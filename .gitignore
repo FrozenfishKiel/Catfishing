@@ -1,0 +1,34 @@
+# Unreal Engine generated files
+Binaries/
+DerivedDataCache/
+Intermediate/
+Saved/
+Build/
+
+# Unreal plugin generated files
+Plugins/**/Binaries/
+Plugins/**/Intermediate/
+Plugins/**/Saved/
+Plugins/**/DerivedDataCache/
+
+# IDE and generated project files
+.vs/
+.idea/
+*.sln
+*.slnx
+*.opensdf
+*.sdf
+*.suo
+*.user
+*.VC.db
+*.VC.VC.opendb
+
+# Rider local plugin
+Plugins/Developer/RiderLink/
+
+# Local tooling state
+.codex/
+
+# OS files
+Thumbs.db
+Desktop.ini
