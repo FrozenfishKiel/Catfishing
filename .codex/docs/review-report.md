@@ -1,8 +1,8 @@
-# Catfishing A–G 程序员 Review 报告
+# Catfishing  程序员 Review 报告
 
 > **文档状态：待程序员审查**  
-> **事实截止时间：2026-08-12 02:21 CST（Asia/Shanghai）**  
-> **审查结论边界：** 独立代码审查已完整覆盖当前 A–G 的 103 个 Source 文件、4 个 Config、4 个 Scripts 和 2 个地图资产元数据，旧 F01–F15 均已关闭，最终 `code_findings: none / pass`。本报告仍保持“待程序员审查”，因为它是交给程序员复核改动、风险和产品接线的入口；B–G runtime、人工 PIE 和双账号 Steam 未验证。
+> **事实截止时间：2026-08-12 10:57 CST（Asia/Shanghai）**
+> **审查结论边界：** 独立代码审查已完整覆盖 A–G 代码面，旧 F01–F15 均已关闭，最终 `code_findings: none / pass`。之后源码按领域归属完成目录整理并修复编码问题，整理后通过 strict UTF-8、注释检查和 Editor/Game 构建。本报告仍保持“待程序员审查”，因为它是交给程序员复核改动、风险和产品接线的入口；B–G runtime、人工 PIE 和双账号 Steam 未验证。
 
 ## 1. 文档状态
 
@@ -10,20 +10,24 @@
 - **独立代码审查状态：** pass；无当前 open code finding。
 - **注释语义审查状态：** CMT01–CMT22 已闭环；CMT16–CMT22 包含 6 处 header 与 1 处 cpp 注释准确性修正。修正后 Editor/Game 同源重构建通过。
 - **运行验证状态：** 阶段 A 无窗口 Null OSS 正常/负路径通过；B–G 正常玩法未运行。
+- **目录整理状态：** 已按“类型自身所属系统”整理目录；`AbilitySystem`、`Character`、`Condition`、`Framework/Game`、`Logging`、`Online`、`UI` 不再混在模块根。
 - **产品验收状态：** 待人工验收，详见 `.codex/docs/acceptance-report.md`。
 
 ## 2. 事实来源
 
 - 原始阶段目标：`Docs/Development/AI开发交接.md`。只取 A–G 范围、架构优先级和产品边界，不采用其中已经过时的“空模板”现状。
 - 架构/接线/产品事实：技术方案作为架构，`Knowledge/Development/FRAMEWORK_WIRING.md` 作为接线说明，正式 GDD 作为产品规则；源码事实优先于文档描述。
-- 当前代码：`Source/` 103 文件，约 683 KB 文本代码/配置/脚本；完整读取而非抽样。
+- 当前代码：`Source/` 103 文件，其中 `Source/Catfishing/` 有 101 个 Runtime 模块文件，另有 2 个 Target 文件；完整读取而非抽样。
 - 当前配置与资产：`Config/` 4 文件、`Scripts/` 4 文件、Content 仅 Frontend/Lake 两张地图。
+- 最新目录整理：本地提交 `25136c8 Organize Catfishing source directories`；`AGENTS.md` 记录目录分类规则，即类应按自身系统归属放置，而不是按服务对象或挂载对象放置。
+- 目录整理后验证：strict UTF-8 扫描 114 个文件通过；`comment_quality_check.py` 扫描 `Source/Catfishing` 101 文件 / 1884 条注释 / 0 error；`git diff --check` 通过；`CatfishingEditor` 构建 28/28 actions、18.87 s、exit 0；`Catfishing` Game 构建 35/35 actions、40.42 s、exit 0。
 - 独立 Review：覆盖 UHT/UE 5.8 API、模块依赖、Online 同步重入/迟到回调/Destroy 补偿、四事实、GI 过滤、teardown/ACK timeout、StateTree 拓扑、FastArray、身份/准入、跨聚合事务、durable grant、Social、统一 gameplay gate、复制/安全和最小性；F01–F15 经过多轮 closure re-review 后最终 pass。
 - 最终构建：`Saved/Verification/BG_StaticBuild_20260812_011156/build_CatfishingEditor_final_header_167_179_206.log`、`build_Catfishing_final_header_167_179_206.log`。
-- 最终静态汇总：同目录 `final_header_167_179_206_static_summary.log`；Editor 7/7、11.218 s、exit 0，Game 6/6、15.313 s、exit 0，Python AST 4/4，diff-check 0，114 个保护文件 delta 0，无残留进程。
-- 最终运行：同目录 `runtime_safe_null_travel_after_wait_end_pie_fix.log`、`runtime_safe_null_missing_lake_failure_after_wait_end_pie_fix.log`。运行日志生成于最后的纯注释修正前；最终重链的 Editor/Game PE `.text` size/hash 与 runtime 副本完全一致。
+- 原 A–G 运行前静态汇总：同目录 `final_header_167_179_206_static_summary.log`；Editor 7/7、11.218 s、exit 0，Game 6/6、15.313 s、exit 0，Python AST 4/4，diff-check 0，114 个保护文件 delta 0，无残留进程。
+- 原 A 阶段运行证据：同目录 `runtime_safe_null_travel_after_wait_end_pie_fix.log`、`runtime_safe_null_missing_lake_failure_after_wait_end_pie_fix.log`。这些运行日志生成于目录整理前；目录整理后只重跑了编码、静态、注释和构建检查，没有重跑 UE runtime。
+- 目录整理后构建证据：strict UTF-8 扫描 114 个文件通过；`CatfishingEditor` 28/28 actions、18.87 s、exit 0；`Catfishing` Game 35/35 actions、40.42 s、exit 0。
 - 运行门禁：同目录 `runtime_bg_gate_matrix.md`。
-- 保护项：`.codex/state`、`.gitignore`、`.slnx`、`Docs/Knowledge` 的既有用户状态排除归因，未作为本轮实现改动审查；本 documentation 节点只新增 `.codex/docs/` 下三份报告。
+- 保护项：`.codex/state`、`.gitignore`、`.slnx`、`Docs/Knowledge` 的既有用户状态排除归因，未作为本轮实现改动审查；本次文档更新只维护 `.codex/docs/` 下三份报告。
 
 ## 3. 改动总览
 
@@ -63,23 +67,34 @@ Source/
   CatfishingEditor.Target.cs
   Catfishing/
     Catfishing.Build.cs
-    Catfishing.cpp / Catfishing.h / CatLog.h
-    CatOnlineSubsystem.cpp / .h
-    CatOnlineTypes.h / CatOnlineSettings.cpp / .h
-    CatGameplayTypes.cpp / .h
-    CatCharacter.cpp / .h
-    CatAbilitySettings.cpp / .h
-    CatStageCTestAbility.cpp / .h
-    CatSurvivalAttributeSet.cpp / .h
-    CatLocalPlayerUISubsystem.cpp / .h
-    CatTravelWidget.cpp / .h
-    CatSurvivalWidget.cpp / .h
-    CatUISettings.cpp / .h
+    Catfishing.cpp / Catfishing.h
+    AbilitySystem/
+      CatAbilitySettings.cpp / .h
+      CatStageCTestAbility.cpp / .h
+      CatSurvivalAttributeSet.cpp / .h
+    Character/
+      CatCharacter.cpp / .h
+    Condition/
+      CatConditionSettings.cpp / .h
+      CatConditionComponent.cpp / .h
+      CatConditionTypes.h
     Framework/Core/
       CatDomainCommandTypes.h
       CatRunContracts.h
       CatProfileContracts.h
       CatSacrificeContracts.h
+    Framework/Game/
+      CatGameplayTypes.cpp / .h
+    Logging/
+      CatLog.h
+    Online/
+      CatOnlineSubsystem.cpp / .h
+      CatOnlineTypes.h / CatOnlineSettings.cpp / .h
+    UI/
+      CatLocalPlayerUISubsystem.cpp / .h
+      CatTravelWidget.cpp / .h
+      CatSurvivalWidget.cpp / .h
+      CatUISettings.cpp / .h
     Run/
       CatRunSettings.cpp / .h
       CatRunStateTreeEvents.cpp / .h
@@ -118,10 +133,6 @@ Source/
       CatEquipmentDefinition.cpp / .h
       CatEquipmentComponent.cpp / .h
       CatEquipmentTypes.h
-    Character/
-      CatConditionSettings.cpp / .h
-      CatConditionComponent.cpp / .h
-      CatConditionTypes.h
     Camp/
       CatCampSettings.cpp / .h
       CatCampHubActor.cpp / .h
@@ -134,38 +145,38 @@ Source/
 
 代码地图按所有权划分：
 
-- **进程/平台生命周期：** `CatOnlineSubsystem`。
-- **局内权威与复制入口：** `CatGameplayTypes` 中的 GameMode/GameState/PlayerState/PlayerController。
-- **角色聚合：** `CatCharacter` + ASC/AttributeSet + Equipment/Condition。
+- **进程/平台生命周期：** `Online/CatOnlineSubsystem`。
+- **局内权威与复制入口：** `Framework/Game/CatGameplayTypes` 中的 GameMode/GameState/PlayerState/PlayerController。
+- **角色聚合：** `Character/CatCharacter` 只放角色实例生命周期；`AbilitySystem/` 放 Ability、ASC 配置和 AttributeSet；`Condition/` 放湿身、倒地、恢复等状态系统。
 - **世界级玩法服务：** Run、Environment、Fishing、Items、Imprint、Social。
-- **客户端本地持久与 UI：** `CatProfileSubsystem`、`CatLocalPlayerUISubsystem`。
+- **客户端本地持久与 UI：** `Profile/CatProfileSubsystem`、`UI/CatLocalPlayerUISubsystem`。
 - **跨域 DTO/错误：** `Framework/Core` 和各域 `*Types.h`。
 - **产品事实：** `*Settings`、Fish/Equipment DataAsset、StateTree 和场景 Actor；当前多数尚未装配。
 
 ## 5. 变更矩阵
 
-| ID | 阶段/层 | 主要文件与锚点 | 改动职责 | 主要影响 | 已有证据 | 主要风险 |
-|---|---|---|---|---|---|---|
-| M-01 | 工程基线 | `Catfishing.uproject:3`、`Catfishing.Build.cs:10` | UE 5.8、GAS/StateTree/Steam/Python 插件与单模块依赖 | UHT、Target、运行插件 | Editor/Game 构建通过 | IncludeOrder 仍为 5.6 兼容模式 |
-| M-02 | A 地图/启动 | `Config/DefaultEngine.ini:4`、Frontend/Lake | 默认 Frontend 与两地图 GameMode | 冷启动和旅行目标 | 主资产查询/Frontend 无窗口启动 | 地图仅为工程基线，无 B–G 场景装配 |
-| M-03 | A/B Online | `CatOnlineSubsystem.cpp:187` `RequestCreateSession`、`:408` `RequestLeave`、`:874` `HandlePostLoadMap` | 单一 OSS/Travel 所有者、四事实、epoch、补偿和 teardown | 所有联机入口 | Null OSS 两轮与缺图负路径通过 | Steam/远端/ACK timeout 未实测 |
-| M-04 | A UI | `CatLocalPlayerUISubsystem.cpp:123`、`CatTravelWidget.cpp:80` | 本地玩家 UI 创建/销毁和 Online 快照展示 | Frontend 诊断、Widget 生命周期 | Widget 5/5、EndPIE 清理 | 无可见 PIE 可读性证据 |
-| M-05 | B/D 网关 | `CatGameplayTypes.cpp:119` `PreLogin`、`:310` `CanAcceptGameplayCommand` | 身份准入、统一 gameplay gate、RPC 桥 | 所有服务器命令 | 完整 code review + 构建 | 双账号/恶意 RPC 未运行 |
-| M-06 | C 角色/GAS | `CatCharacter.cpp:190` `InitializeAbilityActorInfo`、`:207` `ApplyInitialAttributesOnce` | Character-owned ASC、属性、输入生命周期 | 角色能力/属性 | 构建 + code review | 正式复制策略/输入/数值未定 |
-| M-07 | C/G 状态 | `Condition/CatConditionComponent.cpp:192` `ApplyRecovery` | 湿身/倒地/恢复的权威快照和幂等终态 | 救援、草药、进食、营地 | code review | 距离/多人复制未运行 |
-| M-08 | D Run | `CatGameplayTypes.cpp:397` `EnterRunPhaseFromStateTree`、`:925` `RequestRunTeardown` | Run phase、命令 cache、公开复制和 teardown | 日循环/结算/Host 退出 | code review；缺配置 fail-closed | 缺 `ST_RunFlow`，正常路径未跑 |
-| M-09 | D StateTree | `Run/CatRunStateTreeNodes.cpp:15` | Task/Condition 只调用 GameMode 合同 | 保证唯一流程拓扑 | UHT/构建 | 正式 StateTree 资产缺失 |
-| M-10 | D Environment | `Environment/CatConfiguredEnvironmentProvider.cpp:7`、`CatWaterRegion.cpp:42` | 配置环境快照、水域聚合与查询 | 天气、鱼表筛选、自然贡献 | Lake fail-closed 日志 | 无正式水域/天气 Actor |
-| M-11 | E Fishing | `Fishing/CatFishingService.cpp:36`、`CatFishingSession.cpp:314` | 单活动会话、能力快照、HookedFight 协作、首抄 capture | 捕鱼主链 | code review | 正式 StateTree/鱼资产缺失 |
-| M-12 | E Items | `Items/CatItemsService.cpp:92` `CommitCapture`、`:334` `ReserveFish` | 容器所有权/revision、唯一鱼、转移/偷取/献祭 reservation | 物品一致性 | code review | 容量为 0，运行未测 |
-| M-13 | E Replication | `Items/CatContainerReplicationComponent.cpp:25` | Authority snapshot→FastArray→OnRep snapshot | 鱼袋/共享缸客户端视图 | 构建 + code review | 无真实多客户端 delta 证据 |
-| M-14 | E Sacrifice | `Run/CatSacrificeCoordinator.cpp:26` | Reserve→Run contribution→Commit/Cancel 补偿 | 跨 Items/Run 事务 | code review | 部分失败未运行注入 |
-| M-15 | F Imprint | `Collection/CatRunImprintService.cpp:141`、`:262` | 全参与者两阶段 CapturePlan、成像 terminal、Grant 投递/ACK | 本轮印记和退出交付 | F15 closure review | 外部成像桥未接 |
-| M-16 | F Profile | `Profile/CatProfileSubsystem.cpp:70` `ApplyGrant`、`:335` `SaveCurrentProfile` | durable journal、幂等 Grant、收藏/装备选择持久化 | 跨局数据 | code review | persistence 默认关闭，恢复未跑 |
-| M-17 | G Equipment | `Equipment/CatEquipmentComponent.cpp:30`、`:248` | 解锁证明、局内耐久/消耗品和营地维修 | 角色装备状态 | code review | definitions/trust policy 未装配 |
-| M-18 | G Camp | `Camp/CatCampHubActor.cpp:43`、`:132` | 救援、休息、共享缸、营火全员计划 | 营地协作 | F15 closure review | Lake 无 Camp Actor，范围为 0 |
-| M-19 | G Social | `Social/CatSocialService.cpp:61`、`:245` | TheftProtocolId、权威距离、恶作剧/求助/保护牌和 teardown | 玩家交互协议 | F01–F15 closure review | Social gate/范围/冷却未配置 |
-| M-20 | 验证脚本 | `Scripts/verify_stage_a_travel.py:26`、`:126`；failure `:28`、`:77` | UE GUID 规范化、两轮状态机、负路径、EndPIE 顺序 | 可重复阶段 A 证据 | 两脚本最终 PASS | 仅 Null OSS，无 B–G harness |
+| ID   | 阶段/层          | 主要文件与锚点                                                                                              | 改动职责                                         | 主要影响                    | 已有证据                        | 主要风险                         |
+| ---- | ------------- | ---------------------------------------------------------------------------------------------------- | -------------------------------------------- | ----------------------- | --------------------------- | ---------------------------- |
+| M-01 | 工程基线          | `Catfishing.uproject:3`、`Catfishing.Build.cs:10`                                                     | UE 5.8、GAS/StateTree/Steam/Python 插件与单模块依赖   | UHT、Target、运行插件         | Editor/Game 构建通过            | IncludeOrder 仍为 5.6 兼容模式     |
+| M-02 | A 地图/启动       | `Config/DefaultEngine.ini:4`、Frontend/Lake                                                           | 默认 Frontend 与两地图 GameMode                    | 冷启动和旅行目标                | 主资产查询/Frontend 无窗口启动        | 地图仅为工程基线，无 B–G 场景装配          |
+| M-03 | A/B Online    | `CatOnlineSubsystem.cpp:187` `RequestCreateSession`、`:408` `RequestLeave`、`:874` `HandlePostLoadMap` | 单一 OSS/Travel 所有者、四事实、epoch、补偿和 teardown     | 所有联机入口                  | Null OSS 两轮与缺图负路径通过         | Steam/远端/ACK timeout 未实测     |
+| M-04 | A UI          | `CatLocalPlayerUISubsystem.cpp:123`、`CatTravelWidget.cpp:80`                                         | 本地玩家 UI 创建/销毁和 Online 快照展示                   | Frontend 诊断、Widget 生命周期 | Widget 5/5、EndPIE 清理        | 无可见 PIE 可读性证据                |
+| M-05 | B/D 网关        | `CatGameplayTypes.cpp:119` `PreLogin`、`:310` `CanAcceptGameplayCommand`                              | 身份准入、统一 gameplay gate、RPC 桥                  | 所有服务器命令                 | 完整 code review + 构建         | 双账号/恶意 RPC 未运行               |
+| M-06 | C 角色/GAS      | `CatCharacter.cpp:190` `InitializeAbilityActorInfo`、`:207` `ApplyInitialAttributesOnce`              | Character-owned ASC、属性、输入生命周期                | 角色能力/属性                 | 构建 + code review            | 正式复制策略/输入/数值未定               |
+| M-07 | C/G 状态        | `Condition/CatConditionComponent.cpp:192` `ApplyRecovery`                                            | 湿身/倒地/恢复的权威快照和幂等终态                           | 救援、草药、进食、营地             | code review                 | 距离/多人复制未运行                   |
+| M-08 | D Run         | `CatGameplayTypes.cpp:397` `EnterRunPhaseFromStateTree`、`:925` `RequestRunTeardown`                  | Run phase、命令 cache、公开复制和 teardown            | 日循环/结算/Host 退出          | code review；缺配置 fail-closed | 缺 `ST_RunFlow`，正常路径未跑        |
+| M-09 | D StateTree   | `Run/CatRunStateTreeNodes.cpp:15`                                                                    | Task/Condition 只调用 GameMode 合同               | 保证唯一流程拓扑                | UHT/构建                      | 正式 StateTree 资产缺失            |
+| M-10 | D Environment | `Environment/CatConfiguredEnvironmentProvider.cpp:7`、`CatWaterRegion.cpp:42`                         | 配置环境快照、水域聚合与查询                               | 天气、鱼表筛选、自然贡献            | Lake fail-closed 日志         | 无正式水域/天气 Actor               |
+| M-11 | E Fishing     | `Fishing/CatFishingService.cpp:36`、`CatFishingSession.cpp:314`                                       | 单活动会话、能力快照、HookedFight 协作、首抄 capture         | 捕鱼主链                    | code review                 | 正式 StateTree/鱼资产缺失           |
+| M-12 | E Items       | `Items/CatItemsService.cpp:92` `CommitCapture`、`:334` `ReserveFish`                                  | 容器所有权/revision、唯一鱼、转移/偷取/献祭 reservation      | 物品一致性                   | code review                 | 容量为 0，运行未测                   |
+| M-13 | E Replication | `Items/CatContainerReplicationComponent.cpp:25`                                                      | Authority snapshot→FastArray→OnRep snapshot  | 鱼袋/共享缸客户端视图             | 构建 + code review            | 无真实多客户端 delta 证据             |
+| M-14 | E Sacrifice   | `Run/CatSacrificeCoordinator.cpp:26`                                                                 | Reserve→Run contribution→Commit/Cancel 补偿    | 跨 Items/Run 事务          | code review                 | 部分失败未运行注入                    |
+| M-15 | F Imprint     | `Collection/CatRunImprintService.cpp:141`、`:262`                                                     | 全参与者两阶段 CapturePlan、成像 terminal、Grant 投递/ACK | 本轮印记和退出交付               | F15 closure review          | 外部成像桥未接                      |
+| M-16 | F Profile     | `Profile/CatProfileSubsystem.cpp:70` `ApplyGrant`、`:335` `SaveCurrentProfile`                        | durable journal、幂等 Grant、收藏/装备选择持久化          | 跨局数据                    | code review                 | persistence 默认关闭，恢复未跑        |
+| M-17 | G Equipment   | `Equipment/CatEquipmentComponent.cpp:30`、`:248`                                                      | 解锁证明、局内耐久/消耗品和营地维修                           | 角色装备状态                  | code review                 | definitions/trust policy 未装配 |
+| M-18 | G Camp        | `Camp/CatCampHubActor.cpp:43`、`:132`                                                                 | 救援、休息、共享缸、营火全员计划                             | 营地协作                    | F15 closure review          | Lake 无 Camp Actor，范围为 0      |
+| M-19 | G Social      | `Social/CatSocialService.cpp:61`、`:245`                                                              | TheftProtocolId、权威距离、恶作剧/求助/保护牌和 teardown    | 玩家交互协议                  | F01–F15 closure review      | Social gate/范围/冷却未配置         |
+| M-20 | 验证脚本          | `Scripts/verify_stage_a_travel.py:26`、`:126`；failure `:28`、`:77`                                     | UE GUID 规范化、两轮状态机、负路径、EndPIE 顺序              | 可重复阶段 A 证据              | 两脚本最终 PASS                  | 仅 Null OSS，无 B–G harness     |
 
 ## 6. 主要文件单卡
 
@@ -704,18 +715,18 @@ Client 只能回传服务器签发的 ProtocolId，不能指定终态鱼或伪�
 
 ## 9. 风险清单
 
-| 严重度 | 风险 | 当前保护 | 剩余验证/决定 |
-|---|---|---|---|
-| 高 | B–G 正式资产/配置缺失，正常产品路径不可运行 | 所有入口 fail-closed，无 fallback 伪成功 | 产品/设计补齐 settings、两棵 StateTree、DataAsset、输入和场景 Actor 后全量 runtime |
-| 高 | Steam 异步、双账号、邀请、重连、Host 退出未实测 | epoch、opaque handle、准入、teardown/ACK timeout 已代码审查；Null OSS 同步路径通过 | 双账号 Steam 两端日志，含中途加入/掉线/迟到回调 |
-| 高 | 跨域事务在运行时部分失败 | terminal cache、reservation、batch、journal、teardown 补偿 | 注入 Items/Run/Profile/外部桥失败，检查无重复/半提交 |
-| 高 | Profile durable 语义未落盘实测 | SaveGame schema、pending journal、AppliedGrantIds、ACK gate | 重启/崩溃/损坏/重复 Grant/容量与原子文件策略 |
-| 中 | FastArray 和公开复制只有静态审查 | authority-only publisher、revision、PostReplicatedReceive | 两客户端增删/转移/重排/断线重连 delta 测试 |
-| 中 | Social timer 与网络竞态 | ProtocolId、active map、terminal cache、teardown resolve | Catch 与 timeout 同帧、角色离开、共享缸恢复策略测试 |
-| 中 | `CatGameplayTypes.cpp` 扇出高 | 它是 GameMode/GameState/PlayerState/PlayerController 的真实框架边界；没有新增 manager | 程序员重点检查 RPC→域服务路由，未来只有出现独立所有权时再拆 |
-| 中 | 可见 UI/输入未验收 | 原生工程 UI 生命周期有 headless 证据；产品输入 gate 关闭 | 可见 PIE、手柄/键鼠焦点、重生/占有、多 LocalPlayer |
-| 低 | Target 使用 `EngineIncludeOrderVersion.Unreal5_6` 兼容顺序 | UE 5.8 Editor/Game 当前构建通过 | 单独升级 include order 并全量重建，避免和玩法改动混做 |
-| 低 | 大量新文件在空模板基线中尚未形成稳定 Git 历史 | 完整审查面和文件地图已记录；保护项排除归因 | 程序员提交前按真实归属分组 review/stage，勿吞并用户文档和 state |
+| 严重度 | 风险                                                   | 当前保护                                                                    | 剩余验证/决定                                                         |
+| --- | ---------------------------------------------------- | ----------------------------------------------------------------------- | --------------------------------------------------------------- |
+| 高   | B–G 正式资产/配置缺失，正常产品路径不可运行                             | 所有入口 fail-closed，无 fallback 伪成功                                         | 产品/设计补齐 settings、两棵 StateTree、DataAsset、输入和场景 Actor 后全量 runtime |
+| 高   | Steam 异步、双账号、邀请、重连、Host 退出未实测                        | epoch、opaque handle、准入、teardown/ACK timeout 已代码审查；Null OSS 同步路径通过       | 双账号 Steam 两端日志，含中途加入/掉线/迟到回调                                    |
+| 高   | 跨域事务在运行时部分失败                                         | terminal cache、reservation、batch、journal、teardown 补偿                    | 注入 Items/Run/Profile/外部桥失败，检查无重复/半提交                            |
+| 高   | Profile durable 语义未落盘实测                              | SaveGame schema、pending journal、AppliedGrantIds、ACK gate                | 重启/崩溃/损坏/重复 Grant/容量与原子文件策略                                     |
+| 中   | FastArray 和公开复制只有静态审查                                | authority-only publisher、revision、PostReplicatedReceive                 | 两客户端增删/转移/重排/断线重连 delta 测试                                      |
+| 中   | Social timer 与网络竞态                                   | ProtocolId、active map、terminal cache、teardown resolve                   | Catch 与 timeout 同帧、角色离开、共享缸恢复策略测试                               |
+| 中   | `CatGameplayTypes.cpp` 扇出高                           | 它是 GameMode/GameState/PlayerState/PlayerController 的真实框架边界；没有新增 manager | 程序员重点检查 RPC→域服务路由，未来只有出现独立所有权时再拆                                |
+| 中   | 可见 UI/输入未验收                                          | 原生工程 UI 生命周期有 headless 证据；产品输入 gate 关闭                                  | 可见 PIE、手柄/键鼠焦点、重生/占有、多 LocalPlayer                              |
+| 低   | Target 使用 `EngineIncludeOrderVersion.Unreal5_6` 兼容顺序 | UE 5.8 Editor/Game 当前构建通过                                               | 单独升级 include order 并全量重建，避免和玩法改动混做                              |
+| 低   | 大量新文件在空模板基线中尚未形成稳定 Git 历史                            | 完整审查面和文件地图已记录；保护项排除归因                                                   | 程序员提交前按真实归属分组 review/stage，勿吞并用户文档和 state                       |
 
 ## 10. 设计取舍
 
@@ -784,40 +795,40 @@ FishDefinition 没有 CaptureImprintEvent 时仍允许实物鱼进入容器；�
 
 ### 保留结构的具体理由
 
-| 结构 | 若删除会丢失的保证 |
-|---|---|
-| Online `operation epoch` | 迟到/同步 callback 无法与当前 request 隔离 |
-| 四事实 snapshot | Session、地图、角色、传输会再次混成单一模糊状态 |
-| Run/Social/Fishing terminal cache | 重试和重复 RPC 会重复副作用 |
-| Items `CaptureByFishingSession` | 不同 RequestId 可为同一会话生成第二条鱼 |
-| Sacrifice reservation | 跨 Items/Run 部分失败无法补偿 |
-| Imprint delivery maps + ACK | 离线/重连/Host exit 时 Grant 可丢失 |
-| 两阶段 CapturePlan batch | 多参与者只拿到半批计划；同步 RPC 可使引用失效 |
-| Profile GrantJournal | ACK 可能早于 durable merge，崩溃后丢奖励 |
-| FastArray adapter | 每次复制整容器或让业务依赖复制内部结构 |
-| 配置 gate | 默认 0/None 会被误当正式产品值 |
+| 结构                                | 若删除会丢失的保证                       |
+| --------------------------------- | ------------------------------- |
+| Online `operation epoch`          | 迟到/同步 callback 无法与当前 request 隔离 |
+| 四事实 snapshot                      | Session、地图、角色、传输会再次混成单一模糊状态     |
+| Run/Social/Fishing terminal cache | 重试和重复 RPC 会重复副作用                |
+| Items `CaptureByFishingSession`   | 不同 RequestId 可为同一会话生成第二条鱼       |
+| Sacrifice reservation             | 跨 Items/Run 部分失败无法补偿            |
+| Imprint delivery maps + ACK       | 离线/重连/Host exit 时 Grant 可丢失     |
+| 两阶段 CapturePlan batch             | 多参与者只拿到半批计划；同步 RPC 可使引用失效       |
+| Profile GrantJournal              | ACK 可能早于 durable merge，崩溃后丢奖励   |
+| FastArray adapter                 | 每次复制整容器或让业务依赖复制内部结构             |
+| 配置 gate                           | 默认 0/None 会被误当正式产品值             |
 
 删减结论：未发现可以在保持同等正确性、清晰性和验证边界的前提下继续删除的新增 manager/type/state。最大的文件是 Gameplay Framework 聚合边界，不建议以“变短”为目的机械拆分；若后续出现独立生命周期或可测试边界，再做有证据的拆分。
 
 ## 14. 修复入口
 
-| 问题类别 | 首个入口 | 继续追踪 | 修复后必须重跑 |
-|---|---|---|---|
-| Create/Join/Leave 状态错误、迟到回调 | `CatOnlineSubsystem.cpp:111` `BeginOperation` | `:664-822` callbacks、`:874` map load、`:935` failures | 两个阶段 A 脚本 + Editor/Game 构建 + Steam 双端相关场景 |
-| Host teardown/Grant ACK 卡住 | `CatGameplayTypes.cpp:925` `RequestRunTeardown` | `:1026-1086` ACK/timeout、`CatOnlineSubsystem.cpp:449` | Host leave 正常/timeout/远端断开 |
-| 准入或 RPC 越权 | `CatGameplayTypes.cpp:119` `PreLogin`、`:310` gate | PlayerController `:1267-1836`、各域 identity rebuild | 双账号 + 恶意参数 + voluntary leave/reconnect |
-| Run phase/结算错误 | `CatGameplayTypes.cpp:397` | Run settings/events/nodes、`:729-910` ready/environment/startup | 正式 `ST_RunFlow` 全拓扑和 illegal transition |
-| 环境/水域错误 | `CatConfiguredEnvironmentProvider.cpp:7` | `CatWaterRegion.cpp:11/19/42`、WaterQuery | 正式天气、水域边界与多客户端 snapshot |
-| 同角色多 Fishing/终态后锁死 | `CatFishingService.cpp:36` | `:184-231` terminate/compact、Session `:479-586` | start retry、角色离开、session lifespan |
-| 重复鱼或 scoop 归属错误 | `CatFishingSession.cpp:314` | `CatItemsService.cpp:92` | 普通/巨鱼并发 NearShore；确认首个合法者唯一得鱼 |
-| 容器不同步/超容/转移半提交 | `CatItemsService.cpp:31` / `:179` | Replication component `:25`、settings capacity | 双客户端 FastArray、满容量、revision conflict |
-| 献祭丢鱼或重复贡献 | `CatSacrificeCoordinator.cpp:26` | Items reservation `:334` 起 | Reserve/Run/Commit/Cancel 各步骤失败注入 |
-| 部分 CapturePlan | `CatRunImprintService.cpp:141` | Fishing `:438`、Camp `:193`、Social caught-imprint | 1/2/4/8 人 batch、离线 recipient、同步 RPC 重入 |
-| Grant 重复/ACK 过早 | `CatProfileSubsystem.cpp:70` | `:237-367` merge/save/reload、Imprint `:321` ACK | 崩溃/重启/损坏/重复 grant/ACK 丢失 |
-| 装备未解锁或远程维修 | `CatEquipmentComponent.cpp:30` / `:248` | Equipment settings/definitions、PlayerState unlock | 未解锁/伪 revision/营地内外 |
-| 远程救援/草药/共享缸 | `CatConditionComponent.cpp:107-185`、`CatCampHubActor.cpp:43-131` | Controller RPC `:1492-1630` | 服务器距离边界、不同团队/角色、重复请求 |
-| 偷鱼/Catch 竞态 | `CatSocialService.cpp:61` | `:150-244` protocol、`:483` timeout、Items theft | Catch vs timeout、角色退出、shared tank policy |
-| 自动化假失败/挂起 | 两脚本 `_on_slate_pre_tick` | GUID key 与 `WAIT_END_PIE` 分支 | 正常/缺 Lake 两脚本、进程残留和主文件 hash |
+| 问题类别                        | 首个入口                                                             | 继续追踪                                                           | 修复后必须重跑                                   |
+| --------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------- | ----------------------------------------- |
+| Create/Join/Leave 状态错误、迟到回调 | `CatOnlineSubsystem.cpp:111` `BeginOperation`                    | `:664-822` callbacks、`:874` map load、`:935` failures           | 两个阶段 A 脚本 + Editor/Game 构建 + Steam 双端相关场景 |
+| Host teardown/Grant ACK 卡住  | `CatGameplayTypes.cpp:925` `RequestRunTeardown`                  | `:1026-1086` ACK/timeout、`CatOnlineSubsystem.cpp:449`          | Host leave 正常/timeout/远端断开                |
+| 准入或 RPC 越权                  | `CatGameplayTypes.cpp:119` `PreLogin`、`:310` gate                | PlayerController `:1267-1836`、各域 identity rebuild              | 双账号 + 恶意参数 + voluntary leave/reconnect    |
+| Run phase/结算错误              | `CatGameplayTypes.cpp:397`                                       | Run settings/events/nodes、`:729-910` ready/environment/startup | 正式 `ST_RunFlow` 全拓扑和 illegal transition   |
+| 环境/水域错误                     | `CatConfiguredEnvironmentProvider.cpp:7`                         | `CatWaterRegion.cpp:11/19/42`、WaterQuery                       | 正式天气、水域边界与多客户端 snapshot                   |
+| 同角色多 Fishing/终态后锁死          | `CatFishingService.cpp:36`                                       | `:184-231` terminate/compact、Session `:479-586`                | start retry、角色离开、session lifespan         |
+| 重复鱼或 scoop 归属错误             | `CatFishingSession.cpp:314`                                      | `CatItemsService.cpp:92`                                       | 普通/巨鱼并发 NearShore；确认首个合法者唯一得鱼             |
+| 容器不同步/超容/转移半提交              | `CatItemsService.cpp:31` / `:179`                                | Replication component `:25`、settings capacity                  | 双客户端 FastArray、满容量、revision conflict      |
+| 献祭丢鱼或重复贡献                   | `CatSacrificeCoordinator.cpp:26`                                 | Items reservation `:334` 起                                     | Reserve/Run/Commit/Cancel 各步骤失败注入         |
+| 部分 CapturePlan              | `CatRunImprintService.cpp:141`                                   | Fishing `:438`、Camp `:193`、Social caught-imprint               | 1/2/4/8 人 batch、离线 recipient、同步 RPC 重入    |
+| Grant 重复/ACK 过早             | `CatProfileSubsystem.cpp:70`                                     | `:237-367` merge/save/reload、Imprint `:321` ACK                | 崩溃/重启/损坏/重复 grant/ACK 丢失                  |
+| 装备未解锁或远程维修                  | `CatEquipmentComponent.cpp:30` / `:248`                          | Equipment settings/definitions、PlayerState unlock              | 未解锁/伪 revision/营地内外                       |
+| 远程救援/草药/共享缸                 | `CatConditionComponent.cpp:107-185`、`CatCampHubActor.cpp:43-131` | Controller RPC `:1492-1630`                                    | 服务器距离边界、不同团队/角色、重复请求                      |
+| 偷鱼/Catch 竞态                 | `CatSocialService.cpp:61`                                        | `:150-244` protocol、`:483` timeout、Items theft                 | Catch vs timeout、角色退出、shared tank policy  |
+| 自动化假失败/挂起                   | 两脚本 `_on_slate_pre_tick`                                         | GUID key 与 `WAIT_END_PIE` 分支                                   | 正常/缺 Lake 两脚本、进程残留和主文件 hash               |
 
 ## 15. 待程序员审查与人工断点
 

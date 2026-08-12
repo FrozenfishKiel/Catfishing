@@ -1,13 +1,15 @@
 # Catfishing A–G 开发测试报告
 
 > **文档状态：存在测试缺口**  
-> **事实截止时间：2026-08-12 02:21 CST（Asia/Shanghai）**  
-> **结论口径：** 当前 C++ 工程可编译，阶段 A 已在 UE 5.8 无窗口 Editor 中完成正常旅行和缺失 Lake 的失败补偿回归；这不是可见 PIE、人工玩法或双账号 Steam 验收。阶段 B–G 因正式配置、StateTree、DataAsset 与场景装配缺失，未执行产品运行验证。
+> **事实截止时间：2026-08-12 10:57 CST（Asia/Shanghai）**
+> **结论口径：** 当前 C++ 工程在目录整理和编码修复后可编译；阶段 A 的无窗口 Editor 正常旅行与缺失 Lake 失败补偿证据来自目录整理前的同一功能逻辑回归。目录整理后只补跑了 UTF-8、静态检查、注释检查和 Editor/Game 构建，没有重跑可见 PIE、Steam 双账号或 B–G 产品玩法。
 
 ## 事实来源
 
 - 目标与边界：`Docs/Development/AI开发交接.md`，仅用于确认阶段 A–G 原始目标；其中“空模板”等初始状态已过时，不作为当前实现事实。
-- 当前代码与配置：`Source/` 103 个文件、`Config/` 4 个文件、`Scripts/` 4 个文件，以及 `Content/Catfishing/Maps/Frontend.umap`、`Lake.umap` 两个地图资产。
+- 当前代码与配置：`Source/` 103 个文件（`Source/Catfishing/` 101 个 Runtime 模块文件 + 2 个 Target 文件）、`Config/` 4 个文件、`Scripts/` 4 个文件，以及 `Content/Catfishing/Maps/Frontend.umap`、`Lake.umap` 两个地图资产。
+- 最新目录整理基线：本地提交 `25136c8 Organize Catfishing source directories`；`AGENTS.md` 记录“按类型自身所属系统归档，而不是按服务对象归档”的文件分类规则。
+- 目录整理后补充验证：严格 UTF-8 扫描 114 个文件通过；`comment_quality_check.py` 扫描 `Source/Catfishing` 101 文件 / 1884 条注释 / 0 error；`git diff --check` 通过；`CatfishingEditor` 构建 28/28 actions、18.87 s、exit 0；`Catfishing` Game 构建 35/35 actions、40.42 s、exit 0。
 - 最终验证证据根：`Saved/Verification/BG_StaticBuild_20260812_011156/`。
 - 最终同源构建证据：`build_CatfishingEditor_final_header_167_179_206.log`、`build_Catfishing_final_header_167_179_206.log`、`final_header_167_179_206_static_summary.log`。
 - 最终运行证据：`runtime_safe_null_travel_after_wait_end_pie_fix.log`、`runtime_safe_null_missing_lake_failure_after_wait_end_pie_fix.log`。
@@ -20,14 +22,15 @@
 | 编号 | 验证层级 | 实际目标 | 结果 | 强度与边界 |
 |---|---|---|---|---|
 | T-01 | 静态检查 | Python 语法、补丁空白、运行副本未污染、残留进程 | 通过 | 仅证明静态可解析与验证过程卫生 |
-| T-02 | C++ 构建 | `CatfishingEditor` Win64 Development | 通过，7/7 actions，11.218 s，exit 0 | 当前最终 header 同源的 UE 5.8 编译/UHT/链接证据 |
-| T-03 | C++ 构建 | `Catfishing` Game Win64 Development | 通过，6/6 actions，15.313 s，exit 0 | 当前最终 header 同源的非 Editor Target 编译/链接证据 |
+| T-02 | C++ 构建 | `CatfishingEditor` Win64 Development | 通过；目录整理后 28/28 actions，18.87 s，exit 0 | UE 5.8 编译/UHT/链接证据；旧 runtime 同源构建另见原日志 |
+| T-03 | C++ 构建 | `Catfishing` Game Win64 Development | 通过；目录整理后 35/35 actions，40.42 s，exit 0 | 非 Editor Target 编译/链接证据；旧 runtime 同源构建另见原日志 |
 | T-04 | 无窗口 Editor 真实运行 | 主项目资产查询与 Frontend 启动 | 通过 | `UnrealEditor-Cmd`、无窗口、非人工 PIE |
 | T-05 | 无窗口 Editor 真实运行 | 安全 Null OSS 副本，两轮 Host→Lake→Leave→Frontend | 通过，50.704 s，PASS 1 / FAIL 0 | 覆盖阶段 A 四事实状态与重复 pending；不是 Steam |
 | T-06 | 无窗口 Editor 真实运行 | 安全副本移除 Lake 后的旅行失败、Destroy 补偿与新请求重试 | 通过，43.181 s，PASS 1 / FAIL 0 | 覆盖受控负路径；未直接注入真正迟到 OSS 回调 |
 | T-07 | 配置/资产门禁扫描 | B–G 正式资产、产品数值、权限与持久化策略 | 存在阻断缺口 | 证明系统 fail-closed；没有运行 B–G 玩法 |
 | T-08 | 可见 PIE / 人工体验 | 键位、UI、角色、钓鱼、营地、社交完整体验 | 未执行 | 必须由人类在正式资产装配后执行 |
 | T-09 | Steam 双账号 | Create/Find/Join/Invite/掉线重连/Host 退出 | 未执行 | 缺正式 Online 策略及双账号环境 |
+| T-10 | 目录/编码回归 | 源码按领域目录归档后，确认 UTF-8、include、注释和双 Target 构建 | 通过 | 只覆盖目录整理本身；没有重跑 UE runtime |
 
 ## 2. 逐项测试记录
 
@@ -45,6 +48,17 @@
 - **证据强度：** 中；静态和过程卫生证据，不是玩法证据。
 - **判断：** 通过。
 
+### T-10 目录整理与编码修复回归
+
+- **验收项映射：** 文件结构按领域归属整理后，不引入编码破坏、旧 include、旧路径引用或构建回退。
+- **来源：** 用户要求“按类自身隶属类型归档”、`AGENTS.md` 的目录分类规则、本地提交 `25136c8`。
+- **目标：** 证明 `AbilitySystem/`、`Character/`、`Condition/`、`Framework/Game/`、`Logging/`、`Online/`、`UI/` 等目录整理后，源码仍是严格 UTF-8，UE 反射和链接仍可通过。
+- **方法与入口：** 对 `AGENTS.md`、`Catfishing.uproject`、`Config/`、`Source/Catfishing/`、`Scripts/`、`.codex/docs/` 做 strict UTF-8 扫描；搜索旧根路径 include；运行 `git diff --check`；运行注释机械检查；分别构建 `CatfishingEditor` 与 `Catfishing`。
+- **实际观察：** strict UTF-8 扫描 114 个文件通过；旧根 include/旧源路径未命中；`comment_quality_check.py` 为 101 文件、1884 条注释、0 error、pass；Editor 构建 28/28 actions、18.87 s、exit 0；Game 构建 35/35 actions、40.42 s、exit 0。
+- **未覆盖：** 没有在目录整理后重跑无窗口 UE runtime、可见 PIE、Steam 或 B–G 产品玩法；这些仍按原测试缺口和人工验收计划处理。
+- **证据强度：** 强于纯静态检查，能证明目录整理后的 C++/UHT/链接可用；不能替代运行验收。
+- **判断：** 通过。
+
 ### T-02 Editor Target 构建
 
 - **验收项映射：** UE 5.8 下 UHT、C++ 编译与 Editor 链接可完成。
@@ -52,10 +66,10 @@
 - **目标：** 捕获 UHT 签名、模块依赖、Include 根、反射类型和链接问题。
 - **方法与入口：** 全量构建 `CatfishingEditor` Win64 Development。
 - **前置条件：** UE 5.8 工具链可用；不启动图形化 Editor。
-- **实际观察：** 7/7 real actions 完成，11.218 s，exit 0；重编 `CatOnlineSubsystem.cpp` 并重链 `UnrealEditor-Catfishing.dll`。最终 Editor `.text` size/hash 与产生 runtime PASS 的安全副本完全一致。
-- **证据：** `build_CatfishingEditor_final_header_167_179_206.log`、`final_header_167_179_206_static_summary.log`。
+- **实际观察：** 原 A–G runtime 同源构建为 7/7 real actions、11.218 s、exit 0；目录整理和编码修复后重新构建为 28/28 actions、18.87 s、exit 0。
+- **证据：** 原同源证据为 `build_CatfishingEditor_final_header_167_179_206.log`、`final_header_167_179_206_static_summary.log`；目录整理后的构建记录来自本轮终端证据。
 - **已覆盖：** Editor Target 的 UHT、编译和链接。
-- **未覆盖：** 可见 Editor 交互、蓝图编译、Cook/Package、Shipping。
+- **未覆盖：** 目录整理后未重跑可见 Editor 交互、蓝图编译、Cook/Package、Shipping 或 UE runtime。
 - **证据强度：** 强，真实构建。
 - **判断：** 通过。
 
@@ -66,10 +80,10 @@
 - **目标：** 证明机械修复没有只让 Editor Target 偶然通过。
 - **方法与入口：** 全量构建 `Catfishing` Win64 Development。
 - **前置条件：** UE 5.8 工具链可用。
-- **实际观察：** 6/6 real actions 完成，15.313 s，exit 0；重编 `CatOnlineSubsystem.cpp` 并重链 `Catfishing.exe`。最终 Game `.text` size/hash 与 runtime 副本完全一致。
-- **证据：** `build_Catfishing_final_header_167_179_206.log`、`final_header_167_179_206_static_summary.log`。
+- **实际观察：** 原 A–G runtime 同源构建为 6/6 real actions、15.313 s、exit 0；目录整理和编码修复后重新构建为 35/35 actions、40.42 s、exit 0。
+- **证据：** 原同源证据为 `build_Catfishing_final_header_167_179_206.log`、`final_header_167_179_206_static_summary.log`；目录整理后的构建记录来自本轮终端证据。
 - **已覆盖：** Game Target 的编译和链接、Runtime/Editor 依赖边界。
-- **未覆盖：** 打包、Cook、Steam 发布构建与 Shipping 行为。
+- **未覆盖：** 目录整理后未重跑打包、Cook、Steam 发布构建、Shipping 或 UE runtime。
 - **证据强度：** 强，真实构建。
 - **判断：** 通过。
 
