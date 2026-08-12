@@ -4,6 +4,37 @@ Catfishing 是一个基于 Unreal Engine 5.8 的联机钓鱼与营地协作项�
 
 当前代码已经具备 Frontend/Lake 基础地图、Online/Travel 状态框架、角色与 AbilitySystem 骨架、局流程与 StateTree 适配点、钓鱼/物品/图鉴/档案/营地/社交等领域服务的程序合同。正式数值、输入资产、鱼表、装备表、两棵 StateTree、Steam 双账号联机和完整产品体验仍需要后续补齐与人工验收。
 
+## 先看模块：当前代码分成哪些系统
+
+先把最容易混淆的地方说清楚：工程层面目前只有一个 Unreal Runtime 模块，名字叫 `Catfishing`；下面这些“模块”指的是 `Source/Catfishing/` 里的业务系统目录。也就是说，程序员平时找代码时看的是这些目录，而不是去找多个 UE Runtime Module。
+
+当前一共有 18 个主要系统目录：
+
+| 分组 | 模块目录 | 它负责什么 | 你什么时候会看它 |
+|---|---|---|---|
+| 框架宿主 | `Framework/Game/` | UE 游戏框架宿主，放 GameMode、GameState、PlayerState、PlayerController。 | 查玩家进入局、生成角色、局内宿主日志、服务器权限入口时看。 |
+| 框架宿主 | `Framework/Core/` | 跨系统共享的轻量合同，放 Run、Environment、HelpSignal 这类 DTO。 | 多个系统都要引用同一份只读事实或命令结构时看。 |
+| 联机与旅行 | `Online/` | Session、邀请、Frontend/Lake 旅行、网络失败和联机快照。 | 改 Host、Find、Join、Leave、掉线恢复、Steam 接线时看。 |
+| UI | `UI/` | LocalPlayer 级 UI 生命周期、原生 Widget、只读 View DTO。 | 改界面展示、按钮意图转发、HUD 数据读取、跨地图 UI 清理时看。 |
+| 角色身体 | `Character/` | 角色本体、Pawn/Character 生命周期、输入桥。 | 改 `ACatCharacter` 自己的身体生命周期、Possess/UnPossess、输入绑定时看。 |
+| 角色身体 | `AbilitySystem/` | GAS 能力、属性集、Ability 诊断类和 Ability 配置。 | 改属性、Ability、ASC 初始化、能力激活和属性复制时看。 |
+| 角色身体 | `Condition/` | 猫的身体状态域，例如湿身、倒地、恢复、救援状态。 | 改身体状态判定、倒地恢复、救援事实、状态 Revision 时看。 |
+| 局流程 | `Run/` | 一局流程、阶段切换、献祭、Run StateTree 适配点。 | 改开局/结算/献祭/局阶段，或接正式 `ST_RunFlow` 时看。 |
+| 核心玩法 | `Fishing/` | 钓鱼会话、阶段入口、协作搏斗、近岸抢抄事务。 | 改抛竿、搏斗、鱼池选择、捕获结算、`ST_FishingSession` 接线时看。 |
+| 核心玩法 | `Items/` | 容器、鱼实例、事务、FastArray 复制边界。 | 改鱼护/共享缸、捕获提交、鱼转移、鱼消耗、偷鱼 escrow 时看。 |
+| 核心玩法 | `Collection/` | 本轮图鉴/印记计划和 durable grant。 | 改捕获后记录图鉴、多人印记候选、Grant ACK 时看。 |
+| 核心玩法 | `Profile/` | 本地档案、持久化和跨局收藏合同。 | 改 SaveGame、档案 slot、跨局收藏落盘、Profile 与图鉴桥接时看。 |
+| 数据与配置 | `Data/` | 鱼定义、鱼目录和数据选择规则。 | 改鱼表结构、鱼种运行时可用性、巨鱼筛选和鱼池查询时看。 |
+| 数据与配置 | `Equipment/` | 装备定义、装备状态和局内消耗。 | 改鱼竿、鱼饵、窝料、耐久、装备快照和装备门禁时看。 |
+| 场景环境 | `Environment/` | 环境、天气、时间、水域和聚鱼查询。 | 改水域区域、时间/天气、自然聚鱼、环境快照时看。 |
+| 场景环境 | `Camp/` | 营地、共享缸、休息、救援和篝火协作。 | 改营地交互、共享缸、救援送回营地、篝火献祭入口时看。 |
+| 玩家交互 | `Social/` | 玩家间交互协议。 | 改偷鱼、恶作剧、求助、防骚扰牌和玩家间权限校验时看。 |
+| 基础设施 | `Logging/` | 项目日志分类声明。 | 新增跨系统日志分类，或核对 `LogCatfishing` / `LogCatOnline` 时看。 |
+
+每个系统如果需要自动化测试，就在自己的 `Tests/` 子目录里放测试文件。例如物品系统的测试在 `Source/Catfishing/Items/Tests/`，联机系统的测试在 `Source/Catfishing/Online/Tests/`。这条规则是为了让以后别人补功能时，不用满仓库找测试放哪。
+
+目录归属按“类本身属于哪个系统”判断，不按“它服务谁”判断。比如 `UCatSurvivalAttributeSet` 属于 `AbilitySystem/`，不是 `Character/`；GameMode、PlayerState 这类项目大父类属于 `Framework/Game/`，不是模块根目录。
+
 ## 文档目录怎么读
 
 | 目录 | 存放内容 | 什么时候看 |
@@ -19,33 +50,6 @@ Catfishing 是一个基于 Unreal Engine 5.8 的联机钓鱼与营地协作项�
 | `Scripts/` | 地图生成和阶段 A 验证辅助脚本。 | 维护验证工具时才看；普通功能开发不应依赖脚本绕过正式入口。 |
 
 版本管理口径：`.codex/docs/` 和 `Knowledge/` 属于项目长期知识，应提交；`.codex/state/`、`Saved/`、`Intermediate/`、构建产物和本地缓存不提交。`Scripts/` 不是日常功能提交的默认范围，只有脚本本身成为稳定工程工具时才单独审查后提交。
-
-## 模块概要
-
-当前项目保持一个 Unreal Runtime 模块：`Source/Catfishing`。模块内部按领域目录拆分，不按“谁调用它”或“挂在哪个 Actor 上”归类。
-
-| 模块目录 | 作用 | 主要内容 |
-|---|---|---|
-| `AbilitySystem/` | 角色能力、属性和临时诊断 Ability。 | `UCatSurvivalAttributeSet`、Ability 设置、诊断 Ability。 |
-| `Character/` | 角色本体、Pawn/Character 生命周期和输入桥。 | `ACatCharacter`，只放角色自身职责。 |
-| `Condition/` | 猫的身体状态域。 | 湿身、倒地、恢复、救援相关状态组件与类型。 |
-| `Equipment/` | 装备定义、装备状态和局内消耗。 | 鱼竿、鱼饵、窝料、耐久和装备快照。 |
-| `Fishing/` | 钓鱼会话、阶段入口、协作和抢抄事务。 | `UCatFishingService`、`ACatFishingSession`、Fishing StateTree 节点。 |
-| `Items/` | 容器、鱼实例、事务、FastArray 复制边界。 | 鱼护/共享缸、捕获提交、转移、消耗、预留/提交/取消。 |
-| `Collection/` | 本轮图鉴/印记计划和 durable grant。 | `UCatRunImprintService`、CapturePlan、FishRecorded Grant。 |
-| `Profile/` | 本地档案、持久化和跨局收藏合同。 | Profile 设置、Grant ACK、SaveGame 接缝。 |
-| `Run/` | 一局流程、阶段、献祭和 StateTree 适配。 | Run contracts、Run StateTree 节点、献祭协调器。 |
-| `Environment/` | 环境、天气、时间、水域和聚鱼查询。 | Environment provider、水域区域、水域查询子系统。 |
-| `Camp/` | 营地、共享缸、休息、救援和篝火协作。 | `ACatCampHubActor`、营地设置与协作入口。 |
-| `Social/` | 玩家间交互协议。 | 偷鱼、恶作剧、求助、防骚扰牌和 Social service。 |
-| `Online/` | Session、邀请、旅行、网络失败和四事实快照。 | `UCatOnlineSubsystem`、Online settings/types。 |
-| `UI/` | LocalPlayer 级 UI 生命周期、原生 Widget 和只读 View DTO。 | Travel Widget、Survival Widget、LocalPlayer UI Subsystem。 |
-| `Data/` | 鱼定义、鱼目录和数据选择规则。 | FishDefinition、FishCatalog settings。 |
-| `Framework/Core/` | 跨系统共享的轻量合同。 | Run、Environment、HelpSignal 等公开 DTO。 |
-| `Framework/Game/` | UE 游戏框架宿主。 | GameMode、GameState、PlayerState、PlayerController。 |
-| `Logging/` | 项目日志分类。 | `LogCatfishing`、`LogCatOnline` 等日志声明。 |
-
-每个模块如果需要自动化测试，都在自己的 `Tests/` 子目录里放测试文件。测试应验证公开行为和正式入口，不读取生产私有缓存，也不添加测试后门。
 
 ## 程序员怎么读代码
 
