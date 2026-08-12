@@ -38,6 +38,7 @@
 *.xcodeproj
 *.xcworkspace
 *.sln
+*.slnx
 *.suo
 *.opensdf
 *.sdf
@@ -80,3 +81,4 @@ DerivedDataCache/*
 output/
 tmp/
 Temp/
+.codex/
