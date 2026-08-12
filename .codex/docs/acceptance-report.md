@@ -1,17 +1,18 @@
 # Catfishing A–G 开发人工验收报告
 
 > **文档状态：待人工验收**  
-> **事实截止时间：2026-08-12 10:57 CST（Asia/Shanghai）**
-> **当前阻断：** 阶段 B–G 的正式产品设置、输入资产、两棵 StateTree、Fish/Equipment DataAsset、水域与营地场景装配尚未提供。当前代码会按设计 fail-closed，因此可以验收“没有伪成功”，但无法完成正式产品体验验收。源码目录已按领域归属整理并完成编码/构建回归，但目录整理后尚未重跑 UE runtime。
+> **事实截止时间：2026-08-12 15:20 CST（Asia/Shanghai）**
+> **当前阻断：** 阶段 B–G 的正式产品设置、输入资产、两棵 StateTree、Fish/Equipment DataAsset、水域与营地场景装配尚未提供。当前代码会按设计 fail-closed，因此可以验收“没有伪成功”，但无法完成正式产品体验验收。源码目录已按领域归属整理并完成编码/构建回归；43 个测试文件的 64 条 UE Automation 已通过，其中 63 条 `Catfishing.Unit.*` 覆盖模块合同，1 条 `Catfishing.Slice.ItemsCollection.CommitCaptureRecordsSingleFishGrant` 证明 Items→Collection 最小纵向桥接成立，但它们不能替代可见 PIE、真实 UMG 按钮/焦点、跨进程复制、Steam 双账号或完整产品验收。
 
 ## 事实来源
 
 - 原始范围与产品边界：`Docs/Development/AI开发交接.md`。
 - 当前实现事实：`Source/`、`Config/`、`Scripts/` 和 `Content/Catfishing/Maps/Frontend.umap`、`Lake.umap`。
 - 最新目录基线：本地提交 `25136c8 Organize Catfishing source directories`，以及 `AGENTS.md` 中“按类型自身所属系统归档，而不是按服务对象归档”的规则。
-- 目录整理后工程证据：strict UTF-8 扫描 114 个文件通过；`comment_quality_check.py` 扫描 `Source/Catfishing` 101 文件 / 1884 条注释 / 0 error；`CatfishingEditor` 构建 28/28 actions、18.87 s、exit 0；`Catfishing` Game 构建 35/35 actions、40.42 s、exit 0。
+- 目录整理与测试补齐后工程证据：strict UTF-8 扫描通过；`comment_quality_check.py` 最新扫描 `Source/Catfishing` 144 文件 / 2044 条注释 / 0 error；`CatfishingEditor` 与 `Catfishing` Game Target 构建通过。
 - 产品门禁清单：`Saved/Verification/BG_StaticBuild_20260812_011156/runtime_bg_gate_matrix.md`。
 - 已完成的工程验证：同目录下两个最终 build 日志、两个最终 runtime 日志及 `runtime_wait_end_pie_fix_baseline_hashes.csv`。
+- 自动化测试基线：`Docs/Development/自动化测试方案.md`；Items 四项早期证据位于 `Saved/Automation/20260812-items-commit-capture-suite-01/`；最终完整套件位于 `Saved/Automation/20260812-full-automation-04/`，Found 64 / Success 64 / succeededWithWarnings 0 / failed 0 / warnings 0 / errors 0 / exit 0；该批次包含 63 条 `Catfishing.Unit.*` 与 1 条 `Catfishing.Slice.*`。
 - 测试边界：`.codex/docs/testing-report.md`。
 - 独立代码审查：当前完整 A–G 代码面最终 `pass`，无未闭环 code finding；这不等于人工验收通过。
 
@@ -20,6 +21,8 @@
 验收时请以 `25136c8` 之后的目录结构为准：`CatSurvivalAttributeSet`、测试 Ability 和 Ability 设置属于 `Source/Catfishing/AbilitySystem/`；`ACatCharacter` 自身属于 `Source/Catfishing/Character/`；湿身、倒地、恢复等状态属于 `Source/Catfishing/Condition/`；GameMode/GameState/PlayerState/PlayerController 属于 `Source/Catfishing/Framework/Game/`；Online、UI、Logging 也分别进入自己的目录。这个整理只改变归档和 include 路径，不改变阶段 A–G 的产品规则。
 
 目录整理后的机器证据只覆盖编码、静态与构建：没有在整理后重新执行无窗口 UE runtime、可见 PIE、Steam 双账号或 B–G 产品玩法。因此人工验收仍需要按下面的冷启动步骤重新打开项目、观察 UI、确认地图和正式资产门禁。
+
+首批目录整理后的 UE Automation 已扩展完成：63 条模块级 `Catfishing.Unit.*` 测试覆盖 Settings/Definition fail-closed、Character/AbilitySystem 局部生命周期、Fishing Service/Session 失败门禁、StateTree node 默认合同、Condition 局部生命周期、Items 捕获/转移/消费/预留事务、Collection 印记计划、Environment 水域聚合与查询、Social/Run/Profile/UI/Online 等基础合同。另有 1 条 `Catfishing.Slice.*` 已把 Items 成功捕获事实交给 Collection 记录成单个 `FishRecorded` Grant，证明最小 Items→Collection 桥接可以通过公开接口组合。它们证明当前架构的模块边界可以被自动验证，也已经进入纵向切片阶段；但仍没有覆盖客户端 FastArray 收敛、完整 Fishing→Items→Collection→Profile 链、真实 StateTree/地图接线、真实 UMG 按钮/焦点或任何人工交互，因此本报告状态仍是“待人工验收”。
 
 ## 1. 这次交付了什么
 
@@ -43,6 +46,8 @@
 - Frontend 原生 Online 面板包含 `Host Session`、`Find Sessions`、`Join First Result`、`Join Accepted Invite`、`Leave Session`，并展示 World/Session/Role/Transport/Operation/结果/邀请/错误。
 - 在验证专用 Null OSS 安全副本中，Host→Lake→Leave→Frontend 已连续两轮完成；缺失 Lake 时会补偿销毁 Session 并允许新请求重试。
 - Lake 在缺少正式 Run/Environment 配置时会明确 fail-closed，不会静默启动一套假的日循环。
+- `Catfishing.Unit` 模块套件可作为人工验收前的快速机器回归：63 条自动化测试已经证明一批配置门禁、事务幂等、Revision、所有权和局部生命周期合同成立。
+- `Catfishing.Slice.ItemsCollection.CommitCaptureRecordsSingleFishGrant` 可作为第一条纵向烟雾测试：它证明 Items 的公开 committed capture 事实能被 Collection 记录为唯一 Grant，并且重放不会复制 pending ACK。
 
 ### 当前不能验收的产品效果
 
@@ -179,6 +184,7 @@
 3. 1/2/4/8 人矩阵，至少包含普通鱼与巨鱼、NearShore 竞态、共享缸和营火 batch。
 4. Profile 重启/损坏/重复 Grant/ACK 超时与真实图片桥证据。
 5. Cook/Package 后的 Development/Shipping 冒烟证据。
+6. 跨模块纵向切片 Automation：Items→Collection 最小切片已完成；仍至少要补 Fishing→Items→Collection→Profile、Run→Sacrifice→Items、Character→AbilitySystem→Condition→UI 三条机器可重复链路，再进入更重的多人/人工验收。
 
 ## 7. 人工反馈记录模板
 

@@ -81,4 +81,11 @@ DerivedDataCache/*
 output/
 tmp/
 Temp/
-.codex/
+
+# Codex keeps both durable project reports and volatile agent state.
+# Commit the human-readable project reports, but keep graph/runtime state local.
+.codex/*
+!.codex/
+!.codex/docs/
+!.codex/docs/**
+.codex/state/

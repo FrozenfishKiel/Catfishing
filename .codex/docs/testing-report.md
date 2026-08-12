@@ -1,20 +1,23 @@
 # Catfishing A–G 开发测试报告
 
 > **文档状态：存在测试缺口**  
-> **事实截止时间：2026-08-12 10:57 CST（Asia/Shanghai）**
-> **结论口径：** 当前 C++ 工程在目录整理和编码修复后可编译；阶段 A 的无窗口 Editor 正常旅行与缺失 Lake 失败补偿证据来自目录整理前的同一功能逻辑回归。目录整理后只补跑了 UTF-8、静态检查、注释检查和 Editor/Game 构建，没有重跑可见 PIE、Steam 双账号或 B–G 产品玩法。
+> **事实截止时间：2026-08-12 15:20 CST（Asia/Shanghai）**
+> **结论口径：** 当前 C++ 工程在目录整理、编码修复和测试补齐后可编译；UE Automation 已扩展到 43 个测试文件 / 64 条测试，其中 63 条 `Catfishing.Unit.*` 与 1 条 `Catfishing.Slice.*` 在同一无窗口批次中全部 Success，warning/error 均为 0。阶段 A 的无窗口 Editor 正常旅行与缺失 Lake 失败补偿证据仍来自同一功能逻辑回归；可见 PIE、Steam 双账号、跨进程复制、真实 UMG 按钮/焦点及 B–G 产品玩法尚未验证。
 
 ## 事实来源
 
 - 目标与边界：`Docs/Development/AI开发交接.md`，仅用于确认阶段 A–G 原始目标；其中“空模板”等初始状态已过时，不作为当前实现事实。
-- 当前代码与配置：`Source/` 103 个文件（`Source/Catfishing/` 101 个 Runtime 模块文件 + 2 个 Target 文件）、`Config/` 4 个文件、`Scripts/` 4 个文件，以及 `Content/Catfishing/Maps/Frontend.umap`、`Lake.umap` 两个地图资产。
+- 当前代码与配置：`Source/Catfishing/` 144 个源码/构建文件（101 个非测试文件 + 43 个 Automation 测试 cpp）、2 个 Target 文件、`Config/` 4 个文件、`Scripts/` 4 个文件，以及 `Content/Catfishing/Maps/Frontend.umap`、`Lake.umap` 两个地图资产。
 - 最新目录整理基线：本地提交 `25136c8 Organize Catfishing source directories`；`AGENTS.md` 记录“按类型自身所属系统归档，而不是按服务对象归档”的文件分类规则。
-- 目录整理后补充验证：严格 UTF-8 扫描 114 个文件通过；`comment_quality_check.py` 扫描 `Source/Catfishing` 101 文件 / 1884 条注释 / 0 error；`git diff --check` 通过；`CatfishingEditor` 构建 28/28 actions、18.87 s、exit 0；`Catfishing` Game 构建 35/35 actions、40.42 s、exit 0。
+- 目录整理与测试补齐后补充验证：严格 UTF-8 扫描通过；`comment_quality_check.py` 最新扫描 `Source/Catfishing` 144 文件 / 2044 条注释 / 0 error；`git diff --check` 通过；新增/修正测试后 `CatfishingEditor` 与 `Catfishing` Game Target 均重新构建通过。
 - 最终验证证据根：`Saved/Verification/BG_StaticBuild_20260812_011156/`。
 - 最终同源构建证据：`build_CatfishingEditor_final_header_167_179_206.log`、`build_Catfishing_final_header_167_179_206.log`、`final_header_167_179_206_static_summary.log`。
 - 最终运行证据：`runtime_safe_null_travel_after_wait_end_pie_fix.log`、`runtime_safe_null_missing_lake_failure_after_wait_end_pie_fix.log`。
 - 覆盖边界与资产缺口：`runtime_bg_gate_matrix.md`、`runtime_wait_end_pie_fix_baseline_hashes.csv`。
 - 辅助证据：`static_python_ast.log`、`static_git_diff_check.log`、`runtime_main_asset_query_process.log`、`runtime_main_game_frontend_process.log`、`postbuild_process_check.log`。
+- 自动化测试方案与模块级实现：`Docs/Development/自动化测试方案.md`、`Source/Catfishing/*/Tests/*Tests.cpp`。
+- Items 四项批量证据：`Saved/Automation/20260812-items-commit-capture-suite-01/Build-UBT.log`、`Game-Build-UBT.log`、`Automation.log`、`Report/index.json` 与 `index.html`；逐条证据另见 `20260812-items-replay-tracer-01`、`20260812-items-stale-revision-01`、`20260812-items-wrong-owner-01`、`20260812-items-full-container-01`。
+- 最终 64 条完整批量证据：`Saved/Automation/20260812-full-automation-04/Automation.log`、`Report/index.json` 与 `index.html`；最终结果为 succeeded=64、succeededWithWarnings=0、failed=0、notRun=0、inProcess=0、warnings/errors 合计 0。该批次包含 63 条 `Catfishing.Unit.*` 与 1 条 `Catfishing.Slice.*`。
 - 独立审查交接：完整 Source/Config/Scripts/资产元数据代码审查最终 `pass`，F01–F15 与 CMT01–CMT22 已闭环；其中 CMT16–CMT22 是 6 处 header 与 1 处 cpp 的注释准确性修正。该结论不替代运行验收。
 
 ## 1. 测试概览
@@ -31,6 +34,9 @@
 | T-08 | 可见 PIE / 人工体验 | 键位、UI、角色、钓鱼、营地、社交完整体验 | 未执行 | 必须由人类在正式资产装配后执行 |
 | T-09 | Steam 双账号 | Create/Find/Join/Invite/掉线重连/Host 退出 | 未执行 | 缺正式 Online 策略及双账号环境 |
 | T-10 | 目录/编码回归 | 源码按领域目录归档后，确认 UTF-8、include、注释和双 Target 构建 | 通过 | 只覆盖目录整理本身；没有重跑 UE runtime |
+| T-11 | L1 Automation 合同测试 | Items 捕获重放、过期 Revision、错误 owner、容量已满四条合同 | 通过；Found 4，Success 4，exit 0 | 真实 Game World、真实 WorldSubsystem 与公开 Snapshot；不覆盖跨进程复制或其他操作族 |
+| T-12 | L1/L2/L3 Automation 完整批次 | 43 个测试文件、63 条 `Catfishing.Unit.*` 与 1 条 `Catfishing.Slice.*` | 通过；Found 64，Success 64，warning/error 0，exit 0 | 真实 UE Automation 与若干真实 Game World；覆盖第一条 Items→Collection 切片；不覆盖 Steam、可见 PIE、真实 UMG 按钮/焦点或正式资产 |
+| T-13 | L3 Automation 纵向切片 | `Items→Collection` committed capture 到 `FishRecorded` Grant 的最小桥接 | 通过；已纳入完整批次，Success 1，exit 0 | 真实 UE Automation、真实 Game World 和两个真实 WorldSubsystem；不覆盖 Fishing 起点、Profile durable ACK、跨进程复制或可见 PIE |
 
 ## 2. 逐项测试记录
 
@@ -58,6 +64,47 @@
 - **未覆盖：** 没有在目录整理后重跑无窗口 UE runtime、可见 PIE、Steam 或 B–G 产品玩法；这些仍按原测试缺口和人工验收计划处理。
 - **证据强度：** 强于纯静态检查，能证明目录整理后的 C++/UHT/链接可用；不能替代运行验收。
 - **判断：** 通过。
+
+### T-11 Items CommitCapture 四项合同
+
+- **验收项映射：** Items 捕获事务必须形成稳定终态；重复请求、过期 Revision、错误身份和容量不足不得复制实物鱼、留下部分 Committed 事实或错误推进容器 Revision。
+- **来源：** `Docs/Development/自动化测试方案.md` 第 7 节与 `UCatItemsService` 的公开合同。
+- **目标：** 证明合法捕获可提交且重放不复制鱼；Revision 冲突返回最新版本且不写入；非 owner 被拒绝且不写入；正容量已占满时返回容量错误且不写入。
+- **方法与入口：** 每条都由 `FTestWorldWrapper` 创建独立真实 Game World；取得真实 `UCatItemsService`；在 authority Actor 上注册真实 `UCatContainerReplicationComponent`；只调用 `RegisterContainer`、`CommitCapture`、`TryGetContainerSnapshot`。失败场景在调用前保存公开 Snapshot，调用后逐字段比较容器和既有鱼。
+- **实际观察：** 批量过滤精确发现 4 条，四个完整路径均 Success。重放返回 `AlreadyResolved` 且只有一条鱼；陈旧版本返回 `RevisionConflict / Revision 2`；错误身份返回 `PermissionDenied / Revision 1`；满容量返回 `CapacityExceeded / Revision 2`。三个拒绝结果均未提交、Committed DTO 保持默认，失败前后公开 Snapshot 不变。Automation 报告 succeeded=4、succeededWithWarnings=0、failed=0、notRun=0、warnings/errors 合计 0，进程 44.3 s 自然 exit 0。Game Target 最终实际执行 4 actions，明确编译 `CatItemsServiceTests.cpp` 并链接 `Catfishing.exe`，21.12 s、exit 0。
+- **证据：** 总回归为 `Saved/Automation/20260812-items-commit-capture-suite-01/`，其中 `Game-Build-UBT.log` 保存最终 Game 构建；逐条目录为 `20260812-items-replay-tracer-01`、`20260812-items-stale-revision-01`、`20260812-items-wrong-owner-01`、`20260812-items-full-container-01`。
+- **副作用检查：** 四条测试分别注销容器并销毁 Test World，WorldContext 均恢复；批量运行前后 Source/Config/Content 指纹同为 `A992EED680FEB45B8B75D9EDA4CEBBF7E37FE12AB1F3CDEB63BD1A0C553347EE`；无残留 UE/UBT/Shader/LiveCoding/UBA 进程。
+- **未覆盖：** FastArray 跨进程复制、Steam、真实地图、多客户端、UI、StateTree、Capacity=0 的未决策略、Transfer/Consume/Reserve/Theft 等其他 Items 操作和其他模块测试族。
+- **证据强度：** 强；真实 UE Automation、真实 Game World 与公开生产接口，但仍是单进程 L1 合同测试。
+- **判断：** 通过。这 4 条都是既有合同的 characterization GREEN，没有为了展示 TDD 人为制造 RED。
+
+### T-12 完整 `Catfishing` Automation 套件
+
+- **验收项映射：** 用户要求“所有模块测试一次性写完”，并按模块目录内 `Tests/` 存放测试文件；当前阶段先固定各模块公开合同、fail-closed gate、局部生命周期和事务边界，为下一步跨模块纵向切片提供基线。
+- **来源：** `Docs/Development/自动化测试方案.md` V3、项目目录分类规则、各模块公开接口与 UE Automation 报告。
+- **目标：** 证明当前 43 个测试文件能被 UE Automation 发现并执行，覆盖 AbilitySystem、Camp、Character、Collection、Condition、Data、Environment、Equipment、Fishing、Framework/Game、Items、Online、Profile、Run、Social、UI 的基础合同，并纳入 Items→Collection 第一条纵向切片。
+- **方法与入口：** 构建 `CatfishingEditor` 与 `Catfishing` 两个 Development Target；随后使用无窗口 `UnrealEditor-Cmd` 执行 `Automation RunTests Catfishing`，输出到 `Saved/Automation/20260812-full-automation-04/`。
+- **前置条件：** 不启动可见 UE；不使用 Steam 双账号；测试只读/瞬态构造配置对象，或用 `FTestWorldWrapper` 建真实 `EWorldType::Game` 测试 World。
+- **实际观察：** 报告 `tests=64`、`succeeded=64`、`succeededWithWarnings=0`、`failed=0`、`notRun=0`、`inProcess=0`、测试 warnings/errors 合计 0；完整路径首条为 `Catfishing.Slice.ItemsCollection.CommitCaptureRecordsSingleFishGrant`，末条为 `Catfishing.Unit.UI.TravelWidget.ClassAndOpaqueHandlesRemainViewOnly`；`LogAutomationController: Error`、Fatal、Ensure 均为 0。
+- **证据：** `Saved/Automation/20260812-full-automation-04/Report/index.json`、`Saved/Automation/20260812-full-automation-04/Automation.log`。本轮构建证据来自终端输出：Editor 5 actions / exit 0，Game 4 actions / exit 0，均明确编译最终改动的测试 cpp 并链接成功。
+- **覆盖范围：** 覆盖 Settings/Definition readiness、Character 默认组件、AbilitySystem 诊断 Ability、Fishing Service/Session fail-closed、StateTree node 默认合同、Condition wet/营地搬运、Items 捕获/转移/消费/预留/关门事务、Collection 印记计划、Environment 水域聚合与查询、Equipment/Camp/Social/UI/Online/Run/Profile 的基础合同，以及 Items→Collection 最小切片。
+- **未覆盖范围：** 未覆盖完整 Fishing→Items→Collection→Profile、Run→Sacrifice→Items、Character→AbilitySystem→Condition→UI 等正向纵向链；未覆盖 Steam、跨进程复制、真实 StateTree 资产拓扑、正式 DataAsset/地图摆放、输入、真实 UMG 按钮/焦点和可见 UI。
+- **证据强度：** 强于静态检查和构建，属于真实 UE Automation；低于完整集成/PIE/Steam 验收。
+- **判断：** 通过，可作为进入跨模块纵向切片前的模块级回归基线。
+
+### T-13 `Items→Collection` 跨模块纵向切片
+
+- **验收项映射：** 用户要求“没问题就进入跨模块纵向切片”；当前先选择不需要新增生产 seam 的最小链路，验证 Items 的 committed capture 事实能被 Collection 作为正式输入消费。
+- **来源：** `Docs/Development/自动化测试方案.md` 的 L3 切片要求、`Source/Catfishing/Items/CatItemsService.*` 的 `CommitCapture` 公共结果，以及 `Source/Catfishing/Collection/CatRunImprintService.*` 的 `RecordCommittedCapture` 公共入口。
+- **目标：** 证明一条通过 Items 写入的实物鱼，可以不读私有状态、不加测试后门，转化为 Collection 的单个 `FishRecorded` Grant；同一 `CaptureRequestId` 重放不会产生第二个 Grant 或增加 pending ACK。
+- **方法与入口：** 新增 `Source/Catfishing/Collection/Tests/CatItemsCollectionSliceTests.cpp`。测试用 `FTestWorldWrapper` 创建真实 `EWorldType::Game`，取得真实 `UCatItemsService` 与 `UCatRunImprintService`；在 authority Actor 上注册真实 `UCatContainerReplicationComponent`；先调用 `CommitCapture`，再把公开 `CaptureResult.Committed` 传给 `RecordCommittedCapture`。
+- **前置条件：** 不启动可见 UE；不使用 Steam、真实地图、StateTree、Profile SaveGame 或外部成像桥；测试只在单进程 Game World 内验证两个真实模块的组合行为。
+- **实际观察：** Automation 精确过滤发现 1 条 `Catfishing.Slice.ItemsCollection.CommitCaptureRecordsSingleFishGrant`，报告 `succeeded=1`、`failed=0`、`notRun=0`、`inProcess=0`、warnings/errors 合计 0；日志显示测试 `Success`，并出现 Items 的 `items_capture_terminal ... Committed=true Error=None ContainerRevision=2` 结构化日志。
+- **证据：** 该切片已纳入 `Saved/Automation/20260812-full-automation-04/Report/index.json`、`Saved/Automation/20260812-full-automation-04/Automation.log`；早期单独切片证据仍保留在 `Saved/Automation/20260812-slice-items-collection-01/`。
+- **覆盖范围：** 覆盖 Items 成功捕获事实、Collection 记录 committed capture、同一 capture 重放幂等、pending Grant ACK 数量不重复、teardown 前仍能暴露 pending durable ACK。
+- **未覆盖范围：** 未覆盖 FishingService/StateTree 产生捕获事实、Profile 接收 durable Grant ACK、SaveGame 磁盘恢复、FastArray 跨进程复制、Steam、可见 UI 或多人协作。
+- **证据强度：** 中强；真实 UE Automation 与真实 WorldSubsystem 组合测试，强于单模块合同；但它是第一条最小切片，不代表完整玩法链路。
+- **判断：** 通过，可作为后续 Fishing→Items→Collection→Profile 完整切片的第一颗“铆钉”。
 
 ### T-02 Editor Target 构建
 
@@ -155,6 +202,9 @@
 | F-06 | 重跑报 `frontend_fact_mismatch` | 回到 Frontend 后 Transport 仍保留 `Connected` | `HandlePostLoadMap` 在 Frontend 明确把 transport 收敛为 `Idle` | 后续两轮均为 `NoSession / Frontend / Idle` |
 | F-07 | 旅行事实已正确但脚本超时在 `WAIT_END_PIE` | EndPIE 后脚本先重新获取已销毁 Online，再检查结束状态 | 两个脚本都把 EndPIE 分支放到 Online 枚举之前 | 最终正常旅行 50.704 s、负路径 43.181 s，均 exit 0 |
 | F-08 | 负路径最初报 `request_id_changed_before_first_terminal` | TravelFailure 的内部 Destroy 补偿曾开启新的操作身份，使原 Create 的 RequestId 在该用户请求到达失败终态前被替换 | Destroy 作为原 Create/Join 的内部补偿继续沿用该 RequestId/operation；用 `DeferredFailureAfterDestroy` 在 Destroy callback 后结束原请求，只有用户发起重试才生成新 RequestId | 最终观察首请求在 epoch 1 接受、epoch 2 失败终态仍可关联；用户重试在 epoch 3 获得新 RequestId，epoch 4 清理 |
+| F-09 | 模块套件首次运行 `Condition.Component.CarryToCampRequiresValidRescueFactAndReplays` 失败 | 测试夹具直接 Spawn 抽象 `AController`，导致有效搬运 Controller 为空 | 改为实例化 `APlayerController` 并补直接 include | 最终 `20260812-full-automation-04` 中该测试 Success，完整批次 64/64 |
+| F-10 | Items 事务测试编译和运行先后失败 | 测试文件残留 UE 5.8 不存在的 `FTestWorldWrapper(EWorldType::Game)` 构造、命名空间类型未限定、`TObjectPtr` 直接传给 `TestNotNull`，以及把容器初始 Revision=1 误写成 0 | 统一 `CreateTestWorld`；给 `FRegisteredContainer` 加命名空间限定；`TestNotNull` 使用 `.Get()`；按真实 Revision 链修正捕获/转移/消费/预留期望 | Editor/Game 目标重新构建成功；最终 `20260812-full-automation-04` 中 Items 事务相关测试全部 Success |
+| F-11 | 第一条切片需要避免变成“读私有状态”的假集成 | Collection 当前不公开 Grant payload，直接验证 Profile ACK 会迫使测试读取私有队列或新增测试后门 | 切片先停在 `RecordCommittedCapture` 的公开返回值和 pending ACK 计数；不强行越界到 Profile | `20260812-full-automation-04` 证明 Items→Collection 最小桥接成功；Profile durable ACK 留给下一条切片 |
 
 最终 runtime PASS 不是在源码机械修复之前取得的旧逻辑结果：Online transport/pending 修复后，Editor 与 Game 两个 Target 均已重建并运行。其后只发生注释准确性修正；当前 header 同源的最终重链再次通过，而且 Editor/Game PE `.text` 的 size 与 SHA-256 均和产生 runtime PASS 的副本完全一致，证明可执行逻辑没有变化。详见 `final_header_167_179_206_static_summary.log`。
 
@@ -168,6 +218,8 @@
 - 自动化不得改主项目：114 个主文件 hash delta 0。
 - 缺 B–G 产品事实不得伪造成功：各域保持 unset/disabled/undecided 并 fail-closed。
 - 旧“双人抄网”规则不得复活：代码审查确认巨鱼协作只发生于 HookedFight，NearShore 首个合法抄中者获得鱼；该规则尚未做多人运行实测。
+- 自动化不得被错误过滤器伪装成通过：最新批次明确发现 64 条 `Catfishing.*`，不是 0 test；所有个案 Success 且 warnings/errors 合计 0。
+- 纵向切片不得绕过模块公开接口：第一条 `Catfishing.Slice.*` 只使用 Items/Collection public seam，不读取私有 map/cache，也没有新增生产测试后门。
 
 ## 5. 测试缺口与严重度
 
@@ -187,7 +239,7 @@
 ### 较低：维护风险
 
 1. 最终构建仍提示 Target 使用 `EngineIncludeOrderVersion.Unreal5_6` 兼容顺序；在 UE 5.8 可编译，但建议单独升级后重建，避免未来 include 顺序差异。
-2. 当前自动化主要覆盖阶段 A；B–G 缺少独立 AutomationSpec/functional test。
+2. 当前自动化已覆盖一批 B–G 模块级合同，并落地第一条 Items→Collection 纵向切片；但完整 Fishing→Items→Collection→Profile、Run→Sacrifice→Items、Character→AbilitySystem→Condition→UI 等真实玩法 Functional Test 仍未落地。
 
 ## 6. 结论
 
@@ -195,6 +247,7 @@
 
 - 当前冻结代码在 UE 5.8 的 Editor/Game Development Target 中编译、链接通过。
 - 阶段 A 的 Null OSS 两轮旅行、四事实收敛、重复 pending gate、Widget/EndPIE 生命周期，以及缺失 Lake 的失败补偿与重试，在无窗口真实 Editor 中通过。
+- 43 个测试文件的 63 条 `Catfishing.Unit.*` 与 1 条 `Catfishing.Slice.*` 已作为基础回归通过；其中 Items→Collection 最小链路能通过公开接口组合。
 - 当前验证没有改写主项目，也没有留下 UE/构建进程。
 
 当前证据**不支持**以下声明：

@@ -1,8 +1,8 @@
 # Catfishing  程序员 Review 报告
 
 > **文档状态：待程序员审查**  
-> **事实截止时间：2026-08-12 10:57 CST（Asia/Shanghai）**
-> **审查结论边界：** 独立代码审查已完整覆盖 A–G 代码面，旧 F01–F15 均已关闭，最终 `code_findings: none / pass`。之后源码按领域归属完成目录整理并修复编码问题，整理后通过 strict UTF-8、注释检查和 Editor/Game 构建。本报告仍保持“待程序员审查”，因为它是交给程序员复核改动、风险和产品接线的入口；B–G runtime、人工 PIE 和双账号 Steam 未验证。
+> **事实截止时间：2026-08-12 15:20 CST（Asia/Shanghai）**
+> **审查结论边界：** 独立代码审查已完整覆盖 A–G 生产代码面，旧 F01–F15 均已关闭，最终 `code_findings: none / pass`。之后源码按领域归属完成目录整理并修复编码问题，整理后通过 strict UTF-8、注释检查和 Editor/Game 构建；Automation 已扩展到 43 个测试文件 / 64 条测试，其中 63 条 `Catfishing.Unit.*` 与 1 条跨模块切片 `Catfishing.Slice.ItemsCollection.CommitCaptureRecordsSingleFishGrant` 在同一无窗口批次中全部通过。新增测试文件仍需程序员按本报告审查测试意图是否与后续真实功能方向一致，因此本报告继续保持“待程序员审查”。
 
 ## 1. 文档状态
 
@@ -11,16 +11,17 @@
 - **注释语义审查状态：** CMT01–CMT22 已闭环；CMT16–CMT22 包含 6 处 header 与 1 处 cpp 注释准确性修正。修正后 Editor/Game 同源重构建通过。
 - **运行验证状态：** 阶段 A 无窗口 Null OSS 正常/负路径通过；B–G 正常玩法未运行。
 - **目录整理状态：** 已按“类型自身所属系统”整理目录；`AbilitySystem`、`Character`、`Condition`、`Framework/Game`、`Logging`、`Online`、`UI` 不再混在模块根。
+- **自动化测试状态：** 43 个测试文件 / 64 条 UE Automation 批量通过，其中 63 条 `Catfishing.Unit.*` 与 1 条 `Catfishing.Slice.*`。它们是后续继续写纵向切片前的回归基线，仍需程序员审查测试意图和覆盖边界。
 - **产品验收状态：** 待人工验收，详见 `.codex/docs/acceptance-report.md`。
 
 ## 2. 事实来源
 
 - 原始阶段目标：`Docs/Development/AI开发交接.md`。只取 A–G 范围、架构优先级和产品边界，不采用其中已经过时的“空模板”现状。
 - 架构/接线/产品事实：技术方案作为架构，`Knowledge/Development/FRAMEWORK_WIRING.md` 作为接线说明，正式 GDD 作为产品规则；源码事实优先于文档描述。
-- 当前代码：`Source/` 103 文件，其中 `Source/Catfishing/` 有 101 个 Runtime 模块文件，另有 2 个 Target 文件；完整读取而非抽样。
+- 当前代码：`Source/Catfishing/` 144 个源码/构建文件，其中 101 个非测试文件、43 个 Automation 测试 cpp，另有 2 个 Target 文件；A–G 生产代码沿用上一轮完整独立审查，新测试文件已完成构建、机械注释检查与 UE Automation 验证。
 - 当前配置与资产：`Config/` 4 文件、`Scripts/` 4 文件、Content 仅 Frontend/Lake 两张地图。
 - 最新目录整理：本地提交 `25136c8 Organize Catfishing source directories`；`AGENTS.md` 记录目录分类规则，即类应按自身系统归属放置，而不是按服务对象或挂载对象放置。
-- 目录整理后验证：strict UTF-8 扫描 114 个文件通过；`comment_quality_check.py` 扫描 `Source/Catfishing` 101 文件 / 1884 条注释 / 0 error；`git diff --check` 通过；`CatfishingEditor` 构建 28/28 actions、18.87 s、exit 0；`Catfishing` Game 构建 35/35 actions、40.42 s、exit 0。
+- 目录整理与测试补齐后验证：strict UTF-8 扫描通过；`comment_quality_check.py` 最新扫描 `Source/Catfishing` 144 文件 / 2044 条注释 / 0 error；`git diff --check` 通过；`CatfishingEditor` 与 `Catfishing` Game Target 构建通过。
 - 独立 Review：覆盖 UHT/UE 5.8 API、模块依赖、Online 同步重入/迟到回调/Destroy 补偿、四事实、GI 过滤、teardown/ACK timeout、StateTree 拓扑、FastArray、身份/准入、跨聚合事务、durable grant、Social、统一 gameplay gate、复制/安全和最小性；F01–F15 经过多轮 closure re-review 后最终 pass。
 - 最终构建：`Saved/Verification/BG_StaticBuild_20260812_011156/build_CatfishingEditor_final_header_167_179_206.log`、`build_Catfishing_final_header_167_179_206.log`。
 - 原 A–G 运行前静态汇总：同目录 `final_header_167_179_206_static_summary.log`；Editor 7/7、11.218 s、exit 0，Game 6/6、15.313 s、exit 0，Python AST 4/4，diff-check 0，114 个保护文件 delta 0，无残留进程。
@@ -28,6 +29,7 @@
 - 目录整理后构建证据：strict UTF-8 扫描 114 个文件通过；`CatfishingEditor` 28/28 actions、18.87 s、exit 0；`Catfishing` Game 35/35 actions、40.42 s、exit 0。
 - 运行门禁：同目录 `runtime_bg_gate_matrix.md`。
 - 保护项：`.codex/state`、`.gitignore`、`.slnx`、`Docs/Knowledge` 的既有用户状态排除归因，未作为本轮实现改动审查；本次文档更新只维护 `.codex/docs/` 下三份报告。
+- 测试方案、模块测试与第一条切片测试：`Docs/Development/自动化测试方案.md`、`Source/Catfishing/*/Tests/*Tests.cpp`；最终完整批量运行证据为 `Saved/Automation/20260812-full-automation-04/`，结果为 Found 64 / Success 64 / succeededWithWarnings 0 / failed 0 / warnings 0 / errors 0 / exit 0；该批次包含 63 条 `Catfishing.Unit.*` 与 1 条 `Catfishing.Slice.*`。
 
 ## 3. 改动总览
 
@@ -40,6 +42,8 @@
 5. 巨鱼协作仅属于 HookedFight；NearShore 不采用旧“双人抄网”，由首个通过权威距离与 revision 校验的 scooper 唯一得到鱼。
 6. Profile grant 先 durable journal 再 ACK；CapturePlan 使用全参与者两阶段 batch，避免部分成功。
 7. 所有未决数值、权限、复制策略、输入和场景资产保持 unset/disabled/undecided，不用默认 0 值伪造产品体验。
+8. `Source/Catfishing/*/Tests/*Tests.cpp` 把公开模块合同固化为模块内 Automation 测试；当前 63 条 Unit 覆盖配置门禁、Definition readiness、局部生命周期、Items 事务、Collection 计划、Environment 查询、StateTree node 默认合同与若干跨对象合同，不读取私有状态，也没有新增生产测试后门。
+9. `Source/Catfishing/Collection/Tests/CatItemsCollectionSliceTests.cpp` 开始第一条 L3 纵向切片：Items 的公开 committed capture 事实被 Collection 记录为单个 `FishRecorded` Grant，证明两个真实 WorldSubsystem 的最小组合链路成立。
 
 构建与阶段 A 回归已经有新鲜证据；B–G 的代码合同已审查，但正式资产不存在，不能从 Review 报告推导出“玩法已跑通”。
 
@@ -118,6 +122,8 @@ Source/
       CatContainerReplicationComponent.cpp / .h
       CatFishTankActor.cpp / .h
       CatItemTypes.h
+      Tests/
+        CatItemsServiceTests.cpp
     Data/
       CatFishCatalogSettings.cpp / .h
       CatFishDefinition.cpp / .h
@@ -141,6 +147,38 @@ Source/
       CatSocialService.cpp / .h
       CatProtectionSignActor.cpp / .h
       CatSocialTypes.h
+```
+
+新增/扩展的测试文件都放在被测模块自己的 `Tests/` 子目录，程序员审查测试层时优先看这些路径：
+
+```text
+Source/Catfishing/
+  AbilitySystem/Tests/CatAbilitySettingsTests.cpp
+  Camp/Tests/CatCampSettingsTests.cpp
+  Collection/Tests/CatItemsCollectionSliceTests.cpp
+  Collection/Tests/CatRunImprintServiceTests.cpp
+  Condition/Tests/CatConditionSettingsTests.cpp
+  Condition/Tests/CatConditionComponentTests.cpp
+  Data/Tests/CatFishDefinitionTests.cpp
+  Data/Tests/CatFishCatalogSettingsTests.cpp
+  Environment/Tests/CatEnvironmentSettingsTests.cpp
+  Environment/Tests/CatWaterRegionTests.cpp
+  Environment/Tests/CatWaterQuerySubsystemTests.cpp
+  Equipment/Tests/CatEquipmentDefinitionTests.cpp
+  Equipment/Tests/CatEquipmentSettingsTests.cpp
+  Equipment/Tests/CatEquipmentComponentTests.cpp
+  Fishing/Tests/CatFishingSettingsTests.cpp
+  Framework/Game/Tests/CatPlayerStateTests.cpp
+  Items/Tests/CatItemsServiceTests.cpp
+  Items/Tests/CatItemsServiceTransactionTests.cpp
+  Items/Tests/CatContainerReplicationComponentTests.cpp
+  Items/Tests/CatItemsSettingsTests.cpp
+  Online/Tests/CatOnlineSettingsTests.cpp
+  Profile/Tests/CatProfileSettingsTests.cpp
+  Run/Tests/CatRunSettingsTests.cpp
+  Social/Tests/CatSocialSettingsTests.cpp
+  Social/Tests/CatProtectionSignActorTests.cpp
+  UI/Tests/CatUISettingsTests.cpp
 ```
 
 代码地图按所有权划分：
@@ -177,6 +215,9 @@ Source/
 | M-18 | G Camp        | `Camp/CatCampHubActor.cpp:43`、`:132`                                                                 | 救援、休息、共享缸、营火全员计划                             | 营地协作                    | F15 closure review          | Lake 无 Camp Actor，范围为 0      |
 | M-19 | G Social      | `Social/CatSocialService.cpp:61`、`:245`                                                              | TheftProtocolId、权威距离、恶作剧/求助/保护牌和 teardown    | 玩家交互协议                  | F01–F15 closure review      | Social gate/范围/冷却未配置         |
 | M-20 | 验证脚本          | `Scripts/verify_stage_a_travel.py:26`、`:126`；failure `:28`、`:77`                                     | UE GUID 规范化、两轮状态机、负路径、EndPIE 顺序              | 可重复阶段 A 证据              | 两脚本最终 PASS                  | 仅 Null OSS，无 B–G harness     |
+| M-21 | Items L1 测试   | `Items/Tests/CatItemsServiceTests.cpp:37`、`:169`、`:321`、`:436`                                     | 重放、Revision 冲突、owner 权限、容量边界与 Snapshot 不变式    | 后续 Items 事务回归护栏          | Found 4 / Success 4 / exit 0  | 单进程；未覆盖其他 Items 操作和客户端复制    |
+| M-22 | 模块测试套件        | `AbilitySystem/Tests/CatAbilitySettingsTests.cpp:7`、`Items/Tests/CatItemsServiceTransactionTests.cpp:132`、`Character/Tests/CatCharacterLifecycleTests.cpp:7` | 43 个 Automation 测试文件固定公开合同、局部生命周期、事务边界和第一条切片 | 进入更多 L3 纵向切片前的回归基线 | Found 64 / Success 64 / warnings 0 / exit 0 | 测试意图仍需程序员审查；未覆盖完整跨模块正常玩法链 |
+| M-23 | Items→Collection 切片 | `Collection/Tests/CatItemsCollectionSliceTests.cpp:70` `FCatItemsCollectionCommitCaptureSliceTest::RunTest` | 通过真实 Items 捕获事实驱动 Collection 记录单个 `FishRecorded` Grant，并验证重放不复制 pending ACK | 第一条跨模块纵向烟雾测试 | 已纳入 Found 64 / Success 64 完整批次 | 未覆盖 Fishing 起点、Profile durable ACK、跨进程复制 |
 
 ## 6. 主要文件单卡
 
@@ -516,6 +557,53 @@ Source/
 - **风险：** 仅覆盖 Null OSS 安全副本；同步完成不代表 Steam 异步行为。
 - **建议先看：** 正常脚本 `:26`、`:126-208`；负脚本 `:28`、`:77-154`。
 
+### 6.22 `Source/Catfishing/Items/Tests/CatItemsServiceTests.cpp:37` — Items `CommitCapture` 四项合同
+
+- **模块/层：** Items / L1 UE Automation 合同测试。
+- **改动类型：** 新增模块内测试文件；仅在 `WITH_DEV_AUTOMATION_TESTS` 下注册。
+- **改了什么：** 用真实 Game Test World、真实 `UCatItemsService` 与真实容器复制组件，验证合法捕获重放、过期 Revision、错误 StableNetId 和满容量后的公开 Result/Snapshot。
+- **为什么：** 后续程序员会在当前框架上实现具体玩法，Items 的实物唯一性与 Revision 幂等必须成为可重复的架构护栏。
+- **怎么做：** 每例由 `FTestWorldWrapper` 建独立 World，authority Actor 挂组件并注册 PersonalGuard；成功/拒绝后都从 public API 读取 Result 与 Snapshot。三个拒绝场景逐字段比较前后 Snapshot，并核对默认 Committed DTO；最后注销容器并核对 WorldContext 清理。
+- **输入：** 固定合法 RequestId、FishingSessionId、FishInstanceId、ContainerId、StableNetId、鱼定义、重量与贡献值。
+- **输出：** Automation 断言与公开 `FCatContainerSnapshot` / `FCatCaptureCommitResult`。
+- **状态读取：** 仅通过 Items public API 读取 Result 与 Snapshot，不读取私有 cache/map。
+- **状态写入：** 仅通过正式 Register/Commit/Unregister 入口改变测试 World 内的容器事实。
+- **消费者：** UE Automation、后续 Items 回归和 `.codex/docs/testing-report.md`。
+- **验证：** Editor 与 Game 两个 Development Target 均明确编译该 cpp，Game 最终 4/4 actions、exit 0；逐条均精确 Found 1 / Success 1，最终前缀批量 Found 4 / Success 4 / exit 0，证据在 `Saved/Automation/20260812-items-commit-capture-suite-01/`。
+- **风险：** 单进程 L1 不证明 FastArray 跨客户端复制；当前 4 例保留显式场景装配而未抽 fixture，后续继续增加同类用例时应重新评估文件内测试支持是否能在不隐藏规格的前提下降低重复。
+- **建议先看：** 注册 `:11-29`；四条入口 `:37`、`:169`、`:321`、`:436`；重点逆查每个失败调用后的 Result、Snapshot 和清理断言。
+
+### 6.23 `Source/Catfishing/*/Tests/*Tests.cpp` — 64 条 Automation 套件
+
+- **模块/层：** 测试层 / L1-L2 模块合同。
+- **改动类型：** 新增或扩展 43 个测试文件；全部位于被测系统自己的 `Tests/` 子目录。
+- **改了什么：** 把 AbilitySystem、Camp、Character、Collection、Condition、Data、Environment、Equipment、Fishing、Framework/Game、Items、Online、Profile、Run、Social、UI 的基础合同注册为 `Catfishing.Unit.*` 自动化测试，并保留 1 条 `Catfishing.Slice.*` 纵向切片。
+- **为什么：** 当前架构要交给后续程序员继续实现实际玩法，必须先证明模块公开入口的方向没有偏：默认值 fail-closed、合法配置可读、事务幂等、Revision/所有权不被绕过、局部生命周期可清理。
+- **怎么做：** Settings/Definition 测试使用瞬态对象直接验证 readiness 和解析输出；需要 World 的测试用 `FTestWorldWrapper::CreateTestWorld(EWorldType::Game)` 取得真实 WorldSubsystem 或 Spawn 真实 Actor/Component；Items 事务测试只走 Register/Commit/Transfer/Consume/Reserve/Cancel/Close 等正式入口。
+- **关键输入：** 明确的 RequestId、ExpectedRevision、StableNetId、DefinitionId、容器容量、PlayerState/Controller/Actor、测试用配置值。
+- **关键输出：** UE Automation Success/Fail、公开 Result、Snapshot、Revision、错误码、组件公开状态。
+- **状态读写：** 测试通过生产 public API 写入测试 World 内的短生命周期状态，再通过 public Result/Snapshot/查询接口读取；不读取生产私有 map/cache，也不加测试后门。
+- **调用方：** UE Automation Framework 的 `Automation RunTests Catfishing`。
+- **消费方：** `.codex/docs/testing-report.md`、后续跨模块纵向切片和程序员回归。
+- **风险与审查重点：** 这批测试大多是模块合同，不证明完整玩法链；程序员应审查每条测试是否真正代表后续功能入口，尤其是 `Items/Tests/CatItemsServiceTransactionTests.cpp:132` 的 Revision 链、`Condition/Tests/CatConditionComponentTests.cpp:16` 的真实 Controller 夹具、`Fishing/Tests/CatFishingSessionTests.cpp:16` 的缺 StateTree fail-closed，以及 `Collection/Tests/CatRunImprintServiceTests.cpp:26` 的批量计划幂等。UI Widget 测试只验证 headless 可稳定观察的 DTO/opaque handle 契约，不冒充真实按钮点击。
+- **程序员建议先看：** 先看测试方案 `Docs/Development/自动化测试方案.md:8`，再看模块测试树；核心事务从 `Items/Tests/CatItemsServiceTransactionTests.cpp:10` 的 helper 与 `:132` 起四条事务测试进入。
+
+### 6.24 `Source/Catfishing/Collection/Tests/CatItemsCollectionSliceTests.cpp:70` — Items→Collection 纵向切片
+
+- **模块/层：** 测试层 / L3 跨模块纵向切片。
+- **改动类型：** 新增切片测试文件；仅在 `WITH_DEV_AUTOMATION_TESTS` 下注册。
+- **改了什么：** 用真实 Game Test World 同时取得 `UCatItemsService` 与 `UCatRunImprintService`；先通过 Items 注册个人鱼护并提交一条合法捕获，再把 `CommitCapture` 返回的公开 `Committed` 事实交给 Collection 记录。
+- **为什么：** 模块级测试只能证明各自合同成立；这条切片开始证明两个模块能通过当前公开接口协作，而不是靠私有字段或测试后门粘起来。
+- **怎么做：** `:33` 的 `RegisterPersonalGuard` 生成 authority Actor、正式复制组件和个人鱼护；`:56` 的 `MakeCaptureCommand` 构造合法捕获命令；`:97` 调用 `ItemsService->CommitCapture`；`:111` 和 `:117` 两次调用 `RecordCommittedCapture` 断言初次 Grant 有效、重放 GrantId 相同、pending ACK 数量不增加。
+- **关键输入：** `ContainerId`、`StableNetId=SlicePlayerA`、合法 `RequestId/FishingSessionId/FishInstanceId`、`FishDefinitionId=SliceFish`、公开 capture condition。
+- **关键输出：** `FCatCaptureCommitResult::Committed`、`FishRecorded GrantId`、`GetPendingGrantAckCount()`、`PrepareForRunTeardown()`。
+- **状态读写：** Items 写入测试 World 内的容器快照；Collection 写入本轮 pending Grant ACK。测试只通过 public API 读写，不读取私有 map/cache。
+- **调用方：** UE Automation Framework 的精确过滤 `Automation RunTests Catfishing.Slice.ItemsCollection.CommitCaptureRecordsSingleFishGrant`。
+- **消费方：** `.codex/docs/testing-report.md`、后续 Fishing→Items→Collection→Profile 完整切片。
+- **风险与审查重点：** 这条切片刻意停在 Collection pending Grant 边界，因为当前没有不加后门的公开接口能抽取 Grant payload 并交给 Profile ACK；程序员审查时重点确认这个停止点是否符合“先纵向，不越权”的测试策略。
+- **验证：** `Saved/Automation/20260812-full-automation-04/Report/index.json` 显示完整批次 Found 64 / Success 64 / failed 0 / warnings 0 / errors 0；其中 `Catfishing.Slice.ItemsCollection.CommitCaptureRecordsSingleFishGrant` 为 Success，且 `Automation.log` 中 Items 结构化日志显示 committed capture 成功。早期单测证据仍保留在 `Saved/Automation/20260812-slice-items-collection-01/`。
+- **程序员建议先看：** 从 `:70` 的 `RunTest` 读主链，再回看 `:33` fixture 和 `:56` 命令构造；最后对照 `Collection/CatRunImprintService.cpp` 的 `RecordCommittedCapture`。
+
 ## 7. 代码工作流
 
 ### 7.1 Host Create → Lake → Leave → Frontend
@@ -711,7 +799,8 @@ Client 只能回传服务器签发的 ProtocolId，不能指定终态鱼或伪�
 2. 从 `CommitCapture:92` 反查所有鱼生成入口，确认没有旁路。
 3. 从 `CreateCapturePlansForParticipants:141` 反查全部调用者，确认没有退回单人逐个提交。
 4. 从 PlayerController Server RPC 段 `:1267-1836` 检查每个命令是否统一经过 gameplay gate 和服务器身份重建。
-5. 最后看两个 Python 脚本和最终日志，区分“已验证”与“只审查”。
+5. 从 `Source/Catfishing/*/Tests/*Tests.cpp` 反查每条测试是否只走正式公开入口，尤其是 Items 事务、Condition 搬运和 Collection 批量计划。
+6. 最后看两个 Python 脚本和最终日志，区分“已验证”与“只审查”。
 
 ## 9. 风险清单
 
@@ -725,6 +814,7 @@ Client 只能回传服务器签发的 ProtocolId，不能指定终态鱼或伪�
 | 中   | Social timer 与网络竞态                                   | ProtocolId、active map、terminal cache、teardown resolve                   | Catch 与 timeout 同帧、角色离开、共享缸恢复策略测试                               |
 | 中   | `CatGameplayTypes.cpp` 扇出高                           | 它是 GameMode/GameState/PlayerState/PlayerController 的真实框架边界；没有新增 manager | 程序员重点检查 RPC→域服务路由，未来只有出现独立所有权时再拆                                |
 | 中   | 可见 UI/输入未验收                                          | 原生工程 UI 生命周期有 headless 证据；产品输入 gate 关闭                                  | 可见 PIE、手柄/键鼠焦点、重生/占有、多 LocalPlayer                              |
+| 中   | 纵向链路仍只覆盖第一条最小桥接                                   | 43 个测试文件 / 63 条 `Catfishing.Unit.*` 已通过；1 条 Items→Collection `Catfishing.Slice.*` 已通过 | 下一步补 Fishing→Items→Collection→Profile、Run→Sacrifice→Items、Character→AbilitySystem→Condition→UI 等 L3 切片 |
 | 低   | Target 使用 `EngineIncludeOrderVersion.Unreal5_6` 兼容顺序 | UE 5.8 Editor/Game 当前构建通过                                               | 单独升级 include order 并全量重建，避免和玩法改动混做                              |
 | 低   | 大量新文件在空模板基线中尚未形成稳定 Git 历史                            | 完整审查面和文件地图已记录；保护项排除归因                                                   | 程序员提交前按真实归属分组 review/stage，勿吞并用户文档和 state                       |
 
@@ -732,7 +822,7 @@ Client 只能回传服务器签发的 ProtocolId，不能指定终态鱼或伪�
 
 ### 10.1 单 Runtime 模块而非按域拆模块
 
-当前 103 个文件仍处于一个产品和同一 Runtime 生命周期内。拆成多模块会引入导出宏、循环依赖、Build.cs 和加载顺序成本，却没有独立发布/复用边界。保留目录级领域边界，并用 `Framework/Core` 公开最小 DTO，是当前更小的充分方案。
+当前 101 个非测试文件仍处于一个产品和同一 Runtime 生命周期内；新增的 43 个测试文件只建立回归护栏，不改变运行模块边界。拆成多模块会引入导出宏、循环依赖、Build.cs 和加载顺序成本，却没有独立发布/复用边界。保留目录级领域边界，并用 `Framework/Core` 公开最小 DTO，是当前更小的充分方案。
 
 ### 10.2 Online subsystem 而非 Session/Travel manager 链
 
@@ -828,6 +918,7 @@ FishDefinition 没有 CaptureImprintEvent 时仍允许实物鱼进入容器；�
 | 装备未解锁或远程维修                  | `CatEquipmentComponent.cpp:30` / `:248`                          | Equipment settings/definitions、PlayerState unlock              | 未解锁/伪 revision/营地内外                       |
 | 远程救援/草药/共享缸                 | `CatConditionComponent.cpp:107-185`、`CatCampHubActor.cpp:43-131` | Controller RPC `:1492-1630`                                    | 服务器距离边界、不同团队/角色、重复请求                      |
 | 偷鱼/Catch 竞态                 | `CatSocialService.cpp:61`                                        | `:150-244` protocol、`:483` timeout、Items theft                 | Catch vs timeout、角色退出、shared tank policy  |
+| 模块测试失败或意图偏差                 | 对应模块 `Tests/*Tests.cpp`                                        | `Docs/Development/自动化测试方案.md` 的“测什么/怎么测/怎么证明”说明     | 失败模块精确前缀 + `Catfishing.Unit` 全套 + 双 Target 构建 |
 | 自动化假失败/挂起                   | 两脚本 `_on_slate_pre_tick`                                         | GUID key 与 `WAIT_END_PIE` 分支                                   | 正常/缺 Lake 两脚本、进程残留和主文件 hash               |
 
 ## 15. 待程序员审查与人工断点
@@ -844,7 +935,8 @@ FishDefinition 没有 CaptureImprintEvent 时仍允许实物鱼进入容器；�
 6. **复制/隐私断点：** 检查 FastArray、GameState/PlayerState 只公开必要 DTO；Profile durable 私有数据不复制给其他玩家。
 7. **Social 安全断点：** 检查 TheftProtocolId、authority actor 距离、能力/团队资格和 timer teardown。
 8. **最小性断点：** 确认没有为了缩短大文件再引入无独立生命周期的 manager；新增产品功能优先扩展现有域合同。
-9. **证据断点：** 对照 `testing-report.md`，不要把 Null OSS、headless Editor 或代码 Review 写成 Steam/B–G/人工 PIE 通过。
+9. **测试意图断点：** 逐模块抽查 `Tests/` 是否只验证公开合同，是否把“后续真实功能会依赖的边界”写清楚，而不是测试私有实现细节或当前临时写法。
+10. **证据断点：** 对照 `testing-report.md`，不要把 Null OSS、headless Editor、`Catfishing.Unit` 或代码 Review 写成 Steam/B–G/人工 PIE 通过。
 
 ### 15.2 旧 finding 闭环
 
@@ -863,4 +955,4 @@ FishDefinition 没有 CaptureImprintEvent 时仍允许实物鱼进入容器；�
 
 ### 15.4 程序员签字建议
 
-程序员完成上述九个 Review 断点后，可以把“代码审查”单独标记为通过；只有补齐资产/配置并取得人工与 Steam 证据后，才能推进“产品验收”。当前建议结论保持：**代码独立审查 pass，程序员 Review 待完成，B–G 产品运行待验收。**
+程序员完成上述十个 Review 断点后，可以把“代码审查”单独标记为通过；只有补齐资产/配置并取得人工与 Steam 证据后，才能推进“产品验收”。当前建议结论保持：**代码独立审查 pass，程序员 Review 待完成，B–G 产品运行待验收。**
