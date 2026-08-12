@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Character/CatConditionTypes.h"
+#include "Condition/CatConditionTypes.h"
 #include "Components/ActorComponent.h"
 #include "CatConditionComponent.generated.h"
 

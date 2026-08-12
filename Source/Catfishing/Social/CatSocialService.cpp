@@ -1,9 +1,9 @@
 #include "Social/CatSocialService.h"
 
-#include "CatCharacter.h"
-#include "CatGameplayTypes.h"
-#include "CatLog.h"
-#include "Character/CatConditionComponent.h"
+#include "Character/CatCharacter.h"
+#include "Framework/Game/CatGameplayTypes.h"
+#include "Logging/CatLog.h"
+#include "Condition/CatConditionComponent.h"
 #include "Collection/CatRunImprintService.h"
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishDefinition.h"

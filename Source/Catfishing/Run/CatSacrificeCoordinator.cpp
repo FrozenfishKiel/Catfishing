@@ -1,6 +1,6 @@
 #include "Run/CatSacrificeCoordinator.h"
 
-#include "CatGameplayTypes.h"
+#include "Framework/Game/CatGameplayTypes.h"
 #include "Engine/World.h"
 #include "Fishing/CatFishingService.h"
 #include "GameFramework/PlayerState.h"

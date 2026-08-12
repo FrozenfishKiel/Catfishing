@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "CatOnlineTypes.h"
+#include "Online/CatOnlineTypes.h"
 #include "UObject/Object.h"
 #include "CatOnlineSettings.generated.h"
 

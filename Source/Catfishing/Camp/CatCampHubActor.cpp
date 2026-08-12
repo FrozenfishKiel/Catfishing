@@ -1,9 +1,9 @@
 #include "Camp/CatCampHubActor.h"
 
 #include "Camp/CatCampSettings.h"
-#include "CatCharacter.h"
-#include "CatGameplayTypes.h"
-#include "Character/CatConditionComponent.h"
+#include "Character/CatCharacter.h"
+#include "Framework/Game/CatGameplayTypes.h"
+#include "Condition/CatConditionComponent.h"
 #include "Collection/CatRunImprintService.h"
 #include "Components/SceneComponent.h"
 #include "Data/CatFishCatalogSettings.h"

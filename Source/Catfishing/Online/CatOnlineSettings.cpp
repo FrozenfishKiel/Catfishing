@@ -1,4 +1,4 @@
-#include "CatOnlineSettings.h"
+#include "Online/CatOnlineSettings.h"
 
 // 重连 gate 流程：要求正 TTL 且白名单精确等于当前已实现的 ConnectionLost；负值、零或任何未识别位都保持 fail-closed。
 bool UCatOnlineSettings::IsReconnectAdmissionReady() const

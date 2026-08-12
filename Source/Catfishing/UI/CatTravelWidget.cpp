@@ -1,6 +1,6 @@
-#include "CatTravelWidget.h"
+#include "UI/CatTravelWidget.h"
 
-#include "CatLog.h"
+#include "Logging/CatLog.h"
 #include "Blueprint/WidgetTree.h"
 #include "Components/Button.h"
 #include "Components/TextBlock.h"

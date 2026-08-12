@@ -1,6 +1,6 @@
 #include "Items/CatItemsService.h"
 
-#include "CatLog.h"
+#include "Logging/CatLog.h"
 #include "Engine/World.h"
 #include "Items/CatContainerReplicationComponent.h"
 

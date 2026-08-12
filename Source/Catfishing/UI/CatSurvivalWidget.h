@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
-#include "Character/CatConditionTypes.h"
+#include "Condition/CatConditionTypes.h"
 #include "Equipment/CatEquipmentTypes.h"
 #include "Framework/Core/CatRunContracts.h"
 #include "Social/CatSocialTypes.h"

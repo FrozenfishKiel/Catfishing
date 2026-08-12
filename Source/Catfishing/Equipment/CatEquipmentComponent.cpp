@@ -1,6 +1,6 @@
 #include "Equipment/CatEquipmentComponent.h"
 
-#include "CatGameplayTypes.h"
+#include "Framework/Game/CatGameplayTypes.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
 #include "GameFramework/Pawn.h"

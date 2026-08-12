@@ -1,6 +1,6 @@
 #include "Collection/CatRunImprintService.h"
 
-#include "CatGameplayTypes.h"
+#include "Framework/Game/CatGameplayTypes.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerState.h"
 

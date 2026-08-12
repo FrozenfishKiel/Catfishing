@@ -152,7 +152,7 @@ Source/
 | M-04 | A UI | `CatLocalPlayerUISubsystem.cpp:123`、`CatTravelWidget.cpp:80` | 本地玩家 UI 创建/销毁和 Online 快照展示 | Frontend 诊断、Widget 生命周期 | Widget 5/5、EndPIE 清理 | 无可见 PIE 可读性证据 |
 | M-05 | B/D 网关 | `CatGameplayTypes.cpp:119` `PreLogin`、`:310` `CanAcceptGameplayCommand` | 身份准入、统一 gameplay gate、RPC 桥 | 所有服务器命令 | 完整 code review + 构建 | 双账号/恶意 RPC 未运行 |
 | M-06 | C 角色/GAS | `CatCharacter.cpp:190` `InitializeAbilityActorInfo`、`:207` `ApplyInitialAttributesOnce` | Character-owned ASC、属性、输入生命周期 | 角色能力/属性 | 构建 + code review | 正式复制策略/输入/数值未定 |
-| M-07 | C/G 状态 | `Character/CatConditionComponent.cpp:192` `ApplyRecovery` | 湿身/倒地/恢复的权威快照和幂等终态 | 救援、草药、进食、营地 | code review | 距离/多人复制未运行 |
+| M-07 | C/G 状态 | `Condition/CatConditionComponent.cpp:192` `ApplyRecovery` | 湿身/倒地/恢复的权威快照和幂等终态 | 救援、草药、进食、营地 | code review | 距离/多人复制未运行 |
 | M-08 | D Run | `CatGameplayTypes.cpp:397` `EnterRunPhaseFromStateTree`、`:925` `RequestRunTeardown` | Run phase、命令 cache、公开复制和 teardown | 日循环/结算/Host 退出 | code review；缺配置 fail-closed | 缺 `ST_RunFlow`，正常路径未跑 |
 | M-09 | D StateTree | `Run/CatRunStateTreeNodes.cpp:15` | Task/Condition 只调用 GameMode 合同 | 保证唯一流程拓扑 | UHT/构建 | 正式 StateTree 资产缺失 |
 | M-10 | D Environment | `Environment/CatConfiguredEnvironmentProvider.cpp:7`、`CatWaterRegion.cpp:42` | 配置环境快照、水域聚合与查询 | 天气、鱼表筛选、自然贡献 | Lake fail-closed 日志 | 无正式水域/天气 Actor |
@@ -185,7 +185,7 @@ Source/
 - **风险：** 根 include 提高跨目录可见性；新增公共头时仍应直接 include，不能依赖偶然传递。
 - **建议先看：** `:7-20`，再对照任一公共头的模块类型。
 
-### 6.2 `Source/Catfishing/CatOnlineSubsystem.cpp:29` — `UCatOnlineSubsystem`
+### 6.2 `Source/Catfishing/Online/CatOnlineSubsystem.cpp:29` — `UCatOnlineSubsystem`
 
 - **模块/层：** GameInstance 生命周期 / Online 与 Travel。
 - **改动类型：** 新增核心子系统。
@@ -201,7 +201,7 @@ Source/
 - **风险：** Steam 异步/迟到回调、DestroySession 失败、远端 Grant ACK timeout 仍缺平台运行证据。
 - **建议先看：** `:111` `BeginOperation`，`:187` Create，`:408` Leave，`:449` teardown，`:664-822` callbacks，`:874` map load，`:935` travel failure。
 
-### 6.3 `Source/Catfishing/CatLocalPlayerUISubsystem.cpp:20` — `UCatLocalPlayerUISubsystem`
+### 6.3 `Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp:20` — `UCatLocalPlayerUISubsystem`
 
 - **模块/层：** LocalPlayer / UI 生命周期。
 - **改动类型：** 新增 UI 所有者。
@@ -217,7 +217,7 @@ Source/
 - **风险：** split-screen/多 LocalPlayer 未验证；可见 UI 焦点和可读性未人工检查。
 - **建议先看：** `:20-65` delegate 生命周期，`:123-153` Travel Widget，`:195-282` Survival Widget。
 
-### 6.4 `Source/Catfishing/CatTravelWidget.cpp:11` — `UCatTravelWidget`
+### 6.4 `Source/Catfishing/UI/CatTravelWidget.cpp:11` — `UCatTravelWidget`
 
 - **模块/层：** UMG 原生诊断 UI。
 - **改动类型：** 新增无蓝图依赖 Widget。
@@ -233,7 +233,7 @@ Source/
 - **风险：** 工程诊断 UI 不等于最终产品 UI；未做本地化/手柄焦点验收。
 - **建议先看：** `:11-48` 初始化树，`:51-76` 绑定/解绑，`:80` `Configure`。
 
-### 6.5 `Source/Catfishing/CatGameplayTypes.cpp:43` — GameMode/GameState/PlayerState/PlayerController
+### 6.5 `Source/Catfishing/Framework/Game/CatGameplayTypes.cpp:43` — GameMode/GameState/PlayerState/PlayerController
 
 - **模块/层：** Gameplay Framework 权威总线。
 - **改动类型：** 扩展核心 gameplay 类和 RPC 桥。
@@ -249,7 +249,7 @@ Source/
 - **风险：** 文件很大但承担真实框架聚合边界；未来拆分前必须保持唯一 Run/身份/teardown 所有权，不能按函数长度机械拆 manager。
 - **建议先看：** `:119-335` 准入/gate，`:397-507` phase，`:925-1086` teardown，`:1267-1836` RPC 边界。
 
-### 6.6 `Source/Catfishing/CatCharacter.cpp:23` — `ACatCharacter`
+### 6.6 `Source/Catfishing/Character/CatCharacter.cpp:23` — `ACatCharacter`
 
 - **模块/层：** Pawn / 角色聚合根。
 - **改动类型：** 新增 Character-owned GAS 与组件生命周期。
@@ -441,7 +441,7 @@ Source/
 - **风险：** definitions 为空、unlock trust policy 未决；团队可达/多人装配未运行。
 - **建议先看：** `:30-96` loadout，`:97-247` consumable/durability，`:248-323` repair/publish。
 
-### 6.18 `Source/Catfishing/Character/CatConditionComponent.cpp:192` — `ApplyRecovery`
+### 6.18 `Source/Catfishing/Condition/CatConditionComponent.cpp:192` — `ApplyRecovery`
 
 - **模块/层：** Character ActorComponent / 生存状态。
 - **改动类型：** 新增湿身、倒地和恢复状态机。

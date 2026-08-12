@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "CatOnlineTypes.h"
+#include "Online/CatOnlineTypes.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
 #include "CatLocalPlayerUISubsystem.generated.h"
 

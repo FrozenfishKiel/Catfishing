@@ -1,6 +1,6 @@
 #include "Run/CatRunStateTreeNodes.h"
 
-#include "CatGameplayTypes.h"
+#include "Framework/Game/CatGameplayTypes.h"
 #include "StateTreeExecutionContext.h"
 
 // EnterPhase Task 构造流程：禁用 Tick 与无意义的 Tick/Exit 属性复制，使每次 State 进入只执行一次 GameMode 提交。

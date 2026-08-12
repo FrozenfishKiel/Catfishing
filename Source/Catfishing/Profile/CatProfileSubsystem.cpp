@@ -1,6 +1,6 @@
 #include "Profile/CatProfileSubsystem.h"
 
-#include "CatLog.h"
+#include "Logging/CatLog.h"
 #include "Engine/LocalPlayer.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"

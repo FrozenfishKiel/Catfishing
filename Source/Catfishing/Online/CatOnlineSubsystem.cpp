@@ -1,8 +1,8 @@
-#include "CatOnlineSubsystem.h"
+#include "Online/CatOnlineSubsystem.h"
 
-#include "CatLog.h"
-#include "CatOnlineSettings.h"
-#include "CatGameplayTypes.h"
+#include "Logging/CatLog.h"
+#include "Online/CatOnlineSettings.h"
+#include "Framework/Game/CatGameplayTypes.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"

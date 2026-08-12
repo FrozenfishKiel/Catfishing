@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
-#include "CatOnlineTypes.h"
+#include "Online/CatOnlineTypes.h"
 #include "CatTravelWidget.generated.h"
 
 class UButton;

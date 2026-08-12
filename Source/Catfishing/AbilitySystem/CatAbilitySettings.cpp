@@ -1,4 +1,4 @@
-#include "CatAbilitySettings.h"
+#include "AbilitySystem/CatAbilitySettings.h"
 
 // ASC runtime gate 流程：要求显式总开关和当前唯一支持的 Full 策略；不按构建配置关闭正式 Character 身体链，也不猜测 Mixed。
 bool UCatAbilitySettings::IsRuntimeEnabled() const

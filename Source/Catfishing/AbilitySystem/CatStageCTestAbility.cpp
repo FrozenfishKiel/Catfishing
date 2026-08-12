@@ -1,8 +1,8 @@
-#include "CatStageCTestAbility.h"
+#include "AbilitySystem/CatStageCTestAbility.h"
 
 #include "AbilitySystemComponent.h"
-#include "CatAbilitySettings.h"
-#include "CatSurvivalAttributeSet.h"
+#include "AbilitySystem/CatAbilitySettings.h"
+#include "AbilitySystem/CatSurvivalAttributeSet.h"
 
 // 构造流程：只锁定网络执行位置为服务器；实例化、输入、Tag、Cost、Cooldown 与 Cue 均保持引擎默认或空，等待后续产品裁决。
 UCatStageCTestAbility::UCatStageCTestAbility()
