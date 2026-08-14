@@ -12,6 +12,9 @@ class UCatItemsService;
 class UStateTreeComponent;
 class FCatFishingSessionReplicationContractTest;
 class FCatFishingSessionSnapshotVersionMutationRulesTest;
+class FCatFishingSessionTerminationOutcomeTest;
+class FCatFishingSessionExistingCaptureReconciliationTest;
+class FCatFishingSessionRejectedFightSummaryPublicationTest;
 
 DECLARE_MULTICAST_DELEGATE(FCatFishingSessionSnapshotChanged);
 
@@ -74,6 +77,9 @@ protected:
 private:
 	friend class FCatFishingSessionReplicationContractTest;
 	friend class FCatFishingSessionSnapshotVersionMutationRulesTest;
+	friend class FCatFishingSessionTerminationOutcomeTest;
+	friend class FCatFishingSessionExistingCaptureReconciliationTest;
+	friend class FCatFishingSessionRejectedFightSummaryPublicationTest;
 
 	/** 客户端收到完整 Snapshot 后只广播重读信号，不推进任何玩法。 */
 	UFUNCTION()
@@ -88,8 +94,17 @@ private:
 	/** 终态的单一直接写口；StateTree 不可进入终态。 */
 	void FinalizeSession(ECatFishingPhase FinalPhase, ECatFishingOutcome FinalOutcome, const TCHAR* DiagnosticReason);
 
+	/** 只接受当前会话完整且与快照一致的 Items committed 事实，随后同步写捕获终态。 */
+	bool ReconcileCommittedCapture(const FCatCaptureCommittedResult& Committed);
+
+	/** 验证 Items 已提交 DTO 可安全作为当前会话唯一捕获事实。 */
+	bool IsCommittedCaptureForCurrentSession(const FCatCaptureCommittedResult& Committed) const;
+
 	/** 用 FishingService 的统一权威谓词重读参与者，更新公开人数、合计 FishingStrength 与 FightStamina。 */
-	void RefreshFightSummary();
+	bool RefreshFightSummary();
+
+	/** 仅在失败路径重读摘要实际改变时发出高频复制更新。 */
+	void PublishRefreshedFightSummaryIfChanged(bool bSummaryChanged);
 
 	/** 在终态快照强制网络更新后设置有界 Actor lifespan；配置缺失时立即销毁以免无界泄漏。 */
 	void ScheduleTerminalDestroy();

@@ -220,11 +220,12 @@ FCatDomainCommandResult ACatFishingSession::ResolveFightExchangeFromStateTree(co
 		Result.Error = ECatDomainCommandError::InvalidPhase;
 		return Result;
 	}
-	RefreshFightSummary();
+	const bool bSummaryChanged = RefreshFightSummary();
 	if (Snapshot.FightParticipantCount < FishDefinition->MinimumFightParticipants
 		|| Snapshot.CombinedFishingStrength < FishDefinition->FishStrength
 		|| Snapshot.CombinedFightStamina < ParticipantStaminaCost * Snapshot.FightParticipantCount)
 	{
+		PublishRefreshedFightSummaryIfChanged(bSummaryChanged);
 		Result.Error = ECatDomainCommandError::InvalidPhase;
 		Result.Revision = Snapshot.Revision;
 		return Result;
@@ -241,6 +242,7 @@ FCatDomainCommandResult ACatFishingSession::ResolveFightExchangeFromStateTree(co
 			ValidatedStableNetId, ValidatedCharacter, FishingStrength, FightStamina)
 			|| ValidatedStableNetId != Pair.Key || ValidatedCharacter != Character || FightStamina < ParticipantStaminaCost)
 		{
+			PublishRefreshedFightSummaryIfChanged(bSummaryChanged);
 			Result.Error = ECatDomainCommandError::InvalidPhase;
 			Result.Revision = Snapshot.Revision;
 			return Result;
@@ -438,21 +440,50 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 			const FCatCaptureCommitResult CaptureResult = ItemsService->CommitCapture(CaptureCommand);
 			Result.Command = CaptureResult.Command;
 			Result.Capture = CaptureResult.Committed;
-			if (CaptureResult.Command.bCommitted)
+			const bool bHasCommittedCapture = CaptureResult.Command.bCommitted
+				|| CaptureResult.Command.Error == ECatDomainCommandError::AlreadyResolved;
+			if (bHasCommittedCapture && IsCommittedCaptureForCurrentSession(CaptureResult.Committed))
 			{
+				FCatImprintCandidate CommittedCaptureCandidate = CaptureCandidate;
+				CommittedCaptureCandidate.CandidateId = CaptureResult.Committed.FishInstance.FishInstanceId;
+				CommittedCaptureCandidate.SubjectId = CaptureResult.Committed.FishInstance.FishInstanceId;
+				CommittedCaptureCandidate.FishDefinitionId = CaptureResult.Committed.FishInstance.FishDefinitionId;
+				TSet<FString> CommittedCaptureParticipants;
+				if (Snapshot.bGiant)
+				{
+					for (const TPair<FString, TWeakObjectPtr<ACatCharacter>>& Pair : FightParticipantCharacters)
+					{
+						ACatCharacter* ParticipantCharacter = Pair.Value.Get();
+						FString ParticipantStableNetId;
+						ACatCharacter* ValidatedCharacter = nullptr;
+						double FishingStrength = 0.0;
+						double FightStamina = 0.0;
+						if (ParticipantCharacter && UCatFishingService::TryGetFightCapability(
+							ParticipantCharacter->GetController(), ParticipantStableNetId, ValidatedCharacter,
+							FishingStrength, FightStamina) && ParticipantStableNetId == Pair.Key
+							&& ValidatedCharacter == ParticipantCharacter)
+						{
+							CommittedCaptureParticipants.Add(ParticipantStableNetId);
+						}
+					}
+				}
+				CommittedCaptureParticipants.Add(CaptureResult.Committed.FishInstance.OwnerStableNetId);
+				CommittedCaptureCandidate.ParticipantStableNetIds = CommittedCaptureParticipants.Array();
+				CommittedCaptureCandidate.ParticipantStableNetIds.Sort();
+				CommittedCaptureCandidate.ParticipantCount = CommittedCaptureCandidate.ParticipantStableNetIds.Num();
 				FCatCaptureConditionSnapshot Condition;
 				Condition.RegionId = WaterRegionSnapshot.RegionId;
 				const FGuid FishRecordedGrantId = ImprintService->RecordCommittedCapture(
-					CaptureResult.Committed, StableNetId, Condition);
+					CaptureResult.Committed, CaptureResult.Committed.FishInstance.OwnerStableNetId, Condition);
 				bool bOptionalPlanCommitted = true;
 				if (bHasCaptureImprintEvent)
 				{
 					// 巨鱼候选包含 HookedFight 的合法钓手/协作者以及最终抄手；实物归属仍只来自 Items 的首个近岸 Compare-and-Commit。
-					bOptionalPlanCommitted = ImprintService->SubmitImprintCandidate(CaptureCandidate);
+					bOptionalPlanCommitted = ImprintService->SubmitImprintCandidate(CommittedCaptureCandidate);
 					TArray<FCatCapturePlan> CapturePlans;
 					bOptionalPlanCommitted = bOptionalPlanCommitted
-						&& ImprintService->CreateCapturePlansForParticipants(CaptureCandidate.CandidateId,
-							CaptureCandidate.ParticipantStableNetIds, false, CapturePlans);
+						&& ImprintService->CreateCapturePlansForParticipants(CommittedCaptureCandidate.CandidateId,
+							CommittedCaptureCandidate.ParticipantStableNetIds, false, CapturePlans);
 				}
 				if (!FishRecordedGrantId.IsValid() || !bOptionalPlanCommitted)
 				{
@@ -463,9 +494,10 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 						bOptionalPlanCommitted ? TEXT("true") : TEXT("false"),
 						FishRecordedGrantId.IsValid() ? TEXT("true") : TEXT("false"));
 				}
-				bCaptureResolved = true;
-				FinalizeSession(ECatFishingPhase::Resolved, ECatFishingOutcome::Caught, TEXT("Capture committed"));
-				Result.Command.Revision = Snapshot.Revision;
+				if (ReconcileCommittedCapture(CaptureResult.Committed))
+				{
+					Result.Command.Revision = Snapshot.Revision;
+				}
 			}
 		}
 	}
@@ -481,11 +513,20 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 // 会话终止流程：非 authority、已 Resolved 或已 Terminated 直接幂等返回，避免覆盖捕获终态。首次中断只写一次 Terminated/Revision 并发布快照，再停止 StateTree、释放钓手之外的参与弱引用且不触碰 Items；最后启动配置的有界复制窗口，让客户端看见终态后销毁 Actor，服务据此释放钓手的单活跃槽位。
 void ACatFishingSession::TerminateSession(const ECatFishingOutcome Outcome, const TCHAR* DiagnosticReason)
 {
-	if (Outcome == ECatFishingOutcome::None || Outcome == ECatFishingOutcome::Caught)
+	switch (Outcome)
 	{
+	case ECatFishingOutcome::EmptyHook:
+	case ECatFishingOutcome::HookWindowExpired:
+	case ECatFishingOutcome::Escaped:
+	case ECatFishingOutcome::RodBroken:
+	case ECatFishingOutcome::CatInWater:
+	case ECatFishingOutcome::Cancelled:
+	case ECatFishingOutcome::Invalidated:
+		FinalizeSession(ECatFishingPhase::Terminated, Outcome, DiagnosticReason);
+		return;
+	default:
 		return;
 	}
-	FinalizeSession(ECatFishingPhase::Terminated, Outcome, DiagnosticReason);
 }
 
 void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, const ECatFishingOutcome FinalOutcome,
@@ -505,6 +546,7 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	}
 	FightParticipantIds.Reset();
 	FightParticipantCharacters.Reset();
+	FisherCharacter.Reset();
 	ScheduleTerminalDestroy();
 	UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_session_terminated SessionId=%s Outcome=%s Reason=%s Revision=%lld"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(FinalOutcome),
@@ -580,8 +622,33 @@ void ACatFishingSession::PublishSnapshot(const ECatFishingSnapshotMutation Mutat
 }
 
 // 搏斗摘要流程：清零三项聚合后，对每个弱 Character 重用 FishingService 的 Active/未倒地/正能力谓词；只累加身份与弱引用仍一致的当前参与者。
-void ACatFishingSession::RefreshFightSummary()
+bool ACatFishingSession::IsCommittedCaptureForCurrentSession(const FCatCaptureCommittedResult& Committed) const
 {
+	return Committed.CaptureRequestId.IsValid() && Committed.FishingSessionId == Snapshot.FishingSessionId
+		&& Committed.FishInstance.FishInstanceId.IsValid() && !Committed.FishInstance.FishDefinitionId.IsNone()
+		&& Committed.FishInstance.FishDefinitionId == Snapshot.FishDefinitionId
+		&& Committed.FishInstance.SourceFishingSessionId == Snapshot.FishingSessionId
+		&& !Committed.FishInstance.OwnerStableNetId.IsEmpty() && Committed.ContainerId.IsValid()
+		&& Committed.ContainerRevision > 0 && FMath::IsFinite(Committed.FishInstance.WeightKilograms)
+		&& Committed.FishInstance.WeightKilograms > 0.0 && Committed.FishInstance.SacrificeContribution > 0;
+}
+
+bool ACatFishingSession::ReconcileCommittedCapture(const FCatCaptureCommittedResult& Committed)
+{
+	if (!HasAuthority() || !IsCommittedCaptureForCurrentSession(Committed) || IsTerminal())
+	{
+		return false;
+	}
+	bCaptureResolved = true;
+	FinalizeSession(ECatFishingPhase::Resolved, ECatFishingOutcome::Caught, TEXT("Capture reconciled"));
+	return IsTerminal() && Snapshot.Phase == ECatFishingPhase::Resolved && Snapshot.Outcome == ECatFishingOutcome::Caught;
+}
+
+bool ACatFishingSession::RefreshFightSummary()
+{
+	const int32 PreviousParticipantCount = Snapshot.FightParticipantCount;
+	const double PreviousCombinedFishingStrength = Snapshot.CombinedFishingStrength;
+	const double PreviousCombinedFightStamina = Snapshot.CombinedFightStamina;
 	Snapshot.FightParticipantCount = 0;
 	Snapshot.CombinedFishingStrength = 0.0;
 	Snapshot.CombinedFightStamina = 0.0;
@@ -600,6 +667,17 @@ void ACatFishingSession::RefreshFightSummary()
 			Snapshot.CombinedFishingStrength += Strength;
 			Snapshot.CombinedFightStamina += FightStamina;
 		}
+	}
+	return Snapshot.FightParticipantCount != PreviousParticipantCount
+		|| Snapshot.CombinedFishingStrength != PreviousCombinedFishingStrength
+		|| Snapshot.CombinedFightStamina != PreviousCombinedFightStamina;
+}
+
+void ACatFishingSession::PublishRefreshedFightSummaryIfChanged(const bool bSummaryChanged)
+{
+	if (bSummaryChanged)
+	{
+		PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
 	}
 }
 

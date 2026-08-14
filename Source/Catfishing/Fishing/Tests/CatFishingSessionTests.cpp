@@ -4,7 +4,12 @@
 #include "Net/UnrealNetwork.h"
 #include "Tests/AutomationCommon.h"
 
+#include "Character/CatCharacter.h"
 #include "Fishing/CatFishingSession.h"
+#include "GameFramework/Actor.h"
+#include "GameFramework/PlayerState.h"
+#include "Items/CatContainerReplicationComponent.h"
+#include "Items/CatItemsService.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingSessionPublicSnapshotDefaultsTest,
@@ -68,8 +73,19 @@ bool FCatFishingSessionTerminationOutcomeTest::RunTest(const FString& Parameters
 	const FCatFishingSessionSnapshot Before = Session->GetSnapshot();
 	Session->TerminateSession(ECatFishingOutcome::None, TEXT("Ignored none"));
 	Session->TerminateSession(ECatFishingOutcome::Caught, TEXT("Ignored caught"));
+	Session->TerminateSession(static_cast<ECatFishingOutcome>(255), TEXT("Ignored invalid outcome"));
 	TestEqual(TEXT("Rejected outcomes leave phase unchanged"), Session->GetSnapshot().Phase, Before.Phase);
 	TestEqual(TEXT("Rejected outcomes leave version unchanged"), Session->GetSnapshot().Revision, Before.Revision);
+	TestEqual(TEXT("Invalid outcome leaves sequence unchanged"), Session->GetSnapshot().SnapshotSequence, Before.SnapshotSequence);
+	TestEqual(TEXT("Invalid outcome leaves epoch unchanged"), Session->GetSnapshot().PhaseEpoch, Before.PhaseEpoch);
+	TestEqual(TEXT("Invalid outcome leaves explicit outcome unchanged"), Session->GetSnapshot().Outcome, Before.Outcome);
+
+	ACatCharacter* FisherCharacter = World->SpawnActor<ACatCharacter>();
+	APlayerState* FisherPlayerState = World->SpawnActor<APlayerState>();
+	TestNotNull(TEXT("Spawns private fisher character for terminal cleanup"), FisherCharacter);
+	TestNotNull(TEXT("Spawns public fisher player state fact"), FisherPlayerState);
+	Session->FisherCharacter = FisherCharacter;
+	Session->Snapshot.FisherPlayerState = FisherPlayerState;
 
 	AddExpectedErrorPlain(TEXT("Event=fishing_session_terminated"), EAutomationExpectedErrorFlags::Contains, 1);
 	Session->TerminateSession(ECatFishingOutcome::Invalidated, TEXT("Automation invalidated"));
@@ -79,6 +95,8 @@ bool FCatFishingSessionTerminationOutcomeTest::RunTest(const FString& Parameters
 	TestEqual(TEXT("First termination advances revision once"), Terminal.Revision, Before.Revision + 1);
 	TestEqual(TEXT("First termination advances sequence once"), Terminal.SnapshotSequence, Before.SnapshotSequence + 1);
 	TestEqual(TEXT("First termination advances phase epoch once"), Terminal.PhaseEpoch, Before.PhaseEpoch + 1);
+	TestFalse(TEXT("Terminal cleanup releases private fisher character weak reference"), Session->FisherCharacter.IsValid());
+	TestEqual(TEXT("Terminal snapshot preserves public fisher player state fact"), Terminal.FisherPlayerState.Get(), FisherPlayerState);
 	Session->TerminateSession(ECatFishingOutcome::Escaped, TEXT("Ignored replay"));
 	const FCatFishingSessionSnapshot Replay = Session->GetSnapshot();
 	TestEqual(TEXT("Second termination cannot overwrite outcome"), Replay.Outcome, Terminal.Outcome);
@@ -216,6 +234,138 @@ bool FCatFishingSessionSnapshotVersionMutationRulesTest::RunTest(const FString& 
 	TestEqual(TEXT("Phase change increments revision"), Session->Snapshot.Revision, int64{12});
 	TestEqual(TEXT("Phase change increments sequence"), Session->Snapshot.SnapshotSequence, int64{23});
 	TestEqual(TEXT("Phase change increments epoch"), Session->Snapshot.PhaseEpoch, int64{31});
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingSessionExistingCaptureReconciliationTest,
+	"Catfishing.Unit.Fishing.Session.ExistingItemsCaptureReconcilesUsingCommittedFacts",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingSessionExistingCaptureReconciliationTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("Creates authoritative reconciliation test world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	UWorld* World = WorldWrapper.GetTestWorld();
+	if (!World)
+	{
+		return false;
+	}
+	UCatItemsService* ItemsService = World->GetSubsystem<UCatItemsService>();
+	AActor* ContainerHost = World->SpawnActor<AActor>();
+	UCatContainerReplicationComponent* ContainerComponent = ContainerHost
+		? NewObject<UCatContainerReplicationComponent>(ContainerHost) : nullptr;
+	ACatFishingSession* Session = World->SpawnActor<ACatFishingSession>();
+	ACatFishingSession* RejectingSession = World->SpawnActor<ACatFishingSession>();
+	ACatFishingSession* NonAuthoritySession = World->SpawnActor<ACatFishingSession>();
+	if (!TestNotNull(TEXT("Creates real Items service"), ItemsService)
+		|| !TestNotNull(TEXT("Spawns Items container host"), ContainerHost)
+		|| !TestNotNull(TEXT("Creates Items replication component"), ContainerComponent)
+		|| !TestNotNull(TEXT("Spawns session for committed capture reconciliation"), Session)
+		|| !TestNotNull(TEXT("Spawns session for malformed committed capture rejection"), RejectingSession)
+		|| !TestNotNull(TEXT("Spawns non-authority session for reconciliation guard"), NonAuthoritySession))
+	{
+		return false;
+	}
+	ContainerHost->AddInstanceComponent(ContainerComponent);
+	ContainerComponent->RegisterComponent();
+	const FString FirstOwnerStableNetId = TEXT("FirstOwner");
+	const FGuid ContainerId = FGuid::NewGuid();
+	const FGuid FishingSessionId = FGuid::NewGuid();
+	TestTrue(TEXT("Registers real personal guard"), ItemsService->RegisterContainer(ContainerComponent, ContainerId,
+		ECatContainerKind::PersonalGuard, FirstOwnerStableNetId, 2));
+	FCatContainerSnapshot ContainerSnapshot;
+	if (!ItemsService->TryGetContainerSnapshot(ContainerId, ContainerSnapshot))
+	{
+		ItemsService->UnregisterContainer(ContainerComponent);
+		return false;
+	}
+	FCatCaptureCommitCommand FirstCommand;
+	FirstCommand.Context.RequestId = FGuid::NewGuid();
+	FirstCommand.Context.ExpectedRevision = ContainerSnapshot.Revision;
+	FirstCommand.Context.StableNetId = FirstOwnerStableNetId;
+	FirstCommand.FishingSessionId = FishingSessionId;
+	FirstCommand.FishInstanceId = FGuid::NewGuid();
+	FirstCommand.FishDefinitionId = TEXT("ReconciledFish");
+	FirstCommand.TargetContainerId = ContainerId;
+	FirstCommand.WeightKilograms = 1.25;
+	FirstCommand.SacrificeContribution = 3;
+	const FCatCaptureCommitResult FirstResult = ItemsService->CommitCapture(FirstCommand);
+	TestTrue(TEXT("Commits the real first capture"), FirstResult.Command.bCommitted);
+
+	FCatCaptureCommitCommand ExistingSessionRequest = FirstCommand;
+	ExistingSessionRequest.Context.RequestId = FGuid::NewGuid();
+	ExistingSessionRequest.FishInstanceId = FGuid::NewGuid();
+	const FCatCaptureCommitResult ExistingResult = ItemsService->CommitCapture(ExistingSessionRequest);
+	TestFalse(TEXT("Existing session request does not create a second fish"), ExistingResult.Command.bCommitted);
+	TestEqual(TEXT("Existing session request exposes committed Items fact"), ExistingResult.Command.Error,
+		ECatDomainCommandError::AlreadyResolved);
+	TestEqual(TEXT("Existing session result retains original fish instance"), ExistingResult.Committed.FishInstance.FishInstanceId,
+		FirstResult.Committed.FishInstance.FishInstanceId);
+	TestEqual(TEXT("Existing session result retains original owner"), ExistingResult.Committed.FishInstance.OwnerStableNetId,
+		FirstOwnerStableNetId);
+
+	Session->Snapshot.FishingSessionId = FishingSessionId;
+	Session->Snapshot.FishDefinitionId = FirstCommand.FishDefinitionId;
+	TestTrue(TEXT("Existing committed fact synchronously resolves its fishing session"),
+		Session->ReconcileCommittedCapture(ExistingResult.Committed));
+	TestTrue(TEXT("Reconciliation marks capture resolved"), Session->bCaptureResolved);
+	TestEqual(TEXT("Reconciliation enters Resolved"), Session->Snapshot.Phase, ECatFishingPhase::Resolved);
+	TestEqual(TEXT("Reconciliation records Caught"), Session->Snapshot.Outcome, ECatFishingOutcome::Caught);
+
+	NonAuthoritySession->Snapshot.FishingSessionId = FishingSessionId;
+	NonAuthoritySession->Snapshot.FishDefinitionId = FirstCommand.FishDefinitionId;
+	NonAuthoritySession->SetRole(ROLE_SimulatedProxy);
+	TestFalse(TEXT("Non-authority cannot reconcile an existing Items capture"),
+		NonAuthoritySession->ReconcileCommittedCapture(ExistingResult.Committed));
+	TestFalse(TEXT("Non-authority reconciliation leaves capture unresolved"), NonAuthoritySession->bCaptureResolved);
+	TestEqual(TEXT("Non-authority reconciliation leaves phase unchanged"), NonAuthoritySession->Snapshot.Phase,
+		ECatFishingPhase::Created);
+
+	RejectingSession->Snapshot.FishingSessionId = FishingSessionId;
+	RejectingSession->Snapshot.FishDefinitionId = FirstCommand.FishDefinitionId;
+	FCatCaptureCommittedResult MismatchedCommitted = ExistingResult.Committed;
+	MismatchedCommitted.FishInstance.OwnerStableNetId.Reset();
+	TestFalse(TEXT("Incomplete committed DTO is rejected without finalizing"),
+		RejectingSession->ReconcileCommittedCapture(MismatchedCommitted));
+	TestEqual(TEXT("Rejected committed DTO leaves phase unchanged"), RejectingSession->Snapshot.Phase,
+		ECatFishingPhase::Created);
+	ItemsService->UnregisterContainer(ContainerComponent);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingSessionRejectedFightSummaryPublicationTest,
+	"Catfishing.Unit.Fishing.Session.RejectedFightRefreshPublishesOnlyChangedSummary",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingSessionRejectedFightSummaryPublicationTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("Creates authoritative fight summary test world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	UWorld* World = WorldWrapper.GetTestWorld();
+	ACatFishingSession* Session = World ? World->SpawnActor<ACatFishingSession>() : nullptr;
+	if (!TestNotNull(TEXT("Spawns session"), Session))
+	{
+		return false;
+	}
+	Session->Snapshot.Revision = 10;
+	Session->Snapshot.SnapshotSequence = 20;
+	Session->Snapshot.PhaseEpoch = 30;
+	Session->Snapshot.FightParticipantCount = 2;
+	Session->Snapshot.CombinedFishingStrength = 8.0;
+	Session->Snapshot.CombinedFightStamina = 6.0;
+	const bool bSummaryChanged = Session->RefreshFightSummary();
+	Session->PublishRefreshedFightSummaryIfChanged(bSummaryChanged);
+	TestTrue(TEXT("Invalid participants refresh the stale public summary"), bSummaryChanged);
+	TestEqual(TEXT("Changed rejected summary keeps revision"), Session->Snapshot.Revision, int64{10});
+	TestEqual(TEXT("Changed rejected summary advances high-frequency sequence"), Session->Snapshot.SnapshotSequence, int64{21});
+	TestEqual(TEXT("Changed rejected summary keeps phase epoch"), Session->Snapshot.PhaseEpoch, int64{30});
+	TestFalse(TEXT("Unchanged summary does not publish an empty update"), Session->RefreshFightSummary());
+	Session->PublishRefreshedFightSummaryIfChanged(false);
+	TestEqual(TEXT("Empty refresh does not advance sequence"), Session->Snapshot.SnapshotSequence, int64{21});
 	return !HasAnyErrors();
 }
 
