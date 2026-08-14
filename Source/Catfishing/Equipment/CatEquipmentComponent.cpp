@@ -265,9 +265,11 @@ FCatFishingFailureResult UCatEquipmentComponent::CommitFishingFailure(const FGui
 FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FGuid FishingSessionId,
 	const FName RodDefinitionId, const FName BaitDefinitionId, const FName FloatDefinitionId, const int64 ExpectedRevision)
 {
-	if (FishingUseRecords.Contains(FishingSessionId))
+	if (const FCatFishingUseRecord* ExistingRecord = FindFishingUseRecord(FishingSessionId))
 	{
-		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false);
+		const bool bReserved = ExistingRecord->bSpecialBaitReserved && !ExistingRecord->bBaitCommitted
+			&& !ExistingRecord->bReleased;
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, bReserved);
 	}
 
 	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
@@ -430,7 +432,7 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingRodBreak(cons
 	{
 		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::NotFound, false);
 	}
-	if (Record->bReleased || Record->bBreakCommitted)
+	if (Record->bReleased || Record->bBreakCommitted || Record->bWearCommitted)
 	{
 		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false, Record);
 	}

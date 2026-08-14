@@ -8,6 +8,7 @@
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/Pawn.h"
 #include "Tests/AutomationCommon.h"
+#include "UObject/StrongObjectPtr.h"
 
 #include <limits>
 
@@ -78,6 +79,7 @@ namespace CatEquipmentFishingUseTest
 		TArray<TSoftObjectPtr<UCatEquipmentDefinition>> SavedDefinitions;
 		ECatDomainPolicy SavedTrustPolicy = ECatDomainPolicy::Unset;
 		FName SavedDriftwoodDefinitionId = NAME_None;
+		TArray<TStrongObjectPtr<UCatEquipmentDefinition>> RuntimeDefinitions;
 		FTestWorldWrapper WorldWrapper;
 		APawn* Pawn = nullptr;
 		ACatfishingPlayerState* PlayerState = nullptr;
@@ -89,16 +91,22 @@ namespace CatEquipmentFishingUseTest
 			SavedDefinitions = Settings->Definitions;
 			SavedTrustPolicy = Settings->ProfileLoadoutTrustPolicy;
 			SavedDriftwoodDefinitionId = Settings->DriftwoodDefinitionId;
+			RuntimeDefinitions.Reserve(5);
 
-			UCatEquipmentDefinition* Rod = MakeDefinition(RodId, ECatEquipmentKind::Rod);
-			UCatEquipmentDefinition* SpecialBait = MakeDefinition(SpecialBaitId, ECatEquipmentKind::Bait);
+			TStrongObjectPtr<UCatEquipmentDefinition>& Rod = RuntimeDefinitions.Emplace_GetRef(
+				MakeDefinition(RodId, ECatEquipmentKind::Rod));
+			TStrongObjectPtr<UCatEquipmentDefinition>& SpecialBait = RuntimeDefinitions.Emplace_GetRef(
+				MakeDefinition(SpecialBaitId, ECatEquipmentKind::Bait));
 			SpecialBait->bSpecialBait = true;
 			SpecialBait->bRunConsumable = true;
-			UCatEquipmentDefinition* NormalBait = MakeDefinition(NormalBaitId, ECatEquipmentKind::Bait);
-			UCatEquipmentDefinition* Float = MakeDefinition(FloatId, ECatEquipmentKind::Float);
-			UCatEquipmentDefinition* Driftwood = MakeDefinition(DriftwoodId, ECatEquipmentKind::Driftwood);
+			TStrongObjectPtr<UCatEquipmentDefinition>& NormalBait = RuntimeDefinitions.Emplace_GetRef(
+				MakeDefinition(NormalBaitId, ECatEquipmentKind::Bait));
+			TStrongObjectPtr<UCatEquipmentDefinition>& Float = RuntimeDefinitions.Emplace_GetRef(
+				MakeDefinition(FloatId, ECatEquipmentKind::Float));
+			TStrongObjectPtr<UCatEquipmentDefinition>& Driftwood = RuntimeDefinitions.Emplace_GetRef(
+				MakeDefinition(DriftwoodId, ECatEquipmentKind::Driftwood));
 			Driftwood->bRunConsumable = true;
-			Settings->Definitions = { Rod, SpecialBait, NormalBait, Float, Driftwood };
+			Settings->Definitions = { Rod.Get(), SpecialBait.Get(), NormalBait.Get(), Float.Get(), Driftwood.Get() };
 			Settings->ProfileLoadoutTrustPolicy = ECatDomainPolicy::Enabled;
 			Settings->DriftwoodDefinitionId = DriftwoodId;
 
@@ -207,8 +215,9 @@ bool FCatEquipmentFishingUseBeginTest::RunTest(const FString& Parameters)
 
 	const FCatFishingUseReservationResult Replay = Fixture.Component->BeginFishingUse(
 		SessionId, RodId, SpecialBaitId, FloatId, Before.Revision);
-	TestFalse(TEXT("Begin replay does not reserve twice"), Replay.bReserved);
+	TestTrue(TEXT("Special-bait Begin replay returns its existing reservation"), Replay.bReserved);
 	TestEqual(TEXT("Begin replay is already resolved"), Replay.Error, ECatDomainCommandError::AlreadyResolved);
+	TestEqual(TEXT("Begin replay returns current reservation revision"), Replay.EquipmentRevision, Fixture.Component->GetSnapshot().Revision);
 	TestEqual(TEXT("Begin replay keeps public revision"), Fixture.Component->GetSnapshot().Revision, Before.Revision);
 
 	const FCatFishingUseReservationResult Exclusive = Fixture.Component->BeginFishingUse(
@@ -344,28 +353,49 @@ bool FCatEquipmentFishingUseBreakTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	using namespace CatEquipmentFishingUseTest;
-	FFishingUseFixture Fixture;
-	if (!Fixture.Create(*this) || !Fixture.ConfigureSpecial(*this))
 	{
-		return false;
-	}
+		FFishingUseFixture Fixture;
+		if (!Fixture.Create(*this) || !Fixture.ConfigureSpecial(*this))
+		{
+			return false;
+		}
 
-	const FGuid SessionId = FGuid::NewGuid();
-	Fixture.Component->BeginFishingUse(SessionId, RodId, SpecialBaitId, FloatId, Fixture.Component->GetSnapshot().Revision);
-	Fixture.Component->SetAccumulatedFishingRodWear(SessionId, 1, 100.0);
-	const FCatFishingUseOperationResult Wear = Fixture.Component->CommitFishingRodWear(SessionId);
-	TestFalse(TEXT("Wear reaching remaining durability requires break"), Wear.bApplied);
-	TestEqual(TEXT("Rejected terminal wear keeps rod intact"), Fixture.Component->GetSnapshot().RodDurability, 100.0);
-	const int64 BeforeBreakRevision = Fixture.Component->GetSnapshot().Revision;
-	const FCatFishingUseOperationResult Break = Fixture.Component->CommitFishingRodBreak(SessionId);
-	TestTrue(TEXT("Rod break overrides pending wear"), Break.bApplied);
-	TestEqual(TEXT("Rod break leaves exactly zero durability"), Fixture.Component->GetSnapshot().RodDurability, 0.0);
-	TestTrue(TEXT("Rod break records broken snapshot"), Fixture.Component->GetSnapshot().bRodBroken);
-	TestEqual(TEXT("Rod break advances revision exactly once"), Fixture.Component->GetSnapshot().Revision, BeforeBreakRevision + 1);
-	const FCatFishingUseOperationResult BreakReplay = Fixture.Component->CommitFishingRodBreak(SessionId);
-	TestFalse(TEXT("Rod break replay does not apply twice"), BreakReplay.bApplied);
-	TestEqual(TEXT("Rod break replay keeps zero durability"), Fixture.Component->GetSnapshot().RodDurability, 0.0);
-	Fixture.WorldWrapper.ForwardErrorMessages(this);
+		const FGuid SessionId = FGuid::NewGuid();
+		Fixture.Component->BeginFishingUse(SessionId, RodId, SpecialBaitId, FloatId, Fixture.Component->GetSnapshot().Revision);
+		Fixture.Component->SetAccumulatedFishingRodWear(SessionId, 1, 100.0);
+		const FCatFishingUseOperationResult Wear = Fixture.Component->CommitFishingRodWear(SessionId);
+		TestFalse(TEXT("Wear reaching remaining durability requires break"), Wear.bApplied);
+		TestEqual(TEXT("Rejected terminal wear keeps rod intact"), Fixture.Component->GetSnapshot().RodDurability, 100.0);
+		const int64 BeforeBreakRevision = Fixture.Component->GetSnapshot().Revision;
+		const FCatFishingUseOperationResult Break = Fixture.Component->CommitFishingRodBreak(SessionId);
+		TestTrue(TEXT("Rod break overrides pending wear"), Break.bApplied);
+		TestEqual(TEXT("Rod break leaves exactly zero durability"), Fixture.Component->GetSnapshot().RodDurability, 0.0);
+		TestTrue(TEXT("Rod break records broken snapshot"), Fixture.Component->GetSnapshot().bRodBroken);
+		TestEqual(TEXT("Rod break advances revision exactly once"), Fixture.Component->GetSnapshot().Revision, BeforeBreakRevision + 1);
+		const FCatFishingUseOperationResult BreakReplay = Fixture.Component->CommitFishingRodBreak(SessionId);
+		TestFalse(TEXT("Rod break replay does not apply twice"), BreakReplay.bApplied);
+		TestEqual(TEXT("Rod break replay keeps zero durability"), Fixture.Component->GetSnapshot().RodDurability, 0.0);
+		Fixture.WorldWrapper.ForwardErrorMessages(this);
+	}
+	{
+		FFishingUseFixture Fixture;
+		if (!Fixture.Create(*this) || !Fixture.ConfigureSpecial(*this))
+		{
+			return false;
+		}
+
+		const FGuid SessionId = FGuid::NewGuid();
+		Fixture.Component->BeginFishingUse(SessionId, RodId, SpecialBaitId, FloatId, Fixture.Component->GetSnapshot().Revision);
+		Fixture.Component->SetAccumulatedFishingRodWear(SessionId, 1, 10.0);
+		const FCatFishingUseOperationResult Wear = Fixture.Component->CommitFishingRodWear(SessionId);
+		TestTrue(TEXT("Wear below durability commits"), Wear.bApplied);
+		const FCatEquipmentLoadoutSnapshot AfterWearCommit = Fixture.Component->GetSnapshot();
+		const FCatFishingUseOperationResult LateBreak = Fixture.Component->CommitFishingRodBreak(SessionId);
+		TestFalse(TEXT("Break after committed wear cannot apply"), LateBreak.bApplied);
+		TestEqual(TEXT("Break after committed wear is already resolved"), LateBreak.Error, ECatDomainCommandError::AlreadyResolved);
+		TestSnapshotUnchanged(*this, TEXT("Late break after committed wear"), AfterWearCommit, Fixture.Component->GetSnapshot());
+		Fixture.WorldWrapper.ForwardErrorMessages(this);
+	}
 	return !HasAnyErrors();
 }
 
