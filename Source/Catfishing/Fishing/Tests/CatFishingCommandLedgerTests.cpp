@@ -122,9 +122,27 @@ bool FCatFishingCommandLedgerReelingSequenceTest::RunTest(const FString& Paramet
 	TestEqual(TEXT("A different authority has an independent sequence"), Ledger.TryCommitReelingSequence(TEXT("AuthorityB"), Command, SessionId, AttemptId), ECatFishingCommandError::None);
 	Command.ActivationCorrelationId = FGuid::NewGuid();
 	TestEqual(TEXT("A different activation correlation has an independent sequence"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::None);
+	FCatSetReelingCommand DifferentSession = Command;
+	DifferentSession.FishingSessionId = FGuid::NewGuid();
+	TestEqual(TEXT("A different session has an independent sequence"), Ledger.TryCommitReelingSequence(AuthorityIdentity, DifferentSession, DifferentSession.FishingSessionId, AttemptId), ECatFishingCommandError::None);
+	FCatSetReelingCommand DifferentAttempt = Command;
+	DifferentAttempt.CastAttemptId = FGuid::NewGuid();
+	TestEqual(TEXT("A different attempt has an independent sequence"), Ledger.TryCommitReelingSequence(AuthorityIdentity, DifferentAttempt, SessionId, DifferentAttempt.CastAttemptId), ECatFishingCommandError::None);
+	FCatSetReelingCommand WrongCurrentSession = Command;
+	WrongCurrentSession.RequestId = FGuid::NewGuid();
+	WrongCurrentSession.FishingSessionId = FGuid::NewGuid();
+	WrongCurrentSession.ActivationCorrelationId = FGuid::NewGuid();
+	TestEqual(TEXT("Wrong current session is rejected without committing"), Ledger.TryCommitReelingSequence(AuthorityIdentity, WrongCurrentSession, FGuid::NewGuid(), AttemptId), ECatFishingCommandError::SessionNotFound);
+	TestEqual(TEXT("Corrected current session commits the same key"), Ledger.TryCommitReelingSequence(AuthorityIdentity, WrongCurrentSession, WrongCurrentSession.FishingSessionId, AttemptId), ECatFishingCommandError::None);
+	FCatSetReelingCommand WrongCurrentAttempt = Command;
+	WrongCurrentAttempt.RequestId = FGuid::NewGuid();
+	WrongCurrentAttempt.CastAttemptId = FGuid::NewGuid();
+	WrongCurrentAttempt.ActivationCorrelationId = FGuid::NewGuid();
+	TestEqual(TEXT("Wrong current attempt is rejected without committing"), Ledger.TryCommitReelingSequence(AuthorityIdentity, WrongCurrentAttempt, SessionId, FGuid::NewGuid()), ECatFishingCommandError::CastAttemptConflict);
+	TestEqual(TEXT("Corrected current attempt commits the same key"), Ledger.TryCommitReelingSequence(AuthorityIdentity, WrongCurrentAttempt, SessionId, WrongCurrentAttempt.CastAttemptId), ECatFishingCommandError::None);
+	TestEqual(TEXT("A committed identical reeling key is stale before reset"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::InputSequenceStale);
 	Ledger.Reset();
-	Command.ActivationCorrelationId = FGuid::NewGuid();
-	TestEqual(TEXT("Reset clears committed reeling sequences"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::None);
+	TestEqual(TEXT("Reset clears the same committed reeling key"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::None);
 	return !HasAnyErrors();
 }
 
