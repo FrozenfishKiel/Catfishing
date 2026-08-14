@@ -10,6 +10,7 @@
 #include "Data/CatFishDefinition.h"
 #include "Engine/World.h"
 #include "Environment/CatWaterQuerySubsystem.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
 #include "Social/CatSocialService.h"
 #include "GameFramework/PlayerState.h"
@@ -29,6 +30,7 @@ void UCatFishingService::Deinitialize()
 	SessionFisherById.Reset();
 	ActiveSessionByFisher.Reset();
 	StartTerminalCache.Reset();
+	DeployedRodByPlayerState.Reset();
 	Super::Deinitialize();
 }
 
@@ -219,6 +221,126 @@ void UCatFishingService::CloseCommandsAndTerminateAll()
 	}
 }
 
+// Session 查询流程：先压缩终态/失效弱引用，再做只读查找；失败查询不建立任何缓存或索引项。
+ACatFishingSession* UCatFishingService::FindSession(const FGuid FishingSessionId)
+{
+	CompactSessions();
+	if (!FishingSessionId.IsValid())
+	{
+		return nullptr;
+	}
+	const TWeakObjectPtr<ACatFishingSession>* WeakSession = Sessions.Find(FishingSessionId);
+	ACatFishingSession* Session = WeakSession ? WeakSession->Get() : nullptr;
+	return Session && !Session->IsTerminal() ? Session : nullptr;
+}
+
+// Controller 活动会话查询：所有输出先清零，再交叉验证服务器身份、正反索引、存活 Session 与公开 SessionId。
+bool UCatFishingService::TryGetActiveSessionForController(const AController* Controller,
+	FGuid& OutFishingSessionId, FCatFishingSessionSnapshot& OutSnapshot)
+{
+	OutFishingSessionId.Invalidate();
+	OutSnapshot = FCatFishingSessionSnapshot{};
+	CompactSessions();
+	const FString StableNetId = ResolveStableNetId(Controller);
+	const FGuid* MappedSessionId = StableNetId.IsEmpty() ? nullptr : ActiveSessionByFisher.Find(StableNetId);
+	if (!MappedSessionId || !MappedSessionId->IsValid())
+	{
+		return false;
+	}
+	const FGuid SessionId = *MappedSessionId;
+	const FString MappedFisherId = SessionFisherById.FindRef(SessionId);
+	ACatFishingSession* Session = FindSession(SessionId);
+	if (!Session || MappedFisherId != StableNetId)
+	{
+		return false;
+	}
+	const FCatFishingSessionSnapshot& Snapshot = Session->GetSnapshot();
+	if (Snapshot.FishingSessionId != SessionId)
+	{
+		return false;
+	}
+	OutFishingSessionId = SessionId;
+	OutSnapshot = Snapshot;
+	return true;
+}
+
+// 鱼竿查询流程：先移除双端任一失效的弱条目，再按服务器 PlayerState 身份只读查找。
+ACatFishingRodActor* UCatFishingService::FindDeployedRod(const APlayerState* PlayerState)
+{
+	CompactDeployedRods();
+	if (!PlayerState)
+	{
+		return nullptr;
+	}
+	const TWeakObjectPtr<APlayerState> PlayerKey(const_cast<APlayerState*>(PlayerState));
+	const TWeakObjectPtr<ACatFishingRodActor>* WeakRod = DeployedRodByPlayerState.Find(PlayerKey);
+	return WeakRod ? WeakRod->Get() : nullptr;
+}
+
+// 鱼竿登记流程：双端必须存活；首次登记成功，相同 Actor 幂等重放，不替换已有存活 Actor。
+bool UCatFishingService::RegisterDeployedRod(APlayerState* PlayerState, ACatFishingRodActor* RodActor)
+{
+	CompactDeployedRods();
+	if (!IsValid(PlayerState) || !IsValid(RodActor))
+	{
+		return false;
+	}
+	const TWeakObjectPtr<APlayerState> PlayerKey(PlayerState);
+	if (const TWeakObjectPtr<ACatFishingRodActor>* Existing = DeployedRodByPlayerState.Find(PlayerKey))
+	{
+		return Existing->Get() == RodActor;
+	}
+	DeployedRodByPlayerState.Add(PlayerKey, RodActor);
+	return true;
+}
+
+// 鱼竿注销流程：ExpectedRodActor 必须与当前存活值精确匹配；missing/null/mismatch 都保持无副作用。
+void UCatFishingService::UnregisterDeployedRod(const APlayerState* PlayerState,
+	const ACatFishingRodActor* ExpectedRodActor)
+{
+	CompactDeployedRods();
+	if (!PlayerState || !ExpectedRodActor)
+	{
+		return;
+	}
+	const TWeakObjectPtr<APlayerState> PlayerKey(const_cast<APlayerState*>(PlayerState));
+	const TWeakObjectPtr<ACatFishingRodActor>* Existing = DeployedRodByPlayerState.Find(PlayerKey);
+	if (Existing && Existing->Get() == ExpectedRodActor)
+	{
+		DeployedRodByPlayerState.Remove(PlayerKey);
+	}
+}
+
+// Session 诊断流程：逐项统计存活且未终态会话，不把弱 Map 的物理条目数误报为活动数量。
+int32 UCatFishingService::GetTrackedSessionCountForDiagnostics() const
+{
+	int32 LiveSessionCount = 0;
+	for (const TPair<FGuid, TWeakObjectPtr<ACatFishingSession>>& Pair : Sessions)
+	{
+		const ACatFishingSession* Session = Pair.Value.Get();
+		if (Session && !Session->IsTerminal())
+		{
+			++LiveSessionCount;
+		}
+	}
+	return LiveSessionCount;
+}
+
+// 鱼竿诊断流程：只统计 key/value 双有效的弱登记，不直接返回 Map::Num。
+int32 UCatFishingService::GetDeployedRodCountForDiagnostics() const
+{
+	int32 LiveRodCount = 0;
+	for (const TPair<TWeakObjectPtr<APlayerState>, TWeakObjectPtr<ACatFishingRodActor>>& Pair
+		: DeployedRodByPlayerState)
+	{
+		if (Pair.Key.IsValid() && Pair.Value.IsValid())
+		{
+			++LiveRodCount;
+		}
+	}
+	return LiveRodCount;
+}
+
 // 弱索引压缩流程：移除已销毁或 Resolved/Terminated 会话，并用会话到身份反向键释放精确单活跃槽位；开始终态缓存保留供网络重放。
 void UCatFishingService::CompactSessions()
 {
@@ -234,6 +356,18 @@ void UCatFishingService::CompactSessions()
 				ActiveSessionByFisher.Remove(StableNetId);
 			}
 			SessionFisherById.Remove(SessionId);
+			It.RemoveCurrent();
+		}
+	}
+}
+
+// 鱼竿 Registry 压缩流程：任一弱端失效即删除整条登记，不保留可阻塞后续 Place 的幽灵槽位。
+void UCatFishingService::CompactDeployedRods()
+{
+	for (auto It = DeployedRodByPlayerState.CreateIterator(); It; ++It)
+	{
+		if (!It.Key().IsValid() || !It.Value().IsValid())
+		{
 			It.RemoveCurrent();
 		}
 	}

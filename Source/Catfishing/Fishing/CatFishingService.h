@@ -6,7 +6,9 @@
 #include "CatFishingService.generated.h"
 
 class ACatCharacter;
+class ACatFishingRodActor;
 class ACatFishingSession;
+class APlayerState;
 class UCatFishDefinition;
 
 /** 一局服务器 Fishing 入口；创建/查询/终止会话并把所有阶段写入留给会话内 StateTree。 */
@@ -38,11 +40,36 @@ public:
 	/** Host teardown 关闭入口并终止所有未结算会话。 */
 	void CloseCommandsAndTerminateAll();
 
+	/** 查询指定存活且未终态的服务器 Session；未知或失效身份返回空且不创建索引项。 */
+	ACatFishingSession* FindSession(FGuid FishingSessionId);
+
+	/** 从 Controller 的服务器私有身份查询其唯一活动 Session，并只复制公开 Snapshot 到输出。 */
+	bool TryGetActiveSessionForController(const AController* Controller, FGuid& OutFishingSessionId,
+		FCatFishingSessionSnapshot& OutSnapshot);
+
+	/** 查询 PlayerState 当前登记的存活部署鱼竿；未知身份返回空。 */
+	ACatFishingRodActor* FindDeployedRod(const APlayerState* PlayerState);
+
+	/** 为 PlayerState 登记唯一部署鱼竿；相同 Actor 重放成功，不同存活 Actor 被拒绝。 */
+	bool RegisterDeployedRod(APlayerState* PlayerState, ACatFishingRodActor* RodActor);
+
+	/** 仅当当前登记值精确匹配 ExpectedRodActor 时注销，避免旧 Actor 迟到回调删除替代鱼竿。 */
+	void UnregisterDeployedRod(const APlayerState* PlayerState, const ACatFishingRodActor* ExpectedRodActor);
+
+	/** 仅统计当前存活且未终态的 Session，不暴露服务器索引。 */
+	int32 GetTrackedSessionCountForDiagnostics() const;
+
+	/** 仅统计 key/value 都存活的鱼竿登记，不暴露服务器 Registry。 */
+	int32 GetDeployedRodCountForDiagnostics() const;
+
 private:
 	friend class ACatFishingSession;
 
 	/** 清除已销毁或已终态 Session 弱引用，并同时释放对应钓手的单活跃槽位。 */
 	void CompactSessions();
+
+	/** 清除 PlayerState 或 Rod Actor 任一端已经失效的部署登记。 */
+	void CompactDeployedRods();
 
 	/** 从 Controller 的 APlayerState::UniqueId 读取服务器私有身份；无效身份不能进入开始终态缓存。 */
 	static FString ResolveStableNetId(const AController* Controller);
@@ -66,6 +93,9 @@ private:
 
 	/** 身份+开始操作+RequestId 到首次同步结果；成功重试复用原 SessionId，失败重试不重新抽鱼。 */
 	TMap<FString, FCatFishingStartResult> StartTerminalCache;
+
+	/** PlayerState 到其当前唯一部署鱼竿的服务器弱 Registry；不强持 Actor，也不扫描 World 重建。 */
+	TMap<TWeakObjectPtr<APlayerState>, TWeakObjectPtr<ACatFishingRodActor>> DeployedRodByPlayerState;
 
 	/** teardown 后永久拒绝本 World 新会话。 */
 	bool bCommandsOpen = true;

@@ -4,10 +4,16 @@
 #include "Tests/AutomationCommon.h"
 
 #include "Fishing/CatFishingService.h"
+#include "GameFramework/PlayerState.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingServiceFailClosedTest,
 	"Catfishing.Unit.Fishing.Service.InvalidIdentityAndUnknownSessionFailClosed",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingServiceUnknownQueriesTest,
+	"Catfishing.Unit.Fishing.Service.UnknownSessionQueriesAreSideEffectFree",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 // 测试流程：取得真实 Fishing WorldSubsystem 后从三个公开入口提交缺身份/未知会话命令；结果必须明确拒绝且不会创建可观察会话。
@@ -53,6 +59,56 @@ bool FCatFishingServiceFailClosedTest::RunTest(const FString& Parameters)
 	Fishing->CloseCommandsAndTerminateAll();
 	const FCatFishingStartResult ClosedResult = Fishing->StartFishingSession(nullptr, FGuid::NewGuid());
 	TestFalse(TEXT("关门后缺身份请求仍不启动会话"), ClosedResult.bStarted);
+	return !HasAnyErrors();
+}
+
+// 查询契约：无效/未知 Session、Controller 与 PlayerState 必须清空输出且不能创建任何 Session/Rod 索引项。
+bool FCatFishingServiceUnknownQueriesTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("创建 FishingService 查询测试 Game World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	WorldWrapper.ForwardErrorMessages(this);
+	UWorld* World = WorldWrapper.GetTestWorld();
+	UCatFishingService* Fishing = World ? World->GetSubsystem<UCatFishingService>() : nullptr;
+	APlayerState* UnknownPlayerState = World ? World->SpawnActor<APlayerState>() : nullptr;
+	TestNotNull(TEXT("真实 FishingService 已创建"), Fishing);
+	TestNotNull(TEXT("未知 PlayerState 夹具已创建"), UnknownPlayerState);
+	if (!Fishing || !UnknownPlayerState)
+	{
+		return false;
+	}
+
+	const int32 SessionCountBefore = Fishing->GetTrackedSessionCountForDiagnostics();
+	const int32 RodCountBefore = Fishing->GetDeployedRodCountForDiagnostics();
+	TestNull(TEXT("无效 SessionId 查询返回空"), Fishing->FindSession(FGuid()));
+	TestNull(TEXT("未知 SessionId 查询返回空"), Fishing->FindSession(FGuid::NewGuid()));
+
+	FGuid OutFishingSessionId = FGuid::NewGuid();
+	FCatFishingSessionSnapshot OutSnapshot;
+	OutSnapshot.FishingSessionId = FGuid::NewGuid();
+	OutSnapshot.Revision = 41;
+	OutSnapshot.SnapshotSequence = 42;
+	OutSnapshot.Phase = ECatFishingPhase::Resolved;
+	OutSnapshot.Outcome = ECatFishingOutcome::Caught;
+	OutSnapshot.bReeling = true;
+	TestFalse(TEXT("无 Controller 的活动 Session 查询失败"),
+		Fishing->TryGetActiveSessionForController(nullptr, OutFishingSessionId, OutSnapshot));
+	TestFalse(TEXT("失败查询清空 SessionId 输出"), OutFishingSessionId.IsValid());
+	TestFalse(TEXT("失败查询清空 Snapshot SessionId"), OutSnapshot.FishingSessionId.IsValid());
+	TestEqual(TEXT("失败查询恢复默认 Revision"), OutSnapshot.Revision, int64{0});
+	TestEqual(TEXT("失败查询恢复默认 SnapshotSequence"), OutSnapshot.SnapshotSequence, int64{0});
+	TestEqual(TEXT("失败查询恢复默认 Phase"), OutSnapshot.Phase, ECatFishingPhase::Created);
+	TestEqual(TEXT("失败查询恢复默认 Outcome"), OutSnapshot.Outcome, ECatFishingOutcome::None);
+	TestFalse(TEXT("失败查询恢复默认收线状态"), OutSnapshot.bReeling);
+
+	TestNull(TEXT("空 PlayerState 鱼竿查询返回空"), Fishing->FindDeployedRod(nullptr));
+	TestNull(TEXT("未知 PlayerState 鱼竿查询返回空"), Fishing->FindDeployedRod(UnknownPlayerState));
+	TestEqual(TEXT("未知查询不改变 Session 计数"),
+		Fishing->GetTrackedSessionCountForDiagnostics(), SessionCountBefore);
+	TestEqual(TEXT("未知查询不改变鱼竿计数"),
+		Fishing->GetDeployedRodCountForDiagnostics(), RodCountBefore);
 	return !HasAnyErrors();
 }
 
