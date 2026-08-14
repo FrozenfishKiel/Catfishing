@@ -269,7 +269,8 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	{
 		const bool bReserved = ExistingRecord->bSpecialBaitReserved && !ExistingRecord->bBaitCommitted
 			&& !ExistingRecord->bReleased;
-		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, bReserved, ExistingRecord);
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, bReserved,
+			bReserved ? ExistingRecord : nullptr);
 	}
 
 	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();

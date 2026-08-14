@@ -187,6 +187,7 @@ bool FCatEquipmentFishingUseBeginTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	using namespace CatEquipmentFishingUseTest;
+	{
 	FFishingUseFixture Fixture;
 	if (!Fixture.Create(*this) || !Fixture.ConfigureSpecial(*this))
 	{
@@ -236,6 +237,8 @@ bool FCatEquipmentFishingUseBeginTest::RunTest(const FString& Parameters)
 		SessionId, RodId, SpecialBaitId, FloatId, Before.Revision);
 	TestFalse(TEXT("Released session cannot begin a second reservation"), Tombstone.bReserved);
 	TestEqual(TEXT("Released begin reports tombstone"), Tombstone.Error, ECatDomainCommandError::AlreadyResolved);
+	TestEqual(TEXT("Released Begin replay fails closed for wear sequence"), Tombstone.WearSequence, int64{0});
+	TestEqual(TEXT("Released Begin replay fails closed for absolute wear"), Tombstone.AbsoluteRodWear, 0.0);
 
 	const FCatEquipmentLoadoutSnapshot AtomicBefore = Fixture.Component->GetSnapshot();
 	const FCatFishingUseReservationResult Invalid = Fixture.Component->BeginFishingUse(
@@ -248,6 +251,31 @@ bool FCatEquipmentFishingUseBeginTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Unknown bait commit fails closed"), UnknownBait.Error, ECatDomainCommandError::NotFound);
 	TestSnapshotUnchanged(*this, TEXT("Unknown bait commit"), AtomicBefore, Fixture.Component->GetSnapshot());
 	Fixture.WorldWrapper.ForwardErrorMessages(this);
+	}
+
+	{
+		FFishingUseFixture Fixture;
+		if (!Fixture.Create(*this) || !Fixture.ConfigureNormal(*this))
+		{
+			return false;
+		}
+
+		const FCatEquipmentLoadoutSnapshot Before = Fixture.Component->GetSnapshot();
+		const FGuid SessionId = FGuid::NewGuid();
+		const FCatFishingUseReservationResult Begin = Fixture.Component->BeginFishingUse(
+			SessionId, RodId, NormalBaitId, FloatId, Before.Revision);
+		TestFalse(TEXT("Normal-bait Begin does not reserve a special bait"), Begin.bReserved);
+		const FCatFishingUseOperationResult SetWear = Fixture.Component->SetAccumulatedFishingRodWear(SessionId, 1, 12.5);
+		TestTrue(TEXT("Normal-bait session records pending wear"), SetWear.bApplied);
+		const FCatFishingUseReservationResult Replay = Fixture.Component->BeginFishingUse(
+			SessionId, RodId, NormalBaitId, FloatId, Before.Revision);
+		TestFalse(TEXT("Normal-bait Begin replay remains unreserved"), Replay.bReserved);
+		TestEqual(TEXT("Normal-bait Begin replay is already resolved"), Replay.Error, ECatDomainCommandError::AlreadyResolved);
+		TestEqual(TEXT("Normal-bait Begin replay fails closed for wear sequence"), Replay.WearSequence, int64{0});
+		TestEqual(TEXT("Normal-bait Begin replay fails closed for absolute wear"), Replay.AbsoluteRodWear, 0.0);
+		TestEqual(TEXT("Normal-bait Begin replay keeps public revision"), Fixture.Component->GetSnapshot().Revision, Before.Revision);
+		Fixture.WorldWrapper.ForwardErrorMessages(this);
+	}
 	return !HasAnyErrors();
 }
 
