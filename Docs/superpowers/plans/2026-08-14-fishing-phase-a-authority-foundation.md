@@ -436,6 +436,8 @@ rg -a -l "RegionRevision|CatWaterRegion" Content
 
 保存输出到任务记录；不得修改用户输入 hunk。
 
+用户已接受 `b9342f9` 混合提交作为新基线，因此两个 Controller 文件在本任务开始时必须相对当前 HEAD 保持 clean；`stash@{0}` 继续原样保留。若上述 `git diff` 非空，说明出现新的并发修改，立即停止本任务，不得暂存或覆盖。
+
 - [ ] **Step 2: 先改测试形成红灯**
 
 更新现有 Water 测试并新增断言：GeometryRevision 为 7；初始 AggregationRevision 为 1；首次聚鱼后 AggregationRevision 为 2；GeometryRevision 仍为 7；旧 aggregation revision 返回 RevisionConflict；WaterQuery 在聚鱼前后返回相同 GeometryRevision。
@@ -446,7 +448,7 @@ rg -a -l "RegionRevision|CatWaterRegion" Content
 
 - [ ] **Step 4: 实现双版本并窄改现有 Controller 接缝**
 
-只改以下 dirty 接缝：
+Controller 只改以下 Water 接缝：
 
 - `CatGameplayTypes.h` 的 `ServerContributeChum` 参数名为 `ExpectedAggregationRevision`。
 - `CatGameplayTypes.cpp` 自然聚鱼读取 `MakeSnapshot().AggregationRevision`。
@@ -458,16 +460,9 @@ rg -a -l "RegionRevision|CatWaterRegion" Content
 
 运行 Editor build，再分别运行 `Catfishing.Unit.Environment.WaterRegion` 与 `Catfishing.Unit.Environment.WaterQuery`。
 
-- [ ] **Step 6: 用显式 index-only patch 暂存 dirty Controller 的 Water hunk**
+- [ ] **Step 6: 显式暂存并审计 Controller 的 Water hunk**
 
-先完整暂存所有 clean Water/Fishing 文件。随后使用 `apply_patch` 在 `Saved/CodexBaseline/phase-a/` 创建 `water-controller-index.patch`；该 patch 必须以当前 `HEAD` 的两个 Controller 文件为旧内容，只包含以下白名单：头文件 `ExpectedRegionRevision`→`ExpectedAggregationRevision`，实现中的同名参数、`MakeSnapshot().AggregationRevision`、`Command.ExpectedAggregationRevision` 和失败结果的当前 AggregationRevision。不得从 working-tree `git diff` 自动整包生成 patch，因为其中含用户输入改动。
-
-```powershell
-git apply --cached --check 'Saved/CodexBaseline/phase-a/water-controller-index.patch'
-git apply --cached 'Saved/CodexBaseline/phase-a/water-controller-index.patch'
-```
-
-然后执行：
+由于用户已接受包含输入代码的 `b9342f9` 为基线，Controller 在本任务开始时是 clean；使用显式文件清单暂存本任务的 Water/Fishing/Controller 文件，然后执行：
 
 ```powershell
 git diff --cached --name-only
@@ -475,7 +470,7 @@ git diff --cached -- Source/Catfishing/Framework/Game/CatGameplayTypes.h Source/
 git diff --cached --check
 ```
 
-cached Controller diff 必须与 `water-controller-index.patch` 的语义逐行一致；若出现 `UEnhancedInputLocalPlayerSubsystem`、`UInputAction`、`UInputMappingContext`、`FInputActionValue`、`OnRep_Pawn`、`DefaultMappingContext`、`IA_Move`、`IA_Look`、`IA_Jump`、`IA_Run`、`ServerSetSprinting`、`MoveInput`、`LookInput`、`WalkMaxSpeed` 或 `SprintMaxSpeed`，立即用 `git apply --cached -R 'Saved/CodexBaseline/phase-a/water-controller-index.patch'` 精确撤销本 patch 并修正；不得提交。
+cached Controller diff 必须只包含以下白名单语义：头文件 `ExpectedRegionRevision`→`ExpectedAggregationRevision`，实现中的同名参数、`MakeSnapshot().AggregationRevision`、`Command.ExpectedAggregationRevision` 和失败结果的当前 AggregationRevision。若出现 `UEnhancedInputLocalPlayerSubsystem`、`UInputAction`、`UInputMappingContext`、`FInputActionValue`、`OnRep_Pawn`、`DefaultMappingContext`、`IA_Move`、`IA_Look`、`IA_Jump`、`IA_Run`、`ServerSetSprinting`、`MoveInput`、`LookInput`、`WalkMaxSpeed` 或 `SprintMaxSpeed`，立即执行 `git restore --staged` 仅撤销这两个 Controller 文件的暂存并停止；不得提交、不得改写工作树。
 
 - [ ] **Step 7: 提交任务 3**
 
