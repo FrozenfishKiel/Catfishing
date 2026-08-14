@@ -16,9 +16,13 @@
 #include "CatGameplayTypes.generated.h"
 
 class UStateTreeComponent;
+class UEnhancedInputLocalPlayerSubsystem;
+class UInputAction;
+class UInputMappingContext;
 class ACatCampHubActor;
 class ACatCharacter;
 class ACatWaterRegion;
+struct FInputActionValue;
 
 /** GameState Run/Environment 完整公开快照变化通知；本机 UI 必须重新读取 GetRunPublicState。 */
 DECLARE_MULTICAST_DELEGATE(FCatRunPublicStateChanged);
@@ -283,6 +287,8 @@ class CATFISHING_API ACatfishingPlayerController : public APlayerController
 public:
 	/** 控制器接管 Pawn 后记录装配结果；不缓存 Pawn 或创建第二条 Online 旅行入口。 */
 	virtual void OnPossess(APawn* InPawn) override;
+	/** owning client 收到 Pawn 复制变化后重置疾跑意图，并把普通移动速度应用到新 Pawn。 */
+	virtual void OnRep_Pawn() override;
 	/** 把客户端额度意图转发给 authority GameMode；身份由服务器 PlayerState 派生。 */
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitQuotaContribution(FGuid RequestId, int64 ExpectedRevision, int32 Contribution);
@@ -418,7 +424,88 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerPublishPublicFishCollection(const TArray<FCatFishCollectionRecord>& Records);
 
+protected:
+	/** 为本地 Controller 安装显式配置的玩法 Mapping Context；服务端远端 Controller 不接触本地输入子系统。 */
+	virtual void BeginPlay() override;
+	/** 绑定 Move、Look、Jump、Sprint Enhanced Input Action，并保留父类输入初始化。 */
+	virtual void SetupInputComponent() override;
+	/** Pawn 断开前恢复普通速度并清除疾跑意图，避免状态泄漏到下一次占有。 */
+	virtual void OnUnPossess() override;
+	/** 只移除本 Controller 实际安装的 Mapping Context，不清空 LocalPlayer 的其他输入层。 */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+	/** 玩法输入映射；在 PlayerController 蓝图默认值中接入 IMC。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|Input")
+	TObjectPtr<UInputMappingContext> DefaultMappingContext;
+
+	/** 二维移动输入：X 为左右，Y 为前后。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|Input")
+	TObjectPtr<UInputAction> MoveAction;
+
+	/** 二维视角输入：X 为 Yaw，Y 为 Pitch；反转与灵敏度由 IMC Modifier 配置。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|Input")
+	TObjectPtr<UInputAction> LookAction;
+
+	/** 跳跃输入；Started 调用 Jump，Completed/Canceled 调用 StopJumping。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|Input")
+	TObjectPtr<UInputAction> JumpAction;
+
+	/** 长按疾跑输入；Started 开启疾跑，Completed/Canceled 恢复普通移动速度。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|Input")
+	TObjectPtr<UInputAction> SprintAction;
+
+	/** 未按疾跑键时 CharacterMovement 的最大地面移动速度。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|Input|Movement",
+		meta = (ClampMin = "0.0", UIMin = "0.0", Units = "cm/s"))
+	float WalkMaxSpeed = 100.0f;
+
+	/** 按住疾跑键时 CharacterMovement 的最大地面移动速度。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|Input|Movement",
+		meta = (ClampMin = "0.0", UIMin = "0.0", Units = "cm/s"))
+	float SprintMaxSpeed = 350.0f;
+
+	/** 本 Controller 的输入层优先级；不影响其他系统已经安装的 Mapping Context。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|Input")
+	int32 InputMappingPriority = 0;
+
 private:
+	/** 幂等安装当前配置的玩法 Mapping Context；BeginPlay/输入初始化均可安全调用。 */
+	void ApplyInputMappingContext();
+	/** 移除本 Controller 安装的玩法 Mapping Context，并清空弱绑定记录。 */
+	void RemoveInputMappingContext();
+	/** 按 Controller 的水平朝向把二维输入转成当前 Pawn 的前后/左右移动。 */
+	void Move(const FInputActionValue& Value);
+	/** 把二维输入写入 Controller 的 Yaw/Pitch。 */
+	void Look(const FInputActionValue& Value);
+	/** 对当前已占有的 Character 开始跳跃。 */
+	void StartJump();
+	/** 对当前已占有的 Character 停止跳跃。 */
+	void StopJump();
+	/** 本地 Started 输入开启疾跑，并把布尔意图可靠同步给 authority。 */
+	void StartSprint();
+	/** 本地 Completed/Canceled 输入关闭疾跑，并把布尔意图可靠同步给 authority。 */
+	void StopSprint();
+	/** 更新本 Controller 的疾跑意图并应用速度；仅本地输入路径需要向服务器转发。 */
+	void SetSprintRequested(bool bNewSprintRequested, bool bNotifyServer);
+	/** 把服务器配置的普通/疾跑速度应用到指定 Character；非 Character Pawn 安全跳过。 */
+	void ApplySprintSpeed(APawn* TargetPawn, bool bSprinting) const;
+
+	/** owning client 只提交疾跑开关；最终速度始终取服务器 PlayerController 类默认配置。 */
+	UFUNCTION(Server, Reliable)
+	void ServerSetSprinting(bool bNewSprinting);
+
+	/** 实际接收 AddMappingContext 的本地输入子系统；只用于成对 Remove。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UEnhancedInputLocalPlayerSubsystem> AppliedInputSubsystem;
+
+	/** 实际安装的 Context；与蓝图配置分开记录以支持安全清理。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UInputMappingContext> AppliedMappingContext;
+
+	/** 当前 Controller 的疾跑按键意图；客户端和 authority 分别维护，不作为远端动画事实复制。 */
+	UPROPERTY(Transient)
+	bool bSprintRequested = false;
+
 	/** 统一向 authority GameMode 查询运行内玩法命令 gate；缺少 GameMode、非 Active 或 teardown 关门时返回 false。 */
 	bool CanForwardGameplayCommand() const;
 
