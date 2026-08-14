@@ -402,7 +402,7 @@ public:
 	/** 消费一份正式 Chum 并向脚下唯一 WaterRegion 提交同一 RequestId；定义拥有三轴值，客户端不能自报贡献。 */
 	UFUNCTION(Server, Reliable)
 	void ServerContributeChum(ACatWaterRegion* WaterRegion, FGuid RequestId, int64 ExpectedEquipmentRevision,
-		int64 ExpectedRegionRevision, FName ChumDefinitionId);
+		int64 ExpectedAggregationRevision, FName ChumDefinitionId);
 
 	/** Online Client 在 DestroySession 前通知服务器这是主动离局；GameMode 不把它误判为连接故障。 */
 	UFUNCTION(Server, Reliable)

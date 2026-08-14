@@ -66,13 +66,17 @@ struct FCatAggregationCommand
 {
 	GENERATED_BODY()
 
-	/** RequestId、WaterRegion ExpectedRevision 与服务器身份；自然事件使用服务私有身份键。 */
+	/** RequestId 与服务器身份；自然事件使用服务私有身份键。 */
 	UPROPERTY(BlueprintReadWrite)
 	FCatDomainCommandContext Context;
 
 	/** 目标 WaterRegion 稳定 ID。 */
 	UPROPERTY(BlueprintReadWrite)
 	FName RegionId = NAME_None;
+
+	/** 本次 ChumPool 写入预期的聚鱼版本；几何版本仅用于只读查询快照。 */
+	UPROPERTY(BlueprintReadWrite)
+	int64 ExpectedAggregationRevision = 0;
 
 	/** 本次写入同一 ChumPool 的三轴增量。 */
 	UPROPERTY(BlueprintReadWrite)
@@ -89,9 +93,13 @@ struct FCatAggregationResult
 {
 	GENERATED_BODY()
 
-	/** 公共命令终态；Revision 是 ChumPool/Region 提交后的版本。 */
+	/** 公共命令终态；兼容期内 Revision 与 AggregationRevision 相同。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatDomainCommandResult Command;
+
+	/** ChumPool 提交后的聚鱼版本。 */
+	UPROPERTY(BlueprintReadOnly)
+	int64 AggregationRevision = 0;
 
 	/** 提交后的同一共享三轴池快照。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -127,9 +135,13 @@ struct FCatWaterRegionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	FName RegionId = NAME_None;
 
-	/** WaterRegion 当前几何配置的服务器 Revision；Actor 配置变化后旧查询不得继续提交。 */
+	/** WaterRegion 当前几何配置的服务器版本；聚鱼写入不改变它。 */
 	UPROPERTY(BlueprintReadOnly)
-	int64 RegionRevision = 0;
+	int64 GeometryRevision = 0;
+
+	/** 当前共享 ChumPool 的服务器版本；聚鱼写入以它执行乐观并发校验。 */
+	UPROPERTY(BlueprintReadOnly)
+	int64 AggregationRevision = 0;
 
 	/** 被命中的世界空间中心，只用于后续几何校验和诊断，不授权客户端写入。 */
 	UPROPERTY(BlueprintReadOnly)

@@ -45,7 +45,7 @@ bool ACatFishingSession::InitializeSession(AController* FisherController, ACatCh
 		|| !InFisherCharacter || !InFishDefinition || !InFishDefinition->IsRuntimeDefinitionReady()
 		|| StableNetId.IsEmpty() || !InFisherGuardContainerId.IsValid()
 		|| !FMath::IsFinite(InFishWeightKilograms) || InFishWeightKilograms <= 0.0
-		|| WaterRegion.RegionId.IsNone() || WaterRegion.RegionRevision <= 0 || !Items)
+		|| WaterRegion.RegionId.IsNone() || WaterRegion.GeometryRevision <= 0 || !Items)
 	{
 		return false;
 	}

@@ -46,9 +46,9 @@ public:
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Prototype")
 	FVector HalfExtent = FVector::ZeroVector;
 
-	/** 关卡几何版本；WaterQuery 把它写入快照，让后续命令能拒绝陈旧命中。 */
+	/** 关卡几何版本；WaterQuery 把它写入快照，聚鱼写入不会改变它。 */
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Prototype", meta = (ClampMin = "1"))
-	int64 RegionRevision = 0;
+	int64 GeometryRevision = 0;
 
 	/** 聚鱼 Aggregate 显式启用 gate；默认关闭。 */
 	UPROPERTY(EditInstanceOnly, Category = "Water|Aggregation")
@@ -59,6 +59,10 @@ public:
 	double AggregationBudget = 0.0;
 
 private:
+	/** 当前共享 ChumPool 的运行时版本，只用于聚鱼命令的并发校验和诊断。 */
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Water|Aggregation", meta = (AllowPrivateAccess = "true"))
+	int64 AggregationRevision = 1;
+
 	/** 当前玩家与自然事件共用的服务器 ChumPool。 */
 	FCatChumVector ChumPool;
 

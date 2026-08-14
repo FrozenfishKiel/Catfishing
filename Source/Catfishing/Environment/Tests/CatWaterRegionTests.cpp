@@ -19,19 +19,19 @@ namespace CatWaterRegionTest
 		Region->RegionId = RegionId;
 		Region->bEnablePrototypeBounds = true;
 		Region->HalfExtent = FVector(100.0, 100.0, 50.0);
-		Region->RegionRevision = Revision;
+		Region->GeometryRevision = Revision;
 		Region->bEnableAggregation = bEnableAggregation;
 		Region->AggregationBudget = AggregationBudget;
 	}
 
 	// 命令流程：创建聚鱼写口的最小正式命令，RequestId/身份/Revision/贡献由调用方决定以覆盖成功、重放和并发拒绝。
 	static FCatAggregationCommand MakeAggregationCommand(const FString& StableNetId, const FGuid RequestId,
-		const int64 ExpectedRevision, const double Fishy)
+		const int64 ExpectedAggregationRevision, const double Fishy)
 	{
 		FCatAggregationCommand Command;
 		Command.Context.StableNetId = StableNetId;
 		Command.Context.RequestId = RequestId;
-		Command.Context.ExpectedRevision = ExpectedRevision;
+		Command.ExpectedAggregationRevision = ExpectedAggregationRevision;
 		Command.RegionId = TEXT("LakeA");
 		Command.Contribution.Fishy = Fishy;
 		return Command;
@@ -80,7 +80,8 @@ bool FCatWaterRegionConfigurationTest::RunTest(const FString& Parameters)
 
 	const FCatWaterRegionSnapshot Snapshot = Region->MakeSnapshot();
 	TestEqual(TEXT("快照复制稳定区域 ID"), Snapshot.RegionId, FName(TEXT("LakeA")));
-	TestEqual(TEXT("快照复制区域 Revision"), Snapshot.RegionRevision, int64(7));
+	TestEqual(TEXT("快照复制几何 Revision"), Snapshot.GeometryRevision, int64(7));
+	TestEqual(TEXT("快照初始聚鱼 Revision"), Snapshot.AggregationRevision, int64(1));
 	TestEqual(TEXT("快照复制 AABB 半尺寸"), Snapshot.HalfExtent, FVector(100.0, 100.0, 50.0));
 	return !HasAnyErrors();
 }
@@ -106,21 +107,24 @@ bool FCatWaterRegionAggregationTransactionTest::RunTest(const FString& Parameter
 	{
 		return false;
 	}
-	CatWaterRegionTest::ConfigureRegion(Region, TEXT("LakeA"), FVector::ZeroVector, 1, true, 2.0);
+	CatWaterRegionTest::ConfigureRegion(Region, TEXT("LakeA"), FVector::ZeroVector, 7, true, 2.0);
 
 	const FGuid RequestId = FGuid::NewGuid();
 	FCatAggregationResult FirstResult = Region->ContributeAggregation(
 		CatWaterRegionTest::MakeAggregationCommand(TEXT("PlayerA"), RequestId, 1, 1.0));
 	TestTrue(TEXT("首次聚鱼提交成功"), FirstResult.Command.bCommitted);
 	TestEqual(TEXT("首次聚鱼返回 None"), FirstResult.Command.Error, ECatDomainCommandError::None);
-	TestEqual(TEXT("首次聚鱼推进 Revision"), FirstResult.Command.Revision, int64(2));
+	TestEqual(TEXT("首次聚鱼推进 AggregationRevision"), FirstResult.AggregationRevision, int64(2));
+	TestEqual(TEXT("首次聚鱼兼容命令 Revision"), FirstResult.Command.Revision, int64(2));
 	TestEqual(TEXT("首次聚鱼增加 ChumPool"), FirstResult.ChumPool.Fishy, 1.0);
+	TestEqual(TEXT("首次聚鱼不改变 GeometryRevision"), Region->MakeSnapshot().GeometryRevision, int64(7));
 
 	FCatAggregationResult ReplayResult = Region->ContributeAggregation(
 		CatWaterRegionTest::MakeAggregationCommand(TEXT("PlayerA"), RequestId, 1, 1.0));
 	TestFalse(TEXT("聚鱼重放不再次提交"), ReplayResult.Command.bCommitted);
 	TestEqual(TEXT("聚鱼重放返回 AlreadyResolved"), ReplayResult.Command.Error, ECatDomainCommandError::AlreadyResolved);
 	TestEqual(TEXT("聚鱼重放不二次加池"), ReplayResult.ChumPool.Fishy, 1.0);
+	TestEqual(TEXT("聚鱼重放保留 AggregationRevision"), ReplayResult.AggregationRevision, int64(2));
 
 	FCatAggregationResult StaleResult = Region->ContributeAggregation(
 		CatWaterRegionTest::MakeAggregationCommand(TEXT("PlayerA"), FGuid::NewGuid(), 1, 1.0));

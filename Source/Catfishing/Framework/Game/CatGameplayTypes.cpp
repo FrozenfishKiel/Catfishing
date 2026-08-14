@@ -993,7 +993,7 @@ void ACatfishingGameModeBase::SubmitNaturalAggregationIfConfigured()
 	}
 	FCatAggregationCommand Command;
 	Command.Context.RequestId = FGuid::NewGuid();
-	Command.Context.ExpectedRevision = Match->MakeSnapshot().RegionRevision;
+	Command.ExpectedAggregationRevision = Match->MakeSnapshot().AggregationRevision;
 	Command.Context.StableNetId = TEXT("Environment");
 	Command.RegionId = RegionId;
 	Command.Contribution = Contribution;
@@ -2052,7 +2052,7 @@ void ACatfishingPlayerController::ServerCompleteShakeDry_Implementation(const FG
 
 // 玩家窝料流程：先过统一玩法 gate 和 Controller 终态重放，再派生身份并验证 WaterRegion/Chum；区域预检后扣耗材并提交同 RequestId。
 void ACatfishingPlayerController::ServerContributeChum_Implementation(ACatWaterRegion* WaterRegion,
-	const FGuid RequestId, const int64 ExpectedEquipmentRevision, const int64 ExpectedRegionRevision,
+	const FGuid RequestId, const int64 ExpectedEquipmentRevision, const int64 ExpectedAggregationRevision,
 	const FName ChumDefinitionId)
 {
 	if (!CanForwardGameplayCommand())
@@ -2083,12 +2083,14 @@ void ACatfishingPlayerController::ServerContributeChum_Implementation(ACatWaterR
 	{
 		FCatAggregationCommand Command;
 		Command.Context.RequestId = RequestId;
-		Command.Context.ExpectedRevision = ExpectedRegionRevision;
+		Command.ExpectedAggregationRevision = ExpectedAggregationRevision;
 		Command.Context.StableNetId = CurrentPlayerState->GetUniqueId()->ToString();
 		Command.RegionId = WaterRegion->RegionId;
 		Command.Contribution = ChumDefinition->ChumContribution;
 		Command.Source = ECatAggregationSource::PlayerChum;
 		Result.Command.Error = WaterRegion->ValidateAggregation(Command);
+		Result.AggregationRevision = WaterRegion->MakeSnapshot().AggregationRevision;
+		Result.Command.Revision = Result.AggregationRevision;
 		if (Result.Command.Error == ECatDomainCommandError::None)
 		{
 			const FCatDomainCommandResult ConsumeResult = Equipment->ConsumeRunConsumableFromAuthority(
@@ -2096,7 +2098,8 @@ void ACatfishingPlayerController::ServerContributeChum_Implementation(ACatWaterR
 			if (!ConsumeResult.bCommitted)
 			{
 				Result.Command.Error = ConsumeResult.Error;
-				Result.Command.Revision = ExpectedRegionRevision;
+				Result.AggregationRevision = WaterRegion->MakeSnapshot().AggregationRevision;
+				Result.Command.Revision = Result.AggregationRevision;
 			}
 			else
 			{

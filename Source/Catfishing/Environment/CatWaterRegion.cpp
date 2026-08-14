@@ -10,7 +10,7 @@ ACatWaterRegion::ACatWaterRegion()
 // 配置校验流程：按 gate、ID、Revision、有限中心与三个正半尺寸逐项检查；任何 Unset 都阻止水域进入查询候选。
 bool ACatWaterRegion::IsRuntimeConfigured() const
 {
-	return bEnablePrototypeBounds && !RegionId.IsNone() && RegionRevision > 0
+	return bEnablePrototypeBounds && !RegionId.IsNone() && GeometryRevision > 0
 		&& !LocalCenterOffset.ContainsNaN() && !HalfExtent.ContainsNaN()
 		&& HalfExtent.X > 0.0 && HalfExtent.Y > 0.0 && HalfExtent.Z > 0.0;
 }
@@ -31,7 +31,8 @@ FCatWaterRegionSnapshot ACatWaterRegion::MakeSnapshot() const
 {
 	FCatWaterRegionSnapshot Snapshot;
 	Snapshot.RegionId = RegionId;
-	Snapshot.RegionRevision = RegionRevision;
+	Snapshot.GeometryRevision = GeometryRevision;
+	Snapshot.AggregationRevision = AggregationRevision;
 	Snapshot.WorldCenter = GetActorLocation() + LocalCenterOffset;
 	Snapshot.HalfExtent = HalfExtent;
 	Snapshot.ChumPool = ChumPool;
@@ -58,11 +59,12 @@ FCatAggregationResult ACatWaterRegion::ContributeAggregation(const FCatAggregati
 		ChumPool.Fishy += Command.Contribution.Fishy;
 		ChumPool.Fragrant += Command.Contribution.Fragrant;
 		ChumPool.Fermented += Command.Contribution.Fermented;
-		++RegionRevision;
+		++AggregationRevision;
 		Result.Command.bCommitted = true;
 		Result.Command.Error = ECatDomainCommandError::None;
 	}
-	Result.Command.Revision = RegionRevision;
+	Result.AggregationRevision = AggregationRevision;
+	Result.Command.Revision = AggregationRevision;
 	Result.ChumPool = ChumPool;
 	AggregationTerminalCache.Add(CacheKey, Result);
 	return Result;
@@ -82,7 +84,7 @@ ECatDomainCommandError ACatWaterRegion::ValidateAggregation(const FCatAggregatio
 	{
 		return ECatDomainCommandError::InvalidPayload;
 	}
-	if (Command.Context.ExpectedRevision != RegionRevision)
+	if (Command.ExpectedAggregationRevision != AggregationRevision)
 	{
 		return ECatDomainCommandError::RevisionConflict;
 	}

@@ -20,7 +20,9 @@ namespace CatWaterQuerySubsystemTest
 		Region->RegionId = RegionId;
 		Region->bEnablePrototypeBounds = true;
 		Region->HalfExtent = FVector(100.0, 100.0, 50.0);
-		Region->RegionRevision = 1;
+		Region->GeometryRevision = 1;
+		Region->bEnableAggregation = true;
+		Region->AggregationBudget = 2.0;
 		return Region;
 	}
 
@@ -63,7 +65,12 @@ bool FCatWaterQuerySubsystemUniqueRegionTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	CatWaterQuerySubsystemTest::SpawnConfiguredRegion(World, TEXT("LakeA"), FVector::ZeroVector);
+	ACatWaterRegion* LakeA = CatWaterQuerySubsystemTest::SpawnConfiguredRegion(World, TEXT("LakeA"), FVector::ZeroVector);
+	TestNotNull(TEXT("可创建可聚鱼 WaterRegion"), LakeA);
+	if (!LakeA)
+	{
+		return false;
+	}
 
 	FCatWaterQueryResult BadRevisionResult = QuerySubsystem->QueryWaterRegion(
 		CatWaterQuerySubsystemTest::MakeDayQuery(FVector::ZeroVector, 0));
@@ -75,7 +82,22 @@ bool FCatWaterQuerySubsystemUniqueRegionTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("唯一配置水域查询成功"), UniqueResult.bSucceeded);
 	TestEqual(TEXT("唯一查询返回 None"), UniqueResult.Error, ECatWaterQueryError::None);
 	TestEqual(TEXT("唯一查询返回区域 ID"), UniqueResult.Region.RegionId, FName(TEXT("LakeA")));
+	TestEqual(TEXT("聚鱼前查询返回 GeometryRevision"), UniqueResult.Region.GeometryRevision, int64(1));
 	TestEqual(TEXT("唯一查询保留 RunRevision"), UniqueResult.RunRevision, int64(3));
+
+	FCatAggregationCommand AggregationCommand;
+	AggregationCommand.Context.StableNetId = TEXT("PlayerA");
+	AggregationCommand.Context.RequestId = FGuid::NewGuid();
+	AggregationCommand.RegionId = TEXT("LakeA");
+	AggregationCommand.ExpectedAggregationRevision = 1;
+	AggregationCommand.Contribution.Fishy = 1.0;
+	const FCatAggregationResult AggregationResult = LakeA->ContributeAggregation(AggregationCommand);
+	TestTrue(TEXT("查询后聚鱼提交成功"), AggregationResult.Command.bCommitted);
+
+	FCatWaterQueryResult AfterAggregationResult = QuerySubsystem->QueryWaterRegion(
+		CatWaterQuerySubsystemTest::MakeDayQuery(FVector::ZeroVector, 3));
+	TestTrue(TEXT("聚鱼后水域查询成功"), AfterAggregationResult.bSucceeded);
+	TestEqual(TEXT("聚鱼后查询保持 GeometryRevision"), AfterAggregationResult.Region.GeometryRevision, int64(1));
 
 	CatWaterQuerySubsystemTest::SpawnConfiguredRegion(World, TEXT("LakeB"), FVector::ZeroVector);
 	FCatWaterQueryResult AmbiguousResult = QuerySubsystem->QueryWaterRegion(
