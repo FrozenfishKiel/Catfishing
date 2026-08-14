@@ -39,8 +39,8 @@ private:
 	/** 把 View 的 Host/Find/Join/Invite/Leave 意图翻译为 Online 公共接口调用；不直接访问 OSS 或旅行 API。 */
 	void HandleActionRequested(ECatOnlineUIAction Action, FGuid OpaqueHandle);
 
-	/** 基于当前 LocalPlayer Controller 创建并配置唯一 Widget；Controller 不可用时安全等待下一次变化。 */
-	void CreateWidgetForCurrentController();
+	/** 根据当前 Controller 与完整 Online 快照调和唯一 TravelWidget；直达 Lake 且没有 Session 时移除，其余状态创建或刷新。 */
+	void RefreshOnlineWidgetForCurrentController();
 
 	/** 成对解除 View 动作广播并移出视口；空实例和重复调用保持幂等。 */
 	void RemoveOnlineWidget();

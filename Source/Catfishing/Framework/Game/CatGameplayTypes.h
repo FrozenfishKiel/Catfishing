@@ -50,8 +50,10 @@ public:
 	virtual void StartPlay() override;
 	/** World 退出时关闭命令，清白天截止/HostExit ACK 计时与等待集合，再停 StateTree，避免旧 Run 回调进入下一地图。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-	/** 在 Login 之前校验 StableNetId 有效性与唯一占用，并建立 Reserved 记录；O 路径不使用隐式默认。 */
+	/** 在 Login 前校验身份与唯一占用；正式玩家建立 Reserved，PIE 无会话远端的无效身份只放行到服务器 InitNewPlayer 分配。 */
 	virtual void PreLogin(const FString& Options, const FString& Address, const FUniqueNetIdRepl& UniqueId, FString& ErrorMessage) override;
+	/** 在引擎注册 PlayerState 前为 PIE 无会话玩家注入仅本次 World 有效的服务器身份；正式平台身份仍原样进入父类流程。 */
+	virtual FString InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId, const FString& Options, const FString& Portal = TEXT("")) override;
 	/** 在父类生成 Character 之前把 Reserved 提升为与 Controller 匹配的 Active，再进入引擎标准 PostLogin 链。 */
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	/** 生成 Character 前再次验证 PlayerState 的继承 UniqueId 与 Active Controller 匹配，失败时不调用父类生成。 */
@@ -113,6 +115,8 @@ private:
 	static FString MakeStableNetIdLogValue(const FUniqueNetIdRepl& UniqueId);
 	/** 检查 Controller 的 PlayerState UniqueId 是否命中 Active 且弱引用精确相等；不做恢复或替换。 */
 	bool IsControllerActive(const AController* Controller) const;
+	/** 判断当前服务器是否处于可使用开发身份的 Editor PIE 无会话环境；任何非 PIE、已有会话或活动 Online 操作都返回 false。 */
+	bool IsPieNoSessionAdmissionAllowed() const;
 	/** PostLogin 身份接缝失败时通过 GameSession 拒绝连接；不调用父类 PostLogin，也不释放无法安全归属的 Reserved 记录，因而不会生成 Character 或擅自实施未裁的过期策略。 */
 	void RejectPostLoginController(APlayerController* NewPlayer, const FString& Reason);
 	/** 从已激活 Controller 读取唯一身份并写入命令上下文；客户端提交的 StableNetId 永远被覆盖。 */

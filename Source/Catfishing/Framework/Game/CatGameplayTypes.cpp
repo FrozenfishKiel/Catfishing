@@ -25,6 +25,7 @@
 #include "GameFramework/GameSession.h"
 #include "Items/CatItemsService.h"
 #include "Net/UnrealNetwork.h"
+#include "OnlineSubsystemTypes.h"
 #include "Profile/CatProfileSubsystem.h"
 #include "Run/CatRunSettings.h"
 #include "Run/CatSacrificeCoordinator.h"
@@ -32,6 +33,18 @@
 #include "StateTree.h"
 #include "Social/CatSocialService.h"
 #include "TimerManager.h"
+
+namespace
+{
+	/** PIE 无会话身份的 UE 类型标签；服务器只在受限开发准入中创建，客户端提交同类型身份会被拒绝。 */
+	const FName CatPieNoSessionUniqueIdType(TEXT("CAT_PIE_NOSESSION"));
+
+	// 临时身份识别流程：先要求 FUniqueNetIdRepl 有效，再只比较服务器保留的类型标签；不会根据字符串前缀接受客户端伪造值。
+	bool IsPieNoSessionUniqueId(const FUniqueNetIdRepl& UniqueId)
+	{
+		return UniqueId.IsValid() && UniqueId->GetType() == CatPieNoSessionUniqueIdType;
+	}
+}
 
 // 构造流程：在类默认对象阶段清空 PawnClass；Frontend Controller 只承载 LocalPlayer UI，不自动生成可操控身体。
 ACatFrontendGameMode::ACatFrontendGameMode()
@@ -115,7 +128,7 @@ void ACatfishingGameModeBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-// PreLogin 流程：先保留引擎 GameSession/UniqueId 兼容检查；成功后拒绝无效身份这一未裁准入路径，再以 StableNetId 建立 Reserved 或拒绝重复占用。
+// PreLogin 流程：先保留引擎 GameSession/UniqueId 兼容检查；客户端提交保留的 PIE 类型始终拒绝。远端无身份只在 Editor PIE 无会话 gate 下继续等待服务器于 InitNewPlayer 分配身份，其余路径仍按 StableNetId 建立 Reserved 或拒绝重复占用。
 void ACatfishingGameModeBase::PreLogin(const FString& Options, const FString& Address, const FUniqueNetIdRepl& UniqueId, FString& ErrorMessage)
 {
 	Super::PreLogin(Options, Address, UniqueId, ErrorMessage);
@@ -123,8 +136,19 @@ void ACatfishingGameModeBase::PreLogin(const FString& Options, const FString& Ad
 	{
 		return;
 	}
+	if (IsPieNoSessionUniqueId(UniqueId))
+	{
+		ErrorMessage = TEXT("CAT_PIE_ID_MUST_BE_SERVER_GENERATED");
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=identity_prelogin_rejected StableNetId=Valid(Redacted) Address=%s Error=ClientSuppliedPieIdentity"), *Address);
+		return;
+	}
 	if (!UniqueId.IsValid())
 	{
+		if (IsPieNoSessionAdmissionAllowed())
+		{
+			UE_LOG(LogCatOnline, Log, TEXT("Event=identity_prelogin_development_allowed StableNetId=Invalid Address=%s Source=PieNoSession"), *Address);
+			return;
+		}
 		ErrorMessage = TEXT("CAT_POLICY_UNDECIDED:InvalidStableNetIdAdmission");
 		UE_LOG(LogCatOnline, Warning, TEXT("Event=identity_prelogin_rejected StableNetId=Invalid Address=%s Error=PolicyUndecided"), *Address);
 		return;
@@ -162,6 +186,61 @@ void ACatfishingGameModeBase::PreLogin(const FString& Options, const FString& Ad
 	}
 	AdmissionRecords.Add(StableNetIdKey);
 	UE_LOG(LogCatOnline, Log, TEXT("Event=identity_reserved StableNetId=%s Records=%d"), *MakeStableNetIdLogValue(UniqueId), AdmissionRecords.Num());
+}
+
+// 玩家初始化流程：
+// 1. 先拒绝任何调用方传入的保留 PIE 身份，保证临时 GUID 只能由当前 authority World 生成。
+// 2. 无有效身份时仅在 Editor PIE、NoSession 且无 Online 操作的服务器生成一次临时身份，再把有效身份交给父类写入 PlayerState；其他环境原样保留引擎行为。
+// 3. 父类成功后，远端正式玩家继续消费 PreLogin 已写的 Reserved；只有本地 Controller 或本次生成的临时身份在缺记录时补 Reserved。
+// 4. 任何父类失败或重复占用都返回错误，不留下新的准入记录；PostLogin 仍负责唯一的 Reserved→Active 提升与 Character 生成。
+FString ACatfishingGameModeBase::InitNewPlayer(APlayerController* NewPlayerController, const FUniqueNetIdRepl& UniqueId,
+	const FString& Options, const FString& Portal)
+{
+	if (IsPieNoSessionUniqueId(UniqueId))
+	{
+		return TEXT("CAT_PIE_ID_MUST_BE_SERVER_GENERATED");
+	}
+
+	FUniqueNetIdRepl EffectiveUniqueId = UniqueId;
+	bool bGeneratedPieIdentity = false;
+	if (!EffectiveUniqueId.IsValid() && IsPieNoSessionAdmissionAllowed())
+	{
+		const FString GeneratedValue = FString::Printf(TEXT("PIE-%s"),
+			*FGuid::NewGuid().ToString(EGuidFormats::Digits));
+		const FUniqueNetIdRef GeneratedUniqueId = FUniqueNetIdString::Create(GeneratedValue, CatPieNoSessionUniqueIdType);
+		EffectiveUniqueId = FUniqueNetIdRepl(GeneratedUniqueId);
+		bGeneratedPieIdentity = true;
+	}
+
+	const FString ErrorMessage = Super::InitNewPlayer(NewPlayerController, EffectiveUniqueId, Options, Portal);
+	if (!ErrorMessage.IsEmpty())
+	{
+		return ErrorMessage;
+	}
+
+	const APlayerState* PlayerState = NewPlayerController ? NewPlayerController->PlayerState : nullptr;
+	if (!PlayerState || !PlayerState->GetUniqueId().IsValid())
+	{
+		return ErrorMessage;
+	}
+
+	const bool bLocalControllerNeedsReservation = NewPlayerController->IsLocalController();
+	if (!bGeneratedPieIdentity && !bLocalControllerNeedsReservation)
+	{
+		return ErrorMessage;
+	}
+
+	const FString StableNetIdKey = MakeStableNetIdKey(PlayerState->GetUniqueId());
+	if (AdmissionRecords.Contains(StableNetIdKey))
+	{
+		return TEXT("CAT_DUPLICATE_STABLE_NET_ID");
+	}
+
+	AdmissionRecords.Add(StableNetIdKey);
+	UE_LOG(LogCatOnline, Log, TEXT("Event=identity_reserved StableNetId=%s Records=%d Source=%s"),
+		*MakeStableNetIdLogValue(PlayerState->GetUniqueId()), AdmissionRecords.Num(),
+		bGeneratedPieIdentity ? TEXT("PieNoSession") : TEXT("LocalController"));
+	return ErrorMessage;
 }
 
 // PostLogin 流程：父类尚未调用 HandleStartingNewPlayer 时先读取 PlayerState 继承 UniqueId；只有命中 Reserved 才提升 Active 并绑定 Controller，随后才进入父类生成/占有 Character。
@@ -222,7 +301,7 @@ void ACatfishingGameModeBase::HandleStartingNewPlayer_Implementation(APlayerCont
 	Super::HandleStartingNewPlayer_Implementation(NewPlayer);
 }
 
-// Logout 流程：先读取尚未被引擎清理的 PlayerState；只有 StableNetId 命中且 Active 弱引用等于 Exiting 才移除，旧连接永远不能删除同身份的新记录。
+// Logout 流程：先读取尚未被引擎清理的 PlayerState；只有 StableNetId 命中且 Active 弱引用等于 Exiting 才移除，旧连接永远不能删除同身份的新记录。PIE 无会话身份随连接立即失效并显式跳过重连 TTL，避免下一次测试误恢复旧玩家。
 void ACatfishingGameModeBase::Logout(AController* Exiting)
 {
 	const APlayerState* PlayerState = Exiting ? Exiting->PlayerState : nullptr;
@@ -230,6 +309,7 @@ void ACatfishingGameModeBase::Logout(AController* Exiting)
 	if (PlayerState && PlayerState->GetUniqueId().IsValid())
 	{
 		const FString StableNetIdKey = MakeStableNetIdKey(PlayerState->GetUniqueId());
+		const bool bPieNoSessionIdentity = IsPieNoSessionUniqueId(PlayerState->GetUniqueId());
 		const FAdmissionRecord* Record = AdmissionRecords.Find(StableNetIdKey);
 		if (Record && Record->Phase == EAdmissionPhase::Active && Record->Controller.Get() == Exiting)
 		{
@@ -239,13 +319,18 @@ void ACatfishingGameModeBase::Logout(AController* Exiting)
 			const bool bVoluntary = VoluntaryLeaveStableNetIds.Remove(StableNetIdKey) > 0;
 			const bool bKeepVoluntary = bVoluntary
 				&& OnlineSettings->VoluntaryLeaveRecovery == ECatPolicyDecision::Enabled;
-			if (OnlineSettings->IsReconnectAdmissionReady() && (!bVoluntary || bKeepVoluntary) && GetWorld())
+			if (!bPieNoSessionIdentity && OnlineSettings->IsReconnectAdmissionReady() && (!bVoluntary || bKeepVoluntary) && GetWorld())
 			{
 				ReconnectExpiryByStableNetId.Add(StableNetIdKey,
 					GetWorld()->GetTimeSeconds() + OnlineSettings->ReconnectRecordTtlSeconds);
 			}
-			UE_LOG(LogCatOnline, Log, TEXT("Event=identity_released StableNetId=%s Result=ControllerMatched Remaining=%d Recovery=PolicyUndecided"),
-				*MakeStableNetIdLogValue(PlayerState->GetUniqueId()), AdmissionRecords.Num());
+			else if (bPieNoSessionIdentity)
+			{
+				ReconnectExpiryByStableNetId.Remove(StableNetIdKey);
+			}
+			UE_LOG(LogCatOnline, Log, TEXT("Event=identity_released StableNetId=%s Result=ControllerMatched Remaining=%d Recovery=%s"),
+				*MakeStableNetIdLogValue(PlayerState->GetUniqueId()), AdmissionRecords.Num(),
+				bPieNoSessionIdentity ? TEXT("SkippedPieNoSession") : TEXT("PolicyUndecided"));
 		}
 		else
 		{
@@ -304,6 +389,41 @@ bool ACatfishingGameModeBase::IsControllerActive(const AController* Controller) 
 	}
 	const FAdmissionRecord* Record = AdmissionRecords.Find(MakeStableNetIdKey(PlayerState->GetUniqueId()));
 	return Record && Record->Phase == EAdmissionPhase::Active && Record->Controller.Get() == Controller;
+}
+
+// 开发准入 gate 流程：
+// 1. 非 Editor 编译直接返回 false，使打包 Game/Server 不包含可启用的匿名准入路径。
+// 2. Editor 中只接受真实 PIE World 与三种服务器 NetMode，客户端 World 和普通 Editor World 均拒绝。
+// 3. 最后读取 GameInstance 的 Online 唯一快照；只有没有 NamedSession、没有会话角色且没有活动操作时才允许服务器生成临时身份。
+bool ACatfishingGameModeBase::IsPieNoSessionAdmissionAllowed() const
+{
+#if WITH_EDITOR
+	const UWorld* World = GetWorld();
+	if (!World || World->WorldType != EWorldType::PIE)
+	{
+		return false;
+	}
+
+	const ENetMode NetMode = World->GetNetMode();
+	if (NetMode != NM_Standalone && NetMode != NM_ListenServer && NetMode != NM_DedicatedServer)
+	{
+		return false;
+	}
+
+	const UGameInstance* GameInstance = World->GetGameInstance();
+	const UCatOnlineSubsystem* Online = GameInstance ? GameInstance->GetSubsystem<UCatOnlineSubsystem>() : nullptr;
+	if (!Online)
+	{
+		return false;
+	}
+
+	const FCatOnlineSnapshot Snapshot = Online->GetSnapshot();
+	return Snapshot.SessionState == ECatOnlineSessionState::NoSession
+		&& Snapshot.SessionRole == ECatOnlineSessionRole::None
+		&& Snapshot.ActiveOperation == ECatOnlineOperation::None;
+#else
+	return false;
+#endif
 }
 
 // 玩法命令 gate 流程：要求 authority、本局命令门仍开放且 Controller 精确命中 Active 身份记录；Profile/Capture/Settlement/HostExit 等收口协议走各自校验，不调用本方法。
