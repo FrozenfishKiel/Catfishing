@@ -396,6 +396,7 @@ git commit -m "Add fishing command concurrency ledger"
 - Modify: `Source/Catfishing/Environment/Tests/CatWaterQuerySubsystemTests.cpp`
 - Modify narrowly: `Source/Catfishing/Framework/Game/CatGameplayTypes.h`
 - Modify narrowly: `Source/Catfishing/Framework/Game/CatGameplayTypes.cpp`
+- Modify: `Source/Catfishing/Framework/Game/Tests/CatGameplayTypesTests.cpp`
 - Modify: `Source/Catfishing/Fishing/CatFishingSession.cpp`
 
 **Contract:**
@@ -442,6 +443,8 @@ rg -a -l "RegionRevision|CatWaterRegion" Content
 
 更新现有 Water 测试并新增断言：GeometryRevision 为 7；初始 AggregationRevision 为 1；首次聚鱼后 AggregationRevision 为 2；GeometryRevision 仍为 7；旧 aggregation revision 返回 RevisionConflict；WaterQuery 在聚鱼前后返回相同 GeometryRevision。
 
+Review remediation 还需新增 `Catfishing.Unit.Framework.PlayerChum.InvalidPayloadReportsCurrentAggregationRevision`：WaterRegion 当前 AggregationRevision 为 2 时，Controller 的 InvalidPayload 结果必须同时返回 `AggregationRevision=2` 与兼容的 `Command.Revision=2`；空 WaterRegion 保持 0。
+
 - [ ] **Step 3: 运行 Water 红灯构建/测试**
 
 先运行 Editor build。预期为字段不存在的编译失败；若已编译，则运行 filter `Catfishing.Unit.Environment.Water` 并观察版本断言失败。
@@ -453,12 +456,13 @@ Controller 只改以下 Water 接缝：
 - `CatGameplayTypes.h` 的 `ServerContributeChum` 参数名为 `ExpectedAggregationRevision`。
 - `CatGameplayTypes.cpp` 自然聚鱼读取 `MakeSnapshot().AggregationRevision`。
 - 玩家聚鱼实现参数名、`Command.ExpectedAggregationRevision` 和失败结果中的当前 AggregationRevision。
+- 玩家聚鱼 InvalidPayload 快路径统一调用私有静态 `MakeInvalidPlayerChumResult`；它只读取非空 WaterRegion 的当前 AggregationRevision，并同时填充结果的两个版本字段。仅允许为该 helper 添加对应 automation test friend，不扩大 Controller 公共 API。
 
 不改旧 Fishing RPC，不改用户输入函数。
 
 - [ ] **Step 5: 构建并运行 Water 测试**
 
-运行 Editor build，再分别运行 `Catfishing.Unit.Environment.WaterRegion` 与 `Catfishing.Unit.Environment.WaterQuery`。
+运行 Editor build，再分别运行 `Catfishing.Unit.Environment.WaterRegion`、`Catfishing.Unit.Environment.WaterQuery` 与 `Catfishing.Unit.Framework.PlayerChum`。
 
 - [ ] **Step 6: 显式暂存并审计 Controller 的 Water hunk**
 
@@ -470,7 +474,7 @@ git diff --cached -- Source/Catfishing/Framework/Game/CatGameplayTypes.h Source/
 git diff --cached --check
 ```
 
-cached Controller diff 必须只包含以下白名单语义：头文件 `ExpectedRegionRevision`→`ExpectedAggregationRevision`，实现中的同名参数、`MakeSnapshot().AggregationRevision`、`Command.ExpectedAggregationRevision` 和失败结果的当前 AggregationRevision。若出现 `UEnhancedInputLocalPlayerSubsystem`、`UInputAction`、`UInputMappingContext`、`FInputActionValue`、`OnRep_Pawn`、`DefaultMappingContext`、`IA_Move`、`IA_Look`、`IA_Jump`、`IA_Run`、`ServerSetSprinting`、`MoveInput`、`LookInput`、`WalkMaxSpeed` 或 `SprintMaxSpeed`，立即执行 `git restore --staged` 仅撤销这两个 Controller 文件的暂存并停止；不得提交、不得改写工作树。
+cached Controller diff 必须只包含以下白名单语义：头文件 `ExpectedRegionRevision`→`ExpectedAggregationRevision`，实现中的同名参数、`MakeSnapshot().AggregationRevision`、`Command.ExpectedAggregationRevision`、失败结果的当前 AggregationRevision，以及 review remediation 所需的私有 `MakeInvalidPlayerChumResult`/单一 automation friend。若出现 `UEnhancedInputLocalPlayerSubsystem`、`UInputAction`、`UInputMappingContext`、`FInputActionValue`、`OnRep_Pawn`、`DefaultMappingContext`、`IA_Move`、`IA_Look`、`IA_Jump`、`IA_Run`、`ServerSetSprinting`、`MoveInput`、`LookInput`、`WalkMaxSpeed` 或 `SprintMaxSpeed`，立即执行 `git restore --staged` 仅撤销这两个 Controller 文件的暂存并停止；不得提交、不得改写工作树。
 
 - [ ] **Step 7: 提交任务 3**
 
