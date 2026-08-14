@@ -40,6 +40,7 @@
 #include "StateTree.h"
 #include "Social/CatSocialService.h"
 #include "TimerManager.h"
+#include "Fishing/Integration/CatFishingCommandComponent.h"
 
 namespace
 {
@@ -51,6 +52,16 @@ namespace
 	{
 		return UniqueId.IsValid() && UniqueId->GetType() == CatPieNoSessionUniqueIdType;
 	}
+}
+
+ACatfishingPlayerController::ACatfishingPlayerController()
+{
+	FishingCommandComponent = CreateDefaultSubobject<UCatFishingCommandComponent>(TEXT("FishingCommandComponent"));
+}
+
+UCatFishingCommandComponent* ACatfishingPlayerController::GetFishingCommandComponent() const
+{
+	return FishingCommandComponent;
 }
 
 // 构造流程：在类默认对象阶段清空 PawnClass；Frontend Controller 只承载 LocalPlayer UI，不自动生成可操控身体。

@@ -16,6 +16,7 @@
 #include "CatGameplayTypes.generated.h"
 
 class UStateTreeComponent;
+class UCatFishingCommandComponent;
 class UEnhancedInputLocalPlayerSubsystem;
 class UInputAction;
 class UInputMappingContext;
@@ -328,6 +329,11 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerRequestScoop(FGuid FishingSessionId, FCatScoopCommand Command);
 
+	ACatfishingPlayerController();
+
+	UFUNCTION(BlueprintPure, Category="Catfishing|Fishing")
+	UCatFishingCommandComponent* GetFishingCommandComponent() const;
+
 	/** 把唯一献祭命令转给 SacrificeCoordinator；Controller 不直接删鱼或增加 Run 额度。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestSacrifice(FCatSacrificeCommand Command);
@@ -520,4 +526,7 @@ private:
 
 	/** 本 Controller 的玩家窝料首次终态；覆盖 Equipment→WaterRegion 同步协调，重放不会再次扣耗材或增加池。 */
 	TMap<FGuid, FCatAggregationResult> PlayerChumTerminalCache;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Catfishing|Fishing", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UCatFishingCommandComponent> FishingCommandComponent;
 };
