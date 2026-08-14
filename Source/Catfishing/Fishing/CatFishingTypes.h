@@ -40,6 +40,29 @@ enum class ECatFishMotionIntent : uint8
 	None, CalmOrInward, StrugglingOutward, AutoHauling
 };
 
+class APlayerState;
+class ACatFishingRodActor;
+
+USTRUCT(BlueprintType)
+struct FCatFishingAttemptSnapshot
+{
+	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly) FGuid RequestId;
+	UPROPERTY(BlueprintReadOnly) FGuid FishingSessionId;
+	UPROPERTY(BlueprintReadOnly) FGuid CastAttemptId;
+	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> FisherPlayerState = nullptr;
+	UPROPERTY(BlueprintReadOnly) TObjectPtr<ACatFishingRodActor> RodActor = nullptr;
+	UPROPERTY(BlueprintReadOnly) FName RodDefinitionId = NAME_None;
+	UPROPERTY(BlueprintReadOnly) FName FloatDefinitionId = NAME_None;
+	UPROPERTY(BlueprintReadOnly) FName BaitDefinitionId = NAME_None;
+	UPROPERTY(BlueprintReadOnly) int64 EquipmentReservationRevision = 0;
+	UPROPERTY(BlueprintReadOnly) int64 RodActorRevision = 0;
+	UPROPERTY(BlueprintReadOnly) FVector ServerCorrectedLandingWorldPoint = FVector::ZeroVector;
+	UPROPERTY(BlueprintReadOnly) FName WaterRegionId = NAME_None;
+	UPROPERTY(BlueprintReadOnly) int64 GeometryRevision = 0;
+	UPROPERTY() uint64 ServerRandomSeed = 0;
+};
+
 /** FishingSession 对客户端公开的最小只读事实；不复制 FishDefinition 对象、StableNetId 或容器写模型。 */
 USTRUCT(BlueprintType)
 struct FCatFishingSessionSnapshot
