@@ -212,12 +212,17 @@ bool FCatEquipmentFishingUseBeginTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Begin reserves matching special-bait fishing use"), Begin.bReserved);
 	TestEqual(TEXT("Begin reservation preserves public revision"), Begin.EquipmentRevision, Before.Revision);
 	TestTrue(TEXT("Begin creates active session"), Fixture.Component->IsFishingUseActive(SessionId));
+	const FCatFishingUseOperationResult SetWear = Fixture.Component->SetAccumulatedFishingRodWear(SessionId, 1, 12.5);
+	TestTrue(TEXT("Set wear records reservation observable before Begin replay"), SetWear.bApplied);
+	TestEqual(TEXT("Set wear does not publish Equipment revision before Begin replay"), Fixture.Component->GetSnapshot().Revision, Before.Revision);
 
 	const FCatFishingUseReservationResult Replay = Fixture.Component->BeginFishingUse(
 		SessionId, RodId, SpecialBaitId, FloatId, Before.Revision);
 	TestTrue(TEXT("Special-bait Begin replay returns its existing reservation"), Replay.bReserved);
 	TestEqual(TEXT("Begin replay is already resolved"), Replay.Error, ECatDomainCommandError::AlreadyResolved);
 	TestEqual(TEXT("Begin replay returns current reservation revision"), Replay.EquipmentRevision, Fixture.Component->GetSnapshot().Revision);
+	TestEqual(TEXT("Begin replay returns current wear sequence"), Replay.WearSequence, int64{1});
+	TestEqual(TEXT("Begin replay returns current absolute rod wear"), Replay.AbsoluteRodWear, 12.5);
 	TestEqual(TEXT("Begin replay keeps public revision"), Fixture.Component->GetSnapshot().Revision, Before.Revision);
 
 	const FCatFishingUseReservationResult Exclusive = Fixture.Component->BeginFishingUse(

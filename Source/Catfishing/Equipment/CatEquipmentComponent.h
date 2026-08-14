@@ -78,7 +78,7 @@ private:
 	const FCatFishingUseRecord* FindFishingUseRecord(FGuid FishingSessionId) const;
 	int32 GetPendingReservedSpecialBaitCount(FName DefinitionId) const;
 	FCatFishingUseReservationResult MakeFishingUseReservationResult(FGuid FishingSessionId,
-		ECatDomainCommandError Error, bool bReserved) const;
+		ECatDomainCommandError Error, bool bReserved, const FCatFishingUseRecord* Record = nullptr) const;
 	FCatFishingUseOperationResult MakeFishingUseOperationResult(FGuid FishingSessionId,
 		ECatDomainCommandError Error, bool bApplied, const FCatFishingUseRecord* Record = nullptr) const;
 	/** 客户端收到完整装配事实后只供 UI/玩法只读消费；不反向请求自动装备。 */

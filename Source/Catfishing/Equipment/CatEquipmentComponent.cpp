@@ -269,7 +269,7 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	{
 		const bool bReserved = ExistingRecord->bSpecialBaitReserved && !ExistingRecord->bBaitCommitted
 			&& !ExistingRecord->bReleased;
-		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, bReserved);
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, bReserved, ExistingRecord);
 	}
 
 	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
@@ -580,7 +580,7 @@ int32 UCatEquipmentComponent::GetPendingReservedSpecialBaitCount(const FName Def
 }
 
 FCatFishingUseReservationResult UCatEquipmentComponent::MakeFishingUseReservationResult(const FGuid FishingSessionId,
-	const ECatDomainCommandError Error, const bool bReserved) const
+	const ECatDomainCommandError Error, const bool bReserved, const FCatFishingUseRecord* Record) const
 {
 	FCatFishingUseReservationResult Result;
 	Result.SessionId = FishingSessionId;
@@ -589,6 +589,11 @@ FCatFishingUseReservationResult UCatEquipmentComponent::MakeFishingUseReservatio
 	Result.RemainingRodDurability = Snapshot.RodDurability;
 	Result.bReserved = bReserved;
 	Result.bRodBroken = Snapshot.bRodBroken;
+	if (Record)
+	{
+		Result.WearSequence = Record->LastWearSequence;
+		Result.AbsoluteRodWear = Record->AbsoluteRodWear;
+	}
 	return Result;
 }
 
