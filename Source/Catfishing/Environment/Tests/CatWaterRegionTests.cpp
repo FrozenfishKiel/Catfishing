@@ -86,7 +86,7 @@ bool FCatWaterRegionConfigurationTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-// 测试流程：同一 WaterRegion 先成功提交聚鱼，再重放、用陈旧 Revision 写入和超预算写入；ChumPool 与 RegionRevision 只能在首次成功时推进。
+// 测试流程：同一 WaterRegion 先成功提交聚鱼，再重放、用陈旧 Revision 写入和超预算写入；ChumPool 与 AggregationRevision 只能在首次成功时推进。
 bool FCatWaterRegionAggregationTransactionTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -131,12 +131,18 @@ bool FCatWaterRegionAggregationTransactionTest::RunTest(const FString& Parameter
 	TestFalse(TEXT("陈旧 Revision 聚鱼不提交"), StaleResult.Command.bCommitted);
 	TestEqual(TEXT("陈旧 Revision 聚鱼返回 RevisionConflict"), StaleResult.Command.Error, ECatDomainCommandError::RevisionConflict);
 	TestEqual(TEXT("陈旧 Revision 聚鱼不改变池"), StaleResult.ChumPool.Fishy, 1.0);
+	TestEqual(TEXT("陈旧 Revision 保持 AggregationRevision"), StaleResult.AggregationRevision, int64(2));
+	TestEqual(TEXT("陈旧 Revision 保持命令 Revision"), StaleResult.Command.Revision, int64(2));
+	TestEqual(TEXT("陈旧 Revision 不改变 GeometryRevision"), Region->MakeSnapshot().GeometryRevision, int64(7));
 
 	FCatAggregationResult CapacityResult = Region->ContributeAggregation(
 		CatWaterRegionTest::MakeAggregationCommand(TEXT("PlayerA"), FGuid::NewGuid(), 2, 2.0));
 	TestFalse(TEXT("超预算聚鱼不提交"), CapacityResult.Command.bCommitted);
 	TestEqual(TEXT("超预算聚鱼返回 CapacityExceeded"), CapacityResult.Command.Error, ECatDomainCommandError::CapacityExceeded);
 	TestEqual(TEXT("超预算聚鱼不改变池"), CapacityResult.ChumPool.Fishy, 1.0);
+	TestEqual(TEXT("超预算保持 AggregationRevision"), CapacityResult.AggregationRevision, int64(2));
+	TestEqual(TEXT("超预算保持命令 Revision"), CapacityResult.Command.Revision, int64(2));
+	TestEqual(TEXT("超预算不改变 GeometryRevision"), Region->MakeSnapshot().GeometryRevision, int64(7));
 	return !HasAnyErrors();
 }
 

@@ -469,6 +469,11 @@ protected:
 	int32 InputMappingPriority = 0;
 
 private:
+	friend class FCatPlayerChumInvalidPayloadReportsCurrentAggregationRevisionTest;
+
+	/** 构造玩家 Chum 无效载荷终态；非空 WaterRegion 返回当前聚鱼版本，空指针保留零版本。 */
+	static FCatAggregationResult MakeInvalidPlayerChumResult(FGuid RequestId, const ACatWaterRegion* WaterRegion);
+
 	/** 幂等安装当前配置的玩法 Mapping Context；BeginPlay/输入初始化均可安全调用。 */
 	void ApplyInputMappingContext();
 	/** 移除本 Controller 安装的玩法 Mapping Context，并清空弱绑定记录。 */

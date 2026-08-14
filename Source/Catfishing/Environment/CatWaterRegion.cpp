@@ -39,7 +39,7 @@ FCatWaterRegionSnapshot ACatWaterRegion::MakeSnapshot() const
 	return Snapshot;
 }
 
-// 聚鱼提交流程：两个 Source 共用相同身份/RequestId 缓存、Region/Revision/三轴/预算校验；成功只增加同一 ChumPool 与 RegionRevision，不创建自然事件旁路。
+// 聚鱼提交流程：两个 Source 共用相同身份/RequestId 缓存、Region/Revision/三轴/预算校验；成功只增加同一 ChumPool 与 AggregationRevision，不创建自然事件旁路。
 FCatAggregationResult ACatWaterRegion::ContributeAggregation(const FCatAggregationCommand& Command)
 {
 	FCatAggregationResult Result;

@@ -2050,6 +2050,20 @@ void ACatfishingPlayerController::ServerCompleteShakeDry_Implementation(const FG
 	}
 }
 
+FCatAggregationResult ACatfishingPlayerController::MakeInvalidPlayerChumResult(const FGuid RequestId,
+	const ACatWaterRegion* WaterRegion)
+{
+	FCatAggregationResult Result;
+	Result.Command.RequestId = RequestId;
+	Result.Command.Error = ECatDomainCommandError::InvalidPayload;
+	if (WaterRegion)
+	{
+		Result.AggregationRevision = WaterRegion->MakeSnapshot().AggregationRevision;
+		Result.Command.Revision = Result.AggregationRevision;
+	}
+	return Result;
+}
+
 // 玩家窝料流程：先过统一玩法 gate 和 Controller 终态重放，再派生身份并验证 WaterRegion/Chum；区域预检后扣耗材并提交同 RequestId。
 void ACatfishingPlayerController::ServerContributeChum_Implementation(ACatWaterRegion* WaterRegion,
 	const FGuid RequestId, const int64 ExpectedEquipmentRevision, const int64 ExpectedAggregationRevision,
@@ -2077,7 +2091,7 @@ void ACatfishingPlayerController::ServerContributeChum_Implementation(ACatWaterR
 		|| ChumDefinition->Kind != ECatEquipmentKind::Chum || !ChumDefinition->ChumContribution.IsValidContribution()
 		|| !WaterRegion->ContainsWorldPoint(ControlledCharacter->GetActorLocation()))
 	{
-		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
+		Result = MakeInvalidPlayerChumResult(RequestId, WaterRegion);
 	}
 	else
 	{
