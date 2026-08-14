@@ -21,8 +21,15 @@
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
+#include "EnhancedInputComponent.h"
+#include "EnhancedInputSubsystems.h"
 #include "Fishing/CatFishingService.h"
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/GameSession.h"
+#include "InputAction.h"
+#include "InputActionValue.h"
+#include "InputMappingContext.h"
 #include "Items/CatItemsService.h"
 #include "Net/UnrealNetwork.h"
 #include "OnlineSubsystemTypes.h"
@@ -259,7 +266,7 @@ void ACatfishingGameModeBase::PostLogin(APlayerController* NewPlayer)
 		RejectPostLoginController(NewPlayer, TEXT("CAT_IDENTITY_RESERVATION_MISMATCH"));
 		return;
 	}
-
+	
 	Record->Phase = EAdmissionPhase::Active;
 	Record->Controller = NewPlayer;
 	const bool bWasReconnect = PendingReconnectStableNetIds.Remove(StableNetIdKey) > 0;
@@ -1371,8 +1378,200 @@ void ACatfishingPlayerState::OnRep_ReadyForNextDay()
 void ACatfishingPlayerController::OnPossess(APawn* InPawn)
 {
 	Super::OnPossess(InPawn);
+	bSprintRequested = false;
+	ApplySprintSpeed(InPawn, false);
 	UE_LOG(LogCatfishing, Log, TEXT("Event=controller_possessed Controller=%s Pawn=%s"),
 		*GetClass()->GetName(), InPawn ? *InPawn->GetClass()->GetName() : TEXT("None"));
+}
+
+// Pawn 复制刷新流程：owning client 在拿到新 Pawn 后从普通速度开始，旧 Pawn 的按键意图不会穿透重生或旅行边界。
+void ACatfishingPlayerController::OnRep_Pawn()
+{
+	Super::OnRep_Pawn();
+	bSprintRequested = false;
+	ApplySprintSpeed(GetPawn(), false);
+}
+
+// 本地输入启动流程：父类完成 Actor 生命周期后，幂等安装本 Controller 配置的唯一玩法输入层。
+void ACatfishingPlayerController::BeginPlay()
+{
+	Super::BeginPlay();
+	ApplyInputMappingContext();
+}
+
+// 输入绑定流程：只接受项目配置的 EnhancedInputComponent；未接入的 Action 独立跳过，不阻塞其余输入。
+void ACatfishingPlayerController::SetupInputComponent()
+{
+	Super::SetupInputComponent();
+	ApplyInputMappingContext();
+
+	UEnhancedInputComponent* EnhancedInput = Cast<UEnhancedInputComponent>(InputComponent);
+	if (!EnhancedInput)
+	{
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=controller_input_binding_failed Controller=%s Error=EnhancedInputComponentUnavailable"),
+			*GetClass()->GetName());
+		return;
+	}
+
+	if (MoveAction)
+	{
+		EnhancedInput->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ThisClass::Move);
+	}
+	if (LookAction)
+	{
+		EnhancedInput->BindAction(LookAction, ETriggerEvent::Triggered, this, &ThisClass::Look);
+	}
+	if (JumpAction)
+	{
+		EnhancedInput->BindAction(JumpAction, ETriggerEvent::Started, this, &ThisClass::StartJump);
+		EnhancedInput->BindAction(JumpAction, ETriggerEvent::Completed, this, &ThisClass::StopJump);
+		EnhancedInput->BindAction(JumpAction, ETriggerEvent::Canceled, this, &ThisClass::StopJump);
+	}
+	if (SprintAction)
+	{
+		EnhancedInput->BindAction(SprintAction, ETriggerEvent::Started, this, &ThisClass::StartSprint);
+		EnhancedInput->BindAction(SprintAction, ETriggerEvent::Completed, this, &ThisClass::StopSprint);
+		EnhancedInput->BindAction(SprintAction, ETriggerEvent::Canceled, this, &ThisClass::StopSprint);
+	}
+}
+
+// Pawn 断开流程：Controller 仍持有 Pawn 时先恢复普通速度并清意图，再交还父类断开占有。
+void ACatfishingPlayerController::OnUnPossess()
+{
+	ApplySprintSpeed(GetPawn(), false);
+	bSprintRequested = false;
+	Super::OnUnPossess();
+}
+
+// 输入清理流程：只撤销本 Controller 安装的 Context，再交还父类销毁；不干扰诊断或 UI 输入层。
+void ACatfishingPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	ApplySprintSpeed(GetPawn(), false);
+	bSprintRequested = false;
+	RemoveInputMappingContext();
+	Super::EndPlay(EndPlayReason);
+}
+
+// Mapping Context 安装流程：仅本地 Controller 从自身 LocalPlayer 取 Enhanced Input 子系统，重复调用保持幂等。
+void ACatfishingPlayerController::ApplyInputMappingContext()
+{
+	if (!IsLocalController() || !DefaultMappingContext || AppliedMappingContext)
+	{
+		return;
+	}
+
+	ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	UEnhancedInputLocalPlayerSubsystem* InputSubsystem = LocalPlayer
+		? LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>() : nullptr;
+	if (!InputSubsystem)
+	{
+		return;
+	}
+
+	InputSubsystem->AddMappingContext(DefaultMappingContext, InputMappingPriority);
+	AppliedInputSubsystem = InputSubsystem;
+	AppliedMappingContext = DefaultMappingContext;
+}
+
+// Mapping Context 移除流程：使用安装时保存的同一子系统和资产成对清理，World teardown 下弱引用失效也安全。
+void ACatfishingPlayerController::RemoveInputMappingContext()
+{
+	if (UEnhancedInputLocalPlayerSubsystem* InputSubsystem = AppliedInputSubsystem.Get();
+		InputSubsystem && AppliedMappingContext)
+	{
+		InputSubsystem->RemoveMappingContext(AppliedMappingContext);
+	}
+	AppliedInputSubsystem.Reset();
+	AppliedMappingContext = nullptr;
+}
+
+// 移动输入流程：以控制器水平朝向为基准，Y 驱动前后、X 驱动左右；Pawn 缺失时不制造旁路移动状态。
+void ACatfishingPlayerController::Move(const FInputActionValue& Value)
+{
+	APawn* ControlledPawn = GetPawn();
+	if (!ControlledPawn)
+	{
+		return;
+	}
+
+	const FVector2D Movement = Value.Get<FVector2D>();
+	const FRotator YawRotation(0.0, GetControlRotation().Yaw, 0.0);
+	const FVector ForwardDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
+	const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
+	ControlledPawn->AddMovementInput(ForwardDirection, Movement.Y);
+	ControlledPawn->AddMovementInput(RightDirection, Movement.X);
+}
+
+// 视角输入流程：输入资产只提供二维意图，轴反转、缩放和死区由 Mapping Context 的 Modifier 决定。
+void ACatfishingPlayerController::Look(const FInputActionValue& Value)
+{
+	const FVector2D LookAxis = Value.Get<FVector2D>();
+	AddYawInput(LookAxis.X);
+	AddPitchInput(LookAxis.Y);
+}
+
+// 跳跃按下流程：只对当前已占有的 Character 生效，普通 Pawn 不伪造跳跃实现。
+void ACatfishingPlayerController::StartJump()
+{
+	if (ACharacter* ControlledCharacter = Cast<ACharacter>(GetPawn()))
+	{
+		ControlledCharacter->Jump();
+	}
+}
+
+// 跳跃释放流程：Completed 与 Canceled 共用同一收口，支持 Character 的可变跳跃时长。
+void ACatfishingPlayerController::StopJump()
+{
+	if (ACharacter* ControlledCharacter = Cast<ACharacter>(GetPawn()))
+	{
+		ControlledCharacter->StopJumping();
+	}
+}
+
+// 疾跑按下流程：本地立即应用以保持操控响应，同时仅向 authority 发送布尔意图，客户端不能提交任意速度。
+void ACatfishingPlayerController::StartSprint()
+{
+	SetSprintRequested(true, true);
+}
+
+// 疾跑释放流程：Completed/Canceled 幂等共用，窗口失焦或 Mapping Context 取消时也恢复普通速度。
+void ACatfishingPlayerController::StopSprint()
+{
+	SetSprintRequested(false, true);
+}
+
+// 疾跑意图更新流程：重复事件仍会修正当前 Pawn 的速度，但只在状态实际变化时发送一次可靠 RPC。
+void ACatfishingPlayerController::SetSprintRequested(const bool bNewSprintRequested, const bool bNotifyServer)
+{
+	const bool bStateChanged = bSprintRequested != bNewSprintRequested;
+	bSprintRequested = bNewSprintRequested;
+	ApplySprintSpeed(GetPawn(), bSprintRequested);
+
+	if (bStateChanged && bNotifyServer && !HasAuthority())
+	{
+		ServerSetSprinting(bSprintRequested);
+	}
+}
+
+// 移动速度应用流程：只修改当前 CharacterMovement 的 MaxWalkSpeed；实际速度仍由移动组件加速度、制动和网络移动决定。
+void ACatfishingPlayerController::ApplySprintSpeed(APawn* TargetPawn, const bool bSprinting) const
+{
+	ACharacter* ControlledCharacter = Cast<ACharacter>(TargetPawn);
+	UCharacterMovementComponent* MovementComponent = ControlledCharacter
+		? ControlledCharacter->GetCharacterMovement() : nullptr;
+	if (!MovementComponent)
+	{
+		return;
+	}
+
+	MovementComponent->MaxWalkSpeed = FMath::Max(0.0f, bSprinting ? SprintMaxSpeed : WalkMaxSpeed);
+}
+
+// authority 疾跑流程：客户端只能选择开关，服务器使用自身类默认速度重新应用并参与权威移动校验。
+void ACatfishingPlayerController::ServerSetSprinting_Implementation(const bool bNewSprinting)
+{
+	SetSprintRequested(bNewSprinting, false);
 }
 
 // Controller 玩法 gate 流程：现取当前 World 的 authority GameMode 并委托唯一判断；不缓存 GameMode 或身份，旅行、Logout 与 teardown 后会立即 fail-closed。
