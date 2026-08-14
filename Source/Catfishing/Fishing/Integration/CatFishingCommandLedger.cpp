@@ -105,20 +105,20 @@ ECatFishingCommandError FCatFishingCommandLedger::ValidateReeling(const FString&
 	return ECatFishingCommandError::None;
 }
 
-void FCatFishingCommandLedger::CommitReelingSequence(const FString& AuthorityIdentity,
-	const FCatSetReelingCommand& Command)
+ECatFishingCommandError FCatFishingCommandLedger::TryCommitReelingSequence(const FString& AuthorityIdentity,
+	const FCatSetReelingCommand& Command, const FGuid CurrentFishingSessionId, const FGuid CurrentCastAttemptId,
+	const int64 MaximumInputSequenceAdvance)
 {
-	if (AuthorityIdentity.IsEmpty() || !HasValidReelingIdentity(Command) || Command.InputSequence <= 0)
+	const ECatFishingCommandError Validation = ValidateReeling(AuthorityIdentity, Command, CurrentFishingSessionId,
+		CurrentCastAttemptId, MaximumInputSequenceAdvance);
+	if (Validation != ECatFishingCommandError::None)
 	{
-		return;
+		return Validation;
 	}
 
 	const FString Key = MakeReelingKey(AuthorityIdentity, Command);
-	int64& LastSequence = ReelingSequences.FindOrAdd(Key);
-	if (Command.InputSequence > LastSequence)
-	{
-		LastSequence = Command.InputSequence;
-	}
+	ReelingSequences.Add(Key, Command.InputSequence);
+	return ECatFishingCommandError::None;
 }
 
 void FCatFishingCommandLedger::Reset()

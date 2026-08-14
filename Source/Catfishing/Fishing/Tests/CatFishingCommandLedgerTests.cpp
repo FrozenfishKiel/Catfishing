@@ -35,11 +35,18 @@ bool FCatFishingCommandLedgerFirstTerminalResultTest::RunTest(const FString& Par
 	TestTrue(TEXT("Replay preserves first committed value"), Replay.bCommitted);
 	TestEqual(TEXT("Replay preserves first error"), Replay.Error, ECatFishingCommandError::None);
 	TestEqual(TEXT("Replay preserves first revision"), Replay.Revision, int64{ 41 });
+	FCatFishingCommandResult OtherAuthority = First;
+	OtherAuthority.Revision = 43;
+	TestTrue(TEXT("Same request id is isolated for a different authority"), Ledger.RecordTerminalResult(TEXT("AuthorityB"), OtherAuthority));
+	TestTrue(TEXT("Other authority result can be replayed"), Ledger.TryGetTerminalResult(TEXT("AuthorityB"), RequestId, Replay));
+	TestEqual(TEXT("Other authority keeps its own terminal result"), Replay.Revision, int64{ 43 });
 
 	FCatFishingCommandResult InvalidRequest = First;
 	InvalidRequest.RequestId.Invalidate();
 	TestFalse(TEXT("Invalid request id is not recorded"), Ledger.RecordTerminalResult(AuthorityIdentity, InvalidRequest));
 	TestFalse(TEXT("Empty identity is not recorded"), Ledger.RecordTerminalResult(TEXT(""), First));
+	Ledger.Reset();
+	TestFalse(TEXT("Reset clears terminal replays"), Ledger.TryGetTerminalResult(AuthorityIdentity, RequestId, Replay));
 	return !HasAnyErrors();
 }
 
@@ -93,26 +100,31 @@ bool FCatFishingCommandLedgerReelingSequenceTest::RunTest(const FString& Paramet
 	Command.ActivationCorrelationId = FGuid::NewGuid();
 
 	Command.InputSequence = 1;
-	TestEqual(TEXT("Sequence one is accepted"), Ledger.ValidateReeling(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::None);
-	Ledger.CommitReelingSequence(AuthorityIdentity, Command);
-	TestEqual(TEXT("Duplicate sequence one is rejected"), Ledger.ValidateReeling(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::InputSequenceStale);
+	TestEqual(TEXT("Sequence one atomically commits"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::None);
+	TestEqual(TEXT("Duplicate sequence one is rejected without committing"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::InputSequenceStale);
 	Command.InputSequence = 0;
-	TestEqual(TEXT("Non-positive sequence is rejected"), Ledger.ValidateReeling(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::InvalidPayload);
+	TestEqual(TEXT("Non-positive sequence is rejected without committing"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::InvalidPayload);
 	Command.InputSequence = 1025;
-	TestEqual(TEXT("Maximum allowed advance is accepted"), Ledger.ValidateReeling(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::None);
-	Ledger.CommitReelingSequence(AuthorityIdentity, Command);
+	TestEqual(TEXT("Maximum allowed advance atomically commits"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::None);
 	Command.InputSequence = 2050;
-	TestEqual(TEXT("Oversized advance is rejected"), Ledger.ValidateReeling(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::InputSequenceGapTooLarge);
+	TestEqual(TEXT("Oversized advance is rejected without committing"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::InputSequenceGapTooLarge);
 	Command.InputSequence = 1026;
-	TestEqual(TEXT("Rejected oversized advance does not pollute ledger"), Ledger.ValidateReeling(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::None);
-	Ledger.CommitReelingSequence(AuthorityIdentity, Command);
+	TestEqual(TEXT("Rejected oversized advance does not pollute ledger"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::None);
 
 	Command.InputSequence = 1027;
 	Command.RequestId.Invalidate();
-	TestEqual(TEXT("Invalid reeling request id is rejected"), Ledger.ValidateReeling(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::InvalidPayload);
+	TestEqual(TEXT("Invalid reeling request id is rejected without committing"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::InvalidPayload);
 	Command.RequestId = FGuid::NewGuid();
-	TestEqual(TEXT("Rejected invalid request does not pollute ledger"), Ledger.ValidateReeling(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::None);
+	TestEqual(TEXT("Rejected invalid request does not pollute ledger"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::None);
 	TestEqual(TEXT("Empty reeling identity is rejected"), Ledger.ValidateReeling(TEXT(""), Command, SessionId, AttemptId), ECatFishingCommandError::InvalidIdentity);
+
+	Command.InputSequence = 1;
+	TestEqual(TEXT("A different authority has an independent sequence"), Ledger.TryCommitReelingSequence(TEXT("AuthorityB"), Command, SessionId, AttemptId), ECatFishingCommandError::None);
+	Command.ActivationCorrelationId = FGuid::NewGuid();
+	TestEqual(TEXT("A different activation correlation has an independent sequence"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::None);
+	Ledger.Reset();
+	Command.ActivationCorrelationId = FGuid::NewGuid();
+	TestEqual(TEXT("Reset clears committed reeling sequences"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::None);
 	return !HasAnyErrors();
 }
 

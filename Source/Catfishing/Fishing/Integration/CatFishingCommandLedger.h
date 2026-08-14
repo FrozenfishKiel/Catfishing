@@ -21,8 +21,12 @@ public:
 		FGuid CurrentFishingSessionId,
 		FGuid CurrentCastAttemptId,
 		int64 MaximumInputSequenceAdvance = 1024) const;
-	void CommitReelingSequence(const FString& AuthorityIdentity,
-		const FCatSetReelingCommand& Command);
+	ECatFishingCommandError TryCommitReelingSequence(
+		const FString& AuthorityIdentity,
+		const FCatSetReelingCommand& Command,
+		FGuid CurrentFishingSessionId,
+		FGuid CurrentCastAttemptId,
+		int64 MaximumInputSequenceAdvance = 1024);
 	void Reset();
 
 private:
