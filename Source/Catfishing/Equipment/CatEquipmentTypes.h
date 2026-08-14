@@ -108,3 +108,65 @@ struct FCatFishingFailureResult
 	UPROPERTY(BlueprintReadOnly)
 	double RemainingRodDurability = 0.0;
 };
+
+/** Fishing use reservation 的 Begin 结果；bReserved 仅表示 special bait 的未提交保护额度。 */
+USTRUCT(BlueprintType)
+struct FCatFishingUseReservationResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly)
+	FGuid SessionId;
+
+	UPROPERTY(BlueprintReadOnly)
+	ECatDomainCommandError Error = ECatDomainCommandError::InvalidPayload;
+
+	UPROPERTY(BlueprintReadOnly)
+	int64 EquipmentRevision = 0;
+
+	UPROPERTY(BlueprintReadOnly)
+	int64 WearSequence = 0;
+
+	UPROPERTY(BlueprintReadOnly)
+	double AbsoluteRodWear = 0.0;
+
+	UPROPERTY(BlueprintReadOnly)
+	double RemainingRodDurability = 0.0;
+
+	UPROPERTY(BlueprintReadOnly)
+	bool bReserved = false;
+
+	UPROPERTY(BlueprintReadOnly)
+	bool bRodBroken = false;
+};
+
+/** Fishing use 后续操作结果；bApplied 只在首次改变 private record 或公开 Equipment 事实时为 true。 */
+USTRUCT(BlueprintType)
+struct FCatFishingUseOperationResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly)
+	FGuid SessionId;
+
+	UPROPERTY(BlueprintReadOnly)
+	ECatDomainCommandError Error = ECatDomainCommandError::InvalidPayload;
+
+	UPROPERTY(BlueprintReadOnly)
+	int64 EquipmentRevision = 0;
+
+	UPROPERTY(BlueprintReadOnly)
+	int64 WearSequence = 0;
+
+	UPROPERTY(BlueprintReadOnly)
+	double AbsoluteRodWear = 0.0;
+
+	UPROPERTY(BlueprintReadOnly)
+	double RemainingRodDurability = 0.0;
+
+	UPROPERTY(BlueprintReadOnly)
+	bool bApplied = false;
+
+	UPROPERTY(BlueprintReadOnly)
+	bool bRodBroken = false;
+};

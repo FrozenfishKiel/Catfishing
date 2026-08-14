@@ -40,6 +40,17 @@ public:
 	FCatFishingFailureResult CommitFishingFailure(FGuid RequestId, int64 ExpectedRevision,
 		ECatFishingFailurePenalty Penalty);
 
+	FCatFishingUseReservationResult BeginFishingUse(FGuid FishingSessionId, FName RodDefinitionId,
+		FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);
+	FCatFishingUseOperationResult CommitFishingBait(FGuid FishingSessionId);
+	FCatFishingUseOperationResult SetAccumulatedFishingRodWear(FGuid FishingSessionId, int64 WearSequence,
+		double AbsoluteTotal);
+	FCatFishingUseOperationResult CommitFishingRodWear(FGuid FishingSessionId);
+	FCatFishingUseOperationResult CommitFishingRodBreak(FGuid FishingSessionId);
+	FCatFishingUseOperationResult ReleaseFishingUse(FGuid FishingSessionId);
+	bool HasActiveFishingUse() const;
+	bool IsFishingUseActive(FGuid FishingSessionId) const;
+
 	/** 固定营地修竿点提交维修；只消费一份显式浮木并恢复到当前 Rod 定义最大耐久。 */
 	FCatDomainCommandResult RepairRodAtCamp(FGuid RequestId, int64 ExpectedRevision, bool bAtCamp);
 
@@ -47,6 +58,29 @@ public:
 	FCatEquipmentSnapshotChanged OnSnapshotChanged;
 
 private:
+	struct FCatFishingUseRecord
+	{
+		FGuid SessionId;
+		FName RodDefinitionId = NAME_None;
+		FName BaitDefinitionId = NAME_None;
+		FName FloatDefinitionId = NAME_None;
+		int64 ReservationRevision = 0;
+		int64 LastWearSequence = 0;
+		double AbsoluteRodWear = 0.0;
+		bool bSpecialBaitReserved = false;
+		bool bBaitCommitted = false;
+		bool bWearCommitted = false;
+		bool bBreakCommitted = false;
+		bool bReleased = false;
+	};
+
+	FCatFishingUseRecord* FindFishingUseRecord(FGuid FishingSessionId);
+	const FCatFishingUseRecord* FindFishingUseRecord(FGuid FishingSessionId) const;
+	int32 GetPendingReservedSpecialBaitCount(FName DefinitionId) const;
+	FCatFishingUseReservationResult MakeFishingUseReservationResult(FGuid FishingSessionId,
+		ECatDomainCommandError Error, bool bReserved) const;
+	FCatFishingUseOperationResult MakeFishingUseOperationResult(FGuid FishingSessionId,
+		ECatDomainCommandError Error, bool bApplied, const FCatFishingUseRecord* Record = nullptr) const;
 	/** 客户端收到完整装配事实后只供 UI/玩法只读消费；不反向请求自动装备。 */
 	UFUNCTION()
 	void OnRep_Snapshot();
@@ -72,4 +106,8 @@ private:
 
 	/** 失败预算命令首次完整终态缓存；重放不会再次扣饵或耐久。 */
 	TMap<FGuid, FCatFishingFailureResult> FailureTerminalCache;
+
+	/** 当前 Character 生命周期内的私有 fishing reservation/tombstone；不复制也不持久化。 */
+	TMap<FGuid, FCatFishingUseRecord> FishingUseRecords;
+	FGuid ActiveFishingUseSessionId;
 };

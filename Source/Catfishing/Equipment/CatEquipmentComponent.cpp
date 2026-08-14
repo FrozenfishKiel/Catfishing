@@ -32,6 +32,12 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
+	if (HasActiveFishingUse())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPhase;
+		Result.Revision = Snapshot.Revision;
+		return Result;
+	}
 	const FString Key = MakeTerminalKey(TEXT("ConfigureLoadout"), RequestId);
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
@@ -154,6 +160,10 @@ FCatDomainCommandResult UCatEquipmentComponent::ConsumeRunConsumableFromAuthorit
 	{
 		Result.Error = ECatDomainCommandError::RevisionConflict;
 	}
+	else if (Stack && Stack->Quantity <= GetPendingReservedSpecialBaitCount(DefinitionId))
+	{
+		Result.Error = ECatDomainCommandError::CapacityExceeded;
+	}
 	else if (!Stack || Stack->Quantity <= 0)
 	{
 		Result.Error = ECatDomainCommandError::CapacityExceeded;
@@ -177,6 +187,14 @@ FCatFishingFailureResult UCatEquipmentComponent::CommitFishingFailure(const FGui
 {
 	FCatFishingFailureResult Result;
 	Result.Command.RequestId = RequestId;
+	if (HasActiveFishingUse())
+	{
+		Result.Command.Error = ECatDomainCommandError::InvalidPhase;
+		Result.Command.Revision = Snapshot.Revision;
+		Result.Penalty = Penalty;
+		Result.RemainingRodDurability = Snapshot.RodDurability;
+		return Result;
+	}
 	if (const FCatFishingFailureResult* Cached = FailureTerminalCache.Find(RequestId))
 	{
 		Result = *Cached;
@@ -244,12 +262,233 @@ FCatFishingFailureResult UCatEquipmentComponent::CommitFishingFailure(const FGui
 	return Result;
 }
 
+FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FGuid FishingSessionId,
+	const FName RodDefinitionId, const FName BaitDefinitionId, const FName FloatDefinitionId, const int64 ExpectedRevision)
+{
+	if (FishingUseRecords.Contains(FishingSessionId))
+	{
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false);
+	}
+
+	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+	UCatEquipmentDefinition* Rod = Settings->FindRuntimeDefinition(RodDefinitionId);
+	UCatEquipmentDefinition* Bait = Settings->FindRuntimeDefinition(BaitDefinitionId);
+	UCatEquipmentDefinition* Float = Settings->FindRuntimeDefinition(FloatDefinitionId);
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::DependencyUnavailable, false);
+	}
+	if (!FishingSessionId.IsValid() || RodDefinitionId.IsNone() || BaitDefinitionId.IsNone() || FloatDefinitionId.IsNone()
+		|| !Rod || !Bait || !Float || Rod->Kind != ECatEquipmentKind::Rod || Bait->Kind != ECatEquipmentKind::Bait
+		|| Float->Kind != ECatEquipmentKind::Float)
+	{
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false);
+	}
+	if (Snapshot.Revision != ExpectedRevision)
+	{
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::RevisionConflict, false);
+	}
+	if (Snapshot.RodDefinitionId != RodDefinitionId || Snapshot.BaitDefinitionId != BaitDefinitionId
+		|| Snapshot.FloatDefinitionId != FloatDefinitionId)
+	{
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false);
+	}
+	if (Snapshot.bRodBroken || !FMath::IsFinite(Snapshot.RodDurability) || Snapshot.RodDurability <= 0.0)
+	{
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false);
+	}
+	if (HasActiveFishingUse())
+	{
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false);
+	}
+	const bool bSpecialBait = Bait->bSpecialBait;
+	if (bSpecialBait && !Bait->bRunConsumable)
+	{
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false);
+	}
+	FCatRunConsumableStack* BaitStack = FindConsumable(BaitDefinitionId);
+	if (bSpecialBait && (!BaitStack || BaitStack->Quantity <= GetPendingReservedSpecialBaitCount(BaitDefinitionId)))
+	{
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false);
+	}
+
+	FCatFishingUseRecord Record;
+	Record.SessionId = FishingSessionId;
+	Record.RodDefinitionId = RodDefinitionId;
+	Record.BaitDefinitionId = BaitDefinitionId;
+	Record.FloatDefinitionId = FloatDefinitionId;
+	Record.ReservationRevision = Snapshot.Revision;
+	Record.bSpecialBaitReserved = bSpecialBait;
+	FishingUseRecords.Add(FishingSessionId, Record);
+	ActiveFishingUseSessionId = FishingSessionId;
+	return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::None, bSpecialBait);
+}
+
+FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBait(const FGuid FishingSessionId)
+{
+	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
+	if (!Record)
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::NotFound, false);
+	}
+	if (Record->bReleased || Record->bBaitCommitted)
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false, Record);
+	}
+	if (!IsFishingUseActive(FishingSessionId))
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
+	}
+	if (Record->bSpecialBaitReserved)
+	{
+		FCatRunConsumableStack* Stack = FindConsumable(Record->BaitDefinitionId);
+		if (!Stack || Stack->Quantity <= 0)
+		{
+			return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false, Record);
+		}
+		--Stack->Quantity;
+		++Snapshot.Revision;
+		Record->bBaitCommitted = true;
+		PublishSnapshot();
+	}
+	else
+	{
+		Record->bBaitCommitted = true;
+	}
+	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
+}
+
+FCatFishingUseOperationResult UCatEquipmentComponent::SetAccumulatedFishingRodWear(const FGuid FishingSessionId,
+	const int64 WearSequence, const double AbsoluteTotal)
+{
+	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
+	if (!Record)
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::NotFound, false);
+	}
+	if (Record->bReleased || Record->bBreakCommitted || Record->bWearCommitted)
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false, Record);
+	}
+	if (!IsFishingUseActive(FishingSessionId))
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
+	}
+	if (!FMath::IsFinite(AbsoluteTotal) || AbsoluteTotal < 0.0 || AbsoluteTotal < Record->AbsoluteRodWear)
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false, Record);
+	}
+	if (Record->LastWearSequence == 0 && WearSequence != 1)
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false, Record);
+	}
+	if (WearSequence == Record->LastWearSequence)
+	{
+		const ECatDomainCommandError Error = AbsoluteTotal == Record->AbsoluteRodWear
+			? ECatDomainCommandError::AlreadyResolved : ECatDomainCommandError::InvalidPayload;
+		return MakeFishingUseOperationResult(FishingSessionId, Error, false, Record);
+	}
+	if (WearSequence != Record->LastWearSequence + 1)
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false, Record);
+	}
+	Record->LastWearSequence = WearSequence;
+	Record->AbsoluteRodWear = AbsoluteTotal;
+	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
+}
+
+FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingRodWear(const FGuid FishingSessionId)
+{
+	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
+	if (!Record)
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::NotFound, false);
+	}
+	if (Record->bReleased || Record->bWearCommitted || Record->bBreakCommitted)
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false, Record);
+	}
+	if (!IsFishingUseActive(FishingSessionId) || Record->LastWearSequence == 0)
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
+	}
+	if (Record->AbsoluteRodWear >= Snapshot.RodDurability)
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
+	}
+	Snapshot.RodDurability -= Record->AbsoluteRodWear;
+	Record->bWearCommitted = true;
+	++Snapshot.Revision;
+	PublishSnapshot();
+	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
+}
+
+FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingRodBreak(const FGuid FishingSessionId)
+{
+	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
+	if (!Record)
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::NotFound, false);
+	}
+	if (Record->bReleased || Record->bBreakCommitted)
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false, Record);
+	}
+	if (!IsFishingUseActive(FishingSessionId))
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
+	}
+	Snapshot.RodDurability = 0.0;
+	Snapshot.bRodBroken = true;
+	Record->bBreakCommitted = true;
+	++Snapshot.Revision;
+	PublishSnapshot();
+	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
+}
+
+FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FGuid FishingSessionId)
+{
+	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
+	if (!Record)
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::NotFound, false);
+	}
+	if (Record->bReleased)
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false, Record);
+	}
+	if (!IsFishingUseActive(FishingSessionId))
+	{
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
+	}
+	Record->bReleased = true;
+	ActiveFishingUseSessionId.Invalidate();
+	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
+}
+
+bool UCatEquipmentComponent::HasActiveFishingUse() const
+{
+	return ActiveFishingUseSessionId.IsValid() && IsFishingUseActive(ActiveFishingUseSessionId);
+}
+
+bool UCatEquipmentComponent::IsFishingUseActive(const FGuid FishingSessionId) const
+{
+	const FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
+	return FishingSessionId.IsValid() && ActiveFishingUseSessionId == FishingSessionId && Record && !Record->bReleased;
+}
+
 // 维修流程：验证固定营地事实、Revision、当前 Rod/浮木定义和库存；成功只扣一份浮木并恢复当前 Rod 最大耐久，不升级或替换装备。
 FCatDomainCommandResult UCatEquipmentComponent::RepairRodAtCamp(const FGuid RequestId, const int64 ExpectedRevision,
 	const bool bAtCamp)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
+	if (HasActiveFishingUse())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPhase;
+		Result.Revision = Snapshot.Revision;
+		return Result;
+	}
 	const FString Key = MakeTerminalKey(TEXT("RepairRod"), RequestId);
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
@@ -311,6 +550,62 @@ FCatRunConsumableStack* UCatEquipmentComponent::FindConsumable(const FName Defin
 	{
 		return Stack.DefinitionId == DefinitionId;
 	});
+}
+
+UCatEquipmentComponent::FCatFishingUseRecord* UCatEquipmentComponent::FindFishingUseRecord(const FGuid FishingSessionId)
+{
+	return FishingUseRecords.Find(FishingSessionId);
+}
+
+const UCatEquipmentComponent::FCatFishingUseRecord* UCatEquipmentComponent::FindFishingUseRecord(const FGuid FishingSessionId) const
+{
+	return FishingUseRecords.Find(FishingSessionId);
+}
+
+int32 UCatEquipmentComponent::GetPendingReservedSpecialBaitCount(const FName DefinitionId) const
+{
+	int32 ReservedCount = 0;
+	for (const TPair<FGuid, FCatFishingUseRecord>& Pair : FishingUseRecords)
+	{
+		const FCatFishingUseRecord& Record = Pair.Value;
+		if (!Record.bReleased && Record.bSpecialBaitReserved && !Record.bBaitCommitted
+			&& Record.BaitDefinitionId == DefinitionId)
+		{
+			++ReservedCount;
+		}
+	}
+	return ReservedCount;
+}
+
+FCatFishingUseReservationResult UCatEquipmentComponent::MakeFishingUseReservationResult(const FGuid FishingSessionId,
+	const ECatDomainCommandError Error, const bool bReserved) const
+{
+	FCatFishingUseReservationResult Result;
+	Result.SessionId = FishingSessionId;
+	Result.Error = Error;
+	Result.EquipmentRevision = Snapshot.Revision;
+	Result.RemainingRodDurability = Snapshot.RodDurability;
+	Result.bReserved = bReserved;
+	Result.bRodBroken = Snapshot.bRodBroken;
+	return Result;
+}
+
+FCatFishingUseOperationResult UCatEquipmentComponent::MakeFishingUseOperationResult(const FGuid FishingSessionId,
+	const ECatDomainCommandError Error, const bool bApplied, const FCatFishingUseRecord* Record) const
+{
+	FCatFishingUseOperationResult Result;
+	Result.SessionId = FishingSessionId;
+	Result.Error = Error;
+	Result.EquipmentRevision = Snapshot.Revision;
+	Result.RemainingRodDurability = Snapshot.RodDurability;
+	Result.bApplied = bApplied;
+	Result.bRodBroken = Snapshot.bRodBroken;
+	if (Record)
+	{
+		Result.WearSequence = Record->LastWearSequence;
+		Result.AbsoluteRodWear = Record->AbsoluteRodWear;
+	}
+	return Result;
 }
 
 // 幂等键流程：组合操作名与 RequestId，只存在本 Character 内存；不承担跨局 Profile 或平台身份。
