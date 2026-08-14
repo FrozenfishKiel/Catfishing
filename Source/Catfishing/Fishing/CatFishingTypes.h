@@ -42,6 +42,15 @@ enum class ECatFishMotionIntent : uint8
 
 class APlayerState;
 class ACatFishingRodActor;
+class ACatFishingHookActor;
+class ACatFishEncounterActor;
+
+enum class ECatFishingSnapshotMutation : uint8
+{
+	HighFrequency,
+	Discrete,
+	PhaseChange
+};
 
 USTRUCT(BlueprintType)
 struct FCatFishingAttemptSnapshot
@@ -77,6 +86,44 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 
+	/** 每次公开快照写入都会递增；高频输入不使离散命令的 Revision 过期。 */
+	UPROPERTY(BlueprintReadOnly)
+	int64 SnapshotSequence = 0;
+
+	/** 每次阶段变化递增，用于拒绝前一阶段的延迟事件。 */
+	UPROPERTY(BlueprintReadOnly)
+	int64 PhaseEpoch = 0;
+
+	/** 此次投竿的服务器分配身份；不同于会话身份且不可由 Session 自行生成。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid CastAttemptId;
+
+	/** 会话完成原因；Terminated 阶段不从阶段名猜测结果。 */
+	UPROPERTY(BlueprintReadOnly)
+	ECatFishingOutcome Outcome = ECatFishingOutcome::None;
+
+	/** 当前阶段在服务器开始的世界时间。 */
+	UPROPERTY(BlueprintReadOnly)
+	double PhaseStartedServerTime = 0.0;
+
+	/** 真咬窗口的服务器截止时间；未配置窗口时保持零。 */
+	UPROPERTY(BlueprintReadOnly)
+	double WindowEndsServerTime = 0.0;
+
+	/** 当前钓手的公开 PlayerState 身份；StableNetId 不复制。 */
+	UPROPERTY(BlueprintReadOnly)
+	TObjectPtr<APlayerState> FisherPlayerState = nullptr;
+
+	/** 表现 Actor 的类型化引用；Task 6 不负责生成或初始化它们。 */
+	UPROPERTY(BlueprintReadOnly)
+	TObjectPtr<ACatFishingRodActor> RodActor = nullptr;
+
+	UPROPERTY(BlueprintReadOnly)
+	TObjectPtr<ACatFishingHookActor> HookActor = nullptr;
+
+	UPROPERTY(BlueprintReadOnly)
+	TObjectPtr<ACatFishEncounterActor> FishEncounterActor = nullptr;
+
 	/** 当前由服务器 StateTree 进入的公开阶段。 */
 	UPROPERTY(BlueprintReadOnly)
 	ECatFishingPhase Phase = ECatFishingPhase::Created;
@@ -104,6 +151,31 @@ struct FCatFishingSessionSnapshot
 	/** 当前鱼短周期体力剩余；只由 StateTree FightExchange Task 消耗，进入会话时从 FishDefinition 冻结。 */
 	UPROPERTY(BlueprintReadOnly)
 	double FishFightStaminaRemaining = 0.0;
+
+	/** 冻结定义体力的归一化剩余值；鱼的位置继续由 FishEncounter Transform 复制。 */
+	UPROPERTY(BlueprintReadOnly)
+	double NormalizedFishStamina = 0.0;
+
+	/** 当前连续收线输入；高频更新不推进离散命令 Revision。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bReeling = false;
+
+	/** FishEncounter 的只读运动意图；不含位置或 Transform。 */
+	UPROPERTY(BlueprintReadOnly)
+	ECatFishMotionIntent FishMotionIntent = ECatFishMotionIntent::None;
+
+	void AdvanceVersion(const ECatFishingSnapshotMutation Mutation)
+	{
+		++SnapshotSequence;
+		if (Mutation == ECatFishingSnapshotMutation::Discrete || Mutation == ECatFishingSnapshotMutation::PhaseChange)
+		{
+			++Revision;
+		}
+		if (Mutation == ECatFishingSnapshotMutation::PhaseChange)
+		{
+			++PhaseEpoch;
+		}
+	}
 };
 
 /** StateTree 阶段入口结果；失败不会由 C++ 选择备用阶段。 */

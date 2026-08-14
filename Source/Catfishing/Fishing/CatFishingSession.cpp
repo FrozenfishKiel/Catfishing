@@ -20,6 +20,7 @@
 ACatFishingSession::ACatFishingSession()
 {
 	bReplicates = true;
+	bAlwaysRelevant = true;
 	PrimaryActorTick.bCanEverTick = false;
 	StateTreeComponent = CreateDefaultSubobject<UStateTreeComponent>(TEXT("FishingStateTree"));
 	StateTreeComponent->SetStartLogicAutomatically(false);
@@ -33,15 +34,16 @@ void ACatFishingSession::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 }
 
 // 会话初始化流程：只接受 authority、显式 runtime gate、完整鱼定义/重量/水域/身份/鱼护与 Items；全部就绪后设置资产并启动 StateTree，失败销毁由服务负责。
-bool ACatFishingSession::InitializeSession(AController* FisherController, ACatCharacter* InFisherCharacter,
-	UCatFishDefinition* InFishDefinition, const FGuid InFisherGuardContainerId, const double InFishWeightKilograms,
-	const FCatWaterRegionSnapshot& WaterRegion)
+bool ACatFishingSession::InitializeSession(const FGuid InFishingSessionId, const FGuid InCastAttemptId,
+	AController* FisherController, ACatCharacter* InFisherCharacter, UCatFishDefinition* InFishDefinition,
+	const FGuid InFisherGuardContainerId, const double InFishWeightKilograms, const FCatWaterRegionSnapshot& WaterRegion)
 {
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
 	UStateTree* StateTreeAsset = Settings ? Settings->FishingSessionStateTree.LoadSynchronous() : nullptr;
 	const FString StableNetId = ResolveStableNetId(FisherController);
 	UCatItemsService* Items = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
 	if (!HasAuthority() || !Settings || !Settings->IsRuntimeReady() || !StateTreeAsset || !StateTreeComponent
+		|| !InFishingSessionId.IsValid() || !InCastAttemptId.IsValid() || InFishingSessionId == InCastAttemptId
 		|| !InFisherCharacter || !InFishDefinition || !InFishDefinition->IsRuntimeDefinitionReady()
 		|| StableNetId.IsEmpty() || !InFisherGuardContainerId.IsValid()
 		|| !FMath::IsFinite(InFishWeightKilograms) || InFishWeightKilograms <= 0.0
@@ -50,13 +52,20 @@ bool ACatFishingSession::InitializeSession(AController* FisherController, ACatCh
 		return false;
 	}
 
-	Snapshot.FishingSessionId = FGuid::NewGuid();
+	Snapshot.FishingSessionId = InFishingSessionId;
+	Snapshot.CastAttemptId = InCastAttemptId;
 	Snapshot.Revision = 1;
+	Snapshot.SnapshotSequence = 0;
+	Snapshot.PhaseEpoch = 1;
 	Snapshot.Phase = ECatFishingPhase::Created;
+	Snapshot.Outcome = ECatFishingOutcome::None;
+	Snapshot.FisherPlayerState = FisherController ? FisherController->PlayerState : nullptr;
 	Snapshot.FishDefinitionId = InFishDefinition->FishDefinitionId;
 	Snapshot.bGiant = InFishDefinition->BodyClass == ECatFishBodyClass::Giant;
 	Snapshot.FightParticipantCount = 1;
 	Snapshot.FishFightStaminaRemaining = InFishDefinition->FishFightStamina;
+	Snapshot.NormalizedFishStamina = InFishDefinition->FishFightStamina > 0.0
+		? FMath::Clamp(Snapshot.FishFightStaminaRemaining / InFishDefinition->FishFightStamina, 0.0, 1.0) : 0.0;
 	FishDefinition = InFishDefinition;
 	FisherCharacter = InFisherCharacter;
 	FisherStableNetId = StableNetId;
@@ -67,6 +76,7 @@ bool ACatFishingSession::InitializeSession(AController* FisherController, ACatCh
 	FightParticipantCharacters.Add(StableNetId, InFisherCharacter);
 	RefreshFightSummary();
 	ItemsService = Items;
+	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
 	StateTreeComponent->SetStateTree(StateTreeAsset);
 	bStartupInProgress = true;
 	StateTreeComponent->StartLogic();
@@ -75,7 +85,6 @@ bool ACatFishingSession::InitializeSession(AController* FisherController, ACatCh
 	{
 		return false;
 	}
-	PublishSnapshot();
 	return true;
 }
 
@@ -87,14 +96,19 @@ FCatFishingPhaseResult ACatFishingSession::EnterPhaseFromStateTree(const ECatFis
 	Result.PreviousPhase = Snapshot.Phase;
 	Result.CurrentPhase = Snapshot.Phase;
 	Result.Revision = Snapshot.Revision;
-	if (!HasAuthority() || !StateTreeComponent || (!StateTreeComponent->IsRunning() && !bStartupInProgress))
+	if (!HasAuthority())
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;
 	}
-	if (bCaptureResolved || NewPhase == ECatFishingPhase::Resolved)
+	if (IsTerminal() || bCaptureResolved || NewPhase == ECatFishingPhase::Resolved || NewPhase == ECatFishingPhase::Terminated)
 	{
 		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		return Result;
+	}
+	if (!StateTreeComponent || (!StateTreeComponent->IsRunning() && !bStartupInProgress))
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;
 	}
 	if (NewPhase == ECatFishingPhase::NearShore)
@@ -115,6 +129,7 @@ FCatFishingPhaseResult ACatFishingSession::EnterPhaseFromStateTree(const ECatFis
 		bHasNearShoreTarget = false;
 	}
 	Snapshot.Phase = NewPhase;
+	Snapshot.PhaseStartedServerTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
 	// 巨鱼离开 HookedFight 后仍需把合法协作者带入成像候选；NearShore 只冻结参与事实，不再接受新的 assist。
 	if (NewPhase != ECatFishingPhase::HookedFight && NewPhase != ECatFishingPhase::NearShore)
 	{
@@ -124,12 +139,7 @@ FCatFishingPhaseResult ACatFishingSession::EnterPhaseFromStateTree(const ECatFis
 		FightParticipantCharacters.Add(FisherStableNetId, FisherCharacter);
 	}
 	RefreshFightSummary();
-	++Snapshot.Revision;
-	PublishSnapshot();
-	if (IsTerminal())
-	{
-		ScheduleTerminalDestroy();
-	}
+	PublishSnapshot(ECatFishingSnapshotMutation::PhaseChange);
 	Result.bApplied = true;
 	Result.CurrentPhase = NewPhase;
 	Result.Error = ECatDomainCommandError::None;
@@ -185,8 +195,7 @@ FCatDomainCommandResult ACatFishingSession::SubmitFightAssist(AController* Assis
 			if (bNewParticipant)
 			{
 				RefreshFightSummary();
-				++Snapshot.Revision;
-				PublishSnapshot();
+				PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
 			}
 			Result.bCommitted = true;
 			Result.Error = ECatDomainCommandError::None;
@@ -245,8 +254,9 @@ FCatDomainCommandResult ACatFishingSession::ResolveFightExchangeFromStateTree(co
 		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), FMath::Max(0.0, Current - ParticipantStaminaCost));
 	}
 	Snapshot.FishFightStaminaRemaining = FMath::Max(0.0, Snapshot.FishFightStaminaRemaining - FishStaminaCost);
-	++Snapshot.Revision;
-	PublishSnapshot();
+	Snapshot.NormalizedFishStamina = FishDefinition->FishFightStamina > 0.0
+		? FMath::Clamp(Snapshot.FishFightStaminaRemaining / FishDefinition->FishFightStamina, 0.0, 1.0) : 0.0;
+	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
 	Result.bCommitted = true;
 	Result.Error = ECatDomainCommandError::None;
 	Result.Revision = Snapshot.Revision;
@@ -300,7 +310,7 @@ FCatDomainCommandResult ACatFishingSession::ResolveRetryExhaustedEscapeFromState
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;
 	}
-	TerminateSession(TEXT("Retry budget exhausted"));
+	TerminateSession(ECatFishingOutcome::Escaped, TEXT("Retry budget exhausted"));
 	Result.bCommitted = true;
 	Result.Error = ECatDomainCommandError::None;
 	Result.Revision = Snapshot.Revision;
@@ -454,14 +464,7 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 						FishRecordedGrantId.IsValid() ? TEXT("true") : TEXT("false"));
 				}
 				bCaptureResolved = true;
-				Snapshot.Phase = ECatFishingPhase::Resolved;
-				++Snapshot.Revision;
-				PublishSnapshot();
-				if (StateTreeComponent && StateTreeComponent->IsRunning())
-				{
-					StateTreeComponent->StopLogic(TEXT("Capture committed"));
-				}
-				ScheduleTerminalDestroy();
+				FinalizeSession(ECatFishingPhase::Resolved, ECatFishingOutcome::Caught, TEXT("Capture committed"));
 				Result.Command.Revision = Snapshot.Revision;
 			}
 		}
@@ -476,24 +479,36 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 }
 
 // 会话终止流程：非 authority、已 Resolved 或已 Terminated 直接幂等返回，避免覆盖捕获终态。首次中断只写一次 Terminated/Revision 并发布快照，再停止 StateTree、释放钓手之外的参与弱引用且不触碰 Items；最后启动配置的有界复制窗口，让客户端看见终态后销毁 Actor，服务据此释放钓手的单活跃槽位。
-void ACatFishingSession::TerminateSession(const TCHAR* Reason)
+void ACatFishingSession::TerminateSession(const ECatFishingOutcome Outcome, const TCHAR* DiagnosticReason)
 {
-	if (!HasAuthority() || bCaptureResolved || Snapshot.Phase == ECatFishingPhase::Terminated)
+	if (Outcome == ECatFishingOutcome::None || Outcome == ECatFishingOutcome::Caught)
 	{
 		return;
 	}
-	Snapshot.Phase = ECatFishingPhase::Terminated;
-	++Snapshot.Revision;
-	PublishSnapshot();
+	FinalizeSession(ECatFishingPhase::Terminated, Outcome, DiagnosticReason);
+}
+
+void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, const ECatFishingOutcome FinalOutcome,
+	const TCHAR* DiagnosticReason)
+{
+	if (!HasAuthority() || IsTerminal())
+	{
+		return;
+	}
+	Snapshot.Phase = FinalPhase;
+	Snapshot.Outcome = FinalOutcome;
+	Snapshot.PhaseStartedServerTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	PublishSnapshot(ECatFishingSnapshotMutation::PhaseChange);
 	if (StateTreeComponent && StateTreeComponent->IsRunning())
 	{
-		StateTreeComponent->StopLogic(FString(Reason));
+		StateTreeComponent->StopLogic(FString(DiagnosticReason));
 	}
 	FightParticipantIds.Reset();
 	FightParticipantCharacters.Reset();
 	ScheduleTerminalDestroy();
-	UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_session_terminated SessionId=%s Reason=%s Revision=%lld"),
-		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), Reason ? Reason : TEXT("None"), Snapshot.Revision);
+	UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_session_terminated SessionId=%s Outcome=%s Reason=%s Revision=%lld"),
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(FinalOutcome),
+		DiagnosticReason ? DiagnosticReason : TEXT("None"), Snapshot.Revision);
 }
 
 // Character 关联查询流程：比较初始钓手和协作者弱引用；不以名字或网络地址猜测。
@@ -550,10 +565,16 @@ FString ACatFishingSession::ResolveStableNetId(const AController* Controller)
 }
 
 // 发布流程：仅 authority 请求即时网络更新；Snapshot 本身由单一 Replicated 属性发送。
-void ACatFishingSession::PublishSnapshot()
+void ACatFishingSession::OnRep_Snapshot()
+{
+	OnSnapshotChanged.Broadcast();
+}
+
+void ACatFishingSession::PublishSnapshot(const ECatFishingSnapshotMutation Mutation)
 {
 	if (HasAuthority())
 	{
+		Snapshot.AdvanceVersion(Mutation);
 		ForceNetUpdate();
 	}
 }

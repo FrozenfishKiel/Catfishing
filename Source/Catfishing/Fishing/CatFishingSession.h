@@ -10,6 +10,10 @@ class ACatCharacter;
 class UCatFishDefinition;
 class UCatItemsService;
 class UStateTreeComponent;
+class FCatFishingSessionReplicationContractTest;
+class FCatFishingSessionSnapshotVersionMutationRulesTest;
+
+DECLARE_MULTICAST_DELEGATE(FCatFishingSessionSnapshotChanged);
 
 /** 一次服务器钓鱼长流程宿主；StateTree 拥有阶段拓扑，Actor 只执行阶段副作用与短事务。 */
 UCLASS()
@@ -25,8 +29,9 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** authority 注入当前钓手、鱼定义、目标鱼护与水域快照并启动 ST_FishingSession；任一 gate 失败返回 false。 */
-	bool InitializeSession(AController* FisherController, ACatCharacter* FisherCharacter, UCatFishDefinition* FishDefinition,
-		FGuid FisherGuardContainerId, double FishWeightKilograms, const FCatWaterRegionSnapshot& WaterRegion);
+	bool InitializeSession(FGuid InFishingSessionId, FGuid InCastAttemptId, AController* FisherController,
+		ACatCharacter* FisherCharacter, UCatFishDefinition* FishDefinition, FGuid FisherGuardContainerId,
+		double FishWeightKilograms, const FCatWaterRegionSnapshot& WaterRegion);
 
 	/** StateTree EnterPhase Task 的唯一阶段写入口；NearShore 必须提供水域内服务器目标，HookedFight/NearShore 保留合法参与者，其他阶段重置为钓手，终态启动有界销毁。 */
 	FCatFishingPhaseResult EnterPhaseFromStateTree(ECatFishingPhase NewPhase,
@@ -48,13 +53,16 @@ public:
 	FCatScoopResult RequestScoop(AController* ScoopingController, const FCatScoopCommand& Command);
 
 	/** 掉线、倒地、局末或依赖失效时幂等写 Terminated、停树并释放参与者；Resolved 保持捕获终态，两种终态都只保留配置的复制窗口后销毁 Actor。 */
-	void TerminateSession(const TCHAR* Reason);
+	void TerminateSession(ECatFishingOutcome Outcome, const TCHAR* DiagnosticReason);
 
 	/** 判断 Character 是否为钓手或已登记协作者；FishingService 用于生命周期中断。 */
 	bool InvolvesCharacter(const ACatCharacter* Character) const;
 
 	/** 提供当前复制阶段和协作摘要供服务/表现读取；私有参与身份、鱼资产和事务缓存不会随返回值泄露。 */
 	const FCatFishingSessionSnapshot& GetSnapshot() const;
+
+	/** 本机完整 Snapshot 变化通知；订阅者只需重新读取 GetSnapshot。 */
+	FCatFishingSessionSnapshotChanged OnSnapshotChanged;
 
 	/** 判断会话是否已进入 Resolved/Terminated 终态；FishingService 据此释放该钓手的单活跃槽位。 */
 	bool IsTerminal() const;
@@ -64,11 +72,21 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	friend class FCatFishingSessionReplicationContractTest;
+	friend class FCatFishingSessionSnapshotVersionMutationRulesTest;
+
+	/** 客户端收到完整 Snapshot 后只广播重读信号，不推进任何玩法。 */
+	UFUNCTION()
+	void OnRep_Snapshot();
+
 	/** 从已激活 Controller 的 PlayerState::UniqueId 读取服务器私有身份；失败返回空。 */
 	static FString ResolveStableNetId(const AController* Controller);
 
 	/** 发布 Snapshot 并请求立即网络更新；只由 authority 调用。 */
-	void PublishSnapshot();
+	void PublishSnapshot(ECatFishingSnapshotMutation Mutation);
+
+	/** 终态的单一直接写口；StateTree 不可进入终态。 */
+	void FinalizeSession(ECatFishingPhase FinalPhase, ECatFishingOutcome FinalOutcome, const TCHAR* DiagnosticReason);
 
 	/** 用 FishingService 的统一权威谓词重读参与者，更新公开人数、合计 FishingStrength 与 FightStamina。 */
 	void RefreshFightSummary();
@@ -81,7 +99,7 @@ private:
 	TObjectPtr<UStateTreeComponent> StateTreeComponent;
 
 	/** 客户端可观察的会话阶段、鱼种和参与人数；服务器是唯一写者。 */
-	UPROPERTY(Replicated)
+	UPROPERTY(ReplicatedUsing=OnRep_Snapshot)
 	FCatFishingSessionSnapshot Snapshot;
 
 	/** 当前鱼种数据资产；只在服务器验证/捕获时读取，不复制为运行真相。 */

@@ -116,8 +116,21 @@ FCatFishingStartResult UCatFishingService::StartFishingSession(AController* Fish
 		Result.Error = ECatDomainCommandError::PolicyUndecided;
 		return Finish(Result);
 	}
-	ACatFishingSession* Session = GetWorld()->SpawnActor<ACatFishingSession>();
-	if (!Session || !Session->InitializeSession(FisherController, Character, FishDefinition,
+	const FGuid SessionId = FGuid::NewGuid();
+	FGuid CastAttemptId = FGuid::NewGuid();
+	while (CastAttemptId == SessionId)
+	{
+		CastAttemptId = FGuid::NewGuid();
+	}
+	FActorSpawnParameters SpawnParameters;
+	SpawnParameters.Owner = FisherController;
+	ACatFishingSession* Session = GetWorld()->SpawnActor<ACatFishingSession>(ACatFishingSession::StaticClass(),
+		Character->GetActorTransform(), SpawnParameters);
+	if (Session)
+	{
+		Session->SetOwner(FisherController);
+	}
+	if (!Session || !Session->InitializeSession(SessionId, CastAttemptId, FisherController, Character, FishDefinition,
 		Character->GetPersonalFishGuardId(), FishWeightKilograms, WaterResult.Region))
 	{
 		if (Session)
@@ -127,7 +140,6 @@ FCatFishingStartResult UCatFishingService::StartFishingSession(AController* Fish
 		Result.Error = ECatDomainCommandError::PolicyUndecided;
 		return Finish(Result);
 	}
-	const FGuid SessionId = Session->GetSnapshot().FishingSessionId;
 	Sessions.Add(SessionId, Session);
 	SessionFisherById.Add(SessionId, StableNetId);
 	ActiveSessionByFisher.Add(StableNetId, SessionId);
@@ -188,7 +200,7 @@ void UCatFishingService::TerminateSessionsForCharacter(const ACatCharacter* Char
 	{
 		if (ACatFishingSession* Session = Pair.Value.Get(); Session && Session->InvolvesCharacter(Character))
 		{
-			Session->TerminateSession(TEXT("Character unavailable"));
+			Session->TerminateSession(ECatFishingOutcome::Invalidated, TEXT("Character unavailable"));
 		}
 	}
 	CompactSessions();
@@ -202,7 +214,7 @@ void UCatFishingService::CloseCommandsAndTerminateAll()
 	{
 		if (ACatFishingSession* Session = Pair.Value.Get())
 		{
-			Session->TerminateSession(TEXT("Run teardown"));
+			Session->TerminateSession(ECatFishingOutcome::Invalidated, TEXT("Run teardown"));
 		}
 	}
 }
