@@ -341,13 +341,17 @@ public:
         FGuid CurrentFishingSessionId,
         FGuid CurrentCastAttemptId,
         int64 MaximumInputSequenceAdvance = 1024) const;
-    void CommitReelingSequence(const FString& AuthorityIdentity,
-        const FCatSetReelingCommand& Command);
+    ECatFishingCommandError TryCommitReelingSequence(
+        const FString& AuthorityIdentity,
+        const FCatSetReelingCommand& Command,
+        FGuid CurrentFishingSessionId,
+        FGuid CurrentCastAttemptId,
+        int64 MaximumInputSequenceAdvance = 1024);
     void Reset();
 };
 ```
 
-Terminal key 是 `AuthorityIdentity|RequestId`。Reeling key 是 `AuthorityIdentity|FishingSessionId|CastAttemptId|ActivationCorrelationId`。离散校验依次检查有效 Request/Session/Attempt、SessionId、Attempt 和 ExpectedRevision；Reeling 不读 Revision，只检查 SessionId、Attempt、正 InputSequence、严格递增和单次最大增量 1024。失败不更新任何序号。
+Terminal key 是 `AuthorityIdentity|RequestId`。Reeling key 是 `AuthorityIdentity|FishingSessionId|CastAttemptId|ActivationCorrelationId`。离散校验依次检查有效 Request/Session/Attempt、SessionId、Attempt 和 ExpectedRevision；Reeling 不读 Revision，只检查 SessionId、Attempt、正 InputSequence、严格递增和单次最大增量 1024。`ValidateReeling` 是只读预检；正式写入只能调用原子的 `TryCommitReelingSequence`，它复用相同校验并且只在结果为 `None` 时推进序号，不公开未校验写入口。失败不更新任何序号。
 
 - [ ] **Step 1: 写三条红测**
 
@@ -356,6 +360,8 @@ Terminal key 是 `AuthorityIdentity|RequestId`。Reeling key 是 `AuthorityIdent
 - `Catfishing.Unit.Fishing.CommandLedger.ReelingSequenceIsMonotonicBoundedAndRevisionIndependent`
 
 第三条测试顺序固定为：接受 seq 1；拒绝重复 1；拒绝 0；接受 1025；拒绝 2050 的越界跳号；随后接受 1026，证明越界请求没有污染账本。
+
+同一测试还必须证明：相同 RequestId 在不同 authority 下彼此隔离；相同 Session/Attempt 的不同 authority 或 ActivationCorrelationId 可分别从 seq 1 开始；`Reset()` 同时清除 terminal replay 与 Reeling sequence；直接调用原子提交处理越界输入也不能污染下一条合法序号。
 
 - [ ] **Step 2: 运行红灯构建**
 
