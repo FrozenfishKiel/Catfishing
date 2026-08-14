@@ -52,7 +52,7 @@ git status --porcelain=v1 -uall | Out-File -Encoding utf8 -NoClobber "$baselineR
 
 - [ ] **Step 2: 复制 dirty tracked 文件并保存原始 Controller diff**
 
-使用 `Copy-Item -NoClobber` 逐字节复制 `Config/DefaultEditor.ini`、`Config/DefaultEngine.ini`、`Source/Catfishing/Framework/Game/CatGameplayTypes.h`、`Source/Catfishing/Framework/Game/CatGameplayTypes.cpp`、`Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp` 到 `tracked/` 的同名扁平副本。随后执行：
+使用 `[System.IO.File]::Copy($source, $destination, $false)` 逐字节复制 `Config/DefaultEditor.ini`、`Config/DefaultEngine.ini`、`Source/Catfishing/Framework/Game/CatGameplayTypes.h`、`Source/Catfishing/Framework/Game/CatGameplayTypes.cpp`、`Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp` 到 `tracked/` 的同名扁平副本；第三个参数固定为 false，目标存在即抛错且绝不覆盖。随后执行：
 
 ```powershell
 git diff --binary -- Source/Catfishing/Framework/Game/CatGameplayTypes.h Source/Catfishing/Framework/Game/CatGameplayTypes.cpp | Out-File -Encoding utf8 -NoClobber "$baselineRoot\controller-user-diff.patch"
