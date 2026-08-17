@@ -892,7 +892,7 @@ git commit -m "Add owner-only fishing command results"
 - `/Game/Catfishing/Fishing/Actors/BP_FishingHook`
 - `/Game/Catfishing/Fishing/Actors/BP_FishEncounter`
 
-- [ ] **Step 1: 检查变更范围**
+- [x] **Step 1: 检查变更范围**
 
 ```powershell
 git status --short
@@ -902,14 +902,14 @@ git diff --check -- Source/Catfishing/Fishing Source/Catfishing/Environment Sour
 
 重新计算 Config/UI 哈希并与 Task 0 的 `tracked/` 副本比较；重新生成 `content-sha256-final.tsv` 并与 `content-sha256.tsv` 使用 `Compare-Object` 比较，结果必须为空。对两个 Controller 文件分别执行 `git diff --no-index -- <baseline-copy> <current-file>`；差异只能包含 Task 3 的 AggregationRevision 白名单和 Task 8 的 Command Component 白名单，任何用户输入行的删除、改写或格式化均失败。最后比较 `git status --porcelain=v1 -uall`，除本阶段已提交文件与当前允许的 Controller 用户改动外，原 dirty/untracked 路径集合必须不减少、不新增意外路径。Config、UI 和 Content 不加入暂存区。
 
-- [ ] **Step 2: Editor 与 Game 构建**
+- [x] **Step 2: Editor 与 Game 构建**
 
 ```powershell
 & 'D:\UE_5.8\Engine\Build\BatchFiles\Build.bat' CatfishingEditor Win64 Development 'D:\develop\Catfishing\Catfishing.uproject' -WaitMutex -NoHotReloadFromIDE
 & 'D:\UE_5.8\Engine\Build\BatchFiles\Build.bat' Catfishing Win64 Development 'D:\develop\Catfishing\Catfishing.uproject' -WaitMutex -NoHotReloadFromIDE
 ```
 
-- [ ] **Step 3: 运行阶段 A 域测试**
+- [x] **Step 3: 运行阶段 A 域测试**
 
 依次运行 filters：
 
@@ -926,18 +926,18 @@ Catfishing.Unit.Fishing.CommandComponent
 
 每批使用独立 `Saved/Automation/phase-a-<domain>/Report` 与 log。每次启动 UnrealEditor-Cmd 前先执行 `New-Item -ItemType Directory -Force -Path '<absolute-run-directory>\Report' | Out-Null`，确保 Report 与 `-abslog` 的共同父目录存在；UE 不负责创建任意 abslog 父目录。解析报告并确认 failed=0、notRun=0、inProcess=0；不能只依据 UnrealEditor-Cmd 退出码。
 
-- [ ] **Step 4: 运行全量 Catfishing Automation**
+- [x] **Step 4: 运行全量 Catfishing Automation**
 
 ```powershell
 New-Item -ItemType Directory -Force -Path 'D:\develop\Catfishing\Saved\Automation\phase-a-all\Report' | Out-Null
 & 'D:\UE_5.8\Engine\Binaries\Win64\UnrealEditor-Cmd.exe' 'D:\develop\Catfishing\Catfishing.uproject' -unattended -nop4 -nosplash -nullrhi -DDC-ForceMemoryCache '-ExecCmds=Automation RunTests Catfishing;Quit' '-TestExit=Automation Test Queue Empty' '-ReportExportPath=D:\develop\Catfishing\Saved\Automation\phase-a-all\Report' '-abslog=D:\develop\Catfishing\Saved\Automation\phase-a-all\Automation.log'
 ```
 
-- [ ] **Step 5: 进行两轮代码审查**
+- [x] **Step 5: 进行两轮代码审查**
 
 第一轮核对实现是否逐项符合本计划和正式设计；第二轮只查并发、authority、复制、tombstone、Blueprint 边界和用户 dirty hunk 泄漏。所有 P0/P1 修复后重新执行受影响域测试与两个 build。
 
-- [ ] **Step 6: 扫描未完成占位和错误依赖**
+- [x] **Step 6: 扫描未完成占位和错误依赖**
 
 ```powershell
 rg -n "T(O)DO|T(B)D|F(I)XME|待[定]|待[补]|implement[ ]later|/Script/Fishing_System|/Script/TP_ThirdPerson|/Script/GFur" Source/Catfishing/Fishing Source/Catfishing/Environment Source/Catfishing/Equipment Docs/FishingActorBlueprintHooks_zh-CN.md
@@ -945,12 +945,19 @@ rg -n "T(O)DO|T(B)D|F(I)XME|待[定]|待[补]|implement[ ]later|/Script/Fishing_
 
 代码和交付文档中不得存在未裁接口占位，不得引用 Demo authority 类型或 GFur。
 
-- [ ] **Step 7: 提交文档与计划证据**
+- [x] **Step 7: 提交文档与计划证据**
 
 ```powershell
 git add Docs/FishingActorBlueprintHooks_zh-CN.md Docs/superpowers/plans/2026-08-14-fishing-phase-a-authority-foundation.md
 git diff --cached --check
 git commit -m "Document fishing actor blueprint extension points"
 ```
+
+**Task 9 绝对证据路径（Task 0 原 baseline + 用户确认的 post-baseline delta）：**
+
+- 完整命令、Controller no-index 归因、Config/UI SHA256、Content 611→1527 补充保护清单、提交审计与 2026-08-14/2026-08-17 分轮结果：`D:\develop\Catfishing\.superpowers\sdd\2026-08-14-fishing-phase-a-authority-foundation\task-9-report.md`
+- 8 个 domain JSON/abslog：`D:\develop\Catfishing\Saved\Automation\phase-a-task9-contracts`、`D:\develop\Catfishing\Saved\Automation\phase-a-task9-command-ledger`、`D:\develop\Catfishing\Saved\Automation\phase-a-task9-water`、`D:\develop\Catfishing\Saved\Automation\phase-a-task9-equipment-fishing-use`、`D:\develop\Catfishing\Saved\Automation\phase-a-task9-actors`、`D:\develop\Catfishing\Saved\Automation\phase-a-task9-session`、`D:\develop\Catfishing\Saved\Automation\phase-a-task9-service`、`D:\develop\Catfishing\Saved\Automation\phase-a-task9-command-component`
+- 2026-08-14 全量 JSON/abslog：`D:\develop\Catfishing\Saved\Automation\phase-a-all\Report\index.json`、`D:\develop\Catfishing\Saved\Automation\phase-a-all\Automation.log`
+- 蓝图操作者清单：`D:\develop\Catfishing\Docs\FishingActorBlueprintHooks_zh-CN.md`
 
 阶段 A 完成条件是：两个 target 构建成功、所有阶段 A 域测试和全量 `Catfishing` 自动化成功、cached/working diff 未覆盖用户输入与资产，并且 Rod/Hook/Fish 三个原生父类已经能在 UE Editor 中创建蓝图子类、接 Mesh/皮肤/动画事件而不获得任何权威写入口。此阶段只完成 owning-client RPC 的静态契约；阶段 B 在旧 RPC/Ability 真正接入该通道时，必须先增加 server + owning client + non-owning client 网络测试，验证只有 owner 收到结果且 Listen Server 本地请求只广播一次，未通过前不得宣称 owner-only 传输验收完成。
