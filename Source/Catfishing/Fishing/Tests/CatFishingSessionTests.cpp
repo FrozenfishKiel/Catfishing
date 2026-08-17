@@ -186,7 +186,10 @@ bool FCatFishingSessionReplicationContractTest::RunTest(const FString& Parameter
 	Session->OnSnapshotChanged.Remove(DelegateHandle);
 	TestEqual(TEXT("OnRep emits exactly one local reread signal"), SnapshotSignals, 1);
 	TestEqual(TEXT("OnRep does not change snapshot phase"), Session->GetSnapshot().Phase, BeforeNotification.Phase);
+	TestEqual(TEXT("OnRep does not change snapshot revision"), Session->GetSnapshot().Revision, BeforeNotification.Revision);
 	TestEqual(TEXT("OnRep does not change snapshot version"), Session->GetSnapshot().SnapshotSequence, BeforeNotification.SnapshotSequence);
+	TestEqual(TEXT("OnRep does not change snapshot phase epoch"), Session->GetSnapshot().PhaseEpoch, BeforeNotification.PhaseEpoch);
+	TestEqual(TEXT("OnRep does not change snapshot outcome"), Session->GetSnapshot().Outcome, BeforeNotification.Outcome);
 	Session->GetClass()->SetUpRuntimeReplicationData();
 	TArray<FLifetimeProperty> LifetimeProps;
 	Session->GetLifetimeReplicatedProps(LifetimeProps);
@@ -222,18 +225,27 @@ bool FCatFishingSessionSnapshotVersionMutationRulesTest::RunTest(const FString& 
 	Session->Snapshot.Revision = 10;
 	Session->Snapshot.SnapshotSequence = 20;
 	Session->Snapshot.PhaseEpoch = 30;
+	int32 SnapshotSignals = 0;
+	const FDelegateHandle DelegateHandle = Session->OnSnapshotChanged.AddLambda([&SnapshotSignals]()
+	{
+		++SnapshotSignals;
+	});
 	Session->PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
 	TestEqual(TEXT("High frequency preserves revision"), Session->Snapshot.Revision, int64{10});
 	TestEqual(TEXT("High frequency increments sequence"), Session->Snapshot.SnapshotSequence, int64{21});
 	TestEqual(TEXT("High frequency preserves epoch"), Session->Snapshot.PhaseEpoch, int64{30});
+	TestEqual(TEXT("High frequency authority publication emits exactly one local signal"), SnapshotSignals, 1);
 	Session->PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
 	TestEqual(TEXT("Discrete increments revision"), Session->Snapshot.Revision, int64{11});
 	TestEqual(TEXT("Discrete increments sequence"), Session->Snapshot.SnapshotSequence, int64{22});
 	TestEqual(TEXT("Discrete preserves epoch"), Session->Snapshot.PhaseEpoch, int64{30});
+	TestEqual(TEXT("Discrete authority publication emits exactly one additional local signal"), SnapshotSignals, 2);
 	Session->PublishSnapshot(ECatFishingSnapshotMutation::PhaseChange);
 	TestEqual(TEXT("Phase change increments revision"), Session->Snapshot.Revision, int64{12});
 	TestEqual(TEXT("Phase change increments sequence"), Session->Snapshot.SnapshotSequence, int64{23});
 	TestEqual(TEXT("Phase change increments epoch"), Session->Snapshot.PhaseEpoch, int64{31});
+	TestEqual(TEXT("Phase change authority publication emits exactly one additional local signal"), SnapshotSignals, 3);
+	Session->OnSnapshotChanged.Remove(DelegateHandle);
 	return !HasAnyErrors();
 }
 

@@ -548,9 +548,18 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	FightParticipantCharacters.Reset();
 	FisherCharacter.Reset();
 	ScheduleTerminalDestroy();
-	UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_session_terminated SessionId=%s Outcome=%s Reason=%s Revision=%lld"),
-		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(FinalOutcome),
-		DiagnosticReason ? DiagnosticReason : TEXT("None"), Snapshot.Revision);
+	if (FinalPhase == ECatFishingPhase::Resolved && FinalOutcome == ECatFishingOutcome::Caught)
+	{
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_session_resolved SessionId=%s Outcome=%s Reason=%s Revision=%lld"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(FinalOutcome),
+			DiagnosticReason ? DiagnosticReason : TEXT("None"), Snapshot.Revision);
+	}
+	else
+	{
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_session_terminated SessionId=%s Outcome=%s Reason=%s Revision=%lld"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(FinalOutcome),
+			DiagnosticReason ? DiagnosticReason : TEXT("None"), Snapshot.Revision);
+	}
 }
 
 // Character 关联查询流程：比较初始钓手和协作者弱引用；不以名字或网络地址猜测。
@@ -609,6 +618,11 @@ FString ACatFishingSession::ResolveStableNetId(const AController* Controller)
 // 发布流程：仅 authority 请求即时网络更新；Snapshot 本身由单一 Replicated 属性发送。
 void ACatFishingSession::OnRep_Snapshot()
 {
+	NotifySnapshotChanged();
+}
+
+void ACatFishingSession::NotifySnapshotChanged()
+{
 	OnSnapshotChanged.Broadcast();
 }
 
@@ -618,6 +632,7 @@ void ACatFishingSession::PublishSnapshot(const ECatFishingSnapshotMutation Mutat
 	{
 		Snapshot.AdvanceVersion(Mutation);
 		ForceNetUpdate();
+		NotifySnapshotChanged();
 	}
 }
 

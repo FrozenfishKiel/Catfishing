@@ -83,6 +83,7 @@ bool FCatFishingConcurrencyFieldsContractTest::RunTest(const FString& Parameters
 
 	const FCatBeginCastCommand BeginCast;
 	const FCatSetReelingCommand SetReeling;
+	const FCatPrimaryReleasedCommand PrimaryReleased;
 	const FCatRodCommandContext RodContext;
 	const FCatFishingSessionCommandContext SessionContext;
 	const UScriptStruct* SessionCommandStructs[] = {
@@ -103,12 +104,71 @@ bool FCatFishingConcurrencyFieldsContractTest::RunTest(const FString& Parameters
 	{
 		TestNotNull(FString::Printf(TEXT("%s carries session command context"), *CommandStruct->GetName()), FindFProperty<FProperty>(CommandStruct, TEXT("Context")));
 	}
-	for (const TCHAR* Field : ReelingIdentityFields)
+	const UScriptStruct* OrderedInputCommandStructs[] = {
+		FCatSetReelingCommand::StaticStruct(), FCatPrimaryReleasedCommand::StaticStruct()
+	};
+	for (const UScriptStruct* CommandStruct : OrderedInputCommandStructs)
 	{
-		TestNotNull(FString::Printf(TEXT("Reeling carries %s"), Field), FindFProperty<FProperty>(FCatSetReelingCommand::StaticStruct(), Field));
+		for (const TCHAR* Field : ReelingIdentityFields)
+		{
+			TestNotNull(FString::Printf(TEXT("%s carries %s"), *CommandStruct->GetName(), Field),
+				FindFProperty<FProperty>(CommandStruct, Field));
+		}
+		TestFalse(FString::Printf(TEXT("%s does not carry an expected revision"), *CommandStruct->GetName()),
+			FindFProperty<FProperty>(CommandStruct, TEXT("ExpectedRevision")) != nullptr);
 	}
-	TestFalse(TEXT("Reeling does not carry an expected revision"), FindFProperty<FProperty>(FCatSetReelingCommand::StaticStruct(), TEXT("ExpectedRevision")) != nullptr);
 	TestEqual(TEXT("Reeling input sequence defaults to zero"), SetReeling.InputSequence, int64{ 0 });
+	TestEqual(TEXT("Primary release input sequence defaults to zero"), PrimaryReleased.InputSequence, int64{ 0 });
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingContributeChumContractTest,
+	"Catfishing.Unit.Fishing.Contracts.ContributeChumUsesAggregationConcurrencyDomain",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+// Protects the Water concurrency boundary: Chum writes are region aggregations, not Fishing Session mutations.
+bool FCatFishingContributeChumContractTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	const FCatContributeChumCommand Command;
+	const FCatContributeChumResult Result;
+	const UScriptStruct* CommandStruct = FCatContributeChumCommand::StaticStruct();
+	const TCHAR* RequiredCommandFields[] = {
+		TEXT("RequestId"), TEXT("RegionId"), TEXT("ExpectedAggregationRevision"),
+		TEXT("ChumDefinitionId"), TEXT("Quantity")
+	};
+	const TCHAR* ForbiddenSessionFields[] = {
+		TEXT("Context"), TEXT("FishingSessionId"), TEXT("SessionId"), TEXT("CastAttemptId"), TEXT("ExpectedRevision")
+	};
+	for (const TCHAR* Field : RequiredCommandFields)
+	{
+		TestNotNull(FString::Printf(TEXT("Contribute Chum carries %s"), Field),
+			FindFProperty<FProperty>(CommandStruct, Field));
+	}
+	for (const TCHAR* Field : ForbiddenSessionFields)
+	{
+		TestNull(FString::Printf(TEXT("Contribute Chum omits Session-domain field %s"), Field),
+			FindFProperty<FProperty>(CommandStruct, Field));
+	}
+	TestFalse(TEXT("Contribute Chum request id defaults invalid"), Command.RequestId.IsValid());
+	TestTrue(TEXT("Contribute Chum region id defaults unset"), Command.RegionId.IsNone());
+	TestEqual(TEXT("Contribute Chum aggregation revision defaults zero"), Command.ExpectedAggregationRevision, int64{ 0 });
+	TestTrue(TEXT("Contribute Chum definition id defaults unset"), Command.ChumDefinitionId.IsNone());
+	TestEqual(TEXT("Contribute Chum quantity defaults fail closed"), Command.Quantity, int32{ 0 });
+
+	const UScriptStruct* ResultStruct = FCatContributeChumResult::StaticStruct();
+	TestNotNull(TEXT("Contribute Chum result wraps the unified Fishing command result"),
+		FindFProperty<FProperty>(ResultStruct, TEXT("Command")));
+	TestNotNull(TEXT("Contribute Chum result exposes the latest aggregation revision"),
+		FindFProperty<FProperty>(ResultStruct, TEXT("AggregationRevision")));
+	TestNotNull(TEXT("Contribute Chum result exposes the latest Chum pool"),
+		FindFProperty<FProperty>(ResultStruct, TEXT("ChumPool")));
+	TestEqual(TEXT("Contribute Chum result aggregation revision defaults zero"), Result.AggregationRevision, int64{ 0 });
+	TestEqual(TEXT("Contribute Chum result Chum pool defaults empty Fishy"), Result.ChumPool.Fishy, 0.0);
+	TestEqual(TEXT("Contribute Chum result Chum pool defaults empty Fragrant"), Result.ChumPool.Fragrant, 0.0);
+	TestEqual(TEXT("Contribute Chum result Chum pool defaults empty Fermented"), Result.ChumPool.Fermented, 0.0);
 	return !HasAnyErrors();
 }
 

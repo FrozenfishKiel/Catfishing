@@ -241,6 +241,8 @@ struct FCatSetReelingCommand
 
 Place 不能引用尚未生成的 RodActor，固定使用独立 `FCatPlaceRodCommand { RequestId, ExpectedEquipmentRevision }`；Operate/Leave/Pack 使用 `FCatRodCommandContext`；ChangeSkin 另增加 `RodSkinDefinitionId`；Hook/Cancel/Scoop/Assist 使用 `FCatFishingSessionCommandContext`，其中 Scoop 另带仅供诊断的候选世界点；PrimaryReleased 与 SetReeling 使用相同 Session/Attempt/Correlation/InputSequence，但每个输入边沿有独立 RequestId。
 
+**Plan defect remediation（2026-08-17 final review）：** `ContributeChum` 属于 Water Aggregation 并发域，不得复用 `FCatFishingSessionCommandContext`。`FCatContributeChumCommand` 固定携带 `RequestId`、`RegionId`、`ExpectedAggregationRevision`、稳定 `ChumDefinitionId` 与 fail-closed 的 `Quantity`；不得包含 `FishingSessionId`/`SessionId`、`CastAttemptId` 或通用 `ExpectedRevision`。阶段 A 只有协议壳、尚未接入 Equipment 原子消费，因此不提前加入 `ExpectedEquipmentRevision`；未来只有在同层真实协调耗材消费时才以独立设计补入。结构化 `FCatContributeChumResult` 包装统一 `FCatFishingCommandResult`，并返回最新 `AggregationRevision` 与 `FCatChumVector ChumPool`。
+
 统一结构化结果：
 
 ```cpp
@@ -276,8 +278,9 @@ Native tags 命名空间使用 `CatFishingGameplayTags`，精确注册：`CastLa
 - `Catfishing.Unit.Fishing.Contracts.PhaseOutcomeAndCommandDefaultsAreFailClosed`
 - `Catfishing.Unit.Fishing.Contracts.BeginCastDiscreteAndReelingCommandsExposeDifferentConcurrencyFields`
 - `Catfishing.Unit.Fishing.Contracts.StructuredResultCarriesCurrentServerConcurrencyIdentity`
+- `Catfishing.Unit.Fishing.Contracts.ContributeChumUsesAggregationConcurrencyDomain`
 
-测试必须逐一比较 16 个 tag 的精确字符串；验证枚举默认 Outcome=None；验证 BeginCast 不含 SessionId 的语义；验证离散命令有 ExpectedRevision；验证 Reeling 不携带 ExpectedRevision 且默认 InputSequence 为 0。带 typed Rod 引用的 Attempt Snapshot 在 Task 5 的 Actor 类型可链接后加入并测试。
+测试必须逐一比较 16 个 tag 的精确字符串；验证枚举默认 Outcome=None；验证 BeginCast 不含 SessionId 的语义；验证离散命令有 ExpectedRevision；验证 SetReeling 与 PrimaryReleased 都携带 RequestId/SessionId/CastAttemptId/ActivationCorrelationId/InputSequence、不携带 ExpectedRevision 且默认 InputSequence 为 0；反射验证 ContributeChum 包含 RequestId/RegionId/ExpectedAggregationRevision/ChumDefinitionId/Quantity，不含 SessionId/CastAttemptId/ExpectedRevision，默认身份无效、ID unset、Revision/Quantity 为 0，并验证其 result 含 AggregationRevision 与 ChumPool。带 typed Rod 引用的 Attempt Snapshot 在 Task 5 的 Actor 类型可链接后加入并测试。
 
 - [ ] **Step 2: 运行红灯构建**
 

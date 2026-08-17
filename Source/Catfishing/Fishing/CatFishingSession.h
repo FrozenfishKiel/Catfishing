@@ -85,6 +85,9 @@ private:
 	UFUNCTION()
 	void OnRep_Snapshot();
 
+	/** authority 发布和客户端 RepNotify 共用的本地重读信号；调用本身不修改 Snapshot。 */
+	void NotifySnapshotChanged();
+
 	/** 从已激活 Controller 的 PlayerState::UniqueId 读取服务器私有身份；失败返回空。 */
 	static FString ResolveStableNetId(const AController* Controller);
 
