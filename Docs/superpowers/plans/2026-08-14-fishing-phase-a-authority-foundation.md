@@ -900,7 +900,7 @@ git diff --name-only
 git diff --check -- Source/Catfishing/Fishing Source/Catfishing/Environment Source/Catfishing/Equipment Docs
 ```
 
-重新计算 Config/UI 哈希并与 Task 0 的 `tracked/` 副本比较；重新生成 `content-sha256-final.tsv` 并与 `content-sha256.tsv` 使用 `Compare-Object` 比较，结果必须为空。对两个 Controller 文件分别执行 `git diff --no-index -- <baseline-copy> <current-file>`；差异只能包含 Task 3 的 AggregationRevision 白名单和 Task 8 的 Command Component 白名单，任何用户输入行的删除、改写或格式化均失败。最后比较 `git status --porcelain=v1 -uall`，除本阶段已提交文件与当前允许的 Controller 用户改动外，原 dirty/untracked 路径集合必须不减少、不新增意外路径。Config、UI 和 Content 不加入暂存区。
+本 Task 9 复验门禁明确 **supersede** 早期“raw diff 必须为空”的字面条件；`Saved/CodexBaseline/phase-a` 中的 Task 0 immutable baseline 本身保持不变，不得为了制造空比较而覆盖或重建。重新计算 Config/UI 哈希、Content path+SHA256 manifest，并对两个 Controller 文件分别执行 `git diff --no-index -- <baseline-copy> <current-file>`：Controller 的期望 raw delta 必须精确等于用户已接受的 `b9342f9` 混合提交增量 + Task 3 AggregationRevision 增量 + Task 8 Command Component 增量；Content 的期望 raw delta 必须精确等于 `Boatyard` 新增 244 条、`Underwater_life` 新增 672 条，以及 `NaturePackage/Maps/Showcase2.umap` 从 Task 0 SHA256 `34CD99FFBB43A809F0F4A87B53588610F62A35982F4AE80417A91905A9CF47D7` 到用户确认 SHA256 `17D3A569CCEB221F5426A93F02E183F28D8DDE3A288CFA156BEF4E84A0E17B13` 的一进一出变更。最终 `Compare-Object`、Controller no-index 和 `git status --porcelain=v1 -uall` 必须精确等于这些授权 delta，且相对 Task 9 补充保护证据不得出现任何额外 Source、Config、UI、Content、stash 或 index 漂移；Config、UI 和 Content 不加入暂存区。
 
 - [x] **Step 2: Editor 与 Game 构建**
 
