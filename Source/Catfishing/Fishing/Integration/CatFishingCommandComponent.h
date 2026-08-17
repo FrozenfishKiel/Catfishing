@@ -32,6 +32,13 @@ class CATFISHING_API UCatFishingCommandComponent : public UActorComponent
 public:
 	UCatFishingCommandComponent();
 	void DeliverResultFromAuthority(const FCatFishingCommandResult& Result);
+	void DeliverPlaceChumResultFromAuthority(const FCatPlaceChumResult& Result);
+
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Chum")
+	void SubmitPlaceChum(const FCatPlaceChumCommand& Command);
+
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Chum")
+	bool TryGetPlaceChumResult(FGuid RequestId, FCatPlaceChumResult& OutResult) const;
 
 	UFUNCTION(BlueprintCallable)
 	bool TryGetResult(FGuid RequestId, FCatFishingCommandResult& OutResult) const;
@@ -49,8 +56,6 @@ public:
 	void ForwardLegacyStart(FGuid RequestId);
 	void ForwardLegacyAssist(FGuid FishingSessionId, FGuid RequestId, int64 ExpectedRevision);
 	void ForwardLegacyScoop(FGuid FishingSessionId, FCatScoopCommand Command);
-	void ForwardLegacyChum(class ACatWaterRegion* WaterRegion, FGuid RequestId,
-		int64 ExpectedEquipmentRevision, int64 ExpectedAggregationRevision, FName ChumDefinitionId);
 
 	UPROPERTY(BlueprintAssignable)
 	FCatFishingCommandResultReceived OnResultReceived;
@@ -58,6 +63,12 @@ public:
 private:
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveFishingCommandResult(const FCatFishingCommandResult& Result);
+
+	UFUNCTION(Client, Reliable)
+	void ClientReceivePlaceChumResult(const FCatPlaceChumResult& Result);
+
+	UFUNCTION(Server, Reliable)
+	void ServerSubmitPlaceChum(const FCatPlaceChumCommand& Command);
 
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitFishingAbilityCommand(ECatFishingCommandType CommandType, FCatFishingInputEdge Edge);
@@ -69,11 +80,12 @@ private:
 	FCatFishingInputEdge MakeDiscreteEdge();
 	void DispatchAbilityCommand(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge);
 	void HandleAbilityCommandFromAuthority(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge);
-	static FCatAggregationResult MakeInvalidChumResult(FGuid RequestId, const ACatWaterRegion* WaterRegion);
+	void ReceivePlaceChumResultLocally(const FCatPlaceChumResult& Result);
 
 	TMap<FGuid, FCatFishingCommandResult> ResultsByRequestId;
 	TArray<FGuid> ResultOrder;
 	FGuid PrimaryActivationCorrelationId;
 	int64 NextInputSequence = 0;
-	TMap<FGuid, FCatAggregationResult> ChumTerminalCache;
+	TMap<FGuid, FCatPlaceChumResult> PlaceChumResultsByRequestId;
+	TArray<FGuid> PlaceChumResultOrder;
 };

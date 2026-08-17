@@ -24,6 +24,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Fishing.CommandComponent.ControllerCreatesExactlyOneNativeDefaultComponent",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingPlaceChumMailboxTest,
+	"Catfishing.Unit.Fishing.CommandComponent.PlaceChumResultIsOwnerScopedFirstWinsAndBounded",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
 namespace CatFishingCommandComponentTest
 {
 	static FCatFishingCommandResult MakeResult(const FGuid RequestId, const int64 Revision)
@@ -395,6 +400,47 @@ bool FCatFishingCommandComponentNativeSubobjectTest::RunTest(const FString& Para
 	}
 	TestEqual(TEXT("controller enumerates exactly one native command component"), NativeComponentCount, 1);
 	TestEqual(TEXT("controller has exactly one command component before test relays"), Components.Num(), 1);
+	return !HasAnyErrors();
+}
+
+bool FCatFishingPlaceChumMailboxTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	ACatfishingPlayerController* Controller =
+		CatFishingCommandComponentTest::SpawnProjectController(*this, WorldWrapper);
+	UCatFishingCommandComponent* Component = Controller ? Controller->GetFishingCommandComponent() : nullptr;
+	if (!Component) return false;
+	FCatPlaceChumResult First;
+	First.RequestId = FGuid::NewGuid();
+	First.bCommitted = true;
+	First.Error = ECatChumFieldError::None;
+	First.FieldId = FGuid::NewGuid();
+	First.EquipmentRevision = 8;
+	First.ChumFieldSetRevision = 4;
+	Component->DeliverPlaceChumResultFromAuthority(First);
+	FCatPlaceChumResult Spatial;
+	TestTrue(TEXT("owner can read dedicated placement result"),
+		Component->TryGetPlaceChumResult(First.RequestId, Spatial));
+	TestEqual(TEXT("dedicated result preserves first field"), Spatial.FieldId, First.FieldId);
+	FCatFishingCommandResult Common;
+	TestTrue(TEXT("ability can read unified placement result"), Component->TryGetResult(First.RequestId, Common));
+	TestEqual(TEXT("unified result is PlaceChum"), Common.CommandType, ECatFishingCommandType::PlaceChum);
+	FCatPlaceChumResult Duplicate = First;
+	Duplicate.FieldId = FGuid::NewGuid();
+	Duplicate.bCommitted = false;
+	Component->DeliverPlaceChumResultFromAuthority(Duplicate);
+	Component->TryGetPlaceChumResult(First.RequestId, Spatial);
+	TestEqual(TEXT("duplicate cannot replace first dedicated result"), Spatial.FieldId, First.FieldId);
+	for (int32 Index = 0; Index < 33; ++Index)
+	{
+		FCatPlaceChumResult Next = First;
+		Next.RequestId = FGuid::NewGuid();
+		Next.FieldId = FGuid::NewGuid();
+		Component->DeliverPlaceChumResultFromAuthority(Next);
+	}
+	TestFalse(TEXT("dedicated mailbox evicts oldest past bound"),
+		Component->TryGetPlaceChumResult(First.RequestId, Spatial));
 	return !HasAnyErrors();
 }
 

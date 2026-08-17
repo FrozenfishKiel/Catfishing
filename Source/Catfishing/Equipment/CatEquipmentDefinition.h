@@ -50,9 +50,6 @@ public:
 	FName FunctionalRouteId = NAME_None;
 
 	/** Chum 耗材提交给共享 WaterRegion 的三轴增量；其他类别必须保持零值，客户端不能覆盖该数据。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Function")
-	FCatChumVector ChumContribution;
-
 	/** Chum placement 的空间影响定义；运行时冻结曲线 LUT，数量只放大三轴贡献。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Chum")
 	FCatChumInfluenceSpec ChumInfluence;

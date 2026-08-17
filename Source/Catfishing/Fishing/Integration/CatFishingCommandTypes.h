@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Environment/CatChumFieldTypes.h"
 #include "Fishing/CatFishingTypes.h"
 #include "CatFishingCommandTypes.generated.h"
 
@@ -8,7 +9,7 @@ UENUM(BlueprintType)
 enum class ECatFishingCommandType : uint8
 {
 	None, PlaceRod, OperateRod, LeaveRod, PackRod, ChangeRodSkin, BeginCast, RequestHook, SetReeling,
-	PrimaryReleased, CancelFishing, RequestScoop, AssistFight, ContributeChum, TailRescue
+	PrimaryReleased, CancelFishing, RequestScoop, AssistFight, PlaceChum, TailRescue
 };
 
 UENUM(BlueprintType)
@@ -124,17 +125,6 @@ struct FCatRequestScoopCommand
 USTRUCT(BlueprintType)
 struct FCatAssistFightCommand { GENERATED_BODY() UPROPERTY(BlueprintReadWrite) FCatFishingSessionCommandContext Context; };
 USTRUCT(BlueprintType)
-struct FCatContributeChumCommand
-{
-	GENERATED_BODY()
-
-	UPROPERTY(BlueprintReadWrite) FGuid RequestId;
-	UPROPERTY(BlueprintReadWrite) FName RegionId = NAME_None;
-	UPROPERTY(BlueprintReadWrite) int64 ExpectedAggregationRevision = 0;
-	UPROPERTY(BlueprintReadWrite) FName ChumDefinitionId = NAME_None;
-	UPROPERTY(BlueprintReadWrite) int32 Quantity = 0;
-};
-USTRUCT(BlueprintType)
 struct FCatTailRescueCommand { GENERATED_BODY() UPROPERTY(BlueprintReadWrite) FCatFishingSessionCommandContext Context; };
 
 USTRUCT(BlueprintType)
@@ -155,16 +145,6 @@ struct FCatFishingCommandResult
 	UPROPERTY(BlueprintReadOnly) int64 RodActorRevision = 0;
 	UPROPERTY(BlueprintReadOnly) int64 EquipmentRevision = 0;
 	UPROPERTY(BlueprintReadOnly) FGuid SuggestedFishingSessionId;
-};
-
-USTRUCT(BlueprintType)
-struct FCatContributeChumResult
-{
-	GENERATED_BODY()
-
-	UPROPERTY(BlueprintReadOnly) FCatFishingCommandResult Command;
-	UPROPERTY(BlueprintReadOnly) int64 AggregationRevision = 0;
-	UPROPERTY(BlueprintReadOnly) FCatChumVector ChumPool;
 };
 
 USTRUCT(BlueprintType)

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "Data/CatFishSelectionTypes.h"
 #include "Framework/Core/CatRunContracts.h"
 #include "CatFishDefinition.generated.h"
 
@@ -38,6 +39,7 @@ class CATFISHING_API UCatFishDefinition : public UPrimaryDataAsset
 public:
 	/** 检查该资产是否足以进入阶段 E 事务；任一必需字段 Unset 都返回 false。 */
 	bool IsRuntimeDefinitionReady() const;
+	double FindBaitMultiplierOrNeutral(FName BaitDefinitionId) const;
 
 	/** 鱼种稳定 ID；FishInstance、图鉴候选和日志只引用该值，不把资产对象当永久身份。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
@@ -105,7 +107,10 @@ public:
 
 	/** 该鱼偏好的特殊鱼饵定义 ID；普通饵无限且不要求出现在数组中。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Preference")
-	TArray<FName> PreferredSpecialBaitIds;
+	FCatChumVector ChumPreference;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Preference")
+	TArray<FCatBaitWeightMultiplier> BaitWeightMultipliers;
 
 	/** 食用安全结论；Unset 时不能通过吃鱼链修改身体状态。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")

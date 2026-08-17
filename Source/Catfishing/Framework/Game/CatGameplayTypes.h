@@ -407,11 +407,6 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerCompleteShakeDry(FGuid RequestId);
 
-	/** 消费一份正式 Chum 并向脚下唯一 WaterRegion 提交同一 RequestId；定义拥有三轴值，客户端不能自报贡献。 */
-	UFUNCTION(Server, Reliable)
-	void ServerContributeChum(ACatWaterRegion* WaterRegion, FGuid RequestId, int64 ExpectedEquipmentRevision,
-		int64 ExpectedAggregationRevision, FName ChumDefinitionId);
-
 	/** Online Client 在 DestroySession 前通知服务器这是主动离局；GameMode 不把它误判为连接故障。 */
 	UFUNCTION(Server, Reliable)
 	void ServerMarkVoluntaryLeave();
@@ -479,10 +474,7 @@ protected:
 	int32 InputMappingPriority = 0;
 
 private:
-	friend class FCatPlayerChumInvalidPayloadReportsCurrentAggregationRevisionTest;
-
-	/** 构造玩家 Chum 无效载荷终态；非空 WaterRegion 返回当前聚鱼版本，空指针保留零版本。 */
-	static FCatAggregationResult MakeInvalidPlayerChumResult(FGuid RequestId, const ACatWaterRegion* WaterRegion);
+	friend class UCatFishingCommandComponent;
 
 	/** 幂等安装当前配置的玩法 Mapping Context；BeginPlay/输入初始化均可安全调用。 */
 	void ApplyInputMappingContext();

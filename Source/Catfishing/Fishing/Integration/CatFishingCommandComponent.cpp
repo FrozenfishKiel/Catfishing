@@ -2,11 +2,9 @@
 
 #include "GameFramework/PlayerController.h"
 #include "Character/CatCharacter.h"
-#include "Environment/CatWaterRegion.h"
-#include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentSettings.h"
+#include "Environment/CatChumPlacementService.h"
 #include "Fishing/CatFishingService.h"
+#include "Framework/Game/CatGameplayTypes.h"
 #include "Logging/CatLog.h"
 #include "GameFramework/PlayerState.h"
 
@@ -32,6 +30,33 @@ void UCatFishingCommandComponent::DeliverResultFromAuthority(const FCatFishingCo
 	{
 		ClientReceiveFishingCommandResult(Result);
 	}
+}
+
+void UCatFishingCommandComponent::DeliverPlaceChumResultFromAuthority(const FCatPlaceChumResult& Result)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->HasAuthority() || !Result.RequestId.IsValid()) return;
+	if (Controller->IsLocalController()) ReceivePlaceChumResultLocally(Result);
+	else ClientReceivePlaceChumResult(Result);
+}
+
+void UCatFishingCommandComponent::SubmitPlaceChum(const FCatPlaceChumCommand& Command)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->IsLocalController() || !Command.RequestId.IsValid()) return;
+	if (Controller->HasAuthority()) ServerSubmitPlaceChum_Implementation(Command);
+	else ServerSubmitPlaceChum(Command);
+}
+
+bool UCatFishingCommandComponent::TryGetPlaceChumResult(const FGuid RequestId,
+	FCatPlaceChumResult& OutResult) const
+{
+	OutResult = FCatPlaceChumResult();
+	if (!IsSupportedOwner() || !RequestId.IsValid()) return false;
+	const FCatPlaceChumResult* Result = PlaceChumResultsByRequestId.Find(RequestId);
+	if (!Result) return false;
+	OutResult = *Result;
+	return true;
 }
 
 bool UCatFishingCommandComponent::TryGetResult(const FGuid RequestId,
@@ -75,6 +100,8 @@ void UCatFishingCommandComponent::ResetTransientCommandState()
 
 	ResultsByRequestId.Reset();
 	ResultOrder.Reset();
+	PlaceChumResultsByRequestId.Reset();
+	PlaceChumResultOrder.Reset();
 	PrimaryActivationCorrelationId.Invalidate();
 	NextInputSequence = 0;
 }
@@ -129,7 +156,7 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitScoop()
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitChum()
 {
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
-	DispatchAbilityCommand(ECatFishingCommandType::ContributeChum, Edge);
+	DispatchAbilityCommand(ECatFishingCommandType::PlaceChum, Edge);
 	return Edge;
 }
 
@@ -216,88 +243,28 @@ void UCatFishingCommandComponent::ForwardLegacyScoop(const FGuid FishingSessionI
 	}
 }
 
-FCatAggregationResult UCatFishingCommandComponent::MakeInvalidChumResult(const FGuid RequestId,
-	const ACatWaterRegion* WaterRegion)
+void UCatFishingCommandComponent::ServerSubmitPlaceChum_Implementation(const FCatPlaceChumCommand& Command)
 {
-	FCatAggregationResult Result;
-	Result.Command.RequestId = RequestId;
-	Result.Command.Error = ECatDomainCommandError::InvalidPayload;
-	if (WaterRegion)
-	{
-		Result.AggregationRevision = WaterRegion->MakeSnapshot().AggregationRevision;
-		Result.Command.Revision = Result.AggregationRevision;
-	}
-	return Result;
-}
-
-void UCatFishingCommandComponent::ForwardLegacyChum(ACatWaterRegion* WaterRegion, const FGuid RequestId,
-	const int64 ExpectedEquipmentRevision, const int64 ExpectedAggregationRevision,
-	const FName ChumDefinitionId)
-{
-	APlayerController* Controller = Cast<APlayerController>(GetOwner());
-	if (!Controller || !Controller->HasAuthority())
-	{
-		return;
-	}
-	if (const FCatAggregationResult* Cached = ChumTerminalCache.Find(RequestId))
-	{
-		UE_LOG(LogCatItems, Log, TEXT("Event=player_chum_replayed RequestId=%s Error=%s Revision=%lld"),
-			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(Cached->Command.Error),
-			Cached->Command.Revision);
-		return;
-	}
-	FCatAggregationResult Result;
-	Result.Command.RequestId = RequestId;
-	ACatCharacter* Character = Cast<ACatCharacter>(Controller->GetPawn());
-	UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
-	const APlayerState* PlayerState = Controller->PlayerState;
-	UCatEquipmentDefinition* ChumDefinition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(ChumDefinitionId);
-	if (!RequestId.IsValid() || !WaterRegion || !Character || !Equipment || !PlayerState
-		|| !PlayerState->GetUniqueId().IsValid() || !ChumDefinition
-		|| ChumDefinition->Kind != ECatEquipmentKind::Chum || !ChumDefinition->ChumContribution.IsValidContribution()
-		|| !WaterRegion->ContainsWorldPoint(Character->GetActorLocation()))
-	{
-		Result = MakeInvalidChumResult(RequestId, WaterRegion);
-	}
-	else
-	{
-		FCatAggregationCommand Command;
-		Command.Context.RequestId = RequestId;
-		Command.ExpectedAggregationRevision = ExpectedAggregationRevision;
-		Command.Context.StableNetId = PlayerState->GetUniqueId()->ToString();
-		Command.RegionId = WaterRegion->RegionId;
-		Command.Contribution = ChumDefinition->ChumContribution;
-		Command.Source = ECatAggregationSource::PlayerChum;
-		Result.Command.Error = WaterRegion->ValidateAggregation(Command);
-		Result.AggregationRevision = WaterRegion->MakeSnapshot().AggregationRevision;
-		Result.Command.Revision = Result.AggregationRevision;
-		if (Result.Command.Error == ECatDomainCommandError::None)
-		{
-			const FCatDomainCommandResult ConsumeResult = Equipment->ConsumeRunConsumableFromAuthority(
-				RequestId, ExpectedEquipmentRevision, ChumDefinitionId);
-			if (!ConsumeResult.bCommitted)
-			{
-				Result.Command.Error = ConsumeResult.Error;
-				Result.AggregationRevision = WaterRegion->MakeSnapshot().AggregationRevision;
-				Result.Command.Revision = Result.AggregationRevision;
-			}
-			else
-			{
-				Result = WaterRegion->ContributeAggregation(Command);
-			}
-		}
-	}
-	ChumTerminalCache.Add(RequestId, Result);
-	UE_LOG(LogCatItems, Log, TEXT("Event=player_chum_terminal RequestId=%s Definition=%s Region=%s Committed=%s Error=%s Revision=%lld"),
-		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *ChumDefinitionId.ToString(),
-		WaterRegion ? *WaterRegion->RegionId.ToString() : TEXT("None"), Result.Command.bCommitted ? TEXT("true") : TEXT("false"),
-		*UEnum::GetValueAsString(Result.Command.Error), Result.Command.Revision);
+	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
+	if (!Controller || !Controller->HasAuthority() || !Controller->CanForwardGameplayCommand()) return;
+	UCatChumPlacementService* Service = GetWorld()
+		? GetWorld()->GetSubsystem<UCatChumPlacementService>() : nullptr;
+	FCatPlaceChumResult Result;
+	Result.RequestId = Command.RequestId;
+	if (Service) Result = Service->PlaceChum(Controller, Command);
+	DeliverPlaceChumResultFromAuthority(Result);
 }
 
 void UCatFishingCommandComponent::ClientReceiveFishingCommandResult_Implementation(
 	const FCatFishingCommandResult& Result)
 {
 	ReceiveResultLocally(Result);
+}
+
+void UCatFishingCommandComponent::ClientReceivePlaceChumResult_Implementation(
+	const FCatPlaceChumResult& Result)
+{
+	ReceivePlaceChumResultLocally(Result);
 }
 
 bool UCatFishingCommandComponent::IsSupportedOwner() const
@@ -323,4 +290,39 @@ void UCatFishingCommandComponent::ReceiveResultLocally(const FCatFishingCommandR
 	}
 
 	OnResultReceived.Broadcast(Result);
+}
+
+void UCatFishingCommandComponent::ReceivePlaceChumResultLocally(const FCatPlaceChumResult& Result)
+{
+	if (!IsSupportedOwner() || !Result.RequestId.IsValid()
+		|| PlaceChumResultsByRequestId.Contains(Result.RequestId)) return;
+	PlaceChumResultsByRequestId.Add(Result.RequestId, Result);
+	PlaceChumResultOrder.Add(Result.RequestId);
+	if (PlaceChumResultOrder.Num() > MaxStoredResults)
+	{
+		const FGuid Evicted = PlaceChumResultOrder[0];
+		PlaceChumResultOrder.RemoveAt(0);
+		PlaceChumResultsByRequestId.Remove(Evicted);
+	}
+	FCatFishingCommandResult Common;
+	Common.CommandType = ECatFishingCommandType::PlaceChum;
+	Common.bCommitted = Result.bCommitted;
+	Common.RequestId = Result.RequestId;
+	Common.EquipmentRevision = Result.EquipmentRevision;
+	Common.Revision = Result.ChumFieldSetRevision;
+	switch (Result.Error)
+	{
+	case ECatChumFieldError::None: Common.Error = ECatFishingCommandError::None; break;
+	case ECatChumFieldError::FeatureDisabled: Common.Error = ECatFishingCommandError::FeatureDisabled; break;
+	case ECatChumFieldError::CommandsClosed: Common.Error = ECatFishingCommandError::CommandsClosed; break;
+	case ECatChumFieldError::InvalidIdentity: Common.Error = ECatFishingCommandError::InvalidIdentity; break;
+	case ECatChumFieldError::InvalidPayload: Common.Error = ECatFishingCommandError::InvalidPayload; break;
+	case ECatChumFieldError::InvalidWaterTarget: Common.Error = ECatFishingCommandError::InvalidWaterTarget; break;
+	case ECatChumFieldError::StaleGeometry: Common.Error = ECatFishingCommandError::RevisionConflict; break;
+	case ECatChumFieldError::PlacementOutOfRange: Common.Error = ECatFishingCommandError::CastOutOfRange; break;
+	case ECatChumFieldError::EquipmentRevisionConflict: Common.Error = ECatFishingCommandError::EquipmentRevisionConflict; break;
+	case ECatChumFieldError::AlreadyResolved: Common.Error = ECatFishingCommandError::AlreadyResolved; break;
+	default: Common.Error = ECatFishingCommandError::DependencyUnavailable; break;
+	}
+	ReceiveResultLocally(Common);
 }

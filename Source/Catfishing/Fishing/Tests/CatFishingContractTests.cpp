@@ -123,21 +123,21 @@ bool FCatFishingConcurrencyFieldsContractTest::RunTest(const FString& Parameters
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatFishingContributeChumContractTest,
-	"Catfishing.Unit.Fishing.Contracts.ContributeChumUsesAggregationConcurrencyDomain",
+	FCatFishingPlaceChumContractTest,
+	"Catfishing.Unit.Fishing.Contracts.PlaceChumUsesWaterAndEquipmentConcurrencyNotSessionIdentity",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 // Protects the Water concurrency boundary: Chum writes are region aggregations, not Fishing Session mutations.
-bool FCatFishingContributeChumContractTest::RunTest(const FString& Parameters)
+bool FCatFishingPlaceChumContractTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 
-	const FCatContributeChumCommand Command;
-	const FCatContributeChumResult Result;
-	const UScriptStruct* CommandStruct = FCatContributeChumCommand::StaticStruct();
+	const FCatPlaceChumCommand Command;
+	const FCatPlaceChumResult Result;
+	const UScriptStruct* CommandStruct = FCatPlaceChumCommand::StaticStruct();
 	const TCHAR* RequiredCommandFields[] = {
-		TEXT("RequestId"), TEXT("RegionId"), TEXT("ExpectedAggregationRevision"),
-		TEXT("ChumDefinitionId"), TEXT("Quantity")
+		TEXT("RequestId"), TEXT("ExpectedWaterRegionHandle"), TEXT("ExpectedEquipmentRevision"),
+		TEXT("ChumDefinitionId"), TEXT("Quantity"), TEXT("ClientCandidateWorldPoint")
 	};
 	const TCHAR* ForbiddenSessionFields[] = {
 		TEXT("Context"), TEXT("FishingSessionId"), TEXT("SessionId"), TEXT("CastAttemptId"), TEXT("ExpectedRevision")
@@ -153,22 +153,15 @@ bool FCatFishingContributeChumContractTest::RunTest(const FString& Parameters)
 			FindFProperty<FProperty>(CommandStruct, Field));
 	}
 	TestFalse(TEXT("Contribute Chum request id defaults invalid"), Command.RequestId.IsValid());
-	TestTrue(TEXT("Contribute Chum region id defaults unset"), Command.RegionId.IsNone());
-	TestEqual(TEXT("Contribute Chum aggregation revision defaults zero"), Command.ExpectedAggregationRevision, int64{ 0 });
+	TestFalse(TEXT("Place Chum exact water handle defaults invalid"), Command.ExpectedWaterRegionHandle.IsValid());
+	TestEqual(TEXT("Place Chum equipment revision defaults zero"), Command.ExpectedEquipmentRevision, int64{ 0 });
 	TestTrue(TEXT("Contribute Chum definition id defaults unset"), Command.ChumDefinitionId.IsNone());
 	TestEqual(TEXT("Contribute Chum quantity defaults fail closed"), Command.Quantity, int32{ 0 });
 
-	const UScriptStruct* ResultStruct = FCatContributeChumResult::StaticStruct();
-	TestNotNull(TEXT("Contribute Chum result wraps the unified Fishing command result"),
-		FindFProperty<FProperty>(ResultStruct, TEXT("Command")));
-	TestNotNull(TEXT("Contribute Chum result exposes the latest aggregation revision"),
-		FindFProperty<FProperty>(ResultStruct, TEXT("AggregationRevision")));
-	TestNotNull(TEXT("Contribute Chum result exposes the latest Chum pool"),
-		FindFProperty<FProperty>(ResultStruct, TEXT("ChumPool")));
-	TestEqual(TEXT("Contribute Chum result aggregation revision defaults zero"), Result.AggregationRevision, int64{ 0 });
-	TestEqual(TEXT("Contribute Chum result Chum pool defaults empty Fishy"), Result.ChumPool.Fishy, 0.0);
-	TestEqual(TEXT("Contribute Chum result Chum pool defaults empty Fragrant"), Result.ChumPool.Fragrant, 0.0);
-	TestEqual(TEXT("Contribute Chum result Chum pool defaults empty Fermented"), Result.ChumPool.Fermented, 0.0);
+	const UScriptStruct* ResultStruct = FCatPlaceChumResult::StaticStruct();
+	TestNotNull(TEXT("Place Chum result exposes corrected point"),
+		FindFProperty<FProperty>(ResultStruct, TEXT("ServerCorrectedCenter")));
+	TestFalse(TEXT("Place Chum result defaults uncommitted"), Result.bCommitted);
 	return !HasAnyErrors();
 }
 

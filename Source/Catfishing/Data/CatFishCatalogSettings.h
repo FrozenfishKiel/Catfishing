@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
+#include "Data/CatFishSelectionTypes.h"
 #include "Framework/Core/CatRunContracts.h"
 #include "CatFishCatalogSettings.generated.h"
 
@@ -22,7 +23,18 @@ public:
 		ECatEnvironmentWeather Weather, int32 ActivePlayerCount, double CombinedFishingStrength,
 		double CombinedFightStamina, int32 RandomSeed, double& OutWeightKilograms) const;
 
+	FCatFishSelectionResult SelectRuntimeDefinition(const FCatFishSelectionContext& Context) const;
+
 	/** 正式 FishDefinition 软引用清单；默认空使 Fishing fail-closed，不扫描旧鱼种文档或测试资产。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Catalog")
 	TArray<TSoftObjectPtr<UCatFishDefinition>> Definitions;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Selection")
+	TSoftObjectPtr<class UCurveFloat> ChumSaturationCurve;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Selection")
+	double ChumAffinityHalfSaturation = 0.0;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Selection")
+	double MaximumChumModifier = 0.0;
 };

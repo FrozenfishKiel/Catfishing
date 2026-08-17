@@ -32,11 +32,6 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Framework.GameMode.RunCommandsFailClosedBeforeRuntimeStart",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatPlayerChumInvalidPayloadReportsCurrentAggregationRevisionTest,
-	"Catfishing.Unit.Framework.PlayerChum.InvalidPayloadReportsCurrentAggregationRevision",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
-
 // 测试流程：生成真实 Lake GameMode 但不启动 Run StateTree；协调器额度写口必须在命令门关闭时拒绝，并把首次终态缓存为可重放结果。
 bool FCatGameModeRunCommandFailClosedTest::RunTest(const FString& Parameters)
 {
@@ -74,54 +69,6 @@ bool FCatGameModeRunCommandFailClosedTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("同一请求重放返回 AlreadyResolved"), Replay.Error, ECatRunCommandError::AlreadyResolved);
 	TestEqual(TEXT("重放保留首次 Revision"), Replay.Revision, First.Revision);
 	TestEqual(TEXT("默认 Run 公开状态仍未开始"), GameMode->GetRunPublicState().Phase.Phase, ECatRunPhase::NotStarted);
-	return !HasAnyErrors();
-}
-
-bool FCatPlayerChumInvalidPayloadReportsCurrentAggregationRevisionTest::RunTest(const FString& Parameters)
-{
-	(void)Parameters;
-
-	FTestWorldWrapper WorldWrapper;
-	TestTrue(TEXT("创建 PlayerChum 测试 World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
-	WorldWrapper.ForwardErrorMessages(this);
-	UWorld* World = WorldWrapper.GetTestWorld();
-	TestNotNull(TEXT("可创建 PlayerChum 测试 World"), World);
-	if (!World)
-	{
-		return false;
-	}
-
-	ACatWaterRegion* Region = World->SpawnActor<ACatWaterRegion>();
-	TestNotNull(TEXT("可创建 WaterRegion"), Region);
-	if (!Region)
-	{
-		return false;
-	}
-	FCatWaterRegionTestAccess::InjectBakedGeometry(*Region, CatGameplayTypesTest::BuildLakeCache());
-	Region->bEnableAggregation = true;
-	Region->AggregationBudget = 2.0;
-
-	FCatAggregationCommand Contribution;
-	Contribution.Context.StableNetId = TEXT("PlayerA");
-	Contribution.Context.RequestId = FGuid::NewGuid();
-	Contribution.RegionId = Region->RegionId;
-	Contribution.ExpectedAggregationRevision = 1;
-	Contribution.Contribution.Fishy = 1.0;
-	const FCatAggregationResult ContributionResult = Region->ContributeAggregation(Contribution);
-	TestTrue(TEXT("合法聚鱼推进 AggregationRevision"), ContributionResult.Command.bCommitted);
-	TestEqual(TEXT("聚鱼后当前 AggregationRevision"), Region->MakeSnapshot().AggregationRevision, int64(2));
-
-	const FGuid RequestId = FGuid::NewGuid();
-	const FCatAggregationResult InvalidPayload = ACatfishingPlayerController::MakeInvalidPlayerChumResult(RequestId, Region);
-	TestFalse(TEXT("非空水域的 InvalidPayload 不提交"), InvalidPayload.Command.bCommitted);
-	TestEqual(TEXT("非空水域的 InvalidPayload 状态"), InvalidPayload.Command.Error, ECatDomainCommandError::InvalidPayload);
-	TestEqual(TEXT("非空水域保留 RequestId"), InvalidPayload.Command.RequestId, RequestId);
-	TestEqual(TEXT("非空水域返回当前 AggregationRevision"), InvalidPayload.AggregationRevision, int64(2));
-	TestEqual(TEXT("非空水域兼容命令 Revision"), InvalidPayload.Command.Revision, int64(2));
-
-	const FCatAggregationResult NullRegionInvalidPayload = ACatfishingPlayerController::MakeInvalidPlayerChumResult(RequestId, nullptr);
-	TestEqual(TEXT("空水域的 AggregationRevision 为零"), NullRegionInvalidPayload.AggregationRevision, int64(0));
-	TestEqual(TEXT("空水域的命令 Revision 为零"), NullRegionInvalidPayload.Command.Revision, int64(0));
 	return !HasAnyErrors();
 }
 

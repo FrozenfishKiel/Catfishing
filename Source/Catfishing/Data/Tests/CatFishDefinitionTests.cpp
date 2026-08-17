@@ -19,6 +19,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Data.FishDefinition.ToxicFishRequiresPositivePoisonIncrease",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishDefinitionChumBaitValidityTest,
+	"Catfishing.Unit.Data.FishDefinition.ChumPreferenceAndBaitMultipliersMustBeValid",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
 namespace CatFishDefinitionTest
 {
 	// 构造流程：只填运行 readiness 所需的公开字段，CaptureImprintEventId 保持 None，用于证明实物鱼与印记候选已解耦。
@@ -98,6 +103,22 @@ bool FCatFishDefinitionToxicFoodTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("Toxic 鱼缺少 PoisonIncrease 时不可运行"), Definition->IsRuntimeDefinitionReady());
 	Definition->PoisonIncrease = 1.5;
 	TestTrue(TEXT("Toxic 鱼给出正 PoisonIncrease 后可运行"), Definition->IsRuntimeDefinitionReady());
+	return !HasAnyErrors();
+}
+
+bool FCatFishDefinitionChumBaitValidityTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UCatFishDefinition* Definition = CatFishDefinitionTest::MakeReadyStandardFish();
+	Definition->ChumPreference.Fishy = 1.0;
+	FCatBaitWeightMultiplier& Bait = Definition->BaitWeightMultipliers.AddDefaulted_GetRef();
+	Bait.BaitDefinitionId = TEXT("Worm");
+	Bait.Multiplier = 1.5;
+	TestTrue(TEXT("finite chum preference and unique positive bait multiplier are valid"),
+		Definition->IsRuntimeDefinitionReady());
+	const FCatBaitWeightMultiplier Duplicate = Bait;
+	Definition->BaitWeightMultipliers.Add(Duplicate);
+	TestFalse(TEXT("duplicate bait ids fail closed"), Definition->IsRuntimeDefinitionReady());
 	return !HasAnyErrors();
 }
 
