@@ -55,6 +55,12 @@ public:
 	/** 服务器权威近岸目标允许抢抄的最大距离，单位厘米；0 表示 Unset，不从客户端命中位置推导。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))
 	double ScoopReachCentimeters = 0.0;
+	UPROPERTY(Config, EditAnywhere, Category="Scoop", meta=(ClampMin="0.01"))
+	double NearShoreWidthCentimeters = 300.0;
+	UPROPERTY(Config, EditAnywhere, Category="Scoop", meta=(ClampMin="0", ClampMax="89"))
+	double MaximumScoopGroundSlopeDegrees = 45.0;
+	UPROPERTY(Config, EditAnywhere, Category="Scoop")
+	TEnumAsByte<ECollisionChannel> ScoopTraceChannel = ECC_Visibility;
 
 	/** Resolved/Terminated 快照发布后 Actor 继续复制的有界秒数；0 表示 Unset 并阻止新会话，避免泄漏或丢最后终态。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))

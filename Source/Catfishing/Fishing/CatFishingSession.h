@@ -39,7 +39,7 @@ public:
 	/** authority 注入当前钓手、鱼定义、目标鱼护与水域快照并启动 ST_FishingSession；任一 gate 失败返回 false。 */
 	bool InitializeSession(FGuid InFishingSessionId, FGuid InCastAttemptId, AController* FisherController,
 		ACatCharacter* FisherCharacter, UCatFishDefinition* FishDefinition, FGuid FisherGuardContainerId,
-		double FishWeightKilograms, const FCatWaterRegionSnapshot& WaterRegion);
+		double FishWeightKilograms, const FCatWaterRegionHandle& WaterRegion);
 	bool PrepareSessionFromAuthority(const FCatFishingAttemptSnapshot& Attempt, AController* FisherController,
 		ACatCharacter* FisherCharacter, ACatFishingHookActor* HookActor);
 	bool StartPreparedSessionLogicFromAuthority();
@@ -57,8 +57,7 @@ public:
 	void HandleFightRunnerFailureFromAuthority();
 
 	/** StateTree EnterPhase Task 的唯一阶段写入口；NearShore 必须提供水域内服务器目标，HookedFight/NearShore 保留合法参与者，其他阶段重置为钓手，终态启动有界销毁。 */
-	FCatFishingPhaseResult EnterPhaseFromStateTree(ECatFishingPhase NewPhase,
-		bool bHasAuthoritativeNearShoreTarget, FVector AuthoritativeNearShoreTarget);
+	FCatFishingPhaseResult EnterPhaseFromStateTree(ECatFishingPhase NewPhase);
 
 	/** 巨鱼 HookedFight 中按统一参战能力谓词登记一次协作者；非 Active、倒地、力量/体力非正、阶段不符或重复 RequestId 都不增加参与集合。 */
 	FCatDomainCommandResult SubmitFightAssist(AController* AssistingController, FGuid RequestId, int64 ExpectedRevision);
@@ -133,6 +132,7 @@ private:
 	void ScheduleTerminalDestroy();
 	void HandleProbeTimer();
 	void HandleTrueBiteWindowExpired();
+	bool TryReadNearShoreFishSpatial(FCatWaterSpatialResult& OutSpatial) const;
 
 	/** 当前会话唯一 StateTree 组件；自动启动关闭，由 Initialize 显式设置资产。 */
 	UPROPERTY(VisibleAnywhere)
@@ -160,15 +160,6 @@ private:
 
 	/** 鱼运行态在会话创建时冻结的真实重量，单位千克。 */
 	double FishWeightKilograms = 0.0;
-
-	/** 会话创建时唯一命中的水域快照；不作为近岸几何的替代真相。 */
-	FCatWaterRegionSnapshot WaterRegionSnapshot;
-
-	/** StateTree 绑定的服务器鱼运行态在 NearShore 的世界位置；客户端 ScoopWorldLocation 永远不能覆盖它。 */
-	FVector NearShoreTargetWorldLocation = FVector::ZeroVector;
-
-	/** 当前 NearShore 是否持有通过水域 AABB 校验的服务器目标；默认 false 使缺鱼运行态时捕获 fail-closed。 */
-	bool bHasNearShoreTarget = false;
 
 	/** HookedFight 的服务器私有参与者身份集合；巨鱼进入 NearShore 后保留到候选生成，普通鱼始终只含初始钓手。 */
 	TSet<FString> FightParticipantIds;

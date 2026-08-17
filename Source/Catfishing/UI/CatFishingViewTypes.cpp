@@ -1,0 +1,15 @@
+#include "UI/CatFishingViewTypes.h"
+
+FCatFishingViewState FCatFishingViewState::FromSnapshot(const FCatFishingSessionSnapshot& Snapshot)
+{
+	FCatFishingViewState View;
+	View.FishingSessionId = Snapshot.FishingSessionId;
+	View.Revision = Snapshot.Revision;
+	View.Phase = Snapshot.Phase;
+	View.Outcome = Snapshot.Outcome;
+	View.FishDefinitionId = Snapshot.FishDefinitionId;
+	View.NormalizedFishStamina = Snapshot.NormalizedFishStamina;
+	View.bReeling = Snapshot.bReeling;
+	View.FishMotionIntent = Snapshot.FishMotionIntent;
+	return View;
+}

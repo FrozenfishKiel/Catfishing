@@ -2,7 +2,7 @@
 
 namespace
 {
-	bool IsFiniteVector(const FVector& Value)
+	bool IsFiniteMotionVector(const FVector& Value)
 	{
 		return FMath::IsFinite(Value.X) && FMath::IsFinite(Value.Y) && FMath::IsFinite(Value.Z);
 	}
@@ -17,8 +17,8 @@ namespace
 FCatFishMotionSolveResult FCatFishFightMotionSolver::Solve(const FCatFishMotionSolveInput& Input)
 {
 	FCatFishMotionSolveResult Result;
-	if (!Input.WaterBounds.IsValid || !IsFiniteVector(Input.RodTipWorldPosition)
-		|| !IsFiniteVector(Input.ProposedFishWorldPosition)
+	if (!Input.WaterBounds.IsValid || !IsFiniteMotionVector(Input.RodTipWorldPosition)
+		|| !IsFiniteMotionVector(Input.ProposedFishWorldPosition)
 		|| !FMath::IsFinite(Input.MaximumLineLengthCentimeters)
 		|| Input.MaximumLineLengthCentimeters <= 0.0)
 	{

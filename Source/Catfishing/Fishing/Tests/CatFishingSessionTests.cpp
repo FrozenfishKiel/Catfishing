@@ -130,7 +130,7 @@ bool FCatFishingSessionStateTreeTerminalPhaseTest::RunTest(const FString& Parame
 	const FCatFishingSessionSnapshot Before = Session->GetSnapshot();
 	for (const ECatFishingPhase TerminalPhase : { ECatFishingPhase::Resolved, ECatFishingPhase::Terminated })
 	{
-		const FCatFishingPhaseResult Result = Session->EnterPhaseFromStateTree(TerminalPhase, false, FVector::ZeroVector);
+		const FCatFishingPhaseResult Result = Session->EnterPhaseFromStateTree(TerminalPhase);
 		TestFalse(TEXT("StateTree terminal entry is rejected"), Result.bApplied);
 		TestEqual(TEXT("StateTree terminal entry reports an already-resolved guard"), Result.Error, ECatDomainCommandError::AlreadyResolved);
 		TestEqual(TEXT("StateTree terminal entry leaves phase unchanged"), Session->GetSnapshot().Phase, Before.Phase);

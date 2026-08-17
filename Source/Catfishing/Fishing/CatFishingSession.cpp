@@ -51,7 +51,7 @@ void ACatFishingSession::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 // 会话初始化流程：只接受 authority、显式 runtime gate、完整鱼定义/重量/水域/身份/鱼护与 Items；全部就绪后设置资产并启动 StateTree，失败销毁由服务负责。
 bool ACatFishingSession::InitializeSession(const FGuid InFishingSessionId, const FGuid InCastAttemptId,
 	AController* FisherController, ACatCharacter* InFisherCharacter, UCatFishDefinition* InFishDefinition,
-	const FGuid InFisherGuardContainerId, const double InFishWeightKilograms, const FCatWaterRegionSnapshot& WaterRegion)
+	const FGuid InFisherGuardContainerId, const double InFishWeightKilograms, const FCatWaterRegionHandle& WaterRegion)
 {
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
 	UStateTree* StateTreeAsset = Settings ? Settings->FishingSessionStateTree.LoadSynchronous() : nullptr;
@@ -62,7 +62,7 @@ bool ACatFishingSession::InitializeSession(const FGuid InFishingSessionId, const
 		|| !InFisherCharacter || !InFishDefinition || !InFishDefinition->IsRuntimeDefinitionReady()
 		|| StableNetId.IsEmpty() || !InFisherGuardContainerId.IsValid()
 		|| !FMath::IsFinite(InFishWeightKilograms) || InFishWeightKilograms <= 0.0
-		|| WaterRegion.RegionId.IsNone() || WaterRegion.GeometryRevision <= 0 || !Items)
+		|| !WaterRegion.IsValid() || !Items)
 	{
 		return false;
 	}
@@ -86,7 +86,7 @@ bool ACatFishingSession::InitializeSession(const FGuid InFishingSessionId, const
 	FisherStableNetId = StableNetId;
 	FisherGuardContainerId = InFisherGuardContainerId;
 	FishWeightKilograms = InFishWeightKilograms;
-	WaterRegionSnapshot = WaterRegion;
+	AttemptSnapshot.WaterRegion = WaterRegion;
 	FightParticipantIds.Add(StableNetId);
 	FightParticipantCharacters.Add(StableNetId, InFisherCharacter);
 	RefreshFightSummary();
@@ -104,8 +104,24 @@ bool ACatFishingSession::InitializeSession(const FGuid InFishingSessionId, const
 }
 
 // 阶段进入流程：先验证 authority、唯一 StateTree 生命周期和未结算状态；NearShore 只接受水域包围盒内的服务器目标并冻结该位置，其他阶段清除目标。HookedFight 与 NearShore 保留钓手/协作者供搏斗和巨鱼候选使用，其余阶段把参与集合收回为钓手；随后刷新协作摘要、递增一次 Revision 并复制快照，若资产进入终态则启动有界销毁。C++ 只应用资产已选阶段，不维护转移拓扑。
-FCatFishingPhaseResult ACatFishingSession::EnterPhaseFromStateTree(const ECatFishingPhase NewPhase,
-	const bool bHasAuthoritativeNearShoreTarget, const FVector AuthoritativeNearShoreTarget)
+bool ACatFishingSession::TryReadNearShoreFishSpatial(FCatWaterSpatialResult& OutSpatial) const
+{
+	OutSpatial = FCatWaterSpatialResult{};
+	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	const UCatWaterQuerySubsystem* Water = GetWorld() ? GetWorld()->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
+	const ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
+	if (!HasAuthority() || !Settings || !Water || !Encounter || !AttemptSnapshot.WaterRegion.IsValid()
+		|| !FMath::IsFinite(Settings->NearShoreWidthCentimeters) || Settings->NearShoreWidthCentimeters <= 0.0)
+	{
+		return false;
+	}
+	OutSpatial = Water->QueryShoreRelation(Encounter->GetActorLocation(), AttemptSnapshot.WaterRegion);
+	return OutSpatial.bSucceeded && OutSpatial.Containment == ECatWaterContainment::Inside
+		&& OutSpatial.SignedDistanceToShoreCm > 0.0
+		&& OutSpatial.SignedDistanceToShoreCm <= Settings->NearShoreWidthCentimeters;
+}
+
+FCatFishingPhaseResult ACatFishingSession::EnterPhaseFromStateTree(const ECatFishingPhase NewPhase)
 {
 	FCatFishingPhaseResult Result;
 	Result.PreviousPhase = Snapshot.Phase;
@@ -128,24 +144,12 @@ FCatFishingPhaseResult ACatFishingSession::EnterPhaseFromStateTree(const ECatFis
 	}
 	if (NewPhase == ECatFishingPhase::NearShore)
 	{
-		const FBox WaterBounds = FBox::BuildAABB(WaterRegionSnapshot.WorldCenter, WaterRegionSnapshot.HalfExtent);
-		const UCatWaterQuerySubsystem* Water = GetWorld() ? GetWorld()->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
-		const FCatWaterSpatialResult Exact = Water && AttemptSnapshot.WaterRegion.IsValid()
-			? Water->QueryWaterPoint(AuthoritativeNearShoreTarget, AttemptSnapshot.WaterRegion) : FCatWaterSpatialResult{};
-		const bool bLegacyWaterContains = WaterBounds.IsValid && WaterBounds.IsInsideOrOn(AuthoritativeNearShoreTarget);
-		if (!bHasAuthoritativeNearShoreTarget || AuthoritativeNearShoreTarget.ContainsNaN()
-			|| (!Exact.bSucceeded && !bLegacyWaterContains))
+		FCatWaterSpatialResult FishSpatial;
+		if (!TryReadNearShoreFishSpatial(FishSpatial))
 		{
 			Result.Error = ECatDomainCommandError::PolicyUndecided;
 			return Result;
 		}
-		NearShoreTargetWorldLocation = AuthoritativeNearShoreTarget;
-		bHasNearShoreTarget = true;
-	}
-	else
-	{
-		NearShoreTargetWorldLocation = FVector::ZeroVector;
-		bHasNearShoreTarget = false;
 	}
 	if (NewPhase == ECatFishingPhase::HookedFight && !bFightStaminaInitialized)
 	{
@@ -384,6 +388,32 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 		&& ValidatedScooperId == StableNetId;
 	double ScoopReachCentimeters = 0.0;
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	UCatWaterQuerySubsystem* Water = GetWorld() ? GetWorld()->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
+	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
+	UCatEquipmentComponent* ScooperEquipment = ScoopingCharacter ? ScoopingCharacter->GetEquipmentComponent() : nullptr;
+	const FCatEquipmentLoadoutSnapshot* ScooperLoadout = ScooperEquipment ? &ScooperEquipment->GetSnapshot() : nullptr;
+	const UCatEquipmentDefinition* ScoopDefinition = ScooperLoadout
+		? GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(ScooperLoadout->ScoopNetDefinitionId) : nullptr;
+	FCatWaterSpatialResult FishSpatial;
+	const bool bFishNearShore = TryReadNearShoreFishSpatial(FishSpatial);
+	const FCatWaterSpatialResult ScooperSpatial = Water && ScoopingCharacter && AttemptSnapshot.WaterRegion.IsValid()
+		? Water->QueryShoreRelation(ScoopingCharacter->GetActorLocation(), AttemptSnapshot.WaterRegion)
+		: FCatWaterSpatialResult{};
+	FHitResult GroundHit;
+	bool bValidGround = false;
+	bool bHasLineOfSight = false;
+	if (Settings && ScoopingCharacter && Encounter && GetWorld())
+	{
+		FCollisionQueryParams GroundParams(SCENE_QUERY_STAT(CatScoopGround), false, ScoopingCharacter);
+		bValidGround = GetWorld()->LineTraceSingleByChannel(GroundHit,
+			ScoopingCharacter->GetActorLocation() + FVector(0, 0, 75),
+			ScoopingCharacter->GetActorLocation() - FVector(0, 0, 250), Settings->ScoopTraceChannel, GroundParams)
+			&& GroundHit.ImpactNormal.Z >= FMath::Cos(FMath::DegreesToRadians(Settings->MaximumScoopGroundSlopeDegrees));
+		FCollisionQueryParams SightParams(SCENE_QUERY_STAT(CatScoopLineOfSight), true, ScoopingCharacter);
+		SightParams.AddIgnoredActor(Encounter);
+		bHasLineOfSight = !GetWorld()->LineTraceTestByChannel(ScoopingCharacter->GetPawnViewLocation(),
+			Encounter->GetActorLocation(), Settings->ScoopTraceChannel, SightParams);
+	}
 	const FString CacheKey = FString::Printf(TEXT("%s|%s"), *StableNetId,
 		*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 	if (const FCatScoopResult* Cached = ScoopTerminalCache.Find(CacheKey))
@@ -397,8 +427,7 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	{
 		Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
 	}
-	else if (!Command.Context.RequestId.IsValid() || StableNetId.IsEmpty() || !Command.TargetGuardContainerId.IsValid()
-		|| Command.ScoopWorldLocation.ContainsNaN())
+	else if (!Command.Context.RequestId.IsValid() || StableNetId.IsEmpty() || !Command.TargetGuardContainerId.IsValid())
 	{
 		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
 	}
@@ -410,16 +439,22 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	{
 		Result.Command.Error = ECatDomainCommandError::RevisionConflict;
 	}
-	else if (!bScooperFightCapable || !ScoopingCharacter || !bHasNearShoreTarget || !Settings
-		|| !Settings->TryGetScoopReach(ScoopReachCentimeters)
-		|| FVector::DistSquared(ScoopingCharacter->GetActorLocation(), NearShoreTargetWorldLocation)
-			> FMath::Square(ScoopReachCentimeters))
-	{
-		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
-	}
-	else if (!ItemsService.IsValid() || !FishDefinition)
+	else if (!ItemsService.IsValid() || !FishDefinition || !Water || !Encounter || !AttemptSnapshot.WaterRegion.IsValid())
 	{
 		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
+			TEXT("Scoop system dependency unavailable"));
+	}
+	else if (!bScooperFightCapable || !ScoopingCharacter || !bFishNearShore || !Settings
+		|| !Settings->TryGetScoopReach(ScoopReachCentimeters)
+		|| !ScoopDefinition || ScoopDefinition->Kind != ECatEquipmentKind::ScoopNet
+		|| !ScoopDefinition->IsRuntimeDefinitionReady() || ScoopDefinition->ScoopReachCentimeters <= 0.0
+		|| !ScooperSpatial.bSucceeded || ScooperSpatial.Containment != ECatWaterContainment::Outside
+		|| FVector::DistSquared(ScoopingCharacter->GetActorLocation(), Encounter->GetActorLocation())
+			> FMath::Square(FMath::Min(ScoopReachCentimeters, ScoopDefinition->ScoopReachCentimeters))
+		|| !bHasLineOfSight || !bValidGround)
+	{
+		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
 	}
 	else
 	{
@@ -470,6 +505,8 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 					&& (!GameState || !ImprintService->CanAcceptImprintCandidate(CaptureCandidate))))
 			{
 				Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
+				FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
+					TEXT("Capture run or imprint dependency unavailable"));
 				Result.Command.Revision = Snapshot.Revision;
 				ScoopTerminalCache.Add(CacheKey, Result);
 				return Result;
@@ -484,6 +521,23 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 			CaptureCommand.TargetContainerId = Command.TargetGuardContainerId;
 			CaptureCommand.WeightKilograms = FishWeightKilograms;
 			CaptureCommand.SacrificeContribution = FishDefinition->SacrificeContribution;
+			UCatEquipmentComponent* FisherEquipment = FisherCharacter.IsValid()
+				? FisherCharacter->GetEquipmentComponent() : nullptr;
+			const FCatFishingUseOperationResult BaitFinal = FisherEquipment
+				? FisherEquipment->CommitFishingBaitDeferred(Snapshot.FishingSessionId) : FCatFishingUseOperationResult{};
+			const bool bBaitFinal = BaitFinal.bApplied || BaitFinal.Error == ECatDomainCommandError::AlreadyResolved;
+			const FCatFishingUseOperationResult WearFinal = FisherEquipment
+				? FisherEquipment->CommitFishingRodWear(Snapshot.FishingSessionId) : FCatFishingUseOperationResult{};
+			const bool bWearFinal = WearFinal.bApplied || WearFinal.Error == ECatDomainCommandError::AlreadyResolved;
+			if (!bBaitFinal || !bWearFinal)
+			{
+				Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
+				FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
+					TEXT("Capture equipment finalization failed"));
+				Result.Command.Revision = Snapshot.Revision;
+				ScoopTerminalCache.Add(CacheKey, Result);
+				return Result;
+			}
 			const FCatCaptureCommitResult CaptureResult = ItemsService->CommitCapture(CaptureCommand);
 			Result.Command = CaptureResult.Command;
 			Result.Capture = CaptureResult.Committed;
@@ -519,7 +573,7 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 				CommittedCaptureCandidate.ParticipantStableNetIds.Sort();
 				CommittedCaptureCandidate.ParticipantCount = CommittedCaptureCandidate.ParticipantStableNetIds.Num();
 				FCatCaptureConditionSnapshot Condition;
-				Condition.RegionId = WaterRegionSnapshot.RegionId;
+				Condition.RegionId = AttemptSnapshot.WaterRegion.RegionId;
 				const FGuid FishRecordedGrantId = ImprintService->RecordCommittedCapture(
 					CaptureResult.Committed, CaptureResult.Committed.FishInstance.OwnerStableNetId, Condition);
 				bool bOptionalPlanCommitted = true;
@@ -545,6 +599,18 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 				{
 					Result.Command.Revision = Snapshot.Revision;
 				}
+			}
+			else if (bHasCommittedCapture)
+			{
+				FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
+					TEXT("Committed capture did not match session"));
+			}
+			else if (CaptureResult.Command.Error != ECatDomainCommandError::CapacityExceeded
+				&& CaptureResult.Command.Error != ECatDomainCommandError::RevisionConflict
+				&& CaptureResult.Command.Error != ECatDomainCommandError::NotFound)
+			{
+				FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
+					TEXT("Capture commit failed closed"));
 			}
 		}
 	}
@@ -621,7 +687,7 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 	}
 	if (Snapshot.Phase != ECatFishingPhase::Waiting)
 	{
-		if (!EnterPhaseFromStateTree(ECatFishingPhase::Waiting, false, FVector::ZeroVector).bApplied) return false;
+		if (!EnterPhaseFromStateTree(ECatFishingPhase::Waiting).bApplied) return false;
 	}
 	double BiteRate = Settings->BaseBiteRatePerSecond;
 	double MinimumDelay = Settings->MinimumBiteDelaySeconds;
@@ -895,7 +961,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	}
 	bFightStaminaInitialized = true;
 	StaminaParticipantsTouched.Add(FisherCharacter);
-	if (!EnterPhaseFromStateTree(ECatFishingPhase::HookedFight, false, FVector::ZeroVector).bApplied)
+	if (!EnterPhaseFromStateTree(ECatFishingPhase::HookedFight).bApplied)
 	{
 		FightRunner->Stop();
 		FightRunner = nullptr;
@@ -959,8 +1025,7 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 		|| Step.Outcome == ECatFightStepOutcome::NearShore)
 	{
 		FightRunner->Stop();
-		const FVector Target = Snapshot.FishEncounterActor ? Snapshot.FishEncounterActor->GetActorLocation() : FVector::ZeroVector;
-		EnterPhaseFromStateTree(ECatFishingPhase::NearShore, Snapshot.FishEncounterActor != nullptr, Target);
+		EnterPhaseFromStateTree(ECatFishingPhase::NearShore);
 	}
 }
 

@@ -22,8 +22,7 @@ EStateTreeRunStatus FCatFishingEnterPhaseTask::EnterState(FStateTreeExecutionCon
 		return EStateTreeRunStatus::Failed;
 	}
 	const FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
-	return Session->EnterPhaseFromStateTree(InstanceData.Phase, InstanceData.bHasAuthoritativeNearShoreTarget,
-		InstanceData.AuthoritativeNearShoreTarget).bApplied
+	return Session->EnterPhaseFromStateTree(InstanceData.Phase).bApplied
 		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
 }
 

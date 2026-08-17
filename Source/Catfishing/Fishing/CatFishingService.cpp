@@ -532,8 +532,11 @@ FCatFishingStartResult UCatFishingService::StartFishingSession(AController* Fish
 	{
 		Session->SetOwner(FisherController);
 	}
+	FCatWaterRegionHandle LegacyWaterHandle;
+	LegacyWaterHandle.RegionId = WaterResult.Region.RegionId;
+	LegacyWaterHandle.GeometryRevision = WaterResult.Region.GeometryRevision;
 	if (!Session || !Session->InitializeSession(SessionId, CastAttemptId, FisherController, Character, FishDefinition,
-		Character->GetPersonalFishGuardId(), FishWeightKilograms, WaterResult.Region))
+		Character->GetPersonalFishGuardId(), FishWeightKilograms, LegacyWaterHandle))
 	{
 		if (Session)
 		{

@@ -234,8 +234,6 @@ struct FCatScoopCommand
 	FGuid TargetGuardContainerId;
 
 	/** 客户端表现命中位置，仅用于载荷诊断；授权只比较服务器 Character 与 StateTree 绑定的权威近岸目标。 */
-	UPROPERTY(BlueprintReadWrite)
-	FVector ScoopWorldLocation = FVector::ZeroVector;
 };
 
 /** 抢抄事务终态；只在首个合法请求成功时包含 CaptureCommittedResult。 */

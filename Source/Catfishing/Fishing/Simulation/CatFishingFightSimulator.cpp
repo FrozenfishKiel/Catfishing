@@ -2,7 +2,7 @@
 
 namespace
 {
-	bool IsFiniteVector(const FVector& Value)
+	bool IsFiniteFightVector(const FVector& Value)
 	{
 		return FMath::IsFinite(Value.X) && FMath::IsFinite(Value.Y) && FMath::IsFinite(Value.Z);
 	}
@@ -32,8 +32,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		|| !FMath::IsFinite(State.FishStamina) || State.FishStamina < 0.0
 		|| !FMath::IsFinite(State.LineLengthCentimeters) || State.LineLengthCentimeters < 0.0
 		|| !FMath::IsFinite(State.AbsoluteRodWear) || State.AbsoluteRodWear < 0.0
-		|| !IsFiniteVector(State.FishWorldPosition) || !IsFiniteVector(RodTipWorldPosition)
-		|| !IsFiniteVector(OutwardDirection))
+		|| !IsFiniteFightVector(State.FishWorldPosition) || !IsFiniteFightVector(RodTipWorldPosition)
+		|| !IsFiniteFightVector(OutwardDirection))
 	{
 		return Result;
 	}

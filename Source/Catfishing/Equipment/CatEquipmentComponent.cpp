@@ -459,6 +459,8 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingRodWear(const
 	}
 	Snapshot.RodDurability -= Record->AbsoluteRodWear;
 	Record->bWearCommitted = true;
+	Record->bReleased = true;
+	ActiveFishingUseSessionId.Invalidate();
 	++Snapshot.Revision;
 	PublishSnapshot();
 	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
@@ -482,6 +484,8 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingRodBreak(cons
 	Snapshot.RodDurability = 0.0;
 	Snapshot.bRodBroken = true;
 	Record->bBreakCommitted = true;
+	Record->bReleased = true;
+	ActiveFishingUseSessionId.Invalidate();
 	++Snapshot.Revision;
 	PublishSnapshot();
 	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);

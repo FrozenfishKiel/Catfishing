@@ -17,13 +17,6 @@ struct FCatFishingEnterPhaseTaskInstanceData
 	UPROPERTY(EditAnywhere, Category = "Parameter")
 	ECatFishingPhase Phase = ECatFishingPhase::Created;
 
-	/** 进入 NearShore 时由服务器鱼运行态绑定的世界目标；其他 Phase 不读取。 */
-	UPROPERTY(EditAnywhere, Category = "Parameter")
-	FVector AuthoritativeNearShoreTarget = FVector::ZeroVector;
-
-	/** 资产确认上述目标来自服务器运行态；默认 false，禁止仅靠阶段名绕过几何校验。 */
-	UPROPERTY(EditAnywhere, Category = "Parameter")
-	bool bHasAuthoritativeNearShoreTarget = false;
 };
 
 /** ST_FishingSession 的阶段入口 Task；只调用 Session 唯一写口。 */
