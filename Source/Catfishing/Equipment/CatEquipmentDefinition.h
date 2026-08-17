@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
+#include "Environment/CatChumFieldTypes.h"
 #include "Environment/CatWaterTypes.h"
 #include "Equipment/CatEquipmentTypes.h"
 #include "CatEquipmentDefinition.generated.h"
@@ -51,6 +52,10 @@ public:
 	/** Chum 耗材提交给共享 WaterRegion 的三轴增量；其他类别必须保持零值，客户端不能覆盖该数据。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Function")
 	FCatChumVector ChumContribution;
+
+	/** Chum placement 的空间影响定义；运行时冻结曲线 LUT，数量只放大三轴贡献。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Chum")
+	FCatChumInfluenceSpec ChumInfluence;
 
 	/** 数据人员对正式定义的显式运行 gate；默认关闭。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Runtime")

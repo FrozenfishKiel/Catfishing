@@ -2,6 +2,7 @@
 
 #include "Misc/AutomationTest.h"
 
+#include "Curves/CurveFloat.h"
 #include "Equipment/CatEquipmentDefinition.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -21,7 +22,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatEquipmentDefinitionChumTest,
-	"Catfishing.Unit.Equipment.Definition.ChumRequiresPositiveContribution",
+	"Catfishing.Unit.Equipment.Definition.ChumRequiresSpatialInfluenceSpec",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 // 测试流程：创建默认装备定义并调用正式 readiness；Unset 类别、身份和功能路线不能被当作可运行道具。
@@ -88,7 +89,7 @@ bool FCatEquipmentDefinitionSpecialBaitTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-// 测试流程：配置 Chum 定义并验证三轴贡献；全零贡献失败，任一正贡献通过，证明窝料数值由数据定义显式提供。
+// 测试流程：配置 Chum 定义并验证完整空间 Influence；只有贡献、范围、寿命、曲线和数量上限全部显式提供才可运行。
 bool FCatEquipmentDefinitionChumTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -105,9 +106,18 @@ bool FCatEquipmentDefinitionChumTest::RunTest(const FString& Parameters)
 	Definition->Kind = ECatEquipmentKind::Chum;
 	Definition->FunctionalRouteId = TEXT("ChumRoute");
 	Definition->bRunConsumable = true;
-	TestFalse(TEXT("Chum 缺少正三轴贡献时不可运行"), Definition->IsRuntimeDefinitionReady());
-	Definition->ChumContribution.Fishy = 1.0;
-	TestTrue(TEXT("Chum 提供正贡献后可运行"), Definition->IsRuntimeDefinitionReady());
+	TestFalse(TEXT("Chum 缺少空间 Influence 时不可运行"), Definition->IsRuntimeDefinitionReady());
+	UCurveFloat* Distance = NewObject<UCurveFloat>(GetTransientPackage());
+	Distance->FloatCurve.AddKey(0.0f, 1.0f); Distance->FloatCurve.AddKey(1.0f, 0.0f);
+	UCurveFloat* Time = NewObject<UCurveFloat>(GetTransientPackage());
+	Time->FloatCurve.AddKey(0.0f, 1.0f); Time->FloatCurve.AddKey(1.0f, 0.0f);
+	Definition->ChumInfluence.RadiusCentimeters = 500.0;
+	Definition->ChumInfluence.DurationSeconds = 60.0;
+	Definition->ChumInfluence.BaseContribution.Fishy = 1.0;
+	Definition->ChumInfluence.DistanceFalloffCurve = Distance;
+	Definition->ChumInfluence.TimeFalloffCurve = Time;
+	Definition->ChumInfluence.MaximumQuantityPerPlacement = 3;
+	TestTrue(TEXT("Chum 完整空间 Influence 后可运行"), Definition->IsRuntimeDefinitionReady());
 	return !HasAnyErrors();
 }
 

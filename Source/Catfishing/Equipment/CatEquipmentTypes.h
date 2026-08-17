@@ -170,3 +170,18 @@ struct FCatFishingUseOperationResult
 	UPROPERTY(BlueprintReadOnly)
 	bool bRodBroken = false;
 };
+
+USTRUCT(BlueprintType)
+struct FCatRunConsumableUseResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly) FGuid OperationId;
+	UPROPERTY(BlueprintReadOnly) ECatDomainCommandError Error = ECatDomainCommandError::InvalidPayload;
+	UPROPERTY(BlueprintReadOnly) FName DefinitionId = NAME_None;
+	UPROPERTY(BlueprintReadOnly) int32 Quantity = 0;
+	UPROPERTY(BlueprintReadOnly) int64 EquipmentRevision = 0;
+	UPROPERTY(BlueprintReadOnly) bool bReserved = false;
+	UPROPERTY(BlueprintReadOnly) bool bCommitted = false;
+	UPROPERTY(BlueprintReadOnly) bool bReleased = false;
+};

@@ -127,15 +127,15 @@ struct FCatChumVector
 	GENERATED_BODY()
 
 	/** 腥味贡献；非有限或负值无效。 */
-	UPROPERTY(BlueprintReadOnly)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly)
 	double Fishy = 0.0;
 
 	/** 香味贡献；非有限或负值无效。 */
-	UPROPERTY(BlueprintReadOnly)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly)
 	double Fragrant = 0.0;
 
 	/** 发酵味贡献；非有限或负值无效。 */
-	UPROPERTY(BlueprintReadOnly)
+	UPROPERTY(EditAnywhere, BlueprintReadOnly)
 	double Fermented = 0.0;
 
 	/** 校验共享聚鱼三轴能否作为服务器环境事实；负值、非有限值和全零均拒绝，鱼种偏好仍由数据表而非本 DTO 推导。 */
@@ -144,6 +144,43 @@ struct FCatChumVector
 		return FMath::IsFinite(Fishy) && FMath::IsFinite(Fragrant) && FMath::IsFinite(Fermented)
 			&& Fishy >= 0.0 && Fragrant >= 0.0 && Fermented >= 0.0
 			&& (Fishy > 0.0 || Fragrant > 0.0 || Fermented > 0.0);
+	}
+
+	FCatChumVector ScaledBy(const double Scale) const
+	{
+		FCatChumVector Result;
+		if (!FMath::IsFinite(Scale) || Scale < 0.0 || !FMath::IsFinite(Fishy) || !FMath::IsFinite(Fragrant)
+			|| !FMath::IsFinite(Fermented) || Fishy < 0.0 || Fragrant < 0.0 || Fermented < 0.0)
+		{
+			return Result;
+		}
+		Result.Fishy = Fishy * Scale;
+		Result.Fragrant = Fragrant * Scale;
+		Result.Fermented = Fermented * Scale;
+		if (!FMath::IsFinite(Result.Fishy) || !FMath::IsFinite(Result.Fragrant) || !FMath::IsFinite(Result.Fermented))
+		{
+			return FCatChumVector();
+		}
+		return Result;
+	}
+
+	void Accumulate(const FCatChumVector& Other)
+	{
+		if (!FMath::IsFinite(Fishy) || !FMath::IsFinite(Fragrant) || !FMath::IsFinite(Fermented)
+			|| !FMath::IsFinite(Other.Fishy) || !FMath::IsFinite(Other.Fragrant) || !FMath::IsFinite(Other.Fermented)
+			|| Other.Fishy < 0.0 || Other.Fragrant < 0.0 || Other.Fermented < 0.0)
+		{
+			return;
+		}
+		const double NewFishy = Fishy + Other.Fishy;
+		const double NewFragrant = Fragrant + Other.Fragrant;
+		const double NewFermented = Fermented + Other.Fermented;
+		if (FMath::IsFinite(NewFishy) && FMath::IsFinite(NewFragrant) && FMath::IsFinite(NewFermented))
+		{
+			Fishy = NewFishy;
+			Fragrant = NewFragrant;
+			Fermented = NewFermented;
+		}
 	}
 };
 

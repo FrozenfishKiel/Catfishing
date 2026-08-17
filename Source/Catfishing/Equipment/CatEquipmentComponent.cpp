@@ -32,7 +32,7 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	if (HasActiveFishingUse())
+	if (HasActiveFishingUse() || HasActiveRunConsumableUse())
 	{
 		Result.Error = ECatDomainCommandError::InvalidPhase;
 		Result.Revision = Snapshot.Revision;
@@ -105,6 +105,12 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantRunConsumableFromAuthority(
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
+	if (HasActiveRunConsumableUse())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPhase;
+		Result.Revision = Snapshot.Revision;
+		return Result;
+	}
 	const FString Key = MakeTerminalKey(TEXT("GrantConsumable"), RequestId);
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
@@ -142,6 +148,12 @@ FCatDomainCommandResult UCatEquipmentComponent::ConsumeRunConsumableFromAuthorit
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
+	if (HasActiveRunConsumableUse())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPhase;
+		Result.Revision = Snapshot.Revision;
+		return Result;
+	}
 	const FString Key = MakeTerminalKey(TEXT("ConsumeConsumable"), RequestId);
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
@@ -160,7 +172,8 @@ FCatDomainCommandResult UCatEquipmentComponent::ConsumeRunConsumableFromAuthorit
 	{
 		Result.Error = ECatDomainCommandError::RevisionConflict;
 	}
-	else if (Stack && Stack->Quantity <= GetPendingReservedSpecialBaitCount(DefinitionId))
+	else if (Stack && Stack->Quantity <= GetPendingReservedSpecialBaitCount(DefinitionId)
+		+ GetPendingReservedRunConsumableCount(DefinitionId))
 	{
 		Result.Error = ECatDomainCommandError::CapacityExceeded;
 	}
@@ -187,7 +200,7 @@ FCatFishingFailureResult UCatEquipmentComponent::CommitFishingFailure(const FGui
 {
 	FCatFishingFailureResult Result;
 	Result.Command.RequestId = RequestId;
-	if (HasActiveFishingUse())
+	if (HasActiveFishingUse() || HasActiveRunConsumableUse())
 	{
 		Result.Command.Error = ECatDomainCommandError::InvalidPhase;
 		Result.Command.Revision = Snapshot.Revision;
@@ -272,6 +285,10 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, bReserved,
 			bReserved ? ExistingRecord : nullptr);
 	}
+	if (HasActiveRunConsumableUse())
+	{
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false);
+	}
 
 	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
 	UCatEquipmentDefinition* Rod = Settings->FindRuntimeDefinition(RodDefinitionId);
@@ -300,7 +317,7 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false);
 	}
-	if (HasActiveFishingUse())
+	if (HasActiveFishingUse() || HasActiveRunConsumableUse())
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false);
 	}
@@ -480,13 +497,138 @@ bool UCatEquipmentComponent::IsFishingUseActive(const FGuid FishingSessionId) co
 	return FishingSessionId.IsValid() && ActiveFishingUseSessionId == FishingSessionId && Record && !Record->bReleased;
 }
 
+FCatRunConsumableUseResult UCatEquipmentComponent::BeginRunConsumableUse(const FGuid OperationId,
+	const FName DefinitionId, const int32 Quantity, const int64 ExpectedRevision)
+{
+	if (const FCatRunConsumableUseRecord* Existing = RunConsumableUseRecords.Find(OperationId))
+	{
+		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::AlreadyResolved, Existing);
+	}
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+	{
+		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::DependencyUnavailable);
+	}
+	if (!OperationId.IsValid() || DefinitionId.IsNone() || Quantity <= 0)
+	{
+		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::InvalidPayload);
+	}
+	if (Snapshot.Revision != ExpectedRevision)
+	{
+		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::RevisionConflict);
+	}
+	if (HasActiveFishingUse() || HasActiveRunConsumableUse())
+	{
+		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::InvalidPhase);
+	}
+	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(DefinitionId);
+	FCatRunConsumableStack* Stack = FindConsumable(DefinitionId);
+	if (!Definition || !Definition->bRunConsumable)
+	{
+		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::InvalidPayload);
+	}
+	if (!Stack || Stack->Quantity - GetPendingReservedSpecialBaitCount(DefinitionId) < Quantity)
+	{
+		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::CapacityExceeded);
+	}
+	FCatRunConsumableUseRecord Record;
+	Record.OperationId = OperationId;
+	Record.DefinitionId = DefinitionId;
+	Record.Quantity = Quantity;
+	Record.ReservationRevision = Snapshot.Revision;
+	Record.ResultRevision = Snapshot.Revision;
+	RunConsumableUseRecords.Add(OperationId, Record);
+	ActiveRunConsumableUseOperationId = OperationId;
+	return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::None,
+		RunConsumableUseRecords.Find(OperationId));
+}
+
+FCatRunConsumableUseResult UCatEquipmentComponent::CommitRunConsumableUse(const FGuid OperationId)
+{
+	FCatRunConsumableUseResult Result = CommitRunConsumableUseDeferred(OperationId);
+	if (Result.bCommitted)
+	{
+		PublishDeferredRunConsumableUse(OperationId);
+	}
+	return Result;
+}
+
+FCatRunConsumableUseResult UCatEquipmentComponent::CommitRunConsumableUseDeferred(const FGuid OperationId)
+{
+	FCatRunConsumableUseRecord* Record = RunConsumableUseRecords.Find(OperationId);
+	if (!Record)
+	{
+		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::NotFound);
+	}
+	if (Record->bCommitted || Record->bReleased)
+	{
+		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::AlreadyResolved, Record);
+	}
+	if (ActiveRunConsumableUseOperationId != OperationId)
+	{
+		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::InvalidPhase, Record);
+	}
+	FCatRunConsumableStack* Stack = FindConsumable(Record->DefinitionId);
+	if (!Stack || Stack->Quantity < Record->Quantity)
+	{
+		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::CapacityExceeded, Record);
+	}
+	Stack->Quantity -= Record->Quantity;
+	++Snapshot.Revision;
+	Record->ResultRevision = Snapshot.Revision;
+	Record->bCommitted = true;
+	return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::None, Record);
+}
+
+void UCatEquipmentComponent::PublishDeferredRunConsumableUse(const FGuid OperationId)
+{
+	FCatRunConsumableUseRecord* Record = RunConsumableUseRecords.Find(OperationId);
+	if (!Record || !Record->bCommitted || Record->bReleased || Record->bCommitPublished)
+	{
+		return;
+	}
+	Record->bCommitPublished = true;
+	if (ActiveRunConsumableUseOperationId == OperationId)
+	{
+		ActiveRunConsumableUseOperationId.Invalidate();
+	}
+	PublishSnapshot();
+}
+
+FCatRunConsumableUseResult UCatEquipmentComponent::ReleaseRunConsumableUse(const FGuid OperationId)
+{
+	FCatRunConsumableUseRecord* Record = RunConsumableUseRecords.Find(OperationId);
+	if (!Record)
+	{
+		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::NotFound);
+	}
+	if (Record->bCommitted || Record->bReleased)
+	{
+		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::AlreadyResolved, Record);
+	}
+	if (ActiveRunConsumableUseOperationId != OperationId)
+	{
+		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::InvalidPhase, Record);
+	}
+	Record->bReleased = true;
+	Record->ResultRevision = Record->ReservationRevision;
+	ActiveRunConsumableUseOperationId.Invalidate();
+	return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::None, Record);
+}
+
+bool UCatEquipmentComponent::HasActiveRunConsumableUse() const
+{
+	const FCatRunConsumableUseRecord* Record = RunConsumableUseRecords.Find(ActiveRunConsumableUseOperationId);
+	return ActiveRunConsumableUseOperationId.IsValid() && Record && !Record->bReleased
+		&& (!Record->bCommitted || !Record->bCommitPublished);
+}
+
 // 维修流程：验证固定营地事实、Revision、当前 Rod/浮木定义和库存；成功只扣一份浮木并恢复当前 Rod 最大耐久，不升级或替换装备。
 FCatDomainCommandResult UCatEquipmentComponent::RepairRodAtCamp(const FGuid RequestId, const int64 ExpectedRevision,
 	const bool bAtCamp)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	if (HasActiveFishingUse())
+	if (HasActiveFishingUse() || HasActiveRunConsumableUse())
 	{
 		Result.Error = ECatDomainCommandError::InvalidPhase;
 		Result.Revision = Snapshot.Revision;
@@ -578,6 +720,32 @@ int32 UCatEquipmentComponent::GetPendingReservedSpecialBaitCount(const FName Def
 		}
 	}
 	return ReservedCount;
+}
+
+int32 UCatEquipmentComponent::GetPendingReservedRunConsumableCount(const FName DefinitionId) const
+{
+	const FCatRunConsumableUseRecord* Record = RunConsumableUseRecords.Find(ActiveRunConsumableUseOperationId);
+	return Record && !Record->bCommitted && !Record->bReleased && Record->DefinitionId == DefinitionId
+		? Record->Quantity : 0;
+}
+
+FCatRunConsumableUseResult UCatEquipmentComponent::MakeRunConsumableUseResult(const FGuid OperationId,
+	const ECatDomainCommandError Error, const FCatRunConsumableUseRecord* Record) const
+{
+	FCatRunConsumableUseResult Result;
+	Result.OperationId = OperationId;
+	Result.Error = Error;
+	Result.EquipmentRevision = Snapshot.Revision;
+	if (Record)
+	{
+		Result.DefinitionId = Record->DefinitionId;
+		Result.Quantity = Record->Quantity;
+		Result.EquipmentRevision = Record->ResultRevision;
+		Result.bReserved = !Record->bCommitted && !Record->bReleased;
+		Result.bCommitted = Record->bCommitted;
+		Result.bReleased = Record->bReleased;
+	}
+	return Result;
 }
 
 FCatFishingUseReservationResult UCatEquipmentComponent::MakeFishingUseReservationResult(const FGuid FishingSessionId,

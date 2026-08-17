@@ -25,7 +25,7 @@ bool UCatEquipmentDefinition::IsRuntimeDefinitionReady() const
 	if (Kind == ECatEquipmentKind::Chum)
 	{
 		return bRunConsumable && !bSpecialBait && FMath::IsNearlyZero(MaximumRodDurability)
-			&& ChumContribution.IsValidContribution();
+			&& ChumInfluence.IsRuntimeReady();
 	}
-	return FMath::IsNearlyZero(MaximumRodDurability) && !bSpecialBait;
+	return FMath::IsNearlyZero(MaximumRodDurability) && !bSpecialBait && ChumInfluence.IsUnconfigured();
 }

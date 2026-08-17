@@ -51,6 +51,14 @@ public:
 	bool HasActiveFishingUse() const;
 	bool IsFishingUseActive(FGuid FishingSessionId) const;
 
+	FCatRunConsumableUseResult BeginRunConsumableUse(FGuid OperationId,
+		FName DefinitionId, int32 Quantity, int64 ExpectedRevision);
+	FCatRunConsumableUseResult CommitRunConsumableUse(FGuid OperationId);
+	FCatRunConsumableUseResult CommitRunConsumableUseDeferred(FGuid OperationId);
+	void PublishDeferredRunConsumableUse(FGuid OperationId);
+	FCatRunConsumableUseResult ReleaseRunConsumableUse(FGuid OperationId);
+	bool HasActiveRunConsumableUse() const;
+
 	/** 固定营地修竿点提交维修；只消费一份显式浮木并恢复到当前 Rod 定义最大耐久。 */
 	FCatDomainCommandResult RepairRodAtCamp(FGuid RequestId, int64 ExpectedRevision, bool bAtCamp);
 
@@ -74,9 +82,24 @@ private:
 		bool bReleased = false;
 	};
 
+	struct FCatRunConsumableUseRecord
+	{
+		FGuid OperationId;
+		FName DefinitionId = NAME_None;
+		int32 Quantity = 0;
+		int64 ReservationRevision = 0;
+		int64 ResultRevision = 0;
+		bool bCommitted = false;
+		bool bReleased = false;
+		bool bCommitPublished = false;
+	};
+
 	FCatFishingUseRecord* FindFishingUseRecord(FGuid FishingSessionId);
 	const FCatFishingUseRecord* FindFishingUseRecord(FGuid FishingSessionId) const;
 	int32 GetPendingReservedSpecialBaitCount(FName DefinitionId) const;
+	int32 GetPendingReservedRunConsumableCount(FName DefinitionId) const;
+	FCatRunConsumableUseResult MakeRunConsumableUseResult(FGuid OperationId,
+		ECatDomainCommandError Error, const FCatRunConsumableUseRecord* Record = nullptr) const;
 	FCatFishingUseReservationResult MakeFishingUseReservationResult(FGuid FishingSessionId,
 		ECatDomainCommandError Error, bool bReserved, const FCatFishingUseRecord* Record = nullptr) const;
 	FCatFishingUseOperationResult MakeFishingUseOperationResult(FGuid FishingSessionId,
@@ -110,4 +133,6 @@ private:
 	/** 当前 Character 生命周期内的私有 fishing reservation/tombstone；不复制也不持久化。 */
 	TMap<FGuid, FCatFishingUseRecord> FishingUseRecords;
 	FGuid ActiveFishingUseSessionId;
+	TMap<FGuid, FCatRunConsumableUseRecord> RunConsumableUseRecords;
+	FGuid ActiveRunConsumableUseOperationId;
 };
