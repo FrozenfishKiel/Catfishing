@@ -53,10 +53,26 @@ bool ACatFishEncounterActor::InitializeAuthoritativeIdentity(const FGuid InFishi
 
 const FCatFishEncounterPresentationState& ACatFishEncounterActor::GetPresentationState() const { return PresentationState; }
 
+void ACatFishEncounterActor::DeferInitialPresentationFromAuthority()
+{
+	if (HasAuthority() && !HasActorBegunPlay()) bPresentationDeferred = true;
+}
+
+void ACatFishEncounterActor::PublishInitialPresentationFromAuthority()
+{
+	if (!HasAuthority()) return;
+	bPresentationDeferred = false;
+	if (bHasPendingPresentationNotification && HasActorBegunPlay())
+	{
+		bHasPendingPresentationNotification = false;
+		DispatchPresentationChanged(PendingPreviousPresentationState, PendingCurrentPresentationState);
+	}
+}
+
 void ACatFishEncounterActor::BeginPlay()
 {
 	Super::BeginPlay();
-	if (bHasPendingPresentationNotification)
+	if (bHasPendingPresentationNotification && !bPresentationDeferred)
 	{
 		bHasPendingPresentationNotification = false;
 		DispatchPresentationChanged(PendingPreviousPresentationState, PendingCurrentPresentationState);
@@ -71,7 +87,7 @@ void ACatFishEncounterActor::OnRep_PresentationState(const FCatFishEncounterPres
 void ACatFishEncounterActor::QueueOrDispatchPresentationChanged(const FCatFishEncounterPresentationState& Previous,
 	const FCatFishEncounterPresentationState& Current)
 {
-	if (!HasActorBegunPlay())
+	if (!HasActorBegunPlay() || bPresentationDeferred)
 	{
 		if (!bHasPendingPresentationNotification)
 		{

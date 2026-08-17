@@ -353,6 +353,13 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 
 FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBait(const FGuid FishingSessionId)
 {
+	const FCatFishingUseOperationResult Result = CommitFishingBaitDeferred(FishingSessionId);
+	if (Result.bApplied) PublishDeferredFishingBait(FishingSessionId);
+	return Result;
+}
+
+FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBaitDeferred(const FGuid FishingSessionId)
+{
 	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
 	if (!Record)
 	{
@@ -376,13 +383,20 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBait(const FG
 		--Stack->Quantity;
 		++Snapshot.Revision;
 		Record->bBaitCommitted = true;
-		PublishSnapshot();
 	}
 	else
 	{
 		Record->bBaitCommitted = true;
 	}
 	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
+}
+
+void UCatEquipmentComponent::PublishDeferredFishingBait(const FGuid FishingSessionId)
+{
+	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
+	if (!Record || !Record->bBaitCommitted || Record->bBaitCommitPublished) return;
+	Record->bBaitCommitPublished = true;
+	if (Record->bSpecialBaitReserved) PublishSnapshot();
 }
 
 FCatFishingUseOperationResult UCatEquipmentComponent::SetAccumulatedFishingRodWear(const FGuid FishingSessionId,

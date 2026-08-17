@@ -4,6 +4,7 @@
 #include "Fishing/CatFishingTypes.h"
 #include "Equipment/CatEquipmentTypes.h"
 #include "StateTreeTaskBase.h"
+#include "StateTreeConditionBase.h"
 #include "CatFishingStateTreeNodes.generated.h"
 
 /** Fishing 阶段入口 Task 参数；资产节点选择公开 Phase，C++ 不保存转移表。 */
@@ -146,4 +147,40 @@ struct CATFISHING_API FCatFishingResolveRetryExhaustedTask : public FStateTreeTa
 
 	/** 进入 State 时调用 Session 唯一剪影终态写口；Collection 拒绝时返回 Failed 且会话保持可诊断。 */
 	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
+};
+
+USTRUCT(meta=(DisplayName="Cat Fishing Schedule Waiting Probe", Category="Catfishing|Fishing"))
+struct CATFISHING_API FCatFishingScheduleWaitingProbeTask : public FStateTreeTaskCommonBase
+{
+	GENERATED_BODY()
+	using FInstanceDataType = FCatFishingWaitTaskInstanceData;
+	FCatFishingScheduleWaitingProbeTask();
+	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
+	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
+};
+
+USTRUCT(meta=(DisplayName="Cat Fishing Resolve True Bite Selection", Category="Catfishing|Fishing"))
+struct CATFISHING_API FCatFishingResolveTrueBiteSelectionTask : public FStateTreeTaskCommonBase
+{
+	GENERATED_BODY()
+	using FInstanceDataType = FCatFishingWaitTaskInstanceData;
+	FCatFishingResolveTrueBiteSelectionTask();
+	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
+	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
+};
+
+USTRUCT()
+struct FCatFishingPhaseConditionInstanceData
+{
+	GENERATED_BODY()
+	UPROPERTY(EditAnywhere, Category="Parameter") ECatFishingPhase ExpectedPhase = ECatFishingPhase::Created;
+};
+
+USTRUCT(meta=(DisplayName="Cat Fishing Phase Is", Category="Catfishing|Fishing"))
+struct CATFISHING_API FCatFishingPhaseCondition : public FStateTreeConditionCommonBase
+{
+	GENERATED_BODY()
+	using FInstanceDataType = FCatFishingPhaseConditionInstanceData;
+	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
+	virtual bool TestCondition(FStateTreeExecutionContext& Context) const override;
 };

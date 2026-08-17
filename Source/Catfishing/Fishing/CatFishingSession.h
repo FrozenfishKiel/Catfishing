@@ -4,6 +4,8 @@
 #include "GameFramework/Actor.h"
 #include "Fishing/CatFishingTypes.h"
 #include "Equipment/CatEquipmentTypes.h"
+#include "Data/CatFishSelectionTypes.h"
+#include "Fishing/Integration/CatFishingCommandTypes.h"
 #include "CatFishingSession.generated.h"
 
 class ACatCharacter;
@@ -41,6 +43,10 @@ public:
 	bool StartPreparedSessionLogicFromAuthority();
 	bool PublishPreparedSessionFromAuthority();
 	void AbortPreparedSessionFromAuthority();
+	bool ScheduleWaitingProbeFromStateTree();
+	FCatFishSelectionCommitResult ResolveProbeSelectionFromStateTree();
+	FCatFishingCommandResult RequestHookFromAuthority(FGuid RequestId);
+	FCatFishingCommandResult CancelFromAuthority(FGuid RequestId);
 
 	/** StateTree EnterPhase Task 的唯一阶段写入口；NearShore 必须提供水域内服务器目标，HookedFight/NearShore 保留合法参与者，其他阶段重置为钓手，终态启动有界销毁。 */
 	FCatFishingPhaseResult EnterPhaseFromStateTree(ECatFishingPhase NewPhase,
@@ -117,6 +123,8 @@ private:
 
 	/** 在终态快照强制网络更新后设置有界 Actor lifespan；配置缺失时立即销毁以免无界泄漏。 */
 	void ScheduleTerminalDestroy();
+	void HandleProbeTimer();
+	void HandleTrueBiteWindowExpired();
 
 	/** 当前会话唯一 StateTree 组件；自动启动关闭，由 Initialize 显式设置资产。 */
 	UPROPERTY(VisibleAnywhere)
@@ -185,4 +193,12 @@ private:
 
 	/** 本会话唯一失败预算终态；重放不再次扣特殊饵或鱼竿耐久。 */
 	FCatFishingFailureResult FailureBudgetResult;
+	FCatFishingAttemptSnapshot AttemptSnapshot;
+	FCatFishSelectionContext FrozenSelectionContext;
+	FCatFishSelectionResult FrozenSelectionResult;
+	ECatFishSelectionResolution SelectionResolution = ECatFishSelectionResolution::None;
+	FTimerHandle ProbeTimerHandle;
+	FTimerHandle TrueBiteTimerHandle;
+	TMap<FGuid, FCatFishingCommandResult> HookTerminalByRequest;
+	TMap<FGuid, FCatFishingCommandResult> CancelTerminalByRequest;
 };

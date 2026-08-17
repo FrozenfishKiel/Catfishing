@@ -40,6 +40,21 @@ enum class ECatFishMotionIntent : uint8
 	None, CalmOrInward, StrugglingOutward, AutoHauling
 };
 
+UENUM(BlueprintType)
+enum class ECatFishSelectionResolution : uint8
+{
+	None, InProgress, Selected, NoEligibleFish, Failed
+};
+
+USTRUCT(BlueprintType)
+struct FCatFishSelectionCommitResult
+{
+	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly) ECatFishSelectionResolution Resolution = ECatFishSelectionResolution::None;
+	UPROPERTY(BlueprintReadOnly) FName FishDefinitionId = NAME_None;
+	UPROPERTY(BlueprintReadOnly) ECatDomainCommandError Error = ECatDomainCommandError::DependencyUnavailable;
+};
+
 class APlayerState;
 class ACatFishingRodActor;
 class ACatFishingHookActor;

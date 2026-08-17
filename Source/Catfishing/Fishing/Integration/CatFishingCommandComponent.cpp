@@ -4,6 +4,7 @@
 #include "Character/CatCharacter.h"
 #include "Environment/CatChumPlacementService.h"
 #include "Fishing/CatFishingService.h"
+#include "Fishing/CatFishingSession.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Logging/CatLog.h"
 #include "GameFramework/PlayerState.h"
@@ -252,6 +253,27 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	Result.CommandType = CommandType;
 	Result.RequestId = Edge.RequestId;
 	Result.bCommitted = false;
+	if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
+	{
+		FGuid SessionId;
+		FCatFishingSessionSnapshot Snapshot;
+		if (Fishing->TryGetActiveSessionForController(Controller, SessionId, Snapshot))
+		{
+			if (ACatFishingSession* Session = Fishing->FindSession(SessionId))
+			{
+				if (CommandType == ECatFishingCommandType::RequestHook)
+				{
+					DeliverResultFromAuthority(Session->RequestHookFromAuthority(Edge.RequestId));
+					return;
+				}
+				if (CommandType == ECatFishingCommandType::CancelFishing)
+				{
+					DeliverResultFromAuthority(Session->CancelFromAuthority(Edge.RequestId));
+					return;
+				}
+			}
+		}
+	}
 	// Stage B establishes the single command edge. Payload/session/rod resolution lands in C/D;
 	// until then every input command has an explicit terminal refusal and never fabricates success.
 	Result.Error = ECatFishingCommandError::DependencyUnavailable;

@@ -16,6 +16,8 @@ public:
 	ACatFishEncounterActor();
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	bool InitializeAuthoritativeIdentity(FGuid InFishingSessionId, FGuid InCastAttemptId, FName InFishDefinitionId, double InInitialLineLength);
+	void DeferInitialPresentationFromAuthority();
+	void PublishInitialPresentationFromAuthority();
 	const FCatFishEncounterPresentationState& GetPresentationState() const;
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category="Fishing|Fish")
 	void BP_OnFishPresentationChanged(const FCatFishEncounterPresentationState& Previous, const FCatFishEncounterPresentationState& Current);
@@ -34,6 +36,7 @@ private:
 	UPROPERTY(ReplicatedUsing=OnRep_PresentationState, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
 	FCatFishEncounterPresentationState PresentationState;
 	bool bIdentityInitialized = false;
+	bool bPresentationDeferred = false;
 	bool bHasPendingPresentationNotification = false;
 	FCatFishEncounterPresentationState PendingPreviousPresentationState;
 	FCatFishEncounterPresentationState PendingCurrentPresentationState;

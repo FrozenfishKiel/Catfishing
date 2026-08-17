@@ -107,3 +107,44 @@ EStateTreeRunStatus FCatFishingResolveRetryExhaustedTask::EnterState(FStateTreeE
 	return Session && Session->ResolveRetryExhaustedEscapeFromStateTree().bCommitted
 		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
 }
+
+FCatFishingScheduleWaitingProbeTask::FCatFishingScheduleWaitingProbeTask()
+{
+	bShouldCallTick = false;
+	bShouldCopyBoundPropertiesOnTick = false;
+	bShouldCopyBoundPropertiesOnExitState = false;
+}
+
+EStateTreeRunStatus FCatFishingScheduleWaitingProbeTask::EnterState(FStateTreeExecutionContext& Context,
+	const FStateTreeTransitionResult& Transition) const
+{
+	(void)Transition;
+	ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
+	return Session && Session->ScheduleWaitingProbeFromStateTree()
+		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
+}
+
+FCatFishingResolveTrueBiteSelectionTask::FCatFishingResolveTrueBiteSelectionTask()
+{
+	bShouldCallTick = false;
+	bShouldCopyBoundPropertiesOnTick = false;
+	bShouldCopyBoundPropertiesOnExitState = false;
+}
+
+EStateTreeRunStatus FCatFishingResolveTrueBiteSelectionTask::EnterState(FStateTreeExecutionContext& Context,
+	const FStateTreeTransitionResult& Transition) const
+{
+	(void)Transition;
+	ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
+	if (!Session) return EStateTreeRunStatus::Failed;
+	const FCatFishSelectionCommitResult Result = Session->ResolveProbeSelectionFromStateTree();
+	return Result.Resolution == ECatFishSelectionResolution::Selected
+		|| Result.Resolution == ECatFishSelectionResolution::NoEligibleFish
+		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
+}
+
+bool FCatFishingPhaseCondition::TestCondition(FStateTreeExecutionContext& Context) const
+{
+	const ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
+	return Session && Session->GetSnapshot().Phase == Context.GetInstanceData(*this).ExpectedPhase;
+}

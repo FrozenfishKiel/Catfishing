@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 
 #include "Data/CatFishDefinition.h"
+#include "Data/CatFishPersonalityDefinition.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishDefinitionDefaultsTest,
@@ -22,6 +23,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishDefinitionChumBaitValidityTest,
 	"Catfishing.Unit.Data.FishDefinition.ChumPreferenceAndBaitMultipliersMustBeValid",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishPersonalityReadinessTest,
+	"Catfishing.Unit.Data.FishDefinition.BiteAndFightPersonalitiesFailClosed",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 namespace CatFishDefinitionTest
@@ -119,6 +125,34 @@ bool FCatFishDefinitionChumBaitValidityTest::RunTest(const FString& Parameters)
 	const FCatBaitWeightMultiplier Duplicate = Bait;
 	Definition->BaitWeightMultipliers.Add(Duplicate);
 	TestFalse(TEXT("duplicate bait ids fail closed"), Definition->IsRuntimeDefinitionReady());
+	return !HasAnyErrors();
+}
+
+bool FCatFishPersonalityReadinessTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UCatBitePersonalityDefinition* Bite = NewObject<UCatBitePersonalityDefinition>(GetTransientPackage());
+	Bite->BitePersonalityId = TEXT("Nibble");
+	Bite->ProbeDurationSeconds = 0.5;
+	Bite->TrueBiteWindowSeconds = 1.0;
+	Bite->PerfectHookWindowSeconds = 0.25;
+	Bite->PerfectFishStrengthMultiplier = 0.8;
+	Bite->PerfectFishStaminaMultiplier = 0.8;
+	Bite->PerfectInitialLineLengthMultiplier = 0.9;
+	TestTrue(TEXT("complete bite personality is ready"), Bite->IsRuntimeDefinitionReady());
+	Bite->PerfectHookWindowSeconds = 2.0;
+	TestFalse(TEXT("perfect window cannot exceed response window"), Bite->IsRuntimeDefinitionReady());
+
+	UCatFightPersonalityDefinition* Fight = NewObject<UCatFightPersonalityDefinition>(GetTransientPackage());
+	Fight->FightPersonalityId = TEXT("Steady");
+	Fight->CalmDurationRangeSeconds = FVector2D(0.5, 1.0);
+	Fight->StruggleDurationRangeSeconds = FVector2D(0.25, 0.75);
+	Fight->CalmMovementSpeedCentimetersPerSecond = 50.0;
+	Fight->StruggleMovementSpeedCentimetersPerSecond = 100.0;
+	Fight->StruggleDrainMultiplier = 2.0;
+	TestTrue(TEXT("complete fight personality is ready"), Fight->IsRuntimeDefinitionReady());
+	Fight->StruggleDrainMultiplier = 0.5;
+	TestFalse(TEXT("struggle drain cannot weaken calm drain"), Fight->IsRuntimeDefinitionReady());
 	return !HasAnyErrors();
 }
 

@@ -44,6 +44,8 @@ public:
 	FCatFishingUseReservationResult BeginFishingUse(FGuid FishingSessionId, FName RodDefinitionId,
 		FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);
 	FCatFishingUseOperationResult CommitFishingBait(FGuid FishingSessionId);
+	FCatFishingUseOperationResult CommitFishingBaitDeferred(FGuid FishingSessionId);
+	void PublishDeferredFishingBait(FGuid FishingSessionId);
 	FCatFishingUseOperationResult SetAccumulatedFishingRodWear(FGuid FishingSessionId, int64 WearSequence,
 		double AbsoluteTotal);
 	FCatFishingUseOperationResult CommitFishingRodWear(FGuid FishingSessionId);
@@ -78,6 +80,7 @@ private:
 		double AbsoluteRodWear = 0.0;
 		bool bSpecialBaitReserved = false;
 		bool bBaitCommitted = false;
+		bool bBaitCommitPublished = false;
 		bool bWearCommitted = false;
 		bool bBreakCommitted = false;
 		bool bReleased = false;

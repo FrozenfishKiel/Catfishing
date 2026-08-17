@@ -37,6 +37,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Equipment.FishingUse.ActiveReservationBlocksLegacyMutationsAndProtectsReservedBait",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatEquipmentFishingUseDeferredBaitTest,
+	"Catfishing.Unit.Equipment.FishingUse.DeferredBaitCommitPublishesExactlyOnce",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
 namespace CatEquipmentFishingUseTest
 {
 	static const FName RodId(TEXT("FishingUseRod"));
@@ -60,6 +65,21 @@ namespace CatEquipmentFishingUseTest
 		if (Kind == ECatEquipmentKind::Rod)
 		{
 			Definition->MaximumRodDurability = 100.0;
+			Definition->FishingStrength = 1.0;
+			Definition->MaximumLineLengthCentimeters = 2000.0;
+			Definition->HighTensionWearMultiplier = 1.0;
+		}
+		else if (Kind == ECatEquipmentKind::Bait)
+		{
+			Definition->BiteRateMultiplier = 1.0;
+			Definition->MinimumBiteDelayMultiplier = 1.0;
+		}
+		else if (Kind == ECatEquipmentKind::Float)
+		{
+			Definition->MaximumCastDistanceCentimeters = 1500.0;
+			Definition->CastErrorStandardDeviationCentimeters = 10.0;
+			Definition->MaximumCastErrorRadiusCentimeters = 30.0;
+			Definition->BiteSignalStability = 1.0;
 		}
 		return Definition;
 	}
@@ -471,6 +491,27 @@ bool FCatEquipmentFishingUseLegacyGateTest::RunTest(const FString& Parameters)
 	const FCatFishingUseOperationResult CommitReserved = Fixture.Component->CommitFishingBait(SessionId);
 	TestTrue(TEXT("Reserved last bait can still commit once"), CommitReserved.bApplied);
 	TestEqual(TEXT("Reservation commit consumes final protected bait"), QuantityOf(Fixture.Component->GetSnapshot(), SpecialBaitId), 0);
+	Fixture.WorldWrapper.ForwardErrorMessages(this);
+	return !HasAnyErrors();
+}
+
+bool FCatEquipmentFishingUseDeferredBaitTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	using namespace CatEquipmentFishingUseTest;
+	FFishingUseFixture Fixture;
+	if (!Fixture.Create(*this) || !Fixture.ConfigureSpecial(*this)) return false;
+	const FGuid SessionId = FGuid::NewGuid();
+	Fixture.Component->BeginFishingUse(SessionId, RodId, SpecialBaitId, FloatId,
+		Fixture.Component->GetSnapshot().Revision);
+	int32 PublishCount = 0;
+	Fixture.Component->OnSnapshotChanged.AddLambda([&PublishCount]() { ++PublishCount; });
+	const FCatFishingUseOperationResult Commit = Fixture.Component->CommitFishingBaitDeferred(SessionId);
+	TestTrue(TEXT("deferred special bait commit succeeds"), Commit.bApplied);
+	TestEqual(TEXT("deferred commit has not published"), PublishCount, 0);
+	Fixture.Component->PublishDeferredFishingBait(SessionId);
+	Fixture.Component->PublishDeferredFishingBait(SessionId);
+	TestEqual(TEXT("idempotent publish emits once"), PublishCount, 1);
 	Fixture.WorldWrapper.ForwardErrorMessages(this);
 	return !HasAnyErrors();
 }

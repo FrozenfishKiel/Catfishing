@@ -8,15 +8,25 @@
 #include "AbilitySystem/CatSurvivalAttributeSet.h"
 #include "Collection/CatRunImprintService.h"
 #include "Data/CatFishDefinition.h"
+#include "Data/CatFishCatalogSettings.h"
+#include "Data/CatFishPersonalityDefinition.h"
+#include "Environment/CatChumFieldSubsystem.h"
+#include "Fishing/Actors/CatFishEncounterActor.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/CatFishingGameplayTags.h"
+#include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Components/StateTreeComponent.h"
 #include "GameFramework/PlayerState.h"
 #include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentSettings.h"
 #include "Items/CatItemsService.h"
 #include "Net/UnrealNetwork.h"
 #include "StateTree.h"
+#include "TimerManager.h"
 
 // 构造流程：创建唯一 StateTree 组件、关闭自动启动并开启 Actor 复制；阶段只在事件驱动时更新。
 ACatFishingSession::ACatFishingSession()
@@ -574,6 +584,7 @@ bool ACatFishingSession::PrepareSessionFromAuthority(const FCatFishingAttemptSna
 	Snapshot.FisherPlayerState = FisherController->PlayerState;
 	Snapshot.RodActor = Attempt.RodActor;
 	Snapshot.HookActor = HookActor;
+	AttemptSnapshot = Attempt;
 	// Fish identity remains deliberately empty until Probe/TrueBite commits selection.
 	FisherCharacter = InFisherCharacter;
 	FisherStableNetId = StableNetId;
@@ -583,6 +594,254 @@ bool ACatFishingSession::PrepareSessionFromAuthority(const FCatFishingAttemptSna
 	ItemsService = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
 	bPrepared = ItemsService.IsValid() && FisherGuardContainerId.IsValid();
 	return bPrepared;
+}
+
+bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
+{
+	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	if (!HasAuthority() || !bPrepared || IsTerminal() || !Settings
+		|| !FMath::IsFinite(Settings->BaseBiteRatePerSecond) || Settings->BaseBiteRatePerSecond <= 0.0
+		|| !FMath::IsFinite(Settings->MinimumBiteDelaySeconds) || Settings->MinimumBiteDelaySeconds < 0.0
+		|| !FMath::IsFinite(Settings->MaximumBiteDelaySeconds)
+		|| Settings->MaximumBiteDelaySeconds < Settings->MinimumBiteDelaySeconds)
+	{
+		return false;
+	}
+	if (Snapshot.Phase != ECatFishingPhase::Waiting)
+	{
+		if (!EnterPhaseFromStateTree(ECatFishingPhase::Waiting, false, FVector::ZeroVector).bApplied) return false;
+	}
+	double BiteRate = Settings->BaseBiteRatePerSecond;
+	double MinimumDelay = Settings->MinimumBiteDelaySeconds;
+	if (const UCatEquipmentDefinition* Bait = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(AttemptSnapshot.BaitDefinitionId))
+	{
+		BiteRate *= Bait->BiteRateMultiplier;
+		MinimumDelay *= Bait->MinimumBiteDelayMultiplier;
+	}
+	if (UCatChumFieldSubsystem* Chum = GetWorld()->GetSubsystem<UCatChumFieldSubsystem>())
+	{
+		const FCatChumSample Sample = Chum->SampleChumAtPoint(Snapshot.HookActor->GetActorLocation(),
+			AttemptSnapshot.WaterRegion, GetWorld()->GetTimeSeconds());
+		const double TotalChum = Sample.EffectiveChumVector.Fishy + Sample.EffectiveChumVector.Fragrant
+			+ Sample.EffectiveChumVector.Fermented;
+		if (Sample.bSucceeded && FMath::IsFinite(TotalChum) && TotalChum > 0.0)
+		{
+			BiteRate *= 1.0 + (1.0 - FMath::Exp(-TotalChum));
+		}
+	}
+	if (!FMath::IsFinite(BiteRate) || BiteRate <= 0.0 || MinimumDelay > Settings->MaximumBiteDelaySeconds) return false;
+	FRandomStream Random(static_cast<int32>(AttemptSnapshot.ServerRandomSeed));
+	const double Unit = FMath::Clamp(static_cast<double>(Random.FRand()), UE_DOUBLE_SMALL_NUMBER, 1.0 - UE_DOUBLE_SMALL_NUMBER);
+	const double PoissonDelay = -FMath::Loge(1.0 - Unit) / BiteRate;
+	const double Delay = FMath::Clamp(PoissonDelay, MinimumDelay, Settings->MaximumBiteDelaySeconds);
+	GetWorldTimerManager().SetTimer(ProbeTimerHandle, this, &ThisClass::HandleProbeTimer, Delay, false);
+	return true;
+}
+
+void ACatFishingSession::HandleProbeTimer()
+{
+	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::Waiting || !StateTreeComponent) return;
+	StateTreeComponent->SendStateTreeEvent(CatFishingGameplayTags::ProbeTriggered, FConstStructView(), TEXT("CatFishing"));
+}
+
+FCatFishSelectionCommitResult ACatFishingSession::ResolveProbeSelectionFromStateTree()
+{
+	FCatFishSelectionCommitResult Result;
+	Result.Resolution = SelectionResolution;
+	Result.FishDefinitionId = FrozenSelectionResult.FishDefinitionId;
+	if (SelectionResolution == ECatFishSelectionResolution::Selected)
+	{
+		Result.Error = ECatDomainCommandError::None;
+		return Result;
+	}
+	if (SelectionResolution == ECatFishSelectionResolution::NoEligibleFish
+		|| SelectionResolution == ECatFishSelectionResolution::Failed
+		|| SelectionResolution == ECatFishSelectionResolution::InProgress)
+	{
+		return Result;
+	}
+	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::Probe
+		|| !AttemptSnapshot.WaterRegion.IsValid() || !Snapshot.HookActor || !FisherCharacter.IsValid())
+	{
+		SelectionResolution = ECatFishSelectionResolution::Failed;
+		Result.Resolution = SelectionResolution;
+		return Result;
+	}
+	SelectionResolution = ECatFishSelectionResolution::InProgress;
+	UWorld* World = GetWorld();
+	UCatChumFieldSubsystem* Chum = World ? World->GetSubsystem<UCatChumFieldSubsystem>() : nullptr;
+	const ACatfishingGameState* GameState = World ? World->GetGameState<ACatfishingGameState>() : nullptr;
+	UCatFishingService* Service = World ? World->GetSubsystem<UCatFishingService>() : nullptr;
+	UCatEquipmentComponent* Equipment = FisherCharacter->GetEquipmentComponent();
+	if (!Chum || !GameState || !Service || !Equipment)
+	{
+		SelectionResolution = ECatFishSelectionResolution::Failed;
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Selection dependency unavailable"));
+		Result.Resolution = SelectionResolution;
+		return Result;
+	}
+	int32 PlayerCount = 0;
+	double FishingStrength = 0.0;
+	double FightStamina = 0.0;
+	Service->BuildFightCapabilitySnapshot(PlayerCount, FishingStrength, FightStamina);
+	FrozenSelectionContext = FCatFishSelectionContext{};
+	FrozenSelectionContext.WaterRegion = AttemptSnapshot.WaterRegion;
+	FrozenSelectionContext.ChumSample = Chum->SampleChumAtPoint(Snapshot.HookActor->GetActorLocation(),
+		AttemptSnapshot.WaterRegion, World->GetTimeSeconds());
+	FrozenSelectionContext.TimeOfDay = GameState->GetRunPublicState().Environment.TimeOfDay;
+	FrozenSelectionContext.Weather = GameState->GetRunPublicState().Environment.Weather;
+	FrozenSelectionContext.BaitDefinitionId = AttemptSnapshot.BaitDefinitionId;
+	FrozenSelectionContext.ActivePlayerCount = PlayerCount;
+	FrozenSelectionContext.CombinedFishingStrength = FishingStrength;
+	FrozenSelectionContext.CombinedFightStamina = FightStamina;
+	FrozenSelectionContext.RandomSeed = static_cast<int32>(AttemptSnapshot.ServerRandomSeed);
+	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
+	FrozenSelectionResult = Catalog->SelectRuntimeDefinition(FrozenSelectionContext);
+	UCatFishDefinition* SelectedDefinition = FrozenSelectionResult.bSelected
+		? Catalog->FindRuntimeDefinition(FrozenSelectionResult.FishDefinitionId) : nullptr;
+	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	const UCatBitePersonalityDefinition* Bite = SelectedDefinition && Settings
+		? Settings->FindBitePersonality(SelectedDefinition->BitePersonalityId) : nullptr;
+	const UCatFightPersonalityDefinition* Fight = SelectedDefinition && Settings
+		? Settings->FindFightPersonality(SelectedDefinition->FightPersonalityId) : nullptr;
+	if (!SelectedDefinition || !Bite || !Fight)
+	{
+		SelectionResolution = ECatFishSelectionResolution::NoEligibleFish;
+		Equipment->ReleaseFishingUse(Snapshot.FishingSessionId);
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::EmptyHook, TEXT("No eligible fish"));
+		Result.Resolution = SelectionResolution;
+		Result.Error = ECatDomainCommandError::None;
+		return Result;
+	}
+	const UCatFishingPresentationSettings* Presentation = GetDefault<UCatFishingPresentationSettings>();
+	UClass* FishClass = Presentation ? Presentation->FishEncounterActorClass.LoadSynchronous() : nullptr;
+	const FVector FishLocation = Snapshot.HookActor->GetActorLocation();
+	ACatFishEncounterActor* Encounter = FishClass && FishClass->IsChildOf(ACatFishEncounterActor::StaticClass())
+		? World->SpawnActorDeferred<ACatFishEncounterActor>(FishClass, FTransform(FishLocation), this,
+			FisherCharacter.Get(), ESpawnActorCollisionHandlingMethod::AlwaysSpawn) : nullptr;
+	const double InitialLineLength = AttemptSnapshot.RodActor
+		? FVector::Distance(AttemptSnapshot.RodActor->GetRodTipWorldTransform().GetLocation(), FishLocation) : 0.0;
+	if (!Encounter)
+	{
+		SelectionResolution = ECatFishSelectionResolution::Failed;
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Fish presentation unavailable"));
+		Result.Resolution = SelectionResolution;
+		return Result;
+	}
+	Encounter->DeferInitialPresentationFromAuthority();
+	if (!Encounter->InitializeAuthoritativeIdentity(Snapshot.FishingSessionId, Snapshot.CastAttemptId,
+		SelectedDefinition->FishDefinitionId, InitialLineLength))
+	{
+		Encounter->Destroy();
+		SelectionResolution = ECatFishSelectionResolution::Failed;
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Fish identity failed"));
+		Result.Resolution = SelectionResolution;
+		return Result;
+	}
+	Encounter->FinishSpawning(FTransform(FishLocation));
+	const FCatFishEncounterPresentationState& EncounterState = Encounter->GetPresentationState();
+	if (!IsValid(Encounter) || EncounterState.FishingSessionId != Snapshot.FishingSessionId
+		|| EncounterState.CastAttemptId != Snapshot.CastAttemptId
+		|| EncounterState.FishDefinitionId != SelectedDefinition->FishDefinitionId
+		|| !Encounter->GetActorLocation().Equals(FishLocation, 1.0))
+	{
+		if (IsValid(Encounter)) Encounter->Destroy();
+		SelectionResolution = ECatFishSelectionResolution::Failed;
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Fish construction changed authority state"));
+		Result.Resolution = SelectionResolution;
+		return Result;
+	}
+	const FCatFishingUseOperationResult BaitCommit = Equipment->CommitFishingBaitDeferred(Snapshot.FishingSessionId);
+	if (!BaitCommit.bApplied)
+	{
+		Encounter->Destroy();
+		SelectionResolution = ECatFishSelectionResolution::Failed;
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Bait commit failed"));
+		Result.Resolution = SelectionResolution;
+		return Result;
+	}
+	FishDefinition = SelectedDefinition;
+	FishWeightKilograms = FrozenSelectionResult.WeightKilograms;
+	Snapshot.FishDefinitionId = SelectedDefinition->FishDefinitionId;
+	Snapshot.bGiant = SelectedDefinition->BodyClass == ECatFishBodyClass::Giant;
+	Snapshot.FishFightStaminaRemaining = SelectedDefinition->FishFightStamina;
+	Snapshot.NormalizedFishStamina = 1.0;
+	Snapshot.FishEncounterActor = Encounter;
+	Snapshot.Phase = ECatFishingPhase::TrueBiteWindow;
+	Snapshot.PhaseStartedServerTime = World->GetTimeSeconds();
+	Snapshot.WindowEndsServerTime = Snapshot.PhaseStartedServerTime + Bite->TrueBiteWindowSeconds;
+	SelectionResolution = ECatFishSelectionResolution::Selected;
+	Equipment->PublishDeferredFishingBait(Snapshot.FishingSessionId);
+	Encounter->PublishInitialPresentationFromAuthority();
+	PublishSnapshot(ECatFishingSnapshotMutation::PhaseChange);
+	GetWorldTimerManager().SetTimer(TrueBiteTimerHandle, this, &ThisClass::HandleTrueBiteWindowExpired,
+		Bite->TrueBiteWindowSeconds, false);
+	Result.Resolution = SelectionResolution;
+	Result.FishDefinitionId = SelectedDefinition->FishDefinitionId;
+	Result.Error = ECatDomainCommandError::None;
+	return Result;
+}
+
+void ACatFishingSession::HandleTrueBiteWindowExpired()
+{
+	if (HasAuthority() && !IsTerminal() && Snapshot.Phase == ECatFishingPhase::TrueBiteWindow)
+	{
+		if (StateTreeComponent) StateTreeComponent->SendStateTreeEvent(CatFishingGameplayTags::WindowExpired,
+			FConstStructView(), TEXT("CatFishing"));
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::HookWindowExpired, TEXT("True bite window expired"));
+	}
+}
+
+FCatFishingCommandResult ACatFishingSession::RequestHookFromAuthority(const FGuid RequestId)
+{
+	if (const FCatFishingCommandResult* Cached = HookTerminalByRequest.Find(RequestId)) return *Cached;
+	FCatFishingCommandResult Result;
+	Result.CommandType = ECatFishingCommandType::RequestHook;
+	Result.RequestId = RequestId;
+	Result.FishingSessionId = Snapshot.FishingSessionId;
+	Result.CastAttemptId = Snapshot.CastAttemptId;
+	if (!RequestId.IsValid() || !HasAuthority() || IsTerminal()) Result.Error = ECatFishingCommandError::InvalidPayload;
+	else if (Snapshot.Phase == ECatFishingPhase::Waiting || Snapshot.Phase == ECatFishingPhase::Probe)
+	{
+		if (StateTreeComponent) StateTreeComponent->SendStateTreeEvent(CatFishingGameplayTags::EarlyHook,
+			FConstStructView(), TEXT("CatFishing"));
+		Result.bCommitted = true;
+		Result.Error = ECatFishingCommandError::None;
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::EmptyHook, TEXT("Early hook"));
+	}
+	else if (Snapshot.Phase == ECatFishingPhase::TrueBiteWindow && SelectionResolution == ECatFishSelectionResolution::Selected)
+	{
+		GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
+		if (StateTreeComponent) StateTreeComponent->SendStateTreeEvent(CatFishingGameplayTags::HookAccepted,
+			FConstStructView(), TEXT("CatFishing"));
+		Result.bCommitted = EnterPhaseFromStateTree(ECatFishingPhase::HookedFight, false, FVector::ZeroVector).bApplied;
+		Result.Error = Result.bCommitted ? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;
+	}
+	else Result.Error = ECatFishingCommandError::InvalidPhase;
+	Result.Revision = Snapshot.Revision;
+	HookTerminalByRequest.Add(RequestId, Result);
+	return Result;
+}
+
+FCatFishingCommandResult ACatFishingSession::CancelFromAuthority(const FGuid RequestId)
+{
+	if (const FCatFishingCommandResult* Cached = CancelTerminalByRequest.Find(RequestId)) return *Cached;
+	FCatFishingCommandResult Result;
+	Result.CommandType = ECatFishingCommandType::CancelFishing;
+	Result.RequestId = RequestId;
+	Result.FishingSessionId = Snapshot.FishingSessionId;
+	if (RequestId.IsValid() && HasAuthority() && !IsTerminal())
+	{
+		if (StateTreeComponent) StateTreeComponent->SendStateTreeEvent(CatFishingGameplayTags::Interrupted,
+			FConstStructView(), TEXT("CatFishing"));
+		Result.bCommitted = true;
+		Result.Error = ECatFishingCommandError::None;
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Cancelled, TEXT("Cancelled"));
+	}
+	else Result.Error = ECatFishingCommandError::InvalidPhase;
+	Result.Revision = Snapshot.Revision;
+	CancelTerminalByRequest.Add(RequestId, Result);
+	return Result;
 }
 
 bool ACatFishingSession::StartPreparedSessionLogicFromAuthority()
@@ -631,6 +890,15 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	Snapshot.Outcome = FinalOutcome;
 	Snapshot.PhaseStartedServerTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
 	PublishSnapshot(ECatFishingSnapshotMutation::PhaseChange);
+	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
+	GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
+	if (FisherCharacter.IsValid())
+	{
+		if (UCatEquipmentComponent* Equipment = FisherCharacter->GetEquipmentComponent())
+		{
+			Equipment->ReleaseFishingUse(Snapshot.FishingSessionId);
+		}
+	}
 	if (StateTreeComponent && StateTreeComponent->IsRunning())
 	{
 		StateTreeComponent->StopLogic(FString(DiagnosticReason));
@@ -700,6 +968,8 @@ bool ACatFishingSession::IsTerminal() const
 // World 清理流程：停止仍在运行的 StateTree，并为仍可达参与者登记/应用 stamina 恢复后清私有弱引用；不补发捕获事务。
 void ACatFishingSession::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
+	GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
 	if (StateTreeComponent && StateTreeComponent->IsRunning())
 	{
 		StateTreeComponent->StopLogic(TEXT("FishingSession EndPlay"));

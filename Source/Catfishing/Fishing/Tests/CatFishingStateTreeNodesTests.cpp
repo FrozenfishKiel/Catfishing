@@ -42,6 +42,14 @@ bool FCatFishingStateTreeNodesDefaultsTest::RunTest(const FString& Parameters)
 	const FCatFishingResolveRetryExhaustedTask RetryExhaustedTask;
 	TestTrue(TEXT("重试耗尽节点复用无参数结构"),
 		RetryExhaustedTask.GetInstanceDataType() == FCatFishingWaitTaskInstanceData::StaticStruct());
+	const FCatFishingScheduleWaitingProbeTask ScheduleProbeTask;
+	const FCatFishingResolveTrueBiteSelectionTask ResolveSelectionTask;
+	TestTrue(TEXT("waiting scheduler exposes no data overrides"),
+		ScheduleProbeTask.GetInstanceDataType() == FCatFishingWaitTaskInstanceData::StaticStruct());
+	TestTrue(TEXT("true-bite selection exposes no data overrides"),
+		ResolveSelectionTask.GetInstanceDataType() == FCatFishingWaitTaskInstanceData::StaticStruct());
+	TestEqual(TEXT("true-bite task data has no reflected fields"),
+		FCatFishingWaitTaskInstanceData::StaticStruct()->PropertyLink, static_cast<FProperty*>(nullptr));
 	return !HasAnyErrors();
 }
 

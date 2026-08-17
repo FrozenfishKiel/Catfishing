@@ -1,5 +1,7 @@
 #include "Fishing/CatFishingSettings.h"
 
+#include "Data/CatFishPersonalityDefinition.h"
+
 // 运行 gate 流程：要求产品显式开启总开关、提供 StateTree 软引用、有限正响应窗/终态复制窗与近岸验证；任一为 Unset 都阻止会话创建。
 bool UCatFishingSettings::IsRuntimeReady() const
 {
@@ -8,6 +10,38 @@ bool UCatFishingSettings::IsRuntimeReady() const
 		&& bEnableNearShoreValidation
 		&& FMath::IsFinite(ScoopReachCentimeters) && ScoopReachCentimeters > 0.0
 		&& FMath::IsFinite(TerminalReplicationWindowSeconds) && TerminalReplicationWindowSeconds > 0.0;
+}
+
+const UCatBitePersonalityDefinition* UCatFishingSettings::FindBitePersonality(const FName PersonalityId) const
+{
+	if (PersonalityId.IsNone()) return nullptr;
+	const UCatBitePersonalityDefinition* Match = nullptr;
+	for (const TSoftObjectPtr<UCatBitePersonalityDefinition>& Entry : BitePersonalities)
+	{
+		const UCatBitePersonalityDefinition* Candidate = Entry.LoadSynchronous();
+		if (Candidate && Candidate->BitePersonalityId == PersonalityId && Candidate->IsRuntimeDefinitionReady())
+		{
+			if (Match) return nullptr;
+			Match = Candidate;
+		}
+	}
+	return Match;
+}
+
+const UCatFightPersonalityDefinition* UCatFishingSettings::FindFightPersonality(const FName PersonalityId) const
+{
+	if (PersonalityId.IsNone()) return nullptr;
+	const UCatFightPersonalityDefinition* Match = nullptr;
+	for (const TSoftObjectPtr<UCatFightPersonalityDefinition>& Entry : FightPersonalities)
+	{
+		const UCatFightPersonalityDefinition* Candidate = Entry.LoadSynchronous();
+		if (Candidate && Candidate->FightPersonalityId == PersonalityId && Candidate->IsRuntimeDefinitionReady())
+		{
+			if (Match) return nullptr;
+			Match = Candidate;
+		}
+	}
+	return Match;
 }
 
 // 抢抄距离读取流程：先清输出，再复用完整 runtime gate 并读取有限正厘米值；调用方只能比较服务器 Character 与 StateTree 提供的权威目标。
