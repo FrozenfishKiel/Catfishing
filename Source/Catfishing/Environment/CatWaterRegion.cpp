@@ -147,30 +147,6 @@ const FBox2D& ACatWaterRegion::GetBakedBoundsForQuery() const
 	return BakedGeometry.Bounds2D;
 }
 
-bool ACatWaterRegion::IsRuntimeConfigured() const
-{
-	return HasValidBakedGeometry();
-}
-
-bool ACatWaterRegion::ContainsWorldPoint(const FVector& WorldPoint) const
-{
-	if (!HasValidBakedGeometry()) return false;
-	const FCatWaterSpatialResult Result = FCatWaterGeometry::QueryPoint(BakedGeometry, WorldPoint, BakedGeometry.BankHeightToleranceCm);
-	return Result.bSucceeded && Result.Containment != ECatWaterContainment::Outside;
-}
-
-FCatWaterRegionSnapshot ACatWaterRegion::MakeSnapshot() const
-{
-	FCatWaterRegionSnapshot Snapshot;
-	if (!HasValidBakedGeometry()) return Snapshot;
-	Snapshot.RegionId = BakedGeometry.Handle.RegionId;
-	Snapshot.GeometryRevision = BakedGeometry.Handle.GeometryRevision;
-	Snapshot.AggregationRevision = AggregationRevision;
-	CatWaterRegionPrivate::ComputeWorldBounds(BakedGeometry, Snapshot.WorldCenter, Snapshot.HalfExtent);
-	Snapshot.ChumPool = ChumPool;
-	return Snapshot;
-}
-
 void ACatWaterRegion::BeginPlay()
 {
 	Super::BeginPlay();
@@ -346,39 +322,3 @@ void ACatWaterRegion::PostEditMove(const bool bFinished)
 	if (bFinished) InvalidateBakedGeometry();
 }
 #endif
-
-FCatAggregationResult ACatWaterRegion::ContributeAggregation(const FCatAggregationCommand& Command)
-{
-	FCatAggregationResult Result;
-	Result.Command.RequestId = Command.Context.RequestId;
-	const FString CacheKey = FString::Printf(TEXT("%s|%s"), *Command.Context.StableNetId,
-		*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
-	if (const FCatAggregationResult* Cached = AggregationTerminalCache.Find(CacheKey))
-	{
-		Result = *Cached; Result.Command.bCommitted = false; Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
-		return Result;
-	}
-	Result.Command.Error = ValidateAggregation(Command);
-	if (Result.Command.Error == ECatDomainCommandError::None)
-	{
-		ChumPool.Fishy += Command.Contribution.Fishy; ChumPool.Fragrant += Command.Contribution.Fragrant;
-		ChumPool.Fermented += Command.Contribution.Fermented; ++AggregationRevision;
-		Result.Command.bCommitted = true;
-	}
-	Result.AggregationRevision = AggregationRevision; Result.Command.Revision = AggregationRevision; Result.ChumPool = ChumPool;
-	AggregationTerminalCache.Add(CacheKey, Result);
-	return Result;
-}
-
-ECatDomainCommandError ACatWaterRegion::ValidateAggregation(const FCatAggregationCommand& Command) const
-{
-	const double ExistingTotal = ChumPool.Fishy + ChumPool.Fragrant + ChumPool.Fermented;
-	const double AddedTotal = Command.Contribution.Fishy + Command.Contribution.Fragrant + Command.Contribution.Fermented;
-	if (!HasAuthority() || !bEnableAggregation || !FMath::IsFinite(AggregationBudget) || AggregationBudget <= 0.0)
-		return ECatDomainCommandError::PolicyUndecided;
-	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
-		|| Command.RegionId != RegionId || !Command.Contribution.IsValidContribution()) return ECatDomainCommandError::InvalidPayload;
-	if (Command.ExpectedAggregationRevision != AggregationRevision) return ECatDomainCommandError::RevisionConflict;
-	return !FMath::IsFinite(ExistingTotal + AddedTotal) || ExistingTotal + AddedTotal > AggregationBudget
-		? ECatDomainCommandError::CapacityExceeded : ECatDomainCommandError::None;
-}

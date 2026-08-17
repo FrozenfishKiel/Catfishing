@@ -28,7 +28,25 @@ namespace CatEquipmentConsumableUseTest
 		{
 			Definition->LoadoutSlotId = *FString::Printf(TEXT("%sSlot"), *Id.ToString());
 		}
-		if (Kind == ECatEquipmentKind::Rod) Definition->MaximumRodDurability = 100.0;
+		if (Kind == ECatEquipmentKind::Rod)
+		{
+			Definition->MaximumRodDurability = 100.0;
+			Definition->FishingStrength = 1.0;
+			Definition->MaximumLineLengthCentimeters = 2000.0;
+			Definition->HighTensionWearMultiplier = 1.0;
+		}
+		if (Kind == ECatEquipmentKind::Bait)
+		{
+			Definition->BiteRateMultiplier = 1.0;
+			Definition->MinimumBiteDelayMultiplier = 1.0;
+		}
+		if (Kind == ECatEquipmentKind::Float)
+		{
+			Definition->MaximumCastDistanceCentimeters = 1500.0;
+			Definition->CastErrorStandardDeviationCentimeters = 10.0;
+			Definition->MaximumCastErrorRadiusCentimeters = 30.0;
+			Definition->BiteSignalStability = 1.0;
+		}
 		if (Kind == ECatEquipmentKind::Herb) Definition->bRunConsumable = true;
 		return Definition;
 	}

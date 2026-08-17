@@ -250,26 +250,3 @@ struct FCatScoopResult
 	UPROPERTY(BlueprintReadOnly)
 	FCatCaptureCommittedResult Capture;
 };
-
-/** FishingService 建立会话的同步结果；成功只表示 StateTree 已启动，不表示已经咬钩或捕获。 */
-USTRUCT(BlueprintType)
-struct FCatFishingStartResult
-{
-	GENERATED_BODY()
-
-	/** 与开始意图一致的 RequestId；相同服务器身份重试会重放包含同一会话 ID 的首次结果。 */
-	UPROPERTY(BlueprintReadOnly)
-	FGuid RequestId;
-
-	/** 会话是否成功创建并启动唯一 StateTree。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bStarted = false;
-
-	/** 新会话 ID；失败保持无效。 */
-	UPROPERTY(BlueprintReadOnly)
-	FGuid FishingSessionId;
-
-	/** 启动失败原因。 */
-	UPROPERTY(BlueprintReadOnly)
-	ECatDomainCommandError Error = ECatDomainCommandError::DependencyUnavailable;
-};

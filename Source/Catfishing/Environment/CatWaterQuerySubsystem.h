@@ -24,9 +24,6 @@ public:
 		const FCatWaterRegionHandle& ExpectedHandle) const;
 	ECatWaterQueryError FindRegionById(FName RegionId, FCatWaterRegionHandle& OutHandle) const;
 
-	// Temporary compatibility wrapper for legacy callers.
-	FCatWaterQueryResult QueryWaterRegion(const FCatWaterQuery& Query) const;
-
 private:
 	friend class ACatWaterRegion;
 

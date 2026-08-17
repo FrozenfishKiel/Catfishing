@@ -27,14 +27,6 @@ public:
 	FCatWaterRegionHandle GetWaterRegionHandle() const;
 	const FBox2D& GetBakedBoundsForQuery() const;
 
-	// Temporary compatibility wrappers. They read only the authoritative baked cache.
-	bool IsRuntimeConfigured() const;
-	bool ContainsWorldPoint(const FVector& WorldPoint) const;
-	FCatWaterRegionSnapshot MakeSnapshot() const;
-
-	FCatAggregationResult ContributeAggregation(const FCatAggregationCommand& Command);
-	ECatDomainCommandError ValidateAggregation(const FCatAggregationCommand& Command) const;
-
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Authoring")
 	FName RegionId = NAME_None;
 
@@ -67,22 +59,6 @@ public:
 
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Presentation")
 	TSoftClassPtr<ACatWaterRegionPresentationActor> WaterPresentationClass;
-
-	// Deprecated compatibility fields retained until the legacy consumers migrate.
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Prototype", meta = (DeprecatedProperty))
-	bool bEnablePrototypeBounds = false;
-
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Prototype", meta = (DeprecatedProperty))
-	FVector LocalCenterOffset = FVector::ZeroVector;
-
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Prototype", meta = (DeprecatedProperty))
-	FVector HalfExtent = FVector::ZeroVector;
-
-	UPROPERTY(EditInstanceOnly, Category = "Water|Aggregation")
-	bool bEnableAggregation = false;
-
-	UPROPERTY(EditInstanceOnly, Category = "Water|Aggregation", meta = (ClampMin = "0"))
-	double AggregationBudget = 0.0;
 
 #if WITH_EDITOR
 	UFUNCTION(CallInEditor, Category = "Water|Authoring")
@@ -123,12 +99,6 @@ private:
 
 	UPROPERTY(Transient)
 	TObjectPtr<ACatWaterRegionPresentationActor> SpawnedPresentation;
-
-	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Water|Aggregation", meta = (AllowPrivateAccess = "true"))
-	int64 AggregationRevision = 1;
-
-	FCatChumVector ChumPool;
-	TMap<FString, FCatAggregationResult> AggregationTerminalCache;
 
 #if WITH_EDITOR
 	bool BuildCurrentGeometryInput(FCatWaterGeometryBuildInput& OutInput, TArray<FString>& OutErrors) const;

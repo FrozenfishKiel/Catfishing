@@ -33,13 +33,6 @@ bool FCatFishingServiceFailClosedTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	const FGuid StartRequestId = FGuid::NewGuid();
-	const FCatFishingStartResult StartResult = Fishing->StartFishingSession(nullptr, StartRequestId);
-	TestFalse(TEXT("缺少 Controller 身份时不会启动会话"), StartResult.bStarted);
-	TestEqual(TEXT("缺少身份返回 InvalidIdentity"), StartResult.Error, ECatDomainCommandError::InvalidIdentity);
-	TestEqual(TEXT("开始结果保留原 RequestId"), StartResult.RequestId, StartRequestId);
-	TestFalse(TEXT("失败开始不伪造 SessionId"), StartResult.FishingSessionId.IsValid());
-
 	const FGuid AssistRequestId = FGuid::NewGuid();
 	const FCatDomainCommandResult AssistResult = Fishing->SubmitFightAssist(
 		FGuid::NewGuid(), nullptr, AssistRequestId, 1);
@@ -57,8 +50,6 @@ bool FCatFishingServiceFailClosedTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("抢抄拒绝保留 RequestId"), ScoopResult.Command.RequestId, ScoopCommand.Context.RequestId);
 
 	Fishing->CloseCommandsAndTerminateAll();
-	const FCatFishingStartResult ClosedResult = Fishing->StartFishingSession(nullptr, FGuid::NewGuid());
-	TestFalse(TEXT("关门后缺身份请求仍不启动会话"), ClosedResult.bStarted);
 	return !HasAnyErrors();
 }
 

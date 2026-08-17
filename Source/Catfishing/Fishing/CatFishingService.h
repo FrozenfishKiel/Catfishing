@@ -26,7 +26,6 @@ public:
 	virtual void Deinitialize() override;
 
 	/** 从当前 Run/Environment、水域和统一参战能力快照抽取鱼种与重量，并为该身份建立唯一 StateTree 会话；巨鱼成功后才附带广播可选 Social 提示。 */
-	FCatFishingStartResult StartFishingSession(AController* FisherController, FGuid RequestId);
 	FCatBeginCastResult BeginCast(AController* FisherController, const FCatBeginCastCommand& Command);
 	FCatFishingCommandResult PlaceRod(AController* Controller, const FCatPlaceRodCommand& Command);
 	FCatFishingCommandResult OperateRod(AController* Controller, const FCatOperateRodCommand& Command);
@@ -98,7 +97,6 @@ private:
 	TMap<FString, FGuid> ActiveSessionByFisher;
 
 	/** 身份+开始操作+RequestId 到首次同步结果；成功重试复用原 SessionId，失败重试不重新抽鱼。 */
-	TMap<FString, FCatFishingStartResult> StartTerminalCache;
 	TMap<FString, FCatBeginCastResult> BeginCastTerminalCache;
 	TSet<FString> BeginCastInProgress;
 

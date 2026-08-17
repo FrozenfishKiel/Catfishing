@@ -18,11 +18,6 @@ public:
 	/** 按稳定 ID 查找完整且启用的鱼定义；重复 ID 或加载失败返回空。 */
 	UCatFishDefinition* FindRuntimeDefinition(FName FishDefinitionId) const;
 
-	/** 按环境与权威协作人数/总力量/总体力筛选可达鱼种，再用数据权重确定性抽取并返回服务器重量。 */
-	UCatFishDefinition* SelectRuntimeDefinition(FName RegionId, ECatEnvironmentTimeOfDay TimeOfDay,
-		ECatEnvironmentWeather Weather, int32 ActivePlayerCount, double CombinedFishingStrength,
-		double CombinedFightStamina, int32 RandomSeed, double& OutWeightKilograms) const;
-
 	FCatFishSelectionResult SelectRuntimeDefinition(const FCatFishSelectionContext& Context) const;
 
 	/** 正式 FishDefinition 软引用清单；默认空使 Fishing fail-closed，不扫描旧鱼种文档或测试资产。 */

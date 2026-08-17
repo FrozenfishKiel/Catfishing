@@ -27,16 +27,16 @@ ECatEnvironmentTimeOfDay UCatEnvironmentSettings::ResolveTimeOfDay(const FCatRun
 }
 
 // 自然聚鱼读取流程：先清输出，再要求 Environment 总配置、公共事件、目标区域和合法三轴同时存在；成功只复制数据，不寻找 Actor 或写 WaterRegion。
-bool UCatEnvironmentSettings::TryGetNaturalAggregation(FName& OutRegionId, FCatChumVector& OutContribution) const
+bool UCatEnvironmentSettings::TryGetNaturalChumField(FName& OutChumDefinitionId, FName& OutAnchorId) const
 {
-	OutRegionId = NAME_None;
-	OutContribution = FCatChumVector();
-	if (!IsRuntimeReady() || ActiveEventId.IsNone() || NaturalAggregationRegionId.IsNone()
-		|| !NaturalAggregationContribution.IsValidContribution())
+	OutChumDefinitionId = NAME_None;
+	OutAnchorId = NAME_None;
+	if (!IsRuntimeReady() || ActiveEventId.IsNone() || NaturalChumDefinitionId.IsNone()
+		|| NaturalChumAnchorId.IsNone())
 	{
 		return false;
 	}
-	OutRegionId = NaturalAggregationRegionId;
-	OutContribution = NaturalAggregationContribution;
+	OutChumDefinitionId = NaturalChumDefinitionId;
+	OutAnchorId = NaturalChumAnchorId;
 	return true;
 }

@@ -20,7 +20,7 @@ public:
 	ECatEnvironmentTimeOfDay ResolveTimeOfDay(const FCatRunPhaseSnapshot& RunSnapshot, double ServerNowSeconds) const;
 
 	/** 读取当前公共自然事件对共享 WaterRegion 的显式聚鱼输入；任一事件、区域或三轴 Unset 都返回 false。 */
-	bool TryGetNaturalAggregation(FName& OutRegionId, FCatChumVector& OutContribution) const;
+	bool TryGetNaturalChumField(FName& OutChumDefinitionId, FName& OutAnchorId) const;
 
 	/** 正式环境运行 gate；默认关闭，配置提供者保持 Unknown 并拒绝发布伪造天气。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
@@ -42,11 +42,11 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Event")
 	FName ActiveEventId = NAME_None;
 
-	/** 当前自然事件提交聚鱼机制的目标 WaterRegion；None 表示事件只做表现，不触发聚鱼。 */
+	/** 自然事件使用的唯一 ready ChumDefinition；None 表示不创建空间窝点。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Event")
-	FName NaturalAggregationRegionId = NAME_None;
+	FName NaturalChumDefinitionId = NAME_None;
 
-	/** 当前自然事件写入共享 ChumPool 的三轴增量；默认全零，不产生自然聚鱼。 */
+	/** 自然事件落点的唯一 ChumFieldAnchor；锚点冻结 exact WaterHandle 与世界位置。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Event")
-	FCatChumVector NaturalAggregationContribution;
+	FName NaturalChumAnchorId = NAME_None;
 };

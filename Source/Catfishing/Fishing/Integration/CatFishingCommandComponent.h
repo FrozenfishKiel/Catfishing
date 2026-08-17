@@ -62,7 +62,6 @@ public:
 	FCatFishingInputEdge SubmitScoop();
 	FCatFishingInputEdge SubmitChum();
 	void ForwardLegacyAssist(FGuid FishingSessionId, FGuid RequestId, int64 ExpectedRevision);
-	void ForwardLegacyStart(FGuid RequestId);
 	void ForwardLegacyScoop(FGuid FishingSessionId, FCatScoopCommand Command);
 
 	UPROPERTY(BlueprintAssignable)

@@ -17,6 +17,7 @@
 
 class UStateTreeComponent;
 class UCatFishingCommandComponent;
+class UCatChumFieldReplicationComponent;
 class UCatAbilitySystemComponent;
 class UEnhancedInputLocalPlayerSubsystem;
 class UEnhancedInputComponent;
@@ -149,7 +150,7 @@ private:
 	/** 把当前 Run Revision 的只读 DTO交给 Environment，并将同一组合快照发布到 GameState。 */
 	bool RefreshEnvironmentAndPublish();
 	/** 当前环境事件首次出现时把显式自然输入提交给唯一 WaterRegion；成功键按 Day+Event 去重，失败保留重试机会。 */
-	void SubmitNaturalAggregationIfConfigured();
+	void SubmitNaturalChumFieldIfConfigured();
 	/** 只向正在运行的 StateTree 发送稳定 GameplayTag；本方法不包含 Phase 转移表。 */
 	bool SendRunStateTreeEvent(FGameplayTag EventTag, ECatRunTransitionReason Reason);
 	/** 启动 gate 失败时保持 NotStarted、关闭写口并发布 StartupFailed，不回退为 C++ 状态机。 */
@@ -194,8 +195,8 @@ private:
 	FTimerHandle DayDeadlineTimerHandle;
 	/** Host teardown 完成通知；它不复制且只在服务器 GameMode 生命周期内有效。 */
 	FCatRunTeardownCompleted RunTeardownCompleted;
-	/** 已成功提交自然聚鱼的 Day+Event 键；只活在本 GameMode，防止同一环境刷新重复消耗共享预算。 */
-	TSet<FString> SubmittedNaturalAggregationKeys;
+	/** 已成功发布自然空间窝点的 Day+Event 键；只活在本 GameMode，防止环境刷新重复创建。 */
+	TSet<FString> SubmittedNaturalChumFieldKeys;
 	/** 当前 Host exit 仍待确认的远端 StableNetId；服务器只保存私有键，不复制原始身份。 */
 	TSet<FString> PendingHostExitAckStableNetIds;
 	/** 当前 Host exit 的关联 RequestId；远端 ACK 和超时必须匹配它。 */
@@ -214,6 +215,7 @@ class CATFISHING_API ACatfishingGameState : public AGameStateBase
 {
 	GENERATED_BODY()
 public:
+	ACatfishingGameState();
 	/** 注册 RunPublicState 与 LastHelpSignal 两份整结构复制；客户分别经 RepNotify 消费各自 Revision 对齐的完整快照。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	/** 仅允许 authority GameMode 写入组合公开事实；每次写入都会触发网络更新。 */
@@ -224,6 +226,8 @@ public:
 	void SetHelpSignalFromAuthority(const FCatHelpSignalSnapshot& NewSignal);
 	/** 提供最近一次服务器求助信号供表现去重；它不是任务分配或自动加入玩法的授权依据。 */
 	const FCatHelpSignalSnapshot& GetLastHelpSignal() const;
+	const UCatChumFieldReplicationComponent* GetChumFieldReplication() const { return ChumFieldReplication; }
+	UCatChumFieldReplicationComponent* GetChumFieldReplicationFromAuthority();
 	/** 本机 Run/Environment 完整快照变化通知；不授权订阅者推进 StateTree。 */
 	FCatRunPublicStateChanged OnRunPublicStateChanged;
 	/** 本机最近求助完整快照变化通知；不授权订阅者接受任务或改变 Social 权限。 */
@@ -240,6 +244,9 @@ protected:
 
 private:
 	/** Run 的唯一公开复制快照；服务器 GameMode 写，客户端 RepNotify 读。 */
+	UPROPERTY(VisibleAnywhere)
+	TObjectPtr<UCatChumFieldReplicationComponent> ChumFieldReplication;
+
 	UPROPERTY(ReplicatedUsing = OnRep_RunPublicState)
 	FCatRunPublicState RunPublicState;
 
@@ -318,10 +325,6 @@ public:
 	/** 外部本地成像桥回报真实结果；成功必须携带 durable ImprintId，服务器随后才生成 Grant。 */
 	UFUNCTION(Server, Reliable)
 	void ServerReportImprintCaptureResult(FGuid CapturePlanId, bool bSucceeded, FGuid ImprintId);
-
-	/** 请求服务器按当前 Run/Environment/Water 与可参战协作能力快照开始一次钓鱼会话；RequestId 只用于重放，不参与抽鱼。 */
-	UFUNCTION(Server, Reliable)
-	void ServerStartFishingSession(FGuid RequestId);
 
 	/** 把 Giant HookedFight 的手动协作意图转给指定 FishingSession。 */
 	UFUNCTION(Server, Reliable)

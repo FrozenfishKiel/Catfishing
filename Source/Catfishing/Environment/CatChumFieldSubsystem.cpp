@@ -2,6 +2,8 @@
 
 #include "Engine/World.h"
 #include "Environment/CatChumFieldSettings.h"
+#include "Environment/CatChumFieldReplicationComponent.h"
+#include "Framework/Game/CatGameplayTypes.h"
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "TimerManager.h"
 
@@ -228,6 +230,13 @@ void UCatChumFieldSubsystem::PublishActivatedField(const FGuid FieldId)
 	}
 	if (!bTerminalStored) return;
 	Field->bPublicationFlushed = true;
+	if (ACatfishingGameState* GameState = GetWorld()->GetGameState<ACatfishingGameState>())
+	{
+		if (UCatChumFieldReplicationComponent* Replication = GameState->GetChumFieldReplicationFromAuthority())
+		{
+			Replication->ReconcileFieldFromAuthority(*Field);
+		}
+	}
 	OnFieldActivated.Broadcast(FieldId);
 }
 
@@ -341,7 +350,17 @@ int32 UCatChumFieldSubsystem::CleanupExpiredFields(const double ServerTime)
 	{
 		++FieldSetRevisionByRegion.FindOrAdd(RegionId);
 	}
-	for (const FGuid& Id : Expired) OnFieldRemoved.Broadcast(Id);
+	for (const FGuid& Id : Expired)
+	{
+		if (ACatfishingGameState* GameState = GetWorld()->GetGameState<ACatfishingGameState>())
+		{
+			if (UCatChumFieldReplicationComponent* Replication = GameState->GetChumFieldReplicationFromAuthority())
+			{
+				Replication->RemoveFieldFromAuthority(Id);
+			}
+		}
+		OnFieldRemoved.Broadcast(Id);
+	}
 	return Expired.Num();
 }
 

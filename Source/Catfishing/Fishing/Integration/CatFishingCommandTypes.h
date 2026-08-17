@@ -159,5 +159,4 @@ struct FCatBeginCastResult
 };
 
 ECatFishingCommandError MapDomainCommandError(ECatDomainCommandError Error);
-FCatFishingCommandResult MakeFishingCommandResult(const FCatFishingStartResult& LegacyResult);
 FCatFishingSessionCommandContext MakeFishingSessionCommandContext(FGuid FishingSessionId, const FCatScoopCommand& LegacyCommand);

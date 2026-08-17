@@ -280,18 +280,6 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	DeliverResultFromAuthority(Result);
 }
 
-void UCatFishingCommandComponent::ForwardLegacyStart(const FGuid RequestId)
-{
-	APlayerController* Controller = Cast<APlayerController>(GetOwner());
-	if (Controller && Controller->HasAuthority())
-	{
-		if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
-		{
-			Fishing->StartFishingSession(Controller, RequestId);
-		}
-	}
-}
-
 void UCatFishingCommandComponent::ForwardLegacyAssist(const FGuid FishingSessionId, const FGuid RequestId,
 	const int64 ExpectedRevision)
 {

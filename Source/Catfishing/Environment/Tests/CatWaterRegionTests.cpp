@@ -72,16 +72,6 @@ namespace CatWaterRegionTest
 	}
 #endif
 
-	static FCatAggregationCommand MakeAggregation(int64 ExpectedRevision)
-	{
-		FCatAggregationCommand Command;
-		Command.Context.StableNetId = TEXT("PlayerA");
-		Command.Context.RequestId = FGuid::NewGuid();
-		Command.RegionId = TEXT("LakeA");
-		Command.ExpectedAggregationRevision = ExpectedRevision;
-		Command.Contribution.Fishy = 1;
-		return Command;
-	}
 }
 
 #define CAT_REGION_TEST(ClassName, Suffix) \
@@ -90,7 +80,6 @@ namespace CatWaterRegionTest
 
 CAT_REGION_TEST(FCatWaterRegionDefaultTest, "DefaultRegionHasNoRuntimeGeometry")
 CAT_REGION_TEST(FCatWaterRegionRuntimeCacheTest, "RuntimeUsesBakedCacheNotMutatedSpline")
-CAT_REGION_TEST(FCatWaterRegionAggregationTest, "AggregationReplayRevisionAndBudgetContracts")
 
 #if WITH_EDITOR
 CAT_REGION_TEST(FCatWaterRegionBakeRejectTest, "BakeRejectsDuplicateIdsAndOwnershipMismatch")
@@ -105,7 +94,6 @@ bool FCatWaterRegionDefaultTest::RunTest(const FString& Parameters)
 	ACatWaterRegion* Region = NewObject<ACatWaterRegion>();
 	TestFalse(TEXT("default has no valid baked geometry"), Region->HasValidBakedGeometry());
 	TestFalse(TEXT("default handle invalid"), Region->GetWaterRegionHandle().IsValid());
-	TestFalse(TEXT("compatibility gate uses baked cache"), Region->IsRuntimeConfigured());
 	return !HasAnyErrors();
 }
 
@@ -116,27 +104,16 @@ bool FCatWaterRegionRuntimeCacheTest::RunTest(const FString& Parameters)
 	const FCatWaterGeometryCache Cache = CatWaterRegionTest::BuildSquare();
 	FCatWaterRegionTestAccess::InjectBakedGeometry(*Region, Cache);
 	TestTrue(TEXT("injected baked cache is runtime valid"), Region->HasValidBakedGeometry());
-	TestTrue(TEXT("inside comes from polygon cache"), Region->ContainsWorldPoint(FVector(100,100,100)));
-	TestFalse(TEXT("point in AABB but outside polygon fails"), Region->ContainsWorldPoint(FVector(199,1999,100)));
+	TestNotEqual(TEXT("inside comes from polygon cache"),
+		FCatWaterGeometry::QueryPoint(Cache, FVector(100,100,100), Cache.BankHeightToleranceCm).Containment,
+		ECatWaterContainment::Outside);
+	TestEqual(TEXT("point in AABB but outside polygon fails"),
+		FCatWaterGeometry::QueryPoint(Cache, FVector(199,1999,100), Cache.BankHeightToleranceCm).Containment,
+		ECatWaterContainment::Outside);
 	Region->BoundaryActors.Reset();
-	TestTrue(TEXT("runtime remains independent of authoring actor array"), Region->ContainsWorldPoint(FVector(100,100,100)));
-	return !HasAnyErrors();
-}
-
-bool FCatWaterRegionAggregationTest::RunTest(const FString& Parameters)
-{
-	(void)Parameters;
-	FTestWorldWrapper WorldWrapper; WorldWrapper.CreateTestWorld(EWorldType::Game);
-	ACatWaterRegion* Region = WorldWrapper.GetTestWorld()->SpawnActor<ACatWaterRegion>();
-	FCatWaterRegionTestAccess::InjectBakedGeometry(*Region, CatWaterRegionTest::BuildSquare());
-	Region->bEnableAggregation = true; Region->AggregationBudget = 2;
-	FCatAggregationCommand First = CatWaterRegionTest::MakeAggregation(1);
-	const FCatAggregationResult Applied = Region->ContributeAggregation(First);
-	TestTrue(TEXT("first contribution commits"), Applied.Command.bCommitted);
-	TestEqual(TEXT("aggregation revision advances"), Applied.AggregationRevision, int64(2));
-	const FCatAggregationResult Replay = Region->ContributeAggregation(First);
-	TestEqual(TEXT("replay is terminal"), Replay.Command.Error, ECatDomainCommandError::AlreadyResolved);
-	TestEqual(TEXT("aggregation does not mutate geometry handle"), Region->GetWaterRegionHandle(), CatWaterRegionTest::BuildSquare().Handle);
+	TestNotEqual(TEXT("runtime remains independent of authoring actor array"),
+		FCatWaterGeometry::QueryPoint(Cache, FVector(100,100,100), Cache.BankHeightToleranceCm).Containment,
+		ECatWaterContainment::Outside);
 	return !HasAnyErrors();
 }
 

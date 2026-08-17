@@ -16,17 +16,6 @@ ECatFishingCommandError MapDomainCommandError(const ECatDomainCommandError Error
 	}
 }
 
-FCatFishingCommandResult MakeFishingCommandResult(const FCatFishingStartResult& LegacyResult)
-{
-	FCatFishingCommandResult Result;
-	Result.CommandType = ECatFishingCommandType::BeginCast;
-	Result.bCommitted = LegacyResult.bStarted;
-	Result.Error = MapDomainCommandError(LegacyResult.Error);
-	Result.RequestId = LegacyResult.RequestId;
-	Result.FishingSessionId = LegacyResult.FishingSessionId;
-	return Result;
-}
-
 FCatFishingSessionCommandContext MakeFishingSessionCommandContext(const FGuid FishingSessionId,
 	const FCatScoopCommand& LegacyCommand)
 {

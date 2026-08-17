@@ -203,35 +203,3 @@ FCatWaterSpatialResult UCatWaterQuerySubsystem::QueryNearestShoreForPreview(
 	}
 	return Best.bSucceeded ? Best : CatWaterQueryPrivate::MakeError(ECatWaterQueryError::RegionNotFound);
 }
-
-FCatWaterQueryResult UCatWaterQuerySubsystem::QueryWaterRegion(const FCatWaterQuery& Query) const
-{
-	FCatWaterQueryResult Result; Result.RunRevision = Query.RunRevision;
-	if (Query.RunRevision <= 0) { Result.Error = ECatWaterQueryError::RevisionConflict; return Result; }
-	if (Query.RunPhase.Phase != ECatRunPhase::DayActive || !Query.RunPhase.bFishingAllowed)
-	{
-		Result.Error = ECatWaterQueryError::FishingClosed; return Result;
-	}
-	if (!CatWaterQueryPrivate::IsFinite(Query.WorldLocation))
-	{
-		Result.Error = ECatWaterQueryError::InvalidLocation; return Result;
-	}
-	CompactRegistry();
-	const ACatWaterRegion* Match = nullptr;
-	for (const TPair<FName, TArray<TWeakObjectPtr<ACatWaterRegion>>>& Pair : RegionsById)
-	{
-		for (const TWeakObjectPtr<ACatWaterRegion>& Entry : Pair.Value)
-		{
-			const ACatWaterRegion* Region = Entry.Get();
-			if (!Region || !CatWaterQueryPrivate::BoundsContainWorldXY(Region->BakedGeometry, Query.WorldLocation)) continue;
-			const FCatWaterSpatialResult Spatial = FCatWaterGeometry::QueryPoint(
-				Region->BakedGeometry, Query.WorldLocation, Region->BakedGeometry.WaterPointVerticalToleranceCm);
-			if (!CatWaterQueryPrivate::IsWater(Spatial)) continue;
-			if (Match) { Result.Error = ECatWaterQueryError::AmbiguousRegion; return Result; }
-			Match = Region;
-		}
-	}
-	if (!Match) { Result.Error = ECatWaterQueryError::RegionNotFound; return Result; }
-	Result.bSucceeded = true; Result.Error = ECatWaterQueryError::None; Result.Region = Match->MakeSnapshot();
-	return Result;
-}

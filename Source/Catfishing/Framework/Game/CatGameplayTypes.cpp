@@ -16,6 +16,9 @@
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishDefinition.h"
 #include "Environment/CatConfiguredEnvironmentProvider.h"
+#include "Environment/CatChumFieldReplicationComponent.h"
+#include "Environment/CatChumFieldAnchor.h"
+#include "Environment/CatChumFieldSubsystem.h"
 #include "Environment/CatEnvironmentSettings.h"
 #include "Environment/CatWaterRegion.h"
 #include "Engine/GameInstance.h"
@@ -952,7 +955,7 @@ bool ACatfishingGameModeBase::RefreshEnvironmentAndPublish()
 				}
 			}
 		}
-		SubmitNaturalAggregationIfConfigured();
+		SubmitNaturalChumFieldIfConfigured();
 	}
 	else
 	{
@@ -969,7 +972,7 @@ bool ACatfishingGameModeBase::RefreshEnvironmentAndPublish()
 }
 
 // 自然聚鱼流程：按当前 Day+Event 去重，读取 Environment 显式区域/三轴，扫描唯一同 ID WaterRegion；构造系统身份命令并提交同一聚鱼写口，只有 committed 才记录去重键。
-void ACatfishingGameModeBase::SubmitNaturalAggregationIfConfigured()
+void ACatfishingGameModeBase::SubmitNaturalChumFieldIfConfigured()
 {
 	if (!HasAuthority() || !RunPublicState.Environment.bHasActiveEvent || !GetWorld())
 	{
@@ -977,51 +980,65 @@ void ACatfishingGameModeBase::SubmitNaturalAggregationIfConfigured()
 	}
 	const FString EventKey = FString::Printf(TEXT("%d|%s"), RunPublicState.Phase.DayIndex,
 		*RunPublicState.Environment.ActiveEventId.ToString());
-	if (SubmittedNaturalAggregationKeys.Contains(EventKey))
+	if (SubmittedNaturalChumFieldKeys.Contains(EventKey))
 	{
 		return;
 	}
-	FName RegionId;
-	FCatChumVector Contribution;
-	if (!GetDefault<UCatEnvironmentSettings>()->TryGetNaturalAggregation(RegionId, Contribution))
+	FName ChumDefinitionId;
+	FName AnchorId;
+	if (!GetDefault<UCatEnvironmentSettings>()->TryGetNaturalChumField(ChumDefinitionId, AnchorId))
 	{
 		return;
 	}
-	ACatWaterRegion* Match = nullptr;
-	for (TActorIterator<ACatWaterRegion> It(GetWorld()); It; ++It)
+	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(ChumDefinitionId);
+	if (!Definition || Definition->Kind != ECatEquipmentKind::Chum || !Definition->ChumInfluence.IsRuntimeReady())
 	{
-		if (It->RegionId == RegionId)
+		return;
+	}
+	ACatChumFieldAnchor* Match = nullptr;
+	for (TActorIterator<ACatChumFieldAnchor> It(GetWorld()); It; ++It)
+	{
+		if (It->AnchorId == AnchorId)
 		{
 			if (Match)
 			{
-				UE_LOG(LogCatEnvironment, Error, TEXT("Event=natural_aggregation_rejected Day=%d EnvironmentEvent=%s Region=%s Error=AmbiguousRegion"),
-					RunPublicState.Phase.DayIndex, *RunPublicState.Environment.ActiveEventId.ToString(), *RegionId.ToString());
+				UE_LOG(LogCatEnvironment, Error, TEXT("Event=natural_chum_rejected Day=%d EnvironmentEvent=%s Anchor=%s Error=AmbiguousAnchor"),
+					RunPublicState.Phase.DayIndex, *RunPublicState.Environment.ActiveEventId.ToString(), *AnchorId.ToString());
 				return;
 			}
 			Match = *It;
 		}
 	}
-	if (!Match)
+	UCatChumFieldSubsystem* Fields = GetWorld()->GetSubsystem<UCatChumFieldSubsystem>();
+	if (!Match || !Match->ExpectedWaterRegionHandle.IsValid() || !Fields)
 	{
 		return;
 	}
-	FCatAggregationCommand Command;
-	Command.Context.RequestId = FGuid::NewGuid();
-	Command.ExpectedAggregationRevision = Match->MakeSnapshot().AggregationRevision;
-	Command.Context.StableNetId = TEXT("Environment");
-	Command.RegionId = RegionId;
-	Command.Contribution = Contribution;
-	Command.Source = ECatAggregationSource::NaturalEvent;
-	const FCatAggregationResult Result = Match->ContributeAggregation(Command);
-	if (Result.Command.bCommitted)
+	FCatPrepareChumFieldRequest Request;
+	Request.StableNetId = TEXT("Environment");
+	Request.Command.RequestId = FGuid::NewGuid();
+	Request.Command.ExpectedWaterRegionHandle = Match->ExpectedWaterRegionHandle;
+	Request.Command.ChumDefinitionId = ChumDefinitionId;
+	Request.Command.Quantity = 1;
+	Request.Command.ClientCandidateWorldPoint = Match->GetActorLocation();
+	Request.ServerCorrectedCenter = Match->GetActorLocation();
+	Request.Influence = Definition->ChumInfluence;
+	Request.Source = ECatChumFieldSource::NaturalEvent;
+	Request.ServerTime = GetWorld()->GetTimeSeconds();
+	const FCatPrepareChumFieldResult Prepared = Fields->PrepareField(Request);
+	if (!Prepared.bPrepared) return;
+	const FCatPlaceChumResult Result = Fields->ActivatePreparedFieldDeferred(Prepared.CommitToken, 0);
+	Fields->StoreTerminalResult(Request.StableNetId, Result);
+	if (Result.bCommitted)
 	{
-		SubmittedNaturalAggregationKeys.Add(EventKey);
+		SubmittedNaturalChumFieldKeys.Add(EventKey);
+		Fields->PublishActivatedField(Result.FieldId);
 	}
-	UE_LOG(LogCatEnvironment, Log, TEXT("Event=natural_aggregation_terminal RequestId=%s Day=%d EnvironmentEvent=%s Region=%s Committed=%s Error=%s Revision=%lld"),
-		*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Phase.DayIndex,
-		*RunPublicState.Environment.ActiveEventId.ToString(), *RegionId.ToString(),
-		Result.Command.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Command.Error),
-		Result.Command.Revision);
+	UE_LOG(LogCatEnvironment, Log, TEXT("Event=natural_chum_terminal RequestId=%s Day=%d EnvironmentEvent=%s Definition=%s Anchor=%s Committed=%s Error=%s Revision=%lld"),
+		*Request.Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Phase.DayIndex,
+		*RunPublicState.Environment.ActiveEventId.ToString(), *ChumDefinitionId.ToString(), *AnchorId.ToString(),
+		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
+		Result.ChumFieldSetRevision);
 }
 
 // StateTree 事件提交流程：先验证组件正在运行与 Tag 有效，再保存一份不改变 Phase 的结构化结果并发送事件；资产负责消费 Tag 和选择目标边。
@@ -1242,6 +1259,11 @@ const FCatRunPublicState& ACatfishingGameModeBase::GetRunPublicState() const
 }
 
 // GameState 开始流程：先完成父类注册，再记录实际类型；Run 快照只由 authority GameMode setter 写入。
+ACatfishingGameState::ACatfishingGameState()
+{
+	ChumFieldReplication = CreateDefaultSubobject<UCatChumFieldReplicationComponent>(TEXT("ChumFieldReplication"));
+}
+
 void ACatfishingGameState::BeginPlay()
 {
 	Super::BeginPlay();
@@ -1290,6 +1312,11 @@ void ACatfishingGameState::SetHelpSignalFromAuthority(const FCatHelpSignalSnapsh
 const FCatHelpSignalSnapshot& ACatfishingGameState::GetLastHelpSignal() const
 {
 	return LastHelpSignal;
+}
+
+UCatChumFieldReplicationComponent* ACatfishingGameState::GetChumFieldReplicationFromAuthority()
+{
+	return HasAuthority() ? ChumFieldReplication : nullptr;
 }
 
 // Run 快照复制回调流程：只记录新 Revision/Phase 供诊断；UI 与玩法继续通过 getter 读取，不在客户端推进 StateTree。
@@ -1779,19 +1806,6 @@ void ACatfishingPlayerController::ServerReportImprintCaptureResult_Implementatio
 	if (UCatRunImprintService* Service = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr)
 	{
 		Service->ReportCaptureResult(this, CapturePlanId, bSucceeded, ImprintId);
-	}
-}
-
-// 钓鱼开始 RPC 流程：先过统一玩法 gate，再转交当前 Controller 与 RequestId；FishingService 重读 Run、Environment、水域和权威协作能力，RequestId 不作为抽鱼熵。
-void ACatfishingPlayerController::ServerStartFishingSession_Implementation(const FGuid RequestId)
-{
-	if (!CanForwardGameplayCommand())
-	{
-		return;
-	}
-	if (FishingCommandComponent)
-	{
-		FishingCommandComponent->ForwardLegacyStart(RequestId);
 	}
 }
 
