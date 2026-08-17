@@ -6,6 +6,7 @@
 #include "CatFishingHookActor.generated.h"
 
 class USceneComponent;
+class UProjectileMovementComponent;
 
 UCLASS(Blueprintable, meta=(ChildCannotTick))
 class CATFISHING_API ACatFishingHookActor : public AActor
@@ -16,6 +17,10 @@ public:
 	ACatFishingHookActor();
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	bool InitializeAuthoritativeIdentity(FGuid InFishingSessionId, FGuid InCastAttemptId);
+	bool BeginAuthoritativeFlight(const FVector& InitialVelocity, const FVector& ExpectedLandingWorldPoint);
+	bool FinalizeAuthoritativeLandingOnce(bool bSucceeded, const FVector& LandingWorldPoint);
+	void DeferInitialPresentationFromAuthority();
+	void PublishInitialPresentationFromAuthority();
 	const FCatFishingHookPresentationState& GetPresentationState() const;
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category="Fishing|Hook")
 	void BP_OnHookPresentationChanged(const FCatFishingHookPresentationState& Previous, const FCatFishingHookPresentationState& Current);
@@ -34,9 +39,12 @@ private:
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> HookVisualAnchor;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> BobberVisualAnchor;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> BaitVisualAnchor;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UProjectileMovementComponent> ProjectileMovement;
 	UPROPERTY(ReplicatedUsing=OnRep_PresentationState, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
 	FCatFishingHookPresentationState PresentationState;
 	bool bIdentityInitialized = false;
+	bool bLandingFinalized = false;
+	bool bPresentationDeferred = false;
 	bool bHasPendingPresentationNotification = false;
 	FCatFishingHookPresentationState PendingPreviousPresentationState;
 	FCatFishingHookPresentationState PendingCurrentPresentationState;

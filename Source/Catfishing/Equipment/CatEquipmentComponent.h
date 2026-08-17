@@ -26,7 +26,8 @@ public:
 
 	/** 根据服务器目录与可信解锁证明验证三个稳定 ID 后首次原子装配；客户端 Profile 选择不授予权限，也不能借重复请求修复耐久。 */
 	FCatDomainCommandResult ConfigureLoadoutFromAuthority(FGuid RequestId, int64 ExpectedRevision,
-		FName RodDefinitionId, FName BaitDefinitionId, FName FloatDefinitionId);
+		FName RodDefinitionId, FName BaitDefinitionId, FName FloatDefinitionId,
+		FName ScoopNetDefinitionId = NAME_None, FName RodSkinDefinitionId = NAME_None);
 
 	/** 一局拾取/奖励上层提交耗材；只接受定义为 run consumable 的正式条目。 */
 	FCatDomainCommandResult GrantRunConsumableFromAuthority(FGuid RequestId, int64 ExpectedRevision,

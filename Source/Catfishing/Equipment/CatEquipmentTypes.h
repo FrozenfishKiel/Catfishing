@@ -77,6 +77,12 @@ struct FCatEquipmentLoadoutSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	FName FloatDefinitionId = NAME_None;
 
+	UPROPERTY(BlueprintReadOnly)
+	FName ScoopNetDefinitionId = NAME_None;
+
+	UPROPERTY(BlueprintReadOnly)
+	FName RodSkinDefinitionId = NAME_None;
+
 	/** 当前鱼竿耐久；没有合法鱼竿时为 0。 */
 	UPROPERTY(BlueprintReadOnly)
 	double RodDurability = 0.0;

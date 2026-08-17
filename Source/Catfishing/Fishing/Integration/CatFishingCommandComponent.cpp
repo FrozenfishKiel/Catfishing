@@ -40,6 +40,60 @@ void UCatFishingCommandComponent::DeliverPlaceChumResultFromAuthority(const FCat
 	else ClientReceivePlaceChumResult(Result);
 }
 
+void UCatFishingCommandComponent::DeliverBeginCastResultFromAuthority(const FCatBeginCastResult& Result)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->HasAuthority() || !Result.Command.RequestId.IsValid()) return;
+	if (Controller->IsLocalController()) ReceiveBeginCastResultLocally(Result);
+	else ClientReceiveBeginCastResult(Result);
+}
+
+void UCatFishingCommandComponent::SubmitBeginCast(const FCatBeginCastCommand& Command)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->IsLocalController() || !Command.RequestId.IsValid()) return;
+	if (Controller->HasAuthority()) ServerSubmitBeginCast_Implementation(Command);
+	else ServerSubmitBeginCast(Command);
+}
+
+void UCatFishingCommandComponent::SubmitPlaceRod(const FCatPlaceRodCommand& Command)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->IsLocalController() || !Command.RequestId.IsValid()) return;
+	if (Controller->HasAuthority()) ServerSubmitPlaceRod_Implementation(Command); else ServerSubmitPlaceRod(Command);
+}
+
+void UCatFishingCommandComponent::SubmitOperateRod(const FCatOperateRodCommand& Command)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->IsLocalController() || !Command.Context.RequestId.IsValid()) return;
+	if (Controller->HasAuthority()) ServerSubmitOperateRod_Implementation(Command); else ServerSubmitOperateRod(Command);
+}
+
+void UCatFishingCommandComponent::SubmitLeaveRod(const FCatLeaveRodCommand& Command)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->IsLocalController() || !Command.Context.RequestId.IsValid()) return;
+	if (Controller->HasAuthority()) ServerSubmitLeaveRod_Implementation(Command); else ServerSubmitLeaveRod(Command);
+}
+
+void UCatFishingCommandComponent::SubmitPackRod(const FCatPackRodCommand& Command)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->IsLocalController() || !Command.Context.RequestId.IsValid()) return;
+	if (Controller->HasAuthority()) ServerSubmitPackRod_Implementation(Command); else ServerSubmitPackRod(Command);
+}
+
+bool UCatFishingCommandComponent::TryGetBeginCastResult(const FGuid RequestId, FCatBeginCastResult& OutResult) const
+{
+	OutResult = FCatBeginCastResult{};
+	if (!IsSupportedOwner() || !RequestId.IsValid()) return false;
+	const FCatBeginCastResult* Found = BeginCastResultsByRequestId.Find(RequestId);
+	if (!Found) return false;
+	OutResult = *Found;
+	return true;
+}
+
 void UCatFishingCommandComponent::SubmitPlaceChum(const FCatPlaceChumCommand& Command)
 {
 	APlayerController* Controller = Cast<APlayerController>(GetOwner());
@@ -102,6 +156,8 @@ void UCatFishingCommandComponent::ResetTransientCommandState()
 	ResultOrder.Reset();
 	PlaceChumResultsByRequestId.Reset();
 	PlaceChumResultOrder.Reset();
+	BeginCastResultsByRequestId.Reset();
+	BeginCastResultOrder.Reset();
 	PrimaryActivationCorrelationId.Invalidate();
 	NextInputSequence = 0;
 }
@@ -255,6 +311,52 @@ void UCatFishingCommandComponent::ServerSubmitPlaceChum_Implementation(const FCa
 	DeliverPlaceChumResultFromAuthority(Result);
 }
 
+void UCatFishingCommandComponent::ServerSubmitBeginCast_Implementation(const FCatBeginCastCommand& Command)
+{
+	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
+	if (!Controller || !Controller->HasAuthority() || !Controller->CanForwardGameplayCommand()) return;
+	FCatBeginCastResult Result;
+	Result.Command.CommandType = ECatFishingCommandType::BeginCast;
+	Result.Command.RequestId = Command.RequestId;
+	if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
+	{
+		Result = Fishing->BeginCast(Controller, Command);
+	}
+	DeliverBeginCastResultFromAuthority(Result);
+}
+
+void UCatFishingCommandComponent::ServerSubmitPlaceRod_Implementation(const FCatPlaceRodCommand& Command)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->HasAuthority()) return;
+	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
+	if (Fishing) DeliverResultFromAuthority(Fishing->PlaceRod(Controller, Command));
+}
+
+void UCatFishingCommandComponent::ServerSubmitOperateRod_Implementation(const FCatOperateRodCommand& Command)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->HasAuthority()) return;
+	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
+	if (Fishing) DeliverResultFromAuthority(Fishing->OperateRod(Controller, Command));
+}
+
+void UCatFishingCommandComponent::ServerSubmitLeaveRod_Implementation(const FCatLeaveRodCommand& Command)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->HasAuthority()) return;
+	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
+	if (Fishing) DeliverResultFromAuthority(Fishing->LeaveRod(Controller, Command));
+}
+
+void UCatFishingCommandComponent::ServerSubmitPackRod_Implementation(const FCatPackRodCommand& Command)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->HasAuthority()) return;
+	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
+	if (Fishing) DeliverResultFromAuthority(Fishing->PackRod(Controller, Command));
+}
+
 void UCatFishingCommandComponent::ClientReceiveFishingCommandResult_Implementation(
 	const FCatFishingCommandResult& Result)
 {
@@ -265,6 +367,11 @@ void UCatFishingCommandComponent::ClientReceivePlaceChumResult_Implementation(
 	const FCatPlaceChumResult& Result)
 {
 	ReceivePlaceChumResultLocally(Result);
+}
+
+void UCatFishingCommandComponent::ClientReceiveBeginCastResult_Implementation(const FCatBeginCastResult& Result)
+{
+	ReceiveBeginCastResultLocally(Result);
 }
 
 bool UCatFishingCommandComponent::IsSupportedOwner() const
@@ -325,4 +432,19 @@ void UCatFishingCommandComponent::ReceivePlaceChumResultLocally(const FCatPlaceC
 	default: Common.Error = ECatFishingCommandError::DependencyUnavailable; break;
 	}
 	ReceiveResultLocally(Common);
+}
+
+void UCatFishingCommandComponent::ReceiveBeginCastResultLocally(const FCatBeginCastResult& Result)
+{
+	const FGuid RequestId = Result.Command.RequestId;
+	if (!IsSupportedOwner() || !RequestId.IsValid() || BeginCastResultsByRequestId.Contains(RequestId)) return;
+	BeginCastResultsByRequestId.Add(RequestId, Result);
+	BeginCastResultOrder.Add(RequestId);
+	if (BeginCastResultOrder.Num() > MaxStoredResults)
+	{
+		const FGuid Evicted = BeginCastResultOrder[0];
+		BeginCastResultOrder.RemoveAt(0);
+		BeginCastResultsByRequestId.Remove(Evicted);
+	}
+	ReceiveResultLocally(Result.Command);
 }

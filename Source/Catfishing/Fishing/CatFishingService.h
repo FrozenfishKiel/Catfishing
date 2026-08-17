@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "Fishing/CatFishingTypes.h"
+#include "Fishing/Integration/CatFishingCommandTypes.h"
 #include "CatFishingService.generated.h"
 
 class ACatCharacter;
@@ -26,6 +27,11 @@ public:
 
 	/** 从当前 Run/Environment、水域和统一参战能力快照抽取鱼种与重量，并为该身份建立唯一 StateTree 会话；巨鱼成功后才附带广播可选 Social 提示。 */
 	FCatFishingStartResult StartFishingSession(AController* FisherController, FGuid RequestId);
+	FCatBeginCastResult BeginCast(AController* FisherController, const FCatBeginCastCommand& Command);
+	FCatFishingCommandResult PlaceRod(AController* Controller, const FCatPlaceRodCommand& Command);
+	FCatFishingCommandResult OperateRod(AController* Controller, const FCatOperateRodCommand& Command);
+	FCatFishingCommandResult LeaveRod(AController* Controller, const FCatLeaveRodCommand& Command);
+	FCatFishingCommandResult PackRod(AController* Controller, const FCatPackRodCommand& Command);
 
 	/** 把巨鱼搏斗协作意图转给指定会话；会话用统一谓词拒绝非 Active、倒地、无当前 Character 或力量/体力非正的请求者。 */
 	FCatDomainCommandResult SubmitFightAssist(FGuid FishingSessionId, AController* AssistingController,
@@ -93,6 +99,8 @@ private:
 
 	/** 身份+开始操作+RequestId 到首次同步结果；成功重试复用原 SessionId，失败重试不重新抽鱼。 */
 	TMap<FString, FCatFishingStartResult> StartTerminalCache;
+	TMap<FString, FCatBeginCastResult> BeginCastTerminalCache;
+	TSet<FString> BeginCastInProgress;
 
 	/** PlayerState 到其当前唯一部署鱼竿的服务器弱 Registry；不强持 Actor，也不扫描 World 重建。 */
 	TMap<TWeakObjectPtr<APlayerState>, TWeakObjectPtr<ACatFishingRodActor>> DeployedRodByPlayerState;

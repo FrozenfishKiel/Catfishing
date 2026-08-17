@@ -1,6 +1,7 @@
 #include "Fishing/Actors/CatFishingRodActor.h"
 
 #include "Components/SceneComponent.h"
+#include "Fishing/CatFishingService.h"
 #include "Net/UnrealNetwork.h"
 
 ACatFishingRodActor::ACatFishingRodActor()
@@ -66,6 +67,70 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	return true;
 }
 
+bool ACatFishingRodActor::ConfigureCanonicalAnchorsFromAuthority(const FTransform& InRodTip,
+	const FTransform& InStand, const FTransform& InGrip)
+{
+	if (!HasAuthority() || bIdentityInitialized || InRodTip.ContainsNaN() || InStand.ContainsNaN() || InGrip.ContainsNaN())
+	{
+		return false;
+	}
+	RodTipCanonicalLocalTransform = InRodTip;
+	StandCanonicalLocalTransform = InStand;
+	GripCanonicalLocalTransform = InGrip;
+	RodTipAnchor->SetRelativeTransform(InRodTip);
+	StandAnchor->SetRelativeTransform(InStand);
+	GripAnchor->SetRelativeTransform(InGrip);
+	return true;
+}
+
+bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresentationState& Next,
+	const int64 ExpectedRevision)
+{
+	if (!HasAuthority() || !bIdentityInitialized || ExpectedRevision != PresentationState.RodActorRevision)
+	{
+		return false;
+	}
+	FCatFishingRodPresentationState Committed = Next;
+	Committed.RodActorId = PresentationState.RodActorId;
+	Committed.RodDefinitionId = PresentationState.RodDefinitionId;
+	Committed.OwnerPlayerState = PresentationState.OwnerPlayerState;
+	Committed.RodActorRevision = PresentationState.RodActorRevision + 1;
+	const FCatFishingRodPresentationState Previous = PresentationState;
+	PresentationState = Committed;
+	QueueOrDispatchPresentationChanged(Previous, PresentationState);
+	ForceNetUpdate();
+	return true;
+}
+
+bool ACatFishingRodActor::SetOperatorFromAuthority(APlayerState* InOperatorPlayerState, const int64 ExpectedRevision)
+{
+	FCatFishingRodPresentationState Next = PresentationState;
+	Next.OperatorPlayerState = InOperatorPlayerState;
+	return CommitAuthoritativeMutation(Next, ExpectedRevision);
+}
+
+bool ACatFishingRodActor::SetRodSkinFromAuthority(const FName InRodSkinDefinitionId, const int64 ExpectedRevision)
+{
+	if (InRodSkinDefinitionId.IsNone()) return false;
+	FCatFishingRodPresentationState Next = PresentationState;
+	Next.RodSkinDefinitionId = InRodSkinDefinitionId;
+	return CommitAuthoritativeMutation(Next, ExpectedRevision);
+}
+
+bool ACatFishingRodActor::SetBrokenFromAuthority(const bool bInBroken, const int64 ExpectedRevision)
+{
+	FCatFishingRodPresentationState Next = PresentationState;
+	Next.bBroken = bInBroken;
+	return CommitAuthoritativeMutation(Next, ExpectedRevision);
+}
+
+bool ACatFishingRodActor::SetDeployedFromAuthority(const bool bInDeployed, const int64 ExpectedRevision)
+{
+	FCatFishingRodPresentationState Next = PresentationState;
+	Next.bDeployed = bInDeployed;
+	return CommitAuthoritativeMutation(Next, ExpectedRevision);
+}
+
 const FCatFishingRodPresentationState& ACatFishingRodActor::GetPresentationState() const { return PresentationState; }
 FTransform ACatFishingRodActor::GetRodTipWorldTransform() const { return RodTipCanonicalLocalTransform * GetActorTransform(); }
 FTransform ACatFishingRodActor::GetStandWorldTransform() const { return StandCanonicalLocalTransform * GetActorTransform(); }
@@ -79,6 +144,21 @@ void ACatFishingRodActor::BeginPlay()
 		bHasPendingPresentationNotification = false;
 		DispatchPresentationChanged(PendingPreviousPresentationState, PendingCurrentPresentationState);
 	}
+}
+
+void ACatFishingRodActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (HasAuthority() && PresentationState.OwnerPlayerState)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			if (UCatFishingService* Fishing = World->GetSubsystem<UCatFishingService>())
+			{
+				Fishing->UnregisterDeployedRod(PresentationState.OwnerPlayerState, this);
+			}
+		}
+	}
+	Super::EndPlay(EndPlayReason);
 }
 
 void ACatFishingRodActor::OnRep_PresentationState(const FCatFishingRodPresentationState& Previous)

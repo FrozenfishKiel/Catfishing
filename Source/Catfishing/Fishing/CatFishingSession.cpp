@@ -10,6 +10,7 @@
 #include "Data/CatFishDefinition.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/CatFishingService.h"
+#include "Fishing/Actors/CatFishingHookActor.h"
 #include "Components/StateTreeComponent.h"
 #include "GameFramework/PlayerState.h"
 #include "Equipment/CatEquipmentComponent.h"
@@ -551,6 +552,72 @@ void ACatFishingSession::TerminateSession(const ECatFishingOutcome Outcome, cons
 	default:
 		return;
 	}
+}
+
+bool ACatFishingSession::PrepareSessionFromAuthority(const FCatFishingAttemptSnapshot& Attempt,
+	AController* FisherController, ACatCharacter* InFisherCharacter, ACatFishingHookActor* HookActor)
+{
+	const FString StableNetId = ResolveStableNetId(FisherController);
+	if (!HasAuthority() || bPrepared || !Attempt.RequestId.IsValid() || !Attempt.FishingSessionId.IsValid()
+		|| !Attempt.CastAttemptId.IsValid() || Attempt.FishingSessionId == Attempt.CastAttemptId
+		|| !Attempt.WaterRegion.IsValid() || !Attempt.RodActor || !HookActor || !InFisherCharacter
+		|| !FisherController || !FisherController->PlayerState || StableNetId.IsEmpty())
+	{
+		return false;
+	}
+	Snapshot = FCatFishingSessionSnapshot{};
+	Snapshot.FishingSessionId = Attempt.FishingSessionId;
+	Snapshot.CastAttemptId = Attempt.CastAttemptId;
+	Snapshot.Revision = 1;
+	Snapshot.PhaseEpoch = 1;
+	Snapshot.Phase = ECatFishingPhase::Created;
+	Snapshot.FisherPlayerState = FisherController->PlayerState;
+	Snapshot.RodActor = Attempt.RodActor;
+	Snapshot.HookActor = HookActor;
+	// Fish identity remains deliberately empty until Probe/TrueBite commits selection.
+	FisherCharacter = InFisherCharacter;
+	FisherStableNetId = StableNetId;
+	FisherGuardContainerId = InFisherCharacter->GetPersonalFishGuardId();
+	FightParticipantIds.Add(StableNetId);
+	FightParticipantCharacters.Add(StableNetId, InFisherCharacter);
+	ItemsService = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
+	bPrepared = ItemsService.IsValid() && FisherGuardContainerId.IsValid();
+	return bPrepared;
+}
+
+bool ACatFishingSession::StartPreparedSessionLogicFromAuthority()
+{
+	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	UStateTree* StateTreeAsset = Settings ? Settings->FishingSessionStateTree.LoadSynchronous() : nullptr;
+	if (!HasAuthority() || !bPrepared || bPublished || !Settings || !Settings->IsRuntimeReady()
+		|| !StateTreeAsset || !StateTreeComponent)
+	{
+		return false;
+	}
+	StateTreeComponent->SetStateTree(StateTreeAsset);
+	bStartupInProgress = true;
+	StateTreeComponent->StartLogic();
+	bStartupInProgress = false;
+	return StateTreeComponent->IsRunning() || Snapshot.Phase != ECatFishingPhase::Created;
+}
+
+bool ACatFishingSession::PublishPreparedSessionFromAuthority()
+{
+	if (!HasAuthority() || !bPrepared || bPublished || !StateTreeComponent || !StateTreeComponent->IsRunning())
+	{
+		return false;
+	}
+	bPublished = true;
+	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
+	return true;
+}
+
+void ACatFishingSession::AbortPreparedSessionFromAuthority()
+{
+	if (!HasAuthority() || bPublished) return;
+	if (StateTreeComponent) StateTreeComponent->StopLogic(TEXT("BeginCast transaction aborted"));
+	bPrepared = false;
+	Destroy();
 }
 
 void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, const ECatFishingOutcome FinalOutcome,

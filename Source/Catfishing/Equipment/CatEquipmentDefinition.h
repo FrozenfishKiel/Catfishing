@@ -45,6 +45,48 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0"))
 	double MaximumRodDurability = 0.0;
 
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0"))
+	double FishingStrength = 0.0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0"))
+	double MaximumLineLengthCentimeters = 0.0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0"))
+	double BaseDurabilityWearPerSecond = 0.0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0"))
+	double HighTensionWearMultiplier = 0.0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod")
+	FTransform RodTipLocalTransform = FTransform::Identity;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod")
+	FTransform StandLocalTransform = FTransform::Identity;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod")
+	FTransform GripLocalTransform = FTransform::Identity;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Float", meta = (ClampMin = "0.0"))
+	double MaximumCastDistanceCentimeters = 0.0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Float", meta = (ClampMin = "0.0"))
+	double CastErrorStandardDeviationCentimeters = 0.0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Float", meta = (ClampMin = "0.0"))
+	double MaximumCastErrorRadiusCentimeters = 0.0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Float", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double BiteSignalStability = 0.0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Bait", meta = (ClampMin = "0.0"))
+	double BiteRateMultiplier = 0.0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Bait", meta = (ClampMin = "0.0"))
+	double MinimumBiteDelayMultiplier = 0.0;
+
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Scoop", meta = (ClampMin = "0.0"))
+	double ScoopReachCentimeters = 0.0;
+
 	/** 公开的功能路线 ID；钓鱼/表现按稳定 ID消费，不比较大小。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Function")
 	FName FunctionalRouteId = NAME_None;

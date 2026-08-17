@@ -80,6 +80,7 @@ struct FCatBeginCastCommand
 	UPROPERTY(BlueprintReadWrite) int64 ExpectedEquipmentRevision = 0;
 	UPROPERTY(BlueprintReadWrite) int64 ExpectedRodActorRevision = 0;
 	UPROPERTY(BlueprintReadWrite) FVector ClientCandidateWorldPoint = FVector::ZeroVector;
+	UPROPERTY(BlueprintReadWrite) FCatWaterRegionHandle ExpectedWaterRegionHandle;
 };
 
 USTRUCT(BlueprintType)
@@ -153,6 +154,8 @@ struct FCatBeginCastResult
 	GENERATED_BODY()
 
 	UPROPERTY(BlueprintReadOnly) FCatFishingCommandResult Command;
+	UPROPERTY(BlueprintReadOnly) FCatWaterRegionHandle WaterRegion;
+	UPROPERTY(BlueprintReadOnly) FVector ServerCorrectedLandingWorldPoint = FVector::ZeroVector;
 };
 
 ECatFishingCommandError MapDomainCommandError(ECatDomainCommandError Error);

@@ -11,10 +11,16 @@
 #include "Data/CatFishDefinition.h"
 #include "Engine/World.h"
 #include "Environment/CatWaterQuerySubsystem.h"
+#include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentSettings.h"
+#include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
+#include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Social/CatSocialService.h"
 #include "GameFramework/PlayerState.h"
+#include "Components/CapsuleComponent.h"
 
 // 创建条件流程：仅 authority Game World 持有会话索引；客户端不能创建平行 StateTree。
 bool UCatFishingService::ShouldCreateSubsystem(UObject* Outer) const
@@ -31,8 +37,395 @@ void UCatFishingService::Deinitialize()
 	SessionFisherById.Reset();
 	ActiveSessionByFisher.Reset();
 	StartTerminalCache.Reset();
+	BeginCastTerminalCache.Reset();
+	BeginCastInProgress.Reset();
 	DeployedRodByPlayerState.Reset();
 	Super::Deinitialize();
+}
+
+FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
+	const FCatBeginCastCommand& Command)
+{
+	FCatBeginCastResult Result;
+	Result.Command.CommandType = ECatFishingCommandType::BeginCast;
+	Result.Command.RequestId = Command.RequestId;
+	const FString StableNetId = ResolveStableNetId(FisherController);
+	if (!Command.RequestId.IsValid() || StableNetId.IsEmpty())
+	{
+		Result.Command.Error = ECatFishingCommandError::InvalidIdentity;
+		return Result;
+	}
+	const FString Key = FString::Printf(TEXT("%s|BeginCast|%s"), *StableNetId,
+		*Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+	if (const FCatBeginCastResult* Cached = BeginCastTerminalCache.Find(Key)) return *Cached;
+	if (BeginCastInProgress.Contains(Key))
+	{
+		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
+		return Result;
+	}
+	BeginCastInProgress.Add(Key);
+	const auto Finish = [this, &Key](const FCatBeginCastResult& Candidate)
+	{
+		BeginCastInProgress.Remove(Key);
+		BeginCastTerminalCache.FindOrAdd(Key, Candidate);
+		return BeginCastTerminalCache.FindChecked(Key);
+	};
+	UWorld* World = GetWorld();
+	const ACatfishingGameModeBase* GameMode = World ? World->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
+	if (!bCommandsOpen || !GameMode || !GameMode->CanAcceptGameplayCommand(FisherController))
+	{
+		Result.Command.Error = ECatFishingCommandError::CommandsClosed;
+		return Finish(Result);
+	}
+	ACatCharacter* Character = FisherController ? Cast<ACatCharacter>(FisherController->GetPawn()) : nullptr;
+	APlayerState* PlayerState = FisherController ? FisherController->PlayerState : nullptr;
+	UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
+	ACatFishingRodActor* Rod = FindDeployedRod(PlayerState);
+	if (!World || !Character || !PlayerState || !Equipment || !Rod)
+	{
+		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
+		return Finish(Result);
+	}
+	const FCatFishingRodPresentationState& RodState = Rod->GetPresentationState();
+	const FCatEquipmentLoadoutSnapshot& Loadout = Equipment->GetSnapshot();
+	if (Command.RodActorId != RodState.RodActorId || Command.ExpectedRodActorRevision != RodState.RodActorRevision)
+	{
+		Result.Command.Error = ECatFishingCommandError::RodActorRevisionConflict;
+		return Finish(Result);
+	}
+	if (!RodState.bDeployed || RodState.bBroken || RodState.OwnerPlayerState != PlayerState
+		|| RodState.OperatorPlayerState != PlayerState)
+	{
+		Result.Command.Error = RodState.bBroken ? ECatFishingCommandError::RodBroken : ECatFishingCommandError::RodOccupied;
+		return Finish(Result);
+	}
+	if (Command.ExpectedEquipmentRevision != Loadout.Revision)
+	{
+		Result.Command.Error = ECatFishingCommandError::EquipmentRevisionConflict;
+		return Finish(Result);
+	}
+	if (Loadout.RodDefinitionId != RodState.RodDefinitionId || !Command.ExpectedWaterRegionHandle.IsValid()
+		|| Command.ClientCandidateWorldPoint.ContainsNaN())
+	{
+		Result.Command.Error = ECatFishingCommandError::InvalidPayload;
+		return Finish(Result);
+	}
+	const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
+	const UCatEquipmentDefinition* RodDefinition = EquipmentSettings->FindRuntimeDefinition(Loadout.RodDefinitionId);
+	const UCatEquipmentDefinition* FloatDefinition = EquipmentSettings->FindRuntimeDefinition(Loadout.FloatDefinitionId);
+	const UCatEquipmentDefinition* BaitDefinition = EquipmentSettings->FindRuntimeDefinition(Loadout.BaitDefinitionId);
+	if (!RodDefinition || RodDefinition->Kind != ECatEquipmentKind::Rod || !FloatDefinition
+		|| FloatDefinition->Kind != ECatEquipmentKind::Float || !BaitDefinition
+		|| BaitDefinition->Kind != ECatEquipmentKind::Bait)
+	{
+		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
+		return Finish(Result);
+	}
+	UCatWaterQuerySubsystem* WaterQuery = World->GetSubsystem<UCatWaterQuerySubsystem>();
+	const FCatWaterSpatialResult Water = WaterQuery
+		? WaterQuery->ResolveCandidatePointToWater(Command.ClientCandidateWorldPoint, Command.ExpectedWaterRegionHandle)
+		: FCatWaterSpatialResult{};
+	if (!Water.bSucceeded || Water.Containment == ECatWaterContainment::Outside)
+	{
+		Result.Command.Error = Water.Error == ECatWaterQueryError::AmbiguousRegion
+			? ECatFishingCommandError::AmbiguousWater : ECatFishingCommandError::InvalidWaterTarget;
+		return Finish(Result);
+	}
+	const FVector ViewOrigin = Character->GetPawnViewLocation();
+	const FVector ToLanding = Water.WaterSurfaceWorldPoint - ViewOrigin;
+	const double MaxRange = FMath::Min(RodDefinition->MaximumLineLengthCentimeters,
+		FloatDefinition->MaximumCastDistanceCentimeters);
+	if (!FMath::IsFinite(MaxRange) || MaxRange <= 0.0 || ToLanding.Length() > MaxRange
+		|| ToLanding.IsNearlyZero() || FVector::DotProduct(FisherController->GetControlRotation().Vector(),
+			ToLanding.GetSafeNormal()) < 0.5)
+	{
+		Result.Command.Error = ECatFishingCommandError::CastOutOfRange;
+		return Finish(Result);
+	}
+	FCollisionQueryParams TraceParams(SCENE_QUERY_STAT(CatBeginCastLineOfSight), true);
+	TraceParams.AddIgnoredActor(Character);
+	TraceParams.AddIgnoredActor(Rod);
+	FHitResult SightHit;
+	if (World->LineTraceSingleByChannel(SightHit, ViewOrigin, Water.WaterSurfaceWorldPoint,
+		ECC_Visibility, TraceParams))
+	{
+		Result.Command.Error = ECatFishingCommandError::InvalidWaterTarget;
+		return Finish(Result);
+	}
+	FGuid SessionId = FGuid::NewGuid();
+	FGuid CastAttemptId = FGuid::NewGuid();
+	while (CastAttemptId == SessionId) CastAttemptId = FGuid::NewGuid();
+	const FCatFishingUseReservationResult Reserved = Equipment->BeginFishingUse(SessionId,
+		Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision);
+	if (Reserved.Error != ECatDomainCommandError::None)
+	{
+		Result.Command.Error = Reserved.Error == ECatDomainCommandError::RevisionConflict
+			? ECatFishingCommandError::EquipmentRevisionConflict : ECatFishingCommandError::DependencyUnavailable;
+		return Finish(Result);
+	}
+	const UCatFishingPresentationSettings* Presentation = GetDefault<UCatFishingPresentationSettings>();
+	UClass* HookClass = Presentation ? Presentation->HookActorClass.LoadSynchronous() : nullptr;
+	if (!HookClass || !HookClass->IsChildOf(ACatFishingHookActor::StaticClass()))
+	{
+		Equipment->ReleaseFishingUse(SessionId);
+		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
+		return Finish(Result);
+	}
+	const FTransform HookTransform(Rod->GetRodTipWorldTransform().GetRotation(),
+		Rod->GetRodTipWorldTransform().GetLocation());
+	ACatFishingHookActor* Hook = World->SpawnActorDeferred<ACatFishingHookActor>(HookClass, HookTransform,
+		Rod, Character, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	if (!Hook)
+	{
+		Equipment->ReleaseFishingUse(SessionId);
+		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
+		return Finish(Result);
+	}
+	Hook->DeferInitialPresentationFromAuthority();
+	if (!Hook->InitializeAuthoritativeIdentity(SessionId, CastAttemptId))
+	{
+		Hook->Destroy();
+		Equipment->ReleaseFishingUse(SessionId);
+		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
+		return Finish(Result);
+	}
+	Hook->FinishSpawning(HookTransform);
+	ACatFishingSession* Session = World->SpawnActorDeferred<ACatFishingSession>(ACatFishingSession::StaticClass(),
+		Character->GetActorTransform(), FisherController, Character, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+	FCatFishingAttemptSnapshot Attempt;
+	Attempt.RequestId = Command.RequestId;
+	Attempt.FishingSessionId = SessionId;
+	Attempt.CastAttemptId = CastAttemptId;
+	Attempt.FisherPlayerState = PlayerState;
+	Attempt.RodActor = Rod;
+	Attempt.RodDefinitionId = Loadout.RodDefinitionId;
+	Attempt.FloatDefinitionId = Loadout.FloatDefinitionId;
+	Attempt.BaitDefinitionId = Loadout.BaitDefinitionId;
+	Attempt.EquipmentReservationRevision = Reserved.EquipmentRevision;
+	Attempt.RodActorRevision = RodState.RodActorRevision;
+	Attempt.ServerCorrectedLandingWorldPoint = Water.WaterSurfaceWorldPoint;
+	Attempt.WaterRegion = Water.WaterRegion;
+	Attempt.ServerRandomSeed = static_cast<uint64>(GetTypeHash(FGuid::NewGuid()));
+	if (!Session || !Session->PrepareSessionFromAuthority(Attempt, FisherController, Character, Hook))
+	{
+		if (Session) Session->Destroy();
+		Hook->Destroy();
+		Equipment->ReleaseFishingUse(SessionId);
+		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
+		return Finish(Result);
+	}
+	Session->FinishSpawning(Character->GetActorTransform());
+	if (!Session->StartPreparedSessionLogicFromAuthority())
+	{
+		Session->AbortPreparedSessionFromAuthority();
+		Hook->Destroy();
+		Equipment->ReleaseFishingUse(SessionId);
+		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
+		return Finish(Result);
+	}
+	Sessions.Add(SessionId, Session);
+	SessionFisherById.Add(SessionId, StableNetId);
+	ActiveSessionByFisher.Add(StableNetId, SessionId);
+	Result.Command.bCommitted = true;
+	Result.Command.Error = ECatFishingCommandError::None;
+	Result.Command.FishingSessionId = SessionId;
+	Result.Command.CastAttemptId = CastAttemptId;
+	Result.Command.RodActorId = RodState.RodActorId;
+	Result.Command.RodActorRevision = RodState.RodActorRevision;
+	Result.Command.EquipmentRevision = Reserved.EquipmentRevision;
+	Result.WaterRegion = Water.WaterRegion;
+	Result.ServerCorrectedLandingWorldPoint = Water.WaterSurfaceWorldPoint;
+	const FCatBeginCastResult Frozen = Finish(Result);
+	Session->PublishPreparedSessionFromAuthority();
+	Hook->PublishInitialPresentationFromAuthority();
+	Hook->BeginAuthoritativeFlight(ToLanding.GetSafeNormal() * FMath::Min(MaxRange, 1500.0),
+		Water.WaterSurfaceWorldPoint);
+	return Frozen;
+}
+
+FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, const FCatPlaceRodCommand& Command)
+{
+	FCatFishingCommandResult Result;
+	Result.CommandType = ECatFishingCommandType::PlaceRod;
+	Result.RequestId = Command.RequestId;
+	UWorld* World = GetWorld();
+	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
+	APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
+	UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
+	if (!Command.RequestId.IsValid() || ResolveStableNetId(Controller).IsEmpty())
+	{
+		Result.Error = ECatFishingCommandError::InvalidIdentity;
+		return Result;
+	}
+	if (!bCommandsOpen || !World || !Character || !PlayerState || !Equipment)
+	{
+		Result.Error = ECatFishingCommandError::DependencyUnavailable;
+		return Result;
+	}
+	if (FindDeployedRod(PlayerState))
+	{
+		Result.Error = ECatFishingCommandError::ActiveSessionExists;
+		return Result;
+	}
+	const FCatEquipmentLoadoutSnapshot& Loadout = Equipment->GetSnapshot();
+	if (Loadout.Revision != Command.ExpectedEquipmentRevision)
+	{
+		Result.Error = ECatFishingCommandError::EquipmentRevisionConflict;
+		return Result;
+	}
+	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Loadout.RodDefinitionId);
+	const UCatFishingPresentationSettings* Presentation = GetDefault<UCatFishingPresentationSettings>();
+	UClass* RodClass = Presentation ? Presentation->RodActorClass.LoadSynchronous() : nullptr;
+	if (!RodDefinition || RodDefinition->Kind != ECatEquipmentKind::Rod || !RodClass
+		|| !RodClass->IsChildOf(ACatFishingRodActor::StaticClass()))
+	{
+		Result.Error = ECatFishingCommandError::DependencyUnavailable;
+		return Result;
+	}
+	const FVector Candidate = Character->GetActorLocation() + Character->GetActorForwardVector() * 150.0;
+	FHitResult GroundHit;
+	FCollisionQueryParams GroundParams(SCENE_QUERY_STAT(CatPlaceRodGround), false, Character);
+	if (!World->LineTraceSingleByChannel(GroundHit, Candidate + FVector(0, 0, 100),
+		Candidate - FVector(0, 0, 250), ECC_Visibility, GroundParams) || GroundHit.ImpactNormal.Z < 0.7)
+	{
+		Result.Error = ECatFishingCommandError::InvalidPayload;
+		return Result;
+	}
+	if (UCatWaterQuerySubsystem* WaterQuery = World->GetSubsystem<UCatWaterQuerySubsystem>())
+	{
+		const FCatWaterSpatialResult Shore = WaterQuery->QueryNearestShoreForPreview(GroundHit.ImpactPoint);
+		if (Shore.bSucceeded && Shore.Containment != ECatWaterContainment::Outside)
+		{
+			Result.Error = ECatFishingCommandError::InvalidWaterTarget;
+			return Result;
+		}
+	}
+	const FTransform SpawnTransform(Character->GetActorRotation(), GroundHit.ImpactPoint);
+	ACatFishingRodActor* Rod = World->SpawnActorDeferred<ACatFishingRodActor>(RodClass, SpawnTransform,
+		Controller, Character, ESpawnActorCollisionHandlingMethod::DontSpawnIfColliding);
+	const FGuid RodActorId = FGuid::NewGuid();
+	if (!Rod || !Rod->ConfigureCanonicalAnchorsFromAuthority(RodDefinition->RodTipLocalTransform,
+		RodDefinition->StandLocalTransform, RodDefinition->GripLocalTransform)
+		|| !Rod->InitializeAuthoritativeIdentity(RodActorId, Loadout.RodDefinitionId, Loadout.RodSkinDefinitionId,
+			PlayerState, PlayerState, true, Loadout.bRodBroken))
+	{
+		if (Rod) Rod->Destroy();
+		Result.Error = ECatFishingCommandError::DependencyUnavailable;
+		return Result;
+	}
+	Rod->FinishSpawning(SpawnTransform);
+	if (!RegisterDeployedRod(PlayerState, Rod))
+	{
+		Rod->Destroy();
+		Result.Error = ECatFishingCommandError::ActiveSessionExists;
+		return Result;
+	}
+	Result.bCommitted = true;
+	Result.Error = ECatFishingCommandError::None;
+	Result.RodActorId = RodActorId;
+	Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
+	Result.EquipmentRevision = Loadout.Revision;
+	return Result;
+}
+
+FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller, const FCatOperateRodCommand& Command)
+{
+	FCatFishingCommandResult Result;
+	Result.CommandType = ECatFishingCommandType::OperateRod;
+	Result.RequestId = Command.Context.RequestId;
+	APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
+	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
+	ACatFishingRodActor* Rod = FindDeployedRod(PlayerState);
+	if (!Rod || !Character || Rod->GetPresentationState().RodActorId != Command.Context.RodActorId)
+	{
+		Result.Error = ECatFishingCommandError::NoRod;
+		return Result;
+	}
+	const FCatFishingRodPresentationState& State = Rod->GetPresentationState();
+	if (State.bBroken || State.OwnerPlayerState != PlayerState || State.OperatorPlayerState
+		|| FVector::DistSquared(Character->GetActorLocation(), Rod->GetStandWorldTransform().GetLocation()) > FMath::Square(250.0))
+	{
+		Result.Error = State.bBroken ? ECatFishingCommandError::RodBroken : ECatFishingCommandError::RodOccupied;
+		return Result;
+	}
+	if (!Rod->SetOperatorFromAuthority(PlayerState, Command.Context.ExpectedRodActorRevision))
+	{
+		Result.Error = ECatFishingCommandError::RodActorRevisionConflict;
+		return Result;
+	}
+	Character->SetActorTransform(Rod->GetStandWorldTransform());
+	Result.bCommitted = true;
+	Result.Error = ECatFishingCommandError::None;
+	Result.RodActorId = State.RodActorId;
+	Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
+	return Result;
+}
+
+FCatFishingCommandResult UCatFishingService::LeaveRod(AController* Controller, const FCatLeaveRodCommand& Command)
+{
+	FCatFishingCommandResult Result;
+	Result.CommandType = ECatFishingCommandType::LeaveRod;
+	Result.RequestId = Command.Context.RequestId;
+	APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
+	ACatFishingRodActor* Rod = FindDeployedRod(PlayerState);
+	FGuid SessionId;
+	FCatFishingSessionSnapshot Snapshot;
+	if (!Rod || Rod->GetPresentationState().RodActorId != Command.Context.RodActorId)
+	{
+		Result.Error = ECatFishingCommandError::NoRod;
+		return Result;
+	}
+	if (TryGetActiveSessionForController(Controller, SessionId, Snapshot))
+	{
+		Result.Error = ECatFishingCommandError::ActiveSessionExists;
+		return Result;
+	}
+	if (Rod->GetPresentationState().OperatorPlayerState != PlayerState
+		|| !Rod->SetOperatorFromAuthority(nullptr, Command.Context.ExpectedRodActorRevision))
+	{
+		Result.Error = ECatFishingCommandError::RodActorRevisionConflict;
+		return Result;
+	}
+	Result.bCommitted = true;
+	Result.Error = ECatFishingCommandError::None;
+	Result.RodActorId = Command.Context.RodActorId;
+	Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
+	return Result;
+}
+
+FCatFishingCommandResult UCatFishingService::PackRod(AController* Controller, const FCatPackRodCommand& Command)
+{
+	FCatFishingCommandResult Result;
+	Result.CommandType = ECatFishingCommandType::PackRod;
+	Result.RequestId = Command.Context.RequestId;
+	APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
+	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
+	ACatFishingRodActor* Rod = FindDeployedRod(PlayerState);
+	FGuid SessionId;
+	FCatFishingSessionSnapshot Snapshot;
+	if (!Rod || !Character || Rod->GetPresentationState().RodActorId != Command.Context.RodActorId)
+	{
+		Result.Error = ECatFishingCommandError::NoRod;
+		return Result;
+	}
+	if (Rod->GetPresentationState().OperatorPlayerState || TryGetActiveSessionForController(Controller, SessionId, Snapshot)
+		|| FVector::DistSquared(Character->GetActorLocation(), Rod->GetActorLocation()) > FMath::Square(250.0))
+	{
+		Result.Error = ECatFishingCommandError::ActiveSessionExists;
+		return Result;
+	}
+	if (!Rod->SetDeployedFromAuthority(false, Command.Context.ExpectedRodActorRevision))
+	{
+		Result.Error = ECatFishingCommandError::RodActorRevisionConflict;
+		return Result;
+	}
+	UnregisterDeployedRod(PlayerState, Rod);
+	Result.bCommitted = true;
+	Result.Error = ECatFishingCommandError::None;
+	Result.RodActorId = Command.Context.RodActorId;
+	Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
+	Rod->Destroy();
+	return Result;
 }
 
 // 会话创建流程：先按服务器身份/RequestId 重放首次结果并拒绝该身份仍存活的唯一会话，再验证当前 Character、Run、水域以及“Active Controller + 未倒地 + FishingStrength/FightStamina 为正”的统一参战能力。随后用全体合法者的人数、总力量和总体力快照及服务器新熵查询鱼表；只有 Actor 生成、StateTree 初始化全部成功后才登记会话索引与终态结果。巨鱼的 Social 提示在成功事实之后 best-effort 广播，缺少 Social 不回滚会话，也不改写首次 Start 结果。

@@ -18,6 +18,11 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	bool InitializeAuthoritativeIdentity(FGuid InRodActorId, FName InRodDefinitionId, FName InRodSkinDefinitionId,
 		APlayerState* InOwnerPlayerState, APlayerState* InOperatorPlayerState, bool bInDeployed, bool bInBroken);
+	bool ConfigureCanonicalAnchorsFromAuthority(const FTransform& InRodTip, const FTransform& InStand, const FTransform& InGrip);
+	bool SetOperatorFromAuthority(APlayerState* InOperatorPlayerState, int64 ExpectedRevision);
+	bool SetRodSkinFromAuthority(FName InRodSkinDefinitionId, int64 ExpectedRevision);
+	bool SetBrokenFromAuthority(bool bInBroken, int64 ExpectedRevision);
+	bool SetDeployedFromAuthority(bool bInDeployed, int64 ExpectedRevision);
 	const FCatFishingRodPresentationState& GetPresentationState() const;
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetRodTipWorldTransform() const;
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetStandWorldTransform() const;
@@ -29,12 +34,14 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
 	UFUNCTION()
 	void OnRep_PresentationState(const FCatFishingRodPresentationState& Previous);
 	void QueueOrDispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	void DispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
+	bool CommitAuthoritativeMutation(const FCatFishingRodPresentationState& Next, int64 ExpectedRevision);
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> SceneRoot;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> VisualRoot;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> RodTipAnchor;

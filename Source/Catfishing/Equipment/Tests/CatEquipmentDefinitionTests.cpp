@@ -25,6 +25,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Equipment.Definition.ChumRequiresSpatialInfluenceSpec",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatEquipmentDefinitionFishingFunctionFieldsTest,
+	"Catfishing.Unit.Equipment.Definition.RodFloatBaitAndScoopFunctionalFieldsAreValidated",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
 // 测试流程：创建默认装备定义并调用正式 readiness；Unset 类别、身份和功能路线不能被当作可运行道具。
 bool FCatEquipmentDefinitionDefaultsTest::RunTest(const FString& Parameters)
 {
@@ -60,6 +65,9 @@ bool FCatEquipmentDefinitionRodTest::RunTest(const FString& Parameters)
 	Definition->FunctionalRouteId = TEXT("StarterRod");
 	TestFalse(TEXT("Rod 缺少正最大耐久时不可运行"), Definition->IsRuntimeDefinitionReady());
 	Definition->MaximumRodDurability = 100.0;
+	Definition->FishingStrength = 1.0;
+	Definition->MaximumLineLengthCentimeters = 1000.0;
+	Definition->HighTensionWearMultiplier = 1.0;
 	TestTrue(TEXT("Rod 配置正最大耐久后可运行"), Definition->IsRuntimeDefinitionReady());
 	return !HasAnyErrors();
 }
@@ -82,6 +90,8 @@ bool FCatEquipmentDefinitionSpecialBaitTest::RunTest(const FString& Parameters)
 	Definition->LoadoutSlotId = TEXT("BaitSlot");
 	Definition->FunctionalRouteId = TEXT("SpecialBaitRoute");
 	Definition->bSpecialBait = true;
+	Definition->BiteRateMultiplier = 1.0;
+	Definition->MinimumBiteDelayMultiplier = 1.0;
 	Definition->bRunConsumable = false;
 	TestFalse(TEXT("特殊饵不是一局消耗品时不可运行"), Definition->IsRuntimeDefinitionReady());
 	Definition->bRunConsumable = true;
@@ -118,6 +128,28 @@ bool FCatEquipmentDefinitionChumTest::RunTest(const FString& Parameters)
 	Definition->ChumInfluence.TimeFalloffCurve = Time;
 	Definition->ChumInfluence.MaximumQuantityPerPlacement = 3;
 	TestTrue(TEXT("Chum 完整空间 Influence 后可运行"), Definition->IsRuntimeDefinitionReady());
+	return !HasAnyErrors();
+}
+
+bool FCatEquipmentDefinitionFishingFunctionFieldsTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UCatEquipmentDefinition* Rod = NewObject<UCatEquipmentDefinition>(GetTransientPackage());
+	Rod->bEnableRuntimeDefinition = true;
+	Rod->EquipmentDefinitionId = TEXT("RodFunctional");
+	Rod->Kind = ECatEquipmentKind::Rod;
+	Rod->LoadoutSlotId = TEXT("Rod");
+	Rod->FunctionalRouteId = TEXT("RodRoute");
+	Rod->MaximumRodDurability = 100.0;
+	Rod->FishingStrength = 2.0;
+	Rod->MaximumLineLengthCentimeters = 2000.0;
+	Rod->HighTensionWearMultiplier = 1.0;
+	Rod->RodTipLocalTransform = FTransform(FVector(100.0, 0.0, 100.0));
+	Rod->StandLocalTransform = FTransform(FVector(-50.0, 0.0, 0.0));
+	Rod->GripLocalTransform = FTransform(FVector(0.0, 0.0, 80.0));
+	TestTrue(TEXT("complete rod function geometry is ready"), Rod->IsRuntimeDefinitionReady());
+	Rod->MaximumLineLengthCentimeters = 0.0;
+	TestFalse(TEXT("rod without line length fails closed"), Rod->IsRuntimeDefinitionReady());
 	return !HasAnyErrors();
 }
 

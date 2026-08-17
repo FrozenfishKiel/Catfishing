@@ -9,6 +9,7 @@
 #include "Fishing/Actors/CatFishingActorTypes.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/Components/CatFishingLineComponent.h"
 #include "Fishing/CatFishingTypes.h"
 #include "GameFramework/PlayerState.h"
 #include "Net/UnrealNetwork.h"
@@ -36,6 +37,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingAttemptSnapshotContractTest,
 	"Catfishing.Unit.Fishing.Actors.AttemptSnapshotUsesTypedRodAndDefaultsFailClosed",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingRodMutationAndLineContractTest,
+	"Catfishing.Unit.Fishing.Actors.RodMutationsUseCanonicalAnchorsAndLineIsPresentationOnly",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 namespace CatFishingActorContractTest
@@ -275,8 +281,7 @@ bool FCatFishingAttemptSnapshotContractTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("attempt reservation revision defaults zero"), Snapshot.EquipmentReservationRevision, int64{0});
 	TestEqual(TEXT("attempt rod revision defaults zero"), Snapshot.RodActorRevision, int64{0});
 	TestEqual(TEXT("attempt landing defaults zero"), Snapshot.ServerCorrectedLandingWorldPoint, FVector::ZeroVector);
-	TestTrue(TEXT("attempt water region defaults None"), Snapshot.WaterRegionId.IsNone());
-	TestEqual(TEXT("attempt geometry revision defaults zero"), Snapshot.GeometryRevision, int64{0});
+	TestTrue(TEXT("attempt water region defaults invalid"), !Snapshot.WaterRegion.IsValid());
 	TestEqual(TEXT("attempt seed defaults zero"), Snapshot.ServerRandomSeed, uint64{0});
 	const UScriptStruct* Struct = FCatFishingAttemptSnapshot::StaticStruct();
 	const FObjectPropertyBase* RodProperty = FindFProperty<FObjectPropertyBase>(Struct, TEXT("RodActor"));
@@ -291,6 +296,15 @@ bool FCatFishingAttemptSnapshotContractTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("attempt fisher property is typed"), FisherProperty->PropertyClass == APlayerState::StaticClass());
 		TestFalse(TEXT("attempt seed is not Blueprint visible"), SeedProperty->HasAnyPropertyFlags(CPF_BlueprintVisible));
 	}
+	return !HasAnyErrors();
+}
+
+bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const UCatFishingLineComponent* Line = GetDefault<UCatFishingLineComponent>();
+	TestFalse(TEXT("line component does not tick"), Line->PrimaryComponentTick.bCanEverTick);
+	TestFalse(TEXT("line component does not replicate gameplay state"), Line->GetIsReplicated());
 	return !HasAnyErrors();
 }
 

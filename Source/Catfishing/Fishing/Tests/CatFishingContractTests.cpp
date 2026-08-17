@@ -76,6 +76,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Fishing.Contracts.BeginCastDiscreteAndReelingCommandsExposeDifferentConcurrencyFields",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingBeginCastWaterHandleContractTest,
+	"Catfishing.Unit.Fishing.Contracts.BeginCastCarriesExactWaterHandleAndCandidatePoint",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
 // Protects command authority shape: cast uses rod/equipment revisions while reeling uses an ordered input stream.
 bool FCatFishingConcurrencyFieldsContractTest::RunTest(const FString& Parameters)
 {
@@ -208,6 +213,21 @@ bool FCatFishingStructuredResultContractTest::RunTest(const FString& Parameters)
 		TestNotNull(FString::Printf(TEXT("Result exposes %s"), Field), FindFProperty<FProperty>(ResultStruct, Field));
 	}
 	TestFalse(TEXT("Default result has no suggested session"), Result.SuggestedFishingSessionId.IsValid());
+	return !HasAnyErrors();
+}
+
+bool FCatFishingBeginCastWaterHandleContractTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const UScriptStruct* Command = FCatBeginCastCommand::StaticStruct();
+	const UScriptStruct* Result = FCatBeginCastResult::StaticStruct();
+	TestNotNull(TEXT("command carries exact water handle"),
+		FindFProperty<FProperty>(Command, TEXT("ExpectedWaterRegionHandle")));
+	TestNotNull(TEXT("command carries candidate point"),
+		FindFProperty<FProperty>(Command, TEXT("ClientCandidateWorldPoint")));
+	TestNotNull(TEXT("result carries exact water handle"), FindFProperty<FProperty>(Result, TEXT("WaterRegion")));
+	TestNotNull(TEXT("result carries corrected landing"),
+		FindFProperty<FProperty>(Result, TEXT("ServerCorrectedLandingWorldPoint")));
 	return !HasAnyErrors();
 }
 

@@ -7,6 +7,7 @@
 #include "CatFishingSession.generated.h"
 
 class ACatCharacter;
+class ACatFishingHookActor;
 class UCatFishDefinition;
 class UCatItemsService;
 class UStateTreeComponent;
@@ -35,6 +36,11 @@ public:
 	bool InitializeSession(FGuid InFishingSessionId, FGuid InCastAttemptId, AController* FisherController,
 		ACatCharacter* FisherCharacter, UCatFishDefinition* FishDefinition, FGuid FisherGuardContainerId,
 		double FishWeightKilograms, const FCatWaterRegionSnapshot& WaterRegion);
+	bool PrepareSessionFromAuthority(const FCatFishingAttemptSnapshot& Attempt, AController* FisherController,
+		ACatCharacter* FisherCharacter, ACatFishingHookActor* HookActor);
+	bool StartPreparedSessionLogicFromAuthority();
+	bool PublishPreparedSessionFromAuthority();
+	void AbortPreparedSessionFromAuthority();
 
 	/** StateTree EnterPhase Task 的唯一阶段写入口；NearShore 必须提供水域内服务器目标，HookedFight/NearShore 保留合法参与者，其他阶段重置为钓手，终态启动有界销毁。 */
 	FCatFishingPhaseResult EnterPhaseFromStateTree(ECatFishingPhase NewPhase,
@@ -162,6 +168,8 @@ private:
 
 	/** StateTree StartLogic 同步进入首状态时允许 EnterPhase 写入的短生命周期标记。 */
 	bool bStartupInProgress = false;
+	bool bPrepared = false;
+	bool bPublished = false;
 
 	/** 捕获是否已经由某个合法请求不可逆提交；true 后所有新抢抄返回 AlreadyResolved。 */
 	bool bCaptureResolved = false;

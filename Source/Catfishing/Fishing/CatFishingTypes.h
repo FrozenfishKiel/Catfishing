@@ -67,8 +67,7 @@ struct FCatFishingAttemptSnapshot
 	UPROPERTY(BlueprintReadOnly) int64 EquipmentReservationRevision = 0;
 	UPROPERTY(BlueprintReadOnly) int64 RodActorRevision = 0;
 	UPROPERTY(BlueprintReadOnly) FVector ServerCorrectedLandingWorldPoint = FVector::ZeroVector;
-	UPROPERTY(BlueprintReadOnly) FName WaterRegionId = NAME_None;
-	UPROPERTY(BlueprintReadOnly) int64 GeometryRevision = 0;
+	UPROPERTY(BlueprintReadOnly) FCatWaterRegionHandle WaterRegion;
 	UPROPERTY() uint64 ServerRandomSeed = 0;
 };
 

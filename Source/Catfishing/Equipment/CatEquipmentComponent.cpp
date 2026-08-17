@@ -28,7 +28,8 @@ const FCatEquipmentLoadoutSnapshot& UCatEquipmentComponent::GetSnapshot() const
 
 // 装配流程：按 RequestId 重放后验证 authority/Revision、三份正式定义类别和服务器解锁证明；只允许首次装配，重复同套不补耐久，换装策略未裁时 fail-closed。
 FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(const FGuid RequestId,
-	const int64 ExpectedRevision, const FName RodDefinitionId, const FName BaitDefinitionId, const FName FloatDefinitionId)
+	const int64 ExpectedRevision, const FName RodDefinitionId, const FName BaitDefinitionId,
+	const FName FloatDefinitionId, const FName ScoopNetDefinitionId, const FName RodSkinDefinitionId)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
@@ -50,13 +51,15 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 	UCatEquipmentDefinition* Rod = Settings->FindRuntimeDefinition(RodDefinitionId);
 	UCatEquipmentDefinition* Bait = Settings->FindRuntimeDefinition(BaitDefinitionId);
 	UCatEquipmentDefinition* Float = Settings->FindRuntimeDefinition(FloatDefinitionId);
+	UCatEquipmentDefinition* Scoop = ScoopNetDefinitionId.IsNone() ? nullptr : Settings->FindRuntimeDefinition(ScoopNetDefinitionId);
 	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
 	const ACatfishingPlayerState* PlayerState = OwnerPawn ? OwnerPawn->GetPlayerState<ACatfishingPlayerState>() : nullptr;
 	if (Settings->ProfileLoadoutTrustPolicy != ECatDomainPolicy::Enabled)
 	{
 		Result.Error = ECatDomainCommandError::PolicyUndecided;
 	}
-	else if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !Rod || !Bait || !Float)
+	else if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !Rod || !Bait || !Float
+		|| (!ScoopNetDefinitionId.IsNone() && !Scoop))
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
@@ -65,13 +68,14 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 		Result.Error = ECatDomainCommandError::RevisionConflict;
 	}
 	else if (Rod->Kind != ECatEquipmentKind::Rod || Bait->Kind != ECatEquipmentKind::Bait
-		|| Float->Kind != ECatEquipmentKind::Float)
+		|| Float->Kind != ECatEquipmentKind::Float || (Scoop && Scoop->Kind != ECatEquipmentKind::ScoopNet))
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
 	}
 	else if (!PlayerState || !PlayerState->HasServerAuthorizedEquipmentUnlock(Rod->RequiredUnlockId)
 		|| !PlayerState->HasServerAuthorizedEquipmentUnlock(Bait->RequiredUnlockId)
-		|| !PlayerState->HasServerAuthorizedEquipmentUnlock(Float->RequiredUnlockId))
+		|| !PlayerState->HasServerAuthorizedEquipmentUnlock(Float->RequiredUnlockId)
+		|| (Scoop && !PlayerState->HasServerAuthorizedEquipmentUnlock(Scoop->RequiredUnlockId)))
 	{
 		Result.Error = ECatDomainCommandError::PermissionDenied;
 	}
@@ -79,7 +83,8 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 	{
 		// 同一套新 Request 只读取既有耐久，不能借 Configure 免费修竿；任何不同 ID 都属于尚未裁决的换装生命周期。
 		const bool bSameLoadout = Snapshot.RodDefinitionId == RodDefinitionId
-			&& Snapshot.BaitDefinitionId == BaitDefinitionId && Snapshot.FloatDefinitionId == FloatDefinitionId;
+			&& Snapshot.BaitDefinitionId == BaitDefinitionId && Snapshot.FloatDefinitionId == FloatDefinitionId
+			&& Snapshot.ScoopNetDefinitionId == ScoopNetDefinitionId && Snapshot.RodSkinDefinitionId == RodSkinDefinitionId;
 		Result.Error = bSameLoadout ? ECatDomainCommandError::AlreadyResolved : ECatDomainCommandError::PolicyUndecided;
 	}
 	else
@@ -87,6 +92,8 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 		Snapshot.RodDefinitionId = RodDefinitionId;
 		Snapshot.BaitDefinitionId = BaitDefinitionId;
 		Snapshot.FloatDefinitionId = FloatDefinitionId;
+		Snapshot.ScoopNetDefinitionId = ScoopNetDefinitionId;
+		Snapshot.RodSkinDefinitionId = RodSkinDefinitionId;
 		Snapshot.RodDurability = Rod->MaximumRodDurability;
 		Snapshot.bRodBroken = false;
 		++Snapshot.Revision;
