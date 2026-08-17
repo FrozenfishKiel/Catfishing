@@ -148,3 +148,42 @@ bool FCatFishingPhaseCondition::TestCondition(FStateTreeExecutionContext& Contex
 	const ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
 	return Session && Session->GetSnapshot().Phase == Context.GetInstanceData(*this).ExpectedPhase;
 }
+
+FCatFishingStartFightRunnerTask::FCatFishingStartFightRunnerTask()
+{
+	bShouldCallTick = false;
+	bShouldCopyBoundPropertiesOnTick = false;
+	bShouldCopyBoundPropertiesOnExitState = false;
+}
+
+EStateTreeRunStatus FCatFishingStartFightRunnerTask::EnterState(FStateTreeExecutionContext& Context,
+	const FStateTreeTransitionResult& Transition) const
+{
+	(void)Transition;
+	ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
+	return Session && (Session->IsFightRunnerRunning() || Session->TryEnterHookedFightFromAuthority())
+		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
+}
+
+FCatFishingWaitForFightRunnerTask::FCatFishingWaitForFightRunnerTask()
+{
+	bShouldCallTick = true;
+	bShouldCopyBoundPropertiesOnTick = false;
+	bShouldCopyBoundPropertiesOnExitState = false;
+}
+
+EStateTreeRunStatus FCatFishingWaitForFightRunnerTask::EnterState(FStateTreeExecutionContext& Context,
+	const FStateTreeTransitionResult& Transition) const
+{
+	(void)Transition;
+	const ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
+	return Session && Session->IsFightRunnerRunning() ? EStateTreeRunStatus::Running : EStateTreeRunStatus::Succeeded;
+}
+
+EStateTreeRunStatus FCatFishingWaitForFightRunnerTask::Tick(FStateTreeExecutionContext& Context,
+	const float DeltaTime) const
+{
+	(void)DeltaTime;
+	const ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
+	return Session && Session->IsFightRunnerRunning() ? EStateTreeRunStatus::Running : EStateTreeRunStatus::Succeeded;
+}

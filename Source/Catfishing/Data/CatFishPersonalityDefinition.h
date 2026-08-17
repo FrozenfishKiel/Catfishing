@@ -30,5 +30,6 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly) FVector2D StruggleDurationRangeSeconds = FVector2D::ZeroVector;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0")) double CalmMovementSpeedCentimetersPerSecond = 0.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0")) double StruggleMovementSpeedCentimetersPerSecond = 0.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0.01")) double BaseDrainMultiplier = 1.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="1")) double StruggleDrainMultiplier = 0.0;
 };

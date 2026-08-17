@@ -21,5 +21,6 @@ bool UCatFightPersonalityDefinition::IsRuntimeDefinitionReady() const
 	return !FightPersonalityId.IsNone() && ValidRange(CalmDurationRangeSeconds) && ValidRange(StruggleDurationRangeSeconds)
 		&& FMath::IsFinite(CalmMovementSpeedCentimetersPerSecond) && CalmMovementSpeedCentimetersPerSecond > 0.0
 		&& FMath::IsFinite(StruggleMovementSpeedCentimetersPerSecond) && StruggleMovementSpeedCentimetersPerSecond > 0.0
-		&& FMath::IsFinite(StruggleDrainMultiplier) && StruggleDrainMultiplier >= 1.0;
+		&& FMath::IsFinite(BaseDrainMultiplier) && BaseDrainMultiplier > 0.0
+		&& FMath::IsFinite(StruggleDrainMultiplier) && StruggleDrainMultiplier > 1.0;
 }

@@ -18,6 +18,8 @@ public:
 	bool InitializeAuthoritativeIdentity(FGuid InFishingSessionId, FGuid InCastAttemptId, FName InFishDefinitionId, double InInitialLineLength);
 	void DeferInitialPresentationFromAuthority();
 	void PublishInitialPresentationFromAuthority();
+	bool ApplyFightStepFromAuthority(ECatFishMotionIntent MotionIntent, double CurrentLineLength,
+		const FVector& FishWorldPosition);
 	const FCatFishEncounterPresentationState& GetPresentationState() const;
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category="Fishing|Fish")
 	void BP_OnFishPresentationChanged(const FCatFishEncounterPresentationState& Previous, const FCatFishEncounterPresentationState& Current);

@@ -53,6 +53,23 @@ bool ACatFishEncounterActor::InitializeAuthoritativeIdentity(const FGuid InFishi
 
 const FCatFishEncounterPresentationState& ACatFishEncounterActor::GetPresentationState() const { return PresentationState; }
 
+bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionIntent MotionIntent,
+	const double CurrentLineLength, const FVector& FishWorldPosition)
+{
+	if (!HasAuthority() || !bIdentityInitialized || FishWorldPosition.ContainsNaN()
+		|| !FMath::IsFinite(CurrentLineLength) || CurrentLineLength < 0.0)
+	{
+		return false;
+	}
+	const FCatFishEncounterPresentationState Previous = PresentationState;
+	PresentationState.MotionIntent = MotionIntent;
+	PresentationState.CurrentLineLength = CurrentLineLength;
+	SetActorLocation(FishWorldPosition, false, nullptr, ETeleportType::TeleportPhysics);
+	QueueOrDispatchPresentationChanged(Previous, PresentationState);
+	ForceNetUpdate();
+	return true;
+}
+
 void ACatFishEncounterActor::DeferInitialPresentationFromAuthority()
 {
 	if (HasAuthority() && !HasActorBegunPlay()) bPresentationDeferred = true;

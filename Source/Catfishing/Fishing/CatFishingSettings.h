@@ -41,6 +41,13 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0")) double MinimumBiteDelaySeconds = 0.0;
 	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0")) double MaximumBiteDelaySeconds = 0.0;
 
+	/** Authority fight runner tuning. Defaults are usable without introducing persistent Config changes. */
+	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.001")) double FixedFightStepSeconds = 0.05;
+	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.001")) double BaseFightDrainPerSecond = 1.0;
+	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.001")) double ReelSpeedCentimetersPerSecond = 80.0;
+	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0")) double EscapeSlackCentimeters = 100.0;
+	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0")) double NearShoreLineLengthCentimeters = 100.0;
+
 	/** NearShore 合法几何策略 gate；默认 false，未接真实岸线验证时不允许测试命令伪造捕获。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
 	bool bEnableNearShoreValidation = false;

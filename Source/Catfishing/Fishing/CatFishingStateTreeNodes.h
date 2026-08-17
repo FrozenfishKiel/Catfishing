@@ -184,3 +184,28 @@ struct CATFISHING_API FCatFishingPhaseCondition : public FStateTreeConditionComm
 	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
 	virtual bool TestCondition(FStateTreeExecutionContext& Context) const override;
 };
+
+/** Starts the authority runner; all numeric simulation remains outside StateTree. */
+USTRUCT(meta=(DisplayName="Cat Fishing Start Fight Runner", Category="Catfishing|Fishing"))
+struct CATFISHING_API FCatFishingStartFightRunnerTask : public FStateTreeTaskCommonBase
+{
+	GENERATED_BODY()
+	using FInstanceDataType = FCatFishingWaitTaskInstanceData;
+	FCatFishingStartFightRunnerTask();
+	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
+	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context,
+		const FStateTreeTransitionResult& Transition) const override;
+};
+
+/** Polls runner completion only; it never performs a fight step. */
+USTRUCT(meta=(DisplayName="Cat Fishing Wait For Fight Runner", Category="Catfishing|Fishing"))
+struct CATFISHING_API FCatFishingWaitForFightRunnerTask : public FStateTreeTaskCommonBase
+{
+	GENERATED_BODY()
+	using FInstanceDataType = FCatFishingWaitTaskInstanceData;
+	FCatFishingWaitForFightRunnerTask();
+	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
+	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context,
+		const FStateTreeTransitionResult& Transition) const override;
+	virtual EStateTreeRunStatus Tick(FStateTreeExecutionContext& Context, float DeltaTime) const override;
+};

@@ -11,12 +11,15 @@
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishPersonalityDefinition.h"
 #include "Environment/CatChumFieldSubsystem.h"
+#include "Environment/CatWaterQuerySubsystem.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingGameplayTags.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/CatFishingService.h"
+#include "Fishing/Simulation/CatFishFightMotionSolver.h"
+#include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Components/StateTreeComponent.h"
 #include "GameFramework/PlayerState.h"
@@ -126,8 +129,12 @@ FCatFishingPhaseResult ACatFishingSession::EnterPhaseFromStateTree(const ECatFis
 	if (NewPhase == ECatFishingPhase::NearShore)
 	{
 		const FBox WaterBounds = FBox::BuildAABB(WaterRegionSnapshot.WorldCenter, WaterRegionSnapshot.HalfExtent);
+		const UCatWaterQuerySubsystem* Water = GetWorld() ? GetWorld()->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
+		const FCatWaterSpatialResult Exact = Water && AttemptSnapshot.WaterRegion.IsValid()
+			? Water->QueryWaterPoint(AuthoritativeNearShoreTarget, AttemptSnapshot.WaterRegion) : FCatWaterSpatialResult{};
+		const bool bLegacyWaterContains = WaterBounds.IsValid && WaterBounds.IsInsideOrOn(AuthoritativeNearShoreTarget);
 		if (!bHasAuthoritativeNearShoreTarget || AuthoritativeNearShoreTarget.ContainsNaN()
-			|| !WaterBounds.IsInsideOrOn(AuthoritativeNearShoreTarget))
+			|| (!Exact.bSucceeded && !bLegacyWaterContains))
 		{
 			Result.Error = ECatDomainCommandError::PolicyUndecided;
 			return Result;
@@ -235,6 +242,11 @@ FCatDomainCommandResult ACatFishingSession::ResolveFightExchangeFromStateTree(co
 	const double ParticipantStaminaCost)
 {
 	FCatDomainCommandResult Result;
+	if (FightRunner && FightRunner->IsRunning())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPhase;
+		return Result;
+	}
 	Result.RequestId = FGuid::NewGuid();
 	if (!HasAuthority() || !StateTreeComponent || !StateTreeComponent->IsRunning()
 		|| Snapshot.Phase != ECatFishingPhase::HookedFight || !FishDefinition
@@ -792,6 +804,174 @@ void ACatFishingSession::HandleTrueBiteWindowExpired()
 	}
 }
 
+bool ACatFishingSession::TryEnterHookedFightFromAuthority()
+{
+	if (FightRunner && FightRunner->IsRunning()) return Snapshot.Phase == ECatFishingPhase::HookedFight;
+	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	const UCatFightPersonalityDefinition* Personality = FishDefinition && Settings
+		? Settings->FindFightPersonality(FishDefinition->FightPersonalityId) : nullptr;
+	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
+		AttemptSnapshot.RodDefinitionId);
+	UCatEquipmentComponent* Equipment = FisherCharacter.IsValid() ? FisherCharacter->GetEquipmentComponent() : nullptr;
+	UCatAbilitySystemComponent* AbilitySystem = FisherCharacter.IsValid()
+		? FisherCharacter->GetCatAbilitySystemComponent() : nullptr;
+	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
+	ACatFishingRodActor* Rod = AttemptSnapshot.RodActor;
+	UCatWaterQuerySubsystem* Water = GetWorld() ? GetWorld()->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
+	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::TrueBiteWindow
+		|| SelectionResolution != ECatFishSelectionResolution::Selected || !Settings || !Personality
+		|| !Personality->IsRuntimeDefinitionReady() || !RodDefinition || !RodDefinition->IsRuntimeDefinitionReady()
+		|| !Equipment || !Equipment->IsFishingUseActive(Snapshot.FishingSessionId) || !AbilitySystem
+		|| !Encounter || !Rod || !Water || !AttemptSnapshot.WaterRegion.IsValid())
+	{
+		return false;
+	}
+
+	FCatFightSimulationConfig Config;
+	Config.FixedStepSeconds = Settings->FixedFightStepSeconds;
+	Config.BaseDrainPerSecond = Settings->BaseFightDrainPerSecond;
+	Config.BaseDrainMultiplier = Personality->BaseDrainMultiplier;
+	Config.StruggleDrainMultiplier = Personality->StruggleDrainMultiplier;
+	Config.ReelSpeedCentimetersPerSecond = Settings->ReelSpeedCentimetersPerSecond;
+	Config.FishCalmSpeedCentimetersPerSecond = Personality->CalmMovementSpeedCentimetersPerSecond;
+	Config.FishStruggleSpeedCentimetersPerSecond = Personality->StruggleMovementSpeedCentimetersPerSecond;
+	Config.MaximumLineLengthCentimeters = RodDefinition->MaximumLineLengthCentimeters;
+	Config.RodWearPerTensionSecond = RodDefinition->BaseDurabilityWearPerSecond
+		* RodDefinition->HighTensionWearMultiplier / RodDefinition->MaximumLineLengthCentimeters;
+	Config.RodDurability = Equipment->GetSnapshot().RodDurability;
+	Config.EscapeSlackCentimeters = Settings->EscapeSlackCentimeters;
+	Config.NearShoreLineLengthCentimeters = Settings->NearShoreLineLengthCentimeters;
+	if (!Config.IsValid() || !AbilitySystem->InitializeFishingStaminaForSession()) return false;
+
+	FCatFightSimulationState InitialState;
+	InitialState.CatStamina = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	InitialState.FishStamina = Snapshot.FishFightStaminaRemaining;
+	InitialState.LineLengthCentimeters = Encounter->GetPresentationState().CurrentLineLength;
+	InitialState.FishWorldPosition = Encounter->GetActorLocation();
+	InitialState.MotionIntent = ECatFishMotionIntent::CalmOrInward;
+	const FVector Landing = AttemptSnapshot.ServerCorrectedLandingWorldPoint;
+	const FVector HalfExtent(Config.MaximumLineLengthCentimeters, Config.MaximumLineLengthCentimeters,
+		FMath::Max(500.0, Config.MaximumLineLengthCentimeters * 0.25));
+	const FBox FrozenBounds = FBox::BuildAABB(Landing, HalfExtent);
+	FCatFishMotionSolveInput ProjectionInput;
+	ProjectionInput.RodTipWorldPosition = Rod->GetRodTipWorldTransform().GetLocation();
+	ProjectionInput.ProposedFishWorldPosition = InitialState.FishWorldPosition;
+	ProjectionInput.WaterBounds = FrozenBounds;
+	ProjectionInput.MaximumLineLengthCentimeters = Config.MaximumLineLengthCentimeters;
+	const FCatFishMotionSolveResult Projected = FCatFishFightMotionSolver::Solve(ProjectionInput);
+	const FCatWaterSpatialResult Exact = Projected.bSucceeded
+		? Water->ResolveCandidatePointToWater(Projected.FishWorldPosition, AttemptSnapshot.WaterRegion)
+		: FCatWaterSpatialResult{};
+	if (!Projected.bSucceeded || !Exact.bSucceeded
+		|| !Encounter->ApplyFightStepFromAuthority(ECatFishMotionIntent::CalmOrInward,
+			InitialState.LineLengthCentimeters, Exact.WaterSurfaceWorldPoint))
+	{
+		AbilitySystem->RequestFishingStaminaReset();
+		return false;
+	}
+	InitialState.FishWorldPosition = Encounter->GetActorLocation();
+
+	FCatFishingFightRunnerInit Init;
+	Init.Session = this;
+	Init.FishActor = Encounter;
+	Init.RodActor = Rod;
+	Init.AbilitySystem = AbilitySystem;
+	Init.Equipment = Equipment;
+	Init.FishingSessionId = Snapshot.FishingSessionId;
+	Init.WaterRegion = AttemptSnapshot.WaterRegion;
+	Init.FrozenWaterBounds = FrozenBounds;
+	Init.Config = Config;
+	Init.InitialState = InitialState;
+	Init.CalmDurationRangeSeconds = Personality->CalmDurationRangeSeconds;
+	Init.StruggleDurationRangeSeconds = Personality->StruggleDurationRangeSeconds;
+	Init.RandomSeed = AttemptSnapshot.ServerRandomSeed != 0
+		? AttemptSnapshot.ServerRandomSeed : static_cast<uint64>(GetTypeHash(Snapshot.FishingSessionId));
+	FightRunner = NewObject<UCatFishingFightRunner>(this);
+	if (!FightRunner || !FightRunner->InitializeFromAuthority(Init) || !FightRunner->Start())
+	{
+		FightRunner = nullptr;
+		AbilitySystem->RequestFishingStaminaReset();
+		return false;
+	}
+	bFightStaminaInitialized = true;
+	StaminaParticipantsTouched.Add(FisherCharacter);
+	if (!EnterPhaseFromStateTree(ECatFishingPhase::HookedFight, false, FVector::ZeroVector).bApplied)
+	{
+		FightRunner->Stop();
+		FightRunner = nullptr;
+		StaminaParticipantsTouched.Remove(FisherCharacter);
+		bFightStaminaInitialized = false;
+		AbilitySystem->RequestFishingStaminaReset();
+		return false;
+	}
+	return true;
+}
+
+bool ACatFishingSession::SetReelingFromAuthority(const int64 InputSequence, const bool bReeling)
+{
+	if (!HasAuthority() || Snapshot.Phase != ECatFishingPhase::HookedFight || !FightRunner
+		|| !FightRunner->SetReeling(InputSequence, bReeling))
+	{
+		return false;
+	}
+	Snapshot.bReeling = bReeling;
+	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
+	return true;
+}
+
+bool ACatFishingSession::IsFightRunnerRunning() const
+{
+	return FightRunner && FightRunner->IsRunning();
+}
+
+void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepResult& Step,
+	const double FishStaminaRemaining, const ECatFishMotionIntent MotionIntent)
+{
+	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::HookedFight || !FightRunner) return;
+	Snapshot.FishFightStaminaRemaining = FMath::Max(0.0, FishStaminaRemaining);
+	Snapshot.NormalizedFishStamina = FishDefinition && FishDefinition->FishFightStamina > 0.0
+		? FMath::Clamp(Snapshot.FishFightStaminaRemaining / FishDefinition->FishFightStamina, 0.0, 1.0) : 0.0;
+	Snapshot.FishMotionIntent = MotionIntent;
+	RefreshFightSummary();
+	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
+	if (Step.Outcome == ECatFightStepOutcome::RodBroken)
+	{
+		UCatEquipmentComponent* Equipment = FisherCharacter.IsValid() ? FisherCharacter->GetEquipmentComponent() : nullptr;
+		if (!Equipment || !Equipment->CommitFishingRodBreak(Snapshot.FishingSessionId).bApplied)
+		{
+			FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Rod break commit failed"));
+			return;
+		}
+		if (Snapshot.RodActor)
+		{
+			const int64 Revision = Snapshot.RodActor->GetPresentationState().RodActorRevision;
+			Snapshot.RodActor->SetBrokenFromAuthority(true, Revision);
+		}
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::RodBroken, TEXT("Rod broken"));
+	}
+	else if (Step.Outcome == ECatFightStepOutcome::CatStaminaExhausted
+		|| Step.Outcome == ECatFightStepOutcome::Escaped)
+	{
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Escaped,
+			Step.Outcome == ECatFightStepOutcome::Escaped ? TEXT("Fish escaped") : TEXT("Cat fight stamina exhausted"));
+	}
+	else if (Step.Outcome == ECatFightStepOutcome::FishExhausted
+		|| Step.Outcome == ECatFightStepOutcome::NearShore)
+	{
+		FightRunner->Stop();
+		const FVector Target = Snapshot.FishEncounterActor ? Snapshot.FishEncounterActor->GetActorLocation() : FVector::ZeroVector;
+		EnterPhaseFromStateTree(ECatFishingPhase::NearShore, Snapshot.FishEncounterActor != nullptr, Target);
+	}
+}
+
+void ACatFishingSession::HandleFightRunnerFailureFromAuthority()
+{
+	if (HasAuthority() && !IsTerminal())
+	{
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Fight runner dependency failed"));
+	}
+}
+
 FCatFishingCommandResult ACatFishingSession::RequestHookFromAuthority(const FGuid RequestId)
 {
 	if (const FCatFishingCommandResult* Cached = HookTerminalByRequest.Find(RequestId)) return *Cached;
@@ -812,9 +992,14 @@ FCatFishingCommandResult ACatFishingSession::RequestHookFromAuthority(const FGui
 	else if (Snapshot.Phase == ECatFishingPhase::TrueBiteWindow && SelectionResolution == ECatFishSelectionResolution::Selected)
 	{
 		GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
-		if (StateTreeComponent) StateTreeComponent->SendStateTreeEvent(CatFishingGameplayTags::HookAccepted,
-			FConstStructView(), TEXT("CatFishing"));
-		Result.bCommitted = EnterPhaseFromStateTree(ECatFishingPhase::HookedFight, false, FVector::ZeroVector).bApplied;
+		Result.bCommitted = TryEnterHookedFightFromAuthority();
+		if (Result.bCommitted && StateTreeComponent) StateTreeComponent->SendStateTreeEvent(
+			CatFishingGameplayTags::HookAccepted, FConstStructView(), TEXT("CatFishing"));
+		if (!Result.bCommitted)
+		{
+			FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
+				TEXT("Hooked fight initialization failed"));
+		}
 		Result.Error = Result.bCommitted ? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;
 	}
 	else Result.Error = ECatFishingCommandError::InvalidPhase;
@@ -890,6 +1075,7 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	Snapshot.Outcome = FinalOutcome;
 	Snapshot.PhaseStartedServerTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
 	PublishSnapshot(ECatFishingSnapshotMutation::PhaseChange);
+	if (FightRunner) FightRunner->Stop();
 	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
 	GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
 	if (FisherCharacter.IsValid())
@@ -968,6 +1154,7 @@ bool ACatFishingSession::IsTerminal() const
 // World 清理流程：停止仍在运行的 StateTree，并为仍可达参与者登记/应用 stamina 恢复后清私有弱引用；不补发捕获事务。
 void ACatFishingSession::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (FightRunner) FightRunner->Stop();
 	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
 	GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
 	if (StateTreeComponent && StateTreeComponent->IsRunning())

@@ -12,7 +12,9 @@ class ACatCharacter;
 class ACatFishingHookActor;
 class UCatFishDefinition;
 class UCatItemsService;
+class UCatFishingFightRunner;
 class UStateTreeComponent;
+struct FCatFightStepResult;
 class FCatFishingSessionReplicationContractTest;
 class FCatFishingSessionSnapshotVersionMutationRulesTest;
 class FCatFishingSessionTerminationOutcomeTest;
@@ -47,6 +49,12 @@ public:
 	FCatFishSelectionCommitResult ResolveProbeSelectionFromStateTree();
 	FCatFishingCommandResult RequestHookFromAuthority(FGuid RequestId);
 	FCatFishingCommandResult CancelFromAuthority(FGuid RequestId);
+	bool TryEnterHookedFightFromAuthority();
+	bool SetReelingFromAuthority(int64 InputSequence, bool bReeling);
+	bool IsFightRunnerRunning() const;
+	void HandleFightRunnerStepFromAuthority(const FCatFightStepResult& Step, double FishStaminaRemaining,
+		ECatFishMotionIntent MotionIntent);
+	void HandleFightRunnerFailureFromAuthority();
 
 	/** StateTree EnterPhase Task 的唯一阶段写入口；NearShore 必须提供水域内服务器目标，HookedFight/NearShore 保留合法参与者，其他阶段重置为钓手，终态启动有界销毁。 */
 	FCatFishingPhaseResult EnterPhaseFromStateTree(ECatFishingPhase NewPhase,
@@ -129,6 +137,9 @@ private:
 	/** 当前会话唯一 StateTree 组件；自动启动关闭，由 Initialize 显式设置资产。 */
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UStateTreeComponent> StateTreeComponent;
+
+	UPROPERTY()
+	TObjectPtr<UCatFishingFightRunner> FightRunner;
 
 	/** 客户端可观察的会话阶段、鱼种和参与人数；服务器是唯一写者。 */
 	UPROPERTY(ReplicatedUsing=OnRep_Snapshot)
