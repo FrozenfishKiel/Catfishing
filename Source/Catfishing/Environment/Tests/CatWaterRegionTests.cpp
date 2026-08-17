@@ -3,147 +3,202 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 
+#include "Environment/CatWaterGeometry.h"
 #include "Environment/CatWaterRegion.h"
+#include "Environment/Tests/CatWaterTestFixtures.h"
+
+#if WITH_EDITOR
+#include "Components/SplineComponent.h"
+#include "Environment/CatWaterBoundarySplineActor.h"
+#include "Misc/DataValidation.h"
+#include "UObject/UnrealType.h"
+#endif
 
 namespace CatWaterRegionTest
 {
-	// 配置流程：把测试水域设置成完整 prototype AABB，并按参数开放聚鱼预算；调用方仍通过公开接口验证运行结果。
-	static void ConfigureRegion(ACatWaterRegion* Region, const FName RegionId, const FVector& Location,
-		const int64 Revision, const bool bEnableAggregation, const double AggregationBudget)
+	static FCatWaterGeometryBuildInput MakeSquare(FName Id = TEXT("LakeA"), FVector Origin = FVector(0, 0, 100))
 	{
-		if (!Region)
-		{
-			return;
-		}
-		Region->SetActorLocation(Location);
-		Region->RegionId = RegionId;
-		Region->bEnablePrototypeBounds = true;
-		Region->HalfExtent = FVector(100.0, 100.0, 50.0);
-		Region->GeometryRevision = Revision;
-		Region->bEnableAggregation = bEnableAggregation;
-		Region->AggregationBudget = AggregationBudget;
+		FCatWaterGeometryBuildInput Input;
+		Input.RegionId = Id;
+		Input.PlaneToWorld = FTransform(FRotator::ZeroRotator, Origin);
+		Input.WaterPointVerticalToleranceCm = 10;
+		Input.BankHeightToleranceCm = 30;
+		Input.BoundaryToleranceCm = 2;
+		Input.MaxLandingCorrectionCm = 25;
+		Input.MinimumWaterInsetCm = 5;
+		Input.MaxSampleSegmentLengthCm = 100;
+		Input.MaxChordErrorCm = 5;
+		FCatWaterPolygonBuildInput& Boundary = Input.Boundaries.AddDefaulted_GetRef();
+		Boundary.BoundaryId = TEXT("Outer");
+		Boundary.Vertices = {{0,0}, {200,0}, {200,200}, {0,200}};
+		return Input;
 	}
 
-	// 命令流程：创建聚鱼写口的最小正式命令，RequestId/身份/Revision/贡献由调用方决定以覆盖成功、重放和并发拒绝。
-	static FCatAggregationCommand MakeAggregationCommand(const FString& StableNetId, const FGuid RequestId,
-		const int64 ExpectedAggregationRevision, const double Fishy)
+	static FCatWaterGeometryCache BuildSquare(FName Id = TEXT("LakeA"), FVector Origin = FVector(0, 0, 100))
+	{
+		return FCatWaterGeometry::Build(MakeSquare(Id, Origin)).Cache;
+	}
+
+#if WITH_EDITOR
+	static ACatWaterBoundarySplineActor* AddSquareBoundary(UWorld* World, ACatWaterRegion* Region, FName Id = TEXT("Outer"))
+	{
+		ACatWaterBoundarySplineActor* Boundary = World->SpawnActor<ACatWaterBoundarySplineActor>();
+		Boundary->BoundaryId = Id;
+		Boundary->OwningRegion = Region;
+		USplineComponent* Spline = const_cast<USplineComponent*>(Boundary->GetBoundarySpline());
+		Spline->ClearSplinePoints(false);
+		for (const FVector Point : {FVector(0,0,0), FVector(200,0,0), FVector(200,200,0), FVector(0,200,0)})
+		{
+			Spline->AddSplinePoint(Point, ESplineCoordinateSpace::World, false);
+		}
+		for (int32 Index = 0; Index < 4; ++Index) Spline->SetSplinePointType(Index, ESplinePointType::Linear, false);
+		Spline->SetClosedLoop(true, true);
+		Region->BoundaryActors.Add(Boundary);
+		return Boundary;
+	}
+
+	static ACatWaterRegion* AddBakedRegion(UWorld* World, FName Id = TEXT("LakeA"))
+	{
+		ACatWaterRegion* Region = World->SpawnActor<ACatWaterRegion>();
+		Region->RegionId = Id;
+		Region->WaterSurfaceZ = 100;
+		Region->WaterPointVerticalToleranceCm = 10;
+		Region->BankHeightToleranceCm = 30;
+		Region->MaxLandingCorrectionCm = 25;
+		Region->MinimumWaterInsetCm = 5;
+		AddSquareBoundary(World, Region);
+		Region->BakeGeometry();
+		return Region;
+	}
+#endif
+
+	static FCatAggregationCommand MakeAggregation(int64 ExpectedRevision)
 	{
 		FCatAggregationCommand Command;
-		Command.Context.StableNetId = StableNetId;
-		Command.Context.RequestId = RequestId;
-		Command.ExpectedAggregationRevision = ExpectedAggregationRevision;
+		Command.Context.StableNetId = TEXT("PlayerA");
+		Command.Context.RequestId = FGuid::NewGuid();
 		Command.RegionId = TEXT("LakeA");
-		Command.Contribution.Fishy = Fishy;
+		Command.ExpectedAggregationRevision = ExpectedRevision;
+		Command.Contribution.Fishy = 1;
 		return Command;
 	}
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatWaterRegionConfigurationTest,
-	"Catfishing.Unit.Environment.WaterRegion.ConfigurationBoundsAndSnapshotAreExplicit",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+#define CAT_REGION_TEST(ClassName, Suffix) \
+	IMPLEMENT_SIMPLE_AUTOMATION_TEST(ClassName, "Catfishing.Unit.Environment.WaterRegion." Suffix, \
+		EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatWaterRegionAggregationTransactionTest,
-	"Catfishing.Unit.Environment.WaterRegion.AggregationReplayRevisionAndBudgetContracts",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+CAT_REGION_TEST(FCatWaterRegionDefaultTest, "DefaultRegionHasNoRuntimeGeometry")
+CAT_REGION_TEST(FCatWaterRegionRuntimeCacheTest, "RuntimeUsesBakedCacheNotMutatedSpline")
+CAT_REGION_TEST(FCatWaterRegionAggregationTest, "AggregationReplayRevisionAndBudgetContracts")
 
-// 测试流程：在真实 Game World 生成 WaterRegion，从默认无效到完整 AABB 逐步验证 Contains 与 Snapshot；水域必须由关卡显式配置才可命中。
-bool FCatWaterRegionConfigurationTest::RunTest(const FString& Parameters)
+#if WITH_EDITOR
+CAT_REGION_TEST(FCatWaterRegionBakeRejectTest, "BakeRejectsDuplicateIdsAndOwnershipMismatch")
+CAT_REGION_TEST(FCatWaterRegionStableHandleTest, "BakeStoresStableNonZeroHandle")
+CAT_REGION_TEST(FCatWaterRegionStaleValidationTest, "DataValidationRejectsStaleBake")
+CAT_REGION_TEST(FCatWaterRegionMutationTest, "AuthoringMutationInvalidatesRuntimeHandle")
+#endif
+
+bool FCatWaterRegionDefaultTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-
-	FTestWorldWrapper WorldWrapper;
-	TestTrue(TEXT("创建 WaterRegion 测试 World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
-	WorldWrapper.ForwardErrorMessages(this);
-	UWorld* World = WorldWrapper.GetTestWorld();
-	TestNotNull(TEXT("可创建 WaterRegion 测试 World"), World);
-	if (!World)
-	{
-		return false;
-	}
-
-	ACatWaterRegion* Region = World->SpawnActor<ACatWaterRegion>();
-	TestNotNull(TEXT("可生成 WaterRegion"), Region);
-	if (!Region)
-	{
-		return false;
-	}
-
-	TestFalse(TEXT("默认 WaterRegion 不可运行"), Region->IsRuntimeConfigured());
-	TestFalse(TEXT("默认 WaterRegion 不包含任何点"), Region->ContainsWorldPoint(FVector::ZeroVector));
-
-	CatWaterRegionTest::ConfigureRegion(Region, TEXT("LakeA"), FVector::ZeroVector, 7, false, 0.0);
-	TestTrue(TEXT("完整 prototype 配置可运行"), Region->IsRuntimeConfigured());
-	TestTrue(TEXT("配置后 AABB 包含中心点"), Region->ContainsWorldPoint(FVector::ZeroVector));
-	TestFalse(TEXT("配置后 AABB 拒绝远点"), Region->ContainsWorldPoint(FVector(1000.0, 0.0, 0.0)));
-
-	const FCatWaterRegionSnapshot Snapshot = Region->MakeSnapshot();
-	TestEqual(TEXT("快照复制稳定区域 ID"), Snapshot.RegionId, FName(TEXT("LakeA")));
-	TestEqual(TEXT("快照复制几何 Revision"), Snapshot.GeometryRevision, int64(7));
-	TestEqual(TEXT("快照初始聚鱼 Revision"), Snapshot.AggregationRevision, int64(1));
-	TestEqual(TEXT("快照复制 AABB 半尺寸"), Snapshot.HalfExtent, FVector(100.0, 100.0, 50.0));
+	ACatWaterRegion* Region = NewObject<ACatWaterRegion>();
+	TestFalse(TEXT("default has no valid baked geometry"), Region->HasValidBakedGeometry());
+	TestFalse(TEXT("default handle invalid"), Region->GetWaterRegionHandle().IsValid());
+	TestFalse(TEXT("compatibility gate uses baked cache"), Region->IsRuntimeConfigured());
 	return !HasAnyErrors();
 }
 
-// 测试流程：同一 WaterRegion 先成功提交聚鱼，再重放、用陈旧 Revision 写入和超预算写入；ChumPool 与 AggregationRevision 只能在首次成功时推进。
-bool FCatWaterRegionAggregationTransactionTest::RunTest(const FString& Parameters)
+bool FCatWaterRegionRuntimeCacheTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-
-	FTestWorldWrapper WorldWrapper;
-	TestTrue(TEXT("创建聚鱼测试 World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
-	WorldWrapper.ForwardErrorMessages(this);
-	UWorld* World = WorldWrapper.GetTestWorld();
-	TestNotNull(TEXT("可创建聚鱼测试 World"), World);
-	if (!World)
-	{
-		return false;
-	}
-
-	ACatWaterRegion* Region = World->SpawnActor<ACatWaterRegion>();
-	TestNotNull(TEXT("可生成聚鱼 WaterRegion"), Region);
-	if (!Region)
-	{
-		return false;
-	}
-	CatWaterRegionTest::ConfigureRegion(Region, TEXT("LakeA"), FVector::ZeroVector, 7, true, 2.0);
-
-	const FGuid RequestId = FGuid::NewGuid();
-	FCatAggregationResult FirstResult = Region->ContributeAggregation(
-		CatWaterRegionTest::MakeAggregationCommand(TEXT("PlayerA"), RequestId, 1, 1.0));
-	TestTrue(TEXT("首次聚鱼提交成功"), FirstResult.Command.bCommitted);
-	TestEqual(TEXT("首次聚鱼返回 None"), FirstResult.Command.Error, ECatDomainCommandError::None);
-	TestEqual(TEXT("首次聚鱼推进 AggregationRevision"), FirstResult.AggregationRevision, int64(2));
-	TestEqual(TEXT("首次聚鱼兼容命令 Revision"), FirstResult.Command.Revision, int64(2));
-	TestEqual(TEXT("首次聚鱼增加 ChumPool"), FirstResult.ChumPool.Fishy, 1.0);
-	TestEqual(TEXT("首次聚鱼不改变 GeometryRevision"), Region->MakeSnapshot().GeometryRevision, int64(7));
-
-	FCatAggregationResult ReplayResult = Region->ContributeAggregation(
-		CatWaterRegionTest::MakeAggregationCommand(TEXT("PlayerA"), RequestId, 1, 1.0));
-	TestFalse(TEXT("聚鱼重放不再次提交"), ReplayResult.Command.bCommitted);
-	TestEqual(TEXT("聚鱼重放返回 AlreadyResolved"), ReplayResult.Command.Error, ECatDomainCommandError::AlreadyResolved);
-	TestEqual(TEXT("聚鱼重放不二次加池"), ReplayResult.ChumPool.Fishy, 1.0);
-	TestEqual(TEXT("聚鱼重放保留 AggregationRevision"), ReplayResult.AggregationRevision, int64(2));
-
-	FCatAggregationResult StaleResult = Region->ContributeAggregation(
-		CatWaterRegionTest::MakeAggregationCommand(TEXT("PlayerA"), FGuid::NewGuid(), 1, 1.0));
-	TestFalse(TEXT("陈旧 Revision 聚鱼不提交"), StaleResult.Command.bCommitted);
-	TestEqual(TEXT("陈旧 Revision 聚鱼返回 RevisionConflict"), StaleResult.Command.Error, ECatDomainCommandError::RevisionConflict);
-	TestEqual(TEXT("陈旧 Revision 聚鱼不改变池"), StaleResult.ChumPool.Fishy, 1.0);
-	TestEqual(TEXT("陈旧 Revision 保持 AggregationRevision"), StaleResult.AggregationRevision, int64(2));
-	TestEqual(TEXT("陈旧 Revision 保持命令 Revision"), StaleResult.Command.Revision, int64(2));
-	TestEqual(TEXT("陈旧 Revision 不改变 GeometryRevision"), Region->MakeSnapshot().GeometryRevision, int64(7));
-
-	FCatAggregationResult CapacityResult = Region->ContributeAggregation(
-		CatWaterRegionTest::MakeAggregationCommand(TEXT("PlayerA"), FGuid::NewGuid(), 2, 2.0));
-	TestFalse(TEXT("超预算聚鱼不提交"), CapacityResult.Command.bCommitted);
-	TestEqual(TEXT("超预算聚鱼返回 CapacityExceeded"), CapacityResult.Command.Error, ECatDomainCommandError::CapacityExceeded);
-	TestEqual(TEXT("超预算聚鱼不改变池"), CapacityResult.ChumPool.Fishy, 1.0);
-	TestEqual(TEXT("超预算保持 AggregationRevision"), CapacityResult.AggregationRevision, int64(2));
-	TestEqual(TEXT("超预算保持命令 Revision"), CapacityResult.Command.Revision, int64(2));
-	TestEqual(TEXT("超预算不改变 GeometryRevision"), Region->MakeSnapshot().GeometryRevision, int64(7));
+	ACatWaterRegion* Region = NewObject<ACatWaterRegion>();
+	const FCatWaterGeometryCache Cache = CatWaterRegionTest::BuildSquare();
+	FCatWaterRegionTestAccess::InjectBakedGeometry(*Region, Cache);
+	TestTrue(TEXT("injected baked cache is runtime valid"), Region->HasValidBakedGeometry());
+	TestTrue(TEXT("inside comes from polygon cache"), Region->ContainsWorldPoint(FVector(100,100,100)));
+	TestFalse(TEXT("point in AABB but outside polygon fails"), Region->ContainsWorldPoint(FVector(199,1999,100)));
+	Region->BoundaryActors.Reset();
+	TestTrue(TEXT("runtime remains independent of authoring actor array"), Region->ContainsWorldPoint(FVector(100,100,100)));
 	return !HasAnyErrors();
 }
 
-#endif // WITH_DEV_AUTOMATION_TESTS
+bool FCatWaterRegionAggregationTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper; WorldWrapper.CreateTestWorld(EWorldType::Game);
+	ACatWaterRegion* Region = WorldWrapper.GetTestWorld()->SpawnActor<ACatWaterRegion>();
+	FCatWaterRegionTestAccess::InjectBakedGeometry(*Region, CatWaterRegionTest::BuildSquare());
+	Region->bEnableAggregation = true; Region->AggregationBudget = 2;
+	FCatAggregationCommand First = CatWaterRegionTest::MakeAggregation(1);
+	const FCatAggregationResult Applied = Region->ContributeAggregation(First);
+	TestTrue(TEXT("first contribution commits"), Applied.Command.bCommitted);
+	TestEqual(TEXT("aggregation revision advances"), Applied.AggregationRevision, int64(2));
+	const FCatAggregationResult Replay = Region->ContributeAggregation(First);
+	TestEqual(TEXT("replay is terminal"), Replay.Command.Error, ECatDomainCommandError::AlreadyResolved);
+	TestEqual(TEXT("aggregation does not mutate geometry handle"), Region->GetWaterRegionHandle(), CatWaterRegionTest::BuildSquare().Handle);
+	return !HasAnyErrors();
+}
+
+#if WITH_EDITOR
+bool FCatWaterRegionBakeRejectTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper; WorldWrapper.CreateTestWorld(EWorldType::Editor);
+	UWorld* World = WorldWrapper.GetTestWorld();
+	ACatWaterRegion* Region = World->SpawnActor<ACatWaterRegion>(); Region->RegionId = TEXT("LakeA");
+	ACatWaterBoundarySplineActor* First = CatWaterRegionTest::AddSquareBoundary(World, Region, TEXT("Same"));
+	CatWaterRegionTest::AddSquareBoundary(World, Region, TEXT("Same"));
+	Region->BakeGeometry();
+	TestFalse(TEXT("duplicate boundary IDs clear cache"), Region->HasValidBakedGeometry());
+	Region->BoundaryActors.SetNum(1); First->OwningRegion = nullptr;
+	Region->BakeGeometry();
+	TestFalse(TEXT("ownership mismatch clears cache"), Region->HasValidBakedGeometry());
+	return !HasAnyErrors();
+}
+
+bool FCatWaterRegionStableHandleTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper; WorldWrapper.CreateTestWorld(EWorldType::Editor);
+	ACatWaterRegion* Region = CatWaterRegionTest::AddBakedRegion(WorldWrapper.GetTestWorld());
+	const FCatWaterRegionHandle First = Region->GetWaterRegionHandle();
+	TestTrue(TEXT("bake creates nonzero handle"), First.IsValid());
+	Region->BakeGeometry();
+	TestEqual(TEXT("same authored geometry has stable handle"), Region->GetWaterRegionHandle(), First);
+	TestTrue(TEXT("source digest stored"), FCatWaterRegionTestAccess::GetBakedSourceDigest(*Region) != 0);
+	return !HasAnyErrors();
+}
+
+bool FCatWaterRegionStaleValidationTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper; WorldWrapper.CreateTestWorld(EWorldType::Editor);
+	ACatWaterRegion* Region = CatWaterRegionTest::AddBakedRegion(WorldWrapper.GetTestWorld());
+	ACatWaterBoundarySplineActor* Boundary = Region->BoundaryActors[0];
+	const_cast<USplineComponent*>(Boundary->GetBoundarySpline())->SetLocationAtSplinePoint(
+		1, FVector(250,0,0), ESplineCoordinateSpace::World, true);
+	FDataValidationContext Context;
+	TestNotEqual(TEXT("stale bake rejected by data validation"), Region->IsDataValid(Context), EDataValidationResult::Valid);
+	TestFalse(TEXT("stale bake cannot serve runtime handle"), Region->HasValidBakedGeometry());
+	return !HasAnyErrors();
+}
+
+bool FCatWaterRegionMutationTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper; WorldWrapper.CreateTestWorld(EWorldType::Editor);
+	ACatWaterRegion* Region = CatWaterRegionTest::AddBakedRegion(WorldWrapper.GetTestWorld());
+	TestTrue(TEXT("precondition baked"), Region->HasValidBakedGeometry());
+	Region->WaterSurfaceZ += 10;
+	FProperty* Property = FindFProperty<FProperty>(ACatWaterRegion::StaticClass(), GET_MEMBER_NAME_CHECKED(ACatWaterRegion, WaterSurfaceZ));
+	FPropertyChangedEvent Event(Property);
+	Region->PostEditChangeProperty(Event);
+	TestFalse(TEXT("authoring property mutation invalidates handle"), Region->GetWaterRegionHandle().IsValid());
+	return !HasAnyErrors();
+}
+#endif
+
+#undef CAT_REGION_TEST
+
+#endif

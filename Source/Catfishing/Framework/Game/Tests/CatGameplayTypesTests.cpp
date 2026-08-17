@@ -3,8 +3,29 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 
+#include "Environment/CatWaterGeometry.h"
 #include "Environment/CatWaterRegion.h"
+#include "Environment/Tests/CatWaterTestFixtures.h"
 #include "Framework/Game/CatGameplayTypes.h"
+
+namespace CatGameplayTypesTest
+{
+	static FCatWaterGeometryCache BuildLakeCache()
+	{
+		FCatWaterGeometryBuildInput Input;
+		Input.RegionId = TEXT("LakeA");
+		Input.PlaneToWorld = FTransform::Identity;
+		Input.WaterPointVerticalToleranceCm = 10;
+		Input.BankHeightToleranceCm = 20;
+		Input.BoundaryToleranceCm = 1;
+		Input.MaxLandingCorrectionCm = 10;
+		Input.MinimumWaterInsetCm = 2;
+		FCatWaterPolygonBuildInput& Boundary = Input.Boundaries.AddDefaulted_GetRef();
+		Boundary.BoundaryId = TEXT("Outer");
+		Boundary.Vertices = {{-100,-100}, {100,-100}, {100,100}, {-100,100}};
+		return FCatWaterGeometry::Build(Input).Cache;
+	}
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatGameModeRunCommandFailClosedTest,
@@ -76,10 +97,7 @@ bool FCatPlayerChumInvalidPayloadReportsCurrentAggregationRevisionTest::RunTest(
 	{
 		return false;
 	}
-	Region->RegionId = TEXT("LakeA");
-	Region->bEnablePrototypeBounds = true;
-	Region->HalfExtent = FVector(100.0, 100.0, 50.0);
-	Region->GeometryRevision = 7;
+	FCatWaterRegionTestAccess::InjectBakedGeometry(*Region, CatGameplayTypesTest::BuildLakeCache());
 	Region->bEnableAggregation = true;
 	Region->AggregationBudget = 2.0;
 

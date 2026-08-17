@@ -2,70 +2,135 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "Environment/CatWaterTypes.h"
+
+#include "Environment/CatWaterGeometry.h"
+
 #include "CatWaterRegion.generated.h"
 
-/** 关卡里一个显式配置的中性水域；只提供只读 prototype 包围盒，不依赖 Experimental Water 插件。 */
+class ACatWaterBoundarySplineActor;
+class ACatWaterRegionPresentationActor;
+class UCatWaterQuerySubsystem;
+class UCatWaterRegionPresentationSubsystem;
+struct FCatWaterRegionTestAccess;
+class FDataValidationContext;
+class FObjectPreSaveContext;
+
 UCLASS(BlueprintType)
 class CATFISHING_API ACatWaterRegion : public AActor
 {
 	GENERATED_BODY()
 
 public:
-	/** 关闭 Tick 与复制；区域是关卡 authority 配置，客户端不把它当环境真相副本。 */
 	ACatWaterRegion();
 
-	/** 验证显式 gate、稳定 ID、正 Revision 和有限正包围盒；默认对象因此不可被查询命中。 */
+	bool HasValidBakedGeometry() const;
+	FCatWaterRegionHandle GetWaterRegionHandle() const;
+	const FBox2D& GetBakedBoundsForQuery() const;
+
+	// Temporary compatibility wrappers. They read only the authoritative baked cache.
 	bool IsRuntimeConfigured() const;
-
-	/** 在显式 axis-aligned prototype 几何中判断世界点；配置无效时始终返回 false。 */
 	bool ContainsWorldPoint(const FVector& WorldPoint) const;
-
-	/** 构造只读查询快照；仅在 IsRuntimeConfigured 成立后调用。 */
 	FCatWaterRegionSnapshot MakeSnapshot() const;
 
-	/** 玩家窝料与自然事件共用的唯一 ChumPool 写口；按 RequestId/Revision/预算原子提交。 */
 	FCatAggregationResult ContributeAggregation(const FCatAggregationCommand& Command);
-
-	/** 只读验证一条聚鱼命令是否可立即提交；跨 Equipment→WaterRegion 协调先调用它，避免扣除耗材后才发现池拒绝。 */
 	ECatDomainCommandError ValidateAggregation(const FCatAggregationCommand& Command) const;
 
-	/** 鱼表与环境 DTO 使用的稳定区域 ID；默认 None 表示未接线。 */
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water")
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Authoring")
 	FName RegionId = NAME_None;
 
-	/** 关卡作者对临时 AABB 查询的显式 gate；默认关闭，不把 Actor 位置误当最终岸线。 */
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Prototype")
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Authoring")
+	double WaterSurfaceZ = 0.0;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Authoring", meta = (ClampMin = "0"))
+	double WaterPointVerticalToleranceCm = 0.0;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Authoring", meta = (ClampMin = "0"))
+	double BankHeightToleranceCm = 0.0;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Authoring", meta = (ClampMin = "0"))
+	double BoundaryToleranceCm = 2.0;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Authoring", meta = (ClampMin = "0"))
+	double MaxLandingCorrectionCm = 0.0;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Authoring", meta = (ClampMin = "0"))
+	double MinimumWaterInsetCm = 0.0;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Authoring", meta = (ClampMin = "0.1"))
+	double MaxSampleSegmentLengthCm = 100.0;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Authoring", meta = (ClampMin = "0"))
+	double MaxChordErrorCm = 5.0;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Authoring")
+	TArray<TObjectPtr<ACatWaterBoundarySplineActor>> BoundaryActors;
+
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Presentation")
+	TSoftClassPtr<ACatWaterRegionPresentationActor> WaterPresentationClass;
+
+	// Deprecated compatibility fields retained until the legacy consumers migrate.
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Prototype", meta = (DeprecatedProperty))
 	bool bEnablePrototypeBounds = false;
 
-	/** 相对 Actor 位置的 prototype 包围盒中心；仅在 gate 开启后读取。 */
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Prototype")
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Prototype", meta = (DeprecatedProperty))
 	FVector LocalCenterOffset = FVector::ZeroVector;
 
-	/** prototype 包围盒半尺寸；任一轴非正或非有限均视为 Unset。 */
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Prototype")
+	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Prototype", meta = (DeprecatedProperty))
 	FVector HalfExtent = FVector::ZeroVector;
 
-	/** 关卡几何版本；WaterQuery 把它写入快照，聚鱼写入不会改变它。 */
-	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Prototype", meta = (ClampMin = "1"))
-	int64 GeometryRevision = 0;
-
-	/** 聚鱼 Aggregate 显式启用 gate；默认关闭。 */
 	UPROPERTY(EditInstanceOnly, Category = "Water|Aggregation")
 	bool bEnableAggregation = false;
 
-	/** 三轴共享总预算；0 表示 Unset，不接受任何来源写入。 */
 	UPROPERTY(EditInstanceOnly, Category = "Water|Aggregation", meta = (ClampMin = "0"))
 	double AggregationBudget = 0.0;
 
+#if WITH_EDITOR
+	UFUNCTION(CallInEditor, Category = "Water|Authoring")
+	void BakeGeometry();
+
+	virtual EDataValidationResult IsDataValid(FDataValidationContext& Context) const override;
+	virtual void PreSave(FObjectPreSaveContext SaveContext) override;
+	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	virtual void PostEditMove(bool bFinished) override;
+
+	void InvalidateBakedGeometry();
+#endif
+
+protected:
+	virtual void BeginPlay() override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
 private:
-	/** 当前共享 ChumPool 的运行时版本，只用于聚鱼命令的并发校验和诊断。 */
+	friend class ACatWaterBoundarySplineActor;
+	friend class UCatWaterQuerySubsystem;
+	friend class UCatWaterRegionPresentationSubsystem;
+#if WITH_DEV_AUTOMATION_TESTS
+	friend struct FCatWaterRegionTestAccess;
+#endif
+
+	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Water|Authoring", meta = (AllowPrivateAccess = "true"))
+	int64 GeometryRevision = 0;
+
+	UPROPERTY()
+	FCatWaterGeometryCache BakedGeometry;
+
+	UPROPERTY()
+	int64 BakedSourceDigest = 0;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	bool bTrustInjectedGeometryForTests = false;
+#endif
+
+	UPROPERTY(Transient)
+	TObjectPtr<ACatWaterRegionPresentationActor> SpawnedPresentation;
+
 	UPROPERTY(VisibleInstanceOnly, BlueprintReadOnly, Category = "Water|Aggregation", meta = (AllowPrivateAccess = "true"))
 	int64 AggregationRevision = 1;
 
-	/** 当前玩家与自然事件共用的服务器 ChumPool。 */
 	FCatChumVector ChumPool;
-
-	/** 聚鱼命令首次终态缓存；同 RequestId 不重复消耗预算。 */
 	TMap<FString, FCatAggregationResult> AggregationTerminalCache;
+
+#if WITH_EDITOR
+	bool BuildCurrentGeometryInput(FCatWaterGeometryBuildInput& OutInput, TArray<FString>& OutErrors) const;
+#endif
 };
