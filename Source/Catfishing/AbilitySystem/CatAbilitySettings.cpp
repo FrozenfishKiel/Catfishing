@@ -1,5 +1,8 @@
 #include "AbilitySystem/CatAbilitySettings.h"
 
+#include "AbilitySystem/CatAbilityInputConfig.h"
+#include "AbilitySystem/CatAbilitySet.h"
+
 // ASC runtime gate 流程：要求显式总开关和当前唯一支持的 Full 策略；不按构建配置关闭正式 Character 身体链，也不猜测 Mixed。
 bool UCatAbilitySettings::IsRuntimeEnabled() const
 {
@@ -46,4 +49,31 @@ bool UCatAbilitySettings::TryGetInitialAttributes(float& OutHunger, float& OutFa
 	OutFishingStrength = InitialFishingStrength;
 	OutFightStamina = InitialFightStamina;
 	return true;
+}
+
+bool UCatAbilitySettings::IsFishingRuntimeReady() const
+{
+	if (!IsRuntimeEnabled() || DefaultAbilitySet.IsNull() || AbilityInputConfig.IsNull())
+	{
+		return false;
+	}
+	const UCatAbilitySet* AbilitySet = DefaultAbilitySet.LoadSynchronous();
+	const UCatAbilityInputConfig* InputConfig = AbilityInputConfig.LoadSynchronous();
+	float Hunger = 0.0f;
+	float Fatigue = 0.0f;
+	float Poison = 0.0f;
+	float FishingStrength = 0.0f;
+	float FightStamina = 0.0f;
+	return AbilitySet && AbilitySet->IsRuntimeReady() && InputConfig && InputConfig->IsRuntimeReady()
+		&& TryGetInitialAttributes(Hunger, Fatigue, Poison, FishingStrength, FightStamina);
+}
+
+bool UCatAbilitySettings::TryGetInitialFightStamina(float& OutFightStamina) const
+{
+	OutFightStamina = 0.0f;
+	float Hunger = 0.0f;
+	float Fatigue = 0.0f;
+	float Poison = 0.0f;
+	float FishingStrength = 0.0f;
+	return TryGetInitialAttributes(Hunger, Fatigue, Poison, FishingStrength, OutFightStamina);
 }

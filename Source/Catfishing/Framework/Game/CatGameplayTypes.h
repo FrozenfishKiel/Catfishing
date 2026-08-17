@@ -17,7 +17,9 @@
 
 class UStateTreeComponent;
 class UCatFishingCommandComponent;
+class UCatAbilitySystemComponent;
 class UEnhancedInputLocalPlayerSubsystem;
+class UEnhancedInputComponent;
 class UInputAction;
 class UInputMappingContext;
 class ACatCampHubActor;
@@ -435,6 +437,8 @@ protected:
 	virtual void BeginPlay() override;
 	/** 绑定 Move、Look、Jump、Sprint Enhanced Input Action，并保留父类输入初始化。 */
 	virtual void SetupInputComponent() override;
+	/** Super 完成每帧输入后恰好一次把边沿交给当前 Pawn 的 ASC。 */
+	virtual void PostProcessInput(const float DeltaTime, const bool bGamePaused) override;
 	/** Pawn 断开前恢复普通速度并清除疾跑意图，避免状态泄漏到下一次占有。 */
 	virtual void OnUnPossess() override;
 	/** 只移除本 Controller 实际安装的 Mapping Context，不清空 LocalPlayer 的其他输入层。 */
@@ -500,6 +504,10 @@ private:
 	void SetSprintRequested(bool bNewSprintRequested, bool bNotifyServer);
 	/** 把服务器配置的普通/疾跑速度应用到指定 Character；非 Character Pawn 安全跳过。 */
 	void ApplySprintSpeed(APawn* TargetPawn, bool bSprinting) const;
+	void AbilityInputTagPressed(FGameplayTag InputTag);
+	void AbilityInputTagReleased(FGameplayTag InputTag);
+	UCatAbilitySystemComponent* GetCurrentCatAbilitySystemComponent() const;
+	void RefreshAbilityInputRoute();
 
 	/** owning client 只提交疾跑开关；最终速度始终取服务器 PlayerController 类默认配置。 */
 	UFUNCTION(Server, Reliable)
@@ -517,15 +525,20 @@ private:
 	UPROPERTY(Transient)
 	bool bSprintRequested = false;
 
+	/** 最近一次路由的 Pawn ASC；OnRep_Pawn 可先清旧 Pawn 再接新 Pawn。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UCatAbilitySystemComponent> RoutedAbilitySystem;
+
+	/** Ability 输入只在同一个 EnhancedInputComponent 上绑定一次。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UEnhancedInputComponent> AbilityBoundInputComponent;
+
 	/** 统一向 authority GameMode 查询运行内玩法命令 gate；缺少 GameMode、非 Active 或 teardown 关门时返回 false。 */
 	bool CanForwardGameplayCommand() const;
 
 	/** owning client 最近收到的 Social 协议读模型；由可靠结果 RPC 整体替换，不复制回服务器或作为权限事实。 */
 	UPROPERTY(Transient)
 	FCatTheftResult LastTheftResult;
-
-	/** 本 Controller 的玩家窝料首次终态；覆盖 Equipment→WaterRegion 同步协调，重放不会再次扣耗材或增加池。 */
-	TMap<FGuid, FCatAggregationResult> PlayerChumTerminalCache;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Catfishing|Fishing", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UCatFishingCommandComponent> FishingCommandComponent;

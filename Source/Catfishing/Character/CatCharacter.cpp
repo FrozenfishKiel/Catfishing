@@ -1,7 +1,9 @@
 #include "Character/CatCharacter.h"
 
 #include "AbilitySystemComponent.h"
+#include "AbilitySystem/CatAbilitySet.h"
 #include "AbilitySystem/CatAbilitySettings.h"
+#include "AbilitySystem/CatAbilitySystemComponent.h"
 #include "AbilitySystem/CatStageCTestAbility.h"
 #include "AbilitySystem/CatSurvivalAttributeSet.h"
 #include "Condition/CatConditionComponent.h"
@@ -22,7 +24,7 @@
 // 构造流程：一次创建 Character-owned ASC/AttributeSet、个人鱼护复制出口、离散身体状态和局内装备组件；只开启 ASC 组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
 ACatCharacter::ACatCharacter()
 {
-	AbilitySystemComponent = CreateDefaultSubobject<UAbilitySystemComponent>(TEXT("AbilitySystemComponent"));
+	AbilitySystemComponent = CreateDefaultSubobject<UCatAbilitySystemComponent>(TEXT("AbilitySystemComponent"));
 	AbilitySystemComponent->SetIsReplicated(true);
 	SurvivalAttributes = CreateDefaultSubobject<UCatSurvivalAttributeSet>(TEXT("SurvivalAttributes"));
 	PersonalFishGuard = CreateDefaultSubobject<UCatContainerReplicationComponent>(TEXT("PersonalFishGuard"));
@@ -32,6 +34,11 @@ ACatCharacter::ACatCharacter()
 
 // ASC 查询流程：直接返回构造期唯一组件；不通过 Controller、PlayerState 或全局管理器寻找第二份身体能力真相。
 UAbilitySystemComponent* ACatCharacter::GetAbilitySystemComponent() const
+{
+	return AbilitySystemComponent;
+}
+
+UCatAbilitySystemComponent* ACatCharacter::GetCatAbilitySystemComponent() const
 {
 	return AbilitySystemComponent;
 }
@@ -68,6 +75,7 @@ void ACatCharacter::PossessedBy(AController* NewController)
 	InitializeAbilityActorInfo();
 	if (HasAuthority())
 	{
+		GrantDefaultAbilitySetOnce();
 		GrantStageCTestAbility();
 		RegisterPersonalFishGuard();
 	}
@@ -145,6 +153,8 @@ void ACatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	RemoveProvisionalMappingContext();
 	if (AbilitySystemComponent)
 	{
+		DefaultAbilitySetHandles.TakeFromAbilitySystem(AbilitySystemComponent);
+		bDefaultAbilitySetGranted = false;
 		AbilitySystemComponent->CancelAllAbilities();
 		AbilitySystemComponent->ClearActorInfo();
 	}
@@ -224,8 +234,24 @@ void ACatCharacter::ApplyInitialAttributesOnce()
 	AbilitySystemComponent->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFatigueAttribute(), Fatigue);
 	AbilitySystemComponent->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), Poison);
 	AbilitySystemComponent->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), FishingStrength);
-	AbilitySystemComponent->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), FightStamina);
+	if (!AbilitySystemComponent->InitializeFishingStaminaForSession())
+	{
+		return;
+	}
 	bInitialAttributesApplied = true;
+}
+
+void ACatCharacter::GrantDefaultAbilitySetOnce()
+{
+	const UCatAbilitySettings* Settings = GetDefault<UCatAbilitySettings>();
+	if (!HasAuthority() || !AbilitySystemComponent || bDefaultAbilitySetGranted
+		|| !Settings || !Settings->IsFishingRuntimeReady())
+	{
+		return;
+	}
+	const UCatAbilitySet* AbilitySet = Settings->DefaultAbilitySet.LoadSynchronous();
+	bDefaultAbilitySetGranted = AbilitySet
+		&& AbilitySet->GiveToAbilitySystem(AbilitySystemComponent, DefaultAbilitySetHandles);
 }
 
 // Ability 授予流程：只接受 authority、已开启 runtime、有效 ASC 且尚无句柄的组合；GiveAbility 返回的句柄立即成为后续 PossessedBy 的唯一去重依据。

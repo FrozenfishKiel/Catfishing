@@ -4,6 +4,7 @@
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Logging/CatLog.h"
 #include "AbilitySystemComponent.h"
+#include "AbilitySystem/CatAbilitySystemComponent.h"
 #include "AbilitySystem/CatSurvivalAttributeSet.h"
 #include "Collection/CatRunImprintService.h"
 #include "Data/CatFishDefinition.h"
@@ -128,6 +129,18 @@ FCatFishingPhaseResult ACatFishingSession::EnterPhaseFromStateTree(const ECatFis
 		NearShoreTargetWorldLocation = FVector::ZeroVector;
 		bHasNearShoreTarget = false;
 	}
+	if (NewPhase == ECatFishingPhase::HookedFight && !bFightStaminaInitialized)
+	{
+		UCatAbilitySystemComponent* AbilitySystem = FisherCharacter.IsValid()
+			? FisherCharacter->GetCatAbilitySystemComponent() : nullptr;
+		if (!AbilitySystem || !AbilitySystem->InitializeFishingStaminaForSession())
+		{
+			Result.Error = ECatDomainCommandError::DependencyUnavailable;
+			return Result;
+		}
+		bFightStaminaInitialized = true;
+		StaminaParticipantsTouched.Add(FisherCharacter);
+	}
 	Snapshot.Phase = NewPhase;
 	Snapshot.PhaseStartedServerTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
 	// 巨鱼离开 HookedFight 后仍需把合法协作者带入成像候选；NearShore 只冻结参与事实，不再接受新的 assist。
@@ -230,7 +243,7 @@ FCatDomainCommandResult ACatFishingSession::ResolveFightExchangeFromStateTree(co
 		Result.Revision = Snapshot.Revision;
 		return Result;
 	}
-	TArray<UAbilitySystemComponent*> ParticipantSystems;
+	TArray<UCatAbilitySystemComponent*> ParticipantSystems;
 	for (const TPair<FString, TWeakObjectPtr<ACatCharacter>>& Pair : FightParticipantCharacters)
 	{
 		ACatCharacter* Character = Pair.Value.Get();
@@ -247,13 +260,24 @@ FCatDomainCommandResult ACatFishingSession::ResolveFightExchangeFromStateTree(co
 			Result.Revision = Snapshot.Revision;
 			return Result;
 		}
-		UAbilitySystemComponent* ASC = Character->GetAbilitySystemComponent();
+		UCatAbilitySystemComponent* ASC = Character->GetCatAbilitySystemComponent();
+		if (!ASC)
+		{
+			Result.Error = ECatDomainCommandError::DependencyUnavailable;
+			Result.Revision = Snapshot.Revision;
+			return Result;
+		}
 		ParticipantSystems.Add(ASC);
 	}
-	for (UAbilitySystemComponent* ASC : ParticipantSystems)
+	for (UCatAbilitySystemComponent* ASC : ParticipantSystems)
 	{
-		const double Current = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
-		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), FMath::Max(0.0, Current - ParticipantStaminaCost));
+		if (!ASC->ApplyFishingStaminaDelta(-static_cast<float>(ParticipantStaminaCost)))
+		{
+			Result.Error = ECatDomainCommandError::DependencyUnavailable;
+			Result.Revision = Snapshot.Revision;
+			return Result;
+		}
+		StaminaParticipantsTouched.Add(Cast<ACatCharacter>(ASC->GetAvatarActor()));
 	}
 	Snapshot.FishFightStaminaRemaining = FMath::Max(0.0, Snapshot.FishFightStaminaRemaining - FishStaminaCost);
 	Snapshot.NormalizedFishStamina = FishDefinition->FishFightStamina > 0.0
@@ -544,6 +568,17 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	{
 		StateTreeComponent->StopLogic(FString(DiagnosticReason));
 	}
+	for (const TWeakObjectPtr<ACatCharacter>& WeakParticipant : StaminaParticipantsTouched)
+	{
+		if (ACatCharacter* Participant = WeakParticipant.Get())
+		{
+			if (UCatAbilitySystemComponent* AbilitySystem = Participant->GetCatAbilitySystemComponent())
+			{
+				AbilitySystem->RequestFishingStaminaReset();
+			}
+		}
+	}
+	StaminaParticipantsTouched.Reset();
 	FightParticipantIds.Reset();
 	FightParticipantCharacters.Reset();
 	FisherCharacter.Reset();
@@ -595,12 +630,26 @@ bool ACatFishingSession::IsTerminal() const
 	return Snapshot.Phase == ECatFishingPhase::Resolved || Snapshot.Phase == ECatFishingPhase::Terminated;
 }
 
-// World 清理流程：停止仍在运行的 StateTree并清私有弱引用；不从 EndPlay 恢复或补发捕获事务。
+// World 清理流程：停止仍在运行的 StateTree，并为仍可达参与者登记/应用 stamina 恢复后清私有弱引用；不补发捕获事务。
 void ACatFishingSession::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	if (StateTreeComponent && StateTreeComponent->IsRunning())
 	{
 		StateTreeComponent->StopLogic(TEXT("FishingSession EndPlay"));
+	}
+	if (HasAuthority())
+	{
+		for (const TWeakObjectPtr<ACatCharacter>& WeakParticipant : StaminaParticipantsTouched)
+		{
+			if (ACatCharacter* Participant = WeakParticipant.Get())
+			{
+				if (UCatAbilitySystemComponent* AbilitySystem = Participant->GetCatAbilitySystemComponent())
+				{
+					AbilitySystem->RequestFishingStaminaReset();
+				}
+			}
+		}
+		StaminaParticipantsTouched.Reset();
 	}
 	ItemsService.Reset();
 	FisherCharacter.Reset();

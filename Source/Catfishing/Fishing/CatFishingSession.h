@@ -169,6 +169,12 @@ private:
 	/** 本会话失败预算是否已经提交；true 后任何第二种惩罚都返回 AlreadyResolved。 */
 	bool bFailureBudgetCommitted = false;
 
+	/** HookedFight 首次进入时的幂等 stamina 初始化事实；重复阶段事件不能补满已消耗体力。 */
+	bool bFightStaminaInitialized = false;
+
+	/** 本会话实际初始化或消耗过 stamina 的 Character；终态只恢复这些池。 */
+	TSet<TWeakObjectPtr<ACatCharacter>> StaminaParticipantsTouched;
+
 	/** 本会话唯一失败预算终态；重放不再次扣特殊饵或鱼竿耐久。 */
 	FCatFishingFailureResult FailureBudgetResult;
 };

@@ -6,6 +6,8 @@
 
 class UInputAction;
 class UInputMappingContext;
+class UCatAbilityInputConfig;
+class UCatAbilitySet;
 
 /** Character-owned ASC 的已验证复制策略；Mixed 仍需 V3 证据，因此没有可选枚举值。 */
 UENUM(BlueprintType)
@@ -33,6 +35,12 @@ public:
 	/** 读取新 Character 的五项局内初始属性；任一负值或非有限都清空输出并保持 fail-closed。 */
 	bool TryGetInitialAttributes(float& OutHunger, float& OutFatigue, float& OutPoison,
 		float& OutFishingStrength, float& OutFightStamina) const;
+
+	/** 正式 Fishing GAS 资产必须同时存在且 InputConfig 完整，缺任一项都不授予或绑定输入。 */
+	bool IsFishingRuntimeReady() const;
+
+	/** 只读取已验证的正 FightStamina 基线，供 SetByCaller 初始化/恢复 GE 使用。 */
+	bool TryGetInitialFightStamina(float& OutFightStamina) const;
 
 	/** Character-owned ASC 正式运行总 gate；默认关闭，项目接线后可在所有构建配置显式启用。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
@@ -65,6 +73,14 @@ public:
 	/** 新 Character 初始 FightStamina；必须为正才能支持正式搏斗。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Attributes", meta = (ClampMin = "-1.0"))
 	float InitialFightStamina = -1.0f;
+
+	/** Character authority 的正式默认 AbilitySet；代码不创建或猜测资产路径。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Fishing", meta = (AllowedClasses = "/Script/Catfishing.CatAbilitySet"))
+	TSoftObjectPtr<UCatAbilitySet> DefaultAbilitySet;
+
+	/** PlayerController 的正式 Ability 输入映射；复用现有 /Game/Input Action。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Fishing", meta = (AllowedClasses = "/Script/Catfishing.CatAbilityInputConfig"))
+	TSoftObjectPtr<UCatAbilityInputConfig> AbilityInputConfig;
 
 	/** 开发诊断 Ability/Input 总 gate；Shipping 构建始终忽略它，正式身体链不依赖该开关。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Diagnostics")

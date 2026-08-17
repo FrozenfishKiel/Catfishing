@@ -1,6 +1,9 @@
 #include "Framework/Game/CatGameplayTypes.h"
 
 #include "Character/CatCharacter.h"
+#include "AbilitySystem/CatAbilityInputConfig.h"
+#include "AbilitySystem/CatAbilitySettings.h"
+#include "AbilitySystem/CatAbilitySystemComponent.h"
 #include "Logging/CatLog.h"
 #include "Online/CatOnlineSettings.h"
 #include "Online/CatOnlineSubsystem.h"
@@ -1389,6 +1392,11 @@ void ACatfishingPlayerState::OnRep_ReadyForNextDay()
 void ACatfishingPlayerController::OnPossess(APawn* InPawn)
 {
 	Super::OnPossess(InPawn);
+	if (FishingCommandComponent)
+	{
+		FishingCommandComponent->ResetTransientCommandState();
+	}
+	RefreshAbilityInputRoute();
 	bSprintRequested = false;
 	ApplySprintSpeed(InPawn, false);
 	UE_LOG(LogCatfishing, Log, TEXT("Event=controller_possessed Controller=%s Pawn=%s"),
@@ -1399,6 +1407,11 @@ void ACatfishingPlayerController::OnPossess(APawn* InPawn)
 void ACatfishingPlayerController::OnRep_Pawn()
 {
 	Super::OnRep_Pawn();
+	if (FishingCommandComponent)
+	{
+		FishingCommandComponent->ResetTransientCommandState();
+	}
+	RefreshAbilityInputRoute();
 	bSprintRequested = false;
 	ApplySprintSpeed(GetPawn(), false);
 }
@@ -1445,11 +1458,51 @@ void ACatfishingPlayerController::SetupInputComponent()
 		EnhancedInput->BindAction(SprintAction, ETriggerEvent::Completed, this, &ThisClass::StopSprint);
 		EnhancedInput->BindAction(SprintAction, ETriggerEvent::Canceled, this, &ThisClass::StopSprint);
 	}
+
+	const UCatAbilitySettings* AbilitySettings = GetDefault<UCatAbilitySettings>();
+	const UCatAbilityInputConfig* AbilityInputConfig = AbilitySettings && AbilitySettings->IsFishingRuntimeReady()
+		? AbilitySettings->AbilityInputConfig.LoadSynchronous() : nullptr;
+	if (AbilityInputConfig && AbilityBoundInputComponent.Get() != EnhancedInput)
+	{
+		for (const FCatAbilityInputAction& Entry : AbilityInputConfig->AbilityInputActions)
+		{
+			EnhancedInput->BindAction(Entry.InputAction, ETriggerEvent::Started,
+				this, &ThisClass::AbilityInputTagPressed, Entry.InputTag);
+			EnhancedInput->BindAction(Entry.InputAction, ETriggerEvent::Completed,
+				this, &ThisClass::AbilityInputTagReleased, Entry.InputTag);
+			EnhancedInput->BindAction(Entry.InputAction, ETriggerEvent::Canceled,
+				this, &ThisClass::AbilityInputTagReleased, Entry.InputTag);
+		}
+		AbilityBoundInputComponent = EnhancedInput;
+	}
+}
+
+void ACatfishingPlayerController::PostProcessInput(const float DeltaTime, const bool bGamePaused)
+{
+	Super::PostProcessInput(DeltaTime, bGamePaused);
+	if (UCatAbilitySystemComponent* AbilitySystem = GetCurrentCatAbilitySystemComponent())
+	{
+		AbilitySystem->ProcessAbilityInput(DeltaTime, bGamePaused);
+	}
 }
 
 // Pawn 断开流程：Controller 仍持有 Pawn 时先恢复普通速度并清意图，再交还父类断开占有。
 void ACatfishingPlayerController::OnUnPossess()
 {
+	if (UCatAbilitySystemComponent* AbilitySystem = RoutedAbilitySystem.Get())
+	{
+		AbilitySystem->ResetAbilityInput();
+	}
+	if (UCatAbilitySystemComponent* AbilitySystem = GetCurrentCatAbilitySystemComponent();
+		AbilitySystem && AbilitySystem != RoutedAbilitySystem.Get())
+	{
+		AbilitySystem->ResetAbilityInput();
+	}
+	RoutedAbilitySystem.Reset();
+	if (FishingCommandComponent)
+	{
+		FishingCommandComponent->ResetTransientCommandState();
+	}
 	ApplySprintSpeed(GetPawn(), false);
 	bSprintRequested = false;
 	Super::OnUnPossess();
@@ -1458,6 +1511,16 @@ void ACatfishingPlayerController::OnUnPossess()
 // 输入清理流程：只撤销本 Controller 安装的 Context，再交还父类销毁；不干扰诊断或 UI 输入层。
 void ACatfishingPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (UCatAbilitySystemComponent* AbilitySystem = RoutedAbilitySystem.Get())
+	{
+		AbilitySystem->ResetAbilityInput();
+	}
+	RoutedAbilitySystem.Reset();
+	AbilityBoundInputComponent.Reset();
+	if (FishingCommandComponent)
+	{
+		FishingCommandComponent->ResetTransientCommandState();
+	}
 	ApplySprintSpeed(GetPawn(), false);
 	bSprintRequested = false;
 	RemoveInputMappingContext();
@@ -1726,9 +1789,9 @@ void ACatfishingPlayerController::ServerStartFishingSession_Implementation(const
 	{
 		return;
 	}
-	if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
+	if (FishingCommandComponent)
 	{
-		Fishing->StartFishingSession(this, RequestId);
+		FishingCommandComponent->ForwardLegacyStart(RequestId);
 	}
 }
 
@@ -1740,9 +1803,9 @@ void ACatfishingPlayerController::ServerAssistFishingSession_Implementation(cons
 	{
 		return;
 	}
-	if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
+	if (FishingCommandComponent)
 	{
-		Fishing->SubmitFightAssist(FishingSessionId, this, RequestId, ExpectedRevision);
+		FishingCommandComponent->ForwardLegacyAssist(FishingSessionId, RequestId, ExpectedRevision);
 	}
 }
 
@@ -1754,12 +1817,9 @@ void ACatfishingPlayerController::ServerRequestScoop_Implementation(const FGuid 
 	{
 		return;
 	}
-	Command.Context.StableNetId.Reset();
-	const ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	Command.TargetGuardContainerId = ControlledCharacter ? ControlledCharacter->GetPersonalFishGuardId() : FGuid();
-	if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
+	if (FishingCommandComponent)
 	{
-		Fishing->RequestScoop(FishingSessionId, this, Command);
+		FishingCommandComponent->ForwardLegacyScoop(FishingSessionId, Command);
 	}
 }
 
@@ -2075,6 +2135,43 @@ FCatAggregationResult ACatfishingPlayerController::MakeInvalidPlayerChumResult(c
 	return Result;
 }
 
+UCatAbilitySystemComponent* ACatfishingPlayerController::GetCurrentCatAbilitySystemComponent() const
+{
+	const ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
+	return ControlledCharacter ? ControlledCharacter->GetCatAbilitySystemComponent() : nullptr;
+}
+
+void ACatfishingPlayerController::RefreshAbilityInputRoute()
+{
+	UCatAbilitySystemComponent* NewAbilitySystem = GetCurrentCatAbilitySystemComponent();
+	if (UCatAbilitySystemComponent* PreviousAbilitySystem = RoutedAbilitySystem.Get();
+		PreviousAbilitySystem && PreviousAbilitySystem != NewAbilitySystem)
+	{
+		PreviousAbilitySystem->ResetAbilityInput();
+	}
+	if (NewAbilitySystem)
+	{
+		NewAbilitySystem->ResetAbilityInput();
+	}
+	RoutedAbilitySystem = NewAbilitySystem;
+}
+
+void ACatfishingPlayerController::AbilityInputTagPressed(const FGameplayTag InputTag)
+{
+	if (UCatAbilitySystemComponent* AbilitySystem = GetCurrentCatAbilitySystemComponent())
+	{
+		AbilitySystem->AbilityInputTagPressed(InputTag);
+	}
+}
+
+void ACatfishingPlayerController::AbilityInputTagReleased(const FGameplayTag InputTag)
+{
+	if (UCatAbilitySystemComponent* AbilitySystem = GetCurrentCatAbilitySystemComponent())
+	{
+		AbilitySystem->AbilityInputTagReleased(InputTag);
+	}
+}
+
 // 玩家窝料流程：先过统一玩法 gate 和 Controller 终态重放，再派生身份并验证 WaterRegion/Chum；区域预检后扣耗材并提交同 RequestId。
 void ACatfishingPlayerController::ServerContributeChum_Implementation(ACatWaterRegion* WaterRegion,
 	const FGuid RequestId, const int64 ExpectedEquipmentRevision, const int64 ExpectedAggregationRevision,
@@ -2084,59 +2181,11 @@ void ACatfishingPlayerController::ServerContributeChum_Implementation(ACatWaterR
 	{
 		return;
 	}
-	if (const FCatAggregationResult* Cached = PlayerChumTerminalCache.Find(RequestId))
+	if (FishingCommandComponent)
 	{
-		UE_LOG(LogCatItems, Log, TEXT("Event=player_chum_replayed RequestId=%s Error=%s Revision=%lld"),
-			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(Cached->Command.Error),
-			Cached->Command.Revision);
-		return;
+		FishingCommandComponent->ForwardLegacyChum(WaterRegion, RequestId, ExpectedEquipmentRevision,
+			ExpectedAggregationRevision, ChumDefinitionId);
 	}
-	FCatAggregationResult Result;
-	Result.Command.RequestId = RequestId;
-	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	UCatEquipmentComponent* Equipment = ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr;
-	const APlayerState* CurrentPlayerState = PlayerState;
-	UCatEquipmentDefinition* ChumDefinition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(ChumDefinitionId);
-	if (!RequestId.IsValid() || !WaterRegion || !ControlledCharacter || !Equipment || !CurrentPlayerState
-		|| !CurrentPlayerState->GetUniqueId().IsValid() || !ChumDefinition
-		|| ChumDefinition->Kind != ECatEquipmentKind::Chum || !ChumDefinition->ChumContribution.IsValidContribution()
-		|| !WaterRegion->ContainsWorldPoint(ControlledCharacter->GetActorLocation()))
-	{
-		Result = MakeInvalidPlayerChumResult(RequestId, WaterRegion);
-	}
-	else
-	{
-		FCatAggregationCommand Command;
-		Command.Context.RequestId = RequestId;
-		Command.ExpectedAggregationRevision = ExpectedAggregationRevision;
-		Command.Context.StableNetId = CurrentPlayerState->GetUniqueId()->ToString();
-		Command.RegionId = WaterRegion->RegionId;
-		Command.Contribution = ChumDefinition->ChumContribution;
-		Command.Source = ECatAggregationSource::PlayerChum;
-		Result.Command.Error = WaterRegion->ValidateAggregation(Command);
-		Result.AggregationRevision = WaterRegion->MakeSnapshot().AggregationRevision;
-		Result.Command.Revision = Result.AggregationRevision;
-		if (Result.Command.Error == ECatDomainCommandError::None)
-		{
-			const FCatDomainCommandResult ConsumeResult = Equipment->ConsumeRunConsumableFromAuthority(
-				RequestId, ExpectedEquipmentRevision, ChumDefinitionId);
-			if (!ConsumeResult.bCommitted)
-			{
-				Result.Command.Error = ConsumeResult.Error;
-				Result.AggregationRevision = WaterRegion->MakeSnapshot().AggregationRevision;
-				Result.Command.Revision = Result.AggregationRevision;
-			}
-			else
-			{
-				Result = WaterRegion->ContributeAggregation(Command);
-			}
-		}
-	}
-	PlayerChumTerminalCache.Add(RequestId, Result);
-	UE_LOG(LogCatItems, Log, TEXT("Event=player_chum_terminal RequestId=%s Definition=%s Region=%s Committed=%s Error=%s Revision=%lld"),
-		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *ChumDefinitionId.ToString(),
-		WaterRegion ? *WaterRegion->RegionId.ToString() : TEXT("None"), Result.Command.bCommitted ? TEXT("true") : TEXT("false"),
-		*UEnum::GetValueAsString(Result.Command.Error), Result.Command.Revision);
 }
 
 // 主动离局 RPC 流程：只把当前 Controller 交给 authority GameMode；标记不销毁 Session、不旅行，并由随后 Logout 精确消费。

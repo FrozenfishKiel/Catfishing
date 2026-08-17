@@ -2,11 +2,13 @@
 
 #include "CoreMinimal.h"
 #include "AbilitySystemInterface.h"
+#include "AbilitySystem/CatAbilitySet.h"
 #include "GameplayAbilitySpecHandle.h"
 #include "GameFramework/Character.h"
 #include "CatCharacter.generated.h"
 
 class UAbilitySystemComponent;
+class UCatAbilitySystemComponent;
 class UCatSurvivalAttributeSet;
 class UCatContainerReplicationComponent;
 class UCatConditionComponent;
@@ -29,6 +31,7 @@ public:
 
 	/** 返回 Character 持有的唯一 ASC；即使阶段 C gate 关闭也返回组件，让外部只读接缝不需要第二条查找路径。 */
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
+	UCatAbilitySystemComponent* GetCatAbilitySystemComponent() const;
 
 	/** 返回 authority 为本 Character 注册的一局个人鱼护 ID；未注册时为无效 GUID。 */
 	FGuid GetPersonalFishGuardId() const;
@@ -67,6 +70,7 @@ private:
 
 	/** authority 在 ActorInfo 就绪后授予一次诊断 Ability；有效 SpecHandle 是唯一去重事实，重占有不会重复授予。 */
 	void GrantStageCTestAbility();
+	void GrantDefaultAbilitySetOnce();
 
 	/** authority 新 Character 首次 ActorInfo 就绪时整体应用五项显式初值；重占有不重置已消耗的局内状态。 */
 	void ApplyInitialAttributesOnce();
@@ -88,7 +92,7 @@ private:
 
 	/** 猫身体唯一 AbilitySystemComponent；构造期创建、随 Character 复制，并拥有本 Actor 的 AttributeSet 与 Ability。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Abilities", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UAbilitySystemComponent> AbilitySystemComponent;
+	TObjectPtr<UCatAbilitySystemComponent> AbilitySystemComponent;
 
 	/** 猫身体唯一 Survival 属性集；ASC 自动发现并持有 Hunger/Fatigue/Poison/FishingStrength/FightStamina 五项局内真相。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Survival", meta = (AllowPrivateAccess = "true"))
@@ -111,6 +115,10 @@ private:
 
 	/** 服务器已授予的阶段 C 诊断 Ability 句柄；无效表示尚未授予，Character 销毁时随 ASC 一起释放。 */
 	FGameplayAbilitySpecHandle StageCTestAbilityHandle;
+
+	/** authority 首次正式授予的默认集合句柄；重占有保留，Character 最终销毁时成组撤销。 */
+	FCatGrantedAbilitySetHandles DefaultAbilitySetHandles;
+	bool bDefaultAbilitySetGranted = false;
 
 	/** 本 Character 是否已经整体应用过初始属性；只在 authority 写，重占有保持 true，重连新身体重新开始。 */
 	bool bInitialAttributesApplied = false;

@@ -1,6 +1,7 @@
 #include "Fishing/CatFishingService.h"
 
 #include "Character/CatCharacter.h"
+#include "AbilitySystem/CatAbilitySystemComponent.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Logging/CatLog.h"
 #include "AbilitySystemComponent.h"
@@ -71,6 +72,12 @@ FCatFishingStartResult UCatFishingService::StartFishingSession(AController* Fish
 		return Finish(Result);
 	}
 	if (!Character || !GameState || !WaterQuery)
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		return Finish(Result);
+	}
+	if (UCatAbilitySystemComponent* AbilitySystem = Character->GetCatAbilitySystemComponent();
+		!AbilitySystem || !AbilitySystem->EnsureFishingStaminaReadyForNewSession())
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Finish(Result);

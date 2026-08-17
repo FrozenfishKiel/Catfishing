@@ -100,7 +100,6 @@ bool FCatStageCTestAbilityAuthorityGateTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 
-	AddExpectedErrorPlain(TEXT("No GameplayCueNotifyPaths were specified"), EAutomationExpectedErrorFlags::Contains, 1);
 	CatStageCTestAbilityTest::FAbilitySettingsOverride SettingsOverride(-2.5f);
 	FTestWorldWrapper WorldWrapper;
 	TestTrue(TEXT("创建 Stage C Ability 测试 World"), WorldWrapper.CreateTestWorld(EWorldType::Game));

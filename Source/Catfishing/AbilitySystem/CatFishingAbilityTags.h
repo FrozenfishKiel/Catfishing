@@ -1,0 +1,31 @@
+#pragma once
+
+#include "NativeGameplayTags.h"
+
+namespace CatFishingAbilityTags
+{
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_RodInteract);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Primary);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Cancel);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Scoop);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Input_Fishing_Chum);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Fishing_RodInteract);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Fishing_Primary);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Fishing_Cancel);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Fishing_Scoop);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Fishing_Chum);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_ActivationPolicy_OnInputTriggered);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_ActivationPolicy_WhileInputActive);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_ActivationPolicy_OnGranted);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Fishing_Aiming);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Fishing_Reeling);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Fishing_Scooping);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Fishing_RodOperating);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_Caught);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_RodBroken);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_CatInWater);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_Cancelled);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(GameplayCue_Fishing_Cast);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(GameplayCue_Fishing_Reel);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Data_Fishing_FightStaminaDelta);
+}
