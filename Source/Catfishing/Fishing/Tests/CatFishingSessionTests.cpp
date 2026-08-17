@@ -245,6 +245,13 @@ bool FCatFishingSessionSnapshotVersionMutationRulesTest::RunTest(const FString& 
 	TestEqual(TEXT("Phase change increments sequence"), Session->Snapshot.SnapshotSequence, int64{23});
 	TestEqual(TEXT("Phase change increments epoch"), Session->Snapshot.PhaseEpoch, int64{31});
 	TestEqual(TEXT("Phase change authority publication emits exactly one additional local signal"), SnapshotSignals, 3);
+	const int32 BeforeRepNotifySignals = SnapshotSignals;
+	const int64 BeforeRepNotifySequence = Session->Snapshot.SnapshotSequence;
+	Session->OnRep_Snapshot();
+	TestEqual(TEXT("RepNotify emits exactly one additional signal"),
+		SnapshotSignals, BeforeRepNotifySignals + 1);
+	TestEqual(TEXT("RepNotify never advances authority versions"),
+		Session->Snapshot.SnapshotSequence, BeforeRepNotifySequence);
 	Session->OnSnapshotChanged.Remove(DelegateHandle);
 	return !HasAnyErrors();
 }
