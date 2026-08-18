@@ -28,6 +28,9 @@ public:
 	FCatDomainCommandResult ConfigureLoadoutFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName RodDefinitionId, FName BaitDefinitionId, FName FloatDefinitionId);
 
+	/** 尝试为刚入局的真实玩家装配项目 starter 三件套；已有装配时只返回 AlreadyResolved，不修耐久也不换装。 */
+	FCatDomainCommandResult ConfigureStarterLoadoutFromAuthority(FGuid RequestId);
+
 	/** 一局拾取/奖励上层提交耗材；只接受定义为 run consumable 的正式条目。 */
 	FCatDomainCommandResult GrantRunConsumableFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName DefinitionId, int32 Quantity);
@@ -36,12 +39,25 @@ public:
 	FCatDomainCommandResult ConsumeRunConsumableFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName DefinitionId);
 
-	/** 提交一次钓鱼失败预算；一个 RequestId 只能选择 None/丢特殊饵/伤竿之一，绝不双罚。 */
+	/** 为跨域效果预留一份一局耗材；预留只占住库存、不推进公开 Revision，调用方必须随后提交或释放同一 RequestId。 */
+	FCatDomainCommandResult ReserveRunConsumableFromAuthority(FGuid RequestId, int64 ExpectedRevision,
+		FName DefinitionId);
+
+	/** 把同一 RequestId 的耗材预留转成真实消耗；只有预留成功后的领域效果成功提交时才能调用。 */
+	FCatDomainCommandResult CommitReservedRunConsumableFromAuthority(FGuid RequestId, int64 ExpectedRevision,
+		FName DefinitionId);
+
+	/** 释放同一 RequestId 的耗材预留；领域效果在预留后拒绝时调用，避免占住库存到角色销毁。 */
+	FCatDomainCommandResult ReleaseRunConsumableReservationFromAuthority(FGuid RequestId, int64 ExpectedRevision,
+		FName DefinitionId);
+
+	/** 提交一次钓鱼失败预算；DamageRod 只保留兼容语义，正式耐久消耗必须走 Fight Resource Cursor。 */
 	FCatFishingFailureResult CommitFishingFailure(FGuid RequestId, int64 ExpectedRevision,
 		ECatFishingFailurePenalty Penalty);
 
-	/** 固定营地修竿点提交维修；只消费一份显式浮木并恢复到当前 Rod 定义最大耐久。 */
-	FCatDomainCommandResult RepairRodAtCamp(FGuid RequestId, int64 ExpectedRevision, bool bAtCamp);
+	/** 提交 Fight Resource Cursor 产生的鱼竿耐久消耗；只接受正有限成本，返回后调用方用 Snapshot 判断 RodBroken。 */
+	FCatDomainCommandResult CommitFightRodDurabilityFromAuthority(FGuid RequestId, int64 ExpectedRevision,
+		double DurabilityCost);
 
 	/** 本机完整装配变化通知；不携带可写指针或客户端授权。 */
 	FCatEquipmentSnapshotChanged OnSnapshotChanged;
@@ -57,6 +73,22 @@ private:
 	/** 按定义 ID 查现有耗材栈；未找到返回空。 */
 	FCatRunConsumableStack* FindConsumable(FName DefinitionId);
 
+	/** 当前跨域效果占住的一份耗材；它还没有减少公开 Snapshot，只用于阻止并发请求重复占用同一库存。 */
+	struct FRunConsumableReservation
+	{
+		/** 被占住的一局耗材稳定 ID；提交或释放时必须与首次预留一致。 */
+		FName DefinitionId = NAME_None;
+
+		/** 首次预留看到的 Equipment Revision；提交或释放不接受调用方改写前提。 */
+		int64 ExpectedRevision = 0;
+
+		/** 首次预留的业务载荷签名；同 RequestId 改 Definition 或 Revision 会被视为载荷漂移。 */
+		FString PayloadSignature;
+	};
+
+	/** 统计当前仍未提交/释放的同定义预留数量；可用库存必须扣除这些占位。 */
+	int32 CountActiveConsumableReservations(FName DefinitionId) const;
+
 	/** 构造操作+RequestId 幂等键；只在当前 Character 生命周期使用。 */
 	static FString MakeTerminalKey(const TCHAR* Operation, FGuid RequestId);
 
@@ -70,6 +102,15 @@ private:
 	/** 普通装备/耗材命令首次终态缓存。 */
 	TMap<FString, FCatDomainCommandResult> TerminalCache;
 
+	/** 普通装备/耗材命令首次受理时的业务载荷签名；同 RequestId 不能换定义、数量或 Revision 前提。 */
+	TMap<FString, FString> TerminalPayloadByKey;
+
+	/** 尚未提交或释放的一局耗材预留；Key 是 RequestId，值记录被占住的定义和 Revision 前提。 */
+	TMap<FGuid, FRunConsumableReservation> ActiveConsumableReservations;
+
 	/** 失败预算命令首次完整终态缓存；重放不会再次扣饵或耐久。 */
 	TMap<FGuid, FCatFishingFailureResult> FailureTerminalCache;
+
+	/** 失败预算首次受理时的业务载荷签名；同 RequestId 不能把 None 重放成扣罚或反向漂移。 */
+	TMap<FGuid, FString> FailurePayloadByRequestId;
 };

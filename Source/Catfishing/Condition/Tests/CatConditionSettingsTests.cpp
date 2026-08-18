@@ -26,6 +26,10 @@ bool FCatConditionSettingsDefaultsTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
+	Settings->bEnableConditionRuntime = false;
+	Settings->PoisonDownedThreshold = 0.0;
+	Settings->FatigueDownedThreshold = 0.0;
+
 	TestFalse(TEXT("默认 Condition gate 不提供倒地阈值"), Settings->HasDownedThresholds());
 	Settings->bEnableConditionRuntime = true;
 	Settings->PoisonDownedThreshold = 10.0;
@@ -53,4 +57,28 @@ bool FCatConditionSettingsValidThresholdsTest::RunTest(const FString& Parameters
 	return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatConditionSettingsProjectDefaultsTest,
+	"Catfishing.Unit.Condition.Settings.ProjectDefaultsEnableWork04RuntimeSlice",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+// 测试流程：从项目 DefaultGame.ini 读取正式 Condition Settings，确认倒地阈值显式启用、初始身体不会因零属性立即倒地。
+bool FCatConditionSettingsProjectDefaultsTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
+	TestNotNull(TEXT("项目默认 Condition Settings 可读取"), Settings);
+	if (!Settings)
+	{
+		return false;
+	}
+
+	TestTrue(TEXT("项目默认启用倒地阈值裁决"), Settings->HasDownedThresholds());
+	TestEqual(TEXT("项目默认 Poison 倒地阈值高于初始零值"), Settings->PoisonDownedThreshold, 100.0);
+	TestEqual(TEXT("项目默认 Fatigue 倒地阈值高于初始零值"), Settings->FatigueDownedThreshold, 100.0);
+	TestEqual(TEXT("项目默认野外自救减少 Fatigue"), Settings->FieldRestFatigueRelief, 15.0);
+	TestEqual(TEXT("项目默认营地休息减少更多 Fatigue"), Settings->CampRestFatigueRelief, 50.0);
+	return !HasAnyErrors();
+}
 #endif // WITH_DEV_AUTOMATION_TESTS

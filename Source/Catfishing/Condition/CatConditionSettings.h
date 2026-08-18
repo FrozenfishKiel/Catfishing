@@ -34,15 +34,4 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Recovery", meta = (ClampMin = "0.0"))
 	double CampRestFatigueRelief = 0.0;
 
-	/** 草药一次减少的 Poison；0 表示未裁。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Recovery", meta = (ClampMin = "0.0"))
-	double HerbPoisonRelief = 0.0;
-
-	/** 草药一次减少的 Fatigue；允许正式配置为 0，只要 Poison 恢复为正。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Recovery", meta = (ClampMin = "0.0"))
-	double HerbFatigueRelief = 0.0;
-
-	/** 服务器允许施药者与目标之间的最大世界距离，单位厘米；0 表示未裁并拒绝草药命令。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Recovery", meta = (ClampMin = "0.0"))
-	double HerbUseRangeCentimeters = 0.0;
 };

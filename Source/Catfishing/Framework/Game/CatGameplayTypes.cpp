@@ -10,6 +10,7 @@
 #include "Condition/CatConditionSettings.h"
 #include "Collection/CatRunImprintService.h"
 #include "Components/StateTreeComponent.h"
+#include "Data/CatDataCatalogValidation.h"
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishDefinition.h"
 #include "Environment/CatConfiguredEnvironmentProvider.h"
@@ -71,7 +72,7 @@ ACatfishingGameModeBase::ACatfishingGameModeBase()
 	EnvironmentProvider = CreateDefaultSubobject<UCatConfiguredEnvironmentProvider>(TEXT("EnvironmentProvider"));
 }
 
-// 启动流程：先执行引擎玩法启动并建立 NotStarted 快照，再依次校验 authority、正式运行数值、环境接口与 ST_RunFlow 资产；全部满足才显式启动 StateTree，任一步失败均保持 NotStarted/StartupFailed。
+// 启动流程：先执行引擎玩法启动并建立 NotStarted 快照，再校验 authority、正式运行数值、Data 内容包、环境接口与 ST_RunFlow 资产；全部满足才启动唯一 StateTree。
 void ACatfishingGameModeBase::StartPlay()
 {
 	Super::StartPlay();
@@ -80,6 +81,16 @@ void ACatfishingGameModeBase::StartPlay()
 	RunPublicState.Phase.ServerTimeAnchorSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
 	RunPublicState.Revision = 1;
 	RefreshEnvironmentAndPublish();
+
+	const FCatDataCatalogValidationReport DataCatalogReport = FCatDataCatalogValidator::ValidateRuntimeCatalogs(
+		GetDefault<UCatFishCatalogSettings>(), GetDefault<UCatEquipmentSettings>());
+	if (!DataCatalogReport.bValid)
+	{
+		UE_LOG(LogCatRun, Error, TEXT("Event=data_catalog_invalid ContentHash=%s Issues=%d"),
+			*DataCatalogReport.ContentHashHex, DataCatalogReport.Issues.Num());
+		FailRunStartup(TEXT("DataCatalogInvalid"));
+		return;
+	}
 
 	const UCatRunSettings* Settings = GetDefault<UCatRunSettings>();
 	float DayLengthSeconds = 0.0f;
@@ -113,7 +124,7 @@ void ACatfishingGameModeBase::StartPlay()
 		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision, *RunFlowAsset->GetName());
 }
 
-// World 收口流程：先关闭新 Run 命令并清唯一白天截止计时，再清 HostExit ACK 计时句柄与远端等待集合；然后停止仍运行的 StateTree，最后调父类，使迟到 Task/ACK 不能进入新 World。
+// World 收口流程：先关闭新 Run 命令并清唯一白天截止计时，再清 HostExit ACK 与自然事件去重；随后重置 WaterRegion 聚鱼运行态并停 StateTree，最后交父类，使迟到 Task/ACK 不能进入新 World。
 void ACatfishingGameModeBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	bRunCommandsOpen = false;
@@ -121,6 +132,14 @@ void ACatfishingGameModeBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	GetWorldTimerManager().ClearTimer(HostExitAckTimerHandle);
 	HostExitAckTimerHandle.Invalidate();
 	PendingHostExitAckStableNetIds.Reset();
+	SubmittedNaturalAggregationKeys.Reset();
+	if (UWorld* World = GetWorld())
+	{
+		for (TActorIterator<ACatWaterRegion> It(World); It; ++It)
+		{
+			It->ResetRuntimeAggregationFromAuthority();
+		}
+	}
 	if (RunStateTreeComponent && RunStateTreeComponent->IsRunning())
 	{
 		RunStateTreeComponent->StopLogic(TEXT("GameMode EndPlay"));
@@ -485,13 +504,19 @@ FCatRunCommandResult ACatfishingGameModeBase::MakeRunCommandResult(const FGuid& 
 	return Result;
 }
 
-// 终态重放流程：命中缓存后复制首次结果，但把本次提交标记为 false 并返回 AlreadyResolved；调用者据此不会重复写额度、ready 或发送事件。
-bool ACatfishingGameModeBase::TryReplayRunCommand(const FString& CacheKey, FCatRunCommandResult& OutResult) const
+// 终态重放流程：命中缓存后先比较首次业务载荷；只有同载荷重试才返回 AlreadyResolved，载荷漂移会作为新的非法命令暴露。
+bool ACatfishingGameModeBase::TryReplayRunCommand(const FString& CacheKey, const FString& PayloadSignature,
+	const FGuid& RequestId, FCatRunCommandResult& OutResult) const
 {
 	const FCatRunCommandResult* Cached = RunCommandTerminalCache.Find(CacheKey);
 	if (!Cached)
 	{
 		return false;
+	}
+	if (const FString* CachedPayload = RunCommandPayloadByKey.Find(CacheKey); CachedPayload && *CachedPayload != PayloadSignature)
+	{
+		OutResult = MakeRunCommandResult(RequestId, false, ECatRunCommandError::InvalidPayload);
+		return true;
 	}
 	OutResult = *Cached;
 	OutResult.bCommitted = false;
@@ -499,21 +524,27 @@ bool ACatfishingGameModeBase::TryReplayRunCommand(const FString& CacheKey, FCatR
 	return true;
 }
 
-// 终态保存流程：只在不存在时写入首次结果；同键意外重复到达仍返回只读重放语义，不覆盖首次 Revision 或原因。
-FCatRunCommandResult ACatfishingGameModeBase::CacheRunCommandResult(const FString& CacheKey, const FCatRunCommandResult& Result)
+// 终态保存流程：只在不存在时写入首次结果与载荷签名；同键重复保存也必须先验证载荷，避免把不同业务事实折叠成重放。
+FCatRunCommandResult ACatfishingGameModeBase::CacheRunCommandResult(const FString& CacheKey,
+	const FString& PayloadSignature, const FCatRunCommandResult& Result)
 {
 	if (const FCatRunCommandResult* Existing = RunCommandTerminalCache.Find(CacheKey))
 	{
+		if (const FString* CachedPayload = RunCommandPayloadByKey.Find(CacheKey); CachedPayload && *CachedPayload != PayloadSignature)
+		{
+			return MakeRunCommandResult(Result.RequestId, false, ECatRunCommandError::InvalidPayload);
+		}
 		FCatRunCommandResult Replay = *Existing;
 		Replay.bCommitted = false;
 		Replay.Error = ECatRunCommandError::AlreadyResolved;
 		return Replay;
 	}
 	RunCommandTerminalCache.Add(CacheKey, Result);
+	RunCommandPayloadByKey.Add(CacheKey, PayloadSignature);
 	return Result;
 }
 
-// 阶段进入流程：先要求 authority、有效 Run 与正在启动/运行的唯一 StateTree，并在写状态前拒绝未裁的成功结算或白天参数。通过后统一清掉旧白天截止并复位玩法开关：DayActive 递增天数、清额度/终局原因、重置 Active 玩家 ready、开启 quota/fishing 并建立唯一 one-shot timer；NormalNight 冻结当前 ready 资格；两种 settlement 写对应终局原因并清 ready 集合；Ending/Ended/NotStarted 关闭新命令。最后只递增一次 Revision、保存 StateTree 可读结果并刷新 Environment/GameState 组合快照；C++ 始终不选择下一条转移边。
+// 阶段进入流程：先要求 authority、有效 Run 与正在启动/运行的唯一 StateTree，并在写状态前拒绝未裁/未到最终天数的成功结算或非法白天参数。通过后统一清掉旧白天截止并复位玩法开关：DayActive 递增天数、清额度/终局原因、重置 Active 玩家 ready、开启 quota/fishing 并建立唯一 one-shot timer；NormalNight 冻结当前 ready 资格；两种 settlement 写对应终局原因并清 ready 集合；Ending/Ended/NotStarted 关闭新命令。最后只递增一次 Revision、保存 StateTree 可读结果，并按 Phase 刷新环境后发布 GameState 组合快照；C++ 始终不选择下一条转移边。
 FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(const ECatRunPhase NewPhase, const ECatRunTransitionReason Reason)
 {
 	FCatRunTransitionResult Result;
@@ -521,14 +552,20 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 	Result.CurrentPhase = RunPublicState.Phase.Phase;
 	Result.Reason = Reason;
 	Result.Revision = RunPublicState.Revision;
-	if (!HasAuthority() || !RunPublicState.Phase.RunId.IsValid()
-		|| !RunStateTreeComponent || (!RunStateTreeComponent->IsRunning() && !bRunStartupInProgress))
+	bool bCanAcceptStateTreePhase = RunStateTreeComponent
+		&& (RunStateTreeComponent->IsRunning() || bRunStartupInProgress);
+#if WITH_DEV_AUTOMATION_TESTS
+	bCanAcceptStateTreePhase = bCanAcceptStateTreePhase || bAutomationRunPhaseEntryBypass;
+#endif
+	if (!HasAuthority() || !RunPublicState.Phase.RunId.IsValid() || !bCanAcceptStateTreePhase)
 	{
 		Result.Error = ECatRunCommandError::StateTreeUnavailable;
 		LastRunFlowResult = Result;
 		return Result;
 	}
-	if (NewPhase == ECatRunPhase::SuccessSettlementNight && !GetDefault<UCatRunSettings>()->IsSuccessSettlementEnabled())
+	const UCatRunSettings* Settings = GetDefault<UCatRunSettings>();
+	if (NewPhase == ECatRunPhase::SuccessSettlementNight
+		&& (!Settings || !Settings->CanEnterSuccessSettlementNight(RunPublicState.Phase.DayIndex)))
 	{
 		Result.Error = ECatRunCommandError::PolicyUndecided;
 		LastRunFlowResult = Result;
@@ -537,7 +574,7 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 	float DayLengthSeconds = 0.0f;
 	int32 DayQuotaTarget = 0;
 	if (NewPhase == ECatRunPhase::DayActive
-		&& !GetDefault<UCatRunSettings>()->TryGetDayParameters(DayLengthSeconds, DayQuotaTarget))
+		&& (!Settings || !Settings->TryGetDayParameters(DayLengthSeconds, DayQuotaTarget)))
 	{
 		Result.Error = ECatRunCommandError::PolicyUndecided;
 		LastRunFlowResult = Result;
@@ -688,7 +725,7 @@ FCatRunCommandResult ACatfishingGameModeBase::SubmitCommittedQuotaContributionFr
 	return SubmitQuotaContributionInternal(Command);
 }
 
-// 额度内部流程：先查完整幂等缓存，再校验 gate/Phase/Revision/载荷；首次写入更新总量与 Revision，达标时关闭写口和计时器并发送唯一 StateTree 事件。
+// 额度内部流程：先把 ExpectedRevision 与贡献值纳入幂等载荷，再校验 gate/Phase/Revision；同 RequestId 换额度只能失败，不能重放旧结果。
 FCatRunCommandResult ACatfishingGameModeBase::SubmitQuotaContributionInternal(const FCatQuotaContributionCommand& ServerCommand)
 {
 	if (!ServerCommand.Context.RequestId.IsValid())
@@ -697,32 +734,39 @@ FCatRunCommandResult ACatfishingGameModeBase::SubmitQuotaContributionInternal(co
 	}
 	const FString CacheKey = MakeRunCommandCacheKey(ServerCommand.Context.StableNetId,
 		ECatRunCommandType::QuotaContribution, ServerCommand.Context.RequestId);
+	const FString PayloadSignature = FString::Printf(TEXT("ExpectedRevision=%lld|Contribution=%d"),
+		ServerCommand.Context.ExpectedRevision, ServerCommand.Contribution);
 	FCatRunCommandResult Replay;
-	if (TryReplayRunCommand(CacheKey, Replay))
+	if (TryReplayRunCommand(CacheKey, PayloadSignature, ServerCommand.Context.RequestId, Replay))
 	{
 		return Replay;
 	}
 	if (!bRunCommandsOpen)
 	{
-		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::CommandsClosed));
+		return CacheRunCommandResult(CacheKey, PayloadSignature,
+			MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::CommandsClosed));
 	}
 	if (RunPublicState.Phase.Phase != ECatRunPhase::DayActive || !RunPublicState.Phase.bQuotaOpen)
 	{
-		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::InvalidPhase));
+		return CacheRunCommandResult(CacheKey, PayloadSignature,
+			MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::InvalidPhase));
 	}
 	if (ServerCommand.Context.ExpectedRevision != RunPublicState.Revision)
 	{
-		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::RevisionConflict));
+		return CacheRunCommandResult(CacheKey, PayloadSignature,
+			MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::RevisionConflict));
 	}
 	const int64 NewProgress = static_cast<int64>(RunPublicState.QuotaProgress) + ServerCommand.Contribution;
 	if (ServerCommand.Contribution <= 0 || NewProgress > MAX_int32)
 	{
-		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::InvalidPayload));
+		return CacheRunCommandResult(CacheKey, PayloadSignature,
+			MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::InvalidPayload));
 	}
 	const bool bReachesQuota = NewProgress >= RunPublicState.QuotaTarget;
 	if (bReachesQuota && (!RunStateTreeComponent || !RunStateTreeComponent->IsRunning()))
 	{
-		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::StateTreeUnavailable));
+		return CacheRunCommandResult(CacheKey, PayloadSignature,
+			MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::StateTreeUnavailable));
 	}
 
 	RunPublicState.QuotaProgress = static_cast<int32>(NewProgress);
@@ -737,7 +781,7 @@ FCatRunCommandResult ACatfishingGameModeBase::SubmitQuotaContributionInternal(co
 	}
 	RefreshEnvironmentAndPublish();
 	FCatRunCommandResult Result = MakeRunCommandResult(ServerCommand.Context.RequestId, true, ECatRunCommandError::None, TransitionReason);
-	Result = CacheRunCommandResult(CacheKey, Result);
+	Result = CacheRunCommandResult(CacheKey, PayloadSignature, Result);
 	if (bReachesQuota)
 	{
 		SendRunStateTreeEvent(CatRunStateTreeEvents::QuotaReached, TransitionReason);
@@ -745,7 +789,7 @@ FCatRunCommandResult ACatfishingGameModeBase::SubmitQuotaContributionInternal(co
 	return Result;
 }
 
-// 翻天确认流程：服务器重建身份并按幂等键/Revision/普通夜资格校验，只在事实变化时改 PlayerState 与 Revision；最后一名合资格玩家确认时只发送 AllEligibleReady 事件。
+// 翻天确认流程：服务器重建身份后把 ExpectedRevision 与 ready 值纳入幂等载荷；同 RequestId 不能从确认漂移成撤销或反向漂移。
 FCatRunCommandResult ACatfishingGameModeBase::SubmitNextDayReady(AController* RequestingController, const FCatNextDayReadyCommand& Command)
 {
 	FCatNextDayReadyCommand ServerCommand = Command;
@@ -759,35 +803,42 @@ FCatRunCommandResult ACatfishingGameModeBase::SubmitNextDayReady(AController* Re
 	}
 	const FString CacheKey = MakeRunCommandCacheKey(ServerCommand.Context.StableNetId,
 		ECatRunCommandType::NextDayReady, ServerCommand.Context.RequestId);
+	const FString PayloadSignature = FString::Printf(TEXT("ExpectedRevision=%lld|Ready=%s"),
+		ServerCommand.Context.ExpectedRevision, ServerCommand.bReady ? TEXT("true") : TEXT("false"));
 	FCatRunCommandResult Replay;
-	if (TryReplayRunCommand(CacheKey, Replay))
+	if (TryReplayRunCommand(CacheKey, PayloadSignature, ServerCommand.Context.RequestId, Replay))
 	{
 		return Replay;
 	}
 	if (!bRunCommandsOpen)
 	{
-		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::CommandsClosed));
+		return CacheRunCommandResult(CacheKey, PayloadSignature,
+			MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::CommandsClosed));
 	}
 	if (RunPublicState.Phase.Phase != ECatRunPhase::NormalNight || bAllEligibleReadyEventSent)
 	{
-		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::InvalidPhase));
+		return CacheRunCommandResult(CacheKey, PayloadSignature,
+			MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::InvalidPhase));
 	}
 	if (ServerCommand.Context.ExpectedRevision != RunPublicState.Revision)
 	{
-		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::RevisionConflict));
+		return CacheRunCommandResult(CacheKey, PayloadSignature,
+			MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::RevisionConflict));
 	}
 	if (!NightReadyEligibleIds.Contains(ServerCommand.Context.StableNetId))
 	{
 		const ECatRunCommandError Error = GetDefault<UCatRunSettings>()->CanAdmitLateNightReady()
 			? ECatRunCommandError::NotEligible : ECatRunCommandError::PolicyUndecided;
-		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, Error));
+		return CacheRunCommandResult(CacheKey, PayloadSignature,
+			MakeRunCommandResult(ServerCommand.Context.RequestId, false, Error));
 	}
 
 	ACatfishingPlayerState* PlayerState = RequestingController
 		? RequestingController->GetPlayerState<ACatfishingPlayerState>() : nullptr;
 	if (!PlayerState)
 	{
-		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::InvalidIdentity));
+		return CacheRunCommandResult(CacheKey, PayloadSignature,
+			MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::InvalidIdentity));
 	}
 	const bool bWasReady = NightReadyIds.Contains(ServerCommand.Context.StableNetId);
 	if (ServerCommand.bReady)
@@ -804,13 +855,13 @@ FCatRunCommandResult ACatfishingGameModeBase::SubmitNextDayReady(AController* Re
 		++RunPublicState.Revision;
 		RefreshEnvironmentAndPublish();
 	}
-	FCatRunCommandResult Result = CacheRunCommandResult(CacheKey,
+	FCatRunCommandResult Result = CacheRunCommandResult(CacheKey, PayloadSignature,
 		MakeRunCommandResult(ServerCommand.Context.RequestId, true, ECatRunCommandError::None));
 	EvaluateAllEligibleReady();
 	return Result;
 }
 
-// 结算完成流程：协调器使用专用私有身份键参与同一终态缓存，校验结算 Phase 与 Revision 后只提交 SettlementComplete 事件；目标 Ending 仍由资产选择。
+// 结算完成流程：协调器使用专用私有身份键，并把 ExpectedRevision 纳入同一终态载荷；结算重试不能换 Revision 复用旧 RequestId。
 FCatRunCommandResult ACatfishingGameModeBase::CompleteSettlementFromCoordinator(const FGuid RequestId, const int64 ExpectedRevision)
 {
 	if (!RequestId.IsValid())
@@ -818,31 +869,36 @@ FCatRunCommandResult ACatfishingGameModeBase::CompleteSettlementFromCoordinator(
 		return MakeRunCommandResult(RequestId, false, ECatRunCommandError::InvalidPayload);
 	}
 	const FString CacheKey = MakeRunCommandCacheKey(TEXT("RunCoordinator"), ECatRunCommandType::SettlementComplete, RequestId);
+	const FString PayloadSignature = FString::Printf(TEXT("ExpectedRevision=%lld"), ExpectedRevision);
 	FCatRunCommandResult Replay;
-	if (TryReplayRunCommand(CacheKey, Replay))
+	if (TryReplayRunCommand(CacheKey, PayloadSignature, RequestId, Replay))
 	{
 		return Replay;
 	}
 	if (!bRunCommandsOpen)
 	{
-		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(RequestId, false, ECatRunCommandError::CommandsClosed));
+		return CacheRunCommandResult(CacheKey, PayloadSignature,
+			MakeRunCommandResult(RequestId, false, ECatRunCommandError::CommandsClosed));
 	}
 	if (RunPublicState.Phase.Phase != ECatRunPhase::FailureSettlementNight
 		&& RunPublicState.Phase.Phase != ECatRunPhase::SuccessSettlementNight)
 	{
-		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(RequestId, false, ECatRunCommandError::InvalidPhase));
+		return CacheRunCommandResult(CacheKey, PayloadSignature,
+			MakeRunCommandResult(RequestId, false, ECatRunCommandError::InvalidPhase));
 	}
 	if (ExpectedRevision != RunPublicState.Revision)
 	{
-		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(RequestId, false, ECatRunCommandError::RevisionConflict));
+		return CacheRunCommandResult(CacheKey, PayloadSignature,
+			MakeRunCommandResult(RequestId, false, ECatRunCommandError::RevisionConflict));
 	}
 	const FCatRunCommandResult SuccessResult = MakeRunCommandResult(RequestId, true,
 		ECatRunCommandError::None, ECatRunTransitionReason::SettlementComplete);
 	if (!SendRunStateTreeEvent(CatRunStateTreeEvents::SettlementComplete, ECatRunTransitionReason::SettlementComplete))
 	{
-		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(RequestId, false, ECatRunCommandError::StateTreeUnavailable));
+		return CacheRunCommandResult(CacheKey, PayloadSignature,
+			MakeRunCommandResult(RequestId, false, ECatRunCommandError::StateTreeUnavailable));
 	}
-	return CacheRunCommandResult(CacheKey, SuccessResult);
+	return CacheRunCommandResult(CacheKey, PayloadSignature, SuccessResult);
 }
 
 // 夜间资格冻结流程：从当前 Active 身份记录建立一次性集合，并把对应 PlayerState ready 清零；晚加入/重连不会隐式写入该集合。
@@ -911,40 +967,57 @@ void ACatfishingGameModeBase::HandleDayDeadlineElapsed()
 	SendRunStateTreeEvent(CatRunStateTreeEvents::QuotaFailed, ECatRunTransitionReason::QuotaFailed);
 }
 
-// 环境发布流程：以当前 Phase 与 Revision 调用只读 provider；成功时替换同 Revision 环境 DTO，随后无论环境是否成功都把 Run 唯一公开聚合写入 GameState，失败只记录诊断而不制造替代天气。
+// 环境发布流程：先判断当前 Phase 是否仍需要环境事实；白天和普通夜会调用 provider 并在成功时替换同 Revision 环境 DTO，Settlement/Ending 发布对齐当前 Revision 的中性快照而不触发天气或自然事件副作用。环境失败只记录诊断而不制造替代天气，GameState 发布仍是唯一公开出口。
+
 bool ACatfishingGameModeBase::RefreshEnvironmentAndPublish()
 {
-	const ICatEnvironmentProvider* Provider = Cast<ICatEnvironmentProvider>(EnvironmentProvider);
-	const FCatEnvironmentResult EnvironmentResult = Provider
-		? Provider->EvaluateEnvironment(RunPublicState.Phase, RunPublicState.Revision)
-		: FCatEnvironmentResult();
-	if (EnvironmentResult.bSucceeded)
+	const ECatRunPhase CurrentPhase = RunPublicState.Phase.Phase;
+	const bool bShouldEvaluateEnvironment = CurrentPhase != ECatRunPhase::FailureSettlementNight
+		&& CurrentPhase != ECatRunPhase::SuccessSettlementNight
+		&& CurrentPhase != ECatRunPhase::Ending
+		&& CurrentPhase != ECatRunPhase::Ended;
+	bool bEnvironmentSucceeded = true;
+	if (!bShouldEvaluateEnvironment)
 	{
-		RunPublicState.Environment = EnvironmentResult.Snapshot;
-		if (EnvironmentResult.Snapshot.Weather == ECatEnvironmentWeather::Rain)
-		{
-			for (TActorIterator<ACatCharacter> It(GetWorld()); It; ++It)
-			{
-				if (UCatConditionComponent* Conditions = It->GetConditionComponent())
-				{
-					Conditions->SetWetFromAuthority(true);
-				}
-			}
-		}
-		SubmitNaturalAggregationIfConfigured();
+		// Terminal 阶段不再拥有天气/公共事件副作用；发布中性快照并对齐 Revision，避免旧环境事实被误认为当前状态。
+		RunPublicState.Environment = FCatEnvironmentSnapshot();
+		RunPublicState.Environment.SourceRunRevision = RunPublicState.Revision;
 	}
 	else
 	{
-		UE_LOG(LogCatRun, Error, TEXT("Event=environment_evaluation_failed RunId=%s Revision=%lld Error=%s"),
-			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
-			Provider ? *EnvironmentResult.Error : TEXT("ProviderUnavailable"));
+		const ICatEnvironmentProvider* Provider = Cast<ICatEnvironmentProvider>(EnvironmentProvider);
+		const FCatEnvironmentResult EnvironmentResult = Provider
+			? Provider->EvaluateEnvironment(RunPublicState.Phase, RunPublicState.Revision)
+			: FCatEnvironmentResult();
+		bEnvironmentSucceeded = EnvironmentResult.bSucceeded;
+		if (EnvironmentResult.bSucceeded)
+		{
+			RunPublicState.Environment = EnvironmentResult.Snapshot;
+			if (EnvironmentResult.Snapshot.Weather == ECatEnvironmentWeather::Rain)
+			{
+				for (TActorIterator<ACatCharacter> It(GetWorld()); It; ++It)
+				{
+					if (UCatConditionComponent* Conditions = It->GetConditionComponent())
+					{
+						Conditions->SetWetFromAuthority(true);
+					}
+				}
+			}
+			SubmitNaturalAggregationIfConfigured();
+		}
+		else
+		{
+			UE_LOG(LogCatRun, Error, TEXT("Event=environment_evaluation_failed RunId=%s Revision=%lld Error=%s"),
+				*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
+				Provider ? *EnvironmentResult.Error : TEXT("ProviderUnavailable"));
+		}
 	}
 	ACatfishingGameState* CatGameState = GetWorld() ? GetWorld()->GetGameState<ACatfishingGameState>() : nullptr;
 	if (CatGameState)
 	{
 		CatGameState->SetRunPublicStateFromAuthority(RunPublicState);
 	}
-	return EnvironmentResult.bSucceeded && CatGameState != nullptr;
+	return bEnvironmentSucceeded && CatGameState != nullptr;
 }
 
 // 自然聚鱼流程：按当前 Day+Event 去重，读取 Environment 显式区域/三轴，扫描唯一同 ID WaterRegion；构造系统身份命令并提交同一聚鱼写口，只有 committed 才记录去重键。
@@ -1220,6 +1293,25 @@ const FCatRunPublicState& ACatfishingGameModeBase::GetRunPublicState() const
 	return RunPublicState;
 }
 
+#if WITH_DEV_AUTOMATION_TESTS
+// 自动化种子流程：清掉旧白天计时与聚合状态，再写入最小 RunId、Phase、DayIndex 和 Revision，并开启测试旁路；这样测试能覆盖 GameMode gate，而不需要真实 ST_RunFlow 资产。
+void ACatfishingGameModeBase::SeedRunPhaseEntryForAutomation(const ECatRunPhase CurrentPhase,
+	const int32 CurrentDayIndex, const int64 CurrentRevision)
+{
+	ClearDayDeadline();
+	RunPublicState = FCatRunPublicState();
+	RunPublicState.Phase.RunId = FGuid::NewGuid();
+	RunPublicState.Phase.Phase = CurrentPhase;
+	RunPublicState.Phase.DayIndex = FMath::Max(0, CurrentDayIndex);
+	RunPublicState.Phase.ServerTimeAnchorSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
+	RunPublicState.Revision = CurrentRevision > 0 ? CurrentRevision : 1;
+	bRunCommandsOpen = true;
+	NightReadyEligibleIds.Reset();
+	NightReadyIds.Reset();
+	bAllEligibleReadyEventSent = false;
+	bAutomationRunPhaseEntryBypass = true;
+}
+#endif
 // GameState 开始流程：先完成父类注册，再记录实际类型；Run 快照只由 authority GameMode setter 写入。
 void ACatfishingGameState::BeginPlay()
 {
@@ -1638,55 +1730,6 @@ void ACatfishingPlayerController::ServerConfigureEquipment_Implementation(const 
 	}
 }
 
-// 修竿 RPC 流程：先过统一玩法 gate，再让 Camp 验证本人在固定范围并调用 Equipment 的浮木/耐久事务；不提供远程修理。
-void ACatfishingPlayerController::ServerRepairRodAtCamp_Implementation(ACatCampHubActor* Camp,
-	const FGuid RequestId, const int64 ExpectedEquipmentRevision)
-{
-	if (!CanForwardGameplayCommand())
-	{
-		return;
-	}
-	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	UCatEquipmentComponent* Equipment = ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr;
-	if (Camp && Equipment && Camp->GetWorld() == GetWorld())
-	{
-		Equipment->RepairRodAtCamp(RequestId, ExpectedEquipmentRevision, Camp->IsControllerInCamp(this));
-	}
-}
-
-// 草药 RPC 流程：先过统一玩法 gate，再从当前 Pawn 和目标 Character 读服务器位置，要求施药者未倒地且距离不超显式正范围；最后完成身体 preflight 才不可逆扣草药并恢复目标。
-void ACatfishingPlayerController::ServerUseHerbOnCharacter_Implementation(ACatCharacter* TargetCharacter,
-	const FGuid RequestId, const int64 ExpectedEquipmentRevision, const FName HerbDefinitionId)
-{
-	if (!CanForwardGameplayCommand())
-	{
-		return;
-	}
-	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	UCatEquipmentComponent* Equipment = ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr;
-	UCatConditionComponent* SourceConditions = ControlledCharacter ? ControlledCharacter->GetConditionComponent() : nullptr;
-	UCatConditionComponent* Conditions = TargetCharacter ? TargetCharacter->GetConditionComponent() : nullptr;
-	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(HerbDefinitionId);
-	const UCatConditionSettings* ConditionSettings = GetDefault<UCatConditionSettings>();
-	if (!Equipment || !SourceConditions || SourceConditions->GetSnapshot().bDowned || !Conditions
-		|| !Definition || Definition->Kind != ECatEquipmentKind::Herb || !ConditionSettings
-		|| !FMath::IsFinite(ConditionSettings->HerbUseRangeCentimeters)
-		|| ConditionSettings->HerbUseRangeCentimeters <= 0.0
-		|| TargetCharacter->GetWorld() != GetWorld()
-		|| FVector::DistSquared(ControlledCharacter->GetActorLocation(), TargetCharacter->GetActorLocation())
-			> FMath::Square(ConditionSettings->HerbUseRangeCentimeters)
-		|| Conditions->ValidateHerbRecovery() != ECatDomainCommandError::None)
-	{
-		return;
-	}
-	const FCatDomainCommandResult Consume = Equipment->ConsumeRunConsumableFromAuthority(
-		RequestId, ExpectedEquipmentRevision, HerbDefinitionId);
-	if (Consume.bCommitted)
-	{
-		Conditions->ApplyCommittedHerbRecovery(this, RequestId);
-	}
-}
-
 // 直接吃鱼 RPC 流程：先强制进食者为未倒地当前 Pawn，再用 Items 真实宿主验证共享鱼缸的服务器距离；只有身体 preflight 也成功才不可逆移除鱼并应用状态。
 void ACatfishingPlayerController::ServerConsumeFish_Implementation(ACatCharacter* EatingCharacter,
 	FCatFishConsumeCommand Command)
@@ -1761,13 +1804,13 @@ void ACatfishingPlayerController::ServerBeginTheft_Implementation(FCatTheftComma
 	}
 }
 
-// 偷鱼结果客户端流程：可靠接收服务器完整终态并整体替换本机读模型；ProtocolId 由此到达 UI，客户端不能据本缓存修改 escrow 或主人事实。
+// 偷鱼结果客户端流程：可靠接收服务器完整终态并整体替换本机读模型；ProtocolId、追回/吃掉/售出状态由此到达 UI，客户端不能据本缓存修改 escrow、主人或钱包事实。
 void ACatfishingPlayerController::ClientReceiveTheftResult_Implementation(const FCatTheftResult& Result)
 {
 	LastTheftResult = Result;
 }
 
-// 偷鱼结果读取流程：返回最近一次 Begin/Catch 的本机副本供界面取得 ProtocolId 和阶段；服务器授权仍重读当前 Controller/World 事实。
+// 偷鱼结果读取流程：返回最近一次 Begin/Catch/Sell 的本机副本供界面取得 ProtocolId 和阶段；服务器授权仍重读当前 Controller/World 事实。
 FCatTheftResult ACatfishingPlayerController::GetLastTheftResult() const
 {
 	return LastTheftResult;
@@ -1786,6 +1829,20 @@ void ACatfishingPlayerController::ServerCatchTheft_Implementation(const FGuid Th
 	}
 }
 
+// 偷鱼售出 RPC 流程：先过统一玩法 gate，再交当前 Controller、ProtocolId、钱包版本和售价值；当前 Social 稳定 fail-closed，避免半事务删除鱼或写钱包。
+void ACatfishingPlayerController::ServerSellStolenFish_Implementation(const FGuid TheftProtocolId,
+	const FGuid RequestId, const int64 ExpectedWalletRevision, const int32 SaleValue)
+{
+	if (!CanForwardGameplayCommand())
+	{
+		return;
+	}
+	if (UCatSocialService* Social = GetWorld() ? GetWorld()->GetSubsystem<UCatSocialService>() : nullptr)
+	{
+		ClientReceiveTheftResult(Social->SellStolenFish(
+			this, TheftProtocolId, RequestId, ExpectedWalletRevision, SaleValue));
+	}
+}
 // 手动求助 RPC 流程：先过统一玩法 gate，再转交 Controller、RequestId 和 Manual 类型；Social 拒绝客户端伪造 Giant 提示。
 void ACatfishingPlayerController::ServerRequestManualHelp_Implementation(const FGuid RequestId,
 	const ECatHelpSignalKind Kind)
@@ -1851,7 +1908,7 @@ void ACatfishingPlayerController::ServerCompleteShakeDry_Implementation(const FG
 	}
 }
 
-// 玩家窝料流程：先过统一玩法 gate 和 Controller 终态重放，再派生身份并验证 WaterRegion/Chum；区域预检后扣耗材并提交同 RequestId。
+// 玩家窝料流程：先过统一玩法 gate，再把耗材、水域和双 Revision 固定为本 Controller 的请求载荷；同 RequestId 重放只读取本 Controller 的终态缓存并返回，不再预留、扣耗材或增加水域池；首次执行先校验水域、预留 Equipment、写入 WaterRegion，水域拒绝时释放预留，写入成功后才提交耗材消耗。
 void ACatfishingPlayerController::ServerContributeChum_Implementation(ACatWaterRegion* WaterRegion,
 	const FGuid RequestId, const int64 ExpectedEquipmentRevision, const int64 ExpectedRegionRevision,
 	const FName ChumDefinitionId)
@@ -1860,8 +1917,24 @@ void ACatfishingPlayerController::ServerContributeChum_Implementation(ACatWaterR
 	{
 		return;
 	}
+	if (!RequestId.IsValid())
+	{
+		UE_LOG(LogCatItems, Warning, TEXT("Event=player_chum_invalid_request"));
+		return;
+	}
+	const FString PayloadSignature = FString::Printf(
+		TEXT("EquipmentRevision=%lld|RegionRevision=%lld|Chum=%s|Region=%s"),
+		ExpectedEquipmentRevision, ExpectedRegionRevision, *ChumDefinitionId.ToString(),
+		WaterRegion ? *WaterRegion->RegionId.ToString() : TEXT("None"));
 	if (const FCatAggregationResult* Cached = PlayerChumTerminalCache.Find(RequestId))
 	{
+		const FString* StoredPayload = PlayerChumPayloadByRequest.Find(RequestId);
+		if (!StoredPayload || *StoredPayload != PayloadSignature)
+		{
+			UE_LOG(LogCatItems, Warning, TEXT("Event=player_chum_payload_mismatch RequestId=%s"),
+				*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+			return;
+		}
 		UE_LOG(LogCatItems, Log, TEXT("Event=player_chum_replayed RequestId=%s Error=%s Revision=%lld"),
 			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(Cached->Command.Error),
 			Cached->Command.Revision);
@@ -1892,20 +1965,37 @@ void ACatfishingPlayerController::ServerContributeChum_Implementation(ACatWaterR
 		Result.Command.Error = WaterRegion->ValidateAggregation(Command);
 		if (Result.Command.Error == ECatDomainCommandError::None)
 		{
-			const FCatDomainCommandResult ConsumeResult = Equipment->ConsumeRunConsumableFromAuthority(
+			const FCatDomainCommandResult ReserveResult = Equipment->ReserveRunConsumableFromAuthority(
 				RequestId, ExpectedEquipmentRevision, ChumDefinitionId);
-			if (!ConsumeResult.bCommitted)
+			if (!ReserveResult.bCommitted)
 			{
-				Result.Command.Error = ConsumeResult.Error;
+				Result.Command.Error = ReserveResult.Error;
 				Result.Command.Revision = ExpectedRegionRevision;
 			}
 			else
 			{
 				Result = WaterRegion->ContributeAggregation(Command);
+				if (Result.Command.bCommitted)
+				{
+					const FCatDomainCommandResult ConsumeResult = Equipment->CommitReservedRunConsumableFromAuthority(
+						RequestId, ExpectedEquipmentRevision, ChumDefinitionId);
+					if (!ConsumeResult.bCommitted)
+					{
+						UE_LOG(LogCatItems, Error,
+							TEXT("Event=player_chum_reserved_consume_failed RequestId=%s Error=%s EquipmentRevision=%lld"),
+							*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(ConsumeResult.Error),
+							ConsumeResult.Revision);
+					}
+				}
+				else
+				{
+					Equipment->ReleaseRunConsumableReservationFromAuthority(RequestId, ExpectedEquipmentRevision, ChumDefinitionId);
+				}
 			}
 		}
 	}
 	PlayerChumTerminalCache.Add(RequestId, Result);
+	PlayerChumPayloadByRequest.Add(RequestId, PayloadSignature);
 	UE_LOG(LogCatItems, Log, TEXT("Event=player_chum_terminal RequestId=%s Definition=%s Region=%s Committed=%s Error=%s Revision=%lld"),
 		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *ChumDefinitionId.ToString(),
 		WaterRegion ? *WaterRegion->RegionId.ToString() : TEXT("None"), Result.Command.bCommitted ? TEXT("true") : TEXT("false"),

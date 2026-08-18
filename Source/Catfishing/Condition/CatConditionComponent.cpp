@@ -50,31 +50,30 @@ ECatDomainCommandError UCatConditionComponent::ValidateFishConsumption(const UCa
 {
 	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
 	return GetOwner() && GetOwner()->HasAuthority() && GetDefault<UCatAbilitySettings>()->IsRuntimeEnabled()
-		&& FishDefinition && FishDefinition->IsRuntimeDefinitionReady() && ResolveAbilitySystem()
+		&& FishDefinition && FishDefinition->HasRuntimeConsumptionEffect() && ResolveAbilitySystem()
 		&& Settings && Settings->HasDownedThresholds()
 		? ECatDomainCommandError::None : ECatDomainCommandError::DependencyUnavailable;
 }
 
-// 草药预检流程：只读核对 authority、正式身体 runtime、ASC、倒地阈值与两项恢复量；不扣库存、不写 Attribute，也不制造预留状态。
-ECatDomainCommandError UCatConditionComponent::ValidateHerbRecovery() const
-{
-	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
-	return GetOwner() && GetOwner()->HasAuthority() && GetDefault<UCatAbilitySettings>()->IsRuntimeEnabled()
-		&& ResolveAbilitySystem() && Settings && Settings->HasDownedThresholds()
-		&& FMath::IsFinite(Settings->HerbPoisonRelief) && Settings->HerbPoisonRelief > 0.0
-		&& FMath::IsFinite(Settings->HerbFatigueRelief) && Settings->HerbFatigueRelief >= 0.0
-		? ECatDomainCommandError::None : ECatDomainCommandError::PolicyUndecided;
-}
-
-// 进食流程：先按 RequestId 重放，再验证 authority/定义/ASC；首次减少 Hunger、按 Toxic 增加 Poison，随后只走统一倒地裁决并缓存终态。
+// 进食流程：先把鱼定义和食用数值固化为本次请求的载荷签名；缓存命中时必须同签名才允许稳定重放，首次执行才写 ASC 和 Snapshot。
 FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid RequestId,
 	const UCatFishDefinition* FishDefinition)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	const FString Key = MakeTerminalKey(TEXT("EatFish"), RequestId);
+	const FString PayloadSignature = FishDefinition
+		? FString::Printf(TEXT("FishDefinitionId=%s|FoodSafety=%d|HungerRelief=%.17g|PoisonIncrease=%.17g"),
+			*FishDefinition->FishDefinitionId.ToString(), static_cast<int32>(FishDefinition->FoodSafety),
+			FishDefinition->HungerRelief, FishDefinition->PoisonIncrease)
+		: FString(TEXT("FishDefinition=null"));
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
+		if (const FString* CachedPayload = TerminalPayloadByKey.Find(Key); CachedPayload && *CachedPayload != PayloadSignature)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+			return Result;
+		}
 		Result = *Cached;
 		Result.bCommitted = false;
 		Result.Error = ECatDomainCommandError::AlreadyResolved;
@@ -100,6 +99,7 @@ FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid
 		Result.Revision = Snapshot.Revision;
 	}
 	TerminalCache.Add(Key, Result);
+	TerminalPayloadByKey.Add(Key, PayloadSignature);
 	return Result;
 }
 
@@ -137,30 +137,22 @@ FCatDomainCommandResult UCatConditionComponent::RequestCampRest(AController* Req
 	return ApplyRecovery(RequestId, ECatRecoveryMode::CampRest, Settings->CampRestFatigueRelief, 0.0);
 }
 
-// 草药恢复流程：上层完成库存事务后调用；这里只验证 authority/Controller/显式恢复值，允许本人或伙伴但不在本组件复制援助者身份。
-FCatDomainCommandResult UCatConditionComponent::ApplyCommittedHerbRecovery(AController* HelpingController,
-	const FGuid RequestId)
-{
-	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
-	if (!HelpingController || ValidateHerbRecovery() != ECatDomainCommandError::None)
-	{
-		FCatDomainCommandResult Result;
-		Result.RequestId = RequestId;
-		Result.Error = ECatDomainCommandError::PolicyUndecided;
-		return Result;
-	}
-	return ApplyRecovery(RequestId, ECatRecoveryMode::Herb, Settings->HerbFatigueRelief, Settings->HerbPoisonRelief);
-}
-
-// 搬运完成流程：要求真实救援者和固定营地落点事实；不修改 Attribute，只把仍倒地者的恢复方式标为 CarriedToCamp，后续休息/草药继续处理阈值。
+// 搬运完成流程：先固定救援者与营地点事实，再处理终态缓存；同 RequestId 不能从“没到营地”漂移成“已到营地”后绕过首个结论。
 FCatDomainCommandResult UCatConditionComponent::CompleteCarryToCamp(AController* HelpingController,
 	const FGuid RequestId, const bool bAtCampRescuePoint)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	const FString Key = MakeTerminalKey(TEXT("CarryToCamp"), RequestId);
+	const FString PayloadSignature = FString::Printf(TEXT("Helper=%s|AtCampRescuePoint=%s"),
+		HelpingController ? *HelpingController->GetName() : TEXT("None"), bAtCampRescuePoint ? TEXT("true") : TEXT("false"));
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
+		if (const FString* CachedPayload = TerminalPayloadByKey.Find(Key); CachedPayload && *CachedPayload != PayloadSignature)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+			return Result;
+		}
 		Result = *Cached;
 		Result.bCommitted = false;
 		Result.Error = ECatDomainCommandError::AlreadyResolved;
@@ -170,6 +162,7 @@ FCatDomainCommandResult UCatConditionComponent::CompleteCarryToCamp(AController*
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
 		TerminalCache.Add(Key, Result);
+		TerminalPayloadByKey.Add(Key, PayloadSignature);
 		return Result;
 	}
 	Snapshot.RecoveryMode = ECatRecoveryMode::CarriedToCamp;
@@ -179,6 +172,7 @@ FCatDomainCommandResult UCatConditionComponent::CompleteCarryToCamp(AController*
 	Result.Error = ECatDomainCommandError::None;
 	Result.Revision = Snapshot.Revision;
 	TerminalCache.Add(Key, Result);
+	TerminalPayloadByKey.Add(Key, PayloadSignature);
 	return Result;
 }
 
@@ -188,15 +182,22 @@ void UCatConditionComponent::OnRep_Snapshot()
 	OnSnapshotChanged.Broadcast();
 }
 
-// 统一恢复流程：按 Mode+RequestId 幂等重放，验证 authority/ASC/阈值 gate 后非负减少属性，再重新裁决 Downed 并缓存结果。
+// 统一恢复流程：把恢复模式和数值作为 RequestId 的业务事实；缓存命中先挡住参数漂移，首次执行才修改 ASC 并重新裁决 Downed。
 FCatDomainCommandResult UCatConditionComponent::ApplyRecovery(const FGuid RequestId, const ECatRecoveryMode Mode,
 	const double FatigueRelief, const double PoisonRelief)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	const FString Key = MakeTerminalKey(*UEnum::GetValueAsString(Mode), RequestId);
+	const FString PayloadSignature = FString::Printf(TEXT("Mode=%d|FatigueRelief=%.17g|PoisonRelief=%.17g"),
+		static_cast<int32>(Mode), FatigueRelief, PoisonRelief);
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
+		if (const FString* CachedPayload = TerminalPayloadByKey.Find(Key); CachedPayload && *CachedPayload != PayloadSignature)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+			return Result;
+		}
 		Result = *Cached;
 		Result.bCommitted = false;
 		Result.Error = ECatDomainCommandError::AlreadyResolved;
@@ -221,6 +222,7 @@ FCatDomainCommandResult UCatConditionComponent::ApplyRecovery(const FGuid Reques
 		Result.Revision = Snapshot.Revision;
 	}
 	TerminalCache.Add(Key, Result);
+	TerminalPayloadByKey.Add(Key, PayloadSignature);
 	return Result;
 }
 

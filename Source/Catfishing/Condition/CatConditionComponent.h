@@ -33,9 +33,6 @@ public:
 	/** 在实物鱼被不可逆移除前只读校验食用定义、ASC 与倒地阈值；返回 None 才允许上层提交 Items 事务。 */
 	ECatDomainCommandError ValidateFishConsumption(const UCatFishDefinition* FishDefinition) const;
 
-	/** 在草药库存被不可逆扣除前只读校验 ASC、倒地阈值与正式恢复数值；返回 None 才允许上层提交 Equipment 事务。 */
-	ECatDomainCommandError ValidateHerbRecovery() const;
-
 	/** 实物鱼消费提交后读取 FishDefinition 食用字段，减少 Hunger、增加可选 Poison，并重新裁决倒地。 */
 	FCatDomainCommandResult ConsumeCommittedFish(FGuid RequestId, const UCatFishDefinition* FishDefinition);
 
@@ -44,9 +41,6 @@ public:
 
 	/** 固定营地休息入口；只允许 Camp actor 传入已到达事实并按营地恢复值处理。 */
 	FCatDomainCommandResult RequestCampRest(AController* RequestingController, FGuid RequestId, bool bAtCamp);
-
-	/** 草药恢复入口；允许本人或伙伴调用，但库存消费必须在上层先完成，组件只处理身体事实。 */
-	FCatDomainCommandResult ApplyCommittedHerbRecovery(AController* HelpingController, FGuid RequestId);
 
 	/** 搬运完成入口；要求服务器已把 Character 放到固定营地救援点，随后记录仍倒地者的恢复方式；同 RequestId 只提交一次。 */
 	FCatDomainCommandResult CompleteCarryToCamp(AController* HelpingController, FGuid RequestId, bool bAtCampRescuePoint);
@@ -80,4 +74,7 @@ private:
 
 	/** 身体命令的首次完整终态；防止重复吃鱼或重复恢复。 */
 	TMap<FString, FCatDomainCommandResult> TerminalCache;
+
+	/** 身体命令首次终态对应的业务载荷签名；同 RequestId 重放只能复用原始事实，换鱼、换恢复参数或换救援事实会被拒绝。 */
+	TMap<FString, FString> TerminalPayloadByKey;
 };

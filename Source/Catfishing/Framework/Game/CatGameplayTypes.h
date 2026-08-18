@@ -81,6 +81,10 @@ public:
 	FCatRunTeardownCompleted& OnRunTeardownCompleted();
 	/** 返回服务器 Run 聚合的只读公开事实；客户端应读取 GameState 的复制副本。 */
 	const FCatRunPublicState& GetRunPublicState() const;
+#if WITH_DEV_AUTOMATION_TESTS
+	/** 自动化测试专用：在没有 ST_RunFlow 资产时种入最小 Run 状态，让阶段入口 gate 可被公共测试覆盖；正式构建不暴露该入口。 */
+	void SeedRunPhaseEntryForAutomation(ECatRunPhase CurrentPhase, int32 CurrentDayIndex, int64 CurrentRevision);
+#endif
 	/** Online Client 主动离局前标记当前 Controller；Logout 据此按 VoluntaryLeaveRecovery 决定是否保留重连准入。 */
 	void MarkVoluntaryLeave(AController* Controller);
 	/** 远端 Client 完成本地 DestroySession 后确认同一 Host exit RequestId；全部确认会提前结束有界等待。 */
@@ -125,10 +129,10 @@ private:
 	static FString MakeRunCommandCacheKey(const FString& StableNetId, ECatRunCommandType CommandType, const FGuid& RequestId);
 	/** 创建与当前 Revision/Phase 对齐的命令结果，集中保证拒绝和提交返回相同事实字段。 */
 	FCatRunCommandResult MakeRunCommandResult(const FGuid& RequestId, bool bCommitted, ECatRunCommandError Error, ECatRunTransitionReason Reason = ECatRunTransitionReason::None) const;
-	/** 命中首次终态时返回只读重放结果；重复请求只报告 AlreadyResolved，不再次写真相。 */
-	bool TryReplayRunCommand(const FString& CacheKey, FCatRunCommandResult& OutResult) const;
-	/** 保存命令的首次同步终态；后续相同身份、类别与 RequestId 只能读取该记录。 */
-	FCatRunCommandResult CacheRunCommandResult(const FString& CacheKey, const FCatRunCommandResult& Result);
+	/** 命中首次终态时先比较业务载荷；相同载荷返回只读重放，载荷漂移返回 InvalidPayload 且不改写 Run。 */
+	bool TryReplayRunCommand(const FString& CacheKey, const FString& PayloadSignature, const FGuid& RequestId, FCatRunCommandResult& OutResult) const;
+	/** 保存命令的首次同步终态和载荷签名；后续相同身份、类别与 RequestId 只能读取同一业务事实。 */
+	FCatRunCommandResult CacheRunCommandResult(const FString& CacheKey, const FString& PayloadSignature, const FCatRunCommandResult& Result);
 	/** 已由服务器适配好 StableNetId 的额度唯一实现；玩家 RPC 与献祭协调器都汇入此处。 */
 	FCatRunCommandResult SubmitQuotaContributionInternal(const FCatQuotaContributionCommand& ServerCommand);
 	/** 进入普通夜晚时冻结当前 Active 身份集合并清空个人 ready，未裁的晚加入不会隐式扩容。 */
@@ -139,7 +143,7 @@ private:
 	void ClearDayDeadline();
 	/** 白天唯一截止回调关闭额度写口并发送 QuotaFailed 事件；夜晚没有倒计时器。 */
 	void HandleDayDeadlineElapsed();
-	/** 把当前 Run Revision 的只读 DTO交给 Environment，并将同一组合快照发布到 GameState。 */
+	/** 按当前 Run Phase 发布 GameState 组合快照；需要环境事实的阶段调用 Environment provider，终局阶段只发布对齐 Revision 的中性环境快照。 */
 	bool RefreshEnvironmentAndPublish();
 	/** 当前环境事件首次出现时把显式自然输入提交给唯一 WaterRegion；成功键按 Day+Event 去重，失败保留重试机会。 */
 	void SubmitNaturalAggregationIfConfigured();
@@ -175,6 +179,10 @@ private:
 	bool bRunCommandsOpen = false;
 	/** StateTree 正在同步 StartLogic 的短生命周期标记；允许首个 EnterPhase Task 在启动返回前写入。 */
 	bool bRunStartupInProgress = false;
+#if WITH_DEV_AUTOMATION_TESTS
+	/** 自动化测试的 StateTree 入口旁路；只用于缺少资产时验证 GameMode 服务端 gate，不参与正式运行或复制。 */
+	bool bAutomationRunPhaseEntryBypass = false;
+#endif
 	/** 本普通夜晚的合资格 StableNetId 快照；加入/重连策略未裁时不会自动添加。 */
 	TSet<FString> NightReadyEligibleIds;
 	/** 本普通夜晚已确认 ready 的 StableNetId 集合；玩家撤销或离开时同步移除。 */
@@ -183,6 +191,8 @@ private:
 	bool bAllEligibleReadyEventSent = false;
 	/** 身份、命令类别与 RequestId 到首次终态的缓存；保证 RPC 重试不会重复提交。 */
 	TMap<FString, FCatRunCommandResult> RunCommandTerminalCache;
+	/** Run 命令首次终态对应的业务载荷签名；同 RequestId 换贡献、ready 值或结算 Revision 会被拒绝。 */
+	TMap<FString, FString> RunCommandPayloadByKey;
 	/** 白天截止的唯一计时器句柄；每次 Phase 进入和 teardown 都先清除。 */
 	FTimerHandle DayDeadlineTimerHandle;
 	/** Host teardown 完成通知；它不复制且只在服务器 GameMode 生命周期内有效。 */
@@ -348,14 +358,6 @@ public:
 	void ServerConfigureEquipment(FGuid RequestId, int64 ExpectedRevision, FName RodDefinitionId,
 		FName BaitDefinitionId, FName FloatDefinitionId);
 
-	/** 在固定营地消费浮木并修复当前鱼竿；不升级或替换装备。 */
-	UFUNCTION(Server, Reliable)
-	void ServerRepairRodAtCamp(ACatCampHubActor* Camp, FGuid RequestId, int64 ExpectedEquipmentRevision);
-
-	/** 消费本人一份草药后恢复目标 Character；库存提交成功前不会修改身体。 */
-	UFUNCTION(Server, Reliable)
-	void ServerUseHerbOnCharacter(ACatCharacter* TargetCharacter, FGuid RequestId,
-		int64 ExpectedEquipmentRevision, FName HerbDefinitionId);
 
 	/** 从本人鱼护或共享缸直接吃一条鱼；Items 移除成功后才按 FishDefinition 修改 Hunger/Poison。 */
 	UFUNCTION(Server, Reliable)
@@ -365,17 +367,21 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerBeginTheft(FCatTheftCommand Command);
 
-	/** 服务器把 Begin/Catch 的首次或重放结果发回 owning client；ProtocolId 只能通过该权威结果取得。 */
+	/** 服务器把 Begin/Catch/Sell 的首次或重放结果发回 owning client；ProtocolId 和售出终态只能通过该权威结果取得。 */
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveTheftResult(const FCatTheftResult& Result);
 
-	/** 提供本机最近收到的偷鱼协议结果供 UI 读取；它不授权客户端直接访问 Social 或 Items 写口。 */
+	/** 提供本机最近收到的偷鱼协议结果供 UI 读取；它不授权客户端直接访问 Social、Items 或 ShopEconomy 写口。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Social")
 	FCatTheftResult GetLastTheftResult() const;
 
 	/** 在进食窗口内按服务器返回的 ProtocolId 追回；Social 按权威主人、状态、距离与共享缸策略授权。 */
 	UFUNCTION(Server, Reliable)
 	void ServerCatchTheft(FGuid TheftProtocolId);
+
+	/** 在追回窗口内请求售出本人持有的偷鱼 escrow；当前 Social 在可恢复经济事务缺失时稳定拒绝，不删除鱼也不入账。 */
+	UFUNCTION(Server, Reliable)
+	void ServerSellStolenFish(FGuid TheftProtocolId, FGuid RequestId, int64 ExpectedWalletRevision, int32 SaleValue);
 
 	/** 手动发布普通钓鱼或倒地求助；普通信号不会升级为全局任务。 */
 	UFUNCTION(Server, Reliable)
@@ -393,7 +399,7 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerCompleteShakeDry(FGuid RequestId);
 
-	/** 消费一份正式 Chum 并向脚下唯一 WaterRegion 提交同一 RequestId；定义拥有三轴值，客户端不能自报贡献。 */
+	/** 消费一份正式 Chum 并向脚下 WaterRegion 提交聚鱼；服务端先预留耗材，水域写入成功后才提交消耗，客户端不能自报贡献。 */
 	UFUNCTION(Server, Reliable)
 	void ServerContributeChum(ACatWaterRegion* WaterRegion, FGuid RequestId, int64 ExpectedEquipmentRevision,
 		int64 ExpectedRegionRevision, FName ChumDefinitionId);
@@ -426,6 +432,9 @@ private:
 	UPROPERTY(Transient)
 	FCatTheftResult LastTheftResult;
 
-	/** 本 Controller 的玩家窝料首次终态；覆盖 Equipment→WaterRegion 同步协调，重放不会再次扣耗材或增加池。 */
+	/** 本 Controller 的玩家窝料首次终态；覆盖 Equipment 预留、WaterRegion 写入和 Equipment 消耗三步，重放不会再次扣耗材或增加池。 */
 	TMap<FGuid, FCatAggregationResult> PlayerChumTerminalCache;
+
+	/** 玩家窝料首次终态对应的业务载荷签名；同 RequestId 换耗材、装备 Revision 或水域 Revision 会被拒绝。 */
+	TMap<FGuid, FString> PlayerChumPayloadByRequest;
 };
