@@ -353,3 +353,36 @@ provider 一直在正常工作，那条错误恰恰就是后来定性的生产 B
 
 反例（不要这样做）：把"构建通过 + 全量自动化 failed=0 + 冒烟绿 + 注释检查 pass"写进交付说明，
 然后据此声称代码质量没有问题。这四项全绿与本文开头那个可达的正确性缺陷同时成立过。
+
+## 关卡里要摆放的 Actor 必须显式建立根组件，否则位置写不进去且不报错
+
+同一个缺陷在这个项目里已经出现两次：`ACatWaterRegion`（2026-08-19，编号 G-37）和
+`ACatFishTankActor`（2026-08-20，摆灰盒场景时发现）。两次的表现完全一样——
+
+Actor 的构造函数里只 `CreateDefaultSubobject` 了业务组件，**没有创建根组件、也没有 `SetRootComponent`**。
+UE 对没有根组件的 Actor 会把 `SetActorLocation` / `SetActorTransform` 当作无效调用**静默丢弃**：
+不报错、不警告、返回值也可能是 true，但位置纹丝不动。后果分两层：
+
+- 关卡作者在编辑器里拖不动它，或者拖完保存后位置不生效，摆出来的场景和实际运行不一致；
+- 自动化测试里 `SpawnActor` 给的坐标同样无效，所有 Actor 全部叠在世界原点，
+  于是"按距离判定"的用例（近岸、交互半径、区域归属）会以一种极难定位的方式失败——
+  G-37 当初就是这样表现的：测试摆好了两片水域，但它们其实都在原点。
+
+核心规则：
+
+- **任何预期在关卡里被摆放、或在测试里按坐标 Spawn 的 Actor，构造函数必须显式建立一个根组件**
+  （通常是 `USceneComponent`），再把业务组件挂上去。不要指望某个业务组件"顺便"成为根。
+- 新增这类 Actor 时，把"能不能被摆到非原点位置"当成它的基本契约来对待。
+- 根组件的属性注释要写清楚它是这个 Actor 唯一的可写 Transform 来源、以及没有它会怎样，
+  避免下一个人做"清理无用组件"时把它删掉——它看起来确实不参与任何业务判定。
+
+反例（两次都是这样写的）：
+
+```cpp
+ACatFishTankActor::ACatFishTankActor()
+{
+    bReplicates = true;
+    ContainerReplication = CreateDefaultSubobject<UCatContainerReplicationComponent>(TEXT("ContainerReplication"));
+    // 没有根组件：这个鱼缸永远只能待在世界原点
+}
+```

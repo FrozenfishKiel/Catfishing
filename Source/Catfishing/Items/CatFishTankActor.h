@@ -30,6 +30,12 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** 鱼缸在世界里的锚点，也是这个 Actor 唯一的可写 Transform 来源。
+	 *  它不参与任何玩法判定，但没有它关卡作者就摆不动鱼缸——Actor 没有根组件时 SetActorLocation 会静默失效，
+	 *  鱼缸只能永远待在世界原点，而它本该摆在营地旁边供人转鱼。 */
+	UPROPERTY(VisibleAnywhere, Category = "Tank")
+	TObjectPtr<USceneComponent> TankRoot;
+
 	/** 共享鱼缸的一局稳定 ID；关卡未配置时 authority BeginPlay 生成一次。 */
 	UPROPERTY(Replicated)
 	FGuid TankContainerId;

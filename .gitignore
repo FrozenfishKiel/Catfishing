@@ -89,3 +89,6 @@ Temp/
 !.codex/docs/
 !.codex/docs/**
 .codex/state/
+
+# 自动化测试报告输出
+TestReports/

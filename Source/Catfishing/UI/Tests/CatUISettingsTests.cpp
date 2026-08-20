@@ -32,39 +32,6 @@ bool FCatUISettingsLakeStatusGateTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatUISettingsCommandPanelGateTest,
-	"Catfishing.Unit.UI.Settings.CommandPanelUsesOnlyExplicitGateAndDefaultsOff",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
-
-// 测试流程：先把瞬态 Settings 的两个开关都抹回 false（CDO 带着 ini 的 True 出生），确认 IsCommandPanelEnabled 只跟自
-// 己的字段走、不随 Lake 状态 View 开关联动；
-// 再读项目 CDO 确认 ini 里白盒面板当前是开着的。AttachSurvivalPawn 只在 IsCommandPanelEnabled 为真时才 CreateWidget，
-// 这条测试固定的是那个 gate 函数本身，不是 Widget 创建路径。
-bool FCatUISettingsCommandPanelGateTest::RunTest(const FString& Parameters)
-{
-	(void)Parameters;
-
-	UCatUISettings* Settings = NewObject<UCatUISettings>(GetTransientPackage());
-	TestNotNull(TEXT("可创建瞬态 UI Settings"), Settings);
-	if (!Settings)
-	{
-		return false;
-	}
-	Settings->bEnableLakeStatusView = false;
-	Settings->bEnableCommandPanel = false;
-	TestFalse(TEXT("两开关都关时命令面板 gate 关闭"), Settings->IsCommandPanelEnabled());
-	Settings->bEnableLakeStatusView = true;
-	TestFalse(TEXT("只开 Lake 状态 View 不会连带打开命令面板"), Settings->IsCommandPanelEnabled());
-	Settings->bEnableCommandPanel = true;
-	TestTrue(TEXT("显式开关打开命令面板 gate"), Settings->IsCommandPanelEnabled());
-
-	const UCatUISettings* ProjectDefaults = GetDefault<UCatUISettings>();
-	TestNotNull(TEXT("项目 UI Settings 可读取"), ProjectDefaults);
-	TestTrue(TEXT("项目 DefaultGame.ini 当前开启开发期白盒命令面板"), ProjectDefaults && ProjectDefaults->IsCommandPanelEnabled());
-	return !HasAnyErrors();
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatUISettingsProjectDefaultsTest,
 	"Catfishing.Unit.UI.Settings.ProjectDefaultsEnableLakeStatusView",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)

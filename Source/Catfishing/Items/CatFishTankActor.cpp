@@ -10,6 +10,10 @@ ACatFishTankActor::ACatFishTankActor()
 {
 	bReplicates = true;
 	PrimaryActorTick.bCanEverTick = false;
+	// 先给一个根组件再挂容器组件：Actor 没有根组件时引擎会把 SetActorLocation 当无效调用静默丢掉，
+	// 关卡里的鱼缸就只能永远停在世界原点——而它本该摆在营地旁边，玩家才走得过去转鱼。
+	TankRoot = CreateDefaultSubobject<USceneComponent>(TEXT("TankRoot"));
+	SetRootComponent(TankRoot);
 	ContainerReplication = CreateDefaultSubobject<UCatContainerReplicationComponent>(TEXT("ContainerReplication"));
 }
 

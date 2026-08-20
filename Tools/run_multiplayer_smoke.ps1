@@ -10,7 +10,7 @@
 #     run_started                  —— 一局真的开起来（ST_RunFlow）
 #   客户端侧必须出现：
 #     run_snapshot_received        —— Run 公开快照真的复制到了客户端（含全部嵌套 DTO 的网络序列化）
-#     ui_command_panel_created     —— 客户端 LocalPlayer 管线成立（占有 Pawn + UI 装配）
+#     ui_survival_view_created     —— 客户端 LocalPlayer 管线成立（占有 Pawn + 状态 View 装配）
 #   双方都不允许出现：
 #     identity_prelogin_rejected / Fatal error / GetLastError=4551（模块被系统拦截）
 #
@@ -88,10 +88,10 @@ Write-Host "[smoke] 客户端进程 PID=$($Client.Id)"
 
 # 客户端就绪判据：Run 快照真的复制过来了。
 $ClientJoined = Wait-ForPattern -Path $ClientLog -Pattern 'Event=run_snapshot_received' -Seconds $TimeoutSeconds -MustLive @($Server, $Client)
-# UI 面板要等 Pawn 复制到客户端并触发占有通知，是最后一个到位的标记；必须在进程活着时轮询，
+# 状态 View 要等 Pawn 复制到客户端并触发占有通知，是最后一个到位的标记；必须在进程活着时轮询，
 # 杀进程会把没刷盘的日志尾巴一起带走。
 if ($ClientJoined) {
-    Wait-ForPattern -Path $ClientLog -Pattern 'Event=ui_command_panel_created' -Seconds 90 -MustLive @($Server, $Client) | Out-Null
+    Wait-ForPattern -Path $ClientLog -Pattern 'Event=ui_survival_view_created' -Seconds 90 -MustLive @($Server, $Client) | Out-Null
 }
 Stop-Procs @($Server, $Client)
 Start-Sleep -Seconds 3
@@ -121,7 +121,7 @@ Assert-Present -Path $ServerLog -Pattern 'Event=run_started'              -What 
 Assert-Present -Path $ServerLog -Pattern 'Event=identity_reserved'       -What '服务器: 真实 PreLogin 准入' -MinCount 2
 Assert-Present -Path $ServerLog -Pattern 'Event=lake_postlogin_complete' -What '服务器: 入局完成（主机+远端）' -MinCount 2
 Assert-Present -Path $ClientLog -Pattern 'Event=run_snapshot_received'   -What '客户端: 收到 Run 复制快照'
-Assert-Present -Path $ClientLog -Pattern 'Event=ui_command_panel_created' -What '客户端: LocalPlayer 管线成立'
+Assert-Present -Path $ClientLog -Pattern 'Event=ui_survival_view_created' -What '客户端: LocalPlayer 管线成立'
 
 Assert-Absent -Path $ServerLog -Pattern 'identity_prelogin_rejected' -What '服务器: 准入被拒'
 Assert-Absent -Path $ServerLog -Pattern 'GetLastError=4551'          -What '服务器: 模块被系统拦截'
