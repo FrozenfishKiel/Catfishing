@@ -10,11 +10,11 @@ enum class ECatRunPhase : uint8
 {
 	/** Run 与环境真相已初始化，但 StateTree 尚未进入首个可玩状态。 */
 	NotStarted,
-	/** 白天额度窗口开启；只有该阶段允许提交额度贡献并持有唯一截止计时器。 */
+	/** 白天限时弧线；只有该阶段允许钓鱼并持有唯一截止计时器，献祭窗口在白天始终关闭。 */
 	DayActive,
-	/** 当日额度已达成后的普通夜晚；无计时，只等待当前合资格玩家确认翻天。 */
+	/** 白天到点后的普通夜晚；无计时，受理献祭并等待当前合资格玩家确认翻天。 */
 	NormalNight,
-	/** 截止时额度未达成后的失败结算夜；无计时，必须等待 SettlementComplete。 */
+	/** 翻天确认时额度未交齐后的失败结算夜；无计时，必须等待 SettlementComplete。 */
 	FailureSettlementNight,
 	/** 产品明确选择成功终局后使用的成功结算夜；默认策略未裁时不可进入。 */
 	SuccessSettlementNight,
@@ -30,7 +30,7 @@ enum class ECatRunEndReason : uint8
 {
 	/** 当前尚无终局原因。 */
 	None,
-	/** 白天截止时额度不足，并已由 StateTree 进入失败结算夜。 */
+	/** 翻天确认时当日额度仍不足，并已由 StateTree 进入失败结算夜。 */
 	QuotaFailed,
 	/** 成功终局策略已明确并完成相应结算。 */
 	Success,
@@ -46,11 +46,11 @@ enum class ECatRunTransitionReason : uint8
 {
 	/** 当前没有待消费的转移原因。 */
 	None,
-	/** 当日额度首次达到目标。 */
-	QuotaReached,
-	/** 白天截止时额度仍不足。 */
+	/** 白天的固定时长弧线走完；它只表示到点入夜，本身不做任何额度判定。 */
+	DayElapsed,
+	/** 翻天确认时当日额度仍不足；本局在失败结算夜结束。 */
 	QuotaFailed,
-	/** 普通夜晚当前合资格玩家全部确认翻天。 */
+	/** 普通夜晚当前合资格玩家全部确认翻天，且确认点的当日额度已交齐。 */
 	AllEligibleReady,
 	/** 失败或成功结算依赖已经收口，可进入 Ending。 */
 	SettlementComplete,
@@ -86,7 +86,7 @@ enum class ECatRunCommandError : uint8
 	InvalidPhase,
 	/** StableNetId 无效、未 Active 或不匹配当前 Controller。 */
 	InvalidIdentity,
-	/** RequestId、贡献量或其他命令载荷无效。 */
+	/** RequestId、额度条数或其他命令载荷无效。 */
 	InvalidPayload,
 	/** ExpectedRevision 落后或超前于 Run 当前 Revision。 */
 	RevisionConflict,
@@ -158,11 +158,11 @@ struct FCatRunPhaseSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasDeadline = false;
 
-	/** 当前是否允许钓鱼规则消费本阶段；白天截止或额度完成后会先关闭，夜晚始终为 false。 */
+	/** 当前是否允许钓鱼规则消费本阶段；白天到点即关闭，夜晚始终为 false。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bFishingAllowed = false;
 
-	/** 当前是否仍接受额度贡献；它在 DayActive 内提供截止/达标竞争的精确服务器边界。 */
+	/** 当前是否仍受理献祭额度贡献；只有普通夜晚打开，翻天确认裁定结算后立刻关闭，白天与结算夜始终关闭。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bQuotaOpen = false;
 };
@@ -227,13 +227,17 @@ struct FCatRunPublicState
 	UPROPERTY(BlueprintReadOnly)
 	FCatEnvironmentSnapshot Environment;
 
-	/** 当日已提交的额度贡献总量；只由 GameMode 幂等命令写口增加。 */
+	/** 当日已献祭的鱼条数；额度是纯数量口径，一条鱼恒记 1，不按鱼的供奉进度加权，进入新白天时清零。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 QuotaProgress = 0;
 
 	/** 当前已配置的当日目标；默认 Unset，只有 RunSettings 显式 runtime gate 后才发布正值。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 QuotaTarget = 0;
+
+	/** 献祭累积的世界进度，用于驱动森林复苏演出与鱼册剪影解锁；它是额度之上的独立累计层，跨天累计、下限 0，不参与额度判定，也不改变局终点。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 WorldProgress = 0;
 
 	/** Run Aggregate 的单调 Revision；所有读后写命令必须提交匹配的 ExpectedRevision。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -276,9 +280,13 @@ struct FCatQuotaContributionCommand
 	UPROPERTY(BlueprintReadWrite)
 	FCatRunCommandContext Context;
 
-	/** 本次已提交结果贡献的正整数；具体额度曲线与人数缩放由 RunSettings gate 决定。 */
+	/** 本次献祭计入当日额度的条数；额度是纯数量口径，单条献祭恒为 1，必须为正值才会被受理。 */
 	UPROPERTY(BlueprintReadWrite)
-	int32 Contribution = 0;
+	int32 QuotaCount = 0;
+
+	/** 本次献祭对世界进度的增减；取自鱼定义的供奉进度值，臭臭鱼这类鱼允许为负，落地时按下限 0 截断。 */
+	UPROPERTY(BlueprintReadWrite)
+	int32 WorldProgressDelta = 0;
 };
 
 /** 普通夜晚个人翻天确认命令；PlayerState 只复制本人的最终 ready 事实。 */
@@ -364,7 +372,10 @@ enum class ECatRunTeardownStatus : uint8
 {
 	/** Run 已完成本阶段全部收口，Online 可以继续 DestroySession。 */
 	Ready,
-	/** 当前管线已关闭并收口 Fishing/Social/Items/Imprint，正在有界等待远端退出 ACK 与 durable Grant ACK；Online 必须等待同一 RequestId/epoch 回调。 */
+	/**
+	 * 当前管线已关闭并收口 Fishing/Social/Items/ShopEconomy/Imprint，正在有界等待远端退出 ACK 与 durable Grant ACK；
+	 * Online 必须等待同一 RequestId/epoch 回调。
+	 */
 	Pending,
 	/** Run 无法安全收口，Online 必须停止 Destroy/旅行链。 */
 	Failed

@@ -12,7 +12,7 @@ enum class ECatEquipmentKind : uint8
 	Unknown,
 	/** 有耐久的鱼竿。 */
 	Rod,
-	/** 普通无限或特殊消耗型鱼饵。 */
+	/** 鱼饵；普通饵与特殊饵都是一局消耗品（飞书 §3.4），只在鱼偏好、进货限量和丢饵预算上区分身份。 */
 	Bait,
 	/** 四种正式玩法路线之一的鱼漂。 */
 	Float,
@@ -20,9 +20,9 @@ enum class ECatEquipmentKind : uint8
 	ScoopNet,
 	/** 共享聚鱼池的窝料。 */
 	Chum,
-	/** 身体恢复上层先提交的草药耗材。 */
+	/** 旧草药恢复路径的保留枚举；WORK-04 起不再允许进入 Runtime Catalog。 */
 	Herb,
-	/** 修竿使用的浮木。 */
+	/** 旧修竿材料路径的保留枚举；WORK-04 起不再允许进入 Runtime Catalog。 */
 	Driftwood,
 	/** 其他正式一次性特效道具。 */
 	Utility
@@ -34,9 +34,9 @@ enum class ECatFishingFailurePenalty : uint8
 {
 	/** 失败发生但本次不提交物资惩罚。 */
 	None,
-	/** 只损失一份已选特殊鱼饵；普通饵无限，不能进入该结果。 */
+	/** 只损失一份已选特殊鱼饵；普通饵的每次咬钩扣饵走 Fishing 的 Bait 语义链，不走这条失败预算。 */
 	LoseSpecialBait,
-	/** 只降低当前鱼竿耐久；降至零即断竿，不再同时丢饵。 */
+	/** 旧失败预算伤竿选择；WORK-04 起不直接扣耐久，正式断竿由 Fight Resource Cursor 产生。 */
 	DamageRod
 };
 
@@ -69,7 +69,7 @@ struct FCatEquipmentLoadoutSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	FName RodDefinitionId = NAME_None;
 
-	/** 当前鱼饵稳定 ID；普通饵不会出现在耗材栈。 */
+	/** 当前鱼饵稳定 ID，表示"现在挂的是哪种饵"；它对应的随身份数另在 Consumables 里按同一定义 ID 计数。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName BaitDefinitionId = NAME_None;
 
@@ -81,13 +81,107 @@ struct FCatEquipmentLoadoutSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	double RodDurability = 0.0;
 
-	/** 当前鱼竿是否已断；只有 DamageRod 把耐久降至零时为 true。 */
+	/**
+	 * 当前鱼竿是否已断；只有 FishingSession 通过 CommitFightRodDurabilityFromAuthority 把耐久磨到 0 才会把它写成
+	 * true（判定表①强度断竿也走这条路）。
+	 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bRodBroken = false;
 
-	/** 一局消耗品数量；不包含无限普通鱼饵或跨局解锁。 */
+	/** 一局消耗品数量，按定义 ID 分栈：普通饵、特殊饵、窝料都在这里；不包含跨局解锁。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatRunConsumableStack> Consumables;
+};
+
+/**
+ * 团队装备库里的一件实物。飞书商店册 §3.2 写"买来的物品进团队装备库"，所以这是一件东西被买下来之后在局内的落点，
+ * 和挂在某只猫身上的装配是两回事：装配表达"现在谁在用"，这里表达"这局的队伍手上有什么"。
+ * 一件实例对应一次购买或一次免费自取，随局存在，World 结束就没了。
+ */
+USTRUCT(BlueprintType)
+struct FCatTeamEquipmentInstance
+{
+	GENERATED_BODY()
+
+	/** 这件东西在本局的稳定 ID；它同时被当作交回商店的交付回执 ID，让账本能指回具体哪一件。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid InstanceId;
+
+	/** 对应的 EquipmentDefinition 稳定 ID；入库时已经过运行目录校验，不是随手记下的名字。 */
+	UPROPERTY(BlueprintReadOnly)
+	FName DefinitionId = NAME_None;
+
+	/** 从定义冻结下来的功能类别；后续资产改类别不改变已入库实例的性质。 */
+	UPROPERTY(BlueprintReadOnly)
+	ECatEquipmentKind Kind = ECatEquipmentKind::Unknown;
+
+	/** 把这件东西买进来的那笔商店订单；它是"同一笔订单只入库一次"的判断依据。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid SourceTransactionId;
+};
+
+/** 团队装备库的复制读模型；全队共有一份，客户端只读，取用规则不在这份快照里。 */
+USTRUCT(BlueprintType)
+struct FCatTeamEquipmentLibrarySnapshot
+{
+	GENERATED_BODY()
+
+	/** 每次成功入库后递增；入库命令用它做乐观并发前提，商店也用它作为交付回执的下游版本。 */
+	UPROPERTY(BlueprintReadOnly)
+	int64 Revision = 0;
+
+	/** 当前库里的全部实物，按入库顺序排列。 */
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FCatTeamEquipmentInstance> Instances;
+};
+
+/** 把一笔已经付过款的商店订单交付进团队装备库的命令；Shop 不自己创建实例，只能提交这条命令。 */
+USTRUCT(BlueprintType)
+struct FCatTeamEquipmentGrantCommand
+{
+	GENERATED_BODY()
+
+	/** RequestId、装备库 ExpectedRevision 与服务器重建的身份；客户端不能直接指定要入库什么。 */
+	UPROPERTY(BlueprintReadWrite)
+	FCatDomainCommandContext Context;
+
+	/** 触发这次入库的商店账本 ID；同一笔订单重复提交只会拿回第一次入库的那件实物。 */
+	UPROPERTY(BlueprintReadWrite)
+	FGuid SourceTransactionId;
+
+	/** 要入库的 EquipmentDefinition 稳定 ID；装备库会自己去运行目录核对，不信任调用方说它合法。 */
+	UPROPERTY(BlueprintReadWrite)
+	FName DefinitionId = NAME_None;
+};
+
+/** 从团队装备库按实例取走一件实物的命令；取走之后这件东西归取用者装配，装备库里不再有它。 */
+USTRUCT(BlueprintType)
+struct FCatTeamEquipmentTakeCommand
+{
+	GENERATED_BODY()
+
+	/** RequestId、装备库 ExpectedRevision 与服务器重建的取用者身份；客户端只能指定要哪一件，身份由 RPC 层重建。 */
+	UPROPERTY(BlueprintReadWrite)
+	FCatDomainCommandContext Context;
+
+	/** 要取走的那件实物在本局的稳定 ID；装备库按它定位，查不到就拒绝，不按定义名"随便拿一件同款"。 */
+	UPROPERTY(BlueprintReadWrite)
+	FGuid InstanceId;
+};
+
+/** 入库/取用命令的终态；成功和合法重放都会带回那件实物，入库时供商店拿它当交付回执，取用时供 Equipment 装配。 */
+USTRUCT(BlueprintType)
+struct FCatTeamEquipmentGrantResult
+{
+	GENERATED_BODY()
+
+	/** 公共命令终态；Revision 对应团队装备库聚合。 */
+	UPROPERTY(BlueprintReadOnly)
+	FCatDomainCommandResult Command;
+
+	/** 本次入库或此前已入库的那件实物；拒绝时保持默认。 */
+	UPROPERTY(BlueprintReadOnly)
+	FCatTeamEquipmentInstance Instance;
 };
 
 /** 一次失败预算提交结果；明确记录唯一选择的惩罚。 */

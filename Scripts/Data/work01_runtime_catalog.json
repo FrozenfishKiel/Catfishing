@@ -1,0 +1,491 @@
+{
+  "schema": 1,
+  "purpose": "Work01 runtime catalog landing manifest for the first playable DataAsset slice. Runtime code consumes generated assets and Settings only; this manifest is an offline import source and audit record.",
+  "source_facts": {
+    "fish_sheet": {
+      "title": "鱼表格 / 第一版",
+      "token": "CQlMsQon6hlo8ctpZRWcAPzOnRi",
+      "revision": 547,
+      "slice": "第一版!A1:T40; landed rows 2-14 except rows blocked below. Columns E (出没地点) and J (喜爱窝料) are read per row. Excluded: rarity, personality, time-of-day, weather and spawn-weight have no column in this sheet and are not landed."
+    },
+    "equipment_doc": {
+      "title": "装备与道具",
+      "token": "Ohy5dF5PJofBg8xeZnrcx1vEnxg",
+      "revision": 664,
+      "slice": "equipment selection, bait, float and quick-reference sections. Excluded: the v1.9 抄网/鱼护 item category is not landed in this catalog."
+    },
+    "rod_durability_doc": {
+      "title": "鱼竿耐久度规则",
+      "token": "XrUWdZjAcoGrccxDZDzcKraUnWb",
+      "revision": 63,
+      "slice": "1.1 rod table durability column and 1.3 float table only. Rod strength (25/60/130) and line max (60/80/100 m) were landed on 2026-08-20 from the 装备册 / 裁决同步 adjudication (strength is static and separate from durability, see Docs/Development/需求对齐差距清单.md G-23); the older 10/50/210 figures in this doc are superseded. Only the two existing rod assets (T1/T2) carry values; no T3 asset is created."
+    },
+    "chum_bait_sheet": {
+      "title": "窝料/饵",
+      "token": "WeirsgUSWhjpCEtosj0cVeBMnOg",
+      "revision": 83,
+      "slice": "Sheet1!A1:E22"
+    }
+  },
+  "catalogs": {
+    "fish": {
+      "content_schema_version": 1,
+      "data_revision": 548,
+      "source_stamp": {
+        "source_kind": "FeishuSheet",
+        "source_node_token": "CQlMsQon6hlo8ctpZRWcAPzOnRi",
+        "source_revision": 547,
+        "source_slice_name": "第一版 rows 2-14 runtime-ready subset"
+      },
+      "data_revision_note": "data_revision is the catalog content identity and is deliberately decoupled from the Feishu revision: the sheet is still 547, but this landing re-reads the same source into different fields, so the ContentHash changes. Reusing 547 would produce two different contents under one revision. The Feishu revision is carried by source_stamp.source_revision.",
+      "asset_root": "/Game/Catfishing/Data/Fish",
+      "landing_policy": {
+        "fish_strength_policy": "maximum_weight_kg * source_strength_coefficient; conservative gate until EncounterSpec carries rolled strength",
+        "food_policy": "Unset means catchable but not edible; eating remains fail-closed through HasRuntimeConsumptionEffect",
+        "selection_policy": "no spawn weight exists in the source; the encounter model draws from the chum three-axis mix, which is not implemented yet, so the catalog draws uniformly among candidates"
+      },
+      "definitions": [
+        {
+          "asset_name": "Fish_RiverPattern",
+          "id": "RiverPatternFish",
+          "source_name": "河纹鱼",
+          "source_row": 2,
+          "body_class": "Standard",
+          "sacrifice": 1,
+          "regions": ["River"],
+          "chum_affinity": ["Fermented"],
+          "min_kg": 0.4,
+          "max_kg": 3.0,
+          "strength_coefficient": 6.0,
+          "fight_stamina": 30.0,
+          "min_participants": 1,
+          "tank": true,
+          "preferred_special_bait_ids": []
+        },
+        {
+          "asset_name": "Fish_LittleSilver",
+          "id": "LittleSilverFish",
+          "source_name": "小银鱼",
+          "source_row": 3,
+          "body_class": "Standard",
+          "sacrifice": 1,
+          "regions": ["River", "ForestLake"],
+          "chum_affinity": ["Fermented"],
+          "min_kg": 0.05,
+          "max_kg": 0.4,
+          "strength_coefficient": 4.0,
+          "fight_stamina": 15.0,
+          "min_participants": 1,
+          "tank": true,
+          "preferred_special_bait_ids": []
+        },
+        {
+          "asset_name": "Fish_LittleColor",
+          "id": "LittleColorFish",
+          "source_name": "小彩鱼",
+          "source_row": 4,
+          "body_class": "Standard",
+          "sacrifice": 3,
+          "regions": ["River", "ForestLake"],
+          "chum_affinity": ["Fragrant"],
+          "min_kg": 0.04,
+          "max_kg": 0.4,
+          "strength_coefficient": 5.0,
+          "fight_stamina": 25.0,
+          "min_participants": 1,
+          "tank": true,
+          "preferred_special_bait_ids": ["FlashingBait"]
+        },
+        {
+          "asset_name": "Fish_ForestLongtail",
+          "id": "ForestLongtailFish",
+          "source_name": "森林长尾鱼",
+          "source_row": 5,
+          "body_class": "Standard",
+          "sacrifice": 2,
+          "regions": ["River", "ForestLake"],
+          "chum_affinity": ["Fragrant"],
+          "min_kg": 3.0,
+          "max_kg": 8.0,
+          "strength_coefficient": 10.0,
+          "fight_stamina": 90.0,
+          "min_participants": 1,
+          "tank": true,
+          "preferred_special_bait_ids": ["FlashingBait"]
+        },
+        {
+          "asset_name": "Fish_SilvermoonTrout",
+          "id": "SilvermoonTrout",
+          "source_name": "银月鳟",
+          "source_row": 6,
+          "body_class": "Standard",
+          "sacrifice": 3,
+          "regions": ["River", "ForestLake"],
+          "chum_affinity": ["Fragrant", "Fermented"],
+          "min_kg": 3.0,
+          "max_kg": 8.0,
+          "strength_coefficient": 10.5,
+          "fight_stamina": 100.0,
+          "min_participants": 1,
+          "tank": true,
+          "preferred_special_bait_ids": ["MoonlightBait", "FlashingBait"]
+        },
+        {
+          "asset_name": "Fish_LakeGiantShadow",
+          "id": "LakeGiantShadow",
+          "source_name": "湖心巨影",
+          "source_row": 7,
+          "body_class": "Giant",
+          "sacrifice": 10,
+          "regions": ["River", "ForestLake"],
+          "chum_affinity": ["Fishy"],
+          "min_kg": 15.0,
+          "max_kg": 40.0,
+          "strength_coefficient": 2.8,
+          "fight_stamina": 260.0,
+          "min_participants": 2,
+          "tank": false,
+          "preferred_special_bait_ids": ["GiantLure"]
+        },
+        {
+          "asset_name": "Fish_Petal",
+          "id": "PetalFish",
+          "source_name": "花瓣鱼",
+          "source_row": 8,
+          "body_class": "Standard",
+          "sacrifice": 3,
+          "regions": ["River", "ForestLake"],
+          "chum_affinity": ["Fragrant"],
+          "min_kg": 0.05,
+          "max_kg": 0.4,
+          "strength_coefficient": 4.5,
+          "fight_stamina": 20.0,
+          "min_participants": 1,
+          "tank": true,
+          "preferred_special_bait_ids": []
+        },
+        {
+          "asset_name": "Fish_Windbell",
+          "id": "WindbellFish",
+          "source_name": "风铃鱼",
+          "source_row": 9,
+          "body_class": "Standard",
+          "sacrifice": 3,
+          "regions": ["River", "ForestLake"],
+          "chum_affinity": ["Fragrant"],
+          "min_kg": 0.05,
+          "max_kg": 0.4,
+          "strength_coefficient": 4.5,
+          "fight_stamina": 20.0,
+          "min_participants": 1,
+          "tank": true,
+          "preferred_special_bait_ids": ["SoundBait"]
+        },
+        {
+          "asset_name": "Fish_Salted",
+          "id": "SaltedFish",
+          "source_name": "咸鱼",
+          "source_row": 10,
+          "body_class": "Standard",
+          "sacrifice": 2,
+          "regions": ["River", "ForestLake"],
+          "chum_affinity": ["Fishy"],
+          "min_kg": 0.5,
+          "max_kg": 1.2,
+          "strength_coefficient": 7.5,
+          "fight_stamina": 45.0,
+          "min_participants": 1,
+          "tank": true,
+          "preferred_special_bait_ids": []
+        },
+        {
+          "asset_name": "Fish_Blackfish",
+          "id": "Blackfish",
+          "source_name": "黑鱼",
+          "source_row": 12,
+          "body_class": "Standard",
+          "sacrifice": 2,
+          "regions": ["River"],
+          "chum_affinity": ["Fishy"],
+          "min_kg": 3.0,
+          "max_kg": 8.0,
+          "strength_coefficient": 11.5,
+          "fight_stamina": 100.0,
+          "min_participants": 1,
+          "tank": true,
+          "preferred_special_bait_ids": []
+        },
+        {
+          "asset_name": "Fish_Loach",
+          "id": "Loach",
+          "source_name": "泥鳅",
+          "source_row": 13,
+          "body_class": "Standard",
+          "sacrifice": 1,
+          "regions": ["River"],
+          "chum_affinity": ["Fermented"],
+          "min_kg": 0.05,
+          "max_kg": 0.5,
+          "strength_coefficient": 3.5,
+          "fight_stamina": 15.0,
+          "min_participants": 1,
+          "tank": true,
+          "preferred_special_bait_ids": []
+        },
+        {
+          "asset_name": "Fish_EstuaryBass",
+          "id": "EstuaryBass",
+          "source_name": "河口鲈",
+          "source_row": 14,
+          "body_class": "Standard",
+          "sacrifice": 2,
+          "regions": ["River"],
+          "chum_affinity": ["Fishy"],
+          "min_kg": 1.0,
+          "max_kg": 5.0,
+          "strength_coefficient": 9.0,
+          "fight_stamina": 80.0,
+          "min_participants": 1,
+          "tank": true,
+          "preferred_special_bait_ids": []
+        }
+      ],
+      "blocked_rows": [
+        {
+          "source_name": "臭臭鱼",
+          "source_row": 11,
+          "reason": "design has decided this fish can be offered (-1 progress, still counts toward the quota), but the sacrifice chain has not split progress delta from quota counting yet; a single non-negative contribution field cannot express it. This is an engineering gap blocking a decided rule, not a source data problem."
+        },
+        {
+          "source_name": "河豚",
+          "source_row": 15,
+          "reason": "missing location, chum affinity, weight, strength coefficient and fight stamina in the selected source slice"
+        },
+        {
+          "source_name": "电鳗",
+          "source_row": 16,
+          "reason": "missing location, chum affinity, weight, strength coefficient and fight stamina in the selected source slice"
+        },
+        {
+          "source_name": "狗鱼",
+          "source_row": 17,
+          "reason": "missing location, chum affinity, weight, strength coefficient and fight stamina in the selected source slice"
+        }
+      ]
+    },
+    "equipment": {
+      "content_schema_version": 1,
+      "data_revision": 656,
+      "source_stamp": {
+        "source_kind": "FeishuComposite",
+        "source_node_token": "Ohy5dF5PJofBg8xeZnrcx1vEnxg",
+        "source_revision": 664,
+        "source_slice_name": "装备与道具 rev664 plus rod durability rev63 and bait/chum sheet rev83"
+      },
+      "data_revision_note": "same decoupling as the fish catalog: data_revision is the catalog content identity, source_stamp.source_revision carries the Feishu revision. 654 (2026-08-20): ordinary baits (Bug/Meat/Fruit/Nectar) gained run_consumable=true per Feishu fishing rules 3.4 (2026-08-18 ruling: every bite consumes 1 bait regardless of outcome; ordinary bait carry cap 5); the Feishu sheet revision is unchanged, so source_stamp stays 664. Applied to assets by Tools/Python/apply_equipment_consumable_flags.py. 656 (2026-08-20): the three float assets gained float_range_meters (Feishu equipment book 3/5/7 m) and float_accuracy_radius_meters (Feishu only gives high/medium/low, so the radii are engineering placeholders, decision record D-23), and their route ids were renamed per route_id_policy. Applied by Tools/Python/apply_float_cast_stats.py.",
+      "asset_root": "/Game/Catfishing/Data/Equipment",
+      "profile_loadout_trust_policy": "Enabled",
+      "run_consumable_stack_capacity": 5,
+      "run_consumable_stack_capacity_note": "Feishu equipment book: ordinary bait / chum carry cap 5 each, marked tentative (decision record D-13). 0 means no cap.",
+      "route_id_policy": "FunctionalRouteId is a public route label and is never compared by magnitude, so it must not encode numbers that a dedicated field already owns. Rod routes carry no strength (RodStrength owns it), no line max (MaximumLineLengthMeters owns it) and no durability (MaximumRodDurability owns it). Float routes no longer carry range or precision either: FloatCastRangeMeters and FloatAccuracyOffsetRadiusMeters own them as of 2026-08-20, so the three float routes were renamed to plain identities (the bell route keeps BiteBell because the audible bite cue is a functional trait no field owns).",
+      "starter_loadout": {
+        "rod": "StarterRodT1",
+        "bait": "BugBait",
+        "float": "FeatherFloat"
+      },
+      "definitions": [
+        {
+          "asset_name": "Equip_Rod_StarterT1",
+          "id": "StarterRodT1",
+          "source_name": "1级鱼竿",
+          "kind": "Rod",
+          "slot": "Rod",
+          "route": "RodTier1",
+          "max_rod_durability": 40.0,
+          "rod_strength": 25.0,
+          "max_line_meters": 60.0,
+          "required_unlock": ""
+        },
+        {
+          "asset_name": "Equip_Rod_ShopT2",
+          "id": "ShopRodT2",
+          "source_name": "2级鱼竿",
+          "kind": "Rod",
+          "slot": "Rod",
+          "route": "RodTier2",
+          "max_rod_durability": 70.0,
+          "rod_strength": 60.0,
+          "max_line_meters": 80.0,
+          "required_unlock": "ShopRodT2"
+        },
+        {
+          "asset_name": "Equip_Float_Feather",
+          "id": "FeatherFloat",
+          "source_name": "羽毛漂",
+          "kind": "Float",
+          "slot": "Float",
+          "route": "FloatFeather",
+          "float_range_meters": 3.0,
+          "float_accuracy_radius_meters": 0.3,
+          "required_unlock": ""
+        },
+        {
+          "asset_name": "Equip_Float_YarnBall",
+          "id": "YarnBallFloat",
+          "source_name": "毛线球漂",
+          "kind": "Float",
+          "slot": "Float",
+          "route": "FloatYarnBall",
+          "float_range_meters": 5.0,
+          "float_accuracy_radius_meters": 0.7,
+          "required_unlock": "YarnBallFloat"
+        },
+        {
+          "asset_name": "Equip_Float_Bell",
+          "id": "BellFloat",
+          "source_name": "铃铛漂",
+          "kind": "Float",
+          "slot": "Float",
+          "route": "FloatBell_BiteBell",
+          "float_range_meters": 7.0,
+          "float_accuracy_radius_meters": 1.5,
+          "required_unlock": "BellFloat"
+        },
+        {
+          "asset_name": "Equip_Bait_Bug",
+          "id": "BugBait",
+          "source_name": "虫虫饵",
+          "kind": "Bait",
+          "slot": "Bait",
+          "route": "NormalBait_Bug",
+          "run_consumable": true,
+          "special_bait": false,
+          "required_unlock": ""
+        },
+        {
+          "asset_name": "Equip_Bait_Meat",
+          "id": "MeatBait",
+          "source_name": "肉块饵",
+          "kind": "Bait",
+          "slot": "Bait",
+          "route": "NormalBait_Meat",
+          "run_consumable": true,
+          "special_bait": false,
+          "required_unlock": "MeatBait"
+        },
+        {
+          "asset_name": "Equip_Bait_Fruit",
+          "id": "FruitBait",
+          "source_name": "果实饵",
+          "kind": "Bait",
+          "slot": "Bait",
+          "route": "NormalBait_Fruit",
+          "run_consumable": true,
+          "special_bait": false,
+          "required_unlock": "FruitBait"
+        },
+        {
+          "asset_name": "Equip_Bait_Nectar",
+          "id": "NectarBait",
+          "source_name": "花蜜饵",
+          "kind": "Bait",
+          "slot": "Bait",
+          "route": "NormalBait_Nectar",
+          "run_consumable": true,
+          "special_bait": false,
+          "required_unlock": "NectarBait"
+        },
+        {
+          "asset_name": "Equip_Bait_Moonlight",
+          "id": "MoonlightBait",
+          "source_name": "月光饵",
+          "kind": "Bait",
+          "slot": "Bait",
+          "route": "RareBait_Moonlight",
+          "run_consumable": true,
+          "special_bait": true,
+          "required_unlock": "MoonlightBait"
+        },
+        {
+          "asset_name": "Equip_Bait_Flashing",
+          "id": "FlashingBait",
+          "source_name": "闪光鱼饵",
+          "kind": "Bait",
+          "slot": "Bait",
+          "route": "FakeBait_Flashing",
+          "run_consumable": true,
+          "special_bait": true,
+          "required_unlock": "FlashingBait"
+        },
+        {
+          "asset_name": "Equip_Bait_Sound",
+          "id": "SoundBait",
+          "source_name": "声音鱼饵",
+          "kind": "Bait",
+          "slot": "Bait",
+          "route": "FakeBait_Sound",
+          "run_consumable": true,
+          "special_bait": true,
+          "required_unlock": "SoundBait"
+        },
+        {
+          "asset_name": "Equip_Bait_GiantLure",
+          "id": "GiantLure",
+          "source_name": "巨物诱饵",
+          "kind": "Bait",
+          "slot": "Bait",
+          "route": "FakeBait_Giant",
+          "run_consumable": true,
+          "special_bait": true,
+          "required_unlock": "GiantLure"
+        },
+        {
+          "asset_name": "Equip_Chum_Bug",
+          "id": "BugChum",
+          "source_name": "虫虫窝",
+          "kind": "Chum",
+          "route": "Chum_Bug",
+          "run_consumable": true,
+          "chum": { "fishy": 10.0, "fragrant": 2.0, "fermented": 1.0 }
+        },
+        {
+          "asset_name": "Equip_Chum_FruitFragrance",
+          "id": "FruitFragranceChum",
+          "source_name": "花果香窝",
+          "kind": "Chum",
+          "route": "Chum_FruitFragrance",
+          "run_consumable": true,
+          "chum": { "fishy": 1.0, "fragrant": 10.0, "fermented": 3.0 }
+        },
+        {
+          "asset_name": "Equip_Chum_FermentedGrain",
+          "id": "FermentedGrainChum",
+          "source_name": "发酵谷物窝",
+          "kind": "Chum",
+          "route": "Chum_FermentedGrain",
+          "run_consumable": true,
+          "chum": { "fishy": 0.0, "fragrant": 3.0, "fermented": 10.0 }
+        },
+        {
+          "asset_name": "Equip_Chum_HolyLight",
+          "id": "HolyLightChum",
+          "source_name": "圣光诱鱼窝",
+          "kind": "Chum",
+          "route": "Chum_HolyLight",
+          "run_consumable": true,
+          "chum": { "fishy": 5.0, "fragrant": 8.0, "fermented": 8.0 }
+        }
+      ],
+      "blocked_references": [
+        {
+          "source_name": "青鳞鲫/鲶鱼/鳜鱼/金鳞鲤/白鲢",
+          "reason": "bait target names appear in the chum/bait sheet but have no runtime-ready fish rows in the selected fish table slice"
+        },
+        {
+          "source_name": "特殊鱼类/大型鱼",
+          "reason": "group target labels are design categories, not stable runtime FishDefinitionIds"
+        }
+      ]
+    }
+  }
+}

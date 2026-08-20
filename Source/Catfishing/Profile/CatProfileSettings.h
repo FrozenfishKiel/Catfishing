@@ -31,4 +31,14 @@ public:
 	/** 外部本地截图/编码/文件落盘桥已完成的显式 gate；默认关闭且本模块不提供占位图片。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Imprint")
 	bool bEnableExternalImprintCaptureBridge = false;
+
+	/**
+	 * 本地跨局相册最多保存多少条印记索引，即飞书 §6 锚定项「跨局相册容量上限」。
+	 * 它计的是 SaveGame 里 Imprints 数组的条数，被本人隐藏的条目照样占位——隐藏只是本地视图开关，不释放存储。
+	 * 默认 0 表示存储方案与整理策略都还没裁决，此时任何新印记 Grant 都写不进档案；
+	 * 由 UCatProfileSubsystem::ApplyGrant 在把印记写进 Journal 之前读取。
+	 * 上限只负责拒绝新增，不做淘汰或裁剪：删哪条属于飞书未定的「整理策略」，工程不能替产品选。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Imprint", meta = (ClampMin = "0"))
+	int32 MaxLocalAlbumImprints = 0;
 };

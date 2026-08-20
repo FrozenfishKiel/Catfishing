@@ -1,6 +1,6 @@
 #include "Equipment/CatEquipmentComponent.h"
 
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingPlayerState.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
 #include "GameFramework/Pawn.h"
@@ -141,7 +141,112 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureStarterLoadoutFromAutho
 		StarterRodDefinitionId, StarterBaitDefinitionId, StarterFloatDefinitionId);
 }
 
-// 耗材授予流程：先用 RequestId、定义、数量和 Revision 签名确认合法重放，再验证 authority、正数量与正式 consumable 定义。
+// 取用装配流程：先用 RequestId、实例、定义和 Revision 签名确认合法重放；再验证 authority、实例引用的定义在运行目录里且类别是 Rod/Bait/Float 之一、
+// Revision 前提成立、三件套已经配齐；通过后只改写对应槽位的定义 ID（Rod 还把耐久重置为新竿上限并清掉断竿标记），推进 Revision 并广播。
+// 这里刻意不调用 HasServerAuthorizedEquipmentUnlock：实例来自团队装备库，它是服务器按已付款订单造出来的，本身就是取得证明（见头文件声明注释）。
+FCatDomainCommandResult UCatEquipmentComponent::EquipFromTeamLibraryFromAuthority(const FGuid RequestId,
+	const int64 ExpectedRevision, const FCatTeamEquipmentInstance& Instance)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	if (!RequestId.IsValid())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+	const FString Key = MakeTerminalKey(TEXT("EquipFromTeamLibrary"), RequestId);
+	const FString PayloadSignature = FString::Printf(TEXT("ExpectedRevision=%lld|Instance=%s|Definition=%s"),
+		ExpectedRevision,
+		*Instance.InstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Instance.DefinitionId.ToString());
+	switch (CatQueryTerminalReplay(TerminalCache, TerminalPayloadByKey, Key, PayloadSignature, Result, MarkCommandReplayed))
+	{
+	case ECatTerminalReplayOutcome::PayloadMismatch:
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	case ECatTerminalReplayOutcome::Replayed:
+		return Result;
+	case ECatTerminalReplayOutcome::FirstAttempt:
+		break;
+	}
+	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Instance.DefinitionId);
+	const bool bLoadoutComplete = !Snapshot.RodDefinitionId.IsNone() && !Snapshot.BaitDefinitionId.IsNone()
+		&& !Snapshot.FloatDefinitionId.IsNone();
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !Instance.InstanceId.IsValid() || !Definition
+		|| (Definition->Kind != ECatEquipmentKind::Rod && Definition->Kind != ECatEquipmentKind::Bait
+			&& Definition->Kind != ECatEquipmentKind::Float))
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	}
+	else if (Snapshot.Revision != ExpectedRevision)
+	{
+		Result.Error = ECatDomainCommandError::RevisionConflict;
+	}
+	else if (!bLoadoutComplete)
+	{
+		// 还没有三件套时不允许只装一件：ConfigureLoadout 要求在空装配上一次配齐，这里先填一个槽会让那条路永远进不去。
+		Result.Error = ECatDomainCommandError::PolicyUndecided;
+	}
+	else
+	{
+		if (Definition->Kind == ECatEquipmentKind::Rod)
+		{
+			Snapshot.RodDefinitionId = Instance.DefinitionId;
+			Snapshot.RodDurability = Definition->MaximumRodDurability;
+			Snapshot.bRodBroken = false;
+		}
+		else if (Definition->Kind == ECatEquipmentKind::Bait)
+		{
+			Snapshot.BaitDefinitionId = Instance.DefinitionId;
+		}
+		else
+		{
+			Snapshot.FloatDefinitionId = Instance.DefinitionId;
+		}
+		++Snapshot.Revision;
+		PublishSnapshot();
+		Result.bCommitted = true;
+		Result.Error = ECatDomainCommandError::None;
+	}
+	Result.Revision = Snapshot.Revision;
+	TerminalCache.Add(Key, Result);
+	TerminalPayloadByKey.Add(Key, PayloadSignature);
+	return Result;
+}
+
+// 耗材授予准入流程：先判 authority、正数量和"这条定义是不是正式的一局耗材"，再按配置的随身携带上限看这一栈还装不装得下；
+// 上限为 0 表示不设限。全程只读，不碰 Snapshot 也不写缓存。
+// 刻意不判 Revision：并发前提是授予写口自己要处理的事，预检回答的是"东西装不装得下"，商店订单在下单前问的也是这一件事。
+ECatDomainCommandError UCatEquipmentComponent::ValidateRunConsumableGrant(const FGuid RequestId,
+	const FName DefinitionId, const int32 Quantity) const
+{
+	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+	const UCatEquipmentDefinition* Definition = Settings->FindRuntimeDefinition(DefinitionId);
+	if (!RequestId.IsValid() || !GetOwner() || !GetOwner()->HasAuthority() || !Definition
+		|| !Definition->bRunConsumable || Quantity <= 0)
+	{
+		return ECatDomainCommandError::InvalidPayload;
+	}
+	// 这个 RequestId 已经有终态了：授予写口只会把首次结果原样重放回来，一份都不会再进栈，上限因此不构成拒绝理由。
+	// 照常判上限会让一次网络重试因为"栈现在满了"被挡在一笔已经付过款的订单前面，那笔订单反而再也交付不出去。
+	if (TerminalCache.Contains(MakeTerminalKey(TEXT("GrantConsumable"), RequestId)))
+	{
+		return ECatDomainCommandError::None;
+	}
+	const FCatRunConsumableStack* ExistingStack = FindConsumable(DefinitionId);
+	const int32 ExistingQuantity = ExistingStack ? ExistingStack->Quantity : 0;
+	if (Settings->RunConsumableStackCapacity > 0
+		&& ExistingQuantity + Quantity > Settings->RunConsumableStackCapacity)
+	{
+		// 超出随身上限时整笔拒绝，而不是只收一部分：调用方（商店订单）是按"一份订单一份耗材"交付的，收一半会让订单回执和实际到手数量对不上。
+		return ECatDomainCommandError::CapacityExceeded;
+	}
+	return ECatDomainCommandError::None;
+}
+
+// 耗材授予流程：先用 RequestId、定义、数量和 Revision 签名确认合法重放，再用 ValidateRunConsumableGrant 问一次准入
+// （authority、正数量、正式 consumable 定义、随身携带上限），最后判 Revision 前提；全过才累加数量、推进 Revision 并广播。
+// 准入判据不在这里重写一遍，是因为商店订单要在扣钱之前问同一个问题，两处各写一份迟早会走散。
 FCatDomainCommandResult UCatEquipmentComponent::GrantRunConsumableFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const FName DefinitionId, const int32 Quantity)
 {
@@ -167,10 +272,10 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantRunConsumableFromAuthority(
 	case ECatTerminalReplayOutcome::FirstAttempt:
 		break;
 	}
-	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(DefinitionId);
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !Definition || !Definition->bRunConsumable || Quantity <= 0)
+	const ECatDomainCommandError GrantRejection = ValidateRunConsumableGrant(RequestId, DefinitionId, Quantity);
+	if (GrantRejection != ECatDomainCommandError::None)
 	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
+		Result.Error = GrantRejection;
 	}
 	else if (Snapshot.Revision != ExpectedRevision)
 	{
@@ -244,7 +349,8 @@ FCatDomainCommandResult UCatEquipmentComponent::ConsumeRunConsumableFromAuthorit
 	return Result;
 }
 
-// 耗材预留流程：先拒绝无效 RequestId 并校验重放载荷，再验证 authority、Revision、正式定义和扣除活动预留后的可用库存；成功只记录活动预留并缓存终态，不写公开 Snapshot 或推进 Revision。
+// 耗材预留流程：先拒绝无效 RequestId 并校验重放载荷，再验证 authority、Revision、正式定义和扣除活动预留后的可用库存；
+// 成功只记录活动预留并缓存终态，不写公开 Snapshot 或推进 Revision。
 FCatDomainCommandResult UCatEquipmentComponent::ReserveRunConsumableFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const FName DefinitionId)
 {
@@ -485,7 +591,7 @@ FCatFishingFailureResult UCatEquipmentComponent::CommitFishingFailure(const FGui
 
 // Fight 耐久流程：先用 RequestId、成本和 Revision 签名确认合法重放，再验证 authority、正成本与当前鱼竿；成功只写鱼竿耐久和 RodBroken。
 FCatDomainCommandResult UCatEquipmentComponent::CommitFightRodDurabilityFromAuthority(const FGuid RequestId,
-	const int64 ExpectedRevision, const double DurabilityCost)
+	const int64 ExpectedRevision, const double DurabilityCost, const bool bRecordTerminalResult)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
@@ -494,19 +600,26 @@ FCatDomainCommandResult UCatEquipmentComponent::CommitFightRodDurabilityFromAuth
 		Result.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
 	}
-	const FString Key = MakeTerminalKey(TEXT("FightRodDurability"), RequestId);
-	const FString PayloadSignature = FString::Printf(TEXT("ExpectedRevision=%lld|DurabilityCost=%.17g"),
-		ExpectedRevision,
-		DurabilityCost);
-	switch (CatQueryTerminalReplay(TerminalCache, TerminalPayloadByKey, Key, PayloadSignature, Result, MarkCommandReplayed))
+	// 幂等这一份成本只有真正需要重放保护的调用方才付：键和签名各要拼一次字符串，而僵持磨损那条路是按秒走的。
+	// 不记终态时也就没有可查的终态，直接进入提交。
+	FString Key;
+	FString PayloadSignature;
+	if (bRecordTerminalResult)
 	{
-	case ECatTerminalReplayOutcome::PayloadMismatch:
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-		return Result;
-	case ECatTerminalReplayOutcome::Replayed:
-		return Result;
-	case ECatTerminalReplayOutcome::FirstAttempt:
-		break;
+		Key = MakeTerminalKey(TEXT("FightRodDurability"), RequestId);
+		PayloadSignature = FString::Printf(TEXT("ExpectedRevision=%lld|DurabilityCost=%.17g"),
+			ExpectedRevision,
+			DurabilityCost);
+		switch (CatQueryTerminalReplay(TerminalCache, TerminalPayloadByKey, Key, PayloadSignature, Result, MarkCommandReplayed))
+		{
+		case ECatTerminalReplayOutcome::PayloadMismatch:
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+			return Result;
+		case ECatTerminalReplayOutcome::Replayed:
+			return Result;
+		case ECatTerminalReplayOutcome::FirstAttempt:
+			break;
+		}
 	}
 	if (!GetOwner() || !GetOwner()->HasAuthority()
 		|| !FMath::IsFinite(DurabilityCost) || DurabilityCost <= 0.0)
@@ -531,8 +644,11 @@ FCatDomainCommandResult UCatEquipmentComponent::CommitFightRodDurabilityFromAuth
 		Result.Error = ECatDomainCommandError::None;
 	}
 	Result.Revision = Snapshot.Revision;
-	TerminalCache.Add(Key, Result);
-	TerminalPayloadByKey.Add(Key, PayloadSignature);
+	if (bRecordTerminalResult)
+	{
+		TerminalCache.Add(Key, Result);
+		TerminalPayloadByKey.Add(Key, PayloadSignature);
+	}
 	return Result;
 }
 
@@ -555,12 +671,20 @@ FCatRunConsumableStack& UCatEquipmentComponent::FindOrAddConsumable(const FName 
 }
 
 // 耗材栈查询流程：按稳定定义 ID 返回当前一局记录；无匹配不创建占位。
-FCatRunConsumableStack* UCatEquipmentComponent::FindConsumable(const FName DefinitionId)
+const FCatRunConsumableStack* UCatEquipmentComponent::FindConsumable(const FName DefinitionId) const
 {
 	return Snapshot.Consumables.FindByPredicate([DefinitionId](const FCatRunConsumableStack& Stack)
 	{
 		return Stack.DefinitionId == DefinitionId;
 	});
+}
+
+// 可写重载流程：查找判据只有上面 const 版本一份，这里只是把它的结果解除 const，交给需要改数量的写口。
+// 之所以要拆出 const 版本，是因为耗材授予准入必须能在不改任何状态的前提下读到当前栈量。
+FCatRunConsumableStack* UCatEquipmentComponent::FindConsumable(const FName DefinitionId)
+{
+	return const_cast<FCatRunConsumableStack*>(
+		static_cast<const UCatEquipmentComponent*>(this)->FindConsumable(DefinitionId));
 }
 
 // 预留计数流程：遍历当前活动预留并只统计同一耗材定义；Reserve 用它从公开数量中扣除尚未提交的占位。

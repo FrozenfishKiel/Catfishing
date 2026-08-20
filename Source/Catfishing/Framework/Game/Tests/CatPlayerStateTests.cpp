@@ -3,7 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingPlayerState.h"
 
 namespace CatPlayerStateTest
 {
@@ -24,7 +24,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Framework.PlayerState.PublicCollectionValidationAndStarterUnlockContract",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 测试流程：在真实 World 生成项目 PlayerState，写入合法公开图鉴摘要，再尝试重复 ID；同时验证装备解锁证明只有 None 被视为 starter。
+// 测试流程：在真实 World 生成项目 PlayerState，写入合法公开图鉴摘要，再尝试重复 ID；
+// 随后验证装备解锁证明：None 永远是 starter；非空 UnlockId 在服务器还没持有清单时拒绝，owning client 上报并通过校验后放行，
+// 含 None 或重复条目的清单整份被拒且不覆盖上一份。这条测试此前锁的是"非空一律拒绝"的 stub 语义，按 D-04 接线后改成锁
+// "只认服务器持有的清单"，不是放宽——没上报仍然拒绝。
 bool FCatPlayerStateCollectionAndUnlockTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -60,7 +63,13 @@ bool FCatPlayerStateCollectionAndUnlockTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("拒绝后保留上一份合法摘要"), PlayerState->GetPublicFishCollection().Num(), 1);
 
 	TestTrue(TEXT("None UnlockId 代表 starter 已授权"), PlayerState->HasServerAuthorizedEquipmentUnlock(NAME_None));
-	TestFalse(TEXT("非空 UnlockId 在授权源未接入前拒绝"), PlayerState->HasServerAuthorizedEquipmentUnlock(TEXT("PremiumRod")));
+	TestFalse(TEXT("服务器尚未持有清单时非空 UnlockId 拒绝"), PlayerState->HasServerAuthorizedEquipmentUnlock(TEXT("PremiumRod")));
+	TestTrue(TEXT("合法解锁清单可写入"), PlayerState->SetAuthorizedEquipmentUnlocksFromAuthority({TEXT("PremiumRod")}));
+	TestTrue(TEXT("上报后的 UnlockId 被服务器认可"), PlayerState->HasServerAuthorizedEquipmentUnlock(TEXT("PremiumRod")));
+	TestFalse(TEXT("没上报的 UnlockId 仍然拒绝"), PlayerState->HasServerAuthorizedEquipmentUnlock(TEXT("OtherRod")));
+	TestFalse(TEXT("含 None 的清单被拒"), PlayerState->SetAuthorizedEquipmentUnlocksFromAuthority({TEXT("PremiumRod"), NAME_None}));
+	TestFalse(TEXT("含重复条目的清单被拒"), PlayerState->SetAuthorizedEquipmentUnlocksFromAuthority({TEXT("A"), TEXT("A")}));
+	TestEqual(TEXT("拒绝后保留上一份清单"), PlayerState->GetAuthorizedEquipmentUnlocks().Num(), 1);
 	return !HasAnyErrors();
 }
 

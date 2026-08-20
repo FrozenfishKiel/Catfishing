@@ -41,7 +41,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Environment.WaterQuery.RequiresDayRevisionAndUniqueConfiguredRegion",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 测试流程：在真实 World 中通过 WaterQuerySubsystem 查询已配置 WaterRegion；先验证无效 RunRevision，再验证唯一命中，最后用重叠区域证明优先级未裁时拒绝猜测。
+// 测试流程：在真实 World 中通过 WaterQuerySubsystem 查询已配置 WaterRegion；先验证无效 RunRevision，再验证唯一命中，
+// 最后用重叠区域证明优先级未裁时拒绝猜测。
 bool FCatWaterQuerySubsystemUniqueRegionTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -82,6 +83,45 @@ bool FCatWaterQuerySubsystemUniqueRegionTest::RunTest(const FString& Parameters)
 		CatWaterQuerySubsystemTest::MakeDayQuery(FVector::ZeroVector, 4));
 	TestFalse(TEXT("两个水域重叠时查询失败"), AmbiguousResult.bSucceeded);
 	TestEqual(TEXT("两个水域重叠返回 AmbiguousRegion"), AmbiguousResult.Error, ECatWaterQueryError::AmbiguousRegion);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatWaterQuerySubsystemRegionCenterTest,
+	"Catfishing.Unit.Environment.WaterQuery.RegionCenterLookupRequiresOneConfiguredRegionPerId",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+// 测试流程：验证按 RegionId 反查水域中心这条路——自然事件靠它拿到落点，所以空 ID、找不到和重名都必须失败并清空输出，
+// 只有关卡里恰好有一片同 ID 水域时才给出中心。这里刻意造一次重名，确认它不会退化成"随便挑第一片"。
+bool FCatWaterQuerySubsystemRegionCenterTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("创建区域中心查找测试 World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	WorldWrapper.ForwardErrorMessages(this);
+	UWorld* World = WorldWrapper.GetTestWorld();
+	UCatWaterQuerySubsystem* QuerySubsystem = World ? World->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
+	TestNotNull(TEXT("可取得 WaterQuery 子系统"), QuerySubsystem);
+	if (!World || !QuerySubsystem)
+	{
+		return false;
+	}
+
+	FVector Center(9.0, 9.0, 9.0);
+	TestFalse(TEXT("空 RegionId 查不到中心"), QuerySubsystem->TryGetRegionCenter(NAME_None, Center));
+	TestEqual(TEXT("空 RegionId 时输出清零"), Center, FVector::ZeroVector);
+	TestFalse(TEXT("关卡里没有该 RegionId 时查不到中心"),
+		QuerySubsystem->TryGetRegionCenter(TEXT("ForestLake"), Center));
+
+	CatWaterQuerySubsystemTest::SpawnConfiguredRegion(World, TEXT("ForestLake"), FVector(-4000.0, 200.0, 0.0));
+	TestTrue(TEXT("唯一同名水域可查到中心"), QuerySubsystem->TryGetRegionCenter(TEXT("ForestLake"), Center));
+	TestEqual(TEXT("中心与水域几何一致"), Center, FVector(-4000.0, 200.0, 0.0));
+
+	CatWaterQuerySubsystemTest::SpawnConfiguredRegion(World, TEXT("ForestLake"), FVector(1000.0, 0.0, 0.0));
+	TestFalse(TEXT("同一个 RegionId 出现两次时拒绝猜测"),
+		QuerySubsystem->TryGetRegionCenter(TEXT("ForestLake"), Center));
+	TestEqual(TEXT("重名拒绝时输出清零"), Center, FVector::ZeroVector);
 	return !HasAnyErrors();
 }
 

@@ -1,6 +1,7 @@
 #include "Run/CatRunStateTreeNodes.h"
 
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingGameMode.h"
+#include "Run/CatRunSettings.h"
 #include "StateTreeExecutionContext.h"
 
 // EnterPhase Task 构造流程：禁用 Tick 与无意义的 Tick/Exit 属性复制，使每次 State 进入只执行一次 GameMode 提交。
@@ -11,7 +12,8 @@ FCatRunEnterPhaseTask::FCatRunEnterPhaseTask()
 	bShouldCopyBoundPropertiesOnExitState = false;
 }
 
-// 阶段进入流程：从 UE 5.8 StateTree Context Owner 取得承载组件的 GameMode Actor，读取资产参数并调用唯一写口；宿主缺失或 Result 拒绝时让节点失败，不在节点内选择回退状态。
+// 阶段进入流程：从 UE 5.8 StateTree Context Owner 取得承载组件的 GameMode Actor，读取资产参数并调用唯一写口；宿主缺失
+// 或 Result 拒绝时让节点失败，不在节点内选择回退状态。
 EStateTreeRunStatus FCatRunEnterPhaseTask::EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const
 {
 	(void)Transition;
@@ -41,7 +43,8 @@ EStateTreeRunStatus FCatRunWaitForEventTask::EnterState(FStateTreeExecutionConte
 	return EStateTreeRunStatus::Running;
 }
 
-// Result 条件流程：读取资产配置的 ExpectedReason，再向 Context Owner 的 GameMode 查询唯一最新结构化 Result；类型不符时 fail-closed，不尝试从 Phase 推断原因。
+// Result 条件流程：读取资产配置的 ExpectedReason，再向 Context Owner 的 GameMode 查询唯一最新结构化 Result；类型不符
+// 时 fail-closed，不尝试从 Phase 推断原因。
 bool FCatRunResultReasonCondition::TestCondition(FStateTreeExecutionContext& Context) const
 {
 	const ACatfishingGameModeBase* GameMode = Cast<ACatfishingGameModeBase>(Context.GetOwner());
@@ -51,4 +54,19 @@ bool FCatRunResultReasonCondition::TestCondition(FStateTreeExecutionContext& Con
 	}
 	const FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
 	return GameMode->DoesLastRunFlowResultMatch(InstanceData.ExpectedReason);
+}
+
+// 最终天选边流程：取 Context Owner 的 GameMode，读公开快照里的当前 DayIndex，交给
+// UCatRunSettings::CanEnterSuccessSettlementNight 比较最终天；GameMode 或 Settings 缺失一律 false，因为 false 对应的
+// 那条边是再翻一天，不会让未裁配置误进成功结算。这里的结果和 EnterRunPhaseFromStateTree 内部的同一判定是双保险：这里
+// 选边，那边兜底拒绝。
+bool FCatRunSuccessSettlementEligibleCondition::TestCondition(FStateTreeExecutionContext& Context) const
+{
+	const ACatfishingGameModeBase* GameMode = Cast<ACatfishingGameModeBase>(Context.GetOwner());
+	const UCatRunSettings* Settings = GetDefault<UCatRunSettings>();
+	if (!GameMode || !Settings)
+	{
+		return false;
+	}
+	return Settings->CanEnterSuccessSettlementNight(GameMode->GetRunPublicState().Phase.DayIndex);
 }

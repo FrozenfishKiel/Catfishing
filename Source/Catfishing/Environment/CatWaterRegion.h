@@ -5,30 +5,37 @@
 #include "Environment/CatWaterTypes.h"
 #include "CatWaterRegion.generated.h"
 
-/** 关卡里一个显式配置的中性水域；只提供只读 prototype 包围盒，不依赖 Experimental Water 插件。 */
+/**
+ * 关卡里一个显式配置的中性水域，回答「这个坐标算不算水」，并在服务器把站进来的猫置成淋湿。
+ *
+ * 它是纯几何：一个由关卡作者摆好的 axis-aligned 包围盒加一个稳定 ID，不依赖 Experimental Water 插件。
+ * 它不持有窝料池——窝料挂在 UCatChumSpotSubsystem 的动态圆形窝点上，那些窝点由投料落点长出来、会衰减消散，
+ * 与关卡静态水域几何是两套完全不同的生命周期，一个窝点也可能横跨或落在多片水域几何之间。
+ * 落水置湿是它唯一的运行时副作用：飞书猫册写"雨天渐湿、落水全湿"，淋湿只是表现状态，这里不附带任何数值或移动惩罚。
+ */
 UCLASS(BlueprintType)
 class CATFISHING_API ACatWaterRegion : public AActor
 {
 	GENERATED_BODY()
 
 public:
-	/** 关闭 Tick 与复制；区域是关卡 authority 配置，客户端不把它当环境真相副本。 */
+	/** 关闭复制、按固定节拍开启 Tick；区域是关卡 authority 配置，客户端不把它当环境真相副本。 */
 	ACatWaterRegion();
+
+	/** 服务器按节拍把站在本水域 AABB 里的每只猫置成 Wet；客户端、未配置区域或没有猫在水里时什么都不做。 */
+	virtual void Tick(float DeltaSeconds) override;
 
 	/** 验证显式 gate、稳定 ID、正 Revision 和有限正包围盒；默认对象因此不可被查询命中。 */
 	bool IsRuntimeConfigured() const;
+
+	/** 落水检查的 Tick 间隔（秒）；淋湿是纯表现状态，不需要逐帧判定，按这个节拍扫一次足够让人看见"下水就湿"。 */
+	static constexpr float WetCheckIntervalSeconds = 0.25f;
 
 	/** 在显式 axis-aligned prototype 几何中判断世界点；配置无效时始终返回 false。 */
 	bool ContainsWorldPoint(const FVector& WorldPoint) const;
 
 	/** 构造只读查询快照；仅在 IsRuntimeConfigured 成立后调用。 */
 	FCatWaterRegionSnapshot MakeSnapshot() const;
-
-	/** 玩家窝料与自然事件共用的唯一 ChumPool 写口；按 RequestId/Revision/预算原子提交。 */
-	FCatAggregationResult ContributeAggregation(const FCatAggregationCommand& Command);
-
-	/** 只读验证一条聚鱼命令是否可立即提交；跨 Equipment→WaterRegion 协调先调用它，避免扣除耗材后才发现池拒绝。 */
-	ECatDomainCommandError ValidateAggregation(const FCatAggregationCommand& Command) const;
 
 	/** 鱼表与环境 DTO 使用的稳定区域 ID；默认 None 表示未接线。 */
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water")
@@ -46,22 +53,15 @@ public:
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Prototype")
 	FVector HalfExtent = FVector::ZeroVector;
 
-	/** 关卡几何版本；WaterQuery 把它写入快照，让后续命令能拒绝陈旧命中。 */
+	/** 关卡几何版本；WaterQuery 把它写入快照，让后续命令能拒绝陈旧命中。
+	 *  它只随关卡作者改动几何而变，运行时不再被任何写入推进——窝料写入推进的是窝点集合自己的 Revision。 */
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Prototype", meta = (ClampMin = "1"))
 	int64 RegionRevision = 0;
 
-	/** 聚鱼 Aggregate 显式启用 gate；默认关闭。 */
-	UPROPERTY(EditInstanceOnly, Category = "Water|Aggregation")
-	bool bEnableAggregation = false;
-
-	/** 三轴共享总预算；0 表示 Unset，不接受任何来源写入。 */
-	UPROPERTY(EditInstanceOnly, Category = "Water|Aggregation", meta = (ClampMin = "0"))
-	double AggregationBudget = 0.0;
-
 private:
-	/** 当前玩家与自然事件共用的服务器 ChumPool。 */
-	FCatChumVector ChumPool;
-
-	/** 聚鱼命令首次终态缓存；同 RequestId 不重复消耗预算。 */
-	TMap<FString, FCatAggregationResult> AggregationTerminalCache;
+	/** 水域在世界里的锚点，也是这个 Actor 唯一的可写 Transform 来源。
+	 *  它本身不参与任何判定：包围盒是「本组件所在位置 + LocalCenterOffset ± HalfExtent」，
+	 *  没有它关卡作者就拖不动这片水域，几何只能全靠偏移硬写。 */
+	UPROPERTY(VisibleAnywhere, Category = "Water")
+	TObjectPtr<USceneComponent> RegionRoot;
 };

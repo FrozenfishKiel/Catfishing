@@ -16,14 +16,6 @@ struct FCatSurvivalViewState
 {
 	GENERATED_BODY()
 
-	/** 当前猫身体的 Hunger 只读投影；范围与单位尚未裁决，View 不做夹取或解释。 */
-	UPROPERTY(BlueprintReadOnly)
-	float Hunger = 0.0f;
-
-	/** 当前猫身体的 Fatigue 只读投影；范围与单位尚未裁决，View 不反向写入身体状态。 */
-	UPROPERTY(BlueprintReadOnly)
-	float Fatigue = 0.0f;
-
 	/** 当前 Poison 只读投影；阈值和倒地裁决仍由 Character Condition 拥有。 */
 	UPROPERTY(BlueprintReadOnly)
 	float Poison = 0.0f;
@@ -68,14 +60,6 @@ protected:
 	virtual void NativeOnInitialized() override;
 
 private:
-	/** Hunger 数值文本节点；仅由 Render 写入，WidgetTree 持有实际生命周期。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UTextBlock> HungerText;
-
-	/** Fatigue 数值文本节点；仅由 Render 写入，WidgetTree 持有实际生命周期。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UTextBlock> FatigueText;
-
 	/** Poison、搏斗资源、Condition、装备、Run、天气与求助的多行摘要；仅由 Render 一次性覆盖。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> StatusText;

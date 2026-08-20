@@ -4,6 +4,15 @@
 #include "Engine/World.h"
 #include "Items/CatContainerReplicationComponent.h"
 
+namespace
+{
+	/** 献祭预留在持有键中的目的段；献祭协调器的预留、取消和提交都用它，其他系统不得复用这个字面量。 */
+	constexpr const TCHAR* SacrificeHoldPurpose = TEXT("Sacrifice");
+
+	/** 商店售卖冻结在持有键中的目的段；它把售卖冻结与献祭预留分成两个互不相通的键空间。 */
+	constexpr const TCHAR* SaleHoldPurpose = TEXT("Sale");
+}
+
 // 创建条件流程：只允许 Game/PIE 的 authority World 持有可写 Items；客户端 World 不创建第二份容器聚合。
 bool UCatItemsService::ShouldCreateSubsystem(UObject* Outer) const
 {
@@ -18,12 +27,18 @@ void UCatItemsService::Deinitialize()
 	Containers.Reset();
 	ReservationByFish.Reset();
 	Reservations.Reset();
+	ReservationTerminalCache.Reset();
+	ReservationPayloadByKey.Reset();
 	TheftEscrows.Reset();
 	CaptureTerminalCache.Reset();
+	CapturePayloadByKey.Reset();
 	CaptureByFishingSession.Reset();
 	TransferTerminalCache.Reset();
+	TransferPayloadByKey.Reset();
 	ConsumeTerminalCache.Reset();
+	ConsumePayloadByKey.Reset();
 	TheftTerminalCache.Reset();
+	TheftPayloadByKey.Reset();
 	Super::Deinitialize();
 }
 
@@ -51,7 +66,9 @@ bool UCatItemsService::RegisterContainer(UCatContainerReplicationComponent* Repl
 	return true;
 }
 
-// 容器注销流程：只移除弱引用精确匹配的宿主记录；迟到的旧 Actor 不能删除同 ID 的新注册容器。
+// 容器注销流程：只处理弱引用精确匹配的那条记录，迟到的旧 Actor 不能删掉同 ID 的新注册容器。
+// 命中后还要分两种情况：该容器仍欠着偷鱼 escrow 的返还槽位时，只清掉宿主弱引用而保留记录，
+// 否则赃物被追回时就没有容器可以放回去；没有欠账时才整条移除。
 void UCatItemsService::UnregisterContainer(UCatContainerReplicationComponent* ReplicationComponent)
 {
 	if (!ReplicationComponent)
@@ -88,7 +105,9 @@ bool UCatItemsService::TryGetContainerSnapshot(const FGuid ContainerId, FCatCont
 	return true;
 }
 
-// 捕获提交流程：先读取终态缓存，再验证命令、预分配鱼 ID、个人鱼护、身份、Revision、容量和冻结定义值；全部满足时只追加一次数组并发布同 Revision 的不可变 Committed DTO。
+// 捕获提交流程：先用最小合法字段生成终态键和载荷签名，重放必须签名一致，再验证预分配鱼 ID、个人鱼护、身份、Revision、容量和冻结定义值。
+// SacrificeContribution 只拒绝 0：它是从鱼定义冻结下来的世界进度增减量，负值是臭臭鱼这类鱼的正常取值，
+// 只有 0 才意味着调用方没带上定义值，那种鱼放进鱼护后献祭链会拿到一个没有出处的进度增量。
 FCatCaptureCommitResult UCatItemsService::CommitCapture(const FCatCaptureCommitCommand& Command)
 {
 	FCatCaptureCommitResult Result;
@@ -97,18 +116,29 @@ FCatCaptureCommitResult UCatItemsService::CommitCapture(const FCatCaptureCommitC
 	if (!Command.Context.RequestId.IsValid() || !Command.FishingSessionId.IsValid() || !Command.FishInstanceId.IsValid()
 		|| !Command.TargetContainerId.IsValid()
 		|| Command.Context.StableNetId.IsEmpty() || Command.FishDefinitionId.IsNone()
-		|| !FMath::IsFinite(Command.WeightKilograms) || Command.WeightKilograms <= 0.0 || Command.SacrificeContribution <= 0)
+		|| !FMath::IsFinite(Command.WeightKilograms) || Command.WeightKilograms <= 0.0 || Command.SacrificeContribution == 0)
 	{
 		return Result;
 	}
 	const FString CacheKey = MakeTerminalKey(Command.Context.StableNetId, TEXT("Capture"),
 		Command.FishingSessionId, Command.Context.RequestId);
-	if (const FCatCaptureCommitResult* Cached = CaptureTerminalCache.Find(CacheKey))
+	const FString PayloadSignature = FString::Printf(
+		TEXT("ExpectedRevision=%lld|FishInstanceId=%s|FishDefinitionId=%s|TargetContainerId=%s|Weight=%.17g|Contribution=%d"),
+		Command.Context.ExpectedRevision,
+		*Command.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Command.FishDefinitionId.ToString(),
+		*Command.TargetContainerId.ToString(EGuidFormats::DigitsWithHyphens),
+		Command.WeightKilograms,
+		Command.SacrificeContribution);
+	switch (CatQueryTerminalReplay(CaptureTerminalCache, CapturePayloadByKey, CacheKey, PayloadSignature, Result, [](FCatCaptureCommitResult& R){ MarkCommandReplayed(R.Command); }))
 	{
-		Result = *Cached;
-		Result.Command.bCommitted = false;
-		Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
+	case ECatTerminalReplayOutcome::PayloadMismatch:
+		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
+	case ECatTerminalReplayOutcome::Replayed:
+		return Result;
+	case ECatTerminalReplayOutcome::FirstAttempt:
+		break;
 	}
 	// FishingSession 是捕获竞争的聚合作用域；服务级映射在任何容器写入前复核，防止旁路或不同 RequestId 为同一会话生成第二个 FishInstance。
 	if (const FCatCaptureCommittedResult* ExistingCapture = CaptureByFishingSession.Find(Command.FishingSessionId))
@@ -117,6 +147,7 @@ FCatCaptureCommitResult UCatItemsService::CommitCapture(const FCatCaptureCommitC
 		Result.Command.Revision = ExistingCapture->ContainerRevision;
 		Result.Committed = *ExistingCapture;
 		CaptureTerminalCache.Add(CacheKey, Result);
+		CapturePayloadByKey.Add(CacheKey, PayloadSignature);
 		return Result;
 	}
 	FContainerRecord* Target = Containers.Find(Command.TargetContainerId);
@@ -168,6 +199,7 @@ FCatCaptureCommitResult UCatItemsService::CommitCapture(const FCatCaptureCommitC
 	}
 	Result.Command.Revision = Target ? Target->Snapshot.Revision : 0;
 	CaptureTerminalCache.Add(CacheKey, Result);
+	CapturePayloadByKey.Add(CacheKey, PayloadSignature);
 	UE_LOG(LogCatItems, Log, TEXT("Event=items_capture_terminal RequestId=%s SessionId=%s Committed=%s Error=%s ContainerRevision=%lld"),
 		*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 		*Command.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
@@ -175,7 +207,7 @@ FCatCaptureCommitResult UCatItemsService::CommitCapture(const FCatCaptureCommitC
 	return Result;
 }
 
-// 原子转移流程：先重放终态，再同时校验两容器、源权限、双 Revision、锁和目标容量；提交时从源副本取鱼，两个数组在任一发布前一起改写并各增一次 Revision。
+// 原子转移流程：先用源容器聚合、RequestId 和载荷签名确认合法重放，再同时校验两容器、源权限、双 Revision、锁和目标容量。
 FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransferCommand& Command)
 {
 	FCatDomainCommandResult Result;
@@ -189,12 +221,21 @@ FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransf
 	}
 	const FString CacheKey = MakeTerminalKey(Command.Context.StableNetId, TEXT("Transfer"),
 		Command.SourceContainerId, Command.Context.RequestId);
-	if (const FCatDomainCommandResult* Cached = TransferTerminalCache.Find(CacheKey))
+	const FString PayloadSignature = FString::Printf(
+		TEXT("ExpectedRevision=%lld|FishInstanceId=%s|TargetContainerId=%s|ExpectedTargetRevision=%lld"),
+		Command.Context.ExpectedRevision,
+		*Command.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Command.TargetContainerId.ToString(EGuidFormats::DigitsWithHyphens),
+		Command.ExpectedTargetRevision);
+	switch (CatQueryTerminalReplay(TransferTerminalCache, TransferPayloadByKey, CacheKey, PayloadSignature, Result, MarkCommandReplayed))
 	{
-		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+	case ECatTerminalReplayOutcome::PayloadMismatch:
+		Result.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
+	case ECatTerminalReplayOutcome::Replayed:
+		return Result;
+	case ECatTerminalReplayOutcome::FirstAttempt:
+		break;
 	}
 	FContainerRecord* Source = Containers.Find(Command.SourceContainerId);
 	FContainerRecord* Target = Containers.Find(Command.TargetContainerId);
@@ -253,13 +294,14 @@ FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransf
 	}
 	Result.Revision = Source ? Source->Snapshot.Revision : 0;
 	TransferTerminalCache.Add(CacheKey, Result);
+	TransferPayloadByKey.Add(CacheKey, PayloadSignature);
 	UE_LOG(LogCatItems, Log, TEXT("Event=items_transfer_terminal RequestId=%s Committed=%s Error=%s SourceRevision=%lld"),
 		*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens), Result.bCommitted ? TEXT("true") : TEXT("false"),
 		*UEnum::GetValueAsString(Result.Error), Result.Revision);
 	return Result;
 }
 
-// 直接进食流程：先重放终态，再校验身份、容器 Revision、个人归属/共享缸、未预留与目标鱼；成功不可逆移除一条鱼并发布一次 Revision。
+// 直接进食流程：先用源容器聚合、RequestId 和载荷签名确认合法重放，再校验身份、Revision、个人归属/共享缸、未预留与目标鱼。
 FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand& Command)
 {
 	FCatFishConsumeResult Result;
@@ -272,12 +314,18 @@ FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand
 	}
 	const FString CacheKey = MakeTerminalKey(Command.Context.StableNetId, TEXT("ConsumeFish"),
 		Command.SourceContainerId, Command.Context.RequestId);
-	if (const FCatFishConsumeResult* Cached = ConsumeTerminalCache.Find(CacheKey))
+	const FString PayloadSignature = FString::Printf(TEXT("ExpectedRevision=%lld|FishInstanceId=%s"),
+		Command.Context.ExpectedRevision,
+		*Command.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
+	switch (CatQueryTerminalReplay(ConsumeTerminalCache, ConsumePayloadByKey, CacheKey, PayloadSignature, Result, [](FCatFishConsumeResult& R){ MarkCommandReplayed(R.Command); }))
 	{
-		Result = *Cached;
-		Result.Command.bCommitted = false;
-		Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
+	case ECatTerminalReplayOutcome::PayloadMismatch:
+		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
+	case ECatTerminalReplayOutcome::Replayed:
+		return Result;
+	case ECatTerminalReplayOutcome::FirstAttempt:
+		break;
 	}
 	FContainerRecord* Source = Containers.Find(Command.SourceContainerId);
 	int32 FishIndex = INDEX_NONE;
@@ -324,99 +372,165 @@ FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand
 	}
 	Result.Command.Revision = Source ? Source->Snapshot.Revision : 0;
 	ConsumeTerminalCache.Add(CacheKey, Result);
+	ConsumePayloadByKey.Add(CacheKey, PayloadSignature);
 	UE_LOG(LogCatItems, Log, TEXT("Event=items_consume_terminal RequestId=%s Committed=%s Error=%s Revision=%lld"),
 		*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens), Result.Command.bCommitted ? TEXT("true") : TEXT("false"),
 		*UEnum::GetValueAsString(Result.Command.Error), Result.Command.Revision);
 	return Result;
 }
 
-// 献祭预留流程：按 RequestId 幂等读取既有记录，再校验身份、容器 Revision、鱼归属与未锁定；成功只增加容器 Revision 和锁，不提前删除复制数组。
+// 献祭预留流程：整体复用鱼冻结机制，只把持有目的固定为献祭；调用方不需要鱼副本，献祭结果只带走冻结贡献。
 FCatFishReservationResult UCatItemsService::ReserveFish(const FCatSacrificeCommand& Command)
 {
+	return HoldFish(Command.Context, Command.ContainerId, Command.FishInstanceId, SacrificeHoldPurpose, nullptr);
+}
+
+// 鱼冻结流程：先按持有键与业务载荷重放首次结果（重放成功前还要确认那把锁此刻真的还在），再校验身份、容器 Revision、
+// 鱼归属与未被其他持有占用；成功只增加 Revision 和锁，不提前删除复制数组。
+// 键里带持有目的的原因：献祭协调器和商店都拿客户端 RequestId 当幂等键，两边可能给同一容器发同一个 GUID；
+// 键不区分目的时，一方的提交就能把另一方冻结的鱼删掉，而两边各自看到的都是"我的请求正常完成"。
+FCatFishReservationResult UCatItemsService::HoldFish(const FCatDomainCommandContext& Context, const FGuid ContainerId,
+	const FGuid FishInstanceId, const TCHAR* HoldPurpose, FCatFishInstance* OutFish)
+{
 	FCatFishReservationResult Result;
-	Result.ReservationId = Command.Context.RequestId;
-	const FString ReservationKey = MakeReservationKey(Command.Context.StableNetId, Command.ContainerId,
-		Command.Context.RequestId);
-	if (const FReservationRecord* Existing = Reservations.Find(ReservationKey))
-	{
-		Result.bReserved = true;
-		Result.Error = ECatDomainCommandError::None;
-		Result.ContainerRevision = Existing->bCommitted ? Existing->CommittedRevision
-			: Containers.FindRef(Existing->ContainerId).Snapshot.Revision;
-		Result.SacrificeContribution = Existing->Fish.SacrificeContribution;
-		return Result;
-	}
-	FContainerRecord* Container = Containers.Find(Command.ContainerId);
-	if (!bCommandsOpen)
-	{
-		Result.Error = ECatDomainCommandError::CommandsClosed;
-		return Result;
-	}
-	if (!Container)
-	{
-		Result.Error = ECatDomainCommandError::NotFound;
-		return Result;
-	}
-	if (!Command.Context.RequestId.IsValid() || !Command.FishInstanceId.IsValid() || Command.Context.StableNetId.IsEmpty())
+	if (!Context.RequestId.IsValid() || !FishInstanceId.IsValid()
+		|| !ContainerId.IsValid() || Context.StableNetId.IsEmpty())
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
 	}
-	if (Container->Snapshot.Revision != Command.Context.ExpectedRevision)
+	const FString ReservationKey = MakeReservationKey(Context.StableNetId, ContainerId,
+		Context.RequestId, HoldPurpose);
+	const FString PayloadSignature = FString::Printf(TEXT("ExpectedRevision=%lld|FishInstanceId=%s"),
+		Context.ExpectedRevision,
+		*FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
+	// 传空的 MarkReplayed 不是偷懒：本领域的结果结构里没有"本次是否发生写入"这一位，重放要么原样交回首次成功，
+	// 要么原样交回首次拒绝的原因（陈旧 Revision 就是陈旧 Revision，不能被改写成 AlreadyResolved），所以没有终态头要改。
+	switch (CatQueryTerminalReplay(ReservationTerminalCache, ReservationPayloadByKey, ReservationKey,
+		PayloadSignature, Result, [](FCatFishReservationResult&){}))
+	{
+	case ECatTerminalReplayOutcome::PayloadMismatch:
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	case ECatTerminalReplayOutcome::Replayed:
+	{
+		const FReservationRecord* Held = Reservations.Find(ReservationKey);
+		// 终态缓存答的是"这个请求当时得到了什么"，预留记录答的是"此刻这条鱼还冻着没有"，两者故意不同寿：
+		// 缓存要留下来挡住"取消之后拿同一个 RequestId 再锁一次鱼"，所以它必然会比锁活得久。
+		// 也正因为如此，重放时不能把当时那句"冻结成功"当成现在的事实——ReleaseFishHold 和 teardown 都会把记录连同锁一起
+		// 拿走，那之后鱼已经还给容器，谁都可以转移、吃掉或献祭它。此时再重放一次成功，调用方会以为自己手上有一条锁住的
+		// 鱼，而 OutFish 无鱼可填，它就拿着一条全零的鱼往下走（商店链会拿 0 千克去问价）。
+		// 所以这里现查一次锁：锁没了就照实说这个请求已经被取消，让调用方换个 RequestId 重新发起。
+		if (Result.bReserved && !Held)
+		{
+			FCatFishReservationResult ReleasedResult;
+			ReleasedResult.Error = ECatDomainCommandError::Cancelled;
+			if (const FContainerRecord* CurrentContainer = Containers.Find(ContainerId))
+			{
+				ReleasedResult.ContainerRevision = CurrentContainer->Snapshot.Revision;
+			}
+			return ReleasedResult;
+		}
+		// 走到这里说明载荷一致、锁也还在，才把冻结的那条鱼交回去；换鱼或换版本前提的同 RequestId 请求上面已经被判冲突，
+		// 连首次冻的是哪条鱼都看不到。
+		if (OutFish && Held)
+		{
+			*OutFish = Held->Fish;
+		}
+		return Result;
+	}
+	case ECatTerminalReplayOutcome::FirstAttempt:
+		break;
+	}
+	FContainerRecord* Container = Containers.Find(ContainerId);
+	const auto Finish = [this, &ReservationKey, &PayloadSignature, &Result]()
+	{
+		ReservationTerminalCache.Add(ReservationKey, Result);
+		ReservationPayloadByKey.Add(ReservationKey, PayloadSignature);
+		return Result;
+	};
+	if (!bCommandsOpen)
+	{
+		Result.Error = ECatDomainCommandError::CommandsClosed;
+		return Finish();
+	}
+	if (!Container)
+	{
+		Result.Error = ECatDomainCommandError::NotFound;
+		return Finish();
+	}
+	if (Container->Snapshot.Revision != Context.ExpectedRevision)
 	{
 		Result.Error = ECatDomainCommandError::RevisionConflict;
 		Result.ContainerRevision = Container->Snapshot.Revision;
-		return Result;
+		return Finish();
 	}
-	const int32 FishIndex = Container->Snapshot.Fish.IndexOfByPredicate([&Command](const FCatFishInstance& Fish)
+	const int32 FishIndex = Container->Snapshot.Fish.IndexOfByPredicate([FishInstanceId](const FCatFishInstance& Fish)
 	{
-		return Fish.FishInstanceId == Command.FishInstanceId;
+		return Fish.FishInstanceId == FishInstanceId;
 	});
 	if (FishIndex == INDEX_NONE)
 	{
 		Result.Error = ECatDomainCommandError::NotFound;
-		return Result;
+		return Finish();
 	}
 	const FCatFishInstance& Fish = Container->Snapshot.Fish[FishIndex];
+	// 个人鱼护里的鱼只有它自己的主人能冻结；共用鱼缸装的是团队储备，任何在场玩家都能冻结，不要求原钓手在场。
 	const bool bOwnerMayReserve = Container->Snapshot.Kind == ECatContainerKind::SharedFishTank
-		|| Fish.OwnerStableNetId == Command.Context.StableNetId;
+		|| Fish.OwnerStableNetId == Context.StableNetId;
 	if (!bOwnerMayReserve)
 	{
 		Result.Error = ECatDomainCommandError::PermissionDenied;
-		return Result;
+		return Finish();
 	}
-	if (ReservationByFish.Contains(Command.FishInstanceId))
+	if (ReservationByFish.Contains(FishInstanceId))
 	{
 		Result.Error = ECatDomainCommandError::InvalidPhase;
-		return Result;
+		return Finish();
 	}
 	FReservationRecord& Reservation = Reservations.Add(ReservationKey);
-	Reservation.RequestId = Command.Context.RequestId;
-	Reservation.ContainerId = Command.ContainerId;
+	Reservation.ContainerId = ContainerId;
 	Reservation.Fish = Fish;
-	ReservationByFish.Add(Fish.FishInstanceId, ReservationKey);
+	ReservationByFish.Add(Reservation.Fish.FishInstanceId, ReservationKey);
 	++Container->Snapshot.Revision;
 	PublishContainer(*Container);
 	Result.bReserved = true;
 	Result.Error = ECatDomainCommandError::None;
 	Result.ContainerRevision = Container->Snapshot.Revision;
-	Result.SacrificeContribution = Fish.SacrificeContribution;
-	return Result;
+	Result.SacrificeContribution = Reservation.Fish.SacrificeContribution;
+	if (OutFish)
+	{
+		*OutFish = Reservation.Fish;
+	}
+	return Finish();
 }
 
-// 预留取消流程：只消费未提交且容器匹配的记录，移除 Fish 锁并增加容器 Revision；已提交记录返回 AlreadyResolved 且不恢复鱼。
+// 预留取消流程：整体复用持有释放机制，只把持有目的固定为献祭；协调器不需要鱼副本。
 FCatDomainCommandResult UCatItemsService::CancelFishReservation(const FString& StableNetId, const FGuid RequestId,
 	const FGuid ContainerId)
 {
+	return ReleaseFishHold(StableNetId, ContainerId, RequestId, SacrificeHoldPurpose, nullptr);
+}
+
+// 持有释放流程：只消费未提交且容器匹配的记录，移除 Fish 锁并增加容器 Revision；已提交记录返回 AlreadyResolved 且不恢复鱼。
+// 这里刻意不去删同键的终态缓存：那条缓存正是用来拒绝"取消之后同一个 RequestId 又想把鱼锁回去"的重放，删了这道门就没了。
+// 代价是缓存会比锁活得久，所以由 HoldFish 的重放段现查锁来收口，而不是靠这里清缓存。
+FCatDomainCommandResult UCatItemsService::ReleaseFishHold(const FString& StableNetId, const FGuid ContainerId,
+	const FGuid RequestId, const TCHAR* HoldPurpose, FCatFishInstance* OutFish)
+{
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	const FString ReservationKey = MakeReservationKey(StableNetId, ContainerId, RequestId);
+	const FString ReservationKey = MakeReservationKey(StableNetId, ContainerId, RequestId, HoldPurpose);
 	FReservationRecord* Reservation = Reservations.Find(ReservationKey);
 	FContainerRecord* Container = Containers.Find(ContainerId);
 	if (!Reservation || !Container || Reservation->ContainerId != ContainerId)
 	{
 		Result.Error = ECatDomainCommandError::NotFound;
 		return Result;
+	}
+	if (OutFish)
+	{
+		*OutFish = Reservation->Fish;
 	}
 	if (Reservation->bCommitted)
 	{
@@ -434,18 +548,29 @@ FCatDomainCommandResult UCatItemsService::CancelFishReservation(const FString& S
 	return Result;
 }
 
-// 预留提交流程：重复提交原样返回；首次提交确认鱼仍存在且锁属于 RequestId，再不可逆删除数组、释放锁、记录提交 Revision 并发布。
+// 预留提交流程：整体复用持有提交机制，只把持有目的固定为献祭；协调器只读贡献值，不需要鱼副本。
 FCatFishReservationCommitResult UCatItemsService::CommitFishReservation(const FString& StableNetId,
 	const FGuid RequestId, const FGuid ContainerId)
 {
+	return CommitFishHold(StableNetId, ContainerId, RequestId, SacrificeHoldPurpose, nullptr);
+}
+
+// 持有提交流程：重复提交原样返回；首次提交确认鱼仍存在且锁属于该持有键，再不可逆删除数组、释放锁、记录提交 Revision 并发布。
+FCatFishReservationCommitResult UCatItemsService::CommitFishHold(const FString& StableNetId,
+	const FGuid ContainerId, const FGuid RequestId, const TCHAR* HoldPurpose, FCatFishInstance* OutFish)
+{
 	FCatFishReservationCommitResult Result;
-	const FString ReservationKey = MakeReservationKey(StableNetId, ContainerId, RequestId);
+	const FString ReservationKey = MakeReservationKey(StableNetId, ContainerId, RequestId, HoldPurpose);
 	FReservationRecord* Reservation = Reservations.Find(ReservationKey);
 	FContainerRecord* Container = Containers.Find(ContainerId);
 	if (!Reservation || !Container || Reservation->ContainerId != ContainerId)
 	{
 		Result.Error = ECatDomainCommandError::NotFound;
 		return Result;
+	}
+	if (OutFish)
+	{
+		*OutFish = Reservation->Fish;
 	}
 	if (Reservation->bCommitted)
 	{
@@ -478,7 +603,73 @@ FCatFishReservationCommitResult UCatItemsService::CommitFishReservation(const FS
 	return Result;
 }
 
-// 偷鱼开始流程：先重放终态，再校验命令、源容器、Revision、目标鱼、非本人和未预留；成功把唯一鱼移入 escrow、源数组移除并发布一次 Revision，同时保留返还槽位。
+// 售卖冻结流程：商店写钱包之前先用同一套持有机制把这条鱼锁住；锁定期间它不能被转移、吃掉、献祭或偷走，
+// 所以钱包入账失败时只要释放冻结，鱼就原样还在，不会出现钱和鱼同时到手。
+// 这里不查鱼定义、不算价格、不碰钱包：Items 只回答"这条鱼现在能不能被取出"。
+// 重放判定必须先于持有核心：核心对首提和重放返回同一结构，只有先看一眼记录，才能把重试报成 AlreadyResolved 而不是第二次成交。
+FCatFishSaleHoldResult UCatItemsService::PrepareFishSale(const FCatFishSaleHoldCommand& Command)
+{
+	FCatFishSaleHoldResult Result;
+	Result.Command.RequestId = Command.Context.RequestId;
+	const bool bHeldBefore = Reservations.Contains(MakeReservationKey(Command.Context.StableNetId,
+		Command.ContainerId, Command.Context.RequestId, SaleHoldPurpose));
+	const FCatFishReservationResult Hold = HoldFish(Command.Context, Command.ContainerId, Command.FishInstanceId,
+		SaleHoldPurpose, &Result.Fish);
+	Result.Command.Revision = Hold.ContainerRevision;
+	if (!Hold.bReserved)
+	{
+		Result.Command.Error = Hold.Error;
+		return Result;
+	}
+	Result.Command.bCommitted = !bHeldBefore;
+	Result.Command.Error = bHeldBefore ? ECatDomainCommandError::AlreadyResolved : ECatDomainCommandError::None;
+	UE_LOG(LogCatItems, Log, TEXT("Event=items_fish_sale_prepared RequestId=%s ContainerId=%s Committed=%s Revision=%lld"),
+		*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Command.ContainerId.ToString(EGuidFormats::DigitsWithHyphens),
+		Result.Command.bCommitted ? TEXT("true") : TEXT("false"), Result.Command.Revision);
+	return Result;
+}
+
+// 售卖回退流程：钱包没入账或入账失败时释放同一售卖请求的冻结，这条鱼原位恢复可转移、可吃、可献祭、可被偷。
+// 已经 drain 过的售卖不会被回退：那时钱已经入账、鱼已经不在容器里，恢复它就是凭空多出一条鱼。
+FCatFishSaleHoldResult UCatItemsService::CancelPreparedFishSale(const FString& StableNetId, const FGuid ContainerId,
+	const FGuid SaleRequestId)
+{
+	FCatFishSaleHoldResult Result;
+	Result.Command = ReleaseFishHold(StableNetId, ContainerId, SaleRequestId, SaleHoldPurpose, &Result.Fish);
+	return Result;
+}
+
+// 售卖 drain 流程：钱包已经入账之后，不可逆移除同一售卖请求冻结的那条鱼。
+// 钱包成功但 drain 失败时可以用同一 RequestId 重试；重试成功后再重放只返回首次的 Revision 与同一条鱼，不会二次移除。
+FCatFishSaleHoldResult UCatItemsService::CommitPreparedFishSale(const FString& StableNetId, const FGuid ContainerId,
+	const FGuid SaleRequestId)
+{
+	FCatFishSaleHoldResult Result;
+	Result.Command.RequestId = SaleRequestId;
+	// 同上：是否已经 drain 过必须在调用持有核心之前读，核心把重放和首提返回成同一结构。
+	const FReservationRecord* Held = Reservations.Find(
+		MakeReservationKey(StableNetId, ContainerId, SaleRequestId, SaleHoldPurpose));
+	const bool bDrainedBefore = Held && Held->bCommitted;
+	const FCatFishReservationCommitResult Drain = CommitFishHold(StableNetId, ContainerId, SaleRequestId,
+		SaleHoldPurpose, &Result.Fish);
+	Result.Command.Revision = Drain.ContainerRevision;
+	if (!Drain.bCommitted)
+	{
+		Result.Command.Error = Drain.Error;
+		return Result;
+	}
+	Result.Command.bCommitted = !bDrainedBefore;
+	Result.Command.Error = bDrainedBefore ? ECatDomainCommandError::AlreadyResolved : ECatDomainCommandError::None;
+	UE_LOG(LogCatItems, Log, TEXT("Event=items_fish_sale_drained RequestId=%s ContainerId=%s FishInstanceId=%s Committed=%s Revision=%lld"),
+		*SaleRequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		*ContainerId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Result.Fish.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		Result.Command.bCommitted ? TEXT("true") : TEXT("false"), Result.Command.Revision);
+	return Result;
+}
+
+// 偷鱼开始流程：先用源容器聚合、RequestId 和载荷签名确认合法重放，再校验命令、源容器、Revision、目标鱼、非本人和未预留。
 FCatFishTheftResult UCatItemsService::BeginFishTheft(const FCatFishTheftCommand& Command)
 {
 	FCatFishTheftResult Result;
@@ -492,12 +683,20 @@ FCatFishTheftResult UCatItemsService::BeginFishTheft(const FCatFishTheftCommand&
 	}
 	const FString CacheKey = MakeTerminalKey(Command.Context.StableNetId, TEXT("Theft"),
 		Command.SourceContainerId, Command.Context.RequestId);
-	if (const FCatFishTheftResult* Cached = TheftTerminalCache.Find(CacheKey))
+	const FString PayloadSignature = FString::Printf(
+		TEXT("ExpectedRevision=%lld|TheftProtocolId=%s|FishInstanceId=%s"),
+		Command.Context.ExpectedRevision,
+		*Command.TheftProtocolId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Command.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
+	switch (CatQueryTerminalReplay(TheftTerminalCache, TheftPayloadByKey, CacheKey, PayloadSignature, Result, [](FCatFishTheftResult& R){ MarkCommandReplayed(R.Command); }))
 	{
-		Result = *Cached;
-		Result.Command.bCommitted = false;
-		Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
+	case ECatTerminalReplayOutcome::PayloadMismatch:
+		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
+	case ECatTerminalReplayOutcome::Replayed:
+		return Result;
+	case ECatTerminalReplayOutcome::FirstAttempt:
+		break;
 	}
 	FContainerRecord* Source = Containers.Find(Command.SourceContainerId);
 	int32 FishIndex = INDEX_NONE;
@@ -540,7 +739,6 @@ FCatFishTheftResult UCatItemsService::BeginFishTheft(const FCatFishTheftCommand&
 		else
 		{
 			FTheftEscrowRecord& Escrow = TheftEscrows.Add(Command.TheftProtocolId);
-			Escrow.TheftProtocolId = Command.TheftProtocolId;
 			Escrow.ClientRequestId = Command.Context.RequestId;
 			Escrow.SourceContainerId = Command.SourceContainerId;
 			Escrow.Fish = Source->Snapshot.Fish[FishIndex];
@@ -551,16 +749,15 @@ FCatFishTheftResult UCatItemsService::BeginFishTheft(const FCatFishTheftCommand&
 			Result.Command.bCommitted = true;
 			Result.Command.Error = ECatDomainCommandError::None;
 			Result.Fish = Escrow.Fish;
-			Result.SourceContainerId = Escrow.SourceContainerId;
-			Result.TheftProtocolId = Escrow.TheftProtocolId;
 		}
 	}
 	Result.Command.Revision = Source ? Source->Snapshot.Revision : 0;
 	TheftTerminalCache.Add(CacheKey, Result);
+	TheftPayloadByKey.Add(CacheKey, PayloadSignature);
 	return Result;
 }
 
-// 偷鱼追回流程：按服务器 ProtocolId 定位精确 escrow 与仍存源容器，把预留鱼原位追加并发布一次 Revision；随后删除 escrow，客户端 RequestId 永远不能命中别人的鱼。
+// 偷鱼追回流程：按服务器 ProtocolId 定位精确 escrow 与仍存源容器；售卖准备态会拒绝追回，避免钱包结算中途把鱼还回去。
 FCatFishTheftResult UCatItemsService::ReturnStolenFish(const FGuid TheftProtocolId)
 {
 	FCatFishTheftResult Result;
@@ -573,9 +770,12 @@ FCatFishTheftResult UCatItemsService::ReturnStolenFish(const FGuid TheftProtocol
 		Result.Command.Error = ECatDomainCommandError::NotFound;
 		return Result;
 	}
+	if (Escrow->bSalePrepared)
+	{
+		Result.Command.Error = ECatDomainCommandError::InvalidPhase;
+		return Result;
+	}
 	Result.Fish = Escrow->Fish;
-	Result.SourceContainerId = Escrow->SourceContainerId;
-	Result.TheftProtocolId = Escrow->TheftProtocolId;
 	Source->Snapshot.Fish.Add(Escrow->Fish);
 	++Source->Snapshot.Revision;
 	PublishContainer(*Source);
@@ -586,7 +786,7 @@ FCatFishTheftResult UCatItemsService::ReturnStolenFish(const FGuid TheftProtocol
 	return Result;
 }
 
-// 偷鱼吃掉流程：按服务器 ProtocolId 定位 escrow 后复制不可变鱼事实并删除；鱼已在 Begin 时离开源数组，因此这里不再改容器 Revision 或执行第二次删除。
+// 偷鱼吃掉流程：只处理仍在普通追回窗口内的 escrow；售卖准备态由售卖请求继续 drain，不能被 Timer 当作进食消费。
 FCatFishTheftResult UCatItemsService::CommitStolenFishConsumption(const FGuid TheftProtocolId)
 {
 	FCatFishTheftResult Result;
@@ -598,9 +798,12 @@ FCatFishTheftResult UCatItemsService::CommitStolenFishConsumption(const FGuid Th
 		Result.Command.Error = ECatDomainCommandError::NotFound;
 		return Result;
 	}
+	if (Escrow->bSalePrepared)
+	{
+		Result.Command.Error = ECatDomainCommandError::InvalidPhase;
+		return Result;
+	}
 	Result.Fish = Escrow->Fish;
-	Result.SourceContainerId = Escrow->SourceContainerId;
-	Result.TheftProtocolId = Escrow->TheftProtocolId;
 	Result.Command.bCommitted = true;
 	Result.Command.Error = ECatDomainCommandError::None;
 	if (const FContainerRecord* Source = Containers.Find(Escrow->SourceContainerId))
@@ -611,7 +814,134 @@ FCatFishTheftResult UCatItemsService::CommitStolenFishConsumption(const FGuid Th
 	return Result;
 }
 
-// Teardown 流程：永久关闭新命令，逐个释放尚未提交的 Fish 锁并清除其预留记录；ItemsCommitted 记录保留给协调器补 Run，容器数组随后由 World 生命周期释放。
+// 售卖准备流程：钱包写入前先把 escrow 锁成“同一售卖请求专用”；它不是终态，不删除鱼，也不推进容器 Revision。
+FCatFishTheftResult UCatItemsService::PrepareStolenFishSale(const FGuid TheftProtocolId,
+	const FGuid SaleRequestId, const FString& ThiefStableNetId)
+{
+	FCatFishTheftResult Result;
+	Result.TheftProtocolId = TheftProtocolId;
+	Result.Command.RequestId = SaleRequestId;
+	if (!TheftProtocolId.IsValid() || !SaleRequestId.IsValid() || ThiefStableNetId.IsEmpty())
+	{
+		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+	FTheftEscrowRecord* Escrow = TheftEscrows.Find(TheftProtocolId);
+	if (!Escrow)
+	{
+		Result.Command.Error = ECatDomainCommandError::NotFound;
+		return Result;
+	}
+	Result.Fish = Escrow->Fish;
+	if (Escrow->ThiefStableNetId != ThiefStableNetId)
+	{
+		Result.Command.Error = ECatDomainCommandError::PermissionDenied;
+		return Result;
+	}
+	if (const FContainerRecord* Source = Containers.Find(Escrow->SourceContainerId))
+	{
+		Result.Command.Revision = Source->Snapshot.Revision;
+	}
+	if (Escrow->bSalePrepared)
+	{
+		Result.Command.Error = Escrow->SaleRequestId == SaleRequestId
+			? ECatDomainCommandError::AlreadyResolved : ECatDomainCommandError::InvalidPhase;
+		return Result;
+	}
+	Escrow->bSalePrepared = true;
+	Escrow->SaleRequestId = SaleRequestId;
+	Result.Command.bCommitted = true;
+	Result.Command.Error = ECatDomainCommandError::None;
+	return Result;
+}
+
+// 售卖取消流程：只允许同一售卖请求在钱包未入账或入账失败后解除准备态；这样追回/吃掉窗口才会恢复原语义。
+FCatFishTheftResult UCatItemsService::CancelPreparedStolenFishSale(const FGuid TheftProtocolId,
+	const FGuid SaleRequestId, const FString& ThiefStableNetId)
+{
+	FCatFishTheftResult Result;
+	Result.TheftProtocolId = TheftProtocolId;
+	Result.Command.RequestId = SaleRequestId;
+	if (!TheftProtocolId.IsValid() || !SaleRequestId.IsValid() || ThiefStableNetId.IsEmpty())
+	{
+		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+	FTheftEscrowRecord* Escrow = TheftEscrows.Find(TheftProtocolId);
+	if (!Escrow)
+	{
+		Result.Command.Error = ECatDomainCommandError::NotFound;
+		return Result;
+	}
+	Result.Fish = Escrow->Fish;
+	if (Escrow->ThiefStableNetId != ThiefStableNetId)
+	{
+		Result.Command.Error = ECatDomainCommandError::PermissionDenied;
+		return Result;
+	}
+	if (const FContainerRecord* Source = Containers.Find(Escrow->SourceContainerId))
+	{
+		Result.Command.Revision = Source->Snapshot.Revision;
+	}
+	if (!Escrow->bSalePrepared)
+	{
+		Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
+		return Result;
+	}
+	if (Escrow->SaleRequestId != SaleRequestId)
+	{
+		Result.Command.Error = ECatDomainCommandError::InvalidPhase;
+		return Result;
+	}
+	Escrow->bSalePrepared = false;
+	Escrow->SaleRequestId = FGuid();
+	Result.Command.bCommitted = true;
+	Result.Command.Error = ECatDomainCommandError::None;
+	return Result;
+}
+
+// 售卖 drain 流程：只删除已经由同一请求准备好的 escrow；钱包成功但 drain 失败时可重试同一 RequestId，而不能新开一笔售卖。
+FCatFishTheftResult UCatItemsService::CommitPreparedStolenFishSale(const FGuid TheftProtocolId,
+	const FGuid SaleRequestId, const FString& ThiefStableNetId)
+{
+	FCatFishTheftResult Result;
+	Result.TheftProtocolId = TheftProtocolId;
+	Result.Command.RequestId = SaleRequestId;
+	if (!TheftProtocolId.IsValid() || !SaleRequestId.IsValid() || ThiefStableNetId.IsEmpty())
+	{
+		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+	FTheftEscrowRecord* Escrow = TheftEscrows.Find(TheftProtocolId);
+	if (!Escrow)
+	{
+		Result.Command.Error = ECatDomainCommandError::NotFound;
+		return Result;
+	}
+	Result.Fish = Escrow->Fish;
+	if (Escrow->ThiefStableNetId != ThiefStableNetId)
+	{
+		Result.Command.Error = ECatDomainCommandError::PermissionDenied;
+		return Result;
+	}
+	if (!Escrow->bSalePrepared || Escrow->SaleRequestId != SaleRequestId)
+	{
+		Result.Command.Error = ECatDomainCommandError::InvalidPhase;
+		return Result;
+	}
+	Result.Command.bCommitted = true;
+	Result.Command.Error = ECatDomainCommandError::None;
+	if (const FContainerRecord* Source = Containers.Find(Escrow->SourceContainerId))
+	{
+		Result.Command.Revision = Source->Snapshot.Revision;
+	}
+	TheftEscrows.Remove(TheftProtocolId);
+	return Result;
+}
+
+// Teardown 流程：永久关闭新命令，普通偷鱼 escrow 会尝试返还；偷鱼售卖准备态不强制返还，避免钱包可能已入账后又把鱼还回去。
+// 容器持有（献祭预留与商店售卖冻结）在这里一律释放，不按目的区分：这两条协议都是同一次调用里同步走完
+// 冻结→入账→移除，teardown 不会插进中间，所以不存在"钱已入账但冻结被 teardown 释放"的交错。
 void UCatItemsService::CloseCommandsAndCancelReservations()
 {
 	bCommandsOpen = false;
@@ -686,11 +1016,12 @@ FString UCatItemsService::MakeTerminalKey(const FString& StableNetId, const TCHA
 		*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
-// 预留键流程：把可逆锁精确绑定到服务器身份、容器聚合与 RequestId；提交和取消必须同时持有三者，不能用裸 RequestId 解锁他人记录。
+// 持有键流程：把可逆锁精确绑定到持有目的、服务器身份、容器聚合与 RequestId；提交和取消必须同时持有四者，
+// 不能用裸 RequestId 解锁他人记录，也不能用献祭的 RequestId 去 drain 一笔售卖冻结。
 FString UCatItemsService::MakeReservationKey(const FString& StableNetId, const FGuid& ContainerId,
-	const FGuid& RequestId)
+	const FGuid& RequestId, const TCHAR* HoldPurpose)
 {
-	return FString::Printf(TEXT("%s|%s|%s"), *StableNetId,
+	return FString::Printf(TEXT("%s|%s|%s|%s"), HoldPurpose, *StableNetId,
 		*ContainerId.ToString(EGuidFormats::DigitsWithHyphens),
 		*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 }

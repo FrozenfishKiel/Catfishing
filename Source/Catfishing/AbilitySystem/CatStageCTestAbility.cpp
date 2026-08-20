@@ -10,7 +10,9 @@ UCatStageCTestAbility::UCatStageCTestAbility()
 	NetExecutionPolicy = EGameplayAbilityNetExecutionPolicy::ServerOnly;
 }
 
-// 激活流程：ActorInfo 是 GAS 调用合同，若引擎异常缺失则无法安全结束实例而直接返回；正常入口再校验 authority、ASC 与 fail-closed 临时数值，失败走标准 Cancel，成功由 ASC 修改 Hunger 并 End。
+// 激活流程：ActorInfo 是 GAS 调用合同，若引擎异常缺失则无法安全结束实例而直接返回；正常入口再校验 authority、ASC 与
+// fail-closed 临时数值，失败走标准 Cancel，成功由 ASC 修改 Poison 并 End。这里只改 ASC 数值、不调用 Condition 的倒地
+// 裁决，所以加毒后 bDowned 要等下一次吃鱼或恢复入口重算才会变。
 void UCatStageCTestAbility::ActivateAbility(const FGameplayAbilitySpecHandle Handle, const FGameplayAbilityActorInfo* ActorInfo,
 	const FGameplayAbilityActivationInfo ActivationInfo, const FGameplayEventData* TriggerEventData)
 {
@@ -20,14 +22,14 @@ void UCatStageCTestAbility::ActivateAbility(const FGameplayAbilitySpecHandle Han
 		return;
 	}
 	UAbilitySystemComponent* AbilitySystem = ActorInfo->AbilitySystemComponent.Get();
-	float HungerDelta = 0.0f;
+	float PoisonDelta = 0.0f;
 	if (!ActorInfo->IsNetAuthority() || !AbilitySystem
-		|| !GetDefault<UCatAbilitySettings>()->TryGetDiagnosticHungerDelta(HungerDelta))
+		|| !GetDefault<UCatAbilitySettings>()->TryGetDiagnosticPoisonDelta(PoisonDelta))
 	{
 		CancelAbility(Handle, ActorInfo, ActivationInfo, true);
 		return;
 	}
 
-	AbilitySystem->ApplyModToAttribute(UCatSurvivalAttributeSet::GetHungerAttribute(), EGameplayModOp::Additive, HungerDelta);
+	AbilitySystem->ApplyModToAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute(), EGameplayModOp::Additive, PoisonDelta);
 	EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 }

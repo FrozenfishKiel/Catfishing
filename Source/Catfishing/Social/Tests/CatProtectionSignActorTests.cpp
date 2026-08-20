@@ -38,16 +38,16 @@ bool FCatProtectionSignActorRadiusTest::RunTest(const FString& Parameters)
 	}
 
 	SignActor->SetActorLocation(FVector::ZeroVector);
-	TestFalse(TEXT("未配置前不保护目标"), SignActor->ProtectsMischiefAgainst(ProtectedPlayer, FVector::ZeroVector));
+	TestFalse(TEXT("未配置前不保护目标"), SignActor->ProtectsAgainst(ProtectedPlayer, FVector::ZeroVector));
 	TestFalse(TEXT("无效半径配置失败"), SignActor->ConfigureProtection(ProtectedPlayer, 0.0));
 	TestTrue(TEXT("有效 PlayerState 与半径配置成功"), SignActor->ConfigureProtection(ProtectedPlayer, 100.0));
 
 	TestTrue(TEXT("受保护玩家在半径内被保护"),
-		SignActor->ProtectsMischiefAgainst(ProtectedPlayer, FVector(50.0, 0.0, 0.0)));
+		SignActor->ProtectsAgainst(ProtectedPlayer, FVector(50.0, 0.0, 0.0)));
 	TestFalse(TEXT("其他玩家即使在半径内也不被保护"),
-		SignActor->ProtectsMischiefAgainst(OtherPlayer, FVector(50.0, 0.0, 0.0)));
+		SignActor->ProtectsAgainst(OtherPlayer, FVector(50.0, 0.0, 0.0)));
 	TestFalse(TEXT("受保护玩家在半径外不被保护"),
-		SignActor->ProtectsMischiefAgainst(ProtectedPlayer, FVector(150.0, 0.0, 0.0)));
+		SignActor->ProtectsAgainst(ProtectedPlayer, FVector(150.0, 0.0, 0.0)));
 	return !HasAnyErrors();
 }
 

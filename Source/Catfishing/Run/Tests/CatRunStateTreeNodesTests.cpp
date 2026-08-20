@@ -30,6 +30,10 @@ bool FCatRunStateTreeNodesDefaultsTest::RunTest(const FString& Parameters)
 		ResultCondition.GetInstanceDataType() == FCatRunResultReasonConditionInstanceData::StaticStruct());
 	const FCatRunResultReasonConditionInstanceData ConditionData;
 	TestEqual(TEXT("Result 条件默认不匹配任何产品原因"), ConditionData.ExpectedReason, ECatRunTransitionReason::None);
+
+	const FCatRunSuccessSettlementEligibleCondition FinalDayCondition;
+	TestTrue(TEXT("最终天选边条件只暴露空参数结构，最终天序号只从 Settings 读"),
+		FinalDayCondition.GetInstanceDataType() == FCatRunSuccessSettlementEligibleConditionInstanceData::StaticStruct());
 	return !HasAnyErrors();
 }
 

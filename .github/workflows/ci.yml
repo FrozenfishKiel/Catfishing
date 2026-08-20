@@ -1,0 +1,26 @@
+# Catfishing 持续检查
+#
+# 需要一台装有 UE 5.8（D:\UE_5.8）的自托管 Windows Runner，打上 [self-hosted, windows, ue5]。
+# 真正的检查逻辑全部在 Tools/ci_check.ps1 —— 本地和 CI 跑的是同一个脚本，口径不会分叉。
+# 注意：Runner 机器若开启 Smart App Control 强制模式且 Defender 处于被动模式，
+# 新链接的 DLL 会被按哈希拒绝加载（详见 .harness/CODING_LESSONS.md），需先解决再启用本工作流。
+name: ci
+on:
+  push:
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: [self-hosted, windows, ue5]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: 全量检查（构建/目录校验/StateTree/自动化/联机冒烟）
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File Tools/ci_check.ps1
+      - name: 保存报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-reports
+          path: Saved/CI/**
+          retention-days: 14

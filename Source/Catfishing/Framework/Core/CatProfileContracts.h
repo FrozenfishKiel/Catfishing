@@ -8,14 +8,19 @@
 UENUM(BlueprintType)
 enum class ECatProfileGrantKind : uint8
 {
-	/** 捕获已提交后记录鱼种、真实重量与首次条件。 */
+	/** 「钓起」轨：捕获已提交后记录鱼种、真实重量与首次条件，收件人是上钩成立时的钓手。 */
 	FishRecorded,
-	/** 合格逃鱼候选归约为剪影；除“重试耗尽”外的资格仍由外部裁决。 */
+	/**
+	 * 鱼册剪影页的永久 Grant。飞书鱼册口径是剪影由供奉推进（World_Progress）解锁；旧的"重试耗尽"资格路径已随重试制废
+	 * 除（钓鱼规则 2026-08-18）删除，当前生产侧还没有任何入口生成这一类 Grant，Profile 只保留消费能力。
+	 */
 	FishSilhouette,
 	/** CapturePlan 本地成像成功后授予一张印记索引。 */
 	Imprint,
 	/** 已提交里程碑归约出的解锁；具体内容和收益由产品定义。 */
-	Unlock
+	Unlock,
+	/** 「抄获」轨：同一次已提交捕获里抄网命中者独得的记录，与 FishRecorded 并列而不是替代；自钓自抄时两条都发。 */
+	FishScooped
 };
 
 /** 鱼图鉴页的三态；状态只能 Unknown→Silhouette→Recorded 单向推进。 */
@@ -143,7 +148,7 @@ struct FCatProfileApplyResult
 	ECatDomainCommandError Error = ECatDomainCommandError::DependencyUnavailable;
 };
 
-/** 本地鱼图鉴单页持久事实；实物鱼删除不会触碰此结构。 */
+/** 本地鱼图鉴单页持久事实；同一页并列保存「钓起」轨（状态与个人最佳）和「抄获」轨（次数）。实物鱼删除不会触碰此结构。 */
 USTRUCT()
 struct FCatFishCollectionRecord
 {
@@ -168,6 +173,15 @@ struct FCatFishCollectionRecord
 	/** 合格剪影候选累计次数；Recorded 后仍保留历史。 */
 	UPROPERTY(SaveGame)
 	int32 EncounterCount = 0;
+
+	/**
+	 * 本人用抄网命中这个鱼种的累计次数，即「抄获」记录轨的全部内容。
+	 * 它与 State/BestWeightKilograms 所在的「钓起」轨互不影响：抄网命中只累加这个计数，
+	 * 不推进图鉴状态也不参与个人最佳；自己钓自己抄时同一次捕获会同时推进两轨。
+	 * 只记次数是因为飞书目前只把抄获拍成一条独立记录轨，没有定义它展示哪些字段。
+	 */
+	UPROPERTY(SaveGame)
+	int32 ScoopedCount = 0;
 };
 
 /** 本地相册索引中的一条印记记录；它只保存稳定 ID，不保存图片字节、编码格式或磁盘路径。 */

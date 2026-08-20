@@ -30,7 +30,8 @@ const FCatConditionSnapshot& UCatConditionComponent::GetSnapshot() const
 	return Snapshot;
 }
 
-// Wet 写入流程：只接受 authority 和真实变化；提交后增加 Revision/强制更新，明确不触碰 Hunger、Fatigue、Poison 或移动能力。
+// Wet 写入流程：只接受 authority 和真实变化；提交后增加 Revision/强制更新，明确不触碰 Poison 或移动能力。相同值直接返
+// 回，所以水域按节拍反复写 true 不会推高 Revision。
 void UCatConditionComponent::SetWetFromAuthority(const bool bNewWet)
 {
 	AActor* Owner = GetOwner();
@@ -55,7 +56,15 @@ ECatDomainCommandError UCatConditionComponent::ValidateFishConsumption(const UCa
 		? ECatDomainCommandError::None : ECatDomainCommandError::DependencyUnavailable;
 }
 
-// 进食流程：先把鱼定义和食用数值固化为本次请求的载荷签名；缓存命中时必须同签名才允许稳定重放，首次执行才写 ASC 和 Snapshot。
+// 进食流程：先把鱼定义与食用数值固化成本次请求的载荷签名；缓存命中且签名一致才按原终态稳定重放，签名不同说明同一
+// RequestId 被换成了另一条鱼，直接拒绝。
+// 签名只在本进程、本组件实例的终态缓存里互相比较，既不复制给客户端也不落盘或跨版本保留，所以它的字段集可以随食用效果
+// 一起收缩：去掉已删除的饥饿恢复量不会让任何已存在的重放记录失配。
+// 首次执行时只有 Toxic 鱼会累加 Poison，Safe 鱼不改任何 Attribute，两者随后都重新裁决倒地并返回 bCommitted。
+// 失败分支覆盖 RequestId 无效或 ValidateFishConsumption 不通过，返回 DependencyUnavailable 且不碰任何 Attribute。
+// 注意终态缓存写在成功/失败之外，也就是失败结果同样被永久记住：调用到这里时实物鱼已经被 Items 事务不可逆移除，本组件
+// 没有资格给同一个 RequestId 第二次结算机会，
+// 否则一次失败就能被反复重试成一次真正的加毒。代价是失败无法就地重试——上层要重新走一遍，必须换一个新的 RequestId，用旧 ID 只会拿到 AlreadyResolved。
 FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid RequestId,
 	const UCatFishDefinition* FishDefinition)
 {
@@ -63,21 +72,19 @@ FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid
 	Result.RequestId = RequestId;
 	const FString Key = MakeTerminalKey(TEXT("EatFish"), RequestId);
 	const FString PayloadSignature = FishDefinition
-		? FString::Printf(TEXT("FishDefinitionId=%s|FoodSafety=%d|HungerRelief=%.17g|PoisonIncrease=%.17g"),
+		? FString::Printf(TEXT("FishDefinitionId=%s|FoodSafety=%d|PoisonIncrease=%.17g"),
 			*FishDefinition->FishDefinitionId.ToString(), static_cast<int32>(FishDefinition->FoodSafety),
-			FishDefinition->HungerRelief, FishDefinition->PoisonIncrease)
+			FishDefinition->PoisonIncrease)
 		: FString(TEXT("FishDefinition=null"));
-	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
+	switch (CatQueryTerminalReplay(TerminalCache, TerminalPayloadByKey, Key, PayloadSignature, Result, MarkCommandReplayed))
 	{
-		if (const FString* CachedPayload = TerminalPayloadByKey.Find(Key); CachedPayload && *CachedPayload != PayloadSignature)
-		{
-			Result.Error = ECatDomainCommandError::InvalidPayload;
-			return Result;
-		}
-		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+	case ECatTerminalReplayOutcome::PayloadMismatch:
+		Result.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
+	case ECatTerminalReplayOutcome::Replayed:
+		return Result;
+	case ECatTerminalReplayOutcome::FirstAttempt:
+		break;
 	}
 	UAbilitySystemComponent* ASC = ResolveAbilitySystem();
 	if (!RequestId.IsValid() || ValidateFishConsumption(FishDefinition) != ECatDomainCommandError::None)
@@ -86,12 +93,10 @@ FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid
 	}
 	else
 	{
-		const double Hunger = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetHungerAttribute());
-		const double Poison = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute());
-		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetHungerAttribute(), FMath::Max(0.0, Hunger - FishDefinition->HungerRelief));
 		if (FishDefinition->FoodSafety == ECatFishFoodSafety::Toxic)
 		{
-			ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), Poison + FishDefinition->PoisonIncrease);
+			ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(),
+				ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()) + FishDefinition->PoisonIncrease);
 		}
 		EvaluateDownedFromAttributes(ECatRecoveryMode::None);
 		Result.bCommitted = true;
@@ -103,41 +108,44 @@ FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid
 	return Result;
 }
 
-// 野外自救流程：要求请求者正拥有本 Character，再读取显式较慢恢复值；0/非法配置返回 PolicyUndecided，成功交统一恢复路径。
+// 野外自救流程：只要求请求者正拥有本 Character，身份不符返回 PolicyUndecided，其余交统一恢复路径。
+// 这条路径没有自己的数值配置：疲惫数值制删除后野外自救和营地休息的区别只剩"是否需要在营地范围"，解除倒地都由统一恢复路径清毒完成。
+// 倒地阈值未裁（HasDownedThresholds 为 false）时由 ApplyRecovery 拒绝，不在这里重复判断。
 FCatDomainCommandResult UCatConditionComponent::RequestFieldSelfRecovery(AController* RequestingController,
 	const FGuid RequestId)
 {
 	const ACatCharacter* Character = Cast<ACatCharacter>(GetOwner());
-	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
-	if (!Character || Character->GetController() != RequestingController || !Settings
-		|| !FMath::IsFinite(Settings->FieldRestFatigueRelief) || Settings->FieldRestFatigueRelief <= 0.0)
+	if (!Character || Character->GetController() != RequestingController)
 	{
 		FCatDomainCommandResult Result;
 		Result.RequestId = RequestId;
 		Result.Error = ECatDomainCommandError::PolicyUndecided;
 		return Result;
 	}
-	return ApplyRecovery(RequestId, ECatRecoveryMode::FieldSelfRecovery, Settings->FieldRestFatigueRelief, 0.0);
+	return ApplyRecovery(RequestId, ECatRecoveryMode::FieldSelfRecovery);
 }
 
-// 营地休息流程：要求调用者拥有本 Character 且上层已验证固定营地范围，再用显式营地恢复值交统一恢复；不会强制等待或启动计时任务。
+// 营地休息流程：要求调用者拥有本 Character 且上层已验证固定营地范围（bAtCamp），其余交统一恢复；不会强制等待或启动计时任务。
+// 与野外自救同理，解除倒地由统一恢复路径清 Poison 完成，这里没有营地专属的数值。
 FCatDomainCommandResult UCatConditionComponent::RequestCampRest(AController* RequestingController,
 	const FGuid RequestId, const bool bAtCamp)
 {
 	const ACatCharacter* Character = Cast<ACatCharacter>(GetOwner());
-	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
-	if (!bAtCamp || !Character || Character->GetController() != RequestingController || !Settings
-		|| !FMath::IsFinite(Settings->CampRestFatigueRelief) || Settings->CampRestFatigueRelief <= 0.0)
+	if (!bAtCamp || !Character || Character->GetController() != RequestingController)
 	{
 		FCatDomainCommandResult Result;
 		Result.RequestId = RequestId;
 		Result.Error = ECatDomainCommandError::PolicyUndecided;
 		return Result;
 	}
-	return ApplyRecovery(RequestId, ECatRecoveryMode::CampRest, Settings->CampRestFatigueRelief, 0.0);
+	return ApplyRecovery(RequestId, ECatRecoveryMode::CampRest);
 }
 
 // 搬运完成流程：先固定救援者与营地点事实，再处理终态缓存；同 RequestId 不能从“没到营地”漂移成“已到营地”后绕过首个结论。
+// 事实合法后走的是与另外两条恢复路径同一套结算：清空 Poison 再重新裁决倒地。飞书把"伙伴搬运回营地"写成解除倒地的三条路径之一，
+// 只记录 RecoveryMode 而不动 Poison 会被下一次裁决立刻判回倒地。
+// 缺 ASC 或未裁倒地阈值时返回 DependencyUnavailable 而不是 InvalidPayload：救援事实本身没问题，是身体依赖还没配好，
+// 这时不能报成功——报成功等于宣称人被救起来了，实际一个数值都没改。
 FCatDomainCommandResult UCatConditionComponent::CompleteCarryToCamp(AController* HelpingController,
 	const FGuid RequestId, const bool bAtCampRescuePoint)
 {
@@ -146,17 +154,15 @@ FCatDomainCommandResult UCatConditionComponent::CompleteCarryToCamp(AController*
 	const FString Key = MakeTerminalKey(TEXT("CarryToCamp"), RequestId);
 	const FString PayloadSignature = FString::Printf(TEXT("Helper=%s|AtCampRescuePoint=%s"),
 		HelpingController ? *HelpingController->GetName() : TEXT("None"), bAtCampRescuePoint ? TEXT("true") : TEXT("false"));
-	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
+	switch (CatQueryTerminalReplay(TerminalCache, TerminalPayloadByKey, Key, PayloadSignature, Result, MarkCommandReplayed))
 	{
-		if (const FString* CachedPayload = TerminalPayloadByKey.Find(Key); CachedPayload && *CachedPayload != PayloadSignature)
-		{
-			Result.Error = ECatDomainCommandError::InvalidPayload;
-			return Result;
-		}
-		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+	case ECatTerminalReplayOutcome::PayloadMismatch:
+		Result.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
+	case ECatTerminalReplayOutcome::Replayed:
+		return Result;
+	case ECatTerminalReplayOutcome::FirstAttempt:
+		break;
 	}
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !HelpingController || !RequestId.IsValid() || !bAtCampRescuePoint)
 	{
@@ -165,9 +171,16 @@ FCatDomainCommandResult UCatConditionComponent::CompleteCarryToCamp(AController*
 		TerminalPayloadByKey.Add(Key, PayloadSignature);
 		return Result;
 	}
-	Snapshot.RecoveryMode = ECatRecoveryMode::CarriedToCamp;
-	++Snapshot.Revision;
-	PublishSnapshot();
+	UAbilitySystemComponent* ASC = ResolveAbilitySystem();
+	if (!ASC || !GetDefault<UCatConditionSettings>()->HasDownedThresholds())
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		TerminalCache.Add(Key, Result);
+		TerminalPayloadByKey.Add(Key, PayloadSignature);
+		return Result;
+	}
+	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), 0.0f);
+	EvaluateDownedFromAttributes(ECatRecoveryMode::CarriedToCamp);
 	Result.bCommitted = true;
 	Result.Error = ECatDomainCommandError::None;
 	Result.Revision = Snapshot.Revision;
@@ -182,40 +195,39 @@ void UCatConditionComponent::OnRep_Snapshot()
 	OnSnapshotChanged.Broadcast();
 }
 
-// 统一恢复流程：把恢复模式和数值作为 RequestId 的业务事实；缓存命中先挡住参数漂移，首次执行才修改 ASC 并重新裁决 Downed。
-FCatDomainCommandResult UCatConditionComponent::ApplyRecovery(const FGuid RequestId, const ECatRecoveryMode Mode,
-	const double FatigueRelief, const double PoisonRelief)
+// 统一恢复流程：把恢复模式作为 RequestId 的业务事实；缓存命中先挡住参数漂移，首次执行才修改 ASC 并重新裁决 Downed。
+// 恢复对 Poison 的处理是清零而不是按量削减：飞书猫咪与状态册 §3.1.5 把这几条路径写成"解除倒地"，没有给任何毒值削减量，
+// 而 EvaluateDownedFromAttributes 每次都从 Poison 重算 bDowned，部分削减一旦仍在阈值以上就会当场把人判回倒地，
+// 与"单人可爬回营地休息自愈，保证不卡死"这条硬约束直接冲突。
+// 载荷签名只剩 Mode：它只在本进程、本组件实例的终态缓存里互相比较，不复制也不落盘，去掉已删除的疲惫减量不会让已有重放记录失配。
+FCatDomainCommandResult UCatConditionComponent::ApplyRecovery(const FGuid RequestId, const ECatRecoveryMode Mode)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	const FString Key = MakeTerminalKey(*UEnum::GetValueAsString(Mode), RequestId);
-	const FString PayloadSignature = FString::Printf(TEXT("Mode=%d|FatigueRelief=%.17g|PoisonRelief=%.17g"),
-		static_cast<int32>(Mode), FatigueRelief, PoisonRelief);
-	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
+	// 操作名必须是固定字面量、把 Mode 留给载荷签名，跟同文件的 EatFish / CarryToCamp 一致。
+	// 以前这里把 Mode 拼进了键：野外自愈和营地休息因此落进两个不同的槽位，同一个 RequestId 分别发给这两条 RPC
+	// 会各执行一次，而"换恢复参数会被拒绝"这条声明的不变量在签名侧永远比不出差异（键已经先分开了），形同虚设。
+	const FString Key = MakeTerminalKey(TEXT("Recovery"), RequestId);
+	const FString PayloadSignature = FString::Printf(TEXT("Mode=%d"), static_cast<int32>(Mode));
+	switch (CatQueryTerminalReplay(TerminalCache, TerminalPayloadByKey, Key, PayloadSignature, Result, MarkCommandReplayed))
 	{
-		if (const FString* CachedPayload = TerminalPayloadByKey.Find(Key); CachedPayload && *CachedPayload != PayloadSignature)
-		{
-			Result.Error = ECatDomainCommandError::InvalidPayload;
-			return Result;
-		}
-		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+	case ECatTerminalReplayOutcome::PayloadMismatch:
+		Result.Error = ECatDomainCommandError::InvalidPayload;
 		return Result;
+	case ECatTerminalReplayOutcome::Replayed:
+		return Result;
+	case ECatTerminalReplayOutcome::FirstAttempt:
+		break;
 	}
 	UAbilitySystemComponent* ASC = ResolveAbilitySystem();
 	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !ASC || !Settings->HasDownedThresholds()
-		|| !FMath::IsFinite(FatigueRelief) || FatigueRelief < 0.0 || !FMath::IsFinite(PoisonRelief) || PoisonRelief < 0.0)
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !ASC || !Settings->HasDownedThresholds())
 	{
 		Result.Error = ECatDomainCommandError::PolicyUndecided;
 	}
 	else
 	{
-		const double Fatigue = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFatigueAttribute());
-		const double Poison = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute());
-		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFatigueAttribute(), FMath::Max(0.0, Fatigue - FatigueRelief));
-		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), FMath::Max(0.0, Poison - PoisonRelief));
+		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), 0.0f);
 		EvaluateDownedFromAttributes(Mode);
 		Result.bCommitted = true;
 		Result.Error = ECatDomainCommandError::None;
@@ -226,7 +238,11 @@ FCatDomainCommandResult UCatConditionComponent::ApplyRecovery(const FGuid Reques
 	return Result;
 }
 
-// 倒地裁决流程：读取 ASC 两项数值与显式阈值，更新唯一 Downed/RecoveryMode；首次进入倒地时终止相关 FishingSession，始终没有死亡分支。
+// 倒地裁决流程：读取 ASC Poison 数值与显式阈值，更新唯一 Downed/RecoveryMode；首次进入倒地时终止相关 FishingSession，
+// 始终没有死亡分支。倒地来源仅中毒（飞书猫咪状态册 v1.7）。
+// 飞书 §3.1.5 的第三条恢复路径「翻天时未获救的倒地者自动救起、清晨在营地醒来」不由本组件发起：Run 换日时
+// `ACatfishingGameModeBase::ApplyDayBreakSideEffects()` 会对仍然倒地的玩家调用本组件的营地休息入口，所以四条恢复路径
+// 最终都汇到这里解除倒地。
 void UCatConditionComponent::EvaluateDownedFromAttributes(const ECatRecoveryMode RecoveryMode)
 {
 	UAbilitySystemComponent* ASC = ResolveAbilitySystem();
@@ -236,9 +252,11 @@ void UCatConditionComponent::EvaluateDownedFromAttributes(const ECatRecoveryMode
 		return;
 	}
 	const bool bWasDowned = Snapshot.bDowned;
-	Snapshot.bDowned = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()) >= Settings->PoisonDownedThreshold
-		|| ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFatigueAttribute()) >= Settings->FatigueDownedThreshold;
-	Snapshot.RecoveryMode = Snapshot.bDowned ? RecoveryMode : ECatRecoveryMode::None;
+	Snapshot.bDowned = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()) >= Settings->PoisonDownedThreshold;
+	// RecoveryMode 记录这次裁决是由哪条路径触发的，恢复成功、人已站起来之后仍然保留：Snapshot 把它定义为最近一次被服务器接受的恢复方式。
+	// 恢复路径现在会清掉 Poison，裁决后必然不倒地，所以旧写法（不倒地就抹成 None）会让三条恢复路径的记录全部立刻消失。
+	// 吃鱼这类非恢复入口传 None，会把上一次的路径清掉。
+	Snapshot.RecoveryMode = RecoveryMode;
 	++Snapshot.Revision;
 	PublishSnapshot();
 	if (!bWasDowned && Snapshot.bDowned)

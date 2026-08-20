@@ -33,8 +33,9 @@ bool ACatProtectionSignActor::ConfigureProtection(APlayerState* InProtectedPlaye
 	return true;
 }
 
-// 保护判断流程：要求配置完整、目标 PlayerState 精确相同且交互位置落在球形范围内；不按名字或队伍推断。
-bool ACatProtectionSignActor::ProtectsMischiefAgainst(const APlayerState* TargetPlayerState,
+// 保护判断流程：要求配置完整、目标 PlayerState 精确相同且交互位置落在球形范围内；不按名字或队伍推断。调用方决定传入哪
+// 一个位置，本函数只做身份与半径判定。
+bool ACatProtectionSignActor::ProtectsAgainst(const APlayerState* TargetPlayerState,
 	const FVector& InteractionLocation) const
 {
 	return ProtectedPlayerState && ProtectedPlayerState == TargetPlayerState && RadiusCentimeters > 0.0

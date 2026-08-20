@@ -87,3 +87,66 @@ struct FCatDomainCommandResult
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 };
+
+/**
+ * 声明：重放已有终态时，保证调用方不会把"上次已经写入"误读成"这次又写了一次"；原因是重试路径若据此重复执行副作用，会造成重复扣费与重复发奖。
+ * 实现：清掉提交标记并把原因改为 AlreadyResolved，其余字段（RequestId、Revision 及各领域自带数据）保持首次终态原样。
+ *       两者缺一不可：保持原样是为了让重试方拿到与首次完全一致的业务结果，不必自己缓存；
+ *       清掉 bCommitted 则是因为网络重试、客户端重发和恢复泵都会重放同一 RequestId，
+ *       如果这些路径看到 bCommitted=true，就会重复扣耐久、重复入账或重复发奖。
+ * 用途：结果类型就是 FCatDomainCommandResult 的领域可直接把它传给 CatQueryTerminalReplay；
+ *       结果类型内嵌该结构的领域应自己写一行 lambda 指向内嵌位置。不要把本函数改成模板去猜结构——
+ *       各领域的内嵌层级并不一致，猜错会静默改写错字段。
+ */
+inline void MarkCommandReplayed(FCatDomainCommandResult& Result)
+{
+	Result.bCommitted = false;
+	Result.Error = ECatDomainCommandError::AlreadyResolved;
+}
+
+/** 终态重放查询的三种结局；调用方据此决定是直接返回结果，还是继续走首次受理的完整校验链。 */
+enum class ECatTerminalReplayOutcome : uint8
+{
+	/** 这个终态键没有记录，本次是首次受理，调用方应继续正常校验并在结束时写入终态。 */
+	FirstAttempt,
+	/** 同一终态键已有记录且载荷一致，调用方应立即返回被填充为 AlreadyResolved 的重放结果。 */
+	Replayed,
+	/** 同一终态键已有记录但载荷不同，说明同一 RequestId 被复用于不同语义意图，调用方应立即返回 InvalidPayload。 */
+	PayloadMismatch
+};
+
+/**
+ * 声明：按终态键查询同一命令是否已有终态，并在载荷一致时把首次结果重放进 OutResult。
+ * 实现：先查终态缓存，没有记录直接判为首次受理；有记录时比对同键载荷签名，签名缺失或不同都判为载荷冲突，
+ *       签名一致才把缓存结果写回 OutResult 并由 MarkReplayed 改写终态头，使重放不再声称本次发生了写入。
+ * 边界：本函数只做重放判定，不写缓存、不改聚合状态；首次受理路径的写入仍由各服务在自己的提交点完成。
+ * 泛型说明：ResultType 由各领域自带（可能内嵌 FCatDomainCommandResult），故终态头改写通过 MarkReplayed 回调外置，
+ *          由调用方指明该领域的终态头位置，避免本函数假设结果结构。
+ * 键类型同样是模板参数：多数领域的幂等键是“身份+用途+RequestId”拼出来的字符串，但也有领域的写口只对单个 Controller 开放，
+ *          此时 RequestId 自己就已经唯一，键就是 FGuid。此处原本写死 FString，逼得那类领域只能手抄一份一模一样的判定，
+ *          抄出来的副本再各自漂移——这条不变量已经因此复发过多次。载荷签名仍保持 FString：
+ *          它是拼给人读的调试串，不需要跟着泛化。
+ */
+template <typename KeyType, typename ResultType, typename MarkReplayedFunc>
+ECatTerminalReplayOutcome CatQueryTerminalReplay(
+	const TMap<KeyType, ResultType>& TerminalCache,
+	const TMap<KeyType, FString>& PayloadByKey,
+	const KeyType& TerminalKey,
+	const FString& PayloadSignature,
+	ResultType& OutResult,
+	MarkReplayedFunc MarkReplayed)
+{
+	const ResultType* Cached = TerminalCache.Find(TerminalKey);
+	if (!Cached)
+	{
+		return ECatTerminalReplayOutcome::FirstAttempt;
+	}
+	const FString* CachedPayload = PayloadByKey.Find(TerminalKey);
+	if (!CachedPayload || *CachedPayload != PayloadSignature)
+	{
+		return ECatTerminalReplayOutcome::PayloadMismatch;
+	}
+	OutResult = *Cached;
+	MarkReplayed(OutResult);
+	return ECatTerminalReplayOutcome::Replayed;
+}

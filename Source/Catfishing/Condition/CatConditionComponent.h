@@ -33,16 +33,23 @@ public:
 	/** 在实物鱼被不可逆移除前只读校验食用定义、ASC 与倒地阈值；返回 None 才允许上层提交 Items 事务。 */
 	ECatDomainCommandError ValidateFishConsumption(const UCatFishDefinition* FishDefinition) const;
 
-	/** 实物鱼消费提交后读取 FishDefinition 食用字段，减少 Hunger、增加可选 Poison，并重新裁决倒地。 */
+	/**
+	 * 实物鱼消费提交后按 FishDefinition 结算食用后果：Toxic 鱼增加 Poison，Safe 鱼不改任何 Attribute，两者都重新裁决
+	 * 倒地；前置校验不通过时返回 DependencyUnavailable。成功与失败都写入终态缓存，同一 RequestId 只结算一次，重试必须
+	 * 换新 RequestId。
+	 */
 	FCatDomainCommandResult ConsumeCommittedFish(FGuid RequestId, const UCatFishDefinition* FishDefinition);
 
-	/** 单人可用的野外休息入口；按显式较慢数值恢复 Fatigue，不要求其他玩家。 */
+	/** 单人可用的野外休息入口；只要求请求者正拥有本 Character，随后解除中毒并重新裁决倒地，不要求其他玩家或营地范围。 */
 	FCatDomainCommandResult RequestFieldSelfRecovery(AController* RequestingController, FGuid RequestId);
 
-	/** 固定营地休息入口；只允许 Camp actor 传入已到达事实并按营地恢复值处理。 */
+	/** 固定营地休息入口；只允许 Camp actor 传入已到达事实，随后按与野外自救同一套结算解除中毒并重新裁决倒地。 */
 	FCatDomainCommandResult RequestCampRest(AController* RequestingController, FGuid RequestId, bool bAtCamp);
 
-	/** 搬运完成入口；要求服务器已把 Character 放到固定营地救援点，随后记录仍倒地者的恢复方式；同 RequestId 只提交一次。 */
+	/**
+	 * 搬运完成入口；要求服务器已把 Character 放到固定营地救援点，随后解除中毒并重新裁决倒地；缺 ASC 或未裁阈值返回
+	 * DependencyUnavailable，同 RequestId 只提交一次。
+	 */
 	FCatDomainCommandResult CompleteCarryToCamp(AController* HelpingController, FGuid RequestId, bool bAtCampRescuePoint);
 
 	/** 本机完整快照变化通知；LocalPlayer UI 成对订阅，领域写入者不依赖该通知推进。 */
@@ -53,10 +60,16 @@ private:
 	UFUNCTION()
 	void OnRep_Snapshot();
 
-	/** 校验 Recovery 配置并对 Fatigue/Poison 应用非负减量；随后按阈值更新 Downed/RecoveryMode。 */
-	FCatDomainCommandResult ApplyRecovery(FGuid RequestId, ECatRecoveryMode Mode, double FatigueRelief, double PoisonRelief);
+	/**
+	 * 校验 authority/RequestId/ASC/倒地阈值后把 Poison 清零，随后按阈值更新 Downed/RecoveryMode。清零而非部分削减是因
+	 * 为飞书把三条恢复路径定义成"解除倒地"。
+	 */
+	FCatDomainCommandResult ApplyRecovery(FGuid RequestId, ECatRecoveryMode Mode);
 
-	/** 读取 ASC 当前 Fatigue/Poison 与显式阈值更新 Downed；首次倒地会终止该 Character 的 FishingSession。 */
+	/**
+	 * 读取 ASC 当前 Poison 与显式中毒阈值更新 Downed，并把传入的恢复路径写进 Snapshot；倒地来源仅中毒（飞书猫咪状态册
+	 * v1.7）。首次倒地会终止该 Character 的 FishingSession。
+	 */
 	void EvaluateDownedFromAttributes(ECatRecoveryMode RecoveryMode);
 
 	/** 定位 Owner Character 的唯一 ASC 供属性监听与权威写入；Owner 类型不匹配时返回空，避免创建平行身体属性源。 */

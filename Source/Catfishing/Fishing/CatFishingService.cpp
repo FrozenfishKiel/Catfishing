@@ -1,19 +1,99 @@
 #include "Fishing/CatFishingService.h"
 
+#include "Framework/Core/CatStableNetId.h"
 #include "Character/CatCharacter.h"
-#include "Framework/Game/CatGameplayTypes.h"
-#include "Logging/CatLog.h"
-#include "AbilitySystemComponent.h"
-#include "AbilitySystem/CatSurvivalAttributeSet.h"
-#include "Condition/CatConditionComponent.h"
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishDefinition.h"
 #include "Engine/World.h"
-#include "Environment/CatWaterQuerySubsystem.h"
+#include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/CatFishingSession.h"
-#include "Social/CatSocialService.h"
 #include "GameFramework/PlayerState.h"
+#include "Integration/Fishing/CatFishingBoundarySubsystem.h"
+#include "Logging/CatLog.h"
+#include "Math/RandomStream.h"
+#include "Social/CatSocialService.h"
 
+// 落点解析流程：先取钓手身上的漂并要求它进了运行目录、射程与精准度都是正数；再把朝向压到水平面归一化，
+// 沿这个方向推出一个射程，最后叠一个半径由精准度决定的圆内随机偏移。任何一步不成立都返回 false 并保持输出为零向量。
+bool UCatFishingService::TryResolveFloatCastLocation(const ACatCharacter& Fisher, const FGuid& RequestId,
+	FVector& OutCastLocation)
+{
+	OutCastLocation = FVector::ZeroVector;
+	const UCatEquipmentComponent* Equipment = Fisher.GetEquipmentComponent();
+	const FName FloatDefinitionId = Equipment ? Equipment->GetSnapshot().FloatDefinitionId : NAME_None;
+	const UCatEquipmentDefinition* FloatDefinition = FloatDefinitionId.IsNone()
+		? nullptr : GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(FloatDefinitionId);
+	if (!FloatDefinition || FloatDefinition->Kind != ECatEquipmentKind::Float
+		|| !FMath::IsFinite(FloatDefinition->FloatCastRangeMeters) || FloatDefinition->FloatCastRangeMeters <= 0.0
+		|| !FMath::IsFinite(FloatDefinition->FloatAccuracyOffsetRadiusMeters)
+		|| FloatDefinition->FloatAccuracyOffsetRadiusMeters <= 0.0)
+	{
+		return false;
+	}
+	const double CastRangeMeters = FloatDefinition->FloatCastRangeMeters;
+	const double AccuracyOffsetRadiusMeters = FloatDefinition->FloatAccuracyOffsetRadiusMeters;
+	FVector CastDirection = Fisher.GetActorForwardVector();
+	CastDirection.Z = 0.0;
+	if (!CastDirection.Normalize())
+	{
+		// 朝向退化成纯竖直（猫被摆成朝天或朝地）时没有水平方向可用，算不出落点，宁可不抛也不随便挑一个方向。
+		return false;
+	}
+	FRandomStream OffsetStream(static_cast<int32>(GetTypeHash(RequestId)));
+	// 在圆内均匀取点要对半径开方，否则点会挤到圆心；这里的偏移代表"漂没落在瞄的地方"，均匀分布才符合"越不准偏得越开"。
+	const double OffsetRadius = AccuracyOffsetRadiusMeters * 100.0
+		* FMath::Sqrt(static_cast<double>(OffsetStream.GetFraction()));
+	const double OffsetAngleRadians = static_cast<double>(OffsetStream.GetFraction()) * 2.0 * UE_DOUBLE_PI;
+	const FVector Offset(OffsetRadius * FMath::Cos(OffsetAngleRadians),
+		OffsetRadius * FMath::Sin(OffsetAngleRadians), 0.0);
+	OutCastLocation = Fisher.GetActorLocation() + CastDirection * (CastRangeMeters * 100.0) + Offset;
+	return true;
+}
+
+namespace
+{
+	// 错误映射流程：Boundary 错误只描述协调合同，Service 返回值仍沿用既有 DomainCommandError 语义。
+	ECatDomainCommandError MapBoundaryErrorToDomain(const ECatFishingBoundaryError Error)
+	{
+		switch (Error)
+		{
+		case ECatFishingBoundaryError::None:
+			return ECatDomainCommandError::None;
+		case ECatFishingBoundaryError::InvalidIdentity:
+			return ECatDomainCommandError::InvalidIdentity;
+		case ECatFishingBoundaryError::InvalidOrder:
+		case ECatFishingBoundaryError::AttemptClosed:
+			return ECatDomainCommandError::InvalidPhase;
+		case ECatFishingBoundaryError::RevisionConflict:
+			return ECatDomainCommandError::RevisionConflict;
+		case ECatFishingBoundaryError::PermissionDenied:
+			return ECatDomainCommandError::PermissionDenied;
+		case ECatFishingBoundaryError::CapacityExceeded:
+			return ECatDomainCommandError::CapacityExceeded;
+		case ECatFishingBoundaryError::AlreadySettled:
+			return ECatDomainCommandError::AlreadyResolved;
+		case ECatFishingBoundaryError::CancelledBeforeCommit:
+		case ECatFishingBoundaryError::TimedOutBeforeCommit:
+			return ECatDomainCommandError::Cancelled;
+		case ECatFishingBoundaryError::OperationNotFound:
+		case ECatFishingBoundaryError::ResultExpired:
+			return ECatDomainCommandError::NotFound;
+		case ECatFishingBoundaryError::PolicyUndecided:
+			return ECatDomainCommandError::PolicyUndecided;
+		case ECatFishingBoundaryError::DependencyUnavailable:
+			return ECatDomainCommandError::DependencyUnavailable;
+		case ECatFishingBoundaryError::UnsupportedSchema:
+		case ECatFishingBoundaryError::InvalidAttempt:
+		case ECatFishingBoundaryError::InvalidRequest:
+		case ECatFishingBoundaryError::PayloadMismatch:
+		case ECatFishingBoundaryError::CursorGap:
+		default:
+			return ECatDomainCommandError::InvalidPayload;
+		}
+	}
+}
 // 创建条件流程：仅 authority Game World 持有会话索引；客户端不能创建平行 StateTree。
 bool UCatFishingService::ShouldCreateSubsystem(UObject* Outer) const
 {
@@ -28,105 +108,148 @@ void UCatFishingService::Deinitialize()
 	Sessions.Reset();
 	SessionFisherById.Reset();
 	ActiveSessionByFisher.Reset();
-	StartTerminalCache.Reset();
+	StartResultByBoundaryOperation.Reset();
+	StartResultByAttempt.Reset();
 	Super::Deinitialize();
 }
 
-// 会话创建流程：先按服务器身份/RequestId 重放首次结果并拒绝该身份仍存活的唯一会话，再验证当前 Character、Run、水域以及“Active Controller + 未倒地 + FishingStrength/FightStamina 为正”的统一参战能力。随后用全体合法者的人数、总力量和总体力快照及服务器新熵查询鱼表；只有 Actor 生成、StateTree 初始化全部成功后才登记会话索引与终态结果。巨鱼的 Social 提示在成功事实之后 best-effort 广播，缺少 Social 不回滚会话，也不改写首次 Start 结果。
+// 会话创建流程：Service 保留 RPC 入口、单活跃槽位和 Session 注册；Start/Cast 的身份、只读采集和 encounter 冻结交给
+// Boundary，避免旧路径在 Start 中直接抽鱼。
 FCatFishingStartResult UCatFishingService::StartFishingSession(AController* FisherController, const FGuid RequestId)
 {
 	FCatFishingStartResult Result;
 	Result.RequestId = RequestId;
 	CompactSessions();
-	const FString StableNetId = ResolveStableNetId(FisherController);
-	if (!RequestId.IsValid() || StableNetId.IsEmpty())
+
+	UCatFishingBoundarySubsystem* Boundary = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingBoundarySubsystem>() : nullptr;
+	if (!Boundary)
 	{
-		Result.Error = ECatDomainCommandError::InvalidIdentity;
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;
 	}
-	const FString TerminalKey = FString::Printf(TEXT("%s|StartFishing|%s"), *StableNetId,
-		*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
-	if (const FCatFishingStartResult* Cached = StartTerminalCache.Find(TerminalKey))
+
+	const FCatFishingBoundaryStartResult StartResult = Boundary->Start(FisherController, RequestId);
+	if (StartResult.Header.Disposition != ECatFishingBoundaryDisposition::Committed)
 	{
-		return *Cached;
+		Result.Error = MapBoundaryErrorToDomain(StartResult.Header.Error);
+		return Result;
 	}
-	const auto Finish = [this, &TerminalKey](const FCatFishingStartResult& TerminalResult)
+
+	// 重放保护：Start 已接受后的 Service 终态先按 Attempt 返回，避免重试时被当前命令、会话或 Pawn 生命周期改写。
+	const FGuid AttemptCacheKey = StartResult.Context.AttemptId.Value;
+	if (StartResult.Header.bReplay)
 	{
-		StartTerminalCache.Add(TerminalKey, TerminalResult);
+		if (const FCatFishingStartResult* CachedByAttempt = StartResultByAttempt.Find(AttemptCacheKey))
+		{
+			return *CachedByAttempt;
+		}
+	}
+	// 这个 lambda 是"Start 已经受理、但会话最终没建起来"这一类失败的唯一终点（成功路径走下面那个 Finish），
+	// 所以 attempt 的收口写在这里，而不是靠每条出口各自记得调一次。attempt 是 Start 那一刻在 Boundary 里开的，
+	// 没有会话来接手它，它就永远停在半开状态：AttemptId 对 Bait、Fight 这些后半程协议仍然合法，可谁都不会再推进它、
+	// 也没人能终止它，于是按失败次数一路堆到 World 反初始化。
+	// 之前这条约定确实是靠各出口自觉执行的，五条里漏了三条（撞上已有会话、取不到身体、Cast 被拒）——
+	// 收进唯一终点之后就不存在"下一个人忘了加"这回事了。
+	const auto FinishAttempt = [this, AttemptCacheKey, Boundary, AttemptId = StartResult.Context.AttemptId](
+		const FCatFishingStartResult& TerminalResult)
+	{
+		Boundary->CloseAttempt(AttemptId);
+		if (AttemptCacheKey.IsValid())
+		{
+			StartResultByAttempt.Add(AttemptCacheKey, TerminalResult);
+		}
 		return TerminalResult;
 	};
-	ACatCharacter* Character = FisherController ? Cast<ACatCharacter>(FisherController->GetPawn()) : nullptr;
-	const ACatfishingGameState* GameState = GetWorld() ? GetWorld()->GetGameState<ACatfishingGameState>() : nullptr;
-	UCatWaterQuerySubsystem* WaterQuery = GetWorld() ? GetWorld()->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
+
 	if (!bCommandsOpen)
 	{
 		Result.Error = ECatDomainCommandError::CommandsClosed;
-		return Finish(Result);
+		return FinishAttempt(Result);
 	}
+
+	const FString StableNetId = StartResult.Context.PrincipalId.CanonicalValue;
 	if (ActiveSessionByFisher.Contains(StableNetId))
 	{
 		Result.Error = ECatDomainCommandError::InvalidPhase;
+		return FinishAttempt(Result);
+	}
+
+	ACatCharacter* Character = FisherController ? Cast<ACatCharacter>(FisherController->GetPawn()) : nullptr;
+	if (!Character)
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		return FinishAttempt(Result);
+	}
+	FVector CastWorldLocation = FVector::ZeroVector;
+	if (!TryResolveFloatCastLocation(*Character, RequestId, CastWorldLocation))
+	{
+		// 没有可用的漂就没有落点，也就没有 D₀；这里 fail-closed 而不是退回"落在猫脚下"，
+		// 否则遛鱼会从 0 米开局，等于把一条产品规则悄悄换成一个占位值。
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_cast_float_unavailable RequestId=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		return FinishAttempt(Result);
+	}
+	FCatFishingCastAcceptedRequest CastRequest;
+	CastRequest.RequestId = RequestId;
+	CastRequest.AttemptId = StartResult.Context.AttemptId;
+	CastRequest.CastWorldLocation = CastWorldLocation;
+	CastRequest.ExpectedRunRevision = StartResult.Context.RunRevision;
+	const FCatFishingBoundaryCastResult CastResult = Boundary->CastAccepted(FisherController, CastRequest);
+	if (CastResult.Header.Disposition != ECatFishingBoundaryDisposition::Committed)
+	{
+		Result.Error = MapBoundaryErrorToDomain(CastResult.Header.Error);
+		return FinishAttempt(Result);
+	}
+
+	const FString OperationCacheKey = CastResult.Header.Operation.ToCacheKey();
+	if (const FCatFishingStartResult* Cached = StartResultByBoundaryOperation.Find(OperationCacheKey))
+	{
+		StartResultByAttempt.Add(AttemptCacheKey, *Cached);
+		return *Cached;
+	}
+	const auto Finish = [this, &OperationCacheKey, AttemptCacheKey](const FCatFishingStartResult& TerminalResult)
+	{
+		StartResultByBoundaryOperation.Add(OperationCacheKey, TerminalResult);
+		StartResultByAttempt.Add(AttemptCacheKey, TerminalResult);
+		return TerminalResult;
+	};
+
+	// 下面三条出口都在 Cast 已经提交之后：CastAccepted 那一刻已经把 operation 写成 Committed，并把鱼种、重量、水域和
+	// D₀ 冻结成一份 EncounterSpec，这份规格本来是要交给马上要建的会话去消费的。会话没建起来，它就没有主人了——而
+	// Boundary 侧的 AttemptId 对 Bait、Fight 这些后半程协议仍然合法，只要不收口，Journal 里就留着一个谁都不会再推进、
+	// 也没人能终止的半开 attempt，按失败次数一路堆到 World 反初始化。所以这里沿用 Cast 之前那两条出口的同一个约定：
+	// 没造出会话就把 attempt 收掉。收口只挡这个 Attempt 上的新 operation，已接受的 Start/Cast 结果照样能被重放读到，
+	// 网络重试仍然拿回同一个终态。
+	if (ActiveSessionByFisher.Contains(StableNetId))
+	{
+		Boundary->CloseAttempt(StartResult.Context.AttemptId);
+		Result.Error = ECatDomainCommandError::InvalidPhase;
 		return Finish(Result);
 	}
-	if (!Character || !GameState || !WaterQuery)
+
+	UCatFishDefinition* FishDefinition = GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(
+		CastResult.EncounterSpec.FishDefinitionId);
+	if (!FishDefinition)
 	{
+		Boundary->CloseAttempt(StartResult.Context.AttemptId);
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Finish(Result);
 	}
-	const FCatRunPublicState& RunState = GameState->GetRunPublicState();
-	FCatWaterQuery Query;
-	Query.WorldLocation = Character->GetActorLocation();
-	Query.RunPhase = RunState.Phase;
-	Query.RunRevision = RunState.Revision;
-	const FCatWaterQueryResult WaterResult = WaterQuery->QueryWaterRegion(Query);
-	if (!WaterResult.bSucceeded)
-	{
-		Result.Error = WaterResult.Error == ECatWaterQueryError::FishingClosed
-			? ECatDomainCommandError::InvalidPhase : ECatDomainCommandError::DependencyUnavailable;
-		return Finish(Result);
-	}
-	FString ValidatedFisherId;
-	ACatCharacter* ValidatedFisherCharacter = nullptr;
-	double FisherStrength = 0.0;
-	double FisherFightStamina = 0.0;
-	if (!TryGetFightCapability(FisherController, ValidatedFisherId, ValidatedFisherCharacter,
-		FisherStrength, FisherFightStamina) || ValidatedFisherId != StableNetId || ValidatedFisherCharacter != Character)
-	{
-		Result.Error = ECatDomainCommandError::PolicyUndecided;
-		return Finish(Result);
-	}
-	int32 FightCapablePlayerCount = 0;
-	double CombinedFishingStrength = 0.0;
-	double CombinedFightStamina = 0.0;
-	BuildFightCapabilitySnapshot(FightCapablePlayerCount, CombinedFishingStrength, CombinedFightStamina);
-	if (FightCapablePlayerCount <= 0)
-	{
-		Result.Error = ECatDomainCommandError::PolicyUndecided;
-		return Finish(Result);
-	}
-	double FishWeightKilograms = 0.0;
-	// 抽取熵由 authority 在首次请求时生成并立即被终态缓存封存；客户端 GUID 只做幂等关联，不能操纵鱼池随机序列。
-	const int32 ServerSelectionEntropy = static_cast<int32>(GetTypeHash(FGuid::NewGuid()));
-	UCatFishDefinition* FishDefinition = GetDefault<UCatFishCatalogSettings>()->SelectRuntimeDefinition(
-		WaterResult.Region.RegionId, RunState.Environment.TimeOfDay, RunState.Environment.Weather,
-		FMath::Clamp(FightCapablePlayerCount, 1, 8), CombinedFishingStrength, CombinedFightStamina,
-		ServerSelectionEntropy, FishWeightKilograms);
-	if (!FishDefinition || !FMath::IsFinite(FishWeightKilograms) || FishWeightKilograms <= 0.0)
-	{
-		Result.Error = ECatDomainCommandError::PolicyUndecided;
-		return Finish(Result);
-	}
+
 	ACatFishingSession* Session = GetWorld()->SpawnActor<ACatFishingSession>();
 	if (!Session || !Session->InitializeSession(FisherController, Character, FishDefinition,
-		Character->GetPersonalFishGuardId(), FishWeightKilograms, WaterResult.Region))
+		StartResult.Context.FisherGuardContainerId, CastResult.EncounterSpec))
 	{
 		if (Session)
 		{
 			Session->Destroy();
 		}
+		Boundary->CloseAttempt(StartResult.Context.AttemptId);
 		Result.Error = ECatDomainCommandError::PolicyUndecided;
 		return Finish(Result);
 	}
+
 	const FGuid SessionId = Session->GetSnapshot().FishingSessionId;
 	Sessions.Add(SessionId, Session);
 	SessionFisherById.Add(SessionId, StableNetId);
@@ -134,11 +257,12 @@ FCatFishingStartResult UCatFishingService::StartFishingSession(AController* Fish
 	Result.bStarted = true;
 	Result.FishingSessionId = SessionId;
 	Result.Error = ECatDomainCommandError::None;
-	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_session_started RequestId=%s SessionId=%s Fish=%s Region=%s Giant=%s WeightKg=%.3f"),
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_session_started RequestId=%s SessionId=%s Fish=%s Region=%s Giant=%s WeightKg=%.3f BiteIntervalSeconds=%.3f"),
 		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *SessionId.ToString(EGuidFormats::DigitsWithHyphens),
-		*FishDefinition->FishDefinitionId.ToString(), *WaterResult.Region.RegionId.ToString(),
-		FishDefinition->BodyClass == ECatFishBodyClass::Giant ? TEXT("true") : TEXT("false"), FishWeightKilograms);
-	if (FishDefinition->BodyClass == ECatFishBodyClass::Giant)
+		*CastResult.EncounterSpec.FishDefinitionId.ToString(), *CastResult.EncounterSpec.WaterRegion.RegionId.ToString(),
+		CastResult.EncounterSpec.bGiant ? TEXT("true") : TEXT("false"), CastResult.EncounterSpec.FishWeightKilograms,
+		CastResult.EncounterSpec.BiteIntervalSeconds);
+	if (CastResult.EncounterSpec.bGiant)
 	{
 		if (UCatSocialService* Social = GetWorld()->GetSubsystem<UCatSocialService>())
 		{
@@ -147,8 +271,9 @@ FCatFishingStartResult UCatFishingService::StartFishingSession(AController* Fish
 	}
 	return Finish(Result);
 }
-
-// 协作转发流程：先清理终态或失效弱引用并定位真实 Session，未找到返回 NotFound；找到后由会话统一校验 Giant/HookedFight/Revision，以及请求者仍是 Active Controller、持有当前 Character、未倒地且力量/体力为正，任何拒绝都发生在参与集合写入前。
+// 协作转发流程：先清理终态或失效弱引用并定位真实 Session，未找到返回 NotFound；找到后由会话统一校验
+// Giant/HookedFight/Revision，以及请求者仍是 Active Controller、持有当前 Character、未倒地且力量/体力为正，任何拒绝都
+// 发生在参与集合写入前。
 FCatDomainCommandResult UCatFishingService::SubmitFightAssist(const FGuid FishingSessionId,
 	AController* AssistingController, const FGuid RequestId, const int64 ExpectedRevision)
 {
@@ -159,6 +284,21 @@ FCatDomainCommandResult UCatFishingService::SubmitFightAssist(const FGuid Fishin
 	}
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
+	Result.Error = ECatDomainCommandError::NotFound;
+	return Result;
+}
+
+// 遛鱼意图转发流程：先清理终态弱引用，按 Controller 的服务器身份查单活跃会话索引；找到就转给会话（会话再复核身份与阶段），找不到返回 NotFound。
+FCatDomainCommandResult UCatFishingService::SubmitFightIntent(AController* FisherController, const ECatFishingFightIntent Intent)
+{
+	CompactSessions();
+	const FString StableNetId = CatResolveStableNetId(FisherController);
+	const FGuid SessionId = ActiveSessionByFisher.FindRef(StableNetId);
+	if (ACatFishingSession* Session = Sessions.FindRef(SessionId).Get())
+	{
+		return Session->SubmitFightIntent(FisherController, Intent);
+	}
+	FCatDomainCommandResult Result;
 	Result.Error = ECatDomainCommandError::NotFound;
 	return Result;
 }
@@ -223,74 +363,6 @@ void UCatFishingService::CompactSessions()
 			}
 			SessionFisherById.Remove(SessionId);
 			It.RemoveCurrent();
-		}
-	}
-}
-
-// 身份解析流程：只读当前 Controller 的继承 UniqueId；它仅作为服务器私有幂等/单活跃键，不进入 Fishing 公开快照。
-FString UCatFishingService::ResolveStableNetId(const AController* Controller)
-{
-	const APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
-	return PlayerState && PlayerState->GetUniqueId().IsValid() ? PlayerState->GetUniqueId()->ToString() : FString();
-}
-
-// 参与者谓词流程：先清所有输出，再用服务器 GameMode Active gate、当前 Pawn、Condition 与 ASC 逐层验证；只有身份有效、未倒地且两项能力都为正有限值才返回真。
-bool UCatFishingService::TryGetFightCapability(const AController* Controller, FString& OutStableNetId,
-	ACatCharacter*& OutCharacter, double& OutFishingStrength, double& OutFightStamina)
-{
-	OutStableNetId.Reset();
-	OutCharacter = nullptr;
-	OutFishingStrength = 0.0;
-	OutFightStamina = 0.0;
-	const UWorld* World = Controller ? Controller->GetWorld() : nullptr;
-	const ACatfishingGameModeBase* GameMode = World ? World->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
-	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
-	const UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
-	const UAbilitySystemComponent* ASC = Character ? Character->GetAbilitySystemComponent() : nullptr;
-	const FString StableNetId = ResolveStableNetId(Controller);
-	if (!World || !GameMode || !Character || !Conditions || !ASC || StableNetId.IsEmpty()
-		|| !GameMode->CanAcceptGameplayCommand(Controller) || Conditions->GetSnapshot().bDowned)
-	{
-		return false;
-	}
-	const double Strength = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
-	const double FightStamina = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
-	if (!FMath::IsFinite(Strength) || Strength <= 0.0
-		|| !FMath::IsFinite(FightStamina) || FightStamina <= 0.0)
-	{
-		return false;
-	}
-	OutStableNetId = StableNetId;
-	OutCharacter = Character;
-	OutFishingStrength = Strength;
-	OutFightStamina = FightStamina;
-	return true;
-}
-
-// 协作快照流程：所有输出先清零，然后遍历当前 Controller 并只累加统一谓词接受的玩家；断线、倒地或零能力玩家不能扩大 Giant 池。
-void UCatFishingService::BuildFightCapabilitySnapshot(int32& OutParticipantCount,
-	double& OutFishingStrength, double& OutFightStamina) const
-{
-	OutParticipantCount = 0;
-	OutFishingStrength = 0.0;
-	OutFightStamina = 0.0;
-	const UWorld* World = GetWorld();
-	if (!World)
-	{
-		return;
-	}
-	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
-	{
-		const AController* Controller = It->Get();
-		FString StableNetId;
-		ACatCharacter* Character = nullptr;
-		double Strength = 0.0;
-		double FightStamina = 0.0;
-		if (TryGetFightCapability(Controller, StableNetId, Character, Strength, FightStamina))
-		{
-			++OutParticipantCount;
-			OutFishingStrength += Strength;
-			OutFightStamina += FightStamina;
 		}
 	}
 }

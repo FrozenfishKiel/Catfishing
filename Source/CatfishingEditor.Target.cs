@@ -10,6 +10,7 @@ public class CatfishingEditorTarget : TargetRules
 		Type = TargetType.Editor;
 		DefaultBuildSettings = BuildSettingsVersion.V7;
 
-		ExtraModuleNames.AddRange( new string[] { "Catfishing" } );
+		// Editor 目标同时链接运行时模块与只进 Editor 的 CatfishingEditor 工具模块（资产生成 Commandlet）；Game 目标不含后者。
+		ExtraModuleNames.AddRange( new string[] { "Catfishing", "CatfishingEditor" } );
 	}
 }

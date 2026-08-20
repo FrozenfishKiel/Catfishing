@@ -18,6 +18,25 @@ enum class ECatImprintCaptureDeliveryStage : uint8
 	CaptureFailed
 };
 
+/**
+ * 结算夜归档还差什么才算就绪；它替代原来那个「未就绪就返回 false」的哑布尔值，
+ * 让结算协调器和日志能区分「还要继续等」和「本局配置本来就不会产出这一项」。
+ */
+UENUM(BlueprintType)
+enum class ECatSettlementArchiveBlocker : uint8
+{
+	/** 归档已就绪，结算夜可以推进。 */
+	None,
+	/** 传入的 RunId 无效，无法定位本局记录；这是调用方的错，不是等待状态。 */
+	InvalidRun,
+	/** 本局还有 CapturePlan 停在 Planned/Delivered，尚未拿到明确的成功或失败终态。 */
+	CaptureDeliveryPending,
+	/** 营地已配置篝火封面事件，但本局还没有任何封面计划落地。 */
+	CampfireCoverPlanMissing,
+	/** 还有永久 Grant 没有收到客户端 durable ACK。 */
+	GrantAckPending
+};
+
 /** Grant 投递阶段；只按 GrantId 跟踪远端接收/ACK，不借用 CapturePlan 状态。 */
 UENUM(BlueprintType)
 enum class ECatGrantDeliveryStage : uint8
@@ -59,10 +78,6 @@ struct FCatImprintCandidate
 	/** 服务器裁决的参与人数；原始 StableNetId 数组保存在服务私有记录。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 ParticipantCount = 0;
-
-	/** 候选产生时 GameMode 是否已确认本局全部 Active 玩家都在场；只有该事实可允许篝火封面计划。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bAllActivePlayersPresent = false;
 
 	/** 服务器私有参与者 StableNetId；无 UPROPERTY，不进入公共 DTO。 */
 	TArray<FString> ParticipantStableNetIds;

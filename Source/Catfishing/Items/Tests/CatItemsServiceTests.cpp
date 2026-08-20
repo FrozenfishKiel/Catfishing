@@ -27,6 +27,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatItemsCommitCaptureFullContainerTest,
 	"Catfishing.Unit.Items.CommitCapture.FullContainerDoesNotMutateContainer",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatItemsRequestPayloadDriftRejectedTest,
+	"Catfishing.Unit.Items.RequestPayloadDriftRejectedBeforeMutableState",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 // 测试流程：
 // 1. 先确认引擎可用并记录现有 WorldContext 数量；引擎不可用时立即失败，Game World 创建失败时也不继续触碰 Items 状态。
@@ -579,4 +583,135 @@ bool FCatItemsCommitCaptureFullContainerTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
+// 测试流程：
+// 1. 在真实 Game World 中注册个人鱼护并成功提交一条捕获，建立可重放的成功终态。
+// 2. 用同一 RequestId 和 FishingSessionId 改换 FishInstanceId 重放捕获；服务必须在读取可变容器前用载荷签名拒绝漂移，不追加第二条鱼。
+// 3. 再制造一次献祭预留 RevisionConflict，随后用同一 RequestId 改换 ExpectedRevision；首次拒绝也必须稳定重放，不能因
+// 为当前 Revision 已变化而重新受理。
+// 4. 最后从公开快照确认容器仍只有首次捕获的鱼，证明两个漂移请求都没有产生副作用。
+bool FCatItemsRequestPayloadDriftRejectedTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	if (!TestNotNull(TEXT("引擎实例可用于创建 Items 漂移测试 World"), GEngine))
+	{
+		return false;
+	}
+
+	const int32 InitialWorldContextCount = GEngine->GetWorldContexts().Num();
+	{
+		FTestWorldWrapper WorldWrapper;
+		if (TestTrue(TEXT("创建 Items 载荷漂移测试 Game World"), WorldWrapper.CreateTestWorld(EWorldType::Game)))
+		{
+			UWorld* World = WorldWrapper.GetTestWorld();
+			UCatItemsService* ItemsService = World ? World->GetSubsystem<UCatItemsService>() : nullptr;
+			AActor* ContainerHost = World ? World->SpawnActor<AActor>() : nullptr;
+			UCatContainerReplicationComponent* ReplicationComponent = ContainerHost
+				? NewObject<UCatContainerReplicationComponent>(ContainerHost)
+				: nullptr;
+
+			const bool bHasRuntimeObjects = TestNotNull(TEXT("Items 漂移测试 World 可用"), World)
+				&& TestNotNull(TEXT("Items 漂移测试取得真实子系统"), ItemsService)
+				&& TestNotNull(TEXT("Items 漂移测试创建容器宿主"), ContainerHost)
+				&& TestNotNull(TEXT("Items 漂移测试创建复制组件"), ReplicationComponent);
+			if (bHasRuntimeObjects)
+			{
+				ContainerHost->AddInstanceComponent(ReplicationComponent);
+				ReplicationComponent->RegisterComponent();
+
+				const FString StableNetId = TEXT("PayloadDriftStableNetId");
+				const FGuid ContainerId = FGuid::NewGuid();
+				TestTrue(TEXT("Items 漂移测试注册个人鱼护"),
+					ItemsService->RegisterContainer(ReplicationComponent, ContainerId,
+						ECatContainerKind::PersonalGuard, StableNetId, 4));
+
+				FCatContainerSnapshot InitialSnapshot;
+				const bool bHasInitialSnapshot = ItemsService->TryGetContainerSnapshot(ContainerId, InitialSnapshot);
+				TestTrue(TEXT("漂移测试可读取初始快照"), bHasInitialSnapshot);
+				if (bHasInitialSnapshot)
+				{
+					FCatCaptureCommitCommand CaptureCommand;
+					CaptureCommand.Context.RequestId = FGuid::NewGuid();
+					CaptureCommand.Context.ExpectedRevision = InitialSnapshot.Revision;
+					CaptureCommand.Context.StableNetId = StableNetId;
+					CaptureCommand.FishingSessionId = FGuid::NewGuid();
+					CaptureCommand.FishInstanceId = FGuid::NewGuid();
+					CaptureCommand.FishDefinitionId = TEXT("PayloadDriftFish");
+					CaptureCommand.TargetContainerId = ContainerId;
+					CaptureCommand.WeightKilograms = 2.0;
+					CaptureCommand.SacrificeContribution = 5;
+
+					const FCatCaptureCommitResult FirstCapture = ItemsService->CommitCapture(CaptureCommand);
+					TestTrue(TEXT("漂移测试首次捕获提交成功"), FirstCapture.Command.bCommitted);
+					TestEqual(TEXT("漂移测试首次捕获无错误"), FirstCapture.Command.Error, ECatDomainCommandError::None);
+
+					FCatCaptureCommitCommand DriftCapture = CaptureCommand;
+					DriftCapture.FishInstanceId = FGuid::NewGuid();
+					const FCatCaptureCommitResult DriftCaptureResult = ItemsService->CommitCapture(DriftCapture);
+					TestFalse(TEXT("同 RequestId 捕获漂移不提交"), DriftCaptureResult.Command.bCommitted);
+					TestEqual(TEXT("同 RequestId 捕获漂移返回 InvalidPayload"),
+						DriftCaptureResult.Command.Error,
+						ECatDomainCommandError::InvalidPayload);
+
+					const FCatCaptureCommitResult ReplayCapture = ItemsService->CommitCapture(CaptureCommand);
+					TestFalse(TEXT("原捕获载荷仍可幂等重放"), ReplayCapture.Command.bCommitted);
+					TestEqual(TEXT("原捕获载荷重放返回 AlreadyResolved"),
+						ReplayCapture.Command.Error,
+						ECatDomainCommandError::AlreadyResolved);
+
+					FCatSacrificeCommand ReserveCommand;
+					ReserveCommand.Context.RequestId = FGuid::NewGuid();
+					ReserveCommand.Context.ExpectedRevision = InitialSnapshot.Revision;
+					ReserveCommand.Context.StableNetId = StableNetId;
+					ReserveCommand.FishInstanceId = CaptureCommand.FishInstanceId;
+					ReserveCommand.ContainerId = ContainerId;
+					ReserveCommand.ExpectedRunRevision = 1;
+
+					const FCatFishReservationResult FirstReserve = ItemsService->ReserveFish(ReserveCommand);
+					TestFalse(TEXT("陈旧 Revision 预留不建立锁"), FirstReserve.bReserved);
+					TestEqual(TEXT("陈旧 Revision 预留返回 RevisionConflict"),
+						FirstReserve.Error,
+						ECatDomainCommandError::RevisionConflict);
+
+					FCatSacrificeCommand DriftReserve = ReserveCommand;
+					DriftReserve.Context.ExpectedRevision = FirstCapture.Command.Revision;
+					const FCatFishReservationResult DriftReserveResult = ItemsService->ReserveFish(DriftReserve);
+					TestFalse(TEXT("同 RequestId 预留漂移不建立锁"), DriftReserveResult.bReserved);
+					TestEqual(TEXT("同 RequestId 预留漂移返回 InvalidPayload"),
+						DriftReserveResult.Error,
+						ECatDomainCommandError::InvalidPayload);
+
+					const FCatFishReservationResult ReplayReserve = ItemsService->ReserveFish(ReserveCommand);
+					TestFalse(TEXT("原预留拒绝仍稳定重放"), ReplayReserve.bReserved);
+					TestEqual(TEXT("原预留拒绝重放保留 RevisionConflict"),
+						ReplayReserve.Error,
+						ECatDomainCommandError::RevisionConflict);
+
+					FCatContainerSnapshot FinalSnapshot;
+					const bool bHasFinalSnapshot = ItemsService->TryGetContainerSnapshot(ContainerId, FinalSnapshot);
+					TestTrue(TEXT("漂移请求后仍可读取最终快照"), bHasFinalSnapshot);
+					if (bHasFinalSnapshot)
+					{
+						TestEqual(TEXT("漂移请求后 Revision 仍停在首次捕获"), FinalSnapshot.Revision, FirstCapture.Command.Revision);
+						TestEqual(TEXT("漂移请求后容器仍只有一条鱼"), FinalSnapshot.Fish.Num(), 1);
+						if (FinalSnapshot.Fish.Num() == 1)
+						{
+							TestEqual(TEXT("漂移请求后保留原鱼实例"),
+								FinalSnapshot.Fish[0].FishInstanceId,
+								CaptureCommand.FishInstanceId);
+						}
+					}
+				}
+
+				ItemsService->UnregisterContainer(ReplicationComponent);
+			}
+		}
+		WorldWrapper.ForwardErrorMessages(this);
+	}
+
+	TestEqual(TEXT("Items 漂移测试结束后 WorldContext 数量恢复"),
+		GEngine->GetWorldContexts().Num(),
+		InitialWorldContextCount);
+	return !HasAnyErrors();
+}
 #endif // WITH_DEV_AUTOMATION_TESTS

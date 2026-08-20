@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Online/CatOnlineTypes.h"
 #include "Engine/EngineBaseTypes.h"
+#include "Engine/TimerHandle.h"
 #include "Interfaces/OnlineSessionInterface.h"
 #include "OnlineSessionSettings.h"
 #include "Subsystems/GameInstanceSubsystem.h"
@@ -49,7 +50,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Online")
 	FCatOnlineResult RequestAcceptInvite(FCatSessionInviteHandle InviteHandle);
 
-	/** 根据已确认 SessionRole 选择 Host exit 或 Client leave；重复请求先于角色/策略校验拒绝且不覆盖活动关联键，再以一次 DestroySession 与前台旅行收口。 */
+	/**
+	 * 根据已确认 SessionRole 选择 Host exit 或 Client leave；重复请求先于角色/策略校验拒绝且不覆盖活动关联键，再以一
+	 * 次 DestroySession 与前台旅行收口。
+	 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Online")
 	FCatOnlineResult RequestLeave();
 
@@ -59,6 +63,31 @@ public:
 	/** 组装当前四类事实、RequestId/epoch 与 opaque 摘要；实现只复制数据，不推进异步状态。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Online")
 	FCatOnlineSnapshot GetSnapshot() const;
+
+	/** 把一名已准入成员加进本局成员关系，并在该成员就是本进程房主时确立唯一房主身份；重复登记幂等，冲突的第二个房主声明被拒绝。 */
+	bool RegisterSessionMember(const FString& StableNetId, bool bIsHost);
+
+	/** 把一名成员从本局成员关系里移除；被注销者恰好是房主时只清空房主身份，本轮不选新房主。 */
+	bool UnregisterSessionMember(const FString& StableNetId);
+
+	/** 房主踢人在 Online 侧的收口：校验房主身份与目标成员后释放该成员的成员关系；返回 None 表示 GameMode 可以继续释放准入记录并断开该连接。 */
+	ECatOnlineError CommitHostKick(const FString& RequesterStableNetId, const FString& TargetStableNetId);
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** 为旅行收口自动化直接种入四类 Online 事实、操作角色和预期包名；只用于验证状态机，不创建平台 Session、不加载地图、不模拟真实 Steam。 */
+	void SeedTravelClosureStateForAutomation(ECatOnlineOperation InActiveOperation,
+		ECatOnlineSessionState InSessionState, ECatOnlineSessionRole InSessionRole,
+		ECatOnlineSessionRole InOperationRole, ECatOnlineWorldState InWorldState,
+		ECatOnlineTransportState InTransportState, const FString& InExpectedPackage);
+
+	/**
+	 * 为超时自动化种入"平台请求已提交、仍在等待完成回调"的操作状态，并按当前配置真实武装有界计时器；返回是否成功武
+	 * 装。它不调用 OSS，也不写 World 与角色事实。
+	 */
+	bool SeedPendingPlatformOperationForAutomation(ECatOnlineOperation InOperation,
+		ECatOnlineSessionState InPendingSessionState);
+
+#endif
 
 	/** 快照事实变更广播；LocalPlayer UI 子系统按自己的生命周期成对订阅。 */
 	FCatOnlineSnapshotChanged OnSnapshotChanged;
@@ -82,6 +111,18 @@ private:
 
 	/** 在当前操作 epoch 下绑定 Destroy 回调并提交平台清理；FailureAfterDestroy 非 None 表示旅行/解析失败后的补偿。 */
 	bool BeginDestroySession(ECatOnlineError FailureAfterDestroy);
+
+	/** 为刚提交的平台请求武装唯一有界等待计时器；返回 None 表示窗口已建立，否则返回调用方应当据以结案的结构化错误。 */
+	ECatOnlineError ArmOperationTimeout();
+
+	/** 幂等清除有界等待计时器；已触发、World 已失效或从未武装时都安全。 */
+	void ClearOperationTimeout();
+
+	/** 有界窗口内没等到平台完成回调时的唯一收口；只消费提交时的 epoch，并按当时等待的平台调用选择补偿路径。 */
+	void HandleOperationTimeout(uint64 SubmittedEpoch);
+
+	/** 释放全部成员关系与房主身份；本地 NamedSession 不再存在时调用，避免下一局沿用上一局的成员关系。 */
+	void ClearSessionMembership();
 
 	/** Host Leave 在 DestroySession 前向当前 Lake GameMode 提交 Run teardown；同步 Ready、异步 Pending 与失败都保持同一 RequestId/epoch。 */
 	bool BeginHostRunTeardown();
@@ -113,7 +154,10 @@ private:
 	/** 平台邀请接受回调：只保存 opaque 结果并通知 UI，后续接受动作复用 RequestJoinInternal。 */
 	void HandleSessionUserInviteAccepted(bool bWasSuccessful, int32 ControllerId, FUniqueNetIdPtr UserId, const FOnlineSessionSearchResult& InviteResult);
 
-	/** PostLoadMap 回调：按 GameInstance/ExpectedPackage 隔离后独立确认 World，并把 Lake 收敛为 Connected、Frontend 收敛为 Idle；最后只结算 ActiveOperation，不改写 Session 事实。 */
+	/**
+	 * PostLoadMap 回调：按 GameInstance/ExpectedPackage 隔离后独立确认 World，并把 Lake 收敛为 Connected、Frontend 收
+	 * 敛为 Idle；最后只结算 ActiveOperation，不改写 Session 事实。
+	 */
 	void HandlePostLoadMap(UWorld* LoadedWorld);
 
 	/** TravelFailure 回调：只消费本 GameInstance 的待确认旅行；Create/Join 先 Destroy 补偿，Leave 保留已完成的 Session 清理。 */
@@ -152,19 +196,33 @@ private:
 	/** 当前 GameInstance 的 World 事实；Initialize 按初始包名建立基线，之后仅由旅行提交、PostLoadMap 和 TravelFailure 写入。 */
 	ECatOnlineWorldState WorldState = ECatOnlineWorldState::Unknown;
 
-	/** 本地 NamedSession 事实；仅平台 Session 请求与回调写入。 */
+	/**
+	 * 本地 NamedSession 事实。
+	 * 写入点不只是平台 Session 请求和回调：BeginOperation 会先写入 pending 状态，操作超时和 NetworkFailure 也会写。
+	 * 因此不能把它当成"平台已经确认的事实"，只能当成"本进程当前认为的会话状态"。
+	 */
 	ECatOnlineSessionState SessionState = ECatOnlineSessionState::NoSession;
 
 	/** 当前运输事实；Initialize 按初始 World 建立基线，之后仅由旅行提交、PostLoadMap、TravelFailure 和 NetworkFailure 写入。 */
 	ECatOnlineTransportState TransportState = ECatOnlineTransportState::Idle;
 
-	/** 当前唯一复合操作；BeginOperation 写入，Finish/Deinitialize 清空；请求入口据此拒绝并发，平台操作与 Run teardown 回调再和 OperationEpoch 联合校验。 */
+	/**
+	 * 当前唯一复合操作；BeginOperation 写入，Finish/Deinitialize 清空；请求入口据此拒绝并发，平台操作与 Run teardown
+	 * 回调再和 OperationEpoch 联合校验。
+	 */
 	ECatOnlineOperation ActiveOperation = ECatOnlineOperation::None;
 
-	/** 已确认的本地 NamedSession 角色；Create/Join 成功写入，Destroy 成功清空。 */
+	/**
+	 * 已确认的本地 NamedSession 角色。
+	 * Create/Join 成功写入 Host/Client，Destroy 成功清空；除此之外 Create/Join 失败与 Destroy 回调的清理分支也会把它抹回 None。
+	 * 旅行 API 选择不要直接读它，读下面的 OperationRole；它在 Destroy 成功后就已经是 None 了。
+	 */
 	ECatOnlineSessionRole SessionRole = ECatOnlineSessionRole::None;
 
-	/** 当前复合操作冻结的会话角色；Create/Join 成功或 Leave 开始时写入，使 SessionRole 在 Destroy 成功清空后仍能选择正确旅行 API，Finish/Deinitialize 清空。 */
+	/**
+	 * 当前复合操作冻结的会话角色；Create/Join 成功或 Leave 开始时写入，使 SessionRole 在 Destroy 成功清空后仍能选择正
+	 * 确旅行 API，Finish/Deinitialize 清空。
+	 */
 	ECatOnlineSessionRole OperationRole = ECatOnlineSessionRole::None;
 
 	/** 最近一次结构化错误；不承担 World、Session 或 Transport 真相。 */
@@ -187,6 +245,18 @@ private:
 
 	/** 当前待确认的目标包名；跨旅行只保存字符串，不持有旧 World 或 Actor。 */
 	FString ExpectedPackage;
+
+	/**
+	 * 当前会话的成员关系，内容是每人的服务器私有身份；只有承载 Listen Server 的房主进程会被 GameMode 喂数据，客户端进程恒为空。
+	 * 它只回答"这个身份在不在本局"，数组下标不代表入局顺序；本轮不做 Host Migration，没有任何地方需要"最早加入者"。
+	 */
+	TArray<FString> SessionMemberStableNetIds;
+
+	/** 当前会话房主的服务器私有身份；空串表示还没有登记过房主，踢人授权据此拒绝任何非房主请求。 */
+	FString HostStableNetId;
+
+	/** 当前平台完成回调的有界等待计时器；它只覆盖"已提交平台调用、等待回调"这一段，不覆盖回调之后的地图旅行。 */
+	FTimerHandle OperationTimeoutHandle;
 
 	/** 当前搜索对象；只在 Find epoch 内存活，回调结案或清理时释放。 */
 	TSharedPtr<FOnlineSessionSearch> ActiveSearch;

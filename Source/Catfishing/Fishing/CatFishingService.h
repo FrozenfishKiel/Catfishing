@@ -22,12 +22,27 @@ public:
 	/** World 销毁时先终止所有未结算会话，再清弱映射。 */
 	virtual void Deinitialize() override;
 
-	/** 从当前 Run/Environment、水域和统一参战能力快照抽取鱼种与重量，并为该身份建立唯一 StateTree 会话；巨鱼成功后才附带广播可选 Social 提示。 */
+	/** 通过 Boundary Start/Cast 获取 PreCast context 与 EncounterSpec，再为该身份建立唯一 StateTree 会话；巨鱼成功后才附带广播可选 Social 提示。 */
 	FCatFishingStartResult StartFishingSession(AController* FisherController, FGuid RequestId);
+
+	/**
+	 * 按钓手当前装的鱼漂算出这一竿浮漂落在哪儿；返回 false 表示没漂、漂没进运行目录或漂的射程/精准度非法，此时不该抛竿。
+	 *
+	 * 落点 = 猫的位置 + 水平朝向 × 射程 + 一个半径由精准度决定的水平随机偏移。
+	 * 飞书的抛竿规则本来是"点击水面即抛、点哪落哪、点击距离 ≤ 射程"，但项目还没有点击瞄准输入，
+	 * 所以这里退化成"朝哪抛哪"，射程直接充当抛投距离；接上瞄准后只要把方向与距离换成点击结果，偏移这一段可以原样保留。
+	 * 偏移只走水平面：射程和精准度在装备册里都是水面上的距离，把高度差算进去会让落点被地形起伏拉偏。
+	 * 随机流用 RequestId 播种而不是全局随机，同一次抛竿重放会落在同一点，审计和自动化都能复现。
+	 * 它是抛竿几何的唯一实现，所以直接公开给自动化断言，免得为了验一段向量运算搭起一整局。
+	 */
+	static bool TryResolveFloatCastLocation(const ACatCharacter& Fisher, const FGuid& RequestId, FVector& OutCastLocation);
 
 	/** 把巨鱼搏斗协作意图转给指定会话；会话用统一谓词拒绝非 Active、倒地、无当前 Character 或力量/体力非正的请求者。 */
 	FCatDomainCommandResult SubmitFightAssist(FGuid FishingSessionId, AController* AssistingController,
 		FGuid RequestId, int64 ExpectedRevision);
+
+	/** 把钓手当前按住的遛鱼操作（拖/松/无）转给他自己的活跃会话；按服务器身份找会话，客户端不指定会话 ID，没有活跃会话返回 NotFound。 */
+	FCatDomainCommandResult SubmitFightIntent(AController* FisherController, ECatFishingFightIntent Intent);
 
 	/** 把 NearShore 抢抄意图转给指定会话；服务不自己创建鱼或选择胜者。 */
 	FCatScoopResult RequestScoop(FGuid FishingSessionId, AController* ScoopingController, const FCatScoopCommand& Command);
@@ -39,21 +54,8 @@ public:
 	void CloseCommandsAndTerminateAll();
 
 private:
-	friend class ACatFishingSession;
-
 	/** 清除已销毁或已终态 Session 弱引用，并同时释放对应钓手的单活跃槽位。 */
 	void CompactSessions();
-
-	/** 从 Controller 的 APlayerState::UniqueId 读取服务器私有身份；无效身份不能进入开始终态缓存。 */
-	static FString ResolveStableNetId(const AController* Controller);
-
-	/** 用同一服务器谓词解析单个战斗参与者；必须是 Active Controller/当前 Character、未倒地且两项独立能力都为正有限值。 */
-	static bool TryGetFightCapability(const AController* Controller, FString& OutStableNetId,
-		ACatCharacter*& OutCharacter, double& OutFishingStrength, double& OutFightStamina);
-
-	/** 从当前所有服务器 Controller 汇总合法参与者人数、力量与搏斗体力；任一依赖缺失时输出保持零。 */
-	void BuildFightCapabilitySnapshot(int32& OutParticipantCount, double& OutFishingStrength,
-		double& OutFightStamina) const;
 
 	/** FishingSessionId 到服务器 Actor 弱引用；Actor/StateTree 自己持有阶段真相。 */
 	TMap<FGuid, TWeakObjectPtr<ACatFishingSession>> Sessions;
@@ -61,11 +63,14 @@ private:
 	/** 会话 ID 到初始钓手私有身份；服务压缩终态时据此精确释放单活跃索引。 */
 	TMap<FGuid, FString> SessionFisherById;
 
-	/** 钓手私有身份到当前唯一非终态会话；同一玩家不能并行抽取第二条鱼。 */
+	/** 钓手私有身份到当前唯一非终态会话；同一玩家不能并行创建第二个未结算 Attempt。 */
 	TMap<FString, FGuid> ActiveSessionByFisher;
 
-	/** 身份+开始操作+RequestId 到首次同步结果；成功重试复用原 SessionId，失败重试不重新抽鱼。 */
-	TMap<FString, FCatFishingStartResult> StartTerminalCache;
+	/** Boundary Cast Operation 到最终 Service Start 结果；同一 Cast 重放必须返回同一个 SessionId 或同一个创建失败。 */
+	TMap<FString, FCatFishingStartResult> StartResultByBoundaryOperation;
+
+	/** Boundary Attempt 到最终 Service Start 结果；同一 Start 重放先用它绕过当前命令关闭、活跃会话和 Character 生命周期漂移。 */
+	TMap<FGuid, FCatFishingStartResult> StartResultByAttempt;
 
 	/** teardown 后永久拒绝本 World 新会话。 */
 	bool bCommandsOpen = true;

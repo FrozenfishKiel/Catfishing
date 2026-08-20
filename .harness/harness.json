@@ -1,0 +1,14 @@
+﻿{
+    "schema_version":  "1.0",
+    "required_context":  [
+                             ".harness/PROBLEM_ANALYSIS_STANDARD.md",
+                             ".harness/CODING_LESSONS.md"
+                         ],
+    "observability":  {
+                          "sources":  [
+                                          "当前项目源码、配置、资产和测试中的真实入口与状态写入链",
+                                          "必要时读取的 Unreal Engine 5.8 源码与平台实现",
+                                          "UBT、Automation、PIE、多进程、运行日志和人工可见结果"
+                                      ]
+                      }
+}

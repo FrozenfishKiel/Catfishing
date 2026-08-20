@@ -19,29 +19,26 @@ bool FCatFishingStateTreeNodesDefaultsTest::RunTest(const FString& Parameters)
 		EnterPhaseTask.GetInstanceDataType() == FCatFishingEnterPhaseTaskInstanceData::StaticStruct());
 	const FCatFishingEnterPhaseTaskInstanceData EnterPhaseData;
 	TestEqual(TEXT("阶段入口默认保持 Created"), EnterPhaseData.Phase, ECatFishingPhase::Created);
-	TestFalse(TEXT("NearShore 默认没有权威目标"), EnterPhaseData.bHasAuthoritativeNearShoreTarget);
-	TestEqual(TEXT("NearShore 默认目标为零向量"), EnterPhaseData.AuthoritativeNearShoreTarget, FVector::ZeroVector);
+	// 近岸目标不再是资产参数：实例数据里只剩 Phase 一个属性，资产没有任何能填世界位置的入口。
+	const UScriptStruct* EnterPhaseStruct = FCatFishingEnterPhaseTaskInstanceData::StaticStruct();
+	TestTrue(TEXT("阶段入口实例数据只暴露 Phase 一个属性"),
+		EnterPhaseStruct->PropertyLink && !EnterPhaseStruct->PropertyLink->PropertyLinkNext);
 
 	const FCatFishingWaitTask WaitTask;
 	TestTrue(TEXT("等待节点暴露空参数结构"),
 		WaitTask.GetInstanceDataType() == FCatFishingWaitTaskInstanceData::StaticStruct());
 
 	const FCatFishingFightExchangeTask FightExchangeTask;
-	TestTrue(TEXT("搏斗交换节点暴露消耗参数结构"),
+	TestTrue(TEXT("搏斗推进节点暴露空参数结构"),
 		FightExchangeTask.GetInstanceDataType() == FCatFishingFightExchangeTaskInstanceData::StaticStruct());
-	const FCatFishingFightExchangeTaskInstanceData FightData;
-	TestEqual(TEXT("默认鱼体力消耗为 0，保持未裁 fail-closed"), FightData.FishStaminaCost, 0.0);
-	TestEqual(TEXT("默认参与者体力消耗为 0，保持未裁 fail-closed"), FightData.ParticipantStaminaCost, 0.0);
+	// 消耗公式全部来自飞书规则、写死在会话的纯模型里：实例数据不得再暴露任何可调消耗参数，否则资产就能绕过产品数值。
+	TestNull(TEXT("搏斗推进节点实例数据没有任何属性"), FCatFishingFightExchangeTaskInstanceData::StaticStruct()->PropertyLink);
 
 	const FCatFishingFailureBudgetTask FailureBudgetTask;
 	TestTrue(TEXT("失败预算节点暴露互斥惩罚参数结构"),
 		FailureBudgetTask.GetInstanceDataType() == FCatFishingFailureBudgetTaskInstanceData::StaticStruct());
 	const FCatFishingFailureBudgetTaskInstanceData FailureData;
 	TestEqual(TEXT("默认失败惩罚为 None"), FailureData.Penalty, ECatFishingFailurePenalty::None);
-
-	const FCatFishingResolveRetryExhaustedTask RetryExhaustedTask;
-	TestTrue(TEXT("重试耗尽节点复用无参数结构"),
-		RetryExhaustedTask.GetInstanceDataType() == FCatFishingWaitTaskInstanceData::StaticStruct());
 	return !HasAnyErrors();
 }
 

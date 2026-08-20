@@ -24,7 +24,11 @@ public:
 	/** 祭坛/UI 的唯一外部入口；服务器重建 StableNetId 并推进或重放同 RequestId 协议。 */
 	FCatSacrificeResult RequestSacrifice(AController* RequestingController, const FCatSacrificeCommand& Command);
 
-	/** Host teardown 前补齐献祭、关闭 Fishing/Social 并在 Items 关闭前归还 theft escrow；全部领域收口才返回 true。 */
+	/**
+	 * Host teardown 前把本局献祭协议收到终态：永久关新献祭入口，取消还能取消的预留，并为已不可逆提交的协议重试 Run apply。
+	 * 全部协议都收到终态才返回 true；返回 false 时上层不得继续 DestroySession，否则已消耗的鱼会拿不到额度。
+	 * 它不负责关闭 Fishing/Social/Items/ShopEconomy，那是局级顺序，由 GameMode 持有。
+	 */
 	bool PrepareForRunTeardown();
 
 private:
@@ -36,9 +40,6 @@ private:
 		/** 当前可重放协议结果。 */
 		FCatSacrificeResult Result;
 	};
-
-	/** 从 Controller PlayerState 的继承 UniqueId 读取私有身份；无效返回空。 */
-	static FString ResolveStableNetId(const AController* Controller);
 
 	/** 组合服务器身份、固定 Sacrifice 命令类别与 RequestId；同一玩家改鱼重放仍只能得到首次协议。 */
 	static FString MakeProtocolKey(const FString& StableNetId, const FGuid& RequestId);

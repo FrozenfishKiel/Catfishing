@@ -18,8 +18,6 @@ bool FCatSurvivalWidgetViewStateContractTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("SurvivalWidget 是 UUserWidget 派生 View"), UCatSurvivalWidget::StaticClass()->IsChildOf(UUserWidget::StaticClass()));
 
 	FCatSurvivalViewState ViewState;
-	ViewState.Hunger = 12.5f;
-	ViewState.Fatigue = 33.25f;
 	ViewState.Poison = 1.5f;
 	ViewState.FishingStrength = 4.0f;
 	ViewState.FightStamina = 8.0f;
@@ -34,8 +32,6 @@ bool FCatSurvivalWidgetViewStateContractTest::RunTest(const FString& Parameters)
 	ViewState.HelpSignal.Kind = ECatHelpSignalKind::ManualFishing;
 
 	const FCatSurvivalViewState CopiedState = ViewState;
-	TestEqual(TEXT("DTO 保留 Hunger"), CopiedState.Hunger, 12.5f);
-	TestEqual(TEXT("DTO 保留 Fatigue"), CopiedState.Fatigue, 33.25f);
 	TestEqual(TEXT("DTO 保留 Poison"), CopiedState.Poison, 1.5f);
 	TestEqual(TEXT("DTO 保留 FishingStrength"), CopiedState.FishingStrength, 4.0f);
 	TestEqual(TEXT("DTO 保留 FightStamina"), CopiedState.FightStamina, 8.0f);

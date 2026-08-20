@@ -9,7 +9,7 @@
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatSurvivalAttributeSetValueContractTest,
-	"Catfishing.Unit.AbilitySystem.SurvivalAttributeSet.ASCReadsAndWritesFiveIndependentAttributes",
+	"Catfishing.Unit.AbilitySystem.SurvivalAttributeSet.ASCReadsAndWritesThreeIndependentAttributes",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 namespace CatSurvivalAttributeSetTest
@@ -45,7 +45,7 @@ namespace CatSurvivalAttributeSetTest
 	}
 }
 
-// 测试流程：在真实 Game World 中装配 ASC/AttributeSet，通过 ASC 设置五项属性并逐项读取；最后只改 Hunger，确认其他四项不会被联动改写。
+// 测试流程：在真实 Game World 中装配 ASC/AttributeSet，通过 ASC 设置三项属性并逐项读取；最后只改 Poison，确认另外两项不会被联动改写。
 bool FCatSurvivalAttributeSetValueContractTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -69,24 +69,18 @@ bool FCatSurvivalAttributeSetValueContractTest::RunTest(const FString& Parameter
 		return false;
 	}
 
-	Fixture.AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetHungerAttribute(), 11.0f);
-	Fixture.AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFatigueAttribute(), 22.0f);
 	Fixture.AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), 3.0f);
 	Fixture.AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 4.0f);
 	Fixture.AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 5.0f);
 
-	TestEqual(TEXT("ASC 可读取 Hunger"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetHungerAttribute()), 11.0f);
-	TestEqual(TEXT("ASC 可读取 Fatigue"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFatigueAttribute()), 22.0f);
 	TestEqual(TEXT("ASC 可读取 Poison"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()), 3.0f);
 	TestEqual(TEXT("ASC 可读取 FishingStrength"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute()), 4.0f);
 	TestEqual(TEXT("ASC 可读取 FightStamina"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 5.0f);
 
-	Fixture.AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetHungerAttribute(), 7.0f);
-	TestEqual(TEXT("Hunger 可独立变化"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetHungerAttribute()), 7.0f);
-	TestEqual(TEXT("Hunger 变化不改 Fatigue"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFatigueAttribute()), 22.0f);
-	TestEqual(TEXT("Hunger 变化不改 Poison"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()), 3.0f);
-	TestEqual(TEXT("Hunger 变化不改 FishingStrength"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute()), 4.0f);
-	TestEqual(TEXT("Hunger 变化不改 FightStamina"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 5.0f);
+	Fixture.AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), 7.0f);
+	TestEqual(TEXT("Poison 可独立变化"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()), 7.0f);
+	TestEqual(TEXT("Poison 变化不改 FishingStrength"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute()), 4.0f);
+	TestEqual(TEXT("Poison 变化不改 FightStamina"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 5.0f);
 	return !HasAnyErrors();
 }
 

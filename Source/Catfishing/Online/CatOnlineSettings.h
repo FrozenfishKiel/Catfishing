@@ -26,11 +26,28 @@ public:
 	/** 判断重连准入配置是否完整；只接受当前实现的 ConnectionLost 位和正 TTL，出现任何未识别位都 fail-closed。 */
 	bool IsReconnectAdmissionReady() const;
 
+	/** 读取 CreateSession 应使用的公开连接容量；只有 1 到 8 人的好友局边界被当前 WORK-02 合同接受，读取失败会把输出清零。 */
+	bool TryGetSessionPublicConnectionLimit(int32& OutPublicConnectionLimit) const;
+
 	/** 读取 Host exit 等待远端 Destroy ACK 与最终 Grant ACK 的统一正超时秒数；未裁或非有限时返回 false。 */
 	bool TryGetHostExitAckTimeout(double& OutSeconds) const;
+
+	/** 读取 Create/Find/Join/Destroy 等待平台完成回调的统一正超时秒数；未裁或非有限时返回 false，请求入口据此拒绝无界等待。 */
+	bool TryGetSessionOperationTimeout(double& OutSeconds) const;
 	/** Session 的搜索与准入策略；Create/Find 在 Undecided 时返回 PolicyUndecided。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Session")
 	ECatSessionAccessPolicy SessionAccess = ECatSessionAccessPolicy::Undecided;
+
+	/** 建局时对外开放的连接容量，表示当前好友局允许同时进入的玩家数；0 表示尚未裁定，CreateSession 不得用硬编码人数替代它。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Session", meta = (ClampMin = "0", ClampMax = "8"))
+	int32 SessionPublicConnectionLimit = 0;
+
+	/**
+	 * 一次平台会话操作（CreateSession/FindSessions/JoinSession/DestroySession）允许等待完成回调的秒数；0 表示未裁，四
+	 * 个操作都会因此拒绝提交，而不是无限挂起。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Session", meta = (ClampMin = "0.0"))
+	double SessionOperationTimeoutSeconds = 0.0;
 
 	/** 主动 Client leave 是否保留重连资格；未裁时离局请求不会把 Disabled 或 Enabled 当默认。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Reconnect")

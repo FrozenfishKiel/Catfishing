@@ -27,12 +27,14 @@ public:
 	/** 判断 Character ASC 正式运行链是否显式启用；当前只接受已有安全语义的 Full 策略。 */
 	bool IsRuntimeEnabled() const;
 
-	/** 读取非 Shipping 诊断 Ability 的 Hunger 改变量；诊断关闭、非有限或零值时清输出并返回 false。 */
-	bool TryGetDiagnosticHungerDelta(float& OutDelta) const;
+	/** 读取非 Shipping 诊断 Ability 的 Poison 改变量；诊断关闭、非有限或零值时清输出并返回 false。 */
+	bool TryGetDiagnosticPoisonDelta(float& OutDelta) const;
 
-	/** 读取新 Character 的五项局内初始属性；任一负值或非有限都清空输出并保持 fail-closed。 */
-	bool TryGetInitialAttributes(float& OutHunger, float& OutFatigue, float& OutPoison,
-		float& OutFishingStrength, float& OutFightStamina) const;
+	/**
+	 * 读取新 Character 的三项局内初始属性；任一负值或非有限都清空输出并保持 fail-closed。饥饿与疲惫数值都已按飞书删
+	 * 除，不再输出 Hunger 或 Fatigue。
+	 */
+	bool TryGetInitialAttributes(float& OutPoison, float& OutFishingStrength, float& OutFightStamina) const;
 
 	/** Character-owned ASC 正式运行总 gate；默认关闭，项目接线后可在所有构建配置显式启用。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
@@ -45,14 +47,6 @@ public:
 	/** 新 Character 初始属性总 gate；默认关闭，数值必须由项目配置显式提供且只应用一次。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Attributes")
 	bool bEnableInitialAttributeTuning = false;
-
-	/** 新 Character 初始 Hunger；负值表示 Unset，0 是允许的明确值。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Attributes", meta = (ClampMin = "-1.0"))
-	float InitialHunger = -1.0f;
-
-	/** 新 Character 初始 Fatigue；负值表示 Unset。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Attributes", meta = (ClampMin = "-1.0"))
-	float InitialFatigue = -1.0f;
 
 	/** 新 Character 初始 Poison；负值表示 Unset。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Attributes", meta = (ClampMin = "-1.0"))
@@ -70,9 +64,12 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Diagnostics")
 	bool bEnableDiagnosticAbility = false;
 
-	/** 诊断 Ability 对 Hunger 的加法改变量；0 表示未配置，不属于正式身体公式。 */
+	/**
+	 * 诊断 Ability 对 Poison 的加法改变量；0 表示未配置，不属于正式身体公式。疲惫数值删除后诊断改写仍在生产目录里的
+	 * Poison，让开发者能用它手动把猫推到倒地阈值。
+	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Diagnostics")
-	float DiagnosticHungerDelta = 0.0f;
+	float DiagnosticPoisonDelta = 0.0f;
 
 	/** 开发诊断 InputAction 软引用；正式玩法输入资产未接线时保持空。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Diagnostics", meta = (AllowedClasses = "/Script/EnhancedInput.InputAction"))

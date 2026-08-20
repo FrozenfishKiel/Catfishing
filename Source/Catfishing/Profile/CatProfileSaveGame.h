@@ -43,7 +43,11 @@ public:
 	UPROPERTY(SaveGame)
 	TArray<FName> UnlockIds;
 
-	/** 跨局保留的功能型装备槽位选择；服务器仍会用正式目录验证，不包含局内耐久或耗材数量。 */
+	/**
+	 * 跨局保留的功能型装备槽位选择；服务器仍会用正式目录验证，不包含局内耐久或耗材数量。
+	 * 当前没有任何代码读写它：原来的一对读写入口从未被接上，已删。字段本身保留是因为它已经在玩家存档里，
+	 * 删掉 UPROPERTY(SaveGame) 会改变存档布局；装备选择真正接线时直接用这个字段，不要另建一个。
+	 */
 	UPROPERTY(SaveGame)
 	TMap<FName, FName> EquipmentSelectionBySlot;
 };

@@ -21,7 +21,8 @@ void UCatContainerReplicationComponent::GetLifetimeReplicatedProps(TArray<FLifet
 	DOREPLIFETIME(ThisClass, ReplicatedFish);
 }
 
-// authority 发布流程：验证 Owner 权威后替换元数据，再按 FishInstanceId 删除旧项并标记数组变脏，对新项/变更项分别 MarkItemDirty；最后 ForceNetUpdate，预留锁等私有事实不进入复制。
+// authority 发布流程：验证 Owner 权威后替换元数据，再按 FishInstanceId 删除旧项并标记数组变脏，对新项/变更项分别
+// MarkItemDirty；最后 ForceNetUpdate，预留锁等私有事实不进入复制。
 void UCatContainerReplicationComponent::SetSnapshotFromAuthority(const FCatContainerSnapshot& NewSnapshot)
 {
 	AActor* Owner = GetOwner();

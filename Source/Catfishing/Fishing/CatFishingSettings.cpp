@@ -1,6 +1,8 @@
 #include "Fishing/CatFishingSettings.h"
 
 // 运行 gate 流程：要求产品显式开启总开关、提供 StateTree 软引用、有限正响应窗/终态复制窗与近岸验证；任一为 Unset 都阻止会话创建。
+// 搏斗开局的 D₀ 不在这里把关：它已经改成按当前鱼漂的射程与精准度现算，属于每一竿各自的落点事实，
+// 由装备目录（漂射程必须为正）和 Boundary（落点距离必须为正）分别 fail-closed，不再是一个全局配置项。
 bool UCatFishingSettings::IsRuntimeReady() const
 {
 	return bEnableFishingRuntime && !FishingSessionStateTree.IsNull()

@@ -14,13 +14,16 @@ enum class ECatRecoveryMode : uint8
 	FieldSelfRecovery,
 	/** 固定营地的快速休息路径。 */
 	CampRest,
-	/** 自己或伙伴消耗草药的恢复路径。 */
+	/**
+	 * 旧草药恢复路径的保留枚举；WORK-04 起不再由生产入口提交。之所以保留空位而不是删掉，是因为这个枚举随 Snapshot 复
+	 * 制到客户端：删值会让 CarriedToCamp 的整数值前移，版本不一致的客户端会把搬运恢复读成另一种恢复方式。
+	 */
 	Herb,
 	/** 伙伴搬运到固定营地救援点。 */
 	CarriedToCamp
 };
 
-/** Character 局内身体离散状态的复制读模型；Hunger/Fatigue/Poison 数值仍只在 ASC AttributeSet。 */
+/** Character 局内身体离散状态的复制读模型；Poison 数值仍只在 ASC AttributeSet。 */
 USTRUCT(BlueprintType)
 struct FCatConditionSnapshot
 {
@@ -34,7 +37,7 @@ struct FCatConditionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bWet = false;
 
-	/** 猫是否因正式 Poison/Fatigue 阈值进入可恢复倒地；项目不存在死亡终态。 */
+	/** 猫是否因 Poison 达到显式阈值进入可恢复倒地；倒地来源仅中毒（飞书猫咪状态册 v1.4）。项目不存在死亡终态。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bDowned = false;
 

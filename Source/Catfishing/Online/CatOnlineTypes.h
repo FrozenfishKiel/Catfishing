@@ -63,7 +63,11 @@ enum class ECatOnlineSessionState : uint8
 	Host,
 	/** 本地 NamedSession 已由 JoinSession 成功建立。 */
 	Client,
-	/** DestroySession 已提交，等待平台回调。 */
+	/**
+	 * 本进程已经开始拆会话，但还没拆完。
+	 * 它在受理 Leave/HostExit 的那一刻就写下了，不等于 DestroySession 已提交：房主路径还要先等 Run teardown 的
+	 * 远端 ACK，这段时间可能不短，状态一直是 Destroying。UI 只能把它读成"正在退出"，不能读成"马上就完"。
+	 */
 	Destroying,
 	/** 会话事实无法安全确认，需要用户重试或重新进入前台。 */
 	Error
@@ -154,7 +158,9 @@ enum class ECatOnlineError : uint8
 	/** 房主离局前 Run 无法完成权威收口；Session 保持原状且退出链停止。 */
 	RunTeardownFailed,
 	/** 到达的包不符合两地图或当前操作的预期目标。 */
-	UnexpectedMap
+	UnexpectedMap,
+	/** 平台完成回调在有界等待窗口内没有到达；它只说明本地不再继续等待，不代表平台一定失败。 */
+	OperationTimedOut
 };
 
 /** View 能表达的最小会话意图；LocalPlayer UI 子系统将其翻译成 Online 公共接口调用。 */

@@ -79,7 +79,11 @@ struct FCatSacrificeResult
 	UPROPERTY(BlueprintReadOnly)
 	int64 RunRevision = 0;
 
-	/** 从真实鱼定义读取并最终应用的正整数额度；未到 RunAccepted 时保持 0。 */
+	/** 本次献祭计入当日额度的条数；额度是纯数量口径，单条献祭恒为 1，未到 Reserved 时保持 0。 */
 	UPROPERTY(BlueprintReadOnly)
-	int32 AppliedContribution = 0;
+	int32 AppliedQuotaCount = 0;
+
+	/** 本次献祭对世界进度的增减；从已预留或已提交的真实鱼实例读取，臭臭鱼这类鱼可以为负，未到 Reserved 时保持 0。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 AppliedWorldProgressDelta = 0;
 };

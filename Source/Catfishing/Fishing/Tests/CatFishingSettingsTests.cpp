@@ -10,7 +10,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Fishing.Settings.RuntimeRequiresStateTreeAndPositiveWindows",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 测试流程：构造一份只在内存存在的 Fishing Settings，逐步补齐 StateTree、真咬窗口、近岸验证、抢抄距离和终态复制窗口；读取接口必须随 runtime readiness 同步 fail-closed。
+// 测试流程：构造一份只在内存存在的 Fishing Settings，逐步补齐 StateTree、真咬窗口、近岸验证、抢抄距离和终态复制窗口；
+// 读取接口必须随 runtime readiness 同步 fail-closed。
 bool FCatFishingSettingsRuntimeReadinessTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -21,6 +22,15 @@ bool FCatFishingSettingsRuntimeReadinessTest::RunTest(const FString& Parameters)
 	{
 		return false;
 	}
+
+	// 逐项清掉 DefaultGame.ini 在 CDO 上设过的 Fishing 配置（瞬态对象是从 CDO 拷出来的）：
+	// 不清的话 runtime 已经可运行，下面的 fail-closed 断言会直接失败；项目 ini 值本身由下面的 ProjectDefaults 用例单独守。
+	Settings->bEnableFishingRuntime = false;
+	Settings->FishingSessionStateTree = nullptr;
+	Settings->TrueBiteWindowSeconds = 0.0;
+	Settings->bEnableNearShoreValidation = false;
+	Settings->ScoopReachCentimeters = 0.0;
+	Settings->TerminalReplicationWindowSeconds = 0.0;
 
 	double ScoopReach = 99.0;
 	double TerminalWindow = 99.0;
@@ -42,6 +52,36 @@ bool FCatFishingSettingsRuntimeReadinessTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("抢抄距离保持配置值"), ScoopReach, 250.0);
 	TestTrue(TEXT("完整配置可读取终态复制窗口"), Settings->TryGetTerminalReplicationWindow(TerminalWindow));
 	TestEqual(TEXT("终态复制窗口保持配置值"), TerminalWindow, 5.0);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingSettingsProjectDefaultsTest,
+	"Catfishing.Unit.Fishing.Settings.ProjectDefaultsEnableFishingRuntime",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+// 测试流程：读项目默认 Fishing Settings，确认 DefaultGame.ini 的 CatFishingSettings 段已让 runtime 可运行，且两个已落
+// 地数值（飞书已裁的 1 米可抄距离、工程留存窗 5 秒）没有被改动；真咬窗只要求为正，因为它是待裁占位值。
+bool FCatFishingSettingsProjectDefaultsTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	TestNotNull(TEXT("项目 Fishing Settings 可读取"), Settings);
+	if (!Settings)
+	{
+		return false;
+	}
+
+	double ScoopReach = 0.0;
+	double TerminalWindow = 0.0;
+	TestTrue(TEXT("项目默认 Fishing runtime 已可运行"), Settings->IsRuntimeReady());
+	TestFalse(TEXT("项目默认已指定 ST_FishingSession 资产"), Settings->FishingSessionStateTree.IsNull());
+	TestTrue(TEXT("项目默认可读取抢抄距离"), Settings->TryGetScoopReach(ScoopReach));
+	TestEqual(TEXT("项目默认可抄距离为飞书裁定的 1 米"), ScoopReach, 100.0);
+	TestTrue(TEXT("项目默认可读取终态复制窗口"), Settings->TryGetTerminalReplicationWindow(TerminalWindow));
+	TestEqual(TEXT("项目默认终态复制窗口 5 秒"), TerminalWindow, 5.0);
+	TestTrue(TEXT("项目默认真咬窗为正的暂定值"), Settings->TrueBiteWindowSeconds > 0.0);
 	return !HasAnyErrors();
 }
 

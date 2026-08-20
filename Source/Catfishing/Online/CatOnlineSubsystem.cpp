@@ -2,7 +2,8 @@
 
 #include "Logging/CatLog.h"
 #include "Online/CatOnlineSettings.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingGameMode.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
@@ -11,6 +12,7 @@
 #include "GameFramework/PlayerController.h"
 #include "OnlineSubsystem.h"
 #include "OnlineSubsystemUtils.h"
+#include "TimerManager.h"
 #include "UObject/UObjectGlobals.h"
 
 namespace CatOnlineNames
@@ -25,7 +27,8 @@ namespace CatOnlineNames
 	static const FName MapSetting(TEXT("CAT_MAP"));
 }
 
-// 初始化流程：先绑定三类引擎生命周期，再按当前 World 尝试绑定对应 OSS 邀请接口，最后建立 World 快照；邀请接口缺失时保持未绑定，不缓存旧 World 或伪造 Session 错误。
+// 初始化流程：先绑定三类引擎生命周期，再按当前 World 尝试绑定对应 OSS 邀请接口，最后建立 World 快照；邀请接口缺失时保
+// 持未绑定，不缓存旧 World 或伪造 Session 错误。
 void UCatOnlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -51,6 +54,7 @@ void UCatOnlineSubsystem::Deinitialize()
 	++OperationEpoch;
 	ClearRunTeardownDelegate();
 	ClearOperationDelegates();
+	ClearOperationTimeout();
 	ClearInviteDelegate();
 	if (GEngine && TravelFailureHandle.IsValid())
 	{
@@ -71,6 +75,7 @@ void UCatOnlineSubsystem::Deinitialize()
 	InvitesByHandle.Reset();
 	InviteSummaries.Reset();
 	ExpectedPackage.Reset();
+	ClearSessionMembership();
 	PendingHostExitAckRequestId.Invalidate();
 	ActiveOperation = ECatOnlineOperation::None;
 	OperationRole = ECatOnlineSessionRole::None;
@@ -88,7 +93,8 @@ IOnlineSessionPtr UCatOnlineSubsystem::GetWorldSessionInterface() const
 	return OnlineSubsystem ? OnlineSubsystem->GetSessionInterface() : nullptr;
 }
 
-// 接口错误归类流程：先检查当前 World，再用同一 World 查询 OSS，最后检查 Session 接口；两次查询间接口若恢复则归为可重试 RequestRejected，不把竞态误报为成功。
+// 接口错误归类流程：先检查当前 World，再用同一 World 查询 OSS，最后检查 Session 接口；两次查询间接口若恢复则归为可重
+// 试 RequestRejected，不把竞态误报为成功。
 ECatOnlineError UCatOnlineSubsystem::GetSessionInterfaceError() const
 {
 	const UWorld* World = GetWorld();
@@ -111,6 +117,9 @@ ECatOnlineError UCatOnlineSubsystem::GetSessionInterfaceError() const
 FCatOnlineResult UCatOnlineSubsystem::BeginOperation(const ECatOnlineOperation Operation,
 	const ECatOnlineSessionState PendingSessionState, const FGuid CorrelationRequestId)
 {
+	// 现有六个调用点都在自己的入口先用同一条件拒过一次，所以这道门目前走不到。
+	// 它仍然保留：并发受理是这个状态机唯一不能出错的前提，而"每个调用点都记得先查"是会随新入口失效的约定，
+	// 真出现漏检时，这里返回拒绝远好于让 epoch、ActiveRequestId 和 pending 状态被第二个操作静默覆盖。
 	if (ActiveOperation != ECatOnlineOperation::None)
 	{
 		return RejectRequest(ECatOnlineError::CommandAlreadyPending);
@@ -138,7 +147,8 @@ FCatOnlineResult UCatOnlineSubsystem::BeginOperation(const ECatOnlineOperation O
 	return Result;
 }
 
-// 远端 Host exit 流程：先以 CommandAlreadyPending 拒绝任何活动操作且不覆盖原 RequestId/epoch，再验证 Lake Client 与服务器关联键；受理后不提交主动离局标记，复用 Leave 状态机并保存 Destroy 成功后的 ACK 键。
+// 远端 Host exit 流程：先以 CommandAlreadyPending 拒绝任何活动操作且不覆盖原 RequestId/epoch，再验证 Lake Client 与服
+// 务器关联键；受理后不提交主动离局标记，复用 Leave 状态机并保存 Destroy 成功后的 ACK 键。
 FCatOnlineResult UCatOnlineSubsystem::RequestRemoteHostExit(const FGuid HostExitRequestId)
 {
 	if (ActiveOperation != ECatOnlineOperation::None)
@@ -182,8 +192,10 @@ FCatOnlineResult UCatOnlineSubsystem::RejectRequest(const ECatOnlineError Error)
 	return Result;
 }
 
-// Create 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再依次检查前台、SessionAccess 策略、World-aware Session 接口和兼容合同；绑定携带 epoch 的回调后提交平台请求。
-// UE 5.8 的 OSS 允许在 API 返回前同步触发完成委托，因此返回后必须同时复核 operation、epoch 与句柄；只有回调尚未消费本次提交时，false 才发布一次 RequestRejected。
+// Create 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再依次检查前台、SessionAccess、1～8 人容量策
+// 略、World-aware Session 接口和兼容合同；绑定携带 epoch 的回调后提交平台请求。
+// UE 5.8 的 OSS 允许在 API 返回前同步触发完成委托，因此返回后必须同时复核 operation、epoch 与句柄；只有回调尚未消费本
+// 次提交时，false 才发布一次 RequestRejected。
 FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 {
 	if (ActiveOperation != ECatOnlineOperation::None)
@@ -196,6 +208,11 @@ FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 	}
 	const UCatOnlineSettings* Settings = GetDefault<UCatOnlineSettings>();
 	if (Settings->SessionAccess == ECatSessionAccessPolicy::Undecided)
+	{
+		return RejectRequest(ECatOnlineError::PolicyUndecided);
+	}
+	int32 PublicConnectionLimit = 0;
+	if (!Settings->TryGetSessionPublicConnectionLimit(PublicConnectionLimit))
 	{
 		return RejectRequest(ECatOnlineError::PolicyUndecided);
 	}
@@ -224,7 +241,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 	}
 
 	FOnlineSessionSettings SessionSettings;
-	SessionSettings.NumPublicConnections = 8;
+	SessionSettings.NumPublicConnections = PublicConnectionLimit;
 	SessionSettings.NumPrivateConnections = 0;
 	SessionSettings.bAllowJoinInProgress = true;
 	SessionSettings.bAllowInvites = true;
@@ -234,15 +251,14 @@ FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 	SessionSettings.bAllowJoinViaPresence = Settings->SessionAccess == ECatSessionAccessPolicy::Public;
 	SessionSettings.bAllowJoinViaPresenceFriendsOnly = Settings->SessionAccess == ECatSessionAccessPolicy::FriendsOnly;
 	SessionSettings.Set(CatOnlineNames::MapSetting, CatOnlineNames::Lake, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
-	if (!HasCompatibleSessionSettings(SessionSettings))
+	if (const ECatOnlineError TimeoutError = ArmOperationTimeout(); TimeoutError != ECatOnlineError::None)
 	{
 		SessionState = ECatOnlineSessionState::NoSession;
-		FinishOperationFailure(ECatOnlineError::SessionCompatibilityMismatch);
+		FinishOperationFailure(TimeoutError);
 		Result.bAccepted = false;
 		Result.Error = LastError;
 		return Result;
 	}
-
 	const uint64 SubmittedEpoch = OperationEpoch;
 	CreateSessionHandle = OperationSessionInterface->AddOnCreateSessionCompleteDelegate_Handle(
 		FOnCreateSessionCompleteDelegate::CreateUObject(this, &ThisClass::HandleCreateSessionComplete, SubmittedEpoch));
@@ -260,7 +276,8 @@ FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 	return Result;
 }
 
-// Find 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再检查前台与公开搜索策略；受理新 Find 前整代清除旧搜索句柄，使 pending 快照也不暴露上一代结果。
+// Find 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再检查前台与公开搜索策略；受理新 Find 前整代清
+// 除旧搜索句柄，使 pending 快照也不暴露上一代结果。
 // 提交后按 operation、epoch 与句柄识别同步完成；只有 OSS 返回 false 且回调仍未消费本代时才结为 RequestRejected。
 FCatOnlineResult UCatOnlineSubsystem::RequestFindSessions()
 {
@@ -299,6 +316,14 @@ FCatOnlineResult UCatOnlineSubsystem::RequestFindSessions()
 		return Result;
 	}
 
+	if (const ECatOnlineError TimeoutError = ArmOperationTimeout(); TimeoutError != ECatOnlineError::None)
+	{
+		SessionState = ECatOnlineSessionState::NoSession;
+		FinishOperationFailure(TimeoutError);
+		Result.bAccepted = false;
+		Result.Error = LastError;
+		return Result;
+	}
 	ActiveSearch = MakeShared<FOnlineSessionSearch>();
 	ActiveSearch->MaxSearchResults = 50;
 	ActiveSearch->bIsLanQuery = false;
@@ -336,7 +361,8 @@ FCatOnlineResult UCatOnlineSubsystem::RequestJoinSession(const FCatSessionSearch
 	return RequestJoinInternal(SearchResultCopy);
 }
 
-// 邀请 Join 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再从私有映射解析 opaque 邀请；异步 Join 成败未知时保持本代句柄，只有成功回调或统一清理才使其失效。
+// 邀请 Join 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再从私有映射解析 opaque 邀请；异步 Join 成
+// 败未知时保持本代句柄，只有成功回调或统一清理才使其失效。
 FCatOnlineResult UCatOnlineSubsystem::RequestAcceptInvite(const FCatSessionInviteHandle InviteHandle)
 {
 	if (ActiveOperation != ECatOnlineOperation::None)
@@ -387,6 +413,14 @@ FCatOnlineResult UCatOnlineSubsystem::RequestJoinInternal(const FOnlineSessionSe
 		Result.Error = LastError;
 		return Result;
 	}
+	if (const ECatOnlineError TimeoutError = ArmOperationTimeout(); TimeoutError != ECatOnlineError::None)
+	{
+		SessionState = ECatOnlineSessionState::NoSession;
+		FinishOperationFailure(TimeoutError);
+		Result.bAccepted = false;
+		Result.Error = LastError;
+		return Result;
+	}
 	const uint64 SubmittedEpoch = OperationEpoch;
 	JoinSessionHandle = OperationSessionInterface->AddOnJoinSessionCompleteDelegate_Handle(
 		FOnJoinSessionCompleteDelegate::CreateUObject(this, &ThisClass::HandleJoinSessionComplete, SubmittedEpoch));
@@ -404,7 +438,8 @@ FCatOnlineResult UCatOnlineSubsystem::RequestJoinInternal(const FOnlineSessionSe
 	return Result;
 }
 
-// Leave 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再读取已确认角色而不从 NetMode 猜 Host/Client；Client 主动离局策略未裁时明确 gate，Host exit 不借该策略改变收口。
+// Leave 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再读取已确认角色而不从 NetMode 猜
+// Host/Client；Client 主动离局策略未裁时明确 gate，Host exit 不借该策略改变收口。
 FCatOnlineResult UCatOnlineSubsystem::RequestLeave()
 {
 	if (ActiveOperation != ECatOnlineOperation::None)
@@ -445,7 +480,8 @@ FCatOnlineResult UCatOnlineSubsystem::RequestLeave()
 	return Result;
 }
 
-// Host Run 收口流程：先取得当前 authority GameMode 并在调用前绑定完成委托，再提交携带 Online RequestId/epoch 的 teardown；同步广播可能重入本子系统，因此返回后只在操作仍属于本代时解释直接结果。
+// Host Run 收口流程：先取得当前 authority GameMode 并在调用前绑定完成委托，再提交携带 Online RequestId/epoch 的
+// teardown；同步广播可能重入本子系统，因此返回后只在操作仍属于本代时解释直接结果。
 bool UCatOnlineSubsystem::BeginHostRunTeardown()
 {
 	UWorld* World = GetWorld();
@@ -513,6 +549,84 @@ FCatOnlineSnapshot UCatOnlineSubsystem::GetSnapshot() const
 	return Snapshot;
 }
 
+// 成员登记流程：先拒绝空身份；声明房主时要求本局还没有别的房主，出现第二个房主声明说明上游身份接缝出错，拒绝比覆盖安全。
+// 随后按首次出现的先后追加到成员数组，数组下标就是入局顺序；重连或重复登记只确认已在册，不会把玩家重排到队尾。
+bool UCatOnlineSubsystem::RegisterSessionMember(const FString& StableNetId, const bool bIsHost)
+{
+	if (StableNetId.IsEmpty())
+	{
+		return false;
+	}
+	if (bIsHost && !HostStableNetId.IsEmpty() && HostStableNetId != StableNetId)
+	{
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_member_register_rejected Reason=HostAlreadyRegistered Members=%d"),
+			SessionMemberStableNetIds.Num());
+		return false;
+	}
+	if (bIsHost)
+	{
+		HostStableNetId = StableNetId;
+	}
+	if (SessionMemberStableNetIds.Contains(StableNetId))
+	{
+		return true;
+	}
+	SessionMemberStableNetIds.Add(StableNetId);
+	UE_LOG(LogCatOnline, Log, TEXT("Event=online_member_registered IsHost=%d Members=%d"),
+		bIsHost ? 1 : 0, SessionMemberStableNetIds.Num());
+	return true;
+}
+
+// 成员注销流程：不在册时直接返回 false；在册则从成员关系里移除。
+// 被注销者是房主时只清空房主身份：飞书 rev78 要求房主离开自动移交给最早加入者，但本地工作计划明写不实现 Host
+// Migration，本轮不替这条冲突做裁决，因此不选新房主。
+bool UCatOnlineSubsystem::UnregisterSessionMember(const FString& StableNetId)
+{
+	if (SessionMemberStableNetIds.Remove(StableNetId) == 0)
+	{
+		return false;
+	}
+	if (HostStableNetId == StableNetId)
+	{
+		HostStableNetId.Reset();
+	}
+	UE_LOG(LogCatOnline, Log, TEXT("Event=online_member_unregistered Members=%d HasHost=%d"),
+		SessionMemberStableNetIds.Num(), HostStableNetId.IsEmpty() ? 0 : 1);
+	return true;
+}
+
+// 踢人收口流程：先要求本进程确实是承载 Listen Server 的房主，再要求请求者就是已登记房主、目标非空且不是房主本人，最后要求目标确实在册。
+// 校验全过才把目标从成员关系里移除；本方法只负责 Online 侧的成员事实，准入记录释放、连接断开和"不写重连 TTL"由服务器 GameMode 在拿到 None 之后完成。
+ECatOnlineError UCatOnlineSubsystem::CommitHostKick(const FString& RequesterStableNetId, const FString& TargetStableNetId)
+{
+	if (SessionRole != ECatOnlineSessionRole::Host || HostStableNetId.IsEmpty()
+		|| RequesterStableNetId != HostStableNetId
+		|| TargetStableNetId.IsEmpty() || TargetStableNetId == HostStableNetId)
+	{
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_host_kick_rejected Role=%s HasHost=%d Members=%d"),
+			*UEnum::GetValueAsString(SessionRole), HostStableNetId.IsEmpty() ? 0 : 1, SessionMemberStableNetIds.Num());
+		return ECatOnlineError::InvalidState;
+	}
+	const int32 TargetIndex = SessionMemberStableNetIds.IndexOfByKey(TargetStableNetId);
+	if (TargetIndex == INDEX_NONE)
+	{
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_host_kick_rejected Reason=TargetNotMember Members=%d"),
+			SessionMemberStableNetIds.Num());
+		return ECatOnlineError::InvalidState;
+	}
+	SessionMemberStableNetIds.RemoveAt(TargetIndex);
+	UE_LOG(LogCatOnline, Log, TEXT("Event=online_host_kick_committed Members=%d"),
+		SessionMemberStableNetIds.Num());
+	return ECatOnlineError::None;
+}
+
+// 成员关系释放流程：本地 NamedSession 已经不存在时清空成员数组与房主身份，使下一局从零开始登记；重复调用无副作用。
+void UCatOnlineSubsystem::ClearSessionMembership()
+{
+	SessionMemberStableNetIds.Reset();
+	HostStableNetId.Reset();
+}
+
 // Destroy 提交流程：补偿开始先废止所有大厅候选；再在当前 World 精确取得 Session 接口，NamedSession 已不存在时把清理视为幂等完成。
 // 平台调用返回后复核提交时的 operation、epoch 与 Destroy 句柄，避免同步完成已经旅行或结案后再次广播 queued/失败。
 bool UCatOnlineSubsystem::BeginDestroySession(const ECatOnlineError FailureAfterDestroy)
@@ -539,6 +653,7 @@ bool UCatOnlineSubsystem::BeginDestroySession(const ECatOnlineError FailureAfter
 	{
 		SessionState = ECatOnlineSessionState::NoSession;
 		SessionRole = ECatOnlineSessionRole::None;
+		ClearSessionMembership();
 		if (FailureAfterDestroy != ECatOnlineError::None)
 		{
 			FinishOperationFailure(FailureAfterDestroy);
@@ -553,6 +668,14 @@ bool UCatOnlineSubsystem::BeginDestroySession(const ECatOnlineError FailureAfter
 	}
 
 	SessionState = ECatOnlineSessionState::Destroying;
+	if (const ECatOnlineError TimeoutError = ArmOperationTimeout(); TimeoutError != ECatOnlineError::None)
+	{
+		// 无界 Destroy 会让本地 NamedSession 事实永远停在 Destroying，因此宁可保留 Error 让玩家看到收口失败；
+		// 这条路径同时吞掉 FailureAfterDestroy 携带的原始失败，日志里的 online_operation_timeout_unavailable 是它唯一的痕迹。
+		SessionState = ECatOnlineSessionState::Error;
+		FinishOperationFailure(TimeoutError);
+		return false;
+	}
 	const ECatOnlineOperation SubmittedOperation = ActiveOperation;
 	const uint64 SubmittedEpoch = OperationEpoch;
 	DestroySessionHandle = OperationSessionInterface->AddOnDestroySessionCompleteDelegate_Handle(
@@ -572,6 +695,93 @@ bool UCatOnlineSubsystem::BeginDestroySession(const ECatOnlineError FailureAfter
 		BroadcastSnapshot(TEXT("online_destroy_queued"));
 	}
 	return bRequestQueued || !bStillAwaitingCompletion;
+}
+
+// 超时武装流程：先要求配置给出有限正秒数，未裁时返回 PolicyUndecided，让调用方拒绝一次注定无界的等待；再要求当前 GameInstance 有 World 承载计时器。
+// 计时器携带武装时的 epoch，因此同一 World 上的旧计时器即使因故留存，也会在回调里被 epoch 校验丢弃。
+ECatOnlineError UCatOnlineSubsystem::ArmOperationTimeout()
+{
+	double TimeoutSeconds = 0.0;
+	if (!GetDefault<UCatOnlineSettings>()->TryGetSessionOperationTimeout(TimeoutSeconds))
+	{
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_operation_timeout_unavailable RequestId=%s Epoch=%llu Operation=%s Reason=PolicyUndecided"),
+			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, *UEnum::GetValueAsString(ActiveOperation));
+		return ECatOnlineError::PolicyUndecided;
+	}
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_operation_timeout_unavailable RequestId=%s Epoch=%llu Operation=%s Reason=WorldUnavailable"),
+			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, *UEnum::GetValueAsString(ActiveOperation));
+		return ECatOnlineError::WorldUnavailable;
+	}
+	ClearOperationTimeout();
+	World->GetTimerManager().SetTimer(OperationTimeoutHandle,
+		FTimerDelegate::CreateUObject(this, &ThisClass::HandleOperationTimeout, OperationEpoch),
+		static_cast<float>(TimeoutSeconds), false);
+	return ECatOnlineError::None;
+}
+
+// 超时清理流程：只在当前 World 仍存在且句柄有效时真正清计时器；随后无条件作废句柄，使重复清理和"计时器已触发"两种情况都安全。
+// 有 GameInstance 时 UWorld::GetTimerManager 转发到 GameInstance 的计时器管理器，所以计时器跨地图旅行仍然存活，
+// 旅行后在新 World 上清理命中的还是同一个管理器和同一个句柄。只有拿不到 World 时这里会放掉计时器，
+// 那种迟到触发靠 HandleOperationTimeout 的 epoch 校验丢弃。
+void UCatOnlineSubsystem::ClearOperationTimeout()
+{
+	if (UWorld* World = GetWorld(); World && OperationTimeoutHandle.IsValid())
+	{
+		World->GetTimerManager().ClearTimer(OperationTimeoutHandle);
+	}
+	OperationTimeoutHandle.Invalidate();
+}
+
+// 超时收口流程：先丢弃不属于当前代际或已无活动操作的迟到触发；随后按超时时正在等待的 SessionState 选择补偿，并统一以 OperationTimedOut 结案。
+// 这里先解绑本代平台回调，让平台稍后真的回来时因句柄失效被丢弃；超时不代表平台一定失败，所以 Create/Join 仍要走一次
+// Destroy，把可能已经建成的本地 NamedSession 清掉。
+void UCatOnlineSubsystem::HandleOperationTimeout(const uint64 SubmittedEpoch)
+{
+	if (SubmittedEpoch != OperationEpoch || ActiveOperation == ECatOnlineOperation::None)
+	{
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_timeout_ignored Epoch=%llu CurrentEpoch=%llu Operation=%s"),
+			SubmittedEpoch, OperationEpoch, *UEnum::GetValueAsString(ActiveOperation));
+		return;
+	}
+	// 计时器是一次性的，触发后句柄不再指向任何待执行回调，这里同步作废它以免后续清理误认为还有窗口。
+	OperationTimeoutHandle.Invalidate();
+	const ECatOnlineSessionState AwaitedState = SessionState;
+	UE_LOG(LogCatOnline, Error, TEXT("Event=online_operation_timeout RequestId=%s Epoch=%llu Operation=%s Awaited=%s"),
+		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
+		*UEnum::GetValueAsString(ActiveOperation), *UEnum::GetValueAsString(AwaitedState));
+	ClearOperationDelegates();
+
+	switch (AwaitedState)
+	{
+	case ECatOnlineSessionState::Creating:
+	case ECatOnlineSessionState::Joining:
+		// 解绑同时释放了操作接口引用，这里按当前 World 重新取一次；取得到就复用 Destroy 补偿链，取不到说明本地根本没有可清理的平台对象。
+		OperationSessionInterface = GetWorldSessionInterface();
+		if (OperationSessionInterface.IsValid())
+		{
+			BeginDestroySession(ECatOnlineError::OperationTimedOut);
+			return;
+		}
+		SessionState = ECatOnlineSessionState::NoSession;
+		FinishOperationFailure(ECatOnlineError::OperationTimedOut);
+		return;
+	case ECatOnlineSessionState::Searching:
+		ActiveSearch.Reset();
+		SessionState = ECatOnlineSessionState::NoSession;
+		FinishOperationFailure(ECatOnlineError::OperationTimedOut);
+		return;
+	case ECatOnlineSessionState::Destroying:
+		// Destroy 没等到回调时本地 NamedSession 的真实状态不可知，因此保留 Error 让玩家重试或回前台，不再触发第二次 Destroy，也不据此发起回前台旅行。
+		SessionState = ECatOnlineSessionState::Error;
+		FinishOperationFailure(ECatOnlineError::OperationTimedOut);
+		return;
+	default:
+		FinishOperationFailure(ECatOnlineError::OperationTimedOut);
+		return;
+	}
 }
 
 // Host 旅行流程：Create 已成功才校验 authority 并提交 Lake?listen；同步受理后只写 World/Transport 目标，最终成功仍由 PostLoadMap 确认。
@@ -675,6 +885,8 @@ void UCatOnlineSubsystem::HandleCreateSessionComplete(const FName SessionName, c
 	}
 	// 句柄在回调入口立即失效，既阻止同 epoch 重复完成，也让尚未返回的 CreateSession 外层识别本次提交已被消费。
 	CreateSessionHandle.Reset();
+	// 平台回调已经到达，等待窗口到此为止；后续的 Listen 旅行由 PostLoadMap/TravelFailure 负责，不由本计时器兜底。
+	ClearOperationTimeout();
 	if (!bWasSuccessful)
 	{
 		SessionState = ECatOnlineSessionState::NoSession;
@@ -706,6 +918,8 @@ void UCatOnlineSubsystem::HandleFindSessionsComplete(const bool bWasSuccessful, 
 	}
 	// 同步完成时先作废句柄，FindSessions 返回后的外层就不会再用同步 false 覆盖本回调的具体结果。
 	FindSessionsHandle.Reset();
+	// 平台回调已经到达，等待窗口到此为止。
+	ClearOperationTimeout();
 	SearchResultsByHandle.Reset();
 	SearchSummaries.Reset();
 	if (!bWasSuccessful || !ActiveSearch.IsValid())
@@ -736,7 +950,8 @@ void UCatOnlineSubsystem::HandleFindSessionsComplete(const bool bWasSuccessful, 
 	FinishOperationSuccess();
 }
 
-// Join 回调流程：只消费当前 Join epoch；成功后先确立 Client Session 事实，再解析连接地址并提交唯一 ClientTravel，解析/控制器失败均先 Destroy 本地 NamedSession。
+// Join 回调流程：只消费当前 Join epoch；成功后先确立 Client Session 事实，再解析连接地址并提交唯一 ClientTravel，解析
+// /控制器失败均先 Destroy 本地 NamedSession。
 void UCatOnlineSubsystem::HandleJoinSessionComplete(const FName SessionName, const EOnJoinSessionCompleteResult::Type Result, const uint64 CallbackEpoch)
 {
 	if (SessionName != CatOnlineNames::GameSession || ActiveOperation != ECatOnlineOperation::Join
@@ -751,6 +966,8 @@ void UCatOnlineSubsystem::HandleJoinSessionComplete(const FName SessionName, con
 	}
 	// 同步完成先消费句柄；异步失败仍保留当前搜索/邀请代际供明确重试，成功则在旅行前统一废止全部候选。
 	JoinSessionHandle.Reset();
+	// 平台回调已经到达，等待窗口到此为止；后续的 ClientTravel 由 PostLoadMap/TravelFailure 负责，不由本计时器兜底。
+	ClearOperationTimeout();
 	if (Result != EOnJoinSessionCompleteResult::Success)
 	{
 		SessionState = ECatOnlineSessionState::NoSession;
@@ -789,6 +1006,8 @@ void UCatOnlineSubsystem::HandleDestroySessionComplete(const FName SessionName, 
 	}
 	// DestroySession 也可能同步回调；先作废句柄，外层只能观察已推进的旅行或终态，不能再广播 queued。
 	DestroySessionHandle.Reset();
+	// 平台回调已经到达，等待窗口到此为止；后续的回前台旅行由 PostLoadMap/TravelFailure 负责，不由本计时器兜底。
+	ClearOperationTimeout();
 	if (!bWasSuccessful)
 	{
 		SessionState = ECatOnlineSessionState::Error;
@@ -798,6 +1017,7 @@ void UCatOnlineSubsystem::HandleDestroySessionComplete(const FName SessionName, 
 
 	SessionState = ECatOnlineSessionState::NoSession;
 	SessionRole = ECatOnlineSessionRole::None;
+	ClearSessionMembership();
 	if (DeferredFailureAfterDestroy != ECatOnlineError::None)
 	{
 		const ECatOnlineError Failure = DeferredFailureAfterDestroy;
@@ -818,7 +1038,8 @@ void UCatOnlineSubsystem::HandleDestroySessionComplete(const FName SessionName, 
 	}
 }
 
-// Run teardown 完成流程：先核对当前仍是同一 Host Leave 及相同 RequestId/epoch，再解绑精确 GameMode；Ready 进入唯一 Destroy 链，Failed 以 Online 错误结案，Pending 通知仅保留等待。
+// Run teardown 完成流程：先核对当前仍是同一 Host Leave 及相同 RequestId/epoch，再解绑精确 GameMode；Ready 进入唯一
+// Destroy 链，Failed 以 Online 错误结案，Pending 通知仅保留等待。
 void UCatOnlineSubsystem::HandleRunTeardownCompleted(const FCatRunTeardownResult& Result)
 {
 	if (ActiveOperation != ECatOnlineOperation::Leave
@@ -844,7 +1065,8 @@ void UCatOnlineSubsystem::HandleRunTeardownCompleted(const FCatRunTeardownResult
 	BeginDestroySession(ECatOnlineError::None);
 }
 
-// 邀请接受流程：平台失败、无效或不兼容结果只更新结构化错误；有效结果生成 opaque 句柄，原始 UserId 不写日志也不进入 Snapshot，等待 UI 显式汇入统一 Join。
+// 邀请接受流程：平台失败、无效或不兼容结果只更新结构化错误；有效结果生成 opaque 句柄，原始 UserId 不写日志也不进入
+// Snapshot，等待 UI 显式汇入统一 Join。
 void UCatOnlineSubsystem::HandleSessionUserInviteAccepted(const bool bWasSuccessful, const int32 ControllerId, FUniqueNetIdPtr UserId, const FOnlineSessionSearchResult& InviteResult)
 {
 	(void)UserId;
@@ -870,7 +1092,9 @@ void UCatOnlineSubsystem::HandleSessionUserInviteAccepted(const bool bWasSuccess
 	BroadcastSnapshot(TEXT("online_invite_accepted"));
 }
 
-// 地图完成流程：先隔离空 World 和其他 GameInstance，再重绑该 World 的邀请接口；来源包回载时保留 pending 等 TravelFailure，意外包进入补偿。命中 ExpectedPackage 后先确认独立 World 事实，再按 Lake→Connected、Frontend→Idle 收敛 Transport，最后由原成功/失败路径结算 ActiveOperation；Session 事实始终只由平台回调维护。
+// 地图完成流程：先隔离空 World 和其他 GameInstance，再重绑该 World 的邀请接口；来源包回载时保留 pending 等
+// TravelFailure，意外包进入补偿。命中 ExpectedPackage 后先确认独立 World 事实，再按 Lake→Connected、Frontend→Idle 收
+// 敛 Transport，最后由原成功/失败路径结算 ActiveOperation；Session 事实始终只由平台回调维护。
 void UCatOnlineSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 {
 	if (!LoadedWorld || LoadedWorld->GetGameInstance() != GetGameInstance())
@@ -931,7 +1155,8 @@ void UCatOnlineSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 	BroadcastSnapshot(TEXT("online_world_observed"));
 }
 
-// 旅行失败流程：先按 GameInstance 过滤并记录来源 World；Create/Join 的已建 Session 必须先 Destroy 补偿，Leave 已完成的平台清理则直接发布失败且不触发第二次旅行。
+// 旅行失败流程：先按 GameInstance 过滤并记录来源 World；Create/Join 的已建 Session 必须先 Destroy 补偿，Leave 已完成
+// 的平台清理则直接发布失败且不触发第二次旅行。
 void UCatOnlineSubsystem::HandleTravelFailure(UWorld* FailureWorld, const ETravelFailure::Type FailureType, const FString& Reason)
 {
 	if (!FailureWorld || FailureWorld->GetGameInstance() != GetGameInstance())
@@ -943,7 +1168,8 @@ void UCatOnlineSubsystem::HandleTravelFailure(UWorld* FailureWorld, const ETrave
 	ExpectedPackage.Reset();
 	TransportState = ECatOnlineTransportState::Failed;
 	UE_LOG(LogCatOnline, Error, TEXT("Event=online_travel_failure RequestId=%s Epoch=%llu Operation=%s Type=%s Reason=%s"),
-		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, *UEnum::GetValueAsString(ActiveOperation), ETravelFailure::ToString(FailureType), *Reason);
+		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
+		*UEnum::GetValueAsString(ActiveOperation), ETravelFailure::ToString(FailureType), *Reason);
 
 	if ((ActiveOperation == ECatOnlineOperation::Create || ActiveOperation == ECatOnlineOperation::Join)
 		&& SessionRole != ECatOnlineSessionRole::None)
@@ -970,8 +1196,10 @@ void UCatOnlineSubsystem::HandleTravelFailure(UWorld* FailureWorld, const ETrave
 	}
 }
 
-// 网络失败流程：UE 的全局事件会广播任意 NetDriver，先把来源收窄到本 GameInstance 的当前 GameNetDriver 或 PendingNetDriver，再与 TravelFailure 独立记录和补偿。
-// 已建立连接的 Client 与 Listen Host 都落在 GameNetDriver；Join 握手失败则由 PendingNetDriver 广播且 FailureWorld 可能为空，所以两条路径必须分别用注册表和 WorldContext 验证，Beacon 等驱动一律忽略。
+// 网络失败流程：UE 的全局事件会广播任意 NetDriver，先把来源收窄到本 GameInstance 的当前 GameNetDriver 或
+// PendingNetDriver，再与 TravelFailure 独立记录和补偿。
+// 已建立连接的 Client 与 Listen Host 都落在 GameNetDriver；Join 握手失败则由 PendingNetDriver 广播且 FailureWorld 可
+// 能为空，所以两条路径必须分别用注册表和 WorldContext 验证，Beacon 等驱动一律忽略。
 void UCatOnlineSubsystem::HandleNetworkFailure(UWorld* FailureWorld, UNetDriver* NetDriver, const ENetworkFailure::Type FailureType, const FString& Reason)
 {
 	if (!GEngine || !NetDriver)
@@ -1071,6 +1299,7 @@ void UCatOnlineSubsystem::FinishOperationSuccess()
 {
 	ClearRunTeardownDelegate();
 	ClearOperationDelegates();
+	ClearOperationTimeout();
 	ActiveSearch.Reset();
 	ExpectedPackage.Reset();
 	ActiveOperation = ECatOnlineOperation::None;
@@ -1088,6 +1317,7 @@ void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 {
 	ClearRunTeardownDelegate();
 	ClearOperationDelegates();
+	ClearOperationTimeout();
 	ActiveSearch.Reset();
 	ExpectedPackage.Reset();
 	ActiveOperation = ECatOnlineOperation::None;
@@ -1188,3 +1418,63 @@ bool UCatOnlineSubsystem::HasCompatibleSessionSettings(const FOnlineSessionSetti
 {
 	return Settings.bUsesPresence == Settings.bUseLobbiesIfAvailable;
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+// 自动化种入流程：先清掉可能跨测试残留的平台委托、超时计时器、成员关系和搜索/邀请候选，再写入四类事实、操作角色、预期包名和新 RequestId/epoch。
+// 它不调用 OSS、不加载地图、不生成 NetDriver；测试只能用它证明 Online 状态机的收口语义，不能冒充真实 Steam 或多进程旅行证据。
+void UCatOnlineSubsystem::SeedTravelClosureStateForAutomation(const ECatOnlineOperation InActiveOperation,
+	const ECatOnlineSessionState InSessionState, const ECatOnlineSessionRole InSessionRole,
+	const ECatOnlineSessionRole InOperationRole, const ECatOnlineWorldState InWorldState,
+	const ECatOnlineTransportState InTransportState, const FString& InExpectedPackage)
+{
+	ClearRunTeardownDelegate();
+	ClearOperationDelegates();
+	ClearOperationTimeout();
+	ClearSessionMembership();
+	ActiveSearch.Reset();
+	SearchResultsByHandle.Reset();
+	SearchSummaries.Reset();
+	InvitesByHandle.Reset();
+	InviteSummaries.Reset();
+	PendingHostExitAckRequestId.Invalidate();
+	DeferredFailureAfterDestroy = ECatOnlineError::None;
+	DeferredFailureAfterTravel = ECatOnlineError::None;
+	ActiveRequestId = FGuid::NewGuid();
+	++OperationEpoch;
+	ActiveOperation = InActiveOperation;
+	SessionState = InSessionState;
+	SessionRole = InSessionRole;
+	OperationRole = InOperationRole;
+	WorldState = InWorldState;
+	TransportState = InTransportState;
+	ExpectedPackage = InExpectedPackage;
+	LastError = ECatOnlineError::None;
+	BroadcastSnapshot(TEXT("online_automation_seeded"));
+}
+
+// 待回调种入流程：先清掉可能跨测试残留的委托、计时器和大厅候选，再写入"平台请求已提交"的操作与会话事实，最后按真实配置武装同一个有界计时器。
+// 它不调用 OSS，也不写 World、SessionRole 或成员关系；测试只能用它证明超时窗口确实被武装并按等待中的调用选择补偿，不能冒充真实平台请求。
+bool UCatOnlineSubsystem::SeedPendingPlatformOperationForAutomation(const ECatOnlineOperation InOperation,
+	const ECatOnlineSessionState InPendingSessionState)
+{
+	ClearRunTeardownDelegate();
+	ClearOperationDelegates();
+	ClearOperationTimeout();
+	ActiveSearch.Reset();
+	SearchResultsByHandle.Reset();
+	SearchSummaries.Reset();
+	InvitesByHandle.Reset();
+	InviteSummaries.Reset();
+	PendingHostExitAckRequestId.Invalidate();
+	DeferredFailureAfterDestroy = ECatOnlineError::None;
+	DeferredFailureAfterTravel = ECatOnlineError::None;
+	ActiveRequestId = FGuid::NewGuid();
+	++OperationEpoch;
+	ActiveOperation = InOperation;
+	SessionState = InPendingSessionState;
+	LastError = ECatOnlineError::None;
+	const ECatOnlineError TimeoutError = ArmOperationTimeout();
+	BroadcastSnapshot(TEXT("online_automation_pending_seeded"));
+	return TimeoutError == ECatOnlineError::None;
+}
+#endif

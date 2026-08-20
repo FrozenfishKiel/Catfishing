@@ -115,7 +115,8 @@ void UCatTravelWidget::HandleFindClicked()
 	OnActionRequested.Broadcast(ECatOnlineUIAction::Find, FGuid());
 }
 
-// Join 点击流程：只在保存的搜索句柄含有效 GUID 时广播；并发操作 gate 与私有映射是否仍含该句柄由 Online 子系统复核，View 不把 GUID 有效性当作平台结果仍新鲜。
+// Join 点击流程：只在保存的搜索句柄含有效 GUID 时广播；并发操作 gate 与私有映射是否仍含该句柄由 Online 子系统复核，
+// View 不把 GUID 有效性当作平台结果仍新鲜。
 void UCatTravelWidget::HandleJoinClicked()
 {
 	if (FirstSearchHandle.IsValid())

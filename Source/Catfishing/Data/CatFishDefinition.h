@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
-#include "Framework/Core/CatRunContracts.h"
+#include "Environment/CatWaterTypes.h"
 #include "CatFishDefinition.generated.h"
 
 /** 鱼体型只表达协作档位，不携带任何力量、体力或几何公式。 */
@@ -36,8 +36,11 @@ class CATFISHING_API UCatFishDefinition : public UPrimaryDataAsset
 	GENERATED_BODY()
 
 public:
-	/** 检查该资产是否足以进入阶段 E 事务；任一必需字段 Unset 都返回 false。 */
+	/** 检查该资产是否足以进入钓鱼/捕获目录；任一捕获必需字段 Unset 都返回 false，食用数值另由 HasRuntimeConsumptionEffect 裁决。 */
 	bool IsRuntimeDefinitionReady() const;
+
+	/** 判断该鱼是否已经拥有完整食用效果；Fishing/Items 只读捕获 readiness，吃鱼命令必须单独读取这个 gate。 */
+	bool HasRuntimeConsumptionEffect() const;
 
 	/** 鱼种稳定 ID；FishInstance、图鉴候选和日志只引用该值，不把资产对象当永久身份。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
@@ -47,33 +50,28 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing")
 	ECatFishBodyClass BodyClass = ECatFishBodyClass::Unknown;
 
-	/** 献祭提交后贡献的额度值；0 表示 Unset，客户端命令不能覆盖它。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Sacrifice", meta = (ClampMin = "0"))
+	/**
+	 * 这条鱼被献祭后对「世界进度」的增减量，而不是当日额度。额度已经拆成"献祭了几条鱼"这个独立计数，
+	 * 与本字段互不换算：一条 -1 的臭臭鱼照样算一条达标鱼，只是把世界进度往回拉一格。
+	 * 因此这里允许负值，也不设 ClampMin；0 仍然保留"这一行没填"的含义，readiness 会据此 fail-closed。
+	 * 由鱼表格「供奉」列冻结，客户端命令不能覆盖它。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Sacrifice")
 	int32 SacrificeContribution = 0;
 
 	/** 捕获后可选成像事件的正式语义 ID；None 只跳过 CapturePlan，不阻止实物鱼与 FishRecorded 提交。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Imprint")
 	FName CaptureImprintEventId = NAME_None;
 
-	/** 稀有度轴的稳定内容 ID；它只控制出现/收集权重，与 BodyClass 协作轴完全独立。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Distribution")
-	FName RarityTierId = NAME_None;
-
-	/** 该鱼可出现的 WaterRegion ID；钓点不是机制字段，空数组表示未配置。 */
+	/** 该鱼能出现在哪些 WaterRegion，取自鱼表格「出没地点」列；空数组表示该行地点未填，鱼不能进入任何池子。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Distribution")
 	TArray<FName> RegionIds;
 
-	/** 该鱼可出现的局内白天时段；夜晚不会进入选择器。 */
+	/** 该鱼被哪几味窝料吸引，取自鱼表格「喜爱窝料」列；一条鱼可以同时吃两味（银月鳟为香与酵），所以是集合而不是单值。
+	 *  本轮只做落盘与校验；按三轴占比决定鱼群构成的选鱼公式出自飞书「钓鱼规则」rev212 第二章的窝料气味占比模型
+	 *  （池内三味占比即鱼群种族占比），该模型的消费端尚未开工，目录侧不预先实现。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Distribution")
-	TArray<ECatEnvironmentTimeOfDay> TimeOfDay;
-
-	/** 该鱼可出现的 Environment 天气；天气定义权仍在 Environment。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Distribution")
-	TArray<ECatEnvironmentWeather> Weather;
-
-	/** 候选选择的正权重；它由内容数据表达稀有度，不在代码硬编码档位概率。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Distribution", meta = (ClampMin = "0.0"))
-	double SpawnWeight = 0.0;
+	TArray<ECatChumAffinity> ChumAffinities;
 
 	/** 该鱼真实重量的最小千克值；选择时由服务器在显式范围内抽取。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Physical", meta = (ClampMin = "0.0"))
@@ -91,17 +89,11 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "0.0"))
 	double FishStrength = 0.0;
 
-	/** 搏斗中的鱼短周期体力；与日常属性/稀有度独立，0 表示未裁。 */
+	/** 搏斗中的鱼短周期体力，来自飞书鱼表格「体力」列的真值；命中后作为搏斗快照 FishFightStaminaRemaining 的初值，
+	 *  不参与猫的日常属性，0 表示公式输入未裁。HookedFight 内按飞书 §4.4 僵持逐秒扣减（猫力×0.08/秒），完美中鱼先削 15%。
+	 *  它不参与选鱼筛选：飞书的体力是消耗资源不是准入资格，拿它和在场合计体力比较会让高体力鱼永远选不出来。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "0.0"))
 	double FishFightStamina = 0.0;
-
-	/** 试探/真咬节奏的稳定内容模板 ID；Fishing StateTree 消费模板而不改变三阶段规则。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Personality")
-	FName BitePersonalityId = NAME_None;
-
-	/** 搏斗冲刺/体力节奏的稳定内容模板 ID；不包含 C++ 转移拓扑。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Personality")
-	FName FightPersonalityId = NAME_None;
 
 	/** 该鱼偏好的特殊鱼饵定义 ID；普通饵无限且不要求出现在数组中。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Preference")
@@ -111,11 +103,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")
 	ECatFishFoodSafety FoodSafety = ECatFishFoodSafety::Unset;
 
-	/** 直接食用后减少 Hunger 的正值；0 表示食用收益未裁。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use", meta = (ClampMin = "0.0"))
-	double HungerRelief = 0.0;
-
-	/** Toxic 鱼直接食用后增加 Poison 的正值；Safe 必须保持 0。 */
+	/** Toxic 鱼直接食用后增加 Poison 的正值；Safe 必须保持 0。饥饿系统已删除（飞书猫咪状态册 v1.4），食用收益不再有 Hunger 一项。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use", meta = (ClampMin = "0.0"))
 	double PoisonIncrease = 0.0;
 

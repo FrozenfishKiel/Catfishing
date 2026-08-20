@@ -4,13 +4,17 @@
 #include "Tests/AutomationCommon.h"
 
 #include "Run/CatSacrificeCoordinator.h"
+#include "ShopEconomy/CatShopEconomyService.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatSacrificeCoordinatorTeardownGateTest,
 	"Catfishing.Unit.Run.SacrificeCoordinator.TeardownClosesNewSacrificeCommands",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 测试流程：从真实 Game World 取得 SacrificeCoordinator，先执行空协议 teardown，再提交一条结构完整但无 Controller 的命令；关闭后的错误必须优先暴露 CommandsClosed。
+// 测试流程：从真实 Game World 取得 SacrificeCoordinator，先确认跟局清空的商店经济服务存在，再执行空协议 teardown，最
+// 后提交一条结构完整但无 Controller 的命令；关闭后的错误必须优先暴露 CommandsClosed。
+// teardown 现在把 ShopEconomy 也算进必须收口的领域，所以这里断言它在同一 World 存在；商店关闭后的具体拒绝错误依赖商店
+// runtime 配置，本用例不构造那套 fixture。
 bool FCatSacrificeCoordinatorTeardownGateTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -32,6 +36,7 @@ bool FCatSacrificeCoordinatorTeardownGateTest::RunTest(const FString& Parameters
 		return false;
 	}
 
+	TestNotNull(TEXT("teardown 依赖的一局商店经济服务存在"), World->GetSubsystem<UCatShopEconomyService>());
 	TestTrue(TEXT("无活跃协议时 teardown 可以收口"), Coordinator->PrepareForRunTeardown());
 
 	FCatSacrificeCommand Command;

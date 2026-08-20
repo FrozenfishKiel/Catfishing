@@ -18,11 +18,14 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
 	bool bEnableCampRuntime = false;
 
-	/** 休息、鱼缸转移和篝火交互的世界距离上限，单位厘米；0 表示未裁。 */
+	/**
+	 * 休息、鱼缸转移和篝火交互的世界距离上限，单位厘米；默认 0 代表这个数值还没被产品裁定，此时 IsRuntimeReady 返回
+	 * false，整套营地命令连同 bEnableCampRuntime 一起 fail-closed，因此不存在“已裁为 0 半径”的合法配置。
+	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Interaction", meta = (ClampMin = "0.0"))
 	double InteractionRadiusCentimeters = 0.0;
 
-	/** 结算夜全员在场时提交的固定篝火封面事件 ID；None 时普通回看仍可播但不会伪造相册封面。 */
+	/** 结算夜提交的固定篝火封面事件 ID；封面参与者取当晚真正围坐的玩家，不要求全员在场。None 时每晚篝火回看照常广播，只是不产生相册封面成像计划。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Campfire")
 	FName CampfireCoverEventId = NAME_None;
 };

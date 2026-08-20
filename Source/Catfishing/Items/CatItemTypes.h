@@ -152,9 +152,6 @@ struct FCatFishTheftResult
 
 	/** 进入 escrow 的唯一鱼实例；Social 只用定义 ID/原主人裁决追逐与进食。 */
 	FCatFishInstance Fish;
-
-	/** 预留返还槽位的源容器 ID。 */
-	FGuid SourceContainerId;
 };
 
 /** 本人直接吃鱼的命令；个人鱼护要求原主人，共享鱼缸允许当前 Active 玩家但仍由服务器身份写入。 */
@@ -188,6 +185,35 @@ struct FCatFishConsumeResult
 
 	/** 已被不可逆吃掉的鱼事实；拒绝时保持默认。 */
 	UPROPERTY(BlueprintReadOnly)
+	FCatFishInstance Fish;
+};
+
+/** 把个人鱼护或共用鱼缸里的一条鱼交给商店售卖的第一阶段命令；偷来的鱼不走这里，它有自己的 escrow 协议。 */
+USTRUCT()
+struct FCatFishSaleHoldCommand
+{
+	GENERATED_BODY()
+
+	/** 售卖请求的 RequestId、源容器 ExpectedRevision 与服务器身份；同一 RequestId 要贯穿冻结、钱包入账与移除三步。 */
+	FCatDomainCommandContext Context;
+
+	/** 要卖掉的唯一实物鱼。 */
+	FGuid FishInstanceId;
+
+	/** 鱼当前所在的个人鱼护或共用鱼缸。 */
+	FGuid ContainerId;
+};
+
+/** 售卖两阶段协议三个入口共用的不可变结果；商店按 Fish 引用的真实定义自行定价，Items 不返回也不计算金额。 */
+USTRUCT()
+struct FCatFishSaleHoldResult
+{
+	GENERATED_BODY()
+
+	/** 公共命令终态；Revision 是本次处理后的源容器版本，部分拒绝分支没有可报的版本时保持 0。 */
+	FCatDomainCommandResult Command;
+
+	/** 被冻结或已移除的鱼事实副本；拒绝和载荷漂移时保持默认，调用方拿不到目标鱼。 */
 	FCatFishInstance Fish;
 };
 
@@ -244,9 +270,6 @@ struct FCatFishReservationResult
 
 	/** 结构化拒绝原因；成功为 None。 */
 	ECatDomainCommandError Error = ECatDomainCommandError::InvalidPayload;
-
-	/** 与 Sacrifice RequestId 一一对应的预留 ID。 */
-	FGuid ReservationId;
 
 	/** 预留状态对应的容器 Revision。 */
 	int64 ContainerRevision = 0;

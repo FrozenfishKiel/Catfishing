@@ -89,3 +89,29 @@ struct CATFISHING_API FCatRunResultReasonCondition : public FStateTreeConditionC
 	/** 从 Context Owner 的 GameMode 读取最新 Result 并比较原因；宿主类型不符时返回 false。 */
 	virtual bool TestCondition(FStateTreeExecutionContext& Context) const override;
 };
+
+/** 最终天选边条件的空实例数据；条件没有可配参数，但 StateTree 编译器要求每个节点都带实例值，所以给一个空结构。 */
+USTRUCT()
+struct FCatRunSuccessSettlementEligibleConditionInstanceData
+{
+	GENERATED_BODY()
+};
+
+/**
+ * ST_RunFlow 的最终天选边条件：普通夜晚收到 AllEligibleReady 后，资产用它决定走 SuccessSettlementNight 还是再翻一天。
+ * 判定本身留在服务器（UCatRunSettings::CanEnterSuccessSettlementNight 比较当前 DayIndex 与 FinalDayIndex），资产读不到 DayIndex，只负责按真假选边；
+ * 没有参数，因为它只有一个问题要问 GameMode。对应 Docs/Development/工程自补决策记录.md 的 D-01。
+ */
+USTRUCT(meta = (DisplayName = "Cat Run Success Settlement Eligible", Category = "Catfishing|Run"))
+struct CATFISHING_API FCatRunSuccessSettlementEligibleCondition : public FStateTreeConditionCommonBase
+{
+	GENERATED_BODY()
+
+	using FInstanceDataType = FCatRunSuccessSettlementEligibleConditionInstanceData;
+
+	/** 返回空实例结构；本条件没有资产可配的参数，最终天序号只从 UCatRunSettings 读。 */
+	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
+
+	/** 向 Context Owner 的 GameMode 询问当前 DayIndex 是否已到可进成功结算夜的最终天；宿主类型不符或配置未裁时返回 false，让资产走翻天边。 */
+	virtual bool TestCondition(FStateTreeExecutionContext& Context) const override;
+};
