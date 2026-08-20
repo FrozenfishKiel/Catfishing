@@ -677,6 +677,150 @@ bool FCatPlayerControllerTeamEquipmentTakeRejectedWhenLibraryClosedTest::RunTest
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatPlayerControllerDeliveredOrderReplaySurvivesSettlementNightTest,
+	"Catfishing.Unit.Framework.PlayerController.DeliveredEquipmentOrderReplayReturnsReceiptAfterSettlementNight",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+// 测试流程：守的是"钱已经花了、东西也已经发了，之后再问一次却被告知现在不能发货"这一类回执丢失。
+// 网络重试、UI 重复点击、断线重连都会让同一个 RequestId 再来一趟，这时候调用方要的是首次那份回执，
+// 不是"此刻还能不能交付"的重新裁定——后者在结算夜必然是否定的，于是玩家侧看到的就是钱扣了、竿不知去向。
+// 现场是真实可达的：进结算夜时 CloseShopForSettlementNight 把团队装备库的入库写口关掉，
+// 而玩法命令门仍然放行，所以重放确实能一路走到订单链里，撞上那道本来只该对首次下单生效的交付前置校验。
+// 步骤：
+// 1. 真实 GameMode 准入一名玩家、占有 Character，白天用产品购买 RPC 买下 ShopRodT2 并入库（走 DefaultGame.ini 的真实目录）。
+// 2. 用真实相位入口进失败结算夜，先把"装备库确实已经关了"单独断言出来——这正是重放会撞上的那道拒绝。
+// 3. 用与首次逐字相同的命令（同 RequestId、同钱包版本前提、同 EntryId、同服务器身份）再走一次订单链。
+//    这一步直接打协调器而不是再发一次 RPC，因为 RPC 是 void、拿不到回执；协调器就是修复所在的那一层，命令内容与 RPC 组装的完全一致。
+// 4. 断言重放拿回的是 AlreadyResolved 和首次那件实物的 InstanceId，而不是 CommandsClosed；
+//    同时钱包余额、钱包版本、账本条数、装备库内容和版本一个都没有再动——重放只能取回执，不能产生第二次副作用。
+bool FCatPlayerControllerDeliveredOrderReplaySurvivesSettlementNightTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("创建已交付订单重放测试 World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	WorldWrapper.ForwardErrorMessages(this);
+	UWorld* World = WorldWrapper.GetTestWorld();
+	TestNotNull(TEXT("可创建已交付订单重放测试 World"), World);
+	if (!World)
+	{
+		return false;
+	}
+	const FString GameModeOption = FString::Printf(TEXT("?game=%s"), *ACatfishingGameModeBase::StaticClass()->GetPathName());
+	FURL GameModeUrl(nullptr, *GameModeOption, TRAVEL_Absolute);
+	TestTrue(TEXT("已交付订单重放测试 World 可注册项目 Lake GameMode"), World->SetGameMode(GameModeUrl));
+	ACatfishingGameModeBase* GameMode = World->GetAuthGameMode<ACatfishingGameModeBase>();
+	UCatTeamEquipmentLibrary* Library = World->GetSubsystem<UCatTeamEquipmentLibrary>();
+	UCatShopEconomyService* Shop = World->GetSubsystem<UCatShopEconomyService>();
+	UCatShopOrderCoordinator* Coordinator = World->GetSubsystem<UCatShopOrderCoordinator>();
+	TestNotNull(TEXT("已交付订单重放测试可取得 authority GameMode"), GameMode);
+	TestNotNull(TEXT("已交付订单重放测试可取得团队装备库"), Library);
+	TestNotNull(TEXT("已交付订单重放测试可取得商店服务"), Shop);
+	TestNotNull(TEXT("已交付订单重放测试可取得订单协调器"), Coordinator);
+	if (!GameMode || !Library || !Shop || !Coordinator)
+	{
+		return false;
+	}
+	World->InitializeActorsForPlay(GameModeUrl);
+	GameMode->SeedRunPhaseEntryForAutomation(ECatRunPhase::DayActive, 1, 1);
+
+	const FUniqueNetIdRef StableUniqueId = FUniqueNetIdString::Create(
+		TEXT("player:delivered-order-replay"), UOnlineEngineInterface::Get()->GetDefaultOnlineSubsystemName());
+	const FUniqueNetIdRepl UniqueId(StableUniqueId);
+	FString PreLoginError;
+	GameMode->PreLogin(TEXT(""), TEXT("127.0.0.1"), UniqueId, PreLoginError);
+	ACatfishingPlayerController* Controller = World->SpawnActor<ACatfishingPlayerController>();
+	ACatfishingPlayerState* PlayerState = World->SpawnActor<ACatfishingPlayerState>();
+	UPlayer* TestPlayer = Controller ? NewObject<UPlayer>(Controller) : nullptr;
+	if (!Controller || !PlayerState || !TestPlayer || !PreLoginError.IsEmpty())
+	{
+		TestTrue(TEXT("已交付订单重放测试准入前提齐全"), false);
+		return false;
+	}
+	TestPlayer->CurrentNetSpeed = 10000;
+	Controller->SetPlayer(TestPlayer);
+	PlayerState->SetUniqueId(UniqueId);
+	Controller->SetPlayerState(PlayerState);
+	World->AddController(Controller);
+	GameMode->PostLogin(Controller);
+
+	ACatCharacter* Character = World->SpawnActor<ACatCharacter>();
+	TestNotNull(TEXT("已交付订单重放测试 Character 可创建"), Character);
+	if (!Character)
+	{
+		return false;
+	}
+	Controller->Possess(Character);
+	UCatEquipmentComponent* Equipment = Character->GetEquipmentComponent();
+	TestNotNull(TEXT("已交付订单重放测试 Character 拥有 Equipment 组件"), Equipment);
+	if (!Equipment)
+	{
+		return false;
+	}
+
+	// ---- 白天用产品购买 RPC 买下 2 级竿并入库 ----
+	// RequestId 和钱包版本前提要留在手上：重放必须拿着与首次逐字相同的载荷，否则商店会判成载荷漂移，
+	// 那样验的就是另一条路（InvalidPayload），跟本轮要守的东西无关。
+	const FGuid OrderRequestId = FGuid::NewGuid();
+	const int64 WalletRevisionAtOrder = Shop->GetWalletSnapshot().Revision;
+	Controller->ServerSubmitShopPurchase(TEXT("ShopRodT2Order"), OrderRequestId, WalletRevisionAtOrder);
+	TestEqual(TEXT("白天下单后装备库多一件实物"), Library->GetSnapshot().Instances.Num(), 1);
+	if (Library->GetSnapshot().Instances.Num() != 1)
+	{
+		return false;
+	}
+	const FCatTeamEquipmentInstance Bought = Library->GetSnapshot().Instances[0];
+	TestEqual(TEXT("买到的就是 ShopRodT2"), Bought.DefinitionId, FName(TEXT("ShopRodT2")));
+	const TArray<FCatShopTransactionRecord> LedgerAfterOrder = Shop->GetTransactionLedgerSnapshot();
+	TestEqual(TEXT("下单只写了一条账本记录"), LedgerAfterOrder.Num(), 1);
+	if (LedgerAfterOrder.Num() != 1)
+	{
+		return false;
+	}
+	TestEqual(TEXT("首次订单已经推到已交付"), LedgerAfterOrder[0].DeliveryState, ECatShopDeliveryState::Delivered);
+
+	// ---- 进失败结算夜：玩法命令门还开着，装备库写口已经被收摊关掉 ----
+	const FCatRunTransitionResult SettlementResult = GameMode->EnterRunPhaseFromStateTree(
+		ECatRunPhase::FailureSettlementNight, ECatRunTransitionReason::QuotaFailed);
+	TestTrue(TEXT("可进入失败结算夜"), SettlementResult.bApplied);
+	TestTrue(TEXT("结算夜里玩法命令门仍然放行，所以重放确实够得到订单链"),
+		GameMode->CanAcceptGameplayCommand(Controller));
+	// 这一条把"重放会撞上什么"钉死：交付前置校验问的就是这个问题，此刻它的答案是拒绝。
+	// 修复的全部内容就是让重放根本不去问它，所以先证明这个答案确实是否定的，后面的 AlreadyResolved 才有意义。
+	TestEqual(TEXT("结算夜里装备库入库写口已关，交付前置校验此刻只会给出 CommandsClosed"),
+		Library->ValidateShopOrderGrant(TEXT("ShopRodT2")), ECatDomainCommandError::CommandsClosed);
+
+	// ---- 用与首次逐字相同的命令重放 ----
+	const FCatShopWalletSnapshot WalletBeforeReplay = Shop->GetWalletSnapshot();
+	const int64 LibraryRevisionBeforeReplay = Library->GetSnapshot().Revision;
+	FCatShopPurchaseCommand ReplayCommand;
+	ReplayCommand.Context.RequestId = OrderRequestId;
+	ReplayCommand.Context.ExpectedRevision = WalletRevisionAtOrder;
+	// 身份必须和 RPC 层重建出来的那一个一致：幂等键里就有它，换一个身份等于换了一笔订单。
+	ReplayCommand.Context.StableNetId = CatResolveStableNetId(PlayerState);
+	ReplayCommand.EntryId = TEXT("ShopRodT2Order");
+	const FCatShopOrderResult Replay = Coordinator->SubmitPurchase(ReplayCommand, Equipment);
+
+	TestFalse(TEXT("重放不会再付一次款"), Replay.Transaction.Command.bCommitted);
+	TestEqual(TEXT("重放的订单这一段返回首次终态 AlreadyResolved，而不是 CommandsClosed"),
+		Replay.Transaction.Command.Error, ECatDomainCommandError::AlreadyResolved);
+	TestEqual(TEXT("重放的交付这一段同样返回 AlreadyResolved"),
+		Replay.Delivery.Error, ECatDomainCommandError::AlreadyResolved);
+	TestEqual(TEXT("重放拿回的是首次那件实物的 InstanceId"), Replay.Instance.InstanceId, Bought.InstanceId);
+	TestEqual(TEXT("重放读回的账本仍指向那件实物"), Replay.Transaction.Transaction.DeliveryReceiptId, Bought.InstanceId);
+	TestEqual(TEXT("重放读回的账本仍是已交付"), Replay.Transaction.Transaction.DeliveryState,
+		ECatShopDeliveryState::Delivered);
+
+	// 重放只能取回执，不能有第二次副作用：钱包、账本和装备库都必须原地不动。
+	TestEqual(TEXT("重放不再扣一次公款"), Shop->GetWalletSnapshot().Balance, WalletBeforeReplay.Balance);
+	TestEqual(TEXT("重放不推进钱包版本"), Shop->GetWalletSnapshot().Revision, WalletBeforeReplay.Revision);
+	TestEqual(TEXT("重放不写第二条账本记录"), Shop->GetTransactionLedgerSnapshot().Num(), LedgerAfterOrder.Num());
+	TestEqual(TEXT("重放没有让装备库多出第二件"), Library->GetSnapshot().Instances.Num(), 1);
+	TestEqual(TEXT("重放不推进装备库版本"), Library->GetSnapshot().Revision, LibraryRevisionBeforeReplay);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatPlayerControllerConsumeFishTerminalCacheTest,
 	"Catfishing.Unit.Framework.PlayerController.ConsumeFishCachesTerminalPerRequestId",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)

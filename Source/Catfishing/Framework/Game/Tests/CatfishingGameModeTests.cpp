@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 
+#include "Character/CatCharacter.h"
 #include "Data/CatFishCatalogSettings.h"
 #include "Engine/Player.h"
 #include "Equipment/CatEquipmentDefinition.h"
@@ -11,9 +12,13 @@
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Framework/Game/CatfishingPlayerState.h"
 #include "GameFramework/PlayerController.h"
+#include "Items/CatContainerReplicationComponent.h"
+#include "Items/CatItemsService.h"
 #include "Net/OnlineEngineInterface.h"
 #include "OnlineSubsystemTypes.h"
 #include "Run/CatRunSettings.h"
+#include "Social/CatSocialService.h"
+#include "Social/CatSocialSettings.h"
 #include "TimerManager.h"
 
 namespace CatfishingGameModeTest
@@ -147,6 +152,74 @@ namespace CatfishingGameModeTest
             Settings->DayLengthSeconds = SavedDayLengthSeconds;
             Settings->QuotaTarget = SavedQuotaTarget;
             Settings->PlayerScalingPolicy = SavedScalingPolicy;
+        }
+    };
+
+    /**
+     * 偷鱼准入守卫；只覆盖 BeginTheft 真正读到的那几项 Social 配置，其余字段保持项目原值。
+     * 需要它是因为验证 teardown 收口失败必须先有一条真实的社交 escrow，而 escrow 只能由 BeginTheft 建立。
+     * 不直接依赖 DefaultGame.ini 的原因和 FRunDayCycleSettingsOverride 一样：偷鱼权限和距离都是策划会改的产品数值，
+     * 本用例验的是 teardown 分支，它的成立性不能挂在会变的外部配置上。
+     * 必须在 CreateTestWorld 之前构造：Social 服务在 Initialize 时就把权限抄进运行期策略，建好 World 再改已经来不及。
+     */
+    struct FTheftAdmissionSettingsOverride
+    {
+        /** 被临时覆盖的 Social 设置默认对象；为空表示取不到 CDO，本守卫不改也不恢复任何字段。 */
+        UCatSocialSettings* Settings = nullptr;
+
+        /** 用例开始前的 Social 总 gate；析构时恢复。 */
+        bool bSavedSocialRuntime = false;
+
+        /** 用例开始前的偷鱼权限默认值；它是 Social 运行期策略的开局来源，析构时恢复。 */
+        ECatDomainPolicy SavedTheftPermission = ECatDomainPolicy::Unset;
+
+        /** 用例开始前的赃鱼进食窗口秒数；偷鱼参数 gate 要求它为正，析构时恢复。 */
+        double SavedEatingWindowSeconds = 0.0;
+
+        /** 用例开始前的偷鱼交互距离；析构时恢复。 */
+        double SavedTheftRangeCentimeters = 0.0;
+
+        /** 用例开始前的追回交互距离；偷鱼参数 gate 要求它为正，析构时恢复。 */
+        double SavedCatchRangeCentimeters = 0.0;
+
+        /** 用例开始前的共用鱼缸追回策略；未裁时共用鱼缸整条偷取不可达，析构时恢复。 */
+        ECatSharedTankRecoveryPolicy SavedSharedTankPolicy = ECatSharedTankRecoveryPolicy::Undecided;
+
+        /** 构造流程：抄下六个默认值，再写成一套"偷鱼这条路能走通"的最小组合；距离取得很宽，用例不验距离。 */
+        FTheftAdmissionSettingsOverride()
+        {
+            Settings = GetMutableDefault<UCatSocialSettings>();
+            if (!Settings)
+            {
+                return;
+            }
+            bSavedSocialRuntime = Settings->bEnableSocialRuntime;
+            SavedTheftPermission = Settings->TheftPermission;
+            SavedEatingWindowSeconds = Settings->TheftEatingWindowSeconds;
+            SavedTheftRangeCentimeters = Settings->TheftInteractionRangeCentimeters;
+            SavedCatchRangeCentimeters = Settings->TheftCatchRangeCentimeters;
+            SavedSharedTankPolicy = Settings->SharedTankRecoveryPolicy;
+            Settings->bEnableSocialRuntime = true;
+            Settings->TheftPermission = ECatDomainPolicy::Enabled;
+            Settings->TheftEatingWindowSeconds = 30.0;
+            Settings->TheftInteractionRangeCentimeters = 1000.0;
+            Settings->TheftCatchRangeCentimeters = 1000.0;
+            Settings->SharedTankRecoveryPolicy = ECatSharedTankRecoveryPolicy::OriginalOwner;
+        }
+
+        /** 析构流程：六个值原样写回 CDO；不调用 SaveConfig，测试改动不落到项目 ini。 */
+        ~FTheftAdmissionSettingsOverride()
+        {
+            if (!Settings)
+            {
+                return;
+            }
+            Settings->bEnableSocialRuntime = bSavedSocialRuntime;
+            Settings->TheftPermission = SavedTheftPermission;
+            Settings->TheftEatingWindowSeconds = SavedEatingWindowSeconds;
+            Settings->TheftInteractionRangeCentimeters = SavedTheftRangeCentimeters;
+            Settings->TheftCatchRangeCentimeters = SavedCatchRangeCentimeters;
+            Settings->SharedTankRecoveryPolicy = SavedSharedTankPolicy;
         }
     };
 }
@@ -648,6 +721,180 @@ bool FCatGameModeDayFlipSettlesQuotaTest::RunTest(const FString& Parameters)
 		GameMode->SubmitNextDayReady(Controller, SecondReadyCommand).bCommitted);
 	TestEqual(TEXT("补交达标后翻天确认裁定为进入下一天"),
 		GameMode->GetLastRunFlowResultForAutomation().Reason, ECatRunTransitionReason::AllEligibleReady);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatGameModeFailedTeardownClearsDayDeadlineTest,
+	"Catfishing.Unit.Framework.GameMode.FailedRunTeardownClearsDayDeadline",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+// 测试流程：守的是收口失败之后这一局必须真的停下来，而不是"门关了、计时器还在跑"。
+// RequestRunTeardown 里那两个收口调用一进函数就把各自的写口永久关掉，且没有任何重开入口；
+// 所以收口一旦失败，准入门被关是对的，但白天截止计时器如果还活着，它到点就会推着流程再进一次相位，
+// 而相位进入会把 bRunCommandsOpen 重新置回 true——于是又变成"门开着、房间全锁了"，
+// 玩家点什么都能穿过门再撞上 CommandsClosed，其中取用团队装备那条会先把装备装到猫身上才发现取不走。
+// 本用例锁的就是失败早退分支必须清掉白天截止这一步。
+// 收口失败的现场是这样造出来的：先让一条真实的偷鱼 escrow 成立，再抢在 teardown 之前单独调用 Items 的关门写口。
+// Items 关门时会把 escrow 里的鱼原位退回并把 escrow 记录删掉，但它不通知 Social；
+// Social 那边的协议还挂着，teardown 走到 CloseRunDomainCommands 时就再也退不回去，收口整体失败。
+// 这是 CatSocialService 注释里"调用方不得先关闭 Items"那条禁令被违反后的样子，也是自动化环境里
+// 唯一能用公开写口做出"还不回去的 escrow"的办法——ReturnStolenFish 另外两条失败分支（源容器消失、售卖准备态）
+// 都被生产代码自己堵死了，构造不出来。
+//
+// 说明一下这条用例覆盖不到的另外半个修复：失败分支除了清截止，还会 StopLogic 停掉 StateTree。
+// 这里用的是 SeedRunPhaseEntryForAutomation，它会永久打开 bAutomationRunPhaseEntryBypass，
+// 之后的相位进入不再看 StateTree 是否还在跑，所以"停了 StateTree 之后就再也进不了相位"这件事
+// 在本层观测不到——停与不停，再进一次相位都会成功。那半个修复要靠带真实 ST_RunFlow 资产的功能测试来守。
+bool FCatGameModeFailedTeardownClearsDayDeadlineTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	// 收口失败会打一行 Error 日志；不先声明预期，自动化框架会把这行日志本身算成一次测试失败。
+	AddExpectedErrorPlain(TEXT("Event=run_teardown_failed"), EAutomationExpectedErrorFlags::Contains, 1);
+	// 白天取 600 秒，保证用例期间截止计时器不会自己到点；断言只覆盖收口失败有没有把截止清掉。
+	CatfishingGameModeTest::FRunDayCycleSettingsOverride RunSettingsOverride(600.0f, 2);
+	CatfishingGameModeTest::FTheftAdmissionSettingsOverride TheftSettingsOverride;
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("创建收口失败测试 World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	WorldWrapper.ForwardErrorMessages(this);
+	UWorld* World = WorldWrapper.GetTestWorld();
+	TestNotNull(TEXT("可创建收口失败测试 World"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	ACatfishingGameModeBase* GameMode = World->SpawnActor<ACatfishingGameModeBase>();
+	UCatItemsService* Items = World->GetSubsystem<UCatItemsService>();
+	UCatSocialService* Social = World->GetSubsystem<UCatSocialService>();
+	TestNotNull(TEXT("可生成项目 Lake GameMode"), GameMode);
+	TestNotNull(TEXT("可取得 Items 服务"), Items);
+	TestNotNull(TEXT("可取得 Social 服务"), Social);
+	if (!GameMode || !Items || !Social)
+	{
+		return false;
+	}
+
+	// ---- 进白天：白天是唯一会建立截止计时的相位，收口失败要清掉的就是它 ----
+	GameMode->SeedRunPhaseEntryForAutomation(ECatRunPhase::NotStarted, 0, 1);
+	TestTrue(TEXT("可进入白天"), GameMode->EnterRunPhaseFromStateTree(
+		ECatRunPhase::DayActive, ECatRunTransitionReason::AllEligibleReady).bApplied);
+	TestTrue(TEXT("白天持有唯一截止点"), GameMode->GetRunPublicState().Phase.bHasDeadline);
+	TestTrue(TEXT("白天已经写出具体截止时间点"),
+		GameMode->GetRunPublicState().Phase.DeadlineServerTimeSeconds > 0.0);
+
+	// ---- 造一名真实小偷 ----
+	APlayerController* ThiefController = World->SpawnActor<APlayerController>();
+	ACatfishingPlayerState* ThiefState = World->SpawnActor<ACatfishingPlayerState>();
+	ACatCharacter* ThiefCharacter = World->SpawnActor<ACatCharacter>();
+	if (!ThiefController || !ThiefState || !ThiefCharacter)
+	{
+		TestTrue(TEXT("收口失败测试的小偷可完整生成"), false);
+		return false;
+	}
+	const FUniqueNetIdRef ThiefUniqueId = FUniqueNetIdString::Create(
+		TEXT("player:teardown-stuck-escrow-thief"), UOnlineEngineInterface::Get()->GetDefaultOnlineSubsystemName());
+	ThiefState->SetUniqueId(FUniqueNetIdRepl(ThiefUniqueId));
+	ThiefController->SetPlayerState(ThiefState);
+	World->AddController(ThiefController);
+	// 小偷站在离两个容器宿主 100 厘米的地方；上面的守卫把交互距离放到 1000，距离不是本用例的验证目标。
+	ThiefCharacter->SetActorLocation(FVector(100.0, 0.0, 0.0));
+	ThiefController->Possess(ThiefCharacter);
+
+	// ---- 造一条真实的鱼，并把它放进共用鱼缸 ----
+	// 走个人鱼护再转存的两步，是因为 CommitCapture 只收自己名下的个人鱼护；共用鱼缸里的鱼只能靠转存进来。
+	// 用共用鱼缸而不是个人鱼护当偷取目标，是因为个人鱼护还要求原主人在场可交互，那样得再造第二名玩家。
+	const FString FisherStableNetId(TEXT("player:teardown-stuck-escrow-fisher"));
+	AActor* GuardHost = World->SpawnActor<AActor>();
+	AActor* TankHost = World->SpawnActor<AActor>();
+	UCatContainerReplicationComponent* GuardComponent = GuardHost
+		? NewObject<UCatContainerReplicationComponent>(GuardHost) : nullptr;
+	UCatContainerReplicationComponent* TankComponent = TankHost
+		? NewObject<UCatContainerReplicationComponent>(TankHost) : nullptr;
+	if (!GuardHost || !TankHost || !GuardComponent || !TankComponent)
+	{
+		TestTrue(TEXT("收口失败测试的两个容器宿主可完整生成"), false);
+		return false;
+	}
+	GuardHost->AddInstanceComponent(GuardComponent);
+	GuardComponent->RegisterComponent();
+	TankHost->AddInstanceComponent(TankComponent);
+	TankComponent->RegisterComponent();
+	const FGuid GuardContainerId = FGuid::NewGuid();
+	const FGuid TankContainerId = FGuid::NewGuid();
+	Items->RegisterContainer(GuardComponent, GuardContainerId, ECatContainerKind::PersonalGuard, FisherStableNetId, 4);
+	Items->RegisterContainer(TankComponent, TankContainerId, ECatContainerKind::SharedFishTank, FString(), 4);
+
+	const auto ReadRevision = [Items](const FGuid ContainerId)
+	{
+		FCatContainerSnapshot Snapshot;
+		Items->TryGetContainerSnapshot(ContainerId, Snapshot);
+		return Snapshot.Revision;
+	};
+	const auto ContainsFish = [Items](const FGuid ContainerId, const FGuid FishInstanceId)
+	{
+		FCatContainerSnapshot Snapshot;
+		Items->TryGetContainerSnapshot(ContainerId, Snapshot);
+		return Snapshot.Fish.ContainsByPredicate([FishInstanceId](const FCatFishInstance& Fish)
+		{
+			return Fish.FishInstanceId == FishInstanceId;
+		});
+	};
+
+	const FGuid StolenFishId = FGuid::NewGuid();
+	FCatCaptureCommitCommand CaptureCommand;
+	CaptureCommand.Context.RequestId = FGuid::NewGuid();
+	CaptureCommand.Context.ExpectedRevision = ReadRevision(GuardContainerId);
+	CaptureCommand.Context.StableNetId = FisherStableNetId;
+	CaptureCommand.FishingSessionId = FGuid::NewGuid();
+	CaptureCommand.FishInstanceId = StolenFishId;
+	CaptureCommand.FishDefinitionId = TEXT("TestFish");
+	CaptureCommand.TargetContainerId = GuardContainerId;
+	CaptureCommand.WeightKilograms = 2.5;
+	CaptureCommand.SacrificeContribution = 3;
+	TestTrue(TEXT("可往个人鱼护种一条真实的鱼"), Items->CommitCapture(CaptureCommand).Command.bCommitted);
+
+	FCatFishTransferCommand TransferCommand;
+	TransferCommand.Context.RequestId = FGuid::NewGuid();
+	TransferCommand.Context.ExpectedRevision = ReadRevision(GuardContainerId);
+	TransferCommand.Context.StableNetId = FisherStableNetId;
+	TransferCommand.FishInstanceId = StolenFishId;
+	TransferCommand.SourceContainerId = GuardContainerId;
+	TransferCommand.TargetContainerId = TankContainerId;
+	TransferCommand.ExpectedTargetRevision = ReadRevision(TankContainerId);
+	TestTrue(TEXT("原钓手把鱼存进共用鱼缸"), Items->TransferOwnedFish(TransferCommand).bCommitted);
+
+	// ---- 偷走它：这一步才产生 teardown 必须收口的那条 escrow ----
+	FCatTheftCommand TheftCommand;
+	TheftCommand.Context.RequestId = FGuid::NewGuid();
+	TheftCommand.Context.ExpectedRevision = ReadRevision(TankContainerId);
+	TheftCommand.FishInstanceId = StolenFishId;
+	TheftCommand.SourceContainerId = TankContainerId;
+	const FCatTheftResult Theft = Social->BeginTheft(ThiefController, TheftCommand);
+	TestTrue(TEXT("偷鱼成立，escrow 已经建立"), Theft.Command.bCommitted);
+	TestFalse(TEXT("鱼进了 escrow，已经不在共用鱼缸里"), ContainsFish(TankContainerId, StolenFishId));
+	if (!Theft.Command.bCommitted)
+	{
+		return false;
+	}
+
+	// ---- 抢在 teardown 之前单独关掉 Items：escrow 被它自己退掉并删除，Social 却毫不知情 ----
+	Items->CloseCommandsAndCancelReservations();
+	TestTrue(TEXT("Items 单独关门时把赃鱼退回了共用鱼缸"), ContainsFish(TankContainerId, StolenFishId));
+
+	// ---- 收口：Social 手里那条协议已经没有对应 escrow 可退，整条收口必须失败 ----
+	FCatRunTeardownRequest TeardownRequest;
+	TeardownRequest.RequestId = FGuid::NewGuid();
+	TeardownRequest.OperationEpoch = 1;
+	const FCatRunTeardownResult Teardown = GameMode->RequestRunTeardown(TeardownRequest);
+	TestEqual(TEXT("有还不回去的社交协议时收口失败"), Teardown.Status, ECatRunTeardownStatus::Failed);
+	TestEqual(TEXT("收口失败返回 TeardownFailed"), Teardown.Error, ECatRunCommandError::TeardownFailed);
+
+	// 这两条是本用例真正守的东西：领域写口已经永久关掉了，白天截止绝不能留着继续推流程。
+	TestFalse(TEXT("收口失败后不再持有白天截止"), GameMode->GetRunPublicState().Phase.bHasDeadline);
+	TestEqual(TEXT("收口失败后截止时间点已经清零"),
+		GameMode->GetRunPublicState().Phase.DeadlineServerTimeSeconds, 0.0);
 	return !HasAnyErrors();
 }
 

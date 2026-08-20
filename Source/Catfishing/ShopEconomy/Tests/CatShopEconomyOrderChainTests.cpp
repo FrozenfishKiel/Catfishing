@@ -346,6 +346,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.ShopEconomy.OrderCoordinator.FullConsumableStackRejectsOrderBeforeAnyPayment",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatShopOrderCoordinatorDeliveredConsumableReplayWithoutRecipientTest,
+	"Catfishing.Unit.ShopEconomy.OrderCoordinator.DeliveredConsumableOrderReplayReturnsReceiptWithoutRecipient",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
 // 测试流程：收鱼价没被裁定时，估价接口不给价、预检不放行、入账整笔拒绝，且钱包和账本一个字都不动。
 // 这条锁的是 E1 最重要的一点：飞书没给斜率之前，售鱼这条路必须整条走不通，而不是按某个工程默认价先跑起来。
 bool FCatShopEconomyFishSaleFailsClosedWithoutPriceTableTest::RunTest(const FString& Parameters)
@@ -870,6 +875,88 @@ bool FCatShopOrderCoordinatorConsumableCapacityGateTest::RunTest(const FString& 
 			TestEqual(TEXT("被拒的订单不写账本"), Service->GetTransactionLedgerSnapshot().Num(), LedgerCountBefore);
 			TestEqual(TEXT("被拒之后耗材栈仍是 2"),
 				CatShopOrderChainTest::GetConsumableQuantity(Equipment->GetSnapshot(), EquipmentFixture.BaitDefinitionId), 2);
+		}
+		WorldWrapper.ForwardErrorMessages(this);
+	}
+	return !HasAnyErrors();
+}
+
+// 测试流程：守的是耗材那条链上的同一件事——已经付过钱、也已经发到玩家身上的订单，重放时必须能把回执取回来。
+// 耗材的收货人是买家自己的身体，所以"收货人还在不在"是会变的：Pawn 一旦销毁（倒地被清、掉线重连、换关卡），
+// RPC 层从 Pawn 上取到的 Equipment 组件就是空的。此时如果还拿"现在能不能交付"去裁定一次重放，
+// 答案必然是没有收货人，调用方就拿不到本该拿到的 AlreadyResolved——从外面看就是钱扣了、饵不知去向。
+// 步骤：先带收货人正常买一份窝料并交付成功，再真的把承载 Equipment 组件的 Actor 销毁掉，
+// 然后用与首次逐字相同的命令、按生产入口在没有 Pawn 时的样子（收货人为空）重放一次。
+// 断言的重点是两段终态都必须是 AlreadyResolved 而不是 DependencyUnavailable；
+// 钱包、库存和账本的不变量一并断言，是为了同时排除"重放绕过了幂等、又下了一单"这条相反的错。
+bool FCatShopOrderCoordinatorDeliveredConsumableReplayWithoutRecipientTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	CatShopOrderChainTest::FEquipmentCatalogFixture EquipmentFixture;
+	CatShopOrderChainTest::FShopSettingsFixture ShopFixture;
+	// 收费且限量：收费才看得出钱包动没动，限量才看得出库存动没动。
+	ShopFixture.AddEntry(TEXT("ChumOrder"), ECatShopEntryKind::RunConsumableGrant,
+		EquipmentFixture.BaitDefinitionId, 1, 4, false);
+	FTestWorldWrapper WorldWrapper;
+	if (TestTrue(TEXT("创建耗材订单重放测试 Game World"), WorldWrapper.CreateTestWorld(EWorldType::Game)))
+	{
+		UWorld* World = WorldWrapper.GetTestWorld();
+		UCatShopOrderCoordinator* Coordinator = World ? World->GetSubsystem<UCatShopOrderCoordinator>() : nullptr;
+		UCatShopEconomyService* Service = World ? World->GetSubsystem<UCatShopEconomyService>() : nullptr;
+		AActor* Host = World ? World->SpawnActor<AActor>() : nullptr;
+		UCatEquipmentComponent* Equipment = Host ? NewObject<UCatEquipmentComponent>(Host) : nullptr;
+		if (Host && Equipment)
+		{
+			Host->AddInstanceComponent(Equipment);
+			Equipment->RegisterComponent();
+		}
+		TestNotNull(TEXT("订单协调器可创建"), Coordinator);
+		TestNotNull(TEXT("商店服务可创建"), Service);
+		TestNotNull(TEXT("收货人 Equipment 组件可创建"), Equipment);
+		if (Coordinator && Service && Host && Equipment)
+		{
+			// 首次下单：RequestId 和钱包版本前提都留在手上，重放必须原样带回去，否则商店会判成载荷漂移，
+			// 验到的就是 InvalidPayload 那条路，跟本轮要守的东西无关。
+			const FGuid OrderRequestId = FGuid::NewGuid();
+			const int64 WalletRevisionAtOrder = Service->GetWalletSnapshot().Revision;
+			const FCatShopPurchaseCommand OrderCommand = CatShopOrderChainTest::MakePurchaseCommand(
+				TEXT("PlayerA"), WalletRevisionAtOrder, TEXT("ChumOrder"), OrderRequestId);
+			const FCatShopOrderResult Delivered = Coordinator->SubmitPurchase(OrderCommand, Equipment);
+			TestTrue(TEXT("带收货人的窝料订单正常成交"), Delivered.Delivery.bCommitted);
+			TestEqual(TEXT("窝料落到收货人耗材栈"),
+				CatShopOrderChainTest::GetConsumableQuantity(Equipment->GetSnapshot(), EquipmentFixture.BaitDefinitionId), 1);
+			TestEqual(TEXT("首次订单已经推到已交付"), Delivered.Transaction.Transaction.DeliveryState,
+				ECatShopDeliveryState::Delivered);
+
+			const FCatShopWalletSnapshot WalletBeforeReplay = Service->GetWalletSnapshot();
+			FCatShopStockSnapshot StockBeforeReplay;
+			TestTrue(TEXT("重放前能读到窝料条目库存"), Service->TryGetStockSnapshot(TEXT("ChumOrder"), StockBeforeReplay));
+			const int32 LedgerCountBeforeReplay = Service->GetTransactionLedgerSnapshot().Num();
+
+			// 买家的身体没了。生产入口在这种情况下从 Pawn 上取不到 Equipment 组件，交给协调器的收货人就是空的，
+			// 所以这里也把收货人留空——重放的载荷和真实入口此刻会组装出来的完全一致。
+			Host->Destroy();
+			Equipment = nullptr;
+			const FCatShopOrderResult Replay = Coordinator->SubmitPurchase(OrderCommand);
+
+			TestFalse(TEXT("重放不会再付一次款"), Replay.Transaction.Command.bCommitted);
+			TestEqual(TEXT("收货人没了也要返回首次终态 AlreadyResolved，而不是依赖不可用"),
+				Replay.Transaction.Command.Error, ECatDomainCommandError::AlreadyResolved);
+			TestEqual(TEXT("重放的交付这一段同样返回 AlreadyResolved"),
+				Replay.Delivery.Error, ECatDomainCommandError::AlreadyResolved);
+			TestEqual(TEXT("重放读回的账本仍是已交付"), Replay.Transaction.Transaction.DeliveryState,
+				ECatShopDeliveryState::Delivered);
+			TestEqual(TEXT("耗材订单的回执仍是订单 RequestId"),
+				Replay.Transaction.Transaction.DeliveryReceiptId, OrderRequestId);
+
+			TestEqual(TEXT("重放不再扣一次公款"), Service->GetWalletSnapshot().Balance, WalletBeforeReplay.Balance);
+			TestEqual(TEXT("重放不推进钱包版本"), Service->GetWalletSnapshot().Revision, WalletBeforeReplay.Revision);
+			FCatShopStockSnapshot StockAfterReplay;
+			TestTrue(TEXT("重放后仍能读到窝料条目库存"), Service->TryGetStockSnapshot(TEXT("ChumOrder"), StockAfterReplay));
+			TestEqual(TEXT("重放不再扣一次库存"), StockAfterReplay.RemainingStock, StockBeforeReplay.RemainingStock);
+			TestEqual(TEXT("重放不写第二条账本记录"),
+				Service->GetTransactionLedgerSnapshot().Num(), LedgerCountBeforeReplay);
 		}
 		WorldWrapper.ForwardErrorMessages(this);
 	}
