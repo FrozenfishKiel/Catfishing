@@ -10,6 +10,7 @@
 
 class ACatCharacter;
 class ACatFishingHookActor;
+class UCatEquipmentComponent;
 class UCatFishDefinition;
 class UCatItemsService;
 class UCatFishingFightRunner;
@@ -24,7 +25,7 @@ class FCatFishingSessionRejectedFightSummaryPublicationTest;
 DECLARE_MULTICAST_DELEGATE(FCatFishingSessionSnapshotChanged);
 
 /** 一次服务器钓鱼长流程宿主；StateTree 拥有阶段拓扑，Actor 只执行阶段副作用与短事务。 */
-UCLASS()
+UCLASS(BlueprintType)
 class CATFISHING_API ACatFishingSession : public AActor
 {
 	GENERATED_BODY()
@@ -51,9 +52,11 @@ public:
 	FCatFishingCommandResult CancelFromAuthority(FGuid RequestId);
 	bool TryEnterHookedFightFromAuthority();
 	bool SetReelingFromAuthority(int64 InputSequence, bool bReeling);
+	/** 右键放线写口；仅 HookedFight 且 Runner 运行中生效，拖优先于放。 */
+	bool SetSlackingFromAuthority(int64 InputSequence, bool bSlacking);
 	bool IsFightRunnerRunning() const;
 	void HandleFightRunnerStepFromAuthority(const FCatFightStepResult& Step, double FishStaminaRemaining,
-		ECatFishMotionIntent MotionIntent);
+		ECatFishMotionIntent MotionIntent, double RodDurabilityRemaining);
 	void HandleFightRunnerFailureFromAuthority();
 
 	/** StateTree EnterPhase Task 的唯一阶段写入口；NearShore 必须提供水域内服务器目标，HookedFight/NearShore 保留合法参与者，其他阶段重置为钓手，终态启动有界销毁。 */
@@ -74,6 +77,17 @@ public:
 	/** NearShore 的首个合法 Compare-and-Commit；实物只归抄手，配置成像事件时为全部合法搏斗参与者先建齐 Planned 事实再投递，Resolved 后启动有界销毁。 */
 	FCatScoopResult RequestScoop(AController* ScoopingController, const FCatScoopCommand& Command);
 
+	/**
+	 * 多人接力（规格：用别人的竿继续钓）：把会话的"钓手"身份转移给新操作者。
+	 * 只允许在等待/试探/真咬阶段转移（搏斗/近岸离开＝弃战，没有可转移的会话）；
+	 * 饵料预留与竿磨损仍结算到抛竿时冻结的 CastEquipment（竿主的装备），只有体力/力量/鱼护随新钓手。
+	 * 仅供 UCatFishingService 在 OperateRod 成功后调用；服务器索引由服务同步更新。
+	 */
+	bool TransferFisherFromAuthority(AController* NewFisherController);
+
+	/** 会话当前钓手的服务器私有身份（转移后为新钓手）；仅服务读取用于索引维护。 */
+	const FString& GetFisherStableNetIdForAuthority() const { return FisherStableNetId; }
+
 	/** 掉线、倒地、局末或依赖失效时幂等写 Terminated、停树并释放参与者；Resolved 保持捕获终态，两种终态都只保留配置的复制窗口后销毁 Actor。 */
 	void TerminateSession(ECatFishingOutcome Outcome, const TCHAR* DiagnosticReason);
 
@@ -82,6 +96,14 @@ public:
 
 	/** 提供当前复制阶段和协作摘要供服务/表现读取；私有参与身份、鱼资产和事务缓存不会随返回值泄露。 */
 	const FCatFishingSessionSnapshot& GetSnapshot() const;
+
+	/** 蓝图只读副本（HUD/调试用）；与 GetSnapshot 相同内容，按值返回。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Fishing")
+	FCatFishingSessionSnapshot GetReplicatedSnapshot() const { return GetSnapshot(); }
+
+	/** 蓝图只读：会话是否已进入终态。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Fishing")
+	bool IsSessionTerminal() const { return IsTerminal(); }
 
 	/** 本机完整 Snapshot 变化通知；订阅者只需重新读取 GetSnapshot。 */
 	FCatFishingSessionSnapshotChanged OnSnapshotChanged;
@@ -149,11 +171,17 @@ private:
 	UPROPERTY()
 	TObjectPtr<UCatFishDefinition> FishDefinition;
 
-	/** 初始钓手 Character 弱引用；失效时服务终止本会话。 */
+	/** 当前钓手 Character 弱引用（接力转移后指向新钓手）；失效时服务终止本会话。 */
 	TWeakObjectPtr<ACatCharacter> FisherCharacter;
 
-	/** 初始钓手服务器私有 StableNetId。 */
+	/** 当前钓手服务器私有 StableNetId（接力转移后为新钓手）。 */
 	FString FisherStableNetId;
+
+	/**
+	 * 抛竿时冻结的装备组件（原始抛竿者=竿主的装备）：饵料预留、竿磨损、失败惩罚全部结算到它。
+	 * 钓手接力转移不改变它——用谁的竿就磨谁的竿、扣抛竿时上的饵。
+	 */
+	TWeakObjectPtr<UCatEquipmentComponent> CastEquipment;
 
 	/** 初始钓手个人鱼护 ID；钓手之外的抢抄者必须提交自己的 Guard ID。 */
 	FGuid FisherGuardContainerId;

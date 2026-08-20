@@ -1,0 +1,142 @@
+# DataAsset 字段说明手册
+
+对应代码状态：2026-08-19。给配数值/建资产的人看：每个 DataAsset 类型的字段含义、校验规则、注册方法。
+
+## 0. 所有 DataAsset 共同的规矩
+
+1. **必须注册才生效**：代码从不扫描目录，只认 `Config/DefaultGame.ini` 里显式列出的资产（各类型注册键见下表）。新建 DA 忘了注册 = 游戏里等于不存在。
+2. **改 ini 必须重启 Editor**（DeveloperSettings 只在启动读取）；改 DA 资产本身在下一次会话/播种时生效，不需要重启。
+3. **`bEnableRuntimeDefinition` 显式启用 gate**：大部分定义类默认关闭，防止占位资产被正式流程采用。建完资产记得勾上。
+4. **ID 唯一**：同类型清单里出现两个相同 ID → 查询返回空（fail-closed），相关功能整个失效，不是"随便选一个"。
+5. **校验是整体的**：任一必填字段不合法，整个定义被判"未就绪"而被跳过（症状往往是 InvalidPayload / DependencyUnavailable / No eligible fish 这类下游错误，日志过滤 `LogCat` 前缀可定位）。
+6. **PIE 运行中保存会被静默拒绝**（返回成功但不落盘）——停 PIE 再保存。
+
+| 类型 | 注册位置（DefaultGame.ini 的 section / 键） | 现有资产 |
+|---|---|---|
+| 猫种类 CatCharacterDefinition | `[CatAbilitySettings]` `+CharacterDefinitions=` | DA_Cat_Default |
+| 装备 CatEquipmentDefinition | `[CatEquipmentSettings]` `+Definitions=` | DA_Rod/Bait/Float/ScoopNet/Chum_Basic |
+| 鱼种 CatFishDefinition | `[CatFishCatalogSettings]` `+Definitions=` | DA_Fish_Test01 |
+| 咬钩性格 CatBitePersonalityDefinition | `[CatFishingSettings]` `+BitePersonalities=` | DA_Bite_Test01 |
+| 搏斗性格 CatFightPersonalityDefinition | `[CatFishingSettings]` `+FightPersonalities=` | DA_Fight_Test01 |
+| AbilitySet / InputConfig | `[CatAbilitySettings]` `DefaultAbilitySet=` / `AbilityInputConfig=` | DA_CatAbilitySet_Default 等 |
+| 曲线 CurveFloat | 被上述 DA/设置按字段引用 | Curve_ChumSaturation 等 3 条 |
+
+---
+
+## 1. 猫种类：`UCatCharacterDefinition`（DA_Cat_*）
+
+按种类差异化猫的初始属性与搏斗数值。角色蓝图 Details 里把 `Cat Definition Id` 填成某个 DA 的 ID 即选用该种类；留 **None** 则回退 `CatAbilitySettings` 的全局五项初值（Initial*）。数值只在**属性播种**和**搏斗开始**两个时刻被冻结，运行中改资产不影响进行中的搏斗。
+
+| 字段 | 含义 | 校验 |
+|---|---|---|
+| CatDefinitionId | 种类稳定 ID，角色用它选种类 | 必填、清单内唯一 |
+| DisplayName | 表现用显示名 | 不参与数值裁决 |
+| InitialHunger | 初始饱食度（项目语义 100=吃饱） | ≥0 |
+| InitialFatigue / InitialPoison | 初始疲劳/中毒 | ≥0 |
+| FishingStrength | **猫力量**（规格 4.2：与鱼力量、竿强度三方比较） | >0 |
+| FightStaminaMaximum | **猫搏斗体力上限**（规格 4.3 消耗与放线回复的基线） | >0 |
+| bEnableRuntimeDefinition | 显式启用 gate | 必须 True |
+
+⚠️ 角色指定了 ID 但定义缺失/未就绪时**不会悄悄换成全局值**——属性播种直接失败并打 `initial_attributes_unresolved` Warning，钓鱼链整体不可用，方便第一时间发现配错。
+
+## 2. 装备：`UCatEquipmentDefinition`（DA_Rod/Bait/Float/ScoopNet/Chum_*）
+
+一个类覆盖五种装备，靠 `Kind` 区分；**每个 Kind 只看自己那组字段，其余必须保持默认 0/false**（校验会因"竿字段出现在鱼饵上"这类越界而判未就绪）。
+
+**共同字段**：`EquipmentDefinitionId`(唯一ID) · `Kind`(种类,不能 Unknown) · `LoadoutSlotId`(Rod/Bait/Float/ScoopNet 四种必填,窝料不填) · `RequiredUnlockId`(解锁门槛,None=不设) · `bRunConsumable`(是否一局内耗材:窝料 True、特殊饵 True、其他 False) · `bSpecialBait`(特殊鱼饵标记,与 bRunConsumable 同真同假仅限 Bait) · `FunctionalRouteId`(功能路由,必填,常规填 Route_Standard) · `bEnableRuntimeDefinition`(gate)
+
+**Rod（鱼竿）**：
+| 字段 | 含义 | 规格对应 |
+|---|---|---|
+| MaximumRodDurability | 竿耐久上限（动态资源 D） | 4.2 竿耐久 40/70/120 档 |
+| FishingStrength | 竿强度（静态,不随耐久掉） | 4.2 竿强 25/60/130 档,判定①瞬断比较用 |
+| MaximumLineLengthCentimeters | 线长上限 cm | 放尽绷紧强制按拖判定 |
+| BaseDurabilityWearPerSecond / HighTensionWearMultiplier | 基础磨损/绷紧磨损倍率 | ≥0 / ≥1 |
+| RodTipLocal/StandLocal/GripLocalTransform | 竿尖(抛竿原点+鱼线起点)/操作站位/握持 三个权威锚点 | 表现蓝图只读不写 |
+
+**Bait（鱼饵）**：`BiteRateMultiplier`(>0,咬钩率倍率) · `MinimumBiteDelayMultiplier`(>0,最短咬钩延迟倍率)
+**Float（浮漂）**：`MaximumCastDistanceCentimeters`(>0,最大抛竿距离) · `CastErrorStandardDeviation/MaximumCastErrorRadiusCentimeters`(落点误差σ/上限,σ≤上限) · `BiteSignalStability`(0~1,咬钩信号稳定度)
+**ScoopNet（抄网）**：`ScoopReachCentimeters`(>0,**抄手向正前方发射的水平线段长度**,语义="网杆多长")。与鱼定义里的 `ScoopTargetRadiusCentimeters`(圆半径)配对构成抄网判定：**俯视投影下线段∩圆**即够得着。实际生效长度取 `min(本值, UCatFishingSettings::ScoopReachCentimeters)`——全局那个是上限闸门。高度差另由 `UCatFishingSettings::MaximumScoopVerticalDeltaCentimeters` 单独限制,判定本身完全不看俯仰角。
+**Chum（窝料）**：`bRunConsumable` 必须 True，核心在 `ChumInfluence` 结构：
+
+| ChumInfluence 字段 | 含义 | 校验 |
+|---|---|---|
+| RadiusCentimeters | 窝点半径 cm | >0 |
+| DurationSeconds | 窝点持续秒 | >0 |
+| BaseContribution (Fishy/Fragrant/Fermented) | 腥/香/酵三轴基础贡献量,与鱼的 ChumPreference 点积决定诱鱼偏好 | 三轴合法 |
+| DistanceFalloffCurve | 距离衰减曲线(输入0=中心→1=边缘,输出≥0,v(0)>0) | 必填 |
+| TimeFalloffCurve | 时间衰减曲线(输入0=刚投→1=到期) | 必填 |
+| MaximumQuantityPerPlacement | 单次投放最多消耗份数 | >0 |
+| PresentationId / PresentationClass | 表现语义 ID / 表现 Actor 类 | 可空 |
+
+## 3. 鱼种：`UCatFishDefinition`（DA_Fish_*）
+
+| 字段组 | 字段 | 含义 |
+|---|---|---|
+| 身份 | FishDefinitionId | 唯一 ID,图鉴/日志/实物鱼都引用它 |
+| 体型 | BodyClass | Standard=单人可搏 / Giant=可多人协作(近岸仍首个合法抢抄者归属);不能 Unknown |
+| 出没 | RegionIds / TimeOfDay / Weather | 可出现的水域 ID/时段(夜晚永不进选择器)/天气;**空数组=未配置=不出现** |
+| 稀有 | RarityTierId / SpawnWeight | 稀有度轴 ID / 选择正权重(稀有度由数据表达,代码无硬编码档位) |
+| 体重 | Minimum/MaximumWeightKilograms | 服务器在区间内抽取真实重量;min≤max |
+| 搏斗 | FishStrength | **鱼力量**(规格 4.2,与猫力/竿强比较);>0 |
+| 搏斗 | FishFightStamina | **鱼搏斗体力**(短周期,与稀有度独立);>0 |
+| 搏斗 | MinimumFightParticipants | 需要的协作人数;单人局过滤 >1 的定义 |
+| 抄网 | **ScoopTargetRadiusCentimeters** | **这条鱼的可捞圆圈半径 cm**,圆心随鱼移动;抄手向正前方发射长度=抄网 ScoopReach 的水平线段,与圆相交即够得着。语义="这条鱼有多好捞"——小鱼小圈、巨鱼大圈以降低多人抢抄难度。**必须 >0,为 0 时服务器一律拒绝抢抄** |
+| 性格 | BitePersonalityId / FightPersonalityId | 引用下面两类模板的 ID |
+| 偏好 | ChumPreference (三轴) | 与窝点三轴点积→经饱和曲线→选择权重放大(封顶 MaximumChumModifier) |
+| 偏好 | BaitWeightMultipliers | 特定鱼饵 ID→权重倍率;普通饵不用列 |
+| 食用 | FoodSafety / HungerRelief / PoisonIncrease | Safe/Toxic 结论 + 吃后减饥/增毒量(Safe 必须 0 毒) |
+| 其他 | SacrificeContribution / CaptureImprintEventId / bTankDisplayEligible | 献祭额度 / 捕获成像事件 / 可否入展示鱼缸 |
+| gate | bEnableRuntimeDefinition | 必须 True |
+
+## 4. 咬钩性格：`UCatBitePersonalityDefinition`（DA_Bite_*）
+
+| 字段 | 含义 |
+|---|---|
+| BitePersonalityId | 唯一 ID,被 FishDefinition.BitePersonalityId 引用 |
+| ProbeDurationSeconds | 试探期时长(浮漂轻点,提竿=空钩) |
+| TrueBiteWindowSeconds | 真咬窗时长(黑漂,此窗内提竿=中鱼,超时=脱钩) |
+| PerfectHookWindowSeconds | **完美提竿窗**(真咬开始后 X 秒内提竿=完美中鱼,规格 4.1 默认 1s) |
+| PerfectFishStrengthMultiplier | 完美中鱼时鱼力量折减(0~1,规格 0.8) |
+| PerfectFishStaminaMultiplier | 完美中鱼时鱼体力折减(0~1,规格 0.85) |
+| PerfectInitialLineLengthMultiplier | 完美中鱼时初始线长折减(0~1,鱼更近) |
+
+## 5. 搏斗性格：`UCatFightPersonalityDefinition`（DA_Fight_*）
+
+| 字段 | 含义 |
+|---|---|
+| FightPersonalityId | 唯一 ID,被 FishDefinition.FightPersonalityId 引用 |
+| CalmDurationRangeSeconds | 顺从期(向内游)时长区间,服务器每段随机抽;鱼体力<50% 后休息期 ×1.5 |
+| StruggleDurationRangeSeconds | 挣扎期(向外游)时长区间;上钩瞬间必从挣扎开始 |
+| CalmMovementSpeedCentimetersPerSecond | 顺从期游速(向内) |
+| StruggleMovementSpeedCentimetersPerSecond | 挣扎期游速(向外) |
+| BaseDrainMultiplier / StruggleDrainMultiplier | 该鱼种体力消耗基础/挣扎倍率(在规格系数之上再乘) |
+
+## 6. GAS 资产：`UCatAbilitySet` / `UCatAbilityInputConfig`
+
+**AbilitySet**（DA_CatAbilitySet_Default,每行一条 GrantedAbilities）:
+- `Ability`:GameplayAbility 类——**换成蓝图子类就在这里换**(BP_GA_*)
+- `InputTag`:绑定的输入 Tag(Cat.Input.Fishing.Primary 等,前缀必须 Cat.)
+- `Level`:授予等级(当前恒 1)
+- `ActivationPolicy`:OnInputTriggered=按一下激活一次 / **WhileInputActive=按住期间保持激活(左键/右键/Q 三个按住型必须用它,否则收不到 InputReleased)** / OnGranted=授予即激活
+- `InitialEffect`:授予时附带的 GameplayEffect(可空)
+
+**InputConfig**（DA_CatAbilityInputConfig）: 每行 `InputAction`(IA_* 资产) ↔ `InputTag` 的映射;数量须 ≥5 且覆盖五个核心 Fishing Tag,缺一整套输入不绑定。
+
+## 7. 曲线资产（CurveFloat）
+
+| 曲线 | 引用处 | 输入→输出 | 校验(不满足→整条链失效) |
+|---|---|---|---|
+| Curve_ChumSaturation | CatFishCatalogSettings.ChumSaturationCurve | 归一化窝料亲和度 0→1 映射到权重倍率 | **v(0) 必须恰=1.0** 且单调不减,终值≤MaximumChumModifier |
+| Curve_ChumDistanceFalloff | 各窝料 DA 的 ChumInfluence | 0=窝点中心→1=边缘 的浓度衰减 | 全程 ≥0 且 **v(0)>0** |
+| Curve_ChumTimeFalloff | 同上 | 0=刚投放→1=到期 的浓度衰减 | 同上 |
+
+## 8. 常见配置事故速查
+
+| 症状 | 多半是 |
+|---|---|
+| starter 装配/发窝料失败 InvalidPayload | 对应 DA 未注册 / bEnableRuntimeDefinition 没勾 / 某字段越了 Kind 的界 |
+| No eligible fish | 鱼的 Region/TimeOfDay/Weather 空数组;或 CatFishCatalogSettings 三项(曲线/半饱和/上限)未配;或曲线不过校验 |
+| 打窝 EquipmentUnavailable | 背包没窝料(上一条的下游);或窝料 DA 的 ChumInfluence 缺曲线 |
+| 提竿后搏斗数值全 0 | 猫种类 ID 配错(看 initial_attributes_unresolved 日志) / DA_Bite/DA_Fight 未注册 |
+| 新 DA 配好了不生效 | ini 没加注册行,或加了没重启 Editor |

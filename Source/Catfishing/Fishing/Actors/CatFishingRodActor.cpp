@@ -6,23 +6,28 @@
 
 ACatFishingRodActor::ACatFishingRodActor()
 {
+	// 表现 Actor 需要复制自身存在与 Transform，但玩法权威不在这里，Tick 全关以省性能。
 	bReplicates = true;
 	SetReplicateMovement(true);
-	bAlwaysRelevant = false;
+	bAlwaysRelevant = false; // 不强制全图相关性，交给引擎按距离/视锥裁剪
 	bNetUseOwnerRelevancy = false;
-	bOnlyRelevantToOwner = false;
+	bOnlyRelevantToOwner = false; // 其他玩家也要能看到这根竿，不能只对 Owner 复制
 	PrimaryActorTick.bCanEverTick = false;
 	PrimaryActorTick.bStartWithTickEnabled = false;
+	// SceneRoot 是根组件，其余锚点都挂在它下面，整体随 Actor Transform 移动
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
+	// VisualRoot 承载美术表现（皮肤/特效），与权威判定用的锚点分层，便于蓝图独立驱动视觉
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
 	VisualRoot->SetupAttachment(SceneRoot);
+	// RodTip/Stand/Grip 三个锚点分别对应竿尖(挂线)、插竿点、握持点，供表现和玩法逻辑取世界坐标
 	RodTipAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("RodTipAnchor"));
 	RodTipAnchor->SetupAttachment(SceneRoot);
 	StandAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("StandAnchor"));
 	StandAnchor->SetupAttachment(SceneRoot);
 	GripAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("GripAnchor"));
 	GripAnchor->SetupAttachment(SceneRoot);
+	// 这些锚点的具体相对位置由权威在 ConfigureCanonicalAnchorsFromAuthority 中设置，不允许蓝图继承时手改
 	SceneRoot->bEditableWhenInherited = false;
 	RodTipAnchor->bEditableWhenInherited = false;
 	StandAnchor->bEditableWhenInherited = false;
@@ -32,6 +37,7 @@ ACatFishingRodActor::ACatFishingRodActor()
 void ACatFishingRodActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	// 只复制这一个聚合结构体；所有客户端可见状态都收敛到 PresentationState，减少复制条目
 	DOREPLIFETIME(ThisClass, PresentationState);
 }
 
@@ -39,21 +45,25 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	const FName InRodSkinDefinitionId, APlayerState* InOwnerPlayerState, APlayerState* InOperatorPlayerState,
 	const bool bInDeployed, const bool bInBroken)
 {
+	// 只有服务器能设身份；三个必填标识缺一不可，否则视为非法调用
 	if (!HasAuthority() || !InRodActorId.IsValid() || InRodDefinitionId.IsNone() || !InOwnerPlayerState)
 	{
 		return false;
 	}
 	if (bIdentityInitialized)
 	{
+		// 幂等保护：身份已初始化过，只有传入值与已有身份完全一致才算“成功”，
+		// 防止同一个 Actor 被误用来承载第二个不同的竿身份
 		return PresentationState.RodActorId == InRodActorId
 			&& PresentationState.RodDefinitionId == InRodDefinitionId
 			&& PresentationState.OwnerPlayerState == InOwnerPlayerState;
 	}
 
+	// 记录变更前状态用于表现事件对比（Previous -> Current）
 	const FCatFishingRodPresentationState Previous = PresentationState;
 	FCatFishingRodPresentationState Next;
 	Next.RodActorId = InRodActorId;
-	Next.RodActorRevision = 1;
+	Next.RodActorRevision = 1; // 首次初始化即为 Revision 1，后续每次权威变更递增
 	Next.RodDefinitionId = InRodDefinitionId;
 	Next.RodSkinDefinitionId = InRodSkinDefinitionId;
 	Next.OwnerPlayerState = InOwnerPlayerState;
@@ -62,21 +72,26 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	Next.bBroken = bInBroken;
 	PresentationState = Next;
 	bIdentityInitialized = true;
+	// 本地（服务器）立即广播表现变化事件；客户端则依赖下面的 OnRep 触发同样的事件
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
-	ForceNetUpdate();
+	ForceNetUpdate(); // 身份初始化是一次性关键事件，强制立即复制，不等下个 tick 窗口
 	return true;
 }
 
 bool ACatFishingRodActor::ConfigureCanonicalAnchorsFromAuthority(const FTransform& InRodTip,
 	const FTransform& InStand, const FTransform& InGrip)
 {
+	// 必须在身份初始化“之前”配置锚点（bIdentityInitialized 为真时拒绝），
+	// 且三个 Transform 都不能是 NaN，否则后续世界坐标换算会污染整条竿的表现
 	if (!HasAuthority() || bIdentityInitialized || InRodTip.ContainsNaN() || InStand.ContainsNaN() || InGrip.ContainsNaN())
 	{
 		return false;
 	}
+	// 保存规范的本地 Transform，供 GetXXXWorldTransform 与 Actor 世界 Transform 相乘得到世界坐标
 	RodTipCanonicalLocalTransform = InRodTip;
 	StandCanonicalLocalTransform = InStand;
 	GripCanonicalLocalTransform = InGrip;
+	// 同步应用到实际场景组件上，使编辑器/运行时可视化与权威数据一致
 	RodTipAnchor->SetRelativeTransform(InRodTip);
 	StandAnchor->SetRelativeTransform(InStand);
 	GripAnchor->SetRelativeTransform(InGrip);
@@ -86,15 +101,17 @@ bool ACatFishingRodActor::ConfigureCanonicalAnchorsFromAuthority(const FTransfor
 bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresentationState& Next,
 	const int64 ExpectedRevision)
 {
+	// 乐观并发控制：调用方必须带上它读到的旧 Revision，若与当前不一致说明状态已被其他写者改过，拒绝本次提交
 	if (!HasAuthority() || !bIdentityInitialized || ExpectedRevision != PresentationState.RodActorRevision)
 	{
 		return false;
 	}
+	// 身份类字段（Id/DefinitionId/Owner）不可被这条“可变状态”写口覆盖，只保留传入 Next 里的可变部分
 	FCatFishingRodPresentationState Committed = Next;
 	Committed.RodActorId = PresentationState.RodActorId;
 	Committed.RodDefinitionId = PresentationState.RodDefinitionId;
 	Committed.OwnerPlayerState = PresentationState.OwnerPlayerState;
-	Committed.RodActorRevision = PresentationState.RodActorRevision + 1;
+	Committed.RodActorRevision = PresentationState.RodActorRevision + 1; // 每次成功提交 Revision 自增一
 	const FCatFishingRodPresentationState Previous = PresentationState;
 	PresentationState = Committed;
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
@@ -104,6 +121,7 @@ bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresen
 
 bool ACatFishingRodActor::SetOperatorFromAuthority(APlayerState* InOperatorPlayerState, const int64 ExpectedRevision)
 {
+	// 从当前状态拷贝一份再单独改 Operator 字段，其余字段维持不变地交给 CommitAuthoritativeMutation 提交
 	FCatFishingRodPresentationState Next = PresentationState;
 	Next.OperatorPlayerState = InOperatorPlayerState;
 	return CommitAuthoritativeMutation(Next, ExpectedRevision);
@@ -111,7 +129,7 @@ bool ACatFishingRodActor::SetOperatorFromAuthority(APlayerState* InOperatorPlaye
 
 bool ACatFishingRodActor::SetRodSkinFromAuthority(const FName InRodSkinDefinitionId, const int64 ExpectedRevision)
 {
-	if (InRodSkinDefinitionId.IsNone()) return false;
+	if (InRodSkinDefinitionId.IsNone()) return false; // 空皮肤 ID 视为非法调用，直接拒绝
 	FCatFishingRodPresentationState Next = PresentationState;
 	Next.RodSkinDefinitionId = InRodSkinDefinitionId;
 	return CommitAuthoritativeMutation(Next, ExpectedRevision);
@@ -119,6 +137,7 @@ bool ACatFishingRodActor::SetRodSkinFromAuthority(const FName InRodSkinDefinitio
 
 bool ACatFishingRodActor::SetBrokenFromAuthority(const bool bInBroken, const int64 ExpectedRevision)
 {
+	// 断竿是搏斗失败的惩罚结果之一，这里只负责把状态写进表现层，不涉及耐久扣减本身
 	FCatFishingRodPresentationState Next = PresentationState;
 	Next.bBroken = bInBroken;
 	return CommitAuthoritativeMutation(Next, ExpectedRevision);
@@ -126,12 +145,14 @@ bool ACatFishingRodActor::SetBrokenFromAuthority(const bool bInBroken, const int
 
 bool ACatFishingRodActor::SetDeployedFromAuthority(const bool bInDeployed, const int64 ExpectedRevision)
 {
+	// 插竿/收竿切换，驱动蓝图切换竿的摆放动画与碰撞表现
 	FCatFishingRodPresentationState Next = PresentationState;
 	Next.bDeployed = bInDeployed;
 	return CommitAuthoritativeMutation(Next, ExpectedRevision);
 }
 
 const FCatFishingRodPresentationState& ACatFishingRodActor::GetPresentationState() const { return PresentationState; }
+// 三个世界 Transform 都是“本地规范 Transform 叠乘 Actor 当前世界 Transform”，随 Actor 移动/旋转自动更新
 FTransform ACatFishingRodActor::GetRodTipWorldTransform() const { return RodTipCanonicalLocalTransform * GetActorTransform(); }
 FTransform ACatFishingRodActor::GetStandWorldTransform() const { return StandCanonicalLocalTransform * GetActorTransform(); }
 FTransform ACatFishingRodActor::GetGripWorldTransform() const { return GripCanonicalLocalTransform * GetActorTransform(); }
@@ -139,6 +160,8 @@ FTransform ACatFishingRodActor::GetGripWorldTransform() const { return GripCanon
 void ACatFishingRodActor::BeginPlay()
 {
 	Super::BeginPlay();
+	// 身份可能在 Actor BeginPlay 之前就由权威初始化完毕（生成时序问题），
+	// 那时事件被推迟到这里；BeginPlay 后再把积压的“上一次变化”补发一次
 	if (bHasPendingPresentationNotification)
 	{
 		bHasPendingPresentationNotification = false;
@@ -148,6 +171,7 @@ void ACatFishingRodActor::BeginPlay()
 
 void ACatFishingRodActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	// 只有权威端且已绑定 Owner 时才需要清理服务里的“已部署鱼竿”登记，避免野指针残留
 	if (HasAuthority() && PresentationState.OwnerPlayerState)
 	{
 		if (UWorld* World = GetWorld())
@@ -163,6 +187,7 @@ void ACatFishingRodActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 
 void ACatFishingRodActor::OnRep_PresentationState(const FCatFishingRodPresentationState& Previous)
 {
+	// 客户端收到复制更新时的唯一入口；Previous 由引擎在应用新值前自动传入旧值
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 }
 
@@ -171,8 +196,10 @@ void ACatFishingRodActor::QueueOrDispatchPresentationChanged(const FCatFishingRo
 {
 	if (!HasActorBegunPlay())
 	{
+		// BeginPlay 前不能安全触发蓝图事件（组件/资源可能还没就绪），先把变化排队
 		if (!bHasPendingPresentationNotification)
 		{
+			// 只在“第一次”排队时记录 Previous，保证积压期间多次变化最终仍呈现“最早前值 -> 最新值”的单次跳变
 			PendingPreviousPresentationState = Previous;
 			bHasPendingPresentationNotification = true;
 		}
@@ -185,6 +212,18 @@ void ACatFishingRodActor::QueueOrDispatchPresentationChanged(const FCatFishingRo
 void ACatFishingRodActor::DispatchPresentationChanged(const FCatFishingRodPresentationState& Previous,
 	const FCatFishingRodPresentationState& Current)
 {
+	// 收竿后 Actor 还要活满一个终态复制窗（见 UCatFishingService::PackRod）才销毁，
+	// 期间必须立刻从视觉和碰撞上消失，否则玩家会看到一根杵着不走、还挡路的幽灵竿。
+	// 放在分发路径而不是权威写口：服务器与每个客户端各自在"得知"这次变化的那一刻本地执行；
+	// bHidden 虽是复制属性，但 bActorEnableCollision 不是，只有本地各自执行才能保证两者一致。
+	// 判据用 Current 的绝对状态而非 Previous->Current 跃迁：中途加入的客户端首帧 Previous 是默认结构体，
+	// 跃迁判据会漏掉正处于死亡窗口里的竿。bDeployed 在竿的正常生命周期里恒为 true，故不会误伤。
+	if (Current.RodActorId.IsValid() && !Current.bDeployed)
+	{
+		SetActorHiddenInGame(true);
+		SetActorEnableCollision(false);
+	}
+	// 先应用皮肤（视觉资源切换），再广播通用状态变化事件给蓝图做其余表现响应
 	BP_ApplyRodSkin(Current.RodSkinDefinitionId);
 	BP_OnRodPresentationChanged(Previous, Current);
 }

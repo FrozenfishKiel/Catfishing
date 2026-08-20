@@ -4,6 +4,7 @@
 #include "AbilitySystem/CatFishingAbilityTags.h"
 #include "AbilitySystem/CatFishingStaminaEffect.h"
 #include "AbilitySystem/CatSurvivalAttributeSet.h"
+#include "Character/CatCharacter.h"
 #include "Abilities/GameplayAbility.h"
 
 namespace
@@ -181,8 +182,11 @@ bool UCatAbilitySystemComponent::ApplyFishingStaminaDelta(const float Delta)
 
 bool UCatAbilitySystemComponent::InitializeFishingStaminaForSession()
 {
+	// 基线按 Avatar 的猫种类解析，与搏斗装配的 CatStaminaMaximum 保持同源；非 CatCharacter Avatar 走全局值。
+	const ACatCharacter* Character = Cast<ACatCharacter>(GetAvatarActor());
+	const FName CatDefinitionId = Character ? Character->GetCatDefinitionId() : NAME_None;
 	float Baseline = 0.0f;
-	if (!GetDefault<UCatAbilitySettings>()->TryGetInitialFightStamina(Baseline))
+	if (!GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(CatDefinitionId, Baseline))
 	{
 		return false;
 	}

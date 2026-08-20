@@ -1,6 +1,52 @@
 #include "UI/CatFishingViewBridge.h"
 
+#include "Engine/World.h"
+#include "EngineUtils.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
+#include "GameFramework/PlayerState.h"
+
+UCatFishingViewBridge* UCatFishingViewBridge::CreateFishingViewBridge(UObject* Outer)
+{
+	return NewObject<UCatFishingViewBridge>(Outer ? Outer : GetTransientPackage());
+}
+
+// 客户端只能看到复制过来的会话；按公开的 FisherPlayerState 匹配，不读任何服务器私有身份。
+ACatFishingSession* UCatFishingViewBridge::FindFishingSessionForPlayerState(UObject* WorldContextObject,
+	APlayerState* PlayerState)
+{
+	UWorld* World = WorldContextObject ? WorldContextObject->GetWorld() : nullptr;
+	if (!World || !PlayerState) return nullptr;
+	for (TActorIterator<ACatFishingSession> It(World); It; ++It)
+	{
+		ACatFishingSession* Session = *It;
+		if (IsValid(Session) && Session->GetSnapshot().FisherPlayerState == PlayerState && !Session->IsTerminal())
+		{
+			return Session;
+		}
+	}
+	return nullptr;
+}
+
+// 同样只读复制过来的公开事实：Rod 的 PresentationState.OperatorPlayerState 就是"谁在操作这根竿"，
+// 客户端与服务器看到的是同一份值，不需要（也拿不到）服务器侧的 DeployedRodByPlayerState 索引。
+ACatFishingRodActor* UCatFishingViewBridge::FindRodOperatedByPlayerState(UObject* WorldContextObject,
+	APlayerState* PlayerState)
+{
+	UWorld* World = WorldContextObject ? WorldContextObject->GetWorld() : nullptr;
+	if (!World || !PlayerState) return nullptr;
+	for (TActorIterator<ACatFishingRodActor> It(World); It; ++It)
+	{
+		ACatFishingRodActor* Rod = *It;
+		if (!IsValid(Rod)) continue;
+		const FCatFishingRodPresentationState& State = Rod->GetPresentationState();
+		if (State.OperatorPlayerState == PlayerState && State.bDeployed && !State.bBroken)
+		{
+			return Rod;
+		}
+	}
+	return nullptr;
+}
 
 bool UCatFishingViewBridge::BindSession(ACatFishingSession* Session)
 {
@@ -34,4 +80,5 @@ void UCatFishingViewBridge::RefreshFromSession()
 	if (!Session) return;
 	ViewState = FCatFishingViewState::FromSnapshot(Session->GetSnapshot());
 	OnViewStateChanged.Broadcast(ViewState);
+	OnViewStateChangedBP.Broadcast(ViewState);
 }

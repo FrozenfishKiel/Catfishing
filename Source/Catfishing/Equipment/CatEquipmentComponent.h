@@ -22,6 +22,7 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** 提供服务器最终装配或客户端复制读模型；调用方只能据此显示/校验 Revision，不能通过引用补耐久或改库存。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Equipment")
 	const FCatEquipmentLoadoutSnapshot& GetSnapshot() const;
 
 	/** 根据服务器目录与可信解锁证明验证三个稳定 ID 后首次原子装配；客户端 Profile 选择不授予权限，也不能借重复请求修复耐久。 */

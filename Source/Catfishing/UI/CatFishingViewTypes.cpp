@@ -10,6 +10,8 @@ FCatFishingViewState FCatFishingViewState::FromSnapshot(const FCatFishingSession
 	View.FishDefinitionId = Snapshot.FishDefinitionId;
 	View.NormalizedFishStamina = Snapshot.NormalizedFishStamina;
 	View.bReeling = Snapshot.bReeling;
+	View.bSlacking = Snapshot.bSlacking;
+	View.bPerfectHook = Snapshot.bPerfectHook;
 	View.FishMotionIntent = Snapshot.FishMotionIntent;
 	return View;
 }

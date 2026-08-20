@@ -15,7 +15,7 @@ public class Catfishing : ModuleRules
 		});
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
-			"InputCore", "GameplayTasks",
+			"InputCore", "GameplayTasks", "CableComponent",
 			"GameplayStateTreeModule", "EnhancedInput",
 			"Slate", "SlateCore", "OnlineSubsystemUtils"
 		});

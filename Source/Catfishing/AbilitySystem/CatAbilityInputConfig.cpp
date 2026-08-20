@@ -5,7 +5,8 @@
 
 bool UCatAbilityInputConfig::IsRuntimeReady() const
 {
-	if (AbilityInputActions.Num() != 5)
+	// 五个核心钓鱼输入必须齐全；允许追加可选输入（例如右键放线）。
+	if (AbilityInputActions.Num() < 5)
 	{
 		return false;
 	}

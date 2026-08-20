@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "GameplayTagContainer.h"
 #include "Fishing/Integration/CatFishingCommandTypes.h"
 #include "CatFishingCommandComponent.generated.h"
 
@@ -58,6 +59,10 @@ public:
 	FCatFishingInputEdge SubmitRodInteract();
 	FCatFishingInputEdge SubmitPrimaryPressed();
 	FCatFishingInputEdge SubmitPrimaryReleased();
+	FCatFishingInputEdge SubmitSlackPressed();
+	FCatFishingInputEdge SubmitSlackReleased();
+	FCatFishingInputEdge SubmitChumPressed();
+	FCatFishingInputEdge SubmitChumReleased();
 	FCatFishingInputEdge SubmitCancel();
 	FCatFishingInputEdge SubmitScoop();
 	FCatFishingInputEdge SubmitChum();
@@ -93,6 +98,36 @@ private:
 	FCatFishingInputEdge MakeDiscreteEdge();
 	void DispatchAbilityCommand(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge);
 	void HandleAbilityCommandFromAuthority(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge);
+	/**
+	 * 权威侧广播一次性表现事件；Character 按标签决定是否跳过已经由 Ability 预测过的本地动作。
+	 * 只用于"失败时不留任何权威痕迹"的动作；有复制状态可读的动作走各自的表现事件，走这条会播两遍。
+	 * 调用点必须在语义已经确定之后——左键按下有瞄准/提竿/收线三种含义，不能在分派前统一广播。
+	 */
+	void BroadcastCosmeticEventFromAuthority(const FGameplayTag& EventTag) const;
+	/** 服务器按 Controller 视线射线∩水面重建抛竿命令（规格 3.1：点哪落哪、无蓄力）；所有 ID/Revision/Handle 由服务器填。 */
+	void BeginCastFromViewOnAuthority(APlayerController* Controller, const FGuid& RequestId);
+	/** 服务器按 Q 按住时长换算蓄力并投放窝料（规格 3.1 打窝：蓄力抛掷）；落点用与客户端预览相同的弹道预测。 */
+	void ThrowChumFromChargeOnAuthority(APlayerController* Controller, const FGuid& RequestId, double HeldSeconds);
+	/** 服务器记录的 Q 按下时刻（世界时间）；<0 表示当前未蓄力。 */
+	double ChumChargeStartServerTime = -1.0;
+
+	/**
+	 * 本地记录的 Q 按下时刻（世界时间）；<0 表示当前未蓄力。
+	 * 与 ChumChargeStartServerTime 分开的理由：后者只在 HandleAbilityCommandFromAuthority 里写，
+	 * 远端客户端本地那一份永远是 -1，拿它画预览会变成"只有主机看得见"。
+	 * 这一份在本地提交边沿时就写好，纯表现用途，不参与任何裁决（实际蓄力时长仍以服务器那份为准）。
+	 */
+	double LocalChumChargeStartTime = -1.0;
+
+	/** 服务器记录的"本次左键按住=瞄准抛竿"关联 ID；只有同一次按住的松开才触发抛竿，防止提竿失败后的松开误抛。 */
+	FGuid ServerAimingCorrelationId;
+
+public:
+	/** 调试可视化只读：当前 Q 蓄力起始世界时间；<0 表示未蓄力。仅在权威端有效。 */
+	double GetChumChargeStartServerTime() const { return ChumChargeStartServerTime; }
+
+	/** 表现只读：本地 Q 蓄力起始世界时间；<0 表示未蓄力。主机与客户端都有效，预览线用这个。 */
+	double GetLocalChumChargeStartTime() const { return LocalChumChargeStartTime; }
 	void ReceivePlaceChumResultLocally(const FCatPlaceChumResult& Result);
 	void ReceiveBeginCastResultLocally(const FCatBeginCastResult& Result);
 

@@ -4,12 +4,16 @@
 #include "AbilitySystem/CatAbilitySet.h"
 #include "AbilitySystem/CatAbilitySettings.h"
 #include "AbilitySystem/CatAbilitySystemComponent.h"
+#include "AbilitySystem/CatFishingAbilityTags.h"
 #include "AbilitySystem/CatStageCTestAbility.h"
 #include "AbilitySystem/CatSurvivalAttributeSet.h"
+#include "Animation/AnimMontage.h"
 #include "Condition/CatConditionComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatEquipmentSettings.h"
+#include "Logging/CatLog.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
@@ -19,6 +23,7 @@
 #include "Items/CatItemsService.h"
 #include "Items/CatItemsSettings.h"
 #include "Fishing/CatFishingService.h"
+#include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Social/CatSocialService.h"
 
 // 构造流程：一次创建 Character-owned ASC/AttributeSet、个人鱼护复制出口、离散身体状态和局内装备组件；只开启 ASC 组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
@@ -55,6 +60,29 @@ UCatConditionComponent* ACatCharacter::GetConditionComponent() const
 	return ConditionComponent;
 }
 
+// 一次性表现广播落地点：挥网仍由本地 Ability 先播，所以发起端跳过；Primary 输入有瞄准/提竿/收线
+// 三种语义，已不再按下即播，因此提竿事件也必须让发起端收到服务器确认后的表现。
+void ACatCharacter::Multicast_PlayCosmeticEvent_Implementation(const FGameplayTag EventTag)
+{
+	const bool bLocallyPredicted = EventTag != CatFishingAbilityTags::Cosmetic_Fishing_HookPull;
+	if (!EventTag.IsValid() || (IsLocallyControlled() && bLocallyPredicted))
+	{
+		return;
+	}
+	BP_PlayCosmeticEvent(EventTag);
+}
+
+bool ACatCharacter::PlayFishingCastMontageFromPresentation()
+{
+	if (GetNetMode() == NM_DedicatedServer)
+	{
+		return false;
+	}
+	const UCatFishingPresentationSettings* Presentation = GetDefault<UCatFishingPresentationSettings>();
+	UAnimMontage* Montage = Presentation ? Presentation->CastMontage.LoadSynchronous() : nullptr;
+	return Montage && PlayAnimMontage(Montage) > 0.0f;
+}
+
 // Equipment 读取流程：直接返回构造期唯一一局组件；调用方不得从 Profile SaveGame 或 UI 建立第二个运行装配聚合。
 UCatEquipmentComponent* ACatCharacter::GetEquipmentComponent() const
 {
@@ -78,6 +106,7 @@ void ACatCharacter::PossessedBy(AController* NewController)
 		GrantDefaultAbilitySetOnce();
 		GrantStageCTestAbility();
 		RegisterPersonalFishGuard();
+		ApplyStarterLoadoutIfConfigured();
 	}
 }
 
@@ -179,6 +208,35 @@ void ACatCharacter::RegisterPersonalFishGuard()
 		OwningPlayerState->GetUniqueId()->ToString(), Capacity);
 }
 
+// 开发便利装配流程：只在 authority、开关打开、Loadout 仍为空时执行一次；装配与发窝料都走正式权威写口并留结构化日志，失败不重试。
+void ACatCharacter::ApplyStarterLoadoutIfConfigured()
+{
+	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+	if (!HasAuthority() || !EquipmentComponent || !Settings || !Settings->bAutoConfigureStarterLoadout)
+	{
+		return;
+	}
+	const FCatEquipmentLoadoutSnapshot& Snapshot = EquipmentComponent->GetSnapshot();
+	if (!Snapshot.RodDefinitionId.IsNone())
+	{
+		return;
+	}
+	const FCatDomainCommandResult Configure = EquipmentComponent->ConfigureLoadoutFromAuthority(FGuid::NewGuid(),
+		Snapshot.Revision, Settings->StarterRodDefinitionId, Settings->StarterBaitDefinitionId,
+		Settings->StarterFloatDefinitionId, Settings->StarterScoopNetDefinitionId);
+	UE_LOG(LogCatCharacter, Log, TEXT("Event=starter_loadout_configure Committed=%s Error=%s Revision=%lld"),
+		Configure.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Configure.Error), Configure.Revision);
+	if (!Configure.bCommitted || Settings->StarterChumDefinitionId.IsNone() || Settings->StarterChumQuantity <= 0)
+	{
+		return;
+	}
+	const FCatDomainCommandResult Grant = EquipmentComponent->GrantRunConsumableFromAuthority(FGuid::NewGuid(),
+		EquipmentComponent->GetSnapshot().Revision, Settings->StarterChumDefinitionId, Settings->StarterChumQuantity);
+	UE_LOG(LogCatCharacter, Log, TEXT("Event=starter_chum_grant Committed=%s Error=%s Revision=%lld Definition=%s Quantity=%d"),
+		Grant.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Grant.Error), Grant.Revision,
+		*Settings->StarterChumDefinitionId.ToString(), Settings->StarterChumQuantity);
+}
+
 // 会话中断通知流程：向当前 authority World 的 Fishing 与 Social 服务报告身体失效；前者终止半场搏斗，后者返还仍在追回窗口的鱼，二者都不跨 World 保存协议。
 void ACatCharacter::NotifyFishingOwnerUnavailable()
 {
@@ -225,9 +283,15 @@ void ACatCharacter::ApplyInitialAttributesOnce()
 	float Poison = 0.0f;
 	float FishingStrength = 0.0f;
 	float FightStamina = 0.0f;
-	if (!GetDefault<UCatAbilitySettings>()->TryGetInitialAttributes(
+	if (!GetDefault<UCatAbilitySettings>()->TryGetInitialAttributesForCharacter(CatDefinitionId,
 		Hunger, Fatigue, Poison, FishingStrength, FightStamina))
 	{
+		if (!CatDefinitionId.IsNone())
+		{
+			UE_LOG(LogCatCharacter, Warning,
+				TEXT("Event=initial_attributes_unresolved CatDefinitionId=%s Reason=DefinitionMissingOrNotReady"),
+				*CatDefinitionId.ToString());
+		}
 		return;
 	}
 	AbilitySystemComponent->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetHungerAttribute(), Hunger);

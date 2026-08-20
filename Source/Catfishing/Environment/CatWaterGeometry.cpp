@@ -656,7 +656,15 @@ FCatWaterGeometryBuildResult FCatWaterGeometry::Build(const FCatWaterGeometryBui
 	Result.bSucceeded = Result.Cache.IsRuntimeReady();
 	if (!Result.bSucceeded)
 	{
-		Result.Errors.Add(TEXT("Canonical water geometry cache is not runtime ready."));
+		UE_LOG(LogTemp, Error, TEXT("Water Cache Runtime Ready Failed"));
+
+		UE_LOG(LogTemp, Error, TEXT("Handle Valid=%d"), Result.Cache.Handle.IsValid());
+		UE_LOG(LogTemp, Error, TEXT("Include Count=%d"), Result.Cache.IncludePolygons.Num());
+		UE_LOG(LogTemp, Error, TEXT("Bounds Valid=%d"), Result.Cache.Bounds2D.bIsValid);
+		UE_LOG(LogTemp, Error, TEXT("PlaneToWorld NaN=%d"), Result.Cache.PlaneToWorld.ContainsNaN());
+		UE_LOG(LogTemp, Error, TEXT("WorldToPlane NaN=%d"), Result.Cache.WorldToPlane.ContainsNaN());
+		UE_LOG(LogTemp, Error, TEXT("WaterTolerance=%f"), Result.Cache.WaterPointVerticalToleranceCm);
+		UE_LOG(LogTemp, Error, TEXT("MaxSample=%f"), Result.Cache.MaxSampleSegmentLengthCm);
 	}
 	return Result;
 }

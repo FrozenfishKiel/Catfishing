@@ -85,6 +85,15 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Physical", meta = (ClampMin = "0.0"))
 	double MaximumWeightKilograms = 0.0;
 
+	/**
+	 * 抄网可捞圆圈的半径（厘米），圆心随鱼的权威位置移动。
+	 * 抄手向正前方水平发射一条长度 = 抄网 ScoopReachCentimeters 的线段，与这个圆相交即判定够得着。
+	 * 判定纯水平（俯视投影），高度差另由 UCatFishingSettings::MaximumScoopVerticalDeltaCentimeters 单独限制。
+	 * 语义是"这条鱼有多好捞"：小鱼给小圈、巨鱼给大圈以降低多人抢抄难度。0 表示未裁，服务器一律拒绝抢抄。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "0.0", Units = "cm"))
+	double ScoopTargetRadiusCentimeters = 0.0;
+
 	/** 刷新该鱼需要的在场协作能力人数；单人局过滤任何大于 1 的定义。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "1", ClampMax = "8"))
 	int32 MinimumFightParticipants = 0;

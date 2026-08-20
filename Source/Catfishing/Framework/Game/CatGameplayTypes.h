@@ -360,10 +360,14 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerRescueCharacterToCamp(ACatCampHubActor* Camp, ACatCharacter* TargetCharacter, FGuid RequestId);
 
-	/** 提交三个功能装备 ID；服务器目录与可信解锁证明共同通过后才允许首次装配，客户端 Profile 选择本身不授予权限。 */
-	UFUNCTION(Server, Reliable)
+	/** 提交四个功能装备 ID；服务器目录与可信解锁证明共同通过后才允许首次装配，客户端 Profile 选择本身不授予权限。ScoopNet 可为 None，但近岸抢抄需要它。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
 	void ServerConfigureEquipment(FGuid RequestId, int64 ExpectedRevision, FName RodDefinitionId,
-		FName BaitDefinitionId, FName FloatDefinitionId);
+		FName BaitDefinitionId, FName FloatDefinitionId, FName ScoopNetDefinitionId);
+
+	/** 向本人一局耗材栈发放指定数量；服务器从当前 Pawn 重建身份后调用 Equipment 唯一发放写口，客户端参数不授予权限。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
+	void ServerGrantRunConsumable(FGuid RequestId, int64 ExpectedRevision, FName DefinitionId, int32 Quantity);
 
 	/** 在固定营地消费浮木并修复当前鱼竿；不升级或替换装备。 */
 	UFUNCTION(Server, Reliable)

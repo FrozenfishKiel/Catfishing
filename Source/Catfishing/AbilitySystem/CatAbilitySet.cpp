@@ -22,7 +22,11 @@ bool UCatAbilitySet::IsRuntimeReady() const
 		SeenAbilities.Add(Entry.Ability);
 		if (Entry.InputTag.IsValid())
 		{
-			const ECatAbilityActivationPolicy ExpectedPolicy = Entry.InputTag == CatFishingAbilityTags::Input_Fishing_Primary
+			// 按住型输入（拖 / 放线 / 打窝蓄力）必须 WhileInputActive，其余离散输入必须 OnInputTriggered。
+			const bool bHeldInput = Entry.InputTag == CatFishingAbilityTags::Input_Fishing_Primary
+				|| Entry.InputTag == CatFishingAbilityTags::Input_Fishing_Slack
+				|| Entry.InputTag == CatFishingAbilityTags::Input_Fishing_Chum;
+			const ECatAbilityActivationPolicy ExpectedPolicy = bHeldInput
 				? ECatAbilityActivationPolicy::WhileInputActive : ECatAbilityActivationPolicy::OnInputTriggered;
 			if (Entry.ActivationPolicy != ExpectedPolicy)
 			{

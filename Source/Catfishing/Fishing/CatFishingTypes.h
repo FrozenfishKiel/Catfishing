@@ -170,9 +170,21 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	double NormalizedFishStamina = 0.0;
 
-	/** 当前连续收线输入；高频更新不推进离散命令 Revision。 */
+	/** 搏斗中的竿耐久余量（会话内资源：进入搏斗时=鱼竿 DA 耐久上限，磨损只在本会话累计）；非搏斗阶段保持 0。 */
+	UPROPERTY(BlueprintReadOnly)
+	double RodDurabilityRemaining = 0.0;
+
+	/** 当前连续收线（左键拖）输入；高频更新不推进离散命令 Revision。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bReeling = false;
+
+	/** 当前连续放线（右键松）输入；拖优先于放，二者同时按住时以 bReeling 为准。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bSlacking = false;
+
+	/** 本次是否在完美响应窗内提竿；鱼力量/体力已按性格模板折减。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bPerfectHook = false;
 
 	/** FishEncounter 的只读运动意图；不含位置或 Transform。 */
 	UPROPERTY(BlueprintReadOnly)

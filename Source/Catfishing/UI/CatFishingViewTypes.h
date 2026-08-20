@@ -15,6 +15,8 @@ struct CATFISHING_API FCatFishingViewState
 	UPROPERTY(BlueprintReadOnly) FName FishDefinitionId = NAME_None;
 	UPROPERTY(BlueprintReadOnly) double NormalizedFishStamina = 0.0;
 	UPROPERTY(BlueprintReadOnly) bool bReeling = false;
+	UPROPERTY(BlueprintReadOnly) bool bSlacking = false;
+	UPROPERTY(BlueprintReadOnly) bool bPerfectHook = false;
 	UPROPERTY(BlueprintReadOnly) ECatFishMotionIntent FishMotionIntent = ECatFishMotionIntent::None;
 
 	static FCatFishingViewState FromSnapshot(const FCatFishingSessionSnapshot& Snapshot);

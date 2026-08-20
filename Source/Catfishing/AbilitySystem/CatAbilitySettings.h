@@ -8,6 +8,7 @@ class UInputAction;
 class UInputMappingContext;
 class UCatAbilityInputConfig;
 class UCatAbilitySet;
+class UCatCharacterDefinition;
 
 /** Character-owned ASC 的已验证复制策略；Mixed 仍需 V3 证据，因此没有可选枚举值。 */
 UENUM(BlueprintType)
@@ -42,6 +43,19 @@ public:
 	/** 只读取已验证的正 FightStamina 基线，供 SetByCaller 初始化/恢复 GE 使用。 */
 	bool TryGetInitialFightStamina(float& OutFightStamina) const;
 
+	/** 同步解析猫种类清单并只接受唯一就绪匹配；重复或未就绪返回空，防止两端选到不同数值。 */
+	const UCatCharacterDefinition* FindRuntimeCharacterDefinition(FName CatDefinitionId) const;
+
+	/**
+	 * 按猫种类读取五项初始属性：Id 为 None 时回退全局五项初值（旧行为）；
+	 * Id 已指定但定义缺失/未就绪时 fail-closed 返回 false，不悄悄换成全局值。
+	 */
+	bool TryGetInitialAttributesForCharacter(FName CatDefinitionId, float& OutHunger, float& OutFatigue,
+		float& OutPoison, float& OutFishingStrength, float& OutFightStamina) const;
+
+	/** 按猫种类读取搏斗体力基线；解析语义与上项一致，供 ASC 会话初始化与搏斗装配共用。 */
+	bool TryGetFightStaminaBaselineForCharacter(FName CatDefinitionId, float& OutFightStamina) const;
+
 	/** Character-owned ASC 正式运行总 gate；默认关闭，项目接线后可在所有构建配置显式启用。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
 	bool bEnableCharacterAbilityRuntime = false;
@@ -73,6 +87,10 @@ public:
 	/** 新 Character 初始 FightStamina；必须为正才能支持正式搏斗。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Attributes", meta = (ClampMin = "-1.0"))
 	float InitialFightStamina = -1.0f;
+
+	/** 正式猫种类清单；默认空且不扫描资产目录，Character 通过 CatDefinitionId 选择其中一项。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Characters")
+	TArray<TSoftObjectPtr<UCatCharacterDefinition>> CharacterDefinitions;
 
 	/** Character authority 的正式默认 AbilitySet；代码不创建或猜测资产路径。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Fishing", meta = (AllowedClasses = "/Script/Catfishing.CatAbilitySet"))

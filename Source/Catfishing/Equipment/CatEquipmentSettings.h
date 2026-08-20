@@ -32,4 +32,29 @@ public:
 	/** 修竿点消费的浮木定义 ID；None 表示维修链未配置。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Repair")
 	FName DriftwoodDefinitionId = NAME_None;
+
+	/**
+	 * 开发便利：Character 被占有时若 Loadout 为空，自动走一次 ConfigureLoadoutFromAuthority 装配 starter 套装并发放窝料。
+	 * 仍经过完整的目录/解锁/Revision 校验；正式的营地选装 UI 接好后应关闭。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Development")
+	bool bAutoConfigureStarterLoadout = false;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Development")
+	FName StarterRodDefinitionId = NAME_None;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Development")
+	FName StarterBaitDefinitionId = NAME_None;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Development")
+	FName StarterFloatDefinitionId = NAME_None;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Development")
+	FName StarterScoopNetDefinitionId = NAME_None;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Development")
+	FName StarterChumDefinitionId = NAME_None;
+
+	UPROPERTY(Config, EditAnywhere, Category = "Development", meta = (ClampMin = "0"))
+	int32 StarterChumQuantity = 0;
 };

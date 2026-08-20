@@ -1906,20 +1906,54 @@ void ACatfishingPlayerController::ServerRescueCharacterToCamp_Implementation(ACa
 	}
 }
 
-// 装配 RPC 流程：先过统一玩法 gate，当前 Pawn 还必须是项目 Character；EquipmentComponent 用服务器目录验证三个定义并原子写入。
+// 装配 RPC 流程：先过统一玩法 gate，当前 Pawn 还必须是项目 Character；EquipmentComponent 用服务器目录验证四个定义并原子写入。
 void ACatfishingPlayerController::ServerConfigureEquipment_Implementation(const FGuid RequestId,
-	const int64 ExpectedRevision, const FName RodDefinitionId, const FName BaitDefinitionId, const FName FloatDefinitionId)
+	const int64 ExpectedRevision, const FName RodDefinitionId, const FName BaitDefinitionId,
+	const FName FloatDefinitionId, const FName ScoopNetDefinitionId)
 {
 	if (!CanForwardGameplayCommand())
 	{
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=configure_equipment_rejected Reason=CommandsClosedOrInactive Request=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 		return;
 	}
 	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	if (UCatEquipmentComponent* Equipment = ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr)
+	UCatEquipmentComponent* Equipment = ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr;
+	if (!Equipment)
 	{
-		Equipment->ConfigureLoadoutFromAuthority(RequestId, ExpectedRevision,
-			RodDefinitionId, BaitDefinitionId, FloatDefinitionId);
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=configure_equipment_rejected Reason=NoEquipmentComponent Request=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		return;
 	}
+	const FCatDomainCommandResult Result = Equipment->ConfigureLoadoutFromAuthority(RequestId, ExpectedRevision,
+		RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId);
+	UE_LOG(LogCatfishing, Log, TEXT("Event=configure_equipment Committed=%s Error=%s Revision=%lld Rod=%s Bait=%s Float=%s Net=%s"),
+		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error), Result.Revision,
+		*RodDefinitionId.ToString(), *BaitDefinitionId.ToString(), *FloatDefinitionId.ToString(), *ScoopNetDefinitionId.ToString());
+}
+
+// 一局耗材发放 RPC 流程：先过统一玩法 gate，再从当前 Pawn 取 Equipment；发放本身仍由组件校验定义是否为 run consumable 并做 Revision/幂等裁决。
+void ACatfishingPlayerController::ServerGrantRunConsumable_Implementation(const FGuid RequestId,
+	const int64 ExpectedRevision, const FName DefinitionId, const int32 Quantity)
+{
+	if (!CanForwardGameplayCommand())
+	{
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=grant_consumable_rejected Reason=CommandsClosedOrInactive Request=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		return;
+	}
+	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
+	UCatEquipmentComponent* Equipment = ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr;
+	if (!Equipment)
+	{
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=grant_consumable_rejected Reason=NoEquipmentComponent Request=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		return;
+	}
+	const FCatDomainCommandResult Result = Equipment->GrantRunConsumableFromAuthority(RequestId, ExpectedRevision, DefinitionId, Quantity);
+	UE_LOG(LogCatfishing, Log, TEXT("Event=grant_consumable Committed=%s Error=%s Revision=%lld Definition=%s Quantity=%d"),
+		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error), Result.Revision,
+		*DefinitionId.ToString(), Quantity);
 }
 
 // 修竿 RPC 流程：先过统一玩法 gate，再让 Camp 验证本人在固定范围并调用 Equipment 的浮木/耐久事务；不提供远程修理。

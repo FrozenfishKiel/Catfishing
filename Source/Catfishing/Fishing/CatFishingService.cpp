@@ -14,13 +14,16 @@
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
+#include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
+#include "Fishing/CatFishingSettings.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Social/CatSocialService.h"
 #include "GameFramework/PlayerState.h"
 #include "Components/CapsuleComponent.h"
+#include "GameFramework/CharacterMovementComponent.h"
 
 // 创建条件流程：仅 authority Game World 持有会话索引；客户端不能创建平行 StateTree。
 bool UCatFishingService::ShouldCreateSubsystem(UObject* Outer) const
@@ -79,7 +82,8 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	ACatCharacter* Character = FisherController ? Cast<ACatCharacter>(FisherController->GetPawn()) : nullptr;
 	APlayerState* PlayerState = FisherController ? FisherController->PlayerState : nullptr;
 	UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
-	ACatFishingRodActor* Rod = FindDeployedRod(PlayerState);
+	// 抛竿按"正在操作的竿"解析而非"自己拥有的竿"：多人可用别人的竿抛竿（饵料/磨损记在抛竿者自己的装备上）。
+	ACatFishingRodActor* Rod = FindRodOperatedBy(PlayerState);
 	if (!World || !Character || !PlayerState || !Equipment || !Rod)
 	{
 		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
@@ -92,8 +96,7 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		Result.Command.Error = ECatFishingCommandError::RodActorRevisionConflict;
 		return Finish(Result);
 	}
-	if (!RodState.bDeployed || RodState.bBroken || RodState.OwnerPlayerState != PlayerState
-		|| RodState.OperatorPlayerState != PlayerState)
+	if (!RodState.bDeployed || RodState.bBroken || RodState.OperatorPlayerState != PlayerState)
 	{
 		Result.Command.Error = RodState.bBroken ? ECatFishingCommandError::RodBroken : ECatFishingCommandError::RodOccupied;
 		return Finish(Result);
@@ -290,18 +293,25 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		Result.Error = ECatFishingCommandError::InvalidPayload;
 		return Result;
 	}
-	if (UCatWaterQuerySubsystem* WaterQuery = World->GetSubsystem<UCatWaterQuerySubsystem>())
+	// 放竿点规则：必须在水域样条线外侧（岸上），且离岸线不超过配置带宽（默认 4m）；找不到任何水域也拒绝。
 	{
-		const FCatWaterSpatialResult Shore = WaterQuery->QueryNearestShoreForPreview(GroundHit.ImpactPoint);
-		if (Shore.bSucceeded && Shore.Containment != ECatWaterContainment::Outside)
+		UCatWaterQuerySubsystem* WaterQuery = World->GetSubsystem<UCatWaterQuerySubsystem>();
+		const FCatWaterSpatialResult Shore = WaterQuery
+			? WaterQuery->QueryNearestShoreForPreview(GroundHit.ImpactPoint) : FCatWaterSpatialResult{};
+		const double MaxShoreDistance = GetDefault<UCatFishingSettings>()->RodPlacementMaxShoreDistanceCentimeters;
+		const bool bOnBank = Shore.bSucceeded && Shore.Containment == ECatWaterContainment::Outside;
+		const bool bWithinBand = MaxShoreDistance <= 0.0
+			|| FMath::Abs(Shore.SignedDistanceToShoreCm) <= MaxShoreDistance;
+		if (!bOnBank || !bWithinBand)
 		{
 			Result.Error = ECatFishingCommandError::InvalidWaterTarget;
 			return Result;
 		}
 	}
+	// 放竿合法性由上面的地面/岸带规则决定；表现 Mesh 的碰撞不能否决生成，故 AlwaysSpawn。
 	const FTransform SpawnTransform(Character->GetActorRotation(), GroundHit.ImpactPoint);
 	ACatFishingRodActor* Rod = World->SpawnActorDeferred<ACatFishingRodActor>(RodClass, SpawnTransform,
-		Controller, Character, ESpawnActorCollisionHandlingMethod::DontSpawnIfColliding);
+		Controller, Character, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	const FGuid RodActorId = FGuid::NewGuid();
 	if (!Rod || !Rod->ConfigureCanonicalAnchorsFromAuthority(RodDefinition->RodTipLocalTransform,
 		RodDefinition->StandLocalTransform, RodDefinition->GripLocalTransform)
@@ -334,25 +344,56 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 	Result.RequestId = Command.Context.RequestId;
 	APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
 	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
-	ACatFishingRodActor* Rod = FindDeployedRod(PlayerState);
-	if (!Rod || !Character || Rod->GetPresentationState().RodActorId != Command.Context.RodActorId)
+	// 按公开 RodActorId 在全部部署竿中解析：多人允许操作别人的竿（无人操作即可接管）。
+	ACatFishingRodActor* Rod = FindDeployedRodById(Command.Context.RodActorId);
+	if (!Rod || !Character)
 	{
 		Result.Error = ECatFishingCommandError::NoRod;
 		return Result;
 	}
 	const FCatFishingRodPresentationState& State = Rod->GetPresentationState();
-	if (State.bBroken || State.OwnerPlayerState != PlayerState || State.OperatorPlayerState
+	if (State.bBroken || State.OperatorPlayerState
 		|| FVector::DistSquared(Character->GetActorLocation(), Rod->GetStandWorldTransform().GetLocation()) > FMath::Square(250.0))
 	{
 		Result.Error = State.bBroken ? ECatFishingCommandError::RodBroken : ECatFishingCommandError::RodOccupied;
 		return Result;
 	}
+	// 该竿若绑着一个还在等口的会话（原钓手离开），接管者必须能合法承接会话；先校验再占位，失败不留半状态。
+	ACatFishingSession* BoundSession = FindActiveSessionByRod(Rod);
+	if (BoundSession)
+	{
+		const ECatFishingPhase BoundPhase = BoundSession->GetSnapshot().Phase;
+		const bool bTakeoverPhase = BoundPhase == ECatFishingPhase::Waiting
+			|| BoundPhase == ECatFishingPhase::Probe || BoundPhase == ECatFishingPhase::TrueBiteWindow;
+		if (!bTakeoverPhase || !TransferSessionFisher(BoundSession, Controller))
+		{
+			Result.Error = ECatFishingCommandError::RodOccupied;
+			return Result;
+		}
+	}
 	if (!Rod->SetOperatorFromAuthority(PlayerState, Command.Context.ExpectedRodActorRevision))
 	{
+		// 接力转移已成功但占位失败：把会话交还原状不可行（原钓手可能已离线），保守起见维持转移结果，
+		// 下一次 E 重试占位即可（会话钓手已是本人，TransferSessionFisher 幂等）。
 		Result.Error = ECatFishingCommandError::RodActorRevisionConflict;
 		return Result;
 	}
-	Character->SetActorTransform(Rod->GetStandWorldTransform());
+	// 站位锚点是地面点；角色原点在胶囊中心，必须抬高半高再传送，并用 TeleportTo 让引擎自动排斥穿插，否则会卡进 Landscape。
+	const FTransform Stand = Rod->GetStandWorldTransform();
+	const float HalfHeight = Character->GetCapsuleComponent()
+		? Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight() : 0.0f;
+	const FVector StandLocation = Stand.GetLocation() + FVector(0.0, 0.0, HalfHeight + 2.0f);
+	const FRotator StandRotation(0.0, Stand.Rotator().Yaw, 0.0);
+	if (!Character->TeleportTo(StandLocation, StandRotation))
+	{
+		Character->SetActorLocationAndRotation(StandLocation, StandRotation, false, nullptr, ETeleportType::TeleportPhysics);
+	}
+	// 操作竿位期间锁定移动，进入固定钓鱼姿态；离开竿（LeaveRod）或收竿（PackRod）时恢复行走。视角旋转不受影响。
+	if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
+	{
+		Movement->StopMovementImmediately();
+		Movement->DisableMovement();
+	}
 	Result.bCommitted = true;
 	Result.Error = ECatFishingCommandError::None;
 	Result.RodActorId = State.RodActorId;
@@ -366,24 +407,28 @@ FCatFishingCommandResult UCatFishingService::LeaveRod(AController* Controller, c
 	Result.CommandType = ECatFishingCommandType::LeaveRod;
 	Result.RequestId = Command.Context.RequestId;
 	APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
-	ACatFishingRodActor* Rod = FindDeployedRod(PlayerState);
-	FGuid SessionId;
-	FCatFishingSessionSnapshot Snapshot;
+	// 离开按"正在操作的竿"解析（可能是别人的竿），不再假设操作的就是自己的竿。
+	ACatFishingRodActor* Rod = FindRodOperatedBy(PlayerState);
 	if (!Rod || Rod->GetPresentationState().RodActorId != Command.Context.RodActorId)
 	{
 		Result.Error = ECatFishingCommandError::NoRod;
 		return Result;
 	}
-	if (TryGetActiveSessionForController(Controller, SessionId, Snapshot))
-	{
-		Result.Error = ECatFishingCommandError::ActiveSessionExists;
-		return Result;
-	}
+	// 有活跃会话也允许离开：会话与操作位解耦（等口阶段离开＝会话继续走计时，竿钩保持原状）；
+	// 搏斗阶段的弃战语义由命令分派层在调用本函数前先行终止会话。
 	if (Rod->GetPresentationState().OperatorPlayerState != PlayerState
 		|| !Rod->SetOperatorFromAuthority(nullptr, Command.Context.ExpectedRodActorRevision))
 	{
 		Result.Error = ECatFishingCommandError::RodActorRevisionConflict;
 		return Result;
+	}
+	// 离开竿位：解除操作期的移动锁定。
+	if (const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr)
+	{
+		if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
+		{
+			Movement->SetMovementMode(MOVE_Walking);
+		}
 	}
 	Result.bCommitted = true;
 	Result.Error = ECatFishingCommandError::None;
@@ -419,11 +464,25 @@ FCatFishingCommandResult UCatFishingService::PackRod(AController* Controller, co
 		return Result;
 	}
 	UnregisterDeployedRod(PlayerState, Rod);
+	// 收竿：解除可能残留的操作期移动锁定。
+	if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
+	{
+		Movement->SetMovementMode(MOVE_Walking);
+	}
 	Result.bCommitted = true;
 	Result.Error = ECatFishingCommandError::None;
 	Result.RodActorId = Command.Context.RodActorId;
 	Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
-	Rod->Destroy();
+	// 不能在这里裸 Destroy：上面 SetDeployedFromAuthority(false) 的 ForceNetUpdate 只是标脏，
+	// 真正发包要等下一次 NetDriver tick，那时 Actor 已 pending kill，远端客户端只会收到"销毁"而收不到
+	// bDeployed=false 这次属性变化，BP_OnRodPresentationChanged 在客户端上不会为收竿触发一次
+	// （listen server 本机因为是同步 dispatch 反而正常，所以这个 bug 在单机 PIE 下完全看不出来）。
+	// 与 ACatFishingSession::ScheduleTerminalDestroy 对齐：复用同一个终态复制窗，让客户端播完收竿表现再消失。
+	// 竿本身在 ACatFishingRodActor::DispatchPresentationChanged 里已经立刻隐藏并关碰撞，窗口期不会留下可见/挡路的残影。
+	double TerminalWindowSeconds = 0.0;
+	const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
+	Rod->SetLifeSpan(FishingSettings && FishingSettings->TryGetTerminalReplicationWindow(TerminalWindowSeconds)
+		? static_cast<float>(TerminalWindowSeconds) : KINDA_SMALL_NUMBER); // 配置缺失时下一帧销毁，不无界泄漏
 	return Result;
 }
 
@@ -540,6 +599,116 @@ ACatFishingRodActor* UCatFishingService::FindDeployedRod(const APlayerState* Pla
 	const TWeakObjectPtr<APlayerState> PlayerKey(const_cast<APlayerState*>(PlayerState));
 	const TWeakObjectPtr<ACatFishingRodActor>* WeakRod = DeployedRodByPlayerState.Find(PlayerKey);
 	return WeakRod ? WeakRod->Get() : nullptr;
+}
+
+// 多人竿共享查询组：都先压缩失效登记再线性扫描（部署竿数量=玩家数量级，线性可接受）。
+ACatFishingRodActor* UCatFishingService::FindDeployedRodById(const FGuid RodActorId)
+{
+	CompactDeployedRods();
+	if (!RodActorId.IsValid()) return nullptr;
+	for (const TPair<TWeakObjectPtr<APlayerState>, TWeakObjectPtr<ACatFishingRodActor>>& Pair : DeployedRodByPlayerState)
+	{
+		ACatFishingRodActor* Rod = Pair.Value.Get();
+		if (Rod && Rod->GetPresentationState().RodActorId == RodActorId) return Rod;
+	}
+	return nullptr;
+}
+
+ACatFishingRodActor* UCatFishingService::FindRodOperatedBy(const APlayerState* PlayerState)
+{
+	CompactDeployedRods();
+	if (!PlayerState) return nullptr;
+	for (const TPair<TWeakObjectPtr<APlayerState>, TWeakObjectPtr<ACatFishingRodActor>>& Pair : DeployedRodByPlayerState)
+	{
+		ACatFishingRodActor* Rod = Pair.Value.Get();
+		if (Rod && Rod->GetPresentationState().OperatorPlayerState == PlayerState) return Rod;
+	}
+	return nullptr;
+}
+
+ACatFishingRodActor* UCatFishingService::FindNearestOperableRod(const FVector& WorldLocation,
+	const double MaxDistanceCentimeters)
+{
+	CompactDeployedRods();
+	ACatFishingRodActor* Best = nullptr;
+	double BestDistanceSquared = FMath::Square(FMath::Max(0.0, MaxDistanceCentimeters));
+	for (const TPair<TWeakObjectPtr<APlayerState>, TWeakObjectPtr<ACatFishingRodActor>>& Pair : DeployedRodByPlayerState)
+	{
+		ACatFishingRodActor* Rod = Pair.Value.Get();
+		if (!Rod || Rod->GetPresentationState().bBroken || Rod->GetPresentationState().OperatorPlayerState) continue;
+		const double DistanceSquared = FVector::DistSquared(WorldLocation, Rod->GetStandWorldTransform().GetLocation());
+		if (DistanceSquared <= BestDistanceSquared)
+		{
+			BestDistanceSquared = DistanceSquared;
+			Best = Rod;
+		}
+	}
+	return Best;
+}
+
+ACatFishingSession* UCatFishingService::FindActiveSessionByRod(const ACatFishingRodActor* RodActor)
+{
+	CompactSessions();
+	if (!RodActor) return nullptr;
+	for (const TPair<FGuid, TWeakObjectPtr<ACatFishingSession>>& Pair : Sessions)
+	{
+		ACatFishingSession* Session = Pair.Value.Get();
+		if (Session && !Session->IsTerminal() && Session->GetSnapshot().RodActor == RodActor) return Session;
+	}
+	return nullptr;
+}
+
+ACatFishingSession* UCatFishingService::FindNearestScoopableSession(const FVector& WorldLocation,
+	const double MaxDistanceCentimeters)
+{
+	CompactSessions();
+	ACatFishingSession* Best = nullptr;
+	double BestDistanceSquared = FMath::Square(FMath::Max(0.0, MaxDistanceCentimeters));
+	for (const TPair<FGuid, TWeakObjectPtr<ACatFishingSession>>& Pair : Sessions)
+	{
+		ACatFishingSession* Session = Pair.Value.Get();
+		const ACatFishEncounterActor* Fish = Session ? Session->GetSnapshot().FishEncounterActor : nullptr;
+		// 与 Session::RequestScoop 的阶段口径保持一致：搏斗中和近岸都可抢抄（鱼身上的圈一直存在）。
+		// 这里只做粗筛路由，真正的射线∩圆判定和 Compare-and-Commit 都在 Session 内部。
+		const ECatFishingPhase Phase = Session ? Session->GetSnapshot().Phase : ECatFishingPhase::Created;
+		if (!Session || Session->IsTerminal() || !Fish
+			|| (Phase != ECatFishingPhase::HookedFight && Phase != ECatFishingPhase::NearShore))
+		{
+			continue;
+		}
+		const double DistanceSquared = FVector::DistSquared2D(WorldLocation, Fish->GetActorLocation());
+		if (DistanceSquared <= BestDistanceSquared)
+		{
+			BestDistanceSquared = DistanceSquared;
+			Best = Session;
+		}
+	}
+	return Best;
+}
+
+// 接力转移编排：新钓手不能已有自己的活跃会话（单活跃槽位不变量）；会话转移成功后才动正反索引，保持两边一致。
+bool UCatFishingService::TransferSessionFisher(ACatFishingSession* Session, AController* NewFisherController)
+{
+	CompactSessions();
+	const FString NewFisherId = ResolveStableNetId(NewFisherController);
+	if (!Session || Session->IsTerminal() || NewFisherId.IsEmpty()) return false;
+	const FGuid SessionId = Session->GetSnapshot().FishingSessionId;
+	const FString OldFisherId = SessionFisherById.FindRef(SessionId);
+	if (OldFisherId == NewFisherId) return true; // 已是当前钓手：幂等成功。
+	if (const FGuid* Existing = ActiveSessionByFisher.Find(NewFisherId); Existing && FindSession(*Existing))
+	{
+		return false; // 新钓手自己的会话还活着，不能同时接管别人的。
+	}
+	if (!Session->TransferFisherFromAuthority(NewFisherController)) return false;
+	if (!OldFisherId.IsEmpty() && ActiveSessionByFisher.FindRef(OldFisherId) == SessionId)
+	{
+		ActiveSessionByFisher.Remove(OldFisherId);
+	}
+	SessionFisherById.Add(SessionId, NewFisherId);
+	ActiveSessionByFisher.Add(NewFisherId, SessionId);
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_session_fisher_reindexed SessionId=%s NewFisher=%s"),
+		*SessionId.ToString(EGuidFormats::DigitsWithHyphens), *NewFisherId);
+	return true;
 }
 
 // 鱼竿登记流程：双端必须存活；首次登记成功，相同 Actor 幂等重放，不替换已有存活 Actor。

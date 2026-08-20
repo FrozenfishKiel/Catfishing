@@ -4,6 +4,9 @@
 #include "Tests/AutomationCommon.h"
 #include "UObject/UnrealType.h"
 
+#include "CableComponent.h"
+#include "Animation/AnimMontage.h"
+#include "Character/CatCharacter.h"
 #include "Components/SceneComponent.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingActorTypes.h"
@@ -11,6 +14,7 @@
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Components/CatFishingLineComponent.h"
 #include "Fishing/CatFishingTypes.h"
+#include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "GameFramework/PlayerState.h"
 #include "Net/UnrealNetwork.h"
 
@@ -136,6 +140,16 @@ bool FCatFishingActorNativeBasesContractTest::RunTest(const FString& Parameters)
 		TestFalse(FString::Printf(TEXT("%s is not abstract"), *CDO->GetClass()->GetName()), CDO->GetClass()->HasAnyClassFlags(CLASS_Abstract));
 		TestFalse(FString::Printf(TEXT("%s does not tick"), *CDO->GetClass()->GetName()), CDO->PrimaryActorTick.bCanEverTick);
 	}
+	const UFunction* CastMontageFunction = ACatCharacter::StaticClass()->FindFunctionByName(
+		GET_FUNCTION_NAME_CHECKED(ACatCharacter, PlayFishingCastMontageFromPresentation));
+	TestNotNull(TEXT("character exposes the replicated-state cast montage presentation entry"), CastMontageFunction);
+	if (CastMontageFunction)
+	{
+		TestTrue(TEXT("cast montage entry is cosmetic"), CastMontageFunction->HasAnyFunctionFlags(FUNC_BlueprintCosmetic));
+	}
+	const UCatFishingPresentationSettings* PresentationSettings = GetDefault<UCatFishingPresentationSettings>();
+	TestFalse(TEXT("cast montage is configured"), PresentationSettings->CastMontage.IsNull());
+	TestNotNull(TEXT("configured cast montage resolves"), PresentationSettings->CastMontage.LoadSynchronous());
 
 	FTestWorldWrapper WorldWrapper;
 	TestTrue(TEXT("create actor contract game world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
@@ -305,6 +319,41 @@ bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameter
 	const UCatFishingLineComponent* Line = GetDefault<UCatFishingLineComponent>();
 	TestFalse(TEXT("line component does not tick"), Line->PrimaryComponentTick.bCanEverTick);
 	TestFalse(TEXT("line component does not replicate gameplay state"), Line->GetIsReplicated());
+	ACatFishingHookActor* Hook = GetMutableDefault<ACatFishingHookActor>();
+	const UCableComponent* Cable = Cast<UCableComponent>(Hook->GetDefaultSubobjectByName(TEXT("FishingLine")));
+	TestNotNull(TEXT("hook owns a native fishing-line cable"), Cable);
+	if (Cable)
+	{
+		TestFalse(TEXT("visual cable itself is not replicated"), Cable->GetIsReplicated());
+		TestTrue(TEXT("visual cable has both endpoints fixed"), Cable->bAttachStart && Cable->bAttachEnd);
+		TestFalse(TEXT("visual cable collision stays disabled"), Cable->bEnableCollision);
+	}
+
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("create line presentation game world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	if (UWorld* World = WorldWrapper.GetTestWorld())
+	{
+		ACatFishingRodActor* Rod = World->SpawnActor<ACatFishingRodActor>();
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.Owner = Rod;
+		ACatFishingHookActor* RuntimeHook = World->SpawnActor<ACatFishingHookActor>(
+			ACatFishingHookActor::StaticClass(), FTransform::Identity, SpawnParameters);
+		TestNotNull(TEXT("spawn runtime hook for cable binding"), RuntimeHook);
+		WorldWrapper.BeginPlayInTestWorld();
+		if (RuntimeHook)
+		{
+			TestTrue(TEXT("authority identity publishes the line presentation state"),
+				RuntimeHook->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid()));
+			const UCableComponent* RuntimeCable = Cast<UCableComponent>(
+				RuntimeHook->GetDefaultSubobjectByName(TEXT("FishingLine")));
+			TestNotNull(TEXT("runtime hook keeps its cable"), RuntimeCable);
+			if (RuntimeCable)
+			{
+				TestTrue(TEXT("runtime cable attaches to the replicated rod owner"),
+					RuntimeCable->GetAttachedActor() == Rod);
+			}
+		}
+	}
 	return !HasAnyErrors();
 }
 

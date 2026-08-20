@@ -91,8 +91,7 @@ Rod Actor 的权威 Transform 由 replicated movement 单独复制。耐久不�
 
 - 触发时机：与上项相同，并固定在 `BP_ApplyRodSkin` 之后调用。
 - 用途：比较只读 Previous/Current，更新部署、操作人、破损和皮肤的本地表现。
-- 阶段 A 只保证初始化通知；后续权威变化必须继续由原生状态入口和 RepNotify 驱动。
-
+- 阶段 A 只保证初始化通知；后续权威变化必须继续由原生状态入口和 RepNotify 驱wo
 `BP_PlayRodPresentationEvent(EventTag)`
 
 - 触发时机：仅当后续原生表现桥显式调用时触发；阶段 A 没有自动网络调用点。

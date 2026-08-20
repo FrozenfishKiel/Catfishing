@@ -23,9 +23,13 @@ class CATFISHING_API ACatWaterRegion : public AActor
 public:
 	ACatWaterRegion();
 
+	UFUNCTION(BlueprintPure, Category = "Water")
 	bool HasValidBakedGeometry() const;
+	UFUNCTION(BlueprintPure, Category = "Water")
 	FCatWaterRegionHandle GetWaterRegionHandle() const;
 	const FBox2D& GetBakedBoundsForQuery() const;
+	/** 调试可视化只读：烘焙几何缓存（边界多边形/水面高度）。不提供写口。 */
+	const FCatWaterGeometryCache& GetBakedGeometryForDebug() const { return BakedGeometry; }
 
 	UPROPERTY(EditInstanceOnly, BlueprintReadOnly, Category = "Water|Authoring")
 	FName RegionId = NAME_None;

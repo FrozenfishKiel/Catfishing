@@ -55,6 +55,27 @@ public:
 	/** 查询 PlayerState 当前登记的存活部署鱼竿；未知身份返回空。 */
 	ACatFishingRodActor* FindDeployedRod(const APlayerState* PlayerState);
 
+	/** 按公开 RodActorId 在全部部署鱼竿中查找（多人：允许操作别人的竿）；未知返回空。 */
+	ACatFishingRodActor* FindDeployedRodById(FGuid RodActorId);
+
+	/** 查询 PlayerState 当前正在操作的竿（不限竿主）；没有则空。 */
+	ACatFishingRodActor* FindRodOperatedBy(const APlayerState* PlayerState);
+
+	/** 最近的可接管竿：未损坏、无人操作、站位锚点在 MaxDistance 内；不限竿主，没有则空。 */
+	ACatFishingRodActor* FindNearestOperableRod(const FVector& WorldLocation, double MaxDistanceCentimeters);
+
+	/** 查找绑定在指定竿上的存活未终态会话（操作位与会话解耦后，竿是会话的空间锚）；没有则空。 */
+	ACatFishingSession* FindActiveSessionByRod(const ACatFishingRodActor* RodActor);
+
+	/** 抢抄目标搜索：按鱼与请求者的水平距离找最近的 NearShore 阶段会话；没有则空。 */
+	ACatFishingSession* FindNearestScoopableSession(const FVector& WorldLocation, double MaxDistanceCentimeters);
+
+	/**
+	 * 钓手接力转移编排（多人用别人的竿继续钓）：校验新钓手无自己的活跃会话（单活跃槽位），
+	 * 调用会话 TransferFisherFromAuthority，成功后同步更新服务器正反索引。
+	 */
+	bool TransferSessionFisher(ACatFishingSession* Session, AController* NewFisherController);
+
 	/** 为 PlayerState 登记唯一部署鱼竿；相同 Actor 重放成功，不同存活 Actor 被拒绝。 */
 	bool RegisterDeployedRod(APlayerState* PlayerState, ACatFishingRodActor* RodActor);
 

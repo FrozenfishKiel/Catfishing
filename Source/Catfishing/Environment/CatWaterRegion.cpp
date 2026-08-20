@@ -235,9 +235,15 @@ void ACatWaterRegion::BakeGeometry()
 	FCatWaterGeometryBuildInput Input; TArray<FString> Errors;
 	if (!BuildCurrentGeometryInput(Input, Errors))
 	{
+		for (const FString& Error : Errors)
+		{
+			UE_LOG(LogTemp, Error, TEXT("Water Bake Error: %s"), *Error);
+		}
+
 		InvalidateBakedGeometry();
 		return;
 	}
+	UE_LOG(LogTemp, Error, TEXT("BakeGeometry Successful"));
 	FCatWaterGeometryBuildResult Build = FCatWaterGeometry::Build(Input);
 	if (!Build.bSucceeded)
 	{

@@ -91,19 +91,21 @@ bool FCatAbilitySetGrantRemoveTest::RunTest(const FString& Parameters)
 	Entry.Level = 2;
 	Entry.ActivationPolicy = ECatAbilityActivationPolicy::WhileInputActive;
 	AbilitySet->GrantedAbilities.Add(Entry);
-	const auto AddInputAbility = [AbilitySet](const TSubclassOf<UGameplayAbility> Ability, const FGameplayTag InputTag)
+	const auto AddInputAbility = [AbilitySet](const TSubclassOf<UGameplayAbility> Ability, const FGameplayTag InputTag,
+		const ECatAbilityActivationPolicy Policy = ECatAbilityActivationPolicy::OnInputTriggered)
 	{
 		FCatAbilitySetAbility AdditionalEntry;
 		AdditionalEntry.Ability = Ability;
 		AdditionalEntry.InputTag = InputTag;
 		AdditionalEntry.Level = 1;
-		AdditionalEntry.ActivationPolicy = ECatAbilityActivationPolicy::OnInputTriggered;
+		AdditionalEntry.ActivationPolicy = Policy;
 		AbilitySet->GrantedAbilities.Add(AdditionalEntry);
 	};
 	AddInputAbility(UCatGA_FishingRodInteract::StaticClass(), CatFishingAbilityTags::Input_Fishing_RodInteract);
 	AddInputAbility(UCatGA_FishingCancel::StaticClass(), CatFishingAbilityTags::Input_Fishing_Cancel);
 	AddInputAbility(UCatGA_FishingScoop::StaticClass(), CatFishingAbilityTags::Input_Fishing_Scoop);
-	AddInputAbility(UCatGA_FishingChum::StaticClass(), CatFishingAbilityTags::Input_Fishing_Chum);
+	AddInputAbility(UCatGA_FishingChum::StaticClass(), CatFishingAbilityTags::Input_Fishing_Chum,
+		ECatAbilityActivationPolicy::WhileInputActive);
 
 	FCatGrantedAbilitySetHandles Handles;
 	TestTrue(TEXT("authority ASC accepts a complete ability set"), AbilitySet->GiveToAbilitySystem(AbilitySystem, Handles));
