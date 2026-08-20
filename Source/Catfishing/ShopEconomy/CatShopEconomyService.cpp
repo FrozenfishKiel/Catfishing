@@ -60,6 +60,18 @@ bool UCatShopEconomyService::TryGetCatalogEntry(const FName EntryId, FCatShopCat
 	return true;
 }
 
+// 重放判定流程：用与 CommitCatalogTransaction 完全相同的三段拼出幂等键，再只查终态表是否已有该键。
+// 键的拼法必须和购买写口逐字一致，否则协调器会以为是首次、白跑一趟交付前置校验；这也是它没有独立成一套判据的原因。
+// 只读：不比对载荷签名（载荷不一致由购买写口自己判 InvalidPayload），不看成败，不改任何状态。
+bool UCatShopEconomyService::HasCatalogTransactionTerminal(const FCatShopPurchaseCommand& Command,
+	const bool bFreeClaim) const
+{
+	const FString CacheKey = MakeTerminalKey(Command.Context.StableNetId,
+		bFreeClaim ? TEXT("FreeClaim") : TEXT("Purchase"),
+		Command.Context.RequestId);
+	return TerminalCache.Contains(CacheKey);
+}
+
 // 账本读取流程：复制本局交易记录；广播层可展示金额和交付状态，但不能绕过确认入口直接改服务内数组。
 TArray<FCatShopTransactionRecord> UCatShopEconomyService::GetTransactionLedgerSnapshot() const
 {

@@ -12,19 +12,34 @@ UENUM(BlueprintType)
 enum class ECatFishingPhase : uint8
 {
 	/** 会话对象已建立但 StateTree 尚未进入试探期。 */
-	Created,
+	Created = 0,
 	/** 鱼只给试探信号；此阶段提竿不能直接形成捕获。 */
-	Probe,
+	Probe = 1,
 	/** 真咬响应窗口；具体时长与输入规则由未裁配置和资产决定。 */
-	TrueBiteWindow,
+	TrueBiteWindow = 2,
 	/** Hooked 后唯一允许多人协作的搏斗阶段。 */
-	HookedFight,
+	HookedFight = 3,
 	/** 鱼已到近岸并等待首个合法抢抄 Compare-and-Commit。 */
-	NearShore,
+	NearShore = 4,
 	/** 捕获事务已提交且唯一鱼实例已经进入胜者鱼护。 */
-	Resolved,
+	Resolved = 5,
 	/** 掉线、倒地、局末或依赖失效后终止；旧半场不会重连恢复。 */
-	Terminated
+	Terminated = 6,
+	CastFlight = 7,
+	Waiting = 8,
+	AutoHauling = 9
+};
+
+UENUM(BlueprintType)
+enum class ECatFishingOutcome : uint8
+{
+	None, Caught, EmptyHook, HookWindowExpired, Escaped, RodBroken, CatInWater, Cancelled, Invalidated
+};
+
+UENUM(BlueprintType)
+enum class ECatFishMotionIntent : uint8
+{
+	None, CalmOrInward, StrugglingOutward, AutoHauling
 };
 
 /** FishingSession 对客户端公开的最小只读事实；不复制 FishDefinition 对象、StableNetId 或容器写模型。 */

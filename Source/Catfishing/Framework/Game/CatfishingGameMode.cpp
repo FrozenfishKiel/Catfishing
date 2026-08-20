@@ -1509,6 +1509,16 @@ FCatRunTeardownResult ACatfishingGameModeBase::RequestRunTeardown(const FCatRunT
 			*Request.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 			bSacrificeSettled ? TEXT("true") : TEXT("false"),
 			bDomainsClosed ? TEXT("true") : TEXT("false"));
+		// 光把门关上不够：白天截止计时器和 StateTree 只要还活着，下一次相位进入就会在 EnterRunPhaseFromStateTree
+		// 里把 bRunCommandsOpen 重新置回 true，而领域写口是永久关闭的（四个域都没有重开入口），
+		// 于是又回到上面那段注释要防的"门开着、房间全锁了"。收口失败意味着这一局已经不可能继续，
+		// 就必须连流程一起停掉，而不是只关一道门。停掉不影响 Online 重试退出：重试走的是 PrepareForRunTeardown，
+		// 它重投卡住的献祭记录，不依赖 StateTree 还在跑。
+		ClearDayDeadline();
+		if (RunStateTreeComponent && RunStateTreeComponent->IsRunning())
+		{
+			RunStateTreeComponent->StopLogic(TEXT("Run teardown failed"));
+		}
 		Result.Status = ECatRunTeardownStatus::Failed;
 		Result.Error = ECatRunCommandError::TeardownFailed;
 		return Result;

@@ -27,6 +27,7 @@
 #include "OnlineSubsystemTypes.h"
 #include "ShopEconomy/CatShopEconomyService.h"
 #include "ShopEconomy/CatShopEconomySettings.h"
+#include "ShopEconomy/CatShopOrderCoordinator.h"
 
 namespace CatfishingPlayerControllerTest
 {

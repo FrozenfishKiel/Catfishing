@@ -146,8 +146,13 @@ FCatShopOrderResult UCatShopOrderCoordinator::RunOrder(const FCatShopPurchaseCom
 	// 记待重投则要再引入一份重投队列。所以这里宁可把每条交付前提都提前问一遍，也不让钱先出去再发现东西送不出。
 	// 目录里根本没有这条 EntryId 时不在这里拦：那条路购买写口自己就会拒绝且一分钱不动，它给的错误码（NotFound、
 	// PolicyUndecided、CommandsClosed）比这里编一个更准确。
+	// 前置校验只对"第一次下这一单"有意义。同 RequestId 的重放，钱在首次那一趟就已经扣掉了，这次要做的是把既有回执
+	// 找回来（交付过就回 AlreadyResolved，没交付完就把交付补上），而不是重新问一遍"现在还能不能交付"。
+	// 少了这道判断就会出现：结算夜关掉装备库之后重放一笔已交付的装备订单，被前置校验以写口已关拒掉；
+	// 或者买家 Pawn 已经销毁时重放一笔已交付的耗材订单，被判成没有收货人——两种情况下调用方都拿不到本该拿到的
+	// AlreadyResolved 和实物回执，看起来就像"钱扣了、东西不知去向"。
 	FCatShopCatalogEntry Entry;
-	if (Shop->TryGetCatalogEntry(Command.EntryId, Entry))
+	if (!Shop->HasCatalogTransactionTerminal(Command, bFreeClaim) && Shop->TryGetCatalogEntry(Command.EntryId, Entry))
 	{
 		ECatDomainCommandError DeliveryRejection = ECatDomainCommandError::None;
 		if (Entry.Kind == ECatShopEntryKind::RunConsumableGrant)

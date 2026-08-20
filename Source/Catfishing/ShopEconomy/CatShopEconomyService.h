@@ -40,6 +40,16 @@ public:
 	 */
 	bool TryGetCatalogEntry(FName EntryId, FCatShopCatalogEntry& OutEntry) const;
 
+	/**
+	 * 声明：这条目录交易命令是不是同一 RequestId 的重放，也就是购买写口那边已经存过终态了。
+	 * 实现：按购买写口完全相同的规则拼出幂等键（身份 + 购买/免费自取 + RequestId），只查终态表在不在，不比对载荷、
+	 *       不读账本、不碰任何状态。
+	 * 边界：它只回答"这个号以前来过没有"，不回答"这一笔当时成没成功"，也不回答"现在还能不能买"。
+	 *       订单协调器用它决定要不要跑交付前置校验——重放的订单钱在首次那一趟就已经扣了，再拿"此刻能不能交付"
+	 *       去挡它，只会把一次本该返回既有回执的重试变成拒绝，反而制造出"钱扣了、回执拿不到"的假象。
+	 */
+	bool HasCatalogTransactionTerminal(const FCatShopPurchaseCommand& Command, bool bFreeClaim) const;
+
 	/** 本局经济账本是钱包、库存和订单状态的审计事实；外层展示只能读副本，金额不可回写，交付状态只由确认回执推进。 */
 	TArray<FCatShopTransactionRecord> GetTransactionLedgerSnapshot() const;
 
