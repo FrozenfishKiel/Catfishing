@@ -27,6 +27,7 @@
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
+#include "Equipment/CatTeamEquipmentLibrary.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Fishing/CatFishingService.h"
@@ -43,6 +44,8 @@
 #include "Run/CatRunSettings.h"
 #include "Run/CatSacrificeCoordinator.h"
 #include "Run/CatRunStateTreeEvents.h"
+#include "ShopEconomy/CatShopEconomyService.h"
+#include "ShopEconomy/CatShopOrderCoordinator.h"
 #include "StateTree.h"
 #include "Social/CatSocialService.h"
 #include "TimerManager.h"
@@ -105,6 +108,23 @@ void ACatfishingGameModeBase::StartPlay()
 	RunPublicState.Revision = 1;
 	RefreshEnvironmentAndPublish();
 
+	// 在任何玩家订单可达之前订阅领域变化；每次真实提交都重建整份复制快照。
+	if (UWorld* World = GetWorld())
+	{
+		if (UCatShopEconomyService* Shop = World->GetSubsystem<UCatShopEconomyService>())
+		{
+			ShopPublicTransactionHandle = Shop->OnPublicTransactionCommitted.AddWeakLambda(this,
+				[this](const FCatShopPublicTransaction&) { PublishShopEconomySnapshot(); });
+		}
+		if (UCatTeamEquipmentLibrary* Library = World->GetSubsystem<UCatTeamEquipmentLibrary>())
+		{
+			TeamEquipmentLibraryHandle = Library->OnLibraryChanged.AddUObject(this,
+				&ThisClass::PublishTeamEquipmentLibrarySnapshot);
+		}
+	}
+	PublishShopEconomySnapshot();
+	PublishTeamEquipmentLibrarySnapshot();
+
 	const UCatRunSettings* Settings = GetDefault<UCatRunSettings>();
 	float DayLengthSeconds = 0.0f;
 	int32 QuotaTarget = 0;
@@ -141,10 +161,24 @@ void ACatfishingGameModeBase::StartPlay()
 void ACatfishingGameModeBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	bRunCommandsOpen = false;
+	CloseShopForSettlementNight();
 	ClearDayDeadline();
 	GetWorldTimerManager().ClearTimer(HostExitAckTimerHandle);
 	HostExitAckTimerHandle.Invalidate();
 	PendingHostExitAckStableNetIds.Reset();
+	if (UWorld* World = GetWorld())
+	{
+		if (UCatShopEconomyService* Shop = World->GetSubsystem<UCatShopEconomyService>())
+		{
+			Shop->OnPublicTransactionCommitted.Remove(ShopPublicTransactionHandle);
+		}
+		if (UCatTeamEquipmentLibrary* Library = World->GetSubsystem<UCatTeamEquipmentLibrary>())
+		{
+			Library->OnLibraryChanged.Remove(TeamEquipmentLibraryHandle);
+		}
+	}
+	ShopPublicTransactionHandle.Reset();
+	TeamEquipmentLibraryHandle.Reset();
 	if (RunStateTreeComponent && RunStateTreeComponent->IsRunning())
 	{
 		RunStateTreeComponent->StopLogic(TEXT("GameMode EndPlay"));
@@ -580,6 +614,13 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 	case ECatRunPhase::DayActive:
 	{
 		++RunPublicState.Phase.DayIndex;
+		if (UCatShopEconomyService* Shop = GetWorld()->GetSubsystem<UCatShopEconomyService>())
+		{
+			if (Shop->AdvanceShopDay(RunPublicState.Phase.DayIndex))
+			{
+				PublishShopEconomySnapshot();
+			}
+		}
 		RunPublicState.QuotaProgress = 0;
 		RunPublicState.QuotaTarget = DayQuotaTarget;
 		RunPublicState.EndReason = ECatRunEndReason::None;
@@ -615,12 +656,14 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		RunPublicState.EndReason = ECatRunEndReason::QuotaFailed;
 		NightReadyEligibleIds.Reset();
 		NightReadyIds.Reset();
+		CloseShopForSettlementNight();
 		break;
 	case ECatRunPhase::SuccessSettlementNight:
 		bRunCommandsOpen = true;
 		RunPublicState.EndReason = ECatRunEndReason::Success;
 		NightReadyEligibleIds.Reset();
 		NightReadyIds.Reset();
+		CloseShopForSettlementNight();
 		break;
 	case ECatRunPhase::Ending:
 	case ECatRunPhase::Ended:
@@ -1258,6 +1301,49 @@ const FCatRunPublicState& ACatfishingGameModeBase::GetRunPublicState() const
 	return RunPublicState;
 }
 
+void ACatfishingGameModeBase::CloseShopForSettlementNight()
+{
+	if (UCatShopEconomyService* Shop = GetWorld() ? GetWorld()->GetSubsystem<UCatShopEconomyService>() : nullptr)
+	{
+		Shop->CloseCommands();
+	}
+	if (UCatTeamEquipmentLibrary* Library =
+		GetWorld() ? GetWorld()->GetSubsystem<UCatTeamEquipmentLibrary>() : nullptr)
+	{
+		Library->CloseCommands();
+	}
+}
+
+void ACatfishingGameModeBase::PublishShopEconomySnapshot()
+{
+	ACatfishingGameState* CatGameState = GetGameState<ACatfishingGameState>();
+	UCatShopEconomyService* Shop = GetWorld() ? GetWorld()->GetSubsystem<UCatShopEconomyService>() : nullptr;
+	if (!CatGameState || !Shop)
+	{
+		return;
+	}
+	CatGameState->SetShopEconomySnapshotFromAuthority(Shop->BuildPublicSnapshot(
+		[this](const FString& StableNetId) { return ResolvePlayerStateByStableNetId(StableNetId); }));
+}
+
+void ACatfishingGameModeBase::PublishTeamEquipmentLibrarySnapshot()
+{
+	ACatfishingGameState* CatGameState = GetGameState<ACatfishingGameState>();
+	UCatTeamEquipmentLibrary* Library =
+		GetWorld() ? GetWorld()->GetSubsystem<UCatTeamEquipmentLibrary>() : nullptr;
+	if (CatGameState && Library)
+	{
+		CatGameState->SetTeamEquipmentLibraryFromAuthority(Library->GetSnapshot());
+	}
+}
+
+APlayerState* ACatfishingGameModeBase::ResolvePlayerStateByStableNetId(const FString& StableNetId) const
+{
+	const FAdmissionRecord* Record = StableNetId.IsEmpty() ? nullptr : AdmissionRecords.Find(StableNetId);
+	return Record && Record->Phase == EAdmissionPhase::Active && Record->Controller.IsValid()
+		? Record->Controller->PlayerState : nullptr;
+}
+
 // GameState 开始流程：先完成父类注册，再记录实际类型；Run 快照只由 authority GameMode setter 写入。
 ACatfishingGameState::ACatfishingGameState()
 {
@@ -1276,6 +1362,8 @@ void ACatfishingGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>&
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ThisClass, RunPublicState);
 	DOREPLIFETIME(ThisClass, LastHelpSignal);
+	DOREPLIFETIME(ThisClass, ShopEconomySnapshot);
+	DOREPLIFETIME(ThisClass, TeamEquipmentLibrary);
 }
 
 // Run 快照写入流程：只接受 authority 实例，把 GameMode 提供的完整 DTO 一次替换并请求立即网络更新；客户端调用不会改本地副本。
@@ -1314,6 +1402,40 @@ const FCatHelpSignalSnapshot& ACatfishingGameState::GetLastHelpSignal() const
 	return LastHelpSignal;
 }
 
+void ACatfishingGameState::SetShopEconomySnapshotFromAuthority(
+	const FCatShopPublicEconomySnapshot& NewSnapshot)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	ShopEconomySnapshot = NewSnapshot;
+	ForceNetUpdate();
+	OnShopEconomySnapshotChanged.Broadcast();
+}
+
+const FCatShopPublicEconomySnapshot& ACatfishingGameState::GetShopEconomySnapshot() const
+{
+	return ShopEconomySnapshot;
+}
+
+void ACatfishingGameState::SetTeamEquipmentLibraryFromAuthority(
+	const FCatTeamEquipmentLibrarySnapshot& NewSnapshot)
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	TeamEquipmentLibrary = NewSnapshot;
+	ForceNetUpdate();
+	OnTeamEquipmentLibraryChanged.Broadcast();
+}
+
+const FCatTeamEquipmentLibrarySnapshot& ACatfishingGameState::GetTeamEquipmentLibrary() const
+{
+	return TeamEquipmentLibrary;
+}
+
 UCatChumFieldReplicationComponent* ACatfishingGameState::GetChumFieldReplicationFromAuthority()
 {
 	return HasAuthority() ? ChumFieldReplication : nullptr;
@@ -1335,6 +1457,23 @@ void ACatfishingGameState::OnRep_HelpSignal()
 	UE_LOG(LogCatfishing, Verbose, TEXT("Event=help_signal_received Kind=%s Revision=%lld Global=%s"),
 		*UEnum::GetValueAsString(LastHelpSignal.Kind), LastHelpSignal.Revision,
 		LastHelpSignal.bGlobal ? TEXT("true") : TEXT("false"));
+}
+
+void ACatfishingGameState::OnRep_ShopEconomySnapshot()
+{
+	OnShopEconomySnapshotChanged.Broadcast();
+	UE_LOG(LogCatfishing, Verbose,
+		TEXT("Event=shop_economy_snapshot_received Balance=%d WalletRevision=%lld Transactions=%d"),
+		ShopEconomySnapshot.Balance, ShopEconomySnapshot.WalletRevision,
+		ShopEconomySnapshot.Transactions.Num());
+}
+
+void ACatfishingGameState::OnRep_TeamEquipmentLibrary()
+{
+	OnTeamEquipmentLibraryChanged.Broadcast();
+	UE_LOG(LogCatfishing, Verbose,
+		TEXT("Event=team_equipment_library_received Revision=%lld Instances=%d"),
+		TeamEquipmentLibrary.Revision, TeamEquipmentLibrary.Instances.Num());
 }
 
 // PlayerState 开始流程：先完成父类注册，再记录继承 UniqueId 的有效性和策略允许的日志表示；不复制第二份 StableNetId 或恢复白名单。
@@ -1954,6 +2093,158 @@ void ACatfishingPlayerController::ServerGrantRunConsumable_Implementation(const 
 	UE_LOG(LogCatfishing, Log, TEXT("Event=grant_consumable Committed=%s Error=%s Revision=%lld Definition=%s Quantity=%d"),
 		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error), Result.Revision,
 		*DefinitionId.ToString(), Quantity);
+}
+
+void ACatfishingPlayerController::ServerSubmitShopPurchase_Implementation(const FName EntryId,
+	const FGuid RequestId, const int64 ExpectedWalletRevision)
+{
+	SubmitShopOrder(EntryId, RequestId, ExpectedWalletRevision, false);
+}
+
+void ACatfishingPlayerController::ServerClaimFreeShopEntry_Implementation(const FName EntryId,
+	const FGuid RequestId, const int64 ExpectedWalletRevision)
+{
+	SubmitShopOrder(EntryId, RequestId, ExpectedWalletRevision, true);
+}
+
+void ACatfishingPlayerController::SubmitShopOrder(const FName EntryId, const FGuid RequestId,
+	const int64 ExpectedWalletRevision, const bool bFreeClaim)
+{
+	if (!CanForwardGameplayCommand())
+	{
+		return;
+	}
+	const APlayerState* CurrentPlayerState = PlayerState;
+	UCatShopOrderCoordinator* Coordinator =
+		GetWorld() ? GetWorld()->GetSubsystem<UCatShopOrderCoordinator>() : nullptr;
+	if (!Coordinator || !CurrentPlayerState || !CurrentPlayerState->GetUniqueId().IsValid())
+	{
+		return;
+	}
+
+	FCatShopPurchaseCommand Command;
+	Command.Context.RequestId = RequestId;
+	Command.Context.ExpectedRevision = ExpectedWalletRevision;
+	Command.Context.StableNetId = CurrentPlayerState->GetUniqueId()->ToString();
+	Command.EntryId = EntryId;
+	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
+	UCatEquipmentComponent* RecipientEquipment =
+		ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr;
+	const FCatShopOrderResult Result = bFreeClaim
+		? Coordinator->SubmitFreeClaim(Command, RecipientEquipment)
+		: Coordinator->SubmitPurchase(Command, RecipientEquipment);
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=shop_order_submitted RequestId=%s EntryId=%s Free=%s Order=%s Delivery=%s"),
+		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *EntryId.ToString(),
+		bFreeClaim ? TEXT("true") : TEXT("false"),
+		*UEnum::GetValueAsString(Result.Transaction.Command.Error),
+		*UEnum::GetValueAsString(Result.Delivery.Error));
+}
+
+void ACatfishingPlayerController::ServerSellFish_Implementation(const FGuid FishInstanceId,
+	const FGuid ContainerId, const int64 ExpectedContainerRevision,
+	const ECatShopFishSaleSource SourceKind, const FGuid RequestId,
+	const int64 ExpectedWalletRevision)
+{
+	if (!CanForwardGameplayCommand())
+	{
+		return;
+	}
+	const APlayerState* CurrentPlayerState = PlayerState;
+	UCatShopOrderCoordinator* Coordinator =
+		GetWorld() ? GetWorld()->GetSubsystem<UCatShopOrderCoordinator>() : nullptr;
+	if (!Coordinator || !CurrentPlayerState || !CurrentPlayerState->GetUniqueId().IsValid())
+	{
+		return;
+	}
+	FCatShopFishSaleOrderCommand Command;
+	Command.Context.RequestId = RequestId;
+	Command.Context.ExpectedRevision = ExpectedWalletRevision;
+	Command.Context.StableNetId = CurrentPlayerState->GetUniqueId()->ToString();
+	Command.FishInstanceId = FishInstanceId;
+	Command.ContainerId = ContainerId;
+	Command.ExpectedContainerRevision = ExpectedContainerRevision;
+	Command.SourceKind = SourceKind;
+	const FCatShopOrderResult Result = Coordinator->SubmitFishSale(Command);
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=shop_fish_sale_submitted RequestId=%s FishInstanceId=%s Wallet=%s Items=%s"),
+		*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		*FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*UEnum::GetValueAsString(Result.Transaction.Command.Error),
+		*UEnum::GetValueAsString(Result.Delivery.Error));
+}
+
+void ACatfishingPlayerController::ServerTakeTeamEquipment_Implementation(const FGuid InstanceId,
+	const FGuid RequestId, const int64 ExpectedLibraryRevision,
+	const int64 ExpectedEquipmentRevision)
+{
+	if (!CanForwardGameplayCommand() || !RequestId.IsValid())
+	{
+		return;
+	}
+	const FString PayloadSignature = FString::Printf(
+		TEXT("Instance=%s|LibraryRevision=%lld|EquipmentRevision=%lld"),
+		*InstanceId.ToString(EGuidFormats::DigitsWithHyphens), ExpectedLibraryRevision,
+		ExpectedEquipmentRevision);
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	switch (CatQueryTerminalReplay(TakeTeamEquipmentTerminalCache,
+		TakeTeamEquipmentPayloadByRequest, RequestId, PayloadSignature, Result, MarkCommandReplayed))
+	{
+	case ECatTerminalReplayOutcome::PayloadMismatch:
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=team_equipment_take_payload_mismatch RequestId=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		return;
+	case ECatTerminalReplayOutcome::Replayed:
+		return;
+	case ECatTerminalReplayOutcome::FirstAttempt:
+		break;
+	}
+
+	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
+	UCatEquipmentComponent* Equipment =
+		ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr;
+	UCatTeamEquipmentLibrary* Library =
+		GetWorld() ? GetWorld()->GetSubsystem<UCatTeamEquipmentLibrary>() : nullptr;
+	const APlayerState* CurrentPlayerState = PlayerState;
+	if (!Equipment || !Library || !CurrentPlayerState || !CurrentPlayerState->GetUniqueId().IsValid())
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	}
+	else
+	{
+		FCatTeamEquipmentTakeCommand Take;
+		Take.Context.RequestId = RequestId;
+		Take.Context.ExpectedRevision = ExpectedLibraryRevision;
+		Take.Context.StableNetId = CurrentPlayerState->GetUniqueId()->ToString();
+		Take.InstanceId = InstanceId;
+		FCatTeamEquipmentInstance Instance;
+		const ECatDomainCommandError Admission = Library->ValidateTake(Take, Instance);
+		if (Admission != ECatDomainCommandError::None)
+		{
+			Result.Error = Admission;
+			Result.Revision = Equipment->GetSnapshot().Revision;
+		}
+		else
+		{
+			Result = Equipment->EquipFromTeamLibraryFromAuthority(RequestId,
+				ExpectedEquipmentRevision, Instance);
+			if (Result.bCommitted)
+			{
+				const FCatTeamEquipmentGrantResult Taken = Library->TakeInstance(Take);
+				if (!Taken.Command.bCommitted)
+				{
+					UE_LOG(LogCatfishing, Error,
+						TEXT("Event=team_equipment_take_failed_after_equip RequestId=%s Error=%s"),
+						*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+						*UEnum::GetValueAsString(Taken.Command.Error));
+				}
+			}
+		}
+	}
+	TakeTeamEquipmentTerminalCache.Add(RequestId, Result);
+	TakeTeamEquipmentPayloadByRequest.Add(RequestId, PayloadSignature);
 }
 
 // 修竿 RPC 流程：先过统一玩法 gate，再让 Camp 验证本人在固定范围并调用 Equipment 的浮木/耐久事务；不提供远程修理。

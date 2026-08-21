@@ -30,9 +30,17 @@ public:
 		FName RodDefinitionId, FName BaitDefinitionId, FName FloatDefinitionId,
 		FName ScoopNetDefinitionId = NAME_None, FName RodSkinDefinitionId = NAME_None);
 
+	/** 只读预检耗材能否授予；商店用它保证扣款前已经确认角色确实收得下货。 */
+	ECatDomainCommandError ValidateRunConsumableGrant(FGuid RequestId, FName DefinitionId,
+		int32 Quantity) const;
+
 	/** 一局拾取/奖励上层提交耗材；只接受定义为 run consumable 的正式条目。 */
 	FCatDomainCommandResult GrantRunConsumableFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName DefinitionId, int32 Quantity);
+
+	/** 把团队装备库中已购买的实例装入本人现有三件套；只允许 Rod/Bait/Float。 */
+	FCatDomainCommandResult EquipFromTeamLibraryFromAuthority(FGuid RequestId, int64 ExpectedRevision,
+		const FCatTeamEquipmentInstance& Instance);
 
 	/** 消费一份指定一局耗材；草药、窝料和道具上层必须先成功提交本结果再产生领域效果。 */
 	FCatDomainCommandResult ConsumeRunConsumableFromAuthority(FGuid RequestId, int64 ExpectedRevision,
@@ -131,6 +139,9 @@ private:
 
 	/** 普通装备/耗材命令首次终态缓存。 */
 	TMap<FString, FCatDomainCommandResult> TerminalCache;
+
+	/** 新接入的跨聚合命令载荷签名；防止同一 RequestId 被换定义或数量后再次利用。 */
+	TMap<FString, FString> TerminalPayloadByKey;
 
 	/** 失败预算命令首次完整终态缓存；重放不会再次扣饵或耐久。 */
 	TMap<FGuid, FCatFishingFailureResult> FailureTerminalCache;

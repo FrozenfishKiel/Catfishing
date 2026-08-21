@@ -96,6 +96,81 @@ struct FCatEquipmentLoadoutSnapshot
 	TArray<FCatRunConsumableStack> Consumables;
 };
 
+/** 团队装备库中的一件局内实物；它尚未归属于某个角色。 */
+USTRUCT(BlueprintType)
+struct FCatTeamEquipmentInstance
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly)
+	FGuid InstanceId;
+
+	UPROPERTY(BlueprintReadOnly)
+	FName DefinitionId = NAME_None;
+
+	UPROPERTY(BlueprintReadOnly)
+	ECatEquipmentKind Kind = ECatEquipmentKind::Unknown;
+
+	/** 创建这件实物的商店交易，用于交付重试去重。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid SourceTransactionId;
+};
+
+/** 团队装备库的复制读模型；客户端只读，服务器拥有唯一可写事实。 */
+USTRUCT(BlueprintType)
+struct FCatTeamEquipmentLibrarySnapshot
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly)
+	int64 Revision = 0;
+
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FCatTeamEquipmentInstance> Instances;
+};
+
+/** 将一笔已付款订单交付进团队装备库。 */
+USTRUCT(BlueprintType)
+struct FCatTeamEquipmentGrantCommand
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadWrite)
+	FCatDomainCommandContext Context;
+
+	UPROPERTY(BlueprintReadWrite)
+	FGuid SourceTransactionId;
+
+	UPROPERTY(BlueprintReadWrite)
+	FName DefinitionId = NAME_None;
+};
+
+/** 按实例 ID 从团队装备库取走一件实物。 */
+USTRUCT(BlueprintType)
+struct FCatTeamEquipmentTakeCommand
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadWrite)
+	FCatDomainCommandContext Context;
+
+	UPROPERTY(BlueprintReadWrite)
+	FGuid InstanceId;
+};
+
+/** 团队装备入库/取用的终态；合法重放返回第一次创建或取走的同一件实物。 */
+USTRUCT(BlueprintType)
+struct FCatTeamEquipmentGrantResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly)
+	FCatDomainCommandResult Command;
+
+	UPROPERTY(BlueprintReadOnly)
+	FCatTeamEquipmentInstance Instance;
+};
+
 /** 一次失败预算提交结果；明确记录唯一选择的惩罚。 */
 USTRUCT(BlueprintType)
 struct FCatFishingFailureResult

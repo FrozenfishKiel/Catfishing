@@ -106,30 +106,71 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 	return Result;
 }
 
-// 耗材授予流程：按 RequestId 重放并验证 authority/Revision/正数量与正式 consumable 定义；成功只增加一局数量和 Revision。
+ECatDomainCommandError UCatEquipmentComponent::ValidateRunConsumableGrant(const FGuid RequestId,
+	const FName DefinitionId, const int32 Quantity) const
+{
+	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+	const UCatEquipmentDefinition* Definition = Settings->FindRuntimeDefinition(DefinitionId);
+	if (!RequestId.IsValid() || !GetOwner() || !GetOwner()->HasAuthority() || !Definition
+		|| !Definition->bRunConsumable || Quantity <= 0)
+	{
+		return ECatDomainCommandError::InvalidPayload;
+	}
+	const FString Key = MakeTerminalKey(TEXT("GrantConsumable"), RequestId);
+	if (TerminalCache.Contains(Key))
+	{
+		return ECatDomainCommandError::None;
+	}
+	if (HasActiveRunConsumableUse())
+	{
+		return ECatDomainCommandError::InvalidPhase;
+	}
+	const FCatRunConsumableStack* ExistingStack = Snapshot.Consumables.FindByPredicate(
+		[DefinitionId](const FCatRunConsumableStack& Stack)
+		{
+			return Stack.DefinitionId == DefinitionId;
+		});
+	const int32 ExistingQuantity = ExistingStack ? ExistingStack->Quantity : 0;
+	if (Settings->RunConsumableStackCapacity > 0
+		&& ExistingQuantity + Quantity > Settings->RunConsumableStackCapacity)
+	{
+		return ECatDomainCommandError::CapacityExceeded;
+	}
+	return ECatDomainCommandError::None;
+}
+
+// 耗材授予流程：重放先核对载荷签名，再复用商店预检同一套准入规则；成功只增加一局数量和 Revision。
 FCatDomainCommandResult UCatEquipmentComponent::GrantRunConsumableFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const FName DefinitionId, const int32 Quantity)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	if (HasActiveRunConsumableUse())
+	if (!RequestId.IsValid())
 	{
-		Result.Error = ECatDomainCommandError::InvalidPhase;
+		Result.Error = ECatDomainCommandError::InvalidPayload;
 		Result.Revision = Snapshot.Revision;
 		return Result;
 	}
 	const FString Key = MakeTerminalKey(TEXT("GrantConsumable"), RequestId);
+	const FString PayloadSignature = FString::Printf(TEXT("ExpectedRevision=%lld|Definition=%s|Quantity=%d"),
+		ExpectedRevision, *DefinitionId.ToString(), Quantity);
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
+		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
+		if (!CachedPayload || *CachedPayload != PayloadSignature)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+			Result.Revision = Snapshot.Revision;
+			return Result;
+		}
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
-	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(DefinitionId);
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !Definition || !Definition->bRunConsumable || Quantity <= 0)
+	const ECatDomainCommandError Rejection = ValidateRunConsumableGrant(RequestId, DefinitionId, Quantity);
+	if (Rejection != ECatDomainCommandError::None)
 	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
+		Result.Error = Rejection;
 	}
 	else if (Snapshot.Revision != ExpectedRevision)
 	{
@@ -146,6 +187,80 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantRunConsumableFromAuthority(
 	}
 	Result.Revision = Snapshot.Revision;
 	TerminalCache.Add(Key, Result);
+	TerminalPayloadByKey.Add(Key, PayloadSignature);
+	return Result;
+}
+
+FCatDomainCommandResult UCatEquipmentComponent::EquipFromTeamLibraryFromAuthority(const FGuid RequestId,
+	const int64 ExpectedRevision, const FCatTeamEquipmentInstance& Instance)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	if (!RequestId.IsValid())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+	const FString Key = MakeTerminalKey(TEXT("EquipFromTeamLibrary"), RequestId);
+	const FString PayloadSignature = FString::Printf(TEXT("ExpectedRevision=%lld|Instance=%s|Definition=%s"),
+		ExpectedRevision, *Instance.InstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Instance.DefinitionId.ToString());
+	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
+	{
+		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
+		if (!CachedPayload || *CachedPayload != PayloadSignature)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+			Result.Revision = Snapshot.Revision;
+			return Result;
+		}
+		Result = *Cached;
+		MarkCommandReplayed(Result);
+		return Result;
+	}
+
+	UCatEquipmentDefinition* Definition =
+		GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Instance.DefinitionId);
+	const bool bLoadoutComplete = !Snapshot.RodDefinitionId.IsNone()
+		&& !Snapshot.BaitDefinitionId.IsNone() && !Snapshot.FloatDefinitionId.IsNone();
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !Instance.InstanceId.IsValid() || !Definition
+		|| (Definition->Kind != ECatEquipmentKind::Rod && Definition->Kind != ECatEquipmentKind::Bait
+			&& Definition->Kind != ECatEquipmentKind::Float))
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	}
+	else if (Snapshot.Revision != ExpectedRevision)
+	{
+		Result.Error = ECatDomainCommandError::RevisionConflict;
+	}
+	else if (!bLoadoutComplete)
+	{
+		Result.Error = ECatDomainCommandError::PolicyUndecided;
+	}
+	else
+	{
+		if (Definition->Kind == ECatEquipmentKind::Rod)
+		{
+			Snapshot.RodDefinitionId = Instance.DefinitionId;
+			Snapshot.RodDurability = Definition->MaximumRodDurability;
+			Snapshot.bRodBroken = false;
+		}
+		else if (Definition->Kind == ECatEquipmentKind::Bait)
+		{
+			Snapshot.BaitDefinitionId = Instance.DefinitionId;
+		}
+		else
+		{
+			Snapshot.FloatDefinitionId = Instance.DefinitionId;
+		}
+		++Snapshot.Revision;
+		PublishSnapshot();
+		Result.bCommitted = true;
+		Result.Error = ECatDomainCommandError::None;
+	}
+	Result.Revision = Snapshot.Revision;
+	TerminalCache.Add(Key, Result);
+	TerminalPayloadByKey.Add(Key, PayloadSignature);
 	return Result;
 }
 

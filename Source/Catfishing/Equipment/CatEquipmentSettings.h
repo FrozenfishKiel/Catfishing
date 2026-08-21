@@ -25,6 +25,10 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Loadout")
 	ECatDomainPolicy ProfileLoadoutTrustPolicy = ECatDomainPolicy::Unset;
 
+	/** 每种局内耗材的随身上限；0 表示暂不限制。商店在扣款前也会使用同一条规则预检。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Consumables", meta = (ClampMin = "0"))
+	int32 RunConsumableStackCapacity = 0;
+
 	/** 一次 DamageRod 失败预算扣除的耐久；0 表示公式/数值未裁。 */
 	UPROPERTY(Config, EditAnywhere, Category = "FailureBudget", meta = (ClampMin = "0.0"))
 	double RodFailureDurabilityLoss = 0.0;

@@ -87,3 +87,46 @@ struct FCatDomainCommandResult
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 };
+
+/** 把首次终态改写成安全的幂等重放结果，避免上层重复执行扣款、发奖等副作用。 */
+inline void MarkCommandReplayed(FCatDomainCommandResult& Result)
+{
+	Result.bCommitted = false;
+	Result.Error = ECatDomainCommandError::AlreadyResolved;
+}
+
+/** 查询幂等终态缓存后的三种结论。 */
+enum class ECatTerminalReplayOutcome : uint8
+{
+	FirstAttempt,
+	Replayed,
+	PayloadMismatch
+};
+
+/**
+ * 共享的终态重放检查。缓存键可以是 FString、FGuid 等领域自己的稳定键；载荷签名防止调用方
+ * 复用同一个 RequestId，却偷偷替换订单、物品或版本前提。
+ */
+template <typename KeyType, typename ResultType, typename MarkReplayedFunc>
+ECatTerminalReplayOutcome CatQueryTerminalReplay(
+	const TMap<KeyType, ResultType>& TerminalCache,
+	const TMap<KeyType, FString>& PayloadByKey,
+	const KeyType& TerminalKey,
+	const FString& PayloadSignature,
+	ResultType& OutResult,
+	MarkReplayedFunc MarkReplayed)
+{
+	const ResultType* Cached = TerminalCache.Find(TerminalKey);
+	if (!Cached)
+	{
+		return ECatTerminalReplayOutcome::FirstAttempt;
+	}
+	const FString* CachedPayload = PayloadByKey.Find(TerminalKey);
+	if (!CachedPayload || *CachedPayload != PayloadSignature)
+	{
+		return ECatTerminalReplayOutcome::PayloadMismatch;
+	}
+	OutResult = *Cached;
+	MarkReplayed(OutResult);
+	return ECatTerminalReplayOutcome::Replayed;
+}

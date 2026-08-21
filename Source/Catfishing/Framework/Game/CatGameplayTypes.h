@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Collection/CatImprintTypes.h"
 #include "Environment/CatWaterTypes.h"
+#include "Equipment/CatEquipmentTypes.h"
 #include "Fishing/CatFishingTypes.h"
 #include "Framework/Core/CatProfileContracts.h"
 #include "Framework/Core/CatRunContracts.h"
@@ -12,6 +13,7 @@
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
+#include "ShopEconomy/CatShopEconomyTypes.h"
 #include "Social/CatSocialTypes.h"
 #include "CatGameplayTypes.generated.h"
 
@@ -33,6 +35,10 @@ DECLARE_MULTICAST_DELEGATE(FCatRunPublicStateChanged);
 
 /** GameState 最近求助完整快照变化通知；本机 UI 必须重新读取 GetLastHelpSignal。 */
 DECLARE_MULTICAST_DELEGATE(FCatHelpSignalChanged);
+
+/** GameState 团队经济/团队装备快照变化通知；表现层收到后重读整份复制事实。 */
+DECLARE_MULTICAST_DELEGATE(FCatShopEconomySnapshotChanged);
+DECLARE_MULTICAST_DELEGATE(FCatTeamEquipmentSnapshotChanged);
 
 /** 前台专用模式；明确不生成默认 Pawn，只承载 LocalPlayer Online UI。 */
 UCLASS()
@@ -159,6 +165,14 @@ private:
 	void CompleteHostExitAckWait(bool bTimedOut);
 	/** Host exit 统一有界等待的超时回调；只消费当前 GameMode 的单一 Timer，且不把超时写成真实 ACK。 */
 	void HandleHostExitAckTimeout();
+	/** 把商店当前余额和公开流水整体发布给 GameState。 */
+	void PublishShopEconomySnapshot();
+	/** 把服务器团队装备库整体发布给 GameState。 */
+	void PublishTeamEquipmentLibrarySnapshot();
+	/** 将服务器私有 StableNetId 解析成可复制的 PlayerState。 */
+	APlayerState* ResolvePlayerStateByStableNetId(const FString& StableNetId) const;
+	/** 进入最终结算夜后同时关闭新商店订单与团队装备入库。 */
+	void CloseShopForSettlementNight();
 
 	/** StableNetId 到最小装配记录的服务器唯一映射；GameMode 不复制到客户端，World 销毁时整体释放。 */
 	TMap<FString, FAdmissionRecord> AdmissionRecords;
@@ -207,6 +221,9 @@ private:
 	FTimerHandle HostExitAckTimerHandle;
 	/** 当前 Host exit 是否已完成远端 Destroy ACK 与最终 Grant ACK 的统一有界等待；超时完成不修改各自真实 ACK 记录。 */
 	bool bHostExitAckWaitComplete = false;
+	/** 商店/团队装备变化的服务器本机订阅；EndPlay 成对解除，避免旧 World 回调。 */
+	FDelegateHandle ShopPublicTransactionHandle;
+	FDelegateHandle TeamEquipmentLibraryHandle;
 };
 
 /** Lake 共享比赛状态；复制由服务器 GameMode 组合的 Run/Environment 快照与 Social 最近求助事实。 */
@@ -226,12 +243,20 @@ public:
 	void SetHelpSignalFromAuthority(const FCatHelpSignalSnapshot& NewSignal);
 	/** 提供最近一次服务器求助信号供表现去重；它不是任务分配或自动加入玩法的授权依据。 */
 	const FCatHelpSignalSnapshot& GetLastHelpSignal() const;
+	/** 仅 authority 写入团队钱包与公开流水的整份快照。 */
+	void SetShopEconomySnapshotFromAuthority(const FCatShopPublicEconomySnapshot& NewSnapshot);
+	const FCatShopPublicEconomySnapshot& GetShopEconomySnapshot() const;
+	/** 仅 authority 写入团队装备库快照。 */
+	void SetTeamEquipmentLibraryFromAuthority(const FCatTeamEquipmentLibrarySnapshot& NewSnapshot);
+	const FCatTeamEquipmentLibrarySnapshot& GetTeamEquipmentLibrary() const;
 	const UCatChumFieldReplicationComponent* GetChumFieldReplication() const { return ChumFieldReplication; }
 	UCatChumFieldReplicationComponent* GetChumFieldReplicationFromAuthority();
 	/** 本机 Run/Environment 完整快照变化通知；不授权订阅者推进 StateTree。 */
 	FCatRunPublicStateChanged OnRunPublicStateChanged;
 	/** 本机最近求助完整快照变化通知；不授权订阅者接受任务或改变 Social 权限。 */
 	FCatHelpSignalChanged OnHelpSignalChanged;
+	FCatShopEconomySnapshotChanged OnShopEconomySnapshotChanged;
+	FCatTeamEquipmentSnapshotChanged OnTeamEquipmentLibraryChanged;
 protected:
 	/** 实例进入 World 后记录实际类；不增加可写玩法状态。 */
 	virtual void BeginPlay() override;
@@ -241,6 +266,10 @@ protected:
 	/** 客户端收到新求助 Revision 后只记录/供表现读取，不自动执行互动。 */
 	UFUNCTION()
 	void OnRep_HelpSignal();
+	UFUNCTION()
+	void OnRep_ShopEconomySnapshot();
+	UFUNCTION()
+	void OnRep_TeamEquipmentLibrary();
 
 private:
 	/** Run 的唯一公开复制快照；服务器 GameMode 写，客户端 RepNotify 读。 */
@@ -253,6 +282,12 @@ private:
 	/** Social 在 authority 写入的最近一条手动/巨鱼信号；客户 OnRep 只通知表现，范围和全局标记始终由服务器裁决。 */
 	UPROPERTY(ReplicatedUsing = OnRep_HelpSignal)
 	FCatHelpSignalSnapshot LastHelpSignal;
+
+	UPROPERTY(ReplicatedUsing = OnRep_ShopEconomySnapshot)
+	FCatShopPublicEconomySnapshot ShopEconomySnapshot;
+
+	UPROPERTY(ReplicatedUsing = OnRep_TeamEquipmentLibrary)
+	FCatTeamEquipmentLibrarySnapshot TeamEquipmentLibrary;
 };
 
 /** Lake 玩家身份与个人局状态宿主；复用 APlayerState::UniqueId，只增加普通夜 ready 与主动公开的鱼图鉴摘要。 */
@@ -368,6 +403,24 @@ public:
 	/** 向本人一局耗材栈发放指定数量；服务器从当前 Pawn 重建身份后调用 Equipment 唯一发放写口，客户端参数不授予权限。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
 	void ServerGrantRunConsumable(FGuid RequestId, int64 ExpectedRevision, FName DefinitionId, int32 Quantity);
+
+	/** 花团队公款购买服务器目录项；价格、库存与身份均不由客户端提供。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
+	void ServerSubmitShopPurchase(FName EntryId, FGuid RequestId, int64 ExpectedWalletRevision);
+
+	/** 免费领取服务器明确配置为免费且无限库存的目录项。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
+	void ServerClaimFreeShopEntry(FName EntryId, FGuid RequestId, int64 ExpectedWalletRevision);
+
+	/** 售出本人鱼护或共享鱼缸中的鱼；当前在 Items 两阶段适配完成前会安全拒绝。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
+	void ServerSellFish(FGuid FishInstanceId, FGuid ContainerId, int64 ExpectedContainerRevision,
+		ECatShopFishSaleSource SourceKind, FGuid RequestId, int64 ExpectedWalletRevision);
+
+	/** 从团队装备库取走实例并装入本人的现有三件套。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
+	void ServerTakeTeamEquipment(FGuid InstanceId, FGuid RequestId, int64 ExpectedLibraryRevision,
+		int64 ExpectedEquipmentRevision);
 
 	/** 在固定营地消费浮木并修复当前鱼竿；不升级或替换装备。 */
 	UFUNCTION(Server, Reliable)
@@ -534,10 +587,16 @@ private:
 
 	/** 统一向 authority GameMode 查询运行内玩法命令 gate；缺少 GameMode、非 Active 或 teardown 关门时返回 false。 */
 	bool CanForwardGameplayCommand() const;
+	/** 购买与免费领取共用的服务器转发实现。 */
+	void SubmitShopOrder(FName EntryId, FGuid RequestId, int64 ExpectedWalletRevision, bool bFreeClaim);
 
 	/** owning client 最近收到的 Social 协议读模型；由可靠结果 RPC 整体替换，不复制回服务器或作为权限事实。 */
 	UPROPERTY(Transient)
 	FCatTheftResult LastTheftResult;
+
+	/** 团队装备取用是一条跨库与个人装备的幂等链；缓存阻止重试取走第二件。 */
+	TMap<FGuid, FCatDomainCommandResult> TakeTeamEquipmentTerminalCache;
+	TMap<FGuid, FString> TakeTeamEquipmentPayloadByRequest;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Catfishing|Fishing", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UCatFishingCommandComponent> FishingCommandComponent;
