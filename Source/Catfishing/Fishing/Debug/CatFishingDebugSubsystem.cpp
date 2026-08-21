@@ -30,7 +30,7 @@
 
 #if ENABLE_DRAW_DEBUG
 static TAutoConsoleVariable<int32> CVarCatFishingDebug(
-	TEXT("cat.Fishing.Debug"), 1,
+	TEXT("cat.Fishing.Debug"), 0,
 	TEXT("钓鱼调试可视化：0=全部关闭；1=全量（水域边界/瞄准落点/蓄力抛物线/窝点/竿尖球/钩鱼球/抄网射线与鱼圈/鱼线/状态条）；")
 	TEXT("2=精简（只保留抄网射线、鱼身上的可捞圆圈、鱼线和状态条，关闭其余调试球/圈/线）。")
 	TEXT("抄网圆圈绿色=当前按 F 抄得到，红色=够不着；颜色直接来自服务器同一个判定函数。"),

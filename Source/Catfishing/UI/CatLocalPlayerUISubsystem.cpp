@@ -53,7 +53,7 @@ void UCatLocalPlayerUISubsystem::PlayerControllerChanged(APlayerController* NewC
 	RefreshOnlineWidgetForCurrentController();
 }
 
-// 快照消费流程：每次事实变化都重新调和 TravelWidget；直达 Lake 会移除联机白盒，正式 Session/旅行或返回 Frontend 时可按新快照重新创建并刷新。
+// 快照消费流程：每次事实变化都重新调和 TravelWidget；直达玩法地图会移除联机白盒，正式 Session/旅行或返回 Frontend 时可按新快照重新创建并刷新。
 void UCatLocalPlayerUISubsystem::HandleOnlineSnapshotChanged()
 {
 	RefreshOnlineWidgetForCurrentController();
@@ -114,41 +114,41 @@ void UCatLocalPlayerUISubsystem::HandleActionRequested(const ECatOnlineUIAction 
 
 // Widget 调和流程：
 // 1. 读取当前 LocalPlayer Controller 与 Online 完整快照；任一宿主不可用时移除旧 View，等待生命周期再次触发。
-// 2. 快照精确表示 Lake、NoSession、无角色且无活动操作时移除 TravelWidget，让直达玩法地图的 PIE 不再被联机白盒遮挡。
-// 3. 其余状态沿用正式 UI：缺实例时创建并绑定一次动作委托，随后用同一快照配置；正式 Lake Host/Client 因有会话角色仍保留 Leave。
+// 2. 快照精确表示玩法地图、NoSession、无角色且无活动操作时移除 TravelWidget，让直达玩法地图的 PIE 不再被联机白盒遮挡。
+// 3. 其余状态沿用正式 UI：缺实例时创建并绑定一次动作委托，随后用同一快照配置；正式玩法地图 Host/Client 因有会话角色仍保留 Leave。
 void UCatLocalPlayerUISubsystem::RefreshOnlineWidgetForCurrentController()
 {
-	// APlayerController* Controller = GetLocalPlayer()->GetPlayerController(GetWorld());
-	// const UCatOnlineSubsystem* Online = GetLocalPlayer()->GetGameInstance()->GetSubsystem<UCatOnlineSubsystem>();
-	// if (!Controller || !Online)
-	// {
-	// 	RemoveOnlineWidget();
-	// 	return;
-	// }
-	//
-	// const FCatOnlineSnapshot Snapshot = Online->GetSnapshot();
-	// const bool bDirectLakeWithoutSession = Snapshot.WorldState == ECatOnlineWorldState::Lake
-	// 	&& Snapshot.SessionState == ECatOnlineSessionState::NoSession
-	// 	&& Snapshot.SessionRole == ECatOnlineSessionRole::None
-	// 	&& Snapshot.ActiveOperation == ECatOnlineOperation::None;
-	// if (bDirectLakeWithoutSession)
-	// {
-	// 	RemoveOnlineWidget();
-	// 	return;
-	// }
-	//
-	// if (!OnlineWidget)
-	// {
-	// 	OnlineWidget = CreateWidget<UCatTravelWidget>(Controller, UCatTravelWidget::StaticClass());
-	// 	if (!OnlineWidget)
-	// 	{
-	// 		return;
-	// 	}
-	// 	ActionHandle = OnlineWidget->OnActionRequested.AddUObject(this, &ThisClass::HandleActionRequested);
-	// 	OnlineWidget->AddToViewport();
-	// 	UE_LOG(LogCatUI, Log, TEXT("Event=ui_online_widget_created World=%s"), GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
-	// }
-	// OnlineWidget->Configure(Snapshot);
+	APlayerController* Controller = GetLocalPlayer()->GetPlayerController(GetWorld());
+	const UCatOnlineSubsystem* Online = GetLocalPlayer()->GetGameInstance()->GetSubsystem<UCatOnlineSubsystem>();
+	if (!Controller || !Online)
+	{
+		RemoveOnlineWidget();
+		return;
+	}
+
+	const FCatOnlineSnapshot Snapshot = Online->GetSnapshot();
+	const bool bDirectGameplayWithoutSession = Snapshot.WorldState == ECatOnlineWorldState::Lake
+		&& Snapshot.SessionState == ECatOnlineSessionState::NoSession
+		&& Snapshot.SessionRole == ECatOnlineSessionRole::None
+		&& Snapshot.ActiveOperation == ECatOnlineOperation::None;
+	if (bDirectGameplayWithoutSession)
+	{
+		RemoveOnlineWidget();
+		return;
+	}
+
+	if (!OnlineWidget)
+	{
+		OnlineWidget = CreateWidget<UCatTravelWidget>(Controller, UCatTravelWidget::StaticClass());
+		if (!OnlineWidget)
+		{
+			return;
+		}
+		ActionHandle = OnlineWidget->OnActionRequested.AddUObject(this, &ThisClass::HandleActionRequested);
+		OnlineWidget->AddToViewport();
+		UE_LOG(LogCatUI, Log, TEXT("Event=ui_online_widget_created World=%s"), GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
+	}
+	OnlineWidget->Configure(Snapshot);
 }
 
 // Widget 移除流程：存在实例时先解绑动作广播，再移出视口并清 UObject 引用；空分支不制造虚假 removed 日志。

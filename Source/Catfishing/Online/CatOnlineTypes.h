@@ -37,9 +37,9 @@ enum class ECatOnlineWorldState : uint8
 	Unknown,
 	/** 当前 World 是 Frontend。 */
 	Frontend,
-	/** 已提交去 Lake 的旅行，仍等待目标 World 到达。 */
+	/** 已提交去联机玩法地图的旅行，仍等待目标 World 到达；枚举名 Lake 为兼容既有蓝图而保留。 */
 	TravelingToLake,
-	/** 当前 World 是 Lake。 */
+	/** 当前 World 是联机玩法地图（目前为 Showcase2）；枚举名 Lake 为兼容既有蓝图而保留。 */
 	Lake,
 	/** 已提交回 Frontend 的旅行，仍等待目标 World 到达。 */
 	TravelingToFrontend,

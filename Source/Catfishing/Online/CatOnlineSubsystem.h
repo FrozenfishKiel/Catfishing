@@ -33,7 +33,7 @@ public:
 	/** 先让所有 epoch 失效并成对解绑，再清除 opaque 结果和非 UObject 平台引用，保证迟到回调无副作用。 */
 	virtual void Deinitialize() override;
 
-	/** 在 Frontend 提交 CreateSession；重复请求优先返回 CommandAlreadyPending 且不覆盖活动关联键，只有平台成功回调后才内部打开 Lake listen。 */
+	/** 在 Frontend 提交 CreateSession；重复请求优先返回 CommandAlreadyPending 且不覆盖活动关联键，只有平台成功回调后才内部打开配置的玩法地图 listen。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Online")
 	FCatOnlineResult RequestCreateSession();
 
@@ -83,14 +83,14 @@ private:
 	/** 在当前操作 epoch 下绑定 Destroy 回调并提交平台清理；FailureAfterDestroy 非 None 表示旅行/解析失败后的补偿。 */
 	bool BeginDestroySession(ECatOnlineError FailureAfterDestroy);
 
-	/** Host Leave 在 DestroySession 前向当前 Lake GameMode 提交 Run teardown；同步 Ready、异步 Pending 与失败都保持同一 RequestId/epoch。 */
+	/** Host Leave 在 DestroySession 前向当前玩法地图 GameMode 提交 Run teardown；同步 Ready、异步 Pending 与失败都保持同一 RequestId/epoch。 */
 	bool BeginHostRunTeardown();
 
-	/** CreateSession 成功后的唯一 Listen 旅行入口；只写 World/Transport 事实，不改 Session 成功事实。 */
-	bool BeginHostTravelToLake();
+	/** CreateSession 成功后的唯一玩法地图 Listen 旅行入口；只写 World/Transport 事实，不改 Session 成功事实。 */
+	bool BeginHostTravelToGameplayMap();
 
-	/** JoinSession 成功且地址解析完成后的唯一 ClientTravel 入口；调用方仍等待 PostLoadMap 终态。 */
-	bool BeginClientTravelToLake(const FString& ConnectString);
+	/** JoinSession 成功且地址解析完成后的唯一玩法地图 ClientTravel 入口；调用方仍等待 PostLoadMap 终态。 */
+	bool BeginClientTravelToGameplayMap(const FString& ConnectString);
 
 	/** DestroySession 成功后的统一回前台入口；根据 OperationRole 选择 ServerTravel 或 ClientTravel。 */
 	bool BeginTravelToFrontend();
@@ -113,7 +113,7 @@ private:
 	/** 平台邀请接受回调：只保存 opaque 结果并通知 UI，后续接受动作复用 RequestJoinInternal。 */
 	void HandleSessionUserInviteAccepted(bool bWasSuccessful, int32 ControllerId, FUniqueNetIdPtr UserId, const FOnlineSessionSearchResult& InviteResult);
 
-	/** PostLoadMap 回调：按 GameInstance/ExpectedPackage 隔离后独立确认 World，并把 Lake 收敛为 Connected、Frontend 收敛为 Idle；最后只结算 ActiveOperation，不改写 Session 事实。 */
+	/** PostLoadMap 回调：按 GameInstance/ExpectedPackage 隔离后独立确认 World，并把玩法地图收敛为 Connected、Frontend 收敛为 Idle；最后只结算 ActiveOperation，不改写 Session 事实。 */
 	void HandlePostLoadMap(UWorld* LoadedWorld);
 
 	/** TravelFailure 回调：只消费本 GameInstance 的待确认旅行；Create/Join 先 Destroy 补偿，Leave 保留已完成的 Session 清理。 */
@@ -146,8 +146,8 @@ private:
 	/** 广播快照变化并写结构化诊断；日志只公开策略允许的身份表示。 */
 	void BroadcastSnapshot(const TCHAR* EventName);
 
-	/** 验证 Presence/Lobby 选择是否保持同值；Create 与 Join 必须共用该门槛，因为旅行成功也无法修复平台会话模型不兼容。 */
-	static bool HasCompatibleSessionSettings(const FOnlineSessionSettings& Settings);
+	/** 验证 Presence Lobby 与项目/协议/配置地图标识；Create、搜索、邀请和 Join 共用同一门槛，隔离共享 AppId 480 的其他房间。 */
+	bool HasCompatibleSessionSettings(const FOnlineSessionSettings& Settings) const;
 
 	/** 当前 GameInstance 的 World 事实；Initialize 按初始包名建立基线，之后仅由旅行提交、PostLoadMap 和 TravelFailure 写入。 */
 	ECatOnlineWorldState WorldState = ECatOnlineWorldState::Unknown;
@@ -188,6 +188,9 @@ private:
 	/** 当前待确认的目标包名；跨旅行只保存字符串，不持有旧 World 或 Actor。 */
 	FString ExpectedPackage;
 
+	/** Initialize 时从 CatOnlineSettings 冻结的玩法地图长包名；同一 GameInstance 的旅行、到达判定与 Session 过滤始终共用它。 */
+	FString GameplayMapPackage;
+
 	/** 当前搜索对象；只在 Find epoch 内存活，回调结案或清理时释放。 */
 	TSharedPtr<FOnlineSessionSearch> ActiveSearch;
 
@@ -224,7 +227,7 @@ private:
 	/** 当前 Host Leave 绑定的 Run teardown 句柄；完成、失败、World 销毁或子系统反初始化都会消费。 */
 	FDelegateHandle RunTeardownHandle;
 
-	/** Run teardown 句柄所属的精确 Lake GameMode；只用于成对解绑，不作为 World 或 Session 真相。 */
+	/** Run teardown 句柄所属的精确玩法地图 GameMode；只用于成对解绑，不作为 World 或 Session 真相。 */
 	TWeakObjectPtr<ACatfishingGameModeBase> RunTeardownGameMode;
 
 	/** SessionUserInviteAccepted 全局委托的配对解绑句柄。 */

@@ -22,6 +22,12 @@ bool FCatOnlineSettingsReconnectAndExitTest::RunTest(const FString& Parameters)
 	}
 
 	double TimeoutSeconds = 9.0;
+	FString GameplayMapPackage(TEXT("stale"));
+	TestFalse(TEXT("默认玩法地图未配置时读取失败"), Settings->TryGetGameplayMapPackage(GameplayMapPackage));
+	TestTrue(TEXT("玩法地图读取失败时清空输出"), GameplayMapPackage.IsEmpty());
+	Settings->GameplayMap = TSoftObjectPtr<UWorld>(FSoftObjectPath(TEXT("/Game/NaturePackage/Maps/Showcase2.Showcase2")));
+	TestTrue(TEXT("有效 World 软路径可读取为长包名"), Settings->TryGetGameplayMapPackage(GameplayMapPackage));
+	TestEqual(TEXT("玩法地图规范化为不含对象名的长包名"), GameplayMapPackage, FString(TEXT("/Game/NaturePackage/Maps/Showcase2")));
 	TestFalse(TEXT("默认重连准入不可用"), Settings->IsReconnectAdmissionReady());
 	TestFalse(TEXT("默认 Host exit 超时读取失败"), Settings->TryGetHostExitAckTimeout(TimeoutSeconds));
 	TestEqual(TEXT("失败时 Host exit 超时清零"), TimeoutSeconds, 0.0);

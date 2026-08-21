@@ -11,6 +11,7 @@
 #include "GameFramework/PlayerController.h"
 #include "OnlineSubsystem.h"
 #include "OnlineSubsystemUtils.h"
+#include "Online/OnlineSessionNames.h"
 #include "UObject/UObjectGlobals.h"
 
 namespace CatOnlineNames
@@ -19,16 +20,21 @@ namespace CatOnlineNames
 	static const FName GameSession(TEXT("GameSession"));
 	/** Frontend 的稳定长包名；WorldState 与旅行目标共用，PIE 前缀在比较前统一剥离。 */
 	static const FString Frontend(TEXT("/Game/Catfishing/Maps/Frontend"));
-	/** Lake 的稳定长包名；Create 成功后追加 listen，Join 则使用平台解析出的地址。 */
-	static const FString Lake(TEXT("/Game/Catfishing/Maps/Lake"));
 	/** Session 搜索摘要中的地图键；它只用于平台发现信息，不参与 World 到达判定。 */
 	static const FName MapSetting(TEXT("CAT_MAP"));
+	/** AppId 480 是共享测试池；项目键把 Catfishing 会话与其他 Spacewar 开发房间隔离。 */
+	static const FName ProjectSetting(TEXT("CAT_PROJECT"));
+	static const FString ProjectId(TEXT("Catfishing"));
+	/** 协议键阻止网络合同不兼容的旧构建进入当前房间。 */
+	static const FName ProtocolSetting(TEXT("CAT_PROTOCOL_VERSION"));
+	static const FString ProtocolVersion(TEXT("1"));
 }
 
 // 初始化流程：先绑定三类引擎生命周期，再按当前 World 尝试绑定对应 OSS 邀请接口，最后建立 World 快照；邀请接口缺失时保持未绑定，不缓存旧 World 或伪造 Session 错误。
 void UCatOnlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
+	GetDefault<UCatOnlineSettings>()->TryGetGameplayMapPackage(GameplayMapPackage);
 	PostLoadMapHandle = FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(this, &ThisClass::HandlePostLoadMap);
 	if (GEngine)
 	{
@@ -71,6 +77,7 @@ void UCatOnlineSubsystem::Deinitialize()
 	InvitesByHandle.Reset();
 	InviteSummaries.Reset();
 	ExpectedPackage.Reset();
+	GameplayMapPackage.Reset();
 	PendingHostExitAckRequestId.Invalidate();
 	ActiveOperation = ECatOnlineOperation::None;
 	OperationRole = ECatOnlineSessionRole::None;
@@ -199,6 +206,10 @@ FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 	{
 		return RejectRequest(ECatOnlineError::PolicyUndecided);
 	}
+	if (GameplayMapPackage.IsEmpty())
+	{
+		return RejectRequest(ECatOnlineError::InvalidState);
+	}
 
 	FCatOnlineResult Result = BeginOperation(ECatOnlineOperation::Create, ECatOnlineSessionState::Creating);
 	if (!Result.bAccepted)
@@ -233,7 +244,9 @@ FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 	SessionSettings.bShouldAdvertise = Settings->SessionAccess != ECatSessionAccessPolicy::InviteOnly;
 	SessionSettings.bAllowJoinViaPresence = Settings->SessionAccess == ECatSessionAccessPolicy::Public;
 	SessionSettings.bAllowJoinViaPresenceFriendsOnly = Settings->SessionAccess == ECatSessionAccessPolicy::FriendsOnly;
-	SessionSettings.Set(CatOnlineNames::MapSetting, CatOnlineNames::Lake, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+	SessionSettings.Set(CatOnlineNames::MapSetting, GameplayMapPackage, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+	SessionSettings.Set(CatOnlineNames::ProjectSetting, CatOnlineNames::ProjectId, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
+	SessionSettings.Set(CatOnlineNames::ProtocolSetting, CatOnlineNames::ProtocolVersion, EOnlineDataAdvertisementType::ViaOnlineServiceAndPing);
 	if (!HasCompatibleSessionSettings(SessionSettings))
 	{
 		SessionState = ECatOnlineSessionState::NoSession;
@@ -281,6 +294,10 @@ FCatOnlineResult UCatOnlineSubsystem::RequestFindSessions()
 	{
 		return RejectRequest(ECatOnlineError::InvalidState);
 	}
+	if (GameplayMapPackage.IsEmpty())
+	{
+		return RejectRequest(ECatOnlineError::InvalidState);
+	}
 
 	SearchResultsByHandle.Reset();
 	SearchSummaries.Reset();
@@ -302,6 +319,10 @@ FCatOnlineResult UCatOnlineSubsystem::RequestFindSessions()
 	ActiveSearch = MakeShared<FOnlineSessionSearch>();
 	ActiveSearch->MaxSearchResults = 50;
 	ActiveSearch->bIsLanQuery = false;
+	ActiveSearch->QuerySettings.Set(SEARCH_LOBBIES, true, EOnlineComparisonOp::Equals);
+	ActiveSearch->QuerySettings.Set(CatOnlineNames::ProjectSetting, CatOnlineNames::ProjectId, EOnlineComparisonOp::Equals);
+	ActiveSearch->QuerySettings.Set(CatOnlineNames::ProtocolSetting, CatOnlineNames::ProtocolVersion, EOnlineComparisonOp::Equals);
+	ActiveSearch->QuerySettings.Set(CatOnlineNames::MapSetting, GameplayMapPackage, EOnlineComparisonOp::Equals);
 	const uint64 SubmittedEpoch = OperationEpoch;
 	FindSessionsHandle = OperationSessionInterface->AddOnFindSessionsCompleteDelegate_Handle(
 		FOnFindSessionsCompleteDelegate::CreateUObject(this, &ThisClass::HandleFindSessionsComplete, SubmittedEpoch));
@@ -574,19 +595,19 @@ bool UCatOnlineSubsystem::BeginDestroySession(const ECatOnlineError FailureAfter
 	return bRequestQueued || !bStillAwaitingCompletion;
 }
 
-// Host 旅行流程：Create 已成功才校验 authority 并提交 Lake?listen；同步受理后只写 World/Transport 目标，最终成功仍由 PostLoadMap 确认。
-bool UCatOnlineSubsystem::BeginHostTravelToLake()
+// Host 旅行流程：Create 已成功才校验 authority 并提交配置的 GameplayMap?listen；同步受理后只写 World/Transport 目标，最终成功仍由 PostLoadMap 确认。
+bool UCatOnlineSubsystem::BeginHostTravelToGameplayMap()
 {
 	UWorld* World = GetWorld();
-	if (!World || World->GetNetMode() == NM_Client)
+	if (!World || World->GetNetMode() == NM_Client || GameplayMapPackage.IsEmpty())
 	{
 		return false;
 	}
-	if (!World->ServerTravel(CatOnlineNames::Lake + TEXT("?listen"), false))
+	if (!World->ServerTravel(GameplayMapPackage + TEXT("?listen"), false))
 	{
 		return false;
 	}
-	ExpectedPackage = CatOnlineNames::Lake;
+	ExpectedPackage = GameplayMapPackage;
 	WorldState = ECatOnlineWorldState::TravelingToLake;
 	TransportState = ECatOnlineTransportState::TravelQueued;
 	BroadcastSnapshot(TEXT("online_host_travel_queued"));
@@ -594,15 +615,15 @@ bool UCatOnlineSubsystem::BeginHostTravelToLake()
 }
 
 // Client 旅行流程：Join 与 Resolve 已成功后临时取得本地控制器并调用 ClientTravel；不保存 Controller 引用，PostLoadMap 才发布到达终态。
-bool UCatOnlineSubsystem::BeginClientTravelToLake(const FString& ConnectString)
+bool UCatOnlineSubsystem::BeginClientTravelToGameplayMap(const FString& ConnectString)
 {
 	APlayerController* PlayerController = GetGameInstance() ? GetGameInstance()->GetFirstLocalPlayerController() : nullptr;
-	if (!PlayerController || ConnectString.IsEmpty())
+	if (!PlayerController || ConnectString.IsEmpty() || GameplayMapPackage.IsEmpty())
 	{
 		return false;
 	}
 	PlayerController->ClientTravel(ConnectString, TRAVEL_Absolute);
-	ExpectedPackage = CatOnlineNames::Lake;
+	ExpectedPackage = GameplayMapPackage;
 	WorldState = ECatOnlineWorldState::TravelingToLake;
 	TransportState = ECatOnlineTransportState::TravelQueued;
 	BroadcastSnapshot(TEXT("online_client_travel_queued"));
@@ -686,7 +707,7 @@ void UCatOnlineSubsystem::HandleCreateSessionComplete(const FName SessionName, c
 	SessionState = ECatOnlineSessionState::Host;
 	SessionRole = ECatOnlineSessionRole::Host;
 	OperationRole = ECatOnlineSessionRole::Host;
-	if (!BeginHostTravelToLake())
+	if (!BeginHostTravelToGameplayMap())
 	{
 		BeginDestroySession(ECatOnlineError::TravelRejected);
 	}
@@ -769,7 +790,7 @@ void UCatOnlineSubsystem::HandleJoinSessionComplete(const FName SessionName, con
 	FString ConnectString;
 	if (!OperationSessionInterface.IsValid()
 		|| !OperationSessionInterface->GetResolvedConnectString(CatOnlineNames::GameSession, ConnectString)
-		|| !BeginClientTravelToLake(ConnectString))
+		|| !BeginClientTravelToGameplayMap(ConnectString))
 	{
 		BeginDestroySession(ECatOnlineError::ConnectStringUnavailable);
 	}
@@ -881,8 +902,8 @@ void UCatOnlineSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 	const FString PackageName = UWorld::StripPIEPrefixFromPackageName(LoadedWorld->GetPackage()->GetName(), LoadedWorld->StreamingLevelsPrefix);
 	if (!ExpectedPackage.IsEmpty())
 	{
-		const bool bReturnedToSource = (ExpectedPackage == CatOnlineNames::Lake && PackageName == CatOnlineNames::Frontend)
-			|| (ExpectedPackage == CatOnlineNames::Frontend && PackageName == CatOnlineNames::Lake);
+		const bool bReturnedToSource = (ExpectedPackage == GameplayMapPackage && PackageName == CatOnlineNames::Frontend)
+			|| (ExpectedPackage == CatOnlineNames::Frontend && PackageName == GameplayMapPackage);
 		if (bReturnedToSource)
 		{
 			// UE 的部分失败链先重新载入来源 World，随后才广播 TravelFailure；这里不抢先使 epoch 失效，避免补偿链丢失 Session 事实。
@@ -1057,7 +1078,7 @@ bool UCatOnlineSubsystem::SetWorldStateForPackage(const FString& PackageName)
 		WorldState = ECatOnlineWorldState::Frontend;
 		return true;
 	}
-	if (PackageName == CatOnlineNames::Lake)
+	if (!GameplayMapPackage.IsEmpty() && PackageName == GameplayMapPackage)
 	{
 		WorldState = ECatOnlineWorldState::Lake;
 		return true;
@@ -1183,8 +1204,19 @@ void UCatOnlineSubsystem::BroadcastSnapshot(const TCHAR* EventName)
 	OnSnapshotChanged.Broadcast();
 }
 
-// 兼容合同检查流程：Create 和 Join 都只比较同一对平台设置；任何不相等结果在 Session API 前被拒绝，不交给旅行阶段兜底。
-bool UCatOnlineSubsystem::HasCompatibleSessionSettings(const FOnlineSessionSettings& Settings)
+// 兼容合同检查流程：会话必须使用 Presence Lobby，并携带本项目、协议和地图标识；AppId 480 的其他开发房间不会进入公开句柄映射或 Join。
+bool UCatOnlineSubsystem::HasCompatibleSessionSettings(const FOnlineSessionSettings& Settings) const
 {
-	return Settings.bUsesPresence == Settings.bUseLobbiesIfAvailable;
+	FString ProjectId;
+	FString ProtocolVersion;
+	FString MapName;
+	return Settings.bUsesPresence
+		&& Settings.bUseLobbiesIfAvailable
+		&& Settings.Get(CatOnlineNames::ProjectSetting, ProjectId)
+		&& ProjectId == CatOnlineNames::ProjectId
+		&& Settings.Get(CatOnlineNames::ProtocolSetting, ProtocolVersion)
+		&& ProtocolVersion == CatOnlineNames::ProtocolVersion
+		&& Settings.Get(CatOnlineNames::MapSetting, MapName)
+		&& !GameplayMapPackage.IsEmpty()
+		&& MapName == GameplayMapPackage;
 }

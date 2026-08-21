@@ -147,7 +147,7 @@ C++ 实际只发 5 个事件：ProbeTriggered / HookAccepted / WindowExpired / E
 
 ## 4. 调试可视化
 
-`UCatFishingDebugSubsystem`，CVar `cat.Fishing.Debug`（默认 1）：
+`UCatFishingDebugSubsystem`，CVar `cat.Fishing.Debug`（默认 0，需要调试时执行 `cat.Fishing.Debug 1`）：
 青色湖边界 / 抛竿瞄准绿球 / Q 蓄力黄色抛物线+落点球 / 窝点绿圈+剩余秒 /
 钩子蓝球 / 鱼球（红=发力·绿=累了）+ 鱼线 / 近岸翡翠圈 / 屏幕状态条（阶段提示+猫体力·鱼体力%·线长·拖放·完美）。
 命令链每条回执有结构化日志：过滤 `LogCatFishing`，失败为 Warning 且带 Error 枚举。

@@ -5,6 +5,8 @@
 #include "UObject/Object.h"
 #include "CatOnlineSettings.generated.h"
 
+class UWorld;
+
 /** 当前实现能可靠分类的可恢复断线原因位；其他原因没有证据时不得塞入掩码。 */
 UENUM()
 enum class ECatRecoverableFailure : uint8
@@ -23,6 +25,9 @@ class CATFISHING_API UCatOnlineSettings : public UObject
 	GENERATED_BODY()
 
 public:
+	/** 读取配置的玩法地图对象路径并规范化为长包名；空值或非法包名保持 fail-closed。 */
+	bool TryGetGameplayMapPackage(FString& OutPackageName) const;
+
 	/** 判断重连准入配置是否完整；只接受当前实现的 ConnectionLost 位和正 TTL，出现任何未识别位都 fail-closed。 */
 	bool IsReconnectAdmissionReady() const;
 
@@ -31,6 +36,10 @@ public:
 	/** Session 的搜索与准入策略；Create/Find 在 Undecided 时返回 PolicyUndecided。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Session")
 	ECatSessionAccessPolicy SessionAccess = ECatSessionAccessPolicy::Undecided;
+
+	/** CreateSession 后 Host 打开的玩法地图；使用软引用让测试/正式地图只通过配置切换，不要求重新编译。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Travel")
+	TSoftObjectPtr<UWorld> GameplayMap;
 
 	/** 主动 Client leave 是否保留重连资格；未裁时离局请求不会把 Disabled 或 Enabled 当默认。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Reconnect")

@@ -70,11 +70,11 @@
 误读：把早期框架验证入口当成正式数值/技能。
 事实：这些入口用于证明 ASC、输入、UI 和复制链路；正式 Ability、数值、UI 资产、InputAction 和 DataAsset 仍需后续内容接线。
 
-## Steam 只完成基线接线
+## Steam 只完成单机初始化验证
 
-现象：看到 `DefaultPlatformService=Steam` 和 `OnlineSubsystemSteam bEnabled=true` 就认为 Steam 联机已完整通过。
-误读：把 ini 静态配置当成双账号运行证据。
-事实：SteamSockets、NetDriver、`bInitServerOnClient`、双账号回调顺序和真实传输仍是专项验证项。
+现象：看到 AppId 480、SteamSockets 配置和 `Client/Game Server API initialized 1` 就认为 Steam 联机已完整通过。
+误读：把单进程初始化成功当成双账号建房、搜索、加入和真实传输证据。
+事实：本机 Win64 游戏模式已确认 OSS Steam 初始化成功；SteamSockets 实际监听/连接驱动、Host/Find/Join/Leave 回调顺序和双账号传输仍是专项验证项。
 
 ## 共享鱼缸不是跨局仓库
 
