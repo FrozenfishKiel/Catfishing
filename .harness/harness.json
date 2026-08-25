@@ -27,7 +27,7 @@
         "Album"
       ],
       "tracking_rule": "HUD、菜单、个人鱼护/背包和图鉴只是同一信息可达闭环的界面切面，禁止拆成可独立关闭的业务任务、影子清单或半成品交付项。",
-      "completion_rule": "只有唯一正式 UI 生命周期、Fishing 状态与错误反馈、菜单和个人鱼获/图鉴入口、捕获结果展示、只读 View 边界以及构建和运行证据同时成立时，模块才能整体关闭；任一环节缺失时只保留一个模块级未完成状态。",
+      "completion_rule": "只有唯一正式 UI 生命周期、C++ 后端只读 ViewState/Result/纯意图、WBP 前端渲染、Fishing 状态与错误反馈、菜单和个人鱼获/图鉴入口、捕获结果展示、只读 View 边界以及构建和运行证据同时成立时，模块才能整体关闭；隐藏或移除原生白盒根只能作为回归基线，不能作为完成证据；任一环节缺失时只保留一个模块级未完成状态。",
       "handoff_rule": "换 Agent、换会话或失败回边时，必须按 UIReach 整体目标和同一组端到端验收继续，不得按控件或页面交接局部完成结论。"
     },
     "ItemsTankSacrificeCamp": {
@@ -56,7 +56,7 @@
         "Shop"
       ],
       "tracking_rule": "Equipment、TeamLibrary、Shop 只是同一装备获取与装配闭环的实现切面；鱼竿、鱼饵、鱼漂、团队装备库、商店购买、领取和装备生效不得拆成可独立关闭的业务事项。",
-      "completion_rule": "只有鱼竿、鱼饵、鱼漂可通过正式商店或团队装备库获取、领取并装备，FishingSession 读取装备/Items 的强度、耐久、消耗品和 Revision 快照且不形成第二份可写真相，失败预算只提交一种惩罚，装备不可偷、解锁跟人并经 FProfileGrant 授予链，以及构建、Automation 和 Lake 运行证据整体成立时，模块才能整体关闭；装配重连恢复、收益数值或内容未裁决时必须保持 fail-closed。",
+      "completion_rule": "只有鱼竿、鱼饵、鱼漂可通过正式商店或团队装备库获取、领取并装备，默认配置引用 /Game/Catfishing/Data/Equipment/Equip_* 正式资产，开发期 Starter Loadout 自动装配关闭，客户端直连消耗品 grant 被拒绝，FishingSession 读取装备/Items 的强度、当前耐久、消耗品和 Revision 快照且不形成第二份可写真相，失败预算只提交一种惩罚，装备不可偷、解锁跟人并经 FProfileGrant 授予链，以及构建、Automation 和 Lake 运行证据整体成立时，模块才能整体关闭；旧 DA_*_Basic/自动 starter/直连 grant 只能作为历史回归基线，不能作为正式关闭证据；装配重连恢复、收益数值或内容未裁决时必须保持 fail-closed。",
       "handoff_rule": "换 Agent、换会话或失败回边时必须携带 Equipment、TeamLibrary、Shop 的同一组端到端证据；静态、构建、局部 UI 或孤立数据资产绿灯不能替代购买/领取/装备/Fishing 生效的完整闭环，也不能把任一切面单独标为完成。"
     },
     "FrontendOnline": {
@@ -138,8 +138,8 @@
       "content_input_package_source": ".harness/formal-non-fish-content-input-package.json",
       "release_handoff_package_source": ".harness/delivery-release-handoff-package.json",
       "tracking_rule": "HarnessInventory、RegressionEvidence、PlayerAcceptance、AssetReadiness、ReleaseHandoff 只是同一交付闭环的证据切面，不能拆成可独立关闭的业务事项；新发现的交付缺口、玩家验收缺口或正式资产问题只能挂在 DeliveryHarnessAssets 模块级缺口下，避免换 Agent 后把绿色回归和正式资产阻塞混在一起。",
-      "completion_rule": "只有所有已关闭业务模块的 Harness 入口、构建/自动化/运行证据、玩家验收来源、正式鱼类/咬钩/搏斗资产 readiness、正式非鱼内容输入、正式 UI/表现资产边界和交付 handoff 同时成立时，本模块才能整体关闭；任一模块证据过期、正式资产仍是测试资产、FormalFishAssetInputPackage 仍缺少生成正式 UE 鱼定义所需字段、FormalNonFishContentInputPackage 仍有表现或进度成长内容缺口，或玩家可见白盒仍未裁时，只能保持一个模块级未完成状态。",
-      "handoff_rule": "换 Agent、换会话或失败回边时必须携带 Delivery/Harness/Assets 的同一组端到端证据；Static 盘点绿灯只表示交付缺口被集中追踪，不能替代 AssetReadiness 通过，也不能把 DA_*_Test01、FormalFishAssetInputPackage 或 FormalNonFishContentInputPackage 的字段缺口写成已完成。"
+      "completion_rule": "只有所有已关闭业务模块的 Harness 入口、构建/自动化/运行证据、玩家验收来源、正式鱼类/咬钩/搏斗资产 readiness、正式非鱼内容输入、正式 UI/表现资产边界和交付 handoff 同时成立时，本模块才能整体关闭；任一模块证据过期、FormalNonFishContentInputPackage 仍有表现或进度成长内容缺口、RunEnvironmentSocial 行为证据未通过，或玩家可见白盒仍未裁时，只能保持一个模块级未完成状态。FormalFishAssetInputPackage 当前为代理编制的临时正式表且已替换测试资产，后续策划复核只覆盖同一包和同一批资产。",
+      "handoff_rule": "换 Agent、换会话或失败回边时必须携带 Delivery/Harness/Assets 的同一组端到端证据；Static 盘点绿灯只表示交付缺口被集中追踪，不能替代 AssetReadiness 通过，也不能把 FormalNonFishContentInputPackage 或 RunEnvironmentSocial 行为证据缺口写成已完成。"
     }
   },
   "verification": {

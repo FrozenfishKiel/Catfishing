@@ -3,13 +3,20 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 
-#include "AbilitySystemComponent.h"
+#include "AbilitySystem/CatAbilitySystemComponent.h"
 #include "AbilitySystem/CatSurvivalAttributeSet.h"
 #include "GameFramework/Actor.h"
+
+#include <limits>
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatSurvivalAttributeSetValueContractTest,
 	"Catfishing.Unit.AbilitySystem.SurvivalAttributeSet.ASCReadsAndWritesThreeIndependentAttributes",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatAbilitySystemComponentPoisonDeltaContractTest,
+	"Catfishing.Unit.AbilitySystem.AbilitySystemComponent.PoisonDeltaUsesGameplayEffectAndClampsRecovery",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 namespace CatSurvivalAttributeSetTest
@@ -20,8 +27,8 @@ namespace CatSurvivalAttributeSetTest
 		/** 承载 ASC 组件的 authority Actor；组件注册依赖真实 Owner 生命周期。 */
 		TObjectPtr<AActor> Owner = nullptr;
 
-		/** 测试使用的真实 AbilitySystemComponent；它是属性读写和 delegate 的唯一入口。 */
-		TObjectPtr<UAbilitySystemComponent> AbilitySystem = nullptr;
+		/** 测试使用的项目 AbilitySystemComponent；它是属性读写、GE 提交和 delegate 的唯一入口。 */
+		TObjectPtr<UCatAbilitySystemComponent> AbilitySystem = nullptr;
 
 		/** 被 ASC 持有的项目 Survival AttributeSet；测试不把它当成第二个写口。 */
 		TObjectPtr<UCatSurvivalAttributeSet> AttributeSet = nullptr;
@@ -32,7 +39,7 @@ namespace CatSurvivalAttributeSetTest
 	{
 		FAbilityFixture Fixture;
 		Fixture.Owner = World ? World->SpawnActor<AActor>() : nullptr;
-		Fixture.AbilitySystem = Fixture.Owner ? NewObject<UAbilitySystemComponent>(Fixture.Owner) : nullptr;
+		Fixture.AbilitySystem = Fixture.Owner ? NewObject<UCatAbilitySystemComponent>(Fixture.Owner) : nullptr;
 		Fixture.AttributeSet = Fixture.Owner ? NewObject<UCatSurvivalAttributeSet>(Fixture.Owner) : nullptr;
 		if (Fixture.Owner && Fixture.AbilitySystem && Fixture.AttributeSet)
 		{
@@ -81,6 +88,40 @@ bool FCatSurvivalAttributeSetValueContractTest::RunTest(const FString& Parameter
 	TestEqual(TEXT("Poison 可独立变化"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()), 7.0f);
 	TestEqual(TEXT("Poison 变化不改 FishingStrength"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute()), 4.0f);
 	TestEqual(TEXT("Poison 变化不改 FightStamina"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 5.0f);
+	return !HasAnyErrors();
+}
+
+// 测试流程：以项目 ASC 的 Poison delta 接口提交正向中毒和负向恢复；验证调用方不直接写基值时也能通过 GE 改 Poison，并且恢复不会降到 0 以下。
+bool FCatAbilitySystemComponentPoisonDeltaContractTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("创建 Poison delta 测试 World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	WorldWrapper.ForwardErrorMessages(this);
+	UWorld* World = WorldWrapper.GetTestWorld();
+	TestNotNull(TEXT("可创建测试 World"), World);
+	if (!World)
+	{
+		return false;
+	}
+
+	const CatSurvivalAttributeSetTest::FAbilityFixture Fixture = CatSurvivalAttributeSetTest::CreateFixture(World);
+	TestNotNull(TEXT("Poison delta 测试 ASC 已创建"), Fixture.AbilitySystem.Get());
+	TestNotNull(TEXT("Poison delta 测试 AttributeSet 已创建"), Fixture.AttributeSet.Get());
+	if (!Fixture.AbilitySystem || !Fixture.AttributeSet)
+	{
+		return false;
+	}
+
+	Fixture.AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), 2.0f);
+	TestTrue(TEXT("正向 Poison delta 通过 GameplayEffect 提交"), Fixture.AbilitySystem->ApplyPoisonDelta(4.0f));
+	TestEqual(TEXT("Poison 增加到预期值"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()), 6.0f);
+	TestTrue(TEXT("负向 Poison delta 通过 GameplayEffect 提交"), Fixture.AbilitySystem->ApplyPoisonDelta(-3.0f));
+	TestEqual(TEXT("Poison 恢复到预期值"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()), 3.0f);
+	TestTrue(TEXT("过量恢复被夹到零且仍视为提交成功"), Fixture.AbilitySystem->ApplyPoisonDelta(-20.0f));
+	TestEqual(TEXT("Poison 不低于零"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()), 0.0f);
+	TestFalse(TEXT("非法 Poison delta 被拒绝"), Fixture.AbilitySystem->ApplyPoisonDelta(std::numeric_limits<float>::quiet_NaN()));
 	return !HasAnyErrors();
 }
 

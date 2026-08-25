@@ -8,7 +8,15 @@
 #include "UObject/StrongObjectPtr.h"
 #include "UObject/UnrealType.h"
 
+#include "AbilitySystem/CatBodyActionAbility.h"
+#include "AbilitySystem/CatAbilitySettings.h"
+#include "AbilitySystem/CatAbilitySystemComponent.h"
+#include "AbilitySystem/CatFishingAbilityTags.h"
+#include "Abilities/GameplayAbilityTypes.h"
 #include "Character/CatCharacter.h"
+#include "Condition/CatConditionComponent.h"
+#include "Condition/CatConditionSettings.h"
+#include "Data/CatFishDefinition.h"
 #include "Environment/CatWaterGeometry.h"
 #include "Environment/CatWaterRegion.h"
 #include "Environment/Tests/CatWaterTestFixtures.h"
@@ -17,6 +25,7 @@
 #include "Net/OnlineEngineInterface.h"
 #include "Online/CatOnlineSettings.h"
 #include "OnlineSubsystemTypes.h"
+#include "Growth/CatGrowthSettings.h"
 #include "Social/CatProtectionSignActor.h"
 #include "Social/CatSocialSettings.h"
 
@@ -101,6 +110,49 @@ namespace CatGameplayTypesTest
 		Controller->Possess(OutCharacter);
 		return Controller;
 	}
+
+	// BodyAction AbilitySpec 识别流程：入口测试只关心统一身体动作网关是否存在，不绑定具体 Ability 类名，避免默认 AbilitySet 后续重排时误判。
+	static bool IsBodyActionAbilitySpec(const FGameplayAbilitySpec& Spec)
+	{
+		return Spec.Ability && Spec.Ability->GetAssetTags().HasTagExact(CatFishingAbilityTags::Ability_Body_Command);
+	}
+
+	// BodyAction 网关计数流程：只读 ASC 可激活列表，用于测试夹具确认自己没有重复授予，也没有跳过正式 GAS 入口。
+	static int32 CountBodyActionAbilitySpecs(const UCatAbilitySystemComponent* AbilitySystem)
+	{
+		int32 Count = 0;
+		if (!AbilitySystem)
+		{
+			return Count;
+		}
+		for (const FGameplayAbilitySpec& Spec : AbilitySystem->GetActivatableAbilities())
+		{
+			if (IsBodyActionAbilitySpec(Spec))
+			{
+				++Count;
+			}
+		}
+		return Count;
+	}
+
+	// BodyAction 网关装配流程：真实项目应由默认 AbilitySet 授予网关；若测试夹具没有触发完整授予，则只从当前 Character ASC 补一份网关来验证 RPC 仍先经过 GAS。
+	static bool EnsureBodyActionGatewayForCharacter(FAutomationTestBase& Test, const ACatCharacter* Character)
+	{
+		UCatAbilitySystemComponent* AbilitySystem = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
+		Test.TestNotNull(TEXT("RunEnvironmentSocial 入口测试 ASC 可用"), AbilitySystem);
+		if (!AbilitySystem)
+		{
+			return false;
+		}
+		if (CountBodyActionAbilitySpecs(AbilitySystem) == 0)
+		{
+			AbilitySystem->GiveAbility(FGameplayAbilitySpec(UCatGA_BodyActionCommand::StaticClass(), 1));
+		}
+		Test.TestEqual(TEXT("RunEnvironmentSocial 入口测试只使用一份 BodyAction 网关"),
+			CountBodyActionAbilitySpecs(AbilitySystem), 1);
+		return CountBodyActionAbilitySpecs(AbilitySystem) == 1;
+	}
+
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -187,18 +239,72 @@ bool FCatGameModeCommandIntentGateTest::RunTest(const FString& Parameters)
 	ACatfishingGameModeBase* GameMode = World->SpawnActor<ACatfishingGameModeBase>();
 	ACatfishingPlayerController* Controller = World->SpawnActor<ACatfishingPlayerController>();
 	ACatfishingPlayerState* PlayerState = World->SpawnActor<ACatfishingPlayerState>();
+	UCatAbilitySettings* AbilitySettings = GetMutableDefault<UCatAbilitySettings>();
+	UCatConditionSettings* ConditionSettings = GetMutableDefault<UCatConditionSettings>();
+	UCatGrowthSettings* GrowthSettings = GetMutableDefault<UCatGrowthSettings>();
 	TestNotNull(TEXT("可生成 CommandIntent GameMode"), GameMode);
 	TestNotNull(TEXT("可生成 CommandIntent Controller"), Controller);
 	TestNotNull(TEXT("可生成 CommandIntent PlayerState"), PlayerState);
-	if (!GameMode || !Controller || !PlayerState)
+	TestNotNull(TEXT("可读取 Ability 默认设置"), AbilitySettings);
+	TestNotNull(TEXT("可读取 Condition 默认设置"), ConditionSettings);
+	TestNotNull(TEXT("可读取 Growth 默认设置"), GrowthSettings);
+	if (!GameMode || !Controller || !PlayerState || !AbilitySettings || !ConditionSettings || !GrowthSettings)
 	{
 		return false;
 	}
+
+	const bool bSavedAbilityRuntime = AbilitySettings->bEnableCharacterAbilityRuntime;
+	const bool bSavedInitialAttributeTuning = AbilitySettings->bEnableInitialAttributeTuning;
+	const ECatAbilityReplicationPolicy SavedReplicationPolicy = AbilitySettings->ReplicationPolicy;
+	const float SavedInitialPoison = AbilitySettings->InitialPoison;
+	const float SavedInitialFishingStrength = AbilitySettings->InitialFishingStrength;
+	const float SavedInitialFightStamina = AbilitySettings->InitialFightStamina;
+	const bool bSavedConditionRuntime = ConditionSettings->bEnableConditionRuntime;
+	const double SavedPoisonDownedThreshold = ConditionSettings->PoisonDownedThreshold;
+	const bool bSavedGrowthRuntime = GrowthSettings->bEnableGrowthRuntime;
+	const int32 SavedExperiencePerChoiceSlot = GrowthSettings->ExperiencePerChoiceSlot;
+	ON_SCOPE_EXIT
+	{
+		AbilitySettings->bEnableCharacterAbilityRuntime = bSavedAbilityRuntime;
+		AbilitySettings->bEnableInitialAttributeTuning = bSavedInitialAttributeTuning;
+		AbilitySettings->ReplicationPolicy = SavedReplicationPolicy;
+		AbilitySettings->InitialPoison = SavedInitialPoison;
+		AbilitySettings->InitialFishingStrength = SavedInitialFishingStrength;
+		AbilitySettings->InitialFightStamina = SavedInitialFightStamina;
+		ConditionSettings->bEnableConditionRuntime = bSavedConditionRuntime;
+		ConditionSettings->PoisonDownedThreshold = SavedPoisonDownedThreshold;
+		GrowthSettings->bEnableGrowthRuntime = bSavedGrowthRuntime;
+		GrowthSettings->ExperiencePerChoiceSlot = SavedExperiencePerChoiceSlot;
+	};
+	AbilitySettings->bEnableCharacterAbilityRuntime = true;
+	AbilitySettings->bEnableInitialAttributeTuning = true;
+	AbilitySettings->ReplicationPolicy = ECatAbilityReplicationPolicy::Full;
+	AbilitySettings->InitialPoison = 0.0f;
+	AbilitySettings->InitialFishingStrength = 5.0f;
+	AbilitySettings->InitialFightStamina = 5.0f;
+	ConditionSettings->bEnableConditionRuntime = true;
+	ConditionSettings->PoisonDownedThreshold = 5.0;
+	GrowthSettings->bEnableGrowthRuntime = true;
+	GrowthSettings->ExperiencePerChoiceSlot = 10;
 
 	const FString StableNetId = TEXT("CommandIntentPlayer");
 	const FUniqueNetIdRef UniqueId = FUniqueNetIdString::Create(StableNetId, FName(TEXT("CAT_TEST")));
 	PlayerState->SetUniqueId(FUniqueNetIdRepl(UniqueId));
 	Controller->PlayerState = PlayerState;
+	ACatCharacter* Character = World->SpawnActor<ACatCharacter>();
+	TestNotNull(TEXT("CommandIntent 使用真实 Character 承载身体状态"), Character);
+	if (!Character)
+	{
+		return false;
+	}
+	Character->SetPlayerState(PlayerState);
+	Controller->Possess(Character);
+	UCatConditionComponent* Conditions = Character->GetConditionComponent();
+	TestNotNull(TEXT("CommandIntent Character 持有 Condition 组件"), Conditions);
+	if (!Conditions)
+	{
+		return false;
+	}
 
 	ACatfishingGameModeBase::FAdmissionRecord Record;
 	Record.Phase = ACatfishingGameModeBase::EAdmissionPhase::Active;
@@ -212,6 +318,39 @@ bool FCatGameModeCommandIntentGateTest::RunTest(const FString& Parameters)
 	GameMode->RunPublicState.Phase.bFishingAllowed = true;
 	TestTrue(TEXT("白天宽玩法命令可进入"), GameMode->CanAcceptGameplayCommand(Controller));
 	TestTrue(TEXT("白天允许 Fishing/Chum 命令"), GameMode->CanAcceptFishingCommand(Controller));
+
+	UCatFishDefinition* ToxicFish = NewObject<UCatFishDefinition>(GetTransientPackage());
+	TestNotNull(TEXT("可创建 CommandIntent 毒鱼定义"), ToxicFish);
+	if (!ToxicFish)
+	{
+		return false;
+	}
+	ToxicFish->bEnableRuntimeDefinition = true;
+	ToxicFish->FishDefinitionId = FName(TEXT("CommandIntentToxicFish"));
+	ToxicFish->BodyClass = ECatFishBodyClass::Standard;
+	ToxicFish->SacrificeContribution = 1;
+	ToxicFish->RarityTierId = FName(TEXT("Common"));
+	ToxicFish->RegionIds = {FName(TEXT("River"))};
+	ToxicFish->TimeOfDay = {ECatEnvironmentTimeOfDay::Day};
+	ToxicFish->Weather = {ECatEnvironmentWeather::Clear};
+	ToxicFish->SpawnWeight = 1.0;
+	ToxicFish->MinimumWeightKilograms = 1.0;
+	ToxicFish->MaximumWeightKilograms = 2.0;
+	ToxicFish->ScoopTargetRadiusCentimeters = 30.0;
+	ToxicFish->MinimumFightParticipants = 1;
+	ToxicFish->FishStrength = 1.0;
+	ToxicFish->FishFightStamina = 1.0;
+	ToxicFish->BitePersonalityId = FName(TEXT("Bite"));
+	ToxicFish->FightPersonalityId = FName(TEXT("Fight"));
+	ToxicFish->FoodSafety = ECatFishFoodSafety::Toxic;
+	ToxicFish->EatingExperience = 1.0;
+	ToxicFish->PoisonIncrease = 10.0;
+	AddExpectedErrorPlain(TEXT("Event=character_downed"), EAutomationExpectedErrorFlags::Contains, 1);
+	const FCatDomainCommandResult EatResult = Conditions->ConsumeCommittedFish(FGuid::NewGuid(), ToxicFish);
+	TestTrue(TEXT("测试毒鱼提交成功制造倒地事实"), EatResult.bCommitted);
+	TestTrue(TEXT("Condition 快照进入 Downed"), Conditions->GetSnapshot().bDowned);
+	TestTrue(TEXT("倒地后宽玩法命令仍可服务救援/Social"), GameMode->CanAcceptGameplayCommand(Controller));
+	TestFalse(TEXT("倒地后 Fishing/玩家打窝窄 gate 关闭"), GameMode->CanAcceptFishingCommand(Controller));
 
 	GameMode->RunPublicState.Phase.bFishingAllowed = false;
 	TestTrue(TEXT("白天收口命令仍可进入宽 gate"), GameMode->CanAcceptGameplayCommand(Controller));
@@ -354,6 +493,7 @@ bool FCatGameModeReconnectAdmissionWhitelistTest::RunTest(const FString& Paramet
 // 1. 先锁住 Controller Social RPC、偷鱼结果 RPC 与 Chum RPC 的网络声明，确认玩家只从正式入口进出。
 // 2. 再在真实 Lake GameMode 测试 World 中种入同一名 Active 玩家，并把 Run 固定在普通夜晚。
 // 3. 同一个 Controller 继续验证求助、保护牌、偷鱼结果缓存和打窝回执，证明 Social 宽 gate 与 Chum 窄 gate 在同一入口闭环里协同。
+//    Social 命令现在先进入 BodyAction Ability；本测试只验玩家入口合同，提交窗口/取消生命周期由 AbilitySystem 专门用例覆盖。
 // 4. 本测试是机器侧入口合同证据，不证明真人多客户端同步、UI 操作、跨进程 RPC 传输或整局人工验收；这些仍作为模块级同一闭环处理。
 bool FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest::RunTest(const FString& Parameters)
 {
@@ -400,6 +540,12 @@ bool FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest::RunTest(const
 	{
 		return false;
 	}
+	UCatGA_BodyActionCommand* BodyActionAbility = GetMutableDefault<UCatGA_BodyActionCommand>();
+	TestNotNull(TEXT("BodyAction Ability CDO 可用于入口合同测试"), BodyActionAbility);
+	if (!BodyActionAbility)
+	{
+		return false;
+	}
 
 	const bool bSavedEnableSocialRuntime = SocialSettings->bEnableSocialRuntime;
 	const ECatDomainPolicy SavedMischiefPermission = SocialSettings->MischiefPermission;
@@ -419,6 +565,7 @@ bool FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest::RunTest(const
 		SocialSettings->ProtectionSignPlacementRangeCentimeters = SavedProtectionSignPlacementRangeCentimeters;
 		SocialSettings->ManualHelpRadiusCentimeters = SavedManualHelpRadiusCentimeters;
 		SocialSettings->ManualHelpCooldownSeconds = SavedManualHelpCooldownSeconds;
+		BodyActionAbility->ClearBodyActionCommitWindowOverrideForAutomation();
 	};
 	SocialSettings->bEnableSocialRuntime = true;
 	SocialSettings->MischiefPermission = ECatDomainPolicy::Enabled;
@@ -428,6 +575,8 @@ bool FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest::RunTest(const
 	SocialSettings->ProtectionSignPlacementRangeCentimeters = 120.0;
 	SocialSettings->ManualHelpRadiusCentimeters = 450.0;
 	SocialSettings->ManualHelpCooldownSeconds = 6.0;
+	// 入口合同测试不推进整局 World tick，否则 Run StateTree 会改写手工夹具；窗口行为由 AbilitySystem.CancelWindowUsesAbilityLifecycle 单独覆盖。
+	BodyActionAbility->SetBodyActionCommitWindowSecondsForAutomation(0.0f);
 
 	FTestWorldWrapper WorldWrapper;
 	TestTrue(TEXT("创建 RunEnvironmentSocial 玩家入口测试 World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
@@ -465,6 +614,10 @@ bool FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest::RunTest(const
 	}
 	// 公开打窝组件需要本地 owning Controller 才能走 SubmitPlaceChum；这里只补 LocalPlayer 身份，后续是否允许仍由 GameMode gate 裁决。
 	Controller->SetPlayer(LocalPlayer.Get());
+	if (!CatGameplayTypesTest::EnsureBodyActionGatewayForCharacter(*this, Character))
+	{
+		return false;
+	}
 
 	// Phase 夹具只固定同一 Run 的普通夜晚事实：Social 应继续收口，新的 Fishing/Chum 必须被窄 gate 拒绝。
 	ACatfishingGameModeBase::FAdmissionRecord Record;
@@ -482,6 +635,12 @@ bool FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest::RunTest(const
 
 	const FGuid HelpRequestId = FGuid::NewGuid();
 	Controller->ServerRequestManualHelp_Implementation(HelpRequestId, ECatHelpSignalKind::ManualFishing);
+	GameState = World->GetGameState<ACatfishingGameState>();
+	TestNotNull(TEXT("手动求助后当前 GameState 可读"), GameState);
+	if (!GameState)
+	{
+		return false;
+	}
 	const FCatHelpSignalSnapshot& HelpSignal = GameState->GetLastHelpSignal();
 	TestEqual(TEXT("手动求助通过 Controller 发布到 GameState"), HelpSignal.SignalId, HelpRequestId);
 	TestEqual(TEXT("手动求助保持 ManualFishing 类型"), HelpSignal.Kind, ECatHelpSignalKind::ManualFishing);

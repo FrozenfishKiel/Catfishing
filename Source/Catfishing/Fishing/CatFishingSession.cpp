@@ -1112,6 +1112,13 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
 		FisherCharacter->GetCatDefinitionId(), CatStaminaBaseline);
 
+	const FCatEquipmentLoadoutSnapshot& EquipmentSnapshot = Equipment->GetSnapshot();
+	if (EquipmentSnapshot.RodDefinitionId != AttemptSnapshot.RodDefinitionId
+		|| !FMath::IsFinite(EquipmentSnapshot.RodDurability) || EquipmentSnapshot.RodDurability <= 0.0)
+	{
+		return false;
+	}
+
 	// 规格 4.2 三方力量：猫力量 = ASC FishingStrength；鱼力量 = 鱼种 FishStrength（含完美折减）；竿强度 = 鱼竿定义 FishingStrength（静态）。
 	// 下面把服务器设置、鱼竿/鱼定义、性格模板的各项参数一次性打包进模拟配置结构体，交给 FightRunner/Simulator 使用。
 	FCatFightSimulationConfig Config;
@@ -1131,8 +1138,8 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.FishCalmSpeedCentimetersPerSecond = Personality->CalmMovementSpeedCentimetersPerSecond;
 	Config.FishStruggleSpeedCentimetersPerSecond = Personality->StruggleMovementSpeedCentimetersPerSecond;
 	Config.MaximumLineLengthCentimeters = RodDefinition->MaximumLineLengthCentimeters;
-	// 竿耐久是会话内资源：每场搏斗从 DA 上限满值开始（用户口径），不跨会话累积磨损。
-	Config.RodDurability = RodDefinition->MaximumRodDurability;
+	// 竿耐久以 Equipment 当前快照为权威；这里不从 DA 最大值重置，避免维修、磨损或断竿状态被下一场搏斗悄悄抹掉。
+	Config.RodDurability = EquipmentSnapshot.RodDurability;
 	Config.StruggleHoldRodWearPerSecond = RodDefinition->BaseDurabilityWearPerSecond;
 	Config.TautRodWearMultiplier = FMath::Max(1.0, RodDefinition->HighTensionWearMultiplier);
 	Config.EscapeSlackCentimeters = Settings->EscapeSlackCentimeters;
@@ -1270,8 +1277,8 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency); // 搏斗数值每步都要尽快同步给客户端表现层。
 	if (Step.Outcome == ECatFightStepOutcome::RodBroken)
 	{
-		// 断竿：先把竿耐久磨损结算为不可逆的装备事务，失败则整体判会话失效（不允许"竿断了但没扣耐久"的不一致）。
-		UCatEquipmentComponent* Equipment = FisherCharacter.IsValid() ? FisherCharacter->GetEquipmentComponent() : nullptr;
+		// 断竿：先把竿耐久磨损结算为不可逆的装备事务，失败则整体判会话失效；提交对象必须是会话开始时冻结的抛竿者装备，不能因接力或 Pawn 变化转移。
+		UCatEquipmentComponent* Equipment = CastEquipment.Get();
 		if (!Equipment || !Equipment->CommitFishingRodBreak(Snapshot.FishingSessionId).bApplied)
 		{
 			FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Rod break commit failed"));

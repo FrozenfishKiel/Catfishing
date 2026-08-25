@@ -1,6 +1,6 @@
 # Catfishing 当前框架项目地图
 
-更新时间：2026-08-12
+更新时间：2026-08-25
 文档状态：当前源码事实地图。
 范围：面向后续程序员和 AI 代码审查，说明当前框架从哪里读、运行时真相由谁持有、哪些旧文档只能作为历史来源。本文不替代 GDD、数值表或验收报告。
 
@@ -26,8 +26,8 @@
 | `Framework/Game/` | UE 游戏框架宿主、玩家准入、Run 写口、PlayerController RPC。 | `CatGameplayTypes.h/.cpp` |
 | `Online/` | Session、邀请、旅行、Destroy 补偿、网络/旅行失败收口。 | `UCatOnlineSubsystem` |
 | `UI/` | LocalPlayer UI 生命周期、Travel/Survival 原生 Widget、只读展示。 | `UCatLocalPlayerUISubsystem`、`UCatTravelWidget`、`UCatSurvivalWidget` |
-| `Character/` | 猫身体 Actor、ASC Owner/Avatar、输入映射和身体宿主组件装配。 | `ACatCharacter` |
-| `AbilitySystem/` | Ability/AttributeSet/能力配置。 | `UCatSurvivalAttributeSet`、`UCatStageCTestAbility`、`UCatAbilitySettings` |
+| `Character/` | 猫身体 Actor、ASC Owner/Avatar 和身体宿主组件装配。 | `ACatCharacter` |
+| `AbilitySystem/` | Ability/AttributeSet/能力配置和正式 GameplayEffect 写口。 | `UCatAbilitySystemComponent`、`UCatSurvivalAttributeSet`、`UCatGE_PoisonDelta`、`UCatAbilitySettings` |
 | `Condition/` | Wet/Downed/Recovery 等离散身体状态。 | `UCatConditionComponent` |
 | `Equipment/` | 一局装备、耗材、鱼竿耐久和失败预算。 | `UCatEquipmentComponent`、`UCatEquipmentDefinition` |
 | `Run/` | StateTree 节点、Run 配置、献祭跨 Items/Run 协调。 | `UCatSacrificeCoordinator`、`CatRunStateTreeNodes.*` |
@@ -50,7 +50,7 @@
 | Run Phase、额度、夜晚 ready、Host exit 等局事实 | `ACatfishingGameModeBase` | `ACatfishingGameState`、StateTree、Online |
 | 公开 Run/Environment/Help 快照 | `ACatfishingGameState` | UI、本地表现、客户端只读逻辑 |
 | 稳定身份、普通夜 ready、公开鱼图鉴摘要 | `ACatfishingPlayerState` | GameMode、Social、UI |
-| 猫身体、ASC、五项生存属性、Condition、Equipment、个人鱼护出口 | `ACatCharacter` 及其组件 | UI、Fishing、Items、Condition、Equipment |
+| 猫身体、ASC、Poison/FishingStrength/FightStamina、Condition、Equipment、个人鱼护出口 | `ACatCharacter` 及其组件 | UI、Fishing、Items、Condition、Equipment |
 | 单次钓鱼会话阶段、参与者、鱼运行态、抢抄终态 | `ACatFishingSession` | FishingService、Items、Collection、客户端复制 |
 | 鱼实例、容器数组、预留、转移、吃鱼、偷鱼 escrow | `UCatItemsService` | Fishing、Social、Run sacrifice、Container 复制组件 |
 | 献祭跨域协议阶段 | `UCatSacrificeCoordinator` | GameMode、Items、Online teardown |
@@ -139,4 +139,4 @@ Steam 当前使用开发测试 AppId 480，并已接入 `SteamDevAppId`、`bInit
 - **架构事实**：技术方案和接线文档已经定下的边界。
 - **产品事实**：GDD 和用户裁决确定的玩法规则。
 
-旧文档里的拟定名、空模板状态或候选方案不能压过当前源码事实；当前源码里的临时 gate、未配置默认值或诊断 Ability 也不能被当成最终产品裁决。
+旧文档里的拟定名、空模板状态或候选方案不能压过当前源码事实；当前源码里的临时 gate、未配置默认值或历史诊断入口也不能被当成最终产品裁决。

@@ -43,7 +43,7 @@ namespace CatFishingPlayerEntryTest
 	static const FName WaterRegionId(TEXT("River"));
 	/** 本测试使用的鱼竿定义 ID；只存在于 CDO 临时目录，不写入配置文件。 */
 	static const FName RodId(TEXT("PlayerEntryRod"));
-	/** 本测试使用的普通鱼饵定义 ID；普通饵不会引入一局耗材数量干扰。 */
+	/** 本测试使用的普通鱼饵定义 ID；玩家入口闭环必须先通过正式数量栈授予一份鱼饵，才允许进入 Fishing use。 */
 	static const FName BaitId(TEXT("PlayerEntryBait"));
 	/** 本测试使用的鱼漂定义 ID；它只让装备装配和钓鱼占用记录完整。 */
 	static const FName FloatId(TEXT("PlayerEntryFloat"));
@@ -72,6 +72,7 @@ namespace CatFishingPlayerEntryTest
 		}
 		else if (Kind == ECatEquipmentKind::Bait)
 		{
+			Definition->bRunConsumable = true;
 			Definition->BiteRateMultiplier = 1.0;
 			Definition->MinimumBiteDelayMultiplier = 1.0;
 		}
@@ -379,7 +380,7 @@ namespace CatFishingPlayerEntryTest
 					ECatContainerKind::PersonalGuard);
 		}
 
-		/** 装备流程：通过正式 EquipmentComponent 装配四件 Fishing 入口装备，并创建会话占用记录供捕获前 finalization 使用。 */
+		/** 装备流程：通过正式 EquipmentComponent 装配 Fishing 入口装备、授予一份普通饵，并创建会话占用记录供捕获前 finalization 使用。 */
 		bool ConfigureEquipment(FAutomationTestBase& Test)
 		{
 			UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
@@ -390,6 +391,12 @@ namespace CatFishingPlayerEntryTest
 			const FCatDomainCommandResult Configure = Equipment->ConfigureLoadoutFromAuthority(
 				FGuid::NewGuid(), Equipment->GetSnapshot().Revision, RodId, BaitId, FloatId, ScoopNetId);
 			if (!Test.TestTrue(TEXT("Configure rod/bait/float/scoop through Equipment authority API"), Configure.bCommitted))
+			{
+				return false;
+			}
+			const FCatDomainCommandResult BaitGrant = Equipment->GrantRunConsumableFromAuthority(
+				FGuid::NewGuid(), Equipment->GetSnapshot().Revision, BaitId, 1);
+			if (!Test.TestTrue(TEXT("Grant one normal bait through Equipment authority API"), BaitGrant.bCommitted))
 			{
 				return false;
 			}

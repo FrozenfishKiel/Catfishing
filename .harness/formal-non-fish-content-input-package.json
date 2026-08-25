@@ -10,12 +10,12 @@
     "gap_list": {
       "kind": "local_markdown",
       "path": "Docs/Development/需求对齐差距清单.md",
-      "available_fact": "The human progress entry records DataWorldProfileAlbum and CharacterGrowthCondition as engineering-complete but not formally content-complete, and keeps DeliveryHarnessAssets blocked by formal presentation and progress/growth content decisions."
+      "available_fact": "The human progress entry records DataWorldProfileAlbum and CharacterGrowthCondition as engineering-complete but not formally content-complete, notes that BodyAction long-action Montage assets and config now have clean machine evidence, and keeps DeliveryHarnessAssets blocked by formal GameplayCue/final presentation plus progress/growth content decisions."
     },
     "technical_plan": {
       "kind": "local_markdown",
       "path": "Docs/Architecture/项目技术方案.md",
-      "available_fact": "The technical plan records the same product/content boundaries: unlock milestones, imprint admission, Buff choices, fatigue presentation, yellow-stamina boundaries, and player-visible presentation resources remain open inputs rather than engineering facts."
+      "available_fact": "The technical plan records the same product/content boundaries: unlock milestones, imprint admission, Buff choices, fatigue presentation, yellow-stamina boundaries, BodyAction formal GameplayCue/final player-visible presentation resources, and broader player-visible presentation resources remain open inputs rather than engineering facts; BodyAction formal Montage assets/config are now generated and load-verified."
     },
     "release_handoff": {
       "kind": "local_json",
@@ -26,6 +26,37 @@
       "kind": "local_json",
       "path": ".harness/harness.json",
       "available_fact": "DeliveryHarnessAssets is a single atomic module; formal presentation and progress/growth content blockers must remain module-level Delivery inputs instead of scattered subtasks."
+    },
+    "upgrade_effect_doc": {
+      "kind": "lark_docx",
+      "title": "升级效果",
+      "doc_token": "Sisrw4FzWiL2AekXetFc7Vxunqg",
+      "document_id": "Pd5EdR7EyoMzYsx3C2Nc1CDSncg",
+      "revision": 52,
+      "available_fact": "The live document is the stated source for the current three-choice growth Buff catalog, including player-facing copy, effects, values, stacking notes, and appearance order.",
+      "blocking_fact": "The same document says all values are snapshots pending playtest, so it narrows the growth-Buff gap but does not by itself freeze formal growth content."
+    },
+    "imprint_album_doc": {
+      "kind": "lark_docx",
+      "title": "印记图鉴",
+      "wiki_node_token": "EPi4wjG5IigRTwkH8stcGWoUnUh",
+      "document_id": "MK7Ad0bF6oBoTXxv2VRcfLhRn6f",
+      "revision": 43,
+      "available_fact": "The live imprint album source confirms TheftCaught as a must-enter imprint event for both involved players and lists candidate trigger families for fishing, social, fish-album, character/state, environment, equipment/items, camp, and self-photo moments.",
+      "blocking_fact": "Except for explicitly fixed entries such as TheftCaught, most triggers are still candidate/C4/C7-dependent entries rather than a frozen permanent Imprint admission list."
+    },
+    "equipment_unlock_context": {
+      "kind": "lark_docx_set",
+      "titles": [
+        "装备与道具",
+        "裁决同步 · 装备与商店（王甜甜）"
+      ],
+      "revisions": [
+        742,
+        25
+      ],
+      "available_fact": "The equipment sources describe unlock as shop shelving or ceremony context and show that the earlier cumulative-30-fish rod unlock was removed in favor of public-fund purchase.",
+      "blocking_fact": "No live source read in this pass provides concrete world, growth, or album milestone to formal equipment UnlockId mappings."
     }
   },
   "content_groups": {
@@ -36,18 +67,18 @@
         "FormalPresentationBoundaryClosed"
       ],
       "required_facts": [
-        "Formal UI or presentation resources for any player-visible Lake status, menu, fish, bite, fight, and asset naming paths.",
-        "A product decision that native debug text, raw state labels, and test asset names are not visible on the formal player path.",
+        "Formal UI or presentation resources for any player-visible Lake status, menu, fish, bite, fight, BodyAction long-action GameplayCue/final presentation path, and asset naming paths; BodyAction Montage resources are generated/configured but still need final presentation acceptance.",
+        "A product decision that native debug text, raw state labels, and internal asset names are not visible on the formal player path.",
         "A confirmation path for reopening any default-hidden native LakeReach debug surface only after it is replaced by formal presentation."
       ],
       "blocking_gaps": [
         "FormalUIPresentationResourcesMissing",
         "PlayerVisibleDebugTextBoundaryNotFrozen",
-        "TestAssetNamesStillTrackedAsFormalPresentationRisk"
+        "BodyActionFormalGameplayCueFinalPresentationMissing"
       ],
       "do_not_do": [
         "Do not reopen UIReach or FrontendOnline as partial presentation tasks.",
-        "Do not treat the default-hidden CatLakeReachWidget debug path as formal player UI readiness.",
+        "Do not treat the CatLakeReachWidget C++ base class or machine DTO projection alone as formal player UI readiness; UIReach formal evidence must keep the WBP_CatLakeReach Designer-bound frontend, MVC backend, and runtime attach proof together.",
         "Do not mark DeliveryHarnessAssets complete from Static inventory while formal presentation is still open."
       ]
     },
@@ -60,7 +91,7 @@
       "required_facts": [
         "Concrete world, growth, or album milestones that produce each formal equipment UnlockId.",
         "Full imprint admission list beyond TheftCaught, including which run events can create permanent Imprint grants.",
-        "Formal growth Buff choices, numeric effects, and player-facing copy for PendingChoiceCount consumption.",
+        "Formal growth Buff choices, numeric effects, and player-facing copy for PendingChoiceCount consumption; the current 升级效果 source narrows this but still needs formal acceptance or playtest freeze.",
         "Formal light, medium, and heavy fatigue presentation triggers now that fatigue is no longer a gameplay number.",
         "Formal yellow-stamina shield presentation and consumption boundary."
       ],
@@ -82,5 +113,5 @@
     "FormalPresentationBoundaryOpen",
     "FormalProgressGrowthContentOpen"
   ],
-  "close_rule": "This package can move to ready only when both content_groups are satisfied with authoritative product/content facts and package_blocking_gaps is empty. It does not close DeliveryHarnessAssets by itself; Delivery still also requires formal fish asset readiness, tracked test asset replacement, RunEnvironmentSocial module behavior evidence, and passing Static plus AssetReadiness verification."
+  "close_rule": "This package can move to ready only when both content_groups are satisfied with authoritative product/content facts and package_blocking_gaps is empty. It does not close DeliveryHarnessAssets by itself; Delivery still also requires RunEnvironmentSocial module behavior evidence and passing Static plus AssetReadiness verification."
 }

@@ -47,6 +47,8 @@ namespace CatTeamEquipmentTakeFlowTest
 		}
 		else if (Kind == ECatEquipmentKind::Bait)
 		{
+			// Bait 在正式目录中由商店以局内数量栈交付；测试定义也按这个 gate 配置，避免团队库夹具继续沿用旧的无库存鱼饵假设。
+			Definition->bRunConsumable = true;
 			Definition->BiteRateMultiplier = 1.0;
 			Definition->MinimumBiteDelayMultiplier = 1.0;
 		}
@@ -179,6 +181,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Equipment.TeamLibrary.TakeFlowPrecheckProtectsLibraryBeforeEquip",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+// 测试流程：从项目正式装备目录取 ShopRodT2 入库，随后覆盖入库重放、取用、取用重放和关门拒绝，确保团队库不再依赖旧 Basic 白盒定义。
 bool FCatTeamEquipmentLibraryAdapterLifecycleTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -200,9 +203,9 @@ bool FCatTeamEquipmentLibraryAdapterLifecycleTest::RunTest(const FString& Parame
 	Grant.Context.ExpectedRevision = 0;
 	Grant.Context.StableNetId = TEXT("TeamLibraryPlayer");
 	Grant.SourceTransactionId = FGuid::NewGuid();
-	Grant.DefinitionId = TEXT("Rod_Basic");
+	Grant.DefinitionId = TEXT("ShopRodT2");
 	const FCatTeamEquipmentGrantResult Granted = Library->GrantFromShopOrder(Grant);
-	TestTrue(TEXT("本地基础竿首次入库成功"), Granted.Command.bCommitted);
+	TestTrue(TEXT("正式商店竿首次入库成功"), Granted.Command.bCommitted);
 	TestEqual(TEXT("首次入库无错误"), Granted.Command.Error, ECatDomainCommandError::None);
 	TestTrue(TEXT("装备实例 ID 由服务器创建"), Granted.Instance.InstanceId.IsValid());
 	TestEqual(TEXT("入库后版本推进"), Library->GetSnapshot().Revision, static_cast<int64>(1));

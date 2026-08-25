@@ -370,20 +370,20 @@
     {
       "from": "implementation",
       "to": "verification",
-      "summary": "验证证据：UBT CatfishingEditor 构建通过；UI Automation 7/7；Online Automation 2/2；静态核对 UI 无旅行旁路，Leave 只转交 Online RequestLeave。",
+      "summary": "验证证据：UBT CatfishingEditor 构建通过；UI Automation 8/8；Online Automation 2/2；静态核对 UI 无旅行旁路，Leave 只转交 Online RequestLeave。",
       "input_ref": "",
       "output_ref": "",
       "edge_status": "profile_allowed",
-      "timestamp": "2026-08-24T17:06:32.352630+08:00"
+      "timestamp": "2026-08-25T13:50:09+08:00"
     },
     {
       "from": "verification",
       "to": "verification",
-      "summary": "UI 7/7、Online 2/2、静态 Online 边界与配置检查已完成",
+      "summary": "UI 8/8、Online 2/2、静态 Online 边界与配置检查已完成",
       "input_ref": "",
       "output_ref": "",
       "edge_status": "out_of_profile",
-      "timestamp": "2026-08-24T17:18:03.452890+08:00"
+      "timestamp": "2026-08-25T13:50:09+08:00"
     },
     {
       "from": "verification",

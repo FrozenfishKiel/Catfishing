@@ -13,6 +13,9 @@
 #include "Subsystems/GameInstanceSubsystem.h"
 #include "Tests/AutomationCommon.h"
 #include "UI/CatFishingViewBridge.h"
+#include "UI/CatLakeReachModel.h"
+#include "UI/CatLakeReachPageController.h"
+#include "UI/CatLakeReachWidget.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
 #include "UI/CatUISettings.h"
 #include "UObject/StrongObjectPtr.h"
@@ -67,7 +70,7 @@ bool FCatLocalPlayerUISubsystemTypeContractTest::RunTest(const FString& Paramete
 }
 
 // 测试流程：用 FTestWorldWrapper 创建带 GameInstance 的 Game World，再给 LocalPlayer 装入同一 WorldContext 且带 Overlay 的临时 GameViewportClient，避免命令行 Viewport 缺层的假失败。
-// 随后让项目 Controller 通过正式 Pawn notifier 占有项目 Character；先断言默认玩家路径不创建 LakeReach 白盒根，再显式打开 gate 验证旧 UIReach 根仍可成对装卸。
+// 随后让项目 Controller 通过正式 Pawn notifier 占有项目 Character；先断言关闭 gate 时不创建半套 MVC，再显式打开 gate 验证 WBP View、Model 和 PageController 成对装卸。
 bool FCatLocalPlayerUISubsystemLakeReachAttachTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -126,35 +129,56 @@ bool FCatLocalPlayerUISubsystemLakeReachAttachTest::RunTest(const FString& Param
 		WorldContext->GameViewport = nullptr;
 		return false;
 	}
-	const bool bSavedLakeStatusView = Settings->bEnableLakeStatusView;
-	Settings->bEnableLakeStatusView = false;
+	const bool bSavedLakeReachView = Settings->bEnableLakeReachView;
+	const TSoftClassPtr<UCatLakeReachWidget> SavedLakeReachClass = Settings->LakeReachWidgetClass;
+	Settings->bEnableLakeReachView = false;
+	Settings->LakeReachWidgetClass = TSoftClassPtr<UCatLakeReachWidget>(
+		FSoftClassPath(TEXT("/Game/UI/WBP_CatLakeReach.WBP_CatLakeReach_C")));
 
 	Controller->SetPlayer(LocalPlayer.Get());
 	LocalUI->PlayerControllerChanged(Controller);
 	Controller->Possess(Character);
-	TestNull(TEXT("默认配置下占有 Character 不创建 LakeReach 白盒根 View"), LocalUI->LakeReachWidget.Get());
-	TestNull(TEXT("默认配置下不创建 UIReach Fishing 只读 Bridge"), LocalUI->FishingViewBridge.Get());
-	TestFalse(TEXT("默认配置下菜单不会被白盒根打开"), LocalUI->IsLakeMenuOpen());
+	TestNull(TEXT("关闭 gate 后占有 Character 不创建 LakeReach WBP View"), LocalUI->LakeReachWidget.Get());
+	TestNull(TEXT("关闭 gate 后不创建 UIReach Model"), LocalUI->LakeReachModel.Get());
+	TestNull(TEXT("关闭 gate 后不创建 UIReach PageController"), LocalUI->LakeReachPageController.Get());
+	TestFalse(TEXT("关闭 gate 后菜单不会生成半套输入状态"), LocalUI->IsLakeMenuOpen());
 
-	Settings->bEnableLakeStatusView = true;
+	Settings->bEnableLakeReachView = true;
 	LocalUI->HandleControllerPawnChanged(Character);
-	TestNotNull(TEXT("显式开启后创建唯一 LakeReach 根 View"), LocalUI->LakeReachWidget.Get());
-	TestNotNull(TEXT("显式开启后创建唯一 Fishing 只读 Bridge"), LocalUI->FishingViewBridge.Get());
-	TestTrue(TEXT("LakeReach 根绑定当前 Character 的 ASC"),
-		LocalUI->BoundLakeASC.Get() == Character->GetAbilitySystemComponent());
+	TestNotNull(TEXT("显式开启后创建唯一 LakeReach WBP View"), LocalUI->LakeReachWidget.Get());
+	TestNotNull(TEXT("显式开启后创建唯一 UIReach Model"), LocalUI->LakeReachModel.Get());
+	TestNotNull(TEXT("显式开启后创建唯一 UIReach PageController"), LocalUI->LakeReachPageController.Get());
+	if (LocalUI->LakeReachWidget)
+	{
+		TestTrue(TEXT("LakeReach 玩家前端继承正式 View 基类"),
+			LocalUI->LakeReachWidget->GetClass()->IsChildOf(UCatLakeReachWidget::StaticClass()));
+		TestFalse(TEXT("LakeReach 玩家前端不是原生 View 基类替身"),
+			LocalUI->LakeReachWidget->GetClass() == UCatLakeReachWidget::StaticClass());
+		TestEqual(TEXT("LakeReach 玩家前端加载正式 WBP 类"),
+			LocalUI->LakeReachWidget->GetClass()->GetName(),
+			FString(TEXT("WBP_CatLakeReach_C")));
+	}
+	if (LocalUI->LakeReachModel)
+	{
+		TestNotNull(TEXT("Model 创建唯一 Fishing 只读 Bridge"), LocalUI->LakeReachModel->GetFishingViewBridgeForTests());
+		TestTrue(TEXT("Model 绑定当前 Character 的 ASC"),
+			LocalUI->LakeReachModel->GetBoundAbilitySystemForTests() == Character->GetAbilitySystemComponent());
+	}
 	TestFalse(TEXT("初始菜单不会在装配时自动打开"), LocalUI->IsLakeMenuOpen());
 
 	LocalUI->DetachLakePawn();
-	TestNull(TEXT("Detach 后移除 LakeReach 根 View"), LocalUI->LakeReachWidget.Get());
-	TestNull(TEXT("Detach 后释放 Fishing 只读 Bridge"), LocalUI->FishingViewBridge.Get());
+	TestNull(TEXT("Detach 后移除 LakeReach WBP View"), LocalUI->LakeReachWidget.Get());
+	TestNull(TEXT("Detach 后释放 UIReach Model"), LocalUI->LakeReachModel.Get());
+	TestNull(TEXT("Detach 后释放 UIReach PageController"), LocalUI->LakeReachPageController.Get());
 	TestFalse(TEXT("Detach 后菜单状态保持关闭"), LocalUI->IsLakeMenuOpen());
-	Settings->bEnableLakeStatusView = bSavedLakeStatusView;
+	Settings->bEnableLakeReachView = bSavedLakeReachView;
+	Settings->LakeReachWidgetClass = SavedLakeReachClass;
 	LocalPlayer->PlayerRemoved();
 	WorldContext->GameViewport = nullptr;
 	return !HasAnyErrors();
 }
 
-// 测试流程：创建最小 Game World 和真实 FishingSession Actor，只走 UIReach 内部 Bridge/生命周期 helper；命令行 Editor 下不伪造 LocalPlayer 占有链。
+// 测试流程：创建最小 Game World 和真实 FishingSession Actor，只走 UIReach Model 的 Bridge/生命周期 helper；命令行 Editor 下不伪造 LocalPlayer 占有链。
 // 断言边界是 Actor 销毁后 Bridge 与观察状态被清空，后续根 View 刷新才会得到 no active session。
 bool FCatLocalPlayerUISubsystemFishingSessionLifecycleTest::RunTest(const FString& Parameters)
 {
@@ -173,15 +197,13 @@ bool FCatLocalPlayerUISubsystemFishingSessionLifecycleTest::RunTest(const FStrin
 	}
 	WorldWrapper.BeginPlayInTestWorld();
 
-	TStrongObjectPtr<ULocalPlayer> LocalPlayer(GEngine ? NewObject<ULocalPlayer>(GEngine) : nullptr);
-	TStrongObjectPtr<UCatLocalPlayerUISubsystem> LocalUI(LocalPlayer.IsValid()
-		? NewObject<UCatLocalPlayerUISubsystem>(LocalPlayer.Get()) : nullptr);
-	if (!TestNotNull(TEXT("用合法 LocalPlayer Outer 创建 UIReach 子系统"), LocalUI.Get()))
+	TStrongObjectPtr<UCatLakeReachModel> Model(NewObject<UCatLakeReachModel>(GetTransientPackage()));
+	if (!TestNotNull(TEXT("创建 UIReach Model 生命周期测试对象"), Model.Get()))
 	{
 		return false;
 	}
-	LocalUI->FishingViewBridge = NewObject<UCatFishingViewBridge>(LocalUI.Get());
-	if (!TestNotNull(TEXT("为 UIReach 子系统创建唯一 FishingViewBridge"), LocalUI->FishingViewBridge.Get()))
+	Model->FishingViewBridge = NewObject<UCatFishingViewBridge>(Model.Get());
+	if (!TestNotNull(TEXT("为 UIReach Model 创建唯一 FishingViewBridge"), Model->FishingViewBridge.Get()))
 	{
 		return false;
 	}
@@ -191,13 +213,14 @@ bool FCatLocalPlayerUISubsystemFishingSessionLifecycleTest::RunTest(const FStrin
 	{
 		return false;
 	}
-	LocalUI->SetFishingViewSession(Session);
-	TestTrue(TEXT("Bridge 先绑定当前 FishingSession"), LocalUI->FishingViewBridge->GetBoundSession() == Session);
-	TestTrue(TEXT("UIReach 生命周期观察指向同一 FishingSession"), LocalUI->ObservedFishingSession.Get() == Session);
+	Model->SetFishingViewSession(Session);
+	TestTrue(TEXT("Bridge 先绑定当前 FishingSession"), Model->GetFishingViewBridgeForTests()->GetBoundSession() == Session);
+	TestTrue(TEXT("UIReach Model 生命周期观察指向同一 FishingSession"),
+		Model->GetObservedFishingSessionForTests() == Session);
 
 	TestTrue(TEXT("销毁当前观察的 FishingSession Actor"), Session->Destroy());
-	TestNull(TEXT("Session 销毁后 Bridge 不再保留旧会话"), LocalUI->FishingViewBridge->GetBoundSession());
-	TestFalse(TEXT("Session 销毁后生命周期观察被成对清理"), LocalUI->ObservedFishingSession.IsValid());
+	TestNull(TEXT("Session 销毁后 Bridge 不再保留旧会话"), Model->GetFishingViewBridgeForTests()->GetBoundSession());
+	TestNull(TEXT("Session 销毁后生命周期观察被成对清理"), Model->GetObservedFishingSessionForTests());
 	return !HasAnyErrors();
 }
 
@@ -215,7 +238,7 @@ bool FCatLocalPlayerUISubsystemOnlineWidgetPolicyTest::RunTest(const FString& Pa
 	TestTrue(TEXT("Frontend 仍显示正式组局入口"),
 		UCatLocalPlayerUISubsystem::ShouldShowOnlineTravelWidget(FrontendSnapshot));
 	TestFalse(TEXT("Frontend 不显示 Lake 菜单离局入口"),
-		UCatLocalPlayerUISubsystem::CanRequestOnlineLeaveFromLake(FrontendSnapshot));
+		UCatLakeReachModel::CanRequestOnlineLeaveFromLake(FrontendSnapshot));
 
 	FCatOnlineSnapshot TravelingToLakeSnapshot = FrontendSnapshot;
 	TravelingToLakeSnapshot.WorldState = ECatOnlineWorldState::TravelingToLake;
@@ -231,7 +254,7 @@ bool FCatLocalPlayerUISubsystemOnlineWidgetPolicyTest::RunTest(const FString& Pa
 	TestFalse(TEXT("Host 到达 Lake 后不再显示 Host/Find/Join 白盒"),
 		UCatLocalPlayerUISubsystem::ShouldShowOnlineTravelWidget(LakeHostSnapshot));
 	TestTrue(TEXT("Host 到达 Lake 后菜单可提交正式 Leave"),
-		UCatLocalPlayerUISubsystem::CanRequestOnlineLeaveFromLake(LakeHostSnapshot));
+		UCatLakeReachModel::CanRequestOnlineLeaveFromLake(LakeHostSnapshot));
 
 	FCatOnlineSnapshot LakeClientSnapshot = LakeHostSnapshot;
 	LakeClientSnapshot.SessionState = ECatOnlineSessionState::Client;
@@ -239,7 +262,7 @@ bool FCatLocalPlayerUISubsystemOnlineWidgetPolicyTest::RunTest(const FString& Pa
 	TestFalse(TEXT("Client 到达 Lake 后不再显示 Host/Find/Join 白盒"),
 		UCatLocalPlayerUISubsystem::ShouldShowOnlineTravelWidget(LakeClientSnapshot));
 	TestTrue(TEXT("Client 到达 Lake 后菜单可提交正式 Leave"),
-		UCatLocalPlayerUISubsystem::CanRequestOnlineLeaveFromLake(LakeClientSnapshot));
+		UCatLakeReachModel::CanRequestOnlineLeaveFromLake(LakeClientSnapshot));
 
 	FCatOnlineSnapshot DirectLakeSnapshot;
 	DirectLakeSnapshot.WorldState = ECatOnlineWorldState::Lake;
@@ -249,21 +272,21 @@ bool FCatLocalPlayerUISubsystemOnlineWidgetPolicyTest::RunTest(const FString& Pa
 	TestFalse(TEXT("直开 Lake 不显示联机白盒"),
 		UCatLocalPlayerUISubsystem::ShouldShowOnlineTravelWidget(DirectLakeSnapshot));
 	TestFalse(TEXT("直开 Lake 没有 Session 时不显示离局按钮"),
-		UCatLocalPlayerUISubsystem::CanRequestOnlineLeaveFromLake(DirectLakeSnapshot));
+		UCatLakeReachModel::CanRequestOnlineLeaveFromLake(DirectLakeSnapshot));
 
 	FCatOnlineSnapshot LeavingLakeSnapshot = LakeClientSnapshot;
 	LeavingLakeSnapshot.ActiveOperation = ECatOnlineOperation::Leave;
 	TestFalse(TEXT("Lake Leave pending 时仍不显示联机白盒"),
 		UCatLocalPlayerUISubsystem::ShouldShowOnlineTravelWidget(LeavingLakeSnapshot));
 	TestFalse(TEXT("Lake Leave pending 时禁用重复离局入口"),
-		UCatLocalPlayerUISubsystem::CanRequestOnlineLeaveFromLake(LeavingLakeSnapshot));
+		UCatLakeReachModel::CanRequestOnlineLeaveFromLake(LeavingLakeSnapshot));
 
 	FCatOnlineSnapshot TravelingToFrontendSnapshot = LeavingLakeSnapshot;
 	TravelingToFrontendSnapshot.WorldState = ECatOnlineWorldState::TravelingToFrontend;
 	TestFalse(TEXT("回 Frontend 途中不把 Host/Find/Join 面板盖回玩法画面"),
 		UCatLocalPlayerUISubsystem::ShouldShowOnlineTravelWidget(TravelingToFrontendSnapshot));
 	TestFalse(TEXT("回 Frontend 途中不再显示 Lake 菜单离局入口"),
-		UCatLocalPlayerUISubsystem::CanRequestOnlineLeaveFromLake(TravelingToFrontendSnapshot));
+		UCatLakeReachModel::CanRequestOnlineLeaveFromLake(TravelingToFrontendSnapshot));
 	return !HasAnyErrors();
 }
 

@@ -42,6 +42,36 @@ function Assert-TextPattern {
     }
 }
 
+function Assert-NoTextPattern {
+    param([string]$Pattern, [string]$RelativePath, [string]$Description)
+    $Ripgrep = Get-Command rg -ErrorAction SilentlyContinue
+    if (-not $Ripgrep) {
+        throw "rg is required for static verification"
+    }
+    & $Ripgrep.Source -n $Pattern (Join-Path $ProjectRoot $RelativePath)
+    if ($LASTEXITCODE -eq 0) {
+        throw ("Static contract unexpectedly found: {0} pattern={1} path={2}" -f $Description, $Pattern, $RelativePath)
+    }
+    if ($LASTEXITCODE -ne 1) {
+        throw ("Static contract scan failed: {0} pattern={1} path={2} exit={3}" -f $Description, $Pattern, $RelativePath, $LASTEXITCODE)
+    }
+}
+
+function Assert-NoBinaryTextPattern {
+    param([string]$Pattern, [string]$RelativePath, [string]$Description)
+    $Ripgrep = Get-Command rg -ErrorAction SilentlyContinue
+    if (-not $Ripgrep) {
+        throw "rg is required for static verification"
+    }
+    & $Ripgrep.Source -a -n $Pattern (Join-Path $ProjectRoot $RelativePath)
+    if ($LASTEXITCODE -eq 0) {
+        throw ("Static binary contract unexpectedly found: {0} pattern={1} path={2}" -f $Description, $Pattern, $RelativePath)
+    }
+    if ($LASTEXITCODE -ne 1) {
+        throw ("Static binary contract scan failed: {0} pattern={1} path={2} exit={3}" -f $Description, $Pattern, $RelativePath, $LASTEXITCODE)
+    }
+}
+
 function Invoke-ModuleStaticCheck {
     Assert-TextPattern "EquipmentTeamLibraryShop" ".harness/harness.json" "module harness"
     Assert-TextPattern "equipment_teamlibrary_shop_static_check" ".harness/harness.json" "static verification entry"
@@ -51,9 +81,18 @@ function Invoke-ModuleStaticCheck {
     Assert-TextPattern "EquipmentTeamLibraryShop" ".codex/state/equipment-teamlibrary-shop-harness.json" "module harness state"
     Assert-TextPattern "EquipmentTeamLibraryShop" ".codex/state/equipment-teamlibrary-shop-context.json" "module context state"
     Assert-TextPattern "Equipment / TeamLibrary / Shop" "Docs/Development" "human progress entry"
-    Assert-TextPattern "FreeBasicBaitClaim" "Config/DefaultGame.ini" "free basic bait shop entry"
-    Assert-TextPattern "FreeBasicBaitClaim" "Source/Catfishing/ShopEconomy/Tests/CatShopEconomySettingsTests.cpp" "shop settings free bait expectation"
+    Assert-TextPattern "bAutoConfigureStarterLoadout=False" "Config/DefaultGame.ini" "developer starter auto loadout disabled"
+    Assert-TextPattern "Equip_Rod_StarterT1" "Config/DefaultGame.ini" "formal starter rod asset entry"
+    Assert-TextPattern "Equip_Bait_Bug" "Config/DefaultGame.ini" "formal bait asset entry"
+    Assert-TextPattern "Equip_Chum_Bug" "Config/DefaultGame.ini" "formal chum asset entry"
+    Assert-NoTextPattern "/Game/Data/Equipment/DA_.*_Basic|Rod_Basic|Bait_Basic|Chum_Basic|FakeBait_Giant" "Config/DefaultGame.ini" "legacy Basic equipment or fake bait id in runtime config"
+    Assert-NoBinaryTextPattern "FakeBait_|/Game/Data/Equipment/DA_.*_Basic|Rod_Basic|Bait_Basic|Chum_Basic" "Content/Catfishing/Data/Equipment" "legacy Basic equipment or fake bait id in formal equipment assets"
+    Assert-TextPattern "FreeBugBaitClaim" "Config/DefaultGame.ini" "free formal bait shop entry"
+    Assert-TextPattern "FreeBugBaitClaim" "Source/Catfishing/ShopEconomy/Tests/CatShopEconomySettingsTests.cpp" "shop settings free bait expectation"
+    Assert-TextPattern "DirectClientGrantDisabled" "Source/Catfishing/Framework/Game/CatGameplayTypes.cpp" "direct client consumable grant disabled"
     Assert-TextPattern "EQUIPMENT_TEAMLIBRARY_SHOP_RUNTIME_PASS" "Scripts/verify_equipment_teamlibrary_shop_runtime.py" "runtime pass marker"
+    Assert-TextPattern "Normal-bait Begin without inventory is rejected" "Source/Catfishing/Equipment/Tests/CatEquipmentFishingUseTests.cpp" "normal bait inventory gate test"
+    Assert-TextPattern "Normal bait commit removes exactly one bait" "Source/Catfishing/Equipment/Tests/CatEquipmentFishingUseTests.cpp" "normal bait commit consumes inventory test"
     Assert-TextPattern "SubmitFishSale" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "fish sale coordinator"
     Assert-TextPattern "ConsumeFish" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "fish sale consumes Items first"
     Assert-TextPattern "ValidateFishSale" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "fish sale wallet precheck"
@@ -69,6 +108,7 @@ function Invoke-ModuleStaticCheck {
     Assert-TextPattern "FishSaleConsumesFishCreditsWalletAndReplays" "Source/Catfishing/ShopEconomy/Tests/CatShopOrderCoordinatorTests.cpp" "fish sale replay test"
     Assert-TextPattern "TakeFlowPrecheckProtectsLibraryBeforeEquip" "Source/Catfishing/Equipment/Tests/CatTeamEquipmentLibraryAdapterTests.cpp" "team library take order test"
     Assert-TextPattern "UnlockGrantAckAuthorizesEquipment" "Source/Catfishing/Collection/Tests/CatRunImprintServiceTests.cpp" "unlock grant ack test"
+    Write-Host "EQUIPMENT_TEAMLIBRARY_SHOP_STATIC_PASS FormalConfig=True RejectsLegacyBasic=True RejectsLegacyAssetStrings=True NormalBaitInventoryGate=True"
 }
 
 function Invoke-ModuleBuild {

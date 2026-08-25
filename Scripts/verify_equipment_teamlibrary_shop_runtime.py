@@ -84,6 +84,7 @@ def _validate_equipment_definition(settings, definition_id: str, kind: str, asse
     _require(actual_id == definition_id, f"{asset_name} ID 不匹配: actual={actual_id} expected={definition_id}")
     _require(_enum_contains(actual_kind, kind), f"{definition_id} 类别不匹配: actual={actual_kind} expected={kind}")
     _require(route not in ("", "None"), f"{definition_id} 缺 FunctionalRouteId")
+    _require(not route.startswith("FakeBait_"), f"{definition_id} 仍使用测试味 FunctionalRouteId: {route}")
 
     if kind == "Rod":
         _require(float(_get_property(definition, "maximum_rod_durability", "MaximumRodDurability")) > 0.0,
@@ -93,8 +94,8 @@ def _validate_equipment_definition(settings, definition_id: str, kind: str, asse
         _require(float(_get_property(definition, "maximum_line_length_centimeters", "MaximumLineLengthCentimeters")) > 0.0,
                  f"{definition_id} 线长无效")
     elif kind == "Bait":
-        _require(not bool(_get_property(definition, "b_run_consumable", "bRunConsumable")),
-                 f"{definition_id} 普通饵不应配置为 RunConsumable")
+        _require(bool(_get_property(definition, "b_run_consumable", "bRunConsumable")),
+                 f"{definition_id} 鱼饵必须由正式局内消耗品数量栈交付")
         _require(float(_get_property(definition, "bite_rate_multiplier", "BiteRateMultiplier")) > 0.0,
                  f"{definition_id} BiteRateMultiplier 无效")
         _require(float(_get_property(definition, "minimum_bite_delay_multiplier", "MinimumBiteDelayMultiplier")) > 0.0,
@@ -158,7 +159,7 @@ def _validate_shop_entry(settings, entry_id: str, kind: str, definition_id: str,
 def main() -> None:
     """执行第四模块 Lake Runtime 探针。
 
-    先只读加载 Lake 并核对正式 GameMode/Controller，再验证 starter 装备、窝料和商店目录。
+    先只读加载 Lake 并核对正式 GameMode/Controller，再验证全部正式 EquipmentDefinition、starter 装备、窝料和商店目录。
     PASS 标记同时输出关键 ID 与数量，供 PowerShell Runtime 模式确认这不是旧日志或空跑。
     """
     level_editor = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
@@ -181,27 +182,39 @@ def main() -> None:
     _require(controller_class == expected_controller, f"Lake Controller 不匹配: actual={controller_class} expected={expected_controller}")
 
     equipment_settings = unreal.get_default_object(_load_class("/Script/Catfishing.CatEquipmentSettings"))
-    _require(bool(_get_property(equipment_settings, "b_auto_configure_starter_loadout", "bAutoConfigureStarterLoadout")),
-             "Starter Loadout 自动装配未启用")
+    _require(not bool(_get_property(equipment_settings, "b_auto_configure_starter_loadout", "bAutoConfigureStarterLoadout")),
+             "开发期 Starter Loadout 自动装配必须关闭，第四模块只能由商店/团队库等正式入口交付装备")
     _require(int(_get_property(equipment_settings, "starter_chum_quantity", "StarterChumQuantity")) > 0,
              "StarterChumQuantity 必须为正")
 
     expected_definitions = [
-        ("Rod_Basic", "Rod", "DA_Rod_Basic", "/Game/Data/Equipment/DA_Rod_Basic.DA_Rod_Basic"),
-        ("Bait_Basic", "Bait", "DA_Bait_Basic", "/Game/Data/Equipment/DA_Bait_Basic.DA_Bait_Basic"),
-        ("Float_Basic", "Float", "DA_Float_Basic", "/Game/Data/Equipment/DA_Float_Basic.DA_Float_Basic"),
-        ("ScoopNet_Basic", "ScoopNet", "DA_ScoopNet_Basic", "/Game/Data/Equipment/DA_ScoopNet_Basic.DA_ScoopNet_Basic"),
-        ("Chum_Basic", "Chum", "DA_Chum_Basic", "/Game/Data/Equipment/DA_Chum_Basic.DA_Chum_Basic"),
+        ("StarterRodT1", "Rod", "Equip_Rod_StarterT1", "/Game/Catfishing/Data/Equipment/Equip_Rod_StarterT1.Equip_Rod_StarterT1"),
+        ("ShopRodT2", "Rod", "Equip_Rod_ShopT2", "/Game/Catfishing/Data/Equipment/Equip_Rod_ShopT2.Equip_Rod_ShopT2"),
+        ("BugBait", "Bait", "Equip_Bait_Bug", "/Game/Catfishing/Data/Equipment/Equip_Bait_Bug.Equip_Bait_Bug"),
+        ("FlashingBait", "Bait", "Equip_Bait_Flashing", "/Game/Catfishing/Data/Equipment/Equip_Bait_Flashing.Equip_Bait_Flashing"),
+        ("FruitBait", "Bait", "Equip_Bait_Fruit", "/Game/Catfishing/Data/Equipment/Equip_Bait_Fruit.Equip_Bait_Fruit"),
+        ("GiantLureBait", "Bait", "Equip_Bait_GiantLure", "/Game/Catfishing/Data/Equipment/Equip_Bait_GiantLure.Equip_Bait_GiantLure"),
+        ("MeatBait", "Bait", "Equip_Bait_Meat", "/Game/Catfishing/Data/Equipment/Equip_Bait_Meat.Equip_Bait_Meat"),
+        ("MoonlightBait", "Bait", "Equip_Bait_Moonlight", "/Game/Catfishing/Data/Equipment/Equip_Bait_Moonlight.Equip_Bait_Moonlight"),
+        ("NectarBait", "Bait", "Equip_Bait_Nectar", "/Game/Catfishing/Data/Equipment/Equip_Bait_Nectar.Equip_Bait_Nectar"),
+        ("SoundBait", "Bait", "Equip_Bait_Sound", "/Game/Catfishing/Data/Equipment/Equip_Bait_Sound.Equip_Bait_Sound"),
+        ("FeatherFloat", "Float", "Equip_Float_Feather", "/Game/Catfishing/Data/Equipment/Equip_Float_Feather.Equip_Float_Feather"),
+        ("YarnBallFloat", "Float", "Equip_Float_YarnBall", "/Game/Catfishing/Data/Equipment/Equip_Float_YarnBall.Equip_Float_YarnBall"),
+        ("BellFloat", "Float", "Equip_Float_Bell", "/Game/Catfishing/Data/Equipment/Equip_Float_Bell.Equip_Float_Bell"),
+        ("BugChum", "Chum", "Equip_Chum_Bug", "/Game/Catfishing/Data/Equipment/Equip_Chum_Bug.Equip_Chum_Bug"),
+        ("FermentedGrainChum", "Chum", "Equip_Chum_FermentedGrain", "/Game/Catfishing/Data/Equipment/Equip_Chum_FermentedGrain.Equip_Chum_FermentedGrain"),
+        ("FruitFragranceChum", "Chum", "Equip_Chum_FruitFragrance", "/Game/Catfishing/Data/Equipment/Equip_Chum_FruitFragrance.Equip_Chum_FruitFragrance"),
+        ("HolyLightChum", "Chum", "Equip_Chum_HolyLight", "/Game/Catfishing/Data/Equipment/Equip_Chum_HolyLight.Equip_Chum_HolyLight"),
     ]
     for definition_id, kind, asset_name, asset_path in expected_definitions:
         _validate_equipment_definition(equipment_settings, definition_id, kind, asset_name, asset_path)
 
     starter_ids = {
-        "Rod_Basic": _get_property(equipment_settings, "starter_rod_definition_id", "StarterRodDefinitionId"),
-        "Bait_Basic": _get_property(equipment_settings, "starter_bait_definition_id", "StarterBaitDefinitionId"),
-        "Float_Basic": _get_property(equipment_settings, "starter_float_definition_id", "StarterFloatDefinitionId"),
-        "ScoopNet_Basic": _get_property(equipment_settings, "starter_scoop_net_definition_id", "StarterScoopNetDefinitionId"),
-        "Chum_Basic": _get_property(equipment_settings, "starter_chum_definition_id", "StarterChumDefinitionId"),
+        "StarterRodT1": _get_property(equipment_settings, "starter_rod_definition_id", "StarterRodDefinitionId"),
+        "BugBait": _get_property(equipment_settings, "starter_bait_definition_id", "StarterBaitDefinitionId"),
+        "FeatherFloat": _get_property(equipment_settings, "starter_float_definition_id", "StarterFloatDefinitionId"),
+        "None": _get_property(equipment_settings, "starter_scoop_net_definition_id", "StarterScoopNetDefinitionId"),
+        "BugChum": _get_property(equipment_settings, "starter_chum_definition_id", "StarterChumDefinitionId"),
     }
     for expected, actual in starter_ids.items():
         _require(_as_name(actual) == expected, f"Starter ID 不匹配: actual={actual} expected={expected}")
@@ -210,14 +223,14 @@ def main() -> None:
     _require(bool(_get_property(shop_settings, "b_enable_shop_economy_runtime", "bEnableShopEconomyRuntime")),
              "ShopEconomy runtime 未启用")
     _require(int(_get_property(shop_settings, "starting_team_wallet_balance", "StartingTeamWalletBalance")) >= 5,
-             "团队钱包初始余额不足以购买基础竿和基础漂")
-    _validate_shop_entry(shop_settings, "ShopRodBasicOrder", "EquipmentGrant", "Rod_Basic", 3, False, True)
-    _validate_shop_entry(shop_settings, "ShopFloatBasicOrder", "EquipmentGrant", "Float_Basic", 2, False, True)
-    _validate_shop_entry(shop_settings, "ShopChumOrder", "RunConsumableGrant", "Chum_Basic", 1, True, False)
-    _validate_shop_entry(shop_settings, "FreeBasicBaitClaim", "EquipmentGrant", "Bait_Basic", 0, True, False)
-    _validate_shop_entry(shop_settings, "FreeStarterRodClaim", "EquipmentGrant", "Rod_Basic", 0, True, False)
-    _require(_as_name(_get_property(shop_settings, "free_ordinary_bait_entry_id", "FreeOrdinaryBaitEntryId")) == "FreeBasicBaitClaim",
-             "免费普通饵入口未绑定 FreeBasicBaitClaim")
+             "团队钱包初始余额不足以购买正式鱼竿和正式鱼漂")
+    _validate_shop_entry(shop_settings, "ShopRodT2Order", "EquipmentGrant", "ShopRodT2", 3, False, True)
+    _validate_shop_entry(shop_settings, "ShopFloatYarnBallOrder", "EquipmentGrant", "YarnBallFloat", 2, False, True)
+    _validate_shop_entry(shop_settings, "ShopBugChumOrder", "RunConsumableGrant", "BugChum", 1, True, False)
+    _validate_shop_entry(shop_settings, "FreeBugBaitClaim", "RunConsumableGrant", "BugBait", 0, True, False)
+    _validate_shop_entry(shop_settings, "FreeStarterRodClaim", "EquipmentGrant", "StarterRodT1", 0, True, False)
+    _require(_as_name(_get_property(shop_settings, "free_ordinary_bait_entry_id", "FreeOrdinaryBaitEntryId")) == "FreeBugBaitClaim",
+             "免费普通饵入口未绑定 FreeBugBaitClaim")
     _require(_as_name(_get_property(shop_settings, "free_starter_rod_entry_id", "FreeStarterRodEntryId")) == "FreeStarterRodClaim",
              "免费保底竿入口未绑定 FreeStarterRodClaim")
 
@@ -228,8 +241,10 @@ def main() -> None:
     unreal.log(
         "EQUIPMENT_TEAMLIBRARY_SHOP_RUNTIME_PASS "
         f"LakeGameMode={actual_game_mode} Controller={controller_class} "
-        "Definitions=Rod_Basic,Bait_Basic,Float_Basic,ScoopNet_Basic,Chum_Basic "
-        "Catalog=ShopRodBasicOrder,ShopFloatBasicOrder,ShopChumOrder,FreeBasicBaitClaim,FreeStarterRodClaim "
+        "Definitions=StarterRodT1,ShopRodT2,BugBait,FlashingBait,FruitBait,GiantLureBait,MeatBait,"
+        "MoonlightBait,NectarBait,SoundBait,FeatherFloat,YarnBallFloat,BellFloat,BugChum,"
+        "FermentedGrainChum,FruitFragranceChum,HolyLightChum "
+        "Catalog=ShopRodT2Order,ShopFloatYarnBallOrder,ShopBugChumOrder,FreeBugBaitClaim,FreeStarterRodClaim "
         f"PlayerStarts={len(player_starts)} Regions={len(regions)} PricePolicy={price_policy}"
     )
 

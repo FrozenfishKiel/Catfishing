@@ -311,7 +311,7 @@ FCatDomainCommandResult UCatEquipmentComponent::ConsumeRunConsumableFromAuthorit
 	{
 		Result.Error = ECatDomainCommandError::RevisionConflict;
 	}
-	else if (Stack && Stack->Quantity <= GetPendingReservedSpecialBaitCount(DefinitionId)
+	else if (Stack && Stack->Quantity <= GetPendingReservedFishingBaitCount(DefinitionId)
 		+ GetPendingReservedRunConsumableCount(DefinitionId))
 	{
 		Result.Error = ECatDomainCommandError::CapacityExceeded;
@@ -417,9 +417,15 @@ FCatFishingFailureResult UCatEquipmentComponent::CommitFishingFailure(const FGui
 FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FGuid FishingSessionId,
 	const FName RodDefinitionId, const FName BaitDefinitionId, const FName FloatDefinitionId, const int64 ExpectedRevision)
 {
+	// 建立 Fishing 装备预留的流程：
+	// 1. 先用 SessionId 返回已存在的终态，保证 FishingSession 重放不会再检查或再占库存。
+	// 2. 再校验 authority、定义类型、Revision、当前装配和鱼竿耐久，任何不一致都保持快照不变。
+	// 3. 接着拒绝正在进行的 Fishing 或 RunConsumable 操作，让鱼饵库存同一时间只有一个写入意图。
+	// 4. 普通饵和特殊饵都必须声明为 RunConsumable，并且数量栈扣除其他 Fishing 预留后仍至少剩一份。
+	// 5. 最后只写入预留记录和 Active Session，不递增 Revision；真正的库存变化留到 Commit 阶段发布。
 	if (const FCatFishingUseRecord* ExistingRecord = FindFishingUseRecord(FishingSessionId))
 	{
-		const bool bReserved = ExistingRecord->bSpecialBaitReserved && !ExistingRecord->bBaitCommitted
+		const bool bReserved = ExistingRecord->bBaitQuantityReserved && !ExistingRecord->bBaitCommitted
 			&& !ExistingRecord->bReleased;
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, bReserved,
 			bReserved ? ExistingRecord : nullptr);
@@ -460,13 +466,13 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false);
 	}
-	const bool bSpecialBait = Bait->bSpecialBait;
-	if (bSpecialBait && !Bait->bRunConsumable)
+	// 鱼饵是否扣数量由 RunConsumable 决定；SpecialBait 只保留偏好、失败惩罚等玩法语义，不能再绕过库存真相。
+	if (!Bait->bRunConsumable)
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false);
 	}
 	FCatRunConsumableStack* BaitStack = FindConsumable(BaitDefinitionId);
-	if (bSpecialBait && (!BaitStack || BaitStack->Quantity <= GetPendingReservedSpecialBaitCount(BaitDefinitionId)))
+	if (!BaitStack || BaitStack->Quantity <= GetPendingReservedFishingBaitCount(BaitDefinitionId))
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false);
 	}
@@ -477,14 +483,15 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	Record.BaitDefinitionId = BaitDefinitionId;
 	Record.FloatDefinitionId = FloatDefinitionId;
 	Record.ReservationRevision = Snapshot.Revision;
-	Record.bSpecialBaitReserved = bSpecialBait;
+	Record.bBaitQuantityReserved = true;
 	FishingUseRecords.Add(FishingSessionId, Record);
 	ActiveFishingUseSessionId = FishingSessionId;
-	return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::None, bSpecialBait);
+	return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::None, true);
 }
 
 FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBait(const FGuid FishingSessionId)
 {
+	// 立即提交入口只负责串起“先提交、再发布”的固定顺序；真实扣减仍集中在 Deferred 版本，避免两条入口各自维护库存语义。
 	const FCatFishingUseOperationResult Result = CommitFishingBaitDeferred(FishingSessionId);
 	if (Result.bApplied) PublishDeferredFishingBait(FishingSessionId);
 	return Result;
@@ -492,6 +499,12 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBait(const FG
 
 FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBaitDeferred(const FGuid FishingSessionId)
 {
+	// 延迟提交鱼饵的流程：
+	// 1. 先找到 Begin 阶段留下的记录；没有记录说明 Fishing 从未拿到装备使用权。
+	// 2. 已释放或已提交的记录只返回终态，不允许重复扣同一份库存。
+	// 3. 只有当前 Active Fishing Session 能提交，避免旧会话在新会话开始后补扣。
+	// 4. Begin 已经保护了一份普通或特殊鱼饵，这里只消费那一份并递增快照 Revision。
+	// 5. 只标记已提交，不广播快照；调用方可以先完成 Fishing 自己的终态事件，再显式 Publish。
 	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
 	if (!Record)
 	{
@@ -505,7 +518,8 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBaitDeferred(
 	{
 		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
 	}
-	if (Record->bSpecialBaitReserved)
+	// Begin 已经为这场 Fishing 保护一份饵；Commit 只消费这份受保护数量，重放不会再次扣库存。
+	if (Record->bBaitQuantityReserved)
 	{
 		FCatRunConsumableStack* Stack = FindConsumable(Record->BaitDefinitionId);
 		if (!Stack || Stack->Quantity <= 0)
@@ -525,10 +539,11 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBaitDeferred(
 
 void UCatEquipmentComponent::PublishDeferredFishingBait(const FGuid FishingSessionId)
 {
+	// 发布延迟扣饵结果：只有已经提交且尚未发布的记录会广播快照；重复调用只更新本地终态标记，不会制造第二次 UI/网络变化。
 	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
 	if (!Record || !Record->bBaitCommitted || Record->bBaitCommitPublished) return;
 	Record->bBaitCommitPublished = true;
-	if (Record->bSpecialBaitReserved) PublishSnapshot();
+	if (Record->bBaitQuantityReserved) PublishSnapshot();
 }
 
 FCatFishingUseOperationResult UCatEquipmentComponent::SetAccumulatedFishingRodWear(const FGuid FishingSessionId,
@@ -657,6 +672,12 @@ bool UCatEquipmentComponent::IsFishingUseActive(const FGuid FishingSessionId) co
 FCatRunConsumableUseResult UCatEquipmentComponent::BeginRunConsumableUse(const FGuid OperationId,
 	const FName DefinitionId, const int32 Quantity, const int64 ExpectedRevision)
 {
+	// 建立通用一局耗材预留的流程：
+	// 1. 先按 OperationId 返回已有记录，保证草药、窝料或道具使用的网络重放不重复占库存。
+	// 2. 再校验 authority、请求参数和 Revision；失败时不写入任何预留状态。
+	// 3. 接着拒绝与 Fishing 或其他 RunConsumable 操作并发，避免两条提交链同时改同一份数量栈。
+	// 4. 可用数量必须减去 Fishing 已保护但尚未提交的鱼饵份数，这样普通饵也不会被 RunConsumable 入口双花。
+	// 5. 最后写入预留记录并保持快照不发布，实际扣减由 Commit/Publish 阶段完成。
 	if (const FCatRunConsumableUseRecord* Existing = RunConsumableUseRecords.Find(OperationId))
 	{
 		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::AlreadyResolved, Existing);
@@ -683,7 +704,7 @@ FCatRunConsumableUseResult UCatEquipmentComponent::BeginRunConsumableUse(const F
 	{
 		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::InvalidPayload);
 	}
-	if (!Stack || Stack->Quantity - GetPendingReservedSpecialBaitCount(DefinitionId) < Quantity)
+	if (!Stack || Stack->Quantity - GetPendingReservedFishingBaitCount(DefinitionId) < Quantity)
 	{
 		return MakeRunConsumableUseResult(OperationId, ECatDomainCommandError::CapacityExceeded);
 	}
@@ -864,13 +885,13 @@ const UCatEquipmentComponent::FCatFishingUseRecord* UCatEquipmentComponent::Find
 	return FishingUseRecords.Find(FishingSessionId);
 }
 
-int32 UCatEquipmentComponent::GetPendingReservedSpecialBaitCount(const FName DefinitionId) const
+int32 UCatEquipmentComponent::GetPendingReservedFishingBaitCount(const FName DefinitionId) const
 {
 	int32 ReservedCount = 0;
 	for (const TPair<FGuid, FCatFishingUseRecord>& Pair : FishingUseRecords)
 	{
 		const FCatFishingUseRecord& Record = Pair.Value;
-		if (!Record.bReleased && Record.bSpecialBaitReserved && !Record.bBaitCommitted
+		if (!Record.bReleased && Record.bBaitQuantityReserved && !Record.bBaitCommitted
 			&& Record.BaitDefinitionId == DefinitionId)
 		{
 			++ReservedCount;

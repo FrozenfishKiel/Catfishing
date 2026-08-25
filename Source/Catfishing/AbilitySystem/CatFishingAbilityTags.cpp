@@ -14,6 +14,7 @@ namespace CatFishingAbilityTags
 	UE_DEFINE_GAMEPLAY_TAG(Ability_Fishing_Scoop, "Cat.Ability.Fishing.Scoop");
 	UE_DEFINE_GAMEPLAY_TAG(Ability_Fishing_Chum, "Cat.Ability.Fishing.Chum");
 	UE_DEFINE_GAMEPLAY_TAG(Ability_Fishing_Slack, "Cat.Ability.Fishing.Slack");
+	UE_DEFINE_GAMEPLAY_TAG(Ability_Body_Command, "Cat.Ability.Body.Command");
 	UE_DEFINE_GAMEPLAY_TAG(Ability_ActivationPolicy_OnInputTriggered, "Cat.Ability.ActivationPolicy.OnInputTriggered");
 	UE_DEFINE_GAMEPLAY_TAG(Ability_ActivationPolicy_WhileInputActive, "Cat.Ability.ActivationPolicy.WhileInputActive");
 	UE_DEFINE_GAMEPLAY_TAG(Ability_ActivationPolicy_OnGranted, "Cat.Ability.ActivationPolicy.OnGranted");
@@ -25,6 +26,20 @@ namespace CatFishingAbilityTags
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Fishing_Outcome_RodBroken, "Cat.Ability.Event.Fishing.Outcome.RodBroken");
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Fishing_Outcome_CatInWater, "Cat.Ability.Event.Fishing.Outcome.CatInWater");
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Fishing_Outcome_Cancelled, "Cat.Ability.Event.Fishing.Outcome.Cancelled");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_RequestSacrifice, "Cat.Ability.Event.Body.RequestSacrifice");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_CampRest, "Cat.Ability.Event.Body.CampRest");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_CampfirePlayback, "Cat.Ability.Event.Body.CampfirePlayback");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_TransferFishToTank, "Cat.Ability.Event.Body.TransferFishToTank");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_RescueCharacterToCamp, "Cat.Ability.Event.Body.RescueCharacterToCamp");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_RepairRodAtCamp, "Cat.Ability.Event.Body.RepairRodAtCamp");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_UseHerbOnCharacter, "Cat.Ability.Event.Body.UseHerbOnCharacter");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_ConsumeFish, "Cat.Ability.Event.Body.ConsumeFish");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_BeginTheft, "Cat.Ability.Event.Body.BeginTheft");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_CatchTheft, "Cat.Ability.Event.Body.CatchTheft");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_RequestManualHelp, "Cat.Ability.Event.Body.RequestManualHelp");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_RequestMischief, "Cat.Ability.Event.Body.RequestMischief");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_PlaceProtectionSign, "Cat.Ability.Event.Body.PlaceProtectionSign");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_CompleteShakeDry, "Cat.Ability.Event.Body.CompleteShakeDry");
 	UE_DEFINE_GAMEPLAY_TAG(GameplayCue_Fishing_Cast, "Cat.GameplayCue.Fishing.Cast");
 	UE_DEFINE_GAMEPLAY_TAG(GameplayCue_Fishing_Reel, "Cat.GameplayCue.Fishing.Reel");
 	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_ScoopSwing, "Cat.Cosmetic.Fishing.ScoopSwing");

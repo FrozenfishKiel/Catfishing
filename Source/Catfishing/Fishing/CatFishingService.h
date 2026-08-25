@@ -110,6 +110,9 @@ private:
 	/** 从 Controller 的 APlayerState::UniqueId 读取服务器私有身份；无效身份不能进入开始终态缓存。 */
 	static FString ResolveStableNetId(const AController* Controller);
 
+	/** 新 Fishing 写口的身体 gate；要求请求者仍拥有当前 Character 且未倒地，防止绕过 CommandComponent 的调用继续放竿、接竿或抛竿。 */
+	static bool CanControllerStartFishingAction(const AController* Controller);
+
 	/** 用同一服务器谓词解析单个战斗参与者；必须是 Active Controller/当前 Character、未倒地且两项独立能力都为正有限值。 */
 	static bool TryGetFightCapability(const AController* Controller, FString& OutStableNetId,
 		ACatCharacter*& OutCharacter, double& OutFishingStrength, double& OutFightStamina);

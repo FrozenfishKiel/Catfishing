@@ -128,6 +128,14 @@ FCatDomainCommandResult ACatCampHubActor::TransferFishToTank(AController* Reques
 	return Items->TransferOwnedFish(Command);
 }
 
+// 共享鱼缸读取流程：只通过 Items 公开快照口读取当前固定鱼缸；缺 Items、缺鱼缸或容器未注册都返回 false 并清空输出。
+bool ACatCampHubActor::TryGetSharedFishTankSnapshot(FCatContainerSnapshot& OutSnapshot) const
+{
+	OutSnapshot = FCatContainerSnapshot();
+	const UCatItemsService* Items = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
+	return Items && SharedFishTank && Items->TryGetContainerSnapshot(SharedFishTank->GetTankContainerId(), OutSnapshot);
+}
+
 // 篝火回看流程：先由服务器 UniqueId 与 RequestId 重放首次终态，再验证固定营地范围、结算夜和封面事件配置。随后逐个确认 GameState 玩家仍有有效身份、Controller 和营地内 Character，提交全员 Candidate，并通过批量接口先建齐全部 Planned 记录、再尝试投递；任一前置或落盘失败都会缓存拒绝且不发网络表现。全部事实成立后才用 Reliable NetMulticast 把原 RequestId 送到相关客户端，并缓存首次成功；本流程不写 next-day ready、不等待客户端播放完成，也不保存补播状态。
 FCatDomainCommandResult ACatCampHubActor::RequestCampfirePlayback(AController* RequestingController, const FGuid RequestId)
 {

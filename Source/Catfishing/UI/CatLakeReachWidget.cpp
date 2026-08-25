@@ -1,215 +1,315 @@
 #include "UI/CatLakeReachWidget.h"
 
-#include "Blueprint/WidgetTree.h"
 #include "Components/Button.h"
-#include "Components/TextBlock.h"
-#include "Components/VerticalBox.h"
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
 
-// 初始化流程：先建立可聚焦的 UUserWidget，再创建常驻 HUD/Fishing/反馈文本和同一根树内的菜单区域；菜单默认折叠，所有子项只由 Render 更新。
+// 初始化流程：只让 UUserWidget 可接收键盘焦点；正式布局和控件树由 WBP 资产提供，C++ 不再构造玩家可见白盒界面。
 void UCatLakeReachWidget::NativeOnInitialized()
 {
 	Super::NativeOnInitialized();
 	SetIsFocusable(true);
-	if (WidgetTree->RootWidget)
-	{
-		return;
-	}
-
-	UVerticalBox* RootBox = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("LakeReachRoot"));
-	UTextBlock* TitleText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("LakeReachTitle"));
-	SurvivalText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("LakeSurvivalStatus"));
-	FishingText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("LakeFishingStatus"));
-	FeedbackText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("LakeFishingFeedback"));
-	MenuPanel = WidgetTree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("LakeReachMenu"));
-	UTextBlock* MenuTitle = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("LakeReachMenuTitle"));
-	FishGuardText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("PersonalFishGuard"));
-	FishCollectionText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("FishCollection"));
-	LeaveButton = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("LeaveLakeRun"));
-	UTextBlock* LeaveText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("LeaveLakeRunText"));
-	CloseButton = WidgetTree->ConstructWidget<UButton>(UButton::StaticClass(), TEXT("CloseLakeReachMenu"));
-	UTextBlock* CloseText = WidgetTree->ConstructWidget<UTextBlock>(UTextBlock::StaticClass(), TEXT("CloseLakeReachMenuText"));
-
-	TitleText->SetText(FText::FromString(TEXT("Catfishing Lake")));
-	MenuTitle->SetText(FText::FromString(TEXT("Menu / Personal Catch / Collection")));
-	LeaveText->SetText(FText::FromString(TEXT("Leave Run")));
-	CloseText->SetText(FText::FromString(TEXT("Close Menu")));
-	LeaveButton->AddChild(LeaveText);
-	CloseButton->AddChild(CloseText);
-	MenuPanel->AddChildToVerticalBox(MenuTitle);
-	MenuPanel->AddChildToVerticalBox(FishGuardText);
-	MenuPanel->AddChildToVerticalBox(FishCollectionText);
-	MenuPanel->AddChildToVerticalBox(LeaveButton);
-	MenuPanel->AddChildToVerticalBox(CloseButton);
-	MenuPanel->SetVisibility(ESlateVisibility::Collapsed);
-	RootBox->AddChildToVerticalBox(TitleText);
-	RootBox->AddChildToVerticalBox(SurvivalText);
-	RootBox->AddChildToVerticalBox(FishingText);
-	RootBox->AddChildToVerticalBox(FeedbackText);
-	RootBox->AddChildToVerticalBox(MenuPanel);
-	WidgetTree->RootWidget = RootBox;
 }
 
-// 构造流程：先恢复父类 Slate 生命周期，再对菜单内关闭与离局按钮执行 Remove/Add 配对；重复进入视口仍只保留一组 UObject 回调。
+// 构造流程：先恢复父类 Slate 生命周期，再对 WBP 可选绑定按钮执行 Remove/Add 配对；没有绑定按钮时仍允许蓝图自己调用 RequestCloseMenu/RequestLeaveLake。
 void UCatLakeReachWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
 	if (CloseButton)
 	{
-		// 关闭按钮绑定先移除再添加，抵消 Widget 重建或重复进视口造成的动态委托重复。
 		CloseButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleCloseClicked);
 		CloseButton->OnClicked.AddDynamic(this, &ThisClass::HandleCloseClicked);
 	}
 	if (LeaveButton)
 	{
-		// 离局按钮遵守同一配对策略；View 只广播意图，不在按钮回调里直接改 Online/Run 状态。
 		LeaveButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleLeaveClicked);
 		LeaveButton->OnClicked.AddDynamic(this, &ThisClass::HandleLeaveClicked);
 	}
+	if (PreviousFishGuardButton)
+	{
+		PreviousFishGuardButton->OnClicked.RemoveDynamic(this, &ThisClass::HandlePreviousFishGuardClicked);
+		PreviousFishGuardButton->OnClicked.AddDynamic(this, &ThisClass::HandlePreviousFishGuardClicked);
+	}
+	if (NextFishGuardButton)
+	{
+		NextFishGuardButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleNextFishGuardClicked);
+		NextFishGuardButton->OnClicked.AddDynamic(this, &ThisClass::HandleNextFishGuardClicked);
+	}
+	if (ConsumeFishButton)
+	{
+		ConsumeFishButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleConsumeFishClicked);
+		ConsumeFishButton->OnClicked.AddDynamic(this, &ThisClass::HandleConsumeFishClicked);
+	}
+	if (TransferFishToTankButton)
+	{
+		TransferFishToTankButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleTransferFishToTankClicked);
+		TransferFishToTankButton->OnClicked.AddDynamic(this, &ThisClass::HandleTransferFishToTankClicked);
+	}
+	if (SacrificeFishButton)
+	{
+		SacrificeFishButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleSacrificeFishClicked);
+		SacrificeFishButton->OnClicked.AddDynamic(this, &ThisClass::HandleSacrificeFishClicked);
+	}
 }
 
-// 销毁流程：解除按钮对本对象的动态绑定，再清除 View 自己的纯意图广播并交还父类；它不承担玩法、Session 或输入资源清理。
+// 销毁流程：解除 WBP 可选按钮对本对象的动态绑定，再清除 View 自己的纯意图广播；它不承担 Model、Session 或输入资源清理。
 void UCatLakeReachWidget::NativeDestruct()
 {
 	if (CloseButton)
 	{
-		// Destruct 只解除本对象曾经添加的关闭按钮绑定，父级 UI 生命周期负责真正移除 Widget。
 		CloseButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleCloseClicked);
 	}
 	if (LeaveButton)
 	{
-		// 离局按钮解绑后再清空本 View 的意图委托，避免外部对象在销毁后收到悬空通知。
 		LeaveButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleLeaveClicked);
+	}
+	if (PreviousFishGuardButton)
+	{
+		PreviousFishGuardButton->OnClicked.RemoveDynamic(this, &ThisClass::HandlePreviousFishGuardClicked);
+	}
+	if (NextFishGuardButton)
+	{
+		NextFishGuardButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleNextFishGuardClicked);
+	}
+	if (ConsumeFishButton)
+	{
+		ConsumeFishButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleConsumeFishClicked);
+	}
+	if (TransferFishToTankButton)
+	{
+		TransferFishToTankButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleTransferFishToTankClicked);
+	}
+	if (SacrificeFishButton)
+	{
+		SacrificeFishButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleSacrificeFishClicked);
 	}
 	OnCloseRequested.Clear();
 	OnLeaveRequested.Clear();
+	OnFishGuardSelectionRequested.Clear();
+	OnFishGuardActionRequested.Clear();
 	Super::NativeDestruct();
 }
 
-// 键盘流程：仅在菜单已展开且输入键名等于协调器最近投影的菜单键时广播关闭并消费；其他输入保持 UUserWidget 默认传播。
+// 键盘流程：仅在菜单已展开且输入键名等于 PageController 最近投影的菜单键时请求关闭并消费；其余输入保持 UUserWidget 默认传播。
 FReply UCatLakeReachWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
 	if (bRenderedMenuOpen && !RenderedMenuToggleKeyName.IsNone()
 		&& InKeyEvent.GetKey().GetFName() == RenderedMenuToggleKeyName)
 	{
-		OnCloseRequested.Broadcast();
+		RequestCloseMenu();
 		return FReply::Handled();
 	}
 	return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
 }
 
-// 渲染流程：先验证所有文本、菜单和离局按钮都存在，缺任一节点就直接返回，避免半棵 WidgetTree 展示旧数据。
-// 然后一次写入身体状态；Fishing 有会话时按阶段选择 Hook/Fight/Scoop/Ended/等待提示，无会话时显示可开始钓鱼的空态。
-// 结构化命令结果只在协调器显式带入时显示，否则保持等待动作；鱼护总是按快照列出，Profile 不可用时图鉴显示降级文案。
-// 最后写入菜单打开状态、关闭快捷键缓存和离局按钮的启用/可见性，Widget 不反向推导菜单或 Online 权限。
+// 渲染流程：
+// 1. 缓存 native DTO，保留 C++ 测试和 native-only FishCollection 副本。
+// 2. 转换为蓝图安全 DTO，其中 Profile 图鉴记录只复制成 UI 专用条目，不暴露 SaveGame 结构。
+// 3. 更新给 WBP Designer 属性绑定读取的只读标量与 Visibility 投影；C++ 不写任何 TextBlock 或菜单容器。
+// 4. 更新键盘关闭和离局 gate 缓存，再触发可选 BP_RenderViewState，让蓝图图表补动画或复杂表现。
 void UCatLakeReachWidget::Render(const FCatUIReachViewState& ViewState)
 {
-	if (!SurvivalText || !FishingText || !FeedbackText || !MenuPanel || !FishGuardText || !FishCollectionText
-		|| !LeaveButton)
-	{
-		return;
-	}
-
-	const FString Survival = FString::Printf(
-		TEXT("Poison %.1f  Strength %.1f  Stamina %.1f\n")
-		TEXT("Growth XP %d  Slot %d  Pending Choices %d\n")
-		TEXT("Wet %s  Downed %s  Recovery %s\nRod %s  Durability %.1f  Day %d  Phase %s  Weather %s  Help %s"),
-		ViewState.Poison, ViewState.FishingStrength, ViewState.FightStamina,
-		ViewState.Growth.TotalExperience, ViewState.Growth.ExperienceInCurrentSlot, ViewState.Growth.PendingChoiceCount,
-		ViewState.Condition.bWet ? TEXT("true") : TEXT("false"),
-		ViewState.Condition.bDowned ? TEXT("true") : TEXT("false"),
-		*UEnum::GetValueAsString(ViewState.Condition.RecoveryMode),
-		*ViewState.Equipment.RodDefinitionId.ToString(), ViewState.Equipment.RodDurability,
-		ViewState.Run.Phase.DayIndex, *UEnum::GetValueAsString(ViewState.Run.Phase.Phase),
-		*UEnum::GetValueAsString(ViewState.Run.Environment.Weather),
-		*UEnum::GetValueAsString(ViewState.HelpSignal.Kind));
-	SurvivalText->SetText(FText::FromString(Survival));
-
-	FString Prompt = TEXT("Place or operate a rod to begin fishing");
-	if (ViewState.bHasFishingSession)
-	{
-		switch (ViewState.Fishing.Phase)
-		{
-		case ECatFishingPhase::TrueBiteWindow:
-			Prompt = TEXT("Hook now");
-			break;
-		case ECatFishingPhase::HookedFight:
-			Prompt = TEXT("Reel or slack according to fish motion");
-			break;
-		case ECatFishingPhase::NearShore:
-			Prompt = TEXT("Scoop the fish near shore");
-			break;
-		case ECatFishingPhase::Resolved:
-		case ECatFishingPhase::Terminated:
-			Prompt = TEXT("Fishing session ended");
-			break;
-		default:
-			Prompt = TEXT("Wait for the bite or cancel fishing");
-			break;
-		}
-		FishingText->SetText(FText::FromString(FString::Printf(
-			TEXT("Fishing %s  Fish %s  Fish stamina %.0f%%  Reeling %s  Slacking %s\nPrompt: %s"),
-			*UEnum::GetValueAsString(ViewState.Fishing.Phase), *ViewState.Fishing.FishDefinitionId.ToString(),
-			ViewState.Fishing.NormalizedFishStamina * 100.0,
-			ViewState.Fishing.bReeling ? TEXT("true") : TEXT("false"),
-			ViewState.Fishing.bSlacking ? TEXT("true") : TEXT("false"), *Prompt)));
-	}
-	else
-	{
-		FishingText->SetText(FText::FromString(FString::Printf(TEXT("Fishing: no active session\nPrompt: %s"), *Prompt)));
-	}
-
-	if (ViewState.bHasFishingCommandResult)
-	{
-		FeedbackText->SetText(FText::FromString(FString::Printf(TEXT("Last action %s: %s (Committed %s)"),
-			*UEnum::GetValueAsString(ViewState.LastFishingCommandResult.CommandType),
-			*UEnum::GetValueAsString(ViewState.LastFishingCommandResult.Error),
-			ViewState.LastFishingCommandResult.bCommitted ? TEXT("true") : TEXT("false"))));
-	}
-	else
-	{
-		FeedbackText->SetText(FText::FromString(TEXT("Fishing feedback: waiting for an action")));
-	}
-
-	FString GuardLines = FString::Printf(TEXT("Personal fish guard: %d fish (Revision %lld)"),
-		ViewState.PersonalFishGuard.Fish.Num(), ViewState.PersonalFishGuard.Revision);
-	for (const FCatFishInstance& Fish : ViewState.PersonalFishGuard.Fish)
-	{
-		GuardLines += FString::Printf(TEXT("\n- %s  %.2f kg"), *Fish.FishDefinitionId.ToString(), Fish.WeightKilograms);
-	}
-	FishGuardText->SetText(FText::FromString(GuardLines));
-
-	FString CollectionLines = ViewState.bFishCollectionAvailable
-		? FString::Printf(TEXT("Fish collection: %d records"), ViewState.FishCollection.Num())
-		: FString(TEXT("Fish collection: profile unavailable"));
-	for (const FCatFishCollectionRecord& Record : ViewState.FishCollection)
-	{
-		CollectionLines += FString::Printf(TEXT("\n- %s  %s  Best %.2f kg  Encounters %d"),
-			*Record.FishDefinitionId.ToString(), *UEnum::GetValueAsString(Record.State),
-			Record.BestWeightKilograms, Record.EncounterCount);
-	}
-	FishCollectionText->SetText(FText::FromString(CollectionLines));
-
+	LastNativeViewState = ViewState;
+	LastBlueprintViewState = MakeBlueprintViewState(ViewState);
+	BlueprintPoisonValue = LastBlueprintViewState.Poison;
+	BlueprintFishingStrengthValue = LastBlueprintViewState.FishingStrength;
+	BlueprintFightStaminaValue = LastBlueprintViewState.FightStamina;
+	BlueprintFishGuardCount = LastBlueprintViewState.PersonalFishGuard.Fish.Num();
+	BlueprintSelectedFishGuardIndex = LastBlueprintViewState.SelectedFishGuardIndex;
+	BlueprintSelectedFishDefinitionId = LastBlueprintViewState.SelectedFishGuardFish.FishDefinitionId;
+	BlueprintSelectedFishText = LastBlueprintViewState.bHasSelectedFishGuardFish
+		? FText::FromString(FString::Printf(TEXT("%s %.2f kg"),
+			*LastBlueprintViewState.SelectedFishGuardFish.FishDefinitionId.ToString(),
+			LastBlueprintViewState.SelectedFishGuardFish.WeightKilograms))
+		: FText::GetEmpty();
+	BlueprintSelectedFishWeightKilograms = LastBlueprintViewState.SelectedFishGuardFish.WeightKilograms;
+	bBlueprintHasSelectedFishGuardFish = LastBlueprintViewState.bHasSelectedFishGuardFish;
+	bBlueprintCanSelectPreviousFishGuardEntry = LastBlueprintViewState.bCanSelectPreviousFishGuardEntry;
+	bBlueprintCanSelectNextFishGuardEntry = LastBlueprintViewState.bCanSelectNextFishGuardEntry;
+	bBlueprintFishGuardActionEnabled = LastBlueprintViewState.bCanSubmitSelectedFishGuardAction;
+	BlueprintFishGuardActionVisibility = LastBlueprintViewState.bHasSelectedFishGuardFish
+		? ESlateVisibility::Visible : ESlateVisibility::Collapsed;
+	bBlueprintFishGuardActionPending = LastBlueprintViewState.bFishGuardActionPending;
+	BlueprintFishGuardResultRevision = LastBlueprintViewState.LastFishGuardCommandResult.Revision;
+	BlueprintFishGuardResultError = LastBlueprintViewState.LastFishGuardCommandResult.Error;
+	BlueprintFishGuardResultText = LastBlueprintViewState.bHasFishGuardCommandResult
+		? FText::FromString(UEnum::GetValueAsString(LastBlueprintViewState.LastFishGuardCommandResult.Error))
+		: FText::GetEmpty();
+	BlueprintFishCollectionCount = LastBlueprintViewState.FishCollectionEntries.Num();
+	BlueprintMenuVisibility = LastBlueprintViewState.bMenuOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed;
+	BlueprintLeaveVisibility = LastBlueprintViewState.bCanRequestOnlineLeave ? ESlateVisibility::Visible : ESlateVisibility::Collapsed;
+	bBlueprintLeaveEnabled = LastBlueprintViewState.bMenuOpen && LastBlueprintViewState.bCanRequestOnlineLeave;
 	bRenderedMenuOpen = ViewState.bMenuOpen;
 	bRenderedCanRequestOnlineLeave = ViewState.bCanRequestOnlineLeave;
+	bRenderedCanSelectPreviousFishGuardEntry = ViewState.bCanSelectPreviousFishGuardEntry;
+	bRenderedCanSelectNextFishGuardEntry = ViewState.bCanSelectNextFishGuardEntry;
+	bRenderedCanSubmitSelectedFishGuardAction = ViewState.bCanSubmitSelectedFishGuardAction;
 	RenderedMenuToggleKeyName = ViewState.MenuToggleKeyName;
-	LeaveButton->SetIsEnabled(bRenderedMenuOpen && bRenderedCanRequestOnlineLeave);
-	LeaveButton->SetVisibility(bRenderedCanRequestOnlineLeave ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-	MenuPanel->SetVisibility(bRenderedMenuOpen ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	BP_RenderViewState(LastBlueprintViewState);
 }
 
-// 点击流程：只广播关闭意图；LocalPlayer 协调器负责判断当前菜单状态并恢复 Enhanced Input、焦点和鼠标。
-void UCatLakeReachWidget::HandleCloseClicked()
+// 关闭请求流程：只广播关闭意图；PageController 负责判断当前菜单状态并恢复 Enhanced Input、焦点和鼠标。
+void UCatLakeReachWidget::RequestCloseMenu()
 {
 	OnCloseRequested.Broadcast();
 }
 
-// 离局点击流程：只在菜单仍展开且最近完整投影允许离局时广播纯意图；实际 RequestLeave、Run teardown 与旅行都留给 Online 管线。
-void UCatLakeReachWidget::HandleLeaveClicked()
+// 离局请求流程：只在菜单仍展开且最近完整投影允许离局时广播纯意图；实际 RequestLeave、Run teardown 与旅行都留给 Online 管线。
+void UCatLakeReachWidget::RequestLeaveLake()
 {
 	if (bRenderedMenuOpen && bRenderedCanRequestOnlineLeave)
 	{
 		OnLeaveRequested.Broadcast();
 	}
+}
+
+// 选择前移流程：只有菜单仍展开且最近投影允许前移时才广播偏移；Model 会按最新鱼护快照重新裁剪下标。
+void UCatLakeReachWidget::RequestSelectPreviousFishGuardEntry()
+{
+	if (bRenderedMenuOpen && bRenderedCanSelectPreviousFishGuardEntry)
+	{
+		OnFishGuardSelectionRequested.Broadcast(-1);
+	}
+}
+
+// 选择后移流程：只有菜单仍展开且最近投影允许后移时才广播偏移；Widget 不读取鱼数组或缓存目标鱼 ID。
+void UCatLakeReachWidget::RequestSelectNextFishGuardEntry()
+{
+	if (bRenderedMenuOpen && bRenderedCanSelectNextFishGuardEntry)
+	{
+		OnFishGuardSelectionRequested.Broadcast(1);
+	}
+}
+
+// 吃鱼请求流程：复用统一鱼护动作过滤；服务器结果回来前 View 不移除本地鱼条目。
+void UCatLakeReachWidget::RequestConsumeSelectedFish()
+{
+	RequestFishGuardAction(ECatUIReachFishGuardAction::ConsumeSelectedFish);
+}
+
+// 转缸请求流程：复用统一鱼护动作过滤；共享鱼缸和版本号由 PageController 重读正式来源。
+void UCatLakeReachWidget::RequestTransferSelectedFishToTank()
+{
+	RequestFishGuardAction(ECatUIReachFishGuardAction::TransferSelectedFishToTank);
+}
+
+// 献祭请求流程：复用统一鱼护动作过滤；献祭协议载荷由 PageController 从当前 Model 选择构造。
+void UCatLakeReachWidget::RequestSacrificeSelectedFish()
+{
+	RequestFishGuardAction(ECatUIReachFishGuardAction::SacrificeSelectedFish);
+}
+
+// 蓝图状态读取流程：返回最近一次 Render 生成的蓝图安全副本；延迟动画读取它不会触碰 Model 或玩法对象。
+FCatUIReachBlueprintViewState UCatLakeReachWidget::GetLastBlueprintViewState() const
+{
+	return LastBlueprintViewState;
+}
+
+// native 状态读取流程：返回最近一次 Render 输入；测试用它确认 native-only 图鉴记录仍被 Model 保留。
+const FCatUIReachViewState& UCatLakeReachWidget::GetLastNativeViewState() const
+{
+	return LastNativeViewState;
+}
+
+// 点击流程：把 WBP 可选按钮点击收口到同一个蓝图可调用入口；View 不直接访问 PlayerController。
+void UCatLakeReachWidget::HandleCloseClicked()
+{
+	RequestCloseMenu();
+}
+
+// 离局点击流程：把 WBP 可选按钮点击收口到同一个蓝图可调用入口；Online gate 由最近 ViewState 缓存过滤。
+void UCatLakeReachWidget::HandleLeaveClicked()
+{
+	RequestLeaveLake();
+}
+
+// 上一条点击流程：把 WBP 点击收口到蓝图可调用入口；按钮重建或蓝图直接调用都经过同一 gate。
+void UCatLakeReachWidget::HandlePreviousFishGuardClicked()
+{
+	RequestSelectPreviousFishGuardEntry();
+}
+
+// 下一条点击流程：把 WBP 点击收口到蓝图可调用入口；按钮重建或蓝图直接调用都经过同一 gate。
+void UCatLakeReachWidget::HandleNextFishGuardClicked()
+{
+	RequestSelectNextFishGuardEntry();
+}
+
+// 吃鱼点击流程：只表达玩家想吃当前选中鱼；不在 View 中修改鱼护数量或身体数值。
+void UCatLakeReachWidget::HandleConsumeFishClicked()
+{
+	RequestConsumeSelectedFish();
+}
+
+// 转缸点击流程：只表达玩家想把当前选中鱼转入共享鱼缸；不在 View 中访问 Camp Actor。
+void UCatLakeReachWidget::HandleTransferFishToTankClicked()
+{
+	RequestTransferSelectedFishToTank();
+}
+
+// 献祭点击流程：只表达玩家想献祭当前选中鱼；不在 View 中访问 SacrificeCoordinator。
+void UCatLakeReachWidget::HandleSacrificeFishClicked()
+{
+	RequestSacrificeSelectedFish();
+}
+
+// 鱼护动作过滤流程：先拒绝空动作、关闭菜单、无选择或 pending 期间的迟到点击；通过后只广播动作枚举，让 PageController 从 Model 重建可信命令。
+void UCatLakeReachWidget::RequestFishGuardAction(const ECatUIReachFishGuardAction Action)
+{
+	if (Action != ECatUIReachFishGuardAction::None && bRenderedMenuOpen && bRenderedCanSubmitSelectedFishGuardAction)
+	{
+		OnFishGuardActionRequested.Broadcast(Action);
+	}
+}
+
+// DTO 转换流程：复制所有蓝图支持字段；Profile 的 native-only FishCollection 逐条转为 UI 专用条目，避免为展示修改 durable 合同。
+FCatUIReachBlueprintViewState UCatLakeReachWidget::MakeBlueprintViewState(const FCatUIReachViewState& ViewState)
+{
+	FCatUIReachBlueprintViewState BlueprintState;
+	BlueprintState.Poison = ViewState.Poison;
+	BlueprintState.FishingStrength = ViewState.FishingStrength;
+	BlueprintState.FightStamina = ViewState.FightStamina;
+	BlueprintState.Condition = ViewState.Condition;
+	BlueprintState.Growth = ViewState.Growth;
+	BlueprintState.Equipment = ViewState.Equipment;
+	BlueprintState.Run = ViewState.Run;
+	BlueprintState.HelpSignal = ViewState.HelpSignal;
+	BlueprintState.Fishing = ViewState.Fishing;
+	BlueprintState.bHasFishingSession = ViewState.bHasFishingSession;
+	BlueprintState.LastFishingCommandResult = ViewState.LastFishingCommandResult;
+	BlueprintState.bHasFishingCommandResult = ViewState.bHasFishingCommandResult;
+	BlueprintState.PersonalFishGuard = ViewState.PersonalFishGuard;
+	BlueprintState.SelectedFishGuardIndex = ViewState.SelectedFishGuardIndex;
+	BlueprintState.SelectedFishGuardFish = ViewState.SelectedFishGuardFish;
+	BlueprintState.bHasSelectedFishGuardFish = ViewState.bHasSelectedFishGuardFish;
+	BlueprintState.bCanSelectPreviousFishGuardEntry = ViewState.bCanSelectPreviousFishGuardEntry;
+	BlueprintState.bCanSelectNextFishGuardEntry = ViewState.bCanSelectNextFishGuardEntry;
+	BlueprintState.bCanSubmitSelectedFishGuardAction = ViewState.bCanSubmitSelectedFishGuardAction;
+	BlueprintState.bFishGuardActionPending = ViewState.bFishGuardActionPending;
+	BlueprintState.PendingFishGuardAction = ViewState.PendingFishGuardAction;
+	BlueprintState.PendingFishGuardRequestId = ViewState.PendingFishGuardRequestId;
+	BlueprintState.LastFishGuardAction = ViewState.LastFishGuardAction;
+	BlueprintState.LastFishGuardCommandResult = ViewState.LastFishGuardCommandResult;
+	BlueprintState.bHasFishGuardCommandResult = ViewState.bHasFishGuardCommandResult;
+	BlueprintState.LastFishGuardSacrificeResult = ViewState.LastFishGuardSacrificeResult;
+	BlueprintState.LastFishGuardConsumeResult = ViewState.LastFishGuardConsumeResult;
+	BlueprintState.FishCollectionEntries = ViewState.FishCollectionEntries;
+	if (BlueprintState.FishCollectionEntries.IsEmpty() && !ViewState.FishCollection.IsEmpty())
+	{
+		BlueprintState.FishCollectionEntries.Reserve(ViewState.FishCollection.Num());
+		for (const FCatFishCollectionRecord& Record : ViewState.FishCollection)
+		{
+			FCatUIReachFishCollectionEntry Entry;
+			Entry.FishDefinitionId = Record.FishDefinitionId;
+			Entry.State = Record.State;
+			Entry.BestWeightKilograms = Record.BestWeightKilograms;
+			Entry.EncounterCount = Record.EncounterCount;
+			BlueprintState.FishCollectionEntries.Add(Entry);
+		}
+	}
+	BlueprintState.bFishCollectionAvailable = ViewState.bFishCollectionAvailable;
+	BlueprintState.bMenuOpen = ViewState.bMenuOpen;
+	BlueprintState.MenuToggleKeyName = ViewState.MenuToggleKeyName;
+	BlueprintState.bCanRequestOnlineLeave = ViewState.bCanRequestOnlineLeave;
+	return BlueprintState;
 }

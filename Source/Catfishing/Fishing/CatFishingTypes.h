@@ -170,7 +170,7 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	double NormalizedFishStamina = 0.0;
 
-	/** 搏斗中的竿耐久余量（会话内资源：进入搏斗时=鱼竿 DA 耐久上限，磨损只在本会话累计）；非搏斗阶段保持 0。 */
+	/** 搏斗中的竿耐久余量；进入搏斗时冻结 Equipment 当前耐久，后续磨损最终提交回同一个抛竿者装备组件。 */
 	UPROPERTY(BlueprintReadOnly)
 	double RodDurabilityRemaining = 0.0;
 

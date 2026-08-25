@@ -79,9 +79,16 @@ function Invoke-ModuleStaticCheck {
     Assert-TextPattern "data_world_profile_album_automation" ".harness/harness.json" "automation verification entry"
     Assert-TextPattern "Data / World / Profile / Album" "Docs/Development" "human module row"
     Assert-TextPattern "UnlockId" "Docs/Development" "unlock milestone decision remains visible"
-    Assert-TextPattern "DA_Fish_Test01" "Config/DefaultGame.ini" "current fish catalog seed is explicit"
-    Assert-TextPattern "DA_Bite_Test01" "Config/DefaultGame.ini" "current bite personality seed is explicit"
-    Assert-TextPattern "DA_Fight_Test01" "Config/DefaultGame.ini" "current fight personality seed is explicit"
+    Assert-TextPattern "Fish_RiverPattern" "Config/DefaultGame.ini" "formal fish catalog seed is explicit"
+    Assert-TextPattern "Fish_Puffer" "Config/DefaultGame.ini" "formal toxic fish catalog seed is explicit"
+    Assert-TextPattern "Bite_Cautious" "Config/DefaultGame.ini" "formal bite personality seed is explicit"
+    Assert-TextPattern "Fight_GiantHeavy" "Config/DefaultGame.ini" "formal fight personality seed is explicit"
+    $DefaultGame = Get-Content -LiteralPath (Join-Path $ProjectRoot "Config/DefaultGame.ini") -Raw -Encoding UTF8
+    foreach ($TestAssetName in @("DA_Fish_Test01", "DA_Bite_Test01", "DA_Fight_Test01")) {
+        if ($DefaultGame.Contains($TestAssetName)) {
+            throw ("DataWorldProfileAlbum static contract still references tracked test asset: {0}" -f $TestAssetName)
+        }
+    }
     Assert-TextPattern "FCatProfileGrant" "Source/Catfishing/Framework/Core/CatProfileContracts.h" "profile grant contract"
     Assert-TextPattern "ApplyGrant" "Source/Catfishing/Profile/CatProfileSubsystem.h" "durable grant entry"
     Assert-TextPattern "GetFishCollectionSnapshot" "Source/Catfishing/Profile/CatProfileSubsystem.h" "public collection snapshot"

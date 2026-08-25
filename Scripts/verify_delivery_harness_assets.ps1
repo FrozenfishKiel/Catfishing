@@ -45,6 +45,24 @@ function Assert-TextContains {
     }
 }
 
+function Assert-TextNotContains {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$RelativePath,
+        [Parameter(Mandatory = $true)]
+        [string]$Needle,
+        [Parameter(Mandatory = $true)]
+        [string]$Description
+    )
+    <# 负向配置核验只用于历史测试资产名这类稳定禁用锚点；命中即失败，避免旧白盒资产在正式配置中悄悄回流。 #>
+    $Path = Join-Path $ProjectRoot $RelativePath
+    Assert-FileExists $RelativePath $Description
+    $Text = Get-Content -LiteralPath $Path -Raw -Encoding UTF8
+    if ($Text.Contains($Needle)) {
+        throw ("DeliveryHarnessAssets forbidden text still present {0}: {1} in {2}" -f $Description, $Needle, $RelativePath)
+    }
+}
+
 function Assert-DirectoryTextContains {
     param(
         [Parameter(Mandatory = $true)]
@@ -276,9 +294,26 @@ function Assert-DeliveryHarnessAssetsMachineStatus {
         }
     }
 
-    foreach ($RequirementId in @("FormalFishAssetInputPackageReady", "RuntimeConfigUsesFormalFishAssets", "FormalPresentationBoundaryClosed", "FormalProgressGrowthContentClosed", "RunEnvironmentSocialClosed")) {
-        if (@($State.open_requirements) -notcontains $RequirementId) {
+    $ExpectedTrackedRequirements = @("FormalFishAssetInputPackageReady", "RuntimeConfigUsesFormalFishAssets", "FormalPresentationBoundaryClosed", "FormalProgressGrowthContentClosed", "RunEnvironmentSocialClosed")
+    foreach ($RequirementId in $ExpectedTrackedRequirements) {
+        if (@($State.tracked_requirements) -notcontains $RequirementId) {
+            throw ("DeliveryHarnessAssets machine status missing tracked requirement: {0}" -f $RequirementId)
+        }
+    }
+    <# open_requirements 只允许列仍未满足的关闭条件；全量门槛另放 tracked_requirements，避免接手者把已满足的鱼资产和运行配置条件误读成还没收。 #>
+    $ReleaseRequirements = @($ReleaseHandoff.closure_requirements)
+    foreach ($RequirementId in $ExpectedTrackedRequirements) {
+        $ReleaseRequirement = $ReleaseRequirements | Where-Object { $_.requirement_id -eq $RequirementId } | Select-Object -First 1
+        if (-not $ReleaseRequirement) {
+            throw ("DeliveryHarnessAssets machine status cannot find release requirement: {0}" -f $RequirementId)
+        }
+        $IsOpen = $ReleaseRequirement.current_status -ne "satisfied"
+        $IsListedOpen = @($State.open_requirements) -contains $RequirementId
+        if ($IsOpen -and -not $IsListedOpen) {
             throw ("DeliveryHarnessAssets machine status missing open requirement: {0}" -f $RequirementId)
+        }
+        if (-not $IsOpen -and $IsListedOpen) {
+            throw ("DeliveryHarnessAssets machine status lists satisfied requirement as open: {0}" -f $RequirementId)
         }
     }
     foreach ($ForbiddenSplit in @("AssetReadiness task", "Buff task", "UnlockId task", "Imprint task", "presentation task", "weather task", "chum task", "help task", "protection sign task", "theft task", "reconnect task")) {
@@ -627,14 +662,13 @@ function Assert-ReleaseHandoffLatestRecordedEvidence {
         [Parameter(Mandatory = $true)]
         [object]$Package
     )
-    <# 记录证据校验把“当前包引用哪份证据”和“本次复跑又生成了哪份 transcript”分开；latest_recorded_evidence 必须投影对应 evidence_contract，不能成为第二份手写证据表。 #>
+    <# 记录证据校验把“当前包引用哪份证据”和“本次复跑又生成了哪份 transcript”分开；Static 记录只保留结构化出口，AssetReadiness 仍必须投影对应 evidence_contract，避免自引用 PASS 日志把 Static 启动锁死。 #>
     if (-not $Package.PSObject.Properties.Name.Contains("latest_recorded_evidence")) {
         throw "DeliveryReleaseHandoffPackage missing latest_recorded_evidence"
     }
     $RecordedEvidence = $Package.latest_recorded_evidence
     $EvidenceContracts = @($Package.evidence_contracts)
     $ExpectedEvidenceMirrors = @{
-        static_log = "DeliveryHarnessAssets.StaticPass"
         asset_readiness_log = "DeliveryHarnessAssets.AssetReadinessProtectedBlock"
     }
     foreach ($EntryName in @("static_log", "asset_readiness_log")) {
@@ -646,6 +680,10 @@ function Assert-ReleaseHandoffLatestRecordedEvidence {
         if ([string]::IsNullOrWhiteSpace($Entry.path) -or [string]::IsNullOrWhiteSpace($Entry.expected_text) -or [string]::IsNullOrWhiteSpace($Entry.scope)) {
             throw ("DeliveryReleaseHandoffPackage latest recorded evidence incomplete: {0}" -f $EntryName)
         }
+        if (-not $ExpectedEvidenceMirrors.ContainsKey($EntryName)) {
+            continue
+        }
+
         $ContractId = $ExpectedEvidenceMirrors[$EntryName]
         $Contract = $EvidenceContracts | Where-Object { $_.contract_id -eq $ContractId } | Select-Object -First 1
         if (-not $Contract) {
@@ -812,7 +850,7 @@ function Assert-ReleaseHandoffPackage {
 }
 
 function Invoke-StaticInventory {
-    <# 静态交付盘点流程：把模块合同、验证入口、文档缺口和当前测试资产状态集中到 DeliveryHarnessAssets 一个模块下；它不替代正式资产 readiness。 #>
+    <# 静态交付盘点流程：把模块合同、验证入口、文档缺口和当前正式资产状态集中到 DeliveryHarnessAssets 一个模块下；它不替代正式资产 readiness。 #>
     $HarnessPath = Join-Path $ProjectRoot ".harness\harness.json"
     Assert-FileExists ".harness\harness.json" "project harness"
     $Harness = Get-Content -LiteralPath $HarnessPath -Raw -Encoding UTF8 | ConvertFrom-Json
@@ -922,14 +960,18 @@ function Invoke-StaticInventory {
     Assert-DirectoryTextContains "Docs\Architecture" "FormalPresentationBoundaryFreeze" "technical formal presentation boundary input contract"
     Assert-DirectoryTextContains "Docs\Architecture" "FormalProgressGrowthContentFreeze" "technical formal progress and growth content input contract"
     Assert-DirectoryTextContains "Docs\Architecture" "R_MATRIX_IS_NOT_IMPLEMENTATION_STATUS" "technical matrix implementation-status boundary"
-    Assert-TextContains "Config\DefaultGame.ini" "DA_Fish_Test01" "current fish test asset reference"
-    Assert-TextContains "Config\DefaultGame.ini" "DA_Bite_Test01" "current bite test asset reference"
-    Assert-TextContains "Config\DefaultGame.ini" "DA_Fight_Test01" "current fight test asset reference"
+    Assert-TextContains "Config\DefaultGame.ini" "Fish_RiverPattern" "formal fish asset reference"
+    Assert-TextContains "Config\DefaultGame.ini" "Fish_Puffer" "formal toxic fish asset reference"
+    Assert-TextContains "Config\DefaultGame.ini" "Bite_Cautious" "formal bite asset reference"
+    Assert-TextContains "Config\DefaultGame.ini" "Fight_GiantHeavy" "formal fight asset reference"
+    Assert-TextNotContains "Config\DefaultGame.ini" "DA_Fish_Test01" "current fish test asset reference"
+    Assert-TextNotContains "Config\DefaultGame.ini" "DA_Bite_Test01" "current bite test asset reference"
+    Assert-TextNotContains "Config\DefaultGame.ini" "DA_Fight_Test01" "current fight test asset reference"
     Assert-FormalFishAssetInputPackage
     Assert-FormalNonFishContentInputPackage
     Assert-ReleaseHandoffPackage
 
-    Write-Host "DELIVERY_HARNESS_ASSETS_STATIC_PASS DeliveryReleaseHandoffPackage=Ready FormalFishAssetInputPackage=Blocked FormalNonFishContentInputPackage=Blocked FormalAssetReadiness=BlockedByTrackedTestAssetsAndIncompleteFishSource"
+    Write-Host "DELIVERY_HARNESS_ASSETS_STATIC_PASS DeliveryReleaseHandoffPackage=Ready FormalFishAssetInputPackage=Ready RuntimeConfigUsesFormalFishAssets=True FormalNonFishContentInputPackage=Blocked FormalAssetReadiness=BlockedByFormalNonFishContentAndBehaviorEvidence"
 }
 
 function Invoke-AssetReadiness {

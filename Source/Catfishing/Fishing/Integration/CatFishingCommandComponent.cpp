@@ -1,6 +1,7 @@
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 
 #include "GameFramework/PlayerController.h"
+#include "AbilitySystem/CatAbilitySystemComponent.h"
 #include "AbilitySystem/CatFishingAbilityTags.h"
 #include "Character/CatCharacter.h"
 #include "Environment/CatChumPlacementService.h"
@@ -380,6 +381,17 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	Result.CommandType = CommandType;
 	Result.RequestId = Edge.RequestId;
 	Result.bCommitted = false;
+	if (CommandType == ECatFishingCommandType::CancelFishing)
+	{
+		// X 先作为通用身体动作取消键处理：只取消还停在 GAS 提交窗口里的 BodyAction，不会吞掉后续 Fishing 收竿/会话取消语义。
+		if (const ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(Controller))
+		{
+			if (UCatAbilitySystemComponent* AbilitySystem = CatController->GetCurrentCatAbilitySystemComponent())
+			{
+				AbilitySystem->CancelBodyActionAbilitiesFromAuthority();
+			}
+		}
+	}
 	if (const ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(Controller);
 		!CatController || !CatController->CanForwardFishingCommand())
 	{

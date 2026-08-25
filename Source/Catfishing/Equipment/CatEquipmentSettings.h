@@ -38,27 +38,33 @@ public:
 	FName DriftwoodDefinitionId = NAME_None;
 
 	/**
-	 * 开发便利：Character 被占有时若 Loadout 为空，自动走一次 ConfigureLoadoutFromAuthority 装配 starter 套装并发放窝料。
-	 * 仍经过完整的目录/解锁/Revision 校验；正式的营地选装 UI 接好后应关闭。
+	 * 受控 Starter 兜底开关；打开时服务器会在角色首次占有且 Loadout 为空时尝试写入配置的基础装备和窝料。
+	 * 正式默认配置保持关闭，避免绕过商店、团队库或 Profile Grant 授权链；测试或诊断显式打开时仍经过目录、解锁和 Revision 校验。
 	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Development")
+	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	bool bAutoConfigureStarterLoadout = false;
 
-	UPROPERTY(Config, EditAnywhere, Category = "Development")
+	/** Starter 兜底鱼竿定义 ID；只在兜底开关打开时读取，正式商店/团队库路径不会自动消费它。 */
+	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterRodDefinitionId = NAME_None;
 
-	UPROPERTY(Config, EditAnywhere, Category = "Development")
+	/** Starter 兜底鱼饵定义 ID；只为显式兜底装配提供完整 Loadout，不代表普通饵扣减策略。 */
+	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterBaitDefinitionId = NAME_None;
 
-	UPROPERTY(Config, EditAnywhere, Category = "Development")
+	/** Starter 兜底鱼漂定义 ID；只在显式兜底流程中写入个人 Equipment，正式获取仍走商店或团队库。 */
+	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterFloatDefinitionId = NAME_None;
 
-	UPROPERTY(Config, EditAnywhere, Category = "Development")
+	/** Starter 兜底抄网定义 ID；None 表示兜底装配不发抄网，正式抄网来源由后续内容或商店配置决定。 */
+	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterScoopNetDefinitionId = NAME_None;
 
-	UPROPERTY(Config, EditAnywhere, Category = "Development")
+	/** Starter 兜底窝料定义 ID；只在兜底装配成功后授予同一角色的局内消耗品栈。 */
+	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterChumDefinitionId = NAME_None;
 
-	UPROPERTY(Config, EditAnywhere, Category = "Development", meta = (ClampMin = "0"))
+	/** Starter 兜底窝料数量；0 表示即使兜底装配开启也不额外发放窝料。 */
+	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback", meta = (ClampMin = "0"))
 	int32 StarterChumQuantity = 0;
 };

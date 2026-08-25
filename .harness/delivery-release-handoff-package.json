@@ -19,7 +19,7 @@
     "UIReach": {
       "title": "UI / Reach——Fishing 信息可达闭环",
       "closure_status": "complete",
-      "status_basis": "Static, Build, Automation, Runtime attach evidence, comment review, and code review are recorded as one atomic UI reachability closure.",
+      "status_basis": "Static, Build, formal WBP Create with Designer bindings, Automation, Runtime attach evidence, MCP asset hierarchy, comment review, and code review are recorded as one atomic UI reachability closure.",
       "evidence_roots": [
         "Saved/Automation/UIReach"
       ]
@@ -35,7 +35,7 @@
     "EquipmentTeamLibraryShop": {
       "title": "Equipment / TeamLibrary / Shop——装备获取与装配闭环",
       "closure_status": "complete",
-      "status_basis": "Static, Build, Automation, Lake Runtime, comment review, and code review are recorded as one atomic equipment-acquisition-and-loadout closure.",
+      "status_basis": "2026-08-25 formal-asset Static, Build, Automation, Runtime, MCP asset verification, comment review, and Rider error gate replace the 2026-08-24 Basic/auto-starter baseline. Default Equipment/Shop config now uses /Game/Catfishing/Data/Equipment/Equip_* assets, auto starter loadout is disabled, direct client consumable grant is rejected, FishingSession reads the current Equipment snapshot, ordinary and special bait must both pass the formal RunConsumable inventory gate, formal Equipment assets no longer contain FakeBait_ route IDs, and Runtime verifies all 17 formal definitions including GiantLureBait.",
       "evidence_roots": [
         "Saved/Automation/EquipmentTeamLibraryShop"
       ]
@@ -52,7 +52,7 @@
     "DataWorldProfileAlbum": {
       "title": "Data / World / Profile / Album——长期进度与相册闭环",
       "closure_status": "engineering_complete",
-      "status_basis": "Static, Build, Automation, and comment review prove the engineering loop; formal fish/bite/fight content, concrete UnlockId milestones, and full imprint admission remain product/content blockers.",
+      "status_basis": "Static, Build, Automation, and comment review prove the engineering loop; formal fish/bite/fight runtime assets are now supplied by the agent-authored provisional formal table, while concrete UnlockId milestones and full imprint admission remain product/content blockers.",
       "evidence_roots": [
         "Saved/Automation/DataWorldProfileAlbum"
       ]
@@ -60,9 +60,10 @@
     "CharacterGrowthCondition": {
       "title": "Character / Growth / Condition——猫身体状态与吃鱼成长闭环",
       "closure_status": "engineering_complete",
-      "status_basis": "Static, Build, Automation, and Runtime evidence prove the engineering loop; formal Buff choices, visual fatigue triggers, and yellow-stamina presentation remain product/content blockers.",
+      "status_basis": "Static, Build, Automation, Runtime, BodyAction presentation专项 automation, and BodyAction Montage asset creation/load automation prove the engineering loop; BodyAction lead-in, presentation tag, formal Montage settings/assets, and Character start-stop hooks are in code and clean evidence, but formal GameplayCue/final presentation, formal Buff choices, visual fatigue triggers, and yellow-stamina presentation remain product/content blockers.",
       "evidence_roots": [
         "Saved/Automation/CharacterGrowthCondition",
+        "Saved/Automation/BodyActionPresentation/AbilitySystem-Fix-20260825-1639",
         "Saved/Automation/FishingPlayerEntry"
       ]
     },
@@ -78,16 +79,17 @@
         ".codex/state/run-environment-social-behavior-evidence.json",
         "Scripts/verify_run_environment_social.ps1",
         "Scripts/record_run_environment_social_behavior_evidence.ps1",
-        "Saved/Automation/RunEnvironmentSocial/Build-20260825-001739",
-        "Saved/Automation/RunEnvironmentSocial/20260825-001109",
-        "Saved/Automation/RunEnvironmentSocial/MapConfigure-20260824-222051",
-        "Saved/Automation/RunEnvironmentSocial/Runtime-20260824-222447"
+        "Saved/Automation/RunEnvironmentSocial/Build-20260825-152826",
+        "Saved/Automation/RunEnvironmentSocial/Automation-20260825-163741",
+        "Saved/Automation/RunEnvironmentSocial/20260825-163741",
+        "Saved/Automation/RunEnvironmentSocial/MapConfigure-20260825-140129",
+        "Saved/Automation/RunEnvironmentSocial/Runtime-20260825-140435"
       ]
     },
     "DeliveryHarnessAssets": {
       "title": "Delivery / Harness / Assets——交付验证与正式资产闭环",
       "closure_status": "blocked",
-      "status_basis": "Harness inventory, regression entry map, formal fish input package, formal non-fish content input package, and this release handoff are centralized; formal asset readiness remains blocked by tracked test assets, incomplete authoritative fish input, open presentation/progress/growth content decisions, and the RunEnvironmentSocial module still lacking necessary human or multi-client behavior evidence even though its Static, Build, Automation, Lake MapConfigure, Runtime, reconnect fail-closed whitelist, and Controller player-entry contract machine evidence now pass.",
+      "status_basis": "Harness inventory, regression entry map, formal fish input package, formal non-fish content input package, and this release handoff are centralized; formal fish/bite/fight runtime assets and BodyAction long-action Montage assets/config now have machine evidence, and Config no longer references the tracked fish test assets. Delivery remains blocked by open GameplayCue/final presentation, progress/growth content decisions, and the RunEnvironmentSocial module still lacking necessary human or multi-client behavior evidence even though its Static, Build, Automation, Lake MapConfigure, Runtime, reconnect fail-closed whitelist, and Controller player-entry contract machine evidence now pass. EquipmentTeamLibraryShop has fresh formal-asset closure evidence and is no longer a Delivery blocker.",
       "evidence_roots": [
         "Saved/Automation/DeliveryHarnessAssets",
         ".codex/state/delivery-harness-assets-harness.json",
@@ -99,16 +101,6 @@
   },
   "completion_blockers": [
     {
-      "blocker_id": "FormalFishAssetInputPackageBlocked",
-      "source": ".harness/formal-fish-asset-input-package.json",
-      "summary": "Authoritative per-fish values and UE mappings are not sufficient to generate and switch to formal fish, bite, and fight assets."
-    },
-    {
-      "blocker_id": "TrackedTestAssetsStillConfigured",
-      "source": "Config/DefaultGame.ini",
-      "summary": "Runtime config still references DA_Fish_Test01, DA_Bite_Test01, and DA_Fight_Test01."
-    },
-    {
       "blocker_id": "FormalPresentationBoundaryOpen",
       "source": ".harness/formal-non-fish-content-input-package.json",
       "summary": "Formal UI/presentation resources and any player-visible native debug naming must stay tracked as one DeliveryHarnessAssets gap until asset readiness is closed."
@@ -116,7 +108,7 @@
     {
       "blocker_id": "FormalProgressGrowthContentOpen",
       "source": ".harness/formal-non-fish-content-input-package.json",
-      "summary": "Concrete UnlockId milestones, full imprint admission beyond TheftCaught, growth Buff choices, fatigue presentation triggers, and yellow-stamina presentation/consumption rules are not frozen for formal content closure."
+      "summary": "Live context now confirms TheftCaught as an imprint event and provides a snapshot growth-Buff catalog, but concrete UnlockId milestones, full imprint admission beyond fixed entries, playtest-frozen growth content, fatigue presentation triggers, and yellow-stamina presentation/consumption rules are not frozen for formal content closure."
     },
     {
       "blocker_id": "RunEnvironmentSocialModuleOpen",
@@ -142,13 +134,41 @@
       ]
     },
     {
+      "contract_id": "UIReach.BuildPass",
+      "module_key": "UIReach",
+      "check_kind": "file_contains",
+      "path": "Saved/Automation/UIReach/Build-20260825-162651/Build.log",
+      "expected_text": "Result: Succeeded"
+    },
+    {
+      "contract_id": "UIReach.WBPCreateSuccess",
+      "module_key": "UIReach",
+      "check_kind": "automation_report",
+      "path": "Saved/Automation/UIReach/CreateWBP-20260825-163206/Report/index.json",
+      "expected_tests": [
+        "Catfishing.Editor.UIReach.CreateFormalWBPAsset"
+      ]
+    },
+    {
+      "contract_id": "UIReach.WBPDesignerBindings",
+      "module_key": "UIReach",
+      "check_kind": "file_contains",
+      "path": "Saved/Automation/UIReach/CreateWBP-20260825-163206/CreateWBP.log",
+      "expected_text": "WidgetCount=39 BindingCount=16 FrontendPanel=LakeReachRootFrame ActionPanel=FishGuardActionPanel"
+    },
+    {
       "contract_id": "UIReach.AutomationSuccess",
       "module_key": "UIReach",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/UIReach/20260824-175022/Report/index.json",
+      "path": "Saved/Automation/UIReach/20260825-163436/Report/index.json",
       "allow_warnings": true,
+      "warning_basis": "The only warning is ui_reach_menu_input_unavailable for Tab in command-line automation; the same report and log still show fish-guard selection/action tests and items_consume_terminal Committed=true.",
       "expected_tests": [
-        "Catfishing.Unit.UI.Reach.SingleRootCarriesHudFishingGuardAndCollectionFacts",
+        "Catfishing.Unit.UI.Settings.LakeReachUsesConfiguredWidgetClass",
+        "Catfishing.Unit.UI.LocalPlayerUISubsystem.AttachesSingleLakeReachRootForPossessedCat",
+        "Catfishing.Unit.UI.Reach.BlueprintViewCarriesHudFishingGuardAndCollectionFacts",
+        "Catfishing.Unit.UI.Reach.FishGuardConsumeClickReachesBackendAndUpdatesGuard",
+        "Catfishing.Unit.UI.Reach.FishGuardWidgetEmitsPureSelectionAndActionIntents",
         "Catfishing.Unit.UI.LocalPlayerUISubsystem.OnlineTravelWidgetStaysOutOfLake"
       ]
     },
@@ -156,14 +176,23 @@
       "contract_id": "UIReach.RuntimePass",
       "module_key": "UIReach",
       "check_kind": "file_contains",
-      "path": "Saved/Automation/UIReach/Runtime-20260824-175359/Runtime.log",
+      "path": "Saved/Automation/UIReach/Runtime-20260825-163301/Runtime.log",
       "expected_text": "UI_REACH_RUNTIME_PASS"
+    },
+    {
+      "contract_id": "UIReach.RuntimeAttachSuccess",
+      "module_key": "UIReach",
+      "check_kind": "automation_report",
+      "path": "Saved/Automation/UIReach/Runtime-20260825-163301/AttachAutomation/Report/index.json",
+      "expected_tests": [
+        "Catfishing.Unit.UI.LocalPlayerUISubsystem.AttachesSingleLakeReachRootForPossessedCat"
+      ]
     },
     {
       "contract_id": "ItemsTankSacrificeCamp.ItemsReportSuccess",
       "module_key": "ItemsTankSacrificeCamp",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/ItemsTankSacrificeCamp/20260824-181013/Items/Report/index.json",
+      "path": "Saved/Automation/ItemsTankSacrificeCamp/20260825-135205/Items/Report/index.json",
       "expected_tests": [
         "Catfishing.Unit.Items.Settings.CapacityMappingFailClosedByContainerKind"
       ]
@@ -172,7 +201,7 @@
       "contract_id": "ItemsTankSacrificeCamp.RunReportSuccess",
       "module_key": "ItemsTankSacrificeCamp",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/ItemsTankSacrificeCamp/20260824-181013/Run/Report/index.json",
+      "path": "Saved/Automation/ItemsTankSacrificeCamp/20260825-135205/Run/Report/index.json",
       "expected_tests": [
         "Catfishing.Unit.Run.SacrificeCoordinator.ItemsCommittedRecoveryOnlyRetriesRun"
       ]
@@ -181,7 +210,7 @@
       "contract_id": "ItemsTankSacrificeCamp.CampReportSuccess",
       "module_key": "ItemsTankSacrificeCamp",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/ItemsTankSacrificeCamp/20260824-181013/Camp/Report/index.json",
+      "path": "Saved/Automation/ItemsTankSacrificeCamp/20260825-135205/Camp/Report/index.json",
       "allow_warnings": true,
       "warning_basis": "Known external AbilitySystem warning already recorded in the module handoff; no failed, notRun, or inProcess tests are allowed.",
       "expected_tests": [
@@ -192,21 +221,28 @@
       "contract_id": "ItemsTankSacrificeCamp.RuntimePass",
       "module_key": "ItemsTankSacrificeCamp",
       "check_kind": "file_contains",
-      "path": "Saved/Automation/ItemsTankSacrificeCamp/Runtime-20260824-181406/Runtime.log",
+      "path": "Saved/Automation/ItemsTankSacrificeCamp/Runtime-20260825-135514/Runtime.log",
       "expected_text": "ITEMS_TANK_SACRIFICE_CAMP_MAP_PASS"
+    },
+    {
+      "contract_id": "EquipmentTeamLibraryShop.StaticPass",
+      "module_key": "EquipmentTeamLibraryShop",
+      "check_kind": "file_contains",
+      "path": "Saved/Automation/EquipmentTeamLibraryShop/Static-20260825-122718/Static.log",
+      "expected_text": "EQUIPMENT_TEAMLIBRARY_SHOP_STATIC_PASS"
     },
     {
       "contract_id": "EquipmentTeamLibraryShop.BuildPass",
       "module_key": "EquipmentTeamLibraryShop",
       "check_kind": "file_contains",
-      "path": "Saved/Automation/EquipmentTeamLibraryShop/Build-20260824-172941/Build.log",
+      "path": "Saved/Automation/EquipmentTeamLibraryShop/Build-20260825-114503/Build.log",
       "expected_text": "EQUIPMENT_TEAMLIBRARY_SHOP_BUILD_PASS"
     },
     {
       "contract_id": "EquipmentTeamLibraryShop.ShopOrderSuccess",
       "module_key": "EquipmentTeamLibraryShop",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/EquipmentTeamLibraryShop/20260824-173052/ShopOrderCoordinator/Report/index.json",
+      "path": "Saved/Automation/EquipmentTeamLibraryShop/20260825-114520/ShopOrderCoordinator/Report/index.json",
       "expected_tests": [
         "Catfishing.Unit.ShopEconomy.OrderCoordinator.FishSaleConsumesFishCreditsWalletAndReplays"
       ]
@@ -215,7 +251,7 @@
       "contract_id": "EquipmentTeamLibraryShop.FishingReadinessSuccess",
       "module_key": "EquipmentTeamLibraryShop",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/EquipmentTeamLibraryShop/20260824-173052/FishingPlayerEntryFullLoop/Report/index.json",
+      "path": "Saved/Automation/EquipmentTeamLibraryShop/20260825-114520/FishingPlayerEntryFullLoop/Report/index.json",
       "allow_warnings": true,
       "warning_basis": "Known external AbilitySystem warning in the reused Fishing PlayerEntry report; the expected FullLoop test must still be Success.",
       "expected_tests": [
@@ -226,8 +262,22 @@
       "contract_id": "EquipmentTeamLibraryShop.RuntimePass",
       "module_key": "EquipmentTeamLibraryShop",
       "check_kind": "file_contains",
-      "path": "Saved/Automation/EquipmentTeamLibraryShop/Runtime-20260824-173952/Runtime.log",
+      "path": "Saved/Automation/EquipmentTeamLibraryShop/Runtime-20260825-122724/Runtime.log",
       "expected_text": "EQUIPMENT_TEAMLIBRARY_SHOP_RUNTIME_PASS"
+    },
+    {
+      "contract_id": "EquipmentTeamLibraryShop.RuntimeFormalDefinitions",
+      "module_key": "EquipmentTeamLibraryShop",
+      "check_kind": "file_contains",
+      "path": "Saved/Automation/EquipmentTeamLibraryShop/Runtime-20260825-122724/Runtime.log",
+      "expected_text": "GiantLureBait"
+    },
+    {
+      "contract_id": "EquipmentTeamLibraryShop.CommentReviewPass",
+      "module_key": "EquipmentTeamLibraryShop",
+      "check_kind": "file_contains",
+      "path": "Saved/Automation/EquipmentTeamLibraryShop/CommentReview-20260825-120842/comment-review.json",
+      "expected_text": "\"status\": \"pass\""
     },
     {
       "contract_id": "FrontendOnline.HumanSteamPlaytest",
@@ -240,7 +290,7 @@
       "contract_id": "FrontendOnline.UIReportSuccess",
       "module_key": "FrontendOnline",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/FrontendOnline/UI-20260824-171800/Reports/index.json",
+      "path": "Saved/Automation/FrontendOnline/UI-20260825-134846/Reports/index.json",
       "expected_tests": [
         "Catfishing.Unit.UI.LocalPlayerUISubsystem.OnlineTravelWidgetStaysOutOfLake"
       ]
@@ -249,20 +299,20 @@
       "contract_id": "FrontendOnline.OnlineReportSuccess",
       "module_key": "FrontendOnline",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/FrontendOnline/Online-20260824-172000/Reports/index.json"
+      "path": "Saved/Automation/FrontendOnline/Online-20260825-135009/Reports/index.json"
     },
     {
       "contract_id": "DataWorldProfileAlbum.BuildPass",
       "module_key": "DataWorldProfileAlbum",
       "check_kind": "file_contains",
-      "path": "Saved/Automation/DataWorldProfileAlbum/Build-20260824-185535/Build.log",
+      "path": "Saved/Automation/DataWorldProfileAlbum/Build-20260825-110346/Build.log",
       "expected_text": "DATA_WORLD_PROFILE_ALBUM_BUILD_PASS"
     },
     {
       "contract_id": "DataWorldProfileAlbum.ProfileGrantJournalSuccess",
       "module_key": "DataWorldProfileAlbum",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/DataWorldProfileAlbum/20260824-185545/Profile/Report/index.json",
+      "path": "Saved/Automation/DataWorldProfileAlbum/20260825-110358/Profile/Report/index.json",
       "expected_tests": [
         "Catfishing.Unit.Profile.Subsystem.GrantJournalFishAlbumAndUnlocksMergeDurably"
       ]
@@ -271,7 +321,7 @@
       "contract_id": "DataWorldProfileAlbum.ImprintGrantSuccess",
       "module_key": "DataWorldProfileAlbum",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/DataWorldProfileAlbum/20260824-185545/Collection/Report/index.json",
+      "path": "Saved/Automation/DataWorldProfileAlbum/20260825-110358/Collection/Report/index.json",
       "expected_tests": [
         "Catfishing.Unit.Collection.RunImprintService.CaptureResultCreatesImprintGrantAfterSuccess"
       ]
@@ -281,6 +331,26 @@
       "module_key": "CharacterGrowthCondition",
       "check_kind": "automation_report",
       "path": "Saved/Automation/CharacterGrowthCondition/AbilitySystem/Report/index.json"
+    },
+    {
+      "contract_id": "CharacterGrowthCondition.BodyActionMontageAssetsSuccess",
+      "module_key": "CharacterGrowthCondition",
+      "check_kind": "automation_report",
+      "path": "Saved/Automation/CharacterGrowthCondition/BodyActionMontageAssets/Report/index.json",
+      "expected_tests": [
+        "Catfishing.Editor.AbilitySystem.CreateBodyActionMontageAssets"
+      ]
+    },
+    {
+      "contract_id": "CharacterGrowthCondition.BodyActionPresentationAutomationSuccess",
+      "module_key": "CharacterGrowthCondition",
+      "check_kind": "automation_report",
+      "path": "Saved/Automation/BodyActionPresentation/AbilitySystem-Fix-20260825-1639/Report/index.json",
+      "expected_tests": [
+        "Catfishing.Unit.AbilitySystem.BodyAction.CancelWindowUsesAbilityLifecycle",
+        "Catfishing.Unit.AbilitySystem.BodyAction.PayloadMapsEveryCommandToGameplayEvent",
+        "Catfishing.Unit.AbilitySystem.BodyAction.PresentationSettingsDriveCancellableLeadIn"
+      ]
     },
     {
       "contract_id": "CharacterGrowthCondition.GrowthSuccess",
@@ -332,35 +402,35 @@
       "contract_id": "RunEnvironmentSocial.BuildPass",
       "module_key": "RunEnvironmentSocial",
       "check_kind": "file_contains",
-      "path": "Saved/Automation/RunEnvironmentSocial/Build-20260825-001739/Build.log",
+      "path": "Saved/Automation/RunEnvironmentSocial/Build-20260825-152826/Build.log",
       "expected_text": "RUN_ENVIRONMENT_SOCIAL_BUILD_PASS"
     },
     {
       "contract_id": "RunEnvironmentSocial.AutomationPass",
       "module_key": "RunEnvironmentSocial",
       "check_kind": "file_contains",
-      "path": "Saved/Automation/RunEnvironmentSocial/Automation-20260825-001109/Automation.log",
+      "path": "Saved/Automation/RunEnvironmentSocial/Automation-20260825-163741/Automation.log",
       "expected_text": "RUN_ENVIRONMENT_SOCIAL_AUTOMATION_PASS"
     },
     {
       "contract_id": "RunEnvironmentSocial.MapConfigured",
       "module_key": "RunEnvironmentSocial",
       "check_kind": "file_contains",
-      "path": "Saved/Automation/RunEnvironmentSocial/MapConfigure-20260824-222051/MapConfigure.log",
+      "path": "Saved/Automation/RunEnvironmentSocial/MapConfigure-20260825-140129/MapConfigure.log",
       "expected_text": "RUN_ENVIRONMENT_SOCIAL_MAP_CONFIGURED"
     },
     {
       "contract_id": "RunEnvironmentSocial.RuntimePass",
       "module_key": "RunEnvironmentSocial",
       "check_kind": "file_contains",
-      "path": "Saved/Automation/RunEnvironmentSocial/Runtime-20260824-222447/EditorRuntime.log",
+      "path": "Saved/Automation/RunEnvironmentSocial/Runtime-20260825-140435/EditorRuntime.log",
       "expected_text": "RUN_ENVIRONMENT_SOCIAL_RUNTIME_PASS"
     },
     {
       "contract_id": "RunEnvironmentSocial.RunAutomationSuccess",
       "module_key": "RunEnvironmentSocial",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/RunEnvironmentSocial/20260825-001109/Run/Report/index.json",
+      "path": "Saved/Automation/RunEnvironmentSocial/20260825-163741/Run/Report/index.json",
       "expected_tests": [
         "Catfishing.Unit.Run.Settings.RuntimeAdmissionAndSettlementPoliciesAreExplicit",
         "Catfishing.Unit.Run.StateTreeNodes.DefaultParametersDoNotStartHiddenRunFlow",
@@ -372,7 +442,7 @@
       "contract_id": "RunEnvironmentSocial.FrameworkGameModeAutomationSuccess",
       "module_key": "RunEnvironmentSocial",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/RunEnvironmentSocial/20260825-001109/FrameworkGameMode/Report/index.json",
+      "path": "Saved/Automation/RunEnvironmentSocial/20260825-163741/FrameworkGameMode/Report/index.json",
       "expected_tests": [
         "Catfishing.Unit.Framework.GameMode.RunCommandsFailClosedBeforeRuntimeStart",
         "Catfishing.Unit.Framework.GameMode.CommandIntentPhaseGatesKeepSocialReadyAndSettlementOpen",
@@ -384,7 +454,7 @@
       "contract_id": "RunEnvironmentSocial.FishingCommandComponentAutomationSuccess",
       "module_key": "RunEnvironmentSocial",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/RunEnvironmentSocial/20260825-001109/FishingCommandComponent/Report/index.json",
+      "path": "Saved/Automation/RunEnvironmentSocial/20260825-163741/FishingCommandComponent/Report/index.json",
       "expected_tests": [
         "Catfishing.Unit.Fishing.CommandComponent.DirectRodCommandsReturnCommandsClosedWhenFishingGateIsClosed"
       ]
@@ -393,7 +463,7 @@
       "contract_id": "RunEnvironmentSocial.EnvironmentAutomationSuccess",
       "module_key": "RunEnvironmentSocial",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/RunEnvironmentSocial/20260825-001109/Environment/Report/index.json",
+      "path": "Saved/Automation/RunEnvironmentSocial/20260825-163741/Environment/Report/index.json",
       "expected_tests": [
         "Catfishing.Unit.Environment.ConfiguredProvider.RequiresRuntimeSettingsAndReturnsReadOnlySnapshot",
         "Catfishing.Unit.Environment.Settings.TimeOfDayAndNaturalChumFieldRequireExplicitRuntime",
@@ -405,7 +475,7 @@
       "contract_id": "RunEnvironmentSocial.SocialAutomationSuccess",
       "module_key": "RunEnvironmentSocial",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/RunEnvironmentSocial/20260825-001109/Social/Report/index.json",
+      "path": "Saved/Automation/RunEnvironmentSocial/20260825-163741/Social/Report/index.json",
       "expected_tests": [
         "Catfishing.Unit.Social.Settings.TheftMischiefAndManualHelpHaveIndependentGates",
         "Catfishing.Unit.Social.Service.EmptyTeardownAndMissingIdentityCommandsFailClosed",
@@ -413,31 +483,22 @@
       ]
     },
     {
-      "contract_id": "DeliveryHarnessAssets.StaticPass",
-      "module_key": "DeliveryHarnessAssets",
-      "check_kind": "file_contains",
-      "path": "Saved/Automation/DeliveryHarnessAssets/Static-20260825-015921/Static.log",
-      "expected_text": "DELIVERY_HARNESS_ASSETS_STATIC_PASS DeliveryReleaseHandoffPackage=Ready FormalFishAssetInputPackage=Blocked FormalNonFishContentInputPackage=Blocked FormalAssetReadiness=BlockedByTrackedTestAssetsAndIncompleteFishSource"
-    },
-    {
       "contract_id": "DeliveryHarnessAssets.AssetReadinessProtectedBlock",
       "module_key": "DeliveryHarnessAssets",
       "check_kind": "file_contains",
-      "path": "Saved/Automation/DeliveryHarnessAssets/AssetReadiness-20260825-013553/AssetReadiness.log",
-      "expected_text": "DELIVERY_HARNESS_ASSETS_ASSET_READINESS_BLOCKED FormalFishAssetInputPackageStatus=blocked FormalNonFishContentInputPackageStatus=blocked FormalNonFishContentGroups=presentation_boundary:blocked;progress_growth_content:blocked"
+      "path": "Saved/Automation/DeliveryHarnessAssets/AssetReadiness-20260825-173849/AssetReadiness.log",
+      "expected_text": "DELIVERY_HARNESS_ASSETS_ASSET_READINESS_BLOCKED FormalFishAssetInputPackageStatus=ready FormalNonFishContentInputPackageStatus=blocked FormalNonFishContentGroups=presentation_boundary:blocked;progress_growth_content:blocked"
     }
   ],
   "closure_requirements": [
     {
       "requirement_id": "FormalFishAssetInputPackageReady",
-      "current_status": "blocked",
-      "blocked_by": "FormalFishAssetInputPackageBlocked",
+      "current_status": "satisfied",
       "proof_when_satisfied": "FormalFishAssetInputPackage.status is ready and blocking_gaps is empty."
     },
     {
       "requirement_id": "RuntimeConfigUsesFormalFishAssets",
-      "current_status": "blocked",
-      "blocked_by": "TrackedTestAssetsStillConfigured",
+      "current_status": "satisfied",
       "proof_when_satisfied": "Config/DefaultGame.ini no longer references DA_Fish_Test01, DA_Bite_Test01, or DA_Fight_Test01."
     },
     {
@@ -449,13 +510,18 @@
       "requirement_id": "FormalPresentationBoundaryClosed",
       "current_status": "blocked",
       "blocked_by": "FormalPresentationBoundaryOpen",
-      "proof_when_satisfied": "Formal UI/presentation resources are ready and player-visible native debug naming or raw test asset names are no longer on the formal player path."
+      "proof_when_satisfied": "Formal UI/presentation resources, including BodyAction long-action GameplayCue/final presentation resources, are ready and player-visible native debug naming or raw test asset names are no longer on the formal player path; BodyAction Montage assets/config already have clean machine evidence."
     },
     {
       "requirement_id": "FormalProgressGrowthContentClosed",
       "current_status": "blocked",
       "blocked_by": "FormalProgressGrowthContentOpen",
       "proof_when_satisfied": "UnlockId milestone rules, imprint admission list, growth Buff choices, visual fatigue triggers, and yellow-stamina presentation/consumption boundaries are frozen as formal product/content inputs."
+    },
+    {
+      "requirement_id": "EquipmentTeamLibraryShopFormalEvidence",
+      "current_status": "satisfied",
+      "proof_when_satisfied": "EquipmentTeamLibraryShop status is complete again with fresh formal-asset Static, Build, Automation, Runtime, MCP asset verification, comment review, and Rider error-gate evidence replacing the 2026-08-24 Basic/auto-starter baseline."
     },
     {
       "requirement_id": "RunEnvironmentSocialClosed",
@@ -467,22 +533,23 @@
   "remaining_input_contracts": [
     {
       "input_id": "FormalFishAssetFreeze",
-      "current_status": "blocked",
+      "current_status": "satisfied",
       "unblocks_requirements": [
         "FormalFishAssetInputPackageReady",
         "RuntimeConfigUsesFormalFishAssets"
       ],
       "authority_source": ".harness/formal-fish-asset-input-package.json",
       "required_facts": [
-        "Frozen fish-table revision with preference bait, rarity, diet, outward segment length, rest segment length, and movement speed coefficient filled.",
-        "Per-fish UE BodyClass or model/class mapping.",
-        "Formal BitePersonalityId and FightPersonalityId assets and per-fish mappings.",
-        "Per-fish eating-effect reconciliation that can populate UCatFishDefinition without guessing.",
-        "Runtime config replacement plan that removes DA_Fish_Test01, DA_Bite_Test01, and DA_Fight_Test01 together."
+        "Fish table revision 580 is the base row source for the 16 generated fish definitions.",
+        "Codex filled provisional rarity, bait preference, BodyClass, bite personality, fight personality, food safety, experience, and poison values under user authorization.",
+        "Generated UE assets include 16 UCatFishDefinition assets, 4 UCatBitePersonalityDefinition assets, and 4 UCatFightPersonalityDefinition assets under /Game/Catfishing/Data/Fish.",
+        "Config/DefaultGame.ini references the generated formal fish, bite, and fight assets and no longer references DA_Fish_Test01, DA_Bite_Test01, or DA_Fight_Test01.",
+        "Runtime fit compromises are documented in .harness/formal-fish-asset-input-package.json, including StinkyFish positive sacrifice and LakeGiantShadow non-edible fallback."
       ],
       "do_not_do": [
-        "Do not generate formal fish, bite, or fight assets from partial table rows.",
-        "Do not mark DeliveryHarnessAssets complete by only changing Config/DefaultGame.ini."
+        "Do not reopen scattered fish/bite/fight subtasks while the single FormalFishAssetInputPackage is ready.",
+        "Do not treat this provisional fish table as final product balance if planning later provides authoritative values.",
+        "Do not mark DeliveryHarnessAssets complete from fish readiness alone while FormalNonFishContentInputPackage or RunEnvironmentSocial behavior evidence remains blocked."
       ]
     },
     {
@@ -493,12 +560,12 @@
       ],
       "authority_source": ".harness/formal-non-fish-content-input-package.json",
       "required_facts": [
-        "Formal UI or presentation resources for any player-visible Lake status, menu, fish, bite, fight, and asset naming paths.",
+        "Formal UI or presentation resources for any player-visible Lake status, menu, fish, bite, fight, BodyAction long-action GameplayCue/final presentation path, and asset naming paths; BodyAction Montage assets/config already have clean machine evidence.",
         "Decision that native debug text, raw state labels, and test asset names are not visible on the formal player path."
       ],
       "do_not_do": [
         "Do not reopen UIReach or FrontendOnline as partial presentation tasks.",
-        "Do not treat the default-hidden CatLakeReachWidget debug path as formal player UI readiness."
+        "Do not treat the CatLakeReachWidget C++ base class or machine DTO projection alone as formal player UI readiness; UIReach formal evidence must keep the WBP_CatLakeReach Designer-bound frontend, MVC backend, and runtime attach proof together."
       ]
     },
     {
@@ -511,7 +578,7 @@
       "required_facts": [
         "Concrete world, growth, or album milestones that produce each formal equipment UnlockId.",
         "Full imprint admission list beyond TheftCaught, including which run events can create permanent Imprint grants.",
-        "Formal growth Buff choices, numeric effects, and player-facing copy for PendingChoiceCount consumption.",
+        "Formal growth Buff choices, numeric effects, and player-facing copy for PendingChoiceCount consumption; the current 升级效果 source is available but still marked snapshot pending playtest.",
         "Formal light, medium, and heavy fatigue presentation triggers now that fatigue is no longer a gameplay number.",
         "Formal yellow-stamina shield presentation and consumption boundary."
       ],
@@ -523,17 +590,17 @@
     }
   ],
   "latest_recorded_evidence": {
-        "static_log": {
-            "path": "Saved/Automation/DeliveryHarnessAssets/Static-20260825-015921/Static.log",
-      "expected_text": "DELIVERY_HARNESS_ASSETS_STATIC_PASS DeliveryReleaseHandoffPackage=Ready FormalFishAssetInputPackage=Blocked FormalNonFishContentInputPackage=Blocked FormalAssetReadiness=BlockedByTrackedTestAssetsAndIncompleteFishSource",
+    "static_log": {
+      "path": "Saved/Automation/DeliveryHarnessAssets/Static-20260825-173944/Static.log",
+      "expected_text": "DELIVERY_HARNESS_ASSETS_STATIC_PASS DeliveryReleaseHandoffPackage=Ready FormalFishAssetInputPackage=Ready RuntimeConfigUsesFormalFishAssets=True FormalNonFishContentInputPackage=Blocked FormalAssetReadiness=BlockedByFormalNonFishContentAndBehaviorEvidence",
       "scope": "Covers the current DeliveryReleaseHandoffPackage surface, including release evidence contracts, latest_recorded_evidence mirrored from those contracts, DeliveryHarnessAssets machine status source and its mirrored input statuses, FormalFishAssetInputPackage status mirrored from its blocking_gaps, FormalNonFishContentInputPackage package gaps and status mirrored from its content groups, completion_blockers mirrored from authoritative input states, RunEnvironmentSocial module-level remaining behavior acceptance and its single recorder, closure requirements bound to FormalFishAssetInputPackage, FormalNonFishContentInputPackage, and RunEnvironmentSocial BehaviorEvidence, remaining input contracts mirrored from the closure requirements they unblock, technical R matrix boundary marker, next RunEnvironmentSocial module marker, and human/technical remaining-input document anchors."
     },
     "asset_readiness_log": {
-      "path": "Saved/Automation/DeliveryHarnessAssets/AssetReadiness-20260825-013553/AssetReadiness.log",
-      "expected_text": "DELIVERY_HARNESS_ASSETS_ASSET_READINESS_BLOCKED FormalFishAssetInputPackageStatus=blocked FormalNonFishContentInputPackageStatus=blocked FormalNonFishContentGroups=presentation_boundary:blocked;progress_growth_content:blocked",
-      "scope": "Covers the AssetReadiness gate: FormalFishAssetInputPackage and FormalNonFishContentInputPackage must both be ready with no package-level or content-group blocking gaps before runtime config can replace DA_Fish_Test01, DA_Bite_Test01, and DA_Fight_Test01."
+      "path": "Saved/Automation/DeliveryHarnessAssets/AssetReadiness-20260825-173849/AssetReadiness.log",
+      "expected_text": "DELIVERY_HARNESS_ASSETS_ASSET_READINESS_BLOCKED FormalFishAssetInputPackageStatus=ready FormalNonFishContentInputPackageStatus=blocked FormalNonFishContentGroups=presentation_boundary:blocked;progress_growth_content:blocked",
+      "scope": "Covers the AssetReadiness gate after fish replacement and BodyAction Montage asset generation: FormalFishAssetInputPackage is ready, runtime config no longer references DA_Fish_Test01, DA_Bite_Test01, or DA_Fight_Test01, and BodyAction formal Montage assets/config have clean evidence; the remaining block is FormalNonFishContentInputPackage presentation/progress-growth readiness, including BodyAction formal GameplayCue/final presentation resources."
     },
     "update_policy": "Update recorded evidence only when the DeliveryReleaseHandoffPackage surface, AssetReadiness gate, or blocker state changes; do not rewrite it just because an unchanged Static rerun created a newer transcript."
   },
-  "close_rule": "DeliveryHarnessAssets can only move from blocked to complete when FormalFishAssetInputPackage is ready, FormalNonFishContentInputPackage is ready, Config/DefaultGame.ini no longer references the tracked test assets, RunEnvironmentSocial is closed with module evidence, and the same Static plus AssetReadiness checks pass with updated release evidence."
+  "close_rule": "DeliveryHarnessAssets can only move from blocked to complete when the already-satisfied FormalFishAssetInputPackage/runtime-config replacement remains valid, FormalNonFishContentInputPackage is ready, EquipmentTeamLibraryShop has fresh formal-asset closure evidence, RunEnvironmentSocial is closed with module evidence, and the same Static plus AssetReadiness checks pass with updated release evidence."
 }

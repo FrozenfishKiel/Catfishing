@@ -16,7 +16,7 @@ EXPECTED_RUN_FLOW = "/Game/Data/StateTrees/ST_RunFlow.ST_RunFlow"
 EXPECTED_ANCHOR_LABEL = "RunEnvSocial_NaturalChumAnchor"
 EXPECTED_ANCHOR_ID = "LakeAAnchor"
 EXPECTED_EVENT_ID = "RainBloom"
-EXPECTED_NATURAL_CHUM = "Chum_Basic"
+EXPECTED_NATURAL_CHUM = "BugChum"
 EXPECTED_WATER_REGION = "River"
 CONFIG_PATH = pathlib.Path(unreal.Paths.project_config_dir()) / "DefaultGame.ini"
 RUN_SECTION = "/Script/Catfishing.CatRunSettings"
@@ -171,8 +171,8 @@ def _validate_environment_settings() -> None:
              "自然事件窝料定义未配置")
     _require(str(_get_property(settings, "natural_chum_anchor_id", "NaturalChumAnchorId")) == EXPECTED_ANCHOR_ID,
              "自然事件锚点未配置")
-    _require(unreal.load_asset("/Game/Data/Equipment/DA_Chum_Basic") is not None,
-             "自然事件引用的 Chum_Basic 装备资产不可加载")
+    _require(unreal.load_asset("/Game/Catfishing/Data/Equipment/Equip_Chum_Bug") is not None,
+             "自然事件引用的 BugChum 正式装备资产不可加载")
 
 
 def _validate_chum_settings() -> None:

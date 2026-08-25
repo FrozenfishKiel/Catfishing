@@ -11,7 +11,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatAbilitySettingsValidValuesTest,
-	"Catfishing.Unit.AbilitySystem.Settings.ValidRuntimeConfigurationExposesAttributesAndDiagnostics",
+	"Catfishing.Unit.AbilitySystem.Settings.ValidRuntimeConfigurationExposesAttributes",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -37,24 +37,19 @@ bool FCatAbilitySettingsDefaultsTest::RunTest(const FString& Parameters)
 	Settings->InitialPoison = -1.0f;
 	Settings->InitialFishingStrength = -1.0f;
 	Settings->InitialFightStamina = -1.0f;
-	Settings->bEnableDiagnosticAbility = false;
-	Settings->DiagnosticPoisonDelta = 0.0f;
 
 	float Poison = 123.0f;
 	float FishingStrength = 123.0f;
 	float FightStamina = 123.0f;
-	float DiagnosticDelta = 123.0f;
 	TestFalse(TEXT("显式关闭 Ability runtime gate"), Settings->IsRuntimeEnabled());
 	TestFalse(TEXT("关闭配置下初始属性读取失败"), Settings->TryGetInitialAttributes(Poison, FishingStrength, FightStamina));
 	TestEqual(TEXT("失败时 Poison 输出被清零"), Poison, 0.0f);
 	TestEqual(TEXT("失败时 FishingStrength 输出被清零"), FishingStrength, 0.0f);
 	TestEqual(TEXT("失败时 FightStamina 输出被清零"), FightStamina, 0.0f);
-	TestFalse(TEXT("关闭配置下诊断 Poison 改变量读取失败"), Settings->TryGetDiagnosticPoisonDelta(DiagnosticDelta));
-	TestEqual(TEXT("失败时诊断改变量被清零"), DiagnosticDelta, 0.0f);
 	return !HasAnyErrors();
 }
 
-// 测试流程：显式打开正式 runtime、Full 复制策略、初始属性和诊断 gate；随后只通过公开读取接口核对完整配置被一次性暴露。
+// 测试流程：显式打开正式 runtime、Full 复制策略和初始属性 gate；随后只通过公开读取接口核对三项身体初值被一次性暴露。
 bool FCatAbilitySettingsValidValuesTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -72,20 +67,15 @@ bool FCatAbilitySettingsValidValuesTest::RunTest(const FString& Parameters)
 	Settings->InitialPoison = 1.0f;
 	Settings->InitialFishingStrength = 4.0f;
 	Settings->InitialFightStamina = 5.0f;
-	Settings->bEnableDiagnosticAbility = true;
-	Settings->DiagnosticPoisonDelta = 3.5f;
 
 	float Poison = 0.0f;
 	float FishingStrength = 0.0f;
 	float FightStamina = 0.0f;
-	float DiagnosticDelta = 0.0f;
 	TestTrue(TEXT("显式 Full 策略启用 Ability runtime"), Settings->IsRuntimeEnabled());
 	TestTrue(TEXT("完整初始属性配置可读取"), Settings->TryGetInitialAttributes(Poison, FishingStrength, FightStamina));
 	TestEqual(TEXT("Poison 读取配置值"), Poison, 1.0f);
 	TestEqual(TEXT("FishingStrength 读取配置值"), FishingStrength, 4.0f);
 	TestEqual(TEXT("FightStamina 读取配置值"), FightStamina, 5.0f);
-	TestTrue(TEXT("非零诊断 Poison 改变量可读取"), Settings->TryGetDiagnosticPoisonDelta(DiagnosticDelta));
-	TestEqual(TEXT("诊断 Poison 改变量保持配置值"), DiagnosticDelta, 3.5f);
 	return !HasAnyErrors();
 }
 

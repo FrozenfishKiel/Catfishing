@@ -32,6 +32,9 @@ public:
 	FCatDomainCommandResult TransferFishToTank(AController* RequestingController, FGuid RequestId,
 		FGuid FishInstanceId, int64 ExpectedGuardRevision, int64 ExpectedTankRevision);
 
+	/** 读取固定共享鱼缸当前快照；UI 只用它取得转缸 ExpectedRevision，不获得鱼缸写权限。 */
+	bool TryGetSharedFishTankSnapshot(FCatContainerSnapshot& OutSnapshot) const;
+
 	/** 幂等请求可跳过的篝火回看；结算封面先为全体在场玩家批量建齐 Planned 事实，成功才广播一次表现意图，且不写 Run ready。 */
 	FCatDomainCommandResult RequestCampfirePlayback(AController* RequestingController, FGuid RequestId);
 

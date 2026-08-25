@@ -19,8 +19,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.ShopEconomy.Settings.FishPurchasePriceTableFailsClosedAndPicksWeightBand",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 测试流程：从项目 DefaultGame.ini 读取 ShopEconomy Settings，先确认钱包 gate 已满足运行前提，再检查有限库存鱼竿订单
-// 和免费普通饵目录项；这些断言只锁住显式经济配置，不替 Equipment 或 Items 验证下游定义。
+// 测试流程：从项目 DefaultGame.ini 读取 ShopEconomy Settings，先确认钱包 gate 已满足运行前提，再检查正式鱼竿、普通饵和窝料目录项；
+// 这些断言只锁住显式经济配置，不替 Equipment 或 Items 验证下游定义。
 bool FCatShopEconomySettingsProjectDefaultsTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -36,19 +36,19 @@ bool FCatShopEconomySettingsProjectDefaultsTest::RunTest(const FString& Paramete
 	TestEqual(TEXT("项目默认团队钱包初始余额"), Settings->StartingTeamWalletBalance, 10);
 	TestEqual(TEXT("项目默认售鱼最小入账金额"), Settings->MinimumFishSaleValue, 1);
 	TestEqual(TEXT("项目默认免费普通饵入口已显式配置"), Settings->FreeOrdinaryBaitEntryId,
-		FName(TEXT("FreeBasicBaitClaim")));
+		FName(TEXT("FreeBugBaitClaim")));
 
 	const FCatShopCatalogEntry* RodOrder = Settings->CatalogEntries.FindByPredicate(
 		[](const FCatShopCatalogEntry& Entry)
 		{
-			return Entry.EntryId == FName(TEXT("ShopRodBasicOrder"));
+			return Entry.EntryId == FName(TEXT("ShopRodT2Order"));
 		});
 	TestNotNull(TEXT("项目默认商店包含二级鱼竿订单"), RodOrder);
 	if (RodOrder)
 	{
 		TestTrue(TEXT("二级鱼竿订单本身可进入运行库存"), RodOrder->IsRuntimeReady());
 		TestEqual(TEXT("二级鱼竿订单交付给 Equipment"), RodOrder->Kind, ECatShopEntryKind::EquipmentGrant);
-		TestEqual(TEXT("二级鱼竿订单指向 Work1 装备定义"), RodOrder->DefinitionId, FName(TEXT("Rod_Basic")));
+		TestEqual(TEXT("二级鱼竿订单指向正式商店鱼竿定义"), RodOrder->DefinitionId, FName(TEXT("ShopRodT2")));
 		TestEqual(TEXT("二级鱼竿订单单价"), RodOrder->UnitPrice, 3);
 		TestEqual(TEXT("二级鱼竿订单有限库存"), RodOrder->InitialStock, 1);
 		TestFalse(TEXT("二级鱼竿订单不是无限库存"), RodOrder->bUnlimitedStock);
@@ -57,14 +57,14 @@ bool FCatShopEconomySettingsProjectDefaultsTest::RunTest(const FString& Paramete
 	const FCatShopCatalogEntry* FreeBait = Settings->CatalogEntries.FindByPredicate(
 		[](const FCatShopCatalogEntry& Entry)
 		{
-			return Entry.EntryId == FName(TEXT("FreeBasicBaitClaim"));
+			return Entry.EntryId == FName(TEXT("FreeBugBaitClaim"));
 		});
 	TestNotNull(TEXT("项目默认商店包含免费普通饵入口"), FreeBait);
 	if (FreeBait)
 	{
 		TestTrue(TEXT("免费普通饵目录项本身可运行"), FreeBait->IsRuntimeReady());
-		TestEqual(TEXT("免费普通饵交付为 Equipment 装备实例"), FreeBait->Kind, ECatShopEntryKind::EquipmentGrant);
-		TestEqual(TEXT("免费普通饵指向基础普通饵定义"), FreeBait->DefinitionId, FName(TEXT("Bait_Basic")));
+		TestEqual(TEXT("免费普通饵交付为局内消耗品数量"), FreeBait->Kind, ECatShopEntryKind::RunConsumableGrant);
+		TestEqual(TEXT("免费普通饵指向正式 BugBait 定义"), FreeBait->DefinitionId, FName(TEXT("BugBait")));
 		TestEqual(TEXT("免费普通饵价格明确为 0"), FreeBait->UnitPrice, 0);
 		TestTrue(TEXT("免费普通饵使用无限库存"), FreeBait->bUnlimitedStock);
 	}
@@ -72,14 +72,14 @@ bool FCatShopEconomySettingsProjectDefaultsTest::RunTest(const FString& Paramete
 	const FCatShopCatalogEntry* ChumOrder = Settings->CatalogEntries.FindByPredicate(
 		[](const FCatShopCatalogEntry& Entry)
 		{
-			return Entry.EntryId == FName(TEXT("ShopChumOrder"));
+			return Entry.EntryId == FName(TEXT("ShopBugChumOrder"));
 		});
 	TestNotNull(TEXT("项目默认商店包含基础窝料订单"), ChumOrder);
 	if (ChumOrder)
 	{
 		TestTrue(TEXT("基础窝料订单本身可运行"), ChumOrder->IsRuntimeReady());
 		TestEqual(TEXT("基础窝料交付为局内耗材"), ChumOrder->Kind, ECatShopEntryKind::RunConsumableGrant);
-		TestEqual(TEXT("基础窝料指向 Chum_Basic 定义"), ChumOrder->DefinitionId, FName(TEXT("Chum_Basic")));
+		TestEqual(TEXT("基础窝料指向正式 BugChum 定义"), ChumOrder->DefinitionId, FName(TEXT("BugChum")));
 		TestEqual(TEXT("基础窝料订单价格"), ChumOrder->UnitPrice, 1);
 		TestTrue(TEXT("基础窝料使用无限库存"), ChumOrder->bUnlimitedStock);
 	}

@@ -4,22 +4,16 @@
 #include "AbilitySystem/CatAbilitySet.h"
 #include "AbilitySystem/CatAbilitySettings.h"
 #include "AbilitySystem/CatAbilitySystemComponent.h"
+#include "AbilitySystem/CatBodyActionPresentationSettings.h"
 #include "AbilitySystem/CatFishingAbilityTags.h"
-#include "AbilitySystem/CatStageCTestAbility.h"
 #include "AbilitySystem/CatSurvivalAttributeSet.h"
 #include "Animation/AnimMontage.h"
 #include "Condition/CatConditionComponent.h"
-#include "EnhancedInputComponent.h"
-#include "EnhancedInputSubsystems.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentSettings.h"
 #include "Growth/CatGrowthComponent.h"
 #include "Logging/CatLog.h"
-#include "Engine/LocalPlayer.h"
-#include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
-#include "InputAction.h"
-#include "InputMappingContext.h"
 #include "Items/CatContainerReplicationComponent.h"
 #include "Items/CatItemsService.h"
 #include "Items/CatItemsSettings.h"
@@ -82,6 +76,63 @@ void ACatCharacter::Multicast_PlayCosmeticEvent_Implementation(const FGameplayTa
 	BP_PlayCosmeticEvent(EventTag);
 }
 
+// BodyAction 表现开始流程：服务器只广播，真正播放发生在每台客户端；没有配置 Montage 时仍触发蓝图事件，保证正式资源接入点稳定。
+void ACatCharacter::Multicast_PlayBodyActionPresentation_Implementation(
+	const ECatBodyActionAbilityCommand Command, const FGameplayTag PresentationEventTag)
+{
+	if (GetNetMode() == NM_DedicatedServer || Command == ECatBodyActionAbilityCommand::Unknown
+		|| !PresentationEventTag.IsValid())
+	{
+		return;
+	}
+	PlayBodyActionMontageFromPresentation(Command);
+	BP_PlayBodyActionPresentation(Command, PresentationEventTag);
+}
+
+// BodyAction 表现停止流程：取消或拒绝提交时停止同一动作的可选 Montage，再通知蓝图清理非 Montage 表现。
+void ACatCharacter::Multicast_StopBodyActionPresentation_Implementation(
+	const ECatBodyActionAbilityCommand Command, const FGameplayTag PresentationEventTag)
+{
+	if (GetNetMode() == NM_DedicatedServer || Command == ECatBodyActionAbilityCommand::Unknown
+		|| !PresentationEventTag.IsValid())
+	{
+		return;
+	}
+	StopBodyActionMontageFromPresentation(Command);
+	BP_StopBodyActionPresentation(Command, PresentationEventTag);
+}
+
+bool ACatCharacter::PlayBodyActionMontageFromPresentation(const ECatBodyActionAbilityCommand Command)
+{
+	// Montage 播放流程：专服和 Unknown 动作直接拒绝；客户端读取共享表现设置并同步加载可选 Montage，返回值只表示本机是否实际播放成功。
+	// 没配置正式 Montage 时返回 false，但上层 multicast 仍会继续触发 BP_PlayBodyActionPresentation，给蓝图音效、特效或后续正式资产保留入口。
+	if (GetNetMode() == NM_DedicatedServer || Command == ECatBodyActionAbilityCommand::Unknown)
+	{
+		return false;
+	}
+	const UCatBodyActionPresentationSettings* Presentation = GetDefault<UCatBodyActionPresentationSettings>();
+	UAnimMontage* Montage = Presentation ? Presentation->LoadMontageForCommand(Command) : nullptr;
+	return Montage && PlayAnimMontage(Montage) > 0.0f;
+}
+
+bool ACatCharacter::StopBodyActionMontageFromPresentation(const ECatBodyActionAbilityCommand Command)
+{
+	// Montage 停止流程：专服和 Unknown 动作直接拒绝；客户端按同一表现设置找到本动作 Montage，缺配置时不做动画副作用并返回 false。
+	// 返回 false 不代表停止表现广播失败，上层仍会调用 BP_StopBodyActionPresentation，正式蓝图可用它清理非 Montage 表现或执行兜底恢复。
+	if (GetNetMode() == NM_DedicatedServer || Command == ECatBodyActionAbilityCommand::Unknown)
+	{
+		return false;
+	}
+	const UCatBodyActionPresentationSettings* Presentation = GetDefault<UCatBodyActionPresentationSettings>();
+	UAnimMontage* Montage = Presentation ? Presentation->LoadMontageForCommand(Command) : nullptr;
+	if (!Montage)
+	{
+		return false;
+	}
+	StopAnimMontage(Montage);
+	return true;
+}
+
 bool ACatCharacter::PlayFishingCastMontageFromPresentation()
 {
 	if (GetNetMode() == NM_DedicatedServer)
@@ -106,7 +157,7 @@ void ACatCharacter::BeginPlay()
 	InitializeAbilityActorInfo();
 }
 
-// 服务端占有流程：父类先建立 Controller/Owner/PlayerState 关系，再幂等刷新 Character=this 的 ASC Owner/Avatar 并尝试整体应用一次初值；最后仅 authority 按 SpecHandle 授予一次诊断 Ability，并用 PlayerState::UniqueId 注册个人鱼护。
+// 服务端占有流程：父类先建立 Controller/Owner/PlayerState 关系，再幂等刷新 Character=this 的 ASC Owner/Avatar 并尝试整体应用一次初值；最后仅 authority 授予正式 AbilitySet，并用 PlayerState::UniqueId 注册个人鱼护。
 void ACatCharacter::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
@@ -114,13 +165,12 @@ void ACatCharacter::PossessedBy(AController* NewController)
 	if (HasAuthority())
 	{
 		GrantDefaultAbilitySetOnce();
-		GrantStageCTestAbility();
 		RegisterPersonalFishGuard();
 		ApplyStarterLoadoutIfConfigured();
 	}
 }
 
-// Controller 复制流程：父类先修复 Pawn/Controller 双向关系；有效 Controller 刷新 ActorInfo，空 Controller 则先移除自有输入再 Clear，使无占有期间不保留失效 Avatar。
+// Controller 复制流程：父类先修复 Pawn/Controller 双向关系；有效 Controller 刷新 ActorInfo，空 Controller 直接 Clear，使无占有期间不保留失效 Avatar。
 void ACatCharacter::OnRep_Controller()
 {
 	Super::OnRep_Controller();
@@ -130,7 +180,6 @@ void ACatCharacter::OnRep_Controller()
 	}
 	else
 	{
-		RemoveProvisionalMappingContext();
 		if (AbilitySystemComponent)
 		{
 			AbilitySystemComponent->ClearActorInfo();
@@ -138,35 +187,17 @@ void ACatCharacter::OnRep_Controller()
 	}
 }
 
-// 本地重启流程：父类先重置移动预测和创建输入组件；再刷新 ASC，最后 remove-own/add-own 重装临时 MappingContext，重复重启不会叠加上下文。
+// 本地重启流程：父类先重置移动预测和创建输入组件；随后只刷新 ASC ActorInfo，正式输入映射由 PlayerController 维护。
 void ACatCharacter::PawnClientRestart()
 {
 	Super::PawnClientRestart();
 	InitializeAbilityActorInfo();
-	RefreshProvisionalMappingContext();
 }
 
-// 输入绑定流程：保留父类输入初始化后只接受 EnhancedInputComponent；runtime 或软 IA 缺失时安全返回，存在时同步加载该显式临时资产并绑定 Triggered。
-void ACatCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
-{
-	Super::SetupPlayerInputComponent(PlayerInputComponent);
-	const UCatAbilitySettings* Settings = GetDefault<UCatAbilitySettings>();
-	UEnhancedInputComponent* EnhancedInput = Cast<UEnhancedInputComponent>(PlayerInputComponent);
-	if (!Settings->IsRuntimeEnabled() || !Settings->bEnableDiagnosticAbility || !EnhancedInput || Settings->DiagnosticInputAction.IsNull())
-	{
-		return;
-	}
-	if (const UInputAction* InputAction = Settings->DiagnosticInputAction.LoadSynchronous())
-	{
-		EnhancedInput->BindAction(InputAction, ETriggerEvent::Triggered, this, &ThisClass::HandleDiagnosticAbilityInput);
-	}
-}
-
-// 临时失去占有流程：Controller 尚有效时先通知 Fishing/Social 终止该身体的半场协议，再精确移除自有 MappingContext 并取消 Ability；父类断开占有后才 ClearActorInfo，保留 Ability Spec 供同 Actor 重占有。
+// 临时失去占有流程：Controller 尚有效时先通知 Fishing/Social 终止该身体的半场协议，再取消 Ability；父类断开占有后才 ClearActorInfo，保留正式 Ability Spec 供同 Actor 重占有。
 void ACatCharacter::UnPossessed()
 {
 	NotifyFishingOwnerUnavailable();
-	RemoveProvisionalMappingContext();
 	if (AbilitySystemComponent)
 	{
 		AbilitySystemComponent->CancelAllAbilities();
@@ -178,7 +209,7 @@ void ACatCharacter::UnPossessed()
 	}
 }
 
-// 最终清理流程：无论此前是否经历 UnPossessed，都先幂等终止 Fishing/Social，authority 再从 Items 解注册个人鱼护；随后移除自有输入、取消 Ability 并清 ActorInfo，最后才交还父类销毁组件。
+// 最终清理流程：无论此前是否经历 UnPossessed，都先幂等终止 Fishing/Social，authority 再从 Items 解注册个人鱼护；随后撤销默认 AbilitySet、取消 Ability 并清 ActorInfo，最后才交还父类销毁组件。
 void ACatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	NotifyFishingOwnerUnavailable();
@@ -189,7 +220,6 @@ void ACatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 			Items->UnregisterContainer(PersonalFishGuard);
 		}
 	}
-	RemoveProvisionalMappingContext();
 	if (AbilitySystemComponent)
 	{
 		DefaultAbilitySetHandles.TakeFromAbilitySystem(AbilitySystemComponent);
@@ -218,7 +248,8 @@ void ACatCharacter::RegisterPersonalFishGuard()
 		OwningPlayerState->GetUniqueId()->ToString(), Capacity);
 }
 
-// 开发便利装配流程：只在 authority、开关打开、Loadout 仍为空时执行一次；装配与发窝料都走正式权威写口并留结构化日志，失败不重试。
+// Starter 兜底流程：先拒绝非 authority、无组件或未显式打开的情况，避免正式默认路径绕过商店/团队库/Profile Grant。
+// 只有 Loadout 仍没有鱼竿时才用当前 Equipment Revision 写入配置的基础三件套；装配成功后再按新 Revision 发放可选窝料，任一步失败只记日志不重试。
 void ACatCharacter::ApplyStarterLoadoutIfConfigured()
 {
 	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
@@ -311,6 +342,7 @@ void ACatCharacter::ApplyInitialAttributesOnce()
 	bInitialAttributesApplied = true;
 }
 
+// 默认 AbilitySet 授予流程：只接受 authority、有效 ASC、尚未授予和完整正式资产配置；失败不创建临时代用品。
 void ACatCharacter::GrantDefaultAbilitySetOnce()
 {
 	const UCatAbilitySettings* Settings = GetDefault<UCatAbilitySettings>();
@@ -322,59 +354,4 @@ void ACatCharacter::GrantDefaultAbilitySetOnce()
 	const UCatAbilitySet* AbilitySet = Settings->DefaultAbilitySet.LoadSynchronous();
 	bDefaultAbilitySetGranted = AbilitySet
 		&& AbilitySet->GiveToAbilitySystem(AbilitySystemComponent, DefaultAbilitySetHandles);
-}
-
-// Ability 授予流程：只接受 authority、已开启 runtime、有效 ASC 且尚无句柄的组合；GiveAbility 返回的句柄立即成为后续 PossessedBy 的唯一去重依据。
-void ACatCharacter::GrantStageCTestAbility()
-{
-	const UCatAbilitySettings* Settings = GetDefault<UCatAbilitySettings>();
-	if (!HasAuthority() || !AbilitySystemComponent || StageCTestAbilityHandle.IsValid()
-		|| !Settings->IsRuntimeEnabled() || !Settings->bEnableDiagnosticAbility)
-	{
-		return;
-	}
-	StageCTestAbilityHandle = AbilitySystemComponent->GiveAbility(FGameplayAbilitySpec(UCatStageCTestAbility::StaticClass(), 1));
-}
-
-// MappingContext 刷新流程：先移除本 Character 上一次添加的上下文；只有本地拥有、runtime 开启、软 IMC 可解析时才向对应 LocalPlayer 子系统以中性优先级 0 添加并保存配对引用。
-void ACatCharacter::RefreshProvisionalMappingContext()
-{
-	RemoveProvisionalMappingContext();
-	const UCatAbilitySettings* Settings = GetDefault<UCatAbilitySettings>();
-	APlayerController* PlayerController = Cast<APlayerController>(GetController());
-	ULocalPlayer* LocalPlayer = PlayerController ? PlayerController->GetLocalPlayer() : nullptr;
-	UEnhancedInputLocalPlayerSubsystem* InputSubsystem = LocalPlayer ? LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>() : nullptr;
-	if (!Settings->IsRuntimeEnabled() || !Settings->bEnableDiagnosticAbility || !IsLocallyControlled()
-		|| !InputSubsystem || Settings->DiagnosticMappingContext.IsNull())
-	{
-		return;
-	}
-	UInputMappingContext* MappingContext = Settings->DiagnosticMappingContext.LoadSynchronous();
-	if (!MappingContext)
-	{
-		return;
-	}
-	InputSubsystem->AddMappingContext(MappingContext, 0);
-	AppliedMappingContext = MappingContext;
-	AppliedInputSubsystem = InputSubsystem;
-}
-
-// MappingContext 移除流程：只有保存的子系统和上下文同时存活才执行精确 Remove；随后无条件清引用，使 UnPossessed/EndPlay/重启的重复调用保持幂等且不影响别的系统上下文。
-void ACatCharacter::RemoveProvisionalMappingContext()
-{
-	if (UEnhancedInputLocalPlayerSubsystem* InputSubsystem = AppliedInputSubsystem.Get(); InputSubsystem && AppliedMappingContext)
-	{
-		InputSubsystem->RemoveMappingContext(AppliedMappingContext);
-	}
-	AppliedMappingContext = nullptr;
-	AppliedInputSubsystem.Reset();
-}
-
-// 诊断输入流程：只在本地拥有且 ASC 存活时按类请求激活；允许 GAS 把 ServerOnly 请求路由到 authority，客户端从不授予 Ability 或直接改 Attribute。
-void ACatCharacter::HandleDiagnosticAbilityInput()
-{
-	if (IsLocallyControlled() && AbilitySystemComponent)
-	{
-		AbilitySystemComponent->TryActivateAbilityByClass(UCatStageCTestAbility::StaticClass(), true);
-	}
 }

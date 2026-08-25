@@ -819,10 +819,10 @@
       "acceptance_id": "A1",
       "kind": "machine",
       "result": "pass",
-      "summary": "UI 自动化 Catfishing.Unit.UI 7/7 通过；OnlineTravelWidgetStaysOutOfLake 覆盖 Lake Host/Client/NoSession/Leave pending 均不显示 Host/Find/Join 白盒",
-      "command": "UnrealEditor-Cmd.exe ... -ExecCmds='Automation RunTests Catfishing.Unit.UI;Quit' -ReportExportPath=Saved/Automation/FrontendOnline/UI-20260824-171800/Reports",
+      "summary": "UI 自动化 Catfishing.Unit.UI 8/8 通过；OnlineTravelWidgetStaysOutOfLake 覆盖 Lake Host/Client/NoSession/Leave pending 均不显示 Host/Find/Join 白盒",
+      "command": "UnrealEditor-Cmd.exe ... -ExecCmds='Automation RunTests Catfishing.Unit.UI;Quit' -ReportExportPath=Saved/Automation/FrontendOnline/UI-20260825-134846/Reports",
       "source": "agent-reported",
-      "timestamp": "2026-08-24T17:18:40.407160+08:00",
+      "timestamp": "2026-08-25T13:48:46+08:00",
       "limitations": ""
     },
     {
@@ -852,6 +852,6 @@
     ".harness/harness.json",
     ".harness/frontend-online-harness.json"
   ],
-  "self_review": "收口后自审：第六模块 Frontend/Online 已按技术方案和用户打包 Steam 实玩证据关闭；Lake 状态不再显示 Host/Find/Join 白盒；Lake 菜单 Leave 仍转交 UCatOnlineSubsystem::RequestLeave；未新增 Lobby、Host Migration、OpenLevel/ConsoleCommand 旁路。已执行 UBT 构建、UI 自动化 7/7、Online 自动化 2/2、静态边界和配置核对，并补记人工打包联机证据。",
+  "self_review": "收口后自审：第六模块 Frontend/Online 已按技术方案和用户打包 Steam 实玩证据关闭；Lake 状态不再显示 Host/Find/Join 白盒；Lake 菜单 Leave 仍转交 UCatOnlineSubsystem::RequestLeave；未新增 Lobby、Host Migration、OpenLevel/ConsoleCommand 旁路。已执行 UBT 构建、UI 自动化 8/8、Online 自动化 2/2、静态边界和配置核对，并补记人工打包联机证据。",
   "handoff": "交付说明：入口保持 Frontend，Create/Join 后直达 Lake；玩法内联机面板移除，离局入口进入 LakeReach 菜单。模块关闭边界：Host Migration、Lobby/Ready Room、身体/容器/装配深度重连、生产 Steam AppId、正式美术 UI 和正式鱼表资产不属于第六模块完成条件；第一模块仍需单独处理 Lake 内原生菜单、测试资产和 Fatigue 文档/代码不一致。"
 }

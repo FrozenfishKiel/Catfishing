@@ -4,8 +4,6 @@
 #include "Engine/DeveloperSettings.h"
 #include "CatAbilitySettings.generated.h"
 
-class UInputAction;
-class UInputMappingContext;
 class UCatAbilityInputConfig;
 class UCatAbilitySet;
 class UCatCharacterDefinition;
@@ -20,7 +18,7 @@ enum class ECatAbilityReplicationPolicy : uint8
 	Full
 };
 
-/** Character-owned ASC 与开发诊断输入的集中设置；正式运行 gate、初始身体数值和非 Shipping 诊断 gate 相互独立。 */
+/** Character-owned ASC 的集中设置；正式运行 gate、初始身体数值和 Fishing Ability 资产必须一起 fail-closed。 */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "Catfishing Character Abilities"))
 class CATFISHING_API UCatAbilitySettings : public UDeveloperSettings
 {
@@ -29,9 +27,6 @@ class CATFISHING_API UCatAbilitySettings : public UDeveloperSettings
 public:
 	/** 判断 Character ASC 正式运行链是否显式启用；当前只接受已有安全语义的 Full 策略。 */
 	bool IsRuntimeEnabled() const;
-
-	/** 读取非 Shipping 诊断 Ability 的 Poison 改变量；诊断关闭、非有限或零值时清输出并返回 false。 */
-	bool TryGetDiagnosticPoisonDelta(float& OutDelta) const;
 
 	/** 读取新 Character 的三项局内初始属性；任一非法值都会清空输出并保持 fail-closed。 */
 	bool TryGetInitialAttributes(float& OutPoison, float& OutFishingStrength, float& OutFightStamina) const;
@@ -90,20 +85,4 @@ public:
 	/** PlayerController 的正式 Ability 输入映射；复用现有 /Game/Input Action。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Fishing", meta = (AllowedClasses = "/Script/Catfishing.CatAbilityInputConfig"))
 	TSoftObjectPtr<UCatAbilityInputConfig> AbilityInputConfig;
-
-	/** 开发诊断 Ability/Input 总 gate；Shipping 构建始终忽略它，正式身体链不依赖该开关。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Diagnostics")
-	bool bEnableDiagnosticAbility = false;
-
-	/** 诊断 Ability 对 Poison 的加法改变量；0 表示未配置，不属于正式吃鱼或恢复公式。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Diagnostics")
-	float DiagnosticPoisonDelta = 0.0f;
-
-	/** 开发诊断 InputAction 软引用；正式玩法输入资产未接线时保持空。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Diagnostics", meta = (AllowedClasses = "/Script/EnhancedInput.InputAction"))
-	TSoftObjectPtr<UInputAction> DiagnosticInputAction;
-
-	/** 开发诊断 MappingContext 软引用；Character 只移除自己添加的实例。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Diagnostics", meta = (AllowedClasses = "/Script/EnhancedInput.InputMappingContext"))
-	TSoftObjectPtr<UInputMappingContext> DiagnosticMappingContext;
 };

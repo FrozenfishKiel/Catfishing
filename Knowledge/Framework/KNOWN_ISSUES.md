@@ -1,6 +1,6 @@
 # Catfishing 当前框架常见误读
 
-更新时间：2026-08-12
+更新时间：2026-08-25
 文档状态：当前有效误读清单。
 范围：记录后续代码审查最容易误判的地方，以及应该从哪里开始核查。
 
@@ -64,11 +64,11 @@
 误读：把“跟玩家有关”当成 PlayerState 所有权。
 事实：PlayerState 当前只保存连接期公开事实。身体随 Character，实物随 Items/Run，永久档案随 LocalPlayer Profile。
 
-## 诊断 Ability 和临时 Gate 不是最终玩法
+## 历史诊断入口和临时 Gate 不是最终玩法
 
-现象：看到 `UCatStageCTestAbility`、provisional 配置或默认 0/None，就当成产品默认。
+现象：看到旧记录里的 `UCatStageCTestAbility`、provisional 配置或默认 0/None，就当成产品默认。
 误读：把早期框架验证入口当成正式数值/技能。
-事实：这些入口用于证明 ASC、输入、UI 和复制链路；正式 Ability、数值、UI 资产、InputAction 和 DataAsset 仍需后续内容接线。
+事实：Stage C 诊断 Ability 已从正式 Character 生命周期移除；正式 Ability 只从 `DefaultAbilitySet` 和 `AbilityInputConfig` 进入。Poison 的正式写入由 `UCatAbilitySystemComponent::ApplyPoisonDelta` 经 `UCatGE_PoisonDelta` 提交，旧诊断入口不能再作为产品或测试结论引用。
 
 ## Steam 只完成单机初始化验证
 

@@ -2,15 +2,16 @@
 
 #include "Misc/AutomationTest.h"
 
+#include "UI/CatLakeReachWidget.h"
 #include "UI/CatUISettings.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatUISettingsLakeStatusGateTest,
-	"Catfishing.Unit.UI.Settings.LakeStatusViewUsesOnlyExplicitGate",
+	FCatUISettingsLakeReachWidgetClassTest,
+	"Catfishing.Unit.UI.Settings.LakeReachUsesConfiguredWidgetClass",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 测试流程：先验证没有配置覆盖时正式类默认不创建 LakeReach 白盒根，再显式打开和关闭同一 gate，证明玩家默认路径与开发验证路径都由同一设置承担。
-bool FCatUISettingsLakeStatusGateTest::RunTest(const FString& Parameters)
+// 测试流程：先验证正式 UIReach 默认启用但必须指向 WBP 软类；再显式开关同一 gate，证明装配策略由配置类承担且不会回退到原生白盒类。
+bool FCatUISettingsLakeReachWidgetClassTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 
@@ -21,11 +22,22 @@ bool FCatUISettingsLakeStatusGateTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	TestFalse(TEXT("正式类默认不装配 Lake 白盒状态 View"), Settings->IsLakeStatusViewEnabled());
-	Settings->bEnableLakeStatusView = true;
-	TestTrue(TEXT("显式开启后才允许装配 LakeReach 根"), Settings->IsLakeStatusViewEnabled());
-	Settings->bEnableLakeStatusView = false;
-	TestFalse(TEXT("显式关闭后再次回到玩家默认不可见路径"), Settings->IsLakeStatusViewEnabled());
+	TestTrue(TEXT("正式 UIReach 默认允许装配，缺 WBP 时由调用方 fail-closed"), Settings->IsLakeReachViewEnabled());
+	TestEqual(TEXT("默认 LakeReach 前端指向正式 WBP 软类"),
+		Settings->LakeReachWidgetClass.ToSoftObjectPath().ToString(),
+		FString(TEXT("/Game/UI/WBP_CatLakeReach.WBP_CatLakeReach_C")));
+	const TSubclassOf<UCatLakeReachWidget> LoadedClass = Settings->LoadLakeReachWidgetClass();
+	if (TestNotNull(TEXT("正式 LakeReach WBP 类可加载"), LoadedClass.Get()))
+	{
+		TestTrue(TEXT("正式 WBP 继承 LakeReach View 基类"),
+			LoadedClass->IsChildOf(UCatLakeReachWidget::StaticClass()));
+		TestFalse(TEXT("正式配置不把原生 View 基类当玩家前端"),
+			LoadedClass.Get() == UCatLakeReachWidget::StaticClass());
+	}
+	Settings->bEnableLakeReachView = false;
+	TestFalse(TEXT("显式关闭后不装配 LakeReach MVC"), Settings->IsLakeReachViewEnabled());
+	Settings->bEnableLakeReachView = true;
+	TestTrue(TEXT("重新开启后仍走同一正式 WBP 配置"), Settings->IsLakeReachViewEnabled());
 	TestEqual(TEXT("原生菜单输入有稳定默认键名"), Settings->LakeMenuToggleKeyName, FName(TEXT("Tab")));
 	TestTrue(TEXT("菜单输入优先级保持非负"), Settings->LakeMenuInputPriority >= 0);
 	return !HasAnyErrors();
