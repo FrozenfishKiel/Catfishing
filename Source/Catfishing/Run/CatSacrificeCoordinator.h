@@ -3,7 +3,13 @@
 #include "CoreMinimal.h"
 #include "Framework/Core/CatRunContracts.h"
 #include "Framework/Core/CatSacrificeContracts.h"
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Misc/Optional.h"
+#endif
 #include "Subsystems/WorldSubsystem.h"
+#if WITH_DEV_AUTOMATION_TESTS
+#include "Templates/Function.h"
+#endif
 #include "CatSacrificeCoordinator.generated.h"
 
 class ACatfishingGameModeBase;
@@ -26,6 +32,15 @@ public:
 
 	/** Host teardown 前补齐献祭、关闭 Fishing/Social 并在 Items 关闭前归还 theft escrow；全部领域收口才返回 true。 */
 	bool PrepareForRunTeardown();
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** 自动化故障注入回调用的签名；它代表 Items 已不可逆提交后、Run 写口调用前的可选替代结果，只由测试设置和清空。 */
+	using FRunApplyOverrideForAutomation = TFunction<TOptional<FCatRunCommandResult>(
+		UCatSacrificeCoordinator& Coordinator, const FCatQuotaContributionCommand& Command)>;
+
+	/** 设置自动化 Run apply 替代结果；测试用它模拟 ItemsCommitted 后的单次 Run 失败，正式构建没有该入口也不会改变运行时协议。 */
+	static void SetRunApplyOverrideForAutomation(FRunApplyOverrideForAutomation Hook);
+#endif
 
 private:
 	/** 一条协议的服务器内存真相；Command 冻结身份/两个 Revision，Result 保存单向阶段。 */

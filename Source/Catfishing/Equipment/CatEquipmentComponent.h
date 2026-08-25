@@ -38,7 +38,14 @@ public:
 	FCatDomainCommandResult GrantRunConsumableFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName DefinitionId, int32 Quantity);
 
-	/** 把团队装备库中已购买的实例装入本人现有三件套；只允许 Rod/Bait/Float。 */
+	/** 只读检查团队库实例能否装入本人现有三件套；用于跨库取用链在删除公库实例前确认个人 Equipment 收得下。 */
+	ECatDomainCommandError ValidateTeamLibraryEquipFromAuthority(FGuid RequestId, int64 ExpectedRevision,
+		const FCatTeamEquipmentInstance& Instance) const;
+
+	/**
+	 * 把团队装备库中已购买的实例装入本人现有三件套；只允许 Rod/Bait/Float。
+	 * 调用方必须先完成团队库取用预检，再在公库实例成功取走后调用它，避免个人已装备但公库仍保留同一实例。
+	 */
 	FCatDomainCommandResult EquipFromTeamLibraryFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		const FCatTeamEquipmentInstance& Instance);
 

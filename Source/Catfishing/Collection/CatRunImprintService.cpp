@@ -21,6 +21,7 @@ void UCatRunImprintService::Deinitialize()
 	GrantDeliveries.Reset();
 	CaptureGrantByRequest.Reset();
 	SilhouetteGrantByFishingSession.Reset();
+	UnlockGrantByRecipientAndUnlockId.Reset();
 	AlbumByRun.Reset();
 	Super::Deinitialize();
 }
@@ -79,6 +80,30 @@ FGuid UCatRunImprintService::RecordRetryExhaustedSilhouette(const FGuid FishingS
 	if (GrantId.IsValid())
 	{
 		SilhouetteGrantByFishingSession.Add(FishingSessionId, GrantId);
+	}
+	return GrantId;
+}
+
+// 解锁归档流程：按接收者和 UnlockId 重放既有 Grant，再验证命令门与稳定字段；首次只生成 Unlock Grant，不在服务器伪造 Profile 存档。
+FGuid UCatRunImprintService::RecordCommittedUnlock(const FName UnlockId, const FString& RecipientStableNetId)
+{
+	const FString UnlockKey = FString::Printf(TEXT("%s|%s"), *RecipientStableNetId, *UnlockId.ToString());
+	if (const FGuid* Existing = UnlockGrantByRecipientAndUnlockId.Find(UnlockKey))
+	{
+		return *Existing;
+	}
+	if (!bCommandsOpen || UnlockId.IsNone() || RecipientStableNetId.IsEmpty())
+	{
+		return FGuid();
+	}
+	FCatProfileGrant Grant;
+	Grant.Kind = ECatProfileGrantKind::Unlock;
+	Grant.UnlockId = UnlockId;
+	Grant.RecipientStableNetId = RecipientStableNetId;
+	const FGuid GrantId = EnqueueGrant(MoveTemp(Grant));
+	if (GrantId.IsValid())
+	{
+		UnlockGrantByRecipientAndUnlockId.Add(UnlockKey, GrantId);
 	}
 	return GrantId;
 }
@@ -349,6 +374,19 @@ FCatDomainCommandResult UCatRunImprintService::AcknowledgeGrant(AController* Rep
 	return Result;
 }
 
+// ACK Grant 读取流程：只返回已经进入 Acknowledged 的服务器投递记录；Pending/Delivered 或未知 ID 都不能驱动运行期授权。
+bool UCatRunImprintService::TryGetAcknowledgedGrant(const FGuid GrantId, FCatProfileGrant& OutGrant) const
+{
+	OutGrant = FCatProfileGrant();
+	const FCatGrantDeliveryRecord* Record = GrantDeliveries.Find(GrantId);
+	if (!GrantId.IsValid() || !Record || Record->Stage != ECatGrantDeliveryStage::Acknowledged)
+	{
+		return false;
+	}
+	OutGrant = Record->Grant;
+	return true;
+}
+
 // 重投流程：先验证当前 Controller 身份，再逐个重投本人的非终态 CapturePlan 和非 ACK Grant；原 ID 与内容始终不变。
 void UCatRunImprintService::DeliverPendingForController(AController* Controller)
 {
@@ -417,6 +455,15 @@ int32 UCatRunImprintService::GetPendingGrantAckCount() const
 	}
 	return PendingCount;
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+// 自动化快照流程：先清空输出，再复制当前服务端 GrantDeliveryRecord 值；这个入口只为测试核对 Grant 内容和阶段，不参与运行时投递或 ACK。
+void UCatRunImprintService::CopyGrantDeliveryRecordsForAutomation(TArray<FCatGrantDeliveryRecord>& OutRecords) const
+{
+	OutRecords.Reset();
+	GrantDeliveries.GenerateValueArray(OutRecords);
+}
+#endif
 
 // 结算归档检查流程：要求指定 Run 至少建立一份全员篝火封面计划，所有该 Run 计划均已成功或明确失败，且当前一局全部 Grant 已 ACK；只读不触发投递或改状态。
 bool UCatRunImprintService::IsSettlementArchiveReady(const FGuid RunId) const

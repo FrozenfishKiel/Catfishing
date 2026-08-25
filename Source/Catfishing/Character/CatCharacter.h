@@ -14,11 +14,12 @@ class UCatSurvivalAttributeSet;
 class UCatContainerReplicationComponent;
 class UCatConditionComponent;
 class UCatEquipmentComponent;
+class UCatGrowthComponent;
 class UEnhancedInputLocalPlayerSubsystem;
 class UInputMappingContext;
 
 /**
- * Lake 的唯一玩法身体；同时宿主 Character-owned ASC/五属性、Condition、Equipment 与个人鱼护复制出口。
+ * Lake 的唯一玩法身体；同时宿主 Character-owned ASC、Condition、Growth、Equipment 与个人鱼护复制出口。
  * Character 同时作为 ASC Owner/Avatar；丢失占有或销毁时先收口 Fishing/Social，所有局内事实都不上移到 Profile/Online。
  */
 UCLASS()
@@ -27,7 +28,7 @@ class CATFISHING_API ACatCharacter : public ACharacter, public IAbilitySystemInt
 	GENERATED_BODY()
 
 public:
-	/** 构造 ASC/五属性集、Condition、Equipment 与个人鱼护出口，开启组件复制但不在 CDO 写任何运行数值。 */
+	/** 构造 ASC/属性集、Condition、Growth、Equipment 与个人鱼护出口，开启组件复制但不在 CDO 写任何运行数值。 */
 	ACatCharacter();
 
 	/** 返回 Character 持有的唯一 ASC；即使阶段 C gate 关闭也返回组件，让外部只读接缝不需要第二条查找路径。 */
@@ -41,6 +42,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Survival")
 	UCatConditionComponent* GetConditionComponent() const;
 
+	/** 返回 Character 唯一本局吃鱼成长组件；经验槽和待选次数不进入 PlayerState 或 Profile。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Growth")
+	UCatGrowthComponent* GetGrowthComponent() const;
+
 	/** 返回 Character 唯一一局装备组件；永久解锁/选择仍在 LocalPlayer Profile。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Equipment")
 	UCatEquipmentComponent* GetEquipmentComponent() const;
@@ -52,7 +57,7 @@ public:
 	/**
 	 * 该角色使用的猫种类定义 ID（在角色蓝图 Details 里配置，或换皮子类各选一种）。
 	 * 必须与 CatAbilitySettings.CharacterDefinitions 里某个 DA 的 CatDefinitionId 一致；
-	 * None = 回退全局五项初值；指定但找不到定义时属性播种 fail-closed 并留 Warning 日志。
+	 * 留空时使用全局初始属性；填了但找不到定义时属性播种会 fail-closed 并留下 Warning 日志。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catfishing|Character")
 	FName CatDefinitionId = NAME_None;
@@ -114,7 +119,7 @@ private:
 	void GrantStageCTestAbility();
 	void GrantDefaultAbilitySetOnce();
 
-	/** authority 新 Character 首次 ActorInfo 就绪时整体应用五项显式初值；重占有不重置已消耗的局内状态。 */
+	/** authority 新 Character 首次 ActorInfo 就绪时整体应用三项显式初值；重占有不重置已消耗的局内状态。 */
 	void ApplyInitialAttributesOnce();
 
 	/** 为当前本地拥有者重装临时 MappingContext；只移除本 Character 自己曾添加的实例，不调用 ClearAllMappings。 */
@@ -139,7 +144,7 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Abilities", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatAbilitySystemComponent> AbilitySystemComponent;
 
-	/** 猫身体唯一 Survival 属性集；ASC 自动发现并持有 Hunger/Fatigue/Poison/FishingStrength/FightStamina 五项局内真相。 */
+	/** 猫身体唯一 Survival 属性集；构造期显式交给 ASC 持有 Poison、FishingStrength 和 FightStamina 三项真相。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Survival", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatSurvivalAttributeSet> SurvivalAttributes;
 
@@ -150,6 +155,10 @@ private:
 	/** 猫身体唯一离散状态组件；复制 Wet/Downed/Recovery，数值仍由 Survival AttributeSet 拥有。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Survival", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatConditionComponent> ConditionComponent;
+
+	/** 猫身体唯一吃鱼成长组件；复制经验槽与待选次数，Buff 内容未裁时不生成第二套效果状态。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Growth", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCatGrowthComponent> GrowthComponent;
 
 	/** 一局功能型装配、耗材与鱼竿耐久宿主；没有等级、词条、战力或偷取接口。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Equipment", meta = (AllowPrivateAccess = "true"))

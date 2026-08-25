@@ -5,6 +5,7 @@
 #include "CatFishTankActor.generated.h"
 
 class UCatContainerReplicationComponent;
+class USceneComponent;
 
 /** 固定营地的一局共享鱼缸宿主；只适配 Items 容器和复制，不拥有转移、献祭或偷取规则。 */
 UCLASS()
@@ -30,7 +31,11 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
-	/** 共享鱼缸的一局稳定 ID；关卡未配置时 authority BeginPlay 生成一次。 */
+	/** 共享鱼缸的固定场景根；关卡用它摆放位置，运行时不把该坐标当成容器真相。 */
+	UPROPERTY(VisibleAnywhere)
+	TObjectPtr<USceneComponent> TankRoot;
+
+	/** 共享鱼缸在本局运行时使用的稳定容器 ID；服务器 BeginPlay 生成后复制给客户端，调用者用它向 Items 查询同一容器。 */
 	UPROPERTY(Replicated)
 	FGuid TankContainerId;
 

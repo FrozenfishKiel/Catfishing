@@ -5,9 +5,9 @@
 #include "CatCharacterDefinition.generated.h"
 
 /**
- * 猫种类运行定义：按种类差异化初始身体属性与搏斗数值（规格 4.2 三方力量中的"猫"侧）。
+ * 猫种类运行定义：按种类差异化初始中毒值与搏斗数值（规格 4.2 三方力量中的"猫"侧）。
  * 数值只在 Character 属性播种与搏斗体力基线两处被读取并冻结进 ASC/会话，运行中改资产不影响已开始的搏斗。
- * Character 的 CatDefinitionId 为 None 时回退全局 CatAbilitySettings 五项初值，保持旧行为。
+ * Character 的 CatDefinitionId 为 None 时回退全局 CatAbilitySettings 初值，指定但缺失时保持 fail-closed。
  */
 UCLASS(BlueprintType)
 class CATFISHING_API UCatCharacterDefinition : public UPrimaryDataAsset
@@ -25,14 +25,6 @@ public:
 	/** 表现用显示名；不参与任何数值裁决。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
 	FText DisplayName;
-
-	/** 初始 Hunger；负值表示 Unset（项目语义：100 = 吃饱）。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Attributes", meta = (ClampMin = "-1.0"))
-	float InitialHunger = -1.0f;
-
-	/** 初始 Fatigue；负值表示 Unset。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Attributes", meta = (ClampMin = "-1.0"))
-	float InitialFatigue = -1.0f;
 
 	/** 初始 Poison；负值表示 Unset。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Attributes", meta = (ClampMin = "-1.0"))

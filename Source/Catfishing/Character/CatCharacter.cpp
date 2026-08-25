@@ -13,6 +13,7 @@
 #include "EnhancedInputSubsystems.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentSettings.h"
+#include "Growth/CatGrowthComponent.h"
 #include "Logging/CatLog.h"
 #include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerController.h"
@@ -26,14 +27,17 @@
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Social/CatSocialService.h"
 
-// 构造流程：一次创建 Character-owned ASC/AttributeSet、个人鱼护复制出口、离散身体状态和局内装备组件；只开启 ASC 组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
+// 构造流程：一次创建 Character-owned ASC/AttributeSet、个人鱼护复制出口、离散身体状态、吃鱼成长和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
 ACatCharacter::ACatCharacter()
 {
 	AbilitySystemComponent = CreateDefaultSubobject<UCatAbilitySystemComponent>(TEXT("AbilitySystemComponent"));
 	AbilitySystemComponent->SetIsReplicated(true);
 	SurvivalAttributes = CreateDefaultSubobject<UCatSurvivalAttributeSet>(TEXT("SurvivalAttributes"));
+	// ASC 不会仅凭同 Actor 上存在 AttributeSet 就稳定纳入查询列表；构造期显式登记，保证占有时播种属性不会找不到 AttributeSet。
+	AbilitySystemComponent->AddAttributeSetSubobject(SurvivalAttributes.Get());
 	PersonalFishGuard = CreateDefaultSubobject<UCatContainerReplicationComponent>(TEXT("PersonalFishGuard"));
 	ConditionComponent = CreateDefaultSubobject<UCatConditionComponent>(TEXT("ConditionComponent"));
+	GrowthComponent = CreateDefaultSubobject<UCatGrowthComponent>(TEXT("GrowthComponent"));
 	EquipmentComponent = CreateDefaultSubobject<UCatEquipmentComponent>(TEXT("EquipmentComponent"));
 }
 
@@ -58,6 +62,12 @@ FGuid ACatCharacter::GetPersonalFishGuardId() const
 UCatConditionComponent* ACatCharacter::GetConditionComponent() const
 {
 	return ConditionComponent;
+}
+
+// Growth 读取流程：直接返回构造期唯一组件；吃鱼入口只调用这一处，避免 Items、Condition 或 UI 各自缓存经验槽。
+UCatGrowthComponent* ACatCharacter::GetGrowthComponent() const
+{
+	return GrowthComponent;
 }
 
 // 一次性表现广播落地点：挥网仍由本地 Ability 先播，所以发起端跳过；Primary 输入有瞄准/提竿/收线
@@ -271,20 +281,18 @@ void ACatCharacter::InitializeAbilityActorInfo()
 	ApplyInitialAttributesOnce();
 }
 
-// 初始属性流程：只在 authority、ASC 已就绪且尚未应用时整体读取配置；五项全部有效才写基值并设置一次性标记，配置不完整时保留重试机会。
+// 初始属性流程：只在 authority、ASC 已就绪且尚未应用时整体读取配置；三项全部有效才写基值并设置一次性标记，配置不完整时保留重试机会。
 void ACatCharacter::ApplyInitialAttributesOnce()
 {
 	if (!HasAuthority() || !AbilitySystemComponent || bInitialAttributesApplied)
 	{
 		return;
 	}
-	float Hunger = 0.0f;
-	float Fatigue = 0.0f;
 	float Poison = 0.0f;
 	float FishingStrength = 0.0f;
 	float FightStamina = 0.0f;
 	if (!GetDefault<UCatAbilitySettings>()->TryGetInitialAttributesForCharacter(CatDefinitionId,
-		Hunger, Fatigue, Poison, FishingStrength, FightStamina))
+		Poison, FishingStrength, FightStamina))
 	{
 		if (!CatDefinitionId.IsNone())
 		{
@@ -294,8 +302,6 @@ void ACatCharacter::ApplyInitialAttributesOnce()
 		}
 		return;
 	}
-	AbilitySystemComponent->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetHungerAttribute(), Hunger);
-	AbilitySystemComponent->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFatigueAttribute(), Fatigue);
 	AbilitySystemComponent->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), Poison);
 	AbilitySystemComponent->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), FishingStrength);
 	if (!AbilitySystemComponent->InitializeFishingStaminaForSession())

@@ -8,6 +8,7 @@
 #include "Condition/CatConditionComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "Growth/CatGrowthComponent.h"
 #include "Items/CatContainerReplicationComponent.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -15,7 +16,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Character.Lifecycle.DefaultBodyComponentsArePresentAndFailClosed",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 测试流程：在真实 Game World 生成项目 Character 和 Controller；只通过角色公开接口核对 ASC、Condition、Equipment 与个人鱼护 ID，不读取私有字段。
+// 测试流程：在真实 Game World 生成项目 Character 和 Controller；只通过角色公开接口核对 ASC、Condition、Growth、Equipment 与个人鱼护 ID，不读取私有字段。
 bool FCatCharacterLifecycleConstructionTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -42,12 +43,13 @@ bool FCatCharacterLifecycleConstructionTest::RunTest(const FString& Parameters)
 	UAbilitySystemComponent* AbilitySystem = Character->GetAbilitySystemComponent();
 	TestNotNull(TEXT("Character 暴露唯一 ASC"), AbilitySystem);
 	TestNotNull(TEXT("Character 暴露唯一 Condition 组件"), Character->GetConditionComponent());
+	TestNotNull(TEXT("Character 暴露唯一 Growth 组件"), Character->GetGrowthComponent());
 	TestNotNull(TEXT("Character 暴露唯一 Equipment 组件"), Character->GetEquipmentComponent());
 	TestFalse(TEXT("没有有效 PlayerState 身份时个人鱼护 ID 保持无效"), Character->GetPersonalFishGuardId().IsValid());
 
 	Controller->Possess(Character);
 	TestTrue(TEXT("Controller 可以占有项目 Character"), Character->GetController() == Controller);
-	TestFalse(TEXT("默认 Ability runtime 关闭时占有不会注册个人鱼护"), Character->GetPersonalFishGuardId().IsValid());
+	TestFalse(TEXT("没有有效 PlayerState 身份时占有不会注册个人鱼护"), Character->GetPersonalFishGuardId().IsValid());
 
 	Controller->UnPossess();
 	TestNull(TEXT("失去占有后 Character 不再持有 Controller"), Character->GetController());

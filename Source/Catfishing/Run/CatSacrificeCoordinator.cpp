@@ -7,6 +7,14 @@
 #include "Items/CatItemsService.h"
 #include "Social/CatSocialService.h"
 
+#if WITH_DEV_AUTOMATION_TESTS
+namespace
+{
+	/** 当前自动化测试注入的 Run apply 替代结果；为空时协调器始终调用真实 GameMode 写口。 */
+	UCatSacrificeCoordinator::FRunApplyOverrideForAutomation GCatRunApplyOverrideForAutomation;
+}
+#endif
+
 // 创建条件流程：只在 authority Game World 创建协议协调器；客户端不能预留鱼或增加额度。
 bool UCatSacrificeCoordinator::ShouldCreateSubsystem(UObject* Outer) const
 {
@@ -21,6 +29,14 @@ void UCatSacrificeCoordinator::Deinitialize()
 	Protocols.Reset();
 	Super::Deinitialize();
 }
+
+#if WITH_DEV_AUTOMATION_TESTS
+// 自动化注入设置流程：保存测试提供的可选替代器；传入空函数时清掉全局测试状态，避免跨用例串味。
+void UCatSacrificeCoordinator::SetRunApplyOverrideForAutomation(FRunApplyOverrideForAutomation Hook)
+{
+	GCatRunApplyOverrideForAutomation = MoveTemp(Hook);
+}
+#endif
 
 // 献祭请求流程：同 RequestId 先重放或重试 ItemsCommitted；首次请求依次预留、Run 预检、Items 不可逆提交和 Run apply，预检失败只在 commit 前取消。
 FCatSacrificeResult UCatSacrificeCoordinator::RequestSacrifice(AController* RequestingController,
@@ -168,7 +184,7 @@ ECatDomainCommandError UCatSacrificeCoordinator::MapRunError(const ECatRunComman
 	}
 }
 
-// Run apply 流程：以冻结身份、外部 RequestId、最新保存的预期 Revision 和已 committed 贡献调用唯一 GameMode 写口；失败保持 ItemsCommitted，成功推进 RunApplied→Completed。
+// Run apply 流程：以冻结身份、外部 RequestId、当前 Run Revision 和已 committed 贡献构造写命令；自动化构建可先用 override 模拟 Run 写口短暂失败，未命中才调用真实 GameMode；失败保持 ItemsCommitted 等同 RequestId 只补 Run，成功推进 RunApplied→Completed。
 FCatSacrificeResult UCatSacrificeCoordinator::ApplyCommittedRecord(FProtocolRecord& Record)
 {
 	ACatfishingGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
@@ -183,7 +199,25 @@ FCatSacrificeResult UCatSacrificeCoordinator::ApplyCommittedRecord(FProtocolReco
 	QuotaCommand.Context.ExpectedRevision = GameMode->GetRunPublicState().Revision;
 	QuotaCommand.Context.StableNetId = Record.Command.Context.StableNetId;
 	QuotaCommand.Contribution = Record.Result.AppliedContribution;
-	const FCatRunCommandResult RunResult = GameMode->SubmitCommittedQuotaContributionFromCoordinator(QuotaCommand);
+	FCatRunCommandResult RunResult;
+	bool bHasAutomationOverride = false;
+#if WITH_DEV_AUTOMATION_TESTS
+	// 自动化故障注入只替代这一次 Run apply 结果；命中时刻意不触达 GameMode，测试才能复现“鱼已经扣掉但 Run 尚未写入”的恢复窗口。
+	if (GCatRunApplyOverrideForAutomation)
+	{
+		const TOptional<FCatRunCommandResult> OverrideResult =
+			GCatRunApplyOverrideForAutomation(*this, QuotaCommand);
+		if (OverrideResult.IsSet())
+		{
+			RunResult = OverrideResult.GetValue();
+			bHasAutomationOverride = true;
+		}
+	}
+#endif
+	if (!bHasAutomationOverride)
+	{
+		RunResult = GameMode->SubmitCommittedQuotaContributionFromCoordinator(QuotaCommand);
+	}
 	Record.Result.RunRevision = RunResult.Revision;
 	if (!RunResult.bCommitted && RunResult.Error != ECatRunCommandError::AlreadyResolved)
 	{

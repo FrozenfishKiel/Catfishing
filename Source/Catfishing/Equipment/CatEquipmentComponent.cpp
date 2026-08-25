@@ -191,6 +191,34 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantRunConsumableFromAuthority(
 	return Result;
 }
 
+// 团队库装配预检流程：按正式装配入口同一套事实只读判断 authority、RequestId、实例、定义类别、Equipment Revision 和现有三件套。
+// 它不写终态缓存，也不发布 Snapshot；调用方用它把“个人装备收不下”挡在团队库删除之前。
+ECatDomainCommandError UCatEquipmentComponent::ValidateTeamLibraryEquipFromAuthority(const FGuid RequestId,
+	const int64 ExpectedRevision, const FCatTeamEquipmentInstance& Instance) const
+{
+	const UCatEquipmentDefinition* Definition =
+		GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Instance.DefinitionId);
+	const bool bLoadoutComplete = !Snapshot.RodDefinitionId.IsNone()
+		&& !Snapshot.BaitDefinitionId.IsNone() && !Snapshot.FloatDefinitionId.IsNone();
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !Instance.InstanceId.IsValid()
+		|| !Definition || (Definition->Kind != ECatEquipmentKind::Rod && Definition->Kind != ECatEquipmentKind::Bait
+			&& Definition->Kind != ECatEquipmentKind::Float))
+	{
+		return ECatDomainCommandError::InvalidPayload;
+	}
+	if (Snapshot.Revision != ExpectedRevision)
+	{
+		return ECatDomainCommandError::RevisionConflict;
+	}
+	if (!bLoadoutComplete)
+	{
+		return ECatDomainCommandError::PolicyUndecided;
+	}
+	return ECatDomainCommandError::None;
+}
+
+// 团队库装配流程：先按只读预检挡住无效实例、陈旧 Revision 和未初始化三件套；随后根据定义类别替换唯一槽位。
+// 这一步假定调用方已经成功从团队库取走实例；若 payload 重放命中终态缓存，只返回首次结果，不再改第二次个人装备。
 FCatDomainCommandResult UCatEquipmentComponent::EquipFromTeamLibraryFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const FCatTeamEquipmentInstance& Instance)
 {
@@ -221,23 +249,12 @@ FCatDomainCommandResult UCatEquipmentComponent::EquipFromTeamLibraryFromAuthorit
 
 	UCatEquipmentDefinition* Definition =
 		GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Instance.DefinitionId);
-	const bool bLoadoutComplete = !Snapshot.RodDefinitionId.IsNone()
-		&& !Snapshot.BaitDefinitionId.IsNone() && !Snapshot.FloatDefinitionId.IsNone();
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !Instance.InstanceId.IsValid() || !Definition
-		|| (Definition->Kind != ECatEquipmentKind::Rod && Definition->Kind != ECatEquipmentKind::Bait
-			&& Definition->Kind != ECatEquipmentKind::Float))
+	const ECatDomainCommandError Admission = ValidateTeamLibraryEquipFromAuthority(RequestId, ExpectedRevision, Instance);
+	if (Admission != ECatDomainCommandError::None)
 	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
+		Result.Error = Admission;
 	}
-	else if (Snapshot.Revision != ExpectedRevision)
-	{
-		Result.Error = ECatDomainCommandError::RevisionConflict;
-	}
-	else if (!bLoadoutComplete)
-	{
-		Result.Error = ECatDomainCommandError::PolicyUndecided;
-	}
-	else
+	else if (Definition)
 	{
 		if (Definition->Kind == ECatEquipmentKind::Rod)
 		{

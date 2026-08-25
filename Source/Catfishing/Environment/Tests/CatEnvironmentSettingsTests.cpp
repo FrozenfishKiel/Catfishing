@@ -23,6 +23,15 @@ bool FCatEnvironmentSettingsRuntimeAndAggregationTest::RunTest(const FString& Pa
 
 	FName ChumDefinitionId = TEXT("Dirty");
 	FName AnchorId = TEXT("Dirty");
+	// UDeveloperSettings 派生对象会受当前项目配置影响；这里显式回到未裁状态，
+	// 确保本用例验证的是缺少裁决值时 Environment 必须 fail-closed。
+	Settings->bEnableEnvironmentRuntime = false;
+	Settings->ConfiguredWeather = ECatEnvironmentWeather::Unknown;
+	Settings->MorningEndFraction = 0.0;
+	Settings->DuskStartFraction = 0.0;
+	Settings->ActiveEventId = NAME_None;
+	Settings->NaturalChumDefinitionId = NAME_None;
+	Settings->NaturalChumAnchorId = NAME_None;
 	TestFalse(TEXT("默认环境配置不可运行"), Settings->IsRuntimeReady());
 	TestEqual(TEXT("默认时段解析 Unknown"), Settings->ResolveTimeOfDay(FCatRunPhaseSnapshot(), 10.0),
 		ECatEnvironmentTimeOfDay::Unknown);

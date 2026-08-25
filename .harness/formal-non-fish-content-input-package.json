@@ -1,0 +1,86 @@
+{
+  "schema_version": "1.0",
+  "package_id": "FormalNonFishContentInputPackage",
+  "delivery_module": "DeliveryHarnessAssets",
+  "delivery_mode": "single_atomic_module",
+  "status": "blocked",
+  "checked_on": "2026-08-25",
+  "purpose": "Centralize the non-fish formal content inputs that still block DeliveryHarnessAssets, without splitting presentation, unlocks, imprint admission, growth Buffs, fatigue presentation, or yellow-stamina presentation into separately closable tasks.",
+  "sources": {
+    "gap_list": {
+      "kind": "local_markdown",
+      "path": "Docs/Development/需求对齐差距清单.md",
+      "available_fact": "The human progress entry records DataWorldProfileAlbum and CharacterGrowthCondition as engineering-complete but not formally content-complete, and keeps DeliveryHarnessAssets blocked by formal presentation and progress/growth content decisions."
+    },
+    "technical_plan": {
+      "kind": "local_markdown",
+      "path": "Docs/Architecture/项目技术方案.md",
+      "available_fact": "The technical plan records the same product/content boundaries: unlock milestones, imprint admission, Buff choices, fatigue presentation, yellow-stamina boundaries, and player-visible presentation resources remain open inputs rather than engineering facts."
+    },
+    "release_handoff": {
+      "kind": "local_json",
+      "path": ".harness/delivery-release-handoff-package.json",
+      "available_fact": "DeliveryReleaseHandoffPackage already carries FormalPresentationBoundaryFreeze and FormalProgressGrowthContentFreeze as remaining input contracts under one DeliveryHarnessAssets release surface."
+    },
+    "harness_contract": {
+      "kind": "local_json",
+      "path": ".harness/harness.json",
+      "available_fact": "DeliveryHarnessAssets is a single atomic module; formal presentation and progress/growth content blockers must remain module-level Delivery inputs instead of scattered subtasks."
+    }
+  },
+  "content_groups": {
+    "presentation_boundary": {
+      "input_id": "FormalPresentationBoundaryFreeze",
+      "current_status": "blocked",
+      "unblocks_requirements": [
+        "FormalPresentationBoundaryClosed"
+      ],
+      "required_facts": [
+        "Formal UI or presentation resources for any player-visible Lake status, menu, fish, bite, fight, and asset naming paths.",
+        "A product decision that native debug text, raw state labels, and test asset names are not visible on the formal player path.",
+        "A confirmation path for reopening any default-hidden native LakeReach debug surface only after it is replaced by formal presentation."
+      ],
+      "blocking_gaps": [
+        "FormalUIPresentationResourcesMissing",
+        "PlayerVisibleDebugTextBoundaryNotFrozen",
+        "TestAssetNamesStillTrackedAsFormalPresentationRisk"
+      ],
+      "do_not_do": [
+        "Do not reopen UIReach or FrontendOnline as partial presentation tasks.",
+        "Do not treat the default-hidden CatLakeReachWidget debug path as formal player UI readiness.",
+        "Do not mark DeliveryHarnessAssets complete from Static inventory while formal presentation is still open."
+      ]
+    },
+    "progress_growth_content": {
+      "input_id": "FormalProgressGrowthContentFreeze",
+      "current_status": "blocked",
+      "unblocks_requirements": [
+        "FormalProgressGrowthContentClosed"
+      ],
+      "required_facts": [
+        "Concrete world, growth, or album milestones that produce each formal equipment UnlockId.",
+        "Full imprint admission list beyond TheftCaught, including which run events can create permanent Imprint grants.",
+        "Formal growth Buff choices, numeric effects, and player-facing copy for PendingChoiceCount consumption.",
+        "Formal light, medium, and heavy fatigue presentation triggers now that fatigue is no longer a gameplay number.",
+        "Formal yellow-stamina shield presentation and consumption boundary."
+      ],
+      "blocking_gaps": [
+        "UnlockIdMilestoneRulesOpen",
+        "ImprintAdmissionListBeyondTheftCaughtOpen",
+        "GrowthBuffChoicesValuesAndCopyOpen",
+        "FatiguePresentationTriggersOpen",
+        "YellowStaminaPresentationAndConsumptionBoundaryOpen"
+      ],
+      "do_not_do": [
+        "Do not mark DataWorldProfileAlbum formally complete from engineering Profile or Collection automation alone.",
+        "Do not mark CharacterGrowthCondition formally complete from ASC and Growth automation while Buff, fatigue, or yellow-stamina content is still open.",
+        "Do not split UnlockId, imprint admission, Buff, fatigue, and yellow-stamina decisions into separate DeliveryHarnessAssets subtasks."
+      ]
+    }
+  },
+  "package_blocking_gaps": [
+    "FormalPresentationBoundaryOpen",
+    "FormalProgressGrowthContentOpen"
+  ],
+  "close_rule": "This package can move to ready only when both content_groups are satisfied with authoritative product/content facts and package_blocking_gaps is empty. It does not close DeliveryHarnessAssets by itself; Delivery still also requires formal fish asset readiness, tracked test asset replacement, RunEnvironmentSocial module behavior evidence, and passing Static plus AssetReadiness verification."
+}

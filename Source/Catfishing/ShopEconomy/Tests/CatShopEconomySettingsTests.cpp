@@ -35,7 +35,8 @@ bool FCatShopEconomySettingsProjectDefaultsTest::RunTest(const FString& Paramete
 	TestTrue(TEXT("项目默认团队经济运行 gate 已开启"), Settings->IsRuntimeEnabled());
 	TestEqual(TEXT("项目默认团队钱包初始余额"), Settings->StartingTeamWalletBalance, 10);
 	TestEqual(TEXT("项目默认售鱼最小入账金额"), Settings->MinimumFishSaleValue, 1);
-	TestEqual(TEXT("本地普通饵维持非消耗规则，不配置免费耗材入口"), Settings->FreeOrdinaryBaitEntryId, NAME_None);
+	TestEqual(TEXT("项目默认免费普通饵入口已显式配置"), Settings->FreeOrdinaryBaitEntryId,
+		FName(TEXT("FreeBasicBaitClaim")));
 
 	const FCatShopCatalogEntry* RodOrder = Settings->CatalogEntries.FindByPredicate(
 		[](const FCatShopCatalogEntry& Entry)
@@ -56,16 +57,31 @@ bool FCatShopEconomySettingsProjectDefaultsTest::RunTest(const FString& Paramete
 	const FCatShopCatalogEntry* FreeBait = Settings->CatalogEntries.FindByPredicate(
 		[](const FCatShopCatalogEntry& Entry)
 		{
-			return Entry.EntryId == FName(TEXT("ShopChumOrder"));
+			return Entry.EntryId == FName(TEXT("FreeBasicBaitClaim"));
 		});
-	TestNotNull(TEXT("项目默认商店包含免费虫虫饵入口"), FreeBait);
+	TestNotNull(TEXT("项目默认商店包含免费普通饵入口"), FreeBait);
 	if (FreeBait)
 	{
-		TestTrue(TEXT("免费虫虫饵目录项本身可运行"), FreeBait->IsRuntimeReady());
-		TestEqual(TEXT("免费虫虫饵交付为局内耗材"), FreeBait->Kind, ECatShopEntryKind::RunConsumableGrant);
-		TestEqual(TEXT("免费虫虫饵指向 Work1 普通饵定义"), FreeBait->DefinitionId, FName(TEXT("Chum_Basic")));
-		TestEqual(TEXT("基础窝料订单价格"), FreeBait->UnitPrice, 1);
-		TestTrue(TEXT("免费虫虫饵使用无限库存"), FreeBait->bUnlimitedStock);
+		TestTrue(TEXT("免费普通饵目录项本身可运行"), FreeBait->IsRuntimeReady());
+		TestEqual(TEXT("免费普通饵交付为 Equipment 装备实例"), FreeBait->Kind, ECatShopEntryKind::EquipmentGrant);
+		TestEqual(TEXT("免费普通饵指向基础普通饵定义"), FreeBait->DefinitionId, FName(TEXT("Bait_Basic")));
+		TestEqual(TEXT("免费普通饵价格明确为 0"), FreeBait->UnitPrice, 0);
+		TestTrue(TEXT("免费普通饵使用无限库存"), FreeBait->bUnlimitedStock);
+	}
+
+	const FCatShopCatalogEntry* ChumOrder = Settings->CatalogEntries.FindByPredicate(
+		[](const FCatShopCatalogEntry& Entry)
+		{
+			return Entry.EntryId == FName(TEXT("ShopChumOrder"));
+		});
+	TestNotNull(TEXT("项目默认商店包含基础窝料订单"), ChumOrder);
+	if (ChumOrder)
+	{
+		TestTrue(TEXT("基础窝料订单本身可运行"), ChumOrder->IsRuntimeReady());
+		TestEqual(TEXT("基础窝料交付为局内耗材"), ChumOrder->Kind, ECatShopEntryKind::RunConsumableGrant);
+		TestEqual(TEXT("基础窝料指向 Chum_Basic 定义"), ChumOrder->DefinitionId, FName(TEXT("Chum_Basic")));
+		TestEqual(TEXT("基础窝料订单价格"), ChumOrder->UnitPrice, 1);
+		TestTrue(TEXT("基础窝料使用无限库存"), ChumOrder->bUnlimitedStock);
 	}
 
 	return !HasAnyErrors();

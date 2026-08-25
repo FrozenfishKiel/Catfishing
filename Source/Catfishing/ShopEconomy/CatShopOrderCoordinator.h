@@ -89,10 +89,10 @@ public:
 	FCatShopOrderResult SubmitFreeClaim(const FCatShopPurchaseCommand& Command, UCatEquipmentComponent* RecipientEquipment = nullptr);
 
 	/**
-	 * 把玩家容器里的一条鱼卖给商人猫：冻结鱼 → 服务器估价 → 钱包入账 → 移除鱼。
+	 * 把玩家容器里的一条鱼卖给商人猫：读取鱼实例 → 商店预检报价/钱包 → Items 不可逆移除 → 钱包入账。
 	 * 它和购买走同一个协调器，是因为二者的本质问题相同——钱和实物分属两个领域，必须有第三方按固定顺序推进，
 	 * 而且任何一步失败都要保证不会出现“钱扣了鱼还在”或“鱼没了钱没到”。
-	 * 只处理玩家自己容器里的鱼；偷来的鱼有独立的 escrow 协议（追回窗口、空间前提、归还分支都在 Social），不走这里。
+	 * 只处理个人鱼护和共享鱼缸；偷来的鱼有独立的 escrow 协议（追回窗口、空间前提、归还分支都在 Social），本模块继续关闭。
 	 */
 	FCatShopOrderResult SubmitFishSale(const FCatShopFishSaleOrderCommand& Command);
 

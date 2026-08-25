@@ -6,10 +6,13 @@
 
 bool UCatAbilitySet::IsRuntimeReady() const
 {
-	if (GrantedAbilities.Num() < 5)
+	// 默认 AbilitySet 是 InputConfig 之后的第二道入口门禁：六个正式 Fishing 输入 Tag 必须都有可授予能力，
+	// 并且按住型/触发型策略要和玩家意图一致，避免输入层 ready 但 ASC 无对应技能。
+	if (GrantedAbilities.Num() < 6)
 	{
 		return false;
 	}
+	// 两个集合只在就绪门禁内去重：能力类不能重复授予，同一输入 Tag 也不能映射到多个技能。
 	TSet<TSubclassOf<UGameplayAbility>> SeenAbilities;
 	TSet<FGameplayTag> SeenInputTags;
 	for (const FCatAbilitySetAbility& Entry : GrantedAbilities)
@@ -37,6 +40,7 @@ bool UCatAbilitySet::IsRuntimeReady() const
 	}
 	return SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_RodInteract)
 		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Primary)
+		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Slack)
 		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Cancel)
 		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Scoop)
 		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Chum);

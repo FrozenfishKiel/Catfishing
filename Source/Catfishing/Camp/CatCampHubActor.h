@@ -35,6 +35,10 @@ public:
 	/** 幂等请求可跳过的篝火回看；结算封面先为全体在场玩家批量建齐 Planned 事实，成功才广播一次表现意图，且不写 Run ready。 */
 	FCatDomainCommandResult RequestCampfirePlayback(AController* RequestingController, FGuid RequestId);
 
+	/** 服务器完成营地、结算夜和全员 CapturePlan 校验后，把同一 RequestId 可靠送到该营地的相关客户端；每端只复用本地表现委托，不保存播放状态。 */
+	UFUNCTION(NetMulticast, Reliable)
+	void MulticastCampfirePlaybackRequested(FGuid RequestId);
+
 	/** 只读判断 Controller 当前 Character 是否位于固定营地交互范围；供修竿等其他领域适配，不产生回看或休息副作用。 */
 	bool IsControllerInCamp(AController* Controller) const;
 

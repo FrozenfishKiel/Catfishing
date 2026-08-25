@@ -43,7 +43,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatAbilityInputConfigReadinessTest,
-	"Catfishing.Unit.AbilitySystem.InputConfig.RequiresFiveUniqueFishingMappings",
+	"Catfishing.Unit.AbilitySystem.InputConfig.RequiresSixUniqueFishingMappings",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -68,6 +68,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 bool FCatAbilitySetGrantRemoveTest::RunTest(const FString& Parameters)
 {
+	// AbilitySet 授予测试构造正式 Fishing 六输入集合：Primary/Slack/Chum 必须是按住型，
+	// 其余入口是离散触发型；授予、输入路由和整组移除都围绕同一组能力句柄验证。
 	(void)Parameters;
 	FTestWorldWrapper WorldWrapper;
 	TestTrue(TEXT("creates ability set world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
@@ -102,15 +104,27 @@ bool FCatAbilitySetGrantRemoveTest::RunTest(const FString& Parameters)
 		AbilitySet->GrantedAbilities.Add(AdditionalEntry);
 	};
 	AddInputAbility(UCatGA_FishingRodInteract::StaticClass(), CatFishingAbilityTags::Input_Fishing_RodInteract);
+	AddInputAbility(UCatGA_FishingSlack::StaticClass(), CatFishingAbilityTags::Input_Fishing_Slack,
+		ECatAbilityActivationPolicy::WhileInputActive);
 	AddInputAbility(UCatGA_FishingCancel::StaticClass(), CatFishingAbilityTags::Input_Fishing_Cancel);
 	AddInputAbility(UCatGA_FishingScoop::StaticClass(), CatFishingAbilityTags::Input_Fishing_Scoop);
 	AddInputAbility(UCatGA_FishingChum::StaticClass(), CatFishingAbilityTags::Input_Fishing_Chum,
 		ECatAbilityActivationPolicy::WhileInputActive);
+	const FCatAbilitySetAbility* SlackEntry = AbilitySet->GrantedAbilities.FindByPredicate([](const FCatAbilitySetAbility& Candidate)
+	{
+		return Candidate.InputTag == CatFishingAbilityTags::Input_Fishing_Slack;
+	});
+	TestNotNull(TEXT("Slack ability entry is present in formal Fishing set"), SlackEntry);
+	if (SlackEntry)
+	{
+		TestEqual(TEXT("Slack ability remains a held input ability"), SlackEntry->ActivationPolicy,
+			ECatAbilityActivationPolicy::WhileInputActive);
+	}
 
 	FCatGrantedAbilitySetHandles Handles;
 	TestTrue(TEXT("authority ASC accepts a complete ability set"), AbilitySet->GiveToAbilitySystem(AbilitySystem, Handles));
-	TestEqual(TEXT("five ability handles are recorded"), Handles.GetAbilitySpecHandles().Num(), 5);
-	TestEqual(TEXT("five activatable specs are present"), AbilitySystem->GetActivatableAbilities().Num(), 5);
+	TestEqual(TEXT("six ability handles are recorded"), Handles.GetAbilitySpecHandles().Num(), 6);
+	TestEqual(TEXT("six activatable specs are present"), AbilitySystem->GetActivatableAbilities().Num(), 6);
 	if (Handles.GetAbilitySpecHandles().IsEmpty())
 	{
 		return false;
@@ -276,16 +290,12 @@ bool FCatFishingStaminaGameplayEffectBoundaryTest::RunTest(const FString& Parame
 	const bool OldRuntime = Settings->bEnableCharacterAbilityRuntime;
 	const ECatAbilityReplicationPolicy OldPolicy = Settings->ReplicationPolicy;
 	const bool OldTuning = Settings->bEnableInitialAttributeTuning;
-	const float OldHunger = Settings->InitialHunger;
-	const float OldFatigue = Settings->InitialFatigue;
 	const float OldPoison = Settings->InitialPoison;
 	const float OldStrength = Settings->InitialFishingStrength;
 	const float OldStamina = Settings->InitialFightStamina;
 	Settings->bEnableCharacterAbilityRuntime = true;
 	Settings->ReplicationPolicy = ECatAbilityReplicationPolicy::Full;
 	Settings->bEnableInitialAttributeTuning = true;
-	Settings->InitialHunger = 0.0f;
-	Settings->InitialFatigue = 0.0f;
 	Settings->InitialPoison = 0.0f;
 	Settings->InitialFishingStrength = 1.0f;
 	Settings->InitialFightStamina = 10.0f;
@@ -313,8 +323,6 @@ bool FCatFishingStaminaGameplayEffectBoundaryTest::RunTest(const FString& Parame
 	Settings->bEnableCharacterAbilityRuntime = OldRuntime;
 	Settings->ReplicationPolicy = OldPolicy;
 	Settings->bEnableInitialAttributeTuning = OldTuning;
-	Settings->InitialHunger = OldHunger;
-	Settings->InitialFatigue = OldFatigue;
 	Settings->InitialPoison = OldPoison;
 	Settings->InitialFishingStrength = OldStrength;
 	Settings->InitialFightStamina = OldStamina;
@@ -323,11 +331,14 @@ bool FCatFishingStaminaGameplayEffectBoundaryTest::RunTest(const FString& Parame
 
 bool FCatAbilityInputConfigReadinessTest::RunTest(const FString& Parameters)
 {
+	// Readiness 测试按正式玩家入口逐项补齐六个 Tag：每次追加前五项都必须保持关闭，
+	// 六项齐全后才开放；随后复用 Action 验证唯一映射约束仍会重新关闭入口。
 	(void)Parameters;
 	UCatAbilityInputConfig* Config = NewObject<UCatAbilityInputConfig>(GetTransientPackage());
 	const FGameplayTag RequiredTags[] = {
 		CatFishingAbilityTags::Input_Fishing_RodInteract,
 		CatFishingAbilityTags::Input_Fishing_Primary,
+		CatFishingAbilityTags::Input_Fishing_Slack,
 		CatFishingAbilityTags::Input_Fishing_Cancel,
 		CatFishingAbilityTags::Input_Fishing_Scoop,
 		CatFishingAbilityTags::Input_Fishing_Chum
@@ -343,7 +354,7 @@ bool FCatAbilityInputConfigReadinessTest::RunTest(const FString& Parameters)
 			TestFalse(TEXT("partial Fishing mapping remains fail-closed"), Config->IsRuntimeReady());
 		}
 	}
-	TestTrue(TEXT("five unique required mappings are ready"), Config->IsRuntimeReady());
+	TestTrue(TEXT("six unique required mappings are ready"), Config->IsRuntimeReady());
 	Config->AbilityInputActions.Last().InputAction = Config->AbilityInputActions[0].InputAction;
 	TestFalse(TEXT("one InputAction cannot drive two formal Fishing tags"), Config->IsRuntimeReady());
 	return !HasAnyErrors();
@@ -452,16 +463,12 @@ bool FCatPendingStaminaBlocksAbilityActivationTest::RunTest(const FString& Param
 	const bool OldRuntime = Settings->bEnableCharacterAbilityRuntime;
 	const ECatAbilityReplicationPolicy OldPolicy = Settings->ReplicationPolicy;
 	const bool OldTuning = Settings->bEnableInitialAttributeTuning;
-	const float OldHunger = Settings->InitialHunger;
-	const float OldFatigue = Settings->InitialFatigue;
 	const float OldPoison = Settings->InitialPoison;
 	const float OldStrength = Settings->InitialFishingStrength;
 	const float OldStamina = Settings->InitialFightStamina;
 	Settings->bEnableCharacterAbilityRuntime = true;
 	Settings->ReplicationPolicy = ECatAbilityReplicationPolicy::Full;
 	Settings->bEnableInitialAttributeTuning = true;
-	Settings->InitialHunger = 0.0f;
-	Settings->InitialFatigue = 0.0f;
 	Settings->InitialPoison = 0.0f;
 	Settings->InitialFishingStrength = 1.0f;
 	Settings->InitialFightStamina = -1.0f;
@@ -479,8 +486,6 @@ bool FCatPendingStaminaBlocksAbilityActivationTest::RunTest(const FString& Param
 	Settings->bEnableCharacterAbilityRuntime = OldRuntime;
 	Settings->ReplicationPolicy = OldPolicy;
 	Settings->bEnableInitialAttributeTuning = OldTuning;
-	Settings->InitialHunger = OldHunger;
-	Settings->InitialFatigue = OldFatigue;
 	Settings->InitialPoison = OldPoison;
 	Settings->InitialFishingStrength = OldStrength;
 	Settings->InitialFightStamina = OldStamina;

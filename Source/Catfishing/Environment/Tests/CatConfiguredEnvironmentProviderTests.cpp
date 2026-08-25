@@ -34,8 +34,9 @@ namespace CatConfiguredEnvironmentProviderTest
 		/** 原始事件 ID。 */
 		FName OldEventId = NAME_None;
 
-		// 保存流程：记录默认对象旧值后写入一个完整环境配置，不触碰磁盘配置。
-		FEnvironmentSettingsOverride()
+		// 默认对象覆盖流程：先保存旧值，再按用例写入关闭或完整配置；
+		// Provider 读取 GetDefault，因此不能用瞬态设置对象绕过项目配置。
+		explicit FEnvironmentSettingsOverride(const bool bRuntimeReady)
 		{
 			if (Settings)
 			{
@@ -44,11 +45,11 @@ namespace CatConfiguredEnvironmentProviderTest
 				OldMorning = Settings->MorningEndFraction;
 				OldDusk = Settings->DuskStartFraction;
 				OldEventId = Settings->ActiveEventId;
-				Settings->bEnableEnvironmentRuntime = true;
-				Settings->ConfiguredWeather = ECatEnvironmentWeather::Rain;
-				Settings->MorningEndFraction = 0.25;
-				Settings->DuskStartFraction = 0.75;
-				Settings->ActiveEventId = TEXT("StormBloom");
+				Settings->bEnableEnvironmentRuntime = bRuntimeReady;
+				Settings->ConfiguredWeather = bRuntimeReady ? ECatEnvironmentWeather::Rain : ECatEnvironmentWeather::Unknown;
+				Settings->MorningEndFraction = bRuntimeReady ? 0.25 : 0.0;
+				Settings->DuskStartFraction = bRuntimeReady ? 0.75 : 0.0;
+				Settings->ActiveEventId = bRuntimeReady ? FName(TEXT("StormBloom")) : NAME_None;
 			}
 		}
 
@@ -104,12 +105,15 @@ bool FCatConfiguredEnvironmentProviderRuntimeGateTest::RunTest(const FString& Pa
 	}
 
 	const FCatRunPhaseSnapshot InputSnapshot = CatConfiguredEnvironmentProviderTest::MakeDaySnapshot();
-	const FCatEnvironmentResult DefaultResult = Provider->EvaluateEnvironment(InputSnapshot, 1);
-	TestFalse(TEXT("默认配置下 Provider 拒绝生成环境"), DefaultResult.bSucceeded);
-	TestEqual(TEXT("默认配置失败时天气 Unknown"), DefaultResult.Snapshot.Weather, ECatEnvironmentWeather::Unknown);
+	{
+		CatConfiguredEnvironmentProviderTest::FEnvironmentSettingsOverride ClosedOverride(false);
+		const FCatEnvironmentResult DefaultResult = Provider->EvaluateEnvironment(InputSnapshot, 1);
+		TestFalse(TEXT("默认配置下 Provider 拒绝生成环境"), DefaultResult.bSucceeded);
+		TestEqual(TEXT("默认配置失败时天气 Unknown"), DefaultResult.Snapshot.Weather, ECatEnvironmentWeather::Unknown);
+	}
 
 	{
-		CatConfiguredEnvironmentProviderTest::FEnvironmentSettingsOverride Override;
+		CatConfiguredEnvironmentProviderTest::FEnvironmentSettingsOverride Override(true);
 		const FCatEnvironmentResult Result = Provider->EvaluateEnvironment(InputSnapshot, 7);
 		TestTrue(TEXT("完整配置下 Provider 生成环境快照"), Result.bSucceeded);
 		TestEqual(TEXT("天气来自显式配置"), Result.Snapshot.Weather, ECatEnvironmentWeather::Rain);

@@ -11,10 +11,18 @@ class CATFISHING_API UCatUISettings : public UDeveloperSettings
 	GENERATED_BODY()
 
 public:
-	/** 返回 Lake 状态 View 是否显式启用；关闭时 UI 子系统仍维护 Online 生命周期但不订阅玩法宿主。 */
+	/** 返回 Lake 原生状态 View 是否显式启用；默认玩家路径关闭它，UI 子系统仍维护 Online 生命周期。 */
 	bool IsLakeStatusViewEnabled() const;
 
-	/** Lake 只读状态 View 总开关；默认关闭，正式项目配置或资产接线后再启用。 */
+	/** Lake 原生状态 View 的开发/验证开关；默认关闭，只有显式配置或测试开启时才创建 LakeReach 根，避免玩家进 Lake 自动看到白盒状态文字。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake")
 	bool bEnableLakeStatusView = false;
+
+	/** Lake 菜单 Enhanced Input 使用的键名；UI 子系统把它解析为 FKey，同一值也投影给 UIOnly 焦点下的根 View。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Lake|Input")
+	FName LakeMenuToggleKeyName = TEXT("Tab");
+
+	/** Lake 菜单 Mapping Context 的本地优先级；只影响同一 LocalPlayer 的输入解析，不改变玩法权限。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Lake|Input", meta = (ClampMin = "0"))
+	int32 LakeMenuInputPriority = 100;
 };

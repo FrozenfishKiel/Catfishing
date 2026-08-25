@@ -2,6 +2,7 @@
 
 FCatFishingViewState FCatFishingViewState::FromSnapshot(const FCatFishingSessionSnapshot& Snapshot)
 {
+	// 投影流程：逐项复制会话公开快照中允许 UI 展示的字段，并刻意不带出 Actor、组件引用或命令上下文，保持 View 边界只读。
 	FCatFishingViewState View;
 	View.FishingSessionId = Snapshot.FishingSessionId;
 	View.Revision = Snapshot.Revision;

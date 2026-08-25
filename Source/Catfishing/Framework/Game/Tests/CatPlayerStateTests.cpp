@@ -24,7 +24,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Framework.PlayerState.PublicCollectionValidationAndStarterUnlockContract",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 测试流程：在真实 World 生成项目 PlayerState，写入合法公开图鉴摘要，再尝试重复 ID；同时验证装备解锁证明只有 None 被视为 starter。
+// 测试流程：在真实 World 生成项目 PlayerState，写入合法公开图鉴摘要，再尝试重复 ID；同时验证装备解锁只能来自服务器授权快照或已 ACK 的 Unlock Grant。
 bool FCatPlayerStateCollectionAndUnlockTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -60,7 +60,27 @@ bool FCatPlayerStateCollectionAndUnlockTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("拒绝后保留上一份合法摘要"), PlayerState->GetPublicFishCollection().Num(), 1);
 
 	TestTrue(TEXT("None UnlockId 代表 starter 已授权"), PlayerState->HasServerAuthorizedEquipmentUnlock(NAME_None));
-	TestFalse(TEXT("非空 UnlockId 在授权源未接入前拒绝"), PlayerState->HasServerAuthorizedEquipmentUnlock(TEXT("PremiumRod")));
+	TestFalse(TEXT("非空 UnlockId 默认拒绝"), PlayerState->HasServerAuthorizedEquipmentUnlock(TEXT("PremiumRod")));
+	TestFalse(TEXT("重复解锁摘要被拒绝"),
+		PlayerState->SetAuthorizedEquipmentUnlocksFromAuthority({TEXT("PremiumRod"), TEXT("PremiumRod")}));
+	TestFalse(TEXT("非法摘要拒绝后仍未授权"), PlayerState->HasServerAuthorizedEquipmentUnlock(TEXT("PremiumRod")));
+	TestTrue(TEXT("合法解锁摘要可写入"),
+		PlayerState->SetAuthorizedEquipmentUnlocksFromAuthority({TEXT("PremiumRod")}));
+	TestTrue(TEXT("摘要中的非空 UnlockId 被授权"), PlayerState->HasServerAuthorizedEquipmentUnlock(TEXT("PremiumRod")));
+
+	FCatProfileGrant UnlockGrant;
+	UnlockGrant.GrantId = FGuid::NewGuid();
+	UnlockGrant.Kind = ECatProfileGrantKind::Unlock;
+	UnlockGrant.UnlockId = TEXT("PremiumFloat");
+	TestTrue(TEXT("已 ACK Unlock Grant 可追加授权"), PlayerState->AuthorizeEquipmentUnlockFromProfileGrant(UnlockGrant));
+	TestTrue(TEXT("Unlock Grant 授权进入 PlayerState"), PlayerState->HasServerAuthorizedEquipmentUnlock(TEXT("PremiumFloat")));
+
+	FCatProfileGrant FishGrant;
+	FishGrant.GrantId = FGuid::NewGuid();
+	FishGrant.Kind = ECatProfileGrantKind::FishRecorded;
+	FishGrant.UnlockId = TEXT("HackedUnlock");
+	TestFalse(TEXT("非 Unlock Grant 不会授权装备"), PlayerState->AuthorizeEquipmentUnlockFromProfileGrant(FishGrant));
+	TestFalse(TEXT("非 Unlock Grant 的 UnlockId 不生效"), PlayerState->HasServerAuthorizedEquipmentUnlock(TEXT("HackedUnlock")));
 	return !HasAnyErrors();
 }
 

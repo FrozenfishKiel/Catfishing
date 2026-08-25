@@ -3,13 +3,16 @@
 #include "Items/CatContainerReplicationComponent.h"
 #include "Items/CatItemsService.h"
 #include "Items/CatItemsSettings.h"
+#include "Components/SceneComponent.h"
 #include "Net/UnrealNetwork.h"
 
-// 构造流程：开启 Actor/组件复制并关闭 Tick；鱼数组仅由 Items Service 发布到组件。
+// 构造流程：创建固定摆放根，开启 Actor/组件复制并关闭 Tick；鱼数组仅由 Items Service 发布到组件。
 ACatFishTankActor::ACatFishTankActor()
 {
 	bReplicates = true;
 	PrimaryActorTick.bCanEverTick = false;
+	TankRoot = CreateDefaultSubobject<USceneComponent>(TEXT("TankRoot"));
+	SetRootComponent(TankRoot);
 	ContainerReplication = CreateDefaultSubobject<UCatContainerReplicationComponent>(TEXT("ContainerReplication"));
 }
 

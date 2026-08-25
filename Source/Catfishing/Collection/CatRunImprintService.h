@@ -32,6 +32,9 @@ public:
 	FGuid RecordRetryExhaustedSilhouette(FGuid FishingSessionId, FName FishDefinitionId,
 		const FString& RecipientStableNetId);
 
+	/** 记录一份外部里程碑已裁决的装备解锁 Grant；本服务只负责不可变投递和 ACK，不决定解锁条件。 */
+	FGuid RecordCommittedUnlock(FName UnlockId, const FString& RecipientStableNetId);
+
 	/** 只读预检一个候选能否按当前命令门和不可变字段被接收；调用方可在不可逆领域提交前使用，且不会创建候选或投递。 */
 	bool CanAcceptImprintCandidate(const FCatImprintCandidate& Candidate) const;
 
@@ -52,6 +55,9 @@ public:
 	/** 客户端 durable Profile 完成后按 GrantId ACK；身份由当前 Controller PlayerState 重建。 */
 	FCatDomainCommandResult AcknowledgeGrant(AController* ReportingController, FGuid GrantId);
 
+	/** 只读取得已经 durable ACK 的 Grant 内容；调用方用它做服务器侧投影，不接受客户端在 ACK 中夹带内容。 */
+	bool TryGetAcknowledgedGrant(FGuid GrantId, FCatProfileGrant& OutGrant) const;
+
 	/** 玩家登录或生成新 Grant 后重投其所有未 ACK Grant 和未终态 CapturePlan；每次重投复用原稳定 ID。 */
 	void DeliverPendingForController(AController* Controller);
 
@@ -63,6 +69,11 @@ public:
 
 	/** 返回仍未收到 durable ACK 的 Grant 数量；Host 超时日志用它暴露丢失风险，不把超时冒充确认。 */
 	int32 GetPendingGrantAckCount() const;
+
+#if WITH_DEV_AUTOMATION_TESTS
+	/** 自动化专用的 Grant 投递快照；只在开发自动化构建中复制服务端私有记录，避免测试用 pending 数量代替 Grant 内容检查。 */
+	void CopyGrantDeliveryRecordsForAutomation(TArray<FCatGrantDeliveryRecord>& OutRecords) const;
+#endif
 
 	/** 结算协调器只读检查指定 Run 已有篝火封面计划、所有计划终态且全部永久 Grant 已 ACK。 */
 	bool IsSettlementArchiveReady(FGuid RunId) const;
@@ -100,6 +111,9 @@ private:
 
 	/** 合格逃鱼 FishingSessionId 到唯一 FishSilhouette GrantId；StateTree 重入或 ACK 丢失不重复生成。 */
 	TMap<FGuid, FGuid> SilhouetteGrantByFishingSession;
+
+	/** Recipient+UnlockId 到唯一 Unlock GrantId；重试或重复里程碑不会制造多份待 ACK 解锁。 */
+	TMap<FString, FGuid> UnlockGrantByRecipientAndUnlockId;
 
 	/** RunId 到本地相册稳定分组 ID；服务端只分配 ID，不保存图片或路径。 */
 	TMap<FGuid, FGuid> AlbumByRun;

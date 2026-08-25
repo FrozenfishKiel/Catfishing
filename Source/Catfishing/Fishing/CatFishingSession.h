@@ -21,6 +21,8 @@ class FCatFishingSessionSnapshotVersionMutationRulesTest;
 class FCatFishingSessionTerminationOutcomeTest;
 class FCatFishingSessionExistingCaptureReconciliationTest;
 class FCatFishingSessionRejectedFightSummaryPublicationTest;
+class FCatFishingPlayerEntryFullLoopTest;
+namespace CatFishingPlayerEntryTest { struct FPlayerEntryFixture; }
 
 DECLARE_MULTICAST_DELEGATE(FCatFishingSessionSnapshotChanged);
 
@@ -121,6 +123,10 @@ private:
 	friend class FCatFishingSessionTerminationOutcomeTest;
 	friend class FCatFishingSessionExistingCaptureReconciliationTest;
 	friend class FCatFishingSessionRejectedFightSummaryPublicationTest;
+	/** 自动化夹具只装配一条已到 NearShore 的会话事实；最终捕获仍必须通过正式 RequestScoop 写口提交。 */
+	friend class FCatFishingPlayerEntryFullLoopTest;
+	/** 自动化夹具是实际装配私有会话事实的执行体；它只服务 FCatFishingPlayerEntryFullLoopTest。 */
+	friend struct CatFishingPlayerEntryTest::FPlayerEntryFixture;
 
 	/** 客户端收到完整 Snapshot 后只广播重读信号，不推进任何玩法。 */
 	UFUNCTION()

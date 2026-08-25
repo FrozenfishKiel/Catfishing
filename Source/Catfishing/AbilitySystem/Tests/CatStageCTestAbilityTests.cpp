@@ -11,7 +11,7 @@
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatStageCTestAbilityAuthorityGateTest,
-	"Catfishing.Unit.AbilitySystem.StageCTestAbility.AuthorityActivationAppliesConfiguredHungerDelta",
+	"Catfishing.Unit.AbilitySystem.StageCTestAbility.AuthorityActivationAppliesConfiguredPoisonDelta",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 namespace CatStageCTestAbilityTest
@@ -31,7 +31,7 @@ namespace CatStageCTestAbilityTest
 		/** 原始诊断 Ability gate。 */
 		bool bOldDiagnostic = false;
 
-		/** 原始诊断 Hunger 改变量。 */
+		/** 原始诊断 Poison 改变量。 */
 		float OldDelta = 0.0f;
 
 		// 保存流程：在构造时复制默认对象的可变字段，随后写入本测试需要的显式可运行配置。
@@ -42,11 +42,11 @@ namespace CatStageCTestAbilityTest
 				bOldRuntime = Settings->bEnableCharacterAbilityRuntime;
 				OldReplication = Settings->ReplicationPolicy;
 				bOldDiagnostic = Settings->bEnableDiagnosticAbility;
-				OldDelta = Settings->DiagnosticHungerDelta;
+				OldDelta = Settings->DiagnosticPoisonDelta;
 				Settings->bEnableCharacterAbilityRuntime = true;
 				Settings->ReplicationPolicy = ECatAbilityReplicationPolicy::Full;
 				Settings->bEnableDiagnosticAbility = true;
-				Settings->DiagnosticHungerDelta = DiagnosticDelta;
+				Settings->DiagnosticPoisonDelta = DiagnosticDelta;
 			}
 		}
 
@@ -58,7 +58,7 @@ namespace CatStageCTestAbilityTest
 				Settings->bEnableCharacterAbilityRuntime = bOldRuntime;
 				Settings->ReplicationPolicy = OldReplication;
 				Settings->bEnableDiagnosticAbility = bOldDiagnostic;
-				Settings->DiagnosticHungerDelta = OldDelta;
+				Settings->DiagnosticPoisonDelta = OldDelta;
 			}
 		}
 	};
@@ -95,12 +95,12 @@ namespace CatStageCTestAbilityTest
 	}
 }
 
-// 测试流程：临时开启诊断 Ability 配置，在真实 ASC 上激活项目 Ability；成功只能按配置修改 Hunger，其他属性保持原值。
+// 测试流程：临时开启诊断 Ability 配置，在真实 ASC 上激活项目 Ability；成功只能按配置修改 Poison，搏斗属性保持原值。
 bool FCatStageCTestAbilityAuthorityGateTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 
-	CatStageCTestAbilityTest::FAbilitySettingsOverride SettingsOverride(-2.5f);
+	CatStageCTestAbilityTest::FAbilitySettingsOverride SettingsOverride(2.5f);
 	FTestWorldWrapper WorldWrapper;
 	TestTrue(TEXT("创建 Stage C Ability 测试 World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
 	WorldWrapper.ForwardErrorMessages(this);
@@ -119,12 +119,12 @@ bool FCatStageCTestAbilityAuthorityGateTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	Fixture.AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetHungerAttribute(), 10.0f);
-	Fixture.AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFatigueAttribute(), 20.0f);
+	Fixture.AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), 10.0f);
+	Fixture.AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 20.0f);
 	TestTrue(TEXT("正式 TryActivateAbilityByClass 接受诊断 Ability"),
 		Fixture.AbilitySystem->TryActivateAbilityByClass(UCatStageCTestAbility::StaticClass()));
-	TestEqual(TEXT("Ability 按配置修改 Hunger"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetHungerAttribute()), 7.5f);
-	TestEqual(TEXT("Ability 不修改 Fatigue"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFatigueAttribute()), 20.0f);
+	TestEqual(TEXT("Ability 按配置修改 Poison"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()), 12.5f);
+	TestEqual(TEXT("Ability 不修改 FishingStrength"), Fixture.AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute()), 20.0f);
 	return !HasAnyErrors();
 }
 

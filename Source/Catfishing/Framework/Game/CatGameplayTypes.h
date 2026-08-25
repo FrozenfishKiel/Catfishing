@@ -29,6 +29,14 @@ class ACatCampHubActor;
 class ACatCharacter;
 class ACatWaterRegion;
 struct FInputActionValue;
+#if WITH_DEV_AUTOMATION_TESTS
+class FCatGameModeCommandIntentGateTest;
+class FCatGameModeReconnectAdmissionWhitelistTest;
+class FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest;
+class FCatFishingPlayerEntryFullLoopTest;
+namespace CatFishingPlayerEntryTest { struct FPlayerEntryFixture; }
+namespace CatSacrificeCoordinatorTest { struct FItemsCommittedRecoveryFixture; }
+#endif
 
 /** GameState Run/Environment 完整公开快照变化通知；本机 UI 必须重新读取 GetRunPublicState。 */
 DECLARE_MULTICAST_DELEGATE(FCatRunPublicStateChanged);
@@ -103,8 +111,25 @@ public:
 	void NotifyHostExitGrantAckProgress();
 	/** 只读判断当前 Controller 是否仍为 Active 且 Run 玩法命令门开放；teardown/回执协议不调用该 gate。 */
 	bool CanAcceptGameplayCommand(const AController* Controller) const;
+	/** 只读判断当前 Controller 是否可发起新的 Fishing/玩家打窝命令；Social、翻天确认和结算收口不使用这个更窄的白天 gate。 */
+	bool CanAcceptFishingCommand(const AController* Controller) const;
 
 private:
+#if WITH_DEV_AUTOMATION_TESTS
+	/** 自动化夹具直接种入 Active 身份与 Phase，用来验证 Fishing gate 不会误封 Social/Ready/Settlement 宽命令。 */
+	friend class FCatGameModeCommandIntentGateTest;
+	/** 自动化夹具只在测试体内种入并检查私有准入/重连记录，用来证明 Logout、PreLogin 与白名单策略的 fail-closed 边界。 */
+	friend class FCatGameModeReconnectAdmissionWhitelistTest;
+	/** 自动化夹具只给 RunEnvironmentSocial 玩家入口闭环开放最小私有状态访问；测试用同一名 Active 玩家和普通夜晚 Phase 证明 Social 宽 gate 与 Chum 窄 gate 没有分叉，不把求助、保护牌和打窝拆成可独立关闭的小任务。 */
+	friend class FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest;
+	/** 自动化夹具只种入一条已激活身份记录，用来验证玩家 Fishing 命令入口；正式准入仍只走 PreLogin/PostLogin。 */
+	friend class FCatFishingPlayerEntryFullLoopTest;
+	/** 自动化夹具是实际写入私有准入表的执行体；它只服务 FCatFishingPlayerEntryFullLoopTest。 */
+	friend struct CatFishingPlayerEntryTest::FPlayerEntryFixture;
+	/** 自动化夹具只种入一份 DayActive Run 状态，用来验证献祭跨 Items/Run 恢复；正式阶段推进仍只走 StateTree。 */
+	friend struct CatSacrificeCoordinatorTest::FItemsCommittedRecoveryFixture;
+#endif
+
 	/** 服务器最小身份记录阶段；Reserved 来自 PreLogin，Active 只在 PostLogin 与具体 Controller 配对。 */
 	enum class EAdmissionPhase : uint8
 	{
@@ -233,7 +258,7 @@ class CATFISHING_API ACatfishingGameState : public AGameStateBase
 	GENERATED_BODY()
 public:
 	ACatfishingGameState();
-	/** 注册 RunPublicState 与 LastHelpSignal 两份整结构复制；客户分别经 RepNotify 消费各自 Revision 对齐的完整快照。 */
+	/** 注册 Run/Help/Shop/Team 四类公开快照复制；客户端分别经 RepNotify 消费，不在本地推进领域状态。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	/** 仅允许 authority GameMode 写入组合公开事实；每次写入都会触发网络更新。 */
 	void SetRunPublicStateFromAuthority(const FCatRunPublicState& NewState);
@@ -249,7 +274,9 @@ public:
 	/** 仅 authority 写入团队装备库快照。 */
 	void SetTeamEquipmentLibraryFromAuthority(const FCatTeamEquipmentLibrarySnapshot& NewSnapshot);
 	const FCatTeamEquipmentLibrarySnapshot& GetTeamEquipmentLibrary() const;
+	/** 返回 ChumField 的公开复制组件；客户端只读窝点表现事实，不能通过它创建或修改窝点。 */
 	const UCatChumFieldReplicationComponent* GetChumFieldReplication() const { return ChumFieldReplication; }
+	/** authority 写口使用的 ChumField 复制组件；非服务器返回空，防止客户端绕开 Subsystem 发布窝点。 */
 	UCatChumFieldReplicationComponent* GetChumFieldReplicationFromAuthority();
 	/** 本机 Run/Environment 完整快照变化通知；不授权订阅者推进 StateTree。 */
 	FCatRunPublicStateChanged OnRunPublicStateChanged;
@@ -266,16 +293,19 @@ protected:
 	/** 客户端收到新求助 Revision 后只记录/供表现读取，不自动执行互动。 */
 	UFUNCTION()
 	void OnRep_HelpSignal();
+	/** 客户端收到商店公开快照后只记录诊断并通知只读 UI，不在本地确认购买或改库存。 */
 	UFUNCTION()
 	void OnRep_ShopEconomySnapshot();
+	/** 客户端收到团队装备库快照后只刷新展示层，不在复制回调里执行领取、装备或回滚。 */
 	UFUNCTION()
 	void OnRep_TeamEquipmentLibrary();
 
 private:
-	/** Run 的唯一公开复制快照；服务器 GameMode 写，客户端 RepNotify 读。 */
+	/** 自然事件与玩家打窝的公开复制组件；服务器 ChumFieldSubsystem 写入，客户端只用它驱动窝点表现。 */
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UCatChumFieldReplicationComponent> ChumFieldReplication;
 
+	/** Run 对外展示的局内进度真相；服务器在昼夜/额度变化时写入，客户端只通过 OnRep 观察。 */
 	UPROPERTY(ReplicatedUsing = OnRep_RunPublicState)
 	FCatRunPublicState RunPublicState;
 
@@ -283,20 +313,22 @@ private:
 	UPROPERTY(ReplicatedUsing = OnRep_HelpSignal)
 	FCatHelpSignalSnapshot LastHelpSignal;
 
+	/** 商店公开经济快照；只复制可展示目录和团队钱包摘要，购买结果仍由服务器命令返回。 */
 	UPROPERTY(ReplicatedUsing = OnRep_ShopEconomySnapshot)
 	FCatShopPublicEconomySnapshot ShopEconomySnapshot;
 
+	/** 团队装备库公开快照；服务器维护可领取/已领取状态，客户端只读以恢复 UI。 */
 	UPROPERTY(ReplicatedUsing = OnRep_TeamEquipmentLibrary)
 	FCatTeamEquipmentLibrarySnapshot TeamEquipmentLibrary;
 };
 
-/** Lake 玩家身份与个人局状态宿主；复用 APlayerState::UniqueId，只增加普通夜 ready 与主动公开的鱼图鉴摘要。 */
+/** Lake 玩家身份与个人局状态宿主；复用 APlayerState::UniqueId，只增加普通夜 ready、公开鱼图鉴摘要和本局装备解锁投影。 */
 UCLASS()
 class CATFISHING_API ACatfishingPlayerState : public APlayerState
 {
 	GENERATED_BODY()
 public:
-	/** 注册个人翻天确认与公开鱼图鉴摘要复制；StableNetId 继续复用 APlayerState::UniqueId。 */
+	/** 注册个人翻天确认、公开鱼图鉴摘要和装备解锁投影复制；StableNetId 继续复用 APlayerState::UniqueId。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	/** 仅由服务器 GameMode 写入本人的普通夜晚 ready 事实，客户端 RPC 参数不能直接赋值。 */
 	void SetNextDayReadyFromAuthority(bool bNewReady);
@@ -306,7 +338,11 @@ public:
 	bool SetPublicFishCollectionFromAuthority(const TArray<FCatFishCollectionRecord>& Records);
 	/** 提供局内玩家可见的鱼图鉴摘要；相册、Journal 和解锁被排除，避免 PlayerState 成为第二份 Profile。 */
 	const TArray<FCatFishCollectionRecord>& GetPublicFishCollection() const;
-	/** 查询服务器是否持有指定装备解锁的可信证明；当前未接服务端 Profile 证明源，None 视为 starter，其余默认拒绝。 */
+	/** 服务器接收 owning client 从 durable Profile 汇总出的装备解锁摘要；格式非法时保留旧授权并 fail-closed。 */
+	bool SetAuthorizedEquipmentUnlocksFromAuthority(const TArray<FName>& UnlockIds);
+	/** 服务器在某份 Unlock Grant 已经 durable ACK 后追加本局授权；它不接受客户端直接指定 Grant 内容。 */
+	bool AuthorizeEquipmentUnlockFromProfileGrant(const FCatProfileGrant& Grant);
+	/** 查询服务器是否持有指定装备解锁的可信证明；None 视为 starter，非空必须来自本局授权快照。 */
 	bool HasServerAuthorizedEquipmentUnlock(FName UnlockId) const;
 protected:
 	/** 玩家状态进入 World 后记录继承 UniqueId 是否有效；原始值是否输出由 StableNetIdExposure 策略控制。 */
@@ -322,6 +358,10 @@ private:
 	/** authority 在严格校验 owning client 摘要后整体替换的公开鱼图鉴；局内其他玩家可读，不含相册、Journal、解锁、装备或原始 StableNetId。 */
 	UPROPERTY(Replicated)
 	TArray<FCatFishCollectionRecord> PublicFishCollection;
+
+	/** 服务器当前认可并复制的装备解锁 ID 摘要；Profile Grant ACK 或 owning client durable Profile 摘要写入，Equipment 装配只读它。 */
+	UPROPERTY(Replicated)
+	TArray<FName> AuthorizedEquipmentUnlockIds;
 };
 
 /** Lake owning-client 的网络适配器；将 Run、Fishing、Camp、Condition、Items、Social 意图转给 authority，并承接 Profile Grant/CapturePlan/HostExit 回执，不自存领域真相。 */
@@ -353,6 +393,10 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerAcknowledgeProfileGrant(FGuid GrantId);
 
+	/** owning client 把 durable Profile 中的装备解锁摘要提交给服务器；服务器只把它作为本 PlayerState 的本局授权投影。 */
+	UFUNCTION(Server, Reliable)
+	void ServerPublishEquipmentUnlocks(const TArray<FName>& UnlockIds);
+
 	/** 服务器向 owning client 投递独立 CapturePlan；本 RPC 不表示图片或 Grant 已成功。 */
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveImprintCapturePlan(const FCatCapturePlan& Plan);
@@ -374,26 +418,42 @@ public:
 	UFUNCTION(BlueprintPure, Category="Catfishing|Fishing")
 	UCatFishingCommandComponent* GetFishingCommandComponent() const;
 
-	/** 把唯一献祭命令转给 SacrificeCoordinator；Controller 不直接删鱼或增加 Run 额度。 */
+	/** 由 owning client 发起献祭服务器入口；把命令转给唯一 SacrificeCoordinator，完成后通过 ClientReceiveSacrificeResult 回送完整阶段结果，Controller 不直接删鱼或增加 Run 额度。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestSacrifice(FCatSacrificeCommand Command);
 
-	/** 在固定营地范围请求本人休息；Camp/Condition 负责位置和身体裁决。 */
+	/** 服务器把献祭协调器的完整阶段结果可靠发给 owning client；客户端只保存最近读模型，不据此改鱼或 Run 额度。 */
+	UFUNCTION(Client, Reliable)
+	void ClientReceiveSacrificeResult(const FCatSacrificeResult& Result);
+
+	/** 返回本机最近收到的献祭协议结果供 UI 关联 RequestId 和阶段；权威恢复仍只发生在服务器协调器。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Run")
+	FCatSacrificeResult GetLastSacrificeResult() const;
+
+	/** 由 owning client 发起固定营地休息请求；把位置和身体裁决交给 Camp/Condition，完成后通过 ClientReceiveCampCommandResult 回送领域结果。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestCampRest(ACatCampHubActor* Camp, FGuid RequestId);
 
-	/** 在固定营地请求可跳过的篝火回看；结算夜全员在场时同时建立本局封面 CapturePlan。 */
+	/** 由 owning client 发起固定营地篝火回看请求；Camp 在结算夜全员在场且 CapturePlan 建立成功后触发表现 multicast，并通过 ClientReceiveCampCommandResult 回送领域结果。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestCampfirePlayback(ACatCampHubActor* Camp, FGuid RequestId);
 
-	/** 在固定营地把本人鱼护的一条鱼原子转入共享鱼缸。 */
+	/** 由 owning client 发起固定营地转缸请求；把鱼实例和两个 Revision 交给 Camp/Items 原子裁决，并通过 ClientReceiveCampCommandResult 回送领域结果。 */
 	UFUNCTION(Server, Reliable)
 	void ServerTransferFishToTank(ACatCampHubActor* Camp, FGuid RequestId, FGuid FishInstanceId,
 		int64 ExpectedGuardRevision, int64 ExpectedTankRevision);
 
-	/** 伙伴把倒地目标送到固定营地 RescuePoint；没有死亡/重生旁路。 */
+	/** 由 owning client 发起伙伴救援请求；把倒地目标送往固定营地 RescuePoint 并交给 Camp/Condition 裁决，完成后通过 ClientReceiveCampCommandResult 回送领域结果，不进入死亡或重生旁路。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRescueCharacterToCamp(ACatCampHubActor* Camp, ACatCharacter* TargetCharacter, FGuid RequestId);
+
+	/** 服务器把四类营地命令的领域结果可靠发给 owning client；所有路径都保留原 RequestId，客户端不重算 Revision 或领域错误。 */
+	UFUNCTION(Client, Reliable)
+	void ClientReceiveCampCommandResult(const FCatDomainCommandResult& Result);
+
+	/** 返回本机最近收到的营地命令结果供表现层关联请求；该缓存不作为 Camp、Items 或 Condition 的权限事实。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Camp")
+	FCatDomainCommandResult GetLastCampCommandResult() const;
 
 	/** 提交四个功能装备 ID；服务器目录与可信解锁证明共同通过后才允许首次装配，客户端 Profile 选择本身不授予权限。ScoopNet 可为 None，但近岸抢抄需要它。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
@@ -412,12 +472,12 @@ public:
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
 	void ServerClaimFreeShopEntry(FName EntryId, FGuid RequestId, int64 ExpectedWalletRevision);
 
-	/** 售出本人鱼护或共享鱼缸中的鱼；当前在 Items 两阶段适配完成前会安全拒绝。 */
+	/** 售出本人鱼护或共享鱼缸中的鱼；服务器从 Items 容器读取重量并在删除鱼后把收入记入团队钱包。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
 	void ServerSellFish(FGuid FishInstanceId, FGuid ContainerId, int64 ExpectedContainerRevision,
 		ECatShopFishSaleSource SourceKind, FGuid RequestId, int64 ExpectedWalletRevision);
 
-	/** 从团队装备库取走实例并装入本人的现有三件套。 */
+	/** 从团队装备库取走实例并装入本人的现有三件套；服务器先做库和个人装备预检，避免公库删除与个人装配分叉。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
 	void ServerTakeTeamEquipment(FGuid InstanceId, FGuid RequestId, int64 ExpectedLibraryRevision,
 		int64 ExpectedEquipmentRevision);
@@ -431,7 +491,7 @@ public:
 	void ServerUseHerbOnCharacter(ACatCharacter* TargetCharacter, FGuid RequestId,
 		int64 ExpectedEquipmentRevision, FName HerbDefinitionId);
 
-	/** 从本人鱼护或共享缸直接吃一条鱼；Items 移除成功后才按 FishDefinition 修改 Hunger/Poison。 */
+	/** 从本人鱼护或共享缸直接吃一条鱼；Items 移除成功后才按 FishDefinition 修改 Poison 并推进吃鱼成长。 */
 	UFUNCTION(Server, Reliable)
 	void ServerConsumeFish(ACatCharacter* EatingCharacter, FCatFishConsumeCommand Command);
 
@@ -488,7 +548,7 @@ public:
 	void ServerPublishPublicFishCollection(const TArray<FCatFishCollectionRecord>& Records);
 
 protected:
-	/** 为本地 Controller 安装显式配置的玩法 Mapping Context；服务端远端 Controller 不接触本地输入子系统。 */
+	/** 为本地 Controller 安装玩法输入层，并在可用时把 durable Profile 装备解锁投影给服务器；服务端远端 Controller 不接触本地输入或 Profile 子系统。 */
 	virtual void BeginPlay() override;
 	/** 绑定 Move、Look、Jump、Sprint Enhanced Input Action，并保留父类输入初始化。 */
 	virtual void SetupInputComponent() override;
@@ -538,6 +598,8 @@ private:
 
 	/** 幂等安装当前配置的玩法 Mapping Context；BeginPlay/输入初始化均可安全调用。 */
 	void ApplyInputMappingContext();
+	/** owning client 读取本地 durable Profile 的 UnlockIds 并提交服务器投影；本方法不生成或修改任何永久 Grant。 */
+	void PublishProfileEquipmentUnlocksIfAvailable();
 	/** 移除本 Controller 安装的玩法 Mapping Context，并清空弱绑定记录。 */
 	void RemoveInputMappingContext();
 	/** 按 Controller 的水平朝向把二维输入转成当前 Pawn 的前后/左右移动。 */
@@ -587,12 +649,22 @@ private:
 
 	/** 统一向 authority GameMode 查询运行内玩法命令 gate；缺少 GameMode、非 Active 或 teardown 关门时返回 false。 */
 	bool CanForwardGameplayCommand() const;
+	/** 查询 Fishing/玩家打窝专用白天 gate；它复用身份与 teardown 判断，但额外要求 Run 处于 DayActive 且允许钓鱼。 */
+	bool CanForwardFishingCommand() const;
 	/** 购买与免费领取共用的服务器转发实现。 */
 	void SubmitShopOrder(FName EntryId, FGuid RequestId, int64 ExpectedWalletRevision, bool bFreeClaim);
 
 	/** owning client 最近收到的 Social 协议读模型；由可靠结果 RPC 整体替换，不复制回服务器或作为权限事实。 */
 	UPROPERTY(Transient)
 	FCatTheftResult LastTheftResult;
+
+	/** owning client 最近收到的献祭协议读模型，表示服务器协调器最后回送的完整阶段结果；可靠 Client RPC 整体写入，UI 只读且不会影响 Items 或 Run。 */
+	UPROPERTY(Transient)
+	FCatSacrificeResult LastSacrificeResult;
+
+	/** owning client 最近收到的营地命令读模型，表示四类 Camp RPC 中最后返回的公共领域结果；可靠 Client RPC 整体写入，UI 只读且不会触发第二次领域操作。 */
+	UPROPERTY(Transient)
+	FCatDomainCommandResult LastCampCommandResult;
 
 	/** 团队装备取用是一条跨库与个人装备的幂等链；缓存阻止重试取走第二件。 */
 	TMap<FGuid, FCatDomainCommandResult> TakeTeamEquipmentTerminalCache;

@@ -125,9 +125,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")
 	ECatFishFoodSafety FoodSafety = ECatFishFoodSafety::Unset;
 
-	/** 直接食用后减少 Hunger 的正值；0 表示食用收益未裁。 */
+	/** 直接食用后授予的局内成长经验；值来自当前鱼表体重档，0 表示吃鱼成长收益未裁。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use", meta = (ClampMin = "0.0"))
-	double HungerRelief = 0.0;
+	double EatingExperience = 0.0;
 
 	/** Toxic 鱼直接食用后增加 Poison 的正值；Safe 必须保持 0。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use", meta = (ClampMin = "0.0"))

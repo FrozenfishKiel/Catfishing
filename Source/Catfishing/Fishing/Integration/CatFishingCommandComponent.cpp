@@ -16,6 +16,20 @@
 #include "Logging/CatLog.h"
 #include "GameFramework/PlayerState.h"
 
+namespace
+{
+	/** 构造阶段 gate 拒绝时的统一竿命令回执；旧直连 RPC 用它保留 RequestId，让 UI/Ability 能结束等待态。 */
+	FCatFishingCommandResult MakeRodCommandsClosedResult(const ECatFishingCommandType CommandType, const FGuid RequestId)
+	{
+		FCatFishingCommandResult Result;
+		Result.CommandType = CommandType;
+		Result.RequestId = RequestId;
+		Result.Error = ECatFishingCommandError::CommandsClosed;
+		Result.bCommitted = false;
+		return Result;
+	}
+}
+
 UCatFishingCommandComponent::UCatFishingCommandComponent()
 {
 	SetIsReplicatedByDefault(true); // PresentationState 之外，这个组件自身也要在网络上存在（承载 RPC）
@@ -335,6 +349,7 @@ void UCatFishingCommandComponent::ServerSubmitFishingAbilityCommand_Implementati
 	HandleAbilityCommandFromAuthority(CommandType, Edge);
 }
 
+// 权威表现广播流程：只允许服务器从当前 Controller 的 Pawn 触发 multicast；缺少拥有者、非 authority 或事件未配置时直接跳过，避免客户端伪造全局表现。
 void UCatFishingCommandComponent::BroadcastCosmeticEventFromAuthority(const FGameplayTag& EventTag) const
 {
 	const APlayerController* Controller = Cast<APlayerController>(GetOwner());
@@ -351,10 +366,26 @@ void UCatFishingCommandComponent::BroadcastCosmeticEventFromAuthority(const FGam
 void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFishingCommandType CommandType,
 	const FCatFishingInputEdge& Edge)
 {
-	// 唯一的服务器权威命令处理函数：所有钓鱼相关离散输入（抛竿/打窝/收放线/抄鱼/取消等）最终都汇聚到这里
+	// 权威输入收口流程：
+	// 1. 先验证拥有者、服务器权威和 RequestId，非法入口不产生任何结果。
+	// 2. 再统一读取 Fishing 白天 gate；被关闭时回送 CommandsClosed，防止 UI 卡在等待态。
+	// 3. gate 通过后才允许抄网/提竿等表现广播，并按服务器当前鱼竿、会话和窝料事实分派具体写口。
+	// 4. 本函数只处理 Fishing/玩家打窝意图，Social、ready 和结算仍由 Controller 的宽玩法 gate 收口。
 	APlayerController* Controller = Cast<APlayerController>(GetOwner());
 	if (!Controller || !Controller->HasAuthority() || !Edge.RequestId.IsValid())
 	{
+		return;
+	}
+	FCatFishingCommandResult Result;
+	Result.CommandType = CommandType;
+	Result.RequestId = Edge.RequestId;
+	Result.bCommitted = false;
+	if (const ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(Controller);
+		!CatController || !CatController->CanForwardFishingCommand())
+	{
+		// 钓鱼/玩家打窝只在 DayActive 且 bFishingAllowed 时开放；夜晚 ready、结算和 Social 继续走 GameMode 的宽 gate，不在这里误封。
+		Result.Error = ECatFishingCommandError::CommandsClosed;
+		DeliverResultFromAuthority(Result);
 		return;
 	}
 	// 向其他客户端广播挥网动作——必须在任何裁决之前，因为抄网"失败时不留任何权威痕迹"：
@@ -367,11 +398,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	{
 		BroadcastCosmeticEventFromAuthority(CatFishingAbilityTags::Cosmetic_Fishing_ScoopSwing);
 	}
-	// 默认先构造一个“未提交”的失败结果；只有走到具体分支成功时才会改写 bCommitted
-	FCatFishingCommandResult Result;
-	Result.CommandType = CommandType;
-	Result.RequestId = Edge.RequestId;
-	Result.bCommitted = false;
+	// 默认结果已经在阶段 gate 前构造；只有走到具体分支成功时才会改写 bCommitted。
 	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
 	if (Fishing)
 	{
@@ -544,6 +571,11 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				const FCatScoopResult ScoopResult = TargetSession->RequestScoop(Controller, ScoopCommand);
 				Result.bCommitted = ScoopResult.Command.bCommitted;
 				Result.Error = MapDomainCommandError(ScoopResult.Command.Error);
+				const FCatFishingSessionSnapshot& UpdatedSnapshot = TargetSession->GetSnapshot();
+				Result.Revision = UpdatedSnapshot.Revision; // 回执携带提交后的会话版本，表现层不用再猜测本次 F 键是否改变了公开事实。
+				Result.SnapshotSequence = UpdatedSnapshot.SnapshotSequence;
+				Result.PhaseEpoch = UpdatedSnapshot.PhaseEpoch;
+				Result.CastAttemptId = UpdatedSnapshot.CastAttemptId;
 				DeliverResultFromAuthority(Result);
 				return;
 			}
@@ -632,14 +664,18 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 					const FCatScoopResult ScoopResult = Session->RequestScoop(Controller, ScoopCommand);
 					Result.bCommitted = ScoopResult.Command.bCommitted;
 					Result.Error = MapDomainCommandError(ScoopResult.Command.Error); // 领域错误码转成命令层通用错误码
+					const FCatFishingSessionSnapshot& UpdatedSnapshot = Session->GetSnapshot();
+					Result.Revision = UpdatedSnapshot.Revision; // 回执携带提交后的会话版本，表现层不用再猜测本次 F 键是否改变了公开事实。
+					Result.SnapshotSequence = UpdatedSnapshot.SnapshotSequence;
+					Result.PhaseEpoch = UpdatedSnapshot.PhaseEpoch;
+					Result.CastAttemptId = UpdatedSnapshot.CastAttemptId;
 					DeliverResultFromAuthority(Result);
 					return;
 				}
 			}
 		}
 	}
-	// Stage B establishes the single command edge. Payload/session/rod resolution lands in C/D;
-	// until then every input command has an explicit terminal refusal and never fabricates success.
+	// 玩家命令入口先保持单一拒绝出口；只有上方能重建出合法会话、鱼竿和载荷时，才允许返回成功回执。
 	Result.Error = ECatFishingCommandError::DependencyUnavailable;
 	DeliverResultFromAuthority(Result);
 }
@@ -762,12 +798,12 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 	DeliverPlaceChumResultFromAuthority(Service->PlaceChum(Controller, Command));
 }
 
+// 旧版搏斗协作转发流程：先复查 Fishing 白天 gate，再把会话键、幂等键和期望 Revision 交给 Fishing Service；Session 继续裁 Giant、阶段和版本。
 void UCatFishingCommandComponent::ForwardLegacyAssist(const FGuid FishingSessionId, const FGuid RequestId,
 	const int64 ExpectedRevision)
 {
-	// 旧版协作请求入口，只能在服务器上转发；这里不做任何额外校验，交给 Fishing Service/Session 内部把关
-	APlayerController* Controller = Cast<APlayerController>(GetOwner());
-	if (Controller && Controller->HasAuthority())
+	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
+	if (Controller && Controller->HasAuthority() && Controller->CanForwardFishingCommand())
 	{
 		if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
 		{
@@ -776,11 +812,11 @@ void UCatFishingCommandComponent::ForwardLegacyAssist(const FGuid FishingSession
 	}
 }
 
+// 旧版抢抄转发流程：先复查 Fishing 白天 gate，再清理客户端身份并由当前 Pawn 重建鱼护目标；Session 只裁近岸和首个合法抄手。
 void UCatFishingCommandComponent::ForwardLegacyScoop(const FGuid FishingSessionId, FCatScoopCommand Command)
 {
-	// 旧版抢抄入口，同样只能由服务器调用
-	APlayerController* Controller = Cast<APlayerController>(GetOwner());
-	if (!Controller || !Controller->HasAuthority())
+	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
+	if (!Controller || !Controller->HasAuthority() || !Controller->CanForwardFishingCommand())
 	{
 		return;
 	}
@@ -795,26 +831,40 @@ void UCatFishingCommandComponent::ForwardLegacyScoop(const FGuid FishingSessionI
 	}
 }
 
+// 显式打窝 RPC 流程：先保留 RequestId，再用 Fishing 白天 gate 裁阶段；gate 关闭也回送 CommandsClosed，合法路径才进入 ChumPlacementService 的水域、库存和幂等校验。
 void UCatFishingCommandComponent::ServerSubmitPlaceChum_Implementation(const FCatPlaceChumCommand& Command)
 {
-	// Server RPC 落地点：先检查发起者确实有服务器权威、且当前允许转发玩法命令（例如没被限制输入）
 	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
-	if (!Controller || !Controller->HasAuthority() || !Controller->CanForwardGameplayCommand()) return;
-	UCatChumPlacementService* Service = GetWorld()
-		? GetWorld()->GetSubsystem<UCatChumPlacementService>() : nullptr;
 	FCatPlaceChumResult Result;
 	Result.RequestId = Command.RequestId;
+	if (!Controller || !Controller->HasAuthority()) return;
+	if (!Controller->CanForwardFishingCommand())
+	{
+		// 显式 PlaceChum RPC 与 Q 蓄力路径共用同一个白天 gate；拒绝也投递终态，避免 UI 在夜晚挂着 pending。
+		Result.Error = ECatChumFieldError::CommandsClosed;
+		DeliverPlaceChumResultFromAuthority(Result);
+		return;
+	}
+	UCatChumPlacementService* Service = GetWorld()
+		? GetWorld()->GetSubsystem<UCatChumPlacementService>() : nullptr;
 	if (Service) Result = Service->PlaceChum(Controller, Command);
 	DeliverPlaceChumResultFromAuthority(Result);
 }
 
+// 显式抛竿 RPC 流程：先构造 BeginCast 回执，再用 Fishing 白天 gate 裁阶段；gate 关闭回送 CommandsClosed，合法路径才交 Fishing Service 重做射程、视线和装备校验。
 void UCatFishingCommandComponent::ServerSubmitBeginCast_Implementation(const FCatBeginCastCommand& Command)
 {
 	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
-	if (!Controller || !Controller->HasAuthority() || !Controller->CanForwardGameplayCommand()) return;
 	FCatBeginCastResult Result;
 	Result.Command.CommandType = ECatFishingCommandType::BeginCast;
 	Result.Command.RequestId = Command.RequestId;
+	if (!Controller || !Controller->HasAuthority()) return;
+	if (!Controller->CanForwardFishingCommand())
+	{
+		Result.Command.Error = ECatFishingCommandError::CommandsClosed;
+		DeliverBeginCastResultFromAuthority(Result);
+		return;
+	}
 	if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
 	{
 		Result = Fishing->BeginCast(Controller, Command);
@@ -822,36 +872,58 @@ void UCatFishingCommandComponent::ServerSubmitBeginCast_Implementation(const FCa
 	DeliverBeginCastResultFromAuthority(Result);
 }
 
-// 以下几个 ServerSubmitXxxRod_Implementation 模式相同：校验权威后直接转发给 Fishing Service 对应接口，
-// 把服务结果原样投递回执，Service 内部负责真正的射程/占用/装备等业务校验。
+// 旧式放竿入口流程：先校验拥有者和服务器权威；Fishing gate 关闭时用命令本体 RequestId 回送 CommandsClosed，gate 通过后才交 Fishing Service 裁决鱼竿占用、版本和装备状态。
 void UCatFishingCommandComponent::ServerSubmitPlaceRod_Implementation(const FCatPlaceRodCommand& Command)
 {
-	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
 	if (!Controller || !Controller->HasAuthority()) return;
+	if (!Controller->CanForwardFishingCommand())
+	{
+		DeliverResultFromAuthority(MakeRodCommandsClosedResult(ECatFishingCommandType::PlaceRod, Command.RequestId));
+		return;
+	}
 	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
 	if (Fishing) DeliverResultFromAuthority(Fishing->PlaceRod(Controller, Command));
 }
 
+// 旧式操作竿入口流程：沿用 Command.Context.RequestId 作为回执键；阶段 gate 关闭时只返回 CommandsClosed，不让旧 Ability 静默等待或绕过服务层状态裁决。
 void UCatFishingCommandComponent::ServerSubmitOperateRod_Implementation(const FCatOperateRodCommand& Command)
 {
-	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
 	if (!Controller || !Controller->HasAuthority()) return;
+	if (!Controller->CanForwardFishingCommand())
+	{
+		DeliverResultFromAuthority(MakeRodCommandsClosedResult(ECatFishingCommandType::OperateRod, Command.Context.RequestId));
+		return;
+	}
 	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
 	if (Fishing) DeliverResultFromAuthority(Fishing->OperateRod(Controller, Command));
 }
 
+// 旧式离竿入口流程：先走同一 Fishing gate；关闭时按 Context.RequestId 写入失败终态，开放时才由 Fishing Service 检查会话归属和可离开边界。
 void UCatFishingCommandComponent::ServerSubmitLeaveRod_Implementation(const FCatLeaveRodCommand& Command)
 {
-	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
 	if (!Controller || !Controller->HasAuthority()) return;
+	if (!Controller->CanForwardFishingCommand())
+	{
+		DeliverResultFromAuthority(MakeRodCommandsClosedResult(ECatFishingCommandType::LeaveRod, Command.Context.RequestId));
+		return;
+	}
 	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
 	if (Fishing) DeliverResultFromAuthority(Fishing->LeaveRod(Controller, Command));
 }
 
+// 旧式收竿入口流程：关闭 gate 返回 PackRod/Context.RequestId 对应的 CommandsClosed；开放路径仍交服务层处理装备和竿状态，不在组件里复制业务判断。
 void UCatFishingCommandComponent::ServerSubmitPackRod_Implementation(const FCatPackRodCommand& Command)
 {
-	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
 	if (!Controller || !Controller->HasAuthority()) return;
+	if (!Controller->CanForwardFishingCommand())
+	{
+		DeliverResultFromAuthority(MakeRodCommandsClosedResult(ECatFishingCommandType::PackRod, Command.Context.RequestId));
+		return;
+	}
 	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
 	if (Fishing) DeliverResultFromAuthority(Fishing->PackRod(Controller, Command));
 }

@@ -490,6 +490,14 @@ bool ACatfishingGameModeBase::CanAcceptGameplayCommand(const AController* Contro
 	return HasAuthority() && bRunCommandsOpen && IsControllerActive(Controller);
 }
 
+// Fishing/玩家打窝 gate 流程：先复用宽玩法命令 gate，再要求 Run 仍在白天且公开快照允许钓鱼；夜晚 ready、结算收口与 Social 命令继续走宽 gate，不被钓鱼白天规则误封。
+bool ACatfishingGameModeBase::CanAcceptFishingCommand(const AController* Controller) const
+{
+	return CanAcceptGameplayCommand(Controller)
+		&& RunPublicState.Phase.Phase == ECatRunPhase::DayActive
+		&& RunPublicState.Phase.bFishingAllowed;
+}
+
 // PostLogin 拒绝流程：优先让 GameSession 执行标准 Kick；GameSession 不可用时通知客户端回主菜单。该分支不调用父类生成 Character，也不删除无法安全匹配到本 Controller 的 Reserved 记录，避免替未裁 TTL/过期准入策略作决定。
 void ACatfishingGameModeBase::RejectPostLoginController(APlayerController* NewPlayer, const FString& Reason)
 {
@@ -1488,12 +1496,14 @@ void ACatfishingPlayerState::BeginPlay()
 		*GetClass()->GetName(), *StableNetId, HasAuthority() ? TEXT("true") : TEXT("false"));
 }
 
-// PlayerState 复制注册流程：保留父类 UniqueId 等身份字段，再注册个人 ready 与主动公开鱼图鉴摘要；前者不包含全员转移判断，后者不包含 Profile 私有记录。
+// PlayerState 复制注册流程：保留父类 UniqueId 等身份字段，再注册个人 ready、公开鱼图鉴摘要和装备解锁投影；
+// ready 不包含全员转移判断，鱼图鉴和解锁都只是本局公开/授权摘要，不复制 Profile 私有记录。
 void ACatfishingPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ThisClass, bReadyForNextDay);
 	DOREPLIFETIME(ThisClass, PublicFishCollection);
+	DOREPLIFETIME(ThisClass, AuthorizedEquipmentUnlockIds);
 }
 
 // 个人 ready 写入流程：仅 authority 可修改；值变化后强制网络更新，使本人的最终确认及时到达客户端。
@@ -1542,10 +1552,48 @@ const TArray<FCatFishCollectionRecord>& ACatfishingPlayerState::GetPublicFishCol
 	return PublicFishCollection;
 }
 
-// 装备解锁证明读取流程：None 表示定义明确声明 starter；非空 UnlockId 在服务端 durable Profile/授权证明尚未接线前一律返回 false，客户端本地 SaveGame 不能提升权限。
+// 装备解锁摘要写入流程：只允许 authority 接收本人 owning client 的 durable Profile 摘要；数量、空值和重复不合法时保留旧授权，避免坏包清掉或扩大神授予范围。
+bool ACatfishingPlayerState::SetAuthorizedEquipmentUnlocksFromAuthority(const TArray<FName>& UnlockIds)
+{
+	if (!HasAuthority() || UnlockIds.Num() > 256)
+	{
+		return false;
+	}
+	TSet<FName> UniqueUnlockIds;
+	TArray<FName> NewUnlockIds;
+	for (const FName UnlockId : UnlockIds)
+	{
+		if (UnlockId.IsNone() || UniqueUnlockIds.Contains(UnlockId))
+		{
+			return false;
+		}
+		UniqueUnlockIds.Add(UnlockId);
+		NewUnlockIds.Add(UnlockId);
+	}
+	AuthorizedEquipmentUnlockIds = MoveTemp(NewUnlockIds);
+	ForceNetUpdate();
+	return true;
+}
+
+// Unlock Grant 授权流程：只接收已经由服务器投递记录确认 ACK 的不可变 Grant；非 Unlock、空 ID 或非 authority 都不会改变本局装备授权。
+bool ACatfishingPlayerState::AuthorizeEquipmentUnlockFromProfileGrant(const FCatProfileGrant& Grant)
+{
+	if (!HasAuthority() || Grant.Kind != ECatProfileGrantKind::Unlock || Grant.UnlockId.IsNone())
+	{
+		return false;
+	}
+	if (!AuthorizedEquipmentUnlockIds.Contains(Grant.UnlockId))
+	{
+		AuthorizedEquipmentUnlockIds.Add(Grant.UnlockId);
+		ForceNetUpdate();
+	}
+	return true;
+}
+
+// 装备解锁证明读取流程：None 表示定义明确声明 starter；非空 UnlockId 必须命中服务器当前 PlayerState 授权快照，本地 SaveGame 不能被 Equipment 组件直接读取。
 bool ACatfishingPlayerState::HasServerAuthorizedEquipmentUnlock(const FName UnlockId) const
 {
-	return UnlockId.IsNone();
+	return UnlockId.IsNone() || AuthorizedEquipmentUnlockIds.Contains(UnlockId);
 }
 
 // 个人 ready 复制回调流程：只记录最终布尔值；客户端不向 GameMode 回发确认，也不计算全员完成。
@@ -1582,11 +1630,13 @@ void ACatfishingPlayerController::OnRep_Pawn()
 	ApplySprintSpeed(GetPawn(), false);
 }
 
-// 本地输入启动流程：父类完成 Actor 生命周期后，幂等安装本 Controller 配置的唯一玩法输入层。
+// 本地启动流程：父类完成 Actor 生命周期后，幂等安装本 Controller 的玩法输入层；
+// 如果本机 durable Profile 已可读，再把装备解锁摘要投影给服务器 PlayerState，缺失时保持服务器 fail-closed。
 void ACatfishingPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 	ApplyInputMappingContext();
+	PublishProfileEquipmentUnlocksIfAvailable();
 }
 
 // 输入绑定流程：只接受项目配置的 EnhancedInputComponent；未接入的 Action 独立跳过，不阻塞其余输入。
@@ -1714,6 +1764,22 @@ void ACatfishingPlayerController::ApplyInputMappingContext()
 	AppliedMappingContext = DefaultMappingContext;
 }
 
+// Profile 解锁发布流程：只在 owning client 有 LocalPlayer Profile 时复制 UnlockIds 并走服务器 RPC；Profile 不可用时保持服务器 fail-closed 授权。
+void ACatfishingPlayerController::PublishProfileEquipmentUnlocksIfAvailable()
+{
+	if (!IsLocalController())
+	{
+		return;
+	}
+	ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	UCatProfileSubsystem* Profile = LocalPlayer ? LocalPlayer->GetSubsystem<UCatProfileSubsystem>() : nullptr;
+	TArray<FName> UnlockIds;
+	if (Profile && Profile->GetEquipmentUnlockSnapshot(UnlockIds))
+	{
+		ServerPublishEquipmentUnlocks(UnlockIds);
+	}
+}
+
 // Mapping Context 移除流程：使用安装时保存的同一子系统和资产成对清理，World teardown 下弱引用失效也安全。
 void ACatfishingPlayerController::RemoveInputMappingContext()
 {
@@ -1822,6 +1888,14 @@ bool ACatfishingPlayerController::CanForwardGameplayCommand() const
 	return GameMode && GameMode->CanAcceptGameplayCommand(this);
 }
 
+// Controller 钓鱼 gate 流程：现取 authority GameMode 并使用 Fishing 专用白天规则；它只服务抛竿、鱼竿操作、协作、抢抄和玩家打窝，不影响 Social、翻天 ready 或结算 RPC。
+bool ACatfishingPlayerController::CanForwardFishingCommand() const
+{
+	const ACatfishingGameModeBase* GameMode = GetWorld()
+		? GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
+	return GameMode && GameMode->CanAcceptFishingCommand(this);
+}
+
 // 额度 RPC 流程：先过统一玩法 gate，再组装客户端意图；随后由 GameMode 重建身份并完成 Revision/幂等裁决，结果只写结构化日志。
 void ACatfishingPlayerController::ServerSubmitQuotaContribution_Implementation(const FGuid RequestId,
 	const int64 ExpectedRevision, const int32 Contribution)
@@ -1894,6 +1968,10 @@ void ACatfishingPlayerController::ClientReceiveProfileGrant_Implementation(const
 	if (Result.bAckAllowed)
 	{
 		ServerAcknowledgeProfileGrant(Grant.GrantId);
+		if (Grant.Kind == ECatProfileGrantKind::Unlock)
+		{
+			PublishProfileEquipmentUnlocksIfAvailable();
+		}
 		if (Grant.Kind == ECatProfileGrantKind::FishRecorded || Grant.Kind == ECatProfileGrantKind::FishSilhouette)
 		{
 			TArray<FCatFishCollectionRecord> Records;
@@ -1913,11 +1991,29 @@ void ACatfishingPlayerController::ServerAcknowledgeProfileGrant_Implementation(c
 		const FCatDomainCommandResult AckResult = Service->AcknowledgeGrant(this, GrantId);
 		if (AckResult.bCommitted || AckResult.Error == ECatDomainCommandError::AlreadyResolved)
 		{
+			FCatProfileGrant AcknowledgedGrant;
+			if (Service->TryGetAcknowledgedGrant(GrantId, AcknowledgedGrant)
+				&& AcknowledgedGrant.Kind == ECatProfileGrantKind::Unlock)
+			{
+				if (ACatfishingPlayerState* CatPlayerState = GetPlayerState<ACatfishingPlayerState>())
+				{
+					CatPlayerState->AuthorizeEquipmentUnlockFromProfileGrant(AcknowledgedGrant);
+				}
+			}
 			if (ACatfishingGameModeBase* GameMode = GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>())
 			{
 				GameMode->NotifyHostExitGrantAckProgress();
 			}
 		}
+	}
+}
+
+// 装备解锁摘要 RPC 流程：服务器只把 owning client 提交的 durable Profile 摘要写到当前 PlayerState；非法摘要保留旧授权，不回写 Profile 或生成 Grant。
+void ACatfishingPlayerController::ServerPublishEquipmentUnlocks_Implementation(const TArray<FName>& UnlockIds)
+{
+	if (ACatfishingPlayerState* CatPlayerState = GetPlayerState<ACatfishingPlayerState>())
+	{
+		CatPlayerState->SetAuthorizedEquipmentUnlocksFromAuthority(UnlockIds);
 	}
 }
 
@@ -1948,11 +2044,11 @@ void ACatfishingPlayerController::ServerReportImprintCaptureResult_Implementatio
 	}
 }
 
-// 搏斗协作 RPC 流程：先过统一玩法 gate，再转交会话键、幂等键与 ExpectedRevision；Session 继续验证 Giant 与 HookedFight。
+// 搏斗协作 RPC 流程：先过钓鱼白天 gate，再转交会话键、幂等键与 ExpectedRevision；Session 继续验证 Giant 与 HookedFight。
 void ACatfishingPlayerController::ServerAssistFishingSession_Implementation(const FGuid FishingSessionId,
 	const FGuid RequestId, const int64 ExpectedRevision)
 {
-	if (!CanForwardGameplayCommand())
+	if (!CanForwardFishingCommand())
 	{
 		return;
 	}
@@ -1962,11 +2058,11 @@ void ACatfishingPlayerController::ServerAssistFishingSession_Implementation(cons
 	}
 }
 
-// 抢抄 RPC 流程：先过统一玩法 gate，再清客户端身份并用当前 Pawn 的鱼护覆盖目标；FishingSession/Items 决定首个合法 Compare-and-Commit。
+// 抢抄 RPC 流程：先过钓鱼白天 gate，再清客户端身份并用当前 Pawn 的鱼护覆盖目标；FishingSession/Items 决定首个合法 Compare-and-Commit。
 void ACatfishingPlayerController::ServerRequestScoop_Implementation(const FGuid FishingSessionId,
 	FCatScoopCommand Command)
 {
-	if (!CanForwardGameplayCommand())
+	if (!CanForwardFishingCommand())
 	{
 		return;
 	}
@@ -1976,73 +2072,134 @@ void ACatfishingPlayerController::ServerRequestScoop_Implementation(const FGuid 
 	}
 }
 
-// 献祭 RPC 流程：先过统一玩法 gate，清客户端身份后只调用唯一 Coordinator；Items 预留/提交与 Run apply 顺序不在 Controller 复制实现。
+// 献祭 RPC 流程：先保存外部 RequestId；玩法 gate 关闭时回送 CommandsClosed，依赖缺失时回送 DependencyUnavailable。合法路径清除客户端身份并只调用唯一 Coordinator，随后把领域结果原样可靠发给 owning client；Controller 不重算 Revision、不找容器也不改鱼或额度。
 void ACatfishingPlayerController::ServerRequestSacrifice_Implementation(FCatSacrificeCommand Command)
 {
+	FCatSacrificeResult Result;
+	Result.RequestId = Command.Context.RequestId;
 	if (!CanForwardGameplayCommand())
 	{
-		return;
+		Result.Error = ECatDomainCommandError::CommandsClosed;
 	}
-	Command.Context.StableNetId.Reset();
-	if (UCatSacrificeCoordinator* Coordinator = GetWorld() ? GetWorld()->GetSubsystem<UCatSacrificeCoordinator>() : nullptr)
+	else if (UCatSacrificeCoordinator* Coordinator = GetWorld()
+		? GetWorld()->GetSubsystem<UCatSacrificeCoordinator>() : nullptr)
 	{
-		Coordinator->RequestSacrifice(this, Command);
+		Command.Context.StableNetId.Reset();
+		Result = Coordinator->RequestSacrifice(this, Command);
 	}
+	else
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	}
+	ClientReceiveSacrificeResult(Result);
 }
 
-// 营地休息 RPC 流程：先过统一玩法 gate，再调用当前 World 的 Camp Actor；Camp 现取 Pawn/距离后把身体写入交给 ConditionComponent。
+// 献祭结果客户端流程：可靠接收服务器协调器的完整阶段结果并整体替换本机读模型；缓存只服务 UI 关联请求，不参与任何服务器恢复或写入。
+void ACatfishingPlayerController::ClientReceiveSacrificeResult_Implementation(const FCatSacrificeResult& Result)
+{
+	LastSacrificeResult = Result;
+}
+
+// 献祭结果读取流程：返回 owning client 最近收到的完整副本；调用方只能展示 RequestId、阶段与 Revision，不能据此直接操作 Items 或 Run。
+FCatSacrificeResult ACatfishingPlayerController::GetLastSacrificeResult() const
+{
+	return LastSacrificeResult;
+}
+
+// 营地休息 RPC 流程：先保留 RequestId；玩法 gate、无效 Camp 或领域调用分别产生 CommandsClosed、DependencyUnavailable 或 Camp 原始结果，最后统一可靠回送 owning client。
 void ACatfishingPlayerController::ServerRequestCampRest_Implementation(ACatCampHubActor* Camp, const FGuid RequestId)
 {
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
 	if (!CanForwardGameplayCommand())
 	{
-		return;
+		Result.Error = ECatDomainCommandError::CommandsClosed;
 	}
-	if (Camp && Camp->GetWorld() == GetWorld())
+	else if (!Camp || Camp->GetWorld() != GetWorld())
 	{
-		Camp->RequestRest(this, RequestId);
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
+	else
+	{
+		Result = Camp->RequestRest(this, RequestId);
+	}
+	ClientReceiveCampCommandResult(Result);
 }
 
-// 篝火回看 RPC 流程：先过统一玩法 gate，再把 Controller 与 RequestId 交给固定 Camp；Camp 重验范围、结算阶段和全员在场。
+// 篝火回看 RPC 流程：先保留 RequestId；玩法 gate、无效 Camp 或领域调用分别产生 CommandsClosed、DependencyUnavailable 或 Camp 原始结果。Controller 只回送结果，表现 multicast 仍由 Camp 在全员 CapturePlan 成功后触发。
 void ACatfishingPlayerController::ServerRequestCampfirePlayback_Implementation(ACatCampHubActor* Camp,
 	const FGuid RequestId)
 {
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
 	if (!CanForwardGameplayCommand())
 	{
-		return;
+		Result.Error = ECatDomainCommandError::CommandsClosed;
 	}
-	if (Camp && Camp->GetWorld() == GetWorld())
+	else if (!Camp || Camp->GetWorld() != GetWorld())
 	{
-		Camp->RequestCampfirePlayback(this, RequestId);
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
+	else
+	{
+		Result = Camp->RequestCampfirePlayback(this, RequestId);
+	}
+	ClientReceiveCampCommandResult(Result);
 }
 
-// 鱼护入缸 RPC 流程：先过统一玩法 gate，再转交两个 Revision 和鱼 ID；Camp/Items 重建身份、容器和容量事实。
+// 鱼护入缸 RPC 流程：先保留 RequestId；玩法 gate 与 Camp World 引用失败时直接返回结构化拒绝，合法路径把鱼 ID 和两个 Revision 原样交给 Camp/Items，并把领域结果可靠回送 owning client。
 void ACatfishingPlayerController::ServerTransferFishToTank_Implementation(ACatCampHubActor* Camp,
 	const FGuid RequestId, const FGuid FishInstanceId, const int64 ExpectedGuardRevision, const int64 ExpectedTankRevision)
 {
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
 	if (!CanForwardGameplayCommand())
 	{
-		return;
+		Result.Error = ECatDomainCommandError::CommandsClosed;
 	}
-	if (Camp && Camp->GetWorld() == GetWorld())
+	else if (!Camp || Camp->GetWorld() != GetWorld())
 	{
-		Camp->TransferFishToTank(this, RequestId, FishInstanceId, ExpectedGuardRevision, ExpectedTankRevision);
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
+	else
+	{
+		Result = Camp->TransferFishToTank(this, RequestId, FishInstanceId, ExpectedGuardRevision, ExpectedTankRevision);
+	}
+	ClientReceiveCampCommandResult(Result);
 }
 
-// 搬运救援 RPC 流程：先过统一玩法 gate，再验证两个 Actor 属于当前 World 后交固定 Camp；Teleport 与倒地事实由 Camp/Condition 裁决。
+// 搬运救援 RPC 流程：先保留 RequestId；玩法 gate 与 Camp/目标 World 引用失败时返回结构化拒绝，合法路径只转交 Camp/Condition 裁决 Teleport 和倒地事实，最终结果可靠回送 owning client。
 void ACatfishingPlayerController::ServerRescueCharacterToCamp_Implementation(ACatCampHubActor* Camp,
 	ACatCharacter* TargetCharacter, const FGuid RequestId)
 {
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
 	if (!CanForwardGameplayCommand())
 	{
-		return;
+		Result.Error = ECatDomainCommandError::CommandsClosed;
 	}
-	if (Camp && TargetCharacter && Camp->GetWorld() == GetWorld() && TargetCharacter->GetWorld() == GetWorld())
+	else if (!Camp || !TargetCharacter || Camp->GetWorld() != GetWorld() || TargetCharacter->GetWorld() != GetWorld())
 	{
-		Camp->RescueToCamp(this, TargetCharacter, RequestId);
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
+	else
+	{
+		Result = Camp->RescueToCamp(this, TargetCharacter, RequestId);
+	}
+	ClientReceiveCampCommandResult(Result);
+}
+
+// 营地结果客户端流程：可靠接收四类 Camp RPC 的公共领域结果并整体替换本机读模型；不解释错误、不重算 Revision，也不触发新的营地命令。
+void ACatfishingPlayerController::ClientReceiveCampCommandResult_Implementation(
+	const FCatDomainCommandResult& Result)
+{
+	LastCampCommandResult = Result;
+}
+
+// 营地结果读取流程：返回 owning client 最近收到的完整公共结果副本，供 UI 按 RequestId 关联反馈；服务器权限和领域真相不读取该缓存。
+FCatDomainCommandResult ACatfishingPlayerController::GetLastCampCommandResult() const
+{
+	return LastCampCommandResult;
 }
 
 // 装配 RPC 流程：先过统一玩法 gate，当前 Pawn 还必须是项目 Character；EquipmentComponent 用服务器目录验证四个定义并原子写入。
@@ -2174,6 +2331,13 @@ void ACatfishingPlayerController::ServerSellFish_Implementation(const FGuid Fish
 		*UEnum::GetValueAsString(Result.Delivery.Error));
 }
 
+// 团队装备取用 RPC 流程：
+// 1. 先用统一 gameplay gate 和 RequestId 拒绝非权威玩法阶段或无效请求，避免给缓存写入不可重放的半结果。
+// 2. 再按 RequestId 与 payload 处理幂等重放；payload 漂移直接拒绝，合法重放不再碰团队库或个人装备。
+// 3. 首次请求从当前 Pawn、World Subsystem 和 PlayerState 重建服务器事实，缺任一依赖只记录依赖错误。
+// 4. 依赖齐全后先让团队库只读预检实例是否存在，再让个人 Equipment 只读预检当前 Revision 和槽位是否能收下该实例。
+// 5. 两个预检都通过才删除团队库实例；删除成功或同 RequestId 已删除时，最后调用个人 Equipment 的正式装配入口。
+// 6. 无论成功、拒绝还是中途失败，最终都把结果写入 Controller 终态缓存，使后续重试不会取第二件或重复改装备。
 void ACatfishingPlayerController::ServerTakeTeamEquipment_Implementation(const FGuid InstanceId,
 	const FGuid RequestId, const int64 ExpectedLibraryRevision,
 	const int64 ExpectedEquipmentRevision)
@@ -2228,17 +2392,32 @@ void ACatfishingPlayerController::ServerTakeTeamEquipment_Implementation(const F
 		}
 		else
 		{
-			Result = Equipment->EquipFromTeamLibraryFromAuthority(RequestId,
-				ExpectedEquipmentRevision, Instance);
-			if (Result.bCommitted)
+			// 取用链必须先确认个人 Equipment 当前收得下目标实例，再删除团队库实例。
+			// 旧顺序先装备再删库，删除失败时会留下“个人已装备、公库仍有同一实例”的分叉。
+			const ECatDomainCommandError EquipAdmission = Equipment->ValidateTeamLibraryEquipFromAuthority(
+				RequestId, ExpectedEquipmentRevision, Instance);
+			if (EquipAdmission != ECatDomainCommandError::None)
+			{
+				Result.Error = EquipAdmission;
+				Result.Revision = Equipment->GetSnapshot().Revision;
+			}
+			else
 			{
 				const FCatTeamEquipmentGrantResult Taken = Library->TakeInstance(Take);
-				if (!Taken.Command.bCommitted)
+				const bool bLibraryTakeStanding = Taken.Instance.InstanceId.IsValid()
+					&& (Taken.Command.bCommitted || Taken.Command.Error == ECatDomainCommandError::AlreadyResolved);
+				if (!bLibraryTakeStanding)
 				{
+					Result = Taken.Command;
 					UE_LOG(LogCatfishing, Error,
-						TEXT("Event=team_equipment_take_failed_after_equip RequestId=%s Error=%s"),
+						TEXT("Event=team_equipment_take_failed_after_precheck RequestId=%s Error=%s"),
 						*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 						*UEnum::GetValueAsString(Taken.Command.Error));
+				}
+				else
+				{
+					Result = Equipment->EquipFromTeamLibraryFromAuthority(RequestId,
+						ExpectedEquipmentRevision, Taken.Instance);
 				}
 			}
 		}

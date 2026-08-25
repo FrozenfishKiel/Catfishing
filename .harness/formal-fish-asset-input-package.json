@@ -1,0 +1,115 @@
+{
+  "schema_version": "1.0",
+  "package_id": "FormalFishAssetInputPackage",
+  "delivery_module": "DeliveryHarnessAssets",
+  "delivery_mode": "single_atomic_module",
+  "status": "blocked",
+  "checked_on": "2026-08-24",
+  "sources": {
+    "fish_table": {
+      "kind": "lark_sheet",
+      "title": "鱼表格",
+      "wiki_node_token": "DKhnweGaEiPTJZkO8OScQOJenqg",
+      "spreadsheet_token": "CQlMsQon6hlo8ctpZRWcAPzOnRi",
+      "sheet_name": "第一版",
+      "revision": 579,
+      "updated_at_utc": "2026-08-21T08:44:03Z",
+      "available_fact": "16 base fish rows with names, eating notes, sacrifice notes, regions, weight ranges, strength coefficient, stamina, album text, chum attribute, buff, duration, and experience columns.",
+      "blocking_fact": "Preference bait and rarity columns are empty, and the sheet does not directly provide UE BodyClass, BitePersonalityId, FightPersonalityId, or fish body class mapping."
+    },
+    "fish_book": {
+      "kind": "lark_docx",
+      "title": "鱼",
+      "wiki_node_token": "SlFcwt3BdidWCRkz2S4cIplJnnV",
+      "doc_token": "EAnSdzGeFocCTlxmOHGcJTbonAe",
+      "revision": 477,
+      "available_fact": "The fish book declares the fish table as the fish-data SSOT and defines the intended fields: distribution, chum axis, weight axis, bait preference, buff, and experience.",
+      "blocking_fact": "The book defines structure and ownership, not complete per-fish UE asset values."
+    },
+    "fish_owner_decision_sync": {
+      "kind": "lark_docx",
+      "title": "裁决同步 · 鱼／营地／UI 与交互（张佳）",
+      "wiki_node_token": "VuC1wdXIsiXJp1kPDiVcmFOlnNh",
+      "doc_token": "PKxHdEJwQoDnKUxRhnccia6Gnwb",
+      "revision": 5,
+      "available_fact": "The owner-sync page assigns the fish book and fish table to Zhang Jia and names the fish-table completion work as the urgent delivery dependency.",
+      "blocking_fact": "It explicitly lists six pending columns: preference bait, rarity, diet, outward segment length, rest segment length, and movement speed coefficient. Its older note about three missing toxic-fish base rows appears superseded by the current fish table revision, but the six-column blocker remains."
+    },
+    "fish_behavior_doc": {
+      "kind": "lark_docx",
+      "title": "鱼的行为",
+      "wiki_node_token": "XrwVwVQOuir3qFktxHNcdH7engd",
+      "doc_token": "JcPYd2xn3oSSj7xWgkccmEFdnzg",
+      "revision": 173,
+      "available_fact": "The behavior plan defines diet, outward segment length, rest segment length, speed coefficient, water-depth pressure, dying struggle, line-length rhythm, and giant-fish exception semantics.",
+      "blocking_fact": "The document status is complete initial draft pending owner review; it is an input to the fish table, not a completed per-fish mapping or UE bite/fight asset set."
+    },
+    "bait_table": {
+      "kind": "lark_sheet",
+      "title": "窝料/饵",
+      "wiki_node_token": "TwI7w9wooi52q2k1Bi8cZ6cCnag",
+      "spreadsheet_token": "WeirsgUSWhjpCEtosj0cVeBMnOg",
+      "revision": 111,
+      "updated_at_utc": "2026-08-21T08:22:02Z",
+      "available_fact": "Chum and bait candidate tables exist.",
+      "blocking_fact": "Bait sheet says target fish are illustrative and authoritative preference data must come from the fish table preference column."
+    },
+    "eating_effect_doc": {
+      "kind": "lark_docx",
+      "title": "吃鱼效果",
+      "wiki_node_token": "O753wiu7yiuBtMkburWcicZnnre",
+      "doc_token": "KH9bdBX6QoOMxRxo23KcyMQFnxb",
+      "revision": 43,
+      "updated_at_utc": "2026-08-21T07:52:17Z",
+      "available_fact": "Effect families, yellow stamina, poison, no-effect fish, giant sacrifice blessing, and reconciliation notes are documented.",
+      "blocking_fact": "The document says per-fish effect assignment is read from the fish table; several reconciliation notes remain relevant for formal data."
+    },
+    "art_resource_sheet": {
+      "kind": "lark_sheet",
+      "title": "临时美术资源表格",
+      "spreadsheet_token": "SoPdsIRHahMre1tXmQlcGzsVnlf",
+      "fish_sheet_id": "vpOyGr",
+      "revision": 54,
+      "available_fact": "Fish art resource categories exist, including fish, fish animation, quality/size variants, and fish shadow categories.",
+      "blocking_fact": "The fish art sheet is category-level only and does not provide per-fish UE class or model mapping."
+    }
+  },
+  "ue_required_fields": [
+    "FishDefinitionId",
+    "BodyClass",
+    "SacrificeContribution",
+    "RarityTierId",
+    "RegionIds",
+    "TimeOfDay",
+    "Weather",
+    "SpawnWeight",
+    "MinimumWeightKilograms",
+    "MaximumWeightKilograms",
+    "ScoopTargetRadiusCentimeters",
+    "MinimumFightParticipants",
+    "FishStrength",
+    "FishFightStamina",
+    "BitePersonalityId",
+    "FightPersonalityId",
+    "ChumPreference",
+    "BaitWeightMultipliers",
+    "FoodSafety",
+    "EatingExperience",
+    "PoisonIncrease",
+    "bTankDisplayEligible",
+    "bEnableRuntimeDefinition"
+  ],
+  "blocking_gaps": [
+    "TestAssetsStillConfigured",
+    "FishPreferenceBaitColumnEmpty",
+    "FishRarityColumnEmpty",
+    "FishBodyClassMappingMissing",
+    "BitePersonalityAssetsAndMappingsMissing",
+    "FightPersonalityAssetsAndMappingsMissing",
+    "FishBehaviorColumnsPendingInFishTable",
+    "FishBehaviorPlanPendingOwnerReview",
+    "PerFishArtClassMappingMissing",
+    "FishTableEffectReconciliationNotClosed"
+  ],
+  "asset_readiness_rule": "Do not generate or switch runtime config to formal fish, bite, or fight assets until this package is updated as ready with authoritative per-fish mappings and Config/DefaultGame.ini no longer references DA_Fish_Test01, DA_Bite_Test01, or DA_Fight_Test01."
+}

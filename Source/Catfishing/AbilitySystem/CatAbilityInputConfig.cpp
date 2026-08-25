@@ -5,8 +5,9 @@
 
 bool UCatAbilityInputConfig::IsRuntimeReady() const
 {
-	// 五个核心钓鱼输入必须齐全；允许追加可选输入（例如右键放线）。
-	if (AbilityInputActions.Num() < 5)
+	// 正式输入门禁先要求六项玩家意图都有独立 Action，再逐项拒绝空引用、重复 Tag 或重复 Action；
+	// 最后核对稳定 Fishing Tag 集合，确保“配置可加载”不会掩盖收放线入口缺失。
+	if (AbilityInputActions.Num() < 6)
 	{
 		return false;
 	}
@@ -24,6 +25,7 @@ bool UCatAbilityInputConfig::IsRuntimeReady() const
 	}
 	return SeenTags.Contains(CatFishingAbilityTags::Input_Fishing_RodInteract)
 		&& SeenTags.Contains(CatFishingAbilityTags::Input_Fishing_Primary)
+		&& SeenTags.Contains(CatFishingAbilityTags::Input_Fishing_Slack)
 		&& SeenTags.Contains(CatFishingAbilityTags::Input_Fishing_Cancel)
 		&& SeenTags.Contains(CatFishingAbilityTags::Input_Fishing_Scoop)
 		&& SeenTags.Contains(CatFishingAbilityTags::Input_Fishing_Chum);

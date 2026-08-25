@@ -20,7 +20,7 @@ enum class ECatRecoveryMode : uint8
 	CarriedToCamp
 };
 
-/** Character 局内身体离散状态的复制读模型；Hunger/Fatigue/Poison 数值仍只在 ASC AttributeSet。 */
+/** Character 局内身体离散状态的复制读模型；Poison/Fishing 数值只在 ASC AttributeSet，吃鱼成长只在 Growth。 */
 USTRUCT(BlueprintType)
 struct FCatConditionSnapshot
 {
@@ -34,7 +34,7 @@ struct FCatConditionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bWet = false;
 
-	/** 猫是否因正式 Poison/Fatigue 阈值进入可恢复倒地；项目不存在死亡终态。 */
+	/** 猫是否因正式 Poison 阈值进入可恢复倒地；项目不存在死亡终态。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bDowned = false;
 

@@ -36,10 +36,10 @@ public:
 	/** 在草药库存被不可逆扣除前只读校验 ASC、倒地阈值与正式恢复数值；返回 None 才允许上层提交 Equipment 事务。 */
 	ECatDomainCommandError ValidateHerbRecovery() const;
 
-	/** 实物鱼消费提交后读取 FishDefinition 食用字段，减少 Hunger、增加可选 Poison，并重新裁决倒地。 */
+	/** 实物鱼消费提交后读取 FishDefinition 食用字段，增加可选 Poison、推进成长经验，并重新裁决倒地。 */
 	FCatDomainCommandResult ConsumeCommittedFish(FGuid RequestId, const UCatFishDefinition* FishDefinition);
 
-	/** 单人可用的野外休息入口；按显式较慢数值恢复 Fatigue，不要求其他玩家。 */
+	/** 单人可用的野外休息入口；按显式较慢数值恢复 Poison，不要求其他玩家。 */
 	FCatDomainCommandResult RequestFieldSelfRecovery(AController* RequestingController, FGuid RequestId);
 
 	/** 固定营地休息入口；只允许 Camp actor 传入已到达事实并按营地恢复值处理。 */
@@ -59,10 +59,10 @@ private:
 	UFUNCTION()
 	void OnRep_Snapshot();
 
-	/** 校验 Recovery 配置并对 Fatigue/Poison 应用非负减量；随后按阈值更新 Downed/RecoveryMode。 */
-	FCatDomainCommandResult ApplyRecovery(FGuid RequestId, ECatRecoveryMode Mode, double FatigueRelief, double PoisonRelief);
+	/** 校验 Recovery 配置并对 Poison 应用非负减量；随后按阈值更新 Downed/RecoveryMode。 */
+	FCatDomainCommandResult ApplyRecovery(FGuid RequestId, ECatRecoveryMode Mode, double PoisonRelief);
 
-	/** 读取 ASC 当前 Fatigue/Poison 与显式阈值更新 Downed；首次倒地会终止该 Character 的 FishingSession。 */
+	/** 读取 ASC 当前 Poison 与显式阈值更新 Downed；首次倒地会终止该 Character 的 FishingSession。 */
 	void EvaluateDownedFromAttributes(ECatRecoveryMode RecoveryMode);
 
 	/** 定位 Owner Character 的唯一 ASC 供属性监听与权威写入；Owner 类型不匹配时返回空，避免创建平行身体属性源。 */

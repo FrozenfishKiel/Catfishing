@@ -38,7 +38,7 @@ namespace CatContainerReplicationTest
 	}
 }
 
-// 测试流程：在真实 authority Actor 上挂真实复制组件，先发布两条鱼，再发布只剩第二条鱼的新快照；GetSnapshot 必须反映替换后的公开事实。
+// 测试流程：在真实 authority Actor 上挂真实复制组件并订阅只读通知；连续发布两份完整快照后，读取结果与通知次数都必须逐次对应已完成的 authority 发布。
 bool FCatContainerReplicationAuthoritySnapshotTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -55,6 +55,13 @@ bool FCatContainerReplicationAuthoritySnapshotTest::RunTest(const FString& Param
 		{
 			Host->AddInstanceComponent(Component);
 			Component->RegisterComponent();
+			int32 SnapshotChangedCount = 0;
+			int64 LastObservedRevision = 0;
+			Component->OnSnapshotChanged.AddLambda([Component, &SnapshotChangedCount, &LastObservedRevision]()
+			{
+				++SnapshotChangedCount;
+				LastObservedRevision = Component->GetSnapshot().Revision;
+			});
 
 			const FGuid ContainerId = FGuid::NewGuid();
 			const FCatFishInstance FirstFish = CatContainerReplicationTest::MakeFish(TEXT("FirstFish"), 1.0);
@@ -65,11 +72,15 @@ bool FCatContainerReplicationAuthoritySnapshotTest::RunTest(const FString& Param
 			TestEqual(TEXT("首次发布保留容器 ID"), InitialSnapshot.ContainerId, ContainerId);
 			TestEqual(TEXT("首次发布保留 Revision"), InitialSnapshot.Revision, int64{2});
 			TestEqual(TEXT("首次发布两条鱼"), InitialSnapshot.Fish.Num(), 2);
+			TestEqual(TEXT("首次完整发布只广播一次"), SnapshotChangedCount, 1);
+			TestEqual(TEXT("首次广播可读取完整 Revision"), LastObservedRevision, int64{2});
 
 			Component->SetSnapshotFromAuthority(CatContainerReplicationTest::MakeSnapshot(ContainerId, 3, {SecondFish}));
 			const FCatContainerSnapshot& UpdatedSnapshot = Component->GetSnapshot();
 			TestEqual(TEXT("替换发布后 Revision 前进"), UpdatedSnapshot.Revision, int64{3});
 			TestEqual(TEXT("替换发布后只保留一条鱼"), UpdatedSnapshot.Fish.Num(), 1);
+			TestEqual(TEXT("第二次完整发布累计广播两次"), SnapshotChangedCount, 2);
+			TestEqual(TEXT("第二次广播可读取新 Revision"), LastObservedRevision, int64{3});
 			if (UpdatedSnapshot.Fish.Num() == 1)
 			{
 				TestEqual(TEXT("替换发布保留第二条鱼实例"), UpdatedSnapshot.Fish[0].FishInstanceId, SecondFish.FishInstanceId);
