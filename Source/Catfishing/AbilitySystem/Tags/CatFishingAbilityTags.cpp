@@ -1,4 +1,4 @@
-#include "AbilitySystem/CatFishingAbilityTags.h"
+#include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 
 namespace CatFishingAbilityTags
 {

@@ -1,6 +1,6 @@
-#include "AbilitySystem/CatPoisonEffect.h"
+#include "AbilitySystem/Effects/CatPoisonEffect.h"
 
-#include "AbilitySystem/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "NativeGameplayTags.h"
 
 UE_DEFINE_GAMEPLAY_TAG_STATIC(TAG_Data_Condition_PoisonDelta, "Cat.Data.Condition.PoisonDelta");

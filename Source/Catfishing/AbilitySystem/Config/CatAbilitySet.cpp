@@ -1,8 +1,8 @@
-#include "AbilitySystem/CatAbilitySet.h"
+#include "AbilitySystem/Config/CatAbilitySet.h"
 
-#include "AbilitySystem/CatAbilitySystemComponent.h"
-#include "AbilitySystem/CatBodyActionAbility.h"
-#include "AbilitySystem/CatFishingAbilityTags.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/BodyAction/CatBodyActionAbility.h"
+#include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "GameplayEffect.h"
 
 bool UCatAbilitySet::IsRuntimeReady() const

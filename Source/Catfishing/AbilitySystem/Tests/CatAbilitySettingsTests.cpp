@@ -2,7 +2,7 @@
 
 #include "Misc/AutomationTest.h"
 
-#include "AbilitySystem/CatAbilitySettings.h"
+#include "AbilitySystem/Config/CatAbilitySettings.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatAbilitySettingsDefaultsTest,

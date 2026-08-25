@@ -1,6 +1,6 @@
-#include "AbilitySystem/CatAbilityInputConfig.h"
+#include "AbilitySystem/Config/CatAbilityInputConfig.h"
 
-#include "AbilitySystem/CatFishingAbilityTags.h"
+#include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "InputAction.h"
 
 bool UCatAbilityInputConfig::IsRuntimeReady() const

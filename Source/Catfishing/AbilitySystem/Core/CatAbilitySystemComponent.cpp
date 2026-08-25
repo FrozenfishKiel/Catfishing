@@ -1,10 +1,10 @@
-#include "AbilitySystem/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 
-#include "AbilitySystem/CatAbilitySettings.h"
-#include "AbilitySystem/CatFishingAbilityTags.h"
-#include "AbilitySystem/CatFishingStaminaEffect.h"
-#include "AbilitySystem/CatPoisonEffect.h"
-#include "AbilitySystem/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Config/CatAbilitySettings.h"
+#include "AbilitySystem/Tags/CatFishingAbilityTags.h"
+#include "AbilitySystem/Effects/CatFishingStaminaEffect.h"
+#include "AbilitySystem/Effects/CatPoisonEffect.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Character/CatCharacter.h"
 #include "Abilities/GameplayAbility.h"
 

@@ -1,7 +1,7 @@
-#include "AbilitySystem/CatAbilitySettings.h"
+#include "AbilitySystem/Config/CatAbilitySettings.h"
 
-#include "AbilitySystem/CatAbilityInputConfig.h"
-#include "AbilitySystem/CatAbilitySet.h"
+#include "AbilitySystem/Config/CatAbilityInputConfig.h"
+#include "AbilitySystem/Config/CatAbilitySet.h"
 #include "Character/CatCharacterDefinition.h"
 
 // ASC runtime gate 流程：要求显式总开关和当前唯一支持的 Full 策略；不按构建配置关闭正式 Character 身体链，也不猜测 Mixed。

@@ -1,7 +1,7 @@
-#include "AbilitySystem/CatFishingStaminaEffect.h"
+#include "AbilitySystem/Effects/CatFishingStaminaEffect.h"
 
-#include "AbilitySystem/CatFishingAbilityTags.h"
-#include "AbilitySystem/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Tags/CatFishingAbilityTags.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 
 UCatGE_FishingStaminaDelta::UCatGE_FishingStaminaDelta()
 {

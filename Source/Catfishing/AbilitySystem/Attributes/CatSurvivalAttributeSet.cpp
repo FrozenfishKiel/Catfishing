@@ -1,4 +1,4 @@
-#include "AbilitySystem/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 
 #include "Net/UnrealNetwork.h"
 

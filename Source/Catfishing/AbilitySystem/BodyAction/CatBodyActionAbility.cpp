@@ -1,7 +1,7 @@
-#include "AbilitySystem/CatBodyActionAbility.h"
+#include "AbilitySystem/BodyAction/CatBodyActionAbility.h"
 
-#include "AbilitySystem/CatBodyActionPresentationSettings.h"
-#include "AbilitySystem/CatFishingAbilityTags.h"
+#include "AbilitySystem/BodyAction/CatBodyActionPresentationSettings.h"
+#include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "Abilities/Tasks/AbilityTask_WaitDelay.h"
 #include "Character/CatCharacter.h"
 #include "Framework/Game/CatGameplayTypes.h"
