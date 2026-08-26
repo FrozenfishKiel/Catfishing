@@ -2,7 +2,7 @@
 
 #include "AbilitySystemComponent.h"
 #include "AbilitySystemInterface.h"
-#include "AbilitySystem/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Character/CatCharacter.h"
 #include "DrawDebugHelpers.h"
 #include "Engine/Engine.h"

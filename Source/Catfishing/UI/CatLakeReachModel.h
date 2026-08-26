@@ -89,7 +89,7 @@ private:
 	/** ASC HUD 属性变化入口；事件载荷只说明有事实变更，Model 随后重读所有 Query 来源。 */
 	void HandleLakeAttributeChanged(const FOnAttributeChangeData& ChangeData);
 
-	/** Condition、Equipment、Run、Help、鱼护或 Profile 变化入口；每次统一重建整份 ViewState。 */
+	/** Condition、Equipment、Run、Help、Shop、鱼护或 Profile 变化入口；每次统一重建整份 ViewState。 */
 	void HandleLakeSnapshotChanged();
 
 	/** FishingBridge 发布新会话投影的入口；Model 忽略增量载荷并重新聚合所有 UIReach 事实。 */
@@ -215,6 +215,9 @@ private:
 
 	/** GameState 最近求助完整快照通知的配对解绑句柄。 */
 	FDelegateHandle HelpChangedHandle;
+
+	/** GameState 商店公开快照通知的配对解绑句柄；影响钱包余额和商店按钮是否可提交。 */
+	FDelegateHandle ShopEconomyChangedHandle;
 
 	/** 个人鱼护快照订阅的生命周期凭据；影响旧鱼护复制事件能否继续刷新当前 ViewState。 */
 	FDelegateHandle FishGuardChangedHandle;

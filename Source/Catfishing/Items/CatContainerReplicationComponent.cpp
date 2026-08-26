@@ -13,13 +13,14 @@ UCatContainerReplicationComponent::UCatContainerReplicationComponent()
 	ReplicatedFish.Owner = this;
 }
 
-// 复制注册流程：先保留父类字段，再分别注册 ID、类型、Revision 元数据和 FastArray；UE 不保证两类通知的先后，所以它们各自重建同一 Snapshot 以最终收敛。
+// 复制注册流程：先保留父类字段，再分别注册 ID、类型、Revision、容量元数据和 FastArray；UE 不保证两类通知的先后，所以它们各自重建同一 Snapshot 以最终收敛。
 void UCatContainerReplicationComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ThisClass, ReplicatedContainerId);
 	DOREPLIFETIME(ThisClass, ReplicatedKind);
 	DOREPLIFETIME(ThisClass, ReplicatedRevision);
+	DOREPLIFETIME(ThisClass, ReplicatedCapacity);
 	DOREPLIFETIME(ThisClass, ReplicatedFish);
 }
 
@@ -36,7 +37,7 @@ void UCatContainerReplicationComponent::EndPlay(const EEndPlayReason::Type EndPl
 	Super::EndPlay(EndPlayReason);
 }
 
-// authority 发布流程：验证 Owner 权威后替换元数据，再按 FishInstanceId 删除旧项并标记数组变脏，对新项/变更项分别 MarkItemDirty；全部字段一致后广播只读变化并 ForceNetUpdate，预留锁等私有事实不进入复制。
+// authority 发布流程：验证 Owner 权威后替换 ID、类型、Revision、容量元数据，再按 FishInstanceId 删除旧项并标记数组变脏，对新项/变更项分别 MarkItemDirty；全部字段一致后广播只读变化并 ForceNetUpdate，预留锁等私有事实不进入复制。
 void UCatContainerReplicationComponent::SetSnapshotFromAuthority(const FCatContainerSnapshot& NewSnapshot)
 {
 	AActor* Owner = GetOwner();
@@ -48,6 +49,7 @@ void UCatContainerReplicationComponent::SetSnapshotFromAuthority(const FCatConta
 	ReplicatedContainerId = NewSnapshot.ContainerId;
 	ReplicatedKind = NewSnapshot.Kind;
 	ReplicatedRevision = NewSnapshot.Revision;
+	ReplicatedCapacity = NewSnapshot.Capacity;
 	bool bRemovedEntry = false;
 	for (int32 Index = ReplicatedFish.Entries.Num() - 1; Index >= 0; --Index)
 	{
@@ -95,18 +97,19 @@ const FCatContainerSnapshot& UCatContainerReplicationComponent::GetSnapshot() co
 	return Snapshot;
 }
 
-// 元数据复制流程：只安排下一帧合并，不立即暴露当前 FastArray；若同帧鱼数组稍后到达，两类事实会在同一次广播前组合完成。
+// 元数据复制流程：只安排下一帧合并，不立即暴露当前 FastArray；若同帧容量或鱼数组稍后到达，两类事实会在同一次广播前组合完成。
 void UCatContainerReplicationComponent::OnRep_ContainerMetadata()
 {
 	ScheduleSnapshotNotificationFromReplication();
 }
 
-// 快照重建流程：覆盖容器元数据并按当前 FastArray 顺序复制公开鱼字段；OwnerStableNetId 未复制且自然保持空。
+// 快照重建流程：覆盖容器 ID、类型、Revision 和容量元数据，再按当前 FastArray 顺序复制公开鱼字段；OwnerStableNetId 未复制且自然保持空。
 void UCatContainerReplicationComponent::RebuildSnapshotFromReplication()
 {
 	Snapshot.ContainerId = ReplicatedContainerId;
 	Snapshot.Kind = ReplicatedKind;
 	Snapshot.Revision = ReplicatedRevision;
+	Snapshot.Capacity = ReplicatedCapacity;
 	Snapshot.Fish.Reset(ReplicatedFish.Entries.Num());
 	for (const FCatReplicatedFishEntry& Entry : ReplicatedFish.Entries)
 	{

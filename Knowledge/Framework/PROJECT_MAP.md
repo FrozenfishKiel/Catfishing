@@ -27,7 +27,7 @@
 | `Online/` | Session、邀请、旅行、Destroy 补偿、网络/旅行失败收口。 | `UCatOnlineSubsystem` |
 | `UI/` | LocalPlayer UI 生命周期、Travel/Survival 原生 Widget、只读展示。 | `UCatLocalPlayerUISubsystem`、`UCatTravelWidget`、`UCatSurvivalWidget` |
 | `Character/` | 猫身体 Actor、ASC Owner/Avatar 和身体宿主组件装配。 | `ACatCharacter` |
-| `AbilitySystem/` | Ability/AttributeSet/能力配置和正式 GameplayEffect 写口。 | `UCatAbilitySystemComponent`、`UCatSurvivalAttributeSet`、`UCatGE_PoisonDelta`、`UCatAbilitySettings` |
+| `AbilitySystem/` | Ability/AttributeSet/能力配置和正式 GameplayEffect 写口；输入 Ability 按领域放在 `Fishing/InputAbilities/` 等子目录。 | `UCatAbilitySystemComponent`、`UCatSurvivalAttributeSet`、`UCatGE_PoisonDelta`、`UCatAbilitySettings` |
 | `Condition/` | Wet/Downed/Recovery 等离散身体状态。 | `UCatConditionComponent` |
 | `Equipment/` | 一局装备、耗材、鱼竿耐久和失败预算。 | `UCatEquipmentComponent`、`UCatEquipmentDefinition` |
 | `Run/` | StateTree 节点、Run 配置、献祭跨 Items/Run 协调。 | `UCatSacrificeCoordinator`、`CatRunStateTreeNodes.*` |
@@ -77,7 +77,7 @@
 审查 Character、GAS、状态和 UI：
 
 1. `Source/Catfishing/Character/CatCharacter.h/.cpp`
-2. `Source/Catfishing/AbilitySystem/CatSurvivalAttributeSet.h/.cpp`
+2. `Source/Catfishing/AbilitySystem/Attributes/CatSurvivalAttributeSet.h/.cpp`
 3. `Source/Catfishing/Condition/CatConditionComponent.h/.cpp`
 4. `Source/Catfishing/Equipment/CatEquipmentComponent.h/.cpp`
 5. `Source/Catfishing/UI/CatLocalPlayerUISubsystem.h/.cpp`

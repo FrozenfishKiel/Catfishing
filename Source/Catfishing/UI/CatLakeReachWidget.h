@@ -10,6 +10,7 @@
 #include "Framework/Core/CatRunContracts.h"
 #include "Growth/CatGrowthTypes.h"
 #include "Items/CatItemTypes.h"
+#include "ShopEconomy/CatShopEconomyTypes.h"
 #include "Social/CatSocialTypes.h"
 #include "UI/CatFishingViewTypes.h"
 #include "CatLakeReachWidget.generated.h"
@@ -28,6 +29,22 @@ enum class ECatUIReachFishGuardAction : uint8
 	TransferSelectedFishToTank,
 	/** 请求把当前选中的鱼提交给献祭协议；服务器通过 SacrificeCoordinator 协调 Items 与 Run。 */
 	SacrificeSelectedFish
+};
+
+/** LakeReach 商店区的玩家动作意图；它只引用已裁目录项，价格、库存和交付全部由服务器商店链路决定。 */
+UENUM(BlueprintType)
+enum class ECatUIReachShopAction : uint8
+{
+	/** 当前没有可提交的商店动作；View 用它过滤空按钮或旧蓝图调用。 */
+	None,
+	/** 请求购买二级商店鱼竿；团队钱包和库存由 ShopOrderCoordinator 裁决。 */
+	PurchaseShopRodT2,
+	/** 请求购买基础虫虫窝料；它是局内耗材订单，不由 UI 直接发放。 */
+	PurchaseBugChum,
+	/** 请求领取免费虫虫鱼饵；免费资格仍由 ShopEconomy 的免费入口配置判断。 */
+	ClaimFreeBugBait,
+	/** 请求领取保底一级鱼竿；只走免费领取 RPC，不伪造装备入库。 */
+	ClaimFreeStarterRod
 };
 
 /** UIReach 给蓝图前端消费的图鉴展示条目；它是 Profile durable 记录的只读副本，不改变 Profile 的 SaveGame 合同。 */
@@ -90,6 +107,14 @@ struct FCatUIReachViewState
 	/** 当前 World 最近一次公开求助；UI 只表现类型和范围，不缓存可写社交权限。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatHelpSignalSnapshot HelpSignal;
+
+	/** 当前团队钱包与公开流水快照；GameState 复制写入，View 只展示余额和最近交易数量。 */
+	UPROPERTY(BlueprintReadOnly)
+	FCatShopPublicEconomySnapshot ShopEconomy;
+
+	/** 当前 GameState 是否能提供商店快照；false 时商店按钮应保持不可点而不是猜测钱包版本。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bShopEconomyAvailable = false;
 
 	/** 当前玩家 FishingSession 的复制投影；只有 bHasFishingSession 为 true 时才代表有效会话。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -183,9 +208,9 @@ struct FCatUIReachViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bMenuOpen = false;
 
-	/** 打开菜单所用 Enhanced Input 键名；Widget 在 UIOnly 焦点下用同一键请求关闭，避免出现第二套键位。 */
+	/** 打开菜单所用 Enhanced Input 键名；它从正式 IMC 反查而来，Widget 在 UIOnly 焦点下用同一键请求关闭。 */
 	UPROPERTY(BlueprintReadOnly)
-	FName MenuToggleKeyName = TEXT("Tab");
+	FName MenuToggleKeyName = NAME_None;
 
 	/** 当前 Lake 菜单是否可以提交正式离局意图；Online 快照写入，Widget 只据此显示按钮并禁用迟到点击。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -229,6 +254,14 @@ struct FCatUIReachBlueprintViewState
 	/** 当前 World 最近一次公开求助；蓝图只表现类型和范围。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatHelpSignalSnapshot HelpSignal;
+
+	/** 当前团队钱包与公开流水快照；蓝图只展示，不据此直接改余额或库存。 */
+	UPROPERTY(BlueprintReadOnly)
+	FCatShopPublicEconomySnapshot ShopEconomy;
+
+	/** 当前是否拿到可用商店快照；蓝图用它决定商店按钮是否可点。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bShopEconomyAvailable = false;
 
 	/** 当前玩家 FishingSession 的复制投影；只有 bHasFishingSession 为 true 时才有效。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -318,9 +351,9 @@ struct FCatUIReachBlueprintViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bMenuOpen = false;
 
-	/** 打开或关闭菜单所用键名；蓝图可用它显示提示文案。 */
+	/** 打开或关闭菜单所用键名；蓝图可用它显示从正式 IMC 解析出的提示文案。 */
 	UPROPERTY(BlueprintReadOnly)
-	FName MenuToggleKeyName = TEXT("Tab");
+	FName MenuToggleKeyName = NAME_None;
 
 	/** 当前 Lake 菜单是否可以提交正式离局意图；蓝图只据此显示或禁用按钮。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -338,6 +371,9 @@ DECLARE_MULTICAST_DELEGATE_OneParam(FCatLakeReachFishGuardSelectionRequested, in
 
 /** 根 View 的鱼护动作意图；Widget 不携带鱼 ID，PageController 从 Model 当前选择重建正式命令。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatLakeReachFishGuardActionRequested, ECatUIReachFishGuardAction);
+
+/** 根 View 的商店动作意图；Widget 不携带价格、库存或钱包版本，PageController 从 Model 当前快照重建服务器命令。 */
+DECLARE_MULTICAST_DELEGATE_OneParam(FCatLakeReachShopActionRequested, ECatUIReachShopAction);
 
 /** LakeReach 的正式 UMG View 基类；WBP 负责布局和表现，C++ 只缓存只读 DTO、触发蓝图渲染事件并广播用户意图。 */
 UCLASS(BlueprintType, Blueprintable)
@@ -365,6 +401,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|UIReach")
 	void RequestSelectNextFishGuardEntry();
 
+	/** 蓝图或格子按钮请求直接选中某个鱼护格；View 只把目标格折算成偏移，Model 仍按最新快照裁剪。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|UIReach")
+	void RequestSelectFishGuardSlot(int32 SlotIndex);
+
 	/** 蓝图或绑定按钮请求吃掉当前选中鱼；View 不传鱼 ID，避免蓝图持有可伪造命令载荷。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|UIReach")
 	void RequestConsumeSelectedFish();
@@ -376,6 +416,22 @@ public:
 	/** 蓝图或绑定按钮请求献祭当前选中鱼；实际 Items/Run 协议命令由 PageController 重建。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|UIReach")
 	void RequestSacrificeSelectedFish();
+
+	/** 蓝图或绑定按钮请求购买二级鱼竿；View 只发商店意图，不提交钱包版本或目录价格。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|UIReach")
+	void RequestPurchaseShopRodT2();
+
+	/** 蓝图或绑定按钮请求购买虫虫窝料；实际耗材发放仍由服务器商店订单链路确认。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|UIReach")
+	void RequestPurchaseBugChum();
+
+	/** 蓝图或绑定按钮请求免费领取虫虫鱼饵；免费入口是否合法由服务器目录判断。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|UIReach")
+	void RequestClaimFreeBugBait();
+
+	/** 蓝图或绑定按钮请求免费领取保底鱼竿；View 不直接写 Equipment。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|UIReach")
+	void RequestClaimFreeStarterRod();
 
 	/** 返回最近一次蓝图安全 ViewState 副本；蓝图动画或延迟刷新可读取，但不能写回 Model。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|UIReach")
@@ -396,6 +452,9 @@ public:
 	/** 玩家在鱼护面板点击吃鱼、转缸或献祭时发出的纯意图；PageController 负责翻译成正式服务器命令。 */
 	FCatLakeReachFishGuardActionRequested OnFishGuardActionRequested;
 
+	/** 玩家在商店面板点击购买或免费领取时发出的纯意图；PageController 负责翻译成正式 Shop RPC。 */
+	FCatLakeReachShopActionRequested OnShopActionRequested;
+
 protected:
 	/** 首次初始化时只设置可聚焦；正式布局必须来自 WBP，C++ 不在这里构造玩家可见 WidgetTree。 */
 	virtual void NativeOnInitialized() override;
@@ -403,7 +462,7 @@ protected:
 	/** 每次进入视口时对 WBP 可选绑定按钮去重绑定，防止 Slate 重建造成一次点击广播多次。 */
 	virtual void NativeConstruct() override;
 
-	/** 离开视口时解除按钮绑定并清纯意图广播，再交还父类 Slate 生命周期。 */
+	/** 离开视口时只解除本 View 的按钮绑定；外部意图订阅由 PageController::Unbind 统一移除。 */
 	virtual void NativeDestruct() override;
 
 	/** 菜单处于 UIOnly 焦点时消费配置的同一菜单键并请求关闭；其余按键继续交给父类。 */
@@ -430,6 +489,38 @@ private:
 	UFUNCTION()
 	void HandleNextFishGuardClicked();
 
+	/** 把第 1 个鱼护格子点击转换为目标下标选择；它只走统一选择入口，不直接改鱼护。 */
+	UFUNCTION()
+	void HandleFishGuardSlot0Clicked();
+
+	/** 把第 2 个鱼护格子点击转换为目标下标选择；它只走统一选择入口，不直接改鱼护。 */
+	UFUNCTION()
+	void HandleFishGuardSlot1Clicked();
+
+	/** 把第 3 个鱼护格子点击转换为目标下标选择；它只走统一选择入口，不直接改鱼护。 */
+	UFUNCTION()
+	void HandleFishGuardSlot2Clicked();
+
+	/** 把第 4 个鱼护格子点击转换为目标下标选择；它只走统一选择入口，不直接改鱼护。 */
+	UFUNCTION()
+	void HandleFishGuardSlot3Clicked();
+
+	/** 把第 5 个鱼护格子点击转换为目标下标选择；它只走统一选择入口，不直接改鱼护。 */
+	UFUNCTION()
+	void HandleFishGuardSlot4Clicked();
+
+	/** 把第 6 个鱼护格子点击转换为目标下标选择；它只走统一选择入口，不直接改鱼护。 */
+	UFUNCTION()
+	void HandleFishGuardSlot5Clicked();
+
+	/** 把第 7 个鱼护格子点击转换为目标下标选择；它只走统一选择入口，不直接改鱼护。 */
+	UFUNCTION()
+	void HandleFishGuardSlot6Clicked();
+
+	/** 把第 8 个鱼护格子点击转换为目标下标选择；它只走统一选择入口，不直接改鱼护。 */
+	UFUNCTION()
+	void HandleFishGuardSlot7Clicked();
+
 	/** 把吃鱼按钮点击转换为当前选中鱼动作意图；具体鱼实例由 PageController 从 Model 读取。 */
 	UFUNCTION()
 	void HandleConsumeFishClicked();
@@ -442,11 +533,36 @@ private:
 	UFUNCTION()
 	void HandleSacrificeFishClicked();
 
+	/** 把二级鱼竿购买按钮点击转换为商店意图；View 不读取钱包或库存。 */
+	UFUNCTION()
+	void HandlePurchaseShopRodT2Clicked();
+
+	/** 把虫虫窝料购买按钮点击转换为商店意图；具体订单交给 PageController。 */
+	UFUNCTION()
+	void HandlePurchaseBugChumClicked();
+
+	/** 把免费虫虫鱼饵按钮点击转换为商店意图；服务器决定是否可领取。 */
+	UFUNCTION()
+	void HandleClaimFreeBugBaitClicked();
+
+	/** 把保底鱼竿领取按钮点击转换为商店意图；服务器决定是否可领取。 */
+	UFUNCTION()
+	void HandleClaimFreeStarterRodClicked();
+
 	/** 统一过滤鱼护动作按钮的迟到点击；只有菜单展开、选择可提交且动作明确时才广播。 */
 	void RequestFishGuardAction(ECatUIReachFishGuardAction Action);
 
+	/** 统一过滤商店按钮的迟到点击；只有菜单展开且商店快照可用时才广播纯动作枚举。 */
+	void RequestShopAction(ECatUIReachShopAction Action);
+
 	/** 把 native ViewState 转成蓝图可读副本；FishCollection 在这里复制成 UI 专用条目而不暴露 Profile 存档结构。 */
 	static FCatUIReachBlueprintViewState MakeBlueprintViewState(const FCatUIReachViewState& ViewState);
+
+	/** 刷新 WBP 8 个固定鱼护格的文本和可点击状态；它只写蓝图投影字段，不创建或销毁玩家可见控件。 */
+	void UpdateBlueprintFishGuardSlotProjection();
+
+	/** 构造单个鱼护格子的中文展示文本；空格子、选中格和实物鱼信息都来自最近一次只读 ViewState。 */
+	FText MakeBlueprintFishGuardSlotText(int32 SlotIndex) const;
 
 	/** WBP 内可选关闭控件；点击只广播意图，由 PageController 成对恢复 InputMode 与鼠标。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
@@ -464,6 +580,38 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> NextFishGuardButton;
 
+	/** WBP 内第 1 个鱼护格按钮；点击只请求选择该格，空格会被最近 ViewState 禁用。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> FishGuardSlot0Button;
+
+	/** WBP 内第 2 个鱼护格按钮；点击只请求选择该格，空格会被最近 ViewState 禁用。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> FishGuardSlot1Button;
+
+	/** WBP 内第 3 个鱼护格按钮；点击只请求选择该格，空格会被最近 ViewState 禁用。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> FishGuardSlot2Button;
+
+	/** WBP 内第 4 个鱼护格按钮；点击只请求选择该格，空格会被最近 ViewState 禁用。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> FishGuardSlot3Button;
+
+	/** WBP 内第 5 个鱼护格按钮；点击只请求选择该格，空格会被最近 ViewState 禁用。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> FishGuardSlot4Button;
+
+	/** WBP 内第 6 个鱼护格按钮；点击只请求选择该格，空格会被最近 ViewState 禁用。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> FishGuardSlot5Button;
+
+	/** WBP 内第 7 个鱼护格按钮；点击只请求选择该格，空格会被最近 ViewState 禁用。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> FishGuardSlot6Button;
+
+	/** WBP 内第 8 个鱼护格按钮；点击只请求选择该格，空格会被最近 ViewState 禁用。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> FishGuardSlot7Button;
+
 	/** WBP 内可选吃鱼控件；点击只广播动作意图，服务器结果回包后才更新展示。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> ConsumeFishButton;
@@ -476,6 +624,22 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> SacrificeFishButton;
 
+	/** WBP 内可选二级鱼竿购买控件；点击只广播商店意图，不携带价格或库存。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> PurchaseShopRodT2Button;
+
+	/** WBP 内可选虫虫窝料购买控件；点击只广播商店意图，耗材入库由服务器确认。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> PurchaseBugChumButton;
+
+	/** WBP 内可选免费虫虫鱼饵领取控件；点击只广播商店意图，免费白名单由后端目录确认。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> ClaimFreeBugBaitButton;
+
+	/** WBP 内可选保底一级鱼竿领取控件；点击只广播商店意图，不直接写 Equipment。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> ClaimFreeStarterRodButton;
+
 	/** 最近一次 native Render 输入；测试和 C++ 调试可读，蓝图不直接消费 native-only FishCollection。 */
 	FCatUIReachViewState LastNativeViewState;
 
@@ -487,17 +651,97 @@ private:
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
 	float BlueprintPoisonValue = 0.0f;
 
+	/** WBP Designer 绑定用的中文 Poison 文本；它把裸数值说明成猫状态读数，避免玩家只看到一个 0。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintPoisonText;
+
 	/** WBP Designer 绑定用的 FishingStrength 数值；它只来自当前 ViewState，不成为命令参数。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
 	float BlueprintFishingStrengthValue = 0.0f;
+
+	/** WBP Designer 绑定用的中文 FishingStrength 文本；它解释该数值是钓鱼力量而不是鱼护数量。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintFishingStrengthText;
 
 	/** WBP Designer 绑定用的搏斗体力数值；它只表示 Character ASC 当前资源。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
 	float BlueprintFightStaminaValue = 0.0f;
 
+	/** WBP Designer 绑定用的中文搏斗体力文本；它让 HUD 展示当前剩余资源含义。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintFightStaminaText;
+
 	/** WBP Designer 绑定用的个人鱼护条目数；Render 从鱼护快照派生，蓝图只展示数量。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
 	int32 BlueprintFishGuardCount = 0;
+
+	/** WBP Designer 绑定用的中文鱼护数量文本；空鱼护时必须告诉玩家先去钓鱼，而不是显示孤立 0。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintFishGuardCountText;
+
+	/** 第 1 个鱼护格子的蓝图展示投影；Render 从鱼护快照写入格内文本，WBP 只读取它表现空格、选中或实物鱼。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintFishGuardSlot0Text;
+
+	/** 第 2 个鱼护格子的蓝图展示投影；Render 从鱼护快照写入格内文本，WBP 只读取它表现空格、选中或实物鱼。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintFishGuardSlot1Text;
+
+	/** 第 3 个鱼护格子的蓝图展示投影；Render 从鱼护快照写入格内文本，WBP 只读取它表现空格、选中或实物鱼。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintFishGuardSlot2Text;
+
+	/** 第 4 个鱼护格子的蓝图展示投影；Render 从鱼护快照写入格内文本，WBP 只读取它表现空格、选中或实物鱼。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintFishGuardSlot3Text;
+
+	/** 第 5 个鱼护格子的蓝图展示投影；Render 从鱼护快照写入格内文本，WBP 只读取它表现空格、选中或实物鱼。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintFishGuardSlot4Text;
+
+	/** 第 6 个鱼护格子的蓝图展示投影；Render 从鱼护快照写入格内文本，WBP 只读取它表现空格、选中或实物鱼。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintFishGuardSlot5Text;
+
+	/** 第 7 个鱼护格子的蓝图展示投影；Render 从鱼护快照写入格内文本，WBP 只读取它表现空格、选中或实物鱼。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintFishGuardSlot6Text;
+
+	/** 第 8 个鱼护格子的蓝图展示投影；Render 从鱼护快照写入格内文本，WBP 只读取它表现空格、选中或实物鱼。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintFishGuardSlot7Text;
+
+	/** 第 1 个鱼护格子的蓝图交互 gate；Render 写入，只有菜单打开且该格有实物鱼时 WBP 才允许点击。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	bool bBlueprintFishGuardSlot0Enabled = false;
+
+	/** 第 2 个鱼护格子的蓝图交互 gate；Render 写入，只有菜单打开且该格有实物鱼时 WBP 才允许点击。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	bool bBlueprintFishGuardSlot1Enabled = false;
+
+	/** 第 3 个鱼护格子的蓝图交互 gate；Render 写入，只有菜单打开且该格有实物鱼时 WBP 才允许点击。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	bool bBlueprintFishGuardSlot2Enabled = false;
+
+	/** 第 4 个鱼护格子的蓝图交互 gate；Render 写入，只有菜单打开且该格有实物鱼时 WBP 才允许点击。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	bool bBlueprintFishGuardSlot3Enabled = false;
+
+	/** 第 5 个鱼护格子的蓝图交互 gate；Render 写入，只有菜单打开且该格有实物鱼时 WBP 才允许点击。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	bool bBlueprintFishGuardSlot4Enabled = false;
+
+	/** 第 6 个鱼护格子的蓝图交互 gate；Render 写入，只有菜单打开且该格有实物鱼时 WBP 才允许点击。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	bool bBlueprintFishGuardSlot5Enabled = false;
+
+	/** 第 7 个鱼护格子的蓝图交互 gate；Render 写入，只有菜单打开且该格有实物鱼时 WBP 才允许点击。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	bool bBlueprintFishGuardSlot6Enabled = false;
+
+	/** 第 8 个鱼护格子的蓝图交互 gate；Render 写入，只有菜单打开且该格有实物鱼时 WBP 才允许点击。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	bool bBlueprintFishGuardSlot7Enabled = false;
 
 	/** WBP Designer 绑定用的选中鱼下标；没有可选鱼时为 INDEX_NONE。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
@@ -555,6 +799,18 @@ private:
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
 	int32 BlueprintFishCollectionCount = 0;
 
+	/** WBP Designer 绑定用的中文图鉴文本；Profile 未就绪和空图鉴会显示不同原因。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintFishCollectionText;
+
+	/** WBP Designer 绑定用的中文商店摘要；它展示公款余额和流水数量，不暴露服务器私有身份。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintShopSummaryText;
+
+	/** WBP Designer 绑定用的商店按钮可用性；缺 GameState 商店快照时所有商店意图 fail-closed。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
+	bool bBlueprintShopActionEnabled = false;
+
 	/** WBP Designer 绑定用的菜单显隐值；PageController 写入菜单状态，蓝图资产决定菜单容器如何表现。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|UIReach", meta = (AllowPrivateAccess = "true"))
 	ESlateVisibility BlueprintMenuVisibility = ESlateVisibility::Collapsed;
@@ -568,7 +824,7 @@ private:
 	bool bBlueprintLeaveEnabled = false;
 
 	/** 最近一次 Render 指定的菜单键名；NativeOnKeyDown 读取它来关闭当前菜单，不自行读取配置。 */
-	FName RenderedMenuToggleKeyName = TEXT("Tab");
+	FName RenderedMenuToggleKeyName = NAME_None;
 
 	/** 最近一次 Render 指定的菜单可见状态；只有展开时 Widget 才消费菜单键。 */
 	bool bRenderedMenuOpen = false;
@@ -584,4 +840,13 @@ private:
 
 	/** 最近一次 Render 指定的鱼护动作提交 gate；Widget 用它过滤旧的吃鱼、转缸或献祭点击。 */
 	bool bRenderedCanSubmitSelectedFishGuardAction = false;
+
+	/** 最近一次 Render 指定的商店动作提交 gate；Widget 用它过滤缺钱包快照或销毁期的旧点击。 */
+	bool bRenderedCanSubmitShopAction = false;
+
+	/** 最近一次 Render 指定的鱼护实物数量；格子点击读取它来拒绝空格和超过本轮固定显示范围的旧点击。 */
+	int32 RenderedFishGuardCount = 0;
+
+	/** 最近一次 Render 指定的鱼护选中下标；格子点击把目标格折算为相对偏移时读取它。 */
+	int32 RenderedSelectedFishGuardIndex = INDEX_NONE;
 };

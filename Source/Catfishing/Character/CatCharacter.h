@@ -2,8 +2,8 @@
 
 #include "CoreMinimal.h"
 #include "AbilitySystemInterface.h"
-#include "AbilitySystem/CatBodyActionAbility.h"
-#include "AbilitySystem/CatAbilitySet.h"
+#include "AbilitySystem/BodyAction/CatBodyActionAbility.h"
+#include "AbilitySystem/Config/CatAbilitySet.h"
 #include "GameplayTagContainer.h"
 #include "GameFramework/Character.h"
 #include "CatCharacter.generated.h"

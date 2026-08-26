@@ -62,69 +62,57 @@ function Assert-NoTextPattern {
 
 function Invoke-UIReachStaticCheck {
     <#
-    执行 UIReach 原子模块静态合同检查。
-    流程先解析 Harness 中的 UIReach 模块，再核对正式 WBP 前端、Model/PageController/View 基类、fail-closed 装配和统一鱼护/图鉴投影都没有被拆成独立交付入口。
+    执行拆分 UI 模块静态合同检查。
+    该模式只核对源码边界和资产生成入口：HUD、Inventory、InventorySlot、Shop、Interaction、Collection 必须独立，Shop 不由 LocalPlayer 预建，输入仍来自项目既有 InputContext。
     #>
-    $HarnessPath = Join-Path $ProjectRoot ".harness/harness.json"
-    $Harness = Get-Content -LiteralPath $HarnessPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    if (-not ($Harness.module_delivery.PSObject.Properties.Name -contains "UIReach")) {
-        throw "UIReach module is missing from harness"
-    }
-    $Module = $Harness.module_delivery.UIReach
-    if ($Module.delivery_mode -ne "single_atomic_module") {
-        throw ("UIReach delivery_mode mismatch: {0}" -f $Module.delivery_mode)
-    }
-    foreach ($Facet in @("HUD", "Menu", "InventoryAndFishGuard", "Album")) {
-        if (@($Module.facets) -notcontains $Facet) {
-            throw ("UIReach facet missing from atomic module contract: {0}" -f $Facet)
-        }
-    }
-    if ([string]::IsNullOrWhiteSpace($Module.tracking_rule) -or [string]::IsNullOrWhiteSpace($Module.completion_rule)) {
-        throw "UIReach atomic tracking/completion rule is incomplete"
-    }
-
-    # Static 模式只证明“正式前端入口、只读绑定源和按钮意图链路还在”，不把文本命中说成玩家已经能点击成功。
-    # 真正的点击到后端变化由 Automation 模式的鱼护交互用例负责兜底。
-    Assert-TextPattern "UIReach" ".harness/harness.json" "UIReach harness entry"
-    Assert-TextPattern "single_atomic_module" ".harness/harness.json" "atomic delivery mode"
-    Assert-ToolFile (Join-Path $ProjectRoot "Content\UI\WBP_CatLakeReach.uasset") "UIReach formal WBP asset"
-    Assert-TextPattern "UCatLakeReachModel" "Source/Catfishing/UI/CatLakeReachModel.h" "UIReach Model class"
-    Assert-TextPattern "UCatLakeReachPageController" "Source/Catfishing/UI/CatLakeReachPageController.h" "UIReach PageController class"
-    Assert-TextPattern "BP_RenderViewState" "Source/Catfishing/UI/CatLakeReachWidget.h" "WBP render event"
-    Assert-TextPattern "BlueprintPoisonValue" "Source/Catfishing/UI/CatLakeReachWidget.h" "WBP Designer property-binding source values"
-    Assert-TextPattern "WidgetBlueprint->Bindings" "Source/Catfishing/UI/Tests/CatLakeReachWidgetAssetTests.cpp" "formal WBP designer property bindings"
-    Assert-TextPattern "LakeReachRootFrame" "Source/Catfishing/UI/Tests/CatLakeReachWidgetAssetTests.cpp" "formal WBP frontend frame"
-    Assert-TextPattern "FishGuardActionPanel" "Source/Catfishing/UI/Tests/CatLakeReachWidgetAssetTests.cpp" "formal WBP fish guard action panel"
-    Assert-TextPattern "BlueprintFishGuardActionVisibility" "Source/Catfishing/UI/Tests/CatLakeReachWidgetAssetTests.cpp" "formal WBP action-panel visibility binding"
-    Assert-TextPattern "FCatUIReachFishCollectionEntry" "Source/Catfishing/UI/CatLakeReachWidget.h" "Blueprint-safe collection DTO"
-    Assert-TextPattern "FishCollectionEntries" "Source/Catfishing/UI/CatLakeReachWidget.h" "Blueprint collection projection"
-    Assert-TextPattern "ECatUIReachFishGuardAction" "Source/Catfishing/UI/CatLakeReachWidget.h" "fish guard action intent enum"
-    Assert-TextPattern "OnFishGuardActionRequested" "Source/Catfishing/UI/CatLakeReachWidget.h" "fish guard action intent delegate"
-    Assert-TextPattern "RequestConsumeSelectedFish" "Source/Catfishing/UI/CatLakeReachWidget.h" "consume fish UI intent"
-    Assert-TextPattern "HandleViewFishGuardActionRequested" "Source/Catfishing/UI/CatLakeReachPageController.cpp" "PageController translates fish guard UI intent"
-    Assert-TextPattern "ServerConsumeFish" "Source/Catfishing/UI/CatLakeReachPageController.cpp" "fish guard consume action reaches PlayerController server command"
-    Assert-TextPattern "ServerTransferFishToTank" "Source/Catfishing/UI/CatLakeReachPageController.cpp" "fish guard transfer action reaches PlayerController server command"
-    Assert-TextPattern "ServerRequestSacrifice" "Source/Catfishing/UI/CatLakeReachPageController.cpp" "fish guard sacrifice action reaches PlayerController server command"
-    Assert-TextPattern "ClientReceiveFishConsumeResult" "Source/Catfishing/Framework/Game/CatGameplayTypes.h" "consume fish result returns to owning client"
-    Assert-TextPattern "OnFishConsumeResultReceived" "Source/Catfishing/Framework/Game/CatGameplayTypes.h" "consume fish result can refresh UI Model"
-    Assert-TextPattern "TryGetSharedFishTankSnapshot" "Source/Catfishing/Camp/CatCampHubActor.h" "UI can read shared tank revision without write access"
-    Assert-TextPattern "Catfishing.Unit.UI.Reach.FishGuardWidgetEmitsPureSelectionAndActionIntents" "Source/Catfishing/UI/Tests/CatLakeReachWidgetTests.cpp" "fish guard pure intent automation"
-    Assert-TextPattern "Catfishing.Unit.UI.Reach.FishGuardConsumeClickReachesBackendAndUpdatesGuard" "Source/Catfishing/UI/Tests/CatLakeReachFishGuardInteractionTests.cpp" "fish guard consume backend automation"
-    Assert-TextPattern "LoadLakeReachWidgetClass" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "configured WBP class load"
-    Assert-TextPattern "ui_reach_view_class_missing" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "missing WBP fail-closed log"
-    Assert-TextPattern "CreateWidget<UCatLakeReachWidget>\(Controller, ViewClass\)" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "View created from configured WBP class"
-    Assert-TextPattern "BoundPersonalFishGuard" "Source/Catfishing/UI/CatLakeReachModel.h" "personal fish guard read source belongs to Model"
-    Assert-TextPattern "BoundProfile" "Source/Catfishing/UI/CatLakeReachModel.h" "durable collection read source belongs to Model"
-    Assert-TextPattern "CanRequestOnlineLeaveFromLake" "Source/Catfishing/UI/CatLakeReachModel.cpp" "Lake menu leave gate belongs to Model"
-    Assert-NoTextPattern "WidgetTree->ConstructWidget" "Source/Catfishing/UI/CatLakeReachWidget.cpp" "LakeReach View must not construct native player layout"
-    Assert-NoTextPattern "SetText\(" "Source/Catfishing/UI/CatLakeReachWidget.cpp" "LakeReach C++ View must not render WBP text"
-    Assert-NoTextPattern "SetVisibility\(" "Source/Catfishing/UI/CatLakeReachWidget.cpp" "LakeReach C++ View must not render WBP panel visibility"
-    Assert-NoTextPattern "SetIsEnabled\(" "Source/Catfishing/UI/CatLakeReachWidget.cpp" "LakeReach C++ View must not render WBP button enablement"
-    Assert-NoTextPattern "CreateWidget<UCatLakeReachWidget>\([^\r\n]*UCatLakeReachWidget::StaticClass\(\)" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "LakeReach must not fall back to native View class"
-    Assert-TextPattern "Catfishing.Unit.UI.LocalPlayerUISubsystem.AttachesSingleLakeReachRootForPossessedCat" "Source/Catfishing/UI/Tests/CatLocalPlayerUISubsystemTests.cpp" "LocalPlayer viewport attach automation"
-    Assert-TextPattern "Catfishing.Unit.UI.Settings.LakeReachUsesConfiguredWidgetClass" "Source/Catfishing/UI/Tests/CatUISettingsTests.cpp" "configured WBP automation"
-    Assert-TextPattern "Catfishing.Unit.UI.Reach.BlueprintViewCarriesHudFishingGuardAndCollectionFacts" "Source/Catfishing/UI/Tests/CatLakeReachWidgetTests.cpp" "Blueprint View DTO automation"
-    Assert-TextPattern "UI_REACH_RUNTIME_PASS" "Scripts/verify_ui_reach_runtime.py" "Runtime pass marker"
+    Assert-ToolFile (Join-Path $ProjectRoot "Content\Input\InputAction\IA_LakeMenu.uasset") "UIReach menu Input Action asset"
+    Assert-ToolFile (Join-Path $ProjectRoot "Content\Input\InputAction\IA_Interact.uasset") "Interaction confirm Input Action asset"
+    Assert-ToolFile (Join-Path $ProjectRoot "Content\Input\InputContext\IMC_InputContext.uasset") "project InputContext asset"
+    Assert-TextPattern "UCatHUDWidget" "Source/Catfishing/UI/HUD/CatHUDWidget.h" "HUD Widget class"
+    Assert-TextPattern "UCatHUDModel" "Source/Catfishing/UI/HUD/CatHUDModel.h" "HUD Model class"
+    Assert-TextPattern "CatStatusTextBlock" "Source/Catfishing/UI/HUD/CatHUDWidget.h" "HUD text block wiring"
+    Assert-TextPattern "UCatInventoryWidget" "Source/Catfishing/UI/Inventory/CatInventoryWidget.h" "Inventory Widget class"
+    Assert-TextPattern "UCatInventoryModel" "Source/Catfishing/UI/Inventory/CatInventoryModel.h" "Inventory Model class"
+    Assert-TextPattern "UCatInventoryPageController" "Source/Catfishing/UI/Inventory/CatInventoryPageController.h" "Inventory PageController class"
+    Assert-TextPattern "InventorySlotWrapBox" "Source/Catfishing/UI/Inventory/CatInventoryWidget.h" "Inventory WrapBox slot container"
+    Assert-TextPattern "CreateWidget<UCatInventorySlotWidget>" "Source/Catfishing/UI/Inventory/CatInventoryWidget.cpp" "Inventory creates one WBP per slot"
+    Assert-TextPattern "UCatInventorySlotWidget" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "Inventory Slot Widget class"
+    Assert-TextPattern "NativeOnMouseButtonDown" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "slot mouse override"
+    Assert-TextPattern "NativeOnDragDetected" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "slot drag override"
+    Assert-NoTextPattern "UButton" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "Inventory slot must not be a Button"
+    Assert-TextPattern "UCatShopWidget" "Source/Catfishing/UI/Shop/CatShopWidget.h" "Shop Widget class"
+    Assert-TextPattern "UCatShopModel" "Source/Catfishing/UI/Shop/CatShopModel.h" "Shop Model class"
+    Assert-TextPattern "UCatShopPageController" "Source/Catfishing/UI/Shop/CatShopPageController.h" "Shop PageController class"
+    Assert-TextPattern "UCatShopInteractionComponent" "Source/Catfishing/UI/Shop/CatShopInteractionComponent.h" "Shop opened by interactable object component"
+    Assert-TextPattern "ACatShopKioskActor" "Source/Catfishing/UI/Shop/CatShopKioskActor.h" "placeable shop interaction actor"
+    Assert-TextPattern "CreateWidget<UCatShopWidget>" "Source/Catfishing/UI/Shop/CatShopInteractionComponent.cpp" "Shop Widget created by interaction object"
+    Assert-NoTextPattern "CreateWidget<UCatShopWidget>" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "LocalPlayer must not precreate Shop"
+    Assert-TextPattern "ServerSubmitShopPurchase" "Source/Catfishing/UI/Shop/CatShopPageController.cpp" "shop purchase reaches PlayerController RPC"
+    Assert-TextPattern "ServerClaimFreeShopEntry" "Source/Catfishing/UI/Shop/CatShopPageController.cpp" "shop free claim reaches PlayerController RPC"
+    Assert-TextPattern "UCatInteractionPromptWidget" "Source/Catfishing/UI/Interaction/CatInteractionPromptWidget.h" "Interaction prompt Widget class"
+    Assert-TextPattern "UCatInteractionTargetComponent" "Source/Catfishing/UI/Interaction/CatInteractionTargetComponent.h" "generic interaction target component"
+    Assert-TextPattern "UCatInteractionPageController" "Source/Catfishing/UI/Interaction/CatInteractionPageController.h" "interaction key and prompt controller"
+    Assert-TextPattern "LoadInteractionConfirmAction" "Source/Catfishing/UI/CatUISettings.cpp" "interaction confirm action loader"
+    Assert-TextPattern "ResolveInteractionConfirmKeyName" "Source/Catfishing/UI/CatUISettings.cpp" "interaction key resolved from existing IMC"
+    Assert-TextPattern "InteractWithFocusedTarget" "Source/Catfishing/UI/Interaction/CatInteractionPageController.cpp" "confirm key reaches focused target"
+    Assert-TextPattern "UCatCollectionWidget" "Source/Catfishing/UI/Collection/CatCollectionWidget.h" "Collection Widget class"
+    Assert-TextPattern "UCatCollectionModel" "Source/Catfishing/UI/Collection/CatCollectionModel.h" "Collection Model class"
+    Assert-TextPattern "LoadInventoryToggleAction" "Source/Catfishing/UI/CatUISettings.cpp" "Inventory input action loader"
+    Assert-TextPattern "LoadGameplayInputMappingContext" "Source/Catfishing/UI/CatUISettings.cpp" "existing InputContext loader"
+    Assert-TextPattern "ResolveInventoryToggleKeyName" "Source/Catfishing/UI/CatUISettings.cpp" "inventory key resolved from existing IMC"
+    Assert-NoTextPattern "IMC_LakeMenu" "Source/Catfishing/UI/CatUISettings.cpp" "UI Settings must use existing InputContext instead of a duplicate menu IMC"
+    Assert-NoTextPattern "IMC_LakeMenu" "Source/Catfishing/UI/Tests/CatUIModuleWidgetAssetTests.cpp" "WBP create must not generate a duplicate menu IMC"
+    Assert-NoTextPattern "NewObject<UInputAction>" "Source/Catfishing/UI/Inventory/CatInventoryPageController.cpp" "Inventory PageController must not create runtime InputAction"
+    Assert-NoTextPattern "MapKey\(" "Source/Catfishing/UI/Inventory/CatInventoryPageController.cpp" "Inventory PageController must not hard-code key mappings"
+    Assert-TextPattern "CreateWidget<UCatHUDWidget>" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "LocalPlayer creates HUD only"
+    Assert-TextPattern "CreateWidget<UCatInventoryWidget>" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "LocalPlayer creates inventory shell"
+    Assert-TextPattern "UCatInteractionPageController" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "LocalPlayer owns generic interaction controller"
+    Assert-TextPattern "ShopPrecreated=false" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "LocalPlayer explicitly does not precreate shop"
+    Assert-TextPattern "FCatContainerSnapshot" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory view comes from container snapshot"
+    Assert-TextPattern "Capacity" "Source/Catfishing/Items/CatItemTypes.h" "container snapshot exposes backend capacity"
+    Assert-TextPattern "Catfishing.Editor.UIModules.CreateFormalWBPAssets" "Source/Catfishing/UI/Tests/CatUIModuleWidgetAssetTests.cpp" "split WBP asset generation automation"
+    Assert-TextPattern "CREATE_UI_MODULE_WBPS_PASS" "Source/Catfishing/UI/Tests/CatUIModuleWidgetAssetTests.cpp" "split WBP asset pass marker"
+    Assert-TextPattern "IA_Interact" "Source/Catfishing/UI/Tests/CatUIModuleWidgetAssetTests.cpp" "interaction input action generated into existing IMC"
 }
 
 function Invoke-UIReachBuild {
@@ -151,8 +139,8 @@ function Invoke-UIReachBuild {
 
 function Invoke-UIReachWBPCreate {
     <#
-    创建或刷新正式 WBP_CatLakeReach 前端资产。
-    该模式只运行 UIReach 的 Editor 资产自动化，并要求报告证明 WBP 继承正式 View 基类、拥有 Designer 属性绑定且保存成功。
+    创建或刷新拆分后的正式 UI WBP 资产。
+    该模式只运行 UI 模块的 Editor 资产自动化，并要求报告证明 HUD、背包、格子、商店、交互提示和图鉴六个 WBP 保存成功。
     #>
     Assert-ToolFile $ProjectFile "Catfishing project"
     Assert-ToolFile $Editor "Unreal Editor commandlet"
@@ -161,7 +149,7 @@ function Invoke-UIReachWBPCreate {
     $LogFile = Join-Path $RunRoot "CreateWBP.log"
     New-Item -ItemType Directory -Path $RunRoot -Force | Out-Null
     & $Editor $ProjectFile -unattended -nop4 -nosplash -nullrhi -DDC-ForceMemoryCache `
-        "-ExecCmds=Automation RunTests Catfishing.Editor.UIReach.CreateFormalWBPAsset;Quit" `
+        "-ExecCmds=Automation RunTests Catfishing.Editor.UIModules.CreateFormalWBPAssets;Quit" `
         "-TestExit=Automation Test Queue Empty" `
         "-ReportExportPath=$ReportRoot" `
         "-abslog=$LogFile"
@@ -173,12 +161,12 @@ function Invoke-UIReachWBPCreate {
         throw "UIReach WBP create did not produce a fresh report and log"
     }
     Assert-AutomationReport -IndexFile $IndexFile -LogFile $LogFile -ExpectedTests @(
-        "Catfishing.Editor.UIReach.CreateFormalWBPAsset"
+        "Catfishing.Editor.UIModules.CreateFormalWBPAssets"
     )
-    # BindingCount 和面板名是生成脚本与正式 WBP 之间的最小握手信号。
-    # 这里不检查美术细节，只防止动作区或 Designer 绑定缺失时仍保存出看似成功的资产。
+    # 拆分模块和关键控件名是生成脚本与正式 WBP 之间的最小握手信号。
+    # 这里不检查美术细节，只防止仍生成旧总入口或漏掉背包格子/商店/提示模块。
     $LogText = Get-Content -LiteralPath $LogFile -Raw
-    if ($LogText -notmatch "CREATE_UI_REACH_WBP_PASS" -or $LogText -notmatch "WidgetCount=39" -or $LogText -notmatch "BindingCount=16" -or $LogText -notmatch "FrontendPanel=LakeReachRootFrame" -or $LogText -notmatch "ActionPanel=FishGuardActionPanel" -or $LogText -match "EnsureFailed|LogPython: Error") {
+    if ($LogText -notmatch "CREATE_UI_MODULE_WBPS_PASS" -or $LogText -notmatch "InventorySlotRoot=UserWidgetNotButton" -or $LogText -notmatch "SlotContainer=InventorySlotWrapBox" -or $LogText -notmatch "ShopOwner=InteractionObject" -or $LogText -notmatch "ShopKiosk=/Game/UI/Shop/BP_CatShopKiosk" -or $LogText -notmatch "InteractAction=/Game/Input/InputAction/IA_Interact" -or $LogText -notmatch "InteractContext=/Game/Input/InputContext/IMC_InputContext" -or $LogText -notmatch "InteractKey=E" -or $LogText -match "EnsureFailed|LogPython: Error") {
         throw ("UIReach WBP create log is not green: {0}" -f $LogFile)
     }
 }
@@ -279,11 +267,8 @@ function Invoke-UIReachAutomation {
     if (-not (Test-Path -LiteralPath $IndexFile) -or -not (Test-Path -LiteralPath $LogFile)) {
         throw "UIReach automation did not produce a fresh report and log"
     }
-    # 最后两个用例分开守住两层边界：
-    # Widget 用例证明按钮只发 UI 意图，交互用例证明“吃鱼”意图能走到后端并把结果带回 Model。
-    $AllowedWarningMessagesByTest = @{
-        "Catfishing.Unit.UI.Reach.FishGuardConsumeClickReachesBackendAndUpdatesGuard" = @("ui_reach_menu_input_unavailable")
-    }
+    # 这些用例分开守住两层边界：
+    # Reach Widget 用例证明按钮只发 UI 意图；交互用例证明“吃鱼”意图能走到后端并把结果带回 Model。
     Assert-AutomationReport -IndexFile $IndexFile -LogFile $LogFile -ExpectedTests @(
         "Catfishing.Unit.UI.Settings.LakeReachUsesConfiguredWidgetClass",
         "Catfishing.Unit.UI.TravelWidget.ClassAndOpaqueHandlesRemainViewOnly",
@@ -294,8 +279,9 @@ function Invoke-UIReachAutomation {
         "Catfishing.Unit.UI.FishingViewState.ProjectsReplicatedFactsWithoutGameplayObjects",
         "Catfishing.Unit.UI.Reach.BlueprintViewCarriesHudFishingGuardAndCollectionFacts",
         "Catfishing.Unit.UI.Reach.FishGuardWidgetEmitsPureSelectionAndActionIntents",
+        "Catfishing.Unit.UI.Reach.ShopWidgetEmitsPurePurchaseAndFreeClaimIntents",
         "Catfishing.Unit.UI.Reach.FishGuardConsumeClickReachesBackendAndUpdatesGuard"
-    ) -AllowedWarningMessagesByTest $AllowedWarningMessagesByTest
+    )
 }
 
 function Invoke-UIReachRuntimeAttachAutomation {

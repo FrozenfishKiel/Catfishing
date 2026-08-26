@@ -28,6 +28,7 @@ void UCatItemsService::Deinitialize()
 }
 
 // 容器注册流程：逐项验证组件、ID、类型与个人身份，再建立 Revision=1 的空快照并发布；同 ID 只允许同一组件幂等重放。
+// 容器注册流程：验证 authority 期间传入的宿主、ID、类型和个人身份，再把初始 Revision、容量、主人身份和复制组件写入服务端记录并发布初始快照。
 bool UCatItemsService::RegisterContainer(UCatContainerReplicationComponent* ReplicationComponent, const FGuid ContainerId,
 	const ECatContainerKind Kind, const FString& OwnerStableNetId, const int32 Capacity)
 {
@@ -44,6 +45,7 @@ bool UCatItemsService::RegisterContainer(UCatContainerReplicationComponent* Repl
 	Record.Snapshot.ContainerId = ContainerId;
 	Record.Snapshot.Kind = Kind;
 	Record.Snapshot.Revision = 1;
+	Record.Snapshot.Capacity = FMath::Max(0, Capacity);
 	Record.OwnerStableNetId = Kind == ECatContainerKind::PersonalGuard ? OwnerStableNetId : FString();
 	Record.Capacity = FMath::Max(0, Capacity);
 	Record.ReplicationComponent = ReplicationComponent;
@@ -75,7 +77,7 @@ void UCatItemsService::UnregisterContainer(UCatContainerReplicationComponent* Re
 	}
 }
 
-// 快照查询流程：按稳定容器 ID 复制公开 DTO；服务端私有容量、身份和预留永远不写入输出。
+// 快照查询流程：按稳定容器 ID 复制公开 DTO；容量属于公开 UI 事实，服务端私有身份和预留永远不写入输出。
 bool UCatItemsService::TryGetContainerSnapshot(const FGuid ContainerId, FCatContainerSnapshot& OutSnapshot) const
 {
 	const FContainerRecord* Record = Containers.Find(ContainerId);

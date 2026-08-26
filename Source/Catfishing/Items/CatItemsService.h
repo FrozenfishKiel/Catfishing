@@ -22,14 +22,14 @@ public:
 	/** World 销毁时关闭新命令并清空仅属本局的容器、预留与终态缓存。 */
 	virtual void Deinitialize() override;
 
-	/** 注册一个真实容器宿主并发布初始 Revision；个人容器身份只保存在服务端记录。 */
+	/** 注册一个真实容器宿主并发布初始 Revision 和正式容量；个人容器身份只保存在服务端记录。 */
 	bool RegisterContainer(UCatContainerReplicationComponent* ReplicationComponent, FGuid ContainerId,
 		ECatContainerKind Kind, const FString& OwnerStableNetId, int32 Capacity);
 
 	/** 宿主离开 World 时按精确组件解除发布目标；已有终态不会迁移到其他容器。 */
 	void UnregisterContainer(UCatContainerReplicationComponent* ReplicationComponent);
 
-	/** 复制指定容器已提交的公开事实供上层校验 Revision；不存在时整体失败，预留、容量和主人身份始终留在服务端记录。 */
+	/** 复制指定容器已提交的公开事实供上层校验 Revision；不存在时整体失败，预留和主人身份始终留在服务端记录。 */
 	bool TryGetContainerSnapshot(FGuid ContainerId, FCatContainerSnapshot& OutSnapshot) const;
 
 	/** 返回容器的服务器种类与真实 Actor 宿主；供空间权限校验使用，不暴露私有主人身份。 */

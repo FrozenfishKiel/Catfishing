@@ -4,7 +4,7 @@
 #include "Tests/AutomationCommon.h"
 #include "UObject/UnrealType.h"
 
-#include "AbilitySystem/CatAbilitySettings.h"
+#include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "Camp/CatCampHubActor.h"
 #include "Camp/CatCampSettings.h"
 #include "Character/CatCharacter.h"

@@ -4,9 +4,9 @@
 #include "Tests/AutomationCommon.h"
 #include "UObject/StrongObjectPtr.h"
 
-#include "AbilitySystem/CatAbilitySettings.h"
-#include "AbilitySystem/CatAbilitySystemComponent.h"
-#include "AbilitySystem/CatBodyActionAbility.h"
+#include "AbilitySystem/Config/CatAbilitySettings.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/BodyAction/CatBodyActionAbility.h"
 #include "Character/CatCharacter.h"
 #include "Condition/CatConditionSettings.h"
 #include "Data/CatFishCatalogSettings.h"
@@ -375,8 +375,6 @@ bool FCatLakeReachFishGuardConsumeClickBackendTest::RunTest(const FString& Param
 	}
 	TestTrue(TEXT("Model 绑定正式 LocalPlayer/Controller/Character"),
 		Model->Bind(LocalPlayer.Get(), Controller, Character));
-	// 输入告警预期：这个自动化 World 没有完整 Enhanced Input LocalPlayer 子系统，PageController 仍保留正式 warning；本测试只把它登记为夹具限制，不把生产诊断降级。
-	AddExpectedErrorPlain(TEXT("Event=ui_reach_menu_input_unavailable"), EAutomationExpectedErrorFlags::Contains, 1);
 	TestTrue(TEXT("PageController 绑定 Model 与 View"),
 		PageController->Bind(LocalPlayer.Get(), Controller, Model.Get(), Widget.Get()));
 	Model->SetMenuOpen(true);

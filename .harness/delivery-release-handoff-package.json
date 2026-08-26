@@ -19,7 +19,7 @@
     "UIReach": {
       "title": "UI / Reach——Fishing 信息可达闭环",
       "closure_status": "complete",
-      "status_basis": "Static, Build, formal WBP Create with Designer bindings, Automation, Runtime attach evidence, MCP asset hierarchy, comment review, and code review are recorded as one atomic UI reachability closure.",
+      "status_basis": "The latest 2026-08-25 UI feedback refresh is evidenced by Static, Build, and formal WBP Create with Designer bindings; earlier Automation and Runtime attach evidence remain regression evidence only and do not replace the pending manual PIE acceptance for the refreshed UI.",
       "evidence_roots": [
         "Saved/Automation/UIReach"
       ]
@@ -137,14 +137,14 @@
       "contract_id": "UIReach.BuildPass",
       "module_key": "UIReach",
       "check_kind": "file_contains",
-      "path": "Saved/Automation/UIReach/Build-20260825-162651/Build.log",
+      "path": "Saved/Automation/UIReach/Build-20260825-192011/Build.log",
       "expected_text": "Result: Succeeded"
     },
     {
       "contract_id": "UIReach.WBPCreateSuccess",
       "module_key": "UIReach",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/UIReach/CreateWBP-20260825-163206/Report/index.json",
+      "path": "Saved/Automation/UIReach/CreateWBP-20260825-192041/Report/index.json",
       "expected_tests": [
         "Catfishing.Editor.UIReach.CreateFormalWBPAsset"
       ]
@@ -153,22 +153,23 @@
       "contract_id": "UIReach.WBPDesignerBindings",
       "module_key": "UIReach",
       "check_kind": "file_contains",
-      "path": "Saved/Automation/UIReach/CreateWBP-20260825-163206/CreateWBP.log",
-      "expected_text": "WidgetCount=39 BindingCount=16 FrontendPanel=LakeReachRootFrame ActionPanel=FishGuardActionPanel"
+      "path": "Saved/Automation/UIReach/CreateWBP-20260825-192041/CreateWBP.log",
+      "expected_text": "WidgetCount=81 BindingCount=37 FishGuardPanel=FishGuardPanel SlotWrap=FishGuardSlotWrapBox SlotPreviewCount=8 MenuAction=/Game/Input/InputAction/IA_LakeMenu MenuContext=/Game/Input/InputContext/IMC_InputContext"
     },
     {
       "contract_id": "UIReach.AutomationSuccess",
       "module_key": "UIReach",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/UIReach/20260825-163436/Report/index.json",
-      "allow_warnings": true,
-      "warning_basis": "The only warning is ui_reach_menu_input_unavailable for Tab in command-line automation; the same report and log still show fish-guard selection/action tests and items_consume_terminal Committed=true.",
+      "path": "Saved/Automation/UIReach/20260825-184647/Report/index.json",
+      "allow_warnings": false,
+      "warning_basis": "This full UI automation report predates the 19:20 refreshed WBP/Input asset pass and is retained only as regression evidence; the refreshed UI currently relies on the fresh Static, Build, WBPCreate evidence plus pending manual PIE acceptance.",
       "expected_tests": [
         "Catfishing.Unit.UI.Settings.LakeReachUsesConfiguredWidgetClass",
         "Catfishing.Unit.UI.LocalPlayerUISubsystem.AttachesSingleLakeReachRootForPossessedCat",
         "Catfishing.Unit.UI.Reach.BlueprintViewCarriesHudFishingGuardAndCollectionFacts",
         "Catfishing.Unit.UI.Reach.FishGuardConsumeClickReachesBackendAndUpdatesGuard",
         "Catfishing.Unit.UI.Reach.FishGuardWidgetEmitsPureSelectionAndActionIntents",
+        "Catfishing.Unit.UI.Reach.ShopWidgetEmitsPurePurchaseAndFreeClaimIntents",
         "Catfishing.Unit.UI.LocalPlayerUISubsystem.OnlineTravelWidgetStaysOutOfLake"
       ]
     },
@@ -176,14 +177,14 @@
       "contract_id": "UIReach.RuntimePass",
       "module_key": "UIReach",
       "check_kind": "file_contains",
-      "path": "Saved/Automation/UIReach/Runtime-20260825-163301/Runtime.log",
+      "path": "Saved/Automation/UIReach/Runtime-20260825-183455/Runtime.log",
       "expected_text": "UI_REACH_RUNTIME_PASS"
     },
     {
       "contract_id": "UIReach.RuntimeAttachSuccess",
       "module_key": "UIReach",
       "check_kind": "automation_report",
-      "path": "Saved/Automation/UIReach/Runtime-20260825-163301/AttachAutomation/Report/index.json",
+      "path": "Saved/Automation/UIReach/Runtime-20260825-183455/AttachAutomation/Report/index.json",
       "expected_tests": [
         "Catfishing.Unit.UI.LocalPlayerUISubsystem.AttachesSingleLakeReachRootForPossessedCat"
       ]

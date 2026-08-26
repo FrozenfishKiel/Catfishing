@@ -115,6 +115,10 @@ private:
 	UPROPERTY(ReplicatedUsing = OnRep_ContainerMetadata)
 	int64 ReplicatedRevision = 0;
 
+	/** 容器当前正式容量的复制字段；客户端 UI 只用它决定要显示多少格子，不据此创建或删除鱼。 */
+	UPROPERTY(ReplicatedUsing = OnRep_ContainerMetadata)
+	int32 ReplicatedCapacity = 0;
+
 	/** 实物鱼增删改的 FastArray 网络适配；Items 是唯一写者，客户 delta 回调与元数据 OnRep 可任意先后重建并最终收敛。 */
 	UPROPERTY(Replicated)
 	FCatReplicatedFishList ReplicatedFish;

@@ -2,7 +2,7 @@
 
 #include "Misc/AutomationTest.h"
 
-#include "AbilitySystem/CatAbilitySettings.h"
+#include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "Character/CatCharacter.h"
 #include "Collection/CatRunImprintService.h"
 #include "Components/BoxComponent.h"

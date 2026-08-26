@@ -16,7 +16,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.UI.Reach.FishGuardWidgetEmitsPureSelectionAndActionIntents",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 测试流程：只通过正式 View 基类的 DTO seam 填入身体、Fishing 反馈、鱼护和图鉴事实；native 副本必须保留 Profile 记录，蓝图副本必须通过 UI 专用条目承接。
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatLakeReachWidgetShopIntentTest,
+	"Catfishing.Unit.UI.Reach.ShopWidgetEmitsPurePurchaseAndFreeClaimIntents",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+// 测试流程：只通过正式 View 基类的 DTO 渲染入口填入身体、Fishing 反馈、鱼护和图鉴事实；native 副本必须保留 Profile 记录，蓝图副本必须通过 UI 专用条目承接。
 bool FCatLakeReachWidgetViewStateContractTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -33,12 +38,22 @@ bool FCatLakeReachWidgetViewStateContractTest::RunTest(const FString& Parameters
 		UCatLakeReachWidget::StaticClass()->FindFunctionByName(TEXT("RequestSelectPreviousFishGuardEntry")));
 	TestNotNull(TEXT("LakeReach View 暴露下一条鱼护选择入口"),
 		UCatLakeReachWidget::StaticClass()->FindFunctionByName(TEXT("RequestSelectNextFishGuardEntry")));
+	TestNotNull(TEXT("LakeReach View 暴露鱼护格子选择入口"),
+		UCatLakeReachWidget::StaticClass()->FindFunctionByName(TEXT("RequestSelectFishGuardSlot")));
 	TestNotNull(TEXT("LakeReach View 暴露吃鱼意图入口"),
 		UCatLakeReachWidget::StaticClass()->FindFunctionByName(TEXT("RequestConsumeSelectedFish")));
 	TestNotNull(TEXT("LakeReach View 暴露转缸意图入口"),
 		UCatLakeReachWidget::StaticClass()->FindFunctionByName(TEXT("RequestTransferSelectedFishToTank")));
 	TestNotNull(TEXT("LakeReach View 暴露献祭意图入口"),
 		UCatLakeReachWidget::StaticClass()->FindFunctionByName(TEXT("RequestSacrificeSelectedFish")));
+	TestNotNull(TEXT("LakeReach View 暴露购买二级竿意图入口"),
+		UCatLakeReachWidget::StaticClass()->FindFunctionByName(TEXT("RequestPurchaseShopRodT2")));
+	TestNotNull(TEXT("LakeReach View 暴露购买窝料意图入口"),
+		UCatLakeReachWidget::StaticClass()->FindFunctionByName(TEXT("RequestPurchaseBugChum")));
+	TestNotNull(TEXT("LakeReach View 暴露免费鱼饵意图入口"),
+		UCatLakeReachWidget::StaticClass()->FindFunctionByName(TEXT("RequestClaimFreeBugBait")));
+	TestNotNull(TEXT("LakeReach View 暴露保底鱼竿意图入口"),
+		UCatLakeReachWidget::StaticClass()->FindFunctionByName(TEXT("RequestClaimFreeStarterRod")));
 	TestNotNull(TEXT("统一 DTO 暴露选中鱼护条目"),
 		FindFProperty<FStructProperty>(FCatUIReachViewState::StaticStruct(),
 			GET_MEMBER_NAME_CHECKED(FCatUIReachViewState, SelectedFishGuardFish)));
@@ -68,6 +83,9 @@ bool FCatLakeReachWidgetViewStateContractTest::RunTest(const FString& Parameters
 	ViewState.LastFishingCommandResult.CommandType = ECatFishingCommandType::RequestScoop;
 	ViewState.LastFishingCommandResult.Error = ECatFishingCommandError::None;
 	ViewState.bHasFishingCommandResult = true;
+	ViewState.ShopEconomy.Balance = 7;
+	ViewState.ShopEconomy.WalletRevision = 3;
+	ViewState.bShopEconomyAvailable = true;
 	ViewState.bMenuOpen = true;
 	ViewState.MenuToggleKeyName = TEXT("Tab");
 	ViewState.bCanRequestOnlineLeave = true;
@@ -129,6 +147,9 @@ bool FCatLakeReachWidgetViewStateContractTest::RunTest(const FString& Parameters
 	}
 	TestTrue(TEXT("菜单、鱼护和图鉴仍属于同一根状态"), BlueprintState.bMenuOpen && BlueprintState.bFishCollectionAvailable);
 	TestTrue(TEXT("Lake 菜单保留正式 Online 离局 gate"), BlueprintState.bCanRequestOnlineLeave);
+	TestTrue(TEXT("蓝图 DTO 收到商店公开快照"), BlueprintState.bShopEconomyAvailable);
+	TestEqual(TEXT("蓝图 DTO 收到团队公款余额"), BlueprintState.ShopEconomy.Balance, 7);
+	TestEqual(TEXT("蓝图 DTO 收到钱包版本"), BlueprintState.ShopEconomy.WalletRevision, int64{3});
 	return !HasAnyErrors();
 }
 
@@ -182,10 +203,11 @@ bool FCatLakeReachWidgetFishGuardIntentTest::RunTest(const FString& Parameters)
 	Widget->Render(OpenState);
 	Widget->RequestSelectPreviousFishGuardEntry();
 	Widget->RequestSelectNextFishGuardEntry();
+	Widget->RequestSelectFishGuardSlot(1);
 	Widget->RequestConsumeSelectedFish();
 	Widget->RequestTransferSelectedFishToTank();
 	Widget->RequestSacrificeSelectedFish();
-	TestEqual(TEXT("不能前移时只广播一次后移偏移"), SelectionOffsetTotal, 1);
+	TestEqual(TEXT("不能前移时只广播下一格和格子点击两个后移偏移"), SelectionOffsetTotal, 2);
 	TestEqual(TEXT("打开菜单且有选中鱼时广播三种鱼护动作"), Actions.Num(), 3);
 	if (Actions.Num() == 3)
 	{
@@ -202,6 +224,57 @@ bool FCatLakeReachWidgetFishGuardIntentTest::RunTest(const FString& Parameters)
 	Widget->Render(PendingState);
 	Widget->RequestConsumeSelectedFish();
 	TestEqual(TEXT("pending 状态不重复广播鱼护动作"), Actions.Num(), 3);
+	return !HasAnyErrors();
+}
+
+// 测试流程：只通过正式 Widget 公共入口模拟商店按钮；菜单关闭或缺商店快照时不广播，打开菜单且有 GameState 商店快照时只广播购买/免费领取枚举。
+bool FCatLakeReachWidgetShopIntentTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	UCatLakeReachWidget* Widget = NewObject<UCatLakeReachWidget>(GetTransientPackage());
+	if (!TestNotNull(TEXT("可创建商店意图测试 View"), Widget))
+	{
+		return false;
+	}
+
+	TArray<ECatUIReachShopAction> Actions;
+	Widget->OnShopActionRequested.AddLambda([&Actions](const ECatUIReachShopAction Action)
+	{
+		Actions.Add(Action);
+	});
+
+	FCatUIReachViewState ClosedState;
+	ClosedState.bMenuOpen = false;
+	ClosedState.bShopEconomyAvailable = true;
+	ClosedState.ShopEconomy.WalletRevision = 1;
+	Widget->Render(ClosedState);
+	Widget->RequestPurchaseShopRodT2();
+	TestEqual(TEXT("关闭菜单时不广播商店意图"), Actions.Num(), 0);
+
+	FCatUIReachViewState MissingShopState = ClosedState;
+	MissingShopState.bMenuOpen = true;
+	MissingShopState.bShopEconomyAvailable = false;
+	Widget->Render(MissingShopState);
+	Widget->RequestClaimFreeBugBait();
+	TestEqual(TEXT("缺商店快照时不广播商店意图"), Actions.Num(), 0);
+
+	FCatUIReachViewState OpenState = MissingShopState;
+	OpenState.bShopEconomyAvailable = true;
+	OpenState.ShopEconomy.WalletRevision = 2;
+	Widget->Render(OpenState);
+	Widget->RequestPurchaseShopRodT2();
+	Widget->RequestPurchaseBugChum();
+	Widget->RequestClaimFreeBugBait();
+	Widget->RequestClaimFreeStarterRod();
+	TestEqual(TEXT("打开菜单且有商店快照时广播四种商店意图"), Actions.Num(), 4);
+	if (Actions.Num() == 4)
+	{
+		TestEqual(TEXT("第一种商店动作为买二级竿"), Actions[0], ECatUIReachShopAction::PurchaseShopRodT2);
+		TestEqual(TEXT("第二种商店动作为买窝料"), Actions[1], ECatUIReachShopAction::PurchaseBugChum);
+		TestEqual(TEXT("第三种商店动作为领鱼饵"), Actions[2], ECatUIReachShopAction::ClaimFreeBugBait);
+		TestEqual(TEXT("第四种商店动作为领保底竿"), Actions[3], ECatUIReachShopAction::ClaimFreeStarterRod);
+	}
 	return !HasAnyErrors();
 }
 

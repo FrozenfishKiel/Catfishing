@@ -1,6 +1,6 @@
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 
-#include "AbilitySystem/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"

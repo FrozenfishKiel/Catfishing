@@ -33,7 +33,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatLocalPlayerUISubsystemLakeReachAttachTest,
-	"Catfishing.Unit.UI.LocalPlayerUISubsystem.AttachesSingleLakeReachRootForPossessedCat",
+	"Catfishing.Unit.UI.LocalPlayerUISubsystem.AttachesPlayerLakeModulesForPossessedCat",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -70,7 +70,7 @@ bool FCatLocalPlayerUISubsystemTypeContractTest::RunTest(const FString& Paramete
 }
 
 // 测试流程：用 FTestWorldWrapper 创建带 GameInstance 的 Game World，再给 LocalPlayer 装入同一 WorldContext 且带 Overlay 的临时 GameViewportClient，避免命令行 Viewport 缺层的假失败。
-// 随后让项目 Controller 通过正式 Pawn notifier 占有项目 Character；先断言关闭 gate 时不创建半套 MVC，再显式打开 gate 验证 WBP View、Model 和 PageController 成对装卸。
+// 随后让项目 Controller 通过正式 Pawn notifier 占有项目 Character；先断言关闭 gate 时不创建半套模块，再显式打开 gate 验证 HUD、背包和靠近交互模块成对装卸。
 bool FCatLocalPlayerUISubsystemLakeReachAttachTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -130,49 +130,44 @@ bool FCatLocalPlayerUISubsystemLakeReachAttachTest::RunTest(const FString& Param
 		return false;
 	}
 	const bool bSavedLakeReachView = Settings->bEnableLakeReachView;
-	const TSoftClassPtr<UCatLakeReachWidget> SavedLakeReachClass = Settings->LakeReachWidgetClass;
 	Settings->bEnableLakeReachView = false;
-	Settings->LakeReachWidgetClass = TSoftClassPtr<UCatLakeReachWidget>(
-		FSoftClassPath(TEXT("/Game/UI/WBP_CatLakeReach.WBP_CatLakeReach_C")));
 
 	Controller->SetPlayer(LocalPlayer.Get());
 	LocalUI->PlayerControllerChanged(Controller);
 	Controller->Possess(Character);
-	TestNull(TEXT("关闭 gate 后占有 Character 不创建 LakeReach WBP View"), LocalUI->LakeReachWidget.Get());
-	TestNull(TEXT("关闭 gate 后不创建 UIReach Model"), LocalUI->LakeReachModel.Get());
-	TestNull(TEXT("关闭 gate 后不创建 UIReach PageController"), LocalUI->LakeReachPageController.Get());
+	TestNull(TEXT("关闭 gate 后不创建 HUD View"), LocalUI->HUDWidget.Get());
+	TestNull(TEXT("关闭 gate 后不创建 HUD Model"), LocalUI->HUDModel.Get());
+	TestNull(TEXT("关闭 gate 后不创建背包 View"), LocalUI->InventoryWidget.Get());
+	TestNull(TEXT("关闭 gate 后不创建背包 Model"), LocalUI->InventoryModel.Get());
+	TestNull(TEXT("关闭 gate 后不创建背包 PageController"), LocalUI->InventoryPageController.Get());
+	TestNull(TEXT("关闭 gate 后不创建靠近交互提示 View"), LocalUI->InteractionPromptWidget.Get());
+	TestNull(TEXT("关闭 gate 后不创建靠近交互 PageController"), LocalUI->InteractionPageController.Get());
 	TestFalse(TEXT("关闭 gate 后菜单不会生成半套输入状态"), LocalUI->IsLakeMenuOpen());
 
 	Settings->bEnableLakeReachView = true;
 	LocalUI->HandleControllerPawnChanged(Character);
-	TestNotNull(TEXT("显式开启后创建唯一 LakeReach WBP View"), LocalUI->LakeReachWidget.Get());
-	TestNotNull(TEXT("显式开启后创建唯一 UIReach Model"), LocalUI->LakeReachModel.Get());
-	TestNotNull(TEXT("显式开启后创建唯一 UIReach PageController"), LocalUI->LakeReachPageController.Get());
-	if (LocalUI->LakeReachWidget)
-	{
-		TestTrue(TEXT("LakeReach 玩家前端继承正式 View 基类"),
-			LocalUI->LakeReachWidget->GetClass()->IsChildOf(UCatLakeReachWidget::StaticClass()));
-		TestFalse(TEXT("LakeReach 玩家前端不是原生 View 基类替身"),
-			LocalUI->LakeReachWidget->GetClass() == UCatLakeReachWidget::StaticClass());
-		TestEqual(TEXT("LakeReach 玩家前端加载正式 WBP 类"),
-			LocalUI->LakeReachWidget->GetClass()->GetName(),
-			FString(TEXT("WBP_CatLakeReach_C")));
-	}
-	if (LocalUI->LakeReachModel)
-	{
-		TestNotNull(TEXT("Model 创建唯一 Fishing 只读 Bridge"), LocalUI->LakeReachModel->GetFishingViewBridgeForTests());
-		TestTrue(TEXT("Model 绑定当前 Character 的 ASC"),
-			LocalUI->LakeReachModel->GetBoundAbilitySystemForTests() == Character->GetAbilitySystemComponent());
-	}
+	TestNotNull(TEXT("显式开启后创建 HUD View"), LocalUI->HUDWidget.Get());
+	TestNotNull(TEXT("显式开启后创建 HUD Model"), LocalUI->HUDModel.Get());
+	TestNotNull(TEXT("显式开启后创建背包 View"), LocalUI->InventoryWidget.Get());
+	TestNotNull(TEXT("显式开启后创建背包 Model"), LocalUI->InventoryModel.Get());
+	TestNotNull(TEXT("显式开启后创建背包 PageController"), LocalUI->InventoryPageController.Get());
+	TestNotNull(TEXT("显式开启后创建靠近交互提示 View"), LocalUI->InteractionPromptWidget.Get());
+	TestNotNull(TEXT("显式开启后创建靠近交互 PageController"), LocalUI->InteractionPageController.Get());
+	TestNull(TEXT("拆分模块后不再创建旧 LakeReach 聚合 View"), LocalUI->LakeReachWidget.Get());
+	TestNull(TEXT("拆分模块后不再创建旧 LakeReach 聚合 Model"), LocalUI->LakeReachModel.Get());
+	TestNull(TEXT("拆分模块后不再创建旧 LakeReach 聚合 PageController"), LocalUI->LakeReachPageController.Get());
 	TestFalse(TEXT("初始菜单不会在装配时自动打开"), LocalUI->IsLakeMenuOpen());
 
 	LocalUI->DetachLakePawn();
-	TestNull(TEXT("Detach 后移除 LakeReach WBP View"), LocalUI->LakeReachWidget.Get());
-	TestNull(TEXT("Detach 后释放 UIReach Model"), LocalUI->LakeReachModel.Get());
-	TestNull(TEXT("Detach 后释放 UIReach PageController"), LocalUI->LakeReachPageController.Get());
+	TestNull(TEXT("Detach 后移除 HUD View"), LocalUI->HUDWidget.Get());
+	TestNull(TEXT("Detach 后释放 HUD Model"), LocalUI->HUDModel.Get());
+	TestNull(TEXT("Detach 后移除背包 View"), LocalUI->InventoryWidget.Get());
+	TestNull(TEXT("Detach 后释放背包 Model"), LocalUI->InventoryModel.Get());
+	TestNull(TEXT("Detach 后释放背包 PageController"), LocalUI->InventoryPageController.Get());
+	TestNull(TEXT("Detach 后移除靠近交互提示 View"), LocalUI->InteractionPromptWidget.Get());
+	TestNull(TEXT("Detach 后释放靠近交互 PageController"), LocalUI->InteractionPageController.Get());
 	TestFalse(TEXT("Detach 后菜单状态保持关闭"), LocalUI->IsLakeMenuOpen());
 	Settings->bEnableLakeReachView = bSavedLakeReachView;
-	Settings->LakeReachWidgetClass = SavedLakeReachClass;
 	LocalPlayer->PlayerRemoved();
 	WorldContext->GameViewport = nullptr;
 	return !HasAnyErrors();

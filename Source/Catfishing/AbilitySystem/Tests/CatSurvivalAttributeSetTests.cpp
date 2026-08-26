@@ -3,8 +3,8 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 
-#include "AbilitySystem/CatAbilitySystemComponent.h"
-#include "AbilitySystem/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "GameFramework/Actor.h"
 
 #include <limits>

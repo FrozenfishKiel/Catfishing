@@ -1,7 +1,7 @@
 #include "UI/CatLakeReachModel.h"
 
 #include "AbilitySystemComponent.h"
-#include "AbilitySystem/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Character/CatCharacter.h"
 #include "Condition/CatConditionComponent.h"
 #include "Engine/GameInstance.h"
@@ -24,7 +24,7 @@
 // 绑定流程：
 // 1. 先清掉上一套来源，避免同一个 Model 在换 Pawn 时同时订阅两个 World。
 // 2. 校验 LocalPlayer、Controller、Character、ASC 和 World 都属于同一条 Lake 生命周期；失败直接返回 false。
-// 3. 创建 FishingBridge，并保存 ASC、Condition、Equipment、Growth、GameState、鱼护、Profile 和命令结果源的弱引用。
+// 3. 创建 FishingBridge，并保存 ASC、Condition、Equipment、Growth、GameState、商店快照、鱼护、Profile 和命令结果源的弱引用。
 // 4. 对每个只读来源成对订阅完整变化通知，并监听 Controller 的鱼护动作结果和当前 World 生成的 FishingSession。
 // 5. 定位当前会话并发布首份 ViewState；任何后续变化都只触发完整重读，不在 Model 中拼增量状态。
 bool UCatLakeReachModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController, ACatCharacter* InCharacter)
@@ -91,6 +91,7 @@ bool UCatLakeReachModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* In
 	{
 		RunChangedHandle = GameState->OnRunPublicStateChanged.AddUObject(this, &ThisClass::HandleLakeSnapshotChanged);
 		HelpChangedHandle = GameState->OnHelpSignalChanged.AddUObject(this, &ThisClass::HandleLakeSnapshotChanged);
+		ShopEconomyChangedHandle = GameState->OnShopEconomySnapshotChanged.AddUObject(this, &ThisClass::HandleLakeSnapshotChanged);
 	}
 	if (UCatContainerReplicationComponent* FishGuard = BoundPersonalFishGuard.Get())
 	{
@@ -118,7 +119,7 @@ bool UCatLakeReachModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* In
 }
 
 // 解绑流程：
-// 1. 从 ASC、Condition、Equipment、Growth、GameState、鱼护、Profile、命令组件和 Controller 结果源移除绑定时保存的委托句柄。
+// 1. 从 ASC、Condition、Equipment、Growth、GameState、商店、鱼护、Profile、命令组件和 Controller 结果源移除绑定时保存的委托句柄。
 // 2. 停止观察 FishingSession，再解绑 FishingBridge 与 World ActorSpawned 监听。
 // 3. 清全部弱引用、句柄、菜单状态、最近命令结果、鱼护选择/pending/result 和 ViewState；不再广播空态，因为 PageController 和 WBP 根会在同一 Detach 流程里被移除。
 void UCatLakeReachModel::Unbind()
@@ -145,6 +146,7 @@ void UCatLakeReachModel::Unbind()
 	{
 		GameState->OnRunPublicStateChanged.Remove(RunChangedHandle);
 		GameState->OnHelpSignalChanged.Remove(HelpChangedHandle);
+		GameState->OnShopEconomySnapshotChanged.Remove(ShopEconomyChangedHandle);
 	}
 	if (UCatContainerReplicationComponent* FishGuard = BoundPersonalFishGuard.Get())
 	{
@@ -183,6 +185,7 @@ void UCatLakeReachModel::Unbind()
 	EquipmentChangedHandle.Reset();
 	RunChangedHandle.Reset();
 	HelpChangedHandle.Reset();
+	ShopEconomyChangedHandle.Reset();
 	FishGuardChangedHandle.Reset();
 	FishCollectionChangedHandle.Reset();
 	FishingViewChangedHandle.Reset();
@@ -298,7 +301,7 @@ void UCatLakeReachModel::MarkFishGuardActionRejected(const ECatUIReachFishGuardA
 
 // ViewState 刷新流程：
 // 1. 校验 Controller 当前 Pawn、ASC 和 World 仍与绑定时相同；换 World 或换 Pawn 时直接发布默认空态以避免旧事实渲染。
-// 2. 读取三项 ASC 属性以及 Condition、Growth、Equipment、Run、Help、鱼护、Profile 和 Online 可选快照。
+// 2. 读取三项 ASC 属性以及 Condition、Growth、Equipment、Run、Help、Shop、鱼护、Profile 和 Online 可选快照。
 // 3. 从鱼护快照裁剪当前选择，并合入 pending 与最近鱼护动作结果，让 View 能证明服务器回包。
 // 4. FishingBridge 只有仍绑定会话时才提供 Fishing DTO；最近命令结果由单独标记决定是否展示。
 // 5. 写入菜单、键名和离局 gate，最后广播完整快照变化。
@@ -336,6 +339,8 @@ void UCatLakeReachModel::Refresh()
 	{
 		NewState.Run = GameState->GetRunPublicState();
 		NewState.HelpSignal = GameState->GetLastHelpSignal();
+		NewState.ShopEconomy = GameState->GetShopEconomySnapshot();
+		NewState.bShopEconomyAvailable = true;
 	}
 	if (FishingViewBridge && FishingViewBridge->GetBoundSession())
 	{
@@ -389,7 +394,7 @@ void UCatLakeReachModel::Refresh()
 		&& !NewState.bFishGuardActionPending;
 	if (const UCatUISettings* Settings = GetDefault<UCatUISettings>())
 	{
-		NewState.MenuToggleKeyName = Settings->LakeMenuToggleKeyName;
+		NewState.MenuToggleKeyName = Settings->ResolveLakeMenuToggleKeyName();
 	}
 	if (const ULocalPlayer* LocalPlayer = BoundLocalPlayer.Get())
 	{
@@ -445,7 +450,7 @@ void UCatLakeReachModel::HandleLakeAttributeChanged(const FOnAttributeChangeData
 	Refresh();
 }
 
-// 快照变化流程：所有 Query 来源都只提供“需要重读”信号；统一重建整份 DTO。
+// 快照变化流程：所有 Query 来源都只提供“需要重读”信号；统一重建整份 DTO，避免商店、鱼护和 HUD 分别维护 UI 私有状态。
 void UCatLakeReachModel::HandleLakeSnapshotChanged()
 {
 	Refresh();
