@@ -1,6 +1,7 @@
 #include "Environment/CatChumPlacementService.h"
 
 #include "Character/CatCharacter.h"
+#include "Condition/CatConditionComponent.h"
 #include "Engine/World.h"
 #include "Environment/CatChumFieldSettings.h"
 #include "Environment/CatChumFieldSubsystem.h"
@@ -73,7 +74,7 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 		return Fields->TryGetTerminalResult(StableNetId, Candidate.RequestId, Frozen) ? Frozen : Candidate;
 	};
 	const ACatfishingGameModeBase* GameMode = World->GetAuthGameMode<ACatfishingGameModeBase>();
-	if (!GameMode || !GameMode->CanAcceptGameplayCommand(RequestingController))
+	if (!GameMode || !GameMode->CanAcceptFishingCommand(RequestingController))
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::CommandsClosed));
 	}
@@ -90,10 +91,12 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::InvalidPayload));
 	}
 	ACatCharacter* Character = Cast<ACatCharacter>(RequestingController->GetPawn());
+	const UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
 	UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
 	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
 		Command.ChumDefinitionId);
-	if (!Character || !Equipment || !Definition || Definition->Kind != ECatEquipmentKind::Chum
+	if (!Character || !Conditions || Conditions->GetSnapshot().bDowned || !Equipment || !Definition
+		|| Definition->Kind != ECatEquipmentKind::Chum
 		|| !Definition->IsRuntimeDefinitionReady()
 		|| Command.Quantity > Definition->ChumInfluence.MaximumQuantityPerPlacement)
 	{

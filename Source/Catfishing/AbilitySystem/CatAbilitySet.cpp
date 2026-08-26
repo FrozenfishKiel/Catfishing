@@ -1,17 +1,22 @@
 #include "AbilitySystem/CatAbilitySet.h"
 
 #include "AbilitySystem/CatAbilitySystemComponent.h"
+#include "AbilitySystem/CatBodyActionAbility.h"
 #include "AbilitySystem/CatFishingAbilityTags.h"
 #include "GameplayEffect.h"
 
 bool UCatAbilitySet::IsRuntimeReady() const
 {
-	if (GrantedAbilities.Num() < 5)
+	// 默认 AbilitySet 是 InputConfig 之后的第二道入口门禁：六个正式 Fishing 输入 Tag 必须都有可授予能力，
+	// 非 Fishing 身体动作还必须有无输入的 BodyAction 事件网关，避免 UI/RPC 绕过 GAS 直接撞领域写口。
+	if (GrantedAbilities.Num() < 7)
 	{
 		return false;
 	}
+	// 两个集合只在就绪门禁内去重：能力类不能重复授予，同一输入 Tag 也不能映射到多个技能。
 	TSet<TSubclassOf<UGameplayAbility>> SeenAbilities;
 	TSet<FGameplayTag> SeenInputTags;
+	bool bHasBodyActionAbility = false;
 	for (const FCatAbilitySetAbility& Entry : GrantedAbilities)
 	{
 		if (!Entry.Ability || Entry.Level < 1 || SeenAbilities.Contains(Entry.Ability)
@@ -20,6 +25,15 @@ bool UCatAbilitySet::IsRuntimeReady() const
 			return false;
 		}
 		SeenAbilities.Add(Entry.Ability);
+		if (Entry.Ability == UCatGA_BodyActionCommand::StaticClass())
+		{
+			// BodyAction 是 GameplayEvent 网关，不能占用 EnhancedInput Tag；这里保留默认触发策略只为了让授予记录可读、可校验。
+			if (Entry.InputTag.IsValid() || Entry.ActivationPolicy != ECatAbilityActivationPolicy::OnInputTriggered)
+			{
+				return false;
+			}
+			bHasBodyActionAbility = true;
+		}
 		if (Entry.InputTag.IsValid())
 		{
 			// 按住型输入（收线 / 松开线杯 / 打窝蓄力）必须 WhileInputActive，其余离散输入必须 OnInputTriggered。
@@ -37,9 +51,11 @@ bool UCatAbilitySet::IsRuntimeReady() const
 	}
 	return SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_RodInteract)
 		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Primary)
+		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Slack)
 		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Cancel)
 		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Scoop)
-		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Chum);
+		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Chum)
+		&& bHasBodyActionAbility;
 }
 
 bool UCatAbilitySet::GiveToAbilitySystem(UCatAbilitySystemComponent* AbilitySystem,

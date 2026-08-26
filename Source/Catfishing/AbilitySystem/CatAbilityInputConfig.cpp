@@ -9,8 +9,8 @@ bool UCatAbilityInputConfig::IsRuntimeReady() const
 	{
 		return false;
 	}
-	// 五个核心钓鱼输入必须齐全；允许追加可选输入（例如右键松线）。
-	if (AbilityInputActions.Num() < 5)
+	// 交互 Native Input 与六项 GAS 钓鱼意图都必须完整；右键松线是核心输入，不再作为可选项。
+	if (AbilityInputActions.Num() < 6)
 	{
 		return false;
 	}
@@ -28,6 +28,7 @@ bool UCatAbilityInputConfig::IsRuntimeReady() const
 	}
 	return SeenTags.Contains(CatFishingAbilityTags::Input_Fishing_RodInteract)
 		&& SeenTags.Contains(CatFishingAbilityTags::Input_Fishing_Primary)
+		&& SeenTags.Contains(CatFishingAbilityTags::Input_Fishing_Slack)
 		&& SeenTags.Contains(CatFishingAbilityTags::Input_Fishing_Cancel)
 		&& SeenTags.Contains(CatFishingAbilityTags::Input_Fishing_Scoop)
 		&& SeenTags.Contains(CatFishingAbilityTags::Input_Fishing_Chum);

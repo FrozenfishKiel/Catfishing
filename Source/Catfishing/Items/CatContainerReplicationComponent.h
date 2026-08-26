@@ -2,11 +2,15 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Engine/TimerHandle.h"
 #include "Items/CatItemTypes.h"
 #include "Net/Serialization/FastArraySerializer.h"
 #include "CatContainerReplicationComponent.generated.h"
 
 class UCatContainerReplicationComponent;
+
+/** 容器公开快照已经完整替换的只读通知；订阅者收到信号后重新读取 GetSnapshot，不把事件当成写入许可。 */
+DECLARE_MULTICAST_DELEGATE(FCatContainerSnapshotChanged);
 
 /** FastArray 的单条实物鱼复制项；ReplicationID/Key 只服务网络增量，不成为领域身份。 */
 USTRUCT()
@@ -67,17 +71,29 @@ public:
 	/** 注册复制字段；个人组件沿 Character owner 相关性发送，共享组件沿 FishTank Actor 相关性发送。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
+	/** 组件离开 World 时取消尚未触发的客户端合并通知并清空订阅，防止旧 World 在下一帧刷新 UI。 */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
 	/** authority 服务发布完整快照；拒绝客户端调用，并用 ForceNetUpdate 加速事务终态收敛。 */
 	void SetSnapshotFromAuthority(const FCatContainerSnapshot& NewSnapshot);
 
 	/** 提供 Items 已发布的服务器事实或客户端重建结果；只读引用禁止表现绕过聚合写口修改鱼数组。 */
 	const FCatContainerSnapshot& GetSnapshot() const;
 
+	/** 完整快照变化的订阅入口；authority 提交后立即触发，客户端在元数据与 FastArray 收敛后的下一帧触发。 */
+	FCatContainerSnapshotChanged OnSnapshotChanged;
+
 private:
 	friend struct FCatReplicatedFishList;
 
 	/** 元数据或 FastArray 回调发生后重建外部只读 Snapshot；不产生写命令、Revision 或终态缓存。 */
 	void RebuildSnapshotFromReplication();
+
+	/** 客户端任一复制回调到达时安排一次下一帧合并；同帧元数据与 FastArray 回调只保留一个通知。 */
+	void ScheduleSnapshotNotificationFromReplication();
+
+	/** 下一帧重新组合元数据与鱼数组并广播完整快照变化；执行后清除 pending 状态，允许下一事务再次安排。 */
+	void FlushSnapshotNotificationFromReplication();
 
 	/** 容器 ID、类型或 Revision 到达客户端时重建完整读模型；FastArray 同包顺序差异由两类回调共同收敛。 */
 	UFUNCTION()
@@ -102,4 +118,10 @@ private:
 	/** 实物鱼增删改的 FastArray 网络适配；Items 是唯一写者，客户 delta 回调与元数据 OnRep 可任意先后重建并最终收敛。 */
 	UPROPERTY(Replicated)
 	FCatReplicatedFishList ReplicatedFish;
+
+	/** 客户端复制回调合并窗口的计时句柄；EndPlay 用它取消旧 World 尚未执行的下一帧任务。 */
+	FTimerHandle DeferredSnapshotNotificationHandle;
+
+	/** 当前是否已有一次客户端快照通知等待执行；它只做同帧去重，不代表领域事务状态。 */
+	bool bSnapshotNotificationPending = false;
 };

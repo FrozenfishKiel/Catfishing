@@ -33,11 +33,11 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Loadout")
 	FName RequiredUnlockId = NAME_None;
 
-	/** 是否为一局消耗品；普通饵必须为 false，特殊饵必须为 true。 */
+	/** 是否为本局数量型消耗品；Bait、Chum、Herb 会进入角色耗材栈，Rod、Float 和 ScoopNet 不能打开。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Consumption")
 	bool bRunConsumable = false;
 
-	/** Bait 是否为特殊消耗饵；普通饵为 false 且无限使用。 */
+	/** Bait 的特殊身份标记；它只区分偏好和失败惩罚语义，不再决定该饵是否需要一局数量。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Consumption")
 	bool bSpecialBait = false;
 

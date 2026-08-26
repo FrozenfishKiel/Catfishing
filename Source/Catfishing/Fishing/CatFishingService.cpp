@@ -108,7 +108,8 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	};
 	UWorld* World = GetWorld();
 	const ACatfishingGameModeBase* GameMode = World ? World->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
-	if (!bCommandsOpen || !GameMode || !GameMode->CanAcceptGameplayCommand(FisherController))
+	if (!bCommandsOpen || !GameMode || !GameMode->CanAcceptFishingCommand(FisherController)
+		|| !CanControllerStartFishingAction(FisherController))
 	{
 		Result.Command.Error = ECatFishingCommandError::CommandsClosed;
 		return Finish(Result);
@@ -295,7 +296,14 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		Result.Error = ECatFishingCommandError::InvalidIdentity;
 		return Result;
 	}
-	if (!bCommandsOpen || !World || !Character || !PlayerState || !Equipment)
+	const ACatfishingGameModeBase* GameMode = World ? World->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
+	if (!bCommandsOpen || !GameMode || !GameMode->CanAcceptFishingCommand(Controller)
+		|| !CanControllerStartFishingAction(Controller))
+	{
+		Result.Error = ECatFishingCommandError::CommandsClosed;
+		return Result;
+	}
+	if (!World || !Character || !PlayerState || !Equipment)
 	{
 		Result.Error = ECatFishingCommandError::DependencyUnavailable;
 		return Result;
@@ -369,6 +377,14 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 	Result.RequestId = Command.Context.RequestId;
 	APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
 	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
+	UWorld* World = GetWorld();
+	const ACatfishingGameModeBase* GameMode = World ? World->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
+	if (!bCommandsOpen || !GameMode || !GameMode->CanAcceptFishingCommand(Controller)
+		|| !CanControllerStartFishingAction(Controller))
+	{
+		Result.Error = ECatFishingCommandError::CommandsClosed;
+		return Result;
+	}
 	// 按公开 RodActorId 在全部部署竿中解析：不限制竿主，只要还有空槽就能加入。
 	ACatFishingRodActor* Rod = FindDeployedRodById(Command.Context.RodActorId);
 	if (!Rod || !Character)
@@ -544,7 +560,7 @@ FCatFishingCommandResult UCatFishingService::PackRod(AController* Controller, co
 	Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
 	// 不能在这里裸 Destroy：上面 SetDeployedFromAuthority(false) 的 ForceNetUpdate 只是标脏，
 	// 真正发包要等下一次 NetDriver tick，那时 Actor 已 pending kill，远端客户端只会收到"销毁"而收不到
-	// bDeployed=false 这次属性变化，BP_OnRodPresentationChanged 在客户端上不会为收竿触发一次
+	// 这次“已部署变为否”的属性变化，BP_OnRodPresentationChanged 在客户端上不会为收竿触发一次
 	// （listen server 本机因为是同步 dispatch 反而正常，所以这个 bug 在单机 PIE 下完全看不出来）。
 	// 与 ACatFishingSession::ScheduleTerminalDestroy 对齐：复用同一个终态复制窗，让客户端播完收竿表现再消失。
 	// 竿本身在 ACatFishingRodActor::DispatchPresentationChanged 里已经立刻隐藏并关碰撞，窗口期不会留下可见/挡路的残影。
@@ -885,6 +901,14 @@ FString UCatFishingService::ResolveStableNetId(const AController* Controller)
 {
 	const APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
 	return PlayerState && PlayerState->GetUniqueId().IsValid() ? PlayerState->GetUniqueId()->ToString() : FString();
+}
+
+// 新 Fishing 写口身体 gate 流程：只读取当前 Pawn 的 Condition 快照；倒地或没有正式 Character/Condition 时关闭新钓鱼动作，已有会话终止仍由 Condition 首次倒地回调处理。
+bool UCatFishingService::CanControllerStartFishingAction(const AController* Controller)
+{
+	const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
+	const UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
+	return Conditions && !Conditions->GetSnapshot().bDowned;
 }
 
 // 参与者谓词流程：先清所有输出，再用服务器 GameMode Active gate、当前 Pawn、Condition 与 ASC 逐层验证；只有身份有效、未倒地且两项能力都为正有限值才返回真。

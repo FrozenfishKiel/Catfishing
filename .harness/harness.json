@@ -1,0 +1,199 @@
+{
+  "schema_version": "1.0",
+  "module_delivery": {
+    "FishingPlayerEntry": {
+      "title": "Map / Input / Interaction——Fishing 玩家入口闭环",
+      "delivery_mode": "single_atomic_module",
+      "human_status_source": "Docs/Development/需求对齐差距清单.md",
+      "machine_status_source": ".codex/state/current-harness.json",
+      "facets": [
+        "Map",
+        "Input",
+        "Interaction"
+      ],
+      "tracking_rule": "Map、Input、Interaction 只是同一玩家闭环的实现切面，禁止拆成可独立关闭的业务任务、影子清单或半成品交付项；任何新发现的问题、待确认点或补充问题只能挂在 FishingPlayerEntry 模块级缺口下，并保持一组端到端验收口径。补充问题必须服务于一个清晰结论：本模块整体是否完成，以及还缺哪条证据；不能散成换 Agent 后难以收拢、也无法判断模块完成状态的小任务。",
+      "completion_rule": "只有正式 Lake 入口、唯一输入配置、完整 Fishing 玩家命令链、抓捕写入个人鱼获以及构建和运行证据同时成立时，模块才能整体关闭；任一环节缺失时只保留一个模块级未完成状态并在其下写明证据缺口。",
+      "handoff_rule": "换 Agent、换会话或失败回边时，必须按本模块整体目标和同一组端到端验收继续，不得只交接局部文件或把局部绿灯写成模块完成。"
+    },
+    "UIReach": {
+      "title": "UI / Reach——Fishing 信息可达闭环",
+      "delivery_mode": "single_atomic_module",
+      "human_status_source": "Docs/Development/需求对齐差距清单.md",
+      "machine_status_source": ".codex/state/ui-reach-harness.json",
+      "facets": [
+        "HUD",
+        "Menu",
+        "InventoryAndFishGuard",
+        "Album"
+      ],
+      "tracking_rule": "HUD、菜单、个人鱼护/背包和图鉴只是同一信息可达闭环的界面切面，禁止拆成可独立关闭的业务任务、影子清单或半成品交付项。",
+      "completion_rule": "只有唯一正式 UI 生命周期、C++ 后端只读 ViewState/Result/纯意图、WBP 前端渲染、Fishing 状态与错误反馈、菜单和个人鱼获/图鉴入口、捕获结果展示、只读 View 边界以及构建和运行证据同时成立时，模块才能整体关闭；隐藏或移除原生白盒根只能作为回归基线，不能作为完成证据；任一环节缺失时只保留一个模块级未完成状态。",
+      "handoff_rule": "换 Agent、换会话或失败回边时，必须按 UIReach 整体目标和同一组端到端验收继续，不得按控件或页面交接局部完成结论。"
+    },
+    "ItemsTankSacrificeCamp": {
+      "title": "Items / Tank / Sacrifice / Camp——局内渔获归宿闭环",
+      "delivery_mode": "single_atomic_module",
+      "human_status_source": "Docs/Development/需求对齐差距清单.md",
+      "machine_status_source": ".codex/state/items-tank-sacrifice-camp-harness.json",
+      "facets": [
+        "Items",
+        "Tank",
+        "Sacrifice",
+        "Camp"
+      ],
+      "tracking_rule": "Items、Tank、Sacrifice、Camp 只是同一局内渔获归宿闭环的实现切面；网络结果、不可逆献祭恢复、篝火表现和关卡接线不得拆成可独立关闭的业务事项。",
+      "completion_rule": "只有 A1 owning-client 结构化结果回送、A2 篝火 Reliable NetMulticast 与全员 CapturePlan 前置、A3 ItemsCommitted 后只补 Run 且不还鱼不重复额度、A4 Lake 中 Camp/Hub/Tank 引用与位置半径运行事实整体成立时才能关闭；A4 缺少事实或被 blocked 时整个原子模块不得关闭。",
+      "handoff_rule": "换 Agent、换会话或失败回边时必须携带 A1-A4 的同一组端到端证据；静态、构建或局部 Automation 绿灯不能覆盖 A4 Runtime blocked，也不能把任一切面单独标为完成。"
+    },
+    "EquipmentTeamLibraryShop": {
+      "title": "Equipment / TeamLibrary / Shop——装备获取与装配闭环",
+      "delivery_mode": "single_atomic_module",
+      "human_status_source": "Docs/Development/需求对齐差距清单.md",
+      "machine_status_source": ".codex/state/equipment-teamlibrary-shop-harness.json",
+      "facets": [
+        "Equipment",
+        "TeamLibrary",
+        "Shop"
+      ],
+      "tracking_rule": "Equipment、TeamLibrary、Shop 只是同一装备获取与装配闭环的实现切面；鱼竿、鱼饵、鱼漂、团队装备库、商店购买、领取和装备生效不得拆成可独立关闭的业务事项。",
+      "completion_rule": "只有鱼竿、鱼饵、鱼漂可通过正式商店或团队装备库获取、领取并装备，默认配置引用 /Game/Catfishing/Data/Equipment/Equip_* 正式资产，开发期 Starter Loadout 自动装配关闭，客户端直连消耗品 grant 被拒绝，FishingSession 读取装备/Items 的强度、当前耐久、消耗品和 Revision 快照且不形成第二份可写真相，失败预算只提交一种惩罚，装备不可偷、解锁跟人并经 FProfileGrant 授予链，以及构建、Automation 和 Lake 运行证据整体成立时，模块才能整体关闭；旧 DA_*_Basic/自动 starter/直连 grant 只能作为历史回归基线，不能作为正式关闭证据；装配重连恢复、收益数值或内容未裁决时必须保持 fail-closed。",
+      "handoff_rule": "换 Agent、换会话或失败回边时必须携带 Equipment、TeamLibrary、Shop 的同一组端到端证据；静态、构建、局部 UI 或孤立数据资产绿灯不能替代购买/领取/装备/Fishing 生效的完整闭环，也不能把任一切面单独标为完成。"
+    },
+    "FrontendOnline": {
+      "title": "Frontend / Online——前端进局与 Steam 联机闭环",
+      "delivery_mode": "single_atomic_module",
+      "human_status_source": "Docs/Development/需求对齐差距清单.md",
+      "machine_status_source": ".harness/frontend-online-harness.json",
+      "facets": [
+        "FrontendEntry",
+        "SteamSession",
+        "TwoMapTravel",
+        "LeaveAndHostExit"
+      ],
+      "tracking_rule": "FrontendEntry、SteamSession、TwoMapTravel、LeaveAndHostExit 只是同一前端进局与联机闭环的实现切面；Host、Find、Join、Invite、Leave、Host exit、失败补偿和 UI 可见性不得拆成可独立关闭的业务事项。",
+      "completion_rule": "只有默认入口为 Frontend、Create/Join 通过 UCatOnlineSubsystem 进入同一个 Lake Fishing Run、Lake 内不显示 Host/Find/Join 白盒、Leave/Host exit 统一经 Online 收口、无 UI 旅行旁路、构建/自动化/源码边界核对和打包 Steam 双端实玩证据整体成立时，模块才能整体关闭；Host Migration、Lobby/Ready Room、深度重连恢复、生产 Steam AppId、正式美术 UI 和正式鱼表资产不属于本模块关闭条件。",
+      "handoff_rule": "换 Agent、换会话或失败回边时必须携带 Frontend/Online 的同一组端到端证据；静态配置、单机 Steam 初始化或局部 UI 绿灯不能替代打包 Steam 联机实玩与 Create/Find/Join/Leave 主链路证据，也不能把 Host Migration 作为本模块补丁追加。"
+    },
+    "DataWorldProfileAlbum": {
+      "title": "Data / World / Profile / Album——长期进度与相册闭环",
+      "delivery_mode": "single_atomic_module",
+      "human_status_source": "Docs/Development/需求对齐差距清单.md",
+      "machine_status_source": ".codex/state/data-world-profile-album-harness.json",
+      "facets": [
+        "DataCatalog",
+        "WorldProgress",
+        "ProfileGrant",
+        "Album",
+        "Imprint"
+      ],
+      "tracking_rule": "DataCatalog、WorldProgress、ProfileGrant、Album、Imprint 只是同一长期进度闭环的证据切面；鱼表目录、世界进度候选、Grant/Journaling、相册索引、印记成像投递和 ACK 不得拆成可独立关闭的业务事项。",
+      "completion_rule": "只有鱼表目录 fail-closed、Items committed 捕获事实到 FishRecorded Grant、成像成功到 Imprint Grant、里程碑到 Unlock Grant 的投递语义、本地 Profile 先 Pending Journal 再 durable 合并再 ACK、相册隐藏只改本地索引、公开图鉴快照不泄露 Journal/相册/解锁，以及构建和自动化证据整体成立时，工程闭环才能关闭；正式鱼表、具体 UnlockId 投放里程碑、更多印记触发清单、图片格式/容量产品策略和正式美术资产未裁时只能作为清晰的内容/产品缺口记录，不能被本模块代码绿灯冒充为已完成正式内容。",
+      "handoff_rule": "换 Agent、换会话或失败回边时必须携带 Data/World/Profile/Album 的同一组端到端证据；Data、Profile、Collection、Album 或 Imprint 的局部单测绿灯不能单独标为完成，也不能把未裁正式内容拆成散落的小任务。"
+    },
+    "CharacterGrowthCondition": {
+      "title": "Character / Growth / Condition——猫身体状态与吃鱼成长闭环",
+      "delivery_mode": "single_atomic_module",
+      "human_status_source": "Docs/Development/需求对齐差距清单.md",
+      "machine_status_source": ".codex/state/character-growth-condition-harness.json",
+      "facets": [
+        "CharacterBody",
+        "Condition",
+        "Growth",
+        "FishingImpact",
+        "Recovery"
+      ],
+      "tracking_rule": "CharacterBody、Condition、Growth、FishingImpact、Recovery 只是同一猫身体状态与吃鱼成长闭环的证据切面，禁止拆成可独立关闭的业务任务、影子清单或半成品交付项；问题补充只能放在模块级缺口下，不能把清单写成彼此失联的小事项。",
+      "completion_rule": "只有角色 ASC 与当前需求口径一致地持有局内身体数值，Condition 只复制 Wet/Downed/Recovery 离散状态，吃鱼同时收口中毒风险、经验槽、已裁 Buff/黄色体力边界和 RequestId 幂等，Downed/恢复能经服务器命令影响钓鱼与救援且不存在死亡终态，UI 不再泄露废弃白盒状态，以及构建、自动化、Lake 运行证据和旧失败闭环整体成立时，本模块才能整体关闭；Buff 池、数值、文案或表现资产未裁时必须 fail-closed 并作为模块级内容缺口记录，不能把局部绿灯写成完成。",
+      "handoff_rule": "换 Agent、换会话或失败回边时必须携带 Character/Growth/Condition 的同一组端到端证据；AttributeSet、Condition、Growth、UI 或 Fishing 的局部单测绿灯不能单独标为完成，也不能因为换 AI 而把疲惫/饥饿口径、Buff 未裁项或恢复链证据散落到多个清单。"
+    },
+    "RunEnvironmentSocial": {
+      "title": "Run / Environment / Social——局阶段、环境与协作边界闭环",
+      "delivery_mode": "single_atomic_module",
+      "human_status_source": "Docs/Development/需求对齐差距清单.md",
+      "machine_status_source": ".codex/state/run-environment-social-harness.json",
+      "facets": [
+        "RunFlow",
+        "EnvironmentSnapshot",
+        "WaterQueryAndChum",
+        "SocialProtection",
+        "ReconnectBoundary"
+      ],
+      "tracking_rule": "RunFlow、EnvironmentSnapshot、WaterQueryAndChum、SocialProtection、ReconnectBoundary 只是同一局阶段、环境与协作边界闭环的证据切面；昼夜/额度、天气/水域/窝料、求助/恶作剧/保护牌、偷取边界和重连白名单不得拆成可独立关闭的小任务。补充问题只能挂在 RunEnvironmentSocial 模块级缺口下，并且必须服务于一个清晰结论：本模块整体是否完成，以及还缺哪条证据。",
+      "completion_rule": "只有 RunFlow 昼夜/额度/失败结算夜、Environment 只读快照、WaterQuery 与 ChumPool 单一聚鱼账本、Social 求助/恶作剧/保护牌权限、偷取边界、重连 fail-closed 白名单以及构建、自动化和运行证据整体成立时，模块才能关闭；天气概率、自然聚鱼频率、求助范围冷却、恶作剧频率和深度重连恢复未裁时必须保持模块级内容缺口。",
+      "handoff_rule": "换 Agent、换会话或失败回边时必须携带 Run/Environment/Social 的同一组端到端证据；Run、Environment、Social 或 Online 的局部单测绿灯不能单独标为完成，也不能把重连、聚鱼或求助策略散落到多个清单。"
+    },
+    "DeliveryHarnessAssets": {
+      "title": "Delivery / Harness / Assets——交付验证与正式资产闭环",
+      "delivery_mode": "single_atomic_module",
+      "human_status_source": "Docs/Development/需求对齐差距清单.md",
+      "machine_status_source": ".codex/state/delivery-harness-assets-harness.json",
+      "facets": [
+        "HarnessInventory",
+        "RegressionEvidence",
+        "PlayerAcceptance",
+        "AssetReadiness",
+        "ReleaseHandoff"
+      ],
+      "asset_input_package_source": ".harness/formal-fish-asset-input-package.json",
+      "content_input_package_source": ".harness/formal-non-fish-content-input-package.json",
+      "release_handoff_package_source": ".harness/delivery-release-handoff-package.json",
+      "tracking_rule": "HarnessInventory、RegressionEvidence、PlayerAcceptance、AssetReadiness、ReleaseHandoff 只是同一交付闭环的证据切面，不能拆成可独立关闭的业务事项；新发现的交付缺口、玩家验收缺口或正式资产问题只能挂在 DeliveryHarnessAssets 模块级缺口下，避免换 Agent 后把绿色回归和正式资产阻塞混在一起。",
+      "completion_rule": "只有所有已关闭业务模块的 Harness 入口、构建/自动化/运行证据、玩家验收来源、正式鱼类/咬钩/搏斗资产 readiness、正式非鱼内容输入、正式 UI/表现资产边界和交付 handoff 同时成立时，本模块才能整体关闭；任一模块证据过期、FormalNonFishContentInputPackage 仍有表现或进度成长内容缺口、RunEnvironmentSocial 行为证据未通过，或玩家可见白盒仍未裁时，只能保持一个模块级未完成状态。FormalFishAssetInputPackage 当前为代理编制的临时正式表且已替换测试资产，后续策划复核只覆盖同一包和同一批资产。",
+      "handoff_rule": "换 Agent、换会话或失败回边时必须携带 Delivery/Harness/Assets 的同一组端到端证据；Static 盘点绿灯只表示交付缺口被集中追踪，不能替代 AssetReadiness 通过，也不能把 FormalNonFishContentInputPackage 或 RunEnvironmentSocial 行为证据缺口写成已完成。"
+    }
+  },
+  "verification": {
+    "fishing_player_entry_static_check": "powershell -ExecutionPolicy Bypass -File Scripts/verify_fishing_player_entry.ps1 -Mode Static",
+    "fishing_player_entry_build": "powershell -ExecutionPolicy Bypass -File Scripts/verify_fishing_player_entry.ps1 -Mode Build",
+    "fishing_player_entry_automation": "powershell -ExecutionPolicy Bypass -File Scripts/verify_fishing_player_entry.ps1 -Mode Automation",
+    "ui_reach_static_check": "powershell -ExecutionPolicy Bypass -File Scripts/verify_ui_reach.ps1 -Mode Static",
+    "ui_reach_build": "powershell -ExecutionPolicy Bypass -File Scripts/verify_ui_reach.ps1 -Mode Build",
+    "ui_reach_automation": "powershell -ExecutionPolicy Bypass -File Scripts/verify_ui_reach.ps1 -Mode Automation",
+    "ui_reach_runtime": "powershell -ExecutionPolicy Bypass -File Scripts/verify_ui_reach.ps1 -Mode Runtime",
+    "static_check": "powershell -ExecutionPolicy Bypass -File Scripts/verify_delivery_harness_assets.ps1 -Mode Static",
+    "items_tank_sacrifice_camp_static_check": "powershell -ExecutionPolicy Bypass -File Scripts/verify_items_tank_sacrifice_camp.ps1 -Mode Static",
+    "items_tank_sacrifice_camp_build": "powershell -ExecutionPolicy Bypass -File Scripts/verify_items_tank_sacrifice_camp.ps1 -Mode Build",
+    "items_tank_sacrifice_camp_automation": "powershell -ExecutionPolicy Bypass -File Scripts/verify_items_tank_sacrifice_camp.ps1 -Mode Automation",
+    "items_tank_sacrifice_camp_runtime": "powershell -ExecutionPolicy Bypass -File Scripts/verify_items_tank_sacrifice_camp.ps1 -Mode Runtime",
+    "equipment_teamlibrary_shop_static_check": "powershell -ExecutionPolicy Bypass -File Scripts/verify_equipment_teamlibrary_shop.ps1 -Mode Static",
+    "equipment_teamlibrary_shop_build": "powershell -ExecutionPolicy Bypass -File Scripts/verify_equipment_teamlibrary_shop.ps1 -Mode Build",
+    "equipment_teamlibrary_shop_automation": "powershell -ExecutionPolicy Bypass -File Scripts/verify_equipment_teamlibrary_shop.ps1 -Mode Automation",
+    "equipment_teamlibrary_shop_runtime": "powershell -ExecutionPolicy Bypass -File Scripts/verify_equipment_teamlibrary_shop.ps1 -Mode Runtime",
+    "frontend_online_build": "UBT CatfishingEditor Win64 Development",
+    "frontend_online_ui_automation": "UnrealEditor-Cmd.exe -ExecCmds=\"Automation RunTests Catfishing.Unit.UI;Quit\"",
+    "frontend_online_online_automation": "UnrealEditor-Cmd.exe -ExecCmds=\"Automation RunTests Catfishing.Unit.Online;Quit\"",
+    "data_world_profile_album_static_check": "powershell -ExecutionPolicy Bypass -File Scripts/verify_data_world_profile_album.ps1 -Mode Static",
+    "data_world_profile_album_build": "powershell -ExecutionPolicy Bypass -File Scripts/verify_data_world_profile_album.ps1 -Mode Build",
+    "data_world_profile_album_automation": "powershell -ExecutionPolicy Bypass -File Scripts/verify_data_world_profile_album.ps1 -Mode Automation",
+    "character_growth_condition_static_check": "powershell -ExecutionPolicy Bypass -File Scripts/verify_character_growth_condition.ps1 -Mode Static",
+    "character_growth_condition_build": "powershell -ExecutionPolicy Bypass -File Scripts/verify_character_growth_condition.ps1 -Mode Build",
+    "character_growth_condition_automation": "powershell -ExecutionPolicy Bypass -File Scripts/verify_character_growth_condition.ps1 -Mode Automation",
+    "character_growth_condition_runtime": "powershell -ExecutionPolicy Bypass -File Scripts/verify_character_growth_condition.ps1 -Mode Runtime",
+    "run_environment_social_static_check": "powershell -ExecutionPolicy Bypass -File Scripts/verify_run_environment_social.ps1 -Mode Static",
+    "run_environment_social_build": "powershell -ExecutionPolicy Bypass -File Scripts/verify_run_environment_social.ps1 -Mode Build",
+    "run_environment_social_automation": "powershell -ExecutionPolicy Bypass -File Scripts/verify_run_environment_social.ps1 -Mode Automation",
+    "run_environment_social_runtime": "powershell -ExecutionPolicy Bypass -File Scripts/verify_run_environment_social.ps1 -Mode Runtime",
+    "run_environment_social_behavior_evidence": "powershell -ExecutionPolicy Bypass -File Scripts/verify_run_environment_social.ps1 -Mode BehaviorEvidence",
+    "run_environment_social_record_behavior_evidence": "powershell -ExecutionPolicy Bypass -File Scripts/record_run_environment_social_behavior_evidence.ps1 -SourceKind human_playtest -ParticipantsCount 2 -Summary \"整场 RunEnvironmentSocial 行为验收摘要\" -EvidenceRef \"证据路径或记录\" -ConfirmAllCoverage",
+    "delivery_harness_assets_static_check": "powershell -ExecutionPolicy Bypass -File Scripts/verify_delivery_harness_assets.ps1 -Mode Static",
+    "delivery_harness_assets_asset_readiness": "powershell -ExecutionPolicy Bypass -File Scripts/verify_delivery_harness_assets.ps1 -Mode AssetReadiness"
+  },
+  "observability": {
+    "sources": [
+      "UBT 构建输出",
+      "UE Automation 报告与 Automation.log",
+      "Lake 地图和正式输入资产的运行时装配结果",
+      "本地玩家 UI 生命周期、Fishing View 快照和可见运行证据",
+      "Camp/Sacrifice owning-client 结果 RPC 与 Campfire NetMulticast 反射合同",
+      "ItemsCommitted 献祭恢复自动化与 Lake Camp/Hub/Tank Runtime 接线日志",
+      "Equipment/TeamLibrary/Shop 定义、购买、领取、装备命令结果与 RequestId/Revision 日志",
+      "FishingSession 读取装备/Items 快照、鱼饵消耗、鱼竿耐久或断竿的单一失败结果",
+      "FProfileGrant 装备解锁授予、Journal/ACK 与装配恢复 fail-closed 证据",
+      "Frontend/Online 的 UBT 构建、UI/Online Automation 报告、源码边界核对和打包 Steam 联机实玩结论",
+      "Data/World/Profile/Album 的鱼表目录 fail-closed、CaptureCommittedResult 到 FishRecorded Grant、CapturePlan 成像结果到 Imprint Grant、Unlock Grant、Profile durable Journal、公开图鉴快照、相册隐藏和 Imprint Media 传输证据",
+      "Character/Growth/Condition 的 ASC 属性口径、Wet/Downed/Recovery 快照、吃鱼中毒与成长经验、Buff fail-closed、黄色体力边界、恢复命令、Fishing 打断和 UI 状态暴露证据",
+      "Run/Environment/Social 的 RunFlow 阶段、Environment 快照、WaterQuery/ChumPool、求助/恶作剧/保护牌、偷取边界和重连白名单证据",
+      "Delivery/Harness/Assets 的模块交付清单、跨模块回归入口、玩家验收来源、正式资产 readiness 和交付 handoff 证据"
+    ]
+  }
+}

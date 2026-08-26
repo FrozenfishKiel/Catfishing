@@ -1,72 +1,103 @@
 #include "UI/CatLocalPlayerUISubsystem.h"
 
-#include "AbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
-#include "Framework/Game/CatGameplayTypes.h"
-#include "Logging/CatLog.h"
-#include "Online/CatOnlineSubsystem.h"
-#include "AbilitySystem/CatSurvivalAttributeSet.h"
-#include "UI/CatSurvivalWidget.h"
-#include "UI/CatInteractionWidget.h"
-#include "UI/CatTravelWidget.h"
-#include "UI/CatUISettings.h"
-#include "Condition/CatConditionComponent.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
-#include "Equipment/CatEquipmentComponent.h"
+#include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
+#include "Logging/CatLog.h"
+#include "Online/CatOnlineSubsystem.h"
+#include "UI/CatLakeReachModel.h"
+#include "UI/CatLakeReachPageController.h"
+#include "UI/CatLakeReachWidget.h"
+#include "UI/CatInteractionWidget.h"
+#include "UI/CatTravelWidget.h"
+#include "UI/CatUISettings.h"
 #include "Interaction/CatInteractionTargetingComponent.h"
 
-// 初始化流程：先订阅唯一 Online 快照；再弱绑定当前 Controller 的 Pawn notifier、装配现行 Character Survival 投影，最后保留阶段 B Online 白盒创建链。
+// 初始化流程：先订阅唯一 Online 快照，再弱绑定当前 Controller 的 Pawn notifier；LakeReach 是否装配由 AttachLakePawn 统一验证 WBP 配置。
 void UCatLocalPlayerUISubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
-	if (UCatOnlineSubsystem* Online = GetLocalPlayer()->GetGameInstance()->GetSubsystem<UCatOnlineSubsystem>())
+	if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
 	{
-		OnlineSnapshotHandle = Online->OnSnapshotChanged.AddUObject(this, &ThisClass::HandleOnlineSnapshotChanged);
+		if (UGameInstance* GameInstance = LocalPlayer->GetGameInstance())
+		{
+			if (UCatOnlineSubsystem* Online = GameInstance->GetSubsystem<UCatOnlineSubsystem>())
+			{
+				OnlineSnapshotHandle = Online->OnSnapshotChanged.AddUObject(this, &ThisClass::HandleOnlineSnapshotChanged);
+			}
+		}
+		BindController(LocalPlayer->GetPlayerController(GetWorld()));
 	}
-	BindController(GetLocalPlayer()->GetPlayerController(GetWorld()));
 	RefreshOnlineWidgetForCurrentController();
 }
 
-// 销毁流程：先断开旧 Controller Pawn notifier，再从 ASC 移除属性 delegate 与 Survival View；随后移除 Online View/快照订阅，最后交还父类生命周期。
+// 销毁流程：先释放 LakeReach MVC，让菜单输入和 View 意图不再触达旧 Controller；再解绑 Controller、移除 Frontend View 与 Online 快照订阅。
 void UCatLocalPlayerUISubsystem::Deinitialize()
 {
-	UnbindController();
 	DetachInteractionView();
-	DetachSurvivalPawn();
+	DetachLakePawn();
+	UnbindController();
 	RemoveOnlineWidget();
-	if (UCatOnlineSubsystem* Online = GetLocalPlayer()->GetGameInstance()->GetSubsystem<UCatOnlineSubsystem>())
+	if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
 	{
-		Online->OnSnapshotChanged.Remove(OnlineSnapshotHandle);
+		if (UGameInstance* GameInstance = LocalPlayer->GetGameInstance())
+		{
+			if (UCatOnlineSubsystem* Online = GameInstance->GetSubsystem<UCatOnlineSubsystem>())
+			{
+				Online->OnSnapshotChanged.Remove(OnlineSnapshotHandle);
+			}
+		}
 	}
 	OnlineSnapshotHandle.Reset();
 	Super::Deinitialize();
 }
 
-// Controller 变化流程：先解绑旧 Controller notifier、旧 Pawn ASC delegate 与两类 View，再让父类消费新 Controller；最后只弱绑定 NewController 并从其当前 Pawn 冷启动新投影。
+// Controller 替换流程：旧 Controller 仍可访问时先拆掉 LakeReach 和 Frontend UI；父类切换后再只针对 NewController 装配当前 Pawn。
 void UCatLocalPlayerUISubsystem::PlayerControllerChanged(APlayerController* NewController)
 {
-	UnbindController();
 	DetachInteractionView();
-	DetachSurvivalPawn();
+	DetachLakePawn();
+	UnbindController();
 	RemoveOnlineWidget();
 	Super::PlayerControllerChanged(NewController);
 	BindController(NewController);
 	RefreshOnlineWidgetForCurrentController();
 }
 
-// 快照消费流程：每次事实变化都重新调和 TravelWidget；直达玩法地图会移除联机白盒，正式 Session/旅行或返回 Frontend 时可按新快照重新创建并刷新。
+// 菜单切换流程：把输入、焦点和 ViewState 更新全部交给 PageController；Subsystem 不再持有菜单布尔值或渲染细节。
+void UCatLocalPlayerUISubsystem::ToggleLakeMenu()
+{
+	if (LakeReachPageController)
+	{
+		LakeReachPageController->ToggleLakeMenu();
+	}
+}
+
+// 状态读取流程：从 PageController 读取唯一菜单状态；未装配 LakeReach 时固定返回 false，避免从 Widget 可见性拼第二份状态。
+bool UCatLocalPlayerUISubsystem::IsLakeMenuOpen() const
+{
+	return LakeReachPageController ? LakeReachPageController->IsLakeMenuOpen() : false;
+}
+
+// 快照消费流程：Online 变更时先调和 Frontend TravelWidget，再要求 LakeReach Model 重读离局 gate；不把 Online 事件参数拼进 View。
 void UCatLocalPlayerUISubsystem::HandleOnlineSnapshotChanged()
 {
 	RefreshOnlineWidgetForCurrentController();
+	if (LakeReachPageController)
+	{
+		LakeReachPageController->RefreshModel();
+	}
 }
 
-// 动作转交流程：每个 View 意图只调用 Online 的一个公开入口；opaque FGuid 只包装回原句柄类型，UI 不解析平台结果或自行补偿失败。
+// 动作转交流程：Frontend TravelWidget 的每个意图只调用 Online 的一个公开入口；LakeReach 离局意图由 PageController 直接走同一 Online 管线。
 void UCatLocalPlayerUISubsystem::HandleActionRequested(const ECatOnlineUIAction Action, const FGuid OpaqueHandle)
 {
-	UCatOnlineSubsystem* Online = GetLocalPlayer()->GetGameInstance()->GetSubsystem<UCatOnlineSubsystem>();
+	ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	UGameInstance* GameInstance = LocalPlayer ? LocalPlayer->GetGameInstance() : nullptr;
+	UCatOnlineSubsystem* Online = GameInstance ? GameInstance->GetSubsystem<UCatOnlineSubsystem>() : nullptr;
 	if (!Online)
 	{
 		return;
@@ -116,14 +147,13 @@ void UCatLocalPlayerUISubsystem::HandleActionRequested(const ECatOnlineUIAction 
 	}
 }
 
-// Widget 调和流程：
-// 1. 读取当前 LocalPlayer Controller 与 Online 完整快照；任一宿主不可用时移除旧 View，等待生命周期再次触发。
-// 2. 快照精确表示玩法地图、NoSession、无角色且无活动操作时移除 TravelWidget，让直达玩法地图的 PIE 不再被联机白盒遮挡。
-// 3. 其余状态沿用正式 UI：缺实例时创建并绑定一次动作委托，随后用同一快照配置；正式玩法地图 Host/Client 因有会话角色仍保留 Leave。
+// Frontend View 调和流程：读取当前完整 Online 快照；只有 Frontend 或前往 Lake 的等待态保留 TravelWidget，Lake 内正式入口交给 UIReach MVC。
 void UCatLocalPlayerUISubsystem::RefreshOnlineWidgetForCurrentController()
 {
-	APlayerController* Controller = GetLocalPlayer()->GetPlayerController(GetWorld());
-	const UCatOnlineSubsystem* Online = GetLocalPlayer()->GetGameInstance()->GetSubsystem<UCatOnlineSubsystem>();
+	ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	APlayerController* Controller = LocalPlayer ? LocalPlayer->GetPlayerController(GetWorld()) : nullptr;
+	const UGameInstance* GameInstance = LocalPlayer ? LocalPlayer->GetGameInstance() : nullptr;
+	const UCatOnlineSubsystem* Online = GameInstance ? GameInstance->GetSubsystem<UCatOnlineSubsystem>() : nullptr;
 	if (!Controller || !Online)
 	{
 		RemoveOnlineWidget();
@@ -131,11 +161,7 @@ void UCatLocalPlayerUISubsystem::RefreshOnlineWidgetForCurrentController()
 	}
 
 	const FCatOnlineSnapshot Snapshot = Online->GetSnapshot();
-	const bool bDirectGameplayWithoutSession = Snapshot.WorldState == ECatOnlineWorldState::Lake
-		&& Snapshot.SessionState == ECatOnlineSessionState::NoSession
-		&& Snapshot.SessionRole == ECatOnlineSessionRole::None
-		&& Snapshot.ActiveOperation == ECatOnlineOperation::None;
-	if (bDirectGameplayWithoutSession)
+	if (!ShouldShowOnlineTravelWidget(Snapshot))
 	{
 		RemoveOnlineWidget();
 		return;
@@ -155,7 +181,14 @@ void UCatLocalPlayerUISubsystem::RefreshOnlineWidgetForCurrentController()
 	OnlineWidget->Configure(Snapshot);
 }
 
-// Widget 移除流程：存在实例时先解绑动作广播，再移出视口并清 UObject 引用；空分支不制造虚假 removed 日志。
+// Frontend 面板判断流程：只承认前台和从前台出发去 Lake 的旅行等待；到达 Lake 后玩家入口由正式 LakeReach WBP 接管。
+bool UCatLocalPlayerUISubsystem::ShouldShowOnlineTravelWidget(const FCatOnlineSnapshot& Snapshot)
+{
+	return Snapshot.WorldState == ECatOnlineWorldState::Frontend
+		|| Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake;
+}
+
+// Frontend View 移除流程：先解绑动作广播再移出视口；空实例保持幂等，避免 Controller 切换时重复 removed 日志干扰验收。
 void UCatLocalPlayerUISubsystem::RemoveOnlineWidget()
 {
 	if (!OnlineWidget)
@@ -169,7 +202,7 @@ void UCatLocalPlayerUISubsystem::RemoveOnlineWidget()
 	UE_LOG(LogCatUI, Log, TEXT("Event=ui_online_widget_removed World=%s"), GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
 }
 
-// Controller 绑定流程：保存弱引用并在真实 FPawnChangedSignature 上绑定一参数 NewPawn 回调；随后直接消费当前 Pawn，覆盖绑定发生前已经完成占有的冷启动情况。
+// Controller 绑定流程：保存弱引用并订阅当前 Controller 的 Pawn notifier；随后消费当前 Pawn，覆盖绑定前已经完成占有的冷启动情况。
 void UCatLocalPlayerUISubsystem::BindController(APlayerController* Controller)
 {
 	if (!Controller)
@@ -181,7 +214,7 @@ void UCatLocalPlayerUISubsystem::BindController(APlayerController* Controller)
 	HandleControllerPawnChanged(Controller->GetPawn());
 }
 
-// Controller 解绑流程：旧对象仍存活时从同一个 notifier 精确 Remove；若 World 已销毁，弱引用失效后只 Reset 本地句柄，不延长 Controller 生命周期。
+// Controller 解绑流程：旧对象仍存活时从同一个 notifier 精确移除；弱引用失效时只清本地句柄，不延长 Controller 生命周期。
 void UCatLocalPlayerUISubsystem::UnbindController()
 {
 	if (APlayerController* Controller = BoundPlayerController.Get(); Controller && PawnChangedHandle.IsValid())
@@ -192,14 +225,14 @@ void UCatLocalPlayerUISubsystem::UnbindController()
 	BoundPlayerController.Reset();
 }
 
-// Pawn 变化流程：无论新 Pawn 类型如何都先解绑旧 ASC 与 View；只有现行 Pawn 是 ACatCharacter 时才进入 Survival 装配，Frontend 的空 Pawn 自然保持无玩法 View。
+// Pawn 变化流程：无论 NewPawn 类型如何都先完整拆掉上一套 MVC；只有新的 ACatCharacter 通过配置校验时才重新装配。
 void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 {
-	DetachSurvivalPawn();
 	DetachInteractionView();
+	DetachLakePawn();
 	ACatCharacter* Character = Cast<ACatCharacter>(NewPawn);
 	AttachInteractionView(BoundPlayerController.Get(), Character);
-	AttachSurvivalPawn(Character);
+	AttachLakePawn(Character);
 }
 
 void UCatLocalPlayerUISubsystem::AttachInteractionView(APlayerController* Controller, ACatCharacter* Character)
@@ -213,6 +246,7 @@ void UCatLocalPlayerUISubsystem::AttachInteractionView(APlayerController* Contro
 	{
 		return;
 	}
+
 	InteractionWidget = CreateWidget<UCatInteractionWidget>(CatController, UCatInteractionWidget::StaticClass());
 	if (!InteractionWidget)
 	{
@@ -249,11 +283,14 @@ void UCatLocalPlayerUISubsystem::HandleInteractionTargetChanged(AActor* Previous
 	}
 }
 
-// Survival 装配流程：先校验 View gate、World 和当前 Pawn/ASC，创建纯 Render Widget 后才保存弱引用；随后成对订阅五属性、Condition、Equipment 及 GameState 的 Run/Help，最后统一重读首份完整投影。
-void UCatLocalPlayerUISubsystem::AttachSurvivalPawn(ACatCharacter* Character)
+// LakeReach 装配流程：
+// 1. 验证本地设置、当前 Controller/Pawn 和 World；WBP 类缺失或无效时直接 fail-closed，不创建原生白盒替身。
+// 2. 创建 Model、PageController 和配置的 WBP View；Model 先绑定只读 Query/Fishing 源并缓存首份 ViewState。
+// 3. 根 View 入视口后由 PageController 订阅 Model/View、安装可降级输入，并主动渲染当前状态；日志暴露 RootClass 供自动化确认真正加载的是 WBP。
+void UCatLocalPlayerUISubsystem::AttachLakePawn(ACatCharacter* Character)
 {
 	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
-	if (!Settings->IsLakeStatusViewEnabled() || !Character || Character->GetWorld() != GetWorld())
+	if (!Settings || !Settings->IsLakeReachViewEnabled() || !Character || Character->GetWorld() != GetWorld())
 	{
 		return;
 	}
@@ -262,134 +299,58 @@ void UCatLocalPlayerUISubsystem::AttachSurvivalPawn(ACatCharacter* Character)
 	{
 		return;
 	}
-	UAbilitySystemComponent* AbilitySystem = Character->GetAbilitySystemComponent();
-	if (!AbilitySystem)
+
+	const TSubclassOf<UCatLakeReachWidget> ViewClass = Settings->LoadLakeReachWidgetClass();
+	if (!ViewClass)
 	{
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_reach_view_class_missing Class=%s"),
+			*Settings->LakeReachWidgetClass.ToSoftObjectPath().ToString());
 		return;
 	}
 
-	SurvivalWidget = CreateWidget<UCatSurvivalWidget>(Controller, UCatSurvivalWidget::StaticClass());
-	if (!SurvivalWidget)
+	LakeReachModel = NewObject<UCatLakeReachModel>(this);
+	LakeReachPageController = NewObject<UCatLakeReachPageController>(this);
+	LakeReachWidget = CreateWidget<UCatLakeReachWidget>(Controller, ViewClass);
+	if (!LakeReachModel || !LakeReachPageController || !LakeReachWidget)
 	{
+		DetachLakePawn();
 		return;
 	}
-	BoundSurvivalASC = AbilitySystem;
-	HungerChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetHungerAttribute())
-		.AddUObject(this, &ThisClass::HandleSurvivalAttributeChanged);
-	FatigueChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFatigueAttribute())
-		.AddUObject(this, &ThisClass::HandleSurvivalAttributeChanged);
-	PoisonChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetPoisonAttribute())
-		.AddUObject(this, &ThisClass::HandleSurvivalAttributeChanged);
-	FishingStrengthChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFishingStrengthAttribute())
-		.AddUObject(this, &ThisClass::HandleSurvivalAttributeChanged);
-	FightStaminaChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFightStaminaAttribute())
-		.AddUObject(this, &ThisClass::HandleSurvivalAttributeChanged);
-	BoundCondition = Character->GetConditionComponent();
-	BoundEquipment = Character->GetEquipmentComponent();
-	BoundGameState = GetWorld() ? GetWorld()->GetGameState<ACatfishingGameState>() : nullptr;
-	if (UCatConditionComponent* Conditions = BoundCondition.Get())
+	if (!LakeReachModel->Bind(GetLocalPlayer(), Controller, Character))
 	{
-		ConditionChangedHandle = Conditions->OnSnapshotChanged.AddUObject(this, &ThisClass::HandleGameplaySnapshotChanged);
-	}
-	if (UCatEquipmentComponent* Equipment = BoundEquipment.Get())
-	{
-		EquipmentChangedHandle = Equipment->OnSnapshotChanged.AddUObject(this, &ThisClass::HandleGameplaySnapshotChanged);
-	}
-	if (ACatfishingGameState* GameState = BoundGameState.Get())
-	{
-		RunChangedHandle = GameState->OnRunPublicStateChanged.AddUObject(this, &ThisClass::HandleGameplaySnapshotChanged);
-		HelpChangedHandle = GameState->OnHelpSignalChanged.AddUObject(this, &ThisClass::HandleGameplaySnapshotChanged);
-	}
-	SurvivalWidget->AddToViewport(1);
-	RefreshSurvivalView();
-}
-
-// Survival 解绑流程：先用相同 ASC/属性键移除五个 delegate，再从 Condition、Equipment 与 GameState 移除全部快照通知；然后清句柄/弱引用并最后移出 View，阻断旧 World 迟到事件。
-void UCatLocalPlayerUISubsystem::DetachSurvivalPawn()
-{
-	if (UAbilitySystemComponent* AbilitySystem = BoundSurvivalASC.Get())
-	{
-		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetHungerAttribute()).Remove(HungerChangedHandle);
-		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFatigueAttribute()).Remove(FatigueChangedHandle);
-		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetPoisonAttribute()).Remove(PoisonChangedHandle);
-		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFishingStrengthAttribute()).Remove(FishingStrengthChangedHandle);
-		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFightStaminaAttribute()).Remove(FightStaminaChangedHandle);
-	}
-	if (UCatConditionComponent* Conditions = BoundCondition.Get())
-	{
-		Conditions->OnSnapshotChanged.Remove(ConditionChangedHandle);
-	}
-	if (UCatEquipmentComponent* Equipment = BoundEquipment.Get())
-	{
-		Equipment->OnSnapshotChanged.Remove(EquipmentChangedHandle);
-	}
-	if (ACatfishingGameState* GameState = BoundGameState.Get())
-	{
-		GameState->OnRunPublicStateChanged.Remove(RunChangedHandle);
-		GameState->OnHelpSignalChanged.Remove(HelpChangedHandle);
-	}
-	HungerChangedHandle.Reset();
-	FatigueChangedHandle.Reset();
-	PoisonChangedHandle.Reset();
-	FishingStrengthChangedHandle.Reset();
-	FightStaminaChangedHandle.Reset();
-	ConditionChangedHandle.Reset();
-	EquipmentChangedHandle.Reset();
-	RunChangedHandle.Reset();
-	HelpChangedHandle.Reset();
-	BoundSurvivalASC.Reset();
-	BoundCondition.Reset();
-	BoundEquipment.Reset();
-	BoundGameState.Reset();
-	if (SurvivalWidget)
-	{
-		SurvivalWidget->RemoveFromParent();
-		SurvivalWidget = nullptr;
-	}
-}
-
-// 属性变化流程：事件只是“Model 已变”信号，不用单项 NewValue 拼 UI；忽略载荷后重读五属性与 Condition/Equipment/Run/Help 的同一完整投影。
-void UCatLocalPlayerUISubsystem::HandleSurvivalAttributeChanged(const FOnAttributeChangeData& ChangeData)
-{
-	(void)ChangeData;
-	RefreshSurvivalView();
-}
-
-// 玩法快照变化流程：无视具体来源与增量载荷，统一从当前 ASC/组件/GameState 重建整份 ViewState，避免多源事件顺序形成 UI 私有真相。
-void UCatLocalPlayerUISubsystem::HandleGameplaySnapshotChanged()
-{
-	RefreshSurvivalView();
-}
-
-// ViewState 刷新流程：现取 Controller/Pawn 并验证 World/ASC 仍属同一绑定；然后读五属性，按弱引用可用性补入 Condition、Equipment、Run 与 Help，最后只把局部 DTO 交给 Widget::Render。
-void UCatLocalPlayerUISubsystem::RefreshSurvivalView()
-{
-	UAbilitySystemComponent* AbilitySystem = BoundSurvivalASC.Get();
-	const APlayerController* Controller = BoundPlayerController.Get();
-	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
-	if (!SurvivalWidget || !Character || !AbilitySystem || Character->GetWorld() != GetWorld()
-		|| Character->GetAbilitySystemComponent() != AbilitySystem)
-	{
+		DetachLakePawn();
 		return;
 	}
-	FCatSurvivalViewState ViewState;
-	ViewState.Hunger = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetHungerAttribute());
-	ViewState.Fatigue = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFatigueAttribute());
-	ViewState.Poison = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute());
-	ViewState.FishingStrength = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
-	ViewState.FightStamina = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
-	if (const UCatConditionComponent* Conditions = BoundCondition.Get())
+	LakeReachWidget->AddToViewport(1);
+	if (!LakeReachPageController->Bind(GetLocalPlayer(), Controller, LakeReachModel, LakeReachWidget))
 	{
-		ViewState.Condition = Conditions->GetSnapshot();
+		DetachLakePawn();
+		return;
 	}
-	if (const UCatEquipmentComponent* Equipment = BoundEquipment.Get())
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_reach_attached World=%s Controller=%s RootCount=1 RootClass=%s"),
+		GetWorld() ? *GetWorld()->GetName() : TEXT("None"),
+		*GetNameSafe(Controller),
+		*GetNameSafe(LakeReachWidget->GetClass()));
+}
+
+// LakeReach 解绑流程：PageController 先恢复输入和解绑 View 意图，Model 再解除玩法 Query/Fishing 订阅，最后移除 WBP 根并清引用。
+void UCatLocalPlayerUISubsystem::DetachLakePawn()
+{
+	if (LakeReachPageController)
 	{
-		ViewState.Equipment = Equipment->GetSnapshot();
+		LakeReachPageController->Unbind();
+		LakeReachPageController = nullptr;
 	}
-	if (const ACatfishingGameState* GameState = BoundGameState.Get())
+	if (LakeReachModel)
 	{
-		ViewState.Run = GameState->GetRunPublicState();
-		ViewState.HelpSignal = GameState->GetLastHelpSignal();
+		LakeReachModel->Unbind();
+		LakeReachModel = nullptr;
 	}
-	SurvivalWidget->Render(ViewState);
+	if (LakeReachWidget)
+	{
+		LakeReachWidget->RemoveFromParent();
+		LakeReachWidget = nullptr;
+		UE_LOG(LogCatUI, Log, TEXT("Event=ui_reach_detached World=%s RootCount=0"),
+			GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
+	}
 }

@@ -8,6 +8,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingViewStateProjectionTest,
 	"Catfishing.Unit.UI.FishingViewState.ProjectsReplicatedFactsWithoutGameplayObjects",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+// 测试流程：先构造一份 FishingSession 公开快照并投影成 UI DTO，再确认展示字段完整保留；最后创建 Bridge 并验证空会话会被拒绝。
+// 该用例只覆盖只读 View 边界，不生成真实 Session Actor，也不把 UI 投影测试冒充 Fishing 命令或复制生命周期验收。
 bool FCatFishingViewStateProjectionTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;

@@ -17,6 +17,7 @@ namespace CatEquipmentConsumableUseTest
 	static const FName FloatId(TEXT("RunUseFloat"));
 	static const FName ConsumableId(TEXT("RunUseHerb"));
 
+	/** 定义构造流程：创建最小 transient 装备定义，并让 Bait/Herb 都满足正式局内消耗品 gate。 */
 	static UCatEquipmentDefinition* MakeDefinition(FName Id, ECatEquipmentKind Kind)
 	{
 		UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>(GetTransientPackage());
@@ -37,6 +38,7 @@ namespace CatEquipmentConsumableUseTest
 		}
 		if (Kind == ECatEquipmentKind::Bait)
 		{
+			Definition->bRunConsumable = true;
 			Definition->BiteRateMultiplier = 1.0;
 			Definition->MinimumBiteDelayMultiplier = 1.0;
 		}
@@ -47,7 +49,10 @@ namespace CatEquipmentConsumableUseTest
 			Definition->MaximumCastErrorRadiusCentimeters = 30.0;
 			Definition->BiteSignalStability = 1.0;
 		}
-		if (Kind == ECatEquipmentKind::Herb) Definition->bRunConsumable = true;
+		if (Kind == ECatEquipmentKind::Herb)
+		{
+			Definition->bRunConsumable = true;
+		}
 		return Definition;
 	}
 
@@ -213,6 +218,9 @@ bool FCatRunUseFishingMutexTest::RunTest(const FString& Parameters)
 	TestNotEqual(TEXT("run reservation blocks fishing begin"), FishingBlocked.Error, ECatDomainCommandError::None);
 
 	FFixture FishingFirst; if (!FishingFirst.Create(*this)) return false;
+	const FCatDomainCommandResult BaitGrant = FishingFirst.Component->GrantRunConsumableFromAuthority(
+		FGuid::NewGuid(), FishingFirst.Component->GetSnapshot().Revision, BaitId, 1);
+	TestTrue(TEXT("fishing-first fixture grants bait inventory"), BaitGrant.bCommitted);
 	FishingFirst.Component->BeginFishingUse(FGuid::NewGuid(), RodId, BaitId, FloatId, FishingFirst.Component->GetSnapshot().Revision);
 	const FCatRunConsumableUseResult RunBlocked = FishingFirst.Component->BeginRunConsumableUse(
 		FGuid::NewGuid(), ConsumableId, 1, FishingFirst.Component->GetSnapshot().Revision);

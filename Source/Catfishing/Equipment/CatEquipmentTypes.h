@@ -12,7 +12,7 @@ enum class ECatEquipmentKind : uint8
 	Unknown,
 	/** 有耐久的鱼竿。 */
 	Rod,
-	/** 普通无限或特殊消耗型鱼饵。 */
+	/** 鱼饵装配类别；普通饵和特殊饵都可以进入一局耗材数量栈，特殊标记只影响偏好、表现或额外失败惩罚语义。 */
 	Bait,
 	/** 四种正式玩法路线之一的鱼漂。 */
 	Float,
@@ -34,7 +34,7 @@ enum class ECatFishingFailurePenalty : uint8
 {
 	/** 失败发生但本次不提交物资惩罚。 */
 	None,
-	/** 只损失一份已选特殊鱼饵；普通饵无限，不能进入该结果。 */
+	/** 只追加损失一份已选特殊鱼饵；普通饵的基础使用扣减由 Fishing 提交链处理，不进入额外失败惩罚。 */
 	LoseSpecialBait,
 	/** 只降低当前鱼竿耐久；降至零即断竿，不再同时丢饵。 */
 	DamageRod
@@ -69,7 +69,7 @@ struct FCatEquipmentLoadoutSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	FName RodDefinitionId = NAME_None;
 
-	/** 当前鱼饵稳定 ID；普通饵不会出现在耗材栈。 */
+	/** 当前鱼饵稳定 ID，表示装配选择本身；这份饵还能不能用于 Fishing 由一局耗材数量栈证明。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName BaitDefinitionId = NAME_None;
 
@@ -91,7 +91,7 @@ struct FCatEquipmentLoadoutSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bRodBroken = false;
 
-	/** 一局消耗品数量；不包含无限普通鱼饵或跨局解锁。 */
+	/** 一局消耗品数量，表示本局可实际花掉的鱼饵、窝料、草药或道具份数；跨局解锁只决定能否获取，不在这里计数。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatRunConsumableStack> Consumables;
 };
@@ -111,7 +111,7 @@ struct FCatTeamEquipmentInstance
 	UPROPERTY(BlueprintReadOnly)
 	ECatEquipmentKind Kind = ECatEquipmentKind::Unknown;
 
-	/** 创建这件实物的商店交易，用于交付重试去重。 */
+	/** 这件装备实例的来源交易凭证，表示它是由哪一次商店交付生成的运行时事实；团队库写入和重放校验会读取它来避免重复发放同一件实物。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid SourceTransactionId;
 };
@@ -190,7 +190,7 @@ struct FCatFishingFailureResult
 	double RemainingRodDurability = 0.0;
 };
 
-/** Fishing use reservation 的 Begin 结果；bReserved 仅表示 special bait 的未提交保护额度。 */
+/** Fishing use reservation 的 Begin 结果；bReserved 表示本次 Fishing 已保护一份鱼饵数量，直到 Commit 或 Release 收口。 */
 USTRUCT(BlueprintType)
 struct FCatFishingUseReservationResult
 {

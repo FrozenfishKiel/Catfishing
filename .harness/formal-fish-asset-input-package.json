@@ -1,0 +1,162 @@
+{
+  "schema_version": "1.0",
+  "package_id": "FormalFishAssetInputPackage",
+  "delivery_module": "DeliveryHarnessAssets",
+  "delivery_mode": "single_atomic_module",
+  "status": "ready",
+  "checked_on": "2026-08-25",
+  "authoring_basis": {
+    "basis_type": "agent_authored_provisional_formal_table",
+    "authorization": "User authorized Codex to replace the test fish, bite, and fight tables with an agent-authored formal table following the existing product-document direction because final planning decisions are not yet available.",
+    "scope": "This package closes the fish/bite/fight runtime input gap for the current DeliveryHarnessAssets module. It does not claim final product balance or final visual/presentation content.",
+    "review_policy": "When planning provides final rarity, bait preference, behavior, effect, or art mapping decisions, update the same assets/package instead of reopening scattered sub-tasks."
+  },
+  "sources": {
+    "fish_table": {
+      "kind": "lark_sheet",
+      "title": "鱼表格",
+      "wiki_node_token": "DKhnweGaEiPTJZkO8OScQOJenqg",
+      "spreadsheet_token": "CQlMsQon6hlo8ctpZRWcAPzOnRi",
+      "sheet_name": "第一版",
+      "revision": 580,
+      "live_read_at_local": "2026-08-25",
+      "available_fact": "The 第一版 sheet now has 16 base fish rows with names, regions, weight ranges, strength coefficient K, fight stamina, chum attribute, buff/effect notes, duration, sacrifice notes, and experience ranges. These rows are the base row source for the generated UE fish assets.",
+      "agent_decision": "Empty preference bait and rarity columns were filled by Codex using the table's chum/effect semantics, existing equipment bait IDs, and rarity weight tiers Common/Uncommon/Rare/Event."
+    },
+    "fish_book": {
+      "kind": "lark_docx",
+      "title": "鱼",
+      "wiki_node_token": "SlFcwt3BdidWCRkz2S4cIplJnnV",
+      "doc_token": "EAnSdzGeFocCTlxmOHGcJTbonAe",
+      "revision": 477,
+      "available_fact": "The fish book declares the fish table as the fish-data SSOT and defines the intended axes: distribution, chum, weight, bait preference, buff, and experience.",
+      "agent_decision": "Codex kept the UE data centered on those axes instead of adding a temporary runtime JSON or code-side fish table."
+    },
+    "fish_owner_decision_sync": {
+      "kind": "lark_docx",
+      "title": "裁决同步 · 鱼／营地／UI 与交互（张佳）",
+      "wiki_node_token": "VuC1wdXIsiXJp1kPDiVcmFOlnNh",
+      "doc_token": "PKxHdEJwQoDnKUxRhnccia6Gnwb",
+      "revision": 5,
+      "available_fact": "The owner-sync page identifies the fish table completion as a delivery dependency and lists missing columns such as preference bait, rarity, diet, outward segment length, rest segment length, and movement speed coefficient.",
+      "agent_decision": "Codex used this as the shape of the provisional formal table and generated explicit UE fish, bite, and fight assets so the runtime no longer depends on test DataAssets."
+    },
+    "fish_behavior_doc": {
+      "kind": "lark_docx",
+      "title": "鱼的行为",
+      "wiki_node_token": "XrwVwVQOuir3qFktxHNcdH7engd",
+      "doc_token": "JcPYd2xn3oSSj7xWgkccmEFdnzg",
+      "revision": 173,
+      "available_fact": "The behavior plan gives the intended bite/fight thinking: diet-driven bite differences, 3-6 second outward segments, 2-5 second rest segments, weight-class movement coefficients, line-length rhythm, and giant-fish exception semantics.",
+      "agent_decision": "Codex generated four BitePersonality assets and four FightPersonality assets from that direction: cautious, steady, aggressive, giant, and small/medium/large/giant fight rhythms."
+    },
+    "bait_table": {
+      "kind": "lark_sheet",
+      "title": "窝料/饵",
+      "wiki_node_token": "TwI7w9wooi52q2k1Bi8cZ6cCnag",
+      "spreadsheet_token": "WeirsgUSWhjpCEtosj0cVeBMnOg",
+      "revision": 111,
+      "updated_at_utc": "2026-08-21T08:22:02Z",
+      "available_fact": "Chum and bait candidate tables exist and the project already has formal bait equipment assets.",
+      "agent_decision": "Codex mapped fishy/fragrant/fermented fish to existing bait IDs such as MeatBait, BugBait, FruitBait, NectarBait, MoonlightBait, SoundBait, FlashingBait, and GiantLureBait."
+    },
+    "eating_effect_doc": {
+      "kind": "lark_docx",
+      "title": "吃鱼效果",
+      "wiki_node_token": "O753wiu7yiuBtMkburWcicZnnre",
+      "doc_token": "KH9bdBX6QoOMxRxo23KcyMQFnxb",
+      "revision": 43,
+      "updated_at_utc": "2026-08-21T07:52:17Z",
+      "available_fact": "Effect families, yellow stamina, poison, no-effect fish, giant sacrifice blessing, and reconciliation notes are documented.",
+      "agent_decision": "Codex mapped puffer, electric eel, and pike to Toxic fish definitions with positive PoisonIncrease, and kept non-toxic rows Safe with midpoint experience values. Special buff presentation/effect execution remains owned by the non-fish content package."
+    },
+    "art_resource_sheet": {
+      "kind": "lark_sheet",
+      "title": "临时美术资源表格",
+      "spreadsheet_token": "SoPdsIRHahMre1tXmQlcGzsVnlf",
+      "fish_sheet_id": "vpOyGr",
+      "revision": 54,
+      "available_fact": "Fish art resource categories exist, including fish, fish animation, quality/size variants, and fish shadow categories.",
+      "agent_decision": "Because no per-fish UE model mapping is available, this package only completes data readiness. Presentation and art binding remain in FormalNonFishContentInputPackage."
+    }
+  },
+  "ue_required_fields": [
+    "FishDefinitionId",
+    "BodyClass",
+    "SacrificeContribution",
+    "RarityTierId",
+    "RegionIds",
+    "TimeOfDay",
+    "Weather",
+    "SpawnWeight",
+    "MinimumWeightKilograms",
+    "MaximumWeightKilograms",
+    "ScoopTargetRadiusCentimeters",
+    "MinimumFightParticipants",
+    "FishStrength",
+    "FishFightStamina",
+    "BitePersonalityId",
+    "FightPersonalityId",
+    "ChumPreference",
+    "BaitWeightMultipliers",
+    "FoodSafety",
+    "EatingExperience",
+    "PoisonIncrease",
+    "bTankDisplayEligible",
+    "bEnableRuntimeDefinition"
+  ],
+  "generated_assets": {
+    "fish_definitions": [
+      "/Game/Catfishing/Data/Fish/Fish_RiverPattern",
+      "/Game/Catfishing/Data/Fish/Fish_LittleSilver",
+      "/Game/Catfishing/Data/Fish/Fish_LittleColor",
+      "/Game/Catfishing/Data/Fish/Fish_ForestLongtail",
+      "/Game/Catfishing/Data/Fish/Fish_SilvermoonTrout",
+      "/Game/Catfishing/Data/Fish/Fish_LakeGiantShadow",
+      "/Game/Catfishing/Data/Fish/Fish_Petal",
+      "/Game/Catfishing/Data/Fish/Fish_Windbell",
+      "/Game/Catfishing/Data/Fish/Fish_Salted",
+      "/Game/Catfishing/Data/Fish/Fish_Stinky",
+      "/Game/Catfishing/Data/Fish/Fish_Blackfish",
+      "/Game/Catfishing/Data/Fish/Fish_Loach",
+      "/Game/Catfishing/Data/Fish/Fish_EstuaryBass",
+      "/Game/Catfishing/Data/Fish/Fish_Puffer",
+      "/Game/Catfishing/Data/Fish/Fish_ElectricEel",
+      "/Game/Catfishing/Data/Fish/Fish_Pike"
+    ],
+    "bite_personalities": [
+      "/Game/Catfishing/Data/Fish/Bite_Cautious",
+      "/Game/Catfishing/Data/Fish/Bite_Steady",
+      "/Game/Catfishing/Data/Fish/Bite_Aggressive",
+      "/Game/Catfishing/Data/Fish/Bite_Giant"
+    ],
+    "fight_personalities": [
+      "/Game/Catfishing/Data/Fish/Fight_SmallRestless",
+      "/Game/Catfishing/Data/Fish/Fight_MediumSteady",
+      "/Game/Catfishing/Data/Fish/Fight_LargePredator",
+      "/Game/Catfishing/Data/Fish/Fight_GiantHeavy"
+    ]
+  },
+  "runtime_fit_notes": [
+    "FishStrength uses the fish table's maximum weight multiplied by strength coefficient K.",
+    "TimeOfDay and Weather are intentionally broad for this provisional table so the current lake runtime can select every fish in normal daytime weather states.",
+    "StinkyFish uses SacrificeContribution=1 instead of the design note -1 because UCatFishDefinition::IsRuntimeDefinitionReady currently rejects non-positive sacrifice values.",
+    "LakeGiantShadow uses Safe/EatingExperience=1 with bTankDisplayEligible=false because the current FoodSafety enum has no NonEdible value; its actual giant blessing/effect remains a later presentation/effect-content concern.",
+    "CaptureImprintEventId stays None for all generated fish so data readiness does not invent missing imprint event assets."
+  ],
+  "evidence": {
+    "generation_report": "Saved/Automation/FormalFishAssetGeneration.txt",
+    "inspection_report": "Saved/Automation/FormalFishAssetInspect.txt",
+    "runtime_config": "Config/DefaultGame.ini"
+  },
+  "retired_assets": {
+    "deleted": [
+      "/Game/Data/Fish/DA_Fish_Test01",
+      "/Game/Data/Fish/DA_Bite_Test01",
+      "/Game/Data/Fish/DA_Fight_Test01"
+    ],
+    "reason": "These assets were prototype-only test seeds. After Config/DefaultGame.ini switched to /Game/Catfishing/Data/Fish formal assets, keeping them in Content/Data/Fish would make the main branch look like it still had a valid test-table path."
+  },
+  "blocking_gaps": [],
+  "asset_readiness_rule": "This package is ready when generated fish, bite, and fight DataAssets exist, Config/DefaultGame.ini references them instead of DA_Fish_Test01, DA_Bite_Test01, or DA_Fight_Test01, and blocking_gaps is empty. The package remains provisional product content, but no longer blocks the runtime from using formal fish assets."
+}

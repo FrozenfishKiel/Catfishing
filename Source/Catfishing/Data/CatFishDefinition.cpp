@@ -20,8 +20,8 @@ bool UCatFishDefinition::IsRuntimeDefinitionReady() const
 		SeenBaitIds.Add(Entry.BaitDefinitionId);
 	}
 	const bool bFoodReady = FoodSafety == ECatFishFoodSafety::Safe
-		? FMath::IsFinite(HungerRelief) && HungerRelief > 0.0 && FMath::IsNearlyZero(PoisonIncrease)
-		: FoodSafety == ECatFishFoodSafety::Toxic && FMath::IsFinite(HungerRelief) && HungerRelief > 0.0
+		? FMath::IsFinite(EatingExperience) && EatingExperience > 0.0 && FMath::IsNearlyZero(PoisonIncrease)
+		: FoodSafety == ECatFishFoodSafety::Toxic && FMath::IsFinite(EatingExperience) && EatingExperience > 0.0
 			&& FMath::IsFinite(PoisonIncrease) && PoisonIncrease > 0.0;
 	return bEnableRuntimeDefinition && !FishDefinitionId.IsNone() && !RarityTierId.IsNone()
 		&& BodyClass != ECatFishBodyClass::Unknown && SacrificeContribution > 0

@@ -11,6 +11,9 @@ class UCatProfileSaveGame;
 /** 外部本地成像桥监听的新计划广播；监听方只在真实图片 durable 后回报成功。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatCapturePlanReceived, const FCatCapturePlan&);
 
+/** 本地图鉴 durable 内容已经变化的只读通知；订阅者收到信号后重新读取公开快照，不读取 Journal 或写入档案。 */
+DECLARE_MULTICAST_DELEGATE(FCatFishCollectionChanged);
+
 /** 每个 LocalPlayer 的永久档案深模块；它拥有 SaveGame Journal 和内容合并，不接触服务器实物容器。 */
 UCLASS()
 class CATFISHING_API UCatProfileSubsystem : public ULocalPlayerSubsystem
@@ -39,11 +42,17 @@ public:
 	/** 复制本地鱼图鉴公开快照供“互看图鉴”；不包含相册、隐藏印记、Journal、解锁或装备选择。 */
 	bool GetFishCollectionSnapshot(TArray<FCatFishCollectionRecord>& OutRecords) const;
 
+	/** 复制本地 durable 装备解锁摘要；只给 owning Controller 上报本 PlayerState 的运行期授权投影。 */
+	bool GetEquipmentUnlockSnapshot(TArray<FName>& OutUnlockIds) const;
+
 	/** 只在本地相册切换本人隐藏状态并 durable 保存；不产生服务器全局撤下或修改其他玩家副本。 */
 	FCatDomainCommandResult SetImprintHidden(FGuid RequestId, FGuid ImprintId, bool bHidden);
 
 	/** 外部本地成像桥订阅入口；订阅者负责自己的图片格式、原子文件写与容量策略。 */
 	FCatCapturePlanReceived OnCapturePlanReceived;
+
+	/** 鱼图鉴公开快照变化的订阅入口；只在 FishRecorded/FishSilhouette 完成第二次 durable 保存后触发。 */
+	FCatFishCollectionChanged OnFishCollectionChanged;
 
 private:
 	/** 校验 Grant 内容是否足以进入 Journal；拒绝发生在任何 SaveGame 写入之前。 */

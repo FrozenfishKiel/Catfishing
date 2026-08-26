@@ -16,6 +16,8 @@ namespace CatFishingAbilityTags
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Fishing_Scoop);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Fishing_Chum);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Fishing_Slack);
+	/** 非 Fishing 身体动作共享 Ability 的资产标签；AbilitySet 用它证明默认授予里存在正式 BodyAction 网关。 */
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_Body_Command);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_ActivationPolicy_OnInputTriggered);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_ActivationPolicy_WhileInputActive);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Ability_ActivationPolicy_OnGranted);
@@ -30,6 +32,24 @@ namespace CatFishingAbilityTags
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_LineBroken);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_CatInWater);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_Cancelled);
+	/**
+	 * 非 Fishing 身体动作的 GameplayEvent 标签集合。
+	 * PlayerController 只投递这些事件，Ability 再回到原领域服务；新增动作必须同步补 Command 枚举、标签映射和触发器。
+	 */
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_RequestSacrifice);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_CampRest);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_CampfirePlayback);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_TransferFishToTank);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_RescueCharacterToCamp);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_RepairRodAtCamp);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_UseHerbOnCharacter);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_ConsumeFish);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_BeginTheft);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_CatchTheft);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_RequestManualHelp);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_RequestMischief);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_PlaceProtectionSign);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Body_CompleteShakeDry);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(GameplayCue_Fishing_Cast);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(GameplayCue_Fishing_Reel);
 	/**

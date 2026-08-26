@@ -3,6 +3,7 @@
 #include "AbilitySystem/CatAbilitySettings.h"
 #include "AbilitySystem/CatFishingAbilityTags.h"
 #include "AbilitySystem/CatFishingStaminaEffect.h"
+#include "AbilitySystem/CatPoisonEffect.h"
 #include "AbilitySystem/CatSurvivalAttributeSet.h"
 #include "Character/CatCharacter.h"
 #include "Abilities/GameplayAbility.h"
@@ -163,6 +164,35 @@ void UCatAbilitySystemComponent::ResetAbilityInput()
 	InputHeldSpecHandles.Reset();
 }
 
+bool UCatAbilitySystemComponent::CancelBodyActionAbilitiesFromAuthority()
+{
+	// 取消流程：
+	// 1. 只允许服务器 owner 发起，避免客户端本地预测直接终止服务器事务窗口。
+	// 2. 先扫描当前活跃 AbilitySpec，只命中带 BodyAction 资产标签的实例；没有活跃 BodyAction 时保持无副作用。
+	// 3. 命中后再交给 GAS 标准 CancelAbilities，让 AbilityTask、EndAbility 和复制收尾按引擎路径完成。
+	if (!IsOwnerActorAuthoritative())
+	{
+		return false;
+	}
+	FGameplayTagContainer BodyActionTags;
+	BodyActionTags.AddTag(CatFishingAbilityTags::Ability_Body_Command);
+	bool bHasActiveBodyAction = false;
+	for (const FGameplayAbilitySpec& Spec : GetActivatableAbilities())
+	{
+		if (Spec.IsActive() && Spec.Ability && Spec.Ability->GetAssetTags().HasAny(BodyActionTags))
+		{
+			bHasActiveBodyAction = true;
+			break;
+		}
+	}
+	if (!bHasActiveBodyAction)
+	{
+		return false;
+	}
+	CancelAbilities(&BodyActionTags, nullptr, nullptr);
+	return true;
+}
+
 bool UCatAbilitySystemComponent::ApplyFishingStaminaDelta(const float Delta)
 {
 	if (!FMath::IsFinite(Delta) || FMath::IsNearlyZero(Delta) || !GetOwnerActor() || !GetAvatarActor()
@@ -220,6 +250,46 @@ bool UCatAbilitySystemComponent::EnsureFishingStaminaReadyForNewSession()
 	}
 	return GetOwnerActor() && GetAvatarActor()
 		&& GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) > 0.0f;
+}
+
+bool UCatAbilitySystemComponent::ApplyPoisonDelta(const float Delta)
+{
+	// Poison 提交流程：先拒绝非 authority、缺 ActorInfo 和非法数值；再读取当前 Poison，把负向恢复夹到 0。
+	// 夹完没有实际变化仍算成功，因为恢复命令的事务已在上层扣除库存/休息入口完成，不能因已为 0 而变成重试口。
+	// 有真实变化时只通过 UCatGE_PoisonDelta 的 SetByCaller 提交，Condition/Growth 不直接写 AttributeSet。
+	if (!FMath::IsFinite(Delta) || !GetOwnerActor() || !GetAvatarActor() || !IsOwnerActorAuthoritative())
+	{
+		return false;
+	}
+	const float CurrentPoison = GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute());
+	if (!FMath::IsFinite(CurrentPoison))
+	{
+		return false;
+	}
+	const float TargetPoison = Delta < 0.0f ? FMath::Max(0.0f, CurrentPoison + Delta) : CurrentPoison + Delta;
+	if (!FMath::IsFinite(TargetPoison))
+	{
+		return false;
+	}
+	const float ClampedDelta = TargetPoison - CurrentPoison;
+	if (FMath::IsNearlyZero(ClampedDelta))
+	{
+		return true;
+	}
+	const FGameplayEffectSpecHandle Spec = MakeOutgoingSpec(UCatGE_PoisonDelta::StaticClass(), 1.0f, MakeEffectContext());
+	if (!Spec.IsValid())
+	{
+		return false;
+	}
+	Spec.Data->SetSetByCallerMagnitude(UCatGE_PoisonDelta::GetPoisonDeltaTag(), ClampedDelta);
+	return ApplyGameplayEffectSpecToSelf(*Spec.Data.Get()).WasSuccessfullyApplied();
+}
+
+bool UCatAbilitySystemComponent::IsPoisonAtLeast(const float Threshold) const
+{
+	// 阈值读取流程：非法阈值直接关闭裁决；合法阈值只读取当前 ASC Poison，不暴露 AttributeSet 写口给 Condition。
+	return FMath::IsFinite(Threshold)
+		&& GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute()) >= Threshold;
 }
 
 void UCatAbilitySystemComponent::InitAbilityActorInfo(AActor* InOwnerActor, AActor* InAvatarActor)

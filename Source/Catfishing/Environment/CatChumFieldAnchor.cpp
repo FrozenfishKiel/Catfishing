@@ -2,7 +2,8 @@
 
 ACatChumFieldAnchor::ACatChumFieldAnchor()
 {
-	PrimaryActorTick.bCanEverTick = false; // 纯标记点，不需要每帧更新
-	bReplicates = false; // 只作为关卡里的静态锚点使用，不需要网络复制
-	SetActorEnableCollision(false); // 不参与碰撞，避免干扰投掷弹道或玩家移动
+	// 构造流程：关闭 Tick、复制和碰撞，让锚点只作为服务器扫描的关卡数据存在；自然窝点真正写入仍由 GameMode 调用 ChumFieldSubsystem 完成。
+	PrimaryActorTick.bCanEverTick = false;
+	bReplicates = false;
+	SetActorEnableCollision(false);
 }

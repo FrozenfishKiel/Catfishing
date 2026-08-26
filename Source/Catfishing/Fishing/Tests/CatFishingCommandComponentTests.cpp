@@ -2,6 +2,7 @@
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
+#include "Engine/LocalPlayer.h"
 #include "UObject/UnrealType.h"
 
 #include "Fishing/CatFishingTypes.h"
@@ -27,6 +28,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingPlaceChumMailboxTest,
 	"Catfishing.Unit.Fishing.CommandComponent.PlaceChumResultIsOwnerScopedFirstWinsAndBounded",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingCommandComponentDirectRodGateResultTest,
+	"Catfishing.Unit.Fishing.CommandComponent.DirectRodCommandsReturnCommandsClosedWhenFishingGateIsClosed",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 namespace CatFishingCommandComponentTest
@@ -429,6 +435,7 @@ bool FCatFishingPlaceChumMailboxTest::RunTest(const FString& Parameters)
 	FCatPlaceChumResult Duplicate = First;
 	Duplicate.FieldId = FGuid::NewGuid();
 	Duplicate.bCommitted = false;
+	AddExpectedErrorPlain(TEXT("Event=place_chum_result Committed=false"), EAutomationExpectedErrorFlags::Contains, 1);
 	Component->DeliverPlaceChumResultFromAuthority(Duplicate);
 	Component->TryGetPlaceChumResult(First.RequestId, Spatial);
 	TestEqual(TEXT("duplicate cannot replace first dedicated result"), Spatial.FieldId, First.FieldId);
@@ -441,6 +448,70 @@ bool FCatFishingPlaceChumMailboxTest::RunTest(const FString& Parameters)
 	}
 	TestFalse(TEXT("dedicated mailbox evicts oldest past bound"),
 		Component->TryGetPlaceChumResult(First.RequestId, Spatial));
+	return !HasAnyErrors();
+}
+
+// 旧竿入口 gate 测试流程：在没有活跃 Run 的权威 Controller 上提交四类直连命令；每条都应写入 CommandsClosed 回执，证明旧 UI/Ability 不会因为静默返回而卡在等待态。
+bool FCatFishingCommandComponentDirectRodGateResultTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	FTestWorldWrapper WorldWrapper;
+	ACatfishingPlayerController* Controller =
+		CatFishingCommandComponentTest::SpawnProjectController(*this, WorldWrapper);
+	UCatFishingCommandComponent* Component = Controller ? Controller->GetFishingCommandComponent() : nullptr;
+	if (!Controller || !Component)
+	{
+		return false;
+	}
+
+	TStrongObjectPtr<ULocalPlayer> LocalPlayer(GEngine ? NewObject<ULocalPlayer>(GEngine) : nullptr);
+	if (!TestNotNull(TEXT("create local player for public rod submit gate"), LocalPlayer.Get()))
+	{
+		return false;
+	}
+	Controller->SetPlayer(LocalPlayer.Get());
+	TestTrue(TEXT("rod command test controller satisfies public local input gate"),
+		Controller->IsLocalController());
+
+	AddExpectedErrorPlain(TEXT("Event=fishing_command_result"), EAutomationExpectedErrorFlags::Contains, 4);
+
+	const FGuid PlaceRequestId = FGuid::NewGuid();
+	FCatPlaceRodCommand PlaceCommand;
+	PlaceCommand.RequestId = PlaceRequestId;
+	Component->SubmitPlaceRod(PlaceCommand);
+
+	const FGuid OperateRequestId = FGuid::NewGuid();
+	FCatOperateRodCommand OperateCommand;
+	OperateCommand.Context.RequestId = OperateRequestId;
+	Component->SubmitOperateRod(OperateCommand);
+
+	const FGuid LeaveRequestId = FGuid::NewGuid();
+	FCatLeaveRodCommand LeaveCommand;
+	LeaveCommand.Context.RequestId = LeaveRequestId;
+	Component->SubmitLeaveRod(LeaveCommand);
+
+	const FGuid PackRequestId = FGuid::NewGuid();
+	FCatPackRodCommand PackCommand;
+	PackCommand.Context.RequestId = PackRequestId;
+	Component->SubmitPackRod(PackCommand);
+
+	auto ExpectCommandsClosedResult =
+		[this, Component](const TCHAR* Label, const FGuid RequestId, const ECatFishingCommandType CommandType)
+	{
+		FCatFishingCommandResult ReadBack;
+		TestTrue(FString::Printf(TEXT("%s stores a fail-closed result"), Label),
+			Component->TryGetResult(RequestId, ReadBack));
+		TestEqual(FString::Printf(TEXT("%s preserves command type"), Label),
+			ReadBack.CommandType, CommandType);
+		TestFalse(FString::Printf(TEXT("%s is not committed"), Label), ReadBack.bCommitted);
+		TestEqual(FString::Printf(TEXT("%s reports CommandsClosed"), Label),
+			ReadBack.Error, ECatFishingCommandError::CommandsClosed);
+	};
+	ExpectCommandsClosedResult(TEXT("place rod"), PlaceRequestId, ECatFishingCommandType::PlaceRod);
+	ExpectCommandsClosedResult(TEXT("operate rod"), OperateRequestId, ECatFishingCommandType::OperateRod);
+	ExpectCommandsClosedResult(TEXT("leave rod"), LeaveRequestId, ECatFishingCommandType::LeaveRod);
+	ExpectCommandsClosedResult(TEXT("pack rod"), PackRequestId, ECatFishingCommandType::PackRod);
 	return !HasAnyErrors();
 }
 

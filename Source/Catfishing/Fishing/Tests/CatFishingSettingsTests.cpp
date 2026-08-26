@@ -62,7 +62,7 @@ bool FCatFishWeightVisualScaleTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-// 测试流程：构造一份只在内存存在的 Fishing Settings，逐步补齐 StateTree、真咬窗口、近岸验证、抢抄距离和终态复制窗口；读取接口必须随 runtime readiness 同步 fail-closed。
+// 测试流程：构造一份只在内存存在的 Fishing Settings，先显式关闭运行态，再逐步补齐 StateTree、真咬窗口、近岸验证、抢抄距离和终态复制窗口；读取接口必须随 runtime readiness 同步 fail-closed。
 bool FCatFishingSettingsRuntimeReadinessTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -88,8 +88,8 @@ bool FCatFishingSettingsRuntimeReadinessTest::RunTest(const FString& Parameters)
 	double ScoopCooldown = 99.0;
 	double BiteWarning = 99.0;
 	double TerminalWindow = 99.0;
-	TestFalse(TEXT("空 Fishing runtime 不可运行"), Settings->IsRuntimeReady());
-	TestFalse(TEXT("空配置抢抄距离读取失败"), Settings->TryGetScoopReach(ScoopReach));
+	TestFalse(TEXT("显式关闭的 Fishing runtime 不可运行"), Settings->IsRuntimeReady());
+	TestFalse(TEXT("显式关闭时抢抄距离读取失败"), Settings->TryGetScoopReach(ScoopReach));
 	TestEqual(TEXT("失败时抢抄距离清零"), ScoopReach, 0.0);
 	TestTrue(TEXT("默认抄网冷却可读取"), Settings->TryGetScoopCooldown(ScoopCooldown));
 	TestEqual(TEXT("默认抄网冷却为三秒"), ScoopCooldown, 3.0);
@@ -110,7 +110,7 @@ bool FCatFishingSettingsRuntimeReadinessTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("总时间上限恰好容纳五秒慢浮与三秒预警"), Settings->TryGetBiteWarning(BiteWarning));
 	Settings->MaximumBiteDelaySeconds = 15.0;
 	TestTrue(TEXT("恢复合法咬钩延迟后预警可读取"), Settings->TryGetBiteWarning(BiteWarning));
-	TestFalse(TEXT("空配置终态复制窗口读取失败"), Settings->TryGetTerminalReplicationWindow(TerminalWindow));
+	TestFalse(TEXT("显式关闭时终态复制窗口读取失败"), Settings->TryGetTerminalReplicationWindow(TerminalWindow));
 	TestEqual(TEXT("失败时终态复制窗口清零"), TerminalWindow, 0.0);
 
 	Settings->bEnableFishingRuntime = true;

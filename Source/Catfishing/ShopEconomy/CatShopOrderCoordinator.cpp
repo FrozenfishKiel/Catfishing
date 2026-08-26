@@ -2,6 +2,7 @@
 
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatTeamEquipmentLibrary.h"
+#include "Items/CatItemsService.h"
 #include "Logging/CatLog.h"
 #include "ShopEconomy/CatShopEconomyService.h"
 #include "UObject/Class.h"
@@ -27,19 +28,165 @@ FCatShopOrderResult UCatShopOrderCoordinator::SubmitFreeClaim(const FCatShopPurc
 	return RunOrder(Command, true, RecipientEquipment);
 }
 
-// 售鱼链流程：先按来源和请求合法性挡住不该进这条链的意图，再冻结鱼、服务器估价、钱包入账，最后不可逆移除鱼。
-// 三步共用同一个 SaleRequestId；失败回退的边界只有一条：钱包入账成功之前失败一律解冻，之后一律不解冻。
-// 入账成功而移除失败时故意什么都不回退——钱已经进了公款，这时候把鱼放回去等于凭空多出一条鱼，
-// 正确的收口是拿同一个 RequestId 重试移除，Items 那一步本身是幂等的。
+// 售鱼链流程：
+// 1. 先读取 Items 容器快照，确认来源种类和个人鱼护主人，价格只从鱼实例重量现场估出。
+// 2. 再让 Shop 用同一份售鱼命令做钱包/价格预检；这一步失败时绝不触碰 Items，鱼仍留在原容器。
+// 3. 预检通过后用同一个 RequestId 调 Items::ConsumeFish 完成实物提交，成功或合法重放才进入 Shop::ApplyFishSale。
+// 4. Result.Delivery 始终暴露 Items 提交段，Result.Transaction 暴露钱包/账本段，调用方能区分“鱼没删”和“钱没入账”。
+// 边界：Social escrow 售鱼有追回窗口和归还分支，本模块没有那些协议事实，因此继续 fail-closed。
 FCatShopOrderResult UCatShopOrderCoordinator::SubmitFishSale(const FCatShopFishSaleOrderCommand& Command)
 {
 	FCatShopOrderResult Result;
 	Result.Transaction.Command.RequestId = Command.Context.RequestId;
 	Result.Delivery.RequestId = Command.Context.RequestId;
-	// 本地 Items 仍是权威鱼库存，但尚未提供“冻结鱼 -> 入账 -> 移除鱼”的两阶段售鱼适配器。
-	// 在该适配器落地前明确拒绝，避免钱已经进入团队钱包、鱼却仍留在背包中的跨聚合分叉。
-	Result.Transaction.Command.Error = ECatDomainCommandError::DependencyUnavailable;
-	Result.Delivery.Error = ECatDomainCommandError::DependencyUnavailable;
+
+	UWorld* World = GetWorld();
+	UCatShopEconomyService* Shop = World ? World->GetSubsystem<UCatShopEconomyService>() : nullptr;
+	UCatItemsService* Items = World ? World->GetSubsystem<UCatItemsService>() : nullptr;
+	if (!Shop || !Items)
+	{
+		Result.Transaction.Command.Error = ECatDomainCommandError::DependencyUnavailable;
+		Result.Delivery.Error = ECatDomainCommandError::DependencyUnavailable;
+		return Result;
+	}
+
+	const auto RejectBeforeItemsCommit = [&Result, Shop](const ECatDomainCommandError Error, const int64 DeliveryRevision = 0)
+	{
+		// 预检拒绝只回填当前钱包和可选容器版本，不写任何终态缓存；同一个 RequestId 以后仍可在玩家重读快照后重新提交。
+		Result.Transaction.Wallet = Shop->GetWalletSnapshot();
+		Result.Transaction.Command.Error = Error;
+		Result.Transaction.Command.Revision = Result.Transaction.Wallet.Revision;
+		Result.Delivery.Error = Error;
+		Result.Delivery.Revision = DeliveryRevision;
+		return Result;
+	};
+
+	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
+		|| !Command.FishInstanceId.IsValid() || !Command.ContainerId.IsValid())
+	{
+		return RejectBeforeItemsCommit(ECatDomainCommandError::InvalidPayload);
+	}
+
+	ECatContainerKind ExpectedContainerKind = ECatContainerKind::Unknown;
+	if (Command.SourceKind == ECatShopFishSaleSource::PersonalGuard)
+	{
+		ExpectedContainerKind = ECatContainerKind::PersonalGuard;
+	}
+	else if (Command.SourceKind == ECatShopFishSaleSource::SharedFishTank)
+	{
+		ExpectedContainerKind = ECatContainerKind::SharedFishTank;
+	}
+	else if (Command.SourceKind == ECatShopFishSaleSource::StolenEscrow)
+	{
+		return RejectBeforeItemsCommit(ECatDomainCommandError::PolicyUndecided);
+	}
+	else
+	{
+		return RejectBeforeItemsCommit(ECatDomainCommandError::InvalidPayload);
+	}
+
+	FCatContainerSnapshot Snapshot;
+	if (!Items->TryGetContainerSnapshot(Command.ContainerId, Snapshot))
+	{
+		return RejectBeforeItemsCommit(ECatDomainCommandError::NotFound);
+	}
+	if (Snapshot.Kind != ExpectedContainerKind)
+	{
+		return RejectBeforeItemsCommit(ECatDomainCommandError::InvalidPayload, Snapshot.Revision);
+	}
+
+	FCatFishConsumeCommand ConsumeCommand;
+	ConsumeCommand.Context.RequestId = Command.Context.RequestId;
+	ConsumeCommand.Context.ExpectedRevision = Command.ExpectedContainerRevision;
+	ConsumeCommand.Context.StableNetId = Command.Context.StableNetId;
+	ConsumeCommand.FishInstanceId = Command.FishInstanceId;
+	ConsumeCommand.SourceContainerId = Command.ContainerId;
+
+	FCatFishInstance SaleFish;
+	const FCatFishInstance* FishInContainer = Snapshot.Fish.FindByPredicate([&Command](const FCatFishInstance& Fish)
+	{
+		return Fish.FishInstanceId == Command.FishInstanceId;
+	});
+	bool bItemsAlreadyCommitted = false;
+	if (FishInContainer)
+	{
+		SaleFish = *FishInContainer;
+	}
+	else
+	{
+		// 鱼不在快照里时只允许同一 ConsumeFish 终态重放补回鱼事实；没有终态就保持容器原样并拒绝。
+		// 这条分支服务的是“鱼已删、Shop 入账回执需要重试”的恢复，不会创建新的删除动作。
+		const FCatFishConsumeResult ConsumeReplay = Items->ConsumeFish(ConsumeCommand);
+		Result.Delivery = ConsumeReplay.Command;
+		if (ConsumeReplay.Command.Error != ECatDomainCommandError::AlreadyResolved
+			|| ConsumeReplay.Fish.FishInstanceId != Command.FishInstanceId)
+		{
+			return RejectBeforeItemsCommit(ConsumeReplay.Command.Error == ECatDomainCommandError::AlreadyResolved
+				? ECatDomainCommandError::InvalidPayload : ConsumeReplay.Command.Error, Snapshot.Revision);
+		}
+		SaleFish = ConsumeReplay.Fish;
+		bItemsAlreadyCommitted = true;
+	}
+
+	if (Command.SourceKind == ECatShopFishSaleSource::PersonalGuard
+		&& SaleFish.OwnerStableNetId != Command.Context.StableNetId)
+	{
+		return RejectBeforeItemsCommit(ECatDomainCommandError::PermissionDenied, Snapshot.Revision);
+	}
+
+	int32 SaleValue = 0;
+	if (!Shop->TryAppraiseFishSale(SaleFish.WeightKilograms, SaleValue))
+	{
+		return RejectBeforeItemsCommit(ECatDomainCommandError::PolicyUndecided, Snapshot.Revision);
+	}
+
+	FCatShopFishSaleCommand SaleCommand;
+	SaleCommand.Context = Command.Context;
+	SaleCommand.FishInstanceId = SaleFish.FishInstanceId;
+	// ItemsCommitId 采用售鱼 RequestId：Items::ConsumeFish 的幂等终态同样由 RequestId+容器作用域证明，
+	// Shop 账本只需要记录这条协调链对应的实物提交回执，而不是另造一套提交 ID。
+	SaleCommand.ItemsCommitId = Command.Context.RequestId;
+	SaleCommand.SourceKind = Command.SourceKind;
+	SaleCommand.WeightKilograms = SaleFish.WeightKilograms;
+	SaleCommand.SaleValue = SaleValue;
+
+	ECatDomainCommandError ShopValidationError = ECatDomainCommandError::None;
+	int64 CurrentWalletRevision = Shop->GetWalletSnapshot().Revision;
+	if (!Shop->ValidateFishSale(SaleCommand, ShopValidationError, CurrentWalletRevision)
+		&& ShopValidationError != ECatDomainCommandError::AlreadyResolved)
+	{
+		Result.Transaction.Wallet = Shop->GetWalletSnapshot();
+		Result.Transaction.Command.Error = ShopValidationError;
+		Result.Transaction.Command.Revision = CurrentWalletRevision;
+		Result.Delivery.Error = ShopValidationError;
+		Result.Delivery.Revision = Snapshot.Revision;
+		return Result;
+	}
+
+	if (!bItemsAlreadyCommitted)
+	{
+		const FCatFishConsumeResult Consume = Items->ConsumeFish(ConsumeCommand);
+		Result.Delivery = Consume.Command;
+		const bool bItemsCommitStanding = Consume.Command.bCommitted
+			|| Consume.Command.Error == ECatDomainCommandError::AlreadyResolved;
+		if (!bItemsCommitStanding)
+		{
+			Result.Transaction.Wallet = Shop->GetWalletSnapshot();
+			Result.Transaction.Command.Error = Consume.Command.Error;
+			Result.Transaction.Command.Revision = Result.Transaction.Wallet.Revision;
+			return Result;
+		}
+		if (Consume.Fish.FishInstanceId != SaleCommand.FishInstanceId)
+		{
+			Result.Transaction.Wallet = Shop->GetWalletSnapshot();
+			Result.Transaction.Command.Error = ECatDomainCommandError::InvalidPayload;
+			Result.Transaction.Command.Revision = Result.Transaction.Wallet.Revision;
+			Result.Delivery.Error = ECatDomainCommandError::InvalidPayload;
+			return Result;
+		}
+	}
+
+	Result.Transaction = Shop->ApplyFishSale(SaleCommand);
 	return Result;
 }
 

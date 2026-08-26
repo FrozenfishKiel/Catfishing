@@ -19,5 +19,12 @@ public class Catfishing : ModuleRules
 			"InputCore", "GameplayTasks", "CableComponent", "EnhancedInput",
 			"Slate", "SlateCore", "OnlineSubsystemUtils"
 		});
+		if (Target.bBuildEditor)
+		{
+			PrivateDependencyModuleNames.AddRange(new string[]
+			{
+				"AssetRegistry", "UnrealEd", "UMGEditor"
+			});
+		}
 	}
 }

@@ -72,7 +72,7 @@ bool FCatEquipmentDefinitionRodTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-// 测试流程：配置特殊饵定义并切换 bRunConsumable；特殊饵必须是一局消耗品，不能被普通无限饵规则吞掉。
+// 测试流程：配置特殊饵定义并切换 bRunConsumable；特殊标记只表达玩法身份，不能替代一局耗材数量栈的运行 gate。
 bool FCatEquipmentDefinitionSpecialBaitTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;

@@ -31,7 +31,7 @@ namespace CatFishCatalogSettingsTest
 		Definition->BitePersonalityId = TEXT("Bite");
 		Definition->FightPersonalityId = TEXT("Fight");
 		Definition->FoodSafety = ECatFishFoodSafety::Safe;
-		Definition->HungerRelief = 1.0;
+		Definition->EatingExperience = 1.0;
 		return Definition;
 	}
 }

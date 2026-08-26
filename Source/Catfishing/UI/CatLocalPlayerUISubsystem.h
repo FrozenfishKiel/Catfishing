@@ -8,43 +8,54 @@
 class APlayerController;
 class APawn;
 class ACatCharacter;
-class ACatfishingGameState;
+class UCatLakeReachModel;
+class UCatLakeReachPageController;
+class UCatLakeReachWidget;
 class UCatTravelWidget;
-class UCatSurvivalWidget;
 class UCatInteractionWidget;
 class UCatInteractionTargetingComponent;
-class UAbilitySystemComponent;
-class UCatConditionComponent;
-class UCatEquipmentComponent;
-struct FOnAttributeChangeData;
 
-/** 每个 LocalPlayer 的唯一 UI MVC 协调器；分别消费 Online 公共快照与当前 Pawn 的五属性/Condition/Equipment/Run/Help 投影，Controller/World 替换时成对解绑。 */
+/** 每个 LocalPlayer 的 UI 根模块；负责 Frontend 旅行面板和 LakeReach MVC 对象生命周期，不直接聚合玩法 Query 或渲染布局。 */
 UCLASS()
 class CATFISHING_API UCatLocalPlayerUISubsystem : public ULocalPlayerSubsystem
 {
 	GENERATED_BODY()
 
+#if WITH_DEV_AUTOMATION_TESTS
+	friend class FCatLocalPlayerUISubsystemLakeReachAttachTest;
+	friend class FCatLocalPlayerUISubsystemOnlineWidgetPolicyTest;
+#endif
+
 public:
-	/** 订阅 GameInstance Online 快照，绑定当前 Controller Pawn notifier，并按当前 Pawn 分别装配 Online 与 Survival View。 */
+	/** 订阅 GameInstance Online 快照，绑定当前 Controller Pawn notifier，并按当前 Pawn 尝试装配 LakeReach MVC。 */
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 
-	/** 先解绑 Controller/Pawn/ASC/View，再移除 Online Widget 和快照订阅，保证 LocalPlayer 销毁后没有迟到 UI 更新。 */
+	/** 先移除 LakeReach MVC 与 Controller 绑定，再移除 Online View 和快照订阅，保证 LocalPlayer 销毁后没有迟到 UI 更新。 */
 	virtual void Deinitialize() override;
 
-	/** Controller 替换时先解绑旧 Pawn notifier、ASC delegate 与 View，再弱绑定新 Controller 并装配当前 Pawn。 */
+	/** Controller 替换时先从旧 Controller 恢复并清理 UI，再弱绑定新 Controller 并装配其当前 Pawn。 */
 	virtual void PlayerControllerChanged(APlayerController* NewController) override;
 
+	/** 切换当前 LocalPlayer 的 Lake 菜单；实际输入模式、焦点和鼠标由 LakeReach PageController 管理。 */
+	void ToggleLakeMenu();
+
+	/** 返回当前 Lake 菜单是否由 LakeReach PageController 保持打开；无页面时固定为 false。 */
+	bool IsLakeMenuOpen() const;
+
 private:
-	/** 响应 Online 事实变更；实现重新读取完整 Snapshot，View 不从旧事件参数拼接状态。 */
+	/** 响应 Online 事实变更；实现重新读取完整 Snapshot，并同步 Frontend 面板与 LakeReach Model。 */
 	void HandleOnlineSnapshotChanged();
 
-	/** 把 View 的 Host/Find/Join/Invite/Leave 意图翻译为 Online 公共接口调用；不直接访问 OSS 或旅行 API。 */
+	/** 把 Frontend Travel View 的 Host/Find/Join/Invite/Leave 意图翻译为 Online 公共接口调用。 */
 	void HandleActionRequested(ECatOnlineUIAction Action, FGuid OpaqueHandle);
 
-	/** 根据当前 Controller 与完整 Online 快照调和唯一 TravelWidget；直达玩法地图且没有 Session 时移除，其余状态创建或刷新。 */
+	/** 根据当前 Controller 与完整 Online 快照调和唯一 TravelWidget；只有 Frontend 或进入 Lake 前的旅行态会创建或刷新。 */
 	void RefreshOnlineWidgetForCurrentController();
 
-	/** 成对解除 View 动作广播并移出视口；空实例和重复调用保持幂等。 */
+	/** 判断 Frontend 旅行面板是否仍属于当前屏幕；Lake、回 Frontend 途中和异常 World 都不显示 Host/Find/Join 白盒。 */
+	static bool ShouldShowOnlineTravelWidget(const FCatOnlineSnapshot& Snapshot);
+
+	/** 成对解除 Frontend View 动作广播并移出视口；空实例和重复调用保持幂等。 */
 	void RemoveOnlineWidget();
 
 	/** 弱绑定 Controller 的 GetOnNewPawnNotifier，并立即尝试装配其当前 Pawn；不跨 World 强持 Controller。 */
@@ -53,38 +64,45 @@ private:
 	/** 从旧 Controller 精确移除 Pawn notifier 并清弱引用；Controller 已销毁时只清本地句柄。 */
 	void UnbindController();
 
-	/** 当前 Controller Pawn 变化入口；先完整解绑旧身体，再尝试把 NewPawn 作为新的 ACatCharacter Model 来源。 */
+	/** 当前 Controller Pawn 变化入口；先完整解绑旧 LakeReach MVC，再尝试把 NewPawn 作为新的 ACatCharacter 只读来源。 */
 	void HandleControllerPawnChanged(APawn* NewPawn);
 
-	/** 当 View gate 与当前 Character 有效时，绑定五属性与 Condition/Equipment/Run/Help 通知，创建 View 并发布首份完整投影。 */
-	void AttachSurvivalPawn(ACatCharacter* Character);
+	/** 当配置 WBP、当前 Controller 与 Character 有效时创建唯一 LakeReach MVC，并让 Model/PageController/View 成对绑定。 */
+	void AttachLakePawn(ACatCharacter* Character);
 
-	/** 先从旧 ASC 移除五属性 delegate，再解除 Condition/Equipment/GameState 的多源通知，最后释放 View 和全部弱引用。 */
-	void DetachSurvivalPawn();
+	/** 先解绑 PageController，再解绑 Model 并移除 View，最后清理 LakeReach MVC 引用。 */
+	void DetachLakePawn();
+
+	/** 为当前本地 Character 创建独立准星/交互提示层，并订阅同一 Controller 的目标变化信号。 */
 	void AttachInteractionView(APlayerController* Controller, ACatCharacter* Character);
+
+	/** 从原 TargetingComponent 成对解绑并移除交互 View。 */
 	void DetachInteractionView();
+
+	/** 目标变化时只刷新本地提示，不发送交互命令。 */
 	void HandleInteractionTargetChanged(AActor* PreviousTarget, AActor* CurrentTarget);
 
-	/** 任一 ASC HUD 属性变化时重新读取全部数值和完整快照，避免 UI 从增量事件拼接 Model。 */
-	void HandleSurvivalAttributeChanged(const FOnAttributeChangeData& ChangeData);
-
-	/** Condition、Equipment、Run 或 Help 完整快照变化的无载荷入口；每次都从当前宿主重建整份 HUD ViewState。 */
-	void HandleGameplaySnapshotChanged();
-
-	/** 从当前弱绑定 ASC、Condition、Equipment 与 GameState 读取完整投影并只调用 Widget::Render；Widget 不接触玩法宿主。 */
-	void RefreshSurvivalView();
-
-	/** 当前 LocalPlayer 唯一 Online 白盒界面；子系统拥有，Controller 变化或销毁时释放。 */
+	/** 当前 LocalPlayer 唯一 Frontend/旅行白盒界面；子系统拥有，Controller 变化或销毁时释放。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatTravelWidget> OnlineWidget;
 
-	/** 当前 LocalPlayer 唯一 Lake 状态 View；仅在有 ACatCharacter 且正式 UI gate 开启时存在。 */
+	/** 当前 LocalPlayer 的正式 LakeReach WBP View；由 Settings 配置类创建，缺类时不创建原生替身。 */
 	UPROPERTY(Transient)
-	TObjectPtr<UCatSurvivalWidget> SurvivalWidget;
+	TObjectPtr<UCatLakeReachWidget> LakeReachWidget;
 
+	/** 当前 LakeReach MVC Model；它拥有只读 Query 订阅、Fishing Bridge 和当前 ViewState。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatLakeReachModel> LakeReachModel;
+
+	/** 当前 LakeReach MVC PageController；它管理菜单输入、焦点和 View 意图转发。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatLakeReachPageController> LakeReachPageController;
+
+	/** 当前 LocalPlayer 独立的准星与交互提示层。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInteractionWidget> InteractionWidget;
 
+	/** 交互提示当前订阅的 TargetingComponent，用于精确解绑。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatInteractionTargetingComponent> BoundInteractionTargeting;
 
@@ -92,56 +110,15 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APlayerController> BoundPlayerController;
 
-	/** 当前属性 delegate 所属 ASC 弱引用；Detach 必须在它仍存活时用相同属性键成对 Remove。 */
-	UPROPERTY(Transient)
-	TWeakObjectPtr<UAbilitySystemComponent> BoundSurvivalASC;
-
-	/** 当前 HUD 读取的 Condition 弱引用；解绑时从同一对象移除 Snapshot 通知。 */
-	UPROPERTY(Transient)
-	TWeakObjectPtr<UCatConditionComponent> BoundCondition;
-
-	/** 当前 HUD 读取的 Equipment 弱引用；解绑时从同一对象移除 Snapshot 通知。 */
-	UPROPERTY(Transient)
-	TWeakObjectPtr<UCatEquipmentComponent> BoundEquipment;
-
-	/** 当前 World 的 GameState 弱引用；旅行时解绑 Run/Help 通知，不跨 World 保存公开快照。 */
-	UPROPERTY(Transient)
-	TWeakObjectPtr<ACatfishingGameState> BoundGameState;
-
 	/** Online 快照广播的配对解绑句柄；Initialize 写入，Deinitialize 消费。 */
 	FDelegateHandle OnlineSnapshotHandle;
 
-	/** Widget 动作广播的配对解绑句柄；创建时写入，移除时消费。 */
+	/** Frontend TravelWidget 动作广播的配对解绑句柄；创建时写入，移除时消费。 */
 	FDelegateHandle ActionHandle;
 
 	/** 当前 Controller Pawn notifier 的配对解绑句柄；Controller 变化或 Deinitialize 时消费。 */
 	FDelegateHandle PawnChangedHandle;
+
+	/** TargetingComponent 目标变化通知的配对解绑句柄。 */
 	FDelegateHandle InteractionTargetChangedHandle;
-
-	/** Hunger 属性变化 delegate 的配对解绑句柄；Attach 写入，Detach 从同一 ASC/属性键移除。 */
-	FDelegateHandle HungerChangedHandle;
-
-	/** Fatigue 属性变化 delegate 的配对解绑句柄；Attach 写入，Detach 从同一 ASC/属性键移除。 */
-	FDelegateHandle FatigueChangedHandle;
-
-	/** Poison 属性变化 delegate 的配对解绑句柄；Attach 写入，Detach 从同一 ASC 移除。 */
-	FDelegateHandle PoisonChangedHandle;
-
-	/** FishingStrength 属性变化 delegate 的配对解绑句柄；只驱动完整 HUD 重读。 */
-	FDelegateHandle FishingStrengthChangedHandle;
-
-	/** FightStamina 属性变化 delegate 的配对解绑句柄；只驱动完整 HUD 重读。 */
-	FDelegateHandle FightStaminaChangedHandle;
-
-	/** Condition 完整快照通知的配对解绑句柄。 */
-	FDelegateHandle ConditionChangedHandle;
-
-	/** Equipment 完整快照通知的配对解绑句柄。 */
-	FDelegateHandle EquipmentChangedHandle;
-
-	/** GameState Run/Environment 完整快照通知的配对解绑句柄。 */
-	FDelegateHandle RunChangedHandle;
-
-	/** GameState 最近求助完整快照通知的配对解绑句柄。 */
-	FDelegateHandle HelpChangedHandle;
 };

@@ -8,6 +8,7 @@
 
 UCatFishingViewBridge* UCatFishingViewBridge::CreateFishingViewBridge(UObject* Outer)
 {
+	// 工厂流程：优先把桥挂到调用方提供的 UI/Controller Outer 下；没有 Outer 时才退回 transient，结果仍然只是只读投影对象。
 	return NewObject<UCatFishingViewBridge>(Outer ? Outer : GetTransientPackage());
 }
 
@@ -50,6 +51,7 @@ ACatFishingRodActor* UCatFishingViewBridge::FindRodOperatedByPlayerState(UObject
 
 bool UCatFishingViewBridge::BindSession(ACatFishingSession* Session)
 {
+	// 绑定流程：先消费旧会话委托，再保存新会话弱引用并订阅 Snapshot 变化；首次绑定立即刷新，保证 UI 不等下一次复制事件。
 	UnbindSession();
 	if (!Session) return false;
 	BoundSession = Session;
@@ -60,6 +62,7 @@ bool UCatFishingViewBridge::BindSession(ACatFishingSession* Session)
 
 void UCatFishingViewBridge::UnbindSession()
 {
+	// 解绑流程：只有旧会话仍有效时才用保存的句柄移除委托；Actor 已销毁时清本地状态即可，弱引用不会延长生命周期。
 	if (ACatFishingSession* Session = BoundSession.Get())
 	{
 		Session->OnSnapshotChanged.Remove(SnapshotChangedHandle);
@@ -70,12 +73,14 @@ void UCatFishingViewBridge::UnbindSession()
 
 void UCatFishingViewBridge::BeginDestroy()
 {
+	// UObject 销毁流程：先断开 Session 通知，再让父类继续释放；这样迟到复制回调不会访问半销毁的 UI 桥。
 	UnbindSession();
 	Super::BeginDestroy();
 }
 
 void UCatFishingViewBridge::RefreshFromSession()
 {
+	// 刷新流程：读取当前会话完整 Snapshot，投影为只读 DTO，然后同时通知 C++ 与蓝图订阅者；会话丢失时不广播伪造状态。
 	const ACatFishingSession* Session = BoundSession.Get();
 	if (!Session) return;
 	ViewState = FCatFishingViewState::FromSnapshot(Session->GetSnapshot());

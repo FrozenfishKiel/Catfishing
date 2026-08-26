@@ -50,6 +50,7 @@ namespace CatEquipmentFishingUseTest
 	static const FName FloatId(TEXT("FishingUseFloat"));
 	static const FName DriftwoodId(TEXT("FishingUseDriftwood"));
 
+	/** 定义构造流程：创建最小 transient 钓鱼装备定义，并让 Bait 满足正式局内数量栈 gate。 */
 	static UCatEquipmentDefinition* MakeDefinition(const FName Id, const ECatEquipmentKind Kind)
 	{
 		UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>(GetTransientPackage());
@@ -71,6 +72,7 @@ namespace CatEquipmentFishingUseTest
 		}
 		else if (Kind == ECatEquipmentKind::Bait)
 		{
+			Definition->bRunConsumable = true;
 			Definition->BiteRateMultiplier = 1.0;
 			Definition->MinimumBiteDelayMultiplier = 1.0;
 		}
@@ -170,7 +172,7 @@ namespace CatEquipmentFishingUseTest
 			return Grant.bCommitted;
 		}
 
-		bool ConfigureNormal(FAutomationTestBase& Test)
+		bool ConfigureNormal(FAutomationTestBase& Test, const int32 NormalBaitQuantity = 1)
 		{
 			if (!Component)
 			{
@@ -179,7 +181,14 @@ namespace CatEquipmentFishingUseTest
 			const FCatDomainCommandResult Configure = Component->ConfigureLoadoutFromAuthority(
 				FGuid::NewGuid(), Component->GetSnapshot().Revision, RodId, NormalBaitId, FloatId);
 			Test.TestTrue(TEXT("Configure normal-bait fishing loadout"), Configure.bCommitted);
-			return Configure.bCommitted;
+			if (!Configure.bCommitted || NormalBaitQuantity <= 0)
+			{
+				return Configure.bCommitted;
+			}
+			const FCatDomainCommandResult Grant = Component->GrantRunConsumableFromAuthority(
+				FGuid::NewGuid(), Component->GetSnapshot().Revision, NormalBaitId, NormalBaitQuantity);
+			Test.TestTrue(TEXT("Grant normal bait through public authority API"), Grant.bCommitted);
+			return Grant.bCommitted;
 		}
 
 		~FFishingUseFixture()
@@ -200,6 +209,7 @@ namespace CatEquipmentFishingUseTest
 		Test.TestEqual(FString::Printf(TEXT("%s leaves rod durability unchanged"), Label), After.RodDurability, Before.RodDurability);
 		Test.TestEqual(FString::Printf(TEXT("%s leaves rod broken unchanged"), Label), After.bRodBroken, Before.bRodBroken);
 		Test.TestEqual(FString::Printf(TEXT("%s leaves special bait inventory unchanged"), Label), QuantityOf(After, SpecialBaitId), QuantityOf(Before, SpecialBaitId));
+		Test.TestEqual(FString::Printf(TEXT("%s leaves normal bait inventory unchanged"), Label), QuantityOf(After, NormalBaitId), QuantityOf(Before, NormalBaitId));
 	}
 }
 
@@ -284,16 +294,32 @@ bool FCatEquipmentFishingUseBeginTest::RunTest(const FString& Parameters)
 		const FGuid SessionId = FGuid::NewGuid();
 		const FCatFishingUseReservationResult Begin = Fixture.Component->BeginFishingUse(
 			SessionId, RodId, NormalBaitId, FloatId, Before.Revision);
-		TestFalse(TEXT("Normal-bait Begin does not reserve a special bait"), Begin.bReserved);
+		TestTrue(TEXT("Normal-bait Begin reserves one run-consumable bait"), Begin.bReserved);
 		const FCatFishingUseOperationResult SetWear = Fixture.Component->SetAccumulatedFishingRodWear(SessionId, 1, 12.5);
 		TestTrue(TEXT("Normal-bait session records pending wear"), SetWear.bApplied);
 		const FCatFishingUseReservationResult Replay = Fixture.Component->BeginFishingUse(
 			SessionId, RodId, NormalBaitId, FloatId, Before.Revision);
-		TestFalse(TEXT("Normal-bait Begin replay remains unreserved"), Replay.bReserved);
+		TestTrue(TEXT("Normal-bait Begin replay keeps the reserved bait"), Replay.bReserved);
 		TestEqual(TEXT("Normal-bait Begin replay is already resolved"), Replay.Error, ECatDomainCommandError::AlreadyResolved);
-		TestEqual(TEXT("Normal-bait Begin replay fails closed for wear sequence"), Replay.WearSequence, int64{0});
-		TestEqual(TEXT("Normal-bait Begin replay fails closed for absolute wear"), Replay.AbsoluteRodWear, 0.0);
+		TestEqual(TEXT("Normal-bait Begin replay returns current wear sequence"), Replay.WearSequence, int64{1});
+		TestEqual(TEXT("Normal-bait Begin replay returns current absolute wear"), Replay.AbsoluteRodWear, 12.5);
 		TestEqual(TEXT("Normal-bait Begin replay keeps public revision"), Fixture.Component->GetSnapshot().Revision, Before.Revision);
+		Fixture.WorldWrapper.ForwardErrorMessages(this);
+	}
+	{
+		FFishingUseFixture Fixture;
+		if (!Fixture.Create(*this) || !Fixture.ConfigureNormal(*this, 0))
+		{
+			return false;
+		}
+
+		const FCatEquipmentLoadoutSnapshot Before = Fixture.Component->GetSnapshot();
+		const FCatFishingUseReservationResult Begin = Fixture.Component->BeginFishingUse(
+			FGuid::NewGuid(), RodId, NormalBaitId, FloatId, Before.Revision);
+		TestFalse(TEXT("Normal-bait Begin without inventory is rejected"), Begin.bReserved);
+		TestEqual(TEXT("Normal-bait Begin without inventory reports capacity"), Begin.Error, ECatDomainCommandError::CapacityExceeded);
+		TestFalse(TEXT("Normal-bait rejection does not activate fishing use"), Fixture.Component->HasActiveFishingUse());
+		TestSnapshotUnchanged(*this, TEXT("Normal-bait missing inventory begin"), Before, Fixture.Component->GetSnapshot());
 		Fixture.WorldWrapper.ForwardErrorMessages(this);
 	}
 	return !HasAnyErrors();
@@ -340,7 +366,8 @@ bool FCatEquipmentFishingUseBaitTest::RunTest(const FString& Parameters)
 		const int64 BeforeCommitRevision = Fixture.Component->GetSnapshot().Revision;
 		const FCatFishingUseOperationResult Commit = Fixture.Component->CommitFishingBait(SessionId);
 		TestTrue(TEXT("Normal bait records its commit"), Commit.bApplied);
-		TestEqual(TEXT("Normal bait commit does not publish a revision"), Fixture.Component->GetSnapshot().Revision, BeforeCommitRevision);
+		TestEqual(TEXT("Normal bait commit removes exactly one bait"), QuantityOf(Fixture.Component->GetSnapshot(), NormalBaitId), 0);
+		TestEqual(TEXT("Normal bait commit advances revision once"), Fixture.Component->GetSnapshot().Revision, BeforeCommitRevision + 1);
 		Fixture.WorldWrapper.ForwardErrorMessages(this);
 	}
 	return !HasAnyErrors();

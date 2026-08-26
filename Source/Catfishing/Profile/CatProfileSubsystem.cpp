@@ -55,10 +55,11 @@ void UCatProfileSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	}
 }
 
-// 销毁流程：先关闭广播并清 durable 对象引用、槽位和索引，再交还父类；这里不做隐式保存，避免把尚未 Complete 的内存变化提交为成功。
+// 销毁流程：先关闭成像与图鉴广播并清 durable 对象引用、槽位和索引，再交还父类；这里不做隐式保存，避免把尚未 Complete 的内存变化提交为成功。
 void UCatProfileSubsystem::Deinitialize()
 {
 	OnCapturePlanReceived.Clear();
+	OnFishCollectionChanged.Clear();
 	bPersistenceReady = false;
 	CurrentProfile = nullptr;
 	ResolvedSlotName.Reset();
@@ -181,6 +182,18 @@ bool UCatProfileSubsystem::GetFishCollectionSnapshot(TArray<FCatFishCollectionRe
 	return true;
 }
 
+// 装备解锁摘要读取流程：先清输出，只在 durable Profile 可用时复制 UnlockIds；调用方只能把它作为本人 PlayerState 的运行期授权投影。
+bool UCatProfileSubsystem::GetEquipmentUnlockSnapshot(TArray<FName>& OutUnlockIds) const
+{
+	OutUnlockIds.Reset();
+	if (!bPersistenceReady || !CurrentProfile)
+	{
+		return false;
+	}
+	OutUnlockIds = CurrentProfile->UnlockIds;
+	return true;
+}
+
 // 印记隐藏流程：定位本人本地索引并只改 bHidden；保存失败恢复旧值，不发送服务器 RPC，也不删除图片或其他玩家记录。
 FCatDomainCommandResult UCatProfileSubsystem::SetImprintHidden(const FGuid RequestId, const FGuid ImprintId,
 	const bool bHidden)
@@ -291,7 +304,7 @@ bool UCatProfileSubsystem::MergeGrantIntoProfile(const FCatProfileGrant& Grant)
 	return true;
 }
 
-// Pending 完成流程：定位精确 Journal、幂等合并并标记 Complete/Applied；第二次保存失败时立即从磁盘重载先前 Pending，确保内存不会错误允许 ACK。
+// Pending 完成流程：定位精确 Journal，记住授予种类后幂等合并并标记 Complete/Applied；第二次保存失败立即回载磁盘 Pending，成功时才允许 ACK，并仅为图鉴类 Grant 广播新快照可读。
 FCatProfileApplyResult UCatProfileSubsystem::CompletePendingGrant(const FGuid GrantId)
 {
 	FCatProfileApplyResult Result;
@@ -310,6 +323,7 @@ FCatProfileApplyResult UCatProfileSubsystem::CompletePendingGrant(const FGuid Gr
 	{
 		return Result;
 	}
+	const ECatProfileGrantKind CompletedKind = Entry->Grant.Kind;
 	if (!MergeGrantIntoProfile(Entry->Grant))
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
@@ -328,6 +342,10 @@ FCatProfileApplyResult UCatProfileSubsystem::CompletePendingGrant(const FGuid Gr
 	Result.Error = ECatDomainCommandError::None;
 	UE_LOG(LogCatProfile, Log, TEXT("Event=profile_grant_durable GrantId=%s Kind=%s AckAllowed=true"),
 		*GrantId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(Entry->Grant.Kind));
+	if (CompletedKind == ECatProfileGrantKind::FishRecorded || CompletedKind == ECatProfileGrantKind::FishSilhouette)
+	{
+		OnFishCollectionChanged.Broadcast();
+	}
 	return Result;
 }
 

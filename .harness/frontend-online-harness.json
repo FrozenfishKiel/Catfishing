@@ -1,0 +1,857 @@
+{
+  "schema_version": "2.1",
+  "status": "completed",
+  "session_id": "",
+  "created_at": "2026-08-24T16:51:45.694276+08:00",
+  "updated_at": "2026-08-24T17:37:18.9602915+08:00",
+  "goal": {
+    "outcome": "第六模块 Frontend / Online 正式入口体验收口",
+    "non_goals": [
+      "不实现 Host Migration；不重写 OnlineSubsystem 后端；不关闭第四模块；不绕过 UCatOnlineSubsystem 新增 OpenLevel/ConsoleCommand 旁路"
+    ]
+  },
+  "map": {
+    "project_root": "D:\\UnreaProjects\\Catfishing-verify-01",
+    "project_type": "unreal-engine",
+    "local_harness": ".harness/harness.json",
+    "adapter": null,
+    "entry_points": [
+      "Docs/Development/需求对齐差距清单.md",
+      "Docs/Architecture/项目技术方案.md",
+      "Knowledge/Framework/PROJECT_MAP.md",
+      "Knowledge/Development/FRAMEWORK_WIRING.md"
+    ],
+    "relevant_paths": [
+      "Source/Catfishing/UI;Source/Catfishing/Online;Config/DefaultEngine.ini;Config/DefaultGame.ini;相关测试"
+    ],
+    "required_context": [],
+    "context_fingerprints": {
+      ".harness/harness.json": "ec2f73580480280f69b44d305b760c65ac3654baecf644b92930797f8789696c"
+    },
+    "unknowns": []
+  },
+  "acceptance": [
+    {
+      "id": "A1",
+      "criterion": "玩法内不再展示 Host/Find/Join 白盒",
+      "verification": "运行 UI 或 Online 测试并静态核对 Lake 分支",
+      "verification_mode": "machine",
+      "trusted_sources": [
+        "hook-observed",
+        "tool-generated"
+      ]
+    },
+    {
+      "id": "A2",
+      "criterion": "Leave 入口仍通过正式 Online 管线可达",
+      "verification": "测试或源码核对 Lake 菜单触发 RequestLeave",
+      "verification_mode": "machine",
+      "trusted_sources": [
+        "hook-observed",
+        "tool-generated"
+      ]
+    },
+    {
+      "id": "A3",
+      "criterion": "直接 Lake PIE 不被联机 UI 遮挡",
+      "verification": "测试或日志核对 Lake NoSession 不创建 TravelWidget",
+      "verification_mode": "machine",
+      "trusted_sources": [
+        "hook-observed",
+        "tool-generated"
+      ]
+    },
+    {
+      "id": "A4",
+      "criterion": "默认前端入口与 Lake 玩法入口职责清楚",
+      "verification": "资料和配置核对 Frontend 承载组局 Lake 承载玩法",
+      "verification_mode": "manual",
+      "trusted_sources": [
+        "human-confirmed"
+      ]
+    },
+    {
+      "id": "A5",
+      "criterion": "项目 Harness 静态检查通过",
+      "verification": "powershell -ExecutionPolicy Bypass -File Scripts/verify_items_tank_sacrifice_camp.ps1 -Mode Static",
+      "verification_mode": "machine",
+      "trusted_sources": [
+        "hook-observed",
+        "tool-generated"
+      ]
+    }
+  ],
+  "boundaries": {
+    "allowed_paths": [
+      "Source/Catfishing/UI;Source/Catfishing/Online;Config/DefaultEngine.ini;Config/DefaultGame.ini;相关测试"
+    ],
+    "forbidden_changes": [
+      "新增联机旁路或 Lobby Map；擅自更改 Host exit 产品裁决；覆盖用户已有改动"
+    ],
+    "risk_level": "medium",
+    "confirmations": []
+  },
+  "baseline": {
+    "required": false,
+    "checks": [],
+    "evidence": []
+  },
+  "observability": {
+    "sources": [
+      "UBT 构建输出",
+      "UE Automation 报告与 Automation.log",
+      "Lake 地图和正式输入资产的运行时装配结果",
+      "本地玩家 UI 生命周期、Fishing View 快照和可见运行证据",
+      "Camp/Sacrifice owning-client 结果 RPC 与 Campfire NetMulticast 反射合同",
+      "ItemsCommitted 献祭恢复自动化与 Lake Camp/Hub/Tank Runtime 接线日志",
+      "Equipment/TeamLibrary/Shop 定义、购买、领取、装备命令结果与 RequestId/Revision 日志",
+      "FishingSession 读取装备/Items 快照、鱼饵消耗、鱼竿耐久或断竿的单一失败结果",
+      "FProfileGrant 装备解锁授予、Journal/ACK 与装配恢复 fail-closed 证据",
+      "UBT/Automation 输出；UI/Online 单元测试；运行日志中的 ui_online_widget_created/removed 与 online snapshot"
+    ],
+    "blind_spots": []
+  },
+  "comment_contract": {
+    "targets": [
+      "Source/Catfishing/UI",
+      "Source/Catfishing/Online"
+    ],
+    "not_applicable_reason": "",
+    "scan": {
+      "status": "pass",
+      "files_scanned": 24,
+      "comments_scanned": 484,
+      "errors": [],
+      "review_candidates": [
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatFishingViewBridge.cpp",
+          "line": 51,
+          "category": "生命周期或委托清理",
+          "code": "bool UCatFishingViewBridge::BindSession(ACatFishingSession* Session)",
+          "id": "C1"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatFishingViewBridge.cpp",
+          "line": 53,
+          "category": "生命周期或委托清理",
+          "code": "UnbindSession();",
+          "id": "C2"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatFishingViewBridge.cpp",
+          "line": 61,
+          "category": "生命周期或委托清理",
+          "code": "void UCatFishingViewBridge::UnbindSession()",
+          "id": "C3"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatFishingViewBridge.cpp",
+          "line": 73,
+          "category": "生命周期或委托清理",
+          "code": "UnbindSession();",
+          "id": "C4"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatFishingViewBridge.h",
+          "line": 43,
+          "category": "生命周期或委托清理",
+          "code": "bool BindSession(ACatFishingSession* Session);",
+          "id": "C5"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatFishingViewBridge.h",
+          "line": 46,
+          "category": "生命周期或委托清理",
+          "code": "void UnbindSession();",
+          "id": "C6"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLakeReachWidget.cpp",
+          "line": 60,
+          "category": "生命周期或委托清理",
+          "code": "CloseButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleCloseClicked);",
+          "id": "C7"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLakeReachWidget.cpp",
+          "line": 61,
+          "category": "生命周期或委托清理",
+          "code": "CloseButton->OnClicked.AddDynamic(this, &ThisClass::HandleCloseClicked);",
+          "id": "C8"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLakeReachWidget.cpp",
+          "line": 65,
+          "category": "生命周期或委托清理",
+          "code": "LeaveButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleLeaveClicked);",
+          "id": "C9"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLakeReachWidget.cpp",
+          "line": 66,
+          "category": "生命周期或委托清理",
+          "code": "LeaveButton->OnClicked.AddDynamic(this, &ThisClass::HandleLeaveClicked);",
+          "id": "C10"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLakeReachWidget.cpp",
+          "line": 75,
+          "category": "生命周期或委托清理",
+          "code": "CloseButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleCloseClicked);",
+          "id": "C11"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLakeReachWidget.cpp",
+          "line": 79,
+          "category": "生命周期或委托清理",
+          "code": "LeaveButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleLeaveClicked);",
+          "id": "C12"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 39,
+          "category": "生命周期或委托清理",
+          "code": "BindController(GetLocalPlayer()->GetPlayerController(GetWorld()));",
+          "id": "C13"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 47,
+          "category": "生命周期或委托清理",
+          "code": "UnbindController();",
+          "id": "C14"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 61,
+          "category": "生命周期或委托清理",
+          "code": "UnbindController();",
+          "id": "C15"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 64,
+          "category": "生命周期或委托清理",
+          "code": "BindController(NewController);",
+          "id": "C16"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 321,
+          "category": "生命周期或委托清理",
+          "code": "FishingCommand->OnResultReceived.AddDynamic(this, &ThisClass::HandleFishingCommandResult);",
+          "id": "C17"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 336,
+          "category": "生命周期或委托清理",
+          "code": "RefreshFishingSessionBinding();",
+          "id": "C18"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 385,
+          "category": "生命周期或委托清理",
+          "code": "FishingCommand->OnResultReceived.RemoveDynamic(this, &ThisClass::HandleFishingCommandResult);",
+          "id": "C19"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 391,
+          "category": "生命周期或委托清理",
+          "code": "FishingViewBridge->UnbindSession();",
+          "id": "C20"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 463,
+          "category": "生命周期或委托清理",
+          "code": "RefreshFishingSessionBinding();",
+          "id": "C21"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 521,
+          "category": "生命周期或委托清理",
+          "code": "if (Session && FishingViewBridge->BindSession(Session))",
+          "id": "C22"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 527,
+          "category": "生命周期或委托清理",
+          "code": "FishingViewBridge->UnbindSession();",
+          "id": "C23"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 547,
+          "category": "生命周期或委托清理",
+          "code": "Session->OnDestroyed.AddDynamic(this, &ThisClass::HandleFishingSessionDestroyed);",
+          "id": "C24"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 548,
+          "category": "生命周期或委托清理",
+          "code": "Session->OnEndPlay.AddDynamic(this, &ThisClass::HandleFishingSessionEndPlay);",
+          "id": "C25"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 556,
+          "category": "生命周期或委托清理",
+          "code": "Session->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleFishingSessionDestroyed);",
+          "id": "C26"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 557,
+          "category": "生命周期或委托清理",
+          "code": "Session->OnEndPlay.RemoveDynamic(this, &ThisClass::HandleFishingSessionEndPlay);",
+          "id": "C27"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 587,
+          "category": "生命周期或委托清理",
+          "code": "FishingViewBridge->UnbindSession();",
+          "id": "C28"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 682,
+          "category": "生命周期或委托清理",
+          "code": "LakeMenuInputBindingHandle = Input->BindAction(",
+          "id": "C29"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatLocalPlayerUISubsystem.cpp",
+          "line": 693,
+          "category": "生命周期或委托清理",
+          "code": "Input->RemoveBindingByHandle(LakeMenuInputBindingHandle);",
+          "id": "C30"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatTravelWidget.cpp",
+          "line": 54,
+          "category": "生命周期或委托清理",
+          "code": "HostButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleHostClicked);",
+          "id": "C31"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatTravelWidget.cpp",
+          "line": 55,
+          "category": "生命周期或委托清理",
+          "code": "HostButton->OnClicked.AddDynamic(this, &ThisClass::HandleHostClicked);",
+          "id": "C32"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatTravelWidget.cpp",
+          "line": 56,
+          "category": "生命周期或委托清理",
+          "code": "FindButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleFindClicked);",
+          "id": "C33"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatTravelWidget.cpp",
+          "line": 57,
+          "category": "生命周期或委托清理",
+          "code": "FindButton->OnClicked.AddDynamic(this, &ThisClass::HandleFindClicked);",
+          "id": "C34"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatTravelWidget.cpp",
+          "line": 58,
+          "category": "生命周期或委托清理",
+          "code": "JoinButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleJoinClicked);",
+          "id": "C35"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatTravelWidget.cpp",
+          "line": 59,
+          "category": "生命周期或委托清理",
+          "code": "JoinButton->OnClicked.AddDynamic(this, &ThisClass::HandleJoinClicked);",
+          "id": "C36"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatTravelWidget.cpp",
+          "line": 60,
+          "category": "生命周期或委托清理",
+          "code": "InviteButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleInviteClicked);",
+          "id": "C37"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatTravelWidget.cpp",
+          "line": 61,
+          "category": "生命周期或委托清理",
+          "code": "InviteButton->OnClicked.AddDynamic(this, &ThisClass::HandleInviteClicked);",
+          "id": "C38"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatTravelWidget.cpp",
+          "line": 62,
+          "category": "生命周期或委托清理",
+          "code": "LeaveButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleLeaveClicked);",
+          "id": "C39"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatTravelWidget.cpp",
+          "line": 63,
+          "category": "生命周期或委托清理",
+          "code": "LeaveButton->OnClicked.AddDynamic(this, &ThisClass::HandleLeaveClicked);",
+          "id": "C40"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatTravelWidget.cpp",
+          "line": 70,
+          "category": "生命周期或委托清理",
+          "code": "FindButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleFindClicked);",
+          "id": "C41"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatTravelWidget.cpp",
+          "line": 71,
+          "category": "生命周期或委托清理",
+          "code": "JoinButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleJoinClicked);",
+          "id": "C42"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatTravelWidget.cpp",
+          "line": 72,
+          "category": "生命周期或委托清理",
+          "code": "InviteButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleInviteClicked);",
+          "id": "C43"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\CatTravelWidget.cpp",
+          "line": 73,
+          "category": "生命周期或委托清理",
+          "code": "LeaveButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleLeaveClicked);",
+          "id": "C44"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\Tests\\CatFishingViewStateTests.cpp",
+          "line": 28,
+          "category": "生命周期或委托清理",
+          "code": "TestFalse(TEXT(\"bridge rejects a missing session\"), Bridge->BindSession(nullptr));",
+          "id": "C45"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\UI\\Tests\\CatLocalPlayerUISubsystemTests.cpp",
+          "line": 76,
+          "category": "生命周期或委托清理",
+          "code": "WorldWrapper.BeginPlayInTestWorld();",
+          "id": "C46"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\Online\\CatOnlineSettings.cpp",
+          "line": 28,
+          "category": "重试、退避或超时",
+          "code": "if (!FMath::IsFinite(HostExitAckTimeoutSeconds) || HostExitAckTimeoutSeconds <= 0.0)",
+          "id": "C47"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\Online\\CatOnlineSettings.cpp",
+          "line": 32,
+          "category": "重试、退避或超时",
+          "code": "OutSeconds = HostExitAckTimeoutSeconds;",
+          "id": "C48"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\Online\\CatOnlineSubsystem.cpp",
+          "line": 44,
+          "category": "生命周期或委托清理",
+          "code": "RebindInviteDelegate();",
+          "id": "C49"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\Online\\CatOnlineSubsystem.cpp",
+          "line": 901,
+          "category": "生命周期或委托清理",
+          "code": "RebindInviteDelegate();",
+          "id": "C50"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\Online\\Tests\\CatOnlineSettingsTests.cpp",
+          "line": 24,
+          "category": "重试、退避或超时",
+          "code": "double TimeoutSeconds = 9.0;",
+          "id": "C51"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\Online\\Tests\\CatOnlineSettingsTests.cpp",
+          "line": 27,
+          "category": "重试、退避或超时",
+          "code": "Settings->HostExitAckTimeoutSeconds = 0.0;",
+          "id": "C52"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\Online\\Tests\\CatOnlineSettingsTests.cpp",
+          "line": 34,
+          "category": "重试、退避或超时",
+          "code": "TestFalse(TEXT(\"默认 Host exit 超时读取失败\"), Settings->TryGetHostExitAckTimeout(TimeoutSeconds));",
+          "id": "C53"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\Online\\Tests\\CatOnlineSettingsTests.cpp",
+          "line": 35,
+          "category": "重试、退避或超时",
+          "code": "TestEqual(TEXT(\"失败时 Host exit 超时清零\"), TimeoutSeconds, 0.0);",
+          "id": "C54"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\Online\\Tests\\CatOnlineSettingsTests.cpp",
+          "line": 43,
+          "category": "重试、退避或超时",
+          "code": "Settings->HostExitAckTimeoutSeconds = 4.5;",
+          "id": "C55"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\Online\\Tests\\CatOnlineSettingsTests.cpp",
+          "line": 44,
+          "category": "重试、退避或超时",
+          "code": "TestTrue(TEXT(\"正 Host exit ACK 超时可读取\"), Settings->TryGetHostExitAckTimeout(TimeoutSeconds));",
+          "id": "C56"
+        },
+        {
+          "path": "D:\\UnreaProjects\\Catfishing-verify-01\\Source\\Catfishing\\Online\\Tests\\CatOnlineSettingsTests.cpp",
+          "line": 45,
+          "category": "重试、退避或超时",
+          "code": "TestEqual(TEXT(\"Host exit ACK 超时保持配置值\"), TimeoutSeconds, 4.5);",
+          "id": "C57"
+        }
+      ],
+      "timestamp": "2026-08-24T17:18:03.227120+08:00"
+    },
+    "decisions": [
+      {
+        "candidate_id": "C1",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C2",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C3",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C4",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C5",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C6",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C7",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C8",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C9",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C10",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C11",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C12",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C13",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C14",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C15",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C16",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C17",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C18",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C19",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C20",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C21",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C22",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C23",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C24",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C25",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C26",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C27",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C28",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C29",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C30",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C31",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C32",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C33",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C34",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C35",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C36",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C37",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C38",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C39",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C40",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C41",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C42",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C43",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C44",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C45",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C46",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C47",
+        "action": "self-explanatory",
+        "reason": "重试、退避或超时 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C48",
+        "action": "self-explanatory",
+        "reason": "重试、退避或超时 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C49",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C50",
+        "action": "self-explanatory",
+        "reason": "生命周期或委托清理 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C51",
+        "action": "self-explanatory",
+        "reason": "重试、退避或超时 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C52",
+        "action": "self-explanatory",
+        "reason": "重试、退避或超时 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C53",
+        "action": "self-explanatory",
+        "reason": "重试、退避或超时 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C54",
+        "action": "self-explanatory",
+        "reason": "重试、退避或超时 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C55",
+        "action": "self-explanatory",
+        "reason": "重试、退避或超时 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C56",
+        "action": "self-explanatory",
+        "reason": "重试、退避或超时 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      },
+      {
+        "candidate_id": "C57",
+        "action": "self-explanatory",
+        "reason": "重试、退避或超时 已由所在方法或属性注释说明职责、状态配对和副作用；该行代码表达直接，补行内注释只会重复实现。"
+      }
+    ],
+    "review": "注释语义审查：新增/改动的方法、属性和测试流程均已有中文职责注释；comment-review 机械扫描 pass。57 个热点均为生命周期配对或超时边界调用，现有方法级/属性级注释已解释读写状态、配对关系、边界与副作用；单行代码本身直接可读，不再追加重复行内注释。"
+  },
+  "evidence": [
+    {
+      "acceptance_id": "A1",
+      "kind": "machine",
+      "result": "pass",
+      "summary": "UI 自动化 Catfishing.Unit.UI 8/8 通过；OnlineTravelWidgetStaysOutOfLake 覆盖 Lake Host/Client/NoSession/Leave pending 均不显示 Host/Find/Join 白盒",
+      "command": "UnrealEditor-Cmd.exe ... -ExecCmds='Automation RunTests Catfishing.Unit.UI;Quit' -ReportExportPath=Saved/Automation/FrontendOnline/UI-20260825-134846/Reports",
+      "source": "agent-reported",
+      "timestamp": "2026-08-25T13:48:46+08:00",
+      "limitations": ""
+    },
+    {
+      "acceptance_id": "A2",
+      "kind": "machine",
+      "result": "pass",
+      "summary": "LakeReach 菜单 Leave 触发 CatLocalPlayerUISubsystem 动作翻译，并继续转交 UCatOnlineSubsystem::RequestLeave；未新增 Widget 旅行旁路",
+      "command": "UBT 构建、UI Automation 和 Source/Catfishing/UI + Source/Catfishing/Online 静态边界核对",
+      "source": "agent-reported",
+      "timestamp": "2026-08-24T17:18:40.407160+08:00",
+      "limitations": ""
+    },
+    {
+      "acceptance_id": "A4",
+      "kind": "human",
+      "result": "pass",
+      "summary": "用户确认打包版本可以通过 Steam 联机找到房间，并与其他玩家一起进入同局游玩",
+      "command": "打包版本人工实玩",
+      "source": "user-confirmed",
+      "timestamp": "2026-08-24T17:37:18.9602915+08:00",
+      "limitations": "本证据来自用户实玩反馈，Codex 未持有对应双客户端日志或截图。"
+    }
+  ],
+  "observed_failures": [],
+  "touched_paths": [
+    "Docs/Development/需求对齐差距清单.md",
+    ".harness/harness.json",
+    ".harness/frontend-online-harness.json"
+  ],
+  "self_review": "收口后自审：第六模块 Frontend/Online 已按技术方案和用户打包 Steam 实玩证据关闭；Lake 状态不再显示 Host/Find/Join 白盒；Lake 菜单 Leave 仍转交 UCatOnlineSubsystem::RequestLeave；未新增 Lobby、Host Migration、OpenLevel/ConsoleCommand 旁路。已执行 UBT 构建、UI 自动化 8/8、Online 自动化 2/2、静态边界和配置核对，并补记人工打包联机证据。",
+  "handoff": "交付说明：入口保持 Frontend，Create/Join 后直达 Lake；玩法内联机面板移除，离局入口进入 LakeReach 菜单。模块关闭边界：Host Migration、Lobby/Ready Room、身体/容器/装配深度重连、生产 Steam AppId、正式美术 UI 和正式鱼表资产不属于第六模块完成条件；第一模块仍需单独处理 Lake 内原生菜单、测试资产和 Fatigue 文档/代码不一致。"
+}

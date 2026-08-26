@@ -21,6 +21,23 @@ bool FCatSocialSettingsPolicyReadinessTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
+	// UDeveloperSettings 派生对象会读取项目 DefaultGame；这里先显式回到未裁状态，
+	// 确保本用例验证的是 Social readiness 的 fail-closed 语义，而不是当前项目是否已经启用正式 runtime。
+	Settings->bEnableSocialRuntime = false;
+	Settings->TheftPermission = ECatDomainPolicy::Unset;
+	Settings->TheftEatingWindowSeconds = 0.0;
+	Settings->TheftInteractionRangeCentimeters = 0.0;
+	Settings->TheftCatchRangeCentimeters = 0.0;
+	Settings->SharedTankRecoveryPolicy = ECatSharedTankRecoveryPolicy::Undecided;
+	Settings->TheftCaughtImprintEventId = NAME_None;
+	Settings->MischiefPermission = ECatDomainPolicy::Unset;
+	Settings->MischiefCooldownSeconds = 0.0;
+	Settings->MischiefInteractionRangeCentimeters = 0.0;
+	Settings->ProtectionSignRadiusCentimeters = 0.0;
+	Settings->ProtectionSignPlacementRangeCentimeters = 0.0;
+	Settings->ManualHelpRadiusCentimeters = 0.0;
+	Settings->ManualHelpCooldownSeconds = 0.0;
+
 	TestFalse(TEXT("默认偷鱼不可运行"), Settings->IsTheftReady());
 	TestFalse(TEXT("默认恶作剧不可运行"), Settings->IsMischiefReady());
 	TestFalse(TEXT("默认手动求助不可运行"), Settings->IsManualHelpReady());

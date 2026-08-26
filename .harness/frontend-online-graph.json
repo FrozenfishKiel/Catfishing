@@ -1,0 +1,526 @@
+{
+  "schema_version": "2.2",
+  "graph_id": "graph-359811ee20e8",
+  "task_id": "第六模块-frontend-online-收口正式进入游戏入口-去除玩法内-host-join-白盒干扰-并保持-online-正式-create-join-l",
+  "task_title": "第六模块 Frontend / Online：收口正式进入游戏入口，去除玩法内 Host/Join 白盒干扰，并保持 Online 正式 Create/Join/Leave 合同",
+  "goal": "第六模块 Frontend / Online：收口正式进入游戏入口，去除玩法内 Host/Join 白盒干扰，并保持 Online 正式 Create/Join/Leave 合同",
+  "graph_required": true,
+  "level": "G2",
+  "graph_profile": "ue_multi_agent_basic",
+  "gate_reasons": [
+    "用户要求顺便完成第六模块且不得脱离资料"
+  ],
+  "current_node": "integrator",
+  "status": "completed",
+  "nodes": [
+    "gate",
+    "dispatch",
+    "progress_tracker",
+    "prd_review",
+    "tech_doc_review",
+    "harness_context",
+    "source_context",
+    "context",
+    "architect",
+    "implementation",
+    "comment_review",
+    "verification",
+    "review",
+    "memory",
+    "evidence_aggregator",
+    "integrator",
+    "harness_ready",
+    "ue_risk_review",
+    "editor_validation",
+    "documentation",
+    "diagnose",
+    "graph_rebuild"
+  ],
+  "candidate_nodes": [
+    "gate",
+    "dispatch",
+    "progress_tracker",
+    "prd_review",
+    "tech_doc_review",
+    "harness_context",
+    "source_context",
+    "context",
+    "architect",
+    "implementation",
+    "comment_review",
+    "verification",
+    "review",
+    "memory",
+    "evidence_aggregator",
+    "integrator",
+    "harness_ready",
+    "ue_risk_review",
+    "editor_validation",
+    "documentation",
+    "diagnose",
+    "graph_rebuild"
+  ],
+  "active_nodes": [
+    "gate",
+    "dispatch",
+    "integrator"
+  ],
+  "skipped_nodes": [],
+  "node_assignments": {},
+  "dispatch_history": [],
+  "edges": [
+    {
+      "from": "intake",
+      "to": "gate",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "gate",
+      "to": "dispatch",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "dispatch",
+      "to": "progress_tracker",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "dispatch",
+      "to": "prd_review",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "dispatch",
+      "to": "tech_doc_review",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "dispatch",
+      "to": "harness_context",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "dispatch",
+      "to": "source_context",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "dispatch",
+      "to": "ue_risk_review",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "prd_review",
+      "to": "context",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "tech_doc_review",
+      "to": "context",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "harness_context",
+      "to": "context",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "source_context",
+      "to": "context",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "ue_risk_review",
+      "to": "context",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "context",
+      "to": "architect",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "context",
+      "to": "source_context",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "context",
+      "to": "harness_context",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "context",
+      "to": "ue_risk_review",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "context",
+      "to": "dispatch",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "architect",
+      "to": "implementation",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "architect",
+      "to": "harness_ready",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "harness_ready",
+      "to": "implementation",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "implementation",
+      "to": "verification",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "verification",
+      "to": "editor_validation",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "verification",
+      "to": "review",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "editor_validation",
+      "to": "review",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "verification",
+      "to": "diagnose",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "editor_validation",
+      "to": "diagnose",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "diagnose",
+      "to": "implementation",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "diagnose",
+      "to": "dispatch",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "review",
+      "to": "context",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "review",
+      "to": "architect",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "review",
+      "to": "implementation",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "review",
+      "to": "verification",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "review",
+      "to": "dispatch",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "review",
+      "to": "memory",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "memory",
+      "to": "evidence_aggregator",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "memory",
+      "to": "context",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "implementation",
+      "to": "comment_review",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "implementation",
+      "to": "progress_tracker",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "comment_review",
+      "to": "implementation",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "comment_review",
+      "to": "progress_tracker",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "comment_review",
+      "to": "verification",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "verification",
+      "to": "progress_tracker",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "review",
+      "to": "evidence_aggregator",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "review",
+      "to": "progress_tracker",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "review",
+      "to": "documentation",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "verification",
+      "to": "documentation",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "documentation",
+      "to": "evidence_aggregator",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "documentation",
+      "to": "verification",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "documentation",
+      "to": "context",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "verification",
+      "to": "evidence_aggregator",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "evidence_aggregator",
+      "to": "progress_tracker",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "progress_tracker",
+      "to": "integrator",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "gate",
+      "to": "graph_rebuild",
+      "reason": "profile_allowed"
+    },
+    {
+      "from": "graph_rebuild",
+      "to": "dispatch",
+      "reason": "profile_allowed"
+    }
+  ],
+  "visited_nodes": [
+    "gate",
+    "implementation",
+    "verification",
+    "integrator"
+  ],
+  "handoffs": [
+    {
+      "from": "intake",
+      "to": "gate",
+      "summary": "Graph soft check started",
+      "timestamp": "2026-08-24T16:51:35.696272+08:00"
+    },
+    {
+      "from": "gate",
+      "to": "implementation",
+      "summary": "开始第六模块最小实现：Lake 隐藏 TravelWidget，LakeReach 菜单承接 Leave，保持 Online 子系统为唯一旅行与离局入口。",
+      "input_ref": "",
+      "output_ref": "",
+      "edge_status": "out_of_profile",
+      "timestamp": "2026-08-24T16:56:36.441840+08:00"
+    },
+    {
+      "from": "implementation",
+      "to": "verification",
+      "summary": "验证证据：UBT CatfishingEditor 构建通过；UI Automation 8/8；Online Automation 2/2；静态核对 UI 无旅行旁路，Leave 只转交 Online RequestLeave。",
+      "input_ref": "",
+      "output_ref": "",
+      "edge_status": "profile_allowed",
+      "timestamp": "2026-08-25T13:50:09+08:00"
+    },
+    {
+      "from": "verification",
+      "to": "verification",
+      "summary": "UI 8/8、Online 2/2、静态 Online 边界与配置检查已完成",
+      "input_ref": "",
+      "output_ref": "",
+      "edge_status": "out_of_profile",
+      "timestamp": "2026-08-25T13:50:09+08:00"
+    },
+    {
+      "from": "verification",
+      "to": "integrator",
+      "summary": "用户补充打包 Steam 联机实玩证据；第六模块按技术方案关闭，Host Migration、Lobby、深恢复、生产 AppId 和正式资产不纳入本模块。",
+      "input_ref": "Docs/Development/需求对齐差距清单.md",
+      "output_ref": ".harness/frontend-online-harness.json",
+      "edge_status": "profile_allowed",
+      "timestamp": "2026-08-24T17:37:18.9602915+08:00"
+    }
+  ],
+  "harness_envelope": {
+    "state": ".harness/frontend-online-harness.json",
+    "applies_to": "entire_graph",
+    "required_before_nodes": [],
+    "required_before_completion": false
+  },
+  "loop_controller": {
+    "gate": "C:\\Users\\Administrator\\.codex\\runtime\\loop_gate_check.py",
+    "controlled_edges": [
+      [
+        "context",
+        "source_context"
+      ],
+      [
+        "context",
+        "harness_context"
+      ],
+      [
+        "context",
+        "ue_risk_review"
+      ],
+      [
+        "context",
+        "dispatch"
+      ],
+      [
+        "verification",
+        "diagnose"
+      ],
+      [
+        "editor_validation",
+        "diagnose"
+      ],
+      [
+        "diagnose",
+        "implementation"
+      ],
+      [
+        "diagnose",
+        "dispatch"
+      ],
+      [
+        "comment_review",
+        "implementation"
+      ],
+      [
+        "review",
+        "context"
+      ],
+      [
+        "review",
+        "architect"
+      ],
+      [
+        "review",
+        "implementation"
+      ],
+      [
+        "review",
+        "verification"
+      ],
+      [
+        "review",
+        "dispatch"
+      ],
+      [
+        "documentation",
+        "verification"
+      ],
+      [
+        "documentation",
+        "context"
+      ],
+      [
+        "memory",
+        "context"
+      ],
+      [
+        "gate",
+        "graph_rebuild"
+      ],
+      [
+        "graph_rebuild",
+        "dispatch"
+      ]
+    ],
+    "fuse_node": "graph_rebuild",
+    "blocker_gate_input": ".codex/state/loop-blocker.json",
+    "bypass_gate_input": ".codex/state/loop-bypass.json"
+  },
+  "context_contract": {
+    "pack": ".codex/state/current-context.json",
+    "ledger": ".codex/state/context-ledger.json",
+    "adapter": ".codex/context/context.json",
+    "required_for_nodes": [
+      "context",
+      "architect",
+      "implementation",
+      "comment_review",
+      "verification",
+      "review",
+      "memory",
+      "evidence_aggregator",
+      "integrator"
+    ],
+    "handoff_required": true,
+    "prompt_aware_selection_required": true,
+    "handoff_mode": "reference_first_targeted_slice",
+    "deduplication_required": true
+  },
+  "documentation_contract": {
+    "artifact_root": ".codex/docs",
+    "required_before_completion": false,
+    "required_documents": []
+  },
+  "document_artifacts": [],
+  "external_states": {
+    "harness": ".harness/frontend-online-harness.json",
+    "loop": ".codex/state/current-loop.json",
+    "context": ".codex/state/current-context.json",
+    "context_ledger": ".codex/state/context-ledger.json"
+  },
+  "attempts": [],
+  "evidence": [],
+  "open_questions": [],
+  "approvals": [],
+  "memory_updates": [],
+  "handoff": ""
+}

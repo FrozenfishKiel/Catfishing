@@ -11,6 +11,10 @@ class ACatFishingRodActor;
 class ACatFishingSession;
 class APlayerState;
 class UCatFishDefinition;
+#if WITH_DEV_AUTOMATION_TESTS
+class FCatFishingPlayerEntryFullLoopTest;
+namespace CatFishingPlayerEntryTest { struct FPlayerEntryFixture; }
+#endif
 
 /** 一局服务器 Fishing 入口；创建/查询/终止会话并把所有阶段写入留给会话内 StateTree。 */
 UCLASS()
@@ -90,6 +94,12 @@ public:
 
 private:
 	friend class ACatFishingSession;
+#if WITH_DEV_AUTOMATION_TESTS
+	/** 自动化夹具只登记一条已构造的 NearShore 会话索引，用来验证 Controller 命令路由；正式会话创建仍由 BeginCast 负责。 */
+	friend class FCatFishingPlayerEntryFullLoopTest;
+	/** 自动化夹具是实际写入服务索引的执行体；它只服务 FCatFishingPlayerEntryFullLoopTest。 */
+	friend struct CatFishingPlayerEntryTest::FPlayerEntryFixture;
+#endif
 
 	/** 清除已销毁或已终态 Session 弱引用，并同时释放对应钓手的单活跃槽位。 */
 	void CompactSessions();
@@ -99,6 +109,9 @@ private:
 
 	/** 从 Controller 的 APlayerState::UniqueId 读取服务器私有身份；无效身份不能进入开始终态缓存。 */
 	static FString ResolveStableNetId(const AController* Controller);
+
+	/** 新 Fishing 写口的身体 gate；要求请求者仍拥有当前 Character 且未倒地，防止绕过 CommandComponent 的调用继续放竿、接竿或抛竿。 */
+	static bool CanControllerStartFishingAction(const AController* Controller);
 
 	/** 用同一服务器谓词解析单个战斗参与者；必须是 Active Controller/当前 Character、未倒地且两项独立能力都为正有限值。 */
 	static bool TryGetFightCapability(const AController* Controller, FString& OutStableNetId,

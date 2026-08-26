@@ -1,7 +1,9 @@
 #include "Items/CatContainerReplicationComponent.h"
 
+#include "Engine/World.h"
 #include "GameFramework/Actor.h"
 #include "Net/UnrealNetwork.h"
+#include "TimerManager.h"
 
 // 构造流程：声明默认复制并禁用 Tick；服务只在 Revision 变化后显式发布，不制造第二条定时更新链。
 UCatContainerReplicationComponent::UCatContainerReplicationComponent()
@@ -21,7 +23,20 @@ void UCatContainerReplicationComponent::GetLifetimeReplicatedProps(TArray<FLifet
 	DOREPLIFETIME(ThisClass, ReplicatedFish);
 }
 
-// authority 发布流程：验证 Owner 权威后替换元数据，再按 FishInstanceId 删除旧项并标记数组变脏，对新项/变更项分别 MarkItemDirty；最后 ForceNetUpdate，预留锁等私有事实不进入复制。
+// 结束流程：先从当前 World 的 TimerManager 取消延迟广播，再清本地 pending 与外部订阅，最后交还组件生命周期；重复 EndPlay 不会留下迟到回调。
+void UCatContainerReplicationComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(DeferredSnapshotNotificationHandle);
+	}
+	DeferredSnapshotNotificationHandle.Invalidate();
+	bSnapshotNotificationPending = false;
+	OnSnapshotChanged.Clear();
+	Super::EndPlay(EndPlayReason);
+}
+
+// authority 发布流程：验证 Owner 权威后替换元数据，再按 FishInstanceId 删除旧项并标记数组变脏，对新项/变更项分别 MarkItemDirty；全部字段一致后广播只读变化并 ForceNetUpdate，预留锁等私有事实不进入复制。
 void UCatContainerReplicationComponent::SetSnapshotFromAuthority(const FCatContainerSnapshot& NewSnapshot)
 {
 	AActor* Owner = GetOwner();
@@ -70,6 +85,7 @@ void UCatContainerReplicationComponent::SetSnapshotFromAuthority(const FCatConta
 			ReplicatedFish.MarkItemDirty(*Existing);
 		}
 	}
+	OnSnapshotChanged.Broadcast();
 	Owner->ForceNetUpdate();
 }
 
@@ -79,10 +95,10 @@ const FCatContainerSnapshot& UCatContainerReplicationComponent::GetSnapshot() co
 	return Snapshot;
 }
 
-// 元数据复制流程：使用当前 FastArray 条目重建只读快照；同包条目稍后到达时 FastArray 回调会再次重建，不会生成中间领域提交。
+// 元数据复制流程：只安排下一帧合并，不立即暴露当前 FastArray；若同帧鱼数组稍后到达，两类事实会在同一次广播前组合完成。
 void UCatContainerReplicationComponent::OnRep_ContainerMetadata()
 {
-	RebuildSnapshotFromReplication();
+	ScheduleSnapshotNotificationFromReplication();
 }
 
 // 快照重建流程：覆盖容器元数据并按当前 FastArray 顺序复制公开鱼字段；OwnerStableNetId 未复制且自然保持空。
@@ -98,13 +114,41 @@ void UCatContainerReplicationComponent::RebuildSnapshotFromReplication()
 	}
 }
 
-// FastArray 收包完成流程：等待 UE 把本次新增、修改、删除全部应用后再重建一次 DTO；参数只描述映射状态，不参与领域身份或 Revision 裁决。
+// 合并安排流程：已有 pending 时直接复用；否则在有效 World 上登记下一帧回调。无 World 的异常复制入口退化为立即重建和广播，避免读模型永远停在旧值。
+void UCatContainerReplicationComponent::ScheduleSnapshotNotificationFromReplication()
+{
+	if (bSnapshotNotificationPending)
+	{
+		return;
+	}
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		RebuildSnapshotFromReplication();
+		OnSnapshotChanged.Broadcast();
+		return;
+	}
+	bSnapshotNotificationPending = true;
+	DeferredSnapshotNotificationHandle = World->GetTimerManager().SetTimerForNextTick(
+		this, &ThisClass::FlushSnapshotNotificationFromReplication);
+}
+
+// 合并提交流程：先清计时与 pending 状态，再从最新元数据和完整 FastArray 重建 Snapshot，最后只广播“可重新读取”信号；订阅者永远看不到本方法内部的半成品。
+void UCatContainerReplicationComponent::FlushSnapshotNotificationFromReplication()
+{
+	DeferredSnapshotNotificationHandle.Invalidate();
+	bSnapshotNotificationPending = false;
+	RebuildSnapshotFromReplication();
+	OnSnapshotChanged.Broadcast();
+}
+
+// FastArray 收包完成流程：UE 已应用本次新增、修改与删除，但元数据通知顺序仍不保证；因此只安排与 OnRep 共用的下一帧合并，参数不参与领域身份或 Revision 裁决。
 void FCatReplicatedFishList::PostReplicatedReceive(
 	const FFastArraySerializer::FPostReplicatedReceiveParameters& Parameters)
 {
 	(void)Parameters;
 	if (Owner)
 	{
-		Owner->RebuildSnapshotFromReplication();
+		Owner->ScheduleSnapshotNotificationFromReplication();
 	}
 }

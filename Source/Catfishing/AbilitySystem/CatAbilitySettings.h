@@ -4,8 +4,6 @@
 #include "Engine/DeveloperSettings.h"
 #include "CatAbilitySettings.generated.h"
 
-class UInputAction;
-class UInputMappingContext;
 class UCatAbilityInputConfig;
 class UCatAbilitySet;
 class UCatCharacterDefinition;
@@ -20,7 +18,7 @@ enum class ECatAbilityReplicationPolicy : uint8
 	Full
 };
 
-/** Character-owned ASC 与开发诊断输入的集中设置；正式运行 gate 和非 Shipping 诊断 gate 相互独立。 */
+/** Character-owned ASC 的集中设置；正式运行 gate、初始身体数值和 Fishing Ability 资产必须一起 fail-closed。 */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "Catfishing Character Abilities"))
 class CATFISHING_API UCatAbilitySettings : public UDeveloperSettings
 {
@@ -30,12 +28,8 @@ public:
 	/** 判断 Character ASC 正式运行链是否显式启用；当前只接受已有安全语义的 Full 策略。 */
 	bool IsRuntimeEnabled() const;
 
-	/** 读取非 Shipping 诊断 Ability 的 Hunger 改变量；诊断关闭、非有限或零值时清输出并返回 false。 */
-	bool TryGetDiagnosticHungerDelta(float& OutDelta) const;
-
-	/** 读取新 Character 的五项局内初始属性；任一负值或非有限都清空输出并保持 fail-closed。 */
-	bool TryGetInitialAttributes(float& OutHunger, float& OutFatigue, float& OutPoison,
-		float& OutFishingStrength, float& OutFightStamina) const;
+	/** 读取新 Character 的三项局内初始属性；任一非法值都会清空输出并保持 fail-closed。 */
+	bool TryGetInitialAttributes(float& OutPoison, float& OutFishingStrength, float& OutFightStamina) const;
 
 	/** 正式 Fishing GAS 资产必须同时存在且 InputConfig 完整，缺任一项都不授予或绑定输入。 */
 	bool IsFishingRuntimeReady() const;
@@ -47,11 +41,11 @@ public:
 	const UCatCharacterDefinition* FindRuntimeCharacterDefinition(FName CatDefinitionId) const;
 
 	/**
-	 * 按猫种类读取五项初始属性：Id 为 None 时回退全局五项初值（旧行为）；
+	 * 按猫种类读取三项初始属性：Id 为 None 时回退全局初值；
 	 * Id 已指定但定义缺失/未就绪时 fail-closed 返回 false，不悄悄换成全局值。
 	 */
-	bool TryGetInitialAttributesForCharacter(FName CatDefinitionId, float& OutHunger, float& OutFatigue,
-		float& OutPoison, float& OutFishingStrength, float& OutFightStamina) const;
+	bool TryGetInitialAttributesForCharacter(FName CatDefinitionId, float& OutPoison,
+		float& OutFishingStrength, float& OutFightStamina) const;
 
 	/** 按猫种类读取搏斗体力基线；解析语义与上项一致，供 ASC 会话初始化与搏斗装配共用。 */
 	bool TryGetFightStaminaBaselineForCharacter(FName CatDefinitionId, float& OutFightStamina) const;
@@ -67,14 +61,6 @@ public:
 	/** 新 Character 初始属性总 gate；默认关闭，数值必须由项目配置显式提供且只应用一次。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Attributes")
 	bool bEnableInitialAttributeTuning = false;
-
-	/** 新 Character 初始 Hunger；负值表示 Unset，0 是允许的明确值。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Attributes", meta = (ClampMin = "-1.0"))
-	float InitialHunger = -1.0f;
-
-	/** 新 Character 初始 Fatigue；负值表示 Unset。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Attributes", meta = (ClampMin = "-1.0"))
-	float InitialFatigue = -1.0f;
 
 	/** 新 Character 初始 Poison；负值表示 Unset。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Attributes", meta = (ClampMin = "-1.0"))
@@ -99,20 +85,4 @@ public:
 	/** PlayerController 的正式 Ability 输入映射；复用现有 /Game/Input Action。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Fishing", meta = (AllowedClasses = "/Script/Catfishing.CatAbilityInputConfig"))
 	TSoftObjectPtr<UCatAbilityInputConfig> AbilityInputConfig;
-
-	/** 开发诊断 Ability/Input 总 gate；Shipping 构建始终忽略它，正式身体链不依赖该开关。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Diagnostics")
-	bool bEnableDiagnosticAbility = false;
-
-	/** 诊断 Ability 对 Hunger 的加法改变量；0 表示未配置，不属于正式身体公式。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Diagnostics")
-	float DiagnosticHungerDelta = 0.0f;
-
-	/** 开发诊断 InputAction 软引用；正式玩法输入资产未接线时保持空。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Diagnostics", meta = (AllowedClasses = "/Script/EnhancedInput.InputAction"))
-	TSoftObjectPtr<UInputAction> DiagnosticInputAction;
-
-	/** 开发诊断 MappingContext 软引用；Character 只移除自己添加的实例。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Diagnostics", meta = (AllowedClasses = "/Script/EnhancedInput.InputMappingContext"))
-	TSoftObjectPtr<UInputMappingContext> DiagnosticMappingContext;
 };

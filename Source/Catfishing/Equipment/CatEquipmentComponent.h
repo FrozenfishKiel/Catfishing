@@ -38,7 +38,14 @@ public:
 	FCatDomainCommandResult GrantRunConsumableFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName DefinitionId, int32 Quantity);
 
-	/** 把团队装备库中已购买的实例装入本人现有三件套；只允许 Rod/Bait/Float。 */
+	/** 只读检查团队库实例能否装入本人现有三件套；用于跨库取用链在删除公库实例前确认个人 Equipment 收得下。 */
+	ECatDomainCommandError ValidateTeamLibraryEquipFromAuthority(FGuid RequestId, int64 ExpectedRevision,
+		const FCatTeamEquipmentInstance& Instance) const;
+
+	/**
+	 * 把团队装备库中已购买的实例装入本人现有三件套；只允许 Rod/Bait/Float。
+	 * 调用方必须先完成团队库取用预检，再在公库实例成功取走后调用它，避免个人已装备但公库仍保留同一实例。
+	 */
 	FCatDomainCommandResult EquipFromTeamLibraryFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		const FCatTeamEquipmentInstance& Instance);
 
@@ -50,10 +57,14 @@ public:
 	FCatFishingFailureResult CommitFishingFailure(FGuid RequestId, int64 ExpectedRevision,
 		ECatFishingFailurePenalty Penalty);
 
+	/** Fishing 会话开始前申请装备使用权；成功后会保护当前装配和一份鱼饵库存，失败时不会改动快照。 */
 	FCatFishingUseReservationResult BeginFishingUse(FGuid FishingSessionId, FName RodDefinitionId,
 		FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);
+	/** 立即提交 Fishing 已保护的鱼饵数量，并在成功时发布新的 Equipment 快照。 */
 	FCatFishingUseOperationResult CommitFishingBait(FGuid FishingSessionId);
+	/** 只提交 Fishing 已保护的鱼饵数量但暂不发布快照；FishingSession 用它把结算和表现事件排成确定顺序。 */
 	FCatFishingUseOperationResult CommitFishingBaitDeferred(FGuid FishingSessionId);
+	/** 发布此前延迟提交的 Fishing 鱼饵扣减结果；重复调用只返回既有终态，不会再次广播。 */
 	void PublishDeferredFishingBait(FGuid FishingSessionId);
 	FCatFishingUseOperationResult SetAccumulatedFishingRodWear(FGuid FishingSessionId, int64 WearSequence,
 		double AbsoluteTotal);
@@ -63,6 +74,7 @@ public:
 	bool HasActiveFishingUse() const;
 	bool IsFishingUseActive(FGuid FishingSessionId) const;
 
+	/** 草药、窝料和通用道具使用前申请一局耗材预留；会把 Fishing 已保护的鱼饵数量排除在可用库存之外。 */
 	FCatRunConsumableUseResult BeginRunConsumableUse(FGuid OperationId,
 		FName DefinitionId, int32 Quantity, int64 ExpectedRevision);
 	FCatRunConsumableUseResult CommitRunConsumableUse(FGuid OperationId);
@@ -87,7 +99,8 @@ private:
 		int64 ReservationRevision = 0;
 		int64 LastWearSequence = 0;
 		double AbsoluteRodWear = 0.0;
-		bool bSpecialBaitReserved = false;
+		/** Fishing 会话已保护的一份鱼饵数量；Begin 写入，Commit 扣除，Release 放弃，防止普通饵和特殊饵被其他耗材入口双花。 */
+		bool bBaitQuantityReserved = false;
 		bool bBaitCommitted = false;
 		bool bBaitCommitPublished = false;
 		bool bWearCommitted = false;
@@ -109,7 +122,8 @@ private:
 
 	FCatFishingUseRecord* FindFishingUseRecord(FGuid FishingSessionId);
 	const FCatFishingUseRecord* FindFishingUseRecord(FGuid FishingSessionId) const;
-	int32 GetPendingReservedSpecialBaitCount(FName DefinitionId) const;
+	/** 某种鱼饵正在被 Fishing 会话保护但尚未提交的数量；Grant/Consume/RunConsumable 使用它避免同一份饵被双花。 */
+	int32 GetPendingReservedFishingBaitCount(FName DefinitionId) const;
 	int32 GetPendingReservedRunConsumableCount(FName DefinitionId) const;
 	FCatRunConsumableUseResult MakeRunConsumableUseResult(FGuid OperationId,
 		ECatDomainCommandError Error, const FCatRunConsumableUseRecord* Record = nullptr) const;
