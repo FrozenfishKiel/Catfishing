@@ -248,7 +248,7 @@ void ACatCharacter::RegisterPersonalFishGuard()
 		OwningPlayerState->GetUniqueId()->ToString(), Capacity);
 }
 
-// Starter 兜底流程：先拒绝非 authority、无组件或未显式打开的情况，避免正式默认路径绕过商店/团队库/Profile Grant。
+// Starter 兜底流程：先拒绝非 authority、无组件或未显式打开的情况，避免正式默认路径绕过商店或 Profile Grant。
 // 只有 Loadout 仍没有鱼竿时才用当前 Equipment Revision 写入配置的基础三件套；装配成功后再按新 Revision 发放可选窝料，任一步失败只记日志不重试。
 void ACatCharacter::ApplyStarterLoadoutIfConfigured()
 {

@@ -191,48 +191,59 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantRunConsumableFromAuthority(
 	return Result;
 }
 
-// 团队库装配预检流程：按正式装配入口同一套事实只读判断 authority、RequestId、实例、定义类别、Equipment Revision 和现有三件套。
-// 它不写终态缓存，也不发布 Snapshot；调用方用它把“个人装备收不下”挡在团队库删除之前。
-ECatDomainCommandError UCatEquipmentComponent::ValidateTeamLibraryEquipFromAuthority(const FGuid RequestId,
-	const int64 ExpectedRevision, const FCatTeamEquipmentInstance& Instance) const
+// 商店装备授予预检流程：
+// 1. 先按 RequestId 和定义 ID 查询既有终态载荷，合法重放放行，载荷漂移拒绝。
+// 2. 再确认当前组件属于 authority 角色，并且没有 Fishing 或耗材预留正在占用装备快照。
+// 3. 最后只接受可装配到本人槽位的非消耗品定义；鱼饵、窝料、草药等数量型物品继续走耗材栈。
+ECatDomainCommandError UCatEquipmentComponent::ValidateEquipmentGrantFromAuthority(const FGuid RequestId,
+	const FName DefinitionId) const
 {
-	const UCatEquipmentDefinition* Definition =
-		GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Instance.DefinitionId);
-	const bool bLoadoutComplete = !Snapshot.RodDefinitionId.IsNone()
-		&& !Snapshot.BaitDefinitionId.IsNone() && !Snapshot.FloatDefinitionId.IsNone();
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !Instance.InstanceId.IsValid()
-		|| !Definition || (Definition->Kind != ECatEquipmentKind::Rod && Definition->Kind != ECatEquipmentKind::Bait
-			&& Definition->Kind != ECatEquipmentKind::Float))
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid())
 	{
 		return ECatDomainCommandError::InvalidPayload;
 	}
-	if (Snapshot.Revision != ExpectedRevision)
+	const FString Key = MakeTerminalKey(TEXT("GrantEquipment"), RequestId);
+	const FString PayloadSignature = FString::Printf(TEXT("Definition=%s"), *DefinitionId.ToString());
+	if (const FString* CachedPayload = TerminalPayloadByKey.Find(Key))
 	{
-		return ECatDomainCommandError::RevisionConflict;
+		return *CachedPayload == PayloadSignature ? ECatDomainCommandError::None
+			: ECatDomainCommandError::InvalidPayload;
 	}
-	if (!bLoadoutComplete)
+	if (HasActiveFishingUse() || HasActiveRunConsumableUse())
 	{
-		return ECatDomainCommandError::PolicyUndecided;
+		return ECatDomainCommandError::InvalidPhase;
+	}
+	const UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(DefinitionId);
+	if (!Definition || Definition->bRunConsumable)
+	{
+		return ECatDomainCommandError::InvalidPayload;
+	}
+	if (Definition->Kind != ECatEquipmentKind::Rod && Definition->Kind != ECatEquipmentKind::Float
+		&& Definition->Kind != ECatEquipmentKind::ScoopNet)
+	{
+		return ECatDomainCommandError::InvalidPayload;
 	}
 	return ECatDomainCommandError::None;
 }
 
-// 团队库装配流程：先按只读预检挡住无效实例、陈旧 Revision 和未初始化三件套；随后根据定义类别替换唯一槽位。
-// 这一步假定调用方已经成功从团队库取走实例；若 payload 重放命中终态缓存，只返回首次结果，不再改第二次个人装备。
-FCatDomainCommandResult UCatEquipmentComponent::EquipFromTeamLibraryFromAuthority(const FGuid RequestId,
-	const int64 ExpectedRevision, const FCatTeamEquipmentInstance& Instance)
+// 商店装备授予流程：
+// 1. 先用 RequestId 和定义 ID 找终态缓存；合法重放只返回首次结果，不再刷新耐久或重复推进 Revision。
+// 2. 首次提交复用扣款前预检同一套准入规则，并用 ExpectedRevision 防止陈旧 UI 覆盖较新的本人装备。
+// 3. 根据定义类别替换本人对应槽位；鱼竿同时重置为该定义最大耐久，鱼漂和抄网只替换稳定 ID。
+// 4. 成功后发布完整 Equipment 快照，让背包鱼竿槽直接从本人装备真相刷新，不再经过中间库存。
+FCatDomainCommandResult UCatEquipmentComponent::GrantEquipmentFromAuthority(const FGuid RequestId,
+	const int64 ExpectedRevision, const FName DefinitionId)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	if (!RequestId.IsValid())
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
+		Result.Revision = Snapshot.Revision;
 		return Result;
 	}
-	const FString Key = MakeTerminalKey(TEXT("EquipFromTeamLibrary"), RequestId);
-	const FString PayloadSignature = FString::Printf(TEXT("ExpectedRevision=%lld|Instance=%s|Definition=%s"),
-		ExpectedRevision, *Instance.InstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-		*Instance.DefinitionId.ToString());
+	const FString Key = MakeTerminalKey(TEXT("GrantEquipment"), RequestId);
+	const FString PayloadSignature = FString::Printf(TEXT("Definition=%s"), *DefinitionId.ToString());
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
@@ -247,28 +258,31 @@ FCatDomainCommandResult UCatEquipmentComponent::EquipFromTeamLibraryFromAuthorit
 		return Result;
 	}
 
-	UCatEquipmentDefinition* Definition =
-		GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Instance.DefinitionId);
-	const ECatDomainCommandError Admission = ValidateTeamLibraryEquipFromAuthority(RequestId, ExpectedRevision, Instance);
+	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(DefinitionId);
+	const ECatDomainCommandError Admission = ValidateEquipmentGrantFromAuthority(RequestId, DefinitionId);
 	if (Admission != ECatDomainCommandError::None)
 	{
 		Result.Error = Admission;
+	}
+	else if (Snapshot.Revision != ExpectedRevision)
+	{
+		Result.Error = ECatDomainCommandError::RevisionConflict;
 	}
 	else if (Definition)
 	{
 		if (Definition->Kind == ECatEquipmentKind::Rod)
 		{
-			Snapshot.RodDefinitionId = Instance.DefinitionId;
+			Snapshot.RodDefinitionId = DefinitionId;
 			Snapshot.RodDurability = Definition->MaximumRodDurability;
 			Snapshot.bRodBroken = false;
 		}
-		else if (Definition->Kind == ECatEquipmentKind::Bait)
+		else if (Definition->Kind == ECatEquipmentKind::Float)
 		{
-			Snapshot.BaitDefinitionId = Instance.DefinitionId;
+			Snapshot.FloatDefinitionId = DefinitionId;
 		}
 		else
 		{
-			Snapshot.FloatDefinitionId = Instance.DefinitionId;
+			Snapshot.ScoopNetDefinitionId = DefinitionId;
 		}
 		++Snapshot.Revision;
 		PublishSnapshot();

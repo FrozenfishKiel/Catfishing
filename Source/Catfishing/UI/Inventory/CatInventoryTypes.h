@@ -144,7 +144,7 @@ struct FCatInventoryContainerView
 	bool bPrimaryPersonalContainer = false;
 };
 
-/** 背包主界面的完整只读显示投影；它聚合鱼护、当前装配、随身耗材和待取装备，但不提供任何写口。 */
+/** 背包主界面的完整只读显示投影；它聚合鱼护、当前装配和随身耗材，但不提供任何写口。 */
 USTRUCT(BlueprintType)
 struct FCatInventoryViewState
 {
@@ -169,14 +169,6 @@ struct FCatInventoryViewState
 	/** 当前是否已经绑定到本角色 EquipmentComponent；false 表示装备事实还不能可靠展示。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bEquipmentAvailable = false;
-
-	/** 当前后端待取装备复制快照；商店购买的装备先进入这里，玩家未装到自己身上前只作为摘要展示。 */
-	UPROPERTY(BlueprintReadOnly)
-	FCatTeamEquipmentLibrarySnapshot TeamEquipmentLibrary;
-
-	/** 当前是否已经从 GameState 读到待取装备；false 时 View 不能把空列表当成确实没有装备。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bTeamEquipmentLibraryAvailable = false;
 
 	/** WrapBox 应创建的格子总数；当前鱼竿槽、个人鱼护和外部容器公开容量会合并到同一个显示列表。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -258,7 +250,7 @@ struct FCatInventoryViewState
 	UPROPERTY(BlueprintReadOnly)
 	FName ToggleKeyName = NAME_None;
 
-	/** 给蓝图直接展示的背包总览；它同时概括鱼、装备、耗材和待取装备，不再把背包说成只有鱼护。 */
+	/** 给蓝图直接展示的背包总览；它同时概括鱼、装备和耗材，不再把背包说成只有鱼护。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText SummaryText;
 
@@ -269,10 +261,6 @@ struct FCatInventoryViewState
 	/** 给蓝图直接展示的随身耗材数量；鱼饵、窝料和其他 RunConsumable 都来自 Equipment 快照。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText ConsumablesText;
-
-	/** 给蓝图直接展示的待取装备摘要；内部从团队装备库读取，但玩家只需要知道这些装备尚未装到自己身上。 */
-	UPROPERTY(BlueprintReadOnly)
-	FText TeamEquipmentText;
 
 	/** 给蓝图直接展示的当前选择摘要；鱼会显示重量，其他物体显示类别和定义，字段名保留给既有 WBP 兼容。 */
 	UPROPERTY(BlueprintReadOnly)

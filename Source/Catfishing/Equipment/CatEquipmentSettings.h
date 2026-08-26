@@ -39,12 +39,12 @@ public:
 
 	/**
 	 * 受控 Starter 兜底开关；打开时服务器会在角色首次占有且 Loadout 为空时尝试写入配置的基础装备和窝料。
-	 * 正式默认配置保持关闭，避免绕过商店、团队库或 Profile Grant 授权链；测试或诊断显式打开时仍经过目录、解锁和 Revision 校验。
+	 * 正式默认配置保持关闭，避免绕过商店或 Profile Grant 授权链；测试或诊断显式打开时仍经过目录、解锁和 Revision 校验。
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	bool bAutoConfigureStarterLoadout = false;
 
-	/** Starter 兜底鱼竿定义 ID；只在兜底开关打开时读取，正式商店/团队库路径不会自动消费它。 */
+	/** Starter 兜底鱼竿定义 ID；只在兜底开关打开时读取，正式商店和解锁路径不会自动消费它。 */
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterRodDefinitionId = NAME_None;
 
@@ -52,7 +52,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterBaitDefinitionId = NAME_None;
 
-	/** Starter 兜底鱼漂定义 ID；只在显式兜底流程中写入个人 Equipment，正式获取仍走商店或团队库。 */
+	/** Starter 兜底鱼漂定义 ID；只在显式兜底流程中写入个人 Equipment，正式获取仍走商店或解锁授权。 */
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterFloatDefinitionId = NAME_None;
 

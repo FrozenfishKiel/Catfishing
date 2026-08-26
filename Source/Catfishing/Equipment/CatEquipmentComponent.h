@@ -34,20 +34,16 @@ public:
 	ECatDomainCommandError ValidateRunConsumableGrant(FGuid RequestId, FName DefinitionId,
 		int32 Quantity) const;
 
+	/** 只读预检商店装备能否直接授予到本人装备槽；商店用它在扣款前确认买家 Pawn 和定义都能接收。 */
+	ECatDomainCommandError ValidateEquipmentGrantFromAuthority(FGuid RequestId, FName DefinitionId) const;
+
 	/** 一局拾取/奖励上层提交耗材；只接受定义为 run consumable 的正式条目。 */
 	FCatDomainCommandResult GrantRunConsumableFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName DefinitionId, int32 Quantity);
 
-	/** 只读检查团队库实例能否装入本人现有三件套；用于跨库取用链在删除公库实例前确认个人 Equipment 收得下。 */
-	ECatDomainCommandError ValidateTeamLibraryEquipFromAuthority(FGuid RequestId, int64 ExpectedRevision,
-		const FCatTeamEquipmentInstance& Instance) const;
-
-	/**
-	 * 把团队装备库中已购买的实例装入本人现有三件套；只允许 Rod/Bait/Float。
-	 * 调用方必须先完成团队库取用预检，再在公库实例成功取走后调用它，避免个人已装备但公库仍保留同一实例。
-	 */
-	FCatDomainCommandResult EquipFromTeamLibraryFromAuthority(FGuid RequestId, int64 ExpectedRevision,
-		const FCatTeamEquipmentInstance& Instance);
+	/** 商店或其他服务器权威来源授予装配型装备；成功后直接替换本人对应装备槽并发布 Equipment 快照。 */
+	FCatDomainCommandResult GrantEquipmentFromAuthority(FGuid RequestId, int64 ExpectedRevision,
+		FName DefinitionId);
 
 	/** 消费一份指定一局耗材；草药、窝料和道具上层必须先成功提交本结果再产生领域效果。 */
 	FCatDomainCommandResult ConsumeRunConsumableFromAuthority(FGuid RequestId, int64 ExpectedRevision,

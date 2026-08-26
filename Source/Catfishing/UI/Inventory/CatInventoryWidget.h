@@ -25,7 +25,7 @@ DECLARE_MULTICAST_DELEGATE_TwoParams(FCatInventorySlotDropForwarded, const FCatI
 /** 背包动作意图；Widget 不携带鱼 ID，PageController 从 Model 当前选择重建正式服务器命令。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatInventoryActionRequested, ECatInventoryAction);
 
-/** 背包主界面；它展示鱼容器、当前鱼竿、耗材和待取装备，吃鱼/献祭通过个人鱼护选择提交，移动通过格子拖拽提交。 */
+/** 背包主界面；它展示鱼容器、当前鱼竿和随身耗材，吃鱼/献祭通过个人鱼护选择提交，移动通过格子拖拽提交。 */
 UCLASS(BlueprintType, Blueprintable)
 class CATFISHING_API UCatInventoryWidget : public UUserWidget
 {
@@ -143,7 +143,7 @@ private:
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UCatInventorySlotWidget>> BoundSlotWidgets;
 
-	/** 最近一次背包总览文本副本；RenderInventory 写入，简单 WBP 可直接绑定它显示鱼、装备和待取装备概况。 */
+	/** 最近一次背包总览文本副本；RenderInventory 写入，简单 WBP 可直接绑定它显示鱼、装备和耗材概况。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintSummaryText;
 
@@ -155,10 +155,6 @@ private:
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintConsumablesText;
 
-	/** 最近一次待取装备文本副本；RenderInventory 写入，让尚未装到自己身上的装备能在背包页被看见。 */
-	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
-	FText BlueprintTeamEquipmentText;
-
 	/** 最近一次选中鱼文本副本；RenderInventory 写入，鱼容器格子的选择变化会改变这条说明。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintSelectedFishText;
@@ -167,7 +163,7 @@ private:
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintResultText;
 
-	/** WBP Designer 中的背包摘要文本控件；存在时 RenderInventory 会直接写入鱼、装备、耗材和待取装备总览。 */
+	/** WBP Designer 中的背包摘要文本控件；存在时 RenderInventory 会直接写入鱼、装备和耗材总览。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> SummaryTextBlock;
 
@@ -178,10 +174,6 @@ private:
 	/** WBP Designer 中的随身耗材文本控件；存在时 RenderInventory 会直接写入鱼饵、窝料等数量栈。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> ConsumablesTextBlock;
-
-	/** WBP Designer 中的待取装备文本控件；存在时 RenderInventory 会直接写入商店购买但未装到自己身上的装备。 */
-	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UTextBlock> TeamEquipmentTextBlock;
 
 	/** WBP Designer 中的选中鱼文本控件；存在时 RenderInventory 会直接写入当前选中鱼摘要。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))

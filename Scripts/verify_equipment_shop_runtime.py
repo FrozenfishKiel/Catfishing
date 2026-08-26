@@ -72,7 +72,7 @@ def _definition_ref_contains(settings, asset_name: str) -> bool:
 def _validate_equipment_definition(settings, definition_id: str, kind: str, asset_name: str, asset_path: str):
     """验证一条正式 EquipmentDefinition 可被运行目录消费。
 
-    流程先确认 Settings 显式引用资产，再读取资产身份、类别和类别专属关键数值；这些字段决定 Shop/TeamLibrary 能否生成实例，FishingSession 能否读取装备效果。
+    流程先确认 Settings 显式引用资产，再读取资产身份、类别和类别专属关键数值；这些字段决定 Shop 能否把装备交给本人 Equipment，FishingSession 能否读取装备效果。
     """
     _require(_definition_ref_contains(settings, asset_name), f"EquipmentSettings 缺少定义引用: {asset_name}")
     definition = _load_asset(asset_path)
@@ -183,7 +183,7 @@ def main() -> None:
 
     equipment_settings = unreal.get_default_object(_load_class("/Script/Catfishing.CatEquipmentSettings"))
     _require(not bool(_get_property(equipment_settings, "b_auto_configure_starter_loadout", "bAutoConfigureStarterLoadout")),
-             "开发期 Starter Loadout 自动装配必须关闭，第四模块只能由商店/团队库等正式入口交付装备")
+             "开发期 Starter Loadout 自动装配必须关闭，第四模块只能由商店或解锁授权等正式入口交付装备")
     _require(int(_get_property(equipment_settings, "starter_chum_quantity", "StarterChumQuantity")) > 0,
              "StarterChumQuantity 必须为正")
 
@@ -239,7 +239,7 @@ def main() -> None:
              f"当前售鱼价格策略应保持未裁 fail-closed: actual={price_policy}")
 
     unreal.log(
-        "EQUIPMENT_TEAMLIBRARY_SHOP_RUNTIME_PASS "
+        "EQUIPMENT_SHOP_RUNTIME_PASS "
         f"LakeGameMode={actual_game_mode} Controller={controller_class} "
         "Definitions=StarterRodT1,ShopRodT2,BugBait,FlashingBait,FruitBait,GiantLureBait,MeatBait,"
         "MoonlightBait,NectarBait,SoundBait,FeatherFloat,YarnBallFloat,BellFloat,BugChum,"

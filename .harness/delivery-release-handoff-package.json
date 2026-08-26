@@ -32,12 +32,14 @@
         "Saved/Automation/ItemsTankSacrificeCamp"
       ]
     },
-    "EquipmentTeamLibraryShop": {
-      "title": "Equipment / TeamLibrary / Shop——装备获取与装配闭环",
-      "closure_status": "complete",
-      "status_basis": "2026-08-25 formal-asset Static, Build, Automation, Runtime, MCP asset verification, comment review, and Rider error gate replace the 2026-08-24 Basic/auto-starter baseline. Default Equipment/Shop config now uses /Game/Catfishing/Data/Equipment/Equip_* assets, auto starter loadout is disabled, direct client consumable grant is rejected, FishingSession reads the current Equipment snapshot, ordinary and special bait must both pass the formal RunConsumable inventory gate, formal Equipment assets no longer contain FakeBait_ route IDs, and Runtime verifies all 17 formal definitions including GiantLureBait.",
+    "EquipmentShop": {
+      "title": "Equipment / Shop——装备获取与装配闭环",
+      "closure_status": "needs_verification",
+      "status_basis": "2026-08-26 code now routes shop EquipmentGrant delivery directly into the buyer's own Equipment snapshot and removes the old intermediate pickup chain. Fresh Static, Build, Automation, Runtime, comment review, and IDE quality evidence must be recorded before this row can return to complete.",
       "evidence_roots": [
-        "Saved/Automation/EquipmentTeamLibraryShop"
+        "Source/Catfishing/Equipment",
+        "Source/Catfishing/ShopEconomy",
+        "Scripts/verify_equipment_shop.ps1"
       ]
     },
     "FrontendOnline": {
@@ -89,7 +91,7 @@
     "DeliveryHarnessAssets": {
       "title": "Delivery / Harness / Assets——交付验证与正式资产闭环",
       "closure_status": "blocked",
-      "status_basis": "Harness inventory, regression entry map, formal fish input package, formal non-fish content input package, and this release handoff are centralized; formal fish/bite/fight runtime assets and BodyAction long-action Montage assets/config now have machine evidence, and Config no longer references the tracked fish test assets. Delivery remains blocked by open GameplayCue/final presentation, progress/growth content decisions, and the RunEnvironmentSocial module still lacking necessary human or multi-client behavior evidence even though its Static, Build, Automation, Lake MapConfigure, Runtime, reconnect fail-closed whitelist, and Controller player-entry contract machine evidence now pass. EquipmentTeamLibraryShop has fresh formal-asset closure evidence and is no longer a Delivery blocker.",
+      "status_basis": "Harness inventory, regression entry map, formal fish input package, formal non-fish content input package, and this release handoff are centralized; formal fish/bite/fight runtime assets and BodyAction long-action Montage assets/config now have machine evidence, and Config no longer references the tracked fish test assets. Delivery remains blocked by open GameplayCue/final presentation, progress/growth content decisions, EquipmentShop fresh evidence, and the RunEnvironmentSocial module still lacking necessary human or multi-client behavior evidence even though its Static, Build, Automation, Lake MapConfigure, Runtime, reconnect fail-closed whitelist, and Controller player-entry contract machine evidence now pass.",
       "evidence_roots": [
         "Saved/Automation/DeliveryHarnessAssets",
         ".codex/state/delivery-harness-assets-harness.json",
@@ -100,6 +102,11 @@
     }
   },
   "completion_blockers": [
+    {
+      "blocker_id": "EquipmentShopNeedsFreshEvidence",
+      "source": ".harness/delivery-release-handoff-package.json",
+      "summary": "EquipmentShop was refactored on 2026-08-26 so shop equipment grants go directly to the buyer's Equipment snapshot; fresh module evidence is required before release closure can rely on it."
+    },
     {
       "blocker_id": "FormalPresentationBoundaryOpen",
       "source": ".harness/formal-non-fish-content-input-package.json",
@@ -224,61 +231,6 @@
       "check_kind": "file_contains",
       "path": "Saved/Automation/ItemsTankSacrificeCamp/Runtime-20260825-135514/Runtime.log",
       "expected_text": "ITEMS_TANK_SACRIFICE_CAMP_MAP_PASS"
-    },
-    {
-      "contract_id": "EquipmentTeamLibraryShop.StaticPass",
-      "module_key": "EquipmentTeamLibraryShop",
-      "check_kind": "file_contains",
-      "path": "Saved/Automation/EquipmentTeamLibraryShop/Static-20260825-122718/Static.log",
-      "expected_text": "EQUIPMENT_TEAMLIBRARY_SHOP_STATIC_PASS"
-    },
-    {
-      "contract_id": "EquipmentTeamLibraryShop.BuildPass",
-      "module_key": "EquipmentTeamLibraryShop",
-      "check_kind": "file_contains",
-      "path": "Saved/Automation/EquipmentTeamLibraryShop/Build-20260825-114503/Build.log",
-      "expected_text": "EQUIPMENT_TEAMLIBRARY_SHOP_BUILD_PASS"
-    },
-    {
-      "contract_id": "EquipmentTeamLibraryShop.ShopOrderSuccess",
-      "module_key": "EquipmentTeamLibraryShop",
-      "check_kind": "automation_report",
-      "path": "Saved/Automation/EquipmentTeamLibraryShop/20260825-114520/ShopOrderCoordinator/Report/index.json",
-      "expected_tests": [
-        "Catfishing.Unit.ShopEconomy.OrderCoordinator.FishSaleConsumesFishCreditsWalletAndReplays"
-      ]
-    },
-    {
-      "contract_id": "EquipmentTeamLibraryShop.FishingReadinessSuccess",
-      "module_key": "EquipmentTeamLibraryShop",
-      "check_kind": "automation_report",
-      "path": "Saved/Automation/EquipmentTeamLibraryShop/20260825-114520/FishingPlayerEntryFullLoop/Report/index.json",
-      "allow_warnings": true,
-      "warning_basis": "Known external AbilitySystem warning in the reused Fishing PlayerEntry report; the expected FullLoop test must still be Success.",
-      "expected_tests": [
-        "Catfishing.PlayerEntry.FullLoop"
-      ]
-    },
-    {
-      "contract_id": "EquipmentTeamLibraryShop.RuntimePass",
-      "module_key": "EquipmentTeamLibraryShop",
-      "check_kind": "file_contains",
-      "path": "Saved/Automation/EquipmentTeamLibraryShop/Runtime-20260825-122724/Runtime.log",
-      "expected_text": "EQUIPMENT_TEAMLIBRARY_SHOP_RUNTIME_PASS"
-    },
-    {
-      "contract_id": "EquipmentTeamLibraryShop.RuntimeFormalDefinitions",
-      "module_key": "EquipmentTeamLibraryShop",
-      "check_kind": "file_contains",
-      "path": "Saved/Automation/EquipmentTeamLibraryShop/Runtime-20260825-122724/Runtime.log",
-      "expected_text": "GiantLureBait"
-    },
-    {
-      "contract_id": "EquipmentTeamLibraryShop.CommentReviewPass",
-      "module_key": "EquipmentTeamLibraryShop",
-      "check_kind": "file_contains",
-      "path": "Saved/Automation/EquipmentTeamLibraryShop/CommentReview-20260825-120842/comment-review.json",
-      "expected_text": "\"status\": \"pass\""
     },
     {
       "contract_id": "FrontendOnline.HumanSteamPlaytest",
@@ -504,8 +456,9 @@
     },
     {
       "requirement_id": "ReleaseEvidenceContractsGreen",
-      "current_status": "satisfied",
-      "proof_when_satisfied": "Scripts/verify_delivery_harness_assets.ps1 -Mode Static validates every evidence_contract in this package."
+      "current_status": "blocked",
+      "blocked_by": "EquipmentShopNeedsFreshEvidence",
+      "proof_when_satisfied": "Scripts/verify_delivery_harness_assets.ps1 -Mode Static validates every evidence_contract in this package after EquipmentShop fresh evidence is recorded."
     },
     {
       "requirement_id": "FormalPresentationBoundaryClosed",
@@ -520,9 +473,10 @@
       "proof_when_satisfied": "UnlockId milestone rules, imprint admission list, growth Buff choices, visual fatigue triggers, and yellow-stamina presentation/consumption boundaries are frozen as formal product/content inputs."
     },
     {
-      "requirement_id": "EquipmentTeamLibraryShopFormalEvidence",
-      "current_status": "satisfied",
-      "proof_when_satisfied": "EquipmentTeamLibraryShop status is complete again with fresh formal-asset Static, Build, Automation, Runtime, MCP asset verification, comment review, and Rider error-gate evidence replacing the 2026-08-24 Basic/auto-starter baseline."
+      "requirement_id": "EquipmentShopFreshEvidence",
+      "current_status": "blocked",
+      "blocked_by": "EquipmentShopNeedsFreshEvidence",
+      "proof_when_satisfied": "EquipmentShop status is complete again with fresh Static, Build, Automation, Runtime, comment review, and IDE quality evidence after the 2026-08-26 personal Equipment delivery refactor."
     },
     {
       "requirement_id": "RunEnvironmentSocialClosed",
@@ -603,5 +557,5 @@
     },
     "update_policy": "Update recorded evidence only when the DeliveryReleaseHandoffPackage surface, AssetReadiness gate, or blocker state changes; do not rewrite it just because an unchanged Static rerun created a newer transcript."
   },
-  "close_rule": "DeliveryHarnessAssets can only move from blocked to complete when the already-satisfied FormalFishAssetInputPackage/runtime-config replacement remains valid, FormalNonFishContentInputPackage is ready, EquipmentTeamLibraryShop has fresh formal-asset closure evidence, RunEnvironmentSocial is closed with module evidence, and the same Static plus AssetReadiness checks pass with updated release evidence."
+  "close_rule": "DeliveryHarnessAssets can only move from blocked to complete when the already-satisfied FormalFishAssetInputPackage/runtime-config replacement remains valid, FormalNonFishContentInputPackage is ready, EquipmentShop has fresh closure evidence, RunEnvironmentSocial is closed with module evidence, and the same Static plus AssetReadiness checks pass with updated release evidence."
 }

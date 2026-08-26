@@ -17,8 +17,7 @@ bool FCatShopNetworkContractTest::RunTest(const FString& Parameters)
 	for (const FName FunctionName : {
 		FName(TEXT("ServerSubmitShopPurchase")),
 		FName(TEXT("ServerClaimFreeShopEntry")),
-		FName(TEXT("ServerSellFish")),
-		FName(TEXT("ServerTakeTeamEquipment"))})
+		FName(TEXT("ServerSellFish"))})
 	{
 		const UFunction* Function = ControllerClass->FindFunctionByName(FunctionName);
 		TestNotNull(*FString::Printf(TEXT("%s RPC 已反射"), *FunctionName.ToString()), Function);
@@ -41,14 +40,6 @@ bool FCatShopNetworkContractTest::RunTest(const FString& Parameters)
 			FName(TEXT("OnRep_ShopEconomySnapshot")));
 	}
 
-	const FProperty* TeamLibrary = FindFProperty<FProperty>(GameStateClass, TEXT("TeamEquipmentLibrary"));
-	TestNotNull(TEXT("团队装备快照属性已反射"), TeamLibrary);
-	if (TeamLibrary)
-	{
-		TestTrue(TEXT("团队装备快照参与网络复制"), TeamLibrary->HasAnyPropertyFlags(CPF_Net));
-		TestEqual(TEXT("团队装备快照使用完整 RepNotify"), TeamLibrary->RepNotifyFunc,
-			FName(TEXT("OnRep_TeamEquipmentLibrary")));
-	}
 	return !HasAnyErrors();
 }
 

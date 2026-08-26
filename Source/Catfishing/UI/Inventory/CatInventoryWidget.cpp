@@ -63,14 +63,13 @@ FReply UCatInventoryWidget::NativeOnKeyDown(const FGeometry& InGeometry, const F
 	return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
 }
 
-// 渲染流程：缓存完整背包投影，更新鱼/装备/耗材/待取装备文本，再按 Slots 数组重建鱼竿槽和容器格子并触发蓝图扩展点。
+// 渲染流程：缓存完整背包投影，更新鱼/装备/耗材文本，再按 Slots 数组重建鱼竿槽和容器格子并触发蓝图扩展点。
 void UCatInventoryWidget::RenderInventory(const FCatInventoryViewState& ViewState)
 {
 	LastInventoryViewState = ViewState;
 	BlueprintSummaryText = ViewState.SummaryText;
 	BlueprintEquipmentText = ViewState.EquipmentText;
 	BlueprintConsumablesText = ViewState.ConsumablesText;
-	BlueprintTeamEquipmentText = ViewState.TeamEquipmentText;
 	BlueprintSelectedFishText = ViewState.SelectedFishText;
 	BlueprintResultText = ViewState.ResultText;
 	if (SummaryTextBlock)
@@ -84,10 +83,6 @@ void UCatInventoryWidget::RenderInventory(const FCatInventoryViewState& ViewStat
 	if (ConsumablesTextBlock)
 	{
 		ConsumablesTextBlock->SetText(BlueprintConsumablesText);
-	}
-	if (TeamEquipmentTextBlock)
-	{
-		TeamEquipmentTextBlock->SetText(BlueprintTeamEquipmentText);
 	}
 	if (SelectedFishTextBlock)
 	{

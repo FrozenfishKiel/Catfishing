@@ -59,33 +59,6 @@ namespace
 		}
 	}
 
-	// 装备类别标签流程：只服务背包和待取装备展示，不参与装备选择或服务器命令。
-	FString GetEquipmentKindDisplayText(const ECatEquipmentKind Kind)
-	{
-		switch (Kind)
-		{
-		case ECatEquipmentKind::Rod:
-			return TEXT("鱼竿");
-		case ECatEquipmentKind::Bait:
-			return TEXT("鱼饵");
-		case ECatEquipmentKind::Float:
-			return TEXT("鱼漂");
-		case ECatEquipmentKind::ScoopNet:
-			return TEXT("抄网");
-		case ECatEquipmentKind::Chum:
-			return TEXT("窝料");
-		case ECatEquipmentKind::Herb:
-			return TEXT("草药");
-		case ECatEquipmentKind::Driftwood:
-			return TEXT("浮木");
-		case ECatEquipmentKind::Utility:
-			return TEXT("道具");
-		case ECatEquipmentKind::Unknown:
-		default:
-			return TEXT("装备");
-		}
-	}
-
 	// 容器物体类别标签流程：只服务背包文本和调试反馈，不参与服务器策略选择。
 	FString GetContainedObjectKindDisplayText(const ECatContainedObjectKind Kind)
 	{
@@ -158,35 +131,13 @@ namespace
 		}
 		return Count;
 	}
-
-	// 待取装备文案流程：读取 GameState 复制的后端队伍装备列表，让商店买到但尚未装备的竿/漂不会在背包里消失。
-	FText MakeTeamEquipmentText(const FCatTeamEquipmentLibrarySnapshot& Library, const bool bLibraryAvailable)
-	{
-		if (!bLibraryAvailable)
-		{
-			return FText::FromString(TEXT("待取装备：等待同步"));
-		}
-		if (Library.Instances.IsEmpty())
-		{
-			return FText::FromString(TEXT("待取装备：暂无"));
-		}
-		TArray<FString> Parts;
-		Parts.Reserve(Library.Instances.Num());
-		for (const FCatTeamEquipmentInstance& Instance : Library.Instances)
-		{
-			Parts.Add(FString::Printf(TEXT("%s %s"),
-				*GetEquipmentKindDisplayText(Instance.Kind),
-				*GetDefinitionDisplayText(Instance.DefinitionId, TEXT("未命名"))));
-		}
-		return FText::FromString(FString::Printf(TEXT("待取装备：%s"), *FString::Join(Parts, TEXT("，"))));
-	}
 }
 
 // 绑定流程：
 // 1. 先解绑旧来源，避免换 Pawn 后同一个 Model 同时订阅两只鱼护。
-// 2. 校验 LocalPlayer、Controller、Character 和个人鱼护复制组件完整；Equipment、待取装备与外部容器上下文作为可选只读源接入。
-// 3. 订阅鱼护、Equipment、待取装备快照变化和 PlayerController 的吃鱼、容器移动、献祭结果。
-// 4. 发布首份 ViewState，让背包第一次打开时已有鱼、当前鱼竿、耗材和待取装备数据。
+// 2. 校验 LocalPlayer、Controller、Character 和个人鱼护复制组件完整；Equipment 与外部容器上下文作为可选只读源接入。
+// 3. 订阅鱼护、Equipment 快照变化和 PlayerController 的吃鱼、容器移动、献祭结果。
+// 4. 发布首份 ViewState，让背包第一次打开时已有鱼、当前鱼竿和耗材数据。
 bool UCatInventoryModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController,
 	ACatCharacter* InCharacter)
 {
@@ -209,13 +160,6 @@ bool UCatInventoryModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* In
 	{
 		BoundEquipment = Equipment;
 		EquipmentChangedHandle = Equipment->OnSnapshotChanged.AddUObject(this, &ThisClass::HandleEquipmentSnapshotChanged);
-	}
-	if (ACatfishingGameState* GameState = InController->GetWorld()
-		? InController->GetWorld()->GetGameState<ACatfishingGameState>() : nullptr)
-	{
-		BoundGameState = GameState;
-		TeamEquipmentLibraryChangedHandle = GameState->OnTeamEquipmentLibraryChanged.AddUObject(
-			this, &ThisClass::HandleTeamEquipmentLibraryChanged);
 	}
 	if (ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(InController))
 	{
@@ -242,10 +186,6 @@ void UCatInventoryModel::Unbind()
 	{
 		Equipment->OnSnapshotChanged.Remove(EquipmentChangedHandle);
 	}
-	if (ACatfishingGameState* GameState = BoundGameState.Get())
-	{
-		GameState->OnTeamEquipmentLibraryChanged.Remove(TeamEquipmentLibraryChangedHandle);
-	}
 	if (ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(BoundPlayerController.Get()))
 	{
 		CatController->OnCampCommandResultReceived.Remove(CampCommandResultHandle);
@@ -254,7 +194,6 @@ void UCatInventoryModel::Unbind()
 	}
 	FishGuardChangedHandle.Reset();
 	EquipmentChangedHandle.Reset();
-	TeamEquipmentLibraryChangedHandle.Reset();
 	CampCommandResultHandle.Reset();
 	SacrificeResultHandle.Reset();
 	FishConsumeResultHandle.Reset();
@@ -262,7 +201,6 @@ void UCatInventoryModel::Unbind()
 	BoundPlayerController.Reset();
 	BoundPersonalFishGuard.Reset();
 	BoundEquipment.Reset();
-	BoundGameState.Reset();
 	bOpen = false;
 	SelectedSlotIndex = INDEX_NONE;
 	PendingAction = ECatInventoryAction::None;
@@ -380,7 +318,7 @@ void UCatInventoryModel::MarkActionRejected(const ECatInventoryAction Action, co
 
 // 刷新流程：
 // 1. 从个人鱼护和当前外部容器复制组件读取容量、Revision 和容器物体投影。
-// 2. 从 Equipment 和 GameState 读取当前装配、随身耗材和待取装备，保持背包玩家概念完整。
+// 2. 从 Equipment 读取当前装配和随身耗材，保持背包玩家概念完整。
 // 3. 先生成当前鱼竿槽，再生成容器槽，让 WrapBox 能同时证明手上装备和鱼护内容。
 // 4. 裁剪当前选择并派生鱼动作 gate、跨容器拖拽提示、摘要文本、当前选择文本和结果文本。
 // 5. 从 UI Settings 解析既有 InputContext 的背包开关键名，最后广播完整投影。
@@ -395,11 +333,6 @@ void UCatInventoryModel::Refresh()
 	{
 		NewState.Equipment = Equipment->GetSnapshot();
 		NewState.bEquipmentAvailable = true;
-	}
-	if (const ACatfishingGameState* GameState = BoundGameState.Get())
-	{
-		NewState.TeamEquipmentLibrary = GameState->GetTeamEquipmentLibrary();
-		NewState.bTeamEquipmentLibraryAvailable = true;
 	}
 
 	int32 DisplaySlotIndex = 0;
@@ -492,8 +425,6 @@ void UCatInventoryModel::Refresh()
 	}
 	NewState.EquipmentText = MakeEquipmentText(NewState.Equipment, NewState.bEquipmentAvailable);
 	NewState.ConsumablesText = MakeConsumablesText(NewState.Equipment, NewState.bEquipmentAvailable);
-	NewState.TeamEquipmentText = MakeTeamEquipmentText(NewState.TeamEquipmentLibrary,
-		NewState.bTeamEquipmentLibraryAvailable);
 	TArray<FString> ContainerSummaries;
 	ContainerSummaries.Reserve(NewState.Containers.Num());
 	for (const FCatInventoryContainerView& ContainerView : NewState.Containers)
@@ -505,10 +436,9 @@ void UCatInventoryModel::Refresh()
 	}
 	const FString ContainerSummary = ContainerSummaries.IsEmpty()
 		? FString(TEXT("容器 0/0")) : FString::Join(ContainerSummaries, TEXT(" | "));
-	NewState.SummaryText = FText::FromString(FString::Printf(TEXT("背包：%s | 随身耗材 %d 种 | 待取装备 %d 件"),
+	NewState.SummaryText = FText::FromString(FString::Printf(TEXT("背包：%s | 随身耗材 %d 种"),
 		*ContainerSummary,
-		CountActiveConsumableStacks(NewState.Equipment),
-		NewState.TeamEquipmentLibrary.Instances.Num()));
+		CountActiveConsumableStacks(NewState.Equipment)));
 	if (SelectedSlot && SelectedSlot->SlotSource == ECatInventorySlotSource::CurrentRod)
 	{
 		const FString OccupiedText = SelectedSlot->bOccupied
@@ -610,12 +540,6 @@ void UCatInventoryModel::HandleFishGuardSnapshotChanged()
 
 // Equipment 变化流程：装备、耗材、耐久都以完整快照为准；事件只触发重读，背包不缓存增量。
 void UCatInventoryModel::HandleEquipmentSnapshotChanged()
-{
-	Refresh();
-}
-
-// 待取装备变化流程：商店交付或取用只改变 GameState 快照；背包统一重读摘要和当前鱼竿槽。
-void UCatInventoryModel::HandleTeamEquipmentLibraryChanged()
 {
 	Refresh();
 }

@@ -109,7 +109,7 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryWidget> InventoryWidget;
 
-	/** 当前 LocalPlayer 的背包 Model；它只读鱼护、外部容器、装备、待取装备和动作结果。 */
+	/** 当前 LocalPlayer 的背包 Model；它只读鱼护、外部容器、本人装备和动作结果。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryModel> InventoryModel;
 

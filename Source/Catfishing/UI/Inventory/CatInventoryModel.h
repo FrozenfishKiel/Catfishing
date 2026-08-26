@@ -7,7 +7,6 @@
 
 class APlayerController;
 class ACatCharacter;
-class ACatfishingGameState;
 class UCatContainerReplicationComponent;
 class UCatEquipmentComponent;
 class ULocalPlayer;
@@ -15,17 +14,17 @@ class ULocalPlayer;
 /** 背包 Model 完整投影变化通知；PageController 收到后只把最新 ViewState 交给背包 WBP。 */
 DECLARE_MULTICAST_DELEGATE(FCatInventoryModelChanged);
 
-/** 背包 MVC Model；它订阅鱼护、装备和待取装备的只读快照，不创建 Widget、不提交命令。 */
+/** 背包 MVC Model；它订阅鱼护、外部容器和本人装备的只读快照，不创建 Widget、不提交命令。 */
 UCLASS()
 class CATFISHING_API UCatInventoryModel : public UObject
 {
 	GENERATED_BODY()
 
 public:
-	/** 绑定当前 LocalPlayer、Controller、Character 鱼护、Equipment 和待取装备复制源；成功后立即发布完整背包投影。 */
+	/** 绑定当前 LocalPlayer、Controller、Character 鱼护和 Equipment 复制源；成功后立即发布完整背包投影。 */
 	bool Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController, ACatCharacter* InCharacter);
 
-	/** 成对解除鱼护、外部容器、装备、待取装备和 PlayerController 结果订阅，并清空当前选择、pending 和 ViewState。 */
+	/** 成对解除鱼护、外部容器、装备和 PlayerController 结果订阅，并清空当前选择、pending 和 ViewState。 */
 	void Unbind();
 
 	/** 返回 Model 是否仍绑定有效玩家背包读源；PageController 用它过滤旧 Widget 意图。 */
@@ -65,9 +64,6 @@ private:
 
 	/** Equipment 快照变化入口；当前装备、随身耗材或耐久变化都会让背包重读完整投影。 */
 	void HandleEquipmentSnapshotChanged();
-
-	/** 待取装备复制变化入口；商店新买装备或取用后都会让背包刷新待取列表。 */
-	void HandleTeamEquipmentLibraryChanged();
 
 	/** 外部容器复制变化入口；任意已绑定外部容器内容变化后背包会重读完整投影。 */
 	void HandleExternalContainerSnapshotChanged();
@@ -124,10 +120,6 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatEquipmentComponent> BoundEquipment;
 
-	/** 当前 World 的 GameState 复制出口；背包从这里读取后端待取装备列表。 */
-	UPROPERTY(Transient)
-	TWeakObjectPtr<ACatfishingGameState> BoundGameState;
-
 	/** 鱼护快照订阅句柄；Unbind 必须从同一组件移除。 */
 	FDelegateHandle FishGuardChangedHandle;
 
@@ -136,9 +128,6 @@ private:
 
 	/** Equipment 快照订阅句柄；Unbind 必须从同一组件移除。 */
 	FDelegateHandle EquipmentChangedHandle;
-
-	/** 待取装备复制订阅句柄；Unbind 必须从同一 GameState 移除。 */
-	FDelegateHandle TeamEquipmentLibraryChangedHandle;
 
 	/** PlayerController 公共领域结果订阅句柄；背包用它接收跨容器移动终态。 */
 	FDelegateHandle CampCommandResultHandle;

@@ -48,9 +48,8 @@ DECLARE_MULTICAST_DELEGATE(FCatRunPublicStateChanged);
 /** GameState 最近求助完整快照变化通知；本机 UI 必须重新读取 GetLastHelpSignal。 */
 DECLARE_MULTICAST_DELEGATE(FCatHelpSignalChanged);
 
-/** GameState 团队经济/团队装备快照变化通知；表现层收到后重读整份复制事实。 */
+/** GameState 团队经济快照变化通知；表现层收到后重读整份复制事实。 */
 DECLARE_MULTICAST_DELEGATE(FCatShopEconomySnapshotChanged);
-DECLARE_MULTICAST_DELEGATE(FCatTeamEquipmentSnapshotChanged);
 
 /** owning client 收到献祭协议结果后的本机通知；UI Model 只用它刷新读模型，不改变 Items 或 Run。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatSacrificeResultReceived, const FCatSacrificeResult&);
@@ -205,11 +204,9 @@ private:
 	void HandleHostExitAckTimeout();
 	/** 把商店当前余额、货架库存和公开交易记录整体发布给 GameState。 */
 	void PublishShopEconomySnapshot();
-	/** 把服务器团队装备库整体发布给 GameState。 */
-	void PublishTeamEquipmentLibrarySnapshot();
 	/** 将服务器私有 StableNetId 解析成可复制的 PlayerState。 */
 	APlayerState* ResolvePlayerStateByStableNetId(const FString& StableNetId) const;
-	/** 进入最终结算夜后同时关闭新商店订单与团队装备入库。 */
+	/** 进入最终结算夜后关闭新商店订单；已经交付的个人装备事实继续留在各自 Character 上。 */
 	void CloseShopForSettlementNight();
 
 	/** StableNetId 到最小装配记录的服务器唯一映射；GameMode 不复制到客户端，World 销毁时整体释放。 */
@@ -259,9 +256,8 @@ private:
 	FTimerHandle HostExitAckTimerHandle;
 	/** 当前 Host exit 是否已完成远端 Destroy ACK 与最终 Grant ACK 的统一有界等待；超时完成不修改各自真实 ACK 记录。 */
 	bool bHostExitAckWaitComplete = false;
-	/** 商店/团队装备变化的服务器本机订阅；EndPlay 成对解除，避免旧 World 回调。 */
+	/** 商店公开经济变化的服务器本机订阅；EndPlay 成对解除，避免旧 World 回调。 */
 	FDelegateHandle ShopPublicTransactionHandle;
-	FDelegateHandle TeamEquipmentLibraryHandle;
 };
 
 /** Lake 共享比赛状态；复制由服务器 GameMode 组合的 Run/Environment 快照与 Social 最近求助事实。 */
@@ -271,7 +267,7 @@ class CATFISHING_API ACatfishingGameState : public AGameStateBase
 	GENERATED_BODY()
 public:
 	ACatfishingGameState();
-	/** 注册 Run/Help/Shop/Team 四类公开快照复制；客户端分别经 RepNotify 消费，不在本地推进领域状态。 */
+	/** 注册 Run/Help/Shop 三类公开快照复制；客户端分别经 RepNotify 消费，不在本地推进领域状态。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	/** 仅允许 authority GameMode 写入组合公开事实；每次写入都会触发网络更新。 */
 	void SetRunPublicStateFromAuthority(const FCatRunPublicState& NewState);
@@ -283,10 +279,8 @@ public:
 	const FCatHelpSignalSnapshot& GetLastHelpSignal() const;
 	/** 仅 authority 写入团队公款、货架库存与公开交易记录的整份快照。 */
 	void SetShopEconomySnapshotFromAuthority(const FCatShopPublicEconomySnapshot& NewSnapshot);
+	/** 提供服务器最终值或客户端最近复制值，商店 UI 只能只读展示余额、库存和公开交易。 */
 	const FCatShopPublicEconomySnapshot& GetShopEconomySnapshot() const;
-	/** 仅 authority 写入团队装备库快照。 */
-	void SetTeamEquipmentLibraryFromAuthority(const FCatTeamEquipmentLibrarySnapshot& NewSnapshot);
-	const FCatTeamEquipmentLibrarySnapshot& GetTeamEquipmentLibrary() const;
 	/** 返回 ChumField 的公开复制组件；客户端只读窝点表现事实，不能通过它创建或修改窝点。 */
 	const UCatChumFieldReplicationComponent* GetChumFieldReplication() const { return ChumFieldReplication; }
 	/** authority 写口使用的 ChumField 复制组件；非服务器返回空，防止客户端绕开 Subsystem 发布窝点。 */
@@ -295,8 +289,8 @@ public:
 	FCatRunPublicStateChanged OnRunPublicStateChanged;
 	/** 本机最近求助完整快照变化通知；不授权订阅者接受任务或改变 Social 权限。 */
 	FCatHelpSignalChanged OnHelpSignalChanged;
+	/** 本机商店公开经济快照变化通知；只提示 UI 重读，不授权客户端确认交付或改余额。 */
 	FCatShopEconomySnapshotChanged OnShopEconomySnapshotChanged;
-	FCatTeamEquipmentSnapshotChanged OnTeamEquipmentLibraryChanged;
 protected:
 	/** 实例进入 World 后记录实际类；不增加可写玩法状态。 */
 	virtual void BeginPlay() override;
@@ -309,9 +303,6 @@ protected:
 	/** 客户端收到商店公开快照后只记录诊断并通知只读 UI，不在本地确认购买或改库存。 */
 	UFUNCTION()
 	void OnRep_ShopEconomySnapshot();
-	/** 客户端收到团队装备库快照后只刷新展示层，不在复制回调里执行领取、装备或回滚。 */
-	UFUNCTION()
-	void OnRep_TeamEquipmentLibrary();
 
 private:
 	/** 自然事件与玩家打窝的公开复制组件；服务器 ChumFieldSubsystem 写入，客户端只用它驱动窝点表现。 */
@@ -329,10 +320,6 @@ private:
 	/** 商店公开经济快照；只复制团队公款、货架库存和公开交易记录，购买结果仍由服务器命令返回。 */
 	UPROPERTY(ReplicatedUsing = OnRep_ShopEconomySnapshot)
 	FCatShopPublicEconomySnapshot ShopEconomySnapshot;
-
-	/** 团队装备库公开快照；服务器维护可领取/已领取状态，客户端只读以恢复 UI。 */
-	UPROPERTY(ReplicatedUsing = OnRep_TeamEquipmentLibrary)
-	FCatTeamEquipmentLibrarySnapshot TeamEquipmentLibrary;
 };
 
 /** Lake 玩家身份与个人局状态宿主；复用 APlayerState::UniqueId，只增加普通夜 ready、公开鱼图鉴摘要和本局装备解锁投影。 */
@@ -508,11 +495,6 @@ public:
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
 	void ServerSellFish(FGuid FishInstanceId, FGuid ContainerId, int64 ExpectedContainerRevision,
 		ECatShopFishSaleSource SourceKind, FGuid RequestId, int64 ExpectedWalletRevision);
-
-	/** 从团队装备库取走实例并装入本人的现有三件套；服务器先做库和个人装备预检，避免公库删除与个人装配分叉。 */
-	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
-	void ServerTakeTeamEquipment(FGuid InstanceId, FGuid RequestId, int64 ExpectedLibraryRevision,
-		int64 ExpectedEquipmentRevision);
 
 	/** 在固定营地消费浮木并修复当前鱼竿；不升级或替换装备。 */
 	UFUNCTION(Server, Reliable)
@@ -761,10 +743,6 @@ private:
 	/** owning client 最近收到的直接吃鱼读模型，表示 Items 消费鱼实例后的终态；可靠 Client RPC 整体写入，UI 只读且不会应用身体或成长效果。 */
 	UPROPERTY(Transient)
 	FCatFishConsumeResult LastFishConsumeResult;
-
-	/** 团队装备取用是一条跨库与个人装备的幂等链；缓存阻止重试取走第二件。 */
-	TMap<FGuid, FCatDomainCommandResult> TakeTeamEquipmentTerminalCache;
-	TMap<FGuid, FString> TakeTeamEquipmentPayloadByRequest;
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Catfishing|Fishing", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UCatFishingCommandComponent> FishingCommandComponent;

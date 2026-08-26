@@ -28,7 +28,6 @@
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
-#include "Equipment/CatTeamEquipmentLibrary.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Fishing/CatFishingService.h"
@@ -147,14 +146,8 @@ void ACatfishingGameModeBase::StartPlay()
 			ShopPublicTransactionHandle = Shop->OnPublicTransactionCommitted.AddWeakLambda(this,
 				[this](const FCatShopPublicTransaction&) { PublishShopEconomySnapshot(); });
 		}
-		if (UCatTeamEquipmentLibrary* Library = World->GetSubsystem<UCatTeamEquipmentLibrary>())
-		{
-			TeamEquipmentLibraryHandle = Library->OnLibraryChanged.AddUObject(this,
-				&ThisClass::PublishTeamEquipmentLibrarySnapshot);
-		}
 	}
 	PublishShopEconomySnapshot();
-	PublishTeamEquipmentLibrarySnapshot();
 
 	const UCatRunSettings* Settings = GetDefault<UCatRunSettings>();
 	float DayLengthSeconds = 0.0f;
@@ -203,13 +196,8 @@ void ACatfishingGameModeBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 		{
 			Shop->OnPublicTransactionCommitted.Remove(ShopPublicTransactionHandle);
 		}
-		if (UCatTeamEquipmentLibrary* Library = World->GetSubsystem<UCatTeamEquipmentLibrary>())
-		{
-			Library->OnLibraryChanged.Remove(TeamEquipmentLibraryHandle);
-		}
 	}
 	ShopPublicTransactionHandle.Reset();
-	TeamEquipmentLibraryHandle.Reset();
 	if (RunStateTreeComponent && RunStateTreeComponent->IsRunning())
 	{
 		RunStateTreeComponent->StopLogic(TEXT("GameMode EndPlay"));
@@ -1349,11 +1337,6 @@ void ACatfishingGameModeBase::CloseShopForSettlementNight()
 	{
 		Shop->CloseCommands();
 	}
-	if (UCatTeamEquipmentLibrary* Library =
-		GetWorld() ? GetWorld()->GetSubsystem<UCatTeamEquipmentLibrary>() : nullptr)
-	{
-		Library->CloseCommands();
-	}
 }
 
 void ACatfishingGameModeBase::PublishShopEconomySnapshot()
@@ -1366,17 +1349,6 @@ void ACatfishingGameModeBase::PublishShopEconomySnapshot()
 	}
 	CatGameState->SetShopEconomySnapshotFromAuthority(Shop->BuildPublicSnapshot(
 		[this](const FString& StableNetId) { return ResolvePlayerStateByStableNetId(StableNetId); }));
-}
-
-void ACatfishingGameModeBase::PublishTeamEquipmentLibrarySnapshot()
-{
-	ACatfishingGameState* CatGameState = GetGameState<ACatfishingGameState>();
-	UCatTeamEquipmentLibrary* Library =
-		GetWorld() ? GetWorld()->GetSubsystem<UCatTeamEquipmentLibrary>() : nullptr;
-	if (CatGameState && Library)
-	{
-		CatGameState->SetTeamEquipmentLibraryFromAuthority(Library->GetSnapshot());
-	}
 }
 
 APlayerState* ACatfishingGameModeBase::ResolvePlayerStateByStableNetId(const FString& StableNetId) const
@@ -1405,7 +1377,6 @@ void ACatfishingGameState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>&
 	DOREPLIFETIME(ThisClass, RunPublicState);
 	DOREPLIFETIME(ThisClass, LastHelpSignal);
 	DOREPLIFETIME(ThisClass, ShopEconomySnapshot);
-	DOREPLIFETIME(ThisClass, TeamEquipmentLibrary);
 }
 
 // Run 快照写入流程：只接受 authority 实例，把 GameMode 提供的完整 DTO 一次替换并请求立即网络更新；客户端调用不会改本地副本。
@@ -1461,23 +1432,6 @@ const FCatShopPublicEconomySnapshot& ACatfishingGameState::GetShopEconomySnapsho
 	return ShopEconomySnapshot;
 }
 
-void ACatfishingGameState::SetTeamEquipmentLibraryFromAuthority(
-	const FCatTeamEquipmentLibrarySnapshot& NewSnapshot)
-{
-	if (!HasAuthority())
-	{
-		return;
-	}
-	TeamEquipmentLibrary = NewSnapshot;
-	ForceNetUpdate();
-	OnTeamEquipmentLibraryChanged.Broadcast();
-}
-
-const FCatTeamEquipmentLibrarySnapshot& ACatfishingGameState::GetTeamEquipmentLibrary() const
-{
-	return TeamEquipmentLibrary;
-}
-
 UCatChumFieldReplicationComponent* ACatfishingGameState::GetChumFieldReplicationFromAuthority()
 {
 	return HasAuthority() ? ChumFieldReplication : nullptr;
@@ -1509,14 +1463,6 @@ void ACatfishingGameState::OnRep_ShopEconomySnapshot()
 		ShopEconomySnapshot.Balance, ShopEconomySnapshot.WalletRevision,
 		ShopEconomySnapshot.Stocks.Num(),
 		ShopEconomySnapshot.Transactions.Num());
-}
-
-void ACatfishingGameState::OnRep_TeamEquipmentLibrary()
-{
-	OnTeamEquipmentLibraryChanged.Broadcast();
-	UE_LOG(LogCatfishing, Verbose,
-		TEXT("Event=team_equipment_library_received Revision=%lld Instances=%d"),
-		TeamEquipmentLibrary.Revision, TeamEquipmentLibrary.Instances.Num());
 }
 
 // PlayerState 开始流程：先完成父类注册，再记录继承 UniqueId 的有效性和策略允许的日志表示；不复制第二份 StableNetId 或恢复白名单。
@@ -2557,101 +2503,6 @@ void ACatfishingPlayerController::ServerSellFish_Implementation(const FGuid Fish
 		*FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
 		*UEnum::GetValueAsString(Result.Transaction.Command.Error),
 		*UEnum::GetValueAsString(Result.Delivery.Error));
-}
-
-// 团队装备取用 RPC 流程：
-// 1. 先用统一 gameplay gate 和 RequestId 拒绝非权威玩法阶段或无效请求，避免给缓存写入不可重放的半结果。
-// 2. 再按 RequestId 与 payload 处理幂等重放；payload 漂移直接拒绝，合法重放不再碰团队库或个人装备。
-// 3. 首次请求从当前 Pawn、World Subsystem 和 PlayerState 重建服务器事实，缺任一依赖只记录依赖错误。
-// 4. 依赖齐全后先让团队库只读预检实例是否存在，再让个人 Equipment 只读预检当前 Revision 和槽位是否能收下该实例。
-// 5. 两个预检都通过才删除团队库实例；删除成功或同 RequestId 已删除时，最后调用个人 Equipment 的正式装配入口。
-// 6. 无论成功、拒绝还是中途失败，最终都把结果写入 Controller 终态缓存，使后续重试不会取第二件或重复改装备。
-void ACatfishingPlayerController::ServerTakeTeamEquipment_Implementation(const FGuid InstanceId,
-	const FGuid RequestId, const int64 ExpectedLibraryRevision,
-	const int64 ExpectedEquipmentRevision)
-{
-	if (!CanForwardGameplayCommand() || !RequestId.IsValid())
-	{
-		return;
-	}
-	const FString PayloadSignature = FString::Printf(
-		TEXT("Instance=%s|LibraryRevision=%lld|EquipmentRevision=%lld"),
-		*InstanceId.ToString(EGuidFormats::DigitsWithHyphens), ExpectedLibraryRevision,
-		ExpectedEquipmentRevision);
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	switch (CatQueryTerminalReplay(TakeTeamEquipmentTerminalCache,
-		TakeTeamEquipmentPayloadByRequest, RequestId, PayloadSignature, Result, MarkCommandReplayed))
-	{
-	case ECatTerminalReplayOutcome::PayloadMismatch:
-		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=team_equipment_take_payload_mismatch RequestId=%s"),
-			*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
-		return;
-	case ECatTerminalReplayOutcome::Replayed:
-		return;
-	case ECatTerminalReplayOutcome::FirstAttempt:
-		break;
-	}
-
-	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	UCatEquipmentComponent* Equipment =
-		ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr;
-	UCatTeamEquipmentLibrary* Library =
-		GetWorld() ? GetWorld()->GetSubsystem<UCatTeamEquipmentLibrary>() : nullptr;
-	const APlayerState* CurrentPlayerState = PlayerState;
-	if (!Equipment || !Library || !CurrentPlayerState || !CurrentPlayerState->GetUniqueId().IsValid())
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	else
-	{
-		FCatTeamEquipmentTakeCommand Take;
-		Take.Context.RequestId = RequestId;
-		Take.Context.ExpectedRevision = ExpectedLibraryRevision;
-		Take.Context.StableNetId = CurrentPlayerState->GetUniqueId()->ToString();
-		Take.InstanceId = InstanceId;
-		FCatTeamEquipmentInstance Instance;
-		const ECatDomainCommandError Admission = Library->ValidateTake(Take, Instance);
-		if (Admission != ECatDomainCommandError::None)
-		{
-			Result.Error = Admission;
-			Result.Revision = Equipment->GetSnapshot().Revision;
-		}
-		else
-		{
-			// 取用链必须先确认个人 Equipment 当前收得下目标实例，再删除团队库实例。
-			// 旧顺序先装备再删库，删除失败时会留下“个人已装备、公库仍有同一实例”的分叉。
-			const ECatDomainCommandError EquipAdmission = Equipment->ValidateTeamLibraryEquipFromAuthority(
-				RequestId, ExpectedEquipmentRevision, Instance);
-			if (EquipAdmission != ECatDomainCommandError::None)
-			{
-				Result.Error = EquipAdmission;
-				Result.Revision = Equipment->GetSnapshot().Revision;
-			}
-			else
-			{
-				const FCatTeamEquipmentGrantResult Taken = Library->TakeInstance(Take);
-				const bool bLibraryTakeStanding = Taken.Instance.InstanceId.IsValid()
-					&& (Taken.Command.bCommitted || Taken.Command.Error == ECatDomainCommandError::AlreadyResolved);
-				if (!bLibraryTakeStanding)
-				{
-					Result = Taken.Command;
-					UE_LOG(LogCatfishing, Error,
-						TEXT("Event=team_equipment_take_failed_after_precheck RequestId=%s Error=%s"),
-						*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-						*UEnum::GetValueAsString(Taken.Command.Error));
-				}
-				else
-				{
-					Result = Equipment->EquipFromTeamLibraryFromAuthority(RequestId,
-						ExpectedEquipmentRevision, Taken.Instance);
-				}
-			}
-		}
-	}
-	TakeTeamEquipmentTerminalCache.Add(RequestId, Result);
-	TakeTeamEquipmentPayloadByRequest.Add(RequestId, PayloadSignature);
 }
 
 // 修竿 RPC 路由流程：只把营地、RequestId 和装备 Revision 投给 BodyAction Ability；Ability 未接管时保持 fail-closed。

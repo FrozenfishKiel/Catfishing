@@ -81,7 +81,7 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APlayerController> BoundPlayerController;
 
-	/** 当前页面读取的背包 Model；PageController 不直接订阅鱼护、装备或待取装备复制源。 */
+	/** 当前页面读取的背包 Model；PageController 不直接订阅鱼护、外部容器或本人装备复制源。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatInventoryModel> BoundModel;
 

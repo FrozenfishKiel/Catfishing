@@ -215,7 +215,7 @@ function Invoke-UIReachWBPCreate {
     # 拆分模块和关键控件名是生成脚本与正式 WBP 之间的最小握手信号。
     # 这里不检查美术细节，只防止仍生成旧总入口或漏掉背包格子/商店/提示模块。
     $LogText = Get-Content -LiteralPath $LogFile -Raw
-    if ($LogText -notmatch "CREATE_UI_MODULE_WBPS_PASS" -or $LogText -notmatch "InventorySlotRoot=UserWidgetNotButton" -or $LogText -notmatch "SlotContainer=InventorySlotWrapBox" -or $LogText -notmatch "InventoryEquipmentText=EquipmentTextBlock" -or $LogText -notmatch "InventoryConsumablesText=ConsumablesTextBlock" -or $LogText -notmatch "InventoryTeamEquipmentText=TeamEquipmentTextBlock" -or $LogText -notmatch "ShopOwner=InteractionObject" -or $LogText -notmatch "ShopKiosk=/Game/ShopEconomy/BP_CatShopKiosk" -or $LogText -notmatch "InteractAction=/Game/Input/InputAction/IA_Interact" -or $LogText -notmatch "InteractContext=/Game/Input/InputContext/IMC_InputContext" -or $LogText -notmatch "InteractKey=E" -or $LogText -match "EnsureFailed|LogPython: Error") {
+    if ($LogText -notmatch "CREATE_UI_MODULE_WBPS_PASS" -or $LogText -notmatch "InventorySlotRoot=UserWidgetNotButton" -or $LogText -notmatch "SlotContainer=InventorySlotWrapBox" -or $LogText -notmatch "InventoryEquipmentText=EquipmentTextBlock" -or $LogText -notmatch "InventoryConsumablesText=ConsumablesTextBlock" -or $LogText -notmatch "ShopOwner=InteractionObject" -or $LogText -notmatch "ShopKiosk=/Game/ShopEconomy/BP_CatShopKiosk" -or $LogText -notmatch "InteractAction=/Game/Input/InputAction/IA_Interact" -or $LogText -notmatch "InteractContext=/Game/Input/InputContext/IMC_InputContext" -or $LogText -notmatch "InteractKey=E" -or $LogText -match "EnsureFailed|LogPython: Error") {
         throw ("UIReach WBP create log is not green: {0}" -f $LogFile)
     }
 }

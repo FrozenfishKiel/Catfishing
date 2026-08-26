@@ -10,8 +10,8 @@ $ProjectFile = Join-Path $ProjectRoot "Catfishing.uproject"
 $EngineRoot = if ($env:UE_ROOT) { $env:UE_ROOT } else { "D:\UE_5.8" }
 $Editor = Join-Path $EngineRoot "Engine\Binaries\Win64\UnrealEditor-Cmd.exe"
 $BuildTool = Join-Path $EngineRoot "Engine\Build\BatchFiles\Build.bat"
-$EvidenceRoot = Join-Path $ProjectRoot "Saved\Automation\EquipmentTeamLibraryShop"
-$RuntimeProbe = Join-Path $ProjectRoot "Scripts\verify_equipment_teamlibrary_shop_runtime.py"
+$EvidenceRoot = Join-Path $ProjectRoot "Saved\Automation\EquipmentShop"
+$RuntimeProbe = Join-Path $ProjectRoot "Scripts\verify_equipment_shop_runtime.py"
 $TranscriptStarted = $false
 $TranscriptLogFile = $null
 
@@ -73,24 +73,26 @@ function Assert-NoBinaryTextPattern {
 }
 
 function Invoke-ModuleStaticCheck {
-    Assert-TextPattern "EquipmentTeamLibraryShop" ".harness/harness.json" "module harness"
-    Assert-TextPattern "equipment_teamlibrary_shop_static_check" ".harness/harness.json" "static verification entry"
-    Assert-TextPattern "equipment_teamlibrary_shop_build" ".harness/harness.json" "build verification entry"
-    Assert-TextPattern "equipment_teamlibrary_shop_automation" ".harness/harness.json" "automation verification entry"
-    Assert-TextPattern "equipment_teamlibrary_shop_runtime" ".harness/harness.json" "runtime verification entry"
-    Assert-TextPattern "EquipmentTeamLibraryShop" ".codex/state/equipment-teamlibrary-shop-harness.json" "module harness state"
-    Assert-TextPattern "EquipmentTeamLibraryShop" ".codex/state/equipment-teamlibrary-shop-context.json" "module context state"
-    Assert-TextPattern "Equipment / TeamLibrary / Shop" "Docs/Development" "human progress entry"
+    Assert-TextPattern "EquipmentShop" ".harness/harness.json" "module harness"
+    Assert-TextPattern "equipment_shop_static_check" ".harness/harness.json" "static verification entry"
+    Assert-TextPattern "equipment_shop_build" ".harness/harness.json" "build verification entry"
+    Assert-TextPattern "equipment_shop_automation" ".harness/harness.json" "automation verification entry"
+    Assert-TextPattern "equipment_shop_runtime" ".harness/harness.json" "runtime verification entry"
+    Assert-TextPattern "Equipment / Shop" "Docs/Development" "human progress entry"
     Assert-TextPattern "bAutoConfigureStarterLoadout=False" "Config/DefaultGame.ini" "developer starter auto loadout disabled"
     Assert-TextPattern "Equip_Rod_StarterT1" "Config/DefaultGame.ini" "formal starter rod asset entry"
     Assert-TextPattern "Equip_Bait_Bug" "Config/DefaultGame.ini" "formal bait asset entry"
     Assert-TextPattern "Equip_Chum_Bug" "Config/DefaultGame.ini" "formal chum asset entry"
     Assert-NoTextPattern "/Game/Data/Equipment/DA_.*_Basic|Rod_Basic|Bait_Basic|Chum_Basic|FakeBait_Giant" "Config/DefaultGame.ini" "legacy Basic equipment or fake bait id in runtime config"
     Assert-NoBinaryTextPattern "FakeBait_|/Game/Data/Equipment/DA_.*_Basic|Rod_Basic|Bait_Basic|Chum_Basic" "Content/Catfishing/Data/Equipment" "legacy Basic equipment or fake bait id in formal equipment assets"
+    Assert-NoTextPattern "CatTeamEquipment|TeamLibrary|团队库|装备库|待取装备" "Source/Catfishing" "removed team equipment library source semantics"
+    Assert-NoTextPattern "EquipmentTeamLibraryShop|equipment_teamlibrary_shop|verify_equipment_teamlibrary_shop|EQUIPMENT_TEAMLIBRARY_SHOP" ".harness" "removed team equipment library harness semantics"
+    Assert-NoTextPattern "团队库|装备库|待取装备" "Docs/Architecture/项目技术方案.md" "architecture docs must describe personal equipment delivery"
+    Assert-NoTextPattern "团队库|装备库|待取装备" "Docs/Development/需求对齐差距清单.md" "progress docs must describe personal equipment delivery"
     Assert-TextPattern "FreeBugBaitClaim" "Config/DefaultGame.ini" "free formal bait shop entry"
     Assert-TextPattern "FreeBugBaitClaim" "Source/Catfishing/ShopEconomy/Tests/CatShopEconomySettingsTests.cpp" "shop settings free bait expectation"
     Assert-TextPattern "DirectClientGrantDisabled" "Source/Catfishing/Framework/Game/CatGameplayTypes.cpp" "direct client consumable grant disabled"
-    Assert-TextPattern "EQUIPMENT_TEAMLIBRARY_SHOP_RUNTIME_PASS" "Scripts/verify_equipment_teamlibrary_shop_runtime.py" "runtime pass marker"
+    Assert-TextPattern "EQUIPMENT_SHOP_RUNTIME_PASS" "Scripts/verify_equipment_shop_runtime.py" "runtime pass marker"
     Assert-TextPattern "Normal-bait Begin without inventory is rejected" "Source/Catfishing/Equipment/Tests/CatEquipmentFishingUseTests.cpp" "normal bait inventory gate test"
     Assert-TextPattern "Normal bait commit removes exactly one bait" "Source/Catfishing/Equipment/Tests/CatEquipmentFishingUseTests.cpp" "normal bait commit consumes inventory test"
     Assert-TextPattern "SubmitFishSale" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "fish sale coordinator"
@@ -98,17 +100,18 @@ function Invoke-ModuleStaticCheck {
     Assert-TextPattern "ValidateFishSale" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "fish sale wallet precheck"
     Assert-TextPattern "ApplyFishSale" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "fish sale wallet apply"
     Assert-TextPattern "StolenEscrow" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "stolen escrow fail closed"
-    Assert-TextPattern "ValidateTeamLibraryEquipFromAuthority" "Source/Catfishing/Equipment/CatEquipmentComponent.h" "team library equip precheck declaration"
-    Assert-TextPattern "ValidateTeamLibraryEquipFromAuthority" "Source/Catfishing/Framework/Game/CatGameplayTypes.cpp" "team library equip precheck call"
-    Assert-TextPattern "TakeInstance" "Source/Catfishing/Framework/Game/CatGameplayTypes.cpp" "team library take call"
+    Assert-TextPattern "ValidateEquipmentGrantFromAuthority" "Source/Catfishing/Equipment/CatEquipmentComponent.h" "personal equipment grant precheck declaration"
+    Assert-TextPattern "ValidateEquipmentGrantFromAuthority" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "shop equipment grant precheck call"
+    Assert-TextPattern "GrantEquipmentFromAuthority" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "shop equipment grant delivery call"
     Assert-TextPattern "ServerPublishEquipmentUnlocks" "Source/Catfishing/Framework/Game/CatGameplayTypes.h" "profile unlock publish RPC"
     Assert-TextPattern "DOREPLIFETIME\(ThisClass, AuthorizedEquipmentUnlockIds\)" "Source/Catfishing/Framework/Game/CatGameplayTypes.cpp" "authorized unlock replication"
     Assert-TextPattern "RecordCommittedUnlock" "Source/Catfishing/Collection/CatRunImprintService.h" "unlock grant delivery entry"
     Assert-TextPattern "GetEquipmentUnlockSnapshot" "Source/Catfishing/Profile/CatProfileSubsystem.h" "profile unlock snapshot"
     Assert-TextPattern "FishSaleConsumesFishCreditsWalletAndReplays" "Source/Catfishing/ShopEconomy/Tests/CatShopOrderCoordinatorTests.cpp" "fish sale replay test"
-    Assert-TextPattern "TakeFlowPrecheckProtectsLibraryBeforeEquip" "Source/Catfishing/Equipment/Tests/CatTeamEquipmentLibraryAdapterTests.cpp" "team library take order test"
+    Assert-TextPattern "EquipmentClaimGrantsPersonalRod" "Source/Catfishing/ShopEconomy/Tests/CatShopOrderCoordinatorTests.cpp" "shop personal equipment grant test"
+    Assert-TextPattern "ShopGrantEquipsPersonalRodAndReplays" "Source/Catfishing/Equipment/Tests/CatEquipmentComponentTests.cpp" "personal equipment grant replay test"
     Assert-TextPattern "UnlockGrantAckAuthorizesEquipment" "Source/Catfishing/Collection/Tests/CatRunImprintServiceTests.cpp" "unlock grant ack test"
-    Write-Host "EQUIPMENT_TEAMLIBRARY_SHOP_STATIC_PASS FormalConfig=True RejectsLegacyBasic=True RejectsLegacyAssetStrings=True NormalBaitInventoryGate=True"
+    Write-Host "EQUIPMENT_SHOP_STATIC_PASS FormalConfig=True RejectsLegacyBasic=True RejectsLegacyAssetStrings=True NormalBaitInventoryGate=True"
 }
 
 function Invoke-ModuleBuild {
@@ -130,7 +133,7 @@ function Invoke-ModuleBuild {
     if ($BuildOutputLog -and -not (Test-Path -LiteralPath $BuildOutputLog -PathType Leaf)) {
         throw ("CatfishingEditor build did not produce UBT log: {0}" -f $BuildOutputLog)
     }
-    Write-Host ("EQUIPMENT_TEAMLIBRARY_SHOP_BUILD_PASS UBTLog={0} ExitCode=0" -f $BuildOutputLog)
+    Write-Host ("EQUIPMENT_SHOP_BUILD_PASS UBTLog={0} ExitCode=0" -f $BuildOutputLog)
 }
 
 function Invoke-AutomationBatch {
@@ -181,7 +184,8 @@ function Invoke-ModuleAutomation {
         Name = "ShopOrderCoordinator"
         ExpectedTests = @(
             "Catfishing.Unit.ShopEconomy.OrderCoordinator.FishSaleConsumesFishCreditsWalletAndReplays",
-            "Catfishing.Unit.ShopEconomy.OrderCoordinator.FishSalePrecheckFailureDoesNotConsumeFish"
+            "Catfishing.Unit.ShopEconomy.OrderCoordinator.FishSalePrecheckFailureDoesNotConsumeFish",
+            "Catfishing.Unit.ShopEconomy.OrderCoordinator.EquipmentClaimGrantsPersonalRod"
         )
     }
     $Batches += [pscustomobject]@{
@@ -202,11 +206,10 @@ function Invoke-ModuleAutomation {
         )
     }
     $Batches += [pscustomobject]@{
-        Filter = "Catfishing.Unit.Equipment.TeamLibrary"
-        Name = "EquipmentTeamLibrary"
+        Filter = "Catfishing.Unit.Equipment.Component.ShopGrantEquipsPersonalRodAndReplays"
+        Name = "EquipmentPersonalGrant"
         ExpectedTests = @(
-            "Catfishing.Unit.Equipment.TeamLibrary.GrantTakeReplayAndClose",
-            "Catfishing.Unit.Equipment.TeamLibrary.TakeFlowPrecheckProtectsLibraryBeforeEquip"
+            "Catfishing.Unit.Equipment.Component.ShopGrantEquipsPersonalRodAndReplays"
         )
     }
     $Batches += [pscustomobject]@{
@@ -288,7 +291,7 @@ function Invoke-ModuleAutomation {
 function Invoke-ModuleRuntime {
     Assert-ToolFile $ProjectFile "Catfishing project"
     Assert-ToolFile $Editor "Unreal Editor commandlet"
-    Assert-ToolFile $RuntimeProbe "EquipmentTeamLibraryShop runtime probe"
+    Assert-ToolFile $RuntimeProbe "EquipmentShop runtime probe"
     $RuntimeRoot = Join-Path $EvidenceRoot ("Runtime-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
     $LogFile = Join-Path $RuntimeRoot "Runtime.log"
     New-Item -ItemType Directory -Path $RuntimeRoot -Force | Out-Null
@@ -296,15 +299,15 @@ function Invoke-ModuleRuntime {
         "-ExecutePythonScript=$RuntimeProbe" `
         "-abslog=$LogFile"
     if ($LASTEXITCODE -ne 0) {
-        throw ("EquipmentTeamLibraryShop runtime probe failed with exit code {0}" -f $LASTEXITCODE)
+        throw ("EquipmentShop runtime probe failed with exit code {0}" -f $LASTEXITCODE)
     }
     if (-not (Test-Path -LiteralPath $LogFile)) {
-        throw "EquipmentTeamLibraryShop runtime probe did not produce a fresh log"
+        throw "EquipmentShop runtime probe did not produce a fresh log"
     }
     $LogText = Get-Content -LiteralPath $LogFile -Raw
-    $PassCount = ([regex]::Matches($LogText, "EQUIPMENT_TEAMLIBRARY_SHOP_RUNTIME_PASS")).Count
+    $PassCount = ([regex]::Matches($LogText, "EQUIPMENT_SHOP_RUNTIME_PASS")).Count
     if ($PassCount -ne 1 -or $LogText -match "LogPython: Error") {
-        throw ("EquipmentTeamLibraryShop runtime probe is not green: passMarkers={0} log={1}" -f $PassCount, $LogFile)
+        throw ("EquipmentShop runtime probe is not green: passMarkers={0} log={1}" -f $PassCount, $LogFile)
     }
 }
 

@@ -82,7 +82,7 @@ public:
 	 * 价格由服务器按体重轴自己算，调用方带来的报价只是用来核对；两者不一致就整笔拒绝，不会按其中任何一个入账。
 	 */
 	FCatShopTransactionResult ApplyFishSale(const FCatShopFishSaleCommand& Command);
-	/** 用 Equipment 或团队装备库的成功回执确认订单已交付；它不重新扣公款、库存或生成第二条账本。 */
+	/** 用下游领域的成功回执确认订单已交付；它不重新扣公款、库存或生成第二条账本。 */
 	FCatShopTransactionResult ConfirmTransactionDelivery(const FCatShopDeliveryConfirmationCommand& Command);
 
 	/**

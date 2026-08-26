@@ -178,7 +178,7 @@ bool UCatInventoryPageController::IsInventoryOpen() const
 	return bInventoryOpen;
 }
 
-// 外部刷新流程：只要求 Model 重读鱼护、装备和待取装备快照；PageController 不缓存任何后端事实。
+// 外部刷新流程：只要求 Model 重读鱼护、本人装备和外部容器快照；PageController 不缓存任何后端事实。
 void UCatInventoryPageController::RefreshModel()
 {
 	if (UCatInventoryModel* Model = BoundModel.Get())
