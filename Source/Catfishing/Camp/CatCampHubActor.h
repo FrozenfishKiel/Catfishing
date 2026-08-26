@@ -12,7 +12,7 @@ class USceneComponent;
 /** 篝火公共回看请求；它只启动可跳过表现，不参与普通夜晚 ready 或 StateTree 转移。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatCampfirePlaybackRequested, FGuid);
 
-/** Lake 中唯一固定营地宿主；提供休息、救援落点、鱼缸转移和可选回看，不支持建造/装饰/搬迁。 */
+/** Lake 中唯一固定营地宿主；提供休息、救援落点、共享鱼缸引用和可选回看，不支持建造/装饰/搬迁。 */
 UCLASS()
 class CATFISHING_API ACatCampHubActor : public AActor
 {
@@ -28,11 +28,7 @@ public:
 	/** 伙伴把倒地目标送到固定 RescuePoint；Teleport 成功后才提交 CarriedToCamp 事实。 */
 	FCatDomainCommandResult RescueToCamp(AController* HelpingController, ACatCharacter* TargetCharacter, FGuid RequestId);
 
-	/** 把本人鱼护的一条鱼原子转入固定共享鱼缸；双 Revision 与权限仍由 Items 唯一裁决。 */
-	FCatDomainCommandResult TransferFishToTank(AController* RequestingController, FGuid RequestId,
-		FGuid FishInstanceId, int64 ExpectedGuardRevision, int64 ExpectedTankRevision);
-
-	/** 读取固定共享鱼缸当前快照；UI 只用它取得转缸 ExpectedRevision，不获得鱼缸写权限。 */
+	/** 读取固定共享鱼缸当前快照；UI 只用它投影共享容器，不获得鱼缸写权限。 */
 	bool TryGetSharedFishTankSnapshot(FCatContainerSnapshot& OutSnapshot) const;
 
 	/** 判断传入鱼缸是否就是本营地显式关联的共享鱼缸；交互组件只用它解析 Camp 上下文，不取得写权限。 */
@@ -63,7 +59,7 @@ private:
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<USceneComponent> RescuePoint;
 
-	/** 关卡显式关联的共享鱼缸；空引用时转移 fail-closed，不在命令中临时 Spawn。 */
+	/** 关卡显式关联的共享鱼缸；空引用时外部容器上下文 fail-closed，不在命令中临时 Spawn。 */
 	UPROPERTY(EditInstanceOnly, Category = "Camp")
 	TObjectPtr<ACatFishTankActor> SharedFishTank;
 

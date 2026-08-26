@@ -1,7 +1,7 @@
-"""只读核对 UIReach 在正式 Lake 中使用正式 WBP 前端和 MVC 后端入口。
+"""只读核对 UIReach 在正式 Lake 中使用拆分后的正式 WBP 前端和 MVC 后端入口。
 
 脚本不启动 PIE、不保存资源，也不创建任何玩法交易。Automation 负责验证 LocalPlayer UI 协调器和根 View 的代码合同；
-这里补的是运行入口证据：正式 Lake、GameMode/Controller、UI Settings、LakeReach C++ View 基类、配置的 WBP 前端与 MVC 后端类都能被项目运行配置找到。
+这里补的是运行入口证据：正式 Lake、GameMode/Controller、UI Settings、拆分 UI C++ View 基类、配置的 WBP 前端与 MVC 后端类都能被项目运行配置找到。
 """
 
 import unreal
@@ -99,7 +99,7 @@ def _is_default_object_instance_of(cls, unreal_type_name: str) -> bool:
 def main() -> None:
     """执行 UIReach Lake Runtime 探针。
 
-    先只读加载 Lake 并核对正式框架类，再读取 UI Settings 与 UIReach 类反射。
+    先只读加载 Lake 并核对正式框架类，再读取 UI Settings 与拆分 UI 类反射。
     PASS 标记输出关键类名、WBP 配置和地图事实，供 PowerShell 模式确认本轮证据不是旧日志或空跑。
     """
     level_editor = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
@@ -124,45 +124,68 @@ def main() -> None:
 
     ui_settings_class = _load_class("/Script/Catfishing.CatUISettings")
     ui_settings = unreal.get_default_object(ui_settings_class)
-    enabled = bool(_get_property(ui_settings, "b_enable_lake_reach_view", "bEnableLakeReachView"))
-    configured_wbp = _as_name(_get_property(ui_settings, "lake_reach_widget_class", "LakeReachWidgetClass"))
-    menu_action_path = _as_name(_get_property(ui_settings, "lake_menu_toggle_action", "LakeMenuToggleAction"))
-    menu_context_path = _as_name(_get_property(ui_settings, "lake_menu_input_mapping_context", "LakeMenuInputMappingContext"))
-    _require(enabled, "LakeReach 正式 WBP View 应在默认配置中允许装配")
-    _require("WBP_CatLakeReach" in configured_wbp, f"LakeReach 默认 WBP 配置异常: {configured_wbp}")
-    _require("IA_LakeMenu" in menu_action_path, f"Lake 菜单 Action 配置异常: {menu_action_path}")
-    _require("IMC_InputContext" in menu_context_path, f"Lake 菜单 IMC 配置异常: {menu_context_path}")
+    enabled = bool(_get_property(ui_settings, "b_enable_player_lake_ui", "bEnablePlayerLakeUI"))
+    configured_hud = _as_name(_get_property(ui_settings, "hud_widget_class", "HUDWidgetClass"))
+    configured_inventory = _as_name(_get_property(ui_settings, "inventory_widget_class", "InventoryWidgetClass"))
+    configured_slot = _as_name(_get_property(ui_settings, "inventory_slot_widget_class", "InventorySlotWidgetClass"))
+    configured_interaction = _as_name(_get_property(ui_settings, "interaction_prompt_widget_class", "InteractionPromptWidgetClass"))
+    configured_shop = _as_name(_get_property(ui_settings, "shop_widget_class", "ShopWidgetClass"))
+    configured_collection = _as_name(_get_property(ui_settings, "collection_widget_class", "CollectionWidgetClass"))
+    inventory_action_path = _as_name(_get_property(ui_settings, "inventory_toggle_action", "InventoryToggleAction"))
+    interact_action_path = _as_name(_get_property(ui_settings, "interaction_confirm_action", "InteractionConfirmAction"))
+    gameplay_context_path = _as_name(_get_property(ui_settings, "gameplay_input_mapping_context", "GameplayInputMappingContext"))
+    _require(enabled, "拆分玩家 UI 应在默认配置中允许装配")
+    _require("WBP_CatHUD" in configured_hud, f"HUD 默认 WBP 配置异常: {configured_hud}")
+    _require("WBP_CatInventory" in configured_inventory, f"Inventory 默认 WBP 配置异常: {configured_inventory}")
+    _require("WBP_CatInventorySlot" in configured_slot, f"InventorySlot 默认 WBP 配置异常: {configured_slot}")
+    _require("WBP_CatInteractionPrompt" in configured_interaction, f"Interaction 默认 WBP 配置异常: {configured_interaction}")
+    _require("WBP_CatShop" in configured_shop, f"Shop 默认 WBP 配置异常: {configured_shop}")
+    _require("WBP_CatCollection" in configured_collection, f"Collection 默认 WBP 配置异常: {configured_collection}")
+    _require("IA_LakeMenu" in inventory_action_path, f"背包 Action 配置异常: {inventory_action_path}")
+    _require("IA_Interact" in interact_action_path, f"交互 Action 配置异常: {interact_action_path}")
+    _require("IMC_InputContext" in gameplay_context_path, f"Gameplay IMC 配置异常: {gameplay_context_path}")
     _require(unreal.load_asset("/Game/Input/InputAction/IA_LakeMenu") is not None, "无法加载 IA_LakeMenu 输入资产")
+    _require(unreal.load_asset("/Game/Input/InputAction/IA_Interact") is not None, "无法加载 IA_Interact 输入资产")
     _require(unreal.load_asset("/Game/Input/InputContext/IMC_InputContext") is not None, "无法加载 IMC_InputContext 输入资产")
 
     local_ui_class = _load_class("/Script/Catfishing.CatLocalPlayerUISubsystem")
-    model_class = _load_class("/Script/Catfishing.CatLakeReachModel")
-    page_controller_class = _load_class("/Script/Catfishing.CatLakeReachPageController")
-    lake_reach_base_class = _load_class("/Script/Catfishing.CatLakeReachWidget")
-    lake_reach_wbp_class = _load_class("/Game/UI/WBP_CatLakeReach.WBP_CatLakeReach_C")
+    hud_base_class = _load_class("/Script/Catfishing.CatHUDWidget")
+    inventory_base_class = _load_class("/Script/Catfishing.CatInventoryWidget")
+    slot_base_class = _load_class("/Script/Catfishing.CatInventorySlotWidget")
+    interaction_base_class = _load_class("/Script/Catfishing.CatInteractionPromptWidget")
+    shop_base_class = _load_class("/Script/Catfishing.CatShopWidget")
+    collection_base_class = _load_class("/Script/Catfishing.CatCollectionWidget")
+    hud_wbp_class = _load_class("/Game/UI/HUD/WBP_CatHUD.WBP_CatHUD_C")
+    inventory_wbp_class = _load_class("/Game/UI/Inventory/WBP_CatInventory.WBP_CatInventory_C")
+    slot_wbp_class = _load_class("/Game/UI/InventorySlot/WBP_CatInventorySlot.WBP_CatInventorySlot_C")
+    interaction_wbp_class = _load_class("/Game/UI/Interaction/WBP_CatInteractionPrompt.WBP_CatInteractionPrompt_C")
+    shop_wbp_class = _load_class("/Game/UI/Shop/WBP_CatShop.WBP_CatShop_C")
+    collection_wbp_class = _load_class("/Game/UI/Collection/WBP_CatCollection.WBP_CatCollection_C")
     _require("CatLocalPlayerUISubsystem" in local_ui_class.get_name(), "UI 根生命周期类未加载到项目模块")
-    _require("CatLakeReachModel" in model_class.get_name(), "UIReach Model 类未加载到项目模块")
-    _require("CatLakeReachPageController" in page_controller_class.get_name(), "UIReach PageController 类未加载到项目模块")
-    _require("CatLakeReachWidget" in lake_reach_base_class.get_name(), "LakeReach C++ View 基类未加载到项目模块")
-    _require("WBP_CatLakeReach_C" in lake_reach_wbp_class.get_name(), "LakeReach WBP 前端类未加载")
-    _require(lake_reach_wbp_class != lake_reach_base_class, "LakeReach 玩家前端不能是原生 C++ View 基类")
-    wbp_inherits_lake_reach_base = (
-        _is_child_of(lake_reach_wbp_class, lake_reach_base_class)
-        or _is_default_object_instance_of(lake_reach_wbp_class, "CatLakeReachWidget")
+    module_classes = (
+        ("HUD", hud_base_class, hud_wbp_class, "CatHUDWidget"),
+        ("Inventory", inventory_base_class, inventory_wbp_class, "CatInventoryWidget"),
+        ("InventorySlot", slot_base_class, slot_wbp_class, "CatInventorySlotWidget"),
+        ("Interaction", interaction_base_class, interaction_wbp_class, "CatInteractionPromptWidget"),
+        ("Shop", shop_base_class, shop_wbp_class, "CatShopWidget"),
+        ("Collection", collection_base_class, collection_wbp_class, "CatCollectionWidget"),
     )
-    _require(
-        wbp_inherits_lake_reach_base,
-        "LakeReach WBP 前端没有继承正式 View 基类: "
-        f"chain={_class_chain_names(lake_reach_wbp_class)} parent={lake_reach_base_class.get_name()}",
-    )
+    for label, base_class, wbp_class, unreal_type_name in module_classes:
+        _require(wbp_class != base_class, f"{label} 玩家前端不能是原生 C++ View 基类")
+        inherits_base = _is_child_of(wbp_class, base_class) or _is_default_object_instance_of(wbp_class, unreal_type_name)
+        _require(
+            inherits_base,
+            f"{label} WBP 前端没有继承正式 View 基类: "
+            f"chain={_class_chain_names(wbp_class)} parent={base_class.get_name()}",
+        )
 
     unreal.log(
         "UI_REACH_RUNTIME_PASS "
         f"LakeGameMode={actual_game_mode} Controller={controller_class} "
-        f"LocalUI={local_ui_class.get_name()} Model={model_class.get_name()} PageController={page_controller_class.get_name()} "
-        f"RootViewBase={lake_reach_base_class.get_name()} RootClass={lake_reach_wbp_class.get_name()} "
-        f"LakeReachDefault=Enabled ConfiguredWBP={configured_wbp} "
-        f"MenuAction={menu_action_path} MenuContext={menu_context_path} "
+        f"LocalUI={local_ui_class.get_name()} PlayerLakeUI=Enabled "
+        f"HUD={hud_wbp_class.get_name()} Inventory={inventory_wbp_class.get_name()} Slot={slot_wbp_class.get_name()} "
+        f"Interaction={interaction_wbp_class.get_name()} Shop={shop_wbp_class.get_name()} Collection={collection_wbp_class.get_name()} "
+        f"InventoryAction={inventory_action_path} InteractAction={interact_action_path} GameplayContext={gameplay_context_path} "
         f"PlayerStarts={len(player_starts)} Regions={len(regions)}"
     )
 

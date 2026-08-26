@@ -9,9 +9,10 @@
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
+#include "Growth/CatGrowthComponent.h"
 #include "UI/CatFishingViewBridge.h"
 
-// 绑定流程：校验本地玩家、Controller、Character 和 ASC，随后订阅三项属性、Condition 和 Fishing 命令结果，最后发布首份 HUD 投影。
+// 绑定流程：校验本地玩家、Controller、Character 和 ASC，随后订阅三项属性、Condition、Growth 和 Fishing 命令结果，最后发布首份 HUD 投影。
 bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController, ACatCharacter* InCharacter)
 {
 	Unbind();
@@ -34,6 +35,7 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 	BoundPlayerController = InController;
 	BoundAbilitySystem = AbilitySystem;
 	BoundCondition = InCharacter->GetConditionComponent();
+	BoundGrowth = InCharacter->GetGrowthComponent();
 	if (ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(InController))
 	{
 		BoundFishingCommand = CatController->GetFishingCommandComponent();
@@ -48,6 +50,10 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 	{
 		ConditionChangedHandle = Condition->OnSnapshotChanged.AddUObject(this, &ThisClass::HandleConditionChanged);
 	}
+	if (UCatGrowthComponent* Growth = BoundGrowth.Get())
+	{
+		GrowthChangedHandle = Growth->OnSnapshotChanged.AddUObject(this, &ThisClass::HandleGrowthChanged);
+	}
 	if (UCatFishingCommandComponent* FishingCommand = BoundFishingCommand.Get())
 	{
 		FishingCommand->OnResultReceived.AddDynamic(this, &ThisClass::HandleFishingCommandResult);
@@ -59,7 +65,7 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 	return true;
 }
 
-// 解绑流程：从原 ASC、Condition、Fishing 命令和 Bridge 移除订阅，再清弱引用、最近结果和投影，防止跨 Pawn 显示旧状态。
+// 解绑流程：从原 ASC、Condition、Growth、Fishing 命令和 Bridge 移除订阅，再清弱引用、最近结果和投影，防止跨 Pawn 显示旧状态。
 void UCatHUDModel::Unbind()
 {
 	if (UAbilitySystemComponent* AbilitySystem = BoundAbilitySystem.Get())
@@ -71,6 +77,10 @@ void UCatHUDModel::Unbind()
 	if (UCatConditionComponent* Condition = BoundCondition.Get())
 	{
 		Condition->OnSnapshotChanged.Remove(ConditionChangedHandle);
+	}
+	if (UCatGrowthComponent* Growth = BoundGrowth.Get())
+	{
+		Growth->OnSnapshotChanged.Remove(GrowthChangedHandle);
 	}
 	if (UCatFishingCommandComponent* FishingCommand = BoundFishingCommand.Get())
 	{
@@ -85,11 +95,13 @@ void UCatHUDModel::Unbind()
 	FishingStrengthChangedHandle.Reset();
 	FightStaminaChangedHandle.Reset();
 	ConditionChangedHandle.Reset();
+	GrowthChangedHandle.Reset();
 	FishingViewChangedHandle.Reset();
 	BoundLocalPlayer.Reset();
 	BoundPlayerController.Reset();
 	BoundAbilitySystem.Reset();
 	BoundCondition.Reset();
+	BoundGrowth.Reset();
 	BoundFishingCommand.Reset();
 	FishingViewBridge = nullptr;
 	LastFishingCommandResult = FCatFishingCommandResult();
@@ -97,7 +109,7 @@ void UCatHUDModel::Unbind()
 	ViewState = FCatHUDViewState();
 }
 
-// 刷新流程：读取 ASC 三项数值、Condition 和 FishingBridge 当前投影，再生成 HUD 文本并广播完整状态。
+// 刷新流程：读取 ASC 三项数值、Condition、Growth 和 FishingBridge 当前投影，再生成 HUD 文本并广播完整状态。
 void UCatHUDModel::Refresh()
 {
 	FCatHUDViewState NewState;
@@ -111,6 +123,10 @@ void UCatHUDModel::Refresh()
 	{
 		NewState.Condition = Condition->GetSnapshot();
 	}
+	if (const UCatGrowthComponent* Growth = BoundGrowth.Get())
+	{
+		NewState.Growth = Growth->GetSnapshot();
+	}
 	if (FishingViewBridge && FishingViewBridge->GetBoundSession())
 	{
 		NewState.Fishing = FishingViewBridge->GetViewState();
@@ -118,8 +134,13 @@ void UCatHUDModel::Refresh()
 	}
 	NewState.LastFishingCommandResult = LastFishingCommandResult;
 	NewState.bHasFishingCommandResult = bHasFishingCommandResult;
-	NewState.CatStatusText = FText::FromString(FString::Printf(TEXT("猫状态：中毒 %.0f | 钓鱼力量 %.0f | 搏斗体力 %.0f"),
-		NewState.Poison, NewState.FishingStrength, NewState.FightStamina));
+	NewState.CatStatusText = FText::FromString(FString::Printf(TEXT("猫状态：中毒 %.0f | 钓鱼力量 %.0f | 搏斗体力 %.0f | 成长总经验 %d，当前槽 %d，待选 %d"),
+		NewState.Poison,
+		NewState.FishingStrength,
+		NewState.FightStamina,
+		NewState.Growth.TotalExperience,
+		NewState.Growth.ExperienceInCurrentSlot,
+		NewState.Growth.PendingChoiceCount));
 	NewState.FishingFeedbackText = NewState.bHasFishingSession
 		? FText::FromString(TEXT("钓鱼反馈：正在钓鱼，等待会话更新"))
 		: FText::FromString(TEXT("钓鱼反馈：当前没有进行中的钓鱼会话"));
@@ -148,6 +169,12 @@ void UCatHUDModel::HandleAttributeChanged(const FOnAttributeChangeData& ChangeDa
 
 // Condition 变化流程：重读完整 HUD 事实，避免增量顺序形成 UI 私有状态。
 void UCatHUDModel::HandleConditionChanged()
+{
+	Refresh();
+}
+
+// Growth 变化流程：重读完整 HUD 事实，让经验槽、待选次数和身体状态保持同帧投影。
+void UCatHUDModel::HandleGrowthChanged()
 {
 	Refresh();
 }

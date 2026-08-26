@@ -38,13 +38,29 @@ struct FCatShopEntryView
 	UPROPERTY(BlueprintReadOnly)
 	int32 UnitPrice = 0;
 
-	/** 配置里的初始库存；当前公开快照暂不暴露实时库存，有限库存最终仍由服务器拒绝或成交。 */
+	/** 配置冻结时的本轮起始库存；UI 用它显示“剩余/初始”的分母，服务器库存仍是最终裁决。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 InitialStock = 0;
+
+	/** GameState 公开货架里复制出的剩余库存；无限库存时保持 0，只看 bUnlimitedStock。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 RemainingStock = 0;
+
+	/** 当前公开经济快照是否包含这条商品的库存事实；缺失时 UI 禁用点击，避免按配置猜库存。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bStockAvailable = false;
 
 	/** 商品是否无限库存；免费饵和保底竿通常依赖它保证永远能领。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bUnlimitedStock = false;
+
+	/** 当前公开经济快照下该商品是否已售罄；服务器仍是最终裁决，UI 只用它禁用明显无效点击。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bSoldOut = false;
+
+	/** 当前团队公款是否足够支付该条目；免费领取始终为 true，付费项随公款变化刷新。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bAffordable = true;
 
 	/** 该条目是否应该走免费领取 RPC；它来自 ShopEconomy Settings 的免费条目白名单。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -54,16 +70,16 @@ struct FCatShopEntryView
 	UPROPERTY(BlueprintReadOnly)
 	bool bActionEnabled = false;
 
-	/** 给 WBP 商品行文本绑定的中文摘要。 */
+	/** 商品行当前可展示的中文摘要；Model 写入价格、库存和余额提示，WBP 只负责显示。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText DisplayText;
 
-	/** 给 WBP 按钮文本绑定的中文动作名。 */
+	/** 商品行按钮当前应显示的动作名；Model 按免费领取白名单写入“领取”或“购买”。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText ActionText;
 };
 
-/** 商店界面的完整展示投影；它只包含商品、公款和最近提交提示，不包含个人背包或 HUD 状态。 */
+/** 商店界面的完整展示投影；它只包含商品、公款和最近提交提示，不包含背包或 HUD 状态。 */
 USTRUCT(BlueprintType)
 struct FCatShopViewState
 {
@@ -77,7 +93,7 @@ struct FCatShopViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bEconomyAvailable = false;
 
-	/** 团队公款和公开流水快照；客户端只读它，不能通过 UI 修改钱包。 */
+	/** 团队公款和公开经济记录快照；客户端只读它，不能通过 UI 修改公款。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatShopPublicEconomySnapshot Economy;
 
@@ -93,7 +109,7 @@ struct FCatShopViewState
 	UPROPERTY(BlueprintReadOnly)
 	FName LastEntryId = NAME_None;
 
-	/** 当前是否已有购买或领取请求提交后等待公开快照刷新。 */
+	/** 当前是否已有购买或领取请求提交后等待商店快照同步。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bActionPending = false;
 

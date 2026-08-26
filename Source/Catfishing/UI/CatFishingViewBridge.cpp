@@ -4,6 +4,7 @@
 #include "EngineUtils.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
+#include "GameFramework/Actor.h"
 #include "GameFramework/PlayerState.h"
 
 UCatFishingViewBridge* UCatFishingViewBridge::CreateFishingViewBridge(UObject* Outer)
@@ -56,6 +57,8 @@ bool UCatFishingViewBridge::BindSession(ACatFishingSession* Session)
 	if (!Session) return false;
 	BoundSession = Session;
 	SnapshotChangedHandle = Session->OnSnapshotChanged.AddUObject(this, &ThisClass::RefreshFromSession);
+	Session->OnDestroyed.AddDynamic(this, &ThisClass::HandleBoundSessionDestroyed);
+	Session->OnEndPlay.AddDynamic(this, &ThisClass::HandleBoundSessionEndPlay);
 	RefreshFromSession();
 	return true;
 }
@@ -66,9 +69,12 @@ void UCatFishingViewBridge::UnbindSession()
 	if (ACatFishingSession* Session = BoundSession.Get())
 	{
 		Session->OnSnapshotChanged.Remove(SnapshotChangedHandle);
+		Session->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleBoundSessionDestroyed);
+		Session->OnEndPlay.RemoveDynamic(this, &ThisClass::HandleBoundSessionEndPlay);
 	}
 	SnapshotChangedHandle.Reset();
 	BoundSession.Reset();
+	ViewState = FCatFishingViewState();
 }
 
 void UCatFishingViewBridge::BeginDestroy()
@@ -84,6 +90,25 @@ void UCatFishingViewBridge::RefreshFromSession()
 	const ACatFishingSession* Session = BoundSession.Get();
 	if (!Session) return;
 	ViewState = FCatFishingViewState::FromSnapshot(Session->GetSnapshot());
+	OnViewStateChanged.Broadcast(ViewState);
+	OnViewStateChangedBP.Broadcast(ViewState);
+}
+
+void UCatFishingViewBridge::HandleBoundSessionDestroyed(AActor* DestroyedActor)
+{
+	// 销毁回调只表示当前绑定会话不再可展示；清空后广播默认 DTO，具体重新查找由 HUD Model 下一次调和负责。
+	(void)DestroyedActor;
+	UnbindSession();
+	OnViewStateChanged.Broadcast(ViewState);
+	OnViewStateChangedBP.Broadcast(ViewState);
+}
+
+void UCatFishingViewBridge::HandleBoundSessionEndPlay(AActor* Actor, const EEndPlayReason::Type EndPlayReason)
+{
+	// EndPlay 覆盖关卡切换和 Destroy 生命周期；重复回调会因 BoundSession 已清空而保持幂等。
+	(void)Actor;
+	(void)EndPlayReason;
+	UnbindSession();
 	OnViewStateChanged.Broadcast(ViewState);
 	OnViewStateChangedBP.Broadcast(ViewState);
 }

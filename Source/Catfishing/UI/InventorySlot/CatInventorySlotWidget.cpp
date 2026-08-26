@@ -1,6 +1,5 @@
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
 
-#include "Blueprint/DragDropOperation.h"
 #include "Components/TextBlock.h"
 #include "Input/Reply.h"
 #include "InputCoreTypes.h"
@@ -19,7 +18,7 @@ void UCatInventorySlotWidget::RenderSlot(const FCatInventorySlotView& SlotView)
 	BP_RenderSlot(LastSlotView);
 }
 
-// 状态读取流程：返回最近投影的只读引用；调用者只能展示或比较下标，不能通过它修改鱼护。
+// 状态读取流程：返回最近投影的只读引用；调用者只能展示或比较下标，不能通过它修改后端容器。
 const FCatInventorySlotView& UCatInventorySlotWidget::GetLastSlotView() const
 {
 	return LastSlotView;
@@ -52,17 +51,55 @@ FReply UCatInventorySlotWidget::NativeOnMouseButtonDown(const FGeometry& InGeome
 	return Super::NativeOnMouseButtonDown(InGeometry, InMouseEvent);
 }
 
-// 拖拽流程：创建轻量 Operation 只为让 UMG 拖拽链路成立；拖拽结果不直接改容器，主界面或蓝图后续仍必须走服务器命令。
+// 拖拽流程：
+// 1. 只有 Items 容器物体允许拖拽；当前鱼竿槽能选中查看，但不能被当成后端容器源。
+// 2. 容器物体拖拽冻结一份源格只读投影，避免刷新 WrapBox 后继续依赖旧 Widget 指针。
+// 3. Operation 使用独立临时文字控件作为拖拽视觉；真实移动必须等目标格 NativeOnDrop 广播给 PageController 后提交服务器。
 void UCatInventorySlotWidget::NativeOnDragDetected(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent,
 	UDragDropOperation*& OutOperation)
 {
 	(void)InGeometry;
 	(void)InMouseEvent;
+	OutOperation = nullptr;
+	if (!LastSlotView.bCanDrag || LastSlotView.SlotSource != ECatInventorySlotSource::ContainerObject
+		|| !LastSlotView.bOccupied || LastSlotView.ObjectKind == ECatContainedObjectKind::Unknown
+		|| !LastSlotView.ObjectInstanceId.IsValid())
+	{
+		return;
+	}
 	OnPointerActionRequested.Broadcast(LastSlotView.SlotIndex, ECatInventorySlotPointerAction::DragStarted);
-	OutOperation = NewObject<UDragDropOperation>(this);
+	UCatInventoryDragDropOperation* DragOperation = NewObject<UCatInventoryDragDropOperation>(this);
+	OutOperation = DragOperation;
 	if (OutOperation)
 	{
-		OutOperation->Payload = this;
-		OutOperation->DefaultDragVisual = this;
+		DragOperation->SourceSlot = LastSlotView;
+		UTextBlock* DragVisual = NewObject<UTextBlock>(this);
+		if (DragVisual)
+		{
+			DragVisual->SetText(LastSlotView.DisplayText);
+			OutOperation->DefaultDragVisual = DragVisual;
+		}
 	}
+}
+
+// Drop 流程：
+// 1. 只接受本类创建的 UCatInventoryDragDropOperation，其他 UMG 拖拽交回父类。
+// 2. 源和目标都必须是 Items 容器槽；当前鱼竿槽不接收 Drop，避免把 Equipment 当容器 index 提交。
+// 3. 本格只广播源和目标快照，不做本地数组搬运；服务器复制回来后 Model 会重建最终显示。
+bool UCatInventorySlotWidget::NativeOnDrop(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent,
+	UDragDropOperation* InOperation)
+{
+	(void)InGeometry;
+	(void)InDragDropEvent;
+	const UCatInventoryDragDropOperation* DragOperation = Cast<UCatInventoryDragDropOperation>(InOperation);
+	if (!DragOperation || LastSlotView.SlotSource != ECatInventorySlotSource::ContainerObject
+		|| DragOperation->SourceSlot.SlotSource != ECatInventorySlotSource::ContainerObject
+		|| !DragOperation->SourceSlot.bOccupied
+		|| DragOperation->SourceSlot.ObjectKind == ECatContainedObjectKind::Unknown
+		|| !DragOperation->SourceSlot.ObjectInstanceId.IsValid())
+	{
+		return Super::NativeOnDrop(InGeometry, InDragDropEvent, InOperation);
+	}
+	OnSlotDropRequested.Broadcast(DragOperation->SourceSlot, LastSlotView);
+	return true;
 }

@@ -30,7 +30,7 @@ struct FCatFishInstance
 	UPROPERTY(BlueprintReadOnly)
 	FName FishDefinitionId = NAME_None;
 
-	/** 首个合法近岸抢抄者的服务器私有 StableNetId；无 UPROPERTY 因而不进入复制 DTO，公开身份继续读取 PlayerState::UniqueId。 */
+	/** 鱼实例的服务器私有归属 StableNetId；首次捕获写入首抄者，后续共享缸取回仍用它判断谁能拿回个人鱼护。 */
 	FString OwnerStableNetId;
 
 	/** 产生该实例的 FishingSession ID；用于捕获幂等审计，不用于恢复旧会话。 */
@@ -46,7 +46,48 @@ struct FCatFishInstance
 	double WeightKilograms = 0.0;
 };
 
-/** 一个 Items 聚合的复制读模型；服务端事务整体发布，网络出口用 FastArray 增量收敛实物鱼。 */
+/** 容器内物体的领域类别；它用于路由容器规则，不表示所有道具必须继承同一个万能 Item 类型。 */
+UENUM(BlueprintType)
+enum class ECatContainedObjectKind : uint8
+{
+	/** 未能识别的容器物体；UI 不允许拖拽，服务器事务也会 fail-closed。 */
+	Unknown,
+	/** 一条局内实物鱼；鱼的吃、卖、献祭等行为仍由鱼领域结构承载。 */
+	Fish,
+	/** 一件有实例身份的装备；后续鱼竿、鱼漂等进入容器时使用同一容器移动语义。 */
+	Equipment,
+	/** 一组可堆叠耗材；后续鱼饵、窝料、草药等进入容器时按数量扩展具体载荷。 */
+	Consumable
+};
+
+/** 容器读模型中的通用物体投影；当前由权威鱼槽派生，具体行为仍回到各自领域。 */
+USTRUCT(BlueprintType)
+struct FCatContainedObjectInstance
+{
+	GENERATED_BODY()
+
+	/** 容器物体在当前局内的稳定实例 ID；UI 拖拽和服务器事务会把它与槽位下标一起复核。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid ObjectInstanceId;
+
+	/** 该对象属于哪个领域类别；PageController 只转发，Items 服务按类别选择正式容器策略。 */
+	UPROPERTY(BlueprintReadOnly)
+	ECatContainedObjectKind ObjectKind = ECatContainedObjectKind::Unknown;
+
+	/** 对象对应的稳定定义 ID；蓝图展示和服务器策略可读取它，但定义字段仍由各领域资产决定。 */
+	UPROPERTY(BlueprintReadOnly)
+	FName DefinitionId = NAME_None;
+
+	/** 该对象当前在容器中占用的堆叠数量；非堆叠实例保持 1，后续耗材容器可用它表达栈数量。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 StackQuantity = 1;
+
+	/** 当 ObjectKind 为 Fish 时携带的鱼领域副本；其他类别在正式接入统一容器槽位前不会由 Items 持久化。 */
+	UPROPERTY(BlueprintReadOnly)
+	FCatFishInstance Fish;
+};
+
+/** 一个 Items 聚合的复制读模型；服务端事务整体发布，网络出口先复制正式鱼事实，再派生通用容器物体投影。 */
 USTRUCT(BlueprintType)
 struct FCatContainerSnapshot
 {
@@ -68,10 +109,30 @@ struct FCatContainerSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	int32 Capacity = 0;
 
-	/** 当前仍存在的实物鱼；预留只锁定服务端写口，不从复制数组提前移除。 */
+	/** 当前容器的鱼槽数组；数组下标就是容器格子，FishInstanceId 无效的条目表示中间空格占位。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatFishInstance> Fish;
+
+	/** 当前容器的通用物体槽位投影；它由权威鱼槽派生给 UI 读，空槽保持默认对象且 UI 不直接写回它。 */
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FCatContainedObjectInstance> Objects;
 };
+
+namespace CatItems
+{
+	/** 由鱼领域实例构造容器通用投影；调用方只得到可移动对象身份，不获得新的鱼写口。 */
+	FCatContainedObjectInstance MakeContainedObjectFromFish(const FCatFishInstance& Fish);
+
+	/** 按当前鱼数组刷新通用容器物体投影中的鱼对象；服务发布和客户端复制重建都用它保持 UI 读模型一致。 */
+	void RebuildContainedObjectsFromFish(FCatContainerSnapshot& Snapshot);
+
+	/** 计算容器当前真实鱼占用量；容量检查和 UI 摘要读这个口径，不能把空槽占位的数组长度算进去。 */
+	int32 GetContainedObjectCount(const FCatContainerSnapshot& Snapshot);
+
+	/** 按容器槽位下标读取当前支持的通用对象；空槽返回 false，调用方不能把数组长度误当成物体数量。 */
+	bool TryGetContainedObjectAt(const FCatContainerSnapshot& Snapshot, int32 ObjectIndex,
+		FCatContainedObjectInstance& OutObject);
+}
 
 /** FishingSession 提交给 Items 的捕获命令；StableNetId 与重量均由服务器会话填写，客户端不能直接调用服务写口。 */
 USTRUCT()
@@ -101,7 +162,38 @@ struct FCatCaptureCommitCommand
 	int32 SacrificeContribution = 0;
 };
 
-/** 单条鱼原子转移命令；Social 偷取与鱼护入缸共用，不允许先删源再尝试目标。 */
+/** 容器内任意正式物体的转移命令；客户端只提交对象身份和源/目标格意图，具体策略由 Items 服务集中裁决。 */
+USTRUCT()
+struct FCatContainerObjectTransferCommand
+{
+	GENERATED_BODY()
+
+	/** 转移请求的身份、RequestId 与源容器 ExpectedRevision。 */
+	FCatDomainCommandContext Context;
+
+	/** 要移动的容器物体类别；它决定 Items 选择鱼、装备或耗材等领域策略。 */
+	ECatContainedObjectKind ObjectKind = ECatContainedObjectKind::Unknown;
+
+	/** 源容器中要移动的唯一物体实例 ID；服务器会和源槽位一起复核，防止拖拽旧引用改错物体。 */
+	FGuid ObjectInstanceId;
+
+	/** 当前源容器 ID。 */
+	FGuid SourceContainerId;
+
+	/** Drop 源格在源容器内的下标；服务器用它确认该格当前仍是 ObjectInstanceId。 */
+	int32 SourceContainerSlotIndex = INDEX_NONE;
+
+	/** 目标容器 ID；目标容量在同一提交前检查。 */
+	FGuid TargetContainerId;
+
+	/** Drop 目标在目标容器内的下标；Items 按源/目标槽位执行同容器交换或跨容器移动。 */
+	int32 TargetContainerSlotIndex = INDEX_NONE;
+
+	/** 跨容器事务对目标数组的乐观并发前提；服务与源版本一起比较，任一陈旧都保持两边原样。 */
+	int64 ExpectedTargetRevision = 0;
+};
+
+/** 单条鱼原子转移命令；它是当前鱼领域策略适配层，通用容器入口会先转成该命令再提交。 */
 USTRUCT()
 struct FCatFishTransferCommand
 {
@@ -110,14 +202,20 @@ struct FCatFishTransferCommand
 	/** 转移请求的身份、RequestId 与源容器 ExpectedRevision。 */
 	FCatDomainCommandContext Context;
 
-	/** 源容器中要移动的唯一实物鱼。 */
+	/** 源容器中要移动的唯一实物鱼；它必须仍位于 SourceContainerSlotIndex 指向的槽位。 */
 	FGuid FishInstanceId;
 
 	/** 当前源容器 ID。 */
 	FGuid SourceContainerId;
 
+	/** Drop 源格在源容器内的下标；数组槽位是本容器权威位置，不由鱼实例自己保存。 */
+	int32 SourceContainerSlotIndex = INDEX_NONE;
+
 	/** 目标容器 ID；目标容量在同一提交前检查。 */
 	FGuid TargetContainerId;
+
+	/** Drop 目标在目标容器内的下标；空槽接收移动物体，已占用槽位在允许时与源槽交换。 */
+	int32 TargetContainerSlotIndex = INDEX_NONE;
 
 	/** 跨容器事务对目标数组的乐观并发前提；服务与源版本一起比较，任一陈旧都保持两边原样，避免只移动一侧。 */
 	int64 ExpectedTargetRevision = 0;

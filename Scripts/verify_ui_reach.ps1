@@ -25,6 +25,17 @@ function Assert-ToolFile {
     }
 }
 
+function Assert-NoToolFile {
+    <#
+    验证旧源码文件已经从项目中移除。
+    Static 模式用它防止已拆掉的一体化 UI 再次进入构建，而不是只检查旧函数名不出现。
+    #>
+    param([string]$Path, [string]$Description)
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        throw ("removed file still exists: {0} path={1}" -f $Description, $Path)
+    }
+}
+
 function Assert-TextPattern {
     <#
     对一个项目文件执行稳定文本合同检查。
@@ -60,6 +71,17 @@ function Assert-NoTextPattern {
     }
 }
 
+function Report-KnownLegacyAsset {
+    <#
+    报告仍需通过编辑器清理的旧二进制资产。
+    Static 模式不直接删除 UAsset；这里把风险显式写入输出，避免旧 LakeReach 源码已清而资产边界被误读成全清。
+    #>
+    param([string]$Path, [string]$Description)
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        Write-Warning ("legacy binary asset still requires editor-side cleanup: {0} path={1}" -f $Description, $Path)
+    }
+}
+
 function Invoke-UIReachStaticCheck {
     <#
     执行拆分 UI 模块静态合同检查。
@@ -79,12 +101,38 @@ function Invoke-UIReachStaticCheck {
     Assert-TextPattern "UCatInventorySlotWidget" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "Inventory Slot Widget class"
     Assert-TextPattern "NativeOnMouseButtonDown" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "slot mouse override"
     Assert-TextPattern "NativeOnDragDetected" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "slot drag override"
+    Assert-TextPattern "NativeOnDrop" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "slot drop override"
+    Assert-TextPattern "UCatInventoryDragDropOperation" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "slot drag payload is stable DTO"
+    Assert-TextPattern "OnSlotDropRequested" "Source/Catfishing/UI/Inventory/CatInventoryWidget.h" "Inventory forwards slot drop intent"
+    Assert-TextPattern "MoveObjectBetweenContainers" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory has real slot-based object move action"
+    Assert-TextPattern "CurrentRod" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory projects current rod as a first-class slot"
+    Assert-TextPattern "MakeCurrentRodSlotView" "Source/Catfishing/UI/Inventory/CatInventoryModel.cpp" "Inventory builds a visible current rod slot from Equipment"
+    Assert-TextPattern "SlotSource != ECatInventorySlotSource::ContainerObject" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.cpp" "Inventory drag/drop rejects non-container equipment slots"
+    Assert-TextPattern "Containers" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory projects a list of containers instead of a single fish guard"
+    Assert-TextPattern "SetExternalContainerContexts" "Source/Catfishing/UI/Inventory/CatInventoryModel.h" "Inventory accepts extensible external container context"
+    Assert-TextPattern "SourceContainerSlotIndex" "Source/Catfishing/Framework/Game/CatGameplayTypes.h" "slot move RPC carries source container slot"
+    Assert-TextPattern "ServerTransferObjectBetweenContainers" "Source/Catfishing/Framework/Game/CatGameplayTypes.h" "slot move reaches PlayerController RPC"
+    Assert-TextPattern "TransferContainedObject" "Source/Catfishing/Items/CatItemsService.cpp" "slot move uses Items object transfer seam"
+    Assert-NoToolFile (Join-Path $ProjectRoot "Source\Catfishing\UI\CatLakeReachWidget.h") "removed LakeReach widget header"
+    Assert-NoToolFile (Join-Path $ProjectRoot "Source\Catfishing\UI\CatLakeReachWidget.cpp") "removed LakeReach widget source"
+    Assert-NoToolFile (Join-Path $ProjectRoot "Source\Catfishing\UI\CatLakeReachModel.h") "removed LakeReach model header"
+    Assert-NoToolFile (Join-Path $ProjectRoot "Source\Catfishing\UI\CatLakeReachModel.cpp") "removed LakeReach model source"
+    Assert-NoToolFile (Join-Path $ProjectRoot "Source\Catfishing\UI\CatLakeReachPageController.h") "removed LakeReach page controller header"
+    Assert-NoToolFile (Join-Path $ProjectRoot "Source\Catfishing\UI\CatLakeReachPageController.cpp") "removed LakeReach page controller source"
+    Assert-NoToolFile (Join-Path $ProjectRoot "Source\Catfishing\UI\Tests\CatLakeReachWidgetAssetTests.cpp") "removed LakeReach WBP asset automation"
+    Report-KnownLegacyAsset (Join-Path $ProjectRoot "Content\UI\WBP_CatLakeReach.uasset") "old LakeReach WBP asset"
+    Assert-NoTextPattern "CatLakeReach|WBP_CatLakeReach|LakeReachWidgetClass|bEnableLakeReachView|LoadLakeReach|ToggleLakeMenu|IsLakeMenuOpen|AttachLakePawn|DetachLakePawn" "Source/Catfishing" "source must not keep the removed one-page LakeReach UI entry"
+    Assert-NoTextPattern "TransferSelectedFishToTank" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory must not expose old one-off fish tank action"
+    Assert-NoTextPattern "TransferFishToTankButton" "Source/Catfishing/UI/Inventory/CatInventoryWidget.h" "Inventory must not keep old one-off fish tank button"
+    Assert-NoTextPattern "TransferFishToTankButton" "Source/Catfishing/UI/Tests/CatUIModuleWidgetAssetTests.cpp" "split Inventory WBP create must not regenerate old one-off fish tank button"
+    Assert-NoTextPattern "ServerTransferFishToTank" "Source/Catfishing/Framework/Game/CatGameplayTypes.h" "PlayerController must not expose old one-off fish tank RPC"
+    Assert-NoTextPattern "ServerTransferFishBetweenContainers" "Source/Catfishing/Framework/Game/CatGameplayTypes.h" "PlayerController cross-container RPC must be object-based, not fish-only"
     Assert-NoTextPattern "UButton" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "Inventory slot must not be a Button"
     Assert-TextPattern "UCatShopWidget" "Source/Catfishing/UI/Shop/CatShopWidget.h" "Shop Widget class"
     Assert-TextPattern "UCatShopModel" "Source/Catfishing/UI/Shop/CatShopModel.h" "Shop Model class"
     Assert-TextPattern "UCatShopPageController" "Source/Catfishing/UI/Shop/CatShopPageController.h" "Shop PageController class"
     Assert-TextPattern "UCatShopInteractionComponent" "Source/Catfishing/UI/Shop/CatShopInteractionComponent.h" "Shop opened by interactable object component"
-    Assert-TextPattern "ACatShopKioskActor" "Source/Catfishing/UI/Shop/CatShopKioskActor.h" "placeable shop interaction actor"
+    Assert-TextPattern "ACatShopKioskActor" "Source/Catfishing/ShopEconomy/CatShopKioskActor.h" "placeable shop interaction actor"
     Assert-TextPattern "CreateWidget<UCatShopWidget>" "Source/Catfishing/UI/Shop/CatShopInteractionComponent.cpp" "Shop Widget created by interaction object"
     Assert-NoTextPattern "CreateWidget<UCatShopWidget>" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "LocalPlayer must not precreate Shop"
     Assert-TextPattern "ServerSubmitShopPurchase" "Source/Catfishing/UI/Shop/CatShopPageController.cpp" "shop purchase reaches PlayerController RPC"
@@ -95,6 +143,7 @@ function Invoke-UIReachStaticCheck {
     Assert-TextPattern "LoadInteractionConfirmAction" "Source/Catfishing/UI/CatUISettings.cpp" "interaction confirm action loader"
     Assert-TextPattern "ResolveInteractionConfirmKeyName" "Source/Catfishing/UI/CatUISettings.cpp" "interaction key resolved from existing IMC"
     Assert-TextPattern "InteractWithFocusedTarget" "Source/Catfishing/UI/Interaction/CatInteractionPageController.cpp" "confirm key reaches focused target"
+    Assert-TextPattern "FindComponentByClass<UCatInteractionTargetComponent>" "Source/Catfishing/Framework/Game/CatGameplayTypes.cpp" "server reach gate reuses interaction target radius when available"
     Assert-TextPattern "UCatCollectionWidget" "Source/Catfishing/UI/Collection/CatCollectionWidget.h" "Collection Widget class"
     Assert-TextPattern "UCatCollectionModel" "Source/Catfishing/UI/Collection/CatCollectionModel.h" "Collection Model class"
     Assert-TextPattern "LoadInventoryToggleAction" "Source/Catfishing/UI/CatUISettings.cpp" "Inventory input action loader"
@@ -166,7 +215,7 @@ function Invoke-UIReachWBPCreate {
     # 拆分模块和关键控件名是生成脚本与正式 WBP 之间的最小握手信号。
     # 这里不检查美术细节，只防止仍生成旧总入口或漏掉背包格子/商店/提示模块。
     $LogText = Get-Content -LiteralPath $LogFile -Raw
-    if ($LogText -notmatch "CREATE_UI_MODULE_WBPS_PASS" -or $LogText -notmatch "InventorySlotRoot=UserWidgetNotButton" -or $LogText -notmatch "SlotContainer=InventorySlotWrapBox" -or $LogText -notmatch "ShopOwner=InteractionObject" -or $LogText -notmatch "ShopKiosk=/Game/UI/Shop/BP_CatShopKiosk" -or $LogText -notmatch "InteractAction=/Game/Input/InputAction/IA_Interact" -or $LogText -notmatch "InteractContext=/Game/Input/InputContext/IMC_InputContext" -or $LogText -notmatch "InteractKey=E" -or $LogText -match "EnsureFailed|LogPython: Error") {
+    if ($LogText -notmatch "CREATE_UI_MODULE_WBPS_PASS" -or $LogText -notmatch "InventorySlotRoot=UserWidgetNotButton" -or $LogText -notmatch "SlotContainer=InventorySlotWrapBox" -or $LogText -notmatch "InventoryEquipmentText=EquipmentTextBlock" -or $LogText -notmatch "InventoryConsumablesText=ConsumablesTextBlock" -or $LogText -notmatch "InventoryTeamEquipmentText=TeamEquipmentTextBlock" -or $LogText -notmatch "ShopOwner=InteractionObject" -or $LogText -notmatch "ShopKiosk=/Game/ShopEconomy/BP_CatShopKiosk" -or $LogText -notmatch "InteractAction=/Game/Input/InputAction/IA_Interact" -or $LogText -notmatch "InteractContext=/Game/Input/InputContext/IMC_InputContext" -or $LogText -notmatch "InteractKey=E" -or $LogText -match "EnsureFailed|LogPython: Error") {
         throw ("UIReach WBP create log is not green: {0}" -f $LogFile)
     }
 }
@@ -270,24 +319,19 @@ function Invoke-UIReachAutomation {
     # 这些用例分开守住两层边界：
     # Reach Widget 用例证明按钮只发 UI 意图；交互用例证明“吃鱼”意图能走到后端并把结果带回 Model。
     Assert-AutomationReport -IndexFile $IndexFile -LogFile $LogFile -ExpectedTests @(
-        "Catfishing.Unit.UI.Settings.LakeReachUsesConfiguredWidgetClass",
+        "Catfishing.Unit.UI.Settings.SplitPlayerModulesUseConfiguredWidgetClasses",
         "Catfishing.Unit.UI.TravelWidget.ClassAndOpaqueHandlesRemainViewOnly",
         "Catfishing.Unit.UI.LocalPlayerUISubsystem.IsLocalPlayerScopedAndNotGlobalSingleton",
-        "Catfishing.Unit.UI.LocalPlayerUISubsystem.ClearsFishingSessionWhenObservedActorEnds",
-        "Catfishing.Unit.UI.LocalPlayerUISubsystem.AttachesSingleLakeReachRootForPossessedCat",
+        "Catfishing.Unit.UI.LocalPlayerUISubsystem.AttachesSplitPlayerModulesForPossessedCat",
         "Catfishing.Unit.UI.LocalPlayerUISubsystem.OnlineTravelWidgetStaysOutOfLake",
-        "Catfishing.Unit.UI.FishingViewState.ProjectsReplicatedFactsWithoutGameplayObjects",
-        "Catfishing.Unit.UI.Reach.BlueprintViewCarriesHudFishingGuardAndCollectionFacts",
-        "Catfishing.Unit.UI.Reach.FishGuardWidgetEmitsPureSelectionAndActionIntents",
-        "Catfishing.Unit.UI.Reach.ShopWidgetEmitsPurePurchaseAndFreeClaimIntents",
-        "Catfishing.Unit.UI.Reach.FishGuardConsumeClickReachesBackendAndUpdatesGuard"
+        "Catfishing.Unit.UI.FishingViewState.ProjectsReplicatedFactsWithoutGameplayObjects"
     )
 }
 
 function Invoke-UIReachRuntimeAttachAutomation {
     <#
     运行 UIReach Runtime 的 LocalPlayer 装配用例。
-    该用例在命令行 Editor 内构造带 GameViewportClient 的 Game World，先证明关闭 gate 不装配半套 MVC，再显式开启 gate 触发 AttachLakePawn，并要求日志出现唯一 ui_reach_attached/RootCount=1/RootClass=WBP_CatLakeReach_C。
+    该用例在命令行 Editor 内构造带 GameViewportClient 的 Game World，先证明关闭 gate 不装配半套模块，再显式开启 gate 触发拆分玩家 UI，并要求日志出现唯一 ui_player_modules_attached。
     #>
     param([string]$RuntimeRoot)
     $AttachRoot = Join-Path $RuntimeRoot "AttachAutomation"
@@ -295,7 +339,7 @@ function Invoke-UIReachRuntimeAttachAutomation {
     $LogFile = Join-Path $AttachRoot "Automation.log"
     New-Item -ItemType Directory -Path $AttachRoot -Force | Out-Null
     & $Editor $ProjectFile -unattended -nop4 -nosplash -nullrhi -DDC-ForceMemoryCache `
-        "-ExecCmds=Automation RunTests Catfishing.Unit.UI.LocalPlayerUISubsystem.AttachesSingleLakeReachRootForPossessedCat;Quit" `
+        "-ExecCmds=Automation RunTests Catfishing.Unit.UI.LocalPlayerUISubsystem.AttachesSplitPlayerModulesForPossessedCat;Quit" `
         "-TestExit=Automation Test Queue Empty" `
         "-ReportExportPath=$ReportRoot" `
         "-abslog=$LogFile"
@@ -307,11 +351,11 @@ function Invoke-UIReachRuntimeAttachAutomation {
         throw "UIReach runtime attach automation did not produce a fresh report and log"
     }
     Assert-AutomationReport -IndexFile $IndexFile -LogFile $LogFile -ExpectedTests @(
-        "Catfishing.Unit.UI.LocalPlayerUISubsystem.AttachesSingleLakeReachRootForPossessedCat"
+        "Catfishing.Unit.UI.LocalPlayerUISubsystem.AttachesSplitPlayerModulesForPossessedCat"
     )
     $LogText = Get-Content -LiteralPath $LogFile -Raw
-    $AttachCount = ([regex]::Matches($LogText, "Event=ui_reach_attached")).Count
-    if ($AttachCount -ne 1 -or $LogText -notmatch "RootCount=1" -or $LogText -notmatch "RootClass=WBP_CatLakeReach_C") {
+    $AttachCount = ([regex]::Matches($LogText, "Event=ui_player_modules_attached")).Count
+    if ($AttachCount -ne 1 -or $LogText -notmatch "HUD=WBP_CatHUD_C" -or $LogText -notmatch "Inventory=WBP_CatInventory_C" -or $LogText -notmatch "Interaction=WBP_CatInteractionPrompt_C") {
         throw ("UIReach runtime attach log is not green: attachMarkers={0} log={1}" -f $AttachCount, $LogFile)
     }
 }
@@ -319,7 +363,7 @@ function Invoke-UIReachRuntimeAttachAutomation {
 function Invoke-UIReachRuntime {
     <#
     在真实 Editor 命令行中执行 Lake 冷启动验证。
-    流程先用 Python 只读探针检查正式 Lake、GameMode/Controller、UI Settings、UIReach C++ 基类和正式 WBP 类；再运行 LocalPlayer 装配用例要求 ui_reach_attached/RootCount=1/RootClass=WBP_CatLakeReach_C。
+    流程先用 Python 只读探针检查正式 Lake、GameMode/Controller、UI Settings、拆分 UI C++ 基类和正式 WBP 类；再运行 LocalPlayer 装配用例要求 ui_player_modules_attached。
     #>
     Assert-ToolFile $ProjectFile "Catfishing project"
     Assert-ToolFile $Editor "Unreal Editor commandlet"

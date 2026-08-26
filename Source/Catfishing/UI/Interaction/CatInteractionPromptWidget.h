@@ -39,7 +39,7 @@ public:
 	/** 接收交互系统或 LocalPlayer 传入的只读提示投影，并同步给 WBP 表现。 */
 	void RenderPrompt(const FCatInteractionPromptViewState& ViewState);
 
-	/** 返回最近一次交互提示投影；蓝图只读它，不通过它打开商店或鱼缸。 */
+	/** 暴露最近一次交互提示投影给蓝图表现；它只描述提示内容，不能替代交互组件执行打开逻辑。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Interaction")
 	const FCatInteractionPromptViewState& GetLastPromptViewState() const;
 

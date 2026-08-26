@@ -1,8 +1,103 @@
 #include "Items/CatItemsService.h"
 
+#include "Data/CatFishCatalogSettings.h"
+#include "Data/CatFishDefinition.h"
 #include "Logging/CatLog.h"
 #include "Engine/World.h"
 #include "Items/CatContainerReplicationComponent.h"
+
+namespace
+{
+	// 有效鱼槽判断流程：服务器分配过 FishInstanceId 才代表真实鱼；默认构造项只是数组里的空格。
+	bool IsValidFishSlot(const FCatFishInstance& Fish)
+	{
+		return Fish.FishInstanceId.IsValid();
+	}
+
+	// 槽位占用判断流程：先确认下标在数组内，再确认该位置有真实鱼；数组之外在容量内可视为空格。
+	bool IsFishSlotOccupied(const FCatContainerSnapshot& Snapshot, const int32 SlotIndex)
+	{
+		return Snapshot.Fish.IsValidIndex(SlotIndex) && IsValidFishSlot(Snapshot.Fish[SlotIndex]);
+	}
+
+	// 鱼实例定位流程：按槽位数组线性查找真实鱼 ID，返回值就是该鱼当前所在的权威槽位下标。
+	int32 FindFishSlotById(const FCatContainerSnapshot& Snapshot, const FGuid FishInstanceId)
+	{
+		return Snapshot.Fish.IndexOfByPredicate([FishInstanceId](const FCatFishInstance& Fish)
+		{
+			return Fish.FishInstanceId == FishInstanceId;
+		});
+	}
+
+	// 空格查找流程：在容器容量内寻找第一个没有真实鱼的槽位；容量未裁时返回 INDEX_NONE，防止写入无界数组。
+	int32 FindFirstFreeFishSlot(const FCatContainerSnapshot& Snapshot, const int32 Capacity)
+	{
+		if (Capacity <= 0)
+		{
+			return INDEX_NONE;
+		}
+		for (int32 SlotIndex = 0; SlotIndex < Capacity; ++SlotIndex)
+		{
+			if (!IsFishSlotOccupied(Snapshot, SlotIndex))
+			{
+				return SlotIndex;
+			}
+		}
+		return INDEX_NONE;
+	}
+
+	// 槽位扩展流程：只把数组扩到目标槽位可写，不预填整个容量；中间默认项就是可见空格。
+	void EnsureFishSlot(FCatContainerSnapshot& Snapshot, const int32 SlotIndex)
+	{
+		if (SlotIndex >= Snapshot.Fish.Num())
+		{
+			Snapshot.Fish.SetNum(SlotIndex + 1);
+		}
+	}
+
+	// 尾部清理流程：只删除数组末尾连续空槽，保留中间空格，这样拖到后排格子后 UI 仍能按容量显示正确位置。
+	void TrimTrailingEmptyFishSlots(FCatContainerSnapshot& Snapshot)
+	{
+		while (!Snapshot.Fish.IsEmpty() && !IsValidFishSlot(Snapshot.Fish.Last()))
+		{
+			Snapshot.Fish.Pop(EAllowShrinking::No);
+		}
+	}
+
+	// 个人容器离开权限流程：个人鱼护里的鱼只能由主人移出；共享容器不在这里限制取出人，后续目标容器还会复核进入权限。
+	bool CanFishLeaveContainer(const FCatFishInstance& Fish, const ECatContainerKind ContainerKind,
+		const FString& StableNetId)
+	{
+		return ContainerKind != ECatContainerKind::PersonalGuard
+			|| Fish.OwnerStableNetId == StableNetId;
+	}
+
+	// 鱼缸展示资格流程：共享展示容器只接收目录中明确允许展示的鱼，缺定义或未就绪都不能被客户端拖拽绕过。
+	bool CanFishBeDisplayedInTank(const FCatFishInstance& Fish)
+	{
+		const UCatFishDefinition* Definition = GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(
+			Fish.FishDefinitionId);
+		return Definition && Definition->bTankDisplayEligible;
+	}
+
+	// 个人容器进入权限流程：写入个人鱼护时要求鱼主人就是当前玩家；写入共享鱼缸时要求鱼定义允许展示，并保留各自错误码。
+	ECatDomainCommandError ResolveFishEnterContainerError(const FCatFishInstance& Fish,
+		const ECatContainerKind ContainerKind,
+		const FString& StableNetId)
+	{
+		if (ContainerKind == ECatContainerKind::PersonalGuard)
+		{
+			return Fish.OwnerStableNetId == StableNetId
+				? ECatDomainCommandError::None : ECatDomainCommandError::PermissionDenied;
+		}
+		if (ContainerKind == ECatContainerKind::SharedFishTank)
+		{
+			return CanFishBeDisplayedInTank(Fish)
+				? ECatDomainCommandError::None : ECatDomainCommandError::PolicyUndecided;
+		}
+		return ECatDomainCommandError::None;
+	}
+}
 
 // 创建条件流程：只允许 Game/PIE 的 authority World 持有可写 Items；客户端 World 不创建第二份容器聚合。
 bool UCatItemsService::ShouldCreateSubsystem(UObject* Outer) const
@@ -27,7 +122,6 @@ void UCatItemsService::Deinitialize()
 	Super::Deinitialize();
 }
 
-// 容器注册流程：逐项验证组件、ID、类型与个人身份，再建立 Revision=1 的空快照并发布；同 ID 只允许同一组件幂等重放。
 // 容器注册流程：验证 authority 期间传入的宿主、ID、类型和个人身份，再把初始 Revision、容量、主人身份和复制组件写入服务端记录并发布初始快照。
 bool UCatItemsService::RegisterContainer(UCatContainerReplicationComponent* ReplicationComponent, const FGuid ContainerId,
 	const ECatContainerKind Kind, const FString& OwnerStableNetId, const int32 Capacity)
@@ -87,10 +181,11 @@ bool UCatItemsService::TryGetContainerSnapshot(const FGuid ContainerId, FCatCont
 		return false;
 	}
 	OutSnapshot = Record->Snapshot;
+	CatItems::RebuildContainedObjectsFromFish(OutSnapshot);
 	return true;
 }
 
-// 捕获提交流程：先读取终态缓存，再验证命令、预分配鱼 ID、个人鱼护、身份、Revision、容量和冻结定义值；全部满足时只追加一次数组并发布同 Revision 的不可变 Committed DTO。
+// 捕获提交流程：先读取终态缓存，再验证命令、预分配鱼 ID、个人鱼护、身份、Revision、容量和冻结定义值；全部满足时把鱼写入第一个空槽并发布同 Revision 的不可变 Committed DTO。
 FCatCaptureCommitResult UCatItemsService::CommitCapture(const FCatCaptureCommitCommand& Command)
 {
 	FCatCaptureCommitResult Result;
@@ -142,31 +237,42 @@ FCatCaptureCommitResult UCatItemsService::CommitCapture(const FCatCaptureCommitC
 	{
 		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
 	}
-	else if (Target->Snapshot.Fish.Num() + CountReservedReturnSlots(Command.TargetContainerId) >= Target->Capacity)
+	else if (CatItems::GetContainedObjectCount(Target->Snapshot) + CountReservedReturnSlots(Command.TargetContainerId)
+		>= Target->Capacity)
 	{
 		Result.Command.Error = ECatDomainCommandError::CapacityExceeded;
 	}
 	else
 	{
-		FCatFishInstance Fish;
-		Fish.FishInstanceId = Command.FishInstanceId;
-		Fish.FishDefinitionId = Command.FishDefinitionId;
-		Fish.OwnerStableNetId = Command.Context.StableNetId;
-		Fish.SourceFishingSessionId = Command.FishingSessionId;
-		Fish.SacrificeContribution = Command.SacrificeContribution;
-		Fish.WeightKilograms = Command.WeightKilograms;
-		Target->Snapshot.Fish.Add(Fish);
-		++Target->Snapshot.Revision;
-		PublishContainer(*Target);
-		Result.Command.bCommitted = true;
-		Result.Command.Error = ECatDomainCommandError::None;
-		Result.Command.Revision = Target->Snapshot.Revision;
-		Result.Committed.CaptureRequestId = Command.Context.RequestId;
-		Result.Committed.FishingSessionId = Command.FishingSessionId;
-		Result.Committed.FishInstance = Fish;
-		Result.Committed.ContainerId = Command.TargetContainerId;
-		Result.Committed.ContainerRevision = Target->Snapshot.Revision;
-		CaptureByFishingSession.Add(Command.FishingSessionId, Result.Committed);
+		const int32 TargetSlotIndex = FindFirstFreeFishSlot(Target->Snapshot, Target->Capacity);
+		if (TargetSlotIndex == INDEX_NONE)
+		{
+			Result.Command.Error = ECatDomainCommandError::CapacityExceeded;
+		}
+		else
+		{
+			FCatFishInstance Fish;
+			Fish.FishInstanceId = Command.FishInstanceId;
+			Fish.FishDefinitionId = Command.FishDefinitionId;
+			Fish.OwnerStableNetId = Command.Context.StableNetId;
+			Fish.SourceFishingSessionId = Command.FishingSessionId;
+			Fish.SacrificeContribution = Command.SacrificeContribution;
+			Fish.WeightKilograms = Command.WeightKilograms;
+			EnsureFishSlot(Target->Snapshot, TargetSlotIndex);
+			Target->Snapshot.Fish[TargetSlotIndex] = Fish;
+			TrimTrailingEmptyFishSlots(Target->Snapshot);
+			++Target->Snapshot.Revision;
+			PublishContainer(*Target);
+			Result.Command.bCommitted = true;
+			Result.Command.Error = ECatDomainCommandError::None;
+			Result.Command.Revision = Target->Snapshot.Revision;
+			Result.Committed.CaptureRequestId = Command.Context.RequestId;
+			Result.Committed.FishingSessionId = Command.FishingSessionId;
+			Result.Committed.FishInstance = Fish;
+			Result.Committed.ContainerId = Command.TargetContainerId;
+			Result.Committed.ContainerRevision = Target->Snapshot.Revision;
+			CaptureByFishingSession.Add(Command.FishingSessionId, Result.Committed);
+		}
 	}
 	Result.Command.Revision = Target ? Target->Snapshot.Revision : 0;
 	CaptureTerminalCache.Add(CacheKey, Result);
@@ -177,7 +283,44 @@ FCatCaptureCommitResult UCatItemsService::CommitCapture(const FCatCaptureCommitC
 	return Result;
 }
 
-// 原子转移流程：先重放终态，再同时校验两容器、源权限、双 Revision、锁和目标容量；提交时从源副本取鱼，两个数组在任一发布前一起改写并各增一次 Revision。
+// 通用容器物体转移流程：先校验对象级载荷和源/目标槽位意图，再按 ObjectKind 进入集中领域适配；当前只有鱼对象复用原子转移并真正提交，装备或耗材会明确返回策略未裁。
+FCatDomainCommandResult UCatItemsService::TransferContainedObject(const FCatContainerObjectTransferCommand& Command)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = Command.Context.RequestId;
+	Result.Error = ECatDomainCommandError::InvalidPayload;
+	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
+		|| Command.ObjectKind == ECatContainedObjectKind::Unknown || !Command.ObjectInstanceId.IsValid()
+		|| !Command.SourceContainerId.IsValid() || !Command.TargetContainerId.IsValid()
+		|| Command.SourceContainerSlotIndex == INDEX_NONE || Command.TargetContainerSlotIndex == INDEX_NONE)
+	{
+		return Result;
+	}
+	switch (Command.ObjectKind)
+	{
+	case ECatContainedObjectKind::Fish:
+		{
+			FCatFishTransferCommand FishCommand;
+			FishCommand.Context = Command.Context;
+			FishCommand.FishInstanceId = Command.ObjectInstanceId;
+			FishCommand.SourceContainerId = Command.SourceContainerId;
+			FishCommand.SourceContainerSlotIndex = Command.SourceContainerSlotIndex;
+			FishCommand.TargetContainerId = Command.TargetContainerId;
+			FishCommand.TargetContainerSlotIndex = Command.TargetContainerSlotIndex;
+			FishCommand.ExpectedTargetRevision = Command.ExpectedTargetRevision;
+			return TransferOwnedFish(FishCommand);
+		}
+	case ECatContainedObjectKind::Equipment:
+	case ECatContainedObjectKind::Consumable:
+		Result.Error = ECatDomainCommandError::PolicyUndecided;
+		return Result;
+	case ECatContainedObjectKind::Unknown:
+	default:
+		return Result;
+	}
+}
+
+// 原子转移流程：先重放终态，再同时校验两容器、个人归属、双 Revision、源/目标槽位、锁和容量；提交时只交换或移动数组槽位，最后发布一次权威快照。
 FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransferCommand& Command)
 {
 	FCatDomainCommandResult Result;
@@ -185,7 +328,7 @@ FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransf
 	Result.Error = ECatDomainCommandError::InvalidPayload;
 	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty() || !Command.FishInstanceId.IsValid()
 		|| !Command.SourceContainerId.IsValid() || !Command.TargetContainerId.IsValid()
-		|| Command.SourceContainerId == Command.TargetContainerId)
+		|| Command.SourceContainerSlotIndex == INDEX_NONE || Command.TargetContainerSlotIndex == INDEX_NONE)
 	{
 		return Result;
 	}
@@ -199,8 +342,8 @@ FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransf
 		return Result;
 	}
 	FContainerRecord* Source = Containers.Find(Command.SourceContainerId);
-	FContainerRecord* Target = Containers.Find(Command.TargetContainerId);
-	int32 FishIndex = INDEX_NONE;
+	const bool bSameContainer = Command.SourceContainerId == Command.TargetContainerId;
+	FContainerRecord* Target = bSameContainer ? Source : Containers.Find(Command.TargetContainerId);
 	if (!bCommandsOpen)
 	{
 		Result.Error = ECatDomainCommandError::CommandsClosed;
@@ -209,7 +352,10 @@ FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransf
 	{
 		Result.Error = ECatDomainCommandError::NotFound;
 	}
-	else if (Source->Snapshot.Kind != ECatContainerKind::PersonalGuard || Source->OwnerStableNetId != Command.Context.StableNetId)
+	else if ((Source->Snapshot.Kind == ECatContainerKind::PersonalGuard
+			&& Source->OwnerStableNetId != Command.Context.StableNetId)
+		|| (Target->Snapshot.Kind == ECatContainerKind::PersonalGuard
+			&& Target->OwnerStableNetId != Command.Context.StableNetId))
 	{
 		Result.Error = ECatDomainCommandError::PermissionDenied;
 	}
@@ -217,40 +363,101 @@ FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransf
 	{
 		Result.Error = ECatDomainCommandError::RevisionConflict;
 	}
-	else if (ReservationByFish.Contains(Command.FishInstanceId))
-	{
-		Result.Error = ECatDomainCommandError::InvalidPhase;
-	}
-	else if (Target->Capacity <= 0)
+	else if (Source->Capacity <= 0 || Target->Capacity <= 0)
 	{
 		Result.Error = ECatDomainCommandError::PolicyUndecided;
 	}
-	else if (Target->Snapshot.Fish.Num() + CountReservedReturnSlots(Command.TargetContainerId) >= Target->Capacity)
+	else if (Command.SourceContainerSlotIndex < 0 || Command.SourceContainerSlotIndex >= Source->Capacity)
 	{
-		Result.Error = ECatDomainCommandError::CapacityExceeded;
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	}
+	else if (Command.TargetContainerSlotIndex < 0 || Command.TargetContainerSlotIndex >= Target->Capacity)
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
 	}
 	else
 	{
-		FishIndex = Source->Snapshot.Fish.IndexOfByPredicate([&Command](const FCatFishInstance& Fish)
-		{
-			return Fish.FishInstanceId == Command.FishInstanceId;
-		});
+		const int32 FishIndex = FindFishSlotById(Source->Snapshot, Command.FishInstanceId);
 		if (FishIndex == INDEX_NONE)
 		{
 			Result.Error = ECatDomainCommandError::NotFound;
 		}
+		else if (FishIndex != Command.SourceContainerSlotIndex)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+		}
+		else if (ReservationByFish.Contains(Command.FishInstanceId))
+		{
+			Result.Error = ECatDomainCommandError::InvalidPhase;
+		}
 		else
 		{
 			const FCatFishInstance Fish = Source->Snapshot.Fish[FishIndex];
-			Source->Snapshot.Fish.RemoveAt(FishIndex);
-			Target->Snapshot.Fish.Add(Fish);
-			++Source->Snapshot.Revision;
-			++Target->Snapshot.Revision;
-			PublishContainer(*Source);
-			PublishContainer(*Target);
-			Result.bCommitted = true;
-			Result.Error = ECatDomainCommandError::None;
-			Result.Revision = Source->Snapshot.Revision;
+			const bool bTargetOccupied = IsFishSlotOccupied(Target->Snapshot, Command.TargetContainerSlotIndex);
+			const FCatFishInstance TargetFish = bTargetOccupied
+				? Target->Snapshot.Fish[Command.TargetContainerSlotIndex] : FCatFishInstance();
+			const bool bFishMayLeave = CanFishLeaveContainer(Fish, Source->Snapshot.Kind,
+				Command.Context.StableNetId);
+			const ECatDomainCommandError FishEnterError = ResolveFishEnterContainerError(Fish,
+				Target->Snapshot.Kind, Command.Context.StableNetId);
+			const bool bTargetFishMayLeave = !bTargetOccupied || CanFishLeaveContainer(TargetFish,
+				Target->Snapshot.Kind, Command.Context.StableNetId);
+			const ECatDomainCommandError TargetFishEnterError = bTargetOccupied
+				? ResolveFishEnterContainerError(TargetFish, Source->Snapshot.Kind, Command.Context.StableNetId)
+				: ECatDomainCommandError::None;
+			if (!bFishMayLeave || !bTargetFishMayLeave)
+			{
+				Result.Error = ECatDomainCommandError::PermissionDenied;
+			}
+			else if (FishEnterError != ECatDomainCommandError::None)
+			{
+				Result.Error = FishEnterError;
+			}
+			else if (TargetFishEnterError != ECatDomainCommandError::None)
+			{
+				Result.Error = TargetFishEnterError;
+			}
+			else if (bTargetOccupied && ReservationByFish.Contains(TargetFish.FishInstanceId))
+			{
+				Result.Error = ECatDomainCommandError::InvalidPhase;
+			}
+			else if (!bSameContainer && !bTargetOccupied
+				&& CatItems::GetContainedObjectCount(Target->Snapshot) + CountReservedReturnSlots(Command.TargetContainerId)
+					>= Target->Capacity)
+			{
+				Result.Error = ECatDomainCommandError::CapacityExceeded;
+			}
+			else if (bSameContainer && Command.SourceContainerSlotIndex == Command.TargetContainerSlotIndex)
+			{
+				Result.Error = ECatDomainCommandError::AlreadyResolved;
+				Result.Revision = Source->Snapshot.Revision;
+			}
+			else
+			{
+				if (bSameContainer)
+				{
+					EnsureFishSlot(Source->Snapshot, Command.TargetContainerSlotIndex);
+					Source->Snapshot.Fish.Swap(Command.SourceContainerSlotIndex, Command.TargetContainerSlotIndex);
+					TrimTrailingEmptyFishSlots(Source->Snapshot);
+					++Source->Snapshot.Revision;
+					PublishContainer(*Source);
+				}
+				else
+				{
+					EnsureFishSlot(Target->Snapshot, Command.TargetContainerSlotIndex);
+					Target->Snapshot.Fish[Command.TargetContainerSlotIndex] = Fish;
+					Source->Snapshot.Fish[Command.SourceContainerSlotIndex] = TargetFish;
+					TrimTrailingEmptyFishSlots(Source->Snapshot);
+					TrimTrailingEmptyFishSlots(Target->Snapshot);
+					++Source->Snapshot.Revision;
+					++Target->Snapshot.Revision;
+					PublishContainer(*Source);
+					PublishContainer(*Target);
+				}
+				Result.bCommitted = true;
+				Result.Error = ECatDomainCommandError::None;
+				Result.Revision = Source->Snapshot.Revision;
+			}
 		}
 	}
 	Result.Revision = Source ? Source->Snapshot.Revision : 0;
@@ -261,7 +468,7 @@ FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransf
 	return Result;
 }
 
-// 直接进食流程：先重放终态，再校验身份、容器 Revision、个人归属/共享缸、未预留与目标鱼；成功不可逆移除一条鱼并发布一次 Revision。
+// 直接进食流程：先重放终态，再校验身份、容器 Revision、个人归属/共享缸、未预留与目标鱼；成功清空所在槽位并发布一次 Revision。
 FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand& Command)
 {
 	FCatFishConsumeResult Result;
@@ -301,10 +508,7 @@ FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand
 	}
 	else
 	{
-		FishIndex = Source->Snapshot.Fish.IndexOfByPredicate([&Command](const FCatFishInstance& Fish)
-		{
-			return Fish.FishInstanceId == Command.FishInstanceId;
-		});
+		FishIndex = FindFishSlotById(Source->Snapshot, Command.FishInstanceId);
 		if (FishIndex == INDEX_NONE)
 		{
 			Result.Command.Error = ECatDomainCommandError::NotFound;
@@ -317,7 +521,8 @@ FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand
 		else
 		{
 			Result.Fish = Source->Snapshot.Fish[FishIndex];
-			Source->Snapshot.Fish.RemoveAt(FishIndex);
+			Source->Snapshot.Fish[FishIndex] = FCatFishInstance();
+			TrimTrailingEmptyFishSlots(Source->Snapshot);
 			++Source->Snapshot.Revision;
 			PublishContainer(*Source);
 			Result.Command.bCommitted = true;
@@ -370,10 +575,7 @@ FCatFishReservationResult UCatItemsService::ReserveFish(const FCatSacrificeComma
 		Result.ContainerRevision = Container->Snapshot.Revision;
 		return Result;
 	}
-	const int32 FishIndex = Container->Snapshot.Fish.IndexOfByPredicate([&Command](const FCatFishInstance& Fish)
-	{
-		return Fish.FishInstanceId == Command.FishInstanceId;
-	});
+	const int32 FishIndex = FindFishSlotById(Container->Snapshot, Command.FishInstanceId);
 	if (FishIndex == INDEX_NONE)
 	{
 		Result.Error = ECatDomainCommandError::NotFound;
@@ -436,7 +638,7 @@ FCatDomainCommandResult UCatItemsService::CancelFishReservation(const FString& S
 	return Result;
 }
 
-// 预留提交流程：重复提交原样返回；首次提交确认鱼仍存在且锁属于 RequestId，再不可逆删除数组、释放锁、记录提交 Revision 并发布。
+// 预留提交流程：重复提交原样返回；首次提交确认鱼仍存在且锁属于 RequestId，再不可逆清空槽位、释放锁、记录提交 Revision 并发布。
 FCatFishReservationCommitResult UCatItemsService::CommitFishReservation(const FString& StableNetId,
 	const FGuid RequestId, const FGuid ContainerId)
 {
@@ -458,16 +660,14 @@ FCatFishReservationCommitResult UCatItemsService::CommitFishReservation(const FS
 		return Result;
 	}
 	const FString* LockOwner = ReservationByFish.Find(Reservation->Fish.FishInstanceId);
-	const int32 FishIndex = Container->Snapshot.Fish.IndexOfByPredicate([Reservation](const FCatFishInstance& Fish)
-	{
-		return Fish.FishInstanceId == Reservation->Fish.FishInstanceId;
-	});
+	const int32 FishIndex = FindFishSlotById(Container->Snapshot, Reservation->Fish.FishInstanceId);
 	if (!LockOwner || *LockOwner != ReservationKey || FishIndex == INDEX_NONE)
 	{
 		Result.Error = ECatDomainCommandError::InvalidPhase;
 		return Result;
 	}
-	Container->Snapshot.Fish.RemoveAt(FishIndex);
+	Container->Snapshot.Fish[FishIndex] = FCatFishInstance();
+	TrimTrailingEmptyFishSlots(Container->Snapshot);
 	ReservationByFish.Remove(Reservation->Fish.FishInstanceId);
 	++Container->Snapshot.Revision;
 	Reservation->bCommitted = true;
@@ -480,7 +680,7 @@ FCatFishReservationCommitResult UCatItemsService::CommitFishReservation(const FS
 	return Result;
 }
 
-// 偷鱼开始流程：先重放终态，再校验命令、源容器、Revision、目标鱼、非本人和未预留；成功把唯一鱼移入 escrow、源数组移除并发布一次 Revision，同时保留返还槽位。
+// 偷鱼开始流程：先重放终态，再校验命令、源容器、Revision、目标鱼、非本人和未预留；成功把唯一鱼移入 escrow、源槽位清空并发布一次 Revision，同时记录返还槽位。
 FCatFishTheftResult UCatItemsService::BeginFishTheft(const FCatFishTheftCommand& Command)
 {
 	FCatFishTheftResult Result;
@@ -521,10 +721,7 @@ FCatFishTheftResult UCatItemsService::BeginFishTheft(const FCatFishTheftCommand&
 	}
 	else
 	{
-		FishIndex = Source->Snapshot.Fish.IndexOfByPredicate([&Command](const FCatFishInstance& Fish)
-		{
-			return Fish.FishInstanceId == Command.FishInstanceId;
-		});
+		FishIndex = FindFishSlotById(Source->Snapshot, Command.FishInstanceId);
 		if (FishIndex == INDEX_NONE)
 		{
 			Result.Command.Error = ECatDomainCommandError::NotFound;
@@ -545,9 +742,11 @@ FCatFishTheftResult UCatItemsService::BeginFishTheft(const FCatFishTheftCommand&
 			Escrow.TheftProtocolId = Command.TheftProtocolId;
 			Escrow.ClientRequestId = Command.Context.RequestId;
 			Escrow.SourceContainerId = Command.SourceContainerId;
+			Escrow.SourceContainerSlotIndex = FishIndex;
 			Escrow.Fish = Source->Snapshot.Fish[FishIndex];
 			Escrow.ThiefStableNetId = Command.Context.StableNetId;
-			Source->Snapshot.Fish.RemoveAt(FishIndex);
+			Source->Snapshot.Fish[FishIndex] = FCatFishInstance();
+			TrimTrailingEmptyFishSlots(Source->Snapshot);
 			++Source->Snapshot.Revision;
 			PublishContainer(*Source);
 			Result.Command.bCommitted = true;
@@ -562,7 +761,7 @@ FCatFishTheftResult UCatItemsService::BeginFishTheft(const FCatFishTheftCommand&
 	return Result;
 }
 
-// 偷鱼追回流程：按服务器 ProtocolId 定位精确 escrow 与仍存源容器，把预留鱼原位追加并发布一次 Revision；随后删除 escrow，客户端 RequestId 永远不能命中别人的鱼。
+// 偷鱼追回流程：按服务器 ProtocolId 定位精确 escrow 与仍存源容器，优先把鱼放回原槽位并发布一次 Revision；随后删除 escrow，客户端 RequestId 永远不能命中别人的鱼。
 FCatFishTheftResult UCatItemsService::ReturnStolenFish(const FGuid TheftProtocolId)
 {
 	FCatFishTheftResult Result;
@@ -578,7 +777,17 @@ FCatFishTheftResult UCatItemsService::ReturnStolenFish(const FGuid TheftProtocol
 	Result.Fish = Escrow->Fish;
 	Result.SourceContainerId = Escrow->SourceContainerId;
 	Result.TheftProtocolId = Escrow->TheftProtocolId;
-	Source->Snapshot.Fish.Add(Escrow->Fish);
+	const int32 ReturnSlotIndex = Escrow->SourceContainerSlotIndex >= 0 && Escrow->SourceContainerSlotIndex < Source->Capacity
+		&& !IsFishSlotOccupied(Source->Snapshot, Escrow->SourceContainerSlotIndex)
+		? Escrow->SourceContainerSlotIndex : FindFirstFreeFishSlot(Source->Snapshot, Source->Capacity);
+	if (ReturnSlotIndex == INDEX_NONE)
+	{
+		Result.Command.Error = ECatDomainCommandError::CapacityExceeded;
+		return Result;
+	}
+	EnsureFishSlot(Source->Snapshot, ReturnSlotIndex);
+	Source->Snapshot.Fish[ReturnSlotIndex] = Escrow->Fish;
+	TrimTrailingEmptyFishSlots(Source->Snapshot);
 	++Source->Snapshot.Revision;
 	PublishContainer(*Source);
 	Result.Command.bCommitted = true;
@@ -673,6 +882,7 @@ bool UCatItemsService::TryGetContainerAuthorityContext(const FGuid ContainerId, 
 // 快照发布流程：把服务端组合 DTO 写入精确弱组件；宿主已销毁时只保留服务器事实，绝不回滚已提交事务。
 void UCatItemsService::PublishContainer(FContainerRecord& Record)
 {
+	CatItems::RebuildContainedObjectsFromFish(Record.Snapshot);
 	if (UCatContainerReplicationComponent* Component = Record.ReplicationComponent.Get())
 	{
 		Component->SetSnapshotFromAuthority(Record.Snapshot);

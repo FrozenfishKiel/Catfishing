@@ -50,11 +50,11 @@ void UCatShopPageController::Unbind()
 	BoundPlayerController.Reset();
 	BoundModel.Reset();
 	BoundView.Reset();
-	bPreviousMouseCursorVisible = false;
+	ModalInputModeState = FCatUIModalInputModeState();
 	OnPageCloseRequested.Clear();
 }
 
-// 打开流程：把本次交互创建的商店 View 放入视口，记录鼠标状态并通知 Model 刷新打开投影。
+// 打开流程：把本次交互创建的商店 View 放入视口，再应用模态输入锁并通知 Model 刷新打开投影。
 void UCatShopPageController::OpenShop()
 {
 	APlayerController* Controller = BoundPlayerController.Get();
@@ -64,7 +64,6 @@ void UCatShopPageController::OpenShop()
 	{
 		return;
 	}
-	bPreviousMouseCursorVisible = Controller->bShowMouseCursor;
 	if (!View->IsInViewport())
 	{
 		View->AddToViewport(20);
@@ -118,8 +117,8 @@ void UCatShopPageController::HandleViewCloseRequested()
 }
 
 // 商品动作流程：
-// 1. 从 Model 当前投影确认条目仍存在、经济快照可用且没有 pending。
-// 2. 要求领取/购买类型匹配条目免费标记，避免蓝图行把免费入口当付费入口发出。
+// 1. 从 Model 当前投影确认条目仍存在、经济/货架快照可用且没有 pending。
+// 2. 要求领取/购买类型匹配条目免费标记，并尊重 UI 已推导出的售罄/余额不足状态。
 // 3. 生成 RequestId，先写 pending，再调用 PlayerController 的正式服务器 RPC。
 void UCatShopPageController::HandleViewEntryActionRequested(const FName EntryId, const ECatShopUIAction Action)
 {
@@ -140,6 +139,14 @@ void UCatShopPageController::HandleViewEntryActionRequested(const FName EntryId,
 	if (bFreeAction != Entry.bFreeClaim)
 	{
 		Model->MarkActionRejected(Action, EntryId, FText::FromString(TEXT("商店：商品动作类型不匹配")));
+		return;
+	}
+	if (!Entry.bActionEnabled)
+	{
+		const FText Reason = Entry.bSoldOut
+			? FText::FromString(TEXT("商店：这件商品已经售罄"))
+			: FText::FromString(TEXT("商店：团队公款不足或商品暂不可购买"));
+		Model->MarkActionRejected(Action, EntryId, Reason);
 		return;
 	}
 
@@ -174,27 +181,14 @@ void UCatShopPageController::HandleViewEntryActionRequested(const FName EntryId,
 		ExpectedWalletRevision);
 }
 
-// 输入模式流程：商店打开时聚焦本次交互 View 并显示鼠标；关闭时恢复 GameOnly 和旧鼠标状态。
+// 输入模式流程：打开时聚焦本次交互 View、锁住移动/视角并停止当前移动；关闭时释放本商店页申请的输入锁。
 void UCatShopPageController::ApplyShopInputMode(const bool bOpen)
 {
 	APlayerController* Controller = BoundPlayerController.Get();
-	if (!Controller)
-	{
-		return;
-	}
 	if (bOpen)
 	{
-		if (UCatShopWidget* View = BoundView.Get())
-		{
-			FInputModeUIOnly InputMode;
-			InputMode.SetWidgetToFocus(View->TakeWidget());
-			InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-			Controller->SetInputMode(InputMode);
-			Controller->bShowMouseCursor = true;
-			View->SetKeyboardFocus();
-		}
+		CatUIModalInputMode::Open(Controller, BoundView.Get(), ModalInputModeState);
 		return;
 	}
-	Controller->SetInputMode(FInputModeGameOnly());
-	Controller->bShowMouseCursor = bPreviousMouseCursorVisible;
+	CatUIModalInputMode::Close(Controller, ModalInputModeState);
 }

@@ -223,7 +223,7 @@ def main() -> None:
     _require(bool(_get_property(shop_settings, "b_enable_shop_economy_runtime", "bEnableShopEconomyRuntime")),
              "ShopEconomy runtime 未启用")
     _require(int(_get_property(shop_settings, "starting_team_wallet_balance", "StartingTeamWalletBalance")) >= 5,
-             "团队钱包初始余额不足以购买正式鱼竿和正式鱼漂")
+             "团队公款初始余额不足以购买正式鱼竿和正式鱼漂")
     _validate_shop_entry(shop_settings, "ShopRodT2Order", "EquipmentGrant", "ShopRodT2", 3, False, True)
     _validate_shop_entry(shop_settings, "ShopFloatYarnBallOrder", "EquipmentGrant", "YarnBallFloat", 2, False, True)
     _validate_shop_entry(shop_settings, "ShopBugChumOrder", "RunConsumableGrant", "BugChum", 1, True, False)

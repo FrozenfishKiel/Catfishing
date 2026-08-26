@@ -6,14 +6,14 @@
 #include "ShopEconomy/CatShopEconomyTypes.h"
 #include "CatShopEconomySettings.generated.h"
 
-/** 商店经济运行设置；默认关闭，避免在没有目录和定价证据时生成钱包或商品。 */
+/** 商店经济运行设置；默认关闭，避免在没有目录和定价证据时生成公款或商品。 */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "Catfishing Shop Economy"))
 class CATFISHING_API UCatShopEconomySettings : public UDeveloperSettings
 {
 	GENERATED_BODY()
 
 public:
-	/** 运行 gate 表示本局是否允许创建团队钱包和交易入口；目录合法性仍由服务加载库存时检查，避免 Settings 同时拥有交易真相。 */
+	/** 运行 gate 表示本局是否允许创建团队公款和交易入口；目录合法性仍由服务加载库存时检查，避免 Settings 同时拥有交易真相。 */
 	bool IsRuntimeEnabled() const;
 
 	/**
@@ -32,7 +32,7 @@ public:
 	bool bEnableShopEconomyRuntime = false;
 
 	/**
-	 * 每局团队钱包的初始余额。0 是合法取值，表示"裁定过了，本局白手起家"；负数非法。
+	 * 每局团队公款的初始余额。0 是合法取值，表示"裁定过了，本局白手起家"；负数非法。
 	 * 默认值取 -1 作为"这条还没裁过"的哨兵，好让"裁定 0 起始资金"和"没人裁过"在运行期不再是同一个状态——
 	 * 后者必须让整个 ShopEconomy 保持 fail-closed，而不是悄悄按 0 元开局跑下去。
 	 * 不设 ClampMin，避免编辑器把哨兵夹成 0。

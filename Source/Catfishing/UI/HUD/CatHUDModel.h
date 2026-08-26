@@ -12,6 +12,7 @@ class UAbilitySystemComponent;
 class UCatConditionComponent;
 class UCatFishingCommandComponent;
 class UCatFishingViewBridge;
+class UCatGrowthComponent;
 class ULocalPlayer;
 struct FOnAttributeChangeData;
 
@@ -47,6 +48,9 @@ private:
 	/** Condition 快照变化入口；重读完整 HUD 投影。 */
 	void HandleConditionChanged();
 
+	/** Growth 快照变化入口；重读完整 HUD 投影。 */
+	void HandleGrowthChanged();
+
 	/** Fishing 会话投影变化入口；Bridge 已经更新自身，Model 只重建 HUD 文本。 */
 	void HandleFishingViewStateChanged(const FCatFishingViewState& ViewState);
 
@@ -73,6 +77,10 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatConditionComponent> BoundCondition;
 
+	/** 当前 Character 的 Growth 组件弱引用；HUD 只读经验和待选次数，不提交成长选择。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UCatGrowthComponent> BoundGrowth;
+
 	/** 当前 Controller 的 Fishing 命令结果源；HUD 用它显示最近反馈。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatFishingCommandComponent> BoundFishingCommand;
@@ -92,6 +100,9 @@ private:
 
 	/** Condition 快照变化解绑句柄。 */
 	FDelegateHandle ConditionChangedHandle;
+
+	/** Growth 快照变化解绑句柄。 */
+	FDelegateHandle GrowthChangedHandle;
 
 	/** FishingViewBridge 投影变化解绑句柄。 */
 	FDelegateHandle FishingViewChangedHandle;

@@ -38,7 +38,10 @@ public:
 	/** 首个合法抢抄终态调用的唯一鱼实例创建入口；提交会话预分配 ID，同 RequestId/会话重放只返回首次 Committed DTO。 */
 	FCatCaptureCommitResult CommitCapture(const FCatCaptureCommitCommand& Command);
 
-	/** 在两个容器版本同时匹配时原子移动一条鱼；任何失败都保持源和目标原样。 */
+	/** 在源/目标容器版本同时匹配时原子移动一个容器物体；当前只有鱼策略会提交，其他类别先显式拒绝，调用方不能直接写数组。 */
+	FCatDomainCommandResult TransferContainedObject(const FCatContainerObjectTransferCommand& Command);
+
+	/** 在源/目标容器版本同时匹配时原子移动一条鱼；这是鱼领域策略适配层，UI/RPC 应优先走通用容器物体入口。 */
 	FCatDomainCommandResult TransferOwnedFish(const FCatFishTransferCommand& Command);
 
 	/** 从本人鱼护或共享鱼缸不可逆移除一条未预留鱼；成功后上层才可应用食用效果。 */
@@ -59,10 +62,10 @@ public:
 private:
 	friend class UCatSocialService;
 
-	/** 单容器服务器记录；公开快照不含容量、预留或 OwnerStableNetId。 */
+	/** 单容器服务器记录；公开快照含容量和槽位事实，但预留与 OwnerStableNetId 只留在服务器私有记录。 */
 	struct FContainerRecord
 	{
-		/** 当前提交后的公开鱼数组与 Revision。 */
+		/** 当前提交后的公开鱼槽数组、容量与 Revision。 */
 		FCatContainerSnapshot Snapshot;
 		/** 个人鱼护的服务器私有 StableNetId；共享鱼缸为空。 */
 		FString OwnerStableNetId;
@@ -96,6 +99,8 @@ private:
 		FGuid ClientRequestId;
 		/** 鱼被拿走前的源容器。 */
 		FGuid SourceContainerId;
+		/** 鱼被拿走前的源容器槽位；追回时优先放回这个位置，避免数组压缩改变 UI 格子语义。 */
+		int32 SourceContainerSlotIndex = INDEX_NONE;
 		/** 被拿走的完整实物鱼。 */
 		FCatFishInstance Fish;
 		/** 偷取者服务器私有 StableNetId。 */

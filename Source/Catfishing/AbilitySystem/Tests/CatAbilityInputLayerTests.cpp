@@ -27,7 +27,7 @@ namespace
 		ECatBodyActionAbilityCommand::RequestSacrifice,
 		ECatBodyActionAbilityCommand::CampRest,
 		ECatBodyActionAbilityCommand::CampfirePlayback,
-		ECatBodyActionAbilityCommand::TransferFishToTank,
+		ECatBodyActionAbilityCommand::TransferObjectBetweenContainers,
 		ECatBodyActionAbilityCommand::RescueCharacterToCamp,
 		ECatBodyActionAbilityCommand::RepairRodAtCamp,
 		ECatBodyActionAbilityCommand::UseHerbOnCharacter,

@@ -5,6 +5,19 @@
 #include "GameFramework/PlayerController.h"
 #include "ShopEconomy/CatShopEconomySettings.h"
 
+namespace
+{
+	// 公开货架查找流程：只读 GameState 已复制的权威库存快照，UI 不再从交易记录反推剩余库存。
+	const FCatShopStockSnapshot* FindPublicStockSnapshot(const FCatShopPublicEconomySnapshot& Economy,
+		const FName EntryId)
+	{
+		return Economy.Stocks.FindByPredicate([EntryId](const FCatShopStockSnapshot& Stock)
+		{
+			return Stock.EntryId == EntryId;
+		});
+	}
+}
+
 // 绑定流程：校验 Controller 和 GameState，订阅商店公开快照；成功后刷新一次完整投影。
 bool UCatShopModel::Bind(APlayerController* InController)
 {
@@ -56,7 +69,7 @@ void UCatShopModel::SetOpen(const bool bNewOpen)
 	Refresh();
 }
 
-// 提交流程：记录最近动作和条目，pending 状态会让商品按钮禁用，直到下一次公开经济快照刷新。
+// 提交流程：记录最近动作和条目，pending 状态会让商品按钮禁用，直到下一次公开经济/货架快照刷新。
 void UCatShopModel::MarkActionSubmitted(const ECatShopUIAction Action, const FName EntryId)
 {
 	LastAction = Action;
@@ -76,7 +89,7 @@ void UCatShopModel::MarkActionRejected(const ECatShopUIAction Action, const FNam
 	Refresh();
 }
 
-// 刷新流程：读取 GameState 公款快照和 Settings 商品目录，生成只读 ViewState；公开快照变化会关闭 pending 并显示最新流水数。
+// 刷新流程：读取 GameState 经济/货架快照和 Settings 商品目录，生成只读 ViewState；公开快照变化会关闭 pending 并刷新余额/库存提示。
 void UCatShopModel::Refresh()
 {
 	FCatShopViewState NewState;
@@ -96,17 +109,16 @@ void UCatShopModel::Refresh()
 		NewState.Entries.Reserve(Settings->CatalogEntries.Num());
 		for (const FCatShopCatalogEntry& Entry : Settings->CatalogEntries)
 		{
-			FCatShopEntryView EntryView = MakeEntryView(Entry);
-			EntryView.bActionEnabled = NewState.bOpen && NewState.bEconomyAvailable && !NewState.bActionPending;
+			FCatShopEntryView EntryView = MakeEntryView(Entry, NewState.Economy, NewState.bEconomyAvailable);
+			EntryView.bActionEnabled = NewState.bOpen && NewState.bEconomyAvailable
+				&& !NewState.bActionPending && EntryView.bStockAvailable
+				&& EntryView.bAffordable && !EntryView.bSoldOut;
 			NewState.Entries.Add(EntryView);
 		}
 	}
 
 	NewState.WalletText = NewState.bEconomyAvailable
-		? FText::FromString(FString::Printf(TEXT("商店：团队公款 %d | 钱包版本 %lld | 流水 %d"),
-			NewState.Economy.Balance,
-			NewState.Economy.WalletRevision,
-			NewState.Economy.Transactions.Num()))
+		? FText::FromString(FString::Printf(TEXT("商店：团队公款 %d"), NewState.Economy.Balance))
 		: FText::FromString(TEXT("商店：公款数据未同步"));
 
 	if (!LastRejectedReason.IsEmpty())
@@ -115,14 +127,13 @@ void UCatShopModel::Refresh()
 	}
 	else if (NewState.bActionPending)
 	{
-		NewState.ResultText = FText::FromString(FString::Printf(TEXT("已提交：%s，等待服务器公开流水刷新"),
+		NewState.ResultText = FText::FromString(FString::Printf(TEXT("已提交：%s，等待商店结果同步"),
 			*LastEntryId.ToString()));
 	}
 	else if (!LastEntryId.IsNone())
 	{
-		NewState.ResultText = FText::FromString(FString::Printf(TEXT("最近操作：%s，当前公开流水 %d 条"),
-			*LastEntryId.ToString(),
-			NewState.Economy.Transactions.Num()));
+		NewState.ResultText = FText::FromString(FString::Printf(TEXT("最近操作：%s，请在背包查看装备或耗材"),
+			*LastEntryId.ToString()));
 	}
 	else
 	{
@@ -156,34 +167,51 @@ bool UCatShopModel::TryFindEntryView(const FName EntryId, FCatShopEntryView& Out
 	return true;
 }
 
-// GameState 变化流程：公开经济事实已经刷新，清掉等待标记并重建商品、公款和结果文案。
+// GameState 变化流程：公开经济/货架事实已经刷新，清掉等待标记并重建商品、公款和结果文案。
 void UCatShopModel::HandleShopEconomySnapshotChanged()
 {
 	bActionPending = false;
 	Refresh();
 }
 
-// 商品投影流程：把配置目录变成中文展示行；免费条目只从 Settings 白名单判断，不按价格 0 反推。
-FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry) const
+// 商品投影流程：
+// 1. 把配置目录变成中文展示行，免费条目只从 Settings 白名单判断，不按价格 0 反推。
+// 2. 使用公开货架库存读取有限库存剩余数，并用当前团队公款推导付费项是否买得起。
+// 3. 这些结果只影响 UI 展示和明显无效点击；真正扣款和库存裁决仍在服务器 ShopEconomy。
+FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry,
+	const FCatShopPublicEconomySnapshot& Economy, const bool bEconomyAvailable) const
 {
 	const UCatShopEconomySettings* Settings = GetDefault<UCatShopEconomySettings>();
+	const FCatShopStockSnapshot* Stock = bEconomyAvailable ? FindPublicStockSnapshot(Economy, Entry.EntryId) : nullptr;
 	FCatShopEntryView View;
 	View.EntryId = Entry.EntryId;
 	View.Kind = Entry.Kind;
 	View.DefinitionId = Entry.DefinitionId;
 	View.UnitPrice = FMath::Max(0, Entry.UnitPrice);
 	View.InitialStock = Entry.InitialStock;
-	View.bUnlimitedStock = Entry.bUnlimitedStock;
+	View.bStockAvailable = Stock != nullptr;
+	View.bUnlimitedStock = Stock ? Stock->bUnlimitedStock : Entry.bUnlimitedStock;
+	View.RemainingStock = Stock ? FMath::Max(0, Stock->RemainingStock) : 0;
+	View.bSoldOut = View.bStockAvailable && !View.bUnlimitedStock && View.RemainingStock <= 0;
+	View.bAffordable = !bEconomyAvailable || View.UnitPrice <= 0 || Economy.Balance >= View.UnitPrice;
 	View.bFreeClaim = Settings
 		&& (Entry.EntryId == Settings->FreeOrdinaryBaitEntryId || Entry.EntryId == Settings->FreeStarterRodEntryId);
-	const FString StockText = View.bUnlimitedStock
-		? FString(TEXT("无限库存"))
-		: FString::Printf(TEXT("初始库存 %d"), Entry.InitialStock);
-	View.DisplayText = FText::FromString(FString::Printf(TEXT("%s | %s | 价格 %d | %s"),
+	const FString StockText = !View.bStockAvailable
+		? FString(TEXT("库存：未同步"))
+		: View.bUnlimitedStock
+		? FString(TEXT("库存：不限"))
+		: (View.bSoldOut ? FString(TEXT("库存：已售罄"))
+			: FString::Printf(TEXT("库存：剩余 %d/%d"), View.RemainingStock, Entry.InitialStock));
+	const FString PriceText = View.UnitPrice <= 0
+		? FString(TEXT("免费"))
+		: FString::Printf(TEXT("价格 %d"), View.UnitPrice);
+	const FString AffordableText = View.bAffordable ? FString() : FString(TEXT(" | 公款不足"));
+	View.DisplayText = FText::FromString(FString::Printf(TEXT("%s | %s | %s | %s%s"),
 		*Entry.EntryId.ToString(),
 		*Entry.DefinitionId.ToString(),
-		View.UnitPrice,
-		*StockText));
+		*PriceText,
+		*StockText,
+		*AffordableText));
 	View.ActionText = View.bFreeClaim
 		? FText::FromString(TEXT("领取"))
 		: FText::FromString(TEXT("购买"));

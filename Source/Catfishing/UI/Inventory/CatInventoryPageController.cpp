@@ -1,17 +1,86 @@
 #include "UI/Inventory/CatInventoryPageController.h"
 
-#include "Camp/CatCampHubActor.h"
 #include "Character/CatCharacter.h"
 #include "EnhancedInputComponent.h"
-#include "EngineUtils.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
 #include "InputMappingContext.h"
+#include "Items/CatContainerReplicationComponent.h"
 #include "Logging/CatLog.h"
 #include "UI/CatUISettings.h"
 #include "UI/Inventory/CatInventoryModel.h"
+#include "UI/Inventory/CatInventoryTypes.h"
 #include "UI/Inventory/CatInventoryWidget.h"
+
+namespace
+{
+	// 源格复核流程：Drop 时用源容器、源槽位和物体身份去最新 ViewState 复核，避免拖拽开始后的刷新把同一物体换到别的格子后仍被错误提交。
+	const FCatInventorySlotView* FindCurrentSourceSlot(const FCatInventoryViewState& State,
+		const FCatInventorySlotView& DragSource)
+	{
+		if (DragSource.SlotSource != ECatInventorySlotSource::ContainerObject
+			|| !DragSource.ContainerId.IsValid() || DragSource.ContainerSlotIndex == INDEX_NONE
+			|| DragSource.ObjectKind == ECatContainedObjectKind::Unknown
+			|| !DragSource.ObjectInstanceId.IsValid())
+		{
+			return nullptr;
+		}
+		if (State.Slots.IsValidIndex(DragSource.SlotIndex))
+		{
+			const FCatInventorySlotView& IndexedSlot = State.Slots[DragSource.SlotIndex];
+			if (IndexedSlot.ContainerId == DragSource.ContainerId
+				&& IndexedSlot.SlotSource == ECatInventorySlotSource::ContainerObject
+				&& IndexedSlot.ContainerKind == DragSource.ContainerKind
+				&& IndexedSlot.ContainerSlotIndex == DragSource.ContainerSlotIndex
+				&& IndexedSlot.bOccupied
+				&& IndexedSlot.ObjectKind == DragSource.ObjectKind
+				&& IndexedSlot.ObjectInstanceId == DragSource.ObjectInstanceId)
+			{
+				return &IndexedSlot;
+			}
+		}
+		return State.Slots.FindByPredicate([&DragSource](const FCatInventorySlotView& Slot)
+		{
+			return Slot.ContainerId == DragSource.ContainerId
+				&& Slot.SlotSource == ECatInventorySlotSource::ContainerObject
+				&& Slot.ContainerKind == DragSource.ContainerKind
+				&& Slot.ContainerSlotIndex == DragSource.ContainerSlotIndex
+				&& Slot.bOccupied
+				&& Slot.ObjectKind == DragSource.ObjectKind
+				&& Slot.ObjectInstanceId == DragSource.ObjectInstanceId;
+		});
+	}
+
+	// 目标格复核流程：目标可以是空格；Drop 必须保留目标容器内槽位，找不到同一槽位时不能回退到容器第一个格子。
+	const FCatInventorySlotView* FindCurrentTargetSlot(const FCatInventoryViewState& State,
+		const FCatInventorySlotView& DropTarget)
+	{
+		if (DropTarget.SlotSource != ECatInventorySlotSource::ContainerObject
+			|| !DropTarget.ContainerId.IsValid() || DropTarget.ContainerSlotIndex == INDEX_NONE)
+		{
+			return nullptr;
+		}
+		if (State.Slots.IsValidIndex(DropTarget.SlotIndex))
+		{
+			const FCatInventorySlotView& IndexedSlot = State.Slots[DropTarget.SlotIndex];
+			if (IndexedSlot.ContainerId == DropTarget.ContainerId
+				&& IndexedSlot.SlotSource == ECatInventorySlotSource::ContainerObject
+				&& IndexedSlot.ContainerKind == DropTarget.ContainerKind
+				&& IndexedSlot.ContainerSlotIndex == DropTarget.ContainerSlotIndex)
+			{
+				return &IndexedSlot;
+			}
+		}
+		return State.Slots.FindByPredicate([&DropTarget](const FCatInventorySlotView& Slot)
+		{
+			return Slot.ContainerId == DropTarget.ContainerId
+				&& Slot.SlotSource == ECatInventorySlotSource::ContainerObject
+				&& Slot.ContainerKind == DropTarget.ContainerKind
+				&& Slot.ContainerSlotIndex == DropTarget.ContainerSlotIndex;
+		});
+	}
+}
 
 // 绑定流程：
 // 1. 先解除旧页面，避免同一个 Controller 上留下旧输入绑定。
@@ -36,13 +105,15 @@ bool UCatInventoryPageController::Bind(ULocalPlayer* InLocalPlayer, APlayerContr
 		this, &ThisClass::HandleViewSlotSelectionRequested);
 	ViewSlotPointerHandle = InView->OnSlotPointerRequested.AddUObject(
 		this, &ThisClass::HandleViewSlotPointerRequested);
+	ViewSlotDropHandle = InView->OnSlotDropRequested.AddUObject(
+		this, &ThisClass::HandleViewSlotDropRequested);
 	ViewActionHandle = InView->OnInventoryActionRequested.AddUObject(this, &ThisClass::HandleViewActionRequested);
 	InstallInventoryInput();
 	HandleModelViewStateChanged();
 	return true;
 }
 
-// 解绑流程：先关闭打开中的背包并恢复输入，再移除 Action 和所有委托；最后清弱引用和本地状态。
+// 解绑流程：先关闭打开中的背包并恢复输入，再移除 Action、外部容器上下文和所有委托；最后清弱引用和本地状态。
 void UCatInventoryPageController::Unbind()
 {
 	if (bInventoryOpen)
@@ -55,12 +126,14 @@ void UCatInventoryPageController::Unbind()
 	{
 		Model->OnViewStateChanged.Remove(ModelViewChangedHandle);
 		Model->SetOpen(false);
+		Model->ClearExternalContainerContexts();
 	}
 	if (UCatInventoryWidget* View = BoundView.Get())
 	{
 		View->OnCloseRequested.Remove(ViewCloseHandle);
 		View->OnSlotSelectionRequested.Remove(ViewSlotSelectionHandle);
 		View->OnSlotPointerRequested.Remove(ViewSlotPointerHandle);
+		View->OnSlotDropRequested.Remove(ViewSlotDropHandle);
 		View->OnInventoryActionRequested.Remove(ViewActionHandle);
 		View->RemoveFromParent();
 	}
@@ -68,40 +141,35 @@ void UCatInventoryPageController::Unbind()
 	ViewCloseHandle.Reset();
 	ViewSlotSelectionHandle.Reset();
 	ViewSlotPointerHandle.Reset();
+	ViewSlotDropHandle.Reset();
 	ViewActionHandle.Reset();
 	BoundLocalPlayer.Reset();
 	BoundPlayerController.Reset();
 	BoundModel.Reset();
 	BoundView.Reset();
-	bPreviousMouseCursorVisible = false;
+	ModalInputModeState = FCatUIModalInputModeState();
 }
 
-// 切换流程：打开前保存鼠标状态；随后应用输入模式、调整视口挂载和把打开状态投影给 Model。
+// 切换流程：普通按键打开前清空外部容器上下文；随后把真实打开/关闭生命周期交给统一 SetInventoryOpen。
 void UCatInventoryPageController::ToggleInventory()
 {
-	APlayerController* Controller = BoundPlayerController.Get();
 	UCatInventoryModel* Model = BoundModel.Get();
-	UCatInventoryWidget* View = BoundView.Get();
-	if (!Controller || !Model || !View)
+	if (!bInventoryOpen && Model)
 	{
-		return;
+		Model->ClearExternalContainerContexts();
 	}
-	const bool bOpen = !bInventoryOpen;
-	if (bOpen)
+	SetInventoryOpen(!bInventoryOpen);
+}
+
+// 交互打开流程：先把交互对象贡献的外部容器读源交给 Model，再保证背包处于打开态；已打开时只刷新，不重置输入锁。
+void UCatInventoryPageController::OpenInventoryWithExternalContainerContexts(
+	const TArray<UCatContainerReplicationComponent*>& ExternalContainers)
+{
+	if (UCatInventoryModel* Model = BoundModel.Get())
 	{
-		bPreviousMouseCursorVisible = Controller->bShowMouseCursor;
-		if (!View->IsInViewport())
-		{
-			View->AddToViewport(10);
-		}
+		Model->SetExternalContainerContexts(ExternalContainers);
 	}
-	bInventoryOpen = bOpen;
-	ApplyInventoryInputMode(bInventoryOpen);
-	Model->SetOpen(bInventoryOpen);
-	if (!bInventoryOpen)
-	{
-		View->RemoveFromParent();
-	}
+	SetInventoryOpen(true);
 }
 
 // 状态查询流程：返回 PageController 的唯一打开状态，不读取 Widget 可见性或鼠标状态拼第二份真相。
@@ -110,7 +178,7 @@ bool UCatInventoryPageController::IsInventoryOpen() const
 	return bInventoryOpen;
 }
 
-// 外部刷新流程：只要求 Model 重读鱼护快照；PageController 不缓存任何后端事实。
+// 外部刷新流程：只要求 Model 重读鱼护、装备和待取装备快照；PageController 不缓存任何后端事实。
 void UCatInventoryPageController::RefreshModel()
 {
 	if (UCatInventoryModel* Model = BoundModel.Get())
@@ -156,6 +224,86 @@ void UCatInventoryPageController::HandleViewSlotPointerRequested(const int32 Slo
 	HandleViewSlotSelectionRequested(SlotIndex);
 }
 
+// Drop 提交流程：
+// 1. 从最新 ViewState 复核源物体和目标格；已有请求等待回包时只忽略新的 Drop，避免覆盖旧 pending。
+// 2. 同格 Drop 视为无操作直接返回；同容器不同格继续提交服务器整理，不能再当 InvalidPayload 拒绝。
+// 3. 在写 pending 前复制完整 RPC 载荷，因为 MarkActionSubmitted 会刷新 ViewState 并让格子指针失效。
+// 4. 调用 PlayerController 的通用容器移动 RPC；服务器会重新校验个人鱼护、外部容器距离、源/目标槽位和 Items 权限。
+void UCatInventoryPageController::HandleViewSlotDropRequested(const FCatInventorySlotView& SourceSlot,
+	const FCatInventorySlotView& TargetSlot)
+{
+	UCatInventoryModel* Model = BoundModel.Get();
+	ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
+	if (!Model || !CatController)
+	{
+		return;
+	}
+	const FCatInventoryViewState& State = Model->GetViewState();
+	const FGuid RequestId = FGuid::NewGuid();
+	if (State.bActionPending)
+	{
+		return;
+	}
+	const FCatInventorySlotView* CurrentSource = FindCurrentSourceSlot(State, SourceSlot);
+	const FCatInventorySlotView* CurrentTarget = FindCurrentTargetSlot(State, TargetSlot);
+	const int64 RejectRevision = CurrentSource ? CurrentSource->ContainerRevision : 0;
+	if (!CurrentSource || !CurrentTarget || !CurrentSource->bOccupied
+		|| CurrentSource->ObjectKind == ECatContainedObjectKind::Unknown
+		|| !CurrentSource->ObjectInstanceId.IsValid()
+		|| !CurrentSource->ContainerId.IsValid() || !CurrentTarget->ContainerId.IsValid()
+		|| CurrentSource->ContainerSlotIndex == INDEX_NONE || CurrentTarget->ContainerSlotIndex == INDEX_NONE)
+	{
+		Model->MarkActionRejected(ECatInventoryAction::MoveObjectBetweenContainers, RequestId,
+			ECatDomainCommandError::InvalidPayload, RejectRevision);
+		return;
+	}
+	if (CurrentSource->ContainerId == CurrentTarget->ContainerId
+		&& CurrentSource->ContainerSlotIndex == CurrentTarget->ContainerSlotIndex)
+	{
+		return;
+	}
+
+	const ECatContainedObjectKind SubmittedObjectKind = CurrentSource->ObjectKind;
+	const FGuid SubmittedObjectInstanceId = CurrentSource->ObjectInstanceId;
+	const FGuid SubmittedSourceContainerId = CurrentSource->ContainerId;
+	const ECatContainerKind SubmittedSourceContainerKind = CurrentSource->ContainerKind;
+	const int32 SubmittedSourceContainerSlotIndex = CurrentSource->ContainerSlotIndex;
+	const int64 SubmittedSourceRevision = CurrentSource->ContainerRevision;
+	const FGuid SubmittedTargetContainerId = CurrentTarget->ContainerId;
+	const ECatContainerKind SubmittedTargetContainerKind = CurrentTarget->ContainerKind;
+	const int32 SubmittedTargetContainerSlotIndex = CurrentTarget->ContainerSlotIndex;
+	const int64 SubmittedTargetRevision = CurrentTarget->ContainerRevision;
+	Model->MarkActionSubmitted(ECatInventoryAction::MoveObjectBetweenContainers, RequestId);
+	if (CatController->HasAuthority())
+	{
+		CatController->ServerTransferObjectBetweenContainers_Implementation(RequestId,
+			SubmittedObjectKind,
+			SubmittedObjectInstanceId,
+			SubmittedSourceContainerId,
+			SubmittedSourceContainerKind,
+			SubmittedSourceContainerSlotIndex,
+			SubmittedSourceRevision,
+			SubmittedTargetContainerId,
+			SubmittedTargetContainerKind,
+			SubmittedTargetContainerSlotIndex,
+			SubmittedTargetRevision);
+	}
+	else
+	{
+		CatController->ServerTransferObjectBetweenContainers(RequestId,
+			SubmittedObjectKind,
+			SubmittedObjectInstanceId,
+			SubmittedSourceContainerId,
+			SubmittedSourceContainerKind,
+			SubmittedSourceContainerSlotIndex,
+			SubmittedSourceRevision,
+			SubmittedTargetContainerId,
+			SubmittedTargetContainerKind,
+			SubmittedTargetContainerSlotIndex,
+			SubmittedTargetRevision);
+	}
+}
+
 // 背包动作流程：
 // 1. 从 Model 当前 ViewState 读取选中鱼、容器 ID 和 Revision，拒绝空选择。
 // 2. 生成 RequestId 并先写 pending，使同步 authority 回包也能匹配。
@@ -171,7 +319,7 @@ void UCatInventoryPageController::HandleViewActionRequested(const ECatInventoryA
 	}
 	const FCatInventoryViewState& State = Model->GetViewState();
 	const FGuid RequestId = FGuid::NewGuid();
-	const bool bHasSelectedFish = State.bHasSelectedFish
+	const bool bHasSelectedFish = State.bSelectedFishInPersonalGuard
 		&& State.SelectedFish.FishInstanceId.IsValid()
 		&& State.PersonalFishGuard.ContainerId.IsValid();
 	if (!bHasSelectedFish)
@@ -208,29 +356,6 @@ void UCatInventoryPageController::HandleViewActionRequested(const ECatInventoryA
 			}
 			return;
 		}
-	case ECatInventoryAction::TransferSelectedFishToTank:
-		{
-			ACatCampHubActor* Camp = ResolveCampHubForInventoryAction();
-			FCatContainerSnapshot TankSnapshot;
-			if (!Camp || !Camp->TryGetSharedFishTankSnapshot(TankSnapshot))
-			{
-				Model->MarkActionRejected(Action, RequestId, ECatDomainCommandError::DependencyUnavailable,
-					State.PersonalFishGuard.Revision);
-				return;
-			}
-			Model->MarkActionSubmitted(Action, RequestId);
-			if (CatController->HasAuthority())
-			{
-				CatController->ServerTransferFishToTank_Implementation(Camp, RequestId, State.SelectedFish.FishInstanceId,
-					State.PersonalFishGuard.Revision, TankSnapshot.Revision);
-			}
-			else
-			{
-				CatController->ServerTransferFishToTank(Camp, RequestId, State.SelectedFish.FishInstanceId,
-					State.PersonalFishGuard.Revision, TankSnapshot.Revision);
-			}
-			return;
-		}
 	case ECatInventoryAction::SacrificeSelectedFish:
 		{
 			FCatSacrificeCommand Command;
@@ -255,38 +380,28 @@ void UCatInventoryPageController::HandleViewActionRequested(const ECatInventoryA
 	}
 }
 
-// 营地定位流程：优先选择当前 Pawn 最近的固定营地；无 Pawn 时返回 World 中第一座营地，服务器范围校验仍是最终裁决。
-ACatCampHubActor* UCatInventoryPageController::ResolveCampHubForInventoryAction() const
+// 打开状态流程：打开时先入视口再申请模态输入，关闭时先释放输入再移出视口；重复写同一状态保持幂等。
+void UCatInventoryPageController::SetInventoryOpen(const bool bOpen)
 {
-	const APlayerController* Controller = BoundPlayerController.Get();
-	UWorld* World = Controller ? Controller->GetWorld() : nullptr;
-	if (!World)
+	APlayerController* Controller = BoundPlayerController.Get();
+	UCatInventoryModel* Model = BoundModel.Get();
+	UCatInventoryWidget* View = BoundView.Get();
+	if (!Controller || !Model || !View || bInventoryOpen == bOpen)
 	{
-		return nullptr;
+		return;
 	}
-	const APawn* Pawn = Controller->GetPawn();
-	const FVector SourceLocation = Pawn ? Pawn->GetActorLocation() : FVector::ZeroVector;
-	ACatCampHubActor* BestCamp = nullptr;
-	double BestDistanceSq = TNumericLimits<double>::Max();
-	for (TActorIterator<ACatCampHubActor> It(World); It; ++It)
+	if (bOpen && !View->IsInViewport())
 	{
-		ACatCampHubActor* Candidate = *It;
-		if (!Candidate)
-		{
-			continue;
-		}
-		if (!Pawn)
-		{
-			return Candidate;
-		}
-		const double DistanceSq = FVector::DistSquared(SourceLocation, Candidate->GetActorLocation());
-		if (DistanceSq < BestDistanceSq)
-		{
-			BestDistanceSq = DistanceSq;
-			BestCamp = Candidate;
-		}
+		View->AddToViewport(10);
 	}
-	return BestCamp;
+	bInventoryOpen = bOpen;
+	ApplyInventoryInputMode(bInventoryOpen);
+	Model->SetOpen(bInventoryOpen);
+	if (!bInventoryOpen)
+	{
+		View->RemoveFromParent();
+		Model->ClearExternalContainerContexts();
+	}
 }
 
 // 输入安装流程：
@@ -305,8 +420,8 @@ void UCatInventoryPageController::InstallInventoryInput()
 	{
 		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_inventory_input_unavailable Controller=%s Action=%s Context=%s"),
 			*GetNameSafe(Controller),
-			Settings ? *Settings->LakeMenuToggleAction.ToSoftObjectPath().ToString() : TEXT("None"),
-			Settings ? *Settings->LakeMenuInputMappingContext.ToSoftObjectPath().ToString() : TEXT("None"));
+			Settings ? *Settings->InventoryToggleAction.ToSoftObjectPath().ToString() : TEXT("None"),
+			Settings ? *Settings->GameplayInputMappingContext.ToSoftObjectPath().ToString() : TEXT("None"));
 		return;
 	}
 	AppliedInventoryToggleAction = ToggleAction;
@@ -328,27 +443,14 @@ void UCatInventoryPageController::RemoveInventoryInput()
 	AppliedInventoryToggleAction = nullptr;
 }
 
-// 输入模式流程：打开时把背包 WBP 设为 UIOnly 焦点并显示鼠标；关闭时恢复 GameOnly 和打开前鼠标可见性。
+// 输入模式流程：打开时交给通用模态 UI 工具设置焦点、鼠标和移动锁；关闭时只释放本背包页面申请过的那一层锁。
 void UCatInventoryPageController::ApplyInventoryInputMode(const bool bOpen)
 {
 	APlayerController* Controller = BoundPlayerController.Get();
-	if (!Controller)
-	{
-		return;
-	}
 	if (bOpen)
 	{
-		if (UCatInventoryWidget* View = BoundView.Get())
-		{
-			FInputModeUIOnly InputMode;
-			InputMode.SetWidgetToFocus(View->TakeWidget());
-			InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);
-			Controller->SetInputMode(InputMode);
-			Controller->bShowMouseCursor = true;
-			View->SetKeyboardFocus();
-		}
+		CatUIModalInputMode::Open(Controller, BoundView.Get(), ModalInputModeState);
 		return;
 	}
-	Controller->SetInputMode(FInputModeGameOnly());
-	Controller->bShowMouseCursor = bPreviousMouseCursorVisible;
+	CatUIModalInputMode::Close(Controller, ModalInputModeState);
 }

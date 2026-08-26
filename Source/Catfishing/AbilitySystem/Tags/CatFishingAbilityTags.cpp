@@ -31,7 +31,8 @@ namespace CatFishingAbilityTags
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_RequestSacrifice, "Cat.Ability.Event.Body.RequestSacrifice");
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_CampRest, "Cat.Ability.Event.Body.CampRest");
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_CampfirePlayback, "Cat.Ability.Event.Body.CampfirePlayback");
-	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_TransferFishToTank, "Cat.Ability.Event.Body.TransferFishToTank");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_TransferObjectBetweenContainers,
+		"Cat.Ability.Event.Body.TransferObjectBetweenContainers");
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_RescueCharacterToCamp, "Cat.Ability.Event.Body.RescueCharacterToCamp");
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_RepairRodAtCamp, "Cat.Ability.Event.Body.RepairRodAtCamp");
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_UseHerbOnCharacter, "Cat.Ability.Event.Body.UseHerbOnCharacter");

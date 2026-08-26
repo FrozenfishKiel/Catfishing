@@ -21,7 +21,7 @@
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
 
-// 初始化流程：先订阅唯一 Online 快照，再弱绑定当前 Controller 的 Pawn notifier；本地玩家 UI 模块是否装配由 AttachLakePawn 统一验证 WBP 配置。
+// 初始化流程：先订阅唯一 Online 快照，再弱绑定当前 Controller 的 Pawn notifier；本地玩家 UI 模块是否装配由 AttachPlayerLakeUI 统一验证 WBP 配置。
 void UCatLocalPlayerUISubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -39,11 +39,11 @@ void UCatLocalPlayerUISubsystem::Initialize(FSubsystemCollectionBase& Collection
 	RefreshOnlineWidgetForCurrentController();
 }
 
-// 销毁流程：先释放 HUD、背包和提示模块，让输入和 View 意图不再触达旧 Controller；再解绑 Controller、移除 Frontend View 与 Online 快照订阅。
+// 销毁流程：先释放拾取提示、HUD、背包和交互提示模块，让输入和 View 意图不再触达旧 Controller；再解绑 Controller、移除 Frontend View 与 Online 快照订阅。
 void UCatLocalPlayerUISubsystem::Deinitialize()
 {
 	DetachInteractionView();
-	DetachLakePawn();
+	DetachPlayerLakeUI();
 	UnbindController();
 	RemoveOnlineWidget();
 	if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
@@ -64,7 +64,7 @@ void UCatLocalPlayerUISubsystem::Deinitialize()
 void UCatLocalPlayerUISubsystem::PlayerControllerChanged(APlayerController* NewController)
 {
 	DetachInteractionView();
-	DetachLakePawn();
+	DetachPlayerLakeUI();
 	UnbindController();
 	RemoveOnlineWidget();
 	Super::PlayerControllerChanged(NewController);
@@ -81,22 +81,20 @@ void UCatLocalPlayerUISubsystem::ToggleInventory()
 	}
 }
 
+// 外部容器背包打开流程：把交互对象提供的容器读源原样交给 Inventory PageController；Subsystem 不解释容器种类或移动权限。
+void UCatLocalPlayerUISubsystem::OpenInventoryWithExternalContainerContexts(
+	const TArray<UCatContainerReplicationComponent*>& ExternalContainers)
+{
+	if (InventoryPageController)
+	{
+		InventoryPageController->OpenInventoryWithExternalContainerContexts(ExternalContainers);
+	}
+}
+
 // 状态读取流程：从 PageController 读取唯一背包状态；未装配背包时固定返回 false，避免从 Widget 可见性拼第二份状态。
 bool UCatLocalPlayerUISubsystem::IsInventoryOpen() const
 {
 	return InventoryPageController ? InventoryPageController->IsInventoryOpen() : false;
-}
-
-// 旧菜单切换流程：迁移期转发给个人背包，避免外部旧入口继续打开已拆除的 LakeReach 总入口。
-void UCatLocalPlayerUISubsystem::ToggleLakeMenu()
-{
-	ToggleInventory();
-}
-
-// 旧菜单状态读取流程：迁移期返回个人背包状态，避免保留第二份 LakeReach 打开状态。
-bool UCatLocalPlayerUISubsystem::IsLakeMenuOpen() const
-{
-	return IsInventoryOpen();
 }
 
 // 快照消费流程：Online 变更时先调和 Frontend TravelWidget，再刷新 HUD/背包只读模型；不把 Online 事件参数拼进 View。
@@ -113,7 +111,7 @@ void UCatLocalPlayerUISubsystem::HandleOnlineSnapshotChanged()
 	}
 }
 
-// 动作转交流程：Frontend TravelWidget 的每个意图只调用 Online 的一个公开入口；LakeReach 离局意图由 PageController 直接走同一 Online 管线。
+// 动作转交流程：Frontend TravelWidget 的每个意图只调用 Online 的一个公开入口；局内拆分 UI 不在这里预建或转发对象页面。
 void UCatLocalPlayerUISubsystem::HandleActionRequested(const ECatOnlineUIAction Action, const FGuid OpaqueHandle)
 {
 	ULocalPlayer* LocalPlayer = GetLocalPlayer();
@@ -168,7 +166,7 @@ void UCatLocalPlayerUISubsystem::HandleActionRequested(const ECatOnlineUIAction 
 	}
 }
 
-// Frontend View 调和流程：读取当前完整 Online 快照；只有 Frontend 或前往 Lake 的等待态保留 TravelWidget，Lake 内正式入口交给 UIReach MVC。
+// Frontend View 调和流程：读取当前完整 Online 快照；只有 Frontend 或前往 Lake 的等待态保留 TravelWidget，Lake 内正式入口交给局内拆分 UI。
 void UCatLocalPlayerUISubsystem::RefreshOnlineWidgetForCurrentController()
 {
 	ULocalPlayer* LocalPlayer = GetLocalPlayer();
@@ -202,7 +200,7 @@ void UCatLocalPlayerUISubsystem::RefreshOnlineWidgetForCurrentController()
 	OnlineWidget->Configure(Snapshot);
 }
 
-// Frontend 面板判断流程：只承认前台和从前台出发去 Lake 的旅行等待；到达 Lake 后玩家入口由正式 LakeReach WBP 接管。
+// Frontend 面板判断流程：只承认前台和从前台出发去 Lake 的旅行等待；到达 Lake 后玩家入口由 HUD、背包和交互提示接管。
 bool UCatLocalPlayerUISubsystem::ShouldShowOnlineTravelWidget(const FCatOnlineSnapshot& Snapshot)
 {
 	return Snapshot.WorldState == ECatOnlineWorldState::Frontend
@@ -250,10 +248,10 @@ void UCatLocalPlayerUISubsystem::UnbindController()
 void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 {
 	DetachInteractionView();
-	DetachLakePawn();
+	DetachPlayerLakeUI();
 	ACatCharacter* Character = Cast<ACatCharacter>(NewPawn);
 	AttachInteractionView(BoundPlayerController.Get(), Character);
-	AttachLakePawn(Character);
+	AttachPlayerLakeUI(Character);
 }
 
 void UCatLocalPlayerUISubsystem::AttachInteractionView(APlayerController* Controller, ACatCharacter* Character)
@@ -309,7 +307,7 @@ void UCatLocalPlayerUISubsystem::HandleInteractionTargetChanged(AActor* Previous
 // 2. 创建 HUD Model/View 并入视口；HUD 只展示猫状态和钓鱼反馈。
 // 3. 创建 Inventory Model/PageController/View，但背包 View 不预先入视口，只通过既有 InputContext 的 Action 打开。
 // 4. 创建 Interaction 提示 View 和控制器；控制器只扫描通用交互目标，商店仍由世界交互对象拥有。
-void UCatLocalPlayerUISubsystem::AttachLakePawn(ACatCharacter* Character)
+void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 {
 	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
 	if (!Settings || !Settings->IsPlayerLakeUIEnabled() || !Character || Character->GetWorld() != GetWorld())
@@ -348,13 +346,13 @@ void UCatLocalPlayerUISubsystem::AttachLakePawn(ACatCharacter* Character)
 	if (!HUDModel || !HUDWidget || !InventoryModel || !InventoryPageController || !InventoryWidget
 		|| !InteractionPageController || !InteractionPromptWidget)
 	{
-		DetachLakePawn();
+		DetachPlayerLakeUI();
 		return;
 	}
 	InventoryWidget->SetInventorySlotWidgetClass(InventorySlotViewClass);
 	if (!HUDModel->Bind(GetLocalPlayer(), Controller, Character))
 	{
-		DetachLakePawn();
+		DetachPlayerLakeUI();
 		return;
 	}
 	HUDModelViewChangedHandle = HUDModel->OnViewStateChanged.AddUObject(
@@ -364,7 +362,7 @@ void UCatLocalPlayerUISubsystem::AttachLakePawn(ACatCharacter* Character)
 	if (!InventoryModel->Bind(GetLocalPlayer(), Controller, Character)
 		|| !InventoryPageController->Bind(GetLocalPlayer(), Controller, InventoryModel, InventoryWidget))
 	{
-		DetachLakePawn();
+		DetachPlayerLakeUI();
 		return;
 	}
 	FCatInteractionPromptViewState HiddenPrompt;
@@ -373,7 +371,7 @@ void UCatLocalPlayerUISubsystem::AttachLakePawn(ACatCharacter* Character)
 	InteractionPromptWidget->AddToViewport(2);
 	if (!InteractionPageController->Bind(Controller, InteractionPromptWidget))
 	{
-		DetachLakePawn();
+		DetachPlayerLakeUI();
 		return;
 	}
 	UE_LOG(LogCatUI, Log,
@@ -387,7 +385,7 @@ void UCatLocalPlayerUISubsystem::AttachLakePawn(ACatCharacter* Character)
 }
 
 // 本地玩家 UI 解绑流程：PageController 先恢复输入和解绑 View 意图，Model 再解除玩法订阅，最后移除各自 WBP 并清引用。
-void UCatLocalPlayerUISubsystem::DetachLakePawn()
+void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 {
 	if (InventoryPageController)
 	{
@@ -426,9 +424,6 @@ void UCatLocalPlayerUISubsystem::DetachLakePawn()
 		InteractionPromptWidget->RemoveFromParent();
 		InteractionPromptWidget = nullptr;
 	}
-	LakeReachPageController = nullptr;
-	LakeReachModel = nullptr;
-	LakeReachWidget = nullptr;
 	UE_LOG(LogCatUI, Log, TEXT("Event=ui_player_modules_detached World=%s ShopPrecreated=false"),
 		GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
 }

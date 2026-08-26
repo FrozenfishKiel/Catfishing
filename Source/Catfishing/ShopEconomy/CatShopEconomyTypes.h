@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Framework/Core/CatDomainCommandTypes.h"
@@ -40,11 +40,11 @@ enum class ECatShopTransactionKind : uint8
 {
 	/** 交易类别未知；只作为默认空值。 */
 	Unknown,
-	/** 消耗团队钱包购买一条商店目录项。 */
+	/** 消耗团队公款购买一条商店目录项。 */
 	Purchase,
-	/** Items 已不可逆移除鱼以后，把售鱼收入记入团队钱包。 */
+	/** Items 已不可逆移除鱼以后，把售鱼收入记入团队公款。 */
 	FishSale,
-	/** 领取配置为免费自取的订单；普通饵和 1 级保底竿都走这一类，不会减少钱包。 */
+	/** 领取配置为免费自取的订单；普通饵和 1 级保底竿都走这一类，不会减少公款。 */
 	FreeClaim
 };
 
@@ -54,7 +54,7 @@ enum class ECatShopDeliveryState : uint8
 {
 	/** 该交易不需要交付；售鱼入账属于这种账本。 */
 	None,
-	/** 钱包和库存已经提交，等待 Equipment 或后续团队装备库给出交付回执。 */
+	/** 公款和库存已经提交，等待 Equipment 或后续团队装备库给出交付回执。 */
 	Pending,
 	/** 下游领域已经以独立回执确认交付完成；重复确认只读取这条事实。 */
 	Delivered
@@ -79,7 +79,7 @@ struct FCatShopCatalogEntry
 	FName DefinitionId = NAME_None;
 
 	/**
-	 * 单次购买消耗的钱包数额。0 是合法取值，表达"这一项显式免费"，免费普通饵就靠它；负数不允许，商店不能反过来发钱。
+	 * 单次购买消耗的公款数额。0 是合法取值，表达"这一项显式免费"，免费普通饵就靠它；负数不允许，商店不能反过来发钱。
 	 * 默认值刻意取 -1 作为"这一列还没填"的哨兵，而不是 0：两者在运行期必须能区分开，
 	 * 否则漏填价格的目录项会静默变成免费品，玩家能白拿本该收费的东西。校验因此只放行显式写过的非负价格。
 	 * 这里不设 ClampMin，否则编辑器会把哨兵夹成 0，等于把这条区分能力又抹掉。
@@ -136,17 +136,17 @@ struct FCatShopFishWeightPrice
 	bool IsRuntimeReady() const;
 };
 
-/** 团队钱包复制/查询快照；当前只在服务器服务内维护，UI 接线后可用它做只读展示。 */
+/** 团队公款复制/查询快照；当前只在服务器服务内维护，UI 接线后可用它做只读展示。 */
 USTRUCT(BlueprintType)
 struct FCatShopWalletSnapshot
 {
 	GENERATED_BODY()
 
-	/** 钱包聚合版本；每次余额改变递增，购买和售鱼命令以它做并发前提。 */
+	/** 公款聚合版本；每次余额改变递增，购买和售鱼命令以它做并发前提。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 
-	/** 团队当前余额；没有个人钱包分叉，也不允许客户端直接提交增量。 */
+	/** 团队当前余额；没有个人公款分叉，也不允许客户端直接提交增量。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 Balance = 0;
 };
@@ -174,7 +174,7 @@ struct FCatShopStockSnapshot
 	int64 Revision = 0;
 };
 
-/** 一条经济账本记录；金额、钱包和库存事实不可回写，交付状态只由下游回执推进。 */
+/** 一条经济账本记录；金额、公款和库存事实不可回写，交付状态只由下游回执推进。 */
 USTRUCT(BlueprintType)
 struct FCatShopTransactionRecord
 {
@@ -188,7 +188,7 @@ struct FCatShopTransactionRecord
 	UPROPERTY(BlueprintReadOnly)
 	FGuid RequestId;
 
-	/** 服务器重建的操作者身份；团队钱包仍是共享的，不按该身份拆分余额。 */
+	/** 服务器重建的操作者身份；团队公款仍是共享的，不按该身份拆分余额。 */
 	UPROPERTY(BlueprintReadOnly)
 	FString StableNetId;
 
@@ -228,11 +228,11 @@ struct FCatShopTransactionRecord
 	UPROPERTY(BlueprintReadOnly)
 	ECatShopFishSaleSource FishSource = ECatShopFishSaleSource::Unknown;
 
-	/** 对团队钱包的真实增量；购买为负，售鱼为正，免费领取为 0。 */
+	/** 对团队公款的真实增量；购买为负，售鱼为正，免费领取为 0。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 WalletDelta = 0;
 
-	/** 交易提交后的钱包版本；免费领取不改余额时保留当前版本。 */
+	/** 交易提交后的公款版本；免费领取不改余额时保留当前版本。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 WalletRevision = 0;
 
@@ -242,7 +242,7 @@ struct FCatShopTransactionRecord
 };
 
 /**
- * 一条对全队公开的经济流水。飞书 §3.3 要求收入支出全体可见、§3.2 要求每笔购买全队广播，
+ * 一条对全队公开的经济交易记录。飞书 §3.3 要求收入支出全体可见、§3.2 要求每笔购买全队广播，
  * 所以这份形态只留下"谁、做了什么、钱怎么动的"，不带服务器私有身份键，也不带库存内部结构。
  */
 USTRUCT(BlueprintType)
@@ -255,7 +255,7 @@ struct FCatShopPublicTransaction
 	FGuid TransactionId;
 
 	/**
-	 * 这笔流水的公开操作者。ShopEconomy 服务手上只有服务器私有 StableNetId，按项目约定不能进复制 DTO，
+	 * 这笔交易记录的公开操作者。ShopEconomy 服务手上只有服务器私有 StableNetId，按项目约定不能进复制 DTO，
 	 * 所以这一项由复制挂载点按身份映射解析后填入；服务自己构造快照时一律留空。
 	 */
 	UPROPERTY(BlueprintReadOnly)
@@ -287,8 +287,8 @@ struct FCatShopPublicTransaction
 };
 
 /**
- * 团队经济对外的完整只读形态。飞书 §7 要求公款余额全队常时可见，所以余额和流水放在同一份快照里，
- * 客户端拿到它就能同时渲染余额和流水，不需要再发第二次查询。
+ * 团队经济对外的完整只读形态。飞书 §7 要求公款余额全队常时可见，所以余额、货架库存和公开交易记录放在同一份快照里，
+ * 客户端拿到它就能同时渲染余额、库存和交易反馈，不需要再发第二次查询。
  * 这份结构本身不复制：挂到 GameState 还是独立组件由 Framework 决定，ShopEconomy 只负责它的内容正确。
  */
 USTRUCT(BlueprintType)
@@ -308,18 +308,22 @@ struct FCatShopPublicEconomySnapshot
 	UPROPERTY(BlueprintReadOnly)
 	int32 ShopDayIndex = 0;
 
-	/** 本局至今的全部公开流水，按发生顺序排列。 */
+	/** 当前货架库存快照；UI 用它展示剩余数量和禁用已售罄条目，不能据此绕过服务器购买裁决。 */
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FCatShopStockSnapshot> Stocks;
+
+	/** 本局至今的全部公开交易记录，按发生顺序排列。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatShopPublicTransaction> Transactions;
 };
 
-/** 玩家购买或免费领取的经济命令；ExpectedRevision 对应团队钱包版本。 */
+/** 玩家购买或免费领取的经济命令；ExpectedRevision 对应团队公款版本。 */
 USTRUCT(BlueprintType)
 struct FCatShopPurchaseCommand
 {
 	GENERATED_BODY()
 
-	/** RequestId、ExpectedRevision 与服务器身份；客户端不能提交价格、库存或钱包增量。 */
+	/** RequestId、ExpectedRevision 与服务器身份；客户端不能提交价格、库存或公款增量。 */
 	UPROPERTY(BlueprintReadWrite)
 	FCatDomainCommandContext Context;
 
@@ -334,7 +338,7 @@ struct FCatShopFishSaleCommand
 {
 	GENERATED_BODY()
 
-	/** RequestId、ExpectedRevision 与服务器身份；ExpectedRevision 仍指向团队钱包版本。 */
+	/** RequestId、ExpectedRevision 与服务器身份；ExpectedRevision 仍指向团队公款版本。 */
 	UPROPERTY(BlueprintReadWrite)
 	FCatDomainCommandContext Context;
 
@@ -342,7 +346,7 @@ struct FCatShopFishSaleCommand
 	UPROPERTY(BlueprintReadWrite)
 	FGuid FishInstanceId;
 
-	/** Items 不可逆提交或交易协调记录 ID；没有该证据时不能给钱包入账。 */
+	/** Items 不可逆提交或交易协调记录 ID；没有该证据时不能给公款入账。 */
 	UPROPERTY(BlueprintReadWrite)
 	FGuid ItemsCommitId;
 
@@ -357,13 +361,13 @@ struct FCatShopFishSaleCommand
 	/**
 	 * 调用方带进来的成交价。服务器会用 WeightKilograms 自己查一次体重轴，两个值不完全相等就拒绝这笔售鱼。
 	 * 保留一个由调用方填的价格，是为了让玩家在界面上看到的报价和最终入账的钱必须是同一个数；
-	 * 它不是定价权：客户端伪造一个大数只会让整笔交易被拒，不会让钱包多出一分钱。
+	 * 它不是定价权：客户端伪造一个大数只会让整笔交易被拒，不会让公款多出一分钱。
 	 */
 	UPROPERTY(BlueprintReadWrite)
 	int32 SaleValue = 0;
 };
 
-/** 下游领域完成购买交付后的确认命令；它只推进账本状态，不重新扣钱包或库存。 */
+/** 下游领域完成购买交付后的确认命令；它只推进账本状态，不重新扣公款或库存。 */
 USTRUCT(BlueprintType)
 struct FCatShopDeliveryConfirmationCommand
 {
@@ -386,17 +390,17 @@ struct FCatShopDeliveryConfirmationCommand
 	int64 DeliveryRevision = 0;
 };
 
-/** 经济命令的统一返回；包含公共终态、钱包快照、库存快照和首次账本记录。 */
+/** 经济命令的统一返回；包含公共终态、公款快照、库存快照和首次账本记录。 */
 USTRUCT(BlueprintType)
 struct FCatShopTransactionResult
 {
 	GENERATED_BODY()
 
-	/** 公共命令终态；Revision 始终对齐团队钱包版本。 */
+	/** 公共命令终态；Revision 始终对齐团队公款版本。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatDomainCommandResult Command;
 
-	/** 交易提交后团队钱包只读快照；拒绝时返回当前钱包。 */
+	/** 交易提交后团队公款只读快照；拒绝时返回当前公款。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatShopWalletSnapshot Wallet;
 

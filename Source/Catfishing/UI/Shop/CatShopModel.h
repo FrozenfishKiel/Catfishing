@@ -11,7 +11,7 @@ class ACatfishingGameState;
 /** 商店 Model 完整投影变化通知；PageController 收到后只把 ViewState 交给 Shop WBP。 */
 DECLARE_MULTICAST_DELEGATE(FCatShopModelChanged);
 
-/** 商店 MVC Model；它只读 GameState 公款快照和 Settings 商品目录，不创建 Widget、不提交订单。 */
+/** 商店 MVC Model；它只读 GameState 经济/货架快照和 Settings 商品目录，不创建 Widget、不提交订单。 */
 UCLASS()
 class CATFISHING_API UCatShopModel : public UObject
 {
@@ -27,16 +27,16 @@ public:
 	/** 写入商店打开状态并刷新投影；打开来源仍归交互对象组件所有。 */
 	void SetOpen(bool bOpen);
 
-	/** 标记 PageController 已经提交购买或领取 RPC；等待公开快照刷新时禁用重复动作。 */
+	/** 标记 PageController 已经提交购买或领取 RPC；等待经济/货架快照刷新时禁用重复动作。 */
 	void MarkActionSubmitted(ECatShopUIAction Action, FName EntryId);
 
 	/** 标记本地适配层拒绝了 UI 意图；例如条目不存在、经济快照缺失或动作类型不匹配。 */
 	void MarkActionRejected(ECatShopUIAction Action, FName EntryId, FText Reason);
 
-	/** 主动重读当前公开经济快照和配置目录；外部只读事实变化都收敛到这里。 */
+	/** 主动重读当前公开经济/货架快照和配置目录；外部只读事实变化都收敛到这里。 */
 	void Refresh();
 
-	/** 返回最近商店投影；调用方只能读取，不能写回团队钱包或商品目录。 */
+	/** 商店只读投影的查询入口；调用方拿到最近缓存副本，避免写回团队公款或商品目录。 */
 	const FCatShopViewState& GetViewState() const;
 
 	/** 按 EntryId 查找最近投影中的商品行；PageController 用它确认点击来自当前目录。 */
@@ -46,11 +46,12 @@ public:
 	FCatShopModelChanged OnViewStateChanged;
 
 private:
-	/** GameState 商店快照变化入口；刷新公款、流水和 pending 提示。 */
+	/** GameState 商店快照变化入口；刷新公款、商品可用性和 pending 提示。 */
 	void HandleShopEconomySnapshotChanged();
 
-	/** 按配置目录生成一条商品展示投影；不读取运行期写口，也不推导价格。 */
-	FCatShopEntryView MakeEntryView(const FCatShopCatalogEntry& Entry) const;
+	/** 按配置目录和公开经济/货架快照生成一条商品展示投影；只推导玩家可见余额/库存状态，不读取商店写口。 */
+	FCatShopEntryView MakeEntryView(const FCatShopCatalogEntry& Entry,
+		const FCatShopPublicEconomySnapshot& Economy, bool bEconomyAvailable) const;
 
 	/** 当前打开商店的 Controller 弱引用；只用于定位 World/GameState，不拥有 UI 生命周期。 */
 	UPROPERTY(Transient)
@@ -66,7 +67,7 @@ private:
 	/** 当前商店窗口是否打开的交互组件投影；Model 不从 Widget 可见性反推。 */
 	bool bOpen = false;
 
-	/** 当前是否已有购买或领取请求提交后等待公开快照刷新。 */
+	/** 当前是否已有购买或领取请求提交后等待商店快照同步。 */
 	bool bActionPending = false;
 
 	/** 最近一次提交或本地拒绝的动作类型。 */

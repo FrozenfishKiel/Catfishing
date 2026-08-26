@@ -62,7 +62,7 @@ void UCatShopWidget::NativeDestruct()
 	Super::NativeDestruct();
 }
 
-// 渲染流程：缓存只读投影，复制 Designer 绑定字段，然后给蓝图扩展点一次完整状态。
+// 渲染流程：缓存只读投影，复制 Designer 绑定字段，并按每条商品自己的余额/库存 gate 更新默认按钮。
 void UCatShopWidget::RenderShop(const FCatShopViewState& ViewState)
 {
 	LastShopViewState = ViewState;
@@ -88,22 +88,30 @@ void UCatShopWidget::RenderShop(const FCatShopViewState& ViewState)
 	{
 		EntriesTextBlock->SetText(BlueprintEntriesText);
 	}
-	const bool bActionEnabled = ViewState.bOpen && ViewState.bEconomyAvailable && !ViewState.bActionPending;
+	const auto IsEntryActionEnabled = [&ViewState](const FName EntryId)
+	{
+		const FCatShopEntryView* Entry = ViewState.Entries.FindByPredicate(
+			[EntryId](const FCatShopEntryView& Candidate)
+			{
+				return Candidate.EntryId == EntryId;
+			});
+		return Entry && Entry->bActionEnabled;
+	};
 	if (PurchaseShopRodT2Button)
 	{
-		PurchaseShopRodT2Button->SetIsEnabled(bActionEnabled);
+		PurchaseShopRodT2Button->SetIsEnabled(IsEntryActionEnabled(TEXT("ShopRodT2Order")));
 	}
 	if (PurchaseBugChumButton)
 	{
-		PurchaseBugChumButton->SetIsEnabled(bActionEnabled);
+		PurchaseBugChumButton->SetIsEnabled(IsEntryActionEnabled(TEXT("ShopBugChumOrder")));
 	}
 	if (ClaimFreeBugBaitButton)
 	{
-		ClaimFreeBugBaitButton->SetIsEnabled(bActionEnabled);
+		ClaimFreeBugBaitButton->SetIsEnabled(IsEntryActionEnabled(TEXT("FreeBugBaitClaim")));
 	}
 	if (ClaimFreeStarterRodButton)
 	{
-		ClaimFreeStarterRodButton->SetIsEnabled(bActionEnabled);
+		ClaimFreeStarterRodButton->SetIsEnabled(IsEntryActionEnabled(TEXT("FreeStarterRodClaim")));
 	}
 	BP_RenderShop(LastShopViewState);
 }
@@ -114,7 +122,7 @@ const FCatShopViewState& UCatShopWidget::GetLastShopViewState() const
 	return LastShopViewState;
 }
 
-// 购买请求流程：只允许有效 EntryId 出口；价格、库存、钱包版本由 PageController 和服务器后端补齐。
+// 购买请求流程：只允许有效 EntryId 出口；价格、库存和公款并发版本由 PageController 与服务器后端补齐。
 void UCatShopWidget::RequestPurchaseEntry(const FName EntryId)
 {
 	if (EntryId.IsNone())

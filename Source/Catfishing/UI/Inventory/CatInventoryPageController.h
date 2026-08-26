@@ -1,11 +1,12 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "UI/CatUIModalInputMode.h"
 #include "UObject/Object.h"
 #include "CatInventoryPageController.generated.h"
 
-class ACatCampHubActor;
 class APlayerController;
+class UCatContainerReplicationComponent;
 class UCatInventoryModel;
 class UCatInventoryWidget;
 class UEnhancedInputComponent;
@@ -13,8 +14,9 @@ class UInputAction;
 class ULocalPlayer;
 enum class ECatInventoryAction : uint8;
 enum class ECatInventorySlotPointerAction : uint8;
+struct FCatInventorySlotView;
 
-/** 个人鱼护背包的 PageController；它连接 Model 与 WBP，并把纯 UI 意图翻译成输入模式或正式服务器命令。 */
+/** 背包 PageController；它连接 Model 与 WBP，并把格子、拖拽和鱼动作等纯 UI 意图翻译成输入模式或正式服务器命令。 */
 UCLASS()
 class CATFISHING_API UCatInventoryPageController : public UObject
 {
@@ -28,8 +30,11 @@ public:
 	/** 成对解除输入、Model/View 委托和 UI 焦点；换 Pawn、旅行或销毁时调用。 */
 	void Unbind();
 
-	/** 切换个人背包打开状态；只有当前 Controller、Model 和 View 都有效时才改变输入模式和 ViewState。 */
+	/** 切换背包打开状态；只有当前 Controller、Model 和 View 都有效时才改变输入模式和 ViewState。 */
 	void ToggleInventory();
+
+	/** 打开带外部容器上下文的背包；交互对象只提供容器读源，后续移动仍由 Drop 和服务器权限裁决。 */
+	void OpenInventoryWithExternalContainerContexts(const TArray<UCatContainerReplicationComponent*>& ExternalContainers);
 
 	/** 返回背包是否由本 PageController 保持打开；不从 Widget 可见性反推。 */
 	bool IsInventoryOpen() const;
@@ -50,11 +55,14 @@ private:
 	/** 背包格子右键或拖拽意图；默认只同步选择，具体上下文表现留给 WBP。 */
 	void HandleViewSlotPointerRequested(int32 SlotIndex, ECatInventorySlotPointerAction PointerAction);
 
+	/** 背包格子 Drop 意图；从最新 Model 复核源物体和目标容器后提交跨容器服务器事务。 */
+	void HandleViewSlotDropRequested(const FCatInventorySlotView& SourceSlot, const FCatInventorySlotView& TargetSlot);
+
 	/** 背包 View 发出动作意图时从 Model 当前选择重建 PlayerController 服务器命令。 */
 	void HandleViewActionRequested(ECatInventoryAction Action);
 
-	/** 为转缸动作在当前 World 中定位最近固定营地；找不到时返回空并让 Model 显示结构化拒绝。 */
-	ACatCampHubActor* ResolveCampHubForInventoryAction() const;
+	/** 设置背包打开态并成对处理视口、输入模式和 Model 打开投影；普通切换和交互打开共用这条生命周期。 */
+	void SetInventoryOpen(bool bOpen);
 
 	/** 加载 Settings 中配置的背包 Action，并绑定到当前 EnhancedInputComponent；按键映射必须来自既有 InputContext。 */
 	void InstallInventoryInput();
@@ -62,7 +70,7 @@ private:
 	/** 从原 EnhancedInputComponent 精确移除背包 Action 绑定，再释放配置资产强引用。 */
 	void RemoveInventoryInput();
 
-	/** 根据背包打开状态设置 UIOnly/GameOnly、键盘焦点和鼠标，并在关闭时恢复打开前鼠标可见性。 */
+	/** 根据背包打开状态应用或释放模态 UI 输入锁；打开会停止当前移动，关闭会恢复本页面改过的焦点和鼠标。 */
 	void ApplyInventoryInputMode(bool bOpen);
 
 	/** 当前 PageController 所属 LocalPlayer；用于访问配置和输入生命周期。 */
@@ -73,7 +81,7 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APlayerController> BoundPlayerController;
 
-	/** 当前页面读取的背包 Model；PageController 不直接订阅鱼护复制组件。 */
+	/** 当前页面读取的背包 Model；PageController 不直接订阅鱼护、装备或待取装备复制源。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatInventoryModel> BoundModel;
 
@@ -101,6 +109,9 @@ private:
 	/** View 格子鼠标上下文意图订阅句柄；Unbind 必须从同一 View 移除。 */
 	FDelegateHandle ViewSlotPointerHandle;
 
+	/** View 格子 Drop 意图订阅句柄；Unbind 必须从同一 View 移除。 */
+	FDelegateHandle ViewSlotDropHandle;
+
 	/** View 背包动作意图订阅句柄；Unbind 必须从同一 View 移除。 */
 	FDelegateHandle ViewActionHandle;
 
@@ -110,6 +121,6 @@ private:
 	/** 背包当前是否打开的唯一状态；Toggle 写入，Model 和输入恢复只读取。 */
 	bool bInventoryOpen = false;
 
-	/** 打开背包前 Controller 的鼠标可见性；关闭、换 Pawn 或旅行时恢复该值。 */
-	bool bPreviousMouseCursorVisible = false;
+	/** 背包打开期间的模态输入恢复记录；它只记录本页面申请的一层移动/视角锁和鼠标状态。 */
+	FCatUIModalInputModeState ModalInputModeState;
 };

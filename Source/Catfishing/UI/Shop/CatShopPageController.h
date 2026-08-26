@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "UObject/Object.h"
+#include "UI/CatUIModalInputMode.h"
 #include "UI/Shop/CatShopTypes.h"
 #include "CatShopPageController.generated.h"
 
@@ -12,7 +13,7 @@ class UCatShopWidget;
 /** 商店页面请求关闭后的通知；拥有它的交互对象组件用这个事件清理实例。 */
 DECLARE_MULTICAST_DELEGATE(FCatShopPageCloseRequested);
 
-/** 商店 PageController；它把 Shop Widget 意图翻译成 PlayerController RPC，并管理本次打开的输入焦点。 */
+/** 商店 PageController；它把 Shop Widget 意图翻译成 PlayerController RPC，并管理本次打开的模态输入焦点。 */
 UCLASS()
 class CATFISHING_API UCatShopPageController : public UObject
 {
@@ -25,13 +26,13 @@ public:
 	/** 关闭页面、恢复输入模式、解绑 Model/View 广播并清空弱引用。 */
 	void Unbind();
 
-	/** 打开商店页面到视口并应用 UIOnly 焦点；重复调用保持幂等。 */
+	/** 打开商店页面到视口并应用模态输入焦点；重复调用保持幂等。 */
 	void OpenShop();
 
-	/** 关闭商店页面并恢复 GameOnly；是否销毁对象由交互组件决定。 */
+	/** 关闭商店页面并释放模态输入锁；是否销毁对象由交互组件决定。 */
 	void CloseShop();
 
-	/** 返回本次商店页面是否打开；不从 Widget 可见性反推第二份状态。 */
+	/** 本次商店页面打开状态的查询入口；只读取 PageController 状态，避免从 Widget 可见性反推第二份真相。 */
 	bool IsShopOpen() const;
 
 	/** PageController 请求关闭通知；交互对象组件订阅它做最终销毁。 */
@@ -47,7 +48,7 @@ private:
 	/** View 商品动作入口；验证当前条目后提交正式购买或免费领取 RPC。 */
 	void HandleViewEntryActionRequested(FName EntryId, ECatShopUIAction Action);
 
-	/** 打开和关闭时切换输入模式与鼠标状态；不安装 MappingContext 或硬写按键。 */
+	/** 打开和关闭时应用模态 UI 输入锁；不安装 MappingContext 或硬写按键。 */
 	void ApplyShopInputMode(bool bOpen);
 
 	/** 当前打开商店的 Controller；商店 UI 不属于 LocalPlayer 预建根，只属于本次交互。 */
@@ -62,18 +63,18 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatShopWidget> BoundView;
 
-	/** Model 投影变化解绑句柄。 */
+	/** Model 投影变化订阅句柄；Unbind 必须从同一 Model 移除，避免旧页面继续渲染。 */
 	FDelegateHandle ModelViewChangedHandle;
 
-	/** View 关闭意图解绑句柄。 */
+	/** View 关闭意图订阅句柄；Unbind 必须从同一 View 移除，避免销毁期按钮重复关闭。 */
 	FDelegateHandle ViewCloseHandle;
 
-	/** View 商品动作意图解绑句柄。 */
+	/** View 商品动作意图订阅句柄；Unbind 必须从同一 View 移除，避免旧商品按钮迟到下单。 */
 	FDelegateHandle ViewEntryActionHandle;
 
-	/** 打开商店前 Controller 的鼠标显示状态；关闭时恢复。 */
-	bool bPreviousMouseCursorVisible = false;
+	/** 商店打开期间的模态输入恢复记录；关闭页面时用它撤销本页面的移动/视角锁和鼠标状态。 */
+	FCatUIModalInputModeState ModalInputModeState;
 
-	/** 当前页面是否处于打开状态。 */
+	/** 当前商店页面是否由本 PageController 打开；OpenShop/CloseShop 是唯一写者，Widget 可见性不反推它。 */
 	bool bShopOpen = false;
 };

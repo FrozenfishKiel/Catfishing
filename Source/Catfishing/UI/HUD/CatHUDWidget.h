@@ -4,6 +4,7 @@
 #include "Blueprint/UserWidget.h"
 #include "Condition/CatConditionTypes.h"
 #include "Fishing/Integration/CatFishingCommandTypes.h"
+#include "Growth/CatGrowthTypes.h"
 #include "UI/CatFishingViewTypes.h"
 #include "CatHUDWidget.generated.h"
 
@@ -30,6 +31,10 @@ struct FCatHUDViewState
 	/** Character 离散状态快照；Wet、Downed 和恢复仍由 Condition 模块拥有。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatConditionSnapshot Condition;
+
+	/** Character 成长快照；经验槽和待选次数仍由 Growth 组件拥有，HUD 只展示当前事实。 */
+	UPROPERTY(BlueprintReadOnly)
+	FCatGrowthSnapshot Growth;
 
 	/** 当前玩家钓鱼会话投影；只有 bHasFishingSession 为 true 时代表有效反馈。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -66,7 +71,7 @@ public:
 	/** 接收 HUD Model 的只读投影并同步蓝图绑定字段；具体布局和表现交给 WBP。 */
 	void RenderHUD(const FCatHUDViewState& ViewState);
 
-	/** 返回最近一次 HUD 投影；蓝图动画或调试面板只读它。 */
+	/** 暴露最近一次 HUD 投影给蓝图表现；它不持有 Character 或 ASC，因此不能被蓝图拿去改状态。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|HUD")
 	const FCatHUDViewState& GetLastHUDViewState() const;
 

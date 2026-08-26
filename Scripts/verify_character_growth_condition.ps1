@@ -157,7 +157,7 @@ function Invoke-CharacterGrowthConditionStatic {
         "ServerRequestSacrifice_Implementation",
         "ServerRequestCampRest_Implementation",
         "ServerRequestCampfirePlayback_Implementation",
-        "ServerTransferFishToTank_Implementation",
+        "ServerTransferObjectBetweenContainers_Implementation",
         "ServerRescueCharacterToCamp_Implementation",
         "ServerRepairRodAtCamp_Implementation",
         "ServerUseHerbOnCharacter_Implementation",
@@ -169,7 +169,7 @@ function Invoke-CharacterGrowthConditionStatic {
         "ServerPlaceProtectionSign_Implementation",
         "ServerCompleteShakeDry_Implementation"
     )) {
-        Assert-TextContains $GameplayTypes "$BodyActionRpc[\s\S]{0,700}SubmitBodyActionThroughAbility" "$BodyActionRpc must hand off to BodyAction GameplayAbility before domain execution"
+        Assert-TextContains $GameplayTypes "$BodyActionRpc[\s\S]{0,1800}SubmitBodyActionThroughAbility" "$BodyActionRpc must hand off to BodyAction GameplayAbility before domain execution"
     }
 
     $FishingService = Read-ProjectFileText "Source\Catfishing\Fishing\CatFishingService.cpp"
@@ -189,26 +189,28 @@ function Invoke-CharacterGrowthConditionStatic {
     Assert-TextContains $FishDefinition "EatingExperience" "Fish definition must expose eating experience"
     Assert-TextNotContains $FishDefinition "HungerRelief" "Fish definition still exposes removed hunger relief"
 
-    $LakeReachWidget = Read-ProjectFileText "Source\Catfishing\UI\CatLakeReachWidget.h"
-    Assert-TextContains $LakeReachWidget "FCatGrowthSnapshot Growth" "Lake reach view state must expose Growth snapshot"
-    Assert-TextNotContains $LakeReachWidget "Hunger|Fatigue" "Lake reach view state still exposes removed Hunger/Fatigue display fields"
+    $HUDWidget = Read-ProjectFileText "Source\Catfishing\UI\HUD\CatHUDWidget.h"
+    Assert-TextContains $HUDWidget "FCatGrowthSnapshot Growth" "HUD view state must expose Growth snapshot after the one-page lake UI is removed"
+    Assert-TextContains $HUDWidget "FCatConditionSnapshot Condition" "HUD view state must expose Condition snapshot"
+    Assert-TextNotContains $HUDWidget "Hunger|Fatigue" "HUD view state still exposes removed Hunger/Fatigue display fields"
 
     $LocalPlayerUI = Read-ProjectFileText "Source\Catfishing\UI\CatLocalPlayerUISubsystem.cpp"
-    Assert-TextContains $LocalPlayerUI "LoadLakeReachWidgetClass" "LocalPlayer UI must create LakeReach from the configured formal WBP class"
-    Assert-TextContains $LocalPlayerUI "UCatLakeReachModel" "LocalPlayer UI must assemble a LakeReach Model instead of aggregating gameplay state itself"
-    Assert-TextContains $LocalPlayerUI "UCatLakeReachPageController" "LocalPlayer UI must assemble a LakeReach PageController for View intent routing"
+    Assert-TextContains $LocalPlayerUI "LoadHUDWidgetClass" "LocalPlayer UI must create HUD from the configured formal WBP class"
+    Assert-TextContains $LocalPlayerUI "UCatHUDModel" "LocalPlayer UI must assemble a HUD Model instead of aggregating gameplay state itself"
+    Assert-TextContains $LocalPlayerUI "UCatInventoryPageController" "LocalPlayer UI must assemble an Inventory PageController for inventory intent routing"
+    Assert-TextContains $LocalPlayerUI "UCatInteractionPageController" "LocalPlayer UI must assemble a generic interaction PageController"
     Assert-TextNotContains $LocalPlayerUI "GetHungerAttribute|GetFatigueAttribute|ViewState\.Hunger|ViewState\.Fatigue" "LocalPlayer UI still reads removed Hunger/Fatigue state"
 
-    $LakeReachModel = Read-ProjectFileText "Source\Catfishing\UI\CatLakeReachModel.cpp"
-    Assert-TextContains $LakeReachModel "GetGrowthComponent" "LakeReach Model must bind the Character Growth component"
-    Assert-TextContains $LakeReachModel "NewState\.Growth = Growth->GetSnapshot\(\)" "LakeReach Model must copy Growth into the read-only view state"
-    Assert-TextContains $LakeReachModel "GetConditionComponent" "LakeReach Model must bind the Character Condition component"
-    Assert-TextContains $LakeReachModel "NewState\.Condition = Conditions->GetSnapshot\(\)" "LakeReach Model must copy Condition into the read-only view state"
-    Assert-TextNotContains $LakeReachModel "GetHungerAttribute|GetFatigueAttribute|ViewState\.Hunger|ViewState\.Fatigue" "LakeReach Model still reads removed Hunger/Fatigue state"
+    $HUDModel = Read-ProjectFileText "Source\Catfishing\UI\HUD\CatHUDModel.cpp"
+    Assert-TextContains $HUDModel "GetGrowthComponent" "HUD Model must bind the Character Growth component"
+    Assert-TextContains $HUDModel "NewState\.Growth = Growth->GetSnapshot\(\)" "HUD Model must copy Growth into the read-only view state"
+    Assert-TextContains $HUDModel "GetConditionComponent" "HUD Model must bind the Character Condition component"
+    Assert-TextContains $HUDModel "NewState\.Condition = Condition->GetSnapshot\(\)" "HUD Model must copy Condition into the read-only view state"
+    Assert-TextNotContains $HUDModel "GetHungerAttribute|GetFatigueAttribute|ViewState\.Hunger|ViewState\.Fatigue" "HUD Model still reads removed Hunger/Fatigue state"
 
-    $LakeReachRender = Read-ProjectFileText "Source\Catfishing\UI\CatLakeReachWidget.cpp"
-    Assert-TextContains $LakeReachRender "BlueprintState\.Growth = ViewState\.Growth" "Lake reach View must carry the Growth snapshot into the blueprint-safe DTO"
-    Assert-TextNotContains $LakeReachRender "Hunger|Fatigue" "Lake reach debug view still renders removed Hunger/Fatigue labels"
+    $HUDRender = Read-ProjectFileText "Source\Catfishing\UI\HUD\CatHUDWidget.cpp"
+    Assert-TextContains $HUDRender "LastHUDViewState = ViewState" "HUD View must carry Growth and Condition snapshots into the blueprint-safe DTO"
+    Assert-TextNotContains $HUDRender "Hunger|Fatigue" "HUD debug view still renders removed Hunger/Fatigue labels"
 
     $DefaultGame = Read-ProjectFileText "Config\DefaultGame.ini"
     Assert-TextContains $DefaultGame "\[/Script/Catfishing\.CatConditionSettings\]" "DefaultGame must configure Condition runtime"
@@ -293,7 +295,7 @@ function Invoke-CharacterGrowthConditionAutomation {
     Invoke-AutomationFilter "Catfishing.Unit.Framework.GameMode.CommandIntentPhaseGatesKeepSocialReadyAndSettlementOpen" "FrameworkCommandGate"
     Invoke-AutomationFilter "Catfishing.Unit.Growth" "Growth"
     Invoke-AutomationFilter "Catfishing.Unit.Data" "Data"
-    Invoke-AutomationFilter "Catfishing.Unit.UI.Reach" "UIReach"
+    Invoke-AutomationFilter "Catfishing.Unit.UI.Settings" "UISettings"
     Invoke-AutomationFilter "Catfishing.Unit.UI.LocalPlayerUISubsystem" "UILocalPlayer"
     Invoke-AutomationFilter "Catfishing.Unit.Fishing" "Fishing"
     Invoke-AutomationFilter "Catfishing.PlayerEntry.FullLoop" "PlayerEntry"

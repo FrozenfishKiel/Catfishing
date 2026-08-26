@@ -27,7 +27,7 @@ public:
 	/** 主动从 Profile 重读图鉴快照；Profile 未就绪时发布 unavailable 状态。 */
 	void Refresh();
 
-	/** 返回最近一次图鉴投影；调用方只能读取。 */
+	/** 提供最近发布的图鉴投影副本；View 用它重绘，不通过返回值拿 Profile 写权。 */
 	const FCatCollectionViewState& GetViewState() const;
 
 	/** 图鉴投影变化通知。 */

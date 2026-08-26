@@ -141,7 +141,7 @@ void UCatInteractionPageController::InstallInteractionInput()
 		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_interaction_input_unavailable Controller=%s Action=%s Context=%s"),
 			*GetNameSafe(Controller),
 			Settings ? *Settings->InteractionConfirmAction.ToSoftObjectPath().ToString() : TEXT("None"),
-			Settings ? *Settings->LakeMenuInputMappingContext.ToSoftObjectPath().ToString() : TEXT("None"));
+			Settings ? *Settings->GameplayInputMappingContext.ToSoftObjectPath().ToString() : TEXT("None"));
 		return;
 	}
 	AppliedInteractionAction = ConfirmAction;

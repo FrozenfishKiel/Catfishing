@@ -10,14 +10,12 @@ class APawn;
 class ACatCharacter;
 class UCatHUDModel;
 class UCatHUDWidget;
+class UCatContainerReplicationComponent;
 class UCatInteractionPageController;
 class UCatInteractionPromptWidget;
 class UCatInventoryModel;
 class UCatInventoryPageController;
 class UCatInventoryWidget;
-class UCatLakeReachModel;
-class UCatLakeReachPageController;
-class UCatLakeReachWidget;
 class UCatTravelWidget;
 class UCatInteractionWidget;
 class UCatInteractionTargetingComponent;
@@ -29,7 +27,7 @@ class CATFISHING_API UCatLocalPlayerUISubsystem : public ULocalPlayerSubsystem
 	GENERATED_BODY()
 
 #if WITH_DEV_AUTOMATION_TESTS
-	friend class FCatLocalPlayerUISubsystemLakeReachAttachTest;
+	friend class FCatLocalPlayerUISubsystemSplitPlayerModulesAttachTest;
 	friend class FCatLocalPlayerUISubsystemOnlineWidgetPolicyTest;
 #endif
 
@@ -43,17 +41,14 @@ public:
 	/** Controller 替换时先从旧 Controller 恢复并清理 UI，再弱绑定新 Controller 并装配其当前 Pawn。 */
 	virtual void PlayerControllerChanged(APlayerController* NewController) override;
 
-	/** 切换当前 LocalPlayer 的个人背包；实际输入模式、焦点和鼠标由 Inventory PageController 管理。 */
+	/** 切换当前 LocalPlayer 的背包页面；实际输入模式、焦点和鼠标由 Inventory PageController 管理。 */
 	void ToggleInventory();
 
-	/** 返回当前个人背包是否打开；无页面时固定为 false。 */
+	/** 打开带外部容器上下文的背包；交互对象只提供只读容器复制源，跨容器移动仍由背包 Drop 和服务器裁决。 */
+	void OpenInventoryWithExternalContainerContexts(const TArray<UCatContainerReplicationComponent*>& ExternalContainers);
+
+	/** 查询背包 PageController 打开态；没有已装配页面时返回 false，避免旧 Widget 引用影响输入切换判断。 */
 	bool IsInventoryOpen() const;
-
-	/** 兼容旧 Lake 菜单入口；迁移期把它直接转到个人背包开关。 */
-	void ToggleLakeMenu();
-
-	/** 兼容旧 Lake 菜单状态读取；迁移期直接读取个人背包打开状态。 */
-	bool IsLakeMenuOpen() const;
 
 private:
 	/** 响应 Online 事实变更；实现重新读取完整 Snapshot，并同步 Frontend 面板与本地玩家 UI Model。 */
@@ -81,10 +76,10 @@ private:
 	void HandleControllerPawnChanged(APawn* NewPawn);
 
 	/** 当配置 WBP、当前 Controller 与 Character 有效时创建 HUD、Inventory 和 Interaction 三个独立模块。 */
-	void AttachLakePawn(ACatCharacter* Character);
+	void AttachPlayerLakeUI(ACatCharacter* Character);
 
 	/** 先解绑各模块 PageController/Model，再移除 View，最后清理所有本地玩家 UI 引用。 */
-	void DetachLakePawn();
+	void DetachPlayerLakeUI();
 
 	/** 为当前本地 Character 创建准星/高亮/拾取提示层，并订阅 Controller 的视线目标变化。 */
 	void AttachInteractionView(APlayerController* Controller, ACatCharacter* Character);
@@ -110,15 +105,15 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UCatHUDModel> HUDModel;
 
-	/** 当前 LocalPlayer 的个人背包主 WBP；打开前不会进入视口。 */
+	/** 当前 LocalPlayer 的背包主 WBP；普通打开展示个人资源，交互打开可追加外部容器上下文。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryWidget> InventoryWidget;
 
-	/** 当前 LocalPlayer 的个人背包 Model；它只读个人鱼护复制快照和动作结果。 */
+	/** 当前 LocalPlayer 的背包 Model；它只读鱼护、外部容器、装备、待取装备和动作结果。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryModel> InventoryModel;
 
-	/** 当前 LocalPlayer 的个人背包 PageController；它管理背包输入和 View 意图转发。 */
+	/** 当前 LocalPlayer 的背包 PageController；它管理背包输入、外部容器打开和 View 意图转发。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryPageController> InventoryPageController;
 
@@ -137,19 +132,6 @@ private:
 	/** 本地提示当前订阅的视线 TargetingComponent，用于精确解绑。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatInteractionTargetingComponent> BoundInteractionTargeting;
-
-	/** 旧 LakeReach 兼容 View 引用；新 LocalPlayer 不再创建它，保留给迁移期测试编译。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UCatLakeReachWidget> LakeReachWidget;
-
-	/** 旧 LakeReach 兼容 Model 引用；新 LocalPlayer 不再创建它，保留给迁移期测试编译。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UCatLakeReachModel> LakeReachModel;
-
-	/** 旧 LakeReach 兼容 PageController 引用；新 LocalPlayer 不再创建它，保留给迁移期测试编译。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UCatLakeReachPageController> LakeReachPageController;
-
 	/** 当前绑定 Pawn notifier 的 Controller 弱引用；Controller/World 替换时先解绑，绝不成为跨 World 所有者。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APlayerController> BoundPlayerController;
@@ -160,7 +142,7 @@ private:
 	/** Frontend TravelWidget 动作广播的配对解绑句柄；创建时写入，移除时消费。 */
 	FDelegateHandle ActionHandle;
 
-	/** HUD Model 变化广播的配对解绑句柄；AttachLakePawn 写入，DetachLakePawn 消费。 */
+	/** HUD Model 变化广播的配对解绑句柄；AttachPlayerLakeUI 写入，DetachPlayerLakeUI 消费。 */
 	FDelegateHandle HUDModelViewChangedHandle;
 
 	/** 当前 Controller Pawn notifier 的配对解绑句柄；Controller 变化或 Deinitialize 时消费。 */

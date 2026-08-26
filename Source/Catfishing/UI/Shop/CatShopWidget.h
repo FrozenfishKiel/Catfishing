@@ -11,7 +11,7 @@ class UTextBlock;
 /** 商店关闭意图；交互对象拥有页面生命周期，Widget 只发关闭请求。 */
 DECLARE_MULTICAST_DELEGATE(FCatShopCloseRequested);
 
-/** 商品点击意图；参数只包含目录 ID 和购买/领取类型，不包含价格或钱包版本。 */
+/** 商品点击意图；参数只包含目录 ID 和购买/领取类型，不包含价格或公款并发版本。 */
 DECLARE_MULTICAST_DELEGATE_TwoParams(FCatShopEntryActionRequested, FName, ECatShopUIAction);
 
 /** 商店 WBP 基类；它只展示商品和公款，并把购买/领取点击作为纯 UI 意图发出。 */
@@ -24,7 +24,7 @@ public:
 	/** 接收 Shop Model 的只读投影并同步蓝图绑定字段；不读取 GameState 或 ShopEconomy。 */
 	void RenderShop(const FCatShopViewState& ViewState);
 
-	/** 返回最近一次由 Model 投入本 View 的商店只读快照；蓝图只能用它做延迟表现，不能把它当作订单提交或钱包真相来源。 */
+	/** 返回最近一次由 Model 投入本 View 的商店只读快照；蓝图只能用它做延迟表现，不能把它当作订单提交或公款真相来源。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Shop")
 	const FCatShopViewState& GetLastShopViewState() const;
 
@@ -102,7 +102,7 @@ private:
 	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional, AllowPrivateAccess = "true"))
 	TObjectPtr<UButton> CloseButton;
 
-	/** WBP Designer 中的公款文本控件；存在时 RenderShop 会直接写入团队钱包摘要。 */
+	/** WBP Designer 中的公款文本控件；存在时 RenderShop 会直接写入团队公款摘要。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> WalletTextBlock;
 

@@ -1,16 +1,11 @@
 #include "Items/CatFishTankInteractionComponent.h"
 
-#include "Camp/CatCampHubActor.h"
-#include "Character/CatCharacter.h"
-#include "Data/CatFishCatalogSettings.h"
-#include "Data/CatFishDefinition.h"
-#include "Engine/World.h"
-#include "EngineUtils.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Engine/LocalPlayer.h"
 #include "GameFramework/PlayerController.h"
 #include "Items/CatContainerReplicationComponent.h"
 #include "Items/CatFishTankActor.h"
 #include "Logging/CatLog.h"
+#include "UI/CatLocalPlayerUISubsystem.h"
 
 // 构造流程：给鱼缸设置稳定中文提示和默认交互距离；实际距离与权限仍由交互扫描和服务器 Camp gate 共同裁决。
 UCatFishTankInteractionComponent::UCatFishTankInteractionComponent()
@@ -26,74 +21,33 @@ bool UCatFishTankInteractionComponent::CanInteract_Implementation(APlayerControl
 	return Super::CanInteract_Implementation(PlayerController) && GetOwningFishTank();
 }
 
-// 入缸交互流程：
-// 1. 先解析本地 Controller、Pawn、鱼缸 Actor、显式关联 Camp 和两端复制组件；缺任一依赖就记录拒绝日志并返回 false。
-// 2. 再读取个人鱼护和鱼缸快照，要求两边容器 ID 有效且鱼护里至少有鱼；这些失败都只终止本地请求，不写 Items。
-// 3. 优先选择第一条可展示鱼；若客户端鱼表不可用或没有展示鱼，则把第一条鱼交给服务器产生正式拒绝或成功。
-// 4. 最后先拷贝鱼实例 ID，再按 Authority/客户端分支提交同一个转缸入口；主机路径可能同步刷新快照，日志不能再读数组指针。
+// 外部容器打开流程：
+// 1. 解析本地 PlayerController、LocalPlayer、鱼缸 Actor、鱼缸复制组件和本地 UI Subsystem；缺任一依赖就只记录拒绝。
+// 2. 把鱼缸复制组件作为一份外部容器上下文传给背包，组件本身仍只是只读复制出口。
+// 3. 本交互不挑具体物体、不移动容器内容、不提交 Items；真实跨容器移动只能由背包 Drop 后的服务器事务完成。
 bool UCatFishTankInteractionComponent::Interact_Implementation(APlayerController* PlayerController)
 {
-	ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(PlayerController);
-	ACatCharacter* Character = CatController ? Cast<ACatCharacter>(CatController->GetPawn()) : nullptr;
 	ACatFishTankActor* Tank = GetOwningFishTank();
-	ACatCampHubActor* Camp = ResolveLinkedCamp();
-	const UCatContainerReplicationComponent* GuardReplication =
-		Character ? Character->FindComponentByClass<UCatContainerReplicationComponent>() : nullptr;
-	const UCatContainerReplicationComponent* TankReplication =
+	UCatContainerReplicationComponent* TankReplication =
 		Tank ? Tank->FindComponentByClass<UCatContainerReplicationComponent>() : nullptr;
-	if (!CatController || !Character || !Tank || !Camp || !GuardReplication || !TankReplication)
+	ULocalPlayer* LocalPlayer = PlayerController ? PlayerController->GetLocalPlayer() : nullptr;
+	UCatLocalPlayerUISubsystem* UISubsystem = LocalPlayer
+		? LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
+	if (!PlayerController || !Tank || !TankReplication || !UISubsystem)
 	{
-		UE_LOG(LogCatItems, Warning, TEXT("Event=fish_tank_interaction_rejected Reason=DependencyUnavailable Controller=%s Tank=%s Camp=%s"),
+		UE_LOG(LogCatItems, Warning, TEXT("Event=fish_tank_interaction_rejected Reason=DependencyUnavailable Controller=%s Tank=%s"),
 			*GetNameSafe(PlayerController),
-			*GetNameSafe(Tank),
-			*GetNameSafe(Camp));
+			*GetNameSafe(Tank));
 		return false;
 	}
-
-	const FCatContainerSnapshot& GuardSnapshot = GuardReplication->GetSnapshot();
-	const FCatContainerSnapshot& TankSnapshot = TankReplication->GetSnapshot();
-	if (!GuardSnapshot.ContainerId.IsValid() || !TankSnapshot.ContainerId.IsValid() || GuardSnapshot.Fish.IsEmpty())
-	{
-		UE_LOG(LogCatItems, Warning, TEXT("Event=fish_tank_interaction_rejected Reason=SnapshotUnavailable Guard=%s Tank=%s FishCount=%d"),
-			*GuardSnapshot.ContainerId.ToString(EGuidFormats::DigitsWithHyphens),
-			*TankSnapshot.ContainerId.ToString(EGuidFormats::DigitsWithHyphens),
-			GuardSnapshot.Fish.Num());
-		return false;
-	}
-
-	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
-	const FCatFishInstance* FishToTransfer = GuardSnapshot.Fish.FindByPredicate([Catalog](const FCatFishInstance& Fish)
-	{
-		const UCatFishDefinition* Definition = Catalog ? Catalog->FindRuntimeDefinition(Fish.FishDefinitionId) : nullptr;
-		return Definition && Definition->bTankDisplayEligible;
-	});
-	if (!FishToTransfer)
-	{
-		FishToTransfer = &GuardSnapshot.Fish[0];
-	}
-	if (!FishToTransfer->FishInstanceId.IsValid())
-	{
-		UE_LOG(LogCatItems, Warning, TEXT("Event=fish_tank_interaction_rejected Reason=InvalidFishInstance"));
-		return false;
-	}
-
-	const FGuid RequestId = FGuid::NewGuid();
-	const FGuid FishInstanceId = FishToTransfer->FishInstanceId;
-	if (CatController->HasAuthority())
-	{
-		CatController->ServerTransferFishToTank_Implementation(
-			Camp, RequestId, FishInstanceId, GuardSnapshot.Revision, TankSnapshot.Revision);
-	}
-	else
-	{
-		CatController->ServerTransferFishToTank(
-			Camp, RequestId, FishInstanceId, GuardSnapshot.Revision, TankSnapshot.Revision);
-	}
-	UE_LOG(LogCatItems, Log, TEXT("Event=fish_tank_interaction_transfer_requested RequestId=%s Fish=%s GuardRevision=%lld TankRevision=%lld"),
-		*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-		*FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-		GuardSnapshot.Revision,
-		TankSnapshot.Revision);
+	TArray<UCatContainerReplicationComponent*> ExternalContainers;
+	ExternalContainers.Add(TankReplication);
+	UISubsystem->OpenInventoryWithExternalContainerContexts(ExternalContainers);
+	const FCatContainerSnapshot& Snapshot = TankReplication->GetSnapshot();
+	UE_LOG(LogCatItems, Log, TEXT("Event=fish_tank_interaction_inventory_opened Tank=%s Container=%s Revision=%lld"),
+		*GetNameSafe(Tank),
+		*Snapshot.ContainerId.ToString(EGuidFormats::DigitsWithHyphens),
+		Snapshot.Revision);
 	return true;
 }
 
@@ -107,24 +61,4 @@ FText UCatFishTankInteractionComponent::GetInteractionTargetText_Implementation(
 ACatFishTankActor* UCatFishTankInteractionComponent::GetOwningFishTank() const
 {
 	return Cast<ACatFishTankActor>(GetOwner());
-}
-
-// 营地查找流程：遍历当前 World 的固定营地，返回那个显式 SharedFishTank 指向本鱼缸的 Hub；找不到时不猜最近营地。
-ACatCampHubActor* UCatFishTankInteractionComponent::ResolveLinkedCamp() const
-{
-	const ACatFishTankActor* Tank = GetOwningFishTank();
-	UWorld* World = Tank ? Tank->GetWorld() : nullptr;
-	if (!World)
-	{
-		return nullptr;
-	}
-	for (TActorIterator<ACatCampHubActor> It(World); It; ++It)
-	{
-		ACatCampHubActor* Camp = *It;
-		if (Camp && Camp->IsSharedFishTank(Tank))
-		{
-			return Camp;
-		}
-	}
-	return nullptr;
 }

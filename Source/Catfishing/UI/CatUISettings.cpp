@@ -8,10 +8,9 @@
 #include "UI/Interaction/CatInteractionPromptWidget.h"
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
-#include "UI/CatLakeReachWidget.h"
 #include "UI/Shop/CatShopWidget.h"
 
-// 构造流程：为正式拆分 UI WBP、旧 LakeReach 兼容 WBP 和输入资产写入稳定软路径；输入 Action 放在项目既有 InputContext 下维护，运行时代码只加载资产和绑定 Action。
+// 构造流程：为正式拆分 UI WBP 和输入资产写入稳定软路径；输入 Action 放在项目既有 InputContext 下维护，运行时代码只加载资产和绑定 Action。
 UCatUISettings::UCatUISettings()
 {
 	HUDWidgetClass = TSoftClassPtr<UCatHUDWidget>(
@@ -26,20 +25,18 @@ UCatUISettings::UCatUISettings()
 		FSoftClassPath(TEXT("/Game/UI/Interaction/WBP_CatInteractionPrompt.WBP_CatInteractionPrompt_C")));
 	CollectionWidgetClass = TSoftClassPtr<UCatCollectionWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Collection/WBP_CatCollection.WBP_CatCollection_C")));
-	LakeReachWidgetClass = TSoftClassPtr<UCatLakeReachWidget>(
-		FSoftClassPath(TEXT("/Game/UI/WBP_CatLakeReach.WBP_CatLakeReach_C")));
-	LakeMenuToggleAction = TSoftObjectPtr<UInputAction>(
+	InventoryToggleAction = TSoftObjectPtr<UInputAction>(
 		FSoftObjectPath(TEXT("/Game/Input/InputAction/IA_LakeMenu.IA_LakeMenu")));
 	InteractionConfirmAction = TSoftObjectPtr<UInputAction>(
 		FSoftObjectPath(TEXT("/Game/Input/InputAction/IA_Interact.IA_Interact")));
-	LakeMenuInputMappingContext = TSoftObjectPtr<UInputMappingContext>(
+	GameplayInputMappingContext = TSoftObjectPtr<UInputMappingContext>(
 		FSoftObjectPath(TEXT("/Game/Input/InputContext/IMC_InputContext.IMC_InputContext")));
 }
 
 // 玩家 UI gate 流程：直接返回显式项目配置；不读取诊断开关、不推导当前地图，也不改变任何领域状态。
 bool UCatUISettings::IsPlayerLakeUIEnabled() const
 {
-	return bEnableLakeReachView;
+	return bEnablePlayerLakeUI;
 }
 
 // HUD WBP 类加载流程：同步解析配置软类并验证继承 HUD 基类；失败返回空，让 LocalPlayer fail-closed。
@@ -111,7 +108,7 @@ TSubclassOf<UCatCollectionWidget> UCatUISettings::LoadCollectionWidgetClass() co
 // 背包 Action 加载流程：同步解析配置软引用；失败返回空，让 PageController 记录降级并保留鼠标按钮入口。
 UInputAction* UCatUISettings::LoadInventoryToggleAction() const
 {
-	return LakeMenuToggleAction.LoadSynchronous();
+	return InventoryToggleAction.LoadSynchronous();
 }
 
 // 交互确认 Action 加载流程：同步解析配置软引用；失败返回空，让交互控制器只隐藏提示或记录降级。
@@ -123,7 +120,7 @@ UInputAction* UCatUISettings::LoadInteractionConfirmAction() const
 // Gameplay IMC 加载流程：同步解析项目既有 InputContext；返回空表示正式输入资产缺失，调用方不得补建第二套 Context。
 UInputMappingContext* UCatUISettings::LoadGameplayInputMappingContext() const
 {
-	return LakeMenuInputMappingContext.LoadSynchronous();
+	return GameplayInputMappingContext.LoadSynchronous();
 }
 
 // 背包键名解析流程：
@@ -168,39 +165,4 @@ FName UCatUISettings::ResolveInteractionConfirmKeyName() const
 		}
 	}
 	return NAME_None;
-}
-
-// LakeReach 兼容 gate 流程：转到新的玩家 UI gate；旧测试仍能读取同一个配置值。
-bool UCatUISettings::IsLakeReachViewEnabled() const
-{
-	return IsPlayerLakeUIEnabled();
-}
-
-// 旧 LakeReach WBP 类加载流程：同步解析配置的软类并验证它仍继承旧 View 基类；新 LocalPlayer 不再用它装配运行时 UI。
-TSubclassOf<UCatLakeReachWidget> UCatUISettings::LoadLakeReachWidgetClass() const
-{
-	UClass* LoadedClass = LakeReachWidgetClass.LoadSynchronous();
-	if (!LoadedClass || !LoadedClass->IsChildOf(UCatLakeReachWidget::StaticClass()))
-	{
-		return nullptr;
-	}
-	return LoadedClass;
-}
-
-// 旧菜单 Action 加载流程：转到背包开关 Action；迁移期旧 PageController 仍复用唯一 InputContext。
-UInputAction* UCatUISettings::LoadLakeMenuToggleAction() const
-{
-	return LoadInventoryToggleAction();
-}
-
-// 旧菜单 IMC 加载流程：转到项目唯一 Gameplay IMC；迁移期旧 PageController 不会创建新 Context。
-UInputMappingContext* UCatUISettings::LoadLakeMenuInputMappingContext() const
-{
-	return LoadGameplayInputMappingContext();
-}
-
-// 旧菜单键名解析流程：转到新的背包键名解析；迁移期不保留第二份解析逻辑。
-FName UCatUISettings::ResolveLakeMenuToggleKeyName() const
-{
-	return ResolveInventoryToggleKeyName();
 }

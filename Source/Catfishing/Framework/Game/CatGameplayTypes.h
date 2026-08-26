@@ -38,7 +38,6 @@ class FCatGameModeCommandIntentGateTest;
 class FCatGameModeReconnectAdmissionWhitelistTest;
 class FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest;
 class FCatFishingPlayerEntryFullLoopTest;
-class FCatLakeReachFishGuardConsumeClickBackendTest;
 namespace CatFishingPlayerEntryTest { struct FPlayerEntryFixture; }
 namespace CatSacrificeCoordinatorTest { struct FItemsCommittedRecoveryFixture; }
 #endif
@@ -138,8 +137,6 @@ private:
 	friend class FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest;
 	/** 自动化夹具只种入一条已激活身份记录，用来验证玩家 Fishing 命令入口；正式准入仍只走 PreLogin/PostLogin。 */
 	friend class FCatFishingPlayerEntryFullLoopTest;
-	/** 自动化夹具只种入 UIReach 点击闭环所需 Active 身份，用来证明 View 意图会通过 PlayerController 到达 Items 后端。 */
-	friend class FCatLakeReachFishGuardConsumeClickBackendTest;
 	/** 自动化夹具是实际写入私有准入表的执行体；它只服务 FCatFishingPlayerEntryFullLoopTest。 */
 	friend struct CatFishingPlayerEntryTest::FPlayerEntryFixture;
 	/** 自动化夹具只种入一份 DayActive Run 状态，用来验证献祭跨 Items/Run 恢复；正式阶段推进仍只走 StateTree。 */
@@ -206,7 +203,7 @@ private:
 	void CompleteHostExitAckWait(bool bTimedOut);
 	/** Host exit 统一有界等待的超时回调；只消费当前 GameMode 的单一 Timer，且不把超时写成真实 ACK。 */
 	void HandleHostExitAckTimeout();
-	/** 把商店当前余额和公开流水整体发布给 GameState。 */
+	/** 把商店当前余额、货架库存和公开交易记录整体发布给 GameState。 */
 	void PublishShopEconomySnapshot();
 	/** 把服务器团队装备库整体发布给 GameState。 */
 	void PublishTeamEquipmentLibrarySnapshot();
@@ -284,7 +281,7 @@ public:
 	void SetHelpSignalFromAuthority(const FCatHelpSignalSnapshot& NewSignal);
 	/** 提供最近一次服务器求助信号供表现去重；它不是任务分配或自动加入玩法的授权依据。 */
 	const FCatHelpSignalSnapshot& GetLastHelpSignal() const;
-	/** 仅 authority 写入团队钱包与公开流水的整份快照。 */
+	/** 仅 authority 写入团队公款、货架库存与公开交易记录的整份快照。 */
 	void SetShopEconomySnapshotFromAuthority(const FCatShopPublicEconomySnapshot& NewSnapshot);
 	const FCatShopPublicEconomySnapshot& GetShopEconomySnapshot() const;
 	/** 仅 authority 写入团队装备库快照。 */
@@ -329,7 +326,7 @@ private:
 	UPROPERTY(ReplicatedUsing = OnRep_HelpSignal)
 	FCatHelpSignalSnapshot LastHelpSignal;
 
-	/** 商店公开经济快照；只复制可展示目录和团队钱包摘要，购买结果仍由服务器命令返回。 */
+	/** 商店公开经济快照；只复制团队公款、货架库存和公开交易记录，购买结果仍由服务器命令返回。 */
 	UPROPERTY(ReplicatedUsing = OnRep_ShopEconomySnapshot)
 	FCatShopPublicEconomySnapshot ShopEconomySnapshot;
 
@@ -467,10 +464,13 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerRequestCampfirePlayback(ACatCampHubActor* Camp, FGuid RequestId);
 
-	/** 由 owning client 发起固定营地转缸请求；把鱼实例和两个 Revision 交给 Camp/Items 原子裁决，并通过 ClientReceiveCampCommandResult 回送领域结果。 */
+	/** 由 owning client 发起通用容器物体移动请求；服务器重读源/目标槽位、容器宿主、个人鱼护身份、距离和 Items 权限后回送领域结果。 */
 	UFUNCTION(Server, Reliable)
-	void ServerTransferFishToTank(ACatCampHubActor* Camp, FGuid RequestId, FGuid FishInstanceId,
-		int64 ExpectedGuardRevision, int64 ExpectedTankRevision);
+	void ServerTransferObjectBetweenContainers(FGuid RequestId, ECatContainedObjectKind ObjectKind, FGuid ObjectInstanceId,
+		FGuid SourceContainerId, ECatContainerKind SourceContainerKind, int32 SourceContainerSlotIndex,
+		int64 ExpectedSourceRevision, FGuid TargetContainerId, ECatContainerKind TargetContainerKind,
+		int32 TargetContainerSlotIndex,
+		int64 ExpectedTargetRevision);
 
 	/** 由 owning client 发起伙伴救援请求；把倒地目标送往固定营地 RescuePoint 并交给 Camp/Condition 裁决，完成后通过 ClientReceiveCampCommandResult 回送领域结果，不进入死亡或重生旁路。 */
 	UFUNCTION(Server, Reliable)
@@ -504,7 +504,7 @@ public:
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
 	void ServerClaimFreeShopEntry(FName EntryId, FGuid RequestId, int64 ExpectedWalletRevision);
 
-	/** 售出本人鱼护或共享鱼缸中的鱼；服务器从 Items 容器读取重量并在删除鱼后把收入记入团队钱包。 */
+	/** 售出本人鱼护或共享鱼缸中的鱼；服务器从 Items 容器读取重量并在删除鱼后把收入记入团队公款。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
 	void ServerSellFish(FGuid FishInstanceId, FGuid ContainerId, int64 ExpectedContainerRevision,
 		ECatShopFishSaleSource SourceKind, FGuid RequestId, int64 ExpectedWalletRevision);
@@ -676,9 +676,13 @@ private:
 	void SubmitCampRestFromBodyActionAbility(ACatCampHubActor* Camp, FGuid RequestId);
 	/** BodyAction Ability 接管后的篝火回看提交；保持 Camp 的 CapturePlan 与 multicast 裁决。 */
 	void SubmitCampfirePlaybackFromBodyActionAbility(ACatCampHubActor* Camp, FGuid RequestId);
-	/** BodyAction Ability 接管后的转缸提交；保持 Camp/Items 双 Revision 原子事务。 */
-	void SubmitTransferFishToTankFromBodyActionAbility(ACatCampHubActor* Camp, FGuid RequestId,
-		FGuid FishInstanceId, int64 ExpectedGuardRevision, int64 ExpectedTankRevision);
+	/** BodyAction Ability 接管后的通用容器物体移动；保持服务器槽位复核、距离校验和 Items 原子事务。 */
+	void SubmitTransferObjectBetweenContainersFromBodyActionAbility(FGuid RequestId, ECatContainedObjectKind ObjectKind,
+		FGuid ObjectInstanceId,
+		FGuid SourceContainerId, ECatContainerKind SourceContainerKind, int32 SourceContainerSlotIndex,
+		int64 ExpectedSourceRevision, FGuid TargetContainerId, ECatContainerKind TargetContainerKind,
+		int32 TargetContainerSlotIndex,
+		int64 ExpectedTargetRevision);
 	/** BodyAction Ability 接管后的搬运救援提交；保持 Camp/Condition 对倒地目标和营地落点的裁决。 */
 	void SubmitRescueCharacterToCampFromBodyActionAbility(ACatCampHubActor* Camp, ACatCharacter* TargetCharacter,
 		FGuid RequestId);

@@ -37,7 +37,7 @@ void UCatContainerReplicationComponent::EndPlay(const EEndPlayReason::Type EndPl
 	Super::EndPlay(EndPlayReason);
 }
 
-// authority 发布流程：验证 Owner 权威后替换 ID、类型、Revision、容量元数据，再按 FishInstanceId 删除旧项并标记数组变脏，对新项/变更项分别 MarkItemDirty；全部字段一致后广播只读变化并 ForceNetUpdate，预留锁等私有事实不进入复制。
+// authority 发布流程：验证 Owner 权威后替换 ID、类型、Revision、容量元数据和通用对象投影，再把每个鱼槽连同 SlotIndex 写入 FastArray；全部字段一致后广播只读变化并 ForceNetUpdate，预留锁等私有事实不进入复制。
 void UCatContainerReplicationComponent::SetSnapshotFromAuthority(const FCatContainerSnapshot& NewSnapshot)
 {
 	AActor* Owner = GetOwner();
@@ -46,47 +46,20 @@ void UCatContainerReplicationComponent::SetSnapshotFromAuthority(const FCatConta
 		return;
 	}
 	Snapshot = NewSnapshot;
+	CatItems::RebuildContainedObjectsFromFish(Snapshot);
 	ReplicatedContainerId = NewSnapshot.ContainerId;
 	ReplicatedKind = NewSnapshot.Kind;
 	ReplicatedRevision = NewSnapshot.Revision;
 	ReplicatedCapacity = NewSnapshot.Capacity;
-	bool bRemovedEntry = false;
-	for (int32 Index = ReplicatedFish.Entries.Num() - 1; Index >= 0; --Index)
+	ReplicatedFish.Entries.Reset(NewSnapshot.Fish.Num());
+	for (int32 SlotIndex = 0; SlotIndex < NewSnapshot.Fish.Num(); ++SlotIndex)
 	{
-		if (!NewSnapshot.Fish.ContainsByPredicate([&Entry = ReplicatedFish.Entries[Index]](const FCatFishInstance& Fish)
-		{
-			return Fish.FishInstanceId == Entry.Fish.FishInstanceId;
-		}))
-		{
-			ReplicatedFish.Entries.RemoveAt(Index);
-			bRemovedEntry = true;
-		}
+		FCatReplicatedFishEntry& Added = ReplicatedFish.Entries.AddDefaulted_GetRef();
+		Added.SlotIndex = SlotIndex;
+		Added.Fish = NewSnapshot.Fish[SlotIndex];
+		ReplicatedFish.MarkItemDirty(Added);
 	}
-	if (bRemovedEntry)
-	{
-		ReplicatedFish.MarkArrayDirty();
-	}
-	for (const FCatFishInstance& Fish : NewSnapshot.Fish)
-	{
-		FCatReplicatedFishEntry* Existing = ReplicatedFish.Entries.FindByPredicate([&Fish](const FCatReplicatedFishEntry& Entry)
-		{
-			return Entry.Fish.FishInstanceId == Fish.FishInstanceId;
-		});
-		if (!Existing)
-		{
-			FCatReplicatedFishEntry& Added = ReplicatedFish.Entries.AddDefaulted_GetRef();
-			Added.Fish = Fish;
-			ReplicatedFish.MarkItemDirty(Added);
-		}
-		else if (Existing->Fish.FishDefinitionId != Fish.FishDefinitionId
-			|| Existing->Fish.SourceFishingSessionId != Fish.SourceFishingSessionId
-			|| Existing->Fish.SacrificeContribution != Fish.SacrificeContribution
-			|| Existing->Fish.WeightKilograms != Fish.WeightKilograms)
-		{
-			Existing->Fish = Fish;
-			ReplicatedFish.MarkItemDirty(*Existing);
-		}
-	}
+	ReplicatedFish.MarkArrayDirty();
 	OnSnapshotChanged.Broadcast();
 	Owner->ForceNetUpdate();
 }
@@ -103,18 +76,24 @@ void UCatContainerReplicationComponent::OnRep_ContainerMetadata()
 	ScheduleSnapshotNotificationFromReplication();
 }
 
-// 快照重建流程：覆盖容器 ID、类型、Revision 和容量元数据，再按当前 FastArray 顺序复制公开鱼字段；OwnerStableNetId 未复制且自然保持空。
+// 快照重建流程：覆盖容器 ID、类型、Revision 和容量元数据，再按复制项 SlotIndex 还原公开鱼槽并派生通用对象投影；OwnerStableNetId 未复制且自然保持空。
 void UCatContainerReplicationComponent::RebuildSnapshotFromReplication()
 {
 	Snapshot.ContainerId = ReplicatedContainerId;
 	Snapshot.Kind = ReplicatedKind;
 	Snapshot.Revision = ReplicatedRevision;
 	Snapshot.Capacity = ReplicatedCapacity;
-	Snapshot.Fish.Reset(ReplicatedFish.Entries.Num());
+	Snapshot.Fish.Reset();
 	for (const FCatReplicatedFishEntry& Entry : ReplicatedFish.Entries)
 	{
-		Snapshot.Fish.Add(Entry.Fish);
+		const int32 SlotIndex = Entry.SlotIndex >= 0 ? Entry.SlotIndex : Snapshot.Fish.Num();
+		if (SlotIndex >= Snapshot.Fish.Num())
+		{
+			Snapshot.Fish.SetNum(SlotIndex + 1);
+		}
+		Snapshot.Fish[SlotIndex] = Entry.Fish;
 	}
+	CatItems::RebuildContainedObjectsFromFish(Snapshot);
 }
 
 // 合并安排流程：已有 pending 时直接复用；否则在有效 World 上登记下一帧回调。无 World 的异常复制入口退化为立即重建和广播，避免读模型永远停在旧值。

@@ -23,8 +23,8 @@ enum class ECatBodyActionAbilityCommand : uint8
 	CampRest,
 	/** 营地篝火回看动作；Ability 只承接互动意图，全员表现与 CapturePlan 仍由 Camp 收口。 */
 	CampfirePlayback,
-	/** 把个人鱼护中的鱼转入共享鱼缸；Ability 不改容器，转移仍由 Camp/Items 原子提交。 */
-	TransferFishToTank,
+	/** 容器之间移动物体；Ability 不改容器，转移仍由服务器重读源/目标后交给 Items 原子提交。 */
+	TransferObjectBetweenContainers,
 	/** 把倒地伙伴搬运回固定营地；Ability 表达搬运动作，落点和恢复仍由 Camp/Condition 裁决。 */
 	RescueCharacterToCamp,
 	/** 在营地修复当前鱼竿；Ability 表达修理动作，耗材和耐久事务仍由 Equipment 裁决。 */
@@ -93,7 +93,15 @@ public:
 	UPROPERTY(Transient)
 	FGuid RequestId;
 
-	/** 营地转缸要移动的鱼实例 ID；Camp/Items 会继续验证它是否仍在源容器。 */
+	/** 本次容器移动要处理的物体类别；服务器领域层会按类别选择正式策略并继续验证源容器事实。 */
+	UPROPERTY(Transient)
+	ECatContainedObjectKind ContainerObjectKind = ECatContainedObjectKind::Unknown;
+
+	/** 本次容器移动要处理的物体实例 ID；服务器领域层会继续验证它是否仍在源容器。 */
+	UPROPERTY(Transient)
+	FGuid ContainerObjectInstanceId;
+
+	/** 本次鱼领域动作要处理的鱼实例 ID；偷鱼、吃鱼等鱼专属入口继续使用它，不参与通用容器拖拽。 */
 	UPROPERTY(Transient)
 	FGuid FishInstanceId;
 
@@ -101,13 +109,41 @@ public:
 	UPROPERTY(Transient)
 	FGuid TheftProtocolId;
 
-	/** 个人鱼护在玩家发起转缸时看到的容器版本；Items 用它判断源鱼护是否已被别的服务器事务改过，过期时拒绝移动，避免重复转走同一条鱼。 */
+	/** 本次转移是否使用显式源/目标容器引用；false 表示旧载荷或错误载荷，Controller 会 fail-closed。 */
 	UPROPERTY(Transient)
-	int64 ExpectedGuardRevision = 0;
+	bool bUsesExplicitContainerTransfer = false;
 
-	/** 共享鱼缸在玩家发起转缸时看到的容器版本；Items 用它判断目标鱼缸容量和内容是否仍匹配客户端意图，过期时整笔转缸保持不提交。 */
+	/** 通用跨容器转移的源容器 ID；服务器会从 Items 重读种类、宿主和当前可达性，不信任客户端授权。 */
 	UPROPERTY(Transient)
-	int64 ExpectedTankRevision = 0;
+	FGuid SourceContainerId;
+
+	/** 通用容器转移的源容器内格子下标；服务器会确认该格当前仍放着本次拖拽的物体。 */
+	UPROPERTY(Transient)
+	int32 SourceContainerSlotIndex = INDEX_NONE;
+
+	/** 通用跨容器转移的目标容器 ID；它只表达 Drop 目标容器，最终容量和权限由 Items 裁决。 */
+	UPROPERTY(Transient)
+	FGuid TargetContainerId;
+
+	/** 通用容器转移的目标容器内格子下标；同容器整理和跨容器移动都按这个槽位写入或交换。 */
+	UPROPERTY(Transient)
+	int32 TargetContainerSlotIndex = INDEX_NONE;
+
+	/** 通用跨容器转移的源容器种类；服务器会与 Items 注册种类比较，不匹配时拒绝。 */
+	UPROPERTY(Transient)
+	ECatContainerKind SourceContainerKind = ECatContainerKind::Unknown;
+
+	/** 通用跨容器转移的目标容器种类；服务器会与 Items 注册种类比较，不匹配时拒绝。 */
+	UPROPERTY(Transient)
+	ECatContainerKind TargetContainerKind = ECatContainerKind::Unknown;
+
+	/** 通用跨容器转移在 Drop 时看到的源容器 Revision；Items 用它防止源对象已被其他事务改变。 */
+	UPROPERTY(Transient)
+	int64 ExpectedSourceContainerRevision = 0;
+
+	/** 通用跨容器转移在 Drop 时看到的目标容器 Revision；Items 与源版本一起比较，防止目标容量或内容已变化。 */
+	UPROPERTY(Transient)
+	int64 ExpectedTargetContainerRevision = 0;
 
 	/** 调用方观察到的装备 Revision；修竿和草药消费用它防止客户端基于旧装备快照提交。 */
 	UPROPERTY(Transient)

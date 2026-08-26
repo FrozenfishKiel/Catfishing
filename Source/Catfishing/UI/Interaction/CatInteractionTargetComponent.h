@@ -16,7 +16,7 @@ public:
 	/** 构造交互目标默认值；目标默认不开 Tick，扫描方按固定节奏读取它的只读信息。 */
 	UCatInteractionTargetComponent();
 
-	/** 返回该目标当前是否允许指定玩家交互；蓝图可扩展距离外的对象状态判断。 */
+	/** 判断指定玩家是否能使用该目标；扫描方用它过滤提示和确认输入，目标状态仍由对象或蓝图自己裁决。 */
 	UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category = "Catfishing|Interaction")
 	bool CanInteract(APlayerController* PlayerController) const;
 
@@ -30,7 +30,7 @@ public:
 	/** C++ 默认交互执行；派生组件通过 override 接入自己的打开或操作逻辑。 */
 	virtual bool Interact_Implementation(APlayerController* PlayerController);
 
-	/** 返回提示里显示的目标名称；扫描方只读它，不按具体类名判断目标类型。 */
+	/** 提供提示里显示的目标名称；扫描方只把它放进提示文本，不按具体类名猜商店、鱼缸或祭坛。 */
 	UFUNCTION(BlueprintCallable, BlueprintNativeEvent, Category = "Catfishing|Interaction")
 	FText GetInteractionTargetText(APlayerController* PlayerController) const;
 

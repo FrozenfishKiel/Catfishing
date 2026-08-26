@@ -12,24 +12,28 @@ class UCatContainerReplicationComponent;
 /** 容器公开快照已经完整替换的只读通知；订阅者收到信号后重新读取 GetSnapshot，不把事件当成写入许可。 */
 DECLARE_MULTICAST_DELEGATE(FCatContainerSnapshotChanged);
 
-/** FastArray 的单条实物鱼复制项；ReplicationID/Key 只服务网络增量，不成为领域身份。 */
+/** FastArray 的单个鱼槽复制项；ReplicationID/Key 只服务网络增量，不成为领域身份或容器槽位。 */
 USTRUCT()
 struct FCatReplicatedFishEntry : public FFastArraySerializerItem
 {
 	GENERATED_BODY()
 
-	/** 已提交的实物鱼公开字段；OwnerStableNetId 无 UPROPERTY，仍不会发送客户端。 */
+	/** 该复制项代表的容器槽位下标；服务端发布时写入，客户端按它重建稀疏鱼槽数组，不能依赖 FastArray 条目顺序。 */
+	UPROPERTY()
+	int32 SlotIndex = INDEX_NONE;
+
+	/** 已提交的鱼槽公开字段；FishInstanceId 无效时代表空槽，OwnerStableNetId 无 UPROPERTY，仍不会发送客户端。 */
 	UPROPERTY()
 	FCatFishInstance Fish;
 };
 
-/** 容器鱼数组的 FastArray 复制适配；服务端 Items 仍拥有完整数组与 Revision，适配器只发送增删改。 */
+/** 容器鱼槽数组的 FastArray 复制适配；服务端 Items 仍拥有完整数组与 Revision，适配器只发送公开槽位序列。 */
 USTRUCT()
 struct FCatReplicatedFishList : public FFastArraySerializer
 {
 	GENERATED_BODY()
 
-	/** 当前网络增量项；只有组件 SetSnapshotFromAuthority 可以同步它。 */
+	/** 当前网络槽位项；只有组件 SetSnapshotFromAuthority 可以同步它，数组下标要和容器格子保持一致。 */
 	UPROPERTY()
 	TArray<FCatReplicatedFishEntry> Entries;
 
@@ -119,7 +123,7 @@ private:
 	UPROPERTY(ReplicatedUsing = OnRep_ContainerMetadata)
 	int32 ReplicatedCapacity = 0;
 
-	/** 实物鱼增删改的 FastArray 网络适配；Items 是唯一写者，客户 delta 回调与元数据 OnRep 可任意先后重建并最终收敛。 */
+	/** 实物鱼槽位的 FastArray 网络适配；Items 是唯一写者，客户 delta 回调与元数据 OnRep 可任意先后重建并最终收敛。 */
 	UPROPERTY(Replicated)
 	FCatReplicatedFishList ReplicatedFish;
 

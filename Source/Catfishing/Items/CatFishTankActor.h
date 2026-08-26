@@ -48,7 +48,7 @@ private:
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UCatContainerReplicationComponent> ContainerReplication;
 
-	/** 鱼缸的本地交互入口；它只提交转缸意图，真实移动仍由 Camp/Items 决定。 */
+	/** 鱼缸的本地交互入口；它只把共享容器作为背包外部上下文打开，真实移动仍由 Drop 后的服务器 Items 事务决定。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Items", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatFishTankInteractionComponent> TankInteraction;
 };

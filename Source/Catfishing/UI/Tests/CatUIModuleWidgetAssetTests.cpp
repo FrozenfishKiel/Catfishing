@@ -23,7 +23,7 @@
 #include "UI/Interaction/CatInteractionPromptWidget.h"
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
-#include "UI/Shop/CatShopKioskActor.h"
+#include "ShopEconomy/CatShopKioskActor.h"
 #include "UI/Shop/CatShopWidget.h"
 #include "UObject/Package.h"
 #include "UObject/SavePackage.h"
@@ -67,7 +67,7 @@ namespace CatUIModuleWidgetAsset
 
 	// Actor 蓝图获取流程：
 	// 1. 先加载既有商店摆放蓝图，重复运行时只刷新父类关系，不复制新资产。
-	// 2. 缺失时创建继承商店 Kiosk C++ Actor 的蓝图，给关卡一个可直接摆放的交互对象。
+	// 2. 缺失时创建继承商店 Kiosk C++ Actor 的蓝图，给关卡一个可直接摆放的 ShopEconomy 交互对象。
 	// 3. 这里不修改任何关卡；摆放位置仍由地图或后续编辑器步骤决定。
 	UBlueprint* LoadOrCreateActorBlueprint(const FString& PackageName, const FName AssetName, UClass* ParentClass)
 	{
@@ -294,7 +294,7 @@ namespace CatUIModuleWidgetAsset
 // 1. 创建或刷新 IA_Interact，并把 E 键写入项目既有 IMC_InputContext，不生成第二套 IMC。
 // 2. 分别创建 HUD、Inventory、InventorySlot、Shop、Interaction、Collection 六个正式 WBP。
 // 3. 背包主界面只放 WrapBox 和动作按钮，格子 WBP 是独立 UserWidget 且不创建 Button 根。
-// 4. 商店 WBP 只由 ShopInteractionComponent 后续打开；本测试额外保存可放置的 BP_CatShopKiosk，但不把商店挂到 LocalPlayer。
+// 4. 商店 WBP 只由 ShopInteractionComponent 后续打开；本测试额外保存可放置的 ShopEconomy Kiosk，但不把商店挂到 LocalPlayer。
 // 5. 所有控件命名匹配新 C++ View 的 BindWidgetOptional 字段，让蓝图无需复杂绑定也能显示中文文本。
 bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 {
@@ -336,7 +336,7 @@ bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 	UWidgetBlueprint* Collection = LoadOrCreateWidgetBlueprint(
 		TEXT("/Game/UI/Collection/WBP_CatCollection"), TEXT("WBP_CatCollection"), UCatCollectionWidget::StaticClass());
 	UBlueprint* ShopKiosk = LoadOrCreateActorBlueprint(
-		TEXT("/Game/UI/Shop/BP_CatShopKiosk"), TEXT("BP_CatShopKiosk"), ACatShopKioskActor::StaticClass());
+		TEXT("/Game/ShopEconomy/BP_CatShopKiosk"), TEXT("BP_CatShopKiosk"), ACatShopKioskActor::StaticClass());
 
 	if (!TestNotNull(TEXT("创建 HUD WBP"), HUD)
 		|| !TestNotNull(TEXT("创建 Inventory WBP"), Inventory)
@@ -356,8 +356,11 @@ bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 
 	UVerticalBox* InventoryRoot = ResetRootToVerticalBox(Inventory, TEXT("InventoryRoot"));
 	TestNotNull(TEXT("背包根"), InventoryRoot);
-	TestNotNull(TEXT("背包摘要文本"), AddText(Inventory, InventoryRoot, TEXT("SummaryTextBlock"), TEXT("个人鱼护：等待同步")));
-	TestNotNull(TEXT("背包选中鱼文本"), AddText(Inventory, InventoryRoot, TEXT("SelectedFishTextBlock"), TEXT("当前没有选中鱼")));
+	TestNotNull(TEXT("背包摘要文本"), AddText(Inventory, InventoryRoot, TEXT("SummaryTextBlock"), TEXT("背包：等待同步")));
+	TestNotNull(TEXT("背包装备文本"), AddText(Inventory, InventoryRoot, TEXT("EquipmentTextBlock"), TEXT("当前装备：等待同步")));
+	TestNotNull(TEXT("背包耗材文本"), AddText(Inventory, InventoryRoot, TEXT("ConsumablesTextBlock"), TEXT("随身耗材：等待同步")));
+	TestNotNull(TEXT("待取装备文本"), AddText(Inventory, InventoryRoot, TEXT("TeamEquipmentTextBlock"), TEXT("待取装备：等待同步")));
+	TestNotNull(TEXT("背包选中鱼文本"), AddText(Inventory, InventoryRoot, TEXT("SelectedFishTextBlock"), TEXT("鱼护操作：当前没有选中鱼")));
 	UWrapBox* SlotWrapBox = Inventory->WidgetTree->ConstructWidget<UWrapBox>(
 		UWrapBox::StaticClass(), TEXT("InventorySlotWrapBox"));
 	if (TestNotNull(TEXT("背包 WrapBox"), SlotWrapBox))
@@ -371,7 +374,6 @@ bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 	{
 		InventoryRoot->AddChildToVerticalBox(InventoryButtons);
 		TestNotNull(TEXT("吃鱼按钮"), AddButton(Inventory, InventoryButtons, TEXT("ConsumeFishButton"), TEXT("吃鱼")));
-		TestNotNull(TEXT("转缸按钮"), AddButton(Inventory, InventoryButtons, TEXT("TransferFishToTankButton"), TEXT("转缸")));
 		TestNotNull(TEXT("献祭按钮"), AddButton(Inventory, InventoryButtons, TEXT("SacrificeFishButton"), TEXT("献祭")));
 		TestNotNull(TEXT("关闭背包按钮"), AddButton(Inventory, InventoryButtons, TEXT("CloseButton"), TEXT("关闭")));
 	}
@@ -382,7 +384,7 @@ bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 
 	UVerticalBox* ShopRoot = ResetRootToVerticalBox(Shop, TEXT("ShopRoot"));
 	TestNotNull(TEXT("商店根"), ShopRoot);
-	TestNotNull(TEXT("商店钱包文本"), AddText(Shop, ShopRoot, TEXT("WalletTextBlock"), TEXT("商店：公款等待同步")));
+	TestNotNull(TEXT("商店公款文本"), AddText(Shop, ShopRoot, TEXT("WalletTextBlock"), TEXT("商店：公款等待同步")));
 	TestNotNull(TEXT("商店商品文本"), AddText(Shop, ShopRoot, TEXT("EntriesTextBlock"), TEXT("商品等待同步")));
 	TestNotNull(TEXT("商店结果文本"), AddText(Shop, ShopRoot, TEXT("ResultTextBlock"), TEXT("请选择商品")));
 	UHorizontalBox* ShopButtons = Shop->WidgetTree->ConstructWidget<UHorizontalBox>(
@@ -412,14 +414,14 @@ bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 		&& FinalizeWidgetBlueprint(Inventory, TEXT("/Game/UI/Inventory/WBP_CatInventory"))
 		&& FinalizeWidgetBlueprint(InventorySlot, TEXT("/Game/UI/InventorySlot/WBP_CatInventorySlot"))
 		&& FinalizeWidgetBlueprint(Shop, TEXT("/Game/UI/Shop/WBP_CatShop"))
-		&& FinalizeActorBlueprint(ShopKiosk, TEXT("/Game/UI/Shop/BP_CatShopKiosk"))
+		&& FinalizeActorBlueprint(ShopKiosk, TEXT("/Game/ShopEconomy/BP_CatShopKiosk"))
 		&& FinalizeWidgetBlueprint(Interaction, TEXT("/Game/UI/Interaction/WBP_CatInteractionPrompt"))
 		&& FinalizeWidgetBlueprint(Collection, TEXT("/Game/UI/Collection/WBP_CatCollection"));
 	TestTrue(TEXT("保存拆分 UI WBP 资产"), bSaved);
 	if (bSaved)
 	{
 		UE_LOG(LogTemp, Display,
-			TEXT("CREATE_UI_MODULE_WBPS_PASS HUD=/Game/UI/HUD/WBP_CatHUD Inventory=/Game/UI/Inventory/WBP_CatInventory Slot=/Game/UI/InventorySlot/WBP_CatInventorySlot Shop=/Game/UI/Shop/WBP_CatShop ShopKiosk=/Game/UI/Shop/BP_CatShopKiosk Interaction=/Game/UI/Interaction/WBP_CatInteractionPrompt Collection=/Game/UI/Collection/WBP_CatCollection InventorySlotRoot=UserWidgetNotButton SlotContainer=InventorySlotWrapBox ShopOwner=InteractionObject InteractAction=/Game/Input/InputAction/IA_Interact InteractContext=/Game/Input/InputContext/IMC_InputContext InteractKey=E"));
+			TEXT("CREATE_UI_MODULE_WBPS_PASS HUD=/Game/UI/HUD/WBP_CatHUD Inventory=/Game/UI/Inventory/WBP_CatInventory Slot=/Game/UI/InventorySlot/WBP_CatInventorySlot Shop=/Game/UI/Shop/WBP_CatShop ShopKiosk=/Game/ShopEconomy/BP_CatShopKiosk Interaction=/Game/UI/Interaction/WBP_CatInteractionPrompt Collection=/Game/UI/Collection/WBP_CatCollection InventorySlotRoot=UserWidgetNotButton SlotContainer=InventorySlotWrapBox InventoryEquipmentText=EquipmentTextBlock InventoryConsumablesText=ConsumablesTextBlock InventoryTeamEquipmentText=TeamEquipmentTextBlock ShopOwner=InteractionObject InteractAction=/Game/Input/InputAction/IA_Interact InteractContext=/Game/Input/InputContext/IMC_InputContext InteractKey=E"));
 	}
 	return bSaved;
 }

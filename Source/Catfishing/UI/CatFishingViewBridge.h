@@ -7,6 +7,7 @@
 
 class ACatFishingRodActor;
 class ACatFishingSession;
+class AActor;
 class APlayerState;
 
 /** 蓝图可绑定的会话视图变化通知；每次复制快照变化广播一次完整只读 DTO。 */
@@ -69,6 +70,14 @@ protected:
 private:
 	/** 从当前绑定会话重建完整 ViewState 并广播；会话失效时直接返回，不制造 UI 私有终态。 */
 	void RefreshFromSession();
+
+	/** 当前绑定 Session 被销毁时清空投影并广播空状态，让 HUD 不保留上一条会话残影。 */
+	UFUNCTION()
+	void HandleBoundSessionDestroyed(AActor* DestroyedActor);
+
+	/** 当前绑定 Session 结束播放时清空投影并广播空状态，覆盖关卡切换、Actor 销毁和终态收口路径。 */
+	UFUNCTION()
+	void HandleBoundSessionEndPlay(AActor* Actor, EEndPlayReason::Type EndPlayReason);
 
 	/** 当前 Bridge 正在观察的 FishingSession；弱引用由 BindSession 写入、UnbindSession 清空，不延长会话生命周期。 */
 	TWeakObjectPtr<ACatFishingSession> BoundSession;

@@ -22,11 +22,6 @@ void UCatInventoryWidget::NativeConstruct()
 		ConsumeFishButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleConsumeClicked);
 		ConsumeFishButton->OnClicked.AddDynamic(this, &ThisClass::HandleConsumeClicked);
 	}
-	if (TransferFishToTankButton)
-	{
-		TransferFishToTankButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleTransferClicked);
-		TransferFishToTankButton->OnClicked.AddDynamic(this, &ThisClass::HandleTransferClicked);
-	}
 	if (SacrificeFishButton)
 	{
 		SacrificeFishButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleSacrificeClicked);
@@ -49,10 +44,6 @@ void UCatInventoryWidget::NativeDestruct()
 	{
 		ConsumeFishButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleConsumeClicked);
 	}
-	if (TransferFishToTankButton)
-	{
-		TransferFishToTankButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleTransferClicked);
-	}
 	if (SacrificeFishButton)
 	{
 		SacrificeFishButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleSacrificeClicked);
@@ -72,16 +63,31 @@ FReply UCatInventoryWidget::NativeOnKeyDown(const FGeometry& InGeometry, const F
 	return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
 }
 
-// 渲染流程：缓存完整背包投影，更新给 Designer 绑定的文本，再按 Slots 数组重建 WrapBox 格子并触发蓝图扩展点。
+// 渲染流程：缓存完整背包投影，更新鱼/装备/耗材/待取装备文本，再按 Slots 数组重建鱼竿槽和容器格子并触发蓝图扩展点。
 void UCatInventoryWidget::RenderInventory(const FCatInventoryViewState& ViewState)
 {
 	LastInventoryViewState = ViewState;
 	BlueprintSummaryText = ViewState.SummaryText;
+	BlueprintEquipmentText = ViewState.EquipmentText;
+	BlueprintConsumablesText = ViewState.ConsumablesText;
+	BlueprintTeamEquipmentText = ViewState.TeamEquipmentText;
 	BlueprintSelectedFishText = ViewState.SelectedFishText;
 	BlueprintResultText = ViewState.ResultText;
 	if (SummaryTextBlock)
 	{
 		SummaryTextBlock->SetText(BlueprintSummaryText);
+	}
+	if (EquipmentTextBlock)
+	{
+		EquipmentTextBlock->SetText(BlueprintEquipmentText);
+	}
+	if (ConsumablesTextBlock)
+	{
+		ConsumablesTextBlock->SetText(BlueprintConsumablesText);
+	}
+	if (TeamEquipmentTextBlock)
+	{
+		TeamEquipmentTextBlock->SetText(BlueprintTeamEquipmentText);
 	}
 	if (SelectedFishTextBlock)
 	{
@@ -91,14 +97,10 @@ void UCatInventoryWidget::RenderInventory(const FCatInventoryViewState& ViewStat
 	{
 		ResultTextBlock->SetText(BlueprintResultText);
 	}
-	const bool bActionEnabled = ViewState.bHasSelectedFish && !ViewState.bActionPending;
+	const bool bActionEnabled = ViewState.bCanSubmitAction;
 	if (ConsumeFishButton)
 	{
 		ConsumeFishButton->SetIsEnabled(bActionEnabled);
-	}
-	if (TransferFishToTankButton)
-	{
-		TransferFishToTankButton->SetIsEnabled(bActionEnabled);
 	}
 	if (SacrificeFishButton)
 	{
@@ -121,7 +123,7 @@ void UCatInventoryWidget::RequestCloseInventory()
 	OnCloseRequested.Broadcast();
 }
 
-// 选择请求流程：过滤负下标后广播；Model 会基于最新鱼护快照继续裁剪空格和越界。
+// 选择请求流程：过滤负下标后广播；Model 会基于最新背包快照继续裁剪空格和越界。
 void UCatInventoryWidget::RequestSelectSlot(const int32 SlotIndex)
 {
 	if (SlotIndex >= 0)
@@ -134,12 +136,6 @@ void UCatInventoryWidget::RequestSelectSlot(const int32 SlotIndex)
 void UCatInventoryWidget::RequestConsumeSelectedFish()
 {
 	OnInventoryActionRequested.Broadcast(ECatInventoryAction::ConsumeSelectedFish);
-}
-
-// 转缸请求流程：只广播动作枚举；共享鱼缸解析和服务器命令由 PageController 处理。
-void UCatInventoryWidget::RequestTransferSelectedFishToTank()
-{
-	OnInventoryActionRequested.Broadcast(ECatInventoryAction::TransferSelectedFishToTank);
 }
 
 // 献祭请求流程：只广播动作枚举；献祭命令不在蓝图里组装。
@@ -157,7 +153,7 @@ const FCatInventoryViewState& UCatInventoryWidget::GetLastInventoryViewState() c
 // WrapBox 重建流程：
 // 1. 先解绑旧格子并清空 WrapBox，避免刷新后旧下标继续广播。
 // 2. 再为 Model 提供的每个 Slot 创建独立 UCatInventorySlotWidget。
-// 3. 每个格子只绑定选择和鼠标上下文委托，动作按钮仍留在主界面。
+// 3. 每个格子绑定选择、鼠标上下文和 Drop 委托，动作按钮仍留在主界面。
 void UCatInventoryWidget::RebuildSlotWidgets()
 {
 	UnbindSlotWidgets();
@@ -175,6 +171,7 @@ void UCatInventoryWidget::RebuildSlotWidgets()
 		}
 		SlotWidget->OnSlotSelected.AddUObject(this, &ThisClass::HandleSlotSelected);
 		SlotWidget->OnPointerActionRequested.AddUObject(this, &ThisClass::HandleSlotPointerAction);
+		SlotWidget->OnSlotDropRequested.AddUObject(this, &ThisClass::HandleSlotDropRequested);
 		SlotWidget->RenderSlot(SlotView);
 		InventorySlotWrapBox->AddChildToWrapBox(SlotWidget);
 		BoundSlotWidgets.Add(SlotWidget);
@@ -192,6 +189,7 @@ void UCatInventoryWidget::UnbindSlotWidgets()
 		}
 		SlotWidget->OnSlotSelected.RemoveAll(this);
 		SlotWidget->OnPointerActionRequested.RemoveAll(this);
+		SlotWidget->OnSlotDropRequested.RemoveAll(this);
 	}
 	BoundSlotWidgets.Reset();
 }
@@ -210,6 +208,14 @@ void UCatInventoryWidget::HandleSlotPointerAction(const int32 SlotIndex,
 	OnSlotPointerRequested.Broadcast(SlotIndex, PointerAction);
 }
 
+// 格子 Drop 流程：Drop 会先选择目标格，随后把源/目标快照交给 PageController 做方向、Revision 和服务器入口裁决。
+void UCatInventoryWidget::HandleSlotDropRequested(const FCatInventorySlotView& SourceSlot,
+	const FCatInventorySlotView& TargetSlot)
+{
+	RequestSelectSlot(TargetSlot.SlotIndex);
+	OnSlotDropRequested.Broadcast(SourceSlot, TargetSlot);
+}
+
 // 关闭按钮流程：收口到统一关闭请求，避免 WBP 图表和按钮绑定产生两套出口。
 void UCatInventoryWidget::HandleCloseClicked()
 {
@@ -220,12 +226,6 @@ void UCatInventoryWidget::HandleCloseClicked()
 void UCatInventoryWidget::HandleConsumeClicked()
 {
 	RequestConsumeSelectedFish();
-}
-
-// 转缸按钮流程：收口到统一转缸请求。
-void UCatInventoryWidget::HandleTransferClicked()
-{
-	RequestTransferSelectedFishToTank();
 }
 
 // 献祭按钮流程：收口到统一献祭请求。

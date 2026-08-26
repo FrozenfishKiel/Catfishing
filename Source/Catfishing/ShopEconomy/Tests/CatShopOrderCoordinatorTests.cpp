@@ -12,7 +12,7 @@
 
 namespace CatShopOrderCoordinatorTest
 {
-	/** 测试售鱼时临时写入的商店配置；它代表可运行的钱包 gate、最小售鱼金额和一张确定的体重价格表。 */
+	/** 测试售鱼时临时写入的商店配置；它代表可运行的公款 gate、最小售鱼金额和一张确定的体重价格表。 */
 	struct FShopSaleSettingsOverride
 	{
 		/** 被覆盖的默认设置对象；构造写入测试配置，析构恢复原值。 */
@@ -21,7 +21,7 @@ namespace CatShopOrderCoordinatorTest
 		/** 测试前 runtime gate 原值；析构时恢复，避免影响其他 ShopEconomy 用例。 */
 		bool bSavedRuntime = false;
 
-		/** 测试前团队钱包初始余额；售鱼用例需要从 0 开始观察增量。 */
+		/** 测试前团队公款初始余额；售鱼用例需要从 0 开始观察增量。 */
 		int32 SavedStartingBalance = 0;
 
 		/** 测试前最小售鱼金额；恢复后不把测试价格策略泄露给默认对象。 */
@@ -36,7 +36,7 @@ namespace CatShopOrderCoordinatorTest
 		/** 测试前商店目录；本文件不测购买，所以构造期间清空目录以减少无关事实。 */
 		TArray<FCatShopCatalogEntry> SavedCatalogEntries;
 
-		/** 构造流程：保存默认对象上所有会影响售鱼的字段，再写入本测试唯一需要的价格轴和钱包 gate。 */
+		/** 构造流程：保存默认对象上所有会影响售鱼的字段，再写入本测试唯一需要的价格轴和公款 gate。 */
 		FShopSaleSettingsOverride()
 		{
 			Settings = GetMutableDefault<UCatShopEconomySettings>();
@@ -187,7 +187,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.ShopEconomy.OrderCoordinator.FishSalePrecheckFailureDoesNotConsumeFish",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 测试流程：注册个人鱼护并通过 Items 捕获提交种鱼；协调器售鱼后必须删除鱼、增加团队钱包并写 FishSale 账本，
+// 测试流程：注册个人鱼护并通过 Items 捕获提交种鱼；协调器售鱼后必须删除鱼、增加团队公款并写 FishSale 账本，
 // 同一 RequestId 重放只能读取 Items/Shop 终态，不能再次加钱或再次删除。
 bool FCatShopOrderCoordinatorFishSaleSuccessReplayTest::RunTest(const FString& Parameters)
 {
@@ -227,9 +227,9 @@ bool FCatShopOrderCoordinatorFishSaleSuccessReplayTest::RunTest(const FString& P
 	const FCatShopOrderResult Sale = Coordinator->SubmitFishSale(SaleCommand);
 	TestTrue(TEXT("首次售鱼 Items 段提交"), Sale.Delivery.bCommitted);
 	TestEqual(TEXT("首次售鱼 Items 段无错误"), Sale.Delivery.Error, ECatDomainCommandError::None);
-	TestTrue(TEXT("首次售鱼钱包段提交"), Sale.Transaction.Command.bCommitted);
-	TestEqual(TEXT("首次售鱼钱包段无错误"), Sale.Transaction.Command.Error, ECatDomainCommandError::None);
-	TestEqual(TEXT("售鱼增加团队钱包"), ShopService->GetWalletSnapshot().Balance, 5);
+	TestTrue(TEXT("首次售鱼公款段提交"), Sale.Transaction.Command.bCommitted);
+	TestEqual(TEXT("首次售鱼公款段无错误"), Sale.Transaction.Command.Error, ECatDomainCommandError::None);
+	TestEqual(TEXT("售鱼增加团队公款"), ShopService->GetWalletSnapshot().Balance, 5);
 	TestEqual(TEXT("售鱼账本类别为 FishSale"), Sale.Transaction.Transaction.Kind,
 		ECatShopTransactionKind::FishSale);
 	TestEqual(TEXT("售鱼账本记录鱼实例"), Sale.Transaction.Transaction.FishInstanceId, FishInstanceId);
@@ -241,8 +241,8 @@ bool FCatShopOrderCoordinatorFishSaleSuccessReplayTest::RunTest(const FString& P
 	TestFalse(TEXT("售鱼重放 Items 不再次提交"), Replay.Delivery.bCommitted);
 	TestEqual(TEXT("售鱼重放 Items 返回 AlreadyResolved"), Replay.Delivery.Error,
 		ECatDomainCommandError::AlreadyResolved);
-	TestFalse(TEXT("售鱼重放钱包不再次提交"), Replay.Transaction.Command.bCommitted);
-	TestEqual(TEXT("售鱼重放钱包返回 AlreadyResolved"), Replay.Transaction.Command.Error,
+	TestFalse(TEXT("售鱼重放公款不再次提交"), Replay.Transaction.Command.bCommitted);
+	TestEqual(TEXT("售鱼重放公款返回 AlreadyResolved"), Replay.Transaction.Command.Error,
 		ECatDomainCommandError::AlreadyResolved);
 	TestEqual(TEXT("售鱼重放不二次加钱"), ShopService->GetWalletSnapshot().Balance, 5);
 	TestEqual(TEXT("售鱼重放不新增账本"), ShopService->GetTransactionLedgerSnapshot().Num(), 1);
@@ -254,7 +254,7 @@ bool FCatShopOrderCoordinatorFishSaleSuccessReplayTest::RunTest(const FString& P
 	return !HasAnyErrors();
 }
 
-// 测试流程：使用陈旧的钱包 ExpectedRevision 触发 Shop 预检拒绝；协调器必须在 Items 消费前停止，鱼仍留在容器，钱包和账本不变。
+// 测试流程：使用陈旧的公款 ExpectedRevision 触发 Shop 预检拒绝；协调器必须在 Items 消费前停止，鱼仍留在容器，公款和账本不变。
 bool FCatShopOrderCoordinatorFishSalePrecheckFailureTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -290,11 +290,11 @@ bool FCatShopOrderCoordinatorFishSalePrecheckFailureTest::RunTest(const FString&
 		CatShopOrderCoordinatorTest::MakeSaleOrderCommand(Guard, FGuid::NewGuid(), FishInstanceId,
 			Capture.Committed.ContainerRevision, StaleWalletRevision);
 	const FCatShopOrderResult Rejected = Coordinator->SubmitFishSale(SaleCommand);
-	TestFalse(TEXT("钱包 Revision 陈旧时不提交 Items 段"), Rejected.Delivery.bCommitted);
-	TestEqual(TEXT("钱包 Revision 陈旧时 Delivery 返回 RevisionConflict"), Rejected.Delivery.Error,
+	TestFalse(TEXT("公款 Revision 陈旧时不提交 Items 段"), Rejected.Delivery.bCommitted);
+	TestEqual(TEXT("公款 Revision 陈旧时 Delivery 返回 RevisionConflict"), Rejected.Delivery.Error,
 		ECatDomainCommandError::RevisionConflict);
-	TestFalse(TEXT("钱包 Revision 陈旧时不提交钱包段"), Rejected.Transaction.Command.bCommitted);
-	TestEqual(TEXT("钱包 Revision 陈旧时 Transaction 返回 RevisionConflict"), Rejected.Transaction.Command.Error,
+	TestFalse(TEXT("公款 Revision 陈旧时不提交公款段"), Rejected.Transaction.Command.bCommitted);
+	TestEqual(TEXT("公款 Revision 陈旧时 Transaction 返回 RevisionConflict"), Rejected.Transaction.Command.Error,
 		ECatDomainCommandError::RevisionConflict);
 	TestTrue(TEXT("售鱼预检失败后鱼仍在容器"),
 		CatShopOrderCoordinatorTest::SnapshotContainsFish(

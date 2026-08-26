@@ -18,7 +18,7 @@ struct FCatShopFishSaleOrderCommand
 {
 	GENERATED_BODY()
 
-	/** RequestId 与服务器重建的身份；ExpectedRevision 在这条命令里指团队钱包版本。 */
+	/** RequestId 与服务器重建的身份；ExpectedRevision 在这条命令里指团队公款版本。 */
 	FCatDomainCommandContext Context;
 
 	/** 要卖掉的那条鱼。 */
@@ -43,7 +43,7 @@ struct FCatShopOrderResult
 {
 	GENERATED_BODY()
 
-	/** 订单这一段：钱包、商店库存和账本的终态。它的 Transaction 字段带的是账本记录的最新状态。 */
+	/** 订单这一段：公款、商店库存和账本的终态。它的 Transaction 字段带的是账本记录的最新状态。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatShopTransactionResult Transaction;
 
@@ -65,7 +65,7 @@ struct FCatShopOrderResult
  * RunConsumableGrant 进买家自己角色的一局耗材栈（Equipment 的授予入口，订单 RequestId 当回执）。
  *
  * 它存在的理由是《商店订单不拥有装备实例》：商店只能记订单，装备库/角色耗材栈只能各自改自己的库存，两边都不该反过来调对方，
- * 所以需要第三个地方按顺序推这条链。它自己不持有钱包、库存或实例，任何一步失败都保持两边各自的事实不变。
+ * 所以需要第三个地方按顺序推这条链。它自己不持有公款、库存或实例，任何一步失败都保持两边各自的事实不变。
  *
  * 它是给玩家入口用的唯一写口：真正的玩家意图（哪个 Controller、按了什么）由 Framework 的服务器 RPC 重建成
  * 带服务器身份的命令后交给这里，协调器不接触 Controller，也不做权限判断；买家的角色耗材栈也由 RPC 层从它自己的 Pawn 上取好再交进来。
@@ -89,7 +89,7 @@ public:
 	FCatShopOrderResult SubmitFreeClaim(const FCatShopPurchaseCommand& Command, UCatEquipmentComponent* RecipientEquipment = nullptr);
 
 	/**
-	 * 把玩家容器里的一条鱼卖给商人猫：读取鱼实例 → 商店预检报价/钱包 → Items 不可逆移除 → 钱包入账。
+	 * 把玩家容器里的一条鱼卖给商人猫：读取鱼实例 → 商店预检报价/公款 → Items 不可逆移除 → 公款入账。
 	 * 它和购买走同一个协调器，是因为二者的本质问题相同——钱和实物分属两个领域，必须有第三方按固定顺序推进，
 	 * 而且任何一步失败都要保证不会出现“钱扣了鱼还在”或“鱼没了钱没到”。
 	 * 只处理个人鱼护和共享鱼缸；偷来的鱼有独立的 escrow 协议（追回窗口、空间前提、归还分支都在 Social），本模块继续关闭。
@@ -101,7 +101,7 @@ private:
 	 * 声明：按同一条链跑完一笔订单，bFreeClaim 决定走购买还是免费自取写口，目录项的 Kind 决定交付落到装备库还是角色耗材栈。
 	 * 实现：先取本 World 的商店与装备库；再按目录项的 Kind 把交付侧的前提问在扣钱之前——耗材问收货人在不在、定义是不是
 	 *       正式的一局耗材、这一栈还装不装得下；装备问装备库写口开没开、定义在装备运行目录里查不查得到。任一不成立就直接
-	 *       返回，此时钱包、商店库存和账本一个字都没动。前提都成立才提交订单，并只在订单确实成立时继续；已经交付过的订单
+	 *       返回，此时公款、商店库存和账本一个字都没动。前提都成立才提交订单，并只在订单确实成立时继续；已经交付过的订单
 	 *       直接把回执找回来返回（装备类找回实物，耗材类只报 AlreadyResolved）；否则按 Kind 交付：装备类以装备库当前版本
 	 *       入库、实例 ID 当回执、装备库版本当下游版本；耗材类以角色 Equipment 当前版本授予 1 份、订单 RequestId 当回执、
 	 *       Equipment 版本当下游版本；随后确认交付并回填账本最新状态。

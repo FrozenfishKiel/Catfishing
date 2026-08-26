@@ -54,6 +54,7 @@
 #include "Social/CatSocialService.h"
 #include "TimerManager.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
+#include "UI/Interaction/CatInteractionTargetComponent.h"
 
 namespace
 {
@@ -64,6 +65,31 @@ namespace
 	bool IsPieNoSessionUniqueId(const FUniqueNetIdRepl& UniqueId)
 	{
 		return UniqueId.IsValid() && UniqueId->GetType() == CatPieNoSessionUniqueIdType;
+	}
+
+	// 容器触达半径流程：外部容器优先复用宿主交互组件的半径，未接通用交互组件时才回退 Camp 配置。
+	double ResolveContainerReachRadiusCentimeters(const AActor* Host, const UCatCampSettings* Settings)
+	{
+		if (const UCatInteractionTargetComponent* InteractionTarget =
+			Host ? Host->FindComponentByClass<UCatInteractionTargetComponent>() : nullptr)
+		{
+			const double Radius = InteractionTarget->GetInteractionRadiusCentimeters();
+			return FMath::IsFinite(Radius) ? Radius : 0.0;
+		}
+		return Settings && Settings->IsRuntimeReady() ? Settings->InteractionRadiusCentimeters : 0.0;
+	}
+
+	// 容器触达判断流程：个人容器由当前 Character 身份绑定，外部容器必须有 Items 注册宿主并处于同一交互半径内。
+	bool IsContainerHostReachable(const ECatContainerKind Kind, const AActor* Host, const ACatCharacter* Character,
+		const UCatCampSettings* Settings)
+	{
+		if (Kind == ECatContainerKind::PersonalGuard)
+		{
+			return true;
+		}
+		const double Radius = ResolveContainerReachRadiusCentimeters(Host, Settings);
+		return Host && Character && Radius > 0.0
+			&& FVector::DistSquared(Character->GetActorLocation(), Host->GetActorLocation()) <= FMath::Square(Radius);
 	}
 }
 
@@ -1479,8 +1505,9 @@ void ACatfishingGameState::OnRep_ShopEconomySnapshot()
 {
 	OnShopEconomySnapshotChanged.Broadcast();
 	UE_LOG(LogCatfishing, Verbose,
-		TEXT("Event=shop_economy_snapshot_received Balance=%d WalletRevision=%lld Transactions=%d"),
+		TEXT("Event=shop_economy_snapshot_received Balance=%d WalletRevision=%lld Stocks=%d Transactions=%d"),
 		ShopEconomySnapshot.Balance, ShopEconomySnapshot.WalletRevision,
+		ShopEconomySnapshot.Stocks.Num(),
 		ShopEconomySnapshot.Transactions.Num());
 }
 
@@ -2215,18 +2242,29 @@ void ACatfishingPlayerController::SubmitCampfirePlaybackFromBodyActionAbility(AC
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 鱼护入缸 RPC 路由流程：只把鱼实例和两个 Revision 投给 BodyAction Ability；没有正式 Ability 接管时回送依赖错误。
-void ACatfishingPlayerController::ServerTransferFishToTank_Implementation(ACatCampHubActor* Camp,
-	const FGuid RequestId, const FGuid FishInstanceId, const int64 ExpectedGuardRevision, const int64 ExpectedTankRevision)
+// 通用容器物体移动 RPC 路由流程：把 Drop 得到的物体身份、源/目标容器和槽位引用投给 BodyAction Ability；没有正式 Ability 接管时回送依赖错误。
+void ACatfishingPlayerController::ServerTransferObjectBetweenContainers_Implementation(const FGuid RequestId,
+	const ECatContainedObjectKind ObjectKind, const FGuid ObjectInstanceId, const FGuid SourceContainerId,
+	const ECatContainerKind SourceContainerKind,
+	const int32 SourceContainerSlotIndex, const int64 ExpectedSourceRevision, const FGuid TargetContainerId,
+	const ECatContainerKind TargetContainerKind, const int32 TargetContainerSlotIndex,
+	const int64 ExpectedTargetRevision)
 {
-	UCatBodyActionPayload* Payload = CreateBodyActionPayload(ECatBodyActionAbilityCommand::TransferFishToTank);
+	UCatBodyActionPayload* Payload = CreateBodyActionPayload(ECatBodyActionAbilityCommand::TransferObjectBetweenContainers);
 	if (Payload)
 	{
-		Payload->Camp = Camp;
 		Payload->RequestId = RequestId;
-		Payload->FishInstanceId = FishInstanceId;
-		Payload->ExpectedGuardRevision = ExpectedGuardRevision;
-		Payload->ExpectedTankRevision = ExpectedTankRevision;
+		Payload->ContainerObjectKind = ObjectKind;
+		Payload->ContainerObjectInstanceId = ObjectInstanceId;
+		Payload->bUsesExplicitContainerTransfer = true;
+		Payload->SourceContainerId = SourceContainerId;
+		Payload->SourceContainerKind = SourceContainerKind;
+		Payload->SourceContainerSlotIndex = SourceContainerSlotIndex;
+		Payload->ExpectedSourceContainerRevision = ExpectedSourceRevision;
+		Payload->TargetContainerId = TargetContainerId;
+		Payload->TargetContainerKind = TargetContainerKind;
+		Payload->TargetContainerSlotIndex = TargetContainerSlotIndex;
+		Payload->ExpectedTargetContainerRevision = ExpectedTargetRevision;
 	}
 	if (!SubmitBodyActionThroughAbility(Payload))
 	{
@@ -2237,23 +2275,106 @@ void ACatfishingPlayerController::ServerTransferFishToTank_Implementation(ACatCa
 	}
 }
 
-// 鱼护入缸 Ability 提交流程：先保留 RequestId；玩法 gate 与 Camp World 引用失败时直接返回结构化拒绝，合法路径把鱼 ID 和两个 Revision 原样交给 Camp/Items，并把领域结果可靠回送 owning client。
-void ACatfishingPlayerController::SubmitTransferFishToTankFromBodyActionAbility(ACatCampHubActor* Camp,
-	const FGuid RequestId, const FGuid FishInstanceId, const int64 ExpectedGuardRevision, const int64 ExpectedTankRevision)
+// 通用容器物体移动 Ability 提交流程：
+// 1. 先验证玩法命令 gate、载荷形状、当前 Character、Items 和服务器身份。
+// 2. 再从 Items 重读源/目标容器宿主、种类和源容器槽位对象，要求客户端种类与注册事实一致，源格仍是该物体。
+// 3. 个人鱼护必须属于当前 Pawn；非个人容器使用当前交互半径做服务器距离校验，物体能否进入目标容器继续交给 Items 策略裁决。
+// 4. 最后只调用 Items 的通用容器物体入口，并把结果可靠回送 owning client；当前 Items 只对鱼对象提交，其余 ObjectKind 保持策略拒绝。
+void ACatfishingPlayerController::SubmitTransferObjectBetweenContainersFromBodyActionAbility(const FGuid RequestId,
+	const ECatContainedObjectKind ObjectKind, const FGuid ObjectInstanceId,
+	const FGuid SourceContainerId, const ECatContainerKind SourceContainerKind,
+	const int32 SourceContainerSlotIndex, const int64 ExpectedSourceRevision, const FGuid TargetContainerId,
+	const ECatContainerKind TargetContainerKind, const int32 TargetContainerSlotIndex,
+	const int64 ExpectedTargetRevision)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
+	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
+	UCatItemsService* Items = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
+	const APlayerState* CurrentPlayerState = PlayerState;
 	if (!CanForwardGameplayCommand())
 	{
 		Result.Error = ECatDomainCommandError::CommandsClosed;
 	}
-	else if (!Camp || Camp->GetWorld() != GetWorld())
+	else if (!RequestId.IsValid() || ObjectKind == ECatContainedObjectKind::Unknown || !ObjectInstanceId.IsValid()
+		|| !SourceContainerId.IsValid()
+		|| !TargetContainerId.IsValid() || SourceContainerSlotIndex == INDEX_NONE
+		|| TargetContainerSlotIndex == INDEX_NONE
+		|| SourceContainerKind == ECatContainerKind::Unknown || TargetContainerKind == ECatContainerKind::Unknown)
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	}
+	else if (!ControlledCharacter || !Items || !CurrentPlayerState || !CurrentPlayerState->GetUniqueId().IsValid())
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
 	else
 	{
-		Result = Camp->TransferFishToTank(this, RequestId, FishInstanceId, ExpectedGuardRevision, ExpectedTankRevision);
+		ECatContainerKind ActualSourceKind = ECatContainerKind::Unknown;
+		ECatContainerKind ActualTargetKind = ECatContainerKind::Unknown;
+		AActor* SourceHost = nullptr;
+		AActor* TargetHost = nullptr;
+		const UCatCampSettings* CampSettings = GetDefault<UCatCampSettings>();
+		FCatContainerSnapshot SourceSnapshot;
+		FCatContainerSnapshot TargetSnapshot;
+		if (!Items->TryGetContainerHost(SourceContainerId, ActualSourceKind, SourceHost)
+			|| !Items->TryGetContainerHost(TargetContainerId, ActualTargetKind, TargetHost)
+			|| !Items->TryGetContainerSnapshot(SourceContainerId, SourceSnapshot)
+			|| !Items->TryGetContainerSnapshot(TargetContainerId, TargetSnapshot))
+		{
+			Result.Error = ECatDomainCommandError::NotFound;
+		}
+		else if (ActualSourceKind != SourceContainerKind || ActualTargetKind != TargetContainerKind)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+		}
+		else if ((SourceContainerKind == ECatContainerKind::PersonalGuard
+				&& SourceContainerId != ControlledCharacter->GetPersonalFishGuardId())
+			|| (TargetContainerKind == ECatContainerKind::PersonalGuard
+				&& TargetContainerId != ControlledCharacter->GetPersonalFishGuardId()))
+		{
+			Result.Error = ECatDomainCommandError::PermissionDenied;
+		}
+		else if (!IsContainerHostReachable(SourceContainerKind, SourceHost, ControlledCharacter, CampSettings)
+			|| !IsContainerHostReachable(TargetContainerKind, TargetHost, ControlledCharacter, CampSettings))
+		{
+			Result.Error = ECatDomainCommandError::PermissionDenied;
+		}
+		else
+		{
+			FCatContainedObjectInstance MatchedObject;
+			const bool bSourceSlotStillMatches = CatItems::TryGetContainedObjectAt(SourceSnapshot,
+				SourceContainerSlotIndex, MatchedObject)
+				&& MatchedObject.ObjectKind == ObjectKind
+				&& MatchedObject.ObjectInstanceId == ObjectInstanceId;
+			const FCatContainedObjectInstance* Object = bSourceSlotStillMatches ? &MatchedObject : nullptr;
+			FCatContainedObjectInstance TargetSlotObject;
+			const bool bTargetSlotOccupied = CatItems::TryGetContainedObjectAt(TargetSnapshot,
+				TargetContainerSlotIndex, TargetSlotObject);
+			if (!Object)
+			{
+				Result.Error = ECatDomainCommandError::NotFound;
+			}
+			else if (bTargetSlotOccupied && TargetSlotObject.ObjectKind != ObjectKind)
+			{
+				Result.Error = ECatDomainCommandError::PolicyUndecided;
+			}
+			else
+			{
+				FCatContainerObjectTransferCommand Command;
+				Command.Context.RequestId = RequestId;
+				Command.Context.ExpectedRevision = ExpectedSourceRevision;
+				Command.Context.StableNetId = CurrentPlayerState->GetUniqueId()->ToString();
+				Command.ObjectKind = ObjectKind;
+				Command.ObjectInstanceId = ObjectInstanceId;
+				Command.SourceContainerId = SourceContainerId;
+				Command.SourceContainerSlotIndex = SourceContainerSlotIndex;
+				Command.TargetContainerId = TargetContainerId;
+				Command.TargetContainerSlotIndex = TargetContainerSlotIndex;
+				Command.ExpectedTargetRevision = ExpectedTargetRevision;
+				Result = Items->TransferContainedObject(Command);
+			}
+		}
 	}
 	DeliverCampCommandResultToOwningClient(Result);
 }
@@ -2981,9 +3102,28 @@ bool ACatfishingPlayerController::ExecuteBodyActionAbilityPayload(const UCatBody
 	case ECatBodyActionAbilityCommand::CampfirePlayback:
 		SubmitCampfirePlaybackFromBodyActionAbility(Payload.Camp.Get(), Payload.RequestId);
 		return true;
-	case ECatBodyActionAbilityCommand::TransferFishToTank:
-		SubmitTransferFishToTankFromBodyActionAbility(Payload.Camp.Get(), Payload.RequestId,
-			Payload.FishInstanceId, Payload.ExpectedGuardRevision, Payload.ExpectedTankRevision);
+	case ECatBodyActionAbilityCommand::TransferObjectBetweenContainers:
+		if (Payload.bUsesExplicitContainerTransfer)
+		{
+			SubmitTransferObjectBetweenContainersFromBodyActionAbility(Payload.RequestId,
+				Payload.ContainerObjectKind,
+				Payload.ContainerObjectInstanceId,
+				Payload.SourceContainerId,
+				Payload.SourceContainerKind,
+				Payload.SourceContainerSlotIndex,
+				Payload.ExpectedSourceContainerRevision,
+				Payload.TargetContainerId,
+				Payload.TargetContainerKind,
+				Payload.TargetContainerSlotIndex,
+				Payload.ExpectedTargetContainerRevision);
+			return true;
+		}
+		{
+			FCatDomainCommandResult Result;
+			Result.RequestId = Payload.RequestId;
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+			DeliverCampCommandResultToOwningClient(Result);
+		}
 		return true;
 	case ECatBodyActionAbilityCommand::RescueCharacterToCamp:
 		SubmitRescueCharacterToCampFromBodyActionAbility(Payload.Camp.Get(), Payload.TargetCharacter.Get(),

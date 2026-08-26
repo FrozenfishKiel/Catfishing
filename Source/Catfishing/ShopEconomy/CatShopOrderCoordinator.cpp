@@ -30,9 +30,9 @@ FCatShopOrderResult UCatShopOrderCoordinator::SubmitFreeClaim(const FCatShopPurc
 
 // 售鱼链流程：
 // 1. 先读取 Items 容器快照，确认来源种类和个人鱼护主人，价格只从鱼实例重量现场估出。
-// 2. 再让 Shop 用同一份售鱼命令做钱包/价格预检；这一步失败时绝不触碰 Items，鱼仍留在原容器。
+// 2. 再让 Shop 用同一份售鱼命令做公款/价格预检；这一步失败时绝不触碰 Items，鱼仍留在原容器。
 // 3. 预检通过后用同一个 RequestId 调 Items::ConsumeFish 完成实物提交，成功或合法重放才进入 Shop::ApplyFishSale。
-// 4. Result.Delivery 始终暴露 Items 提交段，Result.Transaction 暴露钱包/账本段，调用方能区分“鱼没删”和“钱没入账”。
+// 4. Result.Delivery 始终暴露 Items 提交段，Result.Transaction 暴露公款/账本段，调用方能区分“鱼没删”和“钱没入账”。
 // 边界：Social escrow 售鱼有追回窗口和归还分支，本模块没有那些协议事实，因此继续 fail-closed。
 FCatShopOrderResult UCatShopOrderCoordinator::SubmitFishSale(const FCatShopFishSaleOrderCommand& Command)
 {
@@ -52,7 +52,7 @@ FCatShopOrderResult UCatShopOrderCoordinator::SubmitFishSale(const FCatShopFishS
 
 	const auto RejectBeforeItemsCommit = [&Result, Shop](const ECatDomainCommandError Error, const int64 DeliveryRevision = 0)
 	{
-		// 预检拒绝只回填当前钱包和可选容器版本，不写任何终态缓存；同一个 RequestId 以后仍可在玩家重读快照后重新提交。
+		// 预检拒绝只回填当前公款和可选容器版本，不写任何终态缓存；同一个 RequestId 以后仍可在玩家重读快照后重新提交。
 		Result.Transaction.Wallet = Shop->GetWalletSnapshot();
 		Result.Transaction.Command.Error = Error;
 		Result.Transaction.Command.Revision = Result.Transaction.Wallet.Revision;
@@ -210,7 +210,7 @@ FCatShopOrderResult UCatShopOrderCoordinator::RunOrder(const FCatShopPurchaseCom
 
 	// 交付侧的前提必须问在扣钱之前。PurchaseCatalogEntry 一提交就把钱从公款划走、把限量条目的库存也扣掉，
 	// 而整个商店服务没有任何反方向的写口。本项目对这种跨聚合链的既定做法是前置 gate，不是事后补偿：
-	// 补一条退款路径等于给唯一的不可逆写口开一个反向入口，而"退款算不算一笔流水、账本怎么记"产品还没裁，
+	// 补一条退款路径等于给唯一的不可逆写口开一个反向入口，而"退款算不算一笔交易记录、账本怎么记"产品还没裁，
 	// 记待重投则要再引入一份重投队列。所以这里宁可把每条交付前提都提前问一遍，也不让钱先出去再发现东西送不出。
 	// 目录里根本没有这条 EntryId 时不在这里拦：那条路购买写口自己就会拒绝且一分钱不动，它给的错误码（NotFound、
 	// PolicyUndecided、CommandsClosed）比这里编一个更准确。
@@ -237,8 +237,8 @@ FCatShopOrderResult UCatShopOrderCoordinator::RunOrder(const FCatShopPurchaseCom
 		}
 		if (DeliveryRejection != ECatDomainCommandError::None)
 		{
-			// 订单这一段报的是交付侧的错误码，因为订单压根没提交：钱包、商店库存和账本一个字都没动。
-			// Revision 仍给当前钱包版本，调用方据此重读并决定要不要换个条件重试。
+			// 订单这一段报的是交付侧的错误码，因为订单压根没提交：公款、商店库存和账本一个字都没动。
+			// Revision 仍给当前公款版本，调用方据此重读并决定要不要换个条件重试。
 			Result.Transaction.Command.Error = DeliveryRejection;
 			Result.Transaction.Command.Revision = Shop->GetWalletSnapshot().Revision;
 			Result.Delivery.Error = DeliveryRejection;

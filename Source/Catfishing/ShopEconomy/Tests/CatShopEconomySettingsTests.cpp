@@ -19,7 +19,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.ShopEconomy.Settings.FishPurchasePriceTableFailsClosedAndPicksWeightBand",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 测试流程：从项目 DefaultGame.ini 读取 ShopEconomy Settings，先确认钱包 gate 已满足运行前提，再检查正式鱼竿、普通饵和窝料目录项；
+// 测试流程：从项目 DefaultGame.ini 读取 ShopEconomy Settings，先确认公款 gate 已满足运行前提，再检查正式鱼竿、普通饵和窝料目录项；
 // 这些断言只锁住显式经济配置，不替 Equipment 或 Items 验证下游定义。
 bool FCatShopEconomySettingsProjectDefaultsTest::RunTest(const FString& Parameters)
 {
@@ -33,7 +33,7 @@ bool FCatShopEconomySettingsProjectDefaultsTest::RunTest(const FString& Paramete
 	}
 
 	TestTrue(TEXT("项目默认团队经济运行 gate 已开启"), Settings->IsRuntimeEnabled());
-	TestEqual(TEXT("项目默认团队钱包初始余额"), Settings->StartingTeamWalletBalance, 10);
+	TestEqual(TEXT("项目默认团队公款初始余额"), Settings->StartingTeamWalletBalance, 10);
 	TestEqual(TEXT("项目默认售鱼最小入账金额"), Settings->MinimumFishSaleValue, 1);
 	TestEqual(TEXT("项目默认免费普通饵入口已显式配置"), Settings->FreeOrdinaryBaitEntryId,
 		FName(TEXT("FreeBugBaitClaim")));

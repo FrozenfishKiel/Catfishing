@@ -19,10 +19,13 @@ DECLARE_MULTICAST_DELEGATE_OneParam(FCatInventorySlotSelectionRequested, int32);
 /** 背包格子上下文意图；它只说明鼠标行为，不直接转成服务器命令。 */
 DECLARE_MULTICAST_DELEGATE_TwoParams(FCatInventorySlotPointerRequested, int32, ECatInventorySlotPointerAction);
 
+/** 背包主界面转发的格子 Drop 意图；源和目标都是格子只读投影，PageController 会按最新 Model 复核后再提交服务器。 */
+DECLARE_MULTICAST_DELEGATE_TwoParams(FCatInventorySlotDropForwarded, const FCatInventorySlotView&, const FCatInventorySlotView&);
+
 /** 背包动作意图；Widget 不携带鱼 ID，PageController 从 Model 当前选择重建正式服务器命令。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatInventoryActionRequested, ECatInventoryAction);
 
-/** 个人鱼护/背包主界面；它只拥有 WrapBox 和动作按钮，不承载 HUD、商店或图鉴。 */
+/** 背包主界面；它展示鱼容器、当前鱼竿、耗材和待取装备，吃鱼/献祭通过个人鱼护选择提交，移动通过格子拖拽提交。 */
 UCLASS(BlueprintType, Blueprintable)
 class CATFISHING_API UCatInventoryWidget : public UUserWidget
 {
@@ -47,10 +50,6 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
 	void RequestConsumeSelectedFish();
 
-	/** 请求把当前选中鱼转入共享鱼缸；营地、鱼缸和 Revision 由 PageController 重读。 */
-	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
-	void RequestTransferSelectedFishToTank();
-
 	/** 请求献祭当前选中鱼；献祭命令由 PageController 从 Model 构造。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
 	void RequestSacrificeSelectedFish();
@@ -68,7 +67,10 @@ public:
 	/** 格子鼠标上下文广播；PageController 默认只选择，蓝图可用它弹上下文表现。 */
 	FCatInventorySlotPointerRequested OnSlotPointerRequested;
 
-	/** 吃鱼、转缸或献祭动作广播；PageController 负责翻译成服务器命令。 */
+	/** 格子 Drop 广播；Widget 不判断方向或权限，只把两个格子的只读事实交给 PageController。 */
+	FCatInventorySlotDropForwarded OnSlotDropRequested;
+
+	/** 吃鱼或献祭动作广播；PageController 负责翻译成服务器命令或结构化拒绝。 */
 	FCatInventoryActionRequested OnInventoryActionRequested;
 
 protected:
@@ -78,7 +80,7 @@ protected:
 	/** 离开视口时只解除本 View 自己绑定的按钮和格子委托；外部关闭、格子和动作意图订阅保留到 PageController::Unbind 统一移除。 */
 	virtual void NativeDestruct() override;
 
-	/** 背包 UIOnly 焦点下再次按打开键会请求关闭；其他按键交回父类处理。 */
+	/** 背包处于模态焦点时再次按打开键会请求关闭；其他按键交回父类处理。 */
 	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 	/** WBP 可选渲染扩展点；正式布局可用 Designer 字段绑定和这个事件共同表现。 */
@@ -98,6 +100,9 @@ private:
 	/** Slot Widget 右键或拖拽入口；默认也选择该格，再把上下文意图交给上层。 */
 	void HandleSlotPointerAction(int32 SlotIndex, ECatInventorySlotPointerAction PointerAction);
 
+	/** Slot Widget Drop 入口；只转发源和目标投影，避免主界面从 Widget 指针反查后端事实。 */
+	void HandleSlotDropRequested(const FCatInventorySlotView& SourceSlot, const FCatInventorySlotView& TargetSlot);
+
 	/** 关闭按钮点击入口；收口到 RequestCloseInventory，避免按钮和蓝图图表两套逻辑。 */
 	UFUNCTION()
 	void HandleCloseClicked();
@@ -105,10 +110,6 @@ private:
 	/** 吃鱼按钮点击入口；收口到 RequestConsumeSelectedFish。 */
 	UFUNCTION()
 	void HandleConsumeClicked();
-
-	/** 转缸按钮点击入口；收口到 RequestTransferSelectedFishToTank。 */
-	UFUNCTION()
-	void HandleTransferClicked();
 
 	/** 献祭按钮点击入口；收口到 RequestSacrificeSelectedFish。 */
 	UFUNCTION()
@@ -130,10 +131,6 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> ConsumeFishButton;
 
-	/** WBP Designer 中的转缸按钮；点击只发动作意图。 */
-	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UButton> TransferFishToTankButton;
-
 	/** WBP Designer 中的献祭按钮；点击只发动作意图。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> SacrificeFishButton;
@@ -146,21 +143,45 @@ private:
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UCatInventorySlotWidget>> BoundSlotWidgets;
 
-	/** 给 WBP TextBlock 直接绑定的背包摘要文本。 */
+	/** 最近一次背包总览文本副本；RenderInventory 写入，简单 WBP 可直接绑定它显示鱼、装备和待取装备概况。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintSummaryText;
 
-	/** 给 WBP TextBlock 直接绑定的选中鱼文本。 */
+	/** 最近一次当前装备文本副本；RenderInventory 写入，蓝图只读取它表现鱼竿、鱼饵、鱼漂和耐久。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintEquipmentText;
+
+	/** 最近一次随身耗材文本副本；RenderInventory 写入，用来把 Equipment 快照中的鱼饵、窝料等数量暴露给 WBP。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintConsumablesText;
+
+	/** 最近一次待取装备文本副本；RenderInventory 写入，让尚未装到自己身上的装备能在背包页被看见。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
+	FText BlueprintTeamEquipmentText;
+
+	/** 最近一次选中鱼文本副本；RenderInventory 写入，鱼容器格子的选择变化会改变这条说明。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintSelectedFishText;
 
-	/** 给 WBP TextBlock 直接绑定的最近结果文本。 */
+	/** 最近一次背包动作结果文本副本；RenderInventory 写入，蓝图用它展示 pending、成功或拒绝反馈。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintResultText;
 
-	/** WBP Designer 中的背包摘要文本控件；存在时 RenderInventory 会直接写入当前容量和鱼数。 */
+	/** WBP Designer 中的背包摘要文本控件；存在时 RenderInventory 会直接写入鱼、装备、耗材和待取装备总览。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> SummaryTextBlock;
+
+	/** WBP Designer 中的当前装备文本控件；存在时 RenderInventory 会直接写入鱼竿、鱼饵、鱼漂和耐久。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> EquipmentTextBlock;
+
+	/** WBP Designer 中的随身耗材文本控件；存在时 RenderInventory 会直接写入鱼饵、窝料等数量栈。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> ConsumablesTextBlock;
+
+	/** WBP Designer 中的待取装备文本控件；存在时 RenderInventory 会直接写入商店购买但未装到自己身上的装备。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> TeamEquipmentTextBlock;
 
 	/** WBP Designer 中的选中鱼文本控件；存在时 RenderInventory 会直接写入当前选中鱼摘要。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))

@@ -6,12 +6,9 @@
 #include "Condition/CatConditionComponent.h"
 #include "Collection/CatRunImprintService.h"
 #include "Components/SceneComponent.h"
-#include "Data/CatFishCatalogSettings.h"
-#include "Data/CatFishDefinition.h"
 #include "Items/CatFishTankActor.h"
 #include "Items/CatItemsService.h"
 #include "GameFramework/Controller.h"
-#include "GameFramework/PlayerState.h"
 
 // 构造流程：创建固定根与救援子节点、开启复制并关闭 Tick；营地布局始终来自 Lake 关卡资产而非玩家运行时修改。
 ACatCampHubActor::ACatCampHubActor()
@@ -84,48 +81,6 @@ FCatDomainCommandResult ACatCampHubActor::RescueToCamp(AController* HelpingContr
 		RescueTerminalCache.Add(CacheKey, Result);
 	}
 	return Result;
-}
-
-// 入缸流程：验证本人在营地、真实鱼护/鱼缸 ID 与 Items；构造双 Revision 命令并只调用唯一原子转移入口。
-FCatDomainCommandResult ACatCampHubActor::TransferFishToTank(AController* RequestingController, const FGuid RequestId,
-	const FGuid FishInstanceId, const int64 ExpectedGuardRevision, const int64 ExpectedTankRevision)
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	ACatCharacter* Character = ResolveCharacterInCamp(RequestingController);
-	UCatItemsService* Items = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
-	const APlayerState* PlayerState = RequestingController ? RequestingController->PlayerState : nullptr;
-	if (!Character || !Items || !SharedFishTank || !PlayerState || !PlayerState->GetUniqueId().IsValid())
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		return Result;
-	}
-	FCatContainerSnapshot GuardSnapshot;
-	if (!Items->TryGetContainerSnapshot(Character->GetPersonalFishGuardId(), GuardSnapshot))
-	{
-		Result.Error = ECatDomainCommandError::NotFound;
-		return Result;
-	}
-	const FCatFishInstance* Fish = GuardSnapshot.Fish.FindByPredicate([FishInstanceId](const FCatFishInstance& Candidate)
-	{
-		return Candidate.FishInstanceId == FishInstanceId;
-	});
-	UCatFishDefinition* Definition = Fish
-		? GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(Fish->FishDefinitionId) : nullptr;
-	if (!Definition || !Definition->bTankDisplayEligible)
-	{
-		Result.Error = ECatDomainCommandError::PolicyUndecided;
-		return Result;
-	}
-	FCatFishTransferCommand Command;
-	Command.Context.RequestId = RequestId;
-	Command.Context.ExpectedRevision = ExpectedGuardRevision;
-	Command.Context.StableNetId = PlayerState->GetUniqueId()->ToString();
-	Command.FishInstanceId = FishInstanceId;
-	Command.SourceContainerId = Character->GetPersonalFishGuardId();
-	Command.TargetContainerId = SharedFishTank->GetTankContainerId();
-	Command.ExpectedTargetRevision = ExpectedTankRevision;
-	return Items->TransferOwnedFish(Command);
 }
 
 // 共享鱼缸读取流程：只通过 Items 公开快照口读取当前固定鱼缸；缺 Items、缺鱼缸或容器未注册都返回 false 并清空输出。

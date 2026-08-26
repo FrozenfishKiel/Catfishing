@@ -2,21 +2,21 @@
 
 #include "ShopEconomy/CatShopEconomySettings.h"
 
-// 创建条件流程：只允许服务器 Game World 拥有可写经济事实；客户端不能生成第二份钱包或库存。
+// 创建条件流程：只允许服务器 Game World 拥有可写经济事实；客户端不能生成第二份公款或库存。
 bool UCatShopEconomyService::ShouldCreateSubsystem(UObject* Outer) const
 {
 	const UWorld* World = Cast<UWorld>(Outer);
 	return World && World->IsGameWorld() && World->GetNetMode() != NM_Client;
 }
 
-// 初始化流程：先交父类，再从 Settings 冻结本局钱包、目录、免费饵和售鱼最小金额；目录非法时服务仍存在但购买路径关闭。
+// 初始化流程：先交父类，再从 Settings 冻结本局公款、目录、免费饵和售鱼最小金额；目录非法时服务仍存在但购买路径关闭。
 void UCatShopEconomyService::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	LoadRuntimeEconomyFromSettings();
 }
 
-// 反初始化流程：先关闭新交易，再清除仅属于本 World 的库存、账本和终态缓存；不把团队钱包带入下一局。
+// 反初始化流程：先关闭新交易，再清除仅属于本 World 的库存、账本和终态缓存；不把团队公款带入下一局。
 void UCatShopEconomyService::Deinitialize()
 {
 	CloseCommands();
@@ -27,7 +27,7 @@ void UCatShopEconomyService::Deinitialize()
 	Super::Deinitialize();
 }
 
-// 钱包读取流程：返回当前唯一团队钱包快照副本；调用方不能借引用改余额。
+// 公款读取流程：返回当前唯一团队公款快照副本；调用方不能借引用改余额。
 FCatShopWalletSnapshot UCatShopEconomyService::GetWalletSnapshot() const
 {
 	return Wallet;
@@ -78,7 +78,7 @@ TArray<FCatShopTransactionRecord> UCatShopEconomyService::GetTransactionLedgerSn
 	return TransactionLedger;
 }
 
-// 购买入口流程：只声明普通购买类别，具体钱包/库存/账本提交交给共用提交流程。
+// 购买入口流程：只声明普通购买类别，具体公款/库存/账本提交交给共用提交流程。
 FCatShopTransactionResult UCatShopEconomyService::PurchaseCatalogEntry(const FCatShopPurchaseCommand& Command)
 {
 	return CommitCatalogTransaction(Command, ECatShopTransactionKind::Purchase);
@@ -102,7 +102,7 @@ bool UCatShopEconomyService::TryAppraiseFishSale(const double WeightKilograms, i
 	return UCatShopEconomySettings::TryEvaluateFishPurchasePrice(FishPurchasePriceAnchors, WeightKilograms, OutSaleValue);
 }
 
-// 售鱼预检流程：在 Social 删除 escrow 前只读验证同一售鱼载荷是否能进入钱包；这里不写账本，避免预检本身变成第二个提交点。
+// 售鱼预检流程：在 Social 删除 escrow 前只读验证同一售鱼载荷是否能进入公款；这里不写账本，避免预检本身变成第二个提交点。
 bool UCatShopEconomyService::ValidateFishSale(const FCatShopFishSaleCommand& Command, ECatDomainCommandError& OutError,
 	int64& OutCurrentWalletRevision) const
 {
@@ -152,7 +152,7 @@ bool UCatShopEconomyService::ValidateFishSale(const FCatShopFishSaleCommand& Com
 	return true;
 }
 
-// 售鱼入账流程：先要求身份、鱼实例、Items 提交证据和来源都在，再按钱包版本并发，最后用重量自己估一次价并和调用方报价核对。
+// 售鱼入账流程：先要求身份、鱼实例、Items 提交证据和来源都在，再按公款版本并发，最后用重量自己估一次价并和调用方报价核对。
 // 鱼的删除仍然必须先由 Items 完成，这里不碰鱼；价格则相反，只认服务器估出来的那个数。
 FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFishSaleCommand& Command)
 {
@@ -219,7 +219,7 @@ FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFi
 	if (!TryAppraiseFishSale(Command.WeightKilograms, AppraisedValue))
 	{
 		// 收鱼价没被裁定时整笔拒绝，而不是按调用方报价入账：调用方报价只是它从同一个估价接口取回来的回声，
-		// 一旦这里放行，钱包余额就会变成客户端能提出的任意数字。
+		// 一旦这里放行，公款余额就会变成客户端能提出的任意数字。
 		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
 		Result.Command.Revision = Wallet.Revision;
 		CacheTerminalResult(CacheKey, PayloadSignature, Result);
@@ -333,8 +333,8 @@ FCatShopTransactionResult UCatShopEconomyService::ConfirmTransactionDelivery(
 	CacheTerminalResult(CacheKey, PayloadSignature, Result);
 	if (Result.Command.bCommitted)
 	{
-		// 交付确认不动钱包，但它把订单从"已付款待取"推到"已到货"，这是全队都要看到的状态变化，
-		// 所以和购买、售鱼走同一条广播；订阅方据此更新同一条流水，而不是新增一条。
+		// 交付确认不动公款，但它把订单从"已付款待取"推到"已到货"，这是全队都要看到的状态变化，
+		// 所以和购买、售鱼走同一条广播；订阅方据此更新同一条交易记录，而不是新增一条。
 		OnPublicTransactionCommitted.Broadcast(MakePublicTransaction(Result.Transaction));
 	}
 	return Result;
@@ -363,8 +363,8 @@ bool UCatShopEconomyService::AdvanceShopDay(const int32 NewDayIndex)
 	return true;
 }
 
-// 公开快照流程：把当前钱包、商店天序号和整本账本逐条转成对外形态。
-// 这里不做分页或裁剪：本局账本的条数由玩家实际交易次数决定，规模和一局的容器快照同量级；
+// 公开快照流程：把当前公款、商店天序号、货架库存和整本账本逐条转成对外形态。
+// 这里不做分页或裁剪：本局账本和货架的规模由目录与玩家实际交易次数决定，规模和一局的容器快照同量级；
 // 真到了需要限量的时候，该由复制挂载点按自己的带宽策略截断，而不是让服务先把事实丢掉。
 FCatShopPublicEconomySnapshot UCatShopEconomyService::BuildPublicSnapshot(
 	const TFunction<APlayerState*(const FString&)>& ResolveActorPlayerState) const
@@ -373,13 +373,18 @@ FCatShopPublicEconomySnapshot UCatShopEconomyService::BuildPublicSnapshot(
 	Snapshot.WalletRevision = Wallet.Revision;
 	Snapshot.Balance = Wallet.Balance;
 	Snapshot.ShopDayIndex = CurrentShopDayIndex;
+	Snapshot.Stocks.Reserve(StockByEntryId.Num());
+	for (const TPair<FName, FStockRecord>& Pair : StockByEntryId)
+	{
+		Snapshot.Stocks.Add(MakeStockSnapshot(&Pair.Value));
+	}
 	Snapshot.Transactions.Reserve(TransactionLedger.Num());
 	for (const FCatShopTransactionRecord& Record : TransactionLedger)
 	{
 		FCatShopPublicTransaction PublicTransaction = MakePublicTransaction(Record);
 		if (ResolveActorPlayerState)
 		{
-			// 解析不到就保持空：那说明这笔流水的操作者已经离局或还没进入 Active。
+			// 解析不到就保持空：那说明这笔交易记录的操作者已经离局或还没进入 Active。
 			// 与其挑一个还在场的人顶上，不如让表现层显示未知操作者。
 			PublicTransaction.ActorPlayerState = ResolveActorPlayerState(Record.StableNetId);
 		}
@@ -388,7 +393,7 @@ FCatShopPublicEconomySnapshot UCatShopEconomyService::BuildPublicSnapshot(
 	return Snapshot;
 }
 
-// 关闭流程：只把新命令 gate 置否，不清钱包、库存、账本和 TerminalCache；因此收摊后查询仍读得到本局经济事实，网络重试
+// 关闭流程：只把新命令 gate 置否，不清公款、库存、账本和 TerminalCache；因此收摊后查询仍读得到本局经济事实，网络重试
 // 也仍能拿回首次终态，而四个写口和每日进货都会在各自 gate 处停下。这里不需要第二个“冻结但未 teardown”的中间态，冻结与
 // 收口本来就是同一件事，差别只在调用时机。
 void UCatShopEconomyService::CloseCommands()
@@ -439,7 +444,7 @@ void UCatShopEconomyService::LoadRuntimeEconomyFromSettings()
 	}
 }
 
-// 目录交易流程：验证 runtime、命令、幂等缓存、钱包版本、库存、价格和免费饵约束；成功只写钱包、库存和账本。
+// 目录交易流程：验证 runtime、命令、幂等缓存、公款版本、库存、价格和免费饵约束；成功只写公款、库存和账本。
 FCatShopTransactionResult UCatShopEconomyService::CommitCatalogTransaction(const FCatShopPurchaseCommand& Command,
 	const ECatShopTransactionKind TransactionKind)
 {
@@ -593,7 +598,7 @@ FCatShopStockSnapshot UCatShopEconomyService::MakeStockSnapshot(const FStockReco
 	return Snapshot;
 }
 
-// 公开流水构造流程：复制账本里可以公开的字段。
+// 公开交易记录构造流程：复制账本里可以公开的字段。
 // ActorPlayerState 刻意留空：服务只有服务器私有 StableNetId，按项目约定它不能进复制 DTO，
 // 由持有身份映射的复制挂载点在发出去之前补上公开身份。
 FCatShopPublicTransaction UCatShopEconomyService::MakePublicTransaction(const FCatShopTransactionRecord& Record)
@@ -628,7 +633,7 @@ FString UCatShopEconomyService::MakeTerminalKey(const FString& StableNetId, cons
 		*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
-// 目录载荷签名流程：冻结交易类别、钱包前提和 EntryId；价格与库存来自服务端目录，不接受客户端提交。
+// 目录载荷签名流程：冻结交易类别、公款前提和 EntryId；价格与库存来自服务端目录，不接受客户端提交。
 FString UCatShopEconomyService::MakeCatalogPayloadSignature(const FCatShopPurchaseCommand& Command,
 	const ECatShopTransactionKind TransactionKind)
 {
@@ -636,7 +641,7 @@ FString UCatShopEconomyService::MakeCatalogPayloadSignature(const FCatShopPurcha
 		Command.Context.ExpectedRevision, *Command.EntryId.ToString());
 }
 
-// 售鱼载荷签名流程：冻结钱包前提、鱼实例、Items 提交证据、来源、重量和估值；同 RequestId 改任一项都不是合法重放。
+// 售鱼载荷签名流程：冻结公款前提、鱼实例、Items 提交证据、来源、重量和估值；同 RequestId 改任一项都不是合法重放。
 // 重量必须进签名：它是收购价的唯一输入，同一个 RequestId 换一条更重的鱼重放就等于换了一笔生意。
 FString UCatShopEconomyService::MakeFishSalePayloadSignature(const FCatShopFishSaleCommand& Command)
 {
@@ -647,7 +652,7 @@ FString UCatShopEconomyService::MakeFishSalePayloadSignature(const FCatShopFishS
 		static_cast<int32>(Command.SourceKind), Command.WeightKilograms, Command.SaleValue);
 }
 
-// 交付载荷签名流程：冻结原交易、下游回执、下游版本和钱包前提；回执漂移必须拒绝而不是重放。
+// 交付载荷签名流程：冻结原交易、下游回执、下游版本和公款前提；回执漂移必须拒绝而不是重放。
 FString UCatShopEconomyService::MakeDeliveryPayloadSignature(const FCatShopDeliveryConfirmationCommand& Command)
 {
 	return FString::Printf(TEXT("Expected=%lld|Transaction=%s|Receipt=%s|DeliveryRevision=%lld"),

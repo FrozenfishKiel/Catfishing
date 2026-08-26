@@ -39,7 +39,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Shop")
 	void CloseShop();
 
-	/** 返回当前商店 UI 是否已由本交互对象打开。 */
+	/** 查询本交互对象是否正拥有一套商店页面实例；用于阻止重复打开，不以 Widget 是否仍在视口为唯一事实。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Shop")
 	bool IsShopOpen() const;
 

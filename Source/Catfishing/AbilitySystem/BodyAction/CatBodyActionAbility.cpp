@@ -88,8 +88,8 @@ FGameplayTag UCatBodyActionPayload::GetEventTagForCommand(const ECatBodyActionAb
 		return CatFishingAbilityTags::AbilityEvent_Body_CampRest;
 	case ECatBodyActionAbilityCommand::CampfirePlayback:
 		return CatFishingAbilityTags::AbilityEvent_Body_CampfirePlayback;
-	case ECatBodyActionAbilityCommand::TransferFishToTank:
-		return CatFishingAbilityTags::AbilityEvent_Body_TransferFishToTank;
+	case ECatBodyActionAbilityCommand::TransferObjectBetweenContainers:
+		return CatFishingAbilityTags::AbilityEvent_Body_TransferObjectBetweenContainers;
 	case ECatBodyActionAbilityCommand::RescueCharacterToCamp:
 		return CatFishingAbilityTags::AbilityEvent_Body_RescueCharacterToCamp;
 	case ECatBodyActionAbilityCommand::RepairRodAtCamp:
@@ -129,7 +129,7 @@ UCatGA_BodyActionCommand::UCatGA_BodyActionCommand()
 		ECatBodyActionAbilityCommand::RequestSacrifice,
 		ECatBodyActionAbilityCommand::CampRest,
 		ECatBodyActionAbilityCommand::CampfirePlayback,
-		ECatBodyActionAbilityCommand::TransferFishToTank,
+		ECatBodyActionAbilityCommand::TransferObjectBetweenContainers,
 		ECatBodyActionAbilityCommand::RescueCharacterToCamp,
 		ECatBodyActionAbilityCommand::RepairRodAtCamp,
 		ECatBodyActionAbilityCommand::UseHerbOnCharacter,

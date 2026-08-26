@@ -85,9 +85,10 @@ namespace CatItemsServiceTransactionTest
 		});
 	}
 
-	// 转移命令流程：从当前测试容器上下文构造正式 TransferOwnedFish 命令；源/目标 Revision 都由调用方明确传入。
+	// 转移命令流程：从当前测试容器上下文构造正式 TransferOwnedFish 命令；源/目标槽位和 Revision 都由调用方明确传入。
 	static FCatFishTransferCommand MakeTransferCommand(const FRegisteredContainer& SourceContainer,
 		const FRegisteredContainer& TargetContainer, const FGuid RequestId, const FGuid FishInstanceId,
+		const int32 SourceContainerSlotIndex, const int32 TargetContainerSlotIndex,
 		const int64 ExpectedSourceRevision, const int64 ExpectedTargetRevision)
 	{
 		FCatFishTransferCommand Command;
@@ -96,7 +97,9 @@ namespace CatItemsServiceTransactionTest
 		Command.Context.StableNetId = SourceContainer.OwnerStableNetId;
 		Command.FishInstanceId = FishInstanceId;
 		Command.SourceContainerId = SourceContainer.ContainerId;
+		Command.SourceContainerSlotIndex = SourceContainerSlotIndex;
 		Command.TargetContainerId = TargetContainer.ContainerId;
+		Command.TargetContainerSlotIndex = TargetContainerSlotIndex;
 		Command.ExpectedTargetRevision = ExpectedTargetRevision;
 		return Command;
 	}
@@ -185,7 +188,7 @@ bool FCatItemsTransferOwnedFishTest::RunTest(const FString& Parameters)
 
 	const FGuid TransferRequestId = FGuid::NewGuid();
 	FCatDomainCommandResult TransferResult = ItemsService->TransferOwnedFish(
-		CatItemsServiceTransactionTest::MakeTransferCommand(Guard, Tank, TransferRequestId, FishA, 3, 1));
+		CatItemsServiceTransactionTest::MakeTransferCommand(Guard, Tank, TransferRequestId, FishA, 0, 0, 3, 1));
 	TestTrue(TEXT("首次转移提交"), TransferResult.bCommitted);
 	TestEqual(TEXT("首次转移返回 None"), TransferResult.Error, ECatDomainCommandError::None);
 
@@ -197,13 +200,13 @@ bool FCatItemsTransferOwnedFishTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("成功转移后目标 Revision 为 2"), TankSnapshot.Revision, int64(2));
 
 	FCatDomainCommandResult ReplayResult = ItemsService->TransferOwnedFish(
-		CatItemsServiceTransactionTest::MakeTransferCommand(Guard, Tank, TransferRequestId, FishA, 3, 1));
+		CatItemsServiceTransactionTest::MakeTransferCommand(Guard, Tank, TransferRequestId, FishA, 0, 0, 3, 1));
 	TestFalse(TEXT("转移重放不再次提交"), ReplayResult.bCommitted);
 	TestEqual(TEXT("转移重放返回 AlreadyResolved"), ReplayResult.Error, ECatDomainCommandError::AlreadyResolved);
 
 	const FGuid StaleRequestId = FGuid::NewGuid();
 	FCatDomainCommandResult StaleResult = ItemsService->TransferOwnedFish(
-		CatItemsServiceTransactionTest::MakeTransferCommand(Guard, Tank, StaleRequestId, FishB, 4, 1));
+		CatItemsServiceTransactionTest::MakeTransferCommand(Guard, Tank, StaleRequestId, FishB, 1, 0, 4, 1));
 	TestFalse(TEXT("目标 Revision 陈旧时转移不提交"), StaleResult.bCommitted);
 	TestEqual(TEXT("目标 Revision 陈旧返回 RevisionConflict"), StaleResult.Error, ECatDomainCommandError::RevisionConflict);
 	GuardSnapshot = CatItemsServiceTransactionTest::GetSnapshot(ItemsService, Guard.ContainerId);
@@ -306,7 +309,7 @@ bool FCatItemsReservationCommitTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("预留返回冻结贡献"), ReserveResult.SacrificeContribution, 3);
 
 	FCatDomainCommandResult LockedTransfer = ItemsService->TransferOwnedFish(
-		CatItemsServiceTransactionTest::MakeTransferCommand(Guard, Tank, FGuid::NewGuid(), FishId, 3, 1));
+		CatItemsServiceTransactionTest::MakeTransferCommand(Guard, Tank, FGuid::NewGuid(), FishId, 0, 0, 3, 1));
 	TestFalse(TEXT("已预留鱼不能转移"), LockedTransfer.bCommitted);
 	TestEqual(TEXT("已预留鱼转移返回 InvalidPhase"), LockedTransfer.Error, ECatDomainCommandError::InvalidPhase);
 

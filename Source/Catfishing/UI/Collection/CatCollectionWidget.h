@@ -63,7 +63,7 @@ public:
 	/** 接收 Collection Model 的只读投影并同步给 WBP；不访问任何鱼护容器。 */
 	void RenderCollection(const FCatCollectionViewState& ViewState);
 
-	/** 返回最近一次图鉴投影；蓝图只读它，不通过它写 Profile。 */
+	/** 暴露最近一次图鉴投影给蓝图表现；它没有 Profile 引用，不能被蓝图当作图鉴写入口。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Collection")
 	const FCatCollectionViewState& GetLastCollectionViewState() const;
 
