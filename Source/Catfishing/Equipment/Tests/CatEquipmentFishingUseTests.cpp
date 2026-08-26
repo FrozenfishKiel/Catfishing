@@ -23,6 +23,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatEquipmentFishingUseInfiniteBaitCompatibilityTest,
+	"Catfishing.Unit.Equipment.FishingUse.NonConsumableNormalBaitRemainsCompatible",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatEquipmentFishingUseWearTest,
 	"Catfishing.Unit.Equipment.FishingUse.WearSequenceIsAbsoluteMonotonicAndCommittedOnce",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -47,6 +52,7 @@ namespace CatEquipmentFishingUseTest
 	static const FName RodId(TEXT("FishingUseRod"));
 	static const FName SpecialBaitId(TEXT("FishingUseSpecialBait"));
 	static const FName NormalBaitId(TEXT("FishingUseNormalBait"));
+	static const FName InfiniteBaitId(TEXT("FishingUseInfiniteBait"));
 	static const FName FloatId(TEXT("FishingUseFloat"));
 	static const FName DriftwoodId(TEXT("FishingUseDriftwood"));
 
@@ -113,7 +119,7 @@ namespace CatEquipmentFishingUseTest
 			SavedDefinitions = Settings->Definitions;
 			SavedTrustPolicy = Settings->ProfileLoadoutTrustPolicy;
 			SavedDriftwoodDefinitionId = Settings->DriftwoodDefinitionId;
-			RuntimeDefinitions.Reserve(5);
+			RuntimeDefinitions.Reserve(6);
 
 			TStrongObjectPtr<UCatEquipmentDefinition>& Rod = RuntimeDefinitions.Emplace_GetRef(
 				MakeDefinition(RodId, ECatEquipmentKind::Rod));
@@ -123,12 +129,17 @@ namespace CatEquipmentFishingUseTest
 			SpecialBait->bRunConsumable = true;
 			TStrongObjectPtr<UCatEquipmentDefinition>& NormalBait = RuntimeDefinitions.Emplace_GetRef(
 				MakeDefinition(NormalBaitId, ECatEquipmentKind::Bait));
+			TStrongObjectPtr<UCatEquipmentDefinition>& InfiniteBait = RuntimeDefinitions.Emplace_GetRef(
+				MakeDefinition(InfiniteBaitId, ECatEquipmentKind::Bait));
+			InfiniteBait->bRunConsumable = false;
 			TStrongObjectPtr<UCatEquipmentDefinition>& Float = RuntimeDefinitions.Emplace_GetRef(
 				MakeDefinition(FloatId, ECatEquipmentKind::Float));
 			TStrongObjectPtr<UCatEquipmentDefinition>& Driftwood = RuntimeDefinitions.Emplace_GetRef(
 				MakeDefinition(DriftwoodId, ECatEquipmentKind::Driftwood));
 			Driftwood->bRunConsumable = true;
-			Settings->Definitions = { Rod.Get(), SpecialBait.Get(), NormalBait.Get(), Float.Get(), Driftwood.Get() };
+			Settings->Definitions = {
+				Rod.Get(), SpecialBait.Get(), NormalBait.Get(), InfiniteBait.Get(), Float.Get(), Driftwood.Get()
+			};
 			Settings->ProfileLoadoutTrustPolicy = ECatDomainPolicy::Enabled;
 			Settings->DriftwoodDefinitionId = DriftwoodId;
 
@@ -189,6 +200,18 @@ namespace CatEquipmentFishingUseTest
 				FGuid::NewGuid(), Component->GetSnapshot().Revision, NormalBaitId, NormalBaitQuantity);
 			Test.TestTrue(TEXT("Grant normal bait through public authority API"), Grant.bCommitted);
 			return Grant.bCommitted;
+		}
+
+		bool ConfigureInfinite(FAutomationTestBase& Test)
+		{
+			if (!Component)
+			{
+				return false;
+			}
+			const FCatDomainCommandResult Configure = Component->ConfigureLoadoutFromAuthority(
+				FGuid::NewGuid(), Component->GetSnapshot().Revision, RodId, InfiniteBaitId, FloatId);
+			Test.TestTrue(TEXT("Configure non-consumable normal-bait fishing loadout"), Configure.bCommitted);
+			return Configure.bCommitted;
 		}
 
 		~FFishingUseFixture()
@@ -370,6 +393,32 @@ bool FCatEquipmentFishingUseBaitTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("Normal bait commit advances revision once"), Fixture.Component->GetSnapshot().Revision, BeforeCommitRevision + 1);
 		Fixture.WorldWrapper.ForwardErrorMessages(this);
 	}
+	return !HasAnyErrors();
+}
+
+bool FCatEquipmentFishingUseInfiniteBaitCompatibilityTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	using namespace CatEquipmentFishingUseTest;
+	FFishingUseFixture Fixture;
+	if (!Fixture.Create(*this) || !Fixture.ConfigureInfinite(*this))
+	{
+		return false;
+	}
+
+	const int64 BeforeRevision = Fixture.Component->GetSnapshot().Revision;
+	const FGuid SessionId = FGuid::NewGuid();
+	const FCatFishingUseReservationResult Begin = Fixture.Component->BeginFishingUse(
+		SessionId, RodId, InfiniteBaitId, FloatId, BeforeRevision);
+	TestEqual(TEXT("Infinite normal bait begins without inventory"), Begin.Error, ECatDomainCommandError::None);
+	TestFalse(TEXT("Infinite normal bait does not reserve a quantity"), Begin.bReserved);
+	TestTrue(TEXT("Infinite normal bait still activates fishing use"), Fixture.Component->IsFishingUseActive(SessionId));
+
+	const FCatFishingUseOperationResult Commit = Fixture.Component->CommitFishingBait(SessionId);
+	TestTrue(TEXT("Infinite normal bait records its idempotent commit"), Commit.bApplied);
+	TestEqual(TEXT("Infinite normal bait commit does not advance equipment revision"),
+		Fixture.Component->GetSnapshot().Revision, BeforeRevision);
+	Fixture.WorldWrapper.ForwardErrorMessages(this);
 	return !HasAnyErrors();
 }
 

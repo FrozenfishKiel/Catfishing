@@ -421,8 +421,8 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	// 1. 先用 SessionId 返回已存在的终态，保证 FishingSession 重放不会再检查或再占库存。
 	// 2. 再校验 authority、定义类型、Revision、当前装配和鱼竿耐久，任何不一致都保持快照不变。
 	// 3. 接着拒绝正在进行的 Fishing 或 RunConsumable 操作，让鱼饵库存同一时间只有一个写入意图。
-	// 4. 普通饵和特殊饵都必须声明为 RunConsumable，并且数量栈扣除其他 Fishing 预留后仍至少剩一份。
-	// 5. 最后只写入预留记录和 Active Session，不递增 Revision；真正的库存变化留到 Commit 阶段发布。
+	// 4. 有限饵必须在数量栈扣除其他 Fishing 预留后仍至少剩一份；未声明 RunConsumable 的普通饵按无限使用处理。
+	// 5. 最后只写入预留记录和 Active Session，不递增 Revision；有限饵的真实库存变化留到 Commit 阶段发布。
 	if (const FCatFishingUseRecord* ExistingRecord = FindFishingUseRecord(FishingSessionId))
 	{
 		const bool bReserved = ExistingRecord->bBaitQuantityReserved && !ExistingRecord->bBaitCommitted
@@ -466,13 +466,14 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false);
 	}
-	// 鱼饵是否扣数量由 RunConsumable 决定；SpecialBait 只保留偏好、失败惩罚等玩法语义，不能再绕过库存真相。
-	if (!Bait->bRunConsumable)
+	// 鱼饵是否扣数量由 RunConsumable 决定；SpecialBait 只表达玩法身份，但特殊饵仍必须进入数量栈。
+	if (Bait->bSpecialBait && !Bait->bRunConsumable)
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false);
 	}
 	FCatRunConsumableStack* BaitStack = FindConsumable(BaitDefinitionId);
-	if (!BaitStack || BaitStack->Quantity <= GetPendingReservedFishingBaitCount(BaitDefinitionId))
+	if (Bait->bRunConsumable
+		&& (!BaitStack || BaitStack->Quantity <= GetPendingReservedFishingBaitCount(BaitDefinitionId)))
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false);
 	}
@@ -483,10 +484,10 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	Record.BaitDefinitionId = BaitDefinitionId;
 	Record.FloatDefinitionId = FloatDefinitionId;
 	Record.ReservationRevision = Snapshot.Revision;
-	Record.bBaitQuantityReserved = true;
+	Record.bBaitQuantityReserved = Bait->bRunConsumable;
 	FishingUseRecords.Add(FishingSessionId, Record);
 	ActiveFishingUseSessionId = FishingSessionId;
-	return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::None, true);
+	return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::None, Record.bBaitQuantityReserved);
 }
 
 FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBait(const FGuid FishingSessionId)
