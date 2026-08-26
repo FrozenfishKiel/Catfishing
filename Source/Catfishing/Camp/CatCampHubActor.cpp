@@ -136,6 +136,12 @@ bool ACatCampHubActor::TryGetSharedFishTankSnapshot(FCatContainerSnapshot& OutSn
 	return Items && SharedFishTank && Items->TryGetContainerSnapshot(SharedFishTank->GetTankContainerId(), OutSnapshot);
 }
 
+// 鱼缸归属判断流程：只比较关卡显式引用，不按位置或标签猜测；鱼缸交互因此不会误投到另一座营地。
+bool ACatCampHubActor::IsSharedFishTank(const ACatFishTankActor* Candidate) const
+{
+	return Candidate && SharedFishTank == Candidate;
+}
+
 // 篝火回看流程：先由服务器 UniqueId 与 RequestId 重放首次终态，再验证固定营地范围、结算夜和封面事件配置。随后逐个确认 GameState 玩家仍有有效身份、Controller 和营地内 Character，提交全员 Candidate，并通过批量接口先建齐全部 Planned 记录、再尝试投递；任一前置或落盘失败都会缓存拒绝且不发网络表现。全部事实成立后才用 Reliable NetMulticast 把原 RequestId 送到相关客户端，并缓存首次成功；本流程不写 next-day ready、不等待客户端播放完成，也不保存补播状态。
 FCatDomainCommandResult ACatCampHubActor::RequestCampfirePlayback(AController* RequestingController, const FGuid RequestId)
 {

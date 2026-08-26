@@ -5,6 +5,7 @@
 #include "CatFishTankActor.generated.h"
 
 class UCatContainerReplicationComponent;
+class UCatFishTankInteractionComponent;
 class USceneComponent;
 
 /** 固定营地的一局共享鱼缸宿主；只适配 Items 容器和复制，不拥有转移、献祭或偷取规则。 */
@@ -22,6 +23,10 @@ public:
 
 	/** 返回 authority 生成并复制的一局鱼缸容器 ID；未 BeginPlay 时无效。 */
 	FGuid GetTankContainerId() const;
+
+	/** 该鱼缸暴露给世界交互扫描的能力组件；人工验收和蓝图只读取它确认交互接线，不通过它拿容器写权。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Items")
+	UCatFishTankInteractionComponent* GetTankInteraction() const;
 
 protected:
 	/** authority 进入 World 时以显式 TankId/配置容量注册共享容器；失败保持空读模型。 */
@@ -42,4 +47,8 @@ private:
 	/** Items 提交后唯一对外复制的容器快照组件。 */
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UCatContainerReplicationComponent> ContainerReplication;
+
+	/** 鱼缸的本地交互入口；它只提交转缸意图，真实移动仍由 Camp/Items 决定。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Items", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCatFishTankInteractionComponent> TankInteraction;
 };

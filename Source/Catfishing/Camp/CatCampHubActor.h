@@ -35,6 +35,9 @@ public:
 	/** 读取固定共享鱼缸当前快照；UI 只用它取得转缸 ExpectedRevision，不获得鱼缸写权限。 */
 	bool TryGetSharedFishTankSnapshot(FCatContainerSnapshot& OutSnapshot) const;
 
+	/** 判断传入鱼缸是否就是本营地显式关联的共享鱼缸；交互组件只用它解析 Camp 上下文，不取得写权限。 */
+	bool IsSharedFishTank(const ACatFishTankActor* Candidate) const;
+
 	/** 幂等请求可跳过的篝火回看；结算封面先为全体在场玩家批量建齐 Planned 事实，成功才广播一次表现意图，且不写 Run ready。 */
 	FCatDomainCommandResult RequestCampfirePlayback(AController* RequestingController, FGuid RequestId);
 
