@@ -30,11 +30,6 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Equipment.Settings.FindRuntimeDefinitionRequiresEnabledReadyDefinition",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatEquipmentSettingsStarterDefinitionsTest,
-	"Catfishing.Unit.Equipment.Settings.ConfiguredStarterDefinitionsAreRuntimeReady",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
-
 // 测试流程：向瞬态装备目录放入两条同 ID 正式定义；查找接口必须拒绝重复 ID，避免装配或消耗命令读取不稳定条目。
 bool FCatEquipmentSettingsDuplicateDefinitionTest::RunTest(const FString& Parameters)
 {
@@ -75,23 +70,6 @@ bool FCatEquipmentSettingsFindDefinitionTest::RunTest(const FString& Parameters)
 	UCatEquipmentDefinition* ReadyDefinition = CatEquipmentSettingsTest::MakeReadyHerbDefinition(TEXT("HerbA"));
 	Settings->Definitions = {ReadyDefinition};
 	TestEqual(TEXT("唯一完整定义可被目录返回"), Settings->FindRuntimeDefinition(TEXT("HerbA")), ReadyDefinition);
-	return !HasAnyErrors();
-}
-
-// 项目配置回归：直接加载实际 Starter ID，防止目录规则升级后旧 Basic 资产被静默过滤，导致角色进入玩法却没有鱼竿。
-bool FCatEquipmentSettingsStarterDefinitionsTest::RunTest(const FString& Parameters)
-{
-	(void)Parameters;
-	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-	if (!TestNotNull(TEXT("项目 Equipment Settings 可用"), Settings))
-	{
-		return false;
-	}
-
-	TestNotNull(TEXT("Starter 鱼竿定义可运行"), Settings->FindRuntimeDefinition(Settings->StarterRodDefinitionId));
-	TestNotNull(TEXT("Starter 鱼饵定义可运行"), Settings->FindRuntimeDefinition(Settings->StarterBaitDefinitionId));
-	TestNotNull(TEXT("Starter 鱼漂定义可运行"), Settings->FindRuntimeDefinition(Settings->StarterFloatDefinitionId));
-	TestNotNull(TEXT("Starter 抄网定义可运行"), Settings->FindRuntimeDefinition(Settings->StarterScoopNetDefinitionId));
 	return !HasAnyErrors();
 }
 

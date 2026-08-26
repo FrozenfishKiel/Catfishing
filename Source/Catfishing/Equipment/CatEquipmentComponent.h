@@ -57,12 +57,12 @@ public:
 	FCatFishingFailureResult CommitFishingFailure(FGuid RequestId, int64 ExpectedRevision,
 		ECatFishingFailurePenalty Penalty);
 
-	/** Fishing 会话开始前申请装备使用权；成功后保护当前装配，并在鱼饵为数量型时保护一份库存，失败时不会改动快照。 */
+	/** Fishing 会话开始前申请装备使用权；成功后会保护当前装配和一份鱼饵库存，失败时不会改动快照。 */
 	FCatFishingUseReservationResult BeginFishingUse(FGuid FishingSessionId, FName RodDefinitionId,
 		FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);
-	/** 提交 Fishing 的鱼饵使用；数量型鱼饵扣除一份并发布快照，无限普通饵只记录幂等终态。 */
+	/** 立即提交 Fishing 已保护的鱼饵数量，并在成功时发布新的 Equipment 快照。 */
 	FCatFishingUseOperationResult CommitFishingBait(FGuid FishingSessionId);
-	/** 提交 Fishing 鱼饵使用但暂不发布快照；FishingSession 用它把结算和表现事件排成确定顺序。 */
+	/** 只提交 Fishing 已保护的鱼饵数量但暂不发布快照；FishingSession 用它把结算和表现事件排成确定顺序。 */
 	FCatFishingUseOperationResult CommitFishingBaitDeferred(FGuid FishingSessionId);
 	/** 发布此前延迟提交的 Fishing 鱼饵扣减结果；重复调用只返回既有终态，不会再次广播。 */
 	void PublishDeferredFishingBait(FGuid FishingSessionId);
