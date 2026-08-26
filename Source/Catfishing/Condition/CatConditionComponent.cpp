@@ -1,7 +1,7 @@
 #include "Condition/CatConditionComponent.h"
 
-#include "AbilitySystem/CatAbilitySettings.h"
-#include "AbilitySystem/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Config/CatAbilitySettings.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
 #include "Logging/CatLog.h"
 #include "Condition/CatConditionSettings.h"

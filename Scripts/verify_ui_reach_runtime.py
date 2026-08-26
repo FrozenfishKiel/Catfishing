@@ -126,12 +126,14 @@ def main() -> None:
     ui_settings = unreal.get_default_object(ui_settings_class)
     enabled = bool(_get_property(ui_settings, "b_enable_lake_reach_view", "bEnableLakeReachView"))
     configured_wbp = _as_name(_get_property(ui_settings, "lake_reach_widget_class", "LakeReachWidgetClass"))
-    menu_key = _as_name(_get_property(ui_settings, "lake_menu_toggle_key_name", "LakeMenuToggleKeyName"))
-    menu_priority = int(_get_property(ui_settings, "lake_menu_input_priority", "LakeMenuInputPriority"))
+    menu_action_path = _as_name(_get_property(ui_settings, "lake_menu_toggle_action", "LakeMenuToggleAction"))
+    menu_context_path = _as_name(_get_property(ui_settings, "lake_menu_input_mapping_context", "LakeMenuInputMappingContext"))
     _require(enabled, "LakeReach 正式 WBP View 应在默认配置中允许装配")
     _require("WBP_CatLakeReach" in configured_wbp, f"LakeReach 默认 WBP 配置异常: {configured_wbp}")
-    _require(menu_key not in ("", "None"), f"Lake 菜单键名无效: {menu_key}")
-    _require(menu_priority >= 0, f"Lake 菜单输入优先级无效: {menu_priority}")
+    _require("IA_LakeMenu" in menu_action_path, f"Lake 菜单 Action 配置异常: {menu_action_path}")
+    _require("IMC_InputContext" in menu_context_path, f"Lake 菜单 IMC 配置异常: {menu_context_path}")
+    _require(unreal.load_asset("/Game/Input/InputAction/IA_LakeMenu") is not None, "无法加载 IA_LakeMenu 输入资产")
+    _require(unreal.load_asset("/Game/Input/InputContext/IMC_InputContext") is not None, "无法加载 IMC_InputContext 输入资产")
 
     local_ui_class = _load_class("/Script/Catfishing.CatLocalPlayerUISubsystem")
     model_class = _load_class("/Script/Catfishing.CatLakeReachModel")
@@ -160,7 +162,7 @@ def main() -> None:
         f"LocalUI={local_ui_class.get_name()} Model={model_class.get_name()} PageController={page_controller_class.get_name()} "
         f"RootViewBase={lake_reach_base_class.get_name()} RootClass={lake_reach_wbp_class.get_name()} "
         f"LakeReachDefault=Enabled ConfiguredWBP={configured_wbp} "
-        f"MenuKey={menu_key} MenuPriority={menu_priority} "
+        f"MenuAction={menu_action_path} MenuContext={menu_context_path} "
         f"PlayerStarts={len(player_starts)} Regions={len(regions)}"
     )
 

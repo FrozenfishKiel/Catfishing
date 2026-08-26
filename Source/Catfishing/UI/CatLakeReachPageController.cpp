@@ -3,25 +3,55 @@
 #include "Camp/CatCampHubActor.h"
 #include "Character/CatCharacter.h"
 #include "EnhancedInputComponent.h"
-#include "EnhancedInputSubsystems.h"
 #include "EngineUtils.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
-#include "InputCoreTypes.h"
-#include "InputMappingContext.h"
 #include "Logging/CatLog.h"
 #include "Online/CatOnlineSubsystem.h"
 #include "UI/CatLakeReachModel.h"
 #include "UI/CatLakeReachWidget.h"
 #include "UI/CatUISettings.h"
 
+namespace
+{
+	// 商店按钮映射流程：UI 只发动作枚举，这里把它翻译成项目 DefaultGame.ini 中已经存在的目录 EntryId。
+	// 价格、库存、免费资格和交付目标不在 UI 层判断，继续交给 PlayerController 后面的 ShopOrderCoordinator。
+	bool TryResolveLakeReachShopAction(const ECatUIReachShopAction Action, FName& OutEntryId, bool& bOutFreeClaim)
+	{
+		switch (Action)
+		{
+		case ECatUIReachShopAction::PurchaseShopRodT2:
+			OutEntryId = TEXT("ShopRodT2Order");
+			bOutFreeClaim = false;
+			return true;
+		case ECatUIReachShopAction::PurchaseBugChum:
+			OutEntryId = TEXT("ShopBugChumOrder");
+			bOutFreeClaim = false;
+			return true;
+		case ECatUIReachShopAction::ClaimFreeBugBait:
+			OutEntryId = TEXT("FreeBugBaitClaim");
+			bOutFreeClaim = true;
+			return true;
+		case ECatUIReachShopAction::ClaimFreeStarterRod:
+			OutEntryId = TEXT("FreeStarterRodClaim");
+			bOutFreeClaim = true;
+			return true;
+		case ECatUIReachShopAction::None:
+		default:
+			OutEntryId = NAME_None;
+			bOutFreeClaim = false;
+			return false;
+		}
+	}
+}
+
 // 绑定流程：
 // 1. 先解除旧页面，避免同一个 PageController 仍持有上一只 Controller 的输入。
-// 2. 保存 LocalPlayer、Controller、Model 和 WBP View 的弱引用，并订阅 Model 完整快照、菜单意图和鱼护动作意图。
-// 3. 尝试安装菜单输入 Context；缺 EnhancedInput 时只降级掉快捷键，不阻止 WBP 根和按钮意图工作。
+// 2. 保存 LocalPlayer、Controller、Model 和 WBP View 的弱引用，并订阅 Model 完整快照、菜单、鱼护和商店意图。
+// 3. 尝试绑定菜单输入 Action；缺 EnhancedInput 或既有 InputContext 接线异常时只降级快捷键，不阻止 WBP 根和按钮意图工作。
 // 4. 最后用 Model 当前 ViewState 渲染一次，保证进视口第一帧不是空画面。
 bool UCatLakeReachPageController::Bind(
 	ULocalPlayer* InLocalPlayer,
@@ -46,6 +76,8 @@ bool UCatLakeReachPageController::Bind(
 		this, &ThisClass::HandleViewFishGuardSelectionRequested);
 	ViewFishGuardActionHandle = InView->OnFishGuardActionRequested.AddUObject(
 		this, &ThisClass::HandleViewFishGuardActionRequested);
+	ViewShopActionHandle = InView->OnShopActionRequested.AddUObject(
+		this, &ThisClass::HandleViewShopActionRequested);
 	InstallMenuInput();
 	HandleModelViewStateChanged();
 	return true;
@@ -53,7 +85,7 @@ bool UCatLakeReachPageController::Bind(
 
 // 解绑流程：
 // 1. 如果菜单仍打开，先恢复旧 Controller 的 GameOnly 与鼠标状态。
-// 2. 移除 EnhancedInput Action/Context，再从同一 Model/View 移除菜单和鱼护意图委托。
+// 2. 移除 EnhancedInput Action 绑定，再从同一 Model/View 移除菜单和鱼护意图委托。
 // 3. 清弱引用和句柄，保证旧 WBP 按钮或旧 Model 更新不会影响新页面。
 void UCatLakeReachPageController::Unbind()
 {
@@ -74,12 +106,14 @@ void UCatLakeReachPageController::Unbind()
 		View->OnLeaveRequested.Remove(ViewLeaveHandle);
 		View->OnFishGuardSelectionRequested.Remove(ViewFishGuardSelectionHandle);
 		View->OnFishGuardActionRequested.Remove(ViewFishGuardActionHandle);
+		View->OnShopActionRequested.Remove(ViewShopActionHandle);
 	}
 	ModelViewChangedHandle.Reset();
 	ViewCloseHandle.Reset();
 	ViewLeaveHandle.Reset();
 	ViewFishGuardSelectionHandle.Reset();
 	ViewFishGuardActionHandle.Reset();
+	ViewShopActionHandle.Reset();
 	BoundLocalPlayer.Reset();
 	BoundPlayerController.Reset();
 	BoundModel.Reset();
@@ -275,6 +309,60 @@ void UCatLakeReachPageController::HandleViewFishGuardActionRequested(const ECatU
 	}
 }
 
+// 商店动作意图流程：
+// 1. 把 View 的按钮枚举翻译成现有 ShopEconomy 目录 EntryId，并区分购买或免费领取 RPC。
+// 2. 从 Model 当前 GameState 投影读取团队钱包 Revision，避免 UI 自带价格或钱包状态。
+// 3. 通过 PlayerController 的正式服务器入口提交；本地 authority 测试直接调用实现，远端玩家走 RPC。
+// 4. 提交后只请求 Model 重读，等待 GameState 公开经济快照刷新，不在 UI 层伪造购买成功。
+void UCatLakeReachPageController::HandleViewShopActionRequested(const ECatUIReachShopAction Action)
+{
+	UCatLakeReachModel* Model = BoundModel.Get();
+	ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
+	FName EntryId = NAME_None;
+	bool bFreeClaim = false;
+	if (!Model || !CatController || !TryResolveLakeReachShopAction(Action, EntryId, bFreeClaim))
+	{
+		return;
+	}
+
+	const FCatUIReachViewState& State = Model->GetViewState();
+	if (!State.bMenuOpen || !State.bShopEconomyAvailable)
+	{
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_reach_shop_action_rejected Action=%s Reason=ShopSnapshotUnavailable"),
+			*UEnum::GetValueAsString(Action));
+		return;
+	}
+
+	const FGuid RequestId = FGuid::NewGuid();
+	const int64 ExpectedWalletRevision = State.ShopEconomy.WalletRevision;
+	if (CatController->HasAuthority())
+	{
+		if (bFreeClaim)
+		{
+			CatController->ServerClaimFreeShopEntry_Implementation(EntryId, RequestId, ExpectedWalletRevision);
+		}
+		else
+		{
+			CatController->ServerSubmitShopPurchase_Implementation(EntryId, RequestId, ExpectedWalletRevision);
+		}
+	}
+	else if (bFreeClaim)
+	{
+		CatController->ServerClaimFreeShopEntry(EntryId, RequestId, ExpectedWalletRevision);
+	}
+	else
+	{
+		CatController->ServerSubmitShopPurchase(EntryId, RequestId, ExpectedWalletRevision);
+	}
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_reach_shop_action_requested Action=%s RequestId=%s EntryId=%s Free=%s WalletRevision=%lld"),
+		*UEnum::GetValueAsString(Action),
+		*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		*EntryId.ToString(),
+		bFreeClaim ? TEXT("true") : TEXT("false"),
+		ExpectedWalletRevision);
+	RefreshModel();
+}
+
 // 营地定位流程：优先选择当前 Pawn 最近的固定营地；没有 Pawn 时返回 World 中第一座营地，由服务器范围校验继续兜底。
 ACatCampHubActor* UCatLakeReachPageController::ResolveCampHubForFishGuardAction() const
 {
@@ -310,42 +398,33 @@ ACatCampHubActor* UCatLakeReachPageController::ResolveCampHubForFishGuardAction(
 	return BestCamp;
 }
 
-// 菜单输入安装流程：先要求 Controller 使用 EnhancedInputComponent、LocalPlayer 子系统和有效配置键；然后创建瞬时 Action/Context、映射一个键并保存唯一绑定句柄。
+// 菜单输入安装流程：
+// 1. 先要求 Controller 使用 EnhancedInputComponent 和有效 Settings。
+// 2. 再加载配置里的正式 Action，并额外解析项目既有 InputContext 作为资产接线校验；任何缺失都只降级快捷键。
+// 3. 只绑定 Action 的 Started 事件，不 AddMappingContext、不 MapKey，让按键完全由已有 InputContext 资产维护。
 void UCatLakeReachPageController::InstallMenuInput()
 {
 	RemoveMenuInput();
 	APlayerController* Controller = BoundPlayerController.Get();
 	UEnhancedInputComponent* Input = Controller ? Cast<UEnhancedInputComponent>(Controller->InputComponent) : nullptr;
-	ULocalPlayer* LocalPlayer = BoundLocalPlayer.Get();
-	UEnhancedInputLocalPlayerSubsystem* InputSubsystem = LocalPlayer
-		? LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>() : nullptr;
 	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
-	const FKey MenuKey = Settings ? FKey(Settings->LakeMenuToggleKeyName) : FKey();
-	if (!Input || !InputSubsystem || !Settings || !MenuKey.IsValid())
+	UInputAction* MenuAction = Settings ? Settings->LoadLakeMenuToggleAction() : nullptr;
+	const UInputMappingContext* MenuMappingContext = Settings ? Settings->LoadLakeMenuInputMappingContext() : nullptr;
+	if (!Input || !Settings || !MenuAction || !MenuMappingContext)
 	{
-		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_reach_menu_input_unavailable Controller=%s Key=%s"),
-			*GetNameSafe(Controller), Settings ? *Settings->LakeMenuToggleKeyName.ToString() : TEXT("None"));
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_reach_menu_input_unavailable Controller=%s Action=%s Context=%s"),
+			*GetNameSafe(Controller),
+			Settings ? *Settings->LakeMenuToggleAction.ToSoftObjectPath().ToString() : TEXT("None"),
+			Settings ? *Settings->LakeMenuInputMappingContext.ToSoftObjectPath().ToString() : TEXT("None"));
 		return;
 	}
-
-	LakeMenuToggleAction = NewObject<UInputAction>(this);
-	LakeMenuMappingContext = NewObject<UInputMappingContext>(this);
-	if (!LakeMenuToggleAction || !LakeMenuMappingContext)
-	{
-		LakeMenuToggleAction = nullptr;
-		LakeMenuMappingContext = nullptr;
-		return;
-	}
-	LakeMenuToggleAction->ValueType = EInputActionValueType::Boolean;
-	LakeMenuMappingContext->MapKey(LakeMenuToggleAction, MenuKey);
-	InputSubsystem->AddMappingContext(LakeMenuMappingContext, FMath::Max(0, Settings->LakeMenuInputPriority));
-	bLakeMenuMappingInstalled = true;
+	AppliedLakeMenuToggleAction = MenuAction;
 	LakeMenuInputBindingHandle = Input->BindAction(
-		LakeMenuToggleAction, ETriggerEvent::Started, this, &ThisClass::ToggleLakeMenu).GetHandle();
+		AppliedLakeMenuToggleAction, ETriggerEvent::Started, this, &ThisClass::ToggleLakeMenu).GetHandle();
 	BoundMenuInputComponent = Input;
 }
 
-// 菜单输入移除流程：先从安装时保存的 EnhancedInputComponent 删除精确绑定，再从同一 LocalPlayer 移除已安装 Context；最后清弱引用、句柄和瞬时对象。
+// 菜单输入移除流程：从安装时保存的 EnhancedInputComponent 删除精确绑定；InputContext 属于 PlayerController 基础输入层，本页不安装也不移除它。
 void UCatLakeReachPageController::RemoveMenuInput()
 {
 	if (UEnhancedInputComponent* Input = BoundMenuInputComponent.Get();
@@ -353,22 +432,9 @@ void UCatLakeReachPageController::RemoveMenuInput()
 	{
 		Input->RemoveBindingByHandle(LakeMenuInputBindingHandle);
 	}
-	if (bLakeMenuMappingInstalled && LakeMenuMappingContext)
-	{
-		if (ULocalPlayer* LocalPlayer = BoundLocalPlayer.Get())
-		{
-			if (UEnhancedInputLocalPlayerSubsystem* InputSubsystem =
-				LocalPlayer->GetSubsystem<UEnhancedInputLocalPlayerSubsystem>())
-			{
-				InputSubsystem->RemoveMappingContext(LakeMenuMappingContext);
-			}
-		}
-	}
 	BoundMenuInputComponent.Reset();
 	LakeMenuInputBindingHandle = 0;
-	bLakeMenuMappingInstalled = false;
-	LakeMenuToggleAction = nullptr;
-	LakeMenuMappingContext = nullptr;
+	AppliedLakeMenuToggleAction = nullptr;
 }
 
 // InputMode 流程：打开时把 WBP View 设为 UIOnly 焦点并显示鼠标；关闭时恢复 GameOnly 和打开前鼠标可见性。

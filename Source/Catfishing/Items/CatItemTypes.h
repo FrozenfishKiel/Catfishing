@@ -64,6 +64,10 @@ struct FCatContainerSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 
+	/** 容器当前被正式玩法裁定的格子容量；UI 用它决定 WrapBox 创建多少格，不把它当成扩容写口。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 Capacity = 0;
+
 	/** 当前仍存在的实物鱼；预留只锁定服务端写口，不从复制数组提前移除。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatFishInstance> Fish;

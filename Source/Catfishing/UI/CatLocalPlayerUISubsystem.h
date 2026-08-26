@@ -8,12 +8,19 @@
 class APlayerController;
 class APawn;
 class ACatCharacter;
+class UCatHUDModel;
+class UCatHUDWidget;
+class UCatInteractionPageController;
+class UCatInteractionPromptWidget;
+class UCatInventoryModel;
+class UCatInventoryPageController;
+class UCatInventoryWidget;
 class UCatLakeReachModel;
 class UCatLakeReachPageController;
 class UCatLakeReachWidget;
 class UCatTravelWidget;
 
-/** 每个 LocalPlayer 的 UI 根模块；负责 Frontend 旅行面板和 LakeReach MVC 对象生命周期，不直接聚合玩法 Query 或渲染布局。 */
+/** 每个 LocalPlayer 的 UI 生命周期协调器；只装配本地玩家拥有的 HUD、背包和交互提示，不预建商店或聚合业务页面。 */
 UCLASS()
 class CATFISHING_API UCatLocalPlayerUISubsystem : public ULocalPlayerSubsystem
 {
@@ -25,23 +32,29 @@ class CATFISHING_API UCatLocalPlayerUISubsystem : public ULocalPlayerSubsystem
 #endif
 
 public:
-	/** 订阅 GameInstance Online 快照，绑定当前 Controller Pawn notifier，并按当前 Pawn 尝试装配 LakeReach MVC。 */
+	/** 订阅 GameInstance Online 快照，绑定当前 Controller Pawn notifier，并按当前 Pawn 尝试装配本地玩家 UI 模块。 */
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 
-	/** 先移除 LakeReach MVC 与 Controller 绑定，再移除 Online View 和快照订阅，保证 LocalPlayer 销毁后没有迟到 UI 更新。 */
+	/** 先移除本地玩家 UI 模块与 Controller 绑定，再移除 Online View 和快照订阅，保证 LocalPlayer 销毁后没有迟到 UI 更新。 */
 	virtual void Deinitialize() override;
 
 	/** Controller 替换时先从旧 Controller 恢复并清理 UI，再弱绑定新 Controller 并装配其当前 Pawn。 */
 	virtual void PlayerControllerChanged(APlayerController* NewController) override;
 
-	/** 切换当前 LocalPlayer 的 Lake 菜单；实际输入模式、焦点和鼠标由 LakeReach PageController 管理。 */
+	/** 切换当前 LocalPlayer 的个人背包；实际输入模式、焦点和鼠标由 Inventory PageController 管理。 */
+	void ToggleInventory();
+
+	/** 返回当前个人背包是否打开；无页面时固定为 false。 */
+	bool IsInventoryOpen() const;
+
+	/** 兼容旧 Lake 菜单入口；迁移期把它直接转到个人背包开关。 */
 	void ToggleLakeMenu();
 
-	/** 返回当前 Lake 菜单是否由 LakeReach PageController 保持打开；无页面时固定为 false。 */
+	/** 兼容旧 Lake 菜单状态读取；迁移期直接读取个人背包打开状态。 */
 	bool IsLakeMenuOpen() const;
 
 private:
-	/** 响应 Online 事实变更；实现重新读取完整 Snapshot，并同步 Frontend 面板与 LakeReach Model。 */
+	/** 响应 Online 事实变更；实现重新读取完整 Snapshot，并同步 Frontend 面板与本地玩家 UI Model。 */
 	void HandleOnlineSnapshotChanged();
 
 	/** 把 Frontend Travel View 的 Host/Find/Join/Invite/Leave 意图翻译为 Online 公共接口调用。 */
@@ -62,28 +75,59 @@ private:
 	/** 从旧 Controller 精确移除 Pawn notifier 并清弱引用；Controller 已销毁时只清本地句柄。 */
 	void UnbindController();
 
-	/** 当前 Controller Pawn 变化入口；先完整解绑旧 LakeReach MVC，再尝试把 NewPawn 作为新的 ACatCharacter 只读来源。 */
+	/** 当前 Controller Pawn 变化入口；先完整解绑旧玩家 UI 模块，再尝试把 NewPawn 作为新的 ACatCharacter 只读来源。 */
 	void HandleControllerPawnChanged(APawn* NewPawn);
 
-	/** 当配置 WBP、当前 Controller 与 Character 有效时创建唯一 LakeReach MVC，并让 Model/PageController/View 成对绑定。 */
+	/** 当配置 WBP、当前 Controller 与 Character 有效时创建 HUD、Inventory 和 Interaction 三个独立模块。 */
 	void AttachLakePawn(ACatCharacter* Character);
 
-	/** 先解绑 PageController，再解绑 Model 并移除 View，最后清理 LakeReach MVC 引用。 */
+	/** 先解绑各模块 PageController/Model，再移除 View，最后清理所有本地玩家 UI 引用。 */
 	void DetachLakePawn();
+
+	/** HUD Model 投影变化入口；只把最新状态交给 HUD WBP，不访问背包或商店。 */
+	void HandleHUDModelViewStateChanged();
 
 	/** 当前 LocalPlayer 唯一 Frontend/旅行白盒界面；子系统拥有，Controller 变化或销毁时释放。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatTravelWidget> OnlineWidget;
 
-	/** 当前 LocalPlayer 的正式 LakeReach WBP View；由 Settings 配置类创建，缺类时不创建原生替身。 */
+	/** 当前 LocalPlayer 的状态 HUD WBP；只显示猫状态和钓鱼反馈。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatHUDWidget> HUDWidget;
+
+	/** 当前 LocalPlayer 的状态 HUD Model；它只读 Character 状态和 Fishing 反馈。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatHUDModel> HUDModel;
+
+	/** 当前 LocalPlayer 的个人背包主 WBP；打开前不会进入视口。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatInventoryWidget> InventoryWidget;
+
+	/** 当前 LocalPlayer 的个人背包 Model；它只读个人鱼护复制快照和动作结果。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatInventoryModel> InventoryModel;
+
+	/** 当前 LocalPlayer 的个人背包 PageController；它管理背包输入和 View 意图转发。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatInventoryPageController> InventoryPageController;
+
+	/** 当前 LocalPlayer 的交互提示 WBP；只显示靠近对象提示，不打开具体对象 UI。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatInteractionPromptWidget> InteractionPromptWidget;
+
+	/** 当前 LocalPlayer 的交互提示和确认键控制器；它扫描通用交互目标，不预建任何对象 UI。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatInteractionPageController> InteractionPageController;
+
+	/** 旧 LakeReach 兼容 View 引用；新 LocalPlayer 不再创建它，保留给迁移期测试编译。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatLakeReachWidget> LakeReachWidget;
 
-	/** 当前 LakeReach MVC Model；它拥有只读 Query 订阅、Fishing Bridge 和当前 ViewState。 */
+	/** 旧 LakeReach 兼容 Model 引用；新 LocalPlayer 不再创建它，保留给迁移期测试编译。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatLakeReachModel> LakeReachModel;
 
-	/** 当前 LakeReach MVC PageController；它管理菜单输入、焦点和 View 意图转发。 */
+	/** 旧 LakeReach 兼容 PageController 引用；新 LocalPlayer 不再创建它，保留给迁移期测试编译。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatLakeReachPageController> LakeReachPageController;
 
@@ -96,6 +140,9 @@ private:
 
 	/** Frontend TravelWidget 动作广播的配对解绑句柄；创建时写入，移除时消费。 */
 	FDelegateHandle ActionHandle;
+
+	/** HUD Model 变化广播的配对解绑句柄；AttachLakePawn 写入，DetachLakePawn 消费。 */
+	FDelegateHandle HUDModelViewChangedHandle;
 
 	/** 当前 Controller Pawn notifier 的配对解绑句柄；Controller 变化或 Deinitialize 时消费。 */
 	FDelegateHandle PawnChangedHandle;

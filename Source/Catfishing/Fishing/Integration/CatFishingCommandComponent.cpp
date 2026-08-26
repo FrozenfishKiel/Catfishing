@@ -1,8 +1,8 @@
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 
 #include "GameFramework/PlayerController.h"
-#include "AbilitySystem/CatAbilitySystemComponent.h"
-#include "AbilitySystem/CatFishingAbilityTags.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "Character/CatCharacter.h"
 #include "Environment/CatChumPlacementService.h"
 #include "Equipment/CatEquipmentComponent.h"

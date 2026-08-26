@@ -10,9 +10,9 @@ class UCatLakeReachModel;
 class UCatLakeReachWidget;
 class UEnhancedInputComponent;
 class UInputAction;
-class UInputMappingContext;
 class ULocalPlayer;
 enum class ECatUIReachFishGuardAction : uint8;
+enum class ECatUIReachShopAction : uint8;
 
 /** LakeReach 的 MVC PageController；它连接 Model 与 WBP View，并把 UI 意图翻译成输入模式或正式 Online 请求。 */
 UCLASS()
@@ -52,13 +52,16 @@ private:
 	/** 根 View 发出鱼护动作意图时重读 Model 选择，并把它翻译成正式 PlayerController 服务器命令。 */
 	void HandleViewFishGuardActionRequested(ECatUIReachFishGuardAction Action);
 
+	/** 根 View 发出商店购买或免费领取意图时重读团队钱包 Revision，并转交 PlayerController 的 Shop RPC。 */
+	void HandleViewShopActionRequested(ECatUIReachShopAction Action);
+
 	/** 为鱼护转缸动作在当前 World 中定位最近固定营地；找不到时返回空并让 Model 显示结构化拒绝。 */
 	ACatCampHubActor* ResolveCampHubForFishGuardAction() const;
 
-	/** 为当前 Controller 创建一个配置化原生菜单 Action/Context，安装到 LocalPlayer 并保存唯一绑定句柄。 */
+	/** 加载 Settings 中配置的菜单 Action，并把它绑定到当前 EnhancedInputComponent；按键映射必须来自项目既有 InputContext。 */
 	void InstallMenuInput();
 
-	/** 从原 Controller 精确移除菜单 Action 绑定和 Mapping Context，再释放瞬时输入对象。 */
+	/** 从原 Controller 精确移除菜单 Action 绑定，再释放本页对配置资产的强引用。 */
 	void RemoveMenuInput();
 
 	/** 根据菜单状态设置 UIOnly 或 GameOnly、键盘焦点和鼠标，并在关闭时恢复打开前的鼠标可见性。 */
@@ -80,13 +83,9 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatLakeReachWidget> BoundView;
 
-	/** 当前 LocalPlayer 菜单的瞬时 Enhanced Input Action；只表达开关意图，不进入资产或领域状态。 */
+	/** 当前页面安装的菜单 Action 资产；它来自配置软引用，保存强引用只为输入绑定生命周期配对。 */
 	UPROPERTY(Transient)
-	TObjectPtr<UInputAction> LakeMenuToggleAction;
-
-	/** 当前 LocalPlayer 菜单的瞬时 Mapping Context；安装与移除始终由本 PageController 成对执行。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UInputMappingContext> LakeMenuMappingContext;
+	TObjectPtr<UInputAction> AppliedLakeMenuToggleAction;
 
 	/** 菜单 Action 实际绑定的 Enhanced Input 组件；换 Controller 时从原组件精确移除。 */
 	UPROPERTY(Transient)
@@ -107,11 +106,11 @@ private:
 	/** View 鱼护动作意图订阅句柄；Unbind 必须用同一 View 移除。 */
 	FDelegateHandle ViewFishGuardActionHandle;
 
+	/** View 商店意图订阅句柄；Unbind 必须用同一 View 移除，避免旧按钮迟到提交订单。 */
+	FDelegateHandle ViewShopActionHandle;
+
 	/** Enhanced Input 组件中菜单 Action 的唯一绑定句柄；0 表示没有可移除绑定。 */
 	uint32 LakeMenuInputBindingHandle = 0;
-
-	/** 菜单 Mapping Context 当前是否已安装到 LocalPlayer；Remove 只在 true 时调用以保持精确配对。 */
-	bool bLakeMenuMappingInstalled = false;
 
 	/** 菜单当前是否打开的唯一状态；Toggle 写入，View 和输入恢复只读取。 */
 	bool bLakeMenuOpen = false;

@@ -1,11 +1,11 @@
 #include "Fishing/CatFishingService.h"
 
 #include "Character/CatCharacter.h"
-#include "AbilitySystem/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Logging/CatLog.h"
 #include "AbilitySystemComponent.h"
-#include "AbilitySystem/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Condition/CatConditionComponent.h"
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishDefinition.h"

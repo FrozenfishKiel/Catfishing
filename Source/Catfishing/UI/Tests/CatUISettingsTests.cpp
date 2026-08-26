@@ -2,6 +2,8 @@
 
 #include "Misc/AutomationTest.h"
 
+#include "InputAction.h"
+#include "InputMappingContext.h"
 #include "UI/CatLakeReachWidget.h"
 #include "UI/CatUISettings.h"
 
@@ -38,8 +40,15 @@ bool FCatUISettingsLakeReachWidgetClassTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("显式关闭后不装配 LakeReach MVC"), Settings->IsLakeReachViewEnabled());
 	Settings->bEnableLakeReachView = true;
 	TestTrue(TEXT("重新开启后仍走同一正式 WBP 配置"), Settings->IsLakeReachViewEnabled());
-	TestEqual(TEXT("原生菜单输入有稳定默认键名"), Settings->LakeMenuToggleKeyName, FName(TEXT("Tab")));
-	TestTrue(TEXT("菜单输入优先级保持非负"), Settings->LakeMenuInputPriority >= 0);
+	TestEqual(TEXT("菜单输入 Action 指向正式资产"),
+		Settings->LakeMenuToggleAction.ToSoftObjectPath().ToString(),
+		FString(TEXT("/Game/Input/InputAction/IA_LakeMenu.IA_LakeMenu")));
+	TestEqual(TEXT("菜单输入 IMC 指向项目既有 InputContext"),
+		Settings->LakeMenuInputMappingContext.ToSoftObjectPath().ToString(),
+		FString(TEXT("/Game/Input/InputContext/IMC_InputContext.IMC_InputContext")));
+	TestNotNull(TEXT("菜单输入 Action 资产可加载"), Settings->LoadLakeMenuToggleAction());
+	TestNotNull(TEXT("菜单输入 IMC 资产可加载"), Settings->LoadLakeMenuInputMappingContext());
+	TestEqual(TEXT("菜单键名来自 IMC 映射"), Settings->ResolveLakeMenuToggleKeyName(), FName(TEXT("Tab")));
 	return !HasAnyErrors();
 }
 

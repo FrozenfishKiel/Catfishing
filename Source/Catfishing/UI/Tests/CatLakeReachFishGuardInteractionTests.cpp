@@ -4,9 +4,9 @@
 #include "Tests/AutomationCommon.h"
 #include "UObject/StrongObjectPtr.h"
 
-#include "AbilitySystem/CatAbilitySettings.h"
-#include "AbilitySystem/CatAbilitySystemComponent.h"
-#include "AbilitySystem/CatBodyActionAbility.h"
+#include "AbilitySystem/Config/CatAbilitySettings.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/BodyAction/CatBodyActionAbility.h"
 #include "Character/CatCharacter.h"
 #include "Condition/CatConditionSettings.h"
 #include "Data/CatFishCatalogSettings.h"
