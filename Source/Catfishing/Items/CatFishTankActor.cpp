@@ -1,6 +1,7 @@
 #include "Items/CatFishTankActor.h"
 
 #include "Items/CatContainerReplicationComponent.h"
+#include "Items/CatFishTankInteractionComponent.h"
 #include "Items/CatItemsService.h"
 #include "Items/CatItemsSettings.h"
 #include "Components/SceneComponent.h"
@@ -14,6 +15,7 @@ ACatFishTankActor::ACatFishTankActor()
 	TankRoot = CreateDefaultSubobject<USceneComponent>(TEXT("TankRoot"));
 	SetRootComponent(TankRoot);
 	ContainerReplication = CreateDefaultSubobject<UCatContainerReplicationComponent>(TEXT("ContainerReplication"));
+	TankInteraction = CreateDefaultSubobject<UCatFishTankInteractionComponent>(TEXT("TankInteraction"));
 }
 
 // 注册流程：服务器为本 World 生成 TankId，并以显式配置容量注册共享容器；客户端只等待 ID 与组件快照复制。
@@ -59,4 +61,10 @@ void ACatFishTankActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& Ou
 FGuid ACatFishTankActor::GetTankContainerId() const
 {
 	return TankContainerId;
+}
+
+// 组件读取流程：返回本鱼缸自带的交互组件；调用方不能通过 Actor 绕过组件去直接写容器。
+UCatFishTankInteractionComponent* ACatFishTankActor::GetTankInteraction() const
+{
+	return TankInteraction;
 }

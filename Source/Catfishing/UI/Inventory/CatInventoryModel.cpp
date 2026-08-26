@@ -26,7 +26,7 @@ namespace
 	}
 
 	// 领域错误标签流程：常见错误转中文，其他枚举保留原名方便按日志定位。
-	FString GetDomainErrorDisplayText(const ECatDomainCommandError Error)
+	FString GetInventoryDomainErrorDisplayText(const ECatDomainCommandError Error)
 	{
 		switch (Error)
 		{
@@ -259,7 +259,7 @@ void UCatInventoryModel::Refresh()
 	{
 		NewState.ResultText = FText::FromString(FString::Printf(TEXT("背包操作：%s，%s，版本 %lld"),
 			*GetInventoryActionDisplayText(LastAction),
-			*GetDomainErrorDisplayText(LastCommandResult.Error),
+			*GetInventoryDomainErrorDisplayText(LastCommandResult.Error),
 			LastCommandResult.Revision));
 	}
 	else
