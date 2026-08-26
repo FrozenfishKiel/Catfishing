@@ -18,6 +18,9 @@ struct CATFISHING_API FCatFishingViewState
 	UPROPERTY(BlueprintReadOnly) bool bSlacking = false;
 	UPROPERTY(BlueprintReadOnly) bool bPerfectHook = false;
 	UPROPERTY(BlueprintReadOnly) ECatFishMotionIntent FishMotionIntent = ECatFishMotionIntent::None;
+	UPROPERTY(BlueprintReadOnly) float FishLineAlignment = 0.0f;
+	UPROPERTY(BlueprintReadOnly) float NormalizedLineLoad = 0.0f;
+	UPROPERTY(BlueprintReadOnly) bool bStrongConfrontation = false;
 
 	static FCatFishingViewState FromSnapshot(const FCatFishingSessionSnapshot& Snapshot);
 };

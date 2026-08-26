@@ -19,6 +19,7 @@
 
 class UStateTreeComponent;
 class UCatFishingCommandComponent;
+class UCatInteractionTargetingComponent;
 class UCatChumFieldReplicationComponent;
 class UCatAbilitySystemComponent;
 class UEnhancedInputLocalPlayerSubsystem;
@@ -374,6 +375,13 @@ public:
 	UFUNCTION(BlueprintPure, Category="Catfishing|Fishing")
 	UCatFishingCommandComponent* GetFishingCommandComponent() const;
 
+	UFUNCTION(BlueprintPure, Category="Catfishing|Interaction")
+	UCatInteractionTargetingComponent* GetInteractionTargetingComponent() const { return InteractionTargetingComponent; }
+
+	/** 客户端只提交复制 Actor 与幂等键；服务器重新检查玩法 gate，目标实现继续验证距离、视线和物品状态。 */
+	UFUNCTION(Server, Reliable)
+	void ServerRequestInteraction(AActor* Target, FGuid RequestId);
+
 	/** 把唯一献祭命令转给 SacrificeCoordinator；Controller 不直接删鱼或增加 Run 额度。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestSacrifice(FCatSacrificeCommand Command);
@@ -558,6 +566,7 @@ private:
 	void ApplySprintSpeed(APawn* TargetPawn, bool bSprinting) const;
 	void AbilityInputTagPressed(FGameplayTag InputTag);
 	void AbilityInputTagReleased(FGameplayTag InputTag);
+	void NativeInputTagPressed(FGameplayTag InputTag);
 	UCatAbilitySystemComponent* GetCurrentCatAbilitySystemComponent() const;
 	void RefreshAbilityInputRoute();
 
@@ -600,4 +609,7 @@ private:
 
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Catfishing|Fishing", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UCatFishingCommandComponent> FishingCommandComponent;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Catfishing|Interaction", meta=(AllowPrivateAccess="true"))
+	TObjectPtr<UCatInteractionTargetingComponent> InteractionTargetingComponent;
 };

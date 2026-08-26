@@ -1,6 +1,6 @@
 # 钓鱼核心架构（技术文档）
 
-版本对应：2026-08-19 代码状态。阅读对象：需要理解/修改钓鱼玩法逻辑的人。
+版本对应：2026-08-25 代码状态。阅读对象：需要理解/修改钓鱼玩法逻辑的人。
 配套文档：蓝图任务步骤见《BlueprintTaskGuide_zh-CN.md》；规格口径见《FishingCoreFlow_zh-CN.md》。
 
 ---
@@ -9,8 +9,12 @@
 
 ```
 【输入层】玩家按键
-   E / 左键 / 右键 / Q / F / X
+   R / E / 左键 / 右键 / Q / F / X
         │  Enhanced Input（IMC_InputContext）
+        ▼
+【输入语义层】DA_CatAbilityInputConfig
+   ├─ Native：E → IA_Interact → Cat.Input.Interact → Current Target → 服务器交互 RPC
+   └─ Ability：R/左键/右键/Q/F/X → Fishing InputTag → ASC
         ▼
 【GAS 层】6 个原生 GameplayAbility（可被蓝图子类化，仅承载"输入边沿 + 本地表现钩子"）
    UCatGA_FishingRodInteract / PrimaryAction / Slack / Chum / Scoop / Cancel
@@ -18,10 +22,10 @@
         ▼
 【命令层】UCatFishingCommandComponent（挂在 PlayerController 上，唯一 RPC 边界）
    HandleAbilityCommandFromAuthority()：服务器按"当前事实"分派语义
-   ├─ E   → 没竿=PlaceRod / 没人操作=OperateRod / 自己在操作=LeaveRod
+   ├─ R   → 已占位=LeaveRod / 附近竿有空位=OperateRod / 否则=PlaceRod
    ├─ 左键→ 无会话按下=记录瞄准 / 无会话松开=BeginCast（视线∩水面）
    │        有会话按下=提竿(TrueBite) 或 拖(HookedFight) / 松开=停拖
-   ├─ 右键→ HookedFight 中 按住=放线 / 松开=停放
+   ├─ 右键→ HookedFight 中 按住=松开线杯 / 松开=锁住当前线长
    ├─ Q   → 按下记时刻 / 松开=按时长算蓄力 → 弹道预测落点 → PlaceChum
    ├─ F   → RequestScoop（服务器自动填抄手自己的鱼护 ID）
    └─ X   → 有会话=Cancel（咬钩前零损失）/ 无会话=收竿（操作中先 Leave 再 Pack）
@@ -34,6 +38,9 @@
    ├─ UStateTreeComponent（ST_FishingSession）  ← 只拥有"阶段拓扑"
    ├─ UCatFishingFightRunner                    ← 拥有遛鱼数值（0.05s 固定步进）
    └─ FCatFishingSessionSnapshot（ReplicatedUsing）← 唯一复制出口，只读
+        │
+        └─ ACatFishEncounterActor
+             └─ UStateTreeComponent（ST_FishFight）← 只选发力/平静意图；仅服务器运行
         ▼
 【表现层】只订阅，永不写回（单向依赖）
    Snapshot/ViewBridge、表现 Actor 的 BP_On* 事件、Ability 的 BP_OnLocalInput* 钩子
@@ -45,6 +52,21 @@
 ---
 
 ## 2. 关键子系统
+
+### 2.0 鱼竿放置、共享与左右操作位
+
+`PlaceRod` 现在只检查角色前方 150cm 是否存在可站立实体地面（地面法线 Z≥0.7），不再要求放置点位于水域样条外侧或距岸 4m 内。因此营地、远岸和测试区都可以先架杆。**架杆自由不等于抛线无限**：`BeginCast` 仍要求准星命中有效水域，并同时满足 `min(鱼竿最大线长, 浮漂最大抛距)`、前向夹角与无遮挡视线。
+
+鱼竿公开状态以紧凑数组 `OperatorPlayerStates` 表示占位，服务器复制给所有客户端：
+
+- 第一次 R 的 `PlaceRod` 只把鱼竿部署为空杆，不占槽、不锁角色移动；第二次 R 才进入操作位，保证放杆动画和使用动作是两个独立复制跃迁。
+- `0` 号槽是右侧主位；当前单人钓鱼命令只接受该玩家。
+- `1` 号槽是左侧辅助位；当前只完成站位和网络占用，合力数值/输入仍是 `TODO(CooperativeFishing)`。
+- 主位离开时数组压紧，原 1 号位晋升为 0 号位并移动到右侧；人数从数组长度即时推导，没有可能遗留的 `bTwoPlayer`。
+- 槽位算法按右/左成对向外扩展，配置上限当前为 2、代码有界预留到 8，后续增加人数不需要更换复制结构。
+- `OperatorPlayerState` 只保留为 `OperatorPlayerStates[0]` 的兼容快捷字段；蓝图若要判断双人必须读取数组长度。
+
+另一个容易混淆的身份是 `OwnerPlayerState`：它代表谁部署/谁能最终收走鱼竿，并不限制谁能占位。服务器按公开 `RodActorId` 找全场鱼竿；接管别人鱼竿后，抛竿也按“当前主操作位”查竿，不再误查“自己部署的竿”。
 
 ### 2.1 水域（样条烘焙 → 只读缓存）
 
@@ -70,37 +92,51 @@
 |---|---|
 | Waiting | StateTree 节点 `ScheduleWaitingProbe` **内部自己** EnterPhase，并按泊松抽咬钩延迟起计时器 |
 | Probe | StateTree 的 `EnterPhase` 节点（ProbeTriggered 事件转移后） |
-| TrueBiteWindow | `ResolveTrueBiteSelection` 节点内部**直接写**（选鱼+生成鱼 Actor+扣饵在此一次完成） |
-| HookedFight | `RequestHook` 命令内部（提竿成功） |
-| NearShore | 遛鱼 Runner 结束后 C++ 内部 |
+| TrueBiteWindow | StateTree 的 `OpenTrueBiteWindow` 节点打开通用响应窗；只让浮漂下沉，不选鱼、不生成 Actor、不扣饵 |
+| HookedFight | 真咬窗内收到左键后，`RequestHook` 冻结选鱼上下文、选鱼、生成 Actor、扣饵并启动搏斗 |
+| ExhaustedReel | 鱼体力耗尽或猫形成绝对力量优势后，由 Session 停止搏斗 Runner 并进入 |
 | Resolved/Terminated | `FinalizeSession()` —— StateTree **禁止**进入终态，且它会停树 |
 
-StateTree（`ST_FishingSession`）只有 4 个状态、2 条事件转移 + 1 条完成转移，逻辑极薄。
-C++ 实际只发 5 个事件：ProbeTriggered / HookAccepted / WindowExpired / EarlyHook / Interrupted（后三个发完即停树，树收不到）。
+浮漂正式表现由 `ACatFishingHookActor` 驱动，不依赖 `cat.Fishing.Debug`：Waiting 先保证至少 `MinimumBiteDelaySeconds`（当前 5 秒）的小幅慢浮，再叠加服务器随机安静等待；真咬前 `BiteWarningSeconds`（当前 1.5 秒）只把 Hook 的复制模式切为 `BiteWarning`，此时提前提竿仍是空钩；进入 `TrueBiteWindow` 时切为 `Sunk` 猛然下沉。若响应窗内没有左键，StateTree 走 `WindowExpired → Waiting`，保留鱼竿、鱼线和饵料预约并开始新一轮；每轮使用新的确定性服务器随机种子。`MaximumBiteDelaySeconds`（当前 15 秒）是每轮慢浮开始到下沉的总上限。网络只复制模式和服务器起始时间，各客户端本地计算连续位移，因此不会逐帧复制 Transform。
+
+StateTree（`ST_FishingSession`）只有 4 个状态、3 条事件转移 + 1 条完成转移，逻辑极薄。其中 `WindowExpired` 是 `Probe → Waiting` 的循环边；`EarlyHook` / `Interrupted` 仍由 C++ 直接收敛终态并停树。
 
 ### 2.4 遛鱼（规格 4.3/4.4 判定表）
 
 `FCatFishingFightSimulator::Step()`：纯静态无副作用函数（有单元测试），每 0.05s 由 Runner 调一次。
 
-三方力量（冻结进 Config）：猫力=ASC FishingStrength ／ 鱼力=鱼种 FishStrength（完美中鱼×0.8）／ 竿强=RodDefinition.FishingStrength
+三方力量（冻结进 Config）：猫力=ASC FishingStrength ／ 鱼力=鱼种 FishStrength（完美中鱼×0.8）／ 竿强=RodDefinition.FishingStrength。
+`FCatFishSteeringModel` 用独立服务器随机流产生平滑目标游向；相同种子与固定步长得到相同方向序列，客户端不自行随机。
+
+鱼自己的高层行为由 Encounter 上的 `ST_FishFight` 控制：默认在 `StrugglingOutward` 与 `CalmOrInward` 两个状态间循环。StateTree Task 只把意图和持续时间交给 Runner，不写 Transform、不扣体力，也不直接修改鱼线。未来增加“低体力蓄力冲刺”时，可以在树上增加状态和条件，同时仍复用同一套服务器模拟器。
 
 ```
-鱼 向内游(顺从) ⇄ 向外游(挣扎)，定时交替；上钩瞬间=向外游；鱼体力<50% 休息期×1.5
+LineOutward = normalize(鱼位置 - 竿尖位置)（水平面）
+Alignment   = dot(鱼当前游向, LineOutward)，范围[-1,1]
+LineLoad    = pow(max(Alignment, 0), AngleStrengthExponent)，范围[0,1]
 
-向内游 + 拖(左键)：D 大幅拉近；猫 -= 鱼力×0.15/s；鱼 -= 猫力×0.08/s   ← 拖永远双方消耗
-向内游 + 不按　　：D 缓慢拉近；无消耗
-向外游 + 拖(或线放尽被绷紧)：按序判定，先命中先生效，取等从严
-   ① 竿强 ≤ min(猫力,鱼力)  → 瞬断（断竿，鱼逃）
+鱼仍在平静 ⇄ 挣扎之间定时交替，但每段内部可平滑转向、横切、绕竿和假动作；上钩瞬间=挣扎。
+每次重选方向先根据鱼体力计算向内概率；朝竿尖 ±60° 属于向内。当前测试鱼满体力为 25%，接近力竭为 80%，中间按指数 1.1 的性格曲线插值；发力期仍只把其中 `FeintProbability` 比例当作向内假动作。
+体力/磨损 = 原公式 × LineLoad：正对外冲是满载，斜向按夹角衰减，横向/向内不产生正面鱼线力量。
+左键遇到低 LineLoad 会按 (1-LineLoad) 比例收近；横向速度转换成绕竿尖的角运动，不凭空增加鱼距。
+
+挣扎 + 拖(或线放尽被绷紧) + LineLoad 连续达到性格阈值/确认时间：进入强对抗并按序裁决
+   ① 钓组承载 ≤ min(猫力,鱼力) → 鱼线瞬断（LineBroken，鱼逃；鱼竿保持可用）
    ② 鱼力 ≥ 猫力            → 猫被拖下水（CatInWater，鱼逃）
-   ③ 猫力 ≥ 鱼力×2          → 绝对碾压（D 归零甩上岸→NearShore）
-   ④ 其余 = 僵持消耗战：竿-=鱼力×0.1 · 鱼-=猫力×0.08 · 猫-=鱼力×0.12 /s
-向外游 + 放线(右键)：D 变远；猫体力 +1.5/s（封顶）——喘气窗口
+   ③ 猫力 ≥ 鱼力×2          → 绝对碾压（结束搏斗→ExhaustedReel）
+   ④ 其余 = 僵持消耗战：竿-=鱼力×0.1×LineLoad · 鱼-=猫力×0.08×LineLoad · 猫-=鱼力×0.12×LineLoad /s
+向外游 + 松线(右键)：在 L_max 内不限制鱼，L_paid 只随鱼实际外游被动增长；猫体力 +1.5/s（封顶）
 
-归零优先级：鱼体力(翻肚→贴岸→NearShore) → 猫体力(拖下水) → 竿耐久(断竿)
+L_paid = 已放出的线长（左键主动收短；右键只允许鱼外游时被动带线）
+D      = 竿尖到鱼的直线距离
+Slack  = max(L_paid-D, 0)：有余线时 Cable 本地垂坠
+Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消耗资源
+
+归零优先级：鱼体力(翻肚→ExhaustedReel) → 猫体力(拖下水) → 本场鱼线耐久(断线)
 完美中鱼：真咬后 1s 内提竿（服务器时间戳）→ 鱼力/鱼体力/初始线长按性格模板折减，bPerfectHook 复制
 ```
 
-所有系数在 `Project Settings → Catfishing Fishing → Fight|Spec`，默认即规格快照。
+全局消耗系数在 `Project Settings → Catfishing Fishing → Fight|Spec`；转向、随机倾向、夹角曲线和强对抗阈值在鱼的 `DA_Fight_*` 性格资产。
 
 ### 2.5 抄网（当前实现）
 
@@ -117,15 +153,16 @@ C++ 实际只发 5 个事件：ProbeTriggered / HookAccepted / WindowExpired / E
 - **线段长度** = `min(UCatFishingSettings::ScoopReachCentimeters, 抄网 DA 的 ScoopReachCentimeters)`——全局那个是上限闸门，两个都得调才生效
 - **圆半径** = 鱼定义的 `ScoopTargetRadiusCentimeters`（圆心随鱼移动）。**为 0 时一律拒绝抢抄**（fail-closed）
 - 射线**不带俯仰**：鱼在水下看不清，逼玩家瞄准深度会变成盲操作；而且现实里站高一点更好捞，3D 判定反而会让站得高的人够不着。高度只由 `MaximumScoopVerticalDeltaCentimeters` 单独卡上限
+- 每次服务器接收的真实挥网尝试都会消费 `ScoopCooldownSeconds`（当前 3 秒）：GAS 的 `Cat.Cooldown.Fishing.Scoop` 提供本地预测与 UI 剩余时间，`UCatFishingCommandComponent` 的每玩家服务器闸门负责拒绝绕过 Ability 的重复 RPC；挥空同样消费，其他玩家的冷却互不影响
 
-**开放阶段：`HookedFight` + `NearShore`。** 鱼身上的圈**一直存在**，不是"体力清零才能抄"——搏斗中把鱼收到射线够得着的位置就能直接抄上来（提前结束搏斗的主动选择，也给多人抢抄拉长窗口）。更早的阶段不开放：鱼还没被提上钩，抄它等于绕过提竿机制。
+**开放阶段：`HookedFight` + `ExhaustedReel`。** 鱼身上的圈**一直存在**，不是"体力清零才能抄"——搏斗中把鱼收到射线够得着的位置就能直接抄上来（提前结束搏斗的主动选择，也给多人抢抄拉长窗口）。更早的阶段不开放：鱼还没被提上钩，抄它等于绕过提竿机制。
 
 其余谓词：抄手在岸上（Outside 水域）+ 地面坡度 ≤ `MaximumScoopGroundSlopeDegrees` + 视线不被遮挡 + 装了 ScoopNet。
-**不再要求"鱼在近岸带内"**——射线∩圆已是唯一范围口径，再叠一层离岸距离会出现"debug 圈画成绿色但服务器拒绝"的表现/判定打架。`NearShoreWidthCentimeters` 现在只管"何时进入 NearShore 阶段"。
+**不再要求"鱼在近岸带内"**——射线∩圆已是唯一范围口径，再叠一层离岸距离会出现"debug 圈画成绿色但服务器拒绝"的表现/判定打架。旧 `NearShoreWidthCentimeters` 只作为配置兼容字段保留，不再推进会话阶段。
 
 首个合法 F 走 Items 唯一捕获事务（鱼归抄手，图鉴首钓归钓手的两轨制在 Items 侧）。拒绝时打 `Event=scoop_rejected`，逐项列出谓词并附带实测水平距离/高度差/射程/半径，能直接分辨是"没对准"、"太远"还是"站太高"。
 
-待改为规格版：道具化概率 / 3s 硬直 / 无网翻肚拖上岸拾取 / 30s 苏醒（§6）。
+鱼体力耗尽后还有第二条正式收尾路线：服务器立即复制 `AutoHauling`，各端据此让鱼侧翻；继续按住左键时，服务器在 `ExhaustedReel` 中把鱼逐步收向“竿尖 XY + max(水面 Z, 竿尖下方地面 Z)”的冻结投影，最多到该点。目标 XY 不受 WaterRegion 轮廓限制；岸地高于水面时使用地面高度，避免鱼埋进岸坡。到点后原地生成复制的 `ACatFishPickupActor`。所有玩家都能以准星锁定并按 E 请求拾取，服务器复核距离、视线、物品状态和背包事务，首个合法请求获胜。抄网和世界拾取最终都进入 Items 的唯一事务入口，但 Outcome 分别为 `Captured` 与兼容既有终态的 `Landed`。
 
 ---
 
@@ -143,6 +180,11 @@ C++ 实际只发 5 个事件：ProbeTriggered / HookAccepted / WindowExpired / E
 
 反向纪律（唯一红线）：表现事件里不发命令；Montage 完成 / AnimNotify 不作为任何玩法提交条件。
 
+鱼的体重与视觉大小使用同一条服务器事实链：鱼种选出后，服务器在定义的重量区间内冻结 `WeightKilograms`，再按
+`Scale = clamp(cuberoot(Weight / ReferenceWeight), MinScale, MaxScale)` 计算一次 `VisualScale`。水中
+`FishEncounterActor` 与水面 `FishPickupActor` 都复制这个标量，并分别只缩放 `VisualRoot` / `FishMesh`；Actor 根节点、
+抄网圆、拾取 Sphere、鱼线与岸线判定不随 Mesh 大小变化。这样多人尺寸一致，收鱼交接也不会产生大小跳变。
+
 ---
 
 ## 4. 调试可视化
@@ -159,11 +201,15 @@ Content/Data/Abilities/   DA_CatAbilitySet_Default(6条) · DA_CatAbilityInputCo
 Content/Data/Equipment/   DA_Rod/Bait/Float/ScoopNet/Chum_Basic
 Content/Data/Fish/        DA_Fish_Test01 · DA_Bite_Test01 · DA_Fight_Test01
 Content/Data/Curves/      Curve_ChumSaturation(1→3) · Curve_ChumDistance/TimeFalloff(1→0)
-Content/Data/StateTrees/  ST_RunFlow · ST_FishingSession
+Content/Data/StateTrees/  ST_RunFlow · ST_FishingSession · ST_FishFight
 Config/DefaultGame.ini    10 个 section（改后必须重启 Editor；软引用资产必须真实落盘）
 ```
 
-数值快照：猫力50 体力100 ／ 竿强60 耐久70 线长1500 ／ 鱼力40 体力50 ／ 真咬窗3s 完美窗1s ／ 近岸100cm ／ 放竿岸带400cm。
+当前共用鱼 Mesh 的体重缩放在 `Catfishing Fishing Presentation > FishScale` 配置：参考重量 `1kg`、最小缩放
+`0.75`、最大缩放 `1.75`。以后若每个鱼种拥有独立 Mesh，应把这三个参数迁入对应鱼种表现 DA，而不是让客户端
+按鱼名猜比例。
+
+数值快照：猫力50 体力100 ／ 竿强60 耐久70 线长1500 ／ 鱼力40 体力50 ／ 真咬窗3s 完美窗1s ／ 近岸100cm ／ 鱼竿操作位2个、左右间距140cm。
 开发便利开关：`bAutoConfigureStarterLoadout`（自动装配+发5窝料，正式选装 UI 完成后关闭）。
 
 ## 6. 已知待办（都在契约后面，不影响表现层）
@@ -173,3 +219,4 @@ Config/DefaultGame.ini    10 个 section（改后必须重启 Editor；软引用
 - 窝料规格版：圆形并池、30s×0.9 离散衰减、去设计上限
 - 抄网规格版：概率/硬直/无网拾取/翻肚 30s 苏醒（会新增 Phase/Intent 枚举值→表现层届时"补分支"）
 - 浮漂精准偏移、入夜停咬、拽尾巴救援(W3)、巨鱼协作输入
+- `TODO(CooperativeFishing)`：把鱼竿当前占位数组接入 Session 参与集合、合力/体力结算与多输入仲裁；必须每次从当前数组重建，不能缓存单/双人模式

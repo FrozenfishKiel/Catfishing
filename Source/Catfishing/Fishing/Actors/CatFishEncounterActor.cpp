@@ -1,7 +1,10 @@
 #include "Fishing/Actors/CatFishEncounterActor.h"
 
+#include "Components/StateTreeComponent.h"
 #include "Components/SceneComponent.h"
+#include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "Net/UnrealNetwork.h"
+#include "StateTree.h"
 
 ACatFishEncounterActor::ACatFishEncounterActor()
 {
@@ -17,6 +20,8 @@ ACatFishEncounterActor::ACatFishEncounterActor()
 	SetRootComponent(SceneRoot);
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
 	VisualRoot->SetupAttachment(SceneRoot);
+	FishBehaviorStateTree = CreateDefaultSubobject<UStateTreeComponent>(TEXT("FishBehaviorStateTree"));
+	FishBehaviorStateTree->SetStartLogicAutomatically(false);
 }
 
 void ACatFishEncounterActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -27,11 +32,12 @@ void ACatFishEncounterActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 }
 
 bool ACatFishEncounterActor::InitializeAuthoritativeIdentity(const FGuid InFishingSessionId, const FGuid InCastAttemptId,
-	const FName InFishDefinitionId, const double InInitialLineLength)
+	const FName InFishDefinitionId, const double InInitialLineLength, const double InVisualScale)
 {
 	if (!HasAuthority() || !InFishingSessionId.IsValid() || !InCastAttemptId.IsValid()
 		|| InFishingSessionId == InCastAttemptId || InFishDefinitionId.IsNone()
-		|| !FMath::IsFinite(InInitialLineLength) || InInitialLineLength < 0.0)
+		|| !FMath::IsFinite(InInitialLineLength) || InInitialLineLength < 0.0
+		|| !FMath::IsFinite(InVisualScale) || InVisualScale <= 0.0)
 	{
 		// 非服务器调用、身份参数无效（两个 Guid 不能相同/未设置）、鱼种未指定或初始线长非法一律拒绝初始化。
 		return false;
@@ -48,9 +54,11 @@ bool ACatFishEncounterActor::InitializeAuthoritativeIdentity(const FGuid InFishi
 	PresentationState.FishingSessionId = InFishingSessionId;
 	PresentationState.CastAttemptId = InCastAttemptId;
 	PresentationState.FishDefinitionId = InFishDefinitionId;
+	PresentationState.VisualScale = InVisualScale;
 	PresentationState.MotionIntent = ECatFishMotionIntent::None; // 初始尚未产生任何搏斗运动意图。
 	PresentationState.CurrentLineLength = InInitialLineLength;
 	bIdentityInitialized = true; // 标记身份已锁定，后续调用只能走上面的幂等分支。
+	ApplyVisualScale();
 	QueueOrDispatchPresentationChanged(Previous, PresentationState); // 按 BeginPlay 时序决定立即广播还是先排队。
 	ForceNetUpdate(); // 立即触发一次网络复制，不等下个复制周期，保证表现尽快到达客户端。
 	return true;
@@ -58,17 +66,101 @@ bool ACatFishEncounterActor::InitializeAuthoritativeIdentity(const FGuid InFishi
 
 const FCatFishEncounterPresentationState& ACatFishEncounterActor::GetPresentationState() const { return PresentationState; }
 
+bool ACatFishEncounterActor::StartFishBehaviorFromAuthority(UStateTree* BehaviorStateTree,
+	UCatFishingFightRunner* FightRunner)
+{
+	if (!HasAuthority() || !bIdentityInitialized || !BehaviorStateTree || !FightRunner
+		|| !FishBehaviorStateTree || FishBehaviorStateTree->IsRunning())
+	{
+		return false;
+	}
+	AuthorityFightRunner = FightRunner;
+	FishBehaviorStateTree->SetStateTree(BehaviorStateTree);
+	bBehaviorStartupInProgress = true;
+	FishBehaviorStateTree->StartLogic();
+	bBehaviorStartupInProgress = false;
+	if (!FishBehaviorStateTree->IsRunning())
+	{
+		AuthorityFightRunner.Reset();
+		return false;
+	}
+	return true;
+}
+
+void ACatFishEncounterActor::StopFishBehaviorFromAuthority()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	if (FishBehaviorStateTree && FishBehaviorStateTree->IsRunning())
+	{
+		FishBehaviorStateTree->StopLogic(TEXT("Fishing fight stopped"));
+	}
+	bBehaviorStartupInProgress = false;
+	AuthorityFightRunner.Reset();
+}
+
+bool ACatFishEncounterActor::BeginBehaviorStateFromStateTree(const ECatFishMotionIntent MotionIntent,
+	double& OutDurationSeconds)
+{
+	OutDurationSeconds = 0.0;
+	return HasAuthority() && FishBehaviorStateTree
+		&& (FishBehaviorStateTree->IsRunning() || bBehaviorStartupInProgress)
+		&& AuthorityFightRunner.IsValid()
+		&& AuthorityFightRunner->BeginBehaviorStateFromStateTree(MotionIntent, OutDurationSeconds);
+}
+
 // 直接返回 VisualRoot 的世界变换位置：三个偏移和朝向都已经烘在组件变换里，调试绘制不需要自己重算一遍。
 FVector ACatFishEncounterActor::GetVisualWorldLocation() const
 {
 	return VisualRoot ? VisualRoot->GetComponentLocation() : GetActorLocation();
 }
 
-bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionIntent MotionIntent,
-	const double CurrentLineLength, const FVector& FishWorldPosition, const float StepDeltaSeconds)
+void ACatFishEncounterActor::ApplyVisualScale()
 {
+	// BeginPlay 前蓝图子类的组件基准变换可能尚未完成；等 Actor 完整就绪后再冻结基准 Scale。
+	if (!HasActorBegunPlay() || !VisualRoot)
+	{
+		return;
+	}
+	if (!bVisualRootBaseScaleCaptured)
+	{
+		VisualRootBaseRelativeScale = VisualRoot->GetRelativeScale3D();
+		bVisualRootBaseScaleCaptured = true;
+	}
+	const double Scale = FMath::IsFinite(PresentationState.VisualScale) && PresentationState.VisualScale > 0.0
+		? PresentationState.VisualScale : 1.0;
+	VisualRoot->SetRelativeScale3D(VisualRootBaseRelativeScale * Scale);
+}
+
+void ACatFishEncounterActor::ApplyVisualPose()
+{
+	if (!VisualRoot)
+	{
+		return;
+	}
+	// AutoHauling 在玩法上表示鱼已经力竭、只会被收线拖动。这个状态属于复制的 PresentationState，
+	// 所以服务器和每个客户端都会独立应用同一侧翻角；VisualRoot 旋转不会污染权威 Actor 朝向。
+	const float VisualRoll = PresentationState.MotionIntent == ECatFishMotionIntent::AutoHauling
+		? ExhaustedVisualRollDegrees : 0.0f;
+	VisualRoot->SetRelativeLocationAndRotation(
+		FVector(static_cast<double>(VisualForwardOffsetCentimeters),
+			static_cast<double>(VisualRightOffsetCentimeters),
+			-static_cast<double>(FMath::Max(0.0f, VisualDepthCentimeters))),
+		FRotator(0.0, VisualYawOffsetDegrees, VisualRoll));
+}
+
+bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionIntent MotionIntent,
+	const double CurrentLineLength, const FVector& FishWorldPosition, const float StepDeltaSeconds,
+	const float FishLineAlignment, const float NormalizedLineLoad, const bool bStrongConfrontation)
+{
+	// [FishLogic 4/5：权威落位与多人表现]
+	// Simulator 给出事实，本 Actor 只负责在服务器应用 Transform/表现快照；位置和 PresentationState 再复制给客户端。
 	if (!HasAuthority() || !bIdentityInitialized || FishWorldPosition.ContainsNaN()
-		|| !FMath::IsFinite(CurrentLineLength) || CurrentLineLength < 0.0)
+		|| !FMath::IsFinite(CurrentLineLength) || CurrentLineLength < 0.0
+		|| !FMath::IsFinite(FishLineAlignment) || FishLineAlignment < -1.0f || FishLineAlignment > 1.0f
+		|| !FMath::IsFinite(NormalizedLineLoad) || NormalizedLineLoad < 0.0f || NormalizedLineLoad > 1.0f)
 	{
 		// 必须已经完成身份初始化才允许推进搏斗表现；位置/线长必须是合法有限值，防止把 NaN/负数同步给客户端。
 		return false;
@@ -76,6 +168,10 @@ bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionInt
 	const FCatFishEncounterPresentationState Previous = PresentationState;
 	PresentationState.MotionIntent = MotionIntent; // 更新鱼当前的运动意图（平静/向外挣扎/自动收线中）供表现层驱动动画。
 	PresentationState.CurrentLineLength = CurrentLineLength; // 更新鱼与浮标/竿之间的当前线长，供表现层估算张力/位置。
+	PresentationState.FishLineAlignment = FishLineAlignment;
+	PresentationState.NormalizedLineLoad = NormalizedLineLoad;
+	PresentationState.bStrongConfrontation = bStrongConfrontation;
+	ApplyVisualPose();
 
 	// 朝向跟随实际游动方向：取本步位移的水平分量求偏航角。
 	// 只写 Actor 旋转（随 SetReplicateMovement 一起复制），玩法判定（线长/近岸/抄网半圆）全部只用位置，旋转不参与任何裁决。
@@ -131,18 +227,17 @@ void ACatFishEncounterActor::PublishInitialPresentationFromAuthority()
 void ACatFishEncounterActor::BeginPlay()
 {
 	Super::BeginPlay();
+	if (VisualRoot)
+	{
+		VisualRootBaseRelativeScale = VisualRoot->GetRelativeScale3D();
+		bVisualRootBaseScaleCaptured = true;
+	}
 	// 表现修正只动 VisualRoot（Mesh 挂在它下面），权威 Actor 的位置/朝向保持不变，判定完全不受影响：
 	//   位置 = 前后(X) / 左右(Y) / 下沉(-Z) 三轴微调，在 Actor 本地空间（前 = 鱼真实游动方向）；
 	//   旋转 = 修正美术资源的前向轴，使 Mesh 的视觉正面对齐 Actor 前向。
 	// 注意相对位置在父组件空间求值，不受这里的相对旋转影响，所以"前后左右"的语义不会被 YawOffset 扭转。
-	if (VisualRoot)
-	{
-		VisualRoot->SetRelativeLocationAndRotation(
-			FVector(static_cast<double>(VisualForwardOffsetCentimeters),
-				static_cast<double>(VisualRightOffsetCentimeters),
-				-static_cast<double>(FMath::Max(0.0f, VisualDepthCentimeters))),
-			FRotator(0.0, VisualYawOffsetDegrees, 0.0));
-	}
+	ApplyVisualPose();
+	ApplyVisualScale();
 	if (bHasPendingPresentationNotification && !bPresentationDeferred)
 	{
 		// BeginPlay 完成、且没有被显式要求继续延迟时，把 BeginPlay 之前排队的表现通知补发出去
@@ -155,6 +250,8 @@ void ACatFishEncounterActor::BeginPlay()
 void ACatFishEncounterActor::OnRep_PresentationState(const FCatFishEncounterPresentationState& Previous)
 {
 	// 客户端复制回调：引擎已经把 PresentationState 覆写为最新值，这里只需要用回调参数里的旧值对比分发。
+	ApplyVisualScale();
+	ApplyVisualPose();
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 }
 

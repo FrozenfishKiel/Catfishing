@@ -7,6 +7,7 @@
 #include "Online/CatOnlineSubsystem.h"
 #include "AbilitySystem/CatSurvivalAttributeSet.h"
 #include "UI/CatSurvivalWidget.h"
+#include "UI/CatInteractionWidget.h"
 #include "UI/CatTravelWidget.h"
 #include "UI/CatUISettings.h"
 #include "Condition/CatConditionComponent.h"
@@ -15,6 +16,7 @@
 #include "Engine/World.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "GameFramework/PlayerController.h"
+#include "Interaction/CatInteractionTargetingComponent.h"
 
 // 初始化流程：先订阅唯一 Online 快照；再弱绑定当前 Controller 的 Pawn notifier、装配现行 Character Survival 投影，最后保留阶段 B Online 白盒创建链。
 void UCatLocalPlayerUISubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -32,6 +34,7 @@ void UCatLocalPlayerUISubsystem::Initialize(FSubsystemCollectionBase& Collection
 void UCatLocalPlayerUISubsystem::Deinitialize()
 {
 	UnbindController();
+	DetachInteractionView();
 	DetachSurvivalPawn();
 	RemoveOnlineWidget();
 	if (UCatOnlineSubsystem* Online = GetLocalPlayer()->GetGameInstance()->GetSubsystem<UCatOnlineSubsystem>())
@@ -46,6 +49,7 @@ void UCatLocalPlayerUISubsystem::Deinitialize()
 void UCatLocalPlayerUISubsystem::PlayerControllerChanged(APlayerController* NewController)
 {
 	UnbindController();
+	DetachInteractionView();
 	DetachSurvivalPawn();
 	RemoveOnlineWidget();
 	Super::PlayerControllerChanged(NewController);
@@ -174,7 +178,7 @@ void UCatLocalPlayerUISubsystem::BindController(APlayerController* Controller)
 	}
 	BoundPlayerController = Controller;
 	PawnChangedHandle = Controller->GetOnNewPawnNotifier().AddUObject(this, &ThisClass::HandleControllerPawnChanged);
-	AttachSurvivalPawn(Cast<ACatCharacter>(Controller->GetPawn()));
+	HandleControllerPawnChanged(Controller->GetPawn());
 }
 
 // Controller 解绑流程：旧对象仍存活时从同一个 notifier 精确 Remove；若 World 已销毁，弱引用失效后只 Reset 本地句柄，不延长 Controller 生命周期。
@@ -192,7 +196,57 @@ void UCatLocalPlayerUISubsystem::UnbindController()
 void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 {
 	DetachSurvivalPawn();
-	AttachSurvivalPawn(Cast<ACatCharacter>(NewPawn));
+	DetachInteractionView();
+	ACatCharacter* Character = Cast<ACatCharacter>(NewPawn);
+	AttachInteractionView(BoundPlayerController.Get(), Character);
+	AttachSurvivalPawn(Character);
+}
+
+void UCatLocalPlayerUISubsystem::AttachInteractionView(APlayerController* Controller, ACatCharacter* Character)
+{
+	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
+	ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(Controller);
+	UCatInteractionTargetingComponent* Targeting = CatController
+		? CatController->GetInteractionTargetingComponent() : nullptr;
+	if (!Settings || !Settings->IsInteractionViewEnabled() || !Character || !CatController || !Targeting
+		|| Character->GetWorld() != GetWorld() || CatController->GetPawn() != Character)
+	{
+		return;
+	}
+	InteractionWidget = CreateWidget<UCatInteractionWidget>(CatController, UCatInteractionWidget::StaticClass());
+	if (!InteractionWidget)
+	{
+		return;
+	}
+	BoundInteractionTargeting = Targeting;
+	InteractionTargetChangedHandle = Targeting->OnTargetChanged.AddUObject(
+		this, &ThisClass::HandleInteractionTargetChanged);
+	InteractionWidget->AddToViewport(10);
+	InteractionWidget->RenderTarget(Targeting->GetCurrentTarget());
+}
+
+void UCatLocalPlayerUISubsystem::DetachInteractionView()
+{
+	if (UCatInteractionTargetingComponent* Targeting = BoundInteractionTargeting.Get())
+	{
+		Targeting->OnTargetChanged.Remove(InteractionTargetChangedHandle);
+	}
+	InteractionTargetChangedHandle.Reset();
+	BoundInteractionTargeting.Reset();
+	if (InteractionWidget)
+	{
+		InteractionWidget->RemoveFromParent();
+		InteractionWidget = nullptr;
+	}
+}
+
+void UCatLocalPlayerUISubsystem::HandleInteractionTargetChanged(AActor* PreviousTarget, AActor* CurrentTarget)
+{
+	(void)PreviousTarget;
+	if (InteractionWidget)
+	{
+		InteractionWidget->RenderTarget(CurrentTarget);
+	}
 }
 
 // Survival 装配流程：先校验 View gate、World 和当前 Pawn/ASC，创建纯 Render Widget 后才保存弱引用；随后成对订阅五属性、Condition、Equipment 及 GameState 的 Run/Help，最后统一重读首份完整投影。

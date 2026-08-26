@@ -42,7 +42,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fight", meta = (ClampMin = "-1.0"))
 	float FishingStrength = -1.0f;
 
-	/** 猫搏斗体力上限（规格 4.3 消耗/放线回复的基线）；必须为正。 */
+	/** 猫搏斗体力上限（规格 4.3 消耗/松线喘息回复的基线）；必须为正。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fight", meta = (ClampMin = "-1.0"))
 	float FightStaminaMaximum = -1.0f;
 

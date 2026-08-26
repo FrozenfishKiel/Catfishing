@@ -4,14 +4,15 @@
 #include "UObject/Object.h"
 #include "Environment/CatWaterTypes.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
+#include "Fishing/Simulation/CatFishSteeringModel.h"
 #include "CatFishingFightRunner.generated.h"
 
 class ACatFishEncounterActor;
 class ACatFishingRodActor;
 class ACatFishingSession;
 class UCatAbilitySystemComponent;
-class UCatEquipmentComponent;
 class UCatWaterQuerySubsystem;
+class UStateTree;
 
 struct CATFISHING_API FCatFishingFightRunnerInit
 {
@@ -19,8 +20,6 @@ struct CATFISHING_API FCatFishingFightRunnerInit
 	TWeakObjectPtr<ACatFishEncounterActor> FishActor;
 	TWeakObjectPtr<ACatFishingRodActor> RodActor;
 	TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
-	TWeakObjectPtr<UCatEquipmentComponent> Equipment;
-	FGuid FishingSessionId;
 	FCatWaterRegionHandle WaterRegion;
 	FBox FrozenWaterBounds = FBox(ForceInit);
 	FCatFightSimulationConfig Config;
@@ -32,6 +31,8 @@ struct CATFISHING_API FCatFishingFightRunnerInit
 	/** 鱼体力低于该比例后休息期乘以 LowStaminaRestMultiplier（规格 4.6 临时口径）。 */
 	double LowStaminaRestThreshold = 0.5;
 	double LowStaminaRestMultiplier = 1.5;
+	FCatFishSteeringConfig SteeringConfig;
+	TObjectPtr<UStateTree> BehaviorStateTree = nullptr;
 	uint64 RandomSeed = 0;
 };
 
@@ -45,24 +46,21 @@ public:
 	bool Start();
 	void Stop();
 	bool IsRunning() const { return bRunning; }
-	/** 左键按住/松开；拖优先于放线。 */
+	/** 左键按住/松开；收线优先于松开线杯。 */
 	bool SetReeling(int64 InputSequence, bool bInReeling);
-	/** 右键按住/松开；仅在未拖时生效。 */
+	/** 右键按住/松开线杯；按住期间鱼可在最大线长内自由带线。 */
 	bool SetSlacking(int64 InputSequence, bool bInSlacking);
 	ECatFightCatAction GetCatAction() const { return State.CatAction; }
+	/** StateTree 状态入口的唯一行为意图写口；返回本状态应持续的服务器秒数。 */
+	bool BeginBehaviorStateFromStateTree(ECatFishMotionIntent MotionIntent, double& OutDurationSeconds);
 
 private:
 	void HandleFixedStep();
-	void SelectNextMotionIntent();
 	void RefreshCatAction();
-	/** 翻肚/碾压后把鱼沿竿方向贴到近岸水面内（岸上态尚未实现，TODO 规格 5.3）。 */
-	FVector SnapFishTowardShore(const FVector& FishPosition, const FVector& RodTip, const UCatWaterQuerySubsystem& Water) const;
 	TWeakObjectPtr<ACatFishingSession> Session;
 	TWeakObjectPtr<ACatFishEncounterActor> FishActor;
 	TWeakObjectPtr<ACatFishingRodActor> RodActor;
 	TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
-	TWeakObjectPtr<UCatEquipmentComponent> Equipment;
-	FGuid FishingSessionId;
 	FCatWaterRegionHandle WaterRegion;
 	FBox FrozenWaterBounds = FBox(ForceInit);
 	FCatFightSimulationConfig Config;
@@ -72,10 +70,13 @@ private:
 	double LowStaminaRestThreshold = 0.5;
 	double LowStaminaRestMultiplier = 1.5;
 	double InitialFishStamina = 0.0;
+	FCatFishSteeringConfig SteeringConfig;
+	FCatFishSteeringState SteeringState;
+	UPROPERTY(Transient)
+	TObjectPtr<UStateTree> BehaviorStateTree = nullptr;
 	FRandomStream Random;
-	double MotionSecondsRemaining = 0.0;
+	FRandomStream SteeringRandom;
 	int64 LastInputSequence = 0;
-	int64 WearSequence = 0;
 	bool bPullHeld = false;
 	bool bSlackHeld = false;
 	FTimerHandle FixedStepTimer;

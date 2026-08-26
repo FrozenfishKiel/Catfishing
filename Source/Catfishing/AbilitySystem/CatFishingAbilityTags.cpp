@@ -21,8 +21,10 @@ namespace CatFishingAbilityTags
 	UE_DEFINE_GAMEPLAY_TAG(State_Fishing_Reeling, "Cat.State.Fishing.Reeling");
 	UE_DEFINE_GAMEPLAY_TAG(State_Fishing_Scooping, "Cat.State.Fishing.Scooping");
 	UE_DEFINE_GAMEPLAY_TAG(State_Fishing_RodOperating, "Cat.State.Fishing.RodOperating");
+	UE_DEFINE_GAMEPLAY_TAG(Cooldown_Fishing_Scoop, "Cat.Cooldown.Fishing.Scoop");
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Fishing_Outcome_Caught, "Cat.Ability.Event.Fishing.Outcome.Caught");
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Fishing_Outcome_RodBroken, "Cat.Ability.Event.Fishing.Outcome.RodBroken");
+	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Fishing_Outcome_LineBroken, "Cat.Ability.Event.Fishing.Outcome.LineBroken");
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Fishing_Outcome_CatInWater, "Cat.Ability.Event.Fishing.Outcome.CatInWater");
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Fishing_Outcome_Cancelled, "Cat.Ability.Event.Fishing.Outcome.Cancelled");
 	UE_DEFINE_GAMEPLAY_TAG(GameplayCue_Fishing_Cast, "Cat.GameplayCue.Fishing.Cast");

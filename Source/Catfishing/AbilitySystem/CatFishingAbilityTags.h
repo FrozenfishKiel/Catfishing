@@ -23,8 +23,11 @@ namespace CatFishingAbilityTags
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Fishing_Reeling);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Fishing_Scooping);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Fishing_RodOperating);
+	/** 抄网再次可用前的独立冷却；不要与正在挥网/未来踉跄硬直的 State_Fishing_Scooping 混用。 */
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cooldown_Fishing_Scoop);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_Caught);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_RodBroken);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_LineBroken);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_CatInWater);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_Cancelled);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(GameplayCue_Fishing_Cast);

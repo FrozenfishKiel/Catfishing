@@ -152,7 +152,11 @@ struct CATFISHING_API FCatFishingScheduleWaitingProbeTask : public FStateTreeTas
 	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
 };
 
-USTRUCT(meta=(DisplayName="Cat Fishing Resolve True Bite Selection", Category="Catfishing|Fishing"))
+/**
+ * 旧 ST_FishingSession 资产的序列化兼容节点。内部行为已改为只打开真咬窗口；
+ * 新资产使用 FCatFishingOpenTrueBiteWindowTask，待所有分支资产升级后可移除。
+ */
+USTRUCT(meta=(DisplayName="Cat Fishing Open True Bite Window (Legacy Node)", Category="Catfishing|Fishing"))
 struct CATFISHING_API FCatFishingResolveTrueBiteSelectionTask : public FStateTreeTaskCommonBase
 {
 	GENERATED_BODY()
@@ -160,6 +164,18 @@ struct CATFISHING_API FCatFishingResolveTrueBiteSelectionTask : public FStateTre
 	FCatFishingResolveTrueBiteSelectionTask();
 	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
 	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
+};
+
+/** Probe 进入后只把浮漂切到猛沉并打开响应计时器；不会在玩家左键前创建鱼。 */
+USTRUCT(meta=(DisplayName="Cat Fishing Open True Bite Window", Category="Catfishing|Fishing"))
+struct CATFISHING_API FCatFishingOpenTrueBiteWindowTask : public FStateTreeTaskCommonBase
+{
+	GENERATED_BODY()
+	using FInstanceDataType = FCatFishingWaitTaskInstanceData;
+	FCatFishingOpenTrueBiteWindowTask();
+	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
+	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context,
+		const FStateTreeTransitionResult& Transition) const override;
 };
 
 USTRUCT()

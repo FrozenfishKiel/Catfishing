@@ -28,7 +28,7 @@ ACatFishingSession* UCatFishingViewBridge::FindFishingSessionForPlayerState(UObj
 	return nullptr;
 }
 
-// 同样只读复制过来的公开事实：Rod 的 PresentationState.OperatorPlayerState 就是"谁在操作这根竿"，
+// 同样只读复制过来的公开事实：Rod 的 OperatorPlayerStates 是完整占位数组，OperatorPlayerState 只代表主位；
 // 客户端与服务器看到的是同一份值，不需要（也拿不到）服务器侧的 DeployedRodByPlayerState 索引。
 ACatFishingRodActor* UCatFishingViewBridge::FindRodOperatedByPlayerState(UObject* WorldContextObject,
 	APlayerState* PlayerState)
@@ -40,7 +40,7 @@ ACatFishingRodActor* UCatFishingViewBridge::FindRodOperatedByPlayerState(UObject
 		ACatFishingRodActor* Rod = *It;
 		if (!IsValid(Rod)) continue;
 		const FCatFishingRodPresentationState& State = Rod->GetPresentationState();
-		if (State.OperatorPlayerState == PlayerState && State.bDeployed && !State.bBroken)
+		if (State.OperatorPlayerStates.Contains(PlayerState) && State.bDeployed && !State.bBroken)
 		{
 			return Rod;
 		}

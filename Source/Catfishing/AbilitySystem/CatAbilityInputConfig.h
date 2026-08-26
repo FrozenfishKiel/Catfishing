@@ -1,8 +1,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Engine/DataAsset.h"
 #include "GameplayTagContainer.h"
+#include "Input/CatInputConfig.h"
 #include "CatAbilityInputConfig.generated.h"
 
 class UInputAction;
@@ -20,7 +20,7 @@ struct FCatAbilityInputAction
 };
 
 UCLASS(BlueprintType, Const)
-class CATFISHING_API UCatAbilityInputConfig : public UPrimaryDataAsset
+class CATFISHING_API UCatAbilityInputConfig : public UCatInputConfig
 {
 	GENERATED_BODY()
 

@@ -14,6 +14,7 @@ namespace CatFishingGameplayTags
 	UE_DEFINE_GAMEPLAY_TAG(CatStaminaDepleted, "Cat.Fishing.Event.CatStaminaDepleted");
 	UE_DEFINE_GAMEPLAY_TAG(CatOverpowered, "Cat.Fishing.Event.CatOverpowered");
 	UE_DEFINE_GAMEPLAY_TAG(RodBroken, "Cat.Fishing.Event.RodBroken");
+	UE_DEFINE_GAMEPLAY_TAG(LineBroken, "Cat.Fishing.Event.LineBroken");
 	UE_DEFINE_GAMEPLAY_TAG(AutoHaulReachedShore, "Cat.Fishing.Event.AutoHaulReachedShore");
 	UE_DEFINE_GAMEPLAY_TAG(AutoHaulFailed, "Cat.Fishing.Event.AutoHaulFailed");
 	UE_DEFINE_GAMEPLAY_TAG(ScoopCommitted, "Cat.Fishing.Event.ScoopCommitted");

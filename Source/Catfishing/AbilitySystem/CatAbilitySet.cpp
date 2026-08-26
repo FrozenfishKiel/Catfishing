@@ -22,7 +22,7 @@ bool UCatAbilitySet::IsRuntimeReady() const
 		SeenAbilities.Add(Entry.Ability);
 		if (Entry.InputTag.IsValid())
 		{
-			// 按住型输入（拖 / 放线 / 打窝蓄力）必须 WhileInputActive，其余离散输入必须 OnInputTriggered。
+			// 按住型输入（收线 / 松开线杯 / 打窝蓄力）必须 WhileInputActive，其余离散输入必须 OnInputTriggered。
 			const bool bHeldInput = Entry.InputTag == CatFishingAbilityTags::Input_Fishing_Primary
 				|| Entry.InputTag == CatFishingAbilityTags::Input_Fishing_Slack
 				|| Entry.InputTag == CatFishingAbilityTags::Input_Fishing_Chum;

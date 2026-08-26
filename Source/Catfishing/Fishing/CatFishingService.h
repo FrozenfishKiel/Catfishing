@@ -58,10 +58,10 @@ public:
 	/** 按公开 RodActorId 在全部部署鱼竿中查找（多人：允许操作别人的竿）；未知返回空。 */
 	ACatFishingRodActor* FindDeployedRodById(FGuid RodActorId);
 
-	/** 查询 PlayerState 当前正在操作的竿（不限竿主）；没有则空。 */
+	/** 查询 PlayerState 当前占用任意操作槽的竿（不限竿主、主辅位）；没有则空。 */
 	ACatFishingRodActor* FindRodOperatedBy(const APlayerState* PlayerState);
 
-	/** 最近的可接管竿：未损坏、无人操作、站位锚点在 MaxDistance 内；不限竿主，没有则空。 */
+	/** 最近的可加入竿：已部署、未损坏、仍有空槽，且下一个槽位在 MaxDistance 内；不限竿主。 */
 	ACatFishingRodActor* FindNearestOperableRod(const FVector& WorldLocation, double MaxDistanceCentimeters);
 
 	/** 查找绑定在指定竿上的存活未终态会话（操作位与会话解耦后，竿是会话的空间锚）；没有则空。 */

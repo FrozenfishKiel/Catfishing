@@ -135,10 +135,23 @@ EStateTreeRunStatus FCatFishingResolveTrueBiteSelectionTask::EnterState(FStateTr
 {
 	(void)Transition;
 	ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
-	if (!Session) return EStateTreeRunStatus::Failed;
-	const FCatFishSelectionCommitResult Result = Session->ResolveProbeSelectionFromStateTree();
-	return Result.Resolution == ECatFishSelectionResolution::Selected
-		|| Result.Resolution == ECatFishSelectionResolution::NoEligibleFish
+	return Session && Session->OpenTrueBiteWindowFromStateTree()
+		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
+}
+
+FCatFishingOpenTrueBiteWindowTask::FCatFishingOpenTrueBiteWindowTask()
+{
+	bShouldCallTick = false;
+	bShouldCopyBoundPropertiesOnTick = false;
+	bShouldCopyBoundPropertiesOnExitState = false;
+}
+
+EStateTreeRunStatus FCatFishingOpenTrueBiteWindowTask::EnterState(FStateTreeExecutionContext& Context,
+	const FStateTreeTransitionResult& Transition) const
+{
+	(void)Transition;
+	ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
+	return Session && Session->OpenTrueBiteWindowFromStateTree()
 		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
 }
 

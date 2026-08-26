@@ -5,11 +5,18 @@
 #include "Tests/AutomationCommon.h"
 
 #include "Character/CatCharacter.h"
+#include "Components/BoxComponent.h"
+#include "Components/SceneComponent.h"
+#include "Fishing/Actors/CatFishEncounterActor.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
+#include "Fishing/CatFishingSettings.h"
+#include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerState.h"
 #include "Items/CatContainerReplicationComponent.h"
 #include "Items/CatItemsService.h"
+#include "Items/CatWorldItemSettings.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingSessionPublicSnapshotDefaultsTest,
@@ -36,6 +43,9 @@ bool FCatFishingSessionPublicSnapshotDefaultsTest::RunTest(const FString& Parame
 	TestEqual(TEXT("Default normalized fish stamina is zero"), Snapshot.NormalizedFishStamina, 0.0);
 	TestFalse(TEXT("Default reeling intent is false"), Snapshot.bReeling);
 	TestEqual(TEXT("Default fish motion intent is None"), Snapshot.FishMotionIntent, ECatFishMotionIntent::None);
+	TestEqual(TEXT("Default fish-line alignment is zero"), Snapshot.FishLineAlignment, 0.0f);
+	TestEqual(TEXT("Default normalized line load is zero"), Snapshot.NormalizedLineLoad, 0.0f);
+	TestFalse(TEXT("Default strong confrontation is false"), Snapshot.bStrongConfrontation);
 
 	for (TFieldIterator<FProperty> It(FCatFishingSessionSnapshot::StaticStruct()); It; ++It)
 	{
@@ -45,6 +55,203 @@ bool FCatFishingSessionPublicSnapshotDefaultsTest::RunTest(const FString& Parame
 				|| Property->GetName().Contains(TEXT("Transform")));
 		TestFalse(FString::Printf(TEXT("Snapshot does not duplicate fish world position: %s"), *Property->GetName()), bFishPositionField);
 	}
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingSessionExhaustedReelContinuityTest,
+	"Catfishing.Unit.Fishing.Session.ExhaustedReelPreservesHeldReelingAcrossPhaseTransition",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingSessionExhaustedReelContinuityTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("Creates exhausted-reel continuity world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	UWorld* World = WorldWrapper.GetTestWorld();
+	ACatFishingSession* Session = World ? World->SpawnActor<ACatFishingSession>() : nullptr;
+	ACatFishEncounterActor* Fish = World ? World->SpawnActor<ACatFishEncounterActor>() : nullptr;
+	ACatFishingRodActor* Rod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
+	if (!TestNotNull(TEXT("Spawns session"), Session)
+		|| !TestNotNull(TEXT("Spawns fish encounter"), Fish)
+		|| !TestNotNull(TEXT("Spawns rod"), Rod))
+	{
+		return false;
+	}
+	const FGuid SessionId = FGuid::NewGuid();
+	const FGuid AttemptId = FGuid::NewGuid();
+	TestTrue(TEXT("Initializes fish identity"), Fish->InitializeAuthoritativeIdentity(
+		SessionId, AttemptId, TEXT("TestFish"), 500.0, 1.0));
+	Fish->SetActorLocation(FVector(100.0, 200.0, 50.0));
+	Rod->SetActorLocation(FVector(900.0, 800.0, 300.0));
+	// 在竿尖 XY 下方放一块高于水面的岸地，验证目标会选择岸地表面而不是继续使用水面 Z。
+	AActor* ProjectionGround = World->SpawnActor<AActor>();
+	UBoxComponent* ProjectionGroundCollision = ProjectionGround
+		? NewObject<UBoxComponent>(ProjectionGround, TEXT("ProjectionGroundCollision")) : nullptr;
+	if (!TestNotNull(TEXT("Spawns projection ground"), ProjectionGround)
+		|| !TestNotNull(TEXT("Creates projection ground collision"), ProjectionGroundCollision))
+	{
+		return false;
+	}
+	ProjectionGround->SetRootComponent(ProjectionGroundCollision);
+	ProjectionGround->AddInstanceComponent(ProjectionGroundCollision);
+	ProjectionGroundCollision->SetBoxExtent(FVector(200.0, 200.0, 10.0));
+	ProjectionGroundCollision->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	ProjectionGroundCollision->SetCollisionObjectType(ECC_WorldStatic);
+	ProjectionGroundCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
+	ProjectionGroundCollision->SetCollisionResponseToChannel(
+		GetDefault<UCatWorldItemSettings>()->LandingGroundTraceChannel, ECR_Block);
+	ProjectionGroundCollision->RegisterComponent();
+	ProjectionGround->SetActorLocation(FVector(900.0, 800.0, 140.0));
+	WorldWrapper.BeginPlayInTestWorld();
+
+	Session->Snapshot.FishingSessionId = SessionId;
+	Session->Snapshot.CastAttemptId = AttemptId;
+	Session->Snapshot.Phase = ECatFishingPhase::HookedFight;
+	Session->Snapshot.bReeling = true;
+	Session->Snapshot.bSlacking = true;
+	Session->Snapshot.FishMotionIntent = ECatFishMotionIntent::StrugglingOutward;
+	Session->Snapshot.FishEncounterActor = Fish;
+	Session->Snapshot.RodActor = Rod;
+	Session->bStartupInProgress = true;
+	TestTrue(TEXT("Enters exhausted reel"), Session->BeginExhaustedReelFromAuthority());
+	Session->bStartupInProgress = false;
+
+	TestEqual(TEXT("Phase becomes ExhaustedReel"), Session->Snapshot.Phase, ECatFishingPhase::ExhaustedReel);
+	TestTrue(TEXT("Held left mouse remains reeling"), Session->Snapshot.bReeling);
+	TestFalse(TEXT("Slack is cleared when fish exhausts"), Session->Snapshot.bSlacking);
+	TestEqual(TEXT("Presentation continues auto hauling"), Session->Snapshot.FishMotionIntent,
+		ECatFishMotionIntent::AutoHauling);
+	TestTrue(TEXT("Exhausted target is frozen at rod-tip XY and the higher ground surface"),
+		Session->ExhaustedReelTarget.Equals(FVector(900.0, 800.0, 150.0), UE_KINDA_SMALL_NUMBER));
+	const FVector BeforeReelStep = Fish->GetActorLocation();
+	const double DistanceBeforeReelStep = FVector::Dist(BeforeReelStep, Session->ExhaustedReelTarget);
+	Session->HandleExhaustedReelStep();
+	const double ReelStepDistance = FVector::Dist(BeforeReelStep, Fish->GetActorLocation());
+	const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
+	const double MaximumStepDistance = FishingSettings->ReelSpeedCentimetersPerSecond
+		* FishingSettings->FixedFightStepSeconds;
+	TestTrue(TEXT("Exhausted fish advances gradually"), ReelStepDistance > 0.0);
+	TestTrue(TEXT("Exhausted fish never moves farther than one configured reel step"),
+		ReelStepDistance <= MaximumStepDistance + UE_KINDA_SMALL_NUMBER);
+	TestTrue(TEXT("Exhausted fish gets closer to the frozen projection"),
+		FVector::Dist(Fish->GetActorLocation(), Session->ExhaustedReelTarget) < DistanceBeforeReelStep);
+	TestEqual(TEXT("Encounter immediately publishes exhausted presentation"), Fish->GetPresentationState().MotionIntent,
+		ECatFishMotionIntent::AutoHauling);
+	const USceneComponent* FishVisualRoot = Cast<USceneComponent>(Fish->GetDefaultSubobjectByName(TEXT("VisualRoot")));
+	TestNotNull(TEXT("Exhausted fish owns visual root"), FishVisualRoot);
+	if (FishVisualRoot)
+	{
+		TestTrue(TEXT("Exhausted fish immediately rolls onto its side"),
+			FMath::IsNearlyEqual(FMath::Abs(FishVisualRoot->GetRelativeRotation().Roll), 90.0f));
+	}
+
+	// “侧翻”与“正在收线”是两个独立事实：即便体力清空时玩家没按左键，鱼也必须立刻翻肚，
+	// 只是停在原地等下一次收线输入。
+	ACatFishingSession* IdleSession = World->SpawnActor<ACatFishingSession>();
+	ACatFishEncounterActor* IdleFish = World->SpawnActor<ACatFishEncounterActor>();
+	ACatFishingRodActor* IdleRod = World->SpawnActor<ACatFishingRodActor>();
+	const FGuid IdleSessionId = FGuid::NewGuid();
+	const FGuid IdleAttemptId = FGuid::NewGuid();
+	if (!TestNotNull(TEXT("Spawns idle exhausted session"), IdleSession)
+		|| !TestNotNull(TEXT("Spawns idle exhausted fish"), IdleFish)
+		|| !TestNotNull(TEXT("Spawns idle exhausted rod"), IdleRod)
+		|| !TestTrue(TEXT("Initializes idle fish identity"), IdleFish->InitializeAuthoritativeIdentity(
+			IdleSessionId, IdleAttemptId, TEXT("IdleTestFish"), 500.0, 1.0)))
+	{
+		return false;
+	}
+	IdleSession->Snapshot.FishingSessionId = IdleSessionId;
+	IdleSession->Snapshot.CastAttemptId = IdleAttemptId;
+	IdleSession->Snapshot.Phase = ECatFishingPhase::HookedFight;
+	IdleSession->Snapshot.bReeling = false;
+	IdleSession->Snapshot.FishEncounterActor = IdleFish;
+	IdleSession->Snapshot.RodActor = IdleRod;
+	IdleSession->bStartupInProgress = true;
+	TestTrue(TEXT("Idle fish enters exhausted reel"), IdleSession->BeginExhaustedReelFromAuthority());
+	IdleSession->bStartupInProgress = false;
+	TestFalse(TEXT("Idle exhausted fish remains stationary until reel input"), IdleSession->Snapshot.bReeling);
+	TestEqual(TEXT("Idle exhausted fish still publishes side-flop state"),
+		IdleFish->GetPresentationState().MotionIntent, ECatFishMotionIntent::AutoHauling);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingSessionLineBreakKeepsRodOperableTest,
+	"Catfishing.Unit.Fishing.Session.LineBreakEndsOnlyCurrentSessionAndKeepsRodOperable",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingSessionLineBreakKeepsRodOperableTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("Creates line-break test world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	UWorld* World = WorldWrapper.GetTestWorld();
+	ACatFishingSession* Session = World ? World->SpawnActor<ACatFishingSession>() : nullptr;
+	ACatFishingRodActor* Rod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
+	APlayerState* Owner = World ? World->SpawnActor<APlayerState>() : nullptr;
+	if (!TestNotNull(TEXT("Spawns line-break session"), Session)
+		|| !TestNotNull(TEXT("Spawns reusable rod"), Rod)
+		|| !TestNotNull(TEXT("Spawns rod owner"), Owner))
+	{
+		return false;
+	}
+	TestTrue(TEXT("Initializes deployed operable rod"), Rod->InitializeAuthoritativeIdentity(
+		FGuid::NewGuid(), TEXT("Rod_Test"), TEXT("Skin_Test"), Owner, Owner, true, false));
+	const int64 RodRevisionBefore = Rod->GetPresentationState().RodActorRevision;
+	Session->Snapshot.FishingSessionId = FGuid::NewGuid();
+	Session->Snapshot.Phase = ECatFishingPhase::HookedFight;
+	Session->Snapshot.RodActor = Rod;
+	Session->FightRunner = NewObject<UCatFishingFightRunner>(Session);
+
+	FCatFightStepResult Step;
+	Step.Outcome = ECatFightStepOutcome::LineBroken;
+	AddExpectedErrorPlain(TEXT("Event=fishing_session_terminated"), EAutomationExpectedErrorFlags::Contains, 1);
+	Session->HandleFightRunnerStepFromAuthority(Step, 50.0,
+		ECatFishMotionIntent::StrugglingOutward, 0.0);
+
+	TestEqual(TEXT("Line break terminates only the current session"),
+		Session->Snapshot.Phase, ECatFishingPhase::Terminated);
+	TestEqual(TEXT("Public outcome explicitly reports line break"),
+		Session->Snapshot.Outcome, ECatFishingOutcome::LineBroken);
+	TestTrue(TEXT("Rod remains deployed after line break"), Rod->GetPresentationState().bDeployed);
+	TestFalse(TEXT("Line break never marks rod broken"), Rod->GetPresentationState().bBroken);
+	TestEqual(TEXT("Line break does not mutate rod presentation revision"),
+		Rod->GetPresentationState().RodActorRevision, RodRevisionBefore);
+	TestEqual(TEXT("Current operator remains on the reusable rod"),
+		Rod->GetPresentationState().OperatorPlayerState.Get(), Owner);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingSessionLandedTerminalVisibilityTest,
+	"Catfishing.Unit.Fishing.Session.LandedPickupHidesEncounterDuringTerminalReplicationWindow",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingSessionLandedTerminalVisibilityTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("Creates landed terminal presentation world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	UWorld* World = WorldWrapper.GetTestWorld();
+	ACatFishingSession* Session = World ? World->SpawnActor<ACatFishingSession>() : nullptr;
+	ACatFishEncounterActor* Encounter = World ? World->SpawnActor<ACatFishEncounterActor>() : nullptr;
+	if (!TestNotNull(TEXT("Spawns session"), Session)
+		|| !TestNotNull(TEXT("Spawns encounter"), Encounter))
+	{
+		return false;
+	}
+
+	Encounter->SetActorHiddenInGame(false);
+	Encounter->SetActorEnableCollision(true);
+	Session->Snapshot.FishEncounterActor = Encounter;
+	Session->FinalizeSession(ECatFishingPhase::Resolved, ECatFishingOutcome::Landed,
+		TEXT("Automation landed handoff"));
+
+	TestTrue(TEXT("Landed encounter becomes hidden immediately"), Encounter->IsHidden());
+	TestFalse(TEXT("Landed encounter collision is disabled immediately"), Encounter->GetActorEnableCollision());
+	TestFalse(TEXT("Encounter remains alive for terminal replication"), Encounter->IsActorBeingDestroyed());
+	TestTrue(TEXT("Encounter has a bounded terminal lifespan"), Encounter->GetLifeSpan() > 0.0f);
 	return !HasAnyErrors();
 }
 

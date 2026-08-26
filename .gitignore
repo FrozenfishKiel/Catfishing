@@ -82,6 +82,10 @@ output/
 tmp/
 Temp/
 
+# Local packaged builds and machine-specific assistant settings
+打包/
+.claude/
+
 # Codex keeps both durable project reports and volatile agent state.
 # Commit the human-readable project reports, but keep graph/runtime state local.
 .codex/*

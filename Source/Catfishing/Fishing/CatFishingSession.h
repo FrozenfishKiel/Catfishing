@@ -10,6 +10,7 @@
 
 class ACatCharacter;
 class ACatFishingHookActor;
+class ACatFishPickupActor;
 class UCatEquipmentComponent;
 class UCatFishDefinition;
 class UCatItemsService;
@@ -21,6 +22,8 @@ class FCatFishingSessionSnapshotVersionMutationRulesTest;
 class FCatFishingSessionTerminationOutcomeTest;
 class FCatFishingSessionExistingCaptureReconciliationTest;
 class FCatFishingSessionRejectedFightSummaryPublicationTest;
+class FCatFishingSessionExhaustedReelContinuityTest;
+class FCatFishingSessionLandedTerminalVisibilityTest;
 
 DECLARE_MULTICAST_DELEGATE(FCatFishingSessionSnapshotChanged);
 
@@ -47,17 +50,19 @@ public:
 	bool PublishPreparedSessionFromAuthority();
 	void AbortPreparedSessionFromAuthority();
 	bool ScheduleWaitingProbeFromStateTree();
-	FCatFishSelectionCommitResult ResolveProbeSelectionFromStateTree();
+	/** Probe 状态只打开响应窗口，不选鱼、不生成鱼、不扣饵；鱼只在合法 RequestHook 到达后创建。 */
+	bool OpenTrueBiteWindowFromStateTree();
 	FCatFishingCommandResult RequestHookFromAuthority(FGuid RequestId);
 	FCatFishingCommandResult CancelFromAuthority(FGuid RequestId);
 	bool TryEnterHookedFightFromAuthority();
 	bool SetReelingFromAuthority(int64 InputSequence, bool bReeling);
-	/** 右键放线写口；仅 HookedFight 且 Runner 运行中生效，拖优先于放。 */
+	/** 右键松开线杯写口；仅 HookedFight 且 Runner 运行中生效，收线优先。 */
 	bool SetSlackingFromAuthority(int64 InputSequence, bool bSlacking);
 	bool IsFightRunnerRunning() const;
 	void HandleFightRunnerStepFromAuthority(const FCatFightStepResult& Step, double FishStaminaRemaining,
 		ECatFishMotionIntent MotionIntent, double RodDurabilityRemaining);
-	void HandleFightRunnerFailureFromAuthority();
+	/** FightRunner/表现写入遇到不可恢复错误时终止会话；FailureStage 会进入日志，便于区分几何、装备、ASC 等故障。 */
+	void HandleFightRunnerFailureFromAuthority(FName FailureStage = NAME_None);
 
 	/** StateTree EnterPhase Task 的唯一阶段写入口；NearShore 必须提供水域内服务器目标，HookedFight/NearShore 保留合法参与者，其他阶段重置为钓手，终态启动有界销毁。 */
 	FCatFishingPhaseResult EnterPhaseFromStateTree(ECatFishingPhase NewPhase);
@@ -121,6 +126,9 @@ private:
 	friend class FCatFishingSessionTerminationOutcomeTest;
 	friend class FCatFishingSessionExistingCaptureReconciliationTest;
 	friend class FCatFishingSessionRejectedFightSummaryPublicationTest;
+	friend class FCatFishingSessionExhaustedReelContinuityTest;
+	friend class FCatFishingSessionLandedTerminalVisibilityTest;
+	friend class FCatFishingSessionLineBreakKeepsRodOperableTest;
 
 	/** 客户端收到完整 Snapshot 后只广播重读信号，不推进任何玩法。 */
 	UFUNCTION()
@@ -152,8 +160,16 @@ private:
 
 	/** 在终态快照强制网络更新后设置有界 Actor lifespan；配置缺失时立即销毁以免无界泄漏。 */
 	void ScheduleTerminalDestroy();
+	bool BeginExhaustedReelFromAuthority();
+	void HandleExhaustedReelStep();
+	bool TryResolveExhaustedReelTarget(FVector& OutTarget) const;
+	bool SpawnExhaustedFishPickupFromAuthority(const FVector& SurfaceLocation);
+	bool CommitLandingEquipmentFromAuthority();
+	void HandleBiteWarningTimer();
 	void HandleProbeTimer();
 	void HandleTrueBiteWindowExpired();
+	/** 真咬窗口内收到合法左键后，冻结选择上下文、选鱼、生成 Encounter 并提交饵料。 */
+	FCatFishSelectionCommitResult ResolveHookSelectionFromAuthority();
 	bool TryReadNearShoreFishSpatial(FCatWaterSpatialResult& OutSpatial) const;
 
 	/** 当前会话唯一 StateTree 组件；自动启动关闭，由 Initialize 显式设置资产。 */
@@ -188,6 +204,9 @@ private:
 
 	/** 鱼运行态在会话创建时冻结的真实重量，单位千克。 */
 	double FishWeightKilograms = 0.0;
+
+	/** 由冻结重量计算的一次性表现缩放；水中 Encounter 与岸上 Pickup 共用，避免交接时尺寸跳变。 */
+	double FishVisualScale = 1.0;
 
 	/** HookedFight 的服务器私有参与者身份集合；巨鱼进入 NearShore 后保留到候选生成，普通鱼始终只含初始钓手。 */
 	TSet<FString> FightParticipantIds;
@@ -227,8 +246,20 @@ private:
 	FCatFishSelectionContext FrozenSelectionContext;
 	FCatFishSelectionResult FrozenSelectionResult;
 	ECatFishSelectionResolution SelectionResolution = ECatFishSelectionResolution::None;
+	/** 当前是本次抛竿的第几个咬钩机会；漏按后递增，使下一轮等待与选鱼拥有新的确定性随机流。 */
+	uint32 BiteOpportunitySequence = 0;
+	/** 从抛竿种子和 BiteOpportunitySequence 派生；等待采样、选鱼与后续搏斗共用。 */
+	uint64 CurrentBiteRandomSeed = 0;
+	/** 服务器是否仍接受当前真咬窗口的首次左键；计时器先关闸，再把 WindowExpired 交给 StateTree。 */
+	bool bTrueBiteWindowAcceptingHook = false;
+	FTimerHandle BiteWarningTimerHandle;
 	FTimerHandle ProbeTimerHandle;
 	FTimerHandle TrueBiteTimerHandle;
+	FTimerHandle ExhaustedReelTimerHandle;
+	int64 LastExhaustedReelInputSequence = 0;
+	/** 鱼力竭瞬间冻结的竿尖表面投影；Z 取水面与地面较高者，后续不再重新查询或改写目标。 */
+	FVector ExhaustedReelTarget = FVector::ZeroVector;
+	bool bHasExhaustedReelTarget = false;
 	TMap<FGuid, FCatFishingCommandResult> HookTerminalByRequest;
 	TMap<FGuid, FCatFishingCommandResult> CancelTerminalByRequest;
 };

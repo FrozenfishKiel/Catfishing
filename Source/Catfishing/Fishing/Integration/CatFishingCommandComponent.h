@@ -10,6 +10,16 @@ DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
 	FCatFishingCommandResultReceived,
 	const FCatFishingCommandResult&, Result);
 
+/** 单个玩家的服务器冷却闸门；只保存下一次允许时间，不参与客户端表现或网络复制。 */
+struct CATFISHING_API FCatFishingCooldownGate
+{
+	bool TryConsume(double NowSeconds, double DurationSeconds, double& OutRemainingSeconds);
+	void Reset() { NextAllowedServerTime = 0.0; }
+
+private:
+	double NextAllowedServerTime = 0.0;
+};
+
 USTRUCT(BlueprintType)
 struct FCatFishingInputEdge
 {
@@ -121,6 +131,9 @@ private:
 
 	/** 服务器记录的"本次左键按住=瞄准抛竿"关联 ID；只有同一次按住的松开才触发抛竿，防止提竿失败后的松开误抛。 */
 	FGuid ServerAimingCorrelationId;
+
+	/** 每个 PlayerController 独立的抄网权威冷却；目标鱼/Session 切换不会绕过。 */
+	FCatFishingCooldownGate ScoopCooldownGate;
 
 public:
 	/** 调试可视化只读：当前 Q 蓄力起始世界时间；<0 表示未蓄力。仅在权威端有效。 */

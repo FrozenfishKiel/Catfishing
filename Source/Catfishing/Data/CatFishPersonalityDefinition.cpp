@@ -22,5 +22,27 @@ bool UCatFightPersonalityDefinition::IsRuntimeDefinitionReady() const
 		&& FMath::IsFinite(CalmMovementSpeedCentimetersPerSecond) && CalmMovementSpeedCentimetersPerSecond > 0.0
 		&& FMath::IsFinite(StruggleMovementSpeedCentimetersPerSecond) && StruggleMovementSpeedCentimetersPerSecond > 0.0
 		&& FMath::IsFinite(BaseDrainMultiplier) && BaseDrainMultiplier > 0.0
-		&& FMath::IsFinite(StruggleDrainMultiplier) && StruggleDrainMultiplier > 1.0;
+		&& FMath::IsFinite(StruggleDrainMultiplier) && StruggleDrainMultiplier > 1.0
+		&& ValidRange(DirectionRetargetDurationRangeSeconds)
+		&& FMath::IsFinite(MaximumTurnRateDegreesPerSecond) && MaximumTurnRateDegreesPerSecond > 0.0
+		&& FMath::IsFinite(StruggleOutwardDirectionBias) && StruggleOutwardDirectionBias >= 0.0
+		&& StruggleOutwardDirectionBias <= 1.0
+		&& FMath::IsFinite(CalmInwardDirectionBias) && CalmInwardDirectionBias >= 0.0
+		&& CalmInwardDirectionBias <= 1.0
+		&& FMath::IsFinite(LateralMovementBias) && LateralMovementBias >= 0.0 && LateralMovementBias <= 1.0
+		&& FMath::IsFinite(FeintProbability) && FeintProbability >= 0.0 && FeintProbability <= 1.0
+		&& FMath::IsFinite(FullStaminaInwardProbability)
+		&& FullStaminaInwardProbability >= 0.0 && FullStaminaInwardProbability <= 1.0
+		&& FMath::IsFinite(ExhaustedInwardProbability)
+		&& ExhaustedInwardProbability >= FullStaminaInwardProbability
+		&& ExhaustedInwardProbability <= 1.0
+		&& FMath::IsFinite(InwardProbabilityExponent)
+		&& InwardProbabilityExponent >= 0.1 && InwardProbabilityExponent <= 4.0
+		&& FMath::IsFinite(InwardConeHalfAngleDegrees)
+		&& InwardConeHalfAngleDegrees >= 1.0 && InwardConeHalfAngleDegrees <= 89.0
+		&& FMath::IsFinite(StrongConfrontationAlignmentThreshold)
+		&& StrongConfrontationAlignmentThreshold > 0.0 && StrongConfrontationAlignmentThreshold <= 1.0
+		&& FMath::IsFinite(StrongConfrontationConfirmationSeconds)
+		&& StrongConfrontationConfirmationSeconds >= 0.0 && StrongConfrontationConfirmationSeconds <= 2.0
+		&& FMath::IsFinite(AngleStrengthExponent) && AngleStrengthExponent >= 0.1 && AngleStrengthExponent <= 4.0;
 }

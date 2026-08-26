@@ -6,6 +6,9 @@
 #include "CatFishEncounterActor.generated.h"
 
 class USceneComponent;
+class UStateTree;
+class UStateTreeComponent;
+class UCatFishingFightRunner;
 
 UCLASS(Blueprintable, meta=(ChildCannotTick))
 class CATFISHING_API ACatFishEncounterActor : public AActor
@@ -15,7 +18,8 @@ class CATFISHING_API ACatFishEncounterActor : public AActor
 public:
 	ACatFishEncounterActor();
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
-	bool InitializeAuthoritativeIdentity(FGuid InFishingSessionId, FGuid InCastAttemptId, FName InFishDefinitionId, double InInitialLineLength);
+	bool InitializeAuthoritativeIdentity(FGuid InFishingSessionId, FGuid InCastAttemptId, FName InFishDefinitionId,
+		double InInitialLineLength, double InVisualScale);
 	void DeferInitialPresentationFromAuthority();
 	void PublishInitialPresentationFromAuthority();
 	/**
@@ -24,7 +28,13 @@ public:
 	 * <= 0 表示首次落位，直接对准不插值。
 	 */
 	bool ApplyFightStepFromAuthority(ECatFishMotionIntent MotionIntent, double CurrentLineLength,
-		const FVector& FishWorldPosition, float StepDeltaSeconds = 0.0f);
+		const FVector& FishWorldPosition, float StepDeltaSeconds = 0.0f, float FishLineAlignment = 0.0f,
+		float NormalizedLineLoad = 0.0f, bool bStrongConfrontation = false);
+	/** 服务器把高层鱼行为交给独立 StateTree；客户端永不启动平行行为树。 */
+	bool StartFishBehaviorFromAuthority(UStateTree* BehaviorStateTree, UCatFishingFightRunner* FightRunner);
+	void StopFishBehaviorFromAuthority();
+	/** StateTree Task 的唯一意图写口；具体时长和随机流仍由权威 Runner/性格 DA 决定。 */
+	bool BeginBehaviorStateFromStateTree(ECatFishMotionIntent MotionIntent, double& OutDurationSeconds);
 	const FCatFishEncounterPresentationState& GetPresentationState() const;
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category="Fishing|Fish")
 	void BP_OnFishPresentationChanged(const FCatFishEncounterPresentationState& Previous, const FCatFishEncounterPresentationState& Current);
@@ -70,6 +80,14 @@ protected:
 	float VisualYawOffsetDegrees = 0.0f;
 
 	/**
+	 * 鱼力竭后的侧翻角（度）。AutoHauling 是服务器复制的力竭表现状态；客户端只据此旋转 VisualRoot，
+	 * 不改 Actor 权威 Transform，因此线长、收线目标和拾取判定都不受美术侧翻影响。
+	 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Fishing|Presentation",
+		meta=(ClampMin="-180.0", ClampMax="180.0", Units="deg"))
+	float ExhaustedVisualRollDegrees = 90.0f;
+
+	/**
 	 * 转向速率上限（度/秒）：鱼调头不会瞬间完成，避免挣扎/收线切换时朝向瞬移。
 	 * 只影响表现观感；线长、近岸、抄网等一切判定都只用位置，与朝向无关。
 	 */
@@ -81,8 +99,12 @@ private:
 	void OnRep_PresentationState(const FCatFishEncounterPresentationState& Previous);
 	void QueueOrDispatchPresentationChanged(const FCatFishEncounterPresentationState& Previous, const FCatFishEncounterPresentationState& Current);
 	void DispatchPresentationChanged(const FCatFishEncounterPresentationState& Previous, const FCatFishEncounterPresentationState& Current);
+	void ApplyVisualScale();
+	void ApplyVisualPose();
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> SceneRoot;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> VisualRoot;
+	/** 只在服务器启动；树管理发力/平静拓扑，不直接移动 Actor。 */
+	UPROPERTY(VisibleAnywhere, Category="Fishing|Behavior") TObjectPtr<UStateTreeComponent> FishBehaviorStateTree;
 	UPROPERTY(ReplicatedUsing=OnRep_PresentationState, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
 	FCatFishEncounterPresentationState PresentationState;
 	bool bIdentityInitialized = false;
@@ -90,6 +112,10 @@ private:
 	bool bHasPendingPresentationNotification = false;
 	/** 是否已经有过一次有效的移动方向；首次落位直接对准，之后才做限速转向。 */
 	bool bFacingInitialized = false;
+	bool bVisualRootBaseScaleCaptured = false;
+	bool bBehaviorStartupInProgress = false;
+	TWeakObjectPtr<UCatFishingFightRunner> AuthorityFightRunner;
+	FVector VisualRootBaseRelativeScale = FVector::OneVector;
 	FCatFishEncounterPresentationState PendingPreviousPresentationState;
 	FCatFishEncounterPresentationState PendingCurrentPresentationState;
 };

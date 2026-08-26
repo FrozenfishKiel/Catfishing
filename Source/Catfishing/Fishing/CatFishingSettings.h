@@ -20,6 +20,12 @@ public:
 
 	/** 读取服务器近岸目标到抢抄者的正 reach；未配置或 runtime gate 关闭时清零并返回 false。 */
 	bool TryGetScoopReach(double& OutReachCentimeters) const;
+	/** 读取有限正抄网冷却；非法配置清零并返回 false，服务器据此 fail-closed。 */
+	bool TryGetScoopCooldown(double& OutCooldownSeconds) const;
+	/** 读取真咬前有限正预警时长；调度器保证预警完整播放后才允许进入真咬。 */
+	bool TryGetBiteWarning(double& OutWarningSeconds) const;
+	/** 读取有界操作位数量与左右间距；槽位 0 从右侧开始，后续左右交替向外扩展。 */
+	bool TryGetRodOperatorLayout(int32& OutMaximumSlots, double& OutSlotSpacingCentimeters) const;
 
 	/** 读取终态快照的有界复制留存秒数；未裁或 runtime gate 关闭时清零并返回 false。 */
 	bool TryGetTerminalReplicationWindow(double& OutWindowSeconds) const;
@@ -34,24 +40,48 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
 	TSoftObjectPtr<UStateTree> FishingSessionStateTree;
 
+	/**
+	 * 上钩鱼的高层行为拓扑；服务器在 FishEncounter 的 StateTreeComponent 上运行。
+	 * 它只选择行为状态，固定步移动/鱼线/资源仍由 Runner 和 Simulator 权威结算。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
+	TSoftObjectPtr<UStateTree> FishBehaviorStateTree;
+
 	/** 真咬响应窗口秒数；0 表示 Unset，资产 Task 不应启动计时。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))
 	double TrueBiteWindowSeconds = 0.0;
 	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0")) double BaseBiteRatePerSecond = 0.0;
-	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0")) double MinimumBiteDelaySeconds = 0.0;
-	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0")) double MaximumBiteDelaySeconds = 0.0;
+	/** 抛竿落水后、开始快速抖动前，浮漂至少保持慢浮的秒数。 */
+	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0", Units="s"))
+	double MinimumBiteDelaySeconds = 0.0;
+	/** 从落水到真咬下沉的总时间上限，必须容纳慢浮下限与完整预警。 */
+	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0", Units="s"))
+	double MaximumBiteDelaySeconds = 0.0;
+	/** 真咬前浮漂快速点动的服务器权威预警时长；当前产品口径为 3 秒。 */
+	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0", Units="s"))
+	double BiteWarningSeconds = 1.5;
 
 	/** Authority fight runner tuning. Defaults are usable without introducing persistent Config changes. */
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.001")) double FixedFightStepSeconds = 0.05;
 	/** 旧对称消耗模型的基础速率；规格判定表启用后不再参与计算，保留以兼容既有配置。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.001")) double BaseFightDrainPerSecond = 1.0;
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.001")) double ReelSpeedCentimetersPerSecond = 80.0;
+	/** 本步超线多少厘米视为满表现张力；只用于归一化/UI/Cable，不改变权威约束。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.1"))
+	double TensionResponseRangeCentimeters = 10.0;
+	/** 剩余鱼体力小于等于此值时统一吸附为 0 并进入侧翻收近；避免 UI 已显示 0、玩法仍残留小数体力。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0", ClampMax="1"))
+	double FishExhaustionThreshold = 0.5;
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0")) double EscapeSlackCentimeters = 100.0;
-	/** 鱼到岸距离小于等于该值即进入 NearShore（可抄）；规格快照 1 米，此处默认 100cm。 */
+	/** 兼容旧 StateTree/调试资产的近岸线长；正式抢抄只使用射线几何，靠岸不再终止搏斗。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0")) double NearShoreLineLengthCentimeters = 100.0;
 
-	/** 放竿点必须在水域样条线**外侧**且到岸线距离不超过该值（cm）；0 表示不限制岸距。 */
-	UPROPERTY(Config, EditAnywhere, Category="Rod", meta=(ClampMin="0")) double RodPlacementMaxShoreDistanceCentimeters = 400.0;
+	/** 一根部署鱼竿最多可占用的操作位；当前产品使用左右两位，数组/站位算法预留到更多协作者。 */
+	UPROPERTY(Config, EditAnywhere, Category="Rod|Operators", meta=(ClampMin="1", ClampMax="8"))
+	int32 MaximumRodOperatorSlots = 2;
+	/** 左右第一对站位中心之间的距离；0 表示所有槽位暂时共用原 Stand 锚点。 */
+	UPROPERTY(Config, EditAnywhere, Category="Rod|Operators", meta=(ClampMin="0", Units="cm"))
+	double RodOperatorSlotSpacingCentimeters = 140.0;
 
 	/**
 	 * 打窝蓄力（规格 3.1 打窝：蓄力抛掷、抛物线预览）。服务器按按住时长算 ChargeAlpha，客户端预览用同一组参数（UCatFishingAimLibrary）。
@@ -86,6 +116,9 @@ public:
 	/** 服务器权威近岸目标允许抢抄的最大距离，单位厘米；0 表示 Unset，不从客户端命中位置推导。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))
 	double ScoopReachCentimeters = 0.0;
+	/** 每次真实挥网尝试的冷却秒数；GAS 做预测表现，服务器命令层用同一个值做最终限流。 */
+	UPROPERTY(Config, EditAnywhere, Category="Scoop", meta=(ClampMin="0", Units="s"))
+	double ScoopCooldownSeconds = 3.0;
 	UPROPERTY(Config, EditAnywhere, Category="Scoop", meta=(ClampMin="0.01"))
 	double NearShoreWidthCentimeters = 300.0;
 	UPROPERTY(Config, EditAnywhere, Category="Scoop", meta=(ClampMin="0", ClampMax="89"))

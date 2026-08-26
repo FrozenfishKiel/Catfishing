@@ -2,6 +2,7 @@
 
 #include "Components/SceneComponent.h"
 #include "Fishing/CatFishingService.h"
+#include "Fishing/CatFishingSettings.h"
 #include "Net/UnrealNetwork.h"
 
 ACatFishingRodActor::ACatFishingRodActor()
@@ -25,12 +26,18 @@ ACatFishingRodActor::ACatFishingRodActor()
 	RodTipAnchor->SetupAttachment(SceneRoot);
 	StandAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("StandAnchor"));
 	StandAnchor->SetupAttachment(SceneRoot);
+	RightStandAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("RightStandAnchor"));
+	RightStandAnchor->SetupAttachment(SceneRoot);
+	LeftStandAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("LeftStandAnchor"));
+	LeftStandAnchor->SetupAttachment(SceneRoot);
 	GripAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("GripAnchor"));
 	GripAnchor->SetupAttachment(SceneRoot);
 	// 这些锚点的具体相对位置由权威在 ConfigureCanonicalAnchorsFromAuthority 中设置，不允许蓝图继承时手改
 	SceneRoot->bEditableWhenInherited = false;
 	RodTipAnchor->bEditableWhenInherited = false;
 	StandAnchor->bEditableWhenInherited = false;
+	RightStandAnchor->bEditableWhenInherited = false;
+	LeftStandAnchor->bEditableWhenInherited = false;
 	GripAnchor->bEditableWhenInherited = false;
 }
 
@@ -68,6 +75,10 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	Next.RodSkinDefinitionId = InRodSkinDefinitionId;
 	Next.OwnerPlayerState = InOwnerPlayerState;
 	Next.OperatorPlayerState = InOperatorPlayerState;
+	if (InOperatorPlayerState)
+	{
+		Next.OperatorPlayerStates.Add(InOperatorPlayerState);
+	}
 	Next.bDeployed = bInDeployed;
 	Next.bBroken = bInBroken;
 	PresentationState = Next;
@@ -94,6 +105,8 @@ bool ACatFishingRodActor::ConfigureCanonicalAnchorsFromAuthority(const FTransfor
 	// 同步应用到实际场景组件上，使编辑器/运行时可视化与权威数据一致
 	RodTipAnchor->SetRelativeTransform(InRodTip);
 	StandAnchor->SetRelativeTransform(InStand);
+	RightStandAnchor->SetRelativeTransform(ResolveOperatorStandLocalTransform(0));
+	LeftStandAnchor->SetRelativeTransform(ResolveOperatorStandLocalTransform(1));
 	GripAnchor->SetRelativeTransform(InGrip);
 	return true;
 }
@@ -111,6 +124,9 @@ bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresen
 	Committed.RodActorId = PresentationState.RodActorId;
 	Committed.RodDefinitionId = PresentationState.RodDefinitionId;
 	Committed.OwnerPlayerState = PresentationState.OwnerPlayerState;
+	// 主位只是有序数组首项的兼容镜像，不单独保存模式位；人数从数组实时推导，避免 2→1 后残留协作状态。
+	Committed.OperatorPlayerState = Committed.OperatorPlayerStates.IsEmpty()
+		? nullptr : Committed.OperatorPlayerStates[0];
 	Committed.RodActorRevision = PresentationState.RodActorRevision + 1; // 每次成功提交 Revision 自增一
 	const FCatFishingRodPresentationState Previous = PresentationState;
 	PresentationState = Committed;
@@ -121,10 +137,57 @@ bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresen
 
 bool ACatFishingRodActor::SetOperatorFromAuthority(APlayerState* InOperatorPlayerState, const int64 ExpectedRevision)
 {
-	// 从当前状态拷贝一份再单独改 Operator 字段，其余字段维持不变地交给 CommitAuthoritativeMutation 提交
+	// 旧接口语义保持为“整组替换”，避免老调用方只清快捷字段却留下数组里的幽灵占位。
 	FCatFishingRodPresentationState Next = PresentationState;
-	Next.OperatorPlayerState = InOperatorPlayerState;
+	Next.OperatorPlayerStates.Reset();
+	if (InOperatorPlayerState)
+	{
+		Next.OperatorPlayerStates.Add(InOperatorPlayerState);
+	}
 	return CommitAuthoritativeMutation(Next, ExpectedRevision);
+}
+
+bool ACatFishingRodActor::AddOperatorFromAuthority(APlayerState* InOperatorPlayerState,
+	const int64 ExpectedRevision, int32& OutSlotIndex)
+{
+	OutSlotIndex = INDEX_NONE;
+	const int32 FreeSlotIndex = GetFirstFreeOperatorSlotIndex();
+	if (!InOperatorPlayerState || FreeSlotIndex == INDEX_NONE
+		|| PresentationState.OperatorPlayerStates.Contains(InOperatorPlayerState)
+		|| !PresentationState.bDeployed || PresentationState.bBroken)
+	{
+		return false;
+	}
+	FCatFishingRodPresentationState Next = PresentationState;
+	Next.OperatorPlayerStates.Add(InOperatorPlayerState);
+	if (!CommitAuthoritativeMutation(Next, ExpectedRevision))
+	{
+		return false;
+	}
+	OutSlotIndex = FreeSlotIndex;
+	return true;
+}
+
+bool ACatFishingRodActor::RemoveOperatorFromAuthority(APlayerState* InOperatorPlayerState,
+	const int64 ExpectedRevision, APlayerState*& OutPromotedPrimaryPlayerState)
+{
+	OutPromotedPrimaryPlayerState = nullptr;
+	const int32 ExistingSlotIndex = GetOperatorSlotIndex(InOperatorPlayerState);
+	if (ExistingSlotIndex == INDEX_NONE)
+	{
+		return false;
+	}
+	FCatFishingRodPresentationState Next = PresentationState;
+	Next.OperatorPlayerStates.RemoveAt(ExistingSlotIndex);
+	if (!CommitAuthoritativeMutation(Next, ExpectedRevision))
+	{
+		return false;
+	}
+	if (ExistingSlotIndex == 0 && !PresentationState.OperatorPlayerStates.IsEmpty())
+	{
+		OutPromotedPrimaryPlayerState = PresentationState.OperatorPlayerStates[0];
+	}
+	return true;
 }
 
 bool ACatFishingRodActor::SetRodSkinFromAuthority(const FName InRodSkinDefinitionId, const int64 ExpectedRevision)
@@ -154,8 +217,54 @@ bool ACatFishingRodActor::SetDeployedFromAuthority(const bool bInDeployed, const
 const FCatFishingRodPresentationState& ACatFishingRodActor::GetPresentationState() const { return PresentationState; }
 // 三个世界 Transform 都是“本地规范 Transform 叠乘 Actor 当前世界 Transform”，随 Actor 移动/旋转自动更新
 FTransform ACatFishingRodActor::GetRodTipWorldTransform() const { return RodTipCanonicalLocalTransform * GetActorTransform(); }
-FTransform ACatFishingRodActor::GetStandWorldTransform() const { return StandCanonicalLocalTransform * GetActorTransform(); }
+FTransform ACatFishingRodActor::GetStandWorldTransform() const { return GetOperatorStandWorldTransform(0); }
 FTransform ACatFishingRodActor::GetGripWorldTransform() const { return GripCanonicalLocalTransform * GetActorTransform(); }
+
+FTransform ACatFishingRodActor::ResolveOperatorStandLocalTransform(const int32 SlotIndex) const
+{
+	int32 MaximumSlots = 0;
+	double Spacing = 0.0;
+	if (SlotIndex < 0 || !GetDefault<UCatFishingSettings>()->TryGetRodOperatorLayout(MaximumSlots, Spacing)
+		|| SlotIndex >= MaximumSlots)
+	{
+		return StandCanonicalLocalTransform;
+	}
+	// 0/1 是最靠近中心的右/左；2/3 是外侧第二对。数组扩容时无需改变复制结构和占位算法。
+	const double PairDistance = (static_cast<double>(SlotIndex / 2) + 0.5) * Spacing;
+	const double LateralOffset = SlotIndex % 2 == 0 ? PairDistance : -PairDistance;
+	FTransform SlotTransform = StandCanonicalLocalTransform;
+	SlotTransform.AddToTranslation(FVector(0.0, LateralOffset, 0.0));
+	return SlotTransform;
+}
+
+FTransform ACatFishingRodActor::GetOperatorStandWorldTransform(const int32 SlotIndex) const
+{
+	return ResolveOperatorStandLocalTransform(SlotIndex) * GetActorTransform();
+}
+
+int32 ACatFishingRodActor::GetOperatorCount() const
+{
+	return PresentationState.OperatorPlayerStates.Num();
+}
+
+int32 ACatFishingRodActor::GetOperatorSlotIndex(APlayerState* PlayerState) const
+{
+	return PlayerState ? PresentationState.OperatorPlayerStates.IndexOfByKey(PlayerState) : INDEX_NONE;
+}
+
+bool ACatFishingRodActor::IsPrimaryOperator(APlayerState* PlayerState) const
+{
+	return PlayerState && PresentationState.OperatorPlayerState == PlayerState;
+}
+
+int32 ACatFishingRodActor::GetFirstFreeOperatorSlotIndex() const
+{
+	int32 MaximumSlots = 0;
+	double Spacing = 0.0;
+	return GetDefault<UCatFishingSettings>()->TryGetRodOperatorLayout(MaximumSlots, Spacing)
+		&& PresentationState.OperatorPlayerStates.Num() < MaximumSlots
+		? PresentationState.OperatorPlayerStates.Num() : INDEX_NONE;
+}
 
 void ACatFishingRodActor::BeginPlay()
 {

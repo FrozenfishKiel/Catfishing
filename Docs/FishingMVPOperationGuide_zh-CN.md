@@ -133,9 +133,9 @@ Root
 |---|---|
 | Waiting | `Cat Fishing Schedule Waiting Probe` 节点内部自己 EnterPhase |
 | Probe | StateTree 的 `Cat Fishing Enter Phase` 节点 |
-| TrueBiteWindow | `Cat Fishing Resolve True Bite Selection` 节点内部**直接写** Snapshot.Phase |
-| HookedFight | `RequestHook` 命令内部 EnterPhase（StateTree 节点只是幂等确认） |
-| NearShore | 搏斗 Runner 跑完后 C++ 内部 EnterPhase |
+| TrueBiteWindow | `Cat Fishing Open True Bite Window` 节点打开通用响应窗；此时没有鱼 Actor |
+| HookedFight | 真咬窗内收到左键后，`RequestHook` 才选鱼、生成 Actor、扣饵并 EnterPhase |
+| ExhaustedReel | 鱼体力耗尽或力量碾压后，Session 停止搏斗 Runner 并进入 |
 | Resolved / Terminated | `FinalizeSession()`，**StateTree 禁止进入** |
 
 ### 2.3 节点说明
@@ -146,7 +146,8 @@ Root
 |---|---|---|
 | `Cat Fishing Schedule Waiting Probe` | Task | ✅ 用 |
 | `Cat Fishing Enter Phase` | Task（参数 `Phase`） | ✅ 用 |
-| `Cat Fishing Resolve True Bite Selection` | Task | ✅ 用 |
+| `Cat Fishing Open True Bite Window` | Task | ✅ 用 |
+| `Cat Fishing Open True Bite Window (Legacy Node)` | Task | ❌ 仅用于加载旧资产 |
 | `Cat Fishing Start Fight Runner` | Task | ✅ 用 |
 | `Cat Fishing Wait For Fight Runner` | Task | ✅ 用 |
 | `Cat Fishing Wait` | Task | ✅ 用 |
@@ -181,21 +182,22 @@ Root
 ├── Probe
 │     Tasks Completion: All                    ← ⚠️
 │     Tasks: [Cat Fishing Enter Phase (Phase = Probe)]
-│            [Cat Fishing Resolve True Bite Selection]
+│            [Cat Fishing Open True Bite Window]
 │            [Cat Fishing Wait]
 │     Transitions:
 │       On Event  Cat.Fishing.Event.HookAccepted  →  HookedFight
+│       On Event  Cat.Fishing.Event.WindowExpired →  Waiting
 │
 ├── HookedFight
 │     Tasks Completion: All                    ← ⚠️ 这里尤其关键
 │     Tasks: [Cat Fishing Start Fight Runner]
 │            [Cat Fishing Wait For Fight Runner]
 │     Transitions:
-│       On State Succeeded  →  NearShore
+│       On State Succeeded  →  ExhaustedReelHold
 │
-└── NearShore
+└── ExhaustedReelHold
       Tasks: [Cat Fishing Wait]              （只有一个 Task，Completion 不用管）
-      （无转移，等 C++ 的抢抄事务结算）
+      （无转移，等 C++ 的继续收线落地或抢抄事务结算）
 ```
 
 ### 2.5 六条必须守住的规则
@@ -206,9 +208,9 @@ Root
 
 3. **`Cat Fishing Enter Phase` 的 Phase 不能选 `Resolved` 或 `Terminated`。** 选了会直接返回 `AlreadyResolved` → Failed。终态只能由 C++ 写。
 
-4. **`NearShore` 状态不要再放 `Enter Phase`。** C++ 在搏斗 Runner 结束时已经 EnterPhase(NearShore) 过了，重复进入只会白白递增 Revision。
+4. **`ExhaustedReelHold` 状态不要再放 `Enter Phase`。** C++ 在搏斗 Runner 结束时已经 EnterPhase(ExhaustedReel) 过了，重复进入只会白白递增 Revision。旧资产中的叶子状态即使仍命名为 `NearShore` 也能兼容运行，但建议改名避免误解。
 
-5. **不需要为终态（超时/空竿/取消）做转移。** 我核对过 `FinalizeSession()` 的实现 —— 它自己会调 `StateTreeComponent->StopLogic()`。C++ 发完 `WindowExpired`/`EarlyHook`/`Interrupted` 事件后紧接着就 Finalize 并停树，那些事件**实际上永远不会被树处理到**。想加一个 `Dead` 状态接这些事件也无害，但不是必需的。
+5. **`WindowExpired` 必须接回 `Waiting`。** 漏按只关闭这一轮响应窗，不释放竿、线或饵料预约；Waiting 重入后会清空窗口并重新调度。`EarlyHook` / `Interrupted` 才由 C++ 直接终止并停树，不需要资产终态。
 
 6. **`Cat Fishing Start Fight Runner` 是幂等的。** `RequestHook` 在发 `HookAccepted` 之前就已经启动了 Runner，这个节点检测到已在运行会直接返回 Succeeded，不会重复启动。
 
@@ -232,20 +234,21 @@ FishingSessionStateTree=/Game/Data/StateTrees/ST_FishingSession.ST_FishingSessio
 
 ---
 
-## 步骤 4：按键分配（已定稿，无需新建 InputAction）
+## 步骤 4：按键分配（鱼竿与通用交互分离）
 
-按规格书 4.3 与项目指导，全部复用 `IMC_InputContext` 现有映射，**不新建任何 InputAction**：
+钓鱼 Ability 继续复用原有 InputAction；通用拾取交互新增一个 `IA_Interact`。可以执行《InteractionInputPythonSetup_zh-CN.md》中的脚本自动完成接线：
 
 | 键 | InputAction | 用途 | 走哪条路 |
 |---|---|---|---|
-| **E** | `IA_PutDownFishingRod` | **一键三态**：没竿→放竿 / 有竿没人操作→走到站位操作 / 自己在操作→离开竿。正在钓鱼时按 E 无效（先 X 取消）。竿被别人占着→`RodOccupied` | ✅ C++ 已实现，服务器按事实自动分派 |
+| **R** | `IA_PutDownFishingRod` | **鱼竿一键三态**：已占任意竿位→离开 / 附近鱼竿还有空位→加入 / 否则→放自己的竿。第一人吸附右主位，第二人吸附左辅助位 | ✅ C++ 已实现，服务器按事实自动分派 |
+| **E** | `IA_Interact` | 准星交互/拾取；本地只选择 Current Target，真正拾取由服务器复核距离、视线和物品状态 | ✅ C++ 已实现，走 Native InputTag 而不是 Gameplay Ability |
 | **左键** | `IA_LMB` | 无会话→**长按预览抛物线（不蓄力）松手抛竿**；真咬窗→**提竿**（1 秒内=完美）；遛鱼→**按住拖** | 提竿/拖 ✅ C++；**抛竿预览+提交走蓝图**（5.2） |
-| **右键** | `IA_RMB` | 遛鱼时**按住放线**（鱼向外游时喘气回体力 +1.5/s） | ✅ C++（`UCatGA_FishingSlack`） |
+| **右键** | `IA_RMB` | 遛鱼时**按住松开线杯**（鱼在 L_max 内自由带线，发力期喘气回体力 +1.5/s） | ✅ C++（`UCatGA_FishingSlack`） |
 | **Q** | `IA_BaitSpot` | **长按蓄力打窝**：抛物线越蓄越远，松手投出 | 蓄力预览+提交走蓝图（5.3）；同键上的占位符 Chum Ability 会同时发一条无害的空命令 |
 | **F** | `IA_CatchFish` | 抢抄 | ✅ C++ |
 | **X** | `IA_CancelFishing` | 取消当前会话 | ✅ C++ |
 
-`DA_CatAbilityInputConfig` 现在是 **6 条**（5 个核心 + `Cat.Input.Fishing.Slack` → `IA_RMB`）；`DA_CatAbilitySet_Default` 相应 6 个 Ability。校验规则已放宽为「≥5 且含 5 个核心」。
+`DA_CatAbilityInputConfig.AbilityInputActions` 是 **6 条**（5 个核心 + `Cat.Input.Fishing.Slack` → `IA_RMB`）；`DA_CatAbilitySet_Default` 相应 6 个 Ability。另有 `NativeInputActions`：`Cat.Input.Interact` → `IA_Interact`，它不授予第 7 个 Ability。
 
 > 左键与 Q 上，GAS Ability 和你的蓝图绑定会**同时触发**（同一个 IA 两条独立绑定）。无会话时按左键，GAS 的 `RequestHook` 会拿到一条 `DependencyUnavailable` 回执，无害；按 Q 时占位符 Chum Ability 同理。UI 若监听 `OnResultReceived` 弹失败提示，请按 `CommandType` 过滤这两种。
 
@@ -276,9 +279,9 @@ Get Fishing Command Component      ← BlueprintPure，Controller 自己身上�
 
 ---
 
-### 5.1 放竿 / 操作 / 离开 —— 已由 E 键 C++ 三态接管，**不用做蓝图**
+### 5.1 放竿 / 操作 / 离开 —— 已由 R 键 C++ 三态接管，**不用做蓝图**
 
-按 E 服务器自动分派 PlaceRod / OperateRod / LeaveRod。你只需要**接结果并缓存**：
+按 R 服务器自动分派 PlaceRod / OperateRod / LeaveRod。第一次 R 只部署空杆并播放放杆表现，第二次 R 才进入右侧主位，第三次 R 离开；不能把部署和使用合并。架杆不再要求靠近岸线，只要角色前方有坡度合法的实体地面即可；抛竿阶段仍受有效水域和射程限制。你只需要**接结果并缓存**：
 
 ```
 Get Fishing Command Component → Bind Event to On Result Received
@@ -289,9 +292,11 @@ Get Fishing Command Component → Bind Event to On Result Received
           → CachedRodActorRevision = Result.RodActorRevision
 ```
 
-BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevision` 会变，所以**每次 E 成功都要刷新缓存**。
+BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevision` 会变，所以**每次 R 成功都要刷新缓存**。
 
-**常见失败原因**（放竿）：`InvalidPayload`=脚下太斜/没地面；`InvalidWaterTarget`=落点在水里；`DependencyUnavailable`=还没装配（5.4）。
+**常见失败原因**（放竿）：`InvalidPayload`=前方太斜/没实体地面；`DependencyUnavailable`=还没装配（5.4）。`InvalidWaterTarget/CastOutOfRange` 现在只属于抛竿阶段。
+
+多人占位口径：`OperatorPlayerStates[0]` 是右侧主位，当前只有主位能抛竿/提竿/收线/松线；`[1]` 是左侧辅助位，先完成同步站位，双人合力数值暂未接入。主位退出时左位自动晋升，数组长度立刻从 2 变 1，不保留旧双人模式。当前参数在 `Project Settings → Catfishing Fishing → Rod|Operators`：槽位数 2，左右间距 140cm。
 
 ---
 
@@ -369,16 +374,23 @@ Event BeginPlay
 |---|---|---|
 | 1 | PIE 启动 | `Event=run_started` 且 `Event=run_phase_entered ... Phase=DayActive` |
 | 2 | （自动）装配 | Equipment `Revision` 从 0 → 1，`RodDefinitionId = Rod_Basic` |
-| 3 | 按 R 放竿 | 世界里出现 Rod Actor，结果 `bCommitted=true` |
-| 4 | 走近竿按 E | 角色被吸附到 `StandAnchor` 位置 |
-| 5 | 瞄水面按右键 | `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去 |
+| 3 | 在任意合法地面第一次按 R | 世界里出现无人操作的 Rod Actor并播放放杆表现；角色不吸附、不锁移动 |
+| 3.1 | 放置者再次按 R | 放置者进入右侧主位并开始操作，`OperatorPlayerStates.Num=1` |
+| 4 | 第二个玩家走近同一根竿按 R | 第二人被吸附到左侧辅助位；两端都看到 `OperatorPlayerStates.Num=2` |
+| 4.1 | 主位玩家按 R 离开 | 左侧玩家晋升到右主位；占位人数立即回到 1，之后可继续按单人逻辑操作 |
+| 5 | 瞄水面按住再松开左键 | `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去 |
 | 6 | 等浮漂落水 | Hook 的 `BP_OnHookPresentationChanged` 收到 `Phase=Landed` |
 | 7 | 等咬钩 | `Phase=Probe` → 紧接着 `Phase=TrueBiteWindow`，鱼 Actor 生成 |
 | 8 | 3 秒内按住左键 | `Phase=HookedFight` |
 | 9 | 持续按住左键收线 | Snapshot 里 `NormalizedFishStamina` 下降 |
 | 10 | 鱼被收到面前（**搏斗中就可以**） | debug 里鱼身上的圈从红变绿 = 现在按 F 抄得到 |
 | 11 | 对着鱼按 F | 抄上来；失败看 `Event=scoop_rejected` 的逐项谓词 |
-| 12 | 或者等鱼翻肚 | `Phase=NearShore`，判定规则完全相同（圈一直都在） |
+| 12 | 或者等鱼翻肚 | `Phase=ExhaustedReel`；仍可按 F 抄，也可继续按住左键把鱼拖上岸 |
+| 13 | 鱼落到岸上后准星对准并按 E | 出现交互提示；服务器只允许一个玩家成功拾取，鱼 Actor 随后消失 |
+
+鱼生成时的大小由服务器随机重量决定：`1kg` 对应当前 Mesh 的 `Scale=1`，重量按体积关系取立方根换算并裁在
+`0.75~1.75`。水中鱼和岸上拾取鱼共用同一个复制缩放值；若要调观感，到项目设置
+`Catfishing Fishing Presentation > FishScale` 修改参考重量与上下限，不要在蓝图里再次随机 Scale。
 
 **抄网范围**（详见 `FishingArchitecture_zh-CN.md` §2.5）：猫向正前方发一条水平线段，与挂在鱼身上的圆相交即够得着，**纯俯视投影不看俯仰角**；高度差另由 `MaximumScoopVerticalDeltaCentimeters`（默认 250）卡上限。线段长 = `min(ini 的 ScoopReachCentimeters, 抄网 DA 的同名字段)`，圆半径 = 鱼 DA 的 `ScoopTargetRadiusCentimeters`（**为 0 则永远抄不到**）。
 
@@ -484,7 +496,7 @@ Event=run_phase_entered Day=1 Phase=ECatRunPhase::DayActive Deadline=600.000
 
 ### ✅ 遛鱼按规格重写（2026-08-19）并 PIE 验证
 
-- `Step()` = 规格 4.3 判定表 + 4.4 消耗战；右键放线（`UCatGA_FishingSlack`）；完美中鱼接线；E 键三态放/操作/离开
+- `Step()` = 规格 4.3 判定表 + 4.4 消耗战；右键松开线杯（`UCatGA_FishingSlack`）；完美中鱼接线；E 键三态放/操作/离开
 - `DA_CatAbilityInputConfig` / `DA_CatAbilitySet_Default` 各 6 条（含 Slack）；PIE 中猫 `FishingStrength=50`、Chum runtime=True、规格系数已加载
 - `UCatFishingViewBridge` 已暴露蓝图（`CreateFishingViewBridge` / `FindFishingSessionForPlayerState` / `BindSession` / `OnViewStateChangedBP`），`ACatFishingSession::GetReplicatedSnapshot()` 可读
 - 窝点表现类可配：`[CatFishingPresentationSettings] ChumFieldPresentationClass=`

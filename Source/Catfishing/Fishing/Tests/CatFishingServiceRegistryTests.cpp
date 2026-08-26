@@ -17,6 +17,45 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Fishing.Service.StaleRodUnregisterCannotRemoveReplacement",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingServiceSharedRodSlotsTest,
+	"Catfishing.Unit.Fishing.Service.SharedRodSlotsAreDiscoverableAndBounded",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingServiceSharedRodSlotsTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("creates shared rod slot world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	UWorld* World = WorldWrapper.GetTestWorld();
+	UCatFishingService* Fishing = World ? World->GetSubsystem<UCatFishingService>() : nullptr;
+	APlayerState* Owner = World ? World->SpawnActor<APlayerState>() : nullptr;
+	APlayerState* Helper = World ? World->SpawnActor<APlayerState>() : nullptr;
+	ACatFishingRodActor* Rod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
+	if (!TestNotNull(TEXT("fishing service exists"), Fishing)
+		|| !TestNotNull(TEXT("owner exists"), Owner) || !TestNotNull(TEXT("helper exists"), Helper)
+		|| !TestNotNull(TEXT("rod exists"), Rod))
+	{
+		return false;
+	}
+	TestTrue(TEXT("rod initializes with owner in primary slot"), Rod->InitializeAuthoritativeIdentity(
+		FGuid::NewGuid(), TEXT("Rod"), TEXT("Skin"), Owner, Owner, true, false));
+	TestTrue(TEXT("shared rod registers under immutable owner"), Fishing->RegisterDeployedRod(Owner, Rod));
+	TestEqual(TEXT("owner lookup finds shared rod"), Fishing->FindRodOperatedBy(Owner), Rod);
+	int32 JoinedSlot = INDEX_NONE;
+	TestTrue(TEXT("helper joins auxiliary slot"), Rod->AddOperatorFromAuthority(Helper, 1, JoinedSlot));
+	TestEqual(TEXT("helper occupies slot one"), JoinedSlot, 1);
+	TestEqual(TEXT("helper lookup finds someone else's rod"), Fishing->FindRodOperatedBy(Helper), Rod);
+	TestNull(TEXT("full two-person rod is not offered as operable"),
+		Fishing->FindNearestOperableRod(Rod->GetActorLocation(), 1000.0));
+	APlayerState* Promoted = nullptr;
+	TestTrue(TEXT("helper leaves auxiliary slot"), Rod->RemoveOperatorFromAuthority(Helper, 2, Promoted));
+	TestNull(TEXT("auxiliary departure does not promote anyone"), Promoted);
+	TestEqual(TEXT("rod with free auxiliary slot is offered again"), Fishing->FindNearestOperableRod(
+		Rod->GetOperatorStandWorldTransform(1).GetLocation(), 1.0), Rod);
+	return !HasAnyErrors();
+}
+
 // Registry 契约：首次登记与相同 Actor 重放成功，同一 PlayerState 的第二根存活鱼竿被拒绝。
 bool FCatFishingServiceOneRodPerPlayerStateTest::RunTest(const FString& Parameters)
 {

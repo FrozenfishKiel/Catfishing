@@ -151,6 +151,12 @@ bool FCatFishPersonalityReadinessTest::RunTest(const FString& Parameters)
 	Fight->StruggleMovementSpeedCentimetersPerSecond = 100.0;
 	Fight->StruggleDrainMultiplier = 2.0;
 	TestTrue(TEXT("complete fight personality is ready"), Fight->IsRuntimeDefinitionReady());
+	TestTrue(TEXT("fight personality exposes a valid steering retarget range"),
+		Fight->DirectionRetargetDurationRangeSeconds.X > 0.0
+		&& Fight->DirectionRetargetDurationRangeSeconds.Y >= Fight->DirectionRetargetDurationRangeSeconds.X);
+	Fight->StrongConfrontationAlignmentThreshold = 1.1;
+	TestFalse(TEXT("fight personality rejects confrontation alignment above one"), Fight->IsRuntimeDefinitionReady());
+	Fight->StrongConfrontationAlignmentThreshold = 0.55;
 	Fight->StruggleDrainMultiplier = 0.5;
 	TestFalse(TEXT("struggle drain cannot weaken calm drain"), Fight->IsRuntimeDefinitionReady());
 	return !HasAnyErrors();

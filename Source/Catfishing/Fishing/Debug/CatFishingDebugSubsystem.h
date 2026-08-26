@@ -8,7 +8,7 @@ class APlayerController;
 
 /**
  * 前期无美术资源时的钓鱼调试可视化：水域边界、瞄准落点、蓄力抛物线、窝点圈、钩/鱼/鱼线与屏幕状态条。
- * 纯本地绘制，不写任何权威状态。CVar `cat.Fishing.Debug`（默认 1）控制开关；Shipping 构建整体不编译绘制体。
+ * 纯本地绘制，不写任何权威状态。CVar `cat.Fishing.Debug`（默认 0）控制开关；Shipping 构建整体不编译绘制体。
  */
 UCLASS()
 class CATFISHING_API UCatFishingDebugSubsystem : public UTickableWorldSubsystem

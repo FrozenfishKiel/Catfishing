@@ -76,15 +76,15 @@ bool FCatFishingFightJudgeTableTest::RunTest(const FString& Parameters)
 	using namespace CatFishingFightModelTest;
 	const FJudgeCase Cases[] =
 	{
-		{ 50.0, 40.0, 30.0, ECatFishingPullVerdict::RodBroken, TEXT("① 竿 30 < min(50,40)=40 → 断竿") },
-		{ 50.0, 40.0, 40.0, ECatFishingPullVerdict::RodBroken, TEXT("① 取等：竿 40 == min(50,40) → 断竿") },
-		{ 50.0, 40.0, 41.0, ECatFishingPullVerdict::Stalemate, TEXT("① 反向边界：竿 41 > min → 不断竿，落到 ④ 僵持") },
+		{ 50.0, 40.0, 30.0, ECatFishingPullVerdict::LineBroken, TEXT("① 承载 30 < min(50,40)=40 → 断线") },
+		{ 50.0, 40.0, 40.0, ECatFishingPullVerdict::LineBroken, TEXT("① 取等：承载 40 == min(50,40) → 断线") },
+		{ 50.0, 40.0, 41.0, ECatFishingPullVerdict::Stalemate, TEXT("① 反向边界：承载 41 > min → 不断线，落到 ④ 僵持") },
 		{ 50.0, 80.0, 100.0, ECatFishingPullVerdict::CatDraggedIn, TEXT("② 鱼 80 > 猫 50（竿够强）→ 拖下水") },
 		{ 50.0, 50.0, 100.0, ECatFishingPullVerdict::CatDraggedIn, TEXT("② 取等：鱼 50 == 猫 50 → 拖下水") },
-		{ 50.0, 50.0, 50.0, ECatFishingPullVerdict::RodBroken, TEXT("①优先于②：竿 50 == min(50,50) 先断竿") },
+		{ 50.0, 50.0, 50.0, ECatFishingPullVerdict::LineBroken, TEXT("①优先于②：承载 50 == min(50,50) 先断线") },
 		{ 50.0, 20.0, 100.0, ECatFishingPullVerdict::Overpowered, TEXT("③ 猫 50 > 鱼 20×2=40 → 碾压") },
 		{ 50.0, 25.0, 100.0, ECatFishingPullVerdict::Overpowered, TEXT("③ 取等：猫 50 == 鱼 25×2 → 碾压") },
-		{ 50.0, 25.0, 25.0, ECatFishingPullVerdict::RodBroken, TEXT("①优先于③：竿 25 == min(50,25) 先断竿") },
+		{ 50.0, 25.0, 25.0, ECatFishingPullVerdict::LineBroken, TEXT("①优先于③：承载 25 == min(50,25) 先断线") },
 		{ 49.0, 25.0, 100.0, ECatFishingPullVerdict::Stalemate, TEXT("③ 反向边界：猫 49 < 25×2 → 僵持") },
 		{ 50.0, 40.0, 100.0, ECatFishingPullVerdict::Stalemate, TEXT("④ 其余组合 → 僵持") },
 		{ 130.0, 120.0, 130.0, ECatFishingPullVerdict::Stalemate, TEXT("逗猫棒竿 130 > min(130,120)=120，猫 130 < 240 → 僵持") },
@@ -141,7 +141,7 @@ bool FCatFishingFightStalemateTest::RunTest(const FString& Parameters)
 	Resources.CatStamina = 100.0;
 	Resources.RodDurability = 4.0;
 	CatFishingFightModel::Step(State, Params, ECatFishingFightIntent::Pull, 1.0, Resources, Random, Delta);
-	TestEqual(TEXT("只有竿耐久归零时报断竿"), static_cast<int32>(State.Outcome), static_cast<int32>(ECatFishingFightOutcome::RodBroken));
+	TestEqual(TEXT("只有鱼线耐久归零时报断线"), static_cast<int32>(State.Outcome), static_cast<int32>(ECatFishingFightOutcome::LineBroken));
 
 	// 都差一点：继续打。
 	State = MakeState(ECatFishSwimState::Outward, 20.0, 20.0, 4.01);
@@ -195,11 +195,11 @@ bool FCatFishingFightDistanceModelTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("L 到顶后松：L 不超过 L_max"), State.LineMeters, 60.0, 1e-9);
 	TestEqual(TEXT("L 到顶后松：不回体力"), Delta.CatStaminaDelta, 0.0, 1e-9);
 
-	// L 接近顶时放线被 L_max 截断，D 不得超过 L。
+	// L 接近上限时鱼带线被 L_max 截断，D 不得超过 L。
 	State = MakeState(ECatFishSwimState::Outward, 59.0, 59.0, 30.0);
 	CatFishingFightModel::Step(State, Params, ECatFishingFightIntent::Release, 1.0, Resources, Random, Delta);
-	TestEqual(TEXT("放线被 L_max 截断：L = 60"), State.LineMeters, 60.0, 1e-9);
-	TestEqual(TEXT("放线被 L_max 截断：D 不超过 L"), State.DistanceMeters, 60.0, 1e-9);
+	TestEqual(TEXT("鱼带线被 L_max 截断：L = 60"), State.LineMeters, 60.0, 1e-9);
+	TestEqual(TEXT("鱼带线被 L_max 截断：D 不超过 L"), State.DistanceMeters, 60.0, 1e-9);
 
 	// 体重档系数乘在速率上（大鱼 1.2）。
 	Params.FishSpeedCoefficient = 1.2;
@@ -212,7 +212,7 @@ bool FCatFishingFightDistanceModelTest::RunTest(const FString& Parameters)
 	Params.RodStrength = 40.0; // == min(50,40) → 断竿
 	State = MakeState(ECatFishSwimState::Outward, 20.0, 20.0, 30.0);
 	CatFishingFightModel::Step(State, Params, ECatFishingFightIntent::Pull, 0.016, Resources, Random, Delta);
-	TestEqual(TEXT("向外+拖命中①：同帧断竿"), static_cast<int32>(State.Outcome), static_cast<int32>(ECatFishingFightOutcome::RodBroken));
+	TestEqual(TEXT("向外+拖命中①：同帧断线"), static_cast<int32>(State.Outcome), static_cast<int32>(ECatFishingFightOutcome::LineBroken));
 	Params.RodStrength = 100.0;
 	Params.FishStrengthBase = 50.0; // == 猫 50 → 拖下水
 	State = MakeState(ECatFishSwimState::Outward, 20.0, 20.0, 30.0);

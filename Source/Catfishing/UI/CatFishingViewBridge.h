@@ -31,7 +31,7 @@ public:
 	 *
 	 * 存在的理由：权威侧的等价查询是 UCatFishingService::FindRodOperatedBy，但那个 WorldSubsystem
 	 * 在客户端压根不创建（ShouldCreateSubsystem 里 NetMode != NM_Client），表现层够不着。
-	 * Rod Actor 及其 PresentationState.OperatorPlayerState 是复制的，所以客户端自己扫一遍即可。
+	 * Rod Actor 及其 PresentationState.OperatorPlayerStates 是复制的，所以客户端自己扫一遍即可。
 	 *
 	 * 典型用途：左键按下的表现钩子要区分"我在竿位上准备甩竿"和"我只是站着按了下左键"——
 	 * 后者服务器不会有任何反应，播举竿动画就是表现骗玩家。

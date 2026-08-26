@@ -1,6 +1,6 @@
 # StateTree 从零到能用（Catfishing 项目版）
 
-面向没接触过 StateTree 的人。前半部分讲清概念，后半部分手把手建本项目要的两棵树。
+面向没接触过 StateTree 的人。前半部分讲清概念，后半部分解释本项目的三棵树：整局流程、钓鱼会话，以及单条鱼的搏斗行为。
 
 ---
 
@@ -83,7 +83,7 @@ State 有几种类型（`Type` 属性）：
 
 决定这棵树**能拿到什么数据**、**能用哪些节点**。
 
-本项目两棵树都用 **`StateTree Component Schema`**，它的关键属性是 **Context Actor Class** —— 指定这棵树挂在哪种 Actor 上。
+本项目的树都以 **`StateTree Component Schema`** 为基础，它的关键属性是 **Context Actor Class** —— 指定这棵树挂在哪种 Actor 上。鱼行为树使用项目自定义的 `CatFishBehaviorStateTreeSchema`，本质仍是 Component Schema，但把 Context 限定为 `ACatFishEncounterActor`，避免把鱼 Task 错挂到别的 Actor。
 
 > **这个必须设对。** 所有 C++ 节点内部都是 `Cast<ACatFishingSession>(Context.GetOwner())` 这种写法。Context Actor Class 设错，Cast 返回 null，节点直接返回 Failed，整棵树跑不起来，而且**不会有明显报错**。
 
@@ -115,7 +115,7 @@ ExitState()    ← State 退出时调用一次
 |---|---|---|
 | `Cat Fishing Schedule Waiting Probe` | 调用成功→Succeeded，失败→Failed | ❌ |
 | `Cat Fishing Enter Phase` | 阶段写入成功→Succeeded，被拒→Failed | ❌ |
-| `Cat Fishing Resolve True Bite Selection` | 选到鱼或明确无鱼→Succeeded，其他→Failed | ❌ |
+| `Cat Fishing Open True Bite Window` | 成功打开响应窗→Succeeded，否则→Failed | ❌ |
 | `Cat Fishing Start Fight Runner` | Runner 已跑或启动成功→Succeeded，否则→Failed | ❌ |
 | `Cat Fishing Wait For Fight Runner` | Runner 在跑→Running，否则→Succeeded | ✅ 每帧检查 |
 | **`Cat Fishing Wait`** | **永远 Running** | ❌ |
@@ -148,7 +148,7 @@ ExitState()    ← State 退出时调用一次
 ```
 Probe
   Task 1: Cat Fishing Enter Phase (Phase=Probe)        → Succeeded
-  Task 2: Cat Fishing Resolve True Bite Selection      → Succeeded
+  Task 2: Cat Fishing Open True Bite Window             → Succeeded
   Task 3: Cat Fishing Wait                             → Running（永远）
 ```
 
@@ -206,7 +206,7 @@ Task 上还有个 **`Considered For Completion`** 勾选框，取消勾选也能
 ```
 Cat.Fishing.Event.ProbeTriggered    ← 咬钩计时器到期
 Cat.Fishing.Event.HookAccepted      ← 真咬窗口内成功提竿
-Cat.Fishing.Event.WindowExpired     ← 真咬窗口超时（发完就停树，收不到）
+Cat.Fishing.Event.WindowExpired     ← 真咬窗口超时（Probe 接回 Waiting）
 Cat.Fishing.Event.EarlyHook         ← 过早提竿（发完就停树，收不到）
 Cat.Fishing.Event.Interrupted       ← 主动取消（发完就停树，收不到）
 ```
@@ -221,7 +221,7 @@ Cat.Run.SettlementComplete
 
 > 头文件里声明了 16 个 fishing 事件，但**只有上面 5 个有发送点**，其余 11 个（`CastLanded`、`ScoopCommitted`、`RodBroken`…）在代码里没有任何地方发送。别在资产里等它们。
 
-> 后三个标了"发完就停树"：C++ 发完这些事件后紧接着调 `FinalizeSession()`，而它内部会 `StopLogic()` 停掉整棵树。所以这些事件**实际上永远不会被树处理到**。终态完全由 C++ 收口，你不需要为它们配转移。
+> `WindowExpired` 是例外：它不再调用 `FinalizeSession()`，必须由 Probe 状态接回 Waiting。只有 `EarlyHook` 和 `Interrupted` 发出后会立即由 C++ 收口终态并停树。
 
 ---
 
@@ -236,7 +236,7 @@ State 的另一个属性，决定"这个 State 被考虑时，是自己上还是
 | Try Follow Transitions | 不进入，直接走转移 |
 | Try Select Children At Random / Utility 系列 | 随机/按效用选子状态（AI 用，我们用不上） |
 
-我们两棵树都是**扁平的**（Root 下面一排平级状态，没有嵌套），所以**保持默认就行**，不用动。
+当前三棵树都是**扁平的**（Root 下面一排平级状态，没有嵌套），所以**保持默认就行**，不用动。
 
 树启动时，从 Root 开始按默认行为选择 —— 会选中 **Root 的第一个子状态**。所以**子状态的排列顺序决定了哪个是起始状态**。
 
@@ -369,8 +369,8 @@ Root
 |---|---|
 | Waiting | `Schedule Waiting Probe` 这个 Task **内部自己**调 EnterPhase |
 | Probe | 树的 `Cat Fishing Enter Phase` Task |
-| TrueBiteWindow | `Resolve True Bite Selection` **内部直接改** Snapshot.Phase |
-| HookedFight | `RequestHook` 命令**内部**已经 EnterPhase 了，树的 Task 只是幂等确认 |
+| TrueBiteWindow | `Open True Bite Window` 打开通用窗口；只播放浮漂下沉，不创建鱼 |
+| HookedFight | 真咬窗内收到左键后，`RequestHook` 才选鱼、生成 Actor、扣饵并 EnterPhase |
 | NearShore | 搏斗 Runner 跑完后 **C++ 内部** EnterPhase |
 | Resolved / Terminated | `FinalizeSession()`，**树禁止进入** |
 
@@ -408,14 +408,15 @@ Root
 - `Tasks Completion` → **`All`** ⚠️
 - Tasks（**顺序不能错**）：
   1. `Cat Fishing Enter Phase`，`Phase` = **`Probe`**
-  2. `Cat Fishing Resolve True Bite Selection`（无参数）
+  2. `Cat Fishing Open True Bite Window`（无参数）
   3. `Cat Fishing Wait`（无参数）
 - Transitions：
   1. `On Event`，Tag = `Cat.Fishing.Event.HookAccepted`，Target = `HookedFight`
+  2. `On Event`，Tag = `Cat.Fishing.Event.WindowExpired`，Target = `Waiting`
 
 **顺序为什么不能错**：Task 2 内部第一件事就是检查 `Snapshot.Phase == Probe`，这个前提由 Task 1 建立。Task 1 没先跑，Task 2 直接失败。
 
-**这个状态在干嘛**：Task 2 是整个模块的重心 —— 冻结选鱼上下文（水域、窝料浓度、时段、天气、鱼饵、全服参战能力、随机种子），从鱼表里抽一条鱼，生成鱼 Actor，**真正扣掉鱼饵**，然后直接把阶段改成 `TrueBiteWindow` 并起一个响应窗口计时器。之后就等玩家在窗口内提竿。
+**这个状态在干嘛**：Task 2 只把阶段切到 `TrueBiteWindow`、让浮漂猛沉并启动通用响应计时器。玩家在窗内按左键后，`RequestHook` 才冻结选鱼上下文（水域、窝料、时段、天气、饵料、参战能力和本轮种子）、抽鱼、生成鱼 Actor并真正扣饵。窗口超时则沿 `WindowExpired → Waiting` 回到慢浮等待，不结束架杆会话；下一轮会派生新的服务器随机种子。
 
 ## 4.6 配置 HookedFight
 
@@ -467,7 +468,31 @@ Root
 
 ---
 
-# 第五部分：调试
+# 第五部分：单条鱼行为树 ST_FishFight
+
+这棵树挂在 `ACatFishEncounterActor` 的 `FishBehaviorStateTree` 组件上，并且**只在服务器启动**。默认拓扑很小：
+
+```text
+Hooked Fish Behavior
+ ├─ Struggling Outward       [Cat Fish Behavior State: StrugglingOutward]
+ │        └─ On State Completed → Calm Direction Selection
+ └─ Calm Direction Selection [Cat Fish Behavior State: CalmOrInward]
+          └─ On State Completed → Struggling Outward
+```
+
+每个 Task 进入时只做两件事：把 `MotionIntent` 交给 FightRunner，并从鱼性格 DA 的时长区间抽出本状态持续时间；倒计时结束后 Task 成功，让树切到另一个状态。位置、转向、鱼线、力量、体力和鱼竿磨损全部仍由服务器固定步模拟器处理。
+
+使用自定义 `CatFishBehaviorStateTreeSchema` 的好处是编辑器会把 Context Actor 限定为鱼 Encounter，鱼专用 Task 不会误挂到 Session 或 GameState。编译好 Editor 模块后，可用命令行编辑器稳定生成/重建默认资产：
+
+```text
+D:/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe D:/develop/Catfishing/Catfishing.uproject -ExecutePythonScript=D:/develop/Catfishing/Scripts/create_fish_behavior_state_tree.py -unattended -nop4 -NullRHI
+```
+
+未来添加“低体力蓄力冲刺”时，推荐新增一个 StateTree 状态和一个新的 `MotionIntent`，条件只负责决定何时进入；冲刺速度、体力门槛与网络结果仍写在纯 C++ 模拟层并加单元测试。这样 StateTree 是可视化编排，不会变成无法验证的第二套战斗逻辑。
+
+---
+
+# 第六部分：调试
 
 ## 编译期
 
@@ -531,7 +556,7 @@ UE 自带可视化调试器：菜单 **Tools → Debug → StateTree Debugger**�
 |---|---|---|---|
 | `Cat Fishing Schedule Waiting Probe` | Task | — | Succeeded / Failed |
 | `Cat Fishing Enter Phase` | Task | `Phase` | Succeeded / Failed |
-| `Cat Fishing Resolve True Bite Selection` | Task | — | Succeeded / Failed |
+| `Cat Fishing Open True Bite Window` | Task | — | Succeeded / Failed |
 | `Cat Fishing Start Fight Runner` | Task | — | Succeeded / Failed |
 | `Cat Fishing Wait For Fight Runner` | Task | — | Running → Succeeded |
 | `Cat Fishing Wait` | Task | — | 永远 Running |
@@ -563,7 +588,7 @@ ECatRunTransitionReason:
 
 ---
 
-**建完两棵树别忘了**：把路径写进 `Config/DefaultGame.ini`，然后**重启编辑器**。
+**建完三棵树别忘了**：把路径写进 `Config/DefaultGame.ini`，然后**重启编辑器**。
 
 ```ini
 [/Script/Catfishing.CatRunSettings]
@@ -571,4 +596,6 @@ RunFlowStateTree=/Game/Data/StateTrees/ST_RunFlow.ST_RunFlow
 
 [/Script/Catfishing.CatFishingSettings]
 FishingSessionStateTree=/Game/Data/StateTrees/ST_FishingSession.ST_FishingSession
+
+FishBehaviorStateTree=/Game/Data/StateTrees/ST_FishFight.ST_FishFight
 ```

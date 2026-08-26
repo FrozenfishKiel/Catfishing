@@ -36,6 +36,7 @@ bool FCatFishingNativeEventTagsContractTest::RunTest(const FString& Parameters)
 		{ TEXT("Cat.Fishing.Event.CatStaminaDepleted"), &CatFishingGameplayTags::CatStaminaDepleted },
 		{ TEXT("Cat.Fishing.Event.CatOverpowered"), &CatFishingGameplayTags::CatOverpowered },
 		{ TEXT("Cat.Fishing.Event.RodBroken"), &CatFishingGameplayTags::RodBroken },
+		{ TEXT("Cat.Fishing.Event.LineBroken"), &CatFishingGameplayTags::LineBroken },
 		{ TEXT("Cat.Fishing.Event.AutoHaulReachedShore"), &CatFishingGameplayTags::AutoHaulReachedShore },
 		{ TEXT("Cat.Fishing.Event.AutoHaulFailed"), &CatFishingGameplayTags::AutoHaulFailed },
 		{ TEXT("Cat.Fishing.Event.ScoopCommitted"), &CatFishingGameplayTags::ScoopCommitted },

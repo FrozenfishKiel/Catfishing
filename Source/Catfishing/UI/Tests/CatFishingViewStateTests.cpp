@@ -17,12 +17,18 @@ bool FCatFishingViewStateProjectionTest::RunTest(const FString& Parameters)
 	Snapshot.FishDefinitionId = TEXT("Carp");
 	Snapshot.NormalizedFishStamina = 0.25;
 	Snapshot.bReeling = true;
+	Snapshot.FishLineAlignment = 0.75f;
+	Snapshot.NormalizedLineLoad = 0.6f;
+	Snapshot.bStrongConfrontation = true;
 	const FCatFishingViewState View = FCatFishingViewState::FromSnapshot(Snapshot);
 	TestEqual(TEXT("session id projects"), View.FishingSessionId, Snapshot.FishingSessionId);
 	TestEqual(TEXT("phase projects"), View.Phase, ECatFishingPhase::NearShore);
 	TestEqual(TEXT("fish id projects"), View.FishDefinitionId, FName(TEXT("Carp")));
 	TestEqual(TEXT("normalized stamina projects"), View.NormalizedFishStamina, 0.25);
 	TestTrue(TEXT("reeling projects"), View.bReeling);
+	TestEqual(TEXT("line alignment projects"), View.FishLineAlignment, 0.75f);
+	TestEqual(TEXT("normalized line load projects"), View.NormalizedLineLoad, 0.6f);
+	TestTrue(TEXT("strong confrontation projects"), View.bStrongConfrontation);
 	UCatFishingViewBridge* Bridge = NewObject<UCatFishingViewBridge>();
 	TestNotNull(TEXT("read-only fishing view bridge exists without a widget asset"), Bridge);
 	TestFalse(TEXT("bridge rejects a missing session"), Bridge->BindSession(nullptr));

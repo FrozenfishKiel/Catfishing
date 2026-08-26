@@ -13,7 +13,7 @@ enum class ECatFishingPhase : uint8
 	Created = 0,
 	/** 鱼只给试探信号；此阶段提竿不能直接形成捕获。 */
 	Probe = 1,
-	/** 真咬响应窗口；具体时长与输入规则由未裁配置和资产决定。 */
+	/** 真咬响应窗口；此时只存在浮漂信号，鱼种与鱼 Actor 要等合法左键到达服务器后才创建。 */
 	TrueBiteWindow = 2,
 	/** Hooked 后唯一允许多人协作的搏斗阶段。 */
 	HookedFight = 3,
@@ -25,13 +25,22 @@ enum class ECatFishingPhase : uint8
 	Terminated = 6,
 	CastFlight = 7,
 	Waiting = 8,
-	AutoHauling = 9
+	AutoHauling = 9,
+	/** 鱼体力已归零且不再挣扎；玩家必须继续收线把鱼真实拖过岸线。 */
+	ExhaustedReel = 10
 };
 
 UENUM(BlueprintType)
 enum class ECatFishingOutcome : uint8
 {
-	None, Caught, EmptyHook, HookWindowExpired, Escaped, RodBroken, CatInWater, Cancelled, Invalidated
+	None, Caught, EmptyHook, HookWindowExpired, Escaped,
+	/** 旧版本曾把鱼线断裂误写成鱼竿永久损坏；仅为已有蓝图/存档保持枚举序号，不再由钓鱼核心产生。 */
+	RodBroken UMETA(Hidden),
+	CatInWater, Cancelled, Invalidated,
+	/** 会话已把鱼安全释放为独立岸上拾取物；鱼尚未归属任何玩家。 */
+	Landed,
+	/** 鱼线承载能力或本次线耐久耗尽；只结束当前会话，鱼竿本体保持可用。 */
+	LineBroken
 };
 
 UENUM(BlueprintType)
@@ -170,15 +179,16 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	double NormalizedFishStamina = 0.0;
 
-	/** 搏斗中的竿耐久余量（会话内资源：进入搏斗时=鱼竿 DA 耐久上限，磨损只在本会话累计）；非搏斗阶段保持 0。 */
-	UPROPERTY(BlueprintReadOnly)
+	/** 搏斗中的本场鱼线耐久余量（字段名兼容旧蓝图；进入搏斗时重置，非搏斗阶段保持 0）。 */
+	/** 本场钓鱼的鱼线剩余承载耐久；字段名为兼容既有蓝图保留，不代表场景鱼竿永久损坏。 */
+	UPROPERTY(BlueprintReadOnly, meta=(DisplayName="Line Durability Remaining"))
 	double RodDurabilityRemaining = 0.0;
 
 	/** 当前连续收线（左键拖）输入；高频更新不推进离散命令 Revision。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bReeling = false;
 
-	/** 当前连续放线（右键松）输入；拖优先于放，二者同时按住时以 bReeling 为准。 */
+	/** 当前是否按住右键松开线杯；收线优先，二者同时按住时以 bReeling 为准。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bSlacking = false;
 
@@ -189,6 +199,18 @@ struct FCatFishingSessionSnapshot
 	/** FishEncounter 的只读运动意图；不含位置或 Transform。 */
 	UPROPERTY(BlueprintReadOnly)
 	ECatFishMotionIntent FishMotionIntent = ECatFishMotionIntent::None;
+
+	/** 鱼当前游向与鱼线向外方向夹角余弦，范围 [-1,1]。 */
+	UPROPERTY(BlueprintReadOnly)
+	float FishLineAlignment = 0.0f;
+
+	/** 性格曲线处理后的归一化鱼线受力，范围 [0,1]。 */
+	UPROPERTY(BlueprintReadOnly)
+	float NormalizedLineLoad = 0.0f;
+
+	/** 服务器确认的强对抗状态；客户端只消费，不自行按 Transform 猜测。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bStrongConfrontation = false;
 
 	void AdvanceVersion(const ECatFishingSnapshotMutation Mutation)
 	{

@@ -44,20 +44,23 @@ Stage C 建议使用以下正式资产路径：
 - C++ 类：`ACatFishingRodActor`
 - 蓝图资产：`/Game/Catfishing/Fishing/Actors/BP_FishingRod`
 - Mesh、材质、AnimBP、Niagara 和 Audio 组件只能添加到可编辑的 `VisualRoot` 下。
-- `SceneRoot`、`RodTipAnchor`、`StandAnchor`、`GripAnchor` 是原生锁定组件，不得移动、替换、重挂或用 Construction Script 改写。
+- `SceneRoot`、`RodTipAnchor`、`StandAnchor`、`RightStandAnchor`、`LeftStandAnchor`、`GripAnchor` 是原生锁定组件，不得移动、替换、重挂或用 Construction Script 改写。
 
 ### 3.2 canonical anchors 的只读权威边界
 
-Rod 有三个位于 `SceneRoot` 直属层级的 canonical anchors：
+Rod 的 canonical 中心锚与当前左右站位参考组件都位于 `SceneRoot` 直属层级：
 
 - `RodTipAnchor`：权威抛竿原点与鱼线起点。
-- `StandAnchor`：权威操作站位。
+- `StandAnchor`：左右操作位的 canonical 中心。
+- `RightStandAnchor` / `LeftStandAnchor`：当前两个权威操作位的编辑器参考组件；主位默认右侧。
 - `GripAnchor`：权威握持/IK 目标。
 
 蓝图只能调用以下 Blueprint Pure 值 getter：
 
 - `GetRodTipWorldTransform()`
 - `GetStandWorldTransform()`
+- `GetOperatorStandWorldTransform(SlotIndex)`
+- `GetOperatorCount()` / `GetOperatorSlotIndex(PlayerState)` / `IsPrimaryOperator(PlayerState)`
 - `GetGripWorldTransform()`
 
 getter 返回的是原生 private canonical local transform 与 Actor Transform 的组合值，不读取蓝图可见组件的临时相对变换。阶段 A 的三个 canonical local transform 固定为 Identity；Stage C 必须由 Rod 功能定义提供最终权威值及客户端重建/复制来源。皮肤、Mesh Socket、AnimBP、Montage 和 Construction Script 永远不能反向修改 canonical anchors。
@@ -74,6 +77,7 @@ getter 返回的是原生 private canonical local transform 与 Actor Transform 
 - `RodSkinDefinitionId`
 - `OwnerPlayerState`
 - `OperatorPlayerState`
+- `OperatorPlayerStates`（紧凑有序数组；0=右主位，1=左辅助位；单/多人状态只看当前数组长度）
 - `bDeployed`
 - `bBroken`
 
@@ -177,6 +181,9 @@ FishEncounter 没有提供给蓝图修改的 canonical authority anchor。鱼的
 - `FishDefinitionId`
 - `MotionIntent`
 - `CurrentLineLength`
+- `FishLineAlignment`：鱼游向与鱼线向外方向点积，`-1` 朝竿尖、`0` 横向、`1` 正对外冲
+- `NormalizedLineLoad`：性格幂曲线处理后的服务器受力比例，`0~1`
+- `bStrongConfrontation`：服务器已确认进入强对抗；可直接驱动 AnimBP/Montage/VFX/SFX
 
 Fish 世界位置不在该结构中；它只来自 Actor replicated movement。结构中不得新增 stamina、outcome、capture、item、equipment durability 或第二份 position/target transform。
 
@@ -185,7 +192,7 @@ Fish 世界位置不在该结构中；它只来自 Actor replicated movement。�
 `BP_OnFishPresentationChanged(Previous, Current)`
 
 - 触发时机：权威身份初始化或客户端 RepNotify 后；BeginPlay 前的变化会合并为 BeginPlay 后的一次派发。
-- 用途：按 `FishDefinitionId` 选择 Mesh/材质/AnimBP，按 `MotionIntent` 和 `CurrentLineLength` 切换局部游动、平静、向内或向外挣扎表现。
+- 用途：按 `FishDefinitionId` 选择 Mesh/材质/AnimBP；按 `MotionIntent` 选大类动画；用 `NormalizedLineLoad` 连续调挣扎强度；用 `bStrongConfrontation` 切强对抗 Montage/VFX/SFX。
 - 表现切换不得写鱼体力、Session Phase、Outcome、捕获或 Actor Transform。
 
 `BP_PlayFishPresentationEvent(EventTag)`

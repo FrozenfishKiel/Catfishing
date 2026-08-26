@@ -34,7 +34,7 @@
 | InitialHunger | 初始饱食度（项目语义 100=吃饱） | ≥0 |
 | InitialFatigue / InitialPoison | 初始疲劳/中毒 | ≥0 |
 | FishingStrength | **猫力量**（规格 4.2：与鱼力量、竿强度三方比较） | >0 |
-| FightStaminaMaximum | **猫搏斗体力上限**（规格 4.3 消耗与放线回复的基线） | >0 |
+| FightStaminaMaximum | **猫搏斗体力上限**（规格 4.3 消耗与松线喘息回复的基线） | >0 |
 | bEnableRuntimeDefinition | 显式启用 gate | 必须 True |
 
 ⚠️ 角色指定了 ID 但定义缺失/未就绪时**不会悄悄换成全局值**——属性播种直接失败并打 `initial_attributes_unresolved` Warning，钓鱼链整体不可用，方便第一时间发现配错。
@@ -48,8 +48,8 @@
 **Rod（鱼竿）**：
 | 字段 | 含义 | 规格对应 |
 |---|---|---|
-| MaximumRodDurability | 竿耐久上限（动态资源 D） | 4.2 竿耐久 40/70/120 档 |
-| FishingStrength | 竿强度（静态,不随耐久掉） | 4.2 竿强 25/60/130 档,判定①瞬断比较用 |
+| MaximumRodDurability | **本场鱼线耐久上限**（字段名为兼容资产保留；每次新会话重置，不会写坏鱼竿） | 40/70/120 档 |
+| FishingStrength | 钓组承载强度（静态） | 25/60/130 档，判定①断线比较用 |
 | MaximumLineLengthCentimeters | 线长上限 cm | 放尽绷紧强制按拖判定 |
 | BaseDurabilityWearPerSecond / HighTensionWearMultiplier | 基础磨损/绷紧磨损倍率 | ≥0 / ≥1 |
 | RodTipLocal/StandLocal/GripLocalTransform | 竿尖(抛竿原点+鱼线起点)/操作站位/握持 三个权威锚点 | 表现蓝图只读不写 |
@@ -111,6 +111,19 @@
 | CalmMovementSpeedCentimetersPerSecond | 顺从期游速(向内) |
 | StruggleMovementSpeedCentimetersPerSecond | 挣扎期游速(向外) |
 | BaseDrainMultiplier / StruggleDrainMultiplier | 该鱼种体力消耗基础/挣扎倍率(在规格系数之上再乘) |
+| DirectionRetargetDurationRangeSeconds | 每段目标游向持续时间；到期才重新随机，不是每帧随机 |
+| MaximumTurnRateDegreesPerSecond | 当前游向追向目标游向的最大角速度，控制鱼转弯灵活度 |
+| StruggleOutwardDirectionBias | 挣扎时偏向鱼线外向的程度；越高越常正面对抗 |
+| CalmInwardDirectionBias | 平静时偏向竿尖方向的程度；越高越容易出现安全收线窗口 |
+| LateralMovementBias | 横向绕竿/切线运动倾向 |
+| FeintProbability | 挣扎阶段先选一次反向目标的概率，用于假动作 |
+| FullStaminaInwardProbability | 满体力重选方向时进入“朝竿尖扇区”的概率；低值可防止高体力鱼过早贴岸 |
+| ExhaustedInwardProbability | 接近力竭时的向内概率；必须 ≥ 满体力值 |
+| InwardProbabilityExponent | `pow(1-体力比例, 指数)` 的曲线；>1 表示低体力后才明显增加向内概率 |
+| InwardConeHalfAngleDegrees | 朝竿尖方向左右各多少度算向内；默认 60°，完整扇区 120° |
+| StrongConfrontationAlignmentThreshold | 夹角投影达到多少才算强对抗；体力/磨损在阈值以下仍连续按投影计算 |
+| StrongConfrontationConfirmationSeconds | 强对抗角度需要连续保持多久，才允许触发断线/落水/碾压 |
+| AngleStrengthExponent | 对 `max(cos夹角,0)` 做幂变换；1=线性，越大则斜向力量衰减越快 |
 
 ## 6. GAS 资产：`UCatAbilitySet` / `UCatAbilityInputConfig`
 
@@ -121,7 +134,12 @@
 - `ActivationPolicy`:OnInputTriggered=按一下激活一次 / **WhileInputActive=按住期间保持激活(左键/右键/Q 三个按住型必须用它,否则收不到 InputReleased)** / OnGranted=授予即激活
 - `InitialEffect`:授予时附带的 GameplayEffect(可空)
 
-**InputConfig**（DA_CatAbilityInputConfig）: 每行 `InputAction`(IA_* 资产) ↔ `InputTag` 的映射;数量须 ≥5 且覆盖五个核心 Fishing Tag,缺一整套输入不绑定。
+**InputConfig**（DA_CatAbilityInputConfig）分两组：
+
+- `AbilityInputActions`：`InputAction` ↔ Fishing `InputTag`，用于把输入送进 ASC/GAS；须覆盖五个核心 Fishing Tag。
+- `NativeInputActions`：不需要 Gameplay Ability 的意图映射。当前为 `IA_Interact` ↔ `Cat.Input.Interact`，由 PlayerController 分发给交互组件。
+
+这里采用 Lyra 风格的“设备输入 → InputTag → 消费者”：改 `E/R` 键位只动 IMC，玩法代码仍按稳定 Tag 工作。
 
 ## 7. 曲线资产（CurveFloat）
 

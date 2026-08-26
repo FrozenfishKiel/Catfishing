@@ -10,7 +10,7 @@ enum class ECatFishingCommandType : uint8
 {
 	None, PlaceRod, OperateRod, LeaveRod, PackRod, ChangeRodSkin, BeginCast, RequestHook, SetReeling,
 	PrimaryReleased, CancelFishing, RequestScoop, AssistFight, PlaceChum, TailRescue,
-	/** 右键放线按下 / 松开；只在 HookedFight 有效。 */
+	/** 右键松开线杯的按下 / 松开边沿；只在 HookedFight 有效。 */
 	SlackPressed, SlackReleased,
 	/** Q 打窝蓄力按下 / 松开；服务器按按住时长换算蓄力并投放。 */
 	ChumPressed, ChumReleased

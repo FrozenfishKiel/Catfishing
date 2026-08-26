@@ -180,18 +180,22 @@ bool FCatFishingRodCanonicalAnchorsContractTest::RunTest(const FString& Paramete
 	USceneComponent* VisualRoot = CatFishingActorContractTest::FindSceneComponent(Rod, TEXT("VisualRoot"));
 	USceneComponent* RodTip = CatFishingActorContractTest::FindSceneComponent(Rod, TEXT("RodTipAnchor"));
 	USceneComponent* Stand = CatFishingActorContractTest::FindSceneComponent(Rod, TEXT("StandAnchor"));
+	USceneComponent* RightStand = CatFishingActorContractTest::FindSceneComponent(Rod, TEXT("RightStandAnchor"));
+	USceneComponent* LeftStand = CatFishingActorContractTest::FindSceneComponent(Rod, TEXT("LeftStandAnchor"));
 	USceneComponent* Grip = CatFishingActorContractTest::FindSceneComponent(Rod, TEXT("GripAnchor"));
 	TestNotNull(TEXT("SceneRoot exists"), SceneRoot);
 	TestNotNull(TEXT("VisualRoot exists"), VisualRoot);
 	TestNotNull(TEXT("RodTipAnchor exists"), RodTip);
 	TestNotNull(TEXT("StandAnchor exists"), Stand);
+	TestNotNull(TEXT("RightStandAnchor exists"), RightStand);
+	TestNotNull(TEXT("LeftStandAnchor exists"), LeftStand);
 	TestNotNull(TEXT("GripAnchor exists"), Grip);
-	if (!SceneRoot || !VisualRoot || !RodTip || !Stand || !Grip)
+	if (!SceneRoot || !VisualRoot || !RodTip || !Stand || !RightStand || !LeftStand || !Grip)
 	{
 		return false;
 	}
 	TestEqual(TEXT("VisualRoot attaches to SceneRoot"), VisualRoot->GetAttachParent(), SceneRoot);
-	for (USceneComponent* Anchor : { RodTip, Stand, Grip })
+	for (USceneComponent* Anchor : { RodTip, Stand, RightStand, LeftStand, Grip })
 	{
 		TestEqual(TEXT("canonical anchor attaches to SceneRoot"), Anchor->GetAttachParent(), SceneRoot);
 		TestFalse(TEXT("canonical anchor cannot be edited when inherited"), Anchor->bEditableWhenInherited);
@@ -201,17 +205,29 @@ bool FCatFishingRodCanonicalAnchorsContractTest::RunTest(const FString& Paramete
 	Rod->SetActorTransform(FTransform(FRotator(0.0, 35.0, 0.0), FVector(100.0, 200.0, 300.0)));
 	const FTransform ExpectedTip = Rod->GetRodTipWorldTransform();
 	const FTransform ExpectedStand = Rod->GetStandWorldTransform();
+	const FTransform ExpectedLeftStand = Rod->GetOperatorStandWorldTransform(1);
 	const FTransform ExpectedGrip = Rod->GetGripWorldTransform();
 	VisualRoot->SetRelativeLocation(FVector(900.0, 0.0, 0.0));
 	RodTip->SetRelativeLocation(FVector(-500.0, 0.0, 0.0));
 	Stand->SetRelativeLocation(FVector(-400.0, 0.0, 0.0));
+	RightStand->SetRelativeLocation(FVector(-450.0, 0.0, 0.0));
+	LeftStand->SetRelativeLocation(FVector(-475.0, 0.0, 0.0));
 	Grip->SetRelativeLocation(FVector(-300.0, 0.0, 0.0));
 	TestTrue(TEXT("tip getter ignores component movement"), Rod->GetRodTipWorldTransform().Equals(ExpectedTip));
 	TestTrue(TEXT("stand getter ignores component movement"), Rod->GetStandWorldTransform().Equals(ExpectedStand));
+	TestTrue(TEXT("left stand getter ignores component movement"),
+		Rod->GetOperatorStandWorldTransform(1).Equals(ExpectedLeftStand));
 	TestTrue(TEXT("grip getter ignores component movement"), Rod->GetGripWorldTransform().Equals(ExpectedGrip));
 	Rod->SetActorLocation(FVector(700.0, 800.0, 900.0));
 	TestTrue(TEXT("tip getter follows actor transform"), Rod->GetRodTipWorldTransform().Equals(Rod->GetActorTransform()));
-	TestTrue(TEXT("stand getter follows actor transform"), Rod->GetStandWorldTransform().Equals(Rod->GetActorTransform()));
+	const FVector RightLocation = Rod->GetOperatorStandWorldTransform(0).GetLocation();
+	const FVector LeftLocation = Rod->GetOperatorStandWorldTransform(1).GetLocation();
+	TestTrue(TEXT("right and left stand remain centered on canonical stand"),
+		((RightLocation + LeftLocation) * 0.5).Equals(Rod->GetActorLocation(), UE_KINDA_SMALL_NUMBER));
+	TestTrue(TEXT("legacy stand getter aliases right primary slot"),
+		Rod->GetStandWorldTransform().Equals(Rod->GetOperatorStandWorldTransform(0)));
+	TestTrue(TEXT("invalid slot falls back to canonical stand center"),
+		Rod->GetOperatorStandWorldTransform(-1).Equals(Rod->GetActorTransform()));
 	TestTrue(TEXT("grip getter follows actor transform"), Rod->GetGripWorldTransform().Equals(Rod->GetActorTransform()));
 	return !HasAnyErrors();
 }
@@ -226,9 +242,11 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 	ACatFishingHookActor* Hook = World ? World->SpawnActor<ACatFishingHookActor>() : nullptr;
 	ACatFishEncounterActor* Fish = World ? World->SpawnActor<ACatFishEncounterActor>() : nullptr;
 	APlayerState* Owner = World ? World->SpawnActor<APlayerState>() : nullptr;
+	APlayerState* Helper = World ? World->SpawnActor<APlayerState>() : nullptr;
+	APlayerState* Third = World ? World->SpawnActor<APlayerState>() : nullptr;
 	TestNotNull(TEXT("identity actors spawn"), Rod);
 	TestNotNull(TEXT("identity owner spawns"), Owner);
-	if (!Rod || !Hook || !Fish || !Owner)
+	if (!Rod || !Hook || !Fish || !Owner || !Helper || !Third)
 	{
 		return false;
 	}
@@ -239,20 +257,75 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("rod accepts first identity"), Rod->InitializeAuthoritativeIdentity(RodId, TEXT("Rod"), TEXT("SkinA"), Owner, nullptr, true, false));
 	const FCatFishingRodPresentationState RodFirst = Rod->GetPresentationState();
 	TestEqual(TEXT("rod starts at revision one"), RodFirst.RodActorRevision, int64{1});
+	TestTrue(TEXT("first place transition deploys the rod"), RodFirst.bDeployed);
+	TestEqual(TEXT("first place transition leaves all operator slots empty"), Rod->GetOperatorCount(), 0);
+	TestNull(TEXT("first place transition has no primary operator"), RodFirst.OperatorPlayerState);
 	TestTrue(TEXT("rod exact identity replay succeeds"), Rod->InitializeAuthoritativeIdentity(RodId, TEXT("Rod"), TEXT("SkinB"), Owner, Owner, false, true));
 	TestEqual(TEXT("rod replay preserves state"), Rod->GetPresentationState().RodSkinDefinitionId, RodFirst.RodSkinDefinitionId);
 	TestFalse(TEXT("rod rejects changed immutable identity"), Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), TEXT("Rod"), NAME_None, Owner, nullptr, false, false));
+	int32 JoinedSlot = INDEX_NONE;
+	TestTrue(TEXT("first operator joins right primary slot"), Rod->AddOperatorFromAuthority(Owner, 1, JoinedSlot));
+	TestEqual(TEXT("first operator slot index is zero"), JoinedSlot, 0);
+	TestEqual(TEXT("primary compatibility field follows slot zero"),
+		Rod->GetPresentationState().OperatorPlayerState.Get(), Owner);
+	TestTrue(TEXT("second operator joins left auxiliary slot"), Rod->AddOperatorFromAuthority(Helper, 2, JoinedSlot));
+	TestEqual(TEXT("second operator slot index is one"), JoinedSlot, 1);
+	TestEqual(TEXT("two-player occupancy is derived from compact array"), Rod->GetOperatorCount(), 2);
+	TestFalse(TEXT("third operator is rejected by current two-slot configuration"),
+		Rod->AddOperatorFromAuthority(Third, 3, JoinedSlot));
+	APlayerState* PromotedPrimary = nullptr;
+	TestTrue(TEXT("primary can leave two-player occupancy"),
+		Rod->RemoveOperatorFromAuthority(Owner, 3, PromotedPrimary));
+	TestEqual(TEXT("left operator is explicitly reported as promoted"), PromotedPrimary, Helper);
+	TestEqual(TEXT("promoted operator becomes slot zero"), Rod->GetOperatorSlotIndex(Helper), 0);
+	TestEqual(TEXT("two-to-one transition clears cooperative occupancy immediately"), Rod->GetOperatorCount(), 1);
+	TestEqual(TEXT("primary mirror follows promoted operator"),
+		Rod->GetPresentationState().OperatorPlayerState.Get(), Helper);
+	TestTrue(TEXT("last operator can leave"), Rod->RemoveOperatorFromAuthority(Helper, 4, PromotedPrimary));
+	TestEqual(TEXT("empty occupancy has zero count"), Rod->GetOperatorCount(), 0);
+	TestNull(TEXT("empty occupancy clears primary mirror"), Rod->GetPresentationState().OperatorPlayerState);
 	TestTrue(TEXT("hook accepts first identity"), Hook->InitializeAuthoritativeIdentity(SessionId, AttemptId));
+	TestTrue(TEXT("authority hook accepts calm bobber mode"),
+		Hook->SetBobberPresentationModeFromAuthority(ECatFishingBobberPresentationMode::Calm));
+	TestEqual(TEXT("hook publishes calm bobber mode"), Hook->GetPresentationState().BobberMode,
+		ECatFishingBobberPresentationMode::Calm);
+	TestTrue(TEXT("hook bobber mode timestamp is finite"),
+		FMath::IsFinite(Hook->GetPresentationState().BobberModeStartedServerTime));
 	TestTrue(TEXT("hook exact identity replay succeeds"), Hook->InitializeAuthoritativeIdentity(SessionId, AttemptId));
+	TestTrue(TEXT("hook accepts server line presentation scalars"),
+		Hook->SetFishingLinePresentationFromAuthority(600.0, 500.0, 100.0, 0.25f, false));
+	TestEqual(TEXT("hook publishes paid out line length"),
+		Hook->GetPresentationState().PaidOutLineLengthCentimeters, 600.0);
+	TestEqual(TEXT("hook publishes line slack"),
+		Hook->GetPresentationState().SlackLineLengthCentimeters, 100.0);
 	TestFalse(TEXT("hook rejects same session and attempt ids"), Hook->InitializeAuthoritativeIdentity(SessionId, SessionId));
-	TestTrue(TEXT("fish accepts first identity"), Fish->InitializeAuthoritativeIdentity(SessionId, AttemptId, TEXT("Fish"), 12.0));
-	TestTrue(TEXT("fish exact identity replay succeeds"), Fish->InitializeAuthoritativeIdentity(SessionId, AttemptId, TEXT("Fish"), 99.0));
+	TestTrue(TEXT("fish accepts first identity"), Fish->InitializeAuthoritativeIdentity(
+		SessionId, AttemptId, TEXT("Fish"), 12.0, 1.25));
+	TestTrue(TEXT("fish exact identity replay succeeds"), Fish->InitializeAuthoritativeIdentity(
+		SessionId, AttemptId, TEXT("Fish"), 99.0, 1.75));
 	TestEqual(TEXT("fish replay preserves line length"), Fish->GetPresentationState().CurrentLineLength, 12.0);
+	TestEqual(TEXT("fish replay preserves frozen visual scale"), Fish->GetPresentationState().VisualScale, 1.25);
+	// CreateTestWorld does not start play automatically. The encounter intentionally waits until BeginPlay before
+	// capturing a Blueprint-authored VisualRoot base scale, so exercise the same lifecycle used by a real spawned fish.
+	WorldWrapper.BeginPlayInTestWorld();
+	const USceneComponent* FishVisualRoot = Cast<USceneComponent>(Fish->GetDefaultSubobjectByName(TEXT("VisualRoot")));
+	TestNotNull(TEXT("fish owns visual root"), FishVisualRoot);
+	if (FishVisualRoot)
+	{
+		TestTrue(TEXT("fish visual root consumes frozen scale"),
+			FishVisualRoot->GetRelativeScale3D().Equals(FVector(1.25), UE_KINDA_SMALL_NUMBER));
+	}
 	const double NonFiniteLineLength = TNumericLimits<double>::Max() * 2.0;
-	TestFalse(TEXT("fish rejects non-finite line length"), Fish->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Fish"), NonFiniteLineLength));
+	TestFalse(TEXT("fish rejects non-finite line length"), Fish->InitializeAuthoritativeIdentity(
+		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Fish"), NonFiniteLineLength, 1.0));
+	ACatFishEncounterActor* InvalidScaleFish = World->SpawnActor<ACatFishEncounterActor>();
+	TestFalse(TEXT("fish rejects non-positive visual scale"), InvalidScaleFish && InvalidScaleFish->InitializeAuthoritativeIdentity(
+		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Fish"), 1.0, 0.0));
 	ACatFishingHookActor* ClientHook = World->SpawnActor<ACatFishingHookActor>();
 	ClientHook->SetRole(ROLE_SimulatedProxy);
 	TestFalse(TEXT("client hook rejects authority initialization"), ClientHook->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid()));
+	TestFalse(TEXT("client hook rejects authority bobber mode mutation"),
+		ClientHook->SetBobberPresentationModeFromAuthority(ECatFishingBobberPresentationMode::Sunk));
 	TestFalse(TEXT("client initialization leaves state unconfigured"), ClientHook->GetPresentationState().FishingSessionId.IsValid());
 	for (UClass* Class : { ACatFishingRodActor::StaticClass(), ACatFishingHookActor::StaticClass(), ACatFishEncounterActor::StaticClass() })
 	{
@@ -272,7 +345,9 @@ bool FCatFishEncounterMovementContractTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("fish does not use owner relevancy"), FishCDO->bNetUseOwnerRelevancy);
 	TestFalse(TEXT("fish is not owner-only"), FishCDO->bOnlyRelevantToOwner);
 	const UScriptStruct* StateStruct = FCatFishEncounterPresentationState::StaticStruct();
-	const TSet<FName> ExpectedFields = { TEXT("FishingSessionId"), TEXT("CastAttemptId"), TEXT("FishDefinitionId"), TEXT("MotionIntent"), TEXT("CurrentLineLength") };
+	const TSet<FName> ExpectedFields = { TEXT("FishingSessionId"), TEXT("CastAttemptId"), TEXT("FishDefinitionId"),
+		TEXT("VisualScale"), TEXT("MotionIntent"), TEXT("CurrentLineLength"), TEXT("FishLineAlignment"),
+		TEXT("NormalizedLineLoad"), TEXT("bStrongConfrontation") };
 	for (TFieldIterator<FProperty> It(StateStruct); It; ++It)
 	{
 		TestTrue(FString::Printf(TEXT("fish state field %s is whitelisted"), *It->GetName()), ExpectedFields.Contains(It->GetFName()));
@@ -320,13 +395,24 @@ bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameter
 	TestFalse(TEXT("line component does not tick"), Line->PrimaryComponentTick.bCanEverTick);
 	TestFalse(TEXT("line component does not replicate gameplay state"), Line->GetIsReplicated());
 	ACatFishingHookActor* Hook = GetMutableDefault<ACatFishingHookActor>();
+	const USceneComponent* LineStartAnchor = Cast<USceneComponent>(
+		Hook->GetDefaultSubobjectByName(TEXT("FishingLineStartAnchor")));
 	const UCableComponent* Cable = Cast<UCableComponent>(Hook->GetDefaultSubobjectByName(TEXT("FishingLine")));
+	TestNotNull(TEXT("hook owns a smoothed fishing-line start anchor"), LineStartAnchor);
 	TestNotNull(TEXT("hook owns a native fishing-line cable"), Cable);
+	if (LineStartAnchor)
+	{
+		TestTrue(TEXT("line start anchor is world-space independent from replicated hook jumps"),
+			LineStartAnchor->IsUsingAbsoluteLocation());
+	}
 	if (Cable)
 	{
 		TestFalse(TEXT("visual cable itself is not replicated"), Cable->GetIsReplicated());
 		TestTrue(TEXT("visual cable has both endpoints fixed"), Cable->bAttachStart && Cable->bAttachEnd);
 		TestFalse(TEXT("visual cable collision stays disabled"), Cable->bEnableCollision);
+		TestFalse(TEXT("visual cable does not hard-switch bending stiffness"), Cable->bEnableStiffness);
+		TestTrue(TEXT("visual cable uses stable substeps"), Cable->bUseSubstepping);
+		TestTrue(TEXT("visual cable starts at the smoothing anchor"), Cable->GetAttachParent() == LineStartAnchor);
 	}
 
 	FTestWorldWrapper WorldWrapper;
@@ -344,6 +430,8 @@ bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameter
 		{
 			TestTrue(TEXT("authority identity publishes the line presentation state"),
 				RuntimeHook->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid()));
+			TestTrue(TEXT("authority can publish slack cable shape"),
+				RuntimeHook->SetFishingLinePresentationFromAuthority(600.0, 500.0, 100.0, 0.25f, false));
 			const UCableComponent* RuntimeCable = Cast<UCableComponent>(
 				RuntimeHook->GetDefaultSubobjectByName(TEXT("FishingLine")));
 			TestNotNull(TEXT("runtime hook keeps its cable"), RuntimeCable);
@@ -351,6 +439,29 @@ bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameter
 			{
 				TestTrue(TEXT("runtime cable attaches to the replicated rod owner"),
 					RuntimeCable->GetAttachedActor() == Rod);
+				TestTrue(TEXT("runtime cable does not jump directly to a new paid out length"),
+					RuntimeCable->CableLength < 600.0f);
+				TestTrue(TEXT("slack cable enables visible local gravity"), RuntimeCable->CableGravityScale > 0.08f);
+				for (int32 TickIndex = 0; TickIndex < 120; ++TickIndex)
+				{
+					WorldWrapper.TickTestWorld(1.0f / 60.0f);
+				}
+				TestTrue(TEXT("smoothed runtime cable converges to paid out length"),
+					FMath::IsNearlyEqual(RuntimeCable->CableLength, 600.0f, 0.5f));
+				TestFalse(TEXT("runtime cable keeps one bending mode while slack changes"),
+					RuntimeCable->bEnableStiffness);
+				TestEqual(TEXT("runtime cable keeps fixed solver iterations"), RuntimeCable->SolverIterations, 10);
+			}
+			USceneComponent* HookVisualRoot = CatFishingActorContractTest::FindSceneComponent(RuntimeHook, TEXT("VisualRoot"));
+			TestNotNull(TEXT("runtime hook owns visual root"), HookVisualRoot);
+			if (HookVisualRoot)
+			{
+				const FVector BaseRelativeLocation = HookVisualRoot->GetRelativeLocation();
+				RuntimeHook->SetPresentationBobOffset(12.0f);
+				TestEqual(TEXT("bob offset only adds local Z"), HookVisualRoot->GetRelativeLocation(),
+					BaseRelativeLocation + FVector(0.0, 0.0, 12.0));
+				RuntimeHook->SetPresentationBobOffset(0.0f);
+				TestEqual(TEXT("zero bob offset restores visual base"), HookVisualRoot->GetRelativeLocation(), BaseRelativeLocation);
 			}
 		}
 	}

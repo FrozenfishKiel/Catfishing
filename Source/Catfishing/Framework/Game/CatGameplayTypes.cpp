@@ -38,6 +38,9 @@
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
 #include "Items/CatItemsService.h"
+#include "Interaction/CatInteractable.h"
+#include "Interaction/CatInteractionTags.h"
+#include "Interaction/CatInteractionTargetingComponent.h"
 #include "Net/UnrealNetwork.h"
 #include "OnlineSubsystemTypes.h"
 #include "Profile/CatProfileSubsystem.h"
@@ -66,6 +69,7 @@ namespace
 ACatfishingPlayerController::ACatfishingPlayerController()
 {
 	FishingCommandComponent = CreateDefaultSubobject<UCatFishingCommandComponent>(TEXT("FishingCommandComponent"));
+	InteractionTargetingComponent = CreateDefaultSubobject<UCatInteractionTargetingComponent>(TEXT("InteractionTargetingComponent"));
 }
 
 UCatFishingCommandComponent* ACatfishingPlayerController::GetFishingCommandComponent() const
@@ -1630,6 +1634,11 @@ void ACatfishingPlayerController::SetupInputComponent()
 		? AbilitySettings->AbilityInputConfig.LoadSynchronous() : nullptr;
 	if (AbilityInputConfig && AbilityBoundInputComponent.Get() != EnhancedInput)
 	{
+		for (const FCatNativeInputAction& Entry : AbilityInputConfig->NativeInputActions)
+		{
+			EnhancedInput->BindAction(Entry.InputAction, ETriggerEvent::Started,
+				this, &ThisClass::NativeInputTagPressed, Entry.InputTag);
+		}
 		for (const FCatAbilityInputAction& Entry : AbilityInputConfig->AbilityInputActions)
 		{
 			EnhancedInput->BindAction(Entry.InputAction, ETriggerEvent::Started,
@@ -2095,6 +2104,17 @@ void ACatfishingPlayerController::ServerGrantRunConsumable_Implementation(const 
 		*DefinitionId.ToString(), Quantity);
 }
 
+void ACatfishingPlayerController::ServerRequestInteraction_Implementation(AActor* Target, const FGuid RequestId)
+{
+	if (!CanForwardGameplayCommand() || !RequestId.IsValid() || !IsValid(Target)
+		|| Target->GetWorld() != GetWorld()
+		|| !Target->GetClass()->ImplementsInterface(UCatInteractable::StaticClass()))
+	{
+		return;
+	}
+	ICatInteractable::Execute_RequestInteractionFromAuthority(Target, this, RequestId);
+}
+
 void ACatfishingPlayerController::ServerSubmitShopPurchase_Implementation(const FName EntryId,
 	const FGuid RequestId, const int64 ExpectedWalletRevision)
 {
@@ -2494,6 +2514,14 @@ void ACatfishingPlayerController::AbilityInputTagReleased(const FGameplayTag Inp
 	if (UCatAbilitySystemComponent* AbilitySystem = GetCurrentCatAbilitySystemComponent())
 	{
 		AbilitySystem->AbilityInputTagReleased(InputTag);
+	}
+}
+
+void ACatfishingPlayerController::NativeInputTagPressed(const FGameplayTag InputTag)
+{
+	if (InputTag.MatchesTagExact(CatInteractionTags::Input_Interact) && InteractionTargetingComponent)
+	{
+		InteractionTargetingComponent->TryInteract();
 	}
 }
 

@@ -2,6 +2,10 @@
 
 #include "Misc/AutomationTest.h"
 #include "Fishing/CatFishingStateTreeNodes.h"
+#include "Fishing/Actors/CatFishEncounterActor.h"
+#include "Fishing/Behavior/CatFishBehaviorStateTree.h"
+#include "Fishing/CatFishingSession.h"
+#include "Fishing/StateTree/CatFishingSessionStateTreeSchema.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingStateTreeNodesDefaultsTest,
 	"Catfishing.Unit.Fishing.StateTreeNodes.DefaultParametersAreFailClosedAndExposeOnlyExpectedData",
@@ -30,11 +34,26 @@ bool FCatFishingStateTreeNodesDefaultsTest::RunTest(const FString& Parameters)
 	const FCatFishingFailureBudgetTaskInstanceData FailureData;
 	TestEqual(TEXT("failure penalty defaults to None"), FailureData.Penalty, ECatFishingFailurePenalty::None);
 	const FCatFishingScheduleWaitingProbeTask ScheduleProbeTask;
-	const FCatFishingResolveTrueBiteSelectionTask ResolveSelectionTask;
+	const FCatFishingOpenTrueBiteWindowTask OpenBiteWindowTask;
+	const FCatFishingResolveTrueBiteSelectionTask LegacyOpenBiteWindowTask;
 	TestTrue(TEXT("waiting scheduler exposes no overrides"),
 		ScheduleProbeTask.GetInstanceDataType() == FCatFishingWaitTaskInstanceData::StaticStruct());
-	TestTrue(TEXT("selection task exposes no overrides"),
-		ResolveSelectionTask.GetInstanceDataType() == FCatFishingWaitTaskInstanceData::StaticStruct());
+	TestTrue(TEXT("open bite window task exposes no overrides"),
+		OpenBiteWindowTask.GetInstanceDataType() == FCatFishingWaitTaskInstanceData::StaticStruct());
+	TestTrue(TEXT("legacy serialized selection node remains load-compatible"),
+		LegacyOpenBiteWindowTask.GetInstanceDataType() == FCatFishingWaitTaskInstanceData::StaticStruct());
+	const FCatFishBehaviorStateTask FishBehaviorTask;
+	TestTrue(TEXT("fish behavior task exposes only intent and per-entry remaining time"),
+		FishBehaviorTask.GetInstanceDataType() == FCatFishBehaviorStateTaskInstanceData::StaticStruct());
+	const FCatFishBehaviorStateTaskInstanceData FishBehaviorData;
+	TestEqual(TEXT("fish behavior intent fails closed"), FishBehaviorData.MotionIntent, ECatFishMotionIntent::None);
+	TestEqual(TEXT("fish behavior duration starts unset"), FishBehaviorData.RemainingSeconds, 0.0);
+	const UCatFishBehaviorStateTreeSchema* FishSchema = GetDefault<UCatFishBehaviorStateTreeSchema>();
+	TestTrue(TEXT("fish behavior schema binds directly to encounter actor"),
+		FishSchema && FishSchema->GetContextActorClass() == ACatFishEncounterActor::StaticClass());
+	const UCatFishingSessionStateTreeSchema* SessionSchema = GetDefault<UCatFishingSessionStateTreeSchema>();
+	TestTrue(TEXT("fishing session schema binds directly to session actor"),
+		SessionSchema && SessionSchema->GetContextActorClass() == ACatFishingSession::StaticClass());
 	return !HasAnyErrors();
 }
 

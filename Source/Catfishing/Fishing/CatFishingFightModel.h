@@ -27,7 +27,7 @@ enum class ECatFishingFightIntent : uint8
 	None,
 	/** 拖（左键）：收线对抗。真咬期按它就是提竿。 */
 	Pull,
-	/** 松（右键）：放线让鱼跑，自己回体力。 */
+	/** 松（右键）：打开线杯让鱼被动带线，自己回体力。 */
 	Release
 };
 
@@ -37,30 +37,34 @@ enum class ECatFishingFightOutcome : uint8
 {
 	/** 还没分出结果。 */
 	None,
-	/** 断竿：判定表①（竿强度 ≤ min(猫力,鱼力)）或消耗战把耐久磨到 0；失败，鱼逃。 */
-	RodBroken,
+	/** 旧版本断竿结果，仅为枚举兼容保留；规则层不再产生。 */
+	RodBroken UMETA(Hidden),
 	/** 猫被拖下水：判定表②（鱼力 ≥ 猫力）或猫体力归零；失败，鱼逃。 */
 	CatDraggedIn,
-	/** 绝对碾压：判定表③（猫力 ≥ 鱼力×2），D 直接归零、鱼甩上岸；成功，进 NearShore。 */
+	/** 绝对碾压：判定表③（猫力 ≥ 鱼力×2），D 直接归零、鱼力竭侧翻。 */
 	Overpowered,
-	/** 鱼体力耗尽翻白肚，D 归零；成功，进 NearShore 等抄或拖上岸。 */
+	/** 鱼体力耗尽翻白肚，D 归零；可抄或继续收至竿尖水面投影。 */
 	FishExhausted,
 	/** 鱼被正常遛到离岸不足 1 米（工程暂定出口，见决策记录 D-18）；成功，进 NearShore。 */
-	ReeledToShore
+	ReeledToShore,
+	/** 钓组承载能力不足或本场鱼线耐久耗尽；只结束本次会话。 */
+	LineBroken
 };
 
 /** 飞书 4.3 判定表"向外游 + 拖"一行按 ①→④ 顺序得到的唯一出口。 */
 UENUM()
 enum class ECatFishingPullVerdict : uint8
 {
-	/** ① 竿强度 ≤ min(猫力, 鱼力)：断竿。 */
-	RodBroken,
+	/** 旧版本断竿裁决，仅为枚举兼容保留。 */
+	RodBroken UMETA(Hidden),
 	/** ② 鱼力 ≥ 猫力（未命中①）：猫被拖下水。 */
 	CatDraggedIn,
 	/** ③ 猫力 ≥ 鱼力×2.0（未命中①②）：绝对碾压。 */
 	Overpowered,
 	/** ④ 其余组合：僵持，进入 4.4 消耗战。 */
-	Stalemate
+	Stalemate,
+	/** ① 钓组承载能力 ≤ min(猫力, 鱼力)：断线。 */
+	LineBroken
 };
 
 /**
@@ -78,10 +82,10 @@ struct CATFISHING_API FCatFishingFightParams
 	/** 鱼的基础力量 = 本条鱼实际重量 × 鱼种力量系数 K（完美中鱼已在这里削减过）；垂死挣扎期间实际生效值再 ×1.5。 */
 	double FishStrengthBase = 0.0;
 
-	/** 竿强度（静态）；判定表①用。来自竿定义 RodStrength。 */
+	/** 钓组承载强度（静态）；当前沿用竿定义 RodStrength 字段，判定表①断线用。 */
 	double RodStrength = 0.0;
 
-	/** 放线上限 L_max，单位米；来自竿定义 MaximumLineLengthMeters。 */
+	/** 可放出的线长上限 L_max，单位米；来自竿定义 MaximumLineLengthMeters。 */
 	double LineMaxMeters = 0.0;
 
 	/** 鱼种游速系数：按体重档 小 0.8／中 1.0／大 1.2／巨影 1.5，乘在 D/L 速率表的每一行上。 */
@@ -109,7 +113,7 @@ struct CATFISHING_API FCatFishingFightState
 	/** 鱼猫距离 D，单位米；初值 = 浮漂落点距离。 */
 	double DistanceMeters = 0.0;
 
-	/** 已放线长 L，单位米；初值 = D₀，模型保证 L ≥ D 且 L ≤ L_max。 */
+	/** 已放出线长 L，单位米；初值 = D₀，模型保证 L ≥ D 且 L ≤ L_max。 */
 	double LineMeters = 0.0;
 
 	/** 鱼当前段的方向。 */
@@ -143,13 +147,13 @@ struct CATFISHING_API FCatFishingFightState
 	}
 };
 
-/** 一次推进时模型需要读到的外部资源当前值；它们的真身在 ASC（猫体力）和 EquipmentComponent（竿耐久），模型只读不写。 */
+/** 一次推进时模型需要读到的资源当前值；猫体力来自 ASC，鱼线耐久只属于本场会话。 */
 struct FCatFishingFightResources
 {
 	/** 钓手当前 FightStamina。 */
 	double CatStamina = 0.0;
 
-	/** 钓手鱼竿当前耐久（已经扣掉会话尚未提交给 Equipment 的累计磨损）。 */
+	/** 本场鱼线当前耐久；旧字段名为兼容保留，不写入 Equipment。 */
 	double RodDurability = 0.0;
 };
 
@@ -159,7 +163,7 @@ struct FCatFishingFightStepDelta
 	/** 猫体力增量：负数是消耗，正数是向外游+松时的回复；会话写入时再按 [0, CatStaminaMax] 夹取。 */
 	double CatStaminaDelta = 0.0;
 
-	/** 本次要从竿上磨掉的耐久（≥0）；断竿出口时会话会把它补成"把剩余耐久全磨光"。 */
+	/** 本次鱼线负载耐久消耗（≥0）；旧字段名为兼容保留。 */
 	double RodDurabilityCost = 0.0;
 };
 
@@ -171,7 +175,7 @@ namespace CatFishingFightModel
 {
 	/**
 	 * 飞书 4.3 判定表"向外游 + 拖"按 ①→④ 顺序判定，取等归属从严（等号全部落在更坏的一侧）：
-	 * ① 竿强度 ≤ min(猫力,鱼力) → 断竿；② 鱼力 ≥ 猫力 → 拖下水；③ 猫力 ≥ 鱼力×2.0 → 碾压；④ 其余 → 僵持。任意组合有且仅一个出口。
+	 * ① 钓组承载强度 ≤ min(猫力,鱼力) → 断线；② 鱼力 ≥ 猫力 → 拖下水；③ 猫力 ≥ 鱼力×2.0 → 碾压；④ 其余 → 僵持。任意组合有且仅一个出口。
 	 */
 	CATFISHING_API ECatFishingPullVerdict JudgeOutwardPull(double CatStrength, double FishStrength, double RodStrength);
 
@@ -196,8 +200,8 @@ namespace CatFishingFightModel
 
 	/**
 	 * 推进 DeltaSeconds 的搏斗：先结算段（段到期就按概率 roll 新方向和段长，向外段开始时可能触发垂死挣扎），
-	 * 再按"鱼状态 × 猫操作"查速率表和判定表改 D/L 并算出对猫体力和竿耐久的增量，最后按 4.4 的归零优先级
-	 * （鱼体力 → 猫体力 → 竿耐久）和近岸距离决定终局。已经有终局时什么都不做。
+	 * 再按"鱼状态 × 猫操作"查速率表和判定表改 D/L 并算出对猫体力和鱼线耐久的增量，最后按归零优先级
+	 * （鱼体力 → 猫体力 → 鱼线耐久）和近岸距离决定终局。已经有终局时什么都不做。
 	 */
 	CATFISHING_API void Step(FCatFishingFightState& State, const FCatFishingFightParams& Params,
 		ECatFishingFightIntent Intent, double DeltaSeconds, const FCatFishingFightResources& Resources,

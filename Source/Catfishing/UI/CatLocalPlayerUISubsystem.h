@@ -11,6 +11,8 @@ class ACatCharacter;
 class ACatfishingGameState;
 class UCatTravelWidget;
 class UCatSurvivalWidget;
+class UCatInteractionWidget;
+class UCatInteractionTargetingComponent;
 class UAbilitySystemComponent;
 class UCatConditionComponent;
 class UCatEquipmentComponent;
@@ -59,6 +61,9 @@ private:
 
 	/** 先从旧 ASC 移除五属性 delegate，再解除 Condition/Equipment/GameState 的多源通知，最后释放 View 和全部弱引用。 */
 	void DetachSurvivalPawn();
+	void AttachInteractionView(APlayerController* Controller, ACatCharacter* Character);
+	void DetachInteractionView();
+	void HandleInteractionTargetChanged(AActor* PreviousTarget, AActor* CurrentTarget);
 
 	/** 任一 ASC HUD 属性变化时重新读取全部数值和完整快照，避免 UI 从增量事件拼接 Model。 */
 	void HandleSurvivalAttributeChanged(const FOnAttributeChangeData& ChangeData);
@@ -76,6 +81,12 @@ private:
 	/** 当前 LocalPlayer 唯一 Lake 状态 View；仅在有 ACatCharacter 且正式 UI gate 开启时存在。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatSurvivalWidget> SurvivalWidget;
+
+	UPROPERTY(Transient)
+	TObjectPtr<UCatInteractionWidget> InteractionWidget;
+
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UCatInteractionTargetingComponent> BoundInteractionTargeting;
 
 	/** 当前绑定 Pawn notifier 的 Controller 弱引用；Controller/World 替换时先解绑，绝不成为跨 World 所有者。 */
 	UPROPERTY(Transient)
@@ -105,6 +116,7 @@ private:
 
 	/** 当前 Controller Pawn notifier 的配对解绑句柄；Controller 变化或 Deinitialize 时消费。 */
 	FDelegateHandle PawnChangedHandle;
+	FDelegateHandle InteractionTargetChangedHandle;
 
 	/** Hunger 属性变化 delegate 的配对解绑句柄；Attach 写入，Detach 从同一 ASC/属性键移除。 */
 	FDelegateHandle HungerChangedHandle;

@@ -1,6 +1,8 @@
 #include "AbilitySystem/CatFishingAbilities.h"
 
 #include "AbilitySystem/CatFishingAbilityTags.h"
+#include "AbilitySystem/CatFishingScoopCooldownEffect.h"
+#include "Fishing/CatFishingSettings.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Framework/Game/CatGameplayTypes.h"
 
@@ -134,7 +136,7 @@ void UCatGA_FishingSlack::ActivateAbility(const FGameplayAbilitySpecHandle Handl
 	}
 	BP_OnLocalInputActivated();
 	UCatFishingCommandComponent* Commands = ResolveCommandComponent(ActorInfo);
-	// 右键放线同样是按住型：按下先登记 Pressed 边沿，服务器只在 HookedFight 阶段把它当有效放线输入处理。
+	// 右键松线同样是按住型：按下登记开放线杯边沿，服务器只在 HookedFight 阶段处理。
 	if (!CanSubmitLocalCommand(ActorInfo) || !Commands->SubmitSlackPressed().RequestId.IsValid())
 	{
 		CancelAbility(Handle, ActorInfo, ActivationInfo, true);
@@ -146,7 +148,7 @@ void UCatGA_FishingSlack::InputReleased(const FGameplayAbilitySpecHandle Handle,
 	BP_OnLocalInputReleased();
 	if (UCatFishingCommandComponent* Commands = ResolveCommandComponent(ActorInfo); CanSubmitLocalCommand(ActorInfo) && Commands)
 	{
-		// 提交放线松开边沿，服务器据此清除 bSlacking 输入状态。
+		// 提交右键松开边沿，服务器据此重新锁住当前已放出线长。
 		Commands->SubmitSlackReleased();
 	}
 	EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
@@ -175,14 +177,23 @@ void UCatGA_FishingCancel::ActivateAbility(const FGameplayAbilitySpecHandle Hand
 UCatGA_FishingScoop::UCatGA_FishingScoop()
 {
 	SetAssetTags(FGameplayTagContainer(CatFishingAbilityTags::Ability_Fishing_Scoop));
+	CooldownGameplayEffectClass = UCatGE_FishingScoopCooldown::StaticClass();
 }
 void UCatGA_FishingScoop::ActivateAbility(const FGameplayAbilitySpecHandle Handle,
 	const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo,
 	const FGameplayEventData* TriggerEventData)
 {
 	(void)TriggerEventData;
+	// Commit 是 GAS 真正应用预测冷却/服务器确认冷却的入口；只配置 Cooldown GE 而不 Commit 不会生效。
+	if (!CommitAbility(Handle, ActorInfo, ActivationInfo))
+	{
+		CancelAbility(Handle, ActorInfo, ActivationInfo, true);
+		return;
+	}
 	if (IsRemoteAuthorityMirror(ActorInfo))
 	{
+		// 远端客户端的服务器镜像也要 Commit 才有服务器权威 GE；命令仍由客户端 RPC 提交，不能重复发。
+		EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 		return;
 	}
 	// 挥网抄鱼的即时表现（挥网动作），不代表抢抄一定成功，成败由服务器 Compare-and-Commit 裁决。
@@ -191,6 +202,23 @@ void UCatGA_FishingScoop::ActivateAbility(const FGameplayAbilitySpecHandle Handl
 	// 抄鱼是一次性命令：本地提交拿到合法 RequestId 即视为已发起，真正是否抢到鱼由 Session::RequestScoop 权威裁决。
 	FinishOneShot(Handle, ActorInfo, ActivationInfo,
 		CanSubmitLocalCommand(ActorInfo) && Commands->SubmitScoop().RequestId.IsValid());
+}
+
+void UCatGA_FishingScoop::ApplyCooldown(const FGameplayAbilitySpecHandle Handle,
+	const FGameplayAbilityActorInfo* ActorInfo, const FGameplayAbilityActivationInfo ActivationInfo) const
+{
+	double CooldownSeconds = 0.0;
+	if (!GetDefault<UCatFishingSettings>()->TryGetScoopCooldown(CooldownSeconds))
+	{
+		return; // 服务器命令层会对非法配置 fail-closed；这里不制造错误时长的预测 GE。
+	}
+	FGameplayEffectSpecHandle Spec = MakeOutgoingGameplayEffectSpec(Handle, ActorInfo, ActivationInfo,
+		CooldownGameplayEffectClass, GetAbilityLevel(Handle, ActorInfo));
+	if (Spec.IsValid())
+	{
+		Spec.Data->SetDuration(static_cast<float>(CooldownSeconds), true);
+		ApplyGameplayEffectSpecToOwner(Handle, ActorInfo, ActivationInfo, Spec);
+	}
 }
 
 UCatGA_FishingChum::UCatGA_FishingChum()

@@ -13,5 +13,8 @@ FCatFishingViewState FCatFishingViewState::FromSnapshot(const FCatFishingSession
 	View.bSlacking = Snapshot.bSlacking;
 	View.bPerfectHook = Snapshot.bPerfectHook;
 	View.FishMotionIntent = Snapshot.FishMotionIntent;
+	View.FishLineAlignment = Snapshot.FishLineAlignment;
+	View.NormalizedLineLoad = Snapshot.NormalizedLineLoad;
+	View.bStrongConfrontation = Snapshot.bStrongConfrontation;
 	return View;
 }

@@ -57,7 +57,7 @@
 
 | 资产 | 路径 | 关键内容 |
 |---|---|---|
-| `DA_CatAbilityInputConfig` | `/Game/Data/Abilities/` | 5 条映射，Tag 前缀是 `Cat.Input.Fishing.*` |
+| `DA_CatAbilityInputConfig` | `/Game/Data/Abilities/` | `AbilityInputActions` 保存钓鱼 GAS 映射；`NativeInputActions` 额外保存 `IA_Interact` → `Cat.Input.Interact` |
 | `DA_CatAbilitySet_Default` | `/Game/Data/Abilities/` | 5 个原生 Ability 类；Primary=`WhileInputActive`，其余 `OnInputTriggered` |
 | `DA_Rod_Basic` / `DA_Bait_Basic` / `DA_Float_Basic` / `DA_ScoopNet_Basic` / `DA_Chum_Basic` | `/Game/Data/Equipment/` | Kind 各异，`RequiredUnlockId` 全部留空以走 starter 放行 |
 | `DA_Fish_Test01` | `/Game/Data/Fish/` | `RegionIds=[Showcase_River_01]`，对应关卡里那个湖 |
@@ -218,7 +218,7 @@ Controller.Server Configure Equipment(
 3. 按放竿键，确认 `PlaceRod` 结果 `bCommitted=true`，世界里出现 Rod Actor
 4. 走近竿，按互动键（`RodInteract`），确认角色被吸附到 `StandAnchor`
 5. 瞄水面按抛竿确认键，确认 `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去后 `Phase` 最终变成 `Landed`（Hook 的 `BP_OnHookPresentationChanged` 应该收到一次带 `Landed` 的回调）
-6. 等一段时间（`BaseBiteRatePerSecond`/`MinimumBiteDelaySeconds` 决定），确认 `Phase=TrueBiteWindow`
+6. 确认浮漂先慢浮至少 `MinimumBiteDelaySeconds`（当前 5 秒），再快速抖动 `BiteWarningSeconds`（当前 3 秒），然后下沉并进入 `Phase=TrueBiteWindow`
 7. 窗口内按住 Primary，确认提竿成功进 `HookedFight`
 8. 按住 Primary 持续收线，观察 `NormalizedFishStamina` 下降，直到进 `NearShore`
 9. 走到岸边按抢抄键，确认 `Phase=Resolved`，个人鱼护里多一条鱼

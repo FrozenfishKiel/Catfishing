@@ -221,7 +221,7 @@ void UCatFishingDebugSubsystem::DrawChumChargePreview(APlayerController* Control
 }
 
 // 会话状态：钩/鱼位置球、竿尖到鱼的连线、近岸圈与规格 7.1 的状态提示文字。
-// bFullDetail=false（精简模式）：只画鱼线和状态文字，跳过钩球/鱼球/近岸圈；浮漂 Mesh 浮动照常驱动。
+// bFullDetail=false（精简模式）：只画鱼线和状态文字，跳过钩球/鱼球/近岸圈；浮漂正式表现由 Hook 自己驱动。
 void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const bool bFullDetail) const
 {
 #if ENABLE_DRAW_DEBUG
@@ -243,7 +243,7 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 
 	if (!Session)
 	{
-		PushStatus(2, FColor::Silver, TEXT("E 放竿/操作/离开 · 操作中松开左键=抛竿 · Q 长按=打窝"));
+		PushStatus(2, FColor::Silver, TEXT("R 放竿/操作/离开 · E 准星交互/拾取 · 操作中松开左键=抛竿 · Q 长按=打窝"));
 		return;
 	}
 	const FCatFishingSessionSnapshot& Snapshot = Session->GetSnapshot();
@@ -254,33 +254,23 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 	const FVector RodTip = Rod ? ResolveRodTipDrawLocation(*Rod) : FVector::ZeroVector;
 	if (Hook)
 	{
-		// 浮漂动态（规格 3.3 咬讯的调试替身）：等待=慢速小幅浮动；试探=快速点动；真咬=猛下沉（黑漂）。
-		// 只有下沉（TrueBiteWindow）时提竿才算中鱼——试探期点动时提竿是空钩，这是权威判定，这里只做视觉提示。
-		const double Now = World->GetTimeSeconds();
-		double BobOffset = 0.0;
+		// Debug 只为正式浮漂表现着色/画锚点，不再写 VisualRoot，避免关闭 Debug 后玩法反馈一起消失。
 		FColor HookColor = FColor::Blue;
-		switch (Snapshot.Phase)
+		switch (Hook->GetPresentationState().BobberMode)
 		{
-		case ECatFishingPhase::Waiting:
-			BobOffset = 4.0 * FMath::Sin(Now * 2.0 * UE_DOUBLE_PI * 0.4);
-			break;
-		case ECatFishingPhase::Probe:
-			BobOffset = 7.0 * FMath::Sin(Now * 2.0 * UE_DOUBLE_PI * 2.5);
+		case ECatFishingBobberPresentationMode::BiteWarning:
 			HookColor = FColor::Yellow;
 			break;
-		case ECatFishingPhase::TrueBiteWindow:
-			BobOffset = -28.0;
+		case ECatFishingBobberPresentationMode::Sunk:
 			HookColor = FColor::Red;
 			break;
 		default:
 			break;
 		}
-		// 把浮动同步到 Hook 的表现子树（VisualRoot）：蓝图挂的浮漂/钩 Mesh 与调试球一起动；权威位置不变。
-		Hook->SetPresentationBobOffset(static_cast<float>(BobOffset));
 		// 搏斗/近岸阶段钩 Actor 已跟随鱼移动：不再单独画钩球（避免与鱼球重叠），线也直接画到鱼。
 		if (!Fish)
 		{
-			const FVector HookDrawLocation = Hook->GetActorLocation() + FVector(0.0, 0.0, BobOffset);
+			const FVector HookDrawLocation = Hook->GetPresentationVisualWorldLocation();
 			if (bFullDetail) DrawDebugSphere(World, HookDrawLocation, 14.0f, 10, HookColor, false, -1.0f, 0, 2.0f);
 			if (Rod) DrawDebugLine(World, RodTip, HookDrawLocation, FColor::Silver, false, -1.0f, 0, 1.5f);
 		}
@@ -311,7 +301,14 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 	switch (Snapshot.Phase)
 	{
 	case ECatFishingPhase::Waiting:
-		PushStatus(2, FColor::Silver, TEXT("等待咬钩…（Q 可补窝 / X 收竿零损失）"));
+		if (Hook && Hook->GetPresentationState().BobberMode == ECatFishingBobberPresentationMode::BiteWarning)
+		{
+			PushStatus(2, FColor::Yellow, TEXT("浮漂快速抖动…等它下沉再提竿"));
+		}
+		else
+		{
+			PushStatus(2, FColor::Silver, TEXT("等待咬钩…（Q 可补窝 / X 收竿零损失）"));
+		}
 		break;
 	case ECatFishingPhase::Probe:
 		PushStatus(2, FColor::Yellow, TEXT("鱼在试探…别急着提竿"));
@@ -325,13 +322,14 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 		DrawScoopTargetCircle(Controller, Fish);
 		const bool bStruggling = Snapshot.FishMotionIntent == ECatFishMotionIntent::StrugglingOutward;
 		PushStatus(2, bStruggling ? FColor::Red : FColor::Green, bStruggling
-			? TEXT("鱼在发力！按住右键放线回体力！")
+			? TEXT("鱼在发力！按住右键松开线杯，让鱼自由带线！")
 			: TEXT("鱼累了！按住左键拖回来！"));
 		const double LineLength = Fish ? Fish->GetPresentationState().CurrentLineLength : 0.0;
-		PushStatus(3, FColor::White, FString::Printf(TEXT("猫体力 %.0f  鱼体力 %.0f%%  竿耐久 %.0f  线长 %.0f  %s%s%s"),
+		// 保留一位百分比小数：旧的 %.0f 会把不足 0.5% 的权威剩余体力显示为 0%，误导为侧翻收近阶段失效。
+		PushStatus(3, FColor::White, FString::Printf(TEXT("猫体力 %.0f  鱼体力 %.1f%%  线耐久 %.0f  线长 %.0f  %s%s%s"),
 			CatStamina, Snapshot.NormalizedFishStamina * 100.0, Snapshot.RodDurabilityRemaining, LineLength,
 			Snapshot.bReeling ? TEXT("[拖]") : TEXT(""),
-			Snapshot.bSlacking ? TEXT("[放线]") : TEXT(""),
+			Snapshot.bSlacking ? TEXT("[松线]") : TEXT(""),
 			Snapshot.bPerfectHook ? TEXT(" ★完美中鱼") : TEXT("")));
 		break;
 	}
@@ -340,6 +338,12 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 		// 半径来自鱼定义、颜色来自权威判定函数，绿=现在按 F 抄得到，红=够不着。
 		DrawScoopTargetCircle(Controller, Fish);
 		PushStatus(2, FColor::Emerald, TEXT("鱼到近岸了！快抄！（按 F）"));
+		break;
+	case ECatFishingPhase::ExhaustedReel:
+		DrawScoopTargetCircle(Controller, Fish);
+		PushStatus(2, FColor::Emerald, Snapshot.bReeling
+			? TEXT("鱼已力竭：正在收向竿尖水面投影（也可按 F 抄）")
+			: TEXT("鱼已力竭：按住左键收近（也可按 F 抄）"));
 		break;
 	default:
 		break;

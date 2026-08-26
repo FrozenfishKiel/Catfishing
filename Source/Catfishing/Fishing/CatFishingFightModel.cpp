@@ -11,7 +11,7 @@ namespace CatFishingFightModel
 		constexpr double InwardPullCatStaminaPerFishStrength = 0.15;
 		/** 4.3 向外游+松：猫体力每秒 +1.5。 */
 		constexpr double OutwardReleaseCatStaminaRegenPerSecond = 1.5;
-		/** 4.4 消耗战：竿耐久每秒 -= 鱼力量 × 0.1。 */
+		/** 消耗战：本场鱼线耐久每秒 -= 鱼力量 × 0.1。 */
 		constexpr double StalemateRodWearPerFishStrength = 0.1;
 		/** 4.4 消耗战：鱼体力每秒 -= 猫力 × 0.08。 */
 		constexpr double StalemateFishStaminaPerCatStrength = 0.08;
@@ -71,7 +71,7 @@ namespace CatFishingFightModel
 	{
 		if (RodStrength <= FMath::Min(CatStrength, FishStrength))
 		{
-			return ECatFishingPullVerdict::RodBroken;
+			return ECatFishingPullVerdict::LineBroken;
 		}
 		if (FishStrength >= CatStrength)
 		{
@@ -154,11 +154,11 @@ namespace CatFishingFightModel
 	// 1. 已有终局或 dt 非法直接返回；段已到期先 roll 新段（方向、段长、可能的垂死挣扎）。
 	// 2. 推进挣扎计时：前摇期不加成，生效期鱼力量 ×1.5。
 	// 3. 按"鱼状态 × 猫操作"分支：向内+拖 D/L 各 -3×系数、猫体力 -= 鱼力×0.15；向内+松/不动 D -1×系数；
-	//    向外+拖 查判定表：①②③三个瞬时出口直接写终局（③顺带 D=0），④僵持按 4.4 逐秒扣竿耐久/鱼体力/猫体力；
-	//    向外+松/不动：L 未到顶时 D/L 各 +2.5×系数、猫体力 +1.5，L 到顶时放线无效、什么都不变（工程暂定，见决策记录 D-17）。
+	//    向外+拖查判定表：①②③三个瞬时出口直接写终局（③顺带 D=0），④僵持逐秒扣鱼线耐久/鱼体力/猫体力；
+	//    向外+松：L 未到顶时鱼带动 D/L 各 +2.5×系数、猫体力 +1.5，L 到顶后无法继续带线（旧规格模型，见 D-17）。
 	// 4. 夹取：D ≥ 0，L ≤ L_max 且 L ≥ D；段剩余时间扣掉 dt。
-	// 5. 终局优先级（飞书 4.4）：鱼体力 ≤0 翻肚（D=0）→ 猫体力 ≤0 拖下水 → 竿耐久 ≤0 断竿；都没有时 D ≤ 近岸距离记为遛到岸边。
-	//    猫体力和竿耐久用"当前值 + 本次增量"判断，所以模型不需要持有它们的真身。
+	// 5. 终局优先级：鱼体力 ≤0 翻肚（D=0）→ 猫体力 ≤0 拖下水 → 鱼线耐久 ≤0 断线；都没有时 D ≤ 近岸距离记为遛到岸边。
+	//    猫体力和鱼线耐久用"当前值 + 本次增量"判断，所以模型不需要持有它们的真身。
 	void Step(FCatFishingFightState& State, const FCatFishingFightParams& Params, const ECatFishingFightIntent Intent,
 		const double DeltaSeconds, const FCatFishingFightResources& Resources, FRandomStream& Random,
 		FCatFishingFightStepDelta& OutDelta)
@@ -204,8 +204,9 @@ namespace CatFishingFightModel
 		{
 			switch (JudgeOutwardPull(Params.CatStrength, FishStrength, Params.RodStrength))
 			{
-			case ECatFishingPullVerdict::RodBroken:
-				State.Outcome = ECatFishingFightOutcome::RodBroken;
+			case ECatFishingPullVerdict::RodBroken: // 旧序列化值按新语义收敛
+			case ECatFishingPullVerdict::LineBroken:
+				State.Outcome = ECatFishingFightOutcome::LineBroken;
 				return;
 			case ECatFishingPullVerdict::CatDraggedIn:
 				State.Outcome = ECatFishingFightOutcome::CatDraggedIn;
@@ -247,7 +248,7 @@ namespace CatFishingFightModel
 		}
 		else if (Resources.RodDurability - OutDelta.RodDurabilityCost <= 0.0)
 		{
-			State.Outcome = ECatFishingFightOutcome::RodBroken;
+			State.Outcome = ECatFishingFightOutcome::LineBroken;
 		}
 		else if (State.DistanceMeters <= Params.NearShoreDistanceMeters)
 		{

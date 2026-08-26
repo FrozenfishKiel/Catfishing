@@ -16,6 +16,24 @@
 #include "Logging/CatLog.h"
 #include "GameFramework/PlayerState.h"
 
+bool FCatFishingCooldownGate::TryConsume(const double NowSeconds, const double DurationSeconds,
+	double& OutRemainingSeconds)
+{
+	OutRemainingSeconds = 0.0;
+	if (!FMath::IsFinite(NowSeconds) || NowSeconds < 0.0
+		|| !FMath::IsFinite(DurationSeconds) || DurationSeconds <= 0.0)
+	{
+		return false;
+	}
+	if (NextAllowedServerTime > NowSeconds)
+	{
+		OutRemainingSeconds = NextAllowedServerTime - NowSeconds;
+		return false;
+	}
+	NextAllowedServerTime = NowSeconds + DurationSeconds;
+	return true;
+}
+
 UCatFishingCommandComponent::UCatFishingCommandComponent()
 {
 	SetIsReplicatedByDefault(true); // PresentationState 之外，这个组件自身也要在网络上存在（承载 RPC）
@@ -213,12 +231,13 @@ void UCatFishingCommandComponent::ResetTransientCommandState()
 	BeginCastResultOrder.Reset();
 	PrimaryActivationCorrelationId.Invalidate();
 	LocalChumChargeStartTime = -1.0; // 关卡/会话切换时收起残留的蓄力预览线。
+	ScoopCooldownGate.Reset(); // 世界时间会在旅行时重建，旧世界的绝对时间戳不能带入新地图。
 	NextInputSequence = 0;
 }
 
 FCatFishingInputEdge UCatFishingCommandComponent::MakeDiscreteEdge()
 {
-	// 每条离散命令都配一个新 Guid（去重/幂等用）和自增的输入序号（用于时序判断，如收线/放线的先后）
+	// 每条离散命令都配一个新 Guid（去重/幂等用）和自增的输入序号（用于时序判断，如收线/松线的先后）
 	FCatFishingInputEdge Edge;
 	Edge.RequestId = FGuid::NewGuid();
 	Edge.InputSequence = ++NextInputSequence;
@@ -227,7 +246,7 @@ FCatFishingInputEdge UCatFishingCommandComponent::MakeDiscreteEdge()
 
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitRodInteract()
 {
-	// E 键交互：具体是插竿/操作/离开由服务器根据当前竿状态三态判定，见 HandleAbilityCommandFromAuthority
+	// R 对应的鱼竿 Ability：具体是插竿/操作/离开由服务器根据当前竿状态三态判定，见 HandleAbilityCommandFromAuthority。
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
 	DispatchAbilityCommand(ECatFishingCommandType::OperateRod, Edge);
 	return Edge;
@@ -351,11 +370,40 @@ void UCatFishingCommandComponent::BroadcastCosmeticEventFromAuthority(const FGam
 void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFishingCommandType CommandType,
 	const FCatFishingInputEdge& Edge)
 {
-	// 唯一的服务器权威命令处理函数：所有钓鱼相关离散输入（抛竿/打窝/收放线/抄鱼/取消等）最终都汇聚到这里
+	// 唯一的服务器权威命令处理函数：所有钓鱼相关离散输入（抛竿/打窝/收线/松线/抄鱼/取消等）最终都汇聚到这里
 	APlayerController* Controller = Cast<APlayerController>(GetOwner());
 	if (!Controller || !Controller->HasAuthority() || !Edge.RequestId.IsValid())
 	{
 		return;
+	}
+	// 默认先构造一个“未提交”的失败结果；只有走到具体分支成功时才会改写 bCommitted。
+	FCatFishingCommandResult Result;
+	Result.CommandType = CommandType;
+	Result.RequestId = Edge.RequestId;
+	Result.bCommitted = false;
+	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
+
+	// 服务器是抄网冷却唯一裁决者：GAS 冷却提供正常客户端的预测手感，这层仍要挡住绕过 Ability 直发 RPC 的请求。
+	// 第一次合法到达命令入口的挥网尝试立即消费冷却；没鱼/没对准也算挥空，只有系统依赖或配置损坏不消费。
+	if (CommandType == ECatFishingCommandType::RequestScoop)
+	{
+		double CooldownSeconds = 0.0;
+		if (!Fishing || !GetDefault<UCatFishingSettings>()->TryGetScoopCooldown(CooldownSeconds))
+		{
+			Result.Error = ECatFishingCommandError::DependencyUnavailable;
+			DeliverResultFromAuthority(Result);
+			return;
+		}
+		double RemainingSeconds = 0.0;
+		if (!ScoopCooldownGate.TryConsume(GetWorld()->GetTimeSeconds(), CooldownSeconds, RemainingSeconds))
+		{
+			Result.Error = ECatFishingCommandError::CooldownActive;
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=scoop_cooldown_rejected Request=%s RemainingSeconds=%.3f"),
+				*Edge.RequestId.ToString(EGuidFormats::DigitsWithHyphens), RemainingSeconds);
+			DeliverResultFromAuthority(Result);
+			return;
+		}
 	}
 	// 向其他客户端广播挥网动作——必须在任何裁决之前，因为抄网"失败时不留任何权威痕迹"：
 	// 挥空了服务器上什么都没变，表现层没有可读的复制事实，而发起者自己看到的前摇是 Ability 的
@@ -367,20 +415,14 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	{
 		BroadcastCosmeticEventFromAuthority(CatFishingAbilityTags::Cosmetic_Fishing_ScoopSwing);
 	}
-	// 默认先构造一个“未提交”的失败结果；只有走到具体分支成功时才会改写 bCommitted
-	FCatFishingCommandResult Result;
-	Result.CommandType = CommandType;
-	Result.RequestId = Edge.RequestId;
-	Result.bCommitted = false;
-	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
 	if (Fishing)
 	{
-		// E 键三态（服务器按当前事实分派，客户端不需要知道自己处于哪一态；多人：竿不限竿主）：
+		// R 的鱼竿三态（服务器按当前事实分派，客户端不需要知道自己处于哪一态；多人：竿不限竿主）：
 		//   正在操作某根竿（自己的或别人的） → LeaveRod（离开竿位，自由活动）
-		//   附近有无人操作的竿（不限竿主）   → OperateRod（吸附到站位；竿上若绑着等口中的会话则自动接力成为新钓手）
-		//   附近没有可接管的竿               → PlaceRod（在脚下放自己的竿；已有部署竿会被服务器拒绝）
-		// E 在会话期间同样可用（多人接力钓别人竿）：
-		//   等待/试探/真咬阶段离开 → 会话照常走计时，竿与钩保持原状，任何人再 E 即可接手继续；
+		//   附近有空操作槽的竿（不限竿主）   → OperateRod（首位右主位、次位左辅助位；空主位可接力等口会话）
+		//   附近没有可加入的竿               → PlaceRod（在脚下放自己的竿；已有部署竿会被服务器拒绝）
+		// R 在会话期间同样可用（多人接力钓别人竿）：
+		//   等待/试探/真咬阶段离开 → 会话照常走计时，竿与钩保持原状，任何人再 R 即可接手继续；
 		//   搏斗/近岸阶段离开     → 视为弃战（鱼逃走），但竿保持部署不收回。
 		if (CommandType == ECatFishingCommandType::OperateRod)
 		{
@@ -393,7 +435,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				FCatFishingSessionSnapshot ActiveSnapshot;
 				if (Fishing->TryGetActiveSessionForController(Controller, ActiveSessionId, ActiveSnapshot)
 					&& (ActiveSnapshot.Phase == ECatFishingPhase::HookedFight
-						|| ActiveSnapshot.Phase == ECatFishingPhase::NearShore))
+						|| ActiveSnapshot.Phase == ECatFishingPhase::NearShore
+						|| ActiveSnapshot.Phase == ECatFishingPhase::ExhaustedReel))
 				{
 					if (ACatFishingSession* ActiveSession = Fishing->FindSession(ActiveSessionId))
 					{
@@ -409,8 +452,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				DeliverResultFromAuthority(Fishing->LeaveRod(Controller, LeaveCommand));
 				return;
 			}
-			// 分支二：附近有可接管的竿（无人操作、未损坏，不限竿主）→ 吸附上去操作；
-			// 该竿若绑着等口中的会话（原钓手离开），Fishing->OperateRod 内部自动做钓手接力转移
+			// 分支二：附近有空操作槽的竿（未损坏、不限竿主）→ 按顺序吸附到右主位/左辅助位；
+			// 只有主位为空时，Fishing->OperateRod 才会把等口中的会话接力转移给进入者。
 			if (ACatFishingRodActor* NearbyRod = Character
 				? Fishing->FindNearestOperableRod(Character->GetActorLocation(), 250.0) : nullptr)
 			{
@@ -558,7 +601,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				{
 					// 按下时已有会话 → 这次按住不是瞄准；即使会话随后终止，松开也不得触发重抛。
 					ServerAimingCorrelationId.Invalidate();
-					if (Snapshot.Phase == ECatFishingPhase::HookedFight)
+					if (Snapshot.Phase == ECatFishingPhase::HookedFight
+						|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel)
 					{
 						// 搏斗阶段：左键按下语义变成“开始收线”，InputSequence 用于时序仲裁
 						Result.bCommitted = Session->SetReelingFromAuthority(Edge.InputSequence, true);
@@ -577,7 +621,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				}
 				if (CommandType == ECatFishingCommandType::PrimaryReleased)
 				{
-					if (Snapshot.Phase == ECatFishingPhase::HookedFight)
+					if (Snapshot.Phase == ECatFishingPhase::HookedFight
+						|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel)
 					{
 						// 搏斗阶段松开左键 = 停止收线
 						Result.bCommitted = Session->SetReelingFromAuthority(Edge.InputSequence, false);
@@ -596,7 +641,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				if (CommandType == ECatFishingCommandType::SlackPressed
 					|| CommandType == ECatFishingCommandType::SlackReleased)
 				{
-					// 右键放线只在搏斗阶段有意义；其他阶段视为无害 no-op，避免 UI 误报。
+					// 右键松开线杯只在搏斗阶段有意义；其他阶段视为无害 no-op，避免 UI 误报。
 					if (Snapshot.Phase == ECatFishingPhase::HookedFight)
 					{
 						// 按下/松开都转成同一个权威写口，用命令类型本身当作“是否按下”的布尔值
@@ -644,7 +689,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	DeliverResultFromAuthority(Result);
 }
 
-// 服务器抛竿流程：要求本人已部署且正在操作的竿；视线射线∩水面得到候选落点（BeginCast 内部还会再校验/修正、限射程与视线）；
+
+// 服务器抛竿流程：要求本人处于某根竿的主操作位（鱼竿可以属于别人）；视线射线∩水面得到候选落点；
 // RodActorId/Revision、Equipment Revision、WaterRegion Handle 全部由服务器事实填充，客户端不传任何载荷。
 void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController* Controller, const FGuid& RequestId)
 {
@@ -654,7 +700,8 @@ void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController
 	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
 	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
 	// 竿必须已部署，装备组件用于读取当前鱼饵/浮标等的 Equipment Revision 供后续冲突检测
-	ACatFishingRodActor* Rod = Fishing && Controller ? Fishing->FindDeployedRod(Controller->PlayerState) : nullptr;
+	// 必须按“正在操作”而不是“自己部署”解析；否则接管别人的鱼竿后永远找不到抛竿目标。
+	ACatFishingRodActor* Rod = Fishing && Controller ? Fishing->FindRodOperatedBy(Controller->PlayerState) : nullptr;
 	UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
 	if (!Fishing || !Character || !Rod || !Equipment)
 	{
@@ -664,7 +711,7 @@ void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController
 		return;
 	}
 	const FCatFishingRodPresentationState& RodState = Rod->GetPresentationState();
-	if (RodState.OperatorPlayerState != Controller->PlayerState)
+	if (!Rod->IsPrimaryOperator(Controller->PlayerState))
 	{
 		// 没在操作竿位就松开左键：不是抛竿意图，静默忽略（不投递回执，避免每次点击都刷失败日志）。
 		return;
@@ -782,6 +829,20 @@ void UCatFishingCommandComponent::ForwardLegacyScoop(const FGuid FishingSessionI
 	APlayerController* Controller = Cast<APlayerController>(GetOwner());
 	if (!Controller || !Controller->HasAuthority())
 	{
+		return;
+	}
+	double CooldownSeconds = 0.0;
+	double RemainingSeconds = 0.0;
+	if (!GetDefault<UCatFishingSettings>()->TryGetScoopCooldown(CooldownSeconds)
+		|| !ScoopCooldownGate.TryConsume(GetWorld()->GetTimeSeconds(), CooldownSeconds, RemainingSeconds))
+	{
+		FCatFishingCommandResult Rejected;
+		Rejected.CommandType = ECatFishingCommandType::RequestScoop;
+		Rejected.RequestId = Command.Context.RequestId;
+		Rejected.FishingSessionId = FishingSessionId;
+		Rejected.Error = CooldownSeconds > 0.0
+			? ECatFishingCommandError::CooldownActive : ECatFishingCommandError::DependencyUnavailable;
+		DeliverResultFromAuthority(Rejected);
 		return;
 	}
 	// 清掉调用方可能带来的客户端身份字段，防止伪造 StableNetId
