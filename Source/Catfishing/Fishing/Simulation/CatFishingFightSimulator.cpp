@@ -170,6 +170,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		{
 			// 判定①：钓组承载能力不足 → 鱼线瞬间断裂；鱼竿本体不损坏。
 			Instant = ECatFightStepOutcome::LineBroken;
+			Result.LineBreakCause = ECatFightLineBreakCause::StrengthOverload;
 		}
 		else if (Config.FishStrength >= Config.CatStrength)
 		{
@@ -302,6 +303,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	else if (Result.AbsoluteRodWear >= Config.RodDurability)
 	{
 		// 本场累计负载达到鱼线耐久上限：断线。它只结束本次会话，不写坏装备或场景鱼竿。
+		Result.LineBreakCause = ECatFightLineBreakCause::DurabilityDepleted;
 		Result.Outcome = ECatFightStepOutcome::LineBroken;
 	}
 	else if (UnconstrainedDistance1 > Config.MaximumLineLengthCentimeters + Config.EscapeSlackCentimeters)

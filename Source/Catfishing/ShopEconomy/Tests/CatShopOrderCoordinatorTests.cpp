@@ -164,6 +164,7 @@ namespace CatShopOrderCoordinatorTest
 					Definition->MaximumLineLengthCentimeters = 2000.0;
 					Definition->BaseDurabilityWearPerSecond = 0.1;
 					Definition->HighTensionWearMultiplier = 1.0;
+					Definition->FunctionalRouteId = TEXT("CoordinatorPersonalRodRoute");
 					EquipmentSettings->Definitions = { Definition };
 				}
 			}

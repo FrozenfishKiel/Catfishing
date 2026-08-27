@@ -52,11 +52,13 @@ public:
 
 	const FCatFishPickupPresentationState& GetPresentationState() const { return PresentationState; }
 
+	virtual bool CanInteract_Implementation(AController* RequestingController) const override;
 	virtual void BeginLocalFocus_Implementation() override;
 	virtual void EndLocalFocus_Implementation() override;
 	virtual FText GetInteractionPrompt_Implementation() const override;
-	/** 权威拾取入口；正式独立鱼护对象未接入前只完成身份/距离检查并返回依赖缺失，不写 Character 旧鱼护。 */
-	virtual void RequestInteractionFromAuthority_Implementation(AController* RequestingController, FGuid RequestId) override;
+	virtual double GetInteractionRadius_Implementation() const override;
+	/** 正式独立鱼护尚未选定前只完成身份/距离校验并返回依赖缺失，不写 Character 背包或旧个人鱼护。 */
+	virtual bool Interact_Implementation(AController* RequestingController, FGuid RequestId) override;
 
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category="Catfishing|Items")
 	void BP_OnPickupPresentationChanged(const FCatFishPickupPresentationState& Previous,

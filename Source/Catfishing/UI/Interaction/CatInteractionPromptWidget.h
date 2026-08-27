@@ -6,7 +6,7 @@
 
 class UTextBlock;
 
-/** 交互提示的只读显示投影；它只描述当前靠近对象和确认键，不直接打开商店、鱼缸或祭坛。 */
+/** 交互提示的只读显示投影；它只描述当前准星接口目标和确认键，不直接打开商店、鱼缸或祭坛。 */
 USTRUCT(BlueprintType)
 struct FCatInteractionPromptViewState
 {
@@ -29,7 +29,7 @@ struct FCatInteractionPromptViewState
 	FText PromptText;
 };
 
-/** 交互提示 WBP 基类；它只负责“靠近某对象可按键”的提示，不直接拥有任何对象 UI。 */
+/** 交互提示 WBP 基类；它只显示准星命中的 ICatInteractable 提示，不直接拥有任何对象 UI。 */
 UCLASS(BlueprintType, Blueprintable)
 class CATFISHING_API UCatInteractionPromptWidget : public UUserWidget
 {

@@ -4,12 +4,9 @@
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
-#include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "Logging/CatLog.h"
 #include "Online/CatOnlineSubsystem.h"
-#include "Interaction/CatInteractionTargetingComponent.h"
-#include "UI/CatInteractionWidget.h"
 #include "UI/CatTravelWidget.h"
 #include "UI/CatUISettings.h"
 #include "UI/HUD/CatHUDModel.h"
@@ -39,10 +36,9 @@ void UCatLocalPlayerUISubsystem::Initialize(FSubsystemCollectionBase& Collection
 	RefreshOnlineWidgetForCurrentController();
 }
 
-// 销毁流程：先释放拾取提示、HUD、背包和交互提示模块，让输入和 View 意图不再触达旧 Controller；再解绑 Controller、移除 Frontend View 与 Online 快照订阅。
+// 销毁流程：先释放 HUD、背包和唯一交互提示模块；再解绑 Controller、移除 Frontend View 与 Online 快照订阅。
 void UCatLocalPlayerUISubsystem::Deinitialize()
 {
-	DetachInteractionView();
 	DetachPlayerLakeUI();
 	UnbindController();
 	RemoveOnlineWidget();
@@ -63,7 +59,6 @@ void UCatLocalPlayerUISubsystem::Deinitialize()
 // Controller 替换流程：旧 Controller 仍可访问时先拆掉本地玩家 UI 和 Frontend UI；父类切换后再只针对 NewController 装配当前 Pawn。
 void UCatLocalPlayerUISubsystem::PlayerControllerChanged(APlayerController* NewController)
 {
-	DetachInteractionView();
 	DetachPlayerLakeUI();
 	UnbindController();
 	RemoveOnlineWidget();
@@ -236,7 +231,6 @@ void UCatLocalPlayerUISubsystem::RefreshPlayerLakeUIForController(APlayerControl
 		ULocalPlayer* LocalPlayer = GetLocalPlayer();
 		if (LocalPlayer && LocalPlayer->GetPlayerController(GetWorld()) == Controller)
 		{
-			DetachInteractionView();
 			DetachPlayerLakeUI();
 			UnbindController();
 			BindController(Controller);
@@ -244,21 +238,6 @@ void UCatLocalPlayerUISubsystem::RefreshPlayerLakeUIForController(APlayerControl
 		return;
 	}
 	HandleControllerPawnChanged(Controller->GetPawn());
-}
-
-// Native 交互接管流程：
-// 1. 只接受当前 LocalPlayer 绑定的本地 Controller，避免服务器远端 Controller 借 UI 子系统吞掉玩法输入。
-// 2. 交给 Interaction PageController 判断是否存在通用 UI 目标或本帧已消费记录。
-// 3. 返回 true 时 PlayerController 不再执行旧准星交互，避免同一个 IA_Interact 同时打开商店和触发玩法动作。
-bool UCatLocalPlayerUISubsystem::TryHandleNativeInteractionInput(APlayerController* Controller)
-{
-	if (!Controller || Controller != BoundPlayerController.Get() || !Controller->IsLocalController())
-	{
-		return false;
-	}
-	return InteractionPageController
-		? InteractionPageController->TryHandleNativeInteractionInput()
-		: false;
 }
 
 // Controller 绑定流程：保存弱引用并立即消费当前 Pawn，覆盖绑定前已经完成占有或客户端 ClientRestart 的冷启动情况。
@@ -290,16 +269,13 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 	{
 		InventoryPageController->RefreshModel();
 		InventoryPageController->RefreshInputBinding();
-		InteractionPageController->RefreshInputBinding();
 		return;
 	}
-	DetachInteractionView();
 	DetachPlayerLakeUI();
 	if (!Character)
 	{
 		return;
 	}
-	AttachInteractionView(BoundPlayerController.Get(), Character);
 	AttachPlayerLakeUI(Character);
 	if (HUDWidget && InventoryPageController && InteractionPageController)
 	{
@@ -307,59 +283,11 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 	}
 }
 
-void UCatLocalPlayerUISubsystem::AttachInteractionView(APlayerController* Controller, ACatCharacter* Character)
-{
-	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
-	ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(Controller);
-	UCatInteractionTargetingComponent* Targeting = CatController
-		? CatController->GetInteractionTargetingComponent() : nullptr;
-	if (!Settings || !Settings->IsInteractionViewEnabled() || !Character || !CatController || !Targeting
-		|| Character->GetWorld() != GetWorld() || CatController->GetPawn() != Character)
-	{
-		return;
-	}
-
-	InteractionWidget = CreateWidget<UCatInteractionWidget>(CatController, UCatInteractionWidget::StaticClass());
-	if (!InteractionWidget)
-	{
-		return;
-	}
-	BoundInteractionTargeting = Targeting;
-	InteractionTargetChangedHandle = Targeting->OnTargetChanged.AddUObject(
-		this, &ThisClass::HandleInteractionTargetChanged);
-	InteractionWidget->AddToViewport(10);
-	InteractionWidget->RenderTarget(Targeting->GetCurrentTarget());
-}
-
-void UCatLocalPlayerUISubsystem::DetachInteractionView()
-{
-	if (UCatInteractionTargetingComponent* Targeting = BoundInteractionTargeting.Get())
-	{
-		Targeting->OnTargetChanged.Remove(InteractionTargetChangedHandle);
-	}
-	InteractionTargetChangedHandle.Reset();
-	BoundInteractionTargeting.Reset();
-	if (InteractionWidget)
-	{
-		InteractionWidget->RemoveFromParent();
-		InteractionWidget = nullptr;
-	}
-}
-
-void UCatLocalPlayerUISubsystem::HandleInteractionTargetChanged(AActor* PreviousTarget, AActor* CurrentTarget)
-{
-	(void)PreviousTarget;
-	if (InteractionWidget)
-	{
-		InteractionWidget->RenderTarget(CurrentTarget);
-	}
-}
-
 // 本地玩家 UI 装配流程：
 // 1. 验证本地设置、当前 Controller/Pawn 和 World；核心 WBP 类缺失或无效时直接 fail-closed，不创建原生白盒替身。
 // 2. 创建 HUD Model/View 并入视口；HUD 只展示猫状态和钓鱼反馈。
 // 3. 创建 Inventory Model/PageController/View，但背包 View 不预先入视口，只通过既有 InputContext 的 Action 打开。
-// 4. 创建 Interaction 提示 View 和控制器；控制器只扫描通用交互目标，商店仍由世界交互对象拥有。
+// 4. 创建 Interaction 提示 View 和控制器；控制器只订阅 PlayerController 的唯一准星交互目标。
 void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 {
 	const UCatUISettings* Settings = GetDefault<UCatUISettings>();

@@ -106,12 +106,14 @@ namespace CatEquipmentConsumableUseTest
 				FGuid::NewGuid(), Component->GetSnapshot().Revision, FloatId);
 			const FCatDomainCommandResult Configure = Component->ConfigureLoadoutFromAuthority(
 				FGuid::NewGuid(), Component->GetSnapshot().Revision, RodId, BaitId, FloatId);
+			const bool bLoadoutReady = Configure.bCommitted
+				|| Configure.Error == ECatDomainCommandError::AlreadyResolved;
 			const FCatDomainCommandResult GrantUseItem = Component->GrantInventoryQuantityFromAuthority(
 				FGuid::NewGuid(), Component->GetSnapshot().Revision, ConsumableId, Quantity);
 			Test.TestTrue(TEXT("fixture inventory prepared"),
-				GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && Configure.bCommitted
+				GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && bLoadoutReady
 				&& GrantUseItem.bCommitted);
-			return GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && Configure.bCommitted
+			return GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && bLoadoutReady
 				&& GrantUseItem.bCommitted;
 		}
 

@@ -294,7 +294,7 @@ namespace CatUIModuleWidgetAsset
 // 1. 创建或刷新 IA_Interact，并把 E 键写入项目既有 IMC_InputContext，不生成第二套 IMC。
 // 2. 分别创建 HUD、Inventory、InventorySlot、Shop、Interaction、Collection 六个正式 WBP。
 // 3. 背包主界面只放 WrapBox 和动作按钮，格子 WBP 是独立 UserWidget 且不创建 Button 根。
-// 4. 商店 WBP 只由 ShopInteractionComponent 后续打开；本测试额外保存可放置的 ShopEconomy Kiosk，但不把商店挂到 LocalPlayer。
+// 4. 商店 WBP 只由实现 ICatInteractable 的 Kiosk Actor 后续打开；本测试保存可放置的 ShopEconomy Kiosk，但不把商店挂到 LocalPlayer。
 // 5. 所有控件命名匹配新 C++ View 的 BindWidgetOptional 字段，让蓝图无需复杂绑定也能显示中文文本。
 bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 {

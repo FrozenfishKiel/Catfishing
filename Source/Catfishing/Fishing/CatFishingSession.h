@@ -164,6 +164,8 @@ private:
 	void ScheduleTerminalDestroy();
 	bool BeginExhaustedReelFromAuthority();
 	void HandleExhaustedReelStep();
+	/** 力竭回收阶段统一同步鱼嘴 Hook 与绷紧鱼线表现；避免位置移动而客户端仍沿用搏斗末帧的旧 L_paid/Slack。 */
+	bool PublishExhaustedReelLineFromAuthority(const FVector& FishWorldLocation);
 	bool TryResolveExhaustedReelTarget(FVector& OutTarget) const;
 	bool SpawnExhaustedFishPickupFromAuthority(const FVector& SurfaceLocation);
 	bool CommitLandingEquipmentFromAuthority();

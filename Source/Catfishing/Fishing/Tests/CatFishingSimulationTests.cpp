@@ -145,6 +145,8 @@ bool FCatFishingFightSimulatorOutwardJudgmentTest::RunTest(const FString& Parame
 		Config.RodStrength = 40.0;
 		const FCatFightStepResult Step = Run(Config, Pull);
 		TestEqual(TEXT("line at equality snaps"), static_cast<int32>(Step.Outcome), static_cast<int32>(ECatFightStepOutcome::LineBroken));
+		TestEqual(TEXT("equality reports strength overload"), static_cast<int32>(Step.LineBreakCause),
+			static_cast<int32>(ECatFightLineBreakCause::StrengthOverload));
 		TestFalse(TEXT("snap is not stalemate"), Step.bStalemate);
 	}
 	// ② 拖下水：鱼力 ≥ 猫力（竿够强）。
@@ -251,7 +253,10 @@ bool FCatFishingFightSimulatorPriorityTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("cat exhausted second"), static_cast<int32>(Run(Config, State).Outcome), static_cast<int32>(ECatFightStepOutcome::CatStaminaExhausted));
 
 	State.CatStamina = 100.0;
-	TestEqual(TEXT("line wear third"), static_cast<int32>(Run(Config, State).Outcome), static_cast<int32>(ECatFightStepOutcome::LineBroken));
+	const FCatFightStepResult LineWear = Run(Config, State);
+	TestEqual(TEXT("line wear third"), static_cast<int32>(LineWear.Outcome), static_cast<int32>(ECatFightStepOutcome::LineBroken));
+	TestEqual(TEXT("line wear reports durability depletion"), static_cast<int32>(LineWear.LineBreakCause),
+		static_cast<int32>(ECatFightLineBreakCause::DurabilityDepleted));
 	return !HasAnyErrors();
 }
 

@@ -54,7 +54,6 @@
 #include "Social/CatSocialService.h"
 #include "TimerManager.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
-#include "UI/Interaction/CatInteractionTargetComponent.h"
 
 namespace
 {
@@ -67,14 +66,16 @@ namespace
 		return UniqueId.IsValid() && UniqueId->GetType() == CatPieNoSessionUniqueIdType;
 	}
 
-	// 容器触达半径流程：外部容器优先复用宿主交互组件的半径，未接通用交互组件时才回退 Camp 配置。
+	// 容器触达半径流程：外部容器优先复用宿主交互接口的半径，未实现或未声明时才回退 Camp 配置。
 	double ResolveContainerReachRadiusCentimeters(const AActor* Host, const UCatCampSettings* Settings)
 	{
-		if (const UCatInteractionTargetComponent* InteractionTarget =
-			Host ? Host->FindComponentByClass<UCatInteractionTargetComponent>() : nullptr)
+		if (Host && Host->GetClass()->ImplementsInterface(UCatInteractable::StaticClass()))
 		{
-			const double Radius = InteractionTarget->GetInteractionRadiusCentimeters();
-			return FMath::IsFinite(Radius) ? Radius : 0.0;
+			const double Radius = ICatInteractable::Execute_GetInteractionRadius(const_cast<AActor*>(Host));
+			if (FMath::IsFinite(Radius) && Radius > 0.0)
+			{
+				return Radius;
+			}
 		}
 		return Settings && Settings->IsRuntimeReady() ? Settings->InteractionRadiusCentimeters : 0.0;
 	}
@@ -1703,19 +1704,6 @@ void ACatfishingPlayerController::NotifyLocalPlayerUISubsystemPawnChanged()
 	}
 }
 
-// 本地 UI 交互优先流程：旧 AbilityInputConfig 仍会把 IA_Interact 送进 Native 输入层；这里先询问 LocalPlayer UI 是否已经聚焦商店、鱼缸等通用目标，只有没有 UI 目标时才让旧准星交互继续执行。
-bool ACatfishingPlayerController::TryHandleLocalPlayerUIInteractionInput()
-{
-	if (!IsLocalController())
-	{
-		return false;
-	}
-	ULocalPlayer* LocalPlayer = GetLocalPlayer();
-	UCatLocalPlayerUISubsystem* UISubsystem = LocalPlayer
-		? LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
-	return UISubsystem && UISubsystem->TryHandleNativeInteractionInput(this);
-}
-
 void ACatfishingPlayerController::PostProcessInput(const float DeltaTime, const bool bGamePaused)
 {
 	Super::PostProcessInput(DeltaTime, bGamePaused);
@@ -2496,11 +2484,12 @@ void ACatfishingPlayerController::ServerRequestInteraction_Implementation(AActor
 {
 	if (!CanForwardGameplayCommand() || !RequestId.IsValid() || !IsValid(Target)
 		|| Target->GetWorld() != GetWorld()
-		|| !Target->GetClass()->ImplementsInterface(UCatInteractable::StaticClass()))
+		|| !Target->GetClass()->ImplementsInterface(UCatInteractable::StaticClass())
+		|| !ICatInteractable::Execute_CanInteract(Target, this))
 	{
 		return;
 	}
-	ICatInteractable::Execute_RequestInteractionFromAuthority(Target, this, RequestId);
+	ICatInteractable::Execute_Interact(Target, this, RequestId);
 }
 
 void ACatfishingPlayerController::ServerSubmitShopPurchase_Implementation(const FName EntryId,
@@ -3174,15 +3163,11 @@ void ACatfishingPlayerController::AbilityInputTagReleased(const FGameplayTag Inp
 
 // Native 输入分流流程：
 // 1. 只处理项目约定的交互标签，其他 Native 标签保持无副作用返回。
-// 2. 先给 LocalPlayer UI 一次消费机会；商店、鱼缸等通用目标命中时阻断旧准星交互同帧重复触发。
-// 3. UI 没有消费时才走旧 InteractionTargetingComponent，保留钓鱼和准星交互的兜底路径。
+// 2. IA_Interact 只进入 PlayerController 持有的唯一 TargetingComponent；提示 UI 不再绑定第二次 E。
+// 3. TargetingComponent 对当前 Actor 调用 ICatInteractable，商店、鱼护、鱼缸和死鱼各自在 Actor 实现中处理。
 void ACatfishingPlayerController::NativeInputTagPressed(const FGameplayTag InputTag)
 {
 	if (!InputTag.MatchesTagExact(CatInteractionTags::Input_Interact))
-	{
-		return;
-	}
-	if (TryHandleLocalPlayerUIInteractionInput())
 	{
 		return;
 	}

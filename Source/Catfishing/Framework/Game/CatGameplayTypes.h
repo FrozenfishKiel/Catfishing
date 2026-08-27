@@ -416,7 +416,7 @@ public:
 	UFUNCTION(BlueprintPure, Category="Catfishing|Interaction")
 	UCatInteractionTargetingComponent* GetInteractionTargetingComponent() const { return InteractionTargetingComponent; }
 
-	/** 客户端只提交复制 Actor 与幂等键；服务器重新检查玩法 gate，目标实现继续验证距离、视线和物品状态。 */
+	/** 权威交互转发；服务器检查玩法 gate 和通用接口后，在目标 Actor 上重新调用同一 Interact 虚函数。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestInteraction(AActor* Target, FGuid RequestId);
 
@@ -688,8 +688,6 @@ private:
 
 	/** 当 Pawn 或输入组件在 owning client 就绪时通知 LocalPlayer UI；服务器远端 Controller 和非 Cat UI World 安全跳过。 */
 	void NotifyLocalPlayerUISubsystemPawnChanged();
-	/** IA_Interact 进入旧 Native 输入层时先让本地 UI 交互目标消费；没有 UI 目标时才允许旧准星交互兜底。 */
-	bool TryHandleLocalPlayerUIInteractionInput();
 
 	/** 把献祭终态投给 owning client；本地 authority 没有网络回环时直接写本机读模型，远端玩家继续走可靠 RPC。 */
 	void DeliverSacrificeResultToOwningClient(const FCatSacrificeResult& Result);

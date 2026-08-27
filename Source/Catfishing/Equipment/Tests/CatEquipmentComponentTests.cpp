@@ -58,6 +58,7 @@ namespace CatEquipmentComponentTest
 		Definition->MaximumLineLengthCentimeters = 2000.0;
 		Definition->BaseDurabilityWearPerSecond = 0.1;
 		Definition->HighTensionWearMultiplier = 1.0;
+		Definition->FunctionalRouteId = *FString::Printf(TEXT("%sRoute"), *DefinitionId.ToString());
 		return Definition;
 	}
 
@@ -173,7 +174,7 @@ bool FCatEquipmentComponentFishingFailureNoneTest::RunTest(const FString& Parame
 
 // 测试流程：
 // 1. 用 transient 装备目录创建一根商店鱼竿和另一根漂移鱼竿。
-// 2. 通过本人 EquipmentComponent 的新授予入口提交鱼竿，确认 Snapshot 里的当前鱼竿和耐久立即变化。
+// 2. 通过本人 EquipmentComponent 的新授予入口提交鱼竿，确认鱼竿进入统一库存并成为当前选择。
 // 3. 用同一 RequestId 重放同一鱼竿，确认它只返回 AlreadyResolved，不重复推进 Revision。
 // 4. 用同一 RequestId 换另一根鱼竿，确认载荷漂移被拒绝，避免旧订单被挪作另一件装备。
 bool FCatEquipmentComponentShopGrantEquipsPersonalRodTest::RunTest(const FString& Parameters)
@@ -202,6 +203,16 @@ bool FCatEquipmentComponentShopGrantEquipsPersonalRodTest::RunTest(const FString
 			TestEqual(TEXT("商店鱼竿进入本人当前鱼竿槽"),
 				Component->GetSnapshot().RodDefinitionId, CatEquipmentComponentTest::ShopGrantRodId);
 			TestEqual(TEXT("商店鱼竿按定义刷新耐久"), Component->GetSnapshot().RodDurability, 120.0);
+			const FCatRunInventorySlot* GrantedRodSlot = Component->GetSnapshot().InventorySlots.FindByPredicate(
+				[](const FCatRunInventorySlot& Slot)
+				{
+					return Slot.DefinitionId == CatEquipmentComponentTest::ShopGrantRodId;
+				});
+			TestNotNull(TEXT("商店鱼竿作为道具进入统一库存"), GrantedRodSlot);
+			if (GrantedRodSlot)
+			{
+				TestEqual(TEXT("装备型库存数量固定为一"), GrantedRodSlot->Quantity, 1);
+			}
 
 			const int64 RevisionAfterGrant = Component->GetSnapshot().Revision;
 			const FCatDomainCommandResult Replay = Component->GrantEquipmentFromAuthority(

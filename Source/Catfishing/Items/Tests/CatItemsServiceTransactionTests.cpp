@@ -152,7 +152,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Items.ReserveFish.CancelReleasesFishAndCloseRejectsNewWrites",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 测试流程：先通过 CommitCapture 种入个人鱼护，再执行转移到共享鱼缸；重放不能二次移动，目标 Revision 陈旧时两边容器必须保持原样。
+// 测试流程：先通过现有 Capture 入口种入旧个人容器，再转移到正式地面鱼护；重放不能二次移动，目标 Revision 陈旧时两边容器必须保持原样。
 bool FCatItemsTransferOwnedFishTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -176,10 +176,10 @@ bool FCatItemsTransferOwnedFishTest::RunTest(const FString& Parameters)
 
 	const CatItemsServiceTransactionTest::FRegisteredContainer Guard = CatItemsServiceTransactionTest::RegisterContainer(
 		World, ItemsService, ECatContainerKind::PersonalGuard, TEXT("PlayerA"), 3);
-	const CatItemsServiceTransactionTest::FRegisteredContainer Tank = CatItemsServiceTransactionTest::RegisterContainer(
-		World, ItemsService, ECatContainerKind::SharedFishTank, TEXT(""), 3);
+	const CatItemsServiceTransactionTest::FRegisteredContainer FishGuard = CatItemsServiceTransactionTest::RegisterContainer(
+		World, ItemsService, ECatContainerKind::FishGuard, TEXT(""), 3);
 	TestNotNull(TEXT("个人鱼护组件已创建"), Guard.Component.Get());
-	TestNotNull(TEXT("共享鱼缸组件已创建"), Tank.Component.Get());
+	TestNotNull(TEXT("地面鱼护组件已创建"), FishGuard.Component.Get());
 
 	const FGuid FishA = FGuid::NewGuid();
 	const FGuid FishB = FGuid::NewGuid();
@@ -188,29 +188,29 @@ bool FCatItemsTransferOwnedFishTest::RunTest(const FString& Parameters)
 
 	const FGuid TransferRequestId = FGuid::NewGuid();
 	FCatDomainCommandResult TransferResult = ItemsService->TransferOwnedFish(
-		CatItemsServiceTransactionTest::MakeTransferCommand(Guard, Tank, TransferRequestId, FishA, 0, 0, 3, 1));
+		CatItemsServiceTransactionTest::MakeTransferCommand(Guard, FishGuard, TransferRequestId, FishA, 0, 0, 3, 1));
 	TestTrue(TEXT("首次转移提交"), TransferResult.bCommitted);
 	TestEqual(TEXT("首次转移返回 None"), TransferResult.Error, ECatDomainCommandError::None);
 
 	FCatContainerSnapshot GuardSnapshot = CatItemsServiceTransactionTest::GetSnapshot(ItemsService, Guard.ContainerId);
-	FCatContainerSnapshot TankSnapshot = CatItemsServiceTransactionTest::GetSnapshot(ItemsService, Tank.ContainerId);
+	FCatContainerSnapshot TankSnapshot = CatItemsServiceTransactionTest::GetSnapshot(ItemsService, FishGuard.ContainerId);
 	TestFalse(TEXT("成功转移后源容器不再含 FishA"), CatItemsServiceTransactionTest::SnapshotContainsFish(GuardSnapshot, FishA));
 	TestTrue(TEXT("成功转移后目标容器含 FishA"), CatItemsServiceTransactionTest::SnapshotContainsFish(TankSnapshot, FishA));
 	TestEqual(TEXT("成功转移后源 Revision 为 4"), GuardSnapshot.Revision, int64(4));
 	TestEqual(TEXT("成功转移后目标 Revision 为 2"), TankSnapshot.Revision, int64(2));
 
 	FCatDomainCommandResult ReplayResult = ItemsService->TransferOwnedFish(
-		CatItemsServiceTransactionTest::MakeTransferCommand(Guard, Tank, TransferRequestId, FishA, 0, 0, 3, 1));
+		CatItemsServiceTransactionTest::MakeTransferCommand(Guard, FishGuard, TransferRequestId, FishA, 0, 0, 3, 1));
 	TestFalse(TEXT("转移重放不再次提交"), ReplayResult.bCommitted);
 	TestEqual(TEXT("转移重放返回 AlreadyResolved"), ReplayResult.Error, ECatDomainCommandError::AlreadyResolved);
 
 	const FGuid StaleRequestId = FGuid::NewGuid();
 	FCatDomainCommandResult StaleResult = ItemsService->TransferOwnedFish(
-		CatItemsServiceTransactionTest::MakeTransferCommand(Guard, Tank, StaleRequestId, FishB, 1, 0, 4, 1));
+		CatItemsServiceTransactionTest::MakeTransferCommand(Guard, FishGuard, StaleRequestId, FishB, 1, 0, 4, 1));
 	TestFalse(TEXT("目标 Revision 陈旧时转移不提交"), StaleResult.bCommitted);
 	TestEqual(TEXT("目标 Revision 陈旧返回 RevisionConflict"), StaleResult.Error, ECatDomainCommandError::RevisionConflict);
 	GuardSnapshot = CatItemsServiceTransactionTest::GetSnapshot(ItemsService, Guard.ContainerId);
-	TankSnapshot = CatItemsServiceTransactionTest::GetSnapshot(ItemsService, Tank.ContainerId);
+	TankSnapshot = CatItemsServiceTransactionTest::GetSnapshot(ItemsService, FishGuard.ContainerId);
 	TestTrue(TEXT("陈旧目标 Revision 不会从源移除 FishB"), CatItemsServiceTransactionTest::SnapshotContainsFish(GuardSnapshot, FishB));
 	TestFalse(TEXT("陈旧目标 Revision 不会向目标添加 FishB"), CatItemsServiceTransactionTest::SnapshotContainsFish(TankSnapshot, FishB));
 	return !HasAnyErrors();

@@ -12,8 +12,6 @@
 UCatShopInteractionComponent::UCatShopInteractionComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
-	InteractionTargetText = FText::FromString(TEXT("商店"));
-	InteractionRadiusCentimeters = 300.0;
 }
 
 // 结束流程：交互对象或 World 销毁时先关闭商店 UI，再交还 ActorComponent 生命周期；重复关闭保持幂等。
@@ -21,24 +19,6 @@ void UCatShopInteractionComponent::EndPlay(const EEndPlayReason::Type EndPlayRea
 {
 	CloseShop();
 	Super::EndPlay(EndPlayReason);
-}
-
-// 可交互判断流程：复用通用目标 gate，并避免同一个商店对象在已打开时重复创建第二套 UI。
-bool UCatShopInteractionComponent::CanInteract_Implementation(APlayerController* PlayerController) const
-{
-	return Super::CanInteract_Implementation(PlayerController) && !IsShopOpen();
-}
-
-// 通用交互流程：LocalPlayer 扫描器只调用这个能力入口；商店组件自己决定创建并拥有商店 UI。
-bool UCatShopInteractionComponent::Interact_Implementation(APlayerController* PlayerController)
-{
-	return OpenShopForPlayer(PlayerController);
-}
-
-// 提示文本流程：商店默认显示“商店”；蓝图如果改了 InteractionTargetText，这里会沿用基类文本。
-FText UCatShopInteractionComponent::GetInteractionTargetText_Implementation(APlayerController* PlayerController) const
-{
-	return Super::GetInteractionTargetText_Implementation(PlayerController);
 }
 
 // 打开流程：

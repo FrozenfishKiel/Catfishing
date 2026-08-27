@@ -13,7 +13,6 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
 #include "Interaction/CatInteractionSettings.h"
-#include "Items/CatItemsService.h"
 #include "Items/CatWorldItemSettings.h"
 #include "Net/UnrealNetwork.h"
 
@@ -121,6 +120,14 @@ void ACatFishPickupActor::ApplyLocalFocus(const bool bFocused)
 	}
 }
 
+bool ACatFishPickupActor::CanInteract_Implementation(AController* RequestingController) const
+{
+	return RequestingController
+		&& PresentationState.State == ECatFishPickupState::Available
+		&& PresentationState.FishingSessionId.IsValid()
+		&& PresentationState.FishInstanceId.IsValid();
+}
+
 void ACatFishPickupActor::BeginLocalFocus_Implementation()
 {
 	ApplyLocalFocus(true);
@@ -137,9 +144,15 @@ FText ACatFishPickupActor::GetInteractionPrompt_Implementation() const
 	{
 		return FText::GetEmpty();
 	}
-	return FText::Format(NSLOCTEXT("Catfishing", "FishPickupPrompt", "E 拾取 {0}  {1} kg"),
+	return FText::Format(NSLOCTEXT("Catfishing", "FishPickupPrompt", "拾取 {0}  {1} kg"),
 		FText::FromName(PresentationState.FishDefinitionId),
 		FText::AsNumber(PresentationState.WeightKilograms));
+}
+
+double ACatFishPickupActor::GetInteractionRadius_Implementation() const
+{
+	const UCatInteractionSettings* Settings = GetDefault<UCatInteractionSettings>();
+	return Settings ? Settings->MaximumServerInteractionDistanceCentimeters : 0.0;
 }
 
 bool ACatFishPickupActor::IsAuthorityRequestSpatiallyValid(const AController* RequestingController) const
@@ -165,18 +178,29 @@ bool ACatFishPickupActor::IsAuthorityRequestSpatiallyValid(const AController* Re
 }
 
 // 拾取提交流程：先做身份、状态、倒地和空间校验；通过后本应把鱼提交进玩家的独立鱼护容器。
-// 当前独立鱼护对象尚未接入，函数在提交前明确返回 DependencyUnavailable，不再从 Character 读取旧鱼护 ID。
-void ACatFishPickupActor::RequestInteractionFromAuthority_Implementation(AController* RequestingController,
+// 客户端只把同一个 Actor 接口请求转发到服务器；当前尚未选定目标地面鱼护，服务器不会把鱼写进 Character 背包。
+bool ACatFishPickupActor::Interact_Implementation(AController* RequestingController,
 	const FGuid RequestId)
 {
-	APlayerState* PlayerState = RequestingController ? RequestingController->PlayerState : nullptr;
+	if (!HasAuthority())
+	{
+		ACatfishingPlayerController* PlayerController = Cast<ACatfishingPlayerController>(RequestingController);
+		if (!PlayerController || !PlayerController->IsLocalController() || !RequestId.IsValid())
+		{
+			return false;
+		}
+		PlayerController->ServerRequestInteraction(this, RequestId);
+		return true;
+	}
+
+	const APlayerState* PlayerState = RequestingController ? RequestingController->PlayerState : nullptr;
 	const FString StableNetId = PlayerState && PlayerState->GetUniqueId().IsValid()
 		? PlayerState->GetUniqueId()->ToString() : FString();
 	const FString CacheKey = FString::Printf(TEXT("%s|%s"), *StableNetId,
 		*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 	if (PickupTerminalByRequester.Contains(CacheKey))
 	{
-		return;
+		return true;
 	}
 	FCatDomainCommandResult Terminal;
 	Terminal.RequestId = RequestId;
@@ -204,6 +228,7 @@ void ACatFishPickupActor::RequestInteractionFromAuthority_Implementation(AContro
 		Terminal.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
 	PickupTerminalByRequester.Add(CacheKey, Terminal);
+	return Terminal.bCommitted;
 }
 
 void ACatFishPickupActor::ArchiveCommittedCapture(const FCatCaptureCommittedResult& Committed,

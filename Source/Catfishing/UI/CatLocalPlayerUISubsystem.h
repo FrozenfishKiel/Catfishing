@@ -17,8 +17,6 @@ class UCatInventoryModel;
 class UCatInventoryPageController;
 class UCatInventoryWidget;
 class UCatTravelWidget;
-class UCatInteractionWidget;
-class UCatInteractionTargetingComponent;
 
 /** 每个 LocalPlayer 的 UI 生命周期协调器；只装配本地玩家拥有的 HUD、背包和交互提示，不预建商店或聚合业务页面。 */
 UCLASS()
@@ -53,9 +51,6 @@ public:
 	/** owning client 的 PlayerController 在 Pawn 或输入链就绪后调用；子系统据此重新对齐本地 HUD、背包和交互提示。 */
 	void RefreshPlayerLakeUIForController(APlayerController* Controller);
 
-	/** PlayerController 的旧 Native 交互绑定进入时调用；通用 UI 目标已处理时返回 true，阻断同键旧玩法交互。 */
-	bool TryHandleNativeInteractionInput(APlayerController* Controller);
-
 private:
 	/** 响应 Online 事实变更；实现重新读取完整 Snapshot，并同步 Frontend 面板与本地玩家 UI Model。 */
 	void HandleOnlineSnapshotChanged();
@@ -86,15 +81,6 @@ private:
 
 	/** 先解绑各模块 PageController/Model，再移除 View，最后清理所有本地玩家 UI 引用。 */
 	void DetachPlayerLakeUI();
-
-	/** 为当前本地 Character 创建准星/高亮/拾取提示层，并订阅 Controller 的视线目标变化。 */
-	void AttachInteractionView(APlayerController* Controller, ACatCharacter* Character);
-
-	/** 从本地视线 TargetingComponent 成对解绑并移除拾取提示层。 */
-	void DetachInteractionView();
-
-	/** 视线目标变化时只刷新本地提示，不在 UI 层提交权威命令。 */
-	void HandleInteractionTargetChanged(AActor* PreviousTarget, AActor* CurrentTarget);
 
 	/** HUD Model 投影变化入口；只把最新状态交给 HUD WBP，不访问背包或商店。 */
 	void HandleHUDModelViewStateChanged();
@@ -131,13 +117,6 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInteractionPageController> InteractionPageController;
 
-	/** 本地准星和视线交互提示层；负责已上岸鱼的描边与拾取反馈。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UCatInteractionWidget> InteractionWidget;
-
-	/** 本地提示当前订阅的视线 TargetingComponent，用于精确解绑。 */
-	UPROPERTY(Transient)
-	TWeakObjectPtr<UCatInteractionTargetingComponent> BoundInteractionTargeting;
 	/** 当前 LocalPlayer 对应的 Controller 弱引用；Controller/World 替换时先解绑，绝不成为跨 World 所有者。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APlayerController> BoundPlayerController;
@@ -155,6 +134,4 @@ private:
 	/** HUD Model 变化广播的配对解绑句柄；AttachPlayerLakeUI 写入，DetachPlayerLakeUI 消费。 */
 	FDelegateHandle HUDModelViewChangedHandle;
 
-	/** 视线交互目标变化通知的配对解绑句柄。 */
-	FDelegateHandle InteractionTargetChangedHandle;
 };

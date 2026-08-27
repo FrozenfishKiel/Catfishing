@@ -2,15 +2,16 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Interaction/CatInteractable.h"
 #include "CatFishGuardActor.generated.h"
 
 class UCatContainerReplicationComponent;
-class UCatFishGuardInteractionComponent;
 class USceneComponent;
+class USphereComponent;
 
 /** 世界里的鱼护箱子宿主；它承载一份 Items 鱼容器，可被玩家交互打开，不挂在 Character 或 PlayerState 身上。 */
 UCLASS(BlueprintType, Blueprintable)
-class CATFISHING_API ACatFishGuardActor : public AActor
+class CATFISHING_API ACatFishGuardActor : public AActor, public ICatInteractable
 {
 	GENERATED_BODY()
 
@@ -28,9 +29,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Items")
 	UCatContainerReplicationComponent* GetContainerReplicationComponent() const;
 
-	/** 鱼护箱子暴露给交互扫描的入口组件；关卡蓝图和验收可读取它确认接线，真实库存写入仍必须走 Items 服务。 */
-	UFUNCTION(BlueprintPure, Category = "Catfishing|Items")
-	UCatFishGuardInteractionComponent* GetGuardInteraction() const;
+	virtual bool CanInteract_Implementation(AController* RequestingController) const override;
+	virtual FText GetInteractionPrompt_Implementation() const override;
+	virtual double GetInteractionRadius_Implementation() const override;
+	virtual bool Interact_Implementation(AController* RequestingController, FGuid RequestId) override;
 
 protected:
 	/** authority 进入 World 时生成容器 ID 并注册 FishGuard 容器；客户端只等待 ID 与组件快照复制。 */
@@ -47,6 +49,10 @@ private:
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<USceneComponent> GuardRoot;
 
+	/** 保证没有额外网格碰撞的鱼护蓝图仍能被准星命中。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USphereComponent> InteractionCollision;
+
 	/** 本局鱼护箱子容器 ID；服务器生成后复制，客户端和命令层用它指向同一个 Items 聚合。 */
 	UPROPERTY(Replicated)
 	FGuid GuardContainerId;
@@ -55,9 +61,14 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Items", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatContainerReplicationComponent> ContainerReplication;
 
-	/** 鱼护的通用交互入口；玩家确认时把该鱼护箱子作为外部容器打开。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Items", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UCatFishGuardInteractionComponent> GuardInteraction;
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true"))
+	bool bInteractionEnabled = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true", ClampMin = "0.0", Units = "cm"))
+	double InteractionRadiusCentimeters = 300.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true"))
+	FText InteractionPrompt;
 
 	/** 服务器是否已经把本鱼护注册进 Items；EndPlay 只在注册后注销，避免误删不存在的容器。 */
 	bool bRegisteredWithItems = false;

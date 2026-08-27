@@ -293,7 +293,8 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantEquipmentFromAuthority(cons
 		return Result;
 	}
 
-	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(DefinitionId);
+	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+	UCatEquipmentDefinition* Definition = Settings->FindRuntimeDefinition(DefinitionId);
 	const ECatDomainCommandError Admission = ValidateEquipmentGrantFromAuthority(RequestId, DefinitionId);
 	if (Admission != ECatDomainCommandError::None)
 	{

@@ -23,6 +23,16 @@ enum class ECatFightStepOutcome : uint8
 	Overpowered
 };
 
+/** 断线的直接数值原因；用于日志和调试，避免把鱼线断裂误判为鱼竿永久损坏。 */
+enum class ECatFightLineBreakCause : uint8
+{
+	None,
+	/** 钓组承载力量不高于猫力与鱼力中的较小值，强对抗确认后瞬断。 */
+	StrengthOverload,
+	/** 本场累计鱼线负载达到配置的耐久上限。 */
+	DurabilityDepleted
+};
+
 /** 猫本步的输入意图；左键=收线，右键=松开线杯，都不按=锁住当前已放出线长。 */
 enum class ECatFightCatAction : uint8
 {
@@ -128,6 +138,8 @@ struct CATFISHING_API FCatFightStepResult
 	bool bStalemate = false;
 	/** 已达到性格配置的强对抗角度阈值；瞬断/拖下水/碾压只在这里裁决。 */
 	bool bStrongConfrontation = false;
+	/** Outcome 为 LineBroken 时给出具体来源；其余终局保持 None。 */
+	ECatFightLineBreakCause LineBreakCause = ECatFightLineBreakCause::None;
 	ECatFightStepOutcome Outcome = ECatFightStepOutcome::None;
 };
 

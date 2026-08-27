@@ -213,6 +213,25 @@ bool ACatFishingHookActor::FinalizeAuthoritativeLandingOnce(const bool bSucceede
 	const FCatFishingHookPresentationState Previous = PresentationState;
 	// 落地成功进入 Landed（等待鱼咬钩），失败（例如落在非法区域）进入 Failed 供表现层播放对应反馈
 	PresentationState.Phase = bSucceeded ? ECatFishingHookPresentationPhase::Landed : ECatFishingHookPresentationPhase::Failed;
+	if (bSucceeded)
+	{
+		// 搏斗前也要给 Cable 一份真实的线长基线。此前等待咬钩阶段只有端点距离能把 75cm 占位线撑直，
+		// DisplayedFishingLineLength 仍停在占位值；上钩后的第一份 L_paid 会让积累的余线成段跳出。
+		// 落水时先发布 L_paid=D、Slack=0，利用等待咬钩的时间平滑收敛；不改变任何权威玩法范围。
+		if (const ACatFishingRodActor* Rod = Cast<ACatFishingRodActor>(GetOwner()))
+		{
+			const double LandedLineLength = FVector::Distance(
+				Rod->GetRodTipWorldTransform().GetLocation(), LandingWorldPoint);
+			if (FMath::IsFinite(LandedLineLength))
+			{
+				PresentationState.PaidOutLineLengthCentimeters = LandedLineLength;
+				PresentationState.StraightLineDistanceCentimeters = LandedLineLength;
+				PresentationState.SlackLineLengthCentimeters = 0.0;
+				PresentationState.NormalizedTension = 0.0f;
+				PresentationState.bLineTaut = true;
+			}
+		}
+	}
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 	ForceNetUpdate();
 	return true;

@@ -2,21 +2,28 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "Interaction/CatInteractable.h"
 #include "CatFishTankActor.generated.h"
 
 class UCatContainerReplicationComponent;
 class UCatFishTankInteractionComponent;
 class USceneComponent;
+class USphereComponent;
 
 /** 固定营地的一局共享鱼缸宿主；只适配 Items 容器和复制，不拥有转移、献祭或偷取规则。 */
 UCLASS()
-class CATFISHING_API ACatFishTankActor : public AActor
+class CATFISHING_API ACatFishTankActor : public AActor, public ICatInteractable
 {
 	GENERATED_BODY()
 
 public:
 	/** 建立共享鱼缸唯一复制宿主并关闭无关 Tick；容量和鱼内容仍由 Settings/Items 注入，Actor 不生成第二份容器真相。 */
 	ACatFishTankActor();
+
+	virtual bool CanInteract_Implementation(AController* RequestingController) const override;
+	virtual FText GetInteractionPrompt_Implementation() const override;
+	virtual double GetInteractionRadius_Implementation() const override;
+	virtual bool Interact_Implementation(AController* RequestingController, FGuid RequestId) override;
 
 	/** 注册共享容器 ID 的复制；鱼数组由组件独立复制。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
@@ -40,6 +47,10 @@ private:
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<USceneComponent> TankRoot;
 
+	/** 保证没有额外网格碰撞的容器蓝图仍能被准星命中。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<USphereComponent> InteractionCollision;
+
 	/** 共享鱼缸在本局运行时使用的稳定容器 ID；服务器 BeginPlay 生成后复制给客户端，调用者用它向 Items 查询同一容器。 */
 	UPROPERTY(Replicated)
 	FGuid TankContainerId;
@@ -51,4 +62,13 @@ private:
 	/** 鱼缸的本地交互入口；它只把共享容器作为背包外部上下文打开，真实移动仍由 Drop 后的服务器 Items 事务决定。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Items", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatFishTankInteractionComponent> TankInteraction;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true"))
+	bool bInteractionEnabled = true;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true", ClampMin = "0.0", Units = "cm"))
+	double InteractionRadiusCentimeters = 300.0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true"))
+	FText InteractionPrompt;
 };

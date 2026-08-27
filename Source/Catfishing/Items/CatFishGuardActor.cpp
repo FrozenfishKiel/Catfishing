@@ -1,12 +1,16 @@
 #include "Items/CatFishGuardActor.h"
 
 #include "Components/SceneComponent.h"
+#include "Components/SphereComponent.h"
+#include "Engine/LocalPlayer.h"
+#include "GameFramework/PlayerController.h"
+#include "Interaction/CatInteractionSettings.h"
 #include "Items/CatContainerReplicationComponent.h"
-#include "Items/CatFishGuardInteractionComponent.h"
 #include "Items/CatItemsService.h"
 #include "Items/CatItemsSettings.h"
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
+#include "UI/CatLocalPlayerUISubsystem.h"
 
 // 构造流程：创建独立箱子根、Items 复制出口和交互入口；开启 Actor 复制并关闭 Tick，鱼数组只由 Items 服务发布。
 ACatFishGuardActor::ACatFishGuardActor()
@@ -15,8 +19,15 @@ ACatFishGuardActor::ACatFishGuardActor()
 	PrimaryActorTick.bCanEverTick = false;
 	GuardRoot = CreateDefaultSubobject<USceneComponent>(TEXT("GuardRoot"));
 	SetRootComponent(GuardRoot);
+	InteractionCollision = CreateDefaultSubobject<USphereComponent>(TEXT("InteractionCollision"));
+	InteractionCollision->SetupAttachment(GuardRoot);
+	InteractionCollision->SetSphereRadius(75.0f);
+	InteractionCollision->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	InteractionCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
+	InteractionCollision->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
+	InteractionCollision->SetGenerateOverlapEvents(false);
 	ContainerReplication = CreateDefaultSubobject<UCatContainerReplicationComponent>(TEXT("ContainerReplication"));
-	GuardInteraction = CreateDefaultSubobject<UCatFishGuardInteractionComponent>(TEXT("GuardInteraction"));
+	InteractionPrompt = NSLOCTEXT("Catfishing", "FishGuardInteractionPrompt", "打开鱼护");
 }
 
 // 复制注册流程：Actor 只复制容器 ID；鱼槽数组继续由 ContainerReplication 的 FastArray 负责。
@@ -30,6 +41,10 @@ void ACatFishGuardActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 void ACatFishGuardActor::BeginPlay()
 {
 	Super::BeginPlay();
+	if (const UCatInteractionSettings* Settings = GetDefault<UCatInteractionSettings>(); Settings && InteractionCollision)
+	{
+		InteractionCollision->SetCollisionResponseToChannel(Settings->TargetingTraceChannel, ECR_Block);
+	}
 	if (!HasAuthority())
 	{
 		return;
@@ -104,8 +119,44 @@ UCatContainerReplicationComponent* ACatFishGuardActor::GetContainerReplicationCo
 	return ContainerReplication;
 }
 
-// 交互组件读取流程：返回本鱼护内建的 UI 交互适配器；蓝图可读但不应绕过组件直接改库存。
-UCatFishGuardInteractionComponent* ACatFishGuardActor::GetGuardInteraction() const
+bool ACatFishGuardActor::CanInteract_Implementation(AController* RequestingController) const
 {
-	return GuardInteraction;
+	const APlayerController* PlayerController = Cast<APlayerController>(RequestingController);
+	return bInteractionEnabled && PlayerController && PlayerController->IsLocalController()
+		&& GuardContainerId.IsValid() && ContainerReplication;
+}
+
+FText ACatFishGuardActor::GetInteractionPrompt_Implementation() const
+{
+	return bInteractionEnabled && GuardContainerId.IsValid() ? InteractionPrompt : FText::GetEmpty();
+}
+
+double ACatFishGuardActor::GetInteractionRadius_Implementation() const
+{
+	return FMath::IsFinite(InteractionRadiusCentimeters)
+		? FMath::Max(0.0, InteractionRadiusCentimeters) : 0.0;
+}
+
+// 鱼护交互只在本地打开“随身背包 + 地面鱼护”双容器视图；鱼移动仍通过 Inventory 的服务器 Items 事务完成。
+bool ACatFishGuardActor::Interact_Implementation(AController* RequestingController, const FGuid RequestId)
+{
+	APlayerController* PlayerController = Cast<APlayerController>(RequestingController);
+	ULocalPlayer* LocalPlayer = PlayerController ? PlayerController->GetLocalPlayer() : nullptr;
+	UCatLocalPlayerUISubsystem* UISubsystem = LocalPlayer
+		? LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
+	if (!RequestId.IsValid() || !CanInteract_Implementation(RequestingController) || !UISubsystem)
+	{
+		UE_LOG(LogCatItems, Warning,
+			TEXT("Event=fish_guard_interaction_rejected Reason=DependencyUnavailable Controller=%s Guard=%s"),
+			*GetNameSafe(PlayerController), *GetNameSafe(this));
+		return false;
+	}
+	TArray<UCatContainerReplicationComponent*> ExternalContainers;
+	ExternalContainers.Add(ContainerReplication);
+	UISubsystem->OpenInventoryWithExternalContainerContexts(ExternalContainers);
+	const FCatContainerSnapshot& Snapshot = ContainerReplication->GetSnapshot();
+	UE_LOG(LogCatItems, Log,
+		TEXT("Event=fish_guard_interaction_inventory_opened Guard=%s Container=%s Revision=%lld"),
+		*GetNameSafe(this), *Snapshot.ContainerId.ToString(EGuidFormats::DigitsWithHyphens), Snapshot.Revision);
+	return true;
 }

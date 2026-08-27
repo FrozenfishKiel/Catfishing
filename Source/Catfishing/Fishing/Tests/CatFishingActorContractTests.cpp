@@ -430,6 +430,14 @@ bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameter
 		{
 			TestTrue(TEXT("authority identity publishes the line presentation state"),
 				RuntimeHook->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid()));
+			const FVector LandingPoint(500.0, 0.0, 0.0);
+			TestTrue(TEXT("successful landing publishes the pre-fight line baseline"),
+				RuntimeHook->FinalizeAuthoritativeLandingOnce(true, LandingPoint));
+			TestEqual(TEXT("landed paid line starts at the physical rod-tip distance"),
+				RuntimeHook->GetPresentationState().PaidOutLineLengthCentimeters, 500.0, 0.01);
+			TestEqual(TEXT("landed line starts without manufactured slack"),
+				RuntimeHook->GetPresentationState().SlackLineLengthCentimeters, 0.0, 0.01);
+			TestTrue(TEXT("landed line starts taut"), RuntimeHook->GetPresentationState().bLineTaut);
 			TestTrue(TEXT("authority can publish slack cable shape"),
 				RuntimeHook->SetFishingLinePresentationFromAuthority(600.0, 500.0, 100.0, 0.25f, false));
 			const UCableComponent* RuntimeCable = Cast<UCableComponent>(

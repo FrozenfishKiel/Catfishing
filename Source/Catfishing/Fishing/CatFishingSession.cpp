@@ -1353,6 +1353,21 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		AbilitySystem->RequestFishingStaminaReset();
 		return false;
 	}
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_fight_started SessionId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s CatStrength=%.2f FishStrengthBase=%.2f FishStrengthEffective=%.2f CatStamina=%.2f FishStamina=%.2f LineStrength=%.2f LineDurability=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f"),
+		*Snapshot.FishingSessionId.ToString(),
+		*FishDefinition->FishDefinitionId.ToString(),
+		*RodDefinition->EquipmentDefinitionId.ToString(),
+		bPerfect ? TEXT("true") : TEXT("false"),
+		Config.CatStrength,
+		FishDefinition->FishStrength,
+		Config.FishStrength,
+		InitialState.CatStamina,
+		InitialState.FishStamina,
+		Config.RodStrength,
+		Config.RodDurability,
+		InitialState.LineLengthCentimeters,
+		Config.MaximumLineLengthCentimeters);
 	return true;
 }
 
@@ -1431,6 +1446,28 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency); // 搏斗数值每步都要尽快同步给客户端表现层。
 	if (Step.Outcome == ECatFightStepOutcome::LineBroken)
 	{
+		const TCHAR* LineBreakCause = TEXT("None");
+		switch (Step.LineBreakCause)
+		{
+		case ECatFightLineBreakCause::StrengthOverload:
+			LineBreakCause = TEXT("StrengthOverload");
+			break;
+		case ECatFightLineBreakCause::DurabilityDepleted:
+			LineBreakCause = TEXT("DurabilityDepleted");
+			break;
+		default:
+			break;
+		}
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_line_broken SessionId=%s FishDefinition=%s Cause=%s RemainingLineDurability=%.2f AccumulatedLineWear=%.2f LineLoad=%.3f Alignment=%.3f StrongConfrontation=%s"),
+			*Snapshot.FishingSessionId.ToString(),
+			FishDefinition ? *FishDefinition->FishDefinitionId.ToString() : TEXT("None"),
+			LineBreakCause,
+			Snapshot.RodDurabilityRemaining,
+			Step.AbsoluteRodWear,
+			Step.NormalizedLineLoad,
+			Step.FishLineAlignment,
+			Step.bStrongConfrontation ? TEXT("true") : TEXT("false"));
 		// 断线只终止当前会话。FinalizeSession 会释放 FishingUse；部署中的鱼竿及其操作槽保持原样，可立即重新抛竿。
 		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::LineBroken, TEXT("Fishing line broken"));
 	}
@@ -1498,6 +1535,12 @@ bool ACatFishingSession::BeginExhaustedReelFromAuthority()
 		ExhaustedLocation, Snapshot.RodActor->GetRodTipWorldTransform().GetLocation());
 	if (!Encounter->ApplyFightStepFromAuthority(ECatFishMotionIntent::AutoHauling,
 		CurrentLineLength, ExhaustedLocation, static_cast<float>(Settings->FixedFightStepSeconds)))
+	{
+		return false;
+	}
+	// FightRunner 的末帧可能仍带有松弛 L_paid；进入力竭回收后鱼线按“鱼嘴到杆尖”的绷紧距离统一结算。
+	// 同一权威帧同步 Hook 位置和复制表现，不能只改 Encounter，否则客户端会继续显示搏斗末帧的长线。
+	if (!PublishExhaustedReelLineFromAuthority(ExhaustedLocation))
 	{
 		return false;
 	}
@@ -1607,9 +1650,11 @@ void ACatFishingSession::HandleExhaustedReelStep()
 			TEXT("Exhausted fish movement failed"));
 		return;
 	}
-	if (Snapshot.HookActor)
+	if (!PublishExhaustedReelLineFromAuthority(NewLocation))
 	{
-		Snapshot.HookActor->SetActorLocation(NewLocation);
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
+			TEXT("Exhausted fishing line presentation failed"));
+		return;
 	}
 	if (RemainingDistance <= StepDistance)
 	{
@@ -1627,6 +1672,29 @@ void ACatFishingSession::HandleExhaustedReelStep()
 	}
 	Snapshot.FishMotionIntent = ECatFishMotionIntent::AutoHauling;
 	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
+}
+
+bool ACatFishingSession::PublishExhaustedReelLineFromAuthority(const FVector& FishWorldLocation)
+{
+	if (!HasAuthority() || FishWorldLocation.ContainsNaN() || !Snapshot.RodActor)
+	{
+		return false;
+	}
+	ACatFishingHookActor* Hook = Snapshot.HookActor;
+	if (!Hook)
+	{
+		// Session 单元测试和无表现的服务器夹具允许不生成 Hook；正式运行链有 Hook 时必须走下方统一写口。
+		return true;
+	}
+	const double StraightLineDistance = FVector::Distance(
+		Snapshot.RodActor->GetRodTipWorldTransform().GetLocation(), FishWorldLocation);
+	if (!FMath::IsFinite(StraightLineDistance))
+	{
+		return false;
+	}
+	Hook->SetActorLocation(FishWorldLocation, false, nullptr, ETeleportType::TeleportPhysics);
+	return Hook->SetFishingLinePresentationFromAuthority(
+		StraightLineDistance, StraightLineDistance, 0.0, 0.0f, true);
 }
 
 bool ACatFishingSession::CommitLandingEquipmentFromAuthority()

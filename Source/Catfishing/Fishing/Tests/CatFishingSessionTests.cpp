@@ -8,6 +8,7 @@
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
+#include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/CatFishingSettings.h"
@@ -71,9 +72,11 @@ bool FCatFishingSessionExhaustedReelContinuityTest::RunTest(const FString& Param
 	UWorld* World = WorldWrapper.GetTestWorld();
 	ACatFishingSession* Session = World ? World->SpawnActor<ACatFishingSession>() : nullptr;
 	ACatFishEncounterActor* Fish = World ? World->SpawnActor<ACatFishEncounterActor>() : nullptr;
+	ACatFishingHookActor* Hook = World ? World->SpawnActor<ACatFishingHookActor>() : nullptr;
 	ACatFishingRodActor* Rod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
 	if (!TestNotNull(TEXT("Spawns session"), Session)
 		|| !TestNotNull(TEXT("Spawns fish encounter"), Fish)
+		|| !TestNotNull(TEXT("Spawns hook"), Hook)
 		|| !TestNotNull(TEXT("Spawns rod"), Rod))
 	{
 		return false;
@@ -82,8 +85,13 @@ bool FCatFishingSessionExhaustedReelContinuityTest::RunTest(const FString& Param
 	const FGuid AttemptId = FGuid::NewGuid();
 	TestTrue(TEXT("Initializes fish identity"), Fish->InitializeAuthoritativeIdentity(
 		SessionId, AttemptId, TEXT("TestFish"), 500.0, 1.0));
+	TestTrue(TEXT("Initializes hook identity"), Hook->InitializeAuthoritativeIdentity(SessionId, AttemptId));
 	Fish->SetActorLocation(FVector(100.0, 200.0, 50.0));
 	Rod->SetActorLocation(FVector(900.0, 800.0, 300.0));
+	Hook->SetOwner(Rod);
+	Hook->SetActorLocation(Fish->GetActorLocation());
+	TestTrue(TEXT("Seeds slack line from fight end"),
+		Hook->SetFishingLinePresentationFromAuthority(1300.0, 1000.0, 300.0, 0.0f, false));
 	// 在竿尖 XY 下方放一块高于水面的岸地，验证目标会选择岸地表面而不是继续使用水面 Z。
 	AActor* ProjectionGround = World->SpawnActor<AActor>();
 	UBoxComponent* ProjectionGroundCollision = ProjectionGround
@@ -112,6 +120,7 @@ bool FCatFishingSessionExhaustedReelContinuityTest::RunTest(const FString& Param
 	Session->Snapshot.bSlacking = true;
 	Session->Snapshot.FishMotionIntent = ECatFishMotionIntent::StrugglingOutward;
 	Session->Snapshot.FishEncounterActor = Fish;
+	Session->Snapshot.HookActor = Hook;
 	Session->Snapshot.RodActor = Rod;
 	Session->bStartupInProgress = true;
 	TestTrue(TEXT("Enters exhausted reel"), Session->BeginExhaustedReelFromAuthority());
@@ -122,6 +131,17 @@ bool FCatFishingSessionExhaustedReelContinuityTest::RunTest(const FString& Param
 	TestFalse(TEXT("Slack is cleared when fish exhausts"), Session->Snapshot.bSlacking);
 	TestEqual(TEXT("Presentation continues auto hauling"), Session->Snapshot.FishMotionIntent,
 		ECatFishMotionIntent::AutoHauling);
+	const double ExhaustedLineAtTransition = FVector::Distance(
+		Rod->GetRodTipWorldTransform().GetLocation(), Fish->GetActorLocation());
+	TestEqual(TEXT("Exhausted transition replaces stale fight paid-out length with direct distance"),
+		Hook->GetPresentationState().PaidOutLineLengthCentimeters, ExhaustedLineAtTransition);
+	TestEqual(TEXT("Exhausted transition publishes the same straight-line distance"),
+		Hook->GetPresentationState().StraightLineDistanceCentimeters, ExhaustedLineAtTransition);
+	TestEqual(TEXT("Exhausted transition clears stale fight slack"),
+		Hook->GetPresentationState().SlackLineLengthCentimeters, 0.0);
+	TestTrue(TEXT("Exhausted transition publishes a taut line"), Hook->GetPresentationState().bLineTaut);
+	TestTrue(TEXT("Hook remains at exhausted fish mouth"),
+		Hook->GetActorLocation().Equals(Fish->GetActorLocation(), UE_KINDA_SMALL_NUMBER));
 	TestTrue(TEXT("Exhausted target is frozen at rod-tip XY and the higher ground surface"),
 		Session->ExhaustedReelTarget.Equals(FVector(900.0, 800.0, 150.0), UE_KINDA_SMALL_NUMBER));
 	const FVector BeforeReelStep = Fish->GetActorLocation();
@@ -136,6 +156,14 @@ bool FCatFishingSessionExhaustedReelContinuityTest::RunTest(const FString& Param
 		ReelStepDistance <= MaximumStepDistance + UE_KINDA_SMALL_NUMBER);
 	TestTrue(TEXT("Exhausted fish gets closer to the frozen projection"),
 		FVector::Dist(Fish->GetActorLocation(), Session->ExhaustedReelTarget) < DistanceBeforeReelStep);
+	const double ExhaustedLineAfterStep = FVector::Distance(
+		Rod->GetRodTipWorldTransform().GetLocation(), Fish->GetActorLocation());
+	TestEqual(TEXT("Exhausted reel step shrinks paid-out line with fish distance"),
+		Hook->GetPresentationState().PaidOutLineLengthCentimeters, ExhaustedLineAfterStep);
+	TestEqual(TEXT("Exhausted reel step keeps line slack at zero"),
+		Hook->GetPresentationState().SlackLineLengthCentimeters, 0.0);
+	TestTrue(TEXT("Hook follows exhausted fish after reel step"),
+		Hook->GetActorLocation().Equals(Fish->GetActorLocation(), UE_KINDA_SMALL_NUMBER));
 	TestEqual(TEXT("Encounter immediately publishes exhausted presentation"), Fish->GetPresentationState().MotionIntent,
 		ECatFishMotionIntent::AutoHauling);
 	const USceneComponent* FishVisualRoot = Cast<USceneComponent>(Fish->GetDefaultSubobjectByName(TEXT("VisualRoot")));

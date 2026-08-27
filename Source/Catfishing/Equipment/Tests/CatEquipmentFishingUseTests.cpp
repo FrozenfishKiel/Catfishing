@@ -171,9 +171,11 @@ namespace CatEquipmentFishingUseTest
 				FGuid::NewGuid(), Component->GetSnapshot().Revision, FloatId);
 			const FCatDomainCommandResult Configure = Component->ConfigureLoadoutFromAuthority(
 				FGuid::NewGuid(), Component->GetSnapshot().Revision, RodId, SpecialBaitId, FloatId);
+			const bool bLoadoutReady = Configure.bCommitted
+				|| Configure.Error == ECatDomainCommandError::AlreadyResolved;
 			Test.TestTrue(TEXT("Prepare special-bait inventory loadout"),
-				GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && Configure.bCommitted);
-			return GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && Configure.bCommitted;
+				GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && bLoadoutReady);
+			return GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && bLoadoutReady;
 		}
 
 		bool ConfigureNormal(FAutomationTestBase& Test, const int32 NormalBaitQuantity = 1)
@@ -191,17 +193,19 @@ namespace CatEquipmentFishingUseTest
 				FGuid::NewGuid(), Component->GetSnapshot().Revision, FloatId);
 			const FCatDomainCommandResult Configure = Component->ConfigureLoadoutFromAuthority(
 				FGuid::NewGuid(), Component->GetSnapshot().Revision, RodId, NormalBaitId, FloatId);
-			if (NormalBaitQuantity <= 0 && Configure.bCommitted)
+			const bool bLoadoutReady = Configure.bCommitted
+				|| Configure.Error == ECatDomainCommandError::AlreadyResolved;
+			if (NormalBaitQuantity <= 0 && bLoadoutReady)
 			{
 				const FCatDomainCommandResult RemoveOnlyBait = Component->ConsumeInventoryQuantityFromAuthority(
 					FGuid::NewGuid(), Component->GetSnapshot().Revision, NormalBaitId);
 				Test.TestTrue(TEXT("Prepare normal-bait loadout with empty inventory"), RemoveOnlyBait.bCommitted);
-				return GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && Configure.bCommitted
+				return GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && bLoadoutReady
 					&& RemoveOnlyBait.bCommitted;
 			}
 			Test.TestTrue(TEXT("Prepare normal-bait inventory loadout"),
-				GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && Configure.bCommitted);
-			return GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && Configure.bCommitted;
+				GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && bLoadoutReady);
+			return GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && bLoadoutReady;
 		}
 
 		~FFishingUseFixture()
