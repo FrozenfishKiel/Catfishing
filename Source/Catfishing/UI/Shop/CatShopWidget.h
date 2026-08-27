@@ -48,11 +48,14 @@ public:
 	FCatShopEntryActionRequested OnEntryActionRequested;
 
 protected:
-	/** 构造时补齐旧 WBP 的默认鱼漂按钮并绑定可选按钮；动态商品列表可完全走蓝图的参数入口。 */
+	/** UMG 构造本商店页时补齐旧 WBP 的默认鱼漂按钮并打开键盘焦点能力；完成后 UIOnly 焦点可以落到本页，固定按钮也会转到统一请求入口。 */
 	virtual void NativeConstruct() override;
 
 	/** 析构时只解绑本 View 的可选按钮；关闭和商品动作订阅由 PageController::Unbind 清理。 */
 	virtual void NativeDestruct() override;
+
+	/** UMG 在本页拥有键盘焦点时交付按键；商店打开且命中 Escape 或当前交互键时广播关闭意图并返回已处理，其他按键继续交给父类。 */
+	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 	/** WBP 可选渲染扩展点；正式列表可在蓝图里按 Entries 创建商品行。 */
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|Shop")

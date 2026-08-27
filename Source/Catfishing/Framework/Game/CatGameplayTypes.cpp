@@ -2213,7 +2213,7 @@ void ACatfishingPlayerController::SubmitCampfirePlaybackFromBodyActionAbility(AC
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 通用容器物体移动 RPC 路由流程：把 Drop 得到的物体身份、源/目标容器和槽位引用投给 BodyAction Ability；没有正式 Ability 接管时回送依赖错误。
+// 普通容器库存拖拽 RPC 流程：owning client 只把请求送到自己的 PlayerController；服务器直接进入 Items 提交，公共鱼护按外部箱子处理，不依赖 Actor Owner，也不投 BodyAction/Social。
 void ACatfishingPlayerController::ServerTransferObjectBetweenContainers_Implementation(const FGuid RequestId,
 	const ECatContainedObjectKind ObjectKind, const FGuid ObjectInstanceId, const FGuid SourceContainerId,
 	const ECatContainerKind SourceContainerKind,
@@ -2221,37 +2221,17 @@ void ACatfishingPlayerController::ServerTransferObjectBetweenContainers_Implemen
 	const ECatContainerKind TargetContainerKind, const int32 TargetContainerSlotIndex,
 	const int64 ExpectedTargetRevision)
 {
-	UCatBodyActionPayload* Payload = CreateBodyActionPayload(ECatBodyActionAbilityCommand::TransferObjectBetweenContainers);
-	if (Payload)
-	{
-		Payload->RequestId = RequestId;
-		Payload->ContainerObjectKind = ObjectKind;
-		Payload->ContainerObjectInstanceId = ObjectInstanceId;
-		Payload->bUsesExplicitContainerTransfer = true;
-		Payload->SourceContainerId = SourceContainerId;
-		Payload->SourceContainerKind = SourceContainerKind;
-		Payload->SourceContainerSlotIndex = SourceContainerSlotIndex;
-		Payload->ExpectedSourceContainerRevision = ExpectedSourceRevision;
-		Payload->TargetContainerId = TargetContainerId;
-		Payload->TargetContainerKind = TargetContainerKind;
-		Payload->TargetContainerSlotIndex = TargetContainerSlotIndex;
-		Payload->ExpectedTargetContainerRevision = ExpectedTargetRevision;
-	}
-	if (!SubmitBodyActionThroughAbility(Payload))
-	{
-		FCatDomainCommandResult Result;
-		Result.RequestId = RequestId;
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		DeliverCampCommandResultToOwningClient(Result);
-	}
+	SubmitTransferObjectBetweenContainersFromServerRequest(RequestId, ObjectKind, ObjectInstanceId,
+		SourceContainerId, SourceContainerKind, SourceContainerSlotIndex, ExpectedSourceRevision,
+		TargetContainerId, TargetContainerKind, TargetContainerSlotIndex, ExpectedTargetRevision);
 }
 
-// 通用容器物体移动 Ability 提交流程：
-// 1. 先验证玩法命令 gate、载荷形状、当前 Character、Items 和服务器身份。
-// 2. 再从 Items 重读源/目标容器宿主、种类和源容器槽位对象，要求客户端种类与注册事实一致，源格仍是该物体。
-// 3. 地面鱼护和外部容器都必须由 Items 注册宿主并通过服务器距离校验，物体能否进入目标容器继续交给 Items 策略裁决。
-// 4. 最后只调用 Items 的通用容器物体入口，并把结果可靠回送 owning client；当前 Items 只对鱼对象提交，其余 ObjectKind 保持策略拒绝。
-void ACatfishingPlayerController::SubmitTransferObjectBetweenContainersFromBodyActionAbility(const FGuid RequestId,
+// 普通容器库存服务端提交流程：
+// 1. 先验证玩法命令 gate、RPC 参数形状、当前 Character、Items 服务和服务器身份；客户端身份只作为请求来源，不会让客户端取得鱼护 Actor 权威。
+// 2. 再从 Items 重读源/目标容器宿主、种类、快照和源槽位对象，要求客户端提交的容器类型与注册事实一致，源格仍是同一个物体。
+// 3. 接着只做容器宿主距离校验；公共鱼护是外部箱子库存，不要求拖拽者拥有鱼护，也不进入 Social 偷鱼协议。
+// 4. 最后构造 Items 转移命令，由 Items 按容器策略和 Revision 原子提交，并把结果可靠回送 owning client；当前 Items 只对鱼对象提交，其余 ObjectKind 保持策略拒绝。
+void ACatfishingPlayerController::SubmitTransferObjectBetweenContainersFromServerRequest(const FGuid RequestId,
 	const ECatContainedObjectKind ObjectKind, const FGuid ObjectInstanceId,
 	const FGuid SourceContainerId, const ECatContainerKind SourceContainerKind,
 	const int32 SourceContainerSlotIndex, const int64 ExpectedSourceRevision, const FGuid TargetContainerId,
@@ -3029,7 +3009,7 @@ bool ACatfishingPlayerController::ExecuteBodyActionAbilityPayload(const UCatBody
 	case ECatBodyActionAbilityCommand::TransferObjectBetweenContainers:
 		if (Payload.bUsesExplicitContainerTransfer)
 		{
-			SubmitTransferObjectBetweenContainersFromBodyActionAbility(Payload.RequestId,
+			SubmitTransferObjectBetweenContainersFromServerRequest(Payload.RequestId,
 				Payload.ContainerObjectKind,
 				Payload.ContainerObjectInstanceId,
 				Payload.SourceContainerId,

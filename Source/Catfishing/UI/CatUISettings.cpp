@@ -17,6 +17,8 @@ UCatUISettings::UCatUISettings()
 		FSoftClassPath(TEXT("/Game/UI/HUD/WBP_CatHUD.WBP_CatHUD_C")));
 	InventoryWidgetClass = TSoftClassPtr<UCatInventoryWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatInventory.WBP_CatInventory_C")));
+	FishGuardInventoryWidgetClass = TSoftClassPtr<UCatInventoryWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatFishGuardInventory.WBP_CatFishGuardInventory_C")));
 	InventorySlotWidgetClass = TSoftClassPtr<UCatInventorySlotWidget>(
 		FSoftClassPath(TEXT("/Game/UI/InventorySlot/WBP_CatInventorySlot.WBP_CatInventorySlot_C")));
 	ShopWidgetClass = TSoftClassPtr<UCatShopWidget>(
@@ -54,6 +56,17 @@ TSubclassOf<UCatHUDWidget> UCatUISettings::LoadHUDWidgetClass() const
 TSubclassOf<UCatInventoryWidget> UCatUISettings::LoadInventoryWidgetClass() const
 {
 	UClass* LoadedClass = InventoryWidgetClass.LoadSynchronous();
+	if (!LoadedClass || !LoadedClass->IsChildOf(UCatInventoryWidget::StaticClass()))
+	{
+		return nullptr;
+	}
+	return LoadedClass;
+}
+
+// 鱼护箱子库存 WBP 类加载流程：同步解析配置软类并验证继承背包主界面基类；失败返回空，让鱼护交互明确拒绝而不是退回通用页。
+TSubclassOf<UCatInventoryWidget> UCatUISettings::LoadFishGuardInventoryWidgetClass() const
+{
+	UClass* LoadedClass = FishGuardInventoryWidgetClass.LoadSynchronous();
 	if (!LoadedClass || !LoadedClass->IsChildOf(UCatInventoryWidget::StaticClass()))
 	{
 		return nullptr;

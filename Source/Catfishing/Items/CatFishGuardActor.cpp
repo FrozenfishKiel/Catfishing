@@ -161,7 +161,7 @@ bool ACatFishGuardActor::IsAuthorityRequestSpatiallyValid(const AController* Req
 	return !bHit || Hit.GetActor() == this;
 }
 
-// 鱼护交互流程：本地始终打开“随身背包 + 本次命中鱼护”的视图并把同一接口请求转发给服务器；
+// 鱼护交互流程：本地始终打开“随身背包 + 本次命中鱼护”的鱼护专用箱子视图并把同一接口请求转发给服务器；
 // authority 若发现角色嘴上叼着鱼，则只向本 Actor 的 ContainerId 提交。失败时鱼仍留在嘴上，绝不搜索其他鱼护。
 bool ACatFishGuardActor::Interact_Implementation(AController* RequestingController, const FGuid RequestId)
 {
@@ -184,8 +184,7 @@ bool ACatFishGuardActor::Interact_Implementation(AController* RequestingControll
 		{
 			TArray<UCatContainerReplicationComponent*> ExternalContainers;
 			ExternalContainers.Add(ContainerReplication);
-			UISubsystem->OpenInventoryWithExternalContainerContexts(ExternalContainers);
-			bHandled = true;
+			bHandled = UISubsystem->OpenFishGuardInventoryWithExternalContainerContexts(ExternalContainers);
 		}
 	}
 

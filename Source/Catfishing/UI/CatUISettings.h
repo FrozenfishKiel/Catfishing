@@ -32,6 +32,9 @@ public:
 	/** 返回正式背包主界面 WBP 类；缺失时调用方 fail-closed，不创建原生白盒替身。 */
 	TSubclassOf<UCatInventoryWidget> LoadInventoryWidgetClass() const;
 
+	/** 返回正式鱼护箱子库存 WBP 类；缺失时鱼护交互 fail-closed，不借通用背包页伪装箱子页面。 */
+	TSubclassOf<UCatInventoryWidget> LoadFishGuardInventoryWidgetClass() const;
+
 	/** 读取正式背包格子 WBP 类；缺失时背包只能显示主界面文本，不创建原生格子替身。 */
 	TSubclassOf<UCatInventorySlotWidget> LoadInventorySlotWidgetClass() const;
 
@@ -70,6 +73,10 @@ public:
 	/** 正式背包主 WBP 类；它拥有 WrapBox，并按当前打开的容器容量创建格子。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")
 	TSoftClassPtr<UCatInventoryWidget> InventoryWidgetClass;
+
+	/** 正式鱼护箱子库存 WBP 类；它复用库存 View 基类，但布局上把玩家背包和鱼护容器分成两个面板。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")
+	TSoftClassPtr<UCatInventoryWidget> FishGuardInventoryWidgetClass;
 
 	/** 正式背包格子 WBP 类；每个格子是独立 UserWidget，不是 Button。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")

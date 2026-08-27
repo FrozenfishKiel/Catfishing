@@ -45,6 +45,10 @@ public:
 	/** 打开带外部容器上下文的背包；交互对象只提供只读容器复制源，跨容器移动仍由背包 Drop 和服务器裁决。 */
 	void OpenInventoryWithExternalContainerContexts(const TArray<UCatContainerReplicationComponent*>& ExternalContainers);
 
+	/** 打开鱼护箱子库存页；它使用鱼护专属 WBP，但读写路径仍是当前本地玩家的同一个库存 Model。 */
+	bool OpenFishGuardInventoryWithExternalContainerContexts(
+		const TArray<UCatContainerReplicationComponent*>& ExternalContainers);
+
 	/** 查询背包 PageController 打开态；没有已装配页面时返回 false，避免旧 Widget 引用影响输入切换判断。 */
 	bool IsInventoryOpen() const;
 
@@ -101,7 +105,11 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryWidget> InventoryWidget;
 
-	/** 当前 LocalPlayer 的库存 Model；它只读随身道具、当前交互世界容器、当前选择和动作结果。 */
+	/** 当前 LocalPlayer 的鱼护箱子库存 WBP；只在鱼护交互时入视口，用来展示“玩家背包 + 鱼护箱子”双面板。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatInventoryWidget> FishGuardInventoryWidget;
+
+	/** 当前 LocalPlayer 的库存 Model；它只读随身库存、独立鱼护、外部容器、当前选择和动作结果。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryModel> InventoryModel;
 

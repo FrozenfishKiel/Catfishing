@@ -64,14 +64,15 @@ namespace
 		}
 	}
 
-	// 鱼离开容器权限流程：地面鱼护里的鱼只能由捕获者通过普通库存操作移出；其他玩家必须走 Social 偷鱼协议。
-	// 旧 PersonalGuard 明确拒绝，避免角色随身鱼护路径复活。
+	// 鱼离开容器权限流程：地面鱼护按公共箱子处理，靠近并通过服务器容器校验的玩家都能用普通库存操作移动；旧 PersonalGuard 明确拒绝，避免角色随身鱼护路径复活。
 	bool CanFishLeaveContainer(const FCatFishInstance& Fish, const ECatContainerKind ContainerKind,
 		const FString& StableNetId)
 	{
+		(void)Fish;
+		(void)StableNetId;
 		if (ContainerKind == ECatContainerKind::FishGuard)
 		{
-			return Fish.OwnerStableNetId == StableNetId;
+			return true;
 		}
 		return ContainerKind == ECatContainerKind::SharedFishTank;
 	}
@@ -475,7 +476,7 @@ FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransf
 	return Result;
 }
 
-// 直接进食流程：先重放终态，再校验身份、容器 Revision、个人归属/共享缸、未预留与目标鱼；成功清空所在槽位并发布一次 Revision。
+// 直接进食流程：先重放终态，再校验身份、容器 Revision、旧随身鱼护禁用、未预留与目标鱼；地面鱼护作为公共箱子不再按鱼主人拦截。
 FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand& Command)
 {
 	FCatFishConsumeResult Result;
@@ -520,9 +521,7 @@ FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand
 		{
 			Result.Command.Error = ECatDomainCommandError::NotFound;
 		}
-		else if (Source->Snapshot.Kind == ECatContainerKind::PersonalGuard
-			|| (Source->Snapshot.Kind == ECatContainerKind::FishGuard
-				&& Source->Snapshot.Fish[FishIndex].OwnerStableNetId != Command.Context.StableNetId))
+		else if (Source->Snapshot.Kind == ECatContainerKind::PersonalGuard)
 		{
 			Result.Command.Error = ECatDomainCommandError::PermissionDenied;
 		}
@@ -545,7 +544,7 @@ FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand
 	return Result;
 }
 
-// 献祭预留流程：按 RequestId 幂等读取既有记录，再校验身份、容器 Revision、鱼归属与未锁定；成功只增加容器 Revision 和锁，不提前删除复制数组。
+// 献祭预留流程：按 RequestId 幂等读取既有记录，再校验身份、容器 Revision、公共/个人容器权限与未锁定；成功只增加容器 Revision 和锁，不提前删除复制数组。
 FCatFishReservationResult UCatItemsService::ReserveFish(const FCatSacrificeCommand& Command)
 {
 	FCatFishReservationResult Result;
@@ -591,6 +590,7 @@ FCatFishReservationResult UCatItemsService::ReserveFish(const FCatSacrificeComma
 	}
 	const FCatFishInstance& Fish = Container->Snapshot.Fish[FishIndex];
 	const bool bOwnerMayReserve = Container->Snapshot.Kind == ECatContainerKind::SharedFishTank
+		|| Container->Snapshot.Kind == ECatContainerKind::FishGuard
 		|| Fish.OwnerStableNetId == Command.Context.StableNetId;
 	if (!bOwnerMayReserve)
 	{

@@ -36,6 +36,10 @@ public:
 	/** 打开带外部容器上下文的库存；交互对象只提供容器读源，后续移动仍由 Drop 和服务器权限裁决。 */
 	void OpenInventoryWithExternalContainerContexts(const TArray<UCatContainerReplicationComponent*>& ExternalContainers);
 
+	/** 使用指定库存 WBP 打开外部容器；鱼护这类箱子页面可换自己的布局，但仍共用同一个 Model 和服务器命令链。 */
+	bool OpenInventoryWithExternalContainerContextsUsingView(
+		const TArray<UCatContainerReplicationComponent*>& ExternalContainers, UCatInventoryWidget* PreferredView);
+
 	/** 返回库存是否由本 PageController 保持打开；不从 Widget 可见性反推。 */
 	bool IsInventoryOpen() const;
 
@@ -76,6 +80,12 @@ private:
 	/** 根据库存打开状态应用或释放模态 UI 输入锁；打开会停止当前移动，关闭会恢复本页面改过的焦点和鼠标。 */
 	void ApplyInventoryInputMode(bool bOpen);
 
+	/** 切换当前库存 View；只搬 UI 委托和视口焦点，不重建 Model、输入绑定或后端容器上下文。 */
+	bool SwitchInventoryView(UCatInventoryWidget* NewView);
+
+	/** 解除当前库存 View 的 UI 委托并移出视口；Model 和输入绑定由外层生命周期继续管理。 */
+	void UnbindInventoryView();
+
 	/** 当前 PageController 所属 LocalPlayer；用于访问配置和输入生命周期。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<ULocalPlayer> BoundLocalPlayer;
@@ -91,6 +101,10 @@ private:
 	/** 当前页面渲染的库存 WBP；PageController 只调用 RenderInventory 和订阅纯意图。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatInventoryWidget> BoundView;
+
+	/** 普通 Tab 背包使用的默认 WBP；从鱼护箱子关闭后再次普通打开时要切回这张页面。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UCatInventoryWidget> DefaultInventoryView;
 
 	/** 当前页面安装的库存开关 Action；保存强引用只为输入绑定生命周期配对。 */
 	UPROPERTY(Transient)

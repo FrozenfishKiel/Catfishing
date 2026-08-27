@@ -146,19 +146,46 @@ const FCatInventoryViewState& UCatInventoryWidget::GetLastInventoryViewState() c
 }
 
 // WrapBox 重建流程：
-// 1. 先解绑旧格子并清空 WrapBox，避免刷新后旧下标继续广播。
-// 2. 再为 Model 提供的每个 Slot 创建独立 UCatInventorySlotWidget。
-// 3. 每个格子绑定选择、鼠标上下文和 Drop 委托，动作按钮仍留在主界面。
+// 1. 先解绑旧格子并清空所有可选格子容器，避免刷新后旧下标继续广播。
+// 2. WBP 提供分栏容器时，随身库存格进玩家背包栏，容器格进外部容器栏；缺分栏时回退到旧的单 WrapBox。
+// 3. 每个格子仍绑定同一组选择、鼠标上下文和 Drop 委托，视觉分栏不改变服务器提交参数。
 void UCatInventoryWidget::RebuildSlotWidgets()
 {
 	UnbindSlotWidgets();
-	if (!InventorySlotWrapBox || !InventorySlotWidgetClass)
+	if (!InventorySlotWidgetClass)
 	{
 		return;
 	}
-	InventorySlotWrapBox->ClearChildren();
+	TArray<UWrapBox*> SlotWrapBoxes;
+	auto AddUniqueWrapBox = [&SlotWrapBoxes](UWrapBox* WrapBox)
+	{
+		if (WrapBox)
+		{
+			SlotWrapBoxes.AddUnique(WrapBox);
+		}
+	};
+	AddUniqueWrapBox(InventorySlotWrapBox);
+	AddUniqueWrapBox(InventoryObjectSlotWrapBox);
+	AddUniqueWrapBox(ExternalContainerSlotWrapBox);
+	for (UWrapBox* SlotWrapBox : SlotWrapBoxes)
+	{
+		SlotWrapBox->ClearChildren();
+	}
 	for (const FCatInventorySlotView& SlotView : LastInventoryViewState.Slots)
 	{
+		UWrapBox* TargetWrapBox = InventorySlotWrapBox;
+		if (SlotView.SlotSource == ECatInventorySlotSource::InventoryObject && InventoryObjectSlotWrapBox)
+		{
+			TargetWrapBox = InventoryObjectSlotWrapBox;
+		}
+		else if (SlotView.SlotSource == ECatInventorySlotSource::ContainerObject && ExternalContainerSlotWrapBox)
+		{
+			TargetWrapBox = ExternalContainerSlotWrapBox;
+		}
+		if (!TargetWrapBox)
+		{
+			continue;
+		}
 		UCatInventorySlotWidget* SlotWidget = CreateWidget<UCatInventorySlotWidget>(GetOwningPlayer(), InventorySlotWidgetClass);
 		if (!SlotWidget)
 		{
@@ -168,7 +195,7 @@ void UCatInventoryWidget::RebuildSlotWidgets()
 		SlotWidget->OnPointerActionRequested.AddUObject(this, &ThisClass::HandleSlotPointerAction);
 		SlotWidget->OnSlotDropRequested.AddUObject(this, &ThisClass::HandleSlotDropRequested);
 		SlotWidget->RenderSlot(SlotView);
-		InventorySlotWrapBox->AddChildToWrapBox(SlotWidget);
+		TargetWrapBox->AddChildToWrapBox(SlotWidget);
 		BoundSlotWidgets.Add(SlotWidget);
 	}
 }

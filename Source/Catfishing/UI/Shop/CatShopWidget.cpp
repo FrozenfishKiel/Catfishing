@@ -4,13 +4,18 @@
 #include "Components/Button.h"
 #include "Components/HorizontalBox.h"
 #include "Components/TextBlock.h"
+#include "Input/Events.h"
+#include "InputCoreTypes.h"
+#include "UI/CatUISettings.h"
 
 // 构造流程：
-// 1. 先让旧 WBP 在已有按钮行里补齐鱼漂购买按钮，保证默认商店能拿到开钓必需的鱼漂。
-// 2. 再绑定 Designer 或运行时按钮到统一请求入口；动态商品列表仍可完全绕开这些固定按钮。
+// 1. 先把商店根 Widget 设为可聚焦，让通用 UIOnly 输入模式能把键盘焦点真正交给本页面；后续关闭键才会进入 NativeOnKeyDown。
+// 2. 再让旧 WBP 在已有按钮行里补齐鱼漂购买按钮，保证默认商店能拿到开钓必需的鱼漂。
+// 3. 最后先移除已有点击绑定，再把 Designer 或运行时按钮接到统一请求入口；动态商品列表仍可完全绕开这些固定按钮。
 void UCatShopWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
+	SetIsFocusable(true);
 	EnsureDefaultFloatButton();
 	if (CloseButton)
 	{
@@ -74,6 +79,31 @@ void UCatShopWidget::NativeDestruct()
 		ClaimFreeStarterRodButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleClaimStarterRodClicked);
 	}
 	Super::NativeDestruct();
+}
+
+// 键盘流程：
+// 1. 商店打开后输入模式切到 UIOnly，PlayerController 不再接玩法输入，所以关闭键必须由拥有焦点的 Widget 处理。
+// 2. 先读取 Model 投给 View 的打开状态；未打开时直接交回父类，避免构造或销毁过程中的迟到按键广播关闭意图。
+// 3. 再读取项目配置里的交互确认键；配置缺失时只保留 Escape 作为通用模态关闭出口。
+// 4. 命中 Escape 或交互键后只广播 View 意图并返回 Handled，输入恢复和实例销毁仍交给 PageController 与交互组件。
+FReply UCatShopWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
+{
+	if (!LastShopViewState.bOpen)
+	{
+		return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
+	}
+
+	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
+	const FName InteractionKeyName = Settings ? Settings->ResolveInteractionConfirmKeyName() : NAME_None;
+	const FName PressedKeyName = InKeyEvent.GetKey().GetFName();
+	const bool bPressedCloseKey = PressedKeyName == EKeys::Escape.GetFName()
+		|| (!InteractionKeyName.IsNone() && PressedKeyName == InteractionKeyName);
+	if (bPressedCloseKey)
+	{
+		RequestCloseShop();
+		return FReply::Handled();
+	}
+	return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
 }
 
 // 渲染流程：缓存只读投影，复制 Designer 绑定字段，并按每条商品自己的余额/库存 gate 更新默认按钮。

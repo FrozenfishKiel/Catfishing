@@ -88,7 +88,7 @@ protected:
 	void BP_RenderInventory(const FCatInventoryViewState& ViewState);
 
 private:
-	/** 按当前 Slots 数组清空并重建 WrapBox 子格；每个子格都是 UCatInventorySlotWidget，不是 Button。 */
+	/** 按当前 Slots 数组清空并重建 WrapBox 子格；WBP 可以选择单列表，也可以把随身库存和外部容器拆成两栏。 */
 	void RebuildSlotWidgets();
 
 	/** 解除当前 WrapBox 子格的原生委托；刷新或销毁前调用，避免旧格子继续广播。 */
@@ -122,6 +122,14 @@ private:
 	/** WBP Designer 中的格子容器；主界面刷新时只对它 ClearChildren/AddChild，不硬编码八个按钮。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UWrapBox> InventorySlotWrapBox;
+
+	/** WBP Designer 中的随身库存格容器；鱼护箱子页用它把玩家背包放在独立面板里。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UWrapBox> InventoryObjectSlotWrapBox;
+
+	/** WBP Designer 中的容器格容器；鱼护箱子页用它把鱼护箱子内容和玩家背包分开展示。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UWrapBox> ExternalContainerSlotWrapBox;
 
 	/** WBP Designer 中的关闭按钮；点击只发关闭意图。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))

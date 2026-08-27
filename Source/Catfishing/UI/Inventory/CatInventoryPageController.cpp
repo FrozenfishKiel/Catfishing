@@ -123,16 +123,13 @@ bool UCatInventoryPageController::Bind(ULocalPlayer* InLocalPlayer, APlayerContr
 	BoundLocalPlayer = InLocalPlayer;
 	BoundPlayerController = InController;
 	BoundModel = InModel;
-	BoundView = InView;
 	ModelViewChangedHandle = InModel->OnViewStateChanged.AddUObject(this, &ThisClass::HandleModelViewStateChanged);
-	ViewCloseHandle = InView->OnCloseRequested.AddUObject(this, &ThisClass::HandleViewCloseRequested);
-	ViewSlotSelectionHandle = InView->OnSlotSelectionRequested.AddUObject(
-		this, &ThisClass::HandleViewSlotSelectionRequested);
-	ViewSlotPointerHandle = InView->OnSlotPointerRequested.AddUObject(
-		this, &ThisClass::HandleViewSlotPointerRequested);
-	ViewSlotDropHandle = InView->OnSlotDropRequested.AddUObject(
-		this, &ThisClass::HandleViewSlotDropRequested);
-	ViewActionHandle = InView->OnInventoryActionRequested.AddUObject(this, &ThisClass::HandleViewActionRequested);
+	DefaultInventoryView = InView;
+	if (!SwitchInventoryView(InView))
+	{
+		Unbind();
+		return false;
+	}
 	InstallInventoryInput();
 	HandleModelViewStateChanged();
 	return true;
@@ -153,48 +150,57 @@ void UCatInventoryPageController::Unbind()
 		Model->SetOpen(false);
 		Model->ClearExternalContainerContexts();
 	}
-	if (UCatInventoryWidget* View = BoundView.Get())
-	{
-		View->OnCloseRequested.Remove(ViewCloseHandle);
-		View->OnSlotSelectionRequested.Remove(ViewSlotSelectionHandle);
-		View->OnSlotPointerRequested.Remove(ViewSlotPointerHandle);
-		View->OnSlotDropRequested.Remove(ViewSlotDropHandle);
-		View->OnInventoryActionRequested.Remove(ViewActionHandle);
-		View->RemoveFromParent();
-	}
+	UnbindInventoryView();
 	ModelViewChangedHandle.Reset();
-	ViewCloseHandle.Reset();
-	ViewSlotSelectionHandle.Reset();
-	ViewSlotPointerHandle.Reset();
-	ViewSlotDropHandle.Reset();
-	ViewActionHandle.Reset();
 	BoundLocalPlayer.Reset();
 	BoundPlayerController.Reset();
 	BoundModel.Reset();
-	BoundView.Reset();
+	DefaultInventoryView.Reset();
 	ModalInputModeState = FCatUIModalInputModeState();
 }
 
-// 切换流程：普通按键打开前清空外部容器上下文；随后把真实打开/关闭生命周期交给统一 SetInventoryOpen。
+// 切换流程：普通按键打开前切回默认背包 WBP 并清空外部容器上下文，避免从鱼护箱子关闭后沿用箱子布局。
 void UCatInventoryPageController::ToggleInventory()
 {
 	UCatInventoryModel* Model = BoundModel.Get();
 	if (!bInventoryOpen && Model)
 	{
+		SwitchInventoryView(DefaultInventoryView.Get());
 		Model->ClearExternalContainerContexts();
 	}
 	SetInventoryOpen(!bInventoryOpen);
 }
 
-// 交互打开流程：先把交互对象贡献的外部容器读源交给 Model，再保证库存处于打开态；已打开时只刷新，不重置输入锁。
+// 交互打开流程：先切回默认库存 WBP，再把交互对象贡献的外部容器读源交给 Model；鱼护箱子这类需要专属布局的入口走指定 View 版本。
 void UCatInventoryPageController::OpenInventoryWithExternalContainerContexts(
 	const TArray<UCatContainerReplicationComponent*>& ExternalContainers)
 {
+	SwitchInventoryView(DefaultInventoryView.Get());
 	if (UCatInventoryModel* Model = BoundModel.Get())
 	{
 		Model->SetExternalContainerContexts(ExternalContainers);
 	}
 	SetInventoryOpen(true);
+}
+
+// 指定 View 打开流程：
+// 1. 要求调用方提供交互对象指定的 WBP；缺少 View 时返回 false，让鱼护箱子这类入口能明确 fail-closed。
+// 2. 先切换到指定 WBP，让鱼护箱子能展示自己的双面板布局。
+// 3. 再把外部容器读源交给同一个 Model；切换 WBP 不会生成第二套库存状态。
+// 4. 最后打开库存并返回真实打开结果，调用者可据此 fail-closed。
+bool UCatInventoryPageController::OpenInventoryWithExternalContainerContextsUsingView(
+	const TArray<UCatContainerReplicationComponent*>& ExternalContainers, UCatInventoryWidget* PreferredView)
+{
+	if (!PreferredView || !SwitchInventoryView(PreferredView))
+	{
+		return false;
+	}
+	if (UCatInventoryModel* Model = BoundModel.Get())
+	{
+		Model->SetExternalContainerContexts(ExternalContainers);
+	}
+	SetInventoryOpen(true);
+	return bInventoryOpen;
 }
 
 // 状态查询流程：返回 PageController 的唯一打开状态，不读取 Widget 可见性或鼠标状态拼第二份真相。
@@ -589,4 +595,60 @@ void UCatInventoryPageController::ApplyInventoryInputMode(const bool bOpen)
 		return;
 	}
 	CatUIModalInputMode::Close(Controller, ModalInputModeState);
+}
+
+// View 切换流程：
+// 1. 空 View 直接失败；同一个 View 重复传入时直接成功，避免反复解绑按钮和格子委托。
+// 2. 旧 View 先解除本 Controller 订阅并移出视口；Model、输入和打开状态都保留在 PageController。
+// 3. 新 View 订阅同一组 UI 意图，并立即接收当前 Model 投影；如果库存已经打开，再把它加入视口并刷新焦点。
+bool UCatInventoryPageController::SwitchInventoryView(UCatInventoryWidget* NewView)
+{
+	if (!NewView)
+	{
+		return false;
+	}
+	if (BoundView.Get() == NewView)
+	{
+		return true;
+	}
+	UnbindInventoryView();
+	BoundView = NewView;
+	ViewCloseHandle = NewView->OnCloseRequested.AddUObject(this, &ThisClass::HandleViewCloseRequested);
+	ViewSlotSelectionHandle = NewView->OnSlotSelectionRequested.AddUObject(
+		this, &ThisClass::HandleViewSlotSelectionRequested);
+	ViewSlotPointerHandle = NewView->OnSlotPointerRequested.AddUObject(
+		this, &ThisClass::HandleViewSlotPointerRequested);
+	ViewSlotDropHandle = NewView->OnSlotDropRequested.AddUObject(
+		this, &ThisClass::HandleViewSlotDropRequested);
+	ViewActionHandle = NewView->OnInventoryActionRequested.AddUObject(this, &ThisClass::HandleViewActionRequested);
+	HandleModelViewStateChanged();
+	if (bInventoryOpen)
+	{
+		if (!NewView->IsInViewport())
+		{
+			NewView->AddToViewport(10);
+		}
+		ApplyInventoryInputMode(true);
+	}
+	return true;
+}
+
+// View 解绑流程：只拆 UI 委托和视口父子关系；外层 Unbind 才负责恢复输入、清外部容器和断开 Model。
+void UCatInventoryPageController::UnbindInventoryView()
+{
+	if (UCatInventoryWidget* View = BoundView.Get())
+	{
+		View->OnCloseRequested.Remove(ViewCloseHandle);
+		View->OnSlotSelectionRequested.Remove(ViewSlotSelectionHandle);
+		View->OnSlotPointerRequested.Remove(ViewSlotPointerHandle);
+		View->OnSlotDropRequested.Remove(ViewSlotDropHandle);
+		View->OnInventoryActionRequested.Remove(ViewActionHandle);
+		View->RemoveFromParent();
+	}
+	ViewCloseHandle.Reset();
+	ViewSlotSelectionHandle.Reset();
+	ViewSlotPointerHandle.Reset();
+	ViewSlotDropHandle.Reset();
+	ViewActionHandle.Reset();
+	BoundView.Reset();
 }

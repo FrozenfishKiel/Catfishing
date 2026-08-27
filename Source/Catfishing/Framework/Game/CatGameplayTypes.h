@@ -446,7 +446,7 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerRequestCampfirePlayback(ACatCampHubActor* Camp, FGuid RequestId);
 
-	/** 由 owning client 发起通用容器物体移动请求；服务器重读源/目标槽位、容器宿主、鱼捕获者身份、距离和 Items 权限后回送领域结果。 */
+	/** 由 owning client 发起普通容器库存拖拽请求；这是 Items 请求，不进入 BodyAction/Social，服务器按容器宿主、距离、Revision 和 Items 权限复核后回送领域结果。 */
 	UFUNCTION(Server, Reliable)
 	void ServerTransferObjectBetweenContainers(FGuid RequestId, ECatContainedObjectKind ObjectKind, FGuid ObjectInstanceId,
 		FGuid SourceContainerId, ECatContainerKind SourceContainerKind, int32 SourceContainerSlotIndex,
@@ -654,8 +654,8 @@ private:
 	void SubmitCampRestFromBodyActionAbility(ACatCampHubActor* Camp, FGuid RequestId);
 	/** BodyAction Ability 接管后的篝火回看提交；保持 Camp 的 CapturePlan 与 multicast 裁决。 */
 	void SubmitCampfirePlaybackFromBodyActionAbility(ACatCampHubActor* Camp, FGuid RequestId);
-	/** BodyAction Ability 接管后的通用容器物体移动；保持服务器槽位复核、距离校验和 Items 原子事务。 */
-	void SubmitTransferObjectBetweenContainersFromBodyActionAbility(FGuid RequestId, ECatContainedObjectKind ObjectKind,
+	/** 服务器接管普通容器库存提交；公共鱼护按箱子库存处理，不走 BodyAction/Social，只保留槽位复核、距离校验、Items 原子事务和 owning-client 结果回送。 */
+	void SubmitTransferObjectBetweenContainersFromServerRequest(FGuid RequestId, ECatContainedObjectKind ObjectKind,
 		FGuid ObjectInstanceId,
 		FGuid SourceContainerId, ECatContainerKind SourceContainerKind, int32 SourceContainerSlotIndex,
 		int64 ExpectedSourceRevision, FGuid TargetContainerId, ECatContainerKind TargetContainerKind,

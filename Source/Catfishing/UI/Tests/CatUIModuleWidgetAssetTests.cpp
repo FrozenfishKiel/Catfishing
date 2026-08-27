@@ -35,6 +35,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Editor.UIModules.CreateFormalWBPAssets",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishGuardInventoryWidgetAssetCreationTest,
+	"Catfishing.Editor.UIModules.CreateFishGuardWBPAsset",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::EngineFilter)
+
 namespace CatUIModuleWidgetAsset
 {
 	// 输入 Action 获取流程：
@@ -288,13 +293,110 @@ namespace CatUIModuleWidgetAsset
 		Blueprint->MarkPackageDirty();
 		return SaveAssetPackage(Blueprint, PackageName);
 	}
+
+	// 鱼护库存 WBP 布局流程：
+	// 1. 重建鱼护页面根节点，保留库存 View 基类要求的摘要、装备、选中和结果文本。
+	// 2. 在中间放两个面板：左边是玩家背包格，右边是鱼护箱子格，控件名对应 UCatInventoryWidget 的可选绑定字段。
+	// 3. 只创建关闭按钮；存取鱼靠格子拖拽走原库存命令，不在鱼护页增加第二套动作按钮。
+	bool BuildFishGuardInventoryWidget(FAutomationTestBase& Test, UWidgetBlueprint* FishGuardInventory)
+	{
+		bool bBuilt = true;
+		UVerticalBox* FishGuardRoot = ResetRootToVerticalBox(FishGuardInventory, TEXT("FishGuardInventoryRoot"));
+		bBuilt &= Test.TestNotNull(TEXT("鱼护库存根"), FishGuardRoot);
+		if (!FishGuardInventory || !FishGuardRoot || !FishGuardInventory->WidgetTree)
+		{
+			return false;
+		}
+		bBuilt &= Test.TestNotNull(TEXT("鱼护库存摘要文本"), AddText(
+			FishGuardInventory, FishGuardRoot, TEXT("SummaryTextBlock"), TEXT("鱼护箱子：等待同步")));
+		bBuilt &= Test.TestNotNull(TEXT("鱼护库存装备文本"), AddText(
+			FishGuardInventory, FishGuardRoot, TEXT("EquipmentTextBlock"), TEXT("当前钓具：等待同步")));
+
+		UHorizontalBox* FishGuardPanels = FishGuardInventory
+			? FishGuardInventory->WidgetTree->ConstructWidget<UHorizontalBox>(
+				UHorizontalBox::StaticClass(), TEXT("FishGuardPanels"))
+			: nullptr;
+		if (Test.TestNotNull(TEXT("鱼护库存双面板"), FishGuardPanels))
+		{
+			FishGuardRoot->AddChildToVerticalBox(FishGuardPanels);
+			UVerticalBox* PlayerInventoryPanel = FishGuardInventory->WidgetTree->ConstructWidget<UVerticalBox>(
+				UVerticalBox::StaticClass(), TEXT("PlayerInventoryPanel"));
+			UVerticalBox* GuardContainerPanel = FishGuardInventory->WidgetTree->ConstructWidget<UVerticalBox>(
+				UVerticalBox::StaticClass(), TEXT("GuardContainerPanel"));
+			if (Test.TestNotNull(TEXT("玩家背包面板"), PlayerInventoryPanel))
+			{
+				FishGuardPanels->AddChildToHorizontalBox(PlayerInventoryPanel);
+				bBuilt &= Test.TestNotNull(TEXT("玩家背包标题"), AddText(FishGuardInventory, PlayerInventoryPanel,
+					TEXT("PlayerInventoryHeadingTextBlock"), TEXT("玩家背包")));
+				bBuilt &= Test.TestNotNull(TEXT("玩家背包概要"), AddText(FishGuardInventory, PlayerInventoryPanel,
+					TEXT("InventoryItemsTextBlock"), TEXT("随身库存：等待同步")));
+				UWrapBox* InventoryObjectWrapBox = FishGuardInventory->WidgetTree->ConstructWidget<UWrapBox>(
+					UWrapBox::StaticClass(), TEXT("InventoryObjectSlotWrapBox"));
+				if (Test.TestNotNull(TEXT("玩家背包格子区"), InventoryObjectWrapBox))
+				{
+					PlayerInventoryPanel->AddChildToVerticalBox(InventoryObjectWrapBox);
+				}
+				else
+				{
+					bBuilt = false;
+				}
+			}
+			else
+			{
+				bBuilt = false;
+			}
+			if (Test.TestNotNull(TEXT("鱼护箱子面板"), GuardContainerPanel))
+			{
+				FishGuardPanels->AddChildToHorizontalBox(GuardContainerPanel);
+				bBuilt &= Test.TestNotNull(TEXT("鱼护箱子标题"), AddText(FishGuardInventory, GuardContainerPanel,
+					TEXT("GuardContainerHeadingTextBlock"), TEXT("鱼护箱子")));
+				UWrapBox* ExternalContainerWrapBox = FishGuardInventory->WidgetTree->ConstructWidget<UWrapBox>(
+					UWrapBox::StaticClass(), TEXT("ExternalContainerSlotWrapBox"));
+				if (Test.TestNotNull(TEXT("鱼护箱子格子区"), ExternalContainerWrapBox))
+				{
+					GuardContainerPanel->AddChildToVerticalBox(ExternalContainerWrapBox);
+				}
+				else
+				{
+					bBuilt = false;
+				}
+			}
+			else
+			{
+				bBuilt = false;
+			}
+		}
+		else
+		{
+			bBuilt = false;
+		}
+		bBuilt &= Test.TestNotNull(TEXT("鱼护库存选中文本"), AddText(FishGuardInventory, FishGuardRoot,
+			TEXT("SelectedFishTextBlock"), TEXT("鱼护操作：拖拽鱼或物品到目标格")));
+		bBuilt &= Test.TestNotNull(TEXT("鱼护库存结果文本"), AddText(
+			FishGuardInventory, FishGuardRoot, TEXT("ResultTextBlock"), TEXT("等待操作")));
+		UHorizontalBox* FishGuardButtons = FishGuardInventory
+			? FishGuardInventory->WidgetTree->ConstructWidget<UHorizontalBox>(
+				UHorizontalBox::StaticClass(), TEXT("FishGuardActionButtons"))
+			: nullptr;
+		if (Test.TestNotNull(TEXT("鱼护库存按钮行"), FishGuardButtons))
+		{
+			FishGuardRoot->AddChildToVerticalBox(FishGuardButtons);
+			bBuilt &= Test.TestNotNull(TEXT("关闭鱼护按钮"), AddButton(
+				FishGuardInventory, FishGuardButtons, TEXT("CloseButton"), TEXT("关闭")));
+		}
+		else
+		{
+			bBuilt = false;
+		}
+		return bBuilt;
+	}
 }
 
 // 测试流程：
 // 1. 创建或刷新 IA_Interact，并把 E 键写入项目既有 IMC_InputContext，不生成第二套 IMC。
-// 2. 分别创建 HUD、Inventory、InventorySlot、Shop、Interaction、Collection 六个正式 WBP。
-// 3. 背包主界面只放 WrapBox 和动作按钮，格子 WBP 是独立 UserWidget 且不创建 Button 根。
-// 4. 商店 WBP 只由实现 ICatInteractable 的 Kiosk Actor 后续打开；本测试保存可放置的 ShopEconomy Kiosk，但不把商店挂到 LocalPlayer。
+// 2. 分别创建 HUD、Inventory、FishGuardInventory、InventorySlot、Shop、Interaction、Collection 七个正式 WBP。
+// 3. 普通背包保留单 WrapBox；鱼护库存页使用玩家背包栏和鱼护容器栏两个 WrapBox，但仍继承同一个库存 View 基类。
+// 4. 商店 WBP 只由实现 ICatInteractable 的 Kiosk Actor 后续打开；本测试额外保存可放置的 ShopEconomy Kiosk，但不把商店挂到 LocalPlayer。
 // 5. 所有控件命名匹配新 C++ View 的 BindWidgetOptional 字段，让蓝图无需复杂绑定也能显示中文文本。
 bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 {
@@ -325,6 +427,9 @@ bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 		TEXT("/Game/UI/HUD/WBP_CatHUD"), TEXT("WBP_CatHUD"), UCatHUDWidget::StaticClass());
 	UWidgetBlueprint* Inventory = LoadOrCreateWidgetBlueprint(
 		TEXT("/Game/UI/Inventory/WBP_CatInventory"), TEXT("WBP_CatInventory"), UCatInventoryWidget::StaticClass());
+	UWidgetBlueprint* FishGuardInventory = LoadOrCreateWidgetBlueprint(
+		TEXT("/Game/UI/Inventory/WBP_CatFishGuardInventory"), TEXT("WBP_CatFishGuardInventory"),
+		UCatInventoryWidget::StaticClass());
 	UWidgetBlueprint* InventorySlot = LoadOrCreateWidgetBlueprint(
 		TEXT("/Game/UI/InventorySlot/WBP_CatInventorySlot"), TEXT("WBP_CatInventorySlot"),
 		UCatInventorySlotWidget::StaticClass());
@@ -340,6 +445,7 @@ bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 
 	if (!TestNotNull(TEXT("创建 HUD WBP"), HUD)
 		|| !TestNotNull(TEXT("创建 Inventory WBP"), Inventory)
+		|| !TestNotNull(TEXT("创建鱼护库存 WBP"), FishGuardInventory)
 		|| !TestNotNull(TEXT("创建 InventorySlot WBP"), InventorySlot)
 		|| !TestNotNull(TEXT("创建 Shop WBP"), Shop)
 		|| !TestNotNull(TEXT("创建 Interaction WBP"), Interaction)
@@ -377,6 +483,8 @@ bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 		TestNotNull(TEXT("关闭背包按钮"), AddButton(Inventory, InventoryButtons, TEXT("CloseButton"), TEXT("关闭")));
 	}
 
+	BuildFishGuardInventoryWidget(*this, FishGuardInventory);
+
 	UVerticalBox* SlotRoot = ResetRootToVerticalBox(InventorySlot, TEXT("InventorySlotRoot"));
 	TestNotNull(TEXT("格子根不是按钮"), SlotRoot);
 	TestNotNull(TEXT("格子文本"), AddText(InventorySlot, SlotRoot, TEXT("DisplayTextBlock"), TEXT("[空]")));
@@ -412,6 +520,7 @@ bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 		&& SaveAssetPackage(InputContext, TEXT("/Game/Input/InputContext/IMC_InputContext"))
 		&& FinalizeWidgetBlueprint(HUD, TEXT("/Game/UI/HUD/WBP_CatHUD"))
 		&& FinalizeWidgetBlueprint(Inventory, TEXT("/Game/UI/Inventory/WBP_CatInventory"))
+		&& FinalizeWidgetBlueprint(FishGuardInventory, TEXT("/Game/UI/Inventory/WBP_CatFishGuardInventory"))
 		&& FinalizeWidgetBlueprint(InventorySlot, TEXT("/Game/UI/InventorySlot/WBP_CatInventorySlot"))
 		&& FinalizeWidgetBlueprint(Shop, TEXT("/Game/UI/Shop/WBP_CatShop"))
 		&& FinalizeActorBlueprint(ShopKiosk, TEXT("/Game/ShopEconomy/BP_CatShopKiosk"))
@@ -421,7 +530,36 @@ bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 	if (bSaved)
 	{
 		UE_LOG(LogTemp, Display,
-			TEXT("CREATE_UI_MODULE_WBPS_PASS HUD=/Game/UI/HUD/WBP_CatHUD Inventory=/Game/UI/Inventory/WBP_CatInventory Slot=/Game/UI/InventorySlot/WBP_CatInventorySlot Shop=/Game/UI/Shop/WBP_CatShop ShopKiosk=/Game/ShopEconomy/BP_CatShopKiosk Interaction=/Game/UI/Interaction/WBP_CatInteractionPrompt Collection=/Game/UI/Collection/WBP_CatCollection InventorySlotRoot=UserWidgetNotButton SlotContainer=InventorySlotWrapBox InventoryEquipmentText=EquipmentTextBlock InventoryItemsText=InventoryItemsTextBlock ShopOwner=InteractionObject InteractAction=/Game/Input/InputAction/IA_Interact InteractContext=/Game/Input/InputContext/IMC_InputContext InteractKey=E"));
+			TEXT("CREATE_UI_MODULE_WBPS_PASS HUD=/Game/UI/HUD/WBP_CatHUD Inventory=/Game/UI/Inventory/WBP_CatInventory FishGuardInventory=/Game/UI/Inventory/WBP_CatFishGuardInventory Slot=/Game/UI/InventorySlot/WBP_CatInventorySlot Shop=/Game/UI/Shop/WBP_CatShop ShopKiosk=/Game/ShopEconomy/BP_CatShopKiosk Interaction=/Game/UI/Interaction/WBP_CatInteractionPrompt Collection=/Game/UI/Collection/WBP_CatCollection InventorySlotRoot=UserWidgetNotButton SlotContainer=InventorySlotWrapBox FishGuardPlayerSlotContainer=InventoryObjectSlotWrapBox FishGuardContainerSlotContainer=ExternalContainerSlotWrapBox InventoryEquipmentText=EquipmentTextBlock InventoryItemsText=InventoryItemsTextBlock ShopOwner=InteractionObject InteractAction=/Game/Input/InputAction/IA_Interact InteractContext=/Game/Input/InputContext/IMC_InputContext InteractKey=E"));
+	}
+	return bSaved;
+}
+
+// 单资产生成流程：
+// 1. 只创建或刷新鱼护库存 WBP，不保存输入资产、通用背包、商店或其他已有 WBP。
+// 2. 该入口用于已有编辑器进程占用旧资产时，仍能把新增鱼护箱子页面落到 Content/UI/Inventory。
+// 3. 生成成功只证明资产存在和控件名匹配，不代表运行时验收通过。
+bool FCatFishGuardInventoryWidgetAssetCreationTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	using namespace CatUIModuleWidgetAsset;
+
+	UWidgetBlueprint* FishGuardInventory = LoadOrCreateWidgetBlueprint(
+		TEXT("/Game/UI/Inventory/WBP_CatFishGuardInventory"), TEXT("WBP_CatFishGuardInventory"),
+		UCatInventoryWidget::StaticClass());
+	if (!TestNotNull(TEXT("创建鱼护库存 WBP"), FishGuardInventory))
+	{
+		return false;
+	}
+
+	const bool bBuilt = BuildFishGuardInventoryWidget(*this, FishGuardInventory);
+	const bool bSaved = bBuilt && FinalizeWidgetBlueprint(
+		FishGuardInventory, TEXT("/Game/UI/Inventory/WBP_CatFishGuardInventory"));
+	TestTrue(TEXT("保存鱼护库存 WBP 资产"), bSaved);
+	if (bSaved)
+	{
+		UE_LOG(LogTemp, Display,
+			TEXT("CREATE_FISH_GUARD_WBP_PASS FishGuardInventory=/Game/UI/Inventory/WBP_CatFishGuardInventory FishGuardPlayerSlotContainer=InventoryObjectSlotWrapBox FishGuardContainerSlotContainer=ExternalContainerSlotWrapBox"));
 	}
 	return bSaved;
 }
