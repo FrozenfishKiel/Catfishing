@@ -16,6 +16,7 @@ bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunne
 		|| !Init.RodActor.IsValid() || !Init.AbilitySystem.IsValid()
 		|| !Init.WaterRegion.IsValid() || !Init.FrozenWaterBounds.IsValid
 		|| !Init.Config.IsValid() || Init.RandomSeed == 0
+		|| Init.InitialInputSequence < 0
 		|| Init.CalmDurationRangeSeconds.X <= 0.0 || Init.CalmDurationRangeSeconds.Y < Init.CalmDurationRangeSeconds.X
 		|| Init.StruggleDurationRangeSeconds.X <= 0.0 || Init.StruggleDurationRangeSeconds.Y < Init.StruggleDurationRangeSeconds.X
 		|| !FMath::IsFinite(Init.LowStaminaRestThreshold) || Init.LowStaminaRestThreshold < 0.0 || Init.LowStaminaRestThreshold > 1.0
@@ -47,7 +48,11 @@ bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunne
 	SteeringRandom.Initialize(static_cast<int32>(Init.RandomSeed ^ 0x9E3779B9u));
 	// StateTree 的第一个可选状态同样是向外发力；这里先放一个合法初值，StartLogic 同步进入状态时会从唯一写口覆盖。
 	State.MotionIntent = ECatFishMotionIntent::StrugglingOutward;
-	State.CatAction = ECatFightCatAction::None; // 初始时玩家既未收线也未松开线杯
+	// 连续按键属于玩家输入生命周期，不属于旧 Session；新 Runner 原子恢复服务器已确认的按住状态。
+	LastInputSequence = Init.InitialInputSequence;
+	bPullHeld = Init.bInitialPullHeld;
+	bSlackHeld = Init.bInitialSlackHeld;
+	RefreshCatAction();
 	bInitialized = true;
 	return true;
 }

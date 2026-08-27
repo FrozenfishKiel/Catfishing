@@ -42,6 +42,12 @@ public:
 	/** Character 失去占有、倒地或销毁时终止所有相关未结算会话；不恢复旧半场。 */
 	void TerminateSessionsForCharacter(const ACatCharacter* Character);
 
+	/**
+	 * Run 暂停钓鱼（白天结束、额度完成或进入夜晚）时终止当前会话、释放全部竿位并恢复角色移动。
+	 * 该入口不永久关闭 World 内的 FishingService，下一天仍可重新使用已部署鱼竿。
+	 */
+	void SuspendFishingAndReleaseOperators();
+
 	/** Host teardown 关闭入口并终止所有未结算会话。 */
 	void CloseCommandsAndTerminateAll();
 
@@ -96,6 +102,18 @@ private:
 
 	/** 清除 PlayerState 或 Rod Actor 任一端已经失效的部署登记。 */
 	void CompactDeployedRods();
+
+	/** 终止全部存活会话并释放所有竿位；DiagnosticReason 只进入 Session 终态诊断。 */
+	void TerminateAllSessionsAndReleaseOperators(const TCHAR* DiagnosticReason);
+
+	/** 强制移除指定角色占用的竿位并恢复移动；主位腾空后把晋升者重新吸附到 0 号位。 */
+	void ReleaseOperatorForCharacter(const ACatCharacter* Character);
+
+	/** 清空所有存活鱼竿的操作槽并恢复每个操作角色的移动；鱼竿仍保持部署。 */
+	void ReleaseAllRodOperatorsAndRestoreMovement();
+
+	/** 清空单根鱼竿的操作槽并恢复相关角色移动；用于窗口关闭和鱼竿异常注销的同一补偿路径。 */
+	void ReleaseRodOperatorsAndRestoreMovement(ACatFishingRodActor* Rod);
 
 	/** 从 Controller 的 APlayerState::UniqueId 读取服务器私有身份；无效身份不能进入开始终态缓存。 */
 	static FString ResolveStableNetId(const AController* Controller);

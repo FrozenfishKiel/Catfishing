@@ -35,6 +35,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Fishing.CommandComponent.DirectRodCommandsReturnCommandsClosedWhenFishingGateIsClosed",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingCommandComponentHeldFightInputTest,
+	"Catfishing.Unit.Fishing.CommandComponent.HeldFightInputSurvivesSessionGapsAndReleaseClearsIt",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
 namespace CatFishingCommandComponentTest
 {
 	static FCatFishingCommandResult MakeResult(const FGuid RequestId, const int64 Revision)
@@ -512,6 +517,66 @@ bool FCatFishingCommandComponentDirectRodGateResultTest::RunTest(const FString& 
 	ExpectCommandsClosedResult(TEXT("operate rod"), OperateRequestId, ECatFishingCommandType::OperateRod);
 	ExpectCommandsClosedResult(TEXT("leave rod"), LeaveRequestId, ECatFishingCommandType::LeaveRod);
 	ExpectCommandsClosedResult(TEXT("pack rod"), PackRequestId, ECatFishingCommandType::PackRod);
+	return !HasAnyErrors();
+}
+
+bool FCatFishingCommandComponentHeldFightInputTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	ACatfishingPlayerController* Controller =
+		CatFishingCommandComponentTest::SpawnProjectController(*this, WorldWrapper);
+	UCatFishingCommandComponent* Component = Controller ? Controller->GetFishingCommandComponent() : nullptr;
+	if (!Controller || !Component)
+	{
+		return false;
+	}
+	TStrongObjectPtr<ULocalPlayer> LocalPlayer(GEngine ? NewObject<ULocalPlayer>(GEngine) : nullptr);
+	if (!TestNotNull(TEXT("create local player for held input test"), LocalPlayer.Get()))
+	{
+		return false;
+	}
+	Controller->SetPlayer(LocalPlayer.Get());
+	TestTrue(TEXT("held input test controller satisfies local input gate"), Controller->IsLocalController());
+	// 测试世界没有 Active Run，命令会被玩法 gate 拒绝；持续按键事实必须在该 gate 之前照常更新。
+	AddExpectedErrorPlain(TEXT("Event=fishing_command_result"), EAutomationExpectedErrorFlags::Contains, 4);
+
+	bool bPrimaryHeld = false;
+	bool bSlackHeld = false;
+	int64 InputSequence = 0;
+	TestTrue(TEXT("authority exposes initial held input state"),
+		Component->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld, bSlackHeld, InputSequence));
+	TestFalse(TEXT("primary initially released"), bPrimaryHeld);
+	TestFalse(TEXT("slack initially released"), bSlackHeld);
+	TestEqual(TEXT("initial held input sequence is zero"), InputSequence, int64{0});
+
+	const FCatFishingInputEdge SlackPress = Component->SubmitSlackPressed();
+	Component->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld, bSlackHeld, InputSequence);
+	TestTrue(TEXT("slack press persists without an active session"), bSlackHeld);
+	TestEqual(TEXT("slack press advances held input sequence"), InputSequence, SlackPress.InputSequence);
+
+	const FCatFishingInputEdge PrimaryPress = Component->SubmitPrimaryPressed();
+	Component->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld, bSlackHeld, InputSequence);
+	TestTrue(TEXT("primary and slack may both be physically held"), bPrimaryHeld && bSlackHeld);
+	TestEqual(TEXT("primary press becomes latest held edge"), InputSequence, PrimaryPress.InputSequence);
+
+	const FCatFishingInputEdge SlackRelease = Component->SubmitSlackReleased();
+	Component->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld, bSlackHeld, InputSequence);
+	TestTrue(TEXT("slack release outside a session preserves primary"), bPrimaryHeld);
+	TestFalse(TEXT("slack release outside a session clears slack"), bSlackHeld);
+	TestEqual(TEXT("slack release becomes latest held edge"), InputSequence, SlackRelease.InputSequence);
+
+	const FCatFishingInputEdge PrimaryRelease = Component->SubmitPrimaryReleased();
+	Component->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld, bSlackHeld, InputSequence);
+	TestFalse(TEXT("primary release clears primary"), bPrimaryHeld);
+	TestFalse(TEXT("released state keeps slack clear"), bSlackHeld);
+	TestEqual(TEXT("primary release becomes latest held edge"), InputSequence, PrimaryRelease.InputSequence);
+
+	Component->ResetTransientCommandState();
+	Component->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld, bSlackHeld, InputSequence);
+	TestFalse(TEXT("input lifecycle reset clears primary"), bPrimaryHeld);
+	TestFalse(TEXT("input lifecycle reset clears slack"), bSlackHeld);
+	TestEqual(TEXT("input lifecycle reset clears sequence"), InputSequence, int64{0});
 	return !HasAnyErrors();
 }
 

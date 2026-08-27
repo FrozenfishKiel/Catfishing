@@ -58,6 +58,10 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double InwardPullCatDrainPerFishStrength = 0.15;
 	/** 向内游+拖：鱼体力消耗 = 猫力 × 本系数 /秒。拖永远双方掉体力，顺从/挣扎只是系数档位不同。 */
 	double InwardPullFishDrainPerCatStrength = 0.08;
+	/** 鱼性格的平静/顺从期体力消耗倍率。 */
+	double BaseDrainMultiplier = 1.0;
+	/** 鱼性格的挣扎期体力消耗倍率；必须高于平静倍率。 */
+	double StruggleDrainMultiplier = 2.0;
 	/** 僵持每秒：本场鱼线耐久 -= 鱼力×0.1；鱼体力 -= 猫力×0.08；猫体力 -= 鱼力×0.12。 */
 	double StalemateRodWearPerFishStrength = 0.1;
 	double StalemateFishDrainPerCatStrength = 0.08;

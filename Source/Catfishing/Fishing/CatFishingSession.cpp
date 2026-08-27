@@ -20,6 +20,7 @@
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/Integration/CatFishingAimLibrary.h"
+#include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Fishing/Simulation/CatFishFightMotionSolver.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
@@ -1224,6 +1225,8 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.CatStaminaMaximum = CatStaminaBaseline;
 	Config.InwardPullCatDrainPerFishStrength = Settings->InwardPullCatDrainPerFishStrength;
 	Config.InwardPullFishDrainPerCatStrength = Settings->InwardPullFishDrainPerCatStrength;
+	Config.BaseDrainMultiplier = Personality->BaseDrainMultiplier;
+	Config.StruggleDrainMultiplier = Personality->StruggleDrainMultiplier;
 	Config.StalemateRodWearPerFishStrength = Settings->StalemateRodWearPerFishStrength;
 	Config.StalemateFishDrainPerCatStrength = Settings->StalemateFishDrainPerCatStrength;
 	Config.StalemateCatDrainPerFishStrength = Settings->StalemateCatDrainPerFishStrength;
@@ -1318,6 +1321,17 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Init.FrozenWaterBounds = FrozenBounds;
 	Init.Config = Config;
 	Init.InitialState = InitialState;
+	// 按键按住状态挂在玩家 CommandComponent 上，不随上一场断线终止而丢失。
+	// 这里在 Runner 启动前原子快照；两键同时按住时仍由 Runner 保持“收线优先”。
+	if (const ACatfishingPlayerController* FisherController = FisherCharacter.IsValid()
+		? Cast<ACatfishingPlayerController>(FisherCharacter->GetController()) : nullptr)
+	{
+		if (const UCatFishingCommandComponent* Commands = FisherController->GetFishingCommandComponent())
+		{
+			Commands->TryGetHeldFightInputStateFromAuthority(Init.bInitialPullHeld,
+				Init.bInitialSlackHeld, Init.InitialInputSequence);
+		}
+	}
 	Init.CalmDurationRangeSeconds = Personality->CalmDurationRangeSeconds;
 	Init.StruggleDurationRangeSeconds = Personality->StruggleDurationRangeSeconds;
 	Init.LowStaminaRestThreshold = Settings->LowStaminaRestThreshold;
@@ -1345,6 +1359,8 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		AbilitySystem->RequestFishingStaminaReset();
 		return false;
 	}
+	Snapshot.bReeling = FightRunner->GetCatAction() == ECatFightCatAction::Pull;
+	Snapshot.bSlacking = FightRunner->GetCatAction() == ECatFightCatAction::Slack;
 	bFightStaminaInitialized = true;
 	StaminaParticipantsTouched.Add(FisherCharacter);
 	if (!EnterPhaseFromStateTree(ECatFishingPhase::HookedFight).bApplied)
@@ -1353,6 +1369,8 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		// 否则会出现"Runner 在跑但阶段还停在 TrueBiteWindow"的不一致状态。
 		FightRunner->Stop();
 		FightRunner = nullptr;
+		Snapshot.bReeling = false;
+		Snapshot.bSlacking = false;
 		StaminaParticipantsTouched.Remove(FisherCharacter);
 		bFightStaminaInitialized = false;
 		AbilitySystem->RequestFishingStaminaReset();
@@ -1949,6 +1967,8 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	Snapshot.FishLineAlignment = 0.0f;
 	Snapshot.NormalizedLineLoad = 0.0f;
 	Snapshot.bStrongConfrontation = false;
+	Snapshot.bReeling = false;
+	Snapshot.bSlacking = false;
 	bHasExhaustedReelTarget = false;
 	if (Snapshot.HookActor)
 	{

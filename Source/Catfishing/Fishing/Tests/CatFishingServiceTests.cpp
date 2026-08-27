@@ -3,7 +3,10 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 
+#include "Character/CatCharacter.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerState.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -14,6 +17,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingServiceUnknownQueriesTest,
 	"Catfishing.Unit.Fishing.Service.UnknownSessionQueriesAreSideEffectFree",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingServiceWindowClosureReleasesOperatorMovementTest,
+	"Catfishing.Unit.Fishing.Service.WindowClosureReleasesOperatorMovement",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 // 测试流程：取得真实 Fishing WorldSubsystem 后从三个公开入口提交缺身份/未知会话命令；结果必须明确拒绝且不会创建可观察会话。
@@ -100,6 +108,70 @@ bool FCatFishingServiceUnknownQueriesTest::RunTest(const FString& Parameters)
 		Fishing->GetTrackedSessionCountForDiagnostics(), SessionCountBefore);
 	TestEqual(TEXT("未知查询不改变鱼竿计数"),
 		Fishing->GetDeployedRodCountForDiagnostics(), RodCountBefore);
+	return !HasAnyErrors();
+}
+
+// 钓鱼资格关闭契约：角色已在竿位且移动为 MOVE_None 时，Run 钓鱼窗口关闭必须先清操作槽并恢复 Walking；
+// 同一角色随后再次上竿，倒地/失去资格的 Character 中断路径也必须完成相同补偿。
+bool FCatFishingServiceWindowClosureReleasesOperatorMovementTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("创建 Fishing 窗口关闭测试 Game World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	WorldWrapper.ForwardErrorMessages(this);
+	UWorld* World = WorldWrapper.GetTestWorld();
+	WorldWrapper.BeginPlayInTestWorld();
+	UCatFishingService* Fishing = World ? World->GetSubsystem<UCatFishingService>() : nullptr;
+	ACatCharacter* Character = World ? World->SpawnActor<ACatCharacter>() : nullptr;
+	APlayerState* PlayerState = World ? World->SpawnActor<APlayerState>() : nullptr;
+	ACatFishingRodActor* Rod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
+	if (!TestNotNull(TEXT("FishingService 存在"), Fishing)
+		|| !TestNotNull(TEXT("操作角色存在"), Character)
+		|| !TestNotNull(TEXT("操作 PlayerState 存在"), PlayerState)
+		|| !TestNotNull(TEXT("部署鱼竿存在"), Rod))
+	{
+		return false;
+	}
+
+	Character->SetPlayerState(PlayerState);
+	TestTrue(TEXT("鱼竿以当前角色占据主位初始化"), Rod->InitializeAuthoritativeIdentity(
+		FGuid::NewGuid(), TEXT("Rod"), TEXT("Skin"), PlayerState, PlayerState, true, false));
+	TestTrue(TEXT("部署鱼竿登记成功"), Fishing->RegisterDeployedRod(PlayerState, Rod));
+	UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
+	TestNotNull(TEXT("角色移动组件存在"), Movement);
+	if (!Movement)
+	{
+		return false;
+	}
+
+	Movement->DisableMovement();
+	TestEqual(TEXT("夹具进入竿位移动锁"), Movement->MovementMode.GetValue(), MOVE_None);
+	Fishing->SuspendFishingAndReleaseOperators();
+	TestEqual(TEXT("窗口关闭清空全部操作槽"), Rod->GetOperatorCount(), 0);
+	TestEqual(TEXT("窗口关闭恢复 Walking"), Movement->MovementMode.GetValue(), MOVE_Walking);
+	TestTrue(TEXT("窗口关闭不收走已部署鱼竿"), Rod->GetPresentationState().bDeployed);
+
+	int32 RejoinedSlot = INDEX_NONE;
+	TestTrue(TEXT("下一钓鱼窗口可重新占据原鱼竿"), Rod->AddOperatorFromAuthority(
+		PlayerState, Rod->GetPresentationState().RodActorRevision, RejoinedSlot));
+	TestEqual(TEXT("重新进入主位"), RejoinedSlot, 0);
+	Movement->DisableMovement();
+	Fishing->TerminateSessionsForCharacter(Character);
+	TestEqual(TEXT("Character 中断清空自身操作槽"), Rod->GetOperatorCount(), 0);
+	TestEqual(TEXT("Character 中断恢复 Walking"), Movement->MovementMode.GetValue(), MOVE_Walking);
+
+	TestTrue(TEXT("异常销毁前可再次占据原鱼竿"), Rod->AddOperatorFromAuthority(
+		PlayerState, Rod->GetPresentationState().RodActorRevision, RejoinedSlot));
+	Movement->DisableMovement();
+	TestTrue(TEXT("销毁鱼竿触发 EndPlay 清理"), Rod->Destroy());
+	World->Tick(ELevelTick::LEVELTICK_All, 0.01f);
+	TestEqual(TEXT("鱼竿异常销毁恢复 Walking"), Movement->MovementMode.GetValue(), MOVE_Walking);
+	TestNull(TEXT("鱼竿异常销毁移除部署登记"), Fishing->FindDeployedRod(PlayerState));
+
+	Movement->DisableMovement();
+	Fishing->TerminateSessionsForCharacter(Character);
+	TestEqual(TEXT("鱼竿登记已失效时仍恢复 Walking"), Movement->MovementMode.GetValue(), MOVE_Walking);
 	return !HasAnyErrors();
 }
 

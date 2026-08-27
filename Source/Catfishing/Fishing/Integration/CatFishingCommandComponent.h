@@ -66,6 +66,12 @@ public:
 	void ConsumeResult(FGuid RequestId);
 
 	void ResetTransientCommandState();
+	/**
+	 * 读取服务器最后确认的连续搏斗输入。该状态属于玩家输入生命周期，不属于某个 FishingSession；
+	 * 新 Runner 用它恢复跨断线边界仍真实按住的按键，避免必须松开再按一次。
+	 */
+	bool TryGetHeldFightInputStateFromAuthority(bool& OutPrimaryHeld, bool& OutSlackHeld,
+		int64& OutInputSequence) const;
 	FCatFishingInputEdge SubmitRodInteract();
 	FCatFishingInputEdge SubmitPrimaryPressed();
 	FCatFishingInputEdge SubmitPrimaryReleased();
@@ -105,6 +111,9 @@ private:
 	static constexpr int32 MaxStoredResults = 32;
 
 	bool IsSupportedOwner() const;
+	/** 在路由到具体 Session 前先记录按下/松开事实；即使当前无会话或玩法 gate 关闭，Release 也必须能清掉旧状态。 */
+	void TrackHeldFightInputFromAuthority(ECatFishingCommandType CommandType,
+		const FCatFishingInputEdge& Edge);
 	void ReceiveResultLocally(const FCatFishingCommandResult& Result);
 	FCatFishingInputEdge MakeDiscreteEdge();
 	void DispatchAbilityCommand(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge);
@@ -133,6 +142,14 @@ private:
 
 	/** 服务器记录的"本次左键按住=瞄准抛竿"关联 ID；只有同一次按住的松开才触发抛竿，防止提竿失败后的松开误抛。 */
 	FGuid ServerAimingCorrelationId;
+
+	/**
+	 * 服务器最后确认的物理按键状态。它不随单场 Session 终止而清除：断线时仍按住右键，下一场仍应保持线杯解锁；
+	 * 只有对应 Release 或真正的输入生命周期重置（换角色/旅行）才能清除。
+	 */
+	bool bServerPrimaryHeld = false;
+	bool bServerSlackHeld = false;
+	int64 LastServerHeldInputSequence = 0;
 
 	/** 每个 PlayerController 独立的抄网权威冷却；目标鱼/Session 切换不会绕过。 */
 	FCatFishingCooldownGate ScoopCooldownGate;

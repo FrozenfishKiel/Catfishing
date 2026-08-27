@@ -14,6 +14,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFightSimulatorOutwardJudgmentTest,
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFightSimulatorSlackTest,
 	"Catfishing.Unit.Fishing.Simulation.OutwardSlackRegensCatAndTautLineForcesJudgment",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFightVerticalProjectionRecoveryTest,
+	"Catfishing.Unit.Fishing.Simulation.VerticalProjectionSlackRestoresHorizontalMotionWithoutAxisBias",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFightSimulatorPriorityTest,
 	"Catfishing.Unit.Fishing.Simulation.ZeroingPriorityIsFishThenCatThenRod",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -50,6 +53,8 @@ namespace CatFishingSimulationTest
 		Config.FishStrength = 40.0;
 		Config.RodStrength = 60.0;
 		Config.CatStaminaMaximum = 100.0;
+		Config.BaseDrainMultiplier = 1.0;
+		Config.StruggleDrainMultiplier = 2.0;
 		Config.ReelSpeedCentimetersPerSecond = 100.0;
 		Config.FishCalmSpeedCentimetersPerSecond = 25.0;
 		Config.FishStruggleSpeedCentimetersPerSecond = 75.0;
@@ -93,13 +98,24 @@ bool FCatFishingFightSimulatorInwardTest::RunTest(const FString& Parameters)
 
 	const FCatFightStepResult Pull = Run(Config, MakeState(ECatFishMotionIntent::CalmOrInward, ECatFightCatAction::Pull));
 	TestTrue(TEXT("inward pull succeeds"), Pull.bSucceeded);
-	TestEqual(TEXT("inward fish direction has no opposing cat drain"), Pull.CatStaminaDrain, 0.0, 1e-6);
-	TestEqual(TEXT("inward fish direction has no opposing fish drain"), Pull.FishStaminaDrain, 0.0, 1e-6);
+	TestEqual(TEXT("loaded inward pull still drains cat stamina with the calm coefficient"),
+		Pull.CatStaminaDrain, 40.0 * 0.15 * Config.BaseDrainMultiplier, 1e-6);
+	TestEqual(TEXT("loaded inward pull still drains fish stamina with the calm coefficient"),
+		Pull.FishStaminaDrain, 50.0 * 0.08 * Config.BaseDrainMultiplier, 1e-6);
 	TestEqual(TEXT("inward direction publishes negative alignment"), Pull.FishLineAlignment, -1.0, 1e-6);
 	TestEqual(TEXT("inward direction publishes zero line load"), Pull.NormalizedLineLoad, 0.0, 1e-6);
-	TestEqual(TEXT("inward pull reels distance by reel speed"), Pull.ProposedFishWorldPosition.X, 400.0, 1e-6);
-	TestEqual(TEXT("inward pull reels line to fish"), Pull.LineLengthCentimeters, 400.0, 1e-6);
+	TestEqual(TEXT("inward fish motion and rod traction compose"), Pull.ProposedFishWorldPosition.X, 375.0, 1e-6);
+	TestEqual(TEXT("reel request shortens paid line without erasing fish-led inward motion"),
+		Pull.LineLengthCentimeters, 400.0, 1e-6);
+	TestEqual(TEXT("fish moving inward faster than paid line reduction creates physical slack"),
+		Pull.SlackLineLengthCentimeters, 25.0, 1e-6);
 	TestEqual(TEXT("inward pull has no outcome"), static_cast<int32>(Pull.Outcome), static_cast<int32>(ECatFightStepOutcome::None));
+	const FCatFightStepResult StrugglePull = RunDirection(Config,
+		MakeState(ECatFishMotionIntent::StrugglingOutward, ECatFightCatAction::Pull), FVector::RightVector);
+	TestTrue(TEXT("struggling pull drains more cat stamina than calm pull"),
+		StrugglePull.CatStaminaDrain > Pull.CatStaminaDrain);
+	TestTrue(TEXT("struggling pull drains more fish stamina than calm pull"),
+		StrugglePull.FishStaminaDrain > Pull.FishStaminaDrain);
 
 	const FCatFightStepResult Idle = Run(Config, MakeState(ECatFishMotionIntent::CalmOrInward, ECatFightCatAction::None));
 	TestEqual(TEXT("inward idle is free"), Idle.CatStaminaDrain, 0.0, 1e-9);
@@ -134,8 +150,10 @@ bool FCatFishingFightSimulatorOutwardJudgmentTest::RunTest(const FString& Parame
 		const FCatFightStepResult Step = Run(MakeConfig(), Pull);
 		TestTrue(TEXT("stalemate flagged"), Step.bStalemate);
 		TestEqual(TEXT("stalemate rod wear = fish x 0.1"), Step.AbsoluteRodWear, 40.0 * 0.1, 1e-6);
-		TestEqual(TEXT("stalemate fish drain = cat x 0.08"), Step.FishStaminaDrain, 50.0 * 0.08, 1e-6);
-		TestEqual(TEXT("stalemate cat drain = fish x 0.12"), Step.CatStaminaDrain, 40.0 * 0.12, 1e-6);
+		TestEqual(TEXT("stalemate fish drain uses the struggle multiplier"), Step.FishStaminaDrain,
+			50.0 * 0.08 * MakeConfig().StruggleDrainMultiplier, 1e-6);
+		TestEqual(TEXT("stalemate cat drain uses the struggle multiplier"), Step.CatStaminaDrain,
+			40.0 * 0.12 * MakeConfig().StruggleDrainMultiplier, 1e-6);
 		TestEqual(TEXT("stalemate keeps distance"), Step.ProposedFishWorldPosition.X, 500.0, 1e-6);
 		TestEqual(TEXT("stalemate has no instant outcome"), static_cast<int32>(Step.Outcome), static_cast<int32>(ECatFightStepOutcome::None));
 	}
@@ -206,6 +224,16 @@ bool FCatFishingFightSimulatorSlackTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("fish remains unrestricted while consuming existing slack"),
 		ExistingSlackStep.ProposedFishWorldPosition.X, 575.0, 1e-6);
 
+	FCatFightSimulationConfig StationaryConfig = Config;
+	StationaryConfig.FishCalmSpeedCentimetersPerSecond = 0.0;
+	FCatFightSimulationState StationarySlack = MakeState(
+		ECatFishMotionIntent::CalmOrInward, ECatFightCatAction::Slack);
+	const FCatFightStepResult StationarySlackStep = Run(StationaryConfig, StationarySlack);
+	TestEqual(TEXT("open spool never pays out line while fish is stationary"),
+		StationarySlackStep.LineLengthCentimeters, 500.0, 1e-6);
+	TestEqual(TEXT("stationary open spool creates no artificial slack"),
+		StationarySlackStep.SlackLineLengthCentimeters, 0.0, 1e-6);
+
 	FCatFightSimulationState Full = Slack;
 	Full.CatStamina = 100.0;
 	TestEqual(TEXT("regen is capped at maximum"), Run(Config, Full).CatStaminaDrain, 0.0, 1e-9);
@@ -234,6 +262,114 @@ bool FCatFishingFightSimulatorSlackTest::RunTest(const FString& Parameters)
 	const FCatFightStepResult TautStep = Run(Config, Taut);
 	TestTrue(TEXT("taut line forces pull judgment"), TautStep.bStalemate);
 	TestEqual(TEXT("taut line never exceeds max"), TautStep.ProposedFishWorldPosition.X, 1000.0, 1e-6);
+	return !HasAnyErrors();
+}
+
+bool FCatFishingFightVerticalProjectionRecoveryTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const FCatFightSimulationConfig Config = MakeConfig();
+	const FVector RodTipWorldPosition(0.0, 0.0, 200.0);
+	FCatFightSimulationState ProjectionState = MakeState(
+		ECatFishMotionIntent::StrugglingOutward, ECatFightCatAction::Slack);
+	ProjectionState.CatStamina = 90.0;
+	ProjectionState.FishWorldPosition = FVector::ZeroVector;
+	ProjectionState.LineLengthCentimeters = 200.0;
+
+	// 鱼在竿尖 XY 投影下时，右键只解锁线杯；鱼的真实水平游动会带出恰好所需的线。
+	const FCatFightStepResult SlackX = FCatFishingFightSimulator::Step(
+		Config, ProjectionState, RodTipWorldPosition, FVector::ForwardVector);
+	const double ExpectedDistance = FVector::Distance(
+		RodTipWorldPosition, FVector(Config.FishStruggleSpeedCentimetersPerSecond, 0.0, 0.0));
+	TestTrue(TEXT("vertical projection slack step succeeds"), SlackX.bSucceeded);
+	TestEqual(TEXT("open spool preserves the fish full horizontal X movement"),
+		SlackX.ProposedFishWorldPosition.X, Config.FishStruggleSpeedCentimetersPerSecond, 1e-6);
+	TestEqual(TEXT("X movement does not invent lateral drift"), SlackX.ProposedFishWorldPosition.Y, 0.0, 1e-6);
+	TestEqual(TEXT("open spool pays out exactly to the moved fish"),
+		SlackX.LineLengthCentimeters, ExpectedDistance, 1e-6);
+	TestEqual(TEXT("projection recovery publishes the moved straight-line distance"),
+		SlackX.StraightLineDistanceCentimeters, ExpectedDistance, 1e-6);
+	TestEqual(TEXT("open spool projection recovery creates no tension"), SlackX.TensionCentimeters, 0.0, 1e-9);
+	TestEqual(TEXT("undefined projection radial basis publishes neutral alignment"),
+		SlackX.FishLineAlignment, 0.0, 1e-9);
+	TestEqual(TEXT("undefined projection radial basis publishes no arbitrary load"),
+		SlackX.NormalizedLineLoad, 0.0, 1e-9);
+	TestFalse(TEXT("projection recovery cannot trigger a strong confrontation"), SlackX.bStrongConfrontation);
+	TestEqual(TEXT("high-stamina projection recovery has no terminal outcome"),
+		static_cast<int32>(SlackX.Outcome), static_cast<int32>(ECatFightStepOutcome::None));
+
+	// 同样的游速换成 Y 方向必须得到旋转等价结果，不能被世界 Forward 假方向偏置。
+	const FCatFightStepResult SlackY = FCatFishingFightSimulator::Step(
+		Config, ProjectionState, RodTipWorldPosition, FVector::RightVector);
+	TestTrue(TEXT("rotated vertical projection slack step succeeds"), SlackY.bSucceeded);
+	TestEqual(TEXT("rotated recovery preserves the fish full horizontal Y movement"),
+		SlackY.ProposedFishWorldPosition.Y, Config.FishStruggleSpeedCentimetersPerSecond, 1e-6);
+	TestEqual(TEXT("rotated recovery does not drift toward world forward"),
+		SlackY.ProposedFishWorldPosition.X, 0.0, 1e-6);
+	TestEqual(TEXT("rotated recovery pays out the same scalar line length"),
+		SlackY.LineLengthCentimeters, SlackX.LineLengthCentimeters, 1e-6);
+
+	// 线杯锁住时候选游动仍会被线长截回：本修复只消除奇点，不让鱼无视绷紧的鱼线。
+	FCatFightSimulationState LockedState = ProjectionState;
+	LockedState.CatAction = ECatFightCatAction::None;
+	const FCatFightStepResult Locked = FCatFishingFightSimulator::Step(
+		Config, LockedState, RodTipWorldPosition, FVector::ForwardVector);
+	TestTrue(TEXT("locked projection step succeeds"), Locked.bSucceeded);
+	TestEqual(TEXT("locked spool keeps the fish at the only reachable water point"),
+		FVector::Dist2D(Locked.ProposedFishWorldPosition, RodTipWorldPosition), 0.0, 1e-6);
+	TestEqual(TEXT("locked spool never pays out line"), Locked.LineLengthCentimeters, 200.0, 1e-6);
+	TestTrue(TEXT("blocked horizontal swim is reported as tension"), Locked.TensionCentimeters > 0.0);
+
+	// 投影奇点没有真实水平径向，继续左键也不得因为世界轴 fallback 触发碾压。
+	FCatFightSimulationState PullState = ProjectionState;
+	PullState.CatAction = ECatFightCatAction::Pull;
+	FCatFightSimulationConfig WeakFishConfig = Config;
+	WeakFishConfig.FishStrength = 25.0;
+	const FCatFightStepResult Pull = FCatFishingFightSimulator::Step(
+		WeakFishConfig, PullState, RodTipWorldPosition, FVector::ForwardVector);
+	TestFalse(TEXT("pulling at the undefined radial basis is not a strong confrontation"),
+		Pull.bStrongConfrontation);
+	TestEqual(TEXT("projection fallback cannot classify the fish as overpowered"),
+		static_cast<int32>(Pull.Outcome), static_cast<int32>(ECatFightStepOutcome::None));
+
+	// 靠近投影点时，4cm 的带载收线最多只能给鱼叠加 4cm 水平牵引，不能经三维球面公式放大成 40cm 吸附。
+	FCatFightSimulationConfig TractionConfig = Config;
+	TractionConfig.FixedStepSeconds = 0.05;
+	TractionConfig.ReelSpeedCentimetersPerSecond = 80.0;
+	TractionConfig.FishCalmSpeedCentimetersPerSecond = 0.0;
+	FCatFightSimulationState NearProjection = MakeState(
+		ECatFishMotionIntent::CalmOrInward, ECatFightCatAction::Pull);
+	NearProjection.FishWorldPosition = FVector(40.0, 0.0, 0.0);
+	NearProjection.LineLengthCentimeters = FVector::Distance(
+		RodTipWorldPosition, NearProjection.FishWorldPosition);
+	const FCatFightStepResult BoundedTraction = FCatFishingFightSimulator::Step(
+		TractionConfig, NearProjection, RodTipWorldPosition, FVector::RightVector);
+	const double MaximumPullDisplacement = TractionConfig.ReelSpeedCentimetersPerSecond
+		* TractionConfig.FixedStepSeconds;
+	TestTrue(TEXT("near-projection bounded traction succeeds"), BoundedTraction.bSucceeded);
+	TestEqual(TEXT("near-projection pull correction is limited to one configured reel step"),
+		FVector::Dist2D(NearProjection.FishWorldPosition, BoundedTraction.ProposedFishWorldPosition),
+		MaximumPullDisplacement, 1e-6);
+	TestEqual(TEXT("bounded traction never invents lateral drift"),
+		BoundedTraction.ProposedFishWorldPosition.Y, 0.0, 1e-6);
+	TestEqual(TEXT("paid line reconciles to the fish actually reached distance"),
+		BoundedTraction.LineLengthCentimeters,
+		FVector::Distance(RodTipWorldPosition, BoundedTraction.ProposedFishWorldPosition), 1e-6);
+	TestTrue(TEXT("near-projection reel request may stall instead of teleporting the fish"),
+		BoundedTraction.LineLengthCentimeters
+			> NearProjection.LineLengthCentimeters - MaximumPullDisplacement + 1e-6);
+
+	// 恢复鱼速后，最终位移必须同时保留鱼的横向游动和鱼竿的有限向内牵引，而不是只剩径向漂移。
+	FCatFightSimulationState SwimmingNearProjection = NearProjection;
+	SwimmingNearProjection.MotionIntent = ECatFishMotionIntent::StrugglingOutward;
+	const FCatFightStepResult ComposedMotion = FCatFishingFightSimulator::Step(
+		TractionConfig, SwimmingNearProjection, RodTipWorldPosition, FVector::RightVector);
+	TestTrue(TEXT("fish-led composed motion succeeds"), ComposedMotion.bSucceeded);
+	TestTrue(TEXT("fish keeps its own lateral movement while the rod pulls inward"),
+		ComposedMotion.ProposedFishWorldPosition.Y > 0.0);
+	TestEqual(TEXT("rod traction reduces only one horizontal reel step after the fish move"),
+		FVector::Dist2D(ComposedMotion.ProposedFishWorldPosition, RodTipWorldPosition),
+		40.0 - MaximumPullDisplacement, 1e-6);
 	return !HasAnyErrors();
 }
 
@@ -269,19 +405,19 @@ bool FCatFishingFightExhaustionThresholdTest::RunTest(const FString& Parameters)
 	FCatFightSimulationState State = MakeState(
 		ECatFishMotionIntent::StrugglingOutward, ECatFightCatAction::Pull);
 
-	// 满负载时本步公式消耗 0.2。0.71 -> 0.51 仍可继续，不能过早翻肚。
-	State.FishStamina = 0.71;
+	// 满负载时本步公式消耗 0.4（含挣扎倍率 2.0）。0.91 -> 0.51 仍可继续，不能过早翻肚。
+	State.FishStamina = 0.91;
 	const FCatFightStepResult Above = RunDirection(Config, State, FVector::ForwardVector);
 	TestEqual(TEXT("stamina above display threshold keeps fighting"),
 		static_cast<int32>(Above.Outcome), static_cast<int32>(ECatFightStepOutcome::None));
-	TestEqual(TEXT("normal projected drain is preserved above threshold"), Above.FishStaminaDrain, 0.2, 1e-6);
+	TestEqual(TEXT("struggle-multiplied drain is preserved above threshold"), Above.FishStaminaDrain, 0.4, 1e-6);
 
-	// 0.70 -> 0.50 正好进入阈值：本步把尾数全部扣到 0，并立刻报告 FishExhausted。
-	State.FishStamina = 0.70;
+	// 0.90 -> 0.50 正好进入阈值：本步把尾数全部扣到 0，并立刻报告 FishExhausted。
+	State.FishStamina = 0.90;
 	const FCatFightStepResult Exhausted = RunDirection(Config, State, FVector::ForwardVector);
 	TestEqual(TEXT("sub-display stamina enters exhausted outcome"),
 		static_cast<int32>(Exhausted.Outcome), static_cast<int32>(ECatFightStepOutcome::FishExhausted));
-	TestEqual(TEXT("exhausted drain zeroes authoritative stamina"), Exhausted.FishStaminaDrain, 0.70, 1e-6);
+	TestEqual(TEXT("exhausted drain zeroes authoritative stamina"), Exhausted.FishStaminaDrain, 0.90, 1e-6);
 
 	Config.FishExhaustionThreshold = 1.01;
 	TestFalse(TEXT("threshold above one stamina unit is rejected"), Config.IsValid());
@@ -330,7 +466,7 @@ bool FCatFishingFightAngleProjectionTest::RunTest(const FString& Parameters)
 	const FCatFightSimulationState Pull = MakeState(
 		ECatFishMotionIntent::StrugglingOutward, ECatFightCatAction::Pull);
 
-	// 60°：cos=0.5，低于 0.55 强对抗阈值；体力/磨损按一半力量，仍有一半收线速度。
+	// 60°：cos=0.5，低于 0.55 强对抗阈值；线负载/牵引效率按夹角，带载左键的双方体力用挣扎档。
 	const FVector SixtyDegrees(0.5, FMath::Sqrt(0.75), 0.0);
 	const FCatFightStepResult Oblique = RunDirection(Config, Pull, SixtyDegrees);
 	TestTrue(TEXT("oblique step succeeds"), Oblique.bSucceeded);
@@ -338,8 +474,10 @@ bool FCatFishingFightAngleProjectionTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("linear angle curve keeps half load"), Oblique.NormalizedLineLoad, 0.5, 1e-6);
 	TestFalse(TEXT("half load is below strong confrontation threshold"), Oblique.bStrongConfrontation);
 	TestFalse(TEXT("partial load is not a locked stalemate"), Oblique.bStalemate);
-	TestEqual(TEXT("partial load halves cat drain"), Oblique.CatStaminaDrain, 40.0 * 0.12 * 0.5, 1e-6);
-	TestEqual(TEXT("partial load halves fish drain"), Oblique.FishStaminaDrain, 50.0 * 0.08 * 0.5, 1e-6);
+	TestEqual(TEXT("oblique loaded pull still drains cat stamina in the struggle tier"),
+		Oblique.CatStaminaDrain, 40.0 * 0.12 * Config.StruggleDrainMultiplier, 1e-6);
+	TestEqual(TEXT("oblique loaded pull still drains fish stamina in the struggle tier"),
+		Oblique.FishStaminaDrain, 50.0 * 0.08 * Config.StruggleDrainMultiplier, 1e-6);
 	TestEqual(TEXT("partial load leaves half reel speed"), Oblique.ProposedFishWorldPosition.Size(), 450.0, 1e-6);
 	TestTrue(TEXT("oblique direction produces lateral movement"), Oblique.ProposedFishWorldPosition.Y > 0.0);
 
@@ -347,17 +485,20 @@ bool FCatFishingFightAngleProjectionTest::RunTest(const FString& Parameters)
 	const FCatFightStepResult Lateral = RunDirection(Config, Pull, FVector::RightVector);
 	TestEqual(TEXT("lateral alignment is zero"), Lateral.FishLineAlignment, 0.0, 1e-6);
 	TestEqual(TEXT("lateral load is zero"), Lateral.NormalizedLineLoad, 0.0, 1e-6);
-	TestEqual(TEXT("lateral movement drains no cat stamina"), Lateral.CatStaminaDrain, 0.0, 1e-9);
-	TestEqual(TEXT("lateral movement drains no fish stamina"), Lateral.FishStaminaDrain, 0.0, 1e-9);
+	TestEqual(TEXT("lateral loaded pull still drains cat stamina"), Lateral.CatStaminaDrain,
+		40.0 * 0.12 * Config.StruggleDrainMultiplier, 1e-6);
+	TestEqual(TEXT("lateral loaded pull still drains fish stamina"), Lateral.FishStaminaDrain,
+		50.0 * 0.08 * Config.StruggleDrainMultiplier, 1e-6);
 	TestEqual(TEXT("lateral window uses full reel speed"), Lateral.ProposedFishWorldPosition.Size(), 400.0, 1e-6);
 	TestTrue(TEXT("lateral direction still circles around rod"), Lateral.ProposedFishWorldPosition.Y > 0.0);
 
-	// 约 37°：cos=0.8，超过强对抗阈值；现有三方力量落入僵持，但消耗乘 0.8。
+	// 约 37°：cos=0.8，超过强对抗阈值；现有三方力量落入僵持，磨损按夹角、双方体力按带载挣扎档。
 	const FVector StrongOblique(0.8, 0.6, 0.0);
 	const FCatFightStepResult Strong = RunDirection(Config, Pull, StrongOblique);
 	TestTrue(TEXT("high projection enters strong confrontation"), Strong.bStrongConfrontation);
 	TestTrue(TEXT("high projection preserves stalemate judgment"), Strong.bStalemate);
-	TestEqual(TEXT("strong oblique scales stalemate cat drain"), Strong.CatStaminaDrain, 40.0 * 0.12 * 0.8, 1e-6);
+	TestEqual(TEXT("strong oblique uses loaded struggle cat drain"), Strong.CatStaminaDrain,
+		40.0 * 0.12 * Config.StruggleDrainMultiplier, 1e-6);
 	TestEqual(TEXT("strong oblique confrontation keeps the unopposed twenty percent reel"),
 		Strong.ProposedFishWorldPosition.Size(), 480.0, 1e-6);
 

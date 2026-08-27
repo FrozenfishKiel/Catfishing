@@ -98,7 +98,7 @@ bool FCatFishingFightJudgeTableTest::RunTest(const FString& Parameters)
 }
 
 // 测试流程：
-// 1. 僵持一秒：竿耐久 -= 鱼力×0.1、鱼体力 -= 猫力×0.08、猫体力 -= 鱼力×0.12，逐项核对数值，且 D/L 不变。
+// 1. 僵持一秒：竿耐久按负载系数消耗，鱼/猫体力按挣扎倍率 2.0 消耗，逐项核对数值，且 D/L 不变。
 // 2. 三个归零优先级：同一帧三者都会归零时必须报翻肚；鱼没归零但猫体力归零报拖下水；只有竿归零报断竿；三者都没归零继续打。
 // 3. 翻肚把 D 归零，鱼体力不为负。
 bool FCatFishingFightStalemateTest::RunTest(const FString& Parameters)
@@ -114,15 +114,15 @@ bool FCatFishingFightStalemateTest::RunTest(const FString& Parameters)
 	FCatFishingFightStepDelta Delta;
 	CatFishingFightModel::Step(State, Params, ECatFishingFightIntent::Pull, 1.0, Resources, Random, Delta);
 	TestEqual(TEXT("僵持 1 秒竿耐久 -= 鱼力×0.1 = 4"), Delta.RodDurabilityCost, 4.0, 1e-9);
-	TestEqual(TEXT("僵持 1 秒鱼体力 -= 猫力×0.08 = 4（30→26）"), State.FishStamina, 26.0, 1e-9);
-	TestEqual(TEXT("僵持 1 秒猫体力 -= 鱼力×0.12 = 4.8"), Delta.CatStaminaDelta, -4.8, 1e-9);
+	TestEqual(TEXT("僵持 1 秒鱼体力使用挣扎倍率 2.0（30→22）"), State.FishStamina, 22.0, 1e-9);
+	TestEqual(TEXT("僵持 1 秒猫体力使用挣扎倍率 2.0"), Delta.CatStaminaDelta, -9.6, 1e-9);
 	TestEqual(TEXT("僵持时 D 不变"), State.DistanceMeters, 20.0);
 	TestEqual(TEXT("僵持时 L 不变"), State.LineMeters, 20.0);
 	TestEqual(TEXT("僵持 1 秒后仍在打"), static_cast<int32>(State.Outcome), static_cast<int32>(ECatFishingFightOutcome::None));
 
 	// 优先级 ①：鱼体力、猫体力、竿耐久同一帧全部归零 → 翻肚。
-	State = MakeState(ECatFishSwimState::Outward, 20.0, 20.0, 4.0);
-	Resources.CatStamina = 4.8;
+	State = MakeState(ECatFishSwimState::Outward, 20.0, 20.0, 8.0);
+	Resources.CatStamina = 9.6;
 	Resources.RodDurability = 4.0;
 	CatFishingFightModel::Step(State, Params, ECatFishingFightIntent::Pull, 1.0, Resources, Random, Delta);
 	TestEqual(TEXT("三者同帧归零时优先报翻肚"), static_cast<int32>(State.Outcome), static_cast<int32>(ECatFishingFightOutcome::FishExhausted));
@@ -131,7 +131,7 @@ bool FCatFishingFightStalemateTest::RunTest(const FString& Parameters)
 
 	// 优先级 ②：鱼还有体力，猫体力与竿同帧归零 → 拖下水。
 	State = MakeState(ECatFishSwimState::Outward, 20.0, 20.0, 100.0);
-	Resources.CatStamina = 4.8;
+	Resources.CatStamina = 9.6;
 	Resources.RodDurability = 4.0;
 	CatFishingFightModel::Step(State, Params, ECatFishingFightIntent::Pull, 1.0, Resources, Random, Delta);
 	TestEqual(TEXT("鱼未归零时猫体力归零先于竿报拖下水"), static_cast<int32>(State.Outcome), static_cast<int32>(ECatFishingFightOutcome::CatDraggedIn));
@@ -144,15 +144,15 @@ bool FCatFishingFightStalemateTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("只有鱼线耐久归零时报断线"), static_cast<int32>(State.Outcome), static_cast<int32>(ECatFishingFightOutcome::LineBroken));
 
 	// 都差一点：继续打。
-	State = MakeState(ECatFishSwimState::Outward, 20.0, 20.0, 4.01);
-	Resources.CatStamina = 4.81;
+	State = MakeState(ECatFishSwimState::Outward, 20.0, 20.0, 8.01);
+	Resources.CatStamina = 9.61;
 	Resources.RodDurability = 4.01;
 	CatFishingFightModel::Step(State, Params, ECatFishingFightIntent::Pull, 1.0, Resources, Random, Delta);
 	TestEqual(TEXT("三者都没归零就继续打"), static_cast<int32>(State.Outcome), static_cast<int32>(ECatFishingFightOutcome::None));
 	return !HasAnyErrors();
 }
 
-// 测试流程：逐行核对 D/L 速率表（向内+拖 -3/-3 且猫体力 -鱼力×0.15；向内+松 -1/不变；向外+松 +2.5/+2.5 且猫 +1.5；L 到顶后松无效且不回体力），
+// 测试流程：逐行核对 D/L 速率表（向内+拖 -3/-3 且猫鱼都按平静档耗体力；向内+松 -1/不变；向外+松 +2.5/+2.5 且猫 +1.5；L 到顶后松无效且不回体力），
 // 再核对三条瞬时出口（断竿、拖下水、碾压 D=0）与"遛到近岸"出口，以及体重档系数会乘在速率上。
 bool FCatFishingFightDistanceModelTest::RunTest(const FString& Parameters)
 {
@@ -170,6 +170,7 @@ bool FCatFishingFightDistanceModelTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("向内+拖：D -3"), State.DistanceMeters, 17.0, 1e-9);
 	TestEqual(TEXT("向内+拖：L -3"), State.LineMeters, 22.0, 1e-9);
 	TestEqual(TEXT("向内+拖：猫体力 -= 鱼力 40×0.15 = 6"), Delta.CatStaminaDelta, -6.0, 1e-9);
+	TestEqual(TEXT("向内+拖：鱼体力 -= 猫力 50×0.08 = 4"), State.FishStamina, 26.0, 1e-9);
 
 	State = MakeState(ECatFishSwimState::Inward, 20.0, 25.0, 30.0);
 	CatFishingFightModel::Step(State, Params, ECatFishingFightIntent::Release, 1.0, Resources, Random, Delta);

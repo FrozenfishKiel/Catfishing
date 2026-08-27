@@ -9,6 +9,11 @@ namespace CatFishingFightModel
 		constexpr double OverpowerRatio = 2.0;
 		/** 4.3 向内游+拖：猫体力每秒 -= 鱼力量 × 0.15。 */
 		constexpr double InwardPullCatStaminaPerFishStrength = 0.15;
+		/** 4.3 向内游+拖：鱼体力每秒 -= 猫力量 × 0.08。 */
+		constexpr double InwardPullFishStaminaPerCatStrength = 0.08;
+		/** 兼容规则模型使用的平静/挣扎消耗档；正式运行时由鱼性格资产提供同名倍率。 */
+		constexpr double BaseDrainMultiplier = 1.0;
+		constexpr double StruggleDrainMultiplier = 2.0;
 		/** 4.3 向外游+松：猫体力每秒 +1.5。 */
 		constexpr double OutwardReleaseCatStaminaRegenPerSecond = 1.5;
 		/** 消耗战：本场鱼线耐久每秒 -= 鱼力量 × 0.1。 */
@@ -153,7 +158,7 @@ namespace CatFishingFightModel
 	// 推进流程：
 	// 1. 已有终局或 dt 非法直接返回；段已到期先 roll 新段（方向、段长、可能的垂死挣扎）。
 	// 2. 推进挣扎计时：前摇期不加成，生效期鱼力量 ×1.5。
-	// 3. 按"鱼状态 × 猫操作"分支：向内+拖 D/L 各 -3×系数、猫体力 -= 鱼力×0.15；向内+松/不动 D -1×系数；
+	// 3. 按"鱼状态 × 猫操作"分支：向内+拖 D/L 各 -3×系数，猫/鱼都按平静档消耗；向内+松/不动 D -1×系数；
 	//    向外+拖查判定表：①②③三个瞬时出口直接写终局（③顺带 D=0），④僵持逐秒扣鱼线耐久/鱼体力/猫体力；
 	//    向外+松：L 未到顶时鱼带动 D/L 各 +2.5×系数、猫体力 +1.5，L 到顶后无法继续带线（旧规格模型，见 D-17）。
 	// 4. 夹取：D ≥ 0，L ≤ L_max 且 L ≥ D；段剩余时间扣掉 dt。
@@ -193,7 +198,10 @@ namespace CatFishingFightModel
 				const double Reel = Rules::InwardPullMetersPerSecond * Speed * DeltaSeconds;
 				State.DistanceMeters -= Reel;
 				State.LineMeters -= Reel;
-				OutDelta.CatStaminaDelta -= FishStrength * Rules::InwardPullCatStaminaPerFishStrength * DeltaSeconds;
+				OutDelta.CatStaminaDelta -= FishStrength * Rules::InwardPullCatStaminaPerFishStrength
+					* Rules::BaseDrainMultiplier * DeltaSeconds;
+				State.FishStamina -= Params.CatStrength * Rules::InwardPullFishStaminaPerCatStrength
+					* Rules::BaseDrainMultiplier * DeltaSeconds;
 			}
 			else
 			{
@@ -217,8 +225,10 @@ namespace CatFishingFightModel
 				return;
 			case ECatFishingPullVerdict::Stalemate:
 				OutDelta.RodDurabilityCost += FishStrength * Rules::StalemateRodWearPerFishStrength * DeltaSeconds;
-				State.FishStamina -= Params.CatStrength * Rules::StalemateFishStaminaPerCatStrength * DeltaSeconds;
-				OutDelta.CatStaminaDelta -= FishStrength * Rules::StalemateCatStaminaPerFishStrength * DeltaSeconds;
+				State.FishStamina -= Params.CatStrength * Rules::StalemateFishStaminaPerCatStrength
+					* Rules::StruggleDrainMultiplier * DeltaSeconds;
+				OutDelta.CatStaminaDelta -= FishStrength * Rules::StalemateCatStaminaPerFishStrength
+					* Rules::StruggleDrainMultiplier * DeltaSeconds;
 				break;
 			}
 		}

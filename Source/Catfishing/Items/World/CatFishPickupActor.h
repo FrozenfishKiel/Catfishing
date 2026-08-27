@@ -87,6 +87,10 @@ private:
 	void ApplyCarriedAttachmentFromPresentation();
 	void ReleaseMouthCarryFromAuthority(const FVector& DropLocation);
 	void ApplyLocalFocus(bool bFocused);
+	/** Available 状态恢复落地专用 Mesh 位置和旋转，同时保留冻结重量缩放。 */
+	void ApplyLandedVisualTransform();
+	/** Carried 状态清除落地专用 Mesh 位置和旋转，使鱼原点直接对齐嘴部骨骼，同时保留冻结重量缩放。 */
+	void ApplyCarriedVisualTransform();
 	void ApplyVisualScale();
 	void ArchiveCommittedCapture(const FCatCaptureCommittedResult& Committed, const FString& PickerStableNetId);
 

@@ -139,11 +139,29 @@ bool FCatFishPickupMouthCarryAndGuardStoreTest::RunTest(const FString& Parameter
 	const FGuid FishInstanceId = FGuid::NewGuid();
 	TestTrue(TEXT("初始化可拾取死鱼"), Pickup->InitializeFromAuthority(SessionId, FishInstanceId,
 		Definition, 2.5, 1.0, TEXT("LakeA"), {StableNetId}));
+	USkeletalMeshComponent* PickupMesh = Pickup->FindComponentByClass<USkeletalMeshComponent>();
+	const UCatWorldItemSettings* WorldItemSettings = GetDefault<UCatWorldItemSettings>();
+	if (TestNotNull(TEXT("嘴叼鱼拥有视觉 Mesh"), PickupMesh)
+		&& TestNotNull(TEXT("可读取世界物品设置"), WorldItemSettings))
+	{
+		TestTrue(TEXT("拾取前使用落地 Mesh 位置"), PickupMesh->GetRelativeLocation().Equals(
+			WorldItemSettings->LandedFishMeshRelativeTransform.GetTranslation(), UE_KINDA_SMALL_NUMBER));
+		TestTrue(TEXT("拾取前使用落地 Mesh 旋转"), PickupMesh->GetRelativeRotation().Quaternion().Equals(
+			WorldItemSettings->LandedFishMeshRelativeTransform.GetRotation(), UE_KINDA_SMALL_NUMBER));
+	}
 
 	TestTrue(TEXT("对死鱼按 E 后进入嘴叼状态"), Pickup->Interact_Implementation(Controller, FGuid::NewGuid()));
 	TestEqual(TEXT("死鱼状态为 Carried"), Pickup->GetPresentationState().State, ECatFishPickupState::Carried);
 	TestEqual(TEXT("嘴叼鱼仍附着在角色 Actor 下"), Pickup->GetAttachParentActor(), static_cast<AActor*>(Character));
 	TestEqual(TEXT("角色只能找到这一条嘴叼鱼"), ACatFishPickupActor::FindCarriedFish(Character), Pickup);
+	if (PickupMesh)
+	{
+		TestTrue(TEXT("嘴叼状态清除落地 Mesh 位置"), PickupMesh->GetRelativeLocation().IsNearlyZero());
+		TestTrue(TEXT("嘴叼状态清除落地 Mesh 旋转"), PickupMesh->GetRelativeRotation().IsNearlyZero());
+		TestTrue(TEXT("嘴叼状态保留冻结视觉缩放"), PickupMesh->GetRelativeScale3D().Equals(
+			WorldItemSettings ? WorldItemSettings->LandedFishMeshRelativeTransform.GetScale3D() : FVector::OneVector,
+			UE_KINDA_SMALL_NUMBER));
+	}
 
 	FCatContainerSnapshot OtherBefore;
 	TestTrue(TEXT("可读取未交互鱼护"), Items->TryGetContainerSnapshot(OtherGuard->GetGuardContainerId(), OtherBefore));

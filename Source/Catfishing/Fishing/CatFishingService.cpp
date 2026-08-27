@@ -603,7 +603,8 @@ FCatScoopResult UCatFishingService::RequestScoop(const FGuid FishingSessionId, A
 	return Result;
 }
 
-// Character 中断流程：遍历存活弱引用，精确命中钓手或协作者后终止；Resolved 会话自行保持终态。
+// Character 中断流程：先终止该 Character 参与的存活会话，再释放其竿位和 Fishing 移动锁。
+// 释放不能留给玩家再次按键：倒地后 Fishing gate 已关闭，若仍要求走 LeaveRod 就会形成永久 MOVE_None。
 void UCatFishingService::TerminateSessionsForCharacter(const ACatCharacter* Character)
 {
 	CompactSessions();
@@ -615,17 +616,132 @@ void UCatFishingService::TerminateSessionsForCharacter(const ACatCharacter* Char
 		}
 	}
 	CompactSessions();
+	ReleaseOperatorForCharacter(Character);
 }
 
-// Teardown 流程：永久关闭新入口，并让每个存活会话进入 Terminated；不等待旧半场或创建补偿鱼。
+// Run 钓鱼窗口关闭流程：终止当前半场并释放所有竿位/移动锁，但不关闭 World 级命令门；下一天仍可重新上竿。
+void UCatFishingService::SuspendFishingAndReleaseOperators()
+{
+	TerminateAllSessionsAndReleaseOperators(TEXT("Fishing window closed"));
+}
+
+// Teardown 流程：永久关闭新入口，并让每个存活会话进入 Terminated；随后释放全部竿位，不能把 MOVE_None 带进结算或退出流程。
 void UCatFishingService::CloseCommandsAndTerminateAll()
 {
 	bCommandsOpen = false;
+	TerminateAllSessionsAndReleaseOperators(TEXT("Run teardown"));
+}
+
+void UCatFishingService::TerminateAllSessionsAndReleaseOperators(const TCHAR* DiagnosticReason)
+{
 	for (const TPair<FGuid, TWeakObjectPtr<ACatFishingSession>>& Pair : Sessions)
 	{
 		if (ACatFishingSession* Session = Pair.Value.Get())
 		{
-			Session->TerminateSession(ECatFishingOutcome::Invalidated, TEXT("Run teardown"));
+			Session->TerminateSession(ECatFishingOutcome::Invalidated, DiagnosticReason);
+		}
+	}
+	CompactSessions();
+	ReleaseAllRodOperatorsAndRestoreMovement();
+}
+
+void UCatFishingService::ReleaseOperatorForCharacter(const ACatCharacter* Character)
+{
+	if (!Character)
+	{
+		return;
+	}
+
+	APlayerState* PlayerState = Character->GetPlayerState();
+	ACatFishingRodActor* Rod = FindRodOperatedBy(PlayerState);
+	bool bRemoved = false;
+	APlayerState* PromotedPrimary = nullptr;
+	if (PlayerState && Rod)
+	{
+		const int64 ExpectedRevision = Rod->GetPresentationState().RodActorRevision;
+		bRemoved = Rod->RemoveOperatorFromAuthority(PlayerState, ExpectedRevision, PromotedPrimary);
+		if (!bRemoved)
+		{
+			UE_LOG(LogCatFishing, Error,
+				TEXT("Event=fishing_operator_force_release_failed PlayerState=%s RodActorId=%s Revision=%lld"),
+				*GetNameSafe(PlayerState),
+				*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens), ExpectedRevision);
+		}
+	}
+
+	// 角色已经失去钓鱼资格；即使竿状态异常也必须解除由 Fishing 写入的 MOVE_None，避免门关后永久卡死。
+	if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
+	{
+		Movement->SetMovementMode(MOVE_Walking);
+	}
+
+	if (bRemoved && PromotedPrimary)
+	{
+		if (APlayerController* PromotedController = FindControllerForPlayerState(GetWorld(), PromotedPrimary))
+		{
+			if (ACatCharacter* PromotedCharacter = Cast<ACatCharacter>(PromotedController->GetPawn()))
+			{
+				SnapCharacterToRodSlot(*PromotedCharacter, *Rod, 0);
+			}
+		}
+	}
+}
+
+void UCatFishingService::ReleaseAllRodOperatorsAndRestoreMovement()
+{
+	CompactDeployedRods();
+	TSet<ACatFishingRodActor*> ProcessedRods;
+	for (const TPair<TWeakObjectPtr<APlayerState>, TWeakObjectPtr<ACatFishingRodActor>>& Pair : DeployedRodByPlayerState)
+	{
+		ACatFishingRodActor* Rod = Pair.Value.Get();
+		if (!Rod || ProcessedRods.Contains(Rod))
+		{
+			continue;
+		}
+		ProcessedRods.Add(Rod);
+		ReleaseRodOperatorsAndRestoreMovement(Rod);
+	}
+}
+
+void UCatFishingService::ReleaseRodOperatorsAndRestoreMovement(ACatFishingRodActor* Rod)
+{
+	if (!Rod)
+	{
+		return;
+	}
+
+	// RemoveOperator 会压紧数组，因此必须先复制原操作人列表，再按当前 Revision 逐个移除。
+	const TArray<TObjectPtr<APlayerState>> Operators = Rod->GetPresentationState().OperatorPlayerStates;
+	for (APlayerState* Operator : Operators)
+	{
+		if (!Operator)
+		{
+			continue;
+		}
+		APlayerState* IgnoredPromotion = nullptr;
+		const int64 ExpectedRevision = Rod->GetPresentationState().RodActorRevision;
+		if (!Rod->RemoveOperatorFromAuthority(Operator, ExpectedRevision, IgnoredPromotion))
+		{
+			UE_LOG(LogCatFishing, Error,
+				TEXT("Event=fishing_operator_window_release_failed PlayerState=%s RodActorId=%s Revision=%lld"),
+				*GetNameSafe(Operator),
+				*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens), ExpectedRevision);
+		}
+
+		ACatCharacter* OperatorCharacter = Cast<ACatCharacter>(Operator->GetPawn());
+		if (!OperatorCharacter)
+		{
+			if (APlayerController* Controller = FindControllerForPlayerState(GetWorld(), Operator))
+			{
+				OperatorCharacter = Cast<ACatCharacter>(Controller->GetPawn());
+			}
+		}
+		if (OperatorCharacter)
+		{
+			if (UCharacterMovementComponent* Movement = OperatorCharacter->GetCharacterMovement())
+			{
+				Movement->SetMovementMode(MOVE_Walking);
+			}
 		}
 	}
 }
@@ -821,17 +937,22 @@ bool UCatFishingService::RegisterDeployedRod(APlayerState* PlayerState, ACatFish
 void UCatFishingService::UnregisterDeployedRod(const APlayerState* PlayerState,
 	const ACatFishingRodActor* ExpectedRodActor)
 {
-	CompactDeployedRods();
 	if (!PlayerState || !ExpectedRodActor)
 	{
+		CompactDeployedRods();
 		return;
 	}
 	const TWeakObjectPtr<APlayerState> PlayerKey(const_cast<APlayerState*>(PlayerState));
 	const TWeakObjectPtr<ACatFishingRodActor>* Existing = DeployedRodByPlayerState.Find(PlayerKey);
-	if (Existing && Existing->Get() == ExpectedRodActor)
+	// EndPlay 时普通 Weak.Get() 已可能返回空；允许 pending-kill 读取只用于和调用方 Actor 做同一性校验及最终补偿。
+	ACatFishingRodActor* ExistingRod = Existing ? Existing->Get(true) : nullptr;
+	if (ExistingRod == ExpectedRodActor)
 	{
+		// EndPlay/异常销毁也从这里注销；先恢复该竿全部操作人的移动，不能只丢掉 Registry 线索。
+		ReleaseRodOperatorsAndRestoreMovement(ExistingRod);
 		DeployedRodByPlayerState.Remove(PlayerKey);
 	}
+	CompactDeployedRods();
 }
 
 // Session 诊断流程：逐项统计存活且未终态会话，不把弱 Map 的物理条目数误报为活动数量。

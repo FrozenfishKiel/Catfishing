@@ -17,6 +17,9 @@ void UCatGA_FishingRodInteract::ActivateAbility(const FGameplayAbilitySpecHandle
 	(void)TriggerEventData;
 	if (IsRemoteAuthorityMirror(ActorInfo))
 	{
+		// 命令由 owning client 的 CommandComponent RPC 单独提交；服务器镜像只负责配对本次预测生命周期。
+		// 一次性 Ability 必须当场结束，不能把 RodInteract Spec 留在 Active 后吞掉下一次“离竿”输入。
+		EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 		return;
 	}
 	BP_OnLocalInputActivated();

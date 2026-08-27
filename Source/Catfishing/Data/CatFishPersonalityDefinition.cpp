@@ -22,7 +22,7 @@ bool UCatFightPersonalityDefinition::IsRuntimeDefinitionReady() const
 		&& FMath::IsFinite(CalmMovementSpeedCentimetersPerSecond) && CalmMovementSpeedCentimetersPerSecond > 0.0
 		&& FMath::IsFinite(StruggleMovementSpeedCentimetersPerSecond) && StruggleMovementSpeedCentimetersPerSecond > 0.0
 		&& FMath::IsFinite(BaseDrainMultiplier) && BaseDrainMultiplier > 0.0
-		&& FMath::IsFinite(StruggleDrainMultiplier) && StruggleDrainMultiplier > 1.0
+		&& FMath::IsFinite(StruggleDrainMultiplier) && StruggleDrainMultiplier > BaseDrainMultiplier
 		&& ValidRange(DirectionRetargetDurationRangeSeconds)
 		&& FMath::IsFinite(MaximumTurnRateDegreesPerSecond) && MaximumTurnRateDegreesPerSecond > 0.0
 		&& FMath::IsFinite(StruggleOutwardDirectionBias) && StruggleOutwardDirectionBias >= 0.0

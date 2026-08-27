@@ -629,6 +629,16 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		return Result;
 	}
 
+	// 非白天阶段会关闭 Fishing gate；必须在改公开门禁前由服务器释放竿位和 MOVE_None，
+	// 否则玩家进入夜晚后连 LeaveRod 都会被同一个 gate 拒绝。
+	if (NewPhase != ECatRunPhase::DayActive)
+	{
+		if (UCatFishingService* Fishing = GetWorld()->GetSubsystem<UCatFishingService>())
+		{
+			Fishing->SuspendFishingAndReleaseOperators();
+		}
+	}
+
 	ClearDayDeadline();
 	RunPublicState.Phase.Phase = NewPhase;
 	RunPublicState.Phase.ServerTimeAnchorSeconds = GetWorld()->GetTimeSeconds();
@@ -825,6 +835,11 @@ FCatRunCommandResult ACatfishingGameModeBase::SubmitQuotaContributionInternal(co
 	if (bReachesQuota)
 	{
 		TransitionReason = ECatRunTransitionReason::QuotaReached;
+		// 额度完成会立即关闭 Fishing gate；先释放操作位，避免过渡到夜晚前留下无法解开的移动锁。
+		if (UCatFishingService* Fishing = GetWorld()->GetSubsystem<UCatFishingService>())
+		{
+			Fishing->SuspendFishingAndReleaseOperators();
+		}
 		RunPublicState.Phase.bQuotaOpen = false;
 		RunPublicState.Phase.bFishingAllowed = false;
 		ClearDayDeadline();
@@ -995,6 +1010,11 @@ void ACatfishingGameModeBase::HandleDayDeadlineElapsed()
 	{
 		return;
 	}
+	// 截止时先收口钓鱼并恢复所有操作角色移动，再把新命令门关闭。
+	if (UCatFishingService* Fishing = GetWorld()->GetSubsystem<UCatFishingService>())
+	{
+		Fishing->SuspendFishingAndReleaseOperators();
+	}
 	RunPublicState.Phase.bFishingAllowed = false;
 	RunPublicState.Phase.bQuotaOpen = false;
 	RunPublicState.Phase.bHasDeadline = false;
@@ -1137,6 +1157,10 @@ bool ACatfishingGameModeBase::SendRunStateTreeEvent(const FGameplayTag EventTag,
 // 启动失败流程：保持 NotStarted，清计时器与写口，写 StartupFailed 并递增 Revision；不会启动备用 C++ FSM 或假装 StateTree 已运行。
 void ACatfishingGameModeBase::FailRunStartup(const TCHAR* Reason)
 {
+	if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
+	{
+		Fishing->SuspendFishingAndReleaseOperators();
+	}
 	bRunCommandsOpen = false;
 	ClearDayDeadline();
 	RunPublicState.Phase.Phase = ECatRunPhase::NotStarted;

@@ -117,14 +117,14 @@ LineLoad    = pow(max(Alignment, 0), AngleStrengthExponent)，范围[0,1]
 
 鱼仍在平静 ⇄ 挣扎之间定时交替，但每段内部可平滑转向、横切、绕竿和假动作；上钩瞬间=挣扎。
 每次重选方向先根据鱼体力计算向内概率；朝竿尖 ±60° 属于向内。当前测试鱼满体力为 25%，接近力竭为 80%，中间按指数 1.1 的性格曲线插值；发力期仍只把其中 `FeintProbability` 比例当作向内假动作。
-体力/磨损 = 原公式 × LineLoad：正对外冲是满载，斜向按夹角衰减，横向/向内不产生正面鱼线力量。
-左键遇到低 LineLoad 会按 (1-LineLoad) 比例收近；横向速度转换成绕竿尖的角运动，不凭空增加鱼距。
+LineLoad 控制鱼线磨损、牵引效率和强对抗资格：正对外冲满载，斜向按夹角衰减，横向/向内不制造正面鱼线力量。带载左键的猫/鱼体力消耗不再乘 LineLoad；平静期使用 InwardPull 系数×BaseDrainMultiplier，挣扎期使用 Stalemate 系数×StruggleDrainMultiplier，确保拖线始终双方做功且挣扎档更高。只有鱼自己绷紧锁线、玩家没有主动拉时，双方消耗才按 LineLoad 缩放。
+鱼先按自己的水平游向/游速自由移动，锁线只截住越线部分；左键按 (1-LineLoad) 得到有限牵引位移，并按实际到达的鱼距结算 L_paid，不再用缩短后的三维球面重建位置。
 
 挣扎 + 拖(或线放尽被绷紧) + LineLoad 连续达到性格阈值/确认时间：进入强对抗并按序裁决
    ① 钓组承载 ≤ min(猫力,鱼力) → 鱼线瞬断（LineBroken，鱼逃；鱼竿保持可用）
    ② 鱼力 ≥ 猫力            → 猫被拖下水（CatInWater，鱼逃）
    ③ 猫力 ≥ 鱼力×2          → 绝对碾压（结束搏斗→ExhaustedReel）
-   ④ 其余 = 僵持消耗战：竿-=鱼力×0.1×LineLoad · 鱼-=猫力×0.08×LineLoad · 猫-=鱼力×0.12×LineLoad /s
+   ④ 其余 = 僵持消耗战：竿-=鱼力×0.1×LineLoad · 带载拖时鱼-=猫力×0.08×StruggleDrainMultiplier · 猫-=鱼力×0.12×StruggleDrainMultiplier /s
 向外游 + 松线(右键)：在 L_max 内不限制鱼，L_paid 只随鱼实际外游被动增长；猫体力 +1.5/s（封顶）
 
 L_paid = 已放出的线长（左键主动收短；右键只允许鱼外游时被动带线）
@@ -189,9 +189,13 @@ Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消�
 
 ## 4. 调试可视化
 
-`UCatFishingDebugSubsystem`，CVar `cat.Fishing.Debug`（默认 0，需要调试时执行 `cat.Fishing.Debug 1`）：
-青色湖边界 / 抛竿瞄准绿球 / Q 蓄力黄色抛物线+落点球 / 窝点绿圈+剩余秒 /
-钩子蓝球 / 鱼球（红=发力·绿=累了）+ 鱼线 / 近岸翡翠圈 / 屏幕状态条（阶段提示+猫体力·鱼体力%·线长·拖放·完美）。
+`UCatFishingDebugSubsystem` 的世界调试标记由 CVar `cat.Fishing.Debug` 控制（默认 0，需要调试时执行 `cat.Fishing.Debug 1`）：
+青色湖边界 / 抛竿瞄准绿球 / 窝点绿圈+剩余秒 /
+钩子蓝球 / 鱼球（红=发力·绿=累了）+ 鱼线 / 近岸翡翠圈 / 屏幕阶段提示（线长·拖放·完美）。
+
+右上角三方数值面板使用独立 CVar `cat.Fishing.Stats`，默认 1：鱼显示当前/上限体力与有效力量（含完美中鱼折减），竿显示当前本场鱼线或装备耐久、上限与钓组力量，猫显示 ASC 当前/上限搏斗体力与钓鱼力量。执行 `cat.Fishing.Stats 0` 可单独关闭；它不会修改 `cat.Fishing.Debug`，后者保持默认关闭，开启世界调试也不会改变数值面板开关。
+
+Q 蓄力黄色抛物线与落点球是玩法瞄准反馈，不属于上述两类调试信息；它继续由 `cat.Fishing.ChumPreview` 独立控制并默认开启。
 命令链每条回执有结构化日志：过滤 `LogCatFishing`，失败为 Warning 且带 Error 枚举。
 
 ## 5. 关键资产与配置

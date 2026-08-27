@@ -52,13 +52,12 @@ void ACatFishPickupActor::BeginPlay()
 	}
 	if (Settings && FishMesh && GetNetMode() != NM_DedicatedServer)
 	{
-		FishMesh->SetRelativeTransform(Settings->LandedFishMeshRelativeTransform);
 		if (USkeletalMesh* Mesh = Settings->LandedFishMesh.LoadSynchronous())
 		{
 			FishMesh->SetSkeletalMeshAsset(Mesh);
 		}
 	}
-	ApplyVisualScale();
+	ApplyLandedVisualTransform();
 }
 
 void ACatFishPickupActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -91,11 +90,38 @@ bool ACatFishPickupActor::InitializeFromAuthority(const FGuid InFishingSessionId
 	FishingParticipantStableNetIds.Sort();
 	FishingParticipantStableNetIds.SetNum(Algo::Unique(FishingParticipantStableNetIds));
 	bIdentityInitialized = true;
-	ApplyVisualScale();
+	ApplyLandedVisualTransform();
 	ForceNetUpdate();
 	return true;
 }
 
+
+// 落地视觉流程：只在 Available 状态恢复地面鱼专用局部位置和旋转；统一视觉缩放随后单独应用，避免状态切换覆盖冻结鱼体大小。
+void ACatFishPickupActor::ApplyLandedVisualTransform()
+{
+	if (!FishMesh)
+	{
+		return;
+	}
+	const UCatWorldItemSettings* Settings = GetDefault<UCatWorldItemSettings>();
+	FTransform LandedTransform = Settings ? Settings->LandedFishMeshRelativeTransform : FTransform::Identity;
+	LandedTransform.SetScale3D(FVector::OneVector);
+	FishMesh->SetRelativeTransform(LandedTransform);
+	ApplyVisualScale();
+}
+
+// 嘴叼视觉流程：清掉仅为落地摆放准备的局部位置和旋转，让 FishMesh 原点直接跟随 MouthCarry 骨骼；重量冻结缩放保持不变。
+void ACatFishPickupActor::ApplyCarriedVisualTransform()
+{
+	if (!FishMesh)
+	{
+		return;
+	}
+	FishMesh->SetRelativeTransform(FTransform::Identity);
+	ApplyVisualScale();
+}
+
+// 视觉缩放流程：落地与嘴叼共用服务器冻结的鱼体比例；只缩放 FishMesh，不缩放交互根、附着关系或碰撞半径。
 void ACatFishPickupActor::ApplyVisualScale()
 {
 	if (!FishMesh)
@@ -161,6 +187,7 @@ bool ACatFishPickupActor::BeginMouthCarryFromAuthority(ACatCharacter* Character,
 		return false;
 	}
 	SetActorRelativeTransform(RelativeTransform);
+	ApplyCarriedVisualTransform();
 	ForceNetUpdate();
 	Character->ForceNetUpdate();
 	return GetAttachParentActor() == Character;
@@ -174,7 +201,7 @@ void ACatFishPickupActor::ApplyCarriedAttachmentFromPresentation()
 		return;
 	}
 	ACatCharacter* Character = Cast<ACatCharacter>(PresentationState.CarriedByPlayerState->GetPawn());
-	if (!Character || !Character->GetMesh() || GetAttachParentActor() == Character)
+	if (!Character || !Character->GetMesh())
 	{
 		return;
 	}
@@ -182,8 +209,12 @@ void ACatFishPickupActor::ApplyCarriedAttachmentFromPresentation()
 	const FName SocketName = Character->GetMesh()->GetSkeletalMeshAsset() && Settings
 		? Settings->MouthCarrySocketName : NAME_None;
 	const FTransform RelativeTransform = Settings ? Settings->MouthCarryRelativeTransform : FTransform::Identity;
-	AttachToComponent(Character->GetMesh(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, SocketName);
+	if (GetAttachParentActor() != Character)
+	{
+		AttachToComponent(Character->GetMesh(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, SocketName);
+	}
 	SetActorRelativeTransform(RelativeTransform);
+	ApplyCarriedVisualTransform();
 }
 
 void ACatFishPickupActor::ReleaseMouthCarryFromAuthority(const FVector& DropLocation)
@@ -203,6 +234,7 @@ void ACatFishPickupActor::ReleaseMouthCarryFromAuthority(const FVector& DropLoca
 	SetActorLocation(DropLocation, false, nullptr, ETeleportType::TeleportPhysics);
 	PresentationState.State = ECatFishPickupState::Available;
 	PresentationState.CarriedByPlayerState = nullptr;
+	ApplyLandedVisualTransform();
 	if (InteractionSphere)
 	{
 		InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
@@ -440,9 +472,9 @@ void ACatFishPickupActor::ArchiveCommittedCapture(const FCatCaptureCommittedResu
 
 void ACatFishPickupActor::OnRep_PresentationState(const FCatFishPickupPresentationState& Previous)
 {
-	ApplyVisualScale();
 	if (PresentationState.State == ECatFishPickupState::Carried)
 	{
+		ApplyCarriedVisualTransform();
 		if (InteractionSphere)
 		{
 			InteractionSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -450,9 +482,13 @@ void ACatFishPickupActor::OnRep_PresentationState(const FCatFishPickupPresentati
 		ApplyLocalFocus(false);
 		ApplyCarriedAttachmentFromPresentation();
 	}
-	else if (InteractionSphere)
+	else
 	{
-		InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		ApplyLandedVisualTransform();
+		if (InteractionSphere)
+		{
+			InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		}
 	}
 	BP_OnPickupPresentationChanged(Previous, PresentationState);
 }

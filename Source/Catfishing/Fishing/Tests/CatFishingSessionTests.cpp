@@ -5,6 +5,7 @@
 #include "Tests/AutomationCommon.h"
 
 #include "Character/CatCharacter.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
@@ -18,6 +19,7 @@
 #include "Items/CatContainerReplicationComponent.h"
 #include "Items/CatItemsService.h"
 #include "Items/CatWorldItemSettings.h"
+#include "StateTree.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingSessionPublicSnapshotDefaultsTest,
@@ -56,6 +58,80 @@ bool FCatFishingSessionPublicSnapshotDefaultsTest::RunTest(const FString& Parame
 				|| Property->GetName().Contains(TEXT("Transform")));
 		TestFalse(FString::Printf(TEXT("Snapshot does not duplicate fish world position: %s"), *Property->GetName()), bFishPositionField);
 	}
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingFightRunnerInitialHeldInputTest,
+	"Catfishing.Unit.Fishing.Session.NewFightRunnerRestoresHeldInputWithPullPriority",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingFightRunnerInitialHeldInputTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("creates runner held-input world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	UWorld* World = WorldWrapper.GetTestWorld();
+	ACatFishingSession* Session = World ? World->SpawnActor<ACatFishingSession>() : nullptr;
+	ACatFishEncounterActor* Fish = World ? World->SpawnActor<ACatFishEncounterActor>() : nullptr;
+	ACatFishingRodActor* Rod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
+	UCatAbilitySystemComponent* AbilitySystem = Session
+		? NewObject<UCatAbilitySystemComponent>(Session, TEXT("HeldInputAbilitySystem")) : nullptr;
+	UStateTree* BehaviorStateTree = Session ? NewObject<UStateTree>(Session, TEXT("HeldInputStateTree")) : nullptr;
+	if (!TestNotNull(TEXT("spawns runner session"), Session)
+		|| !TestNotNull(TEXT("spawns runner fish"), Fish)
+		|| !TestNotNull(TEXT("spawns runner rod"), Rod)
+		|| !TestNotNull(TEXT("creates runner ability system"), AbilitySystem)
+		|| !TestNotNull(TEXT("creates runner behavior tree"), BehaviorStateTree))
+	{
+		return false;
+	}
+
+	FCatFishingFightRunnerInit BaseInit;
+	BaseInit.Session = Session;
+	BaseInit.FishActor = Fish;
+	BaseInit.RodActor = Rod;
+	BaseInit.AbilitySystem = AbilitySystem;
+	BaseInit.WaterRegion.RegionId = TEXT("HeldInputWater");
+	BaseInit.WaterRegion.GeometryRevision = 1;
+	BaseInit.FrozenWaterBounds = FBox(FVector(-1000.0), FVector(1000.0));
+	BaseInit.Config.FixedStepSeconds = 0.05;
+	BaseInit.Config.CatStrength = 50.0;
+	BaseInit.Config.FishStrength = 40.0;
+	BaseInit.Config.RodStrength = 60.0;
+	BaseInit.Config.CatStaminaMaximum = 100.0;
+	BaseInit.Config.ReelSpeedCentimetersPerSecond = 100.0;
+	BaseInit.Config.FishCalmSpeedCentimetersPerSecond = 25.0;
+	BaseInit.Config.FishStruggleSpeedCentimetersPerSecond = 75.0;
+	BaseInit.Config.MaximumLineLengthCentimeters = 1000.0;
+	BaseInit.Config.RodDurability = 100.0;
+	BaseInit.InitialState.CatStamina = 100.0;
+	BaseInit.InitialState.FishStamina = 50.0;
+	BaseInit.InitialState.LineLengthCentimeters = 500.0;
+	BaseInit.InitialState.FishWorldPosition = FVector(500.0, 0.0, 0.0);
+	BaseInit.InitialState.MotionIntent = ECatFishMotionIntent::StrugglingOutward;
+	BaseInit.CalmDurationRangeSeconds = FVector2D(1.0, 2.0);
+	BaseInit.StruggleDurationRangeSeconds = FVector2D(1.0, 2.0);
+	BaseInit.BehaviorStateTree = BehaviorStateTree;
+	BaseInit.RandomSeed = 1234;
+	BaseInit.InitialInputSequence = 42;
+
+	FCatFishingFightRunnerInit SlackInit = BaseInit;
+	SlackInit.bInitialSlackHeld = true;
+	UCatFishingFightRunner* SlackRunner = NewObject<UCatFishingFightRunner>(Session);
+	TestTrue(TEXT("initializes new runner with carried slack input"),
+		SlackRunner->InitializeFromAuthority(SlackInit));
+	TestEqual(TEXT("held right mouse restores open spool"),
+		SlackRunner->GetCatAction(), ECatFightCatAction::Slack);
+
+	FCatFishingFightRunnerInit BothInit = BaseInit;
+	BothInit.bInitialPullHeld = true;
+	BothInit.bInitialSlackHeld = true;
+	UCatFishingFightRunner* BothRunner = NewObject<UCatFishingFightRunner>(Session);
+	TestTrue(TEXT("initializes new runner with both physical buttons held"),
+		BothRunner->InitializeFromAuthority(BothInit));
+	TestEqual(TEXT("pull remains authoritative priority when both buttons are held"),
+		BothRunner->GetCatAction(), ECatFightCatAction::Pull);
 	return !HasAnyErrors();
 }
 
@@ -230,6 +306,8 @@ bool FCatFishingSessionLineBreakKeepsRodOperableTest::RunTest(const FString& Par
 	Session->Snapshot.FishingSessionId = FGuid::NewGuid();
 	Session->Snapshot.Phase = ECatFishingPhase::HookedFight;
 	Session->Snapshot.RodActor = Rod;
+	Session->Snapshot.bReeling = true;
+	Session->Snapshot.bSlacking = true;
 	Session->FightRunner = NewObject<UCatFishingFightRunner>(Session);
 
 	FCatFightStepResult Step;
@@ -248,6 +326,8 @@ bool FCatFishingSessionLineBreakKeepsRodOperableTest::RunTest(const FString& Par
 		Rod->GetPresentationState().RodActorRevision, RodRevisionBefore);
 	TestEqual(TEXT("Current operator remains on the reusable rod"),
 		Rod->GetPresentationState().OperatorPlayerState.Get(), Owner);
+	TestFalse(TEXT("terminal line break clears stale reeling presentation"), Session->Snapshot.bReeling);
+	TestFalse(TEXT("terminal line break clears stale slack presentation"), Session->Snapshot.bSlacking);
 	return !HasAnyErrors();
 }
 

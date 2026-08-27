@@ -24,6 +24,11 @@ struct CATFISHING_API FCatFishingFightRunnerInit
 	FBox FrozenWaterBounds = FBox(ForceInit);
 	FCatFightSimulationConfig Config;
 	FCatFightSimulationState InitialState;
+	/** 该玩家服务器已确认的最新连续输入序号；新 Runner 从此序号继续拒绝旧边沿。 */
+	int64 InitialInputSequence = 0;
+	/** 进入本场搏斗时物理左/右键是否仍被按住；收线优先级仍由 RefreshCatAction 统一裁决。 */
+	bool bInitialPullHeld = false;
+	bool bInitialSlackHeld = false;
 	/** 向内游（休息）时长区间。 */
 	FVector2D CalmDurationRangeSeconds = FVector2D::ZeroVector;
 	/** 向外游（发力）时长区间。 */

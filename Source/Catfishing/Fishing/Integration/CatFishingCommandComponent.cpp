@@ -245,9 +245,61 @@ void UCatFishingCommandComponent::ResetTransientCommandState()
 	BeginCastResultsByRequestId.Reset();
 	BeginCastResultOrder.Reset();
 	PrimaryActivationCorrelationId.Invalidate();
+	ServerAimingCorrelationId.Invalidate();
+	bServerPrimaryHeld = false;
+	bServerSlackHeld = false;
+	LastServerHeldInputSequence = 0;
 	LocalChumChargeStartTime = -1.0; // 关卡/会话切换时收起残留的蓄力预览线。
+	ChumChargeStartServerTime = -1.0;
 	ScoopCooldownGate.Reset(); // 世界时间会在旅行时重建，旧世界的绝对时间戳不能带入新地图。
 	NextInputSequence = 0;
+}
+
+bool UCatFishingCommandComponent::TryGetHeldFightInputStateFromAuthority(bool& OutPrimaryHeld,
+	bool& OutSlackHeld, int64& OutInputSequence) const
+{
+	OutPrimaryHeld = false;
+	OutSlackHeld = false;
+	OutInputSequence = 0;
+	const APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->HasAuthority())
+	{
+		return false;
+	}
+	OutPrimaryHeld = bServerPrimaryHeld;
+	OutSlackHeld = bServerSlackHeld;
+	OutInputSequence = LastServerHeldInputSequence;
+	return true;
+}
+
+void UCatFishingCommandComponent::TrackHeldFightInputFromAuthority(
+	const ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge)
+{
+	if (Edge.InputSequence <= LastServerHeldInputSequence)
+	{
+		return;
+	}
+	bool* HeldState = nullptr;
+	switch (CommandType)
+	{
+	case ECatFishingCommandType::RequestHook:
+		HeldState = &bServerPrimaryHeld;
+		break;
+	case ECatFishingCommandType::PrimaryReleased:
+		HeldState = &bServerPrimaryHeld;
+		break;
+	case ECatFishingCommandType::SlackPressed:
+		HeldState = &bServerSlackHeld;
+		break;
+	case ECatFishingCommandType::SlackReleased:
+		HeldState = &bServerSlackHeld;
+		break;
+	default:
+		return;
+	}
+	*HeldState = CommandType == ECatFishingCommandType::RequestHook
+		|| CommandType == ECatFishingCommandType::SlackPressed;
+	LastServerHeldInputSequence = Edge.InputSequence;
 }
 
 FCatFishingInputEdge UCatFishingCommandComponent::MakeDiscreteEdge()
@@ -396,6 +448,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	{
 		return;
 	}
+	// 按键事实先于 Session 路由更新：断线后暂时没有活跃会话时，Release 仍必须清掉持续按住状态。
+	TrackHeldFightInputFromAuthority(CommandType, Edge);
 	FCatFishingCommandResult Result;
 	Result.CommandType = CommandType;
 	Result.RequestId = Edge.RequestId;
