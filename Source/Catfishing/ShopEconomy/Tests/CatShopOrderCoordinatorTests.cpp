@@ -200,7 +200,7 @@ namespace CatShopOrderCoordinatorTest
 		/** 本局容器稳定 ID；售鱼命令和 Items 终态缓存都以它作为聚合作用域。 */
 		FGuid ContainerId;
 
-		/** 个人鱼护主人身份；捕获鱼 OwnerStableNetId 与售鱼命令身份必须匹配。 */
+		/** 捕获者身份；捕获鱼 OwnerStableNetId 与售鱼命令身份必须匹配。 */
 		FString OwnerStableNetId;
 	};
 
@@ -222,7 +222,7 @@ namespace CatShopOrderCoordinatorTest
 		return Result;
 	}
 
-	/** 捕获命令构造流程：把测试鱼写入指定个人鱼护，重量固定落入本文件的单档收购价。 */
+	/** 捕获命令构造流程：把测试鱼写入指定地面鱼护，重量固定落入本文件的单档收购价。 */
 	static FCatCaptureCommitCommand MakeCaptureCommand(const FRegisteredContainer& TargetContainer,
 		const FGuid RequestId, const FGuid FishInstanceId, const int64 ExpectedRevision)
 	{
@@ -279,7 +279,7 @@ namespace CatShopOrderCoordinatorTest
 		Command.FishInstanceId = FishInstanceId;
 		Command.ContainerId = Container.ContainerId;
 		Command.ExpectedContainerRevision = ExpectedContainerRevision;
-		Command.SourceKind = ECatShopFishSaleSource::PersonalGuard;
+		Command.SourceKind = ECatShopFishSaleSource::FishGuard;
 		return Command;
 	}
 
@@ -311,7 +311,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.ShopEconomy.OrderCoordinator.EquipmentClaimGrantsPersonalRod",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 测试流程：注册个人鱼护并通过 Items 捕获提交种鱼；协调器售鱼后必须删除鱼、增加团队公款并写 FishSale 账本，
+// 测试流程：注册地面鱼护并通过 Items 捕获提交种鱼；协调器售鱼后必须删除鱼、增加团队公款并写 FishSale 账本，
 // 同一 RequestId 重放只能读取 Items/Shop 终态，不能再次加钱或再次删除。
 bool FCatShopOrderCoordinatorFishSaleSuccessReplayTest::RunTest(const FString& Parameters)
 {
@@ -336,13 +336,13 @@ bool FCatShopOrderCoordinatorFishSaleSuccessReplayTest::RunTest(const FString& P
 	}
 
 	const CatShopOrderCoordinatorTest::FRegisteredContainer Guard =
-		CatShopOrderCoordinatorTest::RegisterContainer(World, ItemsService, ECatContainerKind::PersonalGuard,
+		CatShopOrderCoordinatorTest::RegisterContainer(World, ItemsService, ECatContainerKind::FishGuard,
 			TEXT("PlayerA"), 3);
-	TestNotNull(TEXT("个人鱼护复制组件已创建"), Guard.Component.Get());
+	TestNotNull(TEXT("地面鱼护复制组件已创建"), Guard.Component.Get());
 	const FGuid FishInstanceId = FGuid::NewGuid();
 	const FCatCaptureCommitResult Capture = CatShopOrderCoordinatorTest::SeedFish(ItemsService, Guard,
 		FishInstanceId, 1);
-	TestTrue(TEXT("售鱼前可捕获写入个人鱼护"), Capture.Command.bCommitted);
+	TestTrue(TEXT("售鱼前可捕获写入地面鱼护"), Capture.Command.bCommitted);
 
 	const FGuid SaleRequestId = FGuid::NewGuid();
 	const FCatShopFishSaleOrderCommand SaleCommand =
@@ -357,7 +357,7 @@ bool FCatShopOrderCoordinatorFishSaleSuccessReplayTest::RunTest(const FString& P
 	TestEqual(TEXT("售鱼账本类别为 FishSale"), Sale.Transaction.Transaction.Kind,
 		ECatShopTransactionKind::FishSale);
 	TestEqual(TEXT("售鱼账本记录鱼实例"), Sale.Transaction.Transaction.FishInstanceId, FishInstanceId);
-	TestFalse(TEXT("售鱼后鱼从个人鱼护移除"),
+	TestFalse(TEXT("售鱼后鱼从地面鱼护移除"),
 		CatShopOrderCoordinatorTest::SnapshotContainsFish(
 			CatShopOrderCoordinatorTest::GetSnapshot(ItemsService, Guard.ContainerId), FishInstanceId));
 
@@ -402,12 +402,12 @@ bool FCatShopOrderCoordinatorFishSalePrecheckFailureTest::RunTest(const FString&
 	}
 
 	const CatShopOrderCoordinatorTest::FRegisteredContainer Guard =
-		CatShopOrderCoordinatorTest::RegisterContainer(World, ItemsService, ECatContainerKind::PersonalGuard,
+		CatShopOrderCoordinatorTest::RegisterContainer(World, ItemsService, ECatContainerKind::FishGuard,
 			TEXT("PlayerA"), 3);
 	const FGuid FishInstanceId = FGuid::NewGuid();
 	const FCatCaptureCommitResult Capture = CatShopOrderCoordinatorTest::SeedFish(ItemsService, Guard,
 		FishInstanceId, 1);
-	TestTrue(TEXT("预检失败用例可捕获写入个人鱼护"), Capture.Command.bCommitted);
+	TestTrue(TEXT("预检失败用例可捕获写入地面鱼护"), Capture.Command.bCommitted);
 
 	const int64 StaleWalletRevision = ShopService->GetWalletSnapshot().Revision + 1;
 	const FCatShopFishSaleOrderCommand SaleCommand =

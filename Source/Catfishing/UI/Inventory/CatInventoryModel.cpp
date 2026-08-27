@@ -371,7 +371,7 @@ void UCatInventoryModel::Refresh()
 
 	int32 DisplaySlotIndex = 0;
 	auto AddContainerToView = [this, &NewState, &DisplaySlotIndex](const FCatContainerSnapshot& Snapshot,
-		const FText& DisplayName, const bool bPrimaryPersonalContainer)
+		const FText& DisplayName)
 	{
 		if (!Snapshot.ContainerId.IsValid())
 		{
@@ -386,7 +386,7 @@ void UCatInventoryModel::Refresh()
 		ContainerView.DisplayName = DisplayName;
 		ContainerView.FirstSlotIndex = DisplaySlotIndex;
 		ContainerView.SlotCount = EffectiveSlotCount;
-		ContainerView.bPrimaryPersonalContainer = bPrimaryPersonalContainer;
+		ContainerView.bInteractionFishContainer = Snapshot.Kind == ECatContainerKind::FishGuard;
 		NewState.Containers.Add(ContainerView);
 		const FString ContainerDisplayName = DisplayName.ToString();
 		for (int32 ContainerSlotIndex = 0; ContainerSlotIndex < EffectiveSlotCount; ++ContainerSlotIndex)
@@ -408,7 +408,6 @@ void UCatInventoryModel::Refresh()
 				NewState.Equipment.Revision, DisplaySlotIndex++));
 		}
 	}
-	AddContainerToView(NewState.PersonalFishGuard, FText::FromString(TEXT("鱼护")), true);
 	int32 ExternalContainerIndex = 0;
 	for (const FExternalContainerBinding& Binding : BoundExternalContainers)
 	{
@@ -418,7 +417,7 @@ void UCatInventoryModel::Refresh()
 			continue;
 		}
 		const FCatContainerSnapshot Snapshot = Component->GetSnapshot();
-		AddContainerToView(Snapshot, MakeContainerDisplayName(Snapshot, ExternalContainerIndex), false);
+		AddContainerToView(Snapshot, MakeContainerDisplayName(Snapshot, ExternalContainerIndex));
 		++ExternalContainerIndex;
 	}
 	NewState.SlotCount = NewState.Slots.Num();
@@ -434,8 +433,8 @@ void UCatInventoryModel::Refresh()
 		&& SelectedSlot->bOccupied
 		&& SelectedSlot->ObjectKind != ECatContainedObjectKind::Unknown
 		&& SelectedSlot->ObjectInstanceId.IsValid();
-	NewState.bSelectedObjectInPersonalContainer = NewState.bHasSelectedObject && SelectedSlot
-		&& SelectedSlot->ContainerKind == ECatContainerKind::PersonalGuard;
+	NewState.bSelectedObjectInFishGuard = NewState.bHasSelectedObject && SelectedSlot
+		&& SelectedSlot->ContainerKind == ECatContainerKind::FishGuard;
 	if (NewState.bHasSelectedObject && SelectedSlot)
 	{
 		NewState.SelectedObject = SelectedSlot->Object;
@@ -444,8 +443,8 @@ void UCatInventoryModel::Refresh()
 		&& SelectedSlot->bOccupied
 		&& SelectedSlot->ObjectKind == ECatContainedObjectKind::Fish
 		&& SelectedSlot->Fish.FishInstanceId.IsValid();
-	NewState.bSelectedFishInPersonalGuard = NewState.bHasSelectedFish && SelectedSlot
-		&& SelectedSlot->ContainerKind == ECatContainerKind::PersonalGuard
+	NewState.bSelectedFishInFishGuard = NewState.bHasSelectedFish && SelectedSlot
+		&& SelectedSlot->ContainerKind == ECatContainerKind::FishGuard
 		&& SelectedSlot->bOccupied;
 	if (NewState.bHasSelectedFish && SelectedSlot)
 	{
@@ -460,7 +459,7 @@ void UCatInventoryModel::Refresh()
 	NewState.bHasCommandResult = bHasCommandResult;
 	NewState.LastConsumeResult = LastConsumeResult;
 	NewState.LastSacrificeResult = LastSacrificeResult;
-	NewState.bCanSubmitAction = bOpen && NewState.bSelectedFishInPersonalGuard && !bActionPending;
+	NewState.bCanSubmitAction = bOpen && NewState.bSelectedFishInFishGuard && !bActionPending;
 	if (const UCatUISettings* Settings = GetDefault<UCatUISettings>())
 	{
 		NewState.ToggleKeyName = Settings->ResolveInventoryToggleKeyName();
@@ -774,14 +773,10 @@ FCatInventorySlotView UCatInventoryModel::MakeInventorySlotView(
 	return Slot;
 }
 
-// 容器名称流程：个人鱼护和鱼护箱子都显示为“鱼护”；其他容器统一按“外部容器 N”命名。
+// 容器名称流程：地面鱼护显示为“鱼护”；其他交互容器统一按“外部容器 N”命名。
 FText UCatInventoryModel::MakeContainerDisplayName(const FCatContainerSnapshot& Snapshot,
 	const int32 ExternalContainerIndex)
 {
-	if (Snapshot.Kind == ECatContainerKind::PersonalGuard)
-	{
-		return FText::FromString(TEXT("鱼护"));
-	}
 	if (Snapshot.Kind == ECatContainerKind::FishGuard)
 	{
 		return FText::FromString(TEXT("鱼护"));

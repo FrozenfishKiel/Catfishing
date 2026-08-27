@@ -42,7 +42,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Theft", meta = (ClampMin = "0.0"))
 	double TheftCatchRangeCentimeters = 0.0;
 
-	/** 共享鱼缸的追回权限；Undecided 时共享缸偷鱼拒绝，个人鱼护仍按原主人。 */
+	/** 共享鱼缸的追回权限；Undecided 时共享缸偷鱼拒绝，地面鱼护里的鱼仍按捕获者身份裁决。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Theft")
 	ECatSharedTankRecoveryPolicy SharedTankRecoveryPolicy = ECatSharedTankRecoveryPolicy::Undecided;
 

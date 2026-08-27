@@ -527,8 +527,8 @@ bool FCatFishingSessionExistingCaptureReconciliationTest::RunTest(const FString&
 	const FString FirstOwnerStableNetId = TEXT("FirstOwner");
 	const FGuid ContainerId = FGuid::NewGuid();
 	const FGuid FishingSessionId = FGuid::NewGuid();
-	TestTrue(TEXT("Registers real personal guard"), ItemsService->RegisterContainer(ContainerComponent, ContainerId,
-		ECatContainerKind::PersonalGuard, FirstOwnerStableNetId, 2));
+	TestTrue(TEXT("Registers real ground fish guard"), ItemsService->RegisterContainer(ContainerComponent, ContainerId,
+		ECatContainerKind::FishGuard, FString(), 2));
 	FCatContainerSnapshot ContainerSnapshot;
 	if (!ItemsService->TryGetContainerSnapshot(ContainerId, ContainerSnapshot))
 	{

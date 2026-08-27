@@ -156,14 +156,14 @@ Make FCatBeginCastCommand
 - 服务器另外校验：距离 ≤ `min(竿最大线长, 浮漂最大抛距)`；准星方向和落点方向夹角 ≤ 约 60°（`Dot ≥ 0.5`）；视线无遮挡
 - 结果 `FCatBeginCastResult` 通过 `TryGetBeginCastResult(RequestId, OutResult)` 拿，里面有服务器修正后的 `ServerCorrectedLandingWorldPoint` 和 `Command.FishingSessionId`——**这个 SessionId 只用于你自己 UI 显示，不需要传给后续任何命令**，因为 Hook/Reel/Cancel/Scoop 全部由服务器通过 `TryGetActiveSessionForController` 自动定位你的活跃会话
 
-### 3.4 RequestHook / 收线 / Cancel / Scoop
+### 3.4 RequestHook / 收线 / Cancel
 
-**不需要写蓝图**——四个原生 Ability 已经覆盖：
+**不需要写蓝图**——三个正式原生 Ability 已经覆盖：
 
 - `Cat.Input.Fishing.Primary` 按住不放：`TrueBiteWindow` 阶段=提竿判定，`HookedFight` 阶段=持续收线（哪个阶段由服务器读当前 Session Phase 决定，蓝图端不用关心）
 - 松开：停止收线（或阶段外的无害 no-op）
 - `Cat.Input.Fishing.Cancel`：随时取消当前会话
-- `Cat.Input.Fishing.Scoop`：`NearShore` 阶段抢抄，服务器自动用你自己的个人鱼护 ID 当目标容器
+- `Cat.Input.Fishing.Scoop` 旧抢抄入口当前保持 fail-closed；正式捕获流程会把力竭鱼拖上岸生成世界死鱼，不再在钓鱼会话里指定鱼护
 
 ### 3.5 PlaceChum（打窝）—— 单独走一条路，不挂在 `Cat.Input.Fishing.Chum` 键位对应的 Ability 上
 
@@ -220,8 +220,8 @@ Controller.Server Configure Equipment(
 5. 瞄水面按抛竿确认键，确认 `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去后 `Phase` 最终变成 `Landed`（Hook 的 `BP_OnHookPresentationChanged` 应该收到一次带 `Landed` 的回调）
 6. 确认浮漂先慢浮至少 `MinimumBiteDelaySeconds`（当前 5 秒），再快速抖动 `BiteWarningSeconds`（当前 3 秒），然后下沉并进入 `Phase=TrueBiteWindow`
 7. 窗口内按住 Primary，确认提竿成功进 `HookedFight`
-8. 按住 Primary 持续收线，观察 `NormalizedFishStamina` 下降，直到进 `NearShore`
-9. 走到岸边按抢抄键，确认 `Phase=Resolved`，个人鱼护里多一条鱼
+8. 按住 Primary 持续收线，观察 `NormalizedFishStamina` 下降；鱼力竭后继续回收，确认岸上生成可交互的死鱼 Actor
+9. 对死鱼按 `E`，确认猫嘴叼鱼且随身背包没有新增鱼；再对目标地面鱼护按 `E`，确认只写入该鱼护
 10. 单独测打窝：调用 `SubmitPlaceChum`，确认 `TryGetPlaceChumResult` 返回 `bCommitted=true`，且第 6 步的等待时间因为窝料明显缩短
 
 任何一步卡住，先看对应阶段在本文第 0/1 节里是"开箱可用"还是"需要你自己接线"，再去查 Config/DataAsset 校验链（第 2 节）。

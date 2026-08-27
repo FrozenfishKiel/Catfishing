@@ -34,7 +34,7 @@ struct FCatCollectionEntryView
 	FText DisplayText;
 };
 
-/** 图鉴/相册界面的完整只读投影；它和个人鱼护实物容器完全分开。 */
+/** 图鉴/相册界面的完整只读投影；它和地面鱼护等实物容器完全分开。 */
 USTRUCT(BlueprintType)
 struct FCatCollectionViewState
 {
@@ -53,7 +53,7 @@ struct FCatCollectionViewState
 	FText SummaryText;
 };
 
-/** 图鉴/相册 WBP 基类；它只读 Profile 记录，不和个人鱼护、商店或 HUD 混在一起。 */
+/** 图鉴/相册 WBP 基类；它只读 Profile 记录，不和地面鱼护、商店或 HUD 混在一起。 */
 UCLASS(BlueprintType, Blueprintable)
 class CATFISHING_API UCatCollectionWidget : public UUserWidget
 {

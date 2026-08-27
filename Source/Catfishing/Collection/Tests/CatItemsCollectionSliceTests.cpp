@@ -15,8 +15,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 namespace CatItemsCollectionSliceTest
 {
-	/** 已注册个人鱼护的切片上下文；它把真实 Actor 宿主、复制组件、容器 ID 和服务器身份绑成一次测试输入。 */
-	struct FPersonalGuardFixture
+	/** 已注册地面鱼护的切片上下文；它把真实 Actor 宿主、复制组件、容器 ID 和服务器身份绑成一次测试输入。 */
+	struct FFishGuardFixture
 	{
 		/** authority Actor 宿主；复制组件依附它取得真实 Owner 生命周期。 */
 		TObjectPtr<AActor> Owner = nullptr;
@@ -24,17 +24,17 @@ namespace CatItemsCollectionSliceTest
 		/** Items 服务发布公开快照的正式组件；切片测试不直接写它的数组。 */
 		TObjectPtr<UCatContainerReplicationComponent> Component = nullptr;
 
-		/** 本次测试容器的稳定 ID；Items 命令通过它定位个人鱼护聚合。 */
+		/** 本次测试地面鱼护的稳定 ID；Items 命令通过它定位容器聚合。 */
 		FGuid ContainerId;
 
 		/** 服务器私有玩家身份；Items owner 校验与 Collection grant 接收者使用同一个值。 */
 		FString StableNetId;
 	};
 
-	// 注册流程：创建真实 Actor 与正式复制组件，再通过 Items public API 注册个人鱼护；失败时返回空组件并让调用方断言。
-	static FPersonalGuardFixture RegisterPersonalGuard(UWorld* World, UCatItemsService* ItemsService)
+	// 注册流程：创建真实 Actor 与正式复制组件，再通过 Items public API 注册地面鱼护；失败时返回空组件并让调用方断言。
+	static FFishGuardFixture RegisterFishGuard(UWorld* World, UCatItemsService* ItemsService)
 	{
-		FPersonalGuardFixture Fixture;
+		FFishGuardFixture Fixture;
 		Fixture.Owner = World ? World->SpawnActor<AActor>() : nullptr;
 		Fixture.Component = Fixture.Owner ? NewObject<UCatContainerReplicationComponent>(Fixture.Owner) : nullptr;
 		Fixture.ContainerId = FGuid::NewGuid();
@@ -44,13 +44,13 @@ namespace CatItemsCollectionSliceTest
 			Fixture.Owner->AddInstanceComponent(Fixture.Component);
 			Fixture.Component->RegisterComponent();
 			ItemsService->RegisterContainer(Fixture.Component, Fixture.ContainerId,
-				ECatContainerKind::PersonalGuard, Fixture.StableNetId, 2);
+				ECatContainerKind::FishGuard, Fixture.StableNetId, 2);
 		}
 		return Fixture;
 	}
 
 	// 捕获命令流程：构造一条合法实物鱼提交；ExpectedRevision 固定为注册后的初始 Revision=1，保证切片从真实 Items 写口进入。
-	static FCatCaptureCommitCommand MakeCaptureCommand(const FPersonalGuardFixture& Guard)
+	static FCatCaptureCommitCommand MakeCaptureCommand(const FFishGuardFixture& Guard)
 	{
 		FCatCaptureCommitCommand Command;
 		Command.Context.RequestId = FGuid::NewGuid();
@@ -89,9 +89,9 @@ bool FCatItemsCollectionCommitCaptureSliceTest::RunTest(const FString& Parameter
 		return false;
 	}
 
-	const CatItemsCollectionSliceTest::FPersonalGuardFixture Guard =
-		CatItemsCollectionSliceTest::RegisterPersonalGuard(World, ItemsService);
-	TestNotNull(TEXT("个人鱼护组件已创建"), Guard.Component.Get());
+	const CatItemsCollectionSliceTest::FFishGuardFixture Guard =
+		CatItemsCollectionSliceTest::RegisterFishGuard(World, ItemsService);
+	TestNotNull(TEXT("地面鱼护组件已创建"), Guard.Component.Get());
 
 	const FCatCaptureCommitCommand CaptureCommand = CatItemsCollectionSliceTest::MakeCaptureCommand(Guard);
 	const FCatCaptureCommitResult CaptureResult = ItemsService->CommitCapture(CaptureCommand);

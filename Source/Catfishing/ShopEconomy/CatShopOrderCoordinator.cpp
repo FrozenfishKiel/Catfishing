@@ -28,7 +28,7 @@ FCatShopOrderResult UCatShopOrderCoordinator::SubmitFreeClaim(const FCatShopPurc
 }
 
 // 售鱼链流程：
-// 1. 先读取 Items 容器快照，确认来源种类和个人鱼护主人，价格只从鱼实例重量现场估出。
+// 1. 先读取 Items 容器快照并确认来源种类，价格只从鱼实例重量现场估出。
 // 2. 再让 Shop 用同一份售鱼命令做公款/价格预检；这一步失败时绝不触碰 Items，鱼仍留在原容器。
 // 3. 预检通过后用同一个 RequestId 调 Items::ConsumeFish 完成实物提交，成功或合法重放才进入 Shop::ApplyFishSale。
 // 4. Result.Delivery 始终暴露 Items 提交段，Result.Transaction 暴露公款/账本段，调用方能区分“鱼没删”和“钱没入账”。
@@ -67,9 +67,9 @@ FCatShopOrderResult UCatShopOrderCoordinator::SubmitFishSale(const FCatShopFishS
 	}
 
 	ECatContainerKind ExpectedContainerKind = ECatContainerKind::Unknown;
-	if (Command.SourceKind == ECatShopFishSaleSource::PersonalGuard)
+	if (Command.SourceKind == ECatShopFishSaleSource::FishGuard)
 	{
-		ExpectedContainerKind = ECatContainerKind::PersonalGuard;
+		ExpectedContainerKind = ECatContainerKind::FishGuard;
 	}
 	else if (Command.SourceKind == ECatShopFishSaleSource::SharedFishTank)
 	{
@@ -127,7 +127,7 @@ FCatShopOrderResult UCatShopOrderCoordinator::SubmitFishSale(const FCatShopFishS
 		bItemsAlreadyCommitted = true;
 	}
 
-	if (Command.SourceKind == ECatShopFishSaleSource::PersonalGuard
+	if (Command.SourceKind == ECatShopFishSaleSource::FishGuard
 		&& SaleFish.OwnerStableNetId != Command.Context.StableNetId)
 	{
 		return RejectBeforeItemsCommit(ECatDomainCommandError::PermissionDenied, Snapshot.Revision);

@@ -26,8 +26,8 @@ enum class ECatShopFishSaleSource : uint8
 {
 	/** 调用方没有声明来源；售鱼写口必须拒绝，避免来源不明的钱进公款账本。 */
 	Unknown,
-	/** 卖鱼者自己鱼护里的鱼。 */
-	PersonalGuard,
+	/** 卖鱼者从明确地面鱼护中选择的鱼。 */
+	FishGuard,
 	/** 共用鱼缸里的鱼；缸是全队共有，钱同样进公款。 */
 	SharedFishTank,
 	/** 偷来的、仍在 Social escrow 里的鱼。 */

@@ -2249,7 +2249,7 @@ void ACatfishingPlayerController::ServerTransferObjectBetweenContainers_Implemen
 // 通用容器物体移动 Ability 提交流程：
 // 1. 先验证玩法命令 gate、载荷形状、当前 Character、Items 和服务器身份。
 // 2. 再从 Items 重读源/目标容器宿主、种类和源容器槽位对象，要求客户端种类与注册事实一致，源格仍是该物体。
-// 3. 个人鱼护和外部容器都必须由 Items 注册宿主并通过服务器距离校验，物体能否进入目标容器继续交给 Items 策略裁决。
+// 3. 地面鱼护和外部容器都必须由 Items 注册宿主并通过服务器距离校验，物体能否进入目标容器继续交给 Items 策略裁决。
 // 4. 最后只调用 Items 的通用容器物体入口，并把结果可靠回送 owning client；当前 Items 只对鱼对象提交，其余 ObjectKind 保持策略拒绝。
 void ACatfishingPlayerController::SubmitTransferObjectBetweenContainersFromBodyActionAbility(const FGuid RequestId,
 	const ECatContainedObjectKind ObjectKind, const FGuid ObjectInstanceId,
@@ -2723,19 +2723,18 @@ void ACatfishingPlayerController::SubmitConsumeFishFromBodyActionAbility(ACatCha
 			{
 				Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
 			}
-			else if (SourceKind != ECatContainerKind::PersonalGuard && SourceKind != ECatContainerKind::SharedFishTank)
+			else if (SourceKind != ECatContainerKind::FishGuard && SourceKind != ECatContainerKind::SharedFishTank)
 			{
 				Result.Command.Error = ECatDomainCommandError::InvalidPayload;
 			}
-			else if (SourceKind == ECatContainerKind::SharedFishTank)
+			else
 			{
 				const UCatCampSettings* CampSettings = GetDefault<UCatCampSettings>();
-				if (!CampSettings || !CampSettings->IsRuntimeReady() || !SourceHost)
+				if (!SourceHost)
 				{
 					Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
 				}
-				else if (FVector::DistSquared(EatingCharacter->GetActorLocation(), SourceHost->GetActorLocation())
-					> FMath::Square(CampSettings->InteractionRadiusCentimeters))
+				else if (!IsContainerHostReachable(SourceHost, EatingCharacter, CampSettings))
 				{
 					Result.Command.Error = ECatDomainCommandError::PermissionDenied;
 				}
@@ -2743,10 +2742,6 @@ void ACatfishingPlayerController::SubmitConsumeFishFromBodyActionAbility(ACatCha
 				{
 					bPreflightMayConsume = true;
 				}
-			}
-			else
-			{
-				bPreflightMayConsume = true;
 			}
 			if (bPreflightMayConsume)
 			{

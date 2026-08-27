@@ -263,7 +263,7 @@ struct FCatScoopCommand
 	UPROPERTY(BlueprintReadWrite)
 	FCatDomainCommandContext Context;
 
-	/** 抢抄者个人鱼护 ID；RPC 到达服务器后由当前 Pawn 的 authority 注册事实覆盖，客户端值不参与授权。 */
+	/** 旧抢抄捕获目标字段；世界鱼改为落地后按 E 叼起，客户端值不参与授权。 */
 	UPROPERTY(BlueprintReadWrite)
 	FGuid TargetGuardContainerId;
 

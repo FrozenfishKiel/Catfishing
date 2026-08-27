@@ -10,8 +10,8 @@ enum class ECatContainerKind : uint8
 {
 	/** 容器尚未注册或种类未裁。 */
 	Unknown,
-	/** 玩家个人的箱子式鱼护；它归个人身份所有，但不由 Character 宿主或复制。 */
-	PersonalGuard,
+	/** 旧角色个人鱼护枚举值，仅为已保存资产兼容保留；运行时不得注册或写入。 */
+	PersonalGuard UMETA(Hidden, Deprecated, DeprecationMessage="Use ground FishGuard actors"),
 	/** 关卡中共享鱼缸 Actor 承载的团队容器。 */
 	SharedFishTank,
 	/** 关卡中可交互鱼护箱子承载的鱼容器；它不绑定玩家身份，也不套用鱼缸展示资格。 */
@@ -32,7 +32,7 @@ struct FCatFishInstance
 	UPROPERTY(BlueprintReadOnly)
 	FName FishDefinitionId = NAME_None;
 
-	/** 鱼实例的服务器私有归属 StableNetId；首次捕获写入首抄者，后续共享缸取回仍用它判断谁能拿回个人鱼护。 */
+	/** 鱼实例的服务器私有捕获者 StableNetId；用于吃鱼、售鱼、偷取与归档权限，不代表角色持有一个随身鱼护。 */
 	FString OwnerStableNetId;
 
 	/** 产生该实例的 FishingSession ID；用于捕获幂等审计，不用于恢复旧会话。 */
@@ -154,7 +154,7 @@ struct FCatCaptureCommitCommand
 	/** 服务器已解析并通过 runtime gate 的鱼种稳定 ID。 */
 	FName FishDefinitionId = NAME_None;
 
-	/** 首次捕获要写入的个人鱼护 ID；共享鱼缸必须走后续 Transfer。 */
+	/** 嘴叼鱼要写入的当前交互地面鱼护 ID；共享鱼缸必须走后续 Transfer。 */
 	FGuid TargetContainerId;
 
 	/** 从服务器鱼运行态冻结的真实重量，单位千克。 */
@@ -261,7 +261,7 @@ struct FCatFishTheftResult
 	FGuid SourceContainerId;
 };
 
-/** 本人直接吃鱼的命令；个人鱼护要求原主人，共享鱼缸允许当前 Active 玩家但仍由服务器身份写入。 */
+/** 直接吃鱼的命令；地面鱼护要求捕获者本人，共享鱼缸允许当前 Active 玩家但仍由服务器身份写入。 */
 USTRUCT(BlueprintType)
 struct FCatFishConsumeCommand
 {
@@ -275,7 +275,7 @@ struct FCatFishConsumeCommand
 	UPROPERTY(BlueprintReadWrite)
 	FGuid FishInstanceId;
 
-	/** 鱼当前所在的个人鱼护或共享鱼缸。 */
+	/** 鱼当前所在的地面鱼护或共享鱼缸。 */
 	UPROPERTY(BlueprintReadWrite)
 	FGuid SourceContainerId;
 };
@@ -313,7 +313,7 @@ struct FCatCaptureCommittedResult
 	UPROPERTY(BlueprintReadOnly)
 	FCatFishInstance FishInstance;
 
-	/** 实例最终写入的容器 ID；阶段 E 首次捕获只允许个人鱼护。 */
+	/** 实例最终写入的容器 ID；嘴叼鱼首次入箱只允许当前交互的地面鱼护。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid ContainerId;
 

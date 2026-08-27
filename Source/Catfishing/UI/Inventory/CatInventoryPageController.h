@@ -84,7 +84,7 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APlayerController> BoundPlayerController;
 
-	/** 当前页面读取的库存 Model；PageController 不直接订阅独立鱼护、外部容器或随身库存复制源。 */
+	/** 当前页面读取的库存 Model；PageController 不直接订阅地面鱼护、其他世界容器或随身库存复制源。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatInventoryModel> BoundModel;
 

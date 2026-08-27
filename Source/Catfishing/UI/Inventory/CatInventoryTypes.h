@@ -14,7 +14,7 @@ enum class ECatInventoryAction : uint8
 {
 	/** 当前没有可提交动作；View 和 Model 用它表示空选择或清空 pending。 */
 	None,
-	/** 请求吃掉当前选中的个人鱼护实物鱼；身体和成长效果只能在服务器 Items 提交成功后发生。 */
+	/** 请求吃掉当前选中的地面鱼护实物鱼；身体和成长效果只能在服务器 Items 提交成功后发生。 */
 	ConsumeSelectedFish,
 	/** 请求把拖拽源物体移动到另一个格子；UI 只提交物体身份、源/目标容器槽位和两个 Revision。 */
 	MoveObjectBetweenContainers,
@@ -151,26 +151,22 @@ struct FCatInventoryContainerView
 	UPROPERTY(BlueprintReadOnly)
 	int32 SlotCount = 0;
 
-	/** 该容器是否是当前玩家自己的个人鱼护；吃鱼和献祭只对它开放。 */
+	/** 该容器是否来自本次世界 Actor 交互；普通背包打开时没有鱼容器。 */
 	UPROPERTY(BlueprintReadOnly)
-	bool bPrimaryPersonalContainer = false;
+	bool bInteractionFishContainer = false;
 };
 
-/** 库存主界面的完整只读显示投影；它聚合随身库存、独立鱼护和外部鱼容器，但不提供任何写口。 */
+/** 库存主界面的完整只读显示投影；它聚合随身背包和本次交互打开的世界容器，但不提供任何写口。 */
 USTRUCT(BlueprintType)
 struct FCatInventoryViewState
 {
 	GENERATED_BODY()
 
-	/** 当前玩家独立鱼护的复制快照；Items 仍是唯一写者，UI 只读鱼数组、容量和 Revision。 */
-	UPROPERTY(BlueprintReadOnly)
-	FCatContainerSnapshot PersonalFishGuard;
-
-	/** 当前库存展示的所有容器；第一个通常是本人鱼护，后续来自本次交互对象提供的外部容器上下文。 */
+	/** 当前库存展示的世界容器；只来自本次射线命中的交互 Actor，不存在角色随身鱼护。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatInventoryContainerView> Containers;
 
-	/** 当前库存是否带有个人鱼护以外的容器；蓝图可用它决定是否显示跨容器拖拽分组。 */
+	/** 当前库存是否带有本次交互 Actor 提供的世界容器；普通背包打开时为 false。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasExternalContainers = false;
 
@@ -182,7 +178,7 @@ struct FCatInventoryViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bEquipmentAvailable = false;
 
-	/** WrapBox 应创建的格子总数；随身库存物品、个人鱼护和外部容器公开容量会合并到同一个显示列表。 */
+	/** WrapBox 应创建的格子总数；随身库存物品和当前交互容器公开容量会合并到同一个显示列表。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 SlotCount = 0;
 
@@ -202,9 +198,9 @@ struct FCatInventoryViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasSelectedObject = false;
 
-	/** 当前选中物体是否来自个人主容器；鱼领域按钮和未来个人容器动作都从这里派生 gate。 */
+	/** 当前选中物体是否来自本次交互打开的地面鱼护。 */
 	UPROPERTY(BlueprintReadOnly)
-	bool bSelectedObjectInPersonalContainer = false;
+	bool bSelectedObjectInFishGuard = false;
 
 	/** 当前被选中的实物鱼副本；没有鱼选择时保持默认值，蓝图不得把它写回容器。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -214,15 +210,15 @@ struct FCatInventoryViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasSelectedFish = false;
 
-	/** 当前选中鱼是否来自个人鱼护；吃鱼和献祭按钮只允许使用本人鱼护选择。 */
+	/** 当前选中鱼是否来自本次射线打开的地面鱼护；吃鱼和献祭从该明确容器提交。 */
 	UPROPERTY(BlueprintReadOnly)
-	bool bSelectedFishInPersonalGuard = false;
+	bool bSelectedFishInFishGuard = false;
 
 	/** 库存窗口当前是否打开；Model 只投影 PageController 的状态，不反查 Widget 可见性。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bOpen = false;
 
-	/** 当前是否可提交吃鱼或献祭意图；pending、空选择或外部容器选择时为 false。 */
+	/** 当前是否可提交吃鱼或献祭意图；只有打开地面鱼护并选中其中一条鱼时为 true。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bCanSubmitAction = false;
 

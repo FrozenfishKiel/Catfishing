@@ -135,7 +135,7 @@ namespace CatShopEconomyServiceTest
 		Command.Context.StableNetId = StableNetId;
 		Command.FishInstanceId = FishInstanceId;
 		Command.ItemsCommitId = FGuid::NewGuid();
-		Command.SourceKind = ECatShopFishSaleSource::PersonalGuard;
+		Command.SourceKind = ECatShopFishSaleSource::FishGuard;
 		Command.WeightKilograms = 1.0;
 		Command.SaleValue = 5;
 		return Command;

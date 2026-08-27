@@ -104,15 +104,10 @@ FCatTheftResult UCatSocialService::BeginTheft(AController* ThiefController, cons
 		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
 		return Finish(Result);
 	}
-	if (SourceKind == ECatContainerKind::PersonalGuard)
+	if (SourceKind != ECatContainerKind::FishGuard && SourceKind != ECatContainerKind::SharedFishTank)
 	{
-		AController* VictimController = FindControllerByStableNetId(SourceOwnerStableNetId);
-		const ACatCharacter* VictimCharacter = VictimController ? Cast<ACatCharacter>(VictimController->GetPawn()) : nullptr;
-		if (SourceOwnerStableNetId.IsEmpty() || !IsCharacterSociallyActive(VictimCharacter))
-		{
-			Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
-			return Finish(Result);
-		}
+		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
+		return Finish(Result);
 	}
 	if (ActiveTheftByThief.Contains(ThiefStableNetId))
 	{
@@ -125,8 +120,7 @@ FCatTheftResult UCatSocialService::BeginTheft(AController* ThiefController, cons
 	});
 	AController* FishOwnerController = SourceFish ? FindControllerByStableNetId(SourceFish->OwnerStableNetId) : nullptr;
 	const ACatCharacter* FishOwnerCharacter = FishOwnerController ? Cast<ACatCharacter>(FishOwnerController->GetPawn()) : nullptr;
-	if (!SourceFish || SourceFish->OwnerStableNetId.IsEmpty() || !IsCharacterSociallyActive(FishOwnerCharacter)
-		|| (SourceKind == ECatContainerKind::PersonalGuard && SourceOwnerStableNetId != SourceFish->OwnerStableNetId))
+	if (!SourceFish || SourceFish->OwnerStableNetId.IsEmpty() || !IsCharacterSociallyActive(FishOwnerCharacter))
 	{
 		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Finish(Result);

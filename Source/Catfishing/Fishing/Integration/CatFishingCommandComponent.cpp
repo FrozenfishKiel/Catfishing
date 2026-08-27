@@ -423,8 +423,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
 	if (CommandType == ECatFishingCommandType::RequestScoop)
 	{
-		// 抄鱼必须有抄手自己的独立鱼护作为捕获目标；旧实现从 Character 取个人鱼护 ID，
-		// 现在已清理掉该错误宿主，因此在正式鱼护对象接入前直接拒绝，不消耗冷却也不广播挥网假象。
+		// 旧抢抄入口会把捕获结果直接写进容器，与“力竭鱼落地 -> E 叼起 -> 对具体鱼护 E 入箱”冲突。
+		// 正式流程已改走世界鱼，因此这里保持 fail-closed，不消耗冷却也不广播挥网假象。
 		Result.Error = ECatFishingCommandError::DependencyUnavailable;
 		UE_LOG(LogCatFishing, Warning, TEXT("Event=scoop_rejected Request=%s Reason=FishGuardActorUnavailable"),
 			*Edge.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
@@ -796,7 +796,7 @@ void UCatFishingCommandComponent::ForwardLegacyAssist(const FGuid FishingSession
 	}
 }
 
-// 旧版抢抄转发流程：先复查 Fishing 白天 gate；正式独立鱼护对象未接入前直接回送依赖缺失，不信任客户端目标，也不回退到 Character 旧鱼护。
+// 旧版抢抄转发流程：先复查 Fishing 白天 gate；因正式捕获已改为世界鱼 E 交互，直接回送依赖缺失且不信任客户端容器目标。
 void UCatFishingCommandComponent::ForwardLegacyScoop(const FGuid FishingSessionId, FCatScoopCommand Command)
 {
 	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());

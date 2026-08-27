@@ -45,6 +45,9 @@ private:
 	/** 服务器把本箱子注册进 Items；重复调用保持幂等，失败时鱼护保留为空容器对象。 */
 	bool RegisterContainerFromAuthority();
 
+	/** authority 复核请求角色与本鱼护的距离/视线；客户端准星命中不能代替服务器空间校验。 */
+	bool IsAuthorityRequestSpatiallyValid(const AController* RequestingController) const;
+
 	/** 鱼护的独立世界根；蓝图可在它下面挂网兜、箱体或其他表现组件，不影响容器真相。 */
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<USceneComponent> GuardRoot;

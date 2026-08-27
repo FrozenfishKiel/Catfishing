@@ -12,7 +12,7 @@
         "Interaction"
       ],
       "tracking_rule": "Map、Input、Interaction 只是同一玩家闭环的实现切面，禁止拆成可独立关闭的业务任务、影子清单或半成品交付项；任何新发现的问题、待确认点或补充问题只能挂在 FishingPlayerEntry 模块级缺口下，并保持一组端到端验收口径。补充问题必须服务于一个清晰结论：本模块整体是否完成，以及还缺哪条证据；不能散成换 Agent 后难以收拢、也无法判断模块完成状态的小任务。",
-      "completion_rule": "只有正式 Lake 入口、唯一输入配置、完整 Fishing 玩家命令链、抓捕写入个人鱼获以及构建和运行证据同时成立时，模块才能整体关闭；任一环节缺失时只保留一个模块级未完成状态并在其下写明证据缺口。",
+      "completion_rule": "只有正式 Lake 入口、唯一输入配置、完整 Fishing 玩家命令链、力竭鱼生成世界 Actor、统一 E 交互完成嘴叼与指定地面鱼护入箱，以及构建和运行证据同时成立时，模块才能整体关闭；任一环节缺失时只保留一个模块级未完成状态并在其下写明证据缺口。",
       "handoff_rule": "换 Agent、换会话或失败回边时，必须按本模块整体目标和同一组端到端验收继续，不得只交接局部文件或把局部绿灯写成模块完成。"
     },
     "UIReach": {
@@ -23,11 +23,11 @@
       "facets": [
         "HUD",
         "Menu",
-        "InventoryAndFishGuard",
+        "InventoryAndWorldFishContainers",
         "Album"
       ],
-      "tracking_rule": "HUD、菜单、个人鱼护/背包和图鉴只是同一信息可达闭环的界面切面，禁止拆成可独立关闭的业务任务、影子清单或半成品交付项。",
-      "completion_rule": "只有唯一正式 UI 生命周期、C++ 后端只读 ViewState/Result/纯意图、WBP 前端渲染、Fishing 状态与错误反馈、菜单和个人鱼获/图鉴入口、捕获结果展示、只读 View 边界以及构建和运行证据同时成立时，模块才能整体关闭；隐藏或移除原生白盒根只能作为回归基线，不能作为完成证据；任一环节缺失时只保留一个模块级未完成状态。",
+      "tracking_rule": "HUD、菜单、随身道具背包、当前交互世界鱼容器和图鉴只是同一信息可达闭环的界面切面，禁止拆成可独立关闭的业务任务、影子清单或半成品交付项。",
+      "completion_rule": "只有唯一正式 UI 生命周期、C++ 后端只读 ViewState/Result/纯意图、WBP 前端渲染、Fishing 状态与错误反馈、只含随身道具的普通背包、由本次 E 命中对象提供的世界鱼容器、捕获结果展示、只读 View 边界以及构建和运行证据同时成立时，模块才能整体关闭；隐藏或移除原生白盒根只能作为回归基线，不能作为完成证据；任一环节缺失时只保留一个模块级未完成状态。",
       "handoff_rule": "换 Agent、换会话或失败回边时，必须按 UIReach 整体目标和同一组端到端验收继续，不得按控件或页面交接局部完成结论。"
     },
     "ItemsTankSacrificeCamp": {
@@ -42,7 +42,7 @@
         "Camp"
       ],
       "tracking_rule": "Items、Tank、Sacrifice、Camp 只是同一局内渔获归宿闭环的实现切面；网络结果、不可逆献祭恢复、篝火表现和关卡接线不得拆成可独立关闭的业务事项。",
-      "completion_rule": "只有 A1 owning-client 结构化结果回送、A2 篝火 Reliable NetMulticast 与全员 CapturePlan 前置、A3 ItemsCommitted 后只补 Run 且不还鱼不重复额度、A4 Lake 中 Camp/Hub/Tank 引用与位置半径运行事实整体成立时才能关闭；A4 缺少事实或被 blocked 时整个原子模块不得关闭。",
+      "completion_rule": "只有 A1 owning-client 结构化结果回送、A2 篝火 Reliable NetMulticast 与全员 CapturePlan 前置、A3 ItemsCommitted 后只补 Run 且不还鱼不重复额度、A4 Lake 中 Camp/Hub/Tank 引用与位置半径运行事实，以及 A5 死鱼 E 嘴叼、指定地面鱼护 E 入箱、箱满保留嘴叼状态和多客户端表现整体成立时才能关闭；任一运行或表现事实缺失时整个原子模块不得关闭。",
       "handoff_rule": "换 Agent、换会话或失败回边时必须携带 A1-A4 的同一组端到端证据；静态、构建或局部 Automation 绿灯不能覆盖 A4 Runtime blocked，也不能把任一切面单独标为完成。"
     },
     "EquipmentShop": {

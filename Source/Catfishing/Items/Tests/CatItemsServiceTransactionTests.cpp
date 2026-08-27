@@ -21,7 +21,7 @@ namespace CatItemsServiceTransactionTest
 		/** 本局容器稳定 ID；所有 Items 命令都以它绑定聚合。 */
 		FGuid ContainerId;
 
-		/** 容器服务器私有主人；个人鱼护授权和鱼 OwnerStableNetId 都使用同一个值。 */
+		/** 测试命令身份；捕获后写入鱼 OwnerStableNetId，后续普通移动和消费据此授权。 */
 		FString OwnerStableNetId;
 	};
 
@@ -43,7 +43,7 @@ namespace CatItemsServiceTransactionTest
 		return Result;
 	}
 
-	// 捕获命令流程：为指定个人鱼护构造合法捕获提交；ExpectedRevision 从调用方传入以覆盖首次提交和并发拒绝。
+	// 捕获命令流程：为指定地面鱼护构造合法捕获提交；ExpectedRevision 从调用方传入以覆盖首次提交和并发拒绝。
 	static FCatCaptureCommitCommand MakeCaptureCommand(const FRegisteredContainer& TargetContainer,
 		const FGuid RequestId, const FGuid FishInstanceId, const int64 ExpectedRevision)
 	{
@@ -175,16 +175,16 @@ bool FCatItemsTransferOwnedFishTest::RunTest(const FString& Parameters)
 	}
 
 	const CatItemsServiceTransactionTest::FRegisteredContainer Guard = CatItemsServiceTransactionTest::RegisterContainer(
-		World, ItemsService, ECatContainerKind::PersonalGuard, TEXT("PlayerA"), 3);
+		World, ItemsService, ECatContainerKind::FishGuard, TEXT("PlayerA"), 3);
 	const CatItemsServiceTransactionTest::FRegisteredContainer FishGuard = CatItemsServiceTransactionTest::RegisterContainer(
 		World, ItemsService, ECatContainerKind::FishGuard, TEXT(""), 3);
-	TestNotNull(TEXT("个人鱼护组件已创建"), Guard.Component.Get());
+	TestNotNull(TEXT("源地面鱼护组件已创建"), Guard.Component.Get());
 	TestNotNull(TEXT("地面鱼护组件已创建"), FishGuard.Component.Get());
 
 	const FGuid FishA = FGuid::NewGuid();
 	const FGuid FishB = FGuid::NewGuid();
-	TestTrue(TEXT("第一条鱼种入个人鱼护"), CatItemsServiceTransactionTest::SeedFish(ItemsService, Guard, FishA, 1).Command.bCommitted);
-	TestTrue(TEXT("第二条鱼种入个人鱼护"), CatItemsServiceTransactionTest::SeedFish(ItemsService, Guard, FishB, 2).Command.bCommitted);
+	TestTrue(TEXT("第一条鱼种入源地面鱼护"), CatItemsServiceTransactionTest::SeedFish(ItemsService, Guard, FishA, 1).Command.bCommitted);
+	TestTrue(TEXT("第二条鱼种入源地面鱼护"), CatItemsServiceTransactionTest::SeedFish(ItemsService, Guard, FishB, 2).Command.bCommitted);
 
 	const FGuid TransferRequestId = FGuid::NewGuid();
 	FCatDomainCommandResult TransferResult = ItemsService->TransferOwnedFish(
@@ -216,7 +216,7 @@ bool FCatItemsTransferOwnedFishTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-// 测试流程：验证直接吃鱼成功、重放和个人鱼护主人权限；同一鱼只能由主人以匹配 Revision 消费，共享/身体效果不在本测试中伪造。
+// 测试流程：验证直接吃鱼成功、重放和地面鱼护中鱼的捕获者权限；同一鱼只能由捕获者以匹配 Revision 消费。
 bool FCatItemsConsumeFishTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -239,7 +239,7 @@ bool FCatItemsConsumeFishTest::RunTest(const FString& Parameters)
 	}
 
 	const CatItemsServiceTransactionTest::FRegisteredContainer Guard = CatItemsServiceTransactionTest::RegisterContainer(
-		World, ItemsService, ECatContainerKind::PersonalGuard, TEXT("PlayerA"), 3);
+		World, ItemsService, ECatContainerKind::FishGuard, TEXT("PlayerA"), 3);
 	const FGuid OwnedFish = FGuid::NewGuid();
 	const FGuid ProtectedFish = FGuid::NewGuid();
 	TestTrue(TEXT("可种入待吃鱼"), CatItemsServiceTransactionTest::SeedFish(ItemsService, Guard, OwnedFish, 1).Command.bCommitted);
@@ -263,7 +263,7 @@ bool FCatItemsConsumeFishTest::RunTest(const FString& Parameters)
 
 	FCatFishConsumeResult WrongOwnerResult = ItemsService->ConsumeFish(
 		CatItemsServiceTransactionTest::MakeConsumeCommand(Guard, FGuid::NewGuid(), ProtectedFish, 4, TEXT("PlayerB")));
-	TestFalse(TEXT("非主人不能吃个人鱼护里的鱼"), WrongOwnerResult.Command.bCommitted);
+	TestFalse(TEXT("非捕获者不能直接吃地面鱼护里的鱼"), WrongOwnerResult.Command.bCommitted);
 	TestEqual(TEXT("非主人吃鱼返回 PermissionDenied"), WrongOwnerResult.Command.Error, ECatDomainCommandError::PermissionDenied);
 	TestTrue(TEXT("权限拒绝不移除鱼"),
 		CatItemsServiceTransactionTest::SnapshotContainsFish(
@@ -294,7 +294,7 @@ bool FCatItemsReservationCommitTest::RunTest(const FString& Parameters)
 	}
 
 	const CatItemsServiceTransactionTest::FRegisteredContainer Guard = CatItemsServiceTransactionTest::RegisterContainer(
-		World, ItemsService, ECatContainerKind::PersonalGuard, TEXT("PlayerA"), 3);
+		World, ItemsService, ECatContainerKind::FishGuard, TEXT("PlayerA"), 3);
 	const CatItemsServiceTransactionTest::FRegisteredContainer Tank = CatItemsServiceTransactionTest::RegisterContainer(
 		World, ItemsService, ECatContainerKind::SharedFishTank, TEXT(""), 3);
 	const FGuid FishId = FGuid::NewGuid();
@@ -360,7 +360,7 @@ bool FCatItemsReservationCancelAndCloseTest::RunTest(const FString& Parameters)
 	}
 
 	const CatItemsServiceTransactionTest::FRegisteredContainer Guard = CatItemsServiceTransactionTest::RegisterContainer(
-		World, ItemsService, ECatContainerKind::PersonalGuard, TEXT("PlayerA"), 4);
+		World, ItemsService, ECatContainerKind::FishGuard, TEXT("PlayerA"), 4);
 	const FGuid FishToCancel = FGuid::NewGuid();
 	const FGuid FishToClose = FGuid::NewGuid();
 	const FGuid FishAfterClose = FGuid::NewGuid();

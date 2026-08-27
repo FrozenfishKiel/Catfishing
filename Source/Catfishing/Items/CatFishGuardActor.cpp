@@ -1,13 +1,16 @@
 #include "Items/CatFishGuardActor.h"
 
+#include "Character/CatCharacter.h"
 #include "Components/SceneComponent.h"
 #include "Components/SphereComponent.h"
 #include "Engine/LocalPlayer.h"
+#include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "Interaction/CatInteractionSettings.h"
 #include "Items/CatContainerReplicationComponent.h"
 #include "Items/CatItemsService.h"
 #include "Items/CatItemsSettings.h"
+#include "Items/World/CatFishPickupActor.h"
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
@@ -122,7 +125,7 @@ UCatContainerReplicationComponent* ACatFishGuardActor::GetContainerReplicationCo
 bool ACatFishGuardActor::CanInteract_Implementation(AController* RequestingController) const
 {
 	const APlayerController* PlayerController = Cast<APlayerController>(RequestingController);
-	return bInteractionEnabled && PlayerController && PlayerController->IsLocalController()
+	return bInteractionEnabled && PlayerController
 		&& GuardContainerId.IsValid() && ContainerReplication;
 }
 
@@ -137,26 +140,85 @@ double ACatFishGuardActor::GetInteractionRadius_Implementation() const
 		? FMath::Max(0.0, InteractionRadiusCentimeters) : 0.0;
 }
 
-// 鱼护交互只在本地打开“随身背包 + 地面鱼护”双容器视图；鱼移动仍通过 Inventory 的服务器 Items 事务完成。
+bool ACatFishGuardActor::IsAuthorityRequestSpatiallyValid(const AController* RequestingController) const
+{
+	const APawn* Pawn = RequestingController ? RequestingController->GetPawn() : nullptr;
+	const UCatInteractionSettings* Settings = GetDefault<UCatInteractionSettings>();
+	UWorld* World = GetWorld();
+	if (!HasAuthority() || !Pawn || !Settings || !World
+		|| FVector::Dist(Pawn->GetPawnViewLocation(), GetActorLocation()) > GetInteractionRadius_Implementation())
+	{
+		return false;
+	}
+	if (!Settings->bRequireServerLineOfSight)
+	{
+		return true;
+	}
+	FCollisionQueryParams QueryParams(SCENE_QUERY_STAT(CatFishGuardLineOfSight), true, Pawn);
+	FHitResult Hit;
+	const bool bHit = World->LineTraceSingleByChannel(Hit, Pawn->GetPawnViewLocation(), GetActorLocation(),
+		Settings->TargetingTraceChannel, QueryParams);
+	return !bHit || Hit.GetActor() == this;
+}
+
+// 鱼护交互流程：本地始终打开“随身背包 + 本次命中鱼护”的视图并把同一接口请求转发给服务器；
+// authority 若发现角色嘴上叼着鱼，则只向本 Actor 的 ContainerId 提交。失败时鱼仍留在嘴上，绝不搜索其他鱼护。
 bool ACatFishGuardActor::Interact_Implementation(AController* RequestingController, const FGuid RequestId)
 {
-	APlayerController* PlayerController = Cast<APlayerController>(RequestingController);
-	ULocalPlayer* LocalPlayer = PlayerController ? PlayerController->GetLocalPlayer() : nullptr;
-	UCatLocalPlayerUISubsystem* UISubsystem = LocalPlayer
-		? LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
-	if (!RequestId.IsValid() || !CanInteract_Implementation(RequestingController) || !UISubsystem)
+	ACatfishingPlayerController* PlayerController = Cast<ACatfishingPlayerController>(RequestingController);
+	if (!RequestId.IsValid() || !CanInteract_Implementation(RequestingController) || !PlayerController)
 	{
 		UE_LOG(LogCatItems, Warning,
 			TEXT("Event=fish_guard_interaction_rejected Reason=DependencyUnavailable Controller=%s Guard=%s"),
 			*GetNameSafe(PlayerController), *GetNameSafe(this));
 		return false;
 	}
-	TArray<UCatContainerReplicationComponent*> ExternalContainers;
-	ExternalContainers.Add(ContainerReplication);
-	UISubsystem->OpenInventoryWithExternalContainerContexts(ExternalContainers);
-	const FCatContainerSnapshot& Snapshot = ContainerReplication->GetSnapshot();
+
+	bool bHandled = false;
+	if (PlayerController->IsLocalController())
+	{
+		ULocalPlayer* LocalPlayer = PlayerController->GetLocalPlayer();
+		UCatLocalPlayerUISubsystem* UISubsystem = LocalPlayer
+			? LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
+		if (UISubsystem)
+		{
+			TArray<UCatContainerReplicationComponent*> ExternalContainers;
+			ExternalContainers.Add(ContainerReplication);
+			UISubsystem->OpenInventoryWithExternalContainerContexts(ExternalContainers);
+			bHandled = true;
+		}
+	}
+
+	if (!HasAuthority())
+	{
+		PlayerController->ServerRequestInteraction(this, RequestId);
+		return true;
+	}
+	if (!IsAuthorityRequestSpatiallyValid(RequestingController))
+	{
+		UE_LOG(LogCatItems, Warning,
+			TEXT("Event=fish_guard_interaction_rejected Reason=PermissionDenied Controller=%s Guard=%s"),
+			*GetNameSafe(PlayerController), *GetNameSafe(this));
+		return bHandled;
+	}
+
+	const FCatContainerSnapshot Snapshot = ContainerReplication->GetSnapshot();
+	ACatCharacter* Character = Cast<ACatCharacter>(PlayerController->GetPawn());
+	if (ACatFishPickupActor* CarriedFish = ACatFishPickupActor::FindCarriedFish(Character))
+	{
+		const FCatCaptureCommitResult StoreResult = CarriedFish->StoreInFishGuardFromAuthority(
+			PlayerController, RequestId, GuardContainerId, Snapshot.Revision);
+		const bool bStored = StoreResult.Command.bCommitted
+			|| StoreResult.Command.Error == ECatDomainCommandError::AlreadyResolved;
+		UE_LOG(LogCatItems, Log,
+			TEXT("Event=fish_guard_store_carried_fish Guard=%s Container=%s Committed=%s Error=%s Revision=%lld"),
+			*GetNameSafe(this), *GuardContainerId.ToString(EGuidFormats::DigitsWithHyphens),
+			bStored ? TEXT("true") : TEXT("false"),
+			*UEnum::GetValueAsString(StoreResult.Command.Error), StoreResult.Command.Revision);
+		bHandled = bHandled || bStored;
+	}
 	UE_LOG(LogCatItems, Log,
 		TEXT("Event=fish_guard_interaction_inventory_opened Guard=%s Container=%s Revision=%lld"),
 		*GetNameSafe(this), *Snapshot.ContainerId.ToString(EGuidFormats::DigitsWithHyphens), Snapshot.Revision);
-	return true;
+	return bHandled || Character != nullptr;
 }

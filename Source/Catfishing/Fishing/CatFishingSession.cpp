@@ -52,10 +52,10 @@ void ACatFishingSession::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(ThisClass, Snapshot);
 }
 
-// 会话初始化流程：只接受 authority、显式 runtime gate、完整鱼定义/重量/水域/身份/鱼护与 Items；全部就绪后设置资产并启动 StateTree，失败销毁由服务负责。
+// 会话初始化流程：只接受 authority、显式 runtime gate、完整鱼定义/重量/水域/身份与 Items；全部就绪后设置资产并启动 StateTree，失败销毁由服务负责。
 bool ACatFishingSession::InitializeSession(const FGuid InFishingSessionId, const FGuid InCastAttemptId,
 	AController* FisherController, ACatCharacter* InFisherCharacter, UCatFishDefinition* InFishDefinition,
-	const FGuid InFisherGuardContainerId, const double InFishWeightKilograms, const FCatWaterRegionHandle& WaterRegion)
+	const double InFishWeightKilograms, const FCatWaterRegionHandle& WaterRegion)
 {
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
 	// StateTree 资产同步加载：Initialize 只在 authority 服务器一次性调用，允许短暂同步等待换取代码简单。
@@ -66,7 +66,7 @@ bool ACatFishingSession::InitializeSession(const FGuid InFishingSessionId, const
 	if (!HasAuthority() || !Settings || !Settings->IsRuntimeReady() || !StateTreeAsset || !StateTreeComponent
 		|| !InFishingSessionId.IsValid() || !InCastAttemptId.IsValid() || InFishingSessionId == InCastAttemptId
 		|| !InFisherCharacter || !InFishDefinition || !InFishDefinition->IsRuntimeDefinitionReady()
-		|| StableNetId.IsEmpty() || !InFisherGuardContainerId.IsValid()
+		|| StableNetId.IsEmpty()
 		|| !FMath::IsFinite(InFishWeightKilograms) || InFishWeightKilograms <= 0.0
 		|| !WaterRegion.IsValid() || !Items)
 	{
@@ -93,7 +93,6 @@ bool ACatFishingSession::InitializeSession(const FGuid InFishingSessionId, const
 	FisherCharacter = InFisherCharacter;
 	CastEquipment = InFisherCharacter->GetEquipmentComponent(); // 冻结原始抛竿者装备：饵料/磨损结算口径不随接力改变。
 	FisherStableNetId = StableNetId;
-	FisherGuardContainerId = InFisherGuardContainerId;
 	FishWeightKilograms = InFishWeightKilograms;
 	FishVisualScale = GetDefault<UCatFishingPresentationSettings>()->ComputeFishUniformVisualScale(InFishWeightKilograms);
 	AttemptSnapshot.WaterRegion = WaterRegion;
@@ -447,8 +446,7 @@ FCatDomainCommandResult ACatFishingSession::ResolveRetryExhaustedEscapeFromState
 }
 
 // 钓手接力转移流程：仅 authority、未终态、等待/试探/真咬阶段可转移（搏斗/近岸阶段离开＝弃战，不存在转移场景）。
-// 新钓手必须通过统一参战能力谓词，并且后续需要独立鱼护对象提供目标容器；当前对象尚未接入时直接拒绝。
-// 因为鱼护不能再挂在 Character 上，本函数不会从 Character 兜底取旧 ID，避免把错误宿主重新接回钓鱼链路。
+// 新钓手必须通过统一参战能力谓词；捕获物最终是落地世界鱼，因此接力不读取或冻结任何鱼护。
 bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherController)
 {
 	const FString NewStableNetId = ResolveStableNetId(NewFisherController);
@@ -469,11 +467,19 @@ bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherContr
 	{
 		return true; // 同一钓手重复接管：幂等成功。
 	}
-	UE_LOG(LogCatFishing, Warning,
-		TEXT("Event=fishing_fisher_transfer_rejected SessionId=%s Phase=%s NewFisher=%s Reason=FishGuardActorUnavailable"),
+	FightParticipantIds.Remove(FisherStableNetId);
+	FightParticipantCharacters.Remove(FisherStableNetId);
+	FisherStableNetId = NewStableNetId;
+	FisherCharacter = NewCharacter;
+	Snapshot.FisherPlayerState = NewFisherController->PlayerState;
+	FightParticipantIds.Add(NewStableNetId);
+	FightParticipantCharacters.Add(NewStableNetId, NewCharacter);
+	RefreshFightSummary();
+	PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_fisher_transferred SessionId=%s Phase=%s NewFisher=%s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 		*UEnum::GetValueAsString(Snapshot.Phase), *NewStableNetId);
-	return false;
+	return true;
 }
 
 // 抢抄流程：先按身份/RequestId 重放，再用统一参战能力谓词、NearShore/Revision、服务器目标与 reach 拒绝不合法命令；随后重验巨鱼 HookedFight 参与者，只把仍 Active、未倒地且力量/体力为正的人与抄手去重后放入可选 Candidate。Items Compare-and-Commit 是实物唯一不可逆点，首个合法抄手独占鱼；FishRecorded 始终独立归档，只有鱼定义配置正式事件才提交 Candidate。批量计划接口先为全部参与者建齐并索引 Planned 记录，确认全量事实后才逐条投递，所以同步 RPC 回入不能留下部分计划，离线未投递仍按原 ID 重试；归档失败只记录且绝不回滚或复制实物鱼。最后写 Resolved、停树并启动有界复制窗口。
@@ -857,9 +863,8 @@ bool ACatFishingSession::PrepareSessionFromAuthority(const FCatFishingAttemptSna
 	FightParticipantIds.Add(StableNetId);
 	FightParticipantCharacters.Add(StableNetId, InFisherCharacter);
 	ItemsService = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
-	// 独立鱼护对象尚未接入会话准备阶段；缺少目标容器时不启动 StateTree，也不回退到 Character 旧宿主。
-	FisherGuardContainerId.Invalidate();
-	bPrepared = false;
+	// 捕获物会在力竭回收后生成世界鱼；抛竿准备只要求 Items 服务存在，不绑定或搜索任何鱼护。
+	bPrepared = ItemsService.IsValid();
 	return bPrepared;
 }
 

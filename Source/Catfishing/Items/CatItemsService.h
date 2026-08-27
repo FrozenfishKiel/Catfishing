@@ -67,7 +67,7 @@ private:
 	{
 		/** 当前提交后的公开鱼槽数组、容量与 Revision。 */
 		FCatContainerSnapshot Snapshot;
-		/** 个人鱼护的服务器私有 StableNetId；共享鱼缸为空。 */
+		/** 旧私有容器主人字段；地面鱼护和共享鱼缸均为空，鱼的捕获者保存在对象实例上。 */
 		FString OwnerStableNetId;
 		/** 显式产品容量；0 表示未裁。 */
 		int32 Capacity = 0;

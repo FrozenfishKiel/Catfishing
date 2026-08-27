@@ -446,7 +446,7 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerRequestCampfirePlayback(ACatCampHubActor* Camp, FGuid RequestId);
 
-	/** 由 owning client 发起通用容器物体移动请求；服务器重读源/目标槽位、容器宿主、个人鱼护身份、距离和 Items 权限后回送领域结果。 */
+	/** 由 owning client 发起通用容器物体移动请求；服务器重读源/目标槽位、容器宿主、鱼捕获者身份、距离和 Items 权限后回送领域结果。 */
 	UFUNCTION(Server, Reliable)
 	void ServerTransferObjectBetweenContainers(FGuid RequestId, ECatContainedObjectKind ObjectKind, FGuid ObjectInstanceId,
 		FGuid SourceContainerId, ECatContainerKind SourceContainerKind, int32 SourceContainerSlotIndex,

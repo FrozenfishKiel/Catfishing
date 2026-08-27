@@ -64,12 +64,16 @@ namespace
 		}
 	}
 
-	// 鱼离开容器权限流程：个人鱼护里的鱼只能由主人移出；世界容器不在这里限制取出人，后续目标容器还会复核进入权限。
+	// 鱼离开容器权限流程：地面鱼护里的鱼只能由捕获者通过普通库存操作移出；其他玩家必须走 Social 偷鱼协议。
+	// 旧 PersonalGuard 明确拒绝，避免角色随身鱼护路径复活。
 	bool CanFishLeaveContainer(const FCatFishInstance& Fish, const ECatContainerKind ContainerKind,
 		const FString& StableNetId)
 	{
-		return ContainerKind != ECatContainerKind::PersonalGuard
-			|| Fish.OwnerStableNetId == StableNetId;
+		if (ContainerKind == ECatContainerKind::FishGuard)
+		{
+			return Fish.OwnerStableNetId == StableNetId;
+		}
+		return ContainerKind == ECatContainerKind::SharedFishTank;
 	}
 
 	// 鱼缸展示资格流程：共享展示容器只接收目录中明确允许展示的鱼，缺定义或未就绪都不能被客户端拖拽绕过。
@@ -80,15 +84,14 @@ namespace
 		return Definition && Definition->bTankDisplayEligible;
 	}
 
-	// 鱼进入容器权限流程：个人鱼护校验主人，共享鱼缸校验展示资格，鱼护箱子只要求目标本身是鱼容器。
+	// 鱼进入容器权限流程：旧 PersonalGuard 拒绝，共享鱼缸校验展示资格，鱼护箱子只要求目标本身是鱼容器。
 	ECatDomainCommandError ResolveFishEnterContainerError(const FCatFishInstance& Fish,
 		const ECatContainerKind ContainerKind,
 		const FString& StableNetId)
 	{
 		if (ContainerKind == ECatContainerKind::PersonalGuard)
 		{
-			return Fish.OwnerStableNetId == StableNetId
-				? ECatDomainCommandError::None : ECatDomainCommandError::PermissionDenied;
+			return ECatDomainCommandError::PolicyUndecided;
 		}
 		if (ContainerKind == ECatContainerKind::SharedFishTank)
 		{
@@ -99,7 +102,7 @@ namespace
 		{
 			return ECatDomainCommandError::None;
 		}
-		return ECatDomainCommandError::None;
+		return ECatDomainCommandError::PolicyUndecided;
 	}
 }
 
@@ -126,12 +129,13 @@ void UCatItemsService::Deinitialize()
 	Super::Deinitialize();
 }
 
-// 容器注册流程：验证 authority 期间传入的宿主、ID、类型和个人身份，再把初始 Revision、容量、主人身份和复制组件写入服务端记录并发布初始快照。
+// 容器注册流程：验证 authority 期间传入的宿主、ID 和世界容器类型，再把初始 Revision、容量和复制组件写入服务端记录并发布初始快照。
 bool UCatItemsService::RegisterContainer(UCatContainerReplicationComponent* ReplicationComponent, const FGuid ContainerId,
 	const ECatContainerKind Kind, const FString& OwnerStableNetId, const int32 Capacity)
 {
-	if (!bCommandsOpen || !ReplicationComponent || !ContainerId.IsValid() || Kind == ECatContainerKind::Unknown
-		|| (Kind == ECatContainerKind::PersonalGuard && OwnerStableNetId.IsEmpty()))
+	(void)OwnerStableNetId;
+	if (!bCommandsOpen || !ReplicationComponent || !ContainerId.IsValid()
+		|| Kind == ECatContainerKind::Unknown || Kind == ECatContainerKind::PersonalGuard)
 	{
 		return false;
 	}
@@ -144,7 +148,7 @@ bool UCatItemsService::RegisterContainer(UCatContainerReplicationComponent* Repl
 	Record.Snapshot.Kind = Kind;
 	Record.Snapshot.Revision = 1;
 	Record.Snapshot.Capacity = FMath::Max(0, Capacity);
-	Record.OwnerStableNetId = Kind == ECatContainerKind::PersonalGuard ? OwnerStableNetId : FString();
+	Record.OwnerStableNetId.Reset();
 	Record.Capacity = FMath::Max(0, Capacity);
 	Record.ReplicationComponent = ReplicationComponent;
 	PublishContainer(Record);
@@ -189,7 +193,8 @@ bool UCatItemsService::TryGetContainerSnapshot(const FGuid ContainerId, FCatCont
 	return true;
 }
 
-// 捕获提交流程：先读取终态缓存，再验证命令、预分配鱼 ID、个人鱼护、身份、Revision、容量和冻结定义值；全部满足时把鱼写入第一个空槽并发布同 Revision 的不可变 Committed DTO。
+// 捕获提交流程：先读取终态缓存，再验证命令、预分配鱼 ID、地面鱼护、Revision、容量和冻结定义值；
+// 全部满足时把嘴叼鱼写入命中鱼护的第一个空槽，并发布同 Revision 的不可变 Committed DTO。
 FCatCaptureCommitResult UCatItemsService::CommitCapture(const FCatCaptureCommitCommand& Command)
 {
 	FCatCaptureCommitResult Result;
@@ -229,7 +234,7 @@ FCatCaptureCommitResult UCatItemsService::CommitCapture(const FCatCaptureCommitC
 	{
 		Result.Command.Error = ECatDomainCommandError::NotFound;
 	}
-	else if (Target->Snapshot.Kind != ECatContainerKind::PersonalGuard || Target->OwnerStableNetId != Command.Context.StableNetId)
+	else if (Target->Snapshot.Kind != ECatContainerKind::FishGuard)
 	{
 		Result.Command.Error = ECatDomainCommandError::PermissionDenied;
 	}
@@ -356,10 +361,8 @@ FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransf
 	{
 		Result.Error = ECatDomainCommandError::NotFound;
 	}
-	else if ((Source->Snapshot.Kind == ECatContainerKind::PersonalGuard
-			&& Source->OwnerStableNetId != Command.Context.StableNetId)
-		|| (Target->Snapshot.Kind == ECatContainerKind::PersonalGuard
-			&& Target->OwnerStableNetId != Command.Context.StableNetId))
+	else if (Source->Snapshot.Kind == ECatContainerKind::PersonalGuard
+		|| Target->Snapshot.Kind == ECatContainerKind::PersonalGuard)
 	{
 		Result.Error = ECatDomainCommandError::PermissionDenied;
 	}
@@ -518,7 +521,8 @@ FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand
 			Result.Command.Error = ECatDomainCommandError::NotFound;
 		}
 		else if (Source->Snapshot.Kind == ECatContainerKind::PersonalGuard
-			&& Source->Snapshot.Fish[FishIndex].OwnerStableNetId != Command.Context.StableNetId)
+			|| (Source->Snapshot.Kind == ECatContainerKind::FishGuard
+				&& Source->Snapshot.Fish[FishIndex].OwnerStableNetId != Command.Context.StableNetId))
 		{
 			Result.Command.Error = ECatDomainCommandError::PermissionDenied;
 		}

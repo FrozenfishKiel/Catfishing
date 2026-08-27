@@ -23,13 +23,13 @@ struct FCatShopFishSaleOrderCommand
 	/** 要卖掉的那条鱼。 */
 	FGuid FishInstanceId;
 
-	/** 这条鱼当前所在的个人鱼护或共用鱼缸。 */
+	/** 这条鱼当前所在的地面鱼护或共用鱼缸。 */
 	FGuid ContainerId;
 
 	/** 上述容器的并发前提版本；Items 用它判断调用方看到的容器内容是否已经过时。 */
 	int64 ExpectedContainerRevision = 0;
 
-	/** 这条鱼是从哪种容器卖出的；只接受个人鱼护和共用鱼缸两种。 */
+	/** 这条鱼是从哪种容器卖出的；只接受地面鱼护和共用鱼缸两种。 */
 	ECatShopFishSaleSource SourceKind = ECatShopFishSaleSource::Unknown;
 };
 
@@ -87,7 +87,7 @@ public:
 	 * 把玩家容器里的一条鱼卖给商人猫：读取鱼实例 → 商店预检报价/公款 → Items 不可逆移除 → 公款入账。
 	 * 它和购买走同一个协调器，是因为二者的本质问题相同——钱和实物分属两个领域，必须有第三方按固定顺序推进，
 	 * 而且任何一步失败都要保证不会出现“钱扣了鱼还在”或“鱼没了钱没到”。
-	 * 只处理个人鱼护和共享鱼缸；偷来的鱼有独立的 escrow 协议（追回窗口、空间前提、归还分支都在 Social），本模块继续关闭。
+	 * 只处理地面鱼护和共享鱼缸；偷来的鱼有独立的 escrow 协议（追回窗口、空间前提、归还分支都在 Social），本模块继续关闭。
 	 */
 	FCatShopOrderResult SubmitFishSale(const FCatShopFishSaleOrderCommand& Command);
 

@@ -31,7 +31,7 @@ namespace CatContainerReplicationTest
 	{
 		FCatContainerSnapshot Snapshot;
 		Snapshot.ContainerId = ContainerId;
-		Snapshot.Kind = ECatContainerKind::PersonalGuard;
+		Snapshot.Kind = ECatContainerKind::FishGuard;
 		Snapshot.Revision = Revision;
 		Snapshot.Fish = Fish;
 		return Snapshot;

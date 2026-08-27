@@ -23,11 +23,13 @@
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Integration/CatFishingAimLibrary.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
+#include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "HAL/IConsoleManager.h"
-#include "Items/CatItemsService.h"
+#include "Items/CatWorldItemSettings.h"
+#include "Items/World/CatFishPickupActor.h"
 #include "Logging/CatLog.h"
 #include "UI/CatFishingViewBridge.h"
 
@@ -108,40 +110,74 @@ namespace CatFishingDebugCommands
 		return nullptr;
 	}
 
-	// 给鱼提交流程：
-	// 1. 先解析鱼定义和目标玩家依赖；任一关键对象缺失时只写拒绝日志，不伪造容器状态。
-	// 2. 独立鱼护对象尚未接入时直接拒绝，不再从 Character 读取旧个人鱼护 ID。
-	// 3. 后续正式鱼护对象完成后，本命令再改为从该对象读取容器快照并走 Items 捕获事务。
+	// 调试死鱼生成流程：只在 authority 为目标玩家前方生成可交互的世界鱼。
+	// 后续仍必须由玩家按 E 叼起，再对具体地面鱼护按 E 入箱；调试命令不绕过正式交互与容器事务。
 	static void GiveFishToPlayer(const TArray<FString>& Args, UWorld* World)
 	{
 		UCatFishDefinition* Definition = ResolveFishDefinition(Args);
+		double WeightKilograms = Definition
+			? (Definition->MinimumWeightKilograms + Definition->MaximumWeightKilograms) * 0.5 : 0.0;
+		if (Args.IsValidIndex(1))
+		{
+			WeightKilograms = FCString::Atod(*Args[1]);
+		}
 		int32 PlayerIndex = 0;
 		if (Args.IsValidIndex(2))
 		{
 			PlayerIndex = FMath::Max(0, FCString::Atoi(*Args[2]));
 		}
 		APlayerController* Controller = ResolvePlayerController(World, PlayerIndex);
-		const APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
-		UCatItemsService* Items = World ? World->GetSubsystem<UCatItemsService>() : nullptr;
-		if (!World || !Definition || !Controller || !PlayerState || !PlayerState->GetUniqueId().IsValid() || !Items)
+		ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
+		APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
+		if (!World || !Definition || !Controller || !Controller->HasAuthority() || !Character || !PlayerState
+			|| !PlayerState->GetUniqueId().IsValid() || !FMath::IsFinite(WeightKilograms)
+			|| WeightKilograms < Definition->MinimumWeightKilograms
+			|| WeightKilograms > Definition->MaximumWeightKilograms)
 		{
 			UE_LOG(LogCatFishing, Warning,
-				TEXT("Event=fishing_debug_give_fish_rejected Reason=DependencyUnavailable World=%s Controller=%s FishDefinition=%s"),
+				TEXT("Event=fishing_debug_give_fish_rejected Reason=InvalidPayload World=%s Controller=%s FishDefinition=%s WeightKg=%.3f"),
 				World ? *World->GetName() : TEXT("None"),
 				*GetNameSafe(Controller),
-				Definition ? *Definition->FishDefinitionId.ToString() : TEXT("None"));
+				Definition ? *Definition->FishDefinitionId.ToString() : TEXT("None"), WeightKilograms);
 			return;
 		}
-		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_debug_give_fish_rejected Reason=FishGuardActorUnavailable FishDefinition=%s PlayerIndex=%d"),
-			*Definition->FishDefinitionId.ToString(),
-			PlayerIndex);
+
+		const UCatWorldItemSettings* WorldItemSettings = GetDefault<UCatWorldItemSettings>();
+		const UCatFishingPresentationSettings* PresentationSettings = GetDefault<UCatFishingPresentationSettings>();
+		const FVector SpawnLocation = Character->GetActorLocation()
+			+ Character->GetActorForwardVector() * 150.0 + FVector(0.0, 0.0, 40.0);
+		FRotator SpawnRotation = Character->GetActorRotation();
+		SpawnRotation.Pitch = 0.0;
+		SpawnRotation.Roll = WorldItemSettings ? WorldItemSettings->LandedFishRollDegrees : 90.0;
+		FActorSpawnParameters SpawnParams;
+		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		ACatFishPickupActor* Pickup = World->SpawnActor<ACatFishPickupActor>(
+			ACatFishPickupActor::StaticClass(), SpawnLocation, SpawnRotation, SpawnParams);
+		const FString StableNetId = PlayerState->GetUniqueId()->ToString();
+		const TArray<FString> Participants{ StableNetId };
+		const double VisualScale = PresentationSettings
+			? PresentationSettings->ComputeFishUniformVisualScale(WeightKilograms) : 1.0;
+		if (!Pickup || !Pickup->InitializeFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), Definition,
+			WeightKilograms, VisualScale, TEXT("DebugSpawn"), Participants))
+		{
+			if (Pickup)
+			{
+				Pickup->Destroy();
+			}
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=fishing_debug_give_fish_rejected Reason=SpawnFailed FishDefinition=%s PlayerIndex=%d"),
+				*Definition->FishDefinitionId.ToString(), PlayerIndex);
+			return;
+		}
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_debug_dead_fish_spawned Pickup=%s FishDefinition=%s WeightKg=%.3f PlayerIndex=%d"),
+			*GetNameSafe(Pickup), *Definition->FishDefinitionId.ToString(), WeightKilograms, PlayerIndex);
 	}
 
-	/** 非 Shipping 构建里的给鱼控制台入口；它代表一条会修改权威 Items 状态的作弊命令，执行时仍走正式捕获提交事务。 */
+	/** 非 Shipping 构建里的死鱼生成入口；只生成世界 Actor，不直接改背包或鱼护。 */
 	static FAutoConsoleCommandWithWorldAndArgs CmdGiveFish(
 		TEXT("cat.Fishing.Debug.GiveFish"),
-		TEXT("调试给鱼入口；走正式个人鱼护 CommitCapture 事务。参数：FishDefinitionId WeightKg PlayerIndex。"),
+		TEXT("在玩家前方生成可按 E 叼起的死鱼。参数：FishDefinitionId WeightKg PlayerIndex。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&GiveFishToPlayer),
 		ECVF_Cheat);
 }

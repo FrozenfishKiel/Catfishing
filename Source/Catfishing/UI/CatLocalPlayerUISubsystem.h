@@ -101,7 +101,7 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryWidget> InventoryWidget;
 
-	/** 当前 LocalPlayer 的库存 Model；它只读随身库存、独立鱼护、外部容器、当前选择和动作结果。 */
+	/** 当前 LocalPlayer 的库存 Model；它只读随身道具、当前交互世界容器、当前选择和动作结果。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryModel> InventoryModel;
 

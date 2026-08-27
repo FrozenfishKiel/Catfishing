@@ -452,13 +452,16 @@ void UCatInventoryPageController::HandleViewActionRequested(const ECatInventoryA
 	}
 	const FCatInventoryViewState& State = Model->GetViewState();
 	const FGuid RequestId = FGuid::NewGuid();
-	const bool bHasSelectedFish = State.bSelectedFishInPersonalGuard
-		&& State.SelectedFish.FishInstanceId.IsValid()
-		&& State.PersonalFishGuard.ContainerId.IsValid();
+	const FCatInventorySlotView* SelectedSlot = State.Slots.IsValidIndex(State.SelectedSlotIndex)
+		? &State.Slots[State.SelectedSlotIndex] : nullptr;
+	const bool bHasSelectedFish = State.bSelectedFishInFishGuard
+		&& State.SelectedFish.FishInstanceId.IsValid() && SelectedSlot
+		&& SelectedSlot->ContainerKind == ECatContainerKind::FishGuard
+		&& SelectedSlot->ContainerId.IsValid();
 	if (!bHasSelectedFish)
 	{
 		Model->MarkActionRejected(Action, RequestId, ECatDomainCommandError::InvalidPayload,
-			State.PersonalFishGuard.Revision);
+			SelectedSlot ? SelectedSlot->ContainerRevision : 0);
 		return;
 	}
 
@@ -470,14 +473,14 @@ void UCatInventoryPageController::HandleViewActionRequested(const ECatInventoryA
 			if (!Character)
 			{
 				Model->MarkActionRejected(Action, RequestId, ECatDomainCommandError::DependencyUnavailable,
-					State.PersonalFishGuard.Revision);
+					SelectedSlot->ContainerRevision);
 				return;
 			}
 			FCatFishConsumeCommand Command;
 			Command.Context.RequestId = RequestId;
-			Command.Context.ExpectedRevision = State.PersonalFishGuard.Revision;
+			Command.Context.ExpectedRevision = SelectedSlot->ContainerRevision;
 			Command.FishInstanceId = State.SelectedFish.FishInstanceId;
-			Command.SourceContainerId = State.PersonalFishGuard.ContainerId;
+			Command.SourceContainerId = SelectedSlot->ContainerId;
 			Model->MarkActionSubmitted(Action, RequestId);
 			if (CatController->HasAuthority())
 			{
@@ -493,9 +496,9 @@ void UCatInventoryPageController::HandleViewActionRequested(const ECatInventoryA
 		{
 			FCatSacrificeCommand Command;
 			Command.Context.RequestId = RequestId;
-			Command.Context.ExpectedRevision = State.PersonalFishGuard.Revision;
+			Command.Context.ExpectedRevision = SelectedSlot->ContainerRevision;
 			Command.FishInstanceId = State.SelectedFish.FishInstanceId;
-			Command.ContainerId = State.PersonalFishGuard.ContainerId;
+			Command.ContainerId = SelectedSlot->ContainerId;
 			Model->MarkActionSubmitted(Action, RequestId);
 			if (CatController->HasAuthority())
 			{

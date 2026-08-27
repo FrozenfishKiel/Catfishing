@@ -5,7 +5,7 @@
   "delivery_mode": "single_atomic_module",
   "package_status": "ready",
   "delivery_module_status": "blocked",
-  "checked_on": "2026-08-25",
+  "checked_on": "2026-08-27",
   "release_handoff_rule": "This package is the single release handoff surface for DeliveryHarnessAssets. Module facets and module rows are evidence slices only; they must not be reopened, closed, or reassigned as separate business tasks.",
   "module_statuses": {
     "FishingPlayerEntry": {
@@ -18,16 +18,16 @@
     },
     "UIReach": {
       "title": "UI / Reach——Fishing 信息可达闭环",
-      "closure_status": "complete",
-      "status_basis": "The latest 2026-08-25 UI feedback refresh is evidenced by Static, Build, and formal WBP Create with Designer bindings; earlier Automation and Runtime attach evidence remain regression evidence only and do not replace the pending manual PIE acceptance for the refreshed UI.",
+      "closure_status": "needs_verification",
+      "status_basis": "The 2026-08-27 inventory contract removes character-owned fish storage: Tab shows Equipment items only, while the concrete E-hit fish guard or tank supplies the world-container context. Static and unit evidence pass, but refreshed WBP/PIE and multiplayer presentation acceptance are still required.",
       "evidence_roots": [
         "Saved/Automation/UIReach"
       ]
     },
     "ItemsTankSacrificeCamp": {
       "title": "Items / Tank / Sacrifice / Camp——局内渔获归宿闭环",
-      "closure_status": "complete",
-      "status_basis": "Static, Build, Automation, Lake Runtime, comment review, code review, and test-document review are recorded as one atomic fish-destination closure.",
+      "closure_status": "needs_verification",
+      "status_basis": "The 2026-08-27 architecture correction makes exhausted fish a world Actor carried at the cat mouth after E, and stores it only when E targets a concrete ground FishGuard Actor. Build, static contracts, focused 2/2 and full 222/222 unit evidence pass; formal Lake placement, mouth transform, failure feedback, and multiplayer presentation remain to be accepted.",
       "evidence_roots": [
         "Saved/Automation/ItemsTankSacrificeCamp"
       ]
