@@ -1,6 +1,5 @@
 #include "Interaction/CatInteractionTargetingComponent.h"
 
-#include "Framework/Game/CatGameplayTypes.h"
 #include "Interaction/CatInteractable.h"
 #include "Interaction/CatInteractionSettings.h"
 #include "Engine/World.h"
@@ -81,7 +80,9 @@ AActor* UCatInteractionTargetingComponent::TraceInteractableFromCrosshair() cons
 		return nullptr;
 	}
 	AActor* HitActor = Hit.GetActor();
-	return HitActor && HitActor->GetClass()->ImplementsInterface(UCatInteractable::StaticClass()) ? HitActor : nullptr;
+	return HitActor && HitActor->GetClass()->ImplementsInterface(UCatInteractable::StaticClass())
+		&& ICatInteractable::Execute_CanInteract(HitActor, PlayerController)
+		? HitActor : nullptr;
 }
 
 void UCatInteractionTargetingComponent::RefreshTargetFromCrosshair()
@@ -118,10 +119,12 @@ void UCatInteractionTargetingComponent::ClearTarget()
 
 void UCatInteractionTargetingComponent::TryInteract()
 {
-	ACatfishingPlayerController* PlayerController = Cast<ACatfishingPlayerController>(GetOwningPlayerController());
+	APlayerController* PlayerController = GetOwningPlayerController();
 	AActor* Target = CurrentTarget.Get();
-	if (PlayerController && IsValid(Target))
+	if (PlayerController && PlayerController->IsLocalController() && IsValid(Target)
+		&& Target->GetClass()->ImplementsInterface(UCatInteractable::StaticClass())
+		&& ICatInteractable::Execute_CanInteract(Target, PlayerController))
 	{
-		PlayerController->ServerRequestInteraction(Target, FGuid::NewGuid());
+		ICatInteractable::Execute_Interact(Target, PlayerController, FGuid::NewGuid());
 	}
 }

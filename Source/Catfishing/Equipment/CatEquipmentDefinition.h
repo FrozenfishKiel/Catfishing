@@ -33,7 +33,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Loadout")
 	FName RequiredUnlockId = NAME_None;
 
-	/** 是否为本局数量型消耗品；Bait、Chum、Herb 会进入角色耗材栈，Rod、Float 和 ScoopNet 不能打开。 */
+	/** 是否为本局数量型物品；Bait、Chum、Herb 会以数量栈进入随身库存，Rod、Float 和 ScoopNet 不能打开。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Consumption")
 	bool bRunConsumable = false;
 

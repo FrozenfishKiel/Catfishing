@@ -12,7 +12,7 @@
         "Interaction"
       ],
       "tracking_rule": "Map、Input、Interaction 只是同一玩家闭环的实现切面，禁止拆成可独立关闭的业务任务、影子清单或半成品交付项；任何新发现的问题、待确认点或补充问题只能挂在 FishingPlayerEntry 模块级缺口下，并保持一组端到端验收口径。补充问题必须服务于一个清晰结论：本模块整体是否完成，以及还缺哪条证据；不能散成换 Agent 后难以收拢、也无法判断模块完成状态的小任务。",
-      "completion_rule": "只有正式 Lake 入口、唯一输入配置、完整 Fishing 玩家命令链、抓捕写入个人鱼获以及构建和运行证据同时成立时，模块才能整体关闭；任一环节缺失时只保留一个模块级未完成状态并在其下写明证据缺口。",
+      "completion_rule": "只有正式 Lake 入口、唯一输入配置、完整 Fishing 玩家命令链、力竭鱼生成世界 Actor、统一 E 交互完成嘴叼与指定地面鱼护入箱，以及构建和运行证据同时成立时，模块才能整体关闭；任一环节缺失时只保留一个模块级未完成状态并在其下写明证据缺口。",
       "handoff_rule": "换 Agent、换会话或失败回边时，必须按本模块整体目标和同一组端到端验收继续，不得只交接局部文件或把局部绿灯写成模块完成。"
     },
     "UIReach": {
@@ -23,11 +23,11 @@
       "facets": [
         "HUD",
         "Menu",
-        "InventoryAndFishGuard",
+        "InventoryAndWorldFishContainers",
         "Album"
       ],
-      "tracking_rule": "HUD、菜单、个人鱼护/背包和图鉴只是同一信息可达闭环的界面切面，禁止拆成可独立关闭的业务任务、影子清单或半成品交付项。",
-      "completion_rule": "只有唯一正式 UI 生命周期、C++ 后端只读 ViewState/Result/纯意图、WBP 前端渲染、Fishing 状态与错误反馈、菜单和个人鱼获/图鉴入口、捕获结果展示、只读 View 边界以及构建和运行证据同时成立时，模块才能整体关闭；隐藏或移除原生白盒根只能作为回归基线，不能作为完成证据；任一环节缺失时只保留一个模块级未完成状态。",
+      "tracking_rule": "HUD、菜单、随身道具背包、当前交互世界鱼容器和图鉴只是同一信息可达闭环的界面切面，禁止拆成可独立关闭的业务任务、影子清单或半成品交付项。",
+      "completion_rule": "只有唯一正式 UI 生命周期、C++ 后端只读 ViewState/Result/纯意图、WBP 前端渲染、Fishing 状态与错误反馈、只含随身道具的普通背包、由本次 E 命中对象提供的世界鱼容器、捕获结果展示、只读 View 边界以及构建和运行证据同时成立时，模块才能整体关闭；隐藏或移除原生白盒根只能作为回归基线，不能作为完成证据；任一环节缺失时只保留一个模块级未完成状态。",
       "handoff_rule": "换 Agent、换会话或失败回边时，必须按 UIReach 整体目标和同一组端到端验收继续，不得按控件或页面交接局部完成结论。"
     },
     "ItemsTankSacrificeCamp": {
@@ -42,22 +42,21 @@
         "Camp"
       ],
       "tracking_rule": "Items、Tank、Sacrifice、Camp 只是同一局内渔获归宿闭环的实现切面；网络结果、不可逆献祭恢复、篝火表现和关卡接线不得拆成可独立关闭的业务事项。",
-      "completion_rule": "只有 A1 owning-client 结构化结果回送、A2 篝火 Reliable NetMulticast 与全员 CapturePlan 前置、A3 ItemsCommitted 后只补 Run 且不还鱼不重复额度、A4 Lake 中 Camp/Hub/Tank 引用与位置半径运行事实整体成立时才能关闭；A4 缺少事实或被 blocked 时整个原子模块不得关闭。",
+      "completion_rule": "只有 A1 owning-client 结构化结果回送、A2 篝火 Reliable NetMulticast 与全员 CapturePlan 前置、A3 ItemsCommitted 后只补 Run 且不还鱼不重复额度、A4 Lake 中 Camp/Hub/Tank 引用与位置半径运行事实，以及 A5 死鱼 E 嘴叼、指定地面鱼护 E 入箱、箱满保留嘴叼状态和多客户端表现整体成立时才能关闭；任一运行或表现事实缺失时整个原子模块不得关闭。",
       "handoff_rule": "换 Agent、换会话或失败回边时必须携带 A1-A4 的同一组端到端证据；静态、构建或局部 Automation 绿灯不能覆盖 A4 Runtime blocked，也不能把任一切面单独标为完成。"
     },
-    "EquipmentTeamLibraryShop": {
-      "title": "Equipment / TeamLibrary / Shop——装备获取与装配闭环",
+    "EquipmentShop": {
+      "title": "Equipment / Shop——装备获取与装配闭环",
       "delivery_mode": "single_atomic_module",
       "human_status_source": "Docs/Development/需求对齐差距清单.md",
-      "machine_status_source": ".codex/state/equipment-teamlibrary-shop-harness.json",
+      "machine_status_source": ".codex/state/current-harness.json",
       "facets": [
         "Equipment",
-        "TeamLibrary",
         "Shop"
       ],
-      "tracking_rule": "Equipment、TeamLibrary、Shop 只是同一装备获取与装配闭环的实现切面；鱼竿、鱼饵、鱼漂、团队装备库、商店购买、领取和装备生效不得拆成可独立关闭的业务事项。",
-      "completion_rule": "只有鱼竿、鱼饵、鱼漂可通过正式商店或团队装备库获取、领取并装备，默认配置引用 /Game/Catfishing/Data/Equipment/Equip_* 正式资产，开发期 Starter Loadout 自动装配关闭，客户端直连消耗品 grant 被拒绝，FishingSession 读取装备/Items 的强度、当前耐久、消耗品和 Revision 快照且不形成第二份可写真相，失败预算只提交一种惩罚，装备不可偷、解锁跟人并经 FProfileGrant 授予链，以及构建、Automation 和 Lake 运行证据整体成立时，模块才能整体关闭；旧 DA_*_Basic/自动 starter/直连 grant 只能作为历史回归基线，不能作为正式关闭证据；装配重连恢复、收益数值或内容未裁决时必须保持 fail-closed。",
-      "handoff_rule": "换 Agent、换会话或失败回边时必须携带 Equipment、TeamLibrary、Shop 的同一组端到端证据；静态、构建、局部 UI 或孤立数据资产绿灯不能替代购买/领取/装备/Fishing 生效的完整闭环，也不能把任一切面单独标为完成。"
+      "tracking_rule": "Equipment、Shop 只是同一装备获取与装配闭环的实现切面；鱼竿、鱼饵、鱼漂、商店购买、领取和装备生效不得拆成可独立关闭的业务事项。",
+      "completion_rule": "只有鱼竿、鱼饵、鱼漂可通过正式商店获取并落到玩家自己的 Equipment，默认配置引用 /Game/Catfishing/Data/Equipment/Equip_* 正式资产，开发期 Starter Loadout 自动装配关闭，客户端直连消耗品 grant 被拒绝，FishingSession 读取装备/Items 的强度、当前耐久、消耗品和 Revision 快照且不形成第二份可写真相，失败预算只提交一种惩罚，装备不可偷、解锁跟人并经 FProfileGrant 授予链，以及构建、Automation 和 Lake 运行证据整体成立时，模块才能整体关闭；旧 DA_*_Basic/自动 starter/直连 grant 只能作为历史回归基线，不能作为正式关闭证据；装配重连恢复、收益数值或内容未裁决时必须保持 fail-closed。",
+      "handoff_rule": "换 Agent、换会话或失败回边时必须携带 Equipment、Shop 的同一组端到端证据；静态、构建、局部 UI 或孤立数据资产绿灯不能替代购买/领取/装备/Fishing 生效的完整闭环，也不能把任一切面单独标为完成。"
     },
     "FrontendOnline": {
       "title": "Frontend / Online——前端进局与 Steam 联机闭环",
@@ -155,10 +154,10 @@
     "items_tank_sacrifice_camp_build": "powershell -ExecutionPolicy Bypass -File Scripts/verify_items_tank_sacrifice_camp.ps1 -Mode Build",
     "items_tank_sacrifice_camp_automation": "powershell -ExecutionPolicy Bypass -File Scripts/verify_items_tank_sacrifice_camp.ps1 -Mode Automation",
     "items_tank_sacrifice_camp_runtime": "powershell -ExecutionPolicy Bypass -File Scripts/verify_items_tank_sacrifice_camp.ps1 -Mode Runtime",
-    "equipment_teamlibrary_shop_static_check": "powershell -ExecutionPolicy Bypass -File Scripts/verify_equipment_teamlibrary_shop.ps1 -Mode Static",
-    "equipment_teamlibrary_shop_build": "powershell -ExecutionPolicy Bypass -File Scripts/verify_equipment_teamlibrary_shop.ps1 -Mode Build",
-    "equipment_teamlibrary_shop_automation": "powershell -ExecutionPolicy Bypass -File Scripts/verify_equipment_teamlibrary_shop.ps1 -Mode Automation",
-    "equipment_teamlibrary_shop_runtime": "powershell -ExecutionPolicy Bypass -File Scripts/verify_equipment_teamlibrary_shop.ps1 -Mode Runtime",
+    "equipment_shop_static_check": "powershell -ExecutionPolicy Bypass -File Scripts/verify_equipment_shop.ps1 -Mode Static",
+    "equipment_shop_build": "powershell -ExecutionPolicy Bypass -File Scripts/verify_equipment_shop.ps1 -Mode Build",
+    "equipment_shop_automation": "powershell -ExecutionPolicy Bypass -File Scripts/verify_equipment_shop.ps1 -Mode Automation",
+    "equipment_shop_runtime": "powershell -ExecutionPolicy Bypass -File Scripts/verify_equipment_shop.ps1 -Mode Runtime",
     "frontend_online_build": "UBT CatfishingEditor Win64 Development",
     "frontend_online_ui_automation": "UnrealEditor-Cmd.exe -ExecCmds=\"Automation RunTests Catfishing.Unit.UI;Quit\"",
     "frontend_online_online_automation": "UnrealEditor-Cmd.exe -ExecCmds=\"Automation RunTests Catfishing.Unit.Online;Quit\"",
@@ -186,7 +185,7 @@
       "本地玩家 UI 生命周期、Fishing View 快照和可见运行证据",
       "Camp/Sacrifice owning-client 结果 RPC 与 Campfire NetMulticast 反射合同",
       "ItemsCommitted 献祭恢复自动化与 Lake Camp/Hub/Tank Runtime 接线日志",
-      "Equipment/TeamLibrary/Shop 定义、购买、领取、装备命令结果与 RequestId/Revision 日志",
+      "Equipment/Shop 定义、购买、领取、装备命令结果与 RequestId/Revision 日志",
       "FishingSession 读取装备/Items 快照、鱼饵消耗、鱼竿耐久或断竿的单一失败结果",
       "FProfileGrant 装备解锁授予、Journal/ACK 与装配恢复 fail-closed 证据",
       "Frontend/Online 的 UBT 构建、UI/Online Automation 报告、源码边界核对和打包 Steam 联机实玩结论",

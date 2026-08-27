@@ -421,36 +421,15 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	}
 
 	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
-	// 服务器是抄网冷却唯一裁决者：GAS 冷却提供预测手感，这层仍阻断绕过 Ability 直发 RPC 的请求。
 	if (CommandType == ECatFishingCommandType::RequestScoop)
 	{
-		double CooldownSeconds = 0.0;
-		if (!Fishing || !GetDefault<UCatFishingSettings>()->TryGetScoopCooldown(CooldownSeconds))
-		{
-			Result.Error = ECatFishingCommandError::DependencyUnavailable;
-			DeliverResultFromAuthority(Result);
-			return;
-		}
-		double RemainingSeconds = 0.0;
-		if (!ScoopCooldownGate.TryConsume(GetWorld()->GetTimeSeconds(), CooldownSeconds, RemainingSeconds))
-		{
-			Result.Error = ECatFishingCommandError::CooldownActive;
-			UE_LOG(LogCatFishing, Warning,
-				TEXT("Event=scoop_cooldown_rejected Request=%s RemainingSeconds=%.3f"),
-				*Edge.RequestId.ToString(EGuidFormats::DigitsWithHyphens), RemainingSeconds);
-			DeliverResultFromAuthority(Result);
-			return;
-		}
-	}
-	// 向其他客户端广播挥网动作——必须在任何裁决之前，因为抄网"失败时不留任何权威痕迹"：
-	// 挥空了服务器上什么都没变，表现层没有可读的复制事实，而发起者自己看到的前摇是 Ability 的
-	// 本地钩子播的（服务器镜像在 IsRemoteAuthorityMirror 处直接 return），其他玩家看不到。
-	// 放在裁决前也保证远端与本地时机口径一致：都是"按下就播"，成败由后续状态变化各自呈现。
-	// F 可以无条件广播是因为它只有一种语义；左键（RequestHook）按下有三种语义，
-	// 必须等下面分派出具体分支才知道该播哪个动作，广播点在各分支内部，不能提到这里。
-	if (CommandType == ECatFishingCommandType::RequestScoop)
-	{
-		BroadcastCosmeticEventFromAuthority(CatFishingAbilityTags::Cosmetic_Fishing_ScoopSwing);
+		// 旧抢抄入口会把捕获结果直接写进容器，与“力竭鱼落地 -> E 叼起 -> 对具体鱼护 E 入箱”冲突。
+		// 正式流程已改走世界鱼，因此这里保持 fail-closed，不消耗冷却也不广播挥网假象。
+		Result.Error = ECatFishingCommandError::DependencyUnavailable;
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=scoop_rejected Request=%s Reason=FishGuardActorUnavailable"),
+			*Edge.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		DeliverResultFromAuthority(Result);
+		return;
 	}
 	if (Fishing)
 	{
@@ -601,37 +580,6 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				DeliverResultFromAuthority(Fishing->PackRod(Controller, Pack));
 				return;
 			}
-			// F 无自己的会话 = 多人抢抄：找附近处于 NearShore 的别人会话，把抄鱼命令投给它。
-			// 胜负判定（首个合法抄手 Compare-and-Commit）与半圆范围校验全部在 Session::RequestScoop 内完成，
-			// 这里只做粗筛路由（水平 15 米内最近的可抄会话），不做任何裁决。
-			if (CommandType == ECatFishingCommandType::RequestScoop)
-			{
-				const ACatCharacter* ScoopingCharacter = Cast<ACatCharacter>(Controller->GetPawn());
-				ACatFishingSession* TargetSession = ScoopingCharacter
-					? Fishing->FindNearestScoopableSession(ScoopingCharacter->GetActorLocation(), 1500.0) : nullptr;
-				if (!TargetSession)
-				{
-					Result.Error = ECatFishingCommandError::NotNearShore;
-					DeliverResultFromAuthority(Result);
-					return;
-				}
-				const FCatFishingSessionSnapshot& TargetSnapshot = TargetSession->GetSnapshot();
-				Result.FishingSessionId = TargetSnapshot.FishingSessionId;
-				FCatScoopCommand ScoopCommand;
-				ScoopCommand.Context.RequestId = Edge.RequestId;
-				ScoopCommand.Context.ExpectedRevision = TargetSnapshot.Revision;
-				ScoopCommand.TargetGuardContainerId = ScoopingCharacter->GetPersonalFishGuardId();
-				const FCatScoopResult ScoopResult = TargetSession->RequestScoop(Controller, ScoopCommand);
-				Result.bCommitted = ScoopResult.Command.bCommitted;
-				Result.Error = MapDomainCommandError(ScoopResult.Command.Error);
-				const FCatFishingSessionSnapshot& UpdatedSnapshot = TargetSession->GetSnapshot();
-				Result.Revision = UpdatedSnapshot.Revision; // 回执携带提交后的会话版本，表现层不用再猜测本次 F 键是否改变了公开事实。
-				Result.SnapshotSequence = UpdatedSnapshot.SnapshotSequence;
-				Result.PhaseEpoch = UpdatedSnapshot.PhaseEpoch;
-				Result.CastAttemptId = UpdatedSnapshot.CastAttemptId;
-				DeliverResultFromAuthority(Result);
-				return;
-			}
 		}
 		else
 		{
@@ -706,27 +654,6 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 					DeliverResultFromAuthority(Session->CancelFromAuthority(Edge.RequestId));
 					return;
 				}
-				if (CommandType == ECatFishingCommandType::RequestScoop)
-				{
-					// 抢抄命令由服务器重建抄手身份和鱼护 ID；客户端无法伪造目标容器。
-					const ACatCharacter* ScoopingCharacter = Cast<ACatCharacter>(Controller->GetPawn());
-					FCatScoopCommand ScoopCommand;
-					ScoopCommand.Context.RequestId = Edge.RequestId;
-					ScoopCommand.Context.ExpectedRevision = Snapshot.Revision; // 乐观并发：绑定客户端读到的会话版本
-					ScoopCommand.TargetGuardContainerId = ScoopingCharacter
-						? ScoopingCharacter->GetPersonalFishGuardId() : FGuid();
-					// 真正的“首个合法抢抄 Compare-and-Commit”逻辑在 Session::RequestScoop 内部
-					const FCatScoopResult ScoopResult = Session->RequestScoop(Controller, ScoopCommand);
-					Result.bCommitted = ScoopResult.Command.bCommitted;
-					Result.Error = MapDomainCommandError(ScoopResult.Command.Error); // 领域错误码转成命令层通用错误码
-					const FCatFishingSessionSnapshot& UpdatedSnapshot = Session->GetSnapshot();
-					Result.Revision = UpdatedSnapshot.Revision; // 回执携带提交后的会话版本，表现层不用再猜测本次 F 键是否改变了公开事实。
-					Result.SnapshotSequence = UpdatedSnapshot.SnapshotSequence;
-					Result.PhaseEpoch = UpdatedSnapshot.PhaseEpoch;
-					Result.CastAttemptId = UpdatedSnapshot.CastAttemptId;
-					DeliverResultFromAuthority(Result);
-					return;
-				}
 			}
 		}
 	}
@@ -799,31 +726,31 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
 	}
-	// 选窝料：优先项目 starter 配置的种类，否则背包里第一份数量>0 的 Chum 类耗材。
+	// 选窝料：优先项目 starter 配置的种类，否则库存格里第一份数量>0 的 Chum 类物品。
 	const FCatEquipmentLoadoutSnapshot& Loadout = Equipment->GetSnapshot();
 	FName ChumId = GetDefault<UCatEquipmentSettings>()->StarterChumDefinitionId;
-	// 小工具 lambda：判断某个耗材 ID 在当前背包快照里是否还有存量
+	// 小工具 lambda：判断某个物品 ID 在当前库存格数组里是否还有存量。
 	auto HasStock = [&Loadout](const FName Id)
 	{
-		for (const FCatRunConsumableStack& Stack : Loadout.Consumables)
+		for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
 		{
-			if (Stack.DefinitionId == Id && Stack.Quantity > 0) return true;
+			if (Slot.DefinitionId == Id && Slot.Quantity > 0) return true;
 		}
 		return false;
 	};
 	if (ChumId.IsNone() || !HasStock(ChumId))
 	{
-		// 默认窝料未配置，或已配置但背包里已经用光了：退化成遍历背包找第一份 Kind==Chum 的耗材
+		// 默认窝料未配置，或已配置但库存里已经用光了：退化成遍历库存格找第一份 Kind==Chum 的数量型物品。
 		ChumId = NAME_None;
-		for (const FCatRunConsumableStack& Stack : Loadout.Consumables)
+		for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
 		{
-			const UCatEquipmentDefinition* Def = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Stack.DefinitionId);
-			if (Def && Def->Kind == ECatEquipmentKind::Chum && Stack.Quantity > 0) { ChumId = Stack.DefinitionId; break; }
+			const UCatEquipmentDefinition* Def = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Slot.DefinitionId);
+			if (Def && Def->Kind == ECatEquipmentKind::Chum && Def->bRunConsumable && Slot.Quantity > 0) { ChumId = Slot.DefinitionId; break; }
 		}
 	}
 	if (ChumId.IsNone())
 	{
-		// 背包里一份可用窝料都没有，直接拒绝，不进入弹道计算
+		// 库存里一份可用窝料都没有，直接拒绝，不进入弹道计算。
 		Result.Error = ECatChumFieldError::EquipmentUnavailable;
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
@@ -869,7 +796,7 @@ void UCatFishingCommandComponent::ForwardLegacyAssist(const FGuid FishingSession
 	}
 }
 
-// 旧版抢抄转发流程：先复查 Fishing 白天 gate，再清理客户端身份并由当前 Pawn 重建鱼护目标；Session 只裁近岸和首个合法抄手。
+// 旧版抢抄转发流程：先复查 Fishing 白天 gate；因正式捕获已改为世界鱼 E 交互，直接回送依赖缺失且不信任客户端容器目标。
 void UCatFishingCommandComponent::ForwardLegacyScoop(const FGuid FishingSessionId, FCatScoopCommand Command)
 {
 	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
@@ -877,29 +804,14 @@ void UCatFishingCommandComponent::ForwardLegacyScoop(const FGuid FishingSessionI
 	{
 		return;
 	}
-	double CooldownSeconds = 0.0;
-	double RemainingSeconds = 0.0;
-	if (!GetDefault<UCatFishingSettings>()->TryGetScoopCooldown(CooldownSeconds)
-		|| !ScoopCooldownGate.TryConsume(GetWorld()->GetTimeSeconds(), CooldownSeconds, RemainingSeconds))
-	{
-		FCatFishingCommandResult Rejected;
-		Rejected.CommandType = ECatFishingCommandType::RequestScoop;
-		Rejected.RequestId = Command.Context.RequestId;
-		Rejected.FishingSessionId = FishingSessionId;
-		Rejected.Error = CooldownSeconds > 0.0
-			? ECatFishingCommandError::CooldownActive : ECatFishingCommandError::DependencyUnavailable;
-		DeliverResultFromAuthority(Rejected);
-		return;
-	}
-	// 清掉调用方可能带来的客户端身份字段，防止伪造 StableNetId
+	FCatFishingCommandResult Result;
+	Result.CommandType = ECatFishingCommandType::RequestScoop;
+	Result.RequestId = Command.Context.RequestId;
+	Result.FishingSessionId = FishingSessionId;
+	Result.Error = ECatFishingCommandError::DependencyUnavailable;
+	// 清掉调用方可能带来的客户端身份字段，防止伪造 StableNetId；没有正式鱼护对象时仍然只能拒绝。
 	Command.Context.StableNetId.Reset();
-	// 抄手的鱼护 ID 必须由服务器根据当前 Pawn 重新读取，不信任传入 Command 里的值
-	const ACatCharacter* Character = Cast<ACatCharacter>(Controller->GetPawn());
-	Command.TargetGuardContainerId = Character ? Character->GetPersonalFishGuardId() : FGuid();
-	if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
-	{
-		Fishing->RequestScoop(FishingSessionId, Controller, Command);
-	}
+	DeliverResultFromAuthority(Result);
 }
 
 // 显式打窝 RPC 流程：先保留 RequestId，再用 Fishing 白天 gate 裁阶段；gate 关闭也回送 CommandsClosed，合法路径才进入 ChumPlacementService 的水域、库存和幂等校验。

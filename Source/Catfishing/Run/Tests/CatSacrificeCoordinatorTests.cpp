@@ -26,7 +26,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 namespace CatSacrificeCoordinatorTest
 {
-	/** 本测试的稳定玩家身份；它同时用于 PlayerState UniqueId、个人鱼护主人和献祭协议键。 */
+	/** 本测试的稳定玩家身份；它同时用于 PlayerState UniqueId、鱼捕获者和献祭协议键。 */
 	static const FString StableNetIdValue(TEXT("CatSacrificeCoordinatorStableNetId"));
 
 	/** 已注册测试容器的公开上下文；测试只通过 ItemsService 写口读写它，不绕过容器内部真相。 */
@@ -41,7 +41,7 @@ namespace CatSacrificeCoordinatorTest
 		/** 本局容器稳定 ID；献祭命令用它绑定 Items 聚合。 */
 		FGuid ContainerId;
 
-		/** 个人鱼护的服务器私有主人；PlayerState 与 Items 授权都使用同一身份字符串。 */
+		/** 鱼实例的服务器私有捕获者；PlayerState 与 Items 授权都使用同一身份字符串。 */
 		FString OwnerStableNetId;
 	};
 
@@ -140,7 +140,7 @@ namespace CatSacrificeCoordinatorTest
 		}
 	};
 
-	/** A3 恢复用例的最小真实世界夹具；只种入 DayActive、玩家身份、个人鱼护和一条鱼。 */
+	/** A3 恢复用例的最小真实世界夹具；只种入 DayActive、玩家身份、地面鱼护和一条鱼。 */
 	struct FItemsCommittedRecoveryFixture
 	{
 		/** 自动化测试世界；GameMode、Subsystem、Actor 都在这里创建并随夹具销毁。 */
@@ -164,7 +164,7 @@ namespace CatSacrificeCoordinatorTest
 		/** 一局献祭协调器；测试只通过 RequestSacrifice 入口触发跨聚合协议。 */
 		UCatSacrificeCoordinator* Coordinator = nullptr;
 
-		/** 测试个人鱼护；它是被献祭鱼所在的真实 Items 容器。 */
+		/** 测试地面鱼护；它是被献祭鱼所在的真实 Items 容器。 */
 		FRegisteredContainer Guard;
 
 		/** 被献祭鱼实例 ID；种鱼、献祭和快照断言都使用同一个不可变标识。 */
@@ -234,10 +234,10 @@ namespace CatSacrificeCoordinatorTest
 			GameMode->bRunCommandsOpen = true;
 		}
 
-		/** 鱼护种入流程：注册个人鱼护并通过 CommitCapture 放入一条真实鱼，返回提交后的 Items Revision。 */
-		int64 SeedPersonalGuard(FAutomationTestBase& Test)
+		/** 鱼护种入流程：注册地面鱼护并通过 CommitCapture 放入一条真实鱼，返回提交后的 Items Revision。 */
+		int64 SeedFishGuard(FAutomationTestBase& Test)
 		{
-			Guard = RegisterContainer(World, ItemsService, ECatContainerKind::PersonalGuard, StableNetIdValue, 3);
+			Guard = RegisterContainer(World, ItemsService, ECatContainerKind::FishGuard, StableNetIdValue, 3);
 			if (!Test.TestNotNull(TEXT("Sacrifice recovery Guard actor exists"), Guard.Owner.Get())
 				|| !Test.TestNotNull(TEXT("Sacrifice recovery Guard component exists"), Guard.Component.Get()))
 			{
@@ -301,7 +301,7 @@ bool FCatSacrificeCoordinatorItemsCommittedRecoveryTest::RunTest(const FString& 
 	{
 		return false;
 	}
-	const int64 SeedItemsRevision = Fixture.SeedPersonalGuard(*this);
+	const int64 SeedItemsRevision = Fixture.SeedFishGuard(*this);
 	if (SeedItemsRevision <= 0)
 	{
 		return false;

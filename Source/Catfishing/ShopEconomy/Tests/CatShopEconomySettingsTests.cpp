@@ -63,7 +63,7 @@ bool FCatShopEconomySettingsProjectDefaultsTest::RunTest(const FString& Paramete
 	if (FreeBait)
 	{
 		TestTrue(TEXT("免费普通饵目录项本身可运行"), FreeBait->IsRuntimeReady());
-		TestEqual(TEXT("免费普通饵交付为局内消耗品数量"), FreeBait->Kind, ECatShopEntryKind::RunConsumableGrant);
+		TestEqual(TEXT("免费普通饵交付为统一库存数量物品"), FreeBait->Kind, ECatShopEntryKind::InventoryQuantityGrant);
 		TestEqual(TEXT("免费普通饵指向正式 BugBait 定义"), FreeBait->DefinitionId, FName(TEXT("BugBait")));
 		TestEqual(TEXT("免费普通饵价格明确为 0"), FreeBait->UnitPrice, 0);
 		TestTrue(TEXT("免费普通饵使用无限库存"), FreeBait->bUnlimitedStock);
@@ -78,7 +78,7 @@ bool FCatShopEconomySettingsProjectDefaultsTest::RunTest(const FString& Paramete
 	if (ChumOrder)
 	{
 		TestTrue(TEXT("基础窝料订单本身可运行"), ChumOrder->IsRuntimeReady());
-		TestEqual(TEXT("基础窝料交付为局内耗材"), ChumOrder->Kind, ECatShopEntryKind::RunConsumableGrant);
+		TestEqual(TEXT("基础窝料交付为统一库存数量物品"), ChumOrder->Kind, ECatShopEntryKind::InventoryQuantityGrant);
 		TestEqual(TEXT("基础窝料指向正式 BugChum 定义"), ChumOrder->DefinitionId, FName(TEXT("BugChum")));
 		TestEqual(TEXT("基础窝料订单价格"), ChumOrder->UnitPrice, 1);
 		TestTrue(TEXT("基础窝料使用无限库存"), ChumOrder->bUnlimitedStock);

@@ -13,15 +13,11 @@
 #include "Equipment/CatEquipmentSettings.h"
 #include "Growth/CatGrowthComponent.h"
 #include "Logging/CatLog.h"
-#include "GameFramework/PlayerState.h"
-#include "Items/CatContainerReplicationComponent.h"
-#include "Items/CatItemsService.h"
-#include "Items/CatItemsSettings.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Social/CatSocialService.h"
 
-// 构造流程：一次创建 Character-owned ASC/AttributeSet、个人鱼护复制出口、离散身体状态、吃鱼成长和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
+// 构造流程：一次创建 Character-owned ASC/AttributeSet、离散身体状态、吃鱼成长和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
 ACatCharacter::ACatCharacter()
 {
 	AbilitySystemComponent = CreateDefaultSubobject<UCatAbilitySystemComponent>(TEXT("AbilitySystemComponent"));
@@ -29,7 +25,6 @@ ACatCharacter::ACatCharacter()
 	SurvivalAttributes = CreateDefaultSubobject<UCatSurvivalAttributeSet>(TEXT("SurvivalAttributes"));
 	// ASC 不会仅凭同 Actor 上存在 AttributeSet 就稳定纳入查询列表；构造期显式登记，保证占有时播种属性不会找不到 AttributeSet。
 	AbilitySystemComponent->AddAttributeSetSubobject(SurvivalAttributes.Get());
-	PersonalFishGuard = CreateDefaultSubobject<UCatContainerReplicationComponent>(TEXT("PersonalFishGuard"));
 	ConditionComponent = CreateDefaultSubobject<UCatConditionComponent>(TEXT("ConditionComponent"));
 	GrowthComponent = CreateDefaultSubobject<UCatGrowthComponent>(TEXT("GrowthComponent"));
 	EquipmentComponent = CreateDefaultSubobject<UCatEquipmentComponent>(TEXT("EquipmentComponent"));
@@ -44,12 +39,6 @@ UAbilitySystemComponent* ACatCharacter::GetAbilitySystemComponent() const
 UCatAbilitySystemComponent* ACatCharacter::GetCatAbilitySystemComponent() const
 {
 	return AbilitySystemComponent;
-}
-
-// 鱼护 ID 读取流程：直接返回 authority 注册事实；客户端若尚未从容器 Snapshot 观察到 ID，不得用该值提交写命令。
-FGuid ACatCharacter::GetPersonalFishGuardId() const
-{
-	return PersonalFishGuardId;
 }
 
 // Condition 读取流程：直接返回构造期唯一组件；外部命令不从 ASC 或 Controller 复制推导另一份 Wet/Downed 状态。
@@ -157,7 +146,7 @@ void ACatCharacter::BeginPlay()
 	InitializeAbilityActorInfo();
 }
 
-// 服务端占有流程：父类先建立 Controller/Owner/PlayerState 关系，再幂等刷新 Character=this 的 ASC Owner/Avatar 并尝试整体应用一次初值；最后仅 authority 授予正式 AbilitySet，并用 PlayerState::UniqueId 注册个人鱼护。
+// 服务端占有流程：父类先建立 Controller/Owner/PlayerState 关系，再幂等刷新 Character=this 的 ASC Owner/Avatar 并尝试整体应用一次初值；最后仅 authority 授予正式 AbilitySet 并应用可选 starter 选择。
 void ACatCharacter::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
@@ -165,7 +154,6 @@ void ACatCharacter::PossessedBy(AController* NewController)
 	if (HasAuthority())
 	{
 		GrantDefaultAbilitySetOnce();
-		RegisterPersonalFishGuard();
 		ApplyStarterLoadoutIfConfigured();
 	}
 }
@@ -209,17 +197,10 @@ void ACatCharacter::UnPossessed()
 	}
 }
 
-// 最终清理流程：无论此前是否经历 UnPossessed，都先幂等终止 Fishing/Social，authority 再从 Items 解注册个人鱼护；随后撤销默认 AbilitySet、取消 Ability 并清 ActorInfo，最后才交还父类销毁组件。
+// 最终清理流程：无论此前是否经历 UnPossessed，都先幂等终止 Fishing/Social；随后撤销默认 AbilitySet、取消 Ability 并清 ActorInfo，最后才交还父类销毁组件。
 void ACatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	NotifyFishingOwnerUnavailable();
-	if (HasAuthority())
-	{
-		if (UCatItemsService* Items = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr)
-		{
-			Items->UnregisterContainer(PersonalFishGuard);
-		}
-	}
 	if (AbilitySystemComponent)
 	{
 		DefaultAbilitySetHandles.TakeFromAbilitySystem(AbilitySystemComponent);
@@ -230,26 +211,8 @@ void ACatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-// 个人鱼护注册流程：仅 authority 且继承 UniqueId 有效时生成一次容器 ID，读取显式容量并交给 Items；原始身份不写入组件快照。
-void ACatCharacter::RegisterPersonalFishGuard()
-{
-	const APlayerState* OwningPlayerState = GetPlayerState();
-	UCatItemsService* Items = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
-	if (!HasAuthority() || !Items || !PersonalFishGuard || !OwningPlayerState || !OwningPlayerState->GetUniqueId().IsValid())
-	{
-		return;
-	}
-	if (!PersonalFishGuardId.IsValid())
-	{
-		PersonalFishGuardId = FGuid::NewGuid();
-	}
-	const int32 Capacity = GetDefault<UCatItemsSettings>()->GetContainerCapacity(static_cast<uint8>(ECatContainerKind::PersonalGuard));
-	Items->RegisterContainer(PersonalFishGuard, PersonalFishGuardId, ECatContainerKind::PersonalGuard,
-		OwningPlayerState->GetUniqueId()->ToString(), Capacity);
-}
-
-// Starter 兜底流程：先拒绝非 authority、无组件或未显式打开的情况，避免正式默认路径绕过商店/团队库/Profile Grant。
-// 只有 Loadout 仍没有鱼竿时才用当前 Equipment Revision 写入配置的基础三件套；装配成功后再按新 Revision 发放可选窝料，任一步失败只记日志不重试。
+// Starter 兜底流程：先拒绝非 authority、无组件或未显式打开的情况，避免正式默认路径绕过商店或 Profile Grant。
+// 只有当前选择仍没有鱼竿时才尝试选择库存里已有的基础三件套；选择成功后再按新 Revision 发放可选窝料，任一步失败只记日志不重试。
 void ACatCharacter::ApplyStarterLoadoutIfConfigured()
 {
 	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
@@ -271,7 +234,7 @@ void ACatCharacter::ApplyStarterLoadoutIfConfigured()
 	{
 		return;
 	}
-	const FCatDomainCommandResult Grant = EquipmentComponent->GrantRunConsumableFromAuthority(FGuid::NewGuid(),
+	const FCatDomainCommandResult Grant = EquipmentComponent->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(),
 		EquipmentComponent->GetSnapshot().Revision, Settings->StarterChumDefinitionId, Settings->StarterChumQuantity);
 	UE_LOG(LogCatCharacter, Log, TEXT("Event=starter_chum_grant Committed=%s Error=%s Revision=%lld Definition=%s Quantity=%d"),
 		Grant.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Grant.Error), Grant.Revision,

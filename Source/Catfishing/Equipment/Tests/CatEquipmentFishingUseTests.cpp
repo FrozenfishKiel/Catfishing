@@ -33,8 +33,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatEquipmentFishingUseLegacyGateTest,
-	"Catfishing.Unit.Equipment.FishingUse.ActiveReservationBlocksLegacyMutationsAndProtectsReservedBait",
+	FCatEquipmentFishingUseDirectGateTest,
+	"Catfishing.Unit.Equipment.FishingUse.ActiveReservationBlocksDirectMutationsAndProtectsReservedBait",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -50,7 +50,7 @@ namespace CatEquipmentFishingUseTest
 	static const FName FloatId(TEXT("FishingUseFloat"));
 	static const FName DriftwoodId(TEXT("FishingUseDriftwood"));
 
-	/** 定义构造流程：创建最小 transient 钓鱼装备定义，并让 Bait 满足正式局内数量栈 gate。 */
+	/** 定义构造流程：创建最小 transient 钓鱼装备定义，并让 Bait 满足统一库存数量物品 gate。 */
 	static UCatEquipmentDefinition* MakeDefinition(const FName Id, const ECatEquipmentKind Kind)
 	{
 		UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>(GetTransientPackage());
@@ -88,11 +88,15 @@ namespace CatEquipmentFishingUseTest
 
 	static int32 QuantityOf(const FCatEquipmentLoadoutSnapshot& Snapshot, const FName DefinitionId)
 	{
-		const FCatRunConsumableStack* Stack = Snapshot.Consumables.FindByPredicate([DefinitionId](const FCatRunConsumableStack& Candidate)
+		int32 Quantity = 0;
+		for (const FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
 		{
-			return Candidate.DefinitionId == DefinitionId;
-		});
-		return Stack ? Stack->Quantity : 0;
+			if (Slot.DefinitionId == DefinitionId && Slot.Quantity > 0)
+			{
+				Quantity += Slot.Quantity;
+			}
+		}
+		return Quantity;
 	}
 
 	struct FFishingUseFixture
@@ -159,17 +163,19 @@ namespace CatEquipmentFishingUseTest
 			{
 				return false;
 			}
+			const FCatDomainCommandResult GrantRod = Component->GrantEquipmentFromAuthority(
+				FGuid::NewGuid(), Component->GetSnapshot().Revision, RodId);
+			const FCatDomainCommandResult GrantBait = Component->GrantInventoryQuantityFromAuthority(
+				FGuid::NewGuid(), Component->GetSnapshot().Revision, SpecialBaitId, SpecialBaitQuantity);
+			const FCatDomainCommandResult GrantFloat = Component->GrantEquipmentFromAuthority(
+				FGuid::NewGuid(), Component->GetSnapshot().Revision, FloatId);
 			const FCatDomainCommandResult Configure = Component->ConfigureLoadoutFromAuthority(
 				FGuid::NewGuid(), Component->GetSnapshot().Revision, RodId, SpecialBaitId, FloatId);
-			Test.TestTrue(TEXT("Configure special-bait fishing loadout"), Configure.bCommitted);
-			if (!Configure.bCommitted)
-			{
-				return false;
-			}
-			const FCatDomainCommandResult Grant = Component->GrantRunConsumableFromAuthority(
-				FGuid::NewGuid(), Component->GetSnapshot().Revision, SpecialBaitId, SpecialBaitQuantity);
-			Test.TestTrue(TEXT("Grant special bait through public authority API"), Grant.bCommitted);
-			return Grant.bCommitted;
+			const bool bLoadoutReady = Configure.bCommitted
+				|| Configure.Error == ECatDomainCommandError::AlreadyResolved;
+			Test.TestTrue(TEXT("Prepare special-bait inventory loadout"),
+				GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && bLoadoutReady);
+			return GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && bLoadoutReady;
 		}
 
 		bool ConfigureNormal(FAutomationTestBase& Test, const int32 NormalBaitQuantity = 1)
@@ -178,17 +184,28 @@ namespace CatEquipmentFishingUseTest
 			{
 				return false;
 			}
+			const int32 InitialBaitQuantity = FMath::Max(1, NormalBaitQuantity);
+			const FCatDomainCommandResult GrantRod = Component->GrantEquipmentFromAuthority(
+				FGuid::NewGuid(), Component->GetSnapshot().Revision, RodId);
+			const FCatDomainCommandResult GrantBait = Component->GrantInventoryQuantityFromAuthority(
+				FGuid::NewGuid(), Component->GetSnapshot().Revision, NormalBaitId, InitialBaitQuantity);
+			const FCatDomainCommandResult GrantFloat = Component->GrantEquipmentFromAuthority(
+				FGuid::NewGuid(), Component->GetSnapshot().Revision, FloatId);
 			const FCatDomainCommandResult Configure = Component->ConfigureLoadoutFromAuthority(
 				FGuid::NewGuid(), Component->GetSnapshot().Revision, RodId, NormalBaitId, FloatId);
-			Test.TestTrue(TEXT("Configure normal-bait fishing loadout"), Configure.bCommitted);
-			if (!Configure.bCommitted || NormalBaitQuantity <= 0)
+			const bool bLoadoutReady = Configure.bCommitted
+				|| Configure.Error == ECatDomainCommandError::AlreadyResolved;
+			if (NormalBaitQuantity <= 0 && bLoadoutReady)
 			{
-				return Configure.bCommitted;
+				const FCatDomainCommandResult RemoveOnlyBait = Component->ConsumeInventoryQuantityFromAuthority(
+					FGuid::NewGuid(), Component->GetSnapshot().Revision, NormalBaitId);
+				Test.TestTrue(TEXT("Prepare normal-bait loadout with empty inventory"), RemoveOnlyBait.bCommitted);
+				return GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && bLoadoutReady
+					&& RemoveOnlyBait.bCommitted;
 			}
-			const FCatDomainCommandResult Grant = Component->GrantRunConsumableFromAuthority(
-				FGuid::NewGuid(), Component->GetSnapshot().Revision, NormalBaitId, NormalBaitQuantity);
-			Test.TestTrue(TEXT("Grant normal bait through public authority API"), Grant.bCommitted);
-			return Grant.bCommitted;
+			Test.TestTrue(TEXT("Prepare normal-bait inventory loadout"),
+				GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && bLoadoutReady);
+			return GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && bLoadoutReady;
 		}
 
 		~FFishingUseFixture()
@@ -479,7 +496,7 @@ bool FCatEquipmentFishingUseBreakTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-bool FCatEquipmentFishingUseLegacyGateTest::RunTest(const FString& Parameters)
+bool FCatEquipmentFishingUseDirectGateTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	using namespace CatEquipmentFishingUseTest;
@@ -491,27 +508,27 @@ bool FCatEquipmentFishingUseLegacyGateTest::RunTest(const FString& Parameters)
 
 	const FGuid SessionId = FGuid::NewGuid();
 	Fixture.Component->BeginFishingUse(SessionId, RodId, SpecialBaitId, FloatId, Fixture.Component->GetSnapshot().Revision);
-	const FCatEquipmentLoadoutSnapshot BeforeLegacy = Fixture.Component->GetSnapshot();
+	const FCatEquipmentLoadoutSnapshot BeforeDirect = Fixture.Component->GetSnapshot();
 	const FCatDomainCommandResult Configure = Fixture.Component->ConfigureLoadoutFromAuthority(
-		FGuid::NewGuid(), BeforeLegacy.Revision, RodId, SpecialBaitId, FloatId);
+		FGuid::NewGuid(), BeforeDirect.Revision, RodId, SpecialBaitId, FloatId);
 	TestFalse(TEXT("Active reservation blocks configure"), Configure.bCommitted);
-	TestSnapshotUnchanged(*this, TEXT("Blocked configure"), BeforeLegacy, Fixture.Component->GetSnapshot());
-	const FCatDomainCommandResult Repair = Fixture.Component->RepairRodAtCamp(FGuid::NewGuid(), BeforeLegacy.Revision, true);
+	TestSnapshotUnchanged(*this, TEXT("Blocked configure"), BeforeDirect, Fixture.Component->GetSnapshot());
+	const FCatDomainCommandResult Repair = Fixture.Component->RepairRodAtCamp(FGuid::NewGuid(), BeforeDirect.Revision, true);
 	TestFalse(TEXT("Active reservation blocks repair"), Repair.bCommitted);
-	TestSnapshotUnchanged(*this, TEXT("Blocked repair"), BeforeLegacy, Fixture.Component->GetSnapshot());
+	TestSnapshotUnchanged(*this, TEXT("Blocked repair"), BeforeDirect, Fixture.Component->GetSnapshot());
 	const FCatFishingFailureResult Failure = Fixture.Component->CommitFishingFailure(
-		FGuid::NewGuid(), BeforeLegacy.Revision, ECatFishingFailurePenalty::DamageRod);
-	TestFalse(TEXT("Active reservation blocks legacy fishing failure"), Failure.Command.bCommitted);
-	TestSnapshotUnchanged(*this, TEXT("Blocked fishing failure"), BeforeLegacy, Fixture.Component->GetSnapshot());
-	const FCatDomainCommandResult ConsumeReserved = Fixture.Component->ConsumeRunConsumableFromAuthority(
-		FGuid::NewGuid(), BeforeLegacy.Revision, SpecialBaitId);
+		FGuid::NewGuid(), BeforeDirect.Revision, ECatFishingFailurePenalty::DamageRod);
+	TestFalse(TEXT("Active reservation blocks direct fishing failure"), Failure.Command.bCommitted);
+	TestSnapshotUnchanged(*this, TEXT("Blocked fishing failure"), BeforeDirect, Fixture.Component->GetSnapshot());
+	const FCatDomainCommandResult ConsumeReserved = Fixture.Component->ConsumeInventoryQuantityFromAuthority(
+		FGuid::NewGuid(), BeforeDirect.Revision, SpecialBaitId);
 	TestFalse(TEXT("Consume cannot steal last reserved special bait"), ConsumeReserved.bCommitted);
-	TestSnapshotUnchanged(*this, TEXT("Blocked reserved bait consume"), BeforeLegacy, Fixture.Component->GetSnapshot());
+	TestSnapshotUnchanged(*this, TEXT("Blocked reserved bait consume"), BeforeDirect, Fixture.Component->GetSnapshot());
 
-	const FCatDomainCommandResult GrantSecond = Fixture.Component->GrantRunConsumableFromAuthority(
+	const FCatDomainCommandResult GrantSecond = Fixture.Component->GrantInventoryQuantityFromAuthority(
 		FGuid::NewGuid(), Fixture.Component->GetSnapshot().Revision, SpecialBaitId, 1);
 	TestTrue(TEXT("Granting another special bait remains allowed"), GrantSecond.bCommitted);
-	const FCatDomainCommandResult ConsumeUnreserved = Fixture.Component->ConsumeRunConsumableFromAuthority(
+	const FCatDomainCommandResult ConsumeUnreserved = Fixture.Component->ConsumeInventoryQuantityFromAuthority(
 		FGuid::NewGuid(), Fixture.Component->GetSnapshot().Revision, SpecialBaitId);
 	TestTrue(TEXT("Consume may deduct only the unreserved second bait"), ConsumeUnreserved.bCommitted);
 	TestEqual(TEXT("Reserved bait remains for commit"), QuantityOf(Fixture.Component->GetSnapshot(), SpecialBaitId), 1);

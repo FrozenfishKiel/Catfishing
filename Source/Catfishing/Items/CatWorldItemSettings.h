@@ -32,6 +32,14 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Pickup", meta=(ClampMin="1.0", Units="cm"))
 	double PickupCollisionRadiusCentimeters = 45.0;
 
+	/** 猫嘴上用于叼鱼的骨骼或 Socket；正式猫骨架当前使用 RigJaw1。 */
+	UPROPERTY(Config, EditAnywhere, Category="Pickup")
+	FName MouthCarrySocketName = TEXT("RigJaw1");
+
+	/** 死鱼 Actor 根节点附着到嘴部 Socket 后的局部微调；美术可只调该值，不改变碰撞根或鱼重量缩放。 */
+	UPROPERTY(Config, EditAnywhere, Category="Pickup")
+	FTransform MouthCarryRelativeTransform = FTransform::Identity;
+
 	UPROPERTY(Config, EditAnywhere, Category="Presentation")
 	TSoftObjectPtr<USkeletalMesh> LandedFishMesh;
 

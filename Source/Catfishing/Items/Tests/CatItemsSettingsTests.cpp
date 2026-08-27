@@ -22,21 +22,22 @@ bool FCatItemsSettingsCapacityMappingTest::RunTest(const FString& Parameters)
 		return false;
 	}
 
-	Settings->PersonalGuardCapacity = 0;
 	Settings->SharedFishTankCapacity = 0;
-	TestEqual(TEXT("未裁个人鱼护容量为 0"), Settings->GetContainerCapacity(static_cast<uint8>(ECatContainerKind::PersonalGuard)), 0);
+	Settings->FishGuardCapacity = 0;
+	TestEqual(TEXT("旧个人鱼护始终关闭"), Settings->GetContainerCapacity(static_cast<uint8>(ECatContainerKind::PersonalGuard)), 0);
 	TestEqual(TEXT("未裁共享鱼缸容量为 0"), Settings->GetContainerCapacity(static_cast<uint8>(ECatContainerKind::SharedFishTank)), 0);
+	TestEqual(TEXT("未裁地面鱼护容量为 0"), Settings->GetContainerCapacity(static_cast<uint8>(ECatContainerKind::FishGuard)), 0);
 	TestEqual(TEXT("未知容器种类容量为 0"), Settings->GetContainerCapacity(static_cast<uint8>(ECatContainerKind::Unknown)), 0);
 
-	Settings->PersonalGuardCapacity = -2;
 	Settings->SharedFishTankCapacity = -5;
-	TestEqual(TEXT("非正个人鱼护容量被收口为 0"), Settings->GetContainerCapacity(static_cast<uint8>(ECatContainerKind::PersonalGuard)), 0);
+	Settings->FishGuardCapacity = -2;
 	TestEqual(TEXT("非正共享鱼缸容量被收口为 0"), Settings->GetContainerCapacity(static_cast<uint8>(ECatContainerKind::SharedFishTank)), 0);
+	TestEqual(TEXT("非正地面鱼护容量被收口为 0"), Settings->GetContainerCapacity(static_cast<uint8>(ECatContainerKind::FishGuard)), 0);
 
-	Settings->PersonalGuardCapacity = 2;
 	Settings->SharedFishTankCapacity = 5;
-	TestEqual(TEXT("个人鱼护读取显式容量"), Settings->GetContainerCapacity(static_cast<uint8>(ECatContainerKind::PersonalGuard)), 2);
+	Settings->FishGuardCapacity = 2;
 	TestEqual(TEXT("共享鱼缸读取显式容量"), Settings->GetContainerCapacity(static_cast<uint8>(ECatContainerKind::SharedFishTank)), 5);
+	TestEqual(TEXT("地面鱼护读取显式容量"), Settings->GetContainerCapacity(static_cast<uint8>(ECatContainerKind::FishGuard)), 2);
 	return !HasAnyErrors();
 }
 

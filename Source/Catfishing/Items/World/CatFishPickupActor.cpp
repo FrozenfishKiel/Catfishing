@@ -110,6 +110,170 @@ void ACatFishPickupActor::ApplyVisualScale()
 	FishMesh->SetRelativeScale3D(BaseScale * Scale);
 }
 
+ACatFishPickupActor* ACatFishPickupActor::FindCarriedFish(const ACatCharacter* Character)
+{
+	if (!Character)
+	{
+		return nullptr;
+	}
+	TArray<AActor*> AttachedActors;
+	Character->GetAttachedActors(AttachedActors, false, true);
+	for (AActor* AttachedActor : AttachedActors)
+	{
+		ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(AttachedActor);
+		if (Fish && Fish->PresentationState.State == ECatFishPickupState::Carried
+			&& Fish->GetAttachParentActor() == Character)
+		{
+			return Fish;
+		}
+	}
+	return nullptr;
+}
+
+bool ACatFishPickupActor::BeginMouthCarryFromAuthority(ACatCharacter* Character, APlayerState* PlayerState)
+{
+	if (!HasAuthority() || !Character || !PlayerState || PresentationState.State != ECatFishPickupState::Available
+		|| FindCarriedFish(Character) || !Character->GetMesh())
+	{
+		return false;
+	}
+	const UCatWorldItemSettings* Settings = GetDefault<UCatWorldItemSettings>();
+	const FName SocketName = Character->GetMesh()->GetSkeletalMeshAsset() && Settings
+		? Settings->MouthCarrySocketName : NAME_None;
+	const FTransform RelativeTransform = Settings ? Settings->MouthCarryRelativeTransform : FTransform::Identity;
+	AuthorityCarrier = Character;
+	Character->OnDestroyed.AddDynamic(this, &ThisClass::HandleAuthorityCarrierDestroyed);
+	SetOwner(Character);
+	SetInstigator(Character);
+	PresentationState.State = ECatFishPickupState::Carried;
+	PresentationState.CarriedByPlayerState = PlayerState;
+	InteractionSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	ApplyLocalFocus(false);
+	if (!AttachToComponent(Character->GetMesh(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, SocketName))
+	{
+		Character->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleAuthorityCarrierDestroyed);
+		AuthorityCarrier.Reset();
+		SetOwner(nullptr);
+		SetInstigator(nullptr);
+		PresentationState.State = ECatFishPickupState::Available;
+		PresentationState.CarriedByPlayerState = nullptr;
+		InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		return false;
+	}
+	SetActorRelativeTransform(RelativeTransform);
+	ForceNetUpdate();
+	Character->ForceNetUpdate();
+	return GetAttachParentActor() == Character;
+}
+
+void ACatFishPickupActor::ApplyCarriedAttachmentFromPresentation()
+{
+	if (HasAuthority() || PresentationState.State != ECatFishPickupState::Carried
+		|| !PresentationState.CarriedByPlayerState)
+	{
+		return;
+	}
+	ACatCharacter* Character = Cast<ACatCharacter>(PresentationState.CarriedByPlayerState->GetPawn());
+	if (!Character || !Character->GetMesh() || GetAttachParentActor() == Character)
+	{
+		return;
+	}
+	const UCatWorldItemSettings* Settings = GetDefault<UCatWorldItemSettings>();
+	const FName SocketName = Character->GetMesh()->GetSkeletalMeshAsset() && Settings
+		? Settings->MouthCarrySocketName : NAME_None;
+	const FTransform RelativeTransform = Settings ? Settings->MouthCarryRelativeTransform : FTransform::Identity;
+	AttachToComponent(Character->GetMesh(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, SocketName);
+	SetActorRelativeTransform(RelativeTransform);
+}
+
+void ACatFishPickupActor::ReleaseMouthCarryFromAuthority(const FVector& DropLocation)
+{
+	if (!HasAuthority() || PresentationState.State != ECatFishPickupState::Carried)
+	{
+		return;
+	}
+	if (ACatCharacter* Character = AuthorityCarrier.Get())
+	{
+		Character->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleAuthorityCarrierDestroyed);
+	}
+	AuthorityCarrier.Reset();
+	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	SetOwner(nullptr);
+	SetInstigator(nullptr);
+	SetActorLocation(DropLocation, false, nullptr, ETeleportType::TeleportPhysics);
+	PresentationState.State = ECatFishPickupState::Available;
+	PresentationState.CarriedByPlayerState = nullptr;
+	if (InteractionSphere)
+	{
+		InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	}
+	ForceNetUpdate();
+}
+
+void ACatFishPickupActor::HandleAuthorityCarrierDestroyed(AActor* DestroyedActor)
+{
+	const FVector DropLocation = DestroyedActor ? DestroyedActor->GetActorLocation() : GetActorLocation();
+	ReleaseMouthCarryFromAuthority(DropLocation);
+}
+
+FCatCaptureCommitResult ACatFishPickupActor::StoreInFishGuardFromAuthority(AController* RequestingController,
+	const FGuid RequestId, const FGuid TargetContainerId, const int64 ExpectedTargetRevision)
+{
+	FCatCaptureCommitResult Result;
+	Result.Command.RequestId = RequestId;
+	Result.Command.Error = ECatDomainCommandError::InvalidPayload;
+	APlayerState* PlayerState = RequestingController ? RequestingController->PlayerState : nullptr;
+	ACatCharacter* Character = RequestingController ? Cast<ACatCharacter>(RequestingController->GetPawn()) : nullptr;
+	const FString StableNetId = PlayerState && PlayerState->GetUniqueId().IsValid()
+		? PlayerState->GetUniqueId()->ToString() : FString();
+	UCatItemsService* Items = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
+	UCatRunImprintService* Imprint = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr;
+	if (!HasAuthority() || !RequestId.IsValid() || !TargetContainerId.IsValid() || StableNetId.IsEmpty()
+		|| !Character || PresentationState.State != ECatFishPickupState::Carried
+		|| GetAttachParentActor() != Character || FindCarriedFish(Character) != this)
+	{
+		return Result;
+	}
+	if (!Items || !Imprint || !FishDefinition || !Imprint->CanRecordCommittedCapture())
+	{
+		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
+		return Result;
+	}
+	FCatCaptureCommitCommand Command;
+	Command.Context.RequestId = RequestId;
+	Command.Context.StableNetId = StableNetId;
+	Command.Context.ExpectedRevision = ExpectedTargetRevision;
+	Command.FishingSessionId = PresentationState.FishingSessionId;
+	Command.FishInstanceId = PresentationState.FishInstanceId;
+	Command.FishDefinitionId = PresentationState.FishDefinitionId;
+	Command.TargetContainerId = TargetContainerId;
+	Command.WeightKilograms = PresentationState.WeightKilograms;
+	Command.SacrificeContribution = FishDefinition->SacrificeContribution;
+	Result = Items->CommitCapture(Command);
+	const bool bCommitted = Result.Command.bCommitted
+		|| (Result.Command.Error == ECatDomainCommandError::AlreadyResolved
+			&& Result.Committed.FishInstance.FishInstanceId == PresentationState.FishInstanceId
+			&& Result.Committed.ContainerId == TargetContainerId);
+	if (!bCommitted)
+	{
+		return Result;
+	}
+	ArchiveCommittedCapture(Result.Committed, StableNetId);
+	if (ACatCharacter* Carrier = AuthorityCarrier.Get())
+	{
+		Carrier->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleAuthorityCarrierDestroyed);
+	}
+	AuthorityCarrier.Reset();
+	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	SetOwner(nullptr);
+	SetInstigator(nullptr);
+	PresentationState.CarriedByPlayerState = nullptr;
+	SetActorEnableCollision(false);
+	SetActorHiddenInGame(true);
+	Destroy();
+	return Result;
+}
+
 void ACatFishPickupActor::ApplyLocalFocus(const bool bFocused)
 {
 	bLocallyFocused = bFocused && PresentationState.State == ECatFishPickupState::Available;
@@ -119,6 +283,14 @@ void ACatFishPickupActor::ApplyLocalFocus(const bool bFocused)
 		FishMesh->SetCustomDepthStencilValue(Settings ? Settings->FocusStencilValue : 1);
 		FishMesh->SetRenderCustomDepth(bLocallyFocused);
 	}
+}
+
+bool ACatFishPickupActor::CanInteract_Implementation(AController* RequestingController) const
+{
+	return RequestingController
+		&& PresentationState.State == ECatFishPickupState::Available
+		&& PresentationState.FishingSessionId.IsValid()
+		&& PresentationState.FishInstanceId.IsValid();
 }
 
 void ACatFishPickupActor::BeginLocalFocus_Implementation()
@@ -137,9 +309,15 @@ FText ACatFishPickupActor::GetInteractionPrompt_Implementation() const
 	{
 		return FText::GetEmpty();
 	}
-	return FText::Format(NSLOCTEXT("Catfishing", "FishPickupPrompt", "E 拾取 {0}  {1} kg"),
+	return FText::Format(NSLOCTEXT("Catfishing", "FishPickupPrompt", "叼起 {0}  {1} kg"),
 		FText::FromName(PresentationState.FishDefinitionId),
 		FText::AsNumber(PresentationState.WeightKilograms));
+}
+
+double ACatFishPickupActor::GetInteractionRadius_Implementation() const
+{
+	const UCatInteractionSettings* Settings = GetDefault<UCatInteractionSettings>();
+	return Settings ? Settings->MaximumServerInteractionDistanceCentimeters : 0.0;
 }
 
 bool ACatFishPickupActor::IsAuthorityRequestSpatiallyValid(const AController* RequestingController) const
@@ -164,24 +342,35 @@ bool ACatFishPickupActor::IsAuthorityRequestSpatiallyValid(const AController* Re
 	return !bHit || Hit.GetActor() == this;
 }
 
-void ACatFishPickupActor::RequestInteractionFromAuthority_Implementation(AController* RequestingController,
+// 嘴叼拾取流程：客户端只把同一个 Actor 接口请求转发到服务器；服务器复核身份、身体状态和空间后，
+// 把这条世界鱼附着到角色嘴部。鱼仍由本 Actor 承载，不进入 Equipment 背包，也不会在拾取时猜测目标鱼护。
+bool ACatFishPickupActor::Interact_Implementation(AController* RequestingController,
 	const FGuid RequestId)
 {
-	const APlayerState* PlayerState = RequestingController ? RequestingController->PlayerState : nullptr;
+	if (!HasAuthority())
+	{
+		ACatfishingPlayerController* PlayerController = Cast<ACatfishingPlayerController>(RequestingController);
+		if (!PlayerController || !PlayerController->IsLocalController() || !RequestId.IsValid())
+		{
+			return false;
+		}
+		PlayerController->ServerRequestInteraction(this, RequestId);
+		return true;
+	}
+
+	APlayerState* PlayerState = RequestingController ? RequestingController->PlayerState : nullptr;
 	const FString StableNetId = PlayerState && PlayerState->GetUniqueId().IsValid()
 		? PlayerState->GetUniqueId()->ToString() : FString();
 	const FString CacheKey = FString::Printf(TEXT("%s|%s"), *StableNetId,
 		*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 	if (PickupTerminalByRequester.Contains(CacheKey))
 	{
-		return;
+		return true;
 	}
 	FCatDomainCommandResult Terminal;
 	Terminal.RequestId = RequestId;
 	ACatCharacter* Character = RequestingController ? Cast<ACatCharacter>(RequestingController->GetPawn()) : nullptr;
 	UCatConditionComponent* Condition = Character ? Character->GetConditionComponent() : nullptr;
-	UCatItemsService* Items = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
-	UCatRunImprintService* Imprint = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr;
 	if (!HasAuthority() || !bIdentityInitialized || !RequestId.IsValid() || StableNetId.IsEmpty())
 	{
 		Terminal.Error = ECatDomainCommandError::InvalidPayload;
@@ -194,47 +383,22 @@ void ACatFishPickupActor::RequestInteractionFromAuthority_Implementation(AContro
 	{
 		Terminal.Error = ECatDomainCommandError::PermissionDenied;
 	}
-	else if (!Items || !Imprint || !FishDefinition || !Imprint->CanRecordCommittedCapture())
+	else if (!FishDefinition)
 	{
 		Terminal.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
+	else if (FindCarriedFish(Character))
+	{
+		Terminal.Error = ECatDomainCommandError::InvalidPhase;
+	}
 	else
 	{
-		const FGuid GuardId = Character->GetPersonalFishGuardId();
-		FCatContainerSnapshot GuardSnapshot;
-		if (!GuardId.IsValid() || !Items->TryGetContainerSnapshot(GuardId, GuardSnapshot))
-		{
-			Terminal.Error = ECatDomainCommandError::NotFound;
-		}
-		else
-		{
-			FCatCaptureCommitCommand Command;
-			Command.Context.RequestId = RequestId;
-			Command.Context.StableNetId = StableNetId;
-			Command.Context.ExpectedRevision = GuardSnapshot.Revision;
-			Command.FishingSessionId = PresentationState.FishingSessionId;
-			Command.FishInstanceId = PresentationState.FishInstanceId;
-			Command.FishDefinitionId = PresentationState.FishDefinitionId;
-			Command.TargetContainerId = GuardId;
-			Command.WeightKilograms = PresentationState.WeightKilograms;
-			Command.SacrificeContribution = FishDefinition->SacrificeContribution;
-			const FCatCaptureCommitResult CaptureResult = Items->CommitCapture(Command);
-			Terminal = CaptureResult.Command;
-			if (CaptureResult.Command.bCommitted)
-			{
-				const FCatFishPickupPresentationState Previous = PresentationState;
-				PresentationState.State = ECatFishPickupState::Claimed;
-				PresentationState.ClaimedByPlayerState = RequestingController->PlayerState;
-				InteractionSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-				ApplyLocalFocus(false);
-				ForceNetUpdate();
-				BP_OnPickupPresentationChanged(Previous, PresentationState);
-				ArchiveCommittedCapture(CaptureResult.Committed, StableNetId);
-				SetLifeSpan(0.25f);
-			}
-		}
+		Terminal.bCommitted = BeginMouthCarryFromAuthority(Character, PlayerState);
+		Terminal.Error = Terminal.bCommitted ? ECatDomainCommandError::None
+			: ECatDomainCommandError::DependencyUnavailable;
 	}
 	PickupTerminalByRequester.Add(CacheKey, Terminal);
+	return Terminal.bCommitted;
 }
 
 void ACatFishPickupActor::ArchiveCommittedCapture(const FCatCaptureCommittedResult& Committed,
@@ -277,13 +441,18 @@ void ACatFishPickupActor::ArchiveCommittedCapture(const FCatCaptureCommittedResu
 void ACatFishPickupActor::OnRep_PresentationState(const FCatFishPickupPresentationState& Previous)
 {
 	ApplyVisualScale();
-	if (PresentationState.State != ECatFishPickupState::Available)
+	if (PresentationState.State == ECatFishPickupState::Carried)
 	{
 		if (InteractionSphere)
 		{
 			InteractionSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		}
 		ApplyLocalFocus(false);
+		ApplyCarriedAttachmentFromPresentation();
+	}
+	else if (InteractionSphere)
+	{
+		InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	}
 	BP_OnPickupPresentationChanged(Previous, PresentationState);
 }

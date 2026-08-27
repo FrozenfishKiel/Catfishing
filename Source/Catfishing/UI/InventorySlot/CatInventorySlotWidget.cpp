@@ -52,8 +52,8 @@ FReply UCatInventorySlotWidget::NativeOnMouseButtonDown(const FGeometry& InGeome
 }
 
 // 拖拽流程：
-// 1. 只有 Items 容器物体允许拖拽；当前鱼竿槽能选中查看，但不能被当成后端容器源。
-// 2. 容器物体拖拽冻结一份源格只读投影，避免刷新 WrapBox 后继续依赖旧 Widget 指针。
+// 1. 只有随身库存物品和 Items 容器物体允许拖拽；空格可作为目标，但不能作为源。
+// 2. 拖拽会冻结一份源格只读投影，避免刷新 WrapBox 后继续依赖旧 Widget 指针。
 // 3. Operation 使用独立临时文字控件作为拖拽视觉；真实移动必须等目标格 NativeOnDrop 广播给 PageController 后提交服务器。
 void UCatInventorySlotWidget::NativeOnDragDetected(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent,
 	UDragDropOperation*& OutOperation)
@@ -61,9 +61,12 @@ void UCatInventorySlotWidget::NativeOnDragDetected(const FGeometry& InGeometry, 
 	(void)InGeometry;
 	(void)InMouseEvent;
 	OutOperation = nullptr;
-	if (!LastSlotView.bCanDrag || LastSlotView.SlotSource != ECatInventorySlotSource::ContainerObject
-		|| !LastSlotView.bOccupied || LastSlotView.ObjectKind == ECatContainedObjectKind::Unknown
-		|| !LastSlotView.ObjectInstanceId.IsValid())
+	const bool bInventoryDrag = LastSlotView.SlotSource == ECatInventorySlotSource::InventoryObject
+		&& LastSlotView.bOccupied && LastSlotView.InventorySlotIndex != INDEX_NONE;
+	const bool bContainerDrag = LastSlotView.SlotSource == ECatInventorySlotSource::ContainerObject
+		&& LastSlotView.bOccupied && LastSlotView.ObjectKind != ECatContainedObjectKind::Unknown
+		&& LastSlotView.ObjectInstanceId.IsValid();
+	if (!LastSlotView.bCanDrag || (!bInventoryDrag && !bContainerDrag))
 	{
 		return;
 	}
@@ -84,7 +87,7 @@ void UCatInventorySlotWidget::NativeOnDragDetected(const FGeometry& InGeometry, 
 
 // Drop 流程：
 // 1. 只接受本类创建的 UCatInventoryDragDropOperation，其他 UMG 拖拽交回父类。
-// 2. 源和目标都必须是 Items 容器槽；当前鱼竿槽不接收 Drop，避免把 Equipment 当容器 index 提交。
+// 2. 源和目标必须同为随身库存格或同为 Items 容器槽，避免把 Equipment 格子和 Items 容器互相提交。
 // 3. 本格只广播源和目标快照，不做本地数组搬运；服务器复制回来后 Model 会重建最终显示。
 bool UCatInventorySlotWidget::NativeOnDrop(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent,
 	UDragDropOperation* InOperation)
@@ -92,11 +95,19 @@ bool UCatInventorySlotWidget::NativeOnDrop(const FGeometry& InGeometry, const FD
 	(void)InGeometry;
 	(void)InDragDropEvent;
 	const UCatInventoryDragDropOperation* DragOperation = Cast<UCatInventoryDragDropOperation>(InOperation);
-	if (!DragOperation || LastSlotView.SlotSource != ECatInventorySlotSource::ContainerObject
-		|| DragOperation->SourceSlot.SlotSource != ECatInventorySlotSource::ContainerObject
-		|| !DragOperation->SourceSlot.bOccupied
-		|| DragOperation->SourceSlot.ObjectKind == ECatContainedObjectKind::Unknown
-		|| !DragOperation->SourceSlot.ObjectInstanceId.IsValid())
+	const bool bInventoryDrop = DragOperation
+		&& LastSlotView.SlotSource == ECatInventorySlotSource::InventoryObject
+		&& DragOperation->SourceSlot.SlotSource == ECatInventorySlotSource::InventoryObject
+		&& DragOperation->SourceSlot.bOccupied
+		&& LastSlotView.InventorySlotIndex != INDEX_NONE
+		&& DragOperation->SourceSlot.InventorySlotIndex != INDEX_NONE;
+	const bool bContainerDrop = DragOperation
+		&& LastSlotView.SlotSource == ECatInventorySlotSource::ContainerObject
+		&& DragOperation->SourceSlot.SlotSource == ECatInventorySlotSource::ContainerObject
+		&& DragOperation->SourceSlot.bOccupied
+		&& DragOperation->SourceSlot.ObjectKind != ECatContainedObjectKind::Unknown
+		&& DragOperation->SourceSlot.ObjectInstanceId.IsValid();
+	if (!DragOperation || (!bInventoryDrop && !bContainerDrop))
 	{
 		return Super::NativeOnDrop(InGeometry, InDragDropEvent, InOperation);
 	}

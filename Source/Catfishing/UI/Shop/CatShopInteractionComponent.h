@@ -1,7 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "UI/Interaction/CatInteractionTargetComponent.h"
+#include "Components/ActorComponent.h"
 #include "CatShopInteractionComponent.generated.h"
 
 class APlayerController;
@@ -9,9 +9,9 @@ class UCatShopModel;
 class UCatShopPageController;
 class UCatShopWidget;
 
-/** 挂在商店交互对象上的 UI 拥有组件；商店页面由交互对象打开，不由 LocalPlayer 预创建。 */
+/** 商店 Actor 的 UI 生命周期助手；不是第二个交互入口，E 键只调用 Owner 上的 ICatInteractable::Interact。 */
 UCLASS(ClassGroup = (Catfishing), BlueprintType, Blueprintable, meta = (BlueprintSpawnableComponent))
-class CATFISHING_API UCatShopInteractionComponent : public UCatInteractionTargetComponent
+class CATFISHING_API UCatShopInteractionComponent : public UActorComponent
 {
 	GENERATED_BODY()
 
@@ -21,15 +21,6 @@ public:
 
 	/** 组件离开 World 时关闭当前商店 UI；避免交互对象销毁后旧页面继续持有 Controller。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
-
-	/** 商店目标的可交互判断；在基类通用 gate 之外拒绝已经打开的同一商店页面。 */
-	virtual bool CanInteract_Implementation(APlayerController* PlayerController) const override;
-
-	/** 通用交互确认入口；被 LocalPlayer 交互控制器调用后打开商店 UI。 */
-	virtual bool Interact_Implementation(APlayerController* PlayerController) override;
-
-	/** 商店提示文本；默认返回“商店”，可由蓝图覆盖组件上的显示文本。 */
-	virtual FText GetInteractionTargetText_Implementation(APlayerController* PlayerController) const override;
 
 	/** 为指定玩家打开商店 UI；创建 Model/PageController/WBP 后由本组件拥有本次实例。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Shop")

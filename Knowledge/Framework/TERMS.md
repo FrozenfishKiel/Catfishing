@@ -34,7 +34,7 @@ _Avoid_: MatchState、地图生命周期。
 **Run Public State**：GameState 复制的公开局快照，客户端只读。
 _Avoid_: 客户端 Run 真相。
 
-**Cat Character**：局内猫身体 Actor，同时是 ASC Owner/Avatar，持有身体组件和个人鱼护出口。
+**Cat Character**：局内猫身体 Actor，同时是 ASC Owner/Avatar，持有身体组件和装备入口，不持有个人鱼护。
 _Avoid_: 玩家档案、PlayerState 身体。
 
 **Condition**：Wet、Downed、Recovery 等离散身体状态，由 `UCatConditionComponent` 持有。

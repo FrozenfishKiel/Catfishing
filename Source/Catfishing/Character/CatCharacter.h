@@ -11,14 +11,14 @@
 class UAbilitySystemComponent;
 class UCatAbilitySystemComponent;
 class UCatSurvivalAttributeSet;
-class UCatContainerReplicationComponent;
 class UCatConditionComponent;
 class UCatEquipmentComponent;
 class UCatGrowthComponent;
 
 /**
- * Lake 的唯一玩法身体；同时宿主 Character-owned ASC、Condition、Growth、Equipment 与个人鱼护复制出口。
+ * Lake 的唯一玩法身体；同时宿主 Character-owned ASC、Condition、Growth 与 Equipment。
  * Character 同时作为 ASC Owner/Avatar；丢失占有或销毁时先收口 Fishing/Social，所有局内事实都不上移到 Profile/Online。
+ * 鱼护是独立箱子式库存对象，不由 Character 创建、注册或复制；鱼以外的随身物品走 Equipment 的统一库存数组。
  */
 UCLASS()
 class CATFISHING_API ACatCharacter : public ACharacter, public IAbilitySystemInterface
@@ -26,15 +26,12 @@ class CATFISHING_API ACatCharacter : public ACharacter, public IAbilitySystemInt
 	GENERATED_BODY()
 
 public:
-	/** 构造 ASC/属性集、Condition、Growth、Equipment 与个人鱼护出口，开启组件复制但不在 CDO 写任何运行数值。 */
+	/** 构造 ASC/属性集、Condition、Growth 与 Equipment，开启组件复制但不在 CDO 写任何运行数值。 */
 	ACatCharacter();
 
 	/** 返回 Character 持有的唯一 ASC；runtime gate 关闭也返回组件，让外部只读接缝不需要第二条查找路径。 */
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
 	UCatAbilitySystemComponent* GetCatAbilitySystemComponent() const;
-
-	/** 返回 authority 为本 Character 注册的一局个人鱼护 ID；未注册时为无效 GUID。 */
-	FGuid GetPersonalFishGuardId() const;
 
 	/** 返回 Character 唯一离散身体状态组件；Wet/Downed/恢复不进入 PlayerState 或 Profile。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Survival")
@@ -129,7 +126,7 @@ protected:
 	/** 组件注册完成后幂等刷新 Owner/Avatar；未裁 runtime 会清除引擎自动建立的 ActorInfo 并保持 fail-closed。 */
 	virtual void BeginPlay() override;
 
-	/** 父类完成占有后刷新 Owner/Avatar 和一次初值；authority 才授正式 AbilitySet 并注册个人鱼护，客户端不 GiveAbility。 */
+	/** 父类完成占有后刷新 Owner/Avatar 和一次初值；authority 才授正式 AbilitySet 并应用可选 starter。 */
 	virtual void PossessedBy(AController* NewController) override;
 
 	/** Controller 复制变化后刷新拥有客户端 ActorInfo；Controller 失效时 ClearActorInfo，不保留失效 Avatar。 */
@@ -141,7 +138,7 @@ protected:
 	/** 失去占有前先收口 Fishing/Social 并取消 Ability；父类断开 Controller 后才清 ActorInfo。 */
 	virtual void UnPossessed() override;
 
-	/** Actor 离开 World 时幂等收口 Fishing/Social、解注册鱼护，再取消 Ability/清 ActorInfo，最后交父类销毁。 */
+	/** Actor 离开 World 时幂等收口 Fishing/Social，再取消 Ability/清 ActorInfo，最后交父类销毁。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
@@ -154,10 +151,7 @@ private:
 	/** authority 新 Character 首次 ActorInfo 就绪时整体应用三项显式初值；重占有不重置已消耗的局内状态。 */
 	void ApplyInitialAttributesOnce();
 
-	/** authority 从 PlayerState::UniqueId 注册个人鱼护；StableNetId 只进入 Items 私有记录，不进入复制组件。 */
-	void RegisterPersonalFishGuard();
-
-	/** 受控 Starter 兜底入口；正式默认关闭，只在设置显式打开时为仍为空的 Loadout 走一次权威校验装配。 */
+	/** 受控 Starter 兜底入口；正式默认关闭，只在设置显式打开时为仍为空的选择走一次“背包已有物品”校验。 */
 	void ApplyStarterLoadoutIfConfigured();
 
 	/** 在失去占有或销毁前终止本 Character 参与的钓鱼与偷鱼协议，随后才允许身体和 ASC 清理。 */
@@ -171,10 +165,6 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Survival", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatSurvivalAttributeSet> SurvivalAttributes;
 
-	/** 个人鱼护的只读复制出口；数组只由 authority Items Service 提交，本 Character 不提供写口。 */
-	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Items", meta = (AllowPrivateAccess = "true"))
-	TObjectPtr<UCatContainerReplicationComponent> PersonalFishGuard;
-
 	/** 猫身体唯一离散状态组件；复制 Wet/Downed/Recovery，数值仍由 Survival AttributeSet 拥有。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Survival", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatConditionComponent> ConditionComponent;
@@ -186,9 +176,6 @@ private:
 	/** 一局功能型装配、耗材与鱼竿耐久宿主；没有等级、词条、战力或偷取接口。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Equipment", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatEquipmentComponent> EquipmentComponent;
-
-	/** 本 Character 一局内的个人鱼护 ID；由 authority 首次注册生成，不复制成第二份容器快照。 */
-	FGuid PersonalFishGuardId;
 
 	/** authority 首次正式授予的默认集合句柄；重占有保留，Character 最终销毁时成组撤销。 */
 	FCatGrantedAbilitySetHandles DefaultAbilitySetHandles;

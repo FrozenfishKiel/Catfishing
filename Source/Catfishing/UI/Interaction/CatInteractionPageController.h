@@ -6,62 +6,45 @@
 
 class APlayerController;
 class UCatInteractionPromptWidget;
-class UCatInteractionTargetComponent;
-class UEnhancedInputComponent;
-class UInputAction;
+class UCatInteractionTargetingComponent;
 
-/** 本地交互提示和确认键控制器；它只扫描通用交互目标，不知道商店、鱼缸或祭坛的具体 UI。 */
+/**
+ * 本地交互提示控制器。E 键只由 PlayerController 的 Native Input Tag 绑定；
+ * 本对象只订阅同一个准星目标组件并把 ICatInteractable 的提示投影到正式 WBP。
+ */
 UCLASS()
 class CATFISHING_API UCatInteractionPageController : public UObject
 {
 	GENERATED_BODY()
 
 public:
-	/** 绑定当前本地 Controller 和提示 View；成功后安装确认键并开始扫描最近交互目标。 */
+	/** 绑定当前本地 Controller 的唯一 TargetingComponent 与提示 View。 */
 	bool Bind(APlayerController* InController, UCatInteractionPromptWidget* InPromptView);
 
-	/** 停止扫描、移除确认键绑定、隐藏提示并清空当前目标。 */
+	/** 移除目标变化订阅，隐藏提示并释放弱引用。 */
 	void Unbind();
 
-	/** 主动刷新最近交互目标和提示文本；Pawn 移动、目标开关或输入后都可调用。 */
+	/** 主动刷新准星目标；不扫描第二套靠近式组件。 */
 	void RefreshFocusedTarget();
 
-	/** 对当前最近目标执行确认交互；没有目标时先刷新一次再决定是否调用。 */
+	/** 便于 UI/自动化显式请求同一次交互；正常 E 键由 PlayerController 直接调用 TargetingComponent。 */
 	void InteractWithFocusedTarget();
 
 private:
-	/** 安装交互确认 Action；只 BindAction，不 AddMappingContext、不 MapKey。 */
-	void InstallInteractionInput();
-
-	/** 移除交互确认 Action；从安装时记录的 EnhancedInputComponent 精确删除绑定。 */
-	void RemoveInteractionInput();
-
-	/** 用当前目标和 Settings 中的确认键名渲染提示；无目标时保持隐藏。 */
+	void HandleTargetChanged(AActor* PreviousTarget, AActor* CurrentTarget);
 	void RenderPrompt();
 
-	/** 当前本地 Controller；扫描、输入和交互调用都只作用于它。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APlayerController> BoundPlayerController;
 
-	/** 当前交互提示 View；它只显示文本，不拥有世界目标。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatInteractionPromptWidget> BoundPromptView;
 
-	/** 当前距离最近且可用的交互目标；目标自身拥有实际交互逻辑。 */
 	UPROPERTY(Transient)
-	TWeakObjectPtr<UCatInteractionTargetComponent> FocusedTarget;
+	TWeakObjectPtr<UCatInteractionTargetingComponent> BoundTargetingComponent;
 
-	/** 当前绑定的确认 Action；保存强引用是为了成对移除输入绑定。 */
 	UPROPERTY(Transient)
-	TObjectPtr<UInputAction> AppliedInteractionAction;
+	TWeakObjectPtr<AActor> FocusedTarget;
 
-	/** 确认 Action 实际绑定的 EnhancedInputComponent；换 Controller 时从原组件精确移除。 */
-	UPROPERTY(Transient)
-	TWeakObjectPtr<UEnhancedInputComponent> BoundInteractionInputComponent;
-
-	/** EnhancedInput 返回的绑定句柄；0 表示没有有效绑定。 */
-	uint32 InteractionInputBindingHandle = 0;
-
-	/** 定时扫描最近交互目标的句柄；Unbind 和 World teardown 时清掉。 */
-	FTimerHandle InteractionScanTimerHandle;
+	FDelegateHandle TargetChangedHandle;
 };

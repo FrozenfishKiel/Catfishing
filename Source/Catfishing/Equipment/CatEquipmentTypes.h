@@ -12,7 +12,7 @@ enum class ECatEquipmentKind : uint8
 	Unknown,
 	/** 有耐久的鱼竿。 */
 	Rod,
-	/** 鱼饵装配类别；普通饵和特殊饵都可以进入一局耗材数量栈，特殊标记只影响偏好、表现或额外失败惩罚语义。 */
+	/** 鱼饵装配类别；普通饵和特殊饵都作为数量型库存物品进入统一库存，特殊标记只影响偏好、表现或额外失败惩罚语义。 */
 	Bait,
 	/** 四种正式玩法路线之一的鱼漂。 */
 	Float,
@@ -40,46 +40,48 @@ enum class ECatFishingFailurePenalty : uint8
 	DamageRod
 };
 
-/** 一局耗材堆叠；数量随 World/Character 清空，不进入 Profile。 */
+/** 一局随身库存的单个格子；数组下标就是玩家看到和操作的格子位置，空格保持默认值。 */
 USTRUCT(BlueprintType)
-struct FCatRunConsumableStack
+struct FCatRunInventorySlot
 {
 	GENERATED_BODY()
 
-	/** EquipmentDefinition 稳定 ID。 */
+	/** 这个格子里物品对应的 EquipmentDefinition 稳定 ID；为空表示格子没有内容，商店、使用和 UI 都按同一个库存数组读取它。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName DefinitionId = NAME_None;
 
-	/** 当前一局数量；只由 authority EquipmentComponent 写入。 */
+	/** 这个格子里的堆叠数量；装备型物品固定为 1，数量型物品按配置上限在同一个格子内堆叠。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 Quantity = 0;
 };
 
-/** Character 当前功能型装配的复制读模型；解锁与跨局选择仍在本地 Profile。 */
+/** Character 当前随身库存与钓鱼选择的复制读模型；解锁仍在本地 Profile，局内持有量随 Character/World 清空。 */
 USTRUCT(BlueprintType)
 struct FCatEquipmentLoadoutSnapshot
 {
 	GENERATED_BODY()
 
-	/** 每次装配、耗材、耐久或维修提交后递增。 */
+	/** 每次选择、库存物品、耐久或维修提交后递增；前端和钓鱼命令用它做并发前提。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 
-	/** 当前鱼竿稳定 ID。 */
+	/** 当前选中的鱼竿稳定 ID；它是钓鱼选择，不代表一个独立装备栏，是否已获得由随身库存证明。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName RodDefinitionId = NAME_None;
 
-	/** 当前鱼饵稳定 ID，表示装配选择本身；这份饵还能不能用于 Fishing 由一局耗材数量栈证明。 */
+	/** 当前选中的鱼饵稳定 ID；这份饵还能不能用于 Fishing 由同 ID 的库存数量证明。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName BaitDefinitionId = NAME_None;
 
-	/** 当前鱼漂稳定 ID。 */
+	/** 当前选中的鱼漂稳定 ID；它是钓鱼选择，不再被库存 UI 展示成单独装备槽。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName FloatDefinitionId = NAME_None;
 
+	/** 当前选中的抄网稳定 ID；它跟随钓鱼/抢抄能力读取，不代表一个独立装备栏。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName ScoopNetDefinitionId = NAME_None;
 
+	/** 当前选中的鱼竿外观 ID；外观选择不进入库存物品数量。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName RodSkinDefinitionId = NAME_None;
 
@@ -91,84 +93,9 @@ struct FCatEquipmentLoadoutSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bRodBroken = false;
 
-	/** 一局消耗品数量，表示本局可实际花掉的鱼饵、窝料、草药或道具份数；跨局解锁只决定能否获取，不在这里计数。 */
+	/** 一局随身库存格子数组；这是库存事实源，鱼饵、窝料、鱼竿和鱼漂都在这里占格，不再另建装备栏库存。 */
 	UPROPERTY(BlueprintReadOnly)
-	TArray<FCatRunConsumableStack> Consumables;
-};
-
-/** 团队装备库中的一件局内实物；它尚未归属于某个角色。 */
-USTRUCT(BlueprintType)
-struct FCatTeamEquipmentInstance
-{
-	GENERATED_BODY()
-
-	UPROPERTY(BlueprintReadOnly)
-	FGuid InstanceId;
-
-	UPROPERTY(BlueprintReadOnly)
-	FName DefinitionId = NAME_None;
-
-	UPROPERTY(BlueprintReadOnly)
-	ECatEquipmentKind Kind = ECatEquipmentKind::Unknown;
-
-	/** 这件装备实例的来源交易凭证，表示它是由哪一次商店交付生成的运行时事实；团队库写入和重放校验会读取它来避免重复发放同一件实物。 */
-	UPROPERTY(BlueprintReadOnly)
-	FGuid SourceTransactionId;
-};
-
-/** 团队装备库的复制读模型；客户端只读，服务器拥有唯一可写事实。 */
-USTRUCT(BlueprintType)
-struct FCatTeamEquipmentLibrarySnapshot
-{
-	GENERATED_BODY()
-
-	UPROPERTY(BlueprintReadOnly)
-	int64 Revision = 0;
-
-	UPROPERTY(BlueprintReadOnly)
-	TArray<FCatTeamEquipmentInstance> Instances;
-};
-
-/** 将一笔已付款订单交付进团队装备库。 */
-USTRUCT(BlueprintType)
-struct FCatTeamEquipmentGrantCommand
-{
-	GENERATED_BODY()
-
-	UPROPERTY(BlueprintReadWrite)
-	FCatDomainCommandContext Context;
-
-	UPROPERTY(BlueprintReadWrite)
-	FGuid SourceTransactionId;
-
-	UPROPERTY(BlueprintReadWrite)
-	FName DefinitionId = NAME_None;
-};
-
-/** 按实例 ID 从团队装备库取走一件实物。 */
-USTRUCT(BlueprintType)
-struct FCatTeamEquipmentTakeCommand
-{
-	GENERATED_BODY()
-
-	UPROPERTY(BlueprintReadWrite)
-	FCatDomainCommandContext Context;
-
-	UPROPERTY(BlueprintReadWrite)
-	FGuid InstanceId;
-};
-
-/** 团队装备入库/取用的终态；合法重放返回第一次创建或取走的同一件实物。 */
-USTRUCT(BlueprintType)
-struct FCatTeamEquipmentGrantResult
-{
-	GENERATED_BODY()
-
-	UPROPERTY(BlueprintReadOnly)
-	FCatDomainCommandResult Command;
-
-	UPROPERTY(BlueprintReadOnly)
-	FCatTeamEquipmentInstance Instance;
+	TArray<FCatRunInventorySlot> InventorySlots;
 };
 
 /** 一次失败预算提交结果；明确记录唯一选择的惩罚。 */

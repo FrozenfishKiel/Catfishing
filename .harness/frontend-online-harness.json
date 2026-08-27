@@ -104,7 +104,7 @@
       "本地玩家 UI 生命周期、Fishing View 快照和可见运行证据",
       "Camp/Sacrifice owning-client 结果 RPC 与 Campfire NetMulticast 反射合同",
       "ItemsCommitted 献祭恢复自动化与 Lake Camp/Hub/Tank Runtime 接线日志",
-      "Equipment/TeamLibrary/Shop 定义、购买、领取、装备命令结果与 RequestId/Revision 日志",
+      "Equipment/Shop 定义、购买、领取、装备命令结果与 RequestId/Revision 日志",
       "FishingSession 读取装备/Items 快照、鱼饵消耗、鱼竿耐久或断竿的单一失败结果",
       "FProfileGrant 装备解锁授予、Journal/ACK 与装配恢复 fail-closed 证据",
       "UBT/Automation 输出；UI/Online 单元测试；运行日志中的 ui_online_widget_created/removed 与 online snapshot"

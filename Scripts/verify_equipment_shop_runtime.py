@@ -72,7 +72,7 @@ def _definition_ref_contains(settings, asset_name: str) -> bool:
 def _validate_equipment_definition(settings, definition_id: str, kind: str, asset_name: str, asset_path: str):
     """验证一条正式 EquipmentDefinition 可被运行目录消费。
 
-    流程先确认 Settings 显式引用资产，再读取资产身份、类别和类别专属关键数值；这些字段决定 Shop/TeamLibrary 能否生成实例，FishingSession 能否读取装备效果。
+    流程先确认 Settings 显式引用资产，再读取资产身份、类别和类别专属关键数值；这些字段决定 Shop 能否把装备交给本人 Equipment，FishingSession 能否读取装备效果。
     """
     _require(_definition_ref_contains(settings, asset_name), f"EquipmentSettings 缺少定义引用: {asset_name}")
     definition = _load_asset(asset_path)
@@ -95,7 +95,7 @@ def _validate_equipment_definition(settings, definition_id: str, kind: str, asse
                  f"{definition_id} 线长无效")
     elif kind == "Bait":
         _require(bool(_get_property(definition, "b_run_consumable", "bRunConsumable")),
-                 f"{definition_id} 鱼饵必须由正式局内消耗品数量栈交付")
+                 f"{definition_id} 鱼饵必须作为数量型物品进入统一库存")
         _require(float(_get_property(definition, "bite_rate_multiplier", "BiteRateMultiplier")) > 0.0,
                  f"{definition_id} BiteRateMultiplier 无效")
         _require(float(_get_property(definition, "minimum_bite_delay_multiplier", "MinimumBiteDelayMultiplier")) > 0.0,
@@ -110,7 +110,7 @@ def _validate_equipment_definition(settings, definition_id: str, kind: str, asse
                  f"{definition_id} 抄网距离无效")
     elif kind == "Chum":
         _require(bool(_get_property(definition, "b_run_consumable", "bRunConsumable")),
-                 f"{definition_id} 窝料必须是 RunConsumable")
+                 f"{definition_id} 窝料必须作为数量型物品进入统一库存")
         influence = _get_property(definition, "chum_influence", "ChumInfluence")
         _require(float(_get_property(influence, "radius_centimeters", "RadiusCentimeters")) > 0.0,
                  f"{definition_id} 窝料半径无效")
@@ -183,7 +183,7 @@ def main() -> None:
 
     equipment_settings = unreal.get_default_object(_load_class("/Script/Catfishing.CatEquipmentSettings"))
     _require(not bool(_get_property(equipment_settings, "b_auto_configure_starter_loadout", "bAutoConfigureStarterLoadout")),
-             "开发期 Starter Loadout 自动装配必须关闭，第四模块只能由商店/团队库等正式入口交付装备")
+             "开发期 Starter Loadout 自动装配必须关闭，第四模块只能由商店或解锁授权等正式入口交付装备")
     _require(int(_get_property(equipment_settings, "starter_chum_quantity", "StarterChumQuantity")) > 0,
              "StarterChumQuantity 必须为正")
 
@@ -226,8 +226,8 @@ def main() -> None:
              "团队公款初始余额不足以购买正式鱼竿和正式鱼漂")
     _validate_shop_entry(shop_settings, "ShopRodT2Order", "EquipmentGrant", "ShopRodT2", 3, False, True)
     _validate_shop_entry(shop_settings, "ShopFloatYarnBallOrder", "EquipmentGrant", "YarnBallFloat", 2, False, True)
-    _validate_shop_entry(shop_settings, "ShopBugChumOrder", "RunConsumableGrant", "BugChum", 1, True, False)
-    _validate_shop_entry(shop_settings, "FreeBugBaitClaim", "RunConsumableGrant", "BugBait", 0, True, False)
+    _validate_shop_entry(shop_settings, "ShopBugChumOrder", "InventoryQuantityGrant", "BugChum", 1, True, False)
+    _validate_shop_entry(shop_settings, "FreeBugBaitClaim", "InventoryQuantityGrant", "BugBait", 0, True, False)
     _validate_shop_entry(shop_settings, "FreeStarterRodClaim", "EquipmentGrant", "StarterRodT1", 0, True, False)
     _require(_as_name(_get_property(shop_settings, "free_ordinary_bait_entry_id", "FreeOrdinaryBaitEntryId")) == "FreeBugBaitClaim",
              "免费普通饵入口未绑定 FreeBugBaitClaim")
@@ -239,7 +239,7 @@ def main() -> None:
              f"当前售鱼价格策略应保持未裁 fail-closed: actual={price_policy}")
 
     unreal.log(
-        "EQUIPMENT_TEAMLIBRARY_SHOP_RUNTIME_PASS "
+        "EQUIPMENT_SHOP_RUNTIME_PASS "
         f"LakeGameMode={actual_game_mode} Controller={controller_class} "
         "Definitions=StarterRodT1,ShopRodT2,BugBait,FlashingBait,FruitBait,GiantLureBait,MeatBait,"
         "MoonlightBait,NectarBait,SoundBait,FeatherFloat,YarnBallFloat,BellFloat,BugChum,"

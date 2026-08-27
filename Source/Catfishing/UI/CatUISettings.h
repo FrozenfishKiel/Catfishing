@@ -59,8 +59,6 @@ public:
 	/** 从正式 IMC 中解析交互确认 Action 的第一个按键名；解析失败时返回 None。 */
 	FName ResolveInteractionConfirmKeyName() const;
 
-	/** 本地交互表现层的启用状态；只影响准星、高亮与拾取提示是否装配，不改变交互目标的服务器裁决。 */
-	bool IsInteractionViewEnabled() const { return bEnableInteractionView; }
 	/** 局内玩家 UI 的装配开关；默认开启后仍要求各模块 WBP 有效，关闭只用于测试或临时禁用玩家可见 UI。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake")
 	bool bEnablePlayerLakeUI = true;
@@ -93,7 +91,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Input")
 	TSoftObjectPtr<UInputAction> InventoryToggleAction;
 
-	/** 交互确认的正式 Enhanced Input Action 资产；靠近商店、鱼缸或祭坛时由通用交互控制器绑定。 */
+	/** 交互确认的正式 Enhanced Input Action 资产；它由 PlayerController 通过 Native Input Tag 唯一绑定，UI 只用它解析提示键名。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Input")
 	TSoftObjectPtr<UInputAction> InteractionConfirmAction;
 
@@ -101,7 +99,4 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Input")
 	TSoftObjectPtr<UInputMappingContext> GameplayInputMappingContext;
 
-	/** 本地准星、高亮与拾取提示层；与上游靠近式通用交互提示并存。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Lake|Interaction")
-	bool bEnableInteractionView = true;
 };

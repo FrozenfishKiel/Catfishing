@@ -19,8 +19,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatItemsCommitCaptureWrongStableNetIdTest,
-	"Catfishing.Unit.Items.CommitCapture.WrongStableNetIdDoesNotMutateContainer",
+	FCatItemsCommitCaptureWrongContainerKindTest,
+	"Catfishing.Unit.Items.CommitCapture.WrongContainerKindDoesNotMutateContainer",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -30,7 +30,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 // 测试流程：
 // 1. 先确认引擎可用并记录现有 WorldContext 数量；引擎不可用时立即失败，Game World 创建失败时也不继续触碰 Items 状态。
-// 2. 在真实 Game World 中取得 Items 子系统，创建并注册个人鱼护，随后从正式查询入口核对初始身份、空内容和 Revision。
+// 2. 在真实 Game World 中取得 Items 子系统，创建并注册地面鱼护，随后从正式查询入口核对初始身份、空内容和 Revision。
 // 3. 通过正式捕获入口提交一条鱼，再原样重放同一命令；分别核对首次提交事实与 AlreadyResolved 结果，证明重复请求没有推进 Revision。
 // 4. 从公开快照核对最终只有一条完整的鱼记录，以容器对外可见状态证明重放没有造成重复写入。
 // 5. 注销容器并确认旧快照不可再查询；离开作用域时由 FTestWorldWrapper 成对销毁 World 与 WorldContext，最后核对全局上下文数量已恢复。
@@ -69,10 +69,10 @@ bool FCatItemsCommitCaptureReplayTest::RunTest(const FString& Parameters)
 				const bool bRegistered = ItemsService->RegisterContainer(
 					ReplicationComponent,
 					ContainerId,
-					ECatContainerKind::PersonalGuard,
+					ECatContainerKind::FishGuard,
 					StableNetId,
 					2);
-				TestTrue(TEXT("个人鱼护通过正式入口注册"), bRegistered);
+				TestTrue(TEXT("地面鱼护通过正式入口注册"), bRegistered);
 
 				FCatContainerSnapshot InitialSnapshot;
 				const bool bHasInitialSnapshot = ItemsService->TryGetContainerSnapshot(ContainerId, InitialSnapshot);
@@ -80,7 +80,7 @@ bool FCatItemsCommitCaptureReplayTest::RunTest(const FString& Parameters)
 				if (bHasInitialSnapshot)
 				{
 					TestEqual(TEXT("初始快照容器身份正确"), InitialSnapshot.ContainerId, ContainerId);
-					TestEqual(TEXT("初始快照为个人鱼护"), InitialSnapshot.Kind, ECatContainerKind::PersonalGuard);
+					TestEqual(TEXT("初始快照为地面鱼护"), InitialSnapshot.Kind, ECatContainerKind::FishGuard);
 					TestEqual(TEXT("初始 Revision 从 1 开始"), InitialSnapshot.Revision, int64{1});
 					TestEqual(TEXT("初始鱼护为空"), InitialSnapshot.Fish.Num(), 0);
 
@@ -161,7 +161,7 @@ bool FCatItemsCommitCaptureReplayTest::RunTest(const FString& Parameters)
 }
 
 // 测试流程：
-// 1. 在独立 Game World 中注册容量为 2 的个人鱼护，先合法提交种子鱼，把聚合推进到 Revision=2 且保留一个可核对的既有实物。
+// 1. 在独立 Game World 中注册容量为 2 的地面鱼护，先合法提交种子鱼，把聚合推进到 Revision=2 且保留一个可核对的既有实物。
 // 2. 保存正式查询入口返回的完整失败前快照，再用新的请求、会话和鱼实例提交 ExpectedRevision=1 的捕获命令，确保拒绝原因只来自调用方版本陈旧。
 // 3. 从 CommitCapture 的公开 Result 核对 RevisionConflict、未提交和当前 Revision，再重新查询容器快照。
 // 4. 逐字段比较失败前后公开快照，并显式确认待捕获鱼未出现，以证明拒绝分支没有留下部分写入。
@@ -199,11 +199,11 @@ bool FCatItemsCommitCaptureStaleRevisionTest::RunTest(const FString& Parameters)
 
 				const FString StableNetId = TEXT("StaleRevisionStableNetId");
 				const FGuid ContainerId = FGuid::NewGuid();
-				TestTrue(TEXT("陈旧 Revision 场景通过正式入口注册个人鱼护"),
+				TestTrue(TEXT("陈旧 Revision 场景通过正式入口注册地面鱼护"),
 					ItemsService->RegisterContainer(
 						ReplicationComponent,
 						ContainerId,
-						ECatContainerKind::PersonalGuard,
+						ECatContainerKind::FishGuard,
 						StableNetId,
 						2));
 
@@ -235,7 +235,7 @@ bool FCatItemsCommitCaptureStaleRevisionTest::RunTest(const FString& Parameters)
 					if (bHasBeforeSnapshot)
 					{
 						TestEqual(TEXT("失败前容器身份正确"), BeforeSnapshot.ContainerId, ContainerId);
-						TestEqual(TEXT("失败前容器为个人鱼护"), BeforeSnapshot.Kind, ECatContainerKind::PersonalGuard);
+						TestEqual(TEXT("失败前容器为地面鱼护"), BeforeSnapshot.Kind, ECatContainerKind::FishGuard);
 						TestEqual(TEXT("失败前 Revision 为 2"), BeforeSnapshot.Revision, int64{2});
 						TestEqual(TEXT("失败前容器包含一条种子鱼"), BeforeSnapshot.Fish.Num(), 1);
 
@@ -313,12 +313,12 @@ bool FCatItemsCommitCaptureStaleRevisionTest::RunTest(const FString& Parameters)
 }
 
 // 测试流程：
-// 1. 在独立 Game World 中以真实主人身份注册容量为 2 的空个人鱼护，并从正式查询入口保存 Revision=1 的失败前公开快照。
-// 2. 构造其余字段和 ExpectedRevision 均合法、但 StableNetId 为另一个非空身份的捕获命令，使拒绝只归因于个人鱼护所有权不匹配。
+// 1. 在独立 Game World 中注册容量为 2 的共享鱼缸，并从正式查询入口保存 Revision=1 的失败前公开快照。
+// 2. 构造其余字段和 ExpectedRevision 均合法的捕获命令，使拒绝只归因于目标不是地面鱼护。
 // 3. 从 CommitCapture 的公开 Result 核对 PermissionDenied、未提交、原 RequestId、当前 Revision 与空 Committed DTO。
-// 4. 逐字段比较失败前后公开快照并确认鱼数组仍为空，证明服务端私有 owner 校验没有产生任何公开容器副作用。
+// 4. 逐字段比较失败前后公开快照并确认鱼数组仍为空，证明容器种类校验没有产生任何公开副作用。
 // 5. 注销容器并由 FTestWorldWrapper 成对释放 World；作用域外核对 WorldContext 数量恢复，避免身份测试污染其他用例。
-bool FCatItemsCommitCaptureWrongStableNetIdTest::RunTest(const FString& Parameters)
+bool FCatItemsCommitCaptureWrongContainerKindTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 
@@ -350,13 +350,13 @@ bool FCatItemsCommitCaptureWrongStableNetIdTest::RunTest(const FString& Paramete
 				ReplicationComponent->RegisterComponent();
 
 				const FString OwnerStableNetId = TEXT("OwnerStableNetId");
-				const FString WrongStableNetId = TEXT("DifferentStableNetId");
+				const FString RequestStableNetId = TEXT("DifferentStableNetId");
 				const FGuid ContainerId = FGuid::NewGuid();
-				TestTrue(TEXT("错误身份场景通过真实主人注册个人鱼护"),
+				TestTrue(TEXT("错误容器种类场景注册共享鱼缸"),
 					ItemsService->RegisterContainer(
 						ReplicationComponent,
 						ContainerId,
-						ECatContainerKind::PersonalGuard,
+						ECatContainerKind::SharedFishTank,
 						OwnerStableNetId,
 						2));
 
@@ -366,24 +366,24 @@ bool FCatItemsCommitCaptureWrongStableNetIdTest::RunTest(const FString& Paramete
 				if (bHasBeforeSnapshot)
 				{
 					TestEqual(TEXT("失败前容器身份正确"), BeforeSnapshot.ContainerId, ContainerId);
-					TestEqual(TEXT("失败前容器为个人鱼护"), BeforeSnapshot.Kind, ECatContainerKind::PersonalGuard);
+					TestEqual(TEXT("失败前容器为共享鱼缸"), BeforeSnapshot.Kind, ECatContainerKind::SharedFishTank);
 					TestEqual(TEXT("失败前 Revision 为 1"), BeforeSnapshot.Revision, int64{1});
-					TestEqual(TEXT("失败前个人鱼护为空"), BeforeSnapshot.Fish.Num(), 0);
+					TestEqual(TEXT("失败前共享鱼缸为空"), BeforeSnapshot.Fish.Num(), 0);
 
 					FCatCaptureCommitCommand Command;
 					Command.Context.RequestId = FGuid::NewGuid();
 					Command.Context.ExpectedRevision = BeforeSnapshot.Revision;
-					Command.Context.StableNetId = WrongStableNetId;
+					Command.Context.StableNetId = RequestStableNetId;
 					Command.FishingSessionId = FGuid::NewGuid();
 					Command.FishInstanceId = FGuid::NewGuid();
-					Command.FishDefinitionId = TEXT("WrongStableNetIdTestFish");
+					Command.FishDefinitionId = TEXT("WrongContainerKindTestFish");
 					Command.TargetContainerId = ContainerId;
 					Command.WeightKilograms = 2.25;
 					Command.SacrificeContribution = 5;
 
 					const FCatCaptureCommitResult Result = ItemsService->CommitCapture(Command);
-					TestFalse(TEXT("错误 StableNetId 不发生捕获提交"), Result.Command.bCommitted);
-					TestEqual(TEXT("错误 StableNetId 返回 PermissionDenied"),
+					TestFalse(TEXT("错误容器种类不发生捕获提交"), Result.Command.bCommitted);
+					TestEqual(TEXT("错误容器种类返回 PermissionDenied"),
 						Result.Command.Error,
 						ECatDomainCommandError::PermissionDenied);
 					TestEqual(TEXT("权限拒绝结果关联原请求"), Result.Command.RequestId, Command.Context.RequestId);
@@ -408,7 +408,7 @@ bool FCatItemsCommitCaptureWrongStableNetIdTest::RunTest(const FString& Paramete
 						TestEqual(TEXT("权限拒绝前后容器类别不变"), AfterSnapshot.Kind, BeforeSnapshot.Kind);
 						TestEqual(TEXT("权限拒绝前后 Revision 不变"), AfterSnapshot.Revision, BeforeSnapshot.Revision);
 						TestEqual(TEXT("权限拒绝前后鱼数量不变"), AfterSnapshot.Fish.Num(), BeforeSnapshot.Fish.Num());
-						TestEqual(TEXT("权限拒绝后个人鱼护仍为空"), AfterSnapshot.Fish.Num(), 0);
+						TestEqual(TEXT("权限拒绝后共享鱼缸仍为空"), AfterSnapshot.Fish.Num(), 0);
 					}
 				}
 
@@ -428,7 +428,7 @@ bool FCatItemsCommitCaptureWrongStableNetIdTest::RunTest(const FString& Paramete
 }
 
 // 测试流程：
-// 1. 在独立 Game World 中以真实主人注册容量为 1 的个人鱼护，再合法提交种子鱼，把容器推进到 Revision=2 且占满唯一槽位。
+// 1. 在独立 Game World 中注册容量为 1 的地面鱼护，再合法提交种子鱼，把容器推进到 Revision=2 且占满唯一槽位。
 // 2. 保存包含种子鱼的完整公开快照，然后用正确主人、当前 Revision 和全新的请求、会话、鱼实例提交第二条合法捕获命令。
 // 3. 从 CommitCapture 的公开 Result 核对 CapacityExceeded、未提交、原 RequestId、当前 Revision 与空 Committed DTO。
 // 4. 逐字段比较失败前后公开快照，并显式确认第二条鱼没有出现，以证明容量拒绝没有覆盖或复制既有实物。
@@ -466,11 +466,11 @@ bool FCatItemsCommitCaptureFullContainerTest::RunTest(const FString& Parameters)
 
 				const FString StableNetId = TEXT("FullContainerOwnerStableNetId");
 				const FGuid ContainerId = FGuid::NewGuid();
-				TestTrue(TEXT("满容器场景通过真实主人注册容量为 1 的个人鱼护"),
+				TestTrue(TEXT("满容器场景注册容量为 1 的地面鱼护"),
 					ItemsService->RegisterContainer(
 						ReplicationComponent,
 						ContainerId,
-						ECatContainerKind::PersonalGuard,
+						ECatContainerKind::FishGuard,
 						StableNetId,
 						1));
 
@@ -480,7 +480,7 @@ bool FCatItemsCommitCaptureFullContainerTest::RunTest(const FString& Parameters)
 				if (bHasInitialSnapshot)
 				{
 					TestEqual(TEXT("种子捕获前 Revision 为 1"), InitialSnapshot.Revision, int64{1});
-					TestEqual(TEXT("种子捕获前个人鱼护为空"), InitialSnapshot.Fish.Num(), 0);
+					TestEqual(TEXT("种子捕获前地面鱼护为空"), InitialSnapshot.Fish.Num(), 0);
 
 					FCatCaptureCommitCommand SeedCommand;
 					SeedCommand.Context.RequestId = FGuid::NewGuid();
@@ -502,7 +502,7 @@ bool FCatItemsCommitCaptureFullContainerTest::RunTest(const FString& Parameters)
 					if (bHasBeforeSnapshot)
 					{
 						TestEqual(TEXT("失败前容器身份正确"), BeforeSnapshot.ContainerId, ContainerId);
-						TestEqual(TEXT("失败前容器为个人鱼护"), BeforeSnapshot.Kind, ECatContainerKind::PersonalGuard);
+						TestEqual(TEXT("失败前容器为地面鱼护"), BeforeSnapshot.Kind, ECatContainerKind::FishGuard);
 						TestEqual(TEXT("失败前 Revision 为 2"), BeforeSnapshot.Revision, int64{2});
 						TestEqual(TEXT("失败前容器包含唯一种子鱼"), BeforeSnapshot.Fish.Num(), 1);
 
@@ -518,8 +518,8 @@ bool FCatItemsCommitCaptureFullContainerTest::RunTest(const FString& Parameters)
 						Command.SacrificeContribution = 6;
 
 						const FCatCaptureCommitResult Result = ItemsService->CommitCapture(Command);
-						TestFalse(TEXT("已满个人鱼护不发生第二次捕获提交"), Result.Command.bCommitted);
-						TestEqual(TEXT("已满个人鱼护返回 CapacityExceeded"),
+						TestFalse(TEXT("已满地面鱼护不发生第二次捕获提交"), Result.Command.bCommitted);
+						TestEqual(TEXT("已满地面鱼护返回 CapacityExceeded"),
 							Result.Command.Error,
 							ECatDomainCommandError::CapacityExceeded);
 						TestEqual(TEXT("容量拒绝结果关联第二条请求"), Result.Command.RequestId, Command.Context.RequestId);

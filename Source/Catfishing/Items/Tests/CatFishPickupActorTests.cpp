@@ -3,14 +3,24 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 
+#include "Character/CatCharacter.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Data/CatFishDefinition.h"
+#include "Framework/Game/CatGameplayTypes.h"
+#include "Items/CatFishGuardActor.h"
+#include "Items/CatItemsService.h"
 #include "Items/CatWorldItemSettings.h"
 #include "Items/World/CatFishPickupActor.h"
+#include "OnlineSubsystemTypes.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishPickupVisualScaleTest,
 	"Catfishing.Unit.Items.FishPickup.ConsumesFrozenWeightVisualScaleWithoutScalingGameplayRoot",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishPickupMouthCarryAndGuardStoreTest,
+	"Catfishing.Unit.Items.FishPickup.MouthCarryStoresOnlyInInteractedGroundGuard",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 namespace CatFishPickupActorTest
@@ -75,6 +85,82 @@ bool FCatFishPickupVisualScaleTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("pickup rejects non-positive frozen scale"), InvalidScalePickup
 		&& InvalidScalePickup->InitializeFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), Definition,
 			1.0, 0.0, TEXT("LakeA"), {}));
+	return !HasAnyErrors();
+}
+
+bool FCatFishPickupMouthCarryAndGuardStoreTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	if (!TestTrue(TEXT("创建嘴叼鱼测试 World"), WorldWrapper.CreateTestWorld(EWorldType::Game)))
+	{
+		return false;
+	}
+	WorldWrapper.ForwardErrorMessages(this);
+	UWorld* World = WorldWrapper.GetTestWorld();
+	ACatfishingPlayerController* Controller = World ? World->SpawnActor<ACatfishingPlayerController>() : nullptr;
+	ACatfishingPlayerState* PlayerState = World ? World->SpawnActor<ACatfishingPlayerState>() : nullptr;
+	ACatCharacter* Character = World ? World->SpawnActor<ACatCharacter>() : nullptr;
+	ACatFishGuardActor* FirstGuard = World ? World->SpawnActor<ACatFishGuardActor>(FVector(100.0, 0.0, 0.0),
+		FRotator::ZeroRotator) : nullptr;
+	ACatFishGuardActor* OtherGuard = World ? World->SpawnActor<ACatFishGuardActor>(FVector(150.0, 100.0, 0.0),
+		FRotator::ZeroRotator) : nullptr;
+	ACatFishPickupActor* Pickup = World ? World->SpawnActor<ACatFishPickupActor>(FVector(50.0, 0.0, 0.0),
+		FRotator::ZeroRotator) : nullptr;
+	UCatItemsService* Items = World ? World->GetSubsystem<UCatItemsService>() : nullptr;
+	UCatFishDefinition* Definition = CatFishPickupActorTest::MakeReadyFish();
+	if (!TestNotNull(TEXT("生成项目 Controller"), Controller)
+		|| !TestNotNull(TEXT("生成项目 PlayerState"), PlayerState)
+		|| !TestNotNull(TEXT("生成嘴叼角色"), Character)
+		|| !TestNotNull(TEXT("生成目标地面鱼护"), FirstGuard)
+		|| !TestNotNull(TEXT("生成另一个地面鱼护"), OtherGuard)
+		|| !TestNotNull(TEXT("生成死鱼 Actor"), Pickup)
+		|| !TestNotNull(TEXT("取得 Items 服务"), Items)
+		|| !TestNotNull(TEXT("创建正式鱼定义"), Definition))
+	{
+		return false;
+	}
+
+	const FString StableNetId(TEXT("MouthCarryPlayer"));
+	const FUniqueNetIdRef UniqueId = FUniqueNetIdString::Create(StableNetId, FName(TEXT("CAT_TEST")));
+	PlayerState->SetUniqueId(FUniqueNetIdRepl(UniqueId));
+	Controller->PlayerState = PlayerState;
+	Character->SetPlayerState(PlayerState);
+	Controller->Possess(Character);
+	Character->SetActorLocation(FVector::ZeroVector);
+	for (AActor* RuntimeActor : TArray<AActor*>{Character, FirstGuard, OtherGuard, Pickup})
+	{
+		if (RuntimeActor && !RuntimeActor->HasActorBegunPlay())
+		{
+			RuntimeActor->DispatchBeginPlay();
+		}
+	}
+	const FGuid SessionId = FGuid::NewGuid();
+	const FGuid FishInstanceId = FGuid::NewGuid();
+	TestTrue(TEXT("初始化可拾取死鱼"), Pickup->InitializeFromAuthority(SessionId, FishInstanceId,
+		Definition, 2.5, 1.0, TEXT("LakeA"), {StableNetId}));
+
+	TestTrue(TEXT("对死鱼按 E 后进入嘴叼状态"), Pickup->Interact_Implementation(Controller, FGuid::NewGuid()));
+	TestEqual(TEXT("死鱼状态为 Carried"), Pickup->GetPresentationState().State, ECatFishPickupState::Carried);
+	TestEqual(TEXT("嘴叼鱼仍附着在角色 Actor 下"), Pickup->GetAttachParentActor(), static_cast<AActor*>(Character));
+	TestEqual(TEXT("角色只能找到这一条嘴叼鱼"), ACatFishPickupActor::FindCarriedFish(Character), Pickup);
+
+	FCatContainerSnapshot OtherBefore;
+	TestTrue(TEXT("可读取未交互鱼护"), Items->TryGetContainerSnapshot(OtherGuard->GetGuardContainerId(), OtherBefore));
+	TestEqual(TEXT("未交互鱼护初始为空"), CatItems::GetContainedObjectCount(OtherBefore), 0);
+	TestTrue(TEXT("对目标鱼护按 E 可处理嘴叼鱼"), FirstGuard->Interact_Implementation(Controller, FGuid::NewGuid()));
+
+	FCatContainerSnapshot FirstAfter;
+	FCatContainerSnapshot OtherAfter;
+	TestTrue(TEXT("可读取目标鱼护提交后快照"), Items->TryGetContainerSnapshot(FirstGuard->GetGuardContainerId(), FirstAfter));
+	TestTrue(TEXT("可读取未交互鱼护提交后快照"), Items->TryGetContainerSnapshot(OtherGuard->GetGuardContainerId(), OtherAfter));
+	TestEqual(TEXT("命中的鱼护收到嘴叼鱼"), CatItems::GetContainedObjectCount(FirstAfter), 1);
+	TestEqual(TEXT("另一个鱼护没有被自动选择"), CatItems::GetContainedObjectCount(OtherAfter), 0);
+	TestTrue(TEXT("目标鱼护保存原鱼实例"), FirstAfter.Fish.ContainsByPredicate([FishInstanceId](const FCatFishInstance& Fish)
+	{
+		return Fish.FishInstanceId == FishInstanceId;
+	}));
+	TestNull(TEXT("提交成功后角色不再叼鱼"), ACatFishPickupActor::FindCarriedFish(Character));
 	return !HasAnyErrors();
 }
 

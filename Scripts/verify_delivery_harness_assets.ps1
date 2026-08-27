@@ -443,6 +443,7 @@ function Assert-ReleaseHandoffClosureRequirements {
         "FormalFishAssetInputPackageReady",
         "RuntimeConfigUsesFormalFishAssets",
         "ReleaseEvidenceContractsGreen",
+        "EquipmentShopFreshEvidence",
         "FormalPresentationBoundaryClosed",
         "FormalProgressGrowthContentClosed",
         "RunEnvironmentSocialClosed"
@@ -496,9 +497,21 @@ function Assert-ReleaseHandoffClosureRequirements {
         throw "RuntimeConfigUsesFormalFishAssets must be satisfied once DefaultGame no longer references tracked test assets"
     }
 
+    $EquipmentShopEntryForEvidence = ($Package.module_statuses.PSObject.Properties | Where-Object { $_.Name -eq "EquipmentShop" } | Select-Object -First 1).Value
     $EvidenceRequirement = ($Requirements | Where-Object { $_.requirement_id -eq "ReleaseEvidenceContractsGreen" } | Select-Object -First 1)
-    if ($EvidenceRequirement.current_status -ne "satisfied") {
-        throw "ReleaseEvidenceContractsGreen must be satisfied because Static has already validated the evidence contracts"
+    if ($EquipmentShopEntryForEvidence.closure_status -eq "complete" -and $EvidenceRequirement.current_status -ne "satisfied") {
+        throw "ReleaseEvidenceContractsGreen must be satisfied once EquipmentShop has fresh evidence"
+    }
+    if ($EquipmentShopEntryForEvidence.closure_status -ne "complete" -and $EvidenceRequirement.current_status -ne "blocked") {
+        throw "ReleaseEvidenceContractsGreen must remain blocked while EquipmentShop is waiting for fresh evidence"
+    }
+
+    $EquipmentShopRequirement = ($Requirements | Where-Object { $_.requirement_id -eq "EquipmentShopFreshEvidence" } | Select-Object -First 1)
+    if ($EquipmentShopEntryForEvidence.closure_status -eq "complete" -and $EquipmentShopRequirement.current_status -ne "satisfied") {
+        throw "EquipmentShopFreshEvidence must be satisfied once EquipmentShop is marked complete"
+    }
+    if ($EquipmentShopEntryForEvidence.closure_status -ne "complete" -and $EquipmentShopRequirement.current_status -ne "blocked") {
+        throw "EquipmentShopFreshEvidence must remain blocked until EquipmentShop is marked complete with fresh evidence"
     }
 
     $PresentationRequirement = ($Requirements | Where-Object { $_.requirement_id -eq "FormalPresentationBoundaryClosed" } | Select-Object -First 1)
@@ -730,7 +743,7 @@ function Assert-ReleaseHandoffPackage {
         FishingPlayerEntry = "complete"
         UIReach = "complete"
         ItemsTankSacrificeCamp = "complete"
-        EquipmentTeamLibraryShop = "complete"
+        EquipmentShop = "needs_verification"
         FrontendOnline = "complete"
         DataWorldProfileAlbum = "engineering_complete"
         CharacterGrowthCondition = "engineering_complete"
@@ -780,6 +793,10 @@ function Assert-ReleaseHandoffPackage {
     }
 
     $ExpectedBlockerSources = @{}
+    $EquipmentShopEntry = ($Package.module_statuses.PSObject.Properties | Where-Object { $_.Name -eq "EquipmentShop" } | Select-Object -First 1).Value
+    if ($EquipmentShopEntry.closure_status -ne "complete") {
+        $ExpectedBlockerSources["EquipmentShopNeedsFreshEvidence"] = ".harness/delivery-release-handoff-package.json"
+    }
     if (-not ($FormalPackage.status -eq "ready" -and @($FormalPackage.blocking_gaps).Count -eq 0)) {
         $ExpectedBlockerSources["FormalFishAssetInputPackageBlocked"] = ".harness/formal-fish-asset-input-package.json"
     }
@@ -889,7 +906,7 @@ function Invoke-StaticInventory {
         "FishingPlayerEntry",
         "UIReach",
         "ItemsTankSacrificeCamp",
-        "EquipmentTeamLibraryShop",
+        "EquipmentShop",
         "FrontendOnline",
         "DataWorldProfileAlbum",
         "CharacterGrowthCondition",
@@ -913,10 +930,10 @@ function Invoke-StaticInventory {
         @{ Key = "items_tank_sacrifice_camp_build"; Script = "Scripts\verify_items_tank_sacrifice_camp.ps1" },
         @{ Key = "items_tank_sacrifice_camp_automation"; Script = "Scripts\verify_items_tank_sacrifice_camp.ps1" },
         @{ Key = "items_tank_sacrifice_camp_runtime"; Script = "Scripts\verify_items_tank_sacrifice_camp.ps1" },
-        @{ Key = "equipment_teamlibrary_shop_static_check"; Script = "Scripts\verify_equipment_teamlibrary_shop.ps1" },
-        @{ Key = "equipment_teamlibrary_shop_build"; Script = "Scripts\verify_equipment_teamlibrary_shop.ps1" },
-        @{ Key = "equipment_teamlibrary_shop_automation"; Script = "Scripts\verify_equipment_teamlibrary_shop.ps1" },
-        @{ Key = "equipment_teamlibrary_shop_runtime"; Script = "Scripts\verify_equipment_teamlibrary_shop.ps1" },
+        @{ Key = "equipment_shop_static_check"; Script = "Scripts\verify_equipment_shop.ps1" },
+        @{ Key = "equipment_shop_build"; Script = "Scripts\verify_equipment_shop.ps1" },
+        @{ Key = "equipment_shop_automation"; Script = "Scripts\verify_equipment_shop.ps1" },
+        @{ Key = "equipment_shop_runtime"; Script = "Scripts\verify_equipment_shop.ps1" },
         @{ Key = "frontend_online_build"; Script = "" },
         @{ Key = "frontend_online_ui_automation"; Script = "" },
         @{ Key = "frontend_online_online_automation"; Script = "" },
