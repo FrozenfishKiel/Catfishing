@@ -1,12 +1,17 @@
 #include "UI/Shop/CatShopWidget.h"
 
+#include "Blueprint/WidgetTree.h"
 #include "Components/Button.h"
+#include "Components/HorizontalBox.h"
 #include "Components/TextBlock.h"
 
-// 构造流程：绑定可选 Designer 按钮；动态商品列表可以不放这些按钮，直接在蓝图商品行调用参数化请求函数。
+// 构造流程：
+// 1. 先让旧 WBP 在已有按钮行里补齐鱼漂购买按钮，保证默认商店能拿到开钓必需的鱼漂。
+// 2. 再绑定 Designer 或运行时按钮到统一请求入口；动态商品列表仍可完全绕开这些固定按钮。
 void UCatShopWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
+	EnsureDefaultFloatButton();
 	if (CloseButton)
 	{
 		CloseButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleCloseClicked);
@@ -21,6 +26,11 @@ void UCatShopWidget::NativeConstruct()
 	{
 		PurchaseBugChumButton->OnClicked.RemoveDynamic(this, &ThisClass::HandlePurchaseChumClicked);
 		PurchaseBugChumButton->OnClicked.AddDynamic(this, &ThisClass::HandlePurchaseChumClicked);
+	}
+	if (PurchaseYarnBallFloatButton)
+	{
+		PurchaseYarnBallFloatButton->OnClicked.RemoveDynamic(this, &ThisClass::HandlePurchaseFloatClicked);
+		PurchaseYarnBallFloatButton->OnClicked.AddDynamic(this, &ThisClass::HandlePurchaseFloatClicked);
 	}
 	if (ClaimFreeBugBaitButton)
 	{
@@ -50,6 +60,10 @@ void UCatShopWidget::NativeDestruct()
 	if (PurchaseBugChumButton)
 	{
 		PurchaseBugChumButton->OnClicked.RemoveDynamic(this, &ThisClass::HandlePurchaseChumClicked);
+	}
+	if (PurchaseYarnBallFloatButton)
+	{
+		PurchaseYarnBallFloatButton->OnClicked.RemoveDynamic(this, &ThisClass::HandlePurchaseFloatClicked);
 	}
 	if (ClaimFreeBugBaitButton)
 	{
@@ -104,6 +118,10 @@ void UCatShopWidget::RenderShop(const FCatShopViewState& ViewState)
 	if (PurchaseBugChumButton)
 	{
 		PurchaseBugChumButton->SetIsEnabled(IsEntryActionEnabled(TEXT("ShopBugChumOrder")));
+	}
+	if (PurchaseYarnBallFloatButton)
+	{
+		PurchaseYarnBallFloatButton->SetIsEnabled(IsEntryActionEnabled(TEXT("ShopFloatYarnBallOrder")));
 	}
 	if (ClaimFreeBugBaitButton)
 	{
@@ -160,6 +178,12 @@ void UCatShopWidget::HandlePurchaseChumClicked()
 	RequestPurchaseEntry(TEXT("ShopBugChumOrder"));
 }
 
+// 默认按钮流程：鱼漂按钮只发固定目录 ID 的购买意图；服务器仍按配置价格、库存和权限裁决。
+void UCatShopWidget::HandlePurchaseFloatClicked()
+{
+	RequestPurchaseEntry(TEXT("ShopFloatYarnBallOrder"));
+}
+
 // 默认按钮流程：免费鱼饵按钮只发固定目录 ID 的领取意图，服务器会验证它是否属于免费条目。
 void UCatShopWidget::HandleClaimBaitClicked()
 {
@@ -176,4 +200,30 @@ void UCatShopWidget::HandleClaimStarterRodClicked()
 void UCatShopWidget::HandleCloseClicked()
 {
 	RequestCloseShop();
+}
+
+// 默认按钮补齐流程：
+// 1. 已有新版 WBP 绑定鱼漂按钮时直接复用，避免运行时生成重复控件。
+// 2. 旧版冷启动 WBP 至少会有 ShopButtons 按钮行；在这里创建按钮和文本，使现有资产也能购买鱼漂。
+// 3. 缺少 WidgetTree 或按钮行时放弃补齐，让动态商品行或蓝图参数入口继续承担商品购买入口。
+void UCatShopWidget::EnsureDefaultFloatButton()
+{
+	if (PurchaseYarnBallFloatButton || !ShopButtons || !WidgetTree)
+	{
+		return;
+	}
+
+	PurchaseYarnBallFloatButton = WidgetTree->ConstructWidget<UButton>(
+		UButton::StaticClass(), TEXT("PurchaseYarnBallFloatButton"));
+	UTextBlock* ButtonText = WidgetTree->ConstructWidget<UTextBlock>(
+		UTextBlock::StaticClass(), TEXT("PurchaseYarnBallFloatButtonText"));
+	if (!PurchaseYarnBallFloatButton || !ButtonText)
+	{
+		PurchaseYarnBallFloatButton = nullptr;
+		return;
+	}
+
+	ButtonText->SetText(FText::FromString(TEXT("买鱼漂")));
+	PurchaseYarnBallFloatButton->AddChild(ButtonText);
+	ShopButtons->AddChildToHorizontalBox(PurchaseYarnBallFloatButton);
 }

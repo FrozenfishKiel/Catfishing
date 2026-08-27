@@ -11,6 +11,8 @@ int32 UCatItemsSettings::GetContainerCapacity(const uint8 ContainerKindValue) co
 		return FMath::Max(0, PersonalGuardCapacity);
 	case ECatContainerKind::SharedFishTank:
 		return FMath::Max(0, SharedFishTankCapacity);
+	case ECatContainerKind::FishGuard:
+		return FMath::Max(0, FishGuardCapacity);
 	default:
 		return 0;
 	}

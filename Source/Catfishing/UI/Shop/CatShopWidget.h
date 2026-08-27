@@ -6,6 +6,7 @@
 #include "CatShopWidget.generated.h"
 
 class UButton;
+class UHorizontalBox;
 class UTextBlock;
 
 /** 商店关闭意图；交互对象拥有页面生命周期，Widget 只发关闭请求。 */
@@ -47,7 +48,7 @@ public:
 	FCatShopEntryActionRequested OnEntryActionRequested;
 
 protected:
-	/** 构造时绑定可选 Designer 按钮；动态商品列表可完全走蓝图的参数入口。 */
+	/** 构造时补齐旧 WBP 的默认鱼漂按钮并绑定可选按钮；动态商品列表可完全走蓝图的参数入口。 */
 	virtual void NativeConstruct() override;
 
 	/** 析构时只解绑本 View 的可选按钮；关闭和商品动作订阅由 PageController::Unbind 清理。 */
@@ -66,6 +67,10 @@ private:
 	UFUNCTION()
 	void HandlePurchaseChumClicked();
 
+	/** 项目默认鱼漂按钮入口；动态 WBP 不需要它，保留是为了冷启动资产能凑齐开钓前置物。 */
+	UFUNCTION()
+	void HandlePurchaseFloatClicked();
+
 	/** 项目默认免费鱼饵按钮入口；动态 WBP 不需要它，保留是为了冷启动资产有可点商品。 */
 	UFUNCTION()
 	void HandleClaimBaitClicked();
@@ -77,6 +82,9 @@ private:
 	/** 关闭按钮入口；它只广播关闭意图，不直接 RemoveFromParent。 */
 	UFUNCTION()
 	void HandleCloseClicked();
+
+	/** 默认鱼漂按钮补齐流程；旧 WBP 只有按钮行没有鱼漂按钮时，运行时补一个最小购买入口。 */
+	void EnsureDefaultFloatButton();
 
 	/** 最近一次 Shop Model 输入的完整投影；本 Widget 不保存任何后端对象。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Shop", meta = (AllowPrivateAccess = "true"))
@@ -114,6 +122,10 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> EntriesTextBlock;
 
+	/** WBP Designer 中的默认商品按钮行；旧资产缺少鱼漂按钮时，Widget 会在这里追加一个运行时按钮。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UHorizontalBox> ShopButtons;
+
 	/** 可选默认商品按钮：购买二级竿；正式动态列表不依赖这个名字。 */
 	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional, AllowPrivateAccess = "true"))
 	TObjectPtr<UButton> PurchaseShopRodT2Button;
@@ -121,6 +133,10 @@ private:
 	/** 可选默认商品按钮：购买窝料；正式动态列表不依赖这个名字。 */
 	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional, AllowPrivateAccess = "true"))
 	TObjectPtr<UButton> PurchaseBugChumButton;
+
+	/** 可选默认商品按钮：购买鱼漂；它保证未做动态商品行的冷启动商店也能获得开钓必需的鱼漂。 */
+	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional, AllowPrivateAccess = "true"))
+	TObjectPtr<UButton> PurchaseYarnBallFloatButton;
 
 	/** 可选默认商品按钮：领取普通鱼饵；正式动态列表不依赖这个名字。 */
 	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional, AllowPrivateAccess = "true"))

@@ -25,9 +25,13 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Loadout")
 	ECatDomainPolicy ProfileLoadoutTrustPolicy = ECatDomainPolicy::Unset;
 
-	/** 每种局内耗材的随身上限；0 表示暂不限制。商店在扣款前也会使用同一条规则预检。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Consumables", meta = (ClampMin = "0"))
-	int32 RunConsumableStackCapacity = 0;
+	/** 随身库存固定格数；后端按它限制入库，Inventory Model 按它渲染空格和已有物品。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Inventory", meta = (ClampMin = "0"))
+	int32 InventorySlotCapacity = 24;
+
+	/** 数量型物品在单个随身库存格里的堆叠上限；鱼饵、窝料、草药等共享这条库存格规则，0 表示同类物品可尽量堆在一个格子里。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Inventory", meta = (ClampMin = "0"))
+	int32 InventoryQuantityStackCapacity = 0;
 
 	/** 一次 DamageRod 失败预算扣除的耐久；0 表示公式/数值未裁。 */
 	UPROPERTY(Config, EditAnywhere, Category = "FailureBudget", meta = (ClampMin = "0.0"))
@@ -38,33 +42,33 @@ public:
 	FName DriftwoodDefinitionId = NAME_None;
 
 	/**
-	 * 受控 Starter 兜底开关；打开时服务器会在角色首次占有且 Loadout 为空时尝试写入配置的基础装备和窝料。
+	 * 受控 Starter 兜底开关；打开时服务器会在角色首次占有且选择为空时尝试选择库存已有的基础装备，并可额外发放窝料。
 	 * 正式默认配置保持关闭，避免绕过商店或 Profile Grant 授权链；测试或诊断显式打开时仍经过目录、解锁和 Revision 校验。
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	bool bAutoConfigureStarterLoadout = false;
 
-	/** Starter 兜底鱼竿定义 ID；只在兜底开关打开时读取，正式商店和解锁路径不会自动消费它。 */
+	/** Starter 兜底鱼竿定义 ID；只在兜底开关打开时读取，且该定义必须已经存在于角色随身库存。 */
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterRodDefinitionId = NAME_None;
 
-	/** Starter 兜底鱼饵定义 ID；只为显式兜底装配提供完整 Loadout，不代表普通饵扣减策略。 */
+	/** Starter 兜底鱼饵定义 ID；只为显式兜底选择提供完整组合，且至少需要库存中已有 1 份对应饵。 */
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterBaitDefinitionId = NAME_None;
 
-	/** Starter 兜底鱼漂定义 ID；只在显式兜底流程中写入个人 Equipment，正式获取仍走商店或解锁授权。 */
+	/** Starter 兜底鱼漂定义 ID；只在显式兜底流程中选择库存已有鱼漂，正式获取仍走商店或解锁授权。 */
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterFloatDefinitionId = NAME_None;
 
-	/** Starter 兜底抄网定义 ID；None 表示兜底装配不发抄网，正式抄网来源由后续内容或商店配置决定。 */
+	/** Starter 兜底抄网定义 ID；None 表示兜底选择不要求抄网，非 None 时也必须已经在随身库存中。 */
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterScoopNetDefinitionId = NAME_None;
 
-	/** Starter 兜底窝料定义 ID；只在兜底装配成功后授予同一角色的局内消耗品栈。 */
+	/** Starter 兜底窝料定义 ID；只在兜底选择成功后授予同一角色的库存数量型物品。 */
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterChumDefinitionId = NAME_None;
 
-	/** Starter 兜底窝料数量；0 表示即使兜底装配开启也不额外发放窝料。 */
+	/** Starter 兜底窝料数量；0 表示即使兜底选择开启也不额外发放窝料。 */
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback", meta = (ClampMin = "0"))
 	int32 StarterChumQuantity = 0;
 };

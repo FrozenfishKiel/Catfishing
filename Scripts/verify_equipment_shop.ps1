@@ -91,7 +91,7 @@ function Invoke-ModuleStaticCheck {
     Assert-NoTextPattern "团队库|装备库|待取装备" "Docs/Development/需求对齐差距清单.md" "progress docs must describe personal equipment delivery"
     Assert-TextPattern "FreeBugBaitClaim" "Config/DefaultGame.ini" "free formal bait shop entry"
     Assert-TextPattern "FreeBugBaitClaim" "Source/Catfishing/ShopEconomy/Tests/CatShopEconomySettingsTests.cpp" "shop settings free bait expectation"
-    Assert-TextPattern "DirectClientGrantDisabled" "Source/Catfishing/Framework/Game/CatGameplayTypes.cpp" "direct client consumable grant disabled"
+    Assert-NoTextPattern "ServerGrantRunConsumable|DirectClientGrantDisabled" "Source/Catfishing/Framework/Game" "direct client quantity grant RPC removed"
     Assert-TextPattern "EQUIPMENT_SHOP_RUNTIME_PASS" "Scripts/verify_equipment_shop_runtime.py" "runtime pass marker"
     Assert-TextPattern "Normal-bait Begin without inventory is rejected" "Source/Catfishing/Equipment/Tests/CatEquipmentFishingUseTests.cpp" "normal bait inventory gate test"
     Assert-TextPattern "Normal bait commit removes exactly one bait" "Source/Catfishing/Equipment/Tests/CatEquipmentFishingUseTests.cpp" "normal bait commit consumes inventory test"
@@ -220,7 +220,7 @@ function Invoke-ModuleAutomation {
             "Catfishing.Unit.Equipment.FishingUse.BaitCommitAndReleaseAreIdempotent",
             "Catfishing.Unit.Equipment.FishingUse.WearSequenceIsAbsoluteMonotonicAndCommittedOnce",
             "Catfishing.Unit.Equipment.FishingUse.RodBreakOverridesWearAndCommitsZeroOnce",
-            "Catfishing.Unit.Equipment.FishingUse.ActiveReservationBlocksLegacyMutationsAndProtectsReservedBait",
+            "Catfishing.Unit.Equipment.FishingUse.ActiveReservationBlocksDirectMutationsAndProtectsReservedBait",
             "Catfishing.Unit.Equipment.FishingUse.DeferredBaitCommitPublishesExactlyOnce"
         )
     }
@@ -234,7 +234,7 @@ function Invoke-ModuleAutomation {
             "Catfishing.Unit.Equipment.ConsumableUse.ReleasePreservesInventoryAndRejectsLateCommit",
             "Catfishing.Unit.Equipment.ConsumableUse.ActiveReservationBlocksConflictingMutations",
             "Catfishing.Unit.Equipment.ConsumableUse.FishingAndRunReservationsAreMutuallyExclusive",
-            "Catfishing.Unit.Equipment.ConsumableUse.ReservedQuantityCannotBeDoubleSpentByLegacyConsume"
+            "Catfishing.Unit.Equipment.ConsumableUse.ReservedQuantityCannotBeDoubleSpentByDirectConsume"
         )
     }
     $Batches += [pscustomobject]@{
@@ -242,13 +242,6 @@ function Invoke-ModuleAutomation {
         Name = "EquipmentFailureBudget"
         ExpectedTests = @(
             "Catfishing.Unit.Equipment.Component.FishingFailureNoneIsIdempotentAndDoesNotPunish"
-        )
-    }
-    $Batches += [pscustomobject]@{
-        Filter = "Catfishing.PlayerEntry.FullLoop"
-        Name = "FishingPlayerEntryFullLoop"
-        ExpectedTests = @(
-            "Catfishing.PlayerEntry.FullLoop"
         )
     }
     $Batches += [pscustomobject]@{

@@ -64,7 +64,7 @@ namespace
 		}
 	}
 
-	// 个人容器离开权限流程：个人鱼护里的鱼只能由主人移出；共享容器不在这里限制取出人，后续目标容器还会复核进入权限。
+	// 鱼离开容器权限流程：个人鱼护里的鱼只能由主人移出；世界容器不在这里限制取出人，后续目标容器还会复核进入权限。
 	bool CanFishLeaveContainer(const FCatFishInstance& Fish, const ECatContainerKind ContainerKind,
 		const FString& StableNetId)
 	{
@@ -80,7 +80,7 @@ namespace
 		return Definition && Definition->bTankDisplayEligible;
 	}
 
-	// 个人容器进入权限流程：写入个人鱼护时要求鱼主人就是当前玩家；写入共享鱼缸时要求鱼定义允许展示，并保留各自错误码。
+	// 鱼进入容器权限流程：个人鱼护校验主人，共享鱼缸校验展示资格，鱼护箱子只要求目标本身是鱼容器。
 	ECatDomainCommandError ResolveFishEnterContainerError(const FCatFishInstance& Fish,
 		const ECatContainerKind ContainerKind,
 		const FString& StableNetId)
@@ -94,6 +94,10 @@ namespace
 		{
 			return CanFishBeDisplayedInTank(Fish)
 				? ECatDomainCommandError::None : ECatDomainCommandError::PolicyUndecided;
+		}
+		if (ContainerKind == ECatContainerKind::FishGuard)
+		{
+			return ECatDomainCommandError::None;
 		}
 		return ECatDomainCommandError::None;
 	}

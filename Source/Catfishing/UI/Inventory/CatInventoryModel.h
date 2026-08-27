@@ -11,35 +11,35 @@ class UCatContainerReplicationComponent;
 class UCatEquipmentComponent;
 class ULocalPlayer;
 
-/** 背包 Model 完整投影变化通知；PageController 收到后只把最新 ViewState 交给背包 WBP。 */
+/** 库存 Model 完整投影变化通知；PageController 收到后只把最新 ViewState 交给库存 WBP。 */
 DECLARE_MULTICAST_DELEGATE(FCatInventoryModelChanged);
 
-/** 背包 MVC Model；它订阅鱼护、外部容器和本人装备的只读快照，不创建 Widget、不提交命令。 */
+/** 库存 MVC Model；它订阅随身库存和外部容器的只读快照，不创建 Widget、不提交命令。 */
 UCLASS()
 class CATFISHING_API UCatInventoryModel : public UObject
 {
 	GENERATED_BODY()
 
 public:
-	/** 绑定当前 LocalPlayer、Controller、Character 鱼护和 Equipment 复制源；成功后立即发布完整背包投影。 */
+	/** 绑定当前 LocalPlayer、Controller 和随身库存读源；成功后立即发布完整库存投影。 */
 	bool Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController, ACatCharacter* InCharacter);
 
-	/** 成对解除鱼护、外部容器、装备和 PlayerController 结果订阅，并清空当前选择、pending 和 ViewState。 */
+	/** 成对解除外部容器、随身库存和 PlayerController 结果订阅，并清空当前选择、pending 和 ViewState。 */
 	void Unbind();
 
-	/** 返回 Model 是否仍绑定有效玩家背包读源；PageController 用它过滤旧 Widget 意图。 */
+	/** 返回 Model 是否仍绑定有效玩家库存读源；PageController 用它过滤旧 Widget 意图。 */
 	bool IsBound() const;
 
-	/** 写入背包打开状态并刷新投影；打开状态由 PageController 持有，Model 只把它合入 ViewState。 */
+	/** 写入库存打开状态并刷新投影；打开状态由 PageController 持有，Model 只把它合入 ViewState。 */
 	void SetOpen(bool bOpen);
 
-	/** 设置当前背包外部容器上下文；交互对象可传入任意数量的只读容器复制源，普通按键打开时应清空它们。 */
+	/** 设置当前库存外部容器上下文；交互对象可传入任意数量的只读容器复制源，普通按键打开时应清空它们。 */
 	void SetExternalContainerContexts(const TArray<UCatContainerReplicationComponent*>& InExternalContainers);
 
-	/** 清除当前背包的外部容器上下文；普通背包打开和离开交互对象时调用，避免旧容器留在新页面。 */
+	/** 清除当前库存的外部容器上下文；普通库存打开和离开交互对象时调用，避免旧容器留在新页面。 */
 	void ClearExternalContainerContexts();
 
-	/** 按格子下标选择当前背包条目；Model 会基于最新 Slots 裁剪空格和越界，并派生鱼动作或装备取用 gate。 */
+	/** 按格子下标选择当前库存条目；Model 会基于最新 Slots 裁剪空格和越界，并派生鱼动作或随身物品说明。 */
 	bool SelectSlot(int32 SlotIndex);
 
 	/** 标记 PageController 已提交服务器命令；View 会进入 pending 并禁用重复点击。 */
@@ -49,44 +49,41 @@ public:
 	void MarkActionRejected(ECatInventoryAction Action, FGuid RequestId, ECatDomainCommandError Error,
 		int64 Revision);
 
-	/** 主动从当前背包读源重读完整快照并广播；外部只读事实变化都收敛到这里。 */
+	/** 主动从当前库存读源重读完整快照并广播；外部只读事实变化都收敛到这里。 */
 	void Refresh();
 
-	/** 背包只读投影的查询入口；调用方拿到最近缓存副本，避免 View 或 PageController 接触后端写口。 */
+	/** 库存只读投影的查询入口；调用方拿到最近缓存副本，避免 View 或 PageController 接触后端写口。 */
 	const FCatInventoryViewState& GetViewState() const;
 
-	/** 背包 ViewState 已变化通知；只有 Bind、Refresh、选择、pending 和结果变化会触发。 */
+	/** 库存 ViewState 已变化通知；只有 Bind、Refresh、选择、pending 和结果变化会触发。 */
 	FCatInventoryModelChanged OnViewStateChanged;
 
 private:
-	/** 个人鱼护复制快照变化入口；事件只表示需要重读，不携带写权限。 */
-	void HandleFishGuardSnapshotChanged();
-
-	/** Equipment 快照变化入口；当前装备、随身耗材或耐久变化都会让背包重读完整投影。 */
+	/** 随身库存快照变化入口；当前选择、物品数量或耐久变化都会让库存重读完整投影。 */
 	void HandleEquipmentSnapshotChanged();
 
-	/** 外部容器复制变化入口；任意已绑定外部容器内容变化后背包会重读完整投影。 */
+	/** 外部容器复制变化入口；任意已绑定外部容器内容变化后库存会重读完整投影。 */
 	void HandleExternalContainerSnapshotChanged();
 
-	/** owning Controller 收到跨容器物体移动结果时匹配当前 pending 并刷新背包反馈。 */
+	/** owning Controller 收到公共领域结果时匹配当前 pending 的容器移动或钓具选择，并刷新库存反馈。 */
 	void HandleCampCommandResult(const FCatDomainCommandResult& Result);
 
-	/** owning Controller 收到献祭结果时匹配当前 pending 并刷新背包反馈。 */
+	/** owning Controller 收到献祭结果时匹配当前 pending 并刷新库存反馈。 */
 	void HandleSacrificeResult(const FCatSacrificeResult& Result);
 
-	/** owning Controller 收到吃鱼结果时匹配当前 pending 并刷新背包反馈。 */
+	/** owning Controller 收到吃鱼结果时匹配当前 pending 并刷新库存反馈。 */
 	void HandleFishConsumeResult(const FCatFishConsumeResult& Result);
 
-	/** 判断服务器回包是否属于当前等待的背包动作；动作类型和 RequestId 必须同时匹配。 */
+	/** 判断服务器回包是否属于当前等待的库存动作；动作类型和 RequestId 必须同时匹配。 */
 	bool IsPendingResult(ECatInventoryAction Action, FGuid RequestId) const;
 
 	/** 按某个容器快照生成一个格子的只读投影；空格显示稳定占位文本，源目标身份来自容器公开事实。 */
 	FCatInventorySlotView MakeSlotView(const FCatContainerSnapshot& Snapshot, int32 ContainerSlotIndex,
 		int32 DisplaySlotIndex, const TCHAR* ContainerDisplayName) const;
 
-	/** 按当前 Equipment 快照生成一个鱼竿槽；它只证明本人后端当前鱼竿，不作为 Items 拖拽源。 */
-	FCatInventorySlotView MakeCurrentRodSlotView(const FCatEquipmentLoadoutSnapshot& Equipment,
-		int32 DisplaySlotIndex) const;
+	/** 按当前随身库存数组生成一个只读物品格；它只暴露格子下标、Revision、定义和数量，不提供 Items 容器移动授权。 */
+	FCatInventorySlotView MakeInventorySlotView(const FCatRunInventorySlot& InventorySlot,
+		int32 InventorySlotIndex, int64 InventoryRevision, int32 DisplaySlotIndex) const;
 
 	/** 按容器种类和顺序生成玩家可读名称；具体容器以后可在上下文层覆盖，Model 默认只做稳定 fallback。 */
 	static FText MakeContainerDisplayName(const FCatContainerSnapshot& Snapshot, int32 ExternalContainerIndex);
@@ -112,24 +109,17 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APlayerController> BoundPlayerController;
 
-	/** 当前 Character 个人鱼护复制出口；背包格子数量和内容都从它的 Snapshot 刷新。 */
-	UPROPERTY(Transient)
-	TWeakObjectPtr<UCatContainerReplicationComponent> BoundPersonalFishGuard;
-
-	/** 当前 Character 的 Equipment 复制出口；背包从这里读取当前装备和随身耗材，不把它们写入鱼护容器。 */
+	/** 当前 Character 的 Equipment 复制出口；库存从这里读取随身物品和钓鱼选择，不把它们写入鱼护容器。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatEquipmentComponent> BoundEquipment;
 
-	/** 鱼护快照订阅句柄；Unbind 必须从同一组件移除。 */
-	FDelegateHandle FishGuardChangedHandle;
-
-	/** 当前交互上下文贡献的外部容器读源；普通背包打开时为空，不会凭空展示远处容器。 */
+	/** 当前交互上下文贡献的外部容器读源；普通库存打开时为空，不会凭空展示远处容器。 */
 	TArray<FExternalContainerBinding> BoundExternalContainers;
 
-	/** Equipment 快照订阅句柄；Unbind 必须从同一组件移除。 */
+	/** 随身库存快照订阅句柄；Unbind 必须从同一组件移除。 */
 	FDelegateHandle EquipmentChangedHandle;
 
-	/** PlayerController 公共领域结果订阅句柄；背包用它接收跨容器移动终态。 */
+	/** PlayerController 公共领域结果订阅句柄；库存用它接收跨容器移动终态。 */
 	FDelegateHandle CampCommandResultHandle;
 
 	/** PlayerController 献祭结果订阅句柄；只用于献祭请求终态。 */
@@ -138,7 +128,7 @@ private:
 	/** PlayerController 吃鱼结果订阅句柄；只用于吃鱼请求终态。 */
 	FDelegateHandle FishConsumeResultHandle;
 
-	/** 当前背包窗口是否打开的 PageController 投影；Model 不从 Widget 可见性反推。 */
+	/** 当前库存窗口是否打开的 PageController 投影；Model 不从 Widget 可见性反推。 */
 	bool bOpen = false;
 
 	/** 当前选中格子下标；Refresh 会按最新 Slots 数组裁剪。 */
@@ -150,16 +140,16 @@ private:
 	/** 当前 pending 的 RequestId；服务器结果必须匹配它才能关闭 pending。 */
 	FGuid PendingRequestId;
 
-	/** 当前是否已有背包动作提交到服务器但尚未收到终态。 */
+	/** 当前是否已有库存动作提交到服务器但尚未收到终态。 */
 	bool bActionPending = false;
 
 	/** 最近一次完成或本地拒绝的动作类型；用于反馈文本和调试。 */
 	ECatInventoryAction LastAction = ECatInventoryAction::None;
 
-	/** 最近一次背包动作的公共结果头；不作为 Items 终态缓存。 */
+	/** 最近一次库存动作的公共结果头；不作为 Items 终态缓存。 */
 	FCatDomainCommandResult LastCommandResult;
 
-	/** 最近是否有可展示的背包动作结果。 */
+	/** 最近是否有可展示的库存动作结果。 */
 	bool bHasCommandResult = false;
 
 	/** 最近一次吃鱼详细结果；只在 LastAction 对应吃鱼时有效。 */
@@ -168,6 +158,6 @@ private:
 	/** 最近一次献祭详细结果；只在 LastAction 对应献祭时有效。 */
 	FCatSacrificeResult LastSacrificeResult;
 
-	/** 最近发布给 View 的完整背包投影；所有刷新都先写这里再广播。 */
+	/** 最近发布给 View 的完整库存投影；所有刷新都先写这里再广播。 */
 	FCatInventoryViewState ViewState;
 };

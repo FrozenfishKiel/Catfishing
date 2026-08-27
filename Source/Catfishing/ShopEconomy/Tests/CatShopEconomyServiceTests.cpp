@@ -84,7 +84,7 @@ namespace CatShopEconomyServiceTest
 			}
 		}
 
-		/** 写入一条有限库存装备订单和一条无限免费普通饵订单；测试只观察经济事实，不创建 Equipment 定义。 */
+		/** 写入一条有限库存装备订单和一条无限免费普通饵数量库存订单；测试只观察经济事实，不创建 Equipment 定义。 */
 		void ConfigurePurchaseCatalog()
 		{
 			if (!Settings)
@@ -100,7 +100,7 @@ namespace CatShopEconomyServiceTest
 
 			FCatShopCatalogEntry FreeBaitEntry;
 			FreeBaitEntry.EntryId = TEXT("FreeBasicBait");
-			FreeBaitEntry.Kind = ECatShopEntryKind::RunConsumableGrant;
+			FreeBaitEntry.Kind = ECatShopEntryKind::InventoryQuantityGrant;
 			FreeBaitEntry.DefinitionId = TEXT("BasicBait");
 			FreeBaitEntry.UnitPrice = 0;
 			FreeBaitEntry.bUnlimitedStock = true;

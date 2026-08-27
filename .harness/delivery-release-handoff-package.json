@@ -11,7 +11,7 @@
     "FishingPlayerEntry": {
       "title": "Map / Input / Interaction——Fishing 玩家入口闭环",
       "closure_status": "complete",
-      "status_basis": "Static, Build, Automation, Lake map verification, and FullLoop evidence are recorded as one atomic player-entry closure.",
+      "status_basis": "Static, Build, Automation, and Lake map verification were recorded as historical player-entry closure evidence. The old FullLoop automation test has been removed with its stale test file and must not be used as current fresh evidence; player-entry capture submission needs a replacement automation or manual acceptance before being claimed fresh again.",
       "evidence_roots": [
         "Saved/Automation/FishingPlayerEntry"
       ]
@@ -130,15 +130,6 @@
       "check_kind": "file_contains",
       "path": "Saved/Automation/FishingPlayerEntry/MapVerification.log",
       "expected_text": "FISHING_PLAYER_ENTRY_MAP_PASS"
-    },
-    {
-      "contract_id": "FishingPlayerEntry.FullLoopSuccess",
-      "module_key": "FishingPlayerEntry",
-      "check_kind": "automation_report",
-      "path": "Saved/Automation/FishingPlayerEntry/Report/index.json",
-      "expected_tests": [
-        "Catfishing.PlayerEntry.FullLoop"
-      ]
     },
     {
       "contract_id": "UIReach.BuildPass",
@@ -312,15 +303,6 @@
       "path": "Saved/Automation/CharacterGrowthCondition/Growth/Report/index.json",
       "expected_tests": [
         "Catfishing.Unit.Growth.Component.CommittedFishAddsExperienceAndReplays"
-      ]
-    },
-    {
-      "contract_id": "CharacterGrowthCondition.PlayerEntrySuccess",
-      "module_key": "CharacterGrowthCondition",
-      "check_kind": "automation_report",
-      "path": "Saved/Automation/CharacterGrowthCondition/PlayerEntry/Report/index.json",
-      "expected_tests": [
-        "Catfishing.PlayerEntry.FullLoop"
       ]
     },
     {

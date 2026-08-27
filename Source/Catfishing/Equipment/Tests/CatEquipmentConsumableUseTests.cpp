@@ -17,7 +17,7 @@ namespace CatEquipmentConsumableUseTest
 	static const FName FloatId(TEXT("RunUseFloat"));
 	static const FName ConsumableId(TEXT("RunUseHerb"));
 
-	/** 定义构造流程：创建最小 transient 装备定义，并让 Bait/Herb 都满足正式局内消耗品 gate。 */
+	/** 定义构造流程：创建最小 transient 装备定义，并让 Bait/Herb 都能作为数量型物品进入统一库存。 */
 	static UCatEquipmentDefinition* MakeDefinition(FName Id, ECatEquipmentKind Kind)
 	{
 		UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>(GetTransientPackage());
@@ -58,11 +58,15 @@ namespace CatEquipmentConsumableUseTest
 
 	static int32 QuantityOf(const FCatEquipmentLoadoutSnapshot& Snapshot)
 	{
-		const FCatRunConsumableStack* Stack = Snapshot.Consumables.FindByPredicate([](const FCatRunConsumableStack& Item)
+		int32 Quantity = 0;
+		for (const FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
 		{
-			return Item.DefinitionId == ConsumableId;
-		});
-		return Stack ? Stack->Quantity : 0;
+			if (Slot.DefinitionId == ConsumableId && Slot.Quantity > 0)
+			{
+				Quantity += Slot.Quantity;
+			}
+		}
+		return Quantity;
 	}
 
 	struct FFixture
@@ -94,12 +98,21 @@ namespace CatEquipmentConsumableUseTest
 			Component = NewObject<UCatEquipmentComponent>(Pawn);
 			Pawn->AddInstanceComponent(Component);
 			Component->RegisterComponent();
+			const FCatDomainCommandResult GrantRod = Component->GrantEquipmentFromAuthority(
+				FGuid::NewGuid(), 0, RodId);
+			const FCatDomainCommandResult GrantBait = Component->GrantInventoryQuantityFromAuthority(
+				FGuid::NewGuid(), Component->GetSnapshot().Revision, BaitId, 1);
+			const FCatDomainCommandResult GrantFloat = Component->GrantEquipmentFromAuthority(
+				FGuid::NewGuid(), Component->GetSnapshot().Revision, FloatId);
 			const FCatDomainCommandResult Configure = Component->ConfigureLoadoutFromAuthority(
-				FGuid::NewGuid(), 0, RodId, BaitId, FloatId);
-			const FCatDomainCommandResult Grant = Component->GrantRunConsumableFromAuthority(
+				FGuid::NewGuid(), Component->GetSnapshot().Revision, RodId, BaitId, FloatId);
+			const FCatDomainCommandResult GrantUseItem = Component->GrantInventoryQuantityFromAuthority(
 				FGuid::NewGuid(), Component->GetSnapshot().Revision, ConsumableId, Quantity);
-			Test.TestTrue(TEXT("fixture configured"), Configure.bCommitted && Grant.bCommitted);
-			return Configure.bCommitted && Grant.bCommitted;
+			Test.TestTrue(TEXT("fixture inventory prepared"),
+				GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && Configure.bCommitted
+				&& GrantUseItem.bCommitted);
+			return GrantRod.bCommitted && GrantBait.bCommitted && GrantFloat.bCommitted && Configure.bCommitted
+				&& GrantUseItem.bCommitted;
 		}
 
 		~FFixture()
@@ -123,7 +136,7 @@ CAT_RUN_USE_TEST(FCatRunUseDeferredTest, "DeferredCommitIsInvisibleUntilIdempote
 CAT_RUN_USE_TEST(FCatRunUseReleaseTest, "ReleasePreservesInventoryAndRejectsLateCommit")
 CAT_RUN_USE_TEST(FCatRunUseMutationGateTest, "ActiveReservationBlocksConflictingMutations")
 CAT_RUN_USE_TEST(FCatRunUseFishingMutexTest, "FishingAndRunReservationsAreMutuallyExclusive")
-CAT_RUN_USE_TEST(FCatRunUseLegacySpendTest, "ReservedQuantityCannotBeDoubleSpentByLegacyConsume")
+CAT_RUN_USE_TEST(FCatRunUseDirectSpendTest, "ReservedQuantityCannotBeDoubleSpentByDirectConsume")
 
 bool FCatRunUseBeginTest::RunTest(const FString& Parameters)
 {
@@ -193,7 +206,7 @@ bool FCatRunUseMutationGateTest::RunTest(const FString& Parameters)
 	F.Component->BeginRunConsumableUse(FGuid::NewGuid(), ConsumableId, 2, F.Component->GetSnapshot().Revision);
 	const FCatEquipmentLoadoutSnapshot Before = F.Component->GetSnapshot();
 	const FCatDomainCommandResult Configure = F.Component->ConfigureLoadoutFromAuthority(FGuid::NewGuid(), Before.Revision, RodId, BaitId, FloatId);
-	const FCatDomainCommandResult Grant = F.Component->GrantRunConsumableFromAuthority(FGuid::NewGuid(), Before.Revision, ConsumableId, 1);
+	const FCatDomainCommandResult Grant = F.Component->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Before.Revision, ConsumableId, 1);
 	const FCatFishingFailureResult Failure = F.Component->CommitFishingFailure(FGuid::NewGuid(), Before.Revision, ECatFishingFailurePenalty::DamageRod);
 	const FCatDomainCommandResult Repair = F.Component->RepairRodAtCamp(FGuid::NewGuid(), Before.Revision, true);
 	TestFalse(TEXT("configure blocked"), Configure.bCommitted);
@@ -218,7 +231,7 @@ bool FCatRunUseFishingMutexTest::RunTest(const FString& Parameters)
 	TestNotEqual(TEXT("run reservation blocks fishing begin"), FishingBlocked.Error, ECatDomainCommandError::None);
 
 	FFixture FishingFirst; if (!FishingFirst.Create(*this)) return false;
-	const FCatDomainCommandResult BaitGrant = FishingFirst.Component->GrantRunConsumableFromAuthority(
+	const FCatDomainCommandResult BaitGrant = FishingFirst.Component->GrantInventoryQuantityFromAuthority(
 		FGuid::NewGuid(), FishingFirst.Component->GetSnapshot().Revision, BaitId, 1);
 	TestTrue(TEXT("fishing-first fixture grants bait inventory"), BaitGrant.bCommitted);
 	FishingFirst.Component->BeginFishingUse(FGuid::NewGuid(), RodId, BaitId, FloatId, FishingFirst.Component->GetSnapshot().Revision);
@@ -228,15 +241,15 @@ bool FCatRunUseFishingMutexTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-bool FCatRunUseLegacySpendTest::RunTest(const FString& Parameters)
+bool FCatRunUseDirectSpendTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters; using namespace CatEquipmentConsumableUseTest;
 	FFixture F; if (!F.Create(*this, 2)) return false;
 	F.Component->BeginRunConsumableUse(FGuid::NewGuid(), ConsumableId, 2, F.Component->GetSnapshot().Revision);
-	const FCatDomainCommandResult Legacy = F.Component->ConsumeRunConsumableFromAuthority(
+	const FCatDomainCommandResult DirectConsume = F.Component->ConsumeInventoryQuantityFromAuthority(
 		FGuid::NewGuid(), F.Component->GetSnapshot().Revision, ConsumableId);
-	TestFalse(TEXT("legacy consume cannot spend reserved quantity"), Legacy.bCommitted);
-	TestEqual(TEXT("legacy consume uses reservation gate"), Legacy.Error, ECatDomainCommandError::InvalidPhase);
+	TestFalse(TEXT("direct consume cannot spend reserved quantity"), DirectConsume.bCommitted);
+	TestEqual(TEXT("direct consume uses reservation gate"), DirectConsume.Error, ECatDomainCommandError::InvalidPhase);
 	TestEqual(TEXT("reserved inventory remains intact"), QuantityOf(F.Component->GetSnapshot()), 2);
 	return !HasAnyErrors();
 }

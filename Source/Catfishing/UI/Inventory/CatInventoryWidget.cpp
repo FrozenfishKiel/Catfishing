@@ -51,7 +51,7 @@ void UCatInventoryWidget::NativeDestruct()
 	Super::NativeDestruct();
 }
 
-// 键盘流程：背包打开且按下当前 IMC 解析出来的同一键时请求关闭；其他键保持默认传播。
+// 键盘流程：库存打开且按下当前 IMC 解析出来的同一键时请求关闭；其他键保持默认传播。
 FReply UCatInventoryWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
 	if (LastInventoryViewState.bOpen && !LastInventoryViewState.ToggleKeyName.IsNone()
@@ -63,13 +63,13 @@ FReply UCatInventoryWidget::NativeOnKeyDown(const FGeometry& InGeometry, const F
 	return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
 }
 
-// 渲染流程：缓存完整背包投影，更新鱼/装备/耗材文本，再按 Slots 数组重建鱼竿槽和容器格子并触发蓝图扩展点。
+// 渲染流程：缓存完整库存投影，更新随身物品、鱼容器和当前选择文本，再按 Slots 数组重建库存格并触发蓝图扩展点。
 void UCatInventoryWidget::RenderInventory(const FCatInventoryViewState& ViewState)
 {
 	LastInventoryViewState = ViewState;
 	BlueprintSummaryText = ViewState.SummaryText;
 	BlueprintEquipmentText = ViewState.EquipmentText;
-	BlueprintConsumablesText = ViewState.ConsumablesText;
+	BlueprintInventoryItemsText = ViewState.InventoryItemsText;
 	BlueprintSelectedFishText = ViewState.SelectedFishText;
 	BlueprintResultText = ViewState.ResultText;
 	if (SummaryTextBlock)
@@ -80,9 +80,9 @@ void UCatInventoryWidget::RenderInventory(const FCatInventoryViewState& ViewStat
 	{
 		EquipmentTextBlock->SetText(BlueprintEquipmentText);
 	}
-	if (ConsumablesTextBlock)
+	if (InventoryItemsTextBlock)
 	{
-		ConsumablesTextBlock->SetText(BlueprintConsumablesText);
+		InventoryItemsTextBlock->SetText(BlueprintInventoryItemsText);
 	}
 	if (SelectedFishTextBlock)
 	{
@@ -118,7 +118,7 @@ void UCatInventoryWidget::RequestCloseInventory()
 	OnCloseRequested.Broadcast();
 }
 
-// 选择请求流程：过滤负下标后广播；Model 会基于最新背包快照继续裁剪空格和越界。
+// 选择请求流程：过滤负下标后广播；Model 会基于最新库存快照继续裁剪空格和越界。
 void UCatInventoryWidget::RequestSelectSlot(const int32 SlotIndex)
 {
 	if (SlotIndex >= 0)

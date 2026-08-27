@@ -67,7 +67,7 @@ bool FCatLocalPlayerUISubsystemTypeContractTest::RunTest(const FString& Paramete
 }
 
 // 测试流程：用 FTestWorldWrapper 创建带 GameInstance 的 Game World，再给 LocalPlayer 装入同一 WorldContext 且带 Overlay 的临时 GameViewportClient，避免命令行 Viewport 缺层的假失败。
-// 随后让项目 Controller 通过正式 Pawn notifier 占有项目 Character；先断言关闭 gate 时不创建半套模块，再显式打开 gate 验证 HUD、背包和交互提示成对装卸。
+// 随后让项目 Controller 占有项目 Character，并通过子系统刷新入口模拟本地 Pawn 就绪；先断言关闭 gate 时不创建半套模块，再显式打开 gate 验证 HUD、背包和交互提示成对装卸。
 bool FCatLocalPlayerUISubsystemSplitPlayerModulesAttachTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;

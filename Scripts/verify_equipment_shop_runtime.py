@@ -95,7 +95,7 @@ def _validate_equipment_definition(settings, definition_id: str, kind: str, asse
                  f"{definition_id} 线长无效")
     elif kind == "Bait":
         _require(bool(_get_property(definition, "b_run_consumable", "bRunConsumable")),
-                 f"{definition_id} 鱼饵必须由正式局内消耗品数量栈交付")
+                 f"{definition_id} 鱼饵必须作为数量型物品进入统一库存")
         _require(float(_get_property(definition, "bite_rate_multiplier", "BiteRateMultiplier")) > 0.0,
                  f"{definition_id} BiteRateMultiplier 无效")
         _require(float(_get_property(definition, "minimum_bite_delay_multiplier", "MinimumBiteDelayMultiplier")) > 0.0,
@@ -110,7 +110,7 @@ def _validate_equipment_definition(settings, definition_id: str, kind: str, asse
                  f"{definition_id} 抄网距离无效")
     elif kind == "Chum":
         _require(bool(_get_property(definition, "b_run_consumable", "bRunConsumable")),
-                 f"{definition_id} 窝料必须是 RunConsumable")
+                 f"{definition_id} 窝料必须作为数量型物品进入统一库存")
         influence = _get_property(definition, "chum_influence", "ChumInfluence")
         _require(float(_get_property(influence, "radius_centimeters", "RadiusCentimeters")) > 0.0,
                  f"{definition_id} 窝料半径无效")
@@ -226,8 +226,8 @@ def main() -> None:
              "团队公款初始余额不足以购买正式鱼竿和正式鱼漂")
     _validate_shop_entry(shop_settings, "ShopRodT2Order", "EquipmentGrant", "ShopRodT2", 3, False, True)
     _validate_shop_entry(shop_settings, "ShopFloatYarnBallOrder", "EquipmentGrant", "YarnBallFloat", 2, False, True)
-    _validate_shop_entry(shop_settings, "ShopBugChumOrder", "RunConsumableGrant", "BugChum", 1, True, False)
-    _validate_shop_entry(shop_settings, "FreeBugBaitClaim", "RunConsumableGrant", "BugBait", 0, True, False)
+    _validate_shop_entry(shop_settings, "ShopBugChumOrder", "InventoryQuantityGrant", "BugChum", 1, True, False)
+    _validate_shop_entry(shop_settings, "FreeBugBaitClaim", "InventoryQuantityGrant", "BugBait", 0, True, False)
     _validate_shop_entry(shop_settings, "FreeStarterRodClaim", "EquipmentGrant", "StarterRodT1", 0, True, False)
     _require(_as_name(_get_property(shop_settings, "free_ordinary_bait_entry_id", "FreeOrdinaryBaitEntryId")) == "FreeBugBaitClaim",
              "免费普通饵入口未绑定 FreeBugBaitClaim")

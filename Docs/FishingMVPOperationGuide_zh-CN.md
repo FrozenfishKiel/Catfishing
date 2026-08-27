@@ -408,7 +408,7 @@ Event BeginPlay
 
 ### ~~2. 打窝需要窝料库存，但没有发放入口~~ ✅ 已修
 
-新增 `ACatfishingPlayerController::ServerGrantRunConsumable`（`Server, Reliable, BlueprintCallable`），服务器端重建身份后转发给 `Equipment->GrantRunConsumableFromAuthority()`。
+数量型物品不再提供客户端直连发放 RPC；调试和正式链路都应通过服务器权威入口把物品写入统一库存格。
 
 > 没有直接给组件方法加 `BlueprintCallable`，而是走 Controller RPC 转发 —— 和 `ServerConfigureEquipment` / `ServerRepairRodAtCamp` 保持一致的权限边界，避免任何蓝图都能直接摸到域写入口。
 
@@ -476,7 +476,7 @@ CatWaterBoundarySplineActor → ACatWaterBoundarySplineActor
 
 - `ST_RunFlow` / `ST_FishingSession` 两棵树已建好，结构核对通过：Schema、Context Actor、`Tasks Completion=All`、Task 顺序与参数、转移链路全部正确
 - 两条 StateTree 路径已写进 `Config/DefaultGame.ini`
-- C++ 缺口 1、2 已补（ScoopNet 参数 + `ServerGrantRunConsumable`），编译通过
+- C++ 缺口 1、2 已补；数量型物品改走统一库存格，旧直连发放入口已移除
 
 ### ✅ PIE 已验证通过（2026-08-18）
 

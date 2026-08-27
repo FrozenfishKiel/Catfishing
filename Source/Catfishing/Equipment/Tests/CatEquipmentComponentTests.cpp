@@ -101,7 +101,7 @@ namespace CatEquipmentComponentTest
 	};
 }
 
-// 测试流程：默认装备目录为空时提交耗材授予；Result 必须拒绝，Snapshot Revision、耗材数组和装配字段保持初始值。
+// 测试流程：默认装备目录为空时提交数量型物品授予；Result 必须拒绝，Snapshot Revision、库存格数组和装配字段保持初始值。
 bool FCatEquipmentComponentDefaultConsumableGateTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -117,13 +117,13 @@ bool FCatEquipmentComponentDefaultConsumableGateTest::RunTest(const FString& Par
 		if (Component)
 		{
 			const FCatEquipmentLoadoutSnapshot Before = Component->GetSnapshot();
-			const FCatDomainCommandResult Result = Component->GrantRunConsumableFromAuthority(
+			const FCatDomainCommandResult Result = Component->GrantInventoryQuantityFromAuthority(
 				FGuid::NewGuid(), Before.Revision, TEXT("MissingConsumable"), 1);
-			TestFalse(TEXT("默认目录下耗材授予不提交"), Result.bCommitted);
-			TestEqual(TEXT("默认目录下耗材授予返回 InvalidPayload"), Result.Error, ECatDomainCommandError::InvalidPayload);
+			TestFalse(TEXT("默认目录下数量库存授予不提交"), Result.bCommitted);
+			TestEqual(TEXT("默认目录下数量库存授予返回 InvalidPayload"), Result.Error, ECatDomainCommandError::InvalidPayload);
 			const FCatEquipmentLoadoutSnapshot& After = Component->GetSnapshot();
 			TestEqual(TEXT("拒绝后 Equipment Revision 不变"), After.Revision, Before.Revision);
-			TestEqual(TEXT("拒绝后耗材数组仍为空"), After.Consumables.Num(), Before.Consumables.Num());
+			TestEqual(TEXT("拒绝后库存格数组仍为空"), After.InventorySlots.Num(), Before.InventorySlots.Num());
 			TestEqual(TEXT("拒绝后 Rod 仍为空"), After.RodDefinitionId, Before.RodDefinitionId);
 			TestEqual(TEXT("拒绝后 Bait 仍为空"), After.BaitDefinitionId, Before.BaitDefinitionId);
 			TestEqual(TEXT("拒绝后 Float 仍为空"), After.FloatDefinitionId, Before.FloatDefinitionId);
@@ -157,7 +157,7 @@ bool FCatEquipmentComponentFishingFailureNoneTest::RunTest(const FString& Parame
 			TestEqual(TEXT("None 失败预算不推进 Revision"), First.Command.Revision, Before.Revision);
 			TestEqual(TEXT("None 失败预算保留惩罚类别"), First.Penalty, ECatFishingFailurePenalty::None);
 			TestEqual(TEXT("None 失败预算不改变耐久"), Component->GetSnapshot().RodDurability, Before.RodDurability);
-			TestEqual(TEXT("None 失败预算不创建耗材"), Component->GetSnapshot().Consumables.Num(), 0);
+			TestEqual(TEXT("None 失败预算不创建库存格"), Component->GetSnapshot().InventorySlots.Num(), 0);
 
 			const FCatFishingFailureResult Replay = Component->CommitFishingFailure(
 				RequestId, Before.Revision, ECatFishingFailurePenalty::DamageRod);

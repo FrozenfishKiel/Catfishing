@@ -358,7 +358,7 @@ bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 	TestNotNull(TEXT("背包根"), InventoryRoot);
 	TestNotNull(TEXT("背包摘要文本"), AddText(Inventory, InventoryRoot, TEXT("SummaryTextBlock"), TEXT("背包：等待同步")));
 	TestNotNull(TEXT("背包装备文本"), AddText(Inventory, InventoryRoot, TEXT("EquipmentTextBlock"), TEXT("当前装备：等待同步")));
-	TestNotNull(TEXT("背包耗材文本"), AddText(Inventory, InventoryRoot, TEXT("ConsumablesTextBlock"), TEXT("随身耗材：等待同步")));
+	TestNotNull(TEXT("背包随身库存文本"), AddText(Inventory, InventoryRoot, TEXT("InventoryItemsTextBlock"), TEXT("随身库存：等待同步")));
 	TestNotNull(TEXT("背包选中鱼文本"), AddText(Inventory, InventoryRoot, TEXT("SelectedFishTextBlock"), TEXT("鱼护操作：当前没有选中鱼")));
 	UWrapBox* SlotWrapBox = Inventory->WidgetTree->ConstructWidget<UWrapBox>(
 		UWrapBox::StaticClass(), TEXT("InventorySlotWrapBox"));
@@ -393,6 +393,7 @@ bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 		ShopRoot->AddChildToVerticalBox(ShopButtons);
 		TestNotNull(TEXT("二级竿按钮"), AddButton(Shop, ShopButtons, TEXT("PurchaseShopRodT2Button"), TEXT("买二级竿")));
 		TestNotNull(TEXT("窝料按钮"), AddButton(Shop, ShopButtons, TEXT("PurchaseBugChumButton"), TEXT("买窝料")));
+		TestNotNull(TEXT("鱼漂按钮"), AddButton(Shop, ShopButtons, TEXT("PurchaseYarnBallFloatButton"), TEXT("买鱼漂")));
 		TestNotNull(TEXT("免费饵按钮"), AddButton(Shop, ShopButtons, TEXT("ClaimFreeBugBaitButton"), TEXT("领鱼饵")));
 		TestNotNull(TEXT("保底竿按钮"), AddButton(Shop, ShopButtons, TEXT("ClaimFreeStarterRodButton"), TEXT("领保底竿")));
 		TestNotNull(TEXT("关闭商店按钮"), AddButton(Shop, ShopButtons, TEXT("CloseButton"), TEXT("关闭")));
@@ -420,7 +421,7 @@ bool FCatUIModuleWidgetAssetsCreationTest::RunTest(const FString& Parameters)
 	if (bSaved)
 	{
 		UE_LOG(LogTemp, Display,
-			TEXT("CREATE_UI_MODULE_WBPS_PASS HUD=/Game/UI/HUD/WBP_CatHUD Inventory=/Game/UI/Inventory/WBP_CatInventory Slot=/Game/UI/InventorySlot/WBP_CatInventorySlot Shop=/Game/UI/Shop/WBP_CatShop ShopKiosk=/Game/ShopEconomy/BP_CatShopKiosk Interaction=/Game/UI/Interaction/WBP_CatInteractionPrompt Collection=/Game/UI/Collection/WBP_CatCollection InventorySlotRoot=UserWidgetNotButton SlotContainer=InventorySlotWrapBox InventoryEquipmentText=EquipmentTextBlock InventoryConsumablesText=ConsumablesTextBlock ShopOwner=InteractionObject InteractAction=/Game/Input/InputAction/IA_Interact InteractContext=/Game/Input/InputContext/IMC_InputContext InteractKey=E"));
+			TEXT("CREATE_UI_MODULE_WBPS_PASS HUD=/Game/UI/HUD/WBP_CatHUD Inventory=/Game/UI/Inventory/WBP_CatInventory Slot=/Game/UI/InventorySlot/WBP_CatInventorySlot Shop=/Game/UI/Shop/WBP_CatShop ShopKiosk=/Game/ShopEconomy/BP_CatShopKiosk Interaction=/Game/UI/Interaction/WBP_CatInteractionPrompt Collection=/Game/UI/Collection/WBP_CatCollection InventorySlotRoot=UserWidgetNotButton SlotContainer=InventorySlotWrapBox InventoryEquipmentText=EquipmentTextBlock InventoryItemsText=InventoryItemsTextBlock ShopOwner=InteractionObject InteractAction=/Game/Input/InputAction/IA_Interact InteractContext=/Game/Input/InputContext/IMC_InputContext InteractKey=E"));
 	}
 	return bSaved;
 }

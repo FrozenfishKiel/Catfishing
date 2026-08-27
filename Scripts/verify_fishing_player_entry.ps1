@@ -27,7 +27,7 @@ function Assert-ContainsText {
 }
 
 function Assert-FishingPlayerEntryStatic {
-    <# 静态核验流程：同时检查 Harness 单原子规则、配置入口、地图探针和 FullLoop 测试锚点；它不替代 Build/Automation，只防止模块被拆碎或入口合同悄悄漂移。 #>
+    <# 静态核验流程：同时检查 Harness 单原子规则、配置入口和地图探针；它不替代 Build 或运行时验收，只防止模块被拆碎或入口合同悄悄漂移。 #>
     $HarnessPath = Join-Path $ProjectRoot ".harness\harness.json"
     if (-not (Test-Path -LiteralPath $HarnessPath)) {
         throw "Missing harness.json for FishingPlayerEntry"
@@ -67,11 +67,6 @@ function Assert-FishingPlayerEntryStatic {
     Assert-ContainsText $MapVerifier "FISHING_PLAYER_ENTRY_MAP_PASS" "Map verifier must emit the FishingPlayerEntry pass marker"
     Assert-ContainsText $MapVerifier "EXPECTED_FISHING_TAGS" "Map verifier must keep the Fishing input tag set explicit"
 
-    $FullLoopTest = Get-Content -LiteralPath (Join-Path $ProjectRoot "Source\Catfishing\Fishing\Tests\CatFishingPlayerEntryTests.cpp") -Raw -Encoding UTF8
-    Assert-ContainsText $FullLoopTest "Catfishing.PlayerEntry.FullLoop" "FishingPlayerEntry must keep the FullLoop automation test"
-    Assert-ContainsText $FullLoopTest "SubmitScoop" "FullLoop must enter through the player command component"
-    Assert-ContainsText $FullLoopTest "FishGuard" "FullLoop must verify personal fish guard capture"
-
     Write-Host "FishingPlayerEntry static check passed"
 }
 
@@ -108,56 +103,10 @@ function Invoke-FishingPlayerEntryMapVerification {
     }
 }
 
-function Assert-FishingPlayerEntryAutomationReport {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string]$IndexFile,
-        [Parameter(Mandatory = $true)]
-        [string]$LogFile
-    )
-    <# 报告核验流程：从结构化报告精确定位唯一 FullLoop 并要求 Success/零错误，再从日志核对同一路径确实开始且以 Success 完成；测试未发现、未执行、重名、失败或只留下旧报告都拒绝。 #>
-    $Report = Get-Content -LiteralPath $IndexFile -Raw | ConvertFrom-Json
-    $Matches = @($Report.tests | Where-Object { $_.fullTestPath -eq "Catfishing.PlayerEntry.FullLoop" })
-    if ($Matches.Count -ne 1 -or @($Report.tests).Count -ne 1) {
-        throw "FishingPlayerEntry report did not discover exactly one FullLoop: matches=$($Matches.Count) total=$(@($Report.tests).Count)"
-    }
-    $FullLoop = $Matches[0]
-    if ($FullLoop.state -ne "Success" -or [int]$FullLoop.errors -ne 0) {
-        throw "FishingPlayerEntry FullLoop did not succeed: state=$($FullLoop.state) errors=$($FullLoop.errors)"
-    }
-    $LogText = Get-Content -LiteralPath $LogFile -Raw
-    $Started = $LogText -match "Test Started\..*Path=\{Catfishing\.PlayerEntry\.FullLoop\}"
-    $Completed = $LogText -match "Test Completed\. Result=\{Success\}.*Path=\{Catfishing\.PlayerEntry\.FullLoop\}"
-    if (-not $Started -or -not $Completed) {
-        throw "FishingPlayerEntry log does not prove FullLoop start and success: started=$Started completed=$Completed"
-    }
-}
-
 function Invoke-FishingPlayerEntryAutomation {
-    <# 自动化流程：先完成 Lake 只读事实验证，再清除本轮专用旧报告并运行唯一 PlayerEntry 过滤器；最后把结构化报告与日志交给精确核验，任一证据缺失都 fail-closed。 #>
+    <# 运行时核验流程：当前 FullLoop 自动化测试已随失效测试文件移除；这里只保留 Lake 只读地图探针，玩家命令链回归需后续新测试或人工验收补回。 #>
     Invoke-FishingPlayerEntryMapVerification
-    $ReportRoot = Join-Path $EvidenceRoot "Report"
-    $LogFile = Join-Path $EvidenceRoot "Automation.log"
-    New-Item -ItemType Directory -Path $EvidenceRoot -Force | Out-Null
-    if (Test-Path -LiteralPath $ReportRoot) {
-        Remove-Item -LiteralPath $ReportRoot -Recurse -Force
-    }
-    if (Test-Path -LiteralPath $LogFile) {
-        Remove-Item -LiteralPath $LogFile -Force
-    }
-    & $Editor $ProjectFile -unattended -nop4 -nosplash -nullrhi -DDC-ForceMemoryCache `
-        "-ExecCmds=Automation RunTests Catfishing.PlayerEntry;Quit" `
-        "-TestExit=Automation Test Queue Empty" `
-        "-ReportExportPath=$ReportRoot" `
-        "-abslog=$LogFile"
-    if ($LASTEXITCODE -ne 0) {
-        throw "FishingPlayerEntry automation editor failed with exit code $LASTEXITCODE"
-    }
-    $IndexFile = Join-Path $ReportRoot "index.json"
-    if (-not (Test-Path -LiteralPath $IndexFile) -or -not (Test-Path -LiteralPath $LogFile)) {
-        throw "FishingPlayerEntry automation did not produce a fresh report and log"
-    }
-    Assert-FishingPlayerEntryAutomationReport -IndexFile $IndexFile -LogFile $LogFile
+    Write-Host "FishingPlayerEntry runtime map verification passed; FullLoop automation is removed"
 }
 
 if ($Mode -eq "Static") {

@@ -4,16 +4,18 @@
 #include "Framework/Core/CatDomainCommandTypes.h"
 #include "CatItemTypes.generated.h"
 
-/** 阶段 E 两类正式容器边界；鱼护归个人，鱼缸是一局共享 Actor 宿主。 */
+/** 阶段 E 正式容器边界；容器都由各自独立宿主接入 Items 事务。 */
 UENUM(BlueprintType)
 enum class ECatContainerKind : uint8
 {
 	/** 容器尚未注册或种类未裁。 */
 	Unknown,
-	/** 随 Character 所有权复制的个人鱼护。 */
+	/** 玩家个人的箱子式鱼护；它归个人身份所有，但不由 Character 宿主或复制。 */
 	PersonalGuard,
 	/** 关卡中共享鱼缸 Actor 承载的团队容器。 */
-	SharedFishTank
+	SharedFishTank,
+	/** 关卡中可交互鱼护箱子承载的鱼容器；它不绑定玩家身份，也不套用鱼缸展示资格。 */
+	FishGuard
 };
 
 /** 一条局内实物鱼；与图鉴/印记 Grant 的永久事实分离，容器删除不能回滚捕获记录。 */

@@ -32,7 +32,7 @@ class CATFISHING_API UCatLocalPlayerUISubsystem : public ULocalPlayerSubsystem
 #endif
 
 public:
-	/** 订阅 GameInstance Online 快照，绑定当前 Controller Pawn notifier，并按当前 Pawn 尝试装配本地玩家 UI 模块。 */
+	/** 订阅 GameInstance Online 快照，绑定当前本地 Controller，并按当前 Pawn 尝试装配本地玩家 UI 模块。 */
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 
 	/** 先移除本地玩家 UI 模块与 Controller 绑定，再移除 Online View 和快照订阅，保证 LocalPlayer 销毁后没有迟到 UI 更新。 */
@@ -50,6 +50,12 @@ public:
 	/** 查询背包 PageController 打开态；没有已装配页面时返回 false，避免旧 Widget 引用影响输入切换判断。 */
 	bool IsInventoryOpen() const;
 
+	/** owning client 的 PlayerController 在 Pawn 或输入链就绪后调用；子系统据此重新对齐本地 HUD、背包和交互提示。 */
+	void RefreshPlayerLakeUIForController(APlayerController* Controller);
+
+	/** PlayerController 的旧 Native 交互绑定进入时调用；通用 UI 目标已处理时返回 true，阻断同键旧玩法交互。 */
+	bool TryHandleNativeInteractionInput(APlayerController* Controller);
+
 private:
 	/** 响应 Online 事实变更；实现重新读取完整 Snapshot，并同步 Frontend 面板与本地玩家 UI Model。 */
 	void HandleOnlineSnapshotChanged();
@@ -66,13 +72,13 @@ private:
 	/** 成对解除 Frontend View 动作广播并移出视口；空实例和重复调用保持幂等。 */
 	void RemoveOnlineWidget();
 
-	/** 弱绑定 Controller 的 GetOnNewPawnNotifier，并立即尝试装配其当前 Pawn；不跨 World 强持 Controller。 */
+	/** 弱绑定当前 LocalPlayer Controller，并立即尝试装配其当前 Pawn；后续 Pawn 就绪通知由项目 PlayerController 主动转交。 */
 	void BindController(APlayerController* Controller);
 
-	/** 从旧 Controller 精确移除 Pawn notifier 并清弱引用；Controller 已销毁时只清本地句柄。 */
+	/** 清理旧 Controller 弱引用；Controller 已销毁时不延长其生命周期。 */
 	void UnbindController();
 
-	/** 当前 Controller Pawn 变化入口；先完整解绑旧玩家 UI 模块，再尝试把 NewPawn 作为新的 ACatCharacter 只读来源。 */
+	/** 当前 Controller Pawn 变化入口；同 Pawn 刷新库存读模型和输入绑定，换 Pawn 或空 Pawn 才拆装本地玩家 UI 模块。 */
 	void HandleControllerPawnChanged(APawn* NewPawn);
 
 	/** 当配置 WBP、当前 Controller 与 Character 有效时创建 HUD、Inventory 和 Interaction 三个独立模块。 */
@@ -109,7 +115,7 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryWidget> InventoryWidget;
 
-	/** 当前 LocalPlayer 的背包 Model；它只读鱼护、外部容器、本人装备和动作结果。 */
+	/** 当前 LocalPlayer 的库存 Model；它只读随身库存、独立鱼护、外部容器、当前选择和动作结果。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryModel> InventoryModel;
 
@@ -132,9 +138,13 @@ private:
 	/** 本地提示当前订阅的视线 TargetingComponent，用于精确解绑。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatInteractionTargetingComponent> BoundInteractionTargeting;
-	/** 当前绑定 Pawn notifier 的 Controller 弱引用；Controller/World 替换时先解绑，绝不成为跨 World 所有者。 */
+	/** 当前 LocalPlayer 对应的 Controller 弱引用；Controller/World 替换时先解绑，绝不成为跨 World 所有者。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APlayerController> BoundPlayerController;
+
+	/** 当前本地 UI 已经成功装配的猫身体；用于识别重复 SetPawn/输入刷新，不把同一个 Pawn 的 UI 反复拆装。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<ACatCharacter> AttachedPlayerLakeCharacter;
 
 	/** Online 快照广播的配对解绑句柄；Initialize 写入，Deinitialize 消费。 */
 	FDelegateHandle OnlineSnapshotHandle;
@@ -144,9 +154,6 @@ private:
 
 	/** HUD Model 变化广播的配对解绑句柄；AttachPlayerLakeUI 写入，DetachPlayerLakeUI 消费。 */
 	FDelegateHandle HUDModelViewChangedHandle;
-
-	/** 当前 Controller Pawn notifier 的配对解绑句柄；Controller 变化或 Deinitialize 时消费。 */
-	FDelegateHandle PawnChangedHandle;
 
 	/** 视线交互目标变化通知的配对解绑句柄。 */
 	FDelegateHandle InteractionTargetChangedHandle;

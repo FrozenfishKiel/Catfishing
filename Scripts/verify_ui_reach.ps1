@@ -105,9 +105,12 @@ function Invoke-UIReachStaticCheck {
     Assert-TextPattern "UCatInventoryDragDropOperation" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "slot drag payload is stable DTO"
     Assert-TextPattern "OnSlotDropRequested" "Source/Catfishing/UI/Inventory/CatInventoryWidget.h" "Inventory forwards slot drop intent"
     Assert-TextPattern "MoveObjectBetweenContainers" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory has real slot-based object move action"
-    Assert-TextPattern "CurrentRod" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory projects current rod as a first-class slot"
-    Assert-TextPattern "MakeCurrentRodSlotView" "Source/Catfishing/UI/Inventory/CatInventoryModel.cpp" "Inventory builds a visible current rod slot from Equipment"
-    Assert-TextPattern "SlotSource != ECatInventorySlotSource::ContainerObject" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.cpp" "Inventory drag/drop rejects non-container equipment slots"
+    Assert-TextPattern "MoveInventoryItem" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory has real slot-based personal inventory move action"
+    Assert-TextPattern "InventoryObject" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory projects personal inventory slots as first-class slots"
+    Assert-TextPattern "InventorySlots" "Source/Catfishing/UI/Inventory/CatInventoryModel.cpp" "Inventory builds visible slots from the unified inventory array"
+    Assert-TextPattern "MakeInventorySlotView" "Source/Catfishing/UI/Inventory/CatInventoryModel.cpp" "Inventory builds visible personal inventory slot views from Equipment"
+    Assert-TextPattern "ServerMoveInventorySlot" "Source/Catfishing/Framework/Game/CatGameplayTypes.h" "personal inventory slot move reaches PlayerController RPC"
+    Assert-TextPattern "InventoryObject" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.cpp" "Inventory drag/drop supports personal inventory slots separately from container slots"
     Assert-TextPattern "Containers" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory projects a list of containers instead of a single fish guard"
     Assert-TextPattern "SetExternalContainerContexts" "Source/Catfishing/UI/Inventory/CatInventoryModel.h" "Inventory accepts extensible external container context"
     Assert-TextPattern "SourceContainerSlotIndex" "Source/Catfishing/Framework/Game/CatGameplayTypes.h" "slot move RPC carries source container slot"
@@ -215,7 +218,7 @@ function Invoke-UIReachWBPCreate {
     # 拆分模块和关键控件名是生成脚本与正式 WBP 之间的最小握手信号。
     # 这里不检查美术细节，只防止仍生成旧总入口或漏掉背包格子/商店/提示模块。
     $LogText = Get-Content -LiteralPath $LogFile -Raw
-    if ($LogText -notmatch "CREATE_UI_MODULE_WBPS_PASS" -or $LogText -notmatch "InventorySlotRoot=UserWidgetNotButton" -or $LogText -notmatch "SlotContainer=InventorySlotWrapBox" -or $LogText -notmatch "InventoryEquipmentText=EquipmentTextBlock" -or $LogText -notmatch "InventoryConsumablesText=ConsumablesTextBlock" -or $LogText -notmatch "ShopOwner=InteractionObject" -or $LogText -notmatch "ShopKiosk=/Game/ShopEconomy/BP_CatShopKiosk" -or $LogText -notmatch "InteractAction=/Game/Input/InputAction/IA_Interact" -or $LogText -notmatch "InteractContext=/Game/Input/InputContext/IMC_InputContext" -or $LogText -notmatch "InteractKey=E" -or $LogText -match "EnsureFailed|LogPython: Error") {
+    if ($LogText -notmatch "CREATE_UI_MODULE_WBPS_PASS" -or $LogText -notmatch "InventorySlotRoot=UserWidgetNotButton" -or $LogText -notmatch "SlotContainer=InventorySlotWrapBox" -or $LogText -notmatch "InventoryEquipmentText=EquipmentTextBlock" -or $LogText -notmatch "InventoryItemsText=InventoryItemsTextBlock" -or $LogText -notmatch "ShopOwner=InteractionObject" -or $LogText -notmatch "ShopKiosk=/Game/ShopEconomy/BP_CatShopKiosk" -or $LogText -notmatch "InteractAction=/Game/Input/InputAction/IA_Interact" -or $LogText -notmatch "InteractContext=/Game/Input/InputContext/IMC_InputContext" -or $LogText -notmatch "InteractKey=E" -or $LogText -match "EnsureFailed|LogPython: Error") {
         throw ("UIReach WBP create log is not green: {0}" -f $LogFile)
     }
 }

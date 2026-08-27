@@ -21,4 +21,8 @@ public:
 	/** 一局共享鱼缸容量；0 表示 Unset，营地 Actor 不会自行选择默认。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Capacity", meta = (ClampMin = "0"))
 	int32 SharedFishTankCapacity = 0;
+
+	/** 一只可交互鱼护箱子的容量；0 表示 Unset，箱子不会自行选择默认。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Capacity", meta = (ClampMin = "0"))
+	int32 FishGuardCapacity = 0;
 };

@@ -185,7 +185,7 @@ Make FCatPlaceChumCommand
 ```
 
 - 结果用 `TryGetPlaceChumResult(RequestId, OutResult)` 拿
-- 窝料本身需要先进玩家的一局耗材栈（`GrantRunConsumableFromAuthority`），MVP 阶段如果还没有拾取/合成窝料的产出链，可以先在 GameMode 里给新玩家直接塞几份测试窝料，或者临时在 Equipment 组件上加一条测试专用的授予接口——这部分不在本文范围内，取决于你们窝料获取的设计
+- 窝料本身需要先进玩家的统一库存格；正式来源走商店订单或服务器权威授予链路，临时调试也应调用同一套库存授予接口，避免再加客户端直连发放入口。
 
 ### 3.6 ConfigureEquipment（首次装配）—— 必须最先做，否则后面全部走不通
 

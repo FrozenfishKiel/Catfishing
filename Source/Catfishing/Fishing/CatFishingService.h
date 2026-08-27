@@ -11,10 +11,6 @@ class ACatFishingRodActor;
 class ACatFishingSession;
 class APlayerState;
 class UCatFishDefinition;
-#if WITH_DEV_AUTOMATION_TESTS
-class FCatFishingPlayerEntryFullLoopTest;
-namespace CatFishingPlayerEntryTest { struct FPlayerEntryFixture; }
-#endif
 
 /** 一局服务器 Fishing 入口；创建/查询/终止会话并把所有阶段写入留给会话内 StateTree。 */
 UCLASS()
@@ -94,12 +90,6 @@ public:
 
 private:
 	friend class ACatFishingSession;
-#if WITH_DEV_AUTOMATION_TESTS
-	/** 自动化夹具只登记一条已构造的 NearShore 会话索引，用来验证 Controller 命令路由；正式会话创建仍由 BeginCast 负责。 */
-	friend class FCatFishingPlayerEntryFullLoopTest;
-	/** 自动化夹具是实际写入服务索引的执行体；它只服务 FCatFishingPlayerEntryFullLoopTest。 */
-	friend struct CatFishingPlayerEntryTest::FPlayerEntryFixture;
-#endif
 
 	/** 清除已销毁或已终态 Session 弱引用，并同时释放对应钓手的单活跃槽位。 */
 	void CompactSessions();

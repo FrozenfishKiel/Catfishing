@@ -446,9 +446,9 @@ FCatDomainCommandResult ACatFishingSession::ResolveRetryExhaustedEscapeFromState
 	return Result;
 }
 
-// 钓手接力转移流程：仅 authority、未终态、等待/试探/真咬阶段可转移（搏斗/近岸阶段离开＝弃战，不存在转移场景）；
-// 新钓手必须通过统一参战能力谓词且有合法个人鱼护。转移只换"人"（身份/Character/鱼护/参与集合/公开 PlayerState），
-// 不换"资源"（CastEquipment 冻结在原始抛竿者身上：饵料预留、竿磨损、失败惩罚仍结算给竿主）。
+// 钓手接力转移流程：仅 authority、未终态、等待/试探/真咬阶段可转移（搏斗/近岸阶段离开＝弃战，不存在转移场景）。
+// 新钓手必须通过统一参战能力谓词，并且后续需要独立鱼护对象提供目标容器；当前对象尚未接入时直接拒绝。
+// 因为鱼护不能再挂在 Character 上，本函数不会从 Character 兜底取旧 ID，避免把错误宿主重新接回钓鱼链路。
 bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherController)
 {
 	const FString NewStableNetId = ResolveStableNetId(NewFisherController);
@@ -469,25 +469,11 @@ bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherContr
 	{
 		return true; // 同一钓手重复接管：幂等成功。
 	}
-	const FGuid NewGuardContainerId = NewCharacter->GetPersonalFishGuardId();
-	if (!NewGuardContainerId.IsValid())
-	{
-		return false;
-	}
-	FightParticipantIds.Remove(FisherStableNetId);
-	FightParticipantCharacters.Remove(FisherStableNetId);
-	FisherStableNetId = NewStableNetId;
-	FisherCharacter = NewCharacter;
-	FisherGuardContainerId = NewGuardContainerId;
-	Snapshot.FisherPlayerState = NewFisherController->PlayerState;
-	FightParticipantIds.Add(NewStableNetId);
-	FightParticipantCharacters.Add(NewStableNetId, NewCharacter);
-	RefreshFightSummary();
-	PublishSnapshot(ECatFishingSnapshotMutation::Discrete); // 客户端 ViewBridge 按 FisherPlayerState 找会话，必须立即可见。
-	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_fisher_transferred SessionId=%s Phase=%s NewFisher=%s"),
+	UE_LOG(LogCatFishing, Warning,
+		TEXT("Event=fishing_fisher_transfer_rejected SessionId=%s Phase=%s NewFisher=%s Reason=FishGuardActorUnavailable"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 		*UEnum::GetValueAsString(Snapshot.Phase), *NewStableNetId);
-	return true;
+	return false;
 }
 
 // 抢抄流程：先按身份/RequestId 重放，再用统一参战能力谓词、NearShore/Revision、服务器目标与 reach 拒绝不合法命令；随后重验巨鱼 HookedFight 参与者，只把仍 Active、未倒地且力量/体力为正的人与抄手去重后放入可选 Candidate。Items Compare-and-Commit 是实物唯一不可逆点，首个合法抄手独占鱼；FishRecorded 始终独立归档，只有鱼定义配置正式事件才提交 Candidate。批量计划接口先为全部参与者建齐并索引 Planned 记录，确认全量事实后才逐条投递，所以同步 RPC 回入不能留下部分计划，离线未投递仍按原 ID 重试；归档失败只记录且绝不回滚或复制实物鱼。最后写 Resolved、停树并启动有界复制窗口。
@@ -868,12 +854,12 @@ bool ACatFishingSession::PrepareSessionFromAuthority(const FCatFishingAttemptSna
 	FisherCharacter = InFisherCharacter;
 	CastEquipment = InFisherCharacter->GetEquipmentComponent(); // 冻结原始抛竿者装备：饵料/磨损结算口径不随接力改变。
 	FisherStableNetId = StableNetId;
-	FisherGuardContainerId = InFisherCharacter->GetPersonalFishGuardId();
 	FightParticipantIds.Add(StableNetId);
 	FightParticipantCharacters.Add(StableNetId, InFisherCharacter);
 	ItemsService = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
-	// 只有 Items 服务与钓手个人鱼护 ID 都齐备才算真正"准备就绪"，否则整体视为失败。
-	bPrepared = ItemsService.IsValid() && FisherGuardContainerId.IsValid();
+	// 独立鱼护对象尚未接入会话准备阶段；缺少目标容器时不启动 StateTree，也不回退到 Character 旧宿主。
+	FisherGuardContainerId.Invalidate();
+	bPrepared = false;
 	return bPrepared;
 }
 

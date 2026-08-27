@@ -29,7 +29,16 @@ public:
 	/** 对当前最近目标执行确认交互；没有目标时先刷新一次再决定是否调用。 */
 	void InteractWithFocusedTarget();
 
+	/** PlayerController 旧 Native 交互绑定进入时先让通用 UI 目标处理；返回 true 表示本次按键不应再触发旧准星交互。 */
+	bool TryHandleNativeInteractionInput();
+
+	/** Controller 的输入组件可能晚于提示 UI 装配完成；本入口让拥有者在输入链就绪后重新安装确认 Action。 */
+	void RefreshInputBinding();
+
 private:
+	/** 执行一次当前聚焦目标交互；直接 UI 绑定和 PlayerController 兜底绑定共用，避免同一帧重复打开对象 UI。 */
+	bool TryInteractWithFocusedTarget();
+
 	/** 安装交互确认 Action；只 BindAction，不 AddMappingContext、不 MapKey。 */
 	void InstallInteractionInput();
 
@@ -61,6 +70,9 @@ private:
 
 	/** EnhancedInput 返回的绑定句柄；0 表示没有有效绑定。 */
 	uint32 InteractionInputBindingHandle = 0;
+
+	/** 最近一次通用 UI 交互成功消费输入的帧号；用于阻断同一 IA_Interact 在旧 Native 绑定里再次触发玩法交互。 */
+	uint64 LastInteractionConsumedFrame = 0;
 
 	/** 定时扫描最近交互目标的句柄；Unbind 和 World teardown 时清掉。 */
 	FTimerHandle InteractionScanTimerHandle;

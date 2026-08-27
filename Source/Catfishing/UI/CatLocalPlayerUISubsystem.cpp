@@ -21,7 +21,7 @@
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
 
-// 初始化流程：先订阅唯一 Online 快照，再弱绑定当前 Controller 的 Pawn notifier；本地玩家 UI 模块是否装配由 AttachPlayerLakeUI 统一验证 WBP 配置。
+// 初始化流程：先订阅唯一 Online 快照，再弱绑定当前 Controller；本地玩家 UI 模块是否装配由 AttachPlayerLakeUI 统一验证 WBP 配置。
 void UCatLocalPlayerUISubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -221,37 +221,90 @@ void UCatLocalPlayerUISubsystem::RemoveOnlineWidget()
 	UE_LOG(LogCatUI, Log, TEXT("Event=ui_online_widget_removed World=%s"), GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
 }
 
-// Controller 绑定流程：保存弱引用并订阅当前 Controller 的 Pawn notifier；随后消费当前 Pawn，覆盖绑定前已经完成占有的冷启动情况。
+// Controller 刷新流程：
+// 1. 拒绝非本地 Controller，避免服务器远端 Controller 误创建 UI。
+// 2. 如果通知来自当前未绑定但属于本 LocalPlayer 的 Controller，先完成绑定并消费当前 Pawn。
+// 3. 如果通知来自已绑定 Controller，则按它当前 Pawn 刷新本地玩家 UI；重复通知由 HandleControllerPawnChanged 幂等裁剪。
+void UCatLocalPlayerUISubsystem::RefreshPlayerLakeUIForController(APlayerController* Controller)
+{
+	if (!Controller || !Controller->IsLocalController())
+	{
+		return;
+	}
+	if (Controller != BoundPlayerController.Get())
+	{
+		ULocalPlayer* LocalPlayer = GetLocalPlayer();
+		if (LocalPlayer && LocalPlayer->GetPlayerController(GetWorld()) == Controller)
+		{
+			DetachInteractionView();
+			DetachPlayerLakeUI();
+			UnbindController();
+			BindController(Controller);
+		}
+		return;
+	}
+	HandleControllerPawnChanged(Controller->GetPawn());
+}
+
+// Native 交互接管流程：
+// 1. 只接受当前 LocalPlayer 绑定的本地 Controller，避免服务器远端 Controller 借 UI 子系统吞掉玩法输入。
+// 2. 交给 Interaction PageController 判断是否存在通用 UI 目标或本帧已消费记录。
+// 3. 返回 true 时 PlayerController 不再执行旧准星交互，避免同一个 IA_Interact 同时打开商店和触发玩法动作。
+bool UCatLocalPlayerUISubsystem::TryHandleNativeInteractionInput(APlayerController* Controller)
+{
+	if (!Controller || Controller != BoundPlayerController.Get() || !Controller->IsLocalController())
+	{
+		return false;
+	}
+	return InteractionPageController
+		? InteractionPageController->TryHandleNativeInteractionInput()
+		: false;
+}
+
+// Controller 绑定流程：保存弱引用并立即消费当前 Pawn，覆盖绑定前已经完成占有或客户端 ClientRestart 的冷启动情况。
 void UCatLocalPlayerUISubsystem::BindController(APlayerController* Controller)
 {
-	if (!Controller)
+	if (!Controller || !Controller->IsLocalController())
 	{
 		return;
 	}
 	BoundPlayerController = Controller;
-	PawnChangedHandle = Controller->GetOnNewPawnNotifier().AddUObject(this, &ThisClass::HandleControllerPawnChanged);
 	HandleControllerPawnChanged(Controller->GetPawn());
 }
 
-// Controller 解绑流程：旧对象仍存活时从同一个 notifier 精确移除；弱引用失效时只清本地句柄，不延长 Controller 生命周期。
+// Controller 解绑流程：只清理本地弱引用；Pawn 刷新由 PlayerController 生命周期主动推送，因此这里不再保留旧 notifier 句柄。
 void UCatLocalPlayerUISubsystem::UnbindController()
 {
-	if (APlayerController* Controller = BoundPlayerController.Get(); Controller && PawnChangedHandle.IsValid())
-	{
-		Controller->GetOnNewPawnNotifier().Remove(PawnChangedHandle);
-	}
-	PawnChangedHandle.Reset();
 	BoundPlayerController.Reset();
 }
 
-// Pawn 变化流程：无论 NewPawn 类型如何都先完整拆掉上一套本地玩家 UI；只有新的 ACatCharacter 通过配置校验时才重新装配。
+// Pawn 变化流程：
+// 1. 先把 NewPawn 裁成项目猫身体；同一个已装配身体的重复通知会重读库存快照并刷新输入绑定，不拆掉正在打开的 UI。
+// 2. 新身体或空身体会先完整拆掉上一套本地玩家 UI，避免跨 Pawn 复用 Model、View 或输入锁。
+// 3. 只有新的 ACatCharacter 通过配置校验时才重新装配 HUD、背包、交互提示和拾取提示层。
 void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 {
+	ACatCharacter* Character = Cast<ACatCharacter>(NewPawn);
+	if (Character && AttachedPlayerLakeCharacter.Get() == Character
+		&& HUDWidget && InventoryPageController && InteractionPageController)
+	{
+		InventoryPageController->RefreshModel();
+		InventoryPageController->RefreshInputBinding();
+		InteractionPageController->RefreshInputBinding();
+		return;
+	}
 	DetachInteractionView();
 	DetachPlayerLakeUI();
-	ACatCharacter* Character = Cast<ACatCharacter>(NewPawn);
+	if (!Character)
+	{
+		return;
+	}
 	AttachInteractionView(BoundPlayerController.Get(), Character);
 	AttachPlayerLakeUI(Character);
+	if (HUDWidget && InventoryPageController && InteractionPageController)
+	{
+		AttachedPlayerLakeCharacter = Character;
+	}
 }
 
 void UCatLocalPlayerUISubsystem::AttachInteractionView(APlayerController* Controller, ACatCharacter* Character)
@@ -374,10 +427,15 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 		DetachPlayerLakeUI();
 		return;
 	}
+	const UWorld* World = GetWorld();
+	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	UE_LOG(LogCatUI, Log,
-		TEXT("Event=ui_player_modules_attached World=%s Controller=%s HUD=%s Inventory=%s Slot=%s Interaction=%s ShopPrecreated=false"),
-		GetWorld() ? *GetWorld()->GetName() : TEXT("None"),
+		TEXT("Event=ui_player_modules_attached World=%s NetMode=%d LocalPlayerIndex=%d Controller=%s LocalController=%s HUD=%s Inventory=%s Slot=%s Interaction=%s ShopPrecreated=false"),
+		World ? *World->GetName() : TEXT("None"),
+		World ? static_cast<int32>(World->GetNetMode()) : -1,
+		LocalPlayer ? LocalPlayer->GetLocalPlayerIndex() : INDEX_NONE,
 		*GetNameSafe(Controller),
+		Controller->IsLocalController() ? TEXT("true") : TEXT("false"),
 		*GetNameSafe(HUDWidget->GetClass()),
 		*GetNameSafe(InventoryWidget->GetClass()),
 		*GetNameSafe(InventorySlotViewClass.Get()),
@@ -424,8 +482,13 @@ void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 		InteractionPromptWidget->RemoveFromParent();
 		InteractionPromptWidget = nullptr;
 	}
-	UE_LOG(LogCatUI, Log, TEXT("Event=ui_player_modules_detached World=%s ShopPrecreated=false"),
-		GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
+	AttachedPlayerLakeCharacter.Reset();
+	const UWorld* World = GetWorld();
+	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_player_modules_detached World=%s NetMode=%d LocalPlayerIndex=%d ShopPrecreated=false"),
+		World ? *World->GetName() : TEXT("None"),
+		World ? static_cast<int32>(World->GetNetMode()) : -1,
+		LocalPlayer ? LocalPlayer->GetLocalPlayerIndex() : INDEX_NONE);
 }
 
 // HUD 渲染转交流程：Model 已聚合状态和钓鱼反馈；Subsystem 只把它交给 HUD WBP。

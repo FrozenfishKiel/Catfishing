@@ -80,12 +80,37 @@ namespace
 				&& Slot.ContainerSlotIndex == DropTarget.ContainerSlotIndex;
 		});
 	}
+
+	// 随身库存格复核流程：按数组下标在最新 ViewState 中找同一格；格子内容是否仍可移动由调用方继续判断。
+	const FCatInventorySlotView* FindCurrentInventorySlot(const FCatInventoryViewState& State,
+		const FCatInventorySlotView& Candidate)
+	{
+		if (Candidate.SlotSource != ECatInventorySlotSource::InventoryObject
+			|| Candidate.InventorySlotIndex == INDEX_NONE)
+		{
+			return nullptr;
+		}
+		if (State.Slots.IsValidIndex(Candidate.SlotIndex))
+		{
+			const FCatInventorySlotView& IndexedSlot = State.Slots[Candidate.SlotIndex];
+			if (IndexedSlot.SlotSource == ECatInventorySlotSource::InventoryObject
+				&& IndexedSlot.InventorySlotIndex == Candidate.InventorySlotIndex)
+			{
+				return &IndexedSlot;
+			}
+		}
+		return State.Slots.FindByPredicate([&Candidate](const FCatInventorySlotView& Slot)
+		{
+			return Slot.SlotSource == ECatInventorySlotSource::InventoryObject
+				&& Slot.InventorySlotIndex == Candidate.InventorySlotIndex;
+		});
+	}
 }
 
 // 绑定流程：
 // 1. 先解除旧页面，避免同一个 Controller 上留下旧输入绑定。
 // 2. 保存 LocalPlayer、Controller、Model 和 View，并订阅 Model、关闭、格子和动作意图。
-// 3. 安装背包开关 Action；缺资产时只降级快捷键，不创建第二套 InputContext。
+// 3. 安装库存开关 Action；缺资产时只降级快捷键，不创建第二套 InputContext。
 // 4. 渲染当前 Model 状态，保证首次打开不是空白。
 bool UCatInventoryPageController::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController,
 	UCatInventoryModel* InModel, UCatInventoryWidget* InView)
@@ -113,7 +138,7 @@ bool UCatInventoryPageController::Bind(ULocalPlayer* InLocalPlayer, APlayerContr
 	return true;
 }
 
-// 解绑流程：先关闭打开中的背包并恢复输入，再移除 Action、外部容器上下文和所有委托；最后清弱引用和本地状态。
+// 解绑流程：先关闭打开中的库存并恢复输入，再移除 Action、外部容器上下文和所有委托；最后清弱引用和本地状态。
 void UCatInventoryPageController::Unbind()
 {
 	if (bInventoryOpen)
@@ -161,7 +186,7 @@ void UCatInventoryPageController::ToggleInventory()
 	SetInventoryOpen(!bInventoryOpen);
 }
 
-// 交互打开流程：先把交互对象贡献的外部容器读源交给 Model，再保证背包处于打开态；已打开时只刷新，不重置输入锁。
+// 交互打开流程：先把交互对象贡献的外部容器读源交给 Model，再保证库存处于打开态；已打开时只刷新，不重置输入锁。
 void UCatInventoryPageController::OpenInventoryWithExternalContainerContexts(
 	const TArray<UCatContainerReplicationComponent*>& ExternalContainers)
 {
@@ -178,7 +203,7 @@ bool UCatInventoryPageController::IsInventoryOpen() const
 	return bInventoryOpen;
 }
 
-// 外部刷新流程：只要求 Model 重读鱼护、本人装备和外部容器快照；PageController 不缓存任何后端事实。
+// 外部刷新流程：只要求 Model 重读本人随身库存、当前选择和已绑定容器快照；PageController 不缓存任何后端事实。
 void UCatInventoryPageController::RefreshModel()
 {
 	if (UCatInventoryModel* Model = BoundModel.Get())
@@ -187,7 +212,13 @@ void UCatInventoryPageController::RefreshModel()
 	}
 }
 
-// 渲染转交流程：Model 已聚合完整背包投影；PageController 只转交给 WBP。
+// 输入刷新流程：Controller 通知输入链重新就绪时重跑同一套安装逻辑；安装函数会先移除旧绑定，因此重复调用不会叠加快捷键。
+void UCatInventoryPageController::RefreshInputBinding()
+{
+	InstallInventoryInput();
+}
+
+// 渲染转交流程：Model 已聚合完整库存投影；PageController 只转交给 WBP。
 void UCatInventoryPageController::HandleModelViewStateChanged()
 {
 	UCatInventoryModel* Model = BoundModel.Get();
@@ -198,7 +229,7 @@ void UCatInventoryPageController::HandleModelViewStateChanged()
 	}
 }
 
-// 关闭意图流程：只有背包打开时才切换关闭，迟到关闭点击不会反向打开。
+// 关闭意图流程：只有库存打开时才切换关闭，迟到关闭点击不会反向打开。
 void UCatInventoryPageController::HandleViewCloseRequested()
 {
 	if (bInventoryOpen)
@@ -216,19 +247,83 @@ void UCatInventoryPageController::HandleViewSlotSelectionRequested(const int32 S
 	}
 }
 
-// 格子上下文流程：右键和拖拽先同步选择；当前版本不在 PageController 中把右键直接转成吃鱼，避免误删实物鱼。
+// 格子上下文流程：
+// 1. 任何右键或拖拽入口都先同步 Model 选择，让 View 的选中框和说明文本跟随最新格子。
+// 2. 只有右键、当前没有 pending、且目标仍是有效随身库存物品时，才继续构造钓具选择命令。
+// 3. 根据格子的装备类别只替换当前组合中的一项；鱼竿、鱼饵、鱼漂三项不完整时本地拒绝，避免提交半套钓鱼选择。
+// 4. 写 pending 之后再调用 PlayerController RPC；服务器会重读目录、解锁、Revision 和库存持有量，UI 不直接改选择。
 void UCatInventoryPageController::HandleViewSlotPointerRequested(const int32 SlotIndex,
 	const ECatInventorySlotPointerAction PointerAction)
 {
-	(void)PointerAction;
 	HandleViewSlotSelectionRequested(SlotIndex);
+	if (PointerAction != ECatInventorySlotPointerAction::Context)
+	{
+		return;
+	}
+	UCatInventoryModel* Model = BoundModel.Get();
+	ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
+	if (!Model || !CatController)
+	{
+		return;
+	}
+	const FCatInventoryViewState& State = Model->GetViewState();
+	if (State.bActionPending || !State.Slots.IsValidIndex(SlotIndex))
+	{
+		return;
+	}
+	const FCatInventorySlotView& Slot = State.Slots[SlotIndex];
+	if (Slot.SlotSource != ECatInventorySlotSource::InventoryObject || !Slot.bOccupied
+		|| Slot.EquipmentDefinitionId.IsNone())
+	{
+		return;
+	}
+	FName RodDefinitionId = State.Equipment.RodDefinitionId;
+	FName BaitDefinitionId = State.Equipment.BaitDefinitionId;
+	FName FloatDefinitionId = State.Equipment.FloatDefinitionId;
+	FName ScoopNetDefinitionId = State.Equipment.ScoopNetDefinitionId;
+	const int64 ExpectedEquipmentRevision = State.Equipment.Revision;
+	switch (Slot.EquipmentKind)
+	{
+	case ECatEquipmentKind::Rod:
+		RodDefinitionId = Slot.EquipmentDefinitionId;
+		break;
+	case ECatEquipmentKind::Bait:
+		BaitDefinitionId = Slot.EquipmentDefinitionId;
+		break;
+	case ECatEquipmentKind::Float:
+		FloatDefinitionId = Slot.EquipmentDefinitionId;
+		break;
+	case ECatEquipmentKind::ScoopNet:
+		ScoopNetDefinitionId = Slot.EquipmentDefinitionId;
+		break;
+	default:
+		return;
+	}
+	const FGuid RequestId = FGuid::NewGuid();
+	if (RodDefinitionId.IsNone() || BaitDefinitionId.IsNone() || FloatDefinitionId.IsNone())
+	{
+		Model->MarkActionRejected(ECatInventoryAction::SelectInventoryFishingItem, RequestId,
+			ECatDomainCommandError::InvalidPayload, State.Equipment.Revision);
+		return;
+	}
+	Model->MarkActionSubmitted(ECatInventoryAction::SelectInventoryFishingItem, RequestId);
+	if (CatController->HasAuthority())
+	{
+		CatController->ServerConfigureEquipment_Implementation(RequestId, ExpectedEquipmentRevision,
+			RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId);
+	}
+	else
+	{
+		CatController->ServerConfigureEquipment(RequestId, ExpectedEquipmentRevision,
+			RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId);
+	}
 }
 
 // Drop 提交流程：
 // 1. 从最新 ViewState 复核源物体和目标格；已有请求等待回包时只忽略新的 Drop，避免覆盖旧 pending。
-// 2. 同格 Drop 视为无操作直接返回；同容器不同格继续提交服务器整理，不能再当 InvalidPayload 拒绝。
-// 3. 在写 pending 前复制完整 RPC 载荷，因为 MarkActionSubmitted 会刷新 ViewState 并让格子指针失效。
-// 4. 调用 PlayerController 的通用容器移动 RPC；服务器会重新校验个人鱼护、外部容器距离、源/目标槽位和 Items 权限。
+// 2. 随身库存格之间走 Equipment 数组整理，并要求拖拽开始时的 Revision 和源格内容仍匹配；鱼容器格之间走 Items 容器移动，混合来源直接拒绝。
+// 3. 同格 Drop 视为无操作直接返回；同容器不同格继续提交服务器整理，不能再当 InvalidPayload 拒绝。
+// 4. 在写 pending 前复制完整 RPC 载荷；库存整理提交拖拽开始那版 Revision，容器移动提交各自容器 Revision。
 void UCatInventoryPageController::HandleViewSlotDropRequested(const FCatInventorySlotView& SourceSlot,
 	const FCatInventorySlotView& TargetSlot)
 {
@@ -242,6 +337,43 @@ void UCatInventoryPageController::HandleViewSlotDropRequested(const FCatInventor
 	const FGuid RequestId = FGuid::NewGuid();
 	if (State.bActionPending)
 	{
+		return;
+	}
+	if (SourceSlot.SlotSource == ECatInventorySlotSource::InventoryObject
+		|| TargetSlot.SlotSource == ECatInventorySlotSource::InventoryObject)
+	{
+		const FCatInventorySlotView* CurrentSource = FindCurrentInventorySlot(State, SourceSlot);
+		const FCatInventorySlotView* CurrentTarget = FindCurrentInventorySlot(State, TargetSlot);
+		if (!CurrentSource || !CurrentTarget || !CurrentSource->bOccupied
+			|| CurrentSource->InventorySlotIndex == INDEX_NONE || CurrentTarget->InventorySlotIndex == INDEX_NONE
+			|| SourceSlot.InventoryRevision != State.Equipment.Revision
+			|| CurrentSource->EquipmentDefinitionId != SourceSlot.EquipmentDefinitionId
+			|| CurrentSource->Object.StackQuantity != SourceSlot.Object.StackQuantity)
+		{
+			Model->MarkActionRejected(ECatInventoryAction::MoveInventoryItem, RequestId,
+				SourceSlot.InventoryRevision != State.Equipment.Revision
+					? ECatDomainCommandError::RevisionConflict : ECatDomainCommandError::InvalidPayload,
+				State.Equipment.Revision);
+			return;
+		}
+		if (CurrentSource->InventorySlotIndex == CurrentTarget->InventorySlotIndex)
+		{
+			return;
+		}
+		const int32 SubmittedSourceSlotIndex = CurrentSource->InventorySlotIndex;
+		const int32 SubmittedTargetSlotIndex = CurrentTarget->InventorySlotIndex;
+		const int64 SubmittedEquipmentRevision = SourceSlot.InventoryRevision;
+		Model->MarkActionSubmitted(ECatInventoryAction::MoveInventoryItem, RequestId);
+		if (CatController->HasAuthority())
+		{
+			CatController->ServerMoveInventorySlot_Implementation(RequestId, SubmittedEquipmentRevision,
+				SubmittedSourceSlotIndex, SubmittedTargetSlotIndex);
+		}
+		else
+		{
+			CatController->ServerMoveInventorySlot(RequestId, SubmittedEquipmentRevision,
+				SubmittedSourceSlotIndex, SubmittedTargetSlotIndex);
+		}
 		return;
 	}
 	const FCatInventorySlotView* CurrentSource = FindCurrentSourceSlot(State, SourceSlot);
@@ -304,11 +436,12 @@ void UCatInventoryPageController::HandleViewSlotDropRequested(const FCatInventor
 	}
 }
 
-// 背包动作流程：
-// 1. 从 Model 当前 ViewState 读取选中鱼、容器 ID 和 Revision，拒绝空选择。
-// 2. 生成 RequestId 并先写 pending，使同步 authority 回包也能匹配。
-// 3. 按动作类型调用 PlayerController 正式服务器入口，绝不让 Widget 直接访问 Items 或 Run。
-// 4. 本地无法解析 Controller、Character 或营地时只发布结构化拒绝。
+// 鱼动作按钮流程：
+// 1. 本入口只处理吃鱼和献祭这类按钮动作；库存整理走 Drop，钓具选择走格子右键上下文。
+// 2. 从 Model 当前 ViewState 读取选中鱼、容器 ID 和 Revision，拒绝空选择或无效鱼护上下文。
+// 3. 生成 RequestId 并先写 pending，使同步 authority 回包也能匹配。
+// 4. 按动作类型调用 PlayerController 正式服务器入口，绝不让 Widget 直接访问 Items 或 Run。
+// 5. Model 或 Controller 已失效时直接丢弃迟到意图；需要 Character 的吃鱼分支无法解析 Pawn 时发布结构化拒绝。
 void UCatInventoryPageController::HandleViewActionRequested(const ECatInventoryAction Action)
 {
 	UCatInventoryModel* Model = BoundModel.Get();
@@ -406,7 +539,7 @@ void UCatInventoryPageController::SetInventoryOpen(const bool bOpen)
 
 // 输入安装流程：
 // 1. 要求 Controller 当前 InputComponent 是 EnhancedInputComponent。
-// 2. 从 UI Settings 加载已有 InputContext 中的背包 Action，并把 IMC 加载作为资产接线校验。
+// 2. 从 UI Settings 加载已有 InputContext 中的库存 Action，并把 IMC 加载作为资产接线校验。
 // 3. 只 BindAction，不 AddMappingContext、不 MapKey，避免运行时代码写死按键或生成第二套 IMC。
 void UCatInventoryPageController::InstallInventoryInput()
 {
@@ -443,7 +576,7 @@ void UCatInventoryPageController::RemoveInventoryInput()
 	AppliedInventoryToggleAction = nullptr;
 }
 
-// 输入模式流程：打开时交给通用模态 UI 工具设置焦点、鼠标和移动锁；关闭时只释放本背包页面申请过的那一层锁。
+// 输入模式流程：打开时交给通用模态 UI 工具设置焦点、鼠标和移动锁；关闭时只释放本库存页面申请过的那一层锁。
 void UCatInventoryPageController::ApplyInventoryInputMode(const bool bOpen)
 {
 	APlayerController* Controller = BoundPlayerController.Get();

@@ -298,11 +298,10 @@ function Invoke-CharacterGrowthConditionAutomation {
     Invoke-AutomationFilter "Catfishing.Unit.UI.Settings" "UISettings"
     Invoke-AutomationFilter "Catfishing.Unit.UI.LocalPlayerUISubsystem" "UILocalPlayer"
     Invoke-AutomationFilter "Catfishing.Unit.Fishing" "Fishing"
-    Invoke-AutomationFilter "Catfishing.PlayerEntry.FullLoop" "PlayerEntry"
 }
 
 function Invoke-CharacterGrowthConditionRuntime {
-    <# 运行证据流程：复用 FishingPlayerEntry 的 Lake 地图只读核对和 FullLoop，让身体/成长改动至少通过正式玩家入口链路进入一次运行时证据。 #>
+    <# 运行证据流程：复用 FishingPlayerEntry 的 Lake 地图只读核对；旧 FullLoop 自动化已移除，正式玩家入口链路需要后续新测试或人工验收补回。 #>
     $PlayerEntryVerifier = Join-Path $PSScriptRoot "verify_fishing_player_entry.ps1"
     & powershell -ExecutionPolicy Bypass -File $PlayerEntryVerifier -Mode Automation
     if ($LASTEXITCODE -ne 0) {

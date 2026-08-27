@@ -50,7 +50,7 @@
 | Run Phase、额度、夜晚 ready、Host exit 等局事实 | `ACatfishingGameModeBase` | `ACatfishingGameState`、StateTree、Online |
 | 公开 Run/Environment/Help 快照 | `ACatfishingGameState` | UI、本地表现、客户端只读逻辑 |
 | 稳定身份、普通夜 ready、公开鱼图鉴摘要 | `ACatfishingPlayerState` | GameMode、Social、UI |
-| 猫身体、ASC、Poison/FishingStrength/FightStamina、Condition、Equipment、个人鱼护出口 | `ACatCharacter` 及其组件 | UI、Fishing、Items、Condition、Equipment |
+| 猫身体、ASC、Poison/FishingStrength/FightStamina、Condition、Equipment | `ACatCharacter` 及其组件 | UI、Fishing、Condition、Equipment |
 | 单次钓鱼会话阶段、参与者、鱼运行态、抢抄终态 | `ACatFishingSession` | FishingService、Items、Collection、客户端复制 |
 | 鱼实例、容器数组、预留、转移、吃鱼、偷鱼 escrow | `UCatItemsService` | Fishing、Social、Run sacrifice、Container 复制组件 |
 | 献祭跨域协议阶段 | `UCatSacrificeCoordinator` | GameMode、Items、Online teardown |
@@ -113,7 +113,7 @@ Frontend 到 Lake 的唯一正式入口在 `UCatOnlineSubsystem`。UI 通过 `UC
 
 玩家进入 Lake 后，`ACatfishingGameModeBase` 通过 `PreLogin`、`PostLogin`、`HandleStartingNewPlayer_Implementation` 维护 Reserved/Active 身份记录，并生成 `ACatCharacter`。`ACatfishingPlayerState` 只承载身份、ready 和公开摘要，不承载 ASC、物品或 Profile。
 
-`ACatCharacter` 是猫身体宿主。ASC、`UCatSurvivalAttributeSet`、`UCatConditionComponent`、`UCatEquipmentComponent` 和个人鱼护复制出口都挂在 Character 上，但目录归属按系统本身判断：AttributeSet 属于 `AbilitySystem/`，Condition 属于 `Condition/`，Equipment 属于 `Equipment/`。
+`ACatCharacter` 是猫身体宿主。ASC、`UCatSurvivalAttributeSet`、`UCatConditionComponent` 和 `UCatEquipmentComponent` 挂在 Character 上，但目录归属按系统本身判断：AttributeSet 属于 `AbilitySystem/`，Condition 属于 `Condition/`，Equipment 属于 `Equipment/`。个人鱼护是独立箱子式容器对象，由 Items 容器注册和正式鱼护宿主承接，不放回 Character。
 
 `UCatFishingService` 负责创建和定位钓鱼会话；真正的阶段和抢抄终态在 `ACatFishingSession`。搏斗阶段可以登记协作者，近岸抢抄只允许首个合法提交者通过 Items Compare-and-Commit 取得实物鱼。
 

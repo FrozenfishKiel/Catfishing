@@ -164,10 +164,12 @@ bool ACatFishPickupActor::IsAuthorityRequestSpatiallyValid(const AController* Re
 	return !bHit || Hit.GetActor() == this;
 }
 
+// 拾取提交流程：先做身份、状态、倒地和空间校验；通过后本应把鱼提交进玩家的独立鱼护容器。
+// 当前独立鱼护对象尚未接入，函数在提交前明确返回 DependencyUnavailable，不再从 Character 读取旧鱼护 ID。
 void ACatFishPickupActor::RequestInteractionFromAuthority_Implementation(AController* RequestingController,
 	const FGuid RequestId)
 {
-	const APlayerState* PlayerState = RequestingController ? RequestingController->PlayerState : nullptr;
+	APlayerState* PlayerState = RequestingController ? RequestingController->PlayerState : nullptr;
 	const FString StableNetId = PlayerState && PlayerState->GetUniqueId().IsValid()
 		? PlayerState->GetUniqueId()->ToString() : FString();
 	const FString CacheKey = FString::Printf(TEXT("%s|%s"), *StableNetId,
@@ -180,7 +182,6 @@ void ACatFishPickupActor::RequestInteractionFromAuthority_Implementation(AContro
 	Terminal.RequestId = RequestId;
 	ACatCharacter* Character = RequestingController ? Cast<ACatCharacter>(RequestingController->GetPawn()) : nullptr;
 	UCatConditionComponent* Condition = Character ? Character->GetConditionComponent() : nullptr;
-	UCatItemsService* Items = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
 	UCatRunImprintService* Imprint = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr;
 	if (!HasAuthority() || !bIdentityInitialized || !RequestId.IsValid() || StableNetId.IsEmpty())
 	{
@@ -194,45 +195,13 @@ void ACatFishPickupActor::RequestInteractionFromAuthority_Implementation(AContro
 	{
 		Terminal.Error = ECatDomainCommandError::PermissionDenied;
 	}
-	else if (!Items || !Imprint || !FishDefinition || !Imprint->CanRecordCommittedCapture())
+	else if (!Imprint || !FishDefinition || !Imprint->CanRecordCommittedCapture())
 	{
 		Terminal.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
 	else
 	{
-		const FGuid GuardId = Character->GetPersonalFishGuardId();
-		FCatContainerSnapshot GuardSnapshot;
-		if (!GuardId.IsValid() || !Items->TryGetContainerSnapshot(GuardId, GuardSnapshot))
-		{
-			Terminal.Error = ECatDomainCommandError::NotFound;
-		}
-		else
-		{
-			FCatCaptureCommitCommand Command;
-			Command.Context.RequestId = RequestId;
-			Command.Context.StableNetId = StableNetId;
-			Command.Context.ExpectedRevision = GuardSnapshot.Revision;
-			Command.FishingSessionId = PresentationState.FishingSessionId;
-			Command.FishInstanceId = PresentationState.FishInstanceId;
-			Command.FishDefinitionId = PresentationState.FishDefinitionId;
-			Command.TargetContainerId = GuardId;
-			Command.WeightKilograms = PresentationState.WeightKilograms;
-			Command.SacrificeContribution = FishDefinition->SacrificeContribution;
-			const FCatCaptureCommitResult CaptureResult = Items->CommitCapture(Command);
-			Terminal = CaptureResult.Command;
-			if (CaptureResult.Command.bCommitted)
-			{
-				const FCatFishPickupPresentationState Previous = PresentationState;
-				PresentationState.State = ECatFishPickupState::Claimed;
-				PresentationState.ClaimedByPlayerState = RequestingController->PlayerState;
-				InteractionSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-				ApplyLocalFocus(false);
-				ForceNetUpdate();
-				BP_OnPickupPresentationChanged(Previous, PresentationState);
-				ArchiveCommittedCapture(CaptureResult.Committed, StableNetId);
-				SetLifeSpan(0.25f);
-			}
-		}
+		Terminal.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
 	PickupTerminalByRequester.Add(CacheKey, Terminal);
 }

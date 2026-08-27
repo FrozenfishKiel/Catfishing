@@ -37,8 +37,6 @@ enum class ECatBodyActionAbilityCommand : uint8;
 class FCatGameModeCommandIntentGateTest;
 class FCatGameModeReconnectAdmissionWhitelistTest;
 class FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest;
-class FCatFishingPlayerEntryFullLoopTest;
-namespace CatFishingPlayerEntryTest { struct FPlayerEntryFixture; }
 namespace CatSacrificeCoordinatorTest { struct FItemsCommittedRecoveryFixture; }
 #endif
 
@@ -54,7 +52,7 @@ DECLARE_MULTICAST_DELEGATE(FCatShopEconomySnapshotChanged);
 /** owning client 收到献祭协议结果后的本机通知；UI Model 只用它刷新读模型，不改变 Items 或 Run。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatSacrificeResultReceived, const FCatSacrificeResult&);
 
-/** owning client 收到营地命令结果后的本机通知；UI Model 只用它关联 RequestId，不重新执行营地动作。 */
+/** owning client 收到公共领域命令结果后的本机通知；UI Model 只用它关联 RequestId，不重新执行领域动作。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatCampCommandResultReceived, const FCatDomainCommandResult&);
 
 /** owning client 收到直接吃鱼结果后的本机通知；UI Model 只用它证明鱼护命令终态并刷新显示。 */
@@ -134,10 +132,6 @@ private:
 	friend class FCatGameModeReconnectAdmissionWhitelistTest;
 	/** 自动化夹具只给 RunEnvironmentSocial 玩家入口闭环开放最小私有状态访问；测试用同一名 Active 玩家和普通夜晚 Phase 证明 Social 宽 gate 与 Chum 窄 gate 没有分叉，不把求助、保护牌和打窝拆成可独立关闭的小任务。 */
 	friend class FCatGameModeRunEnvironmentSocialPlayerEntrypointContractTest;
-	/** 自动化夹具只种入一条已激活身份记录，用来验证玩家 Fishing 命令入口；正式准入仍只走 PreLogin/PostLogin。 */
-	friend class FCatFishingPlayerEntryFullLoopTest;
-	/** 自动化夹具是实际写入私有准入表的执行体；它只服务 FCatFishingPlayerEntryFullLoopTest。 */
-	friend struct CatFishingPlayerEntryTest::FPlayerEntryFixture;
 	/** 自动化夹具只种入一份 DayActive Run 状态，用来验证献祭跨 Items/Run 恢复；正式阶段推进仍只走 StateTree。 */
 	friend struct CatSacrificeCoordinatorTest::FItemsCommittedRecoveryFixture;
 #endif
@@ -208,7 +202,6 @@ private:
 	APlayerState* ResolvePlayerStateByStableNetId(const FString& StableNetId) const;
 	/** 进入最终结算夜后关闭新商店订单；已经交付的个人装备事实继续留在各自 Character 上。 */
 	void CloseShopForSettlementNight();
-
 	/** StableNetId 到最小装配记录的服务器唯一映射；GameMode 不复制到客户端，World 销毁时整体释放。 */
 	TMap<FString, FAdmissionRecord> AdmissionRecords;
 	/** 连接丢失身份到服务器世界时间过期点；只在显式 TTL/失败白名单下建立，不恢复旧 FishingSession。 */
@@ -374,6 +367,8 @@ public:
 	virtual void OnPossess(APawn* InPawn) override;
 	/** owning client 收到 Pawn 复制变化后重置疾跑意图，并把普通移动速度应用到新 Pawn。 */
 	virtual void OnRep_Pawn() override;
+	/** 捕获服务器、客户端复制和 ClientRestart 的统一 Pawn 写入点；本地端据此通知 LocalPlayer UI 重新装配。 */
+	virtual void SetPawn(APawn* InPawn) override;
 	/** 把客户端额度意图转发给 authority GameMode；身份由服务器 PlayerState 派生。 */
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitQuotaContribution(FGuid RequestId, int64 ExpectedRevision, int32 Contribution);
@@ -463,25 +458,26 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerRescueCharacterToCamp(ACatCampHubActor* Camp, ACatCharacter* TargetCharacter, FGuid RequestId);
 
-	/** 服务器把四类营地命令的领域结果可靠发给 owning client；所有路径都保留原 RequestId，客户端不重算 Revision 或领域错误。 */
+	/** 服务器把公共领域命令结果可靠发给 owning client；所有路径都保留原 RequestId，客户端不重算 Revision 或领域错误。 */
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveCampCommandResult(const FCatDomainCommandResult& Result);
 
-	/** 返回本机最近收到的营地命令结果供表现层关联请求；该缓存不作为 Camp、Items 或 Condition 的权限事实。 */
+	/** 返回本机最近收到的公共领域命令结果供表现层关联请求；该缓存不作为 Camp、Items、Equipment 或 Condition 的权限事实。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Camp")
 	FCatDomainCommandResult GetLastCampCommandResult() const;
 
-	/** 营地命令结果到达 owning client 后广播的本机读模型事件；订阅方只能刷新 UI。 */
+	/** 公共领域命令结果到达 owning client 后广播的本机读模型事件；订阅方只能刷新 UI。 */
 	FCatCampCommandResultReceived OnCampCommandResultReceived;
 
-	/** 提交四个功能装备 ID；服务器目录与可信解锁证明共同通过后才允许首次装配，客户端 Profile 选择本身不授予权限。ScoopNet 可为 None，但近岸抢抄需要它。 */
+	/** 提交当前钓鱼选择；服务器目录、可信解锁证明和随身库存持有量共同通过后才写入，客户端选择本身不授予权限。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
 	void ServerConfigureEquipment(FGuid RequestId, int64 ExpectedRevision, FName RodDefinitionId,
 		FName BaitDefinitionId, FName FloatDefinitionId, FName ScoopNetDefinitionId);
 
-	/** 兼容旧蓝图的直接耗材授予 RPC；正式运行一律拒绝，耗材只能由 ShopOrderCoordinator 或其他服务器权威来源调用组件写口。 */
-	UFUNCTION(Server, Reliable, Category = "Catfishing|Equipment")
-	void ServerGrantRunConsumable(FGuid RequestId, int64 ExpectedRevision, FName DefinitionId, int32 Quantity);
+	/** 整理当前角色随身库存中的两个格子；服务器按 Equipment Revision 和数组下标重读后移动、合并或交换。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
+	void ServerMoveInventorySlot(FGuid RequestId, int64 ExpectedRevision,
+		int32 SourceSlotIndex, int32 TargetSlotIndex);
 
 	/** 花团队公款购买服务器目录项；价格、库存与身份均不由客户端提供。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
@@ -690,9 +686,14 @@ private:
 	/** BodyAction Ability 接管后的抖水完成提交；保持 Condition 是 Wet 状态唯一写口。 */
 	void SubmitShakeDryFromBodyActionAbility(FGuid RequestId);
 
+	/** 当 Pawn 或输入组件在 owning client 就绪时通知 LocalPlayer UI；服务器远端 Controller 和非 Cat UI World 安全跳过。 */
+	void NotifyLocalPlayerUISubsystemPawnChanged();
+	/** IA_Interact 进入旧 Native 输入层时先让本地 UI 交互目标消费；没有 UI 目标时才允许旧准星交互兜底。 */
+	bool TryHandleLocalPlayerUIInteractionInput();
+
 	/** 把献祭终态投给 owning client；本地 authority 没有网络回环时直接写本机读模型，远端玩家继续走可靠 RPC。 */
 	void DeliverSacrificeResultToOwningClient(const FCatSacrificeResult& Result);
-	/** 把营地命令终态投给 owning client；本地 authority 没有网络回环时直接写本机读模型，远端玩家继续走可靠 RPC。 */
+	/** 把公共领域命令终态投给 owning client；本地 authority 没有网络回环时直接写本机读模型，远端玩家继续走可靠 RPC。 */
 	void DeliverCampCommandResultToOwningClient(const FCatDomainCommandResult& Result);
 	/** 把直接吃鱼终态投给 owning client；本地 authority 没有网络回环时直接写本机读模型，远端玩家继续走可靠 RPC。 */
 	void DeliverFishConsumeResultToOwningClient(const FCatFishConsumeResult& Result);
@@ -725,7 +726,7 @@ private:
 	bool CanForwardGameplayCommand() const;
 	/** 查询 Fishing/玩家打窝专用 gate；它复用身份与 teardown 判断，但额外要求 Run 处于 DayActive、允许钓鱼且当前猫没有倒地。 */
 	bool CanForwardFishingCommand() const;
-	/** 购买与免费领取共用的服务器转发实现。 */
+	/** 购买与免费领取共用的服务器转发实现；完成或拒绝后把交付段结果回送 owning client，前端再重读复制库存。 */
 	void SubmitShopOrder(FName EntryId, FGuid RequestId, int64 ExpectedWalletRevision, bool bFreeClaim);
 
 	/** owning client 最近收到的 Social 协议读模型；由可靠结果 RPC 整体替换，不复制回服务器或作为权限事实。 */
@@ -736,7 +737,7 @@ private:
 	UPROPERTY(Transient)
 	FCatSacrificeResult LastSacrificeResult;
 
-	/** owning client 最近收到的营地命令读模型，表示四类 Camp RPC 中最后返回的公共领域结果；可靠 Client RPC 整体写入，UI 只读且不会触发第二次领域操作。 */
+	/** owning client 最近收到的公共领域命令读模型；可靠 Client RPC 整体写入，UI 只读且不会触发第二次领域操作。 */
 	UPROPERTY(Transient)
 	FCatDomainCommandResult LastCampCommandResult;
 

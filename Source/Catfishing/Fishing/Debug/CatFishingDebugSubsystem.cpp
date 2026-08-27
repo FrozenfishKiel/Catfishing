@@ -108,44 +108,22 @@ namespace CatFishingDebugCommands
 		return nullptr;
 	}
 
-	// 重量选择流程：第四个参数是千克值，只有有限且大于零时才采用；无效输入回退到正式鱼定义的重量区间中点，
-	// 避免调试鱼破坏定义约束。
-	static double ResolveFishWeightKilograms(const UCatFishDefinition& Definition, const TArray<FString>& Args)
-	{
-		if (Args.IsValidIndex(3))
-		{
-			const double RequestedWeight = FCString::Atod(*Args[3]);
-			if (FMath::IsFinite(RequestedWeight) && RequestedWeight > 0.0)
-			{
-				return RequestedWeight;
-			}
-		}
-		return (Definition.MinimumWeightKilograms + Definition.MaximumWeightKilograms) * 0.5;
-	}
-
 	// 给鱼提交流程：
-	// 1. 先解析鱼定义、数量、玩家索引和目标玩家依赖；任一关键对象缺失时只写拒绝日志，不伪造容器状态。
-	// 2. 每条鱼提交前读取个人鱼护最新 Revision，再构造独立 RequestId、SessionId 和 FishInstanceId，保证调试鱼也走正式捕获事务。
-	// 3. CommitCapture 失败或鱼护快照丢失时立即停止后续提交，最后用结构化日志报告实际成功数量，便于人工验收核对。
+	// 1. 先解析鱼定义和目标玩家依赖；任一关键对象缺失时只写拒绝日志，不伪造容器状态。
+	// 2. 独立鱼护对象尚未接入时直接拒绝，不再从 Character 读取旧个人鱼护 ID。
+	// 3. 后续正式鱼护对象完成后，本命令再改为从该对象读取容器快照并走 Items 捕获事务。
 	static void GiveFishToPlayer(const TArray<FString>& Args, UWorld* World)
 	{
 		UCatFishDefinition* Definition = ResolveFishDefinition(Args);
-		int32 Count = 1;
-		if (Args.IsValidIndex(1))
-		{
-			Count = FMath::Clamp(FCString::Atoi(*Args[1]), 1, 16);
-		}
 		int32 PlayerIndex = 0;
 		if (Args.IsValidIndex(2))
 		{
 			PlayerIndex = FMath::Max(0, FCString::Atoi(*Args[2]));
 		}
 		APlayerController* Controller = ResolvePlayerController(World, PlayerIndex);
-		ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
 		const APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
 		UCatItemsService* Items = World ? World->GetSubsystem<UCatItemsService>() : nullptr;
-		if (!World || !Definition || !Controller || !Character || !PlayerState || !PlayerState->GetUniqueId().IsValid()
-			|| !Items || !Character->GetPersonalFishGuardId().IsValid())
+		if (!World || !Definition || !Controller || !PlayerState || !PlayerState->GetUniqueId().IsValid() || !Items)
 		{
 			UE_LOG(LogCatFishing, Warning,
 				TEXT("Event=fishing_debug_give_fish_rejected Reason=DependencyUnavailable World=%s Controller=%s FishDefinition=%s"),
@@ -154,49 +132,16 @@ namespace CatFishingDebugCommands
 				Definition ? *Definition->FishDefinitionId.ToString() : TEXT("None"));
 			return;
 		}
-
-		int32 CommittedCount = 0;
-		for (int32 Index = 0; Index < Count; ++Index)
-		{
-			FCatContainerSnapshot GuardSnapshot;
-			if (!Items->TryGetContainerSnapshot(Character->GetPersonalFishGuardId(), GuardSnapshot))
-			{
-				break;
-			}
-			FCatCaptureCommitCommand Command;
-			Command.Context.RequestId = FGuid::NewGuid();
-			Command.Context.ExpectedRevision = GuardSnapshot.Revision;
-			Command.Context.StableNetId = PlayerState->GetUniqueId()->ToString();
-			Command.FishingSessionId = FGuid::NewGuid();
-			Command.FishInstanceId = FGuid::NewGuid();
-			Command.FishDefinitionId = Definition->FishDefinitionId;
-			Command.TargetContainerId = Character->GetPersonalFishGuardId();
-			Command.WeightKilograms = ResolveFishWeightKilograms(*Definition, Args);
-			Command.SacrificeContribution = Definition->SacrificeContribution;
-			const FCatCaptureCommitResult Result = Items->CommitCapture(Command);
-			if (!Result.Command.bCommitted)
-			{
-				UE_LOG(LogCatFishing, Warning,
-					TEXT("Event=fishing_debug_give_fish_failed RequestId=%s Error=%s Revision=%lld"),
-					*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-					*UEnum::GetValueAsString(Result.Command.Error),
-					Result.Command.Revision);
-				break;
-			}
-			++CommittedCount;
-		}
-		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_debug_give_fish_done FishDefinition=%s Count=%d Requested=%d PlayerIndex=%d"),
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_debug_give_fish_rejected Reason=FishGuardActorUnavailable FishDefinition=%s PlayerIndex=%d"),
 			*Definition->FishDefinitionId.ToString(),
-			CommittedCount,
-			Count,
 			PlayerIndex);
 	}
 
 	/** 非 Shipping 构建里的给鱼控制台入口；它代表一条会修改权威 Items 状态的作弊命令，执行时仍走正式捕获提交事务。 */
 	static FAutoConsoleCommandWithWorldAndArgs CmdGiveFish(
 		TEXT("cat.Fishing.Debug.GiveFish"),
-		TEXT("直接给指定玩家一条正式 FishInstance。用法：cat.Fishing.Debug.GiveFish [FishDefinitionId] [Count] [PlayerIndex] [WeightKg]"),
+		TEXT("调试给鱼入口；走正式个人鱼护 CommitCapture 事务。参数：FishDefinitionId WeightKg PlayerIndex。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&GiveFishToPlayer),
 		ECVF_Cheat);
 }
@@ -403,14 +348,22 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 	ACatFishingSession* Session = UCatFishingViewBridge::FindFishingSessionForPlayerState(World, Controller->PlayerState);
 	APawn* Pawn = Controller->GetPawn();
 
-	// 装备/库存常驻显示
+	// 装备/库存常驻显示：Debug 也读取 InventorySlots 这个事实源，再按 Chum 定义筛数量；不读兼容汇总，避免装备型格子或旧摘要污染窝料提示。
 	if (const ACatCharacter* Character = Cast<ACatCharacter>(Pawn))
 	{
 		if (const UCatEquipmentComponent* Equipment = Character->GetEquipmentComponent())
 		{
 			const FCatEquipmentLoadoutSnapshot& Loadout = Equipment->GetSnapshot();
 			int32 ChumCount = 0;
-			for (const FCatRunConsumableStack& Stack : Loadout.Consumables) ChumCount += Stack.Quantity;
+			for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
+			{
+				const UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
+					Slot.DefinitionId);
+				if (Definition && Definition->Kind == ECatEquipmentKind::Chum && Slot.Quantity > 0)
+				{
+					ChumCount += Slot.Quantity;
+				}
+			}
 			PushStatus(1, FColor::White, FString::Printf(TEXT("竿耐久 %.0f  窝料 x%d"), Loadout.RodDurability, ChumCount));
 		}
 	}

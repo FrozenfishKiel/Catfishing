@@ -28,7 +28,7 @@
 - Run 阶段、额度、ready、Host exit 等局事实只由 `ACatfishingGameModeBase` 写。
 - GameState 只复制公开快照，不裁决玩法。
 - PlayerState 只保存连接期身份、ready 和公开摘要，不保存 ASC、身体状态、物品或本地档案。
-- Character 持有猫身体 ASC、Condition、Equipment 和个人鱼护出口；这些状态不搬到 PlayerState 或 Profile。
+- Character 持有猫身体 ASC、Condition 和 Equipment；个人鱼护是独立箱子式容器对象，不搬到 Character、PlayerState 或 Profile。
 - FishingSession 持有单次钓鱼阶段、参与者和抢抄终态；Ability、鱼 Actor、UI 不能各自结算同一条鱼。
 - ItemsService 是鱼实例和容器事务唯一写口；FastArray、Widget、StateTree Task 只能消费提交结果。
 - ProfileSubsystem 是本地永久档案唯一写口；服务器不能声明远端 `USaveGame` 已经原子提交。
@@ -55,7 +55,7 @@ SteamSockets、NetDriverDefinitions、`bInitServerOnClient` 和双账号 Steam �
 
 ## Character、GAS 与身体状态
 
-`ACatCharacter` 同时作为 ASC Owner 和 Avatar。服务端负责授予 Ability、初始化属性和注册个人鱼护；拥有客户端只刷新 ActorInfo、输入映射和 UI 订阅。
+`ACatCharacter` 同时作为 ASC Owner 和 Avatar。服务端负责授予 Ability、初始化属性和装备入口；拥有客户端只刷新 ActorInfo、输入映射和 UI 订阅。个人鱼护必须通过独立鱼护对象接入 Items 容器事务，不由 Character 生命周期注册。
 
 `UCatSurvivalAttributeSet` 属于 `AbilitySystem/`，因为它表达 GAS 属性，不属于 `Character/`。`UCatConditionComponent` 属于 `Condition/`，因为它表达 Wet、Downed、Recovery 等离散状态。`UCatEquipmentComponent` 属于 `Equipment/`，因为它表达功能装配和一局耗材。
 

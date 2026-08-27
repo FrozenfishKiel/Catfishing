@@ -55,6 +55,7 @@ public:
 	virtual void BeginLocalFocus_Implementation() override;
 	virtual void EndLocalFocus_Implementation() override;
 	virtual FText GetInteractionPrompt_Implementation() const override;
+	/** 权威拾取入口；正式独立鱼护对象未接入前只完成身份/距离检查并返回依赖缺失，不写 Character 旧鱼护。 */
 	virtual void RequestInteractionFromAuthority_Implementation(AController* RequestingController, FGuid RequestId) override;
 
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category="Catfishing|Items")

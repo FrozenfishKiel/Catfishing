@@ -104,27 +104,66 @@ void UCatInteractionPageController::RefreshFocusedTarget()
 	RenderPrompt();
 }
 
-// 确认流程：如果当前目标已经失效先刷新一次；仍有效时把交互调用交给目标组件自己处理。
+// 确认流程：直接 UI 绑定只关心执行副作用；是否消费旧 Native 交互由共享实现返回给 PlayerController。
 void UCatInteractionPageController::InteractWithFocusedTarget()
 {
+	(void)TryInteractWithFocusedTarget();
+}
+
+// Native 输入接管流程：
+// 1. 如果同一帧已经由直接 UI 绑定消费，立即返回 true，阻断旧准星交互重复触发。
+// 2. 否则复用聚焦目标交互实现；找到通用 UI 目标时即使目标打开失败，也吞掉旧路径，避免商店/鱼缸附近误触放竿等玩法动作。
+bool UCatInteractionPageController::TryHandleNativeInteractionInput()
+{
+	if (LastInteractionConsumedFrame == GFrameCounter)
+	{
+		return true;
+	}
+	return TryInteractWithFocusedTarget();
+}
+
+// 聚焦目标交互流程：
+// 1. 同一帧已经消费过时直接返回，兼容 EnhancedInput 对同一个 Action 的多个绑定执行顺序。
+// 2. 读取当前 Controller 和缓存目标；目标失效时立即刷新一次，覆盖玩家刚走进范围但计时扫描尚未触发的输入帧。
+// 3. 找到通用 UI 目标后调用目标组件能力入口，并记录本帧已消费 IA_Interact，让旧 Native 绑定只作为兜底。
+// 4. 无目标时返回 false，允许 PlayerController 继续走旧准星/钓鱼交互；完成后刷新提示，确保商店已打开等状态及时隐藏。
+bool UCatInteractionPageController::TryInteractWithFocusedTarget()
+{
+	if (LastInteractionConsumedFrame == GFrameCounter)
+	{
+		return true;
+	}
 	APlayerController* Controller = BoundPlayerController.Get();
 	UCatInteractionTargetComponent* Target = FocusedTarget.Get();
 	if (!Controller)
 	{
-		return;
+		return false;
 	}
 	if (!Target || !Target->CanInteract(Controller))
 	{
 		RefreshFocusedTarget();
 		Target = FocusedTarget.Get();
 	}
-	if (Target && Target->Interact(Controller))
+	if (!Target)
+	{
+		return false;
+	}
+
+	LastInteractionConsumedFrame = GFrameCounter;
+	if (Target->Interact(Controller))
 	{
 		UE_LOG(LogCatUI, Log, TEXT("Event=ui_interaction_confirmed Target=%s Controller=%s"),
 			*GetNameSafe(Target->GetOwner()),
 			*GetNameSafe(Controller));
 	}
 	RefreshFocusedTarget();
+	return true;
+}
+
+// 输入刷新流程：Controller 通知输入链重新就绪时重跑同一套安装逻辑；安装函数会先移除旧绑定，因此重复调用不会叠加确认键。
+void UCatInteractionPageController::RefreshInputBinding()
+{
+	InstallInteractionInput();
 }
 
 // 输入安装流程：只加载 Settings 中的确认 Action 和既有 InputContext 作为接线校验；运行时不创建 Action、不安装新 IMC、不硬写按键。

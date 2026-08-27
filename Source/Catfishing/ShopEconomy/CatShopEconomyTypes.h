@@ -5,16 +5,16 @@
 #include "GameFramework/PlayerState.h"
 #include "CatShopEconomyTypes.generated.h"
 
-/** 商店目录条目的交付类别；ShopEconomy 只记录订单语义，不直接写 Equipment 或 Items。 */
+/** 商店目录条目的交付类别；ShopEconomy 只记录订单语义，不直接写玩家随身库存或 Items。 */
 UENUM(BlueprintType)
 enum class ECatShopEntryKind : uint8
 {
 	/** 未声明类别；运行目录必须拒绝。 */
 	Unknown,
-	/** 购买后上层把定义交给买家自己的 Equipment 装备槽。 */
+	/** 购买后上层把装备型定义交给买家自己的随身库存数组。 */
 	EquipmentGrant,
-	/** 购买后上层可把定义交给 Equipment 的局内耗材授予入口。 */
-	RunConsumableGrant
+	/** 购买后上层把数量型定义交给买家自己的随身库存数组。 */
+	InventoryQuantityGrant
 };
 
 /**
@@ -48,13 +48,13 @@ enum class ECatShopTransactionKind : uint8
 	FreeClaim
 };
 
-/** 订单交付进度；Shop 只记录下游回执，不直接修改 Equipment 或 Items。 */
+/** 订单交付进度；Shop 只记录下游回执，不直接修改玩家随身库存或 Items。 */
 UENUM(BlueprintType)
 enum class ECatShopDeliveryState : uint8
 {
 	/** 该交易不需要交付；售鱼入账属于这种账本。 */
 	None,
-	/** 公款和库存已经提交，等待下游 Equipment 给出交付回执。 */
+	/** 公款和商店库存已经提交，等待下游随身库存给出交付回执。 */
 	Pending,
 	/** 下游领域已经以独立回执确认交付完成；重复确认只读取这条事实。 */
 	Delivered
