@@ -45,9 +45,10 @@ public:
 	/** 打开带外部容器上下文的背包；交互对象只提供只读容器复制源，跨容器移动仍由背包 Drop 和服务器裁决。 */
 	void OpenInventoryWithExternalContainerContexts(const TArray<UCatContainerReplicationComponent*>& ExternalContainers);
 
-	/** 打开鱼护箱子库存页；它使用鱼护专属 WBP，但读写路径仍是当前本地玩家的同一个库存 Model。 */
-	bool OpenFishGuardInventoryWithExternalContainerContexts(
-		const TArray<UCatContainerReplicationComponent*>& ExternalContainers);
+	/** 用交互对象指定的库存页面打开外部容器；LocalPlayer 不理解箱子类型，只负责把页面请求交给库存控制器并返回打开结果。 */
+	bool OpenInventoryWithExternalContainerContextsUsingViewClass(
+		const TArray<UCatContainerReplicationComponent*>& ExternalContainers,
+		TSubclassOf<UCatInventoryWidget> InventoryViewClass);
 
 	/** 查询背包 PageController 打开态；没有已装配页面时返回 false，避免旧 Widget 引用影响输入切换判断。 */
 	bool IsInventoryOpen() const;
@@ -80,7 +81,7 @@ private:
 	/** 当前 Controller Pawn 变化入口；同 Pawn 刷新库存读模型和输入绑定，换 Pawn 或空 Pawn 才拆装本地玩家 UI 模块。 */
 	void HandleControllerPawnChanged(APawn* NewPawn);
 
-	/** 当配置 WBP、当前 Controller 与 Character 有效时创建 HUD、Inventory 和 Interaction 三个独立模块。 */
+	/** 当配置 WBP、当前 Controller 与 Character 有效时创建 HUD、Inventory 和 Interaction 三个本地玩家模块。 */
 	void AttachPlayerLakeUI(ACatCharacter* Character);
 
 	/** 先解绑各模块 PageController/Model，再移除 View，最后清理所有本地玩家 UI 引用。 */
@@ -105,11 +106,7 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryWidget> InventoryWidget;
 
-	/** 当前 LocalPlayer 的鱼护箱子库存 WBP；只在鱼护交互时入视口，用来展示“玩家背包 + 鱼护箱子”双面板。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UCatInventoryWidget> FishGuardInventoryWidget;
-
-	/** 当前 LocalPlayer 的库存 Model；它只读随身库存、独立鱼护、外部容器、当前选择和动作结果。 */
+	/** 当前 LocalPlayer 的库存 Model；它只读随身库存、本次交互外部容器、当前选择和动作结果。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryModel> InventoryModel;
 

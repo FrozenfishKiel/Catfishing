@@ -21,14 +21,14 @@
 | WBP 资产 | 父类 | 用途 | 谁创建 |
 | --- | --- | --- | --- |
 | `/Game/UI/HUD/WBP_CatHUD` | `UCatHUDWidget` | 局内状态 HUD，显示猫状态和钓鱼反馈 | `UCatLocalPlayerUISubsystem` 启动局内 UI 时创建 |
-| `/Game/UI/Inventory/WBP_CatInventory` | `UCatInventoryWidget` | 默认背包页面，显示随身库存、个人鱼护和选中详情 | `UCatLocalPlayerUISubsystem` 创建，`UCatInventoryPageController` 打开 |
-| `/Game/UI/Inventory/WBP_CatFishGuardInventory` | `UCatInventoryWidget` | 鱼护箱子/外部容器专用背包页面，适合做玩家背包与容器两栏布局 | `UCatLocalPlayerUISubsystem` 创建，交互对象需要时指定打开 |
+| `/Game/UI/Inventory/WBP_CatInventory` | `UCatInventoryWidget` | 默认背包页面，显示随身库存、当前钓鱼选择和选中详情 | `UCatLocalPlayerUISubsystem` 创建，`UCatInventoryPageController` 打开 |
+| `/Game/UI/Inventory/WBP_CatFishGuardInventory` | `UCatFishGuardInventoryWidget` | 鱼护箱子页面，只显示本次交互到的地面鱼护容器格 | `ACatFishGuardActor` 提供页面类，`UCatInventoryPageController` 按需创建 |
 | `/Game/UI/InventorySlot/WBP_CatInventorySlot` | `UCatInventorySlotWidget` | 背包单个格子，负责显示占用、选中、拖拽和 Drop | `UCatInventoryWidget` 重建格子列表时动态创建 |
 | `/Game/UI/Shop/WBP_CatShop` | `UCatShopWidget` | 世界商店页面，显示商品、公款、购买和领取反馈 | `UCatShopInteractionComponent` 在靠近商店交互时创建 |
 | `/Game/UI/Interaction/WBP_CatInteractionPrompt` | `UCatInteractionPromptWidget` | 靠近对象时的“按键交互”提示 | `UCatLocalPlayerUISubsystem` 启动局内 UI 时创建 |
 | `/Game/UI/Collection/WBP_CatCollection` | `UCatCollectionWidget` | 图鉴/相册只读页面 | 当前已有配置和渲染接口；当前代码未看到完整打开入口 |
 
-这些默认路径来自 `Source/Catfishing/UI/CatUISettings.cpp`。如果以后改资产路径，要同步改 `UCatUISettings` 或项目配置。
+这些默认路径大多来自 `Source/Catfishing/UI/CatUISettings.cpp`。鱼护箱子页面类跟随 `ACatFishGuardActor` 自己的 `InventoryViewClass`，以后新增世界库存对象也应由对象自己提供页面类或打开上下文，不在 `UCatLocalPlayerUISubsystem` 里继续加专用字段。
 
 ## HUD：`WBP_CatHUD`
 
@@ -105,7 +105,7 @@
 | `Equipment` | 当前随身库存和当前钓鱼选择快照。 |
 | `SelectedSlotIndex` | 当前选中的显示格下标。 |
 | `bHasSelectedFish` | 当前是否选中一条鱼。 |
-| `bSelectedFishInPersonalGuard` | 当前选中鱼是否在自己的个人鱼护里。吃鱼/献祭只应该看这个条件。 |
+| `bSelectedFishInFishGuard` | 当前选中鱼是否来自本次打开的地面鱼护。吃鱼/献祭只应该看这个条件。 |
 | `bCanSubmitAction` | 当前是否允许提交吃鱼/献祭等按钮动作。 |
 | `bActionPending` | 是否已有请求等待服务器结果。pending 时按钮应表现为不可重复提交。 |
 | `SummaryText` | C++ 整理好的背包总览文本。 |
@@ -115,22 +115,34 @@
 | `ResultText` | C++ 整理好的最近结果文本。 |
 | `ToggleKeyName` | 当前背包开关键名，来自正式输入资产，不在 WBP 里写死。 |
 
-## 鱼护箱子背包：`WBP_CatFishGuardInventory`
+## 鱼护箱子：`WBP_CatFishGuardInventory`
 
-源码入口同样是 `Source/Catfishing/UI/Inventory/CatInventoryWidget.h`
+源码入口：`Source/Catfishing/UI/Inventory/CatFishGuardInventoryWidget.h`
 
-父类同样必须是 `UCatInventoryWidget`。这个 WBP 用来做外部容器交互，比如把玩家随身库存和鱼护箱子拆成两个区域。
+父类必须是 `UCatFishGuardInventoryWidget`。它就是打开地面鱼护时显示的箱子库存页，不再要求里面嵌玩家背包 WBP，也不再需要另一个鱼护箱子 WBP。鱼护 Actor 把这张页面类交给通用库存打开入口；C++ 会从同一份库存 Model 投影里只留下本次交互到的地面鱼护容器格，再交给普通库存渲染流程。拖拽、选择、吃鱼和献祭仍然走同一个 PageController 和服务器复核链路。
 
-### 推荐保留控件名
+### 可选控件名
 
 | 控件名 | 类型 | 人话说明 |
 | --- | --- | --- |
-| `InventoryObjectSlotWrapBox` | `WrapBox` | 玩家自己的随身库存格子容器。适合放左栏或上栏。 |
-| `ExternalContainerSlotWrapBox` | `WrapBox` | 外部容器格子，比如鱼护箱子内容。适合放右栏或下栏。 |
-| `CloseButton` | `Button` | 关闭页面。 |
-| `ResultTextBlock` | `TextBlock` | 显示移动、冲突、失败或成功反馈。 |
+| `InventorySlotWrapBox` | `WrapBox` | 鱼护箱子格子容器。C++ 只会往里面塞本次地面鱼护容器的格子。 |
+| `CloseButton` | `Button` | 关闭整个鱼护交互界面。存在时 C++ 自动绑定。 |
+| `ConsumeFishButton` | `Button` | 吃掉当前鱼护中选中的鱼。服务器会复核，不是 UI 直接删鱼。 |
+| `SacrificeFishButton` | `Button` | 献祭当前鱼护中选中的鱼。服务器会复核。 |
+| `SummaryTextBlock` | `TextBlock` | 鱼护箱子总览文本。 |
+| `SelectedFishTextBlock` | `TextBlock` | 当前选中的箱子格说明。 |
+| `ResultTextBlock` | `TextBlock` | 最近一次移动、吃鱼、献祭或拒绝反馈。 |
 
-如果只放 `InventorySlotWrapBox`，也能做统一列表；如果想做双栏，就用 `InventoryObjectSlotWrapBox` 和 `ExternalContainerSlotWrapBox`。
+### 蓝图接口
+
+| 名称 | 类型 | 人话说明 |
+| --- | --- | --- |
+| `BP_RenderInventory(ViewState)` | 蓝图事件 | 鱼护箱子数据刷新时触发。传入的 `Slots` 已经只剩地面鱼护容器格。 |
+| `GetLastInventoryViewState()` | 蓝图纯函数 | 读取最近一次鱼护箱子数据。 |
+| `RequestCloseInventory()` | 蓝图可调用 | 请求关闭鱼护交互界面。 |
+| `RequestSelectSlot(SlotIndex)` | 蓝图可调用 | 请求选中某个箱子格，`SlotIndex` 仍是库存 Model 的原始下标。 |
+| `RequestConsumeSelectedFish()` | 蓝图可调用 | 请求吃掉当前选中鱼。 |
+| `RequestSacrificeSelectedFish()` | 蓝图可调用 | 请求献祭当前选中鱼。 |
 
 ## 背包格子：`WBP_CatInventorySlot`
 
@@ -304,7 +316,9 @@
 
 不要在商店按钮里自己改公款、库存或装备。按钮只调用 `RequestPurchaseEntry` 或 `RequestFreeClaimEntry`，服务器回包后 UI 会刷新。
 
-不要把外部鱼护箱子页面做成另一套状态。`WBP_CatFishGuardInventory` 复用同一个 `UCatInventoryWidget` 和同一个 Model，只是布局上把玩家库存和外部容器拆开。
+不要把外部鱼护箱子页面做成另一套状态。`WBP_CatFishGuardInventory` 复用同一个 `UCatInventoryWidget` 和同一个 Model，只是在进入渲染前把显示格裁成地面鱼护容器格。
+
+不要在 `UCatLocalPlayerUISubsystem` 里给世界库存对象继续加专用成员。LocalPlayer 只保留 HUD、普通背包和交互提示这些本地玩家模块；鱼护、鱼缸和以后新增的箱子应从自己的交互对象传入容器上下文和页面类。
 
 不要把 `Content/UI/WBP_CatLakeReach.uasset` 当正式入口继续改。当前正式拆分 WBP 在 `/Game/UI/...` 下。
 
@@ -313,6 +327,8 @@
 - `Source/Catfishing/UI/CatUISettings.h`
 - `Source/Catfishing/UI/CatUISettings.cpp`
 - `Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp`
+- `Source/Catfishing/Items/CatFishGuardActor.h`
+- `Source/Catfishing/Items/CatFishGuardActor.cpp`
 - `Source/Catfishing/UI/CatUIModalInputMode.cpp`
 - `Source/Catfishing/UI/HUD/CatHUDWidget.h`
 - `Source/Catfishing/UI/Inventory/CatInventoryWidget.h`

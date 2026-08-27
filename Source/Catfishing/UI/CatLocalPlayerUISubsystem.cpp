@@ -86,23 +86,24 @@ void UCatLocalPlayerUISubsystem::OpenInventoryWithExternalContainerContexts(
 	}
 }
 
-// 鱼护箱子库存打开流程：
-// 1. 要求本地库存 PageController 和鱼护 WBP 都已装配；缺任一项直接返回 false，避免用通用页假装鱼护页。
-// 2. 把鱼护容器上下文交给同一个库存 Model，再指定鱼护 WBP 作为当前 View。
-// 3. 返回 PageController 的真实打开结果，交互对象据此决定是否报告成功。
-bool UCatLocalPlayerUISubsystem::OpenFishGuardInventoryWithExternalContainerContexts(
-	const TArray<UCatContainerReplicationComponent*>& ExternalContainers)
+// 指定库存页打开流程：
+// 1. 只检查本地库存控制器是否存在；具体箱子类型、页面类和容器来源都由交互对象提供。
+// 2. 控制器缺失时直接返回 false，避免把外部容器打开请求伪装成普通背包切换。
+// 3. 把 ViewClass 原样交给库存 PageController 创建并持有，LocalPlayer 不预建鱼护、鱼缸或未来箱子的专用字段。
+// 4. 返回真实打开结果，让交互对象按自己的规则决定是否继续报告成功或记录拒绝。
+bool UCatLocalPlayerUISubsystem::OpenInventoryWithExternalContainerContextsUsingViewClass(
+	const TArray<UCatContainerReplicationComponent*>& ExternalContainers,
+	const TSubclassOf<UCatInventoryWidget> InventoryViewClass)
 {
-	if (!InventoryPageController || !FishGuardInventoryWidget)
+	if (!InventoryPageController)
 	{
 		UE_LOG(LogCatUI, Warning,
-			TEXT("Event=ui_fish_guard_inventory_unavailable PageController=%s FishGuardWidget=%s"),
-			InventoryPageController ? TEXT("valid") : TEXT("missing"),
-			FishGuardInventoryWidget ? TEXT("valid") : TEXT("missing"));
+			TEXT("Event=ui_external_inventory_unavailable PageController=missing ViewClass=%s"),
+			*GetNameSafe(InventoryViewClass.Get()));
 		return false;
 	}
-	return InventoryPageController->OpenInventoryWithExternalContainerContextsUsingView(
-		ExternalContainers, FishGuardInventoryWidget);
+	return InventoryPageController->OpenInventoryWithExternalContainerContextsUsingViewClass(
+		ExternalContainers, InventoryViewClass);
 }
 
 // 状态读取流程：从 PageController 读取唯一背包状态；未装配背包时固定返回 false，避免从 Widget 可见性拼第二份状态。
@@ -306,8 +307,7 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 // 1. 验证本地设置、当前 Controller/Pawn 和 World；核心 WBP 类缺失或无效时直接 fail-closed，不创建原生白盒替身。
 // 2. 创建 HUD Model/View 并入视口；HUD 只展示猫状态和钓鱼反馈。
 // 3. 创建 Inventory Model/PageController/普通背包 View，但背包 View 不预先入视口，只通过既有 InputContext 的 Action 打开。
-// 4. 可选预创建鱼护箱子 View；缺失不影响主 HUD 和普通背包装配，但鱼护交互会明确拒绝打开。
-// 5. 创建 Interaction 提示 View 和控制器；控制器只扫描通用交互目标，商店仍由世界交互对象拥有。
+// 4. 创建 Interaction 提示 View 和控制器；控制器只扫描通用交互目标，商店、鱼护和未来箱子仍由世界交互对象提供页面上下文。
 void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 {
 	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
@@ -323,8 +323,6 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 
 	const TSubclassOf<UCatHUDWidget> HUDViewClass = Settings->LoadHUDWidgetClass();
 	const TSubclassOf<UCatInventoryWidget> InventoryViewClass = Settings->LoadInventoryWidgetClass();
-	const TSubclassOf<UCatInventoryWidget> FishGuardInventoryViewClass =
-		Settings->LoadFishGuardInventoryWidgetClass();
 	const TSubclassOf<UCatInventorySlotWidget> InventorySlotViewClass = Settings->LoadInventorySlotWidgetClass();
 	const TSubclassOf<UCatInteractionPromptWidget> InteractionPromptViewClass =
 		Settings->LoadInteractionPromptWidgetClass();
@@ -344,8 +342,6 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	InventoryModel = NewObject<UCatInventoryModel>(this);
 	InventoryPageController = NewObject<UCatInventoryPageController>(this);
 	InventoryWidget = CreateWidget<UCatInventoryWidget>(Controller, InventoryViewClass);
-	FishGuardInventoryWidget = FishGuardInventoryViewClass
-		? CreateWidget<UCatInventoryWidget>(Controller, FishGuardInventoryViewClass) : nullptr;
 	InteractionPageController = NewObject<UCatInteractionPageController>(this);
 	InteractionPromptWidget = CreateWidget<UCatInteractionPromptWidget>(Controller, InteractionPromptViewClass);
 	if (!HUDModel || !HUDWidget || !InventoryModel || !InventoryPageController || !InventoryWidget
@@ -355,10 +351,6 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 		return;
 	}
 	InventoryWidget->SetInventorySlotWidgetClass(InventorySlotViewClass);
-	if (FishGuardInventoryWidget)
-	{
-		FishGuardInventoryWidget->SetInventorySlotWidgetClass(InventorySlotViewClass);
-	}
 	if (!HUDModel->Bind(GetLocalPlayer(), Controller, Character))
 	{
 		DetachPlayerLakeUI();
@@ -396,10 +388,6 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 		*GetNameSafe(InventoryWidget->GetClass()),
 		*GetNameSafe(InventorySlotViewClass.Get()),
 		*GetNameSafe(InteractionPromptWidget ? InteractionPromptWidget->GetClass() : nullptr));
-	UE_LOG(LogCatUI, Log,
-		TEXT("Event=ui_fish_guard_inventory_prepared Widget=%s ConfiguredClass=%s"),
-		*GetNameSafe(FishGuardInventoryWidget ? FishGuardInventoryWidget->GetClass() : nullptr),
-		*Settings->FishGuardInventoryWidgetClass.ToSoftObjectPath().ToString());
 }
 
 // 本地玩家 UI 解绑流程：PageController 先恢复输入和解绑 View 意图，Model 再解除玩法订阅，最后移除各自 WBP 并清引用。
@@ -419,11 +407,6 @@ void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 	{
 		InventoryWidget->RemoveFromParent();
 		InventoryWidget = nullptr;
-	}
-	if (FishGuardInventoryWidget)
-	{
-		FishGuardInventoryWidget->RemoveFromParent();
-		FishGuardInventoryWidget = nullptr;
 	}
 	if (HUDModel)
 	{

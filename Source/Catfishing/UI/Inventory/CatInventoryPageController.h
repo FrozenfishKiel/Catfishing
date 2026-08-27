@@ -13,7 +13,6 @@ class UEnhancedInputComponent;
 class UInputAction;
 class ULocalPlayer;
 enum class ECatInventoryAction : uint8;
-enum class ECatInventorySlotPointerAction : uint8;
 struct FCatInventorySlotView;
 
 /** 库存 PageController；它连接 Model 与 WBP，并把格子、拖拽和鱼动作等纯 UI 意图翻译成输入模式或正式服务器命令。 */
@@ -36,9 +35,10 @@ public:
 	/** 打开带外部容器上下文的库存；交互对象只提供容器读源，后续移动仍由 Drop 和服务器权限裁决。 */
 	void OpenInventoryWithExternalContainerContexts(const TArray<UCatContainerReplicationComponent*>& ExternalContainers);
 
-	/** 使用指定库存 WBP 打开外部容器；鱼护这类箱子页面可换自己的布局，但仍共用同一个 Model 和服务器命令链。 */
-	bool OpenInventoryWithExternalContainerContextsUsingView(
-		const TArray<UCatContainerReplicationComponent*>& ExternalContainers, UCatInventoryWidget* PreferredView);
+	/** 使用交互对象指定的库存 WBP 类打开外部容器；PageController 创建临时页面并在打开失败时返回 false。 */
+	bool OpenInventoryWithExternalContainerContextsUsingViewClass(
+		const TArray<UCatContainerReplicationComponent*>& ExternalContainers,
+		TSubclassOf<UCatInventoryWidget> InventoryViewClass);
 
 	/** 返回库存是否由本 PageController 保持打开；不从 Widget 可见性反推。 */
 	bool IsInventoryOpen() const;
@@ -59,8 +59,8 @@ private:
 	/** 库存 View 发出格子选择意图时转交 Model；PageController 不缓存第二份下标。 */
 	void HandleViewSlotSelectionRequested(int32 SlotIndex);
 
-	/** 库存格子右键或拖拽意图；默认只同步选择，具体上下文表现留给 WBP。 */
-	void HandleViewSlotPointerRequested(int32 SlotIndex, ECatInventorySlotPointerAction PointerAction);
+	/** 库存格子右键上下文意图；默认同步选择，再按随身库存物品决定是否提交钓具选择。 */
+	void HandleViewSlotContextRequested(int32 SlotIndex);
 
 	/** 库存格子 Drop 意图；从最新 Model 复核来源后提交随身库存整理或鱼容器移动服务器事务。 */
 	void HandleViewSlotDropRequested(const FCatInventorySlotView& SourceSlot, const FCatInventorySlotView& TargetSlot);
@@ -82,6 +82,13 @@ private:
 
 	/** 切换当前库存 View；只搬 UI 委托和视口焦点，不重建 Model、输入绑定或后端容器上下文。 */
 	bool SwitchInventoryView(UCatInventoryWidget* NewView);
+
+	/** 使用已经创建好的库存页面打开外部容器；内部给 ViewClass 入口复用，失败时不写第二套库存状态。 */
+	bool OpenInventoryWithExternalContainerContextsUsingView(
+		const TArray<UCatContainerReplicationComponent*>& ExternalContainers, UCatInventoryWidget* PreferredView);
+
+	/** 清理失败的外部库存打开状态；只处理按需临时页和外部容器上下文，不关闭普通 Tab 背包。 */
+	void ClearExternalInventoryOpenFailure();
 
 	/** 解除当前库存 View 的 UI 委托并移出视口；Model 和输入绑定由外层生命周期继续管理。 */
 	void UnbindInventoryView();
@@ -106,6 +113,11 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatInventoryWidget> DefaultInventoryView;
 
+	/** 交互对象按需指定的临时库存 WBP，表示当前外部容器请求使用的非默认页面实例。 */
+	/** PageController 创建、持有并在关闭或解绑时释放它；释放只影响页面生命周期，不改 Model 的后端快照。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatInventoryWidget> ExternalInventoryView;
+
 	/** 当前页面安装的库存开关 Action；保存强引用只为输入绑定生命周期配对。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> AppliedInventoryToggleAction;
@@ -123,8 +135,8 @@ private:
 	/** View 格子选择意图订阅句柄；Unbind 必须从同一 View 移除。 */
 	FDelegateHandle ViewSlotSelectionHandle;
 
-	/** View 格子鼠标上下文意图订阅句柄；Unbind 必须从同一 View 移除。 */
-	FDelegateHandle ViewSlotPointerHandle;
+	/** View 格子右键上下文意图订阅句柄；Unbind 必须从同一 View 移除。 */
+	FDelegateHandle ViewSlotContextHandle;
 
 	/** View 格子 Drop 意图订阅句柄；Unbind 必须从同一 View 移除。 */
 	FDelegateHandle ViewSlotDropHandle;
