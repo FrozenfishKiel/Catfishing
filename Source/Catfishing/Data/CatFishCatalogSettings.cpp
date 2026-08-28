@@ -50,8 +50,13 @@ namespace CatFishCatalogSettingsPrivate
 	static double CalculateChallengeRatio(const UCatFishDefinition& Definition,
 		const double CombinedFishingStrength, const double CombinedFightStamina)
 	{
-		return FMath::Max(Definition.FishStrength / CombinedFishingStrength,
-			Definition.FishFightStamina / CombinedFightStamina);
+		const double StrengthRatio = Definition.FishStrength / CombinedFishingStrength;
+		const double StaminaRatio = Definition.FishFightStamina / CombinedFightStamina;
+		// 力量决定瞬时拖落/碾压出口，不能被低体力稀释；体力只有在鱼也具备相称力量时才构成持续挑战。
+		// 调和均值会把“高体力、极低力量”的耐打木桩压回轻松带，避免它占据势均力敌带后又被力量规则秒杀。
+		const double BalancedRatio = (2.0 * StrengthRatio * StaminaRatio)
+			/ (StrengthRatio + StaminaRatio);
+		return FMath::Max(StrengthRatio, BalancedRatio);
 	}
 
 	static EChallengeBand ResolveChallengeBand(const double ChallengeRatio,

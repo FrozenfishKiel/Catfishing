@@ -33,7 +33,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Selection")
 	double MaximumChumModifier = 0.0;
 
-	/** 挑战度不高于该值的鱼归入轻松带；挑战度取鱼力量比与鱼体力比的较大值。 */
+	/** 挑战度不高于该值的鱼归入轻松带；挑战度以力量比为下限，并由力量/体力调和均值连续抬升。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Selection|Challenge", meta = (ClampMin = "0.0"))
 	double ComfortChallengeMaximumRatio = 0.0;
 

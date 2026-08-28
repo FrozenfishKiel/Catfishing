@@ -4,6 +4,7 @@
 
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishDefinition.h"
+#include "Data/CatFishPersonalityDefinition.h"
 #include "Curves/CurveFloat.h"
 #include "Fishing/CatFishingSettings.h"
 
@@ -94,6 +95,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishCatalogBalancedChallengeBandTest,
+	"Catfishing.Unit.Data.FishCatalog.EnduranceOnlyFishDoesNotOccupyMatchedBand",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishCatalogChallengeBandFallbackTest,
 	"Catfishing.Unit.Data.FishCatalog.MissingWeightedBandFallsBackToAvailableFish",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -106,6 +112,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishCatalogShowcaseFormalCatalogTest,
 	"Catfishing.Unit.Data.FishCatalog.ShowcaseRiverSelectsFormalFishCatalog",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishCatalogShowcaseChallengeDistributionTest,
+	"Catfishing.Unit.Data.FishCatalog.ShowcaseRiverProducesVariedFightStrengths",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 // 测试流程：把两条同 ID 且都完整的定义放入瞬态目录；按 ID 查询必须拒绝重复命中，防止 Fishing 随机拿到不稳定资产。
@@ -204,6 +215,30 @@ bool FCatFishCatalogChallengeBandTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
+// 回归：旧 max(力量比,体力比) 会把 20% 力量、100% 体力的鱼误放进势均力敌带，
+// 但它在正式搏斗里会被 2 倍力量规则直接碾压。平衡挑战度必须选择力量/体力都够用的候选。
+bool FCatFishCatalogBalancedChallengeBandTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UCatFishCatalogSettings* Settings = NewObject<UCatFishCatalogSettings>(GetTransientPackage());
+	CatFishCatalogSettingsTest::ConfigureReadySelection(*Settings);
+	Settings->ComfortChallengeBandWeight = 0.0;
+	Settings->MatchedChallengeBandWeight = 1.0;
+	Settings->RiskyChallengeBandWeight = 0.0;
+	Settings->Definitions = {
+		CatFishCatalogSettingsTest::MakeReadyFishDefinition(
+			TEXT("EnduranceOnlyFish"), ECatFishBodyClass::Standard, 1, 20.0, 100.0),
+		CatFishCatalogSettingsTest::MakeReadyFishDefinition(
+			TEXT("BalancedMatchedFish"), ECatFishBodyClass::Standard, 1, 80.0, 130.0)};
+
+	const FCatFishSelectionResult Result = Settings->SelectRuntimeDefinition(
+		CatFishCatalogSettingsTest::MakeSelectionContext());
+	TestTrue(TEXT("matched band remains selectable"), Result.bSelected);
+	TestEqual(TEXT("matched band rejects the endurance-only instant-overpower fish"),
+		Result.FishDefinitionId, FName(TEXT("BalancedMatchedFish")));
+	return !HasAnyErrors();
+}
+
 bool FCatFishCatalogChallengeBandFallbackTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -292,6 +327,58 @@ bool FCatFishCatalogShowcaseFormalCatalogTest::RunTest(const FString& Parameters
 		? FishingSettings->FindBitePersonality(Definition->BitePersonalityId) : nullptr);
 	TestNotNull(TEXT("selected formal fish resolves its fight personality"), Definition
 		? FishingSettings->FindFightPersonality(Definition->FightPersonalityId) : nullptr);
+	return !HasAnyErrors();
+}
+
+// 正式资产分布回归：默认 50 力量/60 体力单猫不能再让 Salted/Puffer 这类低力量鱼长期占满最高权重带。
+// 用连续确定性种子抽样，要求多数结果即使完美中鱼后也不会命中 2 倍力量碾压，并保留鱼种多样性。
+bool FCatFishCatalogShowcaseChallengeDistributionTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const UCatFishCatalogSettings* Settings = GetDefault<UCatFishCatalogSettings>();
+	const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
+	FCatFishSelectionContext Context;
+	Context.WaterRegion.RegionId = TEXT("River");
+	Context.WaterRegion.GeometryRevision = 1;
+	Context.ChumSample.bSucceeded = true;
+	Context.ChumSample.WaterRegion = Context.WaterRegion;
+	Context.TimeOfDay = ECatEnvironmentTimeOfDay::Day;
+	Context.Weather = ECatEnvironmentWeather::Clear;
+	Context.BaitDefinitionId = TEXT("BugBait");
+	Context.ActivePlayerCount = 1;
+	Context.CombinedFishingStrength = 50.0;
+	Context.CombinedFightStamina = 60.0;
+
+	constexpr int32 SampleCount = 256;
+	int32 SelectedCount = 0;
+	int32 NonOverpowerableAfterPerfectHookCount = 0;
+	TSet<FName> SelectedFishIds;
+	for (int32 Seed = 1; Seed <= SampleCount; ++Seed)
+	{
+		Context.RandomSeed = Seed;
+		const FCatFishSelectionResult Result = Settings->SelectRuntimeDefinition(Context);
+		const UCatFishDefinition* Definition = Result.bSelected
+			? Settings->FindRuntimeDefinition(Result.FishDefinitionId) : nullptr;
+		const UCatBitePersonalityDefinition* Bite = Definition && FishingSettings
+			? FishingSettings->FindBitePersonality(Definition->BitePersonalityId) : nullptr;
+		if (!Definition || !Bite)
+		{
+			continue;
+		}
+		++SelectedCount;
+		SelectedFishIds.Add(Definition->FishDefinitionId);
+		const double PerfectHookStrength = Definition->FishStrength * Bite->PerfectFishStrengthMultiplier;
+		if (Context.CombinedFishingStrength
+			< PerfectHookStrength * FishingSettings->OverpowerStrengthRatio)
+		{
+			++NonOverpowerableAfterPerfectHookCount;
+		}
+	}
+
+	TestEqual(TEXT("every deterministic River sample resolves a formal fish"), SelectedCount, SampleCount);
+	TestTrue(TEXT("River sample contains at least four fish species"), SelectedFishIds.Num() >= 4);
+	TestTrue(TEXT("most River samples survive the instant-overpower check even after a perfect hook"),
+		NonOverpowerableAfterPerfectHookCount >= SampleCount / 2);
 	return !HasAnyErrors();
 }
 
