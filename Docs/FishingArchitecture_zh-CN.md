@@ -61,7 +61,7 @@
 
 - 第一次 R 的 `PlaceRod` 只把鱼竿部署为空杆，不占槽、不锁角色移动；第二次 R 才进入操作位，保证放杆动画和使用动作是两个独立复制跃迁。
 - `0` 号槽是右侧主位；当前单人钓鱼命令只接受该玩家。
-- `1` 号槽是左侧辅助位；当前只完成站位和网络占用，合力数值/输入仍是 `TODO(CooperativeFishing)`。
+- `1` 号槽是左侧辅助位；搏斗规则层已经固定“猫总体力量 = 主操作猫力量 + 第二只猫力量”，但运行时尚未把辅助位写入第二项，站位参与条件、体力结算与输入仍是 `TODO(CooperativeFishing)`。
 - 主位离开时数组压紧，原 1 号位晋升为 0 号位并移动到右侧；人数从数组长度即时推导，没有可能遗留的 `bTwoPlayer`。
 - 槽位算法按右/左成对向外扩展，配置上限当前为 2、代码有界预留到 8，后续增加人数不需要更换复制结构。
 - `OperatorPlayerState` 只保留为 `OperatorPlayerStates[0]` 的兼容快捷字段；蓝图若要判断双人必须读取数组长度。
@@ -105,7 +105,7 @@ StateTree（`ST_FishingSession`）只有 4 个状态、3 条事件转移 + 1 条
 
 `FCatFishingFightSimulator::Step()`：纯静态无副作用函数（有单元测试），每 0.05s 由 Runner 调一次。
 
-三方力量（冻结进 Config）：猫力=ASC FishingStrength ／ 鱼力=鱼种 FishStrength（完美中鱼×0.8）／ 竿强=RodDefinition.FishingStrength。
+三方力量（冻结进 Config）：猫总体力量=`PrimaryOperatorCatStrength + SecondCatStrength` ／ 鱼力=鱼种 FishStrength（完美中鱼×0.8）／ 竿强=RodDefinition.FishingStrength。当前运行时只从主操作猫 ASC 填第一项，第二项保持 0，等待双人参与方案确定后接入。
 `FCatFishSteeringModel` 用独立服务器随机流产生平滑目标游向；相同种子与固定步长得到相同方向序列，客户端不自行随机。
 
 鱼自己的高层行为由 Encounter 上的 `ST_FishFight` 控制：默认在 `StrugglingOutward` 与 `CalmOrInward` 两个状态间循环。StateTree Task 只把意图和持续时间交给 Runner，不写 Transform、不扣体力，也不直接修改鱼线。未来增加“低体力蓄力冲刺”时，可以在树上增加状态和条件，同时仍复用同一套服务器模拟器。
@@ -205,7 +205,7 @@ Q 蓄力黄色抛物线与落点球是玩法瞄准反馈，不属于上述两类
 Content/Data/Abilities/   DA_CatAbilitySet_Default(6条) · DA_CatAbilityInputConfig(6条)
 Content/Data/Equipment/   DA_Rod/Bait/Float/ScoopNet/Chum_Basic
 Content/Catfishing/Data/Fish/  正式 Fish_* · Bite_* · Fight_*
-Content/Data/Fish/             Showcase2 水域迁移前的兼容 DA_Fish_Test01 · DA_Bite_Test01 · DA_Fight_Test01
+Content/Data/Fish/             未注册的历史测试二进制（不得作为运行入口，待编辑器引用审计后清理）
 Content/Data/Curves/      Curve_ChumSaturation(1→3) · Curve_ChumDistance/TimeFalloff(1→0)
 Content/Data/StateTrees/  ST_RunFlow · ST_FishingSession · ST_FishFight
 Config/DefaultGame.ini    10 个 section（改后必须重启 Editor；软引用资产必须真实落盘）
@@ -225,4 +225,4 @@ Config/DefaultGame.ini    10 个 section（改后必须重启 Editor；软引用
 - 窝料规格版：圆形并池、30s×0.9 离散衰减、去设计上限
 - 抄网规格版：概率/硬直/无网拾取/翻肚 30s 苏醒（会新增 Phase/Intent 枚举值→表现层届时"补分支"）
 - 浮漂精准偏移、入夜停咬、拽尾巴救援(W3)、巨鱼协作输入
-- `TODO(CooperativeFishing)`：把鱼竿当前占位数组接入 Session 参与集合、合力/体力结算与多输入仲裁；必须每次从当前数组重建，不能缓存单/双人模式
+- `TODO(CooperativeFishing)`：确定第二只猫如何加入与配合后，把服务器权威参与事实接入 `SecondCatStrength`、体力结算与多输入仲裁；力量规则已统一读取 `PrimaryOperatorCatStrength + SecondCatStrength`，但必须每次从当前事实重建，不能缓存单/双人模式

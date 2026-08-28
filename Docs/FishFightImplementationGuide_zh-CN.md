@@ -135,7 +135,7 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 
 | 想改变什么 | 位置 |
 |---|---|
-| 发力/休息持续时间 | `DA_Fight_Test01` 的 Calm/Struggle Duration |
+| 发力/休息持续时间 | 正式 `/Game/Catfishing/Data/Fish/Fight_*` 性格的 Calm/Struggle Duration |
 | 满体力/力竭时向内概率 | `FullStaminaInwardProbability` / `ExhaustedInwardProbability` |
 | 向内扇区和概率增长曲线 | `InwardConeHalfAngleDegrees` / `InwardProbabilityExponent` |
 | 多久换一次目标方向 | `DirectionRetargetDurationRangeSeconds` |
@@ -144,7 +144,7 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 | 假装回头的概率 | `FeintProbability` |
 | 多大夹角算强对抗 | `StrongConfrontationAlignmentThreshold` |
 | 强对抗要持续多久 | `StrongConfrontationConfirmationSeconds` |
-| 鱼力量和总搏斗体力 | 当前选中的 `UCatFishDefinition`（Showcase2 迁移前可能是兼容 `DA_Fish_Test01`） |
+| 鱼力量和总搏斗体力 | 当前从正式鱼库选中的 `UCatFishDefinition` |
 | 猫力量和体力 | `DefaultGame.ini` / 后续猫定义资产 |
 | 收近速度和耗尽吸附阈值 | `UCatFishingSettings` / `DefaultGame.ini` |
 | 张力表现达到满值的响应范围 | `TensionResponseRangeCentimeters`（Project Settings） |

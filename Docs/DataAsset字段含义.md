@@ -15,9 +15,9 @@
 |---|---|---|
 | 猫种类 CatCharacterDefinition | `[CatAbilitySettings]` `+CharacterDefinitions=` | `/Game/Catfishing/Data/Character/Cat_Default` |
 | 装备 CatEquipmentDefinition | `[CatEquipmentSettings]` `+Definitions=` | `/Game/Catfishing/Data/Equipment/Equip_*` |
-| 鱼种 CatFishDefinition | `[CatFishCatalogSettings]` `+Definitions=` | 正式 `/Game/Catfishing/Data/Fish/Fish_*`；Showcase2 迁移前暂留 `DA_Fish_Test01` 兼容当前水域 ID |
-| 咬钩性格 CatBitePersonalityDefinition | `[CatFishingSettings]` `+BitePersonalities=` | 正式 `/Game/Catfishing/Data/Fish/Bite_*`；旧测试鱼仍引用 `DA_Bite_Test01` |
-| 搏斗性格 CatFightPersonalityDefinition | `[CatFishingSettings]` `+FightPersonalities=` | 正式 `/Game/Catfishing/Data/Fish/Fight_*`；旧测试鱼仍引用 `DA_Fight_Test01` |
+| 鱼种 CatFishDefinition | `[CatFishCatalogSettings]` `+Definitions=` | `/Game/Catfishing/Data/Fish/Fish_*`；Showcase2 的 `River` 水域直接使用正式目录 |
+| 咬钩性格 CatBitePersonalityDefinition | `[CatFishingSettings]` `+BitePersonalities=` | `/Game/Catfishing/Data/Fish/Bite_*` |
+| 搏斗性格 CatFightPersonalityDefinition | `[CatFishingSettings]` `+FightPersonalities=` | `/Game/Catfishing/Data/Fish/Fight_*` |
 | AbilitySet / InputConfig | `[CatAbilitySettings]` `DefaultAbilitySet=` / `AbilityInputConfig=` | DA_CatAbilitySet_Default 等 |
 | 曲线 CurveFloat | 被上述 DA/设置按字段引用 | Curve_ChumSaturation 等 3 条 |
 

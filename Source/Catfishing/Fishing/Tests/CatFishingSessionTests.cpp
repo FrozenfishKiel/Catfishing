@@ -99,7 +99,7 @@ bool FCatFishingFightRunnerInitialHeldInputTest::RunTest(const FString& Paramete
 	BaseInit.WaterRegion.GeometryRevision = 1;
 	BaseInit.FrozenWaterBounds = FBox(FVector(-1000.0), FVector(1000.0));
 	BaseInit.Config.FixedStepSeconds = 0.05;
-	BaseInit.Config.CatStrength = 50.0;
+	BaseInit.Config.PrimaryOperatorCatStrength = 50.0;
 	BaseInit.Config.FishStrength = 40.0;
 	BaseInit.Config.RodStrength = 60.0;
 	BaseInit.Config.CatStaminaMaximum = 100.0;

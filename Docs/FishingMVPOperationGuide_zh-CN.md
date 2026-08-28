@@ -296,7 +296,7 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 
 **常见失败原因**（放竿）：`InvalidPayload`=前方太斜/没实体地面；`DependencyUnavailable`=还没装配（5.4）。`InvalidWaterTarget/CastOutOfRange` 现在只属于抛竿阶段。
 
-多人占位口径：`OperatorPlayerStates[0]` 是右侧主位，当前只有主位能抛竿/提竿/收线/松线；`[1]` 是左侧辅助位，先完成同步站位，双人合力数值暂未接入。主位退出时左位自动晋升，数组长度立刻从 2 变 1，不保留旧双人模式。当前参数在 `Project Settings → Catfishing Fishing → Rod|Operators`：槽位数 2，左右间距 140cm。
+多人占位口径：`OperatorPlayerStates[0]` 是右侧主位，当前只有主位能抛竿/提竿/收线/松线；`[1]` 是左侧辅助位，先完成同步站位。搏斗规则层已预留两项并按“主操作猫力量 + 第二只猫力量”计算猫总体力量，但第二项运行时仍为 0；第二只猫怎样加入、何时生效、体力如何分摊和输入如何配合仍是 `TODO(CooperativeFishing)`。主位退出时左位自动晋升，数组长度立刻从 2 变 1，不保留旧双人模式。当前参数在 `Project Settings → Catfishing Fishing → Rod|Operators`：槽位数 2，左右间距 140cm。
 
 ---
 
@@ -443,20 +443,20 @@ Event BeginPlay
 | `CatWaterRegion.h` | `GetWaterRegionHandle()` / `HasValidBakedGeometry()` 加 `BlueprintPure` |
 | `CatFishingHookActor.h/.cpp` | 浮漂落水确认（有界轮询计时器，非 Tick），`Phase` 能走到 `Landed` |
 
-**资产**（12 个，已存盘）
+**关键资产**（已存盘）
 
 ```
 /Game/Data/Abilities/   DA_CatAbilityInputConfig, DA_CatAbilitySet_Default
 /Game/Catfishing/Data/Equipment/   Equip_Rod_StarterT1, Equip_Bait_Bug, Equip_Float_Feather,
                                    Equip_ScoopNet_Starter, Equip_Chum_Bug（以及其他正式目录定义）
 /Game/Catfishing/Data/Fish/  正式 Fish_*, Bite_*, Fight_*
-/Game/Data/Fish/             Showcase2 迁移前兼容 DA_Fish_Test01, DA_Bite_Test01, DA_Fight_Test01
+/Game/Data/Fish/             未注册历史测试二进制；不得再作为运行鱼库入口
 /Game/Data/Curves/      Curve_ChumDistanceFalloff, Curve_ChumTimeFalloff
 ```
 
-**配置**：`Config/DefaultGame.ini` 8 个 section 已写好（缺两条 StateTree 路径 = 步骤 3）
+**配置**：`Config/DefaultGame.ini` 已注册正式鱼、咬钩性格与搏斗性格软引用；旧测试资产不再注册。
 
-**关卡**：`Showcase2` 的 `BP_CatWaterRegion_C_1`（RegionId = `Showcase_River_01`）已烘焙成功，`GeometryRevision = 540261741954039293`，`HasValidBakedGeometry() = True`，已存盘。该 ID 当前只匹配旧 `DA_Fish_Test01`；正式 16 鱼库使用 `River/ForestLake`，需要明确执行 RegionId 迁移、重烘焙和引用验证后才能在 Showcase2 出现。
+**关卡**：`Showcase2` 的唯一 `BP_CatWaterRegion` 已迁移为 `RegionId=River` 并重新烘焙、保存、重载验证；当前 `GeometryRevision=776404699334229561`，`HasValidBakedGeometry()=True`。该水域现在直接匹配正式 16 鱼库中的 `River` 鱼种。
 
 **框架蓝图**（全部已存在且父类正确）
 

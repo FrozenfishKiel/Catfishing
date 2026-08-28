@@ -104,8 +104,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatFishCatalogShowcaseCompatibilityTest,
-	"Catfishing.Unit.Data.FishCatalog.ShowcaseCompatibilityFishRemainsSelectableBeforeRegionMigration",
+	FCatFishCatalogShowcaseFormalCatalogTest,
+	"Catfishing.Unit.Data.FishCatalog.ShowcaseRiverSelectsFormalFishCatalog",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 // 测试流程：把两条同 ID 且都完整的定义放入瞬态目录；按 ID 查询必须拒绝重复命中，防止 Fishing 随机拿到不稳定资产。
@@ -243,13 +243,35 @@ bool FCatFishCatalogChallengeAffinityTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-// 资产合同：Showcase2 尚未把水域身份迁移为 River 前，旧兼容鱼必须能让当前默认 50 力量/60 体力角色进入搏斗链，而不是空钩。
-bool FCatFishCatalogShowcaseCompatibilityTest::RunTest(const FString& Parameters)
+// 资产合同：Showcase2 迁移为 River 后，当前默认 50 力量/60 体力角色必须能从正式目录抽到鱼并解析完整性格链。
+bool FCatFishCatalogShowcaseFormalCatalogTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	const UCatFishCatalogSettings* Settings = GetDefault<UCatFishCatalogSettings>();
+	const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
+	TestEqual(TEXT("formal fish catalog registers the 16 authored definitions"), Settings->Definitions.Num(), 16);
+	int32 RiverDefinitionCount = 0;
+	for (const TSoftObjectPtr<UCatFishDefinition>& DefinitionRef : Settings->Definitions)
+	{
+		const FString AssetPath = DefinitionRef.ToSoftObjectPath().ToString();
+		TestTrue(*FString::Printf(TEXT("catalog entry uses the formal path: %s"), *AssetPath),
+			AssetPath.StartsWith(TEXT("/Game/Catfishing/Data/Fish/")));
+		const UCatFishDefinition* CatalogDefinition = DefinitionRef.LoadSynchronous();
+		TestNotNull(*FString::Printf(TEXT("formal catalog entry loads: %s"), *AssetPath), CatalogDefinition);
+		if (!CatalogDefinition)
+		{
+			continue;
+		}
+		RiverDefinitionCount += CatalogDefinition->RegionIds.Contains(TEXT("River")) ? 1 : 0;
+		TestNotNull(*FString::Printf(TEXT("%s resolves its bite personality"), *AssetPath),
+			FishingSettings->FindBitePersonality(CatalogDefinition->BitePersonalityId));
+		TestNotNull(*FString::Printf(TEXT("%s resolves its fight personality"), *AssetPath),
+			FishingSettings->FindFightPersonality(CatalogDefinition->FightPersonalityId));
+	}
+	TestTrue(TEXT("formal catalog contains fish eligible for the Showcase River"), RiverDefinitionCount > 0);
+
 	FCatFishSelectionContext Context;
-	Context.WaterRegion.RegionId = TEXT("Showcase_River_01");
+	Context.WaterRegion.RegionId = TEXT("River");
 	Context.WaterRegion.GeometryRevision = 1;
 	Context.ChumSample.bSucceeded = true;
 	Context.ChumSample.WaterRegion = Context.WaterRegion;
@@ -261,13 +283,14 @@ bool FCatFishCatalogShowcaseCompatibilityTest::RunTest(const FString& Parameters
 	Context.CombinedFightStamina = 60.0;
 	Context.RandomSeed = 17;
 	const FCatFishSelectionResult Result = Settings->SelectRuntimeDefinition(Context);
-	TestTrue(TEXT("Showcase compatibility fish stays inside the 1.35 challenge ceiling"), Result.bSelected);
+	TestTrue(TEXT("Showcase River can select a fish for the default cat"), Result.bSelected);
 	const UCatFishDefinition* Definition = Settings->FindRuntimeDefinition(Result.FishDefinitionId);
-	TestNotNull(TEXT("selected compatibility id resolves to a runtime fish"), Definition);
-	const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
-	TestNotNull(TEXT("selected compatibility fish resolves its bite personality"), Definition
+	TestNotNull(TEXT("selected formal id resolves to a runtime fish"), Definition);
+	TestTrue(TEXT("selected fish comes from the formal catalog path"),
+		Definition && Definition->GetPathName().StartsWith(TEXT("/Game/Catfishing/Data/Fish/")));
+	TestNotNull(TEXT("selected formal fish resolves its bite personality"), Definition
 		? FishingSettings->FindBitePersonality(Definition->BitePersonalityId) : nullptr);
-	TestNotNull(TEXT("selected compatibility fish resolves its fight personality"), Definition
+	TestNotNull(TEXT("selected formal fish resolves its fight personality"), Definition
 		? FishingSettings->FindFightPersonality(Definition->FightPersonalityId) : nullptr);
 	return !HasAnyErrors();
 }

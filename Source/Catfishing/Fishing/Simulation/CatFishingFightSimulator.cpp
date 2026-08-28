@@ -19,7 +19,9 @@ namespace
 bool FCatFightSimulationConfig::IsValid() const
 {
 	return FMath::IsFinite(FixedStepSeconds) && FixedStepSeconds > 0.0 // 步长必须严格为正，否则无法积分距离
-		&& FMath::IsFinite(CatStrength) && CatStrength > 0.0 // 猫（钓手）力量，用于比力量判定和消耗系数
+		&& FMath::IsFinite(PrimaryOperatorCatStrength) && PrimaryOperatorCatStrength > 0.0 // 当前主操作猫必须提供正力量
+		&& FMath::IsFinite(SecondCatStrength) && SecondCatStrength >= 0.0 // 第二只猫尚未接入时为 0，接入后只接受非负贡献
+		&& FMath::IsFinite(GetCombinedCatStrength()) && GetCombinedCatStrength() > 0.0 // 两只猫之和用于判定和消耗系数
 		&& FMath::IsFinite(FishStrength) && FishStrength > 0.0 // 鱼力量（已按性格模板折减过）
 		&& FMath::IsFinite(RodStrength) && RodStrength > 0.0 // 钓组静态承载强度，决定瞬间断线判定
 		&& FMath::IsFinite(CatStaminaMaximum) && CatStaminaMaximum > 0.0 // 猫体力上限，松线喘息回复不能超过它
@@ -86,6 +88,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	{
 		return Result;
 	}
+	const double CombinedCatStrength = Config.GetCombinedCatStrength();
 	const FVector FishDirection = HorizontalDesiredDirection.GetSafeNormal();
 	const double Distance0 = FVector::Distance(RodTipWorldPosition, State.FishWorldPosition); // 本步开始时竿尖到鱼的距离
 	const double VerticalDistance = FMath::Abs(State.FishWorldPosition.Z - RodTipWorldPosition.Z);
@@ -158,7 +161,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 			{
 				CatDrain = Config.FishStrength * Config.InwardPullCatDrainPerFishStrength
 					* Config.BaseDrainMultiplier * Dt;
-				FishDrain = Config.CatStrength * Config.InwardPullFishDrainPerCatStrength
+				FishDrain = CombinedCatStrength * Config.InwardPullFishDrainPerCatStrength
 					* Config.BaseDrainMultiplier * Dt;
 			}
 		}
@@ -170,7 +173,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 				RodWearDelta = (Config.FishStrength * Config.StalemateRodWearPerFishStrength
 					+ Config.StruggleHoldRodWearPerSecond) * OutwardLoad * Dt
 					* Config.TautRodWearMultiplier;
-				FishDrain = Config.CatStrength * OutwardLoad
+				FishDrain = CombinedCatStrength * OutwardLoad
 					* Config.StalemateFishDrainPerCatStrength * Config.BaseDrainMultiplier * Dt;
 				CatDrain = Config.FishStrength * OutwardLoad
 					* Config.StalemateCatDrainPerFishStrength * Config.BaseDrainMultiplier * Dt;
@@ -181,18 +184,18 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	{
 		// 只有游向与鱼线足够同向时才进入强对抗；重大结局继续用鱼种基础力量，避免随机夹角一帧跳变力量档位。
 		// 取等从严：≤ / ≥ 都归入更严厉的分支。
-		if (Config.RodStrength <= FMath::Min(Config.CatStrength, Config.FishStrength))
+		if (Config.RodStrength <= FMath::Min(CombinedCatStrength, Config.FishStrength))
 		{
 			// 判定①：钓组承载能力不足 → 鱼线瞬间断裂；鱼竿本体不损坏。
 			Instant = ECatFightStepOutcome::LineBroken;
 			Result.LineBreakCause = ECatFightLineBreakCause::StrengthOverload;
 		}
-		else if (Config.FishStrength >= Config.CatStrength)
+		else if (Config.FishStrength >= CombinedCatStrength)
 		{
 			// 判定②：竿没断，但鱼力不弱于猫力 → 猫被拖下水。
 			Instant = ECatFightStepOutcome::DraggedIntoWater;
 		}
-		else if (Config.CatStrength >= Config.FishStrength * Config.OverpowerStrengthRatio)
+		else if (CombinedCatStrength >= Config.FishStrength * Config.OverpowerStrengthRatio)
 		{
 			// 判定③绝对碾压：猫力达到鱼力的指定倍数以上 → D 直接归零，鱼立刻力竭侧翻，无消耗。
 			Instant = ECatFightStepOutcome::Overpowered;
@@ -205,7 +208,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 			RodWearDelta = Config.FishStrength * OutwardLoad * Config.StalemateRodWearPerFishStrength * Dt
 				* Config.TautRodWearMultiplier; // 此分支已经确认鱼线形成约束，直接使用高张力倍率。
 			const double StaminaExchangeLoad = bPullReachesTaut ? 1.0 : OutwardLoad;
-			FishDrain = Config.CatStrength * StaminaExchangeLoad * Config.StalemateFishDrainPerCatStrength
+			FishDrain = CombinedCatStrength * StaminaExchangeLoad * Config.StalemateFishDrainPerCatStrength
 				* Config.StruggleDrainMultiplier * Dt;
 			CatDrain = Config.FishStrength * StaminaExchangeLoad * Config.StalemateCatDrainPerFishStrength
 				* Config.StruggleDrainMultiplier * Dt;
@@ -224,7 +227,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		}
 		// 带载左键时方向只影响牵引效率和线负载，不决定双方是否做功；没有主动拉时仍按真实向外负载缩放。
 		const double StaminaExchangeLoad = bPullReachesTaut ? 1.0 : OutwardLoad;
-		FishDrain = Config.CatStrength * StaminaExchangeLoad * Config.StalemateFishDrainPerCatStrength
+		FishDrain = CombinedCatStrength * StaminaExchangeLoad * Config.StalemateFishDrainPerCatStrength
 			* Config.StruggleDrainMultiplier * Dt;
 		CatDrain = Config.FishStrength * StaminaExchangeLoad * Config.StalemateCatDrainPerFishStrength
 			* Config.StruggleDrainMultiplier * Dt;

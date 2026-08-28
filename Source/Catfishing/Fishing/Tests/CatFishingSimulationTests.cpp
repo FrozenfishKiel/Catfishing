@@ -41,6 +41,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishShoreContactContinuityTest,
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishStaminaDrivenInwardProbabilityTest,
 	"Catfishing.Unit.Fishing.Simulation.LowerStaminaRaisesInwardConeSelectionProbability",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFightCombinedCatStrengthTest,
+	"Catfishing.Unit.Fishing.Simulation.CombinedCatStrengthAddsTwoCatsWithoutGrantingSecondInput",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 namespace CatFishingSimulationTest
 {
@@ -49,7 +52,7 @@ namespace CatFishingSimulationTest
 	{
 		FCatFightSimulationConfig Config;
 		Config.FixedStepSeconds = 1.0; // 用 1 秒步长让每秒速率直接可读
-		Config.CatStrength = 50.0;
+		Config.PrimaryOperatorCatStrength = 50.0;
 		Config.FishStrength = 40.0;
 		Config.RodStrength = 60.0;
 		Config.CatStaminaMaximum = 100.0;
@@ -90,6 +93,30 @@ namespace CatFishingSimulationTest
 }
 
 using namespace CatFishingSimulationTest;
+
+bool FCatFishingFightCombinedCatStrengthTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFightSimulationConfig Config = MakeConfig();
+	Config.FishStrength = 60.0;
+	Config.RodStrength = 100.0;
+	const FCatFightSimulationState Pull = MakeState(
+		ECatFishMotionIntent::StrugglingOutward, ECatFightCatAction::Pull);
+
+	const FCatFightStepResult PrimaryOnly = Run(Config, Pull);
+	TestEqual(TEXT("只有主操作猫 50 力时会被 60 力的鱼拖下水"),
+		static_cast<int32>(PrimaryOnly.Outcome), static_cast<int32>(ECatFightStepOutcome::DraggedIntoWater));
+
+	Config.SecondCatStrength = 25.0;
+	TestEqual(TEXT("猫总体力量等于主操作猫 50 加第二只猫 25"), Config.GetCombinedCatStrength(), 75.0);
+	const FCatFightStepResult TwoCats = Run(Config, Pull);
+	TestTrue(TEXT("第二只猫只贡献力量时进入合计 75 力的僵持结算"), TwoCats.bStalemate);
+	TestEqual(TEXT("合计力量参与鱼体力消耗"), TwoCats.FishStaminaDrain,
+		75.0 * Config.StalemateFishDrainPerCatStrength * Config.StruggleDrainMultiplier, 1e-6);
+	TestEqual(TEXT("第二只猫力量预留不产生第二套输入，模拟仍只有一个 CatAction"),
+		static_cast<int32>(Pull.CatAction), static_cast<int32>(ECatFightCatAction::Pull));
+	return !HasAnyErrors();
+}
 
 bool FCatFishingFightSimulatorInwardTest::RunTest(const FString& Parameters)
 {

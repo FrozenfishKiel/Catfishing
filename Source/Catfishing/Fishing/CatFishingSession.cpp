@@ -1058,11 +1058,16 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
 		FisherCharacter->GetCatDefinitionId(), CatStaminaBaseline);
 
-	// 三方力量：猫力量 = ASC FishingStrength；鱼力量 = 鱼种 FishStrength（含完美折减）；钓组承载 = 鱼竿定义 FishingStrength（静态）。
+	// 三方力量：猫总体力量 = 主操作猫 + 第二只猫的 FishingStrength；鱼力量 = 鱼种 FishStrength（含完美折减）；
+	// 钓组承载 = 鱼竿定义 FishingStrength（静态）。当前只有主操作位能提交搏斗输入，因此本轮只填第一项。
 	// 下面把服务器设置、鱼竿/鱼定义、性格模板的各项参数一次性打包进模拟配置结构体，交给 FightRunner/Simulator 使用。
 	FCatFightSimulationConfig Config;
 	Config.FixedStepSeconds = Settings->FixedFightStepSeconds; // 固定步长模拟，保证服务器权威结果确定可复现。
-	Config.CatStrength = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
+	Config.PrimaryOperatorCatStrength = AbilitySystem->GetNumericAttribute(
+		UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
+	// TODO(CooperativeFishing): 第二只猫如何加入本场搏斗、何时贡献力量以及双方输入如何仲裁尚未确定；
+	// 方案确定后只需从服务器权威参与事实填充本字段，Simulator 已统一按两只猫力量之和结算。
+	Config.SecondCatStrength = 0.0;
 	Config.FishStrength = FishDefinition->FishStrength * FishStrengthScale; // 完美中鱼可能折减鱼的力量。
 	Config.RodStrength = RodDefinition->FishingStrength;
 	Config.CatStaminaMaximum = CatStaminaBaseline;
@@ -1221,12 +1226,14 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		return false;
 	}
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_fight_started SessionId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s CatStrength=%.2f FishStrengthBase=%.2f FishStrengthEffective=%.2f CatStamina=%.2f FishStamina=%.2f LineStrength=%.2f LineDurability=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f"),
+		TEXT("Event=fishing_fight_started SessionId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryCatStrength=%.2f SecondCatStrength=%.2f CombinedCatStrength=%.2f FishStrengthBase=%.2f FishStrengthEffective=%.2f CatStamina=%.2f FishStamina=%.2f LineStrength=%.2f LineDurability=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f"),
 		*Snapshot.FishingSessionId.ToString(),
 		*FishDefinition->FishDefinitionId.ToString(),
 		*RodDefinition->EquipmentDefinitionId.ToString(),
 		bPerfect ? TEXT("true") : TEXT("false"),
-		Config.CatStrength,
+		Config.PrimaryOperatorCatStrength,
+		Config.SecondCatStrength,
+		Config.GetCombinedCatStrength(),
 		FishDefinition->FishStrength,
 		Config.FishStrength,
 		InitialState.CatStamina,

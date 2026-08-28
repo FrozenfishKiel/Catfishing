@@ -46,8 +46,17 @@ struct CATFISHING_API FCatFightSimulationConfig
 {
 	double FixedStepSeconds = 0.0;
 
-	/** 三方力量：猫品种力量 / 鱼种力量（含完美折减）/ 钓组静态承载强度。 */
-	double CatStrength = 0.0;
+	/** 当前唯一能提交搏斗输入的主操作猫力量。 */
+	double PrimaryOperatorCatStrength = 0.0;
+	/** 第二只猫的力量贡献预留槽；参与方式与协作输入确定前，运行时保持为 0。 */
+	double SecondCatStrength = 0.0;
+	/** 猫的总体力量固定为两只猫贡献相加；单人场景的第二项为 0。 */
+	double GetCombinedCatStrength() const
+	{
+		return PrimaryOperatorCatStrength + SecondCatStrength;
+	}
+
+	/** 三方力量中的另两项：鱼种力量（含完美折减）/ 钓组静态承载强度。 */
 	double FishStrength = 0.0;
 	double RodStrength = 0.0;
 
