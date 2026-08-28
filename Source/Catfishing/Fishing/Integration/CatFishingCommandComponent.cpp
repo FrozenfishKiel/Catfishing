@@ -557,7 +557,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		//   附近没有可加入的竿               → PlaceRod（在脚下放自己的竿；已有部署竿会被服务器拒绝）
 		// R 在会话期间同样可用（多人接力钓别人竿）：
 		//   任意阶段离开 → 只释放竿位和持续输入，会话、竿、钩与鱼都保持；
-		//   玩家可去另一根空竿抛线，之后再回到原竿继续。等待阶段也允许其他玩家接力。
+		//   玩家可去另一根空竿抛线，之后再回到原竿继续；等口与搏斗阶段都允许其他玩家接力。
 		if (CommandType == ECatFishingCommandType::OperateRod)
 		{
 			const ACatCharacter* Character = Cast<ACatCharacter>(Controller->GetPawn());

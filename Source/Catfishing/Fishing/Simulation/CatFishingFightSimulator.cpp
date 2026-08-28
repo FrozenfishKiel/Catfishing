@@ -92,7 +92,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const double Distance0 = FVector::Distance(RodTipWorldPosition, State.FishWorldPosition); // 本步开始时竿尖到鱼的距离
 	const double VerticalDistance = FMath::Abs(State.FishWorldPosition.Z - RodTipWorldPosition.Z);
 	const bool bStruggling = State.MotionIntent == ECatFishMotionIntent::StrugglingOutward; // StateTree 的高层发力意图，只决定游速/重大判定资格
-	const bool bPulling = State.CatAction == ECatFightCatAction::Pull; // 玩家本步是否按住左键拖线
+	const bool bOperatorPresent = State.bOperatorPresent;
+	const bool bPulling = bOperatorPresent && State.CatAction == ECatFightCatAction::Pull; // 玩家本步是否按住左键拖线
 	const bool bSlacking = State.CatAction == ECatFightCatAction::Slack; // 玩家本步是否按住右键松开线杯
 	const double SwimSpeed = bStruggling ? Config.FishStruggleSpeedCentimetersPerSecond
 		: Config.FishCalmSpeedCentimetersPerSecond;
@@ -125,7 +126,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		- UE_DOUBLE_KINDA_SMALL_NUMBER;
 	// 普通“没有松开线杯而绷紧”会持续消耗三方资源，但不会自动触发落水/瞬断；重大判定仍要求玩家硬拉，
 	// 或真的已经放到整根线的末端，避免一根短余线在任何距离都立刻判重大失败。
-	const bool bStrongConfrontationCandidate = bStruggling && bLineRestraining
+	const bool bStrongConfrontationCandidate = bOperatorPresent && bStruggling && bLineRestraining
 		&& (bPulling || bAtMaximumLine || bSlackBlockedAtMaximum)
 		&& OutwardLoad >= Config.StrongConfrontationAlignmentThreshold;
 	const double StrongConfrontationBuildUp = bStrongConfrontationCandidate
@@ -149,7 +150,18 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		EffectiveLoadedReelStep = LoadedReelStep * (1.0 - OutwardLoad);
 	}
 
-	if (!bStruggling)
+	if (!bOperatorPresent)
+	{
+		// 无人值守只保留“右键松线”的出线几何；线放尽后由鱼的真实向外负载持续磨损鱼线。
+		// 没有猫在竿位，因此不得结算玩家体力、鱼体力、拖下水或力量碾压。
+		if (bLineRestraining)
+		{
+			RodWearDelta = (Config.FishStrength * Config.StalemateRodWearPerFishStrength
+				+ Config.StruggleHoldRodWearPerSecond) * OutwardLoad * Dt
+				* Config.TautRodWearMultiplier;
+		}
+	}
+	else if (!bStruggling)
 	{
 		// 平静期仍按真实游向运动；体力概率会让高体力鱼更多慢速向外、低体力鱼更多向内。
 		if (bPulling)
@@ -240,7 +252,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 
 	// 体力回复由“右键当前是否持续按住”直接决定，不依赖鱼的游向、是否实际带出新线或是否已经到达 L_max。
 	// 右键是明确的休息动作，所以即使线端仍有鱼线负载，本步猫体力也按回复结算；鱼体力和鱼线磨损仍保留上面的结果。
-	if (bSlacking)
+	if (bOperatorPresent && bSlacking)
 	{
 		const double Regen = Config.SlackStaminaRegenPerSecond * Dt;
 		const double Capped = FMath::Min(Config.CatStaminaMaximum, State.CatStamina + Regen);
@@ -367,7 +379,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		// 鱼体力先耗尽：翻肚，可以被抄或继续收至竿尖水面投影。
 		Result.Outcome = ECatFightStepOutcome::FishExhausted;
 	}
-	else if (CatRemaining <= UE_DOUBLE_SMALL_NUMBER)
+	else if (bOperatorPresent && CatRemaining <= UE_DOUBLE_SMALL_NUMBER)
 	{
 		// 猫体力耗尽（鱼还没耗尽）：猫力竭，视为被拖下水一类的失败。
 		Result.Outcome = ECatFightStepOutcome::CatStaminaExhausted;

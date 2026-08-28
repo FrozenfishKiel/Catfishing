@@ -246,6 +246,8 @@ bool FCatFishingServiceRodBoundSessionRoutingTest::RunTest(const FString& Parame
 	TestTrue(TEXT("离开第一根竿成功"), LeaveResult.bCommitted);
 	TestEqual(TEXT("离开竿位不终止搏斗会话"), FirstSession->Snapshot.Phase, ECatFishingPhase::HookedFight);
 	TestFalse(TEXT("离开竿位清除旧会话收线输入"), FirstSession->Snapshot.bReeling);
+	TestTrue(TEXT("搏斗离竿进入无人值守松线"), FirstSession->Snapshot.bSlacking);
+	TestNull(TEXT("无人值守会话不再把旧玩家登记为当前钓手"), FirstSession->Snapshot.FisherPlayerState.Get());
 	TestFalse(TEXT("离开后旧会话不再截获玩家输入"),
 		Fishing->TryGetActiveSessionForController(Controller, RoutedSessionId, RoutedSnapshot));
 

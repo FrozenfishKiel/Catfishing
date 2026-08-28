@@ -416,15 +416,18 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 	// 玩家输入只路由到当前占据主位的鱼竿，因此这里不再用玩家历史会话阻止跨竿占位。
 	// TODO(CooperativeFishing): 合力玩法落地时，从 Rod.OperatorPlayerStates 每次重建 Session 参与集合；
 	// 不缓存 bTwoPlayer，确保 2→1/3→2 后力量、体力消耗和输入所有权当帧收敛到当前数组。
-	// 只有补进空主位（0 号右位）才是接力；加入左侧辅助位不能把正在等口的会话偷转给自己。
+	// 只有补进空主位（0 号右位）才是接力；加入左侧辅助位不能迁移当前会话操作者。
+	// HookedFight 接力会同步迁移 Runner 的 ASC/力量/体力/输入域，不能只改公开 FisherPlayerState。
 	ACatFishingSession* BoundSession = FindActiveSessionByRod(Rod);
-	if (RequestedSlotIndex == 0 && BoundSession
-		&& BoundSession->GetSnapshot().FisherPlayerState != PlayerState)
+	const bool bNeedsSessionTakeover = RequestedSlotIndex == 0 && BoundSession
+		&& BoundSession->GetSnapshot().FisherPlayerState != PlayerState;
+	if (bNeedsSessionTakeover)
 	{
 		const ECatFishingPhase BoundPhase = BoundSession->GetSnapshot().Phase;
 		const bool bTakeoverPhase = BoundPhase == ECatFishingPhase::Waiting
-			|| BoundPhase == ECatFishingPhase::Probe || BoundPhase == ECatFishingPhase::TrueBiteWindow;
-		if (!bTakeoverPhase || !TransferSessionFisher(BoundSession, Controller))
+			|| BoundPhase == ECatFishingPhase::Probe || BoundPhase == ECatFishingPhase::TrueBiteWindow
+			|| BoundPhase == ECatFishingPhase::HookedFight;
+		if (!bTakeoverPhase)
 		{
 			Result.Error = ECatFishingCommandError::RodOccupied;
 			return Result;
@@ -434,9 +437,23 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 	if (!Rod->AddOperatorFromAuthority(PlayerState, Command.Context.ExpectedRodActorRevision, CommittedSlotIndex)
 		|| CommittedSlotIndex != RequestedSlotIndex)
 	{
-		// 接力转移已成功但占位失败：把会话交还原状不可行（原钓手可能已离线），保守起见维持转移结果，
-		// 下一次 E 重试占位即可（会话钓手已是本人，TransferSessionFisher 幂等）。
 		Result.Error = ECatFishingCommandError::RodActorRevisionConflict;
+		return Result;
+	}
+	if (bNeedsSessionTakeover && !TransferSessionFisher(BoundSession, Controller))
+	{
+		// 先占主位再迁移会话，避免 Runner 已切给新玩家但鱼竿占位因 Revision 冲突失败。
+		// 迁移拒绝时用刚提交后的精确 Revision 回滚本次新占位；同一服务器调用栈内不会夹入第二次写入。
+		APlayerState* IgnoredPromotion = nullptr;
+		if (!Rod->RemoveOperatorFromAuthority(PlayerState,
+			Rod->GetPresentationState().RodActorRevision, IgnoredPromotion))
+		{
+			UE_LOG(LogCatFishing, Error,
+				TEXT("Event=fishing_takeover_slot_rollback_failed SessionId=%s Rod=%s PlayerState=%s RodRevision=%lld"),
+				*BoundSession->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				*GetNameSafe(Rod), *GetNameSafe(PlayerState), Rod->GetPresentationState().RodActorRevision);
+		}
+		Result.Error = ECatFishingCommandError::RodOccupied;
 		return Result;
 	}
 	// 站位是地面点，统一抬高胶囊半高并锁移动；0 号位在右、1 号位在左。
@@ -468,38 +485,34 @@ FCatFishingCommandResult UCatFishingService::LeaveRod(AController* Controller, c
 		Result.Error = ECatFishingCommandError::RodActorRevisionConflict;
 		return Result;
 	}
-	// 主位离开且仍有人时，数组会把原左位晋升到右主位。等待阶段若能接力就先同步钓手身份；
-	// 接力依赖暂不满足时也不能阻止原操作手离开，鱼竿会话仍独立存活。辅助位离开不触碰会话。
-	APlayerState* PromotionCandidate = LeavingSlotIndex == 0 && State.OperatorPlayerStates.Num() > 1
-		? State.OperatorPlayerStates[1] : nullptr;
-	if (PromotionCandidate)
-	{
-		if (ACatFishingSession* BoundSession = FindActiveSessionByRod(Rod))
-		{
-			const ECatFishingPhase Phase = BoundSession->GetSnapshot().Phase;
-			const bool bTransferable = Phase == ECatFishingPhase::Waiting || Phase == ECatFishingPhase::Probe
-				|| Phase == ECatFishingPhase::TrueBiteWindow;
-			APlayerController* PromotedController = FindControllerForPlayerState(GetWorld(), PromotionCandidate);
-			if (bTransferable && PromotedController)
-			{
-				TransferSessionFisher(BoundSession, PromotedController);
-			}
-		}
-	}
-	// 离开只释放操作输入与站位，不把会话写成 Escaped/Terminated。即使正处于搏斗，结果也应由鱼线、
-	// 体力、主动取消或其他明确终局规则产生，而不是由角色和鱼竿的距离产生。
-	if (LeavingSlotIndex == 0)
-	{
-		if (ACatFishingSession* BoundSession = FindActiveSessionByRod(Rod))
-		{
-			BoundSession->SuspendOperatorInputFromAuthority();
-		}
-	}
+	// 先提交离位，再按实际晋升结果迁移会话，避免 Revision 冲突时 Runner 已错误切给辅助位。
+	// 接力依赖暂不满足时也不能阻止原操作手离开，鱼竿会话进入无人值守态。辅助位离开不触碰会话。
+	ACatFishingSession* BoundSession = LeavingSlotIndex == 0 ? FindActiveSessionByRod(Rod) : nullptr;
 	APlayerState* PromotedPrimary = nullptr;
 	if (!Rod->RemoveOperatorFromAuthority(PlayerState, Command.Context.ExpectedRodActorRevision, PromotedPrimary))
 	{
 		Result.Error = ECatFishingCommandError::RodActorRevisionConflict;
 		return Result;
+	}
+	bool bSessionTransferredToPromotion = false;
+	if (PromotedPrimary && BoundSession)
+	{
+		const ECatFishingPhase Phase = BoundSession->GetSnapshot().Phase;
+		const bool bTransferable = Phase == ECatFishingPhase::Waiting || Phase == ECatFishingPhase::Probe
+			|| Phase == ECatFishingPhase::TrueBiteWindow || Phase == ECatFishingPhase::HookedFight;
+		if (bTransferable)
+		{
+			if (APlayerController* PromotedController = FindControllerForPlayerState(GetWorld(), PromotedPrimary))
+			{
+				bSessionTransferredToPromotion = TransferSessionFisher(BoundSession, PromotedController);
+			}
+		}
+	}
+	// 离开只释放操作输入与站位，不把会话写成 Escaped/Terminated。即使正处于搏斗，结果也应由鱼线、
+	// 体力、主动取消或其他明确终局规则产生，而不是由角色和鱼竿的距离产生。
+	if (BoundSession && !bSessionTransferredToPromotion)
+	{
+		BoundSession->SuspendOperatorFromAuthority();
 	}
 	// 离开竿位：解除操作期的移动锁定。
 	if (const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr)
@@ -892,7 +905,7 @@ ACatFishingSession* UCatFishingService::FindNearestScoopableSession(const FVecto
 	return Best;
 }
 
-// 接力转移编排：会话唯一性由鱼竿保证；新钓手在其他鱼竿留下的会话不阻止本次等待阶段接力。
+// 接力转移编排：会话唯一性由鱼竿保证；等口只迁移身份，HookedFight 由 Session 连同 Runner 资源一起迁移。
 bool UCatFishingService::TransferSessionFisher(ACatFishingSession* Session, AController* NewFisherController)
 {
 	CompactSessions();

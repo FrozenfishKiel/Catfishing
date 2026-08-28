@@ -388,9 +388,8 @@ FCatDomainCommandResult ACatFishingSession::ResolveRetryExhaustedEscapeFromState
 	return Result;
 }
 
-// 钓手接力转移流程：仅 authority、未终态、等待/试探/真咬阶段可跨玩家转移；
-// 搏斗/近岸阶段离开只暂停操作输入并保留原钓手，跨玩家接力等待协作资源迁移规则补齐。
-// 新钓手必须通过统一参战能力谓词；捕获物最终是落地世界鱼，因此接力不读取或冻结任何鱼护。
+// 钓手接力转移流程：等口阶段迁移身份，HookedFight 额外迁移 Runner 的 ASC、力量、体力与输入序号域。
+// 原始抛竿者的 CastEquipment 始终不变；捕获物最终是落地世界鱼，接力不读取或冻结任何鱼护。
 bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherController)
 {
 	const FString NewStableNetId = ResolveStableNetId(NewFisherController);
@@ -400,16 +399,86 @@ bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherContr
 	double NewStamina = 0.0;
 	const bool bCapable = UCatFishingService::TryGetFightCapability(NewFisherController, ValidatedId, NewCharacter,
 		NewStrength, NewStamina) && ValidatedId == NewStableNetId;
+	const bool bFightTakeover = Snapshot.Phase == ECatFishingPhase::HookedFight;
 	const bool bTransferablePhase = Snapshot.Phase == ECatFishingPhase::Waiting
-		|| Snapshot.Phase == ECatFishingPhase::Probe || Snapshot.Phase == ECatFishingPhase::TrueBiteWindow;
+		|| Snapshot.Phase == ECatFishingPhase::Probe || Snapshot.Phase == ECatFishingPhase::TrueBiteWindow
+		|| bFightTakeover;
 	if (!HasAuthority() || IsTerminal() || !bTransferablePhase || NewStableNetId.IsEmpty() || !bCapable
 		|| !NewCharacter || !NewFisherController->PlayerState)
 	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_fisher_transfer_rejected SessionId=%s Phase=%s Transferable=%s FightCapable=%s NewStableIdValid=%s %s"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*UEnum::GetValueAsString(Snapshot.Phase), bTransferablePhase ? TEXT("true") : TEXT("false"),
+			bCapable ? TEXT("true") : TEXT("false"), NewStableNetId.IsEmpty() ? TEXT("false") : TEXT("true"),
+			*CatLogContext::BuildControllerFields(NewFisherController));
 		return false;
 	}
 	if (NewStableNetId == FisherStableNetId)
 	{
 		return true; // 同一钓手重复接管：幂等成功。
+	}
+
+	APlayerState* OldFisherPlayerState = Snapshot.FisherPlayerState;
+	ACatCharacter* OldFisherCharacter = FisherCharacter.Get();
+	const FString OldFisherLogValue = CatLogContext::BuildStableNetIdValue(OldFisherPlayerState);
+	if (bFightTakeover)
+	{
+		UCatAbilitySystemComponent* NewAbilitySystem = NewCharacter->GetCatAbilitySystemComponent();
+		float NewStaminaMaximum = 0.0f;
+		const bool bStaminaConfigReady = GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
+			NewCharacter->GetCatDefinitionId(), NewStaminaMaximum)
+			&& FMath::IsFinite(NewStaminaMaximum) && NewStaminaMaximum > 0.0f;
+		if (!FightRunner || !FightRunner->IsRunning() || !NewAbilitySystem || !bStaminaConfigReady
+			|| !NewAbilitySystem->InitializeFishingStaminaForSession())
+		{
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=fishing_fight_takeover_rejected SessionId=%s Reason=StaminaOrRunnerUnavailable Runner=%s StaminaConfig=%s %s"),
+				*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				FightRunner && FightRunner->IsRunning() ? TEXT("Running") : TEXT("Unavailable"),
+				bStaminaConfigReady ? TEXT("Ready") : TEXT("Invalid"),
+				*CatLogContext::BuildControllerFields(NewFisherController));
+			return false;
+		}
+
+		bool bInitialPullHeld = false;
+		bool bInitialSlackHeld = false;
+		int64 InitialInputSequence = 0;
+		if (const ACatfishingPlayerController* NewPlayerController = Cast<ACatfishingPlayerController>(NewFisherController))
+		{
+			if (const UCatFishingCommandComponent* Commands = NewPlayerController->GetFishingCommandComponent())
+			{
+				Commands->TryGetHeldFightInputStateFromAuthority(
+					bInitialPullHeld, bInitialSlackHeld, InitialInputSequence);
+			}
+		}
+		NewStamina = NewAbilitySystem->GetNumericAttribute(
+			UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+		if (!FightRunner->TransferOperatorFromAuthority(NewAbilitySystem, NewStrength,
+			NewStaminaMaximum, NewStamina, InitialInputSequence, bInitialPullHeld, bInitialSlackHeld))
+		{
+			NewAbilitySystem->RequestFishingStaminaReset();
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=fishing_fight_takeover_rejected SessionId=%s Reason=RunnerRebindFailed Strength=%.3f Stamina=%.3f StaminaMaximum=%.3f InputSequence=%lld %s"),
+				*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), NewStrength,
+				NewStamina, static_cast<double>(NewStaminaMaximum), InitialInputSequence,
+				*CatLogContext::BuildControllerFields(NewFisherController));
+			return false;
+		}
+
+		// 旧操作手从这场会话退出后立即恢复自己的短周期体力，并从终态恢复名单移除；
+		// 否则他去另一根竿开新会话时，旧会话结束会把新会话正在使用的体力意外补满。
+		if (OldFisherCharacter && OldFisherCharacter != NewCharacter)
+		{
+			if (UCatAbilitySystemComponent* OldAbilitySystem = OldFisherCharacter->GetCatAbilitySystemComponent())
+			{
+				OldAbilitySystem->RequestFishingStaminaReset();
+			}
+			StaminaParticipantsTouched.Remove(OldFisherCharacter);
+		}
+		StaminaParticipantsTouched.Add(NewCharacter);
+		Snapshot.bReeling = FightRunner->GetCatAction() == ECatFightCatAction::Pull;
+		Snapshot.bSlacking = FightRunner->GetCatAction() == ECatFightCatAction::Slack;
 	}
 	FightParticipantIds.Remove(FisherStableNetId);
 	FightParticipantCharacters.Remove(FisherStableNetId);
@@ -420,9 +489,12 @@ bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherContr
 	FightParticipantCharacters.Add(NewStableNetId, NewCharacter);
 	RefreshFightSummary();
 	PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
-	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_fisher_transferred SessionId=%s Phase=%s %s"),
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_fisher_transferred SessionId=%s Phase=%s Mode=%s OldFisher=%s NewStrength=%.3f NewFightStamina=%.3f %s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 		*UEnum::GetValueAsString(Snapshot.Phase),
+		bFightTakeover ? TEXT("FightRunnerRebind") : TEXT("WaitingIdentityTransfer"),
+		*OldFisherLogValue, NewStrength, NewStamina,
 		*CatLogContext::BuildControllerFields(NewFisherController));
 	return true;
 }
@@ -1641,20 +1713,69 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 	return true;
 }
 
-void ACatFishingSession::SuspendOperatorInputFromAuthority()
+void ACatFishingSession::SuspendOperatorFromAuthority()
 {
 	if (!HasAuthority() || IsTerminal()) return;
-	const bool bPresentationChanged = Snapshot.bReeling || Snapshot.bSlacking;
-	if (FightRunner && FightRunner->IsRunning())
+	const ECatFishingPhase Phase = Snapshot.Phase;
+	const bool bFightUnattended = Phase == ECatFishingPhase::HookedFight;
+	const bool bClearFisherIdentity = bFightUnattended || Phase == ECatFishingPhase::Waiting
+		|| Phase == ECatFishingPhase::Probe || Phase == ECatFishingPhase::TrueBiteWindow;
+	APlayerState* OldFisherPlayerState = Snapshot.FisherPlayerState;
+	ACatCharacter* OldFisherCharacter = FisherCharacter.Get();
+	AController* OldController = OldFisherCharacter ? OldFisherCharacter->GetController() : nullptr;
+	const FString OldFisherLogValue = CatLogContext::BuildStableNetIdValue(OldFisherPlayerState);
+	bool bRunnerTransitionApplied = !bFightUnattended;
+
+	if (bFightUnattended)
 	{
-		FightRunner->ClearOperatorInputFromAuthority();
+		bRunnerTransitionApplied = FightRunner && FightRunner->IsRunning()
+			&& FightRunner->BeginUnattendedSlackFromAuthority();
+		if (!bRunnerTransitionApplied)
+		{
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=fishing_operator_suspended SessionId=%s Phase=%s Mode=UnattendedSlack RunnerTransition=false OldFisher=%s %s"),
+				*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				*UEnum::GetValueAsString(Phase), *OldFisherLogValue,
+				*CatLogContext::BuildControllerFields(OldController));
+		}
+		if (OldFisherCharacter)
+		{
+			if (UCatAbilitySystemComponent* OldAbilitySystem = OldFisherCharacter->GetCatAbilitySystemComponent())
+			{
+				if (!OldAbilitySystem->RequestFishingStaminaReset())
+				{
+					UE_LOG(LogCatFishing, Warning,
+						TEXT("Event=fishing_operator_stamina_release_failed SessionId=%s OldFisher=%s %s"),
+						*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+						*OldFisherLogValue, *CatLogContext::BuildControllerFields(OldController));
+				}
+			}
+			StaminaParticipantsTouched.Remove(OldFisherCharacter);
+		}
 	}
 	Snapshot.bReeling = false;
-	Snapshot.bSlacking = false;
-	if (bPresentationChanged)
+	Snapshot.bSlacking = bFightUnattended;
+	if (bClearFisherIdentity)
+	{
+		FightParticipantIds.Remove(FisherStableNetId);
+		FightParticipantCharacters.Remove(FisherStableNetId);
+		FisherStableNetId.Reset();
+		FisherCharacter.Reset();
+		Snapshot.FisherPlayerState = nullptr;
+		RefreshFightSummary();
+		PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
+	}
+	else
 	{
 		PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
 	}
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_operator_suspended SessionId=%s Phase=%s Mode=%s RunnerTransition=%s OldFisher=%s Rod=%s Reeling=%s Slacking=%s %s"),
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+		*UEnum::GetValueAsString(Phase), bFightUnattended ? TEXT("UnattendedSlack") : TEXT("InputReleased"),
+		bRunnerTransitionApplied ? TEXT("true") : TEXT("false"),
+		*OldFisherLogValue, *GetNameSafe(Snapshot.RodActor), Snapshot.bReeling ? TEXT("true") : TEXT("false"),
+		Snapshot.bSlacking ? TEXT("true") : TEXT("false"), *CatLogContext::BuildControllerFields(OldController));
 }
 
 bool ACatFishingSession::SpawnScoopedFishPickupFromAuthority(ACatCharacter* ScoopingCharacter,

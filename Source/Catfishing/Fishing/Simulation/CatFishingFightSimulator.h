@@ -109,6 +109,8 @@ struct CATFISHING_API FCatFightSimulationConfig
 /** 可变数值状态；世界位置每步开始从 Encounter Actor 复制。 */
 struct CATFISHING_API FCatFightSimulationState
 {
+	/** 当前是否有主操作手；无人接管时 CatAction 固定为 Slack，但不结算任何玩家力量或体力。 */
+	bool bOperatorPresent = true;
 	double CatStamina = 0.0;
 	double FishStamina = 0.0;
 	/** 已放出的线长 L_paid；左键收短，右键松线时只随鱼实际外游被动增长，不按键时固定。 */

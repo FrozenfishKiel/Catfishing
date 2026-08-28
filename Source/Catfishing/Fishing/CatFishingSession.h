@@ -58,8 +58,8 @@ public:
 	bool SetReelingFromAuthority(int64 InputSequence, bool bReeling);
 	/** 右键松开线杯写口；仅 HookedFight 且 Runner 运行中生效，收线优先。 */
 	bool SetSlackingFromAuthority(int64 InputSequence, bool bSlacking);
-	/** 主操作手离开竿位时原子清除本会话持续输入；不改变阶段、结果、鱼或鱼线生命周期。 */
-	void SuspendOperatorInputFromAuthority();
+	/** 主操作手离开竿位：搏斗期进入无人值守松线，等口期清空当前钓手；都不结束会话。 */
+	void SuspendOperatorFromAuthority();
 	bool IsFightRunnerRunning() const;
 	void HandleFightRunnerStepFromAuthority(const FCatFightStepResult& Step, double FishStaminaRemaining,
 		ECatFishMotionIntent MotionIntent, double RodDurabilityRemaining);
@@ -86,10 +86,10 @@ public:
 
 	/**
 	 * 多人接力（规格：用别人的竿继续钓）：把会话的"钓手"身份转移给新操作者。
-	 * 只允许在等待/试探/真咬阶段转移；搏斗中离开不会终止会话，但跨玩家接力仍等待协作规则补齐。
+	 * 允许在等待/试探/真咬及 HookedFight 转移；搏斗接力会迁移 Runner 的 ASC、力量、体力和输入序号域。
 	 * 饵料预留与竿磨损仍结算到抛竿时冻结的 CastEquipment（原始抛竿者的装备），体力/力量随新钓手。
 	 * 接力只转移当前操作猫；鱼最终落地为世界 Actor，接力时不绑定任何鱼护。
-	 * 仅供 UCatFishingService 在 OperateRod 成功后调用；服务器索引由服务同步更新。
+	 * 仅供 UCatFishingService 在主操作位占用提交后调用；失败时服务回滚刚增加的竿位。
 	 */
 	bool TransferFisherFromAuthority(AController* NewFisherController);
 

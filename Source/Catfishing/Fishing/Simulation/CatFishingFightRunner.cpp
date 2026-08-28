@@ -34,6 +34,7 @@ bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunne
 	FrozenWaterBounds = Init.FrozenWaterBounds;
 	Config = Init.Config;
 	State = Init.InitialState;
+	State.bOperatorPresent = true;
 	CalmDurationRangeSeconds = Init.CalmDurationRangeSeconds;
 	StruggleDurationRangeSeconds = Init.StruggleDurationRangeSeconds;
 	LowStaminaRestThreshold = Init.LowStaminaRestThreshold;
@@ -93,8 +94,9 @@ void UCatFishingFightRunner::Stop()
 
 void UCatFishingFightRunner::RefreshCatAction()
 {
-	// 拖优先于放：两个键都按住时按拖处理；都没按则视为不动。
-	State.CatAction = bPullHeld ? ECatFightCatAction::Pull
+	// 无人值守时强制保持松线；有人操作时拖优先于放，两个键都没按则锁住当前已放线长。
+	State.CatAction = !State.bOperatorPresent ? ECatFightCatAction::Slack
+		: bPullHeld ? ECatFightCatAction::Pull
 		: bSlackHeld ? ECatFightCatAction::Slack : ECatFightCatAction::None;
 }
 
@@ -117,11 +119,41 @@ bool UCatFishingFightRunner::SetSlacking(const int64 InputSequence, const bool b
 	return true;
 }
 
-void UCatFishingFightRunner::ClearOperatorInputFromAuthority()
+bool UCatFishingFightRunner::BeginUnattendedSlackFromAuthority()
 {
+	if (!bInitialized) return false;
 	bPullHeld = false;
-	bSlackHeld = false;
+	bSlackHeld = true;
+	State.bOperatorPresent = false;
+	State.StrongConfrontationBuildUpSeconds = 0.0;
+	AbilitySystem.Reset();
 	RefreshCatAction();
+	return true;
+}
+
+bool UCatFishingFightRunner::TransferOperatorFromAuthority(UCatAbilitySystemComponent* NewAbilitySystem,
+	const double NewCatStrength, const double NewCatStaminaMaximum, const double NewCatStamina,
+	const int64 InitialInputSequence, const bool bInitialPullHeld, const bool bInitialSlackHeld)
+{
+	FCatFightSimulationConfig CandidateConfig = Config;
+	CandidateConfig.PrimaryOperatorCatStrength = NewCatStrength;
+	CandidateConfig.CatStaminaMaximum = NewCatStaminaMaximum;
+	if (!bInitialized || !NewAbilitySystem || InitialInputSequence < 0 || !CandidateConfig.IsValid()
+		|| !FMath::IsFinite(NewCatStamina) || NewCatStamina <= 0.0
+		|| NewCatStamina > NewCatStaminaMaximum + UE_DOUBLE_KINDA_SMALL_NUMBER)
+	{
+		return false;
+	}
+	AbilitySystem = NewAbilitySystem;
+	Config = CandidateConfig;
+	State.CatStamina = FMath::Clamp(NewCatStamina, 0.0, NewCatStaminaMaximum);
+	State.bOperatorPresent = true;
+	State.StrongConfrontationBuildUpSeconds = 0.0;
+	LastInputSequence = InitialInputSequence;
+	bPullHeld = bInitialPullHeld;
+	bSlackHeld = bInitialSlackHeld;
+	RefreshCatAction();
+	return true;
 }
 
 bool UCatFishingFightRunner::BeginBehaviorStateFromStateTree(const ECatFishMotionIntent MotionIntent,
@@ -159,7 +191,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 	UCatAbilitySystemComponent* ASC = AbilitySystem.Get();
 	UCatWaterQuerySubsystem* Water = SessionActor && SessionActor->GetWorld()
 		? SessionActor->GetWorld()->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
-	if (!bRunning || !SessionActor || !SessionActor->HasAuthority() || !Encounter || !Rod || !ASC
+	if (!bRunning || !SessionActor || !SessionActor->HasAuthority() || !Encounter || !Rod
+		|| (State.bOperatorPresent && !ASC)
 		|| !Water)
 	{
 		Stop();
@@ -249,7 +282,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 	// 只有 FishExhausted/Overpowered 才切入后续“侧翻并收向竿尖水面投影”阶段。
 
 	// 把猫的体力消耗（正值）转成负的 Delta 施加到 ASC；只有真正非零变化才需要写一次，且写入失败也视为致命错误。
-	if (!FMath::IsNearlyZero(Step.CatStaminaDrain)
+	if (State.bOperatorPresent && !FMath::IsNearlyZero(Step.CatStaminaDrain)
 		&& !ASC->ApplyFishingStaminaDelta(static_cast<float>(-Step.CatStaminaDrain)))
 	{
 		Stop();

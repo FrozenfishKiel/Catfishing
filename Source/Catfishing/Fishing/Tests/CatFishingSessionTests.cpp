@@ -136,6 +136,22 @@ bool FCatFishingFightRunnerInitialHeldInputTest::RunTest(const FString& Paramete
 		BothRunner->InitializeFromAuthority(BothInit));
 	TestEqual(TEXT("pull remains authoritative priority when both buttons are held"),
 		BothRunner->GetCatAction(), ECatFightCatAction::Pull);
+	TestTrue(TEXT("operator leave switches the live simulation state to unattended slack"),
+		BothRunner->BeginUnattendedSlackFromAuthority());
+	TestFalse(TEXT("unattended runner no longer owns a player resource source"),
+		BothRunner->IsOperatorPresentForAuthority());
+	TestEqual(TEXT("unattended runner forces the same spool geometry as right mouse slack"),
+		BothRunner->GetCatAction(), ECatFightCatAction::Slack);
+
+	UCatAbilitySystemComponent* TakeoverAbilitySystem = NewObject<UCatAbilitySystemComponent>(
+		Session, TEXT("TakeoverAbilitySystem"));
+	TestNotNull(TEXT("creates takeover ability system"), TakeoverAbilitySystem);
+	TestTrue(TEXT("fight takeover rebinds a new player resource and independent input sequence domain"),
+		BothRunner->TransferOperatorFromAuthority(
+			TakeoverAbilitySystem, 65.0, 120.0, 80.0, 7, true, false));
+	TestTrue(TEXT("takeover restores an active operator"), BothRunner->IsOperatorPresentForAuthority());
+	TestEqual(TEXT("takeover applies the new player's held pull immediately"),
+		BothRunner->GetCatAction(), ECatFightCatAction::Pull);
 	return !HasAnyErrors();
 }
 

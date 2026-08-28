@@ -14,6 +14,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFightSimulatorOutwardJudgmentTest,
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFightSimulatorSlackTest,
 	"Catfishing.Unit.Fishing.Simulation.HoldingSlackAlwaysRegensAndTautLineStillForcesJudgment",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFightUnattendedSlackTest,
+	"Catfishing.Unit.Fishing.Simulation.UnattendedFightPaysOutThenWearsLineWithoutPlayerResources",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFightVerticalProjectionRecoveryTest,
 	"Catfishing.Unit.Fishing.Simulation.VerticalProjectionSlackRestoresHorizontalMotionWithoutAxisBias",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -308,6 +311,43 @@ bool FCatFishingFightSimulatorSlackTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("taut line never exceeds max"), TautStep.ProposedFishWorldPosition.X, 1000.0, 1e-6);
 	TestEqual(TEXT("holding right still regens when paid line is already at maximum"),
 		TautStep.CatStaminaDrain, -Config.SlackStaminaRegenPerSecond, 1e-9);
+	return !HasAnyErrors();
+}
+
+bool FCatFishingFightUnattendedSlackTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const FCatFightSimulationConfig Config = MakeConfig();
+	FCatFightSimulationState Unattended = MakeState(
+		ECatFishMotionIntent::StrugglingOutward, ECatFightCatAction::Slack);
+	Unattended.bOperatorPresent = false;
+	Unattended.CatStamina = 1.0;
+
+	const FCatFightStepResult PayingOut = Run(Config, Unattended);
+	TestTrue(TEXT("无人值守松线步成功"), PayingOut.bSucceeded);
+	TestEqual(TEXT("无人值守时鱼按实际外游带出线"),
+		PayingOut.LineLengthCentimeters, 575.0, 1e-6);
+	TestEqual(TEXT("未到线长极限前不磨损鱼线"), PayingOut.AbsoluteRodWear, 0.0, 1e-9);
+	TestEqual(TEXT("无人值守不扣也不恢复任何玩家体力"), PayingOut.CatStaminaDrain, 0.0, 1e-9);
+	TestEqual(TEXT("无人值守不借用旧玩家力量消耗鱼体力"), PayingOut.FishStaminaDrain, 0.0, 1e-9);
+	TestEqual(TEXT("无人值守不会把旧玩家判为力竭或落水"),
+		PayingOut.Outcome, ECatFightStepOutcome::None);
+
+	Unattended.LineLengthCentimeters = Config.MaximumLineLengthCentimeters;
+	Unattended.FishWorldPosition = FVector(Config.MaximumLineLengthCentimeters, 0.0, 0.0);
+	const FCatFightStepResult AtLimit = Run(Config, Unattended);
+	TestTrue(TEXT("线放尽后开始累计耐久磨损"), AtLimit.AbsoluteRodWear > 0.0);
+	TestFalse(TEXT("无人值守线端受力不进入玩家力量僵持"), AtLimit.bStalemate);
+	TestFalse(TEXT("无人值守不触发拖下水或力量碾压"), AtLimit.bStrongConfrontation);
+	TestEqual(TEXT("线放尽后仍不结算玩家体力"), AtLimit.CatStaminaDrain, 0.0, 1e-9);
+	TestEqual(TEXT("线放尽后仍不结算鱼体力"), AtLimit.FishStaminaDrain, 0.0, 1e-9);
+
+	Unattended.AbsoluteRodWear = Config.RodDurability - 1.0;
+	const FCatFightStepResult Broken = Run(Config, Unattended);
+	TestEqual(TEXT("无人接管期间允许耐久耗尽断线"),
+		Broken.Outcome, ECatFightStepOutcome::LineBroken);
+	TestEqual(TEXT("无人接管断线原因是耐久耗尽"),
+		Broken.LineBreakCause, ECatFightLineBreakCause::DurabilityDepleted);
 	return !HasAnyErrors();
 }
 
