@@ -467,12 +467,10 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	const FCatWaterSpatialResult CapsuleFootSpatial = Water && ScoopingCharacter && AttemptSnapshot.WaterRegion.IsValid()
 		? Water->QueryShoreRelation(CapsuleFootLocation, AttemptSnapshot.WaterRegion)
 		: FCatWaterSpatialResult{};
-	// 抄网范围口径（与 debug 绘制同源）：抄手向正前方水平发射一条线段，与挂在鱼身上的圆相交即够得着。
+	// 抄网范围口径（与 debug 绘制同源）：沿抄手 Character 的正前方水平发射一条线段，与挂在鱼身上的圆相交即够得着。
 	// 圆心随鱼移动、半径由鱼定义给（这条鱼有多好捞），线段长度由统一有效距离给出，两者互不耦合。
-	const FVector ScooperFacing = ScoopingController
-		? FVector(ScoopingController->GetControlRotation().Vector().X,
-			ScoopingController->GetControlRotation().Vector().Y, 0.0).GetSafeNormal()
-		: FVector::ZeroVector;
+	// 这是身体动作而非镜头瞄准动作；自由转动 Camera/Controller 不得改变抄网判定方向。
+	const FVector ScooperFacing = UCatFishingAimLibrary::ResolveScoopFacingHorizontal(ScoopingCharacter);
 	FHitResult GroundHit;
 	bool bValidGround = false;
 	bool bHasLineOfSight = false;
@@ -569,7 +567,7 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 			TEXT("Event=scoop_rejected SessionId=%s RequestId=%s Phase=%s ExpectedRevision=%lld ActualRevision=%lld "
 				"FightCapable=%d Character=%d MouthFree=%d ScoopReachReady=%d "
 				"FishRadiusSet=%d ScooperOnLand=%d RayReachesFish=%d LineOfSight=%d ValidGround=%d "
-				"GroundTraceHit=%s GroundImpact=%s GroundNormal=%s ScooperFacing=%s FishLocation=%s "
+				"GroundTraceHit=%s GroundImpact=%s GroundNormal=%s ScoopFacingSource=CharacterActorForward ScooperFacing=%s FishLocation=%s "
 				"HorizontalDistanceCm=%.1f VerticalDeltaCm=%.1f ReachCm=%.1f RadiusCm=%.1f %s %s %s %s"),
 			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
@@ -619,7 +617,7 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	ScoopTerminalCache.Add(CacheKey, Result); // 无论成功失败都写入终态缓存，保证后续重放幂等。
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_scoop_terminal SessionId=%s RequestId=%s Committed=%s Error=%s Revision=%lld "
-			"Phase=%s FishLocation=%s ScooperFacing=%s GroundTraceHit=%s ValidGround=%s LineOfSight=%s "
+			"Phase=%s FishLocation=%s ScoopFacingSource=CharacterActorForward ScooperFacing=%s GroundTraceHit=%s ValidGround=%s LineOfSight=%s "
 			"RayReachesFish=%s %s %s %s %s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 		*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),

@@ -729,9 +729,8 @@ void UCatFishingDebugSubsystem::DrawScoopRange(APlayerController* Controller) co
 	// 与权威裁决共用同一解析函数：没有服务器认可的已装备抄网时不显示可用范围。
 	if (!UCatFishingAimLibrary::TryResolveScoopReach(
 		Character ? Character->GetEquipmentComponent() : nullptr, Reach)) return;
-	// 面向方向取控制器视角的水平分量（与抛竿/打窝的瞄准语义一致）。
-	const FVector Facing = FVector(Controller->GetControlRotation().Vector().X,
-		Controller->GetControlRotation().Vector().Y, 0.0).GetSafeNormal();
+	// 抄网是角色身体动作：范围必须跟 Character 面朝方向一致，镜头自由转动不改变提示方向。
+	const FVector Facing = UCatFishingAimLibrary::ResolveScoopFacingHorizontal(Character);
 	if (Facing.IsNearlyZero()) return;
 
 	// 抄网射线：从抄手水平位置沿面向画一条长度 = Reach 的线段，抬高 4cm 避免和地面 z-fighting。
@@ -763,8 +762,7 @@ void UCatFishingDebugSubsystem::DrawScoopTargetCircle(APlayerController* Control
 	double Reach = 0.0;
 	if (!UCatFishingAimLibrary::TryResolveScoopReach(
 		Character ? Character->GetEquipmentComponent() : nullptr, Reach)) return;
-	const FVector Facing = FVector(Controller->GetControlRotation().Vector().X,
-		Controller->GetControlRotation().Vector().Y, 0.0).GetSafeNormal();
+	const FVector Facing = UCatFishingAimLibrary::ResolveScoopFacingHorizontal(Character);
 	// 调 AimLibrary 里那个唯一的判定函数：画出来的"能不能抄到"就是服务器的结论，不存在两套口径。
 	const bool bReachable = UCatFishingAimLibrary::DoesScoopRayReachFish(Pawn->GetActorLocation(), Facing,
 		static_cast<float>(Reach), Fish->GetActorLocation(), static_cast<float>(Radius),

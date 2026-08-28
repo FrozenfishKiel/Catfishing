@@ -15,6 +15,7 @@
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/CatFishingSettings.h"
+#include "Fishing/Integration/CatFishingAimLibrary.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/Actor.h"
@@ -595,6 +596,38 @@ bool FCatFishingSessionSnapshotVersionMutationRulesTest::RunTest(const FString& 
 	TestEqual(TEXT("RepNotify never advances authority versions"),
 		Session->Snapshot.SnapshotSequence, BeforeRepNotifySequence);
 	Session->OnSnapshotChanged.Remove(DelegateHandle);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingScoopFacingUsesCharacterTest,
+	"Catfishing.Unit.Fishing.Session.ScoopFacingUsesCharacterInsteadOfController",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingScoopFacingUsesCharacterTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("创建抄网朝向测试 World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	UWorld* World = WorldWrapper.GetTestWorld();
+	ACatfishingPlayerController* Controller = World ? World->SpawnActor<ACatfishingPlayerController>() : nullptr;
+	ACatCharacter* Character = World ? World->SpawnActor<ACatCharacter>() : nullptr;
+	if (!TestNotNull(TEXT("生成测试 Controller"), Controller)
+		|| !TestNotNull(TEXT("生成测试 Character"), Character))
+	{
+		return false;
+	}
+
+	Controller->Possess(Character);
+	Controller->SetControlRotation(FRotator(0.0, -90.0, 0.0));
+	Character->SetActorRotation(FRotator(0.0, 90.0, 0.0));
+	const FVector Facing = UCatFishingAimLibrary::ResolveScoopFacingHorizontal(Character);
+	TestTrue(TEXT("抄网水平朝向等于 Character Actor Forward"),
+		Facing.Equals(FVector::YAxisVector, KINDA_SMALL_NUMBER));
+	TestFalse(TEXT("抄网水平朝向不跟随相反的 Controller/Camera Forward"),
+		Facing.Equals(FVector(0.0, -1.0, 0.0), KINDA_SMALL_NUMBER));
+	TestTrue(TEXT("空 Character 返回退化朝向并安全拒绝"),
+		UCatFishingAimLibrary::ResolveScoopFacingHorizontal(nullptr).IsNearlyZero());
 	return !HasAnyErrors();
 }
 

@@ -3,6 +3,7 @@
 #include "Engine/World.h"
 #include "Environment/CatChumFieldSettings.h"
 #include "Environment/CatWaterQuerySubsystem.h"
+#include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
@@ -147,6 +148,19 @@ bool UCatFishingAimLibrary::TryResolveScoopReach(const UCatEquipmentComponent* E
 	}
 	OutReachCentimeters = FMath::Min(OutReachCentimeters, ScoopDefinition->ScoopReachCentimeters);
 	return FMath::IsFinite(OutReachCentimeters) && OutReachCentimeters > 0.0;
+}
+
+// 抄网是角色身体动作，不是镜头瞄准动作：只取 Character Actor 的水平前向。
+// 服务器裁决和本地 debug 都调用这里，避免任一入口重新引入 Controller/Camera 朝向。
+FVector UCatFishingAimLibrary::ResolveScoopFacingHorizontal(const ACatCharacter* Character)
+{
+	if (!Character)
+	{
+		return FVector::ZeroVector;
+	}
+
+	const FVector CharacterForward = Character->GetActorForwardVector();
+	return FVector(CharacterForward.X, CharacterForward.Y, 0.0).GetSafeNormal();
 }
 
 // 抄网判定流程：俯视投影下的「线段 ∩ 圆」+ 独立的垂直高度差上限。

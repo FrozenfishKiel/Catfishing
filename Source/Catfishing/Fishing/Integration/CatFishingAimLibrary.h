@@ -54,6 +54,12 @@ public:
 	static bool TryResolveScoopReach(const UCatEquipmentComponent* Equipment, double& OutReachCentimeters);
 
 	/**
+	 * 解析抄网唯一有效朝向：只使用 Character Actor 的水平前向，不读取 Controller/Camera 朝向。
+	 * 服务器裁决与 debug 显示共用此入口，保证自由转动镜头不会改变实际抄网方向。
+	 */
+	static FVector ResolveScoopFacingHorizontal(const ACatCharacter* Character);
+
+	/**
 	 * 抄网判定（唯一口径）：抄手向正前方水平发射一条线段，与挂在鱼身上的圆相交即够得着。
 	 *
 	 *   俯视：线段起点 = 抄手水平位置，方向 = 面向的水平分量，长度 = ReachCentimeters；
