@@ -714,22 +714,11 @@ void UCatFishingDebugSubsystem::DrawScoopRange(APlayerController* Controller) co
 	const APawn* Pawn = Controller ? Controller->GetPawn() : nullptr;
 	if (!Pawn || !World) return;
 	const FVector PawnLocation = Pawn->GetActorLocation();
-	double Reach = GetDefault<UCatFishingSettings>()->ScoopReachCentimeters;
-	// 与权威判定同口径：射线长度取全局设置与已装备抄网 DA 的较小值。
-	if (const ACatCharacter* Character = Cast<ACatCharacter>(Pawn))
-	{
-		if (const UCatEquipmentComponent* Equipment = Character->GetEquipmentComponent())
-		{
-			const UCatEquipmentDefinition* ScoopDefinition = GetDefault<UCatEquipmentSettings>()
-				->FindRuntimeDefinition(Equipment->GetSnapshot().ScoopNetDefinitionId);
-			if (ScoopDefinition && ScoopDefinition->Kind == ECatEquipmentKind::ScoopNet
-				&& ScoopDefinition->ScoopReachCentimeters > 0.0)
-			{
-				Reach = FMath::Min(Reach, ScoopDefinition->ScoopReachCentimeters);
-			}
-		}
-	}
-	if (Reach <= 0.0) return;
+	const ACatCharacter* Character = Cast<ACatCharacter>(Pawn);
+	double Reach = 0.0;
+	// 与权威裁决共用同一解析函数：没有服务器认可的已装备抄网时不显示可用范围。
+	if (!UCatFishingAimLibrary::TryResolveScoopReach(
+		Character ? Character->GetEquipmentComponent() : nullptr, Reach)) return;
 	// 面向方向取控制器视角的水平分量（与抛竿/打窝的瞄准语义一致）。
 	const FVector Facing = FVector(Controller->GetControlRotation().Vector().X,
 		Controller->GetControlRotation().Vector().Y, 0.0).GetSafeNormal();
@@ -760,20 +749,10 @@ void UCatFishingDebugSubsystem::DrawScoopTargetCircle(APlayerController* Control
 	const double Radius = FishDefinition ? FishDefinition->ScoopTargetRadiusCentimeters : 0.0;
 	if (Radius <= 0.0) return;
 
-	double Reach = Settings->ScoopReachCentimeters;
-	if (const ACatCharacter* Character = Cast<ACatCharacter>(Pawn))
-	{
-		if (const UCatEquipmentComponent* Equipment = Character->GetEquipmentComponent())
-		{
-			const UCatEquipmentDefinition* ScoopDefinition = GetDefault<UCatEquipmentSettings>()
-				->FindRuntimeDefinition(Equipment->GetSnapshot().ScoopNetDefinitionId);
-			if (ScoopDefinition && ScoopDefinition->Kind == ECatEquipmentKind::ScoopNet
-				&& ScoopDefinition->ScoopReachCentimeters > 0.0)
-			{
-				Reach = FMath::Min(Reach, ScoopDefinition->ScoopReachCentimeters);
-			}
-		}
-	}
+	const ACatCharacter* Character = Cast<ACatCharacter>(Pawn);
+	double Reach = 0.0;
+	if (!UCatFishingAimLibrary::TryResolveScoopReach(
+		Character ? Character->GetEquipmentComponent() : nullptr, Reach)) return;
 	const FVector Facing = FVector(Controller->GetControlRotation().Vector().X,
 		Controller->GetControlRotation().Vector().Y, 0.0).GetSafeNormal();
 	// 调 AimLibrary 里那个唯一的判定函数：画出来的"能不能抄到"就是服务器的结论，不存在两套口径。

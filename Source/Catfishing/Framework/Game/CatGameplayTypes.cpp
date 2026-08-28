@@ -2093,7 +2093,7 @@ void ACatfishingPlayerController::ServerAssistFishingSession_Implementation(cons
 	}
 }
 
-// 抢抄 RPC 流程：先过钓鱼白天 gate，再清客户端身份并用当前 Pawn 的鱼护覆盖目标；FishingSession/Items 决定首个合法 Compare-and-Commit。
+// 抄网 RPC 流程：先过钓鱼白天 gate，再由命令组件清理客户端身份；Session 裁范围并把鱼交接到抄手嘴上。
 void ACatfishingPlayerController::ServerRequestScoop_Implementation(const FGuid FishingSessionId,
 	FCatScoopCommand Command)
 {

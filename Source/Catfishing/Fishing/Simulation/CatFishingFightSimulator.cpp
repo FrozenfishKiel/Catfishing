@@ -330,6 +330,9 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		? VerticalDistance : FVector::Distance(RodTipWorldPosition, ProposedFishWorldPosition);
 
 	// 把本步计算结果写入返回值，供 Runner/Session 应用到实际状态。
+	// 自由游速在线长/岸线约束前由行为意图选中；即使最终位置被线端完全挡住，
+	// AnimBP 仍能知道鱼正在全力冲刺，而不会因实际位移为 0 错播成待机。
+	Result.IntendedSwimSpeedCentimetersPerSecond = SwimSpeed;
 	Result.CatStaminaDrain = CatDrain;
 	Result.FishStaminaDrain = FishDrain;
 	Result.LineLengthCentimeters = LineLength;

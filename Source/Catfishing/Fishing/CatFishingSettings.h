@@ -18,7 +18,7 @@ public:
 	/** 判断正式运行配置是否具备显式总 gate、StateTree 资产、正响应/终态复制窗口与近岸几何；任一未裁字段都返回 false。 */
 	bool IsRuntimeReady() const;
 
-	/** 读取服务器近岸目标到抢抄者的正 reach；未配置或 runtime gate 关闭时清零并返回 false。 */
+	/** 读取服务器抄网射线的正 reach；未配置或 runtime gate 关闭时清零并返回 false。 */
 	bool TryGetScoopReach(double& OutReachCentimeters) const;
 	/** 读取有限正抄网冷却；非法配置清零并返回 false，服务器据此 fail-closed。 */
 	bool TryGetScoopCooldown(double& OutCooldownSeconds) const;

@@ -57,11 +57,16 @@ UCatGrowthComponent* ACatCharacter::GetGrowthComponent() const
 // 三种语义，已不再按下即播，因此提竿事件也必须让发起端收到服务器确认后的表现。
 void ACatCharacter::Multicast_PlayCosmeticEvent_Implementation(const FGameplayTag EventTag)
 {
-	const bool bLocallyPredicted = EventTag != CatFishingAbilityTags::Cosmetic_Fishing_HookPull;
+	// 提竿、断线和落水都是服务器裁决后才知道的结果，本机玩家也必须收到；只有挥网等预测动作跳过本机重播。
+	const bool bServerConfirmed = EventTag == CatFishingAbilityTags::Cosmetic_Fishing_HookPull
+		|| EventTag == CatFishingAbilityTags::Cosmetic_Fishing_LineBroken
+		|| EventTag == CatFishingAbilityTags::Cosmetic_Fishing_CatInWater;
+	const bool bLocallyPredicted = !bServerConfirmed;
 	if (!EventTag.IsValid() || (IsLocallyControlled() && bLocallyPredicted))
 	{
 		return;
 	}
+	PlayFishingOutcomeMontageFromPresentation(EventTag);
 	BP_PlayCosmeticEvent(EventTag);
 }
 
@@ -130,6 +135,29 @@ bool ACatCharacter::PlayFishingCastMontageFromPresentation()
 	}
 	const UCatFishingPresentationSettings* Presentation = GetDefault<UCatFishingPresentationSettings>();
 	UAnimMontage* Montage = Presentation ? Presentation->CastMontage.LoadSynchronous() : nullptr;
+	return Montage && PlayAnimMontage(Montage) > 0.0f;
+}
+
+bool ACatCharacter::PlayFishingOutcomeMontageFromPresentation(const FGameplayTag OutcomeEventTag)
+{
+	if (GetNetMode() == NM_DedicatedServer || !OutcomeEventTag.IsValid())
+	{
+		return false;
+	}
+	const UCatFishingPresentationSettings* Presentation = GetDefault<UCatFishingPresentationSettings>();
+	if (!Presentation)
+	{
+		return false;
+	}
+	UAnimMontage* Montage = nullptr;
+	if (OutcomeEventTag == CatFishingAbilityTags::Cosmetic_Fishing_LineBroken)
+	{
+		Montage = Presentation->LineBrokenMontage.LoadSynchronous();
+	}
+	else if (OutcomeEventTag == CatFishingAbilityTags::Cosmetic_Fishing_CatInWater)
+	{
+		Montage = Presentation->CatInWaterMontage.LoadSynchronous();
+	}
 	return Montage && PlayAnimMontage(Montage) > 0.0f;
 }
 
@@ -211,12 +239,36 @@ void ACatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-// Starter 兜底流程：先拒绝非 authority、无组件或未显式打开的情况，避免正式默认路径绕过商店或 Profile Grant。
-// 只有当前选择仍没有鱼竿时才尝试选择库存里已有的基础三件套；选择成功后再按新 Revision 发放可选窝料，任一步失败只记日志不重试。
+// 开发装备兜底流程：
+// 1. authority 可通过独立开关给每个新 Character 发一份 Starter 抄网；授予仍走 Equipment 正式写口并自动选中，
+//    重占有时先看库存，不会重复发放。正式商店/奖励获取接入后只需关闭该开关。
+// 2. 其余 Starter 选择仍由原开关控制，只选择库存里已有的基础钓组；选择成功后才发可选窝料。
 void ACatCharacter::ApplyStarterLoadoutIfConfigured()
 {
 	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-	if (!HasAuthority() || !EquipmentComponent || !Settings || !Settings->bAutoConfigureStarterLoadout)
+	if (!HasAuthority() || !EquipmentComponent || !Settings)
+	{
+		return;
+	}
+	if (Settings->bAutoGrantStarterScoopNet && !Settings->StarterScoopNetDefinitionId.IsNone())
+	{
+		const FCatEquipmentLoadoutSnapshot& BeforeGrant = EquipmentComponent->GetSnapshot();
+		const bool bAlreadyOwnsStarterScoop = BeforeGrant.InventorySlots.ContainsByPredicate(
+			[Settings](const FCatRunInventorySlot& Slot)
+			{
+				return Slot.DefinitionId == Settings->StarterScoopNetDefinitionId && Slot.Quantity > 0;
+			});
+		if (!bAlreadyOwnsStarterScoop)
+		{
+			const FCatDomainCommandResult Grant = EquipmentComponent->GrantEquipmentFromAuthority(
+				FGuid::NewGuid(), BeforeGrant.Revision, Settings->StarterScoopNetDefinitionId);
+			UE_LOG(LogCatCharacter, Log,
+				TEXT("Event=starter_scoop_grant Committed=%s Error=%s Revision=%lld Definition=%s"),
+				Grant.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Grant.Error),
+				Grant.Revision, *Settings->StarterScoopNetDefinitionId.ToString());
+		}
+	}
+	if (!Settings->bAutoConfigureStarterLoadout)
 	{
 		return;
 	}

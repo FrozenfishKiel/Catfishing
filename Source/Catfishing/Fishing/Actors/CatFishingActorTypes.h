@@ -75,6 +75,8 @@ struct FCatFishEncounterPresentationState
 	/** 服务器由本鱼冻结重量计算的一次性统一 Mesh 缩放；客户端只消费，不自行随机。 */
 	UPROPERTY(BlueprintReadOnly) double VisualScale = 1.0;
 	UPROPERTY(BlueprintReadOnly) ECatFishMotionIntent MotionIntent = ECatFishMotionIntent::None;
+	/** 行为意图选择的自由游速（cm/s），不受鱼线、岸线或最终位移限制；用于驱动 AnimBP 播放倍率。 */
+	UPROPERTY(BlueprintReadOnly) float IntendedSwimSpeedCentimetersPerSecond = 0.0f;
 	UPROPERTY(BlueprintReadOnly) double CurrentLineLength = 0.0;
 	/** 鱼当前游向与鱼线向外方向夹角余弦，[-1,1]；供所有客户端驱动转向/受力表现。 */
 	UPROPERTY(BlueprintReadOnly) float FishLineAlignment = 0.0f;

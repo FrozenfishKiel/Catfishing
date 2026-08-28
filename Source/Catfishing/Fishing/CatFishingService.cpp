@@ -586,7 +586,7 @@ FCatDomainCommandResult UCatFishingService::SubmitFightAssist(const FGuid Fishin
 	return Result;
 }
 
-// 抢抄转发流程：只定位 Session 并转发；首个合法胜者与 FishInstance 创建完全在 Session→Items Compare-and-Commit 中决定。
+// 抄网转发流程：只定位 Session 并转发；范围裁决、世界鱼创建与嘴叼交接全部由 Session 原子收敛。
 FCatScoopResult UCatFishingService::RequestScoop(const FGuid FishingSessionId, AController* ScoopingController,
 	const FCatScoopCommand& Command)
 {
@@ -873,7 +873,7 @@ ACatFishingSession* UCatFishingService::FindNearestScoopableSession(const FVecto
 		ACatFishingSession* Session = Pair.Value.Get();
 		const ACatFishEncounterActor* Fish = Session ? Session->GetSnapshot().FishEncounterActor : nullptr;
 		// 与 Session::RequestScoop 的阶段口径保持一致：搏斗中和近岸都可抢抄（鱼身上的圈一直存在）。
-		// 这里只做粗筛路由，真正的射线∩圆判定和 Compare-and-Commit 都在 Session 内部。
+		// 这里只做粗筛路由，真正的射线∩圆判定和嘴叼世界鱼交接都在 Session 内部。
 		const ECatFishingPhase Phase = Session ? Session->GetSnapshot().Phase : ECatFishingPhase::Created;
 		if (!Session || Session->IsTerminal() || !Fish
 			|| (Phase != ECatFishingPhase::HookedFight && Phase != ECatFishingPhase::NearShore

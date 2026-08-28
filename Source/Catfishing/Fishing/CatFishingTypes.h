@@ -17,9 +17,9 @@ enum class ECatFishingPhase : uint8
 	TrueBiteWindow = 2,
 	/** Hooked 后唯一允许多人协作的搏斗阶段。 */
 	HookedFight = 3,
-	/** 鱼已到近岸并等待首个合法抢抄 Compare-and-Commit。 */
+	/** 兼容近岸阶段；与 HookedFight/ExhaustedReel 一样按抄网几何开放，不绑定容器事务。 */
 	NearShore = 4,
-	/** 捕获事务已提交且唯一鱼实例已经进入胜者鱼护。 */
+	/** 会话已解决；鱼可能已转成嘴叼世界鱼，或作为力竭落地世界鱼等待拾取。 */
 	Resolved = 5,
 	/** 掉线、倒地、局末或依赖失效后终止；旧半场不会重连恢复。 */
 	Terminated = 6,
@@ -33,7 +33,10 @@ enum class ECatFishingPhase : uint8
 UENUM(BlueprintType)
 enum class ECatFishingOutcome : uint8
 {
-	None, Caught, EmptyHook, HookWindowExpired, Escaped,
+	None,
+	/** 抄网已把水中鱼交接为抄手嘴叼的世界鱼；尚未写入容器。 */
+	Caught,
+	EmptyHook, HookWindowExpired, Escaped,
 	/** 旧版本曾把鱼线断裂误写成鱼竿永久损坏；仅为已有蓝图/存档保持枚举序号，不再由钓鱼核心产生。 */
 	RodBroken UMETA(Hidden),
 	CatInWater, Cancelled, Invalidated,
@@ -253,7 +256,7 @@ struct FCatFishingPhaseResult
 	int64 Revision = 0;
 };
 
-/** 近岸抢抄命令；身份由服务器 Controller 重建，Guard Revision 绑定实际目标容量事实。 */
+/** 抄网命令；身份由服务器 Controller 重建，ExpectedRevision 只绑定 FishingSession。 */
 USTRUCT(BlueprintType)
 struct FCatScoopCommand
 {
@@ -262,25 +265,15 @@ struct FCatScoopCommand
 	/** 抢抄 RequestId、Session ExpectedRevision 与服务器身份。 */
 	UPROPERTY(BlueprintReadWrite)
 	FCatDomainCommandContext Context;
-
-	/** 旧抢抄捕获目标字段；世界鱼改为落地后按 E 叼起，客户端值不参与授权。 */
-	UPROPERTY(BlueprintReadWrite)
-	FGuid TargetGuardContainerId;
-
-	/** 客户端表现命中位置，仅用于载荷诊断；授权只比较服务器 Character 与 StateTree 绑定的权威近岸目标。 */
 };
 
-/** 抢抄事务终态；只在首个合法请求成功时包含 CaptureCommittedResult。 */
+/** 抄网事务终态；成功表示鱼已成为抄手嘴上的世界鱼，尚未写入任何容器。 */
 USTRUCT(BlueprintType)
 struct FCatScoopResult
 {
 	GENERATED_BODY()
 
-	/** 公共命令终态；Revision 对应 FishingSession 而非容器。 */
+	/** 公共命令终态；Revision 对应 FishingSession。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatDomainCommandResult Command;
-
-	/** Items 唯一捕获提交结果；拒绝时保持默认。 */
-	UPROPERTY(BlueprintReadOnly)
-	FCatCaptureCommittedResult Capture;
 };

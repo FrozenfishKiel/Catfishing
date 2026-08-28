@@ -27,7 +27,7 @@
    │        有会话按下=提竿(TrueBite) 或 拖(HookedFight) / 松开=停拖
    ├─ 右键→ HookedFight 中 按住=松开线杯 / 松开=锁住当前线长
    ├─ Q   → 按下记时刻 / 松开=按时长算蓄力 → 弹道预测落点 → PlaceChum
-   ├─ F   → RequestScoop（服务器自动填抄手自己的鱼护 ID）
+   ├─ F   → RequestScoop（服务器找范围内已上钩的鱼；成功直接变成抄手嘴叼世界鱼）
    └─ X   → 有会话=Cancel（咬钩前零损失）/ 无会话=收竿（操作中先 Leave 再 Pack）
         ▼
 【服务层】UCatFishingService（World Subsystem，只在服务器存在）
@@ -155,14 +155,15 @@ Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消�
 - 射线**不带俯仰**：鱼在水下看不清，逼玩家瞄准深度会变成盲操作；而且现实里站高一点更好捞，3D 判定反而会让站得高的人够不着。高度只由 `MaximumScoopVerticalDeltaCentimeters` 单独卡上限
 - 每次服务器接收的真实挥网尝试都会消费 `ScoopCooldownSeconds`（当前 3 秒）：GAS 的 `Cat.Cooldown.Fishing.Scoop` 提供本地预测与 UI 剩余时间，`UCatFishingCommandComponent` 的每玩家服务器闸门负责拒绝绕过 Ability 的重复 RPC；挥空同样消费，其他玩家的冷却互不影响
 
-**开放阶段：`HookedFight` + `ExhaustedReel`。** 鱼身上的圈**一直存在**，不是"体力清零才能抄"——搏斗中把鱼收到射线够得着的位置就能直接抄上来（提前结束搏斗的主动选择，也给多人抢抄拉长窗口）。更早的阶段不开放：鱼还没被提上钩，抄它等于绕过提竿机制。
+**开放阶段：`HookedFight` + `NearShore` + `ExhaustedReel`。** 鱼身上的圈**一直存在**，鱼的剩余体力完全不参与抄网判定——满体力鱼只要已经上钩并进入射线范围也能直接抄走。更早的阶段不开放：鱼还没被提上钩，抄它等于绕过提竿机制。
 
 其余谓词：抄手在岸上（Outside 水域）+ 地面坡度 ≤ `MaximumScoopGroundSlopeDegrees` + 视线不被遮挡 + 装了 ScoopNet。
+当前开发配置通过 `bAutoGrantStarterScoopNet=True` 在服务器首次占有时给每名玩家本人库存发一份并自动选中正式目录定义 `StarterScoopNet`（`Equip_ScoopNet_Starter`）；这是临时可玩性开关，不是正式获取规则。商店或奖励来源接入后关闭它。
 **不再要求"鱼在近岸带内"**——射线∩圆已是唯一范围口径，再叠一层离岸距离会出现"debug 圈画成绿色但服务器拒绝"的表现/判定打架。旧 `NearShoreWidthCentimeters` 只作为配置兼容字段保留，不再推进会话阶段。
 
-首个合法 F 走 Items 唯一捕获事务（鱼归抄手，图鉴首钓归钓手的两轨制在 Items 侧）。拒绝时打 `Event=scoop_rejected`，逐项列出谓词并附带实测水平距离/高度差/射程/半径，能直接分辨是"没对准"、"太远"还是"站太高"。
+首个合法 F 会生成一个 `ACatFishPickupActor`，并立即调用与岸上死鱼按 E 相同的嘴叼交接；此时鱼仍是世界 Actor，不进入背包或鱼护。玩家之后对具体地面鱼护按 E，才由 Items 执行唯一容器提交与图鉴归档。拒绝时打 `Event=scoop_rejected`，逐项列出谓词并附带实测水平距离/高度差/射程/半径，能直接分辨是"没对准"、"太远"还是"站太高"。
 
-鱼体力耗尽后还有第二条正式收尾路线：服务器立即复制 `AutoHauling`，各端据此让鱼侧翻；继续按住左键时，服务器在 `ExhaustedReel` 中把鱼逐步收向“竿尖 XY + max(水面 Z, 竿尖下方地面 Z)”的冻结投影，最多到该点。目标 XY 不受 WaterRegion 轮廓限制；岸地高于水面时使用地面高度，避免鱼埋进岸坡。到点后原地生成复制的 `ACatFishPickupActor`。所有玩家都能以准星锁定并按 E 请求拾取，服务器复核距离、视线、物品状态和背包事务，首个合法请求获胜。抄网和世界拾取最终都进入 Items 的唯一事务入口，但 Outcome 分别为 `Captured` 与兼容既有终态的 `Landed`。
+鱼体力耗尽后还有第二条正式收尾路线：服务器立即复制 `AutoHauling`，各端据此让鱼侧翻；继续按住左键时，服务器在 `ExhaustedReel` 中把鱼逐步收向“竿尖 XY + max(水面 Z, 竿尖下方地面 Z)”的冻结投影，最多到该点。目标 XY 不受 WaterRegion 轮廓限制；岸地高于水面时使用地面高度，避免鱼埋进岸坡。到点后原地生成复制的 `ACatFishPickupActor`。所有玩家都能以准星锁定并按 E 请求拾取，服务器复核距离、视线和物品状态，首个合法请求获胜。抄网与岸上拾取从这里开始共用同一条“嘴叼世界鱼 → 对具体鱼护 E → Items 唯一提交”链；Session Outcome 分别为 `Caught` 与 `Landed`。
 
 ---
 
@@ -214,7 +215,7 @@ Config/DefaultGame.ini    10 个 section（改后必须重启 Editor；软引用
 按鱼名猜比例。
 
 数值快照：猫力50 体力100 ／ 竿强60 耐久70 线长1500 ／ 鱼力40 体力50 ／ 真咬窗3s 完美窗1s ／ 近岸100cm ／ 鱼竿操作位2个、左右间距140cm。
-开发便利开关：`bAutoConfigureStarterLoadout`（自动装配+发5窝料，正式选装 UI 完成后关闭）。
+开发便利开关：整套 `bAutoConfigureStarterLoadout=False`；仅 `bAutoGrantStarterScoopNet=True` 临时默认发一份抄网，正式商店/奖励获取接入后关闭。
 
 ## 6. 已知待办（都在契约后面，不影响表现层）
 

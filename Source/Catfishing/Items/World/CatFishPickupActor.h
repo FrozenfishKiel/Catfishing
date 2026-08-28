@@ -8,6 +8,7 @@
 
 class APlayerState;
 class ACatCharacter;
+class ACatFishingSession;
 class UCatFishDefinition;
 class USkeletalMeshComponent;
 class USphereComponent;
@@ -20,7 +21,7 @@ enum class ECatFishPickupState : uint8
 	Carried
 };
 
-/** 所有客户端可见的岸上鱼只读状态；StableNetId、候选参与者和容器 Revision 永不复制。 */
+/** 所有客户端可见的可携带世界鱼只读状态；StableNetId、候选参与者和容器 Revision 永不复制。 */
 USTRUCT(BlueprintType)
 struct FCatFishPickupPresentationState
 {
@@ -37,7 +38,7 @@ struct FCatFishPickupPresentationState
 };
 
 /**
- * 鱼被拖过岸线后生成的服务器权威世界物品。Actor 没有“原钓手所有权”；任何合法玩家都可先到先得。
+ * 上钩鱼被抄取或力竭拖岸后生成的服务器权威世界物品。Actor 没有“原钓手所有权”；可用时任何合法玩家都可先到先得。
  */
 UCLASS(Blueprintable, meta=(ChildCannotTick))
 class CATFISHING_API ACatFishPickupActor : public AActor, public ICatInteractable
@@ -80,6 +81,8 @@ protected:
 	virtual void BeginPlay() override;
 
 private:
+	friend class ACatFishingSession;
+
 	UFUNCTION() void OnRep_PresentationState(const FCatFishPickupPresentationState& Previous);
 	UFUNCTION() void HandleAuthorityCarrierDestroyed(AActor* DestroyedActor);
 	bool IsAuthorityRequestSpatiallyValid(const AController* RequestingController) const;

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
+#include "GameplayTagContainer.h"
 #include "Fishing/CatFishingTypes.h"
 #include "Equipment/CatEquipmentTypes.h"
 #include "Data/CatFishSelectionTypes.h"
@@ -20,10 +21,11 @@ struct FCatFightStepResult;
 class FCatFishingSessionReplicationContractTest;
 class FCatFishingSessionSnapshotVersionMutationRulesTest;
 class FCatFishingSessionTerminationOutcomeTest;
-class FCatFishingSessionExistingCaptureReconciliationTest;
+class FCatFishingSessionScoopMouthCarryTest;
 class FCatFishingSessionRejectedFightSummaryPublicationTest;
 class FCatFishingSessionExhaustedReelContinuityTest;
 class FCatFishingSessionLandedTerminalVisibilityTest;
+class FCatFishingSessionOutcomePresentationTagTest;
 
 DECLARE_MULTICAST_DELEGATE(FCatFishingSessionSnapshotChanged);
 
@@ -80,7 +82,7 @@ public:
 	/** StateTree 在唯一已裁的“重试耗尽”逃鱼终态调用；Collection 生成剪影 Grant 后终止会话且不创建实物鱼。 */
 	FCatDomainCommandResult ResolveRetryExhaustedEscapeFromStateTree();
 
-	/** NearShore 的首个合法 Compare-and-Commit；实物只归抄手，配置成像事件时为全部合法搏斗参与者先建齐 Planned 事实再投递，Resolved 后启动有界销毁。 */
+	/** 鱼上钩后可无视鱼的剩余体力抄取；服务器范围校验成功即生成世界鱼并直接进入抄手嘴叼状态。 */
 	FCatScoopResult RequestScoop(AController* ScoopingController, const FCatScoopCommand& Command);
 
 	/**
@@ -126,11 +128,12 @@ private:
 	friend class FCatFishingSessionReplicationContractTest;
 	friend class FCatFishingSessionSnapshotVersionMutationRulesTest;
 	friend class FCatFishingSessionTerminationOutcomeTest;
-	friend class FCatFishingSessionExistingCaptureReconciliationTest;
+	friend class FCatFishingSessionScoopMouthCarryTest;
 	friend class FCatFishingSessionRejectedFightSummaryPublicationTest;
 	friend class FCatFishingSessionExhaustedReelContinuityTest;
 	friend class FCatFishingSessionLandedTerminalVisibilityTest;
 	friend class FCatFishingSessionLineBreakKeepsRodOperableTest;
+	friend class FCatFishingSessionOutcomePresentationTagTest;
 
 	/** 客户端收到完整 Snapshot 后只广播重读信号，不推进任何玩法。 */
 	UFUNCTION()
@@ -148,11 +151,8 @@ private:
 	/** 终态的单一直接写口；StateTree 不可进入终态。 */
 	void FinalizeSession(ECatFishingPhase FinalPhase, ECatFishingOutcome FinalOutcome, const TCHAR* DiagnosticReason);
 
-	/** 只接受当前会话完整且与快照一致的 Items committed 事实，随后同步写捕获终态。 */
-	bool ReconcileCommittedCapture(const FCatCaptureCommittedResult& Committed);
-
-	/** 验证 Items 已提交 DTO 可安全作为当前会话唯一捕获事实。 */
-	bool IsCommittedCaptureForCurrentSession(const FCatCaptureCommittedResult& Committed) const;
+	/** 只有断线/猫落水拥有当前猫 Montage；其余终局返回空 Tag，不借用错误表现。 */
+	static FGameplayTag ResolveTerminalFisherPresentationTag(ECatFishingOutcome Outcome);
 
 	/** 用 FishingService 的统一权威谓词重读参与者，更新公开人数、合计 FishingStrength 与 FightStamina。 */
 	bool RefreshFightSummary();
@@ -168,7 +168,10 @@ private:
 	bool PublishExhaustedReelLineFromAuthority(const FVector& FishWorldLocation);
 	bool TryResolveExhaustedReelTarget(FVector& OutTarget) const;
 	bool SpawnExhaustedFishPickupFromAuthority(const FVector& SurfaceLocation);
-	bool CommitLandingEquipmentFromAuthority();
+	/** 抄网成功时生成世界鱼并立即附到抄手嘴部；不读取鱼体力，也不写入鱼护。 */
+	bool SpawnScoopedFishPickupFromAuthority(ACatCharacter* ScoopingCharacter, APlayerState* ScoopingPlayerState,
+		const FString& ScooperStableNetId);
+	bool CommitCatchEquipmentFromAuthority();
 	void HandleBiteWarningTimer();
 	void HandleProbeTimer();
 	void HandleTrueBiteWindowExpired();
@@ -229,7 +232,7 @@ private:
 	bool bPrepared = false;
 	bool bPublished = false;
 
-	/** 捕获是否已经由某个合法请求不可逆提交；true 后所有新抢抄返回 AlreadyResolved。 */
+	/** 鱼是否已从水中 Encounter 交接为世界鱼；true 后所有新抢抄返回 AlreadyResolved。 */
 	bool bCaptureResolved = false;
 
 	/** 本会话失败预算是否已经提交；true 后任何第二种惩罚都返回 AlreadyResolved。 */

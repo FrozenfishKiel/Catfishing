@@ -254,7 +254,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 	if (!Encounter->ApplyFightStepFromAuthority(State.MotionIntent,
 		Step.LineLengthCentimeters, Motion.FishWorldPosition, static_cast<float>(Config.FixedStepSeconds),
 		static_cast<float>(Step.FishLineAlignment), static_cast<float>(Step.NormalizedLineLoad),
-		Step.bStrongConfrontation))
+		static_cast<float>(Step.IntendedSwimSpeedCentimetersPerSecond), Step.bStrongConfrontation))
 	{
 		Stop();
 		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("EncounterFightStepWrite"));

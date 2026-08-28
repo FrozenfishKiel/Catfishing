@@ -14,7 +14,7 @@
 | 类型 | 注册位置（DefaultGame.ini 的 section / 键） | 现有资产 |
 |---|---|---|
 | 猫种类 CatCharacterDefinition | `[CatAbilitySettings]` `+CharacterDefinitions=` | DA_Cat_Default |
-| 装备 CatEquipmentDefinition | `[CatEquipmentSettings]` `+Definitions=` | DA_Rod/Bait/Float/ScoopNet/Chum_Basic |
+| 装备 CatEquipmentDefinition | `[CatEquipmentSettings]` `+Definitions=` | `/Game/Catfishing/Data/Equipment/Equip_*` |
 | 鱼种 CatFishDefinition | `[CatFishCatalogSettings]` `+Definitions=` | DA_Fish_Test01 |
 | 咬钩性格 CatBitePersonalityDefinition | `[CatFishingSettings]` `+BitePersonalities=` | DA_Bite_Test01 |
 | 搏斗性格 CatFightPersonalityDefinition | `[CatFishingSettings]` `+FightPersonalities=` | DA_Fight_Test01 |
@@ -39,7 +39,7 @@
 
 ⚠️ 角色指定了 ID 但定义缺失/未就绪时**不会悄悄换成全局值**——属性播种直接失败并打 `initial_attributes_unresolved` Warning，钓鱼链整体不可用，方便第一时间发现配错。
 
-## 2. 装备：`UCatEquipmentDefinition`（DA_Rod/Bait/Float/ScoopNet/Chum_*）
+## 2. 装备：`UCatEquipmentDefinition`（正式目录 `Equip_Rod/Bait/Float/ScoopNet/Chum_*`）
 
 一个类覆盖五种装备，靠 `Kind` 区分；**每个 Kind 只看自己那组字段，其余必须保持默认 0/false**（校验会因"竿字段出现在鱼饵上"这类越界而判未就绪）。
 
@@ -56,7 +56,7 @@
 
 **Bait（鱼饵）**：`BiteRateMultiplier`(>0,咬钩率倍率) · `MinimumBiteDelayMultiplier`(>0,最短咬钩延迟倍率)
 **Float（浮漂）**：`MaximumCastDistanceCentimeters`(>0,最大抛竿距离) · `CastErrorStandardDeviation/MaximumCastErrorRadiusCentimeters`(落点误差σ/上限,σ≤上限) · `BiteSignalStability`(0~1,咬钩信号稳定度)
-**ScoopNet（抄网）**：`ScoopReachCentimeters`(>0,**抄手向正前方发射的水平线段长度**,语义="网杆多长")。与鱼定义里的 `ScoopTargetRadiusCentimeters`(圆半径)配对构成抄网判定：**俯视投影下线段∩圆**即够得着。实际生效长度取 `min(本值, UCatFishingSettings::ScoopReachCentimeters)`——全局那个是上限闸门。高度差另由 `UCatFishingSettings::MaximumScoopVerticalDeltaCentimeters` 单独限制,判定本身完全不看俯仰角。
+**ScoopNet（抄网）**：`ScoopReachCentimeters`(>0,**抄手向正前方发射的水平线段长度**,语义="网杆多长")。与鱼定义里的 `ScoopTargetRadiusCentimeters`(圆半径)配对构成抄网判定：**俯视投影下线段∩圆**即够得着。实际生效长度取 `min(本值, UCatFishingSettings::ScoopReachCentimeters)`——全局那个是上限闸门。高度差另由 `UCatFishingSettings::MaximumScoopVerticalDeltaCentimeters` 单独限制,判定本身完全不看俯仰角。当前开发期 `bAutoGrantStarterScoopNet=True` 会给每名玩家库存临时发一份并选中正式目录定义 `StarterScoopNet`；正式商店/奖励获取就绪后关闭该开关。
 **Chum（窝料）**：`bRunConsumable` 必须 True，核心在 `ChumInfluence` 结构：
 
 | ChumInfluence 字段 | 含义 | 校验 |
@@ -74,7 +74,7 @@
 | 字段组 | 字段 | 含义 |
 |---|---|---|
 | 身份 | FishDefinitionId | 唯一 ID,图鉴/日志/实物鱼都引用它 |
-| 体型 | BodyClass | Standard=单人可搏 / Giant=可多人协作(近岸仍首个合法抢抄者归属);不能 Unknown |
+| 体型 | BodyClass | Standard=单人可搏 / Giant=可多人协作；抄网成功后世界鱼由首个合法抄手叼走；不能 Unknown |
 | 出没 | RegionIds / TimeOfDay / Weather | 可出现的水域 ID/时段(夜晚永不进选择器)/天气;**空数组=未配置=不出现** |
 | 稀有 | RarityTierId / SpawnWeight | 稀有度轴 ID / 选择正权重(稀有度由数据表达,代码无硬编码档位) |
 | 体重 | Minimum/MaximumWeightKilograms | 服务器在区间内抽取真实重量;min≤max |

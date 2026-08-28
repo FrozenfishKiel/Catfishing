@@ -73,7 +73,7 @@ public:
 	/** 查找绑定在指定竿上的存活未终态会话（操作位与会话解耦后，竿是会话的空间锚）；没有则空。 */
 	ACatFishingSession* FindActiveSessionByRod(const ACatFishingRodActor* RodActor);
 
-	/** 抢抄目标搜索：按鱼与请求者的水平距离找最近的 NearShore 阶段会话；没有则空。 */
+	/** 抄网目标粗筛：按鱼与请求者的水平距离找最近的已上钩会话；精确范围仍由 Session 裁决。 */
 	ACatFishingSession* FindNearestScoopableSession(const FVector& WorldLocation, double MaxDistanceCentimeters);
 
 	/**

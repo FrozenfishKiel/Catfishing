@@ -18,7 +18,7 @@ ECatFishingCommandError MapDomainCommandError(const ECatDomainCommandError Error
 	}
 }
 
-// 旧抢抄载荷适配流程：只搬运请求、会话和期望版本；身份与目标鱼护必须由服务器入口重新写入。
+// 旧抢抄载荷适配流程：只搬运请求、会话和期望版本；身份由服务器入口重新写入，流程不携带容器目标。
 FCatFishingSessionCommandContext MakeFishingSessionCommandContext(const FGuid FishingSessionId,
 	const FCatScoopCommand& LegacyCommand)
 {

@@ -47,7 +47,7 @@ function Assert-FishingPlayerEntryStatic {
     }
     Assert-ContainsText $Module.tracking_rule "模块级缺口" "FishingPlayerEntry tracking_rule must keep new questions under module-level gaps"
     Assert-ContainsText $Module.tracking_rule "不能散成" "FishingPlayerEntry tracking_rule must reject fragmented task tracking"
-    foreach ($Needle in @("正式 Lake", "唯一输入配置", "完整 Fishing 玩家命令链", "个人鱼获", "构建和运行证据")) {
+    foreach ($Needle in @("正式 Lake", "唯一输入配置", "完整 Fishing 玩家命令链", "力竭鱼生成世界 Actor", "嘴叼", "指定地面鱼护入箱", "构建和运行证据")) {
         Assert-ContainsText $Module.completion_rule $Needle "FishingPlayerEntry completion_rule missing required endpoint: $Needle"
     }
     foreach ($Key in @("fishing_player_entry_static_check", "fishing_player_entry_build", "fishing_player_entry_automation")) {

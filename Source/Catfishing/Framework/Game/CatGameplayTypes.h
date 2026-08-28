@@ -404,7 +404,7 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerAssistFishingSession(FGuid FishingSessionId, FGuid RequestId, int64 ExpectedRevision);
 
-	/** 把 NearShore 抢抄意图转给指定 FishingSession；服务器覆盖本人的鱼护 ID，首个合法提交者由 Compare-and-Commit 决定。 */
+	/** 把抄网意图转给指定 FishingSession；鱼上钩且范围合法时直接生成抄手嘴叼的世界鱼。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestScoop(FGuid FishingSessionId, FCatScoopCommand Command);
 

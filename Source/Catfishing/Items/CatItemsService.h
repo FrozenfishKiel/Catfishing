@@ -35,7 +35,7 @@ public:
 	/** 返回容器的服务器种类与真实 Actor 宿主；供空间权限校验使用，不暴露私有主人身份。 */
 	bool TryGetContainerHost(FGuid ContainerId, ECatContainerKind& OutKind, AActor*& OutAuthorityActor) const;
 
-	/** 首个合法抢抄终态调用的唯一鱼实例创建入口；提交会话预分配 ID，同 RequestId/会话重放只返回首次 Committed DTO。 */
+	/** 嘴叼世界鱼对具体鱼护入箱时的唯一鱼实例提交入口；同 RequestId/会话重放只返回首次 Committed DTO。 */
 	FCatCaptureCommitResult CommitCapture(const FCatCaptureCommitCommand& Command);
 
 	/** 在源/目标容器版本同时匹配时原子移动一个容器物体；当前只有鱼策略会提交，其他类别先显式拒绝，调用方不能直接写数组。 */

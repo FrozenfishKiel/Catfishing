@@ -14,6 +14,7 @@
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Components/CatFishingLineComponent.h"
 #include "Fishing/CatFishingTypes.h"
+#include "Fishing/Presentation/CatFishAnimInstance.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "GameFramework/PlayerState.h"
 #include "Net/UnrealNetwork.h"
@@ -142,14 +143,25 @@ bool FCatFishingActorNativeBasesContractTest::RunTest(const FString& Parameters)
 	}
 	const UFunction* CastMontageFunction = ACatCharacter::StaticClass()->FindFunctionByName(
 		GET_FUNCTION_NAME_CHECKED(ACatCharacter, PlayFishingCastMontageFromPresentation));
+	const UFunction* OutcomeMontageFunction = ACatCharacter::StaticClass()->FindFunctionByName(
+		GET_FUNCTION_NAME_CHECKED(ACatCharacter, PlayFishingOutcomeMontageFromPresentation));
 	TestNotNull(TEXT("character exposes the replicated-state cast montage presentation entry"), CastMontageFunction);
+	TestNotNull(TEXT("character exposes the server-confirmed outcome montage presentation entry"), OutcomeMontageFunction);
 	if (CastMontageFunction)
 	{
 		TestTrue(TEXT("cast montage entry is cosmetic"), CastMontageFunction->HasAnyFunctionFlags(FUNC_BlueprintCosmetic));
 	}
+	if (OutcomeMontageFunction)
+	{
+		TestTrue(TEXT("outcome montage entry is cosmetic"), OutcomeMontageFunction->HasAnyFunctionFlags(FUNC_BlueprintCosmetic));
+	}
 	const UCatFishingPresentationSettings* PresentationSettings = GetDefault<UCatFishingPresentationSettings>();
 	TestFalse(TEXT("cast montage is configured"), PresentationSettings->CastMontage.IsNull());
 	TestNotNull(TEXT("configured cast montage resolves"), PresentationSettings->CastMontage.LoadSynchronous());
+	TestFalse(TEXT("line-broken montage is configured"), PresentationSettings->LineBrokenMontage.IsNull());
+	TestNotNull(TEXT("configured line-broken montage resolves"), PresentationSettings->LineBrokenMontage.LoadSynchronous());
+	TestFalse(TEXT("cat-in-water montage is configured"), PresentationSettings->CatInWaterMontage.IsNull());
+	TestNotNull(TEXT("configured cat-in-water montage resolves"), PresentationSettings->CatInWaterMontage.LoadSynchronous());
 
 	FTestWorldWrapper WorldWrapper;
 	TestTrue(TEXT("create actor contract game world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
@@ -315,6 +327,14 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("fish visual root consumes frozen scale"),
 			FishVisualRoot->GetRelativeScale3D().Equals(FVector(1.25), UE_KINDA_SMALL_NUMBER));
 	}
+	TestTrue(TEXT("restrained fish accepts a nonzero intended swim speed"),
+		Fish->ApplyFightStepFromAuthority(ECatFishMotionIntent::StrugglingOutward, 12.0,
+			Fish->GetActorLocation(), 0.05f, 1.0f, 1.0f, 75.0f, true));
+	TestEqual(TEXT("restrained fish publishes intent speed even without displacement"),
+		Fish->GetPresentationState().IntendedSwimSpeedCentimetersPerSecond, 75.0f);
+	TestFalse(TEXT("fish rejects a negative intended swim speed"),
+		Fish->ApplyFightStepFromAuthority(ECatFishMotionIntent::StrugglingOutward, 12.0,
+			Fish->GetActorLocation(), 0.05f, 1.0f, 1.0f, -1.0f, true));
 	const double NonFiniteLineLength = TNumericLimits<double>::Max() * 2.0;
 	TestFalse(TEXT("fish rejects non-finite line length"), Fish->InitializeAuthoritativeIdentity(
 		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Fish"), NonFiniteLineLength, 1.0));
@@ -346,11 +366,25 @@ bool FCatFishEncounterMovementContractTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("fish is not owner-only"), FishCDO->bOnlyRelevantToOwner);
 	const UScriptStruct* StateStruct = FCatFishEncounterPresentationState::StaticStruct();
 	const TSet<FName> ExpectedFields = { TEXT("FishingSessionId"), TEXT("CastAttemptId"), TEXT("FishDefinitionId"),
-		TEXT("VisualScale"), TEXT("MotionIntent"), TEXT("CurrentLineLength"), TEXT("FishLineAlignment"),
+		TEXT("VisualScale"), TEXT("MotionIntent"), TEXT("IntendedSwimSpeedCentimetersPerSecond"),
+		TEXT("CurrentLineLength"), TEXT("FishLineAlignment"),
 		TEXT("NormalizedLineLoad"), TEXT("bStrongConfrontation") };
 	for (TFieldIterator<FProperty> It(StateStruct); It; ++It)
 	{
 		TestTrue(FString::Printf(TEXT("fish state field %s is whitelisted"), *It->GetName()), ExpectedFields.Contains(It->GetFName()));
+	}
+	const UClass* FishAnimClass = UCatFishAnimInstance::StaticClass();
+	for (const FName PropertyName : { FName(TEXT("MotionIntent")), FName(TEXT("IntendedSwimSpeedCentimetersPerSecond")),
+		FName(TEXT("SwimPlayRate")), FName(TEXT("FishLineAlignment")), FName(TEXT("NormalizedLineLoad")),
+		FName(TEXT("bStrongConfrontation")) })
+	{
+		const FProperty* Property = FindFProperty<FProperty>(FishAnimClass, PropertyName);
+		TestNotNull(FString::Printf(TEXT("fish anim instance exposes %s"), *PropertyName.ToString()), Property);
+		if (Property)
+		{
+			TestTrue(FString::Printf(TEXT("fish anim property %s is Blueprint visible"), *PropertyName.ToString()),
+				Property->HasAnyPropertyFlags(CPF_BlueprintVisible));
+		}
 	}
 	return !HasAnyErrors();
 }

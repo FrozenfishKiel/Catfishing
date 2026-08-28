@@ -3,6 +3,9 @@
 #include "Engine/World.h"
 #include "Environment/CatChumFieldSettings.h"
 #include "Environment/CatWaterQuerySubsystem.h"
+#include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Kismet/GameplayStatics.h"
 
@@ -119,6 +122,31 @@ float UCatFishingAimLibrary::ChargeAlphaFromHeldSeconds(const float HeldSeconds)
 	const double MaxSeconds = FMath::Max(0.05, GetDefault<UCatFishingSettings>()->ChumChargeMaxSeconds);
 	// 按住时长线性映射到 [0,1]，超过上限的按住时间视为满蓄力
 	return static_cast<float>(FMath::Clamp(static_cast<double>(HeldSeconds) / MaxSeconds, 0.0, 1.0));
+}
+
+// 抄网有效长度解析流程：先读取全局上限，再从服务器装备快照读取当前抄网定义；两者必须同时完整。
+// debug 与服务器共用这条入口，避免无装备时仍使用全局值画绿色范围、权威裁决却把距离算成 0。
+bool UCatFishingAimLibrary::TryResolveScoopReach(const UCatEquipmentComponent* Equipment,
+	double& OutReachCentimeters)
+{
+	OutReachCentimeters = 0.0;
+	const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
+	if (!FishingSettings || !FishingSettings->TryGetScoopReach(OutReachCentimeters))
+	{
+		return false;
+	}
+
+	const FName SelectedScoopDefinitionId = Equipment ? Equipment->GetSnapshot().ScoopNetDefinitionId : NAME_None;
+	const UCatEquipmentDefinition* ScoopDefinition = SelectedScoopDefinitionId.IsNone() ? nullptr
+		: GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(SelectedScoopDefinitionId);
+	if (!ScoopDefinition || ScoopDefinition->Kind != ECatEquipmentKind::ScoopNet
+		|| !ScoopDefinition->IsRuntimeDefinitionReady() || ScoopDefinition->ScoopReachCentimeters <= 0.0)
+	{
+		OutReachCentimeters = 0.0;
+		return false;
+	}
+	OutReachCentimeters = FMath::Min(OutReachCentimeters, ScoopDefinition->ScoopReachCentimeters);
+	return FMath::IsFinite(OutReachCentimeters) && OutReachCentimeters > 0.0;
 }
 
 // 抄网判定流程：俯视投影下的「线段 ∩ 圆」+ 独立的垂直高度差上限。

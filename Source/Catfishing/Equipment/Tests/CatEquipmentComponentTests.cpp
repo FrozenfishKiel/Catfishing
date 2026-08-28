@@ -2,10 +2,13 @@
 
 #include "Misc/AutomationTest.h"
 
+#include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
+#include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/Actor.h"
+#include "GameFramework/PlayerState.h"
 #include "Tests/AutomationCommon.h"
 #include "UObject/StrongObjectPtr.h"
 
@@ -22,6 +25,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatEquipmentComponentShopGrantEquipsPersonalRodTest,
 	"Catfishing.Unit.Equipment.Component.ShopGrantEquipsPersonalRodAndReplays",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatEquipmentComponentStarterScoopGrantTest,
+	"Catfishing.Unit.Equipment.Component.DevelopmentStarterScoopIsGrantedAndSelectedOnPossession",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 namespace CatEquipmentComponentTest
@@ -100,6 +108,49 @@ namespace CatEquipmentComponentTest
 			}
 		}
 	};
+}
+
+// 开发期默认抄网流程：正式配置只打开独立抄网发放开关，不打开整套 Starter 自动装配；服务器首次占有
+// Character 后必须给本人库存写入恰好一份基础抄网并选中，让 F 的权威装备校验和绿色范围同时成立。
+bool FCatEquipmentComponentStarterScoopGrantTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	if (!TestTrue(TEXT("创建默认抄网发放测试 Game World"), WorldWrapper.CreateTestWorld(EWorldType::Game)))
+	{
+		return false;
+	}
+	UWorld* World = WorldWrapper.GetTestWorld();
+	ACatfishingPlayerController* Controller = World ? World->SpawnActor<ACatfishingPlayerController>() : nullptr;
+	ACatfishingPlayerState* PlayerState = World ? World->SpawnActor<ACatfishingPlayerState>() : nullptr;
+	ACatCharacter* Character = World ? World->SpawnActor<ACatCharacter>() : nullptr;
+	if (!TestNotNull(TEXT("创建默认抄网 Controller"), Controller)
+		|| !TestNotNull(TEXT("创建默认抄网 PlayerState"), PlayerState)
+		|| !TestNotNull(TEXT("创建默认抄网 Character"), Character))
+	{
+		return false;
+	}
+
+	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+	TestTrue(TEXT("开发期默认抄网开关已打开"), Settings && Settings->bAutoGrantStarterScoopNet);
+	TestFalse(TEXT("整套 Starter 自动装配仍保持关闭"), Settings && Settings->bAutoConfigureStarterLoadout);
+	TestEqual(TEXT("默认发放使用基础抄网定义"),
+		Settings ? Settings->StarterScoopNetDefinitionId : NAME_None, FName(TEXT("StarterScoopNet")));
+
+	Controller->PlayerState = PlayerState;
+	Character->SetPlayerState(PlayerState);
+	Controller->Possess(Character);
+	const FCatEquipmentLoadoutSnapshot& Snapshot = Character->GetEquipmentComponent()->GetSnapshot();
+	TestEqual(TEXT("服务器占有后自动选中基础抄网"), Snapshot.ScoopNetDefinitionId,
+		Settings->StarterScoopNetDefinitionId);
+	const int32 StarterScoopQuantity = Snapshot.InventorySlots.FilterByPredicate(
+		[Settings](const FCatRunInventorySlot& Slot)
+		{
+			return Slot.DefinitionId == Settings->StarterScoopNetDefinitionId && Slot.Quantity > 0;
+		}).Num();
+	TestEqual(TEXT("本人随身库存只有一个基础抄网格"), StarterScoopQuantity, 1);
+	WorldWrapper.ForwardErrorMessages(this);
+	return !HasAnyErrors();
 }
 
 // 测试流程：默认装备目录为空时提交数量型物品授予；Result 必须拒绝，Snapshot Revision、库存格数组和装配字段保持初始值。

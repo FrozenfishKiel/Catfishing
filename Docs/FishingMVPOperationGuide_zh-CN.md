@@ -357,12 +357,12 @@ Event BeginPlay
          RodDefinitionId      = "Rod_Basic"
          BaitDefinitionId     = "Bait_Basic"
          FloatDefinitionId    = "Float_Basic"
-         ScoopNetDefinitionId = "ScoopNet_Basic"      ← 第 4 个参数，抢抄必需
+         ScoopNetDefinitionId = "StarterScoopNet"     ← 第 4 个参数；当前开发配置会另行默认发放并选中
 ```
 
 **怎么知道成功了**：这是个 `Server, Reliable` RPC，没有回执结构体。判断方式是**轮询 `Get Snapshot` 的 `Revision` 是否从 0 变成 1**，或者监听装备组件的复制变化。建议在 UI 上显示当前 `RodDefinitionId`，非 `None` 就说明装配好了。
 
-> `ScoopNetDefinitionId` 留空（`None`）也能装配成功，但**近岸抢抄会失败** —— `RequestScoop` 要求抄手 Loadout 里有一个 `Kind == ScoopNet` 的有效装备，否则返回 `PolicyUndecided`。想测抄鱼就必须填上。
+> `RequestScoop` 仍要求服务器装备快照里存在有效 `ScoopNet`。当前 `bAutoGrantStarterScoopNet=True` 会在服务器首次占有时给每名玩家发放并选中 `StarterScoopNet`，所以手工装配留空也能继续测试抄网；正式获取方式接入后关闭该临时开关，届时必须通过商店/奖励获得并选择抄网。
 
 ---
 
@@ -384,9 +384,9 @@ Event BeginPlay
 | 8 | 3 秒内按住左键 | `Phase=HookedFight` |
 | 9 | 持续按住左键收线 | Snapshot 里 `NormalizedFishStamina` 下降 |
 | 10 | 鱼被收到面前（**搏斗中就可以**） | debug 里鱼身上的圈从红变绿 = 现在按 F 抄得到 |
-| 11 | 对着鱼按 F | 抄上来；失败看 `Event=scoop_rejected` 的逐项谓词 |
+| 11 | 对着鱼按 F | 不论鱼剩余体力，范围合法即直接变成嘴叼世界鱼；失败看 `Event=scoop_rejected` 的逐项谓词 |
 | 12 | 或者等鱼翻肚 | `Phase=ExhaustedReel`；仍可按 F 抄，也可继续按住左键把鱼拖上岸 |
-| 13 | 鱼落到岸上后准星对准并按 E | 出现交互提示；服务器只允许一个玩家成功拾取，鱼 Actor 随后消失 |
+| 13 | 鱼落到岸上后准星对准并按 E | 服务器只允许一个玩家成功叼起；随后再对具体地面鱼护按 E 才入箱 |
 
 鱼生成时的大小由服务器随机重量决定：`1kg` 对应当前 Mesh 的 `Scale=1`，重量按体积关系取立方根换算并裁在
 `0.75~1.75`。水中鱼和岸上拾取鱼共用同一个复制缩放值；若要调观感，到项目设置
@@ -404,7 +404,7 @@ Event BeginPlay
 
 ### ~~1. 抢抄需要 ScoopNet，但装配接口传不进去~~ ✅ 已修
 
-`ServerConfigureEquipment` 已加第 4 个参数 `ScoopNetDefinitionId` 并往下传给 `ConfigureLoadoutFromAuthority`。装配时填 `"ScoopNet_Basic"` 即可。
+`ServerConfigureEquipment` 已加第 4 个参数 `ScoopNetDefinitionId` 并往下传给 `ConfigureLoadoutFromAuthority`。当前正式目录定义填 `"StarterScoopNet"`；开发期默认发放开启时可留空沿用服务器已选中的抄网。
 
 ### ~~2. 打窝需要窝料库存，但没有发放入口~~ ✅ 已修
 
@@ -447,8 +447,8 @@ Event BeginPlay
 
 ```
 /Game/Data/Abilities/   DA_CatAbilityInputConfig, DA_CatAbilitySet_Default
-/Game/Data/Equipment/   DA_Rod_Basic, DA_Bait_Basic, DA_Float_Basic,
-                        DA_ScoopNet_Basic, DA_Chum_Basic
+/Game/Catfishing/Data/Equipment/   Equip_Rod_StarterT1, Equip_Bait_Bug, Equip_Float_Feather,
+                                   Equip_ScoopNet_Starter, Equip_Chum_Bug（以及其他正式目录定义）
 /Game/Data/Fish/        DA_Fish_Test01, DA_Bite_Test01, DA_Fight_Test01
 /Game/Data/Curves/      Curve_ChumDistanceFalloff, Curve_ChumTimeFalloff
 ```

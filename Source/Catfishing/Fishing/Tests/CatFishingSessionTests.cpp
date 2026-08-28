@@ -6,19 +6,22 @@
 
 #include "Character/CatCharacter.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
+#include "Data/CatFishDefinition.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
+#include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerState.h"
-#include "Items/CatContainerReplicationComponent.h"
-#include "Items/CatItemsService.h"
 #include "Items/CatWorldItemSettings.h"
+#include "Items/World/CatFishPickupActor.h"
+#include "OnlineSubsystemTypes.h"
 #include "StateTree.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -284,6 +287,27 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingSessionLineBreakKeepsRodOperableTest,
 	"Catfishing.Unit.Fishing.Session.LineBreakEndsOnlyCurrentSessionAndKeepsRodOperable",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingSessionOutcomePresentationTagTest,
+	"Catfishing.Unit.Fishing.Session.LineBreakAndCatInWaterResolveDistinctCatPresentationTags",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingSessionOutcomePresentationTagTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	TestTrue(TEXT("line break resolves the line-broken cat presentation"),
+		ACatFishingSession::ResolveTerminalFisherPresentationTag(ECatFishingOutcome::LineBroken)
+			== CatFishingAbilityTags::Cosmetic_Fishing_LineBroken);
+	TestTrue(TEXT("cat in water resolves the cat-in-water presentation"),
+		ACatFishingSession::ResolveTerminalFisherPresentationTag(ECatFishingOutcome::CatInWater)
+			== CatFishingAbilityTags::Cosmetic_Fishing_CatInWater);
+	TestFalse(TEXT("ordinary escape does not borrow either cat failure montage"),
+		ACatFishingSession::ResolveTerminalFisherPresentationTag(ECatFishingOutcome::Escaped).IsValid());
+	TestFalse(TEXT("successful catch does not borrow either cat failure montage"),
+		ACatFishingSession::ResolveTerminalFisherPresentationTag(ECatFishingOutcome::Caught).IsValid());
+	return !HasAnyErrors();
+}
 
 bool FCatFishingSessionLineBreakKeepsRodOperableTest::RunTest(const FString& Parameters)
 {
@@ -572,100 +596,97 @@ bool FCatFishingSessionSnapshotVersionMutationRulesTest::RunTest(const FString& 
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatFishingSessionExistingCaptureReconciliationTest,
-	"Catfishing.Unit.Fishing.Session.ExistingItemsCaptureReconcilesUsingCommittedFacts",
+	FCatFishingSessionScoopMouthCarryTest,
+	"Catfishing.Unit.Fishing.Session.ScoopFullStaminaFishDirectlyIntoMouthCarry",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-bool FCatFishingSessionExistingCaptureReconciliationTest::RunTest(const FString& Parameters)
+bool FCatFishingSessionScoopMouthCarryTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	FTestWorldWrapper WorldWrapper;
-	TestTrue(TEXT("Creates authoritative reconciliation test world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	TestTrue(TEXT("创建满体力抄网嘴叼测试 World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	WorldWrapper.ForwardErrorMessages(this);
 	UWorld* World = WorldWrapper.GetTestWorld();
-	if (!World)
+	ACatfishingPlayerController* Controller = World ? World->SpawnActor<ACatfishingPlayerController>() : nullptr;
+	ACatfishingPlayerState* PlayerState = World ? World->SpawnActor<ACatfishingPlayerState>() : nullptr;
+	ACatCharacter* Character = World ? World->SpawnActor<ACatCharacter>() : nullptr;
+	ACatFishingSession* Session = World ? World->SpawnActor<ACatFishingSession>() : nullptr;
+	ACatFishEncounterActor* Encounter = World ? World->SpawnActor<ACatFishEncounterActor>() : nullptr;
+	UCatFishDefinition* Definition = NewObject<UCatFishDefinition>(GetTransientPackage());
+	if (!TestNotNull(TEXT("生成项目 Controller"), Controller)
+		|| !TestNotNull(TEXT("生成项目 PlayerState"), PlayerState)
+		|| !TestNotNull(TEXT("生成抄网角色"), Character)
+		|| !TestNotNull(TEXT("生成钓鱼会话"), Session)
+		|| !TestNotNull(TEXT("生成水中鱼"), Encounter)
+		|| !TestNotNull(TEXT("创建鱼定义"), Definition))
 	{
 		return false;
 	}
-	UCatItemsService* ItemsService = World->GetSubsystem<UCatItemsService>();
-	AActor* ContainerHost = World->SpawnActor<AActor>();
-	UCatContainerReplicationComponent* ContainerComponent = ContainerHost
-		? NewObject<UCatContainerReplicationComponent>(ContainerHost) : nullptr;
-	ACatFishingSession* Session = World->SpawnActor<ACatFishingSession>();
-	ACatFishingSession* RejectingSession = World->SpawnActor<ACatFishingSession>();
-	ACatFishingSession* NonAuthoritySession = World->SpawnActor<ACatFishingSession>();
-	if (!TestNotNull(TEXT("Creates real Items service"), ItemsService)
-		|| !TestNotNull(TEXT("Spawns Items container host"), ContainerHost)
-		|| !TestNotNull(TEXT("Creates Items replication component"), ContainerComponent)
-		|| !TestNotNull(TEXT("Spawns session for committed capture reconciliation"), Session)
-		|| !TestNotNull(TEXT("Spawns session for malformed committed capture rejection"), RejectingSession)
-		|| !TestNotNull(TEXT("Spawns non-authority session for reconciliation guard"), NonAuthoritySession))
+
+	Definition->bEnableRuntimeDefinition = true;
+	Definition->FishDefinitionId = TEXT("FullStaminaScoopFish");
+	Definition->BodyClass = ECatFishBodyClass::Standard;
+	Definition->SacrificeContribution = 1;
+	Definition->RarityTierId = TEXT("Common");
+	Definition->RegionIds = {TEXT("LakeA")};
+	Definition->TimeOfDay = {ECatEnvironmentTimeOfDay::Morning};
+	Definition->Weather = {ECatEnvironmentWeather::Clear};
+	Definition->SpawnWeight = 1.0;
+	Definition->MinimumWeightKilograms = 0.5;
+	Definition->MaximumWeightKilograms = 8.0;
+	Definition->MinimumFightParticipants = 1;
+	Definition->FishStrength = 1.0;
+	Definition->FishFightStamina = 100.0;
+	Definition->BitePersonalityId = TEXT("Nibble");
+	Definition->FightPersonalityId = TEXT("Steady");
+	Definition->FoodSafety = ECatFishFoodSafety::Safe;
+	Definition->EatingExperience = 1.0;
+	TestTrue(TEXT("测试鱼定义满足正式运行校验"), Definition->IsRuntimeDefinitionReady());
+
+	const FString StableNetId(TEXT("ScoopMouthCarryPlayer"));
+	const FUniqueNetIdRef UniqueId = FUniqueNetIdString::Create(StableNetId, FName(TEXT("CAT_TEST")));
+	PlayerState->SetUniqueId(FUniqueNetIdRepl(UniqueId));
+	Controller->PlayerState = PlayerState;
+	Character->SetPlayerState(PlayerState);
+	Controller->Possess(Character);
+	if (!Character->HasActorBegunPlay())
 	{
-		return false;
+		Character->DispatchBeginPlay();
 	}
-	ContainerHost->AddInstanceComponent(ContainerComponent);
-	ContainerComponent->RegisterComponent();
-	const FString FirstOwnerStableNetId = TEXT("FirstOwner");
-	const FGuid ContainerId = FGuid::NewGuid();
-	const FGuid FishingSessionId = FGuid::NewGuid();
-	TestTrue(TEXT("Registers real ground fish guard"), ItemsService->RegisterContainer(ContainerComponent, ContainerId,
-		ECatContainerKind::FishGuard, FString(), 2));
-	FCatContainerSnapshot ContainerSnapshot;
-	if (!ItemsService->TryGetContainerSnapshot(ContainerId, ContainerSnapshot))
+
+	Session->Snapshot.FishingSessionId = FGuid::NewGuid();
+	Session->Snapshot.FishDefinitionId = Definition->FishDefinitionId;
+	Session->Snapshot.Phase = ECatFishingPhase::HookedFight;
+	Session->Snapshot.FishEncounterActor = Encounter;
+	Session->Snapshot.FishFightStaminaRemaining = Definition->FishFightStamina;
+	Session->Snapshot.NormalizedFishStamina = 1.0;
+	Session->FishDefinition = Definition;
+	Session->FishWeightKilograms = 2.5;
+	Session->FishVisualScale = 1.0;
+	Session->FisherStableNetId = TEXT("OriginalFisher");
+	Session->FightParticipantIds.Add(Session->FisherStableNetId);
+	Session->AttemptSnapshot.WaterRegion.RegionId = TEXT("LakeA");
+	Session->AttemptSnapshot.WaterRegion.GeometryRevision = 1;
+
+	TestTrue(TEXT("鱼满体力时抄网交接仍然成功"), Session->SpawnScoopedFishPickupFromAuthority(
+		Character, PlayerState, StableNetId));
+	ACatFishPickupActor* CarriedFish = ACatFishPickupActor::FindCarriedFish(Character);
+	if (TestNotNull(TEXT("抄网成功后角色嘴上存在世界鱼"), CarriedFish))
 	{
-		ItemsService->UnregisterContainer(ContainerComponent);
-		return false;
+		TestEqual(TEXT("抄网鱼进入与 E 拾鱼相同的 Carried 状态"),
+			CarriedFish->GetPresentationState().State, ECatFishPickupState::Carried);
+		TestEqual(TEXT("嘴叼鱼保留来源会话"), CarriedFish->GetPresentationState().FishingSessionId,
+			Session->Snapshot.FishingSessionId);
+		TestEqual(TEXT("嘴叼鱼保留鱼种"), CarriedFish->GetPresentationState().FishDefinitionId,
+			Definition->FishDefinitionId);
+		TestEqual(TEXT("嘴叼鱼附着在抄手角色下"), CarriedFish->GetAttachParentActor(),
+			static_cast<AActor*>(Character));
 	}
-	FCatCaptureCommitCommand FirstCommand;
-	FirstCommand.Context.RequestId = FGuid::NewGuid();
-	FirstCommand.Context.ExpectedRevision = ContainerSnapshot.Revision;
-	FirstCommand.Context.StableNetId = FirstOwnerStableNetId;
-	FirstCommand.FishingSessionId = FishingSessionId;
-	FirstCommand.FishInstanceId = FGuid::NewGuid();
-	FirstCommand.FishDefinitionId = TEXT("ReconciledFish");
-	FirstCommand.TargetContainerId = ContainerId;
-	FirstCommand.WeightKilograms = 1.25;
-	FirstCommand.SacrificeContribution = 3;
-	const FCatCaptureCommitResult FirstResult = ItemsService->CommitCapture(FirstCommand);
-	TestTrue(TEXT("Commits the real first capture"), FirstResult.Command.bCommitted);
-
-	FCatCaptureCommitCommand ExistingSessionRequest = FirstCommand;
-	ExistingSessionRequest.Context.RequestId = FGuid::NewGuid();
-	ExistingSessionRequest.FishInstanceId = FGuid::NewGuid();
-	const FCatCaptureCommitResult ExistingResult = ItemsService->CommitCapture(ExistingSessionRequest);
-	TestFalse(TEXT("Existing session request does not create a second fish"), ExistingResult.Command.bCommitted);
-	TestEqual(TEXT("Existing session request exposes committed Items fact"), ExistingResult.Command.Error,
-		ECatDomainCommandError::AlreadyResolved);
-	TestEqual(TEXT("Existing session result retains original fish instance"), ExistingResult.Committed.FishInstance.FishInstanceId,
-		FirstResult.Committed.FishInstance.FishInstanceId);
-	TestEqual(TEXT("Existing session result retains original owner"), ExistingResult.Committed.FishInstance.OwnerStableNetId,
-		FirstOwnerStableNetId);
-
-	Session->Snapshot.FishingSessionId = FishingSessionId;
-	Session->Snapshot.FishDefinitionId = FirstCommand.FishDefinitionId;
-	TestTrue(TEXT("Existing committed fact synchronously resolves its fishing session"),
-		Session->ReconcileCommittedCapture(ExistingResult.Committed));
-	TestTrue(TEXT("Reconciliation marks capture resolved"), Session->bCaptureResolved);
-	TestEqual(TEXT("Reconciliation enters Resolved"), Session->Snapshot.Phase, ECatFishingPhase::Resolved);
-	TestEqual(TEXT("Reconciliation records Caught"), Session->Snapshot.Outcome, ECatFishingOutcome::Caught);
-
-	NonAuthoritySession->Snapshot.FishingSessionId = FishingSessionId;
-	NonAuthoritySession->Snapshot.FishDefinitionId = FirstCommand.FishDefinitionId;
-	NonAuthoritySession->SetRole(ROLE_SimulatedProxy);
-	TestFalse(TEXT("Non-authority cannot reconcile an existing Items capture"),
-		NonAuthoritySession->ReconcileCommittedCapture(ExistingResult.Committed));
-	TestFalse(TEXT("Non-authority reconciliation leaves capture unresolved"), NonAuthoritySession->bCaptureResolved);
-	TestEqual(TEXT("Non-authority reconciliation leaves phase unchanged"), NonAuthoritySession->Snapshot.Phase,
-		ECatFishingPhase::Created);
-
-	RejectingSession->Snapshot.FishingSessionId = FishingSessionId;
-	RejectingSession->Snapshot.FishDefinitionId = FirstCommand.FishDefinitionId;
-	FCatCaptureCommittedResult MismatchedCommitted = ExistingResult.Committed;
-	MismatchedCommitted.FishInstance.OwnerStableNetId.Reset();
-	TestFalse(TEXT("Incomplete committed DTO is rejected without finalizing"),
-		RejectingSession->ReconcileCommittedCapture(MismatchedCommitted));
-	TestEqual(TEXT("Rejected committed DTO leaves phase unchanged"), RejectingSession->Snapshot.Phase,
-		ECatFishingPhase::Created);
-	ItemsService->UnregisterContainer(ContainerComponent);
+	TestEqual(TEXT("满体力没有被当作抄网门槛或强制清零"), Session->Snapshot.FishFightStaminaRemaining, 100.0);
+	TestTrue(TEXT("抄网交接关闭本会话"), Session->bCaptureResolved);
+	TestEqual(TEXT("抄网交接进入 Resolved"), Session->Snapshot.Phase, ECatFishingPhase::Resolved);
+	TestEqual(TEXT("抄网交接结果为 Caught"), Session->Snapshot.Outcome, ECatFishingOutcome::Caught);
+	TestTrue(TEXT("水中的旧 Encounter 在嘴叼交接后立即销毁"), Encounter->IsActorBeingDestroyed());
 	return !HasAnyErrors();
 }
 

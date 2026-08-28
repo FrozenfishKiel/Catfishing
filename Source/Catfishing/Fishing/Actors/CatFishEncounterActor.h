@@ -29,12 +29,14 @@ public:
 	 */
 	bool ApplyFightStepFromAuthority(ECatFishMotionIntent MotionIntent, double CurrentLineLength,
 		const FVector& FishWorldPosition, float StepDeltaSeconds = 0.0f, float FishLineAlignment = 0.0f,
-		float NormalizedLineLoad = 0.0f, bool bStrongConfrontation = false);
+		float NormalizedLineLoad = 0.0f, float IntendedSwimSpeedCentimetersPerSecond = 0.0f,
+		bool bStrongConfrontation = false);
 	/** 服务器把高层鱼行为交给独立 StateTree；客户端永不启动平行行为树。 */
 	bool StartFishBehaviorFromAuthority(UStateTree* BehaviorStateTree, UCatFishingFightRunner* FightRunner);
 	void StopFishBehaviorFromAuthority();
 	/** StateTree Task 的唯一意图写口；具体时长和随机流仍由权威 Runner/性格 DA 决定。 */
 	bool BeginBehaviorStateFromStateTree(ECatFishMotionIntent MotionIntent, double& OutDurationSeconds);
+	UFUNCTION(BlueprintPure, Category="Fishing|Fish")
 	const FCatFishEncounterPresentationState& GetPresentationState() const;
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category="Fishing|Fish")
 	void BP_OnFishPresentationChanged(const FCatFishEncounterPresentationState& Previous, const FCatFishEncounterPresentationState& Current);

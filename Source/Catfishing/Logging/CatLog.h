@@ -14,7 +14,7 @@ DECLARE_LOG_CATEGORY_EXTERN(LogCatRun, Log, All);
 // Environment DTO 求值与公开环境快照使用的日志分类，便于证明环境实现没有反向写 Run。
 DECLARE_LOG_CATEGORY_EXTERN(LogCatEnvironment, Log, All);
 
-// Fishing 会话、StateTree 阶段、搏斗协作与首个合法抢抄事务共享的日志分类，用于核对旧“双人抄网”没有回流。
+// Fishing 会话、StateTree 阶段、搏斗协作与首个合法抄网交接共享的日志分类，用于核对旧“双人抄网”没有回流。
 DECLARE_LOG_CATEGORY_EXTERN(LogCatFishing, Log, All);
 
 // Items 容器、捕获、转移、献祭预留、消费与偷鱼 escrow 共享的日志分类，用于追踪每条实物鱼的唯一事务边界。

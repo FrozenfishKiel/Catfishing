@@ -51,7 +51,6 @@ bool FCatFishingServiceFailClosedTest::RunTest(const FString& Parameters)
 	FCatScoopCommand ScoopCommand;
 	ScoopCommand.Context.RequestId = FGuid::NewGuid();
 	ScoopCommand.Context.ExpectedRevision = 1;
-	ScoopCommand.TargetGuardContainerId = FGuid::NewGuid();
 	const FCatScoopResult ScoopResult = Fishing->RequestScoop(FGuid::NewGuid(), nullptr, ScoopCommand);
 	TestFalse(TEXT("未知会话抢抄不提交"), ScoopResult.Command.bCommitted);
 	TestEqual(TEXT("未知会话抢抄返回 NotFound"), ScoopResult.Command.Error, ECatDomainCommandError::NotFound);

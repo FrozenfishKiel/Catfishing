@@ -119,6 +119,8 @@ struct CATFISHING_API FCatFightSimulationState
 struct CATFISHING_API FCatFightStepResult
 {
 	bool bSucceeded = false;
+	/** 本步鱼主动选择的自由游速，单位 cm/s；在线长、岸线和水域约束前产生，仅供表现层表达游动意图。 */
+	double IntendedSwimSpeedCentimetersPerSecond = 0.0;
 	/** 正值=消耗，负值=回复（松开线杯喘气）。 */
 	double CatStaminaDrain = 0.0;
 	double FishStaminaDrain = 0.0;

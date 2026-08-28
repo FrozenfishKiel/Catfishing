@@ -104,6 +104,8 @@ bool FCatFishingFightSimulatorInwardTest::RunTest(const FString& Parameters)
 		Pull.FishStaminaDrain, 50.0 * 0.08 * Config.BaseDrainMultiplier, 1e-6);
 	TestEqual(TEXT("inward direction publishes negative alignment"), Pull.FishLineAlignment, -1.0, 1e-6);
 	TestEqual(TEXT("inward direction publishes zero line load"), Pull.NormalizedLineLoad, 0.0, 1e-6);
+	TestEqual(TEXT("calm intent publishes its unconstrained swim speed"),
+		Pull.IntendedSwimSpeedCentimetersPerSecond, Config.FishCalmSpeedCentimetersPerSecond, 1e-6);
 	TestEqual(TEXT("inward fish motion and rod traction compose"), Pull.ProposedFishWorldPosition.X, 375.0, 1e-6);
 	TestEqual(TEXT("reel request shortens paid line without erasing fish-led inward motion"),
 		Pull.LineLengthCentimeters, 400.0, 1e-6);
@@ -155,6 +157,9 @@ bool FCatFishingFightSimulatorOutwardJudgmentTest::RunTest(const FString& Parame
 		TestEqual(TEXT("stalemate cat drain uses the struggle multiplier"), Step.CatStaminaDrain,
 			40.0 * 0.12 * MakeConfig().StruggleDrainMultiplier, 1e-6);
 		TestEqual(TEXT("stalemate keeps distance"), Step.ProposedFishWorldPosition.X, 500.0, 1e-6);
+		TestEqual(TEXT("restrained fish keeps publishing its struggle swim intent"),
+			Step.IntendedSwimSpeedCentimetersPerSecond,
+			MakeConfig().FishStruggleSpeedCentimetersPerSecond, 1e-6);
 		TestEqual(TEXT("stalemate has no instant outcome"), static_cast<int32>(Step.Outcome), static_cast<int32>(ECatFightStepOutcome::None));
 	}
 	// ① 瞬断：钓组承载 ≤ min(猫力, 鱼力)，取等从严，结果是断线而非损坏鱼竿。

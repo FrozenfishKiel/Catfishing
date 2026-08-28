@@ -5,16 +5,16 @@
 ## 1. 创建前检查
 
 1. 使用已通过编译的 `CatfishingEditor` 打开工程。
-2. 在 Content Browser 创建或进入 `/Game/Catfishing/Fishing/Actors`。
+2. 在 Content Browser 进入当前运行配置使用的 `/Game/Blueprint/Actors`。
 3. 通过 **Blueprint Class → All Classes** 选择下文指定的原生父类；不要从 Demo 的 Character、Controller、GameMode、FishingComponent 或 Session 派生。
 4. 三个原生父类均禁止 Actor Tick，蓝图不得用 Tick 模拟 Session 阶段、鱼体力、鱼竿耐久或权威位移。
 5. 三个 Actor 都复制 Actor movement，并以空间相关方式复制；蓝图表现事件标记为 Cosmetic，只在收到本地原生调用时执行，不会自动向其他网络端广播。
 
-Stage C 建议使用以下正式资产路径：
+当前运行配置使用以下资产路径：
 
-- `/Game/Catfishing/Fishing/Actors/BP_FishingRod`
-- `/Game/Catfishing/Fishing/Actors/BP_FishingHook`
-- `/Game/Catfishing/Fishing/Actors/BP_FishEncounter`
+- `/Game/Blueprint/Actors/BP_CatFishingRodActor`
+- `/Game/Blueprint/Actors/BP_CatFishingHookActor`
+- `/Game/Blueprint/Actors/BP_CatFishEncounterActor`
 
 ## 2. 共同的权威边界
 
@@ -157,13 +157,13 @@ Hook Actor 的权威世界位置来自原生 Actor Transform 与 replicated move
 - 蓝图只消费只读 Session/Attempt 身份与表现 Phase。
 - 蓝图图表中没有 Session、Equipment、Items 写入，也没有 Actor Transform 写入。
 
-## 5. FishEncounter：`BP_FishEncounter`
+## 5. FishEncounter：`BP_CatFishEncounterActor`
 
 ### 5.1 父类与组件挂载
 
 - 原生父类：`/Script/Catfishing.CatFishEncounterActor`
 - C++ 类：`ACatFishEncounterActor`
-- 蓝图资产：`/Game/Catfishing/Fishing/Actors/BP_FishEncounter`
+- 蓝图资产：`/Game/Blueprint/Actors/BP_CatFishEncounterActor`
 - Skeletal Mesh、Static Mesh、AnimBP、材质、Niagara 和 Audio 组件只能添加到 `VisualRoot` 下。
 
 ### 5.2 Transform 与权威边界
@@ -180,6 +180,7 @@ FishEncounter 没有提供给蓝图修改的 canonical authority anchor。鱼的
 - `CastAttemptId`
 - `FishDefinitionId`
 - `MotionIntent`
+- `IntendedSwimSpeedCentimetersPerSecond`：行为意图在线长/岸线约束前选择的自由游速；鱼被挡住不动时仍保持冲刺值
 - `CurrentLineLength`
 - `FishLineAlignment`：鱼游向与鱼线向外方向点积，`-1` 朝竿尖、`0` 横向、`1` 正对外冲
 - `NormalizedLineLoad`：性格幂曲线处理后的服务器受力比例，`0~1`
@@ -192,7 +193,7 @@ Fish 世界位置不在该结构中；它只来自 Actor replicated movement。�
 `BP_OnFishPresentationChanged(Previous, Current)`
 
 - 触发时机：权威身份初始化或客户端 RepNotify 后；BeginPlay 前的变化会合并为 BeginPlay 后的一次派发。
-- 用途：按 `FishDefinitionId` 选择 Mesh/材质/AnimBP；按 `MotionIntent` 选大类动画；用 `NormalizedLineLoad` 连续调挣扎强度；用 `bStrongConfrontation` 切强对抗 Montage/VFX/SFX。
+- 用途：按 `FishDefinitionId` 选择 Mesh/材质/AnimBP；按 `MotionIntent` 选大类动画；用 `IntendedSwimSpeedCentimetersPerSecond` 驱动游泳播放倍率；用 `NormalizedLineLoad` 连续调受力叠加；用 `bStrongConfrontation` 切强对抗 Montage/VFX/SFX。
 - 表现切换不得写鱼体力、Session Phase、Outcome、捕获或 Actor Transform。
 
 `BP_PlayFishPresentationEvent(EventTag)`
@@ -201,11 +202,69 @@ Fish 世界位置不在该结构中；它只来自 Actor replicated movement。�
 - 用途：播放上钩、挣扎、近岸、脱钩或上鱼的 Montage、VFX/SFX。
 - Montage 完成和 AnimNotify 不能生成物品、提交捕获或决定终态。
 
-### 5.5 FishEncounter 资产验收
+### 5.5 把意图游速接到 AnimBP
+
+原生类 `UCatFishAnimInstance` 已负责在每帧从 `ACatFishEncounterActor` 读取复制状态，并输出经过本地平滑的 `SwimPlayRate`；它不读取 `Get Velocity`，因此鱼被线端或岸线挡住时不会错误降成待机。
+
+#### 5.5.1 复制、改父类并换引用
+
+1. 不直接修改资源包里的 `/Game/Underwater_life/Blueprints/Carp_AnimBlueprint`；在 Content Browser 对它执行 **Duplicate**，目标保存为 `/Game/Catfishing/Animation/Fish/ABP_CatFishEncounter`（磁盘对应 `Content/Catfishing/Animation/Fish`）。
+2. 打开新副本，在工具栏选择 **Class Settings**，把 **Parent Class** 从 `AnimInstance` 改为 `CatFishAnimInstance`，然后 **Compile**。编译后，在 AnimGraph 空白处右键搜索 `Get Swim Play Rate` 和 `Get Motion Intent` 应能找到继承的只读变量；找不到说明新原生 DLL 尚未被当前 Editor 加载，需要关闭 Editor、完成 Development 编译后重开。
+3. 打开 `/Game/Blueprint/Actors/BP_CatFishEncounterActor`，选中 `SkeletalMesh` 组件，把 **Animation Mode** 设为 `Use Animation Blueprint`，把 **Anim Class** 从资源包原版改成 `ABP_CatFishEncounter`。
+4. 在新 AnimBP 的 **Class Defaults → Fishing|Animation** 设置：
+   - `Reference Swim Speed Centimeters Per Second = 75`：动画以 `1.0` 倍播放时对应的美术自由游速；
+   - `Minimum Swim Play Rate = 0.5`；
+   - `Maximum Swim Play Rate = 2.0`；
+   - `Swim Play Rate Interpolation Speed = 8.0`。
+
+#### 5.5.2 最小接法：先确认倍率链有效
+
+资源包当前的 `Random Player` 只有每条 Entry 自己的 Min/Max Play Rate，没有可连接 `SwimPlayRate` 的统一动态输入。先用下面的最小图验证：
+
+1. 打开新 AnimBP 的 **AnimGraph**，暂时断开 `Random Player → Output Pose`。
+2. 从 Content Browser 把 `/Game/Underwater_life/Animations/carp_swim_anim` 拖进 AnimGraph，生成 `Sequence Player`。
+3. 选中 `Sequence Player`，确认 **Loop Animation** 开启；在 Details 中找到 **Play Rate**，点击旁边的 **Expose as Pin**，节点上会出现 `Play Rate` 输入引脚。
+4. 在图中右键搜索 `Get Swim Play Rate`，把变量输出接到 `Sequence Player.Play Rate`。
+5. 把 `Sequence Player` 的 Pose 接到 `Output Pose.Result`，Compile、Save。
+
+最小图应该是：
+
+```text
+Get SwimPlayRate ──> Sequence Player(carp_swim_anim).Play Rate
+                              │
+                              └──────────────> Output Pose
+```
+
+PIE 中鱼进入 `StrugglingOutward` 后，即使被鱼线限制在原地，播放倍率也不会按零位移降为待机。可在 AnimBP Debug Filter 选择运行中的 `BP_CatFishEncounterActor`，观察 `IntendedSwimSpeedCentimetersPerSecond` 与 `SwimPlayRate`。
+
+#### 5.5.3 推荐接法：平静、挣扎、力竭状态机
+
+最小图确认有效后，在 AnimGraph 新建状态机 `FishLocomotion`，把状态机输出接到 `Output Pose`：
+
+- `Calm`：放入 `carp_slowswim_anim` 的循环 `Sequence Player`，暴露 `Play Rate` 并连接 `SwimPlayRate`。
+- `Struggle`：放入 `carp_fastswim_anim` 的循环 `Sequence Player`，暴露 `Play Rate` 并连接 `SwimPlayRate`。
+- `AutoHauling`：放入 `carp_die_anim` 或之后的正式侧翻动画，`Loop Animation=false`、`Play Rate=1.0`，不要连接游泳倍率。
+
+Entry 指向 `Calm`，建立以下转换规则：
+
+```text
+Calm       -> Struggle    : MotionIntent == StrugglingOutward
+Struggle   -> Calm        : MotionIntent == CalmOrInward
+Calm       -> AutoHauling : MotionIntent == AutoHauling
+Struggle   -> AutoHauling : MotionIntent == AutoHauling
+```
+
+转换的 Blend Duration 先统一设为 `0.15s`。`AutoHauling` 不需要返回活鱼状态：该阶段结束后 Encounter 会被正式 Pickup 接管或销毁。
+
+`NormalizedLineLoad`、`FishLineAlignment`、`bStrongConfrontation` 只用于之后增加身体弯曲、水花、受力抖动或爆发表现，不要乘进基础 `SwimPlayRate`，否则鱼横向冲刺或被线挡住时又会错误减弱。
+
+无需在 AnimBP Event Graph 中获取 Pawn、计算位置差或设置这些变量；原生 `NativeUpdateAnimation` 已经完成更新。`None` 与 `AutoHauling` 时 `SwimPlayRate` 返回中性 `1.0`，由对应状态选择自己的动画。
+
+### 5.6 FishEncounter 资产验收
 
 - 允许的七类表现工作已覆盖：Fish Mesh、材质、由 Fish Definition 选择的表现皮肤、AnimBP、局部 Montage、VFX、SFX。
 - Mesh、AnimBP、材质、VFX/SFX 全在 `VisualRoot` 子树。
-- 蓝图根据只读 `MotionIntent` 做局部动画，不保存第二份运动/体力/Outcome 状态。
+- 蓝图根据只读 `MotionIntent` 做局部动画，并只消费原生 `SwimPlayRate`；不保存第二份运动/体力/Outcome 状态。
 - 蓝图图表中没有 Session、Equipment、Items 写入，也没有 Actor Transform 写入。
 
 ## 6. 阶段边界与网络验收说明

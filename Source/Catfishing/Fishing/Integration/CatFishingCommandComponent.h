@@ -83,7 +83,7 @@ public:
 	FCatFishingInputEdge SubmitScoop();
 	FCatFishingInputEdge SubmitChum();
 	void ForwardLegacyAssist(FGuid FishingSessionId, FGuid RequestId, int64 ExpectedRevision);
-	/** 旧蓝图抢抄入口的兼容转发；正式鱼护对象缺席时只返回拒绝结果，避免客户端载荷指定错误容器。 */
+	/** 旧蓝图抢抄入口的兼容转发；成功后同样直接变成嘴叼世界鱼，不接受客户端容器目标。 */
 	void ForwardLegacyScoop(FGuid FishingSessionId, FCatScoopCommand Command);
 
 	UPROPERTY(BlueprintAssignable)
@@ -117,7 +117,7 @@ private:
 	void ReceiveResultLocally(const FCatFishingCommandResult& Result);
 	FCatFishingInputEdge MakeDiscreteEdge();
 	void DispatchAbilityCommand(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge);
-	/** 权威侧统一处理 Ability 输入命令；旧抢抄因与世界鱼 E 交互流程冲突而只回送依赖缺失。 */
+	/** 权威侧统一处理 Ability 输入命令；抄网会搜索已上钩目标并交给 Session 完成嘴叼世界鱼交接。 */
 	void HandleAbilityCommandFromAuthority(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge);
 	/**
 	 * 权威侧广播一次性表现事件；Character 按标签决定是否跳过已经由 Ability 预测过的本地动作。

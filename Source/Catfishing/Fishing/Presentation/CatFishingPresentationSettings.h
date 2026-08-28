@@ -40,6 +40,14 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Animation")
 	TSoftObjectPtr<UAnimMontage> CastMontage;
 
+	/** 服务器确认断线终局后，在当前钓手身上播放的一次性受力/拉空表现。 */
+	UPROPERTY(Config, EditAnywhere, Category="Animation")
+	TSoftObjectPtr<UAnimMontage> LineBrokenMontage;
+
+	/** 服务器确认猫体力耗尽或被鱼拖下水后，在当前钓手身上播放的一次性落水表现。 */
+	UPROPERTY(Config, EditAnywhere, Category="Animation")
+	TSoftObjectPtr<UAnimMontage> CatInWaterMontage;
+
 	/** 浮漂等待时的上下振幅（厘米）与频率（Hz）；只作用于 Hook 的 VisualRoot。 */
 	UPROPERTY(Config, EditAnywhere, Category="Bobber", meta=(ClampMin="0", Units="cm"))
 	double BobberCalmAmplitudeCentimeters = 4.0;

@@ -184,12 +184,15 @@ def main() -> None:
     equipment_settings = unreal.get_default_object(_load_class("/Script/Catfishing.CatEquipmentSettings"))
     _require(not bool(_get_property(equipment_settings, "b_auto_configure_starter_loadout", "bAutoConfigureStarterLoadout")),
              "开发期 Starter Loadout 自动装配必须关闭，第四模块只能由商店或解锁授权等正式入口交付装备")
+    _require(bool(_get_property(equipment_settings, "b_auto_grant_starter_scoop_net", "bAutoGrantStarterScoopNet")),
+             "当前开发期默认抄网发放必须显式打开；正式获取接入后应连同本断言一起关闭")
     _require(int(_get_property(equipment_settings, "starter_chum_quantity", "StarterChumQuantity")) > 0,
              "StarterChumQuantity 必须为正")
 
     expected_definitions = [
         ("StarterRodT1", "Rod", "Equip_Rod_StarterT1", "/Game/Catfishing/Data/Equipment/Equip_Rod_StarterT1.Equip_Rod_StarterT1"),
         ("ShopRodT2", "Rod", "Equip_Rod_ShopT2", "/Game/Catfishing/Data/Equipment/Equip_Rod_ShopT2.Equip_Rod_ShopT2"),
+        ("StarterScoopNet", "ScoopNet", "Equip_ScoopNet_Starter", "/Game/Catfishing/Data/Equipment/Equip_ScoopNet_Starter.Equip_ScoopNet_Starter"),
         ("BugBait", "Bait", "Equip_Bait_Bug", "/Game/Catfishing/Data/Equipment/Equip_Bait_Bug.Equip_Bait_Bug"),
         ("FlashingBait", "Bait", "Equip_Bait_Flashing", "/Game/Catfishing/Data/Equipment/Equip_Bait_Flashing.Equip_Bait_Flashing"),
         ("FruitBait", "Bait", "Equip_Bait_Fruit", "/Game/Catfishing/Data/Equipment/Equip_Bait_Fruit.Equip_Bait_Fruit"),
@@ -213,7 +216,7 @@ def main() -> None:
         "StarterRodT1": _get_property(equipment_settings, "starter_rod_definition_id", "StarterRodDefinitionId"),
         "BugBait": _get_property(equipment_settings, "starter_bait_definition_id", "StarterBaitDefinitionId"),
         "FeatherFloat": _get_property(equipment_settings, "starter_float_definition_id", "StarterFloatDefinitionId"),
-        "None": _get_property(equipment_settings, "starter_scoop_net_definition_id", "StarterScoopNetDefinitionId"),
+        "StarterScoopNet": _get_property(equipment_settings, "starter_scoop_net_definition_id", "StarterScoopNetDefinitionId"),
         "BugChum": _get_property(equipment_settings, "starter_chum_definition_id", "StarterChumDefinitionId"),
     }
     for expected, actual in starter_ids.items():
@@ -241,7 +244,7 @@ def main() -> None:
     unreal.log(
         "EQUIPMENT_SHOP_RUNTIME_PASS "
         f"LakeGameMode={actual_game_mode} Controller={controller_class} "
-        "Definitions=StarterRodT1,ShopRodT2,BugBait,FlashingBait,FruitBait,GiantLureBait,MeatBait,"
+        "Definitions=StarterRodT1,ShopRodT2,StarterScoopNet,BugBait,FlashingBait,FruitBait,GiantLureBait,MeatBait,"
         "MoonlightBait,NectarBait,SoundBait,FeatherFloat,YarnBallFloat,BellFloat,BugChum,"
         "FermentedGrainChum,FruitFragranceChum,HolyLightChum "
         "Catalog=ShopRodT2Order,ShopFloatYarnBallOrder,ShopBugChumOrder,FreeBugBaitClaim,FreeStarterRodClaim "
