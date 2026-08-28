@@ -3,6 +3,7 @@
 #include "Character/CatCharacter.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Logging/CatLog.h"
+#include "Logging/CatLogContext.h"
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
@@ -25,6 +26,7 @@
 #include "Fishing/Simulation/CatFishFightMotionSolver.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
+#include "Components/CapsuleComponent.h"
 #include "Components/StateTreeComponent.h"
 #include "GameFramework/PlayerState.h"
 #include "Equipment/CatEquipmentComponent.h"
@@ -418,9 +420,10 @@ bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherContr
 	FightParticipantCharacters.Add(NewStableNetId, NewCharacter);
 	RefreshFightSummary();
 	PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
-	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_fisher_transferred SessionId=%s Phase=%s NewFisher=%s"),
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_fisher_transferred SessionId=%s Phase=%s %s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-		*UEnum::GetValueAsString(Snapshot.Phase), *NewStableNetId);
+		*UEnum::GetValueAsString(Snapshot.Phase),
+		*CatLogContext::BuildControllerFields(NewFisherController));
 	return true;
 }
 
@@ -453,8 +456,16 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	// 会出现"圈画成绿色（够得着）但服务器因为鱼离岸 3.1 米而拒绝"这种表现与判定打架的情况。
 	// 几何上也已经蕴含：抄手必须站在岸上，射线长度有限，所以能被抄到的鱼必然离岸不远。
 	// 抄手自己相对岸线的空间关系：抢抄要求抄手站在岸上（Outside 水域），不能站在水里抄。
+	const FVector ScooperLocation = ScoopingCharacter ? ScoopingCharacter->GetActorLocation() : FVector::ZeroVector;
+	const float CapsuleHalfHeight = ScoopingCharacter && ScoopingCharacter->GetCapsuleComponent()
+		? ScoopingCharacter->GetCapsuleComponent()->GetScaledCapsuleHalfHeight() : 0.0f;
+	const FVector CapsuleFootLocation = ScooperLocation - FVector(0.0, 0.0, CapsuleHalfHeight);
 	const FCatWaterSpatialResult ScooperSpatial = Water && ScoopingCharacter && AttemptSnapshot.WaterRegion.IsValid()
-		? Water->QueryShoreRelation(ScoopingCharacter->GetActorLocation(), AttemptSnapshot.WaterRegion)
+		? Water->QueryShoreRelation(ScooperLocation, AttemptSnapshot.WaterRegion)
+		: FCatWaterSpatialResult{};
+	// 足底与地面点只用于诊断，不参与当前抄网策略。它们能直接区分“角色中心高度超差”与“脚下实际位于水域内”。
+	const FCatWaterSpatialResult CapsuleFootSpatial = Water && ScoopingCharacter && AttemptSnapshot.WaterRegion.IsValid()
+		? Water->QueryShoreRelation(CapsuleFootLocation, AttemptSnapshot.WaterRegion)
 		: FCatWaterSpatialResult{};
 	// 抄网范围口径（与 debug 绘制同源）：抄手向正前方水平发射一条线段，与挂在鱼身上的圆相交即够得着。
 	// 圆心随鱼移动、半径由鱼定义给（这条鱼有多好捞），线段长度由统一有效距离给出，两者互不耦合。
@@ -480,6 +491,17 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 		bHasLineOfSight = !GetWorld()->LineTraceTestByChannel(ScoopingCharacter->GetPawnViewLocation(),
 			Encounter->GetActorLocation(), Settings->ScoopTraceChannel, SightParams);
 	}
+	const FVector GroundQueryLocation = GroundHit.bBlockingHit ? GroundHit.ImpactPoint : CapsuleFootLocation;
+	const FCatWaterSpatialResult GroundSpatial = Water && ScoopingCharacter && AttemptSnapshot.WaterRegion.IsValid()
+		? Water->QueryShoreRelation(GroundQueryLocation, AttemptSnapshot.WaterRegion)
+		: FCatWaterSpatialResult{};
+	const double FishRadius = FishDefinition ? FishDefinition->ScoopTargetRadiusCentimeters : 0.0;
+	const FVector FishLocation = Encounter ? Encounter->GetActorLocation() : FVector::ZeroVector;
+	const bool bMouthFree = ScoopingCharacter && !ACatFishPickupActor::FindCarriedFish(ScoopingCharacter);
+	const bool bRayReachesFish = bScoopReachReady && ScoopingCharacter && Settings && Encounter && FishRadius > 0.0
+		&& UCatFishingAimLibrary::DoesScoopRayReachFish(ScooperLocation, ScooperFacing,
+			static_cast<float>(ScoopReachCentimeters), FishLocation, static_cast<float>(FishRadius),
+			static_cast<float>(Settings->MaximumScoopVerticalDeltaCentimeters));
 	// 终态缓存键=身份+RequestId：同一玩家的网络重放绝不生成第二条世界鱼。
 	const FString CacheKey = FString::Printf(TEXT("%s|%s"), *StableNetId,
 		*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
@@ -489,6 +511,13 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 		Result = *Cached;
 		Result.Command.bCommitted = false;
 		Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_scoop_replay SessionId=%s RequestId=%s CachedCommitted=%s CachedError=%s %s"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			Cached->Command.bCommitted ? TEXT("true") : TEXT("false"),
+			*UEnum::GetValueAsString(Cached->Command.Error),
+			*CatLogContext::BuildControllerFields(ScoopingController));
 		return Result;
 	}
 	if (bCaptureResolved || IsTerminal())
@@ -524,14 +553,11 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 			TEXT("Scoop system dependency unavailable"));
 	}
 	else if (!bScooperFightCapable || !ScoopingCharacter || !Settings
-		|| !ScoopingController->PlayerState || ACatFishPickupActor::FindCarriedFish(ScoopingCharacter)
+		|| !ScoopingController->PlayerState || !bMouthFree
 		|| !bScoopReachReady
 		|| FishDefinition->ScoopTargetRadiusCentimeters <= 0.0
 		|| !ScooperSpatial.bSucceeded || ScooperSpatial.Containment != ECatWaterContainment::Outside
-		|| !UCatFishingAimLibrary::DoesScoopRayReachFish(ScoopingCharacter->GetActorLocation(), ScooperFacing,
-			static_cast<float>(ScoopReachCentimeters),
-			Encounter->GetActorLocation(), static_cast<float>(FishDefinition->ScoopTargetRadiusCentimeters),
-			static_cast<float>(Settings->MaximumScoopVerticalDeltaCentimeters))
+		|| !bRayReachesFish
 		|| !bHasLineOfSight || !bValidGround)
 	{
 		// 汇总校验：抄手战斗能力/角色有效性/嘴上无鱼/基础抄网距离/鱼的可捞半径已裁/抄手在岸上/
@@ -539,29 +565,33 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
 		// 逐项列出失败谓词：抢抄拒绝原因众多且此前完全静默，排查成本太高。
 		// 额外打出水平距离与高度差的实测值：RayReachesFish=0 时光看谓词分不清是"没对准"、"太远"还是"站太高"。
-		const double FishRadius = FishDefinition ? FishDefinition->ScoopTargetRadiusCentimeters : 0.0;
-		const FVector FishLocation = Encounter ? Encounter->GetActorLocation() : FVector::ZeroVector;
-		const FVector ScooperLocation = ScoopingCharacter ? ScoopingCharacter->GetActorLocation() : FVector::ZeroVector;
 		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=scoop_rejected SessionId=%s Phase=%s FightCapable=%d Character=%d MouthFree=%d ScoopReachReady=%d "
+			TEXT("Event=scoop_rejected SessionId=%s RequestId=%s Phase=%s ExpectedRevision=%lld ActualRevision=%lld "
+				"FightCapable=%d Character=%d MouthFree=%d ScoopReachReady=%d "
 				"FishRadiusSet=%d ScooperOnLand=%d RayReachesFish=%d LineOfSight=%d ValidGround=%d "
-				"HorizontalDistanceCm=%.1f VerticalDeltaCm=%.1f ReachCm=%.1f RadiusCm=%.1f"),
+				"GroundTraceHit=%s GroundImpact=%s GroundNormal=%s ScooperFacing=%s FishLocation=%s "
+				"HorizontalDistanceCm=%.1f VerticalDeltaCm=%.1f ReachCm=%.1f RadiusCm=%.1f %s %s %s %s"),
 			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 			*UEnum::GetValueAsString(Snapshot.Phase),
+			Command.Context.ExpectedRevision, Snapshot.Revision,
 			bScooperFightCapable ? 1 : 0, ScoopingCharacter ? 1 : 0,
-			ScoopingCharacter && !ACatFishPickupActor::FindCarriedFish(ScoopingCharacter) ? 1 : 0,
+			bMouthFree ? 1 : 0,
 			bScoopReachReady ? 1 : 0,
 			FishRadius > 0.0 ? 1 : 0,
 			ScooperSpatial.bSucceeded && ScooperSpatial.Containment == ECatWaterContainment::Outside ? 1 : 0,
-			bScoopReachReady && ScoopingCharacter && Settings
-				&& UCatFishingAimLibrary::DoesScoopRayReachFish(ScooperLocation, ScooperFacing,
-					static_cast<float>(ScoopReachCentimeters),
-					FishLocation, static_cast<float>(FishRadius),
-					static_cast<float>(Settings->MaximumScoopVerticalDeltaCentimeters)) ? 1 : 0,
+			bRayReachesFish ? 1 : 0,
 			bHasLineOfSight ? 1 : 0, bValidGround ? 1 : 0,
+			GroundHit.bBlockingHit ? TEXT("true") : TEXT("false"),
+			*GroundHit.ImpactPoint.ToCompactString(), *GroundHit.ImpactNormal.ToCompactString(),
+			*ScooperFacing.ToCompactString(), *FishLocation.ToCompactString(),
 			FVector::Dist2D(ScooperLocation, FishLocation), FMath::Abs(FishLocation.Z - ScooperLocation.Z),
 			bScoopReachReady ? ScoopReachCentimeters : 0.0,
-			FishRadius);
+			FishRadius,
+			*CatLogContext::BuildControllerFields(ScoopingController),
+			*CatLogContext::BuildWaterSpatialFields(TEXT("CenterWater"), ScooperLocation, ScooperSpatial),
+			*CatLogContext::BuildWaterSpatialFields(TEXT("FootWater"), CapsuleFootLocation, CapsuleFootSpatial),
+			*CatLogContext::BuildWaterSpatialFields(TEXT("GroundWater"), GroundQueryLocation, GroundSpatial));
 	}
 	else
 	{
@@ -587,10 +617,20 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	}
 	Result.Command.Revision = Snapshot.Revision;
 	ScoopTerminalCache.Add(CacheKey, Result); // 无论成功失败都写入终态缓存，保证后续重放幂等。
-	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_scoop_terminal SessionId=%s RequestId=%s Committed=%s Error=%s Revision=%lld"),
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_scoop_terminal SessionId=%s RequestId=%s Committed=%s Error=%s Revision=%lld "
+			"Phase=%s FishLocation=%s ScooperFacing=%s GroundTraceHit=%s ValidGround=%s LineOfSight=%s "
+			"RayReachesFish=%s %s %s %s %s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 		*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-		Result.Command.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Command.Error), Snapshot.Revision);
+		Result.Command.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Command.Error),
+		Snapshot.Revision, *UEnum::GetValueAsString(Snapshot.Phase), *FishLocation.ToCompactString(),
+		*ScooperFacing.ToCompactString(), GroundHit.bBlockingHit ? TEXT("true") : TEXT("false"),
+		bValidGround ? TEXT("true") : TEXT("false"), bHasLineOfSight ? TEXT("true") : TEXT("false"),
+		bRayReachesFish ? TEXT("true") : TEXT("false"), *CatLogContext::BuildControllerFields(ScoopingController),
+		*CatLogContext::BuildWaterSpatialFields(TEXT("CenterWater"), ScooperLocation, ScooperSpatial),
+		*CatLogContext::BuildWaterSpatialFields(TEXT("FootWater"), CapsuleFootLocation, CapsuleFootSpatial),
+		*CatLogContext::BuildWaterSpatialFields(TEXT("GroundWater"), GroundQueryLocation, GroundSpatial));
 	return Result;
 }
 
@@ -1272,7 +1312,9 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 			break;
 		}
 		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_line_broken SessionId=%s FishDefinition=%s Cause=%s RemainingLineDurability=%.2f AccumulatedLineWear=%.2f LineLoad=%.3f Alignment=%.3f StrongConfrontation=%s"),
+			TEXT("Event=fishing_line_broken SessionId=%s FishDefinition=%s Cause=%s RemainingLineDurability=%.2f "
+				"AccumulatedLineWear=%.2f LineLoad=%.3f Alignment=%.3f StrongConfrontation=%s "
+				"FishLocation=%s Rod=%s RodTip=%s Hook=%s %s"),
 			*Snapshot.FishingSessionId.ToString(),
 			FishDefinition ? *FishDefinition->FishDefinitionId.ToString() : TEXT("None"),
 			LineBreakCause,
@@ -1280,7 +1322,12 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 			Step.AbsoluteRodWear,
 			Step.NormalizedLineLoad,
 			Step.FishLineAlignment,
-			Step.bStrongConfrontation ? TEXT("true") : TEXT("false"));
+			Step.bStrongConfrontation ? TEXT("true") : TEXT("false"),
+			Snapshot.FishEncounterActor ? *Snapshot.FishEncounterActor->GetActorLocation().ToCompactString() : TEXT("None"),
+			*GetNameSafe(Snapshot.RodActor),
+			Snapshot.RodActor ? *Snapshot.RodActor->GetRodTipWorldTransform().GetLocation().ToCompactString() : TEXT("None"),
+			*GetNameSafe(Snapshot.HookActor),
+			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
 		// 断线只终止当前会话。FinalizeSession 会释放 FishingUse；部署中的鱼竿及其操作槽保持原样，可立即重新抛竿。
 		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::LineBroken, TEXT("Fishing line broken"));
 	}
@@ -1656,9 +1703,12 @@ bool ACatFishingSession::SpawnScoopedFishPickupFromAuthority(ACatCharacter* Scoo
 
 	bCaptureResolved = true;
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=scooped_fish_mouth_carried SessionId=%s Pickup=%s Scooper=%s FishStamina=%.3f"),
+		TEXT("Event=scooped_fish_mouth_carried SessionId=%s Pickup=%s ScooperPlayerState=%s "
+			"ScooperStableNetId=%s ScooperPawn=%s ScooperLocation=%s FishStamina=%.3f"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Pickup),
-		*ScooperStableNetId, Snapshot.FishFightStaminaRemaining);
+		*GetNameSafe(ScoopingPlayerState), *CatLogContext::BuildStableNetIdValue(ScoopingPlayerState),
+		*GetNameSafe(ScoopingCharacter), *ScoopingCharacter->GetActorLocation().ToCompactString(),
+		Snapshot.FishFightStaminaRemaining);
 	FinalizeSession(ECatFishingPhase::Resolved, ECatFishingOutcome::Caught,
 		TEXT("Scoop transferred hooked fish directly to mouth carry"));
 	return IsTerminal() && Snapshot.Phase == ECatFishingPhase::Resolved
@@ -1821,6 +1871,18 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	{
 		return;
 	}
+	// 在释放参与者弱引用和终态 Actor 之前冻结诊断上下文；终态日志必须能够还原是监听主机还是远端玩家、
+	// 鱼/竿/钩当时分别在哪里，而不能依赖已经被清空的运行时引用。
+	const FString FisherFields = CatLogContext::BuildControllerFields(
+		FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr);
+	const FString FishDefinitionValue = FishDefinition ? FishDefinition->FishDefinitionId.ToString() : TEXT("None");
+	const FString EncounterValue = GetNameSafe(Snapshot.FishEncounterActor);
+	const FVector FishLocation = Snapshot.FishEncounterActor
+		? Snapshot.FishEncounterActor->GetActorLocation() : FVector::ZeroVector;
+	const FString RodValue = GetNameSafe(Snapshot.RodActor);
+	const FVector RodTipLocation = Snapshot.RodActor
+		? Snapshot.RodActor->GetRodTipWorldTransform().GetLocation() : FVector::ZeroVector;
+	const FString HookValue = GetNameSafe(Snapshot.HookActor);
 	Snapshot.Phase = FinalPhase;
 	Snapshot.Outcome = FinalOutcome;
 	Snapshot.PhaseStartedServerTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
@@ -1877,15 +1939,25 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	if (FinalPhase == ECatFishingPhase::Resolved
 		&& (FinalOutcome == ECatFishingOutcome::Caught || FinalOutcome == ECatFishingOutcome::Landed))
 	{
-		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_session_resolved SessionId=%s Outcome=%s Reason=%s Revision=%lld"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(FinalOutcome),
-			DiagnosticReason ? DiagnosticReason : TEXT("None"), Snapshot.Revision);
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_session_resolved SessionId=%s Phase=%s Outcome=%s Reason=\"%s\" Revision=%lld "
+				"SnapshotSequence=%lld PhaseEpoch=%lld FishDefinition=%s Encounter=%s FishLocation=%s "
+				"Rod=%s RodTip=%s Hook=%s %s"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(FinalPhase),
+			*UEnum::GetValueAsString(FinalOutcome), DiagnosticReason ? DiagnosticReason : TEXT("None"), Snapshot.Revision,
+			Snapshot.SnapshotSequence, Snapshot.PhaseEpoch, *FishDefinitionValue, *EncounterValue,
+			*FishLocation.ToCompactString(), *RodValue, *RodTipLocation.ToCompactString(), *HookValue, *FisherFields);
 	}
 	else
 	{
-		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_session_terminated SessionId=%s Outcome=%s Reason=%s Revision=%lld"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(FinalOutcome),
-			DiagnosticReason ? DiagnosticReason : TEXT("None"), Snapshot.Revision);
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_session_terminated SessionId=%s Phase=%s Outcome=%s Reason=\"%s\" Revision=%lld "
+				"SnapshotSequence=%lld PhaseEpoch=%lld FishDefinition=%s Encounter=%s FishLocation=%s "
+				"Rod=%s RodTip=%s Hook=%s %s"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(FinalPhase),
+			*UEnum::GetValueAsString(FinalOutcome), DiagnosticReason ? DiagnosticReason : TEXT("None"), Snapshot.Revision,
+			Snapshot.SnapshotSequence, Snapshot.PhaseEpoch, *FishDefinitionValue, *EncounterValue,
+			*FishLocation.ToCompactString(), *RodValue, *RodTipLocation.ToCompactString(), *HookValue, *FisherFields);
 	}
 }
 

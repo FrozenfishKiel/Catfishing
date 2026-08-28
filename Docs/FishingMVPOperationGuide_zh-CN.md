@@ -386,7 +386,7 @@ Event BeginPlay
 | 8 | 3 秒内按住左键 | `Phase=HookedFight` |
 | 9 | 持续按住左键收线 | Snapshot 里 `NormalizedFishStamina` 下降 |
 | 10 | 鱼被收到面前（**搏斗中就可以**） | debug 里鱼身上的圈从红变绿 = 现在按 F 抄得到 |
-| 11 | 对着鱼按 F | 不论鱼剩余体力，范围合法即直接变成嘴叼世界鱼；失败看 `Event=scoop_rejected` 的逐项谓词 |
+| 11 | 对着鱼按 F | 不论鱼剩余体力，范围合法即直接变成嘴叼世界鱼；失败按同一 `RequestId` 查看 `scoop_target_* → scoop_rejected → fishing_scoop_terminal → fishing_command_result` |
 | 12 | 或者等鱼翻肚 | `Phase=ExhaustedReel`；仍可按 F 抄，也可继续按住左键把鱼拖上岸 |
 | 13 | 鱼落到岸上后准星对准并按 E | 服务器只允许一个玩家成功叼起；随后再对具体地面鱼护按 E 才入箱 |
 
@@ -398,7 +398,7 @@ Event BeginPlay
 
 **咬钩要等多久**：`BaseBiteRatePerSecond=0.2` + 泊松分布，clamp 在 `[2, 15]` 秒。嫌慢就把 ini 里 `BaseBiteRatePerSecond` 调大（比如 2.0）再重启。
 
-**日志过滤关键字**：`LogCatRun`、`LogCatFishing`、`LogCatEquipment`
+**日志过滤关键字**：`LogCatRun`、`LogCatFishing`、`LogCatEquipment`。多人差异先比较 `IsLocalController`、`NetMode`、`PawnLocation`；抄网站位再比较 `CenterWater*`、`FootWater*`、`GroundWater*` 的 `Error`、`Containment`、`VerticalDeltaCm` 与 `SignedShoreDistanceCm`。`FootWater`/`GroundWater` 是诊断对照，不代表当前服务器改成用脚底判定。
 
 ---
 

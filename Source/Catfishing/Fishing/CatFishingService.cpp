@@ -898,11 +898,9 @@ bool UCatFishingService::TransferSessionFisher(ACatFishingSession* Session, ACon
 	CompactSessions();
 	const FString NewFisherId = ResolveStableNetId(NewFisherController);
 	if (!Session || Session->IsTerminal() || NewFisherId.IsEmpty()) return false;
-	const FGuid SessionId = Session->GetSnapshot().FishingSessionId;
 	if (Session->GetFisherStableNetIdForAuthority() == NewFisherId) return true;
 	if (!Session->TransferFisherFromAuthority(NewFisherController)) return false;
-	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_session_fisher_transferred SessionId=%s NewFisher=%s"),
-		*SessionId.ToString(EGuidFormats::DigitsWithHyphens), *NewFisherId);
+	// 成功事件由 Session 的唯一状态写口记录完整且脱敏的 Controller 上下文，服务层不再重复输出原始 StableNetId。
 	return true;
 }
 

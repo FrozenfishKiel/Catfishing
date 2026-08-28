@@ -10,11 +10,13 @@
 #include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Integration/CatFishingAimLibrary.h"
+#include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSession.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Logging/CatLog.h"
+#include "Logging/CatLogContext.h"
 #include "GameFramework/PlayerState.h"
 
 bool FCatFishingCooldownGate::TryConsume(const double NowSeconds, const double DurationSeconds,
@@ -65,18 +67,19 @@ void UCatFishingCommandComponent::DeliverResultFromAuthority(const FCatFishingCo
 	}
 
 	// 唯一命令回执出口：每条结果都留结构化日志，失败用 Warning 便于在 Output Log 里过滤。
+	const FString ControllerFields = CatLogContext::BuildControllerFields(Controller);
 	if (Result.bCommitted)
 	{
-		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_command_result Type=%s Committed=true Request=%s Session=%s Revision=%lld"),
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_command_result Type=%s Committed=true Request=%s Session=%s Revision=%lld %s"),
 			*UEnum::GetValueAsString(Result.CommandType), *Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-			*Result.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), Result.Revision);
+			*Result.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), Result.Revision, *ControllerFields);
 	}
 	else
 	{
-		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_command_result Type=%s Committed=false Error=%s Request=%s Session=%s Revision=%lld"),
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_command_result Type=%s Committed=false Error=%s Request=%s Session=%s Revision=%lld %s"),
 			*UEnum::GetValueAsString(Result.CommandType), *UEnum::GetValueAsString(Result.Error),
 			*Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-			*Result.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), Result.Revision);
+			*Result.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), Result.Revision, *ControllerFields);
 	}
 
 	// 服务器就是本机（单机/监听服务器且这就是本地玩家）时直接走本地路径，不需要多绕一次 RPC 网络往返
@@ -94,16 +97,19 @@ void UCatFishingCommandComponent::DeliverPlaceChumResultFromAuthority(const FCat
 {
 	APlayerController* Controller = Cast<APlayerController>(GetOwner());
 	if (!Controller || !Controller->HasAuthority() || !Result.RequestId.IsValid()) return;
+	const FString ControllerFields = CatLogContext::BuildControllerFields(Controller);
 	if (Result.bCommitted)
 	{
-		UE_LOG(LogCatFishing, Log, TEXT("Event=place_chum_result Committed=true Request=%s Field=%s Center=%s"),
+		UE_LOG(LogCatFishing, Log, TEXT("Event=place_chum_result Committed=true Request=%s Field=%s Center=%s %s"),
 			*Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-			*Result.FieldId.ToString(EGuidFormats::DigitsWithHyphens), *Result.ServerCorrectedCenter.ToString());
+			*Result.FieldId.ToString(EGuidFormats::DigitsWithHyphens), *Result.ServerCorrectedCenter.ToString(),
+			*ControllerFields);
 	}
 	else
 	{
-		UE_LOG(LogCatFishing, Warning, TEXT("Event=place_chum_result Committed=false Error=%s Request=%s"),
-			*UEnum::GetValueAsString(Result.Error), *Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=place_chum_result Committed=false Error=%s Request=%s %s"),
+			*UEnum::GetValueAsString(Result.Error), *Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			*ControllerFields);
 	}
 	if (Controller->IsLocalController()) ReceivePlaceChumResultLocally(Result);
 	else ClientReceivePlaceChumResult(Result);
@@ -113,17 +119,19 @@ void UCatFishingCommandComponent::DeliverBeginCastResultFromAuthority(const FCat
 {
 	APlayerController* Controller = Cast<APlayerController>(GetOwner());
 	if (!Controller || !Controller->HasAuthority() || !Result.Command.RequestId.IsValid()) return;
+	const FString ControllerFields = CatLogContext::BuildControllerFields(Controller);
 	if (Result.Command.bCommitted)
 	{
-		UE_LOG(LogCatFishing, Log, TEXT("Event=begin_cast_result Committed=true Request=%s Session=%s Landing=%s"),
+		UE_LOG(LogCatFishing, Log, TEXT("Event=begin_cast_result Committed=true Request=%s Session=%s Landing=%s %s"),
 			*Result.Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Result.Command.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-			*Result.ServerCorrectedLandingWorldPoint.ToString());
+			*Result.ServerCorrectedLandingWorldPoint.ToString(), *ControllerFields);
 	}
 	else
 	{
-		UE_LOG(LogCatFishing, Warning, TEXT("Event=begin_cast_result Committed=false Error=%s Request=%s"),
-			*UEnum::GetValueAsString(Result.Command.Error), *Result.Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=begin_cast_result Committed=false Error=%s Request=%s %s"),
+			*UEnum::GetValueAsString(Result.Command.Error),
+			*Result.Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *ControllerFields);
 	}
 	if (Controller->IsLocalController()) ReceiveBeginCastResultLocally(Result);
 	else ClientReceiveBeginCastResult(Result);
@@ -489,8 +497,9 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		{
 			Result.Error = ECatFishingCommandError::CooldownActive;
 			UE_LOG(LogCatFishing, Warning,
-				TEXT("Event=scoop_cooldown_rejected Request=%s RemainingSeconds=%.3f"),
-				*Edge.RequestId.ToString(EGuidFormats::DigitsWithHyphens), RemainingSeconds);
+				TEXT("Event=scoop_cooldown_rejected Request=%s RemainingSeconds=%.3f %s"),
+				*Edge.RequestId.ToString(EGuidFormats::DigitsWithHyphens), RemainingSeconds,
+				*CatLogContext::BuildControllerFields(Controller));
 			DeliverResultFromAuthority(Result);
 			return;
 		}
@@ -503,11 +512,27 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		if (!TargetSession)
 		{
 			Result.Error = ECatFishingCommandError::NotNearShore;
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=scoop_target_selection_failed Request=%s Reason=NoEligibleSession SearchOrigin=%s MaxDistanceCm=1500.000 %s"),
+				*Edge.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+				ScoopingCharacter ? *ScoopingCharacter->GetActorLocation().ToCompactString() : TEXT("None"),
+				*CatLogContext::BuildControllerFields(Controller));
 			DeliverResultFromAuthority(Result);
 			return;
 		}
 
 		const FCatFishingSessionSnapshot& TargetSnapshot = TargetSession->GetSnapshot();
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=scoop_target_selected Request=%s SessionId=%s Phase=%s Revision=%lld SearchOrigin=%s FishLocation=%s DistanceCm=%.3f %s"),
+			*Edge.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			*TargetSnapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*UEnum::GetValueAsString(TargetSnapshot.Phase), TargetSnapshot.Revision,
+			ScoopingCharacter ? *ScoopingCharacter->GetActorLocation().ToCompactString() : TEXT("None"),
+			TargetSnapshot.FishEncounterActor
+				? *TargetSnapshot.FishEncounterActor->GetActorLocation().ToCompactString() : TEXT("None"),
+			ScoopingCharacter && TargetSnapshot.FishEncounterActor
+				? FVector::Dist(ScoopingCharacter->GetActorLocation(), TargetSnapshot.FishEncounterActor->GetActorLocation()) : -1.0,
+			*CatLogContext::BuildControllerFields(Controller));
 		Result.FishingSessionId = TargetSnapshot.FishingSessionId;
 		FCatScoopCommand ScoopCommand;
 		ScoopCommand.Context.RequestId = Edge.RequestId;
