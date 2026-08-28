@@ -14,7 +14,7 @@
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
-#include "UI/Inventory/CatInventoryWidget.h"
+#include "UI/Inventory/CatFishGuardInventoryWidget.h"
 
 // 构造流程：创建独立箱子根、Items 复制出口和交互入口；开启 Actor 复制并关闭 Tick，鱼数组只由 Items 服务发布。
 ACatFishGuardActor::ACatFishGuardActor()
@@ -31,7 +31,7 @@ ACatFishGuardActor::ACatFishGuardActor()
 	InteractionCollision->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	InteractionCollision->SetGenerateOverlapEvents(false);
 	ContainerReplication = CreateDefaultSubobject<UCatContainerReplicationComponent>(TEXT("ContainerReplication"));
-	InventoryViewClass = TSoftClassPtr<UCatInventoryWidget>(
+	InventoryViewClass = TSoftClassPtr<UCatFishGuardInventoryWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatFishGuardInventory.WBP_CatFishGuardInventory_C")));
 	InteractionPrompt = NSLOCTEXT("Catfishing", "FishGuardInteractionPrompt", "打开鱼护");
 }
@@ -95,7 +95,7 @@ bool ACatFishGuardActor::RegisterContainerFromAuthority()
 	const int32 Capacity = GetDefault<UCatItemsSettings>()->GetContainerCapacity(
 		static_cast<uint8>(ECatContainerKind::FishGuard));
 	bRegisteredWithItems = Items->RegisterContainer(ContainerReplication, GuardContainerId,
-		ECatContainerKind::FishGuard, FString(), Capacity);
+		ECatContainerKind::FishGuard, Capacity);
 	if (bRegisteredWithItems)
 	{
 		UE_LOG(LogCatItems, Log, TEXT("Event=fish_guard_registered Guard=%s Container=%s Capacity=%d"),
@@ -125,11 +125,11 @@ UCatContainerReplicationComponent* ACatFishGuardActor::GetContainerReplicationCo
 	return ContainerReplication;
 }
 
-// 页面类解析流程：同步加载鱼护自身配置的库存 View，并确认它仍继承统一库存基类；配置为空、路径失效或类型不匹配时返回空，交给交互打开链路记录拒绝。
-TSubclassOf<UCatInventoryWidget> ACatFishGuardActor::LoadInventoryViewClass() const
+// 页面类解析流程：同步加载鱼护自身配置的库存 View，并确认它就是鱼护页面类型；配置错成普通背包页时返回空，交给交互打开链路记录拒绝。
+TSubclassOf<UCatFishGuardInventoryWidget> ACatFishGuardActor::LoadInventoryViewClass() const
 {
 	UClass* LoadedClass = InventoryViewClass.LoadSynchronous();
-	if (!LoadedClass || !LoadedClass->IsChildOf(UCatInventoryWidget::StaticClass()))
+	if (!LoadedClass || !LoadedClass->IsChildOf(UCatFishGuardInventoryWidget::StaticClass()))
 	{
 		return nullptr;
 	}

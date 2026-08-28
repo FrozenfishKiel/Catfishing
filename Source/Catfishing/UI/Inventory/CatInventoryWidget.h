@@ -6,43 +6,36 @@
 #include "CatInventoryWidget.generated.h"
 
 class UButton;
+class UCatInventoryModel;
+class UCatInventoryPageController;
 class UCatInventorySlotWidget;
 class UTextBlock;
 class UWrapBox;
 
-/** 库存关闭意图；Widget 不恢复输入模式，PageController 收到后统一处理焦点和鼠标。 */
-DECLARE_MULTICAST_DELEGATE(FCatInventoryCloseRequested);
-
-/** 库存格子选择意图；参数是格子下标，Model 会按最新后端快照裁剪。 */
-DECLARE_MULTICAST_DELEGATE_OneParam(FCatInventorySlotSelectionRequested, int32);
-
-/** 库存格子上下文意图；它只说明鼠标行为，不直接转成服务器命令。 */
-DECLARE_MULTICAST_DELEGATE_TwoParams(FCatInventorySlotPointerRequested, int32, ECatInventorySlotPointerAction);
-
-/** 库存主界面转发的格子 Drop 意图；源和目标都是格子只读投影，PageController 会按最新 Model 复核后再提交服务器。 */
-DECLARE_MULTICAST_DELEGATE_TwoParams(FCatInventorySlotDropForwarded, const FCatInventorySlotView&, const FCatInventorySlotView&);
-
-/** 库存动作意图；Widget 不携带鱼 ID，PageController 从 Model 当前选择重建正式服务器命令。 */
-DECLARE_MULTICAST_DELEGATE_OneParam(FCatInventoryActionRequested, ECatInventoryAction);
-
-/** 库存主界面；它展示随身库存物品和鱼容器，吃鱼/献祭通过鱼容器选择提交，库存整理和鱼容器移动都通过格子拖拽提交。 */
+/** 库存界面基类；每个 WBP 实例都自己监听当前库存 Model，构建完成时直接按 Model 最新状态刷新自己。 */
 UCLASS(BlueprintType, Blueprintable)
 class CATFISHING_API UCatInventoryWidget : public UUserWidget
 {
 	GENERATED_BODY()
 
 public:
-	/** 接收库存 Model 的完整只读投影；刷新 Designer 字段并用 WrapBox 重建格子 Widget。 */
-	void RenderInventory(const FCatInventoryViewState& ViewState);
+	/** 接收库存 Model 的只读投影并刷新本页控件；调用方只提供数据，本页只更新自己。 */
+	virtual void RenderInventory(const FCatInventoryViewState& ViewState);
 
-	/** 设置 WrapBox 动态创建格子时使用的 WBP 类；LocalPlayer 从 UI Settings 传入，避免主界面硬编码资产路径。 */
-	void SetInventorySlotWidgetClass(TSubclassOf<UCatInventorySlotWidget> InSlotWidgetClass);
+	/** 设置动态格子使用的 WBP 类；外部可显式指定，本页构建时也会从 UI Settings 兜底读取。 */
+	virtual void SetInventorySlotWidgetClass(TSubclassOf<UCatInventorySlotWidget> InSlotWidgetClass);
 
-	/** 蓝图或按钮请求关闭库存；View 只广播意图，不修改输入模式。 */
+	/** 绑定本库存页对应的 Model；本页会监听它的变化，并在绑定完成后立刻按当前投影刷新。 */
+	void BindInventoryModel(UCatInventoryModel* InModel);
+
+	/** 断开本页对库存 Model 的监听；页面移出视口或换 Model 时调用，不销毁 Model 本身。 */
+	void UnbindInventoryModel();
+
+	/** 蓝图或按钮请求关闭库存；本页把意图交给当前 PageController，不自己修改输入模式。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
 	void RequestCloseInventory();
 
-	/** 蓝图或格子请求选中某个下标；View 只广播下标，不读取或修改鱼数组。 */
+	/** 蓝图请求选中本页 DisplayedSlots 里的某个下标；这个下标只在当前 WBP 内有效，不能跨库存使用。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
 	void RequestSelectSlot(int32 SlotIndex);
 
@@ -54,53 +47,63 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
 	void RequestSacrificeSelectedFish();
 
-	/** 最近一次库存投影是 View 与蓝图动画之间的只读交接面；蓝图只能读取它来表现当前帧，不能借它回写 Model 或玩法状态。 */
+	/** 本页最近一次渲染后的只读状态；蓝图只能读取当前 WBP 自己的选择和表现，不能借它回写 Model 或玩法状态。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")
 	const FCatInventoryViewState& GetLastInventoryViewState() const;
 
-	/** 库存关闭意图广播；PageController 是正式订阅者。 */
-	FCatInventoryCloseRequested OnCloseRequested;
-
-	/** 格子选择意图广播；主界面不自己裁剪下标。 */
-	FCatInventorySlotSelectionRequested OnSlotSelectionRequested;
-
-	/** 格子鼠标上下文广播；PageController 默认只选择，蓝图可用它弹上下文表现。 */
-	FCatInventorySlotPointerRequested OnSlotPointerRequested;
-
-	/** 格子 Drop 广播；Widget 不判断方向或权限，只把两个格子的只读事实交给 PageController。 */
-	FCatInventorySlotDropForwarded OnSlotDropRequested;
-
-	/** 吃鱼或献祭动作广播；PageController 负责翻译成服务器命令或结构化拒绝。 */
-	FCatInventoryActionRequested OnInventoryActionRequested;
-
 protected:
-	/** 进入视口时绑定可选按钮；没有 Designer 绑定按钮时仍可由蓝图直接调用 Request*。 */
+	/** 进入视口时绑定可选按钮、解析当前 Model 并刷新本页；没有 Designer 绑定按钮时仍可由蓝图直接调用 Request*。 */
 	virtual void NativeConstruct() override;
 
-	/** 离开视口时只解除本 View 自己绑定的按钮和格子委托；外部关闭、格子和动作意图订阅保留到 PageController::Unbind 统一移除。 */
+	/** 离开视口时解除按钮、格子和 Model 监听；下次构建会重新从当前 LocalPlayer 找 Model。 */
 	virtual void NativeDestruct() override;
 
-	/** 库存处于模态焦点时再次按打开键会请求关闭；其他按键交回父类处理。 */
+	/** 预览按键先于子按钮和格子处理；库存打开时命中关闭键会统一请求关闭，避免焦点落在子控件后按键失效。 */
+	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
+
+	/** 库存处于模态焦点时按关闭键会请求关闭；其他按键交回父类处理。 */
 	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 	/** WBP 可选渲染扩展点；正式布局可用 Designer 字段绑定和这个事件共同表现。 */
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|Inventory")
 	void BP_RenderInventory(const FCatInventoryViewState& ViewState);
 
+	/** 返回本库存 WBP 对应的数据源 Slots；普通背包页默认读取随身库存，营地或鱼护页用派生类改成自己的数据源。 */
+	virtual const TArray<FCatInventorySlotView>& GetInventorySlotsForWidget(
+		const FCatInventoryViewState& ViewState) const;
+
 private:
-	/** 按当前 Slots 数组清空并重建 WrapBox 子格；WBP 可以选择单列表，也可以把随身库存和外部容器拆成两栏。 */
+	/** 按当前 Slots 数组刷新单一 WrapBox 子格；能原位更新时不重建，结构变化时才清空并重建。 */
 	void RebuildSlotWidgets();
 
-	/** 解除当前 WrapBox 子格的原生委托；刷新或销毁前调用，避免旧格子继续广播。 */
+	/** 从当前 LocalPlayer UI 子系统取得库存 Model；蓝图树里的每个库存 WBP 都走同一条自解析入口。 */
+	UCatInventoryModel* ResolveInventoryModel() const;
+
+	/** 从已绑定 Model 读取最新 ViewState 并刷新本页；Model 不存在时保留当前显示，避免构造预览被清空。 */
+	void RefreshInventoryViewFromModel();
+
+	/** Model 广播入口；本页收到后直接重读 Model 当前投影并刷新自己。 */
+	void HandleInventoryModelViewStateChanged();
+
+	/** 从当前 LocalPlayer UI 子系统取得库存 PageController；本页只把玩家意图交给它。 */
+	UCatInventoryPageController* ResolveInventoryPageController() const;
+
+	/** 解除当前 WrapBox 子格的原生委托；刷新或销毁前调用，避免已移除格子继续广播。 */
 	void UnbindSlotWidgets();
 
-	/** Slot Widget 左键选中入口；主界面只转发下标给 PageController/Model。 */
-	void HandleSlotSelected(int32 SlotIndex);
+	/** 提交一个已经属于本页 DisplayedSlots 的格子身份；点击、蓝图下标和 Drop 选择都收口到这里。 */
+	void RequestSelectSlotView(const FCatInventorySlotView& SlotView);
 
-	/** Slot Widget 右键或拖拽入口；默认也选择该格，再把上下文意图交给上层。 */
-	void HandleSlotPointerAction(int32 SlotIndex, ECatInventorySlotPointerAction PointerAction);
+	/** 判断一次按键是否应该关闭当前库存页；世界交互打开的库存额外接受交互键，普通背包保留背包键和 Escape。 */
+	bool ShouldCloseInventoryFromKey(const FKeyEvent& InKeyEvent) const;
 
-	/** Slot Widget Drop 入口；只转发源和目标投影，避免主界面从 Widget 指针反查后端事实。 */
+	/** Slot Widget 左键点击入口；本页把格子身份交给 PageController/Model，不解释成全局下标。 */
+	void HandleSlotSelected(const FCatInventorySlotView& SlotView);
+
+	/** Slot Widget 右键上下文入口；本页把格子身份交给 PageController，由它同步选择并决定动作。 */
+	void HandleSlotContextRequested(const FCatInventorySlotView& SlotView);
+
+	/** Slot Widget Drop 入口；只转交源和目标投影，避免本页从 Widget 指针反查后端事实。 */
 	void HandleSlotDropRequested(const FCatInventorySlotView& SourceSlot, const FCatInventorySlotView& TargetSlot);
 
 	/** 关闭按钮点击入口；收口到 RequestCloseInventory，避免按钮和蓝图图表两套逻辑。 */
@@ -115,21 +118,13 @@ private:
 	UFUNCTION()
 	void HandleSacrificeClicked();
 
-	/** 库存格子 WBP 类；主界面用它为 WrapBox 每个后端格子创建独立 Widget。 */
+	/** 库存格子 WBP 类；本页用它为 WrapBox 每个后端格子创建独立 Widget。 */
 	UPROPERTY(EditDefaultsOnly, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	TSubclassOf<UCatInventorySlotWidget> InventorySlotWidgetClass;
 
-	/** WBP Designer 中的格子容器；主界面刷新时只对它 ClearChildren/AddChild，不硬编码八个按钮。 */
+	/** WBP Designer 中的格子容器；本页刷新时只对它 ClearChildren/AddChild，不硬编码八个按钮。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UWrapBox> InventorySlotWrapBox;
-
-	/** WBP Designer 中的随身库存格容器；鱼护箱子页用它把玩家背包放在独立面板里。 */
-	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UWrapBox> InventoryObjectSlotWrapBox;
-
-	/** WBP Designer 中的容器格容器；鱼护箱子页用它把鱼护箱子内容和玩家背包分开展示。 */
-	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UWrapBox> ExternalContainerSlotWrapBox;
 
 	/** WBP Designer 中的关闭按钮；点击只发关闭意图。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
@@ -143,15 +138,26 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> SacrificeFishButton;
 
-	/** 最近一次库存 Model 输入；WrapBox 重建、键盘关闭和蓝图绑定都读取这一份。 */
+	/** 本页最近一次渲染后的 ViewState 副本；它只保留属于当前 WBP 的选中和动作表现，蓝图读取它不会拿到其他库存页的选择。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	FCatInventoryViewState LastInventoryViewState;
+
+	/** 本页当前实际显示的格子副本；它只来自当前 WBP 对应的一份独立数据源，不会混入其他库存。 */
+	UPROPERTY(Transient)
+	TArray<FCatInventorySlotView> DisplayedSlots;
 
 	/** 当前 WrapBox 中由本对象创建并绑定的格子 Widget；刷新前需要逐个解绑。 */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UCatInventorySlotWidget>> BoundSlotWidgets;
 
-	/** 最近一次库存总览文本副本；RenderInventory 写入，简单 WBP 可直接绑定它显示随身物品和鱼容器概况。 */
+	/** 本页当前监听的库存 Model；它只提供 ViewState 和变化广播，不把后端写口暴露给 Widget。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UCatInventoryModel> BoundInventoryModel;
+
+	/** 本页注册到 Model 变化广播的句柄；解绑必须用它从同一个 Model 移除，避免页面关闭后继续刷新。 */
+	FDelegateHandle InventoryModelViewChangedHandle;
+
+	/** 最近一次库存总览文本副本；RenderInventory 写入，简单 WBP 可直接绑定它显示当前页面的库存和容器概况。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintSummaryText;
 
@@ -159,7 +165,7 @@ private:
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintEquipmentText;
 
-	/** 最近一次随身库存概要文本副本；RenderInventory 写入，用来把统一库存格占用情况暴露给 WBP。 */
+	/** 最近一次随身库存概要文本副本；RenderInventory 写入，用来把玩家背包占用情况暴露给 WBP。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintInventoryItemsText;
 
@@ -171,7 +177,7 @@ private:
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintResultText;
 
-	/** WBP Designer 中的库存摘要文本控件；存在时 RenderInventory 会直接写入随身物品和鱼容器总览。 */
+	/** WBP Designer 中的库存摘要文本控件；存在时 RenderInventory 会直接写入当前页面的库存和容器总览。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> SummaryTextBlock;
 

@@ -3,17 +3,20 @@
 #include "CoreMinimal.h"
 #include "Framework/Core/CatDomainCommandTypes.h"
 #include "GameFramework/PlayerState.h"
+
+class UTexture2D;
+
 #include "CatShopEconomyTypes.generated.h"
 
-/** 商店目录条目的交付类别；ShopEconomy 只记录订单语义，不直接写玩家随身库存或 Items。 */
+/** 商店目录条目的展示/账本类别；真正入库方式由物品定义和收货库存共同裁决，不再由商店条目单独拍板。 */
 UENUM(BlueprintType)
 enum class ECatShopEntryKind : uint8
 {
 	/** 未声明类别；运行目录必须拒绝。 */
 	Unknown,
-	/** 购买后上层把装备型定义交给买家自己的随身库存数组。 */
+	/** 购买项指向鱼竿、鱼漂、抄网这类单件装备；商店只把它写到账本和 UI，不直接决定目标库存实现。 */
 	EquipmentGrant,
-	/** 购买后上层把数量型定义交给买家自己的随身库存数组。 */
+	/** 购买项指向鱼饵、窝料、草药这类数量物；具体堆叠规则仍来自装备定义和库存对象。 */
 	InventoryQuantityGrant
 };
 
@@ -44,23 +47,23 @@ enum class ECatShopTransactionKind : uint8
 	Purchase,
 	/** Items 已不可逆移除鱼以后，把售鱼收入记入团队公款。 */
 	FishSale,
-	/** 领取配置为免费自取的订单；普通饵和 1 级保底竿都走这一类，不会减少公款。 */
+	/** 领取配置为免费自取的订单；基础饵、1 级保底竿和 1 级保底鱼漂都走这一类，不会减少公款。 */
 	FreeClaim
 };
 
-/** 订单交付进度；Shop 只记录下游回执，不直接修改玩家随身库存或 Items。 */
+/** 订单交付进度；Shop 只记录下游回执，不直接修改营地公共仓库、玩家随身库存或 Items。 */
 UENUM(BlueprintType)
 enum class ECatShopDeliveryState : uint8
 {
 	/** 该交易不需要交付；售鱼入账属于这种账本。 */
 	None,
-	/** 公款和商店库存已经提交，等待下游随身库存给出交付回执。 */
+	/** 公款和商店库存已经提交，等待下游库存给出交付回执。 */
 	Pending,
 	/** 下游领域已经以独立回执确认交付完成；重复确认只读取这条事实。 */
 	Delivered
 };
 
-/** 一条商店可交易目录项；价格、库存和交付定义都由配置显式给出。 */
+/** 一条商店可交易目录项；价格、库存、购买数量和交付定义都由配置显式给出。 */
 USTRUCT(BlueprintType)
 struct FCatShopCatalogEntry
 {
@@ -77,6 +80,10 @@ struct FCatShopCatalogEntry
 	/** 被订单引用的装备或耗材定义 ID；具体定义有效性由下游 Equipment/Data 继续校验。 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Catalog")
 	FName DefinitionId = NAME_None;
+
+	/** 单次购买向目标库存发放的数量；商店库存扣一次货架库存，但目标库存可以收到多份鱼饵或窝料。 */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Catalog", meta = (ClampMin = "1"))
+	int32 PurchaseQuantity = 1;
 
 	/**
 	 * 单次购买消耗的公款数额。0 是合法取值，表达"这一项显式免费"，免费普通饵就靠它；负数不允许，商店不能反过来发钱。
@@ -95,6 +102,14 @@ struct FCatShopCatalogEntry
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Catalog")
 	bool bUnlimitedStock = false;
 
+	/** 该目录项是否参与运行目录；关闭时配置仍可留在表里，但不会进入当前商店货架。 */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Catalog")
+	bool bEnabled = true;
+
+	/** 商店层面的上架解锁条件；当前还没有商店解锁事实源，留空才可运行，非空会让该条目 fail-closed。 */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Catalog")
+	FName RequiredShopUnlockId = NAME_None;
+
 	/**
 	 * 这一项是不是飞书商店册 §3.2 的"每日进货"商品，也就是每天开市时把剩余库存重置回当日进货量的那一类。
 	 * 只有它为 true 的条目会被 AdvanceShopDay 补货；永不缺货的竿和基础补给用 bUnlimitedStock 表达，不走这条。
@@ -109,6 +124,22 @@ struct FCatShopCatalogEntry
 	 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Catalog", meta = (ClampMin = "0"))
 	int32 DailyRestockQuantity = 0;
+
+	/** 商店展示名覆盖；为空时 UI 回退到物品定义或稳定 ID，后端不读取它做交易裁决。 */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Presentation")
+	FText DisplayNameOverride;
+
+	/** 商店描述覆盖；只给 View 展示当前售卖口径，不能改变装备定义或购买结果。 */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Presentation", meta = (MultiLine = "true"))
+	FText DescriptionOverride;
+
+	/** 商店图标覆盖；为空时可回退到装备定义图标，后端库存只保存 DefinitionId 和数量。 */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Presentation")
+	TSoftObjectPtr<UTexture2D> IconOverride;
+
+	/** 商店展示排序值；固定保底项可排前，随机池抽中的条目按同一字段稳定排序。 */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Presentation")
+	int32 SortOrder = 0;
 
 	/** 校验目录项是否足以进入运行库存；不检查下游定义是否存在，避免 ShopEconomy 偷做 Equipment/Data 的事实判断。 */
 	bool IsRuntimeReady() const;
@@ -156,6 +187,10 @@ USTRUCT(BlueprintType)
 struct FCatShopStockSnapshot
 {
 	GENERATED_BODY()
+
+	/** 这条库存来自哪个商店摊位库存；EntryId 只在这个 ID 范围内解释，不能全局混用。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid ShopInventoryId;
 
 	/** 对应的商店目录稳定 ID。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -208,7 +243,7 @@ struct FCatShopTransactionRecord
 	UPROPERTY(BlueprintReadOnly)
 	FGuid DeliveryReceiptId;
 
-	/** 下游领域成功交付后的聚合版本；用于审计交付发生在哪个 Equipment/库存版本之后。 */
+	/** 下游领域成功交付后的聚合版本；用于审计交付发生在哪个下游库存版本之后。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 DeliveryRevision = 0;
 
@@ -216,9 +251,17 @@ struct FCatShopTransactionRecord
 	UPROPERTY(BlueprintReadOnly)
 	FName EntryId = NAME_None;
 
+	/** 购买/免费领取来源的摊位库存；账本用它说明这条 EntryId 是按哪一个商店表解释的。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid ShopInventoryId;
+
 	/** 订单要交付的下游定义；售鱼可保持 None。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName DefinitionId = NAME_None;
+
+	/** 本订单成功后应发放给目标库存的数量；货架库存只扣一单，目标库存按这个数量接收入库。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 PurchaseQuantity = 0;
 
 	/** 售鱼时被 Items 不可逆移除的鱼实例；购买可保持无效。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -269,9 +312,17 @@ struct FCatShopPublicTransaction
 	UPROPERTY(BlueprintReadOnly)
 	FName EntryId = NAME_None;
 
+	/** 购买发生在哪个摊位库存上；客户端用它区分同名 EntryId 来自不同商店。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid ShopInventoryId;
+
 	/** 订单指向的下游定义；售鱼保持 None。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName DefinitionId = NAME_None;
+
+	/** 购买或免费领取实际发放的数量；售鱼保持 0，客户端只能展示，不能据此补发物品。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 PurchaseQuantity = 0;
 
 	/** 卖出的鱼来自哪里；购买和免费自取保持 Unknown。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -330,6 +381,25 @@ struct FCatShopPurchaseCommand
 	/** 要购买或领取的商店目录项。 */
 	UPROPERTY(BlueprintReadWrite)
 	FName EntryId = NAME_None;
+
+	/** 服务器确认的来源商店库存；购买写口用它把 EntryId 限定到具体摊位组件。 */
+	UPROPERTY(BlueprintReadWrite)
+	FGuid ShopInventoryId;
+};
+
+/** 显式刷新当前商店货架的服务器请求；它只描述随机数来源，不决定刷新时机。 */
+USTRUCT(BlueprintType)
+struct FCatShopRefreshRequest
+{
+	GENERATED_BODY()
+
+	/** 是否使用调用方给出的随机种子；测试、调试或运营复现需要稳定结果时打开，正常运行可关闭。 */
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Refresh")
+	bool bUseExplicitRandomSeed = false;
+
+	/** 调用方显式指定的随机种子；只有 bUseExplicitRandomSeed 为 true 时参与抽取。 */
+	UPROPERTY(BlueprintReadWrite, EditAnywhere, Category = "Refresh")
+	int32 RandomSeed = 0;
 };
 
 /** Items 已完成不可逆售鱼后提交给经济系统的入账命令。 */

@@ -16,7 +16,7 @@ enum class ECatShopUIAction : uint8
 	ClaimFreeEntry
 };
 
-/** 商店目录中一行商品的展示投影；它由配置目录和公开经济快照拼出，不能写回商店后端。 */
+/** 商店目录中一行商品的展示投影；它由摊位目录和公开经济快照拼出，不能写回商店后端。 */
 USTRUCT(BlueprintType)
 struct FCatShopEntryView
 {
@@ -33,6 +33,10 @@ struct FCatShopEntryView
 	/** 商品指向的装备或消耗品定义；UI 用它显示名字，不能据此直接发放物品。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName DefinitionId = NAME_None;
+
+	/** 单次购买会发到营地公共仓库的数量；UI 只展示，不能把它作为客户端提交参数。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 PurchaseQuantity = 1;
 
 	/** 配置里的单价；Widget 只展示该数值，实际扣款仍以服务器冻结目录为准。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -62,7 +66,7 @@ struct FCatShopEntryView
 	UPROPERTY(BlueprintReadOnly)
 	bool bAffordable = true;
 
-	/** 该条目是否应该走免费领取 RPC；它来自 ShopEconomy Settings 的免费条目白名单。 */
+	/** 该条目是否应该走免费领取 RPC；它来自来源摊位库存组件的免费条目白名单。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bFreeClaim = false;
 
@@ -77,6 +81,14 @@ struct FCatShopEntryView
 	/** 商品行按钮当前应显示的动作名；Model 按免费领取白名单写入“领取”或“购买”。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText ActionText;
+
+	/** 商品行当前显示名；优先来自商店表展示覆盖，未配置时回退到 DefinitionId 或 EntryId。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText DisplayNameText;
+
+	/** 商品行当前说明；只作为 WBP 详情展示，不参与购买裁决。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText DescriptionText;
 };
 
 /** 商店界面的完整展示投影；它只包含商品、公款和最近提交提示，不包含背包或 HUD 状态。 */
@@ -97,7 +109,7 @@ struct FCatShopViewState
 	UPROPERTY(BlueprintReadOnly)
 	FCatShopPublicEconomySnapshot Economy;
 
-	/** 当前可展示商品目录；条目来自配置冻结后的展示副本，不包含服务器写口。 */
+	/** 当前可展示商品目录；条目来自来源摊位库存组件的展示副本，不包含服务器写口。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatShopEntryView> Entries;
 

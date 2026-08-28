@@ -58,7 +58,7 @@ private:
 		FGuid ClientRequestId;
 		/** 偷取者服务器私有 StableNetId。 */
 		FString ThiefStableNetId;
-		/** 鱼的原主人服务器私有 StableNetId。 */
+		/** 鱼实例原捕获者的服务器私有 StableNetId。 */
 		FString VictimStableNetId;
 		/** 偷取者当前 Character 弱引用；失效时返还鱼。 */
 		TWeakObjectPtr<ACatCharacter> ThiefCharacter;
@@ -87,7 +87,7 @@ private:
 	/** 从 Controller PlayerState::UniqueId 解析服务器私有身份；无效返回空。 */
 	static FString ResolveStableNetId(const AController* Controller);
 
-	/** 在当前 World 按 APlayerState::UniqueId 定位精确活动 Controller；未知主人或断线时返回空并让 Social fail-closed。 */
+	/** 在当前 World 按 APlayerState::UniqueId 定位精确活动 Controller；未知鱼实例捕获者或断线时返回空并让 Social fail-closed。 */
 	AController* FindControllerByStableNetId(const FString& StableNetId) const;
 
 	/** 判断项目 Character 当前可参与 Social 交互：角色/Condition 有效且未倒地。 */

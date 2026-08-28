@@ -1,5 +1,6 @@
 #include "Camp/CatCampHubActor.h"
 
+#include "Camp/CatCampInventoryActor.h"
 #include "Camp/CatCampSettings.h"
 #include "Character/CatCharacter.h"
 #include "Framework/Game/CatGameplayTypes.h"
@@ -95,6 +96,17 @@ bool ACatCampHubActor::TryGetSharedFishTankSnapshot(FCatContainerSnapshot& OutSn
 bool ACatCampHubActor::IsSharedFishTank(const ACatFishTankActor* Candidate) const
 {
 	return Candidate && SharedFishTank == Candidate;
+}
+
+// 商店发货仓库判断流程：
+// 1. 只在服务器侧回答，避免客户端把本地引用当成发货事实。
+// 2. 只接受本营地显式配置且同 World 的 PublicInventory；没有配置时返回空，由 PlayerController 回送 DependencyUnavailable。
+// 3. 本函数不执行入库，入库容量、堆叠和幂等仍由 ACatCampInventoryActor 自己裁决。
+ACatCampInventoryActor* ACatCampHubActor::ResolvePublicInventoryForShopOrder() const
+{
+	return HasAuthority() && PublicInventory && PublicInventory->HasAuthority()
+		&& PublicInventory->GetWorld() == GetWorld()
+		? PublicInventory : nullptr;
 }
 
 // 篝火回看流程：先由服务器 UniqueId 与 RequestId 重放首次终态，再验证固定营地范围、结算夜和封面事件配置。随后逐个确认 GameState 玩家仍有有效身份、Controller 和营地内 Character，提交全员 Candidate，并通过批量接口先建齐全部 Planned 记录、再尝试投递；任一前置或落盘失败都会缓存拒绝且不发网络表现。全部事实成立后才用 Reliable NetMulticast 把原 RequestId 送到相关客户端，并缓存首次成功；本流程不写 next-day ready、不等待客户端播放完成，也不保存补播状态。

@@ -6,14 +6,14 @@
 #include "ShopEconomy/CatShopEconomyTypes.h"
 #include "CatShopEconomySettings.generated.h"
 
-/** 商店经济运行设置；默认关闭，避免在没有目录和定价证据时生成公款或商品。 */
+/** 商店经济运行设置；它只裁定团队公款和售鱼估价，不再保存任何摊位出售表。 */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "Catfishing Shop Economy"))
 class CATFISHING_API UCatShopEconomySettings : public UDeveloperSettings
 {
 	GENERATED_BODY()
 
 public:
-	/** 运行 gate 表示本局是否允许创建团队公款和交易入口；目录合法性仍由服务加载库存时检查，避免 Settings 同时拥有交易真相。 */
+	/** 运行 gate 表示本局是否允许创建团队公款和交易入口；摊位目录合法性由各自库存组件检查。 */
 	bool IsRuntimeEnabled() const;
 
 	/**
@@ -43,22 +43,6 @@ public:
 	/** 允许售鱼入账的最小金额；小于该值的命令视为估价证据不足。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Wallet", meta = (ClampMin = "1"))
 	int32 MinimumFishSaleValue = 1;
-
-	/** 显式商店目录；运行时不扫描资产，也不从 Equipment 反推价格或库存。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Catalog")
-	TArray<FCatShopCatalogEntry> CatalogEntries;
-
-	/** 免费普通饵对应的目录项；免费自取入口只接受它和保底竿条目，且要求价格为 0、库存无限。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Catalog")
-	FName FreeOrdinaryBaitEntryId = NAME_None;
-
-	/**
-	 * 1 级保底竿的免费自取目录项。飞书装备册和商店册 §3.2 都写了"1 级竿免费自取、不限量"，
-	 * 它的作用是断竿或没钱的时候永远还有一根竿能用，所以这一条不配置的后果是玩家可能彻底钓不了鱼，
-	 * 而不是少一个便利入口。没配时免费自取入口对它 fail-closed，不会退而求其次去发别的竿。
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "Catalog")
-	FName FreeStarterRodEntryId = NAME_None;
 
 	/**
 	 * 收鱼价体重轴是否已经被产品显式裁定。默认 Unset 表示"还没人拍过"，此时售鱼整体 fail-closed；

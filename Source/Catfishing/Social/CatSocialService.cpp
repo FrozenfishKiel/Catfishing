@@ -57,7 +57,7 @@ bool UCatSocialService::CloseCommandsAndResolveAll()
 	return bAllResolved && ActiveThefts.IsEmpty();
 }
 
-// 偷鱼开始流程：先按身份/操作/客户端 RequestId 重放，再用 Items 私有记录验证真实容器宿主/主人、双方状态与距离；随后分配服务器 ProtocolId 建 escrow 和唯一 Timer。
+// 偷鱼开始流程：先按身份/操作/客户端 RequestId 重放，再用 Items 记录验证真实容器宿主、偷取者与鱼实例原捕获者状态和距离；随后分配服务器 ProtocolId 建 escrow 和唯一 Timer。
 FCatTheftResult UCatSocialService::BeginTheft(AController* ThiefController, const FCatTheftCommand& Command)
 {
 	FCatTheftResult Result;
@@ -68,7 +68,6 @@ FCatTheftResult UCatSocialService::BeginTheft(AController* ThiefController, cons
 	UCatItemsService* Items = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
 	FCatContainerSnapshot SourceSnapshot;
 	ECatContainerKind SourceKind = ECatContainerKind::Unknown;
-	FString SourceOwnerStableNetId;
 	AActor* SourceAuthorityActor = nullptr;
 	if (ThiefStableNetId.IsEmpty() || !Command.Context.RequestId.IsValid())
 	{
@@ -95,8 +94,7 @@ FCatTheftResult UCatSocialService::BeginTheft(AController* ThiefController, cons
 	}
 	if (!Settings->IsTheftReady() || !IsCharacterSociallyActive(ThiefCharacter) || !Items
 		|| !Items->TryGetContainerSnapshot(Command.SourceContainerId, SourceSnapshot)
-		|| !Items->TryGetContainerAuthorityContext(Command.SourceContainerId, SourceKind,
-			SourceOwnerStableNetId, SourceAuthorityActor)
+		|| !Items->TryGetContainerHost(Command.SourceContainerId, SourceKind, SourceAuthorityActor)
 		|| !SourceAuthorityActor || SourceAuthorityActor->GetWorld() != GetWorld()
 		|| FVector::DistSquared(ThiefCharacter->GetActorLocation(), SourceAuthorityActor->GetActorLocation())
 			> FMath::Square(Settings->TheftInteractionRangeCentimeters))
@@ -582,7 +580,7 @@ FString UCatSocialService::ResolveStableNetId(const AController* Controller)
 	return PlayerState && PlayerState->GetUniqueId().IsValid() ? PlayerState->GetUniqueId()->ToString() : FString();
 }
 
-// Controller 定位流程：只遍历当前 World 并比较继承 UniqueId；不使用客户端提供的主人字符串，也不保留跨 World 强引用。
+// Controller 定位流程：只遍历当前 World 并比较继承 UniqueId；不使用客户端提供的身份字符串，也不保留跨 World 强引用。
 AController* UCatSocialService::FindControllerByStableNetId(const FString& StableNetId) const
 {
 	if (!GetWorld() || StableNetId.IsEmpty())

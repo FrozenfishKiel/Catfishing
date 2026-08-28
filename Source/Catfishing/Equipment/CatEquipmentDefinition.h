@@ -7,6 +7,8 @@
 #include "Equipment/CatEquipmentTypes.h"
 #include "CatEquipmentDefinition.generated.h"
 
+class UTexture2D;
+
 /** 一条功能型装备/道具定义；字段只表达玩法用途，不含等级、战力、随机词条或强制升级。 */
 UCLASS(BlueprintType)
 class CATFISHING_API UCatEquipmentDefinition : public UPrimaryDataAsset
@@ -32,6 +34,22 @@ public:
 	/** 使用该定义需要的 Profile UnlockId；None 表示正式 starter 可用，不代表全定义免费。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Loadout")
 	FName RequiredUnlockId = NAME_None;
+
+	/** 玩家可见名称；库存格和商店表现优先读取它，未配置时才回退到稳定 ID。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
+	FText DisplayName;
+
+	/** 玩家可见说明；库存详情、提示面板和后续商店详情只读它，不参与玩法判定。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation", meta = (MultiLine = "true"))
+	FText Description;
+
+	/** 库存格缩略图；WBP 通过 SlotView 读取它，后端库存格只保存 DefinitionId 和数量。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
+	TSoftObjectPtr<UTexture2D> Thumbnail;
+
+	/** 单格最大堆叠数；0 表示沿用项目默认规则，1 表示这类物品不可堆叠。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Inventory", meta = (ClampMin = "0"))
+	int32 MaxStackSize = 0;
 
 	/** 是否为本局数量型物品；Bait、Chum、Herb 会以数量栈进入随身库存，Rod、Float 和 ScoopNet 不能打开。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Consumption")

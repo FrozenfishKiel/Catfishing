@@ -6,7 +6,7 @@
 #include "CatFishGuardActor.generated.h"
 
 class UCatContainerReplicationComponent;
-class UCatInventoryWidget;
+class UCatFishGuardInventoryWidget;
 class USceneComponent;
 class USphereComponent;
 
@@ -57,7 +57,7 @@ private:
 	bool IsAuthorityRequestSpatiallyValid(const AController* RequestingController) const;
 
 	/** 解析本鱼护交互要打开的库存页类；同步读取本 Actor 配置，失败时返回空，让交互打开明确拒绝而不是退回普通背包。 */
-	TSubclassOf<UCatInventoryWidget> LoadInventoryViewClass() const;
+	TSubclassOf<UCatFishGuardInventoryWidget> LoadInventoryViewClass() const;
 
 	/** 鱼护的独立世界根；蓝图可在它下面挂网兜、箱体或其他表现组件，不影响容器真相。 */
 	UPROPERTY(VisibleAnywhere)
@@ -78,7 +78,7 @@ private:
 	/** 鱼护交互打开时使用的库存 WBP 类，表示这个世界容器希望呈现的页面形态。 */
 	/** 蓝图或配置写入它，交互时读取它；值无效会让本次打开失败，不会影响容器内真实鱼数组。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|UI", meta = (AllowPrivateAccess = "true"))
-	TSoftClassPtr<UCatInventoryWidget> InventoryViewClass;
+	TSoftClassPtr<UCatFishGuardInventoryWidget> InventoryViewClass;
 
 	/** 鱼护是否允许成为交互目标；蓝图或编辑器可关闭它，交互扫描和提示读取后会一起隐藏入口。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|Interaction", meta = (AllowPrivateAccess = "true"))

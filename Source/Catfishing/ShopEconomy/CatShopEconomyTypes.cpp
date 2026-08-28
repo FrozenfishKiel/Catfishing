@@ -5,10 +5,12 @@
 // 每日进货那一段是同一种拦法：标了 bDailyRestock 却没给正的进货量，说明飞书还没拍这一项每天进几个，
 // 这时候判它非法比按 0 补货更安全——按 0 补货会让这项从第二天起永远缺货，看起来像"卖光了"而不是"没配"。
 // 无限库存和每日进货互斥：永不缺货的东西不需要进货量，两者同时为真只会让 AdvanceShopDay 去改一个没人读的数字。
+// 商店解锁条件当前没有可信事实源，非空时直接挡在运行目录外，避免字段看似可配但购买路径实际绕过它。
 bool FCatShopCatalogEntry::IsRuntimeReady() const
 {
-	if (EntryId.IsNone() || Kind == ECatShopEntryKind::Unknown || DefinitionId.IsNone()
-		|| UnitPrice < 0 || !(bUnlimitedStock || InitialStock > 0))
+	if (!bEnabled || EntryId.IsNone() || Kind == ECatShopEntryKind::Unknown || DefinitionId.IsNone()
+		|| PurchaseQuantity <= 0 || UnitPrice < 0 || !RequiredShopUnlockId.IsNone()
+		|| !(bUnlimitedStock || InitialStock > 0))
 	{
 		return false;
 	}

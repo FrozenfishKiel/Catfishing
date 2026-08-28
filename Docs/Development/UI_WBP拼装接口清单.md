@@ -1,6 +1,6 @@
 # UI WBP 拼装接口清单
 
-文档状态：当前代码核对版（2026-08-27）
+文档状态：当前代码核对版（2026-08-28）
 
 范围：这份文档只说明当前项目给 WBP 预留了哪些父类、控件名、蓝图事件、蓝图可调用函数和只读数据。它用于手工重做 UI 样式，不作为验收文档，也不规定最终美术风格。
 
@@ -23,12 +23,13 @@
 | `/Game/UI/HUD/WBP_CatHUD` | `UCatHUDWidget` | 局内状态 HUD，显示猫状态和钓鱼反馈 | `UCatLocalPlayerUISubsystem` 启动局内 UI 时创建 |
 | `/Game/UI/Inventory/WBP_CatInventory` | `UCatInventoryWidget` | 默认背包页面，显示随身库存、当前钓鱼选择和选中详情 | `UCatLocalPlayerUISubsystem` 创建，`UCatInventoryPageController` 打开 |
 | `/Game/UI/Inventory/WBP_CatFishGuardInventory` | `UCatFishGuardInventoryWidget` | 鱼护箱子页面，只显示本次交互到的地面鱼护容器格 | `ACatFishGuardActor` 提供页面类，`UCatInventoryPageController` 按需创建 |
+| `/Game/UI/Inventory/WBP_CatCampInventory` | `UCatCampInventoryWidget` | 营地公共仓库组合页面，可同时摆玩家随身库存区和公共仓库区 | `ACatCampInventoryActor` 提供页面类，`UCatInventoryPageController` 按需创建 |
 | `/Game/UI/InventorySlot/WBP_CatInventorySlot` | `UCatInventorySlotWidget` | 背包单个格子，负责显示占用、选中、拖拽和 Drop | `UCatInventoryWidget` 重建格子列表时动态创建 |
 | `/Game/UI/Shop/WBP_CatShop` | `UCatShopWidget` | 世界商店页面，显示商品、公款、购买和领取反馈 | `UCatShopInteractionComponent` 在靠近商店交互时创建 |
 | `/Game/UI/Interaction/WBP_CatInteractionPrompt` | `UCatInteractionPromptWidget` | 靠近对象时的“按键交互”提示 | `UCatLocalPlayerUISubsystem` 启动局内 UI 时创建 |
 | `/Game/UI/Collection/WBP_CatCollection` | `UCatCollectionWidget` | 图鉴/相册只读页面 | 当前已有配置和渲染接口；当前代码未看到完整打开入口 |
 
-这些默认路径大多来自 `Source/Catfishing/UI/CatUISettings.cpp`。鱼护箱子页面类跟随 `ACatFishGuardActor` 自己的 `InventoryViewClass`，以后新增世界库存对象也应由对象自己提供页面类或打开上下文，不在 `UCatLocalPlayerUISubsystem` 里继续加专用字段。
+这些默认路径大多来自 `Source/Catfishing/UI/CatUISettings.cpp`。鱼护箱子页面类跟随 `ACatFishGuardActor` 自己的 `InventoryViewClass`；营地公共仓库页面类跟随 `ACatCampInventoryActor` 自己的 `InventoryViewClass`。营地公共仓库仍然要用自己的根 WBP，但这张根 WBP 可以嵌入其他库存子 WBP；父页会把同一份完整库存 ViewState 分发给子页。如果 `InventoryViewClass` 没有指到有效的库存 WBP，交互会打开失败并记录日志。
 
 ## HUD：`WBP_CatHUD`
 
@@ -67,7 +68,7 @@
 
 源码入口：`Source/Catfishing/UI/Inventory/CatInventoryWidget.h`
 
-父类必须是 `UCatInventoryWidget`。它是背包主页面，不直接改后端库存。普通打开时使用这个页面。
+父类必须是 `UCatInventoryWidget`。它是背包主页面，不直接改后端库存。普通打开时使用这个页面；也可以作为营地或其他容器组合页面里的子库存区，父页会把当前完整 ViewState 自动推给它。
 
 ### 可选控件名
 
@@ -89,6 +90,7 @@
 | --- | --- | --- |
 | `BP_RenderInventory(ViewState)` | 蓝图事件 | 背包数据刷新时触发。复杂布局、动态列表、详情面板可以从这里更新。 |
 | `GetLastInventoryViewState()` | 蓝图纯函数 | 读取最近一次背包完整数据。 |
+| `SetSlotSourceFilter(bFilterSlotsBySource, SlotSourceFilter)` | 蓝图可调用 | 设置本库存页自己的格子来源过滤，只影响本页 `InventorySlotWrapBox`，不改 Model。 |
 | `RequestCloseInventory()` | 蓝图可调用 | 请求关闭背包。 |
 | `RequestSelectSlot(SlotIndex)` | 蓝图可调用 | 请求选中某个显示格。 |
 | `RequestConsumeSelectedFish()` | 蓝图可调用 | 请求吃掉当前选中鱼。服务器会复核，不是 UI 直接删鱼。 |
@@ -102,6 +104,10 @@
 | `SlotCount` | 当前应该显示多少格。 |
 | `Containers` | 本次打开背包纳入展示的鱼护/外部容器列表。 |
 | `bHasExternalContainers` | 是否带有外部容器。打开鱼护箱子时通常为 true。 |
+| `bHasCampInventory` | 是否带有本次交互打开的营地公共仓库。 |
+| `CampInventoryFirstSlotIndex` | 营地公共仓库在 `Slots` 里的起始下标。 |
+| `CampInventorySlotCount` | 营地公共仓库当前展示多少格；空仓库也按配置容量显示空格。 |
+| `CampInventoryRevision` | 营地公共仓库快照版本；右键取用时会提交给服务器复核。 |
 | `Equipment` | 当前随身库存和当前钓鱼选择快照。 |
 | `SelectedSlotIndex` | 当前选中的显示格下标。 |
 | `bHasSelectedFish` | 当前是否选中一条鱼。 |
@@ -114,6 +120,41 @@
 | `SelectedFishText` | C++ 整理好的当前选择文本。 |
 | `ResultText` | C++ 整理好的最近结果文本。 |
 | `ToggleKeyName` | 当前背包开关键名，来自正式输入资产，不在 WBP 里写死。 |
+
+随身库存的格子来源是 `InventoryObject`，营地公共仓库的格子来源是 `CampInventoryObject`。组合页面如果要分成“玩家背包区”和“营地仓库区”，可以给对应库存子 WBP 设置格子来源过滤：玩家背包区设为 `InventoryObject`，公共仓库区设为 `CampInventoryObject`；也可以在 `BP_RenderInventory` 里按 `SlotSource` 或 `CampInventoryFirstSlotIndex/CampInventorySlotCount` 自己分栏展示。玩家右键有物品的营地库存格时，PageController 会提交“取到随身库存”的服务器请求；WBP 不需要也不应该直接改公共仓库数组。
+
+## 营地公共仓库：`WBP_CatCampInventory`
+
+源码入口：`Source/Catfishing/UI/Inventory/CatCampInventoryWidget.h`
+
+父类必须是 `UCatCampInventoryWidget`。它就是玩家直接交互营地仓库时显示的组合库存页。营地仓库 Actor 把这张页面类交给通用库存打开入口；C++ 传入的是完整库存 Model 投影，里面同时有玩家随身库存格和本次公共仓库格。WBP 可以直接放一个或多个继承 `UCatInventoryWidget` 的子库存页，父页会在构建和刷新时把同一份 ViewState、格子 WBP 类和点击/拖拽/关闭意图自动接过去。右键取用仍然走同一个 PageController 和服务器复核链路。
+
+推荐拼法：根 `WBP_CatCampInventory` 负责标题、关闭按钮、结果区和整体布局；里面放一个背包子库存页，把它的格子来源过滤设为 `InventoryObject`；再放一个公共仓库库存区，把过滤设为 `CampInventoryObject`。这样两个区域都读同一份实时 ViewState，不需要玩家先打开一次普通背包。
+
+### 可选控件名
+
+| 控件名 | 类型 | 人话说明 |
+| --- | --- | --- |
+| `InventorySlotWrapBox` | `WrapBox` | 本页面自己的默认格子容器。存在时 C++ 会按当前完整 `Slots` 创建格子；如果页面要分区，建议在蓝图里按 `SlotSource` 拆到不同子库存页或自定义列表。 |
+| `CloseButton` | `Button` | 关闭整个营地仓库界面。存在时 C++ 自动绑定。 |
+| `SummaryTextBlock` | `TextBlock` | 营地仓库总览文本。 |
+| `SelectedFishTextBlock` | `TextBlock` | 当前选中的仓库格说明。控件名沿用父类字段，不只用于鱼。 |
+| `ResultTextBlock` | `TextBlock` | 最近一次取用或拒绝反馈。 |
+
+### 蓝图接口
+
+| 名称 | 类型 | 人话说明 |
+| --- | --- | --- |
+| `BP_RenderInventory(ViewState)` | 蓝图事件 | 营地仓库数据刷新时触发。传入的是完整库存投影，WBP 自己按 `SlotSource` 区分随身库存和公共仓库。 |
+| `GetLastInventoryViewState()` | 蓝图纯函数 | 读取最近一次完整库存数据。 |
+| `RequestCloseInventory()` | 蓝图可调用 | 请求关闭营地仓库交互界面。 |
+| `RequestSelectSlot(SlotIndex)` | 蓝图可调用 | 请求选中某个仓库格，`SlotIndex` 仍是库存 Model 的原始下标。 |
+
+### 资产拼装与接手核对
+
+给营地公共仓库补正式资产时，先确认 `/Game/UI/Inventory/WBP_CatCampInventory` 已存在，父类是 `UCatCampInventoryWidget`。根页面仍由营地 Actor 提供，但页面内部可以摆一个玩家背包子 WBP 和一个公共仓库区域；它们读取的是同一份 Model 投影，不需要额外打开默认背包。
+
+`ACatCampInventoryActor` 上的 `InventoryViewClass` 必须指到这张独立 WBP。程序员或 UI 接手人改完资产后，至少手工核对三件事：直接和营地仓库交互时打开的是 `WBP_CatCampInventory`；页面里按 `InventoryObject` 显示玩家随身库存、按 `CampInventoryObject` 显示公共仓库；右键公共仓库里的占用格时，结果仍然表现为“提交服务器取到随身库存”，而不是本地直接删格。
 
 ## 鱼护箱子：`WBP_CatFishGuardInventory`
 
@@ -168,7 +209,7 @@
 | 字段 | 人话说明 |
 | --- | --- |
 | `SlotIndex` | 这个格子在当前页面里的显示下标。 |
-| `SlotSource` | 格子来源。`InventoryObject` 是随身库存，`ContainerObject` 是鱼护/容器格。 |
+| `SlotSource` | 格子来源。`InventoryObject` 是随身库存，`ContainerObject` 是鱼护/容器格，`CampInventoryObject` 是营地公共仓库格。 |
 | `bOccupied` | 这个格子是否有东西。 |
 | `bCanDrag` | 是否允许拖拽。 |
 | `bSelected` | 是否当前选中。 |
@@ -180,7 +221,7 @@
 
 ### 操作含义
 
-左键会选中格子。右键会尝试把随身库存里的装备设为当前钓鱼选择。拖拽到另一个格子会由 PageController 复核后提交服务器移动；WBP 不需要自己写移动逻辑。
+左键会选中格子。右键随身库存格会尝试把装备设为当前钓鱼选择；右键营地公共仓库格会尝试把物品取到本人随身库存。拖拽到另一个格子会由 PageController 复核后提交服务器移动；WBP 不需要自己写移动逻辑。
 
 ## 商店：`WBP_CatShop`
 
@@ -196,12 +237,7 @@
 | `WalletTextBlock` | `TextBlock` | 团队公款摘要。 |
 | `ResultTextBlock` | `TextBlock` | 最近一次购买/领取反馈。 |
 | `EntriesTextBlock` | `TextBlock` | 商品列表的简单文本版。适合临时展示；正式样式建议做动态商品行。 |
-| `ShopButtons` | `HorizontalBox` | 旧版固定按钮行。旧资产缺鱼漂按钮时，C++ 会在这里补一个最小按钮。 |
-| `PurchaseShopRodT2Button` | `Button` | 固定按钮：购买二级竿。 |
-| `PurchaseBugChumButton` | `Button` | 固定按钮：购买窝料。 |
-| `PurchaseYarnBallFloatButton` | `Button` | 固定按钮：购买鱼漂。 |
-| `ClaimFreeBugBaitButton` | `Button` | 固定按钮：领取普通鱼饵。 |
-| `ClaimFreeStarterRodButton` | `Button` | 固定按钮：领取保底竿。 |
+| `ShopButtons` | `PanelWidget` | 商品按钮容器。正式商店必须保留它；不要在 Designer 里预放商品按钮，C++ 会按当前 `ViewState.Entries` 重建整张货架。 |
 
 ### 蓝图接口
 
@@ -213,24 +249,34 @@
 | `RequestFreeClaimEntry(EntryId)` | 蓝图可调用 | 请求领取免费商品。 |
 | `RequestCloseShop()` | 蓝图可调用 | 请求关闭商店。 |
 
-### 固定商品 ID
+### 当前默认商品 ID
 
 | EntryId | 人话说明 |
 | --- | --- |
-| `ShopRodT2Order` | 二级鱼竿订单。 |
-| `ShopBugChumOrder` | 窝料订单。 |
-| `ShopFloatYarnBallOrder` | 鱼漂订单。 |
-| `FreeBugBaitClaim` | 免费普通鱼饵领取。 |
-| `FreeStarterRodClaim` | 免费保底竿领取。 |
+| `FixedStarterRod` | 固定出现的初级鱼竿。 |
+| `FixedBugBait` | 固定出现的初级鱼饵。 |
+| `FixedFeatherFloat` | 固定出现的初级鱼漂。 |
+| `RandomShopRodT2` | 随机池里的二级鱼竿。 |
+| `RandomYarnBallFloat` | 随机池里的毛线球鱼漂。 |
+| `RandomBellFloat` | 随机池里的铃铛鱼漂。 |
+| `RandomMeatBait` | 随机池里的肉块饵。 |
+| `RandomFruitBait` | 随机池里的果实饵。 |
+| `RandomNectarBait` | 随机池里的花蜜饵。 |
+| `RandomMoonlightBait` | 随机池里的月光饵。 |
+| `RandomBugChum` | 随机池里的虫虫窝料。 |
+| `RandomFruitFragranceChum` | 随机池里的花果香窝料。 |
+| `RandomFermentedGrainChum` | 随机池里的发酵谷物窝料。 |
+| `RandomHolyLightChum` | 随机池里的圣光窝料。 |
 
 ### 动态商品行推荐做法
 
-正式样式不必依赖上面的固定按钮。更好的做法是在 `BP_RenderShop` 里读取 `ViewState.Entries`，每条 `FCatShopEntryView` 生成一个商品行。
+正式样式的标准做法是让 WBP 提供一个名为 `ShopButtons` 的容器，C++ 会按当前 `ViewState.Entries` 自动生成可点击商品按钮；如果要做更精细的卡片样式，也可以在 `BP_RenderShop` 里读取 `ViewState.Entries`，每条 `FCatShopEntryView` 生成一个商品行。商店打开后可以用 `CloseButton`、Escape、交互键或背包键关闭。关卡里的商店摊位不需要单独设置营地；服务器购买时会在当前关卡全图寻找营地，并让营地检查自己的公共仓库。没有可用营地公共仓库时，订单会在扣款前失败并回显原因。
 
 | 字段 | 人话说明 |
 | --- | --- |
 | `EntryId` | 点击时回传的商品 ID。 |
 | `DefinitionId` | 商品对应的装备或消耗品定义。用于展示名字或图标。 |
+| `PurchaseQuantity` | 单次购买会发到营地公共仓库的数量。 |
 | `UnitPrice` | 单价。只展示，服务器才是最终扣款者。 |
 | `RemainingStock` | 剩余库存。 |
 | `bUnlimitedStock` | 是否无限库存。 |
@@ -240,6 +286,8 @@
 | `bActionEnabled` | 当前按钮是否应该可点。 |
 | `DisplayText` | C++ 整理好的商品行文本。 |
 | `ActionText` | C++ 整理好的按钮文字，例如购买或领取。 |
+| `DisplayNameText` | 商品显示名，优先来自商店表覆盖，其次来自装备定义。 |
+| `DescriptionText` | 商品说明，优先来自商店表覆盖，其次来自装备定义。 |
 
 ## 交互提示：`WBP_CatInteractionPrompt`
 
@@ -316,7 +364,9 @@
 
 不要在商店按钮里自己改公款、库存或装备。按钮只调用 `RequestPurchaseEntry` 或 `RequestFreeClaimEntry`，服务器回包后 UI 会刷新。
 
-不要把外部鱼护箱子页面做成另一套状态。`WBP_CatFishGuardInventory` 复用同一个 `UCatInventoryWidget` 和同一个 Model，只是在进入渲染前把显示格裁成地面鱼护容器格。
+不要把外部鱼护箱子页面做成另一套状态。`WBP_CatFishGuardInventory` 复用同一个库存 Model，只是在进入渲染前把显示格裁成地面鱼护容器格。
+
+不要把营地公共仓库的根页面复用默认背包 WBP。`WBP_CatCampInventory` 应继承 `UCatCampInventoryWidget`，但它不再裁掉随身库存；需要分区时按 `SlotSource` 表现，`ACatCampInventoryActor.InventoryViewClass` 要指向这张页面。
 
 不要在 `UCatLocalPlayerUISubsystem` 里给世界库存对象继续加专用成员。LocalPlayer 只保留 HUD、普通背包和交互提示这些本地玩家模块；鱼护、鱼缸和以后新增的箱子应从自己的交互对象传入容器上下文和页面类。
 
@@ -327,10 +377,13 @@
 - `Source/Catfishing/UI/CatUISettings.h`
 - `Source/Catfishing/UI/CatUISettings.cpp`
 - `Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp`
+- `Source/Catfishing/Camp/CatCampInventoryActor.h`
+- `Source/Catfishing/Camp/CatCampInventoryActor.cpp`
 - `Source/Catfishing/Items/CatFishGuardActor.h`
 - `Source/Catfishing/Items/CatFishGuardActor.cpp`
 - `Source/Catfishing/UI/CatUIModalInputMode.cpp`
 - `Source/Catfishing/UI/HUD/CatHUDWidget.h`
+- `Source/Catfishing/UI/Inventory/CatCampInventoryWidget.h`
 - `Source/Catfishing/UI/Inventory/CatInventoryWidget.h`
 - `Source/Catfishing/UI/Inventory/CatInventoryTypes.h`
 - `Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h`

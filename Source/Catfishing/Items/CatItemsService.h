@@ -22,17 +22,17 @@ public:
 	/** World 销毁时关闭新命令并清空仅属本局的容器、预留与终态缓存。 */
 	virtual void Deinitialize() override;
 
-	/** 注册一个真实容器宿主并发布初始 Revision 和正式容量；个人容器身份只保存在服务端记录。 */
+	/** 注册一个真实容器宿主并发布初始 Revision 和正式容量；入口只接收宿主组件、容器 ID、种类和容量，鱼实例归属只留在鱼对象上。 */
 	bool RegisterContainer(UCatContainerReplicationComponent* ReplicationComponent, FGuid ContainerId,
-		ECatContainerKind Kind, const FString& OwnerStableNetId, int32 Capacity);
+		ECatContainerKind Kind, int32 Capacity);
 
 	/** 宿主离开 World 时按精确组件解除发布目标；已有终态不会迁移到其他容器。 */
 	void UnregisterContainer(UCatContainerReplicationComponent* ReplicationComponent);
 
-	/** 复制指定容器已提交的公开事实供上层校验 Revision；不存在时整体失败，预留和主人身份始终留在服务端记录。 */
+	/** 复制指定容器已提交的公开事实供上层校验 Revision；不存在时整体失败，预留事实始终留在服务端记录。 */
 	bool TryGetContainerSnapshot(FGuid ContainerId, FCatContainerSnapshot& OutSnapshot) const;
 
-	/** 返回容器的服务器种类与真实 Actor 宿主；供空间权限校验使用，不暴露私有主人身份。 */
+	/** 返回容器的服务器种类与真实 Actor 宿主；供空间权限校验使用，授权身份仍从鱼实例或调用方上下文读取。 */
 	bool TryGetContainerHost(FGuid ContainerId, ECatContainerKind& OutKind, AActor*& OutAuthorityActor) const;
 
 	/** 首个合法抢抄终态调用的唯一鱼实例创建入口；提交会话预分配 ID，同 RequestId/会话重放只返回首次 Committed DTO。 */
@@ -44,7 +44,7 @@ public:
 	/** 在源/目标容器版本同时匹配时原子移动一条鱼；这是鱼领域策略适配层，UI/RPC 应优先走通用容器物体入口。 */
 	FCatDomainCommandResult TransferOwnedFish(const FCatFishTransferCommand& Command);
 
-	/** 从本人鱼护或共享鱼缸不可逆移除一条未预留鱼；成功后上层才可应用食用效果。 */
+	/** 从地面鱼护箱子或共享鱼缸不可逆移除一条未预留鱼；成功后上层才可应用食用效果。 */
 	FCatFishConsumeResult ConsumeFish(const FCatFishConsumeCommand& Command);
 
 	/** 献祭协调器在不可逆点前锁定一条鱼；预留增加 Revision 但不从复制数组删除。 */
@@ -62,13 +62,11 @@ public:
 private:
 	friend class UCatSocialService;
 
-	/** 单容器服务器记录；公开快照含容量和槽位事实，但预留与 OwnerStableNetId 只留在服务器私有记录。 */
+	/** 单容器服务器记录；公开快照含容量和槽位事实，预留只通过服务私有表按鱼实例单独管理。 */
 	struct FContainerRecord
 	{
 		/** 当前提交后的公开鱼槽数组、容量与 Revision。 */
 		FCatContainerSnapshot Snapshot;
-		/** 旧私有容器主人字段；地面鱼护和共享鱼缸均为空，鱼的捕获者保存在对象实例上。 */
-		FString OwnerStableNetId;
 		/** 显式产品容量；0 表示未裁。 */
 		int32 Capacity = 0;
 		/** 接收复制快照的真实组件弱引用。 */
@@ -115,10 +113,6 @@ private:
 
 	/** 只允许 friend Social 在进食窗口结束后不可逆消费 escrow；返回鱼定义供 Character 应用食用效果。 */
 	FCatFishTheftResult CommitStolenFishConsumption(FGuid TheftProtocolId);
-
-	/** 向 friend Social 返回容器服务器宿主、种类与私有主人；用于权威空间/主人校验，不进入复制 DTO。 */
-	bool TryGetContainerAuthorityContext(FGuid ContainerId, ECatContainerKind& OutKind,
-		FString& OutOwnerStableNetId, AActor*& OutAuthorityActor) const;
 
 	/** 为容器发布新快照；组件失效不回滚服务器事务。 */
 	void PublishContainer(FContainerRecord& Record);

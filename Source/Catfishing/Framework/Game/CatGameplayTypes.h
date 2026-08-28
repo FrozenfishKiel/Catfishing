@@ -28,8 +28,10 @@ class UEnhancedInputLocalPlayerSubsystem;
 class UEnhancedInputComponent;
 class UInputAction;
 class UInputMappingContext;
+class ACatCampInventoryActor;
 class ACatCampHubActor;
 class ACatCharacter;
+class ACatShopKioskActor;
 class ACatWaterRegion;
 struct FInputActionValue;
 enum class ECatBodyActionAbilityCommand : uint8;
@@ -200,7 +202,7 @@ private:
 	void PublishShopEconomySnapshot();
 	/** 将服务器私有 StableNetId 解析成可复制的 PlayerState。 */
 	APlayerState* ResolvePlayerStateByStableNetId(const FString& StableNetId) const;
-	/** 进入最终结算夜后关闭新商店订单；已经交付的个人装备事实继续留在各自 Character 上。 */
+	/** 进入最终结算夜后关闭新商店订单；已经交付的购买物继续留在营地公共仓库快照中。 */
 	void CloseShopForSettlementNight();
 	/** StableNetId 到最小装配记录的服务器唯一映射；GameMode 不复制到客户端，World 销毁时整体释放。 */
 	TMap<FString, FAdmissionRecord> AdmissionRecords;
@@ -251,6 +253,9 @@ private:
 	bool bHostExitAckWaitComplete = false;
 	/** 商店公开经济变化的服务器本机订阅；EndPlay 成对解除，避免旧 World 回调。 */
 	FDelegateHandle ShopPublicTransactionHandle;
+
+	/** 商店货架刷新变化的服务器本机订阅；它只触发快照重建，不创建交易广播。 */
+	FDelegateHandle ShopInventoryRefreshedHandle;
 };
 
 /** Lake 共享比赛状态；复制由服务器 GameMode 组合的 Run/Environment 快照与 Social 最近求助事实。 */
@@ -404,15 +409,18 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerAssistFishingSession(FGuid FishingSessionId, FGuid RequestId, int64 ExpectedRevision);
 
-	/** 把 NearShore 抢抄意图转给指定 FishingSession；服务器覆盖本人的鱼护 ID，首个合法提交者由 Compare-and-Commit 决定。 */
+	/** 把 NearShore 抢抄意图转给指定 FishingSession；服务器覆盖本人当前交互的地面鱼护 ID，首个合法提交者由 Compare-and-Commit 决定。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestScoop(FGuid FishingSessionId, FCatScoopCommand Command);
 
+	/** 建立项目玩家控制器的输入、交互和命令组件宿主；具体输入绑定会在 BeginPlay/SetupInputComponent 阶段安装。 */
 	ACatfishingPlayerController();
 
+	/** 返回本 Controller 持有的钓鱼命令组件；调用方只能通过它提交钓鱼意图，不把组件当库存或 Run 状态来源。 */
 	UFUNCTION(BlueprintPure, Category="Catfishing|Fishing")
 	UCatFishingCommandComponent* GetFishingCommandComponent() const;
 
+	/** 返回本 Controller 持有的交互扫描组件；表现层可读取当前命中目标，真正交互仍走目标 Actor 的接口。 */
 	UFUNCTION(BlueprintPure, Category="Catfishing|Interaction")
 	UCatInteractionTargetingComponent* GetInteractionTargetingComponent() const { return InteractionTargetingComponent; }
 
@@ -462,6 +470,28 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveCampCommandResult(const FCatDomainCommandResult& Result);
 
+	/** 从指定营地公共仓库 Actor 取物到本人随身库存；直接箱子交互使用它，服务器按距离、仓库版本和随身库存版本共同裁决。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Camp")
+	void ServerWithdrawCampInventoryItemAtActor(ACatCampInventoryActor* CampInventory, FGuid RequestId,
+		int64 ExpectedCampInventoryRevision, int32 SourceSlotIndex, int32 Quantity, int64 ExpectedEquipmentRevision);
+
+	/** 整理指定营地公共仓库 Actor 内部两个格子；服务器按仓库距离、版本和槽位下标重读后移动、合并或交换。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Camp")
+	void ServerMoveCampInventorySlotAtActor(ACatCampInventoryActor* CampInventory, FGuid RequestId,
+		int64 ExpectedCampInventoryRevision, int32 SourceSlotIndex, int32 TargetSlotIndex);
+
+	/** 把本人随身库存指定格拖入营地公共仓库指定格；服务器按双方版本和仓库距离同时裁决两份数据源。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Camp")
+	void ServerDepositInventoryItemToCampAtActor(ACatCampInventoryActor* CampInventory, FGuid RequestId,
+		int64 ExpectedCampInventoryRevision, int32 TargetCampSlotIndex, int64 ExpectedEquipmentRevision,
+		int32 SourceEquipmentSlotIndex);
+
+	/** 把营地公共仓库指定格拖到本人随身库存指定格；服务器按双方版本和仓库距离同时裁决两份数据源。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Camp")
+	void ServerWithdrawCampInventoryItemToSlotAtActor(ACatCampInventoryActor* CampInventory, FGuid RequestId,
+		int64 ExpectedCampInventoryRevision, int32 SourceCampSlotIndex, int64 ExpectedEquipmentRevision,
+		int32 TargetEquipmentSlotIndex);
+
 	/** 返回本机最近收到的公共领域命令结果供表现层关联请求；该缓存不作为 Camp、Items、Equipment 或 Condition 的权限事实。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Camp")
 	FCatDomainCommandResult GetLastCampCommandResult() const;
@@ -479,15 +509,17 @@ public:
 	void ServerMoveInventorySlot(FGuid RequestId, int64 ExpectedRevision,
 		int32 SourceSlotIndex, int32 TargetSlotIndex);
 
-	/** 花团队公款购买服务器目录项；价格、库存与身份均不由客户端提供。 */
+	/** 从指定商店摊位购买服务器目录项；服务器复核玩家仍在摊位旁，再全图寻找可接收发货的营地公共仓库。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
-	void ServerSubmitShopPurchase(FName EntryId, FGuid RequestId, int64 ExpectedWalletRevision);
+	void ServerSubmitShopPurchaseAtKiosk(ACatShopKioskActor* ShopKiosk, FName EntryId, FGuid RequestId,
+		int64 ExpectedWalletRevision);
 
-	/** 免费领取服务器明确配置为免费且无限库存的目录项。 */
+	/** 从指定商店摊位免费领取目录项；服务器仍按商店表白名单、摊位距离和当前 World 的营地公共仓库裁决。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
-	void ServerClaimFreeShopEntry(FName EntryId, FGuid RequestId, int64 ExpectedWalletRevision);
+	void ServerClaimFreeShopEntryAtKiosk(ACatShopKioskActor* ShopKiosk, FName EntryId, FGuid RequestId,
+		int64 ExpectedWalletRevision);
 
-	/** 售出本人鱼护或共享鱼缸中的鱼；服务器从 Items 容器读取重量并在删除鱼后把收入记入团队公款。 */
+	/** 售出指定 Items 鱼容器中的鱼；服务器从地面鱼护箱子或共享鱼缸读取重量，并在删除鱼后把收入记入团队公款。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
 	void ServerSellFish(FGuid FishInstanceId, FGuid ContainerId, int64 ExpectedContainerRevision,
 		ECatShopFishSaleSource SourceKind, FGuid RequestId, int64 ExpectedWalletRevision);
@@ -501,7 +533,7 @@ public:
 	void ServerUseHerbOnCharacter(ACatCharacter* TargetCharacter, FGuid RequestId,
 		int64 ExpectedEquipmentRevision, FName HerbDefinitionId);
 
-	/** 从本人鱼护或共享缸直接吃一条鱼；Items 移除成功后才按 FishDefinition 修改 Poison 并推进吃鱼成长。 */
+	/** 从地面鱼护箱子或共享鱼缸直接吃一条鱼；Items 移除成功后才按 FishDefinition 修改 Poison 并推进吃鱼成长。 */
 	UFUNCTION(Server, Reliable)
 	void ServerConsumeFish(ACatCharacter* EatingCharacter, FCatFishConsumeCommand Command);
 
@@ -509,7 +541,7 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveFishConsumeResult(const FCatFishConsumeResult& Result);
 
-	/** 返回本机最近收到的直接吃鱼结果供 UI 关联 RequestId 和容器 Revision；权威鱼护仍由 Items 复制。 */
+	/** 返回本机最近收到的直接吃鱼结果供 UI 关联 RequestId 和容器 Revision；权威容器状态仍由 Items 复制。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Items")
 	FCatFishConsumeResult GetLastFishConsumeResult() const;
 
@@ -639,10 +671,15 @@ private:
 	void SetSprintRequested(bool bNewSprintRequested, bool bNotifyServer);
 	/** 把服务器配置的普通/疾跑速度应用到指定 Character；非 Character Pawn 安全跳过。 */
 	void ApplySprintSpeed(APawn* TargetPawn, bool bSprinting) const;
+	/** Ability 输入按下入口；只把 GameplayTag 转交当前 Character ASC，不在 Controller 内直接启动领域命令。 */
 	void AbilityInputTagPressed(FGameplayTag InputTag);
+	/** Ability 输入释放入口；只把 GameplayTag 转交当前 Character ASC，释放本身不修改 Run、Items 或 Equipment 事实。 */
 	void AbilityInputTagReleased(FGameplayTag InputTag);
+	/** 项目原生输入标签入口；处理交互这类非 Ability 动作，未知标签必须保持无副作用。 */
 	void NativeInputTagPressed(FGameplayTag InputTag);
+	/** 读取当前 Pawn 上可接收输入标签的 Cat AbilitySystem；Pawn 失效或未装配时返回空。 */
 	UCatAbilitySystemComponent* GetCurrentCatAbilitySystemComponent() const;
+	/** 刷新 Ability 输入路由；Pawn 或 ASC 变化时先清旧绑定再接新目标，避免旧 Pawn 继续接收输入。 */
 	void RefreshAbilityInputRoute();
 	/** 为某类非 Fishing 身体动作创建一次性 Ability 事件载荷；创建失败或未知动作时调用方保持 fail-closed。 */
 	UCatBodyActionPayload* CreateBodyActionPayload(ECatBodyActionAbilityCommand Command);
@@ -654,7 +691,7 @@ private:
 	void SubmitCampRestFromBodyActionAbility(ACatCampHubActor* Camp, FGuid RequestId);
 	/** BodyAction Ability 接管后的篝火回看提交；保持 Camp 的 CapturePlan 与 multicast 裁决。 */
 	void SubmitCampfirePlaybackFromBodyActionAbility(ACatCampHubActor* Camp, FGuid RequestId);
-	/** 服务器接管普通容器库存提交；公共鱼护按箱子库存处理，不走 BodyAction/Social，只保留槽位复核、距离校验、Items 原子事务和 owning-client 结果回送。 */
+	/** 服务器接管普通容器库存提交；地面鱼护箱子按 Items 容器处理，不走 BodyAction/Social，只保留槽位复核、距离校验、Items 原子事务和 owning-client 结果回送。 */
 	void SubmitTransferObjectBetweenContainersFromServerRequest(FGuid RequestId, ECatContainedObjectKind ObjectKind,
 		FGuid ObjectInstanceId,
 		FGuid SourceContainerId, ECatContainerKind SourceContainerKind, int32 SourceContainerSlotIndex,
@@ -724,8 +761,9 @@ private:
 	bool CanForwardGameplayCommand() const;
 	/** 查询 Fishing/玩家打窝专用 gate；它复用身份与 teardown 判断，但额外要求 Run 处于 DayActive、允许钓鱼且当前猫没有倒地。 */
 	bool CanForwardFishingCommand() const;
-	/** 购买与免费领取共用的服务器转发实现；完成或拒绝后把交付段结果回送 owning client，前端再重读复制库存。 */
-	void SubmitShopOrder(FName EntryId, FGuid RequestId, int64 ExpectedWalletRevision, bool bFreeClaim);
+	/** 购买与免费领取共用的服务器转发实现；来源摊位只做距离证明，收货公共仓库由当前 World 中的 ACatCampHubActor 接口提供。 */
+	void SubmitShopOrder(ACatShopKioskActor* ShopKiosk, FName EntryId, FGuid RequestId,
+		int64 ExpectedWalletRevision, bool bFreeClaim);
 
 	/** owning client 最近收到的 Social 协议读模型；由可靠结果 RPC 整体替换，不复制回服务器或作为权限事实。 */
 	UPROPERTY(Transient)
@@ -743,9 +781,11 @@ private:
 	UPROPERTY(Transient)
 	FCatFishConsumeResult LastFishConsumeResult;
 
+	/** 当前 Controller 创建的钓鱼命令组件；它承接玩家钓鱼输入并把正式事务继续交给领域服务。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Catfishing|Fishing", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UCatFishingCommandComponent> FishingCommandComponent;
 
+	/** 当前 Controller 创建的准星交互扫描组件；它只负责发现可交互 Actor，具体交互由目标对象自己的接口执行。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Catfishing|Interaction", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UCatInteractionTargetingComponent> InteractionTargetingComponent;
 };

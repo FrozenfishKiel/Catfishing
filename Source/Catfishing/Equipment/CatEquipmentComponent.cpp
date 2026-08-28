@@ -3,6 +3,7 @@
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
+#include "Equipment/CatRunInventorySlotOperations.h"
 #include "GameFramework/Pawn.h"
 #include "Net/UnrealNetwork.h"
 
@@ -328,7 +329,7 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantEquipmentFromAuthority(cons
 // 库存整理流程：
 // 1. 先用 RequestId、Revision 和源/目标下标查询终态缓存，合法重放必须返回首次结果，不受当前 Fishing 或消耗阶段影响。
 // 2. 首次请求再检查当前阶段 gate，避免整理库存和正在提交的库存消耗同时改同一份数组。
-// 3. 服务器重读当前库存格数组，源格必须有物品，目标格可以为空、同定义可合并，或不同定义可交换。
+// 3. 服务器重读当前库存格数组，源格必须有物品，目标格移动/合并/交换复用运行库存格通用规则。
 // 4. 成功移动后推进 Revision 并发布同一份库存快照；View 只通过 OnSnapshotChanged 重刷。
 FCatDomainCommandResult UCatEquipmentComponent::MoveInventorySlotFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const int32 SourceSlotIndex, const int32 TargetSlotIndex)
@@ -376,50 +377,17 @@ FCatDomainCommandResult UCatEquipmentComponent::MoveInventorySlotFromAuthority(c
 		}
 		else
 		{
-			FCatRunInventorySlot& SourceSlot = Snapshot.InventorySlots[SourceSlotIndex];
-			FCatRunInventorySlot& TargetSlot = Snapshot.InventorySlots[TargetSlotIndex];
-			if (SourceSlot.DefinitionId.IsNone() || SourceSlot.Quantity <= 0)
-			{
-				Result.Error = ECatDomainCommandError::NotFound;
-			}
-			else if (TargetSlot.DefinitionId.IsNone() || TargetSlot.Quantity <= 0)
-			{
-				TargetSlot = SourceSlot;
-				SourceSlot = FCatRunInventorySlot();
-				Result.bCommitted = true;
-				Result.Error = ECatDomainCommandError::None;
-			}
-			else if (TargetSlot.DefinitionId == SourceSlot.DefinitionId)
+			const auto ResolveStackLimit = [this](const FName DefinitionId)
 			{
 				const UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
-					SourceSlot.DefinitionId);
-				const int32 StackLimit = Definition ? GetInventoryStackLimit(*Definition) : 1;
-				const int32 Room = FMath::Max(0, StackLimit - TargetSlot.Quantity);
-				const int32 MovedQuantity = FMath::Min(Room, SourceSlot.Quantity);
-				if (MovedQuantity > 0)
-				{
-					TargetSlot.Quantity += MovedQuantity;
-					SourceSlot.Quantity -= MovedQuantity;
-					if (SourceSlot.Quantity <= 0)
-					{
-						SourceSlot = FCatRunInventorySlot();
-					}
-					Result.bCommitted = true;
-					Result.Error = ECatDomainCommandError::None;
-				}
-				else
-				{
-					Result.Error = ECatDomainCommandError::AlreadyResolved;
-				}
-			}
-			else
-			{
-				const FCatRunInventorySlot PreviousTarget = TargetSlot;
-				TargetSlot = SourceSlot;
-				SourceSlot = PreviousTarget;
-				Result.bCommitted = true;
-				Result.Error = ECatDomainCommandError::None;
-			}
+					DefinitionId);
+				return Definition ? GetInventoryStackLimit(*Definition) : 1;
+			};
+			const CatRunInventorySlotOperations::FMoveSlotsResult MoveResult =
+				CatRunInventorySlotOperations::MoveItemBetweenSlots(
+					Snapshot.InventorySlots, SourceSlotIndex, TargetSlotIndex, ResolveStackLimit);
+			Result.bCommitted = MoveResult.bChanged;
+			Result.Error = MoveResult.Error;
 		}
 	}
 	if (Result.bCommitted)
@@ -1041,9 +1009,13 @@ int32 UCatEquipmentComponent::GetConfiguredInventorySlotCapacity() const
 	return Settings ? FMath::Max(0, Settings->InventorySlotCapacity) : 0;
 }
 
-// 单格堆叠读取流程：非数量型物品只能一格一件；数量型物品按配置限制，0 表示用最大整数作为“不限制单格堆叠”。
+// 单格堆叠读取流程：定义资产可直接声明单格上限；未声明时，非数量型物品一格一件，数量型物品沿用项目默认上限。
 int32 UCatEquipmentComponent::GetInventoryStackLimit(const UCatEquipmentDefinition& Definition) const
 {
+	if (Definition.MaxStackSize > 0)
+	{
+		return FMath::Max(1, Definition.MaxStackSize);
+	}
 	if (!Definition.bRunConsumable)
 	{
 		return 1;

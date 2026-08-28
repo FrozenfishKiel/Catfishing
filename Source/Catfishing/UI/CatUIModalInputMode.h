@@ -17,7 +17,7 @@ struct FCatUIModalInputModeState
 
 namespace CatUIModalInputMode
 {
-	/** 为已经挂入视口的模态 Widget 接管本地输入；成功后 UI 获得焦点，角色移动和视角输入被本页面暂停。 */
+	/** 为已经挂入视口的模态 Widget 接管本地输入；会先打开焦点能力，成功后 UI 获得焦点且角色移动和视角输入被本页面暂停。 */
 	void Open(APlayerController* Controller, UUserWidget* FocusWidget, FCatUIModalInputModeState& State);
 
 	/** 释放本页面的模态输入接管；关闭后恢复游戏输入和鼠标状态，Controller 已失效时只清理本地恢复记录。 */

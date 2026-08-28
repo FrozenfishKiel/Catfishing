@@ -8,6 +8,8 @@ FCatFishingViewState FCatFishingViewState::FromSnapshot(const FCatFishingSession
 	View.Revision = Snapshot.Revision;
 	View.Phase = Snapshot.Phase;
 	View.Outcome = Snapshot.Outcome;
+	View.PhaseStartedServerTime = Snapshot.PhaseStartedServerTime;
+	View.WindowEndsServerTime = Snapshot.WindowEndsServerTime;
 	View.FishDefinitionId = Snapshot.FishDefinitionId;
 	View.NormalizedFishStamina = Snapshot.NormalizedFishStamina;
 	View.bReeling = Snapshot.bReeling;

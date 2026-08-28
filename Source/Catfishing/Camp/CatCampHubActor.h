@@ -7,6 +7,7 @@
 
 class ACatCharacter;
 class ACatFishTankActor;
+class ACatCampInventoryActor;
 class USceneComponent;
 
 /** 篝火公共回看请求；它只启动可跳过表现，不参与普通夜晚 ready 或 StateTree 转移。 */
@@ -33,6 +34,9 @@ public:
 
 	/** 判断传入鱼缸是否就是本营地显式关联的共享鱼缸；交互组件只用它解析 Camp 上下文，不取得写权限。 */
 	bool IsSharedFishTank(const ACatFishTankActor* Candidate) const;
+
+	/** 商店发货询问本营地能否提供公共仓库；PlayerController 全图扫描命中后调用它，空值表示本营地当前不能接收购买物。 */
+	ACatCampInventoryActor* ResolvePublicInventoryForShopOrder() const;
 
 	/** 幂等请求可跳过的篝火回看；结算封面先为全体在场玩家批量建齐 Planned 事实，成功才广播一次表现意图，且不写 Run ready。 */
 	FCatDomainCommandResult RequestCampfirePlayback(AController* RequestingController, FGuid RequestId);
@@ -62,6 +66,10 @@ private:
 	/** 关卡显式关联的共享鱼缸；空引用时外部容器上下文 fail-closed，不在命令中临时 Spawn。 */
 	UPROPERTY(EditInstanceOnly, Category = "Camp")
 	TObjectPtr<ACatFishTankActor> SharedFishTank;
+
+	/** 关卡显式关联的营地公共仓库；它接收商店购买物，并作为玩家取用公共装备的唯一营地入口，不由商店摊位配置。 */
+	UPROPERTY(EditInstanceOnly, Category = "Camp")
+	TObjectPtr<ACatCampInventoryActor> PublicInventory;
 
 	/** 救援者身份、命令类别与 RequestId 到首次成功终态；网络重试先重放，避免重复 Teleport 同一倒地目标。 */
 	TMap<FString, FCatDomainCommandResult> RescueTerminalCache;

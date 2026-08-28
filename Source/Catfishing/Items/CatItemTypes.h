@@ -9,13 +9,11 @@ UENUM(BlueprintType)
 enum class ECatContainerKind : uint8
 {
 	/** 容器尚未注册或种类未裁。 */
-	Unknown,
-	/** 旧角色个人鱼护枚举值，仅为已保存资产兼容保留；运行时不得注册或写入。 */
-	PersonalGuard UMETA(Hidden, Deprecated, DeprecationMessage="Use ground FishGuard actors"),
+	Unknown = 0,
 	/** 关卡中共享鱼缸 Actor 承载的团队容器。 */
-	SharedFishTank,
+	SharedFishTank = 2,
 	/** 关卡中可交互鱼护箱子承载的鱼容器；它不绑定玩家身份，也不套用鱼缸展示资格。 */
-	FishGuard
+	FishGuard = 3
 };
 
 /** 一条局内实物鱼；与图鉴/印记 Grant 的永久事实分离，容器删除不能回滚捕获记录。 */
@@ -32,7 +30,7 @@ struct FCatFishInstance
 	UPROPERTY(BlueprintReadOnly)
 	FName FishDefinitionId = NAME_None;
 
-	/** 鱼实例的服务器私有捕获者 StableNetId；用于吃鱼、售鱼、偷取与归档权限，不代表角色持有一个随身鱼护。 */
+	/** 鱼实例的服务器私有捕获者 StableNetId；用于吃鱼、售鱼、偷取与归档权限，不代表角色额外拥有容器库存。 */
 	FString OwnerStableNetId;
 
 	/** 产生该实例的 FishingSession ID；用于捕获幂等审计，不用于恢复旧会话。 */
@@ -238,7 +236,7 @@ struct FCatFishTheftCommand
 	/** 被偷的唯一实物鱼。 */
 	FGuid FishInstanceId;
 
-	/** 他人鱼护或共享鱼缸容器 ID。 */
+	/** 目标地面鱼护箱子或共享鱼缸容器 ID。 */
 	FGuid SourceContainerId;
 };
 
