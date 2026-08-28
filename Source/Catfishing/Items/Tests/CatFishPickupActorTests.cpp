@@ -153,6 +153,23 @@ bool FCatFishPickupMouthCarryAndGuardStoreTest::RunTest(const FString& Parameter
 	TestTrue(TEXT("对死鱼按 E 后进入嘴叼状态"), Pickup->Interact_Implementation(Controller, FGuid::NewGuid()));
 	TestEqual(TEXT("死鱼状态为 Carried"), Pickup->GetPresentationState().State, ECatFishPickupState::Carried);
 	TestEqual(TEXT("嘴叼鱼仍附着在角色 Actor 下"), Pickup->GetAttachParentActor(), static_cast<AActor*>(Character));
+	TestEqual(TEXT("嘴叼鱼根组件精确附着到角色 Mesh"), Pickup->GetRootComponent()->GetAttachParent(),
+		static_cast<USceneComponent*>(Character->GetMesh()));
+	const FName ExpectedMouthSocket = Character->GetMesh()->GetSkeletalMeshAsset() && WorldItemSettings
+		? WorldItemSettings->MouthCarrySocketName : NAME_None;
+	TestEqual(TEXT("嘴叼鱼根组件使用 Mouth Socket"), Pickup->GetRootComponent()->GetAttachSocketName(),
+		ExpectedMouthSocket);
+	TestTrue(TEXT("嘴叼鱼根组件使用配置的 Socket 相对 Transform"), Pickup->GetRootComponent()->GetRelativeTransform().Equals(
+		WorldItemSettings ? WorldItemSettings->MouthCarryRelativeTransform : FTransform::Identity,
+		UE_KINDA_SMALL_NUMBER));
+	TestTrue(TEXT("构造客户端常见的错误角色根附着"), Pickup->AttachToComponent(Character->GetRootComponent(),
+		FAttachmentTransformRules::KeepWorldTransform));
+	TestTrue(TEXT("附着收敛会把同一父 Actor 下的错误组件修回 Mesh Mouth"),
+		Pickup->AttachCarriedRootToMouth(Character, TEXT("AutomationRepair"), false));
+	TestEqual(TEXT("修正后父组件是角色 Mesh"), Pickup->GetRootComponent()->GetAttachParent(),
+		static_cast<USceneComponent*>(Character->GetMesh()));
+	TestEqual(TEXT("修正后 Socket 是 Mouth"), Pickup->GetRootComponent()->GetAttachSocketName(),
+		ExpectedMouthSocket);
 	TestEqual(TEXT("角色只能找到这一条嘴叼鱼"), ACatFishPickupActor::FindCarriedFish(Character), Pickup);
 	if (PickupMesh)
 	{

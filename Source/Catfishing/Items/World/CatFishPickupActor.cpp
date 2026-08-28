@@ -15,7 +15,9 @@
 #include "Interaction/CatInteractionSettings.h"
 #include "Items/CatItemsService.h"
 #include "Items/CatWorldItemSettings.h"
+#include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
+#include "TimerManager.h"
 
 ACatFishPickupActor::ACatFishPickupActor()
 {
@@ -57,7 +59,21 @@ void ACatFishPickupActor::BeginPlay()
 			FishMesh->SetSkeletalMeshAsset(Mesh);
 		}
 	}
-	ApplyLandedVisualTransform();
+	if (PresentationState.State == ECatFishPickupState::Carried)
+	{
+		ApplyCarriedVisualTransform();
+		ReconcileAttachmentFromPresentation(TEXT("BeginPlay"));
+	}
+	else
+	{
+		ApplyLandedVisualTransform();
+	}
+}
+
+void ACatFishPickupActor::OnRep_AttachmentReplication()
+{
+	Super::OnRep_AttachmentReplication();
+	ReconcileAttachmentFromPresentation(TEXT("AttachmentReplication"));
 }
 
 void ACatFishPickupActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -163,10 +179,6 @@ bool ACatFishPickupActor::BeginMouthCarryFromAuthority(ACatCharacter* Character,
 	{
 		return false;
 	}
-	const UCatWorldItemSettings* Settings = GetDefault<UCatWorldItemSettings>();
-	const FName SocketName = Character->GetMesh()->GetSkeletalMeshAsset() && Settings
-		? Settings->MouthCarrySocketName : NAME_None;
-	const FTransform RelativeTransform = Settings ? Settings->MouthCarryRelativeTransform : FTransform::Identity;
 	AuthorityCarrier = Character;
 	Character->OnDestroyed.AddDynamic(this, &ThisClass::HandleAuthorityCarrierDestroyed);
 	SetOwner(Character);
@@ -175,8 +187,9 @@ bool ACatFishPickupActor::BeginMouthCarryFromAuthority(ACatCharacter* Character,
 	PresentationState.CarriedByPlayerState = PlayerState;
 	InteractionSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	ApplyLocalFocus(false);
-	if (!AttachToComponent(Character->GetMesh(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, SocketName))
+	if (!AttachCarriedRootToMouth(Character, TEXT("AuthorityCommit"), false))
 	{
+		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 		Character->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleAuthorityCarrierDestroyed);
 		AuthorityCarrier.Reset();
 		SetOwner(nullptr);
@@ -186,35 +199,169 @@ bool ACatFishPickupActor::BeginMouthCarryFromAuthority(ACatCharacter* Character,
 		InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 		return false;
 	}
-	SetActorRelativeTransform(RelativeTransform);
-	ApplyCarriedVisualTransform();
 	ForceNetUpdate();
 	Character->ForceNetUpdate();
+	UE_LOG(LogCatItems, Log,
+		TEXT("Event=fish_pickup_mouth_attach_committed SessionId=%s FishInstanceId=%s Pickup=%s Carrier=%s ParentComponent=%s Socket=%s ActorRelative=%s NetMode=%d"),
+		*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+		*PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(this),
+		*GetNameSafe(Character), *GetNameSafe(GetRootComponent() ? GetRootComponent()->GetAttachParent() : nullptr),
+		GetRootComponent() ? *GetRootComponent()->GetAttachSocketName().ToString() : TEXT("None"),
+		GetRootComponent() ? *GetRootComponent()->GetRelativeTransform().ToHumanReadableString() : TEXT("Invalid"),
+		static_cast<int32>(GetNetMode()));
 	return GetAttachParentActor() == Character;
 }
 
-void ACatFishPickupActor::ApplyCarriedAttachmentFromPresentation()
+bool ACatFishPickupActor::AttachCarriedRootToMouth(ACatCharacter* Character, const TCHAR* Source,
+	const bool bLogCorrection)
 {
-	if (HasAuthority() || PresentationState.State != ECatFishPickupState::Carried
-		|| !PresentationState.CarriedByPlayerState)
+	USkeletalMeshComponent* CharacterMesh = Character ? Character->GetMesh() : nullptr;
+	USceneComponent* Root = GetRootComponent();
+	if (!Character || !CharacterMesh || !Root)
 	{
-		return;
-	}
-	ACatCharacter* Character = Cast<ACatCharacter>(PresentationState.CarriedByPlayerState->GetPawn());
-	if (!Character || !Character->GetMesh())
-	{
-		return;
+		return false;
 	}
 	const UCatWorldItemSettings* Settings = GetDefault<UCatWorldItemSettings>();
-	const FName SocketName = Character->GetMesh()->GetSkeletalMeshAsset() && Settings
-		? Settings->MouthCarrySocketName : NAME_None;
-	const FTransform RelativeTransform = Settings ? Settings->MouthCarryRelativeTransform : FTransform::Identity;
-	if (GetAttachParentActor() != Character)
+	const bool bCharacterMeshReady = CharacterMesh->GetSkeletalMeshAsset() != nullptr;
+	if (!HasAuthority() && !bCharacterMeshReady)
 	{
-		AttachToComponent(Character->GetMesh(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, SocketName);
+		return false;
+	}
+	const FName SocketName = Settings && bCharacterMeshReady ? Settings->MouthCarrySocketName : NAME_None;
+	const FTransform RelativeTransform = Settings ? Settings->MouthCarryRelativeTransform : FTransform::Identity;
+	USceneComponent* PreviousParent = Root->GetAttachParent();
+	const FName PreviousSocket = Root->GetAttachSocketName();
+	const FTransform PreviousRelative = Root->GetRelativeTransform();
+	const bool bNeedsCorrection = PreviousParent != CharacterMesh || PreviousSocket != SocketName
+		|| !PreviousRelative.Equals(RelativeTransform, UE_KINDA_SMALL_NUMBER);
+	if ((PreviousParent != CharacterMesh || PreviousSocket != SocketName)
+		&& !AttachToComponent(CharacterMesh, FAttachmentTransformRules::SnapToTargetNotIncludingScale, SocketName))
+	{
+		return false;
 	}
 	SetActorRelativeTransform(RelativeTransform);
 	ApplyCarriedVisualTransform();
+	const bool bExact = Root->GetAttachParent() == CharacterMesh && Root->GetAttachSocketName() == SocketName
+		&& Root->GetRelativeTransform().Equals(RelativeTransform, UE_KINDA_SMALL_NUMBER);
+	if (bLogCorrection && bNeedsCorrection)
+	{
+		if (bExact)
+		{
+			UE_LOG(LogCatItems, Log,
+				TEXT("Event=fish_pickup_attachment_reconciled Result=Corrected Source=%s SessionId=%s FishInstanceId=%s Pickup=%s Carrier=%s PreviousParent=%s PreviousSocket=%s DesiredParent=%s DesiredSocket=%s PreviousRelative=%s FinalRelative=%s NetMode=%d"),
+				Source ? Source : TEXT("Unknown"),
+				*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				*PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(this),
+				*GetNameSafe(Character), *GetNameSafe(PreviousParent), *PreviousSocket.ToString(),
+				*GetNameSafe(CharacterMesh), *SocketName.ToString(), *PreviousRelative.ToHumanReadableString(),
+				*Root->GetRelativeTransform().ToHumanReadableString(), static_cast<int32>(GetNetMode()));
+		}
+		else
+		{
+			UE_LOG(LogCatItems, Warning,
+				TEXT("Event=fish_pickup_attachment_reconciled Result=Failed Source=%s SessionId=%s FishInstanceId=%s Pickup=%s Carrier=%s PreviousParent=%s PreviousSocket=%s DesiredParent=%s DesiredSocket=%s NetMode=%d"),
+				Source ? Source : TEXT("Unknown"),
+				*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				*PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(this),
+				*GetNameSafe(Character), *GetNameSafe(PreviousParent), *PreviousSocket.ToString(),
+				*GetNameSafe(CharacterMesh), *SocketName.ToString(), static_cast<int32>(GetNetMode()));
+		}
+	}
+	return bExact;
+}
+
+void ACatFishPickupActor::ReconcileAttachmentFromPresentation(const TCHAR* Source)
+{
+	if (HasAuthority())
+	{
+		return;
+	}
+	if (PresentationState.State != ECatFishPickupState::Carried)
+	{
+		if (UWorld* World = GetWorld())
+		{
+			World->GetTimerManager().ClearTimer(AttachmentReconcileTimer);
+		}
+		AttachmentReconcileAttemptCount = 0;
+		bAttachmentReconcileRetryExhausted = false;
+		if (GetAttachParentActor())
+		{
+			DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		}
+		ApplyLandedVisualTransform();
+		return;
+	}
+
+	ACatCharacter* Character = PresentationState.CarriedByPlayerState
+		? Cast<ACatCharacter>(PresentationState.CarriedByPlayerState->GetPawn()) : nullptr;
+	if (!Character)
+	{
+		Character = Cast<ACatCharacter>(GetAttachmentReplication().AttachParent.Get());
+	}
+	if (!Character)
+	{
+		Character = Cast<ACatCharacter>(GetAttachParentActor());
+	}
+	if (!Character || !AttachCarriedRootToMouth(Character, Source, true))
+	{
+		if (AttachmentReconcileAttemptCount == 0)
+		{
+			UE_LOG(LogCatItems, Log,
+				TEXT("Event=fish_pickup_attachment_reconcile_deferred Reason=CarrierOrMeshUnavailable Source=%s SessionId=%s FishInstanceId=%s Pickup=%s CarrierPlayerState=%s RepAttachParent=%s CurrentAttachParent=%s NetMode=%d"),
+				Source ? Source : TEXT("Unknown"),
+				*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				*PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(this),
+				*GetNameSafe(PresentationState.CarriedByPlayerState),
+				*GetNameSafe(GetAttachmentReplication().AttachParent.Get()), *GetNameSafe(GetAttachParentActor()),
+				static_cast<int32>(GetNetMode()));
+		}
+		ScheduleAttachmentReconcileRetry();
+		return;
+	}
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(AttachmentReconcileTimer);
+	}
+	AttachmentReconcileAttemptCount = 0;
+	bAttachmentReconcileRetryExhausted = false;
+}
+
+void ACatFishPickupActor::ScheduleAttachmentReconcileRetry()
+{
+	UWorld* World = GetWorld();
+	if (!World || HasAuthority() || PresentationState.State != ECatFishPickupState::Carried
+		|| World->GetTimerManager().IsTimerActive(AttachmentReconcileTimer))
+	{
+		return;
+	}
+	constexpr int32 MaximumAttempts = 40;
+	if (AttachmentReconcileAttemptCount >= MaximumAttempts)
+	{
+		if (!bAttachmentReconcileRetryExhausted)
+		{
+			bAttachmentReconcileRetryExhausted = true;
+			UE_LOG(LogCatItems, Warning,
+				TEXT("Event=fish_pickup_attachment_reconcile_failed Reason=RetryExhausted Attempts=%d SessionId=%s FishInstanceId=%s Pickup=%s CarrierPlayerState=%s RepAttachParent=%s NetMode=%d"),
+				AttachmentReconcileAttemptCount,
+				*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				*PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(this),
+				*GetNameSafe(PresentationState.CarriedByPlayerState),
+				*GetNameSafe(GetAttachmentReplication().AttachParent.Get()), static_cast<int32>(GetNetMode()));
+		}
+		return;
+	}
+	World->GetTimerManager().SetTimer(AttachmentReconcileTimer, this,
+		&ThisClass::RetryAttachmentReconcile, 0.05f, false);
+}
+
+void ACatFishPickupActor::RetryAttachmentReconcile()
+{
+	if (UWorld* World = GetWorld())
+	{
+		World->GetTimerManager().ClearTimer(AttachmentReconcileTimer);
+	}
+	++AttachmentReconcileAttemptCount;
+	ReconcileAttachmentFromPresentation(TEXT("DeferredRetry"));
 }
 
 void ACatFishPickupActor::ReleaseMouthCarryFromAuthority(const FVector& DropLocation)
@@ -474,17 +621,16 @@ void ACatFishPickupActor::OnRep_PresentationState(const FCatFishPickupPresentati
 {
 	if (PresentationState.State == ECatFishPickupState::Carried)
 	{
-		ApplyCarriedVisualTransform();
 		if (InteractionSphere)
 		{
 			InteractionSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		}
 		ApplyLocalFocus(false);
-		ApplyCarriedAttachmentFromPresentation();
+		ReconcileAttachmentFromPresentation(TEXT("PresentationState"));
 	}
 	else
 	{
-		ApplyLandedVisualTransform();
+		ReconcileAttachmentFromPresentation(TEXT("PresentationState"));
 		if (InteractionSphere)
 		{
 			InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);

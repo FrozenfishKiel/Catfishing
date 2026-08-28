@@ -79,15 +79,22 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void OnRep_AttachmentReplication() override;
 
 private:
 	friend class ACatFishingSession;
+	friend class FCatFishPickupMouthCarryAndGuardStoreTest;
 
 	UFUNCTION() void OnRep_PresentationState(const FCatFishPickupPresentationState& Previous);
 	UFUNCTION() void HandleAuthorityCarrierDestroyed(AActor* DestroyedActor);
 	bool IsAuthorityRequestSpatiallyValid(const AController* RequestingController) const;
 	bool BeginMouthCarryFromAuthority(ACatCharacter* Character, APlayerState* PlayerState);
-	void ApplyCarriedAttachmentFromPresentation();
+	/** 把根组件精确附着到角色 Mesh + Mouth Socket；不能只比较父 Actor。 */
+	bool AttachCarriedRootToMouth(ACatCharacter* Character, const TCHAR* Source, bool bLogCorrection);
+	/** 以复制的 Carried/Available 为最终事实，收敛 AttachmentReplication 与 PresentationState 的到达顺序。 */
+	void ReconcileAttachmentFromPresentation(const TCHAR* Source);
+	void ScheduleAttachmentReconcileRetry();
+	void RetryAttachmentReconcile();
 	void ReleaseMouthCarryFromAuthority(const FVector& DropLocation);
 	void ApplyLocalFocus(bool bFocused);
 	/** Available 状态恢复落地专用 Mesh 位置和旋转，同时保留冻结重量缩放。 */
@@ -112,5 +119,8 @@ private:
 	TWeakObjectPtr<ACatCharacter> AuthorityCarrier;
 	bool bIdentityInitialized = false;
 	bool bLocallyFocused = false;
+	FTimerHandle AttachmentReconcileTimer;
+	int32 AttachmentReconcileAttemptCount = 0;
+	bool bAttachmentReconcileRetryExhausted = false;
 	TMap<FString, FCatDomainCommandResult> PickupTerminalByRequester;
 };
