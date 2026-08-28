@@ -4,6 +4,7 @@
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Logging/CatLog.h"
+#include "Logging/CatLogContext.h"
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Condition/CatConditionComponent.h"
@@ -404,19 +405,29 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 	}
 	const FCatFishingRodPresentationState State = Rod->GetPresentationState();
 	const int32 RequestedSlotIndex = Rod->GetFirstFreeOperatorSlotIndex();
+	// CooperativeFishing 尚未接入输入、力量和体力分摊前，运行时只开放 0 号主操作位。
+	// 保留 Actor 的双槽数据结构与锚点供后续实现，但不能把当前玩家送进无法操作的副位。
+	if (!State.OperatorPlayerStates.IsEmpty())
+	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_rod_operate_rejected Reason=PrimaryOccupied Rod=%s RodId=%s OperatorCount=%d RequestedSlot=%d %s"),
+			*GetNameSafe(Rod), *State.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
+			State.OperatorPlayerStates.Num(), RequestedSlotIndex,
+			*CatLogContext::BuildControllerFields(Controller));
+		Result.Error = ECatFishingCommandError::RodOccupied;
+		return Result;
+	}
 	if (!PlayerState || !Command.Context.RequestId.IsValid() || ResolveStableNetId(Controller).IsEmpty()
-		|| State.bBroken || !State.bDeployed || RequestedSlotIndex == INDEX_NONE
+		|| State.bBroken || !State.bDeployed || RequestedSlotIndex != 0
 		|| FVector::DistSquared(Character->GetActorLocation(),
 			Rod->GetOperatorStandWorldTransform(RequestedSlotIndex).GetLocation()) > FMath::Square(250.0))
 	{
 		Result.Error = State.bBroken ? ECatFishingCommandError::RodBroken : ECatFishingCommandError::RodOccupied;
 		return Result;
 	}
-	// 辅助位当前只承载站位/占用，不驱动合力数值。旧会话按其鱼竿继续运行，
 	// 玩家输入只路由到当前占据主位的鱼竿，因此这里不再用玩家历史会话阻止跨竿占位。
 	// TODO(CooperativeFishing): 合力玩法落地时，从 Rod.OperatorPlayerStates 每次重建 Session 参与集合；
-	// 不缓存 bTwoPlayer，确保 2→1/3→2 后力量、体力消耗和输入所有权当帧收敛到当前数组。
-	// 只有补进空主位（0 号右位）才是接力；加入左侧辅助位不能迁移当前会话操作者。
+	// 届时再开放 1 号及后续辅助位，并确保力量、体力消耗和输入所有权当帧收敛到当前数组。
 	// HookedFight 接力会同步迁移 Runner 的 ASC/力量/体力/输入域，不能只改公开 FisherPlayerState。
 	ACatFishingSession* BoundSession = FindActiveSessionByRod(Rod);
 	const bool bNeedsSessionTakeover = RequestedSlotIndex == 0 && BoundSession
@@ -458,6 +469,13 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 	}
 	// 站位是地面点，统一抬高胶囊半高并锁移动；0 号位在右、1 号位在左。
 	SnapCharacterToRodSlot(*Character, *Rod, CommittedSlotIndex);
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_rod_operator_joined Rod=%s RodId=%s Slot=%d OperatorCount=%d Takeover=%s SessionId=%s %s"),
+		*GetNameSafe(Rod), *State.RodActorId.ToString(EGuidFormats::DigitsWithHyphens), CommittedSlotIndex,
+		Rod->GetOperatorCount(), bNeedsSessionTakeover ? TEXT("true") : TEXT("false"),
+		BoundSession ? *BoundSession->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens)
+			: TEXT("Invalid"),
+		*CatLogContext::BuildControllerFields(Controller));
 	Result.bCommitted = true;
 	Result.Error = ECatFishingCommandError::None;
 	Result.RodActorId = State.RodActorId;
@@ -532,6 +550,13 @@ FCatFishingCommandResult UCatFishingService::LeaveRod(AController* Controller, c
 			}
 		}
 	}
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_rod_operator_left Rod=%s RodId=%s LeavingSlot=%d RemainingOperators=%d Promoted=%s SessionId=%s %s"),
+		*GetNameSafe(Rod), *State.RodActorId.ToString(EGuidFormats::DigitsWithHyphens), LeavingSlotIndex,
+		Rod->GetOperatorCount(), *GetNameSafe(PromotedPrimary),
+		BoundSession ? *BoundSession->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens)
+			: TEXT("Invalid"),
+		*CatLogContext::BuildControllerFields(Controller));
 	Result.bCommitted = true;
 	Result.Error = ECatFishingCommandError::None;
 	Result.RodActorId = Command.Context.RodActorId;
@@ -851,8 +876,10 @@ ACatFishingRodActor* UCatFishingService::FindNearestOperableRod(const FVector& W
 	{
 		ACatFishingRodActor* Rod = Pair.Value.Get();
 		if (!Rod || !Rod->GetPresentationState().bDeployed || Rod->GetPresentationState().bBroken) continue;
+		// 当前运行版只开放主操作位；辅助槽底层结构保留，但在 CooperativeFishing 完成前不参与 R 键候选。
+		if (Rod->GetOperatorCount() != 0) continue;
 		const int32 FreeSlotIndex = Rod->GetFirstFreeOperatorSlotIndex();
-		if (FreeSlotIndex == INDEX_NONE) continue;
+		if (FreeSlotIndex != 0) continue;
 		const double DistanceSquared = FVector::DistSquared(WorldLocation,
 			Rod->GetOperatorStandWorldTransform(FreeSlotIndex).GetLocation());
 		if (DistanceSquared <= BestDistanceSquared)

@@ -193,6 +193,7 @@ bool FCatFishingServiceRodBoundSessionRoutingTest::RunTest(const FString& Parame
 	ACatfishingPlayerController* Controller = World ? World->SpawnActor<ACatfishingPlayerController>() : nullptr;
 	ACatfishingPlayerState* PlayerState = World ? World->SpawnActor<ACatfishingPlayerState>() : nullptr;
 	APlayerState* SecondRodOwner = World ? World->SpawnActor<APlayerState>() : nullptr;
+	APlayerState* ReplacementFisher = World ? World->SpawnActor<APlayerState>() : nullptr;
 	ACatCharacter* Character = World ? World->SpawnActor<ACatCharacter>() : nullptr;
 	ACatFishingRodActor* FirstRod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
 	ACatFishingRodActor* SecondRod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
@@ -202,6 +203,7 @@ bool FCatFishingServiceRodBoundSessionRoutingTest::RunTest(const FString& Parame
 		|| !TestNotNull(TEXT("Controller 可用"), Controller)
 		|| !TestNotNull(TEXT("PlayerState 可用"), PlayerState)
 		|| !TestNotNull(TEXT("第二根竿所有者可用"), SecondRodOwner)
+		|| !TestNotNull(TEXT("接力玩家可用"), ReplacementFisher)
 		|| !TestNotNull(TEXT("Character 可用"), Character)
 		|| !TestNotNull(TEXT("第一根竿可用"), FirstRod)
 		|| !TestNotNull(TEXT("第二根竿可用"), SecondRod)
@@ -248,6 +250,14 @@ bool FCatFishingServiceRodBoundSessionRoutingTest::RunTest(const FString& Parame
 	TestFalse(TEXT("离开竿位清除旧会话收线输入"), FirstSession->Snapshot.bReeling);
 	TestTrue(TEXT("搏斗离竿进入无人值守松线"), FirstSession->Snapshot.bSlacking);
 	TestNull(TEXT("无人值守会话不再把旧玩家登记为当前钓手"), FirstSession->Snapshot.FisherPlayerState.Get());
+	TestEqual(TEXT("主操作手离开后鱼竿占位数组为空"), FirstRod->GetOperatorCount(), 0);
+	int32 ReplacementSlot = INDEX_NONE;
+	TestTrue(TEXT("下一位玩家可进入原鱼竿"), FirstRod->AddOperatorFromAuthority(
+		ReplacementFisher, FirstRod->GetPresentationState().RodActorRevision, ReplacementSlot));
+	TestEqual(TEXT("下一位玩家进入的是主位而不是预留副位"), ReplacementSlot, 0);
+	APlayerState* IgnoredPromotion = nullptr;
+	TestTrue(TEXT("接力占位夹具可清理"), FirstRod->RemoveOperatorFromAuthority(
+		ReplacementFisher, FirstRod->GetPresentationState().RodActorRevision, IgnoredPromotion));
 	TestFalse(TEXT("离开后旧会话不再截获玩家输入"),
 		Fishing->TryGetActiveSessionForController(Controller, RoutedSessionId, RoutedSnapshot));
 

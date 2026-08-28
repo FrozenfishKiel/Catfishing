@@ -19,7 +19,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingServiceSharedRodSlotsTest,
-	"Catfishing.Unit.Fishing.Service.SharedRodSlotsAreDiscoverableAndBounded",
+	"Catfishing.Unit.Fishing.Service.PrimaryOnlyAdmissionKeepsAuxiliaryLayoutReserved",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingServiceSharedRodSlotsTest::RunTest(const FString& Parameters)
@@ -46,13 +46,13 @@ bool FCatFishingServiceSharedRodSlotsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("helper joins auxiliary slot"), Rod->AddOperatorFromAuthority(Helper, 1, JoinedSlot));
 	TestEqual(TEXT("helper occupies slot one"), JoinedSlot, 1);
 	TestEqual(TEXT("helper lookup finds someone else's rod"), Fishing->FindRodOperatedBy(Helper), Rod);
-	TestNull(TEXT("full two-person rod is not offered as operable"),
+	TestNull(TEXT("occupied primary rod is not offered as operable"),
 		Fishing->FindNearestOperableRod(Rod->GetActorLocation(), 1000.0));
 	APlayerState* Promoted = nullptr;
 	TestTrue(TEXT("helper leaves auxiliary slot"), Rod->RemoveOperatorFromAuthority(Helper, 2, Promoted));
 	TestNull(TEXT("auxiliary departure does not promote anyone"), Promoted);
-	TestEqual(TEXT("rod with free auxiliary slot is offered again"), Fishing->FindNearestOperableRod(
-		Rod->GetOperatorStandWorldTransform(1).GetLocation(), 1.0), Rod);
+	TestNull(TEXT("runtime admission does not expose the reserved auxiliary slot"),
+		Fishing->FindNearestOperableRod(Rod->GetOperatorStandWorldTransform(1).GetLocation(), 1000.0));
 	return !HasAnyErrors();
 }
 

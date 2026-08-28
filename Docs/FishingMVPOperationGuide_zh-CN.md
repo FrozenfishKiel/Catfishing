@@ -296,7 +296,7 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 
 **常见失败原因**（放竿）：`InvalidPayload`=前方太斜/没实体地面；`DependencyUnavailable`=还没装配（5.4）。`InvalidWaterTarget/CastOutOfRange` 现在只属于抛竿阶段。
 
-多人占位口径：`OperatorPlayerStates[0]` 是右侧主位，当前只有主位能抛竿/提竿/收线/松线；`[1]` 是左侧辅助位，先完成同步站位。搏斗规则层已预留两项并按“主操作猫力量 + 第二只猫力量”计算猫总体力量，但第二项运行时仍为 0；第二只猫怎样加入、何时生效、体力如何分摊和输入如何配合仍是 `TODO(CooperativeFishing)`。主位退出时左位自动晋升，数组长度立刻从 2 变 1，不保留旧双人模式。当前参数在 `Project Settings → Catfishing Fishing → Rod|Operators`：槽位数 2，左右间距 140cm。
+多人占位口径：`OperatorPlayerStates[0]` 是当前唯一开放的主位，能抛竿、提竿、收线和松线。`[1]` 及后续辅助槽仍保留在底层结构与站位锚点中，但在协作输入、力量和体力分摊落地前，R 键不会把玩家送入无法操作的辅助位；辅助位开放整体属于 `TODO(CooperativeFishing)`。当前参数仍可在 `Project Settings → Catfishing Fishing → Rod|Operators` 查看，但不代表运行版已经开放多人同竿。
 
 会话跟随鱼竿而不是角色：按 R 离开任何阶段都不会直接结束鱼竿上的会话。多人各自部署鱼竿后，同一玩家可以在第一根竿抛线、离开，再进入第二根空竿抛线；左键与 HUD 始终只路由当前主操作鱼竿。等待/试探/真咬阶段允许迁移当前钓手；`HookedFight` 离竿后自动保持松线，鱼在 `L_max` 内自由带线，放尽后开始按负载磨损本场鱼线，期间不结算离开玩家的力量或体力。下一位玩家进入空主位时会用自己的 ASC、力量、满额搏斗体力和输入状态接管 Runner，原操作手的短周期体力立即恢复。
 
@@ -378,8 +378,8 @@ Event BeginPlay
 | 2 | （自动）装配 | Equipment `Revision` 从 0 → 1，`RodDefinitionId = Rod_Basic` |
 | 3 | 在任意合法地面第一次按 R | 世界里出现无人操作的 Rod Actor并播放放杆表现；角色不吸附、不锁移动 |
 | 3.1 | 放置者再次按 R | 放置者进入右侧主位并开始操作，`OperatorPlayerStates.Num=1` |
-| 4 | 第二个玩家走近同一根竿按 R | 第二人被吸附到左侧辅助位；两端都看到 `OperatorPlayerStates.Num=2` |
-| 4.1 | 主位玩家按 R 离开 | 左侧玩家若存在则晋升并接管当前会话；若处于搏斗且无人晋升，则立刻进入无人值守松线，放至 `L_max` 后开始磨损鱼线，直到下一位玩家接管或断线 |
+| 4 | 主位仍有人时，第二个玩家走近同一根竿按 R | 返回 `RodOccupied`，第二人保持自由移动，不会被吸附到尚未开放的辅助位 |
+| 4.1 | 主位玩家按 R 离开，第二个玩家再按 R | 第二人进入 0 号主位并接管当前会话；两次操作之间若处于搏斗，则保持无人值守松线，放至 `L_max` 后开始磨损鱼线 |
 | 5 | 瞄水面按住再松开左键 | `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去 |
 | 6 | 等浮漂落水 | Hook 的 `BP_OnHookPresentationChanged` 收到 `Phase=Landed` |
 | 7 | 等咬钩 | `Phase=Probe` → 紧接着 `Phase=TrueBiteWindow`，鱼 Actor 生成 |
