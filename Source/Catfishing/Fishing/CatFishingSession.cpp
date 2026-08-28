@@ -1094,7 +1094,6 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.StruggleHoldRodWearPerSecond = RodDefinition->BaseDurabilityWearPerSecond;
 	Config.TautRodWearMultiplier = FMath::Max(1.0, RodDefinition->HighTensionWearMultiplier);
 	Config.EscapeSlackCentimeters = Settings->EscapeSlackCentimeters;
-	Config.NearShoreLineLengthCentimeters = Settings->NearShoreLineLengthCentimeters;
 	if (!Config.IsValid()) return false; // 配置自检（如任何数值非有限/非法组合）未通过则拒绝启动搏斗。
 
 	// 组装搏斗模拟的初始状态：猫当前体力从 ASC 读，鱼体力/初始线长按完美中鱼折减系数缩放。

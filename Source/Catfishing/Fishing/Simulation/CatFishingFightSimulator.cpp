@@ -49,8 +49,7 @@ bool FCatFightSimulationConfig::IsValid() const
 		&& FMath::IsFinite(TensionResponseRangeCentimeters) && TensionResponseRangeCentimeters > 0.0
 		&& FMath::IsFinite(MaximumLineLengthCentimeters) && MaximumLineLengthCentimeters > 0.0 // 线长上限 L_max
 		&& FMath::IsFinite(RodDurability) && RodDurability > 0.0 // 本场鱼线耐久总量（新会话重置）
-		&& IsFiniteNonNegative(EscapeSlackCentimeters) // 判定脱钩前允许超出 L_max 的松弛裕度
-		&& IsFiniteNonNegative(NearShoreLineLengthCentimeters); // 触发近岸阶段的线长阈值
+		&& IsFiniteNonNegative(EscapeSlackCentimeters); // 判定脱钩前允许超出 L_max 的松弛裕度
 }
 
 // [FishLogic 3/5：自由游动与鱼线约束]
@@ -197,7 +196,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		}
 		else if (CombinedCatStrength >= Config.FishStrength * Config.OverpowerStrengthRatio)
 		{
-			// 判定③绝对碾压：猫力达到鱼力的指定倍数以上 → D 直接归零，鱼立刻力竭侧翻，无消耗。
+			// 判定③绝对碾压：猫力达到鱼力的指定倍数以上 → 鱼在当前位置立刻力竭侧翻，无消耗。
+			// 位置必须留给后续 ExhaustedReel 以有限速度收近，不能在结局帧直接跳到竿尖。
 			Instant = ECatFightStepOutcome::Overpowered;
 		}
 		else
@@ -260,8 +260,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 
 	// 右键本身不吐线，只在鱼确实向外游到现有线端之外时让 L_paid 跟随增长。
 	// 不按键时 L_paid 固定；左键先收余线，再以有限水平位移牵引鱼，不能把缩短后的三维线长直接当成瞬移目标。
-	const double UnconstrainedDistance1 = Instant == ECatFightStepOutcome::Overpowered
-		? VerticalDistance : FreeSwimDistance1;
+	double UnconstrainedDistance1 = FreeSwimDistance1;
 	double LineLength = PaidOutLine0;
 	FVector ProposedFishWorldPosition = FreeFishPosition;
 	// 把候选位置限制到指定线长内。这里只处理“鱼想越过线端”的硬约束，不主动缩小球面来拖拽鱼。
@@ -287,7 +286,11 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 
 	if (Instant == ECatFightStepOutcome::Overpowered)
 	{
-		LineLength = VerticalDistance;
+		// 碾压只改变结局，不吞掉本帧开始时的空间事实。位置和已放线长都保持不变；
+		// Session 随后会在同一权威帧切到 AutoHauling，玩家继续收线时才逐步移动鱼。
+		UnconstrainedDistance1 = Distance0;
+		LineLength = PaidOutLine0;
+		ProposedFishWorldPosition = State.FishWorldPosition;
 	}
 	else if (bSlacking)
 	{
@@ -331,8 +334,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		ConstrainCandidateToLine(ProposedFishWorldPosition, LineLength);
 	}
 	const double Tension = FMath::Max(0.0, UnconstrainedDistance1 - LineLength);
-	const double Distance1 = Instant == ECatFightStepOutcome::Overpowered
-		? VerticalDistance : FVector::Distance(RodTipWorldPosition, ProposedFishWorldPosition);
+	const double Distance1 = FVector::Distance(RodTipWorldPosition, ProposedFishWorldPosition);
 
 	// 把本步计算结果写入返回值，供 Runner/Session 应用到实际状态。
 	// 自由游速在线长/岸线约束前由行为意图选中；即使最终位置被线端完全挡住，
@@ -352,11 +354,6 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	Result.StrongConfrontationBuildUpSeconds = StrongConfrontationBuildUp;
 	Result.bStrongConfrontation = bStrongConfrontation;
 	Result.ProposedFishWorldPosition = ProposedFishWorldPosition;
-	if (Instant == ECatFightStepOutcome::Overpowered)
-	{
-		Result.ProposedFishWorldPosition = RodTipWorldPosition;
-	}
-
 	// 归零优先级判定：先看本步是否已经产生瞬时终局，否则按 鱼体力 → 猫体力 → 鱼线耐久 → 脱钩 的顺序检查。
 	const double CatRemaining = State.CatStamina - CatDrain;
 	const double FishRemaining = State.FishStamina - FishDrain;

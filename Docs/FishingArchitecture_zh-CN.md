@@ -123,7 +123,7 @@ LineLoad 控制鱼线磨损、牵引效率和强对抗资格：正对外冲满�
 挣扎 + 拖(或线放尽被绷紧) + LineLoad 连续达到性格阈值/确认时间：进入强对抗并按序裁决
    ① 钓组承载 ≤ min(猫力,鱼力) → 鱼线瞬断（LineBroken，鱼逃；鱼竿保持可用）
    ② 鱼力 ≥ 猫力            → 猫被拖下水（CatInWater，鱼逃）
-   ③ 猫力 ≥ 鱼力×2          → 绝对碾压（结束搏斗→ExhaustedReel）
+   ③ 猫力 ≥ 鱼力×2          → 绝对碾压（保留鱼当前位置，结束搏斗→ExhaustedReel）
    ④ 其余 = 僵持消耗战：竿-=鱼力×0.1×LineLoad · 带载拖时鱼-=猫力×0.08×StruggleDrainMultiplier · 猫-=鱼力×0.12×StruggleDrainMultiplier /s
 向外游 + 松线(右键)：在 L_max 内不限制鱼，L_paid 只随鱼实际外游被动增长；猫体力 +1.5/s（封顶）
 
@@ -132,7 +132,7 @@ D      = 竿尖到鱼的直线距离
 Slack  = max(L_paid-D, 0)：有余线时 Cable 本地垂坠
 Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消耗资源
 
-归零优先级：鱼体力(翻肚→ExhaustedReel) → 猫体力(拖下水) → 本场鱼线耐久(断线)
+归零优先级：鱼体力(在当前位置翻肚→ExhaustedReel) → 猫体力(拖下水) → 本场鱼线耐久(断线)。翻肚/碾压帧不把 D 归零；只有进入 ExhaustedReel 后持续左键才按有限速度收近。
 完美中鱼：真咬后 1s 内提竿（服务器时间戳）→ 鱼力/鱼体力/初始线长按性格模板折减，bPerfectHook 复制
 ```
 
@@ -159,7 +159,7 @@ Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消�
 
 其余谓词：抄手在岸上（Outside 水域）+ 地面坡度 ≤ `MaximumScoopGroundSlopeDegrees` + 视线不被遮挡 + 装了 ScoopNet。
 当前开发配置通过 `bAutoGrantStarterScoopNet=True` 在服务器首次占有时给每名玩家本人库存发一份并自动选中正式目录定义 `StarterScoopNet`（`Equip_ScoopNet_Starter`）；这是临时可玩性开关，不是正式获取规则。商店或奖励来源接入后关闭它。
-**不再要求"鱼在近岸带内"**——射线∩圆已是唯一范围口径，再叠一层离岸距离会出现"debug 圈画成绿色但服务器拒绝"的表现/判定打架。旧 `NearShoreWidthCentimeters` 只作为配置兼容字段保留，不再推进会话阶段。
+**不再要求"鱼在近岸带内"**——射线∩圆已是唯一范围口径，再叠一层离岸距离会出现"debug 圈画成绿色但服务器拒绝"的表现/判定打架。`NearShoreWidthCentimeters` 仅用于外部 StateTree 请求进入 NearShore 时校验真实鱼位置，不参与抢抄距离或自动推进会话阶段。
 
 首个合法 F 会生成一个 `ACatFishPickupActor`，并立即调用与岸上死鱼按 E 相同的嘴叼交接；此时鱼仍是世界 Actor，不进入背包或鱼护。玩家之后对具体地面鱼护按 E，才由 Items 执行唯一容器提交与图鉴归档。拒绝时打 `Event=scoop_rejected`，逐项列出谓词并附带实测水平距离/高度差/射程/半径，能直接分辨是"没对准"、"太远"还是"站太高"。
 

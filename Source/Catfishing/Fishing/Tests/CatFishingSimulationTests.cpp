@@ -212,13 +212,19 @@ bool FCatFishingFightSimulatorOutwardJudgmentTest::RunTest(const FString& Parame
 		const FCatFightStepResult Step = Run(Config, Pull);
 		TestEqual(TEXT("fish at equality drags cat"), static_cast<int32>(Step.Outcome), static_cast<int32>(ECatFightStepOutcome::DraggedIntoWater));
 	}
-	// ③ 碾压：猫力 ≥ 鱼力 × 2，D 归零，无消耗。
+	// ③ 碾压：猫力 ≥ 鱼力 × 2，鱼在当前位置力竭，无消耗；后续由 ExhaustedReel 有限速收近。
 	{
 		FCatFightSimulationConfig Config = MakeConfig();
 		Config.FishStrength = 25.0;
 		const FCatFightStepResult Step = Run(Config, Pull);
 		TestEqual(TEXT("overpower outcome"), static_cast<int32>(Step.Outcome), static_cast<int32>(ECatFightStepOutcome::Overpowered));
-		TestEqual(TEXT("overpower zeroes distance"), Step.ProposedFishWorldPosition.X, 0.0, 1e-6);
+		TestTrue(TEXT("overpower preserves the fish location instead of teleporting to the rod tip"),
+			Step.ProposedFishWorldPosition.Equals(Pull.FishWorldPosition, UE_KINDA_SMALL_NUMBER));
+		TestEqual(TEXT("overpower preserves paid-out line until exhausted reel takes over"),
+			Step.LineLengthCentimeters, Pull.LineLengthCentimeters, 1e-6);
+		TestEqual(TEXT("overpower publishes the preserved straight-line distance"),
+			Step.StraightLineDistanceCentimeters,
+			FVector::Distance(FVector::ZeroVector, Pull.FishWorldPosition), 1e-6);
 		TestEqual(TEXT("overpower costs nothing"), Step.CatStaminaDrain, 0.0, 1e-9);
 	}
 	// ① 优先于 ②③：钓组承载不足且鱼强 → 断线而不是拖下水。

@@ -73,8 +73,6 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0", ClampMax="1"))
 	double FishExhaustionThreshold = 0.5;
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0")) double EscapeSlackCentimeters = 100.0;
-	/** 兼容旧 StateTree/调试资产的近岸线长；正式抢抄只使用射线几何，靠岸不再终止搏斗。 */
-	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0")) double NearShoreLineLengthCentimeters = 100.0;
 
 	/** 一根部署鱼竿最多可占用的操作位；当前产品使用左右两位，数组/站位算法预留到更多协作者。 */
 	UPROPERTY(Config, EditAnywhere, Category="Rod|Operators", meta=(ClampMin="1", ClampMax="8"))

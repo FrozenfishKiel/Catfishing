@@ -202,10 +202,13 @@ bool FCatFishingSessionExhaustedReelContinuityTest::RunTest(const FString& Param
 	Session->Snapshot.HookActor = Hook;
 	Session->Snapshot.RodActor = Rod;
 	Session->bStartupInProgress = true;
+	const FVector FishLocationBeforeExhaustedTransition = Fish->GetActorLocation();
 	TestTrue(TEXT("Enters exhausted reel"), Session->BeginExhaustedReelFromAuthority());
 	Session->bStartupInProgress = false;
 
 	TestEqual(TEXT("Phase becomes ExhaustedReel"), Session->Snapshot.Phase, ECatFishingPhase::ExhaustedReel);
+	TestTrue(TEXT("Entering exhausted reel preserves the death-frame fish location"),
+		Fish->GetActorLocation().Equals(FishLocationBeforeExhaustedTransition, UE_KINDA_SMALL_NUMBER));
 	TestTrue(TEXT("Held left mouse remains reeling"), Session->Snapshot.bReeling);
 	TestFalse(TEXT("Slack is cleared when fish exhausts"), Session->Snapshot.bSlacking);
 	TestEqual(TEXT("Presentation continues auto hauling"), Session->Snapshot.FishMotionIntent,

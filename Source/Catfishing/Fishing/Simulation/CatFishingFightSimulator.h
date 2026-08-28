@@ -7,7 +7,7 @@
 enum class ECatFightStepOutcome : uint8
 {
 	None,
-	/** 鱼体力归零 → 翻肚（D 归零，可抄/可继续收至竿尖水面投影）。 */
+	/** 鱼体力归零 → 在当前位置翻肚，可抄或继续收至竿尖水面投影。 */
 	FishExhausted,
 	/** 猫体力归零 → 力竭被拖下水（规格 4.4 归零优先级第 2 位）。 */
 	CatStaminaExhausted,
@@ -15,11 +15,9 @@ enum class ECatFightStepOutcome : uint8
 	LineBroken,
 	/** 数值异常：鱼距超出线长上限 + 松弛裕度；正常规则下不应出现。 */
 	Escaped,
-	/** 鱼距 ≤ 近岸线长阈值 → 进入 NearShore。 */
-	NearShore,
 	/** 判定②：向外游+拖 且 鱼力 ≥ 猫力 → 猫被拖下水。 */
 	DraggedIntoWater,
-	/** 判定③：向外游+拖 且 猫力 ≥ 鱼力×比 → 碾压，鱼直接力竭侧翻（D 归零）。 */
+	/** 判定③：向外游+拖 且 猫力 ≥ 鱼力×比 → 碾压，鱼在当前位置直接力竭侧翻。 */
 	Overpowered
 };
 
@@ -104,7 +102,6 @@ struct CATFISHING_API FCatFightSimulationConfig
 	/** 本场鱼线耐久总量；旧字段名为兼容现有配置保留，每次新会话都会重置。 */
 	double RodDurability = TNumericLimits<double>::Max();
 	double EscapeSlackCentimeters = 100.0;
-	double NearShoreLineLengthCentimeters = 100.0;
 
 	bool IsValid() const;
 };

@@ -158,7 +158,7 @@ Probe
 
 ### 所以：**凡是放了多个 Task 的 State，都要把 `Tasks Completion` 改成 `All`**
 
-只有一个 Task 的 State（比如只放 `Cat Fishing Wait` 的 `NearShore`）两种设置都一样，不用管。
+只有一个 Task 的 State（比如只放 `Cat Fishing Wait` 的 `ExhaustedReelHold`）两种设置都一样，不用管。
 
 ### 为什么不用另一种改法
 
@@ -371,7 +371,7 @@ Root
 | Probe | 树的 `Cat Fishing Enter Phase` Task |
 | TrueBiteWindow | `Open True Bite Window` 打开通用窗口；只播放浮漂下沉，不创建鱼 |
 | HookedFight | 真咬窗内收到左键后，`RequestHook` 才选鱼、生成 Actor、扣饵并 EnterPhase |
-| NearShore | 搏斗 Runner 跑完后 **C++ 内部** EnterPhase |
+| ExhaustedReel | 鱼体力耗尽或力量碾压后，Session 保留鱼当前位置、停止搏斗 Runner 并在 **C++ 内部** EnterPhase |
 | Resolved / Terminated | `FinalizeSession()`，**树禁止进入** |
 
 所以这棵树只有 4 个状态，逻辑非常薄。
@@ -389,7 +389,7 @@ Root
  ├── Waiting          ← 起始状态，树启动就进这里
  ├── Probe
  ├── HookedFight
- └── NearShore
+ └── ExhaustedReelHold
 ```
 
 ## 4.4 配置 Waiting
@@ -425,24 +425,24 @@ Root
   1. `Cat Fishing Start Fight Runner`（无参数）
   2. `Cat Fishing Wait For Fight Runner`（无参数）
 - Transitions：
-  1. **`On State Succeeded`**，Target = `NearShore`
+  1. **`On State Succeeded`**，Target = `ExhaustedReelHold`
 
 **注意这条转移和前面的不一样** —— 不是 On Event，是 **On State Succeeded**。
 
-**原理**：Task 2 每帧检查搏斗 Runner 还在不在跑。鱼被拉到近岸时，C++ 会 `Runner->Stop()` 并把阶段写成 `NearShore`。Task 2 下一帧发现 Runner 停了，返回 Succeeded。此时 Task 1 早就 Succeeded 了，两个都完成 → State 完成（Succeeded）→ 触发转移。
+**原理**：Task 2 每帧检查搏斗 Runner 还在不在跑。鱼体力耗尽或力量碾压时，C++ 保留死亡帧位置、`Runner->Stop()` 并把阶段写成 `ExhaustedReel`。Task 2 下一帧发现 Runner 停了，返回 Succeeded。此时 Task 1 早就 Succeeded 了，两个都完成 → State 完成（Succeeded）→ 触发到只负责保持树运行的叶子状态。玩家之后持续左键，鱼才会按有限速度收近。
 
 > 这里正好体现 `Tasks Completion = All` 的必要性：如果是默认的 `Any`，Task 1 一 Succeeded 就立刻跳走了，搏斗根本没机会跑。
 
-## 4.7 配置 NearShore
+## 4.7 配置 ExhaustedReelHold
 
 - Tasks：
   1. `Cat Fishing Wait`（无参数）
 - Transitions：**不配**
 - `Tasks Completion`：只有一个 Task，不用管
 
-**这个状态在干嘛**：什么也不干，就是把树钉住别结束。玩家按抢抄键后，`RequestScoop` 走完捕获事务，`FinalizeSession()` 会停掉整棵树。
+**这个状态在干嘛**：不再推进阶段，只把树钉住别结束。鱼的位置与有限速收线由 C++ 的 ExhaustedReel 运行链处理；鱼落地或玩家抢抄完成捕获事务后，`FinalizeSession()` 会停掉整棵树。
 
-> **不要在这里放 `Cat Fishing Enter Phase (NearShore)`** —— C++ 已经写过了，重复写只会白白递增 Revision。
+> **不要在这里放 `Cat Fishing Enter Phase (ExhaustedReel)`** —— C++ 已经写过了，重复写只会白白递增 Revision。
 
 ## 4.8 编译保存
 
@@ -453,7 +453,7 @@ Root
 1. **树永远不能自然结束。** 每个叶子状态都要有一个 `Cat Fishing Wait` 钉住。转移 Target 绝不能选 `Tree Succeeded` / `Tree Failed`。
 2. **多 Task 的 State 必须设 `Tasks Completion = All`。**
 3. **`Cat Fishing Enter Phase` 的 Phase 不能选 `Resolved` 或 `Terminated`。** 选了会返回 `AlreadyResolved` → Failed。
-4. **`NearShore` 不要再放 Enter Phase。**
+4. **`ExhaustedReelHold` 不要再放 Enter Phase。**
 5. **不用为超时/空竿/取消配转移。** C++ 发完事件立刻停树，那些事件收不到。
 
 ## 4.10 用不上的三个节点
@@ -522,7 +522,7 @@ Event=fishing_phase_entered ... Phase=Waiting        ← ST_FishingSession 启�
 Event=fishing_phase_entered ... Phase=Probe          ← ProbeTriggered 转移成功
 Event=fishing_phase_entered ... Phase=TrueBiteWindow ← 选鱼成功（C++ 直接写的）
 Event=fishing_phase_entered ... Phase=HookedFight    ← 提竿成功
-Event=fishing_phase_entered ... Phase=NearShore      ← 搏斗结束
+Event=fishing_phase_entered ... Phase=ExhaustedReel ← 鱼力竭，保留当前位置等待有限速收线
 Event=fishing_session_resolved ...                   ← 抄鱼成功
 ```
 
@@ -544,7 +544,7 @@ UE 自带可视化调试器：菜单 **Tools → Debug → StateTree Debugger**�
 | 提竿后 EmptyHook / No eligible fish | 鱼表没匹配上 —— 检查关卡 RegionId 与正式鱼的 `RegionIds`、时间天气、协作人数和 `MaximumChallengeRatio` |
 | 阶段跳得飞快，几帧就跑完 | **`Tasks Completion` 忘了改成 `All`** |
 | 提竿后没进 HookedFight | 提竿时机不在 TrueBiteWindow 窗口内（默认 3 秒） |
-| 搏斗一进去就跳 NearShore | 同样是 `Tasks Completion` 的问题 |
+| 搏斗一进去就跳 ExhaustedReelHold | 同样是 `Tasks Completion` 的问题 |
 
 ---
 
