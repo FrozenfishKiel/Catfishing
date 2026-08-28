@@ -1,5 +1,7 @@
 #include "ShopEconomy/CatShopEconomyService.h"
 
+#include "Logging/CatLog.h"
+#include "ShopEconomy/CatShopInventoryComponent.h"
 #include "ShopEconomy/CatShopEconomySettings.h"
 
 // 创建条件流程：只允许服务器 Game World 拥有可写经济事实；客户端不能生成第二份公款或库存。
@@ -9,22 +11,88 @@ bool UCatShopEconomyService::ShouldCreateSubsystem(UObject* Outer) const
 	return World && World->IsGameWorld() && World->GetNetMode() != NM_Client;
 }
 
-// 初始化流程：先交父类，再从 Settings 冻结本局公款、目录、免费饵和售鱼最小金额；目录非法时服务仍存在但购买路径关闭。
+// 初始化流程：先交父类，再从 Settings 冻结本局公款、命令 gate 和售鱼最小金额；摊位货架目录由各自库存组件进入 World 时注册。
 void UCatShopEconomyService::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	LoadRuntimeEconomyFromSettings();
 }
 
-// 反初始化流程：先关闭新交易，再清除仅属于本 World 的库存、账本和终态缓存；不把团队公款带入下一局。
+// 反初始化流程：先关闭新交易，再解除摊位库存订阅、清除账本和终态缓存；不把团队公款带入下一局。
 void UCatShopEconomyService::Deinitialize()
 {
 	CloseCommands();
-	StockByEntryId.Reset();
+	for (const FRegisteredShopInventorySubscription& Subscription : RegisteredInventoryChangedHandles)
+	{
+		if (UCatShopInventoryComponent* Inventory = Subscription.Inventory.Get())
+		{
+			Inventory->OnInventoryChanged.Remove(Subscription.Handle);
+		}
+	}
+	RegisteredShopInventories.Reset();
+	RegisteredInventoryChangedHandles.Reset();
 	TransactionLedger.Reset();
 	TerminalCache.Reset();
 	TerminalPayloadByKey.Reset();
 	Super::Deinitialize();
+}
+
+// 注册流程：只接受 authority World 中真实摊位库存组件；重复注册保持幂等，并订阅它的货架变化来推动公开快照刷新。
+bool UCatShopEconomyService::RegisterShopInventory(UCatShopInventoryComponent* ShopInventory)
+{
+	if (!ShopInventory || !ShopInventory->GetOwner() || !ShopInventory->GetOwner()->HasAuthority()
+		|| !ShopInventory->GetShopInventoryId().IsValid())
+	{
+		return false;
+	}
+	for (const TWeakObjectPtr<UCatShopInventoryComponent>& ExistingInventory : RegisteredShopInventories)
+	{
+		if (ExistingInventory.Get() == ShopInventory)
+		{
+			return true;
+		}
+	}
+	RegisteredShopInventories.Add(ShopInventory);
+	const bool bAlreadySubscribed = RegisteredInventoryChangedHandles.ContainsByPredicate(
+		[ShopInventory](const FRegisteredShopInventorySubscription& Subscription)
+		{
+			return Subscription.Inventory.Get() == ShopInventory;
+		});
+	if (!bAlreadySubscribed)
+	{
+		FRegisteredShopInventorySubscription& Subscription = RegisteredInventoryChangedHandles.AddDefaulted_GetRef();
+		Subscription.Inventory = ShopInventory;
+		Subscription.Handle =
+			ShopInventory->OnInventoryChanged.AddUObject(this, &ThisClass::HandleRegisteredShopInventoryChanged);
+	}
+	OnShopInventoryRefreshed.Broadcast();
+	return true;
+}
+
+// 注销流程：按组件对象精确移除注册和变化订阅；注销后广播一次，让客户端公开快照清掉这份摊位货架。
+void UCatShopEconomyService::UnregisterShopInventory(UCatShopInventoryComponent* ShopInventory)
+{
+	if (!ShopInventory)
+	{
+		return;
+	}
+	RegisteredShopInventories.RemoveAll([ShopInventory](const TWeakObjectPtr<UCatShopInventoryComponent>& Candidate)
+	{
+		return !Candidate.IsValid() || Candidate.Get() == ShopInventory;
+	});
+	for (int32 SubscriptionIndex = RegisteredInventoryChangedHandles.Num() - 1; SubscriptionIndex >= 0; --SubscriptionIndex)
+	{
+		const FRegisteredShopInventorySubscription& Subscription = RegisteredInventoryChangedHandles[SubscriptionIndex];
+		if (!Subscription.Inventory.IsValid() || Subscription.Inventory.Get() == ShopInventory)
+		{
+			if (UCatShopInventoryComponent* Inventory = Subscription.Inventory.Get())
+			{
+				Inventory->OnInventoryChanged.Remove(Subscription.Handle);
+			}
+			RegisteredInventoryChangedHandles.RemoveAtSwap(SubscriptionIndex, 1, EAllowShrinking::No);
+		}
+	}
+	OnShopInventoryRefreshed.Broadcast();
 }
 
 // 公款读取流程：返回当前唯一团队公款快照副本；调用方不能借引用改余额。
@@ -33,31 +101,28 @@ FCatShopWalletSnapshot UCatShopEconomyService::GetWalletSnapshot() const
 	return Wallet;
 }
 
-// 库存读取流程：先清输出，再按稳定 EntryId 返回本局库存；目录不可用或缺项都不制造占位。
-bool UCatShopEconomyService::TryGetStockSnapshot(const FName EntryId, FCatShopStockSnapshot& OutSnapshot) const
+// 库存读取流程：先清输出，再从指定摊位库存读取 EntryId；服务不再维护全局货架 Map。
+bool UCatShopEconomyService::TryGetStockSnapshot(const UCatShopInventoryComponent* ShopInventory,
+	const FName EntryId, FCatShopStockSnapshot& OutSnapshot) const
 {
 	OutSnapshot = FCatShopStockSnapshot();
-	const FStockRecord* StockRecord = StockByEntryId.Find(EntryId);
-	if (!bCatalogReady || !StockRecord)
+	if (!ShopInventory)
 	{
 		return false;
 	}
-	OutSnapshot = MakeStockSnapshot(StockRecord);
-	return true;
+	return ShopInventory->TryGetStockSnapshot(EntryId, OutSnapshot);
 }
 
-// 目录项读取流程：先清输出，再按稳定 EntryId 取回开局冻结的那份配置；目录不可用或缺项都不制造占位。
-// 和 TryGetStockSnapshot 分开是因为两者答的不是一个问题：那个答"还剩几件"，这个答"这一项是什么、交给谁"。
-bool UCatShopEconomyService::TryGetCatalogEntry(const FName EntryId, FCatShopCatalogEntry& OutEntry) const
+// 目录项读取流程：先清输出，再从指定摊位库存取回当前货架配置；它和库存读取分开，因为两者回答的是两个问题。
+bool UCatShopEconomyService::TryGetCatalogEntry(const UCatShopInventoryComponent* ShopInventory,
+	const FName EntryId, FCatShopCatalogEntry& OutEntry) const
 {
 	OutEntry = FCatShopCatalogEntry();
-	const FStockRecord* StockRecord = StockByEntryId.Find(EntryId);
-	if (!bCatalogReady || !StockRecord)
+	if (!ShopInventory)
 	{
 		return false;
 	}
-	OutEntry = StockRecord->Entry;
-	return true;
+	return ShopInventory->TryGetCatalogEntry(EntryId, OutEntry);
 }
 
 // 重放判定流程：用与 CommitCatalogTransaction 完全相同的三段拼出幂等键，再只查终态表是否已有该键。
@@ -78,16 +143,18 @@ TArray<FCatShopTransactionRecord> UCatShopEconomyService::GetTransactionLedgerSn
 	return TransactionLedger;
 }
 
-// 购买入口流程：只声明普通购买类别，具体公款/库存/账本提交交给共用提交流程。
-FCatShopTransactionResult UCatShopEconomyService::PurchaseCatalogEntry(const FCatShopPurchaseCommand& Command)
+// 购买入口流程：只声明普通购买类别，具体公款/摊位库存/账本提交交给共用提交流程。
+FCatShopTransactionResult UCatShopEconomyService::PurchaseCatalogEntry(const FCatShopPurchaseCommand& Command,
+	UCatShopInventoryComponent* ShopInventory)
 {
-	return CommitCatalogTransaction(Command, ECatShopTransactionKind::Purchase);
+	return CommitCatalogTransaction(Command, ECatShopTransactionKind::Purchase, ShopInventory);
 }
 
-// 免费自取流程：把 EntryId 策略也交给目录交易统一缓存；这样错误条目的同 RequestId 后续不能换成正确条目复活。
-FCatShopTransactionResult UCatShopEconomyService::ClaimFreeCatalogEntry(const FCatShopPurchaseCommand& Command)
+// 免费自取流程：把来源摊位和 EntryId 策略也交给目录交易统一缓存；错误条目的同 RequestId 后续不能换成正确条目复活。
+FCatShopTransactionResult UCatShopEconomyService::ClaimFreeCatalogEntry(const FCatShopPurchaseCommand& Command,
+	UCatShopInventoryComponent* ShopInventory)
 {
-	return CommitCatalogTransaction(Command, ECatShopTransactionKind::FreeClaim);
+	return CommitCatalogTransaction(Command, ECatShopTransactionKind::FreeClaim, ShopInventory);
 }
 
 // 估价流程：runtime 未就绪或收鱼价没被裁定时直接失败，否则用开局冻结的档位表求值。
@@ -187,7 +254,6 @@ FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFi
 			}))
 			{
 				Result.Transaction = *CurrentRecord;
-				Result.Stock = MakeStockSnapshot(StockByEntryId.Find(CurrentRecord->EntryId));
 			}
 		}
 		Result.Command.bCommitted = false;
@@ -300,7 +366,11 @@ FCatShopTransactionResult UCatShopEconomyService::ConfirmTransactionDelivery(
 	else
 	{
 		Result.Transaction = *Record;
-		Result.Stock = MakeStockSnapshot(StockByEntryId.Find(Record->EntryId));
+		if (const UCatShopInventoryComponent* CurrentInventory =
+			FindRegisteredShopInventoryById(Record->ShopInventoryId))
+		{
+			CurrentInventory->TryGetStockSnapshot(Record->EntryId, Result.Stock);
+		}
 		if (Record->StableNetId != Command.Context.StableNetId)
 		{
 			Result.Command.Error = ECatDomainCommandError::PermissionDenied;
@@ -340,30 +410,54 @@ FCatShopTransactionResult UCatShopEconomyService::ConfirmTransactionDelivery(
 	return Result;
 }
 
-// 每日进货流程：先确认经济、目录和写口都还开着，再确认这次确实是新的一天；
-// 然后只把标了每日进货的条目重置回当日进货量，并推进它们各自的库存 Revision，让手上拿着旧库存版本的客户端知道要重读。
-// 无限库存条目不动：它们表达的是飞书"竿与基础补给永不缺货"，本来就没有会被消耗掉的剩余量。
-// 没标每日进货的限量条目也不动：那是一局只进一次的货，每天补它等于凭空把一局限量改成每日限量。
+// 每日进货流程：先确认经济和写口还开着，再把新天序号广播给所有已注册摊位库存；每个摊位自己决定哪些条目需要补货。
 bool UCatShopEconomyService::AdvanceShopDay(const int32 NewDayIndex)
 {
-	if (!bRuntimeReady || !bCatalogReady || !bCommandsOpen || NewDayIndex <= CurrentShopDayIndex)
+	if (!bRuntimeReady || !bCommandsOpen || NewDayIndex <= CurrentShopDayIndex)
 	{
 		return false;
 	}
 	CurrentShopDayIndex = NewDayIndex;
-	for (TPair<FName, FStockRecord>& Pair : StockByEntryId)
+	bool bAnyChanged = false;
+	for (const TWeakObjectPtr<UCatShopInventoryComponent>& InventoryPtr : RegisteredShopInventories)
 	{
-		if (!Pair.Value.Entry.bDailyRestock)
+		UCatShopInventoryComponent* Inventory = InventoryPtr.Get();
+		if (Inventory && Inventory->AdvanceShopDay(NewDayIndex))
 		{
-			continue;
+			bAnyChanged = true;
 		}
-		Pair.Value.RemainingStock = Pair.Value.Entry.DailyRestockQuantity;
-		++Pair.Value.Revision;
+	}
+	return bAnyChanged;
+}
+
+// 显式刷新流程：
+// 1. 先验证 runtime、命令门、来源摊位库存、注册关系和 RequestId；刷新触发时机仍由调用方决定。
+// 2. 具体抽取、库存替换和变化广播交给来源摊位库存组件，服务不读取全局商店表。
+// 3. 成功后公款、账本和交易幂等缓存原样保留；公开快照会通过组件变化订阅刷新。
+bool UCatShopEconomyService::RefreshShopInventoryFromCatalog(UCatShopInventoryComponent* ShopInventory,
+	const FGuid& RequestId, const FCatShopRefreshRequest& Request)
+{
+	if (!RequestId.IsValid() || !bRuntimeReady || !bCommandsOpen || !ShopInventory)
+	{
+		return false;
+	}
+	const bool bRegistered = RegisteredShopInventories.ContainsByPredicate(
+		[ShopInventory](const TWeakObjectPtr<UCatShopInventoryComponent>& Candidate)
+		{
+			return Candidate.Get() == ShopInventory;
+		});
+	if (!bRegistered)
+	{
+		return false;
+	}
+	if (!ShopInventory->RefreshShopInventoryFromCatalog(RequestId, Request))
+	{
+		return false;
 	}
 	return true;
 }
 
-// 公开快照流程：把当前公款、商店天序号、货架库存和整本账本逐条转成对外形态。
+// 公开快照流程：把当前公款、已注册摊位货架库存和整本账本逐条转成对外形态。
 // 这里不做分页或裁剪：本局账本和货架的规模由目录与玩家实际交易次数决定，规模和一局的容器快照同量级；
 // 真到了需要限量的时候，该由复制挂载点按自己的带宽策略截断，而不是让服务先把事实丢掉。
 FCatShopPublicEconomySnapshot UCatShopEconomyService::BuildPublicSnapshot(
@@ -373,10 +467,12 @@ FCatShopPublicEconomySnapshot UCatShopEconomyService::BuildPublicSnapshot(
 	Snapshot.WalletRevision = Wallet.Revision;
 	Snapshot.Balance = Wallet.Balance;
 	Snapshot.ShopDayIndex = CurrentShopDayIndex;
-	Snapshot.Stocks.Reserve(StockByEntryId.Num());
-	for (const TPair<FName, FStockRecord>& Pair : StockByEntryId)
+	for (const TWeakObjectPtr<UCatShopInventoryComponent>& InventoryPtr : RegisteredShopInventories)
 	{
-		Snapshot.Stocks.Add(MakeStockSnapshot(&Pair.Value));
+		if (const UCatShopInventoryComponent* Inventory = InventoryPtr.Get())
+		{
+			Inventory->AppendStockSnapshots(Snapshot.Stocks);
+		}
 	}
 	Snapshot.Transactions.Reserve(TransactionLedger.Num());
 	for (const FCatShopTransactionRecord& Record : TransactionLedger)
@@ -401,57 +497,45 @@ void UCatShopEconomyService::CloseCommands()
 	bCommandsOpen = false;
 }
 
-// 设置加载流程：清空旧事实后读取默认对象；合法目录转成库存记录，重复或非法项让购买路径整体关闭但不影响售鱼 runtime gate 暴露。
+// 设置加载流程：清空旧交易事实后读取默认对象；公款和售鱼价仍是局级配置，商店货架库存由每个摊位库存组件自己生成。
 void UCatShopEconomyService::LoadRuntimeEconomyFromSettings()
 {
 	Wallet = FCatShopWalletSnapshot();
-	StockByEntryId.Reset();
 	TransactionLedger.Reset();
 	TerminalCache.Reset();
 	TerminalPayloadByKey.Reset();
 	bCommandsOpen = true;
-	bCatalogReady = true;
+	CurrentShopDayIndex = 0;
 	const UCatShopEconomySettings* Settings = GetDefault<UCatShopEconomySettings>();
 	bRuntimeReady = Settings && Settings->IsRuntimeEnabled();
 	if (!Settings)
 	{
-		bCatalogReady = false;
 		return;
 	}
 	// 没裁过起始资金时 StartingTeamWalletBalance 是哨兵 -1，此时 bRuntimeReady 已经是 false，四个写口全部 fail-closed；
 	// 这里仍夹到 0 只是为了不让快照对外暴露一个负余额，不代表哨兵被当成"裁定 0 元"接受了。
 	Wallet.Balance = FMath::Max(0, Settings->StartingTeamWalletBalance);
 	Wallet.Revision = 1;
-	FreeOrdinaryBaitEntryId = Settings->FreeOrdinaryBaitEntryId;
-	FreeStarterRodEntryId = Settings->FreeStarterRodEntryId;
 	MinimumFishSaleValue = FMath::Max(1, Settings->MinimumFishSaleValue);
 	// 收鱼价单独一个 gate：买东西不依赖鱼价，所以这里只冻结售鱼这一路的裁定状态和档位表，
 	// 不把它并进 bRuntimeReady，否则没填鱼价会连购买和免费自取一起关掉。
 	bFishPurchasePriceDecided = Settings->FishPurchasePricePolicy == ECatDomainPolicy::Enabled;
 	FishPurchasePriceAnchors = Settings->FishPurchasePriceAnchors;
-	CurrentShopDayIndex = 0;
-	for (const FCatShopCatalogEntry& Entry : Settings->CatalogEntries)
-	{
-		if (!Entry.IsRuntimeReady() || StockByEntryId.Contains(Entry.EntryId))
-		{
-			bCatalogReady = false;
-			continue;
-		}
-		FStockRecord& Stock = StockByEntryId.Add(Entry.EntryId);
-		Stock.Entry = Entry;
-		Stock.RemainingStock = Entry.InitialStock;
-		Stock.Revision = 1;
-	}
 }
 
-// 目录交易流程：验证 runtime、命令、幂等缓存、公款版本、库存、价格和免费饵约束；成功只写公款、库存和账本。
+// 目录交易流程：
+// 1. 先验证 RequestId、玩家身份、EntryId 和 ShopInventoryId，再用身份+操作+RequestId 查幂等缓存；重放只返回首笔终态并重读当前摊位库存快照。
+// 2. 首次命令继续验证来源摊位身份、免费白名单、经济 runtime、摊位目录状态、命令门、当前货架条目、公款版本和未裁定上架条件。
+// 3. 免费领取必须来自来源摊位白名单且价格为 0、库存无限；普通购买只认摊位表里的单价，并检查当前团队公款够不够。
+// 4. 写入时先让摊位库存扣减当前 EntryId，再扣团队公款、追加账本、缓存终态，最后广播公开交易；因此客户端看到的是库存、公款和账本同一笔结果。
 FCatShopTransactionResult UCatShopEconomyService::CommitCatalogTransaction(const FCatShopPurchaseCommand& Command,
-	const ECatShopTransactionKind TransactionKind)
+	const ECatShopTransactionKind TransactionKind, UCatShopInventoryComponent* ShopInventory)
 {
 	FCatShopTransactionResult Result;
 	Result.Command.RequestId = Command.Context.RequestId;
 	Result.Wallet = Wallet;
-	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty() || Command.EntryId.IsNone())
+	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
+		|| Command.EntryId.IsNone() || !Command.ShopInventoryId.IsValid())
 	{
 		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
 		Result.Command.Revision = Wallet.Revision;
@@ -479,23 +563,33 @@ FCatShopTransactionResult UCatShopEconomyService::CommitCatalogTransaction(const
 			}))
 			{
 				Result.Transaction = *CurrentRecord;
-				Result.Stock = MakeStockSnapshot(StockByEntryId.Find(CurrentRecord->EntryId));
+				if (const UCatShopInventoryComponent* CurrentInventory =
+					FindRegisteredShopInventoryById(CurrentRecord->ShopInventoryId))
+				{
+					CurrentInventory->TryGetStockSnapshot(CurrentRecord->EntryId, Result.Stock);
+				}
 			}
 		}
 		Result.Command.bCommitted = false;
 		Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
 		return Result;
 	}
-	FStockRecord* StockRecord = StockByEntryId.Find(Command.EntryId);
-	Result.Stock = MakeStockSnapshot(StockRecord);
-	if (TransactionKind == ECatShopTransactionKind::FreeClaim && !IsFreeClaimEntry(Command.EntryId))
+	if (!ShopInventory || ShopInventory->GetShopInventoryId() != Command.ShopInventoryId)
+	{
+		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
+		Result.Command.Revision = Wallet.Revision;
+		CacheTerminalResult(CacheKey, PayloadSignature, Result);
+		return Result;
+	}
+	ShopInventory->TryGetStockSnapshot(Command.EntryId, Result.Stock);
+	if (TransactionKind == ECatShopTransactionKind::FreeClaim && !IsFreeClaimEntry(Command.EntryId, ShopInventory))
 	{
 		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
 		Result.Command.Revision = Wallet.Revision;
 		CacheTerminalResult(CacheKey, PayloadSignature, Result);
 		return Result;
 	}
-	if (!bRuntimeReady || !bCatalogReady)
+	if (!bRuntimeReady || !ShopInventory->IsRuntimeCatalogReady())
 	{
 		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
 		Result.Command.Revision = Wallet.Revision;
@@ -509,7 +603,8 @@ FCatShopTransactionResult UCatShopEconomyService::CommitCatalogTransaction(const
 		CacheTerminalResult(CacheKey, PayloadSignature, Result);
 		return Result;
 	}
-	if (!StockRecord)
+	FCatShopCatalogEntry Entry;
+	if (!ShopInventory->TryGetCatalogEntry(Command.EntryId, Entry))
 	{
 		Result.Command.Error = ECatDomainCommandError::NotFound;
 		Result.Command.Revision = Wallet.Revision;
@@ -523,79 +618,77 @@ FCatShopTransactionResult UCatShopEconomyService::CommitCatalogTransaction(const
 		CacheTerminalResult(CacheKey, PayloadSignature, Result);
 		return Result;
 	}
-	// 免费自取要求价格 0 且库存无限：飞书对普通饵和 1 级竿写的都是免费不限量，
-	// 有限库存的"免费"品会在某天领光，保底竿一旦领光就不再是保底，所以这两条一起当准入条件。
-	if (TransactionKind == ECatShopTransactionKind::FreeClaim
-		&& (StockRecord->Entry.UnitPrice != 0 || !StockRecord->Entry.bUnlimitedStock))
+	// 运行目录构建已经拒绝带商店解锁条件的条目；这里再守一次交易写口，防止热更或迁移期数据绕过目录初始化。
+	if (!Entry.RequiredShopUnlockId.IsNone())
 	{
 		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
 		Result.Command.Revision = Wallet.Revision;
 		CacheTerminalResult(CacheKey, PayloadSignature, Result);
 		return Result;
 	}
-	if (!StockRecord->Entry.bUnlimitedStock && StockRecord->RemainingStock <= 0)
+	// 免费自取要求价格 0 且库存无限：基础饵、1 级竿和 1 级漂都是保底项，
+	// 有限库存的"免费"品会在某天领光，基础件一旦领光就不再是保底，所以这两条一起当准入条件。
+	if (TransactionKind == ECatShopTransactionKind::FreeClaim
+		&& (Entry.UnitPrice != 0 || !Entry.bUnlimitedStock))
 	{
-		Result.Command.Error = ECatDomainCommandError::CapacityExceeded;
+		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
 		Result.Command.Revision = Wallet.Revision;
-		Result.Stock = MakeStockSnapshot(StockRecord);
 		CacheTerminalResult(CacheKey, PayloadSignature, Result);
 		return Result;
 	}
-	if (Wallet.Balance < StockRecord->Entry.UnitPrice)
+	if (!Entry.bUnlimitedStock && Result.Stock.RemainingStock <= 0)
 	{
 		Result.Command.Error = ECatDomainCommandError::CapacityExceeded;
 		Result.Command.Revision = Wallet.Revision;
-		Result.Stock = MakeStockSnapshot(StockRecord);
+		CacheTerminalResult(CacheKey, PayloadSignature, Result);
+		return Result;
+	}
+	if (Wallet.Balance < Entry.UnitPrice)
+	{
+		Result.Command.Error = ECatDomainCommandError::CapacityExceeded;
+		Result.Command.Revision = Wallet.Revision;
 		CacheTerminalResult(CacheKey, PayloadSignature, Result);
 		return Result;
 	}
 
-	Wallet.Balance -= StockRecord->Entry.UnitPrice;
-	if (StockRecord->Entry.UnitPrice != 0)
+	FCatShopStockSnapshot CommittedStock;
+	if (!ShopInventory->ConsumeCatalogEntryFromAuthority(Command.EntryId, CommittedStock))
+	{
+		Result.Command.Error = ECatDomainCommandError::CapacityExceeded;
+		Result.Command.Revision = Wallet.Revision;
+		Result.Stock = CommittedStock;
+		CacheTerminalResult(CacheKey, PayloadSignature, Result);
+		return Result;
+	}
+
+	Wallet.Balance -= Entry.UnitPrice;
+	if (Entry.UnitPrice != 0)
 	{
 		++Wallet.Revision;
-	}
-	if (!StockRecord->Entry.bUnlimitedStock)
-	{
-		--StockRecord->RemainingStock;
-		++StockRecord->Revision;
 	}
 	FCatShopTransactionRecord& Record = TransactionLedger.AddDefaulted_GetRef();
 	Record.TransactionId = FGuid::NewGuid();
 	Record.RequestId = Command.Context.RequestId;
 	Record.StableNetId = Command.Context.StableNetId;
 	Record.Kind = TransactionKind;
-	Record.EntryKind = StockRecord->Entry.Kind;
+	Record.EntryKind = Entry.Kind;
 	Record.DeliveryState = ECatShopDeliveryState::Pending;
-	Record.EntryId = StockRecord->Entry.EntryId;
-	Record.DefinitionId = StockRecord->Entry.DefinitionId;
-	Record.WalletDelta = -StockRecord->Entry.UnitPrice;
+	Record.EntryId = Entry.EntryId;
+	Record.ShopInventoryId = Command.ShopInventoryId;
+	Record.DefinitionId = Entry.DefinitionId;
+	Record.PurchaseQuantity = Entry.PurchaseQuantity;
+	Record.WalletDelta = -Entry.UnitPrice;
 	Record.WalletRevision = Wallet.Revision;
-	Record.StockRevision = StockRecord->Revision;
+	Record.StockRevision = CommittedStock.Revision;
 	Result.Command.bCommitted = true;
 	Result.Command.Error = ECatDomainCommandError::None;
 	Result.Command.Revision = Wallet.Revision;
 	Result.Wallet = Wallet;
-	Result.Stock = MakeStockSnapshot(StockRecord);
+	Result.Stock = CommittedStock;
 	Result.Transaction = Record;
 	CacheTerminalResult(CacheKey, PayloadSignature, Result);
 	OnPublicTransactionCommitted.Broadcast(MakePublicTransaction(Record));
 	return Result;
-}
-
-// 库存快照流程：复制目录项主键、剩余数量、无限标记和版本；空记录保持默认，方便拒绝结果携带空 Stock。
-FCatShopStockSnapshot UCatShopEconomyService::MakeStockSnapshot(const FStockRecord* StockRecord)
-{
-	FCatShopStockSnapshot Snapshot;
-	if (!StockRecord)
-	{
-		return Snapshot;
-	}
-	Snapshot.EntryId = StockRecord->Entry.EntryId;
-	Snapshot.RemainingStock = StockRecord->RemainingStock;
-	Snapshot.bUnlimitedStock = StockRecord->Entry.bUnlimitedStock;
-	Snapshot.Revision = StockRecord->Revision;
-	return Snapshot;
 }
 
 // 公开交易记录构造流程：复制账本里可以公开的字段。
@@ -607,22 +700,48 @@ FCatShopPublicTransaction UCatShopEconomyService::MakePublicTransaction(const FC
 	Public.TransactionId = Record.TransactionId;
 	Public.Kind = Record.Kind;
 	Public.EntryId = Record.EntryId;
+	Public.ShopInventoryId = Record.ShopInventoryId;
 	Public.DefinitionId = Record.DefinitionId;
+	Public.PurchaseQuantity = Record.PurchaseQuantity;
 	Public.FishSource = Record.FishSource;
 	Public.WalletDelta = Record.WalletDelta;
 	Public.DeliveryState = Record.DeliveryState;
 	return Public;
 }
 
-// 免费自取判定流程：只认两个显式配置项，且不接受 None。
-// 不按"单价为 0"反推免费自取，是因为那样一来任何漏填价格或被改成 0 的条目都会自动变成可白拿的品类。
-bool UCatShopEconomyService::IsFreeClaimEntry(const FName EntryId) const
+// 免费自取判定流程：只认来源摊位库存组件上的三条显式配置项；不按"单价为 0"反推，避免漏填价格变成白拿。
+bool UCatShopEconomyService::IsFreeClaimEntry(const FName EntryId,
+	const UCatShopInventoryComponent* ShopInventory) const
 {
-	if (EntryId.IsNone())
+	if (EntryId.IsNone() || !ShopInventory)
 	{
 		return false;
 	}
-	return EntryId == FreeOrdinaryBaitEntryId || EntryId == FreeStarterRodEntryId;
+	return ShopInventory->IsFreeClaimEntry(EntryId);
+}
+
+// 摊位库存查找流程：先拒绝无效 ID，再只在当前 World 注册过的组件里查找；销毁中的弱引用会被跳过。
+UCatShopInventoryComponent* UCatShopEconomyService::FindRegisteredShopInventoryById(const FGuid ShopInventoryId) const
+{
+	if (!ShopInventoryId.IsValid())
+	{
+		return nullptr;
+	}
+	for (const TWeakObjectPtr<UCatShopInventoryComponent>& InventoryPtr : RegisteredShopInventories)
+	{
+		if (UCatShopInventoryComponent* Inventory = InventoryPtr.Get();
+			Inventory && Inventory->GetShopInventoryId() == ShopInventoryId)
+		{
+			return Inventory;
+		}
+	}
+	return nullptr;
+}
+
+// 注册摊位变化流程：不解释是哪件商品变化，只广播“公开商店快照需要重建”；GameMode 仍通过 BuildPublicSnapshot 读取完整事实。
+void UCatShopEconomyService::HandleRegisteredShopInventoryChanged()
+{
+	OnShopInventoryRefreshed.Broadcast();
 }
 
 // 幂等键流程：只组合服务器身份、操作和 RequestId；Entry/Fish/Receipt 留给 payload signature 比对，避免同 RequestId 换业务字段时生成第二条交易。
@@ -633,12 +752,13 @@ FString UCatShopEconomyService::MakeTerminalKey(const FString& StableNetId, cons
 		*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
-// 目录载荷签名流程：冻结交易类别、公款前提和 EntryId；价格与库存来自服务端目录，不接受客户端提交。
+// 目录载荷签名流程：冻结交易类别、公款前提、来源摊位库存和 EntryId；价格与库存来自摊位组件，不接受客户端提交。
 FString UCatShopEconomyService::MakeCatalogPayloadSignature(const FCatShopPurchaseCommand& Command,
 	const ECatShopTransactionKind TransactionKind)
 {
-	return FString::Printf(TEXT("Kind=%d|Expected=%lld|Entry=%s"), static_cast<int32>(TransactionKind),
-		Command.Context.ExpectedRevision, *Command.EntryId.ToString());
+	return FString::Printf(TEXT("Kind=%d|Expected=%lld|Shop=%s|Entry=%s"), static_cast<int32>(TransactionKind),
+		Command.Context.ExpectedRevision, *Command.ShopInventoryId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Command.EntryId.ToString());
 }
 
 // 售鱼载荷签名流程：冻结公款前提、鱼实例、Items 提交证据、来源、重量和估值；同 RequestId 改任一项都不是合法重放。

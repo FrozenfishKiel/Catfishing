@@ -6,6 +6,8 @@
 #include "Framework/Core/CatRunContracts.h"
 #include "CatFishDefinition.generated.h"
 
+class UTexture2D;
+
 /** 鱼体型只表达协作档位，不携带任何力量、体力或几何公式。 */
 UENUM(BlueprintType)
 enum class ECatFishBodyClass : uint8
@@ -44,6 +46,18 @@ public:
 	/** 鱼种稳定 ID；FishInstance、图鉴候选和日志只引用该值，不把资产对象当永久身份。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
 	FName FishDefinitionId = NAME_None;
+
+	/** 玩家可见鱼名；鱼护格、图鉴和提示优先读取它，未配置时回退到 FishDefinitionId。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
+	FText DisplayName;
+
+	/** 玩家可见鱼种说明；库存详情和图鉴可以复用，玩法事务不读取它。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation", meta = (MultiLine = "true"))
+	FText Description;
+
+	/** 鱼护/库存格使用的鱼缩略图；捕获实例只保存鱼定义 ID，表现资源由定义资产提供。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
+	TSoftObjectPtr<UTexture2D> Thumbnail;
 
 	/** 体型协作档位；只有 Giant 可在 Fishing 阶段接受搏斗协作者。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing")

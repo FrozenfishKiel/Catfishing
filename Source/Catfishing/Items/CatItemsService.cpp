@@ -64,14 +64,15 @@ namespace
 		}
 	}
 
-	// 鱼离开容器权限流程：地面鱼护里的鱼只能由捕获者通过普通库存操作移出；其他玩家必须走 Social 偷鱼协议。
-	// 旧 PersonalGuard 明确拒绝，避免角色随身鱼护路径复活。
+	// 鱼离开容器权限流程：地面鱼护按公共箱子处理，靠近并通过服务器容器校验的玩家都能用普通库存操作移动；共享鱼缸继续允许正式展示流转。
 	bool CanFishLeaveContainer(const FCatFishInstance& Fish, const ECatContainerKind ContainerKind,
 		const FString& StableNetId)
 	{
+		(void)Fish;
+		(void)StableNetId;
 		if (ContainerKind == ECatContainerKind::FishGuard)
 		{
-			return Fish.OwnerStableNetId == StableNetId;
+			return true;
 		}
 		return ContainerKind == ECatContainerKind::SharedFishTank;
 	}
@@ -84,15 +85,11 @@ namespace
 		return Definition && Definition->bTankDisplayEligible;
 	}
 
-	// 鱼进入容器权限流程：旧 PersonalGuard 拒绝，共享鱼缸校验展示资格，鱼护箱子只要求目标本身是鱼容器。
+	// 鱼进入容器权限流程：共享鱼缸校验展示资格，鱼护箱子只要求目标本身是鱼容器；其他未裁容器不接收鱼。
 	ECatDomainCommandError ResolveFishEnterContainerError(const FCatFishInstance& Fish,
 		const ECatContainerKind ContainerKind,
 		const FString& StableNetId)
 	{
-		if (ContainerKind == ECatContainerKind::PersonalGuard)
-		{
-			return ECatDomainCommandError::PolicyUndecided;
-		}
 		if (ContainerKind == ECatContainerKind::SharedFishTank)
 		{
 			return CanFishBeDisplayedInTank(Fish)
@@ -129,13 +126,12 @@ void UCatItemsService::Deinitialize()
 	Super::Deinitialize();
 }
 
-// 容器注册流程：验证 authority 期间传入的宿主、ID 和世界容器类型，再把初始 Revision、容量和复制组件写入服务端记录并发布初始快照。
+// 容器注册流程：接收 authority 宿主提交的组件、ID 和世界容器类型；随后把初始 Revision、容量和复制组件写入服务端记录并发布初始快照。
 bool UCatItemsService::RegisterContainer(UCatContainerReplicationComponent* ReplicationComponent, const FGuid ContainerId,
-	const ECatContainerKind Kind, const FString& OwnerStableNetId, const int32 Capacity)
+	const ECatContainerKind Kind, const int32 Capacity)
 {
-	(void)OwnerStableNetId;
 	if (!bCommandsOpen || !ReplicationComponent || !ContainerId.IsValid()
-		|| Kind == ECatContainerKind::Unknown || Kind == ECatContainerKind::PersonalGuard)
+		|| Kind == ECatContainerKind::Unknown)
 	{
 		return false;
 	}
@@ -148,7 +144,6 @@ bool UCatItemsService::RegisterContainer(UCatContainerReplicationComponent* Repl
 	Record.Snapshot.Kind = Kind;
 	Record.Snapshot.Revision = 1;
 	Record.Snapshot.Capacity = FMath::Max(0, Capacity);
-	Record.OwnerStableNetId.Reset();
 	Record.Capacity = FMath::Max(0, Capacity);
 	Record.ReplicationComponent = ReplicationComponent;
 	PublishContainer(Record);
@@ -179,7 +174,7 @@ void UCatItemsService::UnregisterContainer(UCatContainerReplicationComponent* Re
 	}
 }
 
-// 快照查询流程：按稳定容器 ID 复制公开 DTO；容量属于公开 UI 事实，服务端私有身份和预留永远不写入输出。
+// 快照查询流程：按稳定容器 ID 复制公开 DTO；容量属于公开 UI 事实，服务端预留永远不写入输出。
 bool UCatItemsService::TryGetContainerSnapshot(const FGuid ContainerId, FCatContainerSnapshot& OutSnapshot) const
 {
 	const FContainerRecord* Record = Containers.Find(ContainerId);
@@ -194,7 +189,7 @@ bool UCatItemsService::TryGetContainerSnapshot(const FGuid ContainerId, FCatCont
 }
 
 // 捕获提交流程：先读取终态缓存，再验证命令、预分配鱼 ID、地面鱼护、Revision、容量和冻结定义值；
-// 全部满足时把嘴叼鱼写入命中鱼护的第一个空槽，并发布同 Revision 的不可变 Committed DTO。
+// 全部满足时把嘴叼鱼写入命中地面鱼护箱子的第一个空槽，并发布同 Revision 的不可变 Committed DTO。
 FCatCaptureCommitResult UCatItemsService::CommitCapture(const FCatCaptureCommitCommand& Command)
 {
 	FCatCaptureCommitResult Result;
@@ -329,7 +324,7 @@ FCatDomainCommandResult UCatItemsService::TransferContainedObject(const FCatCont
 	}
 }
 
-// 原子转移流程：先重放终态，再同时校验两容器、个人归属、双 Revision、源/目标槽位、锁和容量；提交时只交换或移动数组槽位，最后发布一次权威快照。
+// 原子转移流程：先重放终态，再同时校验两容器、鱼实例归属、双 Revision、源/目标槽位、锁和容量；提交时只交换或移动数组槽位，最后发布一次权威快照。
 FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransferCommand& Command)
 {
 	FCatDomainCommandResult Result;
@@ -360,11 +355,6 @@ FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransf
 	else if (!Source || !Target)
 	{
 		Result.Error = ECatDomainCommandError::NotFound;
-	}
-	else if (Source->Snapshot.Kind == ECatContainerKind::PersonalGuard
-		|| Target->Snapshot.Kind == ECatContainerKind::PersonalGuard)
-	{
-		Result.Error = ECatDomainCommandError::PermissionDenied;
 	}
 	else if (Source->Snapshot.Revision != Command.Context.ExpectedRevision || Target->Snapshot.Revision != Command.ExpectedTargetRevision)
 	{
@@ -475,7 +465,7 @@ FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransf
 	return Result;
 }
 
-// 直接进食流程：先重放终态，再校验身份、容器 Revision、个人归属/共享缸、未预留与目标鱼；成功清空所在槽位并发布一次 Revision。
+// 直接进食流程：先重放终态，再校验身份、容器 Revision、未预留与目标鱼；地面鱼护箱子作为公共容器，不再用容器归属拦截。
 FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand& Command)
 {
 	FCatFishConsumeResult Result;
@@ -520,12 +510,6 @@ FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand
 		{
 			Result.Command.Error = ECatDomainCommandError::NotFound;
 		}
-		else if (Source->Snapshot.Kind == ECatContainerKind::PersonalGuard
-			|| (Source->Snapshot.Kind == ECatContainerKind::FishGuard
-				&& Source->Snapshot.Fish[FishIndex].OwnerStableNetId != Command.Context.StableNetId))
-		{
-			Result.Command.Error = ECatDomainCommandError::PermissionDenied;
-		}
 		else
 		{
 			Result.Fish = Source->Snapshot.Fish[FishIndex];
@@ -545,7 +529,7 @@ FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand
 	return Result;
 }
 
-// 献祭预留流程：按 RequestId 幂等读取既有记录，再校验身份、容器 Revision、鱼归属与未锁定；成功只增加容器 Revision 和锁，不提前删除复制数组。
+// 献祭预留流程：按 RequestId 幂等读取既有记录，再校验身份、容器 Revision、容器策略权限与未锁定；成功只增加容器 Revision 和锁，不提前删除复制数组。
 FCatFishReservationResult UCatItemsService::ReserveFish(const FCatSacrificeCommand& Command)
 {
 	FCatFishReservationResult Result;
@@ -591,6 +575,7 @@ FCatFishReservationResult UCatItemsService::ReserveFish(const FCatSacrificeComma
 	}
 	const FCatFishInstance& Fish = Container->Snapshot.Fish[FishIndex];
 	const bool bOwnerMayReserve = Container->Snapshot.Kind == ECatContainerKind::SharedFishTank
+		|| Container->Snapshot.Kind == ECatContainerKind::FishGuard
 		|| Fish.OwnerStableNetId == Command.Context.StableNetId;
 	if (!bOwnerMayReserve)
 	{
@@ -688,7 +673,7 @@ FCatFishReservationCommitResult UCatItemsService::CommitFishReservation(const FS
 	return Result;
 }
 
-// 偷鱼开始流程：先重放终态，再校验命令、源容器、Revision、目标鱼、非本人和未预留；成功把唯一鱼移入 escrow、源槽位清空并发布一次 Revision，同时记录返还槽位。
+// 偷鱼开始流程：先重放终态，再校验命令、源容器、Revision、目标鱼、捕获者身份差异和未预留；成功把唯一鱼移入 escrow、源槽位清空并发布一次 Revision，同时记录返还槽位。
 FCatFishTheftResult UCatItemsService::BeginFishTheft(const FCatFishTheftCommand& Command)
 {
 	FCatFishTheftResult Result;
@@ -855,7 +840,7 @@ void UCatItemsService::CloseCommandsAndCancelReservations()
 	}
 }
 
-// 容器权威上下文读取流程：从服务器私有记录返回真实种类/主人，并把复制组件的 Owner 作为空间宿主；任一记录或宿主失效都整体失败，绝不从公开 DTO 猜主人。
+// 容器宿主读取流程：从服务器记录返回真实种类，并把复制组件所属 Actor 作为空间宿主；任一记录或宿主失效都整体失败。
 bool UCatItemsService::TryGetContainerHost(const FGuid ContainerId, ECatContainerKind& OutKind,
 	AActor*& OutAuthorityActor) const
 {
@@ -870,20 +855,6 @@ bool UCatItemsService::TryGetContainerHost(const FGuid ContainerId, ECatContaine
 	}
 	OutKind = Record->Snapshot.Kind;
 	OutAuthorityActor = AuthorityActor;
-	return true;
-}
-
-// 容器权威上下文读取流程：先复用不泄露身份的宿主查询，再仅从同一服务器记录补充私有主人；任一实体失效都整体失败。
-bool UCatItemsService::TryGetContainerAuthorityContext(const FGuid ContainerId, ECatContainerKind& OutKind,
-	FString& OutOwnerStableNetId, AActor*& OutAuthorityActor) const
-{
-	const FContainerRecord* Record = Containers.Find(ContainerId);
-	if (!Record || !TryGetContainerHost(ContainerId, OutKind, OutAuthorityActor))
-	{
-		OutOwnerStableNetId.Reset();
-		return false;
-	}
-	OutOwnerStableNetId = Record->OwnerStableNetId;
 	return true;
 }
 

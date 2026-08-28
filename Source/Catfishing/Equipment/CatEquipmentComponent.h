@@ -6,6 +6,7 @@
 #include "CatEquipmentComponent.generated.h"
 
 class UCatEquipmentDefinition;
+class ACatCampInventoryActor;
 
 /** Equipment 随身库存与钓鱼选择快照发生提交或复制变化的本机通知；UI 只把它当重读信号。 */
 DECLARE_MULTICAST_DELEGATE(FCatEquipmentSnapshotChanged);
@@ -92,6 +93,9 @@ public:
 	FCatEquipmentSnapshotChanged OnSnapshotChanged;
 
 private:
+	/** 营地公共仓库负责背包和公共仓库之间的服务器拖放事务；只允许它在同一提交里同时改双方快照并发布广播。 */
+	friend class ACatCampInventoryActor;
+
 	struct FCatFishingUseRecord
 	{
 		FGuid SessionId;

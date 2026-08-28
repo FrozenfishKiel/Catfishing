@@ -2,11 +2,14 @@
 
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "Character/CatCharacter.h"
 #include "Condition/CatConditionComponent.h"
+#include "Engine/World.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Framework/Game/CatGameplayTypes.h"
+#include "GameFramework/GameStateBase.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "Growth/CatGrowthComponent.h"
@@ -33,6 +36,7 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 
 	BoundLocalPlayer = InLocalPlayer;
 	BoundPlayerController = InController;
+	BoundCharacter = InCharacter;
 	BoundAbilitySystem = AbilitySystem;
 	BoundCondition = InCharacter->GetConditionComponent();
 	BoundGrowth = InCharacter->GetGrowthComponent();
@@ -99,6 +103,7 @@ void UCatHUDModel::Unbind()
 	FishingViewChangedHandle.Reset();
 	BoundLocalPlayer.Reset();
 	BoundPlayerController.Reset();
+	BoundCharacter.Reset();
 	BoundAbilitySystem.Reset();
 	BoundCondition.Reset();
 	BoundGrowth.Reset();
@@ -109,15 +114,36 @@ void UCatHUDModel::Unbind()
 	ViewState = FCatHUDViewState();
 }
 
-// 刷新流程：读取 ASC 三项数值、Condition、Growth 和 FishingBridge 当前投影，再生成 HUD 文本并广播完整状态。
+// 刷新流程：读取 Run 天数、ASC 三项数值、Condition、Growth 和 FishingBridge 当前投影，再生成 HUD 文本与进度条比例并广播完整状态。
 void UCatHUDModel::Refresh()
 {
 	FCatHUDViewState NewState;
+	APlayerController* Controller = BoundPlayerController.Get();
+	UWorld* World = Controller ? Controller->GetWorld() : nullptr;
+	const AGameStateBase* GameStateBase = World ? World->GetGameState() : nullptr;
+	const double ServerNowSeconds = GameStateBase ? GameStateBase->GetServerWorldTimeSeconds()
+		: (World ? World->GetTimeSeconds() : 0.0);
+	if (const ACatfishingGameState* RunGameState = World ? World->GetGameState<ACatfishingGameState>() : nullptr)
+	{
+		NewState.DayIndex = FMath::Max(1, RunGameState->GetRunPublicState().Phase.DayIndex);
+	}
+	NewState.DayText = FText::FromString(FString::Printf(TEXT("第 %d 天"), NewState.DayIndex));
 	if (const UAbilitySystemComponent* AbilitySystem = BoundAbilitySystem.Get())
 	{
 		NewState.Poison = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute());
 		NewState.FishingStrength = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 		NewState.FightStamina = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	}
+	if (const ACatCharacter* Character = BoundCharacter.Get())
+	{
+		float FightStaminaBaseline = 0.0f;
+		if (GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
+			Character->GetCatDefinitionId(), FightStaminaBaseline))
+		{
+			NewState.FightStaminaMaximum = FightStaminaBaseline;
+			NewState.NormalizedFightStamina = FMath::Clamp(
+				NewState.FightStamina / FightStaminaBaseline, 0.0f, 1.0f);
+		}
 	}
 	if (const UCatConditionComponent* Condition = BoundCondition.Get())
 	{
@@ -131,9 +157,115 @@ void UCatHUDModel::Refresh()
 	{
 		NewState.Fishing = FishingViewBridge->GetViewState();
 		NewState.bHasFishingSession = true;
+		NewState.bShowFishingState = true;
+		NewState.NormalizedFishStamina = FMath::Clamp(
+			static_cast<float>(NewState.Fishing.NormalizedFishStamina), 0.0f, 1.0f);
+		NewState.LineLoadPercent = FMath::Clamp(NewState.Fishing.NormalizedLineLoad, 0.0f, 1.0f);
+		const ECatFishingPhase Phase = NewState.Fishing.Phase;
+		NewState.bShowBitePrompt = Phase == ECatFishingPhase::TrueBiteWindow;
+		NewState.bShowHookCountdown = NewState.bShowBitePrompt
+			&& NewState.Fishing.WindowEndsServerTime > ServerNowSeconds;
+		NewState.bShowFightMeters = Phase == ECatFishingPhase::HookedFight
+			|| Phase == ECatFishingPhase::NearShore
+			|| Phase == ECatFishingPhase::AutoHauling
+			|| Phase == ECatFishingPhase::ExhaustedReel;
+		if (NewState.bShowHookCountdown)
+		{
+			const double WindowDuration = FMath::Max(
+				NewState.Fishing.WindowEndsServerTime - NewState.Fishing.PhaseStartedServerTime, 0.01);
+			const double RemainingSeconds = FMath::Max(NewState.Fishing.WindowEndsServerTime - ServerNowSeconds, 0.0);
+			NewState.HookCountdownPercent = FMath::Clamp(
+				static_cast<float>(RemainingSeconds / WindowDuration), 0.0f, 1.0f);
+			NewState.HookCountdownText = FText::FromString(FString::Printf(TEXT("提竿倒计时 %.1f 秒"), RemainingSeconds));
+		}
 	}
 	NewState.LastFishingCommandResult = LastFishingCommandResult;
 	NewState.bHasFishingCommandResult = bHasFishingCommandResult;
+	NewState.bShowHookSuccessFeedback = NewState.bHasFishingCommandResult
+		&& NewState.LastFishingCommandResult.CommandType == ECatFishingCommandType::RequestHook
+		&& NewState.LastFishingCommandResult.Error == ECatFishingCommandError::None;
+	NewState.BitePromptText = FText::FromString(TEXT("鱼儿咬钩啦！提竿"));
+	NewState.HookSuccessFeedbackText = FText::FromString(TEXT("提竿成功！"));
+	NewState.CatStaminaText = NewState.FightStaminaMaximum > 0.0f
+		? FText::FromString(FString::Printf(TEXT("玩家体力 %.0f / %.0f"),
+			NewState.FightStamina, NewState.FightStaminaMaximum))
+		: FText::FromString(FString::Printf(TEXT("玩家体力 %.0f"), NewState.FightStamina));
+	NewState.FishStaminaText = FText::FromString(FString::Printf(
+		TEXT("鱼体力 %.0f%%"), NewState.NormalizedFishStamina * 100.0f));
+	if (NewState.HookCountdownText.IsEmpty())
+	{
+		NewState.HookCountdownText = FText::FromString(TEXT("提竿倒计时"));
+	}
+	switch (NewState.Fishing.Phase)
+	{
+	case ECatFishingPhase::CastFlight:
+		NewState.FishingStateText = FText::FromString(TEXT("钓鱼状态：抛竿中"));
+		NewState.BobberFeedbackText = FText::FromString(TEXT("鱼漂反馈：正在落点"));
+		break;
+	case ECatFishingPhase::Waiting:
+		NewState.FishingStateText = FText::FromString(TEXT("钓鱼状态：等待咬钩"));
+		NewState.BobberFeedbackText = FText::FromString(TEXT("鱼漂反馈：平稳"));
+		break;
+	case ECatFishingPhase::Probe:
+		NewState.FishingStateText = FText::FromString(TEXT("钓鱼状态：试探"));
+		NewState.BobberFeedbackText = FText::FromString(TEXT("鱼漂反馈：轻微晃动"));
+		break;
+	case ECatFishingPhase::TrueBiteWindow:
+		NewState.FishingStateText = FText::FromString(TEXT("钓鱼状态：提竿判定"));
+		NewState.BobberFeedbackText = FText::FromString(TEXT("鱼漂反馈：明显下沉"));
+		break;
+	case ECatFishingPhase::HookedFight:
+		NewState.FishingStateText = FText::FromString(TEXT("钓鱼状态：遛鱼中"));
+		NewState.BobberFeedbackText = FText::FromString(TEXT("鱼漂反馈：已经中鱼"));
+		break;
+	case ECatFishingPhase::NearShore:
+		NewState.FishingStateText = FText::FromString(TEXT("钓鱼状态：近岸"));
+		NewState.BobberFeedbackText = FText::FromString(TEXT("鱼漂反馈：准备收鱼"));
+		break;
+	case ECatFishingPhase::AutoHauling:
+		NewState.FishingStateText = FText::FromString(TEXT("钓鱼状态：自动回收"));
+		NewState.BobberFeedbackText = FText::FromString(TEXT("鱼漂反馈：回线中"));
+		break;
+	case ECatFishingPhase::ExhaustedReel:
+		NewState.FishingStateText = FText::FromString(TEXT("钓鱼状态：鱼已疲劳"));
+		NewState.BobberFeedbackText = FText::FromString(TEXT("鱼漂反馈：继续收线"));
+		break;
+	case ECatFishingPhase::Resolved:
+		NewState.FishingStateText = FText::FromString(TEXT("钓鱼状态：已结算"));
+		NewState.BobberFeedbackText = FText::FromString(TEXT("鱼漂反馈：会话结束"));
+		break;
+	case ECatFishingPhase::Terminated:
+		NewState.FishingStateText = FText::FromString(TEXT("钓鱼状态：已中止"));
+		NewState.BobberFeedbackText = FText::FromString(TEXT("鱼漂反馈：会话中止"));
+		break;
+	default:
+		NewState.FishingStateText = NewState.bHasFishingSession
+			? FText::FromString(TEXT("钓鱼状态：准备"))
+			: FText::FromString(TEXT("钓鱼状态：未开始"));
+		NewState.BobberFeedbackText = NewState.bHasFishingSession
+			? FText::FromString(TEXT("鱼漂反馈：等待反馈"))
+			: FText::FromString(TEXT("鱼漂反馈：未入水"));
+		break;
+	}
+	switch (NewState.Fishing.FishMotionIntent)
+	{
+	case ECatFishMotionIntent::CalmOrInward:
+		NewState.FishStateText = FText::FromString(TEXT("鱼状态：回游或疲劳"));
+		break;
+	case ECatFishMotionIntent::StrugglingOutward:
+		NewState.FishStateText = NewState.Fishing.bStrongConfrontation
+			? FText::FromString(TEXT("鱼状态：强烈挣扎"))
+			: FText::FromString(TEXT("鱼状态：向外挣扎"));
+		break;
+	case ECatFishMotionIntent::AutoHauling:
+		NewState.FishStateText = FText::FromString(TEXT("鱼状态：可拖回"));
+		break;
+	default:
+		NewState.FishStateText = NewState.bShowFightMeters
+			? FText::FromString(TEXT("鱼状态：观察中"))
+			: FText::FromString(TEXT("鱼状态：未进入遛鱼"));
+		break;
+	}
 	NewState.CatStatusText = FText::FromString(FString::Printf(TEXT("猫状态：中毒 %.0f | 钓鱼力量 %.0f | 搏斗体力 %.0f | 成长总经验 %d，当前槽 %d，待选 %d"),
 		NewState.Poison,
 		NewState.FishingStrength,

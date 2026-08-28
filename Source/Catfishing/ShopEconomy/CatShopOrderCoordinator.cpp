@@ -1,9 +1,10 @@
 #include "ShopEconomy/CatShopOrderCoordinator.h"
 
-#include "Equipment/CatEquipmentComponent.h"
+#include "Camp/CatCampInventoryActor.h"
 #include "Items/CatItemsService.h"
 #include "Logging/CatLog.h"
 #include "ShopEconomy/CatShopEconomyService.h"
+#include "ShopEconomy/CatShopInventoryComponent.h"
 #include "UObject/Class.h"
 
 // 创建条件流程：只在服务器 Game World 建立这条链；客户端不能本地推进订单。
@@ -15,16 +16,16 @@ bool UCatShopOrderCoordinator::ShouldCreateSubsystem(UObject* Outer) const
 
 // 购买入口流程：只声明这是付费订单，其余交给共用链条。
 FCatShopOrderResult UCatShopOrderCoordinator::SubmitPurchase(const FCatShopPurchaseCommand& Command,
-	UCatEquipmentComponent* RecipientEquipment)
+	UCatShopInventoryComponent* ShopInventory, ACatCampInventoryActor* DeliveryInventory)
 {
-	return RunOrder(Command, false, RecipientEquipment);
+	return RunOrder(Command, false, ShopInventory, DeliveryInventory);
 }
 
 // 免费自取入口流程：只声明这是免费订单，其余交给共用链条。
 FCatShopOrderResult UCatShopOrderCoordinator::SubmitFreeClaim(const FCatShopPurchaseCommand& Command,
-	UCatEquipmentComponent* RecipientEquipment)
+	UCatShopInventoryComponent* ShopInventory, ACatCampInventoryActor* DeliveryInventory)
 {
-	return RunOrder(Command, true, RecipientEquipment);
+	return RunOrder(Command, true, ShopInventory, DeliveryInventory);
 }
 
 // 售鱼链流程：
@@ -189,16 +190,16 @@ FCatShopOrderResult UCatShopOrderCoordinator::SubmitFishSale(const FCatShopFishS
 	return Result;
 }
 
-// 订单链流程：取商店依赖、在扣钱之前问完买家随身库存交付前提、下订单、判断订单是否成立、按 EntryKind 分流到装备型或数量型入库入口、确认交付、回填账本状态。
+// 订单链流程：取商店依赖和来源摊位库存、冻结公共仓库版本、在扣钱之前问完公共仓库接收前提、下订单、发货到公共仓库、确认交付、回填账本状态。
 FCatShopOrderResult UCatShopOrderCoordinator::RunOrder(const FCatShopPurchaseCommand& Command, const bool bFreeClaim,
-	UCatEquipmentComponent* RecipientEquipment)
+	UCatShopInventoryComponent* ShopInventory, ACatCampInventoryActor* DeliveryInventory)
 {
 	FCatShopOrderResult Result;
 	Result.Transaction.Command.RequestId = Command.Context.RequestId;
 	Result.Delivery.RequestId = Command.Context.RequestId;
 	UWorld* World = GetWorld();
 	UCatShopEconomyService* Shop = World ? World->GetSubsystem<UCatShopEconomyService>() : nullptr;
-	if (!Shop)
+	if (!Shop || !ShopInventory || ShopInventory->GetShopInventoryId() != Command.ShopInventoryId)
 	{
 		Result.Transaction.Command.Error = ECatDomainCommandError::DependencyUnavailable;
 		Result.Delivery.Error = ECatDomainCommandError::DependencyUnavailable;
@@ -213,31 +214,17 @@ FCatShopOrderResult UCatShopOrderCoordinator::RunOrder(const FCatShopPurchaseCom
 	// PolicyUndecided、CommandsClosed）比这里编一个更准确。
 	// 前置校验只对"第一次下这一单"有意义。同 RequestId 的重放，钱在首次那一趟就已经扣掉了，这次要做的是把既有回执
 	// 找回来（交付过就回 AlreadyResolved，没交付完就把交付补上），而不是重新问一遍"现在还能不能交付"。
-	// 少了这道判断就会出现：结算夜或买家 Pawn 已经销毁时重放一笔已交付订单，被前置校验判成没有收货人；
-	// 这种情况下调用方拿不到本该拿到的
-	// AlreadyResolved 和实物回执，看起来就像"钱扣了、东西不知去向"。
+	// 少了这道判断就会出现：结算夜或营地仓库状态已经变化时重放一笔已交付订单，被前置校验判成当前不能收货；
+	// 这种情况下调用方拿不到本该拿到的 AlreadyResolved 和公共仓库回执，看起来就像"钱扣了、东西没进仓库"。
 	FCatShopCatalogEntry Entry;
-	if (!Shop->HasCatalogTransactionTerminal(Command, bFreeClaim) && Shop->TryGetCatalogEntry(Command.EntryId, Entry))
+	const int64 DeliveryExpectedRevision = DeliveryInventory ? DeliveryInventory->GetSnapshot().Revision : 0;
+	if (!Shop->HasCatalogTransactionTerminal(Command, bFreeClaim)
+		&& Shop->TryGetCatalogEntry(ShopInventory, Command.EntryId, Entry))
 	{
-		ECatDomainCommandError DeliveryRejection = ECatDomainCommandError::None;
-		if (Entry.Kind == ECatShopEntryKind::InventoryQuantityGrant)
-		{
-			// 数量型物品要落到买家自己身上：没有身体就没有收货人，库存格已经满了也塞不进去，两件事都在扣钱之前问清楚。
-			DeliveryRejection = RecipientEquipment
-				? RecipientEquipment->ValidateInventoryQuantityGrant(Command.Context.RequestId, Entry.DefinitionId, 1)
-				: ECatDomainCommandError::DependencyUnavailable;
-		}
-		else if (Entry.Kind == ECatShopEntryKind::EquipmentGrant)
-		{
-			// 装备型物品落到买家本人随身库存：没有收货组件、或定义不是可入库装备，都必须在扣款前拦下。
-			DeliveryRejection = RecipientEquipment
-				? RecipientEquipment->ValidateEquipmentGrantFromAuthority(Command.Context.RequestId, Entry.DefinitionId)
-				: ECatDomainCommandError::DependencyUnavailable;
-		}
-		else
-		{
-			DeliveryRejection = ECatDomainCommandError::InvalidPayload;
-		}
+		const ECatDomainCommandError DeliveryRejection = DeliveryInventory
+			? DeliveryInventory->ValidateAddItemFromAuthority(
+				Command.Context.RequestId, DeliveryExpectedRevision, Entry.DefinitionId, Entry.PurchaseQuantity)
+			: ECatDomainCommandError::DependencyUnavailable;
 		if (DeliveryRejection != ECatDomainCommandError::None)
 		{
 			// 订单这一段报的是交付侧的错误码，因为订单压根没提交：公款、商店库存和账本一个字都没动。
@@ -246,14 +233,16 @@ FCatShopOrderResult UCatShopOrderCoordinator::RunOrder(const FCatShopPurchaseCom
 			Result.Transaction.Command.Revision = Shop->GetWalletSnapshot().Revision;
 			Result.Delivery.Error = DeliveryRejection;
 			UE_LOG(LogCatfishing, Warning,
-				TEXT("Event=shop_order_delivery_precheck_rejected RequestId=%s EntryId=%s DefinitionId=%s Error=%s"),
+				TEXT("Event=shop_order_delivery_precheck_rejected RequestId=%s EntryId=%s DefinitionId=%s Quantity=%d Error=%s"),
 				*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *Command.EntryId.ToString(),
-				*Entry.DefinitionId.ToString(), *UEnum::GetValueAsString(DeliveryRejection));
+				*Entry.DefinitionId.ToString(), Entry.PurchaseQuantity, *UEnum::GetValueAsString(DeliveryRejection));
 			return Result;
 		}
 	}
 
-	Result.Transaction = bFreeClaim ? Shop->ClaimFreeCatalogEntry(Command) : Shop->PurchaseCatalogEntry(Command);
+	Result.Transaction = bFreeClaim
+		? Shop->ClaimFreeCatalogEntry(Command, ShopInventory)
+		: Shop->PurchaseCatalogEntry(Command, ShopInventory);
 	// 订单成立包含两种情况：这次真的下单了，或者同一个 RequestId 之前已经下过单。
 	// 后者必须继续往下走，否则一次网络重试就会把一笔已经付过钱、还没入库的订单永远丢在待交付。
 	const FCatShopTransactionRecord& Record = Result.Transaction.Transaction;
@@ -265,18 +254,9 @@ FCatShopOrderResult UCatShopOrderCoordinator::RunOrder(const FCatShopPurchaseCom
 		Result.Delivery.Error = Result.Transaction.Command.Error;
 		return Result;
 	}
-	const bool bInventoryQuantityOrder = Record.EntryKind == ECatShopEntryKind::InventoryQuantityGrant;
-	const bool bEquipmentOrder = Record.EntryKind == ECatShopEntryKind::EquipmentGrant;
-	if (!bInventoryQuantityOrder && !bEquipmentOrder)
-	{
-		// 账本记录的交付类别必须能映射到一个明确的下游领域；未知类别不默认当成装备，避免错配目录污染本人随身库存。
-		Result.Delivery.Error = ECatDomainCommandError::InvalidPayload;
-		Result.Delivery.Revision = Record.DeliveryRevision;
-		return Result;
-	}
 	if (Record.DeliveryState == ECatShopDeliveryState::Delivered)
 	{
-		// 已经交付过的订单不再交付第二次。装备型和数量型物品都落在买家自己的随身库存快照里，
+		// 已经交付过的订单不再交付第二次。装备型和数量型物品都落在营地公共仓库快照里，
 		// 账本说交付过就只返回幂等终态，避免为了恢复回执再写一次库存数量。
 		Result.Delivery.Revision = Record.DeliveryRevision;
 		Result.Delivery.Error = ECatDomainCommandError::AlreadyResolved;
@@ -288,61 +268,30 @@ FCatShopOrderResult UCatShopOrderCoordinator::RunOrder(const FCatShopPurchaseCom
 	Confirmation.Context.ExpectedRevision = Record.WalletRevision;
 	Confirmation.Context.StableNetId = Command.Context.StableNetId;
 	Confirmation.TransactionId = Record.TransactionId;
-	if (bInventoryQuantityOrder)
-	{
-		// 数量型订单落到买家自己的随身库存：一份订单授予 1 份。Equipment 那一侧按 RequestId 幂等，同一订单重试拿回首次结果而不是再给一份；
-		// 回执没有实例 ID 可用，就用订单 RequestId——它正是库存授予记录的幂等键，账本据此能指回那条授予。
-		if (!RecipientEquipment)
-		{
-			Result.Delivery.Error = ECatDomainCommandError::DependencyUnavailable;
-			UE_LOG(LogCatfishing, Warning,
-				TEXT("Event=shop_order_inventory_quantity_grant_failed TransactionId=%s DefinitionId=%s Error=NoRecipientEquipment"),
-				*Record.TransactionId.ToString(EGuidFormats::DigitsWithHyphens), *Record.DefinitionId.ToString());
-			return Result;
-		}
-		const FCatDomainCommandResult Grant = RecipientEquipment->GrantInventoryQuantityFromAuthority(
-			Command.Context.RequestId, RecipientEquipment->GetSnapshot().Revision, Record.DefinitionId, 1);
-		if (!Grant.bCommitted && Grant.Error != ECatDomainCommandError::AlreadyResolved)
-		{
-			Result.Delivery = Grant;
-			UE_LOG(LogCatfishing, Warning,
-				TEXT("Event=shop_order_inventory_quantity_grant_failed TransactionId=%s DefinitionId=%s Error=%s"),
-				*Record.TransactionId.ToString(EGuidFormats::DigitsWithHyphens), *Record.DefinitionId.ToString(),
-				*UEnum::GetValueAsString(Grant.Error));
-			return Result;
-		}
-		Confirmation.DeliveryReceiptId = Command.Context.RequestId;
-		Confirmation.DeliveryRevision = Grant.Revision;
-		const FCatShopTransactionResult Confirmed = Shop->ConfirmTransactionDelivery(Confirmation);
-		Result.Delivery = Confirmed.Command;
-		if (Confirmed.Transaction.TransactionId == Record.TransactionId)
-		{
-			Result.Transaction.Transaction = Confirmed.Transaction;
-		}
-		return Result;
-	}
-
-	if (!RecipientEquipment)
+	if (!DeliveryInventory)
 	{
 		Result.Delivery.Error = ECatDomainCommandError::DependencyUnavailable;
 		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=shop_order_equipment_grant_failed TransactionId=%s DefinitionId=%s Error=NoRecipientEquipment"),
+			TEXT("Event=shop_order_camp_inventory_grant_failed TransactionId=%s DefinitionId=%s Error=NoCampInventory"),
 			*Record.TransactionId.ToString(EGuidFormats::DigitsWithHyphens), *Record.DefinitionId.ToString());
 		return Result;
 	}
-	const FCatDomainCommandResult Grant = RecipientEquipment->GrantEquipmentFromAuthority(
-		Command.Context.RequestId, RecipientEquipment->GetSnapshot().Revision, Record.DefinitionId);
-	const bool bEquipmentReady = Grant.bCommitted || Grant.Error == ECatDomainCommandError::AlreadyResolved;
-	if (!bEquipmentReady)
+
+	const FCatDomainCommandResult Grant = DeliveryInventory->AddItemFromAuthority(
+		Command.Context.RequestId, DeliveryExpectedRevision,
+		Record.DefinitionId, FMath::Max(1, Record.PurchaseQuantity));
+	const bool bDeliveryReady = Grant.bCommitted || Grant.Error == ECatDomainCommandError::AlreadyResolved;
+	if (!bDeliveryReady)
 	{
 		Result.Delivery = Grant;
 		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=shop_order_equipment_grant_failed TransactionId=%s DefinitionId=%s Error=%s"),
-			*Record.TransactionId.ToString(EGuidFormats::DigitsWithHyphens), *Record.DefinitionId.ToString(),
+			TEXT("Event=shop_order_camp_inventory_grant_failed TransactionId=%s DefinitionId=%s Quantity=%d Error=%s"),
+			*Record.TransactionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*Record.DefinitionId.ToString(), FMath::Max(1, Record.PurchaseQuantity),
 			*UEnum::GetValueAsString(Grant.Error));
 		return Result;
 	}
-	// 订单 RequestId 当库存回执，Equipment Revision 当下游版本；账本能证明这笔订单已落到买家自己的随身库存快照。
+	// 订单 RequestId 当公共仓库入库回执，仓库 Revision 当下游版本；账本能证明这笔订单已落到营地公共库存快照。
 	Confirmation.DeliveryReceiptId = Command.Context.RequestId;
 	Confirmation.DeliveryRevision = Grant.Revision;
 	const FCatShopTransactionResult Confirmed = Shop->ConfirmTransactionDelivery(Confirmation);

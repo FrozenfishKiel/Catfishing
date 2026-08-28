@@ -69,6 +69,10 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APlayerController> BoundPlayerController;
 
+	/** 当前 HUD 对应的猫身体读源；只用于解析猫种类体力基线，不从这里写 Character 状态。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<ACatCharacter> BoundCharacter;
+
 	/** 当前 Character 的 ASC 弱引用；HUD 只读三项数值。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UAbilitySystemComponent> BoundAbilitySystem;

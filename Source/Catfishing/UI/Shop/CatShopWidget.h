@@ -2,18 +2,47 @@
 
 #include "CoreMinimal.h"
 #include "Blueprint/UserWidget.h"
+#include "Components/Button.h"
 #include "UI/Shop/CatShopTypes.h"
 #include "CatShopWidget.generated.h"
 
-class UButton;
-class UHorizontalBox;
+class UPanelWidget;
 class UTextBlock;
+class UCatShopWidget;
 
 /** 商店关闭意图；交互对象拥有页面生命周期，Widget 只发关闭请求。 */
 DECLARE_MULTICAST_DELEGATE(FCatShopCloseRequested);
 
 /** 商品点击意图；参数只包含目录 ID 和购买/领取类型，不包含价格或公款并发版本。 */
 DECLARE_MULTICAST_DELEGATE_TwoParams(FCatShopEntryActionRequested, FName, ECatShopUIAction);
+
+/** 商店动态商品按钮；它只保存当前行的 EntryId 和动作类型，点击后回调父 Widget 的统一 UI 意图出口。 */
+UCLASS()
+class CATFISHING_API UCatShopEntryButton : public UButton
+{
+	GENERATED_BODY()
+
+public:
+	/** 绑定当前商品行的父 Widget、EntryId 和动作类型；重复初始化会先移除已有点击绑定，避免一键提交多次。 */
+	void InitializeShopEntry(UCatShopWidget* InOwnerShopWidget, FName InEntryId, ECatShopUIAction InAction);
+
+private:
+	/** 动态按钮点击入口；只把 EntryId 和动作类型交回父 Widget，不读取价格、库存或公款。 */
+	UFUNCTION()
+	void HandleShopEntryClicked();
+
+	/** 创建本按钮的商店 View；弱引用避免按钮比页面生命周期更长时阻止 Widget 回收。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UCatShopWidget> OwnerShopWidget;
+
+	/** 本按钮代表的商店目录项；点击时只提交这个稳定 ID。 */
+	UPROPERTY(Transient)
+	FName EntryId = NAME_None;
+
+	/** 本按钮代表购买还是免费领取；这个值来自 Model 投影，不由按钮根据价格自行推断。 */
+	UPROPERTY(Transient)
+	ECatShopUIAction Action = ECatShopUIAction::None;
+};
 
 /** 商店 WBP 基类；它只展示商品和公款，并把购买/领取点击作为纯 UI 意图发出。 */
 UCLASS(BlueprintType, Blueprintable)
@@ -48,43 +77,32 @@ public:
 	FCatShopEntryActionRequested OnEntryActionRequested;
 
 protected:
-	/** 构造时补齐旧 WBP 的默认鱼漂按钮并绑定可选按钮；动态商品列表可完全走蓝图的参数入口。 */
+	/** UMG 构造本商店页时打开键盘焦点能力并绑定关闭按钮；正式货架按钮会在渲染阶段按 Model 条目重建。 */
 	virtual void NativeConstruct() override;
 
-	/** 析构时只解绑本 View 的可选按钮；关闭和商品动作订阅由 PageController::Unbind 清理。 */
+	/** 析构时解绑本 View 拥有的关闭按钮与动态商品按钮；关闭和商品动作订阅由 PageController::Unbind 清理。 */
 	virtual void NativeDestruct() override;
+
+	/** 预览按键先于商品按钮处理；商店打开时命中关闭键会统一请求关闭，避免焦点落在动态按钮后按键失效。 */
+	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
+
+	/** UMG 在本页拥有键盘焦点时交付按键；商店打开且命中关闭键时广播关闭意图并返回已处理，其他按键继续交给父类。 */
+	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 	/** WBP 可选渲染扩展点；正式列表可在蓝图里按 Entries 创建商品行。 */
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|Shop")
 	void BP_RenderShop(const FCatShopViewState& ViewState);
 
 private:
-	/** 项目默认二级竿按钮入口；动态 WBP 不需要它，保留是为了冷启动资产有可点商品。 */
-	UFUNCTION()
-	void HandlePurchaseRodClicked();
-
-	/** 项目默认窝料按钮入口；动态 WBP 不需要它，保留是为了冷启动资产有可点商品。 */
-	UFUNCTION()
-	void HandlePurchaseChumClicked();
-
-	/** 项目默认鱼漂按钮入口；动态 WBP 不需要它，保留是为了冷启动资产能凑齐开钓前置物。 */
-	UFUNCTION()
-	void HandlePurchaseFloatClicked();
-
-	/** 项目默认免费鱼饵按钮入口；动态 WBP 不需要它，保留是为了冷启动资产有可点商品。 */
-	UFUNCTION()
-	void HandleClaimBaitClicked();
-
-	/** 项目默认保底竿按钮入口；动态 WBP 不需要它，保留是为了冷启动资产有可点商品。 */
-	UFUNCTION()
-	void HandleClaimStarterRodClicked();
-
 	/** 关闭按钮入口；它只广播关闭意图，不直接 RemoveFromParent。 */
 	UFUNCTION()
 	void HandleCloseClicked();
 
-	/** 默认鱼漂按钮补齐流程；旧 WBP 只有按钮行没有鱼漂按钮时，运行时补一个最小购买入口。 */
-	void EnsureDefaultFloatButton();
+	/** 动态商品按钮重建流程；用 Model 给出的 Entries 生成当前货架按钮，控件名字和 Designer 预留位置都不能决定商品事实。 */
+	void RebuildDynamicEntryButtons(const FCatShopViewState& ViewState);
+
+	/** 判断一次按键是否应该关闭商店；Escape、交互键和库存开关键都作为模态页面关闭出口。 */
+	bool ShouldCloseShopFromKey(const FKeyEvent& InKeyEvent) const;
 
 	/** 最近一次 Shop Model 输入的完整投影；本 Widget 不保存任何后端对象。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Shop", meta = (AllowPrivateAccess = "true"))
@@ -122,27 +140,11 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> EntriesTextBlock;
 
-	/** WBP Designer 中的默认商品按钮行；旧资产缺少鱼漂按钮时，Widget 会在这里追加一个运行时按钮。 */
+	/** WBP Designer 中的商品按钮容器；它代表表驱动货架区域，RenderShop 会按当前 Entries 重建里面的商品按钮。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UHorizontalBox> ShopButtons;
+	TObjectPtr<UPanelWidget> ShopButtons;
 
-	/** 可选默认商品按钮：购买二级竿；正式动态列表不依赖这个名字。 */
-	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional, AllowPrivateAccess = "true"))
-	TObjectPtr<UButton> PurchaseShopRodT2Button;
-
-	/** 可选默认商品按钮：购买窝料；正式动态列表不依赖这个名字。 */
-	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional, AllowPrivateAccess = "true"))
-	TObjectPtr<UButton> PurchaseBugChumButton;
-
-	/** 可选默认商品按钮：购买鱼漂；它保证未做动态商品行的冷启动商店也能获得开钓必需的鱼漂。 */
-	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional, AllowPrivateAccess = "true"))
-	TObjectPtr<UButton> PurchaseYarnBallFloatButton;
-
-	/** 可选默认商品按钮：领取普通鱼饵；正式动态列表不依赖这个名字。 */
-	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional, AllowPrivateAccess = "true"))
-	TObjectPtr<UButton> ClaimFreeBugBaitButton;
-
-	/** 可选默认商品按钮：领取保底竿；正式动态列表不依赖这个名字。 */
-	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional, AllowPrivateAccess = "true"))
-	TObjectPtr<UButton> ClaimFreeStarterRodButton;
+	/** 当前由 C++ 动态创建的商品按钮；保存引用是为了页面重绘或销毁时能解除点击绑定并让过期按钮释放。 */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UCatShopEntryButton>> DynamicEntryButtons;
 };

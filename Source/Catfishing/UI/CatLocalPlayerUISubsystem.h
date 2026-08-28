@@ -7,16 +7,21 @@
 
 class APlayerController;
 class APawn;
+class ACatCampInventoryActor;
 class ACatCharacter;
+class UCatCollectionModel;
+class UCatCollectionWidget;
 class UCatHUDModel;
 class UCatHUDWidget;
 class UCatContainerReplicationComponent;
+class UCatCampInventoryWidget;
 class UCatInteractionPageController;
 class UCatInteractionPromptWidget;
 class UCatInventoryModel;
 class UCatInventoryPageController;
 class UCatInventoryWidget;
 class UCatTravelWidget;
+enum class ECatHUDAction : uint8;
 
 /** 每个 LocalPlayer 的 UI 生命周期协调器；只装配本地玩家拥有的 HUD、背包和交互提示，不预建商店或聚合业务页面。 */
 UCLASS()
@@ -45,8 +50,23 @@ public:
 	/** 打开带外部容器上下文的背包；交互对象只提供只读容器复制源，跨容器移动仍由背包 Drop 和服务器裁决。 */
 	void OpenInventoryWithExternalContainerContexts(const TArray<UCatContainerReplicationComponent*>& ExternalContainers);
 
+	/** 用交互对象指定的库存页面打开外部容器；LocalPlayer 不理解箱子类型，只负责把页面请求交给库存控制器并返回打开结果。 */
+	bool OpenInventoryWithExternalContainerContextsUsingViewClass(
+		const TArray<UCatContainerReplicationComponent*>& ExternalContainers,
+		TSubclassOf<UCatInventoryWidget> InventoryViewClass);
+
+	/** 打开营地公共仓库；公共仓库是团队共享箱子，页面类必须由仓库 Actor 提供，取用由库存 PageController 提交服务器。 */
+	bool OpenCampInventory(ACatCampInventoryActor* CampInventory,
+		TSubclassOf<UCatCampInventoryWidget> InventoryViewClass);
+
 	/** 查询背包 PageController 打开态；没有已装配页面时返回 false，避免旧 Widget 引用影响输入切换判断。 */
 	bool IsInventoryOpen() const;
+
+	/** 返回当前 LocalPlayer 的库存 Model；库存 WBP 构建时用它订阅 ViewState，调用方不得通过它写玩法状态。 */
+	UCatInventoryModel* GetInventoryModel() const;
+
+	/** 返回当前 LocalPlayer 的库存 PageController；库存 WBP 用它提交玩家意图，刷新仍由 WBP 自己完成。 */
+	UCatInventoryPageController* GetInventoryPageController() const;
 
 	/** owning client 的 PlayerController 在 Pawn 或输入链就绪后调用；子系统据此重新对齐本地 HUD、背包和交互提示。 */
 	void RefreshPlayerLakeUIForController(APlayerController* Controller);
@@ -76,14 +96,26 @@ private:
 	/** 当前 Controller Pawn 变化入口；同 Pawn 刷新库存读模型和输入绑定，换 Pawn 或空 Pawn 才拆装本地玩家 UI 模块。 */
 	void HandleControllerPawnChanged(APawn* NewPawn);
 
-	/** 当配置 WBP、当前 Controller 与 Character 有效时创建 HUD、Inventory 和 Interaction 三个独立模块。 */
+	/** 当配置 WBP、当前 Controller 与 Character 有效时创建 HUD、Inventory 和 Interaction 三个本地玩家模块。 */
 	void AttachPlayerLakeUI(ACatCharacter* Character);
 
 	/** 先解绑各模块 PageController/Model，再移除 View，最后清理所有本地玩家 UI 引用。 */
 	void DetachPlayerLakeUI();
 
+	/** 切换当前 LocalPlayer 的图鉴页面；页面只读 Profile 图鉴快照，不接实物鱼容器。 */
+	void ToggleCollection();
+
+	/** 成对解绑并移除图鉴页面；空页面和重复调用保持幂等。 */
+	void CloseCollection();
+
 	/** HUD Model 投影变化入口；只把最新状态交给 HUD WBP，不访问背包或商店。 */
 	void HandleHUDModelViewStateChanged();
+
+	/** Collection Model 投影变化入口；只把最新图鉴快照交给图鉴 WBP。 */
+	void HandleCollectionModelViewStateChanged();
+
+	/** HUD 入口动作入口；背包交给既有库存控制器，菜单和图鉴只保留给蓝图或未来页面控制器。 */
+	void HandleHUDActionRequested(ECatHUDAction Action);
 
 	/** 当前 LocalPlayer 唯一 Frontend/旅行白盒界面；子系统拥有，Controller 变化或销毁时释放。 */
 	UPROPERTY(Transient)
@@ -101,11 +133,19 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryWidget> InventoryWidget;
 
-	/** 当前 LocalPlayer 的库存 Model；它只读随身道具、当前交互世界容器、当前选择和动作结果。 */
+	/** 当前 LocalPlayer 的库存 Model；它只读随身库存、本次交互外部容器、当前选择和动作结果。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryModel> InventoryModel;
 
-	/** 当前 LocalPlayer 的背包 PageController；它管理背包输入、外部容器打开和 View 意图转发。 */
+	/** 当前 LocalPlayer 的图鉴 WBP；按 HUD 猫爪入口懒创建，只展示 Profile 图鉴记录。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatCollectionWidget> CollectionWidget;
+
+	/** 当前 LocalPlayer 的图鉴 Model；它只读 durable Profile 图鉴快照。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatCollectionModel> CollectionModel;
+
+	/** 当前 LocalPlayer 的背包 PageController；它管理背包输入、外部容器打开和玩家库存操作转交。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryPageController> InventoryPageController;
 
@@ -133,5 +173,11 @@ private:
 
 	/** HUD Model 变化广播的配对解绑句柄；AttachPlayerLakeUI 写入，DetachPlayerLakeUI 消费。 */
 	FDelegateHandle HUDModelViewChangedHandle;
+
+	/** HUD 入口动作广播的配对解绑句柄；AttachPlayerLakeUI 写入，DetachPlayerLakeUI 消费。 */
+	FDelegateHandle HUDActionHandle;
+
+	/** Collection Model 变化广播的配对解绑句柄；ToggleCollection 写入，CloseCollection 消费。 */
+	FDelegateHandle CollectionModelViewChangedHandle;
 
 };

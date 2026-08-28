@@ -1,28 +1,30 @@
 #include "UI/Shop/CatShopModel.h"
 
 #include "Engine/World.h"
+#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentSettings.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
-#include "ShopEconomy/CatShopEconomySettings.h"
+#include "ShopEconomy/CatShopInventoryComponent.h"
 
 namespace
 {
-	// 公开货架查找流程：只读 GameState 已复制的权威库存快照，UI 不再从交易记录反推剩余库存。
+	// 公开货架查找流程：只读 GameState 已复制的权威库存快照，并限定到当前摊位库存 ID，避免不同摊位的同名 EntryId 串货。
 	const FCatShopStockSnapshot* FindPublicStockSnapshot(const FCatShopPublicEconomySnapshot& Economy,
-		const FName EntryId)
+		const FGuid ShopInventoryId, const FName EntryId)
 	{
-		return Economy.Stocks.FindByPredicate([EntryId](const FCatShopStockSnapshot& Stock)
+		return Economy.Stocks.FindByPredicate([ShopInventoryId, EntryId](const FCatShopStockSnapshot& Stock)
 		{
-			return Stock.EntryId == EntryId;
+			return Stock.ShopInventoryId == ShopInventoryId && Stock.EntryId == EntryId;
 		});
 	}
 }
 
-// 绑定流程：校验 Controller 和 GameState，订阅商店公开快照；成功后刷新一次完整投影。
-bool UCatShopModel::Bind(APlayerController* InController)
+// 绑定流程：校验 Controller、GameState 和来源摊位库存，订阅商店公开快照与摊位身份复制通知；成功后刷新一次完整投影。
+bool UCatShopModel::Bind(APlayerController* InController, UCatShopInventoryComponent* InShopInventory)
 {
 	Unbind();
-	if (!InController)
+	if (!InController || !InShopInventory)
 	{
 		return false;
 	}
@@ -34,8 +36,11 @@ bool UCatShopModel::Bind(APlayerController* InController)
 	}
 	BoundPlayerController = InController;
 	BoundGameState = GameState;
+	BoundShopInventory = InShopInventory;
 	ShopEconomyChangedHandle = GameState->OnShopEconomySnapshotChanged.AddUObject(
 		this, &ThisClass::HandleShopEconomySnapshotChanged);
+	ShopInventoryIdentityChangedHandle = InShopInventory->OnInventoryIdentityChanged.AddUObject(
+		this, &ThisClass::HandleShopInventoryIdentityChanged);
 	Refresh();
 	return true;
 }
@@ -47,9 +52,15 @@ void UCatShopModel::Unbind()
 	{
 		GameState->OnShopEconomySnapshotChanged.Remove(ShopEconomyChangedHandle);
 	}
+	if (UCatShopInventoryComponent* ShopInventory = BoundShopInventory.Get())
+	{
+		ShopInventory->OnInventoryIdentityChanged.Remove(ShopInventoryIdentityChangedHandle);
+	}
 	ShopEconomyChangedHandle.Reset();
+	ShopInventoryIdentityChangedHandle.Reset();
 	BoundPlayerController.Reset();
 	BoundGameState.Reset();
+	BoundShopInventory.Reset();
 	bOpen = false;
 	bActionPending = false;
 	LastAction = ECatShopUIAction::None;
@@ -79,7 +90,7 @@ void UCatShopModel::MarkActionSubmitted(const ECatShopUIAction Action, const FNa
 	Refresh();
 }
 
-// 本地拒绝流程：记录拒绝原因并刷新结果文本；这类拒绝不会发送任何服务器 RPC。
+// 拒绝回显流程：记录本地校验或服务器回包给出的失败原因，清掉 pending 并刷新结果文本；它只改 UI 投影，不写商店账本。
 void UCatShopModel::MarkActionRejected(const ECatShopUIAction Action, const FName EntryId, const FText Reason)
 {
 	LastAction = Action;
@@ -89,7 +100,7 @@ void UCatShopModel::MarkActionRejected(const ECatShopUIAction Action, const FNam
 	Refresh();
 }
 
-// 刷新流程：读取 GameState 经济/货架快照和 Settings 商品目录，生成只读 ViewState；公开快照变化会关闭 pending 并刷新余额/库存提示。
+// 刷新流程：读取 GameState 经济/货架快照和当前摊位库存组件的商品候选，生成只读 ViewState；公开快照变化会关闭 pending 并刷新余额/库存提示。
 void UCatShopModel::Refresh()
 {
 	FCatShopViewState NewState;
@@ -103,12 +114,19 @@ void UCatShopModel::Refresh()
 		NewState.bEconomyAvailable = true;
 	}
 
-	const UCatShopEconomySettings* Settings = GetDefault<UCatShopEconomySettings>();
-	if (Settings)
+	const UCatShopInventoryComponent* ShopInventory = BoundShopInventory.Get();
+	if (ShopInventory)
 	{
-		NewState.Entries.Reserve(Settings->CatalogEntries.Num());
-		for (const FCatShopCatalogEntry& Entry : Settings->CatalogEntries)
+		TArray<FCatShopCatalogEntry> DisplayCatalogEntries;
+		ShopInventory->CollectDisplayCatalogEntries(DisplayCatalogEntries);
+		NewState.Entries.Reserve(DisplayCatalogEntries.Num());
+		for (const FCatShopCatalogEntry& Entry : DisplayCatalogEntries)
 		{
+			if (NewState.bEconomyAvailable
+				&& !FindPublicStockSnapshot(NewState.Economy, ShopInventory->GetShopInventoryId(), Entry.EntryId))
+			{
+				continue;
+			}
 			FCatShopEntryView EntryView = MakeEntryView(Entry, NewState.Economy, NewState.bEconomyAvailable);
 			EntryView.bActionEnabled = NewState.bOpen && NewState.bEconomyAvailable
 				&& !NewState.bActionPending && EntryView.bStockAvailable
@@ -132,7 +150,7 @@ void UCatShopModel::Refresh()
 	}
 	else if (!LastEntryId.IsNone())
 	{
-		NewState.ResultText = FText::FromString(FString::Printf(TEXT("最近操作：%s，请在背包查看装备或耗材"),
+		NewState.ResultText = FText::FromString(FString::Printf(TEXT("最近操作：%s，请在营地公共仓库查看新物品"),
 			*LastEntryId.ToString()));
 	}
 	else
@@ -174,19 +192,30 @@ void UCatShopModel::HandleShopEconomySnapshotChanged()
 	Refresh();
 }
 
+// 摊位身份变化流程：客户端收到服务器复制的 ShopInventoryId 后重建投影；pending 状态不在这里清，因为这不是订单结果。
+void UCatShopModel::HandleShopInventoryIdentityChanged()
+{
+	Refresh();
+}
+
 // 商品投影流程：
-// 1. 把配置目录变成中文展示行，免费条目只从 Settings 白名单判断，不按价格 0 反推。
-// 2. 使用公开货架库存读取有限库存剩余数，并用当前团队公款推导付费项是否买得起。
-// 3. 这些结果只影响 UI 展示和明显无效点击；真正扣款和库存裁决仍在服务器 ShopEconomy。
+// 1. 把 Catalog 展示字段和装备定义展示字段合成中文展示行，免费条目只从摊位库存白名单判断，不按价格 0 反推。
+// 2. 使用公开货架库存读取有限库存剩余数，并用当前团队公款推导付费项是否买得起；没有出现在公开库存里的随机候选不会展示。
+// 3. 这些结果只影响 UI 展示和明显无效点击；真正扣款、数量和公共仓库发货仍在服务器 ShopEconomy/OrderCoordinator。
 FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry,
 	const FCatShopPublicEconomySnapshot& Economy, const bool bEconomyAvailable) const
 {
-	const UCatShopEconomySettings* Settings = GetDefault<UCatShopEconomySettings>();
-	const FCatShopStockSnapshot* Stock = bEconomyAvailable ? FindPublicStockSnapshot(Economy, Entry.EntryId) : nullptr;
+	const UCatShopInventoryComponent* ShopInventory = BoundShopInventory.Get();
+	const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
+	const UCatEquipmentDefinition* Definition =
+		EquipmentSettings ? EquipmentSettings->FindRuntimeDefinition(Entry.DefinitionId) : nullptr;
+	const FCatShopStockSnapshot* Stock = bEconomyAvailable && ShopInventory
+		? FindPublicStockSnapshot(Economy, ShopInventory->GetShopInventoryId(), Entry.EntryId) : nullptr;
 	FCatShopEntryView View;
 	View.EntryId = Entry.EntryId;
 	View.Kind = Entry.Kind;
 	View.DefinitionId = Entry.DefinitionId;
+	View.PurchaseQuantity = FMath::Max(1, Entry.PurchaseQuantity);
 	View.UnitPrice = FMath::Max(0, Entry.UnitPrice);
 	View.InitialStock = Entry.InitialStock;
 	View.bStockAvailable = Stock != nullptr;
@@ -194,8 +223,15 @@ FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry
 	View.RemainingStock = Stock ? FMath::Max(0, Stock->RemainingStock) : 0;
 	View.bSoldOut = View.bStockAvailable && !View.bUnlimitedStock && View.RemainingStock <= 0;
 	View.bAffordable = !bEconomyAvailable || View.UnitPrice <= 0 || Economy.Balance >= View.UnitPrice;
-	View.bFreeClaim = Settings
-		&& (Entry.EntryId == Settings->FreeOrdinaryBaitEntryId || Entry.EntryId == Settings->FreeStarterRodEntryId);
+	View.bFreeClaim = ShopInventory && ShopInventory->IsFreeClaimEntry(Entry.EntryId);
+	View.DisplayNameText = !Entry.DisplayNameOverride.IsEmpty()
+		? Entry.DisplayNameOverride
+		: (Definition && !Definition->DisplayName.IsEmpty()
+			? Definition->DisplayName
+			: FText::FromName(Entry.DefinitionId.IsNone() ? Entry.EntryId : Entry.DefinitionId));
+	View.DescriptionText = !Entry.DescriptionOverride.IsEmpty()
+		? Entry.DescriptionOverride
+		: (Definition ? Definition->Description : FText());
 	const FString StockText = !View.bStockAvailable
 		? FString(TEXT("库存：未同步"))
 		: View.bUnlimitedStock
@@ -205,10 +241,12 @@ FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry
 	const FString PriceText = View.UnitPrice <= 0
 		? FString(TEXT("免费"))
 		: FString::Printf(TEXT("价格 %d"), View.UnitPrice);
+	const FString QuantityText = View.PurchaseQuantity > 1
+		? FString::Printf(TEXT("数量 x%d | "), View.PurchaseQuantity) : FString();
 	const FString AffordableText = View.bAffordable ? FString() : FString(TEXT(" | 公款不足"));
-	View.DisplayText = FText::FromString(FString::Printf(TEXT("%s | %s | %s | %s%s"),
-		*Entry.EntryId.ToString(),
-		*Entry.DefinitionId.ToString(),
+	View.DisplayText = FText::FromString(FString::Printf(TEXT("%s | %s%s | %s%s"),
+		*View.DisplayNameText.ToString(),
+		*QuantityText,
 		*PriceText,
 		*StockText,
 		*AffordableText));

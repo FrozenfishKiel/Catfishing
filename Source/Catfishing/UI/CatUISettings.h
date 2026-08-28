@@ -8,7 +8,6 @@ class UCatHUDWidget;
 class UCatInteractionPromptWidget;
 class UCatInventorySlotWidget;
 class UCatInventoryWidget;
-class UCatShopWidget;
 class UCatCollectionWidget;
 class UInputAction;
 class UInputMappingContext;
@@ -34,9 +33,6 @@ public:
 
 	/** 读取正式背包格子 WBP 类；缺失时背包只能显示主界面文本，不创建原生格子替身。 */
 	TSubclassOf<UCatInventorySlotWidget> LoadInventorySlotWidgetClass() const;
-
-	/** 返回正式商店 WBP 类；它只由商店交互对象打开，不由 LocalPlayer 预建。 */
-	TSubclassOf<UCatShopWidget> LoadShopWidgetClass() const;
 
 	/** 读取正式交互提示 WBP 类；缺失时只关闭提示表现，不影响交互目标自己的服务器裁决。 */
 	TSubclassOf<UCatInteractionPromptWidget> LoadInteractionPromptWidgetClass() const;
@@ -74,10 +70,6 @@ public:
 	/** 正式背包格子 WBP 类；每个格子是独立 UserWidget，不是 Button。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")
 	TSoftClassPtr<UCatInventorySlotWidget> InventorySlotWidgetClass;
-
-	/** 正式商店 WBP 类；由世界交互对象创建并显示商品、资金和购买结果。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Lake|Shop")
-	TSoftClassPtr<UCatShopWidget> ShopWidgetClass;
 
 	/** 正式交互提示 WBP 类；只显示靠近对象和确认键提示。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Interaction")

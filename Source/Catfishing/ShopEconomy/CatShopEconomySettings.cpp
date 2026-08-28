@@ -1,6 +1,6 @@
 #include "ShopEconomy/CatShopEconomySettings.h"
 
-// Runtime gate 流程：只接受显式开关和非负初始公款；具体目录重复、缺字段和免费饵引用由服务初始化后暴露为目录不可用。
+// Runtime gate 流程：只接受显式开关和非负初始公款；具体摊位目录重复、缺字段和免费白名单由摊位库存组件自己 fail-closed。
 // StartingTeamWalletBalance 判 >= 0 就是在拦"这条没裁过"：它默认是哨兵 -1，只有配置里显式写过才可能过 gate。
 bool UCatShopEconomySettings::IsRuntimeEnabled() const
 {

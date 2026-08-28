@@ -8,7 +8,6 @@
 #include "UI/Interaction/CatInteractionPromptWidget.h"
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
-#include "UI/Shop/CatShopWidget.h"
 
 // 构造流程：为正式拆分 UI WBP 和输入资产写入稳定软路径；输入 Action 放在项目既有 InputContext 下维护，运行时代码只加载资产和绑定 Action。
 UCatUISettings::UCatUISettings()
@@ -19,8 +18,6 @@ UCatUISettings::UCatUISettings()
 		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatInventory.WBP_CatInventory_C")));
 	InventorySlotWidgetClass = TSoftClassPtr<UCatInventorySlotWidget>(
 		FSoftClassPath(TEXT("/Game/UI/InventorySlot/WBP_CatInventorySlot.WBP_CatInventorySlot_C")));
-	ShopWidgetClass = TSoftClassPtr<UCatShopWidget>(
-		FSoftClassPath(TEXT("/Game/UI/Shop/WBP_CatShop.WBP_CatShop_C")));
 	InteractionPromptWidgetClass = TSoftClassPtr<UCatInteractionPromptWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Interaction/WBP_CatInteractionPrompt.WBP_CatInteractionPrompt_C")));
 	CollectionWidgetClass = TSoftClassPtr<UCatCollectionWidget>(
@@ -66,17 +63,6 @@ TSubclassOf<UCatInventorySlotWidget> UCatUISettings::LoadInventorySlotWidgetClas
 {
 	UClass* LoadedClass = InventorySlotWidgetClass.LoadSynchronous();
 	if (!LoadedClass || !LoadedClass->IsChildOf(UCatInventorySlotWidget::StaticClass()))
-	{
-		return nullptr;
-	}
-	return LoadedClass;
-}
-
-// 商店 WBP 类加载流程：同步解析配置软类并验证继承商店基类；失败返回空，让交互对象 fail-closed。
-TSubclassOf<UCatShopWidget> UCatUISettings::LoadShopWidgetClass() const
-{
-	UClass* LoadedClass = ShopWidgetClass.LoadSynchronous();
-	if (!LoadedClass || !LoadedClass->IsChildOf(UCatShopWidget::StaticClass()))
 	{
 		return nullptr;
 	}

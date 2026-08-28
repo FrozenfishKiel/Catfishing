@@ -8,8 +8,9 @@
 // 打开流程：
 // 1. Controller 或焦点 Widget 缺失时不写恢复记录，避免留下无法关闭的半个模态状态。
 // 2. 首次打开时保存鼠标可见性并给 Controller 申请一层移动/视角输入锁；重复打开只刷新焦点，不叠加锁。
-// 3. 切到 UIOnly 并把焦点交给当前页面，让关闭键和按钮点击都由 Widget 接收。
-// 4. 立即停止 PawnMovement，避免玩家按着方向键打开 UI 后角色继续沿旧输入滑动。
+// 3. 在交给 Slate 焦点前强制打开 UserWidget 聚焦能力；关闭键不能依赖每张 WBP 手工勾选焦点能力。
+// 4. 切到 UIOnly 并把焦点交给当前页面，让关闭键和按钮点击都由 Widget 接收。
+// 5. 立即停止 PawnMovement，避免玩家按着方向键打开 UI 后角色继续沿旧输入滑动。
 void CatUIModalInputMode::Open(APlayerController* Controller, UUserWidget* FocusWidget,
 	FCatUIModalInputModeState& State)
 {
@@ -25,6 +26,7 @@ void CatUIModalInputMode::Open(APlayerController* Controller, UUserWidget* Focus
 		State.bInputLockApplied = true;
 	}
 
+	FocusWidget->SetIsFocusable(true);
 	FInputModeUIOnly InputMode;
 	InputMode.SetWidgetToFocus(FocusWidget->TakeWidget());
 	InputMode.SetLockMouseToViewportBehavior(EMouseLockMode::DoNotLock);

@@ -14,6 +14,7 @@
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
+#include "UI/Inventory/CatFishGuardInventoryWidget.h"
 
 // 构造流程：创建独立箱子根、Items 复制出口和交互入口；开启 Actor 复制并关闭 Tick，鱼数组只由 Items 服务发布。
 ACatFishGuardActor::ACatFishGuardActor()
@@ -30,6 +31,8 @@ ACatFishGuardActor::ACatFishGuardActor()
 	InteractionCollision->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	InteractionCollision->SetGenerateOverlapEvents(false);
 	ContainerReplication = CreateDefaultSubobject<UCatContainerReplicationComponent>(TEXT("ContainerReplication"));
+	InventoryViewClass = TSoftClassPtr<UCatFishGuardInventoryWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatFishGuardInventory.WBP_CatFishGuardInventory_C")));
 	InteractionPrompt = NSLOCTEXT("Catfishing", "FishGuardInteractionPrompt", "打开鱼护");
 }
 
@@ -92,7 +95,7 @@ bool ACatFishGuardActor::RegisterContainerFromAuthority()
 	const int32 Capacity = GetDefault<UCatItemsSettings>()->GetContainerCapacity(
 		static_cast<uint8>(ECatContainerKind::FishGuard));
 	bRegisteredWithItems = Items->RegisterContainer(ContainerReplication, GuardContainerId,
-		ECatContainerKind::FishGuard, FString(), Capacity);
+		ECatContainerKind::FishGuard, Capacity);
 	if (bRegisteredWithItems)
 	{
 		UE_LOG(LogCatItems, Log, TEXT("Event=fish_guard_registered Guard=%s Container=%s Capacity=%d"),
@@ -122,6 +125,18 @@ UCatContainerReplicationComponent* ACatFishGuardActor::GetContainerReplicationCo
 	return ContainerReplication;
 }
 
+// 页面类解析流程：同步加载鱼护自身配置的库存 View，并确认它就是鱼护页面类型；配置错成普通背包页时返回空，交给交互打开链路记录拒绝。
+TSubclassOf<UCatFishGuardInventoryWidget> ACatFishGuardActor::LoadInventoryViewClass() const
+{
+	UClass* LoadedClass = InventoryViewClass.LoadSynchronous();
+	if (!LoadedClass || !LoadedClass->IsChildOf(UCatFishGuardInventoryWidget::StaticClass()))
+	{
+		return nullptr;
+	}
+	return LoadedClass;
+}
+
+// 可交互判断流程：读取交互开关、请求 Controller、容器 ID 和复制组件；任一条件缺失都拒绝，让提示和执行入口保持同一套可用性边界。
 bool ACatFishGuardActor::CanInteract_Implementation(AController* RequestingController) const
 {
 	const APlayerController* PlayerController = Cast<APlayerController>(RequestingController);
@@ -129,11 +144,13 @@ bool ACatFishGuardActor::CanInteract_Implementation(AController* RequestingContr
 		&& GuardContainerId.IsValid() && ContainerReplication;
 }
 
+// 提示文本流程：复用交互可用性的核心边界；禁用或容器未注册时返回空文本，避免玩家看到暂时不可执行的鱼护提示。
 FText ACatFishGuardActor::GetInteractionPrompt_Implementation() const
 {
 	return bInteractionEnabled && GuardContainerId.IsValid() ? InteractionPrompt : FText::GetEmpty();
 }
 
+// 距离读取流程：把编辑器配置的厘米值裁成非负有限数；异常值按 0 处理，让服务器距离复核保守失败。
 double ACatFishGuardActor::GetInteractionRadius_Implementation() const
 {
 	return FMath::IsFinite(InteractionRadiusCentimeters)
@@ -161,7 +178,7 @@ bool ACatFishGuardActor::IsAuthorityRequestSpatiallyValid(const AController* Req
 	return !bHit || Hit.GetActor() == this;
 }
 
-// 鱼护交互流程：本地始终打开“随身背包 + 本次命中鱼护”的视图并把同一接口请求转发给服务器；
+// 鱼护交互流程：本地用鱼护对象自己的库存页打开本次命中的容器，并把同一接口请求转发给服务器；
 // authority 若发现角色嘴上叼着鱼，则只向本 Actor 的 ContainerId 提交。失败时鱼仍留在嘴上，绝不搜索其他鱼护。
 bool ACatFishGuardActor::Interact_Implementation(AController* RequestingController, const FGuid RequestId)
 {
@@ -184,8 +201,8 @@ bool ACatFishGuardActor::Interact_Implementation(AController* RequestingControll
 		{
 			TArray<UCatContainerReplicationComponent*> ExternalContainers;
 			ExternalContainers.Add(ContainerReplication);
-			UISubsystem->OpenInventoryWithExternalContainerContexts(ExternalContainers);
-			bHandled = true;
+			bHandled = UISubsystem->OpenInventoryWithExternalContainerContextsUsingViewClass(
+				ExternalContainers, LoadInventoryViewClass());
 		}
 	}
 

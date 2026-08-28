@@ -48,7 +48,7 @@ void ACatFishTankActor::BeginPlay()
 	if (UCatItemsService* Items = GetWorld()->GetSubsystem<UCatItemsService>())
 	{
 		const int32 Capacity = GetDefault<UCatItemsSettings>()->GetContainerCapacity(static_cast<uint8>(ECatContainerKind::SharedFishTank));
-		Items->RegisterContainer(ContainerReplication, TankContainerId, ECatContainerKind::SharedFishTank, FString(), Capacity);
+		Items->RegisterContainer(ContainerReplication, TankContainerId, ECatContainerKind::SharedFishTank, Capacity);
 	}
 }
 

@@ -218,7 +218,7 @@ function Invoke-UIReachBuild {
 function Invoke-UIReachWBPCreate {
     <#
     创建或刷新拆分后的正式 UI WBP 资产。
-    该模式只运行 UI 模块的 Editor 资产自动化，并要求报告证明 HUD、背包、格子、商店、交互提示和图鉴六个 WBP 保存成功。
+    该模式只运行 UI 模块的 Editor 资产自动化，并要求报告证明 HUD、背包、鱼护库存、格子、商店、交互提示和图鉴七个 WBP 保存成功。
     #>
     Assert-ToolFile $ProjectFile "Catfishing project"
     Assert-ToolFile $Editor "Unreal Editor commandlet"
@@ -242,9 +242,9 @@ function Invoke-UIReachWBPCreate {
         "Catfishing.Editor.UIModules.CreateFormalWBPAssets"
     )
     # 拆分模块和关键控件名是生成脚本与正式 WBP 之间的最小握手信号。
-    # 这里不检查美术细节，只防止仍生成旧总入口或漏掉背包格子/商店/提示模块。
+    # 这里不检查美术细节，只防止仍生成旧总入口或漏掉背包格子、鱼护箱子页、商店和提示模块。
     $LogText = Get-Content -LiteralPath $LogFile -Raw
-    if ($LogText -notmatch "CREATE_UI_MODULE_WBPS_PASS" -or $LogText -notmatch "InventorySlotRoot=UserWidgetNotButton" -or $LogText -notmatch "SlotContainer=InventorySlotWrapBox" -or $LogText -notmatch "InventoryEquipmentText=EquipmentTextBlock" -or $LogText -notmatch "InventoryItemsText=InventoryItemsTextBlock" -or $LogText -notmatch "ShopOwner=InteractionObject" -or $LogText -notmatch "ShopKiosk=/Game/ShopEconomy/BP_CatShopKiosk" -or $LogText -notmatch "InteractAction=/Game/Input/InputAction/IA_Interact" -or $LogText -notmatch "InteractContext=/Game/Input/InputContext/IMC_InputContext" -or $LogText -notmatch "InteractKey=E" -or $LogText -match "EnsureFailed|LogPython: Error") {
+    if ($LogText -notmatch "CREATE_UI_MODULE_WBPS_PASS" -or $LogText -notmatch "InventorySlotRoot=UserWidgetNotButton" -or $LogText -notmatch "SlotContainer=InventorySlotWrapBox" -or $LogText -notmatch "FishGuardInventory=/Game/UI/Inventory/WBP_CatFishGuardInventory" -or $LogText -notmatch "FishGuardPlayerSlotContainer=InventoryObjectSlotWrapBox" -or $LogText -notmatch "FishGuardContainerSlotContainer=ExternalContainerSlotWrapBox" -or $LogText -notmatch "InventoryEquipmentText=EquipmentTextBlock" -or $LogText -notmatch "InventoryItemsText=InventoryItemsTextBlock" -or $LogText -notmatch "ShopOwner=InteractionObject" -or $LogText -notmatch "ShopKiosk=/Game/ShopEconomy/BP_CatShopKiosk" -or $LogText -notmatch "InteractAction=/Game/Input/InputAction/IA_Interact" -or $LogText -notmatch "InteractContext=/Game/Input/InputContext/IMC_InputContext" -or $LogText -notmatch "InteractKey=E" -or $LogText -match "EnsureFailed|LogPython: Error") {
         throw ("UIReach WBP create log is not green: {0}" -f $LogFile)
     }
 }

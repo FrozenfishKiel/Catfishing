@@ -22,6 +22,12 @@ struct CATFISHING_API FCatFishingViewState
 	/** 当前会话终局结果；只有会话进入终态后才有展示意义，UI 不根据它触发结算或物品写入。 */
 	UPROPERTY(BlueprintReadOnly) ECatFishingOutcome Outcome = ECatFishingOutcome::None;
 
+	/** 当前阶段开始的服务器世界时间；UI 用它和窗口截止点计算阶段内进度，不用它反推阶段切换。 */
+	UPROPERTY(BlueprintReadOnly) double PhaseStartedServerTime = 0.0;
+
+	/** 真咬钩窗口的服务器截止时间；HUD 只把它显示成提竿倒计时，不据此提交或拒绝提竿命令。 */
+	UPROPERTY(BlueprintReadOnly) double WindowEndsServerTime = 0.0;
+
 	/** 当前鱼种定义 ID；会话快照提供它，UI 用来显示鱼种文本，图鉴记录仍由 Profile/Collection 的正式链路负责。 */
 	UPROPERTY(BlueprintReadOnly) FName FishDefinitionId = NAME_None;
 
