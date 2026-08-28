@@ -1,11 +1,27 @@
 #if WITH_DEV_AUTOMATION_TESTS && ENABLE_DRAW_DEBUG
 
 #include "HAL/IConsoleManager.h"
+#include "Fishing/Debug/CatFishingDebugSubsystem.h"
 #include "Misc/AutomationTest.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingDebugSettingsDefaultsTest,
 	"Catfishing.Unit.Fishing.Debug.WorldMarkersDefaultOffAndStatsDefaultOn",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingDebugFishTypeLineTest,
+	"Catfishing.Unit.Fishing.Debug.StatsPanelShowsCurrentFishDefinitionId",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingDebugFishTypeLineTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	TestEqual(TEXT("没有当前鱼时鱼种行显示占位"),
+		UCatFishingDebugSubsystem::FormatFishTypeLine(NAME_None), FString(TEXT("FISH TYPE  --")));
+	TestEqual(TEXT("存在当前鱼时显示复制快照里的稳定鱼种 ID"),
+		UCatFishingDebugSubsystem::FormatFishTypeLine(TEXT("RiverPattern")),
+		FString(TEXT("FISH TYPE  RiverPattern")));
+	return !HasAnyErrors();
+}
 
 bool FCatFishingDebugSettingsDefaultsTest::RunTest(const FString& Parameters)
 {

@@ -6,6 +6,7 @@
 
 class APlayerController;
 class UCanvas;
+class FCatFishingDebugFishTypeLineTest;
 
 /**
  * 前期无美术资源时的钓鱼调试可视化：水域边界、瞄准落点、蓄力抛物线、窝点圈、钩/鱼/鱼线与阶段提示。
@@ -26,6 +27,9 @@ public:
 	virtual bool IsTickableInEditor() const override { return false; }
 
 private:
+	friend class FCatFishingDebugFishTypeLineTest;
+	/** 把复制快照中的稳定 FishDefinitionId 格式化为右上角鱼种行；没有当前鱼时显式显示 --。 */
+	static FString FormatFishTypeLine(FName FishDefinitionId);
 	/** 独立于世界调试标记的右上角三方数值面板；Canvas 回调只读本地已复制事实。 */
 	void DrawFishingStats(UCanvas* Canvas, APlayerController* Controller);
 	void DrawWaterRegions() const;

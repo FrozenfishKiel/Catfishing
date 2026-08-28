@@ -200,7 +200,7 @@ static TAutoConsoleVariable<int32> CVarCatFishingDebug(
 // 因此它拥有独立 CVar，默认开启；`cat.Fishing.Debug 0` 不会隐藏本面板，反之关闭本面板也不改变世界调试模式。
 static TAutoConsoleVariable<int32> CVarCatFishingStats(
 	TEXT("cat.Fishing.Stats"), 1,
-	TEXT("屏幕右上角钓鱼数值调试：1=显示（默认，鱼体力/力量、竿或鱼线耐久/力量、猫体力/力量）；0=关闭。")
+	TEXT("屏幕右上角钓鱼数值调试：1=显示（默认，当前鱼种、鱼体力/力量、竿或鱼线耐久/力量、猫体力/力量）；0=关闭。")
 	TEXT("本开关与 cat.Fishing.Debug 相互独立。"),
 	ECVF_Default);
 
@@ -258,6 +258,13 @@ void UCatFishingDebugSubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
+FString UCatFishingDebugSubsystem::FormatFishTypeLine(const FName FishDefinitionId)
+{
+	return FishDefinitionId.IsNone()
+		? FString(TEXT("FISH TYPE  --"))
+		: FString::Printf(TEXT("FISH TYPE  %s"), *FishDefinitionId.ToString());
+}
+
 // 右上角数值面板：每一项都读取与权威玩法相同的公开事实/定义，不从表现位置反推资源。
 // 鱼和本场鱼线读取 Session 复制快照；猫读取本地 Character ASC；力量与上限按稳定 DefinitionId 查正式目录。
 void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerController* Controller)
@@ -274,6 +281,8 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 	const ACatFishingSession* Session = UCatFishingViewBridge::FindFishingSessionForPlayerState(
 		GetWorld(), Controller->PlayerState);
 	const FCatFishingSessionSnapshot* SessionSnapshot = Session ? &Session->GetSnapshot() : nullptr;
+	FString FishTypeLine = FormatFishTypeLine(
+		SessionSnapshot ? SessionSnapshot->FishDefinitionId : NAME_None);
 
 	FString FishLine = TEXT("FISH  Stamina --  Strength --");
 	if (SessionSnapshot && !SessionSnapshot->FishDefinitionId.IsNone())
@@ -362,6 +371,7 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 	const TArray<FPanelLine> Lines
 	{
 		{ TEXT("Fishing Stats  [cat.Fishing.Stats 0 = off]"), FLinearColor::Yellow },
+		{ MoveTemp(FishTypeLine), FLinearColor(0.55f, 0.9f, 1.0f) },
 		{ MoveTemp(FishLine), FLinearColor(0.25f, 0.85f, 1.0f) },
 		{ MoveTemp(RodLine), FLinearColor(1.0f, 0.65f, 0.2f) },
 		{ MoveTemp(CatLine), FLinearColor(0.35f, 1.0f, 0.35f) }
