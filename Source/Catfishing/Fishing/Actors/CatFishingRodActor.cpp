@@ -218,6 +218,10 @@ const FCatFishingRodPresentationState& ACatFishingRodActor::GetPresentationState
 // 三个世界 Transform 都是“本地规范 Transform 叠乘 Actor 当前世界 Transform”，随 Actor 移动/旋转自动更新
 FTransform ACatFishingRodActor::GetRodTipWorldTransform() const { return RodTipCanonicalLocalTransform * GetActorTransform(); }
 FTransform ACatFishingRodActor::GetStandWorldTransform() const { return GetOperatorStandWorldTransform(0); }
+FTransform ACatFishingRodActor::GetOperatorInteractionWorldTransform() const
+{
+	return StandCanonicalLocalTransform * GetActorTransform();
+}
 FTransform ACatFishingRodActor::GetGripWorldTransform() const { return GripCanonicalLocalTransform * GetActorTransform(); }
 
 FTransform ACatFishingRodActor::ResolveOperatorStandLocalTransform(const int32 SlotIndex) const

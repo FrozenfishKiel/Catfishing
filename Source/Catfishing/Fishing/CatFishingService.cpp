@@ -58,6 +58,20 @@ namespace
 			Movement->DisableMovement();
 		}
 	}
+
+	void SnapAllRodOperatorsToCurrentSlots(UWorld* World, const ACatFishingRodActor& Rod)
+	{
+		if (!World) return;
+		const TArray<TObjectPtr<APlayerState>>& Operators = Rod.GetPresentationState().OperatorPlayerStates;
+		for (int32 SlotIndex = 0; SlotIndex < Operators.Num(); ++SlotIndex)
+		{
+			APlayerController* Controller = FindControllerForPlayerState(World, Operators[SlotIndex]);
+			if (ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr)
+			{
+				SnapCharacterToRodSlot(*Character, Rod, SlotIndex);
+			}
+		}
+	}
 }
 
 // 创建条件流程：仅 authority Game World 持有会话索引；客户端不能创建平行 StateTree。
@@ -405,12 +419,10 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 	}
 	const FCatFishingRodPresentationState State = Rod->GetPresentationState();
 	const int32 RequestedSlotIndex = Rod->GetFirstFreeOperatorSlotIndex();
-	// CooperativeFishing 尚未接入输入、力量和体力分摊前，运行时只开放 0 号主操作位。
-	// 保留 Actor 的双槽数据结构与锚点供后续实现，但不能把当前玩家送进无法操作的副位。
-	if (!State.OperatorPlayerStates.IsEmpty())
+	if (RequestedSlotIndex == INDEX_NONE)
 	{
 		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_rod_operate_rejected Reason=PrimaryOccupied Rod=%s RodId=%s OperatorCount=%d RequestedSlot=%d %s"),
+			TEXT("Event=fishing_rod_operate_rejected Reason=NoFreeOperatorSlot Rod=%s RodId=%s OperatorCount=%d RequestedSlot=%d %s"),
 			*GetNameSafe(Rod), *State.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
 			State.OperatorPlayerStates.Num(), RequestedSlotIndex,
 			*CatLogContext::BuildControllerFields(Controller));
@@ -418,16 +430,17 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 		return Result;
 	}
 	if (!PlayerState || !Command.Context.RequestId.IsValid() || ResolveStableNetId(Controller).IsEmpty()
-		|| State.bBroken || !State.bDeployed || RequestedSlotIndex != 0
+		|| State.bBroken || !State.bDeployed
 		|| FVector::DistSquared(Character->GetActorLocation(),
-			Rod->GetOperatorStandWorldTransform(RequestedSlotIndex).GetLocation()) > FMath::Square(250.0))
+			Rod->GetOperatorInteractionWorldTransform().GetLocation()) > FMath::Square(250.0))
 	{
 		Result.Error = State.bBroken ? ECatFishingCommandError::RodBroken : ECatFishingCommandError::RodOccupied;
 		return Result;
 	}
-	// 玩家输入只路由到当前占据主位的鱼竿，因此这里不再用玩家历史会话阻止跨竿占位。
-	// TODO(CooperativeFishing): 合力玩法落地时，从 Rod.OperatorPlayerStates 每次重建 Session 参与集合；
-	// 届时再开放 1 号及后续辅助位，并确保力量、体力消耗和输入所有权当帧收敛到当前数组。
+	// 辅助位当前承载共享鱼竿会话的站位与接力候选；主位退出时数组会压紧，副位立即晋升并接管。
+	// 玩家输入仍只路由当前主位，避免两个独立输入序号域同时驱动单一 Runner。
+	// TODO(CooperativeFishing): 合力玩法落地时，从 Rod.OperatorPlayerStates 每次重建 Session 参与集合，
+	// 并明确力量、体力消耗与双输入仲裁；不能把“尚未合力”误解成“不允许第二只猫加入同一根竿”。
 	// HookedFight 接力会同步迁移 Runner 的 ASC/力量/体力/输入域，不能只改公开 FisherPlayerState。
 	ACatFishingSession* BoundSession = FindActiveSessionByRod(Rod);
 	const bool bNeedsSessionTakeover = RequestedSlotIndex == 0 && BoundSession
@@ -540,16 +553,8 @@ FCatFishingCommandResult UCatFishingService::LeaveRod(AController* Controller, c
 			Movement->SetMovementMode(MOVE_Walking);
 		}
 	}
-	if (PromotedPrimary)
-	{
-		if (APlayerController* PromotedController = FindControllerForPlayerState(GetWorld(), PromotedPrimary))
-		{
-			if (ACatCharacter* PromotedCharacter = Cast<ACatCharacter>(PromotedController->GetPawn()))
-			{
-				SnapCharacterToRodSlot(*PromotedCharacter, *Rod, 0);
-			}
-		}
-	}
+	// 删除任意编号都会压紧容器；按新编号重排所有剩余角色，不能只处理 1→0 的主位晋升。
+	SnapAllRodOperatorsToCurrentSlots(GetWorld(), *Rod);
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_rod_operator_left Rod=%s RodId=%s LeavingSlot=%d RemainingOperators=%d Promoted=%s SessionId=%s %s"),
 		*GetNameSafe(Rod), *State.RodActorId.ToString(EGuidFormats::DigitsWithHyphens), LeavingSlotIndex,
@@ -695,11 +700,11 @@ void UCatFishingService::ReleaseOperatorForCharacter(const ACatCharacter* Charac
 	APlayerState* PlayerState = Character->GetPlayerState();
 	ACatFishingRodActor* Rod = FindRodOperatedBy(PlayerState);
 	bool bRemoved = false;
-	APlayerState* PromotedPrimary = nullptr;
+	APlayerState* IgnoredPromotion = nullptr;
 	if (PlayerState && Rod)
 	{
 		const int64 ExpectedRevision = Rod->GetPresentationState().RodActorRevision;
-		bRemoved = Rod->RemoveOperatorFromAuthority(PlayerState, ExpectedRevision, PromotedPrimary);
+		bRemoved = Rod->RemoveOperatorFromAuthority(PlayerState, ExpectedRevision, IgnoredPromotion);
 		if (!bRemoved)
 		{
 			UE_LOG(LogCatFishing, Error,
@@ -715,15 +720,9 @@ void UCatFishingService::ReleaseOperatorForCharacter(const ACatCharacter* Charac
 		Movement->SetMovementMode(MOVE_Walking);
 	}
 
-	if (bRemoved && PromotedPrimary)
+	if (bRemoved && Rod)
 	{
-		if (APlayerController* PromotedController = FindControllerForPlayerState(GetWorld(), PromotedPrimary))
-		{
-			if (ACatCharacter* PromotedCharacter = Cast<ACatCharacter>(PromotedController->GetPawn()))
-			{
-				SnapCharacterToRodSlot(*PromotedCharacter, *Rod, 0);
-			}
-		}
+		SnapAllRodOperatorsToCurrentSlots(GetWorld(), *Rod);
 	}
 }
 
@@ -876,12 +875,10 @@ ACatFishingRodActor* UCatFishingService::FindNearestOperableRod(const FVector& W
 	{
 		ACatFishingRodActor* Rod = Pair.Value.Get();
 		if (!Rod || !Rod->GetPresentationState().bDeployed || Rod->GetPresentationState().bBroken) continue;
-		// 当前运行版只开放主操作位；辅助槽底层结构保留，但在 CooperativeFishing 完成前不参与 R 键候选。
-		if (Rod->GetOperatorCount() != 0) continue;
 		const int32 FreeSlotIndex = Rod->GetFirstFreeOperatorSlotIndex();
-		if (FreeSlotIndex != 0) continue;
+		if (FreeSlotIndex == INDEX_NONE) continue;
 		const double DistanceSquared = FVector::DistSquared(WorldLocation,
-			Rod->GetOperatorStandWorldTransform(FreeSlotIndex).GetLocation());
+			Rod->GetOperatorInteractionWorldTransform().GetLocation());
 		if (DistanceSquared <= BestDistanceSquared)
 		{
 			BestDistanceSquared = DistanceSquared;

@@ -39,7 +39,7 @@ struct FCatFishingRodPresentationState
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> OwnerPlayerState = nullptr;
 	/** 当前主操作手（OperatorPlayerStates[0]）的兼容快捷字段；只有主位驱动现有单人钓鱼会话。 */
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> OperatorPlayerState = nullptr;
-	/** 有序占位真相：0=右侧主位，1=左侧辅助位，之后继续左右交替向外扩展；数组始终紧凑无空洞。 */
+	/** 有序占位容器：加入时追加，离开时压紧；0=主位，之后按编号公式左右交替向外扩展，始终无空洞。 */
 	UPROPERTY(BlueprintReadOnly) TArray<TObjectPtr<APlayerState>> OperatorPlayerStates;
 	UPROPERTY(BlueprintReadOnly) bool bDeployed = false;
 	UPROPERTY(BlueprintReadOnly) bool bBroken = false;

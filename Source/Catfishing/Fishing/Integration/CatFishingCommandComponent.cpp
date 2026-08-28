@@ -553,7 +553,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	{
 		// R 的鱼竿三态（服务器按当前事实分派，客户端不需要知道自己处于哪一态；多人：竿不限竿主）：
 		//   正在操作某根竿（自己的或别人的） → LeaveRod（离开竿位，自由活动）
-		//   附近有空主操作位的竿（不限竿主） → OperateRod（可接力等口或搏斗会话）
+		//   公共交互锚点附近且容器仍有容量      → OperateRod（追加编号，共享同一根竿的会话）
 		//   附近没有可加入的竿               → PlaceRod（在脚下放自己的竿；已有部署竿会被服务器拒绝）
 		// R 在会话期间同样可用（多人接力钓别人竿）：
 		//   任意阶段离开 → 只释放竿位和持续输入，会话、竿、钩与鱼都保持；
@@ -572,8 +572,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				DeliverResultFromAuthority(Fishing->LeaveRod(Controller, LeaveCommand));
 				return;
 			}
-			// 分支二：附近有空主操作位的竿（未损坏、不限竿主）→ 吸附到主位并接管会话。
-			// CooperativeFishing 完成前不开放只有站位、没有玩法输入的辅助位。
+			// 分支二：公共交互锚点附近且容器仍有容量 → 追加到紧凑数组末尾并按编号站位。
+			// 任意成员退出都会压紧编号；0 号退出时新的 0 号接管会话，不为后续人数新增交互分支。
 			if (ACatFishingRodActor* NearbyRod = Character
 				? Fishing->FindNearestOperableRod(Character->GetActorLocation(), 250.0) : nullptr)
 			{

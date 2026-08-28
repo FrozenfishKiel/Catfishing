@@ -217,6 +217,7 @@ bool FCatFishingRodCanonicalAnchorsContractTest::RunTest(const FString& Paramete
 	Rod->SetActorTransform(FTransform(FRotator(0.0, 35.0, 0.0), FVector(100.0, 200.0, 300.0)));
 	const FTransform ExpectedTip = Rod->GetRodTipWorldTransform();
 	const FTransform ExpectedStand = Rod->GetStandWorldTransform();
+	const FTransform ExpectedInteraction = Rod->GetOperatorInteractionWorldTransform();
 	const FTransform ExpectedLeftStand = Rod->GetOperatorStandWorldTransform(1);
 	const FTransform ExpectedGrip = Rod->GetGripWorldTransform();
 	VisualRoot->SetRelativeLocation(FVector(900.0, 0.0, 0.0));
@@ -227,6 +228,8 @@ bool FCatFishingRodCanonicalAnchorsContractTest::RunTest(const FString& Paramete
 	Grip->SetRelativeLocation(FVector(-300.0, 0.0, 0.0));
 	TestTrue(TEXT("tip getter ignores component movement"), Rod->GetRodTipWorldTransform().Equals(ExpectedTip));
 	TestTrue(TEXT("stand getter ignores component movement"), Rod->GetStandWorldTransform().Equals(ExpectedStand));
+	TestTrue(TEXT("shared interaction getter ignores component movement"),
+		Rod->GetOperatorInteractionWorldTransform().Equals(ExpectedInteraction));
 	TestTrue(TEXT("left stand getter ignores component movement"),
 		Rod->GetOperatorStandWorldTransform(1).Equals(ExpectedLeftStand));
 	TestTrue(TEXT("grip getter ignores component movement"), Rod->GetGripWorldTransform().Equals(ExpectedGrip));
@@ -238,6 +241,8 @@ bool FCatFishingRodCanonicalAnchorsContractTest::RunTest(const FString& Paramete
 		((RightLocation + LeftLocation) * 0.5).Equals(Rod->GetActorLocation(), UE_KINDA_SMALL_NUMBER));
 	TestTrue(TEXT("legacy stand getter aliases right primary slot"),
 		Rod->GetStandWorldTransform().Equals(Rod->GetOperatorStandWorldTransform(0)));
+	TestTrue(TEXT("all operators share the canonical interaction anchor"),
+		Rod->GetOperatorInteractionWorldTransform().Equals(Rod->GetActorTransform()));
 	TestTrue(TEXT("invalid slot falls back to canonical stand center"),
 		Rod->GetOperatorStandWorldTransform(-1).Equals(Rod->GetActorTransform()));
 	TestTrue(TEXT("grip getter follows actor transform"), Rod->GetGripWorldTransform().Equals(Rod->GetActorTransform()));

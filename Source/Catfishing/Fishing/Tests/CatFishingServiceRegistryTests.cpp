@@ -19,7 +19,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingServiceSharedRodSlotsTest,
-	"Catfishing.Unit.Fishing.Service.PrimaryOnlyAdmissionKeepsAuxiliaryLayoutReserved",
+	"Catfishing.Unit.Fishing.Service.SharedRodSlotsAreDiscoverableAndBounded",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingServiceSharedRodSlotsTest::RunTest(const FString& Parameters)
@@ -42,17 +42,20 @@ bool FCatFishingServiceSharedRodSlotsTest::RunTest(const FString& Parameters)
 		FGuid::NewGuid(), TEXT("Rod"), TEXT("Skin"), Owner, Owner, true, false));
 	TestTrue(TEXT("shared rod registers under immutable owner"), Fishing->RegisterDeployedRod(Owner, Rod));
 	TestEqual(TEXT("owner lookup finds shared rod"), Fishing->FindRodOperatedBy(Owner), Rod);
+	const FVector SharedInteractionLocation = Rod->GetOperatorInteractionWorldTransform().GetLocation();
+	TestEqual(TEXT("occupied rod exposes its next container position from the shared interaction point"),
+		Fishing->FindNearestOperableRod(SharedInteractionLocation, 1.0), Rod);
 	int32 JoinedSlot = INDEX_NONE;
 	TestTrue(TEXT("helper joins auxiliary slot"), Rod->AddOperatorFromAuthority(Helper, 1, JoinedSlot));
 	TestEqual(TEXT("helper occupies slot one"), JoinedSlot, 1);
 	TestEqual(TEXT("helper lookup finds someone else's rod"), Fishing->FindRodOperatedBy(Helper), Rod);
-	TestNull(TEXT("occupied primary rod is not offered as operable"),
+	TestNull(TEXT("full two-person rod is not offered as operable"),
 		Fishing->FindNearestOperableRod(Rod->GetActorLocation(), 1000.0));
 	APlayerState* Promoted = nullptr;
 	TestTrue(TEXT("helper leaves auxiliary slot"), Rod->RemoveOperatorFromAuthority(Helper, 2, Promoted));
 	TestNull(TEXT("auxiliary departure does not promote anyone"), Promoted);
-	TestNull(TEXT("runtime admission does not expose the reserved auxiliary slot"),
-		Fishing->FindNearestOperableRod(Rod->GetOperatorStandWorldTransform(1).GetLocation(), 1000.0));
+	TestEqual(TEXT("rod with free container position is offered again from the same interaction point"),
+		Fishing->FindNearestOperableRod(SharedInteractionLocation, 1.0), Rod);
 	return !HasAnyErrors();
 }
 

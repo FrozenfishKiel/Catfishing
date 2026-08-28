@@ -32,6 +32,8 @@ public:
 	const FCatFishingRodPresentationState& GetPresentationState() const;
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetRodTipWorldTransform() const;
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetStandWorldTransform() const;
+	/** 所有玩家共用的 R 交互锚点；只决定能否加入，不随当前人数或下一个槽位变化。 */
+	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetOperatorInteractionWorldTransform() const;
 	/** 槽位 0 是右侧，1 是左侧；更高索引左右交替向外扩展。非法索引回退到原始 Stand 中心。 */
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetOperatorStandWorldTransform(int32 SlotIndex) const;
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") int32 GetOperatorCount() const;
@@ -58,7 +60,7 @@ private:
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> VisualRoot;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> RodTipAnchor;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> StandAnchor;
-	/** 当前产品左右两位的编辑器可见参考锚；权威站位仍由 GetOperatorStandWorldTransform 计算。 */
+	/** 当前产品左右两位的编辑器可见参考锚；第三位及以后也统一由编号公式计算，不增加专用锚点。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> RightStandAnchor;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> LeftStandAnchor;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> GripAnchor;
