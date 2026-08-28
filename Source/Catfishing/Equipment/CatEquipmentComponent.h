@@ -59,7 +59,7 @@ public:
 	FCatFishingFailureResult CommitFishingFailure(FGuid RequestId, int64 ExpectedRevision,
 		ECatFishingFailurePenalty Penalty);
 
-	/** Fishing 会话开始前申请当前钓鱼选择使用权；成功前会确认鱼竿和鱼漂仍在随身库存，并保护一份鱼饵库存。 */
+	/** Fishing 会话开始前按 SessionId 申请当前钓鱼选择使用权；不同鱼竿会话可并行，各自保护一份鱼饵库存。 */
 	FCatFishingUseReservationResult BeginFishingUse(FGuid FishingSessionId, FName RodDefinitionId,
 		FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);
 	/** 立即提交 Fishing 已保护的鱼饵数量，并在成功时发布新的 Equipment 快照。 */
@@ -178,9 +178,8 @@ private:
 	/** 失败预算命令首次完整终态缓存；重放不会再次扣饵或耐久。 */
 	TMap<FGuid, FCatFishingFailureResult> FailureTerminalCache;
 
-	/** 当前 Character 生命周期内的私有 fishing reservation/tombstone；不复制也不持久化。 */
+	/** 当前 Character 生命周期内按 SessionId 隔离的 fishing reservation/tombstone；不复制也不持久化。 */
 	TMap<FGuid, FCatFishingUseRecord> FishingUseRecords;
-	FGuid ActiveFishingUseSessionId;
 	TMap<FGuid, FCatRunConsumableUseRecord> RunConsumableUseRecords;
 	FGuid ActiveRunConsumableUseOperationId;
 };

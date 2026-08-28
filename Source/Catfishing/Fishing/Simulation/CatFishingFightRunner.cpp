@@ -117,6 +117,13 @@ bool UCatFishingFightRunner::SetSlacking(const int64 InputSequence, const bool b
 	return true;
 }
 
+void UCatFishingFightRunner::ClearOperatorInputFromAuthority()
+{
+	bPullHeld = false;
+	bSlackHeld = false;
+	RefreshCatAction();
+}
+
 bool UCatFishingFightRunner::BeginBehaviorStateFromStateTree(const ECatFishMotionIntent MotionIntent,
 	double& OutDurationSeconds)
 {

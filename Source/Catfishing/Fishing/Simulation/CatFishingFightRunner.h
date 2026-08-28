@@ -55,6 +55,8 @@ public:
 	bool SetReeling(int64 InputSequence, bool bInReeling);
 	/** 右键按住/松开线杯；按住期间鱼可在最大线长内自由带线。 */
 	bool SetSlacking(int64 InputSequence, bool bInSlacking);
+	/** 操作手离开竿位时清除两种持续输入，不终止 Runner，也不回退输入序号。 */
+	void ClearOperatorInputFromAuthority();
 	ECatFightCatAction GetCatAction() const { return State.CatAction; }
 	/** StateTree 状态入口的唯一行为意图写口；返回本状态应持续的服务器秒数。 */
 	bool BeginBehaviorStateFromStateTree(ECatFishMotionIntent MotionIntent, double& OutDurationSeconds);

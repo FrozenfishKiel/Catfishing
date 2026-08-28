@@ -298,6 +298,8 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 
 多人占位口径：`OperatorPlayerStates[0]` 是右侧主位，当前只有主位能抛竿/提竿/收线/松线；`[1]` 是左侧辅助位，先完成同步站位。搏斗规则层已预留两项并按“主操作猫力量 + 第二只猫力量”计算猫总体力量，但第二项运行时仍为 0；第二只猫怎样加入、何时生效、体力如何分摊和输入如何配合仍是 `TODO(CooperativeFishing)`。主位退出时左位自动晋升，数组长度立刻从 2 变 1，不保留旧双人模式。当前参数在 `Project Settings → Catfishing Fishing → Rod|Operators`：槽位数 2，左右间距 140cm。
 
+会话跟随鱼竿而不是角色：按 R 离开任何阶段都只释放竿位与持续输入，不会直接结束鱼竿上的会话。多人各自部署鱼竿后，同一玩家可以在第一根竿抛线、离开，再进入第二根空竿抛线；左键与 HUD 始终只路由当前主操作鱼竿。等待/试探/真咬阶段允许其他玩家接力；搏斗阶段的跨玩家资源迁移仍未接入，但原钓手可以重新回到该竿继续。
+
 ---
 
 ### 5.2 抛竿 —— 已由左键 C++ 接管，**不用做蓝图**（预览可选）
@@ -306,7 +308,7 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 
 - **左键按下**（无会话时）：服务器无副作用，回执 `RequestHook Committed=true`（= 开始瞄准）
 - **左键松开**：服务器用你的**准星射线 ∩ 水面**算落点，自动填 RodActorId / Revision / Equipment Revision / WaterRegion Handle，走 `BeginCast` 全部校验（射程 ≤ min(竿线长, 漂抛距)、夹角 ≤ 60°、视线无遮挡）
-- 前置：已按 E 操作着竿；没在操作时松开左键会被**静默忽略**（不刷日志）
+- 前置：已按 R 进入鱼竿主操作位；没在操作时松开左键会被**静默忽略**（不刷日志）
 
 结果日志：`Event=begin_cast_result Committed=true Landing=...` 或 `Committed=false Error=CastOutOfRange/InvalidWaterTarget/...`
 

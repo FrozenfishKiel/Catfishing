@@ -14,7 +14,7 @@
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatEquipmentFishingUseBeginTest,
-	"Catfishing.Unit.Equipment.FishingUse.BeginIsAtomicExclusiveAndReplaySafe",
+	"Catfishing.Unit.Equipment.FishingUse.BeginIsAtomicConcurrentAndReplaySafe",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -236,7 +236,7 @@ bool FCatEquipmentFishingUseBeginTest::RunTest(const FString& Parameters)
 	using namespace CatEquipmentFishingUseTest;
 	{
 	FFishingUseFixture Fixture;
-	if (!Fixture.Create(*this) || !Fixture.ConfigureSpecial(*this))
+	if (!Fixture.Create(*this) || !Fixture.ConfigureSpecial(*this, 2))
 	{
 		return false;
 	}
@@ -273,19 +273,25 @@ bool FCatEquipmentFishingUseBeginTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Begin replay returns current absolute rod wear"), Replay.AbsoluteRodWear, 12.5);
 	TestEqual(TEXT("Begin replay keeps public revision"), Fixture.Component->GetSnapshot().Revision, Before.Revision);
 
-	const FCatFishingUseReservationResult Exclusive = Fixture.Component->BeginFishingUse(
-		FGuid::NewGuid(), RodId, SpecialBaitId, FloatId, Before.Revision);
-	TestFalse(TEXT("Second session is rejected while a reservation is active"), Exclusive.bReserved);
-	TestTrue(TEXT("First reservation remains active after exclusive rejection"), Fixture.Component->IsFishingUseActive(SessionId));
+	const FGuid SecondSessionId = FGuid::NewGuid();
+	const FCatFishingUseReservationResult Concurrent = Fixture.Component->BeginFishingUse(
+		SecondSessionId, RodId, SpecialBaitId, FloatId, Before.Revision);
+	TestTrue(TEXT("Second rod session reserves its own bait while the first remains active"), Concurrent.bReserved);
+	TestTrue(TEXT("First concurrent reservation remains active"), Fixture.Component->IsFishingUseActive(SessionId));
+	TestTrue(TEXT("Second concurrent reservation is active"), Fixture.Component->IsFishingUseActive(SecondSessionId));
 
 	const FCatFishingUseOperationResult Release = Fixture.Component->ReleaseFishingUse(SessionId);
 	TestTrue(TEXT("Release succeeds for active reservation"), Release.bApplied);
+	TestTrue(TEXT("Releasing one rod session preserves the other reservation"),
+		Fixture.Component->IsFishingUseActive(SecondSessionId));
 	const FCatFishingUseReservationResult Tombstone = Fixture.Component->BeginFishingUse(
 		SessionId, RodId, SpecialBaitId, FloatId, Before.Revision);
 	TestFalse(TEXT("Released session cannot begin a second reservation"), Tombstone.bReserved);
 	TestEqual(TEXT("Released begin reports tombstone"), Tombstone.Error, ECatDomainCommandError::AlreadyResolved);
 	TestEqual(TEXT("Released Begin replay fails closed for wear sequence"), Tombstone.WearSequence, int64{0});
 	TestEqual(TEXT("Released Begin replay fails closed for absolute wear"), Tombstone.AbsoluteRodWear, 0.0);
+	TestTrue(TEXT("Second reservation releases independently"),
+		Fixture.Component->ReleaseFishingUse(SecondSessionId).bApplied);
 
 	const FCatEquipmentLoadoutSnapshot AtomicBefore = Fixture.Component->GetSnapshot();
 	const FCatFishingUseReservationResult Invalid = Fixture.Component->BeginFishingUse(

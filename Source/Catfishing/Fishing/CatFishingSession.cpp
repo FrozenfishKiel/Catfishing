@@ -54,67 +54,6 @@ void ACatFishingSession::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& O
 	DOREPLIFETIME(ThisClass, Snapshot);
 }
 
-// 会话初始化流程：只接受 authority、显式 runtime gate、完整鱼定义/重量/水域/身份与 Items；全部就绪后设置资产并启动 StateTree，失败销毁由服务负责。
-bool ACatFishingSession::InitializeSession(const FGuid InFishingSessionId, const FGuid InCastAttemptId,
-	AController* FisherController, ACatCharacter* InFisherCharacter, UCatFishDefinition* InFishDefinition,
-	const double InFishWeightKilograms, const FCatWaterRegionHandle& WaterRegion)
-{
-	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
-	// StateTree 资产同步加载：Initialize 只在 authority 服务器一次性调用，允许短暂同步等待换取代码简单。
-	UStateTree* StateTreeAsset = Settings ? Settings->FishingSessionStateTree.LoadSynchronous() : nullptr;
-	const FString StableNetId = ResolveStableNetId(FisherController);
-	UCatItemsService* Items = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
-	// 一次性 fail-closed 校验所有前置依赖：任何一项缺失/非法都拒绝启动会话，不留半初始化状态。
-	if (!HasAuthority() || !Settings || !Settings->IsRuntimeReady() || !StateTreeAsset || !StateTreeComponent
-		|| !InFishingSessionId.IsValid() || !InCastAttemptId.IsValid() || InFishingSessionId == InCastAttemptId
-		|| !InFisherCharacter || !InFishDefinition || !InFishDefinition->IsRuntimeDefinitionReady()
-		|| StableNetId.IsEmpty()
-		|| !FMath::IsFinite(InFishWeightKilograms) || InFishWeightKilograms <= 0.0
-		|| !WaterRegion.IsValid() || !Items)
-	{
-		return false;
-	}
-
-	// 逐字段填充公开 Snapshot 的初始事实；Revision/PhaseEpoch 从 1 起，SnapshotSequence 从 0 起，
-	// 与 FCatFishingSessionSnapshot::AdvanceVersion 的自增语义保持一致。
-	Snapshot.FishingSessionId = InFishingSessionId;
-	Snapshot.CastAttemptId = InCastAttemptId;
-	Snapshot.Revision = 1;
-	Snapshot.SnapshotSequence = 0;
-	Snapshot.PhaseEpoch = 1;
-	Snapshot.Phase = ECatFishingPhase::Created;
-	Snapshot.Outcome = ECatFishingOutcome::None;
-	Snapshot.FisherPlayerState = FisherController ? FisherController->PlayerState : nullptr;
-	Snapshot.FishDefinitionId = InFishDefinition->FishDefinitionId;
-	Snapshot.bGiant = InFishDefinition->BodyClass == ECatFishBodyClass::Giant;
-	Snapshot.FightParticipantCount = 1; // 初始只有钓手一人。
-	Snapshot.FishFightStaminaRemaining = InFishDefinition->FishFightStamina; // 从鱼定义冻结初始体力。
-	Snapshot.NormalizedFishStamina = InFishDefinition->FishFightStamina > 0.0
-		? FMath::Clamp(Snapshot.FishFightStaminaRemaining / InFishDefinition->FishFightStamina, 0.0, 1.0) : 0.0;
-	FishDefinition = InFishDefinition; // 私有引用，不复制，仅服务器读取校验/捕获时使用。
-	FisherCharacter = InFisherCharacter;
-	CastEquipment = InFisherCharacter->GetEquipmentComponent(); // 冻结原始抛竿者装备：饵料/磨损结算口径不随接力改变。
-	FisherStableNetId = StableNetId;
-	FishWeightKilograms = InFishWeightKilograms;
-	FishVisualScale = GetDefault<UCatFishingPresentationSettings>()->ComputeFishUniformVisualScale(InFishWeightKilograms);
-	AttemptSnapshot.WaterRegion = WaterRegion;
-	FightParticipantIds.Add(StableNetId); // 钓手自动是首个（也是初始唯一）搏斗参与者。
-	FightParticipantCharacters.Add(StableNetId, InFisherCharacter);
-	RefreshFightSummary(); // 立即按当前参与集合刷新一次力量/体力聚合，避免快照与实际不一致。
-	ItemsService = Items;
-	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency); // 先把初始状态推给客户端，再启动 StateTree。
-	StateTreeComponent->SetStateTree(StateTreeAsset);
-	bStartupInProgress = true; // 打开短生命周期标记，允许 StartLogic 同步进入首状态时调用 EnterPhaseFromStateTree。
-	StateTreeComponent->StartLogic();
-	bStartupInProgress = false;
-	if (!StateTreeComponent->IsRunning() && Snapshot.Phase == ECatFishingPhase::Created)
-	{
-		// StateTree 没能跑起来且仍停留在初始阶段，说明资产没有成功接管——视为初始化失败。
-		return false;
-	}
-	return true;
-}
-
 // 阶段进入流程：先验证 authority、唯一 StateTree 生命周期和未结算状态；NearShore 只接受水域包围盒内的服务器目标并冻结该位置，其他阶段清除目标。HookedFight 与 NearShore 保留钓手/协作者供搏斗和巨鱼候选使用，其余阶段把参与集合收回为钓手；随后刷新协作摘要、递增一次 Revision 并复制快照，若资产进入终态则启动有界销毁。C++ 只应用资产已选阶段，不维护转移拓扑。
 bool ACatFishingSession::TryReadNearShoreFishSpatial(FCatWaterSpatialResult& OutSpatial) const
 {
@@ -447,7 +386,8 @@ FCatDomainCommandResult ACatFishingSession::ResolveRetryExhaustedEscapeFromState
 	return Result;
 }
 
-// 钓手接力转移流程：仅 authority、未终态、等待/试探/真咬阶段可转移（搏斗/近岸阶段离开＝弃战，不存在转移场景）。
+// 钓手接力转移流程：仅 authority、未终态、等待/试探/真咬阶段可跨玩家转移；
+// 搏斗/近岸阶段离开只暂停操作输入并保留原钓手，跨玩家接力等待协作资源迁移规则补齐。
 // 新钓手必须通过统一参战能力谓词；捕获物最终是落地世界鱼，因此接力不读取或冻结任何鱼护。
 bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherController)
 {
@@ -654,7 +594,7 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	return Result;
 }
 
-// 会话终止流程：非 authority、已 Resolved 或已 Terminated 直接幂等返回，避免覆盖捕获终态。首次中断只写一次 Terminated/Revision 并发布快照，再停止 StateTree、释放钓手之外的参与弱引用且不触碰 Items；最后启动配置的有界复制窗口，让客户端看见终态后销毁 Actor，服务据此释放钓手的单活跃槽位。
+// 会话终止流程：非 authority、已 Resolved 或已 Terminated 直接幂等返回，避免覆盖捕获终态。首次中断只写一次 Terminated/Revision 并发布快照，再停止 StateTree、释放钓手之外的参与弱引用且不触碰 Items；最后启动配置的有界复制窗口，让客户端看见终态后销毁 Actor，服务据此清理会话弱索引。
 void ACatFishingSession::TerminateSession(const ECatFishingOutcome Outcome, const TCHAR* DiagnosticReason)
 {
 	// 只白名单允许"非捕获类"终止结果才真正写终态；Caught/None 等结果不属于这条路径
@@ -1028,7 +968,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	UStateTree* FishBehaviorStateTree = Settings ? Settings->FishBehaviorStateTree.LoadSynchronous() : nullptr;
 	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
 		AttemptSnapshot.RodDefinitionId);
-	UCatEquipmentComponent* Equipment = CastEquipment.Get(); // 钓鱼用途/饵料预留在抛竿者装备上（接力后仍是竿主的）。
+	UCatEquipmentComponent* Equipment = CastEquipment.Get(); // 钓鱼用途/饵料预留始终属于原始抛竿者，接力不改变结算对象。
 	UCatAbilitySystemComponent* AbilitySystem = FisherCharacter.IsValid()
 		? FisherCharacter->GetCatAbilitySystemComponent() : nullptr;
 	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
@@ -1656,6 +1596,22 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 	return true;
 }
 
+void ACatFishingSession::SuspendOperatorInputFromAuthority()
+{
+	if (!HasAuthority() || IsTerminal()) return;
+	const bool bPresentationChanged = Snapshot.bReeling || Snapshot.bSlacking;
+	if (FightRunner && FightRunner->IsRunning())
+	{
+		FightRunner->ClearOperatorInputFromAuthority();
+	}
+	Snapshot.bReeling = false;
+	Snapshot.bSlacking = false;
+	if (bPresentationChanged)
+	{
+		PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
+	}
+}
+
 bool ACatFishingSession::SpawnScoopedFishPickupFromAuthority(ACatCharacter* ScoopingCharacter,
 	APlayerState* ScoopingPlayerState, const FString& ScooperStableNetId)
 {
@@ -1893,7 +1849,7 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
 	GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
 	GetWorldTimerManager().ClearTimer(ExhaustedReelTimerHandle);
-	// 释放抛竿者装备上的"正在使用钓具"占用标记（接力后仍是竿主的装备），允许其重新开始新的一轮钓鱼。
+	// 释放原始抛竿者装备上属于本 Session 的钓具预留；其他鱼竿的并行预留保持不变。
 	if (UCatEquipmentComponent* Equipment = CastEquipment.Get())
 	{
 		Equipment->ReleaseFishingUse(Snapshot.FishingSessionId);
@@ -1973,7 +1929,7 @@ const FCatFishingSessionSnapshot& ACatFishingSession::GetSnapshot() const
 	return Snapshot;
 }
 
-// 终态读取流程：只读取公开阶段，不停止 StateTree 或销毁 Actor；服务用它移除单活跃索引，终态 Actor 仍可完成最后一次复制。
+// 终态读取流程：只读取公开阶段，不停止 StateTree 或销毁 Actor；服务用它移除会话弱索引，终态 Actor 仍可完成最后一次复制。
 bool ACatFishingSession::IsTerminal() const
 {
 	return Snapshot.Phase == ECatFishingPhase::Resolved || Snapshot.Phase == ECatFishingPhase::Terminated;

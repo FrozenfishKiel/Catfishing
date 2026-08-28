@@ -23,7 +23,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Fishing|View", meta = (DefaultToSelf = "Outer"))
 	static UCatFishingViewBridge* CreateFishingViewBridge(UObject* Outer);
 
-	/** 在客户端按 PlayerState 查找当前复制过来的钓鱼会话 Actor；找不到返回空。 */
+	/** 在客户端按 PlayerState 当前占据的主操作鱼竿查找会话；玩家离竿后不显示留在旧竿上的会话。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Fishing|View", meta = (WorldContext = "WorldContextObject"))
 	static ACatFishingSession* FindFishingSessionForPlayerState(UObject* WorldContextObject, APlayerState* PlayerState);
 

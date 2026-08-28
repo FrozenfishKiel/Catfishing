@@ -26,6 +26,7 @@ class FCatFishingSessionRejectedFightSummaryPublicationTest;
 class FCatFishingSessionExhaustedReelContinuityTest;
 class FCatFishingSessionLandedTerminalVisibilityTest;
 class FCatFishingSessionOutcomePresentationTagTest;
+class FCatFishingServiceRodBoundSessionRoutingTest;
 
 DECLARE_MULTICAST_DELEGATE(FCatFishingSessionSnapshotChanged);
 
@@ -42,10 +43,6 @@ public:
 	/** 注册公开 Snapshot 复制；私有身份、鱼资产和容器服务引用不复制。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-	/** authority 注入当前钓手、鱼定义与水域快照并启动 ST_FishingSession；任一 gate 失败返回 false。 */
-	bool InitializeSession(FGuid InFishingSessionId, FGuid InCastAttemptId, AController* FisherController,
-		ACatCharacter* FisherCharacter, UCatFishDefinition* FishDefinition, double FishWeightKilograms,
-		const FCatWaterRegionHandle& WaterRegion);
 	/** 两阶段抛竿准备入口；捕获结果先生成世界鱼，不在抛竿阶段冻结任何鱼护容器。 */
 	bool PrepareSessionFromAuthority(const FCatFishingAttemptSnapshot& Attempt, AController* FisherController,
 		ACatCharacter* FisherCharacter, ACatFishingHookActor* HookActor);
@@ -61,6 +58,8 @@ public:
 	bool SetReelingFromAuthority(int64 InputSequence, bool bReeling);
 	/** 右键松开线杯写口；仅 HookedFight 且 Runner 运行中生效，收线优先。 */
 	bool SetSlackingFromAuthority(int64 InputSequence, bool bSlacking);
+	/** 主操作手离开竿位时原子清除本会话持续输入；不改变阶段、结果、鱼或鱼线生命周期。 */
+	void SuspendOperatorInputFromAuthority();
 	bool IsFightRunnerRunning() const;
 	void HandleFightRunnerStepFromAuthority(const FCatFightStepResult& Step, double FishStaminaRemaining,
 		ECatFishMotionIntent MotionIntent, double RodDurabilityRemaining);
@@ -87,8 +86,8 @@ public:
 
 	/**
 	 * 多人接力（规格：用别人的竿继续钓）：把会话的"钓手"身份转移给新操作者。
-	 * 只允许在等待/试探/真咬阶段转移（搏斗/近岸离开＝弃战，没有可转移的会话）；
-	 * 饵料预留与竿磨损仍结算到抛竿时冻结的 CastEquipment（竿主的装备），体力/力量随新钓手。
+	 * 只允许在等待/试探/真咬阶段转移；搏斗中离开不会终止会话，但跨玩家接力仍等待协作规则补齐。
+	 * 饵料预留与竿磨损仍结算到抛竿时冻结的 CastEquipment（原始抛竿者的装备），体力/力量随新钓手。
 	 * 接力只转移当前操作猫；鱼最终落地为世界 Actor，接力时不绑定任何鱼护。
 	 * 仅供 UCatFishingService 在 OperateRod 成功后调用；服务器索引由服务同步更新。
 	 */
@@ -117,7 +116,7 @@ public:
 	/** 本机完整 Snapshot 变化通知；订阅者只需重新读取 GetSnapshot。 */
 	FCatFishingSessionSnapshotChanged OnSnapshotChanged;
 
-	/** 判断会话是否已进入 Resolved/Terminated 终态；FishingService 据此释放该钓手的单活跃槽位。 */
+	/** 判断会话是否已进入 Resolved/Terminated 终态；FishingService 据此清理会话弱索引。 */
 	bool IsTerminal() const;
 
 protected:
@@ -134,6 +133,7 @@ private:
 	friend class FCatFishingSessionLandedTerminalVisibilityTest;
 	friend class FCatFishingSessionLineBreakKeepsRodOperableTest;
 	friend class FCatFishingSessionOutcomePresentationTagTest;
+	friend class FCatFishingServiceRodBoundSessionRoutingTest;
 
 	/** 客户端收到完整 Snapshot 后只广播重读信号，不推进任何玩法。 */
 	UFUNCTION()
@@ -201,7 +201,7 @@ private:
 	FString FisherStableNetId;
 
 	/**
-	 * 抛竿时冻结的装备组件（原始抛竿者=竿主的装备）：饵料预留、竿磨损、失败惩罚全部结算到它。
+	 * 抛竿时冻结的装备组件（原始抛竿者的装备）：饵料预留、竿磨损、失败惩罚全部结算到它。
 	 * 钓手接力转移不改变它——用谁的竿就磨谁的竿、扣抛竿时上的饵。
 	 */
 	TWeakObjectPtr<UCatEquipmentComponent> CastEquipment;

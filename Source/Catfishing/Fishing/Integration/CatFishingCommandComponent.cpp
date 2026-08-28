@@ -531,28 +531,14 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		//   附近有空操作槽的竿（不限竿主）   → OperateRod（首位右主位、次位左辅助位；空主位可接力等口会话）
 		//   附近没有可加入的竿               → PlaceRod（在脚下放自己的竿；已有部署竿会被服务器拒绝）
 		// R 在会话期间同样可用（多人接力钓别人竿）：
-		//   等待/试探/真咬阶段离开 → 会话照常走计时，竿与钩保持原状，任何人再 R 即可接手继续；
-		//   搏斗/近岸阶段离开     → 视为弃战（鱼逃走），但竿保持部署不收回。
+		//   任意阶段离开 → 只释放竿位和持续输入，会话、竿、钩与鱼都保持；
+		//   玩家可去另一根空竿抛线，之后再回到原竿继续。等待阶段也允许其他玩家接力。
 		if (CommandType == ECatFishingCommandType::OperateRod)
 		{
 			const ACatCharacter* Character = Cast<ACatCharacter>(Controller->GetPawn());
-			// 分支一：正在操作某根竿 → E 表示"离开竿位"；
-			// 离开前先检查是否处于搏斗/近岸这类不允许中途甩手的阶段；是的话视为弃战，强制终止会话（鱼逃走）
+			// 分支一：正在操作某根竿 → R 表示"离开竿位"；会话生命周期归鱼竿，不因角色离开而写终态。
 			if (ACatFishingRodActor* OperatedRod = Fishing->FindRodOperatedBy(Controller->PlayerState))
 			{
-				FGuid ActiveSessionId;
-				FCatFishingSessionSnapshot ActiveSnapshot;
-				if (Fishing->TryGetActiveSessionForController(Controller, ActiveSessionId, ActiveSnapshot)
-					&& (ActiveSnapshot.Phase == ECatFishingPhase::HookedFight
-						|| ActiveSnapshot.Phase == ECatFishingPhase::NearShore
-						|| ActiveSnapshot.Phase == ECatFishingPhase::ExhaustedReel))
-				{
-					if (ACatFishingSession* ActiveSession = Fishing->FindSession(ActiveSessionId))
-					{
-						ActiveSession->TerminateSession(ECatFishingOutcome::Escaped,
-							TEXT("Operator left during fight"));
-					}
-				}
 				const FCatFishingRodPresentationState& OperatedState = OperatedRod->GetPresentationState();
 				FCatLeaveRodCommand LeaveCommand;
 				LeaveCommand.Context.RequestId = Edge.RequestId;
@@ -603,7 +589,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		}
 		FGuid SessionId;
 		FCatFishingSessionSnapshot Snapshot;
-		// 用服务器事实判断这名玩家当前有没有活跃的钓鱼会话，决定走“抛竿前”还是“会话内”两套分支
+		// 按当前主操作位对应的鱼竿判断是否有会话；玩家留在其他鱼竿上的会话不会截获这里的输入。
 		if (!Fishing->TryGetActiveSessionForController(Controller, SessionId, Snapshot))
 		{
 			// 没有会话时：左键按下 = 开始瞄准（记录本次按住的关联 ID），左键松开 = 抛竿。
