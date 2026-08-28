@@ -5,16 +5,96 @@
 
 namespace CatFishCatalogSettingsPrivate
 {
-	static bool PassesGate(const UCatFishDefinition& Definition, const FName RegionId,
+	enum class EChallengeBand : uint8
+	{
+		Comfort,
+		Matched,
+		Risky,
+		Count
+	};
+
+	static bool PassesEcologicalGate(const UCatFishDefinition& Definition, const FName RegionId,
 		const ECatEnvironmentTimeOfDay TimeOfDay, const ECatEnvironmentWeather Weather,
-		const int32 ActivePlayerCount, const double CombinedFishingStrength,
-		const double CombinedFightStamina)
+		const int32 ActivePlayerCount)
 	{
 		return Definition.IsRuntimeDefinitionReady() && Definition.RegionIds.Contains(RegionId)
 			&& Definition.TimeOfDay.Contains(TimeOfDay) && Definition.Weather.Contains(Weather)
-			&& Definition.MinimumFightParticipants <= ActivePlayerCount
-			&& Definition.FishStrength <= CombinedFishingStrength
-			&& Definition.FishFightStamina <= CombinedFightStamina;
+			&& Definition.MinimumFightParticipants <= ActivePlayerCount;
+	}
+
+	static bool IsChallengeSelectionReady(const UCatFishCatalogSettings& Settings)
+	{
+		const double BandWeightTotal = Settings.ComfortChallengeBandWeight
+			+ Settings.MatchedChallengeBandWeight + Settings.RiskyChallengeBandWeight;
+		return FMath::IsFinite(Settings.ComfortChallengeMaximumRatio)
+			&& Settings.ComfortChallengeMaximumRatio > 0.0
+			&& FMath::IsFinite(Settings.MatchedChallengeMaximumRatio)
+			&& Settings.MatchedChallengeMaximumRatio > Settings.ComfortChallengeMaximumRatio
+			&& FMath::IsFinite(Settings.MaximumChallengeRatio)
+			&& Settings.MaximumChallengeRatio > Settings.MatchedChallengeMaximumRatio
+			&& FMath::IsFinite(Settings.TargetChallengeRatio)
+			&& Settings.TargetChallengeRatio > 0.0
+			&& Settings.TargetChallengeRatio <= Settings.MaximumChallengeRatio
+			&& FMath::IsFinite(Settings.ComfortChallengeBandWeight)
+			&& Settings.ComfortChallengeBandWeight >= 0.0
+			&& FMath::IsFinite(Settings.MatchedChallengeBandWeight)
+			&& Settings.MatchedChallengeBandWeight >= 0.0
+			&& FMath::IsFinite(Settings.RiskyChallengeBandWeight)
+			&& Settings.RiskyChallengeBandWeight >= 0.0
+			&& FMath::IsFinite(BandWeightTotal) && BandWeightTotal > 0.0
+			&& FMath::IsFinite(Settings.MinimumChallengeWeightMultiplier)
+			&& Settings.MinimumChallengeWeightMultiplier > 0.0
+			&& Settings.MinimumChallengeWeightMultiplier <= 1.0;
+	}
+
+	static double CalculateChallengeRatio(const UCatFishDefinition& Definition,
+		const double CombinedFishingStrength, const double CombinedFightStamina)
+	{
+		return FMath::Max(Definition.FishStrength / CombinedFishingStrength,
+			Definition.FishFightStamina / CombinedFightStamina);
+	}
+
+	static EChallengeBand ResolveChallengeBand(const double ChallengeRatio,
+		const UCatFishCatalogSettings& Settings)
+	{
+		if (ChallengeRatio <= Settings.ComfortChallengeMaximumRatio)
+		{
+			return EChallengeBand::Comfort;
+		}
+		if (ChallengeRatio <= Settings.MatchedChallengeMaximumRatio)
+		{
+			return EChallengeBand::Matched;
+		}
+		return EChallengeBand::Risky;
+	}
+
+	static double CalculateChallengeModifier(const double ChallengeRatio,
+		const UCatFishCatalogSettings& Settings)
+	{
+		const double AvailableDistance = ChallengeRatio <= Settings.TargetChallengeRatio
+			? Settings.TargetChallengeRatio
+			: Settings.MaximumChallengeRatio - Settings.TargetChallengeRatio;
+		const double NormalizedDistance = AvailableDistance <= UE_DOUBLE_SMALL_NUMBER
+			? 0.0
+			: FMath::Clamp(FMath::Abs(ChallengeRatio - Settings.TargetChallengeRatio)
+				/ AvailableDistance, 0.0, 1.0);
+		return FMath::Lerp(1.0, Settings.MinimumChallengeWeightMultiplier, NormalizedDistance);
+	}
+
+	static double GetConfiguredBandWeight(const EChallengeBand Band,
+		const UCatFishCatalogSettings& Settings)
+	{
+		switch (Band)
+		{
+		case EChallengeBand::Comfort:
+			return Settings.ComfortChallengeBandWeight;
+		case EChallengeBand::Matched:
+			return Settings.MatchedChallengeBandWeight;
+		case EChallengeBand::Risky:
+			return Settings.RiskyChallengeBandWeight;
+		default:
+			return 0.0;
+		}
 	}
 
 	static bool IsSaturationReady(const UCurveFloat* Curve, const double HalfSaturation,
@@ -81,7 +161,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	}
 	UCurveFloat* SaturationCurve = ChumSaturationCurve.LoadSynchronous();
 	if (!CatFishCatalogSettingsPrivate::IsSaturationReady(SaturationCurve, ChumAffinityHalfSaturation,
-		MaximumChumModifier))
+		MaximumChumModifier) || !CatFishCatalogSettingsPrivate::IsChallengeSelectionReady(*this))
 	{
 		return Result;
 	}
@@ -89,14 +169,22 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	{
 		UCatFishDefinition* Definition = nullptr;
 		double FinalWeight = 0.0;
+		CatFishCatalogSettingsPrivate::EChallengeBand ChallengeBand =
+			CatFishCatalogSettingsPrivate::EChallengeBand::Comfort;
 	};
 	TArray<FCandidate> Candidates;
 	for (const TSoftObjectPtr<UCatFishDefinition>& DefinitionRef : Definitions)
 	{
 		UCatFishDefinition* Definition = DefinitionRef.LoadSynchronous();
-		if (!Definition || !CatFishCatalogSettingsPrivate::PassesGate(*Definition,
-			Context.WaterRegion.RegionId, Context.TimeOfDay, Context.Weather, Context.ActivePlayerCount,
-			Context.CombinedFishingStrength, Context.CombinedFightStamina))
+		if (!Definition || !CatFishCatalogSettingsPrivate::PassesEcologicalGate(*Definition,
+			Context.WaterRegion.RegionId, Context.TimeOfDay, Context.Weather, Context.ActivePlayerCount))
+		{
+			continue;
+		}
+		const double ChallengeRatio = CatFishCatalogSettingsPrivate::CalculateChallengeRatio(*Definition,
+			Context.CombinedFishingStrength, Context.CombinedFightStamina);
+		if (!FMath::IsFinite(ChallengeRatio) || ChallengeRatio <= 0.0
+			|| ChallengeRatio > MaximumChallengeRatio)
 		{
 			continue;
 		}
@@ -113,37 +201,96 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 			static_cast<double>(SaturationCurve->GetFloatValue(static_cast<float>(Normalized))),
 			0.0, MaximumChumModifier);
 		const double BaitModifier = Definition->FindBaitMultiplierOrNeutral(Context.BaitDefinitionId);
-		const double FinalWeight = Definition->SpawnWeight * ChumModifier * BaitModifier;
+		const double ChallengeModifier = CatFishCatalogSettingsPrivate::CalculateChallengeModifier(
+			ChallengeRatio, *this);
+		const double FinalWeight = Definition->SpawnWeight * ChumModifier * BaitModifier * ChallengeModifier;
 		if (!FMath::IsFinite(FinalWeight) || FinalWeight <= 0.0)
 		{
 			continue;
 		}
-		Candidates.Add({Definition, FinalWeight});
+		Candidates.Add({Definition, FinalWeight,
+			CatFishCatalogSettingsPrivate::ResolveChallengeBand(ChallengeRatio, *this)});
 	}
 	Candidates.Sort([](const FCandidate& Left, const FCandidate& Right)
 	{
 		return Left.Definition->FishDefinitionId.LexicalLess(Right.Definition->FishDefinitionId);
 	});
-	double TotalWeight = 0.0;
+	bool bBandHasCandidates[static_cast<uint8>(CatFishCatalogSettingsPrivate::EChallengeBand::Count)] = {};
 	for (const FCandidate& Candidate : Candidates)
 	{
-		TotalWeight += Candidate.FinalWeight;
+		bBandHasCandidates[static_cast<uint8>(Candidate.ChallengeBand)] = true;
 	}
-	if (Candidates.IsEmpty() || !FMath::IsFinite(TotalWeight) || TotalWeight <= 0.0)
+	if (Candidates.IsEmpty())
 	{
 		return Result;
 	}
 	FRandomStream Random(Context.RandomSeed);
-	double Cursor = Random.FRandRange(0.0f, static_cast<float>(TotalWeight));
-	const FCandidate* Selected = &Candidates.Last();
+	double AvailableBandWeights[static_cast<uint8>(CatFishCatalogSettingsPrivate::EChallengeBand::Count)] = {};
+	double TotalBandWeight = 0.0;
+	for (uint8 Index = 0; Index < static_cast<uint8>(CatFishCatalogSettingsPrivate::EChallengeBand::Count);
+		++Index)
+	{
+		if (bBandHasCandidates[Index])
+		{
+			AvailableBandWeights[Index] = CatFishCatalogSettingsPrivate::GetConfiguredBandWeight(
+				static_cast<CatFishCatalogSettingsPrivate::EChallengeBand>(Index), *this);
+			TotalBandWeight += AvailableBandWeights[Index];
+		}
+	}
+	// 若当前生态上下文里只存在配置权重为 0 的带，仍回退到现有带，避免有合法鱼却空钩。
+	if (!FMath::IsFinite(TotalBandWeight) || TotalBandWeight <= 0.0)
+	{
+		TotalBandWeight = 0.0;
+		for (uint8 Index = 0; Index < static_cast<uint8>(CatFishCatalogSettingsPrivate::EChallengeBand::Count);
+			++Index)
+		{
+			AvailableBandWeights[Index] = bBandHasCandidates[Index] ? 1.0 : 0.0;
+			TotalBandWeight += AvailableBandWeights[Index];
+		}
+	}
+	double BandCursor = Random.FRandRange(0.0f, static_cast<float>(TotalBandWeight));
+	CatFishCatalogSettingsPrivate::EChallengeBand SelectedBand =
+		CatFishCatalogSettingsPrivate::EChallengeBand::Comfort;
+	for (uint8 Index = 0; Index < static_cast<uint8>(CatFishCatalogSettingsPrivate::EChallengeBand::Count);
+		++Index)
+	{
+		BandCursor -= AvailableBandWeights[Index];
+		if (BandCursor <= 0.0 && AvailableBandWeights[Index] > 0.0)
+		{
+			SelectedBand = static_cast<CatFishCatalogSettingsPrivate::EChallengeBand>(Index);
+			break;
+		}
+	}
+	double TotalCandidateWeight = 0.0;
 	for (const FCandidate& Candidate : Candidates)
 	{
+		if (Candidate.ChallengeBand == SelectedBand)
+		{
+			TotalCandidateWeight += Candidate.FinalWeight;
+		}
+	}
+	if (!FMath::IsFinite(TotalCandidateWeight) || TotalCandidateWeight <= 0.0)
+	{
+		return Result;
+	}
+	double Cursor = Random.FRandRange(0.0f, static_cast<float>(TotalCandidateWeight));
+	const FCandidate* Selected = nullptr;
+	for (const FCandidate& Candidate : Candidates)
+	{
+		if (Candidate.ChallengeBand != SelectedBand)
+		{
+			continue;
+		}
+		Selected = &Candidate; // 同带最后一个候选也是浮点游标落在尾端时的确定性回退。
 		Cursor -= Candidate.FinalWeight;
 		if (Cursor <= 0.0)
 		{
-			Selected = &Candidate;
 			break;
 		}
+	}
+	if (!Selected)
+	{
+		return Result;
 	}
 	Result.bSelected = true;
 	Result.FishDefinitionId = Selected->Definition->FishDefinitionId;

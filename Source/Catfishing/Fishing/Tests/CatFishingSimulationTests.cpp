@@ -12,7 +12,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFightSimulatorOutwardJudgmentTest,
 	"Catfishing.Unit.Fishing.Simulation.OutwardPullJudgesSnapDragOverpowerStalemateInOrder",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFightSimulatorSlackTest,
-	"Catfishing.Unit.Fishing.Simulation.OutwardSlackRegensCatAndTautLineForcesJudgment",
+	"Catfishing.Unit.Fishing.Simulation.HoldingSlackAlwaysRegensAndTautLineStillForcesJudgment",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFightVerticalProjectionRecoveryTest,
 	"Catfishing.Unit.Fishing.Simulation.VerticalProjectionSlackRestoresHorizontalMotionWithoutAxisBias",
@@ -126,19 +126,24 @@ bool FCatFishingFightSimulatorInwardTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("inward idle accumulates twenty five centimeters of slack"),
 		Idle.SlackLineLengthCentimeters, 25.0, 1e-6);
 
-	const FCatFightStepResult Slack = Run(Config, MakeState(ECatFishMotionIntent::CalmOrInward, ECatFightCatAction::Slack));
+	FCatFightSimulationState InwardSlackState = MakeState(
+		ECatFishMotionIntent::CalmOrInward, ECatFightCatAction::Slack);
+	InwardSlackState.CatStamina = 90.0;
+	const FCatFightStepResult Slack = Run(Config, InwardSlackState);
 	TestEqual(TEXT("inward slack behaves like idle"), Slack.ProposedFishWorldPosition.X, Idle.ProposedFishWorldPosition.X, 1e-9);
-	TestEqual(TEXT("inward slack does not regen"), Slack.CatStaminaDrain, 0.0, 1e-9);
+	TestEqual(TEXT("holding right regens while the fish moves inward"),
+		Slack.CatStaminaDrain, -Config.SlackStaminaRegenPerSecond, 1e-9);
 	TestEqual(TEXT("right input does not actively pay out while fish moves inward"),
 		Slack.LineLengthCentimeters, 500.0, 1e-6);
 	TestEqual(TEXT("inward fish still creates slack while spool is open"),
 		Slack.SlackLineLengthCentimeters, 25.0, 1e-6);
 	FCatFightSimulationConfig StationaryConfig = Config;
 	StationaryConfig.FishCalmSpeedCentimetersPerSecond = 0.0;
-	const FCatFightStepResult StationarySlack = Run(StationaryConfig,
-		MakeState(ECatFishMotionIntent::CalmOrInward, ECatFightCatAction::Slack));
+	const FCatFightStepResult StationarySlack = Run(StationaryConfig, InwardSlackState);
 	TestEqual(TEXT("holding right while fish is stationary never manufactures extra line"),
 		StationarySlack.LineLengthCentimeters, 500.0, 1e-6);
+	TestEqual(TEXT("holding right regens while the fish is stationary"),
+		StationarySlack.CatStaminaDrain, -Config.SlackStaminaRegenPerSecond, 1e-9);
 	return !HasAnyErrors();
 }
 
@@ -262,11 +267,14 @@ bool FCatFishingFightSimulatorSlackTest::RunTest(const FString& Parameters)
 
 	// 线已被带到上限且鱼顶在线端：不动 / 继续松线都会重新形成对抗（此配置落入僵持）。
 	FCatFightSimulationState Taut = MakeState(ECatFishMotionIntent::StrugglingOutward, ECatFightCatAction::Slack);
+	Taut.CatStamina = 90.0;
 	Taut.LineLengthCentimeters = 1000.0;
 	Taut.FishWorldPosition = FVector(1000, 0, 0);
 	const FCatFightStepResult TautStep = Run(Config, Taut);
 	TestTrue(TEXT("taut line forces pull judgment"), TautStep.bStalemate);
 	TestEqual(TEXT("taut line never exceeds max"), TautStep.ProposedFishWorldPosition.X, 1000.0, 1e-6);
+	TestEqual(TEXT("holding right still regens when paid line is already at maximum"),
+		TautStep.CatStaminaDrain, -Config.SlackStaminaRegenPerSecond, 1e-9);
 	return !HasAnyErrors();
 }
 

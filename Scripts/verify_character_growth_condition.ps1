@@ -119,6 +119,13 @@ function Invoke-CharacterGrowthConditionStatic {
 
     $CharacterHeader = Read-ProjectFileText "Source\Catfishing\Character\CatCharacter.h"
     $CharacterCpp = Read-ProjectFileText "Source\Catfishing\Character\CatCharacter.cpp"
+    $CharacterDefinition = Read-ProjectFileText "Source\Catfishing\Character\CatCharacterDefinition.h"
+    $DefaultCharacterAssetScript = Read-ProjectFileText "Scripts\create_default_cat_character_asset.py"
+    Assert-TextContains $CharacterDefinition "CatDefinitionId" "Character definition must expose a stable CatDefinitionId"
+    Assert-TextContains $CharacterDefinition "InitialPoison" "Character definition must expose InitialPoison"
+    Assert-TextContains $CharacterDefinition "FishingStrength" "Character definition must expose FishingStrength"
+    Assert-TextContains $CharacterDefinition "FightStaminaMaximum" "Character definition must expose FightStaminaMaximum"
+    Assert-TextContains $DefaultCharacterAssetScript "DEFAULT_CAT_CHARACTER_ASSET_PASS" "Default cat DataAsset generation script must emit a stable pass marker"
     Assert-TextContains $CharacterHeader "Multicast_PlayBodyActionPresentation" "Character must expose a BodyAction-specific multicast that does not reuse Fishing local prediction skipping"
     Assert-TextContains $CharacterHeader "BP_StopBodyActionPresentation" "Character Blueprint must have a stop hook for cancellable BodyAction presentation"
     Assert-TextContains $CharacterHeader "PlayBodyActionMontageFromPresentation" "Character must expose optional BodyAction Montage playback from presentation settings"
@@ -213,6 +220,12 @@ function Invoke-CharacterGrowthConditionStatic {
     Assert-TextNotContains $HUDRender "Hunger|Fatigue" "HUD debug view still renders removed Hunger/Fatigue labels"
 
     $DefaultGame = Read-ProjectFileText "Config\DefaultGame.ini"
+    Assert-TextContains $DefaultGame "DefaultCharacterDefinitionId=DefaultCat" "DefaultGame must select the formal default cat definition"
+    Assert-TextContains $DefaultGame "CharacterDefinitions=/Game/Catfishing/Data/Character/Cat_Default\.Cat_Default" "DefaultGame must register the formal default cat DataAsset"
+    $DefaultCharacterAsset = Join-Path $ProjectRoot "Content\Catfishing\Data\Character\Cat_Default.uasset"
+    if (-not (Test-Path -LiteralPath $DefaultCharacterAsset)) {
+        throw "Formal default cat DataAsset is missing: Content\Catfishing\Data\Character\Cat_Default.uasset"
+    }
     Assert-TextContains $DefaultGame "\[/Script/Catfishing\.CatConditionSettings\]" "DefaultGame must configure Condition runtime"
     Assert-TextContains $DefaultGame "\[/Script/Catfishing\.CatGrowthSettings\]" "DefaultGame must configure Growth runtime"
     Assert-TextContains $DefaultGame "\[/Script/Catfishing\.CatBodyActionPresentationSettings\]" "DefaultGame must configure BodyAction formal Montage presentation settings"

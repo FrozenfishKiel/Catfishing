@@ -152,7 +152,7 @@ bool FCatFishingFightStalemateTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-// 测试流程：逐行核对 D/L 速率表（向内+拖 -3/-3 且猫鱼都按平静档耗体力；向内+松 -1/不变；向外+松 +2.5/+2.5 且猫 +1.5；L 到顶后松无效且不回体力），
+// 测试流程：逐行核对 D/L 速率表（向内+拖 -3/-3 且猫鱼都按平静档耗体力；向内+松 -1/不变且猫 +1.5；向外+松 +2.5/+2.5 且猫 +1.5；L 到顶后不出线但仍回体力），
 // 再核对三条瞬时出口（断竿、拖下水、碾压 D=0）与"遛到近岸"出口，以及体重档系数会乘在速率上。
 bool FCatFishingFightDistanceModelTest::RunTest(const FString& Parameters)
 {
@@ -161,7 +161,7 @@ bool FCatFishingFightDistanceModelTest::RunTest(const FString& Parameters)
 	FRandomStream Random(11);
 	FCatFishingFightParams Params = MakeParams();
 	FCatFishingFightResources Resources;
-	Resources.CatStamina = 100.0;
+	Resources.CatStamina = 90.0;
 	Resources.RodDurability = 40.0;
 	FCatFishingFightStepDelta Delta;
 
@@ -176,7 +176,7 @@ bool FCatFishingFightDistanceModelTest::RunTest(const FString& Parameters)
 	CatFishingFightModel::Step(State, Params, ECatFishingFightIntent::Release, 1.0, Resources, Random, Delta);
 	TestEqual(TEXT("向内+松：D -1"), State.DistanceMeters, 19.0, 1e-9);
 	TestEqual(TEXT("向内+松：L 不变"), State.LineMeters, 25.0, 1e-9);
-	TestEqual(TEXT("向内+松：无体力消耗"), Delta.CatStaminaDelta, 0.0, 1e-9);
+	TestEqual(TEXT("向内+松：右键按住仍回体力"), Delta.CatStaminaDelta, 1.5, 1e-9);
 
 	State = MakeState(ECatFishSwimState::Outward, 20.0, 20.0, 30.0);
 	CatFishingFightModel::Step(State, Params, ECatFishingFightIntent::Release, 1.0, Resources, Random, Delta);
@@ -189,12 +189,12 @@ bool FCatFishingFightDistanceModelTest::RunTest(const FString& Parameters)
 	CatFishingFightModel::Step(State, Params, ECatFishingFightIntent::None, 1.0, Resources, Random, Delta);
 	TestEqual(TEXT("向外+不动：与松相同 D +2.5"), State.DistanceMeters, 22.5, 1e-9);
 
-	// L 到顶：右键失效，D/L 不变也不回体力。
+	// L 到顶：鱼无法继续带线，但右键按住仍然回复体力。
 	State = MakeState(ECatFishSwimState::Outward, 60.0, 60.0, 30.0);
 	CatFishingFightModel::Step(State, Params, ECatFishingFightIntent::Release, 1.0, Resources, Random, Delta);
 	TestEqual(TEXT("L 到顶后松：D 不变"), State.DistanceMeters, 60.0, 1e-9);
 	TestEqual(TEXT("L 到顶后松：L 不超过 L_max"), State.LineMeters, 60.0, 1e-9);
-	TestEqual(TEXT("L 到顶后松：不回体力"), Delta.CatStaminaDelta, 0.0, 1e-9);
+	TestEqual(TEXT("L 到顶后松：右键按住仍回体力"), Delta.CatStaminaDelta, 1.5, 1e-9);
 
 	// L 接近上限时鱼带线被 L_max 截断，D 不得超过 L。
 	State = MakeState(ECatFishSwimState::Outward, 59.0, 59.0, 30.0);

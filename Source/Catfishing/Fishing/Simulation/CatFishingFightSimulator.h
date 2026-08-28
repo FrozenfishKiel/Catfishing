@@ -66,7 +66,7 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double StalemateRodWearPerFishStrength = 0.1;
 	double StalemateFishDrainPerCatStrength = 0.08;
 	double StalemateCatDrainPerFishStrength = 0.12;
-	/** 发力期松开线杯且尚未到线长上限：猫体力回复 /秒（规格 1.5）。 */
+	/** 右键持续按住期间的猫体力回复 /秒（规格 1.5）；不依赖游向、实际出线或当前线长。 */
 	double SlackStaminaRegenPerSecond = 1.5;
 
 	/** 鱼挣扎且线杯未松开、鱼线绷紧时的本场鱼线基础磨损 /秒。 */

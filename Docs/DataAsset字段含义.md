@@ -13,11 +13,11 @@
 
 | 类型 | 注册位置（DefaultGame.ini 的 section / 键） | 现有资产 |
 |---|---|---|
-| 猫种类 CatCharacterDefinition | `[CatAbilitySettings]` `+CharacterDefinitions=` | DA_Cat_Default |
+| 猫种类 CatCharacterDefinition | `[CatAbilitySettings]` `+CharacterDefinitions=` | `/Game/Catfishing/Data/Character/Cat_Default` |
 | 装备 CatEquipmentDefinition | `[CatEquipmentSettings]` `+Definitions=` | `/Game/Catfishing/Data/Equipment/Equip_*` |
-| 鱼种 CatFishDefinition | `[CatFishCatalogSettings]` `+Definitions=` | DA_Fish_Test01 |
-| 咬钩性格 CatBitePersonalityDefinition | `[CatFishingSettings]` `+BitePersonalities=` | DA_Bite_Test01 |
-| 搏斗性格 CatFightPersonalityDefinition | `[CatFishingSettings]` `+FightPersonalities=` | DA_Fight_Test01 |
+| 鱼种 CatFishDefinition | `[CatFishCatalogSettings]` `+Definitions=` | 正式 `/Game/Catfishing/Data/Fish/Fish_*`；Showcase2 迁移前暂留 `DA_Fish_Test01` 兼容当前水域 ID |
+| 咬钩性格 CatBitePersonalityDefinition | `[CatFishingSettings]` `+BitePersonalities=` | 正式 `/Game/Catfishing/Data/Fish/Bite_*`；旧测试鱼仍引用 `DA_Bite_Test01` |
+| 搏斗性格 CatFightPersonalityDefinition | `[CatFishingSettings]` `+FightPersonalities=` | 正式 `/Game/Catfishing/Data/Fish/Fight_*`；旧测试鱼仍引用 `DA_Fight_Test01` |
 | AbilitySet / InputConfig | `[CatAbilitySettings]` `DefaultAbilitySet=` / `AbilityInputConfig=` | DA_CatAbilitySet_Default 等 |
 | 曲线 CurveFloat | 被上述 DA/设置按字段引用 | Curve_ChumSaturation 等 3 条 |
 
@@ -25,14 +25,13 @@
 
 ## 1. 猫种类：`UCatCharacterDefinition`（DA_Cat_*）
 
-按种类差异化猫的初始属性与搏斗数值。角色蓝图 Details 里把 `Cat Definition Id` 填成某个 DA 的 ID 即选用该种类；留 **None** 则回退 `CatAbilitySettings` 的全局五项初值（Initial*）。数值只在**属性播种**和**搏斗开始**两个时刻被冻结，运行中改资产不影响进行中的搏斗。
+按种类差异化猫的初始属性与搏斗数值。角色蓝图 Details 里把 `Cat Definition Id` 填成某个 DA 的 ID 即选用该种类；留 **None** 则先使用 `CatAbilitySettings.DefaultCharacterDefinitionId`，该配置也留空时才回退全局三项初值。数值只在**属性播种**和**搏斗开始**两个时刻被冻结，运行中改资产不影响进行中的搏斗。当前正式默认资产是 `/Game/Catfishing/Data/Character/Cat_Default`，稳定 ID 为 `DefaultCat`。
 
 | 字段 | 含义 | 校验 |
 |---|---|---|
 | CatDefinitionId | 种类稳定 ID，角色用它选种类 | 必填、清单内唯一 |
 | DisplayName | 表现用显示名 | 不参与数值裁决 |
-| InitialHunger | 初始饱食度（项目语义 100=吃饱） | ≥0 |
-| InitialFatigue / InitialPoison | 初始疲劳/中毒 | ≥0 |
+| InitialPoison | 初始中毒值 | ≥0 |
 | FishingStrength | **猫力量**（规格 4.2：与鱼力量、竿强度三方比较） | >0 |
 | FightStaminaMaximum | **猫搏斗体力上限**（规格 4.3 消耗与松线喘息回复的基线） | >0 |
 | bEnableRuntimeDefinition | 显式启用 gate | 必须 True |
@@ -88,6 +87,8 @@
 | 食用 | FoodSafety / HungerRelief / PoisonIncrease | Safe/Toxic 结论 + 吃后减饥/增毒量(Safe 必须 0 毒) |
 | 其他 | SacrificeContribution / CaptureImprintEventId / bTankDisplayEligible | 献祭额度 / 捕获成像事件 / 可否入展示鱼缸 |
 | gate | bEnableRuntimeDefinition | 必须 True |
+
+鱼种没有固定“低级/中级”战斗标签。目录以 `max(FishStrength / 玩家合计力量, FishFightStamina / 玩家合计搏斗体力)` 计算当前玩家上下文里的连续挑战度：`≤ ComfortChallengeMaximumRatio` 为轻松带，之后到 `MatchedChallengeMaximumRatio` 为势均力敌带，再到 `MaximumChallengeRatio` 为高风险带；超过安全上限才不进入池。系统先按三条 `*ChallengeBandWeight` 在当前有候选的难度带之间抽取，再用 `SpawnWeight × 窝料倍率 × 鱼饵倍率 × 连续挑战倍率` 在带内选鱼。某个目标带没有鱼时会在其余有候选的带之间重新归一化；只有生态条件、协作人数或安全上限后确实没有鱼才会空钩。
 
 ## 4. 咬钩性格：`UCatBitePersonalityDefinition`（DA_Bite_*）
 
@@ -154,7 +155,7 @@
 | 症状 | 多半是 |
 |---|---|
 | starter 装配/发窝料失败 InvalidPayload | 对应 DA 未注册 / bEnableRuntimeDefinition 没勾 / 某字段越了 Kind 的界 |
-| No eligible fish | 鱼的 Region/TimeOfDay/Weather 空数组;或 CatFishCatalogSettings 三项(曲线/半饱和/上限)未配;或曲线不过校验 |
+| No eligible fish | 鱼的 Region/TimeOfDay/Weather 不匹配或空数组；协作人数不足；全部鱼超过 MaximumChallengeRatio；或 CatFishCatalogSettings 的窝料曲线/连续挑战参数未配、非法 |
 | 打窝 EquipmentUnavailable | 背包没窝料(上一条的下游);或窝料 DA 的 ChumInfluence 缺曲线 |
 | 提竿后搏斗数值全 0 | 猫种类 ID 配错(看 initial_attributes_unresolved 日志) / DA_Bite/DA_Fight 未注册 |
 | 新 DA 配好了不生效 | ini 没加注册行,或加了没重启 Editor |

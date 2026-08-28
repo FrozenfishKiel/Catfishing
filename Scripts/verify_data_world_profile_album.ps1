@@ -189,7 +189,12 @@ function Invoke-ModuleAutomation {
             "Catfishing.Unit.Data.FishDefinition.ChumPreferenceAndBaitMultipliersMustBeValid",
             "Catfishing.Unit.Data.FishDefinition.BiteAndFightPersonalitiesFailClosed",
             "Catfishing.Unit.Data.FishCatalog.DuplicateRuntimeDefinitionsFailClosed",
-            "Catfishing.Unit.Data.FishCatalog.ZeroLocalChumAndUnlistedBaitAreNeutral"
+            "Catfishing.Unit.Data.FishCatalog.ZeroLocalChumAndUnlistedBaitAreNeutral",
+            "Catfishing.Unit.Data.FishCatalog.RiskyFishAllowedUntilChallengeSafetyCeiling",
+            "Catfishing.Unit.Data.FishCatalog.AvailableChallengeBandsFollowConfiguredMix",
+            "Catfishing.Unit.Data.FishCatalog.MissingWeightedBandFallsBackToAvailableFish",
+            "Catfishing.Unit.Data.FishCatalog.TargetChallengeOutweighsDistantFishWithinBand",
+            "Catfishing.Unit.Data.FishCatalog.ShowcaseCompatibilityFishRemainsSelectableBeforeRegionMigration"
         )
     }
     $Batches += [pscustomobject]@{

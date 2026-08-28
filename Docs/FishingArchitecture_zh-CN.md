@@ -204,7 +204,8 @@ Q 蓄力黄色抛物线与落点球是玩法瞄准反馈，不属于上述两类
 ```
 Content/Data/Abilities/   DA_CatAbilitySet_Default(6条) · DA_CatAbilityInputConfig(6条)
 Content/Data/Equipment/   DA_Rod/Bait/Float/ScoopNet/Chum_Basic
-Content/Data/Fish/        DA_Fish_Test01 · DA_Bite_Test01 · DA_Fight_Test01
+Content/Catfishing/Data/Fish/  正式 Fish_* · Bite_* · Fight_*
+Content/Data/Fish/             Showcase2 水域迁移前的兼容 DA_Fish_Test01 · DA_Bite_Test01 · DA_Fight_Test01
 Content/Data/Curves/      Curve_ChumSaturation(1→3) · Curve_ChumDistance/TimeFalloff(1→0)
 Content/Data/StateTrees/  ST_RunFlow · ST_FishingSession · ST_FishFight
 Config/DefaultGame.ini    10 个 section（改后必须重启 Editor；软引用资产必须真实落盘）

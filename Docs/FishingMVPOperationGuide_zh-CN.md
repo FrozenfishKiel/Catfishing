@@ -449,13 +449,14 @@ Event BeginPlay
 /Game/Data/Abilities/   DA_CatAbilityInputConfig, DA_CatAbilitySet_Default
 /Game/Catfishing/Data/Equipment/   Equip_Rod_StarterT1, Equip_Bait_Bug, Equip_Float_Feather,
                                    Equip_ScoopNet_Starter, Equip_Chum_Bug（以及其他正式目录定义）
-/Game/Data/Fish/        DA_Fish_Test01, DA_Bite_Test01, DA_Fight_Test01
+/Game/Catfishing/Data/Fish/  正式 Fish_*, Bite_*, Fight_*
+/Game/Data/Fish/             Showcase2 迁移前兼容 DA_Fish_Test01, DA_Bite_Test01, DA_Fight_Test01
 /Game/Data/Curves/      Curve_ChumDistanceFalloff, Curve_ChumTimeFalloff
 ```
 
 **配置**：`Config/DefaultGame.ini` 8 个 section 已写好（缺两条 StateTree 路径 = 步骤 3）
 
-**关卡**：`Showcase2` 的 `BP_CatWaterRegion_C_1`（RegionId = `Showcase_River_01`）已烘焙成功，`GeometryRevision = 540261741954039293`，`HasValidBakedGeometry() = True`，已存盘
+**关卡**：`Showcase2` 的 `BP_CatWaterRegion_C_1`（RegionId = `Showcase_River_01`）已烘焙成功，`GeometryRevision = 540261741954039293`，`HasValidBakedGeometry() = True`，已存盘。该 ID 当前只匹配旧 `DA_Fish_Test01`；正式 16 鱼库使用 `River/ForestLake`，需要明确执行 RegionId 迁移、重烘焙和引用验证后才能在 Showcase2 出现。
 
 **框架蓝图**（全部已存在且父类正确）
 

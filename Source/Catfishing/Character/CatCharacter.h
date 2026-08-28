@@ -45,14 +45,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Equipment")
 	UCatEquipmentComponent* GetEquipmentComponent() const;
 
-	/** 返回该角色选择的猫种类定义 ID；None 表示使用全局 CatAbilitySettings 初值。 */
+	/** 返回该角色选择的猫种类定义 ID；None 表示使用 CatAbilitySettings 的正式默认猫种。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Character")
 	FName GetCatDefinitionId() const { return CatDefinitionId; }
 
 	/**
 	 * 该角色使用的猫种类定义 ID（在角色蓝图 Details 里配置，或换皮子类各选一种）。
 	 * 必须与 CatAbilitySettings.CharacterDefinitions 里某个 DA 的 CatDefinitionId 一致；
-	 * 留空时使用全局初始属性；填了但找不到定义时属性播种会 fail-closed 并留下 Warning 日志。
+	 * 留空时使用 CatAbilitySettings.DefaultCharacterDefinitionId；显式 ID 或默认 ID 找不到定义时属性播种会 fail-closed。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catfishing|Character")
 	FName CatDefinitionId = NAME_None;

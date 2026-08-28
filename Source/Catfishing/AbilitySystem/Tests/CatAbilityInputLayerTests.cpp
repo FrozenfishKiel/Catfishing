@@ -14,6 +14,7 @@
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Abilities/GameplayAbilityTypes.h"
 #include "Character/CatCharacter.h"
+#include "Character/CatCharacterDefinition.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Fishing/CatFishingSession.h"
 #include "Framework/Game/CatGameplayTypes.h"
@@ -385,12 +386,33 @@ bool FCatFishingStaminaGameplayEffectBoundaryTest::RunTest(const FString& Parame
 	const float OldPoison = Settings->InitialPoison;
 	const float OldStrength = Settings->InitialFishingStrength;
 	const float OldStamina = Settings->InitialFightStamina;
+	const FName OldDefaultCharacterDefinitionId = Settings->DefaultCharacterDefinitionId;
+	const TArray<TSoftObjectPtr<UCatCharacterDefinition>> OldCharacterDefinitions = Settings->CharacterDefinitions;
+	ON_SCOPE_EXIT
+	{
+		Settings->bEnableCharacterAbilityRuntime = OldRuntime;
+		Settings->ReplicationPolicy = OldPolicy;
+		Settings->bEnableInitialAttributeTuning = OldTuning;
+		Settings->InitialPoison = OldPoison;
+		Settings->InitialFishingStrength = OldStrength;
+		Settings->InitialFightStamina = OldStamina;
+		Settings->DefaultCharacterDefinitionId = OldDefaultCharacterDefinitionId;
+		Settings->CharacterDefinitions = OldCharacterDefinitions;
+	};
 	Settings->bEnableCharacterAbilityRuntime = true;
 	Settings->ReplicationPolicy = ECatAbilityReplicationPolicy::Full;
 	Settings->bEnableInitialAttributeTuning = true;
 	Settings->InitialPoison = 0.0f;
 	Settings->InitialFishingStrength = 1.0f;
 	Settings->InitialFightStamina = 10.0f;
+	UCatCharacterDefinition* TestDefinition = NewObject<UCatCharacterDefinition>(GetTransientPackage());
+	TestDefinition->CatDefinitionId = TEXT("StaminaGameplayEffectTestCat");
+	TestDefinition->InitialPoison = 0.0f;
+	TestDefinition->FishingStrength = 1.0f;
+	TestDefinition->FightStaminaMaximum = 10.0f;
+	TestDefinition->bEnableRuntimeDefinition = true;
+	Settings->DefaultCharacterDefinitionId = TestDefinition->CatDefinitionId;
+	Settings->CharacterDefinitions = {TSoftObjectPtr<UCatCharacterDefinition>(TestDefinition)};
 
 	AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 4.0f);
 	TestTrue(TEXT("session initialization applies the stamina GE"), AbilitySystem->InitializeFishingStaminaForSession());
@@ -412,12 +434,6 @@ bool FCatFishingStaminaGameplayEffectBoundaryTest::RunTest(const FString& Parame
 	TestEqual(TEXT("pending compensation restores baseline before next session"),
 		AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 10.0f);
 
-	Settings->bEnableCharacterAbilityRuntime = OldRuntime;
-	Settings->ReplicationPolicy = OldPolicy;
-	Settings->bEnableInitialAttributeTuning = OldTuning;
-	Settings->InitialPoison = OldPoison;
-	Settings->InitialFishingStrength = OldStrength;
-	Settings->InitialFightStamina = OldStamina;
 	return !HasAnyErrors();
 }
 
@@ -558,29 +574,45 @@ bool FCatPendingStaminaBlocksAbilityActivationTest::RunTest(const FString& Param
 	const float OldPoison = Settings->InitialPoison;
 	const float OldStrength = Settings->InitialFishingStrength;
 	const float OldStamina = Settings->InitialFightStamina;
+	const FName OldDefaultCharacterDefinitionId = Settings->DefaultCharacterDefinitionId;
+	const TArray<TSoftObjectPtr<UCatCharacterDefinition>> OldCharacterDefinitions = Settings->CharacterDefinitions;
+	ON_SCOPE_EXIT
+	{
+		Settings->bEnableCharacterAbilityRuntime = OldRuntime;
+		Settings->ReplicationPolicy = OldPolicy;
+		Settings->bEnableInitialAttributeTuning = OldTuning;
+		Settings->InitialPoison = OldPoison;
+		Settings->InitialFishingStrength = OldStrength;
+		Settings->InitialFightStamina = OldStamina;
+		Settings->DefaultCharacterDefinitionId = OldDefaultCharacterDefinitionId;
+		Settings->CharacterDefinitions = OldCharacterDefinitions;
+	};
 	Settings->bEnableCharacterAbilityRuntime = true;
 	Settings->ReplicationPolicy = ECatAbilityReplicationPolicy::Full;
 	Settings->bEnableInitialAttributeTuning = true;
 	Settings->InitialPoison = 0.0f;
 	Settings->InitialFishingStrength = 1.0f;
 	Settings->InitialFightStamina = -1.0f;
+	UCatCharacterDefinition* TestDefinition = NewObject<UCatCharacterDefinition>(GetTransientPackage());
+	TestDefinition->CatDefinitionId = TEXT("PendingStaminaRecoveryTestCat");
+	TestDefinition->InitialPoison = 0.0f;
+	TestDefinition->FishingStrength = 1.0f;
+	TestDefinition->FightStaminaMaximum = -1.0f;
+	TestDefinition->bEnableRuntimeDefinition = true;
+	Settings->DefaultCharacterDefinitionId = TestDefinition->CatDefinitionId;
+	Settings->CharacterDefinitions = {TSoftObjectPtr<UCatCharacterDefinition>(TestDefinition)};
 	TestFalse(TEXT("invalid reset configuration keeps recovery pending"), AbilitySystem->RequestFishingStaminaReset());
 	AbilitySystem->AbilityInputTagPressed(CatFishingAbilityTags::Input_Fishing_Primary);
 	AbilitySystem->ProcessAbilityInput(0.016f, false);
 	TestEqual(TEXT("pending recovery blocks default ability activation"), ActivationCount, 0);
 
 	Settings->InitialFightStamina = 10.0f;
+	TestDefinition->FightStaminaMaximum = 10.0f;
 	AbilitySystem->AbilityInputTagPressed(CatFishingAbilityTags::Input_Fishing_Primary);
 	AbilitySystem->ProcessAbilityInput(0.016f, false);
 	TestFalse(TEXT("valid recovery clears pending before activation"), AbilitySystem->HasPendingFishingStaminaReset());
 	TestEqual(TEXT("ability activation resumes after compensation"), ActivationCount, 1);
 
-	Settings->bEnableCharacterAbilityRuntime = OldRuntime;
-	Settings->ReplicationPolicy = OldPolicy;
-	Settings->bEnableInitialAttributeTuning = OldTuning;
-	Settings->InitialPoison = OldPoison;
-	Settings->InitialFishingStrength = OldStrength;
-	Settings->InitialFightStamina = OldStamina;
 	return !HasAnyErrors();
 }
 

@@ -91,7 +91,7 @@ struct CATFISHING_API FCatFishingFightParams
 	/** 鱼种游速系数：按体重档 小 0.8／中 1.0／大 1.2／巨影 1.5，乘在 D/L 速率表的每一行上。 */
 	double FishSpeedCoefficient = 1.0;
 
-	/** 猫体力上限；向外游+松时每秒 +1.5 回体力不能超过它。飞书 §4.2 拍定 100，工程取 CatAbilitySettings 的初值作为上限（两者同为 100）。 */
+	/** 猫体力上限；右键持续按住时每秒 +1.5 回体力不能超过它。飞书 §4.2 拍定 100，工程取 CatAbilitySettings 的初值作为上限（两者同为 100）。 */
 	double CatStaminaMax = 0.0;
 
 	/** 鱼-岸距离小到这个值（米）以内就算到了近岸：飞书 §5"离岸不足 1 米才可抄"，与 ScoopReachCentimeters 同源。 */
@@ -160,7 +160,7 @@ struct FCatFishingFightResources
 /** 一次推进要求会话对外部资源做的改动；会话负责把它们真正写进 ASC 与 Equipment。 */
 struct FCatFishingFightStepDelta
 {
-	/** 猫体力增量：负数是消耗，正数是向外游+松时的回复；会话写入时再按 [0, CatStaminaMax] 夹取。 */
+	/** 猫体力增量：负数是消耗，正数是右键持续按住时的回复；会话写入时再按 [0, CatStaminaMax] 夹取。 */
 	double CatStaminaDelta = 0.0;
 
 	/** 本次鱼线负载耐久消耗（≥0）；旧字段名为兼容保留。 */

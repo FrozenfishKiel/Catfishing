@@ -32,7 +32,7 @@ bool UCatAbilitySettings::TryGetInitialAttributes(float& OutPoison, float& OutFi
 bool UCatAbilitySettings::IsFishingRuntimeReady() const
 {
 	// 运行就绪检查流程：先要求 Ability runtime gate 与两份软引用存在，再同步加载 AbilitySet/InputConfig，
-	// 最后复用三项初始身体属性校验；任何一环缺失都保持 fail-closed，避免输入或 ASC 单独就绪。
+	// 最后复用默认猫种解析后的三项初始身体属性校验；任何一环缺失都保持 fail-closed。
 	if (!IsRuntimeEnabled() || DefaultAbilitySet.IsNull() || AbilityInputConfig.IsNull())
 	{
 		return false;
@@ -43,7 +43,7 @@ bool UCatAbilitySettings::IsFishingRuntimeReady() const
 	float FishingStrength = 0.0f;
 	float FightStamina = 0.0f;
 	return AbilitySet && AbilitySet->IsRuntimeReady() && InputConfig && InputConfig->IsRuntimeReady()
-		&& TryGetInitialAttributes(Poison, FishingStrength, FightStamina);
+		&& TryGetInitialAttributesForCharacter(NAME_None, Poison, FishingStrength, FightStamina);
 }
 
 bool UCatAbilitySettings::TryGetInitialFightStamina(float& OutFightStamina) const
@@ -79,14 +79,15 @@ const UCatCharacterDefinition* UCatAbilitySettings::FindRuntimeCharacterDefiniti
 	return Match;
 }
 
-// 按种类初始属性流程：全局 runtime/tuning gate 仍先成立；Id 指定即必须解析到唯一就绪定义（fail-closed），None 走全局路径。
+// 按种类初始属性流程：显式角色 ID 优先，否则使用配置的默认猫种 ID；只有两者都为 None 才使用全局 Initial* 回退。
 bool UCatAbilitySettings::TryGetInitialAttributesForCharacter(const FName CatDefinitionId, float& OutPoison,
 	float& OutFishingStrength, float& OutFightStamina) const
 {
 	OutPoison = 0.0f;
 	OutFishingStrength = 0.0f;
 	OutFightStamina = 0.0f;
-	if (CatDefinitionId.IsNone())
+	const FName ResolvedDefinitionId = CatDefinitionId.IsNone() ? DefaultCharacterDefinitionId : CatDefinitionId;
+	if (ResolvedDefinitionId.IsNone())
 	{
 		return TryGetInitialAttributes(OutPoison, OutFishingStrength, OutFightStamina);
 	}
@@ -94,7 +95,7 @@ bool UCatAbilitySettings::TryGetInitialAttributesForCharacter(const FName CatDef
 	{
 		return false;
 	}
-	const UCatCharacterDefinition* Definition = FindRuntimeCharacterDefinition(CatDefinitionId);
+	const UCatCharacterDefinition* Definition = FindRuntimeCharacterDefinition(ResolvedDefinitionId);
 	if (!Definition)
 	{
 		return false;

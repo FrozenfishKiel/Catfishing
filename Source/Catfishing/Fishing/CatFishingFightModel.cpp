@@ -14,8 +14,8 @@ namespace CatFishingFightModel
 		/** 兼容规则模型使用的平静/挣扎消耗档；正式运行时由鱼性格资产提供同名倍率。 */
 		constexpr double BaseDrainMultiplier = 1.0;
 		constexpr double StruggleDrainMultiplier = 2.0;
-		/** 4.3 向外游+松：猫体力每秒 +1.5。 */
-		constexpr double OutwardReleaseCatStaminaRegenPerSecond = 1.5;
+		/** 右键持续按住：猫体力每秒 +1.5，与游向和实际出线量无关。 */
+		constexpr double ReleaseHoldCatStaminaRegenPerSecond = 1.5;
 		/** 消耗战：本场鱼线耐久每秒 -= 鱼力量 × 0.1。 */
 		constexpr double StalemateRodWearPerFishStrength = 0.1;
 		/** 4.4 消耗战：鱼体力每秒 -= 猫力 × 0.08。 */
@@ -160,7 +160,8 @@ namespace CatFishingFightModel
 	// 2. 推进挣扎计时：前摇期不加成，生效期鱼力量 ×1.5。
 	// 3. 按"鱼状态 × 猫操作"分支：向内+拖 D/L 各 -3×系数，猫/鱼都按平静档消耗；向内+松/不动 D -1×系数；
 	//    向外+拖查判定表：①②③三个瞬时出口直接写终局（③顺带 D=0），④僵持逐秒扣鱼线耐久/鱼体力/猫体力；
-	//    向外+松：L 未到顶时鱼带动 D/L 各 +2.5×系数、猫体力 +1.5，L 到顶后无法继续带线（旧规格模型，见 D-17）。
+	//    向外+松：L 未到顶时鱼带动 D/L 各 +2.5×系数，L 到顶后无法继续带线（旧规格模型，见 D-17）。
+	//    右键持续按住则独立回复猫体力，不依赖游向、实际出线量或是否已经到达 L_max；不动不会回复。
 	// 4. 夹取：D ≥ 0，L ≤ L_max 且 L ≥ D；段剩余时间扣掉 dt。
 	// 5. 终局优先级：鱼体力 ≤0 翻肚（D=0）→ 猫体力 ≤0 拖下水 → 鱼线耐久 ≤0 断线；都没有时 D ≤ 近岸距离记为遛到岸边。
 	//    猫体力和鱼线耐久用"当前值 + 本次增量"判断，所以模型不需要持有它们的真身。
@@ -237,7 +238,13 @@ namespace CatFishingFightModel
 			const double Run = Rules::OutwardReleaseMetersPerSecond * Speed * DeltaSeconds;
 			State.DistanceMeters += Run;
 			State.LineMeters += Run;
-			OutDelta.CatStaminaDelta += Rules::OutwardReleaseCatStaminaRegenPerSecond * DeltaSeconds;
+		}
+
+		if (Intent == ECatFishingFightIntent::Release)
+		{
+			OutDelta.CatStaminaDelta = FMath::Min(
+				Rules::ReleaseHoldCatStaminaRegenPerSecond * DeltaSeconds,
+				FMath::Max(0.0, Params.CatStaminaMax - Resources.CatStamina));
 		}
 
 		// 先把 D 压回非负，再让 L 落在 [D, L_max]，最后 D 不能超过被 L_max 压下来的 L；三步顺序保证 0 ≤ D ≤ L ≤ L_max。

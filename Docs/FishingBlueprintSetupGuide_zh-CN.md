@@ -60,8 +60,8 @@
 | `DA_CatAbilityInputConfig` | `/Game/Data/Abilities/` | `AbilityInputActions` 保存钓鱼 GAS 映射；`NativeInputActions` 额外保存 `IA_Interact` → `Cat.Input.Interact` |
 | `DA_CatAbilitySet_Default` | `/Game/Data/Abilities/` | 5 个原生 Ability 类；Primary=`WhileInputActive`，其余 `OnInputTriggered` |
 | `Equip_ScoopNet_Starter` | `/Game/Catfishing/Data/Equipment/` | 正式目录抄网定义 `StarterScoopNet`；当前由开发期开关默认发放，正式获取接入后关闭该开关 |
-| `DA_Fish_Test01` | `/Game/Data/Fish/` | `RegionIds=[Showcase_River_01]`，对应关卡里那个湖 |
-| `DA_Bite_Test01` / `DA_Fight_Test01` | `/Game/Data/Fish/` | 被 `DA_Fish_Test01` 按稳定 ID 引用 |
+| `DA_Fish_Test01` | `/Game/Data/Fish/` | `RegionIds=[Showcase_River_01]`；只在 Showcase2 改成正式 `River` 水域并重烘焙前承担兼容入口，迁移后删除运行配置引用 |
+| `DA_Bite_Test01` / `DA_Fight_Test01` | `/Game/Data/Fish/` | 只被上述兼容鱼引用；随水域迁移一起退出运行配置 |
 | `Curve_ChumDistanceFalloff` / `Curve_ChumTimeFalloff` | `/Game/Data/Curves/` | 1→0 线性衰减 |
 
 两个最容易踩的校验坑（生成时已规避，改数值时注意别破坏）：

@@ -232,14 +232,16 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	else
 	{
 		// 鱼在挣扎但鱼线未形成对抗：按实际方向自由游，可能向外、横切或假动作向内。
-		if (bSlacking)
-		{
-			// 松开线杯让鱼自由带线：猫借机喘息，回复量不能超过体力上限。
-			const double Regen = Config.SlackStaminaRegenPerSecond * Dt;
-			const double Capped = FMath::Min(Config.CatStaminaMaximum, State.CatStamina + Regen);
-			CatDrain = -(Capped - State.CatStamina); // 负数代表体力回复
-		}
 		// 有余线时不产生张力，也不凭空磨损鱼竿；鱼先消费余线，碰到线端的下一步才进入上面的资源交换。
+	}
+
+	// 体力回复由“右键当前是否持续按住”直接决定，不依赖鱼的游向、是否实际带出新线或是否已经到达 L_max。
+	// 右键是明确的休息动作，所以即使线端仍有鱼线负载，本步猫体力也按回复结算；鱼体力和鱼线磨损仍保留上面的结果。
+	if (bSlacking)
+	{
+		const double Regen = Config.SlackStaminaRegenPerSecond * Dt;
+		const double Capped = FMath::Min(Config.CatStaminaMaximum, State.CatStamina + Regen);
+		CatDrain = -(Capped - State.CatStamina); // 负数代表体力回复
 	}
 
 	// [FishLogic 3/5：资源结算]
