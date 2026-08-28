@@ -11,6 +11,7 @@ class ACatFishingRodActor;
 class ACatFishingSession;
 class APlayerState;
 class UCatFishDefinition;
+class FCatFishingServiceRodBoundSessionRoutingTest;
 
 /** 一局服务器 Fishing 入口；创建/查询/终止会话并把所有阶段写入留给会话内 StateTree。 */
 UCLASS()
@@ -42,13 +43,19 @@ public:
 	/** Character 失去占有、倒地或销毁时终止所有相关未结算会话；不恢复旧半场。 */
 	void TerminateSessionsForCharacter(const ACatCharacter* Character);
 
+	/**
+	 * Run 暂停钓鱼（白天结束、额度完成或进入夜晚）时终止当前会话、释放全部竿位并恢复角色移动。
+	 * 该入口不永久关闭 World 内的 FishingService，下一天仍可重新使用已部署鱼竿。
+	 */
+	void SuspendFishingAndReleaseOperators();
+
 	/** Host teardown 关闭入口并终止所有未结算会话。 */
 	void CloseCommandsAndTerminateAll();
 
 	/** 查询指定存活且未终态的服务器 Session；未知或失效身份返回空且不创建索引项。 */
 	ACatFishingSession* FindSession(FGuid FishingSessionId);
 
-	/** 从 Controller 的服务器私有身份查询其唯一活动 Session，并只复制公开 Snapshot 到输出。 */
+	/** 按 Controller 当前占据的主操作位查询该鱼竿上的活动 Session；离开竿位后不再把旧会话路由给玩家输入。 */
 	bool TryGetActiveSessionForController(const AController* Controller, FGuid& OutFishingSessionId,
 		FCatFishingSessionSnapshot& OutSnapshot);
 
@@ -67,12 +74,12 @@ public:
 	/** 查找绑定在指定竿上的存活未终态会话（操作位与会话解耦后，竿是会话的空间锚）；没有则空。 */
 	ACatFishingSession* FindActiveSessionByRod(const ACatFishingRodActor* RodActor);
 
-	/** 抢抄目标搜索：按鱼与请求者的水平距离找最近的 NearShore 阶段会话；没有则空。 */
+	/** 抄网目标粗筛：按鱼与请求者的水平距离找最近的已上钩会话；精确范围仍由 Session 裁决。 */
 	ACatFishingSession* FindNearestScoopableSession(const FVector& WorldLocation, double MaxDistanceCentimeters);
 
 	/**
-	 * 钓手接力转移编排（多人用别人的竿继续钓）：校验新钓手无自己的活跃会话（单活跃槽位），
-	 * 调用会话 TransferFisherFromAuthority，成功后同步更新服务器正反索引。
+	 * 钓手接力转移编排（多人用别人的竿继续钓）：会话唯一性属于鱼竿，不属于玩家；
+	 * 这里只调用会话 TransferFisherFromAuthority 更新当前钓手事实。
 	 */
 	bool TransferSessionFisher(ACatFishingSession* Session, AController* NewFisherController);
 
@@ -90,12 +97,25 @@ public:
 
 private:
 	friend class ACatFishingSession;
+	friend class FCatFishingServiceRodBoundSessionRoutingTest;
 
-	/** 清除已销毁或已终态 Session 弱引用，并同时释放对应钓手的单活跃槽位。 */
+	/** 清除已销毁或已终态 Session 弱引用；活动会话由其绑定鱼竿定位，不维护玩家唯一槽位。 */
 	void CompactSessions();
 
 	/** 清除 PlayerState 或 Rod Actor 任一端已经失效的部署登记。 */
 	void CompactDeployedRods();
+
+	/** 终止全部存活会话并释放所有竿位；DiagnosticReason 只进入 Session 终态诊断。 */
+	void TerminateAllSessionsAndReleaseOperators(const TCHAR* DiagnosticReason);
+
+	/** 强制移除指定角色占用的竿位并恢复移动；主位腾空后把晋升者重新吸附到 0 号位。 */
+	void ReleaseOperatorForCharacter(const ACatCharacter* Character);
+
+	/** 清空所有存活鱼竿的操作槽并恢复每个操作角色的移动；鱼竿仍保持部署。 */
+	void ReleaseAllRodOperatorsAndRestoreMovement();
+
+	/** 清空单根鱼竿的操作槽并恢复相关角色移动；用于窗口关闭和鱼竿异常注销的同一补偿路径。 */
+	void ReleaseRodOperatorsAndRestoreMovement(ACatFishingRodActor* Rod);
 
 	/** 从 Controller 的 APlayerState::UniqueId 读取服务器私有身份；无效身份不能进入开始终态缓存。 */
 	static FString ResolveStableNetId(const AController* Controller);
@@ -113,12 +133,6 @@ private:
 
 	/** FishingSessionId 到服务器 Actor 弱引用；Actor/StateTree 自己持有阶段真相。 */
 	TMap<FGuid, TWeakObjectPtr<ACatFishingSession>> Sessions;
-
-	/** 会话 ID 到初始钓手私有身份；服务压缩终态时据此精确释放单活跃索引。 */
-	TMap<FGuid, FString> SessionFisherById;
-
-	/** 钓手私有身份到当前唯一非终态会话；同一玩家不能并行抽取第二条鱼。 */
-	TMap<FString, FGuid> ActiveSessionByFisher;
 
 	/** 身份+开始操作+RequestId 到首次同步结果；成功重试复用原 SessionId，失败重试不重新抽鱼。 */
 	TMap<FString, FCatBeginCastResult> BeginCastTerminalCache;

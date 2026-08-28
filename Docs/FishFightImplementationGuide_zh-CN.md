@@ -89,15 +89,15 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 - 横向游：90°，`LineLoad=0`，玩家获得完整收线窗口。
 - 朝竿游：点积为负，钳制为 0，不制造反方向的假拉力。
 
-猫体力、鱼体力、本场鱼线磨损都乘 `LineLoad`。重大判定还要求负载超过鱼性格阈值并持续确认时间，避免方向刚好扫过阈值一帧就断线或落水。
+`LineLoad` 控制鱼线磨损、牵引效率和强对抗资格。玩家的左键已经进入带载牵引时，猫和鱼一定都会消耗体力，不会因为鱼正朝竿尖游或横切而归零：平静期使用 `InwardPull* × BaseDrainMultiplier`，挣扎期使用 `Stalemate* × StruggleDrainMultiplier`，且鱼性格要求挣扎倍率高于平静倍率。玩家没有主动拉、只有鱼自己把锁线绷紧时，双方消耗才继续按 `LineLoad` 缩放。重大判定仍要求负载超过鱼性格阈值并持续确认时间，避免方向刚好扫过阈值一帧就断线或落水。
 
-横向速度不会直接加到位置上，而会换算成“绕竿尖旋转的角度”。这样鱼可以绕圈，但不会因为走切线偷偷增加鱼线长度。
+鱼先按自己的水平游向和游速生成自由候选位置，锁线只阻止候选点继续越过线端。带载左键随后叠加一个不超过本步有效收线距离的水平牵引；鱼没有实际靠近到请求距离时，`L_paid` 以最终鱼距回填，表示卷线受阻，不会把几厘米收线通过三维球面投影放大成吸附或漂移。
 
 ### 鱼线为什么会垂、什么时候会绷紧
 
 模拟不再把“鱼到竿尖的距离”直接当作线长，而是分别记录：
 
-- `L_paid`：已经放出去的实际线长；左键主动收短，右键按住时只允许鱼向外游动被动带出更多线。
+- `L_paid`：已经放出去的实际线长；左键请求收短但不得短于牵引后的真实鱼距，右键按住时只允许鱼向外游动被动带出更多线。
 - `D`：竿尖到鱼的直线距离，由鱼的实际位置决定。
 - `Slack=max(L_paid-D, 0)`：余线；大于 0 时 Cable 平滑增加本地重力，形成垂坠。
 - `Tension`：鱼本步本想游到线端之外的超出量；线会限制鱼的位置，并产生鱼/猫体力消耗和竿磨损。
@@ -129,13 +129,13 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 
 此前调试 HUD 只显示整数百分比，极低的小数体力可能被显示成 `0%`。现在调试值保留一位小数；同时加入 `FishExhaustionThreshold=0.5`：结算后绝对体力不高于 0.5 时，服务器直接将尾数吸附到真正的 0，并立刻进入 `ExhaustedReel`，避免尾数阶段拖得过久。
 
-鱼体力清空的同一服务器帧就会把 `AutoHauling` 复制给 Encounter，所有客户端据此把 `VisualRoot` 侧翻 90°；松开左键只停止位移，不会让鱼重新立起。若耗尽时左键正按住，按住状态会跨阶段保留；否则再次按左键才开始移动。鱼逐步靠近、最多到达“竿尖 XY + max(水面 Z, 竿尖下方地面 Z)”，随后 Encounter 隐藏并原地生成可拾取 Actor。目标 XY 不做岸线限制，目标 Z 只在力竭瞬间查询一次，因此交接时不会二次跳位。
+鱼体力清空或力量碾压的同一服务器帧会保留 Encounter 的当前世界位置，并把 `AutoHauling` 复制给所有客户端驱动 `VisualRoot` 侧翻 90°；结局帧不会再把鱼或 D 直接归零到竿尖。松开左键只停止位移，不会让鱼重新立起。若耗尽时左键正按住，按住状态会跨阶段保留；否则再次按左键才开始移动。鱼随后按固定步逐步靠近、最多到达“竿尖 XY + max(水面 Z, 竿尖下方地面 Z)”，Encounter 隐藏并在原地生成可拾取 Actor。目标 XY 不做岸线限制，目标 Z 只在力竭瞬间查询一次，因此交接时不会二次跳位。
 
 ## 常用调参位置
 
 | 想改变什么 | 位置 |
 |---|---|
-| 发力/休息持续时间 | `DA_Fight_Test01` 的 Calm/Struggle Duration |
+| 发力/休息持续时间 | 正式 `/Game/Catfishing/Data/Fish/Fight_*` 性格的 Calm/Struggle Duration |
 | 满体力/力竭时向内概率 | `FullStaminaInwardProbability` / `ExhaustedInwardProbability` |
 | 向内扇区和概率增长曲线 | `InwardConeHalfAngleDegrees` / `InwardProbabilityExponent` |
 | 多久换一次目标方向 | `DirectionRetargetDurationRangeSeconds` |
@@ -144,7 +144,7 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 | 假装回头的概率 | `FeintProbability` |
 | 多大夹角算强对抗 | `StrongConfrontationAlignmentThreshold` |
 | 强对抗要持续多久 | `StrongConfrontationConfirmationSeconds` |
-| 鱼力量和总搏斗体力 | `DA_Fish_Test01` |
+| 鱼力量和总搏斗体力 | 当前从正式鱼库选中的 `UCatFishDefinition` |
 | 猫力量和体力 | `DefaultGame.ini` / 后续猫定义资产 |
 | 收近速度和耗尽吸附阈值 | `UCatFishingSettings` / `DefaultGame.ini` |
 | 张力表现达到满值的响应范围 | `TensionResponseRangeCentimeters`（Project Settings） |

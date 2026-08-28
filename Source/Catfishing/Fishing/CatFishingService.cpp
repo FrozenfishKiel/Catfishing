@@ -4,6 +4,7 @@
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Logging/CatLog.h"
+#include "Logging/CatLogContext.h"
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Condition/CatConditionComponent.h"
@@ -71,8 +72,6 @@ void UCatFishingService::Deinitialize()
 {
 	CloseCommandsAndTerminateAll();
 	Sessions.Reset();
-	SessionFisherById.Reset();
-	ActiveSessionByFisher.Reset();
 	BeginCastTerminalCache.Reset();
 	BeginCastInProgress.Reset();
 	DeployedRodByPlayerState.Reset();
@@ -134,6 +133,12 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	if (!RodState.bDeployed || RodState.bBroken || RodState.OperatorPlayerState != PlayerState)
 	{
 		Result.Command.Error = RodState.bBroken ? ECatFishingCommandError::RodBroken : ECatFishingCommandError::RodOccupied;
+		return Finish(Result);
+	}
+	// 会话唯一性属于鱼竿：同一玩家可以依次给多根竿抛线，但一根竿不能叠加第二个未终态会话。
+	if (FindActiveSessionByRod(Rod))
+	{
+		Result.Command.Error = ECatFishingCommandError::ActiveSessionExists;
 		return Finish(Result);
 	}
 	if (Command.ExpectedEquipmentRevision != Loadout.Revision)
@@ -263,8 +268,6 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		return Finish(Result);
 	}
 	Sessions.Add(SessionId, Session);
-	SessionFisherById.Add(SessionId, StableNetId);
-	ActiveSessionByFisher.Add(StableNetId, SessionId);
 	Result.Command.bCommitted = true;
 	Result.Command.Error = ECatFishingCommandError::None;
 	Result.Command.FishingSessionId = SessionId;
@@ -402,33 +405,40 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 	}
 	const FCatFishingRodPresentationState State = Rod->GetPresentationState();
 	const int32 RequestedSlotIndex = Rod->GetFirstFreeOperatorSlotIndex();
+	// CooperativeFishing 尚未接入输入、力量和体力分摊前，运行时只开放 0 号主操作位。
+	// 保留 Actor 的双槽数据结构与锚点供后续实现，但不能把当前玩家送进无法操作的副位。
+	if (!State.OperatorPlayerStates.IsEmpty())
+	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_rod_operate_rejected Reason=PrimaryOccupied Rod=%s RodId=%s OperatorCount=%d RequestedSlot=%d %s"),
+			*GetNameSafe(Rod), *State.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
+			State.OperatorPlayerStates.Num(), RequestedSlotIndex,
+			*CatLogContext::BuildControllerFields(Controller));
+		Result.Error = ECatFishingCommandError::RodOccupied;
+		return Result;
+	}
 	if (!PlayerState || !Command.Context.RequestId.IsValid() || ResolveStableNetId(Controller).IsEmpty()
-		|| State.bBroken || !State.bDeployed || RequestedSlotIndex == INDEX_NONE
+		|| State.bBroken || !State.bDeployed || RequestedSlotIndex != 0
 		|| FVector::DistSquared(Character->GetActorLocation(),
 			Rod->GetOperatorStandWorldTransform(RequestedSlotIndex).GetLocation()) > FMath::Square(250.0))
 	{
 		Result.Error = State.bBroken ? ECatFishingCommandError::RodBroken : ECatFishingCommandError::RodOccupied;
 		return Result;
 	}
-	FGuid ExistingSessionId;
-	FCatFishingSessionSnapshot ExistingSessionSnapshot;
-	// 辅助位当前只承载站位/占用，不驱动合力数值；有自己的活动会话时禁止跨竿占位，避免输入被路由回旧会话。
+	// 玩家输入只路由到当前占据主位的鱼竿，因此这里不再用玩家历史会话阻止跨竿占位。
 	// TODO(CooperativeFishing): 合力玩法落地时，从 Rod.OperatorPlayerStates 每次重建 Session 参与集合；
-	// 不缓存 bTwoPlayer，确保 2→1/3→2 后力量、体力消耗和输入所有权当帧收敛到当前数组。
-	if (RequestedSlotIndex > 0
-		&& TryGetActiveSessionForController(Controller, ExistingSessionId, ExistingSessionSnapshot))
-	{
-		Result.Error = ECatFishingCommandError::ActiveSessionExists;
-		return Result;
-	}
-	// 只有补进空主位（0 号右位）才是接力；加入左侧辅助位不能把正在等口的会话偷转给自己。
+	// 届时再开放 1 号及后续辅助位，并确保力量、体力消耗和输入所有权当帧收敛到当前数组。
+	// HookedFight 接力会同步迁移 Runner 的 ASC/力量/体力/输入域，不能只改公开 FisherPlayerState。
 	ACatFishingSession* BoundSession = FindActiveSessionByRod(Rod);
-	if (RequestedSlotIndex == 0 && BoundSession)
+	const bool bNeedsSessionTakeover = RequestedSlotIndex == 0 && BoundSession
+		&& BoundSession->GetSnapshot().FisherPlayerState != PlayerState;
+	if (bNeedsSessionTakeover)
 	{
 		const ECatFishingPhase BoundPhase = BoundSession->GetSnapshot().Phase;
 		const bool bTakeoverPhase = BoundPhase == ECatFishingPhase::Waiting
-			|| BoundPhase == ECatFishingPhase::Probe || BoundPhase == ECatFishingPhase::TrueBiteWindow;
-		if (!bTakeoverPhase || !TransferSessionFisher(BoundSession, Controller))
+			|| BoundPhase == ECatFishingPhase::Probe || BoundPhase == ECatFishingPhase::TrueBiteWindow
+			|| BoundPhase == ECatFishingPhase::HookedFight;
+		if (!bTakeoverPhase)
 		{
 			Result.Error = ECatFishingCommandError::RodOccupied;
 			return Result;
@@ -438,13 +448,34 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 	if (!Rod->AddOperatorFromAuthority(PlayerState, Command.Context.ExpectedRodActorRevision, CommittedSlotIndex)
 		|| CommittedSlotIndex != RequestedSlotIndex)
 	{
-		// 接力转移已成功但占位失败：把会话交还原状不可行（原钓手可能已离线），保守起见维持转移结果，
-		// 下一次 E 重试占位即可（会话钓手已是本人，TransferSessionFisher 幂等）。
 		Result.Error = ECatFishingCommandError::RodActorRevisionConflict;
+		return Result;
+	}
+	if (bNeedsSessionTakeover && !TransferSessionFisher(BoundSession, Controller))
+	{
+		// 先占主位再迁移会话，避免 Runner 已切给新玩家但鱼竿占位因 Revision 冲突失败。
+		// 迁移拒绝时用刚提交后的精确 Revision 回滚本次新占位；同一服务器调用栈内不会夹入第二次写入。
+		APlayerState* IgnoredPromotion = nullptr;
+		if (!Rod->RemoveOperatorFromAuthority(PlayerState,
+			Rod->GetPresentationState().RodActorRevision, IgnoredPromotion))
+		{
+			UE_LOG(LogCatFishing, Error,
+				TEXT("Event=fishing_takeover_slot_rollback_failed SessionId=%s Rod=%s PlayerState=%s RodRevision=%lld"),
+				*BoundSession->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				*GetNameSafe(Rod), *GetNameSafe(PlayerState), Rod->GetPresentationState().RodActorRevision);
+		}
+		Result.Error = ECatFishingCommandError::RodOccupied;
 		return Result;
 	}
 	// 站位是地面点，统一抬高胶囊半高并锁移动；0 号位在右、1 号位在左。
 	SnapCharacterToRodSlot(*Character, *Rod, CommittedSlotIndex);
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_rod_operator_joined Rod=%s RodId=%s Slot=%d OperatorCount=%d Takeover=%s SessionId=%s %s"),
+		*GetNameSafe(Rod), *State.RodActorId.ToString(EGuidFormats::DigitsWithHyphens), CommittedSlotIndex,
+		Rod->GetOperatorCount(), bNeedsSessionTakeover ? TEXT("true") : TEXT("false"),
+		BoundSession ? *BoundSession->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens)
+			: TEXT("Invalid"),
+		*CatLogContext::BuildControllerFields(Controller));
 	Result.bCommitted = true;
 	Result.Error = ECatFishingCommandError::None;
 	Result.RodActorId = State.RodActorId;
@@ -472,30 +503,34 @@ FCatFishingCommandResult UCatFishingService::LeaveRod(AController* Controller, c
 		Result.Error = ECatFishingCommandError::RodActorRevisionConflict;
 		return Result;
 	}
-	// 主位离开且仍有人时，数组会把原左位晋升到右主位。若竿上有可接力会话，先同步转移钓手身份；
-	// 辅助位离开不触碰会话。搏斗期离开的终止语义仍由命令分派层先处理。
-	APlayerState* PromotionCandidate = LeavingSlotIndex == 0 && State.OperatorPlayerStates.Num() > 1
-		? State.OperatorPlayerStates[1] : nullptr;
-	if (PromotionCandidate)
-	{
-		if (ACatFishingSession* BoundSession = FindActiveSessionByRod(Rod))
-		{
-			const ECatFishingPhase Phase = BoundSession->GetSnapshot().Phase;
-			const bool bTransferable = Phase == ECatFishingPhase::Waiting || Phase == ECatFishingPhase::Probe
-				|| Phase == ECatFishingPhase::TrueBiteWindow;
-			APlayerController* PromotedController = FindControllerForPlayerState(GetWorld(), PromotionCandidate);
-			if (!bTransferable || !PromotedController || !TransferSessionFisher(BoundSession, PromotedController))
-			{
-				Result.Error = ECatFishingCommandError::RodOccupied;
-				return Result;
-			}
-		}
-	}
+	// 先提交离位，再按实际晋升结果迁移会话，避免 Revision 冲突时 Runner 已错误切给辅助位。
+	// 接力依赖暂不满足时也不能阻止原操作手离开，鱼竿会话进入无人值守态。辅助位离开不触碰会话。
+	ACatFishingSession* BoundSession = LeavingSlotIndex == 0 ? FindActiveSessionByRod(Rod) : nullptr;
 	APlayerState* PromotedPrimary = nullptr;
 	if (!Rod->RemoveOperatorFromAuthority(PlayerState, Command.Context.ExpectedRodActorRevision, PromotedPrimary))
 	{
 		Result.Error = ECatFishingCommandError::RodActorRevisionConflict;
 		return Result;
+	}
+	bool bSessionTransferredToPromotion = false;
+	if (PromotedPrimary && BoundSession)
+	{
+		const ECatFishingPhase Phase = BoundSession->GetSnapshot().Phase;
+		const bool bTransferable = Phase == ECatFishingPhase::Waiting || Phase == ECatFishingPhase::Probe
+			|| Phase == ECatFishingPhase::TrueBiteWindow || Phase == ECatFishingPhase::HookedFight;
+		if (bTransferable)
+		{
+			if (APlayerController* PromotedController = FindControllerForPlayerState(GetWorld(), PromotedPrimary))
+			{
+				bSessionTransferredToPromotion = TransferSessionFisher(BoundSession, PromotedController);
+			}
+		}
+	}
+	// 离开只释放操作输入与站位，不把会话写成 Escaped/Terminated。即使正处于搏斗，结果也应由鱼线、
+	// 体力、主动取消或其他明确终局规则产生，而不是由角色和鱼竿的距离产生。
+	if (BoundSession && !bSessionTransferredToPromotion)
+	{
+		BoundSession->SuspendOperatorFromAuthority();
 	}
 	// 离开竿位：解除操作期的移动锁定。
 	if (const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr)
@@ -515,6 +550,13 @@ FCatFishingCommandResult UCatFishingService::LeaveRod(AController* Controller, c
 			}
 		}
 	}
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_rod_operator_left Rod=%s RodId=%s LeavingSlot=%d RemainingOperators=%d Promoted=%s SessionId=%s %s"),
+		*GetNameSafe(Rod), *State.RodActorId.ToString(EGuidFormats::DigitsWithHyphens), LeavingSlotIndex,
+		Rod->GetOperatorCount(), *GetNameSafe(PromotedPrimary),
+		BoundSession ? *BoundSession->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens)
+			: TEXT("Invalid"),
+		*CatLogContext::BuildControllerFields(Controller));
 	Result.bCommitted = true;
 	Result.Error = ECatFishingCommandError::None;
 	Result.RodActorId = Command.Context.RodActorId;
@@ -530,14 +572,12 @@ FCatFishingCommandResult UCatFishingService::PackRod(AController* Controller, co
 	APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
 	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
 	ACatFishingRodActor* Rod = FindDeployedRod(PlayerState);
-	FGuid SessionId;
-	FCatFishingSessionSnapshot Snapshot;
 	if (!Rod || !Character || Rod->GetPresentationState().RodActorId != Command.Context.RodActorId)
 	{
 		Result.Error = ECatFishingCommandError::NoRod;
 		return Result;
 	}
-	if (Rod->GetOperatorCount() > 0 || TryGetActiveSessionForController(Controller, SessionId, Snapshot)
+	if (Rod->GetOperatorCount() > 0 || FindActiveSessionByRod(Rod)
 		|| FVector::DistSquared(Character->GetActorLocation(), Rod->GetActorLocation()) > FMath::Square(250.0))
 	{
 		Result.Error = ECatFishingCommandError::ActiveSessionExists;
@@ -586,7 +626,7 @@ FCatDomainCommandResult UCatFishingService::SubmitFightAssist(const FGuid Fishin
 	return Result;
 }
 
-// 抢抄转发流程：只定位 Session 并转发；首个合法胜者与 FishInstance 创建完全在 Session→Items Compare-and-Commit 中决定。
+// 抄网转发流程：只定位 Session 并转发；范围裁决、世界鱼创建与嘴叼交接全部由 Session 原子收敛。
 FCatScoopResult UCatFishingService::RequestScoop(const FGuid FishingSessionId, AController* ScoopingController,
 	const FCatScoopCommand& Command)
 {
@@ -603,7 +643,8 @@ FCatScoopResult UCatFishingService::RequestScoop(const FGuid FishingSessionId, A
 	return Result;
 }
 
-// Character 中断流程：遍历存活弱引用，精确命中钓手或协作者后终止；Resolved 会话自行保持终态。
+// Character 中断流程：先终止该 Character 参与的存活会话，再释放其竿位和 Fishing 移动锁。
+// 释放不能留给玩家再次按键：倒地后 Fishing gate 已关闭，若仍要求走 LeaveRod 就会形成永久 MOVE_None。
 void UCatFishingService::TerminateSessionsForCharacter(const ACatCharacter* Character)
 {
 	CompactSessions();
@@ -615,17 +656,132 @@ void UCatFishingService::TerminateSessionsForCharacter(const ACatCharacter* Char
 		}
 	}
 	CompactSessions();
+	ReleaseOperatorForCharacter(Character);
 }
 
-// Teardown 流程：永久关闭新入口，并让每个存活会话进入 Terminated；不等待旧半场或创建补偿鱼。
+// Run 钓鱼窗口关闭流程：终止当前半场并释放所有竿位/移动锁，但不关闭 World 级命令门；下一天仍可重新上竿。
+void UCatFishingService::SuspendFishingAndReleaseOperators()
+{
+	TerminateAllSessionsAndReleaseOperators(TEXT("Fishing window closed"));
+}
+
+// Teardown 流程：永久关闭新入口，并让每个存活会话进入 Terminated；随后释放全部竿位，不能把 MOVE_None 带进结算或退出流程。
 void UCatFishingService::CloseCommandsAndTerminateAll()
 {
 	bCommandsOpen = false;
+	TerminateAllSessionsAndReleaseOperators(TEXT("Run teardown"));
+}
+
+void UCatFishingService::TerminateAllSessionsAndReleaseOperators(const TCHAR* DiagnosticReason)
+{
 	for (const TPair<FGuid, TWeakObjectPtr<ACatFishingSession>>& Pair : Sessions)
 	{
 		if (ACatFishingSession* Session = Pair.Value.Get())
 		{
-			Session->TerminateSession(ECatFishingOutcome::Invalidated, TEXT("Run teardown"));
+			Session->TerminateSession(ECatFishingOutcome::Invalidated, DiagnosticReason);
+		}
+	}
+	CompactSessions();
+	ReleaseAllRodOperatorsAndRestoreMovement();
+}
+
+void UCatFishingService::ReleaseOperatorForCharacter(const ACatCharacter* Character)
+{
+	if (!Character)
+	{
+		return;
+	}
+
+	APlayerState* PlayerState = Character->GetPlayerState();
+	ACatFishingRodActor* Rod = FindRodOperatedBy(PlayerState);
+	bool bRemoved = false;
+	APlayerState* PromotedPrimary = nullptr;
+	if (PlayerState && Rod)
+	{
+		const int64 ExpectedRevision = Rod->GetPresentationState().RodActorRevision;
+		bRemoved = Rod->RemoveOperatorFromAuthority(PlayerState, ExpectedRevision, PromotedPrimary);
+		if (!bRemoved)
+		{
+			UE_LOG(LogCatFishing, Error,
+				TEXT("Event=fishing_operator_force_release_failed PlayerState=%s RodActorId=%s Revision=%lld"),
+				*GetNameSafe(PlayerState),
+				*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens), ExpectedRevision);
+		}
+	}
+
+	// 角色已经失去钓鱼资格；即使竿状态异常也必须解除由 Fishing 写入的 MOVE_None，避免门关后永久卡死。
+	if (UCharacterMovementComponent* Movement = Character->GetCharacterMovement())
+	{
+		Movement->SetMovementMode(MOVE_Walking);
+	}
+
+	if (bRemoved && PromotedPrimary)
+	{
+		if (APlayerController* PromotedController = FindControllerForPlayerState(GetWorld(), PromotedPrimary))
+		{
+			if (ACatCharacter* PromotedCharacter = Cast<ACatCharacter>(PromotedController->GetPawn()))
+			{
+				SnapCharacterToRodSlot(*PromotedCharacter, *Rod, 0);
+			}
+		}
+	}
+}
+
+void UCatFishingService::ReleaseAllRodOperatorsAndRestoreMovement()
+{
+	CompactDeployedRods();
+	TSet<ACatFishingRodActor*> ProcessedRods;
+	for (const TPair<TWeakObjectPtr<APlayerState>, TWeakObjectPtr<ACatFishingRodActor>>& Pair : DeployedRodByPlayerState)
+	{
+		ACatFishingRodActor* Rod = Pair.Value.Get();
+		if (!Rod || ProcessedRods.Contains(Rod))
+		{
+			continue;
+		}
+		ProcessedRods.Add(Rod);
+		ReleaseRodOperatorsAndRestoreMovement(Rod);
+	}
+}
+
+void UCatFishingService::ReleaseRodOperatorsAndRestoreMovement(ACatFishingRodActor* Rod)
+{
+	if (!Rod)
+	{
+		return;
+	}
+
+	// RemoveOperator 会压紧数组，因此必须先复制原操作人列表，再按当前 Revision 逐个移除。
+	const TArray<TObjectPtr<APlayerState>> Operators = Rod->GetPresentationState().OperatorPlayerStates;
+	for (APlayerState* Operator : Operators)
+	{
+		if (!Operator)
+		{
+			continue;
+		}
+		APlayerState* IgnoredPromotion = nullptr;
+		const int64 ExpectedRevision = Rod->GetPresentationState().RodActorRevision;
+		if (!Rod->RemoveOperatorFromAuthority(Operator, ExpectedRevision, IgnoredPromotion))
+		{
+			UE_LOG(LogCatFishing, Error,
+				TEXT("Event=fishing_operator_window_release_failed PlayerState=%s RodActorId=%s Revision=%lld"),
+				*GetNameSafe(Operator),
+				*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens), ExpectedRevision);
+		}
+
+		ACatCharacter* OperatorCharacter = Cast<ACatCharacter>(Operator->GetPawn());
+		if (!OperatorCharacter)
+		{
+			if (APlayerController* Controller = FindControllerForPlayerState(GetWorld(), Operator))
+			{
+				OperatorCharacter = Cast<ACatCharacter>(Controller->GetPawn());
+			}
+		}
+		if (OperatorCharacter)
+		{
+			if (UCharacterMovementComponent* Movement = OperatorCharacter->GetCharacterMovement())
+			{
+				Movement->SetMovementMode(MOVE_Walking);
+			}
 		}
 	}
 }
@@ -643,32 +799,31 @@ ACatFishingSession* UCatFishingService::FindSession(const FGuid FishingSessionId
 	return Session && !Session->IsTerminal() ? Session : nullptr;
 }
 
-// Controller 活动会话查询：所有输出先清零，再交叉验证服务器身份、正反索引、存活 Session 与公开 SessionId。
+// Controller 活动会话查询：所有输出先清零，再按当前主操作位定位鱼竿及其唯一活动 Session。
+// 玩家离开某根竿后，那根竿的会话继续运行，但不会继续截获该玩家在另一根竿上的输入。
 bool UCatFishingService::TryGetActiveSessionForController(const AController* Controller,
 	FGuid& OutFishingSessionId, FCatFishingSessionSnapshot& OutSnapshot)
 {
 	OutFishingSessionId.Invalidate();
 	OutSnapshot = FCatFishingSessionSnapshot{};
 	CompactSessions();
-	const FString StableNetId = ResolveStableNetId(Controller);
-	const FGuid* MappedSessionId = StableNetId.IsEmpty() ? nullptr : ActiveSessionByFisher.Find(StableNetId);
-	if (!MappedSessionId || !MappedSessionId->IsValid())
+	APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
+	ACatFishingRodActor* Rod = FindRodOperatedBy(PlayerState);
+	if (!Rod || !Rod->IsPrimaryOperator(PlayerState))
 	{
 		return false;
 	}
-	const FGuid SessionId = *MappedSessionId;
-	const FString MappedFisherId = SessionFisherById.FindRef(SessionId);
-	ACatFishingSession* Session = FindSession(SessionId);
-	if (!Session || MappedFisherId != StableNetId)
+	ACatFishingSession* Session = FindActiveSessionByRod(Rod);
+	if (!Session || Session->GetSnapshot().FisherPlayerState != PlayerState)
 	{
 		return false;
 	}
 	const FCatFishingSessionSnapshot& Snapshot = Session->GetSnapshot();
-	if (Snapshot.FishingSessionId != SessionId)
+	if (!Snapshot.FishingSessionId.IsValid() || Snapshot.RodActor != Rod)
 	{
 		return false;
 	}
-	OutFishingSessionId = SessionId;
+	OutFishingSessionId = Snapshot.FishingSessionId;
 	OutSnapshot = Snapshot;
 	return true;
 }
@@ -721,8 +876,10 @@ ACatFishingRodActor* UCatFishingService::FindNearestOperableRod(const FVector& W
 	{
 		ACatFishingRodActor* Rod = Pair.Value.Get();
 		if (!Rod || !Rod->GetPresentationState().bDeployed || Rod->GetPresentationState().bBroken) continue;
+		// 当前运行版只开放主操作位；辅助槽底层结构保留，但在 CooperativeFishing 完成前不参与 R 键候选。
+		if (Rod->GetOperatorCount() != 0) continue;
 		const int32 FreeSlotIndex = Rod->GetFirstFreeOperatorSlotIndex();
-		if (FreeSlotIndex == INDEX_NONE) continue;
+		if (FreeSlotIndex != 0) continue;
 		const double DistanceSquared = FVector::DistSquared(WorldLocation,
 			Rod->GetOperatorStandWorldTransform(FreeSlotIndex).GetLocation());
 		if (DistanceSquared <= BestDistanceSquared)
@@ -757,7 +914,7 @@ ACatFishingSession* UCatFishingService::FindNearestScoopableSession(const FVecto
 		ACatFishingSession* Session = Pair.Value.Get();
 		const ACatFishEncounterActor* Fish = Session ? Session->GetSnapshot().FishEncounterActor : nullptr;
 		// 与 Session::RequestScoop 的阶段口径保持一致：搏斗中和近岸都可抢抄（鱼身上的圈一直存在）。
-		// 这里只做粗筛路由，真正的射线∩圆判定和 Compare-and-Commit 都在 Session 内部。
+		// 这里只做粗筛路由，真正的射线∩圆判定和嘴叼世界鱼交接都在 Session 内部。
 		const ECatFishingPhase Phase = Session ? Session->GetSnapshot().Phase : ECatFishingPhase::Created;
 		if (!Session || Session->IsTerminal() || !Fish
 			|| (Phase != ECatFishingPhase::HookedFight && Phase != ECatFishingPhase::NearShore
@@ -775,28 +932,15 @@ ACatFishingSession* UCatFishingService::FindNearestScoopableSession(const FVecto
 	return Best;
 }
 
-// 接力转移编排：新钓手不能已有自己的活跃会话（单活跃槽位不变量）；会话转移成功后才动正反索引，保持两边一致。
+// 接力转移编排：会话唯一性由鱼竿保证；等口只迁移身份，HookedFight 由 Session 连同 Runner 资源一起迁移。
 bool UCatFishingService::TransferSessionFisher(ACatFishingSession* Session, AController* NewFisherController)
 {
 	CompactSessions();
 	const FString NewFisherId = ResolveStableNetId(NewFisherController);
 	if (!Session || Session->IsTerminal() || NewFisherId.IsEmpty()) return false;
-	const FGuid SessionId = Session->GetSnapshot().FishingSessionId;
-	const FString OldFisherId = SessionFisherById.FindRef(SessionId);
-	if (OldFisherId == NewFisherId) return true; // 已是当前钓手：幂等成功。
-	if (const FGuid* Existing = ActiveSessionByFisher.Find(NewFisherId); Existing && FindSession(*Existing))
-	{
-		return false; // 新钓手自己的会话还活着，不能同时接管别人的。
-	}
+	if (Session->GetFisherStableNetIdForAuthority() == NewFisherId) return true;
 	if (!Session->TransferFisherFromAuthority(NewFisherController)) return false;
-	if (!OldFisherId.IsEmpty() && ActiveSessionByFisher.FindRef(OldFisherId) == SessionId)
-	{
-		ActiveSessionByFisher.Remove(OldFisherId);
-	}
-	SessionFisherById.Add(SessionId, NewFisherId);
-	ActiveSessionByFisher.Add(NewFisherId, SessionId);
-	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_session_fisher_reindexed SessionId=%s NewFisher=%s"),
-		*SessionId.ToString(EGuidFormats::DigitsWithHyphens), *NewFisherId);
+	// 成功事件由 Session 的唯一状态写口记录完整且脱敏的 Controller 上下文，服务层不再重复输出原始 StableNetId。
 	return true;
 }
 
@@ -821,17 +965,22 @@ bool UCatFishingService::RegisterDeployedRod(APlayerState* PlayerState, ACatFish
 void UCatFishingService::UnregisterDeployedRod(const APlayerState* PlayerState,
 	const ACatFishingRodActor* ExpectedRodActor)
 {
-	CompactDeployedRods();
 	if (!PlayerState || !ExpectedRodActor)
 	{
+		CompactDeployedRods();
 		return;
 	}
 	const TWeakObjectPtr<APlayerState> PlayerKey(const_cast<APlayerState*>(PlayerState));
 	const TWeakObjectPtr<ACatFishingRodActor>* Existing = DeployedRodByPlayerState.Find(PlayerKey);
-	if (Existing && Existing->Get() == ExpectedRodActor)
+	// EndPlay 时普通 Weak.Get() 已可能返回空；允许 pending-kill 读取只用于和调用方 Actor 做同一性校验及最终补偿。
+	ACatFishingRodActor* ExistingRod = Existing ? Existing->Get(true) : nullptr;
+	if (ExistingRod == ExpectedRodActor)
 	{
+		// EndPlay/异常销毁也从这里注销；先恢复该竿全部操作人的移动，不能只丢掉 Registry 线索。
+		ReleaseRodOperatorsAndRestoreMovement(ExistingRod);
 		DeployedRodByPlayerState.Remove(PlayerKey);
 	}
+	CompactDeployedRods();
 }
 
 // Session 诊断流程：逐项统计存活且未终态会话，不把弱 Map 的物理条目数误报为活动数量。
@@ -864,7 +1013,7 @@ int32 UCatFishingService::GetDeployedRodCountForDiagnostics() const
 	return LiveRodCount;
 }
 
-// 弱索引压缩流程：移除已销毁或 Resolved/Terminated 会话，并用会话到身份反向键释放精确单活跃槽位；开始终态缓存保留供网络重放。
+// 弱索引压缩流程：移除已销毁或 Resolved/Terminated 会话；开始终态缓存保留供网络重放。
 void UCatFishingService::CompactSessions()
 {
 	for (auto It = Sessions.CreateIterator(); It; ++It)
@@ -872,13 +1021,6 @@ void UCatFishingService::CompactSessions()
 		ACatFishingSession* Session = It.Value().Get();
 		if (!Session || Session->IsTerminal())
 		{
-			const FGuid SessionId = It.Key();
-			const FString StableNetId = SessionFisherById.FindRef(SessionId);
-			if (!StableNetId.IsEmpty() && ActiveSessionByFisher.FindRef(StableNetId) == SessionId)
-			{
-				ActiveSessionByFisher.Remove(StableNetId);
-			}
-			SessionFisherById.Remove(SessionId);
 			It.RemoveCurrent();
 		}
 	}
@@ -896,7 +1038,7 @@ void UCatFishingService::CompactDeployedRods()
 	}
 }
 
-// 身份解析流程：只读当前 Controller 的继承 UniqueId；它仅作为服务器私有幂等/单活跃键，不进入 Fishing 公开快照。
+// 身份解析流程：只读当前 Controller 的继承 UniqueId；它用于服务器私有幂等和参与者身份，不进入 Fishing 公开快照。
 FString UCatFishingService::ResolveStableNetId(const AController* Controller)
 {
 	const APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;

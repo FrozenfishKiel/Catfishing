@@ -18,7 +18,7 @@ public:
 	/** 判断正式运行配置是否具备显式总 gate、StateTree 资产、正响应/终态复制窗口与近岸几何；任一未裁字段都返回 false。 */
 	bool IsRuntimeReady() const;
 
-	/** 读取服务器近岸目标到抢抄者的正 reach；未配置或 runtime gate 关闭时清零并返回 false。 */
+	/** 读取服务器抄网射线的正 reach；未配置或 runtime gate 关闭时清零并返回 false。 */
 	bool TryGetScoopReach(double& OutReachCentimeters) const;
 	/** 读取有限正抄网冷却；非法配置清零并返回 false，服务器据此 fail-closed。 */
 	bool TryGetScoopCooldown(double& OutCooldownSeconds) const;
@@ -73,8 +73,6 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0", ClampMax="1"))
 	double FishExhaustionThreshold = 0.5;
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0")) double EscapeSlackCentimeters = 100.0;
-	/** 兼容旧 StateTree/调试资产的近岸线长；正式抢抄只使用射线几何，靠岸不再终止搏斗。 */
-	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0")) double NearShoreLineLengthCentimeters = 100.0;
 
 	/** 一根部署鱼竿最多可占用的操作位；当前产品使用左右两位，数组/站位算法预留到更多协作者。 */
 	UPROPERTY(Config, EditAnywhere, Category="Rod|Operators", meta=(ClampMin="1", ClampMax="8"))

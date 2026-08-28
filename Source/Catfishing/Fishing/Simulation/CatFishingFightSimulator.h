@@ -7,7 +7,7 @@
 enum class ECatFightStepOutcome : uint8
 {
 	None,
-	/** 鱼体力归零 → 翻肚（D 归零，可抄/可继续收至竿尖水面投影）。 */
+	/** 鱼体力归零 → 在当前位置翻肚，可抄或继续收至竿尖水面投影。 */
 	FishExhausted,
 	/** 猫体力归零 → 力竭被拖下水（规格 4.4 归零优先级第 2 位）。 */
 	CatStaminaExhausted,
@@ -15,11 +15,9 @@ enum class ECatFightStepOutcome : uint8
 	LineBroken,
 	/** 数值异常：鱼距超出线长上限 + 松弛裕度；正常规则下不应出现。 */
 	Escaped,
-	/** 鱼距 ≤ 近岸线长阈值 → 进入 NearShore。 */
-	NearShore,
 	/** 判定②：向外游+拖 且 鱼力 ≥ 猫力 → 猫被拖下水。 */
 	DraggedIntoWater,
-	/** 判定③：向外游+拖 且 猫力 ≥ 鱼力×比 → 碾压，鱼直接力竭侧翻（D 归零）。 */
+	/** 判定③：向外游+拖 且 猫力 ≥ 鱼力×比 → 碾压，鱼在当前位置直接力竭侧翻。 */
 	Overpowered
 };
 
@@ -46,8 +44,17 @@ struct CATFISHING_API FCatFightSimulationConfig
 {
 	double FixedStepSeconds = 0.0;
 
-	/** 三方力量：猫品种力量 / 鱼种力量（含完美折减）/ 钓组静态承载强度。 */
-	double CatStrength = 0.0;
+	/** 当前唯一能提交搏斗输入的主操作猫力量。 */
+	double PrimaryOperatorCatStrength = 0.0;
+	/** 第二只猫的力量贡献预留槽；参与方式与协作输入确定前，运行时保持为 0。 */
+	double SecondCatStrength = 0.0;
+	/** 猫的总体力量固定为两只猫贡献相加；单人场景的第二项为 0。 */
+	double GetCombinedCatStrength() const
+	{
+		return PrimaryOperatorCatStrength + SecondCatStrength;
+	}
+
+	/** 三方力量中的另两项：鱼种力量（含完美折减）/ 钓组静态承载强度。 */
 	double FishStrength = 0.0;
 	double RodStrength = 0.0;
 
@@ -58,11 +65,15 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double InwardPullCatDrainPerFishStrength = 0.15;
 	/** 向内游+拖：鱼体力消耗 = 猫力 × 本系数 /秒。拖永远双方掉体力，顺从/挣扎只是系数档位不同。 */
 	double InwardPullFishDrainPerCatStrength = 0.08;
+	/** 鱼性格的平静/顺从期体力消耗倍率。 */
+	double BaseDrainMultiplier = 1.0;
+	/** 鱼性格的挣扎期体力消耗倍率；必须高于平静倍率。 */
+	double StruggleDrainMultiplier = 2.0;
 	/** 僵持每秒：本场鱼线耐久 -= 鱼力×0.1；鱼体力 -= 猫力×0.08；猫体力 -= 鱼力×0.12。 */
 	double StalemateRodWearPerFishStrength = 0.1;
 	double StalemateFishDrainPerCatStrength = 0.08;
 	double StalemateCatDrainPerFishStrength = 0.12;
-	/** 发力期松开线杯且尚未到线长上限：猫体力回复 /秒（规格 1.5）。 */
+	/** 右键持续按住期间的猫体力回复 /秒（规格 1.5）；不依赖游向、实际出线或当前线长。 */
 	double SlackStaminaRegenPerSecond = 1.5;
 
 	/** 鱼挣扎且线杯未松开、鱼线绷紧时的本场鱼线基础磨损 /秒。 */
@@ -91,7 +102,6 @@ struct CATFISHING_API FCatFightSimulationConfig
 	/** 本场鱼线耐久总量；旧字段名为兼容现有配置保留，每次新会话都会重置。 */
 	double RodDurability = TNumericLimits<double>::Max();
 	double EscapeSlackCentimeters = 100.0;
-	double NearShoreLineLengthCentimeters = 100.0;
 
 	bool IsValid() const;
 };
@@ -99,6 +109,8 @@ struct CATFISHING_API FCatFightSimulationConfig
 /** 可变数值状态；世界位置每步开始从 Encounter Actor 复制。 */
 struct CATFISHING_API FCatFightSimulationState
 {
+	/** 当前是否有主操作手；无人接管时 CatAction 固定为 Slack，但不结算任何玩家力量或体力。 */
+	bool bOperatorPresent = true;
 	double CatStamina = 0.0;
 	double FishStamina = 0.0;
 	/** 已放出的线长 L_paid；左键收短，右键松线时只随鱼实际外游被动增长，不按键时固定。 */
@@ -115,6 +127,8 @@ struct CATFISHING_API FCatFightSimulationState
 struct CATFISHING_API FCatFightStepResult
 {
 	bool bSucceeded = false;
+	/** 本步鱼主动选择的自由游速，单位 cm/s；在线长、岸线和水域约束前产生，仅供表现层表达游动意图。 */
+	double IntendedSwimSpeedCentimetersPerSecond = 0.0;
 	/** 正值=消耗，负值=回复（松开线杯喘气）。 */
 	double CatStaminaDrain = 0.0;
 	double FishStaminaDrain = 0.0;

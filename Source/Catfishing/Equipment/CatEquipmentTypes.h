@@ -16,7 +16,7 @@ enum class ECatEquipmentKind : uint8
 	Bait,
 	/** 四种正式玩法路线之一的鱼漂。 */
 	Float,
-	/** 近岸抢抄工具；它不改变首个合法抢抄规则。 */
+	/** 已上钩鱼的范围抄取工具；不读取鱼的剩余体力。 */
 	ScoopNet,
 	/** 共享聚鱼池的窝料。 */
 	Chum,

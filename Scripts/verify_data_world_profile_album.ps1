@@ -103,6 +103,8 @@ function Invoke-ModuleStaticCheck {
     Assert-TextPattern "CommitCaptureRecordsSingleFishGrant" "Source/Catfishing/Collection/Tests/CatItemsCollectionSliceTests.cpp" "items to collection slice automation"
     Assert-TextPattern "ManifestChunksHashCursorAndRecipientAuth" "Source/Catfishing/Collection/Tests/CatImprintMediaTransportServiceTests.cpp" "imprint media automation"
     Assert-TextPattern "DuplicateRuntimeDefinitionsFailClosed" "Source/Catfishing/Data/Tests/CatFishCatalogSettingsTests.cpp" "data catalog fail closed automation"
+    Assert-TextPattern "ShowcaseRiverSelectsFormalFishCatalog" "Source/Catfishing/Data/Tests/CatFishCatalogSettingsTests.cpp" "Showcase formal fish catalog automation"
+    Assert-TextPattern "SHOWCASE_FORMAL_FISH_REGION_VERIFY_PASS" "Scripts/verify_showcase_formal_fish_region.py" "Showcase River map verification entry"
 }
 
 function Invoke-ModuleBuild {
@@ -189,7 +191,14 @@ function Invoke-ModuleAutomation {
             "Catfishing.Unit.Data.FishDefinition.ChumPreferenceAndBaitMultipliersMustBeValid",
             "Catfishing.Unit.Data.FishDefinition.BiteAndFightPersonalitiesFailClosed",
             "Catfishing.Unit.Data.FishCatalog.DuplicateRuntimeDefinitionsFailClosed",
-            "Catfishing.Unit.Data.FishCatalog.ZeroLocalChumAndUnlistedBaitAreNeutral"
+            "Catfishing.Unit.Data.FishCatalog.ZeroLocalChumAndUnlistedBaitAreNeutral",
+            "Catfishing.Unit.Data.FishCatalog.RiskyFishAllowedUntilChallengeSafetyCeiling",
+            "Catfishing.Unit.Data.FishCatalog.AvailableChallengeBandsFollowConfiguredMix",
+            "Catfishing.Unit.Data.FishCatalog.EnduranceOnlyFishDoesNotOccupyMatchedBand",
+            "Catfishing.Unit.Data.FishCatalog.MissingWeightedBandFallsBackToAvailableFish",
+            "Catfishing.Unit.Data.FishCatalog.TargetChallengeOutweighsDistantFishWithinBand",
+            "Catfishing.Unit.Data.FishCatalog.ShowcaseRiverSelectsFormalFishCatalog",
+            "Catfishing.Unit.Data.FishCatalog.ShowcaseRiverProducesVariedFightStrengths"
         )
     }
     $Batches += [pscustomobject]@{

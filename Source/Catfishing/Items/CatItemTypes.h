@@ -299,15 +299,15 @@ struct FCatCaptureCommittedResult
 {
 	GENERATED_BODY()
 
-	/** 首次成功抢抄请求 ID；同一会话后续请求只能读取该终态。 */
+	/** 嘴叼世界鱼首次成功入箱的请求 ID；同一会话后续请求只能读取该终态。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid CaptureRequestId;
 
-	/** 已原子关闭捕获竞争的 FishingSession ID。 */
+	/** 已原子关闭入箱竞争的 FishingSession ID。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid FishingSessionId;
 
-	/** 唯一创建的鱼实例；其 OwnerStableNetId 必须等于首个合法抢抄者。 */
+	/** 唯一创建的鱼实例；其 OwnerStableNetId 必须等于提交这条嘴叼鱼的玩家。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatFishInstance FishInstance;
 

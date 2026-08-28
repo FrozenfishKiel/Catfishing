@@ -153,20 +153,25 @@ void ACatFishEncounterActor::ApplyVisualPose()
 
 bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionIntent MotionIntent,
 	const double CurrentLineLength, const FVector& FishWorldPosition, const float StepDeltaSeconds,
-	const float FishLineAlignment, const float NormalizedLineLoad, const bool bStrongConfrontation)
+	const float FishLineAlignment, const float NormalizedLineLoad,
+	const float IntendedSwimSpeedCentimetersPerSecond, const bool bStrongConfrontation)
 {
 	// [FishLogic 4/5：权威落位与多人表现]
 	// Simulator 给出事实，本 Actor 只负责在服务器应用 Transform/表现快照；位置和 PresentationState 再复制给客户端。
 	if (!HasAuthority() || !bIdentityInitialized || FishWorldPosition.ContainsNaN()
 		|| !FMath::IsFinite(CurrentLineLength) || CurrentLineLength < 0.0
 		|| !FMath::IsFinite(FishLineAlignment) || FishLineAlignment < -1.0f || FishLineAlignment > 1.0f
-		|| !FMath::IsFinite(NormalizedLineLoad) || NormalizedLineLoad < 0.0f || NormalizedLineLoad > 1.0f)
+		|| !FMath::IsFinite(NormalizedLineLoad) || NormalizedLineLoad < 0.0f || NormalizedLineLoad > 1.0f
+		|| !FMath::IsFinite(IntendedSwimSpeedCentimetersPerSecond)
+		|| IntendedSwimSpeedCentimetersPerSecond < 0.0f)
 	{
 		// 必须已经完成身份初始化才允许推进搏斗表现；位置/线长必须是合法有限值，防止把 NaN/负数同步给客户端。
 		return false;
 	}
 	const FCatFishEncounterPresentationState Previous = PresentationState;
 	PresentationState.MotionIntent = MotionIntent; // 更新鱼当前的运动意图（平静/向外挣扎/自动收线中）供表现层驱动动画。
+	// 复制行为层选中的自由游速，而不是根据最终 Actor 位移反推；鱼被线端或岸线挡住时仍应猛烈甩尾。
+	PresentationState.IntendedSwimSpeedCentimetersPerSecond = IntendedSwimSpeedCentimetersPerSecond;
 	PresentationState.CurrentLineLength = CurrentLineLength; // 更新鱼与浮标/竿之间的当前线长，供表现层估算张力/位置。
 	PresentationState.FishLineAlignment = FishLineAlignment;
 	PresentationState.NormalizedLineLoad = NormalizedLineLoad;

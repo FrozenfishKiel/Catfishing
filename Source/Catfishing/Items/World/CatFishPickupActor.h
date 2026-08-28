@@ -8,6 +8,7 @@
 
 class APlayerState;
 class ACatCharacter;
+class ACatFishingSession;
 class UCatFishDefinition;
 class USkeletalMeshComponent;
 class USphereComponent;
@@ -20,7 +21,7 @@ enum class ECatFishPickupState : uint8
 	Carried
 };
 
-/** 所有客户端可见的岸上鱼只读状态；StableNetId、候选参与者和容器 Revision 永不复制。 */
+/** 所有客户端可见的可携带世界鱼只读状态；StableNetId、候选参与者和容器 Revision 永不复制。 */
 USTRUCT(BlueprintType)
 struct FCatFishPickupPresentationState
 {
@@ -37,7 +38,7 @@ struct FCatFishPickupPresentationState
 };
 
 /**
- * 鱼被拖过岸线后生成的服务器权威世界物品。Actor 没有“原钓手所有权”；任何合法玩家都可先到先得。
+ * 上钩鱼被抄取或力竭拖岸后生成的服务器权威世界物品。Actor 没有“原钓手所有权”；可用时任何合法玩家都可先到先得。
  */
 UCLASS(Blueprintable, meta=(ChildCannotTick))
 class CATFISHING_API ACatFishPickupActor : public AActor, public ICatInteractable
@@ -78,15 +79,28 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void OnRep_AttachmentReplication() override;
 
 private:
+	friend class ACatFishingSession;
+	friend class FCatFishPickupMouthCarryAndGuardStoreTest;
+
 	UFUNCTION() void OnRep_PresentationState(const FCatFishPickupPresentationState& Previous);
 	UFUNCTION() void HandleAuthorityCarrierDestroyed(AActor* DestroyedActor);
 	bool IsAuthorityRequestSpatiallyValid(const AController* RequestingController) const;
 	bool BeginMouthCarryFromAuthority(ACatCharacter* Character, APlayerState* PlayerState);
-	void ApplyCarriedAttachmentFromPresentation();
+	/** 把根组件精确附着到角色 Mesh + Mouth Socket；不能只比较父 Actor。 */
+	bool AttachCarriedRootToMouth(ACatCharacter* Character, const TCHAR* Source, bool bLogCorrection);
+	/** 以复制的 Carried/Available 为最终事实，收敛 AttachmentReplication 与 PresentationState 的到达顺序。 */
+	void ReconcileAttachmentFromPresentation(const TCHAR* Source);
+	void ScheduleAttachmentReconcileRetry();
+	void RetryAttachmentReconcile();
 	void ReleaseMouthCarryFromAuthority(const FVector& DropLocation);
 	void ApplyLocalFocus(bool bFocused);
+	/** Available 状态恢复落地专用 Mesh 位置和旋转，同时保留冻结重量缩放。 */
+	void ApplyLandedVisualTransform();
+	/** Carried 状态清除落地专用 Mesh 位置和旋转，使鱼原点直接对齐嘴部骨骼，同时保留冻结重量缩放。 */
+	void ApplyCarriedVisualTransform();
 	void ApplyVisualScale();
 	void ArchiveCommittedCapture(const FCatCaptureCommittedResult& Committed, const FString& PickerStableNetId);
 
@@ -105,5 +119,8 @@ private:
 	TWeakObjectPtr<ACatCharacter> AuthorityCarrier;
 	bool bIdentityInitialized = false;
 	bool bLocallyFocused = false;
+	FTimerHandle AttachmentReconcileTimer;
+	int32 AttachmentReconcileAttemptCount = 0;
+	bool bAttachmentReconcileRetryExhausted = false;
 	TMap<FString, FCatDomainCommandResult> PickupTerminalByRequester;
 };

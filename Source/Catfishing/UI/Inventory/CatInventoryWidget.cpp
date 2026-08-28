@@ -15,7 +15,7 @@
 namespace
 {
 	// 格子身份比较流程：Widget 只把同一页自己的 Slots 标成本地选中；来源不同但局部下标相同的格子不能互相命中。
-	bool IsSameSlotIdentity(const FCatInventorySlotView& Left, const FCatInventorySlotView& Right)
+	bool IsSameWidgetSlotIdentity(const FCatInventorySlotView& Left, const FCatInventorySlotView& Right)
 	{
 		if (Left.SlotSource != Right.SlotSource)
 		{
@@ -51,7 +51,7 @@ namespace
 		}
 		for (int32 SlotIndex = 0; SlotIndex < Slots.Num(); ++SlotIndex)
 		{
-			if (IsSameSlotIdentity(Slots[SlotIndex], SourceState.SelectedSlot))
+			if (IsSameWidgetSlotIdentity(Slots[SlotIndex], SourceState.SelectedSlot))
 			{
 				return SlotIndex;
 			}

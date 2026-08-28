@@ -36,7 +36,7 @@
 
 | 文件 | 改动 |
 |---|---|
-| `Fishing/Integration/CatFishingCommandComponent.cpp` | `HandleAbilityCommandFromAuthority` 新增 OperateRod（服务器自动找“我部署的竿”）、搏斗中 Primary 按下=收线/松开=停止收线、Scoop（服务器自动填自己的鱼护 ID）三条分支 |
+| `Fishing/Integration/CatFishingCommandComponent.cpp` | `HandleAbilityCommandFromAuthority` 新增 OperateRod（服务器自动找“我部署的竿”）、搏斗中 Primary 按下=收线/松开=停止收线、Scoop（服务器找范围内已上钩鱼并直接嘴叼）三条分支 |
 | `Framework/Game/CatGameplayTypes.h` | `ServerConfigureEquipment` 加 `BlueprintCallable`，蓝图现在能直接调用它提交装备 |
 | `Equipment/CatEquipmentComponent.h` | `GetSnapshot()` 加 `BlueprintPure`，蓝图能读当前 `Revision`/`RodDefinitionId`/`BaitDefinitionId`/`FloatDefinitionId` |
 | `Character/CatCharacter.h` | `GetEquipmentComponent()` / `GetConditionComponent()` 加 `BlueprintPure` |
@@ -59,9 +59,9 @@
 |---|---|---|
 | `DA_CatAbilityInputConfig` | `/Game/Data/Abilities/` | `AbilityInputActions` 保存钓鱼 GAS 映射；`NativeInputActions` 额外保存 `IA_Interact` → `Cat.Input.Interact` |
 | `DA_CatAbilitySet_Default` | `/Game/Data/Abilities/` | 5 个原生 Ability 类；Primary=`WhileInputActive`，其余 `OnInputTriggered` |
-| `DA_Rod_Basic` / `DA_Bait_Basic` / `DA_Float_Basic` / `DA_ScoopNet_Basic` / `DA_Chum_Basic` | `/Game/Data/Equipment/` | Kind 各异，`RequiredUnlockId` 全部留空以走 starter 放行 |
-| `DA_Fish_Test01` | `/Game/Data/Fish/` | `RegionIds=[Showcase_River_01]`，对应关卡里那个湖 |
-| `DA_Bite_Test01` / `DA_Fight_Test01` | `/Game/Data/Fish/` | 被 `DA_Fish_Test01` 按稳定 ID 引用 |
+| `Equip_ScoopNet_Starter` | `/Game/Catfishing/Data/Equipment/` | 正式目录抄网定义 `StarterScoopNet`；当前由开发期开关默认发放，正式获取接入后关闭该开关 |
+| `Fish_*` | `/Game/Catfishing/Data/Fish/` | 16 条正式鱼定义；Showcase2 已使用 `RegionId=River`，按生态条件与连续挑战度从该目录选择 |
+| `Bite_*` / `Fight_*` | `/Game/Catfishing/Data/Fish/` | 正式咬钩与搏斗性格；由选中的 `Fish_*` 稳定 ID 解析 |
 | `Curve_ChumDistanceFalloff` / `Curve_ChumTimeFalloff` | `/Game/Data/Curves/` | 1→0 线性衰减 |
 
 两个最容易踩的校验坑（生成时已规避，改数值时注意别破坏）：
@@ -98,7 +98,7 @@ FishingSessionStateTree=/Game/.../ST_FishingSession.ST_FishingSession   ; ← �
 ### 2.4 StateTree 拓扑（简要重述，细节见前文对话）
 
 - **ST_RunFlow**（Context = `ACatfishingGameModeBase`）：`DayActive → NormalNight/FailureNight → Ending → Ended`，事件只有 `Cat.Run.QuotaReached/QuotaFailed/AllEligibleReady/SettlementComplete`
-- **ST_FishingSession**（Context = `ACatFishingSession`）：`Waiting → Probe → HookedFight → NearShore`，事件只有 `Cat.Fishing.Event.ProbeTriggered/WindowExpired/EarlyHook/HookAccepted/Interrupted`。**树永远不能自然结束**，任何叶子都要停在 `Cat Fishing Wait` 节点上，`Resolved`/`Terminated` 只能由 C++ 写，资产里的 `Enter Phase` Task 选这两个值会直接被拒绝
+- **ST_FishingSession**（Context = `ACatFishingSession`）：`Waiting → Probe → HookedFight → ExhaustedReelHold`；鱼体力耗尽/力量碾压时由 C++ 先进入 `ExhaustedReel`，叶子状态只用 `Cat Fishing Wait` 保持树运行。事件只有 `Cat.Fishing.Event.ProbeTriggered/WindowExpired/EarlyHook/HookAccepted/Interrupted`。**树永远不能自然结束**，`Resolved`/`Terminated` 只能由 C++ 写，资产里的 `Enter Phase` Task 选这两个值会直接被拒绝
 
 ---
 
@@ -163,7 +163,7 @@ Make FCatBeginCastCommand
 - `Cat.Input.Fishing.Primary` 按住不放：`TrueBiteWindow` 阶段=提竿判定，`HookedFight` 阶段=持续收线（哪个阶段由服务器读当前 Session Phase 决定，蓝图端不用关心）
 - 松开：停止收线（或阶段外的无害 no-op）
 - `Cat.Input.Fishing.Cancel`：随时取消当前会话
-- `Cat.Input.Fishing.Scoop` 旧抢抄入口当前保持 fail-closed；正式捕获流程会把力竭鱼拖上岸生成世界死鱼，不再在钓鱼会话里指定鱼护
+- `Cat.Input.Fishing.Scoop`：鱼上钩后即可使用，不读取鱼的剩余体力；服务器范围校验成功后直接进入与岸上死鱼按 E 相同的嘴叼状态，不在钓鱼会话里指定鱼护
 
 ### 3.5 PlaceChum（打窝）—— 单独走一条路，不挂在 `Cat.Input.Fishing.Chum` 键位对应的 Ability 上
 
@@ -220,8 +220,8 @@ Controller.Server Configure Equipment(
 5. 瞄水面按抛竿确认键，确认 `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去后 `Phase` 最终变成 `Landed`（Hook 的 `BP_OnHookPresentationChanged` 应该收到一次带 `Landed` 的回调）
 6. 确认浮漂先慢浮至少 `MinimumBiteDelaySeconds`（当前 5 秒），再快速抖动 `BiteWarningSeconds`（当前 3 秒），然后下沉并进入 `Phase=TrueBiteWindow`
 7. 窗口内按住 Primary，确认提竿成功进 `HookedFight`
-8. 按住 Primary 持续收线，观察 `NormalizedFishStamina` 下降；鱼力竭后继续回收，确认岸上生成可交互的死鱼 Actor
-9. 对死鱼按 `E`，确认猫嘴叼鱼且随身背包没有新增鱼；再对目标地面鱼护按 `E`，确认只写入该鱼护
+8. 鱼仍有体力时先收到抄网射线范围内按 `F`，确认鱼直接挂到猫嘴上；也可继续把鱼力竭后回收，确认岸上生成可交互的死鱼 Actor
+9. F 抄中的鱼应已处于嘴叼状态；力竭落地鱼则先按 `E` 叼起。两条路线都确认随身背包没有新增鱼，再对目标地面鱼护按 `E`，确认只写入该鱼护
 10. 单独测打窝：调用 `SubmitPlaceChum`，确认 `TryGetPlaceChumResult` 返回 `bCommitted=true`，且第 6 步的等待时间因为窝料明显缩短
 
 任何一步卡住，先看对应阶段在本文第 0/1 节里是"开箱可用"还是"需要你自己接线"，再去查 Config/DataAsset 校验链（第 2 节）。

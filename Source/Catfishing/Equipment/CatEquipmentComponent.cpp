@@ -550,9 +550,9 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	// 建立 Fishing 使用预留的流程：
 	// 1. 先用 SessionId 返回已存在的终态，保证 FishingSession 重放不会再检查或再占库存。
 	// 2. 再校验 authority、定义类型、Revision、当前钓鱼选择和鱼竿耐久，任何不一致都保持快照不变。
-	// 3. 接着拒绝正在进行的 Fishing 或 RunConsumable 操作，让鱼饵库存同一时间只有一个写入意图。
+	// 3. 接着拒绝 RunConsumable 并发；Fishing 自身按 SessionId 并行预留，库存可用量统一扣除所有待提交预留。
 	// 4. 鱼竿和鱼漂必须在随身库存中仍有实物；普通饵和特殊饵都必须声明为 RunConsumable，并且格子数量扣除其他 Fishing 预留后仍至少剩一份。
-	// 5. 最后只写入预留记录和 Active Session，不递增 Revision；真正的库存变化留到 Commit 阶段发布。
+	// 5. 最后只写入本 Session 预留记录，不递增 Revision；真正的库存变化留到 Commit 阶段发布。
 	if (const FCatFishingUseRecord* ExistingRecord = FindFishingUseRecord(FishingSessionId))
 	{
 		const bool bReserved = ExistingRecord->bBaitQuantityReserved && !ExistingRecord->bBaitCommitted
@@ -592,10 +592,6 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false);
 	}
-	if (HasActiveFishingUse() || HasActiveRunConsumableUse())
-	{
-		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false);
-	}
 	// 鱼饵是否扣数量由 RunConsumable 决定；SpecialBait 只保留偏好、失败惩罚等玩法语义，不能再绕过库存真相。
 	if (!Bait->bRunConsumable)
 	{
@@ -615,7 +611,6 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	Record.ReservationRevision = Snapshot.Revision;
 	Record.bBaitQuantityReserved = true;
 	FishingUseRecords.Add(FishingSessionId, Record);
-	ActiveFishingUseSessionId = FishingSessionId;
 	return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::None, true);
 }
 
@@ -632,7 +627,7 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBaitDeferred(
 	// 延迟提交鱼饵的流程：
 	// 1. 先找到 Begin 阶段留下的记录；没有记录说明 Fishing 从未拿到装备使用权。
 	// 2. 已释放或已提交的记录只返回终态，不允许重复扣同一份库存。
-	// 3. 只有当前 Active Fishing Session 能提交，避免旧会话在新会话开始后补扣。
+	// 3. 只有该 Session 自己仍处于活动预留态才能提交，旧会话 tombstone 不会补扣。
 	// 4. Begin 已经保护了一份普通或特殊鱼饵，这里只消费那一份并递增快照 Revision。
 	// 5. 只标记已提交，不广播快照；调用方可以先完成 Fishing 自己的终态事件，再显式 Publish。
 	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
@@ -742,7 +737,6 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingRodWear(const
 	Snapshot.RodDurability -= Record->AbsoluteRodWear;
 	Record->bWearCommitted = true;
 	Record->bReleased = true;
-	ActiveFishingUseSessionId.Invalidate();
 	++Snapshot.Revision;
 	PublishSnapshot();
 	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
@@ -767,7 +761,6 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingRodBreak(cons
 	Snapshot.bRodBroken = true;
 	Record->bBreakCommitted = true;
 	Record->bReleased = true;
-	ActiveFishingUseSessionId.Invalidate();
 	++Snapshot.Revision;
 	PublishSnapshot();
 	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
@@ -789,19 +782,22 @@ FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FG
 		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
 	}
 	Record->bReleased = true;
-	ActiveFishingUseSessionId.Invalidate();
 	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
 }
 
 bool UCatEquipmentComponent::HasActiveFishingUse() const
 {
-	return ActiveFishingUseSessionId.IsValid() && IsFishingUseActive(ActiveFishingUseSessionId);
+	for (const TPair<FGuid, FCatFishingUseRecord>& Pair : FishingUseRecords)
+	{
+		if (Pair.Key.IsValid() && !Pair.Value.bReleased) return true;
+	}
+	return false;
 }
 
 bool UCatEquipmentComponent::IsFishingUseActive(const FGuid FishingSessionId) const
 {
 	const FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
-	return FishingSessionId.IsValid() && ActiveFishingUseSessionId == FishingSessionId && Record && !Record->bReleased;
+	return FishingSessionId.IsValid() && Record && !Record->bReleased;
 }
 
 FCatRunConsumableUseResult UCatEquipmentComponent::BeginRunConsumableUse(const FGuid OperationId,

@@ -150,12 +150,17 @@
     "runtime_config": "Config/DefaultGame.ini"
   },
   "retired_assets": {
-    "deleted": [
+    "removed_from_runtime_config": [
       "/Game/Data/Fish/DA_Fish_Test01",
       "/Game/Data/Fish/DA_Bite_Test01",
       "/Game/Data/Fish/DA_Fight_Test01"
     ],
-    "reason": "These assets were prototype-only test seeds. After Config/DefaultGame.ini switched to /Game/Catfishing/Data/Fish formal assets, keeping them in Content/Data/Fish would make the main branch look like it still had a valid test-table path."
+    "retained_binary_assets": [
+      "/Game/Data/Fish/DA_Fish_Test01",
+      "/Game/Data/Fish/DA_Bite_Test01",
+      "/Game/Data/Fish/DA_Fight_Test01"
+    ],
+    "reason": "These prototype-only assets are no longer registered by runtime config. Their binary packages remain until an Unreal Editor reference audit can prove deletion is safe; runtime and verification paths must not use them."
   },
   "blocking_gaps": [],
   "asset_readiness_rule": "This package is ready when generated fish, bite, and fight DataAssets exist, Config/DefaultGame.ini references them instead of DA_Fish_Test01, DA_Bite_Test01, or DA_Fight_Test01, and blocking_gaps is empty. The package remains provisional product content, but no longer blocks the runtime from using formal fish assets."

@@ -32,4 +32,36 @@ public:
 
 	UPROPERTY(Config, EditAnywhere, Category = "Selection")
 	double MaximumChumModifier = 0.0;
+
+	/** 挑战度不高于该值的鱼归入轻松带；挑战度以力量比为下限，并由力量/体力调和均值连续抬升。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Selection|Challenge", meta = (ClampMin = "0.0"))
+	double ComfortChallengeMaximumRatio = 0.0;
+
+	/** 挑战度不高于该值且高于轻松带上限的鱼归入势均力敌带。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Selection|Challenge", meta = (ClampMin = "0.0"))
+	double MatchedChallengeMaximumRatio = 0.0;
+
+	/** 可进入抽取池的挑战度安全上限；允许略强于当前玩家的鱼出现，超过此值仍 fail-closed。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Selection|Challenge", meta = (ClampMin = "0.0"))
+	double MaximumChallengeRatio = 0.0;
+
+	/** 连续挑战权重的峰值位置；越接近该比例，鱼在所属难度带内的相对权重越高。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Selection|Challenge", meta = (ClampMin = "0.0"))
+	double TargetChallengeRatio = 0.0;
+
+	/** 轻松带的抽取权重；只在该带存在候选时参与归一化。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Selection|Challenge", meta = (ClampMin = "0.0"))
+	double ComfortChallengeBandWeight = 0.0;
+
+	/** 势均力敌带的抽取权重；只在该带存在候选时参与归一化。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Selection|Challenge", meta = (ClampMin = "0.0"))
+	double MatchedChallengeBandWeight = 0.0;
+
+	/** 高风险带的抽取权重；只在该带存在候选时参与归一化。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Selection|Challenge", meta = (ClampMin = "0.0"))
+	double RiskyChallengeBandWeight = 0.0;
+
+	/** 难度离目标最远时仍保留的正倍率，避免挑战匹配抹掉鱼饵、窝料和稀有度的生态作用。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Selection|Challenge", meta = (ClampMin = "0.0", ClampMax = "1.0"))
+	double MinimumChallengeWeightMultiplier = 0.0;
 };

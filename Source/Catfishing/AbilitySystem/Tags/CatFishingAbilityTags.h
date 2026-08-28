@@ -27,11 +27,6 @@ namespace CatFishingAbilityTags
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(State_Fishing_RodOperating);
 	/** 抄网再次可用前的独立冷却；不要与正在挥网或未来硬直状态混用。 */
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cooldown_Fishing_Scoop);
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_Caught);
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_RodBroken);
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_LineBroken);
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_CatInWater);
-	UE_DECLARE_GAMEPLAY_TAG_EXTERN(AbilityEvent_Fishing_Outcome_Cancelled);
 	/**
 	 * 非 Fishing 身体动作的 GameplayEvent 标签集合。
 	 * PlayerController 只投递这些事件，Ability 再回到原领域服务；新增动作必须同步补 Command 枚举、标签映射和触发器。
@@ -54,10 +49,12 @@ namespace CatFishingAbilityTags
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(GameplayCue_Fishing_Reel);
 	/**
 	 * 猫身上的一次性表现事件标签（ACatCharacter::Multicast_PlayCosmeticEvent 的载荷）。
-	 * 只给"失败时不留任何权威痕迹"的动作用——挥网落空、提竿空竿，没有状态变化可供表现层读取，
-	 * 但多人派对里其他玩家必须看得到。其余动作（放竿/收竿/断竿/抛竿/打窝）都有复制状态，走各自的表现事件，不重复走这条。
+	 * 挥网、提竿这类输入动作可由命令入口发出；断线/落水只能由 Session 已确认的终局发出。
+	 * Montage 只是外观反馈，不参与终局裁决或角色位移。
 	 */
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cosmetic_Fishing_ScoopSwing);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cosmetic_Fishing_HookPull);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cosmetic_Fishing_LineBroken);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cosmetic_Fishing_CatInWater);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Data_Fishing_FightStaminaDelta);
 }

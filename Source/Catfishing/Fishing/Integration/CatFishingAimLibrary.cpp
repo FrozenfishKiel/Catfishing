@@ -3,6 +3,10 @@
 #include "Engine/World.h"
 #include "Environment/CatChumFieldSettings.h"
 #include "Environment/CatWaterQuerySubsystem.h"
+#include "Character/CatCharacter.h"
+#include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Kismet/GameplayStatics.h"
 
@@ -119,6 +123,44 @@ float UCatFishingAimLibrary::ChargeAlphaFromHeldSeconds(const float HeldSeconds)
 	const double MaxSeconds = FMath::Max(0.05, GetDefault<UCatFishingSettings>()->ChumChargeMaxSeconds);
 	// 按住时长线性映射到 [0,1]，超过上限的按住时间视为满蓄力
 	return static_cast<float>(FMath::Clamp(static_cast<double>(HeldSeconds) / MaxSeconds, 0.0, 1.0));
+}
+
+// 抄网有效长度解析流程：先读取全局上限，再从服务器装备快照读取当前抄网定义；两者必须同时完整。
+// debug 与服务器共用这条入口，避免无装备时仍使用全局值画绿色范围、权威裁决却把距离算成 0。
+bool UCatFishingAimLibrary::TryResolveScoopReach(const UCatEquipmentComponent* Equipment,
+	double& OutReachCentimeters)
+{
+	OutReachCentimeters = 0.0;
+	const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
+	if (!FishingSettings || !FishingSettings->TryGetScoopReach(OutReachCentimeters))
+	{
+		return false;
+	}
+
+	const FName SelectedScoopDefinitionId = Equipment ? Equipment->GetSnapshot().ScoopNetDefinitionId : NAME_None;
+	const UCatEquipmentDefinition* ScoopDefinition = SelectedScoopDefinitionId.IsNone() ? nullptr
+		: GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(SelectedScoopDefinitionId);
+	if (!ScoopDefinition || ScoopDefinition->Kind != ECatEquipmentKind::ScoopNet
+		|| !ScoopDefinition->IsRuntimeDefinitionReady() || ScoopDefinition->ScoopReachCentimeters <= 0.0)
+	{
+		OutReachCentimeters = 0.0;
+		return false;
+	}
+	OutReachCentimeters = FMath::Min(OutReachCentimeters, ScoopDefinition->ScoopReachCentimeters);
+	return FMath::IsFinite(OutReachCentimeters) && OutReachCentimeters > 0.0;
+}
+
+// 抄网是角色身体动作，不是镜头瞄准动作：只取 Character Actor 的水平前向。
+// 服务器裁决和本地 debug 都调用这里，避免任一入口重新引入 Controller/Camera 朝向。
+FVector UCatFishingAimLibrary::ResolveScoopFacingHorizontal(const ACatCharacter* Character)
+{
+	if (!Character)
+	{
+		return FVector::ZeroVector;
+	}
+
+	const FVector CharacterForward = Character->GetActorForwardVector();
+	return FVector(CharacterForward.X, CharacterForward.Y, 0.0).GetSafeNormal();
 }
 
 // 抄网判定流程：俯视投影下的「线段 ∩ 圆」+ 独立的垂直高度差上限。

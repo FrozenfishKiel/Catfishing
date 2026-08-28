@@ -229,9 +229,30 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|HUD")
 	void BP_HandleHUDAction(ECatHUDAction Action);
 
+	/** 在正式 HUD 最上层绘制固定屏幕中心准星；HUD 由 LocalPlayer 子系统创建，因此 Host 与远端 owning client 各自拥有一份。 */
+	virtual int32 NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
+		const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId,
+		const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
+
 private:
 	/** 统一广播 HUD 入口意图；先通知原生协调层，再给蓝图表现层处理页面或动画。 */
 	void SubmitHUDAction(ECatHUDAction Action);
+
+	/** 中性灰准星颜色；保留少量透明度，避免在亮背景上过度抢眼。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|HUD|Crosshair", meta = (AllowPrivateAccess = "true"))
+	FLinearColor CrosshairColor = FLinearColor(0.5f, 0.5f, 0.5f, 0.9f);
+
+	/** 每条准星臂从中心留白边缘向外延伸的像素长度。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|HUD|Crosshair", meta = (AllowPrivateAccess = "true", ClampMin = "1.0", UIMin = "1.0"))
+	float CrosshairArmLength = 8.0f;
+
+	/** 准星中心到每条臂起点的像素距离，给目标中心保留视野。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|HUD|Crosshair", meta = (AllowPrivateAccess = "true", ClampMin = "0.0", UIMin = "0.0"))
+	float CrosshairGap = 3.0f;
+
+	/** 灰色准星线宽，单位为 Slate 像素。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|HUD|Crosshair", meta = (AllowPrivateAccess = "true", ClampMin = "1.0", UIMin = "1.0"))
+	float CrosshairThickness = 2.0f;
 
 	/** 最近一次 Model 输入的 HUD 投影；本对象不持有 Character、ASC 或 FishingSession。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|HUD", meta = (AllowPrivateAccess = "true"))

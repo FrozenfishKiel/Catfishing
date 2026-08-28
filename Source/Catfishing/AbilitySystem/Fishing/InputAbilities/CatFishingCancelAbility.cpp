@@ -17,6 +17,8 @@ void UCatGA_FishingCancel::ActivateAbility(const FGameplayAbilitySpecHandle Hand
 	(void)TriggerEventData;
 	if (IsRemoteAuthorityMirror(ActorInfo))
 	{
+		// Cancel 与 RodInteract 都是一次性输入；服务器远端镜像不提交第二次命令，但必须结束自身。
+		EndAbility(Handle, ActorInfo, ActivationInfo, true, false);
 		return;
 	}
 	BP_OnLocalInputActivated();

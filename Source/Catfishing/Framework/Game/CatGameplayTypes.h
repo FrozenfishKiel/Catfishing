@@ -409,7 +409,7 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerAssistFishingSession(FGuid FishingSessionId, FGuid RequestId, int64 ExpectedRevision);
 
-	/** 把 NearShore 抢抄意图转给指定 FishingSession；服务器覆盖本人当前交互的地面鱼护 ID，首个合法提交者由 Compare-and-Commit 决定。 */
+	/** 把抄网意图转给指定 FishingSession；后续由命令组件和 Session 判断鱼是否可被抄起并完成结果。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestScoop(FGuid FishingSessionId, FCatScoopCommand Command);
 

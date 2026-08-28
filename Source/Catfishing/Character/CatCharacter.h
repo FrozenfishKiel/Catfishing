@@ -45,25 +45,26 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Equipment")
 	UCatEquipmentComponent* GetEquipmentComponent() const;
 
-	/** 返回该角色选择的猫种类定义 ID；None 表示使用全局 CatAbilitySettings 初值。 */
+	/** 返回该角色选择的猫种类定义 ID；None 表示使用 CatAbilitySettings 的正式默认猫种。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Character")
 	FName GetCatDefinitionId() const { return CatDefinitionId; }
 
 	/**
 	 * 该角色使用的猫种类定义 ID（在角色蓝图 Details 里配置，或换皮子类各选一种）。
 	 * 必须与 CatAbilitySettings.CharacterDefinitions 里某个 DA 的 CatDefinitionId 一致；
-	 * 留空时使用全局初始属性；填了但找不到定义时属性播种会 fail-closed 并留下 Warning 日志。
+	 * 留空时使用 CatAbilitySettings.DefaultCharacterDefinitionId；显式 ID 或默认 ID 找不到定义时属性播种会 fail-closed。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catfishing|Character")
 	FName CatDefinitionId = NAME_None;
 
 	/**
-	 * 权威侧广播一次性表现事件到所有客户端，唯一调用方是 UCatFishingCommandComponent 的权威处理路径。
+	 * 权威侧广播一次性表现事件到所有客户端。输入动作由 UCatFishingCommandComponent 发出；
+	 * 断线/落水由 ACatFishingSession 在首次写入终局后发出。
 	 *
 	 * 为什么需要这条通道：挥网落空、提竿空竿这类动作**失败时不产生任何权威状态变化**，
 	 * 表现层没有可读的复制事实；挥网可由 Ability 在本地预测，提竿则必须等服务器先判明 Primary 的真实语义，
 	 * 所以两者都由 authority 广播，而接收端按标签决定是否跳过已经预测过的本地动作。
-	 * 放竿/收竿/断竿/抛竿/打窝都有各自的复制状态与表现事件，不要走这条，否则同一动作会播两遍。
+	 * 放竿/收竿/抛竿/打窝都有各自的复制状态与表现事件，不要走这条，否则同一动作会播两遍。
 	 *
 	 * Unreliable：纯装饰，丢包只是少看一次挥网，不影响任何玩法事实，不值得占用可靠通道。
 	 */
@@ -122,6 +123,13 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintCosmetic, Category = "Catfishing|Presentation")
 	bool PlayFishingCastMontageFromPresentation();
 
+	/**
+	 * 按服务器确认的断线/落水 Cosmetic Tag，从 Fishing 表现设置读取并播放对应 Montage。
+	 * 只接受这两个终局标签；其他一次性表现仍交给 BP_PlayCosmeticEvent。
+	 */
+	UFUNCTION(BlueprintCallable, BlueprintCosmetic, Category = "Catfishing|Presentation")
+	bool PlayFishingOutcomeMontageFromPresentation(FGameplayTag OutcomeEventTag);
+
 protected:
 	/** 组件注册完成后幂等刷新 Owner/Avatar；未裁 runtime 会清除引擎自动建立的 ActorInfo 并保持 fail-closed。 */
 	virtual void BeginPlay() override;
@@ -151,7 +159,7 @@ private:
 	/** authority 新 Character 首次 ActorInfo 就绪时整体应用三项显式初值；重占有不重置已消耗的局内状态。 */
 	void ApplyInitialAttributesOnce();
 
-	/** 受控 Starter 兜底入口；正式默认关闭，只在设置显式打开时为仍为空的选择走一次“背包已有物品”校验。 */
+	/** 受控开发兜底入口；可独立默认发放抄网，完整 Starter 装配仍只选择背包已有物品。 */
 	void ApplyStarterLoadoutIfConfigured();
 
 	/** 在失去占有或销毁前终止本 Character 参与的钓鱼与偷鱼协议，随后才允许身体和 ASC 清理。 */

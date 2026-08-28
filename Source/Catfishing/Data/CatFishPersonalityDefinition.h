@@ -31,7 +31,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0")) double CalmMovementSpeedCentimetersPerSecond = 0.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0")) double StruggleMovementSpeedCentimetersPerSecond = 0.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="0.01")) double BaseDrainMultiplier = 1.0;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="1")) double StruggleDrainMultiplier = 0.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, meta=(ClampMin="1")) double StruggleDrainMultiplier = 2.0;
 
 	/** 每隔多长时间重新选择一次目标游向；不是每帧随机，避免白噪声抖动。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Steering")

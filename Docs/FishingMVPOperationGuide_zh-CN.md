@@ -135,7 +135,7 @@ Root
 | Probe | StateTree 的 `Cat Fishing Enter Phase` 节点 |
 | TrueBiteWindow | `Cat Fishing Open True Bite Window` 节点打开通用响应窗；此时没有鱼 Actor |
 | HookedFight | 真咬窗内收到左键后，`RequestHook` 才选鱼、生成 Actor、扣饵并 EnterPhase |
-| ExhaustedReel | 鱼体力耗尽或力量碾压后，Session 停止搏斗 Runner 并进入 |
+| ExhaustedReel | 鱼体力耗尽或力量碾压后，Session 保留鱼的死亡瞬间位置、停止搏斗 Runner 并进入；随后仅在持续左键时有限速收近 |
 | Resolved / Terminated | `FinalizeSession()`，**StateTree 禁止进入** |
 
 ### 2.3 节点说明
@@ -296,7 +296,9 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 
 **常见失败原因**（放竿）：`InvalidPayload`=前方太斜/没实体地面；`DependencyUnavailable`=还没装配（5.4）。`InvalidWaterTarget/CastOutOfRange` 现在只属于抛竿阶段。
 
-多人占位口径：`OperatorPlayerStates[0]` 是右侧主位，当前只有主位能抛竿/提竿/收线/松线；`[1]` 是左侧辅助位，先完成同步站位，双人合力数值暂未接入。主位退出时左位自动晋升，数组长度立刻从 2 变 1，不保留旧双人模式。当前参数在 `Project Settings → Catfishing Fishing → Rod|Operators`：槽位数 2，左右间距 140cm。
+多人占位口径：`OperatorPlayerStates[0]` 是当前唯一开放的主位，能抛竿、提竿、收线和松线。`[1]` 及后续辅助槽仍保留在底层结构与站位锚点中，但在协作输入、力量和体力分摊落地前，R 键不会把玩家送入无法操作的辅助位；辅助位开放整体属于 `TODO(CooperativeFishing)`。当前参数仍可在 `Project Settings → Catfishing Fishing → Rod|Operators` 查看，但不代表运行版已经开放多人同竿。
+
+会话跟随鱼竿而不是角色：按 R 离开任何阶段都不会直接结束鱼竿上的会话。多人各自部署鱼竿后，同一玩家可以在第一根竿抛线、离开，再进入第二根空竿抛线；左键与 HUD 始终只路由当前主操作鱼竿。等待/试探/真咬阶段允许迁移当前钓手；`HookedFight` 离竿后自动保持松线，鱼在 `L_max` 内自由带线，放尽后开始按负载磨损本场鱼线，期间不结算离开玩家的力量或体力。下一位玩家进入空主位时会用自己的 ASC、力量、满额搏斗体力和输入状态接管 Runner，原操作手的短周期体力立即恢复。
 
 ---
 
@@ -306,7 +308,7 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 
 - **左键按下**（无会话时）：服务器无副作用，回执 `RequestHook Committed=true`（= 开始瞄准）
 - **左键松开**：服务器用你的**准星射线 ∩ 水面**算落点，自动填 RodActorId / Revision / Equipment Revision / WaterRegion Handle，走 `BeginCast` 全部校验（射程 ≤ min(竿线长, 漂抛距)、夹角 ≤ 60°、视线无遮挡）
-- 前置：已按 E 操作着竿；没在操作时松开左键会被**静默忽略**（不刷日志）
+- 前置：已按 R 进入鱼竿主操作位；没在操作时松开左键会被**静默忽略**（不刷日志）
 
 结果日志：`Event=begin_cast_result Committed=true Landing=...` 或 `Committed=false Error=CastOutOfRange/InvalidWaterTarget/...`
 
@@ -357,12 +359,12 @@ Event BeginPlay
          RodDefinitionId      = "Rod_Basic"
          BaitDefinitionId     = "Bait_Basic"
          FloatDefinitionId    = "Float_Basic"
-         ScoopNetDefinitionId = "ScoopNet_Basic"      ← 第 4 个参数，抢抄必需
+         ScoopNetDefinitionId = "StarterScoopNet"     ← 第 4 个参数；当前开发配置会另行默认发放并选中
 ```
 
 **怎么知道成功了**：这是个 `Server, Reliable` RPC，没有回执结构体。判断方式是**轮询 `Get Snapshot` 的 `Revision` 是否从 0 变成 1**，或者监听装备组件的复制变化。建议在 UI 上显示当前 `RodDefinitionId`，非 `None` 就说明装配好了。
 
-> `ScoopNetDefinitionId` 留空（`None`）也能装配成功，但**近岸抢抄会失败** —— `RequestScoop` 要求抄手 Loadout 里有一个 `Kind == ScoopNet` 的有效装备，否则返回 `PolicyUndecided`。想测抄鱼就必须填上。
+> `RequestScoop` 仍要求服务器装备快照里存在有效 `ScoopNet`。当前 `bAutoGrantStarterScoopNet=True` 会在服务器首次占有时给每名玩家发放并选中 `StarterScoopNet`，所以手工装配留空也能继续测试抄网；正式获取方式接入后关闭该临时开关，届时必须通过商店/奖励获得并选择抄网。
 
 ---
 
@@ -376,27 +378,27 @@ Event BeginPlay
 | 2 | （自动）装配 | Equipment `Revision` 从 0 → 1，`RodDefinitionId = Rod_Basic` |
 | 3 | 在任意合法地面第一次按 R | 世界里出现无人操作的 Rod Actor并播放放杆表现；角色不吸附、不锁移动 |
 | 3.1 | 放置者再次按 R | 放置者进入右侧主位并开始操作，`OperatorPlayerStates.Num=1` |
-| 4 | 第二个玩家走近同一根竿按 R | 第二人被吸附到左侧辅助位；两端都看到 `OperatorPlayerStates.Num=2` |
-| 4.1 | 主位玩家按 R 离开 | 左侧玩家晋升到右主位；占位人数立即回到 1，之后可继续按单人逻辑操作 |
+| 4 | 主位仍有人时，第二个玩家走近同一根竿按 R | 返回 `RodOccupied`，第二人保持自由移动，不会被吸附到尚未开放的辅助位 |
+| 4.1 | 主位玩家按 R 离开，第二个玩家再按 R | 第二人进入 0 号主位并接管当前会话；两次操作之间若处于搏斗，则保持无人值守松线，放至 `L_max` 后开始磨损鱼线 |
 | 5 | 瞄水面按住再松开左键 | `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去 |
 | 6 | 等浮漂落水 | Hook 的 `BP_OnHookPresentationChanged` 收到 `Phase=Landed` |
 | 7 | 等咬钩 | `Phase=Probe` → 紧接着 `Phase=TrueBiteWindow`，鱼 Actor 生成 |
 | 8 | 3 秒内按住左键 | `Phase=HookedFight` |
 | 9 | 持续按住左键收线 | Snapshot 里 `NormalizedFishStamina` 下降 |
 | 10 | 鱼被收到面前（**搏斗中就可以**） | debug 里鱼身上的圈从红变绿 = 现在按 F 抄得到 |
-| 11 | 对着鱼按 F | 抄上来；失败看 `Event=scoop_rejected` 的逐项谓词 |
+| 11 | 对着鱼按 F | 不论鱼剩余体力，范围合法即直接变成嘴叼世界鱼；失败按同一 `RequestId` 查看 `scoop_target_* → scoop_rejected → fishing_scoop_terminal → fishing_command_result` |
 | 12 | 或者等鱼翻肚 | `Phase=ExhaustedReel`；仍可按 F 抄，也可继续按住左键把鱼拖上岸 |
-| 13 | 鱼落到岸上后准星对准并按 E | 出现交互提示；服务器只允许一个玩家成功拾取，鱼 Actor 随后消失 |
+| 13 | 鱼落到岸上后准星对准并按 E | 服务器只允许一个玩家成功叼起；随后再对具体地面鱼护按 E 才入箱 |
 
 鱼生成时的大小由服务器随机重量决定：`1kg` 对应当前 Mesh 的 `Scale=1`，重量按体积关系取立方根换算并裁在
 `0.75~1.75`。水中鱼和岸上拾取鱼共用同一个复制缩放值；若要调观感，到项目设置
 `Catfishing Fishing Presentation > FishScale` 修改参考重量与上下限，不要在蓝图里再次随机 Scale。
 
-**抄网范围**（详见 `FishingArchitecture_zh-CN.md` §2.5）：猫向正前方发一条水平线段，与挂在鱼身上的圆相交即够得着，**纯俯视投影不看俯仰角**；高度差另由 `MaximumScoopVerticalDeltaCentimeters`（默认 250）卡上限。线段长 = `min(ini 的 ScoopReachCentimeters, 抄网 DA 的同名字段)`，圆半径 = 鱼 DA 的 `ScoopTargetRadiusCentimeters`（**为 0 则永远抄不到**）。
+**抄网范围**（详见 `FishingArchitecture_zh-CN.md` §2.5）：猫沿 `Character Actor Forward` 面朝正前方发一条水平线段，不读取 `Controller/Camera` 朝向；自由转动镜头不会改变挥网方向。线段与挂在鱼身上的圆相交即够得着，**纯俯视投影不看俯仰角**；高度差另由 `MaximumScoopVerticalDeltaCentimeters`（默认 250）卡上限。线段长 = `min(ini 的 ScoopReachCentimeters, 抄网 DA 的同名字段)`，圆半径 = 鱼 DA 的 `ScoopTargetRadiusCentimeters`（**为 0 则永远抄不到**）。
 
 **咬钩要等多久**：`BaseBiteRatePerSecond=0.2` + 泊松分布，clamp 在 `[2, 15]` 秒。嫌慢就把 ini 里 `BaseBiteRatePerSecond` 调大（比如 2.0）再重启。
 
-**日志过滤关键字**：`LogCatRun`、`LogCatFishing`、`LogCatEquipment`
+**日志过滤关键字**：`LogCatRun`、`LogCatFishing`、`LogCatEquipment`。多人差异先比较 `IsLocalController`、`NetMode`、`PawnLocation`；抄网站位再比较 `CenterWater*`、`FootWater*`、`GroundWater*` 的 `Error`、`Containment`、`VerticalDeltaCm` 与 `SignedShoreDistanceCm`。`FootWater`/`GroundWater` 是诊断对照，不代表当前服务器改成用脚底判定。
 
 ---
 
@@ -404,7 +406,7 @@ Event BeginPlay
 
 ### ~~1. 抢抄需要 ScoopNet，但装配接口传不进去~~ ✅ 已修
 
-`ServerConfigureEquipment` 已加第 4 个参数 `ScoopNetDefinitionId` 并往下传给 `ConfigureLoadoutFromAuthority`。装配时填 `"ScoopNet_Basic"` 即可。
+`ServerConfigureEquipment` 已加第 4 个参数 `ScoopNetDefinitionId` 并往下传给 `ConfigureLoadoutFromAuthority`。当前正式目录定义填 `"StarterScoopNet"`；开发期默认发放开启时可留空沿用服务器已选中的抄网。
 
 ### ~~2. 打窝需要窝料库存，但没有发放入口~~ ✅ 已修
 
@@ -443,19 +445,20 @@ Event BeginPlay
 | `CatWaterRegion.h` | `GetWaterRegionHandle()` / `HasValidBakedGeometry()` 加 `BlueprintPure` |
 | `CatFishingHookActor.h/.cpp` | 浮漂落水确认（有界轮询计时器，非 Tick），`Phase` 能走到 `Landed` |
 
-**资产**（12 个，已存盘）
+**关键资产**（已存盘）
 
 ```
 /Game/Data/Abilities/   DA_CatAbilityInputConfig, DA_CatAbilitySet_Default
-/Game/Data/Equipment/   DA_Rod_Basic, DA_Bait_Basic, DA_Float_Basic,
-                        DA_ScoopNet_Basic, DA_Chum_Basic
-/Game/Data/Fish/        DA_Fish_Test01, DA_Bite_Test01, DA_Fight_Test01
+/Game/Catfishing/Data/Equipment/   Equip_Rod_StarterT1, Equip_Bait_Bug, Equip_Float_Feather,
+                                   Equip_ScoopNet_Starter, Equip_Chum_Bug（以及其他正式目录定义）
+/Game/Catfishing/Data/Fish/  正式 Fish_*, Bite_*, Fight_*
+/Game/Data/Fish/             未注册历史测试二进制；不得再作为运行鱼库入口
 /Game/Data/Curves/      Curve_ChumDistanceFalloff, Curve_ChumTimeFalloff
 ```
 
-**配置**：`Config/DefaultGame.ini` 8 个 section 已写好（缺两条 StateTree 路径 = 步骤 3）
+**配置**：`Config/DefaultGame.ini` 已注册正式鱼、咬钩性格与搏斗性格软引用；旧测试资产不再注册。
 
-**关卡**：`Showcase2` 的 `BP_CatWaterRegion_C_1`（RegionId = `Showcase_River_01`）已烘焙成功，`GeometryRevision = 540261741954039293`，`HasValidBakedGeometry() = True`，已存盘
+**关卡**：`Showcase2` 的唯一 `BP_CatWaterRegion` 已迁移为 `RegionId=River` 并重新烘焙、保存、重载验证；当前 `GeometryRevision=776404699334229561`，`HasValidBakedGeometry()=True`。该水域现在直接匹配正式 16 鱼库中的 `River` 鱼种。
 
 **框架蓝图**（全部已存在且父类正确）
 
@@ -510,7 +513,7 @@ Event=run_phase_entered Day=1 Phase=ECatRunPhase::DayActive Deadline=600.000
 
 ### ⬜ 待办（我）
 
-- ~~C++ 调试可视化~~ ✅ 已完成：`cat.Fishing.Debug 0/1/2`（0=全关，1=全量，2=只留抄网射线+鱼圈+鱼线+状态条）
+- ~~C++ 调试可视化~~ ✅ 已完成：`cat.Fishing.Debug 0/1/2`（默认 0；0=世界标记全关，1=全量，2=只留抄网射线+鱼圈+鱼线+阶段提示）；右上角当前鱼种 ID 与鱼/竿/猫体力、耐久和力量面板由独立的 `cat.Fishing.Stats 0/1` 控制（默认 1）
 - 浮漂弹道修正（现在飞行轨迹落不到目标点会"瞬移"）
 - 规格后续：抄网道具化/概率/硬直/无网拾取/翻肚 30s；窝料并池与 30s×0.9；`T_base/(1+Total/K)` 浮漂级计时器；浮漂精准偏移；入夜停咬
 

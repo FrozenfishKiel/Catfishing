@@ -32,9 +32,9 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Pickup", meta=(ClampMin="1.0", Units="cm"))
 	double PickupCollisionRadiusCentimeters = 45.0;
 
-	/** 猫嘴上用于叼鱼的骨骼或 Socket；正式猫骨架当前使用 RigJaw1。 */
+	/** 猫嘴上用于叼鱼的骨骼或 Socket；正式猫骨架统一使用 Mouth。 */
 	UPROPERTY(Config, EditAnywhere, Category="Pickup")
-	FName MouthCarrySocketName = TEXT("RigJaw1");
+	FName MouthCarrySocketName = TEXT("Mouth");
 
 	/** 死鱼 Actor 根节点附着到嘴部 Socket 后的局部微调；美术可只调该值，不改变碰撞根或鱼重量缩放。 */
 	UPROPERTY(Config, EditAnywhere, Category="Pickup")
@@ -47,6 +47,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Presentation", meta=(ClampMin="-180.0", ClampMax="180.0", Units="deg"))
 	double LandedFishRollDegrees = 90.0;
 
+	/** 只用于 Available 落地状态的 Mesh 局部变换；嘴叼状态会清除其位置和旋转，只复用基础缩放。 */
 	UPROPERTY(Config, EditAnywhere, Category="Presentation")
 	FTransform LandedFishMeshRelativeTransform = FTransform::Identity;
 };

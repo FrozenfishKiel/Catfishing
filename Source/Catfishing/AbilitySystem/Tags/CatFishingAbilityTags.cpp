@@ -23,11 +23,6 @@ namespace CatFishingAbilityTags
 	UE_DEFINE_GAMEPLAY_TAG(State_Fishing_Scooping, "Cat.State.Fishing.Scooping");
 	UE_DEFINE_GAMEPLAY_TAG(State_Fishing_RodOperating, "Cat.State.Fishing.RodOperating");
 	UE_DEFINE_GAMEPLAY_TAG(Cooldown_Fishing_Scoop, "Cat.Cooldown.Fishing.Scoop");
-	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Fishing_Outcome_Caught, "Cat.Ability.Event.Fishing.Outcome.Caught");
-	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Fishing_Outcome_RodBroken, "Cat.Ability.Event.Fishing.Outcome.RodBroken");
-	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Fishing_Outcome_LineBroken, "Cat.Ability.Event.Fishing.Outcome.LineBroken");
-	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Fishing_Outcome_CatInWater, "Cat.Ability.Event.Fishing.Outcome.CatInWater");
-	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Fishing_Outcome_Cancelled, "Cat.Ability.Event.Fishing.Outcome.Cancelled");
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_RequestSacrifice, "Cat.Ability.Event.Body.RequestSacrifice");
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_CampRest, "Cat.Ability.Event.Body.CampRest");
 	UE_DEFINE_GAMEPLAY_TAG(AbilityEvent_Body_CampfirePlayback, "Cat.Ability.Event.Body.CampfirePlayback");
@@ -47,5 +42,7 @@ namespace CatFishingAbilityTags
 	UE_DEFINE_GAMEPLAY_TAG(GameplayCue_Fishing_Reel, "Cat.GameplayCue.Fishing.Reel");
 	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_ScoopSwing, "Cat.Cosmetic.Fishing.ScoopSwing");
 	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_HookPull, "Cat.Cosmetic.Fishing.HookPull");
+	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_LineBroken, "Cat.Cosmetic.Fishing.LineBroken");
+	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_CatInWater, "Cat.Cosmetic.Fishing.CatInWater");
 	UE_DEFINE_GAMEPLAY_TAG(Data_Fishing_FightStaminaDelta, "Cat.Data.Fishing.FightStaminaDelta");
 }

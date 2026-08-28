@@ -7,7 +7,7 @@
 /**
  * 猫种类运行定义：按种类差异化初始中毒值与搏斗数值（规格 4.2 三方力量中的"猫"侧）。
  * 数值只在 Character 属性播种与搏斗体力基线两处被读取并冻结进 ASC/会话，运行中改资产不影响已开始的搏斗。
- * Character 的 CatDefinitionId 为 None 时回退全局 CatAbilitySettings 初值，指定但缺失时保持 fail-closed。
+ * Character 的 CatDefinitionId 为 None 时读取 CatAbilitySettings 的正式默认猫种 ID；两者都为 None 才回退全局初值。
  */
 UCLASS(BlueprintType)
 class CATFISHING_API UCatCharacterDefinition : public UPrimaryDataAsset

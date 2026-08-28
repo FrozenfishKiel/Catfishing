@@ -13,11 +13,11 @@
 
 | 类型 | 注册位置（DefaultGame.ini 的 section / 键） | 现有资产 |
 |---|---|---|
-| 猫种类 CatCharacterDefinition | `[CatAbilitySettings]` `+CharacterDefinitions=` | DA_Cat_Default |
-| 装备 CatEquipmentDefinition | `[CatEquipmentSettings]` `+Definitions=` | DA_Rod/Bait/Float/ScoopNet/Chum_Basic |
-| 鱼种 CatFishDefinition | `[CatFishCatalogSettings]` `+Definitions=` | DA_Fish_Test01 |
-| 咬钩性格 CatBitePersonalityDefinition | `[CatFishingSettings]` `+BitePersonalities=` | DA_Bite_Test01 |
-| 搏斗性格 CatFightPersonalityDefinition | `[CatFishingSettings]` `+FightPersonalities=` | DA_Fight_Test01 |
+| 猫种类 CatCharacterDefinition | `[CatAbilitySettings]` `+CharacterDefinitions=` | `/Game/Catfishing/Data/Character/Cat_Default` |
+| 装备 CatEquipmentDefinition | `[CatEquipmentSettings]` `+Definitions=` | `/Game/Catfishing/Data/Equipment/Equip_*` |
+| 鱼种 CatFishDefinition | `[CatFishCatalogSettings]` `+Definitions=` | `/Game/Catfishing/Data/Fish/Fish_*`；Showcase2 的 `River` 水域直接使用正式目录 |
+| 咬钩性格 CatBitePersonalityDefinition | `[CatFishingSettings]` `+BitePersonalities=` | `/Game/Catfishing/Data/Fish/Bite_*` |
+| 搏斗性格 CatFightPersonalityDefinition | `[CatFishingSettings]` `+FightPersonalities=` | `/Game/Catfishing/Data/Fish/Fight_*` |
 | AbilitySet / InputConfig | `[CatAbilitySettings]` `DefaultAbilitySet=` / `AbilityInputConfig=` | DA_CatAbilitySet_Default 等 |
 | 曲线 CurveFloat | 被上述 DA/设置按字段引用 | Curve_ChumSaturation 等 3 条 |
 
@@ -25,21 +25,20 @@
 
 ## 1. 猫种类：`UCatCharacterDefinition`（DA_Cat_*）
 
-按种类差异化猫的初始属性与搏斗数值。角色蓝图 Details 里把 `Cat Definition Id` 填成某个 DA 的 ID 即选用该种类；留 **None** 则回退 `CatAbilitySettings` 的全局五项初值（Initial*）。数值只在**属性播种**和**搏斗开始**两个时刻被冻结，运行中改资产不影响进行中的搏斗。
+按种类差异化猫的初始属性与搏斗数值。角色蓝图 Details 里把 `Cat Definition Id` 填成某个 DA 的 ID 即选用该种类；留 **None** 则先使用 `CatAbilitySettings.DefaultCharacterDefinitionId`，该配置也留空时才回退全局三项初值。数值只在**属性播种**和**搏斗开始**两个时刻被冻结，运行中改资产不影响进行中的搏斗。当前正式默认资产是 `/Game/Catfishing/Data/Character/Cat_Default`，稳定 ID 为 `DefaultCat`。
 
 | 字段 | 含义 | 校验 |
 |---|---|---|
 | CatDefinitionId | 种类稳定 ID，角色用它选种类 | 必填、清单内唯一 |
 | DisplayName | 表现用显示名 | 不参与数值裁决 |
-| InitialHunger | 初始饱食度（项目语义 100=吃饱） | ≥0 |
-| InitialFatigue / InitialPoison | 初始疲劳/中毒 | ≥0 |
+| InitialPoison | 初始中毒值 | ≥0 |
 | FishingStrength | **猫力量**（规格 4.2：与鱼力量、竿强度三方比较） | >0 |
 | FightStaminaMaximum | **猫搏斗体力上限**（规格 4.3 消耗与松线喘息回复的基线） | >0 |
 | bEnableRuntimeDefinition | 显式启用 gate | 必须 True |
 
 ⚠️ 角色指定了 ID 但定义缺失/未就绪时**不会悄悄换成全局值**——属性播种直接失败并打 `initial_attributes_unresolved` Warning，钓鱼链整体不可用，方便第一时间发现配错。
 
-## 2. 装备：`UCatEquipmentDefinition`（DA_Rod/Bait/Float/ScoopNet/Chum_*）
+## 2. 装备：`UCatEquipmentDefinition`（正式目录 `Equip_Rod/Bait/Float/ScoopNet/Chum_*`）
 
 一个类覆盖五种装备，靠 `Kind` 区分；**每个 Kind 只看自己那组字段，其余必须保持默认 0/false**（校验会因"竿字段出现在鱼饵上"这类越界而判未就绪）。
 
@@ -56,7 +55,7 @@
 
 **Bait（鱼饵）**：`BiteRateMultiplier`(>0,咬钩率倍率) · `MinimumBiteDelayMultiplier`(>0,最短咬钩延迟倍率)
 **Float（浮漂）**：`MaximumCastDistanceCentimeters`(>0,最大抛竿距离) · `CastErrorStandardDeviation/MaximumCastErrorRadiusCentimeters`(落点误差σ/上限,σ≤上限) · `BiteSignalStability`(0~1,咬钩信号稳定度)
-**ScoopNet（抄网）**：`ScoopReachCentimeters`(>0,**抄手向正前方发射的水平线段长度**,语义="网杆多长")。与鱼定义里的 `ScoopTargetRadiusCentimeters`(圆半径)配对构成抄网判定：**俯视投影下线段∩圆**即够得着。实际生效长度取 `min(本值, UCatFishingSettings::ScoopReachCentimeters)`——全局那个是上限闸门。高度差另由 `UCatFishingSettings::MaximumScoopVerticalDeltaCentimeters` 单独限制,判定本身完全不看俯仰角。
+**ScoopNet（抄网）**：`ScoopReachCentimeters`(>0,**抄手沿 Character 面朝正前方发射的水平线段长度**,语义="网杆多长")。方向取 `Character Actor Forward`，不读取 `Controller/Camera` 朝向。与鱼定义里的 `ScoopTargetRadiusCentimeters`(圆半径)配对构成抄网判定：**俯视投影下线段∩圆**即够得着。实际生效长度取 `min(本值, UCatFishingSettings::ScoopReachCentimeters)`——全局那个是上限闸门。高度差另由 `UCatFishingSettings::MaximumScoopVerticalDeltaCentimeters` 单独限制,判定本身完全不看俯仰角。当前开发期 `bAutoGrantStarterScoopNet=True` 会给每名玩家库存临时发一份并选中正式目录定义 `StarterScoopNet`；正式商店/奖励获取就绪后关闭该开关。
 **Chum（窝料）**：`bRunConsumable` 必须 True，核心在 `ChumInfluence` 结构：
 
 | ChumInfluence 字段 | 含义 | 校验 |
@@ -74,7 +73,7 @@
 | 字段组 | 字段 | 含义 |
 |---|---|---|
 | 身份 | FishDefinitionId | 唯一 ID,图鉴/日志/实物鱼都引用它 |
-| 体型 | BodyClass | Standard=单人可搏 / Giant=可多人协作(近岸仍首个合法抢抄者归属);不能 Unknown |
+| 体型 | BodyClass | Standard=单人可搏 / Giant=可多人协作；抄网成功后世界鱼由首个合法抄手叼走；不能 Unknown |
 | 出没 | RegionIds / TimeOfDay / Weather | 可出现的水域 ID/时段(夜晚永不进选择器)/天气;**空数组=未配置=不出现** |
 | 稀有 | RarityTierId / SpawnWeight | 稀有度轴 ID / 选择正权重(稀有度由数据表达,代码无硬编码档位) |
 | 体重 | Minimum/MaximumWeightKilograms | 服务器在区间内抽取真实重量;min≤max |
@@ -88,6 +87,8 @@
 | 食用 | FoodSafety / HungerRelief / PoisonIncrease | Safe/Toxic 结论 + 吃后减饥/增毒量(Safe 必须 0 毒) |
 | 其他 | SacrificeContribution / CaptureImprintEventId / bTankDisplayEligible | 献祭额度 / 捕获成像事件 / 可否入展示鱼缸 |
 | gate | bEnableRuntimeDefinition | 必须 True |
+
+鱼种没有固定“低级/中级”战斗标签。令力量比 `S=FishStrength/玩家合计力量`、体力比 `T=FishFightStamina/玩家合计搏斗体力`，目录按 `max(S, 2ST/(S+T))` 计算当前上下文里的连续挑战度：力量比是危险下限，力量/体力调和均值只在两项都足够时抬高挑战度，避免“体力高但力量极低、进入搏斗又被 2 倍力量规则秒杀”的鱼占据势均力敌带。`≤ ComfortChallengeMaximumRatio` 为轻松带，之后到 `MatchedChallengeMaximumRatio` 为势均力敌带，再到 `MaximumChallengeRatio` 为高风险带；超过安全上限才不进入池。系统先按三条 `*ChallengeBandWeight` 在当前有候选的难度带之间抽取，再用 `SpawnWeight × 窝料倍率 × 鱼饵倍率 × 连续挑战倍率` 在带内选鱼。某个目标带没有鱼时会在其余有候选的带之间重新归一化；只有生态条件、协作人数或安全上限后确实没有鱼才会空钩。
 
 ## 4. 咬钩性格：`UCatBitePersonalityDefinition`（DA_Bite_*）
 
@@ -154,7 +155,7 @@
 | 症状 | 多半是 |
 |---|---|
 | starter 装配/发窝料失败 InvalidPayload | 对应 DA 未注册 / bEnableRuntimeDefinition 没勾 / 某字段越了 Kind 的界 |
-| No eligible fish | 鱼的 Region/TimeOfDay/Weather 空数组;或 CatFishCatalogSettings 三项(曲线/半饱和/上限)未配;或曲线不过校验 |
+| No eligible fish | 鱼的 Region/TimeOfDay/Weather 不匹配或空数组；协作人数不足；全部鱼超过 MaximumChallengeRatio；或 CatFishCatalogSettings 的窝料曲线/连续挑战参数未配、非法 |
 | 打窝 EquipmentUnavailable | 背包没窝料(上一条的下游);或窝料 DA 的 ChumInfluence 缺曲线 |
 | 提竿后搏斗数值全 0 | 猫种类 ID 配错(看 initial_attributes_unresolved 日志) / DA_Bite/DA_Fight 未注册 |
 | 新 DA 配好了不生效 | ini 没加注册行,或加了没重启 Editor |

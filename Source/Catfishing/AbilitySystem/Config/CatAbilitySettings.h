@@ -41,7 +41,7 @@ public:
 	const UCatCharacterDefinition* FindRuntimeCharacterDefinition(FName CatDefinitionId) const;
 
 	/**
-	 * 按猫种类读取三项初始属性：Id 为 None 时回退全局初值；
+	 * 按猫种类读取三项初始属性：Id 为 None 时先读默认猫种定义，默认 ID 也为 None 时才回退全局初值；
 	 * Id 已指定但定义缺失/未就绪时 fail-closed 返回 false，不悄悄换成全局值。
 	 */
 	bool TryGetInitialAttributesForCharacter(FName CatDefinitionId, float& OutPoison,
@@ -73,6 +73,13 @@ public:
 	/** 新 Character 初始 FightStamina；必须为正才能支持正式搏斗。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Attributes", meta = (ClampMin = "-1.0"))
 	float InitialFightStamina = -1.0f;
+
+	/**
+	 * 角色 CatDefinitionId 留空时使用的正式默认猫种 ID。
+	 * None 保留旧的全局 Initial* 回退；非 None 但资产缺失时 fail-closed，不绕回全局值。
+	 */
+	UPROPERTY(Config, EditAnywhere, Category = "Characters")
+	FName DefaultCharacterDefinitionId = NAME_None;
 
 	/** 正式猫种类清单；默认空且不扫描资产目录，Character 通过 CatDefinitionId 选择其中一项。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Characters")

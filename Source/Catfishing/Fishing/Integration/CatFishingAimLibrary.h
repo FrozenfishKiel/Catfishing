@@ -7,6 +7,7 @@
 
 class ACatCharacter;
 class AController;
+class UCatEquipmentComponent;
 
 /** 抛竿/打窝瞄准的公共数学；服务器裁决和客户端预览调用同一组函数，保证预览线与真实落点一致。 */
 UCLASS()
@@ -45,6 +46,18 @@ public:
 	/** 把按住时长换算为 0..1 蓄力 Alpha（按 ChumChargeMaxSeconds）。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Fishing|Aim")
 	static float ChargeAlphaFromHeldSeconds(float HeldSeconds);
+
+	/**
+	 * 解析抄网唯一有效长度：玩家必须在服务器装备快照里选中一份完整 ScoopNet；有效长度取它与
+	 * 全局 Fishing 上限的较小值。服务器裁决与 debug 显示共用此入口，避免无装备时仍显示绿色范围。
+	 */
+	static bool TryResolveScoopReach(const UCatEquipmentComponent* Equipment, double& OutReachCentimeters);
+
+	/**
+	 * 解析抄网唯一有效朝向：只使用 Character Actor 的水平前向，不读取 Controller/Camera 朝向。
+	 * 服务器裁决与 debug 显示共用此入口，保证自由转动镜头不会改变实际抄网方向。
+	 */
+	static FVector ResolveScoopFacingHorizontal(const ACatCharacter* Character);
 
 	/**
 	 * 抄网判定（唯一口径）：抄手向正前方水平发射一条线段，与挂在鱼身上的圆相交即够得着。
