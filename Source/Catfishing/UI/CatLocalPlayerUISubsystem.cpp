@@ -285,7 +285,7 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 
 // 本地玩家 UI 装配流程：
 // 1. 验证本地设置、当前 Controller/Pawn 和 World；核心 WBP 类缺失或无效时直接 fail-closed，不创建原生白盒替身。
-// 2. 创建 HUD Model/View 并入视口；HUD 只展示猫状态和钓鱼反馈。
+// 2. 创建 HUD Model/View 并入视口；HUD 展示猫状态、钓鱼反馈和固定屏幕中心准星。
 // 3. 创建 Inventory Model/PageController/View，但背包 View 不预先入视口，只通过既有 InputContext 的 Action 打开。
 // 4. 创建 Interaction 提示 View 和控制器；控制器只订阅 PlayerController 的唯一准星交互目标。
 void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
@@ -358,7 +358,7 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	const UWorld* World = GetWorld();
 	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	UE_LOG(LogCatUI, Log,
-		TEXT("Event=ui_player_modules_attached World=%s NetMode=%d LocalPlayerIndex=%d Controller=%s LocalController=%s HUD=%s Inventory=%s Slot=%s Interaction=%s ShopPrecreated=false"),
+		TEXT("Event=ui_player_modules_attached World=%s NetMode=%d LocalPlayerIndex=%d Controller=%s LocalController=%s HUD=%s Crosshair=gray_center Inventory=%s Slot=%s Interaction=%s ShopPrecreated=false"),
 		World ? *World->GetName() : TEXT("None"),
 		World ? static_cast<int32>(World->GetNetMode()) : -1,
 		LocalPlayer ? LocalPlayer->GetLocalPlayerIndex() : INDEX_NONE,
