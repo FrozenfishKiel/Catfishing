@@ -97,6 +97,9 @@ private:
 	bool BuildCatalogEntriesFromTable(const UDataTable& CatalogTable, FRandomStream& RandomStream,
 		TArray<FCatShopCatalogEntry>& OutEntries, FString& OutError) const;
 
+	/** 解析本摊位实际使用的出售表；实例配置优先，未配置时读取项目默认表入口。 */
+	TSoftObjectPtr<UDataTable> ResolveShopCatalogTable() const;
+
 	/** 从策划 DataTable 收集所有可能展示的启用商品候选；当前未抽中的随机项会在 UI 侧被公开库存过滤掉。 */
 	void CollectDisplayCatalogEntriesFromTable(const UDataTable& CatalogTable,
 		TArray<FCatShopCatalogEntry>& OutEntries) const;

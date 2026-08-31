@@ -72,6 +72,9 @@ private:
 	FCatShopEntryView MakeEntryView(const FCatShopCatalogEntry& Entry,
 		const FCatShopPublicEconomySnapshot& Economy, bool bEconomyAvailable) const;
 
+	/** 从完整真实商品数组归纳顶部分类按钮投影；玩家实际选中项由 Widget 本地维护，不写回 Model。 */
+	void BuildCategoryViewState(FCatShopViewState& InOutState) const;
+
 	/** 按当前真实商品数组和本地购物车生成右侧已选购投影；超限或失效行会同步到总价、bCartHasInvalidLines 和支付禁用原因。 */
 	void BuildCartViewState(FCatShopViewState& InOutState) const;
 

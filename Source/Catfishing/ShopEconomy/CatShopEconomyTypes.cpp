@@ -28,6 +28,7 @@ bool FCatShopCatalogTableRow::TryBuildCatalogEntry(const FName RowName, FCatShop
 	OutEntry.Kind = Kind;
 	OutEntry.DefinitionId = DefinitionId;
 	OutEntry.DisplayCategoryId = DisplayCategoryId;
+	OutEntry.DisplayCategoryNameOverride = DisplayCategoryNameOverride;
 	OutEntry.PurchaseQuantity = PurchaseQuantity;
 	OutEntry.UnitPrice = UnitPrice;
 	OutEntry.InitialStock = InitialStock;

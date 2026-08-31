@@ -40,6 +40,10 @@ struct FCatShopEntryView
 	UPROPERTY(BlueprintReadOnly)
 	FName DisplayCategoryId = NAME_None;
 
+	/** 商品所属展示分类的显示名；为空时 WBP 可以回退显示 DisplayCategoryId。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText DisplayCategoryNameText;
+
 	/** 单次选购会发到营地公共仓库的数量；UI 只展示，不能把它作为客户端提交参数。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 PurchaseQuantity = 1;
@@ -99,6 +103,29 @@ struct FCatShopEntryView
 	/** 商品行图标覆盖；WBP 可以直接加载它，也可以在为空时回退到装备定义图标。 */
 	UPROPERTY(BlueprintReadOnly)
 	TSoftObjectPtr<UTexture2D> IconOverride;
+};
+
+/** 商店顶部分类按钮的一行展示投影；它从真实商品数组归纳出来，玩家当前选择只保存在本地 Widget。 */
+USTRUCT(BlueprintType)
+struct FCatShopCategoryView
+{
+	GENERATED_BODY()
+
+	/** 分类稳定 ID；NAME_None 表示“全部”，其他值必须来自商品表的 DisplayCategoryId。 */
+	UPROPERTY(BlueprintReadOnly)
+	FName CategoryId = NAME_None;
+
+	/** 分类按钮显示名；“全部”由程序兜底，其他分类优先来自 DataTable 的分类显示名覆盖。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText DisplayNameText;
+
+	/** 当前分类下可展示的商品数量；WBP 可用它隐藏空分类或显示数量角标。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 EntryCount = 0;
+
+	/** 这个分类是否正被本地玩家选中；Model 默认 false，Widget 会在本地刷新时写入它。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bSelected = false;
 };
 
 /** 购物车中一行商品的展示投影；它来自本地购物车和当前真实商品数组的交叉结果，不会同步给其他玩家。 */
@@ -177,6 +204,10 @@ struct FCatShopViewState
 	/** 当前来源摊位的完整真实商品目录；Widget 会在本地按分类过滤出 DisplayedEntries。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatShopEntryView> Entries;
+
+	/** 从 Entries 归纳出的分类按钮数据；玩家当前选择不在这里同步，只由本地 Widget 标记。 */
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FCatShopCategoryView> Categories;
 
 	/** 当前本地购物车行；它由玩家本机点击生成，不同步给其他客户端，支付时才发送 EntryId 和次数。 */
 	UPROPERTY(BlueprintReadOnly)

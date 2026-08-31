@@ -4,6 +4,7 @@
 #include "Engine/World.h"
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
+#include "ShopEconomy/CatShopEconomySettings.h"
 #include "ShopEconomy/CatShopEconomyService.h"
 
 namespace
@@ -33,7 +34,7 @@ namespace
 
 	// 购物车行归一化流程：先拒绝空车、超长数组、非法 EntryId 和超上限次数，再合并重复 EntryId 并按 ID 排序。
 	// 库存扣减只读取这份规范化结果，避免客户端通过重复行或异常数量绕过整批校验。
-	bool NormalizeCartLines(const TArray<FCatShopCartLineCommand>& Lines,
+	bool NormalizeCartLinesForStockConsumption(const TArray<FCatShopCartLineCommand>& Lines,
 		TArray<FCatShopCartLineCommand>& OutLines)
 	{
 		OutLines.Reset();
@@ -253,7 +254,7 @@ bool UCatShopInventoryComponent::ConsumeCatalogEntriesFromAuthority(
 		return false;
 	}
 	TArray<FCatShopCartLineCommand> NormalizedLines;
-	if (!NormalizeCartLines(Lines, NormalizedLines))
+	if (!NormalizeCartLinesForStockConsumption(Lines, NormalizedLines))
 	{
 		return false;
 	}
@@ -294,11 +295,12 @@ bool UCatShopInventoryComponent::ConsumeCatalogEntriesFromAuthority(
 void UCatShopInventoryComponent::CollectDisplayCatalogEntries(TArray<FCatShopCatalogEntry>& OutEntries) const
 {
 	OutEntries.Reset();
-	if (ShopCatalogTable.IsNull())
+	TSoftObjectPtr<UDataTable> CatalogTable = ResolveShopCatalogTable();
+	if (CatalogTable.IsNull())
 	{
 		return;
 	}
-	const UDataTable* LoadedTable = ShopCatalogTable.LoadSynchronous();
+	const UDataTable* LoadedTable = CatalogTable.LoadSynchronous();
 	if (!LoadedTable)
 	{
 		return;
@@ -338,12 +340,13 @@ bool UCatShopInventoryComponent::BuildRuntimeCatalogEntries(FRandomStream& Rando
 {
 	OutEntries.Reset();
 	OutError.Reset();
-	if (ShopCatalogTable.IsNull())
+	TSoftObjectPtr<UDataTable> CatalogTable = ResolveShopCatalogTable();
+	if (CatalogTable.IsNull())
 	{
-		OutError = TEXT("Shop catalog DataTable is not configured.");
+		OutError = TEXT("Shop catalog DataTable and project default DataTable are not configured.");
 		return false;
 	}
-	const UDataTable* LoadedTable = ShopCatalogTable.LoadSynchronous();
+	const UDataTable* LoadedTable = CatalogTable.LoadSynchronous();
 	if (!LoadedTable)
 	{
 		OutError = TEXT("Configured shop catalog DataTable could not be loaded.");
@@ -457,6 +460,17 @@ bool UCatShopInventoryComponent::BuildCatalogEntriesFromTable(const UDataTable& 
 	}
 	SortCatalogEntries(OutEntries);
 	return true;
+}
+
+// 出售表解析流程：摊位实例表拥有最高优先级；没有实例表时才读项目默认表，让普通摊位少配一遍，特殊摊位仍能覆写。
+TSoftObjectPtr<UDataTable> UCatShopInventoryComponent::ResolveShopCatalogTable() const
+{
+	if (!ShopCatalogTable.IsNull())
+	{
+		return ShopCatalogTable;
+	}
+	const UCatShopEconomySettings* Settings = GetDefault<UCatShopEconomySettings>();
+	return Settings ? Settings->DefaultShopCatalogTable : TSoftObjectPtr<UDataTable>();
 }
 
 // DataTable 展示候选流程：

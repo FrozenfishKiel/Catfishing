@@ -6,7 +6,9 @@
 #include "ShopEconomy/CatShopEconomyTypes.h"
 #include "CatShopEconomySettings.generated.h"
 
-/** 商店经济运行设置；它只裁定团队公款和售鱼估价，不再保存任何摊位出售表。 */
+class UDataTable;
+
+/** 商店经济运行设置；它裁定团队公款、售鱼估价和项目默认出售表入口，商品内容仍由 DataTable 资产维护。 */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "Catfishing Shop Economy"))
 class CATFISHING_API UCatShopEconomySettings : public UDeveloperSettings
 {
@@ -43,6 +45,10 @@ public:
 	/** 允许售鱼入账的最小金额；小于该值的命令视为估价证据不足。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Wallet", meta = (ClampMin = "1"))
 	int32 MinimumFishSaleValue = 1;
+
+	/** 项目默认商店出售表；单个摊位没单独指定表时读取它，商品、分类、价格和随机池仍全部由策划 DataTable 配置。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Catalog")
+	TSoftObjectPtr<UDataTable> DefaultShopCatalogTable;
 
 	/**
 	 * 收鱼价体重轴是否已经被产品显式裁定。默认 Unset 表示"还没人拍过"，此时售鱼整体 fail-closed；

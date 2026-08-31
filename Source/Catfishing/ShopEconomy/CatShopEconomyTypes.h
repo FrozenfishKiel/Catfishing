@@ -84,6 +84,10 @@ struct FCatShopCatalogEntry
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Presentation")
 	FName DisplayCategoryId = NAME_None;
 
+	/** 商品分类按钮的显示名覆盖；为空时 UI 直接用 DisplayCategoryId，避免程序内置“鱼竿/鱼饵/鱼窝”等分类文案。 */
+	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Presentation")
+	FText DisplayCategoryNameOverride;
+
 	/** 单次选购向目标库存发放的数量；商店库存扣一次货架库存，但目标库存可以收到多份鱼饵或窝料。 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Catalog", meta = (ClampMin = "1"))
 	int32 PurchaseQuantity = 1;
@@ -172,6 +176,10 @@ struct FCatShopCatalogTableRow : public FTableRowBase
 	/** 商品页展示分类；鱼竿、鱼饵、鱼窝等分类都由这列决定，程序不再内置分类枚举。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Presentation")
 	FName DisplayCategoryId = NAME_None;
+
+	/** 分类按钮显示名；同一 DisplayCategoryId 多行重复填写时，UI 使用排序最靠前商品上的第一个非空显示名。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Presentation")
+	FText DisplayCategoryNameOverride;
 
 	/** 单次选购会交付到营地公共仓库的数量；购物车里同一商品选多次时会按次数累加。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catalog", meta = (ClampMin = "1"))

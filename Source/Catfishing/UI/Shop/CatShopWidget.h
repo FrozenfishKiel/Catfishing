@@ -37,11 +37,59 @@ private:
 	UFUNCTION()
 	void HandleShopEntryClicked();
 
-	/** 创建本按钮的商店 View；弱引用避免按钮比页面生命周期更长时阻止 Widget 回收。 */
+	/** 拥有本按钮的商店页面；弱引用避免动态按钮比页面生命周期更长时阻止 Widget 回收。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatShopWidget> OwnerShopWidget;
 
 	/** 本按钮代表的商店目录项；点击时只提交这个稳定 ID。 */
+	UPROPERTY(Transient)
+	FName EntryId = NAME_None;
+};
+
+/** 商店动态分类按钮；它只保存分类 ID，点击后刷新本地 DisplayedEntries。 */
+UCLASS()
+class CATFISHING_API UCatShopCategoryButton : public UButton
+{
+	GENERATED_BODY()
+
+public:
+	/** 绑定当前分类按钮的父 Widget 和 CategoryId；重复初始化会先清理旧点击绑定，避免一次点击触发多轮过滤。 */
+	void InitializeShopCategory(UCatShopWidget* InOwnerShopWidget, FName InCategoryId);
+
+private:
+	/** 动态分类按钮点击入口；只把 CategoryId 交回父 Widget，不修改 Model 或服务器货架。 */
+	UFUNCTION()
+	void HandleShopCategoryClicked();
+
+	/** 拥有本按钮的商店页面；弱引用让分类按钮不会延长页面对象生命周期。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UCatShopWidget> OwnerShopWidget;
+
+	/** 本按钮代表的本地展示分类；NAME_None 表示“全部”。 */
+	UPROPERTY(Transient)
+	FName CategoryId = NAME_None;
+};
+
+/** 商店动态购物车删除按钮；它只保存 EntryId，点击后从本地购物车删除一份。 */
+UCLASS()
+class CATFISHING_API UCatShopCartLineRemoveButton : public UButton
+{
+	GENERATED_BODY()
+
+public:
+	/** 绑定当前购物车行的父 Widget 和 EntryId；重复初始化会先清理旧点击绑定，避免一次删除扣两份。 */
+	void InitializeCartLine(UCatShopWidget* InOwnerShopWidget, FName InEntryId);
+
+private:
+	/** 动态购物车按钮点击入口；只提交删除意图，不接触服务器订单或公共仓库。 */
+	UFUNCTION()
+	void HandleCartLineRemoveClicked();
+
+	/** 拥有本按钮的商店页面；弱引用避免删除按钮比页面生命周期更长时阻止 Widget 回收。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UCatShopWidget> OwnerShopWidget;
+
+	/** 本按钮代表的购物车目录项；删除时只提交这个稳定 ID。 */
 	UPROPERTY(Transient)
 	FName EntryId = NAME_None;
 };
@@ -63,6 +111,10 @@ public:
 	/** 返回当前分类过滤后的商品行；商品区必须读这个本地数组，而不是直接读完整 Entries。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Shop")
 	const TArray<FCatShopEntryView>& GetDisplayedEntries() const;
+
+	/** 返回从当前真实商品数组归纳出的分类按钮数据；Widget 会在本地标记哪个分类被当前玩家选中。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Shop")
+	const TArray<FCatShopCategoryView>& GetCategories() const;
 
 	/** 当前购物车展示行是右侧已选购列表的只读来源；蓝图按它生成删除按钮和小计。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Shop")
@@ -105,10 +157,10 @@ public:
 	FCatShopCartPayRequested OnCartPayRequested;
 
 protected:
-	/** UMG 构造本商店页时打开键盘焦点能力并绑定关闭按钮；正式货架按钮会在渲染阶段按 Model 条目重建。 */
+	/** UMG 构造本商店页时打开键盘焦点能力、补齐旧资产缺口并绑定关闭/支付按钮；正式动态列表会在渲染阶段按 Model 投影重建。 */
 	virtual void NativeConstruct() override;
 
-	/** 析构时解绑本 View 拥有的关闭、支付和动态商品按钮；外部意图订阅由 PageController::Unbind 清理。 */
+	/** 析构时解绑本 View 拥有的关闭、支付、动态商品、分类和购物车删除按钮；外部意图订阅由 PageController::Unbind 清理。 */
 	virtual void NativeDestruct() override;
 
 	/** 预览按键先于商品按钮处理；商店打开时命中关闭键会统一请求关闭，避免焦点落在动态按钮后按键失效。 */
@@ -117,7 +169,7 @@ protected:
 	/** UMG 在本页拥有键盘焦点时交付按键；商店打开且命中关闭键时广播关闭意图并返回已处理，其他按键继续交给父类。 */
 	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
-	/** WBP 可选渲染扩展点；正式商品列表应通过 GetDisplayedEntries 读取当前分类结果。 */
+	/** WBP 可选渲染扩展点；正式商品列表应通过 GetDisplayedEntries 读取当前分类结果，分类和购物车行分别读取 GetCategories 与 GetCartLines。 */
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|Shop")
 	void BP_RenderShop(const FCatShopViewState& ViewState);
 
@@ -126,14 +178,32 @@ private:
 	UFUNCTION()
 	void HandleCloseClicked();
 
+	/** 补齐旧 WBP 缺失的新购物车控件；只在绑定控件不存在时创建运行时兜底，不覆盖正式同名控件。 */
+	void EnsureFallbackRuntimeControls();
+
+	/** 禁用旧 WBP 遗留的直购/免费领取按钮；它们只按历史命名识别，不再承载任何商品业务。 */
+	void DisableLegacyDirectPurchaseButtons();
+
 	/** 动态商品按钮重建流程；用本地 DisplayedEntries 生成当前货架按钮，分类不会写回 Model 或服务器。 */
 	void RebuildDynamicEntryButtons();
+
+	/** 动态分类按钮重建流程；用当前分类投影生成顶部分类按钮，选中状态只反映本地 Widget。 */
+	void RebuildDynamicCategoryButtons();
+
+	/** 动态购物车按钮重建流程；用当前 CartLines 生成右侧删除按钮，每个按钮只删除一份对应商品。 */
+	void RebuildDynamicCartLineButtons();
+
+	/** 按最新 ViewState.Categories 同步本地分类数组；当前选择失效时回到“全部”。 */
+	void RefreshCategoryPresentation();
 
 	/** 按当前分类把完整 Entries 过滤成本地 DisplayedEntries，并同步简单文本和动态商品按钮。 */
 	void RefreshDisplayedEntries();
 
 	/** 购物车文本重建流程；把当前 CartLines 拼成简单文本，复杂 WBP 可直接读取数组生成右侧列表。 */
 	void RefreshCartPresentation();
+
+	/** 判断当前分类按钮数据里是否存在目标分类；NAME_None 永远合法，代表“全部”。 */
+	bool DoesCategoryExist(FName CategoryId) const;
 
 	/** 判断一次按键是否应该关闭商店；Escape、交互键和库存开关键都作为模态页面关闭出口。 */
 	bool ShouldCloseShopFromKey(const FKeyEvent& InKeyEvent) const;
@@ -157,6 +227,10 @@ private:
 	/** 给 WBP 商品区直接绑定的当前分类显示副本；它只在本地客户端存在，不同步给其他玩家。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Shop", meta = (AllowPrivateAccess = "true"))
 	TArray<FCatShopEntryView> BlueprintDisplayedEntries;
+
+	/** 给 WBP 顶部分类区直接绑定的分类副本；选中状态由本地 Widget 写入，不来自服务器。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Shop", meta = (AllowPrivateAccess = "true"))
+	TArray<FCatShopCategoryView> BlueprintCategories;
 
 	/** 给 WBP 购物车区直接绑定的已选购副本；蓝图按它生成右侧列表和垃圾桶按钮。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Shop", meta = (AllowPrivateAccess = "true"))
@@ -218,7 +292,23 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UPanelWidget> ShopButtons;
 
+	/** WBP Designer 中的分类按钮容器；存在时 C++ 会按 ViewState.Categories 重建“全部”和表驱动分类按钮。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UPanelWidget> CategoryButtons;
+
+	/** WBP Designer 中的购物车行容器；存在时 C++ 会按 CartLines 重建右侧已选购删除按钮。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UPanelWidget> CartLinesPanel;
+
 	/** 当前由 C++ 动态创建的商品按钮；保存引用是为了页面重绘或销毁时能解除点击绑定并让过期按钮释放。 */
 	UPROPERTY(Transient)
 	TArray<TObjectPtr<UCatShopEntryButton>> DynamicEntryButtons;
+
+	/** 当前由 C++ 动态创建的分类按钮；保存引用是为了分类刷新或销毁时能解除点击绑定并移出旧按钮。 */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UCatShopCategoryButton>> DynamicCategoryButtons;
+
+	/** 当前由 C++ 动态创建的购物车删除按钮；保存引用是为了购物车刷新或销毁时能解除点击绑定并移出旧按钮。 */
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<UCatShopCartLineRemoveButton>> DynamicCartLineButtons;
 };

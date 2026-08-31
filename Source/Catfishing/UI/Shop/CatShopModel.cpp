@@ -259,6 +259,7 @@ void UCatShopModel::Refresh()
 			NewState.Entries.Add(EntryView);
 		}
 	}
+	BuildCategoryViewState(NewState);
 	BuildCartViewState(NewState);
 
 	NewState.WalletText = NewState.bEconomyAvailable
@@ -345,6 +346,9 @@ FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry
 	View.Kind = Entry.Kind;
 	View.DefinitionId = Entry.DefinitionId;
 	View.DisplayCategoryId = Entry.DisplayCategoryId;
+	View.DisplayCategoryNameText = !Entry.DisplayCategoryNameOverride.IsEmpty()
+		? Entry.DisplayCategoryNameOverride
+		: (!Entry.DisplayCategoryId.IsNone() ? FText::FromName(Entry.DisplayCategoryId) : FText());
 	View.PurchaseQuantity = FMath::Max(1, Entry.PurchaseQuantity);
 	View.UnitPrice = FMath::Max(0, Entry.UnitPrice);
 	View.bStockAvailable = Stock != nullptr;
@@ -384,6 +388,45 @@ FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry
 		*CartText));
 	View.ActionText = FText::FromString(TEXT("加入"));
 	return View;
+}
+
+// 分类投影流程：
+// 1. “全部”永远由 Model 兜底生成，代表当前完整 Entries，而不是某个商品表分类。
+// 2. 其他分类按 Entries 的当前顺序首次出现即加入，后续同类商品只增加数量，保证顶部按钮跟真实货架同步。
+// 3. bSelected 不在这里写入；每个客户端的分类选择只属于本地 Widget，不能污染其他玩家或真实货架数据。
+void UCatShopModel::BuildCategoryViewState(FCatShopViewState& InOutState) const
+{
+	InOutState.Categories.Reset();
+	FCatShopCategoryView& AllCategory = InOutState.Categories.AddDefaulted_GetRef();
+	AllCategory.CategoryId = NAME_None;
+	AllCategory.DisplayNameText = FText::FromString(TEXT("全部"));
+	AllCategory.EntryCount = InOutState.Entries.Num();
+
+	TMap<FName, int32> CategoryIndexById;
+	for (const FCatShopEntryView& Entry : InOutState.Entries)
+	{
+		if (Entry.DisplayCategoryId.IsNone())
+		{
+			continue;
+		}
+		if (const int32* ExistingIndex = CategoryIndexById.Find(Entry.DisplayCategoryId))
+		{
+			++InOutState.Categories[*ExistingIndex].EntryCount;
+			if (InOutState.Categories[*ExistingIndex].DisplayNameText.IsEmpty()
+				&& !Entry.DisplayCategoryNameText.IsEmpty())
+			{
+				InOutState.Categories[*ExistingIndex].DisplayNameText = Entry.DisplayCategoryNameText;
+			}
+			continue;
+		}
+
+		FCatShopCategoryView& Category = InOutState.Categories.AddDefaulted_GetRef();
+		Category.CategoryId = Entry.DisplayCategoryId;
+		Category.DisplayNameText = !Entry.DisplayCategoryNameText.IsEmpty()
+			? Entry.DisplayCategoryNameText : FText::FromName(Entry.DisplayCategoryId);
+		Category.EntryCount = 1;
+		CategoryIndexById.Add(Entry.DisplayCategoryId, InOutState.Categories.Num() - 1);
+	}
 }
 
 // 购物车投影流程：
