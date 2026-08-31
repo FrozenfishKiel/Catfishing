@@ -208,7 +208,7 @@ void ACatfishingGameModeBase::StartPlay()
 		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision, *RunFlowAsset->GetName());
 }
 
-// World 收口流程：先关闭新 Run 命令并清唯一白天截止计时，再清 HostExit ACK 计时句柄与远端等待集合；随后解除商店交易和货架刷新订阅，避免旧 World 的委托继续发布快照；然后停止仍运行的 StateTree，最后调父类，使迟到 Task/ACK 不能进入新 World。
+// World 收口流程：先关闭新 Run 命令并清白天截止/时段刷新计时，再清 HostExit ACK 计时句柄与远端等待集合；随后解除商店交易和货架刷新订阅，避免旧 World 的委托继续发布快照；然后停止仍运行的 StateTree，最后调父类，使迟到 Task/ACK 不能进入新 World。
 void ACatfishingGameModeBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	bRunCommandsOpen = false;
@@ -630,7 +630,7 @@ FCatRunCommandResult ACatfishingGameModeBase::CacheRunCommandResult(const FStrin
 	return Result;
 }
 
-// 阶段进入流程：先要求 authority、有效 Run 与正在启动/运行的唯一 StateTree，并在写状态前拒绝未裁的成功结算或白天参数。通过后统一清掉旧白天截止并复位玩法开关：DayActive 递增天数、清额度/终局原因、重置 Active 玩家 ready、开启 quota/fishing 并建立唯一 one-shot timer；NormalNight 冻结当前 ready 资格；两种 settlement 写对应终局原因并清 ready 集合；Ending/Ended/NotStarted 关闭新命令。最后只递增一次 Revision、保存 StateTree 可读结果并刷新 Environment/GameState 组合快照；C++ 始终不选择下一条转移边。
+// 阶段进入流程：先要求 authority、有效 Run 与正在启动/运行的唯一 StateTree，并在写状态前拒绝未裁的成功结算或白天参数。通过后统一清掉旧白天计时与公开截止并复位玩法开关：DayActive 递增天数、清额度/终局原因、重置 Active 玩家 ready、开启 quota/fishing，建立截止与 Morning/Dusk 刷新；NormalNight 冻结当前 ready 资格；两种 settlement 写对应终局原因并清 ready 集合；Ending/Ended/NotStarted 关闭新命令。最后只递增一次 Revision、保存 StateTree 可读结果并刷新 Environment/GameState 组合快照；C++ 始终不选择下一条转移边。
 FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(const ECatRunPhase NewPhase, const ECatRunTransitionReason Reason)
 {
 	FCatRunTransitionResult Result;
@@ -653,6 +653,7 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 	}
 	float DayLengthSeconds = 0.0f;
 	int32 DayQuotaTarget = 0;
+	bool bShouldScheduleDayEnvironmentRefreshes = false;
 	if (NewPhase == ECatRunPhase::DayActive
 		&& !GetDefault<UCatRunSettings>()->TryGetDayParameters(DayLengthSeconds, DayQuotaTarget))
 	{
@@ -714,6 +715,7 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		}
 		GetWorld()->GetTimerManager().SetTimer(DayDeadlineTimerHandle, this,
 			&ThisClass::HandleDayDeadlineElapsed, DayLengthSeconds, false);
+		bShouldScheduleDayEnvironmentRefreshes = true;
 		break;
 	}
 	case ECatRunPhase::NormalNight:
@@ -752,6 +754,10 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 	Result.Error = ECatRunCommandError::None;
 	Result.Revision = RunPublicState.Revision;
 	LastRunFlowResult = Result;
+	if (bShouldScheduleDayEnvironmentRefreshes)
+	{
+		ScheduleDayEnvironmentRefreshes();
+	}
 	RefreshEnvironmentAndPublish();
 	UE_LOG(LogCatRun, Log, TEXT("Event=run_phase_entered RunId=%s Revision=%lld Day=%d Phase=%s Reason=%s Deadline=%.3f"),
 		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
@@ -767,7 +773,7 @@ bool ACatfishingGameModeBase::DoesLastRunFlowResultMatch(const ECatRunTransition
 		&& LastRunFlowResult.Reason == ExpectedReason;
 }
 
-// 额度提交流程：服务器重建身份并先查幂等缓存，再校验 gate/Phase/Revision/载荷；首次写入更新总量与 Revision，达标时先释放钓鱼操作位和移动锁，再关闭写口、清计时器、发布快照，并向 StateTree 发送 QuotaReached。
+// 额度提交流程：服务器重建身份并先查幂等缓存，再校验 gate/Phase/Revision/载荷；首次写入更新总量与 Revision，未达标直接发布快照，达标时发布关闭命令的同 Revision 快照，再向 StateTree 发送 QuotaReached。
 FCatRunCommandResult ACatfishingGameModeBase::SubmitQuotaContribution(AController* RequestingController, const FCatQuotaContributionCommand& Command)
 {
 	FCatQuotaContributionCommand ServerCommand = Command;
@@ -824,7 +830,7 @@ FCatRunCommandResult ACatfishingGameModeBase::SubmitCommittedQuotaContributionFr
 	return SubmitQuotaContributionInternal(Command);
 }
 
-// 额度内部流程：先查完整幂等缓存，再校验 gate/Phase/Revision/载荷；首次写入更新总量与 Revision，达标时先释放钓鱼操作位和移动锁，再关闭写口、清计时器并发送唯一 StateTree 事件。
+// 额度内部流程：先查完整幂等缓存，再校验 gate/Phase/Revision/载荷；首次写入更新总量与 Revision，未达标发布同阶段快照，达标时先释放钓鱼操作位和移动锁，再关闭写口、停白天计时、发布过渡快照并发送唯一 StateTree 事件。
 FCatRunCommandResult ACatfishingGameModeBase::SubmitQuotaContributionInternal(const FCatQuotaContributionCommand& ServerCommand)
 {
 	if (!ServerCommand.Context.RequestId.IsValid())
@@ -874,9 +880,13 @@ FCatRunCommandResult ACatfishingGameModeBase::SubmitQuotaContributionInternal(co
 		}
 		RunPublicState.Phase.bQuotaOpen = false;
 		RunPublicState.Phase.bFishingAllowed = false;
-		ClearDayDeadline();
+		ClearDayTimers();
+		RefreshEnvironmentAndPublish();
 	}
-	RefreshEnvironmentAndPublish();
+	else
+	{
+		RefreshEnvironmentAndPublish();
+	}
 	FCatRunCommandResult Result = MakeRunCommandResult(ServerCommand.Context.RequestId, true, ECatRunCommandError::None, TransitionReason);
 	Result = CacheRunCommandResult(CacheKey, Result);
 	if (bReachesQuota)
@@ -1021,19 +1031,77 @@ void ACatfishingGameModeBase::EvaluateAllEligibleReady()
 	}
 }
 
-// 截止清理流程：从当前 World 清除唯一 TimerHandle，并同步清空公开 deadline 三字段；不暂停计时器，因此夜晚和 teardown 不会保留可恢复倒计时。
-void ACatfishingGameModeBase::ClearDayDeadline()
+// 白天计时清理流程：从当前 World 清除截止、Morning 和 Dusk 三个 one-shot 句柄；只停止未来回调，不改公开 deadline 事实。
+void ACatfishingGameModeBase::ClearDayTimers()
 {
 	if (UWorld* World = GetWorld())
 	{
 		World->GetTimerManager().ClearTimer(DayDeadlineTimerHandle);
+		World->GetTimerManager().ClearTimer(DayMorningEnvironmentRefreshTimerHandle);
+		World->GetTimerManager().ClearTimer(DayDuskEnvironmentRefreshTimerHandle);
 	}
 	DayDeadlineTimerHandle.Invalidate();
+	DayMorningEnvironmentRefreshTimerHandle.Invalidate();
+	DayDuskEnvironmentRefreshTimerHandle.Invalidate();
+}
+
+// 截止清理流程：先清所有白天计时回调，再同步清空公开 deadline 字段；只在进入新 Phase、启动失败或 teardown 时使用。
+void ACatfishingGameModeBase::ClearDayDeadline()
+{
+	ClearDayTimers();
 	RunPublicState.Phase.bHasDeadline = false;
 	RunPublicState.Phase.DeadlineServerTimeSeconds = 0.0;
 }
 
-// 白天截止流程：只消费仍开放的同一 DayActive，先关闭钓鱼/额度并递增 Revision、发布快照，再向 StateTree 发送 QuotaFailed；夜晚不创建新计时器。
+// 白天刷新安排流程：读取 Environment 配置换算 Morning/Day/Dusk 分界，再把未来分界安排成本 GameMode 的 one-shot；分界到达只会重发公开快照。
+void ACatfishingGameModeBase::ScheduleDayEnvironmentRefreshes()
+{
+	UWorld* World = GetWorld();
+	const UCatEnvironmentSettings* Settings = GetDefault<UCatEnvironmentSettings>();
+	double MorningEndServerTimeSeconds = 0.0;
+	double DuskStartServerTimeSeconds = 0.0;
+	if (!World || !Settings || !Settings->TryResolveTimeOfDayRefreshTimes(RunPublicState.Phase,
+		MorningEndServerTimeSeconds, DuskStartServerTimeSeconds))
+	{
+		UE_LOG(LogCatEnvironment, Warning, TEXT("Event=environment_day_refresh_schedule_skipped RunId=%s Revision=%lld Day=%d"),
+			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
+			RunPublicState.Phase.DayIndex);
+		return;
+	}
+	const double ServerNowSeconds = World->GetTimeSeconds();
+	if (MorningEndServerTimeSeconds > ServerNowSeconds)
+	{
+		World->GetTimerManager().SetTimer(DayMorningEnvironmentRefreshTimerHandle, this,
+			&ThisClass::HandleDayEnvironmentRefreshElapsed,
+			static_cast<float>(MorningEndServerTimeSeconds - ServerNowSeconds), false);
+	}
+	if (DuskStartServerTimeSeconds > ServerNowSeconds)
+	{
+		World->GetTimerManager().SetTimer(DayDuskEnvironmentRefreshTimerHandle, this,
+			&ThisClass::HandleDayEnvironmentRefreshElapsed,
+			static_cast<float>(DuskStartServerTimeSeconds - ServerNowSeconds), false);
+	}
+	UE_LOG(LogCatEnvironment, Log, TEXT("Event=environment_day_refresh_scheduled RunId=%s Revision=%lld Day=%d MorningAt=%.3f DuskAt=%.3f"),
+		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
+		RunPublicState.Phase.DayIndex, MorningEndServerTimeSeconds, DuskStartServerTimeSeconds);
+}
+
+// 白天语义刷新流程：只在同一个 DayActive 仍有 deadline 且 quota 仍开放时递增 Revision 并重新求值环境；到夜晚的推进仍完全交给 StateTree。
+void ACatfishingGameModeBase::HandleDayEnvironmentRefreshElapsed()
+{
+	if (!HasAuthority() || !bRunCommandsOpen || RunPublicState.Phase.Phase != ECatRunPhase::DayActive
+		|| !RunPublicState.Phase.bHasDeadline || !RunPublicState.Phase.bQuotaOpen)
+	{
+		return;
+	}
+	++RunPublicState.Revision;
+	RefreshEnvironmentAndPublish();
+	UE_LOG(LogCatEnvironment, Log, TEXT("Event=environment_day_segment_refreshed RunId=%s Revision=%lld Day=%d TimeOfDay=%s"),
+		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
+		RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(RunPublicState.Environment.TimeOfDay));
+}
+
+// 白天截止流程：只消费仍开放的同一 DayActive，先关闭钓鱼/额度并停白天计时，保留公开 deadline 发布同 Revision 过渡快照，再向 StateTree 发送 QuotaFailed。
 void ACatfishingGameModeBase::HandleDayDeadlineElapsed()
 {
 	DayDeadlineTimerHandle.Invalidate();
@@ -1049,22 +1117,22 @@ void ACatfishingGameModeBase::HandleDayDeadlineElapsed()
 	}
 	RunPublicState.Phase.bFishingAllowed = false;
 	RunPublicState.Phase.bQuotaOpen = false;
-	RunPublicState.Phase.bHasDeadline = false;
-	RunPublicState.Phase.DeadlineServerTimeSeconds = 0.0;
-	RunPublicState.Phase.ServerTimeAnchorSeconds = GetWorld()->GetTimeSeconds();
+	ClearDayTimers();
 	++RunPublicState.Revision;
 	RefreshEnvironmentAndPublish();
 	SendRunStateTreeEvent(CatRunStateTreeEvents::QuotaFailed, ECatRunTransitionReason::QuotaFailed);
 }
 
-// 环境发布流程：以当前 Phase 与 Revision 调用只读 provider；成功时替换同 Revision 环境 DTO，随后无论环境是否成功都把 Run 唯一公开聚合写入 GameState，失败只记录诊断而不制造替代天气。
+// 环境发布流程：以当前 Phase 与 Revision 调用只读 provider；成功且同 Revision 时替换环境 DTO，失败或版本不齐时发布同 Revision 空环境，最后把唯一公开聚合写入 GameState。
 bool ACatfishingGameModeBase::RefreshEnvironmentAndPublish()
 {
 	const ICatEnvironmentProvider* Provider = Cast<ICatEnvironmentProvider>(EnvironmentProvider);
 	const FCatEnvironmentResult EnvironmentResult = Provider
 		? Provider->EvaluateEnvironment(RunPublicState.Phase, RunPublicState.Revision)
 		: FCatEnvironmentResult();
-	if (EnvironmentResult.bSucceeded)
+	const bool bEnvironmentSucceeded = EnvironmentResult.bSucceeded
+		&& EnvironmentResult.Snapshot.SourceRunRevision == RunPublicState.Revision;
+	if (bEnvironmentSucceeded)
 	{
 		RunPublicState.Environment = EnvironmentResult.Snapshot;
 		if (EnvironmentResult.Snapshot.Weather == ECatEnvironmentWeather::Rain)
@@ -1081,34 +1149,41 @@ bool ACatfishingGameModeBase::RefreshEnvironmentAndPublish()
 	}
 	else
 	{
-		UE_LOG(LogCatRun, Error, TEXT("Event=environment_evaluation_failed RunId=%s Revision=%lld Error=%s"),
+		RunPublicState.Environment = FCatEnvironmentSnapshot();
+		RunPublicState.Environment.SourceRunRevision = RunPublicState.Revision;
+		const FString EnvironmentError = Provider && EnvironmentResult.bSucceeded
+			? FString::Printf(TEXT("RevisionMismatch:%lld"), EnvironmentResult.Snapshot.SourceRunRevision)
+			: (Provider ? EnvironmentResult.Error : FString(TEXT("ProviderUnavailable")));
+		UE_LOG(LogCatRun, Error, TEXT("Event=environment_evaluation_failed RunId=%s Revision=%lld SourceRunRevision=%lld Error=%s"),
 			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
-			Provider ? *EnvironmentResult.Error : TEXT("ProviderUnavailable"));
+			EnvironmentResult.Snapshot.SourceRunRevision,
+			EnvironmentError.IsEmpty() ? TEXT("Unknown") : *EnvironmentError);
 	}
 	ACatfishingGameState* CatGameState = GetWorld() ? GetWorld()->GetGameState<ACatfishingGameState>() : nullptr;
 	if (CatGameState)
 	{
 		CatGameState->SetRunPublicStateFromAuthority(RunPublicState);
 	}
-	return EnvironmentResult.bSucceeded && CatGameState != nullptr;
+	return bEnvironmentSucceeded && CatGameState != nullptr;
 }
 
-// 自然聚鱼流程：按当前 Day+Event 去重，读取 Environment 显式区域/三轴，扫描唯一同 ID WaterRegion；构造系统身份命令并提交同一聚鱼写口，只有 committed 才记录去重键。
+// 自然聚鱼流程：读取 Environment 显式事件与锚点后按 Run+Day+Event+Anchor 去重，扫描唯一同 ID WaterRegion；构造系统身份命令并提交同一聚鱼写口，只有 committed 才记录去重键。
 void ACatfishingGameModeBase::SubmitNaturalChumFieldIfConfigured()
 {
 	if (!HasAuthority() || !RunPublicState.Environment.bHasActiveEvent || !GetWorld())
 	{
 		return;
 	}
-	const FString EventKey = FString::Printf(TEXT("%d|%s"), RunPublicState.Phase.DayIndex,
-		*RunPublicState.Environment.ActiveEventId.ToString());
-	if (SubmittedNaturalChumFieldKeys.Contains(EventKey))
-	{
-		return;
-	}
 	FName ChumDefinitionId;
 	FName AnchorId;
 	if (!GetDefault<UCatEnvironmentSettings>()->TryGetNaturalChumField(ChumDefinitionId, AnchorId))
+	{
+		return;
+	}
+	const FString EventKey = FString::Printf(TEXT("%s|%d|%s|%s"),
+		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Phase.DayIndex,
+		*RunPublicState.Environment.ActiveEventId.ToString(), *AnchorId.ToString());
+	if (SubmittedNaturalChumFieldKeys.Contains(EventKey))
 	{
 		return;
 	}
@@ -1124,7 +1199,8 @@ void ACatfishingGameModeBase::SubmitNaturalChumFieldIfConfigured()
 		{
 			if (Match)
 			{
-				UE_LOG(LogCatEnvironment, Error, TEXT("Event=natural_chum_rejected Day=%d EnvironmentEvent=%s Anchor=%s Error=AmbiguousAnchor"),
+				UE_LOG(LogCatEnvironment, Error, TEXT("Event=natural_chum_rejected RunId=%s Day=%d EnvironmentEvent=%s Anchor=%s Error=AmbiguousAnchor"),
+					*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens),
 					RunPublicState.Phase.DayIndex, *RunPublicState.Environment.ActiveEventId.ToString(), *AnchorId.ToString());
 				return;
 			}
@@ -1156,8 +1232,9 @@ void ACatfishingGameModeBase::SubmitNaturalChumFieldIfConfigured()
 		SubmittedNaturalChumFieldKeys.Add(EventKey);
 		Fields->PublishActivatedField(Result.FieldId);
 	}
-	UE_LOG(LogCatEnvironment, Log, TEXT("Event=natural_chum_terminal RequestId=%s Day=%d EnvironmentEvent=%s Definition=%s Anchor=%s Committed=%s Error=%s Revision=%lld"),
-		*Request.Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Phase.DayIndex,
+	UE_LOG(LogCatEnvironment, Log, TEXT("Event=natural_chum_terminal RequestId=%s RunId=%s Day=%d EnvironmentEvent=%s Definition=%s Anchor=%s Committed=%s Error=%s Revision=%lld"),
+		*Request.Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Phase.DayIndex,
 		*RunPublicState.Environment.ActiveEventId.ToString(), *ChumDefinitionId.ToString(), *AnchorId.ToString(),
 		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
 		Result.ChumFieldSetRevision);

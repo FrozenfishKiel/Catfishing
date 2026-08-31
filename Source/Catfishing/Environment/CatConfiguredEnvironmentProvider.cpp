@@ -8,6 +8,10 @@ FCatEnvironmentResult UCatConfiguredEnvironmentProvider::EvaluateEnvironment(con
 	const int64 RunRevision) const
 {
 	FCatEnvironmentResult Result;
+	if (RunRevision > 0)
+	{
+		Result.Snapshot.SourceRunRevision = RunRevision;
+	}
 	const UCatEnvironmentSettings* Settings = GetDefault<UCatEnvironmentSettings>();
 	const UWorld* World = GetWorld();
 	if (!RunSnapshot.RunId.IsValid() || RunRevision <= 0 || !Settings || !Settings->IsRuntimeReady() || !World)
@@ -17,13 +21,20 @@ FCatEnvironmentResult UCatConfiguredEnvironmentProvider::EvaluateEnvironment(con
 	}
 	Result.Snapshot.Weather = Settings->ConfiguredWeather;
 	Result.Snapshot.TimeOfDay = Settings->ResolveTimeOfDay(RunSnapshot, World->GetTimeSeconds());
-	Result.Snapshot.ActiveEventId = Settings->ActiveEventId;
-	Result.Snapshot.bHasActiveEvent = !Settings->ActiveEventId.IsNone();
+	FName ActiveEventId = NAME_None;
+	if (Settings->TryResolveActiveEvent(RunSnapshot, Result.Snapshot.TimeOfDay, Result.Snapshot.Weather,
+		ActiveEventId))
+	{
+		Result.Snapshot.ActiveEventId = ActiveEventId;
+		Result.Snapshot.bHasActiveEvent = true;
+	}
 	Result.Snapshot.SourceRunRevision = RunRevision;
 	Result.bSucceeded = RunSnapshot.Phase != ECatRunPhase::DayActive
 		|| Result.Snapshot.TimeOfDay != ECatEnvironmentTimeOfDay::Unknown;
 	if (!Result.bSucceeded)
 	{
+		Result.Snapshot = FCatEnvironmentSnapshot();
+		Result.Snapshot.SourceRunRevision = RunRevision;
 		Result.Error = TEXT("TimeOfDayUnavailable");
 	}
 	return Result;

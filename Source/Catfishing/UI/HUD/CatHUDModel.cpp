@@ -15,7 +15,7 @@
 #include "Growth/CatGrowthComponent.h"
 #include "UI/CatFishingViewBridge.h"
 
-// 绑定流程：校验本地玩家、Controller、Character 和 ASC，随后订阅三项属性、Condition、Growth 和 Fishing 命令结果，最后发布首份 HUD 投影。
+// 绑定流程：校验本地玩家、Controller、Character 和 ASC，随后订阅 Run 快照、三项属性、Condition、Growth 和 Fishing 命令结果，最后发布首份 HUD 投影。
 bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController, ACatCharacter* InCharacter)
 {
 	Unbind();
@@ -44,6 +44,15 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 	{
 		BoundFishingCommand = CatController->GetFishingCommandComponent();
 	}
+	if (UWorld* World = InController->GetWorld())
+	{
+		if (ACatfishingGameState* RunGameState = World->GetGameState<ACatfishingGameState>())
+		{
+			BoundRunGameState = RunGameState;
+			RunPublicStateChangedHandle = RunGameState->OnRunPublicStateChanged.AddUObject(
+				this, &ThisClass::HandleRunPublicStateChanged);
+		}
+	}
 	PoisonChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetPoisonAttribute())
 		.AddUObject(this, &ThisClass::HandleAttributeChanged);
 	FishingStrengthChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(
@@ -69,9 +78,13 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 	return true;
 }
 
-// 解绑流程：从原 ASC、Condition、Growth、Fishing 命令和 Bridge 移除订阅，再清弱引用、最近结果和投影，防止跨 Pawn 显示旧状态。
+// 解绑流程：从原 Run、ASC、Condition、Growth、Fishing 命令和 Bridge 移除订阅，再清弱引用、最近结果和投影，防止跨 Pawn 显示旧状态。
 void UCatHUDModel::Unbind()
 {
+	if (ACatfishingGameState* RunGameState = BoundRunGameState.Get())
+	{
+		RunGameState->OnRunPublicStateChanged.Remove(RunPublicStateChangedHandle);
+	}
 	if (UAbilitySystemComponent* AbilitySystem = BoundAbilitySystem.Get())
 	{
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetPoisonAttribute()).Remove(PoisonChangedHandle);
@@ -100,6 +113,7 @@ void UCatHUDModel::Unbind()
 	FightStaminaChangedHandle.Reset();
 	ConditionChangedHandle.Reset();
 	GrowthChangedHandle.Reset();
+	RunPublicStateChangedHandle.Reset();
 	FishingViewChangedHandle.Reset();
 	BoundLocalPlayer.Reset();
 	BoundPlayerController.Reset();
@@ -108,6 +122,7 @@ void UCatHUDModel::Unbind()
 	BoundCondition.Reset();
 	BoundGrowth.Reset();
 	BoundFishingCommand.Reset();
+	BoundRunGameState.Reset();
 	FishingViewBridge = nullptr;
 	LastFishingCommandResult = FCatFishingCommandResult();
 	bHasFishingCommandResult = false;
@@ -307,6 +322,12 @@ void UCatHUDModel::HandleConditionChanged()
 
 // Growth 变化流程：重读完整 HUD 事实，让经验槽、待选次数和身体状态保持同帧投影。
 void UCatHUDModel::HandleGrowthChanged()
+{
+	Refresh();
+}
+
+// Run 快照变化流程：客户端 OnRep 或服务器本机写入到达后统一刷新 HUD；Model 不缓存第二份天数，只重新读取 GameState。
+void UCatHUDModel::HandleRunPublicStateChanged()
 {
 	Refresh();
 }

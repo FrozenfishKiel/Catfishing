@@ -200,11 +200,11 @@ struct FCatEnvironmentResult
 {
 	GENERATED_BODY()
 
-	/** Environment 是否成功消费输入快照；false 时 Run 保留上一份环境事实并记录错误。 */
+	/** Environment 是否成功消费输入快照；false 时 Run 会发布同 Revision 的空环境，避免旧环境事实跨阶段残留。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bSucceeded = false;
 
-	/** 成功求值后的环境快照；其 SourceRunRevision 必须对应输入 Run Revision。 */
+	/** 环境求值后的快照；成功时携带真实语义，失败时至少携带输入 Run Revision 供调用方 fail-closed 发布。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatEnvironmentSnapshot Snapshot;
 
