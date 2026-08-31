@@ -147,17 +147,13 @@ UCatInventoryPageController* UCatLocalPlayerUISubsystem::GetInventoryPageControl
 	return InventoryPageController;
 }
 
-// 快照消费流程：Online 变更时先调和 Frontend TravelWidget，再刷新 HUD/背包只读模型；不把 Online 事件参数拼进 View。
+// 快照消费流程：Online 变更时只调和 Frontend TravelWidget 和 HUD；库存只听自己的数据源，不把会话状态当库存变化。
 void UCatLocalPlayerUISubsystem::HandleOnlineSnapshotChanged()
 {
 	RefreshOnlineWidgetForCurrentController();
 	if (HUDModel)
 	{
 		HUDModel->Refresh();
-	}
-	if (InventoryPageController)
-	{
-		InventoryPageController->RefreshModel();
 	}
 }
 
@@ -313,7 +309,7 @@ void UCatLocalPlayerUISubsystem::UnbindController()
 }
 
 // Pawn 变化流程：
-// 1. 先把 NewPawn 裁成项目猫身体；同一个已装配身体的重复通知会重读库存快照并刷新输入绑定，不拆掉正在打开的 UI。
+// 1. 先把 NewPawn 裁成项目猫身体；同一个已装配身体的重复通知只刷新输入绑定，库存数据继续等自己的读源广播。
 // 2. 新身体或空身体会先完整拆掉上一套本地玩家 UI，避免跨 Pawn 复用 Model、View 或输入锁。
 // 3. 只有新的 ACatCharacter 通过配置校验时才重新装配 HUD、背包、交互提示和拾取提示层。
 void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
@@ -322,7 +318,6 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 	if (Character && AttachedPlayerLakeCharacter.Get() == Character
 		&& HUDWidget && InventoryPageController && InteractionPageController)
 	{
-		InventoryPageController->RefreshModel();
 		InventoryPageController->RefreshInputBinding();
 		return;
 	}

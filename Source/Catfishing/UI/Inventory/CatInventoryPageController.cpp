@@ -351,15 +351,6 @@ bool UCatInventoryPageController::IsInventoryOpen() const
 	return bInventoryOpen;
 }
 
-// 外部刷新流程：只要求 Model 重读本人随身库存、当前选择和已绑定容器快照；PageController 不缓存任何后端事实。
-void UCatInventoryPageController::RefreshModel()
-{
-	if (UCatInventoryModel* Model = BoundModel.Get())
-	{
-		Model->Refresh();
-	}
-}
-
 // 输入刷新流程：Controller 通知输入链重新就绪时重跑同一套安装逻辑；安装函数会先移除已有绑定，因此重复调用不会叠加快捷键。
 void UCatInventoryPageController::RefreshInputBinding()
 {
@@ -375,24 +366,14 @@ void UCatInventoryPageController::RequestCloseInventoryFromWidget()
 	}
 }
 
-// 格子选择流程：PageController 不保存选择状态，只把 SlotView 的来源身份交给 Model 基于对应数据源复核。
-void UCatInventoryPageController::RequestSelectInventorySlotFromWidget(const FCatInventorySlotView& Slot)
-{
-	if (UCatInventoryModel* Model = BoundModel.Get())
-	{
-		Model->SelectSlot(Slot);
-	}
-}
-
 // 格子上下文流程：
-// 1. 右键入口先同步 Model 选择，让 View 的选中框和说明文本跟随最新格子。
+// 1. 右键入口直接按传入格子来源处理动作，不再先同步共享选择或刷新所有库存 WBP。
 // 2. 如果目标是营地公共仓库格，先按最新 ViewState 复核公共槽位，再提交“取到随身库存”服务器请求；这里不直接改公共仓库格。
 // 3. 如果目标是随身库存格，当前没有 pending 且物品有效时，才继续构造钓具选择命令。
 // 4. 根据随身格装备类别只替换当前组合中的一项；鱼竿、鱼饵、鱼漂三项不完整时本地拒绝，避免提交半套钓鱼选择。
-// 5. 写 pending 之后再调用 PlayerController RPC；服务器会重读目录、解锁、当前快照和库存持有量，UI 只发命令，不直接改选择或公共仓库。
+// 5. 记录 pending 后再调用 PlayerController RPC；服务器会重读目录、解锁、当前快照和库存持有量，UI 不会在数据变化前重画格子。
 void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FCatInventorySlotView& Slot)
 {
-	RequestSelectInventorySlotFromWidget(Slot);
 	UCatInventoryModel* Model = BoundModel.Get();
 	ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
 	if (!Model || !CatController)
@@ -400,7 +381,7 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 		return;
 	}
 	const FCatInventoryViewState& State = Model->GetViewState();
-	if (State.bActionPending)
+	if (Model->IsActionPending())
 	{
 		return;
 	}
@@ -503,7 +484,7 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 	}
 	const FCatInventoryViewState& State = Model->GetViewState();
 	const FGuid RequestId = FGuid::NewGuid();
-	if (State.bActionPending)
+	if (Model->IsActionPending())
 	{
 		UE_LOG(LogCatUI, Log,
 			TEXT("Event=ui_inventory_slot_drop_ignored Reason=ActionPending Request=%s SourceSource=%s SourceIndex=%d TargetSource=%s TargetIndex=%d"),
@@ -741,11 +722,12 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 
 // 鱼动作按钮流程：
 // 1. 本入口只处理吃鱼和献祭这类按钮动作；库存整理走 Drop，钓具选择走格子右键上下文。
-// 2. 从 Model 当前 ViewState 读取选中鱼、容器 ID 和 Revision，拒绝空选择或无效鱼护上下文。
-// 3. 生成 RequestId 并先写 pending，使同步 authority 回包也能匹配。
+// 2. 用 Widget 传入的本页选择在最新 ViewState 里复核鱼、容器 ID 和 Revision，拒绝空选择或无效鱼护上下文。
+// 3. 生成 RequestId 并记录 pending，使同步 authority 回包也能匹配，但不提前广播刷新库存格。
 // 4. 按动作类型调用 PlayerController 正式服务器入口，绝不让 Widget 直接访问 Items 或 Run。
 // 5. Model 或 Controller 已失效时直接丢弃迟到意图；需要 Character 的吃鱼分支无法解析 Pawn 时发布结构化拒绝。
-void UCatInventoryPageController::RequestInventoryActionFromWidget(const ECatInventoryAction Action)
+void UCatInventoryPageController::RequestInventoryActionFromWidget(const ECatInventoryAction Action,
+	const FCatInventorySlotView& SelectedSlot)
 {
 	UCatInventoryModel* Model = BoundModel.Get();
 	ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
@@ -755,15 +737,21 @@ void UCatInventoryPageController::RequestInventoryActionFromWidget(const ECatInv
 	}
 	const FCatInventoryViewState& State = Model->GetViewState();
 	const FGuid RequestId = FGuid::NewGuid();
-	const FCatInventorySlotView* SelectedSlot = State.bHasSelectedSlot ? &State.SelectedSlot : nullptr;
-	const bool bHasSelectedFish = State.bSelectedFishInFishGuard
-		&& State.SelectedFish.FishInstanceId.IsValid() && SelectedSlot
-		&& SelectedSlot->ContainerKind == ECatContainerKind::FishGuard
-		&& SelectedSlot->ContainerId.IsValid();
+	if (Model->IsActionPending())
+	{
+		return;
+	}
+	const FCatInventorySlotView* CurrentSlot = FindCurrentSourceSlot(State, SelectedSlot);
+	const bool bHasSelectedFish = CurrentSlot
+		&& CurrentSlot->ContainerKind == ECatContainerKind::FishGuard
+		&& CurrentSlot->ContainerId.IsValid()
+		&& CurrentSlot->bOccupied
+		&& CurrentSlot->ObjectKind == ECatContainedObjectKind::Fish
+		&& CurrentSlot->Fish.FishInstanceId.IsValid();
 	if (!bHasSelectedFish)
 	{
 		Model->MarkActionRejected(Action, RequestId, ECatDomainCommandError::InvalidPayload,
-			SelectedSlot ? SelectedSlot->ContainerRevision : 0);
+			CurrentSlot ? CurrentSlot->ContainerRevision : SelectedSlot.ContainerRevision);
 		return;
 	}
 
@@ -775,14 +763,14 @@ void UCatInventoryPageController::RequestInventoryActionFromWidget(const ECatInv
 			if (!Character)
 			{
 				Model->MarkActionRejected(Action, RequestId, ECatDomainCommandError::DependencyUnavailable,
-					SelectedSlot->ContainerRevision);
+					CurrentSlot->ContainerRevision);
 				return;
 			}
 			FCatFishConsumeCommand Command;
 			Command.Context.RequestId = RequestId;
-			Command.Context.ExpectedRevision = SelectedSlot->ContainerRevision;
-			Command.FishInstanceId = State.SelectedFish.FishInstanceId;
-			Command.SourceContainerId = SelectedSlot->ContainerId;
+			Command.Context.ExpectedRevision = CurrentSlot->ContainerRevision;
+			Command.FishInstanceId = CurrentSlot->Fish.FishInstanceId;
+			Command.SourceContainerId = CurrentSlot->ContainerId;
 			Model->MarkActionSubmitted(Action, RequestId);
 			if (CatController->HasAuthority())
 			{
@@ -798,9 +786,9 @@ void UCatInventoryPageController::RequestInventoryActionFromWidget(const ECatInv
 		{
 			FCatSacrificeCommand Command;
 			Command.Context.RequestId = RequestId;
-			Command.Context.ExpectedRevision = SelectedSlot->ContainerRevision;
-			Command.FishInstanceId = State.SelectedFish.FishInstanceId;
-			Command.ContainerId = SelectedSlot->ContainerId;
+			Command.Context.ExpectedRevision = CurrentSlot->ContainerRevision;
+			Command.FishInstanceId = CurrentSlot->Fish.FishInstanceId;
+			Command.ContainerId = CurrentSlot->ContainerId;
 			Model->MarkActionSubmitted(Action, RequestId);
 			if (CatController->HasAuthority())
 			{

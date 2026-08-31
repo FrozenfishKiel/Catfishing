@@ -94,7 +94,7 @@ struct FCatInventorySlotView
 	UPROPERTY(BlueprintReadOnly)
 	bool bCanDrag = false;
 
-	/** 该格是否是当前 Model 高亮选择；蓝图只用它表现边框或颜色。 */
+	/** 该格是否是当前库存 WBP 的本地高亮选择；Model 原始投影不写它，具体页面渲染时再标记自己的选择。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bSelected = false;
 
@@ -240,11 +240,11 @@ struct FCatInventoryViewState
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatInventorySlotView> CampInventorySlots;
 
-	/** 当前 Model 选中的格子身份；它记录来源和宿主内槽位，避免用某个 UI 的局部下标去找另一份库存。 */
+	/** 当前库存 WBP 本地选中的格子身份；Model 原始投影保持为空，页面渲染时写入自己的只读副本。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatInventorySlotView SelectedSlot;
 
-	/** 当前是否有一份可复核的选中格子身份；UI 用它判断 SelectedSlot 是否代表真实选择。 */
+	/** 当前页面是否有一份可复核的本地选中格子身份；不同库存 WBP 之间不会共享这个选择。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasSelectedSlot = false;
 

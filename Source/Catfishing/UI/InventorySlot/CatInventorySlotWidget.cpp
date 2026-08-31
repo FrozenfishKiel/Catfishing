@@ -106,14 +106,13 @@ void UCatInventorySlotWidget::NativeOnInitialized()
 }
 
 // 鼠标按下流程：
-// 1. 左键先广播点击事实，再把同一次输入交给 Slate 检测拖拽。
-// 2. 右键只广播上下文意图，主界面可以选择该格或打开动作区。
+// 1. 左键只交给 Slate 检测拖拽，不在拖拽阈值确认前广播选择或刷新本页。
+// 2. 右键只广播上下文意图，主界面按格子来源直接构造动作。
 // 3. 其他按键不消费，避免格子截断父级面板快捷键。
 FReply UCatInventorySlotWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
 	if (InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
 	{
-		OnSlotSelected.Broadcast(LastSlotView);
 		return FReply::Handled().DetectDrag(TakeWidget(), EKeys::LeftMouseButton);
 	}
 	if (InMouseEvent.GetEffectingButton() == EKeys::RightMouseButton)
@@ -122,6 +121,18 @@ FReply UCatInventorySlotWidget::NativeOnMouseButtonDown(const FGeometry& InGeome
 		return FReply::Handled();
 	}
 	return Super::NativeOnMouseButtonDown(InGeometry, InMouseEvent);
+}
+
+// 鼠标松开流程：只有未被拖拽消费的普通左键点击会走到这里；这时再更新本页本地选中，不会影响 Drop 命中。
+FReply UCatInventorySlotWidget::NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
+{
+	(void)InGeometry;
+	if (InMouseEvent.GetEffectingButton() == EKeys::LeftMouseButton)
+	{
+		OnSlotSelected.Broadcast(LastSlotView);
+		return FReply::Handled();
+	}
+	return Super::NativeOnMouseButtonUp(InGeometry, InMouseEvent);
 }
 
 // 拖拽流程：

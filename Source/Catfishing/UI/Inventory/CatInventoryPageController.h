@@ -49,17 +49,11 @@ public:
 	/** 返回库存是否由本 PageController 保持打开；不从 Widget 可见性反推。 */
 	bool IsInventoryOpen() const;
 
-	/** 外部事实变化时让 Model 重读；PageController 不保存任何后端快照。 */
-	void RefreshModel();
-
 	/** Controller 的输入组件可能晚于 UI 装配完成；本入口让拥有者在输入链就绪后重新安装库存 Action。 */
 	void RefreshInputBinding();
 
 	/** 库存 WBP 请求关闭当前库存页；关闭状态下的迟到点击不会反向打开。 */
 	void RequestCloseInventoryFromWidget();
-
-	/** 库存 WBP 请求选择一个格子；PageController 只把格子身份交给 Model 基于对应数据源复核。 */
-	void RequestSelectInventorySlotFromWidget(const FCatInventorySlotView& Slot);
 
 	/** 库存 WBP 请求处理一个格子的右键上下文；PageController 会按该格所属数据源决定取用或装备选择。 */
 	void RequestInventorySlotContextFromWidget(const FCatInventorySlotView& Slot);
@@ -68,8 +62,8 @@ public:
 	void RequestInventorySlotDropFromWidget(const FCatInventorySlotView& SourceSlot,
 		const FCatInventorySlotView& TargetSlot);
 
-	/** 库存 WBP 请求执行吃鱼或献祭动作；PageController 从 Model 当前选择重建正式服务器命令。 */
-	void RequestInventoryActionFromWidget(ECatInventoryAction Action);
+	/** 库存 WBP 请求执行吃鱼或献祭动作；PageController 用页面传入的本地选择对照最新 Model 快照重建服务器命令。 */
+	void RequestInventoryActionFromWidget(ECatInventoryAction Action, const FCatInventorySlotView& SelectedSlot);
 
 private:
 	/** 设置库存打开态并成对处理视口、输入模式和 Model 打开投影；普通切换和交互打开共用这条生命周期。 */

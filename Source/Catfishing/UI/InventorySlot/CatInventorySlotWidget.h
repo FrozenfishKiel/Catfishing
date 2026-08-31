@@ -59,8 +59,11 @@ protected:
 	/** 首次初始化时允许格子接收鼠标和键盘焦点；具体可视布局仍来自 WBP。 */
 	virtual void NativeOnInitialized() override;
 
-	/** 鼠标按下流程处理左键点击、左键拖拽检测和右键上下文；格子只发 UI 意图，不直接刷新列表或移动物品。 */
+	/** 鼠标按下流程只启动左键拖拽检测并处理右键上下文；左键选择等到松开时再发，避免拖拽前刷新库存页。 */
 	virtual FReply NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
+
+	/** 鼠标松开流程负责确认一次普通左键点击；已经进入拖拽的输入不会靠这里提前改格子显示。 */
+	virtual FReply NativeOnMouseButtonUp(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
 
 	/** 拖拽开始流程为运行期库存物品或 Items 容器物体创建轻量 DragDropOperation；正式转移仍由目标格 Drop 和服务器命令裁决，拖拽预览只取真实 SlotView 缩略图，不叠加文字或上一次 Brush。 */
 	virtual void NativeOnDragDetected(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent,
