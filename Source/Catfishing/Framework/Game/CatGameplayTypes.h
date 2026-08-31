@@ -509,15 +509,10 @@ public:
 	void ServerMoveInventorySlot(FGuid RequestId, int64 ExpectedRevision,
 		int32 SourceSlotIndex, int32 TargetSlotIndex);
 
-	/** 从指定商店摊位购买服务器目录项；服务器复核玩家仍在摊位旁，再全图寻找可接收发货的营地公共仓库。 */
+	/** 从指定商店摊位支付整车服务器目录项；服务器先限制购物车载荷，再复核摊位和营地公共仓库。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
-	void ServerSubmitShopPurchaseAtKiosk(ACatShopKioskActor* ShopKiosk, FName EntryId, FGuid RequestId,
-		int64 ExpectedWalletRevision);
-
-	/** 从指定商店摊位免费领取目录项；服务器仍按商店表白名单、摊位距离和当前 World 的营地公共仓库裁决。 */
-	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
-	void ServerClaimFreeShopEntryAtKiosk(ACatShopKioskActor* ShopKiosk, FName EntryId, FGuid RequestId,
-		int64 ExpectedWalletRevision);
+	void ServerSubmitShopCartAtKiosk(ACatShopKioskActor* ShopKiosk,
+		const TArray<FCatShopCartLineCommand>& Lines, FGuid RequestId, int64 ExpectedWalletRevision);
 
 	/** 售出指定 Items 鱼容器中的鱼；服务器从地面鱼护箱子或共享鱼缸读取重量，并在删除鱼后把收入记入团队公款。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
@@ -761,9 +756,9 @@ private:
 	bool CanForwardGameplayCommand() const;
 	/** 查询 Fishing/玩家打窝专用 gate；它复用身份与 teardown 判断，但额外要求 Run 处于 DayActive、允许钓鱼且当前猫没有倒地。 */
 	bool CanForwardFishingCommand() const;
-	/** 购买与免费领取共用的服务器转发实现；来源摊位只做距离证明，收货公共仓库由当前 World 中的 ACatCampHubActor 接口提供。 */
-	void SubmitShopOrder(ACatShopKioskActor* ShopKiosk, FName EntryId, FGuid RequestId,
-		int64 ExpectedWalletRevision, bool bFreeClaim);
+	/** 支付按钮触发后的服务器转发实现；它解析摊位和公共仓库后提交购物车，并把交付段结果回送 owning client。 */
+	void SubmitShopCart(ACatShopKioskActor* ShopKiosk, const TArray<FCatShopCartLineCommand>& Lines,
+		FGuid RequestId, int64 ExpectedWalletRevision);
 
 	/** owning client 最近收到的 Social 协议读模型；由可靠结果 RPC 整体替换，不复制回服务器或作为权限事实。 */
 	UPROPERTY(Transient)

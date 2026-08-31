@@ -27,7 +27,7 @@ public:
 	static bool TryEvaluateFishPurchasePrice(const TArray<FCatShopFishWeightPrice>& Anchors, double WeightKilograms,
 		int32& OutPrice);
 
-	/** ShopEconomy 总运行 gate；关闭时购买、免费领取和售鱼入账全部 fail-closed。 */
+	/** ShopEconomy 总运行 gate；关闭时购物车支付和售鱼入账全部 fail-closed。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
 	bool bEnableShopEconomyRuntime = false;
 

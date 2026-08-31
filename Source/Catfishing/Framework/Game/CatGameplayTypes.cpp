@@ -69,6 +69,31 @@ namespace
 		return UniqueId.IsValid() && UniqueId->GetType() == CatPieNoSessionUniqueIdType;
 	}
 
+	// 商店购物车 RPC 输入检查流程：先限制原始数组规模，再合并重复 EntryId 检查单品次数，避免恶意客户端把可靠 RPC 变成大内存归一化入口。
+	bool IsShopCartRpcPayloadWithinLimits(const TArray<FCatShopCartLineCommand>& Lines)
+	{
+		if (Lines.IsEmpty() || Lines.Num() > CatShopCartLimits::MaxCartLines)
+		{
+			return false;
+		}
+		TMap<FName, int32> CountsByEntryId;
+		for (const FCatShopCartLineCommand& Line : Lines)
+		{
+			if (Line.EntryId.IsNone() || Line.CartCount <= 0
+				|| Line.CartCount > CatShopCartLimits::MaxCartCountPerEntry)
+			{
+				return false;
+			}
+			int32& Count = CountsByEntryId.FindOrAdd(Line.EntryId);
+			if (Line.CartCount > CatShopCartLimits::MaxCartCountPerEntry - Count)
+			{
+				return false;
+			}
+			Count += Line.CartCount;
+		}
+		return true;
+	}
+
 	// 容器触达半径流程：外部容器优先复用宿主交互接口的半径，未实现或未声明时才回退 Camp 配置。
 	double ResolveContainerReachRadiusCentimeters(const AActor* Host, const UCatCampSettings* Settings)
 	{
@@ -2661,34 +2686,38 @@ void ACatfishingPlayerController::ServerRequestInteraction_Implementation(AActor
 	ICatInteractable::Execute_Interact(Target, this, RequestId);
 }
 
-// 摊位购买 RPC 流程：服务器只接受来源摊位引用作为距离证明，不接受客户端提交的价格、库存或收货仓库。
-void ACatfishingPlayerController::ServerSubmitShopPurchaseAtKiosk_Implementation(ACatShopKioskActor* ShopKiosk,
-	const FName EntryId, const FGuid RequestId, const int64 ExpectedWalletRevision)
+// 摊位购物车支付 RPC 流程：服务器只接受来源摊位引用和 EntryId/次数意图，不接受客户端提交的价格、库存或收货仓库。
+void ACatfishingPlayerController::ServerSubmitShopCartAtKiosk_Implementation(ACatShopKioskActor* ShopKiosk,
+	const TArray<FCatShopCartLineCommand>& Lines, const FGuid RequestId, const int64 ExpectedWalletRevision)
 {
-	SubmitShopOrder(ShopKiosk, EntryId, RequestId, ExpectedWalletRevision, false);
+	SubmitShopCart(ShopKiosk, Lines, RequestId, ExpectedWalletRevision);
 }
 
-// 摊位免费领取 RPC 流程：服务器只接受来源摊位引用作为距离证明，免费白名单和公共仓库发货仍由后端表与营地接口裁决。
-void ACatfishingPlayerController::ServerClaimFreeShopEntryAtKiosk_Implementation(ACatShopKioskActor* ShopKiosk,
-	const FName EntryId, const FGuid RequestId, const int64 ExpectedWalletRevision)
-{
-	SubmitShopOrder(ShopKiosk, EntryId, RequestId, ExpectedWalletRevision, true);
-}
-
-// 商店订单转发流程：
+// 商店购物车转发流程：
 // 1. 先建立一份交付结果壳，任何早期 gate 拒绝都要回 owning client，避免商店 UI 一直等待。
-// 2. 来源摊位同时证明玩家还在摊位旁边，并提供本摊位自己的商店库存组件作为 EntryId 的权威解释范围。
-// 3. 随后遍历当前 World 的 ACatCampHubActor，让营地接口回答能否提供 PublicInventory。
-// 4. 没有摊位库存、没有营地或所有营地都没有 PublicInventory 时回送 DependencyUnavailable，不进入扣款；有仓库后才把 EntryId 交给订单协调器按摊位表结算。
-// 5. 协调器成功或失败后只把交付段结果回给本玩家；公共仓库和商店公开快照分别通过自己的复制事实刷新。
-void ACatfishingPlayerController::SubmitShopOrder(ACatShopKioskActor* ShopKiosk, const FName EntryId, const FGuid RequestId,
-	const int64 ExpectedWalletRevision, const bool bFreeClaim)
+// 2. 在查摊位前先限制客户端购物车载荷规模，避免可靠 RPC 被异常大数组拖进后续归一化和查表流程。
+// 3. 来源摊位同时证明玩家还在摊位旁边，并提供本摊位自己的商店库存组件作为 EntryId 的权威解释范围。
+// 4. 随后遍历当前 World 的 ACatCampHubActor，让营地接口回答能否提供 PublicInventory。
+// 5. 没有摊位库存、没有营地或所有营地都没有 PublicInventory 时回送 DependencyUnavailable，不进入扣款；有仓库后才把购物车交给订单协调器按摊位表结算。
+// 6. 协调器成功或失败后只把交付段结果回给本玩家；公共仓库和商店公开快照分别通过自己的复制事实刷新。
+void ACatfishingPlayerController::SubmitShopCart(ACatShopKioskActor* ShopKiosk,
+	const TArray<FCatShopCartLineCommand>& Lines, const FGuid RequestId, const int64 ExpectedWalletRevision)
 {
 	FCatDomainCommandResult DeliveryResult;
 	DeliveryResult.RequestId = RequestId;
 	if (!CanForwardGameplayCommand())
 	{
 		DeliveryResult.Error = ECatDomainCommandError::CommandsClosed;
+		DeliverCampCommandResultToOwningClient(DeliveryResult);
+		return;
+	}
+	if (!RequestId.IsValid() || !IsShopCartRpcPayloadWithinLimits(Lines))
+	{
+		DeliveryResult.Error = ECatDomainCommandError::InvalidPayload;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=shop_cart_invalid_rpc_payload RequestId=%s LineCount=%d MaxLines=%d MaxCountPerEntry=%d"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), Lines.Num(),
+			CatShopCartLimits::MaxCartLines, CatShopCartLimits::MaxCartCountPerEntry);
 		DeliverCampCommandResultToOwningClient(DeliveryResult);
 		return;
 	}
@@ -2715,28 +2744,26 @@ void ACatfishingPlayerController::SubmitShopOrder(ACatShopKioskActor* ShopKiosk,
 	{
 		DeliveryResult.Error = ECatDomainCommandError::DependencyUnavailable;
 		UE_LOG(LogCatfishing, Warning,
-			TEXT("Event=shop_order_dependency_missing RequestId=%s EntryId=%s Shop=%s HasShopInventory=%s HasDeliveryInventory=%s Result=RejectedBeforePayment"),
-			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *EntryId.ToString(), *GetNameSafe(ShopKiosk),
+			TEXT("Event=shop_cart_dependency_missing RequestId=%s LineCount=%d Shop=%s HasShopInventory=%s HasDeliveryInventory=%s Result=RejectedBeforePayment"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), Lines.Num(), *GetNameSafe(ShopKiosk),
 			ShopInventory ? TEXT("true") : TEXT("false"), DeliveryInventory ? TEXT("true") : TEXT("false"));
 		DeliverCampCommandResultToOwningClient(DeliveryResult);
 		return;
 	}
 
-	FCatShopPurchaseCommand Command;
+	FCatShopCartCommand Command;
 	Command.Context.RequestId = RequestId;
 	Command.Context.ExpectedRevision = ExpectedWalletRevision;
 	Command.Context.StableNetId = CurrentPlayerState->GetUniqueId()->ToString();
-	Command.EntryId = EntryId;
 	Command.ShopInventoryId = ShopInventory->GetShopInventoryId();
-	const FCatShopOrderResult Result = bFreeClaim
-		? Coordinator->SubmitFreeClaim(Command, ShopInventory, DeliveryInventory)
-		: Coordinator->SubmitPurchase(Command, ShopInventory, DeliveryInventory);
+	Command.Lines = Lines;
+	const FCatShopOrderResult Result = Coordinator->SubmitCart(Command, ShopInventory, DeliveryInventory);
 	DeliveryResult = Result.Delivery;
+	DeliveryResult.RequestId = RequestId;
 	UE_LOG(LogCatfishing, Log,
-		TEXT("Event=shop_order_submitted RequestId=%s EntryId=%s Free=%s Order=%s Delivery=%s"),
-		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *EntryId.ToString(),
-		bFreeClaim ? TEXT("true") : TEXT("false"),
-		*UEnum::GetValueAsString(Result.Transaction.Command.Error),
+		TEXT("Event=shop_cart_submitted RequestId=%s LineCount=%d Order=%s Delivery=%s"),
+		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), Lines.Num(),
+		*UEnum::GetValueAsString(Result.CartTransaction.Command.Error),
 		*UEnum::GetValueAsString(Result.Delivery.Error));
 	DeliverCampCommandResultToOwningClient(DeliveryResult);
 }

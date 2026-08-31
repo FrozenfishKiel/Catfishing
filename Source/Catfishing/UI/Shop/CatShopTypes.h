@@ -10,10 +10,12 @@ enum class ECatShopUIAction : uint8
 {
 	/** 没有有效动作；用于默认空值和拒绝旧点击。 */
 	None,
-	/** 购买一条服务器目录项；价格和库存仍由 ShopEconomy 裁决。 */
-	PurchaseEntry,
-	/** 领取一条服务器明确配置为免费自取的目录项。 */
-	ClaimFreeEntry
+	/** 点击商品卡片后把该目录项加入本地购物车；不会立刻扣钱或发货。 */
+	AddEntryToCart,
+	/** 点击购物车垃圾桶后移除该目录项的一次选购；数量大于 1 时只减少一份。 */
+	RemoveCartEntry,
+	/** 点击支付按钮后把当前购物车一次提交给服务器结算。 */
+	PayCart
 };
 
 /** 商店目录中一行商品的展示投影；它由摊位目录和公开经济快照拼出，不能写回商店后端。 */
@@ -34,7 +36,11 @@ struct FCatShopEntryView
 	UPROPERTY(BlueprintReadOnly)
 	FName DefinitionId = NAME_None;
 
-	/** 单次购买会发到营地公共仓库的数量；UI 只展示，不能把它作为客户端提交参数。 */
+	/** 商品所属展示分类；WBP 本地分类按钮只用它过滤 DisplayedEntries，不修改 Model 的真实商品数组。 */
+	UPROPERTY(BlueprintReadOnly)
+	FName DisplayCategoryId = NAME_None;
+
+	/** 单次选购会发到营地公共仓库的数量；UI 只展示，不能把它作为客户端提交参数。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 PurchaseQuantity = 1;
 
@@ -46,7 +52,7 @@ struct FCatShopEntryView
 	UPROPERTY(BlueprintReadOnly)
 	int32 InitialStock = 0;
 
-	/** GameState 公开货架里复制出的剩余库存；无限库存时保持 0，只看 bUnlimitedStock。 */
+	/** GameState 公开货架里复制出的剩余库存；无限库存展示不依赖该数值，只看 bUnlimitedStock。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 RemainingStock = 0;
 
@@ -54,7 +60,7 @@ struct FCatShopEntryView
 	UPROPERTY(BlueprintReadOnly)
 	bool bStockAvailable = false;
 
-	/** 商品是否无限库存；免费饵和保底竿通常依赖它保证永远能领。 */
+	/** 商品是否无限库存；UI 用它判断是否需要展示剩余量和限制本地加购次数。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bUnlimitedStock = false;
 
@@ -62,23 +68,23 @@ struct FCatShopEntryView
 	UPROPERTY(BlueprintReadOnly)
 	bool bSoldOut = false;
 
-	/** 当前团队公款是否足够支付该条目；免费领取始终为 true，付费项随公款变化刷新。 */
+	/** 当前团队公款是否足够支付单个条目；它只作为展示提示，购物车最终按总价裁决。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bAffordable = true;
-
-	/** 该条目是否应该走免费领取 RPC；它来自来源摊位库存组件的免费条目白名单。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bFreeClaim = false;
 
 	/** 当前 UI 是否允许发起该条目的点击；缺少公款快照或已有 pending 时保持 false。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bActionEnabled = false;
 
+	/** 当前购物车里这个商品已选购几次；商品按钮可用它显示叠加数量，不作为服务器提交的唯一事实。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 CartCount = 0;
+
 	/** 商品行当前可展示的中文摘要；Model 写入价格、库存和余额提示，WBP 只负责显示。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText DisplayText;
 
-	/** 商品行按钮当前应显示的动作名；Model 按免费领取白名单写入“领取”或“购买”。 */
+	/** 商品行按钮当前应显示的动作名；当前正式语义是加入本地购物车。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText ActionText;
 
@@ -89,9 +95,68 @@ struct FCatShopEntryView
 	/** 商品行当前说明；只作为 WBP 详情展示，不参与购买裁决。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText DescriptionText;
+
+	/** 商品行图标覆盖；WBP 可以直接加载它，也可以在为空时回退到装备定义图标。 */
+	UPROPERTY(BlueprintReadOnly)
+	TSoftObjectPtr<UTexture2D> IconOverride;
 };
 
-/** 商店界面的完整展示投影；它只包含商品、公款和最近提交提示，不包含背包或 HUD 状态。 */
+/** 购物车中一行商品的展示投影；它来自本地购物车和当前真实商品数组的交叉结果，不会同步给其他玩家。 */
+USTRUCT(BlueprintType)
+struct FCatShopCartLineView
+{
+	GENERATED_BODY()
+
+	/** 购物车行对应的商店目录 ID；垃圾桶按钮只回传它，Model 再删除一份本地选购。 */
+	UPROPERTY(BlueprintReadOnly)
+	FName EntryId = NAME_None;
+
+	/** 购物车行指向的装备或耗材定义；WBP 可用它回退展示图标或名字。 */
+	UPROPERTY(BlueprintReadOnly)
+	FName DefinitionId = NAME_None;
+
+	/** 商品所属展示分类；购物车本身不按分类过滤，但可用它做视觉分组或调试显示。 */
+	UPROPERTY(BlueprintReadOnly)
+	FName DisplayCategoryId = NAME_None;
+
+	/** 该商品在购物车里被选购了几次；垃圾桶每点一次只减少这个计数一份。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 CartCount = 0;
+
+	/** 单次选购会发放的数量；交付总数等于它乘以 CartCount。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 PurchaseQuantity = 1;
+
+	/** 支付成功后本行会进入营地公共仓库的总数量。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 DeliveryQuantity = 0;
+
+	/** 商品单次选购价格；实际扣款仍由服务器当前目录重新计算。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 UnitPrice = 0;
+
+	/** 本行小计；等于 UnitPrice 乘以 CartCount。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 LineTotalPrice = 0;
+
+	/** 当前真实货架下这行是否仍可结算；任一行不可结算时支付按钮整体禁用。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bLineAvailable = false;
+
+	/** 商品行当前显示名；优先沿用商品投影的展示名。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText DisplayNameText;
+
+	/** 购物车行当前可展示的中文摘要；简单 WBP 可直接绑定这段文本。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText DisplayText;
+
+	/** 购物车行图标覆盖；WBP 可用它显示右侧已选购列表的小图。 */
+	UPROPERTY(BlueprintReadOnly)
+	TSoftObjectPtr<UTexture2D> IconOverride;
+};
+
+/** 商店界面的完整展示投影；它只包含商品、公款、购物车和最近提交提示，不包含背包或 HUD 状态。 */
 USTRUCT(BlueprintType)
 struct FCatShopViewState
 {
@@ -109,9 +174,25 @@ struct FCatShopViewState
 	UPROPERTY(BlueprintReadOnly)
 	FCatShopPublicEconomySnapshot Economy;
 
-	/** 当前可展示商品目录；条目来自来源摊位库存组件的展示副本，不包含服务器写口。 */
+	/** 当前来源摊位的完整真实商品目录；Widget 会在本地按分类过滤出 DisplayedEntries。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatShopEntryView> Entries;
+
+	/** 当前本地购物车行；它由玩家本机点击生成，不同步给其他客户端，支付时才发送 EntryId 和次数。 */
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FCatShopCartLineView> CartLines;
+
+	/** 当前购物车总价；Model 只用于展示和按钮可用性，服务器支付时会重新计算。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 CartTotalPrice = 0;
+
+	/** 当前购物车是否包含行数超限、已下架、售罄、数量超过库存或小计溢出的行；为 true 时支付整体禁用。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bCartHasInvalidLines = false;
+
+	/** 当前支付按钮是否可点击；空车、pending、数据未同步、购物车失效或资金不足都会置 false。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bCanPayCart = false;
 
 	/** 最近一次 UI 提交的动作；用于展示“已提交/被本地拒绝”的结果提示。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -121,7 +202,7 @@ struct FCatShopViewState
 	UPROPERTY(BlueprintReadOnly)
 	FName LastEntryId = NAME_None;
 
-	/** 当前是否已有购买或领取请求提交后等待商店快照同步。 */
+	/** 当前是否已有支付请求提交后等待服务器回包；Model 和 WBP 用它禁用加购、删除和支付，避免本地购物车与已提交订单脱节。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bActionPending = false;
 
@@ -129,7 +210,19 @@ struct FCatShopViewState
 	UPROPERTY(BlueprintReadOnly)
 	FText WalletText;
 
-	/** 给 WBP 结果区域绑定的购买/领取反馈。 */
+	/** 给 WBP 结果区域绑定的加购、删除、支付或拒绝反馈。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText ResultText;
+
+	/** 给 WBP 购物车总计文本绑定的金额摘要。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText CartTotalText;
+
+	/** 给 WBP 支付按钮绑定的固定按钮文案。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText PayButtonText;
+
+	/** 支付按钮禁用时的原因；资金不足时必须显示“资金不足，无法购买！”。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText PayDisabledReasonText;
 };

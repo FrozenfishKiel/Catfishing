@@ -28,6 +28,21 @@ struct FCatCampInventorySnapshot
 	TArray<FCatRunInventorySlot> InventorySlots;
 };
 
+/** 服务器权威来源请求放入公共仓库的一行物品；它只描述定义和数量，不指定目标格子。 */
+USTRUCT(BlueprintType)
+struct FCatCampInventoryAddItemRequest
+{
+	GENERATED_BODY()
+
+	/** 要进入营地公共仓库的装备或耗材定义；实际堆叠规则由装备定义和仓库容量裁决。 */
+	UPROPERTY(BlueprintReadWrite)
+	FName DefinitionId = NAME_None;
+
+	/** 本行要放入公共仓库的数量；装备型通常是 1，数量型可以大于 1。 */
+	UPROPERTY(BlueprintReadWrite, meta = (ClampMin = "1"))
+	int32 Quantity = 1;
+};
+
 /** 营地公共仓库快照变化通知；UI 或营地交互层收到后只能重读快照，不能直接写库存。 */
 DECLARE_MULTICAST_DELEGATE(FCatCampInventorySnapshotChanged);
 
@@ -71,6 +86,14 @@ public:
 	/** 从商店、奖励或其他服务器权威来源把物品放入公共仓库；成功后递增仓库版本并复制。 */
 	FCatDomainCommandResult AddItemFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName DefinitionId, int32 Quantity);
+
+	/** 查询本仓库能否在指定版本整批接收多种物品；服务器身份参与幂等作用域，避免不同玩家同 RequestId 串发货。 */
+	ECatDomainCommandError ValidateAddItemsFromAuthority(FGuid RequestId, int64 ExpectedRevision,
+		const FString& StableNetId, const TArray<FCatCampInventoryAddItemRequest>& Items) const;
+
+	/** 从商店购物车等服务器权威来源整批放入公共仓库；成功按服务器身份缓存终态，失败不写格子也不封死重试。 */
+	FCatDomainCommandResult AddItemsFromAuthority(FGuid RequestId, int64 ExpectedRevision,
+		const FString& StableNetId, const TArray<FCatCampInventoryAddItemRequest>& Items);
 
 	/** 查询玩家是否能从指定公共格子取物到自己的随身装备库存；它只做预检，不修改两边库存。 */
 	ECatDomainCommandError ValidateWithdrawToEquipment(FGuid RequestId, int32 SourceSlotIndex, int32 Quantity,
@@ -116,6 +139,9 @@ private:
 	/** 只读判断指定数量能否完整放进公共仓库；不会为了预检扩容或写入空格。 */
 	bool CanStoreItem(const UCatEquipmentDefinition& Definition, FName DefinitionId, int32 Quantity) const;
 
+	/** 只读判断多行物品能否按当前仓库状态整批放完；模拟成功才允许购物车扣款。 */
+	bool CanStoreItems(const TArray<FCatCampInventoryAddItemRequest>& Items) const;
+
 	/** 解析公共仓库交互要打开的独立库存页类；路径失效时返回空，让交互明确失败而不是退回默认库存页。 */
 	TSubclassOf<UCatCampInventoryWidget> LoadInventoryViewClass() const;
 
@@ -125,11 +151,22 @@ private:
 	/** 向公共仓库格子写入一批物品；调用前必须已通过 CanStoreItem，成功后只改变 Snapshot.InventorySlots。 */
 	bool AddItemQuantity(const UCatEquipmentDefinition& Definition, FName DefinitionId, int32 Quantity);
 
+	/** 向指定格子数组模拟或写入一批物品；调用方决定传入临时数组还是正式 Snapshot。 */
+	bool AddItemQuantityToSlots(TArray<FCatRunInventorySlot>& InventorySlots,
+		const UCatEquipmentDefinition& Definition, FName DefinitionId, int32 Quantity) const;
+
+	/** 整理整批入库请求并生成幂等载荷签名；重复 DefinitionId 会合并，行顺序不会影响同一请求的重放。 */
+	bool BuildAddItemsPayloadSignature(const TArray<FCatCampInventoryAddItemRequest>& Items,
+		FString& OutPayloadSignature, TArray<FCatCampInventoryAddItemRequest>& OutNormalizedItems) const;
+
 	/** 把本次提交发布给复制和本机 UI；所有读者都从完整 Snapshot 重建表现。 */
 	void PublishSnapshot();
 
 	/** 组合操作名和 RequestId 的本 Actor 幂等键；缓存只活在当前仓库 Actor 生命周期内。 */
 	static FString MakeTerminalKey(const TCHAR* Operation, FGuid RequestId);
+
+	/** 组合操作名、服务器身份和 RequestId；跨玩家可共享同一个公共仓库，但批量发货幂等必须按玩家订单隔离。 */
+	static FString MakeTerminalKey(const TCHAR* Operation, const FString& StableNetId, FGuid RequestId);
 
 	/** 公共仓库在关卡中的空间根；它只承载交互或摆放位置，不保存任何库存规则。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|CampInventory",

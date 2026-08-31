@@ -2,16 +2,17 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
-#include "ShopEconomy/CatShopCatalogDefinition.h"
 #include "ShopEconomy/CatShopEconomyTypes.h"
 #include "CatShopInventoryComponent.generated.h"
+
+class UDataTable;
 
 /** 商店货架库存变化通知；经济复制层订阅它后重建公开快照，UI 不直接改库存。 */
 DECLARE_MULTICAST_DELEGATE(FCatShopInventoryComponentChanged);
 
 /**
  * 挂在商店摊位上的库存组件，代表“这个摊位当前卖什么”和“每个货架项还剩多少”。
- * 它持有固定商品、随机池和刷新规则；团队公款、交易账本和公共仓库发货仍由 ShopEconomy 服务与订单协调器处理。
+ * 它从策划 DataTable 构建固定货架和随机候选；团队公款、交易账本和公共仓库发货仍由 ShopEconomy 服务与订单协调器处理。
  */
 UCLASS(ClassGroup = (Catfishing), BlueprintType, Blueprintable, meta = (BlueprintSpawnableComponent))
 class CATFISHING_API UCatShopInventoryComponent : public UActorComponent
@@ -19,7 +20,7 @@ class CATFISHING_API UCatShopInventoryComponent : public UActorComponent
 	GENERATED_BODY()
 
 public:
-	/** 构造默认商店货架表；默认表满足初级竿、基础饵、初级漂必出，其余商品进入随机池。 */
+	/** 构造商店货架组件；组件只建立复制和刷新规则默认值，具体商品必须由策划 DataTable 提供。 */
 	UCatShopInventoryComponent();
 
 	/** 复制商店库存组件的稳定身份；货架数量仍通过 GameState 的公开经济快照同步。 */
@@ -54,14 +55,12 @@ public:
 	/** 查询本摊位当前某个 EntryId 对应的目录原文；订单协调器用它在扣款前先问公共仓库能否接收。 */
 	bool TryGetCatalogEntry(FName EntryId, FCatShopCatalogEntry& OutEntry) const;
 
-	/** authority 订单提交时扣减一条货架库存；无限库存保持版本不变，有限库存成功扣减后推进库存版本。 */
-	bool ConsumeCatalogEntryFromAuthority(FName EntryId, FCatShopStockSnapshot& OutSnapshot);
+	/** authority 整车订单提交时一次性扣减多条货架库存；任一有限库存不足时整批保持原状。 */
+	bool ConsumeCatalogEntriesFromAuthority(const TArray<FCatShopCartLineCommand>& Lines,
+		TArray<FCatShopStockSnapshot>& OutSnapshots);
 
 	/** 收集本摊位所有可展示商品候选；UI 用公开货架快照过滤出本轮随机抽中的条目。 */
 	void CollectDisplayCatalogEntries(TArray<FCatShopCatalogEntry>& OutEntries) const;
-
-	/** 判断某个 EntryId 是否是本摊位允许免费领取的保底项；只认组件上显式配置的三条白名单。 */
-	bool IsFreeClaimEntry(FName EntryId) const;
 
 	/** 推进本摊位货架天序号，并只重置目录项上标记为每日进货的有限库存。 */
 	bool AdvanceShopDay(int32 NewDayIndex);
@@ -90,26 +89,17 @@ private:
 		int64 Revision = 0;
 	};
 
-	/** 一条必须出现在固定货架中的保底免费项；它来自本组件的免费白名单配置。 */
-	struct FRequiredStarterShopEntry
-	{
-		/** 需要稳定存在于固定货架的目录 ID；随机池抽中不能替代“每次都有”。 */
-		FName EntryId = NAME_None;
-
-		/** 对应配置字段的人类可读名称；报错时用它指出缺的是哪条白名单。 */
-		const TCHAR* ConfigName = TEXT("");
-	};
-
-	/** 根据本组件的三条免费白名单组装保底检查列表；任一缺失或重复都会关闭本摊位目录。 */
-	bool CollectRequiredStarterShopEntries(TArray<FRequiredStarterShopEntry>& OutRequiredEntries,
-		FString& OutError) const;
-
-	/** 校验三条保底项确实来自固定表，且每条都是启用、免费、无限库存的可运行商品。 */
-	bool ValidateRequiredFixedSaleEntries(const TArray<FCatShopSaleEntry>& Entries, FString& OutError) const;
-
-	/** 按本组件的正式资产或内联固定/随机数组生成一次运行货架目录；失败时说明具体配置问题。 */
+	/** 按本组件的正式 DataTable 生成一次运行货架目录；失败时说明具体配置问题。 */
 	bool BuildRuntimeCatalogEntries(FRandomStream& RandomStream, TArray<FCatShopCatalogEntry>& OutEntries,
 		FString& OutError) const;
+
+	/** 从策划 DataTable 构建一次运行货架；固定行直接进入货架，随机行按权重不放回抽取。 */
+	bool BuildCatalogEntriesFromTable(const UDataTable& CatalogTable, FRandomStream& RandomStream,
+		TArray<FCatShopCatalogEntry>& OutEntries, FString& OutError) const;
+
+	/** 从策划 DataTable 收集所有可能展示的启用商品候选；当前未抽中的随机项会在 UI 侧被公开库存过滤掉。 */
+	void CollectDisplayCatalogEntriesFromTable(const UDataTable& CatalogTable,
+		TArray<FCatShopCatalogEntry>& OutEntries) const;
 
 	/** 把一组已校验目录项写成当前货架库存；重复 EntryId 或非法项会让整轮重建失败并清空临时结果。 */
 	bool RebuildStockFromCatalogEntries(const TArray<FCatShopCatalogEntry>& CatalogEntries, FString& OutError);
@@ -122,40 +112,15 @@ private:
 		meta = (AllowPrivateAccess = "true"))
 	FGuid ShopInventoryId;
 
-	/** 正式商店出售表资产；配置后它是本摊位固定货架、随机池和刷新规则的首选数据源。 */
+	/** 正式商店出售表资产；策划在这里维护商品、分类、价格、固定上架和随机候选，未配置时商店 fail-closed。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catfishing|Shop|Catalog",
 		meta = (AllowPrivateAccess = "true"))
-	TSoftObjectPtr<UCatShopCatalogDefinition> ShopCatalog;
+	TSoftObjectPtr<UDataTable> ShopCatalogTable;
 
-	/** 本摊位每次刷新都会保留的固定商品；初级竿、基础饵和初级漂默认在这里。 */
+	/** 本摊位的刷新规则；只描述每次从随机候选里抽几条，不决定刷新触发时机。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catfishing|Shop|Catalog",
 		meta = (AllowPrivateAccess = "true"))
-	TArray<FCatShopSaleEntry> FixedSaleEntries;
-
-	/** 本摊位随机刷新候选池；刷新时按权重抽出若干条进入当前货架库存。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catfishing|Shop|Catalog",
-		meta = (AllowPrivateAccess = "true"))
-	TArray<FCatShopRandomSaleEntry> RandomSaleEntries;
-
-	/** 本摊位的刷新规则；只描述抽几条和是否保留固定项，不决定何时刷新。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catfishing|Shop|Catalog",
-		meta = (AllowPrivateAccess = "true"))
-	FCatShopRefreshRule RefreshRule;
-
-	/** 基础鱼饵免费领取条目；它必须指向固定表里免费且无限库存的商品。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catfishing|Shop|Catalog",
-		meta = (AllowPrivateAccess = "true"))
-	FName FreeOrdinaryBaitEntryId = NAME_None;
-
-	/** 初级鱼竿免费领取条目；它必须始终在固定表中，保证玩家没钱时仍能开钓。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catfishing|Shop|Catalog",
-		meta = (AllowPrivateAccess = "true"))
-	FName FreeStarterRodEntryId = NAME_None;
-
-	/** 初级鱼漂免费领取条目；它和初级鱼竿、基础鱼饵一起构成开钓保底。 */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catfishing|Shop|Catalog",
-		meta = (AllowPrivateAccess = "true"))
-	FName FreeStarterFloatEntryId = NAME_None;
+	FCatShopCatalogRefreshRule RefreshRule;
 
 	/** 当前 authority 货架库存；客户端不直接复制这份 Map，只从 GameState 读取公开快照。 */
 	TMap<FName, FStockRecord> StockByEntryId;

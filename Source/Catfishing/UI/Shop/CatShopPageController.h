@@ -48,10 +48,16 @@ private:
 	/** View 关闭意图入口；关闭页面后通知拥有组件。 */
 	void HandleViewCloseRequested();
 
-	/** View 商品动作入口；验证当前条目后提交正式购买或免费领取 RPC。 */
-	void HandleViewEntryActionRequested(FName EntryId, ECatShopUIAction Action);
+	/** View 商品加购意图入口；验证当前条目后只修改本地购物车，不提交服务器购买。 */
+	void HandleViewAddEntryToCartRequested(FName EntryId);
 
-	/** 服务器购买结果入口；只处理本页提交的 RequestId，DependencyUnavailable 会显示没有可用营地公共仓库且未扣款。 */
+	/** View 购物车删除意图入口；每次从本地购物车删掉一份指定商品。 */
+	void HandleViewRemoveCartLineRequested(FName EntryId);
+
+	/** View 支付意图入口；把当前本地购物车转换成正式服务器 RPC。 */
+	void HandleViewPayCartRequested();
+
+	/** 服务器购物车结果入口；只处理本页提交的 RequestId，失败时购物车保留，成功时清空本地队列。 */
 	void HandleCampCommandResultReceived(const FCatDomainCommandResult& Result);
 
 	/** 打开和关闭时应用模态 UI 输入锁；不安装 MappingContext 或硬写按键。 */
@@ -79,8 +85,14 @@ private:
 	/** View 关闭意图订阅句柄；Unbind 必须从同一 View 移除，避免销毁期按钮重复关闭。 */
 	FDelegateHandle ViewCloseHandle;
 
-	/** View 商品动作意图订阅句柄；Unbind 必须从同一 View 移除，避免旧商品按钮迟到下单。 */
-	FDelegateHandle ViewEntryActionHandle;
+	/** View 商品加购意图订阅句柄；Unbind 必须从同一 View 移除，避免旧商品按钮迟到改购物车。 */
+	FDelegateHandle ViewAddEntryHandle;
+
+	/** View 购物车删除意图订阅句柄；Unbind 必须从同一 View 移除，避免旧垃圾桶迟到改购物车。 */
+	FDelegateHandle ViewRemoveCartLineHandle;
+
+	/** View 支付意图订阅句柄；Unbind 必须从同一 View 移除，避免旧支付按钮迟到提交。 */
+	FDelegateHandle ViewPayCartHandle;
 
 	/** 服务器领域结果订阅句柄；只在本次商店页生命周期内监听，关闭时必须解除。 */
 	FDelegateHandle CampCommandResultHandle;
@@ -88,10 +100,10 @@ private:
 	/** 本页最近一次已提交但尚未由服务器结果或经济快照收束的商店请求；只用于匹配回包，不参与权威结算。 */
 	FGuid PendingShopRequestId;
 
-	/** 本页最近一次 pending 请求的动作类型；服务器失败回包要用它恢复对应按钮反馈。 */
+	/** 本页最近一次 pending 请求的动作类型；服务器失败回包要用它恢复支付反馈。 */
 	ECatShopUIAction PendingShopAction = ECatShopUIAction::None;
 
-	/** 本页最近一次 pending 请求的商品条目；服务器失败回包要用它显示具体失败来源。 */
+	/** 本页最近一次 pending 请求关联的商品条目；购物车支付保持 None，兼容本地拒绝提示接口。 */
 	FName PendingShopEntryId = NAME_None;
 
 	/** 商店打开期间的模态输入恢复记录；关闭页面时用它撤销本页面的移动/视角锁和鼠标状态。 */
