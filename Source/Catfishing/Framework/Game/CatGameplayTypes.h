@@ -192,7 +192,7 @@ private:
 	void HandleDayEnvironmentRefreshElapsed();
 	/** 白天唯一截止回调关闭额度写口并发送 QuotaFailed 事件；夜晚没有倒计时器。 */
 	void HandleDayDeadlineElapsed();
-	/** 把当前 Run Revision 的只读 DTO 交给 Environment，并将同 Revision 的组合快照发布到 GameState。 */
+	/** 把当前 Run Revision 的只读 DTO 交给 Environment，并将同 Revision 的组合快照发布到 GameState；不改变角色身体或表现状态。 */
 	bool RefreshEnvironmentAndPublish();
 	/** 当前环境事件首次出现时把显式自然输入提交给唯一 WaterRegion；成功键按 Run+Day+Event+Anchor 去重，失败保留重试机会。 */
 	void SubmitNaturalChumFieldIfConfigured();

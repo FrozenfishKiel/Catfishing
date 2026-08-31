@@ -1123,7 +1123,7 @@ void ACatfishingGameModeBase::HandleDayDeadlineElapsed()
 	SendRunStateTreeEvent(CatRunStateTreeEvents::QuotaFailed, ECatRunTransitionReason::QuotaFailed);
 }
 
-// 环境发布流程：以当前 Phase 与 Revision 调用只读 provider；成功且同 Revision 时替换环境 DTO，失败或版本不齐时发布同 Revision 空环境，最后把唯一公开聚合写入 GameState。
+// 环境发布流程：以当前 Phase 与 Revision 调用只读 provider；成功且同 Revision 时替换环境 DTO，失败或版本不齐时发布同 Revision 空环境，最后把唯一公开聚合写入 GameState；本流程不写角色身体或表现状态。
 bool ACatfishingGameModeBase::RefreshEnvironmentAndPublish()
 {
 	const ICatEnvironmentProvider* Provider = Cast<ICatEnvironmentProvider>(EnvironmentProvider);
@@ -1135,16 +1135,6 @@ bool ACatfishingGameModeBase::RefreshEnvironmentAndPublish()
 	if (bEnvironmentSucceeded)
 	{
 		RunPublicState.Environment = EnvironmentResult.Snapshot;
-		if (EnvironmentResult.Snapshot.Weather == ECatEnvironmentWeather::Rain)
-		{
-			for (TActorIterator<ACatCharacter> It(GetWorld()); It; ++It)
-			{
-				if (UCatConditionComponent* Conditions = It->GetConditionComponent())
-				{
-					Conditions->SetWetFromAuthority(true);
-				}
-			}
-		}
 		SubmitNaturalChumFieldIfConfigured();
 	}
 	else

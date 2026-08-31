@@ -28,7 +28,7 @@ public:
 	/** 提供身体条件的服务器最终值或客户端复制值；外部只据此判断交互资格，不能借返回值改写 Wet/Downed。 */
 	const FCatConditionSnapshot& GetSnapshot() const;
 
-	/** Environment/水体在 authority 设置纯表现 Wet；重复相同值不增加 Revision，也不修改任何 Attribute。 */
+	/** 身体表现入口在 authority 设置纯表现 Wet；重复相同值不增加 Revision，也不修改任何 Attribute。 */
 	void SetWetFromAuthority(bool bNewWet);
 
 	/** 在实物鱼被不可逆移除前只读校验食用定义、ASC 与倒地阈值；返回 None 才允许上层提交 Items 事务。 */
