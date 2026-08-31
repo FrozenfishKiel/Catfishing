@@ -1,6 +1,6 @@
 # Catfishing 当前框架规则
 
-更新时间：2026-08-12
+更新时间：2026-08-31
 文档状态：当前有效规则。
 范围：给后续开发和 AI 审查使用，列出当前框架允许、禁止和必须保持的边界。本文不记录历史讨论。
 
@@ -58,6 +58,8 @@ SteamSockets、NetDriverDefinitions、`bInitServerOnClient` 和双账号 Steam �
 `ACatCharacter` 同时作为 ASC Owner 和 Avatar。服务端负责授予 Ability、初始化属性和装备入口；拥有客户端只刷新 ActorInfo、输入映射和 UI 订阅。个人鱼护必须通过独立鱼护对象接入 Items 容器事务，不由 Character 生命周期注册。
 
 `UCatSurvivalAttributeSet` 属于 `AbilitySystem/`，因为它表达 GAS 属性，不属于 `Character/`。`UCatConditionComponent` 属于 `Condition/`，因为它表达 Wet、Downed、Recovery 等离散状态。`UCatEquipmentComponent` 属于 `Equipment/`，因为它表达功能装配和一局耗材。
+
+天气、水体或其他环境事实只能通过正式服务器入口触发 `Wet`，不能在 Environment、表现层或 UI 里另存一份猫是否湿了。`Wet` 不携带数值惩罚；清 Wet 走抖水或后续明确的 Condition 规则，不能由天气表现直接改身体状态。
 
 `UnPossessed`、`EndPlay` 和 Controller 变化必须先收口 Fishing/Social、移除自有 MappingContext、取消 Ability，再清 ActorInfo。`ClearActorInfo` 只清 ASC 缓存，不替代领域清理。
 
