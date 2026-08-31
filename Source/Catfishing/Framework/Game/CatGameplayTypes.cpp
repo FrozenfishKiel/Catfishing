@@ -2545,7 +2545,7 @@ void ACatfishingPlayerController::ServerWithdrawCampInventoryItemAtActor_Impleme
 // 1. 先过统一玩法 gate；客户端传来的仓库 Actor 只作为候选目标，不能直接授权改公共仓库。
 // 2. 要求公共仓库与当前 World 匹配，并用仓库自身交互半径复核玩家仍在箱子旁边。
 // 3. 通过后只提交源/目标槽位和公共仓库 Revision；移动、合并、交换规则由公共仓库复用运行库存格规则。
-// 4. 无论成功或拒绝都可靠回送公共领域结果，让营地仓库 UI 用同一条 pending 反馈链路收束。
+// 4. 无论成功或拒绝都可靠回送公共领域结果并写入明确日志，让营地仓库 UI 用同一条 pending 反馈链路收束。
 void ACatfishingPlayerController::ServerMoveCampInventorySlotAtActor_Implementation(
 	ACatCampInventoryActor* CampInventory, const FGuid RequestId, const int64 ExpectedCampInventoryRevision,
 	const int32 SourceSlotIndex, const int32 TargetSlotIndex)
@@ -2555,6 +2555,10 @@ void ACatfishingPlayerController::ServerMoveCampInventorySlotAtActor_Implementat
 	if (!CanForwardGameplayCommand())
 	{
 		Result.Error = ECatDomainCommandError::CommandsClosed;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=move_camp_inventory_slot_rejected Reason=CommandsClosedOrInactive Request=%s Camp=%s Source=%d Target=%d"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(CampInventory),
+			SourceSlotIndex, TargetSlotIndex);
 		DeliverCampCommandResultToOwningClient(Result);
 		return;
 	}
@@ -2564,18 +2568,30 @@ void ACatfishingPlayerController::ServerMoveCampInventorySlotAtActor_Implementat
 	if (!RequestId.IsValid() || !CampInventory || CampInventory->GetWorld() != GetWorld() || !ControlledCharacter)
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=move_camp_inventory_slot_rejected Reason=DependencyUnavailable Request=%s Camp=%s Character=%s Source=%d Target=%d"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(CampInventory),
+			*GetNameSafe(ControlledCharacter), SourceSlotIndex, TargetSlotIndex);
 		DeliverCampCommandResultToOwningClient(Result);
 		return;
 	}
 	if (!IsContainerHostReachable(CampInventory, ControlledCharacter, CampSettings))
 	{
 		Result.Error = ECatDomainCommandError::PermissionDenied;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=move_camp_inventory_slot_rejected Reason=PermissionDenied Request=%s Camp=%s Character=%s Source=%d Target=%d"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(CampInventory),
+			*GetNameSafe(ControlledCharacter), SourceSlotIndex, TargetSlotIndex);
 		DeliverCampCommandResultToOwningClient(Result);
 		return;
 	}
 
 	Result = CampInventory->MoveInventorySlotFromAuthority(RequestId, ExpectedCampInventoryRevision,
 		SourceSlotIndex, TargetSlotIndex);
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=move_camp_inventory_slot Committed=%s Error=%s Revision=%lld Camp=%s Source=%d Target=%d"),
+		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
+		Result.Revision, *GetNameSafe(CampInventory), SourceSlotIndex, TargetSlotIndex);
 	DeliverCampCommandResultToOwningClient(Result);
 }
 

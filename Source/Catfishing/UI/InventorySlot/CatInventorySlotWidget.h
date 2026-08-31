@@ -66,6 +66,10 @@ protected:
 	virtual void NativeOnDragDetected(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent,
 	                                  UDragDropOperation*& OutOperation) override;
 
+	/** 拖拽悬停流程只判断目标格能否接收当前载荷；命中后让本格保持 Drop 目标，避免空格把事件漏给同屏其他库存页。 */
+	virtual bool NativeOnDragOver(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent,
+		UDragDropOperation* InOperation) override;
+
 	/** Drop 流程只识别运行期库存格或 Items 容器格的拖拽载荷，并把源目标格事实广播给主界面复核。 */
 	virtual bool NativeOnDrop(const FGeometry& InGeometry, const FDragDropEvent& InDragDropEvent,
 		UDragDropOperation* InOperation) override;

@@ -30,6 +30,23 @@ namespace
 			&& IsRunInventorySlot(SourceSlot)
 			&& IsRunInventorySlot(TargetSlot);
 	}
+
+	// 容器 Drop 判断流程：Items 容器仍只允许占用源格拖到容器目标格；目标空格也要能接住拖拽。
+	bool IsContainerDropPair(const FCatInventorySlotView& SourceSlot, const FCatInventorySlotView& TargetSlot)
+	{
+		return TargetSlot.SlotSource == ECatInventorySlotSource::ContainerObject
+			&& SourceSlot.SlotSource == ECatInventorySlotSource::ContainerObject
+			&& SourceSlot.bOccupied
+			&& SourceSlot.ObjectKind != ECatContainedObjectKind::Unknown
+			&& SourceSlot.ObjectInstanceId.IsValid();
+	}
+
+	// 格子接收判断流程：DragOver 和 Drop 共用同一套判定，避免悬停时漏事件、落下时又试图补救。
+	bool IsAcceptedDropPair(const FCatInventorySlotView& SourceSlot, const FCatInventorySlotView& TargetSlot)
+	{
+		return IsRunInventoryDropPair(SourceSlot, TargetSlot)
+			|| IsContainerDropPair(SourceSlot, TargetSlot);
+	}
 }
 
 // 渲染流程：
@@ -156,6 +173,21 @@ void UCatInventorySlotWidget::NativeOnDragDetected(const FGeometry& InGeometry, 
 	}
 }
 
+// 拖拽悬停流程：
+// 1. 只识别本类创建的轻量载荷；其他 UMG 拖拽继续交回父类。
+// 2. 当前格如果能作为目标，就在悬停阶段直接接住事件，避免空营地格被同屏背包页或父级面板抢走 Drop。
+// 3. 本函数不改选择、不刷新列表、不提交服务器命令，只稳定 Slate 的目标命中。
+bool UCatInventorySlotWidget::NativeOnDragOver(const FGeometry& InGeometry,
+	const FDragDropEvent& InDragDropEvent, UDragDropOperation* InOperation)
+{
+	const UCatInventoryDragDropOperation* DragOperation = Cast<UCatInventoryDragDropOperation>(InOperation);
+	if (DragOperation && IsAcceptedDropPair(DragOperation->SourceSlot, LastSlotView))
+	{
+		return true;
+	}
+	return Super::NativeOnDragOver(InGeometry, InDragDropEvent, InOperation);
+}
+
 // Drop 流程：
 // 1. 只接受本类创建的 UCatInventoryDragDropOperation，其他 UMG 拖拽交回父类。
 // 2. 运行期库存格允许同源整理和跨源转移；Items 容器槽仍只接受容器到容器的移动。
@@ -166,15 +198,7 @@ bool UCatInventorySlotWidget::NativeOnDrop(const FGeometry& InGeometry, const FD
 	(void)InGeometry;
 	(void)InDragDropEvent;
 	const UCatInventoryDragDropOperation* DragOperation = Cast<UCatInventoryDragDropOperation>(InOperation);
-	const bool bRunInventoryDrop = DragOperation
-		&& IsRunInventoryDropPair(DragOperation->SourceSlot, LastSlotView);
-	const bool bContainerDrop = DragOperation
-		&& LastSlotView.SlotSource == ECatInventorySlotSource::ContainerObject
-		&& DragOperation->SourceSlot.SlotSource == ECatInventorySlotSource::ContainerObject
-		&& DragOperation->SourceSlot.bOccupied
-		&& DragOperation->SourceSlot.ObjectKind != ECatContainedObjectKind::Unknown
-		&& DragOperation->SourceSlot.ObjectInstanceId.IsValid();
-	if (!DragOperation || (!bRunInventoryDrop && !bContainerDrop))
+	if (!DragOperation || !IsAcceptedDropPair(DragOperation->SourceSlot, LastSlotView))
 	{
 		return Super::NativeOnDrop(InGeometry, InDragDropEvent, InOperation);
 	}

@@ -443,13 +443,12 @@ void UCatInventoryWidget::HandleSlotContextRequested(const FCatInventorySlotView
 	}
 }
 
-// 格子 Drop 流程：先复制源/目标快照再选择目标格；选择刷新不能改写本次广播已经冻结的拖拽载荷。
+// 格子 Drop 流程：只复制源/目标快照并提交移动意图；不在 Drop 中先选中或刷新，避免同一次鼠标事件里重建同屏库存格。
 void UCatInventoryWidget::HandleSlotDropRequested(const FCatInventorySlotView& SourceSlot,
 	const FCatInventorySlotView& TargetSlot)
 {
 	const FCatInventorySlotView SourceSlotCopy = SourceSlot;
 	const FCatInventorySlotView TargetSlotCopy = TargetSlot;
-	RequestSelectSlotView(TargetSlotCopy);
 	if (UCatInventoryPageController* PageController = ResolveInventoryPageController())
 	{
 		PageController->RequestInventorySlotDropFromWidget(SourceSlotCopy, TargetSlotCopy);
