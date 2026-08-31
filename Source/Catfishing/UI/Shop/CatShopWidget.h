@@ -157,7 +157,10 @@ public:
 	FCatShopCartPayRequested OnCartPayRequested;
 
 protected:
-	/** UMG 构造本商店页时打开键盘焦点能力、补齐旧资产缺口并绑定关闭/支付按钮；正式动态列表会在渲染阶段按 Model 投影重建。 */
+	/** UMG 初始化本商店实例时预先搭建正式界面树；这样 RebuildWidget 取根节点前就能拿到新商店结构。 */
+	virtual void NativeOnInitialized() override;
+
+	/** UMG 构造本商店页时打开键盘焦点能力、确认正式商店布局已存在并绑定关闭/支付按钮；动态列表会在渲染阶段按 Model 投影重建。 */
 	virtual void NativeConstruct() override;
 
 	/** 析构时解绑本 View 拥有的关闭、支付、动态商品、分类和购物车删除按钮；外部意图订阅由 PageController::Unbind 清理。 */
@@ -178,8 +181,8 @@ private:
 	UFUNCTION()
 	void HandleCloseClicked();
 
-	/** 补齐旧 WBP 缺失的新购物车控件；只在绑定控件不存在时创建运行时兜底，不覆盖正式同名控件。 */
-	void EnsureFallbackRuntimeControls();
+	/** 搭建正式商店运行时界面；它复用旧 WBP 根面板或初始化时补建根面板，让玩家实际看到分类货架和右侧购物车。 */
+	void BuildNativeShopLayout();
 
 	/** 禁用旧 WBP 遗留的直购/免费领取按钮；它们只按历史命名识别，不再承载任何商品业务。 */
 	void DisableLegacyDirectPurchaseButtons();
@@ -284,9 +287,13 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> CartTotalTextBlock;
 
-	/** WBP Designer 中的支付按钮；存在时 RenderShop 会按 bCanPayCart 直接设置可用状态。 */
+	/** 商店支付按钮；RenderShop 会按 bCanPayCart 刷新可支付视觉和悬停原因，真正提交仍由 RequestPayCart 裁决。 */
 	UPROPERTY(BlueprintReadOnly, meta = (BindWidgetOptional, AllowPrivateAccess = "true"))
 	TObjectPtr<UButton> PayButton;
+
+	/** 支付按钮内部的文案控件；RenderShop 会用 Model 投影同步“支付”等本地化文字。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UTextBlock> PayButtonLabelTextBlock;
 
 	/** WBP Designer 中的商品按钮容器；它代表表驱动货架区域，RenderShop 会按当前分类结果重建里面的商品按钮。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
