@@ -346,7 +346,7 @@ bool FCatFishingSessionLineBreakKeepsRodOperableTest::RunTest(const FString& Par
 		return false;
 	}
 	TestTrue(TEXT("Initializes deployed operable rod"), Rod->InitializeAuthoritativeIdentity(
-		FGuid::NewGuid(), TEXT("Rod_Test"), TEXT("Skin_Test"), Owner, Owner, true, false));
+		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Rod_Test"), TEXT("Skin_Test"), Owner, Owner, true, false));
 	const int64 RodRevisionBefore = Rod->GetPresentationState().RodActorRevision;
 	Session->Snapshot.FishingSessionId = FGuid::NewGuid();
 	Session->Snapshot.Phase = ECatFishingPhase::HookedFight;

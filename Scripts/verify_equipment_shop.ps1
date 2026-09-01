@@ -88,33 +88,30 @@ function Invoke-ModuleStaticCheck {
     Assert-TextPattern "Equip_Chum_Bug" "Config/DefaultGame.ini" "formal chum asset entry"
     Assert-NoTextPattern "/Game/Data/Equipment/DA_.*_Basic|Rod_Basic|Bait_Basic|Chum_Basic|FakeBait_Giant" "Config/DefaultGame.ini" "legacy Basic equipment or fake bait id in runtime config"
     Assert-NoBinaryTextPattern "FakeBait_|/Game/Data/Equipment/DA_.*_Basic|Rod_Basic|Bait_Basic|Chum_Basic" "Content/Catfishing/Data/Equipment" "legacy Basic equipment or fake bait id in formal equipment assets"
-    Assert-NoTextPattern "CatTeamEquipment|TeamLibrary|团队库|装备库|待取装备" "Source/Catfishing" "removed team equipment library source semantics"
+    Assert-NoTextPattern "CatTeamEquipment|TeamLibrary" "Source/Catfishing" "removed legacy team equipment library source semantics"
     Assert-NoTextPattern "EquipmentTeamLibraryShop|equipment_teamlibrary_shop|verify_equipment_teamlibrary_shop|EQUIPMENT_TEAMLIBRARY_SHOP" ".harness" "removed team equipment library harness semantics"
-    Assert-NoTextPattern "团队库|装备库|待取装备" "Docs/Architecture/项目技术方案.md" "architecture docs must describe personal equipment delivery"
-    Assert-NoTextPattern "团队库|装备库|待取装备" "Docs/Development/需求对齐差距清单.md" "progress docs must describe personal equipment delivery"
-    Assert-TextPattern "FreeBugBaitClaim" "Config/DefaultGame.ini" "free formal bait shop entry"
-    Assert-TextPattern "FreeBugBaitClaim" "Source/Catfishing/ShopEconomy/Tests/CatShopEconomySettingsTests.cpp" "shop settings free bait expectation"
+    Assert-ToolFile (Join-Path $ProjectRoot "Content\Catfishing\Data\Shop\DT_ShopCatalog_Default.uasset") "formal shop catalog DataTable"
+    Assert-TextPattern "DefaultShopCatalogTable=/Game/Catfishing/Data/Shop/DT_ShopCatalog_Default" "Config/DefaultGame.ini" "formal shop catalog DataTable setting"
+    Assert-NoTextPattern "UCatShopCatalogDefinition|FixedSaleEntries|RandomSaleEntries" "Source/Catfishing/ShopEconomy" "removed legacy shop catalog sources"
     Assert-NoTextPattern "ServerGrantRunConsumable|DirectClientGrantDisabled" "Source/Catfishing/Framework/Game" "direct client quantity grant RPC removed"
     Assert-TextPattern "EQUIPMENT_SHOP_RUNTIME_PASS" "Scripts/verify_equipment_shop_runtime.py" "runtime pass marker"
-    Assert-TextPattern "Normal-bait Begin without inventory is rejected" "Source/Catfishing/Equipment/Tests/CatEquipmentFishingUseTests.cpp" "normal bait inventory gate test"
-    Assert-TextPattern "Normal bait commit removes exactly one bait" "Source/Catfishing/Equipment/Tests/CatEquipmentFishingUseTests.cpp" "normal bait commit consumes inventory test"
+    Assert-TextPattern "GetInventoryItemQuantity\(BaitDefinitionId\) <= GetPendingReservedFishingBaitCount" "Source/Catfishing/Equipment/CatEquipmentComponent.cpp" "fishing bait begin requires an unreserved inventory item"
+    Assert-TextPattern "RemoveInventoryItemQuantity\(Record->BaitDefinitionId, 1\)" "Source/Catfishing/Equipment/CatEquipmentComponent.cpp" "fishing bait commit consumes exactly one inventory item"
     Assert-TextPattern "SubmitFishSale" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "fish sale coordinator"
     Assert-TextPattern "ConsumeFish" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "fish sale consumes Items first"
     Assert-TextPattern "ValidateFishSale" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "fish sale wallet precheck"
     Assert-TextPattern "ApplyFishSale" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "fish sale wallet apply"
     Assert-TextPattern "StolenEscrow" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "stolen escrow fail closed"
-    Assert-TextPattern "ValidateEquipmentGrantFromAuthority" "Source/Catfishing/Equipment/CatEquipmentComponent.h" "personal equipment grant precheck declaration"
-    Assert-TextPattern "ValidateEquipmentGrantFromAuthority" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "shop equipment grant precheck call"
-    Assert-TextPattern "GrantEquipmentFromAuthority" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "shop equipment grant delivery call"
+    Assert-TextPattern "ValidateAddItemsFromAuthority" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "cart prechecks camp inventory before payment"
+    Assert-TextPattern "AddItemsFromAuthority" "Source/Catfishing/ShopEconomy/CatShopOrderCoordinator.cpp" "cart delivers into camp inventory"
+    Assert-TextPattern "ResolvePublicInventoryForShopOrder" "Source/Catfishing/Framework/Game/CatGameplayTypes.cpp" "server resolves camp public inventory for shop orders"
+    Assert-TextPattern "WithdrawToEquipmentFromAuthority" "Source/Catfishing/Camp/CatCampInventoryActor.cpp" "players withdraw camp items into personal equipment"
+    Assert-TextPattern "UseActorClass" "Source/Catfishing/Fishing/CatFishingService.cpp" "deployed rods use the purchased item definition actor class"
     Assert-TextPattern "ServerPublishEquipmentUnlocks" "Source/Catfishing/Framework/Game/CatGameplayTypes.h" "profile unlock publish RPC"
     Assert-TextPattern "DOREPLIFETIME\(ThisClass, AuthorizedEquipmentUnlockIds\)" "Source/Catfishing/Framework/Game/CatGameplayTypes.cpp" "authorized unlock replication"
     Assert-TextPattern "RecordCommittedUnlock" "Source/Catfishing/Collection/CatRunImprintService.h" "unlock grant delivery entry"
     Assert-TextPattern "GetEquipmentUnlockSnapshot" "Source/Catfishing/Profile/CatProfileSubsystem.h" "profile unlock snapshot"
-    Assert-TextPattern "FishSaleConsumesFishCreditsWalletAndReplays" "Source/Catfishing/ShopEconomy/Tests/CatShopOrderCoordinatorTests.cpp" "fish sale replay test"
-    Assert-TextPattern "EquipmentClaimGrantsPersonalRod" "Source/Catfishing/ShopEconomy/Tests/CatShopOrderCoordinatorTests.cpp" "shop personal equipment grant test"
-    Assert-TextPattern "ShopGrantEquipsPersonalRodAndReplays" "Source/Catfishing/Equipment/Tests/CatEquipmentComponentTests.cpp" "personal equipment grant replay test"
-    Assert-TextPattern "UnlockGrantAckAuthorizesEquipment" "Source/Catfishing/Collection/Tests/CatRunImprintServiceTests.cpp" "unlock grant ack test"
-    Write-Host "EQUIPMENT_SHOP_STATIC_PASS FormalConfig=True RejectsLegacyBasic=True RejectsLegacyAssetStrings=True NormalBaitInventoryGate=True"
+    Write-Host "EQUIPMENT_SHOP_STATIC_PASS FormalConfig=True ShopCatalogDataTable=True CampInventoryDelivery=True RejectsLegacyCatalog=True NormalBaitInventoryGate=True"
 }
 
 function Invoke-ModuleBuild {
@@ -139,149 +136,8 @@ function Invoke-ModuleBuild {
     Write-Host ("EQUIPMENT_SHOP_BUILD_PASS UBTLog={0} ExitCode=0" -f $BuildOutputLog)
 }
 
-function Invoke-AutomationBatch {
-    param([string]$Filter, [string]$BatchName, [string]$RunRoot, [string[]]$ExpectedTests)
-    Assert-ToolFile $ProjectFile "Catfishing project"
-    Assert-ToolFile $Editor "Unreal Editor commandlet"
-    $BatchRoot = Join-Path $RunRoot $BatchName
-    $ReportRoot = Join-Path $BatchRoot "Report"
-    $LogFile = Join-Path $BatchRoot "Automation.log"
-    New-Item -ItemType Directory -Path $BatchRoot -Force | Out-Null
-    & $Editor $ProjectFile -unattended -nop4 -nosplash -nullrhi -DDC-ForceMemoryCache `
-        "-ExecCmds=Automation RunTests $Filter;Quit" `
-        "-TestExit=Automation Test Queue Empty" `
-        "-ReportExportPath=$ReportRoot" `
-        "-abslog=$LogFile"
-    if ($LASTEXITCODE -ne 0) {
-        throw ("{0} automation editor failed with exit code {1}" -f $BatchName, $LASTEXITCODE)
-    }
-    $IndexFile = Join-Path $ReportRoot "index.json"
-    if (-not (Test-Path -LiteralPath $IndexFile) -or -not (Test-Path -LiteralPath $LogFile)) {
-        throw ("{0} automation did not produce a fresh report and log" -f $BatchName)
-    }
-    $Report = Get-Content -LiteralPath $IndexFile -Raw | ConvertFrom-Json
-    $Tests = @($Report.tests)
-    $NonSuccess = @($Tests | Where-Object { $_.state -ne "Success" -or [int]$_.errors -ne 0 })
-    if ($NonSuccess.Count -gt 0) {
-        throw ("{0} automation has non-success tests: {1}" -f $BatchName, ($NonSuccess.fullTestPath -join ", "))
-    }
-    foreach ($ExpectedTest in $ExpectedTests) {
-        $Matches = @($Tests | Where-Object { $_.fullTestPath -eq $ExpectedTest })
-        if ($Matches.Count -ne 1) {
-            throw ("{0} automation missing expected test {1}: matches={2} total={3}" -f $BatchName, $ExpectedTest, $Matches.Count, $Tests.Count)
-        }
-    }
-    $LogText = Get-Content -LiteralPath $LogFile -Raw
-    foreach ($ExpectedTest in $ExpectedTests) {
-        if ($LogText -notmatch [regex]::Escape($ExpectedTest)) {
-            throw ("{0} automation log does not mention expected test {1}" -f $BatchName, $ExpectedTest)
-        }
-    }
-}
-
 function Invoke-ModuleAutomation {
-    $RunRoot = Join-Path $EvidenceRoot (Get-Date -Format "yyyyMMdd-HHmmss")
-    $Batches = @()
-    $Batches += [pscustomobject]@{
-        Filter = "Catfishing.Unit.ShopEconomy.OrderCoordinator"
-        Name = "ShopOrderCoordinator"
-        ExpectedTests = @(
-            "Catfishing.Unit.ShopEconomy.OrderCoordinator.FishSaleConsumesFishCreditsWalletAndReplays",
-            "Catfishing.Unit.ShopEconomy.OrderCoordinator.FishSalePrecheckFailureDoesNotConsumeFish",
-            "Catfishing.Unit.ShopEconomy.OrderCoordinator.EquipmentClaimGrantsPersonalRod"
-        )
-    }
-    $Batches += [pscustomobject]@{
-        Filter = "Catfishing.Unit.ShopEconomy.Service"
-        Name = "ShopEconomyService"
-        ExpectedTests = @(
-            "Catfishing.Unit.ShopEconomy.Service.PurchaseStockWalletLedgerAndFreeBait",
-            "Catfishing.Unit.ShopEconomy.Service.FishSaleCreditsWalletReplaysAndCloseRejectsNewCommands",
-            "Catfishing.Unit.ShopEconomy.Service.RejectedRequestsReplayBeforeMutableState",
-            "Catfishing.Unit.ShopEconomy.Service.ClosedShopRejectsEveryWriteEntryAndStillReplays"
-        )
-    }
-    $Batches += [pscustomobject]@{
-        Filter = "Catfishing.Unit.ShopEconomy.Settings.ProjectDefaultsExposeWalletCatalogAndFreeBait"
-        Name = "ShopEconomySettings"
-        ExpectedTests = @(
-            "Catfishing.Unit.ShopEconomy.Settings.ProjectDefaultsExposeWalletCatalogAndFreeBait"
-        )
-    }
-    $Batches += [pscustomobject]@{
-        Filter = "Catfishing.Unit.Equipment.Component.ShopGrantEquipsPersonalRodAndReplays"
-        Name = "EquipmentPersonalGrant"
-        ExpectedTests = @(
-            "Catfishing.Unit.Equipment.Component.ShopGrantEquipsPersonalRodAndReplays"
-        )
-    }
-    $Batches += [pscustomobject]@{
-        Filter = "Catfishing.Unit.Equipment.FishingUse"
-        Name = "EquipmentFishingUse"
-        ExpectedTests = @(
-            "Catfishing.Unit.Equipment.FishingUse.BeginIsAtomicExclusiveAndReplaySafe",
-            "Catfishing.Unit.Equipment.FishingUse.BaitCommitAndReleaseAreIdempotent",
-            "Catfishing.Unit.Equipment.FishingUse.WearSequenceIsAbsoluteMonotonicAndCommittedOnce",
-            "Catfishing.Unit.Equipment.FishingUse.RodBreakOverridesWearAndCommitsZeroOnce",
-            "Catfishing.Unit.Equipment.FishingUse.ActiveReservationBlocksDirectMutationsAndProtectsReservedBait",
-            "Catfishing.Unit.Equipment.FishingUse.DeferredBaitCommitPublishesExactlyOnce"
-        )
-    }
-    $Batches += [pscustomobject]@{
-        Filter = "Catfishing.Unit.Equipment.ConsumableUse"
-        Name = "EquipmentConsumableUse"
-        ExpectedTests = @(
-            "Catfishing.Unit.Equipment.ConsumableUse.BeginReservesExactQuantityWithoutPublishingSnapshot",
-            "Catfishing.Unit.Equipment.ConsumableUse.CommitConsumesOnceAndReplayReturnsFrozenObservables",
-            "Catfishing.Unit.Equipment.ConsumableUse.DeferredCommitIsInvisibleUntilIdempotentPublish",
-            "Catfishing.Unit.Equipment.ConsumableUse.ReleasePreservesInventoryAndRejectsLateCommit",
-            "Catfishing.Unit.Equipment.ConsumableUse.ActiveReservationBlocksConflictingMutations",
-            "Catfishing.Unit.Equipment.ConsumableUse.FishingAndRunReservationsAreMutuallyExclusive",
-            "Catfishing.Unit.Equipment.ConsumableUse.ReservedQuantityCannotBeDoubleSpentByDirectConsume"
-        )
-    }
-    $Batches += [pscustomobject]@{
-        Filter = "Catfishing.Unit.Equipment.Component.FishingFailureNoneIsIdempotentAndDoesNotPunish"
-        Name = "EquipmentFailureBudget"
-        ExpectedTests = @(
-            "Catfishing.Unit.Equipment.Component.FishingFailureNoneIsIdempotentAndDoesNotPunish"
-        )
-    }
-    $Batches += [pscustomobject]@{
-        Filter = "Catfishing.Unit.Framework.ShopNetwork"
-        Name = "FrameworkShopNetwork"
-        ExpectedTests = @(
-            "Catfishing.Unit.Framework.ShopNetwork.RpcsAreReliableAndSnapshotsReplicate"
-        )
-    }
-    $Batches += [pscustomobject]@{
-        Filter = "Catfishing.Unit.Framework.PlayerState"
-        Name = "FrameworkPlayerState"
-        ExpectedTests = @(
-            "Catfishing.Unit.Framework.PlayerState.PublicCollectionValidationAndStarterUnlockContract"
-        )
-    }
-    $Batches += [pscustomobject]@{
-        Filter = "Catfishing.Unit.Collection.RunImprintService.UnlockGrantAckAuthorizesEquipment"
-        Name = "CollectionUnlockGrantAck"
-        ExpectedTests = @(
-            "Catfishing.Unit.Collection.RunImprintService.UnlockGrantAckAuthorizesEquipment"
-        )
-    }
-
-    $FailedBatches = @()
-    foreach ($Batch in $Batches) {
-        try {
-            Invoke-AutomationBatch $Batch.Filter $Batch.Name $RunRoot $Batch.ExpectedTests
-        }
-        catch {
-            $FailedBatches += ("{0}: {1}" -f $Batch.Name, $_.Exception.Message)
-            Write-Warning ("{0} automation batch failed; continuing so other fourth-module batches still leave evidence. {1}" -f $Batch.Name, $_.Exception.Message)
-        }
-    }
-    if ($FailedBatches.Count -gt 0) {
-        throw ("Automation batches failed:`n{0}" -f ($FailedBatches -join "`n"))
-    }
+    throw 'EquipmentShop Automation 暂停：旧个人直发测试套件已经删除，必须为“购物车支付→营地公共仓库→取入随身 Equipment”重建端到端测试后才能恢复本模式。'
 }
 
 function Invoke-ModuleRuntime {

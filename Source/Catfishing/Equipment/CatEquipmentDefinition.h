@@ -7,6 +7,7 @@
 #include "Equipment/CatEquipmentTypes.h"
 #include "CatEquipmentDefinition.generated.h"
 
+class AActor;
 class UTexture2D;
 
 /** 一条功能型装备/道具定义；字段只表达玩法用途，不含等级、战力、随机词条或强制升级。 */
@@ -43,9 +44,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation", meta = (MultiLine = "true"))
 	FText Description;
 
-	/** 库存格缩略图；WBP 通过 SlotView 读取它，后端库存格只保存 DefinitionId 和数量。 */
+	/** 库存格缩略图；WBP 通过 SlotView 读取它，后端库存格保存运行实例身份和数量，不保存表现资源。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
 	TSoftObjectPtr<UTexture2D> Thumbnail;
+
+	/** 这类物品通过 Use 部署到世界时生成的 Actor 类；鱼竿放置从实例定义读取它，不再共用全局鱼竿 Actor 配置。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")
+	TSoftClassPtr<AActor> UseActorClass;
 
 	/** 单格最大堆叠数；0 表示沿用项目默认规则，1 表示这类物品不可堆叠。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Inventory", meta = (ClampMin = "0"))

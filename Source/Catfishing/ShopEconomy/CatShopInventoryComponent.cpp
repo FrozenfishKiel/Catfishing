@@ -1,95 +1,87 @@
 #include "ShopEconomy/CatShopInventoryComponent.h"
 
+#include "Engine/DataTable.h"
 #include "Engine/World.h"
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
+#include "ShopEconomy/CatShopEconomySettings.h"
 #include "ShopEconomy/CatShopEconomyService.h"
 
 namespace
 {
-	// 固定商品构造流程：集中写入默认表字段，避免构造函数里每条商品重复展开一组低信号赋值。
-	FCatShopSaleEntry MakeDefaultSaleEntry(const TCHAR* EntryId, const ECatShopEntryKind Kind,
-		const TCHAR* DefinitionId, const int32 PurchaseQuantity, const int32 UnitPrice,
-		const int32 InitialStock, const bool bUnlimitedStock, const int32 SortOrder)
+	// 目录排序流程：排序只影响 UI 展示和快照稳定性，不改变购买裁决；EntryId 次序兜底让同 SortOrder 的条目也有确定顺序。
+	void SortCatalogEntries(TArray<FCatShopCatalogEntry>& Entries)
 	{
-		FCatShopSaleEntry Entry;
-		Entry.EntryId = FName(EntryId);
-		Entry.Kind = Kind;
-		Entry.DefinitionId = FName(DefinitionId);
-		Entry.PurchaseQuantity = PurchaseQuantity;
-		Entry.UnitPrice = UnitPrice;
-		Entry.InitialStock = InitialStock;
-		Entry.bUnlimitedStock = bUnlimitedStock;
-		Entry.SortOrder = SortOrder;
-		return Entry;
+		Entries.StableSort([](const FCatShopCatalogEntry& Left, const FCatShopCatalogEntry& Right)
+		{
+			if (Left.SortOrder != Right.SortOrder)
+			{
+				return Left.SortOrder < Right.SortOrder;
+			}
+			return Left.EntryId.ToString() < Right.EntryId.ToString();
+		});
 	}
 
-	// 随机商品构造流程：先复用默认出售条目，再补抽取权重和可选库存区间；它只用于本组件的 C++ 默认商店表。
-	FCatShopRandomSaleEntry MakeDefaultRandomEntry(const TCHAR* EntryId, const ECatShopEntryKind Kind,
-		const TCHAR* DefinitionId, const int32 PurchaseQuantity, const int32 UnitPrice,
-		const int32 InitialStock, const int32 SortOrder, const int32 RefreshWeight,
-		const int32 MinStockOverride = -1, const int32 MaxStockOverride = -1)
+	/** 随机刷新池里的临时候选；它只在构建当前货架时存在，不会成为第二份库存状态。 */
+	struct FWeightedRandomCandidate
 	{
-		FCatShopRandomSaleEntry Entry;
-		Entry.SaleEntry = MakeDefaultSaleEntry(EntryId, Kind, DefinitionId, PurchaseQuantity,
-			UnitPrice, InitialStock, false, SortOrder);
-		Entry.RefreshWeight = RefreshWeight;
-		Entry.MinRefreshedStockOverride = MinStockOverride;
-		Entry.MaxRefreshedStockOverride = MaxStockOverride;
-		return Entry;
+		/** 已经转换好的运行目录项；被抽中后会进入当前货架库存。 */
+		FCatShopCatalogEntry Entry;
+
+		/** 本候选剩余抽取权重；候选被抽走后整项移除，不再参与后续抽取。 */
+		int32 Weight = 0;
+	};
+
+	// 购物车行归一化流程：先拒绝空车、超长数组、非法 EntryId 和超上限次数，再合并重复 EntryId 并按 ID 排序。
+	// 库存扣减只读取这份规范化结果，避免客户端通过重复行或异常数量绕过整批校验。
+	bool NormalizeCartLinesForStockConsumption(const TArray<FCatShopCartLineCommand>& Lines,
+		TArray<FCatShopCartLineCommand>& OutLines)
+	{
+		OutLines.Reset();
+		if (Lines.IsEmpty() || Lines.Num() > CatShopCartLimits::MaxCartLines)
+		{
+			return false;
+		}
+		TMap<FName, int32> CountsByEntryId;
+		for (const FCatShopCartLineCommand& Line : Lines)
+		{
+			if (Line.EntryId.IsNone() || Line.CartCount <= 0
+				|| Line.CartCount > CatShopCartLimits::MaxCartCountPerEntry)
+			{
+				OutLines.Reset();
+				return false;
+			}
+			int32& Count = CountsByEntryId.FindOrAdd(Line.EntryId);
+			if (Line.CartCount > CatShopCartLimits::MaxCartCountPerEntry - Count)
+			{
+				OutLines.Reset();
+				return false;
+			}
+			Count += Line.CartCount;
+		}
+		for (const TPair<FName, int32>& Pair : CountsByEntryId)
+		{
+			FCatShopCartLineCommand& NormalizedLine = OutLines.AddDefaulted_GetRef();
+			NormalizedLine.EntryId = Pair.Key;
+			NormalizedLine.CartCount = Pair.Value;
+		}
+		OutLines.Sort([](const FCatShopCartLineCommand& Left, const FCatShopCartLineCommand& Right)
+		{
+			return Left.EntryId.ToString() < Right.EntryId.ToString();
+		});
+		return !OutLines.IsEmpty();
 	}
 }
 
 // 构造流程：
 // 1. 关闭 Tick 并打开组件复制，让客户端能拿到和服务器一致的摊位库存 ID。
-// 2. 写入本项目首版商店表：三条固定保底商品每次都有，其他商品放入随机池。
-// 3. 免费白名单只引用固定表 EntryId，不按价格为 0 反推出可领取项。
+// 2. 不再写入任何 C++ 默认商品，正式商品、价格、分类和随机池都必须来自策划 DataTable。
+// 3. 随机抽取数量保留为组件配置，默认 0 表示只展示表中固定上架行。
 UCatShopInventoryComponent::UCatShopInventoryComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
 	SetIsReplicatedByDefault(true);
-
-	RefreshRule.RandomEntryCount = 3;
-
-	FixedSaleEntries =
-	{
-		MakeDefaultSaleEntry(TEXT("FixedStarterRod"), ECatShopEntryKind::EquipmentGrant,
-			TEXT("StarterRodT1"), 1, 0, 0, true, 10),
-		MakeDefaultSaleEntry(TEXT("FixedBugBait"), ECatShopEntryKind::InventoryQuantityGrant,
-			TEXT("BugBait"), 5, 0, 0, true, 20),
-		MakeDefaultSaleEntry(TEXT("FixedFeatherFloat"), ECatShopEntryKind::EquipmentGrant,
-			TEXT("FeatherFloat"), 1, 0, 0, true, 30)
-	};
-
-	RandomSaleEntries =
-	{
-		MakeDefaultRandomEntry(TEXT("RandomShopRodT2"), ECatShopEntryKind::EquipmentGrant,
-			TEXT("ShopRodT2"), 1, 3, 1, 100, 2),
-		MakeDefaultRandomEntry(TEXT("RandomYarnBallFloat"), ECatShopEntryKind::EquipmentGrant,
-			TEXT("YarnBallFloat"), 1, 2, 1, 110, 2),
-		MakeDefaultRandomEntry(TEXT("RandomBellFloat"), ECatShopEntryKind::EquipmentGrant,
-			TEXT("BellFloat"), 1, 2, 1, 120, 2),
-		MakeDefaultRandomEntry(TEXT("RandomMeatBait"), ECatShopEntryKind::InventoryQuantityGrant,
-			TEXT("MeatBait"), 3, 1, 2, 200, 3, 1, 3),
-		MakeDefaultRandomEntry(TEXT("RandomFruitBait"), ECatShopEntryKind::InventoryQuantityGrant,
-			TEXT("FruitBait"), 3, 1, 2, 210, 3, 1, 3),
-		MakeDefaultRandomEntry(TEXT("RandomNectarBait"), ECatShopEntryKind::InventoryQuantityGrant,
-			TEXT("NectarBait"), 3, 1, 2, 220, 3, 1, 3),
-		MakeDefaultRandomEntry(TEXT("RandomMoonlightBait"), ECatShopEntryKind::InventoryQuantityGrant,
-			TEXT("MoonlightBait"), 2, 2, 1, 230, 1),
-		MakeDefaultRandomEntry(TEXT("RandomBugChum"), ECatShopEntryKind::InventoryQuantityGrant,
-			TEXT("BugChum"), 1, 1, 2, 300, 3, 1, 3),
-		MakeDefaultRandomEntry(TEXT("RandomFruitFragranceChum"), ECatShopEntryKind::InventoryQuantityGrant,
-			TEXT("FruitFragranceChum"), 1, 1, 2, 310, 2, 1, 2),
-		MakeDefaultRandomEntry(TEXT("RandomFermentedGrainChum"), ECatShopEntryKind::InventoryQuantityGrant,
-			TEXT("FermentedGrainChum"), 1, 1, 2, 320, 2, 1, 2),
-		MakeDefaultRandomEntry(TEXT("RandomHolyLightChum"), ECatShopEntryKind::InventoryQuantityGrant,
-			TEXT("HolyLightChum"), 1, 2, 1, 330, 1)
-	};
-
-	FreeOrdinaryBaitEntryId = TEXT("FixedBugBait");
-	FreeStarterRodEntryId = TEXT("FixedStarterRod");
-	FreeStarterFloatEntryId = TEXT("FixedFeatherFloat");
+	RefreshRule.RandomEntryCount = 0;
 }
 
 // 复制声明流程：只复制稳定 ShopInventoryId；运行库存通过 GameState 公开快照同步，避免组件复制一份私有 Map。
@@ -106,8 +98,8 @@ void UCatShopInventoryComponent::OnRep_ShopInventoryId()
 }
 
 // 启动流程：
-// 1. 客户端只保留组件默认展示配置并等待服务器复制 ShopInventoryId。
-// 2. authority 生成稳定 ID，按组件表生成本轮初始货架，再把自己注册给 ShopEconomy 服务用于公开快照和购买裁决。
+// 1. 客户端只等待服务器复制 ShopInventoryId 和公开商店快照。
+// 2. authority 生成稳定 ID，按策划 DataTable 生成本轮初始货架，再注册给 ShopEconomy 服务用于公开快照和购买裁决。
 void UCatShopInventoryComponent::BeginPlay()
 {
 	Super::BeginPlay();
@@ -152,7 +144,7 @@ bool UCatShopInventoryComponent::IsRuntimeCatalogReady() const
 	return bCatalogReady;
 }
 
-// 初始货架流程：使用普通随机流从组件表生成一次运行目录；成功后替换当前库存，失败后清空库存并记录目录不可用。
+// 初始货架流程：使用普通随机流从 DataTable 生成一次运行目录；成功后替换当前库存，失败后清空库存并记录目录不可用。
 bool UCatShopInventoryComponent::RebuildInitialInventoryFromCatalog()
 {
 	FRandomStream RandomStream(FMath::Rand());
@@ -249,65 +241,71 @@ bool UCatShopInventoryComponent::TryGetCatalogEntry(const FName EntryId, FCatSho
 	return true;
 }
 
-// 库存扣减流程：只在 authority 上修改货架剩余量；无限库存返回当前快照，有限库存售罄时拒绝并保留原状态。
-// 本函数不广播变化，购买写口会在公款、库存和账本同一笔事务都写完后统一发布公开快照，避免客户端看到半成品状态。
-bool UCatShopInventoryComponent::ConsumeCatalogEntryFromAuthority(const FName EntryId,
-	FCatShopStockSnapshot& OutSnapshot)
+// 整车库存扣减流程：
+// 1. 先在本摊位内合并重复 EntryId，并整批验证 authority、目录状态、条目存在和有限库存数量。
+// 2. 所有行都通过后才进入第二轮扣减；无限库存只返回快照，有限库存按选购次数推进版本。
+// 3. 本函数不广播变化，购买写口会在公款、库存和账本同一笔事务都写完后统一发布公开快照。
+bool UCatShopInventoryComponent::ConsumeCatalogEntriesFromAuthority(
+	const TArray<FCatShopCartLineCommand>& Lines, TArray<FCatShopStockSnapshot>& OutSnapshots)
 {
-	OutSnapshot = FCatShopStockSnapshot();
+	OutSnapshots.Reset();
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !bCatalogReady)
 	{
 		return false;
 	}
-	FStockRecord* StockRecord = StockByEntryId.Find(EntryId);
-	if (!StockRecord)
+	TArray<FCatShopCartLineCommand> NormalizedLines;
+	if (!NormalizeCartLinesForStockConsumption(Lines, NormalizedLines))
 	{
 		return false;
 	}
-	if (!StockRecord->Entry.bUnlimitedStock)
+	for (const FCatShopCartLineCommand& Line : NormalizedLines)
 	{
-		if (StockRecord->RemainingStock <= 0)
+		const FStockRecord* StockRecord = StockByEntryId.Find(Line.EntryId);
+		if (!StockRecord)
 		{
-			OutSnapshot = MakeStockSnapshot(StockRecord);
+			OutSnapshots.Reset();
 			return false;
 		}
-		--StockRecord->RemainingStock;
-		++StockRecord->Revision;
+		if (!StockRecord->Entry.bUnlimitedStock && StockRecord->RemainingStock < Line.CartCount)
+		{
+			OutSnapshots.Add(MakeStockSnapshot(StockRecord));
+			return false;
+		}
 	}
-	OutSnapshot = MakeStockSnapshot(StockRecord);
+	OutSnapshots.Reserve(NormalizedLines.Num());
+	for (const FCatShopCartLineCommand& Line : NormalizedLines)
+	{
+		FStockRecord* StockRecord = StockByEntryId.Find(Line.EntryId);
+		if (!StockRecord)
+		{
+			OutSnapshots.Reset();
+			return false;
+		}
+		if (!StockRecord->Entry.bUnlimitedStock)
+		{
+			StockRecord->RemainingStock -= Line.CartCount;
+			++StockRecord->Revision;
+		}
+		OutSnapshots.Add(MakeStockSnapshot(StockRecord));
+	}
 	return true;
 }
 
-// 展示候选流程：使用和运行货架相同的组件数据源；正式资产缺失或保底固定项非法时清空候选，避免 UI 展示服务器不会接受的商品。
+// 展示候选流程：使用和运行货架相同的 DataTable 数据源；正式表缺失或类型错误时清空候选，避免 UI 展示服务器不会接受的商品。
 void UCatShopInventoryComponent::CollectDisplayCatalogEntries(TArray<FCatShopCatalogEntry>& OutEntries) const
 {
 	OutEntries.Reset();
-	FString IgnoredError;
-	if (!ShopCatalog.IsNull())
+	TSoftObjectPtr<UDataTable> CatalogTable = ResolveShopCatalogTable();
+	if (CatalogTable.IsNull())
 	{
-		const UCatShopCatalogDefinition* LoadedCatalog = ShopCatalog.LoadSynchronous();
-		if (LoadedCatalog && ValidateRequiredFixedSaleEntries(LoadedCatalog->FixedEntries, IgnoredError))
-		{
-			LoadedCatalog->CollectDisplayCatalogEntries(OutEntries);
-		}
 		return;
 	}
-	if (ValidateRequiredFixedSaleEntries(FixedSaleEntries, IgnoredError))
+	const UDataTable* LoadedTable = CatalogTable.LoadSynchronous();
+	if (!LoadedTable)
 	{
-		UCatShopCatalogDefinition::CollectDisplayCatalogEntriesFromArrays(FixedSaleEntries, RandomSaleEntries,
-			OutEntries);
+		return;
 	}
-}
-
-// 免费白名单流程：只认本组件显式配置的三条保底项；价格为 0 的其他商品仍按普通购买入口处理。
-bool UCatShopInventoryComponent::IsFreeClaimEntry(const FName EntryId) const
-{
-	if (EntryId.IsNone())
-	{
-		return false;
-	}
-	return EntryId == FreeOrdinaryBaitEntryId || EntryId == FreeStarterRodEntryId
-		|| EntryId == FreeStarterFloatEntryId;
+	CollectDisplayCatalogEntriesFromTable(*LoadedTable, OutEntries);
 }
 
 // 每日进货流程：只接受更大的天序号，再重置标记了每日进货的有限库存；无限库存和一局限量商品保持原样。
@@ -336,99 +334,176 @@ bool UCatShopInventoryComponent::AdvanceShopDay(const int32 NewDayIndex)
 	return bChanged;
 }
 
-// 保底目录收集流程：要求三条免费自取 ID 都显式配置并且互不重复；缺一条都会让本摊位无法保证“每次都有”。
-bool UCatShopInventoryComponent::CollectRequiredStarterShopEntries(
-	TArray<FRequiredStarterShopEntry>& OutRequiredEntries, FString& OutError) const
-{
-	OutRequiredEntries.Reset();
-	OutError.Reset();
-	const FRequiredStarterShopEntry RequiredEntries[] =
-	{
-		{ FreeStarterRodEntryId, TEXT("FreeStarterRodEntryId") },
-		{ FreeOrdinaryBaitEntryId, TEXT("FreeOrdinaryBaitEntryId") },
-		{ FreeStarterFloatEntryId, TEXT("FreeStarterFloatEntryId") }
-	};
-	TSet<FName> SeenEntryIds;
-	for (const FRequiredStarterShopEntry& RequiredEntry : RequiredEntries)
-	{
-		if (RequiredEntry.EntryId.IsNone())
-		{
-			OutError = FString::Printf(TEXT("Required starter shop entry id is not configured: %s"),
-				RequiredEntry.ConfigName);
-			return false;
-		}
-		if (SeenEntryIds.Contains(RequiredEntry.EntryId))
-		{
-			OutError = FString::Printf(TEXT("Duplicate starter shop entry id: %s"),
-				*RequiredEntry.EntryId.ToString());
-			return false;
-		}
-		SeenEntryIds.Add(RequiredEntry.EntryId);
-		OutRequiredEntries.Add(RequiredEntry);
-	}
-	return true;
-}
-
-// 保底固定项检查流程：每条白名单都必须在固定表里，且转换后价格为 0、库存无限；随机池命中不能满足保底承诺。
-bool UCatShopInventoryComponent::ValidateRequiredFixedSaleEntries(const TArray<FCatShopSaleEntry>& Entries,
-	FString& OutError) const
-{
-	TArray<FRequiredStarterShopEntry> RequiredEntries;
-	if (!CollectRequiredStarterShopEntries(RequiredEntries, OutError))
-	{
-		return false;
-	}
-	for (const FRequiredStarterShopEntry& RequiredEntry : RequiredEntries)
-	{
-		const FCatShopSaleEntry* SaleEntry = Entries.FindByPredicate(
-			[RequiredEntry](const FCatShopSaleEntry& Candidate)
-			{
-				return Candidate.EntryId == RequiredEntry.EntryId;
-			});
-		if (!SaleEntry)
-		{
-			OutError = FString::Printf(TEXT("Required starter shop entry must be fixed: %s"),
-				*RequiredEntry.EntryId.ToString());
-			return false;
-		}
-		FCatShopCatalogEntry RuntimeEntry;
-		if (!SaleEntry->TryBuildCatalogEntry(RuntimeEntry)
-			|| RuntimeEntry.UnitPrice != 0 || !RuntimeEntry.bUnlimitedStock)
-		{
-			OutError = FString::Printf(TEXT("Required starter shop entry must be enabled, free and unlimited: %s"),
-				*RequiredEntry.EntryId.ToString());
-			return false;
-		}
-	}
-	return true;
-}
-
-// 运行目录构建流程：正式 Catalog 资产存在时只用资产；否则使用组件内联固定/随机表，不再回退全局 Settings 目录。
+// 运行目录构建流程：正式商品表是唯一入口；表未配置、加载失败或行类型错误都会让本摊位 fail-closed。
 bool UCatShopInventoryComponent::BuildRuntimeCatalogEntries(FRandomStream& RandomStream,
 	TArray<FCatShopCatalogEntry>& OutEntries, FString& OutError) const
 {
 	OutEntries.Reset();
 	OutError.Reset();
-	if (!ShopCatalog.IsNull())
+	TSoftObjectPtr<UDataTable> CatalogTable = ResolveShopCatalogTable();
+	if (CatalogTable.IsNull())
 	{
-		const UCatShopCatalogDefinition* LoadedCatalog = ShopCatalog.LoadSynchronous();
-		if (!LoadedCatalog)
-		{
-			OutError = TEXT("Configured shop catalog could not be loaded.");
-			return false;
-		}
-		if (!ValidateRequiredFixedSaleEntries(LoadedCatalog->FixedEntries, OutError))
-		{
-			return false;
-		}
-		return LoadedCatalog->BuildRefreshedCatalogEntries(RandomStream, OutEntries, OutError);
-	}
-	if (!ValidateRequiredFixedSaleEntries(FixedSaleEntries, OutError))
-	{
+		OutError = TEXT("Shop catalog DataTable and project default DataTable are not configured.");
 		return false;
 	}
-	return UCatShopCatalogDefinition::BuildRefreshedCatalogEntriesFromArrays(
-		FixedSaleEntries, RandomSaleEntries, RefreshRule, RandomStream, OutEntries, OutError);
+	const UDataTable* LoadedTable = CatalogTable.LoadSynchronous();
+	if (!LoadedTable)
+	{
+		OutError = TEXT("Configured shop catalog DataTable could not be loaded.");
+		return false;
+	}
+	return BuildCatalogEntriesFromTable(*LoadedTable, RandomStream, OutEntries, OutError);
+}
+
+// DataTable 构建流程：
+// 1. 先要求表结构就是 FCatShopCatalogTableRow，再遍历启用行并用 RowName 兜底 EntryId。
+// 2. 固定上架行直接进入输出；随机候选要求正权重，并在进入候选池前解析本轮库存覆盖。
+// 3. 随机池按权重不放回抽取 RefreshRule.RandomEntryCount 条，权重总量超出随机接口范围也视为配置错误。
+// 4. 最后整体排序；任一启用行非法都会关闭整份目录，避免客户端看到服务器不会接受的货架。
+bool UCatShopInventoryComponent::BuildCatalogEntriesFromTable(const UDataTable& CatalogTable,
+	FRandomStream& RandomStream, TArray<FCatShopCatalogEntry>& OutEntries, FString& OutError) const
+{
+	OutEntries.Reset();
+	OutError.Reset();
+	const UScriptStruct* RowStruct = CatalogTable.GetRowStruct();
+	if (!RowStruct || !RowStruct->IsChildOf(FCatShopCatalogTableRow::StaticStruct()))
+	{
+		OutError = TEXT("Shop catalog DataTable row type must be FCatShopCatalogTableRow.");
+		return false;
+	}
+	TSet<FName> SeenEntryIds;
+	TArray<FWeightedRandomCandidate> Candidates;
+	for (const TPair<FName, uint8*>& Pair : CatalogTable.GetRowMap())
+	{
+		const FCatShopCatalogTableRow* Row =
+			reinterpret_cast<const FCatShopCatalogTableRow*>(Pair.Value);
+		if (!Row || !Row->bEnabled)
+		{
+			continue;
+		}
+		FCatShopCatalogEntry RuntimeEntry;
+		if (!Row->TryBuildCatalogEntry(Pair.Key, RuntimeEntry))
+		{
+			OutError = FString::Printf(TEXT("Shop catalog row is not runtime-ready: %s"),
+				*Pair.Key.ToString());
+			OutEntries.Reset();
+			return false;
+		}
+		if (SeenEntryIds.Contains(RuntimeEntry.EntryId))
+		{
+			OutError = FString::Printf(TEXT("Duplicate shop catalog entry id: %s"),
+				*RuntimeEntry.EntryId.ToString());
+			OutEntries.Reset();
+			return false;
+		}
+		SeenEntryIds.Add(RuntimeEntry.EntryId);
+		if (Row->bAlwaysStocked)
+		{
+			OutEntries.Add(MoveTemp(RuntimeEntry));
+			continue;
+		}
+		if (Row->RefreshWeight <= 0)
+		{
+			OutError = FString::Printf(TEXT("Enabled random shop catalog row has no refresh weight: %s"),
+				*Pair.Key.ToString());
+			OutEntries.Reset();
+			return false;
+		}
+		int32 RefreshedStock = 0;
+		if (!Row->TryResolveRefreshedStock(RandomStream, RefreshedStock))
+		{
+			OutError = FString::Printf(TEXT("Shop catalog row stock override is invalid: %s"),
+				*Pair.Key.ToString());
+			OutEntries.Reset();
+			return false;
+		}
+		RuntimeEntry.InitialStock = RefreshedStock;
+		FWeightedRandomCandidate& Candidate = Candidates.AddDefaulted_GetRef();
+		Candidate.Entry = MoveTemp(RuntimeEntry);
+		Candidate.Weight = Row->RefreshWeight;
+	}
+	const int32 DrawCount = FMath::Min(FMath::Max(0, RefreshRule.RandomEntryCount), Candidates.Num());
+	for (int32 DrawIndex = 0; DrawIndex < DrawCount; ++DrawIndex)
+	{
+		int64 TotalWeight = 0;
+		for (const FWeightedRandomCandidate& Candidate : Candidates)
+		{
+			TotalWeight += FMath::Max(0, Candidate.Weight);
+			if (TotalWeight > MAX_int32)
+			{
+				OutError = TEXT("Shop catalog random refresh weight total exceeds int32 range.");
+				OutEntries.Reset();
+				return false;
+			}
+		}
+		if (TotalWeight <= 0)
+		{
+			break;
+		}
+		int32 Pick = RandomStream.RandRange(1, static_cast<int32>(TotalWeight));
+		int32 PickedIndex = INDEX_NONE;
+		for (int32 CandidateIndex = 0; CandidateIndex < Candidates.Num(); ++CandidateIndex)
+		{
+			Pick -= FMath::Max(0, Candidates[CandidateIndex].Weight);
+			if (Pick <= 0)
+			{
+				PickedIndex = CandidateIndex;
+				break;
+			}
+		}
+		if (PickedIndex == INDEX_NONE)
+		{
+			break;
+		}
+		OutEntries.Add(MoveTemp(Candidates[PickedIndex].Entry));
+		Candidates.RemoveAtSwap(PickedIndex, 1, EAllowShrinking::No);
+	}
+	SortCatalogEntries(OutEntries);
+	return true;
+}
+
+// 出售表解析流程：摊位实例表拥有最高优先级；没有实例表时才读项目默认表，让普通摊位少配一遍，特殊摊位仍能覆写。
+TSoftObjectPtr<UDataTable> UCatShopInventoryComponent::ResolveShopCatalogTable() const
+{
+	if (!ShopCatalogTable.IsNull())
+	{
+		return ShopCatalogTable;
+	}
+	const UCatShopEconomySettings* Settings = GetDefault<UCatShopEconomySettings>();
+	return Settings ? Settings->DefaultShopCatalogTable : TSoftObjectPtr<UDataTable>();
+}
+
+// DataTable 展示候选流程：
+// 1. 只读取启用且有上架路径的行；固定行和有权重的随机候选都可作为 UI 候选。
+// 2. 行本身非法时不进入展示候选，服务器初始构建会继续用 fail-closed 日志暴露配置错误。
+// 3. 重复 EntryId 只保留首次候选，避免 WBP 按公开库存反查时出现两个同名商品行。
+void UCatShopInventoryComponent::CollectDisplayCatalogEntriesFromTable(const UDataTable& CatalogTable,
+	TArray<FCatShopCatalogEntry>& OutEntries) const
+{
+	OutEntries.Reset();
+	const UScriptStruct* RowStruct = CatalogTable.GetRowStruct();
+	if (!RowStruct || !RowStruct->IsChildOf(FCatShopCatalogTableRow::StaticStruct()))
+	{
+		return;
+	}
+	TSet<FName> SeenEntryIds;
+	for (const TPair<FName, uint8*>& Pair : CatalogTable.GetRowMap())
+	{
+		const FCatShopCatalogTableRow* Row =
+			reinterpret_cast<const FCatShopCatalogTableRow*>(Pair.Value);
+		if (!Row || !Row->bEnabled || (!Row->bAlwaysStocked && Row->RefreshWeight <= 0))
+		{
+			continue;
+		}
+		FCatShopCatalogEntry RuntimeEntry;
+		if (!Row->TryBuildCatalogEntry(Pair.Key, RuntimeEntry) || SeenEntryIds.Contains(RuntimeEntry.EntryId))
+		{
+			continue;
+		}
+		SeenEntryIds.Add(RuntimeEntry.EntryId);
+		OutEntries.Add(MoveTemp(RuntimeEntry));
+	}
+	SortCatalogEntries(OutEntries);
 }
 
 // 货架重建流程：逐条校验运行目录、拒绝重复 EntryId，并把库存版本从 1 开始；失败时清空临时结果，不留下半张货架。
@@ -465,7 +540,7 @@ bool UCatShopInventoryComponent::RebuildStockFromCatalogEntries(const TArray<FCa
 	return true;
 }
 
-// 库存快照流程：复制本组件 ID、目录主键、剩余数量、无限库存标记和版本；空记录保持默认值。
+// 库存快照流程：复制本组件 ID、目录主键、本轮初始数量、剩余数量、无限库存标记和版本；空记录保持默认值。
 FCatShopStockSnapshot UCatShopInventoryComponent::MakeStockSnapshot(const FStockRecord* StockRecord) const
 {
 	FCatShopStockSnapshot Snapshot;
@@ -475,6 +550,7 @@ FCatShopStockSnapshot UCatShopInventoryComponent::MakeStockSnapshot(const FStock
 	}
 	Snapshot.ShopInventoryId = ShopInventoryId;
 	Snapshot.EntryId = StockRecord->Entry.EntryId;
+	Snapshot.InitialStock = StockRecord->Entry.InitialStock;
 	Snapshot.RemainingStock = StockRecord->RemainingStock;
 	Snapshot.bUnlimitedStock = StockRecord->Entry.bUnlimitedStock;
 	Snapshot.Revision = StockRecord->Revision;

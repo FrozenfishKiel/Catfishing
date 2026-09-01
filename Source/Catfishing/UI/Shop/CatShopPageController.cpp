@@ -7,7 +7,7 @@
 #include "UI/Shop/CatShopModel.h"
 #include "UI/Shop/CatShopWidget.h"
 
-// 绑定流程：先解除旧绑定，再保存 Controller/Model/View 和来源摊位；随后订阅投影、关闭、商品动作和服务器结果，最后渲染首帧。
+// 绑定流程：先解除旧绑定，再保存 Controller/Model/View 和来源摊位；随后订阅投影、关闭、购物车意图和服务器结果，最后渲染首帧。
 bool UCatShopPageController::Bind(APlayerController* InController, UCatShopModel* InModel, UCatShopWidget* InView,
 	ACatShopKioskActor* InSourceShop)
 {
@@ -22,8 +22,11 @@ bool UCatShopPageController::Bind(APlayerController* InController, UCatShopModel
 	BoundSourceShop = InSourceShop;
 	ModelViewChangedHandle = InModel->OnViewStateChanged.AddUObject(this, &ThisClass::HandleModelViewStateChanged);
 	ViewCloseHandle = InView->OnCloseRequested.AddUObject(this, &ThisClass::HandleViewCloseRequested);
-	ViewEntryActionHandle = InView->OnEntryActionRequested.AddUObject(
-		this, &ThisClass::HandleViewEntryActionRequested);
+	ViewAddEntryHandle = InView->OnEntryAddToCartRequested.AddUObject(
+		this, &ThisClass::HandleViewAddEntryToCartRequested);
+	ViewRemoveCartLineHandle = InView->OnCartLineRemoveRequested.AddUObject(
+		this, &ThisClass::HandleViewRemoveCartLineRequested);
+	ViewPayCartHandle = InView->OnCartPayRequested.AddUObject(this, &ThisClass::HandleViewPayCartRequested);
 	if (ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(InController))
 	{
 		CampCommandResultHandle = CatController->OnCampCommandResultReceived.AddUObject(
@@ -49,7 +52,9 @@ void UCatShopPageController::Unbind()
 	if (UCatShopWidget* View = BoundView.Get())
 	{
 		View->OnCloseRequested.Remove(ViewCloseHandle);
-		View->OnEntryActionRequested.Remove(ViewEntryActionHandle);
+		View->OnEntryAddToCartRequested.Remove(ViewAddEntryHandle);
+		View->OnCartLineRemoveRequested.Remove(ViewRemoveCartLineHandle);
+		View->OnCartPayRequested.Remove(ViewPayCartHandle);
 		if (View->IsInViewport())
 		{
 			View->RemoveFromParent();
@@ -61,7 +66,9 @@ void UCatShopPageController::Unbind()
 	}
 	ModelViewChangedHandle.Reset();
 	ViewCloseHandle.Reset();
-	ViewEntryActionHandle.Reset();
+	ViewAddEntryHandle.Reset();
+	ViewRemoveCartLineHandle.Reset();
+	ViewPayCartHandle.Reset();
 	CampCommandResultHandle.Reset();
 	BoundPlayerController.Reset();
 	BoundModel.Reset();
@@ -140,86 +147,108 @@ void UCatShopPageController::HandleViewCloseRequested()
 	OnPageCloseRequested.Broadcast();
 }
 
-// 商品动作流程：
-// 1. 从 Model 当前投影确认条目仍存在、经济/货架快照可用且没有 pending，同时要求本页还持有来源摊位。
-// 2. 要求领取/购买类型匹配条目免费标记，并尊重 UI 已推导出的售罄/余额不足状态。
-// 3. 生成 RequestId，先写 pending，再把来源摊位和 EntryId 一起交给 PlayerController 的正式服务器 RPC。
-void UCatShopPageController::HandleViewEntryActionRequested(const FName EntryId, const ECatShopUIAction Action)
+// 加购意图流程：把商品点击交给 Model 的本地购物车；支付 pending 期间的迟到点击直接忽略，避免清掉等待中的订单状态。
+void UCatShopPageController::HandleViewAddEntryToCartRequested(const FName EntryId)
+{
+	UCatShopModel* Model = BoundModel.Get();
+	if (!Model)
+	{
+		return;
+	}
+	if (Model->GetViewState().bActionPending)
+	{
+		return;
+	}
+	FText FailureReason;
+	if (!Model->AddEntryToCart(EntryId, FailureReason))
+	{
+		Model->MarkActionRejected(ECatShopUIAction::AddEntryToCart, EntryId, FailureReason);
+		return;
+	}
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_shop_entry_added_to_cart EntryId=%s"),
+		*EntryId.ToString());
+}
+
+// 删除意图流程：把购物车垃圾桶点击交给 Model；支付 pending 期间的迟到点击直接忽略，避免已提交购物车和本地队列脱节。
+void UCatShopPageController::HandleViewRemoveCartLineRequested(const FName EntryId)
+{
+	UCatShopModel* Model = BoundModel.Get();
+	if (!Model)
+	{
+		return;
+	}
+	if (Model->GetViewState().bActionPending)
+	{
+		return;
+	}
+	FText FailureReason;
+	if (!Model->RemoveOneCartItem(EntryId, FailureReason))
+	{
+		Model->MarkActionRejected(ECatShopUIAction::RemoveCartEntry, EntryId, FailureReason);
+		return;
+	}
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_shop_entry_removed_from_cart EntryId=%s"),
+		*EntryId.ToString());
+}
+
+// 支付意图流程：
+// 1. 从 Model 当前投影确认页面打开、经济数据同步、购物车可支付且来源摊位还有效。
+// 2. 只把 EntryId 和 CartCount 导出到服务器 RPC；价格、库存、交付数量和公共仓库容量都由服务器重读。
+// 3. 生成 RequestId 后先写 pending，再提交整车 RPC；服务器成功时回包会清空购物车，失败时保留购物车。
+void UCatShopPageController::HandleViewPayCartRequested()
 {
 	UCatShopModel* Model = BoundModel.Get();
 	ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
 	ACatShopKioskActor* SourceShop = BoundSourceShop.Get();
-	if (!Model || EntryId.IsNone() || Action == ECatShopUIAction::None)
+	if (!Model)
 	{
-		return;
-	}
-	if (!CatController || !SourceShop)
-	{
-		Model->MarkActionRejected(Action, EntryId, FText::FromString(TEXT("商店：摊位或控制器上下文已失效")));
 		return;
 	}
 	const FCatShopViewState& State = Model->GetViewState();
-	FCatShopEntryView Entry;
-	if (!State.bOpen || !State.bEconomyAvailable || State.bActionPending || !Model->TryFindEntryView(EntryId, Entry))
+	if (!CatController || !SourceShop)
 	{
-		Model->MarkActionRejected(Action, EntryId, FText::FromString(TEXT("商店：当前商品或公款数据未就绪")));
+		Model->MarkActionRejected(ECatShopUIAction::PayCart, NAME_None,
+			FText::FromString(TEXT("商店：摊位或控制器上下文已失效")));
 		return;
 	}
-	const bool bFreeAction = Action == ECatShopUIAction::ClaimFreeEntry;
-	if (bFreeAction != Entry.bFreeClaim)
+	if (!State.bCanPayCart)
 	{
-		Model->MarkActionRejected(Action, EntryId, FText::FromString(TEXT("商店：商品动作类型不匹配")));
+		const FText Reason = State.PayDisabledReasonText.IsEmpty()
+			? FText::FromString(TEXT("商店：购物车暂不可支付")) : State.PayDisabledReasonText;
+		Model->MarkActionRejected(ECatShopUIAction::PayCart, NAME_None, Reason);
 		return;
 	}
-	if (!Entry.bActionEnabled)
+	TArray<FCatShopCartLineCommand> Lines;
+	if (!Model->BuildCartCommandLines(Lines))
 	{
-		const FText Reason = Entry.bSoldOut
-			? FText::FromString(TEXT("商店：这件商品已经售罄"))
-			: FText::FromString(TEXT("商店：团队公款不足或商品暂不可购买"));
-		Model->MarkActionRejected(Action, EntryId, Reason);
+		Model->MarkActionRejected(ECatShopUIAction::PayCart, NAME_None,
+			FText::FromString(TEXT("请先选购商品")));
 		return;
 	}
 
 	const FGuid RequestId = FGuid::NewGuid();
 	const int64 ExpectedWalletRevision = State.Economy.WalletRevision;
 	PendingShopRequestId = RequestId;
-	PendingShopAction = Action;
-	PendingShopEntryId = EntryId;
-	Model->MarkActionSubmitted(Action, EntryId);
-	if (bFreeAction)
+	PendingShopAction = ECatShopUIAction::PayCart;
+	PendingShopEntryId = NAME_None;
+	Model->MarkActionSubmitted(ECatShopUIAction::PayCart, NAME_None);
+	if (CatController->HasAuthority())
 	{
-		if (CatController->HasAuthority())
-		{
-			CatController->ServerClaimFreeShopEntryAtKiosk_Implementation(
-				SourceShop, EntryId, RequestId, ExpectedWalletRevision);
-		}
-		else
-		{
-			CatController->ServerClaimFreeShopEntryAtKiosk(SourceShop, EntryId, RequestId, ExpectedWalletRevision);
-		}
+		CatController->ServerSubmitShopCartAtKiosk_Implementation(
+			SourceShop, Lines, RequestId, ExpectedWalletRevision);
 	}
 	else
 	{
-		if (CatController->HasAuthority())
-		{
-			CatController->ServerSubmitShopPurchaseAtKiosk_Implementation(
-				SourceShop, EntryId, RequestId, ExpectedWalletRevision);
-		}
-		else
-		{
-			CatController->ServerSubmitShopPurchaseAtKiosk(SourceShop, EntryId, RequestId, ExpectedWalletRevision);
-		}
+		CatController->ServerSubmitShopCartAtKiosk(SourceShop, Lines, RequestId, ExpectedWalletRevision);
 	}
-	UE_LOG(LogCatUI, Log, TEXT("Event=ui_shop_action_submitted EntryId=%s Action=%s WalletRevision=%lld"),
-		*EntryId.ToString(),
-		*UEnum::GetValueAsString(Action),
-		ExpectedWalletRevision);
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_shop_cart_payment_submitted LineCount=%d WalletRevision=%lld"),
+		Lines.Num(), ExpectedWalletRevision);
 }
 
-// 购买结果流程：
+// 购物车结果流程：
 // 1. 只接受当前页面自己提交的 RequestId，其他营地/身体/容器命令结果不会改商店提示。
-// 2. 成功结果继续等待商店经济快照刷新；失败结果立即解除 pending，因为没有扣款也不会触发库存快照变化。
-// 3. 依赖缺失时明确告诉玩家没有可用营地公共仓库，其余失败保持通用未扣款提示。
+// 2. 成功或合法重放会清空本地购物车；失败结果立即解除 pending 并保留购物车内容。
+// 3. 依赖缺失时明确告诉玩家没有可用营地公共仓库，其余失败提示玩家重试或重新打开页面核对同步事实。
 void UCatShopPageController::HandleCampCommandResultReceived(const FCatDomainCommandResult& Result)
 {
 	if (!PendingShopRequestId.IsValid() || Result.RequestId != PendingShopRequestId)
@@ -228,6 +257,10 @@ void UCatShopPageController::HandleCampCommandResultReceived(const FCatDomainCom
 	}
 	if (Result.Error == ECatDomainCommandError::None || Result.Error == ECatDomainCommandError::AlreadyResolved)
 	{
+		if (UCatShopModel* Model = BoundModel.Get())
+		{
+			Model->MarkCartPaymentSucceeded();
+		}
 		PendingShopRequestId = FGuid();
 		PendingShopAction = ECatShopUIAction::None;
 		PendingShopEntryId = NAME_None;
@@ -243,7 +276,7 @@ void UCatShopPageController::HandleCampCommandResultReceived(const FCatDomainCom
 	}
 	const FText Reason = Result.Error == ECatDomainCommandError::DependencyUnavailable
 		? FText::FromString(TEXT("商店：没有可用营地公共仓库，未扣款"))
-		: FText::FromString(TEXT("商店：购买失败，未扣款"));
+		: FText::FromString(TEXT("商店：支付没有完成，请重试或重新打开商店查看公款和仓库"));
 	Model->MarkActionRejected(PendingShopAction, PendingShopEntryId, Reason);
 	PendingShopRequestId = FGuid();
 	PendingShopAction = ECatShopUIAction::None;

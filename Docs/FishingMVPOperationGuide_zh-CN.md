@@ -406,7 +406,7 @@ Event BeginPlay
 
 ### ~~1. 抢抄需要 ScoopNet，但装配接口传不进去~~ ✅ 已修
 
-`ServerConfigureEquipment` 已加第 4 个参数 `ScoopNetDefinitionId` 并往下传给 `ConfigureLoadoutFromAuthority`。当前正式目录定义填 `"StarterScoopNet"`；开发期默认发放开启时可留空沿用服务器已选中的抄网。
+`ServerConfigureEquipment` 现在提交 Rod/Bait/Float/ScoopNet 四个 DefinitionId，并可同时提交对应的四个 ItemInstanceId。库存 UI 应从当前格子带上实例 ID；旧调用没带实例 ID 时，服务器仍会按 DefinitionId 兼容解析一份可用实例。当前正式目录定义填 `"StarterScoopNet"`；开发期默认发放开启时可留空沿用服务器已选中的抄网。
 
 ### ~~2. 打窝需要窝料库存，但没有发放入口~~ ✅ 已修
 
@@ -439,8 +439,8 @@ Event BeginPlay
 | 文件 | 改动 |
 |---|---|
 | `CatFishingCommandComponent.cpp` | `HandleAbilityCommandFromAuthority` 新增 OperateRod / 搏斗收线 / Scoop 三条分支 |
-| `CatGameplayTypes.h` | `ServerConfigureEquipment` 加 `BlueprintCallable` |
-| `CatEquipmentComponent.h` | `GetSnapshot()` 加 `BlueprintPure` |
+| `CatGameplayTypes.h` | `ServerConfigureEquipment` 加 `BlueprintCallable`，并支持随 DefinitionId 提交 ItemInstanceId |
+| `CatEquipmentComponent.h` | `GetSnapshot()` 加 `BlueprintPure`，快照包含当前选择的实例 ID |
 | `CatCharacter.h` | `GetEquipmentComponent()` / `GetConditionComponent()` 加 `BlueprintPure` |
 | `CatWaterRegion.h` | `GetWaterRegionHandle()` / `HasValidBakedGeometry()` 加 `BlueprintPure` |
 | `CatFishingHookActor.h/.cpp` | 浮漂落水确认（有界轮询计时器，非 Tick），`Phase` 能走到 `Landed` |

@@ -7,7 +7,6 @@
 class ACatChumFieldPresentationActor;
 class ACatFishEncounterActor;
 class ACatFishingHookActor;
-class ACatFishingRodActor;
 class UAnimMontage;
 class UCatRodSkinDefinition;
 
@@ -18,8 +17,9 @@ class CATFISHING_API UCatFishingPresentationSettings : public UDeveloperSettings
 
 public:
 	const UCatRodSkinDefinition* FindRuntimeRodSkin(FName RodSkinDefinitionId, FName RodDefinitionId) const;
-	UPROPERTY(Config, EditAnywhere) TSoftClassPtr<ACatFishingRodActor> RodActorClass;
+	/** 抛竿后生成的浮漂/鱼钩表现 Actor 类；它属于 Fishing 表现链，不代表某个库存物品实例。 */
 	UPROPERTY(Config, EditAnywhere) TSoftClassPtr<ACatFishingHookActor> HookActorClass;
+	/** 上钩鱼在世界中的表现 Actor 类；它由 Fishing Session 生成，不进入玩家库存。 */
 	UPROPERTY(Config, EditAnywhere) TSoftClassPtr<ACatFishEncounterActor> FishEncounterActorClass;
 	/**
 	 * 服务器确认抛竿并让 Hook 进入 CastFlight 后，由每台客户端在抛竿者角色上本地播放的 Montage。

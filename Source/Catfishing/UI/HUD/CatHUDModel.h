@@ -8,6 +8,7 @@
 class APlayerController;
 class ACatCharacter;
 class ACatFishingSession;
+class ACatfishingGameState;
 class UAbilitySystemComponent;
 class UCatConditionComponent;
 class UCatFishingCommandComponent;
@@ -26,10 +27,10 @@ class CATFISHING_API UCatHUDModel : public UObject
 	GENERATED_BODY()
 
 public:
-	/** 绑定当前 LocalPlayer、Controller 和 Character；成功后订阅状态变化并发布首份 HUD 投影。 */
+	/** 绑定当前 LocalPlayer、Controller 和 Character；成功后订阅 Run、状态和钓鱼变化并发布首份 HUD 投影。 */
 	bool Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController, ACatCharacter* InCharacter);
 
-	/** 成对解除 ASC、Condition、Fishing 命令和会话桥订阅，并清空当前 HUD 投影。 */
+	/** 成对解除 Run、ASC、Condition、Fishing 命令和会话桥订阅，并清空当前 HUD 投影。 */
 	void Unbind();
 
 	/** 主动重读当前 HUD 所需只读事实；外部生命周期变化都收敛到这里。 */
@@ -50,6 +51,9 @@ private:
 
 	/** Growth 快照变化入口；重读完整 HUD 投影。 */
 	void HandleGrowthChanged();
+
+	/** Run 公开快照变化入口；重读天数和阶段相关 HUD 投影，避免客户端复制到达后界面继续显示旧天数。 */
+	void HandleRunPublicStateChanged();
 
 	/** Fishing 会话投影变化入口；Bridge 已经更新自身，Model 只重建 HUD 文本。 */
 	void HandleFishingViewStateChanged(const FCatFishingViewState& ViewState);
@@ -89,6 +93,10 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatFishingCommandComponent> BoundFishingCommand;
 
+	/** 当前 World 的 Run 公开事实源；HUD 只订阅它的变化通知，不在本地推进天数或阶段。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<ACatfishingGameState> BoundRunGameState;
+
 	/** 当前 HUD 使用的 Fishing 只读桥；它把 FishingSession 复制快照投成 HUD 可读 DTO。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatFishingViewBridge> FishingViewBridge;
@@ -107,6 +115,9 @@ private:
 
 	/** Growth 快照变化解绑句柄。 */
 	FDelegateHandle GrowthChangedHandle;
+
+	/** Run 公开快照变化解绑句柄。 */
+	FDelegateHandle RunPublicStateChangedHandle;
 
 	/** FishingViewBridge 投影变化解绑句柄。 */
 	FDelegateHandle FishingViewChangedHandle;

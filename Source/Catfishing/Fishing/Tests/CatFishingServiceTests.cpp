@@ -143,7 +143,7 @@ bool FCatFishingServiceWindowClosureReleasesOperatorMovementTest::RunTest(const 
 
 	Character->SetPlayerState(PlayerState);
 	TestTrue(TEXT("鱼竿以当前角色占据主位初始化"), Rod->InitializeAuthoritativeIdentity(
-		FGuid::NewGuid(), TEXT("Rod"), TEXT("Skin"), PlayerState, PlayerState, true, false));
+		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Rod"), TEXT("Skin"), PlayerState, PlayerState, true, false));
 	TestTrue(TEXT("部署鱼竿登记成功"), Fishing->RegisterDeployedRod(PlayerState, Rod));
 	UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
 	TestNotNull(TEXT("角色移动组件存在"), Movement);
@@ -220,10 +220,12 @@ bool FCatFishingServiceRodBoundSessionRoutingTest::RunTest(const FString& Parame
 	Controller->Possess(Character);
 	const FGuid FirstRodId = FGuid::NewGuid();
 	const FGuid SecondRodId = FGuid::NewGuid();
+	const FGuid FirstRodItemInstanceId = FGuid::NewGuid();
+	const FGuid SecondRodItemInstanceId = FGuid::NewGuid();
 	TestTrue(TEXT("第一根竿以玩家占据主位初始化"), FirstRod->InitializeAuthoritativeIdentity(
-		FirstRodId, TEXT("RodA"), TEXT("SkinA"), PlayerState, PlayerState, true, false));
+		FirstRodId, FirstRodItemInstanceId, TEXT("RodA"), TEXT("SkinA"), PlayerState, PlayerState, true, false));
 	TestTrue(TEXT("第二根竿以空主位初始化"), SecondRod->InitializeAuthoritativeIdentity(
-		SecondRodId, TEXT("RodB"), TEXT("SkinB"), SecondRodOwner, nullptr, true, false));
+		SecondRodId, SecondRodItemInstanceId, TEXT("RodB"), TEXT("SkinB"), SecondRodOwner, nullptr, true, false));
 	TestTrue(TEXT("登记第一根竿"), Fishing->RegisterDeployedRod(PlayerState, FirstRod));
 	TestTrue(TEXT("登记第二根竿"), Fishing->RegisterDeployedRod(SecondRodOwner, SecondRod));
 

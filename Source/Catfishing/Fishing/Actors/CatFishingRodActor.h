@@ -16,8 +16,10 @@ class CATFISHING_API ACatFishingRodActor : public AActor
 public:
 	ACatFishingRodActor();
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
-	bool InitializeAuthoritativeIdentity(FGuid InRodActorId, FName InRodDefinitionId, FName InRodSkinDefinitionId,
-		APlayerState* InOwnerPlayerState, APlayerState* InOperatorPlayerState, bool bInDeployed, bool bInBroken);
+	/** 初始化这根场景鱼竿的权威身份；ActorId 负责场景对象，ItemInstanceId 负责回到库存里的同一件物品。 */
+	bool InitializeAuthoritativeIdentity(FGuid InRodActorId, FGuid InItemInstanceId, FName InRodDefinitionId,
+		FName InRodSkinDefinitionId, APlayerState* InOwnerPlayerState, APlayerState* InOperatorPlayerState,
+		bool bInDeployed, bool bInBroken);
 	bool ConfigureCanonicalAnchorsFromAuthority(const FTransform& InRodTip, const FTransform& InStand, const FTransform& InGrip);
 	/** 兼容旧单操作手写口：传入玩家时重置为仅该玩家，传空时清空全部槽位。 */
 	bool SetOperatorFromAuthority(APlayerState* InOperatorPlayerState, int64 ExpectedRevision);

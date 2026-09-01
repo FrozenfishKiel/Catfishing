@@ -39,7 +39,7 @@ bool FCatFishingServiceSharedRodSlotsTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	TestTrue(TEXT("rod initializes with owner in primary slot"), Rod->InitializeAuthoritativeIdentity(
-		FGuid::NewGuid(), TEXT("Rod"), TEXT("Skin"), Owner, Owner, true, false));
+		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Rod"), TEXT("Skin"), Owner, Owner, true, false));
 	TestTrue(TEXT("shared rod registers under immutable owner"), Fishing->RegisterDeployedRod(Owner, Rod));
 	TestEqual(TEXT("owner lookup finds shared rod"), Fishing->FindRodOperatedBy(Owner), Rod);
 	const FVector SharedInteractionLocation = Rod->GetOperatorInteractionWorldTransform().GetLocation();

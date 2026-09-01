@@ -42,7 +42,7 @@
 
 一个类覆盖五种装备，靠 `Kind` 区分；**每个 Kind 只看自己那组字段，其余必须保持默认 0/false**（校验会因"竿字段出现在鱼饵上"这类越界而判未就绪）。
 
-**共同字段**：`EquipmentDefinitionId`(唯一ID) · `Kind`(种类,不能 Unknown) · `LoadoutSlotId`(Rod/Bait/Float/ScoopNet 四种必填,窝料不填) · `RequiredUnlockId`(解锁门槛,None=不设) · `bRunConsumable`(是否一局内耗材:窝料 True、特殊饵 True、其他 False) · `bSpecialBait`(特殊鱼饵标记,与 bRunConsumable 同真同假仅限 Bait) · `FunctionalRouteId`(功能路由,必填,常规填 Route_Standard) · `bEnableRuntimeDefinition`(gate)
+**共同字段**：`EquipmentDefinitionId`(唯一ID) · `Kind`(种类,不能 Unknown) · `LoadoutSlotId`(Rod/Bait/Float/ScoopNet 四种必填,窝料不填) · `RequiredUnlockId`(解锁门槛,None=不设) · `UseActorClass`(该物品实例 Use 到世界时生成的 Actor 类；鱼竿必填 BP_CatFishingRodActor) · `bRunConsumable`(是否一局内耗材:窝料 True、特殊饵 True、其他 False) · `bSpecialBait`(特殊鱼饵标记,与 bRunConsumable 同真同假仅限 Bait) · `FunctionalRouteId`(功能路由,必填,常规填 Route_Standard) · `bEnableRuntimeDefinition`(gate)
 
 **Rod（鱼竿）**：
 | 字段 | 含义 | 规格对应 |

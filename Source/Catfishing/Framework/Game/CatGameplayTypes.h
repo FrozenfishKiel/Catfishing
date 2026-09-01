@@ -82,7 +82,7 @@ public:
 	ACatfishingGameModeBase();
 	/** Lake 开始玩法时建立 Run 聚合并经正式 runtime gate 显式启动唯一 StateTree；依赖缺失时保持 NotStarted/StartupFailed。 */
 	virtual void StartPlay() override;
-	/** World 退出时关闭命令，清白天截止/HostExit ACK 计时与等待集合，再停 StateTree，避免旧 Run 回调进入下一地图。 */
+	/** World 退出时关闭命令，清白天截止与时段刷新/HostExit ACK 计时和等待集合，再停 StateTree，避免旧 Run 回调进入下一地图。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 	/** 在 Login 前校验身份与唯一占用；正式玩家建立 Reserved，PIE 无会话远端的无效身份只放行到服务器 InitNewPlayer 分配。 */
 	virtual void PreLogin(const FString& Options, const FString& Address, const FUniqueNetIdRepl& UniqueId, FString& ErrorMessage) override;
@@ -95,7 +95,7 @@ public:
 	/** Controller 离开时只清除与它精确匹配的 Active 记录；不把主动离局猜成可恢复网络异常。 */
 	virtual void Logout(AController* Exiting) override;
 
-	/** StateTree EnterPhase Task 的唯一阶段写入口；先验证阶段策略，再成对切换截止计时、ready 资格与命令 gate，最后只发布一份组合快照。 */
+	/** StateTree EnterPhase Task 的唯一阶段写入口；先验证阶段策略，再成对切换截止/时段刷新计时、ready 资格与命令 gate，最后只发布一份组合快照。 */
 	FCatRunTransitionResult EnterRunPhaseFromStateTree(ECatRunPhase NewPhase, ECatRunTransitionReason Reason);
 	/** StateTree Condition 只读比较最近一次外部结果原因，不从当前 Phase 反推事件来源。 */
 	bool DoesLastRunFlowResultMatch(ECatRunTransitionReason ExpectedReason) const;
@@ -182,13 +182,19 @@ private:
 	void CaptureNightReadyEligibility();
 	/** ready 集合首次全部完成时发布公开事实并只发送 AllEligibleReady 事件，不在 C++ 改写 Phase。 */
 	void EvaluateAllEligibleReady();
+	/** 清除旧白天计时回调；只停止 deadline 与环境刷新 Timer，不改公开截止字段，供 DayActive 收口缝隙安全使用。 */
+	void ClearDayTimers();
 	/** 清除旧白天计时器与公开截止时间；任何新 Phase 在建立自己的副作用前都先调用。 */
 	void ClearDayDeadline();
+	/** 按当前白天截止窗口安排 Morning/Day/Dusk 语义刷新；无效配置只记录诊断，不创建第二套昼夜状态。 */
+	void ScheduleDayEnvironmentRefreshes();
+	/** 白天时段分界到达时重新发布同一 RunPublicState；只有服务器仍处于有效 DayActive 才递增 Revision。 */
+	void HandleDayEnvironmentRefreshElapsed();
 	/** 白天唯一截止回调关闭额度写口并发送 QuotaFailed 事件；夜晚没有倒计时器。 */
 	void HandleDayDeadlineElapsed();
-	/** 把当前 Run Revision 的只读 DTO交给 Environment，并将同一组合快照发布到 GameState。 */
+	/** 把当前 Run Revision 的只读 DTO 交给 Environment，并将同 Revision 的组合快照发布到 GameState；不改变角色身体或表现状态。 */
 	bool RefreshEnvironmentAndPublish();
-	/** 当前环境事件首次出现时把显式自然输入提交给唯一 WaterRegion；成功键按 Day+Event 去重，失败保留重试机会。 */
+	/** 当前环境事件首次出现时把显式自然输入提交给唯一 WaterRegion；成功键按 Run+Day+Event+Anchor 去重，失败保留重试机会。 */
 	void SubmitNaturalChumFieldIfConfigured();
 	/** 只向正在运行的 StateTree 发送稳定 GameplayTag；本方法不包含 Phase 转移表。 */
 	bool SendRunStateTreeEvent(FGameplayTag EventTag, ECatRunTransitionReason Reason);
@@ -235,11 +241,15 @@ private:
 	bool bAllEligibleReadyEventSent = false;
 	/** 身份、命令类别与 RequestId 到首次终态的缓存；保证 RPC 重试不会重复提交。 */
 	TMap<FString, FCatRunCommandResult> RunCommandTerminalCache;
-	/** 白天截止的唯一计时器句柄；每次 Phase 进入和 teardown 都先清除。 */
+	/** 白天截止的唯一计时器句柄；每次 Phase 进入和 teardown 都先清除，达标/截止收口时只停回调不伪造公开 deadline。 */
 	FTimerHandle DayDeadlineTimerHandle;
+	/** 白天 Morning 转 Day 的语义刷新句柄；它只触发同一 RunPublicState 重发，不决定 Phase。 */
+	FTimerHandle DayMorningEnvironmentRefreshTimerHandle;
+	/** 白天 Day 转 Dusk 的语义刷新句柄；它只触发同一 RunPublicState 重发，不决定 Phase。 */
+	FTimerHandle DayDuskEnvironmentRefreshTimerHandle;
 	/** Host teardown 完成通知；它不复制且只在服务器 GameMode 生命周期内有效。 */
 	FCatRunTeardownCompleted RunTeardownCompleted;
-	/** 已成功发布自然空间窝点的 Day+Event 键；只活在本 GameMode，防止环境刷新重复创建。 */
+	/** 已成功发布自然空间窝点的 Run+Day+Event+Anchor 键；只活在本 GameMode，防止环境刷新重复创建。 */
 	TSet<FString> SubmittedNaturalChumFieldKeys;
 	/** 当前 Host exit 仍待确认的远端 StableNetId；服务器只保存私有键，不复制原始身份。 */
 	TSet<FString> PendingHostExitAckStableNetIds;
@@ -499,25 +509,22 @@ public:
 	/** 公共领域命令结果到达 owning client 后广播的本机读模型事件；订阅方只能刷新 UI。 */
 	FCatCampCommandResultReceived OnCampCommandResultReceived;
 
-	/** 提交当前钓鱼选择；服务器目录、可信解锁证明和随身库存持有量共同通过后才写入，客户端选择本身不授予权限。 */
+	/** 提交当前钓鱼选择；实例 ID 用来锁定同定义下的具体物品，服务器仍以目录、解锁证明和库存事实作最终裁决。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
 	void ServerConfigureEquipment(FGuid RequestId, int64 ExpectedRevision, FName RodDefinitionId,
-		FName BaitDefinitionId, FName FloatDefinitionId, FName ScoopNetDefinitionId);
+		FName BaitDefinitionId, FName FloatDefinitionId, FName ScoopNetDefinitionId,
+		FGuid RodItemInstanceId, FGuid BaitItemInstanceId, FGuid FloatItemInstanceId,
+		FGuid ScoopNetItemInstanceId);
 
 	/** 整理当前角色随身库存中的两个格子；服务器按 Equipment Revision 和数组下标重读后移动、合并或交换。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
 	void ServerMoveInventorySlot(FGuid RequestId, int64 ExpectedRevision,
 		int32 SourceSlotIndex, int32 TargetSlotIndex);
 
-	/** 从指定商店摊位购买服务器目录项；服务器复核玩家仍在摊位旁，再全图寻找可接收发货的营地公共仓库。 */
+	/** 从指定商店摊位支付整车服务器目录项；服务器先限制购物车载荷，再复核摊位和营地公共仓库。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
-	void ServerSubmitShopPurchaseAtKiosk(ACatShopKioskActor* ShopKiosk, FName EntryId, FGuid RequestId,
-		int64 ExpectedWalletRevision);
-
-	/** 从指定商店摊位免费领取目录项；服务器仍按商店表白名单、摊位距离和当前 World 的营地公共仓库裁决。 */
-	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
-	void ServerClaimFreeShopEntryAtKiosk(ACatShopKioskActor* ShopKiosk, FName EntryId, FGuid RequestId,
-		int64 ExpectedWalletRevision);
+	void ServerSubmitShopCartAtKiosk(ACatShopKioskActor* ShopKiosk,
+		const TArray<FCatShopCartLineCommand>& Lines, FGuid RequestId, int64 ExpectedWalletRevision);
 
 	/** 售出指定 Items 鱼容器中的鱼；服务器从地面鱼护箱子或共享鱼缸读取重量，并在删除鱼后把收入记入团队公款。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
@@ -761,9 +768,9 @@ private:
 	bool CanForwardGameplayCommand() const;
 	/** 查询 Fishing/玩家打窝专用 gate；它复用身份与 teardown 判断，但额外要求 Run 处于 DayActive、允许钓鱼且当前猫没有倒地。 */
 	bool CanForwardFishingCommand() const;
-	/** 购买与免费领取共用的服务器转发实现；来源摊位只做距离证明，收货公共仓库由当前 World 中的 ACatCampHubActor 接口提供。 */
-	void SubmitShopOrder(ACatShopKioskActor* ShopKiosk, FName EntryId, FGuid RequestId,
-		int64 ExpectedWalletRevision, bool bFreeClaim);
+	/** 支付按钮触发后的服务器转发实现；它解析摊位和公共仓库后提交购物车，并把交付段结果回送 owning client。 */
+	void SubmitShopCart(ACatShopKioskActor* ShopKiosk, const TArray<FCatShopCartLineCommand>& Lines,
+		FGuid RequestId, int64 ExpectedWalletRevision);
 
 	/** owning client 最近收到的 Social 协议读模型；由可靠结果 RPC 整体替换，不复制回服务器或作为权限事实。 */
 	UPROPERTY(Transient)

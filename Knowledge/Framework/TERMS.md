@@ -1,6 +1,6 @@
 # Catfishing 当前框架术语
 
-更新时间：2026-08-12
+更新时间：2026-08-31
 文档状态：当前有效术语表。
 范围：稳定后续沟通和 AI 检索用词；只收录本项目容易混淆的概念。
 
@@ -33,6 +33,9 @@ _Avoid_: MatchState、地图生命周期。
 
 **Run Public State**：GameState 复制的公开局快照，客户端只读。
 _Avoid_: 客户端 Run 真相。
+
+**Environment State**：`Run Public State` 里的环境事实，表达本局此刻的天气、白天鱼情时段和公共自然事件，由服务器根据 Run 快照求值后复制。
+_Avoid_: 本地光照参数、角色 Wet 状态、客户端天气真相、独立环境管理器。
 
 **Cat Character**：局内猫身体 Actor，同时是 ASC Owner/Avatar，持有身体组件和装备入口，不持有个人鱼护。
 _Avoid_: 玩家档案、PlayerState 身体。

@@ -22,17 +22,32 @@ public:
 	/** 绑定当前要打开商店的 Controller 和摊位库存；成功后订阅 GameState 商店快照并发布首份投影。 */
 	bool Bind(APlayerController* InController, UCatShopInventoryComponent* InShopInventory);
 
-	/** 解除 GameState 订阅并清空当前商品、公款和 pending 投影。 */
+	/** 解除 GameState 订阅并清空当前商品、公款、购物车和 pending 投影。 */
 	void Unbind();
 
 	/** 写入商店打开状态并刷新投影；打开来源仍归交互对象组件所有。 */
 	void SetOpen(bool bOpen);
 
-	/** 标记 PageController 已经提交购买或领取 RPC；等待经济/货架快照刷新时禁用重复动作。 */
+	/** 标记 PageController 已经提交购物车支付 RPC；等待服务器回包时禁用重复动作。 */
 	void MarkActionSubmitted(ECatShopUIAction Action, FName EntryId);
 
 	/** 标记一次商店动作被拒绝；本地校验和服务器回包都会用它恢复按钮状态并展示原因。 */
 	void MarkActionRejected(ECatShopUIAction Action, FName EntryId, FText Reason);
+
+	/** 标记当前购物车支付已完成；清空本地选购队列并显示营地公共仓库收货提示。 */
+	void MarkCartPaymentSucceeded();
+
+	/** 商品卡点击后尝试加入本地购物车；pending、满车、售罄、库存不足或单品超限时返回 false 并写入失败原因。 */
+	bool AddEntryToCart(FName EntryId, FText& OutFailureReason);
+
+	/** 从本地购物车移除一份指定商品；数量大于 1 时只减一份，减到 0 时移除该行。 */
+	bool RemoveOneCartItem(FName EntryId, FText& OutFailureReason);
+
+	/** 清空本地购物车；商店关闭或支付成功时调用，不影响服务器货架。 */
+	void ClearCart();
+
+	/** 支付前生成 RPC 需要的购物车行；空车、行数超限或非法计数返回 false，价格和数量倍率服务器重算。 */
+	bool BuildCartCommandLines(TArray<FCatShopCartLineCommand>& OutLines) const;
 
 	/** 主动重读当前公开经济/货架快照和配置目录；外部只读事实变化都收敛到这里。 */
 	void Refresh();
@@ -47,7 +62,7 @@ public:
 	FCatShopModelChanged OnViewStateChanged;
 
 private:
-	/** GameState 商店快照变化入口；刷新公款、商品可用性和 pending 提示。 */
+	/** GameState 商店快照变化入口；刷新公款、商品可用性和购物车支付条件。 */
 	void HandleShopEconomySnapshotChanged();
 
 	/** 摊位库存身份复制入口；刷新当前候选商品和公开货架快照的匹配关系。 */
@@ -57,6 +72,12 @@ private:
 	FCatShopEntryView MakeEntryView(const FCatShopCatalogEntry& Entry,
 		const FCatShopPublicEconomySnapshot& Economy, bool bEconomyAvailable) const;
 
+	/** 从完整真实商品数组归纳顶部分类按钮投影；玩家实际选中项由 Widget 本地维护，不写回 Model。 */
+	void BuildCategoryViewState(FCatShopViewState& InOutState) const;
+
+	/** 按当前真实商品数组和本地购物车生成右侧已选购投影；超限或失效行会同步到总价、bCartHasInvalidLines 和支付禁用原因。 */
+	void BuildCartViewState(FCatShopViewState& InOutState) const;
+
 	/** 当前打开商店的 Controller 弱引用；只用于定位 World/GameState，不拥有 UI 生命周期。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APlayerController> BoundPlayerController;
@@ -65,7 +86,7 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<ACatfishingGameState> BoundGameState;
 
-	/** 当前页面对应的摊位库存组件；商品候选和免费白名单都从它读取，不再从全局 Settings 猜。 */
+	/** 当前页面对应的摊位库存组件；商品候选从它读取，不再从全局 Settings 猜。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatShopInventoryComponent> BoundShopInventory;
 
@@ -78,7 +99,7 @@ private:
 	/** 当前商店窗口是否打开的交互组件投影；Model 不从 Widget 可见性反推。 */
 	bool bOpen = false;
 
-	/** 当前是否已有购买或领取请求提交后等待商店快照同步。 */
+	/** 当前是否已有购物车支付请求提交后等待服务器回包；它由支付提交/回包写入，影响本地加购、删除和支付出口。 */
 	bool bActionPending = false;
 
 	/** 最近一次提交或本地拒绝的动作类型。 */
@@ -89,6 +110,12 @@ private:
 
 	/** 最近一次拒绝原因；本地校验失败和服务器未扣款失败都会写入它，下一次成功提交会清空。 */
 	FText LastRejectedReason;
+
+	/** 本地购物车里每个商品的选购次数；只存在于当前玩家客户端，支付时才转换成服务器命令。 */
+	TMap<FName, int32> CartCountsByEntryId;
+
+	/** 本地购物车的展示顺序；重复点击同一商品只增加数量，不改变它在已选购列表中的位置。 */
+	TArray<FName> CartEntryOrder;
 
 	/** 最近发布给 View 的完整商店投影；所有刷新都先写这里再广播。 */
 	FCatShopViewState ViewState;

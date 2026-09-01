@@ -169,7 +169,10 @@ FCatDomainCommandResult ACatCampInventoryActor::AddItemFromAuthority(const FGuid
 			return Result;
 		}
 		Result = *Cached;
-		MarkCommandReplayed(Result);
+		if (Cached->bCommitted && Cached->Error == ECatDomainCommandError::None)
+		{
+			MarkCommandReplayed(Result);
+		}
 		return Result;
 	}
 
@@ -198,35 +201,161 @@ FCatDomainCommandResult ACatCampInventoryActor::AddItemFromAuthority(const FGuid
 	return Result;
 }
 
+// 整批入库预检流程：
+// 1. 先验证 RequestId、服务器身份和整批载荷签名；重复 DefinitionId 会合并，行顺序不会制造另一批货。
+// 2. 已有同身份同 RequestId 成功终态时只允许同一批货重放，成功终态继续放行给 AddItemsFromAuthority 返回 AlreadyResolved。
+// 3. 首次预检要求仓库版本仍匹配，然后用临时格子数组模拟整批入库，任何一行放不下都拒绝整批。
+ECatDomainCommandError ACatCampInventoryActor::ValidateAddItemsFromAuthority(const FGuid RequestId,
+	const int64 ExpectedRevision, const FString& StableNetId,
+	const TArray<FCatCampInventoryAddItemRequest>& Items) const
+{
+	if (!HasAuthority() || !RequestId.IsValid() || StableNetId.IsEmpty())
+	{
+		return ECatDomainCommandError::InvalidPayload;
+	}
+	FString PayloadSignature;
+	TArray<FCatCampInventoryAddItemRequest> NormalizedItems;
+	if (!BuildAddItemsPayloadSignature(Items, PayloadSignature, NormalizedItems))
+	{
+		return ECatDomainCommandError::InvalidPayload;
+	}
+	const FString Key = MakeTerminalKey(TEXT("AddItems"), StableNetId, RequestId);
+	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
+	{
+		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
+		if (!CachedPayload || *CachedPayload != PayloadSignature)
+		{
+			return ECatDomainCommandError::InvalidPayload;
+		}
+		return Cached->Error == ECatDomainCommandError::None ? ECatDomainCommandError::None : Cached->Error;
+	}
+	if (Snapshot.Revision != ExpectedRevision)
+	{
+		return ECatDomainCommandError::RevisionConflict;
+	}
+	return CanStoreItems(NormalizedItems) ? ECatDomainCommandError::None : ECatDomainCommandError::CapacityExceeded;
+}
+
+// 整批入库提交流程：
+// 1. 用服务器身份、RequestId 和整批载荷签名处理成功终态重放；失败不写终态缓存，调用方重读状态后仍可重新提交。
+// 2. 首次提交复用整批预检，再把当前仓库格子复制到临时数组里完整写入。
+// 3. 只有临时数组整批成功后才替换正式 Snapshot、推进一次 Revision、广播并缓存；失败时正式格子保持原样。
+FCatDomainCommandResult ACatCampInventoryActor::AddItemsFromAuthority(const FGuid RequestId,
+	const int64 ExpectedRevision, const FString& StableNetId,
+	const TArray<FCatCampInventoryAddItemRequest>& Items)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	if (!RequestId.IsValid() || StableNetId.IsEmpty())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		Result.Revision = Snapshot.Revision;
+		return Result;
+	}
+	FString PayloadSignature;
+	TArray<FCatCampInventoryAddItemRequest> NormalizedItems;
+	if (!BuildAddItemsPayloadSignature(Items, PayloadSignature, NormalizedItems))
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		Result.Revision = Snapshot.Revision;
+		return Result;
+	}
+	const FString Key = MakeTerminalKey(TEXT("AddItems"), StableNetId, RequestId);
+	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
+	{
+		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
+		if (!CachedPayload || *CachedPayload != PayloadSignature)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+			Result.Revision = Snapshot.Revision;
+			return Result;
+		}
+		Result = *Cached;
+		if (Cached->bCommitted && Cached->Error == ECatDomainCommandError::None)
+		{
+			MarkCommandReplayed(Result);
+		}
+		return Result;
+	}
+
+	const ECatDomainCommandError Rejection =
+		ValidateAddItemsFromAuthority(RequestId, ExpectedRevision, StableNetId, NormalizedItems);
+	if (Rejection != ECatDomainCommandError::None)
+	{
+		Result.Error = Rejection;
+	}
+	else
+	{
+		TArray<FCatRunInventorySlot> SimulatedSlots = Snapshot.InventorySlots;
+		const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+		bool bStoredAll = true;
+		for (const FCatCampInventoryAddItemRequest& Item : NormalizedItems)
+		{
+			const UCatEquipmentDefinition* Definition =
+				Settings ? Settings->FindRuntimeDefinition(Item.DefinitionId) : nullptr;
+			if (!Definition || !AddItemQuantityToSlots(SimulatedSlots, *Definition, Item.DefinitionId, Item.Quantity))
+			{
+				bStoredAll = false;
+				break;
+			}
+		}
+		if (bStoredAll)
+		{
+			Snapshot.InventorySlots = MoveTemp(SimulatedSlots);
+			++Snapshot.Revision;
+			PublishSnapshot();
+			Result.bCommitted = true;
+			Result.Error = ECatDomainCommandError::None;
+		}
+		else
+		{
+			Result.Error = ECatDomainCommandError::CapacityExceeded;
+		}
+	}
+	Result.Revision = Snapshot.Revision;
+	if (Result.bCommitted && Result.Error == ECatDomainCommandError::None)
+	{
+		TerminalCache.Add(Key, Result);
+		TerminalPayloadByKey.Add(Key, PayloadSignature);
+	}
+	return Result;
+}
+
 // 取用预检流程：
 // 1. 先验证公共仓库槽位、数量、authority 和目标玩家装备组件，确保取用有明确来源和接收方。
-// 2. 再读取源槽 DefinitionId 对应的装备定义；消耗品按数量型授予预检，装备型只允许一次取一件。
-// 3. 目标玩家能接收时才返回 None；本函数不修改公共仓库，也不调用玩家入库提交。
+// 2. 再复制源格形成本次要取出的完整实例；消耗品取指定数量，装备型只允许一次取一件。
+// 3. 目标玩家能原样接收该实例时才返回 None；本函数不修改公共仓库，也不调用玩家入库提交。
 ECatDomainCommandError ACatCampInventoryActor::ValidateWithdrawToEquipment(const FGuid RequestId,
 	const int32 SourceSlotIndex, const int32 Quantity, UCatEquipmentComponent* TargetEquipment) const
 {
+	const AActor* TargetOwner = TargetEquipment ? TargetEquipment->GetOwner() : nullptr;
 	if (!HasAuthority() || !RequestId.IsValid() || !TargetEquipment || Quantity <= 0
-		|| !Snapshot.InventorySlots.IsValidIndex(SourceSlotIndex))
+		|| !TargetOwner || !TargetOwner->HasAuthority() || !Snapshot.InventorySlots.IsValidIndex(SourceSlotIndex))
 	{
 		return ECatDomainCommandError::InvalidPayload;
+	}
+	if (TargetEquipment->HasActiveFishingUse() || TargetEquipment->HasActiveRunConsumableUse())
+	{
+		return ECatDomainCommandError::InvalidPhase;
 	}
 	const FCatRunInventorySlot& SourceSlot = Snapshot.InventorySlots[SourceSlotIndex];
 	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
 	const UCatEquipmentDefinition* Definition =
 		Settings ? Settings->FindRuntimeDefinition(SourceSlot.DefinitionId) : nullptr;
-	if (!Definition || SourceSlot.DefinitionId.IsNone() || SourceSlot.Quantity < Quantity)
+	if (!Definition || !CatRunInventorySlotOperations::IsInventorySlotOccupied(SourceSlot)
+		|| !SourceSlot.ItemInstanceId.IsValid() || SourceSlot.Quantity < Quantity)
 	{
 		return ECatDomainCommandError::InvalidPayload;
 	}
-	if (Definition->bRunConsumable)
-	{
-		return TargetEquipment->ValidateInventoryQuantityGrant(RequestId, SourceSlot.DefinitionId, Quantity);
-	}
-	if (Quantity != 1)
+	if (!Definition->bRunConsumable && Quantity != 1)
 	{
 		return ECatDomainCommandError::InvalidPayload;
 	}
-	return TargetEquipment->ValidateEquipmentGrantFromAuthority(RequestId, SourceSlot.DefinitionId);
+	FCatRunInventorySlot WithdrawnItem = SourceSlot;
+	WithdrawnItem.Quantity = Quantity;
+	CatRunInventorySlotOperations::NormalizeStoredItemSlot(WithdrawnItem, *Definition);
+	return TargetEquipment->CanStoreInventorySlot(*Definition, WithdrawnItem)
+		? ECatDomainCommandError::None : ECatDomainCommandError::CapacityExceeded;
 }
 
 // 取用提交流程：
@@ -241,9 +370,11 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	FName SourceDefinitionId = NAME_None;
+	FGuid SourceItemInstanceId;
 	if (Snapshot.InventorySlots.IsValidIndex(SourceSlotIndex))
 	{
 		SourceDefinitionId = Snapshot.InventorySlots[SourceSlotIndex].DefinitionId;
+		SourceItemInstanceId = Snapshot.InventorySlots[SourceSlotIndex].ItemInstanceId;
 	}
 	if (!RequestId.IsValid())
 	{
@@ -253,8 +384,9 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 	}
 	const FString Key = MakeTerminalKey(TEXT("WithdrawToEquipment"), RequestId);
 	const FString PayloadSignature = FString::Printf(
-		TEXT("ExpectedCamp=%lld|Slot=%d|Definition=%s|Quantity=%d|ExpectedEquipment=%lld"),
-		ExpectedCampRevision, SourceSlotIndex, *SourceDefinitionId.ToString(), Quantity, ExpectedEquipmentRevision);
+		TEXT("ExpectedCamp=%lld|Slot=%d|Definition=%s|Instance=%s|Quantity=%d|ExpectedEquipment=%lld"),
+		ExpectedCampRevision, SourceSlotIndex, *SourceDefinitionId.ToString(),
+		*SourceItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), Quantity, ExpectedEquipmentRevision);
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
@@ -301,17 +433,21 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 
 	TArray<FCatRunInventorySlot> SavedSlots = Snapshot.InventorySlots;
 	FCatRunInventorySlot& SourceSlot = Snapshot.InventorySlots[SourceSlotIndex];
+	FCatRunInventorySlot WithdrawnItem = SourceSlot;
+	WithdrawnItem.Quantity = Quantity;
+	CatRunInventorySlotOperations::NormalizeStoredItemSlot(WithdrawnItem, *Definition);
+	if (Definition->bRunConsumable && Quantity < SourceSlot.Quantity)
+	{
+		WithdrawnItem.ItemInstanceId = FGuid::NewGuid();
+	}
 	SourceSlot.Quantity -= Quantity;
 	if (SourceSlot.Quantity <= 0)
 	{
-		SourceSlot.DefinitionId = NAME_None;
-		SourceSlot.Quantity = 0;
+		SourceSlot = FCatRunInventorySlot();
 	}
 
-	const FCatDomainCommandResult Grant = Definition->bRunConsumable
-		? TargetEquipment->GrantInventoryQuantityFromAuthority(RequestId, ExpectedEquipmentRevision,
-			SourceDefinitionId, Quantity)
-		: TargetEquipment->GrantEquipmentFromAuthority(RequestId, ExpectedEquipmentRevision, SourceDefinitionId);
+	const FCatDomainCommandResult Grant =
+		TargetEquipment->GrantInventorySlotFromAuthority(RequestId, ExpectedEquipmentRevision, WithdrawnItem);
 	const bool bGrantStanding = Grant.bCommitted || Grant.Error == ECatDomainCommandError::AlreadyResolved;
 	if (!bGrantStanding)
 	{
@@ -643,48 +779,33 @@ int32 ACatCampInventoryActor::GetInventoryStackLimit(const UCatEquipmentDefiniti
 	return ConfiguredLimit > 0 ? ConfiguredLimit : MAX_int32;
 }
 
-// 容量预检流程：
-// 1. 不在 const 检查里扩数组，只把配置容量和现有槽位共同视作可用范围。
-// 2. 同定义未满格先吸收数量，再计算现有空格和配置补出的空格。
-// 3. 只有整批数量都能放完才返回 true，商店不会发生半批发货。
+// 容量预检流程：复制当前格子后交给通用写入模拟；模拟能完整放入才返回 true，正式 Snapshot 不会被 const 预检修改。
 bool ACatCampInventoryActor::CanStoreItem(const UCatEquipmentDefinition& Definition,
 	const FName DefinitionId, const int32 Quantity) const
 {
-	if (DefinitionId.IsNone() || Quantity <= 0)
+	TArray<FCatRunInventorySlot> SimulatedSlots = Snapshot.InventorySlots;
+	return AddItemQuantityToSlots(SimulatedSlots, Definition, DefinitionId, Quantity);
+}
+
+// 整批容量预检流程：按归一化后的物品顺序逐行模拟写入同一份临时格子，保证“每行单独可放”和“整车一起可放”不会出现两种答案。
+bool ACatCampInventoryActor::CanStoreItems(const TArray<FCatCampInventoryAddItemRequest>& Items) const
+{
+	if (Items.IsEmpty())
 	{
 		return false;
 	}
-	const int32 StackLimit = GetInventoryStackLimit(Definition);
-	if (StackLimit <= 0)
+	TArray<FCatRunInventorySlot> SimulatedSlots = Snapshot.InventorySlots;
+	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+	for (const FCatCampInventoryAddItemRequest& Item : Items)
 	{
-		return false;
-	}
-	const int32 EffectiveSlotCount = FMath::Max(GetConfiguredSlotCapacity(), Snapshot.InventorySlots.Num());
-	int32 Remaining = Quantity;
-	for (const FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
-	{
-		if (Slot.DefinitionId == DefinitionId && Slot.Quantity > 0 && Slot.Quantity < StackLimit)
+		const UCatEquipmentDefinition* Definition =
+			Settings ? Settings->FindRuntimeDefinition(Item.DefinitionId) : nullptr;
+		if (!Definition || !AddItemQuantityToSlots(SimulatedSlots, *Definition, Item.DefinitionId, Item.Quantity))
 		{
-			Remaining -= FMath::Min(Remaining, StackLimit - Slot.Quantity);
-			if (Remaining <= 0)
-			{
-				return true;
-			}
+			return false;
 		}
 	}
-	int32 EmptySlotCount = FMath::Max(0, EffectiveSlotCount - Snapshot.InventorySlots.Num());
-	for (const FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
-	{
-		if (Slot.DefinitionId.IsNone() || Slot.Quantity <= 0)
-		{
-			++EmptySlotCount;
-		}
-	}
-	for (int32 SlotIndex = 0; SlotIndex < EmptySlotCount && Remaining > 0; ++SlotIndex)
-	{
-		Remaining -= FMath::Min(Remaining, StackLimit);
-	}
-	return Remaining <= 0;
+	return true;
 }
 
 // 页面类解析流程：同步加载营地仓库自身配置的库存 View，并确认它就是营地仓库页面类型；错配普通背包页时返回空，交互打开链路会记录拒绝。
@@ -708,10 +829,7 @@ void ACatCampInventoryActor::EnsureInventorySlotArray()
 	}
 }
 
-// 入库写入流程：
-// 1. 先复用容量预检，保证接下来不会写出半批物品。
-// 2. 补齐可见槽位后先并入同定义未满格，剩余数量再落到空格。
-// 3. 写完只改变公共仓库 Slots；Revision 和广播由提交入口统一处理。
+// 入库写入流程：单行提交先复用容量预检，再把正式 Snapshot 交给通用格子写入；Revision 和广播仍由提交入口统一处理。
 bool ACatCampInventoryActor::AddItemQuantity(const UCatEquipmentDefinition& Definition,
 	const FName DefinitionId, const int32 Quantity)
 {
@@ -719,13 +837,36 @@ bool ACatCampInventoryActor::AddItemQuantity(const UCatEquipmentDefinition& Defi
 	{
 		return false;
 	}
-	EnsureInventorySlotArray();
+	return AddItemQuantityToSlots(Snapshot.InventorySlots, Definition, DefinitionId, Quantity);
+}
+
+// 格子写入流程：
+// 1. 先按配置容量补齐传入数组，调用方传临时数组时就是模拟，传 Snapshot 时就是正式写入。
+// 2. 同定义未满格优先吸收数量并补齐该堆栈实例身份，剩余数量再创建新的运行期实例落到空格。
+// 3. 只有全部数量都放完才返回 true，调用方因此可以用它保证整批入库不产生半批结果。
+bool ACatCampInventoryActor::AddItemQuantityToSlots(TArray<FCatRunInventorySlot>& InventorySlots,
+	const UCatEquipmentDefinition& Definition, const FName DefinitionId, const int32 Quantity) const
+{
+	if (DefinitionId.IsNone() || Quantity <= 0)
+	{
+		return false;
+	}
+	const int32 SlotCapacity = GetConfiguredSlotCapacity();
+	if (InventorySlots.Num() < SlotCapacity)
+	{
+		InventorySlots.AddDefaulted(SlotCapacity - InventorySlots.Num());
+	}
 	const int32 StackLimit = GetInventoryStackLimit(Definition);
+	if (StackLimit <= 0)
+	{
+		return false;
+	}
 	int32 Remaining = Quantity;
-	for (FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
+	for (FCatRunInventorySlot& Slot : InventorySlots)
 	{
 		if (Slot.DefinitionId == DefinitionId && Slot.Quantity > 0 && Slot.Quantity < StackLimit)
 		{
+			CatRunInventorySlotOperations::NormalizeStoredItemSlot(Slot, Definition);
 			const int32 Added = FMath::Min(Remaining, StackLimit - Slot.Quantity);
 			Slot.Quantity += Added;
 			Remaining -= Added;
@@ -735,13 +876,12 @@ bool ACatCampInventoryActor::AddItemQuantity(const UCatEquipmentDefinition& Defi
 			}
 		}
 	}
-	for (FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
+	for (FCatRunInventorySlot& Slot : InventorySlots)
 	{
-		if (Slot.DefinitionId.IsNone() || Slot.Quantity <= 0)
+		if (!CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
 		{
 			const int32 Added = FMath::Min(Remaining, StackLimit);
-			Slot.DefinitionId = DefinitionId;
-			Slot.Quantity = Added;
+			Slot = CatRunInventorySlotOperations::MakeInventoryItemSlot(Definition, DefinitionId, Added);
 			Remaining -= Added;
 			if (Remaining <= 0)
 			{
@@ -750,6 +890,56 @@ bool ACatCampInventoryActor::AddItemQuantity(const UCatEquipmentDefinition& Defi
 		}
 	}
 	return false;
+}
+
+// 整批签名流程：
+// 1. 先合并重复 DefinitionId 并拒绝空定义、非正数量和 int32 溢出。
+// 2. 再按 DefinitionId 排序生成稳定载荷字符串，让同一批货不受购物车行顺序影响。
+// 3. 签名故意不包含 ExpectedRevision：首轮提交仍检查版本，成功后的重放则应取回既有回执而不是被新版本挡住。
+bool ACatCampInventoryActor::BuildAddItemsPayloadSignature(
+	const TArray<FCatCampInventoryAddItemRequest>& Items, FString& OutPayloadSignature,
+	TArray<FCatCampInventoryAddItemRequest>& OutNormalizedItems) const
+{
+	OutPayloadSignature.Reset();
+	OutNormalizedItems.Reset();
+	TMap<FName, int32> QuantitiesByDefinitionId;
+	for (const FCatCampInventoryAddItemRequest& Item : Items)
+	{
+		if (Item.DefinitionId.IsNone() || Item.Quantity <= 0)
+		{
+			return false;
+		}
+		int32& Quantity = QuantitiesByDefinitionId.FindOrAdd(Item.DefinitionId);
+		if (Item.Quantity > MAX_int32 - Quantity)
+		{
+			OutNormalizedItems.Reset();
+			return false;
+		}
+		Quantity += Item.Quantity;
+	}
+	for (const TPair<FName, int32>& Pair : QuantitiesByDefinitionId)
+	{
+		FCatCampInventoryAddItemRequest& NormalizedItem = OutNormalizedItems.AddDefaulted_GetRef();
+		NormalizedItem.DefinitionId = Pair.Key;
+		NormalizedItem.Quantity = Pair.Value;
+	}
+	OutNormalizedItems.Sort([](const FCatCampInventoryAddItemRequest& Left,
+		const FCatCampInventoryAddItemRequest& Right)
+	{
+		return Left.DefinitionId.ToString() < Right.DefinitionId.ToString();
+	});
+	if (OutNormalizedItems.IsEmpty())
+	{
+		return false;
+	}
+	TArray<FString> Parts;
+	Parts.Reserve(OutNormalizedItems.Num());
+	for (const FCatCampInventoryAddItemRequest& Item : OutNormalizedItems)
+	{
+		Parts.Add(FString::Printf(TEXT("%s:%d"), *Item.DefinitionId.ToString(), Item.Quantity));
+	}
+	OutPayloadSignature = FString::Join(Parts, TEXT(","));
+	return true;
 }
 
 // 发布流程：服务器提交后请求复制并广播本机读模型变化；客户端复制回调只走 OnRep_Snapshot。
@@ -763,4 +953,12 @@ void ACatCampInventoryActor::PublishSnapshot()
 FString ACatCampInventoryActor::MakeTerminalKey(const TCHAR* Operation, const FGuid RequestId)
 {
 	return FString::Printf(TEXT("%s|%s"), Operation, *RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+}
+
+// 身份幂等键流程：公共仓库是共享 Actor，但购物车发货来自某个服务器身份的订单；身份进 key 后，不同玩家同 RequestId 不会共享发货终态。
+FString ACatCampInventoryActor::MakeTerminalKey(const TCHAR* Operation, const FString& StableNetId,
+	const FGuid RequestId)
+{
+	return FString::Printf(TEXT("%s|%s|%s"), Operation, *StableNetId,
+		*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 }

@@ -43,9 +43,13 @@ struct FCatShopOrderResult
 {
 	GENERATED_BODY()
 
-	/** 订单这一段：公款、商店库存和账本的终态。它的 Transaction 字段带的是账本记录的最新状态。 */
+	/** 单交易订单这一段：售鱼仍只生成一条经济记录；购物车购买请读取 CartTransaction。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatShopTransactionResult Transaction;
+
+	/** 购物车订单这一段：公款、商店库存和多条购买账本的终态。 */
+	UPROPERTY(BlueprintReadOnly)
+	FCatShopCartTransactionResult CartTransaction;
 
 	/**
 	 * 交付这一段的终态。链条走到哪一步，它就来自哪一步：发货失败时来自营地公共仓库，
@@ -74,12 +78,8 @@ public:
 	/** 只在服务器 Game World 创建；客户端没有这条链，也不能本地推进订单。 */
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 
-	/** 花公款买一条来源摊位目录项并交付到营地公共仓库；缺少摊位库存或公共仓库时订单在扣款前 fail-closed。 */
-	FCatShopOrderResult SubmitPurchase(const FCatShopPurchaseCommand& Command,
-		UCatShopInventoryComponent* ShopInventory, ACatCampInventoryActor* DeliveryInventory);
-
-	/** 免费自取普通饵、保底竿或保底漂；白名单来自来源摊位库存，交付目标同样是营地公共仓库。 */
-	FCatShopOrderResult SubmitFreeClaim(const FCatShopPurchaseCommand& Command,
+	/** 花公款支付一整车来源摊位目录项并交付到营地公共仓库；缺少摊位库存或公共仓库时订单在扣款前 fail-closed。 */
+	FCatShopOrderResult SubmitCart(const FCatShopCartCommand& Command,
 		UCatShopInventoryComponent* ShopInventory, ACatCampInventoryActor* DeliveryInventory);
 
 	/**
@@ -92,20 +92,16 @@ public:
 
 private:
 	/**
-	 * 声明：按同一条链跑完一笔订单，bFreeClaim 决定走购买还是免费自取写口，实际卖货对象是来源摊位库存，收货对象是营地公共仓库。
-	 * 实现：先取本 World 的经济服务、来源摊位库存和公共仓库版本；再把公共仓库能否接收 DefinitionId + PurchaseQuantity 问在扣钱之前。任一不成立就直接
-	 *       返回，此时公款、商店库存和账本一个字都没动。前提都成立才提交订单，并只在订单确实成立时继续；已经交付过的订单
-	 *       直接返回 AlreadyResolved；否则用同一个公共仓库版本和订单 RequestId 把物品加入公共仓库，仓库自己按装备定义决定堆叠或单件入格；
-	 *       随后确认交付并回填账本最新状态。
-	 * 边界：前置 gate 是这条链处理交付失败的唯一手段，因为扣钱那一步不可逆而商店根本没有退款写口——"先扣后发、发不出去
-	 *       再补偿"要给唯一的不可逆写口开一条反向路径，商店账本的退款语义产品也还没裁。gate 挡下时订单那一段返回的是交付
-	 *       侧的错误码，因为订单压根没提交。目录里没有这条 EntryId 时 gate 不拦，交给购买写口自己拒绝：那条路本来就不扣钱，
-	 *       它给的错误码更准确。同 RequestId 的重放也不拦：钱在首次那一趟就扣过了，这次要做的是把既有回执找回来，
-	 *       再拿"此刻公共仓库还能不能收货"去挡它，只会让结算夜或营地仓库状态变化后的已交付订单
-	 *       拿不到 AlreadyResolved，看起来就像钱扣了东西没进公共仓库。
-	 *       交付回执确认失败仍然不退款、不回滚库存：东西已经进入营地公共仓库，重试同一个 RequestId 会沿着幂等缓存把账本补上，
-	 *       而不是重新扣一次钱。
+	 * 声明：按同一条链跑完整个购物车，实际卖货对象是来源摊位库存，收货对象是营地公共仓库。
+	 * 实现：先取本 World 的经济服务、来源摊位库存和公共仓库版本；再用整车报价得到每行 DefinitionId + DeliveryQuantity，
+	 *       并把公共仓库能否整批接收问在扣钱之前。任一不成立就直接返回，此时公款、商店库存和账本一个字都没动。
+	 *       前提都成立才提交整车购买，并只在订单确实成立时继续；已经全部交付过的购物车直接返回 AlreadyResolved。
+	 *       否则用同一个公共仓库版本和购物车 RequestId 把整批物品加入公共仓库，随后逐条确认购买账本并回填最新状态。
+	 * 边界：前置 gate 是这条链处理交付失败的主要手段，因为扣钱那一步不可逆而商店根本没有退款写口。目录里没有某条 EntryId 时
+	 *       报价阶段会拒绝且不扣钱。同 RequestId 的重放不跑前置 gate：钱在首次那一趟就已经扣过，这次要做的是把既有回执找回来，
+	 *       再拿"此刻公共仓库还能不能收货"去挡它，只会让已支付订单拿不到 AlreadyResolved。
+	 *       交付回执确认失败仍然不退款、不回滚库存：东西已经进入营地公共仓库，重试同一个 RequestId 会沿着幂等缓存把账本补上。
 	 */
-	FCatShopOrderResult RunOrder(const FCatShopPurchaseCommand& Command, bool bFreeClaim,
+	FCatShopOrderResult RunCartOrder(const FCatShopCartCommand& Command,
 		UCatShopInventoryComponent* ShopInventory, ACatCampInventoryActor* DeliveryInventory);
 };

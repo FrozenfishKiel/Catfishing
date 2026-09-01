@@ -269,18 +269,24 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	const FGuid RodId = FGuid::NewGuid();
+	const FGuid RodItemInstanceId = FGuid::NewGuid();
 	const FGuid SessionId = FGuid::NewGuid();
 	const FGuid AttemptId = FGuid::NewGuid();
-	TestFalse(TEXT("rod rejects invalid identity"), Rod->InitializeAuthoritativeIdentity(FGuid(), TEXT("Rod"), NAME_None, Owner, nullptr, false, false));
-	TestTrue(TEXT("rod accepts first identity"), Rod->InitializeAuthoritativeIdentity(RodId, TEXT("Rod"), TEXT("SkinA"), Owner, nullptr, true, false));
+	TestFalse(TEXT("rod rejects invalid identity"), Rod->InitializeAuthoritativeIdentity(
+		FGuid(), RodItemInstanceId, TEXT("Rod"), NAME_None, Owner, nullptr, false, false));
+	TestTrue(TEXT("rod accepts first identity"), Rod->InitializeAuthoritativeIdentity(
+		RodId, RodItemInstanceId, TEXT("Rod"), TEXT("SkinA"), Owner, nullptr, true, false));
 	const FCatFishingRodPresentationState RodFirst = Rod->GetPresentationState();
 	TestEqual(TEXT("rod starts at revision one"), RodFirst.RodActorRevision, int64{1});
+	TestEqual(TEXT("rod publishes immutable item instance identity"), RodFirst.ItemInstanceId, RodItemInstanceId);
 	TestTrue(TEXT("first place transition deploys the rod"), RodFirst.bDeployed);
 	TestEqual(TEXT("first place transition leaves all operator slots empty"), Rod->GetOperatorCount(), 0);
 	TestNull(TEXT("first place transition has no primary operator"), RodFirst.OperatorPlayerState);
-	TestTrue(TEXT("rod exact identity replay succeeds"), Rod->InitializeAuthoritativeIdentity(RodId, TEXT("Rod"), TEXT("SkinB"), Owner, Owner, false, true));
+	TestTrue(TEXT("rod exact identity replay succeeds"), Rod->InitializeAuthoritativeIdentity(
+		RodId, RodItemInstanceId, TEXT("Rod"), TEXT("SkinB"), Owner, Owner, false, true));
 	TestEqual(TEXT("rod replay preserves state"), Rod->GetPresentationState().RodSkinDefinitionId, RodFirst.RodSkinDefinitionId);
-	TestFalse(TEXT("rod rejects changed immutable identity"), Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), TEXT("Rod"), NAME_None, Owner, nullptr, false, false));
+	TestFalse(TEXT("rod rejects changed immutable identity"), Rod->InitializeAuthoritativeIdentity(
+		FGuid::NewGuid(), RodItemInstanceId, TEXT("Rod"), NAME_None, Owner, nullptr, false, false));
 	int32 JoinedSlot = INDEX_NONE;
 	TestTrue(TEXT("first operator joins right primary slot"), Rod->AddOperatorFromAuthority(Owner, 1, JoinedSlot));
 	TestEqual(TEXT("first operator slot index is zero"), JoinedSlot, 0);

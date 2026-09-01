@@ -229,48 +229,81 @@
 
 父类必须是 `UCatShopWidget`。商店不是 LocalPlayer 启动时预创建的，它由世界里的商店交互对象打开。
 
-### 可选控件名
+### 主页面的稳定容器和入口
 
 | 控件名 | 类型 | 人话说明 |
 | --- | --- | --- |
+| `CategoryTabsPanel` | `PanelWidget` | 顶部分类页签容器。C++ 会按 `ViewState.Categories` 创建一个 `WBP_CatShopCategoryTab` 对应一条分类。 |
+| `ShopButtons` | `PanelWidget` | 左侧商品卡容器。C++ 会按当前本地 `DisplayedEntries` 重建 `WBP_CatShopGoodsItem`。 |
+| `CartLinesPanel` | `PanelWidget` | 右侧已选购列表容器。C++ 会按当前购物车行重建 `WBP_CatShopCartLine`。 |
+| `PayButton` | `Button` | 支付整个购物车。资金不足、空车、购物车失效或 pending 时会被禁用。 |
 | `CloseButton` | `Button` | 关闭商店。存在时 C++ 自动绑定到 `RequestCloseShop()`。 |
 | `WalletTextBlock` | `TextBlock` | 团队公款摘要。 |
-| `ResultTextBlock` | `TextBlock` | 最近一次购买/领取反馈。 |
-| `EntriesTextBlock` | `TextBlock` | 商品列表的简单文本版。适合临时展示；正式样式建议做动态商品行。 |
-| `ShopButtons` | `PanelWidget` | 商品按钮容器。正式商店必须保留它；不要在 Designer 里预放商品按钮，C++ 会按当前 `ViewState.Entries` 重建整张货架。 |
+| `ResultTextBlock` | `TextBlock` | 最近一次加购、删除、支付或拒绝反馈。 |
+| `CartTotalTextBlock` | `TextBlock` | 右侧购物车总金额。 |
+| `PayButtonLabelTextBlock` | `TextBlock` | 支付按钮内部文案，当前为“支付”。 |
+| `PayDisabledHintLayer` | `Widget` | 支付禁用时的鼠标命中层，用来显示“资金不足，无法购买！”等悬停提示。 |
+
+主 WBP 不再保留 `CategoryAllButton`、`CategorySlot1Button`、`CategorySlot2Button`、`CategorySlot3Button` 这类固定槽位。分类数量来自商品表归纳出的 `ViewState.Categories`，策划增加分类时只改表，主 WBP 不需要手动加按钮。上表控件都是 C++ 自动接线点；纯展示控件可以删除或换成蓝图自定义表现，但删除容器会导致对应动态区域无法生成。
 
 ### 蓝图接口
 
 | 名称 | 类型 | 人话说明 |
 | --- | --- | --- |
-| `BP_RenderShop(ViewState)` | 蓝图事件 | 商店数据刷新时触发。动态商品列表建议从这里生成或刷新。 |
+| `BP_RenderShop(ViewState)` | 蓝图事件 | 商店数据刷新时触发。主页面可在这里补动画或额外视觉状态。 |
 | `GetLastShopViewState()` | 蓝图纯函数 | 读取最近一次商店数据。 |
-| `RequestPurchaseEntry(EntryId)` | 蓝图可调用 | 请求购买某个商品。只传商品 ID，不传价格和库存。 |
-| `RequestFreeClaimEntry(EntryId)` | 蓝图可调用 | 请求领取免费商品。 |
+| `GetDisplayedEntries()` | 蓝图纯函数 | 读取当前客户端分类过滤后的商品数组。商品区应读它，不直接读完整 `ViewState.Entries`。 |
+| `GetCategories()` | 蓝图纯函数 | 读取由真实商品数组归纳出的分类按钮数据；选中态由当前客户端本地写入。 |
+| `GetCartLines()` | 蓝图纯函数 | 读取右侧已选购列表。 |
+| `RequestAddEntryToCart(EntryId)` | 蓝图可调用 | 请求把商品加入本地购物车。只传 EntryId，不传价格、库存或发货数量。 |
+| `RequestRemoveOneCartItem(EntryId)` | 蓝图可调用 | 请求从本地购物车删除一份该商品。 |
+| `RequestPayCart()` | 蓝图可调用 | 请求支付整个购物车。服务器会重新查价、查库存、扣公款并发货到营地公共仓库。 |
+| `RequestSelectCategory(CategoryId)` | 蓝图可调用 | 切换本地分类页，不会写回 Model 或服务器。 |
+| `RequestShowAllCategory()` | 蓝图可调用 | 清空本地分类过滤，显示全部商品。 |
 | `RequestCloseShop()` | 蓝图可调用 | 请求关闭商店。 |
 
-### 当前默认商品 ID
+### 子控件 WBP
 
-| EntryId | 人话说明 |
-| --- | --- |
-| `FixedStarterRod` | 固定出现的初级鱼竿。 |
-| `FixedBugBait` | 固定出现的初级鱼饵。 |
-| `FixedFeatherFloat` | 固定出现的初级鱼漂。 |
-| `RandomShopRodT2` | 随机池里的二级鱼竿。 |
-| `RandomYarnBallFloat` | 随机池里的毛线球鱼漂。 |
-| `RandomBellFloat` | 随机池里的铃铛鱼漂。 |
-| `RandomMeatBait` | 随机池里的肉块饵。 |
-| `RandomFruitBait` | 随机池里的果实饵。 |
-| `RandomNectarBait` | 随机池里的花蜜饵。 |
-| `RandomMoonlightBait` | 随机池里的月光饵。 |
-| `RandomBugChum` | 随机池里的虫虫窝料。 |
-| `RandomFruitFragranceChum` | 随机池里的花果香窝料。 |
-| `RandomFermentedGrainChum` | 随机池里的发酵谷物窝料。 |
-| `RandomHolyLightChum` | 随机池里的圣光窝料。 |
+`WBP_CatShopCategoryTab` 的父类必须是 `UCatShopCategoryTabWidget`，每个实例代表顶部分类栏中的一条分类。建议保留：
 
-### 动态商品行推荐做法
+| 控件名 | 类型 | 人话说明 |
+| --- | --- | --- |
+| `CategoryButton` | `Button` | 点击后切换当前客户端的本地分类过滤。 |
+| `CategoryLabelTextBlock` | `TextBlock` | 分类名，来自 `DisplayNameText` 或分类 ID 回退。 |
+| `CategoryCountTextBlock` | `TextBlock` | 该分类当前商品数量角标。 |
+| `CategorySelectedVisual` | `Widget` | 当前客户端选中该分类时显示的装饰。 |
 
-正式样式的标准做法是让 WBP 提供一个名为 `ShopButtons` 的容器，C++ 会按当前 `ViewState.Entries` 自动生成可点击商品按钮；如果要做更精细的卡片样式，也可以在 `BP_RenderShop` 里读取 `ViewState.Entries`，每条 `FCatShopEntryView` 生成一个商品行。商店打开后可以用 `CloseButton`、Escape、交互键或背包键关闭。关卡里的商店摊位不需要单独设置营地；服务器购买时会在当前关卡全图寻找营地，并让营地检查自己的公共仓库。没有可用营地公共仓库时，订单会在扣款前失败并回显原因。
+`WBP_CatShopGoodsItem` 的父类必须是 `UCatShopGoodsItemWidget`，每个实例代表左侧货架上的一条商品。建议保留：
+
+| 控件名 | 类型 | 人话说明 |
+| --- | --- | --- |
+| `GoodsButton` | `Button` | 点击后把本商品加入本地购物车。 |
+| `GoodsNameTextBlock` | `TextBlock` | 商品名。 |
+| `GoodsIconImage` | `Image` | 商品图标，来自商品表或定义投影。 |
+| `GoodsGlyphTextBlock` | `TextBlock` | 当前无正式商品图标时的后备识别符号。 |
+| `GoodsPriceTextBlock` | `TextBlock` | 单价。 |
+| `GoodsMetaTextBlock` | `TextBlock` | 已选数量、库存充足、余量或售罄提示。 |
+| `GoodsDisabledVisual` | `Widget` | 商品不可加购时显示的遮罩。 |
+
+`WBP_CatShopCartLine` 的父类必须是 `UCatShopCartLineWidget`，每个实例代表右侧购物车中的一条商品。建议保留：
+
+| 控件名 | 类型 | 人话说明 |
+| --- | --- | --- |
+| `CartLineRemoveButton` | `Button` | 垃圾桶删除按钮，每次删除一份。 |
+| `CartLineNameTextBlock` | `TextBlock` | 商品名。 |
+| `CartLineCountTextBlock` | `TextBlock` | 本地选购次数。 |
+| `CartLinePriceTextBlock` | `TextBlock` | 行小计。 |
+| `CartLineIconImage` | `Image` | 购物车行的小图标，来自商品投影。 |
+| `CartLineGlyphTextBlock` | `TextBlock` | 右侧行内后备识别符号。 |
+| `CartLineInvalidVisual` | `Widget` | 货架变化导致本行不可结算时显示。 |
+
+以上子控件里的视觉字段都是可选自动绑定点。默认 WBP 应尽量保留它们，方便 C++ 自动把数据刷进去；如果蓝图想换结构，也可以不放这些名字，再在对应 `BP_RenderCategoryTab`、`BP_RenderGoodsItem`、`BP_RenderCartLine` 里按投影字段自己渲染。
+
+### 当前商店商品表口径
+
+商店出售内容由 `/Game/Catfishing/Data/Shop/DT_ShopCatalog_Default` 维护，行结构是 `FCatShopCatalogTableRow`。分类不写在程序枚举里，直接来自表里的 `DisplayCategoryId` 和 `DisplayCategoryNameOverride`。当前策划表给多少分类，分类栏就生成多少页签；“全部”是程序从完整商品数组归纳出的本地页签。
+
+正式样式的标准做法是让主 WBP 提供 `CategoryTabsPanel`、`ShopButtons` 与 `CartLinesPanel` 三个容器；C++ 只按投影创建分类页签、商品卡和购物车行子 WBP，不在 C++ 里生成整页布局。商店打开后可以用 `CloseButton`、Escape、交互键或背包键关闭。关卡里的商店摊位不需要单独设置营地；服务器支付购物车时会在当前关卡全图寻找营地，并让营地检查自己的公共仓库。没有可用营地公共仓库时，订单会在扣款前失败并回显原因。
 
 | 字段 | 人话说明 |
 | --- | --- |
@@ -278,14 +311,16 @@
 | `DefinitionId` | 商品对应的装备或消耗品定义。用于展示名字或图标。 |
 | `PurchaseQuantity` | 单次购买会发到营地公共仓库的数量。 |
 | `UnitPrice` | 单价。只展示，服务器才是最终扣款者。 |
+| `DisplayCategoryId` | 分类 ID。主页面点击分类后只在本地过滤 `DisplayedEntries`。 |
+| `DisplayCategoryNameText` | 分类显示名。 |
 | `RemainingStock` | 剩余库存。 |
 | `bUnlimitedStock` | 是否无限库存。 |
 | `bSoldOut` | 是否售罄。 |
-| `bAffordable` | 团队公款是否够买。 |
-| `bFreeClaim` | 是否免费领取项。true 时按钮调用 `RequestFreeClaimEntry`。 |
+| `bAffordable` | 团队公款是否够买单个条目。当前加购不受它影响，支付时按整车总价裁决。 |
 | `bActionEnabled` | 当前按钮是否应该可点。 |
+| `CartCount` | 当前购物车里这个商品已选几次。 |
 | `DisplayText` | C++ 整理好的商品行文本。 |
-| `ActionText` | C++ 整理好的按钮文字，例如购买或领取。 |
+| `ActionText` | C++ 整理好的按钮文字，当前语义是加入购物车。 |
 | `DisplayNameText` | 商品显示名，优先来自商店表覆盖，其次来自装备定义。 |
 | `DescriptionText` | 商品说明，优先来自商店表覆盖，其次来自装备定义。 |
 
@@ -362,7 +397,7 @@
 
 不要在 WBP 里写死 Tab、E 等键名。背包和交互键来自 `/Game/Input/InputContext/IMC_InputContext`，C++ 会解析成 `ToggleKeyName` 或 `ConfirmKeyName` 给 UI 展示。
 
-不要在商店按钮里自己改公款、库存或装备。按钮只调用 `RequestPurchaseEntry` 或 `RequestFreeClaimEntry`，服务器回包后 UI 会刷新。
+不要在商店按钮里自己改公款、库存或装备。商品卡只调用 `RequestAddEntryToCart`，购物车垃圾桶只调用 `RequestRemoveOneCartItem`，支付按钮只调用 `RequestPayCart`；服务器回包后 UI 会刷新。
 
 不要把外部鱼护箱子页面做成另一套状态。`WBP_CatFishGuardInventory` 复用同一个库存 Model，只是在进入渲染前把显示格裁成地面鱼护容器格。
 

@@ -16,6 +16,7 @@ TARGET_ROD_PATHS = (
 
 
 def _load(path):
+    """Load a rod definition so anchor copying fails early when an asset path is stale."""
     asset = unreal.EditorAssetLibrary.load_asset(path)
     if asset is None:
         raise RuntimeError(f"Could not load rod definition: {path}")
@@ -23,6 +24,7 @@ def _load(path):
 
 
 def main():
+    """Copy only rod anchor transforms from the calibrated baseline into formal rod definitions."""
     source = _load(SOURCE_ROD_PATH)
     source_tip = source.get_editor_property("rod_tip_local_transform")
     source_stand = source.get_editor_property("stand_local_transform")

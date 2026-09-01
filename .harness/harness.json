@@ -55,7 +55,7 @@
         "Shop"
       ],
       "tracking_rule": "Equipment、Shop 只是同一装备获取与装配闭环的实现切面；鱼竿、鱼饵、鱼漂、商店购买、领取和装备生效不得拆成可独立关闭的业务事项。",
-      "completion_rule": "只有鱼竿、鱼饵、鱼漂和抄网可通过正式商店或已裁奖励来源获取并落到玩家自己的 Equipment，默认配置引用 /Game/Catfishing/Data/Equipment/Equip_* 正式资产，开发期 Starter Loadout 自动装配与临时默认抄网发放全部关闭，客户端直连消耗品 grant 被拒绝，FishingSession 读取装备/Items 的强度、当前耐久、消耗品和 Revision 快照且不形成第二份可写真相，失败预算只提交一种惩罚，装备不可偷、解锁跟人并经 FProfileGrant 授予链，以及构建、Automation 和 Lake 运行证据整体成立时，模块才能整体关闭；旧 DA_*_Basic/自动 starter/直连 grant 只能作为历史回归基线，不能作为正式关闭证据；装配重连恢复、收益数值或内容未裁决时必须保持 fail-closed。",
+      "completion_rule": "只有鱼竿、鱼饵、鱼漂和抄网可通过正式商店或已裁奖励来源获取，商店整车购买在扣款前预检营地公共仓库并将商品统一交付到该仓库，玩家再从公共仓库取到自己的 Equipment；默认配置引用 /Game/Catfishing/Data/Equipment/Equip_* 正式资产和策划维护的商店 DataTable，开发期 Starter Loadout 自动装配与临时默认抄网发放全部关闭，客户端直连消耗品 grant 被拒绝，FishingSession 读取装备/Items 的强度、当前耐久、消耗品和 Revision 快照且不形成第二份可写真相，失败预算只提交一种惩罚，装备不可偷、解锁跟人并经 FProfileGrant 授予链，以及构建、Automation 和 Lake 运行证据整体成立时，模块才能整体关闭；旧 DA_*_Basic、UCatShopCatalogDefinition、组件内联商品数组、自动 starter 和直连 grant 只能作为历史回归基线，不能作为正式关闭证据；装配重连恢复、收益数值或内容未裁决时必须保持 fail-closed。",
       "handoff_rule": "换 Agent、换会话或失败回边时必须携带 Equipment、Shop 的同一组端到端证据；静态、构建、局部 UI 或孤立数据资产绿灯不能替代购买/领取/装备/Fishing 生效的完整闭环，也不能把任一切面单独标为完成。"
     },
     "FrontendOnline": {
