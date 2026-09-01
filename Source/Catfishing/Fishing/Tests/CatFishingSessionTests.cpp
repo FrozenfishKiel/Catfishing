@@ -16,6 +16,7 @@
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Integration/CatFishingAimLibrary.h"
+#include "Fishing/Presentation/CatFishPresentationDefinition.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/Actor.h"
@@ -180,7 +181,7 @@ bool FCatFishingSessionExhaustedReelContinuityTest::RunTest(const FString& Param
 	const FGuid SessionId = FGuid::NewGuid();
 	const FGuid AttemptId = FGuid::NewGuid();
 	TestTrue(TEXT("Initializes fish identity"), Fish->InitializeAuthoritativeIdentity(
-		SessionId, AttemptId, TEXT("TestFish"), 500.0, 1.0));
+		SessionId, AttemptId, TEXT("RiverPatternFish"), 500.0, 1.0));
 	TestTrue(TEXT("Initializes hook identity"), Hook->InitializeAuthoritativeIdentity(SessionId, AttemptId));
 	Fish->SetActorLocation(FVector(100.0, 200.0, 50.0));
 	Rod->SetActorLocation(FVector(900.0, 800.0, 300.0));
@@ -284,7 +285,7 @@ bool FCatFishingSessionExhaustedReelContinuityTest::RunTest(const FString& Param
 		|| !TestNotNull(TEXT("Spawns idle exhausted fish"), IdleFish)
 		|| !TestNotNull(TEXT("Spawns idle exhausted rod"), IdleRod)
 		|| !TestTrue(TEXT("Initializes idle fish identity"), IdleFish->InitializeAuthoritativeIdentity(
-			IdleSessionId, IdleAttemptId, TEXT("IdleTestFish"), 500.0, 1.0)))
+			IdleSessionId, IdleAttemptId, TEXT("LittleSilverFish"), 500.0, 1.0)))
 	{
 		return false;
 	}
@@ -693,6 +694,13 @@ bool FCatFishingSessionScoopMouthCarryTest::RunTest(const FString& Parameters)
 	Definition->FightPersonalityId = TEXT("Steady");
 	Definition->FoodSafety = ECatFishFoodSafety::Safe;
 	Definition->EatingExperience = 1.0;
+	UCatFishPresentationDefinition* FishPresentation = LoadObject<UCatFishPresentationDefinition>(nullptr,
+		TEXT("/Game/Catfishing/Data/Fish/Presentation/FishPresentation_RiverPattern.FishPresentation_RiverPattern"));
+	if (!TestNotNull(TEXT("加载正式鱼表现资产作为抄网交接资源"), FishPresentation))
+	{
+		return false;
+	}
+	Definition->PresentationDefinition = FishPresentation;
 	TestTrue(TEXT("测试鱼定义满足正式运行校验"), Definition->IsRuntimeDefinitionReady());
 
 	const FString StableNetId(TEXT("ScoopMouthCarryPlayer"));

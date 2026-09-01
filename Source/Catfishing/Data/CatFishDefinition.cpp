@@ -1,5 +1,7 @@
 #include "Data/CatFishDefinition.h"
 
+#include "Fishing/Presentation/CatFishPresentationDefinition.h"
+
 // 定义可用性检查流程：验证显式 gate、身份、独立稀有/体型轴、分布三轴、权重/重量、协作人数、性格与食用结论；可选成像事件不属于实物鱼可用性的前置条件。
 bool UCatFishDefinition::IsRuntimeDefinitionReady() const
 {
@@ -24,6 +26,7 @@ bool UCatFishDefinition::IsRuntimeDefinitionReady() const
 		: FoodSafety == ECatFishFoodSafety::Toxic && FMath::IsFinite(EatingExperience) && EatingExperience > 0.0
 			&& FMath::IsFinite(PoisonIncrease) && PoisonIncrease > 0.0;
 	return bEnableRuntimeDefinition && !FishDefinitionId.IsNone() && !RarityTierId.IsNone()
+		&& LoadRuntimePresentationDefinition() != nullptr
 		&& BodyClass != ECatFishBodyClass::Unknown && SacrificeContribution > 0
 		&& RegionIds.Num() > 0 && TimeOfDay.Num() > 0 && Weather.Num() > 0
 		&& FMath::IsFinite(SpawnWeight) && SpawnWeight > 0.0
@@ -34,6 +37,12 @@ bool UCatFishDefinition::IsRuntimeDefinitionReady() const
 		&& FMath::IsFinite(FishFightStamina) && FishFightStamina > 0.0
 		&& !BitePersonalityId.IsNone() && !FightPersonalityId.IsNone() && bFoodReady
 		&& bChumPreferenceValid && bBaitMultipliersValid;
+}
+
+UCatFishPresentationDefinition* UCatFishDefinition::LoadRuntimePresentationDefinition() const
+{
+	UCatFishPresentationDefinition* Presentation = PresentationDefinition.LoadSynchronous();
+	return Presentation && Presentation->IsRuntimeDefinitionReady() ? Presentation : nullptr;
 }
 
 double UCatFishDefinition::FindBaitMultiplierOrNeutral(const FName BaitDefinitionId) const

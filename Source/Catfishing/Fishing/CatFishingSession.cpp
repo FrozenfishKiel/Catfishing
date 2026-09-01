@@ -19,6 +19,7 @@
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingGameplayTags.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
+#include "Fishing/Presentation/CatFishPresentationDefinition.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/Integration/CatFishingAimLibrary.h"
@@ -982,8 +983,10 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 		return Result;
 	}
 	const UCatFishingPresentationSettings* Presentation = GetDefault<UCatFishingPresentationSettings>();
-	const double SelectedVisualScale = Presentation
-		? Presentation->ComputeFishUniformVisualScale(FrozenSelectionResult.WeightKilograms) : 1.0;
+	const UCatFishPresentationDefinition* FishPresentation =
+		SelectedDefinition->LoadRuntimePresentationDefinition();
+	const double SelectedVisualScale = FishPresentation
+		? FishPresentation->ComputeUniformVisualScale(FrozenSelectionResult.WeightKilograms) : 1.0;
 	UClass* FishClass = Presentation ? Presentation->FishEncounterActorClass.LoadSynchronous() : nullptr;
 	const FVector FishLocation = Snapshot.HookActor->GetActorLocation(); // 鱼在钩子所在位置咬钩。
 	// 用 SpawnActorDeferred 而非直接 SpawnActor：需要先设置好初始 Transform/Owner，
@@ -1671,7 +1674,9 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 	FRotator LandedRotation = Snapshot.FishEncounterActor
 		? Snapshot.FishEncounterActor->GetActorRotation() : FRotator::ZeroRotator;
 	LandedRotation.Pitch = 0.0;
-	LandedRotation.Roll = Settings->LandedFishRollDegrees;
+	const UCatFishPresentationDefinition* FishPresentation =
+		FishDefinition->LoadRuntimePresentationDefinition();
+	LandedRotation.Roll = FishPresentation ? FishPresentation->LandedActorRollDegrees : 90.0;
 	ACatFishPickupActor* Pickup = World->SpawnActor<ACatFishPickupActor>(
 		ACatFishPickupActor::StaticClass(), SpawnLocation, LandedRotation, SpawnParams);
 	TArray<FString> Participants;

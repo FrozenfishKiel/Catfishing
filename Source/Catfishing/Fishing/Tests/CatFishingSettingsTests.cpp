@@ -2,8 +2,11 @@
 
 #include "Misc/AutomationTest.h"
 
+#include "Animation/AnimSequenceBase.h"
+#include "Engine/SkeletalMesh.h"
 #include "Fishing/CatFishingSettings.h"
-#include "Fishing/Presentation/CatFishingPresentationSettings.h"
+#include "Fishing/Presentation/CatFishAnimInstance.h"
+#include "Fishing/Presentation/CatFishPresentationDefinition.h"
 #include "StateTree.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -46,19 +49,26 @@ bool FCatRodOperatorLayoutSettingsTest::RunTest(const FString& Parameters)
 bool FCatFishWeightVisualScaleTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	UCatFishingPresentationSettings* Settings = NewObject<UCatFishingPresentationSettings>(GetTransientPackage());
+	UCatFishPresentationDefinition* Settings = NewObject<UCatFishPresentationDefinition>(GetTransientPackage());
 	if (!TestNotNull(TEXT("creates transient presentation settings"), Settings))
 	{
 		return false;
 	}
-	Settings->FishMeshReferenceWeightKilograms = 1.0;
-	Settings->FishMeshMinimumUniformScale = 0.5;
-	Settings->FishMeshMaximumUniformScale = 2.0;
-	TestEqual(TEXT("reference weight keeps unit scale"), Settings->ComputeFishUniformVisualScale(1.0), 1.0);
-	TestEqual(TEXT("eight times weight doubles linear size"), Settings->ComputeFishUniformVisualScale(8.0), 2.0);
-	TestEqual(TEXT("one eighth weight halves linear size"), Settings->ComputeFishUniformVisualScale(0.125), 0.5);
-	TestEqual(TEXT("large values clamp to configured maximum"), Settings->ComputeFishUniformVisualScale(64.0), 2.0);
-	TestEqual(TEXT("invalid weight safely falls back to unit scale"), Settings->ComputeFishUniformVisualScale(0.0), 1.0);
+	Settings->SkeletalMesh = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(TEXT("/Game/Test/FishMesh.FishMesh")));
+	Settings->AnimInstanceClass = TSoftClassPtr<UCatFishAnimInstance>(FSoftObjectPath(TEXT("/Script/Catfishing.CatFishAnimInstance")));
+	Settings->CalmAnimation = TSoftObjectPtr<UAnimSequenceBase>(FSoftObjectPath(TEXT("/Game/Test/Calm.Calm")));
+	Settings->StruggleAnimation = TSoftObjectPtr<UAnimSequenceBase>(FSoftObjectPath(TEXT("/Game/Test/Struggle.Struggle")));
+	Settings->ExhaustedAnimation = TSoftObjectPtr<UAnimSequenceBase>(FSoftObjectPath(TEXT("/Game/Test/Exhausted.Exhausted")));
+	Settings->LandedAnimation = Settings->ExhaustedAnimation;
+	Settings->MeshReferenceWeightKilograms = 1.0;
+	Settings->MinimumUniformScale = 0.5;
+	Settings->MaximumUniformScale = 2.0;
+	TestTrue(TEXT("complete fish presentation is runtime-ready"), Settings->IsRuntimeDefinitionReady());
+	TestEqual(TEXT("reference weight keeps unit scale"), Settings->ComputeUniformVisualScale(1.0), 1.0);
+	TestEqual(TEXT("eight times weight doubles linear size"), Settings->ComputeUniformVisualScale(8.0), 2.0);
+	TestEqual(TEXT("one eighth weight halves linear size"), Settings->ComputeUniformVisualScale(0.125), 0.5);
+	TestEqual(TEXT("large values clamp to configured maximum"), Settings->ComputeUniformVisualScale(64.0), 2.0);
+	TestEqual(TEXT("invalid weight safely falls back to unit scale"), Settings->ComputeUniformVisualScale(0.0), 1.0);
 	return !HasAnyErrors();
 }
 

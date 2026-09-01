@@ -23,7 +23,7 @@ public class Catfishing : ModuleRules
 		{
 			PrivateDependencyModuleNames.AddRange(new string[]
 			{
-				"AssetRegistry", "UnrealEd", "UMGEditor"
+				"AssetRegistry", "AssetTools", "AnimGraph", "UnrealEd", "UMGEditor"
 			});
 		}
 	}

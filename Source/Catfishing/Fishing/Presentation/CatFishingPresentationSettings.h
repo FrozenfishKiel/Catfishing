@@ -18,21 +18,9 @@ class CATFISHING_API UCatFishingPresentationSettings : public UDeveloperSettings
 
 public:
 	const UCatRodSkinDefinition* FindRuntimeRodSkin(FName RodSkinDefinitionId, FName RodDefinitionId) const;
-	/** 按“重量约等于体积”计算鱼 Mesh 的统一线性缩放；非法输入安全回退为 1。 */
-	double ComputeFishUniformVisualScale(double WeightKilograms) const;
 	UPROPERTY(Config, EditAnywhere) TSoftClassPtr<ACatFishingRodActor> RodActorClass;
 	UPROPERTY(Config, EditAnywhere) TSoftClassPtr<ACatFishingHookActor> HookActorClass;
 	UPROPERTY(Config, EditAnywhere) TSoftClassPtr<ACatFishEncounterActor> FishEncounterActorClass;
-
-	/** 当前鱼 Mesh 在 UniformScale=1 时所代表的重量。当前共用一套鱼 Mesh，未来可迁入鱼种表现 DA。 */
-	UPROPERTY(Config, EditAnywhere, Category="FishScale", meta=(ClampMin="0.001", Units="kg"))
-	double FishMeshReferenceWeightKilograms = 1.0;
-
-	/** 体重换算后的最小/最大统一视觉缩放，只裁 Mesh 表现，不改变任何玩法碰撞。 */
-	UPROPERTY(Config, EditAnywhere, Category="FishScale", meta=(ClampMin="0.01"))
-	double FishMeshMinimumUniformScale = 0.75;
-	UPROPERTY(Config, EditAnywhere, Category="FishScale", meta=(ClampMin="0.01"))
-	double FishMeshMaximumUniformScale = 1.75;
 	/**
 	 * 服务器确认抛竿并让 Hook 进入 CastFlight 后，由每台客户端在抛竿者角色上本地播放的 Montage。
 	 * Montage 本身不复制；复制的是 CastFlight 这个玩法事实，因此主机、发起客户端和旁观客户端走同一触发条件。
