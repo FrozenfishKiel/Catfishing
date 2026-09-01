@@ -8,7 +8,6 @@ class UCatHUDWidget;
 class UCatInteractionPromptWidget;
 class UCatInventorySlotWidget;
 class UCatInventoryWidget;
-class UCatCollectionWidget;
 class UInputAction;
 class UInputMappingContext;
 
@@ -25,7 +24,7 @@ public:
 	/** 返回局内玩家 UI 模块是否允许装配；关闭时 LocalPlayer 仍维护 Online 生命周期但不创建 HUD/背包/提示。 */
 	bool IsPlayerLakeUIEnabled() const;
 
-	/** 返回正式状态 HUD WBP 类；缺失时调用方 fail-closed，不创建原生白盒替身。 */
+	/** 返回正式主 HUD WBP 类；缺失时调用方 fail-closed，不创建原生白盒替身。 */
 	TSubclassOf<UCatHUDWidget> LoadHUDWidgetClass() const;
 
 	/** 返回正式背包主界面 WBP 类；缺失时调用方 fail-closed，不创建原生白盒替身。 */
@@ -36,9 +35,6 @@ public:
 
 	/** 读取正式交互提示 WBP 类；缺失时只关闭提示表现，不影响交互目标自己的服务器裁决。 */
 	TSubclassOf<UCatInteractionPromptWidget> LoadInteractionPromptWidgetClass() const;
-
-	/** 读取正式图鉴/相册 WBP 类；缺失时图鉴入口 fail-closed，避免用鱼护实物容器临时代替 Profile 记录。 */
-	TSubclassOf<UCatCollectionWidget> LoadCollectionWidgetClass() const;
 
 	/** 返回配置的背包开关 Input Action；它仍位于项目既有 InputContext 中。 */
 	UInputAction* LoadInventoryToggleAction() const;
@@ -59,7 +55,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Lake")
 	bool bEnablePlayerLakeUI = true;
 
-	/** 正式状态 HUD WBP 类；只显示猫状态、钓鱼反馈和短提示。 */
+	/** 正式主 HUD WBP 类；默认只常驻天数、背包和设置入口，背包内容由库存页面打开后显示。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|HUD")
 	TSoftClassPtr<UCatHUDWidget> HUDWidgetClass;
 
@@ -74,10 +70,6 @@ public:
 	/** 正式交互提示 WBP 类；只显示靠近对象和确认键提示。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Interaction")
 	TSoftClassPtr<UCatInteractionPromptWidget> InteractionPromptWidgetClass;
-
-	/** 正式图鉴/相册 WBP 类；只读 Profile 图鉴记录。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Lake|Collection")
-	TSoftClassPtr<UCatCollectionWidget> CollectionWidgetClass;
 
 	/** 背包开关的正式 Enhanced Input Action 资产；项目应把它维护在既有 InputContext 内，运行时代码只绑定 Action。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Input")

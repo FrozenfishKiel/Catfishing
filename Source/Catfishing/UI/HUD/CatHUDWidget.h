@@ -12,14 +12,12 @@ class UButton;
 class UProgressBar;
 class UTextBlock;
 
-/** HUD 入口按钮向协调层提交的纯界面意图；Widget 不直接创建菜单、图鉴或背包页面。 */
+/** HUD 入口按钮向协调层提交的纯界面意图；Widget 不直接创建菜单或背包页面。 */
 UENUM(BlueprintType)
 enum class ECatHUDAction : uint8
 {
 	/** 打开局内主页或 ESC 菜单入口；正式页面由蓝图或上层控制器决定。 */
 	OpenMainMenu,
-	/** 打开鱼图鉴入口；图鉴记录和筛选逻辑仍归 Collection/Profile 链路。 */
-	OpenCollection,
 	/** 打开随身背包入口；当前原生协调层会把它转交给 Inventory PageController。 */
 	OpenInventory
 };
@@ -27,7 +25,7 @@ enum class ECatHUDAction : uint8
 /** HUD View 向 LocalPlayer UI 协调层广播的纯入口意图；接收方决定具体页面和输入模式。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatHUDActionRequested, ECatHUDAction);
 
-/** 状态 HUD 的只读显示投影；它聚合主界面常驻入口、猫状态、钓鱼反馈和短提示，不持有任何玩法写口。 */
+/** 主界面 HUD 的只读显示投影；它聚合天数、默认入口和必要玩法提示，不持有任何玩法写口。 */
 USTRUCT(BlueprintType)
 struct FCatHUDViewState
 {
@@ -37,7 +35,7 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	int32 DayIndex = 1;
 
-	/** 给顶部天数入口直接显示的中文文本；点击行为仍走 HUD Action，不由文本本身承载。 */
+	/** 给顶部天数展示控件直接显示的中文文本；它只表达 Run 天数，不承载点击入口或页面切换。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText DayText;
 
@@ -77,13 +75,9 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasFishingSession = false;
 
-	/** 当前是否显示主页菜单入口；布局可用它隐藏天数/菜单按钮而不改玩法状态。 */
+	/** 当前是否显示主页菜单入口；布局可用它隐藏设置按钮而不改玩法状态或天数展示。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bMainMenuEntryVisible = true;
-
-	/** 当前是否显示鱼图鉴入口；布局可用它隐藏猫爪图标而不改 Collection 记录。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bCollectionEntryVisible = true;
 
 	/** 当前是否显示背包入口；布局可用它隐藏旅行包按钮而不改变背包控制器。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -93,13 +87,21 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bCanOpenMainMenu = true;
 
-	/** 鱼图鉴入口是否可点击；禁用只影响 UI 按钮，Collection 数据仍按正式链路更新。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bCanOpenCollection = true;
-
 	/** 背包入口是否可点击；禁用只影响 UI 按钮，背包打开仍由 Inventory PageController 裁决。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bCanOpenInventory = true;
+
+	/** 猫状态调试摘要是否显示在主界面上；默认关闭以避免正式 HUD 出现研发态属性文本，只由临时排查显式开启。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bShowCatStatusDebugText = false;
+
+	/** 钓鱼调试反馈是否显示在主界面上；默认关闭以避免空闲状态出现流程诊断文案，只由临时排查显式开启。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bShowFishingFeedbackDebugText = false;
+
+	/** 屏幕中心准星是否显示；默认关闭，让正式主界面只保留天数、背包和设置三个常驻信号。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bShowCrosshair = false;
 
 	/** 当前是否显示钓鱼阶段和浮漂反馈；无会话时 HUD 可以保持极简常驻界面。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -141,11 +143,11 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasFishingCommandResult = false;
 
-	/** 给 TextBlock 直接绑定的猫状态中文摘要。 */
+	/** 给调试 TextBlock 直接绑定的猫状态中文摘要；正式主界面默认不显示它。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText CatStatusText;
 
-	/** 给 TextBlock 直接绑定的钓鱼反馈中文摘要。 */
+	/** 给调试 TextBlock 直接绑定的钓鱼反馈中文摘要；正式主界面默认不显示它。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText FishingFeedbackText;
 
@@ -182,14 +184,14 @@ struct FCatHUDViewState
 	FText FishStaminaText;
 };
 
-/** 状态 HUD 的 WBP 基类；它渲染常驻主界面、钓鱼反馈和入口意图，不直接修改玩法状态。 */
+/** 主界面 HUD 的 WBP 基类；它渲染天数、背包与设置入口，并通过委托把玩家操作交还给 UI 子系统。 */
 UCLASS(BlueprintType, Blueprintable)
 class CATFISHING_API UCatHUDWidget : public UUserWidget
 {
 	GENERATED_BODY()
 
 public:
-	/** 接收 HUD Model 的只读投影并同步蓝图绑定字段；具体布局和表现交给 WBP。 */
+	/** 接收 HUD Model 的只读投影并同步蓝图绑定字段；默认隐藏研发态文本，具体布局和表现交给 WBP。 */
 	void RenderHUD(const FCatHUDViewState& ViewState);
 
 	/** 暴露最近一次 HUD 投影给蓝图表现；它不持有 Character 或 ASC，因此不能被蓝图拿去改状态。 */
@@ -200,10 +202,6 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|HUD")
 	void RequestOpenMainMenu();
 
-	/** 提交鱼图鉴入口意图；HUD 不读取 Profile 图鉴，也不自行创建 Collection 页面。 */
-	UFUNCTION(BlueprintCallable, Category = "Catfishing|HUD")
-	void RequestOpenCollection();
-
 	/** 提交背包入口意图；原生协调层会转交现有 Inventory PageController。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|HUD")
 	void RequestOpenInventory();
@@ -212,24 +210,24 @@ public:
 	FCatHUDActionRequested OnActionRequested;
 
 protected:
-	/** Slate 构造完成后对可选入口按钮去重绑定；没有对应按钮的 WBP 仍保持可用。 */
+	/** Slate 构造完成后对两个主 HUD 入口按钮去重绑定；没有对应按钮的 WBP 仍保持可用。 */
 	virtual void NativeConstruct() override;
 
-	/** 离开视口时解除可选入口按钮绑定，避免重建 Slate 后重复广播同一点击。 */
+	/** 离开视口时解除两个主 HUD 入口按钮绑定，避免重建 Slate 后重复广播同一点击。 */
 	virtual void NativeDestruct() override;
 
 	/** 每帧只刷新本地倒计时表现；提竿窗口裁决仍以服务器 FishingSession 命令结果为准。 */
 	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
-	/** WBP 可选渲染扩展点；Designer 也可以直接绑定 BlueprintCatStatusText 和 BlueprintFishingFeedbackText。 */
+	/** WBP 可选渲染扩展点；Designer 可在特殊调试布局里读取 BlueprintCatStatusText 和 BlueprintFishingFeedbackText。 */
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|HUD")
 	void BP_RenderHUD(const FCatHUDViewState& ViewState);
 
-	/** WBP 可选入口扩展点；用于接主页菜单或图鉴页面，原生 HUD 不替蓝图决定页面栈。 */
+	/** WBP 可选入口扩展点；用于接主页菜单或背包动画，原生 HUD 不替蓝图决定页面栈。 */
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|HUD")
 	void BP_HandleHUDAction(ECatHUDAction Action);
 
-	/** 在正式 HUD 最上层绘制固定屏幕中心准星；HUD 由 LocalPlayer 子系统创建，因此 Host 与远端 owning client 各自拥有一份。 */
+	/** 按 ViewState 绘制可选中心准星；正式主界面默认不绘制，避免压住极简 HUD。 */
 	virtual int32 NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
 		const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId,
 		const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
@@ -258,19 +256,19 @@ private:
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|HUD", meta = (AllowPrivateAccess = "true"))
 	FCatHUDViewState LastHUDViewState;
 
-	/** 给 WBP TextBlock 直接绑定的猫状态文本。 */
+	/** 给 WBP 调试 TextBlock 直接绑定的猫状态文本；默认主界面不会把它显示出来。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|HUD", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintCatStatusText;
 
-	/** 给 WBP TextBlock 直接绑定的钓鱼反馈文本。 */
+	/** 给 WBP 调试 TextBlock 直接绑定的钓鱼反馈文本；默认主界面不会把它显示出来。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|HUD", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintFishingFeedbackText;
 
-	/** WBP Designer 中的猫状态文本控件；存在时 RenderHUD 会直接写入当前中文摘要。 */
+	/** WBP Designer 中的猫状态调试文本控件；存在时 RenderHUD 会写入摘要，并按调试显隐标记决定是否露出。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> CatStatusTextBlock;
 
-	/** WBP Designer 中的钓鱼反馈文本控件；存在时 RenderHUD 会直接写入当前中文反馈。 */
+	/** WBP Designer 中的钓鱼反馈调试文本控件；存在时 RenderHUD 会写入反馈，并按调试显隐标记决定是否露出。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> FishingFeedbackTextBlock;
 
@@ -310,13 +308,9 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> FishStaminaTextBlock;
 
-	/** WBP Designer 中的主页/天数入口按钮；点击时只广播 OpenMainMenu 意图。 */
+	/** WBP Designer 中的设置或主页入口按钮；点击时只广播 OpenMainMenu 意图。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> MainMenuButton;
-
-	/** WBP Designer 中的猫爪图鉴入口按钮；点击时只广播 OpenCollection 意图。 */
-	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UButton> CollectionButton;
 
 	/** WBP Designer 中的旅行包入口按钮；点击时只广播 OpenInventory 意图。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))

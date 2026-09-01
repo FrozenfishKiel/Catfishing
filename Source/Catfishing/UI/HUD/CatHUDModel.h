@@ -20,7 +20,7 @@ struct FOnAttributeChangeData;
 /** HUD Model 完整投影变化通知；PageController/Subsystem 收到后只渲染 HUD WBP。 */
 DECLARE_MULTICAST_DELEGATE(FCatHUDModelChanged);
 
-/** 状态 HUD 的 MVC Model；它只读 Character 状态和钓鱼反馈，不知道背包、商店或图鉴。 */
+/** 主 HUD 的 MVC Model；它只读局天数、入口显隐和可选调试事实，不知道背包内容、商店或图鉴页面。 */
 UCLASS()
 class CATFISHING_API UCatHUDModel : public UObject
 {
