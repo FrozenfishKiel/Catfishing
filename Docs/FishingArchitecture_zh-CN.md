@@ -180,7 +180,7 @@ Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消�
 |---|---|---|
 | Ability 钩子 | `BP_OnLocalInputActivated / Released`（本地端、提交前、不带结果） | 挥网/甩杆/提竿抬手等"成败都播"的即时动作 |
 | Snapshot/ViewBridge | Phase / bReeling / bSlacking / bPerfectHook / NormalizedFishStamina / FishMotionIntent / Outcome | AnimBP 状态机、HUD、结果演出 |
-| 表现 Actor 事件 | Rod/Hook/Fish 的 `BP_On*PresentationChanged` + `BP_Play*Event` | Mesh/皮肤/阶段外观切换 |
+| 表现 Actor 事件 | Rod/Hook/Fish 的 `BP_On*PresentationChanged` + `BP_Play*Event` | 阶段外观与附加音画；鱼基础 Mesh/AnimBP 由鱼种库直连，不在事件内按 ID 重选 |
 | 窝点公开态 | 中心/半径/过期时间（`GameState.ChumFieldReplication`） | 窝点光环表现（BP 类经 `ChumFieldPresentationClass` 配置） |
 | AimLibrary | `ResolveCastAimPoint / PredictChumThrow / ChargeAlphaFromHeldSeconds` | 预览与服务器**同一份数学**，所见即所得 |
 
@@ -188,7 +188,7 @@ Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消�
 
 鱼的体重与视觉大小使用同一条服务器事实链：鱼种选出后，服务器在定义的重量区间内冻结 `WeightKilograms`，再按
 `Scale = clamp(cuberoot(Weight / ReferenceWeight), MinScale, MaxScale)` 计算一次 `VisualScale`。水中
-`FishEncounterActor` 与水面 `FishPickupActor` 都复制这个标量，并分别只缩放 `VisualRoot` / `FishMesh`；Actor 根节点、
+`FishEncounterActor` 与水面 `FishPickupActor` 都复制这个标量，并只缩放各自的 `FishMesh`；Actor 根节点、
 抄网圆、拾取 Sphere、鱼线与岸线判定不随 Mesh 大小变化。这样多人尺寸一致，收鱼交接也不会产生大小跳变。
 
 ---
@@ -209,16 +209,17 @@ Q 蓄力黄色抛物线与落点球是玩法瞄准反馈，不属于上述两类
 ```
 Content/Data/Abilities/   DA_CatAbilitySet_Default(6条) · DA_CatAbilityInputConfig(6条)
 Content/Data/Equipment/   DA_Rod/Bait/Float/ScoopNet/Chum_Basic
-Content/Catfishing/Data/Fish/  正式 Fish_* · Bite_* · Fight_*
+Content/Catfishing/Data/Fish/  正式 Fish_* · Bite_* · Fight_* · Presentation/FishPresentation_*
+Content/Catfishing/Fishing/Animation/Fish/  无骨骼 ABPT_CatFishBase · 每鱼 ABP_Fish_*
 Content/Data/Fish/             未注册的历史测试二进制（不得作为运行入口，待编辑器引用审计后清理）
 Content/Data/Curves/      Curve_ChumSaturation(1→3) · Curve_ChumDistance/TimeFalloff(1→0)
 Content/Data/StateTrees/  ST_RunFlow · ST_FishingSession · ST_FishFight
 Config/DefaultGame.ini    10 个 section（改后必须重启 Editor；软引用资产必须真实落盘）
 ```
 
-当前共用鱼 Mesh 的体重缩放在 `Catfishing Fishing Presentation > FishScale` 配置：参考重量 `1kg`、最小缩放
-`0.75`、最大缩放 `1.75`。以后若每个鱼种拥有独立 Mesh，应把这三个参数迁入对应鱼种表现 DA，而不是让客户端
-按鱼名猜比例。
+鱼表现的唯一入口是 `Fish_*::PresentationDefinition`。每个 `FishPresentation_*` 保存 Mesh、子 AnimBP、四类动画、
+参考重量、最小/最大缩放和三种局部 Transform；运行时没有按鱼名猜 Mesh/比例的平行配置。所有子 ABP 继承同一个
+无 Target Skeleton 的 `ABPT_CatFishBase`，播放速率与状态机只维护一次。
 
 数值快照：猫力50 体力100 ／ 竿强60 耐久70 线长1500 ／ 鱼力40 体力50 ／ 真咬窗3s 完美窗1s ／ 近岸100cm ／ 鱼竿操作位2个、左右间距140cm。
 开发便利开关：整套 `bAutoConfigureStarterLoadout=False`；临时默认抄网发放已经删除，默认进游戏不会创建或选中抄网。

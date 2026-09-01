@@ -10,17 +10,17 @@
 4. 三个原生父类均禁止 Actor Tick，蓝图不得用 Tick 模拟 Session 阶段、鱼体力、鱼竿耐久或权威位移。
 5. 三个 Actor 都复制 Actor movement，并以空间相关方式复制；蓝图表现事件标记为 Cosmetic，只在收到本地原生调用时执行，不会自动向其他网络端广播。
 
-当前运行配置使用以下资产路径：
+当前运行配置使用以下入口：
 
 - `/Game/Blueprint/Actors/BP_CatFishingRodActor`
 - `/Game/Blueprint/Actors/BP_CatFishingHookActor`
-- `/Game/Blueprint/Actors/BP_CatFishEncounterActor`
+- `/Script/Catfishing.CatFishEncounterActor`（鱼外观由鱼种库直接解析，不再使用全局 FishEncounter 蓝图）
 
 ## 2. 共同的权威边界
 
 蓝图只负责表现，可以：
 
-- 在 `VisualRoot` 子树添加 Static Mesh、Skeletal Mesh、Niagara、Audio 和其他纯表现组件。
+- 在允许扩展的 `VisualRoot` 子树添加 Static Mesh、Skeletal Mesh、Niagara、Audio 和其他纯表现组件；FishEncounter 的鱼体 Mesh 是原生锁定组件，不得另加平行鱼体 Mesh。
 - 配置 Mesh、材质实例、材质参数、皮肤外观、AnimBP、Montage、VFX 和 SFX。
 - 根据 `BP_On...PresentationChanged` 的只读 Previous/Current 状态切换本地表现。
 - 根据原生代码传入的 Event Tag 播放一次性 Montage、VFX 或 SFX。
@@ -157,20 +157,21 @@ Hook Actor 的权威世界位置来自原生 Actor Transform 与 replicated move
 - 蓝图只消费只读 Session/Attempt 身份与表现 Phase。
 - 蓝图图表中没有 Session、Equipment、Items 写入，也没有 Actor Transform 写入。
 
-## 5. FishEncounter：`BP_CatFishEncounterActor`
+## 5. FishEncounter：鱼种库直连表现
 
 ### 5.1 父类与组件挂载
 
 - 原生父类：`/Script/Catfishing.CatFishEncounterActor`
 - C++ 类：`ACatFishEncounterActor`
-- 蓝图资产：`/Game/Blueprint/Actors/BP_CatFishEncounterActor`
-- Skeletal Mesh、Static Mesh、AnimBP、材质、Niagara 和 Audio 组件只能添加到 `VisualRoot` 下。
+- 运行类：`/Script/Catfishing.CatFishEncounterActor`
+- 原生组件层级：`SceneRoot → VisualRoot → FishMesh`。`FishMesh` 关闭碰撞，只消费鱼种库解析出的外观。
+- 不再创建“所有鱼共用一个 Mesh/AnimBP”的 FishEncounter 蓝图，也不得在蓝图 Construction Script 中按 `FishDefinitionId` 维护第二张资源映射。
 
 ### 5.2 Transform 与权威边界
 
-FishEncounter 没有提供给蓝图修改的 canonical authority anchor。鱼的服务器 Actor Transform 是世界位置的唯一真相，并由 replicated movement 复制。蓝图只允许在 `VisualRoot` 子树做游动、挣扎、转身或上岸的局部动画偏移；不得用 Set Actor Transform/Location/Rotation、Root Motion 或 Timeline 推动权威 Actor。
+FishEncounter 没有提供给蓝图修改的 canonical authority anchor。鱼的服务器 Actor Transform 是世界位置的唯一真相，并由 replicated movement 复制。每种鱼的局部轴向、位置、侧翻角和基础比例统一配置在自己的 `FishPresentation_*`；不得用 Set Actor Transform/Location/Rotation、Root Motion 或 Timeline 推动权威 Actor。
 
-鱼体力、力量、捕获状态和 Outcome 不在 Fish Actor 中。未来 Fish 行为树若接入，也只能产生运动意图，不能结算体力或捕获。
+鱼体力、力量、捕获状态和 Outcome 不在 Fish Actor 中。行为树只能产生运动意图，不能结算体力或捕获。
 
 ### 5.3 复制状态
 
@@ -193,7 +194,7 @@ Fish 世界位置不在该结构中；它只来自 Actor replicated movement。�
 `BP_OnFishPresentationChanged(Previous, Current)`
 
 - 触发时机：权威身份初始化或客户端 RepNotify 后；BeginPlay 前的变化会合并为 BeginPlay 后的一次派发。
-- 用途：按 `FishDefinitionId` 选择 Mesh/材质/AnimBP；按 `MotionIntent` 选大类动画；用 `IntendedSwimSpeedCentimetersPerSecond` 驱动游泳播放倍率；用 `NormalizedLineLoad` 连续调受力叠加；用 `bStrongConfrontation` 切强对抗 Montage/VFX/SFX。
+- 用途：补充材质参数、VFX/SFX 等不属于基础鱼体资源选择的纯表现；Mesh、骨骼、AnimBP 与基础动画已由原生代码沿鱼种库直接应用，不允许在事件里重新按 ID 选择一遍。
 - 表现切换不得写鱼体力、Session Phase、Outcome、捕获或 Actor Transform。
 
 `BP_PlayFishPresentationEvent(EventTag)`
@@ -202,50 +203,36 @@ Fish 世界位置不在该结构中；它只来自 Actor replicated movement。�
 - 用途：播放上钩、挣扎、近岸、脱钩或上鱼的 Montage、VFX/SFX。
 - Montage 完成和 AnimNotify 不能生成物品、提交捕获或决定终态。
 
-### 5.5 把意图游速接到 AnimBP
+### 5.5 Base AnimBP 与每鱼覆盖
 
-原生类 `UCatFishAnimInstance` 已负责在每帧从 `ACatFishEncounterActor` 读取复制状态，并输出经过本地平滑的 `SwimPlayRate`；它不读取 `Get Velocity`，因此鱼被线端或岸线挡住时不会错误降成待机。
+原生类 `UCatFishAnimInstance` 负责从 `ACatFishEncounterActor` 读取复制状态，并输出经过本地平滑的 `SwimPlayRate`；它不读取 `Get Velocity`，因此鱼被线端或岸线挡住时不会错误降成待机。这套速率逻辑只维护一次。
 
-#### 5.5.1 复制、改父类并换引用
-
-1. 不直接修改资源包里的 `/Game/Underwater_life/Blueprints/Carp_AnimBlueprint`；在 Content Browser 对它执行 **Duplicate**，目标保存为 `/Game/Catfishing/Animation/Fish/ABP_CatFishEncounter`（磁盘对应 `Content/Catfishing/Animation/Fish`）。
-2. 打开新副本，在工具栏选择 **Class Settings**，把 **Parent Class** 从 `AnimInstance` 改为 `CatFishAnimInstance`，然后 **Compile**。编译后，在 AnimGraph 空白处右键搜索 `Get Swim Play Rate` 和 `Get Motion Intent` 应能找到继承的只读变量；找不到说明新原生 DLL 尚未被当前 Editor 加载，需要关闭 Editor、完成 Development 编译后重开。
-3. 打开 `/Game/Blueprint/Actors/BP_CatFishEncounterActor`，选中 `SkeletalMesh` 组件，把 **Animation Mode** 设为 `Use Animation Blueprint`，把 **Anim Class** 从资源包原版改成 `ABP_CatFishEncounter`。
-4. 在新 AnimBP 的 **Class Defaults → Fishing|Animation** 设置：
-   - `Reference Swim Speed Centimeters Per Second = 75`：动画以 `1.0` 倍播放时对应的美术自由游速；
-   - `Minimum Swim Play Rate = 0.5`；
-   - `Maximum Swim Play Rate = 2.0`；
-   - `Swim Play Rate Interpolation Speed = 8.0`。
-
-#### 5.5.2 最小接法：先确认倍率链有效
-
-资源包当前的 `Random Player` 只有每条 Entry 自己的 Min/Max Play Rate，没有可连接 `SwimPlayRate` 的统一动态输入。先用下面的最小图验证：
-
-1. 打开新 AnimBP 的 **AnimGraph**，暂时断开 `Random Player → Output Pose`。
-2. 从 Content Browser 把 `/Game/Underwater_life/Animations/carp_swim_anim` 拖进 AnimGraph，生成 `Sequence Player`。
-3. 选中 `Sequence Player`，确认 **Loop Animation** 开启；在 Details 中找到 **Play Rate**，点击旁边的 **Expose as Pin**，节点上会出现 `Play Rate` 输入引脚。
-4. 在图中右键搜索 `Get Swim Play Rate`，把变量输出接到 `Sequence Player.Play Rate`。
-5. 把 `Sequence Player` 的 Pose 接到 `Output Pose.Result`，Compile、Save。
-
-最小图应该是：
+#### 5.5.1 资产链
 
 ```text
-Get SwimPlayRate ──> Sequence Player(carp_swim_anim).Play Rate
-                              │
-                              └──────────────> Output Pose
+Fish_<Species> (UCatFishDefinition)
+  └─ PresentationDefinition
+       └─ FishPresentation_<Species> (UCatFishPresentationDefinition)
+            ├─ SkeletalMesh（自身持有 Skeleton）
+            ├─ AnimInstanceClass → ABP_Fish_<Species>
+            ├─ Calm / Struggle / Exhausted / Landed Animation
+            └─ 水中 / 落地 / 嘴叼 Transform 与重量缩放参数
+
+ABPT_CatFishBase（无 Target Skeleton 的 AnimBP Template）
+  └─ ABP_Fish_<Species>（绑定本鱼 Skeleton，只覆盖三个 Sequence Player 资源）
 ```
 
-PIE 中鱼进入 `StrugglingOutward` 后，即使被鱼线限制在原地，播放倍率也不会按零位移降为待机。可在 AnimBP Debug Filter 选择运行中的 `BP_CatFishEncounterActor`，观察 `IntendedSwimSpeedCentimetersPerSecond` 与 `SwimPlayRate`。
+`ABPT_CatFishBase` 保存 `Calm / Struggle / AutoHauling` 状态机、转换条件以及 `SwimPlayRate` 接线；每鱼子 ABP 不复制 Event Graph 或速率公式。`FishPresentation_*` 是 `UDataAsset`，不能作为独立鱼目录枚举；运行时只允许从 `Fish_*::PresentationDefinition` 进入。
 
-#### 5.5.3 推荐接法：平静、挣扎、力竭状态机
+#### 5.5.2 新增或换鱼资源
 
-最小图确认有效后，在 AnimGraph 新建状态机 `FishLocomotion`，把状态机输出接到 `Output Pose`：
+1. 在对应 `FishPresentation_*` 配置 Mesh、四类动画和三种局部 Transform。
+2. 新建继承 `ABPT_CatFishBase` 的 `ABP_Fish_*`，Target Skeleton 设为该 Mesh 的 Skeleton。
+3. 在子 ABP 的 Asset Override Editor 中，仅覆盖 `Calm / Struggle / AutoHauling` 三个 Sequence Player。
+4. 把子 ABP Generated Class 写回同一 `FishPresentation_*`，最后只在 `Fish_*::PresentationDefinition` 直接引用该表现资产。
+5. 运行 `Catfishing.Unit.Fishing.Assets.FormalFishPresentationsUseCatalogOwnedAnimBlueprintChildren`；它会检查直连关系、Skeleton 兼容性、Base 继承和覆盖动画一致性。
 
-- `Calm`：放入 `carp_slowswim_anim` 的循环 `Sequence Player`，暴露 `Play Rate` 并连接 `SwimPlayRate`。
-- `Struggle`：放入 `carp_fastswim_anim` 的循环 `Sequence Player`，暴露 `Play Rate` 并连接 `SwimPlayRate`。
-- `AutoHauling`：放入 `carp_die_anim` 或之后的正式侧翻动画，`Loop Animation=false`、`Play Rate=1.0`，不要连接游泳倍率。
-
-Entry 指向 `Calm`，建立以下转换规则：
+Base 状态机口径固定为：
 
 ```text
 Calm       -> Struggle    : MotionIntent == StrugglingOutward
@@ -254,21 +241,22 @@ Calm       -> AutoHauling : MotionIntent == AutoHauling
 Struggle   -> AutoHauling : MotionIntent == AutoHauling
 ```
 
-转换的 Blend Duration 先统一设为 `0.15s`。`AutoHauling` 不需要返回活鱼状态：该阶段结束后 Encounter 会被正式 Pickup 接管或销毁。
+转换 Blend Duration 为 `0.15s`。`Calm` 与 `Struggle` 的 Sequence Player 共用 `SwimPlayRate`；`AutoHauling` 播放力竭动画且不返回活鱼状态，之后由 Pickup 接管。
 
 `NormalizedLineLoad`、`FishLineAlignment`、`bStrongConfrontation` 只用于之后增加身体弯曲、水花、受力抖动或爆发表现，不要乘进基础 `SwimPlayRate`，否则鱼横向冲刺或被线挡住时又会错误减弱。
 
-无需在 AnimBP Event Graph 中获取 Pawn、计算位置差或设置这些变量；原生 `NativeUpdateAnimation` 已经完成更新。`None` 与 `AutoHauling` 时 `SwimPlayRate` 返回中性 `1.0`，由对应状态选择自己的动画。
+子 ABP 不在 Event Graph 获取 Pawn、计算位置差或重复设置速率变量。`None` 与 `AutoHauling` 时 `SwimPlayRate` 返回中性 `1.0`。
 
 ### 5.6 FishEncounter 资产验收
 
 - 允许的七类表现工作已覆盖：Fish Mesh、材质、由 Fish Definition 选择的表现皮肤、AnimBP、局部 Montage、VFX、SFX。
-- Mesh、AnimBP、材质、VFX/SFX 全在 `VisualRoot` 子树。
+- Mesh 由原生 `FishMesh` 承载；AnimBP 与基础动画均能沿 `FishDefinition → PresentationDefinition` 直接追溯。
+- 每个子 ABP 都继承同一个无骨骼模板并绑定自己的 Skeleton，Base 状态机与速率逻辑没有被复制。
 - 蓝图根据只读 `MotionIntent` 做局部动画，并只消费原生 `SwimPlayRate`；不保存第二份运动/体力/Outcome 状态。
 - 蓝图图表中没有 Session、Equipment、Items 写入，也没有 Actor Transform 写入。
 
 ## 6. 阶段边界与网络验收说明
 
-阶段 A 已验证三个原生父类的 Blueprintable 元数据、组件拓扑、复制注册、authority-only 身份初始化、只读 presentation state 和 cosmetic events；本文不表示 Stage C 资产已经创建或保存。
+原生 Actor 的组件拓扑、复制注册、authority-only 身份初始化、只读 presentation state 和 cosmetic events 已有自动化；16 套正式鱼表现资产也已创建并通过直连/Skeleton/Base 继承合同。具体朝向、尺寸和动画节奏仍需在正式 Lake 目测调参。
 
 阶段 A 对 Fishing Command Component 只完成 owning-client reliable RPC 的静态契约、原生 Controller 挂载和单 World 邮箱语义。真实的远程 owner-only 私有路由仍是 Phase B 的阻断测试：旧 RPC/Ability 接入通道后，必须使用 server + owning client + non-owning client 三端网络测试，证明 owning client 恰好收到一次、non-owning client 完全收不到，并证明 Listen Server 本地请求只广播一次。在这些测试通过前，不得宣称 owner-only 远程传输或网络隐私验收完成。

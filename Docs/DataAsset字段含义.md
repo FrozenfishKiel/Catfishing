@@ -73,6 +73,7 @@
 | 字段组 | 字段 | 含义 |
 |---|---|---|
 | 身份 | FishDefinitionId | 唯一 ID,图鉴/日志/实物鱼都引用它 |
+| 表现 | PresentationDefinition | **唯一表现入口**，直接引用本鱼 `FishPresentation_*`；水中 Encounter、落地 Pickup 和嘴叼状态都沿这条引用解析，不得按 FishDefinitionId 再建 Mesh/ABP 映射表 |
 | 体型 | BodyClass | Standard=单人可搏 / Giant=可多人协作；抄网成功后世界鱼由首个合法抄手叼走；不能 Unknown |
 | 出没 | RegionIds / TimeOfDay / Weather | 可出现的水域 ID/时段(夜晚永不进选择器)/天气;**空数组=未配置=不出现** |
 | 稀有 | RarityTierId / SpawnWeight | 稀有度轴 ID / 选择正权重(稀有度由数据表达,代码无硬编码档位) |
@@ -87,6 +88,21 @@
 | 食用 | FoodSafety / HungerRelief / PoisonIncrease | Safe/Toxic 结论 + 吃后减饥/增毒量(Safe 必须 0 毒) |
 | 其他 | SacrificeContribution / CaptureImprintEventId / bTankDisplayEligible | 献祭额度 / 捕获成像事件 / 可否入展示鱼缸 |
 | gate | bEnableRuntimeDefinition | 必须 True |
+
+`FishPresentation_*` 是普通 `UCatFishPresentationDefinition` DataAsset，不单独注册到鱼目录。它配置本鱼的 `SkeletalMesh`、继承 `UCatFishAnimInstance` 的子 AnimBP、Calm/Struggle/Exhausted/Landed 四类动画、参考重量与缩放范围，以及 Encounter/Landed/Carried 三套 Mesh 局部 Transform。Mesh 自身持有 Skeleton；子 AnimBP 和四类动画必须与该 Skeleton 兼容。所有子 AnimBP 继承无 Target Skeleton 的 `ABPT_CatFishBase`，只覆盖三个 Sequence Player，美术资源变化不会复制游速公式与状态机。
+
+首轮正式鱼的近似美术映射如下；这是可替换的内容选择，不是运行时代码分支：
+
+| 正式鱼 | 资源包物种 | 正式鱼 | 资源包物种 |
+|---|---|---|---|
+| RiverPattern | koi | LittleSilver | mackerel |
+| LittleColor | clownfish | ForestLongtail | barracuda |
+| SilvermoonTrout | trout | LakeGiantShadow | arapaima |
+| Petal | discus_v2 | Windbell | butterfly_fish |
+| Salted | atlantic_cod | Stinky | carp |
+| Blackfish | black_redeye_fish | Loach | oreochromis |
+| EstuaryBass | peacock_bass | Puffer | frontosa |
+| ElectricEel | electric_catfish | Pike | pike |
 
 鱼种没有固定“低级/中级”战斗标签。令力量比 `S=FishStrength/玩家合计力量`、体力比 `T=FishFightStamina/玩家合计搏斗体力`，目录按 `max(S, 2ST/(S+T))` 计算当前上下文里的连续挑战度：力量比是危险下限，力量/体力调和均值只在两项都足够时抬高挑战度，避免“体力高但力量极低、进入搏斗又被 2 倍力量规则秒杀”的鱼占据势均力敌带。`≤ ComfortChallengeMaximumRatio` 为轻松带，之后到 `MatchedChallengeMaximumRatio` 为势均力敌带，再到 `MaximumChallengeRatio` 为高风险带；超过安全上限才不进入池。系统先按三条 `*ChallengeBandWeight` 在当前有候选的难度带之间抽取，再用 `SpawnWeight × 窝料倍率 × 鱼饵倍率 × 连续挑战倍率` 在带内选鱼。某个目标带没有鱼时会在其余有候选的带之间重新归一化；只有生态条件、协作人数或安全上限后确实没有鱼才会空钩。
 

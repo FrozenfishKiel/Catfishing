@@ -8,6 +8,7 @@
 #include "Animation/AnimMontage.h"
 #include "Character/CatCharacter.h"
 #include "Components/SceneComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingActorTypes.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
@@ -268,18 +269,24 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 		return false;
 	}
 	const FGuid RodId = FGuid::NewGuid();
+	const FGuid RodItemInstanceId = FGuid::NewGuid();
 	const FGuid SessionId = FGuid::NewGuid();
 	const FGuid AttemptId = FGuid::NewGuid();
-	TestFalse(TEXT("rod rejects invalid identity"), Rod->InitializeAuthoritativeIdentity(FGuid(), TEXT("Rod"), NAME_None, Owner, nullptr, false, false));
-	TestTrue(TEXT("rod accepts first identity"), Rod->InitializeAuthoritativeIdentity(RodId, TEXT("Rod"), TEXT("SkinA"), Owner, nullptr, true, false));
+	TestFalse(TEXT("rod rejects invalid identity"), Rod->InitializeAuthoritativeIdentity(
+		FGuid(), RodItemInstanceId, TEXT("Rod"), NAME_None, Owner, nullptr, false, false));
+	TestTrue(TEXT("rod accepts first identity"), Rod->InitializeAuthoritativeIdentity(
+		RodId, RodItemInstanceId, TEXT("Rod"), TEXT("SkinA"), Owner, nullptr, true, false));
 	const FCatFishingRodPresentationState RodFirst = Rod->GetPresentationState();
 	TestEqual(TEXT("rod starts at revision one"), RodFirst.RodActorRevision, int64{1});
+	TestEqual(TEXT("rod publishes immutable item instance identity"), RodFirst.ItemInstanceId, RodItemInstanceId);
 	TestTrue(TEXT("first place transition deploys the rod"), RodFirst.bDeployed);
 	TestEqual(TEXT("first place transition leaves all operator slots empty"), Rod->GetOperatorCount(), 0);
 	TestNull(TEXT("first place transition has no primary operator"), RodFirst.OperatorPlayerState);
-	TestTrue(TEXT("rod exact identity replay succeeds"), Rod->InitializeAuthoritativeIdentity(RodId, TEXT("Rod"), TEXT("SkinB"), Owner, Owner, false, true));
+	TestTrue(TEXT("rod exact identity replay succeeds"), Rod->InitializeAuthoritativeIdentity(
+		RodId, RodItemInstanceId, TEXT("Rod"), TEXT("SkinB"), Owner, Owner, false, true));
 	TestEqual(TEXT("rod replay preserves state"), Rod->GetPresentationState().RodSkinDefinitionId, RodFirst.RodSkinDefinitionId);
-	TestFalse(TEXT("rod rejects changed immutable identity"), Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), TEXT("Rod"), NAME_None, Owner, nullptr, false, false));
+	TestFalse(TEXT("rod rejects changed immutable identity"), Rod->InitializeAuthoritativeIdentity(
+		FGuid::NewGuid(), RodItemInstanceId, TEXT("Rod"), NAME_None, Owner, nullptr, false, false));
 	int32 JoinedSlot = INDEX_NONE;
 	TestTrue(TEXT("first operator joins right primary slot"), Rod->AddOperatorFromAuthority(Owner, 1, JoinedSlot));
 	TestEqual(TEXT("first operator slot index is zero"), JoinedSlot, 0);
@@ -317,20 +324,20 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 		Hook->GetPresentationState().SlackLineLengthCentimeters, 100.0);
 	TestFalse(TEXT("hook rejects same session and attempt ids"), Hook->InitializeAuthoritativeIdentity(SessionId, SessionId));
 	TestTrue(TEXT("fish accepts first identity"), Fish->InitializeAuthoritativeIdentity(
-		SessionId, AttemptId, TEXT("Fish"), 12.0, 1.25));
+		SessionId, AttemptId, TEXT("RiverPatternFish"), 12.0, 1.25));
 	TestTrue(TEXT("fish exact identity replay succeeds"), Fish->InitializeAuthoritativeIdentity(
-		SessionId, AttemptId, TEXT("Fish"), 99.0, 1.75));
+		SessionId, AttemptId, TEXT("RiverPatternFish"), 99.0, 1.75));
 	TestEqual(TEXT("fish replay preserves line length"), Fish->GetPresentationState().CurrentLineLength, 12.0);
 	TestEqual(TEXT("fish replay preserves frozen visual scale"), Fish->GetPresentationState().VisualScale, 1.25);
-	// CreateTestWorld does not start play automatically. The encounter intentionally waits until BeginPlay before
-	// capturing a Blueprint-authored VisualRoot base scale, so exercise the same lifecycle used by a real spawned fish.
+	// CreateTestWorld does not start play automatically; exercise the same component lifecycle used by a real spawned fish.
 	WorldWrapper.BeginPlayInTestWorld();
-	const USceneComponent* FishVisualRoot = Cast<USceneComponent>(Fish->GetDefaultSubobjectByName(TEXT("VisualRoot")));
-	TestNotNull(TEXT("fish owns visual root"), FishVisualRoot);
-	if (FishVisualRoot)
+	const USkeletalMeshComponent* RuntimeFishMesh = Cast<USkeletalMeshComponent>(
+		Fish->GetDefaultSubobjectByName(TEXT("FishMesh")));
+	TestNotNull(TEXT("fish owns runtime mesh"), RuntimeFishMesh);
+	if (RuntimeFishMesh)
 	{
-		TestTrue(TEXT("fish visual root consumes frozen scale"),
-			FishVisualRoot->GetRelativeScale3D().Equals(FVector(1.25), UE_KINDA_SMALL_NUMBER));
+		TestTrue(TEXT("fish mesh consumes frozen scale"),
+			RuntimeFishMesh->GetRelativeScale3D().Equals(FVector(1.25), UE_KINDA_SMALL_NUMBER));
 	}
 	TestTrue(TEXT("restrained fish accepts a nonzero intended swim speed"),
 		Fish->ApplyFightStepFromAuthority(ECatFishMotionIntent::StrugglingOutward, 12.0,
@@ -362,13 +369,22 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 bool FCatFishEncounterMovementContractTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	const ACatFishEncounterActor* FishCDO = GetDefault<ACatFishEncounterActor>();
+	ACatFishEncounterActor* FishCDO = GetMutableDefault<ACatFishEncounterActor>();
 	TestTrue(TEXT("fish replicates"), FishCDO->GetIsReplicated());
 	TestTrue(TEXT("fish replicates movement"), FishCDO->IsReplicatingMovement());
 	TestFalse(TEXT("fish does not tick"), FishCDO->PrimaryActorTick.bCanEverTick);
 	TestFalse(TEXT("fish is not always relevant"), FishCDO->bAlwaysRelevant);
 	TestFalse(TEXT("fish does not use owner relevancy"), FishCDO->bNetUseOwnerRelevancy);
 	TestFalse(TEXT("fish is not owner-only"), FishCDO->bOnlyRelevantToOwner);
+	const USkeletalMeshComponent* FishMesh = Cast<USkeletalMeshComponent>(
+		FishCDO->GetDefaultSubobjectByName(TEXT("FishMesh")));
+	TestNotNull(TEXT("fish owns one native presentation mesh"), FishMesh);
+	if (FishMesh)
+	{
+		TestTrue(TEXT("native fish mesh is collision-free"), FishMesh->GetCollisionEnabled() == ECollisionEnabled::NoCollision);
+		TestTrue(TEXT("native fish mesh is attached below VisualRoot"),
+			FishMesh->GetAttachParent() == FishCDO->GetDefaultSubobjectByName(TEXT("VisualRoot")));
+	}
 	const UScriptStruct* StateStruct = FCatFishEncounterPresentationState::StaticStruct();
 	const TSet<FName> ExpectedFields = { TEXT("FishingSessionId"), TEXT("CastAttemptId"), TEXT("FishDefinitionId"),
 		TEXT("VisualScale"), TEXT("MotionIntent"), TEXT("IntendedSwimSpeedCentimetersPerSecond"),

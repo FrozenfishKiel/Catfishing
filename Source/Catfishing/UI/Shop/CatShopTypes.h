@@ -100,7 +100,7 @@ struct FCatShopEntryView
 	UPROPERTY(BlueprintReadOnly)
 	FText DescriptionText;
 
-	/** 商品行图标覆盖；WBP 可以直接加载它，也可以在为空时回退到装备定义图标。 */
+	/** 商品行最终显示图标；Model 已按“商店覆盖图优先、装备定义 Thumbnail 兜底”解析，WBP 不再二次查目录。 */
 	UPROPERTY(BlueprintReadOnly)
 	TSoftObjectPtr<UTexture2D> IconOverride;
 };
@@ -178,7 +178,7 @@ struct FCatShopCartLineView
 	UPROPERTY(BlueprintReadOnly)
 	FText DisplayText;
 
-	/** 购物车行图标覆盖；WBP 可用它显示右侧已选购列表的小图。 */
+	/** 购物车行最终显示图标；沿用商品投影已经解析完成的覆盖图或装备定义 Thumbnail。 */
 	UPROPERTY(BlueprintReadOnly)
 	TSoftObjectPtr<UTexture2D> IconOverride;
 };

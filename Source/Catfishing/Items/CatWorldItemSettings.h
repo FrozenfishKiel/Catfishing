@@ -5,9 +5,7 @@
 #include "Engine/EngineTypes.h"
 #include "CatWorldItemSettings.generated.h"
 
-class USkeletalMesh;
-
-/** 岸上世界物品的权威落位与临时美术配置；软 Mesh 只在非 Dedicated Server 端加载。 */
+/** 岸上世界物品的权威落位与通用拾取配置；鱼种美术只由 FishDefinition 的表现定义持有。 */
 UCLASS(Config=Game, DefaultConfig, meta=(DisplayName="Catfishing World Items"))
 class CATFISHING_API UCatWorldItemSettings : public UDeveloperSettings
 {
@@ -39,15 +37,4 @@ public:
 	/** 死鱼 Actor 根节点附着到嘴部 Socket 后的局部微调；美术可只调该值，不改变碰撞根或鱼重量缩放。 */
 	UPROPERTY(Config, EditAnywhere, Category="Pickup")
 	FTransform MouthCarryRelativeTransform = FTransform::Identity;
-
-	UPROPERTY(Config, EditAnywhere, Category="Presentation")
-	TSoftObjectPtr<USkeletalMesh> LandedFishMesh;
-
-	/** 岸上鱼 Actor 的服务器权威侧翻角度；随 ReplicatedMovement 同步给所有客户端。 */
-	UPROPERTY(Config, EditAnywhere, Category="Presentation", meta=(ClampMin="-180.0", ClampMax="180.0", Units="deg"))
-	double LandedFishRollDegrees = 90.0;
-
-	/** 只用于 Available 落地状态的 Mesh 局部变换；嘴叼状态会清除其位置和旋转，只复用基础缩放。 */
-	UPROPERTY(Config, EditAnywhere, Category="Presentation")
-	FTransform LandedFishMeshRelativeTransform = FTransform::Identity;
 };

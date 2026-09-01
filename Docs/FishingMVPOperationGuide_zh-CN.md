@@ -390,9 +390,9 @@ Event BeginPlay
 | 12 | 或者等鱼翻肚 | `Phase=ExhaustedReel`；仍可按 F 抄，也可继续按住左键把鱼拖上岸 |
 | 13 | 鱼落到岸上后准星对准并按 E | 服务器只允许一个玩家成功叼起；随后再对具体地面鱼护按 E 才入箱 |
 
-鱼生成时的大小由服务器随机重量决定：`1kg` 对应当前 Mesh 的 `Scale=1`，重量按体积关系取立方根换算并裁在
-`0.75~1.75`。水中鱼和岸上拾取鱼共用同一个复制缩放值；若要调观感，到项目设置
-`Catfishing Fishing Presentation > FishScale` 修改参考重量与上下限，不要在蓝图里再次随机 Scale。
+鱼生成时的大小由服务器随机重量决定：每个 `FishPresentation_*` 用自己的 `MeshReferenceWeightKilograms` 定义
+`Scale=1` 的参考重量，再按体积关系取立方根并裁在本鱼的 `Minimum/MaximumUniformScale`。水中鱼和岸上拾取鱼
+共用同一个复制缩放值；只在鱼种库直接引用的表现资产中调参数，不要在蓝图里再次随机 Scale。
 
 **抄网范围**（详见 `FishingArchitecture_zh-CN.md` §2.5）：猫沿 `Character Actor Forward` 面朝正前方发一条水平线段，不读取 `Controller/Camera` 朝向；自由转动镜头不会改变挥网方向。线段与挂在鱼身上的圆相交即够得着，**纯俯视投影不看俯仰角**；高度差另由 `MaximumScoopVerticalDeltaCentimeters`（默认 250）卡上限。线段长 = `min(ini 的 ScoopReachCentimeters, 抄网 DA 的同名字段)`，圆半径 = 鱼 DA 的 `ScoopTargetRadiusCentimeters`（**为 0 则永远抄不到**）。
 
@@ -468,7 +468,7 @@ BP_CatCharacter        → ACatCharacter
 BP_CatFishingController→ ACatfishingPlayerController
 BP_CatFishingRodActor  → ACatFishingRodActor
 BP_CatFishingHookActor → ACatFishingHookActor
-BP_CatFishEncounterActor → ACatFishEncounterActor
+CatFishEncounterActor（原生运行类；鱼种库直连 Mesh/ABP）
 BP_CatWaterRegion      → ACatWaterRegion
 CatWaterBoundarySplineActor → ACatWaterBoundarySplineActor
 ```
@@ -506,7 +506,7 @@ Event=run_phase_entered Day=1 Phase=ECatRunPhase::DayActive Deadline=600.000
 
 ### ⬜ 待办（你）
 
-1. 表现蓝图：`BP_CatFishEncounterActor` / `BP_CatFishingRodActor` / `BP_CatFishingHookActor` 挂 Mesh 并实现 `BP_On*PresentationChanged`；新建 `BP_CatChumFieldPresentation`（父类 `CatChumFieldPresentationActor`）并把类路径写进 ini
+1. 表现：Rod/Hook 蓝图继续实现 `BP_On*PresentationChanged`；鱼 Mesh/骨骼/AnimBP/动画只在 `Fish_* → FishPresentation_*` 直连资产中维护；新建 `BP_CatChumFieldPresentation`（父类 `CatChumFieldPresentationActor`）并把类路径写进 ini
 2. `BP_CatFishingController`：5.4 ConfigureEquipment（4 参数）→ `Server Grant Run Consumable` 发窝料 → 5.1 接 E 键结果缓存 → 5.2 左键长按预览+抛竿 → 5.3 Q 蓄力+打窝
 3. （可选）HUD：用 ViewBridge 订阅会话状态
 4. （可选）`ST_RunFlow` 补夜晚循环

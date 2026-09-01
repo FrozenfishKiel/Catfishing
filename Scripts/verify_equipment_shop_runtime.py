@@ -1,9 +1,10 @@
 """只读核对第四模块在正式 Lake 与项目配置中的运行装配事实。
 
-脚本不保存资源、不启动 PIE，也不提交任何交易。Automation 已证明购买、领取、装备和 Fishing 使用命令链；
-这里补的是 Lake Runtime 证据：正式地图能加载，正式 GameMode/Controller 生效，正式 Equipment/Shop 配置足以驱动这些链路。
+脚本不保存资源、不启动 PIE，也不提交任何交易。它只证明正式地图、Equipment 定义、商店 DataTable
+和营地公共仓库 View 配置可以加载；购物车支付、公共仓库入库与玩家取用仍必须由 Automation/PIE 单独证明。
 """
 
+import json
 import math
 import unreal
 
@@ -93,6 +94,8 @@ def _validate_equipment_definition(settings, definition_id: str, kind: str, asse
                  f"{definition_id} FishingStrength 无效")
         _require(float(_get_property(definition, "maximum_line_length_centimeters", "MaximumLineLengthCentimeters")) > 0.0,
                  f"{definition_id} 线长无效")
+        _require("None" not in str(_get_property(definition, "use_actor_class", "UseActorClass")),
+                 f"{definition_id} 缺少部署时使用的 UseActorClass")
     elif kind == "Bait":
         _require(bool(_get_property(definition, "b_run_consumable", "bRunConsumable")),
                  f"{definition_id} 鱼饵必须作为数量型物品进入统一库存")
@@ -125,41 +128,45 @@ def _validate_equipment_definition(settings, definition_id: str, kind: str, asse
     return definition
 
 
-def _find_catalog_entry(settings, entry_id: str):
-    """按 EntryId 在 ShopEconomySettings.CatalogEntries 中找到唯一目录项。
+def _validate_shop_catalog_table(settings):
+    """确认正式商店目录已经迁入项目默认 DataTable，并包含当前正式商品行。"""
+    configured_table = _get_property(settings, "default_shop_catalog_table", "DefaultShopCatalogTable")
+    _require("DT_ShopCatalog_Default" in str(configured_table),
+             f"默认商店 DataTable 配置不匹配: actual={configured_table}")
+    table = _load_asset("/Game/Catfishing/Data/Shop/DT_ShopCatalog_Default")
+    row_names = {_as_name(name) for name in unreal.DataTableFunctionLibrary.get_data_table_row_names(table)}
+    expected_rows = {
+        "Rod_StarterT1", "Rod_ShopT2",
+        "Bait_Bug", "Bait_Flashing", "Bait_Fruit", "Bait_GiantLure", "Bait_Meat",
+        "Bait_Moonlight", "Bait_Nectar", "Bait_Sound",
+        "Chum_Bug", "Chum_FermentedGrain", "Chum_FruitFragrance", "Chum_HolyLight",
+    }
+    missing_rows = sorted(expected_rows - row_names)
+    _require(not missing_rows, f"正式商店 DataTable 缺少商品行: {missing_rows}")
+    return table, row_names
 
-    Runtime 服务会在开局冻结这份目录；重复或缺失都会让商店交付链不可靠，因此探针必须按唯一性检查。
-    """
-    entries = _get_property(settings, "catalog_entries", "CatalogEntries")
-    matches = [entry for entry in entries if _as_name(_get_property(entry, "entry_id", "EntryId")) == entry_id]
-    _require(len(matches) == 1, f"商店目录项数量异常: {entry_id} count={len(matches)}")
-    return matches[0]
 
+def _validate_glass_fiber_rod_contract(definition, table):
+    """固定 ShopRodT2 的正式产品身份，避免商店与背包再次出现两种命名口径。"""
+    display_name = _as_name(_get_property(definition, "display_name", "DisplayName"))
+    description = _as_name(_get_property(definition, "description", "Description"))
+    _require(display_name == "玻璃纤维竿",
+             f"ShopRodT2 正式显示名不匹配: actual={display_name} expected=玻璃纤维竿")
+    _require("玻璃纤维" in description, f"ShopRodT2 正式说明未表达玻璃纤维身份: {description}")
 
-def _validate_shop_entry(settings, entry_id: str, kind: str, definition_id: str, unit_price: int,
-                         unlimited: bool, positive_stock: bool = False) -> None:
-    """验证一条正式 Shop 目录项足以驱动购买或免费领取。
-
-    条目必须指向已存在的 Equipment 定义 ID，价格和库存语义要匹配入口；免费入口还会由服务额外检查 EntryId 白名单。
-    """
-    entry = _find_catalog_entry(settings, entry_id)
-    actual_kind = _get_property(entry, "kind", "Kind")
-    actual_definition = _as_name(_get_property(entry, "definition_id", "DefinitionId"))
-    actual_price = int(_get_property(entry, "unit_price", "UnitPrice"))
-    actual_unlimited = bool(_get_property(entry, "b_unlimited_stock", "bUnlimitedStock"))
-    actual_stock = int(_get_property(entry, "initial_stock", "InitialStock"))
-    _require(_enum_contains(actual_kind, kind), f"{entry_id} Kind 不匹配: actual={actual_kind} expected={kind}")
-    _require(actual_definition == definition_id, f"{entry_id} DefinitionId 不匹配: actual={actual_definition} expected={definition_id}")
-    _require(actual_price == unit_price, f"{entry_id} UnitPrice 不匹配: actual={actual_price} expected={unit_price}")
-    _require(actual_unlimited == unlimited, f"{entry_id} bUnlimitedStock 不匹配: actual={actual_unlimited} expected={unlimited}")
-    if positive_stock:
-        _require(actual_stock > 0, f"{entry_id} 有限库存必须为正: stock={actual_stock}")
+    rows = json.loads(unreal.DataTableFunctionLibrary.export_data_table_to_json_string(table))
+    shop_row = next((row for row in rows if row.get("Name") == "Rod_ShopT2"), None)
+    _require(shop_row is not None, "正式商店缺少 Rod_ShopT2 行")
+    _require(shop_row.get("DefinitionId") == "ShopRodT2",
+             f"玻璃纤维竿商店映射错误: actual={shop_row.get('DefinitionId')} expected=ShopRodT2")
+    _require("玻璃纤维竿" in shop_row.get("DisplayNameOverride", ""),
+             f"玻璃纤维竿商店显示名不匹配: {shop_row.get('DisplayNameOverride')}")
 
 
 def main() -> None:
     """执行第四模块 Lake Runtime 探针。
 
-    先只读加载 Lake 并核对正式 GameMode/Controller，再验证全部正式 EquipmentDefinition、starter 装备、窝料和商店目录。
+    先只读加载 Lake 并核对正式 GameMode/Controller，再验证全部正式 EquipmentDefinition、starter 装备、窝料、商店 DataTable 和公共仓库 View。
     PASS 标记同时输出关键 ID 与数量，供 PowerShell Runtime 模式确认这不是旧日志或空跑。
     """
     level_editor = unreal.get_editor_subsystem(unreal.LevelEditorSubsystem)
@@ -209,8 +216,26 @@ def main() -> None:
         ("FruitFragranceChum", "Chum", "Equip_Chum_FruitFragrance", "/Game/Catfishing/Data/Equipment/Equip_Chum_FruitFragrance.Equip_Chum_FruitFragrance"),
         ("HolyLightChum", "Chum", "Equip_Chum_HolyLight", "/Game/Catfishing/Data/Equipment/Equip_Chum_HolyLight.Equip_Chum_HolyLight"),
     ]
+    loaded_definitions = {}
     for definition_id, kind, asset_name, asset_path in expected_definitions:
-        _validate_equipment_definition(equipment_settings, definition_id, kind, asset_name, asset_path)
+        loaded_definitions[definition_id] = _validate_equipment_definition(
+            equipment_settings, definition_id, kind, asset_name, asset_path)
+
+    expected_thumbnails = {
+        "StarterRodT1": "T_UI_Item_FishingRod_Generic",
+        "ShopRodT2": "T_UI_Item_FishingRod_Generic",
+        "BugBait": "T_UI_Item_Bait_CatFood",
+        "FeatherFloat": "T_UI_Item_Float_Feather",
+        "StarterScoopNet": "T_UI_Item_ScoopNet",
+        "BugChum": "T_UI_Item_Chum_PelletBag",
+        "FermentedGrainChum": "T_UI_Item_Chum_Generic",
+        "FruitFragranceChum": "T_UI_Item_Chum_Generic",
+        "HolyLightChum": "T_UI_Item_Chum_Generic",
+    }
+    for definition_id, expected_thumbnail_name in expected_thumbnails.items():
+        thumbnail = _get_property(loaded_definitions[definition_id], "thumbnail", "Thumbnail")
+        _require(expected_thumbnail_name in str(thumbnail),
+                 f"{definition_id} Thumbnail 不匹配: actual={thumbnail} expected={expected_thumbnail_name}")
 
     starter_ids = {
         "StarterRodT1": _get_property(equipment_settings, "starter_rod_definition_id", "StarterRodDefinitionId"),
@@ -227,15 +252,13 @@ def main() -> None:
              "ShopEconomy runtime 未启用")
     _require(int(_get_property(shop_settings, "starting_team_wallet_balance", "StartingTeamWalletBalance")) >= 5,
              "团队公款初始余额不足以购买正式鱼竿和正式鱼漂")
-    _validate_shop_entry(shop_settings, "ShopRodT2Order", "EquipmentGrant", "ShopRodT2", 3, False, True)
-    _validate_shop_entry(shop_settings, "ShopFloatYarnBallOrder", "EquipmentGrant", "YarnBallFloat", 2, False, True)
-    _validate_shop_entry(shop_settings, "ShopBugChumOrder", "InventoryQuantityGrant", "BugChum", 1, True, False)
-    _validate_shop_entry(shop_settings, "FreeBugBaitClaim", "InventoryQuantityGrant", "BugBait", 0, True, False)
-    _validate_shop_entry(shop_settings, "FreeStarterRodClaim", "EquipmentGrant", "StarterRodT1", 0, True, False)
-    _require(_as_name(_get_property(shop_settings, "free_ordinary_bait_entry_id", "FreeOrdinaryBaitEntryId")) == "FreeBugBaitClaim",
-             "免费普通饵入口未绑定 FreeBugBaitClaim")
-    _require(_as_name(_get_property(shop_settings, "free_starter_rod_entry_id", "FreeStarterRodEntryId")) == "FreeStarterRodClaim",
-             "免费保底竿入口未绑定 FreeStarterRodClaim")
+    catalog_table, catalog_rows = _validate_shop_catalog_table(shop_settings)
+    _validate_glass_fiber_rod_contract(loaded_definitions["ShopRodT2"], catalog_table)
+
+    camp_inventory_cdo = unreal.get_default_object(_load_class("/Script/Catfishing.CatCampInventoryActor"))
+    inventory_view_class = _get_property(camp_inventory_cdo, "inventory_view_class", "InventoryViewClass")
+    _require("WBP_CatCampInventory" in str(inventory_view_class),
+             f"营地公共仓库未绑定独立库存页面: actual={inventory_view_class}")
 
     price_policy = _get_property(shop_settings, "fish_purchase_price_policy", "FishPurchasePricePolicy")
     _require(_enum_contains(price_policy, "Unset"),
@@ -247,8 +270,9 @@ def main() -> None:
         "Definitions=StarterRodT1,ShopRodT2,StarterScoopNet,BugBait,FlashingBait,FruitBait,GiantLureBait,MeatBait,"
         "MoonlightBait,NectarBait,SoundBait,FeatherFloat,YarnBallFloat,BellFloat,BugChum,"
         "FermentedGrainChum,FruitFragranceChum,HolyLightChum "
-        "Catalog=ShopRodT2Order,ShopFloatYarnBallOrder,ShopBugChumOrder,FreeBugBaitClaim,FreeStarterRodClaim "
-        f"PlayerStarts={len(player_starts)} Regions={len(regions)} PricePolicy={price_policy}"
+        f"CatalogTable=DT_ShopCatalog_Default CatalogRows={len(catalog_rows)} GlassRod=ShopRodT2 "
+        f"Thumbnails={len(expected_thumbnails)} "
+        f"CampInventoryView={inventory_view_class} PlayerStarts={len(player_starts)} Regions={len(regions)} PricePolicy={price_policy}"
     )
 
 

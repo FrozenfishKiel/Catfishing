@@ -101,7 +101,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double StalemateRodWearPerFishStrength = 0.1;
 	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double StalemateFishDrainPerCatStrength = 0.08;
 	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double StalemateCatDrainPerFishStrength = 0.12;
-	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double SlackStaminaRegenPerSecond = 1.5;
+	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double SlackStaminaRegenPerSecond = 3;
 	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="1")) double OverpowerStrengthRatio = 2.0;
 	/** 鱼体力低于该比例后休息期乘以下面的倍率（规格 4.6 临时口径）。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0", ClampMax="1")) double LowStaminaRestThreshold = 0.5;

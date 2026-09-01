@@ -10,6 +10,7 @@ class APlayerState;
 class ACatCharacter;
 class ACatFishingSession;
 class UCatFishDefinition;
+class UCatFishPresentationDefinition;
 class USkeletalMeshComponent;
 class USphereComponent;
 
@@ -97,6 +98,8 @@ private:
 	void RetryAttachmentReconcile();
 	void ReleaseMouthCarryFromAuthority(const FVector& DropLocation);
 	void ApplyLocalFocus(bool bFocused);
+	/** 沿 FishDefinition 的直接引用解析 Mesh/落地动画；客户端不会维护独立鱼种映射。 */
+	void RefreshFishPresentation();
 	/** Available 状态恢复落地专用 Mesh 位置和旋转，同时保留冻结重量缩放。 */
 	void ApplyLandedVisualTransform();
 	/** Carried 状态清除落地专用 Mesh 位置和旋转，使鱼原点直接对齐嘴部骨骼，同时保留冻结重量缩放。 */
@@ -114,6 +117,10 @@ private:
 
 	/** 只在 authority 保存定义以构造捕获/图鉴事实，不下发 DataAsset。 */
 	UPROPERTY(Transient) TObjectPtr<UCatFishDefinition> FishDefinition;
+	UPROPERTY(Transient) TObjectPtr<UCatFishPresentationDefinition> FishPresentationDefinition;
+	FTransform LandedMeshBaseTransform = FTransform::Identity;
+	FTransform CarriedMeshBaseTransform = FTransform::Identity;
+	FName AppliedPresentationFishDefinitionId = NAME_None;
 	FName RegionId = NAME_None;
 	TArray<FString> FishingParticipantStableNetIds;
 	TWeakObjectPtr<ACatCharacter> AuthorityCarrier;

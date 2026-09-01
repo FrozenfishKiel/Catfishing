@@ -13,13 +13,9 @@ namespace CatFishCatalogSettingsPrivate
 		Count
 	};
 
-	static bool PassesEcologicalGate(const UCatFishDefinition& Definition, const FName RegionId,
-		const ECatEnvironmentTimeOfDay TimeOfDay, const ECatEnvironmentWeather Weather,
-		const int32 ActivePlayerCount)
+	static bool PassesWaterRegionGate(const UCatFishDefinition& Definition, const FName RegionId)
 	{
-		return Definition.IsRuntimeDefinitionReady() && Definition.RegionIds.Contains(RegionId)
-			&& Definition.TimeOfDay.Contains(TimeOfDay) && Definition.Weather.Contains(Weather)
-			&& Definition.MinimumFightParticipants <= ActivePlayerCount;
+		return Definition.IsRuntimeDefinitionReady() && Definition.RegionIds.Contains(RegionId);
 	}
 
 	static bool IsChallengeSelectionReady(const UCatFishCatalogSettings& Settings)
@@ -156,8 +152,6 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	FCatFishSelectionResult Result;
 	if (!Context.WaterRegion.IsValid() || !Context.ChumSample.bSucceeded
 		|| !(Context.ChumSample.WaterRegion == Context.WaterRegion)
-		|| Context.TimeOfDay == ECatEnvironmentTimeOfDay::Unknown
-		|| Context.Weather == ECatEnvironmentWeather::Unknown
 		|| Context.ActivePlayerCount < 1 || Context.ActivePlayerCount > 8
 		|| !FMath::IsFinite(Context.CombinedFishingStrength) || Context.CombinedFishingStrength <= 0.0
 		|| !FMath::IsFinite(Context.CombinedFightStamina) || Context.CombinedFightStamina <= 0.0)
@@ -173,6 +167,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	struct FCandidate
 	{
 		UCatFishDefinition* Definition = nullptr;
+		double ChallengeRatio = 0.0;
 		double FinalWeight = 0.0;
 		CatFishCatalogSettingsPrivate::EChallengeBand ChallengeBand =
 			CatFishCatalogSettingsPrivate::EChallengeBand::Comfort;
@@ -181,11 +176,12 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	for (const TSoftObjectPtr<UCatFishDefinition>& DefinitionRef : Definitions)
 	{
 		UCatFishDefinition* Definition = DefinitionRef.LoadSynchronous();
-		if (!Definition || !CatFishCatalogSettingsPrivate::PassesEcologicalGate(*Definition,
-			Context.WaterRegion.RegionId, Context.TimeOfDay, Context.Weather, Context.ActivePlayerCount))
+		if (!Definition || !CatFishCatalogSettingsPrivate::PassesWaterRegionGate(*Definition,
+			Context.WaterRegion.RegionId))
 		{
 			continue;
 		}
+		// 挑战度是第一道实际玩法门：超出安全上限的鱼不会再进入任何生态条件或权重计算。
 		const double ChallengeRatio = CatFishCatalogSettingsPrivate::CalculateChallengeRatio(*Definition,
 			Context.CombinedFishingStrength, Context.CombinedFightStamina);
 		if (!FMath::IsFinite(ChallengeRatio) || ChallengeRatio <= 0.0
@@ -193,27 +189,16 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 		{
 			continue;
 		}
-		const double RawAffinity = Context.ChumSample.EffectiveChumVector.Fishy * Definition->ChumPreference.Fishy
-			+ Context.ChumSample.EffectiveChumVector.Fragrant * Definition->ChumPreference.Fragrant
-			+ Context.ChumSample.EffectiveChumVector.Fermented * Definition->ChumPreference.Fermented;
-		if (!FMath::IsFinite(RawAffinity))
-		{
-			return FCatFishSelectionResult();
-		}
-		const double Normalized = RawAffinity <= 0.0 ? 0.0
-			: RawAffinity / (RawAffinity + ChumAffinityHalfSaturation);
-		const double ChumModifier = FMath::Clamp(
-			static_cast<double>(SaturationCurve->GetFloatValue(static_cast<float>(Normalized))),
-			0.0, MaximumChumModifier);
-		const double BaitModifier = Definition->FindBaitMultiplierOrNeutral(Context.BaitDefinitionId);
-		const double ChallengeModifier = CatFishCatalogSettingsPrivate::CalculateChallengeModifier(
-			ChallengeRatio, *this);
-		const double FinalWeight = Definition->SpawnWeight * ChumModifier * BaitModifier * ChallengeModifier;
-		if (!FMath::IsFinite(FinalWeight) || FinalWeight <= 0.0)
+		// 时段和天气已有稳定扩展接缝，但测试期默认旁路；人数门继续保护多人鱼不会进入人数不足的局。
+		if (!FCatFishEligibilityPolicy::PassesTimeOfDay(*Definition, Context.TimeOfDay,
+			bEnableTimeOfDayEligibilityFilter)
+			|| !FCatFishEligibilityPolicy::PassesWeather(*Definition, Context.Weather,
+				bEnableWeatherEligibilityFilter)
+			|| !FCatFishEligibilityPolicy::PassesActivePlayerCount(*Definition, Context.ActivePlayerCount))
 		{
 			continue;
 		}
-		Candidates.Add({Definition, FinalWeight,
+		Candidates.Add({Definition, ChallengeRatio, 0.0,
 			CatFishCatalogSettingsPrivate::ResolveChallengeBand(ChallengeRatio, *this)});
 	}
 	Candidates.Sort([](const FCandidate& Left, const FCandidate& Right)
@@ -229,6 +214,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	{
 		return Result;
 	}
+	Result.EligibleCandidateCount = Candidates.Num();
 	FRandomStream Random(Context.RandomSeed);
 	double AvailableBandWeights[static_cast<uint8>(CatFishCatalogSettingsPrivate::EChallengeBand::Count)] = {};
 	double TotalBandWeight = 0.0;
@@ -266,12 +252,38 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 			break;
 		}
 	}
+	// 所有条件门和挑战档都已经确定后，才计算剩余鱼种的窝料/鱼饵权重并做最终归一化。
 	double TotalCandidateWeight = 0.0;
-	for (const FCandidate& Candidate : Candidates)
+	for (FCandidate& Candidate : Candidates)
 	{
-		if (Candidate.ChallengeBand == SelectedBand)
+		if (Candidate.ChallengeBand != SelectedBand)
+		{
+			continue;
+		}
+		const double RawAffinity = Context.ChumSample.EffectiveChumVector.Fishy
+				* Candidate.Definition->ChumPreference.Fishy
+			+ Context.ChumSample.EffectiveChumVector.Fragrant
+				* Candidate.Definition->ChumPreference.Fragrant
+			+ Context.ChumSample.EffectiveChumVector.Fermented
+				* Candidate.Definition->ChumPreference.Fermented;
+		if (!FMath::IsFinite(RawAffinity))
+		{
+			return FCatFishSelectionResult();
+		}
+		const double NormalizedAffinity = RawAffinity <= 0.0 ? 0.0
+			: RawAffinity / (RawAffinity + ChumAffinityHalfSaturation);
+		const double ChumModifier = FMath::Clamp(
+			static_cast<double>(SaturationCurve->GetFloatValue(static_cast<float>(NormalizedAffinity))),
+			0.0, MaximumChumModifier);
+		const double BaitModifier = Candidate.Definition->FindBaitMultiplierOrNeutral(Context.BaitDefinitionId);
+		const double ChallengeModifier = CatFishCatalogSettingsPrivate::CalculateChallengeModifier(
+			Candidate.ChallengeRatio, *this);
+		Candidate.FinalWeight = Candidate.Definition->SpawnWeight * ChumModifier
+			* BaitModifier * ChallengeModifier;
+		if (FMath::IsFinite(Candidate.FinalWeight) && Candidate.FinalWeight > 0.0)
 		{
 			TotalCandidateWeight += Candidate.FinalWeight;
+			++Result.SelectedBandCandidateCount;
 		}
 	}
 	if (!FMath::IsFinite(TotalCandidateWeight) || TotalCandidateWeight <= 0.0)
@@ -282,7 +294,8 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	const FCandidate* Selected = nullptr;
 	for (const FCandidate& Candidate : Candidates)
 	{
-		if (Candidate.ChallengeBand != SelectedBand)
+		if (Candidate.ChallengeBand != SelectedBand || !FMath::IsFinite(Candidate.FinalWeight)
+			|| Candidate.FinalWeight <= 0.0)
 		{
 			continue;
 		}
@@ -300,6 +313,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	Result.bSelected = true;
 	Result.FishDefinitionId = Selected->Definition->FishDefinitionId;
 	Result.SelectedFinalWeight = Selected->FinalWeight;
+	Result.SelectedNormalizedProbability = Selected->FinalWeight / TotalCandidateWeight;
 	Result.WeightKilograms = Random.FRandRange(
 		static_cast<float>(Selected->Definition->MinimumWeightKilograms),
 		static_cast<float>(Selected->Definition->MaximumWeightKilograms));

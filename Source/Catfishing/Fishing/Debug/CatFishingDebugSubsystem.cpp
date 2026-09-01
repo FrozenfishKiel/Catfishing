@@ -28,7 +28,7 @@
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Integration/CatFishingAimLibrary.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
-#include "Fishing/Presentation/CatFishingPresentationSettings.h"
+#include "Fishing/Presentation/CatFishPresentationDefinition.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
@@ -147,21 +147,21 @@ namespace CatFishingDebugCommands
 			return;
 		}
 
-		const UCatWorldItemSettings* WorldItemSettings = GetDefault<UCatWorldItemSettings>();
-		const UCatFishingPresentationSettings* PresentationSettings = GetDefault<UCatFishingPresentationSettings>();
+		const UCatFishPresentationDefinition* FishPresentation =
+			Definition->LoadRuntimePresentationDefinition();
 		const FVector SpawnLocation = Character->GetActorLocation()
 			+ Character->GetActorForwardVector() * 150.0 + FVector(0.0, 0.0, 40.0);
 		FRotator SpawnRotation = Character->GetActorRotation();
 		SpawnRotation.Pitch = 0.0;
-		SpawnRotation.Roll = WorldItemSettings ? WorldItemSettings->LandedFishRollDegrees : 90.0;
+		SpawnRotation.Roll = FishPresentation ? FishPresentation->LandedActorRollDegrees : 90.0;
 		FActorSpawnParameters SpawnParams;
 		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 		ACatFishPickupActor* Pickup = World->SpawnActor<ACatFishPickupActor>(
 			ACatFishPickupActor::StaticClass(), SpawnLocation, SpawnRotation, SpawnParams);
 		const FString StableNetId = PlayerState->GetUniqueId()->ToString();
 		const TArray<FString> Participants{ StableNetId };
-		const double VisualScale = PresentationSettings
-			? PresentationSettings->ComputeFishUniformVisualScale(WeightKilograms) : 1.0;
+		const double VisualScale = FishPresentation
+			? FishPresentation->ComputeUniformVisualScale(WeightKilograms) : 1.0;
 		if (!Pickup || !Pickup->InitializeFromAuthority(FGuid::NewGuid(), FGuid::NewGuid(), Definition,
 			WeightKilograms, VisualScale, TEXT("DebugSpawn"), Participants))
 		{

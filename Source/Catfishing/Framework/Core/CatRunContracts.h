@@ -104,7 +104,7 @@ enum class ECatRunCommandError : uint8
 UENUM(BlueprintType)
 enum class ECatEnvironmentWeather : uint8
 {
-	/** 天气未配置；依赖分布的 Fishing 必须 fail-closed。 */
+	/** 天气未配置；启用鱼种天气过滤后必须 fail-closed，测试期旁路过滤时可作为只读占位。 */
 	Unknown,
 	/** 晴朗天气。 */
 	Clear,
@@ -118,7 +118,7 @@ enum class ECatEnvironmentWeather : uint8
 UENUM(BlueprintType)
 enum class ECatEnvironmentTimeOfDay : uint8
 {
-	/** 时段未配置或当前不是可钓白天。 */
+	/** 时段未配置或当前不是可钓白天；启用鱼种时段过滤后必须 fail-closed。 */
 	Unknown,
 	/** 白天开始段。 */
 	Morning,
