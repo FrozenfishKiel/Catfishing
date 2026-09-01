@@ -6,6 +6,7 @@
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Logging/CatLog.h"
 #include "HAL/IConsoleManager.h"
+#include "Misc/DefaultValueHelper.h"
 
 #if !UE_BUILD_SHIPPING
 // Run/Environment/Social 的常驻屏幕调试开关；它只决定本地 Tick 是否读取公开快照并输出文本，不写任何 Run、Environment、Social、Wet 或表现状态。
@@ -224,16 +225,57 @@ namespace
 		}
 	}
 
+	// 白天长度调试流程：先解析唯一秒数参数，再要求当前 World 拥有 authority GameMode；客户端或非法参数只写拒绝日志，成功时由 GameMode 重设当前白天时间窗口并立刻 dump 同一份公开快照。
+	void SetRunEnvironmentSocialDayLengthForWorld(const TArray<FString>& Args, UWorld* World)
+	{
+		double NewDayLengthSeconds = 0.0;
+		if (Args.Num() != 1 || !FDefaultValueHelper::ParseDouble(Args[0], NewDayLengthSeconds))
+		{
+			UE_LOG(LogCatRun, Warning,
+				TEXT("Event=run_environment_social_debug_day_length_rejected Reason=InvalidArguments Usage=\"cat.RunEnvironmentSocial.DayLength <Seconds>\""));
+			return;
+		}
+
+		ACatfishingGameModeBase* GameMode = World ? World->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
+		if (!GameMode)
+		{
+			UE_LOG(LogCatRun, Warning,
+				TEXT("Event=run_environment_social_debug_day_length_rejected Reason=AuthorityGameModeUnavailable Seconds=%.3f World=%s NetMode=%s"),
+				NewDayLengthSeconds, World ? *World->GetName() : TEXT("None"),
+				World ? *FormatNetMode(World->GetNetMode()) : TEXT("Unknown"));
+			return;
+		}
+		if (!GameMode->ApplyDebugDayLengthSeconds(NewDayLengthSeconds))
+		{
+			return;
+		}
+
+		APlayerController* Controller = FindDebugController(World);
+		LogRunEnvironmentSocialSnapshot(World, Controller, TEXT("DayLengthCommand"));
+		UObject* Owner = Controller ? static_cast<UObject*>(Controller) : static_cast<UObject*>(World);
+		if (Owner)
+		{
+			PushRunEnvironmentSocialScreenLines(*Owner, BuildRunEnvironmentSocialDebugLines(World, Controller), 6.0f);
+		}
+	}
+
 	/** 非 Shipping 构建里的 RunEnvironmentSocial 一次性快照指令；只读输出，不触发 StateTree、天气或社交流程。 */
 	static FAutoConsoleCommandWithWorldAndArgs CmdRunEnvironmentSocialDump(
 		TEXT("cat.RunEnvironmentSocial.Dump"),
 		TEXT("输出一次 Run/Environment/Social 调试快照到日志，并在本机屏幕显示 6 秒。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&DumpRunEnvironmentSocialForWorld),
 		ECVF_Cheat);
+
+	/** 非 Shipping 构建里的当前白天长度调试指令；只改当前白天时间窗口相关服务器事实和 timer，再通过 GameState 复制给所有客户端。 */
+	static FAutoConsoleCommandWithWorldAndArgs CmdRunEnvironmentSocialDayLength(
+		TEXT("cat.RunEnvironmentSocial.DayLength"),
+		TEXT("重设当前 DayActive 从现在开始持续的秒数，例如 cat.RunEnvironmentSocial.DayLength 60；只能在服务器/ListenServer/Standalone 生效。"),
+		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetRunEnvironmentSocialDayLengthForWorld),
+		ECVF_Cheat);
 }
 #endif
 
-// 初始化流程：只交还父类建立 WorldSubsystem 生命周期；Debug 开关和 Dump 命令由静态 Console 注册承担，不在这里绑定领域事件。
+// 初始化流程：只交还父类建立 WorldSubsystem 生命周期；Debug 开关以及 Dump/DayLength 命令由静态 Console 注册承担，不在这里绑定领域事件。
 void UCatRunEnvironmentDebugSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
