@@ -68,7 +68,7 @@ public:
 	/** 查询 PlayerState 当前占用任意操作槽的竿（不限竿主、主辅位）；没有则空。 */
 	ACatFishingRodActor* FindRodOperatedBy(const APlayerState* PlayerState);
 
-	/** 最近的可加入竿：已部署、未损坏、仍有空槽，且下一个槽位在 MaxDistance 内；不限竿主。 */
+	/** 最近的可加入竿：已部署、未损坏、容器仍有容量，且公共交互锚点在 MaxDistance 内；不限竿主。 */
 	ACatFishingRodActor* FindNearestOperableRod(const FVector& WorldLocation, double MaxDistanceCentimeters);
 
 	/** 查找绑定在指定竿上的存活未终态会话（操作位与会话解耦后，竿是会话的空间锚）；没有则空。 */
@@ -108,7 +108,7 @@ private:
 	/** 终止全部存活会话并释放所有竿位；DiagnosticReason 只进入 Session 终态诊断。 */
 	void TerminateAllSessionsAndReleaseOperators(const TCHAR* DiagnosticReason);
 
-	/** 强制移除指定角色占用的竿位并恢复移动；主位腾空后把晋升者重新吸附到 0 号位。 */
+	/** 强制移除指定角色占用的竿位并恢复移动；容器压紧后按新编号重排所有剩余站位。 */
 	void ReleaseOperatorForCharacter(const ACatCharacter* Character);
 
 	/** 清空所有存活鱼竿的操作槽并恢复每个操作角色的移动；鱼竿仍保持部署。 */

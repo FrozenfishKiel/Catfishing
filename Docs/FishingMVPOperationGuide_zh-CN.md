@@ -240,7 +240,7 @@ FishingSessionStateTree=/Game/Data/StateTrees/ST_FishingSession.ST_FishingSessio
 
 | 键 | InputAction | 用途 | 走哪条路 |
 |---|---|---|---|
-| **R** | `IA_PutDownFishingRod` | **鱼竿一键三态**：已占任意竿位→离开 / 附近鱼竿还有空位→加入 / 否则→放自己的竿。第一人吸附右主位，第二人吸附左辅助位 | ✅ C++ 已实现，服务器按事实自动分派 |
+| **R** | `IA_PutDownFishingRod` | **鱼竿一键三态**：已在操作容器→离开 / 公共交互锚点附近且容器有容量→追加加入 / 否则→放自己的竿 | ✅ C++ 已实现，服务器按事实自动分派 |
 | **E** | `IA_Interact` | 准星交互/拾取；本地只选择 Current Target，真正拾取由服务器复核距离、视线和物品状态 | ✅ C++ 已实现，走 Native InputTag 而不是 Gameplay Ability |
 | **左键** | `IA_LMB` | 无会话→**长按预览抛物线（不蓄力）松手抛竿**；真咬窗→**提竿**（1 秒内=完美）；遛鱼→**按住拖** | 提竿/拖 ✅ C++；**抛竿预览+提交走蓝图**（5.2） |
 | **右键** | `IA_RMB` | 遛鱼时**按住松开线杯**（鱼在 L_max 内自由带线，发力期喘气回体力 +1.5/s） | ✅ C++（`UCatGA_FishingSlack`） |
@@ -296,7 +296,7 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 
 **常见失败原因**（放竿）：`InvalidPayload`=前方太斜/没实体地面；`DependencyUnavailable`=还没装配（5.4）。`InvalidWaterTarget/CastOutOfRange` 现在只属于抛竿阶段。
 
-多人占位口径：`OperatorPlayerStates[0]` 是当前唯一开放的主位，能抛竿、提竿、收线和松线。`[1]` 及后续辅助槽仍保留在底层结构与站位锚点中，但在协作输入、力量和体力分摊落地前，R 键不会把玩家送入无法操作的辅助位；辅助位开放整体属于 `TODO(CooperativeFishing)`。当前参数仍可在 `Project Settings → Catfishing Fishing → Rod|Operators` 查看，但不代表运行版已经开放多人同竿。
+多人占位口径：所有玩家都从同一个公共交互锚点按 R 加入，服务器把 PlayerState 追加到紧凑容器 `OperatorPlayerStates`，编号从 `0` 依次递增；任意成员离开后更高编号依次递减，并按新编号重排全部剩余站位。`[0]` 是当前主位，现有抛竿、提竿、收线和松线由它驱动；新的 `[0]` 会在原主位退出时接管当前会话。配置容量当前为 2，但第三、第四人只需提高 `MaximumRodOperatorSlots`，无需新增专用交互点或分支。多人同时合力、体力分摊和多输入配合仍属于 `TODO(CooperativeFishing)`。
 
 会话跟随鱼竿而不是角色：按 R 离开任何阶段都不会直接结束鱼竿上的会话。多人各自部署鱼竿后，同一玩家可以在第一根竿抛线、离开，再进入第二根空竿抛线；左键与 HUD 始终只路由当前主操作鱼竿。等待/试探/真咬阶段允许迁移当前钓手；`HookedFight` 离竿后自动保持松线，鱼在 `L_max` 内自由带线，放尽后开始按负载磨损本场鱼线，期间不结算离开玩家的力量或体力。下一位玩家进入空主位时会用自己的 ASC、力量、满额搏斗体力和输入状态接管 Runner，原操作手的短周期体力立即恢复。
 
@@ -378,8 +378,8 @@ Event BeginPlay
 | 2 | （自动）装配 | Equipment `Revision` 从 0 → 1，`RodDefinitionId = Rod_Basic` |
 | 3 | 在任意合法地面第一次按 R | 世界里出现无人操作的 Rod Actor并播放放杆表现；角色不吸附、不锁移动 |
 | 3.1 | 放置者再次按 R | 放置者进入右侧主位并开始操作，`OperatorPlayerStates.Num=1` |
-| 4 | 主位仍有人时，第二个玩家走近同一根竿按 R | 返回 `RodOccupied`，第二人保持自由移动，不会被吸附到尚未开放的辅助位 |
-| 4.1 | 主位玩家按 R 离开，第二个玩家再按 R | 第二人进入 0 号主位并接管当前会话；两次操作之间若处于搏斗，则保持无人值守松线，放至 `L_max` 后开始磨损鱼线 |
+| 4 | 主位仍有人时，第二个玩家走近同一个公共交互锚点按 R | 第二人追加为编号 1；两端都看到 `OperatorPlayerStates.Num=2` |
+| 4.1 | 编号 0 的玩家按 R 离开 | 原编号 1 自动变为 0、按新编号重新站位并接管当前会话；若容器为空，搏斗才进入无人值守松线 |
 | 5 | 瞄水面按住再松开左键 | `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去 |
 | 6 | 等浮漂落水 | Hook 的 `BP_OnHookPresentationChanged` 收到 `Phase=Landed` |
 | 7 | 等咬钩 | `Phase=Probe` → 紧接着 `Phase=TrueBiteWindow`，鱼 Actor 生成 |
@@ -515,7 +515,7 @@ Event=run_phase_entered Day=1 Phase=ECatRunPhase::DayActive Deadline=600.000
 
 - ~~C++ 调试可视化~~ ✅ 已完成：`cat.Fishing.Debug 0/1/2`（默认 0；0=世界标记全关，1=全量，2=只留抄网射线+鱼圈+鱼线+阶段提示）；右上角当前鱼种 ID 与鱼/竿/猫体力、耐久和力量面板由独立的 `cat.Fishing.Stats 0/1` 控制（默认 1）
 - 浮漂弹道修正（现在飞行轨迹落不到目标点会"瞬移"）
-- 规格后续：抄网道具化/概率/硬直/无网拾取/翻肚 30s；窝料并池与 30s×0.9；`T_base/(1+Total/K)` 浮漂级计时器；浮漂精准偏移；入夜停咬
+- 规格后续：抄网道具化/概率/硬直/无网拾取/翻肚 30s；窝料接入水域面积/鱼量账本、平均分布、共享重叠收敛曲线与面积容量上限；浮漂级计时器读取所在面积单元聚鱼总量；浮漂精准偏移；入夜停咬
 
 ### ⚠️ StateTree 资产损坏事故记录
 
