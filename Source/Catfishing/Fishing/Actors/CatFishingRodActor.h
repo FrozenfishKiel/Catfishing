@@ -2,7 +2,6 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "Equipment/CatInventoryItemWorldActor.h"
 #include "Fishing/Actors/CatFishingActorTypes.h"
 #include "CatFishingRodActor.generated.h"
 
@@ -11,7 +10,7 @@ class USceneComponent;
 
 /** 场景中已经部署出来的鱼竿表现 Actor；它复制可见状态和操作位，但真实物品实例仍由 Equipment 的 Use/UnUse 记录持有。 */
 UCLASS(Blueprintable, meta=(ChildCannotTick))
-class CATFISHING_API ACatFishingRodActor : public AActor, public ICatInventoryItemWorldActor
+class CATFISHING_API ACatFishingRodActor : public AActor
 {
 	GENERATED_BODY()
 
@@ -45,10 +44,6 @@ public:
 	bool SetDeployedFromAuthority(bool bInDeployed, int64 ExpectedRevision);
 	/** 读取当前复制表现状态；调用方只能观察 Actor 身份、实例身份和操作位，不能绕过权威写口修改。 */
 	const FCatFishingRodPresentationState& GetPresentationState() const;
-	/** 读取这根场景鱼竿对应的库存实例身份；通用物品占用登记用它防止同一根鱼竿又回到普通库存。 */
-	virtual FGuid GetInventoryItemInstanceIdForRegistry() const override;
-	/** 读取这根场景鱼竿对应的物品定义身份；通用物品占用登记用它做身份复核和诊断。 */
-	virtual FName GetInventoryItemDefinitionIdForRegistry() const override;
 	/** 读取竿尖世界坐标；鱼线、浮漂和蓝图表现都以这个锚点作为挂接点。 */
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetRodTipWorldTransform() const;
 	/** 读取主操作位世界坐标；旧调用方把 Stand 视为第一个玩家站位。 */

@@ -3,9 +3,7 @@
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
-#include "Equipment/CatInventoryItemUseRegistry.h"
 #include "Equipment/CatRunInventorySlotOperations.h"
-#include "Engine/World.h"
 #include "GameFramework/Pawn.h"
 #include "Net/UnrealNetwork.h"
 
@@ -423,11 +421,6 @@ FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, co
 		Result.Error = ECatDomainCommandError::RevisionConflict;
 		return Finish(Result);
 	}
-	if (HasActiveFishingUse())
-	{
-		Result.Error = ECatDomainCommandError::InvalidPhase;
-		return Finish(Result);
-	}
 	if (const FCatInventoryItemUseRecord* ExistingRecord = FindInventoryItemUseRecord(ItemInstanceId);
 		ExistingRecord && !ExistingRecord->bReleased)
 	{
@@ -599,9 +592,8 @@ FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, 
 // 库存整理流程：
 // 1. 先用 RequestId、Revision 和源/目标下标查询终态缓存，合法重放必须返回首次结果，不受当前 Fishing 阶段影响。
 // 2. 首次请求先检查 authority、RequestId、Revision 和槽位下标，避免陈旧 UI 改写新的随身库存快照。
-// 3. 服务器重读当前库存格数组，若源格或目标格残留正在 Use 的同实例则拒绝，避免旧重复数据继续被普通整理路径传播。
-// 4. 源格必须有物品，目标格移动/合并/交换复用运行库存格通用规则。
-// 5. 成功移动后推进 Revision 并发布同一份库存快照；View 只通过 OnSnapshotChanged 重刷。
+// 3. 源格必须有物品，目标格移动/合并/交换复用运行库存格通用规则，不读取物品 Use 或 Fishing 会话状态。
+// 4. 成功移动后推进 Revision 并发布同一份库存快照；View 只通过 OnSnapshotChanged 重刷。
 FCatDomainCommandResult UCatEquipmentComponent::MoveInventorySlotFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const int32 SourceSlotIndex, const int32 TargetSlotIndex)
 {
@@ -642,25 +634,17 @@ FCatDomainCommandResult UCatEquipmentComponent::MoveInventorySlotFromAuthority(c
 		}
 		else
 		{
-			if (IsInventoryItemInstanceBlockedByActiveUse(Snapshot.InventorySlots[SourceSlotIndex].ItemInstanceId)
-				|| IsInventoryItemInstanceBlockedByActiveUse(Snapshot.InventorySlots[TargetSlotIndex].ItemInstanceId))
+			const auto ResolveStackLimit = [this](const FName DefinitionId)
 			{
-				Result.Error = ECatDomainCommandError::InvalidPhase;
-			}
-			else
-			{
-				const auto ResolveStackLimit = [this](const FName DefinitionId)
-				{
-					const UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
-						DefinitionId);
-					return Definition ? GetInventoryStackLimit(*Definition) : 1;
-				};
-				const CatRunInventorySlotOperations::FMoveSlotsResult MoveResult =
-					CatRunInventorySlotOperations::MoveItemBetweenSlots(
-						Snapshot.InventorySlots, SourceSlotIndex, TargetSlotIndex, ResolveStackLimit);
-				Result.bCommitted = MoveResult.bChanged;
-				Result.Error = MoveResult.Error;
-			}
+				const UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
+					DefinitionId);
+				return Definition ? GetInventoryStackLimit(*Definition) : 1;
+			};
+			const CatRunInventorySlotOperations::FMoveSlotsResult MoveResult =
+				CatRunInventorySlotOperations::MoveItemBetweenSlots(
+					Snapshot.InventorySlots, SourceSlotIndex, TargetSlotIndex, ResolveStackLimit);
+			Result.bCommitted = MoveResult.bChanged;
+			Result.Error = MoveResult.Error;
 		}
 	}
 	if (Result.bCommitted)
@@ -773,8 +757,8 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	// 1. 先用 SessionId 返回已存在的终态，保证 FishingSession 重放不会再检查或再占库存。
 	// 2. 再校验 authority、定义类型、Revision、当前钓鱼选择和三份实例身份，任何不一致都保持快照不变。
 	// 3. 鱼竿实例必须来自活动 Use 记录，鱼饵和鱼漂实例必须仍在库存中，避免场景竿和背包格引用不同物品。
-	// 4. 鱼饵预留按 ItemInstanceId 计数；多堆同定义饵不会互相借数量，也不会在 Commit 时误扣另一堆。
-	// 5. 最后只写入本 Session 预留记录，不递增 Revision；真正的库存变化留到 Commit 阶段发布。
+	// 4. 通过后立即把选中鱼饵实例的一份移进本 Session 记录并发布库存变化；之后玩家整理或转移背包不会破坏结算。
+	// 5. 记录只保存这场 Fishing 自己要消耗或归还的饵料和耐久累计，不再给库存拖放提供通用占用 gate。
 	if (const FCatFishingUseRecord* ExistingRecord = FindFishingUseRecord(FishingSessionId))
 	{
 		const bool bReserved = ExistingRecord->bBaitQuantityReserved && !ExistingRecord->bBaitCommitted
@@ -825,42 +809,33 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::NotFound, false);
 	}
-	if (FloatSlot->Quantity <= 0
-		|| BaitSlot->Quantity <= GetPendingReservedFishingBaitCount(BaitItemInstanceId))
+	if (FloatSlot->Quantity <= 0)
+	{
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false);
+	}
+	FCatRunInventorySlot ReservedBaitItem;
+	if (!RemoveInventoryItemQuantityFromInstance(BaitItemInstanceId, 1, ReservedBaitItem))
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false);
 	}
 
 	FCatFishingUseRecord Record;
 	Record.SessionId = FishingSessionId;
-	Record.RodItemInstanceId = RodItemInstanceId;
-	Record.BaitItemInstanceId = BaitItemInstanceId;
-	Record.FloatItemInstanceId = FloatItemInstanceId;
-	Record.RodDefinitionId = RodDefinitionId;
-	Record.BaitDefinitionId = BaitDefinitionId;
-	Record.FloatDefinitionId = FloatDefinitionId;
-	Record.ReservationRevision = Snapshot.Revision;
+	Record.ReservedBaitDefinitionId = ReservedBaitItem.DefinitionId;
 	Record.bBaitQuantityReserved = true;
 	FishingUseRecords.Add(FishingSessionId, Record);
+	++Snapshot.Revision;
+	PublishSnapshot();
 	return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::None, true);
-}
-
-FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBait(const FGuid FishingSessionId)
-{
-	// 立即提交入口只负责串起“先提交、再发布”的固定顺序；真实扣减仍集中在 Deferred 版本，避免两条入口各自维护库存语义。
-	const FCatFishingUseOperationResult Result = CommitFishingBaitDeferred(FishingSessionId);
-	if (Result.bApplied) PublishDeferredFishingBait(FishingSessionId);
-	return Result;
 }
 
 FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBaitDeferred(const FGuid FishingSessionId)
 {
-	// 延迟提交鱼饵的流程：
+	// 确认消耗鱼饵的流程：
 	// 1. 先找到 Begin 阶段留下的记录；没有记录说明 Fishing 从未拿到装备使用权。
-	// 2. 已释放或已提交的记录只返回终态，不允许重复扣同一份库存。
-	// 3. 只有该 Session 自己仍处于活动预留态才能提交，旧会话 tombstone 不会补扣。
-	// 4. Begin 已经保护了选中鱼饵实例的一份数量，这里只扣那一格并递增快照 Revision。
-	// 5. 只标记已提交，不广播快照；调用方可以先完成 Fishing 自己的终态事件，再显式 Publish。
+	// 2. 已释放或已提交的记录只返回终态，不允许重复处理同一份暂存饵。
+	// 3. 只有该 Session 自己仍处于活动预留态才能提交，旧会话 tombstone 不会补消耗。
+	// 4. Begin 已经把饵从库存移入记录并发布快照；这里只清掉暂存副本并标记已消耗。
 	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
 	if (!Record)
 	{
@@ -874,36 +849,17 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBaitDeferred(
 	{
 		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
 	}
-	// Begin 已经为这场 Fishing 保护选中饵实例的一份数量；Commit 只消费这份受保护数量，重放不会再次扣库存。
 	if (Record->bBaitQuantityReserved)
 	{
-		FCatRunInventorySlot ConsumedBait;
-		const FCatRunInventorySlot* CurrentBaitSlot = FindInventorySlotByInstanceId(Record->BaitItemInstanceId);
-		if (CurrentBaitSlot && CurrentBaitSlot->DefinitionId == Record->BaitDefinitionId
-			&& RemoveInventoryItemQuantityFromInstance(Record->BaitItemInstanceId, 1, ConsumedBait))
+		if (Record->ReservedBaitDefinitionId.IsNone())
 		{
-			++Snapshot.Revision;
-			Record->bBaitCommitted = true;
+			return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
 		}
-		else
-		{
-			return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false, Record);
-		}
+		Record->ReservedBaitDefinitionId = NAME_None;
+		Record->bBaitQuantityReserved = false;
 	}
-	else
-	{
-		Record->bBaitCommitted = true;
-	}
+	Record->bBaitCommitted = true;
 	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
-}
-
-void UCatEquipmentComponent::PublishDeferredFishingBait(const FGuid FishingSessionId)
-{
-	// 发布延迟扣饵结果：只有已经提交且尚未发布的记录会广播快照；重复调用只更新本地终态标记，不会制造第二次 UI/网络变化。
-	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
-	if (!Record || !Record->bBaitCommitted || Record->bBaitCommitPublished) return;
-	Record->bBaitCommitPublished = true;
-	if (Record->bBaitQuantityReserved) PublishSnapshot();
 }
 
 FCatFishingUseOperationResult UCatEquipmentComponent::SetAccumulatedFishingRodWear(const FGuid FishingSessionId,
@@ -960,6 +916,11 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingRodWear(const
 	{
 		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
 	}
+	if (Record->bBaitQuantityReserved && !Record->bBaitCommitted)
+	{
+		// 竿状态写回只接受已经确认消耗的会话，避免一个终局同时留下未归还的暂存饵。
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
+	}
 	if (Record->AbsoluteRodWear >= Snapshot.RodDurability)
 	{
 		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
@@ -988,6 +949,11 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingRodBreak(cons
 	{
 		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
 	}
+	if (Record->bBaitQuantityReserved && !Record->bBaitCommitted)
+	{
+		// 竿状态写回只接受已经确认消耗的会话，避免一个终局同时留下未归还的暂存饵。
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
+	}
 	Snapshot.RodDurability = 0.0;
 	Snapshot.bRodBroken = true;
 	SyncSelectedRodStateToSelectedInstance();
@@ -1000,6 +966,10 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingRodBreak(cons
 
 FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FGuid FishingSessionId)
 {
+	// Fishing 使用释放流程：
+	// 1. 先按 SessionId 找到 Begin 留下的短生命周期记录；旧会话和重复释放只返回稳定终态。
+	// 2. 如果饵料还没确认消耗，就把这一份按 DefinitionId 作为数量物品归还到随身库存，背包已满时追加返还格。
+	// 3. 归还后显式修正同定义空选择，再关闭记录；已确认消耗的会话只关闭记录，不再碰库存。
 	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
 	if (!Record)
 	{
@@ -1012,6 +982,36 @@ FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FG
 	if (!IsFishingUseActive(FishingSessionId))
 	{
 		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
+	}
+	if (Record->bBaitQuantityReserved && !Record->bBaitCommitted)
+	{
+		const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+		const UCatEquipmentDefinition* Bait = Settings
+			? Settings->FindRuntimeDefinition(Record->ReservedBaitDefinitionId) : nullptr;
+		if (!Bait || Bait->Kind != ECatEquipmentKind::Bait || !Bait->bRunConsumable
+			|| GetInventoryStackLimit(*Bait) <= 0)
+		{
+			return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::DependencyUnavailable,
+				false, Record);
+		}
+		const FName RestoredDefinitionId = Record->ReservedBaitDefinitionId;
+		if (!AddInventoryItemQuantity(*Bait, RestoredDefinitionId, 1))
+		{
+			// 这是归还 Begin 暂存物，不是普通入库；背包被玩家填满时追加返还格，避免终态会话卡住或吞掉鱼饵。
+			Snapshot.InventorySlots.Add(CatRunInventorySlotOperations::MakeInventoryItemSlot(*Bait,
+				RestoredDefinitionId, 1));
+		}
+		Record->ReservedBaitDefinitionId = NAME_None;
+		Record->bBaitQuantityReserved = false;
+		if (Snapshot.BaitDefinitionId == RestoredDefinitionId || Snapshot.BaitDefinitionId.IsNone()
+			|| GetInventoryItemQuantity(Snapshot.BaitDefinitionId) <= 0)
+		{
+			const FCatRunInventorySlot* RestoredSlot = FindFirstInventorySlotByDefinition(RestoredDefinitionId);
+			Snapshot.BaitDefinitionId = RestoredDefinitionId;
+			Snapshot.BaitItemInstanceId = RestoredSlot ? RestoredSlot->ItemInstanceId : FGuid();
+		}
+		++Snapshot.Revision;
+		PublishSnapshot();
 	}
 	Record->bReleased = true;
 	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
@@ -1353,9 +1353,8 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantInventorySlotFromAuthority(
 {
 	// 完整实例授予流程：
 	// 1. 用 RequestId 和实例载荷签名保护重放，避免同一取用请求换成另一件物品。
-	// 2. 首次提交只接受 authority、正确 Revision、未被 Use 占用的实例和可运行定义；数量型与装备型都走完整实例入库，不重新生成 ItemInstanceId。
-	// 3. 精确实例占用会被拒绝，但不会因为玩家正在部署另一件物品就禁止其他实例入库。
-	// 4. 成功后按定义自动修正当前选择并发布快照，调用方不需要知道这份实例落到了哪个格子。
+	// 2. 首次提交只接受 authority、正确 Revision、可运行定义和可容纳实例；数量型与装备型都走完整实例入库，不重新生成 ItemInstanceId。
+	// 3. 成功后按定义自动修正当前选择并发布快照，调用方不需要知道这份实例落到了哪个格子。
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	const FString Key = MakeTerminalKey(TEXT("GrantInventorySlot"), RequestId);
@@ -1385,10 +1384,6 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantInventorySlotFromAuthority(
 	else if (Snapshot.Revision != ExpectedRevision)
 	{
 		Result.Error = ECatDomainCommandError::RevisionConflict;
-	}
-	else if (IsInventoryItemInstanceBlockedByActiveUse(Item.ItemInstanceId))
-	{
-		Result.Error = ECatDomainCommandError::InvalidPhase;
 	}
 	else
 	{
@@ -1518,72 +1513,6 @@ bool UCatEquipmentComponent::HasActiveInventoryItemUse() const
 	return false;
 }
 
-bool UCatEquipmentComponent::IsInventoryItemInstanceInUse(const FGuid ItemInstanceId) const
-{
-	// 精确实例占用判断流程：无效 ID 不能代表真实物品；有效 ID 只查同一条 Use 记录，Released 后允许收口或重新入库。
-	if (!ItemInstanceId.IsValid())
-	{
-		return false;
-	}
-	if (const FCatInventoryItemUseRecord* ActiveUse = FindInventoryItemUseRecord(ItemInstanceId))
-	{
-		return !ActiveUse->bReleased;
-	}
-	return false;
-}
-
-bool UCatEquipmentComponent::IsInventoryItemInstanceBlockedByActiveUse(const FGuid ItemInstanceId) const
-{
-	// 通用占用 gate 流程：
-	// 1. 无效实例不能代表真实物品，空格和旧空 GUID 不阻止整理、交易或入库。
-	// 2. 先查本 Equipment 的活动 Use 记录，覆盖正常部署后还未收口的同一实例。
-	// 3. 再查尚未释放的 Fishing 记录，只拦当前会话真正保护的鱼饵和鱼漂实例，不把整局钓鱼当成库存锁。
-	// 4. 最后查当前服务器 World 的场景物品登记，覆盖公共仓库、交易或坏数据把同一实例送回别处的路径。
-	if (!ItemInstanceId.IsValid())
-	{
-		return false;
-	}
-	if (IsInventoryItemInstanceInUse(ItemInstanceId))
-	{
-		return true;
-	}
-	for (const TPair<FGuid, FCatFishingUseRecord>& Pair : FishingUseRecords)
-	{
-		const FCatFishingUseRecord& Record = Pair.Value;
-		const bool bBaitReservedByActiveFishing = !Record.bReleased && Record.bBaitQuantityReserved
-			&& !Record.bBaitCommitted && Record.BaitItemInstanceId == ItemInstanceId;
-		const bool bFloatBoundToActiveFishing = !Record.bReleased && Record.FloatItemInstanceId == ItemInstanceId;
-		if (bBaitReservedByActiveFishing || bFloatBoundToActiveFishing)
-		{
-			return true;
-		}
-	}
-	if (UWorld* World = GetWorld())
-	{
-		if (UCatInventoryItemUseRegistry* ItemUseRegistry = World->GetSubsystem<UCatInventoryItemUseRegistry>())
-		{
-			return ItemUseRegistry->IsItemInstanceInWorld(ItemInstanceId);
-		}
-	}
-	return false;
-}
-
-int32 UCatEquipmentComponent::GetPendingReservedFishingBaitCount(const FGuid BaitItemInstanceId) const
-{
-	// 鱼饵实例预留数量读取流程：只统计同一 ItemInstanceId 尚未提交、尚未释放的 Fishing 记录，防止同定义多堆鱼饵互相借库存。
-	int32 ReservedCount = 0;
-	for (const TPair<FGuid, FCatFishingUseRecord>& Pair : FishingUseRecords)
-	{
-		const FCatFishingUseRecord& Record = Pair.Value;
-		if (!Record.bReleased && Record.bBaitQuantityReserved && !Record.bBaitCommitted
-			&& Record.BaitItemInstanceId == BaitItemInstanceId)
-		{
-			++ReservedCount;
-		}
-	}
-	return ReservedCount;
-}
-
 // 库存数量读取流程：按定义 ID 汇总当前随身库存格数组；None、空格和非正数量都统一视为没有可用实物。
 int32 UCatEquipmentComponent::GetInventoryItemQuantity(const FName DefinitionId) const
 {
@@ -1695,7 +1624,7 @@ void UCatEquipmentComponent::SyncSelectedRodStateToSelectedInstance()
 // 自动选择流程：
 // 1. 新获得的物品只在当前选择缺失、旧选择无库存/无活动 Use，或同定义已选竿已断/耐久非法时介入。
 // 2. 鱼竿选择刷新会记录具体实例并读取这根实例自己的耐久；鱼饵、鱼漂和抄网也保留被选中的实例身份。
-// 3. 这个流程不移出库存物品，也不创建独立装备栏；Fishing 后续仍从同一库存数组扣饵。
+// 3. 这个流程不移出库存物品，也不创建独立装备栏；Fishing Begin 会按当前选择自行暂存要消耗的那一份饵。
 void UCatEquipmentComponent::AutoSelectGrantedInventoryItem(const UCatEquipmentDefinition& Definition,
 	const FName DefinitionId)
 {

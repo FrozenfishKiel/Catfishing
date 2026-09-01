@@ -57,10 +57,7 @@ public:
 	/** 部署型物品收口时共用的停止使用入口；它按实例调用定义侧 UnUse 裁决，成功才把活动记录里的同一物品放回随身库存。 */
 	FCatInventoryItemUseResult UnUse(FGuid RequestId, FGuid ItemInstanceId);
 
-	/** 只读判断同一实例是否已被本背包 Use 记录、Fishing 预留或当前 World 场景 Actor 占用；仓库、交易和整理用它拒绝重复回流。 */
-	bool IsInventoryItemInstanceBlockedByActiveUse(FGuid ItemInstanceId) const;
-
-	/** 整理两个随身库存格；服务器按数组下标移动、合并或交换物品，正在 Use 的同一实例不会被普通整理路径传播。 */
+	/** 整理两个随身库存格；服务器按数组下标移动、合并或交换物品，成功后发布同一份库存快照。 */
 	FCatDomainCommandResult MoveInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		int32 SourceSlotIndex, int32 TargetSlotIndex);
 
@@ -68,22 +65,24 @@ public:
 	FCatFishingFailureResult CommitFishingFailure(FGuid RequestId, int64 ExpectedRevision,
 		ECatFishingFailurePenalty Penalty);
 
-	/** Fishing 会话开始前按 SessionId 申请当前钓鱼选择使用权；不同鱼竿会话可并行，各自保护选中鱼饵实例的一份库存。 */
+	/** Fishing 会话开始前按 SessionId 申请当前钓鱼选择使用权；Begin 会从随身库存暂存一份选中鱼饵，后续由本会话消耗或归还。 */
 	FCatFishingUseReservationResult BeginFishingUse(FGuid FishingSessionId, FGuid RodItemInstanceId,
 		FGuid BaitItemInstanceId, FGuid FloatItemInstanceId, FName RodDefinitionId,
-		FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);
-	/** 立即提交 Fishing 已保护的鱼饵数量，并在成功时发布新的 Equipment 快照。 */
-	FCatFishingUseOperationResult CommitFishingBait(FGuid FishingSessionId);
-	/** 只提交 Fishing 已保护的鱼饵数量但暂不发布快照；FishingSession 用它把结算和表现事件排成确定顺序。 */
+	FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);
+	/** 确认消耗 Begin 已暂存的鱼饵；库存数量已经在 Begin 发布，本函数只收口会话内的饵料事务。 */
 	FCatFishingUseOperationResult CommitFishingBaitDeferred(FGuid FishingSessionId);
-	/** 发布此前延迟提交的 Fishing 鱼饵扣减结果；重复调用只返回既有终态，不会再次广播。 */
-	void PublishDeferredFishingBait(FGuid FishingSessionId);
+	/** 记录 Fishing 会话当前累计的竿磨损；它只更新会话暂存值，不直接改公开装备快照。 */
 	FCatFishingUseOperationResult SetAccumulatedFishingRodWear(FGuid FishingSessionId, int64 WearSequence,
 		double AbsoluteTotal);
+	/** 把已累计的竿磨损写回当前鱼竿实例并结束本会话；调用前饵料事务必须已经确认消耗。 */
 	FCatFishingUseOperationResult CommitFishingRodWear(FGuid FishingSessionId);
+	/** 把当前鱼竿实例标记为断竿并结束本会话；调用前饵料事务必须已经确认消耗。 */
 	FCatFishingUseOperationResult CommitFishingRodBreak(FGuid FishingSessionId);
+	/** 结束 Fishing 使用记录；未消耗的暂存饵会回到随身库存，已消耗的记录只关闭自身。 */
 	FCatFishingUseOperationResult ReleaseFishingUse(FGuid FishingSessionId);
+	/** 当前是否有仍未结束的 Fishing 使用记录；维修和失败预算用它避开进行中的钓鱼结算。 */
 	bool HasActiveFishingUse() const;
+	/** 指定 Fishing 会话是否仍处于活动状态；Commit/Release 用它防止旧会话重复改写。 */
 	bool IsFishingUseActive(FGuid FishingSessionId) const;
 
 	/** 固定营地修竿点提交维修；只消费一份显式浮木并恢复到当前 Rod 定义最大耐久。 */
@@ -98,25 +97,23 @@ private:
 
 	struct FCatFishingUseRecord
 	{
+		/** 本场 Fishing 会话身份；后续扣饵、耐久结算和释放都按它找到同一条短生命周期记录。 */
 		FGuid SessionId;
-		/** 本场 Fishing 绑定的鱼竿实例身份；它来自已部署鱼竿 Actor，用来把竿耐久回写到同一活动物品实例。 */
-		FGuid RodItemInstanceId;
-		/** 本场 Fishing 保护的鱼饵堆栈实例；Commit 只扣这一格的一份，避免同定义多堆鱼饵被误扣。 */
-		FGuid BaitItemInstanceId;
-		/** 本场 Fishing 读取的鱼漂实例；Begin 用它证明当前选择仍由库存里的同一件鱼漂支撑。 */
-		FGuid FloatItemInstanceId;
-		FName RodDefinitionId = NAME_None;
-		FName BaitDefinitionId = NAME_None;
-		FName FloatDefinitionId = NAME_None;
-		int64 ReservationRevision = 0;
+		/** Begin 从随身库存移出的一份鱼饵定义；数量型物品脱离原堆栈后不再复用原 ItemInstanceId。 */
+		FName ReservedBaitDefinitionId = NAME_None;
+		/** 已接收的竿磨损序号；磨损事件按递增序号提交，重复或跳号不会改耐久。 */
 		int64 LastWearSequence = 0;
+		/** 本场 Fishing 累计的竿耐久损耗；结算时一次性扣到当前选中竿实例，不参与库存拖放判断。 */
 		double AbsoluteRodWear = 0.0;
-		/** Fishing 会话已保护的一份鱼饵数量；Begin 写入，Commit 扣除，Release 放弃，防止普通饵和特殊饵被其他耗材入口双花。 */
+		/** 当前记录是否仍持有 Begin 移出的那份鱼饵；Commit 消耗或 Release 归还后清掉，防止同一份饵重复收口。 */
 		bool bBaitQuantityReserved = false;
+		/** 鱼饵是否已经被本会话确认消耗；它让重复结算只返回终态，不再次处理暂存物。 */
 		bool bBaitCommitted = false;
-		bool bBaitCommitPublished = false;
+		/** 竿磨损是否已经写回；成功后会释放本会话，防止磨损和断竿同时落地。 */
 		bool bWearCommitted = false;
+		/** 断竿是否已经写回；成功后会释放本会话，防止断竿和磨损同时落地。 */
 		bool bBreakCommitted = false;
+		/** 本会话是否已经结束；结束后的记录只作为重放终态，不再保护鱼饵或接受耐久事件。 */
 		bool bReleased = false;
 	};
 
@@ -138,10 +135,6 @@ private:
 	const FCatInventoryItemUseRecord* FindInventoryItemUseRecord(FGuid ItemInstanceId) const;
 	/** 是否存在尚未收口的物品 Use 记录；维修和失败预算用它避免改写正在由场景持有的物品状态。 */
 	bool HasActiveInventoryItemUse() const;
-	/** 某个实例是否正被 Use 记录占用；实例级保护用它先拦部署物品本体，不阻塞其他实例移动。 */
-	bool IsInventoryItemInstanceInUse(FGuid ItemInstanceId) const;
-	/** 某个鱼饵实例正在被 Fishing 会话保护但尚未提交的数量；Begin 用它避免同一堆鱼饵被多个会话超额预留。 */
-	int32 GetPendingReservedFishingBaitCount(FGuid BaitItemInstanceId) const;
 	/** 读取某个定义在库存格数组中的可见数量；选择自动切换和商店预检用它判断旧选择是否仍有实物。 */
 	int32 GetInventoryItemQuantity(FName DefinitionId) const;
 	/** 根据新入库定义修正空选择、无库存旧选择或已断/耐久非法的同定义已选竿；它只改钓鱼选择，不把库存物品移出数组。 */
@@ -187,7 +180,7 @@ private:
 	/** 把一份完整实例副本放入库存格数组；它保留 ItemInstanceId 和工具状态，不按 DefinitionId 重新生成物品。 */
 	bool AddInventoryItemSlot(const UCatEquipmentDefinition& Definition, const FCatRunInventorySlot& Item);
 
-	/** 服务器内部授予一份完整库存实例；营地取用用它避免按定义重新生成同类装备，并拒绝正在 Use 的同一实例。 */
+	/** 服务器内部授予一份完整库存实例；营地取用用它避免按定义重新生成同类装备。 */
 	FCatDomainCommandResult GrantInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		const FCatRunInventorySlot& Item);
 

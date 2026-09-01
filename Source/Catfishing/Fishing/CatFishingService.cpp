@@ -15,7 +15,6 @@
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
-#include "Equipment/CatInventoryItemUseRegistry.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
@@ -242,13 +241,20 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 			? ECatFishingCommandError::EquipmentRevisionConflict : ECatFishingCommandError::DependencyUnavailable;
 		return Finish(Result);
 	}
+	// Begin 已推进装备版本；失败回滚必须回传 Release 后版本，客户端才会刷新到归还鱼饵后的背包快照。
+	const auto ReleaseFishingUseAndFinish = [&Equipment, &Finish, &Result, SessionId](
+		const ECatFishingCommandError Error)
+	{
+		const FCatFishingUseOperationResult Released = Equipment->ReleaseFishingUse(SessionId);
+		Result.Command.EquipmentRevision = Released.EquipmentRevision;
+		Result.Command.Error = Error;
+		return Finish(Result);
+	};
 	const UCatFishingPresentationSettings* Presentation = GetDefault<UCatFishingPresentationSettings>();
 	UClass* HookClass = Presentation ? Presentation->HookActorClass.LoadSynchronous() : nullptr;
 	if (!HookClass || !HookClass->IsChildOf(ACatFishingHookActor::StaticClass()))
 	{
-		Equipment->ReleaseFishingUse(SessionId);
-		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
-		return Finish(Result);
+		return ReleaseFishingUseAndFinish(ECatFishingCommandError::DependencyUnavailable);
 	}
 	const FTransform HookTransform(Rod->GetRodTipWorldTransform().GetRotation(),
 		Rod->GetRodTipWorldTransform().GetLocation());
@@ -256,17 +262,13 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		Rod, Character, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (!Hook)
 	{
-		Equipment->ReleaseFishingUse(SessionId);
-		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
-		return Finish(Result);
+		return ReleaseFishingUseAndFinish(ECatFishingCommandError::DependencyUnavailable);
 	}
 	Hook->DeferInitialPresentationFromAuthority();
 	if (!Hook->InitializeAuthoritativeIdentity(SessionId, CastAttemptId))
 	{
 		Hook->Destroy();
-		Equipment->ReleaseFishingUse(SessionId);
-		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
-		return Finish(Result);
+		return ReleaseFishingUseAndFinish(ECatFishingCommandError::DependencyUnavailable);
 	}
 	Hook->FinishSpawning(HookTransform);
 	ACatFishingSession* Session = World->SpawnActorDeferred<ACatFishingSession>(ACatFishingSession::StaticClass(),
@@ -290,18 +292,14 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	{
 		if (Session) Session->Destroy();
 		Hook->Destroy();
-		Equipment->ReleaseFishingUse(SessionId);
-		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
-		return Finish(Result);
+		return ReleaseFishingUseAndFinish(ECatFishingCommandError::DependencyUnavailable);
 	}
 	Session->FinishSpawning(Character->GetActorTransform());
 	if (!Session->StartPreparedSessionLogicFromAuthority())
 	{
 		Session->AbortPreparedSessionFromAuthority();
 		Hook->Destroy();
-		Equipment->ReleaseFishingUse(SessionId);
-		Result.Command.Error = ECatFishingCommandError::DependencyUnavailable;
-		return Finish(Result);
+		return ReleaseFishingUseAndFinish(ECatFishingCommandError::DependencyUnavailable);
 	}
 	Sessions.Add(SessionId, Session);
 	Result.Command.bCommitted = true;
@@ -1055,7 +1053,7 @@ bool UCatFishingService::TransferSessionFisher(ACatFishingSession* Session, ACon
 	return true;
 }
 
-// 鱼竿登记流程：先把 Actor 的物品实例身份交给通用登记器占位；再写鱼竿自己的玩家弱索引；任一侧失败都会拒绝这次放杆。
+// 鱼竿登记流程：服务只维护玩家到已部署鱼竿的弱索引；相同 Actor 重放成功，不同存活 Actor 被拒绝。
 bool UCatFishingService::RegisterDeployedRod(APlayerState* PlayerState, ACatFishingRodActor* RodActor)
 {
 	CompactDeployedRods();
@@ -1063,21 +1061,10 @@ bool UCatFishingService::RegisterDeployedRod(APlayerState* PlayerState, ACatFish
 	{
 		return false;
 	}
-	UCatInventoryItemUseRegistry* ItemUseRegistry = GetWorld()
-		? GetWorld()->GetSubsystem<UCatInventoryItemUseRegistry>() : nullptr;
-	if (!ItemUseRegistry || !ItemUseRegistry->RegisterWorldItemActor(RodActor))
-	{
-		return false;
-	}
 	const TWeakObjectPtr<APlayerState> PlayerKey(PlayerState);
 	if (const TWeakObjectPtr<ACatFishingRodActor>* Existing = DeployedRodByPlayerState.Find(PlayerKey))
 	{
-		const bool bSameActor = Existing->Get() == RodActor;
-		if (!bSameActor)
-		{
-			ItemUseRegistry->UnregisterWorldItemActor(RodActor);
-		}
-		return bSameActor;
+		return Existing->Get() == RodActor;
 	}
 	DeployedRodByPlayerState.Add(PlayerKey, RodActor);
 	return true;
@@ -1098,13 +1085,8 @@ void UCatFishingService::UnregisterDeployedRod(const APlayerState* PlayerState,
 	ACatFishingRodActor* ExistingRod = Existing ? Existing->Get(true) : nullptr;
 	if (ExistingRod == ExpectedRodActor)
 	{
-		// EndPlay/异常销毁也从这里注销；先恢复该竿全部操作人的移动，不能只丢掉 Registry 线索。
+		// EndPlay/异常销毁也从这里注销；先恢复该竿全部操作人的移动，再清理服务自己的弱索引。
 		ReleaseRodOperatorsAndRestoreMovement(ExistingRod);
-		if (UCatInventoryItemUseRegistry* ItemUseRegistry = GetWorld()
-			? GetWorld()->GetSubsystem<UCatInventoryItemUseRegistry>() : nullptr)
-		{
-			ItemUseRegistry->UnregisterWorldItemActor(const_cast<ACatFishingRodActor*>(ExpectedRodActor));
-		}
 		DeployedRodByPlayerState.Remove(PlayerKey);
 	}
 	CompactDeployedRods();
@@ -1153,7 +1135,7 @@ void UCatFishingService::CompactSessions()
 	}
 }
 
-// 鱼竿 Registry 压缩流程：任一弱端失效即删除整条登记，不保留可阻塞后续 Place 的幽灵槽位。
+// 已部署鱼竿弱索引压缩流程：任一弱端失效即删除整条登记，不保留可阻塞后续 Place 的旧槽位。
 void UCatFishingService::CompactDeployedRods()
 {
 	for (auto It = DeployedRodByPlayerState.CreateIterator(); It; ++It)

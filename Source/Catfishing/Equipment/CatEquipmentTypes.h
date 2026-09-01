@@ -185,7 +185,7 @@ struct FCatFishingFailureResult
 	double RemainingRodDurability = 0.0;
 };
 
-/** Fishing use reservation 的 Begin 结果；bReserved 表示本次 Fishing 已保护一份鱼饵数量，直到 Commit 或 Release 收口。 */
+/** Fishing use reservation 的 Begin 结果；bReserved 表示本次 Fishing 已从随身库存暂存一份鱼饵，直到 Commit 消耗或 Release 归还。 */
 USTRUCT(BlueprintType)
 struct FCatFishingUseReservationResult
 {

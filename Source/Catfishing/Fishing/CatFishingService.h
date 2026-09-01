@@ -83,7 +83,7 @@ public:
 	 */
 	bool TransferSessionFisher(ACatFishingSession* Session, AController* NewFisherController);
 
-	/** 为 PlayerState 登记唯一部署鱼竿；物品实例占用先进入通用登记器，相同 Actor 重放成功，不同 Actor 拒绝。 */
+	/** 为 PlayerState 登记唯一部署鱼竿；相同 Actor 重放成功，不同存活 Actor 被拒绝。 */
 	bool RegisterDeployedRod(APlayerState* PlayerState, ACatFishingRodActor* RodActor);
 
 	/** 仅当当前登记值精确匹配 ExpectedRodActor 时注销，避免旧 Actor 迟到回调删除替代鱼竿。 */
@@ -92,7 +92,7 @@ public:
 	/** 仅统计当前存活且未终态的 Session，不暴露服务器索引。 */
 	int32 GetTrackedSessionCountForDiagnostics() const;
 
-	/** 仅统计 key/value 都存活的鱼竿登记，不暴露服务器 Registry。 */
+	/** 仅统计 key/value 都存活的已部署鱼竿弱索引；诊断只看数量，不暴露服务内部表。 */
 	int32 GetDeployedRodCountForDiagnostics() const;
 
 private:
@@ -138,7 +138,7 @@ private:
 	TMap<FString, FCatBeginCastResult> BeginCastTerminalCache;
 	TSet<FString> BeginCastInProgress;
 
-	/** PlayerState 到其当前唯一部署鱼竿的服务器弱 Registry；不强持 Actor，也不扫描 World 重建。 */
+	/** PlayerState 到其当前唯一部署鱼竿的服务器弱索引；不强持 Actor，也不扫描 World 重建。 */
 	TMap<TWeakObjectPtr<APlayerState>, TWeakObjectPtr<ACatFishingRodActor>> DeployedRodByPlayerState;
 
 	/** teardown 后永久拒绝本 World 新会话。 */

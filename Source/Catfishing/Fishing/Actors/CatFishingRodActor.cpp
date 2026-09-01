@@ -236,18 +236,6 @@ bool ACatFishingRodActor::SetDeployedFromAuthority(const bool bInDeployed, const
 
 const FCatFishingRodPresentationState& ACatFishingRodActor::GetPresentationState() const { return PresentationState; }
 
-// 通用物品实例身份读取流程：只返回 PresentationState 里由权威初始化写入的 ItemInstanceId，不从 Actor 名称或鱼竿服务反推。
-FGuid ACatFishingRodActor::GetInventoryItemInstanceIdForRegistry() const
-{
-	return PresentationState.ItemInstanceId;
-}
-
-// 通用物品定义身份读取流程：鱼竿对登记器只暴露 DefinitionId；鱼竿专属皮肤、站位和状态仍留在钓鱼表现结构里。
-FName ACatFishingRodActor::GetInventoryItemDefinitionIdForRegistry() const
-{
-	return PresentationState.RodDefinitionId;
-}
-
 // 三个世界 Transform 都是“本地规范 Transform 叠乘 Actor 当前世界 Transform”，随 Actor 移动/旋转自动更新
 FTransform ACatFishingRodActor::GetRodTipWorldTransform() const { return RodTipCanonicalLocalTransform * GetActorTransform(); }
 FTransform ACatFishingRodActor::GetStandWorldTransform() const { return GetOperatorStandWorldTransform(0); }
