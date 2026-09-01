@@ -83,6 +83,9 @@ function Invoke-ModuleStaticCheck {
     Assert-TextPattern "bAutoGrantStarterScoopNet=True" "Config/DefaultGame.ini" "temporary starter scoop grant is explicitly enabled"
     Assert-TextPattern "bAutoGrantStarterScoopNet" "Docs/Development" "temporary starter scoop grant is tracked in the human progress entry"
     Assert-TextPattern "Equip_Rod_StarterT1" "Config/DefaultGame.ini" "formal starter rod asset entry"
+    Assert-TextPattern "Equip_Rod_ShopT2" "Config/DefaultGame.ini" "formal glass fiber rod asset entry"
+    Assert-TextPattern 'DISPLAY_NAME = "玻璃纤维竿"' "Scripts/configure_glass_fiber_rod.py" "ShopRodT2 is authored as the glass fiber rod"
+    Assert-TextPattern "GlassRod=ShopRodT2" "Scripts/verify_equipment_shop_runtime.py" "runtime verifies the glass fiber rod identity"
     Assert-TextPattern "Equip_ScoopNet_Starter" "Config/DefaultGame.ini" "formal starter scoop asset entry"
     Assert-TextPattern "Equip_Bait_Bug" "Config/DefaultGame.ini" "formal bait asset entry"
     Assert-TextPattern "Equip_Chum_Bug" "Config/DefaultGame.ini" "formal chum asset entry"
@@ -113,7 +116,7 @@ function Invoke-ModuleStaticCheck {
     Assert-TextPattern "DOREPLIFETIME\(ThisClass, AuthorizedEquipmentUnlockIds\)" "Source/Catfishing/Framework/Game/CatGameplayTypes.cpp" "authorized unlock replication"
     Assert-TextPattern "RecordCommittedUnlock" "Source/Catfishing/Collection/CatRunImprintService.h" "unlock grant delivery entry"
     Assert-TextPattern "GetEquipmentUnlockSnapshot" "Source/Catfishing/Profile/CatProfileSubsystem.h" "profile unlock snapshot"
-    Write-Host "EQUIPMENT_SHOP_STATIC_PASS FormalConfig=True ShopCatalogDataTable=True CampInventoryDelivery=True RejectsLegacyCatalog=True NormalBaitInventoryGate=True"
+    Write-Host "EQUIPMENT_SHOP_STATIC_PASS FormalConfig=True GlassRod=ShopRodT2 ShopCatalogDataTable=True CampInventoryDelivery=True RejectsLegacyCatalog=True NormalBaitInventoryGate=True"
 }
 
 function Invoke-ModuleBuild {

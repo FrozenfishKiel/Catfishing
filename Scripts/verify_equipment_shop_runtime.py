@@ -4,6 +4,7 @@
 和营地公共仓库 View 配置可以加载；购物车支付、公共仓库入库与玩家取用仍必须由 Automation/PIE 单独证明。
 """
 
+import json
 import math
 import unreal
 
@@ -142,7 +143,24 @@ def _validate_shop_catalog_table(settings):
     }
     missing_rows = sorted(expected_rows - row_names)
     _require(not missing_rows, f"正式商店 DataTable 缺少商品行: {missing_rows}")
-    return row_names
+    return table, row_names
+
+
+def _validate_glass_fiber_rod_contract(definition, table):
+    """固定 ShopRodT2 的正式产品身份，避免商店与背包再次出现两种命名口径。"""
+    display_name = _as_name(_get_property(definition, "display_name", "DisplayName"))
+    description = _as_name(_get_property(definition, "description", "Description"))
+    _require(display_name == "玻璃纤维竿",
+             f"ShopRodT2 正式显示名不匹配: actual={display_name} expected=玻璃纤维竿")
+    _require("玻璃纤维" in description, f"ShopRodT2 正式说明未表达玻璃纤维身份: {description}")
+
+    rows = json.loads(unreal.DataTableFunctionLibrary.export_data_table_to_json_string(table))
+    shop_row = next((row for row in rows if row.get("Name") == "Rod_ShopT2"), None)
+    _require(shop_row is not None, "正式商店缺少 Rod_ShopT2 行")
+    _require(shop_row.get("DefinitionId") == "ShopRodT2",
+             f"玻璃纤维竿商店映射错误: actual={shop_row.get('DefinitionId')} expected=ShopRodT2")
+    _require("玻璃纤维竿" in shop_row.get("DisplayNameOverride", ""),
+             f"玻璃纤维竿商店显示名不匹配: {shop_row.get('DisplayNameOverride')}")
 
 
 def main() -> None:
@@ -234,7 +252,8 @@ def main() -> None:
              "ShopEconomy runtime 未启用")
     _require(int(_get_property(shop_settings, "starting_team_wallet_balance", "StartingTeamWalletBalance")) >= 5,
              "团队公款初始余额不足以购买正式鱼竿和正式鱼漂")
-    catalog_rows = _validate_shop_catalog_table(shop_settings)
+    catalog_table, catalog_rows = _validate_shop_catalog_table(shop_settings)
+    _validate_glass_fiber_rod_contract(loaded_definitions["ShopRodT2"], catalog_table)
 
     camp_inventory_cdo = unreal.get_default_object(_load_class("/Script/Catfishing.CatCampInventoryActor"))
     inventory_view_class = _get_property(camp_inventory_cdo, "inventory_view_class", "InventoryViewClass")
@@ -251,7 +270,8 @@ def main() -> None:
         "Definitions=StarterRodT1,ShopRodT2,StarterScoopNet,BugBait,FlashingBait,FruitBait,GiantLureBait,MeatBait,"
         "MoonlightBait,NectarBait,SoundBait,FeatherFloat,YarnBallFloat,BellFloat,BugChum,"
         "FermentedGrainChum,FruitFragranceChum,HolyLightChum "
-        f"CatalogTable=DT_ShopCatalog_Default CatalogRows={len(catalog_rows)} Thumbnails={len(expected_thumbnails)} "
+        f"CatalogTable=DT_ShopCatalog_Default CatalogRows={len(catalog_rows)} GlassRod=ShopRodT2 "
+        f"Thumbnails={len(expected_thumbnails)} "
         f"CampInventoryView={inventory_view_class} PlayerStarts={len(player_starts)} Regions={len(regions)} PricePolicy={price_policy}"
     )
 
