@@ -23,7 +23,7 @@ struct FCatCampInventorySnapshot
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 
-	/** 公共仓库格子数组；每个格子沿用 DefinitionId + Quantity，堆叠语义由装备定义和仓库配置共同决定。 */
+	/** 公共仓库格子数组；每个格子沿用运行期物品实例，堆叠语义由装备定义和仓库配置共同决定。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatRunInventorySlot> InventorySlots;
 };

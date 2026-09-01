@@ -419,8 +419,12 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 	{
 		return;
 	}
+	// 选择提交前重读当前格：同定义物品也可能是不同实例，必须同时比对实例 ID 和数量，避免 UI 旧快照选中已经移动或部署的那件物品。
 	const FCatInventorySlotView* CurrentSlot = FindCurrentRunInventorySlot(State, Slot);
-	if (!CurrentSlot || !CurrentSlot->bOccupied || CurrentSlot->EquipmentDefinitionId.IsNone())
+	if (!CurrentSlot || !CurrentSlot->bOccupied || CurrentSlot->EquipmentDefinitionId.IsNone()
+		|| CurrentSlot->EquipmentDefinitionId != Slot.EquipmentDefinitionId
+		|| CurrentSlot->InventoryItemInstanceId != Slot.InventoryItemInstanceId
+		|| CurrentSlot->Quantity != Slot.Quantity)
 	{
 		return;
 	}
@@ -428,20 +432,28 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 	FName BaitDefinitionId = State.Equipment.BaitDefinitionId;
 	FName FloatDefinitionId = State.Equipment.FloatDefinitionId;
 	FName ScoopNetDefinitionId = State.Equipment.ScoopNetDefinitionId;
+	FGuid RodItemInstanceId = State.Equipment.RodItemInstanceId;
+	FGuid BaitItemInstanceId = State.Equipment.BaitItemInstanceId;
+	FGuid FloatItemInstanceId = State.Equipment.FloatItemInstanceId;
+	FGuid ScoopNetItemInstanceId = State.Equipment.ScoopNetItemInstanceId;
 	const int64 ExpectedEquipmentRevision = State.Equipment.Revision;
 	switch (CurrentSlot->EquipmentKind)
 	{
 	case ECatEquipmentKind::Rod:
 		RodDefinitionId = CurrentSlot->EquipmentDefinitionId;
+		RodItemInstanceId = CurrentSlot->InventoryItemInstanceId;
 		break;
 	case ECatEquipmentKind::Bait:
 		BaitDefinitionId = CurrentSlot->EquipmentDefinitionId;
+		BaitItemInstanceId = CurrentSlot->InventoryItemInstanceId;
 		break;
 	case ECatEquipmentKind::Float:
 		FloatDefinitionId = CurrentSlot->EquipmentDefinitionId;
+		FloatItemInstanceId = CurrentSlot->InventoryItemInstanceId;
 		break;
 	case ECatEquipmentKind::ScoopNet:
 		ScoopNetDefinitionId = CurrentSlot->EquipmentDefinitionId;
+		ScoopNetItemInstanceId = CurrentSlot->InventoryItemInstanceId;
 		break;
 	default:
 		return;
@@ -457,12 +469,14 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 	if (CatController->HasAuthority())
 	{
 		CatController->ServerConfigureEquipment_Implementation(RequestId, ExpectedEquipmentRevision,
-			RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId);
+			RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId,
+			RodItemInstanceId, BaitItemInstanceId, FloatItemInstanceId, ScoopNetItemInstanceId);
 	}
 	else
 	{
 		CatController->ServerConfigureEquipment(RequestId, ExpectedEquipmentRevision,
-			RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId);
+			RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId,
+			RodItemInstanceId, BaitItemInstanceId, FloatItemInstanceId, ScoopNetItemInstanceId);
 	}
 }
 
@@ -518,6 +532,7 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 			|| GetRunInventorySlotIndex(*CurrentSource) == INDEX_NONE
 			|| GetRunInventorySlotIndex(*CurrentTarget) == INDEX_NONE
 			|| CurrentSource->EquipmentDefinitionId != SourceSlot.EquipmentDefinitionId
+			|| CurrentSource->InventoryItemInstanceId != SourceSlot.InventoryItemInstanceId
 			|| CurrentSource->Quantity != SourceSlot.Quantity)
 		{
 			UE_LOG(LogCatUI, Warning,

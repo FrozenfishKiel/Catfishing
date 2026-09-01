@@ -28,10 +28,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Equipment")
 	const FCatEquipmentLoadoutSnapshot& GetSnapshot() const;
 
-	/** 根据服务器目录、可信解锁证明和随身库存持有量设置当前钓鱼选择；它不发放物品，也不能借重复请求修复耐久。 */
+	/** 根据服务器目录、可信解锁证明和随身库存持有量设置当前钓鱼选择；实例 ID 有效时精确选择同一件物品，无效时兼容旧定义选择。 */
 	FCatDomainCommandResult ConfigureLoadoutFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName RodDefinitionId, FName BaitDefinitionId, FName FloatDefinitionId,
-		FName ScoopNetDefinitionId = NAME_None, FName RodSkinDefinitionId = NAME_None);
+		FName ScoopNetDefinitionId = NAME_None, FName RodSkinDefinitionId = NAME_None,
+		FGuid RodItemInstanceId = FGuid(), FGuid BaitItemInstanceId = FGuid(),
+		FGuid FloatItemInstanceId = FGuid(), FGuid ScoopNetItemInstanceId = FGuid());
 
 	/** 只读预检数量型物品能否进入随身库存；商店用它保证扣款前已经确认角色确实收得下这组数量。 */
 	ECatDomainCommandError ValidateInventoryQuantityGrant(FGuid RequestId, FName DefinitionId,
@@ -48,6 +50,12 @@ public:
 	FCatDomainCommandResult GrantEquipmentFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName DefinitionId);
 
+	/** 统一物品使用入口；成功时把指定实例从随身库存移入活动使用记录，调用方再按结果生成世界表现或执行效果。 */
+	FCatInventoryItemUseResult Use(FGuid RequestId, int64 ExpectedRevision, FGuid ItemInstanceId);
+
+	/** 统一物品停止使用入口；成功时把活动使用记录中的同一实例放回随身库存，放不下时保持使用态不变。 */
+	FCatInventoryItemUseResult UnUse(FGuid RequestId, FGuid ItemInstanceId);
+
 	/** 整理两个随身库存格；服务器按数组下标移动、合并或交换物品，成功后发布同一份库存快照。 */
 	FCatDomainCommandResult MoveInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		int32 SourceSlotIndex, int32 TargetSlotIndex);
@@ -61,6 +69,10 @@ public:
 		ECatFishingFailurePenalty Penalty);
 
 	/** Fishing 会话开始前按 SessionId 申请当前钓鱼选择使用权；不同鱼竿会话可并行，各自保护一份鱼饵库存。 */
+	FCatFishingUseReservationResult BeginFishingUse(FGuid FishingSessionId, FGuid RodItemInstanceId,
+		FName RodDefinitionId,
+		FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);
+	/** 旧定义型 Fishing 预留入口的兼容壳；只从当前选择读取实例 ID 后转入新入口，不再维护第二套库存判断。 */
 	FCatFishingUseReservationResult BeginFishingUse(FGuid FishingSessionId, FName RodDefinitionId,
 		FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);
 	/** 立即提交 Fishing 已保护的鱼饵数量，并在成功时发布新的 Equipment 快照。 */
@@ -99,6 +111,8 @@ private:
 	struct FCatFishingUseRecord
 	{
 		FGuid SessionId;
+		/** 本场 Fishing 绑定的鱼竿实例身份；它来自已部署鱼竿 Actor，用来把竿耐久回写到同一活动物品实例。 */
+		FGuid RodItemInstanceId;
 		FName RodDefinitionId = NAME_None;
 		FName BaitDefinitionId = NAME_None;
 		FName FloatDefinitionId = NAME_None;
@@ -111,6 +125,18 @@ private:
 		bool bBaitCommitPublished = false;
 		bool bWearCommitted = false;
 		bool bBreakCommitted = false;
+		bool bReleased = false;
+	};
+
+	struct FCatInventoryItemUseRecord
+	{
+		/** 正在使用的物品实例身份；同一实例只能存在一条活动记录，防止背包和场景同时持有它。 */
+		FGuid ItemInstanceId;
+		/** 从库存移出的物品副本；UnUse 放回库存时必须沿用它，不能按 DefinitionId 重新生成一件。 */
+		FCatRunInventorySlot Item;
+		/** Use 成功时的 Equipment 版本；诊断用它串联库存移出和后续世界 Actor 生成。 */
+		int64 UseRevision = 0;
+		/** 活动记录是否已经收口；收口后的记录不再参与可用性判断。 */
 		bool bReleased = false;
 	};
 
@@ -128,12 +154,18 @@ private:
 
 	FCatFishingUseRecord* FindFishingUseRecord(FGuid FishingSessionId);
 	const FCatFishingUseRecord* FindFishingUseRecord(FGuid FishingSessionId) const;
+	FCatInventoryItemUseRecord* FindInventoryItemUseRecord(FGuid ItemInstanceId);
+	const FCatInventoryItemUseRecord* FindInventoryItemUseRecord(FGuid ItemInstanceId) const;
+	/** 是否存在尚未收口的物品 Use 记录；当前主要覆盖已部署鱼竿，避免换装和维修误改同一实例。 */
+	bool HasActiveInventoryItemUse() const;
 	/** 某种鱼饵正在被 Fishing 会话保护但尚未提交的数量；授予、直接扣除和使用事务都会读它避免同一份饵被双花。 */
 	int32 GetPendingReservedFishingBaitCount(FName DefinitionId) const;
 	/** 读取某个定义在库存格数组中的可见数量；选择自动切换和商店预检用它判断旧选择是否仍有实物。 */
 	int32 GetInventoryItemQuantity(FName DefinitionId) const;
 	/** 根据新入库定义修正空选择、无库存旧选择或已断/耐久非法的同定义已选竿；它只改钓鱼选择，不把库存物品移出数组。 */
 	void AutoSelectGrantedInventoryItem(const UCatEquipmentDefinition& Definition, FName DefinitionId);
+	/** 把当前选择中的鱼竿状态同步到库存格或活动 Use 记录；耐久、断竿和收杆归还都读这份实例副本。 */
+	void SyncSelectedRodStateToSelectedInstance();
 	int32 GetPendingReservedRunConsumableCount(FName DefinitionId) const;
 	FCatRunConsumableUseResult MakeRunConsumableUseResult(FGuid OperationId,
 		ECatDomainCommandError Error, const FCatRunConsumableUseRecord* Record = nullptr) const;
@@ -157,11 +189,34 @@ private:
 	/** 让复制快照至少拥有配置声明的格子数；只追加空格，不截断已有物品。 */
 	void EnsureInventorySlotArray();
 
+	/** 补齐现有库存格的实例身份和工具状态；返回值表示本次是否修正了旧数据。 */
+	bool NormalizeInventorySlots();
+
+	/** 按实例身份查找随身库存格；Use、选择和诊断用它避免只按 DefinitionId 误伤同类物品。 */
+	FCatRunInventorySlot* FindInventorySlotByInstanceId(FGuid ItemInstanceId);
+	const FCatRunInventorySlot* FindInventorySlotByInstanceId(FGuid ItemInstanceId) const;
+
+	/** 读取某个定义当前可用的第一份实例；旧 UI 仍按定义选择时用它落到具体物品实例，鱼竿会优先返回未断且有耐久的那份。 */
+	const FCatRunInventorySlot* FindFirstInventorySlotByDefinition(FName DefinitionId) const;
+
+	/** 判断一份完整实例副本能否原样放回随身库存；UnUse 用它保证收杆失败不会复制出第二根竿。 */
+	bool CanStoreInventorySlot(const UCatEquipmentDefinition& Definition, const FCatRunInventorySlot& Item) const;
+
 	/** 把指定数量放入库存格数组；调用前必须已通过 CanStoreInventoryItem，成功后只修改这份库存事实。 */
 	bool AddInventoryItemQuantity(const UCatEquipmentDefinition& Definition, FName DefinitionId, int32 Quantity);
 
+	/** 把一份完整实例副本放入库存格数组；它保留 ItemInstanceId 和工具状态，不按 DefinitionId 重新生成物品。 */
+	bool AddInventoryItemSlot(const UCatEquipmentDefinition& Definition, const FCatRunInventorySlot& Item);
+
+	/** 服务器内部授予一份完整库存实例；营地取用和收口补偿用它避免按定义重新生成同类装备。 */
+	FCatDomainCommandResult GrantInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedRevision,
+		const FCatRunInventorySlot& Item);
+
 	/** 从库存格数组扣除指定数量；数量归零时清空格子，成功后保留数组位置供 UI 稳定显示。 */
 	bool RemoveInventoryItemQuantity(FName DefinitionId, int32 Quantity);
+
+	/** 从库存格数组移出指定实例并返回副本；Use 用它保证场景 Actor 和背包不会同时持有同一物品。 */
+	bool RemoveInventoryItemInstance(FGuid ItemInstanceId, FCatRunInventorySlot& OutItem);
 
 	/** 构造操作+RequestId 幂等键；只在当前 Character 生命周期使用。 */
 	static FString MakeTerminalKey(const TCHAR* Operation, FGuid RequestId);
@@ -184,6 +239,8 @@ private:
 
 	/** 当前 Character 生命周期内按 SessionId 隔离的 fishing reservation/tombstone；不复制也不持久化。 */
 	TMap<FGuid, FCatFishingUseRecord> FishingUseRecords;
+	/** 当前 Character 生命周期内正在 Use 的物品实例；场景 Actor 收口前不会重新出现在随身库存。 */
+	TMap<FGuid, FCatInventoryItemUseRecord> InventoryItemUseRecords;
 	TMap<FGuid, FCatRunConsumableUseRecord> RunConsumableUseRecords;
 	FGuid ActiveRunConsumableUseOperationId;
 };

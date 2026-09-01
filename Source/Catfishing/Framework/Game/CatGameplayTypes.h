@@ -509,10 +509,12 @@ public:
 	/** 公共领域命令结果到达 owning client 后广播的本机读模型事件；订阅方只能刷新 UI。 */
 	FCatCampCommandResultReceived OnCampCommandResultReceived;
 
-	/** 提交当前钓鱼选择；服务器目录、可信解锁证明和随身库存持有量共同通过后才写入，客户端选择本身不授予权限。 */
+	/** 提交当前钓鱼选择；实例 ID 用来锁定同定义下的具体物品，服务器仍以目录、解锁证明和库存事实作最终裁决。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
 	void ServerConfigureEquipment(FGuid RequestId, int64 ExpectedRevision, FName RodDefinitionId,
-		FName BaitDefinitionId, FName FloatDefinitionId, FName ScoopNetDefinitionId);
+		FName BaitDefinitionId, FName FloatDefinitionId, FName ScoopNetDefinitionId,
+		FGuid RodItemInstanceId, FGuid BaitItemInstanceId, FGuid FloatItemInstanceId,
+		FGuid ScoopNetItemInstanceId);
 
 	/** 整理当前角色随身库存中的两个格子；服务器按 Equipment Revision 和数组下标重读后移动、合并或交换。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")

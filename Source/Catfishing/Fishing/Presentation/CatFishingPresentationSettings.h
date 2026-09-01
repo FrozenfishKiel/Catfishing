@@ -7,7 +7,6 @@
 class ACatChumFieldPresentationActor;
 class ACatFishEncounterActor;
 class ACatFishingHookActor;
-class ACatFishingRodActor;
 class UAnimMontage;
 class UCatRodSkinDefinition;
 
@@ -20,8 +19,9 @@ public:
 	const UCatRodSkinDefinition* FindRuntimeRodSkin(FName RodSkinDefinitionId, FName RodDefinitionId) const;
 	/** 按“重量约等于体积”计算鱼 Mesh 的统一线性缩放；非法输入安全回退为 1。 */
 	double ComputeFishUniformVisualScale(double WeightKilograms) const;
-	UPROPERTY(Config, EditAnywhere) TSoftClassPtr<ACatFishingRodActor> RodActorClass;
+	/** 抛竿后生成的浮漂/鱼钩表现 Actor 类；它属于 Fishing 表现链，不代表某个库存物品实例。 */
 	UPROPERTY(Config, EditAnywhere) TSoftClassPtr<ACatFishingHookActor> HookActorClass;
+	/** 上钩鱼在世界中的表现 Actor 类；它由 Fishing Session 生成，不进入玩家库存。 */
 	UPROPERTY(Config, EditAnywhere) TSoftClassPtr<ACatFishEncounterActor> FishEncounterActorClass;
 
 	/** 当前鱼 Mesh 在 UniformScale=1 时所代表的重量。当前共用一套鱼 Mesh，未来可迁入鱼种表现 DA。 */

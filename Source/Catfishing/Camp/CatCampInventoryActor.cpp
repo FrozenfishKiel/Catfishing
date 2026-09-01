@@ -323,33 +323,39 @@ FCatDomainCommandResult ACatCampInventoryActor::AddItemsFromAuthority(const FGui
 
 // 取用预检流程：
 // 1. 先验证公共仓库槽位、数量、authority 和目标玩家装备组件，确保取用有明确来源和接收方。
-// 2. 再读取源槽 DefinitionId 对应的装备定义；消耗品按数量型授予预检，装备型只允许一次取一件。
-// 3. 目标玩家能接收时才返回 None；本函数不修改公共仓库，也不调用玩家入库提交。
+// 2. 再复制源格形成本次要取出的完整实例；消耗品取指定数量，装备型只允许一次取一件。
+// 3. 目标玩家能原样接收该实例时才返回 None；本函数不修改公共仓库，也不调用玩家入库提交。
 ECatDomainCommandError ACatCampInventoryActor::ValidateWithdrawToEquipment(const FGuid RequestId,
 	const int32 SourceSlotIndex, const int32 Quantity, UCatEquipmentComponent* TargetEquipment) const
 {
+	const AActor* TargetOwner = TargetEquipment ? TargetEquipment->GetOwner() : nullptr;
 	if (!HasAuthority() || !RequestId.IsValid() || !TargetEquipment || Quantity <= 0
-		|| !Snapshot.InventorySlots.IsValidIndex(SourceSlotIndex))
+		|| !TargetOwner || !TargetOwner->HasAuthority() || !Snapshot.InventorySlots.IsValidIndex(SourceSlotIndex))
 	{
 		return ECatDomainCommandError::InvalidPayload;
+	}
+	if (TargetEquipment->HasActiveFishingUse() || TargetEquipment->HasActiveRunConsumableUse())
+	{
+		return ECatDomainCommandError::InvalidPhase;
 	}
 	const FCatRunInventorySlot& SourceSlot = Snapshot.InventorySlots[SourceSlotIndex];
 	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
 	const UCatEquipmentDefinition* Definition =
 		Settings ? Settings->FindRuntimeDefinition(SourceSlot.DefinitionId) : nullptr;
-	if (!Definition || SourceSlot.DefinitionId.IsNone() || SourceSlot.Quantity < Quantity)
+	if (!Definition || !CatRunInventorySlotOperations::IsInventorySlotOccupied(SourceSlot)
+		|| !SourceSlot.ItemInstanceId.IsValid() || SourceSlot.Quantity < Quantity)
 	{
 		return ECatDomainCommandError::InvalidPayload;
 	}
-	if (Definition->bRunConsumable)
-	{
-		return TargetEquipment->ValidateInventoryQuantityGrant(RequestId, SourceSlot.DefinitionId, Quantity);
-	}
-	if (Quantity != 1)
+	if (!Definition->bRunConsumable && Quantity != 1)
 	{
 		return ECatDomainCommandError::InvalidPayload;
 	}
-	return TargetEquipment->ValidateEquipmentGrantFromAuthority(RequestId, SourceSlot.DefinitionId);
+	FCatRunInventorySlot WithdrawnItem = SourceSlot;
+	WithdrawnItem.Quantity = Quantity;
+	CatRunInventorySlotOperations::NormalizeStoredItemSlot(WithdrawnItem, *Definition);
+	return TargetEquipment->CanStoreInventorySlot(*Definition, WithdrawnItem)
+		? ECatDomainCommandError::None : ECatDomainCommandError::CapacityExceeded;
 }
 
 // 取用提交流程：
@@ -364,9 +370,11 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	FName SourceDefinitionId = NAME_None;
+	FGuid SourceItemInstanceId;
 	if (Snapshot.InventorySlots.IsValidIndex(SourceSlotIndex))
 	{
 		SourceDefinitionId = Snapshot.InventorySlots[SourceSlotIndex].DefinitionId;
+		SourceItemInstanceId = Snapshot.InventorySlots[SourceSlotIndex].ItemInstanceId;
 	}
 	if (!RequestId.IsValid())
 	{
@@ -376,8 +384,9 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 	}
 	const FString Key = MakeTerminalKey(TEXT("WithdrawToEquipment"), RequestId);
 	const FString PayloadSignature = FString::Printf(
-		TEXT("ExpectedCamp=%lld|Slot=%d|Definition=%s|Quantity=%d|ExpectedEquipment=%lld"),
-		ExpectedCampRevision, SourceSlotIndex, *SourceDefinitionId.ToString(), Quantity, ExpectedEquipmentRevision);
+		TEXT("ExpectedCamp=%lld|Slot=%d|Definition=%s|Instance=%s|Quantity=%d|ExpectedEquipment=%lld"),
+		ExpectedCampRevision, SourceSlotIndex, *SourceDefinitionId.ToString(),
+		*SourceItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), Quantity, ExpectedEquipmentRevision);
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
@@ -424,17 +433,21 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 
 	TArray<FCatRunInventorySlot> SavedSlots = Snapshot.InventorySlots;
 	FCatRunInventorySlot& SourceSlot = Snapshot.InventorySlots[SourceSlotIndex];
+	FCatRunInventorySlot WithdrawnItem = SourceSlot;
+	WithdrawnItem.Quantity = Quantity;
+	CatRunInventorySlotOperations::NormalizeStoredItemSlot(WithdrawnItem, *Definition);
+	if (Definition->bRunConsumable && Quantity < SourceSlot.Quantity)
+	{
+		WithdrawnItem.ItemInstanceId = FGuid::NewGuid();
+	}
 	SourceSlot.Quantity -= Quantity;
 	if (SourceSlot.Quantity <= 0)
 	{
-		SourceSlot.DefinitionId = NAME_None;
-		SourceSlot.Quantity = 0;
+		SourceSlot = FCatRunInventorySlot();
 	}
 
-	const FCatDomainCommandResult Grant = Definition->bRunConsumable
-		? TargetEquipment->GrantInventoryQuantityFromAuthority(RequestId, ExpectedEquipmentRevision,
-			SourceDefinitionId, Quantity)
-		: TargetEquipment->GrantEquipmentFromAuthority(RequestId, ExpectedEquipmentRevision, SourceDefinitionId);
+	const FCatDomainCommandResult Grant =
+		TargetEquipment->GrantInventorySlotFromAuthority(RequestId, ExpectedEquipmentRevision, WithdrawnItem);
 	const bool bGrantStanding = Grant.bCommitted || Grant.Error == ECatDomainCommandError::AlreadyResolved;
 	if (!bGrantStanding)
 	{
@@ -829,7 +842,7 @@ bool ACatCampInventoryActor::AddItemQuantity(const UCatEquipmentDefinition& Defi
 
 // 格子写入流程：
 // 1. 先按配置容量补齐传入数组，调用方传临时数组时就是模拟，传 Snapshot 时就是正式写入。
-// 2. 同定义未满格优先吸收数量，剩余数量再落到空格；装备型和数量型堆叠上限都来自装备定义。
+// 2. 同定义未满格优先吸收数量并补齐该堆栈实例身份，剩余数量再创建新的运行期实例落到空格。
 // 3. 只有全部数量都放完才返回 true，调用方因此可以用它保证整批入库不产生半批结果。
 bool ACatCampInventoryActor::AddItemQuantityToSlots(TArray<FCatRunInventorySlot>& InventorySlots,
 	const UCatEquipmentDefinition& Definition, const FName DefinitionId, const int32 Quantity) const
@@ -853,6 +866,7 @@ bool ACatCampInventoryActor::AddItemQuantityToSlots(TArray<FCatRunInventorySlot>
 	{
 		if (Slot.DefinitionId == DefinitionId && Slot.Quantity > 0 && Slot.Quantity < StackLimit)
 		{
+			CatRunInventorySlotOperations::NormalizeStoredItemSlot(Slot, Definition);
 			const int32 Added = FMath::Min(Remaining, StackLimit - Slot.Quantity);
 			Slot.Quantity += Added;
 			Remaining -= Added;
@@ -864,11 +878,10 @@ bool ACatCampInventoryActor::AddItemQuantityToSlots(TArray<FCatRunInventorySlot>
 	}
 	for (FCatRunInventorySlot& Slot : InventorySlots)
 	{
-		if (Slot.DefinitionId.IsNone() || Slot.Quantity <= 0)
+		if (!CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
 		{
 			const int32 Added = FMath::Min(Remaining, StackLimit);
-			Slot.DefinitionId = DefinitionId;
-			Slot.Quantity = Added;
+			Slot = CatRunInventorySlotOperations::MakeInventoryItemSlot(Definition, DefinitionId, Added);
 			Remaining -= Added;
 			if (Remaining <= 0)
 			{

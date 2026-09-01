@@ -1,6 +1,6 @@
 #include "Equipment/CatEquipmentDefinition.h"
 
-// 定义检查流程：验证总 gate、身份、类别与功能路线；装配类要求槽位，Rod 要正耐久，所有 Bait 都必须是局内耗材，Chum 还必须给出服务器读取的三轴增量。
+// 定义检查流程：验证总 gate、身份、类别与功能路线；装配类要求槽位，Rod 还要声明 UseActorClass，所有 Bait 都必须是局内耗材，Chum 还必须给出服务器读取的三轴增量。
 bool UCatEquipmentDefinition::IsRuntimeDefinitionReady() const
 {
 	const auto IsFiniteTransform = [](const FTransform& Transform)
@@ -21,7 +21,8 @@ bool UCatEquipmentDefinition::IsRuntimeDefinitionReady() const
 	}
 	if (Kind == ECatEquipmentKind::Rod)
 	{
-		return !bRunConsumable && !bSpecialBait && FMath::IsFinite(MaximumRodDurability) && MaximumRodDurability > 0.0
+		return !bRunConsumable && !bSpecialBait && !UseActorClass.IsNull()
+			&& FMath::IsFinite(MaximumRodDurability) && MaximumRodDurability > 0.0
 			&& FMath::IsFinite(FishingStrength) && FishingStrength > 0.0
 			&& FMath::IsFinite(MaximumLineLengthCentimeters) && MaximumLineLengthCentimeters > 0.0
 			&& FMath::IsFinite(BaseDurabilityWearPerSecond) && BaseDurabilityWearPerSecond >= 0.0

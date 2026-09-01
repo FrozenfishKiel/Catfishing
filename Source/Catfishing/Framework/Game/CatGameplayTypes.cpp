@@ -2675,10 +2675,11 @@ void ACatfishingPlayerController::ServerWithdrawCampInventoryItemToSlotAtActor_I
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 当前选择 RPC 流程：先过统一玩法 gate，当前 Pawn 还必须是项目 Character；EquipmentComponent 会验证目录、解锁和库存持有量后再写选择。
+// 当前选择 RPC 流程：先过统一玩法 gate，当前 Pawn 还必须是项目 Character；EquipmentComponent 会按实例 ID 或定义 ID 验证目录、解锁和库存事实后再写选择。
 void ACatfishingPlayerController::ServerConfigureEquipment_Implementation(const FGuid RequestId,
 	const int64 ExpectedRevision, const FName RodDefinitionId, const FName BaitDefinitionId,
-	const FName FloatDefinitionId, const FName ScoopNetDefinitionId)
+	const FName FloatDefinitionId, const FName ScoopNetDefinitionId, const FGuid RodItemInstanceId,
+	const FGuid BaitItemInstanceId, const FGuid FloatItemInstanceId, const FGuid ScoopNetItemInstanceId)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
@@ -2707,12 +2708,16 @@ void ACatfishingPlayerController::ServerConfigureEquipment_Implementation(const 
 		else
 		{
 			Result = Equipment->ConfigureLoadoutFromAuthority(RequestId, ExpectedRevision,
-				RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId);
+				RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId, NAME_None,
+				RodItemInstanceId, BaitItemInstanceId, FloatItemInstanceId, ScoopNetItemInstanceId);
 		}
 	}
-	UE_LOG(LogCatfishing, Log, TEXT("Event=configure_equipment Committed=%s Error=%s Revision=%lld Rod=%s Bait=%s Float=%s Net=%s"),
+	UE_LOG(LogCatfishing, Log, TEXT("Event=configure_equipment Committed=%s Error=%s Revision=%lld Rod=%s RodItem=%s Bait=%s BaitItem=%s Float=%s FloatItem=%s Net=%s NetItem=%s"),
 		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error), Result.Revision,
-		*RodDefinitionId.ToString(), *BaitDefinitionId.ToString(), *FloatDefinitionId.ToString(), *ScoopNetDefinitionId.ToString());
+		*RodDefinitionId.ToString(), *RodItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*BaitDefinitionId.ToString(), *BaitItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*FloatDefinitionId.ToString(), *FloatItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*ScoopNetDefinitionId.ToString(), *ScoopNetItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
 	DeliverCampCommandResultToOwningClient(Result);
 }
 

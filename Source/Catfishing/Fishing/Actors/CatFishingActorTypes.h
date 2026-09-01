@@ -34,6 +34,8 @@ struct FCatFishingRodPresentationState
 	GENERATED_BODY()
 	UPROPERTY(BlueprintReadOnly) FGuid RodActorId;
 	UPROPERTY(BlueprintReadOnly) int64 RodActorRevision = 0;
+	/** 这根场景鱼竿对应的运行期物品实例 ID；收杆按它 UnUse，避免同定义鱼竿在背包和场上重复存在。 */
+	UPROPERTY(BlueprintReadOnly) FGuid ItemInstanceId;
 	UPROPERTY(BlueprintReadOnly) FName RodDefinitionId = NAME_None;
 	UPROPERTY(BlueprintReadOnly) FName RodSkinDefinitionId = NAME_None;
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> OwnerPlayerState = nullptr;

@@ -1,249 +1,85 @@
 #include "UI/Shop/CatShopWidget.h"
 
-#include "Blueprint/WidgetTree.h"
-#include "Components/Border.h"
 #include "Components/Button.h"
-#include "Components/ButtonSlot.h"
-#include "Components/CanvasPanel.h"
-#include "Components/CanvasPanelSlot.h"
-#include "Components/HorizontalBox.h"
-#include "Components/HorizontalBoxSlot.h"
 #include "Components/Image.h"
 #include "Components/PanelWidget.h"
-#include "Components/ScrollBox.h"
-#include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
-#include "Components/VerticalBox.h"
-#include "Components/VerticalBoxSlot.h"
-#include "Components/WrapBox.h"
-#include "Components/WrapBoxSlot.h"
+#include "Components/Widget.h"
 #include "Engine/Texture2D.h"
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
-#include "Styling/SlateBrush.h"
+#include "Logging/CatLog.h"
 #include "UI/CatUISettings.h"
 
 namespace
 {
-	const FLinearColor ShopInkColor(0.34f, 0.25f, 0.17f, 1.0f);
-	const FLinearColor ShopMutedInkColor(0.58f, 0.49f, 0.38f, 1.0f);
-	const FLinearColor ShopPaperColor(0.92f, 0.85f, 0.70f, 0.96f);
-	const FLinearColor ShopLightPaperColor(0.98f, 0.92f, 0.78f, 0.98f);
-	const FLinearColor ShopPanelColor(0.95f, 0.88f, 0.73f, 0.88f);
-	const FLinearColor ShopAwningBlueColor(0.60f, 0.67f, 0.66f, 0.72f);
-	const FLinearColor ShopSelectedTabColor(0.90f, 0.76f, 0.38f, 0.95f);
-	const FLinearColor ShopButtonHoverColor(0.95f, 0.82f, 0.51f, 0.95f);
-	const FLinearColor ShopPayEnabledColor(0.78f, 0.59f, 0.33f, 1.0f);
-	const FLinearColor ShopPayHoverColor(0.86f, 0.67f, 0.39f, 1.0f);
-	const FLinearColor ShopPayDisabledColor(0.69f, 0.58f, 0.43f, 0.50f);
-
-	// 运行时控件创建流程：给 C++ 自建商店树分配唯一名字，避免 Widget 重新 Construct 时与旧白盒节点撞名。
-	template <typename WidgetType>
-	WidgetType* CreateShopWidget(UWidgetTree* WidgetTree, const TCHAR* BaseName)
+	// 价格文本流程：所有商店金额都用同一个短格式显示，右侧总计和服务器扣款仍读取 Model 投影中的数值字段。
+	FText MakeShellPriceText(const int32 Price)
 	{
-		if (!WidgetTree)
-		{
-			return nullptr;
-		}
-		return WidgetTree->ConstructWidget<WidgetType>(
-			WidgetType::StaticClass(),
-			MakeUniqueObjectName(WidgetTree, WidgetType::StaticClass(), FName(BaseName)));
+		return FText::FromString(FString::Printf(TEXT("贝 %d"), Price));
 	}
 
-	// 文本风格流程：统一设置商店页里的字号、颜色和换行策略，让动态行与静态标题保持同一套水彩纸面观感。
-	void ConfigureShopText(UTextBlock* TextBlock, const int32 FontSize, const FLinearColor Color,
-		const ETextJustify::Type Justification, const bool bAutoWrap)
+	// 后备符号流程：
+	// 1. 优先取展示名首字，让图标缺失时仍能从数据本身得到一个可见识别。
+	// 2. 展示名为空时才取稳定 ID 首字，不按鱼竿、鱼饵、鱼窝这些具体业务名写死规则。
+	// 3. 这个符号只服务临时视觉识别，分类、结算和交付都继续读取 ViewState 投影字段。
+	FString MakeFallbackGlyphText(const FText& DisplayNameText, const FName StableFallbackId)
 	{
-		if (!TextBlock)
+		FString DisplayName = DisplayNameText.ToString();
+		DisplayName.TrimStartAndEndInline();
+		if (!DisplayName.IsEmpty())
+		{
+			return DisplayName.Left(1);
+		}
+		FString FallbackId = StableFallbackId.ToString();
+		FallbackId.TrimStartAndEndInline();
+		if (!FallbackId.IsEmpty())
+		{
+			return FallbackId.Left(1).ToUpper();
+		}
+		return FString();
+	}
+
+	// 文本同步流程：展示 TextBlock 是可选绑定点；存在就写数据，不存在就交给蓝图自己的表现层处理。
+	void SetOptionalText(UTextBlock* TextBlock, const FText& Text)
+	{
+		if (TextBlock)
+		{
+			TextBlock->SetText(Text);
+		}
+	}
+
+	// 可见性同步流程：展示装饰是可选绑定点；存在就跟随状态，不存在不影响主交互链路。
+	void SetOptionalVisibility(UWidget* Widget, const ESlateVisibility Visibility)
+	{
+		if (Widget)
+		{
+			Widget->SetVisibility(Visibility);
+		}
+	}
+
+	// 图标同步流程：
+	// 1. 有正式图标时同步到可选 Image 并显示。
+	// 2. 没有图标或加载失败时折叠 Image，让 WBP 可以露出文字后备层。
+	// 3. 图标只来自商品或购物车投影，不在 UI 里按商品名推断资源。
+	void ApplyOptionalIcon(UImage* IconImage, const TSoftObjectPtr<UTexture2D>& IconOverride)
+	{
+		if (!IconImage)
 		{
 			return;
 		}
-		FSlateFontInfo Font = TextBlock->GetFont();
-		Font.Size = FontSize;
-		TextBlock->SetFont(Font);
-		TextBlock->SetColorAndOpacity(FSlateColor(Color));
-		TextBlock->SetJustification(Justification);
-		TextBlock->SetAutoWrapText(bAutoWrap);
-	}
-
-	// 文本控件创建流程：创建后立即套用通用商店文本样式，调用方只需要关心语义和放置位置。
-	UTextBlock* CreateShopTextBlock(UWidgetTree* WidgetTree, const TCHAR* BaseName, const FText Text,
-		const int32 FontSize, const FLinearColor Color, const ETextJustify::Type Justification,
-		const bool bAutoWrap = false)
-	{
-		UTextBlock* TextBlock = CreateShopWidget<UTextBlock>(WidgetTree, BaseName);
-		if (!TextBlock)
+		UTexture2D* IconTexture = IconOverride.IsNull() ? nullptr : IconOverride.LoadSynchronous();
+		if (!IconTexture)
 		{
-			return nullptr;
-		}
-		TextBlock->SetText(Text);
-		ConfigureShopText(TextBlock, FontSize, Color, Justification, bAutoWrap);
-		return TextBlock;
-	}
-
-	// 色块 Brush 创建流程：动态按钮和面板共用同一套无贴图纸面色块，避免 UI 依赖额外资源才能显示。
-	FSlateBrush MakeShopBrush(const FLinearColor Color)
-	{
-		FSlateBrush Brush;
-		Brush.DrawAs = ESlateBrushDrawType::Box;
-		Brush.TintColor = FSlateColor(Color);
-		Brush.Margin = FMargin(0.18f);
-		return Brush;
-	}
-
-	// 按钮风格流程：把普通、悬停、按下和禁用色一次写入 Slate 样式；动态卡片和支付按钮都走这里。
-	void ApplyShopButtonStyle(UButton* Button, const FLinearColor NormalColor, const FLinearColor HoveredColor,
-		const FLinearColor PressedColor, const FLinearColor DisabledColor)
-	{
-		if (!Button)
-		{
+			IconImage->SetVisibility(ESlateVisibility::Collapsed);
 			return;
 		}
-		FButtonStyle Style;
-		Style.Normal = MakeShopBrush(NormalColor);
-		Style.Hovered = MakeShopBrush(HoveredColor);
-		Style.Pressed = MakeShopBrush(PressedColor);
-		Style.Disabled = MakeShopBrush(DisabledColor);
-		Style.NormalPadding = FMargin(3.0f);
-		Style.PressedPadding = FMargin(4.0f, 4.0f, 2.0f, 2.0f);
-		Button->SetStyle(Style);
+		IconImage->SetBrushFromTexture(IconTexture, false);
+		IconImage->SetVisibility(ESlateVisibility::HitTestInvisible);
 	}
 
-	// 垂直槽配置流程：根据该区域是固定高度还是填满余量设置 SizeRule，并统一写入边距和对齐。
-	void ConfigureVerticalSlot(UVerticalBoxSlot* Slot, const FMargin Padding,
-		const ESlateSizeRule::Type SizeRule = ESlateSizeRule::Automatic, const float FillValue = 1.0f)
-	{
-		if (!Slot)
-		{
-			return;
-		}
-		FSlateChildSize Size;
-		Size.SizeRule = SizeRule;
-		Size.Value = FillValue;
-		Slot->SetSize(Size);
-		Slot->SetPadding(Padding);
-		Slot->SetHorizontalAlignment(HAlign_Fill);
-		Slot->SetVerticalAlignment(VAlign_Fill);
-	}
-
-	// 水平槽配置流程：商品区与购物车区按固定宽度或填充宽度共存，这里统一设置横向 SizeRule 和边距。
-	void ConfigureHorizontalSlot(UHorizontalBoxSlot* Slot, const FMargin Padding,
-		const ESlateSizeRule::Type SizeRule = ESlateSizeRule::Automatic, const float FillValue = 1.0f)
-	{
-		if (!Slot)
-		{
-			return;
-		}
-		FSlateChildSize Size;
-		Size.SizeRule = SizeRule;
-		Size.Value = FillValue;
-		Slot->SetSize(Size);
-		Slot->SetPadding(Padding);
-		Slot->SetHorizontalAlignment(HAlign_Fill);
-		Slot->SetVerticalAlignment(VAlign_Fill);
-	}
-
-	// 控件尺寸流程：只在明确需要稳定尺寸的卡片、页签和支付按钮上写 Override，防止动态文本撑乱布局。
-	void ConfigureSizeBox(USizeBox* SizeBox, const float WidthOverride, const float HeightOverride)
-	{
-		if (!SizeBox)
-		{
-			return;
-		}
-		if (WidthOverride > 0.0f)
-		{
-			SizeBox->SetWidthOverride(WidthOverride);
-		}
-		if (HeightOverride > 0.0f)
-		{
-			SizeBox->SetHeightOverride(HeightOverride);
-		}
-	}
-
-	// 商品图标回退流程：策划表没有贴图时，用商品名和分类给一个稳定符号，保证货架卡片不是纯文字列表。
-	FString ResolveShopEntryGlyph(const FCatShopEntryView& Entry)
-	{
-		const FString DisplayName = Entry.DisplayNameText.ToString();
-		const FString CategoryName = Entry.DisplayCategoryId.ToString();
-		if (DisplayName.Contains(TEXT("鱼竿")) || CategoryName.Contains(TEXT("Rod"))
-			|| CategoryName.Contains(TEXT("rod")))
-		{
-			return TEXT("/");
-		}
-		if (DisplayName.Contains(TEXT("红虫")) || DisplayName.Contains(TEXT("蚯蚓"))
-			|| CategoryName.Contains(TEXT("Bait")) || CategoryName.Contains(TEXT("bait")))
-		{
-			return TEXT("~");
-		}
-		if (DisplayName.Contains(TEXT("小鱼")))
-		{
-			return TEXT("><>");
-		}
-		if (DisplayName.Contains(TEXT("面团")) || DisplayName.Contains(TEXT("玉米"))
-			|| DisplayName.Contains(TEXT("特制")))
-		{
-			return TEXT("●");
-		}
-		if (DisplayName.Contains(TEXT("窝")) || CategoryName.Contains(TEXT("Chum"))
-			|| CategoryName.Contains(TEXT("chum")))
-		{
-			return TEXT("□");
-		}
-		return TEXT("◇");
-	}
-
-	// 购物车图标回退流程：购物车行没有商品完整投影时仍按名称给出近似符号，保证右侧列表和左侧货架视觉一致。
-	FString ResolveShopCartLineGlyph(const FCatShopCartLineView& Line)
-	{
-		const FString DisplayName = Line.DisplayNameText.ToString();
-		const FString CategoryName = Line.DisplayCategoryId.ToString();
-		if (DisplayName.Contains(TEXT("鱼竿")) || CategoryName.Contains(TEXT("Rod"))
-			|| CategoryName.Contains(TEXT("rod")))
-		{
-			return TEXT("/");
-		}
-		if (DisplayName.Contains(TEXT("小鱼")))
-		{
-			return TEXT("><>");
-		}
-		if (DisplayName.Contains(TEXT("窝")) || CategoryName.Contains(TEXT("Chum"))
-			|| CategoryName.Contains(TEXT("chum")))
-		{
-			return TEXT("□");
-		}
-		if (DisplayName.Contains(TEXT("面团")) || DisplayName.Contains(TEXT("玉米"))
-			|| DisplayName.Contains(TEXT("红虫")) || DisplayName.Contains(TEXT("蚯蚓"))
-			|| CategoryName.Contains(TEXT("Bait")) || CategoryName.Contains(TEXT("bait")))
-		{
-			return TEXT("~");
-		}
-		return TEXT("◇");
-	}
-
-	// 商品库存短文案流程：卡片底部只保留玩家立即需要的信息，完整诊断仍在 Entry.DisplayText 里。
-	FText MakeShopEntryMetaText(const FCatShopEntryView& Entry)
-	{
-		if (Entry.CartCount > 0)
-		{
-			return FText::FromString(FString::Printf(TEXT("已选 x%d"), Entry.CartCount));
-		}
-		if (!Entry.bStockAvailable)
-		{
-			return FText::FromString(TEXT("库存同步中"));
-		}
-		if (Entry.bUnlimitedStock)
-		{
-			return FText::FromString(TEXT("库存充足"));
-		}
-		if (Entry.bSoldOut)
-		{
-			return FText::FromString(TEXT("已售罄"));
-		}
-		return FText::FromString(FString::Printf(TEXT("余 %d"), Entry.RemainingStock));
-	}
-
-	// 分类标题流程：空分类名回退到稳定 ID，“全部”则使用固定中文，避免策划表漏配时出现空按钮。
-	FText MakeShopCategoryLabel(const FCatShopCategoryView& Category)
+	// 分类标题流程：Model 通常会给 DisplayNameText；这里补足空文本时的稳定展示，避免页签出现无字按钮。
+	FText MakeCategoryLabelText(const FCatShopCategoryView& Category)
 	{
 		if (!Category.DisplayNameText.IsEmpty())
 		{
@@ -251,137 +87,367 @@ namespace
 		}
 		return Category.CategoryId.IsNone() ? FText::FromString(TEXT("全部")) : FText::FromName(Category.CategoryId);
 	}
+
+	// WBP 类加载流程：动态列表只接受正式蓝图子控件类；缺类时记录错误并停止生成该区域，避免运行时画出第二套界面。
+	template <typename WidgetType>
+	TSubclassOf<WidgetType> LoadRequiredDesignerWidgetClass(const TSoftClassPtr<WidgetType>& WidgetClass,
+		const TCHAR* WidgetRole)
+	{
+		TSubclassOf<WidgetType> LoadedClass = WidgetClass.LoadSynchronous();
+		if (!LoadedClass)
+		{
+			UE_LOG(LogCatUI, Error, TEXT("Event=ui_shop_designer_widget_class_missing Role=%s ClassPath=%s"),
+				WidgetRole, *WidgetClass.ToString());
+		}
+		return LoadedClass;
+	}
 }
 
-// 动态按钮初始化流程：保存父 View 和当前商品 EntryId，重建点击绑定；按钮本身不保存任何后端经济事实。
-void UCatShopEntryButton::InitializeShopEntry(UCatShopWidget* InOwnerShopWidget, const FName InEntryId)
+// 分类页签初始化流程：
+// 1. 保存父商店页弱引用和当前分类投影，旧值会被整行覆盖。
+// 2. 重新绑定 Designer 按钮点击，避免重建时出现重复选择。
+// 3. 最后把投影写入命名控件并触发蓝图扩展表现。
+void UCatShopCategoryTabWidget::InitializeCategoryTab(UCatShopWidget* InOwnerShopWidget,
+	const FCatShopCategoryView& InCategoryView)
 {
 	OwnerShopWidget = InOwnerShopWidget;
-	EntryId = InEntryId;
-	OnClicked.RemoveDynamic(this, &ThisClass::HandleShopEntryClicked);
-	OnClicked.AddDynamic(this, &ThisClass::HandleShopEntryClicked);
-}
-
-// 动态按钮点击流程：校验父 View 和 EntryId 后调用统一加购请求口；价格、库存和支付能力仍由 Model/Controller/服务器裁决。
-void UCatShopEntryButton::HandleShopEntryClicked()
-{
-	UCatShopWidget* ShopWidget = OwnerShopWidget.Get();
-	if (!ShopWidget || EntryId.IsNone())
+	CategoryView = InCategoryView;
+	if (CategoryButton)
 	{
-		return;
+		CategoryButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleCategoryButtonClicked);
+		CategoryButton->OnClicked.AddDynamic(this, &ThisClass::HandleCategoryButtonClicked);
 	}
-	ShopWidget->RequestAddEntryToCart(EntryId);
+	ApplyCategoryTabToDesignerWidgets();
 }
 
-// 分类按钮初始化流程：保存父 View 和分类 ID，重建点击绑定；按钮本身只负责切换本地展示列表。
-void UCatShopCategoryButton::InitializeShopCategory(UCatShopWidget* InOwnerShopWidget, const FName InCategoryId)
+// 分类页签投影读取流程：直接返回当前页签缓存的只读行；外部只能观察，不能通过这里改 Model 或服务器状态。
+const FCatShopCategoryView& UCatShopCategoryTabWidget::GetCategoryView() const
+{
+	return CategoryView;
+}
+
+// 分类页签选择流程：玩家点击本页签时只转发 CategoryId；父商店页会用完整 Entries 在本地重建 DisplayedEntries。
+void UCatShopCategoryTabWidget::RequestSelectThisCategory()
+{
+	if (UCatShopWidget* ShopWidget = OwnerShopWidget.Get())
+	{
+		ShopWidget->RequestSelectCategory(CategoryView.CategoryId);
+	}
+}
+
+// 分类页签构造流程：先让 UUserWidget 完成 BindWidget，再补绑按钮和刷新数据；页签数量来自父页数据数组。
+void UCatShopCategoryTabWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
+	if (CategoryButton)
+	{
+		CategoryButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleCategoryButtonClicked);
+		CategoryButton->OnClicked.AddDynamic(this, &ThisClass::HandleCategoryButtonClicked);
+	}
+	ApplyCategoryTabToDesignerWidgets();
+}
+
+// 分类页签析构流程：解除本页签按钮绑定后交给父类释放 WidgetTree；父商店页会清理数组引用。
+void UCatShopCategoryTabWidget::NativeDestruct()
+{
+	if (CategoryButton)
+	{
+		CategoryButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleCategoryButtonClicked);
+	}
+	Super::NativeDestruct();
+}
+
+// 分类页签点击流程：按钮事件只转到本页签的公开选择入口；父页存在性和分类有效性继续留在统一链路里。
+void UCatShopCategoryTabWidget::HandleCategoryButtonClicked()
+{
+	RequestSelectThisCategory();
+}
+
+// 分类页签刷新流程：
+// 1. 从分类投影写入显示名和数量，分类数量来自 Model/ViewState，不来自主 WBP 固定槽位。
+// 2. 选中装饰只跟随当前客户端本地选中态，其他玩家选择自己的分类不会影响这里。
+// 3. 最后触发蓝图扩展事件，后续正式视觉只改页签 WBP。
+void UCatShopCategoryTabWidget::ApplyCategoryTabToDesignerWidgets()
+{
+	const FText CategoryLabel = MakeCategoryLabelText(CategoryView);
+	SetOptionalText(CategoryLabelTextBlock, CategoryLabel);
+	SetOptionalText(CategoryCountTextBlock,
+		FText::FromString(FString::Printf(TEXT("%d"), CategoryView.EntryCount)));
+	SetOptionalVisibility(CategorySelectedVisual, CategoryView.bSelected
+		? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	if (CategoryButton)
+	{
+		CategoryButton->SetIsEnabled(true);
+		CategoryButton->SetToolTipText(FText::FromString(FString::Printf(TEXT("%s：%d 件商品"),
+			*CategoryLabel.ToString(), CategoryView.EntryCount)));
+	}
+	BP_RenderCategoryTab(CategoryView);
+}
+
+// 商品卡初始化流程：
+// 1. 保存父商店页弱引用和当前商品投影，旧值会被整行覆盖。
+// 2. 重新绑定 Designer 按钮点击，避免复用或重建时出现重复加购。
+// 3. 最后把投影写入命名控件并触发蓝图扩展表现。
+void UCatShopGoodsItemWidget::InitializeGoodsItem(UCatShopWidget* InOwnerShopWidget,
+	const FCatShopEntryView& InEntryView)
 {
 	OwnerShopWidget = InOwnerShopWidget;
-	CategoryId = InCategoryId;
-	OnClicked.RemoveDynamic(this, &ThisClass::HandleShopCategoryClicked);
-	OnClicked.AddDynamic(this, &ThisClass::HandleShopCategoryClicked);
-}
-
-// 分类按钮点击流程：交回父 View 统一处理；分类选择不会写回 Model 的 Entries 或服务器库存。
-void UCatShopCategoryButton::HandleShopCategoryClicked()
-{
-	UCatShopWidget* ShopWidget = OwnerShopWidget.Get();
-	if (!ShopWidget)
+	EntryView = InEntryView;
+	if (GoodsButton)
 	{
-		return;
+		GoodsButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleGoodsButtonClicked);
+		GoodsButton->OnClicked.AddDynamic(this, &ThisClass::HandleGoodsButtonClicked);
 	}
-	ShopWidget->RequestSelectCategory(CategoryId);
+	ApplyGoodsItemToDesignerWidgets();
 }
 
-// 购物车删除按钮初始化流程：保存父 View 和 EntryId，重建点击绑定；按钮本身不保存数量、价格或库存。
-void UCatShopCartLineRemoveButton::InitializeCartLine(UCatShopWidget* InOwnerShopWidget, const FName InEntryId)
+// 商品卡投影读取流程：直接返回当前卡片缓存的只读行；外部只能观察，不能通过这里改购物车或服务器订单。
+const FCatShopEntryView& UCatShopGoodsItemWidget::GetEntryView() const
+{
+	return EntryView;
+}
+
+// 商品卡加购流程：玩家点击本卡时只转发 EntryId；父商店页继续检查 pending，Model 继续检查库存和价格投影。
+void UCatShopGoodsItemWidget::RequestAddThisEntryToCart()
+{
+	if (UCatShopWidget* ShopWidget = OwnerShopWidget.Get())
+	{
+		ShopWidget->RequestAddEntryToCart(EntryView.EntryId);
+	}
+}
+
+// 商品卡构造流程：先让 UUserWidget 完成 BindWidget，再补绑按钮和刷新数据；这样蓝图资产负责结构，C++ 只认命名控件。
+void UCatShopGoodsItemWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
+	if (GoodsButton)
+	{
+		GoodsButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleGoodsButtonClicked);
+		GoodsButton->OnClicked.AddDynamic(this, &ThisClass::HandleGoodsButtonClicked);
+	}
+	ApplyGoodsItemToDesignerWidgets();
+}
+
+// 商品卡析构流程：解除本卡按钮绑定后交给父类释放 WidgetTree；父商店页会清理数组引用。
+void UCatShopGoodsItemWidget::NativeDestruct()
+{
+	if (GoodsButton)
+	{
+		GoodsButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleGoodsButtonClicked);
+	}
+	Super::NativeDestruct();
+}
+
+// 商品卡点击流程：按钮事件只转到本卡的公开加购入口；父页存在性、EntryId、库存和 pending 校验继续留在后续统一链路里。
+void UCatShopGoodsItemWidget::HandleGoodsButtonClicked()
+{
+	RequestAddThisEntryToCart();
+}
+
+// 商品卡刷新流程：
+// 1. 写入商品名、图标、价格和库存/已选短提示，纯展示控件缺失时只跳过对应表现。
+// 2. 图标来自商品投影，后备符号只取展示名或 EntryId 首字，不按具体商品类别写死 UI 规则。
+// 3. 按 Model 给出的 bActionEnabled 禁用按钮并显示 Designer 遮罩，视觉样式仍留在 WBP 里。
+// 4. 最后触发蓝图扩展事件，后续正式贴图或动效可以只改 WBP。
+void UCatShopGoodsItemWidget::ApplyGoodsItemToDesignerWidgets()
+{
+	SetOptionalText(GoodsNameTextBlock, EntryView.DisplayNameText);
+	ApplyOptionalIcon(GoodsIconImage, EntryView.IconOverride);
+	SetOptionalText(GoodsGlyphTextBlock, FText::FromString(ResolveGoodsGlyph()));
+	SetOptionalText(GoodsPriceTextBlock, MakeShellPriceText(EntryView.UnitPrice));
+	SetOptionalText(GoodsMetaTextBlock, MakeGoodsMetaText());
+	SetOptionalVisibility(GoodsDisabledVisual, EntryView.bActionEnabled
+		? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+	if (GoodsButton)
+	{
+		GoodsButton->SetIsEnabled(EntryView.bActionEnabled);
+		GoodsButton->SetToolTipText(EntryView.DisplayText);
+	}
+	BP_RenderGoodsItem(EntryView);
+}
+
+// 商品卡图形流程：把当前行的展示名和 EntryId 交给统一后备符号函数，避免卡片维护第二套商品分类表。
+FString UCatShopGoodsItemWidget::ResolveGoodsGlyph() const
+{
+	return MakeFallbackGlyphText(EntryView.DisplayNameText, EntryView.EntryId);
+}
+
+// 商品卡状态文案流程：优先展示购物车数量，其次展示库存状态；这些都是本地投影，不作为服务器结算输入。
+FText UCatShopGoodsItemWidget::MakeGoodsMetaText() const
+{
+	if (EntryView.CartCount > 0)
+	{
+		return FText::FromString(FString::Printf(TEXT("已选 x%d"), EntryView.CartCount));
+	}
+	if (!EntryView.bStockAvailable)
+	{
+		return FText::FromString(TEXT("库存同步中"));
+	}
+	if (EntryView.bUnlimitedStock)
+	{
+		return FText::FromString(TEXT("库存充足"));
+	}
+	if (EntryView.bSoldOut)
+	{
+		return FText::FromString(TEXT("已售罄"));
+	}
+	return FText::FromString(FString::Printf(TEXT("余 %d"), EntryView.RemainingStock));
+}
+
+// 购物车行初始化流程：保存父页、购物车行和 pending 状态，重建删除绑定，并刷新 Designer 命名控件。
+void UCatShopCartLineWidget::InitializeCartLine(UCatShopWidget* InOwnerShopWidget,
+	const FCatShopCartLineView& InCartLineView, const bool bInActionPending)
 {
 	OwnerShopWidget = InOwnerShopWidget;
-	EntryId = InEntryId;
-	OnClicked.RemoveDynamic(this, &ThisClass::HandleCartLineRemoveClicked);
-	OnClicked.AddDynamic(this, &ThisClass::HandleCartLineRemoveClicked);
-}
-
-// 购物车删除按钮点击流程：只请求删除一份本地选购；支付 pending 保护仍由父 View 和 Model 双重判断。
-void UCatShopCartLineRemoveButton::HandleCartLineRemoveClicked()
-{
-	UCatShopWidget* ShopWidget = OwnerShopWidget.Get();
-	if (!ShopWidget || EntryId.IsNone())
+	CartLineView = InCartLineView;
+	bActionPending = bInActionPending;
+	if (CartLineRemoveButton)
 	{
-		return;
+		CartLineRemoveButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleRemoveButtonClicked);
+		CartLineRemoveButton->OnClicked.AddDynamic(this, &ThisClass::HandleRemoveButtonClicked);
 	}
-	ShopWidget->RequestRemoveOneCartItem(EntryId);
+	ApplyCartLineToDesignerWidgets();
 }
 
-// 初始化流程：在 UUserWidget::RebuildWidget 取 RootWidget 之前搭建正式商店树；这样 AddToViewport 时玩家拿到的是新 UI，不会先显示旧白盒页。
-void UCatShopWidget::NativeOnInitialized()
+// 购物车行投影读取流程：返回当前行缓存的展示数据；外部不能通过这个返回值绕开父商店页删除入口。
+const FCatShopCartLineView& UCatShopCartLineWidget::GetCartLineView() const
 {
-	Super::NativeOnInitialized();
-	BuildNativeShopLayout();
+	return CartLineView;
+}
+
+// 购物车行删除流程：玩家点击垃圾桶时只转发 EntryId；父商店页继续检查 pending 并广播本地删除意图。
+void UCatShopCartLineWidget::RequestRemoveThisCartLine()
+{
+	if (UCatShopWidget* ShopWidget = OwnerShopWidget.Get())
+	{
+		ShopWidget->RequestRemoveOneCartItem(CartLineView.EntryId);
+	}
+}
+
+// 购物车行构造流程：BindWidget 完成后补绑垃圾桶按钮，并把已缓存的行投影写到各文本控件。
+void UCatShopCartLineWidget::NativeConstruct()
+{
+	Super::NativeConstruct();
+	if (CartLineRemoveButton)
+	{
+		CartLineRemoveButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleRemoveButtonClicked);
+		CartLineRemoveButton->OnClicked.AddDynamic(this, &ThisClass::HandleRemoveButtonClicked);
+	}
+	ApplyCartLineToDesignerWidgets();
+}
+
+// 购物车行析构流程：解除删除按钮绑定；购物车真实状态由父 Model 保存，不由行控件销毁决定。
+void UCatShopCartLineWidget::NativeDestruct()
+{
+	if (CartLineRemoveButton)
+	{
+		CartLineRemoveButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleRemoveButtonClicked);
+	}
+	Super::NativeDestruct();
+}
+
+// 删除按钮流程：按钮事件只转到本行的公开删除入口；父页存在性、EntryId 和 pending 校验继续留在后续统一链路里。
+void UCatShopCartLineWidget::HandleRemoveButtonClicked()
+{
+	RequestRemoveThisCartLine();
+}
+
+// 购物车行刷新流程：
+// 1. 写入商品名、图标、数量和行小计，纯展示控件缺失时只跳过对应表现。
+// 2. 图标来自购物车行投影，后备符号只取展示名或 EntryId 首字，不在 UI 内写死商品类型。
+// 3. pending 时禁用删除按钮，避免支付请求发出后本地购物车继续变化。
+// 4. 库存或价格失效时显示无效提示装饰，支付入口会因此保持不可提交。
+// 5. 最后触发蓝图扩展事件，后续正式贴图或动效可以只改 WBP。
+void UCatShopCartLineWidget::ApplyCartLineToDesignerWidgets()
+{
+	SetOptionalText(CartLineNameTextBlock, CartLineView.DisplayNameText);
+	ApplyOptionalIcon(CartLineIconImage, CartLineView.IconOverride);
+	SetOptionalText(CartLineCountTextBlock,
+		FText::FromString(FString::Printf(TEXT("x %d"), CartLineView.CartCount)));
+	SetOptionalText(CartLinePriceTextBlock, MakeShellPriceText(CartLineView.LineTotalPrice));
+	SetOptionalText(CartLineGlyphTextBlock, FText::FromString(ResolveCartLineGlyph()));
+	SetOptionalVisibility(CartLineInvalidVisual, CartLineView.bLineAvailable
+		? ESlateVisibility::Collapsed : ESlateVisibility::HitTestInvisible);
+	if (CartLineRemoveButton)
+	{
+		CartLineRemoveButton->SetIsEnabled(!bActionPending);
+		CartLineRemoveButton->SetToolTipText(FText::FromString(FString::Printf(TEXT("删除一份：%s"),
+			*CartLineView.DisplayNameText.ToString())));
+	}
+	BP_RenderCartLine(CartLineView, bActionPending);
+}
+
+// 购物车行图形流程：复用展示名和 EntryId，不从购物车行之外读取商品数据或写死商品分类。
+FString UCatShopCartLineWidget::ResolveCartLineGlyph() const
+{
+	return MakeFallbackGlyphText(CartLineView.DisplayNameText, CartLineView.EntryId);
+}
+
+// 商店页构造流程：默认指向正式蓝图子控件资产；如果资产缺失只记录日志，不在运行时生成另一套视觉。
+UCatShopWidget::UCatShopWidget(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
+{
+	CategoryTabWidgetClass = TSoftClassPtr<UCatShopCategoryTabWidget>(
+		FSoftObjectPath(TEXT("/Game/UI/Shop/WBP_CatShopCategoryTab.WBP_CatShopCategoryTab_C")));
+	GoodsItemWidgetClass = TSoftClassPtr<UCatShopGoodsItemWidget>(
+		FSoftObjectPath(TEXT("/Game/UI/Shop/WBP_CatShopGoodsItem.WBP_CatShopGoodsItem_C")));
+	CartLineWidgetClass = TSoftClassPtr<UCatShopCartLineWidget>(
+		FSoftObjectPath(TEXT("/Game/UI/Shop/WBP_CatShopCartLine.WBP_CatShopCartLine_C")));
 }
 
 // 构造流程：
-// 1. 先把商店根 Widget 设为可聚焦，让通用 UIOnly 输入模式能把键盘焦点真正交给本页面；后续关闭键才会进入 NativeOnKeyDown。
-// 2. 若初始化阶段未能生成完整控件，构造阶段复用当前根面板再建一次，避免旧资产或异常生命周期留下半成品。
-// 3. 最后把新布局里的关闭按钮和支付按钮接到统一入口；动态货架、分类和购物车会在 RenderShop 中按 Model 投影生成。
+// 1. 先把商店根 Widget 设为可聚焦，让通用 UIOnly 输入模式能把键盘焦点真正交给本页面。
+// 2. 再把 Designer 里的关闭和支付按钮接到统一入口；分类、货架和购物车都等待数据驱动重建。
+// 3. 最后等待 RenderShop 输入真实 ViewState；没有投影前不主动生成分类页签、货架或购物车内容。
 void UCatShopWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
 	SetIsFocusable(true);
-	if (!CloseButton || !PayButton || !CategoryButtons || !ShopButtons || !CartLinesPanel || !CartTotalTextBlock)
-	{
-		BuildNativeShopLayout();
-	}
-	DisableLegacyDirectPurchaseButtons();
 	if (CloseButton)
 	{
-		CloseButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleCloseClicked);
-		CloseButton->OnClicked.AddDynamic(this, &ThisClass::HandleCloseClicked);
-		CloseButton->SetIsEnabled(true);
+		CloseButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCloseShop);
+		CloseButton->OnClicked.AddDynamic(this, &ThisClass::RequestCloseShop);
 	}
 	if (PayButton)
 	{
 		PayButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestPayCart);
 		PayButton->OnClicked.AddDynamic(this, &ThisClass::RequestPayCart);
-		PayButton->SetIsEnabled(true);
 	}
 }
 
 // 析构流程：
-// 1. 先清掉本次动态生成的商品、分类和购物车删除按钮绑定；分类和购物车按钮还会从父容器移除。
-// 2. 再解除本 View 绑定到可选关闭/支付按钮上的 UMG 点击事件，防止再次入视口时叠加回调。
-// 3. 保留外部意图订阅；RemoveFromParent 只是页面离开视口，PageController::Unbind 才是外部订阅的结束点。
+// 1. 先移除本次动态创建的分类页签、商品卡和购物车行，让子 WBP 自己解绑内部按钮。
+// 2. 再解除本 View 绑定到 Designer 按钮上的 UMG 点击事件，防止再次入视口时叠加回调。
+// 3. 保留外部意图订阅；RemoveFromParent 只是页面离开视口，PageController::Unbind 才是外部订阅结束点。
 void UCatShopWidget::NativeDestruct()
 {
-	for (UCatShopEntryButton* Button : DynamicEntryButtons)
+	for (UCatShopCategoryTabWidget* CategoryTab : DynamicCategoryTabs)
 	{
-		if (Button)
+		if (CategoryTab)
 		{
-			Button->OnClicked.Clear();
+			CategoryTab->RemoveFromParent();
 		}
 	}
-	DynamicEntryButtons.Reset();
-	for (UCatShopCategoryButton* Button : DynamicCategoryButtons)
+	DynamicCategoryTabs.Reset();
+	for (UCatShopGoodsItemWidget* GoodsItem : DynamicGoodsItems)
 	{
-		if (Button)
+		if (GoodsItem)
 		{
-			Button->OnClicked.Clear();
-			Button->RemoveFromParent();
+			GoodsItem->RemoveFromParent();
 		}
 	}
-	DynamicCategoryButtons.Reset();
-	for (UCatShopCartLineRemoveButton* Button : DynamicCartLineButtons)
+	DynamicGoodsItems.Reset();
+	for (UCatShopCartLineWidget* CartLineWidget : DynamicCartLineWidgets)
 	{
-		if (Button)
+		if (CartLineWidget)
 		{
-			Button->OnClicked.Clear();
-			Button->RemoveFromParent();
+			CartLineWidget->RemoveFromParent();
 		}
 	}
-	DynamicCartLineButtons.Reset();
+	DynamicCartLineWidgets.Reset();
 	if (CloseButton)
 	{
-		CloseButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleCloseClicked);
+		CloseButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCloseShop);
 	}
 	if (PayButton)
 	{
@@ -413,14 +479,15 @@ FReply UCatShopWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEv
 }
 
 // 渲染流程：
-// 1. 缓存只读投影并复制 Designer 绑定字段，关闭投影会把本地分类选择清回“全部”。
-// 2. 先同步分类按钮、当前分类商品、购物车行和 C++ 简单控件；支付按钮同时刷新可用状态和禁用提示。
-// 3. 最后调用 BP 渲染扩展；蓝图可继续从 GetCategories/GetDisplayedEntries/GetCartLines 读取同一份本地投影。
-// 4. pending 期间把键盘焦点拉回商店根页，避免商品按钮在点击后被重建或禁用时截断 Escape/交互键关闭。
+// 1. 先判断是否从关闭进入打开；新开商店时默认回到“全部”，同一打开会话内保留玩家当前分类。
+// 2. 再缓存 Model 输入的完整投影，并复制蓝图可读字段。
+// 3. 用最新 Categories 重建分类页签，并用最新真实 Entries 和当前本地分类重新生成 DisplayedEntries。
+// 4. 最后触发 BP 渲染扩展并在 pending 时拉回键盘焦点，避免动态按钮重建后关闭键失效。
 void UCatShopWidget::RenderShop(const FCatShopViewState& ViewState)
 {
+	const bool bOpeningFromClosed = ViewState.bOpen && !LastShopViewState.bOpen;
 	LastShopViewState = ViewState;
-	if (!ViewState.bOpen)
+	if (!ViewState.bOpen || bOpeningFromClosed)
 	{
 		BlueprintSelectedCategoryId = NAME_None;
 	}
@@ -431,60 +498,13 @@ void UCatShopWidget::RenderShop(const FCatShopViewState& ViewState)
 	BlueprintCartTotalText = ViewState.CartTotalText;
 	BlueprintPayButtonText = ViewState.PayButtonText;
 	BlueprintPayDisabledReasonText = ViewState.PayDisabledReasonText;
+
 	RefreshCategoryPresentation();
 	RefreshDisplayedEntries();
-	RefreshCartPresentation();
-	if (WalletTextBlock)
-	{
-		WalletTextBlock->SetText(BlueprintWalletText);
-	}
-	if (ResultTextBlock)
-	{
-		ResultTextBlock->SetText(BlueprintResultText);
-	}
-	if (EntriesTextBlock)
-	{
-		EntriesTextBlock->SetText(BlueprintEntriesText);
-	}
-	if (CartTextBlock)
-	{
-		CartTextBlock->SetText(BlueprintCartText);
-	}
-	if (CartTotalTextBlock)
-	{
-		CartTotalTextBlock->SetText(BlueprintCartTotalText);
-	}
-	if (PayButtonLabelTextBlock)
-	{
-		PayButtonLabelTextBlock->SetText(BlueprintPayButtonText);
-	}
-	if (PayButton)
-	{
-		// 资金不足时支付按钮需要保留悬停命中区，否则 Slate 禁用控件不会触发鼠标旁提示；真正提交仍由 RequestPayCart 的 bCanPayCart 拦住。
-		const bool bKeepHoverForDisabledReason = !ViewState.bActionPending;
-		PayButton->SetIsEnabled(ViewState.bCanPayCart || bKeepHoverForDisabledReason);
-		PayButton->SetToolTipText(ViewState.bCanPayCart ? FText() : ViewState.PayDisabledReasonText);
-		if (ViewState.bCanPayCart)
-		{
-			ApplyShopButtonStyle(PayButton, ShopPayEnabledColor, ShopPayHoverColor,
-				FLinearColor(0.67f, 0.45f, 0.23f, 1.0f), ShopPayDisabledColor);
-		}
-		else
-		{
-			ApplyShopButtonStyle(PayButton, ShopPayDisabledColor, ShopPayDisabledColor,
-				ShopPayDisabledColor, ShopPayDisabledColor);
-		}
-	}
+	RebuildCartLines();
+	RefreshMainDesignerWidgets();
 	BP_RenderShop(LastShopViewState);
-	SetIsEnabled(true);
-	if (CloseButton)
-	{
-		CloseButton->SetIsEnabled(true);
-	}
-	if (ShopButtons)
-	{
-		ShopButtons->SetIsEnabled(true);
-	}
+
 	if (ViewState.bOpen && ViewState.bActionPending)
 	{
 		SetKeyboardFocus();
@@ -535,10 +555,10 @@ void UCatShopWidget::RequestRemoveOneCartItem(const FName EntryId)
 	OnCartLineRemoveRequested.Broadcast(EntryId);
 }
 
-// 支付请求流程：只在 Model 投影允许支付时广播；禁用原因留给 WBP 悬停显示，不在这里替服务器裁决。
+// 支付请求流程：只在 Model 投影允许支付且没有等待回包时广播；禁用原因留给 WBP 悬停显示，不在这里替服务器裁决。
 void UCatShopWidget::RequestPayCart()
 {
-	if (!LastShopViewState.bCanPayCart)
+	if (!LastShopViewState.bCanPayCart || LastShopViewState.bActionPending)
 	{
 		return;
 	}
@@ -548,9 +568,15 @@ void UCatShopWidget::RequestPayCart()
 // 分类请求流程：只改本 Widget 的本地分类 ID，再用完整 Entries 重新生成 DisplayedEntries 并唤醒 BP 渲染扩展；不会写回 Model 或服务器。
 void UCatShopWidget::RequestSelectCategory(const FName CategoryId)
 {
-	BlueprintSelectedCategoryId = DoesCategoryExist(CategoryId) ? CategoryId : NAME_None;
+	if (!DoesCategoryExist(CategoryId))
+	{
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_shop_category_missing CategoryId=%s"), *CategoryId.ToString());
+		return;
+	}
+	BlueprintSelectedCategoryId = CategoryId;
 	RefreshCategoryPresentation();
 	RefreshDisplayedEntries();
+	RefreshMainDesignerWidgets();
 	BP_RenderShop(LastShopViewState);
 }
 
@@ -566,632 +592,119 @@ void UCatShopWidget::RequestCloseShop()
 	OnCloseRequested.Broadcast();
 }
 
-// 默认关闭按钮流程：复用统一关闭请求入口，避免按钮和蓝图形成两条关闭路径。
-void UCatShopWidget::HandleCloseClicked()
+// 动态分类页签流程：
+// 1. 清空分类容器中的 Designer 样例页签或上一轮动态页签。
+// 2. 加载正式分类页签 WBP 类，失败时只记录错误并跳过该区域。
+// 3. 逐条读取 Categories 创建页签 WBP；页签只保存 CategoryId 并转发本地分类选择请求。
+// 4. C++ 不再改子项 Slot 间距、对齐或尺寸，所有排版表现都由父容器和子 WBP 资产决定。
+void UCatShopWidget::RebuildCategoryTabs()
 {
-	RequestCloseShop();
-}
+	if (!CategoryTabsPanel)
+	{
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_shop_category_tabs_panel_missing"));
+		DynamicCategoryTabs.Reset();
+		return;
+	}
+	CategoryTabsPanel->ClearChildren();
+	DynamicCategoryTabs.Reset();
 
-// 正式商店布局流程：
-// 1. 优先复用 WBP 已经拥有的根面板并清空旧子节点；没有可用面板时只在初始化阶段补建 Canvas 根。
-// 2. 把所有关键控件写回本类的 BindWidgetOptional 成员，让现有 RenderShop、分类刷新和购物车刷新继续复用同一条 MVC 数据链。
-// 3. 隐藏纯文本兜底控件但继续保留字段同步，蓝图扩展或诊断读取不会因为界面重做而失去数据。
-void UCatShopWidget::BuildNativeShopLayout()
-{
-	if (!WidgetTree)
+	const TSubclassOf<UCatShopCategoryTabWidget> CategoryTabClass = LoadRequiredDesignerWidgetClass(
+		CategoryTabWidgetClass, TEXT("CategoryTab"));
+	if (!CategoryTabClass)
 	{
 		return;
 	}
-
-	CloseButton = nullptr;
-	WalletTextBlock = nullptr;
-	ResultTextBlock = nullptr;
-	EntriesTextBlock = nullptr;
-	CartTextBlock = nullptr;
-	CartTotalTextBlock = nullptr;
-	PayButton = nullptr;
-	PayButtonLabelTextBlock = nullptr;
-	ShopButtons = nullptr;
-	CategoryButtons = nullptr;
-	CartLinesPanel = nullptr;
-
-	UPanelWidget* RootPanel = Cast<UPanelWidget>(WidgetTree->RootWidget);
-	if (!RootPanel)
+	for (const FCatShopCategoryView& Category : BlueprintCategories)
 	{
-		RootPanel = CreateShopWidget<UCanvasPanel>(WidgetTree, TEXT("ShopRoot"));
-		if (!RootPanel)
+		UCatShopCategoryTabWidget* CategoryTab = CreateWidget<UCatShopCategoryTabWidget>(
+			this, CategoryTabClass, MakeUniqueObjectName(this, CategoryTabClass, FName(TEXT("ShopCategoryTab"))));
+		if (!CategoryTab)
 		{
-			return;
+			UE_LOG(LogCatUI, Error, TEXT("Event=ui_shop_category_tab_create_failed CategoryId=%s"),
+				*Category.CategoryId.ToString());
+			continue;
 		}
-		WidgetTree->RootWidget = RootPanel;
+		CategoryTab->InitializeCategoryTab(this, Category);
+		CategoryTabsPanel->AddChild(CategoryTab);
+		DynamicCategoryTabs.Add(CategoryTab);
 	}
-	else
-	{
-		RootPanel->ClearChildren();
-	}
-	RootPanel->SetVisibility(ESlateVisibility::Visible);
-	RootPanel->SetIsEnabled(true);
-
-	UBorder* PageBorder = CreateShopWidget<UBorder>(WidgetTree, TEXT("ShopPageBorder"));
-	UVerticalBox* PageStack = CreateShopWidget<UVerticalBox>(WidgetTree, TEXT("ShopPageStack"));
-	if (!PageBorder || !PageStack)
-	{
-		return;
-	}
-	PageBorder->SetBrushColor(ShopPaperColor);
-	PageBorder->SetPadding(FMargin(24.0f, 18.0f, 24.0f, 24.0f));
-	PageBorder->SetContent(PageStack);
-	if (UCanvasPanel* RootCanvas = Cast<UCanvasPanel>(RootPanel))
-	{
-		if (UCanvasPanelSlot* PageSlot = RootCanvas->AddChildToCanvas(PageBorder))
-		{
-			PageSlot->SetAnchors(FAnchors(0.0f, 0.0f, 1.0f, 1.0f));
-			PageSlot->SetOffsets(FMargin(28.0f, 22.0f, 28.0f, 26.0f));
-		}
-	}
-	else
-	{
-		UPanelSlot* PagePanelSlot = RootPanel->AddChild(PageBorder);
-		if (UVerticalBoxSlot* VerticalSlot = Cast<UVerticalBoxSlot>(PagePanelSlot))
-		{
-			ConfigureVerticalSlot(VerticalSlot, FMargin(28.0f, 22.0f, 28.0f, 26.0f),
-				ESlateSizeRule::Fill, 1.0f);
-		}
-		else if (UHorizontalBoxSlot* HorizontalSlot = Cast<UHorizontalBoxSlot>(PagePanelSlot))
-		{
-			ConfigureHorizontalSlot(HorizontalSlot, FMargin(28.0f, 22.0f, 28.0f, 26.0f),
-				ESlateSizeRule::Fill, 1.0f);
-		}
-	}
-
-	USizeBox* HeaderSizeBox = CreateShopWidget<USizeBox>(WidgetTree, TEXT("ShopHeaderSizeBox"));
-	UVerticalBox* HeaderStack = CreateShopWidget<UVerticalBox>(WidgetTree, TEXT("ShopHeaderStack"));
-	if (HeaderSizeBox && HeaderStack)
-	{
-		ConfigureSizeBox(HeaderSizeBox, 0.0f, 126.0f);
-		HeaderSizeBox->AddChild(HeaderStack);
-		ConfigureVerticalSlot(PageStack->AddChildToVerticalBox(HeaderSizeBox), FMargin(0.0f, 0.0f, 0.0f, 12.0f));
-
-		USizeBox* AwningSizeBox = CreateShopWidget<USizeBox>(WidgetTree, TEXT("ShopAwningSizeBox"));
-		UHorizontalBox* AwningBox = CreateShopWidget<UHorizontalBox>(WidgetTree, TEXT("ShopAwningBox"));
-		if (AwningSizeBox && AwningBox)
-		{
-			ConfigureSizeBox(AwningSizeBox, 0.0f, 42.0f);
-			AwningSizeBox->AddChild(AwningBox);
-			ConfigureVerticalSlot(HeaderStack->AddChildToVerticalBox(AwningSizeBox), FMargin(0.0f, 0.0f, 0.0f, 8.0f));
-			for (int32 SegmentIndex = 0; SegmentIndex < 12; ++SegmentIndex)
-			{
-				UBorder* Segment = CreateShopWidget<UBorder>(WidgetTree, TEXT("ShopAwningSegment"));
-				if (!Segment)
-				{
-					continue;
-				}
-				Segment->SetBrushColor(SegmentIndex % 2 == 0 ? ShopLightPaperColor : ShopAwningBlueColor);
-				ConfigureHorizontalSlot(AwningBox->AddChildToHorizontalBox(Segment), FMargin(0.0f),
-					ESlateSizeRule::Fill, 1.0f);
-			}
-		}
-
-		UHorizontalBox* TitleRow = CreateShopWidget<UHorizontalBox>(WidgetTree, TEXT("ShopTitleRow"));
-		if (TitleRow)
-		{
-			ConfigureVerticalSlot(HeaderStack->AddChildToVerticalBox(TitleRow), FMargin(0.0f),
-				ESlateSizeRule::Fill, 1.0f);
-
-			USizeBox* SignSizeBox = CreateShopWidget<USizeBox>(WidgetTree, TEXT("ShopSignSizeBox"));
-			UBorder* SignBorder = CreateShopWidget<UBorder>(WidgetTree, TEXT("ShopSignBorder"));
-			UTextBlock* SignText = CreateShopTextBlock(WidgetTree, TEXT("ShopSignText"),
-				FText::FromString(TEXT("钓具商店")), 30, ShopInkColor, ETextJustify::Center);
-			if (SignSizeBox && SignBorder && SignText)
-			{
-				ConfigureSizeBox(SignSizeBox, 210.0f, 62.0f);
-				SignBorder->SetBrushColor(FLinearColor(0.75f, 0.59f, 0.36f, 0.82f));
-				SignBorder->SetPadding(FMargin(12.0f));
-				SignBorder->SetContent(SignText);
-				SignSizeBox->AddChild(SignBorder);
-				ConfigureHorizontalSlot(TitleRow->AddChildToHorizontalBox(SignSizeBox),
-					FMargin(0.0f, 0.0f, 18.0f, 0.0f));
-			}
-
-			UTextBlock* FishMarkText = CreateShopTextBlock(WidgetTree, TEXT("ShopFishMarkText"),
-				FText::FromString(TEXT("><)))>")), 40, FLinearColor(0.45f, 0.49f, 0.46f, 0.72f),
-				ETextJustify::Center);
-			if (FishMarkText)
-			{
-				ConfigureHorizontalSlot(TitleRow->AddChildToHorizontalBox(FishMarkText), FMargin(0.0f),
-					ESlateSizeRule::Fill, 1.0f);
-			}
-
-			WalletTextBlock = CreateShopTextBlock(WidgetTree, TEXT("WalletTextBlock"),
-				FText::FromString(TEXT("商店：团队公款 0")), 22, ShopInkColor, ETextJustify::Center);
-			if (WalletTextBlock)
-			{
-				ConfigureHorizontalSlot(TitleRow->AddChildToHorizontalBox(WalletTextBlock),
-					FMargin(14.0f, 6.0f, 14.0f, 0.0f));
-			}
-
-			USizeBox* CloseSizeBox = CreateShopWidget<USizeBox>(WidgetTree, TEXT("ShopCloseSizeBox"));
-			CloseButton = CreateShopWidget<UButton>(WidgetTree, TEXT("CloseButton"));
-			UTextBlock* CloseText = CreateShopTextBlock(WidgetTree, TEXT("ShopCloseText"),
-				FText::FromString(TEXT("X")), 32, ShopMutedInkColor, ETextJustify::Center);
-			if (CloseSizeBox && CloseButton && CloseText)
-			{
-				ConfigureSizeBox(CloseSizeBox, 58.0f, 58.0f);
-				ApplyShopButtonStyle(CloseButton, FLinearColor(0.0f, 0.0f, 0.0f, 0.0f),
-					FLinearColor(0.80f, 0.65f, 0.45f, 0.32f),
-					FLinearColor(0.70f, 0.50f, 0.32f, 0.38f),
-					FLinearColor(0.0f, 0.0f, 0.0f, 0.0f));
-				if (UButtonSlot* CloseSlot = Cast<UButtonSlot>(CloseButton->AddChild(CloseText)))
-				{
-					CloseSlot->SetHorizontalAlignment(HAlign_Center);
-					CloseSlot->SetVerticalAlignment(VAlign_Center);
-				}
-				CloseSizeBox->AddChild(CloseButton);
-				ConfigureHorizontalSlot(TitleRow->AddChildToHorizontalBox(CloseSizeBox), FMargin(0.0f));
-			}
-		}
-	}
-
-	UHorizontalBox* BodyRow = CreateShopWidget<UHorizontalBox>(WidgetTree, TEXT("ShopBodyRow"));
-	if (!BodyRow)
-	{
-		return;
-	}
-	ConfigureVerticalSlot(PageStack->AddChildToVerticalBox(BodyRow), FMargin(0.0f),
-		ESlateSizeRule::Fill, 1.0f);
-
-	UBorder* ProductBorder = CreateShopWidget<UBorder>(WidgetTree, TEXT("ShopProductBorder"));
-	UVerticalBox* ProductStack = CreateShopWidget<UVerticalBox>(WidgetTree, TEXT("ShopProductStack"));
-	if (ProductBorder && ProductStack)
-	{
-		ProductBorder->SetBrushColor(FLinearColor(0.99f, 0.94f, 0.82f, 0.42f));
-		ProductBorder->SetPadding(FMargin(18.0f, 16.0f, 18.0f, 12.0f));
-		ProductBorder->SetContent(ProductStack);
-		ConfigureHorizontalSlot(BodyRow->AddChildToHorizontalBox(ProductBorder),
-			FMargin(0.0f, 0.0f, 22.0f, 0.0f), ESlateSizeRule::Fill, 1.0f);
-
-		CategoryButtons = CreateShopWidget<UHorizontalBox>(WidgetTree, TEXT("CategoryButtons"));
-		USizeBox* CategorySizeBox = CreateShopWidget<USizeBox>(WidgetTree, TEXT("ShopCategorySizeBox"));
-		if (CategoryButtons && CategorySizeBox)
-		{
-			ConfigureSizeBox(CategorySizeBox, 0.0f, 52.0f);
-			CategorySizeBox->AddChild(CategoryButtons);
-			ConfigureVerticalSlot(ProductStack->AddChildToVerticalBox(CategorySizeBox),
-				FMargin(0.0f, 0.0f, 0.0f, 18.0f));
-		}
-
-		UScrollBox* ProductScrollBox = CreateShopWidget<UScrollBox>(WidgetTree, TEXT("ShopProductScrollBox"));
-		UWrapBox* ProductWrapBox = CreateShopWidget<UWrapBox>(WidgetTree, TEXT("ShopButtons"));
-		if (ProductScrollBox && ProductWrapBox)
-		{
-			ProductScrollBox->SetScrollBarVisibility(ESlateVisibility::Visible);
-			ProductWrapBox->SetInnerSlotPadding(FVector2D(12.0f, 12.0f));
-			ShopButtons = ProductWrapBox;
-			ProductScrollBox->AddChild(ProductWrapBox);
-			ConfigureVerticalSlot(ProductStack->AddChildToVerticalBox(ProductScrollBox), FMargin(0.0f),
-				ESlateSizeRule::Fill, 1.0f);
-		}
-	}
-
-	USizeBox* CartSizeBox = CreateShopWidget<USizeBox>(WidgetTree, TEXT("ShopCartSizeBox"));
-	UBorder* CartBorder = CreateShopWidget<UBorder>(WidgetTree, TEXT("ShopCartBorder"));
-	UVerticalBox* CartStack = CreateShopWidget<UVerticalBox>(WidgetTree, TEXT("ShopCartStack"));
-	if (CartSizeBox && CartBorder && CartStack)
-	{
-		ConfigureSizeBox(CartSizeBox, 430.0f, 0.0f);
-		CartBorder->SetBrushColor(FLinearColor(0.97f, 0.91f, 0.78f, 0.52f));
-		CartBorder->SetPadding(FMargin(22.0f, 18.0f, 22.0f, 18.0f));
-		CartBorder->SetContent(CartStack);
-		CartSizeBox->AddChild(CartBorder);
-		ConfigureHorizontalSlot(BodyRow->AddChildToHorizontalBox(CartSizeBox), FMargin(0.0f));
-
-		UTextBlock* CartTitleText = CreateShopTextBlock(WidgetTree, TEXT("ShopCartTitleText"),
-			FText::FromString(TEXT("已选购")), 28, ShopInkColor, ETextJustify::Left);
-		if (CartTitleText)
-		{
-			ConfigureVerticalSlot(CartStack->AddChildToVerticalBox(CartTitleText),
-				FMargin(0.0f, 0.0f, 0.0f, 12.0f));
-		}
-
-		UScrollBox* CartScrollBox = CreateShopWidget<UScrollBox>(WidgetTree, TEXT("ShopCartScrollBox"));
-		UVerticalBox* CartListBox = CreateShopWidget<UVerticalBox>(WidgetTree, TEXT("CartLinesPanel"));
-		if (CartScrollBox && CartListBox)
-		{
-			CartScrollBox->SetScrollBarVisibility(ESlateVisibility::Visible);
-			CartLinesPanel = CartListBox;
-			CartScrollBox->AddChild(CartListBox);
-			ConfigureVerticalSlot(CartStack->AddChildToVerticalBox(CartScrollBox),
-				FMargin(0.0f, 0.0f, 0.0f, 16.0f), ESlateSizeRule::Fill, 1.0f);
-		}
-
-		CartTotalTextBlock = CreateShopTextBlock(WidgetTree, TEXT("CartTotalTextBlock"),
-			FText::FromString(TEXT("总计：0")), 30, ShopInkColor, ETextJustify::Right);
-		if (CartTotalTextBlock)
-		{
-			ConfigureVerticalSlot(CartStack->AddChildToVerticalBox(CartTotalTextBlock),
-				FMargin(0.0f, 8.0f, 0.0f, 14.0f));
-		}
-
-		USizeBox* PaySizeBox = CreateShopWidget<USizeBox>(WidgetTree, TEXT("ShopPaySizeBox"));
-		PayButton = CreateShopWidget<UButton>(WidgetTree, TEXT("PayButton"));
-		PayButtonLabelTextBlock = CreateShopTextBlock(WidgetTree, TEXT("PayButtonText"),
-			FText::FromString(TEXT("支付")), 30, ShopInkColor, ETextJustify::Center);
-		if (PaySizeBox && PayButton && PayButtonLabelTextBlock)
-		{
-			ConfigureSizeBox(PaySizeBox, 0.0f, 72.0f);
-			ApplyShopButtonStyle(PayButton, ShopPayDisabledColor, ShopPayDisabledColor,
-				ShopPayDisabledColor, ShopPayDisabledColor);
-			if (UButtonSlot* PaySlot = Cast<UButtonSlot>(PayButton->AddChild(PayButtonLabelTextBlock)))
-			{
-				PaySlot->SetHorizontalAlignment(HAlign_Center);
-				PaySlot->SetVerticalAlignment(VAlign_Center);
-			}
-			PaySizeBox->AddChild(PayButton);
-			ConfigureVerticalSlot(CartStack->AddChildToVerticalBox(PaySizeBox),
-				FMargin(0.0f, 0.0f, 0.0f, 12.0f));
-		}
-
-		ResultTextBlock = CreateShopTextBlock(WidgetTree, TEXT("ResultTextBlock"),
-			FText::FromString(TEXT("请选择商品加入已选购")), 18, ShopMutedInkColor, ETextJustify::Center, true);
-		if (ResultTextBlock)
-		{
-			ConfigureVerticalSlot(CartStack->AddChildToVerticalBox(ResultTextBlock), FMargin(0.0f));
-		}
-	}
-
-	EntriesTextBlock = CreateShopTextBlock(WidgetTree, TEXT("EntriesTextBlock"), FText(),
-		16, ShopMutedInkColor, ETextJustify::Left, true);
-	CartTextBlock = CreateShopTextBlock(WidgetTree, TEXT("CartTextBlock"), FText(),
-		16, ShopMutedInkColor, ETextJustify::Left, true);
-	if (EntriesTextBlock)
-	{
-		EntriesTextBlock->SetVisibility(ESlateVisibility::Collapsed);
-	}
-	if (CartTextBlock)
-	{
-		CartTextBlock->SetVisibility(ESlateVisibility::Collapsed);
-	}
-}
-
-// 旧直购按钮补防流程：
-// 1. 扫描当前 WidgetTree 里可能仍残留的 Purchase/ClaimFree 命名 Button，正常路径下这些旧子节点已经被正式布局清空。
-// 2. 命中的按钮直接折叠并禁用，让异常生命周期或资产残留也不会和新购物车入口同时出现在页面上。
-// 3. 不读取按钮文本和商品名，也不把旧 EntryId 写回代码；正式商品按钮仍全部由 DataTable + DisplayedEntries 生成。
-void UCatShopWidget::DisableLegacyDirectPurchaseButtons()
-{
-	if (!WidgetTree)
-	{
-		return;
-	}
-	WidgetTree->ForEachWidget([](UWidget* Widget)
-	{
-		UButton* Button = Cast<UButton>(Widget);
-		if (!Button)
-		{
-			return;
-		}
-		const FString WidgetName = Button->GetFName().ToString();
-		const bool bLegacyPurchaseButton = WidgetName.StartsWith(TEXT("Purchase"))
-			|| WidgetName.StartsWith(TEXT("ClaimFree"));
-		if (!bLegacyPurchaseButton)
-		{
-			return;
-		}
-		Button->SetIsEnabled(false);
-		Button->SetVisibility(ESlateVisibility::Collapsed);
-	});
+	CategoryTabsPanel->SetIsEnabled(!LastShopViewState.bActionPending);
 }
 
 // 动态货架流程：
-// 1. 缺少商品容器或 WidgetTree 时不重建动态按钮；文本投影和蓝图渲染扩展仍会继续承接展示。
-// 2. 正常情况下清空本轮 C++ 生成的卡片，再按 DisplayedEntries 逐条生成参考图式商品卡。
-// 3. 卡片只保存 EntryId，点击后仍走统一加购广播；价格、库存和可用性只来自 Model 投影。
-void UCatShopWidget::RebuildDynamicEntryButtons()
+// 1. 清空商品容器中的 Designer 样例卡或上一轮动态卡片；样例只服务编辑器预览，不进入真实商品状态。
+// 2. 加载正式商品卡 WBP 类，失败时只记录错误并跳过该区域。
+// 3. 逐条读取 DisplayedEntries 创建商品卡 WBP，卡片只保存 EntryId 并转发加购请求。
+// 4. 商品卡尺寸、留白和网格对齐属于 WBP 表现层，后端只决定创建哪些数据实例。
+void UCatShopWidget::RebuildGoodsItems()
 {
-	if (!ShopButtons || !WidgetTree)
+	if (!ShopButtons)
 	{
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_shop_goods_panel_missing"));
+		DynamicGoodsItems.Reset();
 		return;
-	}
-	for (UCatShopEntryButton* Button : DynamicEntryButtons)
-	{
-		if (Button)
-		{
-			Button->OnClicked.Clear();
-		}
 	}
 	ShopButtons->ClearChildren();
-	DynamicEntryButtons.Reset();
+	DynamicGoodsItems.Reset();
 
-	for (const FCatShopEntryView& Entry : BlueprintDisplayedEntries)
-	{
-		UCatShopEntryButton* EntryButton = WidgetTree->ConstructWidget<UCatShopEntryButton>(
-			UCatShopEntryButton::StaticClass(), MakeUniqueObjectName(WidgetTree, UCatShopEntryButton::StaticClass(),
-				FName(TEXT("ShopEntryButton"))));
-		USizeBox* CardSizeBox = CreateShopWidget<USizeBox>(WidgetTree, TEXT("ShopEntryCardSizeBox"));
-		UVerticalBox* CardStack = CreateShopWidget<UVerticalBox>(WidgetTree, TEXT("ShopEntryCardStack"));
-		if (!EntryButton || !CardSizeBox || !CardStack)
-		{
-			continue;
-		}
-
-		ConfigureSizeBox(CardSizeBox, 158.0f, 196.0f);
-		CardSizeBox->AddChild(CardStack);
-		const FLinearColor CardNormalColor = Entry.bActionEnabled
-			? FLinearColor(0.98f, 0.92f, 0.80f, 0.88f)
-			: FLinearColor(0.74f, 0.68f, 0.56f, 0.45f);
-		ApplyShopButtonStyle(EntryButton, CardNormalColor, ShopButtonHoverColor,
-			FLinearColor(0.86f, 0.70f, 0.43f, 0.95f), FLinearColor(0.74f, 0.68f, 0.56f, 0.45f));
-
-		UTextBlock* NameText = CreateShopTextBlock(WidgetTree, TEXT("ShopEntryNameText"),
-			Entry.DisplayNameText, 19, ShopInkColor, ETextJustify::Center, true);
-		if (NameText)
-		{
-			ConfigureVerticalSlot(CardStack->AddChildToVerticalBox(NameText), FMargin(8.0f, 10.0f, 8.0f, 4.0f));
-		}
-
-		UWidget* IconWidget = nullptr;
-		if (UTexture2D* IconTexture = Entry.IconOverride.LoadSynchronous())
-		{
-			USizeBox* IconSizeBox = CreateShopWidget<USizeBox>(WidgetTree, TEXT("ShopEntryIconSizeBox"));
-			UImage* IconImage = CreateShopWidget<UImage>(WidgetTree, TEXT("ShopEntryIconImage"));
-			if (IconSizeBox && IconImage)
-			{
-				ConfigureSizeBox(IconSizeBox, 86.0f, 74.0f);
-				IconImage->SetBrushFromTexture(IconTexture, true);
-				IconSizeBox->AddChild(IconImage);
-				IconWidget = IconSizeBox;
-			}
-		}
-		if (!IconWidget)
-		{
-			IconWidget = CreateShopTextBlock(WidgetTree, TEXT("ShopEntryGlyphText"),
-				FText::FromString(ResolveShopEntryGlyph(Entry)), 48,
-				FLinearColor(0.45f, 0.38f, 0.29f, 0.88f), ETextJustify::Center);
-		}
-		if (IconWidget)
-		{
-			UVerticalBoxSlot* IconSlot = CardStack->AddChildToVerticalBox(IconWidget);
-			if (IconSlot)
-			{
-				FSlateChildSize IconSize;
-				IconSize.SizeRule = ESlateSizeRule::Fill;
-				IconSize.Value = 1.0f;
-				IconSlot->SetSize(IconSize);
-				IconSlot->SetPadding(FMargin(8.0f, 2.0f, 8.0f, 4.0f));
-				IconSlot->SetHorizontalAlignment(HAlign_Center);
-				IconSlot->SetVerticalAlignment(VAlign_Center);
-			}
-		}
-
-		UHorizontalBox* PriceRow = CreateShopWidget<UHorizontalBox>(WidgetTree, TEXT("ShopEntryPriceRow"));
-		if (PriceRow)
-		{
-			UTextBlock* ShellText = CreateShopTextBlock(WidgetTree, TEXT("ShopEntryShellText"),
-				FText::FromString(TEXT("贝")), 18, ShopMutedInkColor, ETextJustify::Right);
-			UTextBlock* PriceText = CreateShopTextBlock(WidgetTree, TEXT("ShopEntryPriceText"),
-				FText::AsNumber(Entry.UnitPrice), 24, ShopInkColor, ETextJustify::Left);
-			if (ShellText)
-			{
-				ConfigureHorizontalSlot(PriceRow->AddChildToHorizontalBox(ShellText),
-					FMargin(0.0f, 0.0f, 6.0f, 0.0f));
-			}
-			if (PriceText)
-			{
-				ConfigureHorizontalSlot(PriceRow->AddChildToHorizontalBox(PriceText), FMargin(0.0f));
-			}
-			UVerticalBoxSlot* PriceSlot = CardStack->AddChildToVerticalBox(PriceRow);
-			if (PriceSlot)
-			{
-				PriceSlot->SetPadding(FMargin(18.0f, 0.0f, 18.0f, 2.0f));
-				PriceSlot->SetHorizontalAlignment(HAlign_Center);
-				PriceSlot->SetVerticalAlignment(VAlign_Center);
-			}
-		}
-
-		UTextBlock* MetaText = CreateShopTextBlock(WidgetTree, TEXT("ShopEntryMetaText"),
-			MakeShopEntryMetaText(Entry), 15, ShopMutedInkColor, ETextJustify::Center);
-		if (MetaText)
-		{
-			ConfigureVerticalSlot(CardStack->AddChildToVerticalBox(MetaText), FMargin(6.0f, 0.0f, 6.0f, 8.0f));
-		}
-
-		if (UButtonSlot* ButtonSlot = Cast<UButtonSlot>(EntryButton->AddChild(CardSizeBox)))
-		{
-			ButtonSlot->SetHorizontalAlignment(HAlign_Center);
-			ButtonSlot->SetVerticalAlignment(VAlign_Center);
-		}
-		EntryButton->SetToolTipText(Entry.DisplayText);
-		EntryButton->SetIsEnabled(Entry.bActionEnabled);
-		EntryButton->InitializeShopEntry(this, Entry.EntryId);
-		UPanelSlot* AddedSlot = ShopButtons->AddChild(EntryButton);
-		if (UWrapBoxSlot* WrapSlot = Cast<UWrapBoxSlot>(AddedSlot))
-		{
-			WrapSlot->SetPadding(FMargin(6.0f));
-			WrapSlot->SetHorizontalAlignment(HAlign_Center);
-			WrapSlot->SetVerticalAlignment(VAlign_Center);
-		}
-		DynamicEntryButtons.Add(EntryButton);
-	}
-}
-
-// 动态分类流程：
-// 1. 没有分类容器或 WidgetTree 时只保留 BlueprintCategories 给 WBP 手动渲染。
-// 2. 有容器时清空上一轮页签，并按当前真实商品归纳出的分类重新创建“全部/鱼竿/鱼饵/鱼窝”等按钮。
-// 3. 每个按钮只保存 CategoryId；选中态只改变按钮外观和 DisplayedEntries，不写回 Model 的 Entries。
-void UCatShopWidget::RebuildDynamicCategoryButtons()
-{
-	if (!CategoryButtons || !WidgetTree)
+	const TSubclassOf<UCatShopGoodsItemWidget> GoodsItemClass = LoadRequiredDesignerWidgetClass(
+		GoodsItemWidgetClass, TEXT("GoodsItem"));
+	if (!GoodsItemClass)
 	{
 		return;
 	}
-	for (UCatShopCategoryButton* Button : DynamicCategoryButtons)
+	for (const FCatShopEntryView& Entry : BlueprintDisplayedEntries)
 	{
-		if (Button)
+		UCatShopGoodsItemWidget* GoodsItem = CreateWidget<UCatShopGoodsItemWidget>(
+			this, GoodsItemClass, MakeUniqueObjectName(this, GoodsItemClass, FName(TEXT("ShopGoodsItem"))));
+		if (!GoodsItem)
 		{
-			Button->OnClicked.Clear();
-		}
-	}
-	CategoryButtons->ClearChildren();
-	DynamicCategoryButtons.Reset();
-
-	for (const FCatShopCategoryView& Category : BlueprintCategories)
-	{
-		UCatShopCategoryButton* CategoryButton = WidgetTree->ConstructWidget<UCatShopCategoryButton>(
-			UCatShopCategoryButton::StaticClass(), MakeUniqueObjectName(WidgetTree,
-				UCatShopCategoryButton::StaticClass(), FName(TEXT("ShopCategoryButton"))));
-		USizeBox* CategorySizeBox = CreateShopWidget<USizeBox>(WidgetTree, TEXT("ShopCategoryButtonSizeBox"));
-		UTextBlock* ButtonText = CreateShopTextBlock(WidgetTree, TEXT("ShopCategoryButtonText"),
-			MakeShopCategoryLabel(Category), 22, ShopInkColor, ETextJustify::Center);
-		if (!CategoryButton || !CategorySizeBox || !ButtonText)
-		{
+			UE_LOG(LogCatUI, Error, TEXT("Event=ui_shop_goods_item_create_failed EntryId=%s"), *Entry.EntryId.ToString());
 			continue;
 		}
-		ConfigureSizeBox(CategorySizeBox, 134.0f, 46.0f);
-		ApplyShopButtonStyle(CategoryButton,
-			Category.bSelected ? ShopSelectedTabColor : ShopPanelColor,
-			Category.bSelected ? ShopSelectedTabColor : ShopButtonHoverColor,
-			FLinearColor(0.78f, 0.61f, 0.34f, 0.95f),
-			ShopPayDisabledColor);
-		CategorySizeBox->AddChild(ButtonText);
-		if (UButtonSlot* ButtonSlot = Cast<UButtonSlot>(CategoryButton->AddChild(CategorySizeBox)))
-		{
-			ButtonSlot->SetHorizontalAlignment(HAlign_Center);
-			ButtonSlot->SetVerticalAlignment(VAlign_Center);
-		}
-		CategoryButton->SetToolTipText(FText::FromString(FString::Printf(TEXT("%s：%d 件商品"),
-			*MakeShopCategoryLabel(Category).ToString(), Category.EntryCount)));
-		CategoryButton->SetIsEnabled(true);
-		CategoryButton->InitializeShopCategory(this, Category.CategoryId);
-		if (UHorizontalBoxSlot* CategorySlot = Cast<UHorizontalBoxSlot>(CategoryButtons->AddChild(CategoryButton)))
-		{
-			ConfigureHorizontalSlot(CategorySlot, FMargin(0.0f, 0.0f, 10.0f, 0.0f));
-		}
-		DynamicCategoryButtons.Add(CategoryButton);
+		GoodsItem->InitializeGoodsItem(this, Entry);
+		ShopButtons->AddChild(GoodsItem);
+		DynamicGoodsItems.Add(GoodsItem);
 	}
+	ShopButtons->SetIsEnabled(!LastShopViewState.bActionPending);
 }
 
 // 动态购物车流程：
-// 1. 没有购物车容器或 WidgetTree 时只保留 BlueprintCartLines 给 WBP 手动渲染。
-// 2. 有容器时清空上一轮行控件，并按购物车投影生成右侧“已选购”列表。
-// 3. 每一行整行都是删除命中区；玩家点击该行即可删除一份对应商品，支付 pending 时临时锁住。
-void UCatShopWidget::RebuildDynamicCartLineButtons()
+// 1. 清空购物车容器中的 Designer 样例行或上一轮动态行。
+// 2. 加载正式购物车行 WBP 类，失败时只记录错误并跳过该区域。
+// 3. 每一行只保存 EntryId、展示投影和 pending 状态，删除按钮只删除一份对应商品。
+// 4. 购物车行的行高、间距和横向排版留给 WBP，C++ 不再写 Slot 样式。
+void UCatShopWidget::RebuildCartLines()
 {
-	if (!CartLinesPanel || !WidgetTree)
+	if (!CartLinesPanel)
 	{
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_shop_cart_lines_panel_missing"));
+		DynamicCartLineWidgets.Reset();
 		return;
-	}
-	for (UCatShopCartLineRemoveButton* Button : DynamicCartLineButtons)
-	{
-		if (Button)
-		{
-			Button->OnClicked.Clear();
-		}
 	}
 	CartLinesPanel->ClearChildren();
-	DynamicCartLineButtons.Reset();
+	DynamicCartLineWidgets.Reset();
 
-	if (BlueprintCartLines.IsEmpty())
+	const TSubclassOf<UCatShopCartLineWidget> CartLineClass = LoadRequiredDesignerWidgetClass(
+		CartLineWidgetClass, TEXT("CartLine"));
+	if (!CartLineClass)
 	{
-		UTextBlock* EmptyText = CreateShopTextBlock(WidgetTree, TEXT("ShopCartEmptyText"),
-			FText::FromString(TEXT("选购的商品会出现在这里")), 18,
-			ShopMutedInkColor, ETextJustify::Center, true);
-		if (EmptyText)
-		{
-			ConfigureVerticalSlot(Cast<UVerticalBoxSlot>(CartLinesPanel->AddChild(EmptyText)),
-				FMargin(0.0f, 24.0f, 0.0f, 0.0f));
-		}
 		return;
 	}
-
 	for (const FCatShopCartLineView& Line : BlueprintCartLines)
 	{
-		UCatShopCartLineRemoveButton* RemoveButton = WidgetTree->ConstructWidget<UCatShopCartLineRemoveButton>(
-			UCatShopCartLineRemoveButton::StaticClass(), MakeUniqueObjectName(WidgetTree,
-				UCatShopCartLineRemoveButton::StaticClass(), FName(TEXT("ShopCartLineRemoveButton"))));
-		USizeBox* RowSizeBox = CreateShopWidget<USizeBox>(WidgetTree, TEXT("ShopCartLineSizeBox"));
-		UHorizontalBox* RowBox = CreateShopWidget<UHorizontalBox>(WidgetTree, TEXT("ShopCartLineBox"));
-		if (!RemoveButton || !RowSizeBox || !RowBox)
+		UCatShopCartLineWidget* CartLineWidget = CreateWidget<UCatShopCartLineWidget>(
+			this, CartLineClass, MakeUniqueObjectName(this, CartLineClass, FName(TEXT("ShopCartLine"))));
+		if (!CartLineWidget)
 		{
+			UE_LOG(LogCatUI, Error, TEXT("Event=ui_shop_cart_line_create_failed EntryId=%s"), *Line.EntryId.ToString());
 			continue;
 		}
-
-		ConfigureSizeBox(RowSizeBox, 0.0f, 66.0f);
-		RowSizeBox->AddChild(RowBox);
-		ApplyShopButtonStyle(RemoveButton, FLinearColor(0.98f, 0.92f, 0.80f, 0.44f), ShopButtonHoverColor,
-			FLinearColor(0.78f, 0.61f, 0.34f, 0.82f), ShopPayDisabledColor);
-
-		UWidget* IconWidget = nullptr;
-		if (UTexture2D* IconTexture = Line.IconOverride.LoadSynchronous())
-		{
-			USizeBox* IconSizeBox = CreateShopWidget<USizeBox>(WidgetTree, TEXT("ShopCartIconSizeBox"));
-			UImage* IconImage = CreateShopWidget<UImage>(WidgetTree, TEXT("ShopCartIconImage"));
-			if (IconSizeBox && IconImage)
-			{
-				ConfigureSizeBox(IconSizeBox, 42.0f, 42.0f);
-				IconImage->SetBrushFromTexture(IconTexture, true);
-				IconSizeBox->AddChild(IconImage);
-				IconWidget = IconSizeBox;
-			}
-		}
-		if (!IconWidget)
-		{
-			IconWidget = CreateShopTextBlock(WidgetTree, TEXT("ShopCartGlyphText"),
-				FText::FromString(ResolveShopCartLineGlyph(Line)), 30,
-				FLinearColor(0.45f, 0.38f, 0.29f, 0.88f), ETextJustify::Center);
-		}
-		if (IconWidget)
-		{
-			ConfigureHorizontalSlot(RowBox->AddChildToHorizontalBox(IconWidget),
-				FMargin(10.0f, 0.0f, 12.0f, 0.0f));
-		}
-
-		UTextBlock* NameText = CreateShopTextBlock(WidgetTree, TEXT("ShopCartNameText"),
-			Line.DisplayNameText, 18, ShopInkColor, ETextJustify::Left, true);
-		if (NameText)
-		{
-			ConfigureHorizontalSlot(RowBox->AddChildToHorizontalBox(NameText),
-				FMargin(0.0f, 0.0f, 8.0f, 0.0f), ESlateSizeRule::Fill, 1.0f);
-		}
-
-		UTextBlock* CountText = CreateShopTextBlock(WidgetTree, TEXT("ShopCartCountText"),
-			FText::FromString(FString::Printf(TEXT("x %d"), Line.CartCount)), 18,
-			ShopInkColor, ETextJustify::Center);
-		if (CountText)
-		{
-			ConfigureHorizontalSlot(RowBox->AddChildToHorizontalBox(CountText),
-				FMargin(0.0f, 0.0f, 12.0f, 0.0f));
-		}
-
-		UTextBlock* PriceText = CreateShopTextBlock(WidgetTree, TEXT("ShopCartPriceText"),
-			FText::FromString(FString::Printf(TEXT("贝 %d"), Line.LineTotalPrice)), 18,
-			ShopInkColor, ETextJustify::Right);
-		if (PriceText)
-		{
-			ConfigureHorizontalSlot(RowBox->AddChildToHorizontalBox(PriceText),
-				FMargin(0.0f, 0.0f, 12.0f, 0.0f));
-		}
-
-		UTextBlock* DeleteText = CreateShopTextBlock(WidgetTree, TEXT("ShopCartDeleteText"),
-			FText::FromString(TEXT("删")), 20, ShopMutedInkColor, ETextJustify::Center);
-		if (DeleteText)
-		{
-			ConfigureHorizontalSlot(RowBox->AddChildToHorizontalBox(DeleteText),
-				FMargin(0.0f, 0.0f, 8.0f, 0.0f));
-		}
-
-		if (UButtonSlot* RowButtonSlot = Cast<UButtonSlot>(RemoveButton->AddChild(RowSizeBox)))
-		{
-			RowButtonSlot->SetHorizontalAlignment(HAlign_Fill);
-			RowButtonSlot->SetVerticalAlignment(VAlign_Center);
-		}
-		RemoveButton->SetToolTipText(FText::FromString(FString::Printf(TEXT("删除一份：%s"),
-			*Line.DisplayNameText.ToString())));
-		RemoveButton->SetIsEnabled(!LastShopViewState.bActionPending);
-		RemoveButton->InitializeCartLine(this, Line.EntryId);
-		ConfigureVerticalSlot(Cast<UVerticalBoxSlot>(CartLinesPanel->AddChild(RemoveButton)),
-			FMargin(0.0f, 0.0f, 0.0f, 10.0f));
-		DynamicCartLineButtons.Add(RemoveButton);
+		CartLineWidget->InitializeCartLine(this, Line, LastShopViewState.bActionPending);
+		CartLinesPanel->AddChild(CartLineWidget);
+		DynamicCartLineWidgets.Add(CartLineWidget);
 	}
+	CartLinesPanel->SetIsEnabled(!LastShopViewState.bActionPending);
 }
 
 // 分类文本流程：从最新 ViewState 复制分类投影，并在本地补上选中态；当商店刷新后当前分类消失，自动回到“全部”。
@@ -1207,13 +720,13 @@ void UCatShopWidget::RefreshCategoryPresentation()
 		Category.bSelected = Category.CategoryId == BlueprintSelectedCategoryId;
 	}
 	LastShopViewState.Categories = BlueprintCategories;
-	RebuildDynamicCategoryButtons();
+	RebuildCategoryTabs();
 }
 
 // 分类显示刷新流程：
 // 1. 从 LastShopViewState.Entries 重新生成本地 DisplayedEntries；NAME_None 表示“全部”。
-// 2. 商品列表文本和动态按钮都只读取 DisplayedEntries，避免分类切换时误改完整真实商品数组。
-// 3. 本函数不调用 BP_RenderShop，分类按钮只需要刷新本地数组和可选 C++ 简单控件。
+// 2. 商品区只读取 DisplayedEntries，避免分类切换时误改完整真实商品数组。
+// 3. 本函数不调用 BP_RenderShop，调用方会在整轮刷新完成后统一唤醒蓝图表现。
 void UCatShopWidget::RefreshDisplayedEntries()
 {
 	BlueprintDisplayedEntries.Reset();
@@ -1224,38 +737,32 @@ void UCatShopWidget::RefreshDisplayedEntries()
 			BlueprintDisplayedEntries.Add(Entry);
 		}
 	}
-	TArray<FString> Lines;
-	Lines.Reserve(BlueprintDisplayedEntries.Num());
-	for (const FCatShopEntryView& Entry : BlueprintDisplayedEntries)
-	{
-		Lines.Add(Entry.DisplayText.ToString());
-	}
-	BlueprintEntriesText = FText::FromString(FString::Join(Lines, TEXT("\n")));
-	if (EntriesTextBlock)
-	{
-		EntriesTextBlock->SetText(BlueprintEntriesText);
-	}
-	if (ShopButtons)
-	{
-		RebuildDynamicEntryButtons();
-		ShopButtons->SetIsEnabled(true);
-	}
+	RebuildGoodsItems();
 }
 
-// 购物车文本刷新流程：先把购物车行拼成右侧已选购摘要，再重建 C++ 删除按钮；复杂 WBP 可忽略这段文本，直接按 BlueprintCartLines 创建行。
-void UCatShopWidget::RefreshCartPresentation()
+// 主控件刷新流程：
+// 1. 把 Model 投影中的公款、结果、总计和支付文案写入主 WBP 命名控件，纯展示控件缺失时只跳过对应表现。
+// 2. 支付按钮在不可支付或等待回包时禁用，保证资金不足和 pending 期间点击都不会触发。
+// 3. 禁用提示层只在存在禁用原因时显示并接管 Tooltip；这样按钮不可点时仍能在鼠标旁显示原因。
+void UCatShopWidget::RefreshMainDesignerWidgets()
 {
-	TArray<FString> Lines;
-	Lines.Reserve(BlueprintCartLines.Num());
-	for (const FCatShopCartLineView& Line : BlueprintCartLines)
+	SetOptionalText(WalletTextBlock, BlueprintWalletText);
+	SetOptionalText(ResultTextBlock, BlueprintResultText);
+	SetOptionalText(CartTotalTextBlock, BlueprintCartTotalText);
+	SetOptionalText(PayButtonLabelTextBlock, BlueprintPayButtonText);
+
+	const bool bCanClickPay = LastShopViewState.bCanPayCart && !LastShopViewState.bActionPending;
+	if (PayButton)
 	{
-		Lines.Add(Line.DisplayText.ToString());
+		PayButton->SetIsEnabled(bCanClickPay);
 	}
-	BlueprintCartText = FText::FromString(FString::Join(Lines, TEXT("\n")));
-	RebuildDynamicCartLineButtons();
-	if (CartLinesPanel)
+
+	const bool bShowDisabledHint = !bCanClickPay && !BlueprintPayDisabledReasonText.IsEmpty();
+	if (PayDisabledHintLayer)
 	{
-		CartLinesPanel->SetIsEnabled(true);
+		PayDisabledHintLayer->SetVisibility(bShowDisabledHint ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+		PayDisabledHintLayer->SetIsEnabled(bShowDisabledHint);
+		PayDisabledHintLayer->SetToolTipText(BlueprintPayDisabledReasonText);
 	}
 }
 
@@ -1274,7 +781,7 @@ bool UCatShopWidget::DoesCategoryExist(const FName CategoryId) const
 
 // 关闭键判断流程：
 // 1. 先要求商店处于打开投影，避免构造或移出视口期间的迟到按键误触发关闭。
-// 2. Escape 始终作为模态 UI 兜底关闭键。
+// 2. Escape 始终作为模态 UI 关闭键。
 // 3. 再接受项目配置里的交互键和背包键，让按 E 打开的商店能按 E 关闭，也能用常规库存键退出页面。
 bool UCatShopWidget::ShouldCloseShopFromKey(const FKeyEvent& InKeyEvent) const
 {

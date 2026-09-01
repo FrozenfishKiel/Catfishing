@@ -88,6 +88,8 @@ struct FCatFishingAttemptSnapshot
 	UPROPERTY(BlueprintReadOnly) FGuid CastAttemptId;
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> FisherPlayerState = nullptr;
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<ACatFishingRodActor> RodActor = nullptr;
+	/** 本次抛竿绑定的鱼竿物品实例；它来自部署 Actor，用于诊断和后续实例状态回写。 */
+	UPROPERTY(BlueprintReadOnly) FGuid RodItemInstanceId;
 	UPROPERTY(BlueprintReadOnly) FName RodDefinitionId = NAME_None;
 	UPROPERTY(BlueprintReadOnly) FName FloatDefinitionId = NAME_None;
 	UPROPERTY(BlueprintReadOnly) FName BaitDefinitionId = NAME_None;

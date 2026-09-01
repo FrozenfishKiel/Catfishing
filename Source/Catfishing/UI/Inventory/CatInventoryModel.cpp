@@ -780,7 +780,7 @@ FCatInventorySlotView UCatInventoryModel::MakeSlotView(const FCatContainerSnapsh
 }
 
 // 随身库存格投影流程：
-// 1. 先把本库存内局部下标、库存数组下标、来源和定义 ID 写入只读 SlotView；空定义或非正数量只生成占位文本。
+// 1. 先把本库存内局部下标、库存数组下标、来源、定义 ID 和实例 ID 写入只读 SlotView；空定义或非正数量只生成占位文本。
 // 2. 对有效格读取 Equipment 定义，定义缺失时仍展示物品 ID，但类别降级为 Unknown，避免 UI 因数据缺口空白。
 // 3. 名称、说明、缩略图和堆叠表现都由定义资产投影出来；WBP 不再绕过 Model 自己查数据源。
 // 4. 把当前格的定义、数量和类别同步到通用 Object 字段，让既有 WBP 能复用同一套显示绑定。
@@ -793,6 +793,7 @@ FCatInventorySlotView UCatInventoryModel::MakeInventorySlotView(
 	Slot.InventorySlotIndex = InventorySlotIndex;
 	Slot.EquipmentDefinitionId = InventorySlot.DefinitionId;
 	Slot.DefinitionId = InventorySlot.DefinitionId;
+	Slot.InventoryItemInstanceId = InventorySlot.ItemInstanceId;
 	ApplyInventoryQuantityPresentation(Slot, 0, 1);
 	Slot.bOccupied = !InventorySlot.DefinitionId.IsNone() && InventorySlot.Quantity > 0;
 	if (Slot.bOccupied)
@@ -837,7 +838,7 @@ FCatInventorySlotView UCatInventoryModel::MakeInventorySlotView(
 }
 
 // 营地公共仓库格投影流程：
-// 1. 写入公共仓库槽位下标、快照版本和本仓库局部下标；这些字段只用于取用请求复核。
+// 1. 写入公共仓库槽位下标、快照版本、本仓库局部下标和实例 ID；这些字段只用于展示和取用请求复核。
 // 2. 有效格复用装备定义解析名称、类别、说明、缩略图和堆叠角标，保持公共仓库与随身库存表现一致。
 // 3. 公共仓库格开放同仓库整理和背包/营地跨源拖放；它不进入 Items 容器移动，所有写入仍走服务器命令。
 FCatInventorySlotView UCatInventoryModel::MakeCampInventorySlotView(const FCatRunInventorySlot& InventorySlot,
@@ -850,6 +851,7 @@ FCatInventorySlotView UCatInventoryModel::MakeCampInventorySlotView(const FCatRu
 	Slot.CampInventoryRevision = CampRevision;
 	Slot.EquipmentDefinitionId = InventorySlot.DefinitionId;
 	Slot.DefinitionId = InventorySlot.DefinitionId;
+	Slot.InventoryItemInstanceId = InventorySlot.ItemInstanceId;
 	ApplyInventoryQuantityPresentation(Slot, 0, 1);
 	Slot.bOccupied = !InventorySlot.DefinitionId.IsNone() && InventorySlot.Quantity > 0;
 	if (Slot.bOccupied)

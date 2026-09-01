@@ -48,12 +48,13 @@ void ACatFishingRodActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 	DOREPLIFETIME(ThisClass, PresentationState);
 }
 
-bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActorId, const FName InRodDefinitionId,
-	const FName InRodSkinDefinitionId, APlayerState* InOwnerPlayerState, APlayerState* InOperatorPlayerState,
-	const bool bInDeployed, const bool bInBroken)
+bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActorId, const FGuid InItemInstanceId,
+	const FName InRodDefinitionId, const FName InRodSkinDefinitionId, APlayerState* InOwnerPlayerState,
+	APlayerState* InOperatorPlayerState, const bool bInDeployed, const bool bInBroken)
 {
-	// 只有服务器能设身份；三个必填标识缺一不可，否则视为非法调用
-	if (!HasAuthority() || !InRodActorId.IsValid() || InRodDefinitionId.IsNone() || !InOwnerPlayerState)
+	// 只有服务器能设身份；Actor 身份、物品实例身份和定义身份缺一不可，否则收杆时无法证明该还哪一件物品。
+	if (!HasAuthority() || !InRodActorId.IsValid() || !InItemInstanceId.IsValid()
+		|| InRodDefinitionId.IsNone() || !InOwnerPlayerState)
 	{
 		return false;
 	}
@@ -62,6 +63,7 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 		// 幂等保护：身份已初始化过，只有传入值与已有身份完全一致才算“成功”，
 		// 防止同一个 Actor 被误用来承载第二个不同的竿身份
 		return PresentationState.RodActorId == InRodActorId
+			&& PresentationState.ItemInstanceId == InItemInstanceId
 			&& PresentationState.RodDefinitionId == InRodDefinitionId
 			&& PresentationState.OwnerPlayerState == InOwnerPlayerState;
 	}
@@ -71,6 +73,7 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	FCatFishingRodPresentationState Next;
 	Next.RodActorId = InRodActorId;
 	Next.RodActorRevision = 1; // 首次初始化即为 Revision 1，后续每次权威变更递增
+	Next.ItemInstanceId = InItemInstanceId;
 	Next.RodDefinitionId = InRodDefinitionId;
 	Next.RodSkinDefinitionId = InRodSkinDefinitionId;
 	Next.OwnerPlayerState = InOwnerPlayerState;
@@ -122,6 +125,7 @@ bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresen
 	// 身份类字段（Id/DefinitionId/Owner）不可被这条“可变状态”写口覆盖，只保留传入 Next 里的可变部分
 	FCatFishingRodPresentationState Committed = Next;
 	Committed.RodActorId = PresentationState.RodActorId;
+	Committed.ItemInstanceId = PresentationState.ItemInstanceId;
 	Committed.RodDefinitionId = PresentationState.RodDefinitionId;
 	Committed.OwnerPlayerState = PresentationState.OwnerPlayerState;
 	// 主位只是有序数组首项的兼容镜像，不单独保存模式位；人数从数组实时推导，避免 2→1 后残留协作状态。

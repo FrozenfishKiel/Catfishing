@@ -28,14 +28,16 @@ const FCatEquipmentLoadoutSnapshot& UCatEquipmentComponent::GetSnapshot() const
 }
 
 // 当前钓鱼选择配置流程：
-// 1. 先拒绝并发 Fishing/数量型物品使用事务，再用 RequestId 返回既有终态，避免重复选择刷新耐久。
+// 1. 先拒绝并发 Fishing 或数量型物品使用事务，再用 RequestId 返回既有终态；已部署的物品因不在库存中自然不会被重新选中。
 // 2. 每次提交都必须通过服务器目录、authority、Revision、定义类别、消耗属性和 Profile 解锁证明。
-// 3. 鱼竿、鱼饵、鱼漂和可选抄网必须都已经存在于同一份随身库存；这个入口只选择，不发放。
-// 4. 同一套选择直接返回 AlreadyResolved；不同选择会切换当前钓鱼选择，只有鱼竿定义变化时才换用新竿耐久。
-// 5. 成功时只写钓鱼选择和当前鱼竿耐久，并发布同一份随身库存快照。
+// 3. 鱼竿、鱼饵、鱼漂和可选抄网必须都已经存在于同一份随身库存；新 UI 给实例 ID 时精确选择，旧 UI 只给定义 ID 时服务器会解析到具体实例。
+// 4. 同一套定义和实例选择直接返回 AlreadyResolved；不同选择会切换当前钓鱼选择，并从鱼竿实例读取耐久。
+// 5. 成功时只写钓鱼选择、实例身份和当前鱼竿状态，并发布同一份随身库存快照。
 FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const FName RodDefinitionId, const FName BaitDefinitionId,
-	const FName FloatDefinitionId, const FName ScoopNetDefinitionId, const FName RodSkinDefinitionId)
+	const FName FloatDefinitionId, const FName ScoopNetDefinitionId, const FName RodSkinDefinitionId,
+	const FGuid RodItemInstanceId, const FGuid BaitItemInstanceId, const FGuid FloatItemInstanceId,
+	const FGuid ScoopNetItemInstanceId)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
@@ -87,39 +89,81 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 	{
 		Result.Error = ECatDomainCommandError::PermissionDenied;
 	}
-	else if (GetInventoryItemQuantity(RodDefinitionId) <= 0 || GetInventoryItemQuantity(BaitDefinitionId) <= 0
-		|| GetInventoryItemQuantity(FloatDefinitionId) <= 0
-		|| (!ScoopNetDefinitionId.IsNone() && GetInventoryItemQuantity(ScoopNetDefinitionId) <= 0))
-	{
-		Result.Error = ECatDomainCommandError::NotFound;
-	}
 	else
 	{
-		const bool bSameLoadout = Snapshot.RodDefinitionId == RodDefinitionId
-			&& Snapshot.BaitDefinitionId == BaitDefinitionId && Snapshot.FloatDefinitionId == FloatDefinitionId
-			&& Snapshot.ScoopNetDefinitionId == ScoopNetDefinitionId && Snapshot.RodSkinDefinitionId == RodSkinDefinitionId;
-		if (bSameLoadout)
+		const auto ResolveSelectedInventorySlot =
+			[this](const FName DefinitionId, const FGuid ItemInstanceId) -> const FCatRunInventorySlot*
+			{
+				if (ItemInstanceId.IsValid())
+				{
+					const FCatRunInventorySlot* Slot = FindInventorySlotByInstanceId(ItemInstanceId);
+					return Slot && Slot->DefinitionId == DefinitionId ? Slot : nullptr;
+				}
+				return FindFirstInventorySlotByDefinition(DefinitionId);
+			};
+		const FCatRunInventorySlot* RodSlotBeforeNormalize = ResolveSelectedInventorySlot(RodDefinitionId,
+			RodItemInstanceId);
+		const FCatRunInventorySlot* BaitSlotBeforeNormalize = ResolveSelectedInventorySlot(BaitDefinitionId,
+			BaitItemInstanceId);
+		const FCatRunInventorySlot* FloatSlotBeforeNormalize = ResolveSelectedInventorySlot(FloatDefinitionId,
+			FloatItemInstanceId);
+		const FCatRunInventorySlot* ScoopSlotBeforeNormalize = ScoopNetDefinitionId.IsNone()
+			? nullptr : ResolveSelectedInventorySlot(ScoopNetDefinitionId, ScoopNetItemInstanceId);
+		if (!RodSlotBeforeNormalize || !BaitSlotBeforeNormalize || !FloatSlotBeforeNormalize
+			|| (!ScoopNetDefinitionId.IsNone() && !ScoopSlotBeforeNormalize))
 		{
-			Result.Error = ECatDomainCommandError::AlreadyResolved;
-			Result.Revision = Snapshot.Revision;
-			TerminalCache.Add(Key, Result);
-			return Result;
+			Result.Error = ECatDomainCommandError::NotFound;
 		}
-		const bool bRodChanged = Snapshot.RodDefinitionId != RodDefinitionId;
-		Snapshot.RodDefinitionId = RodDefinitionId;
-		Snapshot.BaitDefinitionId = BaitDefinitionId;
-		Snapshot.FloatDefinitionId = FloatDefinitionId;
-		Snapshot.ScoopNetDefinitionId = ScoopNetDefinitionId;
-		Snapshot.RodSkinDefinitionId = RodSkinDefinitionId;
-		if (bRodChanged)
+		else
 		{
-			Snapshot.RodDurability = Rod->MaximumRodDurability;
-			Snapshot.bRodBroken = false;
+			const bool bNormalized = NormalizeInventorySlots();
+			const FCatRunInventorySlot* RodSlot = ResolveSelectedInventorySlot(RodDefinitionId, RodItemInstanceId);
+			const FCatRunInventorySlot* BaitSlot = ResolveSelectedInventorySlot(BaitDefinitionId, BaitItemInstanceId);
+			const FCatRunInventorySlot* FloatSlot = ResolveSelectedInventorySlot(FloatDefinitionId, FloatItemInstanceId);
+			const FCatRunInventorySlot* ScoopSlot = ScoopNetDefinitionId.IsNone()
+				? nullptr : ResolveSelectedInventorySlot(ScoopNetDefinitionId, ScoopNetItemInstanceId);
+			if (!RodSlot || !BaitSlot || !FloatSlot || (!ScoopNetDefinitionId.IsNone() && !ScoopSlot))
+			{
+				Result.Error = ECatDomainCommandError::NotFound;
+			}
+			else
+			{
+				const FGuid NewScoopItemInstanceId = ScoopSlot ? ScoopSlot->ItemInstanceId : FGuid();
+				const bool bSameLoadout = Snapshot.RodDefinitionId == RodDefinitionId
+					&& Snapshot.RodItemInstanceId == RodSlot->ItemInstanceId
+					&& Snapshot.BaitDefinitionId == BaitDefinitionId
+					&& Snapshot.BaitItemInstanceId == BaitSlot->ItemInstanceId
+					&& Snapshot.FloatDefinitionId == FloatDefinitionId
+					&& Snapshot.FloatItemInstanceId == FloatSlot->ItemInstanceId
+					&& Snapshot.ScoopNetDefinitionId == ScoopNetDefinitionId
+					&& Snapshot.ScoopNetItemInstanceId == NewScoopItemInstanceId
+					&& Snapshot.RodSkinDefinitionId == RodSkinDefinitionId
+					&& Snapshot.RodDurability == RodSlot->RodDurability
+					&& Snapshot.bRodBroken == RodSlot->bRodBroken;
+				if (bSameLoadout && !bNormalized)
+				{
+					Result.Error = ECatDomainCommandError::AlreadyResolved;
+					Result.Revision = Snapshot.Revision;
+					TerminalCache.Add(Key, Result);
+					return Result;
+				}
+				Snapshot.RodDefinitionId = RodDefinitionId;
+				Snapshot.RodItemInstanceId = RodSlot->ItemInstanceId;
+				Snapshot.BaitDefinitionId = BaitDefinitionId;
+				Snapshot.BaitItemInstanceId = BaitSlot->ItemInstanceId;
+				Snapshot.FloatDefinitionId = FloatDefinitionId;
+				Snapshot.FloatItemInstanceId = FloatSlot->ItemInstanceId;
+				Snapshot.ScoopNetDefinitionId = ScoopNetDefinitionId;
+				Snapshot.ScoopNetItemInstanceId = NewScoopItemInstanceId;
+				Snapshot.RodSkinDefinitionId = RodSkinDefinitionId;
+				Snapshot.RodDurability = RodSlot->RodDurability;
+				Snapshot.bRodBroken = RodSlot->bRodBroken;
+				++Snapshot.Revision;
+				PublishSnapshot();
+				Result.bCommitted = true;
+				Result.Error = ECatDomainCommandError::None;
+			}
 		}
-		++Snapshot.Revision;
-		PublishSnapshot();
-		Result.bCommitted = true;
-		Result.Error = ECatDomainCommandError::None;
 	}
 	Result.Revision = Snapshot.Revision;
 	TerminalCache.Add(Key, Result);
@@ -326,6 +370,144 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantEquipmentFromAuthority(cons
 	return Result;
 }
 
+FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, const int64 ExpectedRevision,
+	const FGuid ItemInstanceId)
+{
+	// 物品使用流程：
+	// 1. 先校验 authority、RequestId、Revision 和并发阶段，失败时不触碰库存数组。
+	// 2. 再按实例 ID 找到库存格并读取定义；当前只有 Rod 有部署实现，其他物品保持 no-op 终态。
+	// 3. 成功的 Rod Use 会把整份实例从库存移到活动记录，Snapshot 仍保留当前选择和实例状态供 UI/钓鱼命令读取。
+	// 4. 发布后的调用方才允许生成世界 Actor；若后续生成失败，必须调用 UnUse 把同一实例放回库存。
+	FCatInventoryItemUseResult Result;
+	Result.RequestId = RequestId;
+	Result.EquipmentRevision = Snapshot.Revision;
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !ItemInstanceId.IsValid())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+	if (Snapshot.Revision != ExpectedRevision)
+	{
+		Result.Error = ECatDomainCommandError::RevisionConflict;
+		return Result;
+	}
+	if (HasActiveFishingUse() || HasActiveInventoryItemUse() || HasActiveRunConsumableUse())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPhase;
+		return Result;
+	}
+	if (const FCatInventoryItemUseRecord* ExistingRecord = FindInventoryItemUseRecord(ItemInstanceId);
+		ExistingRecord && !ExistingRecord->bReleased)
+	{
+		Result.Item = ExistingRecord->Item;
+		Result.Error = ECatDomainCommandError::InvalidPhase;
+		return Result;
+	}
+	NormalizeInventorySlots();
+	const FCatRunInventorySlot* SourceSlot = FindInventorySlotByInstanceId(ItemInstanceId);
+	const UCatEquipmentDefinition* Definition = SourceSlot
+		? GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(SourceSlot->DefinitionId) : nullptr;
+	if (!SourceSlot || !Definition)
+	{
+		Result.Error = ECatDomainCommandError::NotFound;
+		return Result;
+	}
+	if (Definition->Kind != ECatEquipmentKind::Rod)
+	{
+		Result.Item = *SourceSlot;
+		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		return Result;
+	}
+	if (SourceSlot->bRodBroken || !FMath::IsFinite(SourceSlot->RodDurability)
+		|| SourceSlot->RodDurability <= 0.0)
+	{
+		Result.Item = *SourceSlot;
+		Result.Error = ECatDomainCommandError::InvalidPhase;
+		return Result;
+	}
+
+	FCatRunInventorySlot UsedItem;
+	if (!RemoveInventoryItemInstance(ItemInstanceId, UsedItem))
+	{
+		Result.Error = ECatDomainCommandError::NotFound;
+		return Result;
+	}
+	FCatInventoryItemUseRecord Record;
+	Record.ItemInstanceId = UsedItem.ItemInstanceId;
+	Record.Item = UsedItem;
+	InventoryItemUseRecords.Add(UsedItem.ItemInstanceId, Record);
+	Snapshot.RodDefinitionId = UsedItem.DefinitionId;
+	Snapshot.RodItemInstanceId = UsedItem.ItemInstanceId;
+	Snapshot.RodDurability = UsedItem.RodDurability;
+	Snapshot.bRodBroken = UsedItem.bRodBroken;
+	++Snapshot.Revision;
+	InventoryItemUseRecords.FindChecked(UsedItem.ItemInstanceId).UseRevision = Snapshot.Revision;
+	PublishSnapshot();
+	Result.Item = UsedItem;
+	Result.EquipmentRevision = Snapshot.Revision;
+	Result.bCommitted = true;
+	Result.Error = ECatDomainCommandError::None;
+	return Result;
+}
+
+FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, const FGuid ItemInstanceId)
+{
+	// 物品停止使用流程：
+	// 1. 先找到活动 Use 记录；找不到说明调用方没有同一实例的使用权，不能按 DefinitionId 重新造物品。
+	// 2. 收口前预检背包是否能原样放回该实例；容量不足时保持场景 Actor 和活动记录不变。
+	// 3. 放回成功后才释放活动记录、同步鱼竿选择状态并发布库存快照，调用方随后可以隐藏或销毁世界 Actor。
+	FCatInventoryItemUseResult Result;
+	Result.RequestId = RequestId;
+	Result.EquipmentRevision = Snapshot.Revision;
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !ItemInstanceId.IsValid())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+	FCatInventoryItemUseRecord* Record = FindInventoryItemUseRecord(ItemInstanceId);
+	if (!Record)
+	{
+		Result.Error = ECatDomainCommandError::NotFound;
+		return Result;
+	}
+	Result.Item = Record->Item;
+	if (Record->bReleased)
+	{
+		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		return Result;
+	}
+	const UCatEquipmentDefinition* Definition =
+		GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Record->Item.DefinitionId);
+	if (!Definition)
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		return Result;
+	}
+	FCatRunInventorySlot RestoredItem = Record->Item;
+	CatRunInventorySlotOperations::NormalizeStoredItemSlot(RestoredItem, *Definition);
+	if (!CanStoreInventorySlot(*Definition, RestoredItem) || !AddInventoryItemSlot(*Definition, RestoredItem))
+	{
+		Result.Error = ECatDomainCommandError::CapacityExceeded;
+		return Result;
+	}
+	Record->Item = RestoredItem;
+	Record->bReleased = true;
+	if (Definition->Kind == ECatEquipmentKind::Rod && Snapshot.RodItemInstanceId == RestoredItem.ItemInstanceId)
+	{
+		Snapshot.RodDefinitionId = RestoredItem.DefinitionId;
+		Snapshot.RodDurability = RestoredItem.RodDurability;
+		Snapshot.bRodBroken = RestoredItem.bRodBroken;
+	}
+	AutoSelectGrantedInventoryItem(*Definition, RestoredItem.DefinitionId);
+	++Snapshot.Revision;
+	PublishSnapshot();
+	Result.Item = RestoredItem;
+	Result.EquipmentRevision = Snapshot.Revision;
+	Result.bCommitted = true;
+	Result.Error = ECatDomainCommandError::None;
+	return Result;
+}
+
 // 库存整理流程：
 // 1. 先用 RequestId、Revision 和源/目标下标查询终态缓存，合法重放必须返回首次结果，不受当前 Fishing 或消耗阶段影响。
 // 2. 首次请求再检查当前阶段 gate，避免整理库存和正在提交的库存消耗同时改同一份数组。
@@ -524,6 +706,7 @@ FCatFishingFailureResult UCatEquipmentComponent::CommitFishingFailure(const FGui
 		{
 			Snapshot.RodDurability = FMath::Max(0.0, Snapshot.RodDurability - Loss);
 			Snapshot.bRodBroken = Snapshot.RodDurability <= 0.0;
+			SyncSelectedRodStateToSelectedInstance();
 			++Snapshot.Revision;
 			Result.Command.bCommitted = true;
 			Result.Command.Error = ECatDomainCommandError::None;
@@ -545,13 +728,23 @@ FCatFishingFailureResult UCatEquipmentComponent::CommitFishingFailure(const FGui
 }
 
 FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FGuid FishingSessionId,
-	const FName RodDefinitionId, const FName BaitDefinitionId, const FName FloatDefinitionId, const int64 ExpectedRevision)
+	const FName RodDefinitionId, const FName BaitDefinitionId, const FName FloatDefinitionId,
+	const int64 ExpectedRevision)
+{
+	// 兼容入口流程：旧调用方仍只知道定义 ID，这里只补当前选择实例 ID 并交给正式 Use-aware 入口，不再复制库存可用性判断。
+	return BeginFishingUse(FishingSessionId, Snapshot.RodItemInstanceId, RodDefinitionId, BaitDefinitionId,
+		FloatDefinitionId, ExpectedRevision);
+}
+
+FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FGuid FishingSessionId,
+	const FGuid RodItemInstanceId, const FName RodDefinitionId, const FName BaitDefinitionId,
+	const FName FloatDefinitionId, const int64 ExpectedRevision)
 {
 	// 建立 Fishing 使用预留的流程：
 	// 1. 先用 SessionId 返回已存在的终态，保证 FishingSession 重放不会再检查或再占库存。
 	// 2. 再校验 authority、定义类型、Revision、当前钓鱼选择和鱼竿耐久，任何不一致都保持快照不变。
 	// 3. 接着拒绝 RunConsumable 并发；Fishing 自身按 SessionId 并行预留，库存可用量统一扣除所有待提交预留。
-	// 4. 鱼竿和鱼漂必须在随身库存中仍有实物；普通饵和特殊饵都必须声明为 RunConsumable，并且格子数量扣除其他 Fishing 预留后仍至少剩一份。
+	// 4. 鱼竿优先由正在操作的 Actor 提供实例身份；旧调用缺失时回退到当前定义可用实例，鱼饵数量扣除其他 Fishing 预留后仍至少剩一份。
 	// 5. 最后只写入本 Session 预留记录，不递增 Revision；真正的库存变化留到 Commit 阶段发布。
 	if (const FCatFishingUseRecord* ExistingRecord = FindFishingUseRecord(FishingSessionId))
 	{
@@ -569,12 +762,21 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	UCatEquipmentDefinition* Rod = Settings->FindRuntimeDefinition(RodDefinitionId);
 	UCatEquipmentDefinition* Bait = Settings->FindRuntimeDefinition(BaitDefinitionId);
 	UCatEquipmentDefinition* Float = Settings->FindRuntimeDefinition(FloatDefinitionId);
+	FGuid ResolvedRodItemInstanceId = RodItemInstanceId;
+	if (!ResolvedRodItemInstanceId.IsValid())
+	{
+		if (const FCatRunInventorySlot* FallbackRodSlot = FindFirstInventorySlotByDefinition(RodDefinitionId))
+		{
+			ResolvedRodItemInstanceId = FallbackRodSlot->ItemInstanceId;
+		}
+	}
 	if (!GetOwner() || !GetOwner()->HasAuthority())
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::DependencyUnavailable, false);
 	}
-	if (!FishingSessionId.IsValid() || RodDefinitionId.IsNone() || BaitDefinitionId.IsNone() || FloatDefinitionId.IsNone()
-		|| !Rod || !Bait || !Float || Rod->Kind != ECatEquipmentKind::Rod || Bait->Kind != ECatEquipmentKind::Bait
+	if (!FishingSessionId.IsValid() || !ResolvedRodItemInstanceId.IsValid() || RodDefinitionId.IsNone()
+		|| BaitDefinitionId.IsNone() || FloatDefinitionId.IsNone() || !Rod || !Bait || !Float
+		|| Rod->Kind != ECatEquipmentKind::Rod || Bait->Kind != ECatEquipmentKind::Bait
 		|| Float->Kind != ECatEquipmentKind::Float)
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false);
@@ -583,8 +785,9 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::RevisionConflict, false);
 	}
-	if (Snapshot.RodDefinitionId != RodDefinitionId || Snapshot.BaitDefinitionId != BaitDefinitionId
-		|| Snapshot.FloatDefinitionId != FloatDefinitionId)
+	if (Snapshot.RodDefinitionId != RodDefinitionId
+		|| (Snapshot.RodItemInstanceId.IsValid() && Snapshot.RodItemInstanceId != ResolvedRodItemInstanceId)
+		|| Snapshot.BaitDefinitionId != BaitDefinitionId || Snapshot.FloatDefinitionId != FloatDefinitionId)
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false);
 	}
@@ -597,7 +800,7 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false);
 	}
-	if (GetInventoryItemQuantity(RodDefinitionId) <= 0 || GetInventoryItemQuantity(FloatDefinitionId) <= 0
+	if (GetInventoryItemQuantity(FloatDefinitionId) <= 0
 		|| GetInventoryItemQuantity(BaitDefinitionId) <= GetPendingReservedFishingBaitCount(BaitDefinitionId))
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false);
@@ -605,6 +808,7 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 
 	FCatFishingUseRecord Record;
 	Record.SessionId = FishingSessionId;
+	Record.RodItemInstanceId = ResolvedRodItemInstanceId;
 	Record.RodDefinitionId = RodDefinitionId;
 	Record.BaitDefinitionId = BaitDefinitionId;
 	Record.FloatDefinitionId = FloatDefinitionId;
@@ -735,6 +939,7 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingRodWear(const
 		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
 	}
 	Snapshot.RodDurability -= Record->AbsoluteRodWear;
+	SyncSelectedRodStateToSelectedInstance();
 	Record->bWearCommitted = true;
 	Record->bReleased = true;
 	++Snapshot.Revision;
@@ -759,6 +964,7 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingRodBreak(cons
 	}
 	Snapshot.RodDurability = 0.0;
 	Snapshot.bRodBroken = true;
+	SyncSelectedRodStateToSelectedInstance();
 	Record->bBreakCommitted = true;
 	Record->bReleased = true;
 	++Snapshot.Revision;
@@ -938,13 +1144,13 @@ bool UCatEquipmentComponent::HasActiveRunConsumableUse() const
 		&& (!Record->bCommitted || !Record->bCommitPublished);
 }
 
-// 维修流程：验证固定营地事实、Revision、当前 Rod/浮木定义和库存；成功只扣一份浮木并恢复当前 Rod 最大耐久，不升级或替换装备。
+// 维修流程：验证固定营地事实、Revision、当前 Rod/浮木定义和库存；鱼竿正在 Use 时拒绝，成功只扣一份浮木并恢复同一实例耐久。
 FCatDomainCommandResult UCatEquipmentComponent::RepairRodAtCamp(const FGuid RequestId, const int64 ExpectedRevision,
 	const bool bAtCamp)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	if (HasActiveFishingUse() || HasActiveRunConsumableUse())
+	if (HasActiveFishingUse() || HasActiveInventoryItemUse() || HasActiveRunConsumableUse())
 	{
 		Result.Error = ECatDomainCommandError::InvalidPhase;
 		Result.Revision = Snapshot.Revision;
@@ -977,6 +1183,7 @@ FCatDomainCommandResult UCatEquipmentComponent::RepairRodAtCamp(const FGuid Requ
 		{
 			Snapshot.RodDurability = Rod->MaximumRodDurability;
 			Snapshot.bRodBroken = false;
+			SyncSelectedRodStateToSelectedInstance();
 			++Snapshot.Revision;
 			PublishSnapshot();
 			Result.bCommitted = true;
@@ -1053,7 +1260,7 @@ bool UCatEquipmentComponent::CanStoreInventoryItem(const UCatEquipmentDefinition
 	int32 EmptySlotCount = FMath::Max(0, EffectiveSlotCount - Snapshot.InventorySlots.Num());
 	for (const FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
 	{
-		if (Slot.DefinitionId.IsNone() || Slot.Quantity <= 0)
+		if (!CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
 		{
 			++EmptySlotCount;
 		}
@@ -1075,10 +1282,41 @@ void UCatEquipmentComponent::EnsureInventorySlotArray()
 	}
 }
 
+bool UCatEquipmentComponent::NormalizeInventorySlots()
+{
+	// 存量格修复流程：
+	// 1. 只遍历当前随身库存事实，不改活动 Use 记录和选择快照。
+	// 2. 有内容的格子交给定义归一化，给旧数据补实例身份并补齐鱼竿状态。
+	// 3. 空格清回默认值，避免残留实例 ID 让 Use 误以为还有物品。
+	// 4. 返回是否真的改动过格子字段，让上层决定是否推进 Revision 和发布快照。
+	bool bChanged = false;
+	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+	for (FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
+	{
+		const FCatRunInventorySlot Before = Slot;
+		const UCatEquipmentDefinition* Definition = Settings && CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot)
+			? Settings->FindRuntimeDefinition(Slot.DefinitionId) : nullptr;
+		if (Definition)
+		{
+			CatRunInventorySlotOperations::NormalizeStoredItemSlot(Slot, *Definition);
+		}
+		else if (!CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
+		{
+			Slot = FCatRunInventorySlot();
+		}
+		bChanged = bChanged || Slot.DefinitionId != Before.DefinitionId
+			|| Slot.ItemInstanceId != Before.ItemInstanceId
+			|| Slot.Quantity != Before.Quantity
+			|| Slot.RodDurability != Before.RodDurability
+			|| Slot.bRodBroken != Before.bRodBroken;
+	}
+	return bChanged;
+}
+
 // 入库写入流程：
 // 1. 复用预检保证不会半写入；随后补齐配置容量内的空格。
-// 2. 同定义未满格先合并，剩余数量再落到空格。
-// 3. 写完只改变 InventorySlots；所有读者都从这份数组重新汇总自己需要的数量。
+// 2. 同定义未满格先合并，并补齐该堆栈的实例身份；剩余数量再按定义创建新的运行期实例落到空格。
+// 3. 写完只改变 InventorySlots；所有读者都从这份数组重新汇总自己需要的数量和实例身份。
 bool UCatEquipmentComponent::AddInventoryItemQuantity(const UCatEquipmentDefinition& Definition,
 	const FName DefinitionId, const int32 Quantity)
 {
@@ -1093,6 +1331,7 @@ bool UCatEquipmentComponent::AddInventoryItemQuantity(const UCatEquipmentDefinit
 	{
 		if (Slot.DefinitionId == DefinitionId && Slot.Quantity > 0 && Slot.Quantity < StackLimit)
 		{
+			CatRunInventorySlotOperations::NormalizeStoredItemSlot(Slot, Definition);
 			const int32 Added = FMath::Min(Remaining, StackLimit - Slot.Quantity);
 			Slot.Quantity += Added;
 			Remaining -= Added;
@@ -1104,11 +1343,10 @@ bool UCatEquipmentComponent::AddInventoryItemQuantity(const UCatEquipmentDefinit
 	}
 	for (FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
 	{
-		if (Slot.DefinitionId.IsNone() || Slot.Quantity <= 0)
+		if (!CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
 		{
 			const int32 Added = FMath::Min(Remaining, StackLimit);
-			Slot.DefinitionId = DefinitionId;
-			Slot.Quantity = Added;
+			Slot = CatRunInventorySlotOperations::MakeInventoryItemSlot(Definition, DefinitionId, Added);
 			Remaining -= Added;
 			if (Remaining <= 0)
 			{
@@ -1119,7 +1357,167 @@ bool UCatEquipmentComponent::AddInventoryItemQuantity(const UCatEquipmentDefinit
 	return false;
 }
 
-// 库存扣减流程：先确认总量足够，再从靠前格子扣数量；格子清空后保留数组位置，避免 UI 下标整体漂移。
+bool UCatEquipmentComponent::CanStoreInventorySlot(const UCatEquipmentDefinition& Definition,
+	const FCatRunInventorySlot& Item) const
+{
+	// 完整实例容量预检流程：
+	// 1. 先拒绝空实例、非法数量和超过堆叠上限的载荷，保证 UnUse 不会放回一份坏状态。
+	// 2. 数量型物品只允许合并回同一个 ItemInstanceId 的堆栈，避免同定义不同实例被揉到一起。
+	// 3. 合并空间不足时再检查配置容量和现有空格；这里只读判断，不提前改变库存数组。
+	if (!CatRunInventorySlotOperations::IsInventorySlotOccupied(Item) || !Item.ItemInstanceId.IsValid())
+	{
+		return false;
+	}
+	const int32 StackLimit = GetInventoryStackLimit(Definition);
+	if (StackLimit <= 0 || Item.Quantity > StackLimit)
+	{
+		return false;
+	}
+	int32 Remaining = Item.Quantity;
+	for (const FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
+	{
+		if (Definition.bRunConsumable && Slot.ItemInstanceId == Item.ItemInstanceId
+			&& Slot.DefinitionId == Item.DefinitionId && Slot.Quantity > 0 && Slot.Quantity < StackLimit)
+		{
+			Remaining -= FMath::Min(Remaining, StackLimit - Slot.Quantity);
+			if (Remaining <= 0)
+			{
+				return true;
+			}
+		}
+	}
+	const int32 EffectiveSlotCount = FMath::Max(GetConfiguredInventorySlotCapacity(), Snapshot.InventorySlots.Num());
+	if (Snapshot.InventorySlots.Num() < EffectiveSlotCount)
+	{
+		return true;
+	}
+	for (const FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
+	{
+		if (!CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UCatEquipmentComponent::AddInventoryItemSlot(const UCatEquipmentDefinition& Definition,
+	const FCatRunInventorySlot& Item)
+{
+	// 完整实例放回流程：先尝试合并同一个数量型实例，再找空格原样落位；不会把不同实例只因 DefinitionId 相同就揉成一份。
+	FCatRunInventorySlot StoredItem = Item;
+	CatRunInventorySlotOperations::NormalizeStoredItemSlot(StoredItem, Definition);
+	if (!CanStoreInventorySlot(Definition, StoredItem))
+	{
+		return false;
+	}
+	EnsureInventorySlotArray();
+	const int32 StackLimit = GetInventoryStackLimit(Definition);
+	if (Definition.bRunConsumable)
+	{
+		int32 Remaining = StoredItem.Quantity;
+		for (FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
+		{
+			if (Slot.ItemInstanceId == StoredItem.ItemInstanceId && Slot.DefinitionId == StoredItem.DefinitionId
+				&& Slot.Quantity > 0 && Slot.Quantity < StackLimit)
+			{
+				const int32 Added = FMath::Min(Remaining, StackLimit - Slot.Quantity);
+				Slot.Quantity += Added;
+				Remaining -= Added;
+				if (Remaining <= 0)
+				{
+					return true;
+				}
+			}
+		}
+		StoredItem.Quantity = Remaining;
+	}
+	for (FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
+	{
+		if (!CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
+		{
+			Slot = StoredItem;
+			return true;
+		}
+	}
+	return false;
+}
+
+FCatDomainCommandResult UCatEquipmentComponent::GrantInventorySlotFromAuthority(const FGuid RequestId,
+	const int64 ExpectedRevision, const FCatRunInventorySlot& Item)
+{
+	// 完整实例授予流程：
+	// 1. 用 RequestId 和实例载荷签名保护重放，避免同一取用请求换成另一件物品。
+	// 2. 首次提交只接受 authority、正确 Revision 和可运行定义；数量型与装备型都走完整实例入库，不重新生成 ItemInstanceId。
+	// 3. 成功后按定义自动修正当前选择并发布快照，调用方不需要知道这份实例落到了哪个格子。
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	const FString Key = MakeTerminalKey(TEXT("GrantInventorySlot"), RequestId);
+	const FString PayloadSignature = FString::Printf(
+		TEXT("ExpectedRevision=%lld|Definition=%s|Instance=%s|Quantity=%d|RodDurability=%.6f|Broken=%s"),
+		ExpectedRevision, *Item.DefinitionId.ToString(),
+		*Item.ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), Item.Quantity,
+		Item.RodDurability, Item.bRodBroken ? TEXT("true") : TEXT("false"));
+	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
+	{
+		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
+		if (!CachedPayload || *CachedPayload != PayloadSignature)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+			Result.Revision = Snapshot.Revision;
+			return Result;
+		}
+		Result = *Cached;
+		MarkCommandReplayed(Result);
+		return Result;
+	}
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid()
+		|| !CatRunInventorySlotOperations::IsInventorySlotOccupied(Item) || !Item.ItemInstanceId.IsValid())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	}
+	else if (Snapshot.Revision != ExpectedRevision)
+	{
+		Result.Error = ECatDomainCommandError::RevisionConflict;
+	}
+	else if (HasActiveFishingUse() || HasActiveRunConsumableUse())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPhase;
+	}
+	else
+	{
+		const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+		const UCatEquipmentDefinition* Definition =
+			Settings ? Settings->FindRuntimeDefinition(Item.DefinitionId) : nullptr;
+		if (!Definition)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+		}
+		else if (!Definition->bRunConsumable && Definition->Kind != ECatEquipmentKind::Rod
+			&& Definition->Kind != ECatEquipmentKind::Float && Definition->Kind != ECatEquipmentKind::ScoopNet)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+		}
+		else if (AddInventoryItemSlot(*Definition, Item))
+		{
+			AutoSelectGrantedInventoryItem(*Definition, Item.DefinitionId);
+			++Snapshot.Revision;
+			PublishSnapshot();
+			Result.bCommitted = true;
+			Result.Error = ECatDomainCommandError::None;
+		}
+		else
+		{
+			Result.Error = ECatDomainCommandError::CapacityExceeded;
+		}
+	}
+	Result.Revision = Snapshot.Revision;
+	TerminalCache.Add(Key, Result);
+	TerminalPayloadByKey.Add(Key, PayloadSignature);
+	return Result;
+}
+
+// 库存扣减流程：先确认总量足够，再从靠前格子扣数量；格子清空后保留数组位置，并修正已选鱼饵实例避免选择指向空格。
 bool UCatEquipmentComponent::RemoveInventoryItemQuantity(const FName DefinitionId, const int32 Quantity)
 {
 	if (DefinitionId.IsNone() || Quantity <= 0 || GetInventoryItemQuantity(DefinitionId) < Quantity)
@@ -1142,6 +1540,32 @@ bool UCatEquipmentComponent::RemoveInventoryItemQuantity(const FName DefinitionI
 		}
 		if (Remaining <= 0)
 		{
+			if (Snapshot.BaitDefinitionId == DefinitionId
+				&& !FindInventorySlotByInstanceId(Snapshot.BaitItemInstanceId))
+			{
+				const FCatRunInventorySlot* ReplacementBaitSlot = FindFirstInventorySlotByDefinition(DefinitionId);
+				Snapshot.BaitItemInstanceId = ReplacementBaitSlot ? ReplacementBaitSlot->ItemInstanceId : FGuid();
+			}
+			return true;
+		}
+	}
+	return false;
+}
+
+bool UCatEquipmentComponent::RemoveInventoryItemInstance(const FGuid ItemInstanceId, FCatRunInventorySlot& OutItem)
+{
+	// 实例移出流程：只按 ItemInstanceId 命中一格，成功后把完整实例副本交给调用方；这一步不会按 DefinitionId 误扣同类物品。
+	OutItem = FCatRunInventorySlot();
+	if (!ItemInstanceId.IsValid())
+	{
+		return false;
+	}
+	for (FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
+	{
+		if (Slot.ItemInstanceId == ItemInstanceId && CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
+		{
+			OutItem = Slot;
+			Slot = FCatRunInventorySlot();
 			return true;
 		}
 	}
@@ -1156,6 +1580,33 @@ UCatEquipmentComponent::FCatFishingUseRecord* UCatEquipmentComponent::FindFishin
 const UCatEquipmentComponent::FCatFishingUseRecord* UCatEquipmentComponent::FindFishingUseRecord(const FGuid FishingSessionId) const
 {
 	return FishingUseRecords.Find(FishingSessionId);
+}
+
+UCatEquipmentComponent::FCatInventoryItemUseRecord* UCatEquipmentComponent::FindInventoryItemUseRecord(
+	const FGuid ItemInstanceId)
+{
+	// 活动 Use 记录查找流程：调用方必须提供实例 ID，本函数只返回本 Character 生命周期内的记录指针，不创建默认记录。
+	return InventoryItemUseRecords.Find(ItemInstanceId);
+}
+
+const UCatEquipmentComponent::FCatInventoryItemUseRecord* UCatEquipmentComponent::FindInventoryItemUseRecord(
+	const FGuid ItemInstanceId) const
+{
+	// 活动 Use 记录只读查找流程：供并发 gate、状态同步和回滚读取同一份实例副本，不允许借查询改变记录状态。
+	return InventoryItemUseRecords.Find(ItemInstanceId);
+}
+
+bool UCatEquipmentComponent::HasActiveInventoryItemUse() const
+{
+	// 活动物品使用 gate 流程：只要存在尚未 Released 的实例记录，就认为库存正被世界表现占用，选择和维修不能并行改它。
+	for (const TPair<FGuid, FCatInventoryItemUseRecord>& Pair : InventoryItemUseRecords)
+	{
+		if (Pair.Key.IsValid() && !Pair.Value.bReleased)
+		{
+			return true;
+		}
+	}
+	return false;
 }
 
 int32 UCatEquipmentComponent::GetPendingReservedFishingBaitCount(const FName DefinitionId) const
@@ -1191,9 +1642,99 @@ int32 UCatEquipmentComponent::GetInventoryItemQuantity(const FName DefinitionId)
 	return Quantity;
 }
 
+FCatRunInventorySlot* UCatEquipmentComponent::FindInventorySlotByInstanceId(const FGuid ItemInstanceId)
+{
+	// 实例格查找流程：先拒绝空 GUID，再只在有内容的随身库存格中匹配，防止空格残留字段被当成真实物品。
+	if (!ItemInstanceId.IsValid())
+	{
+		return nullptr;
+	}
+	for (FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
+	{
+		if (Slot.ItemInstanceId == ItemInstanceId && CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
+		{
+			return &Slot;
+		}
+	}
+	return nullptr;
+}
+
+const FCatRunInventorySlot* UCatEquipmentComponent::FindInventorySlotByInstanceId(
+	const FGuid ItemInstanceId) const
+{
+	// 实例格只读查找流程：和可写版本保持同一命中口径，供选择解析、预检和诊断读取库存里的真实实例。
+	if (!ItemInstanceId.IsValid())
+	{
+		return nullptr;
+	}
+	for (const FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
+	{
+		if (Slot.ItemInstanceId == ItemInstanceId && CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
+		{
+			return &Slot;
+		}
+	}
+	return nullptr;
+}
+
+const FCatRunInventorySlot* UCatEquipmentComponent::FindFirstInventorySlotByDefinition(const FName DefinitionId) const
+{
+	// 定义回退解析流程：
+	// 1. 旧 UI 或兼容入口只给 DefinitionId 时，先在库存里记住第一份同定义实物。
+	// 2. 如果同定义里有未断且耐久有效的鱼竿，优先返回它，避免自动选中一根不可用的断竿。
+	// 3. 没找到可用鱼竿时返回第一份匹配物品，让上层继续按自己的规则给出失败或选择结果。
+	if (DefinitionId.IsNone())
+	{
+		return nullptr;
+	}
+	const FCatRunInventorySlot* FirstMatchedSlot = nullptr;
+	for (const FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
+	{
+		if (Slot.DefinitionId == DefinitionId && CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
+		{
+			if (!FirstMatchedSlot)
+			{
+				FirstMatchedSlot = &Slot;
+			}
+			if (!Slot.bRodBroken && FMath::IsFinite(Slot.RodDurability) && Slot.RodDurability > 0.0)
+			{
+				return &Slot;
+			}
+		}
+	}
+	return FirstMatchedSlot;
+}
+
+void UCatEquipmentComponent::SyncSelectedRodStateToSelectedInstance()
+{
+	// 鱼竿状态同步流程：
+	// 1. 当前选择快照仍服务 UI 与老调用方，但真正实例可能在背包格里，也可能已经被 Use 移到活动记录里。
+	// 2. 如果实例还在库存中，直接写回该格的耐久和断竿状态。
+	// 3. 如果实例已经部署到场景，只更新活动记录里的副本，等 UnUse 时再原样归还。
+	// 4. 已收口记录不再改写，避免收杆后的历史记录影响新的库存事实。
+	if (!Snapshot.RodItemInstanceId.IsValid())
+	{
+		return;
+	}
+	if (FCatRunInventorySlot* StoredSlot = FindInventorySlotByInstanceId(Snapshot.RodItemInstanceId))
+	{
+		StoredSlot->RodDurability = Snapshot.RodDurability;
+		StoredSlot->bRodBroken = Snapshot.bRodBroken;
+		return;
+	}
+	if (FCatInventoryItemUseRecord* ActiveUse = FindInventoryItemUseRecord(Snapshot.RodItemInstanceId))
+	{
+		if (!ActiveUse->bReleased)
+		{
+			ActiveUse->Item.RodDurability = Snapshot.RodDurability;
+			ActiveUse->Item.bRodBroken = Snapshot.bRodBroken;
+		}
+	}
+}
+
 // 自动选择流程：
-// 1. 新获得的物品只在当前选择缺失、旧选择无库存，或同定义已选竿已断/耐久非法时介入。
-// 2. 鱼竿选择刷新会重置当前耐久为这根新竿的最大耐久；鱼饵、鱼漂和抄网只写稳定 ID。
+// 1. 新获得的物品只在当前选择缺失、旧选择无库存/无活动 Use，或同定义已选竿已断/耐久非法时介入。
+// 2. 鱼竿选择刷新会记录具体实例并读取这根实例自己的耐久；鱼饵、鱼漂和抄网也保留被选中的实例身份。
 // 3. 这个流程不移出库存物品，也不创建独立装备栏；Fishing 后续仍从同一库存数组扣饵。
 void UCatEquipmentComponent::AutoSelectGrantedInventoryItem(const UCatEquipmentDefinition& Definition,
 	const FName DefinitionId)
@@ -1204,15 +1745,39 @@ void UCatEquipmentComponent::AutoSelectGrantedInventoryItem(const UCatEquipmentD
 	}
 	if (Definition.Kind == ECatEquipmentKind::Rod)
 	{
+		const FCatRunInventorySlot* GrantedSlot = nullptr;
+		for (const FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
+		{
+			if (Slot.DefinitionId == DefinitionId && CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
+			{
+				if (!Slot.bRodBroken && FMath::IsFinite(Slot.RodDurability) && Slot.RodDurability > 0.0)
+				{
+					GrantedSlot = &Slot;
+					break;
+				}
+				if (!GrantedSlot)
+				{
+					GrantedSlot = &Slot;
+				}
+			}
+		}
+		if (!GrantedSlot)
+		{
+			return;
+		}
+		const FCatInventoryItemUseRecord* ActiveSelectedRod =
+			FindInventoryItemUseRecord(Snapshot.RodItemInstanceId);
+		const bool bSelectedRodIsInUse = ActiveSelectedRod && !ActiveSelectedRod->bReleased;
 		const bool bSelectedRodUnavailable = Snapshot.RodDefinitionId.IsNone()
-			|| GetInventoryItemQuantity(Snapshot.RodDefinitionId) <= 0;
+			|| (GetInventoryItemQuantity(Snapshot.RodDefinitionId) <= 0 && !bSelectedRodIsInUse);
 		const bool bSelectedRodNeedsReplacement = Snapshot.RodDefinitionId == DefinitionId
 			&& (Snapshot.bRodBroken || !FMath::IsFinite(Snapshot.RodDurability) || Snapshot.RodDurability <= 0.0);
 		if (bSelectedRodUnavailable || bSelectedRodNeedsReplacement)
 		{
 			Snapshot.RodDefinitionId = DefinitionId;
-			Snapshot.RodDurability = Definition.MaximumRodDurability;
-			Snapshot.bRodBroken = false;
+			Snapshot.RodItemInstanceId = GrantedSlot->ItemInstanceId;
+			Snapshot.RodDurability = GrantedSlot->RodDurability;
+			Snapshot.bRodBroken = GrantedSlot->bRodBroken;
 		}
 		return;
 	}
@@ -1220,7 +1785,9 @@ void UCatEquipmentComponent::AutoSelectGrantedInventoryItem(const UCatEquipmentD
 	{
 		if (Snapshot.BaitDefinitionId.IsNone() || GetInventoryItemQuantity(Snapshot.BaitDefinitionId) <= 0)
 		{
+			const FCatRunInventorySlot* GrantedSlot = FindFirstInventorySlotByDefinition(DefinitionId);
 			Snapshot.BaitDefinitionId = DefinitionId;
+			Snapshot.BaitItemInstanceId = GrantedSlot ? GrantedSlot->ItemInstanceId : FGuid();
 		}
 		return;
 	}
@@ -1228,7 +1795,9 @@ void UCatEquipmentComponent::AutoSelectGrantedInventoryItem(const UCatEquipmentD
 	{
 		if (Snapshot.FloatDefinitionId.IsNone() || GetInventoryItemQuantity(Snapshot.FloatDefinitionId) <= 0)
 		{
+			const FCatRunInventorySlot* GrantedSlot = FindFirstInventorySlotByDefinition(DefinitionId);
 			Snapshot.FloatDefinitionId = DefinitionId;
+			Snapshot.FloatItemInstanceId = GrantedSlot ? GrantedSlot->ItemInstanceId : FGuid();
 		}
 		return;
 	}
@@ -1236,7 +1805,9 @@ void UCatEquipmentComponent::AutoSelectGrantedInventoryItem(const UCatEquipmentD
 	{
 		if (Snapshot.ScoopNetDefinitionId.IsNone() || GetInventoryItemQuantity(Snapshot.ScoopNetDefinitionId) <= 0)
 		{
+			const FCatRunInventorySlot* GrantedSlot = FindFirstInventorySlotByDefinition(DefinitionId);
 			Snapshot.ScoopNetDefinitionId = DefinitionId;
+			Snapshot.ScoopNetItemInstanceId = GrantedSlot ? GrantedSlot->ItemInstanceId : FGuid();
 		}
 	}
 }

@@ -86,6 +86,10 @@ struct FCatInventorySlotView
 	UPROPERTY(BlueprintReadOnly)
 	int32 CampInventorySlotIndex = INDEX_NONE;
 
+	/** 运行期库存物品的实例 ID；随身库存和营地仓库会填写它，UI 只读展示，服务器仍按槽位和版本重读真相。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid InventoryItemInstanceId;
+
 	/** 该格是否有后端可展示内容；容器空格和空库存占位只展示占位，不允许构造移动或鱼领域命令载荷。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bOccupied = false;

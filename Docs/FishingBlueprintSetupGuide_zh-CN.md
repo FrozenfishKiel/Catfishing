@@ -37,8 +37,8 @@
 | 文件 | 改动 |
 |---|---|
 | `Fishing/Integration/CatFishingCommandComponent.cpp` | `HandleAbilityCommandFromAuthority` 新增 OperateRod（服务器自动找“我部署的竿”）、搏斗中 Primary 按下=收线/松开=停止收线、Scoop（服务器找范围内已上钩鱼并直接嘴叼）三条分支 |
-| `Framework/Game/CatGameplayTypes.h` | `ServerConfigureEquipment` 加 `BlueprintCallable`，蓝图现在能直接调用它提交装备 |
-| `Equipment/CatEquipmentComponent.h` | `GetSnapshot()` 加 `BlueprintPure`，蓝图能读当前 `Revision`/`RodDefinitionId`/`BaitDefinitionId`/`FloatDefinitionId` |
+| `Framework/Game/CatGameplayTypes.h` | `ServerConfigureEquipment` 加 `BlueprintCallable`，蓝图现在能直接调用它提交装备定义和实例 ID |
+| `Equipment/CatEquipmentComponent.h` | `GetSnapshot()` 加 `BlueprintPure`，蓝图能读当前 `Revision`、装备 DefinitionId 和对应 ItemInstanceId |
 | `Character/CatCharacter.h` | `GetEquipmentComponent()` / `GetConditionComponent()` 加 `BlueprintPure` |
 | `Environment/CatWaterRegion.h` | `GetWaterRegionHandle()` / `HasValidBakedGeometry()` 加 `BlueprintPure`，蓝图能从关卡里放置的湖 Actor 直接拿到抛竿/打窝要用的 `FCatWaterRegionHandle` |
 | `Fishing/Actors/CatFishingHookActor.h/.cpp` | 浮漂现在会在权威落点用有界轮询计时器（不是 Tick）确认落水，`Phase` 会真正走到 `Landed`，蓝图的 `BP_OnHookPresentationChanged` 能收到正确通知 |
