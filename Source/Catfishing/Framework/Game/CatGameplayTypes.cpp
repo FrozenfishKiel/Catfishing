@@ -1451,6 +1451,80 @@ const FCatRunPublicState& ACatfishingGameModeBase::GetRunPublicState() const
 	return RunPublicState;
 }
 
+#if !UE_BUILD_SHIPPING
+// 开发期白天长度调整流程：
+// 1. 先校验 authority、World、有限正秒数、可用 timer 秒数和严格未来的服务器截止点；非法输入只写拒绝日志，不改公开状态。
+// 2. 再确认当前仍是钓鱼与额度都开放的 DayActive，防止达标/截止后的过渡态被调试指令续命。
+// 3. 通过同一份 RunPublicState 重写服务器时间锚点与截止点，重排 Deadline、Morning、Dusk 计时器。
+// 4. 最后递增 Revision、刷新 Environment 并发布 GameState，让所有客户端仍走正常复制链看到结果。
+bool ACatfishingGameModeBase::ApplyDebugDayLengthSeconds(const double NewDayLengthSeconds)
+{
+	UWorld* World = GetWorld();
+	if (!HasAuthority() || !World)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_day_length_rejected Reason=AuthorityOrWorldUnavailable Seconds=%.3f"),
+			NewDayLengthSeconds);
+		return false;
+	}
+	if (!FMath::IsFinite(NewDayLengthSeconds) || NewDayLengthSeconds <= 0.0)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_day_length_rejected Reason=InvalidSeconds Seconds=%.3f"),
+			NewDayLengthSeconds);
+		return false;
+	}
+	const float TimerSeconds = static_cast<float>(NewDayLengthSeconds);
+	if (!FMath::IsFinite(TimerSeconds) || TimerSeconds <= 0.0f)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_day_length_rejected Reason=InvalidTimerSeconds Seconds=%.9f"),
+			NewDayLengthSeconds);
+		return false;
+	}
+	if (!bRunCommandsOpen || RunPublicState.Phase.Phase != ECatRunPhase::DayActive
+		|| !RunPublicState.Phase.bHasDeadline || !RunPublicState.Phase.bFishingAllowed
+		|| !RunPublicState.Phase.bQuotaOpen)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_day_length_rejected Reason=NotOpenActiveDay Seconds=%.3f Phase=%s HasDeadline=%s FishingAllowed=%s QuotaOpen=%s CommandsOpen=%s"),
+			NewDayLengthSeconds, *UEnum::GetValueAsString(RunPublicState.Phase.Phase),
+			RunPublicState.Phase.bHasDeadline ? TEXT("true") : TEXT("false"),
+			RunPublicState.Phase.bFishingAllowed ? TEXT("true") : TEXT("false"),
+			RunPublicState.Phase.bQuotaOpen ? TEXT("true") : TEXT("false"),
+			bRunCommandsOpen ? TEXT("true") : TEXT("false"));
+		return false;
+	}
+
+	const double ServerNow = World->GetTimeSeconds();
+	const double NewDeadlineServerTimeSeconds = ServerNow + NewDayLengthSeconds;
+	if (!FMath::IsFinite(NewDeadlineServerTimeSeconds) || NewDeadlineServerTimeSeconds <= ServerNow)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_day_length_rejected Reason=InvalidDeadline Seconds=%.9f ServerNow=%.3f"),
+			NewDayLengthSeconds, ServerNow);
+		return false;
+	}
+	const double OldRemainingSeconds = FMath::Max(0.0,
+		RunPublicState.Phase.DeadlineServerTimeSeconds - ServerNow);
+	ClearDayTimers();
+	RunPublicState.Phase.ServerTimeAnchorSeconds = ServerNow;
+	RunPublicState.Phase.DeadlineServerTimeSeconds = NewDeadlineServerTimeSeconds;
+	RunPublicState.Phase.bHasDeadline = true;
+	World->GetTimerManager().SetTimer(DayDeadlineTimerHandle, this,
+		&ThisClass::HandleDayDeadlineElapsed, TimerSeconds, false);
+	++RunPublicState.Revision;
+	ScheduleDayEnvironmentRefreshes();
+	RefreshEnvironmentAndPublish();
+	UE_LOG(LogCatRun, Display,
+		TEXT("Event=run_environment_social_debug_day_length_applied RunId=%s Revision=%lld Day=%d OldRemaining=%.3f NewLength=%.3f Deadline=%.3f"),
+		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
+		RunPublicState.Phase.DayIndex, OldRemainingSeconds, NewDayLengthSeconds,
+		RunPublicState.Phase.DeadlineServerTimeSeconds);
+	return true;
+}
+#endif
+
 void ACatfishingGameModeBase::CloseShopForSettlementNight()
 {
 	if (UCatShopEconomyService* Shop = GetWorld() ? GetWorld()->GetSubsystem<UCatShopEconomyService>() : nullptr)

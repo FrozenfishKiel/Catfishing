@@ -115,6 +115,10 @@ public:
 	FCatRunTeardownCompleted& OnRunTeardownCompleted();
 	/** 返回服务器 Run 聚合的只读公开事实；客户端应读取 GameState 的复制副本。 */
 	const FCatRunPublicState& GetRunPublicState() const;
+#if !UE_BUILD_SHIPPING
+	/** 开发期调试入口：在服务器开放的 DayActive 上，把当前白天从此刻起的剩余时长重设为可进入 UE timer 的正秒数；成功会重写时间窗口、重排 timer、递增 Revision 并发布 RunPublicState，失败返回 false 且不改天数或客户端本地状态。 */
+	bool ApplyDebugDayLengthSeconds(double NewDayLengthSeconds);
+#endif
 	/** Online Client 主动离局前标记当前 Controller；Logout 据此按 VoluntaryLeaveRecovery 决定是否保留重连准入。 */
 	void MarkVoluntaryLeave(AController* Controller);
 	/** 远端 Client 完成本地 DestroySession 后确认同一 Host exit RequestId；全部确认会提前结束有界等待。 */

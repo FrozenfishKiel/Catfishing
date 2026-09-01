@@ -8,8 +8,8 @@
 class APlayerController;
 
 /**
- * RunEnvironmentSocial 的开发期只读诊断面板；它只消费 GameState 复制事实和本机 PlayerState，不写 Run、Environment、Social 或表现状态。
- * 打包 Development 可通过 `cat.RunEnvironmentSocial.Debug 1` 打开屏幕信息，通过 `cat.RunEnvironmentSocial.Dump` 写一次结构化日志；Shipping 不创建本子系统。
+ * RunEnvironmentSocial 的开发期诊断入口；常驻面板和 Dump 只读 GameState 复制事实，DayLength 指令只请求服务器 GameMode 重排当前白天。
+ * 打包 Development 可通过 `cat.RunEnvironmentSocial.Debug 1` 打开屏幕信息，通过 `cat.RunEnvironmentSocial.Dump` 写一次结构化日志，通过 `cat.RunEnvironmentSocial.DayLength 60` 调整当前白天剩余时长；Shipping 不创建本子系统。
  */
 UCLASS()
 class CATFISHING_API UCatRunEnvironmentDebugSubsystem final : public UTickableWorldSubsystem
