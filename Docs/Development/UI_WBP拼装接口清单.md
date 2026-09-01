@@ -1,6 +1,6 @@
 # UI WBP 拼装接口清单
 
-文档状态：当前代码核对版（2026-08-28）
+文档状态：当前代码核对版（2026-09-01）
 
 范围：这份文档只说明当前项目给 WBP 预留了哪些父类、控件名、蓝图事件、蓝图可调用函数和只读数据。它用于手工重做 UI 样式，不作为验收文档，也不规定最终美术风格。
 
@@ -20,29 +20,32 @@
 
 | WBP 资产 | 父类 | 用途 | 谁创建 |
 | --- | --- | --- | --- |
-| `/Game/UI/HUD/WBP_CatHUD` | `UCatHUDWidget` | 局内状态 HUD，显示猫状态和钓鱼反馈 | `UCatLocalPlayerUISubsystem` 启动局内 UI 时创建 |
+| `/Game/UI/HUD/WBP_CatHUD` | `UCatHUDWidget` | 局内主 HUD，默认常驻天数、背包入口和设置入口 | `UCatLocalPlayerUISubsystem` 启动局内 UI 时创建 |
 | `/Game/UI/Inventory/WBP_CatInventory` | `UCatInventoryWidget` | 默认背包页面，显示随身库存、当前钓鱼选择和选中详情 | `UCatLocalPlayerUISubsystem` 创建，`UCatInventoryPageController` 打开 |
 | `/Game/UI/Inventory/WBP_CatFishGuardInventory` | `UCatFishGuardInventoryWidget` | 鱼护箱子页面，只显示本次交互到的地面鱼护容器格 | `ACatFishGuardActor` 提供页面类，`UCatInventoryPageController` 按需创建 |
 | `/Game/UI/Inventory/WBP_CatCampInventory` | `UCatCampInventoryWidget` | 营地公共仓库组合页面，可同时摆玩家随身库存区和公共仓库区 | `ACatCampInventoryActor` 提供页面类，`UCatInventoryPageController` 按需创建 |
 | `/Game/UI/InventorySlot/WBP_CatInventorySlot` | `UCatInventorySlotWidget` | 背包单个格子，负责显示占用、选中、拖拽和 Drop | `UCatInventoryWidget` 重建格子列表时动态创建 |
 | `/Game/UI/Shop/WBP_CatShop` | `UCatShopWidget` | 世界商店页面，显示商品、公款、购买和领取反馈 | `UCatShopInteractionComponent` 在靠近商店交互时创建 |
 | `/Game/UI/Interaction/WBP_CatInteractionPrompt` | `UCatInteractionPromptWidget` | 靠近对象时的“按键交互”提示 | `UCatLocalPlayerUISubsystem` 启动局内 UI 时创建 |
-| `/Game/UI/Collection/WBP_CatCollection` | `UCatCollectionWidget` | 图鉴/相册只读页面 | 当前已有配置和渲染接口；当前代码未看到完整打开入口 |
+| `/Game/UI/Collection/WBP_CatCollection` | `UCatCollectionWidget` | 图鉴/相册只读页面；当前不是 HUD 常驻入口 | 当前没有运行时创建入口，也不由 `CatUISettings` 装配 |
 
-这些默认路径大多来自 `Source/Catfishing/UI/CatUISettings.cpp`。鱼护箱子页面类跟随 `ACatFishGuardActor` 自己的 `InventoryViewClass`；营地公共仓库页面类跟随 `ACatCampInventoryActor` 自己的 `InventoryViewClass`。营地公共仓库仍然要用自己的根 WBP，但这张根 WBP 可以嵌入其他库存子 WBP；父页会把同一份完整库存 ViewState 分发给子页。如果 `InventoryViewClass` 没有指到有效的库存 WBP，交互会打开失败并记录日志。
+HUD、背包、背包格子和交互提示的默认路径来自 `Source/Catfishing/UI/CatUISettings.cpp`。鱼护箱子页面类跟随 `ACatFishGuardActor` 自己的 `InventoryViewClass`；营地公共仓库页面类跟随 `ACatCampInventoryActor` 自己的 `InventoryViewClass`；图鉴只保留 View 接口，后续需要正式入口时再接创建链路。营地公共仓库仍然要用自己的根 WBP，但这张根 WBP 可以嵌入其他库存子 WBP；父页会把同一份完整库存 ViewState 分发给子页。如果 `InventoryViewClass` 没有指到有效的库存 WBP，交互会打开失败并记录日志。
 
 ## HUD：`WBP_CatHUD`
 
 源码入口：`Source/Catfishing/UI/HUD/CatHUDWidget.h`
 
-父类必须是 `UCatHUDWidget`。它只负责显示，不提供按钮。
+父类必须是 `UCatHUDWidget`。默认主界面只应该常驻左上天数、左下背包入口和右上设置入口；打开背包后的装备栏/物品栏属于背包页面，不放进常驻 HUD。`UCatHUDWidget` 只绑定蓝图里真实存在的命名控件，不在运行时生成 HUD 控件。
 
 ### 可选控件名
 
 | 控件名 | 类型 | 人话说明 |
 | --- | --- | --- |
-| `CatStatusTextBlock` | `TextBlock` | 猫当前状态摘要，比如毒值、钓鱼力量、体力、湿身/倒地/成长信息。 |
-| `FishingFeedbackTextBlock` | `TextBlock` | 当前钓鱼反馈，比如会话阶段、鱼的状态、最近一次命令结果。 |
+| `DayTextBlock` | `TextBlock` | 左上角天数文本，C++ 写入“第 N 天”。 |
+| `MainMenuButton` | `Button` | 右上角设置/主页入口，点击后广播 `OpenMainMenu`。 |
+| `InventoryButton` | `Button` | 左下角背包入口，点击后广播 `OpenInventory`，由背包控制器打开页面。 |
+| `CatStatusTextBlock` | `TextBlock` | 猫状态调试摘要，默认隐藏；只在临时排查布局里显式打开。 |
+| `FishingFeedbackTextBlock` | `TextBlock` | 钓鱼流程调试反馈，默认隐藏；只在临时排查布局里显式打开。 |
 
 ### 蓝图接口
 
@@ -55,6 +58,12 @@
 
 | 字段 | 人话说明 |
 | --- | --- |
+| `DayText` | C++ 整理好的天数字符串，常驻显示在左上角。 |
+| `bMainMenuEntryVisible` | 是否显示设置/主页入口。 |
+| `bInventoryEntryVisible` | 是否显示背包入口。 |
+| `bShowCatStatusDebugText` | 是否显示猫状态调试摘要；当前默认值为 false。 |
+| `bShowFishingFeedbackDebugText` | 是否显示钓鱼调试反馈；当前默认值为 false。 |
+| `bShowCrosshair` | 是否绘制 HUD 中心准星；当前默认值为 false。 |
 | `Poison` | 当前毒值，只展示，不在 UI 里裁决倒地。 |
 | `FishingStrength` | 当前钓鱼力量，只展示。 |
 | `FightStamina` | 当前搏斗体力，只展示。 |
@@ -356,7 +365,7 @@
 
 源码入口：`Source/Catfishing/UI/Collection/CatCollectionWidget.h`
 
-父类必须是 `UCatCollectionWidget`。当前已有 WBP 配置和渲染接口，但当前代码检索没有看到像背包、商店那样完整的打开入口。可以先拼资产和样式，后续需要接打开入口。
+父类必须是 `UCatCollectionWidget`。当前只保留图鉴 View 的渲染接口；LocalPlayer UI 不再提供无来源的懒创建入口，`CatUISettings` 也不再配置这个 WBP。后续需要图鉴时，应先确定正式入口，再按 PageController/Model/View 链路接入。
 
 ### 可选控件名
 

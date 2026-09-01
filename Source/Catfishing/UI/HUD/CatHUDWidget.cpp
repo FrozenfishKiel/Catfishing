@@ -8,7 +8,7 @@
 #include "GameFramework/GameStateBase.h"
 #include "Rendering/DrawElementTypes.h"
 
-// HUD 渲染流程：缓存只读投影，复制 Designer 绑定文本和进度条，再触发蓝图扩展点；不访问任何玩法对象或写口。
+// HUD 渲染流程：缓存 Model 生成的只读投影，按 Designer 真实绑定控件写入天数、调试文本、钓鱼反馈、入口按钮状态和进度条，再触发蓝图扩展点。
 void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 {
 	LastHUDViewState = ViewState;
@@ -21,10 +21,14 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 	if (CatStatusTextBlock)
 	{
 		CatStatusTextBlock->SetText(BlueprintCatStatusText);
+		CatStatusTextBlock->SetVisibility(ViewState.bShowCatStatusDebugText
+			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
 	if (FishingFeedbackTextBlock)
 	{
 		FishingFeedbackTextBlock->SetText(BlueprintFishingFeedbackText);
+		FishingFeedbackTextBlock->SetVisibility(ViewState.bShowFishingFeedbackDebugText
+			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
 	if (BitePromptTextBlock)
 	{
@@ -80,12 +84,6 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 		MainMenuButton->SetVisibility(ViewState.bMainMenuEntryVisible
 			? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
-	if (CollectionButton)
-	{
-		CollectionButton->SetIsEnabled(ViewState.bCanOpenCollection);
-		CollectionButton->SetVisibility(ViewState.bCollectionEntryVisible
-			? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
-	}
 	if (InventoryButton)
 	{
 		InventoryButton->SetIsEnabled(ViewState.bCanOpenInventory);
@@ -119,7 +117,7 @@ const FCatHUDViewState& UCatHUDWidget::GetLastHUDViewState() const
 	return LastHUDViewState;
 }
 
-// 构造流程：让父类完成 Slate 构建后，对三个可选入口按钮执行 Remove/Add 配对，保证重建时不会重复广播。
+// 构造流程：让父类完成 Slate 构建后，对两个主 HUD 入口按钮执行 Remove/Add 配对，保证重建时不会重复广播。
 void UCatHUDWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
@@ -128,11 +126,6 @@ void UCatHUDWidget::NativeConstruct()
 		MainMenuButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenMainMenu);
 		MainMenuButton->OnClicked.AddDynamic(this, &ThisClass::RequestOpenMainMenu);
 	}
-	if (CollectionButton)
-	{
-		CollectionButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenCollection);
-		CollectionButton->OnClicked.AddDynamic(this, &ThisClass::RequestOpenCollection);
-	}
 	if (InventoryButton)
 	{
 		InventoryButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenInventory);
@@ -140,16 +133,12 @@ void UCatHUDWidget::NativeConstruct()
 	}
 }
 
-// 销毁流程：解除三个可选入口按钮对本对象的动态绑定，再交还父类 Slate 生命周期；业务广播不保存 World 引用。
+// 销毁流程：解除两个主 HUD 入口按钮对本对象的动态绑定，再交还父类 Slate 生命周期；业务广播不保存 World 引用。
 void UCatHUDWidget::NativeDestruct()
 {
 	if (MainMenuButton)
 	{
 		MainMenuButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenMainMenu);
-	}
-	if (CollectionButton)
-	{
-		CollectionButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenCollection);
 	}
 	if (InventoryButton)
 	{
@@ -195,7 +184,7 @@ void UCatHUDWidget::NativeTick(const FGeometry& MyGeometry, const float InDeltaT
 	}
 }
 
-// 准星绘制流程：先让 WBP 和子控件完成绘制，再在最终层用本 HUD 的局部中心画四条灰色短线。
+// 准星绘制流程：先让 WBP 和子控件完成绘制；只有 ViewState 明确要求时，才在最终层用本 HUD 的局部中心画四条灰色短线。
 // 本 Widget 只会由 LocalPlayer UI 子系统为本地 Controller 创建，不读取 NetMode 或 HasAuthority，远端客户端不会依赖服务器生成 UI。
 int32 UCatHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
 	const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, const int32 LayerId,
@@ -204,7 +193,9 @@ int32 UCatHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& Allott
 	const int32 MaxLayer = Super::NativePaint(
 		Args, AllottedGeometry, MyCullingRect, OutDrawElements, LayerId, InWidgetStyle, bParentEnabled);
 	const FVector2D LocalSize = AllottedGeometry.GetLocalSize();
-	if (LocalSize.X <= 0.0f || LocalSize.Y <= 0.0f || CrosshairArmLength <= 0.0f || CrosshairThickness <= 0.0f)
+	if (!LastHUDViewState.bShowCrosshair
+		|| LocalSize.X <= 0.0f || LocalSize.Y <= 0.0f
+		|| CrosshairArmLength <= 0.0f || CrosshairThickness <= 0.0f)
 	{
 		return MaxLayer;
 	}
@@ -243,12 +234,6 @@ int32 UCatHUDWidget::NativePaint(const FPaintArgs& Args, const FGeometry& Allott
 void UCatHUDWidget::RequestOpenMainMenu()
 {
 	SubmitHUDAction(ECatHUDAction::OpenMainMenu);
-}
-
-// 鱼图鉴入口流程：把点击转换为纯 UI 意图；图鉴内容和解锁事实仍在 Collection/Profile 链路。
-void UCatHUDWidget::RequestOpenCollection()
-{
-	SubmitHUDAction(ECatHUDAction::OpenCollection);
 }
 
 // 背包入口流程：把点击转换为纯 UI 意图；实际开关背包由 LocalPlayer UI 协调层转交库存控制器。

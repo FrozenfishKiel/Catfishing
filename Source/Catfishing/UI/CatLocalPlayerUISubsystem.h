@@ -9,8 +9,6 @@ class APlayerController;
 class APawn;
 class ACatCampInventoryActor;
 class ACatCharacter;
-class UCatCollectionModel;
-class UCatCollectionWidget;
 class UCatHUDModel;
 class UCatHUDWidget;
 class UCatContainerReplicationComponent;
@@ -102,30 +100,21 @@ private:
 	/** 先解绑各模块 PageController/Model，再移除 View，最后清理所有本地玩家 UI 引用。 */
 	void DetachPlayerLakeUI();
 
-	/** 切换当前 LocalPlayer 的图鉴页面；页面只读 Profile 图鉴快照，不接实物鱼容器。 */
-	void ToggleCollection();
-
-	/** 成对解绑并移除图鉴页面；空页面和重复调用保持幂等。 */
-	void CloseCollection();
-
 	/** HUD Model 投影变化入口；只把最新状态交给 HUD WBP，不访问背包或商店。 */
 	void HandleHUDModelViewStateChanged();
 
-	/** Collection Model 投影变化入口；只把最新图鉴快照交给图鉴 WBP。 */
-	void HandleCollectionModelViewStateChanged();
-
-	/** HUD 入口动作入口；背包交给既有库存控制器，菜单和图鉴只保留给蓝图或未来页面控制器。 */
+	/** HUD 入口动作入口；背包交给既有库存控制器，菜单只保留给蓝图或未来页面控制器。 */
 	void HandleHUDActionRequested(ECatHUDAction Action);
 
 	/** 当前 LocalPlayer 唯一 Frontend/旅行白盒界面；子系统拥有，Controller 变化或销毁时释放。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatTravelWidget> OnlineWidget;
 
-	/** 当前 LocalPlayer 的状态 HUD WBP；只显示猫状态和钓鱼反馈。 */
+	/** 当前 LocalPlayer 的主 HUD WBP；常驻天数、背包和设置入口，调试文字只有显式开启时才露出。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatHUDWidget> HUDWidget;
 
-	/** 当前 LocalPlayer 的状态 HUD Model；它只读 Character 状态和 Fishing 反馈。 */
+	/** 当前 LocalPlayer 的主 HUD Model；它聚合天数、入口显隐和可选调试事实，不保存玩法真相。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatHUDModel> HUDModel;
 
@@ -136,14 +125,6 @@ private:
 	/** 当前 LocalPlayer 的库存 Model；它只读随身库存、本次交互外部容器、当前选择和动作结果。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryModel> InventoryModel;
-
-	/** 当前 LocalPlayer 的图鉴 WBP；按 HUD 猫爪入口懒创建，只展示 Profile 图鉴记录。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UCatCollectionWidget> CollectionWidget;
-
-	/** 当前 LocalPlayer 的图鉴 Model；它只读 durable Profile 图鉴快照。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UCatCollectionModel> CollectionModel;
 
 	/** 当前 LocalPlayer 的背包 PageController；它管理背包输入、外部容器打开和玩家库存操作转交。 */
 	UPROPERTY(Transient)
@@ -176,8 +157,5 @@ private:
 
 	/** HUD 入口动作广播的配对解绑句柄；AttachPlayerLakeUI 写入，DetachPlayerLakeUI 消费。 */
 	FDelegateHandle HUDActionHandle;
-
-	/** Collection Model 变化广播的配对解绑句柄；ToggleCollection 写入，CloseCollection 消费。 */
-	FDelegateHandle CollectionModelViewChangedHandle;
 
 };
