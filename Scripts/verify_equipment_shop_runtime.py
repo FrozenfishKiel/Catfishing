@@ -198,8 +198,26 @@ def main() -> None:
         ("FruitFragranceChum", "Chum", "Equip_Chum_FruitFragrance", "/Game/Catfishing/Data/Equipment/Equip_Chum_FruitFragrance.Equip_Chum_FruitFragrance"),
         ("HolyLightChum", "Chum", "Equip_Chum_HolyLight", "/Game/Catfishing/Data/Equipment/Equip_Chum_HolyLight.Equip_Chum_HolyLight"),
     ]
+    loaded_definitions = {}
     for definition_id, kind, asset_name, asset_path in expected_definitions:
-        _validate_equipment_definition(equipment_settings, definition_id, kind, asset_name, asset_path)
+        loaded_definitions[definition_id] = _validate_equipment_definition(
+            equipment_settings, definition_id, kind, asset_name, asset_path)
+
+    expected_thumbnails = {
+        "StarterRodT1": "T_UI_Item_FishingRod_Generic",
+        "ShopRodT2": "T_UI_Item_FishingRod_Generic",
+        "BugBait": "T_UI_Item_Bait_CatFood",
+        "FeatherFloat": "T_UI_Item_Float_Feather",
+        "StarterScoopNet": "T_UI_Item_ScoopNet",
+        "BugChum": "T_UI_Item_Chum_PelletBag",
+        "FermentedGrainChum": "T_UI_Item_Chum_Generic",
+        "FruitFragranceChum": "T_UI_Item_Chum_Generic",
+        "HolyLightChum": "T_UI_Item_Chum_Generic",
+    }
+    for definition_id, expected_thumbnail_name in expected_thumbnails.items():
+        thumbnail = _get_property(loaded_definitions[definition_id], "thumbnail", "Thumbnail")
+        _require(expected_thumbnail_name in str(thumbnail),
+                 f"{definition_id} Thumbnail 不匹配: actual={thumbnail} expected={expected_thumbnail_name}")
 
     starter_ids = {
         "StarterRodT1": _get_property(equipment_settings, "starter_rod_definition_id", "StarterRodDefinitionId"),
@@ -233,7 +251,7 @@ def main() -> None:
         "Definitions=StarterRodT1,ShopRodT2,StarterScoopNet,BugBait,FlashingBait,FruitBait,GiantLureBait,MeatBait,"
         "MoonlightBait,NectarBait,SoundBait,FeatherFloat,YarnBallFloat,BellFloat,BugChum,"
         "FermentedGrainChum,FruitFragranceChum,HolyLightChum "
-        f"CatalogTable=DT_ShopCatalog_Default CatalogRows={len(catalog_rows)} "
+        f"CatalogTable=DT_ShopCatalog_Default CatalogRows={len(catalog_rows)} Thumbnails={len(expected_thumbnails)} "
         f"CampInventoryView={inventory_view_class} PlayerStarts={len(player_starts)} Regions={len(regions)} PricePolicy={price_policy}"
     )
 

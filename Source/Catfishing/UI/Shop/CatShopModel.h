@@ -70,7 +70,7 @@ private:
 
 	/** 按摊位目录和公开经济/货架快照生成一条商品展示投影；只推导玩家可见余额/库存状态，不读取商店写口。 */
 	FCatShopEntryView MakeEntryView(const FCatShopCatalogEntry& Entry,
-		const FCatShopPublicEconomySnapshot& Economy, bool bEconomyAvailable) const;
+		const FCatShopPublicEconomySnapshot& Economy, bool bEconomyAvailable);
 
 	/** 从完整真实商品数组归纳顶部分类按钮投影；玩家实际选中项由 Widget 本地维护，不写回 Model。 */
 	void BuildCategoryViewState(FCatShopViewState& InOutState) const;
@@ -116,6 +116,9 @@ private:
 
 	/** 本地购物车的展示顺序；重复点击同一商品只增加数量，不改变它在已选购列表中的位置。 */
 	TArray<FName> CartEntryOrder;
+
+	/** 本次绑定期间已经报告过缺图的目录项；避免余额或库存刷新时重复刷同一条诊断日志。 */
+	TSet<FName> ReportedMissingIconEntryIds;
 
 	/** 最近发布给 View 的完整商店投影；所有刷新都先写这里再广播。 */
 	FCatShopViewState ViewState;

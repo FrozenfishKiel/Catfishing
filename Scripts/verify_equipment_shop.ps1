@@ -92,6 +92,8 @@ function Invoke-ModuleStaticCheck {
     Assert-NoTextPattern "EquipmentTeamLibraryShop|equipment_teamlibrary_shop|verify_equipment_teamlibrary_shop|EQUIPMENT_TEAMLIBRARY_SHOP" ".harness" "removed team equipment library harness semantics"
     Assert-ToolFile (Join-Path $ProjectRoot "Content\Catfishing\Data\Shop\DT_ShopCatalog_Default.uasset") "formal shop catalog DataTable"
     Assert-TextPattern "DefaultShopCatalogTable=/Game/Catfishing/Data/Shop/DT_ShopCatalog_Default" "Config/DefaultGame.ini" "formal shop catalog DataTable setting"
+    Assert-TextPattern "Definition \? Definition->Thumbnail" "Source/Catfishing/UI/Shop/CatShopModel.cpp" "shop icon falls back to the equipment definition thumbnail"
+    Assert-TextPattern "Event=ui_shop_icon_missing" "Source/Catfishing/UI/Shop/CatShopModel.cpp" "missing shop icons remain diagnosable in Development logs"
     Assert-NoTextPattern "UCatShopCatalogDefinition|FixedSaleEntries|RandomSaleEntries" "Source/Catfishing/ShopEconomy" "removed legacy shop catalog sources"
     Assert-NoTextPattern "ServerGrantRunConsumable|DirectClientGrantDisabled" "Source/Catfishing/Framework/Game" "direct client quantity grant RPC removed"
     Assert-TextPattern "EQUIPMENT_SHOP_RUNTIME_PASS" "Scripts/verify_equipment_shop_runtime.py" "runtime pass marker"

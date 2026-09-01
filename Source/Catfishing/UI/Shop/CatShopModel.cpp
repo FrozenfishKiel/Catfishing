@@ -5,6 +5,7 @@
 #include "Equipment/CatEquipmentSettings.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
+#include "Logging/CatLog.h"
 #include "ShopEconomy/CatShopInventoryComponent.h"
 
 namespace
@@ -77,6 +78,7 @@ void UCatShopModel::Unbind()
 	LastRejectedReason = FText();
 	CartCountsByEntryId.Reset();
 	CartEntryOrder.Reset();
+	ReportedMissingIconEntryIds.Reset();
 	ViewState = FCatShopViewState();
 }
 
@@ -329,11 +331,11 @@ void UCatShopModel::HandleShopInventoryIdentityChanged()
 }
 
 // 商品投影流程：
-// 1. 把 Catalog 展示字段和装备定义展示字段合成中文展示行，分类和图标覆盖直接来自策划表。
+// 1. 把 Catalog 展示字段和装备定义展示字段合成中文展示行；商店专属图优先，未配置时回退到定义的通用缩略图。
 // 2. 使用公开货架库存读取有限库存剩余数，并用当前团队公款推导单品是否买得起；加购不受单品余额影响。
 // 3. 这些结果只影响 UI 展示和明显无效点击；真正扣款、数量和公共仓库发货仍在服务器 ShopEconomy/OrderCoordinator。
 FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry,
-	const FCatShopPublicEconomySnapshot& Economy, const bool bEconomyAvailable) const
+	const FCatShopPublicEconomySnapshot& Economy, const bool bEconomyAvailable)
 {
 	const UCatShopInventoryComponent* ShopInventory = BoundShopInventory.Get();
 	const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
@@ -358,7 +360,23 @@ FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry
 	View.bSoldOut = View.bStockAvailable && !View.bUnlimitedStock && View.RemainingStock <= 0;
 	View.bAffordable = !bEconomyAvailable || View.UnitPrice <= 0 || Economy.Balance >= View.UnitPrice;
 	View.CartCount = CartCountsByEntryId.FindRef(Entry.EntryId);
-	View.IconOverride = Entry.IconOverride;
+	View.IconOverride = !Entry.IconOverride.IsNull()
+		? Entry.IconOverride
+		: (Definition ? Definition->Thumbnail : TSoftObjectPtr<UTexture2D>());
+	if (View.IconOverride.IsNull())
+	{
+		if (!ReportedMissingIconEntryIds.Contains(Entry.EntryId))
+		{
+			ReportedMissingIconEntryIds.Add(Entry.EntryId);
+			UE_LOG(LogCatUI, Warning,
+				TEXT("Event=ui_shop_icon_missing EntryId=%s DefinitionId=%s HasDefinition=%d"),
+				*Entry.EntryId.ToString(), *Entry.DefinitionId.ToString(), Definition != nullptr ? 1 : 0);
+		}
+	}
+	else
+	{
+		ReportedMissingIconEntryIds.Remove(Entry.EntryId);
+	}
 	View.DisplayNameText = !Entry.DisplayNameOverride.IsEmpty()
 		? Entry.DisplayNameOverride
 		: (Definition && !Definition->DisplayName.IsEmpty()
