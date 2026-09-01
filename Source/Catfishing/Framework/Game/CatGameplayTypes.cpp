@@ -35,6 +35,7 @@
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/GameSession.h"
+#include "GameFramework/Pawn.h"
 #include "InputAction.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
@@ -114,6 +115,84 @@ namespace
 		const double Radius = ResolveContainerReachRadiusCentimeters(Host, Settings);
 		return Host && Character && Radius > 0.0
 			&& FVector::DistSquared(Character->GetActorLocation(), Host->GetActorLocation()) <= FMath::Square(Radius);
+	}
+
+	// 容器空鱼格查找流程：按钮存缸没有显式 Drop 目标；调用方已先处理非正容量，这里只在有效容量内寻找第一个空位。
+	int32 FindFirstFreeFishContainerSlot(const FCatContainerSnapshot& Snapshot)
+	{
+		for (int32 SlotIndex = 0; SlotIndex < Snapshot.Capacity; ++SlotIndex)
+		{
+			FCatContainedObjectInstance ExistingObject;
+			if (!CatItems::TryGetContainedObjectAt(Snapshot, SlotIndex, ExistingObject))
+			{
+				return SlotIndex;
+			}
+		}
+		return INDEX_NONE;
+	}
+
+	// 营地出生点扫描流程：遍历当前 World 内所有有效营地，只有恰好一座时返回；零座或多座都写明确日志并保持 fail-closed。
+	ACatCampHubActor* FindUniqueCampPlayerStart(UWorld* World, const AController* Player, const TCHAR* Caller)
+	{
+		ACatCampHubActor* FirstCamp = nullptr;
+		ACatCampHubActor* DuplicateCamp = nullptr;
+		int32 CampCount = 0;
+		if (World)
+		{
+			for (TActorIterator<ACatCampHubActor> It(World); It; ++It)
+			{
+				ACatCampHubActor* Camp = *It;
+				if (!IsValid(Camp))
+				{
+					continue;
+				}
+				++CampCount;
+				if (!FirstCamp)
+				{
+					FirstCamp = Camp;
+				}
+				else if (!DuplicateCamp)
+				{
+					DuplicateCamp = Camp;
+				}
+			}
+		}
+		if (CampCount != 1)
+		{
+			UE_LOG(LogCatfishing, Error,
+				TEXT("Event=camp_player_start_rejected Caller=%s Controller=%s Reason=%s CampCount=%d FirstCamp=%s DuplicateCamp=%s World=%s NetMode=%d"),
+				Caller, *GetNameSafe(Player), CampCount <= 0 ? TEXT("NoCampPlayerStart") : TEXT("DuplicateCampPlayerStart"),
+				CampCount, *GetNameSafe(FirstCamp), *GetNameSafe(DuplicateCamp), *GetNameSafe(World),
+				World ? static_cast<int32>(World->GetNetMode()) : INDEX_NONE);
+			return nullptr;
+		}
+		return FirstCamp;
+	}
+
+	// 当前玩家出生序号解析流程：按 GameState 当前 PlayerArray 中仍活跃且非纯旁观的玩家顺序即时计算；目标尚未出现在数组中时排在当前活跃队列末尾，不写入持久槽位或重连记忆。
+	int32 ResolveCurrentCampEntryIndex(const AGameStateBase* GameState, const AController* NewPlayer)
+	{
+		const APlayerState* TargetPlayerState = NewPlayer ? NewPlayer->PlayerState : nullptr;
+		if (!GameState || !TargetPlayerState || TargetPlayerState->IsInactive()
+			|| TargetPlayerState->IsOnlyASpectator())
+		{
+			return INDEX_NONE;
+		}
+
+		int32 EntryIndex = 0;
+		for (const APlayerState* PlayerState : GameState->PlayerArray)
+		{
+			if (!PlayerState || PlayerState->IsInactive() || PlayerState->IsOnlyASpectator())
+			{
+				continue;
+			}
+			if (PlayerState == TargetPlayerState)
+			{
+				return EntryIndex;
+			}
+			++EntryIndex;
+		}
+		return EntryIndex;
 	}
 }
 
@@ -405,6 +484,106 @@ void ACatfishingGameModeBase::HandleStartingNewPlayer_Implementation(APlayerCont
 	}
 	UE_LOG(LogCatOnline, Log, TEXT("Event=identity_before_character Controller=%s Result=Active"), *NewPlayer->GetName());
 	Super::HandleStartingNewPlayer_Implementation(NewPlayer);
+}
+
+// 重启玩家流程：先保持引擎对空 Controller 和待销毁 Controller 的早退，再直接扫描本项目唯一营地，避免蓝图覆盖 Find/ChoosePlayerStart 把普通 PlayerStart 带回主出生链；营地缺失、重复或被非营地替代时调用 FailedToRestartPlayer，绝不沿用旧 StartSpot 或 WorldSettings 原点。
+void ACatfishingGameModeBase::RestartPlayer(AController* NewPlayer)
+{
+	if (!NewPlayer || NewPlayer->IsPendingKillPending())
+	{
+		return;
+	}
+	AActor* StartSpot = FindUniqueCampPlayerStart(GetWorld(), NewPlayer, TEXT("RestartPlayer"));
+	if (!Cast<ACatCampHubActor>(StartSpot))
+	{
+		UE_LOG(LogCatfishing, Error,
+			TEXT("Event=camp_player_restart_rejected Controller=%s Reason=CampPlayerStartUnavailable StartSpot=%s World=%s NetMode=%d"),
+			*GetNameSafe(NewPlayer), *GetNameSafe(StartSpot), *GetNameSafe(GetWorld()),
+			GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
+		FailedToRestartPlayer(NewPlayer);
+		return;
+	}
+	RestartPlayerAtPlayerStart(NewPlayer, StartSpot);
+}
+
+// 玩家出生点查找流程：忽略客户端 Portal 名和 Controller 历史 StartSpot，每次都重新走唯一营地扫描；返回空时由 RestartPlayer 统一拒绝生成，防止引擎默认原点回退。
+AActor* ACatfishingGameModeBase::FindPlayerStart_Implementation(AController* Player, const FString& IncomingName)
+{
+	if (!IncomingName.IsEmpty())
+	{
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=camp_player_start_portal_ignored Controller=%s IncomingName=%s Reason=CampIsOnlyPlayerStart World=%s NetMode=%d"),
+			*GetNameSafe(Player), *IncomingName, *GetNameSafe(GetWorld()),
+			GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
+	}
+	return FindUniqueCampPlayerStart(GetWorld(), Player, TEXT("FindPlayerStart"));
+}
+
+// 玩家出生点选择流程：只接受当前 World 唯一 ACatCampHubActor，普通 PlayerStart、tagged PlayerStart 和历史 StartSpot 都不进入候选；成功日志用于联机包核对服务器裁决。
+AActor* ACatfishingGameModeBase::ChoosePlayerStart_Implementation(AController* Player)
+{
+	ACatCampHubActor* Camp = FindUniqueCampPlayerStart(GetWorld(), Player, TEXT("ChoosePlayerStart"));
+	if (Camp)
+	{
+		UE_LOG(LogCatfishing, Log,
+			TEXT("Event=camp_player_start_selected Controller=%s Camp=%s World=%s NetMode=%d"),
+			*GetNameSafe(Player), *GetNameSafe(Camp), *GetNameSafe(GetWorld()),
+			GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
+	}
+	return Camp;
+}
+
+// StartSpot 复用判断流程：固定返回 false，让重连、重新生成和外部 K2_FindPlayerStart 调用都重新经过唯一营地裁决；本方法不清 Controller 状态，只阻断引擎选择旧点的分支。
+bool ACatfishingGameModeBase::ShouldSpawnAtStartSpot(AController* Player)
+{
+	return false;
+}
+
+// 默认 Pawn 生成流程：先确认 StartSpot 仍是唯一营地，再读取当前 PawnClass 和 CDO 给营地做碰撞可用性判断；解析成功后只调用引擎 SpawnDefaultPawnAtTransform，后续 SetPawn/InitStartSpot/FinishRestartPlayer 继续留给父类 RestartPlayerAtPlayerStart。
+APawn* ACatfishingGameModeBase::SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot)
+{
+	const ACatCampHubActor* Camp = Cast<ACatCampHubActor>(StartSpot);
+	if (!Camp)
+	{
+		UE_LOG(LogCatfishing, Error,
+			TEXT("Event=camp_player_spawn_rejected Controller=%s Reason=NonCampStartSpot StartSpot=%s World=%s NetMode=%d"),
+			*GetNameSafe(NewPlayer), *GetNameSafe(StartSpot), *GetNameSafe(GetWorld()),
+			GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
+		return nullptr;
+	}
+
+	UClass* PawnClass = GetDefaultPawnClassForController(NewPlayer);
+	const APawn* PawnToFit = PawnClass ? Cast<APawn>(PawnClass->GetDefaultObject()) : nullptr;
+	const int32 PreferredEntryIndex = ResolveCurrentCampEntryIndex(GameState, NewPlayer);
+	FTransform SpawnTransform;
+	if (!PawnClass || !PawnToFit || PreferredEntryIndex == INDEX_NONE
+		|| !Camp->TryResolvePlayerEntryTransform(PreferredEntryIndex, PawnToFit, SpawnTransform))
+	{
+		UE_LOG(LogCatfishing, Error,
+			TEXT("Event=camp_player_spawn_rejected Controller=%s Reason=TransformUnavailable PawnClass=%s Camp=%s PreferredIndex=%d World=%s NetMode=%d"),
+			*GetNameSafe(NewPlayer), *GetNameSafe(PawnClass), *GetNameSafe(Camp), PreferredEntryIndex,
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
+		return nullptr;
+	}
+
+	APawn* SpawnedPawn = SpawnDefaultPawnAtTransform(NewPlayer, SpawnTransform);
+	if (!SpawnedPawn)
+	{
+		UE_LOG(LogCatfishing, Error,
+			TEXT("Event=camp_player_spawn_failed Controller=%s PawnClass=%s Camp=%s Transform=%s World=%s NetMode=%d"),
+			*GetNameSafe(NewPlayer), *GetNameSafe(PawnClass), *GetNameSafe(Camp),
+			*SpawnTransform.ToHumanReadableString(), *GetNameSafe(GetWorld()),
+			GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
+	}
+	else
+	{
+		UE_LOG(LogCatfishing, Log,
+			TEXT("Event=camp_player_spawned Controller=%s Pawn=%s Camp=%s Transform=%s World=%s NetMode=%d"),
+			*GetNameSafe(NewPlayer), *GetNameSafe(SpawnedPawn), *GetNameSafe(Camp),
+			*SpawnTransform.ToHumanReadableString(), *GetNameSafe(GetWorld()),
+			GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
+	}
+	return SpawnedPawn;
 }
 
 // Logout 流程：先读取尚未被引擎清理的 PlayerState；只有 StableNetId 命中且 Active 弱引用等于 Exiting 才移除，旧连接永远不能删除同身份的新记录。PIE 无会话身份随连接立即失效并显式跳过重连 TTL，避免下一次测试误恢复旧玩家。
@@ -2520,6 +2699,127 @@ void ACatfishingPlayerController::SubmitTransferObjectBetweenContainersFromServe
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
+// 一键存入共享鱼缸 RPC 流程：owning client 只提交鱼护源格和鱼实例；目标鱼缸不接受客户端指定，统一交给服务器从固定营地解析。
+void ACatfishingPlayerController::ServerStoreFishInSharedTank_Implementation(const FGuid RequestId,
+	const FGuid FishInstanceId, const FGuid SourceContainerId, const int32 SourceContainerSlotIndex,
+	const int64 ExpectedSourceRevision)
+{
+	SubmitStoreFishInSharedTankFromServerRequest(RequestId, FishInstanceId, SourceContainerId,
+		SourceContainerSlotIndex, ExpectedSourceRevision);
+}
+
+// 一键存缸服务端提交流程：
+// 1. 先验证按钮请求形状、玩法命令 gate、当前 Character 和 Items 服务，避免在无效局状态下扫描营地。
+// 2. 再从当前 World 的固定营地中寻找已配置、已注册且玩家可触达的 SharedFishTank，并选第一个空鱼格作为目标。
+// 3. 找到目标后立即复用普通容器转移入口；源鱼护身份、同一条鱼、双容器距离、Revision、展示资格和幂等仍由通用路径与 Items 原子裁决。
+void ACatfishingPlayerController::SubmitStoreFishInSharedTankFromServerRequest(const FGuid RequestId,
+	const FGuid FishInstanceId, const FGuid SourceContainerId, const int32 SourceContainerSlotIndex,
+	const int64 ExpectedSourceRevision)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	UWorld* World = GetWorld();
+	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
+	UCatItemsService* Items = World ? World->GetSubsystem<UCatItemsService>() : nullptr;
+	if (!CanForwardGameplayCommand())
+	{
+		Result.Error = ECatDomainCommandError::CommandsClosed;
+	}
+	else if (!RequestId.IsValid() || !FishInstanceId.IsValid() || !SourceContainerId.IsValid()
+		|| SourceContainerSlotIndex == INDEX_NONE)
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	}
+	else if (!World || !ControlledCharacter || !Items)
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	}
+	else
+	{
+		const UCatCampSettings* CampSettings = GetDefault<UCatCampSettings>();
+		AActor* TargetHost = nullptr;
+		FCatContainerSnapshot TargetSnapshot;
+		int32 TargetSlotIndex = INDEX_NONE;
+		bool bFoundSharedTank = false;
+		bool bFoundReachableSharedTank = false;
+		bool bFoundPolicyClosedSharedTank = false;
+		for (TActorIterator<ACatCampHubActor> It(World); It; ++It)
+		{
+			ACatCampHubActor* Camp = *It;
+			FCatContainerSnapshot CandidateSnapshot;
+			if (!IsValid(Camp) || !Camp->TryGetSharedFishTankSnapshot(CandidateSnapshot)
+				|| CandidateSnapshot.Kind != ECatContainerKind::SharedFishTank)
+			{
+				continue;
+			}
+			ECatContainerKind CandidateHostKind = ECatContainerKind::Unknown;
+			AActor* CandidateHost = nullptr;
+			if (!Items->TryGetContainerHost(CandidateSnapshot.ContainerId, CandidateHostKind, CandidateHost)
+				|| CandidateHostKind != ECatContainerKind::SharedFishTank)
+			{
+				continue;
+			}
+			bFoundSharedTank = true;
+			if (!IsContainerHostReachable(CandidateHost, ControlledCharacter, CampSettings))
+			{
+				continue;
+			}
+			bFoundReachableSharedTank = true;
+			if (CandidateSnapshot.Capacity <= 0)
+			{
+				bFoundPolicyClosedSharedTank = true;
+				continue;
+			}
+			const int32 CandidateSlotIndex = FindFirstFreeFishContainerSlot(CandidateSnapshot);
+			if (CandidateSlotIndex == INDEX_NONE)
+			{
+				continue;
+			}
+			TargetHost = CandidateHost;
+			TargetSnapshot = CandidateSnapshot;
+			TargetSlotIndex = CandidateSlotIndex;
+			break;
+		}
+		if (!TargetHost)
+		{
+			Result.Error = !bFoundSharedTank
+				? ECatDomainCommandError::DependencyUnavailable
+				: (!bFoundReachableSharedTank
+					? ECatDomainCommandError::PermissionDenied
+					: (bFoundPolicyClosedSharedTank
+						? ECatDomainCommandError::PolicyUndecided : ECatDomainCommandError::CapacityExceeded));
+		}
+		else
+		{
+			UE_LOG(LogCatItems, Log,
+				TEXT("Event=fish_guard_store_shared_tank_resolved Request=%s Fish=%s SourceContainer=%s SourceSlot=%d TargetTank=%s TargetContainer=%s TargetSlot=%d TargetRevision=%lld"),
+				*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+				*FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+				*SourceContainerId.ToString(EGuidFormats::DigitsWithHyphens), SourceContainerSlotIndex,
+				*GetNameSafe(TargetHost),
+				*TargetSnapshot.ContainerId.ToString(EGuidFormats::DigitsWithHyphens), TargetSlotIndex,
+				TargetSnapshot.Revision);
+			SubmitTransferObjectBetweenContainersFromServerRequest(RequestId, ECatContainedObjectKind::Fish,
+				FishInstanceId,
+				SourceContainerId, ECatContainerKind::FishGuard, SourceContainerSlotIndex,
+				ExpectedSourceRevision,
+				TargetSnapshot.ContainerId, ECatContainerKind::SharedFishTank, TargetSlotIndex,
+				TargetSnapshot.Revision);
+			return;
+		}
+	}
+	if (Result.Error != ECatDomainCommandError::None)
+	{
+		UE_LOG(LogCatItems, Warning,
+			TEXT("Event=fish_guard_store_shared_tank_rejected Request=%s Fish=%s SourceContainer=%s SourceSlot=%d Error=%s Revision=%lld"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			*FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+			*SourceContainerId.ToString(EGuidFormats::DigitsWithHyphens), SourceContainerSlotIndex,
+			*UEnum::GetValueAsString(Result.Error), Result.Revision);
+	}
+	DeliverCampCommandResultToOwningClient(Result);
+}
+
 // 搬运救援 RPC 路由流程：只把目标和营地投给 BodyAction Ability；没有正式 Ability 接管时回送依赖错误。
 void ACatfishingPlayerController::ServerRescueCharacterToCamp_Implementation(ACatCampHubActor* Camp,
 	ACatCharacter* TargetCharacter, const FGuid RequestId)
@@ -2993,9 +3293,9 @@ void ACatfishingPlayerController::SubmitRepairRodAtCampFromBodyActionAbility(ACa
 	}
 }
 
-// 草药 RPC 路由流程：只把施药目标、RequestId、装备 Revision 和草药定义投给 BodyAction Ability；Ability 未接管时静默关闭。
+// 草药 RPC 路由流程：只把施药目标、RequestId、装备 Revision 和草药实例投给 BodyAction Ability；Ability 未接管时静默关闭。
 void ACatfishingPlayerController::ServerUseHerbOnCharacter_Implementation(ACatCharacter* TargetCharacter,
-	const FGuid RequestId, const int64 ExpectedEquipmentRevision, const FName HerbDefinitionId)
+	const FGuid RequestId, const int64 ExpectedEquipmentRevision, const FGuid HerbItemInstanceId)
 {
 	UCatBodyActionPayload* Payload = CreateBodyActionPayload(ECatBodyActionAbilityCommand::UseHerbOnCharacter);
 	if (Payload)
@@ -3003,14 +3303,14 @@ void ACatfishingPlayerController::ServerUseHerbOnCharacter_Implementation(ACatCh
 		Payload->TargetCharacter = TargetCharacter;
 		Payload->RequestId = RequestId;
 		Payload->ExpectedEquipmentRevision = ExpectedEquipmentRevision;
-		Payload->HerbDefinitionId = HerbDefinitionId;
+		Payload->HerbItemInstanceId = HerbItemInstanceId;
 	}
 	SubmitBodyActionThroughAbility(Payload);
 }
 
-// 草药 Ability 提交流程：先过统一玩法 gate，再从当前 Pawn 和目标 Character 读服务器位置，要求施药者未倒地且距离不超显式正范围；最后完成身体 preflight 才不可逆扣草药并恢复目标。
+// 草药 Ability 提交流程：先过统一玩法 gate，再从当前 Pawn 和目标 Character 读服务器位置，要求施药者未倒地且距离不超显式正范围；最后按请求实例通过 Equipment Use 扣量，成功后才恢复目标。
 void ACatfishingPlayerController::SubmitUseHerbOnCharacterFromBodyActionAbility(ACatCharacter* TargetCharacter,
-	const FGuid RequestId, const int64 ExpectedEquipmentRevision, const FName HerbDefinitionId)
+	const FGuid RequestId, const int64 ExpectedEquipmentRevision, const FGuid HerbItemInstanceId)
 {
 	if (!CanForwardGameplayCommand())
 	{
@@ -3020,10 +3320,25 @@ void ACatfishingPlayerController::SubmitUseHerbOnCharacterFromBodyActionAbility(
 	UCatEquipmentComponent* Equipment = ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr;
 	UCatConditionComponent* SourceConditions = ControlledCharacter ? ControlledCharacter->GetConditionComponent() : nullptr;
 	UCatConditionComponent* Conditions = TargetCharacter ? TargetCharacter->GetConditionComponent() : nullptr;
-	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(HerbDefinitionId);
+	const FCatRunInventorySlot* HerbSlot = nullptr;
+	if (Equipment)
+	{
+		for (const FCatRunInventorySlot& Slot : Equipment->GetSnapshot().InventorySlots)
+		{
+			if (Slot.ItemInstanceId == HerbItemInstanceId)
+			{
+				HerbSlot = &Slot;
+				break;
+			}
+		}
+	}
+	UCatEquipmentDefinition* Definition = HerbSlot
+		? GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(HerbSlot->DefinitionId) : nullptr;
 	const UCatConditionSettings* ConditionSettings = GetDefault<UCatConditionSettings>();
-	if (!Equipment || !SourceConditions || SourceConditions->GetSnapshot().bDowned || !Conditions
-		|| !Definition || Definition->Kind != ECatEquipmentKind::Herb || !ConditionSettings
+	if (!HerbItemInstanceId.IsValid() || !Equipment || !SourceConditions || SourceConditions->GetSnapshot().bDowned || !Conditions
+		|| !HerbSlot || HerbSlot->Quantity <= 0
+		|| !Definition || Definition->Kind != ECatEquipmentKind::Herb
+		|| !Definition->ConsumesInventoryQuantityOnUse() || !ConditionSettings
 		|| !FMath::IsFinite(ConditionSettings->HerbUseRangeCentimeters)
 		|| ConditionSettings->HerbUseRangeCentimeters <= 0.0
 		|| TargetCharacter->GetWorld() != GetWorld()
@@ -3033,9 +3348,9 @@ void ACatfishingPlayerController::SubmitUseHerbOnCharacterFromBodyActionAbility(
 	{
 		return;
 	}
-	const FCatDomainCommandResult Consume = Equipment->ConsumeInventoryQuantityFromAuthority(
-		RequestId, ExpectedEquipmentRevision, HerbDefinitionId);
-	if (Consume.bCommitted)
+	const FCatInventoryItemUseResult UseResult =
+		Equipment->Use(RequestId, ExpectedEquipmentRevision, HerbItemInstanceId);
+	if (UseResult.bCommitted)
 	{
 		Conditions->ApplyCommittedHerbRecovery(this, RequestId);
 	}
@@ -3439,7 +3754,7 @@ bool ACatfishingPlayerController::ExecuteBodyActionAbilityPayload(const UCatBody
 		return true;
 	case ECatBodyActionAbilityCommand::UseHerbOnCharacter:
 		SubmitUseHerbOnCharacterFromBodyActionAbility(Payload.TargetCharacter.Get(), Payload.RequestId,
-			Payload.ExpectedEquipmentRevision, Payload.HerbDefinitionId);
+			Payload.ExpectedEquipmentRevision, Payload.HerbItemInstanceId);
 		return true;
 	case ECatBodyActionAbilityCommand::ConsumeFish:
 		SubmitConsumeFishFromBodyActionAbility(Payload.TargetCharacter.Get(), Payload.FishConsumeCommand);

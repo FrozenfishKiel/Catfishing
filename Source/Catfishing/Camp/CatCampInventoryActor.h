@@ -46,7 +46,7 @@ struct FCatCampInventoryAddItemRequest
 /** 营地公共仓库快照变化通知；UI 或营地交互层收到后只能重读快照，不能直接写库存。 */
 DECLARE_MULTICAST_DELEGATE(FCatCampInventorySnapshotChanged);
 
-/** 营地公共装备库 Actor；商店购买物先进入这里，玩家再从公共仓库取到自己的随身装备库存。 */
+/** 营地公共仓库 Actor；商店购买物先进入这里，玩家再从公共仓库取到自己的随身库存。 */
 UCLASS(BlueprintType, Blueprintable)
 class CATFISHING_API ACatCampInventoryActor : public AActor, public ICatInteractable
 {
@@ -95,25 +95,25 @@ public:
 	FCatDomainCommandResult AddItemsFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		const FString& StableNetId, const TArray<FCatCampInventoryAddItemRequest>& Items);
 
-	/** 查询玩家是否能从指定公共格子取物到自己的随身装备库存；它只做预检，不修改两边库存。 */
+	/** 查询玩家是否能从指定公共格子取物到自己的随身库存；正在 Use 或场上部署中的同一实例会被拒绝，本函数不修改两边库存。 */
 	ECatDomainCommandError ValidateWithdrawToEquipment(FGuid RequestId, int32 SourceSlotIndex, int32 Quantity,
 		UCatEquipmentComponent* TargetEquipment) const;
 
-	/** 把公共仓库里的物品取到玩家随身装备库存；成功后公共仓库扣减，玩家随身库存通过自己的授予入口增加。 */
+	/** 把公共仓库里的物品取到玩家随身库存；成功后公共仓库扣减，玩家随身库存通过自己的授予入口增加。 */
 	FCatDomainCommandResult WithdrawToEquipmentFromAuthority(FGuid RequestId, int64 ExpectedCampRevision,
 		int32 SourceSlotIndex, int32 Quantity, UCatEquipmentComponent* TargetEquipment,
 		int64 ExpectedEquipmentRevision);
 
-	/** 整理公共仓库内部两个格子；它只移动、合并或交换公共仓库格，不把物品发到玩家随身库存。 */
+	/** 整理公共仓库内部两个格子；若源/目标格含 Use 或场上部署实例则拒绝，不把物品发到玩家随身库存。 */
 	FCatDomainCommandResult MoveInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		int32 SourceSlotIndex, int32 TargetSlotIndex);
 
-	/** 把玩家随身库存的一个格子拖入本公共仓库指定格；成功时两份独立数据源各自推进版本并广播。 */
+	/** 把玩家随身库存的一个格子拖入本公共仓库指定格；正在 Use 或场上部署中的同一实例不会借交换进入任一侧普通库存。 */
 	FCatDomainCommandResult DepositFromEquipmentSlotFromAuthority(FGuid RequestId, int64 ExpectedCampRevision,
 		int32 TargetCampSlotIndex, UCatEquipmentComponent* SourceEquipment, int64 ExpectedEquipmentRevision,
 		int32 SourceEquipmentSlotIndex);
 
-	/** 把本公共仓库的一个格子拖到玩家随身库存指定格；成功时两份独立数据源各自推进版本并广播。 */
+	/** 把本公共仓库的一个格子拖到玩家随身库存指定格；正在 Use 或场上部署中的同一实例不能被拖放或交换回背包。 */
 	FCatDomainCommandResult WithdrawToEquipmentSlotFromAuthority(FGuid RequestId, int64 ExpectedCampRevision,
 		int32 SourceCampSlotIndex, UCatEquipmentComponent* TargetEquipment, int64 ExpectedEquipmentRevision,
 		int32 TargetEquipmentSlotIndex);
@@ -144,6 +144,9 @@ private:
 
 	/** 解析公共仓库交互要打开的独立库存页类；路径失效时返回空，让交互明确失败而不是退回默认库存页。 */
 	TSubclassOf<UCatCampInventoryWidget> LoadInventoryViewClass() const;
+
+	/** 判断运行期实例是否已被 Use 或场上物品 Actor 占用；仓库取放和整理用它阻止跨玩家同 ID 回流。 */
+	bool IsItemInstanceBlockedByActiveUse(const UCatEquipmentComponent* LocalEquipment, FGuid ItemInstanceId) const;
 
 	/** 补齐公共仓库可见格子；只追加空格，不截断已有物品，避免容量调小吞掉库存。 */
 	void EnsureInventorySlotArray();

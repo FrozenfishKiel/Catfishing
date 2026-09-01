@@ -38,11 +38,11 @@
 
 ⚠️ 角色指定了 ID 但定义缺失/未就绪时**不会悄悄换成全局值**——属性播种直接失败并打 `initial_attributes_unresolved` Warning，钓鱼链整体不可用，方便第一时间发现配错。
 
-## 2. 装备：`UCatEquipmentDefinition`（正式目录 `Equip_Rod/Bait/Float/ScoopNet/Chum_*`）
+## 2. 装备/道具：`UCatEquipmentDefinition`（正式目录 `Equip_*`）
 
-一个类覆盖五种装备，靠 `Kind` 区分；**每个 Kind 只看自己那组字段，其余必须保持默认 0/false**（校验会因"竿字段出现在鱼饵上"这类越界而判未就绪）。
+一个类覆盖装备和道具，靠 `Kind` 区分；**每个 Kind 只看自己那组字段，其余必须保持默认 0/false**（校验会因"竿字段出现在鱼饵上"这类越界而判未就绪）。
 
-**共同字段**：`EquipmentDefinitionId`(唯一ID) · `Kind`(种类,不能 Unknown) · `LoadoutSlotId`(Rod/Bait/Float/ScoopNet 四种必填,窝料不填) · `RequiredUnlockId`(解锁门槛,None=不设) · `UseActorClass`(该物品实例 Use 到世界时生成的 Actor 类；鱼竿必填 BP_CatFishingRodActor) · `bRunConsumable`(是否一局内耗材:窝料 True、特殊饵 True、其他 False) · `bSpecialBait`(特殊鱼饵标记,与 bRunConsumable 同真同假仅限 Bait) · `FunctionalRouteId`(功能路由,必填,常规填 Route_Standard) · `bEnableRuntimeDefinition`(gate)
+**共同字段**：`EquipmentDefinitionId`(唯一ID) · `Kind`(种类,不能 Unknown) · `LoadoutSlotId`(Rod/Bait/Float/ScoopNet 四种钓鱼选择物必填，非选择型道具不填) · `RequiredUnlockId`(解锁门槛,None=不设) · `UseActorClass`(部署型物品 Use 到世界时生成的 Actor 类；鱼竿填 BP_CatFishingRodActor，其他部署物品填自己的 Actor) · `UseInventoryEffect`(统一 Use 成功后的库存影响：Auto 兼容旧部署资产并让 Chum/Herb 默认扣数量、None 表示无通用 Use、HoldInstanceUntilUnUse 表示部署到 UnUse 前占用实例、ConsumeQuantity 表示按请求数量消耗) · `bRunConsumable`(是否一局内耗材：普通/特殊鱼饵、窝料、草药等数量型运行消耗物为 True，工具和部署型物品为 False) · `bSpecialBait`(特殊鱼饵标记,与 bRunConsumable 同真同假仅限 Bait) · `FunctionalRouteId`(功能路由,必填,常规填 Route_Standard) · `bEnableRuntimeDefinition`(gate)
 
 **Rod（鱼竿）**：
 | 字段 | 含义 | 规格对应 |
@@ -55,7 +55,7 @@
 
 **Bait（鱼饵）**：`BiteRateMultiplier`(>0,咬钩率倍率) · `MinimumBiteDelayMultiplier`(>0,最短咬钩延迟倍率)
 **Float（浮漂）**：`MaximumCastDistanceCentimeters`(>0,最大抛竿距离) · `CastErrorStandardDeviation/MaximumCastErrorRadiusCentimeters`(落点误差σ/上限,σ≤上限) · `BiteSignalStability`(0~1,咬钩信号稳定度)
-**ScoopNet（抄网）**：`ScoopReachCentimeters`(>0,**抄手沿 Character 面朝正前方发射的水平线段长度**,语义="网杆多长")。方向取 `Character Actor Forward`，不读取 `Controller/Camera` 朝向。与鱼定义里的 `ScoopTargetRadiusCentimeters`(圆半径)配对构成抄网判定：**俯视投影下线段∩圆**即够得着。实际生效长度取 `min(本值, UCatFishingSettings::ScoopReachCentimeters)`——全局那个是上限闸门。高度差另由 `UCatFishingSettings::MaximumScoopVerticalDeltaCentimeters` 单独限制,判定本身完全不看俯仰角。当前开发期 `bAutoGrantStarterScoopNet=True` 会给每名玩家库存临时发一份并选中正式目录定义 `StarterScoopNet`；正式商店/奖励获取就绪后关闭该开关。
+**ScoopNet（抄网）**：`ScoopReachCentimeters`(>0,**抄手沿 Character 面朝正前方发射的水平线段长度**,语义="网杆多长")。方向取 `Character Actor Forward`，不读取 `Controller/Camera` 朝向。与鱼定义里的 `ScoopTargetRadiusCentimeters`(圆半径)配对构成抄网判定：**俯视投影下线段∩圆**即够得着。实际生效长度取 `min(本值, UCatFishingSettings::ScoopReachCentimeters)`——全局那个是上限闸门。高度差另由 `UCatFishingSettings::MaximumScoopVerticalDeltaCentimeters` 单独限制,判定本身完全不看俯仰角。当前默认配置不发放或自动选中抄网；`StarterScoopNet` 只保留为正式目录定义，商店/奖励来源接入前暂时没有默认获取渠道。
 **Chum（窝料）**：`bRunConsumable` 必须 True，核心在 `ChumInfluence` 结构：
 
 | ChumInfluence 字段 | 含义 | 校验 |

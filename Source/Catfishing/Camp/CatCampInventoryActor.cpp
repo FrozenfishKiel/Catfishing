@@ -3,9 +3,11 @@
 #include "Components/SceneComponent.h"
 #include "Components/SphereComponent.h"
 #include "Engine/LocalPlayer.h"
+#include "Engine/World.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
+#include "Equipment/CatInventoryItemUseRegistry.h"
 #include "Equipment/CatRunInventorySlotOperations.h"
 #include "GameFramework/PlayerController.h"
 #include "Interaction/CatInteractionSettings.h"
@@ -322,9 +324,10 @@ FCatDomainCommandResult ACatCampInventoryActor::AddItemsFromAuthority(const FGui
 }
 
 // 取用预检流程：
-// 1. 先验证公共仓库槽位、数量、authority 和目标玩家装备组件，确保取用有明确来源和接收方。
+// 1. 先验证公共仓库槽位、数量、authority 和目标玩家随身库存组件，确保取用有明确来源和接收方。
 // 2. 再复制源格形成本次要取出的完整实例；消耗品取指定数量，装备型只允许一次取一件。
-// 3. 目标玩家能原样接收该实例时才返回 None；本函数不修改公共仓库，也不调用玩家入库提交。
+// 3. 如果这份实例正被 Use 或任意场上物品 Actor 占用，直接拒绝，避免场上 Actor 和普通库存同时持有同一件物品。
+// 4. 目标玩家能原样接收该实例时才返回 None；本函数不修改公共仓库，也不调用玩家入库提交。
 ECatDomainCommandError ACatCampInventoryActor::ValidateWithdrawToEquipment(const FGuid RequestId,
 	const int32 SourceSlotIndex, const int32 Quantity, UCatEquipmentComponent* TargetEquipment) const
 {
@@ -333,10 +336,6 @@ ECatDomainCommandError ACatCampInventoryActor::ValidateWithdrawToEquipment(const
 		|| !TargetOwner || !TargetOwner->HasAuthority() || !Snapshot.InventorySlots.IsValidIndex(SourceSlotIndex))
 	{
 		return ECatDomainCommandError::InvalidPayload;
-	}
-	if (TargetEquipment->HasActiveFishingUse() || TargetEquipment->HasActiveRunConsumableUse())
-	{
-		return ECatDomainCommandError::InvalidPhase;
 	}
 	const FCatRunInventorySlot& SourceSlot = Snapshot.InventorySlots[SourceSlotIndex];
 	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
@@ -354,15 +353,19 @@ ECatDomainCommandError ACatCampInventoryActor::ValidateWithdrawToEquipment(const
 	FCatRunInventorySlot WithdrawnItem = SourceSlot;
 	WithdrawnItem.Quantity = Quantity;
 	CatRunInventorySlotOperations::NormalizeStoredItemSlot(WithdrawnItem, *Definition);
+	if (IsItemInstanceBlockedByActiveUse(TargetEquipment, WithdrawnItem.ItemInstanceId))
+	{
+		return ECatDomainCommandError::InvalidPhase;
+	}
 	return TargetEquipment->CanStoreInventorySlot(*Definition, WithdrawnItem)
 		? ECatDomainCommandError::None : ECatDomainCommandError::CapacityExceeded;
 }
 
 // 取用提交流程：
 // 1. 先用 RequestId 和源槽/数量/双方版本签名处理幂等，重放不会重复扣公共仓库或重复发玩家随身库存。
-// 2. 首次提交先做公共仓库和个人装备双侧预检，再检查公共仓库 Revision 是否仍是调用方看到的版本。
-// 3. 扣公共仓库槽位前保存一份槽位快照；如果个人装备授予出现意外失败，恢复公共仓库，避免物品凭空消失。
-// 4. 玩家随身装备授予成功后递增公共仓库 Revision、复制并缓存终态；随身库存的 Revision 由 UCatEquipmentComponent 自己返回。
+// 2. 首次提交先做公共仓库和玩家随身库存双侧预检，再检查公共仓库 Revision 是否仍是调用方看到的版本。
+// 3. 扣公共仓库槽位前保存一份槽位快照；如果随身库存授予出现意外失败，恢复公共仓库，避免物品凭空消失。
+// 4. 玩家随身库存授予成功后递增公共仓库 Revision、复制并缓存终态；随身库存的 Revision 由 UCatEquipmentComponent 自己返回。
 FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority(const FGuid RequestId,
 	const int64 ExpectedCampRevision, const int32 SourceSlotIndex, const int32 Quantity,
 	UCatEquipmentComponent* TargetEquipment, const int64 ExpectedEquipmentRevision)
@@ -472,8 +475,8 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 
 // 公共仓库整理流程：
 // 1. 用 RequestId、Revision 和源/目标下标处理幂等重放；同 RequestId 换格子会被拒绝。
-// 2. 首次请求要求服务器 authority、版本匹配且容量数组已补齐，再复用运行库存格通用规则移动、合并或交换。
-// 3. 只有格子数组真的变化时才推进公共仓库 Revision 并广播；目标格已满这类无变化结果不刷新库存。
+// 2. 首次请求要求服务器 authority、版本匹配且容量数组已补齐，若源/目标格含有场上占用实例则拒绝。
+// 3. 通过后复用运行库存格通用规则移动、合并或交换；只有数组真的变化时才推进公共仓库 Revision 并广播。
 FCatDomainCommandResult ACatCampInventoryActor::MoveInventorySlotFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const int32 SourceSlotIndex, const int32 TargetSlotIndex)
 {
@@ -507,17 +510,30 @@ FCatDomainCommandResult ACatCampInventoryActor::MoveInventorySlotFromAuthority(c
 	else
 	{
 		EnsureInventorySlotArray();
-		const auto ResolveStackLimit = [this](const FName DefinitionId)
+		if (!Snapshot.InventorySlots.IsValidIndex(SourceSlotIndex)
+			|| !Snapshot.InventorySlots.IsValidIndex(TargetSlotIndex))
 		{
-			const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-			const UCatEquipmentDefinition* Definition = Settings ? Settings->FindRuntimeDefinition(DefinitionId) : nullptr;
-			return Definition ? GetInventoryStackLimit(*Definition) : 1;
-		};
-		const CatRunInventorySlotOperations::FMoveSlotsResult MoveResult =
-			CatRunInventorySlotOperations::MoveItemBetweenSlots(
-				Snapshot.InventorySlots, SourceSlotIndex, TargetSlotIndex, ResolveStackLimit);
-		Result.bCommitted = MoveResult.bChanged;
-		Result.Error = MoveResult.Error;
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+		}
+		else if (IsItemInstanceBlockedByActiveUse(nullptr, Snapshot.InventorySlots[SourceSlotIndex].ItemInstanceId)
+			|| IsItemInstanceBlockedByActiveUse(nullptr, Snapshot.InventorySlots[TargetSlotIndex].ItemInstanceId))
+		{
+			Result.Error = ECatDomainCommandError::InvalidPhase;
+		}
+		else
+		{
+			const auto ResolveStackLimit = [this](const FName DefinitionId)
+			{
+				const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+				const UCatEquipmentDefinition* Definition = Settings ? Settings->FindRuntimeDefinition(DefinitionId) : nullptr;
+				return Definition ? GetInventoryStackLimit(*Definition) : 1;
+			};
+			const CatRunInventorySlotOperations::FMoveSlotsResult MoveResult =
+				CatRunInventorySlotOperations::MoveItemBetweenSlots(
+					Snapshot.InventorySlots, SourceSlotIndex, TargetSlotIndex, ResolveStackLimit);
+			Result.bCommitted = MoveResult.bChanged;
+			Result.Error = MoveResult.Error;
+		}
 	}
 	if (Result.bCommitted)
 	{
@@ -532,10 +548,11 @@ FCatDomainCommandResult ACatCampInventoryActor::MoveInventorySlotFromAuthority(c
 
 // 背包存入公共仓库流程：
 // 1. 用 RequestId 和双方版本/槽位做幂等签名；同请求重放只返回首次终态，不重复移动任何格子。
-// 2. 首次提交同时验证公共仓库和玩家随身库存的 authority、阶段、Revision 和槽位，任一侧不成立都不改数据源。
-// 3. 通过后用同一套运行库存格规则把背包源格移动、合并或交换到公共仓库目标格。
-// 4. 只有不同物品交换让背包收到营地目标物时才修正背包选择；空格存入和同类合并不反向改选择。
-// 5. 只有数组真的变化时才分别推进背包和公共仓库版本，再各自广播完整快照，让两边 UI 自己刷新。
+// 2. 首次提交同时验证公共仓库和玩家随身库存的 authority、Revision 和槽位，任一侧不成立都不改数据源。
+// 3. 背包源格或公共仓库目标格若藏着仍在 Use 或场上部署中的同实例，提交前拒绝，避免用拖放绕过统一入口。
+// 4. 通过后用同一套运行库存格规则把背包源格移动、合并或交换到公共仓库目标格。
+// 5. 只有不同物品交换让背包收到营地目标物时才修正背包选择；空格存入和同类合并不反向改选择。
+// 6. 只有数组真的变化时才分别推进背包和公共仓库版本，再各自广播完整快照，让两边 UI 自己刷新。
 FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuthority(const FGuid RequestId,
 	const int64 ExpectedCampRevision, const int32 TargetCampSlotIndex, UCatEquipmentComponent* SourceEquipment,
 	const int64 ExpectedEquipmentRevision, const int32 SourceEquipmentSlotIndex)
@@ -565,10 +582,6 @@ FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuth
 		|| !EquipmentOwner->HasAuthority() || SourceEquipmentSlotIndex < 0 || TargetCampSlotIndex < 0)
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
-	}
-	else if (SourceEquipment->HasActiveFishingUse() || SourceEquipment->HasActiveRunConsumableUse())
-	{
-		Result.Error = ECatDomainCommandError::InvalidPhase;
 	}
 	else if (Snapshot.Revision != ExpectedCampRevision
 		|| SourceEquipment->Snapshot.Revision != ExpectedEquipmentRevision)
@@ -606,6 +619,13 @@ FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuth
 			else if (!EquipmentReceivedDefinitionId.IsNone() && !EquipmentReceivedDefinition)
 			{
 				Result.Error = ECatDomainCommandError::InvalidPayload;
+			}
+			else if (IsItemInstanceBlockedByActiveUse(SourceEquipment,
+				SourceEquipment->Snapshot.InventorySlots[SourceEquipmentSlotIndex].ItemInstanceId)
+				|| IsItemInstanceBlockedByActiveUse(SourceEquipment,
+					Snapshot.InventorySlots[TargetCampSlotIndex].ItemInstanceId))
+			{
+				Result.Error = ECatDomainCommandError::InvalidPhase;
 			}
 			else
 			{
@@ -645,9 +665,10 @@ FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuth
 
 // 公共仓库拖入背包流程：
 // 1. 用 RequestId 和双方版本/槽位做幂等签名；重放只返回首次终态，不重复扣公共仓库或发背包。
-// 2. 首次提交同时验证公共仓库、玩家随身库存、阶段、Revision 和槽位，确保这次 Drop 可以同时改两份数据源。
-// 3. 通过后把公共仓库源格移动、合并或交换到背包目标格；目标格不是空格时也按玩家拖放目标处理。
-// 4. 成功后两边各自推进版本并广播完整快照，Model 只收到变化信号并让各 WBP 自己刷新。
+// 2. 首次提交同时验证公共仓库、玩家随身库存、Revision 和槽位，确保这次拖放可以同时改两份数据源。
+// 3. 公共仓库源格或背包目标格若是已经 Use 或场上部署中的同一实例，直接拒绝，防止指定槽位拖放复制场上物品。
+// 4. 通过后把公共仓库源格移动、合并或交换到背包目标格；目标格不是空格时也按玩家拖放目标处理。
+// 5. 成功后两边各自推进版本并广播完整快照，Model 只收到变化信号并让各 WBP 自己刷新。
 FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentSlotFromAuthority(const FGuid RequestId,
 	const int64 ExpectedCampRevision, const int32 SourceCampSlotIndex, UCatEquipmentComponent* TargetEquipment,
 	const int64 ExpectedEquipmentRevision, const int32 TargetEquipmentSlotIndex)
@@ -677,10 +698,6 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentSlotFromAutho
 		|| !EquipmentOwner->HasAuthority() || SourceCampSlotIndex < 0 || TargetEquipmentSlotIndex < 0)
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
-	}
-	else if (TargetEquipment->HasActiveFishingUse() || TargetEquipment->HasActiveRunConsumableUse())
-	{
-		Result.Error = ECatDomainCommandError::InvalidPhase;
 	}
 	else if (Snapshot.Revision != ExpectedCampRevision
 		|| TargetEquipment->Snapshot.Revision != ExpectedEquipmentRevision)
@@ -715,6 +732,13 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentSlotFromAutho
 			else if (!EquipmentTargetDefinitionId.IsNone() && !EquipmentTargetDefinition)
 			{
 				Result.Error = ECatDomainCommandError::InvalidPayload;
+			}
+			else if (IsItemInstanceBlockedByActiveUse(TargetEquipment,
+				Snapshot.InventorySlots[SourceCampSlotIndex].ItemInstanceId)
+				|| IsItemInstanceBlockedByActiveUse(TargetEquipment,
+					TargetEquipment->Snapshot.InventorySlots[TargetEquipmentSlotIndex].ItemInstanceId))
+			{
+				Result.Error = ECatDomainCommandError::InvalidPhase;
 			}
 			else
 			{
@@ -817,6 +841,31 @@ TSubclassOf<UCatCampInventoryWidget> ACatCampInventoryActor::LoadInventoryViewCl
 		return nullptr;
 	}
 	return LoadedClass;
+}
+
+bool ACatCampInventoryActor::IsItemInstanceBlockedByActiveUse(const UCatEquipmentComponent* LocalEquipment,
+	const FGuid ItemInstanceId) const
+{
+	// 活动实例占用查询流程：
+	// 1. 无效实例不能代表真实物品，空格和旧空 GUID 都不阻止仓库整理。
+	// 2. 有本地 Equipment 时先走它的通用占用 gate，覆盖玩家自己的 Use 记录和当前 World 的场景物品登记。
+	// 3. 没有本地 Equipment 时再直接查本 World 登记器，覆盖公共仓库格子本身持有坏数据的路径。
+	if (!ItemInstanceId.IsValid())
+	{
+		return false;
+	}
+	if (LocalEquipment && LocalEquipment->IsInventoryItemInstanceBlockedByActiveUse(ItemInstanceId))
+	{
+		return true;
+	}
+	if (UWorld* World = GetWorld())
+	{
+		if (UCatInventoryItemUseRegistry* ItemUseRegistry = World->GetSubsystem<UCatInventoryItemUseRegistry>())
+		{
+			return ItemUseRegistry->IsItemInstanceInWorld(ItemInstanceId);
+		}
+	}
+	return false;
 }
 
 // 槽位补齐流程：只追加配置容量内缺失的空槽，不删除多余已有槽位；容量被调小时已有物品仍可显示和取走。

@@ -28,6 +28,20 @@ enum class ECatEquipmentKind : uint8
 	Utility
 };
 
+/** 统一物品 Use 成功后对库存实例的处理方式；定义资产声明策略，Equipment 入口只按结果移动、扣量或保持不变。 */
+UENUM(BlueprintType)
+enum class ECatEquipmentUseInventoryEffect : uint8
+{
+	/** 兼容旧数据的自动策略；定义解析会把配置了 UseActorClass 的旧部署型资产视为实例占用，未配置的视为 no-op。 */
+	Auto,
+	/** 这类物品没有通用 Use 库存事务；统一入口返回 AlreadyResolved，不移动、不扣量，也不创建活动记录。 */
+	None,
+	/** Use 成功后整份实例离开背包，由活动使用记录持有到 UnUse 再放回；部署表现只引用这份实例身份。 */
+	HoldInstanceUntilUnUse,
+	/** Use 成功后从同一 ItemInstanceId 的数量栈扣指定份数；调用方必须先完成目标、距离和效果前置裁决。 */
+	ConsumeQuantity
+};
+
 /** 一次钓鱼失败预算允许的唯一惩罚；None 与两个正式结果之外没有第二刀。 */
 UENUM(BlueprintType)
 enum class ECatFishingFailurePenalty : uint8
@@ -66,7 +80,6 @@ struct FCatRunInventorySlot
 	UPROPERTY(BlueprintReadOnly)
 	bool bRodBroken = false;
 };
-
 /** Character 当前随身库存与钓鱼选择的复制读模型；解锁仍在本地 Profile，局内持有量随 Character/World 清空。 */
 USTRUCT(BlueprintType)
 struct FCatEquipmentLoadoutSnapshot
@@ -89,7 +102,7 @@ struct FCatEquipmentLoadoutSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	FName BaitDefinitionId = NAME_None;
 
-	/** 当前选中的鱼饵堆栈实例 ID；数量型物品仍按定义扣数量，但 UI/事务可以追到玩家当时选中的那一格。 */
+	/** 当前选中的鱼饵堆栈实例 ID；Fishing 提交扣饵时按它锁定具体数量栈，不会再误扣同定义的另一格。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid BaitItemInstanceId;
 
@@ -136,7 +149,7 @@ struct FCatInventoryItemUseResult
 	UPROPERTY(BlueprintReadOnly)
 	FGuid RequestId;
 
-	/** 本次被移出或放回库存的运行期实例副本；放杆失败回滚和收杆归还都必须原样沿用它。 */
+	/** 本次被移出、扣减或放回库存的运行期实例副本；部署回滚和收回归还都必须沿用同一 ItemInstanceId。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatRunInventorySlot Item;
 
@@ -202,7 +215,6 @@ struct FCatFishingUseReservationResult
 	UPROPERTY(BlueprintReadOnly)
 	bool bRodBroken = false;
 };
-
 /** Fishing use 后续操作结果；bApplied 只在首次改变 private record 或公开 Equipment 事实时为 true。 */
 USTRUCT(BlueprintType)
 struct FCatFishingUseOperationResult
@@ -232,19 +244,4 @@ struct FCatFishingUseOperationResult
 
 	UPROPERTY(BlueprintReadOnly)
 	bool bRodBroken = false;
-};
-
-USTRUCT(BlueprintType)
-struct FCatRunConsumableUseResult
-{
-	GENERATED_BODY()
-
-	UPROPERTY(BlueprintReadOnly) FGuid OperationId;
-	UPROPERTY(BlueprintReadOnly) ECatDomainCommandError Error = ECatDomainCommandError::InvalidPayload;
-	UPROPERTY(BlueprintReadOnly) FName DefinitionId = NAME_None;
-	UPROPERTY(BlueprintReadOnly) int32 Quantity = 0;
-	UPROPERTY(BlueprintReadOnly) int64 EquipmentRevision = 0;
-	UPROPERTY(BlueprintReadOnly) bool bReserved = false;
-	UPROPERTY(BlueprintReadOnly) bool bCommitted = false;
-	UPROPERTY(BlueprintReadOnly) bool bReleased = false;
 };

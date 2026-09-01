@@ -60,6 +60,12 @@ DECLARE_MULTICAST_DELEGATE_OneParam(FCatCampCommandResultReceived, const FCatDom
 /** owning client 收到直接吃鱼结果后的本机通知；UI Model 只用它证明鱼护命令终态并刷新显示。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatFishConsumeResultReceived, const FCatFishConsumeResult&);
 
+namespace CatGameplayPlayerLimits
+{
+	/** 当前固定营地自动出生布局支持的玩家上限；Online 会话容量和 GameMode 出生裁决必须读取同一口径，避免允许无法落地的第 5 名玩家进入玩法世界。 */
+	inline constexpr int32 MaxCampSpawnPlayers = 4;
+}
+
 /** 前台专用模式；明确不生成默认 Pawn，只承载 LocalPlayer Online UI。 */
 UCLASS()
 class CATFISHING_API ACatFrontendGameMode : public AGameModeBase
@@ -92,6 +98,16 @@ public:
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	/** 生成 Character 前再次验证 PlayerState 的继承 UniqueId 与 Active Controller 匹配，失败时不调用父类生成。 */
 	virtual void HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer) override;
+	/** 玩家重启时只允许从唯一固定营地进入默认生成链；找不到合法营地时保持无 Pawn，不回退到旧 StartSpot 或世界原点。 */
+	virtual void RestartPlayer(AController* NewPlayer) override;
+	/** 查找玩家出生点时忽略客户端 Portal 和历史 StartSpot，只返回当前 World 唯一营地；缺失或重复营地会返回空。 */
+	virtual AActor* FindPlayerStart_Implementation(AController* Player, const FString& IncomingName = TEXT("")) override;
+	/** 选择玩家出生点时只扫描唯一 ACatCampHubActor；普通 PlayerStart 运行时不会成为候选。 */
+	virtual AActor* ChoosePlayerStart_Implementation(AController* Player) override;
+	/** 禁止沿用 Controller 上一次 StartSpot；每次生成都重新按当前唯一营地和当前玩家队列解析。 */
+	virtual bool ShouldSpawnAtStartSpot(AController* Player) override;
+	/** 在营地作为 StartSpot 时把 Pawn 生成位置改为营地附近合法 Transform；非营地 StartSpot 一律拒绝。 */
+	virtual APawn* SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot) override;
 	/** Controller 离开时只清除与它精确匹配的 Active 记录；不把主动离局猜成可恢复网络异常。 */
 	virtual void Logout(AController* Exiting) override;
 
@@ -476,6 +492,11 @@ public:
 		int32 TargetContainerSlotIndex,
 		int64 ExpectedTargetRevision);
 
+	/** 由 owning client 从鱼护页请求把选中鱼存入营地共享鱼缸；服务器重读源鱼护、固定营地鱼缸和首个空目标格后复用 Items 转移。 */
+	UFUNCTION(Server, Reliable)
+	void ServerStoreFishInSharedTank(FGuid RequestId, FGuid FishInstanceId, FGuid SourceContainerId,
+		int32 SourceContainerSlotIndex, int64 ExpectedSourceRevision);
+
 	/** 由 owning client 发起伙伴救援请求；把倒地目标送往固定营地 RescuePoint 并交给 Camp/Condition 裁决，完成后通过 ClientReceiveCampCommandResult 回送领域结果，不进入死亡或重生旁路。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRescueCharacterToCamp(ACatCampHubActor* Camp, ACatCharacter* TargetCharacter, FGuid RequestId);
@@ -539,10 +560,10 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerRepairRodAtCamp(ACatCampHubActor* Camp, FGuid RequestId, int64 ExpectedEquipmentRevision);
 
-	/** 消费本人一份草药后恢复目标 Character；库存提交成功前不会修改身体。 */
+	/** 消费本人指定草药实例的一份数量后恢复目标 Character；库存提交成功前不会修改身体。 */
 	UFUNCTION(Server, Reliable)
 	void ServerUseHerbOnCharacter(ACatCharacter* TargetCharacter, FGuid RequestId,
-		int64 ExpectedEquipmentRevision, FName HerbDefinitionId);
+		int64 ExpectedEquipmentRevision, FGuid HerbItemInstanceId);
 
 	/** 从地面鱼护箱子或共享鱼缸直接吃一条鱼；Items 移除成功后才按 FishDefinition 修改 Poison 并推进吃鱼成长。 */
 	UFUNCTION(Server, Reliable)
@@ -709,15 +730,18 @@ private:
 		int64 ExpectedSourceRevision, FGuid TargetContainerId, ECatContainerKind TargetContainerKind,
 		int32 TargetContainerSlotIndex,
 		int64 ExpectedTargetRevision);
+	/** 服务器接管鱼护一键存缸；只接受 FishGuard 源容器，并从固定营地解析 SharedFishTank 目标，不允许客户端指定任意目标容器。 */
+	void SubmitStoreFishInSharedTankFromServerRequest(FGuid RequestId, FGuid FishInstanceId,
+		FGuid SourceContainerId, int32 SourceContainerSlotIndex, int64 ExpectedSourceRevision);
 	/** BodyAction Ability 接管后的搬运救援提交；保持 Camp/Condition 对倒地目标和营地落点的裁决。 */
 	void SubmitRescueCharacterToCampFromBodyActionAbility(ACatCampHubActor* Camp, ACatCharacter* TargetCharacter,
 		FGuid RequestId);
 	/** BodyAction Ability 接管后的修竿提交；保持 Equipment 的耗材和耐久事务。 */
 	void SubmitRepairRodAtCampFromBodyActionAbility(ACatCampHubActor* Camp, FGuid RequestId,
 		int64 ExpectedEquipmentRevision);
-	/** BodyAction Ability 接管后的草药救援提交；保持 Equipment 扣除先于 Condition 恢复。 */
+	/** BodyAction Ability 接管后的草药救援提交；保持指定草药实例的 Equipment Use 先于 Condition 恢复。 */
 	void SubmitUseHerbOnCharacterFromBodyActionAbility(ACatCharacter* TargetCharacter, FGuid RequestId,
-		int64 ExpectedEquipmentRevision, FName HerbDefinitionId);
+		int64 ExpectedEquipmentRevision, FGuid HerbItemInstanceId);
 	/** BodyAction Ability 接管后的进食提交；保持 Items 先消费鱼，再由 Condition/Growth 应用效果。 */
 	void SubmitConsumeFishFromBodyActionAbility(ACatCharacter* EatingCharacter, FCatFishConsumeCommand Command);
 	/** BodyAction Ability 接管后的偷鱼开始提交；保持 Social 覆盖身份与 Items escrow 协议。 */

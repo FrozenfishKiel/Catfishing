@@ -83,7 +83,7 @@ public:
 	 */
 	bool TransferSessionFisher(ACatFishingSession* Session, AController* NewFisherController);
 
-	/** 为 PlayerState 登记唯一部署鱼竿；相同 Actor 重放成功，不同存活 Actor 被拒绝。 */
+	/** 为 PlayerState 登记唯一部署鱼竿；物品实例占用先进入通用登记器，相同 Actor 重放成功，不同 Actor 拒绝。 */
 	bool RegisterDeployedRod(APlayerState* PlayerState, ACatFishingRodActor* RodActor);
 
 	/** 仅当当前登记值精确匹配 ExpectedRodActor 时注销，避免旧 Actor 迟到回调删除替代鱼竿。 */

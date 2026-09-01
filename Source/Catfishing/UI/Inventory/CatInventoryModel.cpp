@@ -33,6 +33,8 @@ namespace
 			return TEXT("取出公共物品");
 		case ECatInventoryAction::SacrificeSelectedFish:
 			return TEXT("献祭");
+		case ECatInventoryAction::StoreSelectedFishInSharedTank:
+			return TEXT("存入鱼缸");
 		case ECatInventoryAction::None:
 		default:
 			return TEXT("无");
@@ -201,7 +203,7 @@ namespace
 		return Count;
 	}
 
-	// 格子数组占用计数流程：公共仓库和随身库存共享 DefinitionId + Quantity 结构，摘要只需要数有效格，不解释物品权限。
+	// 格子数组占用计数流程：公共仓库和随身库存共享带实例身份的运行槽位结构，摘要只需要数有效格，不解释物品权限。
 	int32 CountOccupiedRunInventorySlots(const TArray<FCatRunInventorySlot>& InventorySlots)
 	{
 		int32 Count = 0;
@@ -470,7 +472,8 @@ void UCatInventoryModel::Refresh()
 		ContainerView.DisplayName = DisplayName;
 		ContainerView.FirstSlotIndex = NewState.ExternalContainerSlots.Num();
 		ContainerView.SlotCount = EffectiveSlotCount;
-		ContainerView.bInteractionFishContainer = Snapshot.Kind == ECatContainerKind::FishGuard;
+		ContainerView.bInteractionFishContainer = Snapshot.Kind == ECatContainerKind::FishGuard
+			|| Snapshot.Kind == ECatContainerKind::SharedFishTank;
 		NewState.Containers.Add(ContainerView);
 		const FString ContainerDisplayName = DisplayName.ToString();
 		for (int32 ContainerSlotIndex = 0; ContainerSlotIndex < EffectiveSlotCount; ++ContainerSlotIndex)
@@ -533,6 +536,7 @@ void UCatInventoryModel::Refresh()
 	NewState.LastConsumeResult = LastConsumeResult;
 	NewState.LastSacrificeResult = LastSacrificeResult;
 	NewState.bCanSubmitAction = false;
+	NewState.bCanStoreSelectedFishInSharedTank = false;
 	if (const UCatUISettings* Settings = GetDefault<UCatUISettings>())
 	{
 		NewState.ToggleKeyName = Settings->ResolveInventoryToggleKeyName();
@@ -567,7 +571,7 @@ void UCatInventoryModel::Refresh()
 	else
 	{
 		NewState.SelectedFishText = NewState.bHasExternalContainers
-			? FText::FromString(TEXT("库存操作：点击格子可查看；拖拽库存格整理或在背包和营地之间转移，拖拽鱼容器格整理或跨容器移动。"))
+			? FText::FromString(TEXT("库存操作：点击外部容器格可查看；选中鱼后可执行鱼动作，拖拽容器格可整理或跨容器移动。"))
 			: FText::FromString(TEXT("库存操作：点击格子可查看；拖拽库存格整理或在背包和营地之间转移，点击鱼护格后可执行鱼动作。"));
 	}
 	if (bActionPending)
@@ -616,13 +620,14 @@ void UCatInventoryModel::HandleCampInventorySnapshotChanged()
 	Refresh();
 }
 
-// 公共领域结果流程：非成功终态只解锁本地 pending；成功整理、取用或装备选择必须等对应快照变化来刷新和解锁。
+// 公共领域结果流程：非成功终态只解锁本地 pending；成功整理、取用、装备选择或存入鱼缸必须等随身/营地/外部容器快照变化来刷新和解锁。
 void UCatInventoryModel::HandleCampCommandResult(const FCatDomainCommandResult& Result)
 {
 	if (!IsPendingResult(ECatInventoryAction::MoveObjectBetweenContainers, Result.RequestId)
 		&& !IsPendingResult(ECatInventoryAction::MoveInventoryItem, Result.RequestId)
 		&& !IsPendingResult(ECatInventoryAction::SelectInventoryFishingItem, Result.RequestId)
-		&& !IsPendingResult(ECatInventoryAction::WithdrawCampInventoryItem, Result.RequestId))
+		&& !IsPendingResult(ECatInventoryAction::WithdrawCampInventoryItem, Result.RequestId)
+		&& !IsPendingResult(ECatInventoryAction::StoreSelectedFishInSharedTank, Result.RequestId))
 	{
 		return;
 	}
@@ -895,13 +900,17 @@ FCatInventorySlotView UCatInventoryModel::MakeCampInventorySlotView(const FCatRu
 	return Slot;
 }
 
-// 容器名称流程：地面鱼护显示为“鱼护”；其他交互容器统一按“外部容器 N”命名。
+// 容器名称流程：正式鱼容器显示玩家能理解的设施名；未知外部容器才按顺序给稳定 fallback。
 FText UCatInventoryModel::MakeContainerDisplayName(const FCatContainerSnapshot& Snapshot,
 	const int32 ExternalContainerIndex)
 {
 	if (Snapshot.Kind == ECatContainerKind::FishGuard)
 	{
 		return FText::FromString(TEXT("鱼护"));
+	}
+	if (Snapshot.Kind == ECatContainerKind::SharedFishTank)
+	{
+		return FText::FromString(TEXT("共享鱼缸"));
 	}
 	return FText::FromString(FString::Printf(TEXT("外部容器 %d"), ExternalContainerIndex + 1));
 }

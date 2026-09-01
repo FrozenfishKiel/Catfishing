@@ -10,24 +10,26 @@
 
 class UTexture2D;
 
-/** 库存相关的玩家动作意图；它只描述 UI 想对选中物体或鱼领域动作做什么，权限、并发前提和结果仍由服务器裁决。 */
+/** 库存相关的玩家动作意图；它只描述 UI 想对选中物体或鱼领域动作做什么，显式数值是蓝图兼容合同，旧值不能重排或复用，新动作只能追加。 */
 UENUM(BlueprintType)
 enum class ECatInventoryAction : uint8
 {
 	/** 当前没有可提交动作；View 和 Model 用它表示空选择或清空 pending。 */
-	None,
-	/** 请求吃掉当前选中的地面鱼护实物鱼；身体和成长效果只能在服务器 Items 提交成功后发生。 */
-	ConsumeSelectedFish,
+	None = 0,
+	/** 请求吃掉当前选中的鱼类容器实物鱼；身体和成长效果只能在服务器 Items 提交成功后发生。 */
+	ConsumeSelectedFish = 1,
 	/** 请求把拖拽源物体移动到另一个格子；UI 只提交物体身份、源/目标容器槽位和容器并发前提。 */
-	MoveObjectBetweenContainers,
+	MoveObjectBetweenContainers = 2,
 	/** 请求整理运行期库存格；同源只改本数据源，背包和营地之间的拖放会由服务器同时改双方数据源。 */
-	MoveInventoryItem,
+	MoveInventoryItem = 3,
 	/** 请求把当前选中的随身库存物品设为钓鱼选择；服务器仍会重读整套鱼竿、鱼饵和鱼漂持有量。 */
-	SelectInventoryFishingItem,
+	SelectInventoryFishingItem = 4,
 	/** 请求把当前选中的鱼交给献祭协议；Items 与 Run 的不可逆点继续由 SacrificeCoordinator 处理。 */
-	SacrificeSelectedFish,
+	SacrificeSelectedFish = 5,
 	/** 请求把当前选中的营地公共仓库格取到本人随身库存；服务器仍按公共仓库版本和个人库存版本共同复核。 */
-	WithdrawCampInventoryItem
+	WithdrawCampInventoryItem = 6,
+	/** 请求把当前选中的鱼护实物鱼转入营地共享鱼缸；服务器负责寻找固定营地鱼缸和可用目标格。 */
+	StoreSelectedFishInSharedTank = 7
 };
 
 /** 库存格子投影的后端事实来源；UI 用它区分运行期库存格和 Items 容器格，避免把不同宿主的写口混用。 */
@@ -189,7 +191,7 @@ struct FCatInventoryContainerView
 	UPROPERTY(BlueprintReadOnly)
 	int32 SlotCount = 0;
 
-	/** 该容器是否来自本次世界 Actor 交互；普通背包打开时没有鱼容器。 */
+	/** 该容器是否是本次交互打开的鱼类世界容器；鱼护和共享鱼缸都会影响鱼动作按钮与蓝图分组。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bInteractionFishContainer = false;
 };
@@ -272,17 +274,25 @@ struct FCatInventoryViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasSelectedFish = false;
 
-	/** 当前选中鱼是否来自本次射线打开的地面鱼护；吃鱼和献祭从该明确容器提交。 */
+	/** 当前选中鱼是否来自本次射线打开的地面鱼护；存入共享鱼缸只能从这个源容器提交。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bSelectedFishInFishGuard = false;
+
+	/** 当前选中鱼是否来自本次交互打开的营地共享鱼缸；吃鱼和献祭允许读取它，存缸动作必须排除它。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bSelectedFishInSharedTank = false;
 
 	/** 库存窗口当前是否打开；Model 只投影 PageController 的状态，不反查 Widget 可见性。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bOpen = false;
 
-	/** 当前是否可提交吃鱼或献祭意图；只有打开地面鱼护并选中其中一条鱼时为 true。 */
+	/** 当前是否可提交吃鱼或献祭意图；打开鱼护或共享鱼缸、选中其中一条实物鱼且没有等待回包时才为 true。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bCanSubmitAction = false;
+
+	/** 当前是否可提交存入共享鱼缸意图；只有选中地面鱼护中的实物鱼且没有等待回包时才为 true。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bCanStoreSelectedFishInSharedTank = false;
 
 	/** 当前是否已经发出库存动作但还没收到服务器终态；View 用它禁用重复提交。 */
 	UPROPERTY(BlueprintReadOnly)

@@ -163,7 +163,7 @@ Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消�
 **开放阶段：`HookedFight` + `NearShore` + `ExhaustedReel`。** 鱼身上的圈**一直存在**，鱼的剩余体力完全不参与抄网判定——满体力鱼只要已经上钩并进入射线范围也能直接抄走。更早的阶段不开放：鱼还没被提上钩，抄它等于绕过提竿机制。
 
 其余谓词：抄手在岸上（Outside 水域）+ 地面坡度 ≤ `MaximumScoopGroundSlopeDegrees` + 视线不被遮挡 + 装了 ScoopNet。
-当前开发配置通过 `bAutoGrantStarterScoopNet=True` 在服务器首次占有时给每名玩家本人库存发一份并自动选中正式目录定义 `StarterScoopNet`（`Equip_ScoopNet_Starter`）；这是临时可玩性开关，不是正式获取规则。商店或奖励来源接入后关闭它。
+当前默认配置不再发放或自动选中 `StarterScoopNet`；临时默认抄网发放配置和 Character 启动分支已删除。`Equip_ScoopNet_Starter` 仍是正式目录定义，但在商店或奖励来源接入前，玩家暂时没有默认获取渠道。
 **不再要求"鱼在近岸带内"**——射线∩圆已是唯一范围口径，再叠一层离岸距离会出现"debug 圈画成绿色但服务器拒绝"的表现/判定打架。`NearShoreWidthCentimeters` 仅用于外部 StateTree 请求进入 NearShore 时校验真实鱼位置，不参与抢抄距离或自动推进会话阶段。
 
 首个合法 F 会生成一个 `ACatFishPickupActor`，并立即调用与岸上死鱼按 E 相同的嘴叼交接；此时鱼仍是世界 Actor，不进入背包或鱼护。玩家之后对具体地面鱼护按 E，才由 Items 执行唯一容器提交与图鉴归档。一次 F 用同一个 `RequestId` 串联 `scoop_target_selected`（或 `scoop_target_selection_failed`）、`scoop_rejected`、`fishing_scoop_terminal` 与最终 `fishing_command_result`。拒绝日志除逐项谓词和距离/高度/射程外，还同时保留角色中心、胶囊足底和地面命中点三组 WaterQuery 的错误枚举、Inside/Boundary/Outside、Region/几何版本、垂直差和带符号岸距；后两组只用于诊断，不改变当前以角色中心为准的权威规则。由此可以区分“角色中心高度超差”“脚下在水域内/边界”“没对准”“太远”“地面或视线不合法”。
@@ -199,7 +199,7 @@ Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消�
 青色湖边界 / 抛竿瞄准绿球 / 窝点绿圈+剩余秒 /
 钩子蓝球 / 鱼球（红=发力·绿=累了）+ 鱼线 / 近岸翡翠圈 / 屏幕阶段提示（线长·拖放·完美）。
 
-右上角三方数值面板使用独立 CVar `cat.Fishing.Stats`，默认 1：第一行显示当前复制快照的稳定 `FishDefinitionId`（无鱼时为 `--`），鱼数值行显示当前/上限体力与有效力量（含完美中鱼折减），竿显示当前本场鱼线或装备耐久、上限与钓组力量，猫显示 ASC 当前/上限搏斗体力与钓鱼力量。执行 `cat.Fishing.Stats 0` 可单独关闭；它不会修改 `cat.Fishing.Debug`，后者保持默认关闭，开启世界调试也不会改变数值面板开关。
+右上角三方数值面板使用独立 CVar `cat.Fishing.Stats`，默认 0：第一行显示当前复制快照的稳定 `FishDefinitionId`（无鱼时为 `--`），鱼数值行显示当前/上限体力与有效力量（含完美中鱼折减），竿显示当前本场鱼线或装备耐久、上限与钓组力量，猫显示 ASC 当前/上限搏斗体力与钓鱼力量。执行 `cat.Fishing.Stats 1` 可在排查时单独开启；它不会修改 `cat.Fishing.Debug`，后者保持默认关闭，开启世界调试也不会改变数值面板开关。
 
 Q 蓄力黄色抛物线与落点球是玩法瞄准反馈，不属于上述两类调试信息；它继续由 `cat.Fishing.ChumPreview` 独立控制并默认开启。
 命令链每条回执有结构化日志：过滤 `LogCatFishing`，失败为 Warning 且带 Error 枚举。命令/抛竿/打窝回执统一附带 Controller、PlayerState、脱敏 StableNetId、`IsLocalController`、NetMode、Pawn 权威位置/Role 与控制朝向；会话终态附带鱼、竿尖、钩、Encounter 和操作者上下文。日志只写命令、拒绝和终态边沿，不逐帧输出；原始 StableNetId 只有 `StableNetIdExposure=Enabled` 时才允许出现。
@@ -221,7 +221,7 @@ Config/DefaultGame.ini    10 个 section（改后必须重启 Editor；软引用
 按鱼名猜比例。
 
 数值快照：猫力50 体力100 ／ 竿强60 耐久70 线长1500 ／ 鱼力40 体力50 ／ 真咬窗3s 完美窗1s ／ 近岸100cm ／ 鱼竿操作位2个、左右间距140cm。
-开发便利开关：整套 `bAutoConfigureStarterLoadout=False`；仅 `bAutoGrantStarterScoopNet=True` 临时默认发一份抄网，正式商店/奖励获取接入后关闭。
+开发便利开关：整套 `bAutoConfigureStarterLoadout=False`；临时默认抄网发放已经删除，默认进游戏不会创建或选中抄网。
 
 ## 6. 已知待办（都在契约后面，不影响表现层）
 

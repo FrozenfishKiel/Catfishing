@@ -521,7 +521,7 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
 	UCatEquipmentComponent* ScooperEquipment = ScoopingCharacter ? ScoopingCharacter->GetEquipmentComponent() : nullptr;
 	double ScoopReachCentimeters = 0.0;
-	// 全局设置和服务器当前装备的抄网 DA 共同给出有效距离；当前开发配置会为每名玩家默认发放并选中一份。
+	// 全局设置和服务器当前装备快照中的已选抄网 DA 共同给出有效距离；当前流程不提供默认获取，未装备时解析保持失败。
 	const bool bScoopReachReady = UCatFishingAimLibrary::TryResolveScoopReach(
 		ScooperEquipment, ScoopReachCentimeters);
 	// 这里不再要求"鱼处于近岸带内"：射线∩圆本身就是唯一的范围判定，再叠一层离岸距离等于两套口径，

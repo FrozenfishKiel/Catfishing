@@ -149,9 +149,9 @@ public:
 	UPROPERTY(Transient)
 	int64 ExpectedEquipmentRevision = 0;
 
-	/** 草药定义 ID；Equipment 会验证它确实是运行时就绪的 Herb。 */
+	/** 草药物品实例 ID；Ability 用它反查定义并提交 Equipment Use，避免同类多堆草药被误扣。 */
 	UPROPERTY(Transient)
-	FName HerbDefinitionId = NAME_None;
+	FGuid HerbItemInstanceId;
 
 	/** 手动求助类型；Social 拒绝 Unknown，并且不会让普通请求伪装成 Giant 系统提示。 */
 	UPROPERTY(Transient)

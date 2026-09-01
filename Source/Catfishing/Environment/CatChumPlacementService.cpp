@@ -34,6 +34,20 @@ namespace CatChumPlacementServicePrivate
 		return Error == ECatDomainCommandError::RevisionConflict
 			? ECatChumFieldError::EquipmentRevisionConflict : ECatChumFieldError::EquipmentUnavailable;
 	}
+
+	static const FCatRunInventorySlot* FindChumUseSlot(const UCatEquipmentComponent& Equipment,
+		const FGuid ChumItemInstanceId, const int32 Quantity)
+	{
+		// 窝料实例解析流程：玩家命令必须带真实 ItemInstanceId；服务器只在自己的库存快照里复核这个实例仍然存在、仍有足量。
+		for (const FCatRunInventorySlot& Slot : Equipment.GetSnapshot().InventorySlots)
+		{
+			if (Slot.ItemInstanceId == ChumItemInstanceId && Slot.Quantity >= Quantity)
+			{
+				return &Slot;
+			}
+		}
+		return nullptr;
+	}
 }
 
 FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* RequestingController,
@@ -83,7 +97,7 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::FeatureDisabled));
 	}
-	if (!Command.ExpectedWaterRegionHandle.IsValid() || Command.ChumDefinitionId.IsNone()
+	if (!Command.ExpectedWaterRegionHandle.IsValid() || !Command.ChumItemInstanceId.IsValid()
 		|| Command.Quantity <= 0 || !FMath::IsFinite(Command.ClientCandidateWorldPoint.X)
 		|| !FMath::IsFinite(Command.ClientCandidateWorldPoint.Y)
 		|| !FMath::IsFinite(Command.ClientCandidateWorldPoint.Z))
@@ -93,14 +107,25 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	ACatCharacter* Character = Cast<ACatCharacter>(RequestingController->GetPawn());
 	const UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
 	UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
-	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
-		Command.ChumDefinitionId);
+	const FCatRunInventorySlot* ChumSlot = Equipment
+		? FindChumUseSlot(*Equipment, Command.ChumItemInstanceId, Command.Quantity) : nullptr;
+	if (!ChumSlot)
+	{
+		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::EquipmentUnavailable));
+	}
+	const FName ChumDefinitionId = ChumSlot ? ChumSlot->DefinitionId : NAME_None;
+	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(ChumDefinitionId);
 	if (!Character || !Conditions || Conditions->GetSnapshot().bDowned || !Equipment || !Definition
 		|| Definition->Kind != ECatEquipmentKind::Chum
 		|| !Definition->IsRuntimeDefinitionReady()
+		|| !Definition->ConsumesInventoryQuantityOnUse()
 		|| Command.Quantity > Definition->ChumInfluence.MaximumQuantityPerPlacement)
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::DefinitionUnavailable));
+	}
+	if (!Command.ChumDefinitionId.IsNone() && Command.ChumDefinitionId != ChumDefinitionId)
+	{
+		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::InvalidPayload));
 	}
 	UCatWaterQuerySubsystem* WaterQuery = World->GetSubsystem<UCatWaterQuerySubsystem>();
 	if (!WaterQuery)
@@ -131,38 +156,33 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::PlacementOccluded));
 	}
-	const FCatRunConsumableUseResult Reserved = Equipment->BeginRunConsumableUse(Command.RequestId,
-		Command.ChumDefinitionId, Command.Quantity, Command.ExpectedEquipmentRevision);
-	if (!Reserved.bReserved)
-	{
-		return FinalizeFirstResult(MakeError(Command.RequestId, MapEquipmentError(Reserved.Error)));
-	}
+	FCatPlaceChumCommand AuthoritativeCommand = Command;
+	AuthoritativeCommand.ChumDefinitionId = ChumDefinitionId;
 	FCatPrepareChumFieldRequest PrepareRequest;
 	PrepareRequest.StableNetId = StableNetId;
-	PrepareRequest.Command = Command;
+	PrepareRequest.Command = AuthoritativeCommand;
 	PrepareRequest.ServerCorrectedCenter = Water.WaterSurfaceWorldPoint;
 	PrepareRequest.Influence = Definition->ChumInfluence;
 	PrepareRequest.ServerTime = World->GetTimeSeconds();
 	const FCatPrepareChumFieldResult Prepared = Fields->PrepareField(PrepareRequest);
 	if (!Prepared.bPrepared)
 	{
-		Equipment->ReleaseRunConsumableUse(Command.RequestId);
 		return FinalizeFirstResult(MakeError(Command.RequestId, Prepared.Error));
 	}
-	const FCatRunConsumableUseResult Committed = Equipment->CommitRunConsumableUseDeferred(Command.RequestId);
-	if (!Committed.bCommitted)
+	const FCatInventoryItemUseResult UsedChum =
+		Equipment->Use(Command.RequestId, Command.ExpectedEquipmentRevision, Command.ChumItemInstanceId, Command.Quantity);
+	if (!UsedChum.bCommitted)
 	{
 		Fields->AbortPreparedField(Prepared.CommitToken);
-		return FinalizeFirstResult(MakeError(Command.RequestId, MapEquipmentError(Committed.Error)));
+		return FinalizeFirstResult(MakeError(Command.RequestId, MapEquipmentError(UsedChum.Error)));
 	}
 	const FCatPlaceChumResult Activated = Fields->ActivatePreparedFieldDeferred(
-		Prepared.CommitToken, Committed.EquipmentRevision);
+		Prepared.CommitToken, UsedChum.EquipmentRevision);
 	if (!Activated.bCommitted)
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, Activated.Error));
 	}
 	const FCatPlaceChumResult Frozen = FinalizeFirstResult(Activated);
-	Equipment->PublishDeferredRunConsumableUse(Command.RequestId);
 	Fields->PublishActivatedField(Frozen.FieldId);
 	return Frozen;
 }

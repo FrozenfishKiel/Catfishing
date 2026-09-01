@@ -15,6 +15,7 @@
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
+#include "Equipment/CatInventoryItemUseRegistry.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
@@ -232,7 +233,8 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	FGuid CastAttemptId = FGuid::NewGuid();
 	while (CastAttemptId == SessionId) CastAttemptId = FGuid::NewGuid();
 	const FCatFishingUseReservationResult Reserved = Equipment->BeginFishingUse(SessionId,
-		RodState.ItemInstanceId, Loadout.RodDefinitionId, Loadout.BaitDefinitionId,
+		RodState.ItemInstanceId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
+		Loadout.RodDefinitionId, Loadout.BaitDefinitionId,
 		Loadout.FloatDefinitionId, Loadout.Revision);
 	if (Reserved.Error != ECatDomainCommandError::None)
 	{
@@ -357,10 +359,8 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		return Result;
 	}
 	const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Loadout.RodDefinitionId);
-	UClass* RodClass = RodDefinition ? RodDefinition->UseActorClass.LoadSynchronous() : nullptr;
 	if (!Loadout.RodItemInstanceId.IsValid() || !RodDefinition || RodDefinition->Kind != ECatEquipmentKind::Rod
-		|| !RodClass
-		|| !RodClass->IsChildOf(ACatFishingRodActor::StaticClass()))
+		|| !RodDefinition->KeepsInventoryInstanceWhileUsed())
 	{
 		Result.Error = ECatFishingCommandError::DependencyUnavailable;
 		return Result;
@@ -390,6 +390,15 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(UseResult.Item.DefinitionId);
 	if (!UsedRodDefinition || UsedRodDefinition->Kind != ECatEquipmentKind::Rod
 		|| UseResult.Item.DefinitionId != Loadout.RodDefinitionId)
+	{
+		Equipment->UnUse(FGuid::NewGuid(), UseResult.Item.ItemInstanceId);
+		Result.Error = ECatFishingCommandError::DependencyUnavailable;
+		Result.EquipmentRevision = Equipment->GetSnapshot().Revision;
+		return Result;
+	}
+	// 鱼竿 Actor 类在 Use 成功后按被移出的实例定义重读；Equipment 只保证库存事务，表现类型仍由钓鱼服务按鱼竿规则裁决。
+	UClass* RodClass = UsedRodDefinition->UseActorClass.LoadSynchronous();
+	if (!RodClass || !RodClass->IsChildOf(ACatFishingRodActor::StaticClass()))
 	{
 		Equipment->UnUse(FGuid::NewGuid(), UseResult.Item.ItemInstanceId);
 		Result.Error = ECatFishingCommandError::DependencyUnavailable;
@@ -1046,7 +1055,7 @@ bool UCatFishingService::TransferSessionFisher(ACatFishingSession* Session, ACon
 	return true;
 }
 
-// 鱼竿登记流程：双端必须存活；首次登记成功，相同 Actor 幂等重放，不替换已有存活 Actor。
+// 鱼竿登记流程：先把 Actor 的物品实例身份交给通用登记器占位；再写鱼竿自己的玩家弱索引；任一侧失败都会拒绝这次放杆。
 bool UCatFishingService::RegisterDeployedRod(APlayerState* PlayerState, ACatFishingRodActor* RodActor)
 {
 	CompactDeployedRods();
@@ -1054,10 +1063,21 @@ bool UCatFishingService::RegisterDeployedRod(APlayerState* PlayerState, ACatFish
 	{
 		return false;
 	}
+	UCatInventoryItemUseRegistry* ItemUseRegistry = GetWorld()
+		? GetWorld()->GetSubsystem<UCatInventoryItemUseRegistry>() : nullptr;
+	if (!ItemUseRegistry || !ItemUseRegistry->RegisterWorldItemActor(RodActor))
+	{
+		return false;
+	}
 	const TWeakObjectPtr<APlayerState> PlayerKey(PlayerState);
 	if (const TWeakObjectPtr<ACatFishingRodActor>* Existing = DeployedRodByPlayerState.Find(PlayerKey))
 	{
-		return Existing->Get() == RodActor;
+		const bool bSameActor = Existing->Get() == RodActor;
+		if (!bSameActor)
+		{
+			ItemUseRegistry->UnregisterWorldItemActor(RodActor);
+		}
+		return bSameActor;
 	}
 	DeployedRodByPlayerState.Add(PlayerKey, RodActor);
 	return true;
@@ -1080,6 +1100,11 @@ void UCatFishingService::UnregisterDeployedRod(const APlayerState* PlayerState,
 	{
 		// EndPlay/异常销毁也从这里注销；先恢复该竿全部操作人的移动，不能只丢掉 Registry 线索。
 		ReleaseRodOperatorsAndRestoreMovement(ExistingRod);
+		if (UCatInventoryItemUseRegistry* ItemUseRegistry = GetWorld()
+			? GetWorld()->GetSubsystem<UCatInventoryItemUseRegistry>() : nullptr)
+		{
+			ItemUseRegistry->UnregisterWorldItemActor(const_cast<ACatFishingRodActor*>(ExpectedRodActor));
+		}
 		DeployedRodByPlayerState.Remove(PlayerKey);
 	}
 	CompactDeployedRods();

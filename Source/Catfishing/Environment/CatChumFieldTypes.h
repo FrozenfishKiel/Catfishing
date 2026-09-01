@@ -97,21 +97,31 @@ struct FCatPlaceChumCommand
 {
 	GENERATED_BODY()
 
+	/** 本次打窝请求的幂等身份；输入组件生成，窝料场和 Equipment 都用它防止重放重复扣量或重复落点。 */
 	UPROPERTY(BlueprintReadWrite)
 	FGuid RequestId;
 
+	/** 客户端预测命中的水域版本；服务器用它复查落点是否仍在同一片有效水面上。 */
 	UPROPERTY(BlueprintReadWrite)
 	FCatWaterRegionHandle ExpectedWaterRegionHandle;
 
+	/** 调用方看到的随身库存版本；Equipment Use 用它拒绝基于旧背包事实的扣量。 */
 	UPROPERTY(BlueprintReadWrite)
 	int64 ExpectedEquipmentRevision = 0;
 
+	/** 玩家实际要消耗的窝料物品实例；PlaceChum 用它锁定背包中的那一格，避免同类多堆窝料被误扣。 */
+	UPROPERTY(BlueprintReadWrite)
+	FGuid ChumItemInstanceId;
+
+	/** 窝料定义身份；玩家投放时由服务器按 ChumItemInstanceId 复核和覆盖，自然事件直接写它来生成场地影响。 */
 	UPROPERTY(BlueprintReadWrite)
 	FName ChumDefinitionId = NAME_None;
 
+	/** 本次投放消耗的窝料份数；Equipment Use 会从 ChumItemInstanceId 对应数量栈扣除这份数量。 */
 	UPROPERTY(BlueprintReadWrite)
 	int32 Quantity = 0;
 
+	/** 客户端预测的候选落点；服务器只把它当输入重新吸附到水面，不直接信任最终坐标。 */
 	UPROPERTY(BlueprintReadWrite)
 	FVector ClientCandidateWorldPoint = FVector::ZeroVector;
 };

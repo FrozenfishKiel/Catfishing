@@ -5,6 +5,7 @@
 #include "Fishing/CatFishingSettings.h"
 #include "Net/UnrealNetwork.h"
 
+// 构造流程：创建表现根、权威锚点和默认复制姿态；这里只搭好场景骨架，真实 Actor/Item 身份稍后由服务器初始化。
 ACatFishingRodActor::ACatFishingRodActor()
 {
 	// 表现 Actor 需要复制自身存在与 Transform，但玩法权威不在这里，Tick 全关以省性能。
@@ -52,6 +53,10 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	const FName InRodDefinitionId, const FName InRodSkinDefinitionId, APlayerState* InOwnerPlayerState,
 	APlayerState* InOperatorPlayerState, const bool bInDeployed, const bool bInBroken)
 {
+	// 权威身份初始化流程：
+	// 1. 先拒绝非服务器、空 ActorId、空 ItemInstanceId、空定义和空 Owner，避免收杆时找不到应归还的实例。
+	// 2. 如果身份已经写过，只允许不可变身份相同的重放成功，防止同一个场景 Actor 被复用成另一根竿。
+	// 3. 首次写入时构造完整 PresentationState，并立即分发表现变化和请求复制。
 	// 只有服务器能设身份；Actor 身份、物品实例身份和定义身份缺一不可，否则收杆时无法证明该还哪一件物品。
 	if (!HasAuthority() || !InRodActorId.IsValid() || !InItemInstanceId.IsValid()
 		|| InRodDefinitionId.IsNone() || !InOwnerPlayerState)
@@ -60,8 +65,8 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	}
 	if (bIdentityInitialized)
 	{
-		// 幂等保护：身份已初始化过，只有传入值与已有身份完全一致才算“成功”，
-		// 防止同一个 Actor 被误用来承载第二个不同的竿身份
+		// 幂等保护：身份已初始化过后只比较不可变身份；皮肤、操作位和部署状态由后续权威写口单独提交。
+		// 这样既能防止同一个 Actor 承载第二根竿，也不会让旧测试夹具的表现字段重放破坏正式身份。
 		return PresentationState.RodActorId == InRodActorId
 			&& PresentationState.ItemInstanceId == InItemInstanceId
 			&& PresentationState.RodDefinitionId == InRodDefinitionId
@@ -90,6 +95,17 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 	ForceNetUpdate(); // 身份初始化是一次性关键事件，强制立即复制，不等下个 tick 窗口
 	return true;
+}
+
+bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActorId,
+	const FName InRodDefinitionId, const FName InRodSkinDefinitionId, APlayerState* InOwnerPlayerState,
+	APlayerState* InOperatorPlayerState, const bool bInDeployed, const bool bInBroken)
+{
+	// 兼容初始化流程：
+	// 1. 旧自动化夹具只验证场景鱼竿身份和占位容器，不具备真实库存实例。
+	// 2. 这里把 ActorId 作为稳定的临时 ItemInstanceId 交给正式入口，保持重放语义一致；正式 PlaceRod 仍必须传 Use 返回的物品实例。
+	return InitializeAuthoritativeIdentity(InRodActorId, InRodActorId, InRodDefinitionId, InRodSkinDefinitionId,
+		InOwnerPlayerState, InOperatorPlayerState, bInDeployed, bInBroken);
 }
 
 bool ACatFishingRodActor::ConfigureCanonicalAnchorsFromAuthority(const FTransform& InRodTip,
@@ -219,6 +235,19 @@ bool ACatFishingRodActor::SetDeployedFromAuthority(const bool bInDeployed, const
 }
 
 const FCatFishingRodPresentationState& ACatFishingRodActor::GetPresentationState() const { return PresentationState; }
+
+// 通用物品实例身份读取流程：只返回 PresentationState 里由权威初始化写入的 ItemInstanceId，不从 Actor 名称或鱼竿服务反推。
+FGuid ACatFishingRodActor::GetInventoryItemInstanceIdForRegistry() const
+{
+	return PresentationState.ItemInstanceId;
+}
+
+// 通用物品定义身份读取流程：鱼竿对登记器只暴露 DefinitionId；鱼竿专属皮肤、站位和状态仍留在钓鱼表现结构里。
+FName ACatFishingRodActor::GetInventoryItemDefinitionIdForRegistry() const
+{
+	return PresentationState.RodDefinitionId;
+}
+
 // 三个世界 Transform 都是“本地规范 Transform 叠乘 Actor 当前世界 Transform”，随 Actor 移动/旋转自动更新
 FTransform ACatFishingRodActor::GetRodTipWorldTransform() const { return RodTipCanonicalLocalTransform * GetActorTransform(); }
 FTransform ACatFishingRodActor::GetStandWorldTransform() const { return GetOperatorStandWorldTransform(0); }
@@ -274,11 +303,12 @@ int32 ACatFishingRodActor::GetFirstFreeOperatorSlotIndex() const
 		? PresentationState.OperatorPlayerStates.Num() : INDEX_NONE;
 }
 
+// BeginPlay 流程：先完成 Actor 自身进入 World 的初始化，再补发权威身份可能提前排队的表现变化；没有积压时不触发蓝图事件。
 void ACatFishingRodActor::BeginPlay()
 {
 	Super::BeginPlay();
 	// 身份可能在 Actor BeginPlay 之前就由权威初始化完毕（生成时序问题），
-	// 那时事件被推迟到这里；BeginPlay 后再把积压的“上一次变化”补发一次
+	// 那时事件被推迟到这里；BeginPlay 后再把积压的“上一次变化”补发一次。
 	if (bHasPendingPresentationNotification)
 	{
 		bHasPendingPresentationNotification = false;
@@ -286,9 +316,10 @@ void ACatFishingRodActor::BeginPlay()
 	}
 }
 
+// EndPlay 流程：权威端先从 FishingService 注销这根已部署鱼竿，再交还给父类清理；客户端或无 Owner 的临时 Actor 不写服务登记。
 void ACatFishingRodActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	// 只有权威端且已绑定 Owner 时才需要清理服务里的“已部署鱼竿”登记，避免野指针残留
+	// 只有权威端且已绑定 Owner 时才需要清理服务里的“已部署鱼竿”登记，避免野指针残留。
 	if (HasAuthority() && PresentationState.OwnerPlayerState)
 	{
 		if (UWorld* World = GetWorld())
@@ -299,12 +330,14 @@ void ACatFishingRodActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 			}
 		}
 	}
+	// 服务登记已经清掉后再调用父类 EndPlay，避免注销路径读到组件或 World 进入半清理状态。
 	Super::EndPlay(EndPlayReason);
 }
 
+// 复制回调流程：客户端收到 PresentationState 后只把前后状态交给表现分发层；它不修改权威身份、库存实例或操作位数组。
 void ACatFishingRodActor::OnRep_PresentationState(const FCatFishingRodPresentationState& Previous)
 {
-	// 客户端收到复制更新时的唯一入口；Previous 由引擎在应用新值前自动传入旧值
+	// Previous 由引擎在应用新值前自动传入旧值，蓝图可以据此区分皮肤、部署或操作位变化。
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 }
 
