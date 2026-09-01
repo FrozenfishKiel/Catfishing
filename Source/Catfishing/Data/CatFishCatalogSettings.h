@@ -33,6 +33,14 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Selection")
 	double MaximumChumModifier = 0.0;
 
+	/** 测试期默认关闭；开启后才按 FishDefinition.TimeOfDay 过滤候选鱼。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Selection|Eligibility")
+	bool bEnableTimeOfDayEligibilityFilter = false;
+
+	/** 测试期默认关闭；开启后才按 FishDefinition.Weather 过滤候选鱼。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Selection|Eligibility")
+	bool bEnableWeatherEligibilityFilter = false;
+
 	/** 挑战度不高于该值的鱼归入轻松带；挑战度以力量比为下限，并由力量/体力调和均值连续抬升。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Selection|Challenge", meta = (ClampMin = "0.0"))
 	double ComfortChallengeMaximumRatio = 0.0;

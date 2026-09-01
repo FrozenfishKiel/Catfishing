@@ -5,6 +5,7 @@
 #include "Environment/CatChumFieldReplicationComponent.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Environment/CatWaterQuerySubsystem.h"
+#include "Logging/CatLog.h"
 #include "TimerManager.h"
 
 namespace CatChumFieldSubsystemPrivate
@@ -98,7 +99,8 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 		// 打窝权威逻辑只能在服务器/单机端跑，客户端调用直接拒绝
 		return MakePrepareError(ECatChumFieldError::DependencyUnavailable);
 	}
-	if (!GetDefault<UCatChumFieldSettings>()->IsRuntimeReady())
+	const UCatChumFieldSettings* Settings = GetDefault<UCatChumFieldSettings>();
+	if (!Settings || !Settings->IsRuntimeReady())
 	{
 		// 功能总开关关闭或配置非法
 		return MakePrepareError(ECatChumFieldError::FeatureDisabled);
@@ -157,6 +159,18 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 		// 窝料定义配置本身非法，或本次数量超出该定义允许的单次投放上限
 		return MakePrepareError(ECatChumFieldError::InvalidPayload);
 	}
+	const double DefinitionRadiusCentimeters = RuntimeInfluence.RadiusCentimeters;
+	double InfluenceRadiusScale = 0.0;
+	if (!Settings->TryGetInfluenceRadiusScale(InfluenceRadiusScale))
+	{
+		return MakePrepareError(ECatChumFieldError::FeatureDisabled);
+	}
+	RuntimeInfluence.RadiusCentimeters *= InfluenceRadiusScale;
+	if (!FMath::IsFinite(RuntimeInfluence.RadiusCentimeters)
+		|| RuntimeInfluence.RadiusCentimeters <= 0.0)
+	{
+		return MakePrepareError(ECatChumFieldError::InvalidPayload);
+	}
 	// 三种诱鱼因子（腥/香/发酵）之和作为这份窝料对"预算"的原始占用量，用来限制单水域窝料浓度上限
 	const double RawContribution = RuntimeInfluence.BaseContribution.Fishy
 		+ RuntimeInfluence.BaseContribution.Fragrant + RuntimeInfluence.BaseContribution.Fermented;
@@ -165,7 +179,6 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 		return MakePrepareError(ECatChumFieldError::InvalidPayload);
 	}
 
-	const UCatChumFieldSettings* Settings = GetDefault<UCatChumFieldSettings>();
 	// 按水域 RegionId 各自维护独立的配额账本，找不到则新建一个全零的
 	FCatChumBudgetState& Budget = BudgetByRegion.FindOrAdd(Water.WaterRegion.RegionId);
 	if (Budget.ActiveCount + Budget.PendingCount >= Settings->MaxActiveFieldsPerRegion
@@ -200,6 +213,13 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 	Result.bPrepared = true; Result.Error = ECatChumFieldError::None; Result.CommitToken.Value = TokenId;
 	Result.FieldId = FieldId; Result.WaterRegion = Water.WaterRegion; Result.CorrectedCenter = Water.WaterSurfaceWorldPoint;
 	Result.StartServerTime = Request.ServerTime; Result.ExpireServerTime = Pending.State.ExpireServerTime;
+	UE_LOG(LogCatEnvironment, Log,
+		TEXT("Event=chum_field_prepared RequestId=%s FieldId=%s Region=%s Definition=%s Quantity=%d BaseRadiusCm=%.2f EffectiveRadiusCm=%.2f AreaMultiplier=%.3f StartServerTime=%.3f ExpireServerTime=%.3f"),
+		*Request.Command.RequestId.ToString(EGuidFormats::DigitsWithHyphensLower),
+		*FieldId.ToString(EGuidFormats::DigitsWithHyphensLower), *Water.WaterRegion.RegionId.ToString(),
+		*Request.Command.ChumDefinitionId.ToString(), Request.Command.Quantity,
+		DefinitionRadiusCentimeters, Pending.State.Influence.RadiusCentimeters,
+		Settings->InfluenceAreaMultiplier, Pending.State.StartServerTime, Pending.State.ExpireServerTime);
 	return Result;
 }
 

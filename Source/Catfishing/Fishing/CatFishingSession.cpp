@@ -965,6 +965,18 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
 	// 按冻结上下文从鱼类图鉴中选出本次的鱼种（含权重/稀有度/条件判定，具体算法在 Catalog 内部）。
 	FrozenSelectionResult = Catalog->SelectRuntimeDefinition(FrozenSelectionContext);
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_fish_selection_resolved SessionId=%s Selected=%s FishId=%s EligibleCandidates=%d SelectedBandCandidates=%d NormalizedProbability=%.6f TimeFilter=%s WeatherFilter=%s TimeOfDay=%s Weather=%s ActivePlayers=%d ChumFields=%d"),
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphensLower),
+		FrozenSelectionResult.bSelected ? TEXT("true") : TEXT("false"),
+		*FrozenSelectionResult.FishDefinitionId.ToString(), FrozenSelectionResult.EligibleCandidateCount,
+		FrozenSelectionResult.SelectedBandCandidateCount,
+		FrozenSelectionResult.SelectedNormalizedProbability,
+		Catalog->bEnableTimeOfDayEligibilityFilter ? TEXT("Enabled") : TEXT("Bypassed"),
+		Catalog->bEnableWeatherEligibilityFilter ? TEXT("Enabled") : TEXT("Bypassed"),
+		*UEnum::GetValueAsString(FrozenSelectionContext.TimeOfDay),
+		*UEnum::GetValueAsString(FrozenSelectionContext.Weather), FrozenSelectionContext.ActivePlayerCount,
+		FrozenSelectionContext.ChumSample.ContributingFieldCount);
 	UCatFishDefinition* SelectedDefinition = FrozenSelectionResult.bSelected
 		? Catalog->FindRuntimeDefinition(FrozenSelectionResult.FishDefinitionId) : nullptr;
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
