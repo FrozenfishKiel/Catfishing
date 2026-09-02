@@ -387,6 +387,13 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitCancel()
 	return Edge;
 }
 
+FCatFishingInputEdge UCatFishingCommandComponent::SubmitCutLine()
+{
+	FCatFishingInputEdge Edge = MakeDiscreteEdge();
+	DispatchAbilityCommand(ECatFishingCommandType::CutLine, Edge);
+	return Edge;
+}
+
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitScoop()
 {
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
@@ -752,10 +759,27 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 					DeliverResultFromAuthority(Result);
 					return;
 				}
-				if (CommandType == ECatFishingCommandType::CancelFishing)
+				if (CommandType == ECatFishingCommandType::CancelFishing
+					|| CommandType == ECatFishingCommandType::CutLine)
 				{
-					// 会话内取消（提竿失败/主动放弃等）交给会话自身的取消状态机
-					DeliverResultFromAuthority(Session->CancelFromAuthority(Edge.RequestId));
+					const bool bCuttablePhase = Snapshot.Phase == ECatFishingPhase::HookedFight
+						|| Snapshot.Phase == ECatFishingPhase::NearShore
+						|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel
+						|| Snapshot.Phase == ECatFishingPhase::AutoHauling;
+					if (CommandType == ECatFishingCommandType::CutLine || bCuttablePhase)
+					{
+						FCatFishingSessionCommandContext Context;
+						Context.RequestId = Edge.RequestId;
+						Context.FishingSessionId = SessionId;
+						Context.ExpectedRevision = Snapshot.Revision;
+						Context.CastAttemptId = Snapshot.CastAttemptId;
+						DeliverResultFromAuthority(Session->CutLineFromAuthority(Controller, Context));
+					}
+					else
+					{
+						// 上钩前仍保留普通取消：收回未形成鱼战的会话，不伪装成切线或丢鱼。
+						DeliverResultFromAuthority(Session->CancelFromAuthority(Edge.RequestId));
+					}
 					return;
 				}
 			}

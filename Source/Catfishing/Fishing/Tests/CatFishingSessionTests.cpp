@@ -19,6 +19,7 @@
 #include "Fishing/Presentation/CatFishPresentationDefinition.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerState.h"
 #include "Items/CatWorldItemSettings.h"
@@ -311,7 +312,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingSessionOutcomePresentationTagTest,
-	"Catfishing.Unit.Fishing.Session.LineBreakAndCatInWaterResolveDistinctCatPresentationTags",
+	"Catfishing.Unit.Fishing.Session.TerminalLineOutcomesResolveDistinctCatPresentationTags",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingSessionCutLineCommandTest,
+	"Catfishing.Unit.Fishing.Session.CutLineIsRevisionGuardedIdempotentStopLoss",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingSessionOutcomePresentationTagTest::RunTest(const FString& Parameters)
@@ -320,6 +326,9 @@ bool FCatFishingSessionOutcomePresentationTagTest::RunTest(const FString& Parame
 	TestTrue(TEXT("line break resolves the line-broken cat presentation"),
 		ACatFishingSession::ResolveTerminalFisherPresentationTag(ECatFishingOutcome::LineBroken)
 			== CatFishingAbilityTags::Cosmetic_Fishing_LineBroken);
+	TestTrue(TEXT("voluntary line cut has its own server-confirmed presentation event"),
+		ACatFishingSession::ResolveTerminalFisherPresentationTag(ECatFishingOutcome::LineCut)
+			== CatFishingAbilityTags::Cosmetic_Fishing_LineCut);
 	TestTrue(TEXT("cat in water resolves the cat-in-water presentation"),
 		ACatFishingSession::ResolveTerminalFisherPresentationTag(ECatFishingOutcome::CatInWater)
 			== CatFishingAbilityTags::Cosmetic_Fishing_CatInWater);
@@ -327,6 +336,64 @@ bool FCatFishingSessionOutcomePresentationTagTest::RunTest(const FString& Parame
 		ACatFishingSession::ResolveTerminalFisherPresentationTag(ECatFishingOutcome::Escaped).IsValid());
 	TestFalse(TEXT("successful catch does not borrow either cat failure montage"),
 		ACatFishingSession::ResolveTerminalFisherPresentationTag(ECatFishingOutcome::Caught).IsValid());
+	return !HasAnyErrors();
+}
+
+bool FCatFishingSessionCutLineCommandTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("Creates cut-line test world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	UWorld* World = WorldWrapper.GetTestWorld();
+	ACatFishingSession* Session = World ? World->SpawnActor<ACatFishingSession>() : nullptr;
+	ACatFishingRodActor* Rod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
+	ACatfishingPlayerController* Controller = World ? World->SpawnActor<ACatfishingPlayerController>() : nullptr;
+	APlayerState* PlayerState = World ? World->SpawnActor<APlayerState>() : nullptr;
+	if (!TestNotNull(TEXT("Spawns cut-line session"), Session)
+		|| !TestNotNull(TEXT("Spawns cut-line rod"), Rod)
+		|| !TestNotNull(TEXT("Spawns cut-line controller"), Controller)
+		|| !TestNotNull(TEXT("Spawns cut-line player state"), PlayerState))
+	{
+		return false;
+	}
+
+	Controller->PlayerState = PlayerState;
+	const FGuid RodActorId = FGuid::NewGuid();
+	TestTrue(TEXT("Initializes held rod identity"), Rod->InitializeAuthoritativeIdentity(
+		RodActorId, FGuid::NewGuid(), TEXT("Rod_CutLine"), TEXT("Skin_CutLine"),
+		PlayerState, PlayerState, true, false));
+	Session->Snapshot.FishingSessionId = FGuid::NewGuid();
+	Session->Snapshot.CastAttemptId = FGuid::NewGuid();
+	Session->Snapshot.Phase = ECatFishingPhase::HookedFight;
+	Session->Snapshot.Revision = 17;
+	Session->Snapshot.SnapshotSequence = 23;
+	Session->Snapshot.PhaseEpoch = 4;
+	Session->Snapshot.FisherPlayerState = PlayerState;
+	Session->Snapshot.RodActor = Rod;
+	Session->Snapshot.RodDurabilityRemaining = 42.5;
+	Session->Snapshot.NormalizedLineLoad = 0.83f;
+	Session->Snapshot.bReeling = true;
+
+	FCatFishingSessionCommandContext Context;
+	Context.RequestId = FGuid::NewGuid();
+	Context.FishingSessionId = Session->Snapshot.FishingSessionId;
+	Context.CastAttemptId = Session->Snapshot.CastAttemptId;
+	Context.ExpectedRevision = Session->Snapshot.Revision;
+	AddExpectedErrorPlain(TEXT("Event=fishing_session_terminated"), EAutomationExpectedErrorFlags::Contains, 1);
+	const FCatFishingCommandResult First = Session->CutLineFromAuthority(Controller, Context);
+	TestTrue(TEXT("Current fisher can commit cut line"), First.bCommitted);
+	TestEqual(TEXT("Cut line returns its distinct command type"), First.CommandType, ECatFishingCommandType::CutLine);
+	TestEqual(TEXT("Cut line terminates the session"), Session->Snapshot.Phase, ECatFishingPhase::Terminated);
+	TestEqual(TEXT("Cut line persists its distinct outcome"), Session->Snapshot.Outcome, ECatFishingOutcome::LineCut);
+	TestEqual(TEXT("Cut line preserves accumulated line durability without extra wear"),
+		Session->Snapshot.RodDurabilityRemaining, 42.5);
+	TestFalse(TEXT("Cut line clears stale reel input"), Session->Snapshot.bReeling);
+	TestFalse(TEXT("Cut line does not break the reusable rod"), Rod->GetPresentationState().bBroken);
+
+	const FCatFishingCommandResult Replay = Session->CutLineFromAuthority(Controller, Context);
+	TestTrue(TEXT("Same request replays committed result"), Replay.bCommitted);
+	TestEqual(TEXT("Replay returns the first terminal revision"), Replay.Revision, First.Revision);
+	TestEqual(TEXT("Replay cannot advance terminal revision"), Session->Snapshot.Revision, First.Revision);
 	return !HasAnyErrors();
 }
 

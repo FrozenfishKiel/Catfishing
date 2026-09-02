@@ -43,6 +43,7 @@ namespace CatFishingAbilityTags
 	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_ScoopSwing, "Cat.Cosmetic.Fishing.ScoopSwing");
 	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_HookPull, "Cat.Cosmetic.Fishing.HookPull");
 	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_LineBroken, "Cat.Cosmetic.Fishing.LineBroken");
+	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_LineCut, "Cat.Cosmetic.Fishing.LineCut");
 	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_CatInWater, "Cat.Cosmetic.Fishing.CatInWater");
 	UE_DEFINE_GAMEPLAY_TAG(Data_Fishing_FightStaminaDelta, "Cat.Data.Fishing.FightStaminaDelta");
 }

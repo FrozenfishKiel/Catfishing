@@ -57,9 +57,10 @@ UCatGrowthComponent* ACatCharacter::GetGrowthComponent() const
 // 三种语义，已不再按下即播，因此提竿事件也必须让发起端收到服务器确认后的表现。
 void ACatCharacter::Multicast_PlayCosmeticEvent_Implementation(const FGameplayTag EventTag)
 {
-	// 提竿、断线和落水都是服务器裁决后才知道的结果，本机玩家也必须收到；只有挥网等预测动作跳过本机重播。
+	// 提竿、断线、主动切线和落水都是服务器裁决后才知道的结果，本机玩家也必须收到；只有挥网等预测动作跳过本机重播。
 	const bool bServerConfirmed = EventTag == CatFishingAbilityTags::Cosmetic_Fishing_HookPull
 		|| EventTag == CatFishingAbilityTags::Cosmetic_Fishing_LineBroken
+		|| EventTag == CatFishingAbilityTags::Cosmetic_Fishing_LineCut
 		|| EventTag == CatFishingAbilityTags::Cosmetic_Fishing_CatInWater;
 	const bool bLocallyPredicted = !bServerConfirmed;
 	if (!EventTag.IsValid() || (IsLocallyControlled() && bLocallyPredicted))

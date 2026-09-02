@@ -718,6 +718,7 @@ void ACatFishingSession::TerminateSession(const ECatFishingOutcome Outcome, cons
 	case ECatFishingOutcome::Escaped:
 	case ECatFishingOutcome::RodBroken:
 	case ECatFishingOutcome::LineBroken:
+	case ECatFishingOutcome::LineCut:
 	case ECatFishingOutcome::CatInWater:
 	case ECatFishingOutcome::Cancelled:
 	case ECatFishingOutcome::Invalidated:
@@ -1959,6 +1960,79 @@ FCatFishingCommandResult ACatFishingSession::CancelFromAuthority(const FGuid Req
 	return Result;
 }
 
+FCatFishingCommandResult ACatFishingSession::CutLineFromAuthority(AController* RequestingController,
+	const FCatFishingSessionCommandContext& Context)
+{
+	if (const FCatFishingCommandResult* Cached = CutLineTerminalByRequest.Find(Context.RequestId))
+	{
+		return *Cached;
+	}
+
+	FCatFishingCommandResult Result;
+	Result.CommandType = ECatFishingCommandType::CutLine;
+	Result.RequestId = Context.RequestId;
+	Result.FishingSessionId = Snapshot.FishingSessionId;
+	Result.CastAttemptId = Snapshot.CastAttemptId;
+	const ECatFishingPhase PhaseBefore = Snapshot.Phase;
+	const bool bCuttablePhase = PhaseBefore == ECatFishingPhase::HookedFight
+		|| PhaseBefore == ECatFishingPhase::NearShore
+		|| PhaseBefore == ECatFishingPhase::ExhaustedReel
+		|| PhaseBefore == ECatFishingPhase::AutoHauling;
+	if (!Context.RequestId.IsValid() || !HasAuthority())
+	{
+		Result.Error = ECatFishingCommandError::InvalidPayload;
+	}
+	else if (IsTerminal())
+	{
+		Result.Error = ECatFishingCommandError::AlreadyResolved;
+	}
+	else if (!Context.FishingSessionId.IsValid() || Context.FishingSessionId != Snapshot.FishingSessionId
+		|| (Context.CastAttemptId.IsValid() && Context.CastAttemptId != Snapshot.CastAttemptId))
+	{
+		Result.Error = ECatFishingCommandError::SessionNotFound;
+	}
+	else if (!RequestingController || !RequestingController->PlayerState
+		|| Snapshot.FisherPlayerState != RequestingController->PlayerState)
+	{
+		Result.Error = ECatFishingCommandError::NotFisher;
+	}
+	else if (Context.ExpectedRevision != Snapshot.Revision)
+	{
+		Result.Error = ECatFishingCommandError::RevisionConflict;
+	}
+	else if (!bCuttablePhase)
+	{
+		Result.Error = ECatFishingCommandError::InvalidPhase;
+	}
+	else
+	{
+		const double LineDurabilityBefore = Snapshot.RodDurabilityRemaining;
+		const double NormalizedLoadBefore = Snapshot.NormalizedLineLoad;
+		// 切线直接抢占终态写口；Finalize 会先写入 LineCut，再停止 Runner/StateTree，避免 Interrupted
+		// 同步回调在同一帧抢先写成另一种终态，保证“第一个终态提交者获胜”的结果可重放。
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::LineCut,
+			TEXT("Fishing line cut by operator"));
+		Result.bCommitted = true;
+		Result.Error = ECatFishingCommandError::None;
+		UE_LOG(LogCatFishing, Display,
+			TEXT("Event=fishing_line_cut_committed SessionId=%s RequestId=%s RodActorId=%s PhaseBefore=%s "
+				"Revision=%lld LineDurabilityBefore=%.3f LineDurabilityAfter=%.3f NormalizedLoadBefore=%.3f %s"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			Snapshot.RodActor
+				? *Snapshot.RodActor->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens)
+				: TEXT("None"),
+			*UEnum::GetValueAsString(PhaseBefore), Snapshot.Revision,
+			LineDurabilityBefore, Snapshot.RodDurabilityRemaining, NormalizedLoadBefore,
+			*CatLogContext::BuildControllerFields(RequestingController));
+	}
+	Result.Revision = Snapshot.Revision;
+	Result.SnapshotSequence = Snapshot.SnapshotSequence;
+	Result.PhaseEpoch = Snapshot.PhaseEpoch;
+	CutLineTerminalByRequest.Add(Context.RequestId, Result);
+	return Result;
+}
+
 bool ACatFishingSession::StartPreparedSessionLogicFromAuthority()
 {
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
@@ -2103,6 +2177,8 @@ FGameplayTag ACatFishingSession::ResolveTerminalFisherPresentationTag(const ECat
 	{
 	case ECatFishingOutcome::LineBroken:
 		return CatFishingAbilityTags::Cosmetic_Fishing_LineBroken;
+	case ECatFishingOutcome::LineCut:
+		return CatFishingAbilityTags::Cosmetic_Fishing_LineCut;
 	case ECatFishingOutcome::CatInWater:
 		return CatFishingAbilityTags::Cosmetic_Fishing_CatInWater;
 	default:

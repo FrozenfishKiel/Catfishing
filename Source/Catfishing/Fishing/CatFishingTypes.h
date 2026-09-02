@@ -43,7 +43,9 @@ enum class ECatFishingOutcome : uint8
 	/** 会话已把鱼安全释放为独立岸上拾取物；鱼尚未归属任何玩家。 */
 	Landed,
 	/** 鱼线承载能力或本次线耐久耗尽；只结束当前会话，鱼竿本体保持可用。 */
-	LineBroken
+	LineBroken,
+	/** 玩家主动切断本场鱼线止损；鱼与已消耗鱼饵丢失，但不追加鱼线/鱼竿磨损。 */
+	LineCut
 };
 
 UENUM(BlueprintType)

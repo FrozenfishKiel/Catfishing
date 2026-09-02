@@ -80,6 +80,8 @@ public:
 	FCatFishingInputEdge SubmitChumPressed();
 	FCatFishingInputEdge SubmitChumReleased();
 	FCatFishingInputEdge SubmitCancel();
+	/** 显式切线入口；现有取消键也会在可切线阶段由服务器改派到同一命令。 */
+	FCatFishingInputEdge SubmitCutLine();
 	FCatFishingInputEdge SubmitScoop();
 	FCatFishingInputEdge SubmitChum();
 	void ForwardLegacyAssist(FGuid FishingSessionId, FGuid RequestId, int64 ExpectedRevision);

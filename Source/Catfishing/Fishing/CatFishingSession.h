@@ -54,6 +54,9 @@ public:
 	bool OpenTrueBiteWindowFromStateTree();
 	FCatFishingCommandResult RequestHookFromAuthority(FGuid RequestId);
 	FCatFishingCommandResult CancelFromAuthority(FGuid RequestId);
+	/** 上钩后的主动止损写口；只接受当前钓手和精确 Revision，提交后鱼/饵丢失但不追加鱼线磨损。 */
+	FCatFishingCommandResult CutLineFromAuthority(AController* RequestingController,
+		const FCatFishingSessionCommandContext& Context);
 	bool TryEnterHookedFightFromAuthority();
 	bool SetReelingFromAuthority(int64 InputSequence, bool bReeling);
 	/** 右键松开线杯写口；仅 HookedFight 且 Runner 运行中生效，收线优先。 */
@@ -133,6 +136,7 @@ private:
 	friend class FCatFishingSessionLandedTerminalVisibilityTest;
 	friend class FCatFishingSessionLineBreakKeepsRodOperableTest;
 	friend class FCatFishingSessionOutcomePresentationTagTest;
+	friend class FCatFishingSessionCutLineCommandTest;
 	friend class FCatFishingServiceRodBoundSessionRoutingTest;
 
 	/** 客户端收到完整 Snapshot 后只广播重读信号，不推进任何玩法。 */
@@ -266,4 +270,5 @@ private:
 	bool bHasExhaustedReelTarget = false;
 	TMap<FGuid, FCatFishingCommandResult> HookTerminalByRequest;
 	TMap<FGuid, FCatFishingCommandResult> CancelTerminalByRequest;
+	TMap<FGuid, FCatFishingCommandResult> CutLineTerminalByRequest;
 };
