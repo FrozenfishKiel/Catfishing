@@ -140,8 +140,16 @@ bool FCatFishingActorNativeBasesContractTest::RunTest(const FString& Parameters)
 	for (const AActor* CDO : CDOs)
 	{
 		TestFalse(FString::Printf(TEXT("%s is not abstract"), *CDO->GetClass()->GetName()), CDO->GetClass()->HasAnyClassFlags(CLASS_Abstract));
-		TestFalse(FString::Printf(TEXT("%s does not tick"), *CDO->GetClass()->GetName()), CDO->PrimaryActorTick.bCanEverTick);
 	}
+	const ACatFishingRodActor* RodCDO = GetDefault<ACatFishingRodActor>();
+	TestTrue(TEXT("native rod can tick while held so authority can follow the carrier"), RodCDO->PrimaryActorTick.bCanEverTick);
+	TestFalse(TEXT("native rod does not start ticking while grounded"), RodCDO->PrimaryActorTick.bStartWithTickEnabled);
+	#if WITH_METADATA
+	TestTrue(TEXT("rod Blueprint children cannot add a second gameplay tick"),
+		ACatFishingRodActor::StaticClass()->HasMetaData(TEXT("ChildCannotTick")));
+	#endif
+	TestFalse(TEXT("hook does not tick"), GetDefault<ACatFishingHookActor>()->PrimaryActorTick.bCanEverTick);
+	TestFalse(TEXT("fish does not tick"), GetDefault<ACatFishEncounterActor>()->PrimaryActorTick.bCanEverTick);
 	const UFunction* CastMontageFunction = ACatCharacter::StaticClass()->FindFunctionByName(
 		GET_FUNCTION_NAME_CHECKED(ACatCharacter, PlayFishingCastMontageFromPresentation));
 	const UFunction* OutcomeMontageFunction = ACatCharacter::StaticClass()->FindFunctionByName(
@@ -282,6 +290,8 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("first place transition deploys the rod"), RodFirst.bDeployed);
 	TestEqual(TEXT("first place transition leaves all operator slots empty"), Rod->GetOperatorCount(), 0);
 	TestNull(TEXT("first place transition has no primary operator"), RodFirst.OperatorPlayerState);
+	TestNull(TEXT("grounded rod has no holder"), RodFirst.HolderPlayerState);
+	TestEqual(TEXT("first place transition is grounded"), RodFirst.PoseMode, ECatFishingRodPoseMode::Grounded);
 	TestTrue(TEXT("rod exact identity replay succeeds"), Rod->InitializeAuthoritativeIdentity(
 		RodId, RodItemInstanceId, TEXT("Rod"), TEXT("SkinB"), Owner, Owner, false, true));
 	TestEqual(TEXT("rod replay preserves state"), Rod->GetPresentationState().RodSkinDefinitionId, RodFirst.RodSkinDefinitionId);
@@ -292,6 +302,10 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("first operator slot index is zero"), JoinedSlot, 0);
 	TestEqual(TEXT("primary compatibility field follows slot zero"),
 		Rod->GetPresentationState().OperatorPlayerState.Get(), Owner);
+	TestEqual(TEXT("first operator becomes authoritative holder"),
+		Rod->GetPresentationState().HolderPlayerState.Get(), Owner);
+	TestEqual(TEXT("first operator atomically switches rod to held"),
+		Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Held);
 	TestTrue(TEXT("second operator joins left auxiliary slot"), Rod->AddOperatorFromAuthority(Helper, 2, JoinedSlot));
 	TestEqual(TEXT("second operator slot index is one"), JoinedSlot, 1);
 	TestEqual(TEXT("two-player occupancy is derived from compact array"), Rod->GetOperatorCount(), 2);
@@ -305,9 +319,16 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("two-to-one transition clears cooperative occupancy immediately"), Rod->GetOperatorCount(), 1);
 	TestEqual(TEXT("primary mirror follows promoted operator"),
 		Rod->GetPresentationState().OperatorPlayerState.Get(), Helper);
+	TestEqual(TEXT("promotion atomically transfers holder"),
+		Rod->GetPresentationState().HolderPlayerState.Get(), Helper);
+	TestEqual(TEXT("promotion keeps rod held"), Rod->GetPresentationState().PoseMode,
+		ECatFishingRodPoseMode::Held);
 	TestTrue(TEXT("last operator can leave"), Rod->RemoveOperatorFromAuthority(Helper, 4, PromotedPrimary));
 	TestEqual(TEXT("empty occupancy has zero count"), Rod->GetOperatorCount(), 0);
 	TestNull(TEXT("empty occupancy clears primary mirror"), Rod->GetPresentationState().OperatorPlayerState);
+	TestNull(TEXT("empty occupancy clears holder"), Rod->GetPresentationState().HolderPlayerState);
+	TestEqual(TEXT("last operator leaving atomically grounds the rod"),
+		Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Grounded);
 	TestTrue(TEXT("hook accepts first identity"), Hook->InitializeAuthoritativeIdentity(SessionId, AttemptId));
 	TestTrue(TEXT("authority hook accepts calm bobber mode"),
 		Hook->SetBobberPresentationModeFromAuthority(ECatFishingBobberPresentationMode::Calm));

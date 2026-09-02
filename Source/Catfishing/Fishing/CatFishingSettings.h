@@ -81,6 +81,27 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Rod|Operators", meta=(ClampMin="0", Units="cm"))
 	double RodOperatorSlotSpacingCentimeters = 140.0;
 
+	/** 手持鱼竿的服务器规范握把偏移：X=角色前方、Y=角色右侧、Z=角色中心向上。 */
+	UPROPERTY(Config, EditAnywhere, Category="Rod|HeldPose", meta=(Units="cm"))
+	FVector HeldRodGripOffsetCentimeters = FVector(35.0, 24.0, 24.0);
+	/** 服务器只接受该范围内的控制器 Pitch 来驱动鱼竿，避免异常视角翻转权威竿尖。 */
+	UPROPERTY(Config, EditAnywhere, Category="Rod|HeldPose", meta=(ClampMin="-89", ClampMax="89", Units="deg"))
+	double HeldRodMinimumPitchDegrees = -35.0;
+	UPROPERTY(Config, EditAnywhere, Category="Rod|HeldPose", meta=(ClampMin="-89", ClampMax="89", Units="deg"))
+	double HeldRodMaximumPitchDegrees = 70.0;
+	/** 竿身未朝向鱼线时仍保留的最低有效杠杆，防止侧向动画把力量瞬间清零。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.05", ClampMax="1"))
+	double HeldRodMinimumLeverageMultiplier = 0.4;
+	/** 持竿者沿反鱼线方向移动时对有效猫力的最大额外比例。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0", ClampMax="1"))
+	double HeldRodMovementStrengthBoost = 0.35;
+	/** 达到完整移动力量加成的参考速度。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="1", Units="cm/s"))
+	double HeldRodMovementReferenceSpeedCentimetersPerSecond = 300.0;
+	/** 鱼线满负载时施加给持竿 CharacterMovement 的最大水平牵引加速度。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0", Units="cm/s^2"))
+	double MaximumFishPullAccelerationCentimetersPerSecondSquared = 240.0;
+
 	/**
 	 * 打窝蓄力（规格 3.1 打窝：蓄力抛掷、抛物线预览）。服务器按按住时长算 ChargeAlpha，客户端预览用同一组参数（UCatFishingAimLibrary）。
 	 * 抛出点 = 角色位置 + ThrowOriginOffset；方向 = 视角 Yaw + 仰角；初速 = Lerp(Min, Max, Alpha)。

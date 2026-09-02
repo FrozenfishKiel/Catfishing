@@ -1,11 +1,13 @@
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "Character/CatCharacter.h"
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Simulation/CatFishFightMotionSolver.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "TimerManager.h"
 
 bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunnerInit& Init)
@@ -217,8 +219,16 @@ void UCatFishingFightRunner::HandleFixedStep()
 		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("FishSteering"));
 		return;
 	}
-	// 纯模拟器用游向与鱼线夹角计算有效力量，再得到体力/线长/磨损和建议新位置。
-	FCatFightStepResult Step = FCatFishingFightSimulator::Step(Config, State, RodTip, DesiredFishDirection);
+	// 从同一根权威 Rod Actor 读取规范竿尖/竿向/速度；客户端动画 Socket 与客户端自报受力均不参与裁决。
+	FCatFightRodConstraintInput RodConstraint;
+	RodConstraint.RodTipWorldPosition = RodTip;
+	RodConstraint.RodForwardWorld = Rod->GetAuthoritativeRodForwardVector();
+	RodConstraint.RodTipVelocityCentimetersPerSecond = Rod->GetAuthoritativeRodTipVelocity();
+	RodConstraint.CarrierVelocityCentimetersPerSecond = Rod->GetAuthoritativeHolderVelocity();
+	RodConstraint.bRodHeld = Rod->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Held;
+	// 纯模拟器把鱼游向、竿向和持竿者移动合成为有效力量，再得到双方体力、线长、负载和建议位置。
+	FCatFightStepResult Step = FCatFishingFightSimulator::Step(
+		Config, State, RodConstraint, DesiredFishDirection);
 	FCatFishMotionSolveInput MotionInput;
 	MotionInput.RodTipWorldPosition = RodTip;
 	MotionInput.ProposedFishWorldPosition = Step.ProposedFishWorldPosition; // Step 算出的理想新位置（未考虑水域边界）
@@ -276,11 +286,31 @@ void UCatFishingFightRunner::HandleFixedStep()
 		// 岸线修正若让线重新产生余量，本步已经不再受线端约束，清掉只用于表现的瞬时张力。
 		Step.TensionCentimeters = 0.0;
 		Step.NormalizedTension = 0.0;
+		Step.CarrierPullAccelerationCentimetersPerSecondSquared = 0.0;
 	}
 
 	// 靠近岸线只是空间事实，不再终止搏斗。抄网随时用自己的服务器射线判定；
 	// 只有 FishExhausted/Overpowered 才切入后续“侧翻并收向竿尖水面投影”阶段。
 
+	// 鱼线张力通过 CharacterMovement 的服务器力输入反向作用到持竿者；这是对普通移动的约束，
+	// 不直接 Teleport Character，也不让非确定性的刚体结果成为会话终态真相。
+	if (RodConstraint.bRodHeld
+		&& Step.CarrierPullAccelerationCentimetersPerSecondSquared > UE_DOUBLE_SMALL_NUMBER)
+	{
+		if (ACatCharacter* Holder = Cast<ACatCharacter>(Rod->GetHolderPawnFromAuthority()))
+		{
+			if (UCharacterMovementComponent* Movement = Holder->GetCharacterMovement())
+			{
+				FVector PullDirection = Motion.FishWorldPosition - Holder->GetActorLocation();
+				PullDirection.Z = 0.0;
+				if (PullDirection.Normalize())
+				{
+					Movement->AddForce(PullDirection * Movement->Mass
+						* Step.CarrierPullAccelerationCentimetersPerSecondSquared);
+				}
+			}
+		}
+	}
 	// 把猫的体力消耗（正值）转成负的 Delta 施加到 ASC；只有真正非零变化才需要写一次，且写入失败也视为致命错误。
 	if (State.bOperatorPresent && !FMath::IsNearlyZero(Step.CatStaminaDrain)
 		&& !ASC->ApplyFishingStaminaDelta(static_cast<float>(-Step.CatStaminaDrain)))

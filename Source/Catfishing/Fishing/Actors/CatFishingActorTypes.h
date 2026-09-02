@@ -6,6 +6,14 @@
 
 class APlayerState;
 
+/** 鱼竿的稳定空间姿态；会话阶段与姿态正交，放到地上不会终止鱼、钩或鱼线。 */
+UENUM(BlueprintType)
+enum class ECatFishingRodPoseMode : uint8
+{
+	Grounded,
+	Held
+};
+
 UENUM(BlueprintType)
 enum class ECatFishingHookPresentationPhase : uint8
 {
@@ -43,6 +51,10 @@ struct FCatFishingRodPresentationState
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> OperatorPlayerState = nullptr;
 	/** 有序占位容器：加入时追加，离开时压紧；0=主位，之后按编号公式左右交替向外扩展，始终无空洞。 */
 	UPROPERTY(BlueprintReadOnly) TArray<TObjectPtr<APlayerState>> OperatorPlayerStates;
+	/** 当前真正握住鱼竿的玩家；始终镜像 OperatorPlayerStates[0]，地面姿态为空。 */
+	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> HolderPlayerState = nullptr;
+	/** 只描述同一根 Rod Actor 在手里还是地上，不参与 FishingSession 阶段推进。 */
+	UPROPERTY(BlueprintReadOnly) ECatFishingRodPoseMode PoseMode = ECatFishingRodPoseMode::Grounded;
 	UPROPERTY(BlueprintReadOnly) bool bDeployed = false;
 	UPROPERTY(BlueprintReadOnly) bool bBroken = false;
 };

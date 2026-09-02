@@ -47,6 +47,9 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishStaminaDrivenInwardProbabilityTest,
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFightCombinedCatStrengthTest,
 	"Catfishing.Unit.Fishing.Simulation.CombinedCatStrengthAddsTwoCatsWithoutGrantingSecondInput",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingHeldRodConstraintTest,
+	"Catfishing.Unit.Fishing.Simulation.HeldRodDirectionAndCarrierMovementAffectConstraintSolve",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 namespace CatFishingSimulationTest
 {
@@ -96,6 +99,52 @@ namespace CatFishingSimulationTest
 }
 
 using namespace CatFishingSimulationTest;
+
+bool FCatFishingHeldRodConstraintTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFightSimulationConfig Config = MakeConfig();
+	Config.FixedStepSeconds = 0.1;
+	Config.FishCalmSpeedCentimetersPerSecond = 20.0;
+	Config.ReelSpeedCentimetersPerSecond = 20.0;
+	FCatFightSimulationState State = MakeState(
+		ECatFishMotionIntent::CalmOrInward, ECatFightCatAction::Pull);
+	State.LineLengthCentimeters = 500.0;
+
+	FCatFightRodConstraintInput Aligned;
+	Aligned.RodTipWorldPosition = FVector::ZeroVector;
+	Aligned.RodForwardWorld = FVector::ForwardVector;
+	Aligned.bRodHeld = true;
+	FCatFightRodConstraintInput Sideways = Aligned;
+	Sideways.RodForwardWorld = FVector::RightVector;
+	const FCatFightStepResult AlignedPull = FCatFishingFightSimulator::Step(
+		Config, State, Aligned, FVector::ForwardVector);
+	const FCatFightStepResult SidewaysPull = FCatFishingFightSimulator::Step(
+		Config, State, Sideways, FVector::ForwardVector);
+	TestTrue(TEXT("aligned held-rod solve succeeds"), AlignedPull.bSucceeded);
+	TestTrue(TEXT("sideways held-rod solve succeeds"), SidewaysPull.bSucceeded);
+	TestTrue(TEXT("rod direction produces higher aligned leverage"),
+		AlignedPull.RodLeverageMultiplier > SidewaysPull.RodLeverageMultiplier);
+	TestTrue(TEXT("aligned leverage produces more fish stamina drain under the existing strength formula"),
+		AlignedPull.FishStaminaDrain > SidewaysPull.FishStaminaDrain);
+	TestTrue(TEXT("poor leverage costs the cat more effort"),
+		SidewaysPull.CatStaminaDrain > AlignedPull.CatStaminaDrain);
+
+	State.CatAction = ECatFightCatAction::None;
+	FCatFightRodConstraintInput MovingAway = Aligned;
+	MovingAway.CarrierVelocityCentimetersPerSecond = FVector(-300.0, 0.0, 0.0);
+	MovingAway.RodTipVelocityCentimetersPerSecond = FVector(-300.0, 0.0, 0.0);
+	const FCatFightStepResult Stationary = FCatFishingFightSimulator::Step(
+		Config, State, Aligned, FVector::ForwardVector);
+	const FCatFightStepResult BackingAway = FCatFishingFightSimulator::Step(
+		Config, State, MovingAway, FVector::ForwardVector);
+	TestTrue(TEXT("carrier movement contribution is measured"), BackingAway.CarrierMovementAlpha > 0.99);
+	TestTrue(TEXT("backing away increases effective cat strength"),
+		BackingAway.EffectiveCatStrength > Stationary.EffectiveCatStrength);
+	TestTrue(TEXT("taut moving constraint produces an opposing carrier acceleration"),
+		BackingAway.CarrierPullAccelerationCentimetersPerSecondSquared > 0.0);
+	return !HasAnyErrors();
+}
 
 bool FCatFishingFightCombinedCatStrengthTest::RunTest(const FString& Parameters)
 {

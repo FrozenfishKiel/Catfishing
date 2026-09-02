@@ -3,17 +3,20 @@
 #include "Components/SceneComponent.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSettings.h"
+#include "GameFramework/Controller.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerState.h"
 #include "Net/UnrealNetwork.h"
 
 ACatFishingRodActor::ACatFishingRodActor()
 {
-	// 表现 Actor 需要复制自身存在与 Transform，但玩法权威不在这里，Tick 全关以省性能。
+	// Transform 仍由服务器权威；原生 Tick 只在 Held 姿态启用，用控制器视角和 Pawn 运动更新规范握把。
 	bReplicates = true;
 	SetReplicateMovement(true);
 	bAlwaysRelevant = false; // 不强制全图相关性，交给引擎按距离/视锥裁剪
 	bNetUseOwnerRelevancy = false;
 	bOnlyRelevantToOwner = false; // 其他玩家也要能看到这根竿，不能只对 Owner 复制
-	PrimaryActorTick.bCanEverTick = false;
+	PrimaryActorTick.bCanEverTick = true;
 	PrimaryActorTick.bStartWithTickEnabled = false;
 	// SceneRoot 是根组件，其余锚点都挂在它下面，整体随 Actor Transform 移动
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
@@ -39,6 +42,15 @@ ACatFishingRodActor::ACatFishingRodActor()
 	RightStandAnchor->bEditableWhenInherited = false;
 	LeftStandAnchor->bEditableWhenInherited = false;
 	GripAnchor->bEditableWhenInherited = false;
+}
+
+void ACatFishingRodActor::Tick(const float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	if (HasAuthority() && PresentationState.PoseMode == ECatFishingRodPoseMode::Held)
+	{
+		RefreshHeldTransformFromAuthority(DeltaSeconds);
+	}
 }
 
 void ACatFishingRodActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -81,6 +93,8 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	if (InOperatorPlayerState)
 	{
 		Next.OperatorPlayerStates.Add(InOperatorPlayerState);
+		Next.HolderPlayerState = InOperatorPlayerState;
+		Next.PoseMode = ECatFishingRodPoseMode::Held;
 	}
 	Next.bDeployed = bInDeployed;
 	Next.bBroken = bInBroken;
@@ -128,12 +142,16 @@ bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresen
 	Committed.ItemInstanceId = PresentationState.ItemInstanceId;
 	Committed.RodDefinitionId = PresentationState.RodDefinitionId;
 	Committed.OwnerPlayerState = PresentationState.OwnerPlayerState;
-	// 主位只是有序数组首项的兼容镜像，不单独保存模式位；人数从数组实时推导，避免 2→1 后残留协作状态。
+	// 主位、持有者和空间姿态都从同一个紧凑数组推导，不能分别保存成互相矛盾的事实。
 	Committed.OperatorPlayerState = Committed.OperatorPlayerStates.IsEmpty()
 		? nullptr : Committed.OperatorPlayerStates[0];
+	Committed.HolderPlayerState = Committed.OperatorPlayerState;
+	Committed.PoseMode = Committed.HolderPlayerState
+		? ECatFishingRodPoseMode::Held : ECatFishingRodPoseMode::Grounded;
 	Committed.RodActorRevision = PresentationState.RodActorRevision + 1; // 每次成功提交 Revision 自增一
 	const FCatFishingRodPresentationState Previous = PresentationState;
 	PresentationState = Committed;
+	SetActorTickEnabled(PresentationState.PoseMode == ECatFishingRodPoseMode::Held);
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 	ForceNetUpdate();
 	return true;
@@ -228,6 +246,66 @@ FTransform ACatFishingRodActor::GetOperatorInteractionWorldTransform() const
 }
 FTransform ACatFishingRodActor::GetGripWorldTransform() const { return GripCanonicalLocalTransform * GetActorTransform(); }
 
+APawn* ACatFishingRodActor::GetHolderPawnFromAuthority() const
+{
+	return HasAuthority() && PresentationState.HolderPlayerState
+		? PresentationState.HolderPlayerState->GetPawn() : nullptr;
+}
+
+FVector ACatFishingRodActor::GetAuthoritativeRodForwardVector() const
+{
+	return (GetRodTipWorldTransform().GetLocation() - GetGripWorldTransform().GetLocation())
+		.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, GetActorForwardVector());
+}
+
+bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSeconds)
+{
+	APawn* HolderPawn = GetHolderPawnFromAuthority();
+	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	if (!HasAuthority() || PresentationState.PoseMode != ECatFishingRodPoseMode::Held
+		|| !HolderPawn || !Settings
+		|| !FMath::IsFinite(Settings->HeldRodMinimumPitchDegrees)
+		|| !FMath::IsFinite(Settings->HeldRodMaximumPitchDegrees)
+		|| Settings->HeldRodMinimumPitchDegrees > Settings->HeldRodMaximumPitchDegrees
+		|| Settings->HeldRodGripOffsetCentimeters.ContainsNaN())
+	{
+		return false;
+	}
+
+	const FVector PreviousTip = GetRodTipWorldTransform().GetLocation();
+	FRotator AimRotation = HolderPawn->GetController()
+		? HolderPawn->GetController()->GetControlRotation() : HolderPawn->GetActorRotation();
+	AimRotation.Pitch = FMath::ClampAngle(AimRotation.Pitch,
+		Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
+	AimRotation.Roll = 0.0;
+	const FVector GripLocation = HolderPawn->GetActorLocation()
+		+ AimRotation.RotateVector(Settings->HeldRodGripOffsetCentimeters);
+	const FTransform DesiredGripTransform(AimRotation.Quaternion(), GripLocation);
+	const FTransform DesiredActorTransform = GripCanonicalLocalTransform.Inverse() * DesiredGripTransform;
+	SetActorTransform(DesiredActorTransform, false, nullptr, ETeleportType::TeleportPhysics);
+	const FVector CurrentTip = GetRodTipWorldTransform().GetLocation();
+	AuthoritativeRodTipVelocity = FMath::IsFinite(DeltaSeconds) && DeltaSeconds > UE_DOUBLE_SMALL_NUMBER
+		? (CurrentTip - PreviousTip) / DeltaSeconds : FVector::ZeroVector;
+	AuthoritativeHolderVelocity = HolderPawn->GetVelocity();
+	return !CurrentTip.ContainsNaN() && !AuthoritativeRodTipVelocity.ContainsNaN()
+		&& !AuthoritativeHolderVelocity.ContainsNaN();
+}
+
+bool ACatFishingRodActor::PlaceOnGroundFromAuthority(const FTransform& GroundTransform)
+{
+	if (!HasAuthority() || PresentationState.PoseMode != ECatFishingRodPoseMode::Grounded
+		|| GroundTransform.ContainsNaN())
+	{
+		return false;
+	}
+	SetActorTransform(GroundTransform, false, nullptr, ETeleportType::TeleportPhysics);
+	AuthoritativeRodTipVelocity = FVector::ZeroVector;
+	AuthoritativeHolderVelocity = FVector::ZeroVector;
+	SetActorTickEnabled(false);
+	ForceNetUpdate();
+	return true;
+}
+
 FTransform ACatFishingRodActor::ResolveOperatorStandLocalTransform(const int32 SlotIndex) const
 {
 	int32 MaximumSlots = 0;
@@ -277,6 +355,7 @@ int32 ACatFishingRodActor::GetFirstFreeOperatorSlotIndex() const
 void ACatFishingRodActor::BeginPlay()
 {
 	Super::BeginPlay();
+	SetActorTickEnabled(HasAuthority() && PresentationState.PoseMode == ECatFishingRodPoseMode::Held);
 	// 身份可能在 Actor BeginPlay 之前就由权威初始化完毕（生成时序问题），
 	// 那时事件被推迟到这里；BeginPlay 后再把积压的“上一次变化”补发一次
 	if (bHasPendingPresentationNotification)

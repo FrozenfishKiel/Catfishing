@@ -320,6 +320,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Fishing.Session.CutLineIsRevisionGuardedIdempotentStopLoss",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingSessionGroundedCutLineCommandTest,
+	"Catfishing.Unit.Fishing.Session.GroundedRodRetainsNearbyOwnerCutLineAuthority",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
 bool FCatFishingSessionOutcomePresentationTagTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -394,6 +399,52 @@ bool FCatFishingSessionCutLineCommandTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("Same request replays committed result"), Replay.bCommitted);
 	TestEqual(TEXT("Replay returns the first terminal revision"), Replay.Revision, First.Revision);
 	TestEqual(TEXT("Replay cannot advance terminal revision"), Session->Snapshot.Revision, First.Revision);
+	return !HasAnyErrors();
+}
+
+bool FCatFishingSessionGroundedCutLineCommandTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("Creates grounded cut-line test world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	UWorld* World = WorldWrapper.GetTestWorld();
+	ACatFishingSession* Session = World ? World->SpawnActor<ACatFishingSession>() : nullptr;
+	ACatFishingRodActor* Rod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
+	ACatfishingPlayerController* Controller = World ? World->SpawnActor<ACatfishingPlayerController>() : nullptr;
+	APlayerState* PlayerState = World ? World->SpawnActor<APlayerState>() : nullptr;
+	ACatCharacter* Character = World ? World->SpawnActor<ACatCharacter>() : nullptr;
+	if (!Session || !Rod || !Controller || !PlayerState || !Character)
+	{
+		AddError(TEXT("Grounded cut-line fixtures must spawn"));
+		return false;
+	}
+	Controller->PlayerState = PlayerState;
+	Character->SetPlayerState(PlayerState);
+	Controller->Possess(Character);
+	Rod->SetActorLocation(Character->GetActorLocation() + FVector(100.0, 0.0, 0.0));
+	TestTrue(TEXT("Initializes unattended grounded rod"), Rod->InitializeAuthoritativeIdentity(
+		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Rod_GroundedCut"), TEXT("Skin_GroundedCut"),
+		PlayerState, nullptr, true, false));
+	Session->Snapshot.FishingSessionId = FGuid::NewGuid();
+	Session->Snapshot.CastAttemptId = FGuid::NewGuid();
+	Session->Snapshot.Phase = ECatFishingPhase::HookedFight;
+	Session->Snapshot.Revision = 9;
+	Session->Snapshot.RodActor = Rod;
+	Session->Snapshot.FisherPlayerState = nullptr;
+	Session->LastSuspendedFisherPlayerState = PlayerState;
+
+	FCatFishingSessionCommandContext Context;
+	Context.RequestId = FGuid::NewGuid();
+	Context.FishingSessionId = Session->Snapshot.FishingSessionId;
+	Context.CastAttemptId = Session->Snapshot.CastAttemptId;
+	Context.ExpectedRevision = Session->Snapshot.Revision;
+	AddExpectedErrorPlain(TEXT("Event=fishing_session_terminated"), EAutomationExpectedErrorFlags::Contains, 1);
+	const FCatFishingCommandResult Result = Session->CutLineFromAuthority(Controller, Context);
+	TestTrue(TEXT("Nearby last holder can cut unattended grounded line"), Result.bCommitted);
+	TestEqual(TEXT("Grounded cut keeps distinct terminal outcome"),
+		Session->Snapshot.Outcome, ECatFishingOutcome::LineCut);
+	TestEqual(TEXT("Cutting does not pick the rod up"), Rod->GetPresentationState().PoseMode,
+		ECatFishingRodPoseMode::Grounded);
 	return !HasAnyErrors();
 }
 

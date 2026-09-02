@@ -15,6 +15,7 @@ class CATFISHING_API ACatFishingRodActor : public AActor
 
 public:
 	ACatFishingRodActor();
+	virtual void Tick(float DeltaSeconds) override;
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	/** 初始化这根场景鱼竿的权威身份；ActorId 负责场景对象，ItemInstanceId 负责回到库存里的同一件物品。 */
 	bool InitializeAuthoritativeIdentity(FGuid InRodActorId, FGuid InItemInstanceId, FName InRodDefinitionId,
@@ -43,6 +44,20 @@ public:
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") bool IsPrimaryOperator(APlayerState* PlayerState) const;
 	int32 GetFirstFreeOperatorSlotIndex() const;
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetGripWorldTransform() const;
+	/** 服务器规范握持跟随：只读 PlayerController/Pawn 权威姿态，不信任客户端 Socket Transform。 */
+	bool RefreshHeldTransformFromAuthority(double DeltaSeconds = 0.0);
+	/** 最后一名操作者离开后把同一 Actor 放到服务器裁定的地面 Transform；不改会话或物品身份。 */
+	bool PlaceOnGroundFromAuthority(const FTransform& GroundTransform);
+	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FVector GetAuthoritativeRodForwardVector() const;
+	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FVector GetAuthoritativeRodTipVelocity() const
+	{
+		return AuthoritativeRodTipVelocity;
+	}
+	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FVector GetAuthoritativeHolderVelocity() const
+	{
+		return AuthoritativeHolderVelocity;
+	}
+	APawn* GetHolderPawnFromAuthority() const;
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category="Fishing|Rod")
 	void BP_OnRodPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category="Fishing|Rod") void BP_ApplyRodSkin(FName RodSkinDefinitionId);
@@ -71,6 +86,8 @@ private:
 	FTransform RodTipCanonicalLocalTransform = FTransform::Identity;
 	FTransform StandCanonicalLocalTransform = FTransform::Identity;
 	FTransform GripCanonicalLocalTransform = FTransform::Identity;
+	FVector AuthoritativeRodTipVelocity = FVector::ZeroVector;
+	FVector AuthoritativeHolderVelocity = FVector::ZeroVector;
 	FTransform ResolveOperatorStandLocalTransform(int32 SlotIndex) const;
 	bool bIdentityInitialized = false;
 	bool bHasPendingPresentationNotification = false;

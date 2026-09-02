@@ -624,6 +624,41 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		// 按当前主操作位对应的鱼竿判断是否有会话；玩家留在其他鱼竿上的会话不会截获这里的输入。
 		if (!Fishing->TryGetActiveSessionForController(Controller, SessionId, Snapshot))
 		{
+			// 地面无人值守的上钩会话仍可就近切线：会话会再次校验竿主/最后持竿者和 250cm 距离。
+			// 普通 Cancel 只在可切线阶段优先走止损；等待期仍保留后面的收竿/拒绝语义。
+			if (CommandType == ECatFishingCommandType::CancelFishing
+				|| CommandType == ECatFishingCommandType::CutLine)
+			{
+				const ACatCharacter* Character = Cast<ACatCharacter>(Controller->GetPawn());
+				ACatFishingRodActor* UnattendedRod = Character
+					? Fishing->FindNearestUnattendedSessionRod(Character->GetActorLocation(), 250.0) : nullptr;
+				ACatFishingSession* UnattendedSession = UnattendedRod
+					? Fishing->FindActiveSessionByRod(UnattendedRod) : nullptr;
+				if (UnattendedSession)
+				{
+					const FCatFishingSessionSnapshot& Unattended = UnattendedSession->GetSnapshot();
+					const bool bCuttable = Unattended.Phase == ECatFishingPhase::HookedFight
+						|| Unattended.Phase == ECatFishingPhase::NearShore
+						|| Unattended.Phase == ECatFishingPhase::ExhaustedReel
+						|| Unattended.Phase == ECatFishingPhase::AutoHauling;
+					if (bCuttable)
+					{
+						FCatFishingSessionCommandContext Context;
+						Context.RequestId = Edge.RequestId;
+						Context.FishingSessionId = Unattended.FishingSessionId;
+						Context.ExpectedRevision = Unattended.Revision;
+						Context.CastAttemptId = Unattended.CastAttemptId;
+						DeliverResultFromAuthority(UnattendedSession->CutLineFromAuthority(Controller, Context));
+						return;
+					}
+				}
+				if (CommandType == ECatFishingCommandType::CutLine)
+				{
+					Result.Error = ECatFishingCommandError::SessionNotFound;
+					DeliverResultFromAuthority(Result);
+					return;
+				}
+			}
 			// 没有会话时：左键按下 = 开始瞄准（记录本次按住的关联 ID），左键松开 = 抛竿。
 			// 只有"按下时就无会话"的那次按住的松开才抛竿——提竿把会话打终止后的松开不能误触发重抛。
 			if (CommandType == ECatFishingCommandType::RequestHook)

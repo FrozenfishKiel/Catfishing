@@ -137,6 +137,7 @@ private:
 	friend class FCatFishingSessionLineBreakKeepsRodOperableTest;
 	friend class FCatFishingSessionOutcomePresentationTagTest;
 	friend class FCatFishingSessionCutLineCommandTest;
+	friend class FCatFishingSessionGroundedCutLineCommandTest;
 	friend class FCatFishingServiceRodBoundSessionRoutingTest;
 
 	/** 客户端收到完整 Snapshot 后只广播重读信号，不推进任何玩法。 */
@@ -247,6 +248,8 @@ private:
 
 	/** 本会话实际初始化或消耗过 stamina 的 Character；终态只恢复这些池。 */
 	TSet<TWeakObjectPtr<ACatCharacter>> StaminaParticipantsTouched;
+	/** 最后一次主动放下鱼竿的钓手；只用于允许其在地面姿态就近切线，不复制、不接管当前输入。 */
+	TWeakObjectPtr<APlayerState> LastSuspendedFisherPlayerState;
 
 	/** 本会话唯一失败预算终态；重放不再次扣特殊饵或鱼竿耐久。 */
 	FCatFishingFailureResult FailureBudgetResult;
@@ -265,7 +268,7 @@ private:
 	FTimerHandle TrueBiteTimerHandle;
 	FTimerHandle ExhaustedReelTimerHandle;
 	int64 LastExhaustedReelInputSequence = 0;
-	/** 鱼力竭瞬间冻结的竿尖表面投影；Z 取水面与地面较高者，后续不再重新查询或改写目标。 */
+	/** 当前竿尖表面投影；手持竿移动时按固定步更新，地面姿态自然保持不变。 */
 	FVector ExhaustedReelTarget = FVector::ZeroVector;
 	bool bHasExhaustedReelTarget = false;
 	TMap<FGuid, FCatFishingCommandResult> HookTerminalByRequest;

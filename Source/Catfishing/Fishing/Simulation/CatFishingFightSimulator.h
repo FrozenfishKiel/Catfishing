@@ -98,12 +98,29 @@ struct CATFISHING_API FCatFightSimulationConfig
 	/** 将“本步鱼试图超过线长的距离”归一化为表现张力时使用的响应范围。 */
 	double TensionResponseRangeCentimeters = 10.0;
 
+	/** 手持约束参数：方向决定杠杆，反向移动决定额外发力，线负载可反向牵引 CharacterMovement。 */
+	double MinimumRodLeverageMultiplier = 0.4;
+	double MovementStrengthBoost = 0.35;
+	double MovementReferenceSpeedCentimetersPerSecond = 300.0;
+	double MaximumCarrierPullAccelerationCentimetersPerSecondSquared = 240.0;
+
 	double MaximumLineLengthCentimeters = 0.0;
 	/** 本场鱼线耐久总量；旧字段名为兼容现有配置保留，每次新会话都会重置。 */
 	double RodDurability = TNumericLimits<double>::Max();
 	double EscapeSlackCentimeters = 100.0;
 
 	bool IsValid() const;
+};
+
+/** 每个固定步从权威 Rod Actor/Pawn 采样的运动约束；客户端只能提交普通移动/视角，不能提交这些结果。 */
+struct CATFISHING_API FCatFightRodConstraintInput
+{
+	FVector RodTipWorldPosition = FVector::ZeroVector;
+	/** 规范握把到竿尖方向；不读取客户端动画 Socket。 */
+	FVector RodForwardWorld = FVector::ForwardVector;
+	FVector RodTipVelocityCentimetersPerSecond = FVector::ZeroVector;
+	FVector CarrierVelocityCentimetersPerSecond = FVector::ZeroVector;
+	bool bRodHeld = false;
 };
 
 /** 可变数值状态；世界位置每步开始从 Encounter Actor 复制。 */
@@ -147,6 +164,16 @@ struct CATFISHING_API FCatFightStepResult
 	double FishLineAlignment = 0.0;
 	/** pow(max(FishLineAlignment,0), AngleStrengthExponent)，用于体力/磨损的连续力量比例。 */
 	double NormalizedLineLoad = 0.0;
+	/** 竿身方向与当前鱼线方向的点积，[0,1]。 */
+	double RodLineAlignment = 1.0;
+	/** 最低杠杆到 1 之间的实际有效倍率。 */
+	double RodLeverageMultiplier = 1.0;
+	/** 持竿者/竿尖沿反鱼线方向移动速度的归一化贡献。 */
+	double CarrierMovementAlpha = 0.0;
+	/** 本步把基础猫力、竿向和玩家移动合成后的力量。 */
+	double EffectiveCatStrength = 0.0;
+	/** 本步鱼线约束反向施加给持竿角色的水平加速度。 */
+	double CarrierPullAccelerationCentimetersPerSecondSquared = 0.0;
 	double StrongConfrontationBuildUpSeconds = 0.0;
 	/** 本步是否处于僵持消耗战（供表现/日志）。 */
 	bool bStalemate = false;
@@ -166,5 +193,8 @@ class CATFISHING_API FCatFishingFightSimulator
 public:
 	static FCatFightStepResult Step(const FCatFightSimulationConfig& Config,
 		const FCatFightSimulationState& State, const FVector& RodTipWorldPosition,
+		const FVector& DesiredFishDirection);
+	static FCatFightStepResult Step(const FCatFightSimulationConfig& Config,
+		const FCatFightSimulationState& State, const FCatFightRodConstraintInput& RodConstraint,
 		const FVector& DesiredFishDirection);
 };

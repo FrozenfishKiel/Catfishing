@@ -219,6 +219,18 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bStrongConfrontation = false;
 
+	/** 当前竿身朝向产生的有效杠杆倍率；1 为完全对齐，配置下限防止瞬时归零。 */
+	UPROPERTY(BlueprintReadOnly)
+	float RodLeverageMultiplier = 1.0f;
+
+	/** 持竿者/竿尖反向移动对本步力量的归一化贡献。 */
+	UPROPERTY(BlueprintReadOnly)
+	float CarrierMovementAlpha = 0.0f;
+
+	/** 鱼线约束实际施加给持竿角色的水平牵引加速度。 */
+	UPROPERTY(BlueprintReadOnly)
+	float CarrierPullAccelerationCentimetersPerSecondSquared = 0.0f;
+
 	void AdvanceVersion(const ECatFishingSnapshotMutation Mutation)
 	{
 		++SnapshotSequence;
