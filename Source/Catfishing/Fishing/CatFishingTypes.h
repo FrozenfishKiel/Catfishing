@@ -231,6 +231,18 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	float CarrierPullAccelerationCentimetersPerSecondSquared = 0.0f;
 
+	/** 持竿者沿远离鱼方向的权威速度倍率；1 表示当前没有运动约束。 */
+	UPROPERTY(BlueprintReadOnly)
+	float CarrierAwaySpeedMultiplier = 1.0f;
+
+	/** 统一约束求解前的线长误差，用于 Development 包诊断和调试表现。 */
+	UPROPERTY(BlueprintReadOnly)
+	float ConstraintErrorCentimeters = 0.0f;
+
+	/** 同一份约束误差本步实际分配给鱼端的水平修正距离。 */
+	UPROPERTY(BlueprintReadOnly)
+	float FishConstraintCorrectionCentimeters = 0.0f;
+
 	void AdvanceVersion(const ECatFishingSnapshotMutation Mutation)
 	{
 		++SnapshotSequence;

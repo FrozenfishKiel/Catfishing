@@ -177,7 +177,22 @@ bool FCatFishingActorNativeBasesContractTest::RunTest(const FString& Parameters)
 	UWorld* World = WorldWrapper.GetTestWorld();
 	if (World)
 	{
-		CatFishingActorContractTest::TestPresentationReplication(*this, World->SpawnActor<ACatFishingRodActor>(), TEXT("PresentationState"));
+		ACatFishingRodActor* Rod = World->SpawnActor<ACatFishingRodActor>();
+		CatFishingActorContractTest::TestPresentationReplication(*this, Rod, TEXT("PresentationState"));
+		FProperty* CarrierConstraintProperty = Rod
+			? FindFProperty<FProperty>(Rod->GetClass(), TEXT("CarrierConstraintState")) : nullptr;
+		TestNotNull(TEXT("rod exposes a replicated carrier constraint state"), CarrierConstraintProperty);
+		if (Rod && CarrierConstraintProperty)
+		{
+			Rod->GetClass()->SetUpRuntimeReplicationData();
+			TArray<FLifetimeProperty> LifetimeProperties;
+			Rod->GetLifetimeReplicatedProps(LifetimeProperties);
+			TestTrue(TEXT("carrier constraint state is registered for lifetime replication"),
+				LifetimeProperties.ContainsByPredicate([CarrierConstraintProperty](const FLifetimeProperty& Candidate)
+				{
+					return Candidate.RepIndex == CarrierConstraintProperty->RepIndex;
+				}));
+		}
 		CatFishingActorContractTest::TestPresentationReplication(*this, World->SpawnActor<ACatFishingHookActor>(), TEXT("PresentationState"));
 		CatFishingActorContractTest::TestPresentationReplication(*this, World->SpawnActor<ACatFishEncounterActor>(), TEXT("PresentationState"));
 	}
@@ -306,6 +321,18 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 		Rod->GetPresentationState().HolderPlayerState.Get(), Owner);
 	TestEqual(TEXT("first operator atomically switches rod to held"),
 		Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Held);
+	TestTrue(TEXT("held rod accepts the authoritative coupled carrier constraint"),
+		Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector,
+			600.0, 0.4, 0.75, 8.0));
+	TestTrue(TEXT("coupled carrier constraint becomes active"),
+		Rod->GetCarrierConstraintState().bActive);
+	TestEqual(TEXT("coupled carrier constraint keeps the server speed multiplier"),
+		Rod->GetCarrierConstraintState().MaximumAwaySpeedMultiplier, 0.4f);
+	Rod->ClearCarrierConstraintFromAuthority();
+	TestFalse(TEXT("clearing the fight constraint removes stale carrier drag"),
+		Rod->GetCarrierConstraintState().bActive);
+	TestEqual(TEXT("clearing the fight constraint restores unrestricted movement"),
+		Rod->GetCarrierConstraintState().MaximumAwaySpeedMultiplier, 1.0f);
 	TestTrue(TEXT("second operator joins left auxiliary slot"), Rod->AddOperatorFromAuthority(Helper, 2, JoinedSlot));
 	TestEqual(TEXT("second operator slot index is one"), JoinedSlot, 1);
 	TestEqual(TEXT("two-player occupancy is derived from compact array"), Rod->GetOperatorCount(), 2);

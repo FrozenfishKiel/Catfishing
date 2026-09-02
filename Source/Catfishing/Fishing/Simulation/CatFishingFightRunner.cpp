@@ -1,13 +1,12 @@
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
-#include "Character/CatCharacter.h"
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Simulation/CatFishFightMotionSolver.h"
-#include "GameFramework/CharacterMovementComponent.h"
+#include "Logging/CatLog.h"
 #include "TimerManager.h"
 
 bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunnerInit& Init)
@@ -90,6 +89,10 @@ void UCatFishingFightRunner::Stop()
 	if (ACatFishingSession* SessionActor = Session.Get())
 	{
 		if (UWorld* World = SessionActor->GetWorld()) World->GetTimerManager().ClearTimer(FixedStepTimer);
+	}
+	if (ACatFishingRodActor* Rod = RodActor.Get())
+	{
+		Rod->ClearCarrierConstraintFromAuthority();
 	}
 	bRunning = false;
 }
@@ -191,11 +194,12 @@ void UCatFishingFightRunner::HandleFixedStep()
 	ACatFishEncounterActor* Encounter = FishActor.Get();
 	ACatFishingRodActor* Rod = RodActor.Get();
 	UCatAbilitySystemComponent* ASC = AbilitySystem.Get();
-	UCatWaterQuerySubsystem* Water = SessionActor && SessionActor->GetWorld()
-		? SessionActor->GetWorld()->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
+	UWorld* World = SessionActor ? SessionActor->GetWorld() : nullptr;
+	UCatWaterQuerySubsystem* Water = World
+		? World->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
 	if (!bRunning || !SessionActor || !SessionActor->HasAuthority() || !Encounter || !Rod
 		|| (State.bOperatorPresent && !ASC)
-		|| !Water)
+		|| !World || !Water)
 	{
 		Stop();
 		if (SessionActor) SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("DependencyResolution"));
@@ -258,6 +262,10 @@ void UCatFishingFightRunner::HandleFixedStep()
 	ShoreInput.RodTipWorldPosition = RodTip;
 	ShoreInput.PreviousLineLengthCentimeters = State.LineLengthCentimeters;
 	ShoreInput.ProposedLineLengthCentimeters = Step.LineLengthCentimeters;
+	// 手持双端约束允许端点暂时存在可诊断的张力误差；岸线修正只能在本步已求得的实际距离内移动，
+	// 不能再用较短的 L_paid 把鱼偷偷硬投影一次。
+	ShoreInput.MaximumConstraintDistanceCentimeters = FMath::Max(
+		Step.LineLengthCentimeters, FVector::Distance(RodTip, Motion.FishWorldPosition));
 	ShoreInput.bReeling = State.CatAction == ECatFightCatAction::Pull;
 	ShoreInput.bSlacking = State.CatAction == ECatFightCatAction::Slack;
 	FCatFishShoreContactResult ShoreContact = FCatFishFightMotionSolver::ResolveLiveFishShoreContact(ShoreInput);
@@ -287,29 +295,67 @@ void UCatFishingFightRunner::HandleFixedStep()
 		Step.TensionCentimeters = 0.0;
 		Step.NormalizedTension = 0.0;
 		Step.CarrierPullAccelerationCentimetersPerSecondSquared = 0.0;
+		Step.CarrierAwaySpeedMultiplier = 1.0;
+		Step.ConstraintErrorCentimeters = 0.0;
+		Step.RelativeConstraintSpeedCentimetersPerSecond = 0.0;
 	}
 
 	// 靠近岸线只是空间事实，不再终止搏斗。抄网随时用自己的服务器射线判定；
 	// 只有 FishExhausted/Overpowered 才切入后续“侧翻并收向竿尖水面投影”阶段。
 
-	// 鱼线张力通过 CharacterMovement 的服务器力输入反向作用到持竿者；这是对普通移动的约束，
-	// 不直接 Teleport Character，也不让非确定性的刚体结果成为会话终态真相。
-	if (RodConstraint.bRodHeld
-		&& Step.CarrierPullAccelerationCentimetersPerSecondSquared > UE_DOUBLE_SMALL_NUMBER)
+	// Runner 只发布这一固定步的统一约束结果；Rod 在服务器与持竿本地客户端每帧把它应用到 CharacterMovement。
+	// 因而普通移动仍负责碰撞与网络预测，但持续输入不能再最终跑回完全不受限的 MaxWalkSpeed。
+	if (RodConstraint.bRodHeld && Step.NormalizedTension > UE_DOUBLE_SMALL_NUMBER)
 	{
-		if (ACatCharacter* Holder = Cast<ACatCharacter>(Rod->GetHolderPawnFromAuthority()))
+		const APawn* Holder = Rod->GetHolderPawnFromAuthority();
+		FVector PullDirection = Motion.FishWorldPosition
+			- (Holder ? Holder->GetActorLocation() : RodTip);
+		PullDirection.Z = 0.0;
+		if (!Rod->SetCarrierConstraintFromAuthority(PullDirection,
+			Step.CarrierPullAccelerationCentimetersPerSecondSquared,
+			Step.CarrierAwaySpeedMultiplier, Step.NormalizedTension,
+			Step.ConstraintErrorCentimeters))
 		{
-			if (UCharacterMovementComponent* Movement = Holder->GetCharacterMovement())
-			{
-				FVector PullDirection = Motion.FishWorldPosition - Holder->GetActorLocation();
-				PullDirection.Z = 0.0;
-				if (PullDirection.Normalize())
-				{
-					Movement->AddForce(PullDirection * Movement->Mass
-						* Step.CarrierPullAccelerationCentimetersPerSecondSquared);
-				}
-			}
+			Stop();
+			SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("CarrierConstraintWrite"));
+			return;
 		}
+	}
+	else
+	{
+		Rod->ClearCarrierConstraintFromAuthority();
+	}
+	const bool bConstraintActive = RodConstraint.bRodHeld
+		&& Step.NormalizedTension > UE_DOUBLE_SMALL_NUMBER;
+	const double WorldSeconds = World->GetTimeSeconds();
+	if (bConstraintActive != bLastConstraintDiagnosticActive
+		|| (bConstraintActive && WorldSeconds >= NextConstraintDiagnosticWorldSeconds))
+	{
+		const TCHAR* Action = State.CatAction == ECatFightCatAction::Pull ? TEXT("Pull")
+			: State.CatAction == ECatFightCatAction::Slack ? TEXT("Slack") : TEXT("None");
+		UE_LOG(LogCatFishing, Display,
+			TEXT("Event=fishing_constraint_sample SessionId=%s RodActorId=%s Active=%s Action=%s "
+				"ConstraintError=%.2f RelativeLineSpeed=%.2f Tension=%.3f FishCorrection=%.2f "
+				"CarrierAcceleration=%.2f CarrierAwaySpeedMultiplier=%.3f RodLeverage=%.3f "
+				"CarrierMovementAlpha=%.3f Fish=%s RodTip=%s Holder=%s NetMode=%d Authority=true"),
+			*SessionActor->GetSnapshot().FishingSessionId.ToString(),
+			*Rod->GetPresentationState().RodActorId.ToString(),
+			bConstraintActive ? TEXT("true") : TEXT("false"),
+			Action,
+			Step.ConstraintErrorCentimeters,
+			Step.RelativeConstraintSpeedCentimetersPerSecond,
+			Step.NormalizedTension,
+			Step.FishConstraintCorrectionCentimeters,
+			Step.CarrierPullAccelerationCentimetersPerSecondSquared,
+			Step.CarrierAwaySpeedMultiplier,
+			Step.RodLeverageMultiplier,
+			Step.CarrierMovementAlpha,
+			*Motion.FishWorldPosition.ToCompactString(),
+			*RodTip.ToCompactString(),
+			*GetNameSafe(Rod->GetHolderPawnFromAuthority()),
+			static_cast<int32>(World->GetNetMode()));
+		NextConstraintDiagnosticWorldSeconds = WorldSeconds + 1.0;
+		bLastConstraintDiagnosticActive = bConstraintActive;
 	}
 	// 把猫的体力消耗（正值）转成负的 Delta 施加到 ASC；只有真正非零变化才需要写一次，且写入失败也视为致命错误。
 	if (State.bOperatorPresent && !FMath::IsNearlyZero(Step.CatStaminaDrain)

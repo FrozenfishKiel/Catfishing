@@ -100,7 +100,13 @@ public:
 	double HeldRodMovementReferenceSpeedCentimetersPerSecond = 300.0;
 	/** 鱼线满负载时施加给持竿 CharacterMovement 的最大水平牵引加速度。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0", Units="cm/s^2"))
-	double MaximumFishPullAccelerationCentimetersPerSecondSquared = 240.0;
+	double MaximumFishPullAccelerationCentimetersPerSecondSquared = 1200.0;
+	/** 手持双端约束每秒最多分配给鱼端的水平修正，限制走动与收线合成后的鱼速。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="1", Units="cm/s"))
+	double MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 160.0;
+	/** 满负载且鱼不弱于猫时，玩家沿远离鱼方向保留的最小速度比例。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0", ClampMax="1"))
+	double MinimumCarrierAwaySpeedMultiplier = 0.15;
 
 	/**
 	 * 打窝蓄力（规格 3.1 打窝：蓄力抛掷、抛物线预览）。服务器按按住时长算 ChargeAlpha，客户端预览用同一组参数（UCatFishingAimLibrary）。

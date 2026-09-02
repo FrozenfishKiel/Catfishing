@@ -54,6 +54,10 @@ bool FCatFightSimulationConfig::IsValid() const
 		&& MovementReferenceSpeedCentimetersPerSecond > 0.0
 		&& FMath::IsFinite(MaximumCarrierPullAccelerationCentimetersPerSecondSquared)
 		&& MaximumCarrierPullAccelerationCentimetersPerSecondSquared >= 0.0
+		&& FMath::IsFinite(MaximumFishConstraintCorrectionSpeedCentimetersPerSecond)
+		&& MaximumFishConstraintCorrectionSpeedCentimetersPerSecond > 0.0
+		&& FMath::IsFinite(MinimumCarrierAwaySpeedMultiplier)
+		&& MinimumCarrierAwaySpeedMultiplier >= 0.0 && MinimumCarrierAwaySpeedMultiplier <= 1.0
 		&& FMath::IsFinite(MaximumLineLengthCentimeters) && MaximumLineLengthCentimeters > 0.0 // 线长上限 L_max
 		&& FMath::IsFinite(RodDurability) && RodDurability > 0.0 // 本场鱼线耐久总量（新会话重置）
 		&& IsFiniteNonNegative(EscapeSlackCentimeters); // 判定脱钩前允许超出 L_max 的松弛裕度
@@ -139,9 +143,11 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const bool bOperatorPresent = State.bOperatorPresent;
 	const bool bPulling = bOperatorPresent && State.CatAction == ECatFightCatAction::Pull; // 玩家本步是否按住左键拖线
 	const bool bSlacking = State.CatAction == ECatFightCatAction::Slack; // 玩家本步是否按住右键松开线杯
-	const bool bKinematicPulling = bOperatorPresent && RodConstraint.bRodHeld && !bSlacking
+	// 移动仍参与同一根鱼线的约束速度和力量分配，但不再伪装成第二个“收线”输入。
+	// 左键只缩短静止线长；持竿者远离只改变竿尖端点，二者稍后合并为唯一 ConstraintError。
+	const bool bCarrierMovingAgainstLine = bOperatorPresent && RodConstraint.bRodHeld && !bSlacking
 		&& KinematicPullSpeed > 1.0;
-	const bool bApplyingTraction = bPulling || bKinematicPulling;
+	const bool bApplyingTraction = bPulling || bCarrierMovingAgainstLine;
 	const double SwimSpeed = bStruggling ? Config.FishStruggleSpeedCentimetersPerSecond
 		: Config.FishCalmSpeedCentimetersPerSecond;
 	// 鱼先在水平面按自身速度游出候选点；这个位移不因为鱼恰好在竿尖 XY 投影下就消失。
@@ -158,21 +164,48 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		Config.MaximumLineLengthCentimeters);
 	const double Slack0 = FMath::Max(0.0, PaidOutLine0 - Distance0);
 	const double RequestedReelStep = bPulling ? Config.ReelSpeedCentimetersPerSecond * Dt : 0.0;
-	const double KinematicPullStep = bKinematicPulling ? KinematicPullSpeed * Dt : 0.0;
 	const double PotentialOutwardStep = FMath::Max(0.0, FreeSwimDistance1 - Distance0);
-	// 收线和鱼外游都会吃掉余线；只有本步会碰到线端时才形成资源对抗。
-	const bool bTractionReachesTaut = bApplyingTraction
-		&& RequestedReelStep + KinematicPullStep + PotentialOutwardStep
+	// 手持时先得到唯一的目标静止线长：左键缩短，右键只按鱼的真实外游距离放线，其余情况保持不变。
+	// 随后所有端点运动只和这个目标比较一次，避免“走路拉一次 + 左键再拉一次”。
+	double CoupledConstraintLineLength = PaidOutLine0;
+	if (RodConstraint.bRodHeld && bPulling)
+	{
+		CoupledConstraintLineLength = FMath::Max(VerticalDistance, PaidOutLine0 - RequestedReelStep);
+	}
+	else if (RodConstraint.bRodHeld && bSlacking)
+	{
+		CoupledConstraintLineLength = FMath::Max(PaidOutLine0,
+			FMath::Min(FreeSwimDistance1, Config.MaximumLineLengthCentimeters));
+	}
+	CoupledConstraintLineLength = FMath::Clamp(CoupledConstraintLineLength,
+		VerticalDistance, Config.MaximumLineLengthCentimeters);
+	const double CoupledConstraintError = RodConstraint.bRodHeld
+		? FMath::Max(0.0, FreeSwimDistance1 - CoupledConstraintLineLength) : 0.0;
+	const bool bCoupledLineRestraining = RodConstraint.bRodHeld
+		&& CoupledConstraintError > UE_DOUBLE_KINDA_SMALL_NUMBER;
+	// 非手持调用保留固定锚点的既有几何；手持调用直接以合并后的误差判断是否碰到线端。
+	const bool bTractionReachesTaut = RodConstraint.bRodHeld
+		? bApplyingTraction && bCoupledLineRestraining
+		: bApplyingTraction && RequestedReelStep + PotentialOutwardStep
 			>= Slack0 - UE_DOUBLE_KINDA_SMALL_NUMBER;
-	const bool bHoldReachesTaut = !bApplyingTraction && !bSlacking
-		&& PotentialOutwardStep > Slack0 + UE_DOUBLE_KINDA_SMALL_NUMBER;
+	const bool bHoldReachesTaut = RodConstraint.bRodHeld
+		? !bApplyingTraction && !bSlacking && bCoupledLineRestraining
+		: !bApplyingTraction && !bSlacking
+			&& PotentialOutwardStep > Slack0 + UE_DOUBLE_KINDA_SMALL_NUMBER;
 	// 松开线杯后，在 L_max 以内鱼不会受到线端限制；只有整根线被鱼带完后继续外冲才重新形成张力。
 	const bool bSlackBlockedAtMaximum = bSlacking
 		&& FreeSwimDistance1 > Config.MaximumLineLengthCentimeters + UE_DOUBLE_KINDA_SMALL_NUMBER;
 	// 是否碰到线端只看真实游向/收线器状态，不看 StateTree 状态名：平静状态随机到向外方向也会形成张力。
-	const bool bLineRestraining = bTractionReachesTaut || bHoldReachesTaut || bSlackBlockedAtMaximum;
+	const bool bLineRestraining = RodConstraint.bRodHeld ? bCoupledLineRestraining
+		: bTractionReachesTaut || bHoldReachesTaut || bSlackBlockedAtMaximum;
+	const double NormalizedConstraintError = bLineRestraining
+		? FMath::Clamp((RodConstraint.bRodHeld ? CoupledConstraintError
+			: FMath::Max(0.0, FreeSwimDistance1 - PaidOutLine0))
+			/ Config.TensionResponseRangeCentimeters, 0.0, 1.0) : 0.0;
 	const double ConstraintLoad = bLineRestraining
-		? FMath::Clamp(FMath::Max(OutwardLoad, CarrierMovementAlpha), 0.0, 1.0) : 0.0;
+		? FMath::Clamp(RodConstraint.bRodHeld
+			? FMath::Max3(OutwardLoad, CarrierMovementAlpha, NormalizedConstraintError)
+			: FMath::Max(OutwardLoad, CarrierMovementAlpha), 0.0, 1.0) : 0.0;
 	const bool bAtMaximumLine = PaidOutLine0 >= Config.MaximumLineLengthCentimeters
 		- UE_DOUBLE_KINDA_SMALL_NUMBER;
 	// 普通“没有松开线杯而绷紧”会持续消耗三方资源，但不会自动触发落水/瞬断；重大判定仍要求玩家硬拉，
@@ -327,6 +360,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	double UnconstrainedDistance1 = FreeSwimDistance1;
 	double LineLength = PaidOutLine0;
 	FVector ProposedFishWorldPosition = FreeFishPosition;
+	double FishConstraintCorrection = 0.0;
 	// 把候选位置限制到指定线长内。这里只处理“鱼想越过线端”的硬约束，不主动缩小球面来拖拽鱼。
 	const auto ConstrainCandidateToLine = [&](FVector& Candidate, const double ConstraintLineLength)
 	{
@@ -355,6 +389,46 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		UnconstrainedDistance1 = Distance0;
 		LineLength = PaidOutLine0;
 		ProposedFishWorldPosition = State.FishWorldPosition;
+	}
+	else if (RodConstraint.bRodHeld)
+	{
+		// 手持态使用唯一双端约束：鱼自由游、竿尖移动和卷线器缩短都只汇入上面同一个误差。
+		// 猫力占比决定误差中多少由鱼端承担，余下部分通过 Carrier 约束反向作用到玩家。
+		LineLength = CoupledConstraintLineLength;
+		if (bLineRestraining)
+		{
+			const double FishCorrectionShare = bOperatorPresent
+				? EffectiveCatStrength / FMath::Max(EffectiveCatStrength + Config.FishStrength,
+					UE_DOUBLE_SMALL_NUMBER)
+				: 1.0;
+			const double MaximumFishCorrection =
+				Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond * Dt;
+			FVector TowardRodProjection(RodTipWorldPosition.X - ProposedFishWorldPosition.X,
+				RodTipWorldPosition.Y - ProposedFishWorldPosition.Y, 0.0);
+			const double HorizontalDistanceToProjection = TowardRodProjection.Size2D();
+			FishConstraintCorrection = FMath::Min3(
+				CoupledConstraintError * FishCorrectionShare,
+				MaximumFishCorrection, HorizontalDistanceToProjection);
+			if (FishConstraintCorrection > UE_DOUBLE_SMALL_NUMBER)
+			{
+				ProposedFishWorldPosition += TowardRodProjection / HorizontalDistanceToProjection
+					* FishConstraintCorrection;
+				ProposedFishWorldPosition.Z = State.FishWorldPosition.Z;
+			}
+		}
+
+		if (bPulling)
+		{
+			// 收线是缩短静止线长的请求。鱼端和玩家端尚未消化的误差最多保留一个张力响应区间；
+			// 超过部分让卷线器本步打滑回退，但绝不会在按住左键时反向放出超过原值的线。
+			const double SolvedDistance = FVector::Distance(
+				RodTipWorldPosition, ProposedFishWorldPosition);
+			const double MinimumSolvedLineLength = FMath::Max(VerticalDistance,
+				SolvedDistance - Config.TensionResponseRangeCentimeters);
+			LineLength = FMath::Clamp(FMath::Max(LineLength,
+				FMath::Min(PaidOutLine0, MinimumSolvedLineLength)),
+				VerticalDistance, Config.MaximumLineLengthCentimeters);
+		}
 	}
 	else if (bSlacking)
 	{
@@ -397,7 +471,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		LineLength = FMath::Clamp(LineLength, VerticalDistance, Config.MaximumLineLengthCentimeters);
 		ConstrainCandidateToLine(ProposedFishWorldPosition, LineLength);
 	}
-	const double Tension = FMath::Max(0.0, UnconstrainedDistance1 - LineLength);
+	const double Tension = RodConstraint.bRodHeld ? CoupledConstraintError
+		: FMath::Max(0.0, UnconstrainedDistance1 - LineLength);
 	const double Distance1 = FVector::Distance(RodTipWorldPosition, ProposedFishWorldPosition);
 
 	// 把本步计算结果写入返回值，供 Runner/Session 应用到实际状态。
@@ -426,6 +501,19 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	Result.CarrierPullAccelerationCentimetersPerSecondSquared =
 		Config.MaximumCarrierPullAccelerationCentimetersPerSecondSquared
 		* PullLoad * FishShareOfOpposition;
+	const double FishToCatStrengthRatio = Config.FishStrength
+		/ FMath::Max(EffectiveCatStrength, UE_DOUBLE_SMALL_NUMBER);
+	const double CarrierSlowdownLoad = PullLoad
+		* FMath::Clamp(FishToCatStrengthRatio, 0.0, 1.0);
+	Result.CarrierAwaySpeedMultiplier = FMath::Lerp(1.0,
+		Config.MinimumCarrierAwaySpeedMultiplier, CarrierSlowdownLoad);
+	Result.ConstraintErrorCentimeters = RodConstraint.bRodHeld ? CoupledConstraintError : Tension;
+	Result.RelativeConstraintSpeedCentimetersPerSecond = RodConstraint.bRodHeld
+		? SwimSpeed * Alignment
+			- FVector::DotProduct(RodConstraint.RodTipVelocityCentimetersPerSecond, LineDirection)
+			+ (bPulling ? Config.ReelSpeedCentimetersPerSecond : 0.0)
+		: 0.0;
+	Result.FishConstraintCorrectionCentimeters = FishConstraintCorrection;
 	Result.StrongConfrontationBuildUpSeconds = StrongConfrontationBuildUp;
 	Result.bStrongConfrontation = bStrongConfrontation;
 	Result.ProposedFishWorldPosition = ProposedFishWorldPosition;

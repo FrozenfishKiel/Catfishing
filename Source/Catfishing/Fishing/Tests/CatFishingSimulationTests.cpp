@@ -143,6 +143,49 @@ bool FCatFishingHeldRodConstraintTest::RunTest(const FString& Parameters)
 		BackingAway.EffectiveCatStrength > Stationary.EffectiveCatStrength);
 	TestTrue(TEXT("taut moving constraint produces an opposing carrier acceleration"),
 		BackingAway.CarrierPullAccelerationCentimetersPerSecondSquared > 0.0);
+
+	// 真实端点位移必须和左键共用一个误差：走路不能把鱼全量硬投影，走路+左键也不能把两种位移完整相加。
+	Config.FixedStepSeconds = 0.05;
+	Config.FishCalmSpeedCentimetersPerSecond = 0.0;
+	Config.ReelSpeedCentimetersPerSecond = 80.0;
+	Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 160.0;
+	State.CatAction = ECatFightCatAction::None;
+	FCatFightRodConstraintInput WalkedAway = Aligned;
+	WalkedAway.RodTipWorldPosition = FVector(-5.0, 0.0, 0.0);
+	WalkedAway.RodTipVelocityCentimetersPerSecond = FVector(-100.0, 0.0, 0.0);
+	WalkedAway.CarrierVelocityCentimetersPerSecond = FVector(-100.0, 0.0, 0.0);
+	const FCatFightStepResult WalkingOnly = FCatFishingFightSimulator::Step(
+		Config, State, WalkedAway, FVector::ForwardVector);
+	State.CatAction = ECatFightCatAction::Pull;
+	const FCatFightStepResult WalkingAndReeling = FCatFishingFightSimulator::Step(
+		Config, State, WalkedAway, FVector::ForwardVector);
+	TestTrue(TEXT("walking a taut held line distributes only part of the endpoint error to the fish"),
+		WalkingOnly.FishConstraintCorrectionCentimeters > 0.0
+		&& WalkingOnly.FishConstraintCorrectionCentimeters < 5.0);
+	TestTrue(TEXT("the unresolved walking share constrains the carrier speed"),
+		WalkingOnly.CarrierAwaySpeedMultiplier < 1.0);
+	TestTrue(TEXT("walking plus reel is capped by one fish-side constraint correction budget"),
+		WalkingAndReeling.FishConstraintCorrectionCentimeters
+			<= Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond
+				* Config.FixedStepSeconds + UE_DOUBLE_KINDA_SMALL_NUMBER);
+	TestTrue(TEXT("walking plus reel no longer gives the fish the full 100 plus 80 centimeters per second"),
+		WalkingAndReeling.FishConstraintCorrectionCentimeters / Config.FixedStepSeconds
+			< 180.0 - UE_DOUBLE_KINDA_SMALL_NUMBER);
+	TestTrue(TEXT("walking and reeling publish one merged constraint error"),
+		WalkingAndReeling.ConstraintErrorCentimeters > WalkingOnly.ConstraintErrorCentimeters
+		&& WalkingAndReeling.RelativeConstraintSpeedCentimetersPerSecond > 0.0);
+
+	State.CatAction = ECatFightCatAction::None;
+	FCatFightRodConstraintInput WalkedTowardFish = Aligned;
+	WalkedTowardFish.RodTipWorldPosition = FVector(5.0, 0.0, 0.0);
+	WalkedTowardFish.RodTipVelocityCentimetersPerSecond = FVector(100.0, 0.0, 0.0);
+	WalkedTowardFish.CarrierVelocityCentimetersPerSecond = FVector(100.0, 0.0, 0.0);
+	const FCatFightStepResult TowardFish = FCatFishingFightSimulator::Step(
+		Config, State, WalkedTowardFish, FVector::ForwardVector);
+	TestEqual(TEXT("walking toward the fish creates slack instead of a phantom pull"),
+		TowardFish.ConstraintErrorCentimeters, 0.0, 1e-9);
+	TestEqual(TEXT("slack leaves carrier movement unrestricted"),
+		TowardFish.CarrierAwaySpeedMultiplier, 1.0, 1e-9);
 	return !HasAnyErrors();
 }
 

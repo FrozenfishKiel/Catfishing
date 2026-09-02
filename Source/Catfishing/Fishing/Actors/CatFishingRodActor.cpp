@@ -3,6 +3,8 @@
 #include "Components/SceneComponent.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSettings.h"
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
@@ -51,6 +53,7 @@ void ACatFishingRodActor::Tick(const float DeltaSeconds)
 	{
 		RefreshHeldTransformFromAuthority(DeltaSeconds);
 	}
+	ApplyCarrierConstraint(DeltaSeconds);
 }
 
 void ACatFishingRodActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -58,6 +61,7 @@ void ACatFishingRodActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	// 只复制这一个聚合结构体；所有客户端可见状态都收敛到 PresentationState，减少复制条目
 	DOREPLIFETIME(ThisClass, PresentationState);
+	DOREPLIFETIME(ThisClass, CarrierConstraintState);
 }
 
 bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActorId, const FGuid InItemInstanceId,
@@ -151,6 +155,10 @@ bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresen
 	Committed.RodActorRevision = PresentationState.RodActorRevision + 1; // 每次成功提交 Revision 自增一
 	const FCatFishingRodPresentationState Previous = PresentationState;
 	PresentationState = Committed;
+	if (PresentationState.PoseMode != ECatFishingRodPoseMode::Held)
+	{
+		CarrierConstraintState = FCatFishingCarrierConstraintState{};
+	}
 	SetActorTickEnabled(PresentationState.PoseMode == ECatFishingRodPoseMode::Held);
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 	ForceNetUpdate();
@@ -258,6 +266,94 @@ FVector ACatFishingRodActor::GetAuthoritativeRodForwardVector() const
 		.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, GetActorForwardVector());
 }
 
+bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullDirection,
+	const double PullAccelerationCentimetersPerSecondSquared, const double MaximumAwaySpeedMultiplier,
+	const double NormalizedTension, const double ConstraintErrorCentimeters)
+{
+	FVector HorizontalDirection(PullDirection.X, PullDirection.Y, 0.0);
+	const bool bValid = HasAuthority()
+		&& PresentationState.PoseMode == ECatFishingRodPoseMode::Held
+		&& !HorizontalDirection.ContainsNaN() && HorizontalDirection.Normalize()
+		&& FMath::IsFinite(PullAccelerationCentimetersPerSecondSquared)
+		&& PullAccelerationCentimetersPerSecondSquared >= 0.0
+		&& FMath::IsFinite(MaximumAwaySpeedMultiplier)
+		&& MaximumAwaySpeedMultiplier >= 0.0 && MaximumAwaySpeedMultiplier <= 1.0
+		&& FMath::IsFinite(NormalizedTension)
+		&& FMath::IsFinite(ConstraintErrorCentimeters) && ConstraintErrorCentimeters >= 0.0;
+	if (!bValid)
+	{
+		return false;
+	}
+
+	FCatFishingCarrierConstraintState Next;
+	Next.PullDirection = HorizontalDirection;
+	Next.PullAccelerationCentimetersPerSecondSquared =
+		static_cast<float>(PullAccelerationCentimetersPerSecondSquared);
+	Next.MaximumAwaySpeedMultiplier = static_cast<float>(MaximumAwaySpeedMultiplier);
+	Next.NormalizedTension = static_cast<float>(FMath::Clamp(NormalizedTension, 0.0, 1.0));
+	Next.ConstraintErrorCentimeters = static_cast<float>(ConstraintErrorCentimeters);
+	Next.bActive = Next.NormalizedTension > KINDA_SMALL_NUMBER
+		|| Next.PullAccelerationCentimetersPerSecondSquared > KINDA_SMALL_NUMBER;
+	CarrierConstraintState = Next;
+	ForceNetUpdate();
+	return true;
+}
+
+void ACatFishingRodActor::ClearCarrierConstraintFromAuthority()
+{
+	if (!HasAuthority())
+	{
+		return;
+	}
+	if (!CarrierConstraintState.bActive
+		&& CarrierConstraintState.ConstraintErrorCentimeters <= KINDA_SMALL_NUMBER
+		&& CarrierConstraintState.PullAccelerationCentimetersPerSecondSquared <= KINDA_SMALL_NUMBER
+		&& FMath::IsNearlyEqual(CarrierConstraintState.MaximumAwaySpeedMultiplier, 1.0f))
+	{
+		return;
+	}
+	CarrierConstraintState = FCatFishingCarrierConstraintState{};
+	ForceNetUpdate();
+}
+
+void ACatFishingRodActor::ApplyCarrierConstraint(const float DeltaSeconds)
+{
+	if (!CarrierConstraintState.bActive || PresentationState.PoseMode != ECatFishingRodPoseMode::Held
+		|| !FMath::IsFinite(DeltaSeconds) || DeltaSeconds <= 0.0f
+		|| !PresentationState.HolderPlayerState)
+	{
+		return;
+	}
+	ACharacter* Holder = Cast<ACharacter>(PresentationState.HolderPlayerState->GetPawn());
+	// 模拟代理只消费 Character 的正常移动复制；服务器和拥有该角色的客户端各应用一次同源约束，兼顾权威和本地手感。
+	if (!Holder || (!HasAuthority() && !Holder->IsLocallyControlled()))
+	{
+		return;
+	}
+	UCharacterMovementComponent* Movement = Holder->GetCharacterMovement();
+	FVector PullDirection(CarrierConstraintState.PullDirection);
+	PullDirection.Z = 0.0;
+	if (!Movement || !PullDirection.Normalize())
+	{
+		return;
+	}
+
+	if (CarrierConstraintState.PullAccelerationCentimetersPerSecondSquared > KINDA_SMALL_NUMBER)
+	{
+		Movement->AddForce(PullDirection * Movement->Mass
+			* CarrierConstraintState.PullAccelerationCentimetersPerSecondSquared);
+	}
+	// AddForce 负责鱼更强时把猫拖向水面；径向速度上限负责让持续输入也不能最终无视张力跑回原 MaxWalkSpeed。
+	const FVector AwayDirection = -PullDirection;
+	const double AwaySpeed = FVector::DotProduct(Movement->Velocity, AwayDirection);
+	const double MaximumAwaySpeed = FMath::Max(0.0f, Movement->MaxWalkSpeed)
+		* FMath::Clamp(static_cast<double>(CarrierConstraintState.MaximumAwaySpeedMultiplier), 0.0, 1.0);
+	if (AwaySpeed > MaximumAwaySpeed)
+	{
+		Movement->Velocity -= AwayDirection * (AwaySpeed - MaximumAwaySpeed);
+	}
+}
+
 bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSeconds)
 {
 	APawn* HolderPawn = GetHolderPawnFromAuthority();
@@ -301,6 +397,7 @@ bool ACatFishingRodActor::PlaceOnGroundFromAuthority(const FTransform& GroundTra
 	SetActorTransform(GroundTransform, false, nullptr, ETeleportType::TeleportPhysics);
 	AuthoritativeRodTipVelocity = FVector::ZeroVector;
 	AuthoritativeHolderVelocity = FVector::ZeroVector;
+	CarrierConstraintState = FCatFishingCarrierConstraintState{};
 	SetActorTickEnabled(false);
 	ForceNetUpdate();
 	return true;
@@ -355,7 +452,7 @@ int32 ACatFishingRodActor::GetFirstFreeOperatorSlotIndex() const
 void ACatFishingRodActor::BeginPlay()
 {
 	Super::BeginPlay();
-	SetActorTickEnabled(HasAuthority() && PresentationState.PoseMode == ECatFishingRodPoseMode::Held);
+	SetActorTickEnabled(PresentationState.PoseMode == ECatFishingRodPoseMode::Held);
 	// 身份可能在 Actor BeginPlay 之前就由权威初始化完毕（生成时序问题），
 	// 那时事件被推迟到这里；BeginPlay 后再把积压的“上一次变化”补发一次
 	if (bHasPendingPresentationNotification)
@@ -408,6 +505,7 @@ void ACatFishingRodActor::QueueOrDispatchPresentationChanged(const FCatFishingRo
 void ACatFishingRodActor::DispatchPresentationChanged(const FCatFishingRodPresentationState& Previous,
 	const FCatFishingRodPresentationState& Current)
 {
+	SetActorTickEnabled(Current.PoseMode == ECatFishingRodPoseMode::Held);
 	// 收竿后 Actor 还要活满一个终态复制窗（见 UCatFishingService::PackRod）才销毁，
 	// 期间必须立刻从视觉和碰撞上消失，否则玩家会看到一根杵着不走、还挡路的幽灵竿。
 	// 放在分发路径而不是权威写口：服务器与每个客户端各自在"得知"这次变化的那一刻本地执行；

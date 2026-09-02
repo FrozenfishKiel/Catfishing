@@ -98,11 +98,15 @@ struct CATFISHING_API FCatFightSimulationConfig
 	/** 将“本步鱼试图超过线长的距离”归一化为表现张力时使用的响应范围。 */
 	double TensionResponseRangeCentimeters = 10.0;
 
-	/** 手持约束参数：方向决定杠杆，反向移动决定额外发力，线负载可反向牵引 CharacterMovement。 */
+	/** 手持约束参数：方向决定杠杆，反向移动决定额外发力，线负载由鱼和持竿者共同承担。 */
 	double MinimumRodLeverageMultiplier = 0.4;
 	double MovementStrengthBoost = 0.35;
 	double MovementReferenceSpeedCentimetersPerSecond = 300.0;
-	double MaximumCarrierPullAccelerationCentimetersPerSecondSquared = 240.0;
+	double MaximumCarrierPullAccelerationCentimetersPerSecondSquared = 1200.0;
+	/** 手持双端约束每秒最多修正到鱼端的水平距离；防止走动和收线叠成鱼的瞬移。 */
+	double MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 160.0;
+	/** 满负载且鱼不弱于猫时，持竿者沿远离鱼方向仍允许保留的最小速度比例。 */
+	double MinimumCarrierAwaySpeedMultiplier = 0.15;
 
 	double MaximumLineLengthCentimeters = 0.0;
 	/** 本场鱼线耐久总量；旧字段名为兼容现有配置保留，每次新会话都会重置。 */
@@ -174,6 +178,14 @@ struct CATFISHING_API FCatFightStepResult
 	double EffectiveCatStrength = 0.0;
 	/** 本步鱼线约束反向施加给持竿角色的水平加速度。 */
 	double CarrierPullAccelerationCentimetersPerSecondSquared = 0.0;
+	/** 双端约束允许持竿者沿远离鱼方向保留的速度比例；1 表示无约束。 */
+	double CarrierAwaySpeedMultiplier = 1.0;
+	/** 本步进入双端求解前的线长误差；包含鱼游动、竿尖移动和收线改变的共同结果。 */
+	double ConstraintErrorCentimeters = 0.0;
+	/** 鱼相对竿尖沿鱼线向外的速度，再加上线杯收短速率；正值表示约束正在收紧。 */
+	double RelativeConstraintSpeedCentimetersPerSecond = 0.0;
+	/** 同一份约束误差最终分配给鱼端的水平位置修正。 */
+	double FishConstraintCorrectionCentimeters = 0.0;
 	double StrongConfrontationBuildUpSeconds = 0.0;
 	/** 本步是否处于僵持消耗战（供表现/日志）。 */
 	bool bStalemate = false;

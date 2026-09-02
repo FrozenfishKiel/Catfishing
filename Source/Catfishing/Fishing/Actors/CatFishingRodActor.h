@@ -8,6 +8,26 @@
 class APlayerState;
 class USceneComponent;
 
+/** 高频复制的手持鱼线约束结果；不推进鱼竿业务 Revision，也不保存第二份搏斗终态。 */
+USTRUCT(BlueprintType)
+struct CATFISHING_API FCatFishingCarrierConstraintState
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly)
+	FVector_NetQuantizeNormal PullDirection = FVector::ZeroVector;
+	UPROPERTY(BlueprintReadOnly)
+	float PullAccelerationCentimetersPerSecondSquared = 0.0f;
+	UPROPERTY(BlueprintReadOnly)
+	float MaximumAwaySpeedMultiplier = 1.0f;
+	UPROPERTY(BlueprintReadOnly)
+	float NormalizedTension = 0.0f;
+	UPROPERTY(BlueprintReadOnly)
+	float ConstraintErrorCentimeters = 0.0f;
+	UPROPERTY(BlueprintReadOnly)
+	bool bActive = false;
+};
+
 UCLASS(Blueprintable, meta=(ChildCannotTick))
 class CATFISHING_API ACatFishingRodActor : public AActor
 {
@@ -57,6 +77,16 @@ public:
 	{
 		return AuthoritativeHolderVelocity;
 	}
+	/** FightRunner 发布同一份双端求解结果；服务器和持竿本地客户端随后每帧应用到 CharacterMovement。 */
+	bool SetCarrierConstraintFromAuthority(const FVector& PullDirection,
+		double PullAccelerationCentimetersPerSecondSquared, double MaximumAwaySpeedMultiplier,
+		double NormalizedTension, double ConstraintErrorCentimeters);
+	void ClearCarrierConstraintFromAuthority();
+	UFUNCTION(BlueprintPure, Category="Fishing|Rod")
+	const FCatFishingCarrierConstraintState& GetCarrierConstraintState() const
+	{
+		return CarrierConstraintState;
+	}
 	APawn* GetHolderPawnFromAuthority() const;
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category="Fishing|Rod")
 	void BP_OnRodPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
@@ -72,6 +102,7 @@ private:
 	void OnRep_PresentationState(const FCatFishingRodPresentationState& Previous);
 	void QueueOrDispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	void DispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
+	void ApplyCarrierConstraint(float DeltaSeconds);
 	bool CommitAuthoritativeMutation(const FCatFishingRodPresentationState& Next, int64 ExpectedRevision);
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> SceneRoot;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> VisualRoot;
@@ -83,6 +114,8 @@ private:
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> GripAnchor;
 	UPROPERTY(ReplicatedUsing=OnRep_PresentationState, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
 	FCatFishingRodPresentationState PresentationState;
+	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
+	FCatFishingCarrierConstraintState CarrierConstraintState;
 	FTransform RodTipCanonicalLocalTransform = FTransform::Identity;
 	FTransform StandCanonicalLocalTransform = FTransform::Identity;
 	FTransform GripCanonicalLocalTransform = FTransform::Identity;

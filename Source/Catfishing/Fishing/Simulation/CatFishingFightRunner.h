@@ -92,6 +92,8 @@ private:
 	bool bPullHeld = false;
 	bool bSlackHeld = false;
 	FTimerHandle FixedStepTimer;
+	double NextConstraintDiagnosticWorldSeconds = 0.0;
+	bool bLastConstraintDiagnosticActive = false;
 	bool bInitialized = false;
 	bool bRunning = false;
 };

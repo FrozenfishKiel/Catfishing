@@ -105,6 +105,8 @@ FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContac
 		|| Input.PreviousLineLengthCentimeters < 0.0
 		|| !FMath::IsFinite(Input.ProposedLineLengthCentimeters)
 		|| Input.ProposedLineLengthCentimeters < 0.0
+		|| !FMath::IsFinite(Input.MaximumConstraintDistanceCentimeters)
+		|| Input.MaximumConstraintDistanceCentimeters < 0.0
 		|| Input.ProposedLineLengthCentimeters > Input.PreviousLineLengthCentimeters + 0.01 && Input.bReeling
 		|| Input.ProposedLineLengthCentimeters + 0.01 < Input.PreviousLineLengthCentimeters && Input.bSlacking
 		|| Input.bReeling && Input.bSlacking
@@ -113,6 +115,10 @@ FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContac
 	{
 		return Result;
 	}
+	const double MaximumConstraintDistance = Input.MaximumConstraintDistanceCentimeters > 0.0
+		? FMath::Max(Input.ProposedLineLengthCentimeters,
+			Input.MaximumConstraintDistanceCentimeters)
+		: Input.ProposedLineLengthCentimeters;
 
 	Result.bShoreContact = FVector::DistSquared2D(Input.CandidateFishWorldPosition,
 		Input.ResolvedWaterWorldPosition) > FMath::Square(Input.CorrectionToleranceCentimeters);
@@ -142,12 +148,13 @@ FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContac
 	}
 
 	if (ClampSegmentEndToSphere(Input.CurrentFishWorldPosition, DesiredPosition,
-		Input.RodTipWorldPosition, Input.ProposedLineLengthCentimeters, Result.FishWorldPosition))
+		Input.RodTipWorldPosition, MaximumConstraintDistance, Result.FishWorldPosition))
 	{
 		Result.LineLengthCentimeters = Input.ProposedLineLengthCentimeters;
 	}
 	else if (Input.bReeling && ClampSegmentEndToSphere(Input.CurrentFishWorldPosition, DesiredPosition,
-		Input.RodTipWorldPosition, Input.PreviousLineLengthCentimeters, Result.FishWorldPosition))
+		Input.RodTipWorldPosition, FMath::Max(Input.PreviousLineLengthCentimeters,
+			MaximumConstraintDistance), Result.FishWorldPosition))
 	{
 		// 岸线阻止鱼继续靠近时，本次收线只能收到实际直线距离；这是“收线未完全成功”，不是主动吐线。
 		Result.LineLengthCentimeters = FMath::Max(Input.ProposedLineLengthCentimeters,
@@ -167,6 +174,6 @@ FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContac
 	Result.bSucceeded = IsFiniteMotionVector(Result.FishWorldPosition)
 		&& FMath::IsFinite(Result.LineLengthCentimeters)
 		&& FVector::Distance(Input.RodTipWorldPosition, Result.FishWorldPosition)
-			<= Result.LineLengthCentimeters + 0.01;
+			<= FMath::Max(Result.LineLengthCentimeters, MaximumConstraintDistance) + 0.01;
 	return Result;
 }

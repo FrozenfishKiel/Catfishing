@@ -1164,6 +1164,9 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		Settings->HeldRodMovementReferenceSpeedCentimetersPerSecond;
 	Config.MaximumCarrierPullAccelerationCentimetersPerSecondSquared =
 		Settings->MaximumFishPullAccelerationCentimetersPerSecondSquared;
+	Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond =
+		Settings->MaximumFishConstraintCorrectionSpeedCentimetersPerSecond;
+	Config.MinimumCarrierAwaySpeedMultiplier = Settings->MinimumCarrierAwaySpeedMultiplier;
 	Config.MaximumLineLengthCentimeters = RodDefinition->MaximumLineLengthCentimeters;
 	// 当前资产字段仍叫 MaximumRodDurability，但玩法语义是“本场鱼线耐久”：每次新会话重置，不损坏装备鱼竿。
 	Config.RodDurability = RodDefinition->MaximumRodDurability;
@@ -1301,7 +1304,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		return false;
 	}
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_fight_started SessionId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryCatStrength=%.2f SecondCatStrength=%.2f CombinedCatStrength=%.2f FishStrengthBase=%.2f FishStrengthEffective=%.2f CatStamina=%.2f FishStamina=%.2f LineStrength=%.2f LineDurability=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s MinimumLeverage=%.3f MovementStrengthBoost=%.3f MovementReferenceSpeed=%.2f MaximumPullAcceleration=%.2f"),
+		TEXT("Event=fishing_fight_started SessionId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryCatStrength=%.2f SecondCatStrength=%.2f CombinedCatStrength=%.2f FishStrengthBase=%.2f FishStrengthEffective=%.2f CatStamina=%.2f FishStamina=%.2f LineStrength=%.2f LineDurability=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s MinimumLeverage=%.3f MovementStrengthBoost=%.3f MovementReferenceSpeed=%.2f MaximumPullAcceleration=%.2f MaximumFishConstraintCorrectionSpeed=%.2f MinimumCarrierAwaySpeedMultiplier=%.3f"),
 		*Snapshot.FishingSessionId.ToString(),
 		*FishDefinition->FishDefinitionId.ToString(),
 		*RodDefinition->EquipmentDefinitionId.ToString(),
@@ -1322,7 +1325,9 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		Config.MinimumRodLeverageMultiplier,
 		Config.MovementStrengthBoost,
 		Config.MovementReferenceSpeedCentimetersPerSecond,
-		Config.MaximumCarrierPullAccelerationCentimetersPerSecondSquared);
+		Config.MaximumCarrierPullAccelerationCentimetersPerSecondSquared,
+		Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond,
+		Config.MinimumCarrierAwaySpeedMultiplier);
 	return true;
 }
 
@@ -1401,6 +1406,10 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 	Snapshot.CarrierMovementAlpha = static_cast<float>(Step.CarrierMovementAlpha);
 	Snapshot.CarrierPullAccelerationCentimetersPerSecondSquared =
 		static_cast<float>(Step.CarrierPullAccelerationCentimetersPerSecondSquared);
+	Snapshot.CarrierAwaySpeedMultiplier = static_cast<float>(Step.CarrierAwaySpeedMultiplier);
+	Snapshot.ConstraintErrorCentimeters = static_cast<float>(Step.ConstraintErrorCentimeters);
+	Snapshot.FishConstraintCorrectionCentimeters =
+		static_cast<float>(Step.FishConstraintCorrectionCentimeters);
 	RefreshFightSummary(); // 每步都重新校验参与者是否仍然合法在场（掉线/倒地会即时反映）。
 	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency); // 搏斗数值每步都要尽快同步给客户端表现层。
 	if (Step.Outcome == ECatFightStepOutcome::LineBroken)
@@ -1499,6 +1508,9 @@ bool ACatFishingSession::BeginExhaustedReelFromAuthority()
 	Snapshot.RodLeverageMultiplier = 1.0f;
 	Snapshot.CarrierMovementAlpha = 0.0f;
 	Snapshot.CarrierPullAccelerationCentimetersPerSecondSquared = 0.0f;
+	Snapshot.CarrierAwaySpeedMultiplier = 1.0f;
+	Snapshot.ConstraintErrorCentimeters = 0.0f;
+	Snapshot.FishConstraintCorrectionCentimeters = 0.0f;
 	if (!EnterPhaseFromStateTree(ECatFishingPhase::ExhaustedReel).bApplied)
 	{
 		return false;
@@ -1807,6 +1819,9 @@ void ACatFishingSession::SuspendOperatorFromAuthority()
 	Snapshot.RodLeverageMultiplier = 1.0f;
 	Snapshot.CarrierMovementAlpha = 0.0f;
 	Snapshot.CarrierPullAccelerationCentimetersPerSecondSquared = 0.0f;
+	Snapshot.CarrierAwaySpeedMultiplier = 1.0f;
+	Snapshot.ConstraintErrorCentimeters = 0.0f;
+	Snapshot.FishConstraintCorrectionCentimeters = 0.0f;
 	LastSuspendedFisherPlayerState = OldFisherPlayerState;
 	FightParticipantIds.Remove(FisherStableNetId);
 	FightParticipantCharacters.Remove(FisherStableNetId);
@@ -2150,6 +2165,9 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	Snapshot.RodLeverageMultiplier = 1.0f;
 	Snapshot.CarrierMovementAlpha = 0.0f;
 	Snapshot.CarrierPullAccelerationCentimetersPerSecondSquared = 0.0f;
+	Snapshot.CarrierAwaySpeedMultiplier = 1.0f;
+	Snapshot.ConstraintErrorCentimeters = 0.0f;
+	Snapshot.FishConstraintCorrectionCentimeters = 0.0f;
 	Snapshot.bReeling = false;
 	Snapshot.bSlacking = false;
 	bHasExhaustedReelTarget = false;
