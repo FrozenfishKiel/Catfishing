@@ -62,12 +62,12 @@
 - 第一次 R 的 `PlaceRod` 只把鱼竿部署为空杆，不占槽、不锁角色移动；第二次 R 才进入操作位，保证放杆动画和使用动作是两个独立复制跃迁。
 - 鱼竿只有一个公共 R 交互锚点；能否加入只看这个锚点与容器剩余容量，不会因为下一个人的编号改用另一套交互位置或射线。
 - `OperatorPlayerStates` 是唯一紧凑容器：加入时追加到末尾并取得 `0、1、2...` 编号，任意成员离开后更高编号全部依次减一。
-- `0` 号是当前主位；现有抛竿、提竿、收线和松线只由它驱动。其余编号先承担同步站位与接力候选，0 号离开后新的 0 号立即接管。
+- `0` 号是当前主位；抛竿、提竿和右键线杯只由它驱动。HookedFight 中所有编号都可用左键控制自己的蓄力，0 号离开后新的 0 号立即接管。
 - 每次容器压紧后，服务器按新编号重排所有剩余角色；站位算法按右/左成对向外扩展，配置上限当前为 2、代码有界预留到 8，增加第三、第四人不需要新增专用槽位分支或交互锚点。
-- 多人同时合力、体力分摊与多输入仲裁仍属于 `TODO(CooperativeFishing)`，但不能因此关闭多人加入入口。
+- HookedFight 固定步每次从该容器重建参与集合：主位按 0~100%、辅助位按 0~75% 的个人蓄力贡献 FishingStrength，并分别从各自 ASC 支付体力；主位力量归零时仍发力的辅助位会触发 50% 捣乱附加消耗。
 - `OperatorPlayerState` 只保留为 `OperatorPlayerStates[0]` 的兼容快捷字段；蓝图若要判断双人必须读取数组长度。
 - 活动会话唯一性属于鱼竿，不属于玩家：一根竿最多绑定一个未终态 `FishingSession`，同一玩家可以在多人部署的多根竿之间依次抛线。
-- 按 R 离开只释放操作位，不写 `Escaped` 或 `Terminated`；`HookedFight` 会立刻进入无人值守松线，鱼按实际外游带线，到 `L_max` 后只按真实负载消耗本场鱼线耐久，不借用离开玩家的力量/体力。下一位玩家占据主位时，Session 与 Runner 会原子迁移到其 ASC、力量、体力和输入序号域；玩家进入另一根竿后，左键与 HUD 也只路由当前主操作鱼竿。
+- 按 R 离开只释放操作位，不写 `Escaped` 或 `Terminated`；`HookedFight` 会立刻进入无人值守松线，鱼按实际外游带线，到 `L_max` 后只按真实负载消耗本场鱼线耐久，不借用离开玩家的力量/体力。下一位玩家占据主位时，Session 与 Runner 会原子迁移到其 ASC、力量、体力和输入序号域；HookedFight 左键按本人所占鱼竿路由，其他主位命令与 HUD 按当前主操作鱼竿路由。
 - 原始抛竿者的 Equipment 以 `FishingSessionId` 隔离多份鱼饵预留；一场结束只释放自己的预留，不会误释放其他鱼竿会话。
 
 另一个容易混淆的身份是 `OwnerPlayerState`：它代表谁部署/谁能最终收走鱼竿，并不限制谁能占位。服务器按公开 `RodActorId` 找全场鱼竿；接管别人鱼竿后，抛竿也按“当前主操作位”查竿，不再误查“自己部署的竿”。
@@ -109,7 +109,7 @@ StateTree（`ST_FishingSession`）只有 4 个状态、3 条事件转移 + 1 条
 
 `FCatFishingFightSimulator::Step()`：纯静态无副作用函数（有单元测试），每 0.05s 由 Runner 调一次。
 
-三方力量（冻结进 Config）：猫总体力量=`PrimaryOperatorCatStrength + SecondCatStrength` ／ 鱼力=鱼种 FishStrength（完美中鱼×0.8）／ 竿强=RodDefinition.FishingStrength。当前运行时只从主操作猫 ASC 填第一项，第二项保持 0，等待双人参与方案确定后接入。
+三方力量：鱼力=鱼种 FishStrength（完美中鱼×0.8）／ 竿强=RodDefinition.FishingStrength；猫总体力量由 Runner 每个固定步从 `OperatorPlayerStates` 重建，为主位与全部辅助位各自 `FishingStrength × PowerAlpha` 的合计，再乘竿向和持竿移动修正。Config 中的 `PrimaryOperatorCatStrength + SecondCatStrength` 是本步实时贡献，不再是启动时冻结的单人属性。
 `FCatFishSteeringModel` 用独立服务器随机流产生平滑目标游向；相同种子与固定步长得到相同方向序列，客户端不自行随机。
 
 鱼自己的高层行为由 Encounter 上的 `ST_FishFight` 控制：默认在 `StrugglingOutward` 与 `CalmOrInward` 两个状态间循环。StateTree Task 只把意图和持续时间交给 Runner，不写 Transform、不扣体力，也不直接修改鱼线。未来增加“低体力蓄力冲刺”时，可以在树上增加状态和条件，同时仍复用同一套服务器模拟器。
@@ -121,15 +121,15 @@ LineLoad    = pow(max(Alignment, 0), AngleStrengthExponent)，范围[0,1]
 
 鱼仍在平静 ⇄ 挣扎之间定时交替，但每段内部可平滑转向、横切、绕竿和假动作；上钩瞬间=挣扎。
 每次重选方向先根据鱼体力计算向内概率；朝竿尖 ±60° 属于向内。当前测试鱼满体力为 25%，接近力竭为 80%，中间按指数 1.1 的性格曲线插值；发力期仍只把其中 `FeintProbability` 比例当作向内假动作。
-LineLoad 控制鱼线磨损、牵引效率和强对抗资格：正对外冲满载，斜向按夹角衰减，横向/向内不制造正面鱼线力量。带载左键的猫/鱼体力消耗不再乘 LineLoad；平静期使用 InwardPull 系数×BaseDrainMultiplier，挣扎期使用 Stalemate 系数×StruggleDrainMultiplier，确保拖线始终双方做功且挣扎档更高。只有鱼自己绷紧锁线、玩家没有主动拉时，双方消耗才按 LineLoad 缩放。
+LineLoad 控制鱼线磨损、牵引效率和强对抗资格：正对外冲满载，斜向按夹角衰减，横向/向内不制造正面鱼线力量。鱼体力继续按实时有效猫力、平静/挣扎档和 LineLoad 结算；猫体力改为主位 `10×PowerAlpha×持竿成本倍率`、辅助位各自 `10×1.5×PowerAlpha`，不再按鱼力反推。
 鱼先按自己的水平游向/游速自由移动，锁线只截住越线部分；左键按 (1-LineLoad) 得到有限牵引位移，并按实际到达的鱼距结算 L_paid，不再用缩短后的三维球面重建位置。
 
 挣扎 + 拖(或线放尽被绷紧) + LineLoad 连续达到性格阈值/确认时间：进入强对抗并按序裁决
    ① 钓组承载 ≤ min(猫力,鱼力) → 鱼线瞬断（LineBroken，鱼逃；鱼竿保持可用）
    ② 鱼力 ≥ 猫力            → 猫被拖下水（CatInWater，鱼逃）
    ③ 猫力 ≥ 鱼力×2          → 绝对碾压（保留鱼当前位置，结束搏斗→ExhaustedReel）
-   ④ 其余 = 僵持消耗战：竿-=鱼力×0.1×LineLoad · 带载拖时鱼-=猫力×0.08×StruggleDrainMultiplier · 猫-=鱼力×0.12×StruggleDrainMultiplier /s
-向外游 + 松线(右键)：在 L_max 内不限制鱼，L_paid 只随鱼实际外游被动增长；猫体力 +1.5/s（封顶）
+   ④ 其余 = 僵持消耗战：竿-=鱼力×0.1×LineLoad · 带载拖时鱼-=实时有效猫力×0.08×StruggleDrainMultiplier · 猫按个人 PowerAlpha 付费
+向外游 + 主位力量归零/右键：在 L_max 内不限制鱼，L_paid 只随鱼实际外游被动增长；没有辅助捣乱时主位体力 +3/s（封顶）
 
 L_paid = 已放出的线长（左键主动收短；右键只允许鱼外游时被动带线）
 D      = 竿尖到鱼的直线距离
@@ -230,5 +230,5 @@ Config/DefaultGame.ini    10 个 section（改后必须重启 Editor；软引用
 - 咬钩公式改版：读取所在面积单元的聚鱼总量、浮漂级计时器、总量变化时比例折算；正式总量→等待时长曲线待裁
 - 窝料改版：水域面积/鱼总量/鱼种库存账本、鱼种平均分布、互斥面积单元、共享重叠收敛曲线、守恒重分配与面积容量上限
 - 抄网规格版：概率/硬直/无网拾取/翻肚 30s 苏醒（会新增 Phase/Intent 枚举值→表现层届时"补分支"）
-- 浮漂精准偏移、入夜停咬、拽尾巴救援(W3)、巨鱼协作输入
-- `TODO(CooperativeFishing)`：确定同竿容器中的非 0 号成员如何贡献力量与配合后，把服务器权威参与事实接入 `SecondCatStrength`、体力结算与多输入仲裁；力量规则已统一读取 `PrimaryOperatorCatStrength + SecondCatStrength`，但必须每次从当前事实重建，不能缓存单/双人模式
+- 浮漂精准偏移、入夜停咬、拽尾巴救援(W3)、巨鱼协作表现输入
+- 多人实时力量与独立体力已接入常规 FightRunner；仍待接的是低体力换人广播/超时、虚脱双倍恢复与 50% 再入门槛，以及正式多人力量/体力 HUD。巨鱼旧 StateTree 交换仍保留兼容参与摘要，不得与常规固定步重复扣体力。

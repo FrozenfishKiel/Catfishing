@@ -1,11 +1,18 @@
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "Character/CatCharacter.h"
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
+#include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Fishing/Simulation/CatFishFightMotionSolver.h"
+#include "Fishing/Simulation/CatFishingCooperativePowerModel.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "GameFramework/PlayerState.h"
 #include "Logging/CatLog.h"
 #include "TimerManager.h"
 
@@ -14,7 +21,7 @@ bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunne
 	ACatFishingSession* SessionActor = Init.Session.Get();
 	// 一次性初始化守卫：已初始化过、Session 无效/非权威、任何依赖弱引用失效、配置非法都直接拒绝。
 	if (bInitialized || !SessionActor || !SessionActor->HasAuthority() || !Init.FishActor.IsValid()
-		|| !Init.RodActor.IsValid() || !Init.AbilitySystem.IsValid()
+		|| !Init.RodActor.IsValid() || !Init.AbilitySystem.IsValid() || !Init.PrimaryPlayerState.IsValid()
 		|| !Init.WaterRegion.IsValid() || !Init.FrozenWaterBounds.IsValid
 		|| !Init.Config.IsValid() || Init.RandomSeed == 0
 		|| Init.InitialInputSequence < 0
@@ -50,10 +57,15 @@ bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunne
 	SteeringRandom.Initialize(static_cast<int32>(Init.RandomSeed ^ 0x9E3779B9u));
 	// StateTree 的第一个可选状态同样是向外发力；这里先放一个合法初值，StartLogic 同步进入状态时会从唯一写口覆盖。
 	State.MotionIntent = ECatFishMotionIntent::StrugglingOutward;
-	// 连续按键属于玩家输入生命周期，不属于旧 Session；新 Runner 原子恢复服务器已确认的按住状态。
-	LastInputSequence = Init.InitialInputSequence;
-	bPullHeld = Init.bInitialPullHeld;
-	bSlackHeld = Init.bInitialSlackHeld;
+	// 每场搏斗从 0% 力量开始；物理按键可以保持按住，但贡献必须经过 2 秒蓄力模型逐步建立。
+	if (!AddParticipantFromAuthority(Init.PrimaryPlayerState.Get(), true,
+		Init.bInitialPullHeld, Init.bInitialSlackHeld, Init.InitialInputSequence))
+	{
+		return false;
+	}
+	Config.PrimaryOperatorCatStrength = 0.0;
+	Config.SecondCatStrength = 0.0;
+	Config.PrimaryPowerAlpha = 0.0;
 	RefreshCatAction();
 	bInitialized = true;
 	return true;
@@ -97,29 +109,273 @@ void UCatFishingFightRunner::Stop()
 	bRunning = false;
 }
 
-void UCatFishingFightRunner::RefreshCatAction()
+FCatFightParticipantRuntime* UCatFishingFightRunner::FindParticipant(APlayerState* PlayerState)
 {
-	// 无人值守时强制保持松线；有人操作时拖优先于放，两个键都没按则锁住当前已放线长。
-	State.CatAction = !State.bOperatorPresent ? ECatFightCatAction::Slack
-		: bPullHeld ? ECatFightCatAction::Pull
-		: bSlackHeld ? ECatFightCatAction::Slack : ECatFightCatAction::None;
+	return PlayerState ? Participants.Find(TWeakObjectPtr<APlayerState>(PlayerState)) : nullptr;
 }
 
-bool UCatFishingFightRunner::SetReeling(const int64 InputSequence, const bool bInReeling)
+FCatFightParticipantRuntime* UCatFishingFightRunner::FindPrimaryParticipant()
 {
-	// 未初始化/未运行，或者这是一条比已处理过的更旧（乱序/重复）的输入，直接丢弃。
-	if (!bInitialized || !bRunning || InputSequence <= LastInputSequence) return false;
-	LastInputSequence = InputSequence; // 推进已处理的最大输入序号，防止旧包回放
-	bPullHeld = bInReeling; // 记录左键（拖线）当前的按住/松开状态
+	for (TPair<TWeakObjectPtr<APlayerState>, FCatFightParticipantRuntime>& Pair : Participants)
+	{
+		if (Pair.Value.bPrimary)
+		{
+			return &Pair.Value;
+		}
+	}
+	return nullptr;
+}
+
+bool UCatFishingFightRunner::AddParticipantFromAuthority(APlayerState* PlayerState, const bool bPrimary,
+	const bool bInitialPullHeld, const bool bInitialSlackHeld, const int64 InitialInputSequence)
+{
+	ACatCharacter* Character = PlayerState ? Cast<ACatCharacter>(PlayerState->GetPawn()) : nullptr;
+	UCatAbilitySystemComponent* ASC = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
+	float StaminaMaximum = 0.0f;
+	const double Strength = ASC
+		? ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute()) : 0.0;
+	const double Stamina = ASC
+		? ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) : 0.0;
+	if (!PlayerState || !Character || !ASC || InitialInputSequence < 0
+		|| !FMath::IsFinite(Strength) || Strength <= 0.0
+		|| !FMath::IsFinite(Stamina) || Stamina <= 0.0
+		|| !GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
+			Character->GetCatDefinitionId(), StaminaMaximum)
+		|| !FMath::IsFinite(StaminaMaximum) || StaminaMaximum <= 0.0f)
+	{
+		return false;
+	}
+
+	FCatFightParticipantRuntime& Participant = Participants.FindOrAdd(TWeakObjectPtr<APlayerState>(PlayerState));
+	Participant.PlayerState = PlayerState;
+	Participant.Character = Character;
+	Participant.AbilitySystem = ASC;
+	Participant.BaseFishingStrength = Strength;
+	Participant.StaminaMaximum = StaminaMaximum;
+	Participant.PowerAlpha = 0.0;
+	Participant.StaminaDrainPerSecond = 0.0;
+	Participant.LastInputSequence = InitialInputSequence;
+	Participant.bPullHeld = bInitialPullHeld;
+	// 线杯只属于主位。辅助位右键在命令入口是 no-op，这里也不能继承其加入前的物理按键状态，
+	// 否则一次“按住右键加入”会让辅助位永久停在 0% 且 SlackReleased 同样无法清除它。
+	Participant.bSlackHeld = bPrimary && bInitialSlackHeld;
+	Participant.bPrimary = bPrimary;
+	if (ACatFishingSession* SessionActor = Session.Get())
+	{
+		SessionActor->RegisterFightStaminaParticipantFromAuthority(Character);
+	}
+	return true;
+}
+
+bool UCatFishingFightRunner::RefreshParticipantsFromRod()
+{
+	ACatFishingRodActor* Rod = RodActor.Get();
+	ACatFishingSession* SessionActor = Session.Get();
+	if (!Rod || !SessionActor)
+	{
+		return false;
+	}
+
+	const TArray<TObjectPtr<APlayerState>>& Operators = Rod->GetPresentationState().OperatorPlayerStates;
+	TSet<TWeakObjectPtr<APlayerState>> CurrentOperators;
+	TArray<TWeakObjectPtr<APlayerState>> InvalidHelpers;
+	for (int32 Index = 0; Index < Operators.Num(); ++Index)
+	{
+		APlayerState* PlayerState = Operators[Index];
+		if (!PlayerState)
+		{
+			continue;
+		}
+		CurrentOperators.Add(PlayerState);
+		if (FCatFightParticipantRuntime* Existing = FindParticipant(PlayerState))
+		{
+			Existing->bPrimary = Index == 0;
+			continue;
+		}
+
+		bool bPullHeld = false;
+		bool bSlackHeld = false;
+		int64 InputSequence = 0;
+		if (const ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(
+			PlayerState->GetPawn() ? PlayerState->GetPawn()->GetController() : nullptr))
+		{
+			if (const UCatFishingCommandComponent* Commands = Controller->GetFishingCommandComponent())
+			{
+				Commands->TryGetHeldFightInputStateFromAuthority(bPullHeld, bSlackHeld, InputSequence);
+			}
+		}
+		// 新辅助位与接手主位都从 0% 开始蓄力；体力直接读取该角色当下 ASC，不做补满。
+		if (!AddParticipantFromAuthority(PlayerState, Index == 0, bPullHeld, bSlackHeld, InputSequence)
+			&& Index > 0)
+		{
+			CurrentOperators.Remove(PlayerState);
+			InvalidHelpers.Add(PlayerState);
+		}
+	}
+	for (const TWeakObjectPtr<APlayerState>& WeakHelper : InvalidHelpers)
+	{
+		APlayerState* Helper = WeakHelper.Get();
+		const int32 SlotIndex = Helper ? Rod->GetOperatorSlotIndex(Helper) : INDEX_NONE;
+		APlayerState* IgnoredPromotion = nullptr;
+		const int64 ExpectedRevision = Rod->GetPresentationState().RodActorRevision;
+		if (SlotIndex > 0 && Rod->RemoveOperatorFromAuthority(Helper, ExpectedRevision, IgnoredPromotion))
+		{
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=fishing_helper_join_rejected SessionId=%s RodActorId=%s Slot=%d Reason=FightCapabilityUnavailable Result=AutoUnloaded"),
+				*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens), SlotIndex);
+		}
+	}
+
+	for (auto It = Participants.CreateIterator(); It; ++It)
+	{
+		if (!CurrentOperators.Contains(It.Key()))
+		{
+			SessionActor->UnregisterFightStaminaParticipantFromAuthority(It.Value().Character.Get());
+			It.RemoveCurrent();
+		}
+	}
+	return !State.bOperatorPresent || FindPrimaryParticipant() != nullptr;
+}
+
+bool UCatFishingFightRunner::UpdateParticipantPowerAndStrength(double& OutCombinedHelperDrainPerSecond)
+{
+	OutCombinedHelperDrainPerSecond = 0.0;
+	double PrimaryStrength = 0.0;
+	double HelperStrength = 0.0;
+	FCatFightParticipantRuntime* Primary = nullptr;
+	for (TPair<TWeakObjectPtr<APlayerState>, FCatFightParticipantRuntime>& Pair : Participants)
+	{
+		FCatFightParticipantRuntime& Participant = Pair.Value;
+		UCatAbilitySystemComponent* ASC = Participant.AbilitySystem.Get();
+		if (!ASC)
+		{
+			return false;
+		}
+		const double CurrentStrength = ASC->GetNumericAttribute(
+			UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
+		if (!FMath::IsFinite(CurrentStrength) || CurrentStrength <= 0.0)
+		{
+			return false;
+		}
+		Participant.BaseFishingStrength = CurrentStrength;
+		// 右键仍保留为主位的主动立即放线；它会清空当前蓄力，松开后必须重新从 0 开始。
+		if (Participant.bSlackHeld)
+		{
+			Participant.PowerAlpha = 0.0;
+		}
+		const FCatFightPowerStepResult Power = FCatFishingCooperativePowerModel::StepParticipant(
+			Config.PowerTuning, Config.FixedStepSeconds, Participant.PowerAlpha,
+			Participant.bPullHeld && !Participant.bSlackHeld, Participant.bPrimary,
+			Participant.BaseFishingStrength);
+		if (!Power.bSucceeded)
+		{
+			return false;
+		}
+		Participant.PowerAlpha = Power.PowerAlpha;
+		Participant.StaminaDrainPerSecond = Power.StaminaDrainPerSecond;
+		if (Participant.bPrimary)
+		{
+			Primary = &Participant;
+			PrimaryStrength = Power.StrengthContribution;
+		}
+		else
+		{
+			HelperStrength += Power.StrengthContribution;
+			OutCombinedHelperDrainPerSecond += Power.StaminaDrainPerSecond;
+		}
+	}
+
+	if (State.bOperatorPresent && !Primary)
+	{
+		return false;
+	}
+	Config.PrimaryOperatorCatStrength = PrimaryStrength;
+	Config.SecondCatStrength = HelperStrength;
+	Config.PrimaryPowerAlpha = Primary ? Primary->PowerAlpha : 0.0;
+	Config.PrimaryDisruptionStaminaDrainPerSecond =
+		FCatFishingCooperativePowerModel::ComputePrimaryDisruptionDrainPerSecond(
+			Config.PowerTuning, Config.PrimaryPowerAlpha, OutCombinedHelperDrainPerSecond);
+	RefreshCatAction();
+	return Config.IsValid();
+}
+
+bool UCatFishingFightRunner::ApplyHelperStaminaChanges(
+	TArray<TWeakObjectPtr<APlayerState>>& OutDepletedHelpers)
+{
+	OutDepletedHelpers.Reset();
+	for (TPair<TWeakObjectPtr<APlayerState>, FCatFightParticipantRuntime>& Pair : Participants)
+	{
+		FCatFightParticipantRuntime& Participant = Pair.Value;
+		if (Participant.bPrimary)
+		{
+			continue;
+		}
+		UCatAbilitySystemComponent* ASC = Participant.AbilitySystem.Get();
+		if (!ASC)
+		{
+			return false;
+		}
+		const double Current = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+		const double Drain = FMath::Min(Current,
+			Participant.StaminaDrainPerSecond * Config.FixedStepSeconds);
+		if (Drain > UE_DOUBLE_SMALL_NUMBER
+			&& !ASC->ApplyFishingStaminaDelta(static_cast<float>(-Drain)))
+		{
+			return false;
+		}
+		if (Current - Drain <= UE_DOUBLE_SMALL_NUMBER)
+		{
+			Participant.PowerAlpha = 0.0;
+			Participant.bPullHeld = false;
+			OutDepletedHelpers.Add(Pair.Key);
+		}
+	}
+	return true;
+}
+
+void UCatFishingFightRunner::RefreshCatAction()
+{
+	// 主位有蓄力（包括松开后的 1 秒衰减）时继续收线；降到 0 后自动进入放线。
+	const FCatFightParticipantRuntime* Primary = FindPrimaryParticipant();
+	State.CatAction = !State.bOperatorPresent || !Primary || Primary->bSlackHeld
+		|| Primary->PowerAlpha <= UE_DOUBLE_SMALL_NUMBER
+		? ECatFightCatAction::Slack : ECatFightCatAction::Pull;
+}
+
+bool UCatFishingFightRunner::SetReeling(APlayerState* InputPlayerState,
+	const int64 InputSequence, const bool bInReeling)
+{
+	FCatFightParticipantRuntime* Participant = FindParticipant(InputPlayerState);
+	if (!Participant && RefreshParticipantsFromRod())
+	{
+		Participant = FindParticipant(InputPlayerState);
+	}
+	if (!bInitialized || !bRunning || !Participant || InputSequence <= Participant->LastInputSequence)
+	{
+		return false;
+	}
+	Participant->LastInputSequence = InputSequence;
+	Participant->bPullHeld = bInReeling;
 	RefreshCatAction(); // 按最新的拖/放状态重新计算本步的猫动作
 	return true;
 }
 
-bool UCatFishingFightRunner::SetSlacking(const int64 InputSequence, const bool bInSlacking)
+bool UCatFishingFightRunner::SetSlacking(APlayerState* InputPlayerState,
+	const int64 InputSequence, const bool bInSlacking)
 {
-	if (!bInitialized || !bRunning || InputSequence <= LastInputSequence) return false;
-	LastInputSequence = InputSequence;
-	bSlackHeld = bInSlacking; // 记录右键（松开线杯）当前的按住/松开状态
+	FCatFightParticipantRuntime* Participant = FindParticipant(InputPlayerState);
+	if (!Participant && RefreshParticipantsFromRod())
+	{
+		Participant = FindParticipant(InputPlayerState);
+	}
+	if (!bInitialized || !bRunning || !Participant || !Participant->bPrimary
+		|| InputSequence <= Participant->LastInputSequence)
+	{
+		return false;
+	}
+	Participant->LastInputSequence = InputSequence;
+	Participant->bSlackHeld = bInSlacking;
 	RefreshCatAction();
 	return true;
 }
@@ -127,8 +383,6 @@ bool UCatFishingFightRunner::SetSlacking(const int64 InputSequence, const bool b
 bool UCatFishingFightRunner::BeginUnattendedSlackFromAuthority()
 {
 	if (!bInitialized) return false;
-	bPullHeld = false;
-	bSlackHeld = true;
 	State.bOperatorPresent = false;
 	State.StrongConfrontationBuildUpSeconds = 0.0;
 	AbilitySystem.Reset();
@@ -136,14 +390,15 @@ bool UCatFishingFightRunner::BeginUnattendedSlackFromAuthority()
 	return true;
 }
 
-bool UCatFishingFightRunner::TransferOperatorFromAuthority(UCatAbilitySystemComponent* NewAbilitySystem,
+bool UCatFishingFightRunner::TransferOperatorFromAuthority(APlayerState* NewPlayerState,
+	UCatAbilitySystemComponent* NewAbilitySystem,
 	const double NewCatStrength, const double NewCatStaminaMaximum, const double NewCatStamina,
 	const int64 InitialInputSequence, const bool bInitialPullHeld, const bool bInitialSlackHeld)
 {
 	FCatFightSimulationConfig CandidateConfig = Config;
 	CandidateConfig.PrimaryOperatorCatStrength = NewCatStrength;
 	CandidateConfig.CatStaminaMaximum = NewCatStaminaMaximum;
-	if (!bInitialized || !NewAbilitySystem || InitialInputSequence < 0 || !CandidateConfig.IsValid()
+	if (!bInitialized || !NewPlayerState || !NewAbilitySystem || InitialInputSequence < 0 || !CandidateConfig.IsValid()
 		|| !FMath::IsFinite(NewCatStamina) || NewCatStamina <= 0.0
 		|| NewCatStamina > NewCatStaminaMaximum + UE_DOUBLE_KINDA_SMALL_NUMBER)
 	{
@@ -154,9 +409,18 @@ bool UCatFishingFightRunner::TransferOperatorFromAuthority(UCatAbilitySystemComp
 	State.CatStamina = FMath::Clamp(NewCatStamina, 0.0, NewCatStaminaMaximum);
 	State.bOperatorPresent = true;
 	State.StrongConfrontationBuildUpSeconds = 0.0;
-	LastInputSequence = InitialInputSequence;
-	bPullHeld = bInitialPullHeld;
-	bSlackHeld = bInitialSlackHeld;
+	for (TPair<TWeakObjectPtr<APlayerState>, FCatFightParticipantRuntime>& Pair : Participants)
+	{
+		Pair.Value.bPrimary = false;
+	}
+	if (!AddParticipantFromAuthority(NewPlayerState, true, bInitialPullHeld,
+		bInitialSlackHeld, InitialInputSequence))
+	{
+		return false;
+	}
+	AbilitySystem = NewAbilitySystem;
+	Config.PrimaryOperatorCatStrength = 0.0;
+	Config.PrimaryPowerAlpha = 0.0;
 	RefreshCatAction();
 	return true;
 }
@@ -205,6 +469,26 @@ void UCatFishingFightRunner::HandleFixedStep()
 		if (SessionActor) SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("DependencyResolution"));
 		return;
 	}
+	double CombinedHelperDrainPerSecond = 0.0;
+	if (!RefreshParticipantsFromRod()
+		|| !UpdateParticipantPowerAndStrength(CombinedHelperDrainPerSecond))
+	{
+		Stop();
+		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("CooperativeParticipantRefresh"));
+		return;
+	}
+	ASC = AbilitySystem.Get();
+	if (State.bOperatorPresent)
+	{
+		if (!ASC)
+		{
+			Stop();
+			SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("PrimaryAbilityResolution"));
+			return;
+		}
+		State.CatStamina = FMath::Clamp(ASC->GetNumericAttribute(
+			UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 0.0, Config.CatStaminaMaximum);
+	}
 
 	// 高层意图与状态持续时间由鱼行为 StateTree 推进；Runner 只读取当前意图，不保存第二份阶段倒计时。
 	// 每步开始都以 Encounter Actor 的实际 Transform 为准同步鱼的位置，避免和上一步的建议位置产生累积误差。
@@ -233,6 +517,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 	// 纯模拟器把鱼游向、竿向和持竿者移动合成为有效力量，再得到双方体力、线长、负载和建议位置。
 	FCatFightStepResult Step = FCatFishingFightSimulator::Step(
 		Config, State, RodConstraint, DesiredFishDirection);
+	Step.ActiveHelperCount = FMath::Max(0, Participants.Num() - (State.bOperatorPresent ? 1 : 0));
 	FCatFishMotionSolveInput MotionInput;
 	MotionInput.RodTipWorldPosition = RodTip;
 	MotionInput.ProposedFishWorldPosition = Step.ProposedFishWorldPosition; // Step 算出的理想新位置（未考虑水域边界）
@@ -328,6 +613,28 @@ void UCatFishingFightRunner::HandleFixedStep()
 	const bool bConstraintActive = RodConstraint.bRodHeld
 		&& Step.NormalizedTension > UE_DOUBLE_SMALL_NUMBER;
 	const double WorldSeconds = World->GetTimeSeconds();
+	if (WorldSeconds >= NextPowerDiagnosticWorldSeconds)
+	{
+		UE_LOG(LogCatFishing, Display,
+			TEXT("Event=fishing_cooperative_power_sample SessionId=%s RodActorId=%s PrimaryPower=%.3f "
+				"PrimaryStrength=%.3f HelperStrength=%.3f CombinedStrength=%.3f ActiveHelpers=%d "
+				"PrimaryStamina=%.3f PrimaryStaminaDrain=%.3f FishStamina=%.3f FishStaminaDrain=%.3f "
+				"DisruptionDrainPerSecond=%.3f NetMode=%d Authority=true"),
+			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
+			Step.PrimaryPowerAlpha,
+			Config.PrimaryOperatorCatStrength,
+			Config.SecondCatStrength,
+			Step.CombinedCatStrength,
+			Step.ActiveHelperCount,
+			State.CatStamina,
+			Step.CatStaminaDrain,
+			State.FishStamina,
+			Step.FishStaminaDrain,
+			Config.PrimaryDisruptionStaminaDrainPerSecond,
+			static_cast<int32>(World->GetNetMode()));
+		NextPowerDiagnosticWorldSeconds = WorldSeconds + 1.0;
+	}
 	if (bConstraintActive != bLastConstraintDiagnosticActive
 		|| (bConstraintActive && WorldSeconds >= NextConstraintDiagnosticWorldSeconds))
 	{
@@ -337,7 +644,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 			TEXT("Event=fishing_constraint_sample SessionId=%s RodActorId=%s Active=%s Action=%s "
 				"ConstraintError=%.2f RelativeLineSpeed=%.2f Tension=%.3f FishCorrection=%.2f "
 				"CarrierAcceleration=%.2f CarrierAwaySpeedMultiplier=%.3f RodLeverage=%.3f "
-				"CarrierMovementAlpha=%.3f Fish=%s RodTip=%s Holder=%s NetMode=%d Authority=true"),
+				"CarrierMovementAlpha=%.3f PrimaryPower=%.3f ActiveCombinedStrength=%.3f ActiveHelpers=%d "
+				"PrimaryStaminaDrain=%.3f DisruptionDrainPerSecond=%.3f Fish=%s RodTip=%s Holder=%s NetMode=%d Authority=true"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(),
 			*Rod->GetPresentationState().RodActorId.ToString(),
 			bConstraintActive ? TEXT("true") : TEXT("false"),
@@ -350,6 +658,11 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.CarrierAwaySpeedMultiplier,
 			Step.RodLeverageMultiplier,
 			Step.CarrierMovementAlpha,
+			Step.PrimaryPowerAlpha,
+			Step.CombinedCatStrength,
+			Step.ActiveHelperCount,
+			Step.CatStaminaDrain,
+			Config.PrimaryDisruptionStaminaDrainPerSecond,
 			*Motion.FishWorldPosition.ToCompactString(),
 			*RodTip.ToCompactString(),
 			*GetNameSafe(Rod->GetHolderPawnFromAuthority()),
@@ -363,6 +676,13 @@ void UCatFishingFightRunner::HandleFixedStep()
 	{
 		Stop();
 		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("AbilityStaminaWrite"));
+		return;
+	}
+	TArray<TWeakObjectPtr<APlayerState>> DepletedHelpers;
+	if (!ApplyHelperStaminaChanges(DepletedHelpers))
+	{
+		Stop();
+		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("HelperAbilityStaminaWrite"));
 		return;
 	}
 	// 鱼线磨损只存在于本场 Runner 状态，不写入装备永久耐久；新会话从配置上限重新开始。
@@ -383,6 +703,37 @@ void UCatFishingFightRunner::HandleFixedStep()
 	State.AbsoluteRodWear = Step.AbsoluteRodWear;
 	State.StrongConfrontationBuildUpSeconds = Step.StrongConfrontationBuildUpSeconds;
 	State.FishWorldPosition = Encounter->GetActorLocation(); // 再次以 Actor 实际落点为准，覆盖掉建议值可能的浮点误差
+	for (const TWeakObjectPtr<APlayerState>& WeakHelper : DepletedHelpers)
+	{
+		APlayerState* Helper = WeakHelper.Get();
+		const int32 SlotIndex = Helper ? Rod->GetOperatorSlotIndex(Helper) : INDEX_NONE;
+		if (SlotIndex <= 0)
+		{
+			continue;
+		}
+		APlayerState* IgnoredPromotion = nullptr;
+		const int64 ExpectedRevision = Rod->GetPresentationState().RodActorRevision;
+		if (Rod->RemoveOperatorFromAuthority(Helper, ExpectedRevision, IgnoredPromotion))
+		{
+			if (FCatFightParticipantRuntime* Participant = FindParticipant(Helper))
+			{
+				SessionActor->UnregisterFightStaminaParticipantFromAuthority(Participant->Character.Get());
+			}
+			Participants.Remove(WeakHelper);
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=fishing_helper_exhausted SessionId=%s RodActorId=%s Slot=%d Result=AutoUnloaded"),
+				*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens), SlotIndex);
+		}
+		else
+		{
+			UE_LOG(LogCatFishing, Error,
+				TEXT("Event=fishing_helper_exhausted SessionId=%s RodActorId=%s Slot=%d Result=RemoveRejected Revision=%lld"),
+				*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
+				SlotIndex, ExpectedRevision);
+		}
+	}
 	// 把本步结果、剩余体力、运动意图和本场剩余鱼线耐久上报给 Session，由它决定是否切换阶段/终止会话。
 	SessionActor->HandleFightRunnerStepFromAuthority(Step, State.FishStamina, State.MotionIntent,
 		Config.RodDurability - Step.AbsoluteRodWear);

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Fishing/CatFishingTypes.h"
+#include "Fishing/Simulation/CatFishingCooperativePowerModel.h"
 
 /** 单步终局；由 Session 映射为公开 Outcome。除 None 外每步最多产生一个。 */
 enum class ECatFightStepOutcome : uint8
@@ -44,11 +45,11 @@ struct CATFISHING_API FCatFightSimulationConfig
 {
 	double FixedStepSeconds = 0.0;
 
-	/** 当前唯一能提交搏斗输入的主操作猫力量。 */
+	/** 主操作猫本步按蓄力百分比折算后的力量贡献。 */
 	double PrimaryOperatorCatStrength = 0.0;
-	/** 第二只猫的力量贡献预留槽；参与方式与协作输入确定前，运行时保持为 0。 */
+	/** 所有辅助位本步按各自蓄力百分比折算后的力量贡献合计。 */
 	double SecondCatStrength = 0.0;
-	/** 猫的总体力量固定为两只猫贡献相加；单人场景的第二项为 0。 */
+	/** 猫的总体力量为主位贡献与所有辅助位贡献之和。 */
 	double GetCombinedCatStrength() const
 	{
 		return PrimaryOperatorCatStrength + SecondCatStrength;
@@ -60,20 +61,22 @@ struct CATFISHING_API FCatFightSimulationConfig
 
 	/** 猫体力上限，松线喘息回复不超过它。 */
 	double CatStaminaMaximum = 0.0;
-
-	/** 向内游+拖：猫体力消耗 = 鱼力 × 本系数 /秒（规格 0.15）。 */
-	double InwardPullCatDrainPerFishStrength = 0.15;
+	/** 多人蓄力和猫体力配置；鱼体力仍使用下面的既有张力公式。 */
+	FCatFightPowerTuning PowerTuning;
+	/** 主位本步力量百分比；用于按文档计算主位体力，而不是再按鱼力量反推。 */
+	double PrimaryPowerAlpha = 1.0;
+	/** 主位完全放线而辅助位仍发力时，本步额外追加给主位的每秒体力消耗。 */
+	double PrimaryDisruptionStaminaDrainPerSecond = 0.0;
 	/** 向内游+拖：鱼体力消耗 = 猫力 × 本系数 /秒。拖永远双方掉体力，顺从/挣扎只是系数档位不同。 */
 	double InwardPullFishDrainPerCatStrength = 0.08;
 	/** 鱼性格的平静/顺从期体力消耗倍率。 */
 	double BaseDrainMultiplier = 1.0;
 	/** 鱼性格的挣扎期体力消耗倍率；必须高于平静倍率。 */
 	double StruggleDrainMultiplier = 2.0;
-	/** 僵持每秒：本场鱼线耐久 -= 鱼力×0.1；鱼体力 -= 猫力×0.08；猫体力 -= 鱼力×0.12。 */
+	/** 僵持每秒：本场鱼线耐久 -= 鱼力×0.1；鱼体力仍按猫的实时有效合力结算。 */
 	double StalemateRodWearPerFishStrength = 0.1;
 	double StalemateFishDrainPerCatStrength = 0.08;
-	double StalemateCatDrainPerFishStrength = 0.12;
-	/** 右键持续按住期间的猫体力回复 /秒（规格 1.5）；不依赖游向、实际出线或当前线长。 */
+	/** 主位力量归零后的猫体力回复 /秒；右键可主动清空主位蓄力并立即进入该状态。 */
 	double SlackStaminaRegenPerSecond = 1.5;
 
 	/** 鱼挣扎且线杯未松开、鱼线绷紧时的本场鱼线基础磨损 /秒。 */
@@ -176,6 +179,10 @@ struct CATFISHING_API FCatFightStepResult
 	double CarrierMovementAlpha = 0.0;
 	/** 本步把基础猫力、竿向和玩家移动合成后的力量。 */
 	double EffectiveCatStrength = 0.0;
+	/** 当前主位蓄力百分比与多人合力，供 Session/HUD 使用同一权威固定步结果。 */
+	double PrimaryPowerAlpha = 0.0;
+	double CombinedCatStrength = 0.0;
+	int32 ActiveHelperCount = 0;
 	/** 本步鱼线约束反向施加给持竿角色的水平加速度。 */
 	double CarrierPullAccelerationCentimetersPerSecondSquared = 0.0;
 	/** 双端约束允许持竿者沿远离鱼方向保留的速度比例；1 表示无约束。 */

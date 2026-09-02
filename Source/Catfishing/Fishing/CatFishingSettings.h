@@ -73,6 +73,24 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0", ClampMax="1"))
 	double FishExhaustionThreshold = 0.5;
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0")) double EscapeSlackCentimeters = 100.0;
+	/** 主位与辅助位从 0 蓄到各自上限所需秒数。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|Cooperative", meta=(ClampMin="0.05", Units="s"))
+	double FightPowerChargeSeconds = 2.0;
+	/** 松开左键后从满蓄力衰减到 0 所需秒数；主位到 0 后自动进入放线。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|Cooperative", meta=(ClampMin="0.05", Units="s"))
+	double FightPowerDecaySeconds = 1.0;
+	/** 辅助位力量百分比上限，策划案当前为 75%。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|Cooperative", meta=(ClampMin="0.01", ClampMax="1"))
+	double HelperMaximumPowerAlpha = 0.75;
+	/** 主位满蓄力时的基础猫体力消耗；实际消耗按当前蓄力百分比线性缩放。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|Cooperative", meta=(ClampMin="0"))
+	double PrimaryStaminaDrainPerSecondAtFullPower = 10.0;
+	/** 辅助位相对主位的体力消耗倍率。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|Cooperative", meta=(ClampMin="1"))
+	double HelperStaminaDrainMultiplier = 1.5;
+	/** 主位已完全放线但辅助位仍发力时，辅助位消耗中追加给主位的比例。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|Cooperative", meta=(ClampMin="0", ClampMax="1"))
+	double DisruptionPrimaryDrainShare = 0.5;
 
 	/** 一根部署鱼竿最多可占用的操作位；当前产品使用左右两位，数组/站位算法预留到更多协作者。 */
 	UPROPERTY(Config, EditAnywhere, Category="Rod|Operators", meta=(ClampMin="1", ClampMax="8"))
@@ -121,13 +139,10 @@ public:
 	/** 服务器每次按 Q 松开投放的份数。 */
 	UPROPERTY(Config, EditAnywhere, Category="Chum|Throw", meta=(ClampMin="1")) int32 ChumThrowQuantity = 1;
 
-	/** 规格 4.3/4.4 遛鱼判定系数；默认值即规格快照，数值拍定以「参数与校准记录」为准。 */
-	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double InwardPullCatDrainPerFishStrength = 0.15;
 	/** 向内游+拖时鱼的体力消耗系数（× 猫力/秒）；拖永远双方消耗，顺从/挣扎只是档位不同。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double InwardPullFishDrainPerCatStrength = 0.08;
 	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double StalemateRodWearPerFishStrength = 0.1;
 	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double StalemateFishDrainPerCatStrength = 0.08;
-	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double StalemateCatDrainPerFishStrength = 0.12;
 	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double SlackStaminaRegenPerSecond = 3;
 	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="1")) double OverpowerStrengthRatio = 2.0;
 	/** 鱼体力低于该比例后休息期乘以下面的倍率（规格 4.6 临时口径）。 */

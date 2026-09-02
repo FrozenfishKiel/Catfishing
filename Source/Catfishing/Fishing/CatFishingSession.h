@@ -58,9 +58,9 @@ public:
 	FCatFishingCommandResult CutLineFromAuthority(AController* RequestingController,
 		const FCatFishingSessionCommandContext& Context);
 	bool TryEnterHookedFightFromAuthority();
-	bool SetReelingFromAuthority(int64 InputSequence, bool bReeling);
+	bool SetReelingFromAuthority(APlayerState* InputPlayerState, int64 InputSequence, bool bReeling);
 	/** 右键松开线杯写口；仅 HookedFight 且 Runner 运行中生效，收线优先。 */
-	bool SetSlackingFromAuthority(int64 InputSequence, bool bSlacking);
+	bool SetSlackingFromAuthority(APlayerState* InputPlayerState, int64 InputSequence, bool bSlacking);
 	/** 主操作手离开竿位：搏斗期进入无人值守松线，等口期清空当前钓手；都不结束会话。 */
 	void SuspendOperatorFromAuthority();
 	bool IsFightRunnerRunning() const;
@@ -139,6 +139,7 @@ private:
 	friend class FCatFishingSessionCutLineCommandTest;
 	friend class FCatFishingSessionGroundedCutLineCommandTest;
 	friend class FCatFishingServiceRodBoundSessionRoutingTest;
+	friend class UCatFishingFightRunner;
 
 	/** 客户端收到完整 Snapshot 后只广播重读信号，不推进任何玩法。 */
 	UFUNCTION()
@@ -161,6 +162,9 @@ private:
 
 	/** 用 FishingService 的统一权威谓词重读参与者，更新公开人数、合计 FishingStrength 与 FightStamina。 */
 	bool RefreshFightSummary();
+	/** Runner 登记/释放实际被本会话扣过体力的角色，终态只恢复仍归本会话所有的池。 */
+	void RegisterFightStaminaParticipantFromAuthority(ACatCharacter* Character);
+	void UnregisterFightStaminaParticipantFromAuthority(ACatCharacter* Character);
 
 	/** 仅在失败路径重读摘要实际改变时发出高频复制更新。 */
 	void PublishRefreshedFightSummaryIfChanged(bool bSummaryChanged);

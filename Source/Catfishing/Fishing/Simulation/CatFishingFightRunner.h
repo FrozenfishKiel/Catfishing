@@ -10,6 +10,8 @@
 class ACatFishEncounterActor;
 class ACatFishingRodActor;
 class ACatFishingSession;
+class ACatCharacter;
+class APlayerState;
 class UCatAbilitySystemComponent;
 class UCatWaterQuerySubsystem;
 class UStateTree;
@@ -20,6 +22,7 @@ struct CATFISHING_API FCatFishingFightRunnerInit
 	TWeakObjectPtr<ACatFishEncounterActor> FishActor;
 	TWeakObjectPtr<ACatFishingRodActor> RodActor;
 	TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
+	TWeakObjectPtr<APlayerState> PrimaryPlayerState;
 	FCatWaterRegionHandle WaterRegion;
 	FBox FrozenWaterBounds = FBox(ForceInit);
 	FCatFightSimulationConfig Config;
@@ -41,6 +44,22 @@ struct CATFISHING_API FCatFishingFightRunnerInit
 	uint64 RandomSeed = 0;
 };
 
+/** 一名鱼竿操作者在本场搏斗中的服务器私有蓄力/体力绑定。 */
+struct CATFISHING_API FCatFightParticipantRuntime
+{
+	TWeakObjectPtr<APlayerState> PlayerState;
+	TWeakObjectPtr<ACatCharacter> Character;
+	TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
+	double BaseFishingStrength = 0.0;
+	double StaminaMaximum = 0.0;
+	double PowerAlpha = 0.0;
+	double StaminaDrainPerSecond = 0.0;
+	int64 LastInputSequence = 0;
+	bool bPullHeld = false;
+	bool bSlackHeld = false;
+	bool bPrimary = false;
+};
+
 /** Authority-only fixed-step owner of fight simulation and resource side effects. */
 UCLASS()
 class CATFISHING_API UCatFishingFightRunner : public UObject
@@ -52,13 +71,13 @@ public:
 	void Stop();
 	bool IsRunning() const { return bRunning; }
 	/** 左键按住/松开；收线优先于松开线杯。 */
-	bool SetReeling(int64 InputSequence, bool bInReeling);
+	bool SetReeling(APlayerState* InputPlayerState, int64 InputSequence, bool bInReeling);
 	/** 右键按住/松开线杯；按住期间鱼可在最大线长内自由带线。 */
-	bool SetSlacking(int64 InputSequence, bool bInSlacking);
+	bool SetSlacking(APlayerState* InputPlayerState, int64 InputSequence, bool bInSlacking);
 	/** 主操作手离竿后进入无人值守松线；Runner 继续推进，但不再读写旧玩家的力量或体力。 */
 	bool BeginUnattendedSlackFromAuthority();
 	/** 搏斗接力时原子迁移 ASC、力量、体力上限/当前值与新玩家自己的输入序号域。 */
-	bool TransferOperatorFromAuthority(UCatAbilitySystemComponent* NewAbilitySystem,
+	bool TransferOperatorFromAuthority(APlayerState* NewPlayerState, UCatAbilitySystemComponent* NewAbilitySystem,
 		double NewCatStrength, double NewCatStaminaMaximum, double NewCatStamina,
 		int64 InitialInputSequence, bool bInitialPullHeld, bool bInitialSlackHeld);
 	ECatFightCatAction GetCatAction() const { return State.CatAction; }
@@ -69,10 +88,18 @@ public:
 private:
 	void HandleFixedStep();
 	void RefreshCatAction();
+	bool RefreshParticipantsFromRod();
+	bool AddParticipantFromAuthority(APlayerState* PlayerState, bool bPrimary,
+		bool bInitialPullHeld, bool bInitialSlackHeld, int64 InitialInputSequence);
+	FCatFightParticipantRuntime* FindParticipant(APlayerState* PlayerState);
+	FCatFightParticipantRuntime* FindPrimaryParticipant();
+	bool UpdateParticipantPowerAndStrength(double& OutCombinedHelperDrainPerSecond);
+	bool ApplyHelperStaminaChanges(TArray<TWeakObjectPtr<APlayerState>>& OutDepletedHelpers);
 	TWeakObjectPtr<ACatFishingSession> Session;
 	TWeakObjectPtr<ACatFishEncounterActor> FishActor;
 	TWeakObjectPtr<ACatFishingRodActor> RodActor;
 	TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
+	TMap<TWeakObjectPtr<APlayerState>, FCatFightParticipantRuntime> Participants;
 	FCatWaterRegionHandle WaterRegion;
 	FBox FrozenWaterBounds = FBox(ForceInit);
 	FCatFightSimulationConfig Config;
@@ -88,11 +115,9 @@ private:
 	TObjectPtr<UStateTree> BehaviorStateTree = nullptr;
 	FRandomStream Random;
 	FRandomStream SteeringRandom;
-	int64 LastInputSequence = 0;
-	bool bPullHeld = false;
-	bool bSlackHeld = false;
 	FTimerHandle FixedStepTimer;
 	double NextConstraintDiagnosticWorldSeconds = 0.0;
+	double NextPowerDiagnosticWorldSeconds = 0.0;
 	bool bLastConstraintDiagnosticActive = false;
 	bool bInitialized = false;
 	bool bRunning = false;

@@ -178,7 +178,19 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	double CombinedFightStamina = 0.0;
 
-	/** 当前鱼短周期体力剩余；只由 StateTree FightExchange Task 消耗，进入会话时从 FishDefinition 冻结。 */
+	/** 主位当前蓄力百分比；0=完全放线，1=主位满蓄力。 */
+	UPROPERTY(BlueprintReadOnly)
+	float PrimaryPowerAlpha = 0.0f;
+
+	/** 当前固定步真正参与受力的多人力量合计（已经乘各自蓄力百分比，尚未乘竿向/移动修正）。 */
+	UPROPERTY(BlueprintReadOnly)
+	double ActiveCombinedFishingStrength = 0.0;
+
+	/** 当前实际贡献/消耗体力模型中的辅助位数量。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 ActiveHelperCount = 0;
+
+	/** 当前鱼短周期体力剩余；常规搏斗由固定步 Runner 消耗，兼容巨鱼交换由 StateTree Task 消耗。 */
 	UPROPERTY(BlueprintReadOnly)
 	double FishFightStaminaRemaining = 0.0;
 
@@ -191,11 +203,11 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly, meta=(DisplayName="Line Durability Remaining"))
 	double RodDurabilityRemaining = 0.0;
 
-	/** 当前连续收线（左键拖）输入；高频更新不推进离散命令 Revision。 */
+	/** 当前主位蓄力仍大于 0、正在收线；松开左键后的衰减期间保持 true。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bReeling = false;
 
-	/** 当前是否按住右键松开线杯；收线优先，二者同时按住时以 bReeling 为准。 */
+	/** 当前是否已进入放线；主位蓄力归零或主动按住右键时为 true。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bSlacking = false;
 

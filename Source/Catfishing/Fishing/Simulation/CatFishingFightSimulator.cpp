@@ -19,19 +19,20 @@ namespace
 bool FCatFightSimulationConfig::IsValid() const
 {
 	return FMath::IsFinite(FixedStepSeconds) && FixedStepSeconds > 0.0 // 步长必须严格为正，否则无法积分距离
-		&& FMath::IsFinite(PrimaryOperatorCatStrength) && PrimaryOperatorCatStrength > 0.0 // 当前主操作猫必须提供正力量
-		&& FMath::IsFinite(SecondCatStrength) && SecondCatStrength >= 0.0 // 第二只猫尚未接入时为 0，接入后只接受非负贡献
-		&& FMath::IsFinite(GetCombinedCatStrength()) && GetCombinedCatStrength() > 0.0 // 两只猫之和用于判定和消耗系数
+		&& FMath::IsFinite(PrimaryOperatorCatStrength) && PrimaryOperatorCatStrength >= 0.0
+		&& FMath::IsFinite(SecondCatStrength) && SecondCatStrength >= 0.0
+		&& FMath::IsFinite(GetCombinedCatStrength()) && GetCombinedCatStrength() >= 0.0
 		&& FMath::IsFinite(FishStrength) && FishStrength > 0.0 // 鱼力量（已按性格模板折减过）
 		&& FMath::IsFinite(RodStrength) && RodStrength > 0.0 // 钓组静态承载强度，决定瞬间断线判定
 		&& FMath::IsFinite(CatStaminaMaximum) && CatStaminaMaximum > 0.0 // 猫体力上限，松线喘息回复不能超过它
-		&& IsFiniteNonNegative(InwardPullCatDrainPerFishStrength) // 向内游+拖：猫体力消耗系数
+		&& PowerTuning.IsValid()
+		&& FMath::IsFinite(PrimaryPowerAlpha) && PrimaryPowerAlpha >= 0.0 && PrimaryPowerAlpha <= 1.0
+		&& IsFiniteNonNegative(PrimaryDisruptionStaminaDrainPerSecond)
 		&& IsFiniteNonNegative(InwardPullFishDrainPerCatStrength) // 向内游+拖：鱼体力消耗系数
 		&& FMath::IsFinite(BaseDrainMultiplier) && BaseDrainMultiplier > 0.0 // 平静/顺从期体力消耗倍率
 		&& FMath::IsFinite(StruggleDrainMultiplier) && StruggleDrainMultiplier > BaseDrainMultiplier // 挣扎必须更费力
 		&& IsFiniteNonNegative(StalemateRodWearPerFishStrength) // 僵持：本场鱼线负载磨损系数
 		&& IsFiniteNonNegative(StalemateFishDrainPerCatStrength) // 僵持：鱼体力消耗系数
-		&& IsFiniteNonNegative(StalemateCatDrainPerFishStrength) // 僵持：猫体力消耗系数
 		&& IsFiniteNonNegative(SlackStaminaRegenPerSecond) // 松开线杯时猫体力回复速率
 		&& IsFiniteNonNegative(StruggleHoldRodWearPerSecond) // 鱼挣扎但猫不拖不放时的竿基础磨损速率（可配置为 0）
 		&& FMath::IsFinite(TautRodWearMultiplier) && TautRodWearMultiplier >= 1.0 // 线绷紧时的磨损放大倍率，至少 1 倍
@@ -254,8 +255,6 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 			// 不再让朝内或横向游动因 LineLoad=0 而把双方消耗一并清零。
 			if (bTractionReachesTaut)
 			{
-				CatDrain = Config.FishStrength * Config.InwardPullCatDrainPerFishStrength
-					* Config.BaseDrainMultiplier * CatEffortMultiplier * Dt;
 				FishDrain = EffectiveCatStrength * Config.InwardPullFishDrainPerCatStrength
 					* Config.BaseDrainMultiplier * Dt;
 			}
@@ -270,9 +269,6 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 					* Config.TautRodWearMultiplier;
 				FishDrain = EffectiveCatStrength * ConstraintLoad
 					* Config.StalemateFishDrainPerCatStrength * Config.BaseDrainMultiplier * Dt;
-				CatDrain = Config.FishStrength * ConstraintLoad
-					* Config.StalemateCatDrainPerFishStrength * Config.BaseDrainMultiplier
-					* CatEffortMultiplier * Dt;
 			}
 		}
 	}
@@ -307,8 +303,6 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 			const double StaminaExchangeLoad = bTractionReachesTaut ? 1.0 : ConstraintLoad;
 			FishDrain = EffectiveCatStrength * StaminaExchangeLoad * Config.StalemateFishDrainPerCatStrength
 				* Config.StruggleDrainMultiplier * Dt;
-			CatDrain = Config.FishStrength * StaminaExchangeLoad * Config.StalemateCatDrainPerFishStrength
-				* Config.StruggleDrainMultiplier * CatEffortMultiplier * Dt;
 		}
 	}
 	else if (bLineRestraining)
@@ -326,8 +320,6 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		const double StaminaExchangeLoad = bTractionReachesTaut ? 1.0 : ConstraintLoad;
 		FishDrain = EffectiveCatStrength * StaminaExchangeLoad * Config.StalemateFishDrainPerCatStrength
 			* Config.StruggleDrainMultiplier * Dt;
-		CatDrain = Config.FishStrength * StaminaExchangeLoad * Config.StalemateCatDrainPerFishStrength
-			* Config.StruggleDrainMultiplier * CatEffortMultiplier * Dt;
 	}
 	else
 	{
@@ -335,9 +327,21 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		// 有余线时不产生张力，也不凭空磨损鱼竿；鱼先消费余线，碰到线端的下一步才进入上面的资源交换。
 	}
 
-	// 体力回复由“右键当前是否持续按住”直接决定，不依赖鱼的游向、是否实际带出新线或是否已经到达 L_max。
-	// 右键是明确的休息动作，所以即使线端仍有鱼线负载，本步猫体力也按回复结算；鱼体力和鱼线磨损仍保留上面的结果。
-	if (bOperatorPresent && bSlacking)
+	// 猫体力与鱼体力使用不同规则：鱼仍按上面的既有张力/性格公式，猫改为策划案的
+	// “基础 10/s × 当前蓄力百分比”。竿向不佳和持竿者额外做功继续提高主位成本。
+	if (bOperatorPresent && bPulling)
+	{
+		CatDrain = (Config.PowerTuning.PrimaryStaminaDrainPerSecondAtFullPower
+			* Config.PrimaryPowerAlpha * CatEffortMultiplier
+			+ Config.PrimaryDisruptionStaminaDrainPerSecond) * Dt;
+	}
+	else if (bOperatorPresent && bSlacking
+		&& Config.PrimaryDisruptionStaminaDrainPerSecond > UE_DOUBLE_SMALL_NUMBER)
+	{
+		// 主位完全放线而辅助位仍在发力：辅助者照常付费，主位再承担其合计消耗的配置比例。
+		CatDrain = Config.PrimaryDisruptionStaminaDrainPerSecond * Dt;
+	}
+	else if (bOperatorPresent && bSlacking)
 	{
 		const double Regen = Config.SlackStaminaRegenPerSecond * Dt;
 		const double Capped = FMath::Min(Config.CatStaminaMaximum, State.CatStamina + Regen);
@@ -494,6 +498,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	Result.RodLeverageMultiplier = RodLeverage;
 	Result.CarrierMovementAlpha = CarrierMovementAlpha;
 	Result.EffectiveCatStrength = EffectiveCatStrength;
+	Result.PrimaryPowerAlpha = Config.PrimaryPowerAlpha;
+	Result.CombinedCatStrength = CombinedCatStrength;
 	const double PullLoad = Result.bLineTaut && bOperatorPresent && RodConstraint.bRodHeld
 		? FMath::Clamp(FMath::Max(ConstraintLoad, Result.NormalizedTension), 0.0, 1.0) : 0.0;
 	const double FishShareOfOpposition = Config.FishStrength

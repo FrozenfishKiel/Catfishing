@@ -494,10 +494,9 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 		Result.Error = State.bBroken ? ECatFishingCommandError::RodBroken : ECatFishingCommandError::RodOccupied;
 		return Result;
 	}
-	// 辅助位当前承载共享鱼竿会话的接力候选；主位退出时数组会压紧，副位立即晋升并接管手持鱼竿。
-	// 玩家输入仍只路由当前主位，避免两个独立输入序号域同时驱动单一 Runner。
-	// TODO(CooperativeFishing): 合力玩法落地时，从 Rod.OperatorPlayerStates 每次重建 Session 参与集合，
-	// 并明确力量、体力消耗与双输入仲裁；不能把“尚未合力”误解成“不允许第二只猫加入同一根竿”。
+	// OperatorPlayerStates 是实时合力与接力的唯一权威容器：0 号主位控制线杯并贡献 0~100% 力量，
+	// 其余操作位各自提交左键蓄力并贡献 0~75% 力量；主位退出时数组压紧，下一位从自身当前体力、0% 力量接管。
+	// Runner 每个固定步从该容器重建参与集合并分别结算体力，不能在 Service 缓存另一份单/多人模式。
 	// HookedFight 接力会同步迁移 Runner 的 ASC/力量/体力/输入域，不能只改公开 FisherPlayerState。
 	ACatFishingSession* BoundSession = FindActiveSessionByRod(Rod);
 	const bool bNeedsSessionTakeover = RequestedSlotIndex == 0 && BoundSession

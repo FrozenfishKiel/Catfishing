@@ -621,6 +621,45 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		}
 		FGuid SessionId;
 		FCatFishingSessionSnapshot Snapshot;
+		// HookedFight 的左键按鱼竿全部操作位路由：主位控制收/放线并蓄力，辅助位只更新自己的蓄力。
+		// 这条分支必须早于“仅主位活动会话”查询，否则辅助者的输入会被误当成新抛竿。
+		if (ACatFishingRodActor* OperatedRod = Fishing->FindRodOperatedBy(Controller->PlayerState))
+		{
+			if (ACatFishingSession* OperatedSession = Fishing->FindActiveSessionByRod(OperatedRod))
+			{
+				const FCatFishingSessionSnapshot& OperatedSnapshot = OperatedSession->GetSnapshot();
+				if (OperatedSnapshot.Phase == ECatFishingPhase::HookedFight
+					&& (CommandType == ECatFishingCommandType::RequestHook
+						|| CommandType == ECatFishingCommandType::PrimaryReleased
+						|| CommandType == ECatFishingCommandType::SlackPressed
+						|| CommandType == ECatFishingCommandType::SlackReleased))
+				{
+					Result.FishingSessionId = OperatedSnapshot.FishingSessionId;
+					if (CommandType == ECatFishingCommandType::RequestHook
+						|| CommandType == ECatFishingCommandType::PrimaryReleased)
+					{
+						Result.bCommitted = OperatedSession->SetReelingFromAuthority(
+							Controller->PlayerState, Edge.InputSequence,
+							CommandType == ECatFishingCommandType::RequestHook);
+					}
+					else if (OperatedRod->IsPrimaryOperator(Controller->PlayerState))
+					{
+						Result.bCommitted = OperatedSession->SetSlackingFromAuthority(
+							Controller->PlayerState, Edge.InputSequence,
+							CommandType == ECatFishingCommandType::SlackPressed);
+					}
+					else
+					{
+						// 策划案中辅助位没有线杯控制；右键对辅助位是无害 no-op。
+						Result.bCommitted = true;
+					}
+					Result.Error = Result.bCommitted
+						? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;
+					DeliverResultFromAuthority(Result);
+					return;
+				}
+			}
+		}
 		// 按当前主操作位对应的鱼竿判断是否有会话；玩家留在其他鱼竿上的会话不会截获这里的输入。
 		if (!Fishing->TryGetActiveSessionForController(Controller, SessionId, Snapshot))
 		{
@@ -741,7 +780,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 						|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel)
 					{
 						// 搏斗阶段：左键按下语义变成“开始收线”，InputSequence 用于时序仲裁
-						Result.bCommitted = Session->SetReelingFromAuthority(Edge.InputSequence, true);
+						Result.bCommitted = Session->SetReelingFromAuthority(
+							Controller->PlayerState, Edge.InputSequence, true);
 						Result.Error = Result.bCommitted
 							? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;
 						DeliverResultFromAuthority(Result);
@@ -761,7 +801,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 						|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel)
 					{
 						// 搏斗阶段松开左键 = 停止收线
-						Result.bCommitted = Session->SetReelingFromAuthority(Edge.InputSequence, false);
+						Result.bCommitted = Session->SetReelingFromAuthority(
+							Controller->PlayerState, Edge.InputSequence, false);
 						Result.Error = Result.bCommitted
 							? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;
 					}
@@ -781,7 +822,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 					if (Snapshot.Phase == ECatFishingPhase::HookedFight)
 					{
 						// 按下/松开都转成同一个权威写口，用命令类型本身当作“是否按下”的布尔值
-						Result.bCommitted = Session->SetSlackingFromAuthority(Edge.InputSequence,
+						Result.bCommitted = Session->SetSlackingFromAuthority(Controller->PlayerState,
+							Edge.InputSequence,
 							CommandType == ECatFishingCommandType::SlackPressed);
 						Result.Error = Result.bCommitted
 							? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;

@@ -68,92 +68,37 @@ bool FCatFishingSessionPublicSnapshotDefaultsTest::RunTest(const FString& Parame
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatFishingFightRunnerInitialHeldInputTest,
-	"Catfishing.Unit.Fishing.Session.NewFightRunnerRestoresHeldInputWithPullPriority",
+	FCatFishingCooperativePowerProgressionTest,
+	"Catfishing.Unit.Fishing.Simulation.CooperativePowerChargesDecaysAndPricesEachRole",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-bool FCatFishingFightRunnerInitialHeldInputTest::RunTest(const FString& Parameters)
+bool FCatFishingCooperativePowerProgressionTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	FTestWorldWrapper WorldWrapper;
-	TestTrue(TEXT("creates runner held-input world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
-	UWorld* World = WorldWrapper.GetTestWorld();
-	ACatFishingSession* Session = World ? World->SpawnActor<ACatFishingSession>() : nullptr;
-	ACatFishEncounterActor* Fish = World ? World->SpawnActor<ACatFishEncounterActor>() : nullptr;
-	ACatFishingRodActor* Rod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
-	UCatAbilitySystemComponent* AbilitySystem = Session
-		? NewObject<UCatAbilitySystemComponent>(Session, TEXT("HeldInputAbilitySystem")) : nullptr;
-	UStateTree* BehaviorStateTree = Session ? NewObject<UStateTree>(Session, TEXT("HeldInputStateTree")) : nullptr;
-	if (!TestNotNull(TEXT("spawns runner session"), Session)
-		|| !TestNotNull(TEXT("spawns runner fish"), Fish)
-		|| !TestNotNull(TEXT("spawns runner rod"), Rod)
-		|| !TestNotNull(TEXT("creates runner ability system"), AbilitySystem)
-		|| !TestNotNull(TEXT("creates runner behavior tree"), BehaviorStateTree))
-	{
-		return false;
-	}
+	const FCatFightPowerTuning Tuning;
+	const FCatFightPowerStepResult PrimaryHalf = FCatFishingCooperativePowerModel::StepParticipant(
+		Tuning, 1.0, 0.0, true, true, 50.0);
+	TestTrue(TEXT("primary half-charge step succeeds"), PrimaryHalf.bSucceeded);
+	TestEqual(TEXT("primary reaches fifty percent after one of two charge seconds"),
+		PrimaryHalf.PowerAlpha, 0.5, 1e-9);
+	TestEqual(TEXT("primary strength is scaled by current power"),
+		PrimaryHalf.StrengthContribution, 25.0, 1e-9);
+	TestEqual(TEXT("primary stamina costs ten per second at full power"),
+		PrimaryHalf.StaminaDrainPerSecond, 5.0, 1e-9);
 
-	FCatFishingFightRunnerInit BaseInit;
-	BaseInit.Session = Session;
-	BaseInit.FishActor = Fish;
-	BaseInit.RodActor = Rod;
-	BaseInit.AbilitySystem = AbilitySystem;
-	BaseInit.WaterRegion.RegionId = TEXT("HeldInputWater");
-	BaseInit.WaterRegion.GeometryRevision = 1;
-	BaseInit.FrozenWaterBounds = FBox(FVector(-1000.0), FVector(1000.0));
-	BaseInit.Config.FixedStepSeconds = 0.05;
-	BaseInit.Config.PrimaryOperatorCatStrength = 50.0;
-	BaseInit.Config.FishStrength = 40.0;
-	BaseInit.Config.RodStrength = 60.0;
-	BaseInit.Config.CatStaminaMaximum = 100.0;
-	BaseInit.Config.ReelSpeedCentimetersPerSecond = 100.0;
-	BaseInit.Config.FishCalmSpeedCentimetersPerSecond = 25.0;
-	BaseInit.Config.FishStruggleSpeedCentimetersPerSecond = 75.0;
-	BaseInit.Config.MaximumLineLengthCentimeters = 1000.0;
-	BaseInit.Config.RodDurability = 100.0;
-	BaseInit.InitialState.CatStamina = 100.0;
-	BaseInit.InitialState.FishStamina = 50.0;
-	BaseInit.InitialState.LineLengthCentimeters = 500.0;
-	BaseInit.InitialState.FishWorldPosition = FVector(500.0, 0.0, 0.0);
-	BaseInit.InitialState.MotionIntent = ECatFishMotionIntent::StrugglingOutward;
-	BaseInit.CalmDurationRangeSeconds = FVector2D(1.0, 2.0);
-	BaseInit.StruggleDurationRangeSeconds = FVector2D(1.0, 2.0);
-	BaseInit.BehaviorStateTree = BehaviorStateTree;
-	BaseInit.RandomSeed = 1234;
-	BaseInit.InitialInputSequence = 42;
+	const FCatFightPowerStepResult PrimaryDecayed = FCatFishingCooperativePowerModel::StepParticipant(
+		Tuning, 0.5, 1.0, false, true, 50.0);
+	TestEqual(TEXT("primary release decays over one second"), PrimaryDecayed.PowerAlpha, 0.5, 1e-9);
 
-	FCatFishingFightRunnerInit SlackInit = BaseInit;
-	SlackInit.bInitialSlackHeld = true;
-	UCatFishingFightRunner* SlackRunner = NewObject<UCatFishingFightRunner>(Session);
-	TestTrue(TEXT("initializes new runner with carried slack input"),
-		SlackRunner->InitializeFromAuthority(SlackInit));
-	TestEqual(TEXT("held right mouse restores open spool"),
-		SlackRunner->GetCatAction(), ECatFightCatAction::Slack);
-
-	FCatFishingFightRunnerInit BothInit = BaseInit;
-	BothInit.bInitialPullHeld = true;
-	BothInit.bInitialSlackHeld = true;
-	UCatFishingFightRunner* BothRunner = NewObject<UCatFishingFightRunner>(Session);
-	TestTrue(TEXT("initializes new runner with both physical buttons held"),
-		BothRunner->InitializeFromAuthority(BothInit));
-	TestEqual(TEXT("pull remains authoritative priority when both buttons are held"),
-		BothRunner->GetCatAction(), ECatFightCatAction::Pull);
-	TestTrue(TEXT("operator leave switches the live simulation state to unattended slack"),
-		BothRunner->BeginUnattendedSlackFromAuthority());
-	TestFalse(TEXT("unattended runner no longer owns a player resource source"),
-		BothRunner->IsOperatorPresentForAuthority());
-	TestEqual(TEXT("unattended runner forces the same spool geometry as right mouse slack"),
-		BothRunner->GetCatAction(), ECatFightCatAction::Slack);
-
-	UCatAbilitySystemComponent* TakeoverAbilitySystem = NewObject<UCatAbilitySystemComponent>(
-		Session, TEXT("TakeoverAbilitySystem"));
-	TestNotNull(TEXT("creates takeover ability system"), TakeoverAbilitySystem);
-	TestTrue(TEXT("fight takeover rebinds a new player resource and independent input sequence domain"),
-		BothRunner->TransferOperatorFromAuthority(
-			TakeoverAbilitySystem, 65.0, 120.0, 80.0, 7, true, false));
-	TestTrue(TEXT("takeover restores an active operator"), BothRunner->IsOperatorPresentForAuthority());
-	TestEqual(TEXT("takeover applies the new player's held pull immediately"),
-		BothRunner->GetCatAction(), ECatFightCatAction::Pull);
+	const FCatFightPowerStepResult HelperFull = FCatFishingCooperativePowerModel::StepParticipant(
+		Tuning, 2.0, 0.0, true, false, 50.0);
+	TestEqual(TEXT("helper is capped at seventy five percent"), HelperFull.PowerAlpha, 0.75, 1e-9);
+	TestEqual(TEXT("helper contributes capped strength"), HelperFull.StrengthContribution, 37.5, 1e-9);
+	TestEqual(TEXT("helper stamina applies the one point five multiplier"),
+		HelperFull.StaminaDrainPerSecond, 11.25, 1e-9);
+	TestEqual(TEXT("released primary inherits half of disrupting helper drain"),
+		FCatFishingCooperativePowerModel::ComputePrimaryDisruptionDrainPerSecond(
+			Tuning, 0.0, HelperFull.StaminaDrainPerSecond), 5.625, 1e-9);
 	return !HasAnyErrors();
 }
 
