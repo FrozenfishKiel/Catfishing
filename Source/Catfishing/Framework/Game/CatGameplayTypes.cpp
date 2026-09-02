@@ -1731,12 +1731,13 @@ APlayerState* ACatfishingGameModeBase::ResolvePlayerStateByStableNetId(const FSt
 		? Record->Controller->PlayerState : nullptr;
 }
 
-// GameState 开始流程：先完成父类注册，再记录实际类型；Run 快照只由 authority GameMode setter 写入。
+// GameState 构造流程：只创建 ChumField 公开复制组件，让客户端可读窝点表现事实；Run、Help 和 Shop 快照仍保持默认值，等待 authority setter 写入。
 ACatfishingGameState::ACatfishingGameState()
 {
 	ChumFieldReplication = CreateDefaultSubobject<UCatChumFieldReplicationComponent>(TEXT("ChumFieldReplication"));
 }
 
+// GameState 开始流程：先完成父类 BeginPlay，再写一条实际类日志；不在这里补算 Run、Social 或商店快照，避免绕过 GameMode 的唯一写口。
 void ACatfishingGameState::BeginPlay()
 {
 	Super::BeginPlay();
@@ -1788,6 +1789,7 @@ const FCatHelpSignalSnapshot& ACatfishingGameState::GetLastHelpSignal() const
 	return LastHelpSignal;
 }
 
+// 商店经济快照写入流程：只接受服务器 authority，整体替换团队余额、货架和公开交易记录；写入后立即请求网络更新并广播本机 UI 重读事件。
 void ACatfishingGameState::SetShopEconomySnapshotFromAuthority(
 	const FCatShopPublicEconomySnapshot& NewSnapshot)
 {
@@ -1800,11 +1802,13 @@ void ACatfishingGameState::SetShopEconomySnapshotFromAuthority(
 	OnShopEconomySnapshotChanged.Broadcast();
 }
 
+// 商店经济快照读取流程：返回服务器最终值或客户端最近复制值；调用方只能展示，不通过该引用确认交付或修改团队余额。
 const FCatShopPublicEconomySnapshot& ACatfishingGameState::GetShopEconomySnapshot() const
 {
 	return ShopEconomySnapshot;
 }
 
+// ChumField 复制组件写口读取流程：仅 authority 返回可写组件，客户端得到空指针，防止表现层绕过环境/窝点服务发布公共窝点。
 UCatChumFieldReplicationComponent* ACatfishingGameState::GetChumFieldReplicationFromAuthority()
 {
 	return HasAuthority() ? ChumFieldReplication : nullptr;
@@ -1828,6 +1832,7 @@ void ACatfishingGameState::OnRep_HelpSignal()
 		LastHelpSignal.bGlobal ? TEXT("true") : TEXT("false"));
 }
 
+// 商店经济复制回调流程：客户端收到整份公开快照后只广播重读通知并写诊断日志；不在 RepNotify 中确认订单交付或推导余额变化。
 void ACatfishingGameState::OnRep_ShopEconomySnapshot()
 {
 	OnShopEconomySnapshotChanged.Broadcast();
@@ -2080,6 +2085,7 @@ void ACatfishingPlayerController::NotifyLocalPlayerUISubsystemPawnChanged()
 	}
 }
 
+// 输入后处理流程：先保留父类每帧输入收尾，再把本帧 Delta/GamePaused 交给当前 Pawn 的 ASC；没有有效 ASC 时保持静默，不缓存旧 Pawn。
 void ACatfishingPlayerController::PostProcessInput(const float DeltaTime, const bool bGamePaused)
 {
 	Super::PostProcessInput(DeltaTime, bGamePaused);

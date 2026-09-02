@@ -272,6 +272,7 @@ namespace
 		TEXT("重设当前 DayActive 从现在开始持续的秒数，例如 cat.RunEnvironmentSocial.DayLength 60；只能在服务器/ListenServer/Standalone 生效。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SetRunEnvironmentSocialDayLengthForWorld),
 		ECVF_Cheat);
+
 }
 #endif
 
@@ -281,7 +282,7 @@ void UCatRunEnvironmentDebugSubsystem::Initialize(FSubsystemCollectionBase& Coll
 	Super::Initialize(Collection);
 }
 
-// 反初始化流程：本子系统没有委托、Timer 或领域对象所有权，只按引擎顺序释放父类资源。
+// 反初始化流程：本子系统不持有领域委托或调试计时器，只按引擎顺序释放父类资源；正式领域对象和复制状态仍由 GameMode/GameState 自己收口。
 void UCatRunEnvironmentDebugSubsystem::Deinitialize()
 {
 	Super::Deinitialize();

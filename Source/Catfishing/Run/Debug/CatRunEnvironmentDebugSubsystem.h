@@ -8,7 +8,7 @@
 class APlayerController;
 
 /**
- * RunEnvironmentSocial 的开发期诊断入口；常驻面板和 Dump 只读 GameState 复制事实，DayLength 指令只请求服务器 GameMode 重排当前白天。
+ * RunEnvironmentSocial 的开发期诊断入口；常驻面板和 Dump 只读 GameState 复制事实，DayLength 只请求服务器 GameMode 重排当前白天时钟。
  * 打包 Development 可通过 `cat.RunEnvironmentSocial.Debug 1` 打开屏幕信息，通过 `cat.RunEnvironmentSocial.Dump` 写一次结构化日志，通过 `cat.RunEnvironmentSocial.DayLength 60` 调整当前白天剩余时长；Shipping 不创建本子系统。
  */
 UCLASS()
@@ -19,7 +19,7 @@ class CATFISHING_API UCatRunEnvironmentDebugSubsystem final : public UTickableWo
 public:
 	/** World 创建时不做状态订阅；Debug 开关由 Console Variable 低频读取，避免给正式运行链增加生命周期依赖。 */
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
-	/** World 结束时仅释放父类资源；本子系统不拥有任何领域对象或委托绑定。 */
+	/** World 结束时按引擎生命周期释放本地诊断入口；本子系统不拥有领域对象、委托绑定或额外计时器。 */
 	virtual void Deinitialize() override;
 	/** 只在非 Shipping 的游戏 World 创建；编辑器资源浏览、CDO 和菜单外 World 不需要该运行时诊断入口。 */
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
