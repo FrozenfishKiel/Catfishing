@@ -66,6 +66,39 @@ namespace CatGameplayPlayerLimits
 	inline constexpr int32 MaxCampSpawnPlayers = 4;
 }
 
+#if !UE_BUILD_SHIPPING
+/** 服务器 Run 私有调试快照；只在非 Shipping 的服务器本机生成给诊断面板读取，字段来自 GameMode 当前内存事实，不复制给客户端，也不成为第二份玩法真相。 */
+struct FCatRunAuthorityDebugSnapshot
+{
+	/** 当前读取方是否处在 authority GameMode 上；false 表示面板只能依赖 GameState 复制结果，看不到服务器私有门禁。 */
+	bool bHasAuthorityGameMode = false;
+
+	/** Run 玩法命令总门当前是否打开；GameMode 是唯一写方，调试面板只用它解释公开 Phase 与服务器命令门是否一致。 */
+	bool bRunCommandsOpen = false;
+
+	/** ST_RunFlow 组件当前是否挂在 GameMode 上；组件缺失时服务器无法消费额度、ready 或结算事件。 */
+	bool bRunStateTreeAssigned = false;
+
+	/** ST_RunFlow 组件当前是否处于运行态；事件只会在运行态下被 StateTree 正式接收。 */
+	bool bRunStateTreeRunning = false;
+
+	/** Run 启动期间首个 EnterPhase Task 是否仍在回调窗口内；它解释启动阶段短暂“StateTree 已启动但公开阶段尚未稳定”的合法状态。 */
+	bool bRunStartupInProgress = false;
+
+	/** 本轮普通夜晚是否已经发过全员 ready 事件；true 后撤销 ready 不应再重新打开 StateTree 事件窗口。 */
+	bool bAllEligibleReadyEventSent = false;
+
+	/** 普通夜晚被冻结的可提交翻天 ready 的玩家数量；由服务器在进入 NormalNight 时写入，面板用它核对 ready 是否有资格集合。 */
+	int32 NightReadyEligibleCount = 0;
+
+	/** 普通夜晚已经提交 ready 的玩家数量；由服务器命令写口维护，面板只读显示。 */
+	int32 NightReadyCount = 0;
+
+	/** 最近一次 StateTree 事件或 EnterPhase 的处理结果；用来判断事件已经发出但资产没有发生阶段转移的情况。 */
+	FCatRunTransitionResult LastRunFlowResult;
+};
+#endif
+
 /** 前台专用模式；明确不生成默认 Pawn，只承载 LocalPlayer Online UI。 */
 UCLASS()
 class CATFISHING_API ACatFrontendGameMode : public AGameModeBase
@@ -134,6 +167,8 @@ public:
 #if !UE_BUILD_SHIPPING
 	/** 开发期调试入口：在服务器开放的 DayActive 上，把当前白天从此刻起的剩余时长重设为可进入 UE timer 的正秒数；成功会重写时间窗口、重排 timer、递增 Revision 并发布 RunPublicState，失败返回 false 且不改天数或客户端本地状态。 */
 	bool ApplyDebugDayLengthSeconds(double NewDayLengthSeconds);
+	/** 开发期只读诊断入口：把 GameMode 不复制的 StateTree、命令门和夜晚 ready 集合折成一次性副本；调用者只能展示，不能据此推进 Run。 */
+	FCatRunAuthorityDebugSnapshot GetAuthorityDebugSnapshotForDebug() const;
 #endif
 	/** Online Client 主动离局前标记当前 Controller；Logout 据此按 VoluntaryLeaveRecovery 决定是否保留重连准入。 */
 	void MarkVoluntaryLeave(AController* Controller);

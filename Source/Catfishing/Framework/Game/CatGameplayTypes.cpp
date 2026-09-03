@@ -1631,6 +1631,27 @@ const FCatRunPublicState& ACatfishingGameModeBase::GetRunPublicState() const
 }
 
 #if !UE_BUILD_SHIPPING
+// 开发期服务器快照流程：先创建一次性副本并标记当前实例是否有 authority；不是服务器时立刻返回空快照。服务器路径只复制私有门禁、StateTree 运行态和最近事件结果给调试面板，既不写 GameState，也不发网络同步，避免形成第二套同步状态。
+FCatRunAuthorityDebugSnapshot ACatfishingGameModeBase::GetAuthorityDebugSnapshotForDebug() const
+{
+	FCatRunAuthorityDebugSnapshot Snapshot;
+	Snapshot.bHasAuthorityGameMode = HasAuthority();
+	if (!Snapshot.bHasAuthorityGameMode)
+	{
+		return Snapshot;
+	}
+
+	Snapshot.bRunCommandsOpen = bRunCommandsOpen;
+	Snapshot.bRunStateTreeAssigned = RunStateTreeComponent != nullptr;
+	Snapshot.bRunStateTreeRunning = RunStateTreeComponent && RunStateTreeComponent->IsRunning();
+	Snapshot.bRunStartupInProgress = bRunStartupInProgress;
+	Snapshot.bAllEligibleReadyEventSent = bAllEligibleReadyEventSent;
+	Snapshot.NightReadyEligibleCount = NightReadyEligibleIds.Num();
+	Snapshot.NightReadyCount = NightReadyIds.Num();
+	Snapshot.LastRunFlowResult = LastRunFlowResult;
+	return Snapshot;
+}
+
 // 开发期白天长度调整流程：
 // 1. 先校验 authority、World、有限正秒数、可用 timer 秒数和严格未来的服务器截止点；非法输入只写拒绝日志，不改公开状态。
 // 2. 再确认当前仍是钓鱼与额度都开放的 DayActive，防止达标/截止后的过渡态被调试指令续命。
