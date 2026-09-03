@@ -367,6 +367,10 @@ namespace
 		if (RunState.Phase.Phase == ECatRunPhase::DayActive
 			&& (!RunState.Phase.bFishingAllowed || !RunState.Phase.bQuotaOpen))
 		{
+			if (AuthoritySnapshot && AuthoritySnapshot->bDebugSkipToNextDayRequested)
+			{
+				return TEXT("等待 StateTree 进入普通夜晚：跳天加速已经用正式额度命令关闭额度和钓鱼，正在等状态机消费 QuotaReached。");
+			}
 			return TEXT("异常：公开阶段仍是白天，但钓鱼/额度已经关闭；通常表示 StateTree 没有进入夜晚。");
 		}
 		if (RunState.Phase.Phase == ECatRunPhase::DayActive
@@ -393,6 +397,11 @@ namespace
 				&& AuthoritySnapshot->bAllEligibleReadyEventSent)
 			{
 				return TEXT("等待 StateTree 推进：全员 ready 事件已发出，但公开阶段还在普通夜晚；如果持续不变，说明事件没有进入下一天分支。");
+			}
+			if (RunState.Phase.Phase == ECatRunPhase::NormalNight
+				&& AuthoritySnapshot->bDebugSkipToNextDayRequested)
+			{
+				return TEXT("跳天加速正在普通夜晚走正式 ready：如果 ready 数量没有追上资格数量，需要看玩家是否仍在可见且合资格集合里。");
 			}
 			if (!AuthoritySnapshot->bRunCommandsOpen
 				&& RunState.Phase.Phase != ECatRunPhase::Ending && RunState.Phase.Phase != ECatRunPhase::Ended)
@@ -552,6 +561,11 @@ namespace
 			Lines.Add({ FString::Printf(TEXT("服务器私有：夜晚资格 %d ｜ 夜晚 ready %d ｜ 已发全员 ready 事件 %s"),
 				AuthoritySnapshotPtr->NightReadyEligibleCount, AuthoritySnapshotPtr->NightReadyCount,
 				FormatBoolForPanel(AuthoritySnapshotPtr->bAllEligibleReadyEventSent)), TextColor });
+			Lines.Add({ FString::Printf(TEXT("服务器私有：跳天加速 %s ｜ 请求天 %d ｜ 请求 Run %s"),
+				FormatBoolForPanel(AuthoritySnapshotPtr->bDebugSkipToNextDayRequested),
+				AuthoritySnapshotPtr->DebugSkipToNextDayDayIndex,
+				*AuthoritySnapshotPtr->DebugSkipToNextDayRunId.ToString(EGuidFormats::DigitsWithHyphens)),
+				AuthoritySnapshotPtr->bDebugSkipToNextDayRequested ? WarningColor : TextColor });
 			Lines.Add({ FString::Printf(TEXT("最近 StateTree 结果：应用 %s ｜ 原因 %s ｜ 错误 %s ｜ Revision %lld"),
 				FormatBoolForPanel(AuthoritySnapshotPtr->LastRunFlowResult.bApplied),
 				*FormatTransitionReasonForPanel(AuthoritySnapshotPtr->LastRunFlowResult.Reason),

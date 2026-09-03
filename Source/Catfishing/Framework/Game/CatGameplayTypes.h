@@ -96,6 +96,15 @@ struct FCatRunAuthorityDebugSnapshot
 
 	/** 最近一次 StateTree 事件或 EnterPhase 的处理结果；用来判断事件已经发出但资产没有发生阶段转移的情况。 */
 	FCatRunTransitionResult LastRunFlowResult;
+
+	/** 开发期跳天加速是否正在等待正式流程推进；只暴露调试请求状态，不参与客户端玩法判断。 */
+	bool bDebugSkipToNextDayRequested = false;
+
+	/** 开发期跳天加速请求所属 Run；面板用它判断请求是否仍对应当前一局。 */
+	FGuid DebugSkipToNextDayRunId;
+
+	/** 开发期跳天加速请求所属天数；面板用它解释当前是在等本天进夜晚还是等下一天白天。 */
+	int32 DebugSkipToNextDayDayIndex = 0;
 };
 #endif
 
@@ -167,6 +176,8 @@ public:
 #if !UE_BUILD_SHIPPING
 	/** 开发期调试入口：在服务器开放的 DayActive 上，把当前白天从此刻起的剩余时长重设为可进入 UE timer 的正秒数；成功会重写时间窗口、重排 timer、递增 Revision 并发布 RunPublicState，失败返回 false 且不改天数或客户端本地状态。 */
 	bool ApplyDebugDayLengthSeconds(double NewDayLengthSeconds);
+	/** 开发期调试入口：请求服务器用正式额度与夜晚 ready 命令把当前 Run 加速到下一天；返回 true 表示请求已被接收或同日请求已在等待推进，返回 false 表示当前无 authority、无 World、阶段不支持或正式命令 gate 拒绝；Phase 与 DayIndex 仍只由 StateTree 阶段入口写入。 */
+	bool ApplyDebugSkipToNextDay();
 	/** 开发期只读诊断入口：把 GameMode 不复制的 StateTree、命令门和夜晚 ready 集合折成一次性副本；调用者只能展示，不能据此推进 Run。 */
 	FCatRunAuthorityDebugSnapshot GetAuthorityDebugSnapshotForDebug() const;
 #endif
@@ -253,6 +264,24 @@ private:
 	void SubmitNaturalChumFieldIfConfigured();
 	/** 只向正在运行的 StateTree 发送稳定 GameplayTag；本方法不包含 Phase 转移表。 */
 	bool SendRunStateTreeEvent(FGameplayTag EventTag, ECatRunTransitionReason Reason);
+#if !UE_BUILD_SHIPPING
+	/** 开发期跳天加速的当前 Run/Day 是否仍匹配；只用于避免迟到的调试请求碰到下一局或下一天。 */
+	bool IsDebugSkipToNextDayRequestCurrent() const;
+	/** 开发期跳天加速收口；进入新天、结算或 World 结束时清掉调试请求，不改正式 Run 状态。 */
+	void ClearDebugSkipToNextDayRequest();
+	/** 开发期跳天加速的玩家选择入口；返回当前仍能走正式 Run 命令 gate 的第一名服务器可见玩家。 */
+	APlayerController* FindDebugSkipToNextDayController() const;
+	/** 开发期跳天加速的额度提交入口；只在开放 DayActive 上构造一条正式额度贡献命令，返回 true 表示额度命令首次提交并发出 QuotaReached，返回 false 表示白天 gate、额度差值或 Active Controller 不满足且不会推进 StateTree。 */
+	bool SubmitDebugQuotaCompletionForCurrentDay();
+	/** 开发期跳天加速的夜晚 ready 提交入口；对当前服务器可见且合资格玩家调用正式 SubmitNextDayReady，返回 true 表示已经提交到全员 ready 事件或本来就在等待推进，返回 false 表示阶段不符、没有可提交玩家或正式 ready 命令被拒。 */
+	bool SubmitDebugReadyForEligiblePlayers(const TCHAR* Trigger);
+	/** 开发期跳天加速的阶段回调入口；正式 Phase 进入后决定是否安排下一步加速或清掉请求。 */
+	void ContinueDebugSkipToNextDayAfterPhaseEntered(ECatRunPhase EnteredPhase);
+	/** 开发期跳天加速的夜晚 ready 延迟入口；用下一帧提交 ready，避免在 StateTree Enter 回调内重入发送事件。 */
+	void ScheduleDebugSkipToNextDayReadySubmission();
+	/** 开发期跳天加速的夜晚 ready 延迟回调；重新核对当前 Run/Day 后只走正式 ready 写口。 */
+	void HandleDebugSkipToNextDayReadyElapsed();
+#endif
 	/** 启动 gate 失败时保持 NotStarted、关闭写口并发布 StartupFailed，不回退为 C++ 状态机。 */
 	void FailRunStartup(const TCHAR* Reason);
 	/** Host exit 的远端 Destroy ACK 与 Profile Grant ACK 全部到达或统一超时后广播 Ready；重复完成不会触发第二次 Online Destroy。 */
@@ -321,6 +350,14 @@ private:
 
 	/** 商店货架刷新变化的服务器本机订阅；它只触发快照重建，不创建交易广播。 */
 	FDelegateHandle ShopInventoryRefreshedHandle;
+#if !UE_BUILD_SHIPPING
+	/** 开发期跳天加速请求是否正在等待正式阶段推进；它只表达作弊输入的短生命周期请求，不代表 Run 阶段。 */
+	bool bDebugSkipToNextDayRequested = false;
+	/** 开发期跳天加速请求所属 Run；用于防止上一局的延迟 ready 影响新局。 */
+	FGuid DebugSkipToNextDayRunId;
+	/** 开发期跳天加速请求所属天数；只有同一天进入普通夜晚时才会自动提交 ready。 */
+	int32 DebugSkipToNextDayDayIndex = 0;
+#endif
 };
 
 /** Lake 共享比赛状态；复制由服务器 GameMode 组合的 Run/Environment 快照与 Social 最近求助事实。 */

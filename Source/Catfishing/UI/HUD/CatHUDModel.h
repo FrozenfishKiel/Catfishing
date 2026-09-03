@@ -58,7 +58,7 @@ private:
 	/** Growth 快照变化入口；重读完整 HUD 投影。 */
 	void HandleGrowthChanged();
 
-	/** Run GameState 绑定调和入口；客户端 GameState 迟到时会在本地补订阅，但不会创建或推进任何 Run 状态。 */
+	/** Run GameState 观察者接线入口；客户端 GameState 迟到时会本地重试，找到后先读一次公开快照刷新 HUD，再订阅后续变化。 */
 	bool RefreshRunGameStateBinding();
 
 	/** Run GameState 解绑入口；移除当前快照通知并停掉等待 GameState 的本地重试。 */
@@ -70,7 +70,7 @@ private:
 	/** Run GameState 等待收口入口；World 切换、解绑或订阅成功后清理本地 Timer。 */
 	void ClearRunGameStateBindingRetry();
 
-	/** Run GameState 重试 Tick；发现 GameState 后补订阅并刷新 HUD，否则保持等待。 */
+	/** Run GameState 重试 Tick；发现 GameState 后交给观察者接线入口完成首次刷新和订阅，否则保持等待。 */
 	void HandleRunGameStateBindingRetry();
 
 	/** Run 公开快照变化入口；重读天数和阶段相关 HUD 投影，避免客户端复制到达后界面继续显示旧天数。 */
