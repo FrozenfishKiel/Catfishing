@@ -127,6 +127,8 @@ LineLoad    = pow(max(Alignment, 0), AngleStrengthExponent)，范围[0,1]
 
 体力统一使用 `实际沿线位移 + max(意图沿线位移-实际沿线位移,0)×IsometricEffortMultiplier`。因此自由运动、带载运动和实际位移为 0 的僵持使用同一公式。锁线绷紧时，鱼的外游意图会形成猫端等长保持意图，所以双方都会消耗；收线是独立执行器做功，原地左键会缩短线长并消耗体力，但不会伪造猫位移，后退只移动端点，不会重复缩短线长。右键只有在 `L_max` 内确实解除约束并允许出线时恢复猫体力；到达最大线长重新绷紧后停止恢复。
 
+Development 运行诊断使用每秒限频的 `fishing_fish_stamina_sample` 记录体力公式的完整输入与结果，包括意图/实际/僵持/有效努力距离、力量、价格、阶段倍率、每秒消耗率、模拟候选与水域解析后的三维位置、`ResolvedDeltaZCm` 和鱼相对水面的高度。单步消耗超过初始体力 10%（且至少 5 点）时额外记录 `fishing_fish_stamina_spike`；体力归零或上岸强制力竭的固定步必定记录 `fishing_fish_stamina_terminal_step`，不受每秒采样限频影响。
+
 L_paid = 已放出的线长（左键主动收短；右键只允许鱼外游时被动带线）
 D      = 竿尖到鱼的直线距离
 Slack  = max(L_paid-D, 0)：有余线时 Cable 本地垂坠
@@ -198,7 +200,7 @@ Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消�
 右上角三方数值面板使用独立 CVar `cat.Fishing.Stats`，默认 1：第一行显示当前复制快照的稳定 `FishDefinitionId`（无鱼时为 `--`），鱼数值行显示当前/上限体力与有效力量（含完美中鱼折减），竿显示当前本场鱼线或装备耐久、上限与钓组力量，猫显示 ASC 当前/上限搏斗体力与钓鱼力量。执行 `cat.Fishing.Stats 0` 可单独关闭；它不会修改 `cat.Fishing.Debug`，后者保持默认关闭，开启世界调试也不会改变数值面板开关。
 
 Q 蓄力黄色抛物线与落点球是玩法瞄准反馈，不属于上述两类调试信息；它继续由 `cat.Fishing.ChumPreview` 独立控制并默认开启。
-命令链每条回执有结构化日志：过滤 `LogCatFishing`，失败为 Warning 且带 Error 枚举。命令/抛竿/打窝回执统一附带 Controller、PlayerState、脱敏 StableNetId、`IsLocalController`、NetMode、Pawn 权威位置/Role 与控制朝向；会话终态附带鱼、竿尖、钩、Encounter 和操作者上下文。日志只写命令、拒绝和终态边沿，不逐帧输出；原始 StableNetId 只有 `StableNetIdExposure=Enabled` 时才允许出现。
+命令链每条回执有结构化日志：过滤 `LogCatFishing`，失败为 Warning 且带 Error 枚举。命令/抛竿/打窝回执统一附带 Controller、PlayerState、脱敏 StableNetId、`IsLocalController`、NetMode、Pawn 权威位置/Role 与控制朝向；会话终态附带鱼、竿尖、钩、Encounter 和操作者上下文。高频物理诊断按状态变化或每秒限频输出，异常单步和终局边沿不被限频吞掉；不逐帧刷屏。原始 StableNetId 只有 `StableNetIdExposure=Enabled` 时才允许出现。
 
 ## 5. 关键资产与配置
 

@@ -253,18 +253,25 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingVerticalRodSwingDoesNotPayOutTest,
 bool FCatFishingVerticalRodSwingDoesNotPayOutTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
+	const FCatFightSimulationConfig Config = MakeConfig();
 	FCatFightSimulationState State = MakeState(ECatFightCatAction::Pull);
 	State.LineLengthCentimeters = 100.0;
 	State.FishWorldPosition = FVector(100.0, 0.0, 0.0);
+	const FCatFightStepResult HorizontalRodStep = FCatFishingFightSimulator::Step(
+		Config, State, MakeHeldConstraint(), FVector::ForwardVector);
 	FCatFightRodConstraintInput Rod = MakeHeldConstraint();
 	Rod.RodTipWorldPosition = FVector(0.0, 0.0, 150.0);
 	const FCatFightStepResult Step = FCatFishingFightSimulator::Step(
-		MakeConfig(), State, Rod, FVector::ForwardVector);
+		Config, State, Rod, FVector::ForwardVector);
 	TestTrue(TEXT("vertical swing geometry remains solvable"), Step.bSucceeded);
 	TestEqual(TEXT("vertical swing does not manufacture line"),
 		Step.LineLengthCentimeters, State.LineLengthCentimeters, 1e-9);
 	TestEqual(TEXT("impossible vertical geometry pauses reel progress"),
 		Step.RequestedReelDistanceCentimeters, 0.0, 1e-9);
+	TestEqual(TEXT("vertical rod geometry cannot move fish off its water plane"),
+		Step.ProposedFishWorldPosition.Z, State.FishWorldPosition.Z, 1e-9);
+	TestTrue(TEXT("vertical rod geometry cannot add fish stamina work"),
+		Step.FishStaminaDrain <= HorizontalRodStep.FishStaminaDrain + 1e-9);
 	return !HasAnyErrors();
 }
 

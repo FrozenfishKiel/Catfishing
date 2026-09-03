@@ -994,6 +994,95 @@ void UCatFishingFightRunner::HandleFixedStep()
 	const bool bConstraintActive = RodConstraint.bRodHeld
 		&& Step.NormalizedTension > UE_DOUBLE_SMALL_NUMBER;
 	const double WorldSeconds = World->GetTimeSeconds();
+	const TCHAR* CatActionName = State.CatAction == ECatFightCatAction::Pull ? TEXT("Pull")
+		: State.CatAction == ECatFightCatAction::Slack ? TEXT("Slack") : TEXT("None");
+	const double FishRealizedEffortDistance = FMath::Min(
+		Step.FishActualLineDistanceCentimeters, Step.FishIntendedLineDistanceCentimeters);
+	const double FishBlockedEffortDistance = FMath::Max(0.0,
+		Step.FishIntendedLineDistanceCentimeters - FishRealizedEffortDistance);
+	const double FishEffectiveEffortDistance = FishRealizedEffortDistance
+		+ FishBlockedEffortDistance * Config.IsometricEffortMultiplier;
+	const double FishPhaseDrainMultiplier = State.MotionIntent == ECatFishMotionIntent::StrugglingOutward
+		? Config.StruggleDrainMultiplier : Config.BaseDrainMultiplier;
+	const double FishUncappedStaminaDrain = State.bFishExhausted ? 0.0
+		: Config.FishStrength * FishEffectiveEffortDistance
+			* Config.FishStaminaCostPerStrengthCentimeter * FishPhaseDrainMultiplier;
+	const double FishStaminaAfterStep = FMath::Max(0.0, State.FishStamina - Step.FishStaminaDrain);
+	const FVector SimulatorFishDelta = Step.ProposedFishWorldPosition - State.FishWorldPosition;
+	const FVector ResolvedFishDelta = Motion.FishWorldPosition - State.FishWorldPosition;
+	const double ResolvedLineDistance2D = FVector::Dist2D(RodTip, Motion.FishWorldPosition);
+	const double ResolvedLineVerticalDistance = FMath::Abs(RodTip.Z - Motion.FishWorldPosition.Z);
+	const double ResolvedLineDistance3D = FVector::Distance(RodTip, Motion.FishWorldPosition);
+	// 活鱼与尚未上岸的鱼干都在本步解析过水面；已经吸附地面的鱼干只解析地面，不能把 Exact 的默认零值冒充水面。
+	const bool bWaterSurfaceAvailableForDiagnostic = !State.bFishExhausted || !bFishBeached;
+	const double WaterSurfaceZ = bWaterSurfaceAvailableForDiagnostic
+		? Exact.WaterSurfaceWorldPoint.Z : Motion.FishWorldPosition.Z;
+	const double FishWaterSurfaceOffsetZ = bWaterSurfaceAvailableForDiagnostic
+		? Motion.FishWorldPosition.Z - WaterSurfaceZ : 0.0;
+	const bool bFishStaminaTerminalStep = !State.bFishExhausted
+		&& Step.Outcome == ECatFightStepOutcome::FishExhausted;
+	const bool bFishStaminaSpike = !State.bFishExhausted && !bFishStaminaTerminalStep
+		&& Step.FishStaminaDrain >= FMath::Max(5.0, InitialFishStamina * 0.1);
+	const auto LogFishStaminaBreakdown = [&](const TCHAR* EventName, const TCHAR* Trigger)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=%s SessionId=%s Trigger=%s CatAction=%s MotionIntent=%s "
+				"FishStaminaBefore=%.3f FishStaminaDrain=%.3f FishStaminaAfter=%.3f "
+				"DrainPerSecond=%.3f UncappedDrain=%.3f FishStrength=%.3f CostPerStrengthCm=%.6f "
+				"PhaseMultiplier=%.3f IsometricMultiplier=%.3f FixedStepSeconds=%.3f IntendedSwimSpeedCmPerSec=%.3f "
+				"FishIntentLineCm=%.3f FishActualLineCm=%.3f FishRealizedEffortCm=%.3f "
+				"FishBlockedEffortCm=%.3f FishEffectiveEffortCm=%.3f "
+				"FishBefore=%s SimulatorCandidate=%s ResolvedFish=%s SimulatorDelta=%s ResolvedDelta=%s "
+				"ResolvedDelta2DCm=%.3f ResolvedDelta3DCm=%.3f ResolvedDeltaZCm=%.3f "
+				"WaterSurfaceAvailable=%s WaterSurfaceZ=%.3f FishWaterSurfaceOffsetZ=%.3f "
+				"DesiredFishDirection=%s RodTip=%s "
+				"LineLengthBefore=%.3f LineLengthAfter=%.3f LineDistance2D=%.3f LineVerticalDistance=%.3f "
+				"LineDistance3D=%.3f Tension=%.3f LineLoad=%.3f Alignment=%.3f Beached=%s NetMode=%d Authority=true"),
+			EventName,
+			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			Trigger,
+			CatActionName,
+			*UEnum::GetValueAsString(State.MotionIntent),
+			State.FishStamina,
+			Step.FishStaminaDrain,
+			FishStaminaAfterStep,
+			Step.FishStaminaDrain / Config.FixedStepSeconds,
+			FishUncappedStaminaDrain,
+			Config.FishStrength,
+			Config.FishStaminaCostPerStrengthCentimeter,
+			FishPhaseDrainMultiplier,
+			Config.IsometricEffortMultiplier,
+			Config.FixedStepSeconds,
+			Step.IntendedSwimSpeedCentimetersPerSecond,
+			Step.FishIntendedLineDistanceCentimeters,
+			Step.FishActualLineDistanceCentimeters,
+			FishRealizedEffortDistance,
+			FishBlockedEffortDistance,
+			FishEffectiveEffortDistance,
+			*State.FishWorldPosition.ToCompactString(),
+			*Step.ProposedFishWorldPosition.ToCompactString(),
+			*Motion.FishWorldPosition.ToCompactString(),
+			*SimulatorFishDelta.ToCompactString(),
+			*ResolvedFishDelta.ToCompactString(),
+			ResolvedFishDelta.Size2D(),
+			ResolvedFishDelta.Size(),
+			ResolvedFishDelta.Z,
+			bWaterSurfaceAvailableForDiagnostic ? TEXT("true") : TEXT("false"),
+			WaterSurfaceZ,
+			FishWaterSurfaceOffsetZ,
+			*DesiredFishDirection.ToCompactString(),
+			*RodTip.ToCompactString(),
+			State.LineLengthCentimeters,
+			Step.LineLengthCentimeters,
+			ResolvedLineDistance2D,
+			ResolvedLineVerticalDistance,
+			ResolvedLineDistance3D,
+			Step.NormalizedTension,
+			Step.NormalizedLineLoad,
+			Step.FishLineAlignment,
+			Step.bFishBeached ? TEXT("true") : TEXT("false"),
+			static_cast<int32>(World->GetNetMode()));
+	};
 	if (WorldSeconds >= NextPowerDiagnosticWorldSeconds)
 	{
 		UE_LOG(LogCatFishing, Display,
@@ -1002,7 +1091,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"CatAcceleration=%.3f FishAcceleration=%.3f NetFishPullAcceleration=%.3f "
 				"PrimaryStamina=%.3f GroupStaminaDrain=%.3f FishStamina=%.3f FishStaminaDrain=%.3f "
 				"MotionIntent=%s CatIntentCm=%.3f CatActualCm=%.3f FishIntentCm=%.3f FishActualCm=%.3f "
-				"FishWorldStepCm=%.3f ReelRequestedCm=%.3f ReelActualCm=%.3f NetMode=%d Authority=true"),
+				"FishWorldStep2DCm=%.3f FishWorldStep3DCm=%.3f FishWorldDeltaZCm=%.3f "
+				"ReelRequestedCm=%.3f ReelActualCm=%.3f NetMode=%d Authority=true"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
 			Config.PrimaryOperatorCatStrength,
@@ -1024,17 +1114,27 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.CatActualLineDistanceCentimeters,
 			Step.FishIntendedLineDistanceCentimeters,
 			Step.FishActualLineDistanceCentimeters,
-			FVector::Dist2D(State.FishWorldPosition, Motion.FishWorldPosition),
+			ResolvedFishDelta.Size2D(),
+			ResolvedFishDelta.Size(),
+			ResolvedFishDelta.Z,
 			Step.RequestedReelDistanceCentimeters,
 			Step.ActualReelDistanceCentimeters,
 			static_cast<int32>(World->GetNetMode()));
+		LogFishStaminaBreakdown(TEXT("fishing_fish_stamina_sample"), TEXT("Periodic"));
 		NextPowerDiagnosticWorldSeconds = WorldSeconds + 1.0;
+	}
+	if (bFishStaminaTerminalStep)
+	{
+		LogFishStaminaBreakdown(TEXT("fishing_fish_stamina_terminal_step"),
+			bBeachedThisStep ? TEXT("ShoreLanding") : TEXT("StaminaDepleted"));
+	}
+	else if (bFishStaminaSpike)
+	{
+		LogFishStaminaBreakdown(TEXT("fishing_fish_stamina_spike"), TEXT("SingleStepThreshold"));
 	}
 	if (bConstraintActive != bLastConstraintDiagnosticActive
 		|| (bConstraintActive && WorldSeconds >= NextConstraintDiagnosticWorldSeconds))
 	{
-		const TCHAR* Action = State.CatAction == ECatFightCatAction::Pull ? TEXT("Pull")
-			: State.CatAction == ECatFightCatAction::Slack ? TEXT("Slack") : TEXT("None");
 		UE_LOG(LogCatFishing, Display,
 			TEXT("Event=fishing_constraint_sample SessionId=%s RodActorId=%s Active=%s CarrierActive=%s Action=%s "
 				"ConstraintError=%.2f RelativeLineSpeed=%.2f Tension=%.3f FishCorrection=%.2f CarrierCorrection=%.2f "
@@ -1046,7 +1146,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			*Rod->GetPresentationState().RodActorId.ToString(),
 			bConstraintActive ? TEXT("true") : TEXT("false"),
 			bCarrierConstraintActive ? TEXT("true") : TEXT("false"),
-			Action,
+			CatActionName,
 			Step.ConstraintErrorCentimeters,
 			Step.RelativeConstraintSpeedCentimetersPerSecond,
 			Step.NormalizedTension,
