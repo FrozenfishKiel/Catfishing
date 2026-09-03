@@ -307,7 +307,9 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const double CatLineForce = bReeling ? EffectiveCatStrength : 0.0;
 	const double LineForceDemand = FMath::Max(FishLineForce, CatLineForce) * NormalizedTension;
 	const double WearLoad = FMath::Max(OutwardLoad, NormalizedTension);
-	const double RodWearDelta = bLineRestraining
+	// 鱼力竭后的收尾只保留线长约束和拖拽位移；死鱼不再施力，
+	// 猫的收线力也不能独自制造鱼线磨损，否则拉鱼干仍会把会话判为断线。
+	const double RodWearDelta = !State.bFishExhausted && bLineRestraining
 		? (FMath::Max(FishLineForce, CatLineForce) * Config.StalemateRodWearPerFishStrength
 			+ (bStruggling ? Config.StruggleHoldRodWearPerSecond : 0.0))
 			* WearLoad * Dt * Config.TautRodWearMultiplier : 0.0;
@@ -351,7 +353,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	{
 		Result.Outcome = ECatFightStepOutcome::FishExhausted;
 	}
-	else if (Result.AbsoluteRodWear >= Config.RodDurability)
+	else if (!State.bFishExhausted && Result.AbsoluteRodWear >= Config.RodDurability)
 	{
 		Result.LineBreakCause = ECatFightLineBreakCause::DurabilityDepleted;
 		Result.Outcome = ECatFightStepOutcome::LineBroken;

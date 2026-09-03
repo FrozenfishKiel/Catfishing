@@ -379,6 +379,7 @@ bool FCatFishingExhaustedContinuationTest::RunTest(const FString& Parameters)
 	FCatFightSimulationState LockedState = MakeState(ECatFightCatAction::None);
 	LockedState.bFishExhausted = true;
 	LockedState.FishStamina = 0.0;
+	LockedState.AbsoluteRodWear = Config.RodDurability;
 	LockedState.MotionIntent = ECatFishMotionIntent::AutoHauling;
 	FCatFightSimulationState ReelingState = LockedState;
 	ReelingState.CatAction = ECatFightCatAction::Pull;
@@ -401,6 +402,10 @@ bool FCatFishingExhaustedContinuationTest::RunTest(const FString& Parameters)
 		Reeling.CarrierTargetPullSpeedCentimetersPerSecond, 0.0, 1e-9);
 	TestEqual(TEXT("exhausted fish does not restrict backing-away speed"),
 		Reeling.CarrierAwaySpeedMultiplier, 1.0, 1e-9);
+	TestEqual(TEXT("reeling an exhausted fish cannot add line wear"),
+		Reeling.AbsoluteRodWear, LockedState.AbsoluteRodWear, 1e-9);
+	TestEqual(TEXT("retained wear at the limit cannot break the line after exhaustion"),
+		Reeling.Outcome, ECatFightStepOutcome::None);
 	return !HasAnyErrors();
 }
 

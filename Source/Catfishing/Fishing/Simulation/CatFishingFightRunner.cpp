@@ -1093,7 +1093,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"PrimaryStamina=%.3f GroupStaminaDrain=%.3f FishStamina=%.3f FishStaminaDrain=%.3f "
 				"MotionIntent=%s CatIntentCm=%.3f CatActualCm=%.3f FishIntentCm=%.3f FishActualCm=%.3f "
 				"FishWorldStep2DCm=%.3f FishWorldStep3DCm=%.3f FishWorldDeltaZCm=%.3f "
-				"ReelRequestedCm=%.3f ReelActualCm=%.3f NetMode=%d Authority=true"),
+				"ReelRequestedCm=%.3f ReelActualCm=%.3f AbsoluteRodWear=%.3f FishExhausted=%s NetMode=%d Authority=true"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
 			Config.PrimaryOperatorCatStrength,
@@ -1120,6 +1120,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 			ResolvedFishDelta.Z,
 			Step.RequestedReelDistanceCentimeters,
 			Step.ActualReelDistanceCentimeters,
+			Step.AbsoluteRodWear,
+			State.bFishExhausted ? TEXT("true") : TEXT("false"),
 			static_cast<int32>(World->GetNetMode()));
 		LogFishStaminaBreakdown(TEXT("fishing_fish_stamina_sample"), TEXT("Periodic"));
 		NextPowerDiagnosticWorldSeconds = WorldSeconds + 1.0;
