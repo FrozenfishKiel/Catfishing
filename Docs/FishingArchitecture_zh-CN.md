@@ -109,7 +109,7 @@ StateTree（`ST_FishingSession`）保持薄编排。其中 `FishExhausted` 是 `
 
 `FCatFishingFightSimulator::Step()`：纯静态无副作用函数（有单元测试），每 0.05s 由 Runner 调一次。
 
-鱼的个体力量由本次实际重量乘统一 `FightStrengthPerKilogram` 得到；猫的基础 `FishingStrength` 使用同一系数反推等效系统质量。双方的意图加速度都等于当前有效力量乘 `FightAccelerationPerStrength`，再由 `FightDriveResponseSeconds` 投影成受性格游速/收线速度封顶的意图速度。鱼线绷紧后先比较双方沿线加速度：只有鱼占优的差值能生成猫端牵引，质量只决定这部分运动在双端如何分配。猫体力下降时有效力量连续降低但质量不变，归零不产生瞬时终局。
+鱼的个体力量由本次实际重量乘正式搏斗平衡资产的 `StrengthPerKilogram` 得到；猫的基础 `FishingStrength` 使用同一系数反推等效系统质量。双方的意图加速度都等于当前有效力量乘 `AccelerationPerStrength`，再由 `DriveResponseSeconds` 投影成受性格游速/收线速度封顶的意图速度。鱼线绷紧后先比较双方沿线加速度：只有鱼占优的差值能生成猫端牵引，质量只决定这部分运动在双端如何分配。猫体力下降时有效力量连续降低但质量不变，归零不产生瞬时终局。
 
 主猫持竿时，PlayerController 在每帧视角旋转完成后把猫身水平朝向同步到 `ControlRotation.Yaw`，并临时关闭面向移动/ControllerDesiredRotation 两条覆盖通道。因此鱼竿朝向、猫身和移动基准共用同一控制 Yaw，向后输入不会让猫掉头；离竿或换 Pawn 时恢复角色原有转向配置。是否持竿仍只读鱼竿 `HolderPlayerState`，Controller 不保存平行业务状态。
 `FCatFishSteeringModel` 用独立服务器随机流产生平滑目标游向；相同种子与固定步长得到相同方向序列，客户端不自行随机。
@@ -182,7 +182,7 @@ Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消�
 
 反向纪律（唯一红线）：表现事件里不发命令；Montage 完成 / AnimNotify 不作为任何玩法提交条件。
 
-鱼的体重、力量与视觉大小使用同一条服务器事实链：服务器先为每个候选鱼种按稳定随机流抽取个体 `WeightKilograms`，以 `Weight × FightStrengthPerKilogram` 计算挑战度和本场基础力量；选中后不再重抽。完美中鱼只在该基础力量上乘性格倍率。视觉再按
+鱼的体重、力量与视觉大小使用同一条服务器事实链：服务器先为每个候选鱼种按稳定随机流抽取个体 `WeightKilograms`，以 `Weight × StrengthPerKilogram` 计算挑战度和本场基础力量；选中后不再重抽。完美中鱼只在该基础力量上乘性格倍率。视觉再按
 `Scale = clamp(cuberoot(Weight / ReferenceWeight), MinScale, MaxScale)` 计算一次 `VisualScale`。水中
 `FishEncounterActor` 与水面 `FishPickupActor` 都复制这个标量，并只缩放各自的 `FishMesh`；Actor 根节点、
 抄网圆、拾取 Sphere、鱼线与岸线判定不随 Mesh 大小变化。这样多人尺寸一致，收鱼交接也不会产生大小跳变。

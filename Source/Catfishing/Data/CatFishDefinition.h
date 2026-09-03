@@ -123,7 +123,7 @@ public:
 	int32 MinimumFightParticipants = 0;
 
 	/**
-	 * 旧资产序列化字段；运行时力量已统一由“本条实际重量 × UCatFishingSettings::FightStrengthPerKilogram”生成。
+	 * 旧资产序列化字段；运行时力量已统一由“本条实际重量 × UCatFishingFightBalanceDefinition::StrengthPerKilogram”生成。
 	 * 暂留字段只为安全读取尚未重存的二进制 DataAsset，不再参与选鱼、搏斗或 UI。
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing",

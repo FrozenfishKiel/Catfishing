@@ -91,7 +91,7 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 
 `LineLoad` 控制鱼线磨损和强对抗资格，但不再直接选择胜负。双方统一按沿线做功结算体力：Locked 绷紧时，鱼的向外意图同时形成猫的等长保持意图，所以即使实际位移接近 0，双方仍会消耗；Reeling 或主动后退已经提供猫的显式意图，不再重复叠加保持意图；FreeSpool 在 `L_max` 内确实解除约束时，鱼支付自己的自由游动做功，猫停止对抗并恢复体力；线放尽后重新形成张力，猫不再恢复。重大判定仍要求负载超过鱼性格阈值并持续确认时间，避免方向刚好扫过阈值一帧就断线。
 
-鱼和猫先按 `加速度 = 有效力量 × FightAccelerationPerStrength` 生成意图速度；鱼性格游速、`ReelSpeed` 只做上限。猫移动只改变猫端候选位置，左键则独立缩短 `L_paid`，三者只形成一份线长约束误差。只有鱼的沿线加速度超过猫时，差值才按实际鱼重与猫等效质量生成猫端目标牵引；等力量自然僵持，猫占优或鱼力竭时修正全部落到鱼端。Rod 不把目标当作每步可累积的冲量，而是在服务器和拥有客户端的角色移动帧中平滑追赶；鱼力竭会立即清除平滑余量。收线请求不会因为鱼没能立即靠近而回填线长；原地收线与后退不会相互冒充或重复计算。
+鱼和猫先按 `加速度 = 有效力量 × AccelerationPerStrength` 生成意图速度，换算系数来自 `DA_FishingFightBalance_Default`；鱼性格游速和资产中的“收线速度”只做上限。猫移动只改变猫端候选位置，左键则独立缩短 `L_paid`，三者只形成一份线长约束误差。只有鱼的沿线加速度超过猫时，差值才按实际鱼重与猫等效质量生成猫端目标牵引；等力量自然僵持，猫占优或鱼力竭时修正全部落到鱼端。Rod 不把目标当作每步可累积的冲量，而是在服务器和拥有客户端的角色移动帧中平滑追赶；鱼力竭会立即清除平滑余量。收线请求不会因为鱼没能立即靠近而回填线长；原地收线与后退不会相互冒充或重复计算。
 
 ### 鱼线为什么会垂、什么时候会绷紧
 
@@ -146,10 +146,10 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 | 多大夹角算强对抗 | `StrongConfrontationAlignmentThreshold` |
 | 强对抗要持续多久 | `StrongConfrontationConfirmationSeconds` |
 | 鱼重量范围和总搏斗体力 | 当前从正式鱼库选中的 `UCatFishDefinition` |
-| 体重→力量、力量→加速度 | `UCatFishingSettings` / `DefaultGame.ini` 的 `FightStrengthPerKilogram`、`FightAccelerationPerStrength`、`FightDriveResponseSeconds` |
-| 猫力量和体力 | `DefaultGame.ini` / 后续猫定义资产 |
-| 收近速度和耗尽吸附阈值 | `UCatFishingSettings` / `DefaultGame.ini` |
-| 张力表现达到满值的响应范围 | `TensionResponseRangeCentimeters`（Project Settings） |
+| 体重→力量、力量→加速度 | `DA_FishingFightBalance_Default` 的“每公斤力量 / 每点力量加速度 / 驱动力响应时间” |
+| 猫力量和体力 | `Cat_Default`（或当前角色绑定的 `UCatCharacterDefinition`） |
+| 收近速度和耗尽吸附阈值 | `DA_FishingFightBalance_Default` 的“收线速度 / 鱼力竭吸附阈值” |
+| 张力表现达到满值的响应范围 | `DA_FishingFightBalance_Default` 的“满张力响应距离” |
 | 竿力量、耐久和高张力磨损 | `DA_Rod_Basic` |
 
 ## 实测时怎么判断卡在哪层

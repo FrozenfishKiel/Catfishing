@@ -5,9 +5,37 @@
 #include "Animation/AnimSequenceBase.h"
 #include "Engine/SkeletalMesh.h"
 #include "Fishing/CatFishingSettings.h"
+#include "Fishing/Config/CatFishingFightBalanceDefinition.h"
 #include "Fishing/Presentation/CatFishAnimInstance.h"
 #include "Fishing/Presentation/CatFishPresentationDefinition.h"
 #include "StateTree.h"
+#include "UObject/UnrealType.h"
+
+namespace
+{
+	void PopulateValidFightBalance(UCatFishingFightBalanceDefinition& Balance)
+	{
+		Balance.BalanceDefinitionId = TEXT("TestFishingFightBalance");
+		Balance.bEnableRuntimeDefinition = true;
+		Balance.StrengthPerKilogram = 10.0;
+		Balance.AccelerationPerStrength = 5.0;
+		Balance.DriveResponseSeconds = 1.0;
+		Balance.ReelSpeedCentimetersPerSecond = 80.0;
+		Balance.CatStaminaCostPerStrengthCentimeter = 0.002;
+		Balance.FishStaminaCostPerStrengthCentimeter = 0.002;
+		Balance.IsometricEffortMultiplier = 1.0;
+		Balance.SlackStaminaRegenPerSecond = 3.0;
+		Balance.FishExhaustionThreshold = 0.5;
+		Balance.LowStaminaRestThreshold = 0.5;
+		Balance.LowStaminaRestMultiplier = 1.5;
+		Balance.TensionResponseRangeCentimeters = 10.0;
+		Balance.EscapeSlackCentimeters = 100.0;
+		Balance.StalemateRodWearPerFishStrength = 0.1;
+		Balance.HeldRodMinimumLeverageMultiplier = 0.4;
+		Balance.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 160.0;
+		Balance.MinimumCarrierAwaySpeedMultiplier = 0.15;
+	}
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingSettingsRuntimeReadinessTest,
@@ -23,6 +51,64 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatRodOperatorLayoutSettingsTest,
 	"Catfishing.Unit.Fishing.Settings.RodOperatorLayoutIsBounded",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingFightBalanceDefinitionTest,
+	"Catfishing.Unit.Fishing.Settings.FightBalanceIsValidatedAndDesignerReadable",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFormalFishingFightBalanceAssetTest,
+	"Catfishing.Unit.Fishing.Assets.FormalFightBalancePreservesAcceptedBaseline",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFormalFishingFightBalanceAssetTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	const UCatFishingFightBalanceDefinition* Balance = Settings
+		? Settings->LoadFightBalanceDefinition() : nullptr;
+	if (!TestNotNull(TEXT("默认配置可加载正式搏斗平衡资产"), Balance)) return false;
+
+	TestEqual(TEXT("正式平衡资产 ID 稳定"), Balance->BalanceDefinitionId,
+		FName(TEXT("DefaultFishingFightBalance")));
+	TestEqual(TEXT("保留每公斤十点力量基线"), Balance->StrengthPerKilogram, 10.0);
+	TestEqual(TEXT("保留每点力量五厘米每平方秒加速度基线"),
+		Balance->AccelerationPerStrength, 5.0);
+	TestEqual(TEXT("保留双方做功体力价格"),
+		Balance->CatStaminaCostPerStrengthCentimeter, 0.002);
+	TestEqual(TEXT("猫鱼做功体力价格保持一致"),
+		Balance->FishStaminaCostPerStrengthCentimeter,
+		Balance->CatStaminaCostPerStrengthCentimeter);
+	return !HasAnyErrors();
+}
+
+bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UCatFishingFightBalanceDefinition* Balance = NewObject<UCatFishingFightBalanceDefinition>(GetTransientPackage());
+	if (!TestNotNull(TEXT("可创建瞬态搏斗平衡资产"), Balance)) return false;
+
+	TestFalse(TEXT("未配置资产默认不可进入运行态"), Balance->IsRuntimeDefinitionReady());
+	PopulateValidFightBalance(*Balance);
+	TestTrue(TEXT("完整合法数值可进入运行态"), Balance->IsRuntimeDefinitionReady());
+
+	const FProperty* StrengthProperty = FindFProperty<FProperty>(
+		UCatFishingFightBalanceDefinition::StaticClass(),
+		GET_MEMBER_NAME_CHECKED(UCatFishingFightBalanceDefinition, StrengthPerKilogram));
+	TestNotNull(TEXT("每公斤力量字段可反射"), StrengthProperty);
+#if WITH_EDITOR
+	if (StrengthProperty)
+	{
+		TestEqual(TEXT("策划界面使用中文字段名"),
+			StrengthProperty->GetDisplayNameText().ToString(), FString(TEXT("每公斤力量")));
+	}
+#endif
+
+	Balance->AccelerationPerStrength = 0.0;
+	TestFalse(TEXT("非法加速度系数阻止运行"), Balance->IsRuntimeDefinitionReady());
+	return !HasAnyErrors();
+}
 
 bool FCatRodOperatorLayoutSettingsTest::RunTest(const FString& Parameters)
 {
@@ -89,6 +175,7 @@ bool FCatFishingSettingsRuntimeReadinessTest::RunTest(const FString& Parameters)
 	Settings->bEnableFishingRuntime = false;
 	Settings->FishingSessionStateTree.Reset();
 	Settings->FishBehaviorStateTree.Reset();
+	Settings->FightBalanceDefinition.Reset();
 	Settings->TrueBiteWindowSeconds = 0.0;
 	Settings->bEnableNearShoreValidation = false;
 	Settings->ScoopReachCentimeters = 0.0;
@@ -131,6 +218,10 @@ bool FCatFishingSettingsRuntimeReadinessTest::RunTest(const FString& Parameters)
 	Settings->ScoopReachCentimeters = 250.0;
 	TestFalse(TEXT("缺少终态复制窗口时仍不可运行"), Settings->IsRuntimeReady());
 	Settings->TerminalReplicationWindowSeconds = 5.0;
+	TestFalse(TEXT("缺少搏斗平衡资产时仍不可运行"), Settings->IsRuntimeReady());
+	UCatFishingFightBalanceDefinition* FightBalance = NewObject<UCatFishingFightBalanceDefinition>(Settings);
+	PopulateValidFightBalance(*FightBalance);
+	Settings->FightBalanceDefinition = FightBalance;
 	TestTrue(TEXT("完整 Fishing 配置可运行"), Settings->IsRuntimeReady());
 	TestTrue(TEXT("完整配置可读取抢抄距离"), Settings->TryGetScoopReach(ScoopReach));
 	TestEqual(TEXT("抢抄距离保持配置值"), ScoopReach, 250.0);
