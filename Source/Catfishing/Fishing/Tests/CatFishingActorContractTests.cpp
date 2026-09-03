@@ -328,10 +328,8 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 		Rod->GetCarrierConstraintState().bActive);
 	TestEqual(TEXT("coupled carrier constraint keeps the server speed multiplier"),
 		Rod->GetCarrierConstraintState().MaximumAwaySpeedMultiplier, 0.4f);
-	TestEqual(TEXT("coupled carrier constraint carries one-step velocity impulse"),
-		Rod->GetCarrierConstraintState().PullVelocityDeltaCentimetersPerSecond, 30.0f);
-	TestTrue(TEXT("coupled carrier constraint advances a replication sequence"),
-		Rod->GetCarrierConstraintState().ConstraintSequence > 0);
+	TestEqual(TEXT("coupled carrier constraint carries a target pull speed"),
+		Rod->GetCarrierConstraintState().TargetPullSpeedCentimetersPerSecond, 30.0f);
 	Rod->ClearCarrierConstraintFromAuthority();
 	TestFalse(TEXT("clearing the fight constraint removes stale carrier drag"),
 		Rod->GetCarrierConstraintState().bActive);

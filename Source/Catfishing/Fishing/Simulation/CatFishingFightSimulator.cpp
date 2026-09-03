@@ -276,9 +276,9 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		const double CatMass = Config.GetCombinedCatMass();
 		const double CarrierShare = Config.FishMassKilograms / (CatMass + Config.FishMassKilograms);
 		Result.CarrierConstraintCorrectionCentimeters = CarrierCorrection;
-		Result.CarrierPullVelocityDeltaCentimetersPerSecond = CarrierCorrection / Dt;
+		Result.CarrierTargetPullSpeedCentimetersPerSecond = CarrierCorrection / Dt;
 		Result.CarrierPullAccelerationCentimetersPerSecondSquared =
-			Result.CarrierPullVelocityDeltaCentimetersPerSecond / Dt;
+			Result.CarrierTargetPullSpeedCentimetersPerSecond / Dt;
 		Result.CarrierAwaySpeedMultiplier = FMath::Lerp(1.0,
 			Config.MinimumCarrierAwaySpeedMultiplier, NormalizedTension * CarrierShare);
 	}

@@ -7,8 +7,9 @@
 
 class APlayerState;
 class USceneComponent;
+class UCharacterMovementComponent;
 
-/** 高频复制的手持鱼线约束结果；不推进鱼竿业务 Revision，也不保存第二份搏斗终态。 */
+/** 高频复制的手持鱼线约束目标；不推进鱼竿业务 Revision，也不保存第二份搏斗终态。 */
 USTRUCT(BlueprintType)
 struct CATFISHING_API FCatFishingCarrierConstraintState
 {
@@ -18,9 +19,9 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 	FVector_NetQuantizeNormal PullDirection = FVector::ZeroVector;
 	UPROPERTY(BlueprintReadOnly)
 	float PullAccelerationCentimetersPerSecondSquared = 0.0f;
-	/** 每个权威约束步只应用一次的径向速度冲量，避免被行走制动静默抵消。 */
+	/** 本约束步要求猫端达到的向鱼速度；本地移动帧平滑追赶该目标，不作为可累积冲量。 */
 	UPROPERTY(BlueprintReadOnly)
-	float PullVelocityDeltaCentimetersPerSecond = 0.0f;
+	float TargetPullSpeedCentimetersPerSecond = 0.0f;
 	UPROPERTY(BlueprintReadOnly)
 	float MaximumAwaySpeedMultiplier = 1.0f;
 	UPROPERTY(BlueprintReadOnly)
@@ -29,9 +30,6 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 	float ConstraintErrorCentimeters = 0.0f;
 	UPROPERTY(BlueprintReadOnly)
 	bool bActive = false;
-	/** 仅用于让相同数值的连续固定步也触发拥有客户端应用一次新冲量。 */
-	UPROPERTY(BlueprintReadOnly)
-	int64 ConstraintSequence = 0;
 };
 
 UCLASS(Blueprintable, meta=(ChildCannotTick))
@@ -83,9 +81,9 @@ public:
 	{
 		return AuthoritativeHolderVelocity;
 	}
-	/** FightRunner 发布同一份双端求解结果；服务器立即应用一次冲量，拥有客户端收到该步后应用一次同源冲量。 */
+	/** FightRunner 发布同一份双端求解目标；服务器与拥有客户端都在移动帧内平滑追赶，不直接写 Actor Transform。 */
 	bool SetCarrierConstraintFromAuthority(const FVector& PullDirection,
-		double PullAccelerationCentimetersPerSecondSquared, double PullVelocityDeltaCentimetersPerSecond,
+		double PullAccelerationCentimetersPerSecondSquared, double TargetPullSpeedCentimetersPerSecond,
 		double MaximumAwaySpeedMultiplier,
 		double NormalizedTension, double ConstraintErrorCentimeters);
 	void ClearCarrierConstraintFromAuthority();
@@ -107,12 +105,11 @@ protected:
 private:
 	UFUNCTION()
 	void OnRep_PresentationState(const FCatFishingRodPresentationState& Previous);
-	UFUNCTION()
-	void OnRep_CarrierConstraintState();
 	void QueueOrDispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	void DispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	void ApplyCarrierConstraint(float DeltaSeconds);
-	void ApplyCarrierConstraintImpulse();
+	void ResetCarrierConstraintSmoothing();
+	void UpdateCarrierConstraintTickDependency(UCharacterMovementComponent* Movement);
 	bool CommitAuthoritativeMutation(const FCatFishingRodPresentationState& Next, int64 ExpectedRevision);
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> SceneRoot;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> VisualRoot;
@@ -124,14 +121,20 @@ private:
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> GripAnchor;
 	UPROPERTY(ReplicatedUsing=OnRep_PresentationState, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
 	FCatFishingRodPresentationState PresentationState;
-	UPROPERTY(ReplicatedUsing=OnRep_CarrierConstraintState, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
+	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
 	FCatFishingCarrierConstraintState CarrierConstraintState;
 	FTransform RodTipCanonicalLocalTransform = FTransform::Identity;
 	FTransform StandCanonicalLocalTransform = FTransform::Identity;
 	FTransform GripCanonicalLocalTransform = FTransform::Identity;
 	FVector AuthoritativeRodTipVelocity = FVector::ZeroVector;
 	FVector AuthoritativeHolderVelocity = FVector::ZeroVector;
-	int64 NextCarrierConstraintSequence = 1;
+	/** 20 Hz 权威目标在本机角色移动帧中的平滑速度；只属于瞬态表现/移动接缝，不复制。 */
+	FVector SmoothedCarrierPullVelocity = FVector::ZeroVector;
+	double SmoothedCarrierAwaySpeedMultiplier = 1.0;
+	TWeakObjectPtr<APawn> SmoothedConstraintHolder;
+	TWeakObjectPtr<UCharacterMovementComponent> CarrierConstraintTickDependency;
+	double NextCarrierSmoothingDiagnosticWorldSeconds = 0.0;
+	bool bLastCarrierSmoothingDiagnosticActive = false;
 	FTransform ResolveOperatorStandLocalTransform(int32 SlotIndex) const;
 	bool bIdentityInitialized = false;
 	bool bHasPendingPresentationNotification = false;

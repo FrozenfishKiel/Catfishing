@@ -126,9 +126,9 @@ struct CATFISHING_API FCatFightStepResult
 	double EffectiveCatStrength = 0.0;
 	double CombinedCatStrength = 0.0;
 	int32 ActiveHelperCount = 0;
-	/** 本固定步应一次性施加给持竿猫的径向速度变化；与鱼端修正来自同一质量分配。 */
-	double CarrierPullVelocityDeltaCentimetersPerSecond = 0.0;
-	/** 兼容现有表现字段；由速度变化除以固定步长得到，不再直接用于 AddForce。 */
+	/** 猫端在下一个固定步内需要达到的向鱼目标速度；运行时平滑追赶，不作为累积冲量。 */
+	double CarrierTargetPullSpeedCentimetersPerSecond = 0.0;
+	/** 兼容现有表现字段；由目标速度除以固定步长得到，不直接用于角色移动。 */
 	double CarrierPullAccelerationCentimetersPerSecondSquared = 0.0;
 	double CarrierAwaySpeedMultiplier = 1.0;
 	double ConstraintErrorCentimeters = 0.0;

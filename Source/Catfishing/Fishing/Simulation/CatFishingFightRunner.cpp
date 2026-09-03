@@ -630,7 +630,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.TensionCentimeters = 0.0;
 			Step.NormalizedTension = 0.0;
 			Step.CarrierPullAccelerationCentimetersPerSecondSquared = 0.0;
-			Step.CarrierPullVelocityDeltaCentimetersPerSecond = 0.0;
+			Step.CarrierTargetPullSpeedCentimetersPerSecond = 0.0;
 			Step.CarrierConstraintCorrectionCentimeters = 0.0;
 			Step.CarrierAwaySpeedMultiplier = 1.0;
 			Step.ConstraintErrorCentimeters = 0.0;
@@ -641,8 +641,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 	// 靠近岸线只是空间事实，不再终止搏斗。抄网随时用自己的服务器射线判定；
 	// 鱼力竭只改变生命周期叶子；空间事实仍由本 Runner 的同一约束输出。
 
-	// Runner 只发布这一固定步的统一约束结果；Rod 在服务器立即应用一次速度冲量，拥有客户端收到后应用一次。
-	// CharacterMovement 仍负责碰撞与网络移动，逐帧只保留远离方向的速度上限。
+	// Runner 只发布这一固定步的统一约束目标；Rod 在服务器和拥有客户端的移动帧内平滑追赶目标速度。
+	// CharacterMovement 仍负责碰撞与网络移动，不直接插值或瞬移 Character Transform。
 	if (RodConstraint.bRodHeld && Step.NormalizedTension > UE_DOUBLE_SMALL_NUMBER)
 	{
 		const APawn* Holder = Rod->GetHolderPawnFromAuthority();
@@ -651,7 +651,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 		PullDirection.Z = 0.0;
 		if (!Rod->SetCarrierConstraintFromAuthority(PullDirection,
 			Step.CarrierPullAccelerationCentimetersPerSecondSquared,
-			Step.CarrierPullVelocityDeltaCentimetersPerSecond,
+			Step.CarrierTargetPullSpeedCentimetersPerSecond,
 			Step.CarrierAwaySpeedMultiplier, Step.NormalizedTension,
 			Step.ConstraintErrorCentimeters))
 		{
@@ -703,7 +703,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 		UE_LOG(LogCatFishing, Display,
 			TEXT("Event=fishing_constraint_sample SessionId=%s RodActorId=%s Active=%s Action=%s "
 				"ConstraintError=%.2f RelativeLineSpeed=%.2f Tension=%.3f FishCorrection=%.2f CarrierCorrection=%.2f "
-				"CarrierAcceleration=%.2f CarrierVelocityDelta=%.2f CarrierAwaySpeedMultiplier=%.3f RodLeverage=%.3f "
+				"CarrierAcceleration=%.2f CarrierTargetPullSpeed=%.2f CarrierAwaySpeedMultiplier=%.3f RodLeverage=%.3f "
 				"ActiveCombinedStrength=%.3f ActiveHelpers=%d GroupStaminaDrain=%.3f "
 				"Stalemate=%s Fish=%s RodTip=%s Holder=%s NetMode=%d Authority=true"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(),
@@ -716,7 +716,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.FishConstraintCorrectionCentimeters,
 			Step.CarrierConstraintCorrectionCentimeters,
 			Step.CarrierPullAccelerationCentimetersPerSecondSquared,
-			Step.CarrierPullVelocityDeltaCentimetersPerSecond,
+			Step.CarrierTargetPullSpeedCentimetersPerSecond,
 			Step.CarrierAwaySpeedMultiplier,
 			Step.RodLeverageMultiplier,
 			Step.CombinedCatStrength,

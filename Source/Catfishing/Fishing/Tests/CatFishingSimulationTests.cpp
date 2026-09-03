@@ -200,7 +200,7 @@ bool FCatFishingEqualMassConstraintTest::RunTest(const FString& Parameters)
 		Step.FishConstraintCorrectionCentimeters,
 		Step.CarrierConstraintCorrectionCentimeters, 1e-6);
 	TestEqual(TEXT("carrier impulse is the carrier correction divided by the fixed step"),
-		Step.CarrierPullVelocityDeltaCentimetersPerSecond,
+		Step.CarrierTargetPullSpeedCentimetersPerSecond,
 		Step.CarrierConstraintCorrectionCentimeters / Config.FixedStepSeconds, 1e-6);
 	return !HasAnyErrors();
 }
