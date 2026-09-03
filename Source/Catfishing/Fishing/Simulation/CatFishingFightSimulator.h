@@ -46,9 +46,9 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double FishStrength = 0.0;
 	/** 鱼实际重量与猫等效系统质量共用的力量换算。 */
 	double StrengthPerKilogram = 10.0;
-	/** 双方共用的力量到意图加速度换算。 */
+	/** 双方共用的力量到绷线对抗加速度换算；不限制鱼的自由游速。 */
 	double AccelerationPerStrength = 5.0;
-	/** 将加速度投影为目标意图速度的响应时长。 */
+	/** 将猫端对抗加速度投影为收线/牵引响应速度的时长。 */
 	double DriveResponseSeconds = 1.0;
 	double RodStrength = 0.0;
 	/** 转矩模型的玩法杆长；来自鱼竿定义，不读取 Mesh 或锚点间距。 */

@@ -125,6 +125,8 @@ private:
 	FTimerHandle FixedStepTimer;
 	double NextConstraintDiagnosticWorldSeconds = 0.0;
 	double NextPowerDiagnosticWorldSeconds = 0.0;
+	mutable double NextGroundSurfaceRejectedDiagnosticWorldSeconds = 0.0;
+	double NextBeachingDeferredDiagnosticWorldSeconds = 0.0;
 	bool bLastConstraintDiagnosticActive = false;
 	bool bFishBeached = false;
 	bool bInitialized = false;

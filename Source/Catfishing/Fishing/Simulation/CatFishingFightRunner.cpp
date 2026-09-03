@@ -524,17 +524,22 @@ bool UCatFishingFightRunner::TryResolveGroundedFishPosition(const FVector& Desir
 		|| Surface.WorldPosition.Z <= WaterRelation.WaterSurfaceWorldPoint.Z
 			+ MinimumDryGroundHeightCentimeters)
 	{
-		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_ground_surface_rejected SessionId=%s Candidate=%s Surface=%s SurfaceActor=%s "
-				"WaterSurface=%s Reason=%s"),
-			Session.IsValid()
-				? *Session->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens)
-				: TEXT("None"),
-			*QueryPosition.ToCompactString(), *Surface.WorldPosition.ToCompactString(),
-			*GetNameSafe(Surface.SurfaceActor.Get()),
-			WaterRelation.bSucceeded
-				? *WaterRelation.WaterSurfaceWorldPoint.ToCompactString() : TEXT("Unavailable"),
-			WaterRelation.bSucceeded ? TEXT("SurfaceNotAboveWater") : TEXT("WaterQueryFailed"));
+		const double WorldSeconds = World->GetTimeSeconds();
+		if (WorldSeconds >= NextGroundSurfaceRejectedDiagnosticWorldSeconds)
+		{
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=fishing_ground_surface_rejected SessionId=%s Candidate=%s Surface=%s SurfaceActor=%s "
+					"WaterSurface=%s Reason=%s"),
+				Session.IsValid()
+					? *Session->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens)
+					: TEXT("None"),
+				*QueryPosition.ToCompactString(), *Surface.WorldPosition.ToCompactString(),
+				*GetNameSafe(Surface.SurfaceActor.Get()),
+				WaterRelation.bSucceeded
+					? *WaterRelation.WaterSurfaceWorldPoint.ToCompactString() : TEXT("Unavailable"),
+				WaterRelation.bSucceeded ? TEXT("SurfaceNotAboveWater") : TEXT("WaterQueryFailed"));
+			NextGroundSurfaceRejectedDiagnosticWorldSeconds = WorldSeconds + 1.0;
+		}
 		return false;
 	}
 	OutGroundedPosition = Surface.WorldPosition;
@@ -670,6 +675,9 @@ void UCatFishingFightRunner::HandleFixedStep()
 		BeachingInput.WaterwardDirection = WaterwardDirection;
 		BeachingInput.CarrierActualWorldDisplacement =
 			RodConstraint.CarrierVelocityCentimetersPerSecond * Config.FixedStepSeconds;
+		BeachingInput.NonCarrierRodTipWorldDisplacement =
+			(RodConstraint.RodTipVelocityCentimetersPerSecond
+				- RodConstraint.CarrierVelocityCentimetersPerSecond) * Config.FixedStepSeconds;
 		BeachingInput.ActualReelDistanceCentimeters = Step.ActualReelDistanceCentimeters;
 		BeachingInput.bLineTaut = Step.bLineTaut;
 		return FCatFishFightMotionSolver::IsIntentionalLandwardHaul(BeachingInput);
@@ -739,13 +747,15 @@ void UCatFishingFightRunner::HandleFixedStep()
 					{
 						Motion.FishWorldPosition = Fallback.WaterSurfaceWorldPoint;
 						Exact = Fallback;
-						if (bIntentionalHaul)
+						const double WorldSeconds = World->GetTimeSeconds();
+						if (bIntentionalHaul && WorldSeconds >= NextBeachingDeferredDiagnosticWorldSeconds)
 						{
 							UE_LOG(LogCatFishing, Warning,
 								TEXT("Event=fishing_beaching_deferred SessionId=%s Lifecycle=Exhausted "
 									"Candidate=%s Result=RemainInWater Reason=DryGroundMissing"),
 								*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 								*Step.ProposedFishWorldPosition.ToCompactString());
+							NextBeachingDeferredDiagnosticWorldSeconds = WorldSeconds + 1.0;
 						}
 					}
 				}
@@ -863,13 +873,18 @@ void UCatFishingFightRunner::HandleFixedStep()
 				// 上岸是可重试的空间结果，不再因为一帧地面缺失终止整场搏斗。
 				ShoreInput.bAllowBeaching = false;
 				ShoreContact = FCatFishFightMotionSolver::ResolveLiveFishShoreContact(ShoreInput);
-				UE_LOG(LogCatFishing, Warning,
-					TEXT("Event=fishing_beaching_deferred SessionId=%s Lifecycle=Active Fish=%s RodTip=%s "
-						"TraceChannel=%d FallbackSucceeded=%s Result=RemainInWater Reason=DryGroundMissing"),
-					*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-					*Step.ProposedFishWorldPosition.ToCompactString(), *RodTip.ToCompactString(),
-					static_cast<int32>(GetDefault<UCatWorldItemSettings>()->LandingGroundTraceChannel.GetValue()),
-					ShoreContact.bSucceeded ? TEXT("true") : TEXT("false"));
+				const double WorldSeconds = World->GetTimeSeconds();
+				if (WorldSeconds >= NextBeachingDeferredDiagnosticWorldSeconds)
+				{
+					UE_LOG(LogCatFishing, Warning,
+						TEXT("Event=fishing_beaching_deferred SessionId=%s Lifecycle=Active Fish=%s RodTip=%s "
+							"TraceChannel=%d FallbackSucceeded=%s Result=RemainInWater Reason=DryGroundMissing"),
+						*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+						*Step.ProposedFishWorldPosition.ToCompactString(), *RodTip.ToCompactString(),
+						static_cast<int32>(GetDefault<UCatWorldItemSettings>()->LandingGroundTraceChannel.GetValue()),
+						ShoreContact.bSucceeded ? TEXT("true") : TEXT("false"));
+					NextBeachingDeferredDiagnosticWorldSeconds = WorldSeconds + 1.0;
+				}
 				if (!ShoreContact.bSucceeded)
 				{
 					Stop();
@@ -986,7 +1001,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"PrimaryStrength=%.3f HelperStrength=%.3f CombinedStrength=%.3f CatSystemMassKg=%.3f FishMassKg=%.3f MassMode=StrengthDerived StrengthPerKg=%.3f ActiveHelpers=%d "
 				"CatAcceleration=%.3f FishAcceleration=%.3f NetFishPullAcceleration=%.3f "
 				"PrimaryStamina=%.3f GroupStaminaDrain=%.3f FishStamina=%.3f FishStaminaDrain=%.3f "
-				"CatIntentCm=%.3f CatActualCm=%.3f FishIntentCm=%.3f FishActualCm=%.3f ReelRequestedCm=%.3f ReelActualCm=%.3f NetMode=%d Authority=true"),
+				"MotionIntent=%s CatIntentCm=%.3f CatActualCm=%.3f FishIntentCm=%.3f FishActualCm=%.3f "
+				"FishWorldStepCm=%.3f ReelRequestedCm=%.3f ReelActualCm=%.3f NetMode=%d Authority=true"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
 			Config.PrimaryOperatorCatStrength,
@@ -1003,10 +1019,12 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.CatStaminaDrain,
 			State.FishStamina,
 			Step.FishStaminaDrain,
+			*UEnum::GetValueAsString(State.MotionIntent),
 			Step.CatIntendedLineDistanceCentimeters,
 			Step.CatActualLineDistanceCentimeters,
 			Step.FishIntendedLineDistanceCentimeters,
 			Step.FishActualLineDistanceCentimeters,
+			FVector::Dist2D(State.FishWorldPosition, Motion.FishWorldPosition),
 			Step.RequestedReelDistanceCentimeters,
 			Step.ActualReelDistanceCentimeters,
 			static_cast<int32>(World->GetNetMode()));

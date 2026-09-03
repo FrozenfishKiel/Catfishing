@@ -34,14 +34,14 @@ public:
 		meta = (DisplayName = "每公斤力量", ClampMin = "0.001"))
 	double StrengthPerKilogram = 0.0;
 
-	/** 猫和鱼共享的“力量→意图加速度”换算，单位 cm/s² / Strength。 */
+	/** 猫和鱼共享的“力量→对抗加速度”换算，单位 cm/s² / Strength；鱼的自由游速由性格资产决定。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "力量与运动",
 		meta = (DisplayName = "每点力量加速度", ClampMin = "0.001"))
 	double AccelerationPerStrength = 0.0;
 
-	/** 将当前加速度投影为目标意图速度的响应时长。 */
+	/** 将猫端对抗加速度投影为收线/牵引响应速度的时长；不限制鱼在松线阶段的自由游速。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "力量与运动",
-		meta = (DisplayName = "驱动力响应时间", ClampMin = "0.001", Units = "s"))
+		meta = (DisplayName = "猫端驱动力响应时间", ClampMin = "0.001", Units = "s"))
 	double DriveResponseSeconds = 0.0;
 
 	/** 左键收线意图的速度上限。 */

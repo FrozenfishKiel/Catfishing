@@ -131,10 +131,39 @@ bool FCatFishingBeachingIntentTest::RunTest(const FString& Parameters)
 	Input.ActualReelDistanceCentimeters = 2.0;
 	TestTrue(TEXT("actual reeling can beach a shore-crossing fish"),
 		FCatFishFightMotionSolver::IsIntentionalLandwardHaul(Input));
+	Input.NonCarrierRodTipWorldDisplacement = FVector(0.0, -20.0, 0.0);
+	TestFalse(TEXT("rod-tip swing cannot borrow a simultaneous reel input to beach the fish"),
+		FCatFishFightMotionSolver::IsIntentionalLandwardHaul(Input));
+	Input.NonCarrierRodTipWorldDisplacement = FVector::ZeroVector;
 	Input.ActualReelDistanceCentimeters = 0.0;
 	Input.CarrierActualWorldDisplacement = FVector(0.0, -2.0, 0.0);
 	TestTrue(TEXT("actual carrier translation toward land can beach a shore-crossing fish"),
 		FCatFishFightMotionSolver::IsIntentionalLandwardHaul(Input));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingShoreRotationRecoveryTest,
+	"Catfishing.Unit.Fishing.Simulation.ReelingSurvivesRodSwingLineGeometryAtShore",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingShoreRotationRecoveryTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFishShoreContactInput Input;
+	Input.CurrentFishWorldPosition = FVector(0.0, 200.0, 0.0);
+	Input.CandidateFishWorldPosition = FVector(0.0, 190.0, 0.0);
+	Input.ResolvedWaterWorldPosition = Input.CandidateFishWorldPosition;
+	Input.WaterwardDirection = FVector::ForwardVector;
+	Input.RodTipWorldPosition = FVector(0.0, 0.0, 150.0);
+	Input.PreviousLineLengthCentimeters = 190.0;
+	Input.ProposedLineLengthCentimeters = 200.0;
+	Input.MaximumConstraintDistanceCentimeters = 250.0;
+	Input.bReeling = true;
+	const FCatFishShoreContactResult Result =
+		FCatFishFightMotionSolver::ResolveLiveFishShoreContact(Input);
+	TestTrue(TEXT("recoverable rod-swing geometry does not invalidate the shore solve"), Result.bSucceeded);
+	TestEqual(TEXT("reeling never pays line out while recovering geometry"),
+		Result.LineLengthCentimeters, Input.PreviousLineLengthCentimeters, 1e-9);
 	return !HasAnyErrors();
 }
 
@@ -191,6 +220,51 @@ bool FCatFishingSpoolModesTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("reeling shortens only the constraint length"), Reeling.LineLengthCentimeters, 492.0, 1e-6);
 	TestEqual(TEXT("requested reel distance is explicit"), Reeling.RequestedReelDistanceCentimeters, 8.0, 1e-6);
 	TestTrue(TEXT("free spool pays out for outward fish intent"), FreeSpool.LineLengthCentimeters > 500.0);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFreeSpoolSwimTest,
+	"Catfishing.Unit.Fishing.Simulation.FreeSpoolUsesBehaviorSwimSpeedEvenForWeakFish",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingFreeSpoolSwimTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFightSimulationConfig Config = MakeConfig();
+	Config.FishStrength = 1.0;
+	const FCatFightSimulationState State = MakeState(ECatFightCatAction::Slack);
+	const FCatFightStepResult Step = FCatFishingFightSimulator::Step(
+		Config, State, MakeHeldConstraint(), FVector::ForwardVector);
+	TestTrue(TEXT("weak fish free-spool step solves"), Step.bSucceeded);
+	TestEqual(TEXT("free fish keeps its behavior-defined struggle speed"),
+		Step.IntendedSwimSpeedCentimetersPerSecond,
+		Config.FishStruggleSpeedCentimetersPerSecond, 1e-9);
+	TestTrue(TEXT("free-spool weak fish visibly changes world position"),
+		Step.ProposedFishWorldPosition.X > State.FishWorldPosition.X + 1.0);
+	TestTrue(TEXT("free spool pays line out for the actual swim"),
+		Step.LineLengthCentimeters > State.LineLengthCentimeters);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingVerticalRodSwingDoesNotPayOutTest,
+	"Catfishing.Unit.Fishing.Simulation.VerticalRodSwingCannotPayOutLineWhileReeling",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingVerticalRodSwingDoesNotPayOutTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFightSimulationState State = MakeState(ECatFightCatAction::Pull);
+	State.LineLengthCentimeters = 100.0;
+	State.FishWorldPosition = FVector(100.0, 0.0, 0.0);
+	FCatFightRodConstraintInput Rod = MakeHeldConstraint();
+	Rod.RodTipWorldPosition = FVector(0.0, 0.0, 150.0);
+	const FCatFightStepResult Step = FCatFishingFightSimulator::Step(
+		MakeConfig(), State, Rod, FVector::ForwardVector);
+	TestTrue(TEXT("vertical swing geometry remains solvable"), Step.bSucceeded);
+	TestEqual(TEXT("vertical swing does not manufacture line"),
+		Step.LineLengthCentimeters, State.LineLengthCentimeters, 1e-9);
+	TestEqual(TEXT("impossible vertical geometry pauses reel progress"),
+		Step.RequestedReelDistanceCentimeters, 0.0, 1e-9);
 	return !HasAnyErrors();
 }
 
@@ -357,8 +431,9 @@ bool FCatFishingStrengthAccelerationTest::RunTest(const FString& Parameters)
 		WeakFish.CatDriveAccelerationCentimetersPerSecondSquared, 250.0, 1e-9);
 	TestEqual(TEXT("fish acceleration is strength times shared coefficient"),
 		WeakFish.FishDriveAccelerationCentimetersPerSecondSquared, 38.25, 1e-9);
-	TestEqual(TEXT("weak fish swim intent is acceleration-limited"),
-		WeakFish.IntendedSwimSpeedCentimetersPerSecond, 38.25, 1e-9);
+	TestEqual(TEXT("weak fish keeps behavior speed before the line constrains it"),
+		WeakFish.IntendedSwimSpeedCentimetersPerSecond,
+		Config.FishStruggleSpeedCentimetersPerSecond, 1e-9);
 	TestEqual(TEXT("7.65 strength fish cannot pull a 50 strength cat"),
 		WeakFish.CarrierTargetPullSpeedCentimetersPerSecond, 0.0, 1e-9);
 	TestEqual(TEXT("weak fish does not restrict cat movement"),

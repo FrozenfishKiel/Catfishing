@@ -100,6 +100,7 @@ bool FCatFishFightMotionSolver::IsIntentionalLandwardHaul(
 		|| !IsFiniteMotionVector(Input.WaterwardDirection)
 		|| Input.WaterwardDirection.IsNearlyZero()
 		|| !IsFiniteMotionVector(Input.CarrierActualWorldDisplacement)
+		|| !IsFiniteMotionVector(Input.NonCarrierRodTipWorldDisplacement)
 		|| !FMath::IsFinite(Input.ActualReelDistanceCentimeters)
 		|| Input.ActualReelDistanceCentimeters < 0.0
 		|| !FMath::IsFinite(Input.MinimumProgressCentimeters)
@@ -119,11 +120,16 @@ bool FCatFishFightMotionSolver::IsIntentionalLandwardHaul(
 	FishDisplacement.Z = 0.0;
 	FVector CarrierDisplacement = Input.CarrierActualWorldDisplacement;
 	CarrierDisplacement.Z = 0.0;
+	FVector NonCarrierRodTipDisplacement = Input.NonCarrierRodTipWorldDisplacement;
+	NonCarrierRodTipDisplacement.Z = 0.0;
 	const double FishLandwardProgress = FVector::DotProduct(FishDisplacement, LandwardDirection);
 	const double CarrierLandwardProgress = FVector::DotProduct(CarrierDisplacement, LandwardDirection);
-	const bool bExplicitCatHaul = Input.ActualReelDistanceCentimeters
-		> Input.MinimumProgressCentimeters
-		|| CarrierLandwardProgress > Input.MinimumProgressCentimeters;
+	const double ExplicitCatHaulDistance = Input.ActualReelDistanceCentimeters
+		+ FMath::Max(0.0, CarrierLandwardProgress);
+	// 若本步主要是竿尖绕 Grip 扫动，先留在水里；旋转稳定后，真实收线/猫平移会自然重获资格。
+	const bool bExplicitCatHaul = ExplicitCatHaulDistance > Input.MinimumProgressCentimeters
+		&& ExplicitCatHaulDistance + Input.MinimumProgressCentimeters
+			>= NonCarrierRodTipDisplacement.Size2D();
 	return bExplicitCatHaul && FishLandwardProgress > Input.MinimumProgressCentimeters;
 }
 
@@ -143,18 +149,27 @@ FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContac
 		|| Input.ProposedLineLengthCentimeters < 0.0
 		|| !FMath::IsFinite(Input.MaximumConstraintDistanceCentimeters)
 		|| Input.MaximumConstraintDistanceCentimeters < 0.0
-		|| Input.ProposedLineLengthCentimeters > Input.PreviousLineLengthCentimeters + 0.01 && Input.bReeling
-		|| Input.ProposedLineLengthCentimeters + 0.01 < Input.PreviousLineLengthCentimeters && Input.bSlacking
 		|| Input.bReeling && Input.bSlacking
 		|| !FMath::IsFinite(Input.CorrectionToleranceCentimeters)
 		|| Input.CorrectionToleranceCentimeters < 0.0)
 	{
 		return Result;
 	}
+	double ProposedLineLength = Input.ProposedLineLengthCentimeters;
+	// 岸线层只做可恢复的空间校正。收线时最多保持旧长度，放线时至少保持旧长度，
+	// 不因竿尖旋转造成的亚帧几何偏差终止整场会话。
+	if (Input.bReeling)
+	{
+		ProposedLineLength = FMath::Min(ProposedLineLength, Input.PreviousLineLengthCentimeters);
+	}
+	else if (Input.bSlacking)
+	{
+		ProposedLineLength = FMath::Max(ProposedLineLength, Input.PreviousLineLengthCentimeters);
+	}
 	const double MaximumConstraintDistance = Input.MaximumConstraintDistanceCentimeters > 0.0
-		? FMath::Max(Input.ProposedLineLengthCentimeters,
+		? FMath::Max(ProposedLineLength,
 			Input.MaximumConstraintDistanceCentimeters)
-		: Input.ProposedLineLengthCentimeters;
+		: ProposedLineLength;
 
 	Result.bShoreContact = FVector::DistSquared2D(Input.CandidateFishWorldPosition,
 		Input.ResolvedWaterWorldPosition) > FMath::Square(Input.CorrectionToleranceCentimeters);
@@ -194,14 +209,14 @@ FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContac
 	if (ClampSegmentEndToSphere(Input.CurrentFishWorldPosition, DesiredPosition,
 		Input.RodTipWorldPosition, MaximumConstraintDistance, Result.FishWorldPosition))
 	{
-		Result.LineLengthCentimeters = Input.ProposedLineLengthCentimeters;
+		Result.LineLengthCentimeters = ProposedLineLength;
 	}
 	else if (Input.bReeling && ClampSegmentEndToSphere(Input.CurrentFishWorldPosition, DesiredPosition,
 		Input.RodTipWorldPosition, FMath::Max(Input.PreviousLineLengthCentimeters,
 			MaximumConstraintDistance), Result.FishWorldPosition))
 	{
 		// 岸线阻止鱼继续靠近时，本次收线只能收到实际直线距离；这是“收线未完全成功”，不是主动吐线。
-		Result.LineLengthCentimeters = FMath::Max(Input.ProposedLineLengthCentimeters,
+		Result.LineLengthCentimeters = FMath::Max(ProposedLineLength,
 			FVector::Distance(Input.RodTipWorldPosition, Result.FishWorldPosition));
 	}
 	else

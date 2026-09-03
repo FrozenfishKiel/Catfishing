@@ -46,8 +46,8 @@
 | 编辑器字段 | C++ 字段 | 当前值 | 含义 |
 |---|---|---:|---|
 | 每公斤力量 | StrengthPerKilogram | 10 | 实际鱼重→鱼力量；也用于猫基础力量反推等效质量 |
-| 每点力量加速度 | AccelerationPerStrength | 5 | 猫/鱼共享的力量→意图加速度换算 |
-| 驱动力响应时间 | DriveResponseSeconds | 1s | 加速度投影到目标速度的响应时长 |
+| 每点力量加速度 | AccelerationPerStrength | 5 | 猫/鱼共享的力量→绷线对抗加速度换算；不限制鱼的自由游速 |
+| 猫端驱动力响应时间 | DriveResponseSeconds | 1s | 猫端对抗加速度投影到收线/牵引响应速度的时长 |
 | 收线速度 | ReelSpeedCentimetersPerSecond | 80 cm/s | 左键收线意图速度上限 |
 | 猫/鱼做功体力消耗系数 | Cat/FishStaminaCostPerStrengthCentimeter | 0.002 | 每点力量、每厘米有效努力的体力价格 |
 | 僵持努力折算倍率 | IsometricEffortMultiplier | 1 | 未实现位移的意图距离计费倍率 |

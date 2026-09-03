@@ -140,18 +140,21 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const double FishSpeedCap = bStruggling
 		? Config.FishStruggleSpeedCentimetersPerSecond
 		: Config.FishCalmSpeedCentimetersPerSecond;
-	const double SwimSpeed = State.bFishExhausted ? 0.0 : FMath::Min(
-		FishSpeedCap, FishDriveAcceleration * Config.DriveResponseSeconds);
+	// 性格资产给的是鱼在无约束水体中的意图游速。力量换算出的加速度只参与绷线后的双方对抗，
+	// 不能反过来成为自由游动的永久速度上限；否则小鱼即使松开线杯也会近似停在原地。
+	const double SwimSpeed = State.bFishExhausted ? 0.0 : FishSpeedCap;
 	const FVector FishIntentDisplacement = FishDirection * SwimSpeed * Dt;
 	FVector FreeFishPosition = State.FishWorldPosition + FishIntentDisplacement;
 	FreeFishPosition.Z = State.FishWorldPosition.Z;
 
+	// L_paid 是线杯账面长度，竿尖旋转不能凭空放线。若抬竿后垂直距离暂时大于线长，
+	// 由约束误差表达不可满足的几何状态，不能在按住收线时把线长反写得更长。
 	const double PaidOutLine0 = FMath::Clamp(State.LineLengthCentimeters,
-		VerticalDistance, Config.MaximumLineLengthCentimeters);
+		0.0, Config.MaximumLineLengthCentimeters);
 	const double ReelIntentSpeed = FMath::Min(Config.ReelSpeedCentimetersPerSecond,
 		CatDriveAcceleration * Config.DriveResponseSeconds);
 	const double RequestedReelDistance = bReeling && EffectiveCatStrength > UE_DOUBLE_SMALL_NUMBER
-		? FMath::Min(ReelIntentSpeed * Dt, PaidOutLine0 - VerticalDistance) : 0.0;
+		? FMath::Min(ReelIntentSpeed * Dt, FMath::Max(0.0, PaidOutLine0 - VerticalDistance)) : 0.0;
 	double LineLength = PaidOutLine0 - RequestedReelDistance;
 	const double FreeDistance = FVector::Distance(RodTip, FreeFishPosition);
 	if (bFreeSpool)
@@ -231,10 +234,15 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	Result.ActualReelDistanceCentimeters = RequestedReelDistance;
 	Result.CatIntendedLineDistanceCentimeters = CatActiveIntentDistance + CatHoldIntentDistance;
 	Result.CatActualLineDistanceCentimeters = RequestedReelDistance + CatCarrierActual;
-	Result.FishIntendedLineDistanceCentimeters = FMath::Abs(
-		FVector::DotProduct(FishIntentDisplacement, LineDirection));
-	Result.FishActualLineDistanceCentimeters = FMath::Abs(FVector::DotProduct(
-		ProposedFishPosition - State.FishWorldPosition, LineDirection));
+	const double FishSignedIntentLineDistance = FVector::DotProduct(
+		FishIntentDisplacement, LineDirection);
+	const double FishSignedActualLineDistance = FVector::DotProduct(
+		ProposedFishPosition - State.FishWorldPosition, LineDirection);
+	Result.FishIntendedLineDistanceCentimeters = FMath::Abs(FishSignedIntentLineDistance);
+	// 被收线或甩杆强迫拖向意图反方向的位移仍参与位置约束，但不能冒充鱼主动做功。
+	Result.FishActualLineDistanceCentimeters = FishSignedIntentLineDistance >= 0.0
+		? FMath::Max(0.0, FishSignedActualLineDistance)
+		: FMath::Max(0.0, -FishSignedActualLineDistance);
 
 	double IgnoredEffortDistance = 0.0;
 	// 鱼力竭后进入纯收尾：仍求解收线和双端位移，但不再向任何猫结算做功消耗。

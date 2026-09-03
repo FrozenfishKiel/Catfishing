@@ -54,6 +54,8 @@ struct CATFISHING_API FCatFishBeachingIntentInput
 	FVector CandidateFishWorldPosition = FVector::ZeroVector;
 	FVector WaterwardDirection = FVector::ForwardVector;
 	FVector CarrierActualWorldDisplacement = FVector::ZeroVector;
+	/** 竿尖相对持竿者的本步扫动；旋转扫动不能借一次同时收线取得上岸资格。 */
+	FVector NonCarrierRodTipWorldDisplacement = FVector::ZeroVector;
 	double ActualReelDistanceCentimeters = 0.0;
 	double MinimumProgressCentimeters = 0.1;
 	bool bLineTaut = false;
