@@ -207,7 +207,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		ProposedFishPosition - State.FishWorldPosition, LineDirection));
 
 	double IgnoredEffortDistance = 0.0;
-	if (bOperatorPresent && EffectiveCatStrength > UE_DOUBLE_SMALL_NUMBER
+	// 鱼力竭后进入纯收尾：仍求解收线和双端位移，但不再向任何猫结算做功消耗。
+	if (!State.bFishExhausted && bOperatorPresent && EffectiveCatStrength > UE_DOUBLE_SMALL_NUMBER
 		&& Result.CatIntendedLineDistanceCentimeters > UE_DOUBLE_SMALL_NUMBER)
 	{
 		FCatFightWorkInput CatWork;

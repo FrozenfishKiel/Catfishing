@@ -158,6 +158,8 @@ bool FCatFishingExhaustedContinuationTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("reeling exhausted fish draws it toward the rod"),
 		Reeling.ProposedFishWorldPosition.X < ReelingState.FishWorldPosition.X);
 	TestEqual(TEXT("exhausted fish cannot spend fish stamina"), Reeling.FishStaminaDrain, 0.0, 1e-9);
+	TestEqual(TEXT("locked exhausted fish cannot drain cat stamina"), Locked.CatStaminaDrain, 0.0, 1e-9);
+	TestEqual(TEXT("reeling exhausted fish cannot drain cat stamina"), Reeling.CatStaminaDrain, 0.0, 1e-9);
 	return !HasAnyErrors();
 }
 

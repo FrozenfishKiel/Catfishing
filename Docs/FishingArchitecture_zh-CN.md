@@ -98,7 +98,7 @@
 | Probe | StateTree 的 `EnterPhase` 节点（ProbeTriggered 事件转移后） |
 | TrueBiteWindow | StateTree 的 `OpenTrueBiteWindow` 节点打开通用响应窗；只让浮漂下沉，不选鱼、不生成 Actor、不扣饵 |
 | HookedFight | 真咬窗内收到左键后，`RequestHook` 冻结选鱼上下文、选鱼、生成 Actor、扣饵并启动搏斗 |
-| ExhaustedReel | `FishExhausted` 事件驱动 StateTree 进入；同一个 Runner 继续双端约束，只关闭鱼 AI |
+| ExhaustedReel | `FishExhausted` 事件驱动 StateTree 进入；同一个 Runner 继续双端运动约束，但关闭鱼 AI 与猫端体力扣费 |
 | Resolved/Terminated | `FinalizeSession()` —— StateTree **禁止**进入终态，且它会停树 |
 
 浮漂正式表现由 `ACatFishingHookActor` 驱动，不依赖 `cat.Fishing.Debug`：Waiting 先保证至少 `MinimumBiteDelaySeconds`（当前 5 秒）的小幅慢浮，再叠加服务器随机安静等待；真咬前 `BiteWarningSeconds`（当前 1.5 秒）只把 Hook 的复制模式切为 `BiteWarning`，此时提前提竿仍是空钩；进入 `TrueBiteWindow` 时切为 `Sunk` 猛然下沉。若响应窗内没有左键，StateTree 走 `WindowExpired → Waiting`，保留鱼竿、鱼线和饵料预约并开始新一轮；每轮使用新的确定性服务器随机种子。`MaximumBiteDelaySeconds`（当前 15 秒）是每轮慢浮开始到下沉的总上限。网络只复制模式和服务器起始时间，各客户端本地计算连续位移，因此不会逐帧复制 Transform。
@@ -130,7 +130,7 @@ D      = 竿尖到鱼的直线距离
 Slack  = max(L_paid-D, 0)：有余线时 Cable 本地垂坠
 Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消耗资源
 
-鱼体力归零发布 `FishExhausted`，StateTree 切入 `ExhaustedReel`，同一 Runner 继续求解；猫体力归零只让主动力量归零。猫进入水中由 Condition 对脚点浸没深度做滞回和持续确认后终止会话；不再存在力量比较直接落水或直接碾压。
+鱼体力归零发布 `FishExhausted`，StateTree 切入 `ExhaustedReel`，同一 Runner 继续求解线长和双端位移，但停止所有猫端做功扣费；左键只负责把力竭鱼逐步收近。猫体力归零只让主动力量归零。猫进入水中由 Condition 对脚点浸没深度做滞回和持续确认后终止会话；不再存在力量比较直接落水或直接碾压。
 完美中鱼：真咬后 1s 内提竿（服务器时间戳）→ 鱼力/鱼体力/初始线长按性格模板折减，bPerfectHook 复制
 ```
 

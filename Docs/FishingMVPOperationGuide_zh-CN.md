@@ -135,7 +135,7 @@ Root
 | Probe | StateTree 的 `Cat Fishing Enter Phase` 节点 |
 | TrueBiteWindow | `Cat Fishing Open True Bite Window` 节点打开通用响应窗；此时没有鱼 Actor |
 | HookedFight | 真咬窗内收到左键后，`RequestHook` 才选鱼、生成 Actor、扣饵并 EnterPhase |
-| ExhaustedReel | 鱼体力耗尽事件驱动 StateTree 进入；保留当前位置，同一 Runner 仅在持续左键时按双端约束收近 |
+| ExhaustedReel | 鱼体力耗尽事件驱动 StateTree 进入；保留当前位置，同一 Runner 仅在持续左键时按双端约束收近，且不再扣猫体力 |
 | Resolved / Terminated | `FinalizeSession()`，**StateTree 禁止进入** |
 
 ### 2.3 节点说明
