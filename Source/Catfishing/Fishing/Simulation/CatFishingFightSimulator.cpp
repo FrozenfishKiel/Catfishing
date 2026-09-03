@@ -250,8 +250,9 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		&& Result.CatIntendedLineDistanceCentimeters > UE_DOUBLE_SMALL_NUMBER)
 	{
 		FCatFightWorkInput CatWork;
-		// 杠杆决定传到鱼线上的有效力，但猫为维持姿态付出的肌肉做功仍按自身主动强度计费。
-		CatWork.Strength = CombinedCatStrength;
+		// 力量仍只决定对抗加速度和位移结果；体力用双方共用的标准努力强度结算，
+		// 避免同样的沿线意图仅因体重/力量不同产生数十倍耗体差。
+		CatWork.Strength = Config.StrengthPerKilogram;
 		CatWork.IntendedLineDistanceCentimeters = Result.CatIntendedLineDistanceCentimeters;
 		CatWork.ActualLineDistanceCentimeters = Result.CatActualLineDistanceCentimeters;
 		CatWork.IsometricEffortMultiplier = Config.IsometricEffortMultiplier;
@@ -273,7 +274,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		&& Result.FishIntendedLineDistanceCentimeters > UE_DOUBLE_SMALL_NUMBER)
 	{
 		FCatFightWorkInput FishWork;
-		FishWork.Strength = Config.FishStrength;
+		FishWork.Strength = Config.StrengthPerKilogram;
 		FishWork.IntendedLineDistanceCentimeters = Result.FishIntendedLineDistanceCentimeters;
 		FishWork.ActualLineDistanceCentimeters = Result.FishActualLineDistanceCentimeters;
 		FishWork.IsometricEffortMultiplier = Config.IsometricEffortMultiplier;

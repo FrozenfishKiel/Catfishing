@@ -341,6 +341,33 @@ bool FCatFishingIsometricWorkTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingStrengthNormalizedStaminaTest,
+	"Catfishing.Unit.Fishing.Simulation.FishStrengthChangesMotionNotStaminaCostForSameLineEffort",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingStrengthNormalizedStaminaTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFightSimulationConfig WeakFishConfig = MakeConfig();
+	WeakFishConfig.FishStrength = 0.4;
+	FCatFightSimulationConfig StrongFishConfig = WeakFishConfig;
+	StrongFishConfig.FishStrength = 40.0;
+	FCatFightSimulationState State = MakeState(ECatFightCatAction::Slack);
+	const FCatFightRodConstraintInput Rod = MakeHeldConstraint();
+	const FCatFightStepResult WeakFish = FCatFishingFightSimulator::Step(
+		WeakFishConfig, State, Rod, FVector::ForwardVector);
+	const FCatFightStepResult StrongFish = FCatFishingFightSimulator::Step(
+		StrongFishConfig, State, Rod, FVector::ForwardVector);
+	TestTrue(TEXT("弱鱼与强鱼单步都成功"), WeakFish.bSucceeded && StrongFish.bSucceeded);
+	TestTrue(TEXT("松线时相同游速产生相同沿线努力距离"),
+		FMath::IsNearlyEqual(WeakFish.FishIntendedLineDistanceCentimeters,
+			StrongFish.FishIntendedLineDistanceCentimeters, 1e-9));
+	TestEqual(TEXT("相同沿线努力不因绝对力量差产生体力倍率"),
+		WeakFish.FishStaminaDrain, StrongFish.FishStaminaDrain, 1e-9);
+	TestTrue(TEXT("标准努力仍会消耗鱼体力"), WeakFish.FishStaminaDrain > 0.0);
+	return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingExhaustedContinuationTest,
 	"Catfishing.Unit.Fishing.Simulation.ExhaustedFishKeepsSameSolverAndMovesOnlyWhenReeled",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)

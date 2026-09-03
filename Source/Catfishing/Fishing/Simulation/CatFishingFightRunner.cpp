@@ -1005,7 +1005,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 	const double FishPhaseDrainMultiplier = State.MotionIntent == ECatFishMotionIntent::StrugglingOutward
 		? Config.StruggleDrainMultiplier : Config.BaseDrainMultiplier;
 	const double FishUncappedStaminaDrain = State.bFishExhausted ? 0.0
-		: Config.FishStrength * FishEffectiveEffortDistance
+		: Config.StrengthPerKilogram * FishEffectiveEffortDistance
 			* Config.FishStaminaCostPerStrengthCentimeter * FishPhaseDrainMultiplier;
 	const double FishStaminaAfterStep = FMath::Max(0.0, State.FishStamina - Step.FishStaminaDrain);
 	const FVector SimulatorFishDelta = Step.ProposedFishWorldPosition - State.FishWorldPosition;
@@ -1028,7 +1028,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 		UE_LOG(LogCatFishing, Log,
 			TEXT("Event=%s SessionId=%s Trigger=%s CatAction=%s MotionIntent=%s "
 				"FishStaminaBefore=%.3f FishStaminaDrain=%.3f FishStaminaAfter=%.3f "
-				"DrainPerSecond=%.3f UncappedDrain=%.3f FishStrength=%.3f CostPerStrengthCm=%.6f "
+				"DrainPerSecond=%.3f UncappedDrain=%.3f FishStrength=%.3f StaminaReferenceStrength=%.3f CostPerStrengthCm=%.6f "
 				"PhaseMultiplier=%.3f IsometricMultiplier=%.3f FixedStepSeconds=%.3f IntendedSwimSpeedCmPerSec=%.3f "
 				"FishIntentLineCm=%.3f FishActualLineCm=%.3f FishRealizedEffortCm=%.3f "
 				"FishBlockedEffortCm=%.3f FishEffectiveEffortCm=%.3f "
@@ -1049,6 +1049,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.FishStaminaDrain / Config.FixedStepSeconds,
 			FishUncappedStaminaDrain,
 			Config.FishStrength,
+			Config.StrengthPerKilogram,
 			Config.FishStaminaCostPerStrengthCentimeter,
 			FishPhaseDrainMultiplier,
 			Config.IsometricEffortMultiplier,

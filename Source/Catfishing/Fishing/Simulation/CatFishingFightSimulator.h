@@ -54,6 +54,7 @@ struct CATFISHING_API FCatFightSimulationConfig
 	/** 转矩模型的玩法杆长；来自鱼竿定义，不读取 Mesh 或锚点间距。 */
 	double RodPhysicsLengthCentimeters = 200.0;
 	double CatStaminaMaximum = 0.0;
+	/** 双方体力都按 StrengthPerKilogram 这一标准努力强度与沿线有效距离结算，不再乘各自绝对力量。 */
 	double CatStaminaCostPerStrengthCentimeter = 0.002;
 	double FishStaminaCostPerStrengthCentimeter = 0.002;
 	double IsometricEffortMultiplier = 1.0;
