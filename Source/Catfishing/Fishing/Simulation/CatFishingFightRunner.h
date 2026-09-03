@@ -75,7 +75,7 @@ public:
 	bool SetSlacking(APlayerState* InputPlayerState, int64 InputSequence, bool bInSlacking);
 	/** 主操作手离竿后进入无人值守松线；Runner 继续推进，但不再读写旧玩家的力量或体力。 */
 	bool BeginUnattendedSlackFromAuthority();
-	/** 鱼力竭只关闭 AI 意图；固定步和同一个双端约束继续运行。 */
+	/** 鱼力竭关闭 AI 与鱼端驱动力并立即清除猫端牵引；固定步和同一线长约束继续负责收近。 */
 	bool SetFishExhaustedFromAuthority();
 	bool IsFishExhaustedForAuthority() const { return State.bFishExhausted; }
 	/** 搏斗接力时原子迁移 ASC、力量、体力上限/当前值与新玩家自己的输入序号域。 */

@@ -43,11 +43,23 @@ namespace CatFishCatalogSettingsPrivate
 			&& Settings.MinimumChallengeWeightMultiplier <= 1.0;
 	}
 
-	static double CalculateChallengeRatio(const UCatFishDefinition& Definition,
-		const double CombinedFishingStrength, const double CombinedFightStamina)
+	static double SampleIndividualWeight(const UCatFishDefinition& Definition,
+		const FCatFishSelectionContext& Context)
 	{
-		const double StrengthRatio = Definition.FishStrength / CombinedFishingStrength;
-		const double StaminaRatio = Definition.FishFightStamina / CombinedFightStamina;
+		// 每个鱼种使用独立稳定随机流，避免增删其他候选时改变本鱼个体重量；主随机流只负责难度带和鱼种抽取。
+		const uint32 Seed = HashCombineFast(GetTypeHash(Context.RandomSeed),
+			GetTypeHash(Definition.FishDefinitionId));
+		FRandomStream WeightRandom(static_cast<int32>(Seed));
+		return WeightRandom.FRandRange(static_cast<float>(Definition.MinimumWeightKilograms),
+			static_cast<float>(Definition.MaximumWeightKilograms));
+	}
+
+	static double CalculateChallengeRatio(const double FishStrength,
+		const double FishStamina, const double CombinedFishingStrength,
+		const double CombinedFightStamina)
+	{
+		const double StrengthRatio = FishStrength / CombinedFishingStrength;
+		const double StaminaRatio = FishStamina / CombinedFightStamina;
 		// 力量是持续约束对抗的危险下限，不能被低体力稀释；体力只有在鱼也具备相称力量时才构成持续挑战。
 		// 调和均值会把“高体力、极低力量”的耐打木桩压回轻松带，避免选择器把它误判为高强度运动对手。
 		const double BalancedRatio = (2.0 * StrengthRatio * StaminaRatio)
@@ -154,7 +166,8 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 		|| !(Context.ChumSample.WaterRegion == Context.WaterRegion)
 		|| Context.ActivePlayerCount < 1 || Context.ActivePlayerCount > 8
 		|| !FMath::IsFinite(Context.CombinedFishingStrength) || Context.CombinedFishingStrength <= 0.0
-		|| !FMath::IsFinite(Context.CombinedFightStamina) || Context.CombinedFightStamina <= 0.0)
+		|| !FMath::IsFinite(Context.CombinedFightStamina) || Context.CombinedFightStamina <= 0.0
+		|| !FMath::IsFinite(Context.StrengthPerKilogram) || Context.StrengthPerKilogram <= 0.0)
 	{
 		return Result;
 	}
@@ -167,6 +180,8 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	struct FCandidate
 	{
 		UCatFishDefinition* Definition = nullptr;
+		double WeightKilograms = 0.0;
+		double BaseFishStrength = 0.0;
 		double ChallengeRatio = 0.0;
 		double FinalWeight = 0.0;
 		CatFishCatalogSettingsPrivate::EChallengeBand ChallengeBand =
@@ -181,10 +196,17 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 		{
 			continue;
 		}
-		// 挑战度是第一道实际玩法门：超出安全上限的鱼不会再进入任何生态条件或权重计算。
-		const double ChallengeRatio = CatFishCatalogSettingsPrivate::CalculateChallengeRatio(*Definition,
+		// 先确定本鱼种在本次咬钩机会里的个体重量，再用同一重量推导力量和挑战度；选中后不再二次抽样。
+		const double WeightKilograms = CatFishCatalogSettingsPrivate::SampleIndividualWeight(
+			*Definition, Context);
+		const double BaseFishStrength = WeightKilograms * Context.StrengthPerKilogram;
+		// 挑战度是第一道实际玩法门：超出安全上限的个体不会再进入任何生态条件或权重计算。
+		const double ChallengeRatio = CatFishCatalogSettingsPrivate::CalculateChallengeRatio(
+			BaseFishStrength, Definition->FishFightStamina,
 			Context.CombinedFishingStrength, Context.CombinedFightStamina);
-		if (!FMath::IsFinite(ChallengeRatio) || ChallengeRatio <= 0.0
+		if (!FMath::IsFinite(WeightKilograms) || WeightKilograms <= 0.0
+			|| !FMath::IsFinite(BaseFishStrength) || BaseFishStrength <= 0.0
+			|| !FMath::IsFinite(ChallengeRatio) || ChallengeRatio <= 0.0
 			|| ChallengeRatio > MaximumChallengeRatio)
 		{
 			continue;
@@ -198,8 +220,13 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 		{
 			continue;
 		}
-		Candidates.Add({Definition, ChallengeRatio, 0.0,
-			CatFishCatalogSettingsPrivate::ResolveChallengeBand(ChallengeRatio, *this)});
+		FCandidate& Candidate = Candidates.AddDefaulted_GetRef();
+		Candidate.Definition = Definition;
+		Candidate.WeightKilograms = WeightKilograms;
+		Candidate.BaseFishStrength = BaseFishStrength;
+		Candidate.ChallengeRatio = ChallengeRatio;
+		Candidate.ChallengeBand = CatFishCatalogSettingsPrivate::ResolveChallengeBand(
+			ChallengeRatio, *this);
 	}
 	Candidates.Sort([](const FCandidate& Left, const FCandidate& Right)
 	{
@@ -312,10 +339,9 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 	}
 	Result.bSelected = true;
 	Result.FishDefinitionId = Selected->Definition->FishDefinitionId;
+	Result.WeightKilograms = Selected->WeightKilograms;
+	Result.BaseFishStrength = Selected->BaseFishStrength;
 	Result.SelectedFinalWeight = Selected->FinalWeight;
 	Result.SelectedNormalizedProbability = Selected->FinalWeight / TotalCandidateWeight;
-	Result.WeightKilograms = Random.FRandRange(
-		static_cast<float>(Selected->Definition->MinimumWeightKilograms),
-		static_cast<float>(Selected->Definition->MaximumWeightKilograms));
 	return Result;
 }

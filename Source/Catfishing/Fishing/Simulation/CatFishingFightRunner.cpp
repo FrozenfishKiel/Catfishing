@@ -270,13 +270,13 @@ bool UCatFishingFightRunner::UpdateParticipantIntentAndProperties()
 		{
 			Primary = &Participant;
 			PrimaryStrength = ActiveStrength;
-			PrimaryMass = Config.FishMassKilograms;
+			PrimaryMass = Participant.BaseFishingStrength / Config.StrengthPerKilogram;
 		}
 		else if (Participant.bPullHeld)
 		{
 			HelperStrength += ActiveStrength;
-			// 每只主动接入约束的辅助猫同样按“一猫=一鱼”的灰盒质量加入猫端系统。
-			HelperMass += Config.FishMassKilograms;
+			// 辅助猫与主位使用同一力量/质量换算；体力只衰减当前驱动力，不改变等效质量。
+			HelperMass += Participant.BaseFishingStrength / Config.StrengthPerKilogram;
 		}
 	}
 
@@ -390,6 +390,11 @@ bool UCatFishingFightRunner::SetFishExhaustedFromAuthority()
 	State.FishStamina = 0.0;
 	State.MotionIntent = ECatFishMotionIntent::AutoHauling;
 	State.StrongConfrontationBuildUpSeconds = 0.0;
+	// 终止鱼端驱动力的同一权威写口立即清掉上一固定步的猫端目标，不能再多拖一个模拟帧。
+	if (ACatFishingRodActor* Rod = RodActor.Get())
+	{
+		Rod->ClearCarrierConstraintFromAuthority();
+	}
 	if (ACatFishEncounterActor* Encounter = FishActor.Get())
 	{
 		Encounter->StopFishBehaviorFromAuthority();
@@ -643,7 +648,10 @@ void UCatFishingFightRunner::HandleFixedStep()
 
 	// Runner 只发布这一固定步的统一约束目标；Rod 在服务器和拥有客户端的移动帧内平滑追赶目标速度。
 	// CharacterMovement 仍负责碰撞与网络移动，不直接插值或瞬移 Character Transform。
-	if (RodConstraint.bRodHeld && Step.NormalizedTension > UE_DOUBLE_SMALL_NUMBER)
+	const bool bCarrierConstraintActive = RodConstraint.bRodHeld
+		&& (Step.CarrierTargetPullSpeedCentimetersPerSecond > UE_DOUBLE_SMALL_NUMBER
+			|| Step.CarrierAwaySpeedMultiplier < 1.0 - UE_DOUBLE_SMALL_NUMBER);
+	if (bCarrierConstraintActive)
 	{
 		const APawn* Holder = Rod->GetHolderPawnFromAuthority();
 		FVector PullDirection = Motion.FishWorldPosition
@@ -671,7 +679,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 	{
 		UE_LOG(LogCatFishing, Display,
 			TEXT("Event=fishing_coupled_work_sample SessionId=%s RodActorId=%s "
-				"PrimaryStrength=%.3f HelperStrength=%.3f CombinedStrength=%.3f CatSystemMassKg=%.3f FishMassKg=%.3f MassMode=EqualPerParticipant ActiveHelpers=%d "
+				"PrimaryStrength=%.3f HelperStrength=%.3f CombinedStrength=%.3f CatSystemMassKg=%.3f FishMassKg=%.3f MassMode=StrengthDerived StrengthPerKg=%.3f ActiveHelpers=%d "
+				"CatAcceleration=%.3f FishAcceleration=%.3f NetFishPullAcceleration=%.3f "
 				"PrimaryStamina=%.3f GroupStaminaDrain=%.3f FishStamina=%.3f FishStaminaDrain=%.3f "
 				"CatIntentCm=%.3f CatActualCm=%.3f FishIntentCm=%.3f FishActualCm=%.3f ReelRequestedCm=%.3f ReelActualCm=%.3f NetMode=%d Authority=true"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
@@ -681,7 +690,11 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.CombinedCatStrength,
 			Config.GetCombinedCatMass(),
 			Config.FishMassKilograms,
+			Config.StrengthPerKilogram,
 			Step.ActiveHelperCount,
+			Step.CatDriveAccelerationCentimetersPerSecondSquared,
+			Step.FishDriveAccelerationCentimetersPerSecondSquared,
+			Step.NetFishPullAccelerationCentimetersPerSecondSquared,
 			State.CatStamina,
 			Step.CatStaminaDrain,
 			State.FishStamina,
@@ -701,14 +714,15 @@ void UCatFishingFightRunner::HandleFixedStep()
 		const TCHAR* Action = State.CatAction == ECatFightCatAction::Pull ? TEXT("Pull")
 			: State.CatAction == ECatFightCatAction::Slack ? TEXT("Slack") : TEXT("None");
 		UE_LOG(LogCatFishing, Display,
-			TEXT("Event=fishing_constraint_sample SessionId=%s RodActorId=%s Active=%s Action=%s "
+			TEXT("Event=fishing_constraint_sample SessionId=%s RodActorId=%s Active=%s CarrierActive=%s Action=%s "
 				"ConstraintError=%.2f RelativeLineSpeed=%.2f Tension=%.3f FishCorrection=%.2f CarrierCorrection=%.2f "
 				"CarrierAcceleration=%.2f CarrierTargetPullSpeed=%.2f CarrierAwaySpeedMultiplier=%.3f RodLeverage=%.3f "
-				"ActiveCombinedStrength=%.3f ActiveHelpers=%d GroupStaminaDrain=%.3f "
+				"ActiveCombinedStrength=%.3f CatAcceleration=%.3f FishAcceleration=%.3f NetFishPullAcceleration=%.3f FishDominance=%.3f ActiveHelpers=%d GroupStaminaDrain=%.3f "
 				"Stalemate=%s Fish=%s RodTip=%s Holder=%s NetMode=%d Authority=true"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(),
 			*Rod->GetPresentationState().RodActorId.ToString(),
 			bConstraintActive ? TEXT("true") : TEXT("false"),
+			bCarrierConstraintActive ? TEXT("true") : TEXT("false"),
 			Action,
 			Step.ConstraintErrorCentimeters,
 			Step.RelativeConstraintSpeedCentimetersPerSecond,
@@ -720,6 +734,10 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.CarrierAwaySpeedMultiplier,
 			Step.RodLeverageMultiplier,
 			Step.CombinedCatStrength,
+			Step.CatDriveAccelerationCentimetersPerSecondSquared,
+			Step.FishDriveAccelerationCentimetersPerSecondSquared,
+			Step.NetFishPullAccelerationCentimetersPerSecondSquared,
+			Step.FishForceDominance,
 			Step.ActiveHelperCount,
 			Step.CatStaminaDrain,
 			Step.bStalemate ? TEXT("true") : TEXT("false"),

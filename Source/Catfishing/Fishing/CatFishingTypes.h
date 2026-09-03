@@ -162,6 +162,14 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	FName FishDefinitionId = NAME_None;
 
+	/** 本次服务器实际抽到的鱼重量；力量、视觉和捕获结果都使用这一份个体事实。 */
+	UPROPERTY(BlueprintReadOnly)
+	double FishWeightKilograms = 0.0;
+
+	/** 本次个体由重量换算、并叠加完美中鱼倍率后的搏斗力量。 */
+	UPROPERTY(BlueprintReadOnly)
+	double FishStrength = 0.0;
+
 	/** 当前鱼是否属于 Giant 档；只影响 HookedFight 是否接收协作者，近岸仍抢抄。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bGiant = false;
@@ -239,7 +247,7 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Carrier movement is an endpoint intent"))
 	float CarrierMovementAlpha = 0.0f;
 
-	/** 兼容现有 HUD 的派生展示值；实际运动改由每个固定步的一次速度冲量驱动。 */
+	/** 鱼占优部分传到猫端的加速度；实际运动由 Rod 平滑追赶同一步的目标牵引速度。 */
 	UPROPERTY(BlueprintReadOnly)
 	float CarrierPullAccelerationCentimetersPerSecondSquared = 0.0f;
 

@@ -105,6 +105,8 @@ protected:
 private:
 	UFUNCTION()
 	void OnRep_PresentationState(const FCatFishingRodPresentationState& Previous);
+	UFUNCTION()
+	void OnRep_CarrierConstraintState();
 	void QueueOrDispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	void DispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	void ApplyCarrierConstraint(float DeltaSeconds);
@@ -121,7 +123,7 @@ private:
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> GripAnchor;
 	UPROPERTY(ReplicatedUsing=OnRep_PresentationState, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
 	FCatFishingRodPresentationState PresentationState;
-	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
+	UPROPERTY(ReplicatedUsing=OnRep_CarrierConstraintState, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
 	FCatFishingCarrierConstraintState CarrierConstraintState;
 	FTransform RodTipCanonicalLocalTransform = FTransform::Identity;
 	FTransform StandCanonicalLocalTransform = FTransform::Identity;

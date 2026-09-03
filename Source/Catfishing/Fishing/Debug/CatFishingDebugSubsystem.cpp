@@ -291,7 +291,6 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 			SessionSnapshot->FishDefinitionId);
 		if (FishDefinition)
 		{
-			double StrengthScale = 1.0;
 			double StaminaScale = 1.0;
 			if (SessionSnapshot->bPerfectHook)
 			{
@@ -300,7 +299,6 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 					? FishingSettings->FindBitePersonality(FishDefinition->BitePersonalityId) : nullptr;
 				if (Bite)
 				{
-					StrengthScale = Bite->PerfectFishStrengthMultiplier;
 					StaminaScale = Bite->PerfectFishStaminaMultiplier;
 				}
 			}
@@ -309,7 +307,7 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 				? FMath::Clamp(SessionSnapshot->FishFightStaminaRemaining / MaximumStamina * 100.0, 0.0, 100.0) : 0.0;
 			FishLine = FString::Printf(TEXT("FISH  Stamina %.1f / %.1f (%.1f%%)  Strength %.1f"),
 				SessionSnapshot->FishFightStaminaRemaining, MaximumStamina, StaminaPercent,
-				FishDefinition->FishStrength * StrengthScale);
+				SessionSnapshot->FishStrength);
 		}
 	}
 

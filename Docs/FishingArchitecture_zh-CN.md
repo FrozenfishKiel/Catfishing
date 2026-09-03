@@ -109,7 +109,7 @@ StateTree（`ST_FishingSession`）保持薄编排。其中 `FishExhausted` 是 `
 
 `FCatFishingFightSimulator::Step()`：纯静态无副作用函数（有单元测试），每 0.05s 由 Runner 调一次。
 
-力量决定双方主动意图能力；质量决定鱼线绷紧后约束修正如何分配。当前灰盒阶段以本次鱼的真实重量作为一个等质量单位：主猫为一个单位，因此单猫与鱼严格各承担 50%；每只正在协作发力的辅助猫再增加一个单位。角色组件的默认质量不进入玩法计算。猫体力下降时有效力量连续降低，归零不产生终局。
+鱼的个体力量由本次实际重量乘统一 `FightStrengthPerKilogram` 得到；猫的基础 `FishingStrength` 使用同一系数反推等效系统质量。双方的意图加速度都等于当前有效力量乘 `FightAccelerationPerStrength`，再由 `FightDriveResponseSeconds` 投影成受性格游速/收线速度封顶的意图速度。鱼线绷紧后先比较双方沿线加速度：只有鱼占优的差值能生成猫端牵引，质量只决定这部分运动在双端如何分配。猫体力下降时有效力量连续降低但质量不变，归零不产生瞬时终局。
 
 主猫持竿时，PlayerController 在每帧视角旋转完成后把猫身水平朝向同步到 `ControlRotation.Yaw`，并临时关闭面向移动/ControllerDesiredRotation 两条覆盖通道。因此鱼竿朝向、猫身和移动基准共用同一控制 Yaw，向后输入不会让猫掉头；离竿或换 Pawn 时恢复角色原有转向配置。是否持竿仍只读鱼竿 `HolderPlayerState`，Controller 不保存平行业务状态。
 `FCatFishSteeringModel` 用独立服务器随机流产生平滑目标游向；相同种子与固定步长得到相同方向序列，客户端不自行随机。
@@ -123,7 +123,7 @@ LineLoad    = pow(max(Alignment, 0), AngleStrengthExponent)，范围[0,1]
 
 鱼仍在平静 ⇄ 挣扎之间定时交替，但每段内部可平滑转向、横切、绕竿和假动作；上钩瞬间=挣扎。
 每次重选方向先根据鱼体力计算向内概率；朝竿尖 ±60° 属于向内。当前测试鱼满体力为 25%，接近力竭为 80%，中间按指数 1.1 的性格曲线插值；发力期仍只把其中 `FeintProbability` 比例当作向内假动作。
-`LineLoad` 仍表达鱼游向在线方向上的投影，并参与磨损和断线负载。鱼与猫先各自产生候选端点；`Locked/Reeling/FreeSpool` 分别保持、缩短或允许被动增加 `L_paid`。全部变化只汇入一个约束误差，再按双方质量分配鱼端位置修正与猫端目标牵引速度。Rod 在服务器和拥有客户端各自按移动帧对20 Hz目标做一阶平滑，只补足不足的向鱼速度并平滑远离方向限速；它不累加冲量、不直接插值 Character Transform，也不再使用容易被行走制动抵消的持续 `AddForce`。
+`LineLoad` 仍表达鱼游向在线方向上的投影，并参与磨损和断线负载。鱼与猫先按同一力量→加速度口径产生候选端点；`Locked/Reeling/FreeSpool` 分别保持、缩短或允许被动增加 `L_paid`。全部变化只汇入一个约束误差，力量差先决定鱼是否能牵引猫，质量再分配占优部分。Rod 在服务器和拥有客户端各自按移动帧对20 Hz目标做一阶平滑，只补足不足的向鱼速度并平滑远离方向限速；它不累加冲量、不直接插值 Character Transform。鱼力竭时 Runner 与 Rod 同帧清除牵引目标和平滑余量，余下张力只用于把鱼随收线/端点运动拖近。
 
 体力统一使用 `实际沿线位移 + max(意图沿线位移-实际沿线位移,0)×IsometricEffortMultiplier`。因此自由运动、带载运动和实际位移为 0 的僵持使用同一公式。锁线绷紧时，鱼的外游意图会形成猫端等长保持意图，所以双方都会消耗；收线是独立执行器做功，原地左键会缩短线长并消耗体力，但不会伪造猫位移，后退只移动端点，不会重复缩短线长。右键只有在 `L_max` 内确实解除约束并允许出线时恢复猫体力；到达最大线长重新绷紧后停止恢复。
 
@@ -182,7 +182,7 @@ Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消�
 
 反向纪律（唯一红线）：表现事件里不发命令；Montage 完成 / AnimNotify 不作为任何玩法提交条件。
 
-鱼的体重与视觉大小使用同一条服务器事实链：鱼种选出后，服务器在定义的重量区间内冻结 `WeightKilograms`，再按
+鱼的体重、力量与视觉大小使用同一条服务器事实链：服务器先为每个候选鱼种按稳定随机流抽取个体 `WeightKilograms`，以 `Weight × FightStrengthPerKilogram` 计算挑战度和本场基础力量；选中后不再重抽。完美中鱼只在该基础力量上乘性格倍率。视觉再按
 `Scale = clamp(cuberoot(Weight / ReferenceWeight), MinScale, MaxScale)` 计算一次 `VisualScale`。水中
 `FishEncounterActor` 与水面 `FishPickupActor` 都复制这个标量，并只缩放各自的 `FishMesh`；Actor 根节点、
 抄网圆、拾取 Sphere、鱼线与岸线判定不随 Mesh 大小变化。这样多人尺寸一致，收鱼交接也不会产生大小跳变。

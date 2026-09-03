@@ -78,7 +78,7 @@
 | 出没 | RegionIds / TimeOfDay / Weather | 可出现的水域 ID/时段(夜晚永不进选择器)/天气;**空数组=未配置=不出现** |
 | 稀有 | RarityTierId / SpawnWeight | 稀有度轴 ID / 选择正权重(稀有度由数据表达,代码无硬编码档位) |
 | 体重 | Minimum/MaximumWeightKilograms | 服务器在区间内抽取真实重量;min≤max |
-| 搏斗 | FishStrength | **鱼力量**(规格 4.2,与猫力/竿强比较);>0 |
+| 搏斗 | FishStrength | 旧二进制资产兼容字段；运行时忽略，重存资产后可逐步清空 |
 | 搏斗 | FishFightStamina | **鱼搏斗体力**(短周期,与稀有度独立);>0 |
 | 搏斗 | MinimumFightParticipants | 需要的协作人数;单人局过滤 >1 的定义 |
 | 抄网 | **ScoopTargetRadiusCentimeters** | **这条鱼的可捞圆圈半径 cm**,圆心随鱼移动;抄手向正前方发射长度=抄网 ScoopReach 的水平线段,与圆相交即够得着。语义="这条鱼有多好捞"——小鱼小圈、巨鱼大圈以降低多人抢抄难度。**必须 >0,为 0 时服务器一律拒绝抢抄** |
@@ -104,7 +104,7 @@
 | EstuaryBass | peacock_bass | Puffer | frontosa |
 | ElectricEel | electric_catfish | Pike | pike |
 
-鱼种没有固定“低级/中级”战斗标签。令力量比 `S=FishStrength/玩家合计力量`、体力比 `T=FishFightStamina/玩家合计搏斗体力`，目录按 `max(S, 2ST/(S+T))` 计算当前上下文里的连续挑战度：力量比是危险下限，力量/体力调和均值只在两项都足够时抬高挑战度，避免力量极低但体力很高的鱼被错误归入势均力敌带。`≤ ComfortChallengeMaximumRatio` 为轻松带，之后到 `MatchedChallengeMaximumRatio` 为势均力敌带，再到 `MaximumChallengeRatio` 为高风险带；超过安全上限才不进入池。系统先按三条 `*ChallengeBandWeight` 在当前有候选的难度带之间抽取，再用 `SpawnWeight × 窝料倍率 × 鱼饵倍率 × 连续挑战倍率` 在带内选鱼。某个目标带没有鱼时会在其余有候选的带之间重新归一化；只有生态条件、协作人数或安全上限后确实没有鱼才会空钩。
+鱼种没有固定“低级/中级”战斗标签。服务器为每个候选鱼种按本次机会种子和稳定鱼 ID 独立抽取个体重量，令 `FishStrength=WeightKilograms×FightStrengthPerKilogram`；该重量和力量一旦选中便冻结，选择、搏斗和 HUD 不再分别重抽或读取旧静态字段。令力量比 `S=FishStrength/玩家合计力量`、体力比 `T=FishFightStamina/玩家合计搏斗体力`，目录按 `max(S, 2ST/(S+T))` 计算当前上下文里的连续挑战度：力量比是危险下限，力量/体力调和均值只在两项都足够时抬高挑战度，避免力量极低但体力很高的鱼被错误归入势均力敌带。`≤ ComfortChallengeMaximumRatio` 为轻松带，之后到 `MatchedChallengeMaximumRatio` 为势均力敌带，再到 `MaximumChallengeRatio` 为高风险带；超过安全上限才不进入池。系统先按三条 `*ChallengeBandWeight` 在当前有候选的难度带之间抽取，再用 `SpawnWeight × 窝料倍率 × 鱼饵倍率 × 连续挑战倍率` 在带内选鱼。某个目标带没有鱼时会在其余有候选的带之间重新归一化；只有生态条件、协作人数或安全上限后确实没有鱼才会空钩。
 
 ## 4. 咬钩性格：`UCatBitePersonalityDefinition`（DA_Bite_*）
 

@@ -7,6 +7,9 @@ bool UCatFishingSettings::IsRuntimeReady() const
 {
 	return bEnableFishingRuntime && !FishingSessionStateTree.IsNull() && !FishBehaviorStateTree.IsNull()
 		&& FMath::IsFinite(TrueBiteWindowSeconds) && TrueBiteWindowSeconds > 0.0
+		&& FMath::IsFinite(FightStrengthPerKilogram) && FightStrengthPerKilogram > 0.0
+		&& FMath::IsFinite(FightAccelerationPerStrength) && FightAccelerationPerStrength > 0.0
+		&& FMath::IsFinite(FightDriveResponseSeconds) && FightDriveResponseSeconds > 0.0
 		&& bEnableNearShoreValidation
 		&& FMath::IsFinite(ScoopReachCentimeters) && ScoopReachCentimeters > 0.0
 		&& FMath::IsFinite(TerminalReplicationWindowSeconds) && TerminalReplicationWindowSeconds > 0.0;

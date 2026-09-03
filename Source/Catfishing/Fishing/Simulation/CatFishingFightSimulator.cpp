@@ -25,6 +25,9 @@ bool FCatFightSimulationConfig::IsValid() const
 		&& FMath::IsFinite(GetCombinedCatMass()) && GetCombinedCatMass() > 0.0
 		&& FMath::IsFinite(FishMassKilograms) && FishMassKilograms > 0.0
 		&& FMath::IsFinite(FishStrength) && FishStrength > 0.0
+		&& FMath::IsFinite(StrengthPerKilogram) && StrengthPerKilogram > 0.0
+		&& FMath::IsFinite(AccelerationPerStrength) && AccelerationPerStrength > 0.0
+		&& FMath::IsFinite(DriveResponseSeconds) && DriveResponseSeconds > 0.0
 		&& FMath::IsFinite(RodStrength) && RodStrength > 0.0
 		&& FMath::IsFinite(CatStaminaMaximum) && CatStaminaMaximum > 0.0
 		&& IsFiniteNonNegative(CatStaminaCostPerStrengthCentimeter)
@@ -112,12 +115,6 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const bool bFreeSpool = !bOperatorPresent || State.CatAction == ECatFightCatAction::Slack;
 	const bool bStruggling = !State.bFishExhausted
 		&& State.MotionIntent == ECatFishMotionIntent::StrugglingOutward;
-	const double SwimSpeed = State.bFishExhausted ? 0.0
-		: bStruggling ? Config.FishStruggleSpeedCentimetersPerSecond
-		: Config.FishCalmSpeedCentimetersPerSecond;
-	const FVector FishIntentDisplacement = FishDirection * SwimSpeed * Dt;
-	FVector FreeFishPosition = State.FishWorldPosition + FishIntentDisplacement;
-	FreeFishPosition.Z = State.FishWorldPosition.Z;
 
 	const double Alignment = bHasRadialBasis
 		? FMath::Clamp(FVector::DotProduct(FishDirection, HorizontalOutward), -1.0, 1.0) : 0.0;
@@ -130,11 +127,30 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		? FMath::Lerp(Config.MinimumRodLeverageMultiplier, 1.0, RodLineAlignment) : 1.0;
 	const double CombinedCatStrength = bOperatorPresent ? Config.GetCombinedCatStrength() : 0.0;
 	const double EffectiveCatStrength = CombinedCatStrength * RodLeverage;
+	const double ActiveFishStrength = State.bFishExhausted ? 0.0 : Config.FishStrength;
+	const double CatDriveAcceleration = EffectiveCatStrength * Config.AccelerationPerStrength;
+	const double FishDriveAcceleration = ActiveFishStrength * Config.AccelerationPerStrength;
+	const double FishOutwardAcceleration = FishDriveAcceleration * OutwardLoad;
+	const double NetFishPullAcceleration = FMath::Max(0.0,
+		FishOutwardAcceleration - CatDriveAcceleration);
+	const double ForceScale = FMath::Max(CatDriveAcceleration, FishOutwardAcceleration);
+	const double FishForceDominance = ForceScale > UE_DOUBLE_SMALL_NUMBER
+		? NetFishPullAcceleration / ForceScale : 0.0;
+	const double FishSpeedCap = bStruggling
+		? Config.FishStruggleSpeedCentimetersPerSecond
+		: Config.FishCalmSpeedCentimetersPerSecond;
+	const double SwimSpeed = State.bFishExhausted ? 0.0 : FMath::Min(
+		FishSpeedCap, FishDriveAcceleration * Config.DriveResponseSeconds);
+	const FVector FishIntentDisplacement = FishDirection * SwimSpeed * Dt;
+	FVector FreeFishPosition = State.FishWorldPosition + FishIntentDisplacement;
+	FreeFishPosition.Z = State.FishWorldPosition.Z;
 
 	const double PaidOutLine0 = FMath::Clamp(State.LineLengthCentimeters,
 		VerticalDistance, Config.MaximumLineLengthCentimeters);
+	const double ReelIntentSpeed = FMath::Min(Config.ReelSpeedCentimetersPerSecond,
+		CatDriveAcceleration * Config.DriveResponseSeconds);
 	const double RequestedReelDistance = bReeling && EffectiveCatStrength > UE_DOUBLE_SMALL_NUMBER
-		? FMath::Min(Config.ReelSpeedCentimetersPerSecond * Dt, PaidOutLine0 - VerticalDistance) : 0.0;
+		? FMath::Min(ReelIntentSpeed * Dt, PaidOutLine0 - VerticalDistance) : 0.0;
 	double LineLength = PaidOutLine0 - RequestedReelDistance;
 	const double FreeDistance = FVector::Distance(RodTip, FreeFishPosition);
 	if (bFreeSpool)
@@ -152,35 +168,48 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const double IntendedDistance = FVector::Distance(IntendedRodTip, FreeFishPosition);
 	const double ConstraintError = FMath::Max(0.0, IntendedDistance - LineLength);
 	const bool bLineRestraining = ConstraintError > UE_DOUBLE_KINDA_SMALL_NUMBER;
+	const double NormalizedTension = FMath::Clamp(
+		ConstraintError / Config.TensionResponseRangeCentimeters, 0.0, 1.0);
 
 	FVector ProposedFishPosition = FreeFishPosition;
 	double FishCorrection = 0.0;
 	double CarrierCorrection = 0.0;
+	double CarrierPullAcceleration = 0.0;
+	double CarrierTargetPullSpeed = 0.0;
+	double CarrierAwaySpeedMultiplier = 1.0;
 	if (bLineRestraining && !bFreeSpoolReleased)
 	{
 		const double CatMass = Config.GetCombinedCatMass();
-		const double FishCorrectionShare = RodConstraint.bRodHeld
-			? CatMass / (CatMass + Config.FishMassKilograms) : 1.0;
-		const double CarrierCorrectionShare = RodConstraint.bRodHeld
+		const double BaseCarrierCorrectionShare = RodConstraint.bRodHeld
 			? Config.FishMassKilograms / (CatMass + Config.FishMassKilograms) : 0.0;
+		// 质量决定强鱼取得优势后两端如何分担运动；力量差决定是否取得优势。
+		// 力量相等是自然僵持：鱼的向外意图由鱼端约束抵消，猫不会被“等质量各一半”无条件拖走。
+		const double CarrierCorrectionShare = BaseCarrierCorrectionShare * FishForceDominance;
+		CarrierPullAcceleration = NetFishPullAcceleration
+			* BaseCarrierCorrectionShare * NormalizedTension;
+		const double MaximumCarrierResponseSpeed = FMath::Min(
+			Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond,
+			CarrierPullAcceleration * Config.DriveResponseSeconds);
+		CarrierCorrection = FMath::Min(ConstraintError * CarrierCorrectionShare,
+			MaximumCarrierResponseSpeed * Dt);
 		const double MaximumFishCorrection = Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond * Dt;
 		FVector TowardRod = IntendedRodTip - ProposedFishPosition;
 		TowardRod.Z = 0.0;
 		const double HorizontalDistance = TowardRod.Size2D();
-		FishCorrection = FMath::Min3(ConstraintError * FishCorrectionShare,
+		FishCorrection = FMath::Min3(FMath::Max(0.0, ConstraintError - CarrierCorrection),
 			MaximumFishCorrection, HorizontalDistance);
 		if (FishCorrection > UE_DOUBLE_SMALL_NUMBER && HorizontalDistance > UE_DOUBLE_SMALL_NUMBER)
 		{
 			ProposedFishPosition += TowardRod / HorizontalDistance * FishCorrection;
 			ProposedFishPosition.Z = State.FishWorldPosition.Z;
 		}
-		CarrierCorrection = FMath::Min(ConstraintError * CarrierCorrectionShare,
-			MaximumFishCorrection);
+		CarrierTargetPullSpeed = CarrierCorrection / Dt;
+		CarrierAwaySpeedMultiplier = FMath::Lerp(1.0,
+			Config.MinimumCarrierAwaySpeedMultiplier,
+			NormalizedTension * CarrierCorrectionShare);
 	}
 
 	const double Distance1 = FVector::Distance(RodTip, ProposedFishPosition);
-	const double NormalizedTension = FMath::Clamp(
-		ConstraintError / Config.TensionResponseRangeCentimeters, 0.0, 1.0);
 	const bool bLineTaut = bLineRestraining
 		|| LineLength - Distance1 <= UE_DOUBLE_KINDA_SMALL_NUMBER;
 
@@ -264,24 +293,20 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	Result.bStalemate = Result.bStrongConfrontation
 		&& FMath::Abs(ActualRadialFishDelta) <= FMath::Max(1.0, SwimSpeed * Dt * 0.1);
 
+	const double FishLineForce = ActiveFishStrength * OutwardLoad;
+	const double CatLineForce = bReeling ? EffectiveCatStrength : 0.0;
+	const double LineForceDemand = FMath::Max(FishLineForce, CatLineForce) * NormalizedTension;
 	const double WearLoad = FMath::Max(OutwardLoad, NormalizedTension);
 	const double RodWearDelta = bLineRestraining
-		? (Config.FishStrength * Config.StalemateRodWearPerFishStrength
+		? (FMath::Max(FishLineForce, CatLineForce) * Config.StalemateRodWearPerFishStrength
 			+ (bStruggling ? Config.StruggleHoldRodWearPerSecond : 0.0))
 			* WearLoad * Dt * Config.TautRodWearMultiplier : 0.0;
 	Result.AbsoluteRodWear = State.AbsoluteRodWear + RodWearDelta;
 
-	if (RodConstraint.bRodHeld && bLineRestraining && !bFreeSpoolReleased)
-	{
-		const double CatMass = Config.GetCombinedCatMass();
-		const double CarrierShare = Config.FishMassKilograms / (CatMass + Config.FishMassKilograms);
-		Result.CarrierConstraintCorrectionCentimeters = CarrierCorrection;
-		Result.CarrierTargetPullSpeedCentimetersPerSecond = CarrierCorrection / Dt;
-		Result.CarrierPullAccelerationCentimetersPerSecondSquared =
-			Result.CarrierTargetPullSpeedCentimetersPerSecond / Dt;
-		Result.CarrierAwaySpeedMultiplier = FMath::Lerp(1.0,
-			Config.MinimumCarrierAwaySpeedMultiplier, NormalizedTension * CarrierShare);
-	}
+	Result.CarrierConstraintCorrectionCentimeters = CarrierCorrection;
+	Result.CarrierTargetPullSpeedCentimetersPerSecond = CarrierTargetPullSpeed;
+	Result.CarrierPullAccelerationCentimetersPerSecondSquared = CarrierPullAcceleration;
+	Result.CarrierAwaySpeedMultiplier = CarrierAwaySpeedMultiplier;
 
 	Result.IntendedSwimSpeedCentimetersPerSecond = SwimSpeed;
 	Result.LineLengthCentimeters = LineLength;
@@ -297,14 +322,15 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	Result.RodLeverageMultiplier = RodLeverage;
 	Result.EffectiveCatStrength = EffectiveCatStrength;
 	Result.CombinedCatStrength = CombinedCatStrength;
+	Result.CatDriveAccelerationCentimetersPerSecondSquared = CatDriveAcceleration;
+	Result.FishDriveAccelerationCentimetersPerSecondSquared = FishDriveAcceleration;
+	Result.NetFishPullAccelerationCentimetersPerSecondSquared = NetFishPullAcceleration;
+	Result.FishForceDominance = FishForceDominance;
 	Result.ConstraintErrorCentimeters = ConstraintError;
 	Result.RelativeConstraintSpeedCentimetersPerSecond = Dt > 0.0
 		? (IntendedDistance - Distance0 + RequestedReelDistance) / Dt : 0.0;
 	Result.FishConstraintCorrectionCentimeters = FishCorrection;
 
-	const double LineForceDemand = FMath::Max(
-		Config.FishStrength * OutwardLoad,
-		bReeling ? EffectiveCatStrength : 0.0) * NormalizedTension;
 	if (Result.bStrongConfrontation && LineForceDemand >= Config.RodStrength)
 	{
 		Result.LineBreakCause = ECatFightLineBreakCause::StrengthOverload;

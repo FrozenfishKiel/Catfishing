@@ -298,9 +298,13 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 	Next.MaximumAwaySpeedMultiplier = static_cast<float>(MaximumAwaySpeedMultiplier);
 	Next.NormalizedTension = static_cast<float>(FMath::Clamp(NormalizedTension, 0.0, 1.0));
 	Next.ConstraintErrorCentimeters = static_cast<float>(ConstraintErrorCentimeters);
-	Next.bActive = Next.NormalizedTension > KINDA_SMALL_NUMBER
-		|| Next.TargetPullSpeedCentimetersPerSecond > KINDA_SMALL_NUMBER;
+	Next.bActive = Next.TargetPullSpeedCentimetersPerSecond > KINDA_SMALL_NUMBER
+		|| Next.MaximumAwaySpeedMultiplier < 1.0f - KINDA_SMALL_NUMBER;
 	CarrierConstraintState = Next;
+	if (!Next.bActive)
+	{
+		ResetCarrierConstraintSmoothing();
+	}
 	ForceNetUpdate();
 	return true;
 }
@@ -311,6 +315,8 @@ void ACatFishingRodActor::ClearCarrierConstraintFromAuthority()
 	{
 		return;
 	}
+	// 服务器终止鱼端驱动力时立即停止本地牵引；客户端在复制回调里做同样处理。
+	ResetCarrierConstraintSmoothing();
 	if (!CarrierConstraintState.bActive
 		&& CarrierConstraintState.ConstraintErrorCentimeters <= KINDA_SMALL_NUMBER
 		&& CarrierConstraintState.PullAccelerationCentimetersPerSecondSquared <= KINDA_SMALL_NUMBER
@@ -321,6 +327,14 @@ void ACatFishingRodActor::ClearCarrierConstraintFromAuthority()
 	}
 	CarrierConstraintState = FCatFishingCarrierConstraintState{};
 	ForceNetUpdate();
+}
+
+void ACatFishingRodActor::OnRep_CarrierConstraintState()
+{
+	if (!CarrierConstraintState.bActive)
+	{
+		ResetCarrierConstraintSmoothing();
+	}
 }
 
 void ACatFishingRodActor::UpdateCarrierConstraintTickDependency(UCharacterMovementComponent* Movement)

@@ -14,6 +14,9 @@ namespace CatFishingCoupledSimulationTest
 		Config.PrimaryOperatorMassKilograms = 10.0;
 		Config.FishMassKilograms = 3.0;
 		Config.FishStrength = 40.0;
+		Config.StrengthPerKilogram = 10.0;
+		Config.AccelerationPerStrength = 5.0;
+		Config.DriveResponseSeconds = 1.0;
 		Config.RodStrength = 100.0;
 		Config.CatStaminaMaximum = 100.0;
 		Config.ReelSpeedCentimetersPerSecond = 80.0;
@@ -97,6 +100,7 @@ bool FCatFishingMassSplitTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	FCatFightSimulationConfig LightCat = MakeConfig();
+	LightCat.FishStrength = 100.0;
 	LightCat.PrimaryOperatorMassKilograms = 3.0;
 	FCatFightSimulationConfig HeavyCat = LightCat;
 	HeavyCat.PrimaryOperatorMassKilograms = 30.0;
@@ -107,6 +111,8 @@ bool FCatFishingMassSplitTest::RunTest(const FString& Parameters)
 		HeavyCat, MakeState(ECatFightCatAction::None), Rod, FVector::ForwardVector);
 	TestTrue(TEXT("heavier cat allocates more correction to fish endpoint"),
 		Heavy.FishConstraintCorrectionCentimeters > Light.FishConstraintCorrectionCentimeters);
+	TestTrue(TEXT("stronger fish produces a bounded carrier target"),
+		Light.CarrierTargetPullSpeedCentimetersPerSecond > 0.0);
 	TestEqual(TEXT("strong fish does not directly create a terminal cat-water outcome"),
 		Heavy.Outcome, ECatFightStepOutcome::None);
 	return !HasAnyErrors();
@@ -160,6 +166,12 @@ bool FCatFishingExhaustedContinuationTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("exhausted fish cannot spend fish stamina"), Reeling.FishStaminaDrain, 0.0, 1e-9);
 	TestEqual(TEXT("locked exhausted fish cannot drain cat stamina"), Locked.CatStaminaDrain, 0.0, 1e-9);
 	TestEqual(TEXT("reeling exhausted fish cannot drain cat stamina"), Reeling.CatStaminaDrain, 0.0, 1e-9);
+	TestEqual(TEXT("exhausted fish contributes no carrier correction"),
+		Reeling.CarrierConstraintCorrectionCentimeters, 0.0, 1e-9);
+	TestEqual(TEXT("exhausted fish contributes no carrier target speed"),
+		Reeling.CarrierTargetPullSpeedCentimetersPerSecond, 0.0, 1e-9);
+	TestEqual(TEXT("exhausted fish does not restrict backing-away speed"),
+		Reeling.CarrierAwaySpeedMultiplier, 1.0, 1e-9);
 	return !HasAnyErrors();
 }
 
@@ -184,24 +196,58 @@ bool FCatFishingHelperOnlyWorkTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingEqualMassConstraintTest,
-	"Catfishing.Unit.Fishing.Simulation.EqualMassSplitsConstraintAcrossBothEndpoints",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingEqualStrengthConstraintTest,
+	"Catfishing.Unit.Fishing.Simulation.EqualStrengthNaturallyStalematesWithoutCarrierPull",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-bool FCatFishingEqualMassConstraintTest::RunTest(const FString& Parameters)
+bool FCatFishingEqualStrengthConstraintTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	FCatFightSimulationConfig Config = MakeConfig();
 	Config.PrimaryOperatorMassKilograms = Config.FishMassKilograms;
+	Config.FishStrength = Config.PrimaryOperatorCatStrength;
+	Config.StrongConfrontationConfirmationSeconds = Config.FixedStepSeconds;
 	const FCatFightStepResult Step = FCatFishingFightSimulator::Step(
 		Config, MakeState(ECatFightCatAction::None), MakeHeldConstraint(), FVector::ForwardVector);
-	TestTrue(TEXT("equal-mass step succeeds"), Step.bSucceeded);
-	TestEqual(TEXT("equal masses split the constraint correction equally"),
-		Step.FishConstraintCorrectionCentimeters,
-		Step.CarrierConstraintCorrectionCentimeters, 1e-6);
-	TestEqual(TEXT("carrier impulse is the carrier correction divided by the fixed step"),
-		Step.CarrierTargetPullSpeedCentimetersPerSecond,
-		Step.CarrierConstraintCorrectionCentimeters / Config.FixedStepSeconds, 1e-6);
+	TestTrue(TEXT("equal-strength step succeeds"), Step.bSucceeded);
+	TestTrue(TEXT("equal opposing drives become a natural stalemate"), Step.bStalemate);
+	TestTrue(TEXT("fish outward intent is canceled at its endpoint"),
+		Step.ProposedFishWorldPosition.Equals(FVector(500.0, 0.0, 0.0), 1e-6));
+	TestEqual(TEXT("equal strength does not move the cat endpoint"),
+		Step.CarrierConstraintCorrectionCentimeters, 0.0, 1e-6);
+	TestEqual(TEXT("equal strength does not create a carrier target"),
+		Step.CarrierTargetPullSpeedCentimetersPerSecond, 0.0, 1e-6);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingStrengthAccelerationTest,
+	"Catfishing.Unit.Fishing.Simulation.SharedStrengthAccelerationDrivesBothSides",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingStrengthAccelerationTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFightSimulationConfig Config = MakeConfig();
+	Config.FishStrength = 7.65;
+	const FCatFightStepResult WeakFish = FCatFishingFightSimulator::Step(
+		Config, MakeState(ECatFightCatAction::None), MakeHeldConstraint(), FVector::ForwardVector);
+	TestTrue(TEXT("strength-driven step succeeds"), WeakFish.bSucceeded);
+	TestEqual(TEXT("cat acceleration is strength times shared coefficient"),
+		WeakFish.CatDriveAccelerationCentimetersPerSecondSquared, 250.0, 1e-9);
+	TestEqual(TEXT("fish acceleration is strength times shared coefficient"),
+		WeakFish.FishDriveAccelerationCentimetersPerSecondSquared, 38.25, 1e-9);
+	TestEqual(TEXT("weak fish swim intent is acceleration-limited"),
+		WeakFish.IntendedSwimSpeedCentimetersPerSecond, 38.25, 1e-9);
+	TestEqual(TEXT("7.65 strength fish cannot pull a 50 strength cat"),
+		WeakFish.CarrierTargetPullSpeedCentimetersPerSecond, 0.0, 1e-9);
+	TestEqual(TEXT("weak fish does not restrict cat movement"),
+		WeakFish.CarrierAwaySpeedMultiplier, 1.0, 1e-9);
+
+	Config.PrimaryOperatorCatStrength = 5.0;
+	const FCatFightStepResult WeakCatReel = FCatFishingFightSimulator::Step(
+		Config, MakeState(ECatFightCatAction::Pull), MakeHeldConstraint(), -FVector::ForwardVector);
+	TestEqual(TEXT("cat reel intent uses the same acceleration conversion"),
+		WeakCatReel.RequestedReelDistanceCentimeters, 2.5, 1e-9);
 	return !HasAnyErrors();
 }
 

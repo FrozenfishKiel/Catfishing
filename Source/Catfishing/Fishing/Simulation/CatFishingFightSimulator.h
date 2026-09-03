@@ -27,7 +27,7 @@ enum class ECatFightCatAction : uint8
 	Slack
 };
 
-/** 固定步所需的冻结参数。力量决定意图驱动力，质量决定约束冲量如何分配。 */
+/** 固定步所需的冻结参数。力量决定意图驱动力，质量只分配鱼占优后产生的双端运动。 */
 struct CATFISHING_API FCatFightSimulationConfig
 {
 	double FixedStepSeconds = 0.0;
@@ -44,6 +44,12 @@ struct CATFISHING_API FCatFightSimulationConfig
 	}
 
 	double FishStrength = 0.0;
+	/** 鱼实际重量与猫等效系统质量共用的力量换算。 */
+	double StrengthPerKilogram = 10.0;
+	/** 双方共用的力量到意图加速度换算。 */
+	double AccelerationPerStrength = 5.0;
+	/** 将加速度投影为目标意图速度的响应时长。 */
+	double DriveResponseSeconds = 1.0;
 	double RodStrength = 0.0;
 	double CatStaminaMaximum = 0.0;
 	double CatStaminaCostPerStrengthCentimeter = 0.002;
@@ -125,6 +131,10 @@ struct CATFISHING_API FCatFightStepResult
 	double RodLeverageMultiplier = 1.0;
 	double EffectiveCatStrength = 0.0;
 	double CombinedCatStrength = 0.0;
+	double CatDriveAccelerationCentimetersPerSecondSquared = 0.0;
+	double FishDriveAccelerationCentimetersPerSecondSquared = 0.0;
+	double NetFishPullAccelerationCentimetersPerSecondSquared = 0.0;
+	double FishForceDominance = 0.0;
 	int32 ActiveHelperCount = 0;
 	/** 猫端在下一个固定步内需要达到的向鱼目标速度；运行时平滑追赶，不作为累积冲量。 */
 	double CarrierTargetPullSpeedCentimetersPerSecond = 0.0;

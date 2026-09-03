@@ -66,6 +66,15 @@ public:
 	/** 旧对称消耗模型的基础速率；规格判定表启用后不再参与计算，保留以兼容既有配置。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.001")) double BaseFightDrainPerSecond = 1.0;
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.001")) double ReelSpeedCentimetersPerSecond = 80.0;
+	/** 鱼和猫共享的体重到力量换算；鱼用实际重量，猫用基础 FishingStrength 反推等效系统质量。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|Motion", meta=(ClampMin="0.001"))
+	double FightStrengthPerKilogram = 10.0;
+	/** 双方共享的力量到意图加速度换算，单位 cm/s² / Strength。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|Motion", meta=(ClampMin="0.001"))
+	double FightAccelerationPerStrength = 5.0;
+	/** 将当前加速度投影为目标意图速度的响应时长；最终速度仍受收线/性格速度上限约束。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|Motion", meta=(ClampMin="0.001", Units="s"))
+	double FightDriveResponseSeconds = 1.0;
 	/** 本步超线多少厘米视为满表现张力；只用于归一化/UI/Cable，不改变权威约束。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.1"))
 	double TensionResponseRangeCentimeters = 10.0;
@@ -100,7 +109,7 @@ public:
 	/** 竿身未朝向鱼线时仍保留的最低有效杠杆，防止侧向动画把力量瞬间清零。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.05", ClampMax="1"))
 	double HeldRodMinimumLeverageMultiplier = 0.4;
-	/** 当前灰盒中鱼端和每只参战猫视为等质量；本值同时限制双方每秒的约束速度修正。 */
+	/** 鱼端每秒允许承担的最大约束速度修正，同时作为猫端牵引目标速度的安全上限。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="1", Units="cm/s"))
 	double MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 160.0;
 	/** 满负载且鱼不弱于猫时，玩家沿远离鱼方向保留的最小速度比例。 */

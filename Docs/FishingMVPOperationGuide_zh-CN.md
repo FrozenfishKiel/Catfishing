@@ -296,9 +296,9 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 
 **常见失败原因**（放竿）：`InvalidPayload`=前方太斜/没实体地面；`DependencyUnavailable`=还没装配（5.4）。`InvalidWaterTarget/CastOutOfRange` 现在只属于抛竿阶段。
 
-多人占位口径：所有玩家都从同一个公共交互锚点按 R 加入，服务器把 PlayerState 追加到紧凑容器 `OperatorPlayerStates`。`[0]` 是当前主位，抛竿、提竿和右键线杯由它驱动；HookedFight 中左键立即提交收线/协作发力意图，不再蓄力或衰减。总做功按有效力量占比分摊到各自 ASC；当前灰盒以鱼真实重量作为每个参与单位的质量，主猫对单鱼为 50/50，每只正在协作发力的辅助猫再增加一个猫端单位。
+多人占位口径：所有玩家都从同一个公共交互锚点按 R 加入，服务器把 PlayerState 追加到紧凑容器 `OperatorPlayerStates`。`[0]` 是当前主位，抛竿、提竿和右键线杯由它驱动；HookedFight 中左键立即提交收线/协作发力意图，不再蓄力或衰减。总做功按有效力量占比分摊到各自 ASC；每只猫以基础 `FishingStrength / FightStrengthPerKilogram` 得到等效质量，鱼使用本次实际重量。只有鱼的沿线加速度高于猫端合力时，差值才会牵引主猫。
 
-会话跟随鱼竿而不是角色：按 R 离开不会直接结束会话。`HookedFight/ExhaustedReel` 离竿后进入无人值守 FreeSpool；下一位玩家使用自己的 ASC、当前力量、体力和输入序号接管同一个 Runner，不补满体力，也没有从 0 蓄力过程。接管后的玩法质量仍按上述等质量参与单位计算，不读取角色组件默认质量。
+会话跟随鱼竿而不是角色：按 R 离开不会直接结束会话。`HookedFight/ExhaustedReel` 离竿后进入无人值守 FreeSpool；下一位玩家使用自己的 ASC、当前力量、体力和输入序号接管同一个 Runner，不补满体力，也没有从 0 蓄力过程。接管后的玩法质量按该玩家基础力量和统一系数重算，不读取角色组件默认质量。
 
 ---
 
