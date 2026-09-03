@@ -31,6 +31,7 @@
 #include "Equipment/CatEquipmentSettings.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -114,6 +115,36 @@ namespace
 		const double Radius = ResolveContainerReachRadiusCentimeters(Host, Settings);
 		return Host && Character && Radius > 0.0
 			&& FVector::DistSquared(Character->GetActorLocation(), Host->GetActorLocation()) <= FMath::Square(Radius);
+	}
+
+	// 持竿查询流程：权威端优先使用 Fishing Registry；拥有客户端没有该服务，
+	// 因此只从已复制的少量鱼竿 Actor 里读 HolderPlayerState。这里不生成第二份持竿状态。
+	bool IsPrimaryFishingRodHolder(ACatfishingPlayerController* Controller)
+	{
+		UWorld* World = Controller ? Controller->GetWorld() : nullptr;
+		APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
+		if (!World || !PlayerState)
+		{
+			return false;
+		}
+
+		if (UCatFishingService* Fishing = World->GetSubsystem<UCatFishingService>())
+		{
+			const ACatFishingRodActor* Rod = Fishing->FindRodOperatedBy(PlayerState);
+			return Rod && Rod->IsPrimaryOperator(PlayerState)
+				&& Rod->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Held;
+		}
+
+		for (TActorIterator<ACatFishingRodActor> It(World); It; ++It)
+		{
+			const FCatFishingRodPresentationState& State = It->GetPresentationState();
+			if (State.PoseMode == ECatFishingRodPoseMode::Held
+				&& State.HolderPlayerState == PlayerState)
+			{
+				return true;
+			}
+		}
+		return false;
 	}
 }
 
@@ -1795,6 +1826,7 @@ void ACatfishingPlayerController::OnPossess(APawn* InPawn)
 // Pawn 复制刷新流程：owning client 在拿到新 Pawn 后从普通速度开始，旧 Pawn 的按键意图不会穿透重生或旅行边界。
 void ACatfishingPlayerController::OnRep_Pawn()
 {
+	RestoreFishingFacingMode();
 	Super::OnRep_Pawn();
 	if (FishingCommandComponent)
 	{
@@ -1808,6 +1840,10 @@ void ACatfishingPlayerController::OnRep_Pawn()
 // Pawn 写入流程：先保留 PlayerController 引擎内部的 SetPawn 行为，再让 owning client 的 LocalPlayer UI 消费当前最终 Pawn。
 void ACatfishingPlayerController::SetPawn(APawn* InPawn)
 {
+	if (FishingFacingCharacter.IsValid() && FishingFacingCharacter.Get() != InPawn)
+	{
+		RestoreFishingFacingMode();
+	}
 	Super::SetPawn(InPawn);
 	NotifyLocalPlayerUISubsystemPawnChanged();
 }
@@ -1819,6 +1855,82 @@ void ACatfishingPlayerController::BeginPlay()
 	Super::BeginPlay();
 	ApplyInputMappingContext();
 	PublishProfileEquipmentUnlocksIfAvailable();
+}
+
+// 视角转向收口：先让 PlayerController 消费完本帧 Yaw/Pitch，再用最新 ControlRotation
+// 驱动持竿猫的水平朝向。移动向量也以同一 ControlRotation 为基准，三者因此不再分离。
+void ACatfishingPlayerController::UpdateRotation(const float DeltaTime)
+{
+	Super::UpdateRotation(DeltaTime);
+	RefreshFishingFacingMode(DeltaTime);
+}
+
+void ACatfishingPlayerController::RefreshFishingFacingMode(const float DeltaTime)
+{
+	ACharacter* ControlledCharacter = Cast<ACharacter>(GetPawn());
+	UCharacterMovementComponent* Movement = ControlledCharacter
+		? ControlledCharacter->GetCharacterMovement() : nullptr;
+	if (!ControlledCharacter || !Movement || !IsPrimaryFishingRodHolder(this))
+	{
+		RestoreFishingFacingMode();
+		return;
+	}
+
+	if (FishingFacingCharacter.Get() != ControlledCharacter)
+	{
+		RestoreFishingFacingMode();
+		FishingFacingCharacter = ControlledCharacter;
+		bSavedUseControllerRotationYaw = ControlledCharacter->bUseControllerRotationYaw;
+		bSavedOrientRotationToMovement = Movement->bOrientRotationToMovement;
+		bSavedUseControllerDesiredRotation = Movement->bUseControllerDesiredRotation;
+		UE_LOG(LogCatFishing, Display,
+			TEXT("Event=fishing_holder_facing_mode_changed Mode=ControlRotation Holder=%s PlayerId=%d "
+				"ActorYaw=%.2f ControlYaw=%.2f PreviousUseControllerYaw=%s PreviousOrientToMovement=%s "
+				"PreviousUseControllerDesired=%s World=%s NetMode=%d Authority=%s LocalRole=%d"),
+			*GetNameSafe(ControlledCharacter), PlayerState ? PlayerState->GetPlayerId() : INDEX_NONE,
+			ControlledCharacter->GetActorRotation().Yaw, GetControlRotation().Yaw,
+			bSavedUseControllerRotationYaw ? TEXT("true") : TEXT("false"),
+			bSavedOrientRotationToMovement ? TEXT("true") : TEXT("false"),
+			bSavedUseControllerDesiredRotation ? TEXT("true") : TEXT("false"),
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE,
+			HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(ControlledCharacter->GetLocalRole()));
+	}
+
+	// 持竿时以 Controller Yaw 为唯一水平朝向；关掉 CharacterMovement 的移动朝向覆盖，
+	// 避免向后输入在同帧又把猫转到与镜头相反的方向。Pitch/Roll 仍由角色原有标志控制。
+	ControlledCharacter->bUseControllerRotationYaw = true;
+	Movement->bOrientRotationToMovement = false;
+	Movement->bUseControllerDesiredRotation = false;
+	ControlledCharacter->FaceRotation(GetControlRotation(), DeltaTime);
+}
+
+void ACatfishingPlayerController::RestoreFishingFacingMode()
+{
+	ACharacter* PreviousCharacter = FishingFacingCharacter.Get();
+	if (!PreviousCharacter)
+	{
+		FishingFacingCharacter.Reset();
+		return;
+	}
+
+	PreviousCharacter->bUseControllerRotationYaw = bSavedUseControllerRotationYaw;
+	if (UCharacterMovementComponent* Movement = PreviousCharacter->GetCharacterMovement())
+	{
+		Movement->bOrientRotationToMovement = bSavedOrientRotationToMovement;
+		Movement->bUseControllerDesiredRotation = bSavedUseControllerDesiredRotation;
+	}
+	UE_LOG(LogCatFishing, Display,
+		TEXT("Event=fishing_holder_facing_mode_changed Mode=Restored Holder=%s PlayerId=%d "
+			"ActorYaw=%.2f ControlYaw=%.2f RestoredUseControllerYaw=%s RestoredOrientToMovement=%s "
+			"RestoredUseControllerDesired=%s World=%s NetMode=%d Authority=%s LocalRole=%d"),
+		*GetNameSafe(PreviousCharacter), PlayerState ? PlayerState->GetPlayerId() : INDEX_NONE,
+		PreviousCharacter->GetActorRotation().Yaw, GetControlRotation().Yaw,
+		bSavedUseControllerRotationYaw ? TEXT("true") : TEXT("false"),
+		bSavedOrientRotationToMovement ? TEXT("true") : TEXT("false"),
+		bSavedUseControllerDesiredRotation ? TEXT("true") : TEXT("false"),
+		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE,
+		HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(PreviousCharacter->GetLocalRole()));
+	FishingFacingCharacter.Reset();
 }
 
 // 输入绑定流程：只接受项目配置的 EnhancedInputComponent；未接入的 Action 独立跳过，不阻塞其余输入。
@@ -1913,6 +2025,7 @@ void ACatfishingPlayerController::PostProcessInput(const float DeltaTime, const 
 // Pawn 断开流程：Controller 仍持有 Pawn 时先恢复普通速度并清意图，再交还父类断开占有。
 void ACatfishingPlayerController::OnUnPossess()
 {
+	RestoreFishingFacingMode();
 	if (UCatAbilitySystemComponent* AbilitySystem = RoutedAbilitySystem.Get())
 	{
 		AbilitySystem->ResetAbilityInput();
@@ -1935,6 +2048,7 @@ void ACatfishingPlayerController::OnUnPossess()
 // 输入清理流程：只撤销本 Controller 安装的 Context，再交还父类销毁；不干扰诊断或 UI 输入层。
 void ACatfishingPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	RestoreFishingFacingMode();
 	if (UCatAbilitySystemComponent* AbilitySystem = RoutedAbilitySystem.Get())
 	{
 		AbilitySystem->ResetAbilityInput();

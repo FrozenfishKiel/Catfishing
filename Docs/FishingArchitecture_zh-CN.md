@@ -110,6 +110,8 @@ StateTree（`ST_FishingSession`）保持薄编排。其中 `FishExhausted` 是 `
 `FCatFishingFightSimulator::Step()`：纯静态无副作用函数（有单元测试），每 0.05s 由 Runner 调一次。
 
 力量决定双方主动意图能力；质量决定鱼线绷紧后约束修正如何分配。当前灰盒阶段以本次鱼的真实重量作为一个等质量单位：主猫为一个单位，因此单猫与鱼严格各承担 50%；每只正在协作发力的辅助猫再增加一个单位。角色组件的默认质量不进入玩法计算。猫体力下降时有效力量连续降低，归零不产生终局。
+
+主猫持竿时，PlayerController 在每帧视角旋转完成后把猫身水平朝向同步到 `ControlRotation.Yaw`，并临时关闭面向移动/ControllerDesiredRotation 两条覆盖通道。因此鱼竿朝向、猫身和移动基准共用同一控制 Yaw，向后输入不会让猫掉头；离竿或换 Pawn 时恢复角色原有转向配置。是否持竿仍只读鱼竿 `HolderPlayerState`，Controller 不保存平行业务状态。
 `FCatFishSteeringModel` 用独立服务器随机流产生平滑目标游向；相同种子与固定步长得到相同方向序列，客户端不自行随机。
 
 鱼自己的高层行为由 Encounter 上的 `ST_FishFight` 控制：默认在 `StrugglingOutward` 与 `CalmOrInward` 两个状态间循环。StateTree Task 只把意图和持续时间交给 Runner，不写 Transform、不扣体力，也不直接修改鱼线。未来增加“低体力蓄力冲刺”时，可以在树上增加状态和条件，同时仍复用同一套服务器模拟器。

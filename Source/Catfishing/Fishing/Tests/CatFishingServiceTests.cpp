@@ -28,6 +28,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingHeldFacingFollowsControlRotationTest,
+	"Catfishing.Unit.Fishing.Service.HeldRodFacingFollowsControlRotationAndRestoresMovementFacing",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingServiceRodBoundSessionRoutingTest,
 	"Catfishing.Unit.Fishing.Service.SessionSurvivesLeaveAndInputRoutesByCurrentRod",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -179,6 +184,73 @@ bool FCatFishingServiceRodOperationsPreserveMovementTest::RunTest(const FString&
 
 	Fishing->TerminateSessionsForCharacter(Character);
 	TestEqual(TEXT("鱼竿登记失效后的中断仍不改移动模式"), Movement->MovementMode.GetValue(), MOVE_Walking);
+	return !HasAnyErrors();
+}
+
+// 持竿朝向契约：镜头 Yaw 必须同帧驱动猫身，向后移动不得再触发面向移动的掉头；
+// 最后一名操作者离开后要精确恢复进入持竿前的 CharacterMovement 配置。
+bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("创建持竿朝向测试 World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	WorldWrapper.ForwardErrorMessages(this);
+	WorldWrapper.BeginPlayInTestWorld();
+	UWorld* World = WorldWrapper.GetTestWorld();
+	UCatFishingService* Fishing = World ? World->GetSubsystem<UCatFishingService>() : nullptr;
+	ACatfishingPlayerController* Controller = World
+		? World->SpawnActor<ACatfishingPlayerController>() : nullptr;
+	ACatfishingPlayerState* PlayerState = World
+		? World->SpawnActor<ACatfishingPlayerState>() : nullptr;
+	ACatCharacter* Character = World ? World->SpawnActor<ACatCharacter>() : nullptr;
+	ACatFishingRodActor* Rod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
+	if (!TestNotNull(TEXT("FishingService 存在"), Fishing)
+		|| !TestNotNull(TEXT("控制器存在"), Controller)
+		|| !TestNotNull(TEXT("PlayerState 存在"), PlayerState)
+		|| !TestNotNull(TEXT("角色存在"), Character)
+		|| !TestNotNull(TEXT("鱼竿存在"), Rod))
+	{
+		return false;
+	}
+
+	Controller->PlayerState = PlayerState;
+	Character->SetPlayerState(PlayerState);
+	Controller->Possess(Character);
+	UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
+	if (!TestNotNull(TEXT("角色移动组件存在"), Movement))
+	{
+		return false;
+	}
+
+	// 用一组非持竿默认值证明离开时是恢复旧配置，而不是硬编码另一组默认值。
+	Character->bUseControllerRotationYaw = false;
+	Movement->bOrientRotationToMovement = true;
+	Movement->bUseControllerDesiredRotation = true;
+	Character->SetActorRotation(FRotator(0.0, 10.0, 0.0));
+	Controller->SetControlRotation(FRotator(0.0, 95.0, 0.0));
+	TestTrue(TEXT("鱼竿以当前玩家作为主持有者初始化"), Rod->InitializeAuthoritativeIdentity(
+		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("FacingRod"), TEXT("Skin"),
+		PlayerState, PlayerState, true, false));
+	TestTrue(TEXT("持有鱼竿登记到权威查询入口"), Fishing->RegisterDeployedRod(PlayerState, Rod));
+
+	Controller->UpdateRotation(1.0f / 60.0f);
+	TestTrue(TEXT("持竿时启用 Controller Yaw 跟随"), Character->bUseControllerRotationYaw);
+	TestFalse(TEXT("持竿时禁止向后输入用移动方向覆盖朝向"),
+		Movement->bOrientRotationToMovement);
+	TestFalse(TEXT("持竿时不另走 CharacterMovement ControllerDesiredRotation 通道"),
+		Movement->bUseControllerDesiredRotation);
+	TestTrue(TEXT("猫身 Yaw 与本帧 Controller Yaw 一致"),
+		FMath::IsNearlyEqual(Character->GetActorRotation().Yaw, Controller->GetControlRotation().Yaw, 0.01f));
+
+	APlayerState* IgnoredPromotion = nullptr;
+	TestTrue(TEXT("主持有者可离开鱼竿"), Rod->RemoveOperatorFromAuthority(
+		PlayerState, Rod->GetPresentationState().RodActorRevision, IgnoredPromotion));
+	Controller->UpdateRotation(1.0f / 60.0f);
+	TestFalse(TEXT("离竿后恢复原 Controller Yaw 设置"), Character->bUseControllerRotationYaw);
+	TestTrue(TEXT("离竿后恢复原面向移动设置"), Movement->bOrientRotationToMovement);
+	TestTrue(TEXT("离竿后恢复原 ControllerDesiredRotation 设置"),
+		Movement->bUseControllerDesiredRotation);
 	return !HasAnyErrors();
 }
 

@@ -614,6 +614,8 @@ public:
 protected:
 	/** 为本地 Controller 安装玩法输入层，并在可用时把 durable Profile 装备解锁投影给服务器；服务端远端 Controller 不接触本地输入或 Profile 子系统。 */
 	virtual void BeginPlay() override;
+	/** Controller 应用本帧视角输入后，让正在持竿的猫以同一个水平朝向跟随。 */
+	virtual void UpdateRotation(float DeltaTime) override;
 	/** 绑定 Move、Look、Jump、Sprint Enhanced Input Action，并保留父类输入初始化。 */
 	virtual void SetupInputComponent() override;
 	/** Super 完成每帧输入后恰好一次把边沿交给当前 Pawn 的 ASC。 */
@@ -659,6 +661,7 @@ protected:
 
 private:
 	friend class UCatFishingCommandComponent;
+	friend class FCatFishingHeldFacingFollowsControlRotationTest;
 
 	/** 幂等安装当前配置的玩法 Mapping Context；BeginPlay/输入初始化均可安全调用。 */
 	void ApplyInputMappingContext();
@@ -682,6 +685,10 @@ private:
 	void SetSprintRequested(bool bNewSprintRequested, bool bNotifyServer);
 	/** 把服务器配置的普通/疾跑速度应用到指定 Character；非 Character Pawn 安全跳过。 */
 	void ApplySprintSpeed(APawn* TargetPawn, bool bSprinting) const;
+	/** 从权威或复制的鱼竿持有者事实刷新角色转向策略，不另存一份持竿业务状态。 */
+	void RefreshFishingFacingMode(float DeltaTime);
+	/** 离竿、换 Pawn 或 Controller 销毁时恢复角色原有转向配置。 */
+	void RestoreFishingFacingMode();
 	/** Ability 输入按下入口；只把 GameplayTag 转交当前 Character ASC，不在 Controller 内直接启动领域命令。 */
 	void AbilityInputTagPressed(FGameplayTag InputTag);
 	/** Ability 输入释放入口；只把 GameplayTag 转交当前 Character ASC，释放本身不修改 Run、Items 或 Equipment 事实。 */
@@ -759,6 +766,13 @@ private:
 	/** 当前 Controller 的疾跑按键意图；客户端和 authority 分别维护，不作为远端动画事实复制。 */
 	UPROPERTY(Transient)
 	bool bSprintRequested = false;
+
+	/** 持竿期间被临时切换转向策略的 Character；鱼竿 PresentationState 仍是是否持竿的唯一事实。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<ACharacter> FishingFacingCharacter;
+	bool bSavedUseControllerRotationYaw = false;
+	bool bSavedOrientRotationToMovement = false;
+	bool bSavedUseControllerDesiredRotation = false;
 
 	/** 最近一次路由的 Pawn ASC；OnRep_Pawn 可先清旧 Pawn 再接新 Pawn。 */
 	UPROPERTY(Transient)
