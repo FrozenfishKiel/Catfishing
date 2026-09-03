@@ -171,7 +171,6 @@ private:
 
 	/** 在终态快照强制网络更新后设置有界 Actor lifespan；配置缺失时立即销毁以免无界泄漏。 */
 	void ScheduleTerminalDestroy();
-	bool TryResolveExhaustedReelTarget(FVector& OutTarget) const;
 	bool SpawnExhaustedFishPickupFromAuthority(const FVector& SurfaceLocation);
 	/** 抄网成功时生成世界鱼并立即附到抄手嘴部；不读取鱼体力，也不写入鱼护。 */
 	bool SpawnScoopedFishPickupFromAuthority(ACatCharacter* ScoopingCharacter, APlayerState* ScoopingPlayerState,

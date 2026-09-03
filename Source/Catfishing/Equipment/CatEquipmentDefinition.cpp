@@ -25,6 +25,7 @@ bool UCatEquipmentDefinition::IsRuntimeDefinitionReady() const
 			&& FMath::IsFinite(MaximumRodDurability) && MaximumRodDurability > 0.0
 			&& FMath::IsFinite(FishingStrength) && FishingStrength > 0.0
 			&& FMath::IsFinite(MaximumLineLengthCentimeters) && MaximumLineLengthCentimeters > 0.0
+			&& FMath::IsFinite(RodPhysicsLengthCentimeters) && RodPhysicsLengthCentimeters > 0.0
 			&& FMath::IsFinite(BaseDurabilityWearPerSecond) && BaseDurabilityWearPerSecond >= 0.0
 			&& FMath::IsFinite(HighTensionWearMultiplier) && HighTensionWearMultiplier >= 1.0
 			&& IsFiniteTransform(RodTipLocalTransform) && IsFiniteTransform(StandLocalTransform)

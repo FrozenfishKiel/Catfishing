@@ -28,6 +28,16 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 	float NormalizedTension = 0.0f;
 	UPROPERTY(BlueprintReadOnly)
 	float ConstraintErrorCentimeters = 0.0f;
+	/** 当前搏斗是否要求鱼竿使用受力后的实际姿态，而不是瞬时跟随控制器。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bFightActive = false;
+	/** 转矩平衡后的实际角速度倍率；0=鱼线完全压住，1=无负载角速度。 */
+	UPROPERTY(BlueprintReadOnly)
+	float RodRotationSpeedMultiplier = 1.0f;
+	UPROPERTY(BlueprintReadOnly)
+	float FishResistingTorqueStrengthMeters = 0.0f;
+	UPROPERTY(BlueprintReadOnly)
+	float CatTorqueCapacityStrengthMeters = 0.0f;
 	UPROPERTY(BlueprintReadOnly)
 	bool bActive = false;
 };
@@ -85,7 +95,10 @@ public:
 	bool SetCarrierConstraintFromAuthority(const FVector& PullDirection,
 		double PullAccelerationCentimetersPerSecondSquared, double TargetPullSpeedCentimetersPerSecond,
 		double MaximumAwaySpeedMultiplier,
-		double NormalizedTension, double ConstraintErrorCentimeters);
+		double NormalizedTension, double ConstraintErrorCentimeters,
+		bool bFightActive = false, double RodRotationSpeedMultiplier = 1.0,
+		double FishResistingTorqueStrengthMeters = 0.0,
+		double CatTorqueCapacityStrengthMeters = 0.0);
 	void ClearCarrierConstraintFromAuthority();
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod")
 	const FCatFishingCarrierConstraintState& GetCarrierConstraintState() const
@@ -130,6 +143,9 @@ private:
 	FTransform GripCanonicalLocalTransform = FTransform::Identity;
 	FVector AuthoritativeRodTipVelocity = FVector::ZeroVector;
 	FVector AuthoritativeHolderVelocity = FVector::ZeroVector;
+	FRotator AuthoritativeHeldAimRotation = FRotator::ZeroRotator;
+	double SmoothedRodRotationSpeedMultiplier = 1.0;
+	TWeakObjectPtr<APawn> AuthoritativeAimHolder;
 	/** 20 Hz 权威目标在本机角色移动帧中的平滑速度；只属于瞬态表现/移动接缝，不复制。 */
 	FVector SmoothedCarrierPullVelocity = FVector::ZeroVector;
 	double SmoothedCarrierAwaySpeedMultiplier = 1.0;
@@ -137,6 +153,9 @@ private:
 	TWeakObjectPtr<UCharacterMovementComponent> CarrierConstraintTickDependency;
 	double NextCarrierSmoothingDiagnosticWorldSeconds = 0.0;
 	bool bLastCarrierSmoothingDiagnosticActive = false;
+	double NextRodRotationResistanceDiagnosticWorldSeconds = 0.0;
+	bool bLastRodRotationStalled = false;
+	bool bHeldAimInitialized = false;
 	FTransform ResolveOperatorStandLocalTransform(int32 SlotIndex) const;
 	bool bIdentityInitialized = false;
 	bool bHasPendingPresentationNotification = false;

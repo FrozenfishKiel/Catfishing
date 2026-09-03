@@ -91,6 +91,42 @@ FCatFishMotionSolveResult FCatFishFightMotionSolver::Solve(const FCatFishMotionS
 	return Result;
 }
 
+bool FCatFishFightMotionSolver::IsIntentionalLandwardHaul(
+	const FCatFishBeachingIntentInput& Input)
+{
+	if (!Input.bLineTaut
+		|| !IsFiniteMotionVector(Input.CurrentFishWorldPosition)
+		|| !IsFiniteMotionVector(Input.CandidateFishWorldPosition)
+		|| !IsFiniteMotionVector(Input.WaterwardDirection)
+		|| Input.WaterwardDirection.IsNearlyZero()
+		|| !IsFiniteMotionVector(Input.CarrierActualWorldDisplacement)
+		|| !FMath::IsFinite(Input.ActualReelDistanceCentimeters)
+		|| Input.ActualReelDistanceCentimeters < 0.0
+		|| !FMath::IsFinite(Input.MinimumProgressCentimeters)
+		|| Input.MinimumProgressCentimeters < 0.0)
+	{
+		return false;
+	}
+
+	FVector LandwardDirection = -Input.WaterwardDirection;
+	LandwardDirection.Z = 0.0;
+	LandwardDirection = LandwardDirection.GetSafeNormal();
+	if (LandwardDirection.IsNearlyZero())
+	{
+		return false;
+	}
+	FVector FishDisplacement = Input.CandidateFishWorldPosition - Input.CurrentFishWorldPosition;
+	FishDisplacement.Z = 0.0;
+	FVector CarrierDisplacement = Input.CarrierActualWorldDisplacement;
+	CarrierDisplacement.Z = 0.0;
+	const double FishLandwardProgress = FVector::DotProduct(FishDisplacement, LandwardDirection);
+	const double CarrierLandwardProgress = FVector::DotProduct(CarrierDisplacement, LandwardDirection);
+	const bool bExplicitCatHaul = Input.ActualReelDistanceCentimeters
+		> Input.MinimumProgressCentimeters
+		|| CarrierLandwardProgress > Input.MinimumProgressCentimeters;
+	return bExplicitCatHaul && FishLandwardProgress > Input.MinimumProgressCentimeters;
+}
+
 FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContact(
 	const FCatFishShoreContactInput& Input)
 {

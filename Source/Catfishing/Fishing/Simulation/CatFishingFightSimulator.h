@@ -51,6 +51,8 @@ struct CATFISHING_API FCatFightSimulationConfig
 	/** 将加速度投影为目标意图速度的响应时长。 */
 	double DriveResponseSeconds = 1.0;
 	double RodStrength = 0.0;
+	/** 转矩模型的玩法杆长；来自鱼竿定义，不读取 Mesh 或锚点间距。 */
+	double RodPhysicsLengthCentimeters = 200.0;
 	double CatStaminaMaximum = 0.0;
 	double CatStaminaCostPerStrengthCentimeter = 0.002;
 	double FishStaminaCostPerStrengthCentimeter = 0.002;

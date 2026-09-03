@@ -74,6 +74,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0"))
 	double MaximumLineLengthCentimeters = 0.0;
 
+	/** 转矩公式使用的玩法杆长；不读取 Mesh Bounds，换皮和视觉缩放不会改变遛鱼手感。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "1.0", Units = "cm"))
+	double RodPhysicsLengthCentimeters = 200.0;
+
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0"))
 	double BaseDurabilityWearPerSecond = 0.0;
 

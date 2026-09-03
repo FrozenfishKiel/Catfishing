@@ -4,6 +4,7 @@
 #include "Fishing/Simulation/CatFishFightMotionSolver.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
 #include "Fishing/Simulation/CatFishingFightWorkModel.h"
+#include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 
 namespace CatFishingCoupledSimulationTest
 {
@@ -109,6 +110,64 @@ bool FCatFishingUnforcedShoreContactTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("fish does not beach without cat-side hauling"), Result.bBeached);
 	TestTrue(TEXT("water-only shore response does not use the land candidate"),
 		!Result.FishWorldPosition.Equals(Input.CandidateFishWorldPosition, 1e-6));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingBeachingIntentTest,
+	"Catfishing.Unit.Fishing.Simulation.BeachingRequiresReelOrCarrierTranslationNotRodTipSwing",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingBeachingIntentTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFishBeachingIntentInput Input;
+	Input.CurrentFishWorldPosition = FVector(0.0, 10.0, 0.0);
+	Input.CandidateFishWorldPosition = FVector(0.0, -10.0, 0.0);
+	Input.WaterwardDirection = FVector(0.0, 1.0, 0.0);
+	Input.bLineTaut = true;
+	TestFalse(TEXT("rod-tip rotation alone cannot beach the fish"),
+		FCatFishFightMotionSolver::IsIntentionalLandwardHaul(Input));
+
+	Input.ActualReelDistanceCentimeters = 2.0;
+	TestTrue(TEXT("actual reeling can beach a shore-crossing fish"),
+		FCatFishFightMotionSolver::IsIntentionalLandwardHaul(Input));
+	Input.ActualReelDistanceCentimeters = 0.0;
+	Input.CarrierActualWorldDisplacement = FVector(0.0, -2.0, 0.0);
+	TestTrue(TEXT("actual carrier translation toward land can beach a shore-crossing fish"),
+		FCatFishFightMotionSolver::IsIntentionalLandwardHaul(Input));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingRodResistanceLengthTest,
+	"Catfishing.Unit.Fishing.Simulation.RodRotationResistanceUsesConfiguredPhysicsLength",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingRodResistanceLengthTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFishingRodResistanceInput Input;
+	Input.CatStrength = 50.0;
+	Input.FishStrength = 25.0;
+	Input.NormalizedTension = 1.0;
+	Input.NormalizedFishLineLoad = 1.0;
+	Input.RodLineAlignment = 0.0;
+	Input.RodPhysicsLengthCentimeters = 100.0;
+	const FCatFishingRodResistanceResult OneMeter = FCatFishingRodResistanceModel::Evaluate(Input);
+	TestTrue(TEXT("one-meter configured rod solves"), OneMeter.bSucceeded);
+	TestEqual(TEXT("one-meter rod consumes half the rotation capacity"),
+		OneMeter.RotationSpeedMultiplier, 0.5, 1e-9);
+
+	Input.RodPhysicsLengthCentimeters = 200.0;
+	const FCatFishingRodResistanceResult TwoMeters = FCatFishingRodResistanceModel::Evaluate(Input);
+	TestTrue(TEXT("two-meter configured rod solves"), TwoMeters.bSucceeded);
+	TestTrue(TEXT("two-meter configured rod reaches the torque stall"), TwoMeters.bRotationStalled);
+	TestEqual(TEXT("stalled rod has no available angular speed"),
+		TwoMeters.RotationSpeedMultiplier, 0.0, 1e-9);
+
+	Input.NormalizedTension = 0.0;
+	const FCatFishingRodResistanceResult Slack = FCatFishingRodResistanceModel::Evaluate(Input);
+	TestEqual(TEXT("slack line leaves rod rotation unrestricted"),
+		Slack.RotationSpeedMultiplier, 1.0, 1e-9);
 	return !HasAnyErrors();
 }
 

@@ -47,6 +47,18 @@ struct CATFISHING_API FCatFishShoreContactResult
 	double LineLengthCentimeters = 0.0;
 };
 
+/** 判定一次越岸是否来自明确的收线或持竿者位移，而不是竿尖旋转扫过岸线。 */
+struct CATFISHING_API FCatFishBeachingIntentInput
+{
+	FVector CurrentFishWorldPosition = FVector::ZeroVector;
+	FVector CandidateFishWorldPosition = FVector::ZeroVector;
+	FVector WaterwardDirection = FVector::ForwardVector;
+	FVector CarrierActualWorldDisplacement = FVector::ZeroVector;
+	double ActualReelDistanceCentimeters = 0.0;
+	double MinimumProgressCentimeters = 0.1;
+	bool bLineTaut = false;
+};
+
 /** Pure deterministic projection into the frozen water geometry and rod line reach. */
 class CATFISHING_API FCatFishFightMotionSolver
 {
@@ -59,4 +71,10 @@ public:
 	 */
 	static FCatFishShoreContactResult ResolveLiveFishShoreContact(
 		const FCatFishShoreContactInput& Input);
+
+	/**
+	 * 上岸必须同时满足“鱼确实向岸上移动”和“猫端确实收线或向岸移动”。
+	 * 竿尖仅由旋转产生的位移不属于猫端平移，不能单独触发上岸/清空体力。
+	 */
+	static bool IsIntentionalLandwardHaul(const FCatFishBeachingIntentInput& Input);
 };

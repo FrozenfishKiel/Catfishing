@@ -37,7 +37,6 @@
 #include "Items/CatItemsService.h"
 #include "Items/CatWorldItemSettings.h"
 #include "Items/World/CatFishPickupActor.h"
-#include "Items/World/CatWorldSurfaceResolver.h"
 #include "Net/UnrealNetwork.h"
 #include "StateTree.h"
 #include "TimerManager.h"
@@ -1161,6 +1160,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.DriveResponseSeconds = Settings->FightDriveResponseSeconds;
 	Snapshot.FishStrength = Config.FishStrength;
 	Config.RodStrength = RodDefinition->FishingStrength;
+	Config.RodPhysicsLengthCentimeters = RodDefinition->RodPhysicsLengthCentimeters;
 	Config.CatStaminaMaximum = CatStaminaBaseline;
 	Config.CatStaminaCostPerStrengthCentimeter = Settings->CatStaminaCostPerStrengthCentimeter;
 	Config.FishStaminaCostPerStrengthCentimeter = Settings->FishStaminaCostPerStrengthCentimeter;
@@ -1499,12 +1499,18 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 	}
 	else if (Snapshot.Phase == ECatFishingPhase::ExhaustedReel && Snapshot.bReeling)
 	{
-		FVector Target;
 		const ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
+		const ACatFishingRodActor* Rod = Snapshot.RodActor;
 		const UCatWorldItemSettings* ItemSettings = GetDefault<UCatWorldItemSettings>();
-		if (!Encounter || !TryResolveExhaustedReelTarget(Target))
+		if (!Encounter || !Rod || !FightRunner)
 		{
-			HandleFightRunnerFailureFromAuthority(TEXT("ExhaustedReelTarget"));
+			HandleFightRunnerFailureFromAuthority(TEXT("ExhaustedReelDependency"));
+			return;
+		}
+		// Pickup 只允许从已经落在真实干地上的 Encounter 交接。鱼仍在水里时继续收线，
+		// 不隐藏旧鱼，也不在竿尖可能悬于水面的 XY 生成不可拾取对象。
+		if (!FightRunner->IsFishBeachedForAuthority())
+		{
 			return;
 		}
 		const double ConfiguredReachTolerance = ItemSettings
@@ -1512,8 +1518,9 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 		const double ReachTolerance = FMath::IsFinite(ConfiguredReachTolerance)
 			&& ConfiguredReachTolerance > 0.0
 			? FMath::Max(5.0, ConfiguredReachTolerance) : 5.0;
-		if (FVector::Dist2D(Encounter->GetActorLocation(), Target) <= ReachTolerance
-			&& !SpawnExhaustedFishPickupFromAuthority(Target))
+		const FVector PickupTarget = Rod->GetGripWorldTransform().GetLocation();
+		if (FVector::Dist2D(Encounter->GetActorLocation(), PickupTarget) <= ReachTolerance
+			&& !SpawnExhaustedFishPickupFromAuthority(Encounter->GetActorLocation()))
 		{
 			HandleFightRunnerFailureFromAuthority(TEXT("ExhaustedFishPickupSpawn"));
 		}
@@ -1537,49 +1544,6 @@ void ACatFishingSession::HandleCatEnteredDangerousWaterFromAuthority(
 		TEXT("Condition confirmed dangerous foot immersion"));
 }
 
-bool ACatFishingSession::TryResolveExhaustedReelTarget(FVector& OutTarget) const
-{
-	OutTarget = FVector::ZeroVector;
-	UWorld* World = GetWorld();
-	const UCatWorldItemSettings* ItemSettings = GetDefault<UCatWorldItemSettings>();
-	const ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
-	const ACatFishingRodActor* Rod = Snapshot.RodActor;
-	if (!World || !ItemSettings || !Encounter || !Rod)
-	{
-		return false;
-	}
-
-	// 鱼越岸前，竿尖 XY 仍可按水面与地面较高者收尾；鱼一旦越岸，目标必须使用真实地面高度，
-	// 即使岸面低于原水面也不能继续悬在旧 Z。垂直查询贯穿完整关卡高度，不再受短距离探测窗限制。
-	const FVector RodTip = Rod->GetRodTipWorldTransform().GetLocation();
-	const double WaterSurfaceZ = Encounter->GetActorLocation().Z;
-	double TargetSurfaceZ = WaterSurfaceZ;
-	TArray<const AActor*> IgnoredActors;
-	IgnoredActors.Add(Encounter);
-	IgnoredActors.Add(Rod);
-	IgnoredActors.Add(Snapshot.HookActor);
-	IgnoredActors.Add(FisherCharacter.Get());
-	const FCatWorldSurfaceResult Surface = FCatWorldSurfaceResolver::ResolveHighestBlockingSurface(
-		World, RodTip, ItemSettings->LandingGroundTraceChannel, IgnoredActors);
-	const bool bFishBeached = FightRunner && FightRunner->IsFishBeachedForAuthority();
-	if (bFishBeached && !Surface.bSucceeded)
-	{
-		UE_LOG(LogCatFishing, Error,
-			TEXT("Event=fishing_landing_target_rejected SessionId=%s Beached=true RodTip=%s TraceChannel=%d "
-				"Reason=GroundSurfaceMissing"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *RodTip.ToCompactString(),
-			static_cast<int32>(ItemSettings->LandingGroundTraceChannel.GetValue()));
-		return false;
-	}
-	if (Surface.bSucceeded)
-	{
-		TargetSurfaceZ = bFishBeached
-			? Surface.WorldPosition.Z : FMath::Max(WaterSurfaceZ, Surface.WorldPosition.Z);
-	}
-	OutTarget = FVector(RodTip.X, RodTip.Y, TargetSurfaceZ);
-	return !OutTarget.ContainsNaN();
-}
-
 bool ACatFishingSession::CommitCatchEquipmentFromAuthority()
 {
 	UCatEquipmentComponent* Equipment = CastEquipment.Get();
@@ -1596,14 +1560,18 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 {
 	UWorld* World = GetWorld();
 	const UCatWorldItemSettings* Settings = GetDefault<UCatWorldItemSettings>();
-	if (!HasAuthority() || !World || !Settings || !FishDefinition || !AttemptSnapshot.WaterRegion.IsValid())
+	if (!HasAuthority() || !World || !Settings || !FishDefinition || !AttemptSnapshot.WaterRegion.IsValid()
+		|| !FightRunner || !FightRunner->IsFishBeachedForAuthority() || !Snapshot.FishEncounterActor)
 	{
 		UE_LOG(LogCatFishing, Error,
-			TEXT("Event=exhausted_fish_pickup_rejected SessionId=%s Authority=%s World=%s Settings=%s FishDefinition=%s WaterRegion=%s Reason=Dependency"),
+			TEXT("Event=exhausted_fish_pickup_rejected SessionId=%s Authority=%s World=%s Settings=%s "
+				"FishDefinition=%s WaterRegion=%s Beached=%s Encounter=%s Reason=Dependency"),
 			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			HasAuthority() ? TEXT("true") : TEXT("false"), World ? TEXT("valid") : TEXT("null"),
 			Settings ? TEXT("valid") : TEXT("null"), FishDefinition ? TEXT("valid") : TEXT("null"),
-			AttemptSnapshot.WaterRegion.IsValid() ? TEXT("valid") : TEXT("invalid"));
+			AttemptSnapshot.WaterRegion.IsValid() ? TEXT("valid") : TEXT("invalid"),
+			FightRunner && FightRunner->IsFishBeachedForAuthority() ? TEXT("true") : TEXT("false"),
+			*GetNameSafe(Snapshot.FishEncounterActor));
 		return false;
 	}
 	if (!CommitCatchEquipmentFromAuthority())
@@ -1613,7 +1581,7 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens));
 		return false;
 	}
-	// Session 已在力竭瞬间冻结了“水面与地面中较高者”的表面点；这里直接使用，避免生成时二次追踪导致跳位。
+	// 使用可见 Encounter 的当前干地位置完成表现交接，避免在竿尖/水面处重新投影后跳位或消失。
 	const FVector SpawnLocation = SurfaceLocation;
 
 	FActorSpawnParameters SpawnParams;
@@ -1664,7 +1632,7 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Pickup),
 		*Pickup->GetActorLocation().ToCompactString(), *Pickup->GetActorRotation().ToCompactString());
 	FinalizeSession(ECatFishingPhase::Resolved, ECatFishingOutcome::Landed,
-		TEXT("Exhausted fish reached rod-tip water projection as world pickup"));
+		TEXT("Grounded exhausted fish reached the rod grip as world pickup"));
 	return true;
 }
 

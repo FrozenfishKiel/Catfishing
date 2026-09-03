@@ -10,6 +10,10 @@ bool UCatFishingSettings::IsRuntimeReady() const
 		&& FMath::IsFinite(FightStrengthPerKilogram) && FightStrengthPerKilogram > 0.0
 		&& FMath::IsFinite(FightAccelerationPerStrength) && FightAccelerationPerStrength > 0.0
 		&& FMath::IsFinite(FightDriveResponseSeconds) && FightDriveResponseSeconds > 0.0
+		&& FMath::IsFinite(HeldRodMaximumAngularSpeedDegreesPerSecond)
+		&& HeldRodMaximumAngularSpeedDegreesPerSecond > 0.0
+		&& FMath::IsFinite(HeldRodAngularResistanceResponseSeconds)
+		&& HeldRodAngularResistanceResponseSeconds > 0.0
 		&& bEnableNearShoreValidation
 		&& FMath::IsFinite(ScoopReachCentimeters) && ScoopReachCentimeters > 0.0
 		&& FMath::IsFinite(TerminalReplicationWindowSeconds) && TerminalReplicationWindowSeconds > 0.0;

@@ -29,6 +29,7 @@ bool FCatFightSimulationConfig::IsValid() const
 		&& FMath::IsFinite(AccelerationPerStrength) && AccelerationPerStrength > 0.0
 		&& FMath::IsFinite(DriveResponseSeconds) && DriveResponseSeconds > 0.0
 		&& FMath::IsFinite(RodStrength) && RodStrength > 0.0
+		&& FMath::IsFinite(RodPhysicsLengthCentimeters) && RodPhysicsLengthCentimeters > 0.0
 		&& FMath::IsFinite(CatStaminaMaximum) && CatStaminaMaximum > 0.0
 		&& IsFiniteNonNegative(CatStaminaCostPerStrengthCentimeter)
 		&& IsFiniteNonNegative(FishStaminaCostPerStrengthCentimeter)
