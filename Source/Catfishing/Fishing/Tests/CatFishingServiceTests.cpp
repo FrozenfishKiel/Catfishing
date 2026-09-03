@@ -234,7 +234,10 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 		PlayerState, PlayerState, true, false));
 	TestTrue(TEXT("持有鱼竿登记到权威查询入口"), Fishing->RegisterDeployedRod(PlayerState, Rod));
 
+	Character->Jump();
+	TestTrue(TEXT("夹具先模拟已按下跳跃"), Character->bPressedJump);
 	Controller->UpdateRotation(1.0f / 60.0f);
+	TestFalse(TEXT("进入持竿模式时会取消旧的按键持有状态"), Character->bPressedJump);
 	TestTrue(TEXT("持竿时启用 Controller Yaw 跟随"), Character->bUseControllerRotationYaw);
 	TestFalse(TEXT("持竿时禁止向后输入用移动方向覆盖朝向"),
 		Movement->bOrientRotationToMovement);
@@ -242,6 +245,8 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 		Movement->bUseControllerDesiredRotation);
 	TestTrue(TEXT("猫身 Yaw 与本帧 Controller Yaw 一致"),
 		FMath::IsNearlyEqual(Character->GetActorRotation().Yaw, Controller->GetControlRotation().Yaw, 0.01f));
+	Controller->StartJump();
+	TestFalse(TEXT("持竿期间的跳跃输入不会留下起跳意图"), Character->bPressedJump);
 
 	APlayerState* IgnoredPromotion = nullptr;
 	TestTrue(TEXT("主持有者可离开鱼竿"), Rod->RemoveOperatorFromAuthority(

@@ -6,6 +6,7 @@
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/BodyAction/CatBodyActionAbility.h"
 #include "Logging/CatLog.h"
+#include "Logging/CatLogContext.h"
 #include "Online/CatOnlineSettings.h"
 #include "Online/CatOnlineSubsystem.h"
 #include "Camp/CatCampInventoryActor.h"
@@ -118,33 +119,40 @@ namespace
 	}
 
 	// 持竿查询流程：权威端优先使用 Fishing Registry；拥有客户端没有该服务，
-	// 因此只从已复制的少量鱼竿 Actor 里读 HolderPlayerState。这里不生成第二份持竿状态。
-	bool IsPrimaryFishingRodHolder(ACatfishingPlayerController* Controller)
+	// 因此只从已复制的少量鱼竿 Actor 里读 OperatorPlayerStates。这里不生成第二份持竿状态。
+	const ACatFishingRodActor* FindHeldFishingRodOperatedBy(ACatfishingPlayerController* Controller)
 	{
 		UWorld* World = Controller ? Controller->GetWorld() : nullptr;
 		APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
 		if (!World || !PlayerState)
 		{
-			return false;
+			return nullptr;
 		}
 
 		if (UCatFishingService* Fishing = World->GetSubsystem<UCatFishingService>())
 		{
 			const ACatFishingRodActor* Rod = Fishing->FindRodOperatedBy(PlayerState);
-			return Rod && Rod->IsPrimaryOperator(PlayerState)
-				&& Rod->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Held;
+			return Rod && Rod->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Held
+				? Rod : nullptr;
 		}
 
 		for (TActorIterator<ACatFishingRodActor> It(World); It; ++It)
 		{
 			const FCatFishingRodPresentationState& State = It->GetPresentationState();
 			if (State.PoseMode == ECatFishingRodPoseMode::Held
-				&& State.HolderPlayerState == PlayerState)
+				&& State.OperatorPlayerStates.Contains(PlayerState))
 			{
-				return true;
+				return *It;
 			}
 		}
-		return false;
+		return nullptr;
+	}
+
+	bool IsPrimaryFishingRodHolder(ACatfishingPlayerController* Controller)
+	{
+		APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
+		const ACatFishingRodActor* Rod = FindHeldFishingRodOperatedBy(Controller);
+		return Rod && Rod->IsPrimaryOperator(PlayerState);
 	}
 }
 
@@ -1879,6 +1887,9 @@ void ACatfishingPlayerController::RefreshFishingFacingMode(const float DeltaTime
 	if (FishingFacingCharacter.Get() != ControlledCharacter)
 	{
 		RestoreFishingFacingMode();
+		// 持竿状态可能在 Jump Started 之后由服务器回执；进入时同步清除旧意图，
+		// 否则按住跳跃进竿位会继续提供 JumpForce，仍可造成竿尖垂直突变。
+		ControlledCharacter->StopJumping();
 		FishingFacingCharacter = ControlledCharacter;
 		bSavedUseControllerRotationYaw = ControlledCharacter->bUseControllerRotationYaw;
 		bSavedOrientRotationToMovement = Movement->bOrientRotationToMovement;
@@ -2139,11 +2150,22 @@ void ACatfishingPlayerController::Look(const FInputActionValue& Value)
 	AddPitchInput(LookAxis.Y);
 }
 
-// 跳跃按下流程：只对当前已占有的 Character 生效，普通 Pawn 不伪造跳跃实现。
+// 跳跃按下流程：只对当前已占有的 Character 生效；任一手持鱼竿操作位都禁止起跳，
+// 避免角色垂直位移突然改变竿尖约束几何并把普通跳跃误判为鱼线负载。
 void ACatfishingPlayerController::StartJump()
 {
 	if (ACharacter* ControlledCharacter = Cast<ACharacter>(GetPawn()))
 	{
+		if (const ACatFishingRodActor* Rod = FindHeldFishingRodOperatedBy(this))
+		{
+			// 清除按键持有状态，避免离竿后在没有新 Started 边沿的情况下延迟起跳。
+			ControlledCharacter->StopJumping();
+			UE_LOG(LogCatFishing, Display,
+				TEXT("Event=fishing_jump_blocked Reason=OperatingHeldRod RodActorId=%s Pose=Held %s"),
+				*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
+				*CatLogContext::BuildControllerFields(this));
+			return;
+		}
 		ControlledCharacter->Jump();
 	}
 }
