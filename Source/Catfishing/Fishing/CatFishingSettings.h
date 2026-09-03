@@ -100,13 +100,7 @@ public:
 	/** 竿身未朝向鱼线时仍保留的最低有效杠杆，防止侧向动画把力量瞬间清零。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.05", ClampMax="1"))
 	double HeldRodMinimumLeverageMultiplier = 0.4;
-	/** 鱼竿并入猫端双体系统的等效质量。 */
-	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.01", Units="kg"))
-	double RodEffectiveMassKilograms = 2.0;
-	/** 鱼线满负载时施加给持竿 CharacterMovement 的最大水平牵引加速度。 */
-	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0", Units="cm/s^2"))
-	double MaximumFishPullAccelerationCentimetersPerSecondSquared = 1200.0;
-	/** 手持双端约束每秒最多分配给鱼端的水平修正，限制走动与收线合成后的鱼速。 */
+	/** 当前灰盒中鱼端和每只参战猫视为等质量；本值同时限制双方每秒的约束速度修正。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="1", Units="cm/s"))
 	double MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 160.0;
 	/** 满负载且鱼不弱于猫时，玩家沿远离鱼方向保留的最小速度比例。 */

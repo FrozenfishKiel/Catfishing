@@ -52,7 +52,6 @@ struct CATFISHING_API FCatFightParticipantRuntime
 	TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
 	double BaseFishingStrength = 0.0;
 	double ActiveFishingStrength = 0.0;
-	double MassKilograms = 0.0;
 	double StaminaMaximum = 0.0;
 	int64 LastInputSequence = 0;
 	bool bPullHeld = false;

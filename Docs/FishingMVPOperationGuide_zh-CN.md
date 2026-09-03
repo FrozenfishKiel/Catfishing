@@ -243,7 +243,7 @@ FishingSessionStateTree=/Game/Data/StateTrees/ST_FishingSession.ST_FishingSessio
 | **R** | `IA_PutDownFishingRod` | **鱼竿一键三态**：已在操作容器→离开 / 公共交互锚点附近且容器有容量→追加加入 / 否则→放自己的竿 | ✅ C++ 已实现，服务器按事实自动分派 |
 | **E** | `IA_Interact` | 准星交互/拾取；本地只选择 Current Target，真正拾取由服务器复核距离、视线和物品状态 | ✅ C++ 已实现，走 Native InputTag 而不是 Gameplay Ability |
 | **左键** | `IA_LMB` | 无会话→**长按预览抛物线（不蓄力）松手抛竿**；真咬窗→**提竿**（1 秒内=完美）；遛鱼→**按住拖** | 提竿/拖 ✅ C++；**抛竿预览+提交走蓝图**（5.2） |
-| **右键** | `IA_RMB` | 遛鱼时**按住松开线杯**（鱼在 L_max 内自由带线，发力期喘气回体力 +1.5/s） | ✅ C++（`UCatGA_FishingSlack`） |
+| **右键** | `IA_RMB` | 遛鱼时**按住松开线杯**（L_max 内确实自由出线时按配置恢复体力；线放尽重新绷紧后停止恢复） | ✅ C++（`UCatGA_FishingSlack`） |
 | **Q** | `IA_BaitSpot` | **长按蓄力打窝**：抛物线越蓄越远，松手投出 | 蓄力预览+提交走蓝图（5.3）；同键上的占位符 Chum Ability 会同时发一条无害的空命令 |
 | **F** | `IA_CatchFish` | 抢抄 | ✅ C++ |
 | **X** | `IA_CancelFishing` | 取消当前会话 | ✅ C++ |
@@ -296,9 +296,9 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 
 **常见失败原因**（放竿）：`InvalidPayload`=前方太斜/没实体地面；`DependencyUnavailable`=还没装配（5.4）。`InvalidWaterTarget/CastOutOfRange` 现在只属于抛竿阶段。
 
-多人占位口径：所有玩家都从同一个公共交互锚点按 R 加入，服务器把 PlayerState 追加到紧凑容器 `OperatorPlayerStates`。`[0]` 是当前主位，抛竿、提竿和右键线杯由它驱动；HookedFight 中左键立即提交收线/协作发力意图，不再蓄力或衰减。总做功按有效力量占比分摊到各自 ASC；参与者质量与鱼真实重量共同决定约束修正比例。
+多人占位口径：所有玩家都从同一个公共交互锚点按 R 加入，服务器把 PlayerState 追加到紧凑容器 `OperatorPlayerStates`。`[0]` 是当前主位，抛竿、提竿和右键线杯由它驱动；HookedFight 中左键立即提交收线/协作发力意图，不再蓄力或衰减。总做功按有效力量占比分摊到各自 ASC；当前灰盒以鱼真实重量作为每个参与单位的质量，主猫对单鱼为 50/50，每只正在协作发力的辅助猫再增加一个猫端单位。
 
-会话跟随鱼竿而不是角色：按 R 离开不会直接结束会话。`HookedFight/ExhaustedReel` 离竿后进入无人值守 FreeSpool；下一位玩家使用自己的 ASC、当前力量、质量、体力和输入序号接管同一个 Runner，不补满体力，也没有从 0 蓄力过程。
+会话跟随鱼竿而不是角色：按 R 离开不会直接结束会话。`HookedFight/ExhaustedReel` 离竿后进入无人值守 FreeSpool；下一位玩家使用自己的 ASC、当前力量、体力和输入序号接管同一个 Runner，不补满体力，也没有从 0 蓄力过程。接管后的玩法质量仍按上述等质量参与单位计算，不读取角色组件默认质量。
 
 ---
 

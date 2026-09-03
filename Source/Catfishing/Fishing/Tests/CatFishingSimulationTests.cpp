@@ -12,7 +12,6 @@ namespace CatFishingCoupledSimulationTest
 		Config.FixedStepSeconds = 0.1;
 		Config.PrimaryOperatorCatStrength = 50.0;
 		Config.PrimaryOperatorMassKilograms = 10.0;
-		Config.RodEffectiveMassKilograms = 2.0;
 		Config.FishMassKilograms = 3.0;
 		Config.FishStrength = 40.0;
 		Config.RodStrength = 100.0;
@@ -180,6 +179,58 @@ bool FCatFishingHelperOnlyWorkTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("helper-only coupled step succeeds"), Step.bSucceeded);
 	TestTrue(TEXT("active helper can still request reel motion"), Step.RequestedReelDistanceCentimeters > 0.0);
 	TestTrue(TEXT("group work is not capped by exhausted primary stamina"), Step.CatStaminaDrain > 0.0);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingEqualMassConstraintTest,
+	"Catfishing.Unit.Fishing.Simulation.EqualMassSplitsConstraintAcrossBothEndpoints",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingEqualMassConstraintTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFightSimulationConfig Config = MakeConfig();
+	Config.PrimaryOperatorMassKilograms = Config.FishMassKilograms;
+	const FCatFightStepResult Step = FCatFishingFightSimulator::Step(
+		Config, MakeState(ECatFightCatAction::None), MakeHeldConstraint(), FVector::ForwardVector);
+	TestTrue(TEXT("equal-mass step succeeds"), Step.bSucceeded);
+	TestEqual(TEXT("equal masses split the constraint correction equally"),
+		Step.FishConstraintCorrectionCentimeters,
+		Step.CarrierConstraintCorrectionCentimeters, 1e-6);
+	TestEqual(TEXT("carrier impulse is the carrier correction divided by the fixed step"),
+		Step.CarrierPullVelocityDeltaCentimetersPerSecond,
+		Step.CarrierConstraintCorrectionCentimeters / Config.FixedStepSeconds, 1e-6);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingHoldAndRecoveryTest,
+	"Catfishing.Unit.Fishing.Simulation.LockedTensionCostsStaminaAndOnlyReleasedFreeSpoolRecovers",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingHoldAndRecoveryTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFightSimulationConfig Config = MakeConfig();
+	Config.PrimaryOperatorMassKilograms = Config.FishMassKilograms;
+	FCatFightSimulationState LockedState = MakeState(ECatFightCatAction::None);
+	LockedState.CatStamina = 50.0;
+	const FCatFightStepResult Locked = FCatFishingFightSimulator::Step(
+		Config, LockedState, MakeHeldConstraint(), FVector::ForwardVector);
+	TestTrue(TEXT("locked taut line creates isometric cat cost"), Locked.CatStaminaDrain > 0.0);
+
+	FCatFightSimulationState ReleasedState = LockedState;
+	ReleasedState.CatAction = ECatFightCatAction::Slack;
+	const FCatFightStepResult Released = FCatFishingFightSimulator::Step(
+		Config, ReleasedState, MakeHeldConstraint(), FVector::ForwardVector);
+	TestTrue(TEXT("free spool inside the line limit restores cat stamina"), Released.CatStaminaDrain < 0.0);
+
+	FCatFightSimulationState MaxedState = ReleasedState;
+	MaxedState.LineLengthCentimeters = Config.MaximumLineLengthCentimeters;
+	MaxedState.FishWorldPosition = FVector(Config.MaximumLineLengthCentimeters, 0.0, 0.0);
+	const FCatFightStepResult Maxed = FCatFishingFightSimulator::Step(
+		Config, MaxedState, MakeHeldConstraint(), FVector::ForwardVector);
+	TestEqual(TEXT("free spool blocked by maximum line length cannot restore stamina"),
+		Maxed.CatStaminaDrain, 0.0, 1e-9);
 	return !HasAnyErrors();
 }
 

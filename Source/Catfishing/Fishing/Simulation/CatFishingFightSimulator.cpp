@@ -22,7 +22,6 @@ bool FCatFightSimulationConfig::IsValid() const
 		&& IsFiniteNonNegative(SecondCatStrength)
 		&& IsFiniteNonNegative(PrimaryOperatorMassKilograms)
 		&& IsFiniteNonNegative(HelperMassKilograms)
-		&& IsFiniteNonNegative(RodEffectiveMassKilograms)
 		&& FMath::IsFinite(GetCombinedCatMass()) && GetCombinedCatMass() > 0.0
 		&& FMath::IsFinite(FishMassKilograms) && FishMassKilograms > 0.0
 		&& FMath::IsFinite(FishStrength) && FishStrength > 0.0
@@ -50,7 +49,6 @@ bool FCatFightSimulationConfig::IsValid() const
 		&& FMath::IsFinite(TensionResponseRangeCentimeters) && TensionResponseRangeCentimeters > 0.0
 		&& FMath::IsFinite(MinimumRodLeverageMultiplier)
 		&& MinimumRodLeverageMultiplier > 0.0 && MinimumRodLeverageMultiplier <= 1.0
-		&& IsFiniteNonNegative(MaximumCarrierPullAccelerationCentimetersPerSecondSquared)
 		&& FMath::IsFinite(MaximumFishConstraintCorrectionSpeedCentimetersPerSecond)
 		&& MaximumFishConstraintCorrectionSpeedCentimetersPerSecond > 0.0
 		&& FMath::IsFinite(MinimumCarrierAwaySpeedMultiplier)
@@ -157,11 +155,14 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 
 	FVector ProposedFishPosition = FreeFishPosition;
 	double FishCorrection = 0.0;
+	double CarrierCorrection = 0.0;
 	if (bLineRestraining && !bFreeSpoolReleased)
 	{
 		const double CatMass = Config.GetCombinedCatMass();
 		const double FishCorrectionShare = RodConstraint.bRodHeld
 			? CatMass / (CatMass + Config.FishMassKilograms) : 1.0;
+		const double CarrierCorrectionShare = RodConstraint.bRodHeld
+			? Config.FishMassKilograms / (CatMass + Config.FishMassKilograms) : 0.0;
 		const double MaximumFishCorrection = Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond * Dt;
 		FVector TowardRod = IntendedRodTip - ProposedFishPosition;
 		TowardRod.Z = 0.0;
@@ -173,23 +174,32 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 			ProposedFishPosition += TowardRod / HorizontalDistance * FishCorrection;
 			ProposedFishPosition.Z = State.FishWorldPosition.Z;
 		}
+		CarrierCorrection = FMath::Min(ConstraintError * CarrierCorrectionShare,
+			MaximumFishCorrection);
 	}
 
 	const double Distance1 = FVector::Distance(RodTip, ProposedFishPosition);
-	const double RemainingConstraintError = bFreeSpoolReleased ? 0.0
-		: FMath::Max(0.0, Distance1 - LineLength);
 	const double NormalizedTension = FMath::Clamp(
-		RemainingConstraintError / Config.TensionResponseRangeCentimeters, 0.0, 1.0);
-	const bool bLineTaut = LineLength - Distance1 <= UE_DOUBLE_KINDA_SMALL_NUMBER;
+		ConstraintError / Config.TensionResponseRangeCentimeters, 0.0, 1.0);
+	const bool bLineTaut = bLineRestraining
+		|| LineLength - Distance1 <= UE_DOUBLE_KINDA_SMALL_NUMBER;
 
 	const double CatCarrierIntent = bOperatorPresent && RodConstraint.bRodHeld
 		? FMath::Max(0.0, -FVector::DotProduct(CarrierIntentDisplacement, LineDirection)) : 0.0;
 	const double CatCarrierActual = bOperatorPresent && RodConstraint.bRodHeld
 		? FMath::Max(0.0, -FVector::DotProduct(
 			RodConstraint.RodTipVelocityCentimetersPerSecond * Dt, LineDirection)) : 0.0;
+	const double CatActiveIntentDistance = RequestedReelDistance + CatCarrierIntent;
+	const double FishOutwardIntentDistance = FMath::Max(0.0,
+		FVector::DotProduct(FishIntentDisplacement, LineDirection));
+	// 锁线本身也是意图：当鱼试图沿线向外且约束已介入时，猫在做等长保持功。
+	// 收线或主动后退已经给出了猫的显式意图，此时不再重复叠加保持距离。
+	const double CatHoldIntentDistance = State.CatAction == ECatFightCatAction::None
+		&& CatActiveIntentDistance <= UE_DOUBLE_SMALL_NUMBER && bLineRestraining
+		? FishOutwardIntentDistance * NormalizedTension : 0.0;
 	Result.RequestedReelDistanceCentimeters = RequestedReelDistance;
 	Result.ActualReelDistanceCentimeters = RequestedReelDistance;
-	Result.CatIntendedLineDistanceCentimeters = RequestedReelDistance + CatCarrierIntent;
+	Result.CatIntendedLineDistanceCentimeters = CatActiveIntentDistance + CatHoldIntentDistance;
 	Result.CatActualLineDistanceCentimeters = RequestedReelDistance + CatCarrierActual;
 	Result.FishIntendedLineDistanceCentimeters = FMath::Abs(
 		FVector::DotProduct(FishIntentDisplacement, LineDirection));
@@ -201,7 +211,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		&& Result.CatIntendedLineDistanceCentimeters > UE_DOUBLE_SMALL_NUMBER)
 	{
 		FCatFightWorkInput CatWork;
-		CatWork.Strength = EffectiveCatStrength;
+		// 杠杆决定传到鱼线上的有效力，但猫为维持姿态付出的肌肉做功仍按自身主动强度计费。
+		CatWork.Strength = CombinedCatStrength;
 		CatWork.IntendedLineDistanceCentimeters = Result.CatIntendedLineDistanceCentimeters;
 		CatWork.ActualLineDistanceCentimeters = Result.CatActualLineDistanceCentimeters;
 		CatWork.IsometricEffortMultiplier = Config.IsometricEffortMultiplier;
@@ -212,7 +223,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 			return FCatFightStepResult{};
 		}
 	}
-	else if (bOperatorPresent && bFreeSpool)
+	else if (bOperatorPresent && bFreeSpool && bFreeSpoolReleased && !bLineRestraining)
 	{
 		const double Capped = FMath::Min(Config.CatStaminaMaximum,
 			State.CatStamina + Config.SlackStaminaRegenPerSecond * Dt);
@@ -259,20 +270,21 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 			* WearLoad * Dt * Config.TautRodWearMultiplier : 0.0;
 	Result.AbsoluteRodWear = State.AbsoluteRodWear + RodWearDelta;
 
-	if (RodConstraint.bRodHeld && bLineRestraining)
+	if (RodConstraint.bRodHeld && bLineRestraining && !bFreeSpoolReleased)
 	{
 		const double CatMass = Config.GetCombinedCatMass();
 		const double CarrierShare = Config.FishMassKilograms / (CatMass + Config.FishMassKilograms);
-		const double RequiredAcceleration = ConstraintError * CarrierShare / FMath::Square(Dt);
-		Result.CarrierPullAccelerationCentimetersPerSecondSquared = FMath::Min(
-			Config.MaximumCarrierPullAccelerationCentimetersPerSecondSquared, RequiredAcceleration);
+		Result.CarrierConstraintCorrectionCentimeters = CarrierCorrection;
+		Result.CarrierPullVelocityDeltaCentimetersPerSecond = CarrierCorrection / Dt;
+		Result.CarrierPullAccelerationCentimetersPerSecondSquared =
+			Result.CarrierPullVelocityDeltaCentimetersPerSecond / Dt;
 		Result.CarrierAwaySpeedMultiplier = FMath::Lerp(1.0,
 			Config.MinimumCarrierAwaySpeedMultiplier, NormalizedTension * CarrierShare);
 	}
 
 	Result.IntendedSwimSpeedCentimetersPerSecond = SwimSpeed;
 	Result.LineLengthCentimeters = LineLength;
-	Result.TensionCentimeters = RemainingConstraintError;
+	Result.TensionCentimeters = ConstraintError;
 	Result.StraightLineDistanceCentimeters = Distance1;
 	Result.SlackLineLengthCentimeters = FMath::Max(0.0, LineLength - Distance1);
 	Result.NormalizedTension = NormalizedTension;

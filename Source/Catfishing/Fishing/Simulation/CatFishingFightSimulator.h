@@ -35,13 +35,12 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double SecondCatStrength = 0.0;
 	double PrimaryOperatorMassKilograms = 0.0;
 	double HelperMassKilograms = 0.0;
-	double RodEffectiveMassKilograms = 0.0;
 	double FishMassKilograms = 0.0;
 
 	double GetCombinedCatStrength() const { return PrimaryOperatorCatStrength + SecondCatStrength; }
 	double GetCombinedCatMass() const
 	{
-		return PrimaryOperatorMassKilograms + HelperMassKilograms + RodEffectiveMassKilograms;
+		return PrimaryOperatorMassKilograms + HelperMassKilograms;
 	}
 
 	double FishStrength = 0.0;
@@ -65,7 +64,7 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double AngleStrengthExponent = 1.0;
 	double TensionResponseRangeCentimeters = 10.0;
 	double MinimumRodLeverageMultiplier = 0.4;
-	double MaximumCarrierPullAccelerationCentimetersPerSecondSquared = 1200.0;
+	/** 鱼端和猫端各自每秒允许承担的最大约束速度修正。 */
 	double MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 160.0;
 	double MinimumCarrierAwaySpeedMultiplier = 0.15;
 	double MaximumLineLengthCentimeters = 0.0;
@@ -127,11 +126,15 @@ struct CATFISHING_API FCatFightStepResult
 	double EffectiveCatStrength = 0.0;
 	double CombinedCatStrength = 0.0;
 	int32 ActiveHelperCount = 0;
+	/** 本固定步应一次性施加给持竿猫的径向速度变化；与鱼端修正来自同一质量分配。 */
+	double CarrierPullVelocityDeltaCentimetersPerSecond = 0.0;
+	/** 兼容现有表现字段；由速度变化除以固定步长得到，不再直接用于 AddForce。 */
 	double CarrierPullAccelerationCentimetersPerSecondSquared = 0.0;
 	double CarrierAwaySpeedMultiplier = 1.0;
 	double ConstraintErrorCentimeters = 0.0;
 	double RelativeConstraintSpeedCentimetersPerSecond = 0.0;
 	double FishConstraintCorrectionCentimeters = 0.0;
+	double CarrierConstraintCorrectionCentimeters = 0.0;
 	double StrongConfrontationBuildUpSeconds = 0.0;
 	bool bStalemate = false;
 	bool bStrongConfrontation = false;

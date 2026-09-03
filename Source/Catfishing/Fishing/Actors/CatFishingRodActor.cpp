@@ -267,7 +267,8 @@ FVector ACatFishingRodActor::GetAuthoritativeRodForwardVector() const
 }
 
 bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullDirection,
-	const double PullAccelerationCentimetersPerSecondSquared, const double MaximumAwaySpeedMultiplier,
+	const double PullAccelerationCentimetersPerSecondSquared,
+	const double PullVelocityDeltaCentimetersPerSecond, const double MaximumAwaySpeedMultiplier,
 	const double NormalizedTension, const double ConstraintErrorCentimeters)
 {
 	FVector HorizontalDirection(PullDirection.X, PullDirection.Y, 0.0);
@@ -276,6 +277,8 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 		&& !HorizontalDirection.ContainsNaN() && HorizontalDirection.Normalize()
 		&& FMath::IsFinite(PullAccelerationCentimetersPerSecondSquared)
 		&& PullAccelerationCentimetersPerSecondSquared >= 0.0
+		&& FMath::IsFinite(PullVelocityDeltaCentimetersPerSecond)
+		&& PullVelocityDeltaCentimetersPerSecond >= 0.0
 		&& FMath::IsFinite(MaximumAwaySpeedMultiplier)
 		&& MaximumAwaySpeedMultiplier >= 0.0 && MaximumAwaySpeedMultiplier <= 1.0
 		&& FMath::IsFinite(NormalizedTension)
@@ -289,12 +292,16 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 	Next.PullDirection = HorizontalDirection;
 	Next.PullAccelerationCentimetersPerSecondSquared =
 		static_cast<float>(PullAccelerationCentimetersPerSecondSquared);
+	Next.PullVelocityDeltaCentimetersPerSecond =
+		static_cast<float>(PullVelocityDeltaCentimetersPerSecond);
 	Next.MaximumAwaySpeedMultiplier = static_cast<float>(MaximumAwaySpeedMultiplier);
 	Next.NormalizedTension = static_cast<float>(FMath::Clamp(NormalizedTension, 0.0, 1.0));
 	Next.ConstraintErrorCentimeters = static_cast<float>(ConstraintErrorCentimeters);
 	Next.bActive = Next.NormalizedTension > KINDA_SMALL_NUMBER
-		|| Next.PullAccelerationCentimetersPerSecondSquared > KINDA_SMALL_NUMBER;
+		|| Next.PullVelocityDeltaCentimetersPerSecond > KINDA_SMALL_NUMBER;
+	Next.ConstraintSequence = NextCarrierConstraintSequence++;
 	CarrierConstraintState = Next;
+	ApplyCarrierConstraintImpulse();
 	ForceNetUpdate();
 	return true;
 }
@@ -308,12 +315,46 @@ void ACatFishingRodActor::ClearCarrierConstraintFromAuthority()
 	if (!CarrierConstraintState.bActive
 		&& CarrierConstraintState.ConstraintErrorCentimeters <= KINDA_SMALL_NUMBER
 		&& CarrierConstraintState.PullAccelerationCentimetersPerSecondSquared <= KINDA_SMALL_NUMBER
+		&& CarrierConstraintState.PullVelocityDeltaCentimetersPerSecond <= KINDA_SMALL_NUMBER
 		&& FMath::IsNearlyEqual(CarrierConstraintState.MaximumAwaySpeedMultiplier, 1.0f))
 	{
 		return;
 	}
+	const int64 LastSequence = CarrierConstraintState.ConstraintSequence;
 	CarrierConstraintState = FCatFishingCarrierConstraintState{};
+	CarrierConstraintState.ConstraintSequence = LastSequence;
 	ForceNetUpdate();
+}
+
+void ACatFishingRodActor::OnRep_CarrierConstraintState()
+{
+	ApplyCarrierConstraintImpulse();
+}
+
+void ACatFishingRodActor::ApplyCarrierConstraintImpulse()
+{
+	if (!CarrierConstraintState.bActive
+		|| CarrierConstraintState.PullVelocityDeltaCentimetersPerSecond <= KINDA_SMALL_NUMBER
+		|| PresentationState.PoseMode != ECatFishingRodPoseMode::Held
+		|| !PresentationState.HolderPlayerState)
+	{
+		return;
+	}
+	ACharacter* Holder = Cast<ACharacter>(PresentationState.HolderPlayerState->GetPawn());
+	if (!Holder || (!HasAuthority() && !Holder->IsLocallyControlled()))
+	{
+		return;
+	}
+	UCharacterMovementComponent* Movement = Holder->GetCharacterMovement();
+	FVector PullDirection(CarrierConstraintState.PullDirection);
+	PullDirection.Z = 0.0;
+	if (!Movement || !PullDirection.Normalize())
+	{
+		return;
+	}
+	// 约束求解器已经按质量分配出本步 DeltaV；这里只把它作为一次冲量交给 CharacterMovement 做碰撞和网络移动。
+	Movement->AddImpulse(PullDirection * Movement->Mass
+		* CarrierConstraintState.PullVelocityDeltaCentimetersPerSecond, false);
 }
 
 void ACatFishingRodActor::ApplyCarrierConstraint(const float DeltaSeconds)
@@ -338,12 +379,7 @@ void ACatFishingRodActor::ApplyCarrierConstraint(const float DeltaSeconds)
 		return;
 	}
 
-	if (CarrierConstraintState.PullAccelerationCentimetersPerSecondSquared > KINDA_SMALL_NUMBER)
-	{
-		Movement->AddForce(PullDirection * Movement->Mass
-			* CarrierConstraintState.PullAccelerationCentimetersPerSecondSquared);
-	}
-	// AddForce 负责鱼更强时把猫拖向水面；径向速度上限负责让持续输入也不能最终无视张力跑回原 MaxWalkSpeed。
+	// 冲量负责每个固定步的猫端位移；径向速度上限负责让持续输入也不能最终无视张力跑回原 MaxWalkSpeed。
 	const FVector AwayDirection = -PullDirection;
 	const double AwaySpeed = FVector::DotProduct(Movement->Velocity, AwayDirection);
 	const double MaximumAwaySpeed = FMath::Max(0.0f, Movement->MaxWalkSpeed)

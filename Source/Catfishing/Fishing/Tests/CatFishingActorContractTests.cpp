@@ -323,11 +323,15 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 		Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Held);
 	TestTrue(TEXT("held rod accepts the authoritative coupled carrier constraint"),
 		Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector,
-			600.0, 0.4, 0.75, 8.0));
+			600.0, 30.0, 0.4, 0.75, 8.0));
 	TestTrue(TEXT("coupled carrier constraint becomes active"),
 		Rod->GetCarrierConstraintState().bActive);
 	TestEqual(TEXT("coupled carrier constraint keeps the server speed multiplier"),
 		Rod->GetCarrierConstraintState().MaximumAwaySpeedMultiplier, 0.4f);
+	TestEqual(TEXT("coupled carrier constraint carries one-step velocity impulse"),
+		Rod->GetCarrierConstraintState().PullVelocityDeltaCentimetersPerSecond, 30.0f);
+	TestTrue(TEXT("coupled carrier constraint advances a replication sequence"),
+		Rod->GetCarrierConstraintState().ConstraintSequence > 0);
 	Rod->ClearCarrierConstraintFromAuthority();
 	TestFalse(TEXT("clearing the fight constraint removes stale carrier drag"),
 		Rod->GetCarrierConstraintState().bActive);

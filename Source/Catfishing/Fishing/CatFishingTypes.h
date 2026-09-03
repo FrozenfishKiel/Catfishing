@@ -239,7 +239,7 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Carrier movement is an endpoint intent"))
 	float CarrierMovementAlpha = 0.0f;
 
-	/** 鱼线约束实际施加给持竿角色的水平牵引加速度。 */
+	/** 兼容现有 HUD 的派生展示值；实际运动改由每个固定步的一次速度冲量驱动。 */
 	UPROPERTY(BlueprintReadOnly)
 	float CarrierPullAccelerationCentimetersPerSecondSquared = 0.0f;
 

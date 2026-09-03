@@ -31,7 +31,6 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/StateTreeComponent.h"
 #include "GameFramework/PlayerState.h"
-#include "GameFramework/CharacterMovementComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
@@ -1132,7 +1131,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
 		FisherCharacter->GetCatDefinitionId(), CatStaminaBaseline);
 
-	// 三方力量与双方质量在此冻结基础值；Runner 每步只刷新参与者输入、力量和 CharacterMovement 质量。
+	// 三方力量与当前等质量灰盒参数在此冻结；Runner 每步只刷新参与者输入、力量和接入约束的猫数。
 	// （含完美折减）；钓组承载 = 鱼竿定义 FishingStrength（静态）。这里先保存主位基础力量供初始化校验，
 	// Runner 启动后会从 OperatorPlayerStates 逐步建立每位参与者的实时贡献。
 	// 下面把服务器设置、鱼竿/鱼定义、性格模板的各项参数一次性打包进模拟配置结构体，交给 FightRunner/Simulator 使用。
@@ -1142,10 +1141,9 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 	// 辅助位合力不能在会话启动瞬间静态冻结；Runner 每个固定步从鱼竿操作位重建并覆盖此合计。
 	Config.SecondCatStrength = 0.0;
-	Config.PrimaryOperatorMassKilograms = FisherCharacter->GetCharacterMovement()
-		? FisherCharacter->GetCharacterMovement()->Mass : 0.0;
+	// 当前灰盒明确假设一只猫（含鱼竿）与本场鱼等质量；CharacterMovement 的 100kg 只属于引擎推挤参数。
+	Config.PrimaryOperatorMassKilograms = FishWeightKilograms;
 	Config.HelperMassKilograms = 0.0;
-	Config.RodEffectiveMassKilograms = Settings->RodEffectiveMassKilograms;
 	Config.FishMassKilograms = FishWeightKilograms;
 	Config.FishStrength = FishDefinition->FishStrength * FishStrengthScale; // 完美中鱼可能折减鱼的力量。
 	Config.RodStrength = RodDefinition->FishingStrength;
@@ -1166,8 +1164,6 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.AngleStrengthExponent = Personality->AngleStrengthExponent;
 	Config.TensionResponseRangeCentimeters = Settings->TensionResponseRangeCentimeters;
 	Config.MinimumRodLeverageMultiplier = Settings->HeldRodMinimumLeverageMultiplier;
-	Config.MaximumCarrierPullAccelerationCentimetersPerSecondSquared =
-		Settings->MaximumFishPullAccelerationCentimetersPerSecondSquared;
 	Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond =
 		Settings->MaximumFishConstraintCorrectionSpeedCentimetersPerSecond;
 	Config.MinimumCarrierAwaySpeedMultiplier = Settings->MinimumCarrierAwaySpeedMultiplier;
@@ -1309,7 +1305,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		return false;
 	}
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_fight_started SessionId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryStrength=%.2f InitialHelperStrength=%.2f InitialCombinedStrength=%.2f CatMassKg=%.2f RodMassKg=%.2f FishMassKg=%.2f FishStrengthBase=%.2f FishStrengthEffective=%.2f CatStamina=%.2f FishStamina=%.2f LineStrength=%.2f LineDurability=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s CatWorkCost=%.5f FishWorkCost=%.5f IsometricMultiplier=%.3f MinimumLeverage=%.3f MaximumPullAcceleration=%.2f MaximumFishConstraintCorrectionSpeed=%.2f MinimumCarrierAwaySpeedMultiplier=%.3f"),
+		TEXT("Event=fishing_fight_started SessionId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryStrength=%.2f InitialHelperStrength=%.2f InitialCombinedStrength=%.2f CatSystemMassKg=%.2f FishMassKg=%.2f MassMode=EqualPerParticipant FishStrengthBase=%.2f FishStrengthEffective=%.2f CatStamina=%.2f FishStamina=%.2f LineStrength=%.2f LineDurability=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s CatWorkCost=%.5f FishWorkCost=%.5f IsometricMultiplier=%.3f MinimumLeverage=%.3f MaximumEndpointCorrectionSpeed=%.2f MinimumCarrierAwaySpeedMultiplier=%.3f"),
 		*Snapshot.FishingSessionId.ToString(),
 		*FishDefinition->FishDefinitionId.ToString(),
 		*RodDefinition->EquipmentDefinitionId.ToString(),
@@ -1318,7 +1314,6 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		Config.SecondCatStrength,
 		Config.GetCombinedCatStrength(),
 		Config.PrimaryOperatorMassKilograms,
-		Config.RodEffectiveMassKilograms,
 		Config.FishMassKilograms,
 		FishDefinition->FishStrength,
 		Config.FishStrength,
@@ -1334,7 +1329,6 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		Config.FishStaminaCostPerStrengthCentimeter,
 		Config.IsometricEffortMultiplier,
 		Config.MinimumRodLeverageMultiplier,
-		Config.MaximumCarrierPullAccelerationCentimetersPerSecondSquared,
 		Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond,
 		Config.MinimumCarrierAwaySpeedMultiplier);
 	return true;

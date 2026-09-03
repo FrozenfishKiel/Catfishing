@@ -18,6 +18,9 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 	FVector_NetQuantizeNormal PullDirection = FVector::ZeroVector;
 	UPROPERTY(BlueprintReadOnly)
 	float PullAccelerationCentimetersPerSecondSquared = 0.0f;
+	/** 每个权威约束步只应用一次的径向速度冲量，避免被行走制动静默抵消。 */
+	UPROPERTY(BlueprintReadOnly)
+	float PullVelocityDeltaCentimetersPerSecond = 0.0f;
 	UPROPERTY(BlueprintReadOnly)
 	float MaximumAwaySpeedMultiplier = 1.0f;
 	UPROPERTY(BlueprintReadOnly)
@@ -26,6 +29,9 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 	float ConstraintErrorCentimeters = 0.0f;
 	UPROPERTY(BlueprintReadOnly)
 	bool bActive = false;
+	/** 仅用于让相同数值的连续固定步也触发拥有客户端应用一次新冲量。 */
+	UPROPERTY(BlueprintReadOnly)
+	int64 ConstraintSequence = 0;
 };
 
 UCLASS(Blueprintable, meta=(ChildCannotTick))
@@ -77,9 +83,10 @@ public:
 	{
 		return AuthoritativeHolderVelocity;
 	}
-	/** FightRunner 发布同一份双端求解结果；服务器和持竿本地客户端随后每帧应用到 CharacterMovement。 */
+	/** FightRunner 发布同一份双端求解结果；服务器立即应用一次冲量，拥有客户端收到该步后应用一次同源冲量。 */
 	bool SetCarrierConstraintFromAuthority(const FVector& PullDirection,
-		double PullAccelerationCentimetersPerSecondSquared, double MaximumAwaySpeedMultiplier,
+		double PullAccelerationCentimetersPerSecondSquared, double PullVelocityDeltaCentimetersPerSecond,
+		double MaximumAwaySpeedMultiplier,
 		double NormalizedTension, double ConstraintErrorCentimeters);
 	void ClearCarrierConstraintFromAuthority();
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod")
@@ -100,9 +107,12 @@ protected:
 private:
 	UFUNCTION()
 	void OnRep_PresentationState(const FCatFishingRodPresentationState& Previous);
+	UFUNCTION()
+	void OnRep_CarrierConstraintState();
 	void QueueOrDispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	void DispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	void ApplyCarrierConstraint(float DeltaSeconds);
+	void ApplyCarrierConstraintImpulse();
 	bool CommitAuthoritativeMutation(const FCatFishingRodPresentationState& Next, int64 ExpectedRevision);
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> SceneRoot;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> VisualRoot;
@@ -114,13 +124,14 @@ private:
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> GripAnchor;
 	UPROPERTY(ReplicatedUsing=OnRep_PresentationState, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
 	FCatFishingRodPresentationState PresentationState;
-	UPROPERTY(Replicated, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
+	UPROPERTY(ReplicatedUsing=OnRep_CarrierConstraintState, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
 	FCatFishingCarrierConstraintState CarrierConstraintState;
 	FTransform RodTipCanonicalLocalTransform = FTransform::Identity;
 	FTransform StandCanonicalLocalTransform = FTransform::Identity;
 	FTransform GripCanonicalLocalTransform = FTransform::Identity;
 	FVector AuthoritativeRodTipVelocity = FVector::ZeroVector;
 	FVector AuthoritativeHolderVelocity = FVector::ZeroVector;
+	int64 NextCarrierConstraintSequence = 1;
 	FTransform ResolveOperatorStandLocalTransform(int32 SlotIndex) const;
 	bool bIdentityInitialized = false;
 	bool bHasPendingPresentationNotification = false;
