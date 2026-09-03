@@ -2,7 +2,7 @@
 
 namespace
 {
-	bool IsFiniteNonNegative(const double Value)
+	bool IsFishingFightBalanceFiniteNonNegative(const double Value)
 	{
 		return FMath::IsFinite(Value) && Value >= 0.0;
 	}
@@ -15,18 +15,18 @@ bool UCatFishingFightBalanceDefinition::IsRuntimeDefinitionReady() const
 		&& FMath::IsFinite(AccelerationPerStrength) && AccelerationPerStrength > 0.0
 		&& FMath::IsFinite(DriveResponseSeconds) && DriveResponseSeconds > 0.0
 		&& FMath::IsFinite(ReelSpeedCentimetersPerSecond) && ReelSpeedCentimetersPerSecond > 0.0
-		&& IsFiniteNonNegative(CatStaminaCostPerStrengthCentimeter)
-		&& IsFiniteNonNegative(FishStaminaCostPerStrengthCentimeter)
-		&& IsFiniteNonNegative(IsometricEffortMultiplier)
-		&& IsFiniteNonNegative(SlackStaminaRegenPerSecond)
+		&& IsFishingFightBalanceFiniteNonNegative(CatStaminaCostPerStrengthCentimeter)
+		&& IsFishingFightBalanceFiniteNonNegative(FishStaminaCostPerStrengthCentimeter)
+		&& IsFishingFightBalanceFiniteNonNegative(IsometricEffortMultiplier)
+		&& IsFishingFightBalanceFiniteNonNegative(SlackStaminaRegenPerSecond)
 		&& FMath::IsFinite(FishExhaustionThreshold)
 		&& FishExhaustionThreshold >= 0.0 && FishExhaustionThreshold <= 1.0
 		&& FMath::IsFinite(LowStaminaRestThreshold)
 		&& LowStaminaRestThreshold >= 0.0 && LowStaminaRestThreshold <= 1.0
 		&& FMath::IsFinite(LowStaminaRestMultiplier) && LowStaminaRestMultiplier >= 1.0
 		&& FMath::IsFinite(TensionResponseRangeCentimeters) && TensionResponseRangeCentimeters > 0.0
-		&& IsFiniteNonNegative(EscapeSlackCentimeters)
-		&& IsFiniteNonNegative(StalemateRodWearPerFishStrength)
+		&& IsFishingFightBalanceFiniteNonNegative(EscapeSlackCentimeters)
+		&& IsFishingFightBalanceFiniteNonNegative(StalemateRodWearPerFishStrength)
 		&& FMath::IsFinite(HeldRodMinimumLeverageMultiplier)
 		&& HeldRodMinimumLeverageMultiplier > 0.0 && HeldRodMinimumLeverageMultiplier <= 1.0
 		&& FMath::IsFinite(MaximumFishConstraintCorrectionSpeedCentimetersPerSecond)
