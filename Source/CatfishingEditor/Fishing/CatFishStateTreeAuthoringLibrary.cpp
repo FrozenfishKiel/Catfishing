@@ -3,6 +3,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Fishing/Behavior/CatFishBehaviorStateTree.h"
 #include "Fishing/CatFishingGameplayTags.h"
+#include "Fishing/CatFishingStateTreeEvents.h"
 #include "Fishing/CatFishingStateTreeNodes.h"
 #include "Fishing/StateTree/CatFishingSessionStateTreeSchema.h"
 #include "Misc/PackageName.h"
@@ -149,10 +150,13 @@ bool UCatFishStateTreeAuthoringLibrary::CreateOrUpdateDefaultFishingSessionState
 	HookedFight.TasksCompletion = EStateTreeTaskCompletionType::All;
 	HookedFight.AddTask<FCatFishingStartFightRunnerTask>();
 	HookedFight.AddTask<FCatFishingWaitForFightRunnerTask>();
-	HookedFight.AddTransition(EStateTreeTransitionTrigger::OnStateSucceeded,
+	HookedFight.AddTransition(EStateTreeTransitionTrigger::OnEvent, CatFishingStateTreeEvents::FishExhausted,
 		EStateTreeTransitionType::GotoState, &ExhaustedReelHold);
 
-	// 搏斗 Runner 在 C++ 内进入 ExhaustedReel；该叶子只让树继续 Running，等待岸上拾取或主动取消。
+	// 鱼力竭只切生命周期叶子；同一个 Runner 继续以 AutoHauling 意图运行双端约束。
+	ExhaustedReelHold.TasksCompletion = EStateTreeTaskCompletionType::All;
+	auto& EnterExhaustedReelTask = ExhaustedReelHold.AddTask<FCatFishingEnterPhaseTask>();
+	EnterExhaustedReelTask.GetInstanceData().Phase = ECatFishingPhase::ExhaustedReel;
 	ExhaustedReelHold.AddTask<FCatFishingWaitTask>();
 
 	FStateTreeCompilerLog CompilerLog;

@@ -20,6 +20,22 @@ enum class ECatRecoveryMode : uint8
 	CarriedToCamp
 };
 
+UENUM(BlueprintType)
+enum class ECatWaterExposureState : uint8
+{
+	Dry,
+	Shallow,
+	Dangerous
+};
+
+enum class ECatWaterExposureUpdate : uint8
+{
+	Unavailable,
+	Unchanged,
+	Changed,
+	DangerousEntered
+};
+
 /** Character 局内身体离散状态的复制读模型；Poison/Fishing 数值只在 ASC AttributeSet，吃鱼成长只在 Growth。 */
 USTRUCT(BlueprintType)
 struct FCatConditionSnapshot
@@ -33,6 +49,10 @@ struct FCatConditionSnapshot
 	/** 毛发当前是否淋湿；它只驱动表现，不带移动、数值或钓鱼惩罚。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bWet = false;
+
+	/** 水深阈值的唯一离散结果；危险只在服务器持续确认后进入。 */
+	UPROPERTY(BlueprintReadOnly)
+	ECatWaterExposureState WaterExposure = ECatWaterExposureState::Dry;
 
 	/** 猫是否因正式 Poison 阈值进入可恢复倒地；项目不存在死亡终态。 */
 	UPROPERTY(BlueprintReadOnly)

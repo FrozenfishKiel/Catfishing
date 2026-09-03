@@ -135,7 +135,7 @@ Root
 | Probe | StateTree 的 `Cat Fishing Enter Phase` 节点 |
 | TrueBiteWindow | `Cat Fishing Open True Bite Window` 节点打开通用响应窗；此时没有鱼 Actor |
 | HookedFight | 真咬窗内收到左键后，`RequestHook` 才选鱼、生成 Actor、扣饵并 EnterPhase |
-| ExhaustedReel | 鱼体力耗尽或力量碾压后，Session 保留鱼的死亡瞬间位置、停止搏斗 Runner 并进入；随后仅在持续左键时有限速收近 |
+| ExhaustedReel | 鱼体力耗尽事件驱动 StateTree 进入；保留当前位置，同一 Runner 仅在持续左键时按双端约束收近 |
 | Resolved / Terminated | `FinalizeSession()`，**StateTree 禁止进入** |
 
 ### 2.3 节点说明
@@ -296,9 +296,9 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 
 **常见失败原因**（放竿）：`InvalidPayload`=前方太斜/没实体地面；`DependencyUnavailable`=还没装配（5.4）。`InvalidWaterTarget/CastOutOfRange` 现在只属于抛竿阶段。
 
-多人占位口径：所有玩家都从同一个公共交互锚点按 R 加入，服务器把 PlayerState 追加到紧凑容器 `OperatorPlayerStates`，编号从 `0` 依次递增；任意成员离开后更高编号依次递减。`[0]` 是当前主位，抛竿、提竿和右键线杯由它驱动；HookedFight 中每个成员的左键只控制自己的蓄力。主位 2 秒蓄到 100%，辅助位 2 秒蓄到 75%，松开后 1 秒衰减；实时力量相加，体力分别从各自 ASC 扣除。配置容量当前为 2，但第三、第四人只需提高 `MaximumRodOperatorSlots`，无需新增交互点或玩法分支。新的 `[0]` 会在原主位退出时接管当前会话，并从自身当前体力、0% 力量继续。
+多人占位口径：所有玩家都从同一个公共交互锚点按 R 加入，服务器把 PlayerState 追加到紧凑容器 `OperatorPlayerStates`。`[0]` 是当前主位，抛竿、提竿和右键线杯由它驱动；HookedFight 中左键立即提交收线/协作发力意图，不再蓄力或衰减。总做功按有效力量占比分摊到各自 ASC；参与者质量与鱼真实重量共同决定约束修正比例。
 
-会话跟随鱼竿而不是角色：按 R 离开任何阶段都不会直接结束鱼竿上的会话。多人各自部署鱼竿后，同一玩家可以在第一根竿抛线、离开，再进入第二根空竿抛线；HookedFight 的左键按本人当前所占鱼竿操作位路由，其他主位命令与 HUD 仍按当前主操作鱼竿路由。等待/试探/真咬阶段允许迁移当前钓手；`HookedFight` 离竿后自动保持松线，鱼在 `L_max` 内自由带线，放尽后开始按负载磨损本场鱼线，期间不结算离开玩家的力量或体力。下一位玩家进入空主位时会用自己的 ASC、当前力量属性、当前搏斗体力和独立输入序号接管 Runner，不给新旧操作手补满体力，并从 0% 力量重新蓄力。
+会话跟随鱼竿而不是角色：按 R 离开不会直接结束会话。`HookedFight/ExhaustedReel` 离竿后进入无人值守 FreeSpool；下一位玩家使用自己的 ASC、当前力量、质量、体力和输入序号接管同一个 Runner，不补满体力，也没有从 0 蓄力过程。
 
 ---
 

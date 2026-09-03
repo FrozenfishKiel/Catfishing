@@ -32,7 +32,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Animation")
 	TSoftObjectPtr<UAnimMontage> LineBrokenMontage;
 
-	/** 服务器确认猫体力耗尽或被鱼拖下水后，在当前钓手身上播放的一次性落水表现。 */
+	/** Condition 确认猫脚点进入危险水深后，在当前钓手身上播放的一次性落水表现。 */
 	UPROPERTY(Config, EditAnywhere, Category="Animation")
 	TSoftObjectPtr<UAnimMontage> CatInWaterMontage;
 

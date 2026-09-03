@@ -98,7 +98,7 @@ FishingSessionStateTree=/Game/.../ST_FishingSession.ST_FishingSession   ; ← �
 ### 2.4 StateTree 拓扑（简要重述，细节见前文对话）
 
 - **ST_RunFlow**（Context = `ACatfishingGameModeBase`）：`DayActive → NormalNight/FailureNight → Ending → Ended`，事件只有 `Cat.Run.QuotaReached/QuotaFailed/AllEligibleReady/SettlementComplete`
-- **ST_FishingSession**（Context = `ACatFishingSession`）：`Waiting → Probe → HookedFight → ExhaustedReelHold`；鱼体力耗尽/力量碾压时由 C++ 先进入 `ExhaustedReel`，叶子状态只用 `Cat Fishing Wait` 保持树运行。事件只有 `Cat.Fishing.Event.ProbeTriggered/WindowExpired/EarlyHook/HookAccepted/Interrupted`。**树永远不能自然结束**，`Resolved`/`Terminated` 只能由 C++ 写，资产里的 `Enter Phase` Task 选这两个值会直接被拒绝
+- **ST_FishingSession**（Context = `ACatFishingSession`）：`Waiting → Probe → HookedFight → ExhaustedReelHold`；鱼体力耗尽时发送 `Cat.Fishing.FishExhausted`，叶子的 `Enter Phase(ExhaustedReel)` 只切生命周期，同一个 Runner 继续运行。**树永远不能自然结束**，`Resolved`/`Terminated` 只能由 C++ 写。
 
 ---
 

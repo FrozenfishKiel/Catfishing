@@ -495,7 +495,7 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 		return Result;
 	}
 	// OperatorPlayerStates 是实时合力与接力的唯一权威容器：0 号主位控制线杯并贡献 0~100% 力量，
-	// 其余操作位各自提交左键蓄力并贡献 0~75% 力量；主位退出时数组压紧，下一位从自身当前体力、0% 力量接管。
+	// 其余操作位各自提交左键协作意图；主位退出时数组压紧，下一位从自身当前体力接管。
 	// Runner 每个固定步从该容器重建参与集合并分别结算体力，不能在 Service 缓存另一份单/多人模式。
 	// HookedFight 接力会同步迁移 Runner 的 ASC/力量/体力/输入域，不能只改公开 FisherPlayerState。
 	ACatFishingSession* BoundSession = FindActiveSessionByRod(Rod);

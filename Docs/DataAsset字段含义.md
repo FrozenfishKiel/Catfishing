@@ -139,7 +139,7 @@
 | InwardProbabilityExponent | `pow(1-体力比例, 指数)` 的曲线；>1 表示低体力后才明显增加向内概率 |
 | InwardConeHalfAngleDegrees | 朝竿尖方向左右各多少度算向内；默认 60°，完整扇区 120° |
 | StrongConfrontationAlignmentThreshold | 夹角投影达到多少才算强对抗；体力/磨损在阈值以下仍连续按投影计算 |
-| StrongConfrontationConfirmationSeconds | 强对抗角度需要连续保持多久，才允许触发断线/落水/碾压 |
+| StrongConfrontationConfirmationSeconds | 强对抗角度需要连续保持多久，才允许按实际线负载触发断线；落水由 Condition 水深判定 |
 | AngleStrengthExponent | 对 `max(cos夹角,0)` 做幂变换；1=线性，越大则斜向力量衰减越快 |
 
 ## 6. GAS 资产：`UCatAbilitySet` / `UCatAbilityInputConfig`

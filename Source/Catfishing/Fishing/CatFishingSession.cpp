@@ -18,6 +18,7 @@
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingGameplayTags.h"
+#include "Fishing/CatFishingStateTreeEvents.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/Presentation/CatFishPresentationDefinition.h"
 #include "Fishing/CatFishingSettings.h"
@@ -30,6 +31,7 @@
 #include "Components/CapsuleComponent.h"
 #include "Components/StateTreeComponent.h"
 #include "GameFramework/PlayerState.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
@@ -125,6 +127,12 @@ FCatFishingPhaseResult ACatFishingSession::EnterPhaseFromStateTree(const ECatFis
 		}
 		bFightStaminaInitialized = true;
 		StaminaParticipantsTouched.Add(FisherCharacter); // 记入"需要在会话结束时恢复体力"的名单。
+	}
+	if (NewPhase == ECatFishingPhase::ExhaustedReel
+		&& (!FightRunner || !FightRunner->SetFishExhaustedFromAuthority()))
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		return Result;
 	}
 	Snapshot.Phase = NewPhase;
 	Snapshot.PhaseStartedServerTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
@@ -400,7 +408,8 @@ bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherContr
 	double NewStamina = 0.0;
 	const bool bCapable = UCatFishingService::TryGetFightCapability(NewFisherController, ValidatedId, NewCharacter,
 		NewStrength, NewStamina) && ValidatedId == NewStableNetId;
-	const bool bFightTakeover = Snapshot.Phase == ECatFishingPhase::HookedFight;
+	const bool bFightTakeover = Snapshot.Phase == ECatFishingPhase::HookedFight
+		|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel;
 	// 姿态与会话阶段正交：只要尚未终局，地上的同一根竿都允许新主操作手接管。
 	const bool bTransferablePhase = Snapshot.Phase == ECatFishingPhase::CastFlight
 		|| Snapshot.Phase == ECatFishingPhase::Waiting || Snapshot.Phase == ECatFishingPhase::Probe
@@ -1123,7 +1132,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
 		FisherCharacter->GetCatDefinitionId(), CatStaminaBaseline);
 
-	// 三方力量：猫总体力量 = 主位与全部辅助位按各自蓄力百分比折算后的力量；鱼力量 = 鱼种 FishStrength
+	// 三方力量与双方质量在此冻结基础值；Runner 每步只刷新参与者输入、力量和 CharacterMovement 质量。
 	// （含完美折减）；钓组承载 = 鱼竿定义 FishingStrength（静态）。这里先保存主位基础力量供初始化校验，
 	// Runner 启动后会从 OperatorPlayerStates 逐步建立每位参与者的实时贡献。
 	// 下面把服务器设置、鱼竿/鱼定义、性格模板的各项参数一次性打包进模拟配置结构体，交给 FightRunner/Simulator 使用。
@@ -1133,23 +1142,21 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 	// 辅助位合力不能在会话启动瞬间静态冻结；Runner 每个固定步从鱼竿操作位重建并覆盖此合计。
 	Config.SecondCatStrength = 0.0;
+	Config.PrimaryOperatorMassKilograms = FisherCharacter->GetCharacterMovement()
+		? FisherCharacter->GetCharacterMovement()->Mass : 0.0;
+	Config.HelperMassKilograms = 0.0;
+	Config.RodEffectiveMassKilograms = Settings->RodEffectiveMassKilograms;
+	Config.FishMassKilograms = FishWeightKilograms;
 	Config.FishStrength = FishDefinition->FishStrength * FishStrengthScale; // 完美中鱼可能折减鱼的力量。
 	Config.RodStrength = RodDefinition->FishingStrength;
 	Config.CatStaminaMaximum = CatStaminaBaseline;
-	Config.InwardPullFishDrainPerCatStrength = Settings->InwardPullFishDrainPerCatStrength;
+	Config.CatStaminaCostPerStrengthCentimeter = Settings->CatStaminaCostPerStrengthCentimeter;
+	Config.FishStaminaCostPerStrengthCentimeter = Settings->FishStaminaCostPerStrengthCentimeter;
+	Config.IsometricEffortMultiplier = Settings->IsometricEffortMultiplier;
 	Config.BaseDrainMultiplier = Personality->BaseDrainMultiplier;
 	Config.StruggleDrainMultiplier = Personality->StruggleDrainMultiplier;
 	Config.StalemateRodWearPerFishStrength = Settings->StalemateRodWearPerFishStrength;
-	Config.StalemateFishDrainPerCatStrength = Settings->StalemateFishDrainPerCatStrength;
 	Config.SlackStaminaRegenPerSecond = Settings->SlackStaminaRegenPerSecond;
-	Config.PowerTuning.ChargeSeconds = Settings->FightPowerChargeSeconds;
-	Config.PowerTuning.DecaySeconds = Settings->FightPowerDecaySeconds;
-	Config.PowerTuning.HelperMaximumPowerAlpha = Settings->HelperMaximumPowerAlpha;
-	Config.PowerTuning.PrimaryStaminaDrainPerSecondAtFullPower =
-		Settings->PrimaryStaminaDrainPerSecondAtFullPower;
-	Config.PowerTuning.HelperStaminaDrainMultiplier = Settings->HelperStaminaDrainMultiplier;
-	Config.PowerTuning.DisruptionPrimaryDrainShare = Settings->DisruptionPrimaryDrainShare;
-	Config.OverpowerStrengthRatio = Settings->OverpowerStrengthRatio;
 	Config.ReelSpeedCentimetersPerSecond = Settings->ReelSpeedCentimetersPerSecond;
 	Config.FishCalmSpeedCentimetersPerSecond = Personality->CalmMovementSpeedCentimetersPerSecond;
 	Config.FishStruggleSpeedCentimetersPerSecond = Personality->StruggleMovementSpeedCentimetersPerSecond;
@@ -1159,9 +1166,6 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.AngleStrengthExponent = Personality->AngleStrengthExponent;
 	Config.TensionResponseRangeCentimeters = Settings->TensionResponseRangeCentimeters;
 	Config.MinimumRodLeverageMultiplier = Settings->HeldRodMinimumLeverageMultiplier;
-	Config.MovementStrengthBoost = Settings->HeldRodMovementStrengthBoost;
-	Config.MovementReferenceSpeedCentimetersPerSecond =
-		Settings->HeldRodMovementReferenceSpeedCentimetersPerSecond;
 	Config.MaximumCarrierPullAccelerationCentimetersPerSecondSquared =
 		Settings->MaximumFishPullAccelerationCentimetersPerSecondSquared;
 	Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond =
@@ -1305,7 +1309,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		return false;
 	}
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_fight_started SessionId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryBaseStrength=%.2f InitialHelperStrength=%.2f InitialCombinedStrength=%.2f FishStrengthBase=%.2f FishStrengthEffective=%.2f CatStamina=%.2f FishStamina=%.2f LineStrength=%.2f LineDurability=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s PowerChargeSeconds=%.2f PowerDecaySeconds=%.2f HelperPowerMaximum=%.2f PrimaryFullPowerDrain=%.2f HelperDrainMultiplier=%.2f DisruptionShare=%.2f MinimumLeverage=%.3f MovementStrengthBoost=%.3f MovementReferenceSpeed=%.2f MaximumPullAcceleration=%.2f MaximumFishConstraintCorrectionSpeed=%.2f MinimumCarrierAwaySpeedMultiplier=%.3f"),
+		TEXT("Event=fishing_fight_started SessionId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryStrength=%.2f InitialHelperStrength=%.2f InitialCombinedStrength=%.2f CatMassKg=%.2f RodMassKg=%.2f FishMassKg=%.2f FishStrengthBase=%.2f FishStrengthEffective=%.2f CatStamina=%.2f FishStamina=%.2f LineStrength=%.2f LineDurability=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s CatWorkCost=%.5f FishWorkCost=%.5f IsometricMultiplier=%.3f MinimumLeverage=%.3f MaximumPullAcceleration=%.2f MaximumFishConstraintCorrectionSpeed=%.2f MinimumCarrierAwaySpeedMultiplier=%.3f"),
 		*Snapshot.FishingSessionId.ToString(),
 		*FishDefinition->FishDefinitionId.ToString(),
 		*RodDefinition->EquipmentDefinitionId.ToString(),
@@ -1313,6 +1317,9 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		Config.PrimaryOperatorCatStrength,
 		Config.SecondCatStrength,
 		Config.GetCombinedCatStrength(),
+		Config.PrimaryOperatorMassKilograms,
+		Config.RodEffectiveMassKilograms,
+		Config.FishMassKilograms,
 		FishDefinition->FishStrength,
 		Config.FishStrength,
 		InitialState.CatStamina,
@@ -1323,15 +1330,10 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		Config.MaximumLineLengthCentimeters,
 		Snapshot.RodActor && Snapshot.RodActor->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Held
 			? TEXT("Held") : TEXT("Grounded"),
-		Config.PowerTuning.ChargeSeconds,
-		Config.PowerTuning.DecaySeconds,
-		Config.PowerTuning.HelperMaximumPowerAlpha,
-		Config.PowerTuning.PrimaryStaminaDrainPerSecondAtFullPower,
-		Config.PowerTuning.HelperStaminaDrainMultiplier,
-		Config.PowerTuning.DisruptionPrimaryDrainShare,
+		Config.CatStaminaCostPerStrengthCentimeter,
+		Config.FishStaminaCostPerStrengthCentimeter,
+		Config.IsometricEffortMultiplier,
 		Config.MinimumRodLeverageMultiplier,
-		Config.MovementStrengthBoost,
-		Config.MovementReferenceSpeedCentimetersPerSecond,
 		Config.MaximumCarrierPullAccelerationCentimetersPerSecondSquared,
 		Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond,
 		Config.MinimumCarrierAwaySpeedMultiplier);
@@ -1341,29 +1343,14 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 bool ACatFishingSession::SetReelingFromAuthority(APlayerState* InputPlayerState,
 	const int64 InputSequence, const bool bReeling)
 {
-	if (HasAuthority() && Snapshot.Phase == ECatFishingPhase::ExhaustedReel)
-	{
-		if (InputPlayerState != Snapshot.FisherPlayerState
-			|| InputSequence <= LastExhaustedReelInputSequence)
-		{
-			return false;
-		}
-		LastExhaustedReelInputSequence = InputSequence;
-		Snapshot.bReeling = bReeling;
-		Snapshot.bSlacking = false;
-		// AutoHauling 同时也是“鱼已力竭/侧翻”的复制表现状态；松开收线只停止位移，不能让鱼重新立起来。
-		Snapshot.FishMotionIntent = ECatFishMotionIntent::AutoHauling;
-		PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
-		return true;
-	}
-	// 收线只在运行中的 HookedFight 生效；InputSequence 由 FightRunner 内部做单调性/去抖校验。
-	if (!HasAuthority() || Snapshot.Phase != ECatFishingPhase::HookedFight || !FightRunner
+	// HookedFight 与鱼力竭回收共用同一个 Runner 和输入序号域。
+	if (!HasAuthority() || (Snapshot.Phase != ECatFishingPhase::HookedFight
+		&& Snapshot.Phase != ECatFishingPhase::ExhaustedReel) || !FightRunner
 		|| !Snapshot.RodActor || Snapshot.RodActor->GetOperatorSlotIndex(InputPlayerState) == INDEX_NONE
 		|| !FightRunner->SetReeling(InputPlayerState, InputSequence, bReeling))
 	{
 		return false;
 	}
-	// 辅助位输入只改变自己的蓄力；公开主位动作从 Runner 的衰减后状态读取，松开边沿不会立刻伪装成 0 力。
 	Snapshot.bReeling = FightRunner->GetCatAction() == ECatFightCatAction::Pull;
 	Snapshot.bSlacking = FightRunner->GetCatAction() == ECatFightCatAction::Slack;
 	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency); // 高频输入不推进离散 Revision，只更新 SnapshotSequence。
@@ -1373,8 +1360,8 @@ bool ACatFishingSession::SetReelingFromAuthority(APlayerState* InputPlayerState,
 bool ACatFishingSession::SetSlackingFromAuthority(APlayerState* InputPlayerState,
 	const int64 InputSequence, const bool bSlacking)
 {
-	// 松开线杯只在运行中的 HookedFight 生效；收线优先的仲裁逻辑在 FightRunner::SetSlacking 内部处理。
-	if (!HasAuthority() || Snapshot.Phase != ECatFishingPhase::HookedFight || !FightRunner
+	if (!HasAuthority() || (Snapshot.Phase != ECatFishingPhase::HookedFight
+		&& Snapshot.Phase != ECatFishingPhase::ExhaustedReel) || !FightRunner
 		|| InputPlayerState != Snapshot.FisherPlayerState
 		|| !FightRunner->SetSlacking(InputPlayerState, InputSequence, bSlacking))
 	{
@@ -1395,8 +1382,8 @@ bool ACatFishingSession::IsFightRunnerRunning() const
 void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepResult& Step,
 	const double FishStaminaRemaining, const ECatFishMotionIntent MotionIntent, const double RodDurabilityRemaining)
 {
-	// 只在仍处于运行中的 HookedFight 阶段才处理回调；阶段已经变化说明这是一次过期的 Runner 回调，直接忽略。
-	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::HookedFight || !FightRunner) return;
+	if (!HasAuthority() || IsTerminal() || (Snapshot.Phase != ECatFishingPhase::HookedFight
+		&& Snapshot.Phase != ECatFishingPhase::ExhaustedReel) || !FightRunner) return;
 	Snapshot.FishFightStaminaRemaining = FMath::Max(0.0, FishStaminaRemaining); // 钳制非负，防止浮点误差产生负值。
 	Snapshot.RodDurabilityRemaining = FMath::Max(0.0, RodDurabilityRemaining);
 	// 钩在鱼嘴里：搏斗期间钩 Actor 跟随鱼的权威位置（含近岸/贴岸吸附后的落点），复制到所有端。
@@ -1418,8 +1405,9 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 	Snapshot.NormalizedLineLoad = static_cast<float>(Step.NormalizedLineLoad);
 	Snapshot.bStrongConfrontation = Step.bStrongConfrontation;
 	Snapshot.RodLeverageMultiplier = static_cast<float>(Step.RodLeverageMultiplier);
-	Snapshot.CarrierMovementAlpha = static_cast<float>(Step.CarrierMovementAlpha);
-	Snapshot.PrimaryPowerAlpha = static_cast<float>(FMath::Clamp(Step.PrimaryPowerAlpha, 0.0, 1.0));
+	Snapshot.CarrierMovementAlpha = 0.0f;
+	// 兼容现有 HUD 资产：字段不再表示蓄力，只表示主位当前是否提交收线意图。
+	Snapshot.PrimaryPowerAlpha = FightRunner->GetCatAction() == ECatFightCatAction::Pull ? 1.0f : 0.0f;
 	Snapshot.ActiveCombinedFishingStrength = FMath::Max(0.0, Step.CombinedCatStrength);
 	Snapshot.ActiveHelperCount = FMath::Max(0, Step.ActiveHelperCount);
 	Snapshot.bReeling = FightRunner->GetCatAction() == ECatFightCatAction::Pull;
@@ -1460,7 +1448,7 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 			Step.FishLineAlignment,
 			Step.bStrongConfrontation ? TEXT("true") : TEXT("false"),
 			Step.RodLeverageMultiplier,
-			Step.CarrierMovementAlpha,
+			0.0,
 			Step.CarrierPullAccelerationCentimetersPerSecondSquared,
 			Snapshot.RodActor && Snapshot.RodActor->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Held
 				? TEXT("Held") : TEXT("Grounded"),
@@ -1472,97 +1460,64 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 		// 断线只终止当前会话。FinalizeSession 会释放 FishingUse；部署中的鱼竿及其操作槽保持原样，可立即重新抛竿。
 		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::LineBroken, TEXT("Fishing line broken"));
 	}
-	else if (Step.Outcome == ECatFightStepOutcome::CatStaminaExhausted
-		|| Step.Outcome == ECatFightStepOutcome::DraggedIntoWater)
-	{
-		// 规格 4.3②/4.4：力量不足或体力归零都是「被拖下水，鱼逃」；救援（W3）尚未实现。
-		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::CatInWater,
-			Step.Outcome == ECatFightStepOutcome::DraggedIntoWater ? TEXT("Fish overpowered cat") : TEXT("Cat fight stamina exhausted"));
-	}
 	else if (Step.Outcome == ECatFightStepOutcome::Escaped)
 	{
 		// 线放尽/张力超限等判定为鱼直接逃脱，无需先进入 NearShore。
 		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Escaped, TEXT("Fish escaped"));
 	}
 	else if (Step.Outcome == ECatFightStepOutcome::FishExhausted
-		|| Step.Outcome == ECatFightStepOutcome::Overpowered)
+		&& Snapshot.Phase == ECatFishingPhase::HookedFight)
 	{
-		// [FishLogic 5/5：耗尽后收至竿尖水面投影]
-		// 翻肚/碾压立即停止鱼的挣扎并进入侧翻表现；玩家继续收线时只会把鱼拉到竿尖对应的水面点。
-		FightRunner->Stop();
-		if (!BeginExhaustedReelFromAuthority())
+		if (!StateTreeComponent || !FightRunner->SetFishExhaustedFromAuthority())
 		{
 			FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
-				TEXT("Exhausted reel phase could not start"));
+				TEXT("Fish exhausted transition unavailable"));
+			return;
+		}
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_fish_exhausted SessionId=%s Result=StateTreeEventSent RunnerContinues=true"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens));
+		Snapshot.FishMotionIntent = ECatFishMotionIntent::AutoHauling;
+		Snapshot.bStrongConfrontation = false;
+		PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
+		StateTreeComponent->SendStateTreeEvent(CatFishingStateTreeEvents::FishExhausted,
+			FConstStructView(), TEXT("CatFishing"));
+	}
+	else if (Snapshot.Phase == ECatFishingPhase::ExhaustedReel && Snapshot.bReeling)
+	{
+		FVector Target;
+		const ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
+		if (!Encounter || !TryResolveExhaustedReelTarget(Target))
+		{
+			HandleFightRunnerFailureFromAuthority(TEXT("ExhaustedReelTarget"));
+			return;
+		}
+		const double ReachTolerance = FMath::Max(5.0,
+			GetDefault<UCatFishingSettings>()->ReelSpeedCentimetersPerSecond
+				* GetDefault<UCatFishingSettings>()->FixedFightStepSeconds);
+		if (FVector::Dist2D(Encounter->GetActorLocation(), Target) <= ReachTolerance
+			&& !SpawnExhaustedFishPickupFromAuthority(Target))
+		{
+			HandleFightRunnerFailureFromAuthority(TEXT("ExhaustedFishPickupSpawn"));
 		}
 	}
 }
 
-bool ACatFishingSession::BeginExhaustedReelFromAuthority()
+void ACatFishingSession::HandleCatEnteredDangerousWaterFromAuthority(
+	const double ImmersionDepthCentimeters)
 {
-	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
-	if (!HasAuthority() || !Settings || !FMath::IsFinite(Settings->FixedFightStepSeconds)
-		|| Settings->FixedFightStepSeconds <= 0.0 || !Snapshot.FishEncounterActor || !Snapshot.RodActor)
+	if (!HasAuthority() || IsTerminal() || (Snapshot.Phase != ECatFishingPhase::HookedFight
+		&& Snapshot.Phase != ECatFishingPhase::ExhaustedReel))
 	{
-		return false;
+		return;
 	}
-	// 如果鱼是在玩家持续按住收线时耗尽体力，必须把这个物理按键状态跨阶段保留下来。
-	// 否则客户端不会再发送一次 Pressed 边沿，玩家只能先松开再按，表现上就像收近流程失效。
-	const bool bContinueReeling = Snapshot.bReeling;
-	FVector ResolvedTarget;
-	if (!TryResolveExhaustedReelTarget(ResolvedTarget))
-	{
-		return false;
-	}
-	ExhaustedReelTarget = ResolvedTarget;
-	bHasExhaustedReelTarget = true;
-	Snapshot.FishFightStaminaRemaining = 0.0;
-	Snapshot.NormalizedFishStamina = 0.0;
-	Snapshot.bReeling = bContinueReeling;
-	Snapshot.bSlacking = false;
-	Snapshot.PrimaryPowerAlpha = 0.0f;
-	Snapshot.ActiveCombinedFishingStrength = 0.0;
-	Snapshot.ActiveHelperCount = 0;
-	// AutoHauling 在该阶段表示“鱼已力竭并侧翻”，与当前是否按住收线分开表达。
-	Snapshot.FishMotionIntent = ECatFishMotionIntent::AutoHauling;
-	Snapshot.FishLineAlignment = 0.0f;
-	Snapshot.NormalizedLineLoad = 0.0f;
-	Snapshot.bStrongConfrontation = false;
-	Snapshot.RodLeverageMultiplier = 1.0f;
-	Snapshot.CarrierMovementAlpha = 0.0f;
-	Snapshot.CarrierPullAccelerationCentimetersPerSecondSquared = 0.0f;
-	Snapshot.CarrierAwaySpeedMultiplier = 1.0f;
-	Snapshot.ConstraintErrorCentimeters = 0.0f;
-	Snapshot.FishConstraintCorrectionCentimeters = 0.0f;
-	if (!EnterPhaseFromStateTree(ECatFishingPhase::ExhaustedReel).bApplied)
-	{
-		return false;
-	}
-	// 进入阶段的同一权威帧就把 AutoHauling 写进 Encounter 表现状态；不要求玩家先按住或重新按一次左键。
-	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
-	const FVector ExhaustedLocation = Encounter->GetActorLocation();
-	const double CurrentLineLength = FVector::Dist(
-		ExhaustedLocation, Snapshot.RodActor->GetRodTipWorldTransform().GetLocation());
-	if (!Encounter->ApplyFightStepFromAuthority(ECatFishMotionIntent::AutoHauling,
-		CurrentLineLength, ExhaustedLocation, static_cast<float>(Settings->FixedFightStepSeconds)))
-	{
-		return false;
-	}
-	// FightRunner 的末帧可能仍带有松弛 L_paid；进入力竭回收后鱼线按“鱼嘴到杆尖”的绷紧距离统一结算。
-	// 同一权威帧同步 Hook 位置和复制表现，不能只改 Encounter，否则客户端会继续显示搏斗末帧的长线。
-	if (!PublishExhaustedReelLineFromAuthority(ExhaustedLocation))
-	{
-		return false;
-	}
-	LastExhaustedReelInputSequence = 0;
-	GetWorldTimerManager().SetTimer(ExhaustedReelTimerHandle, this, &ThisClass::HandleExhaustedReelStep,
-		static_cast<float>(Settings->FixedFightStepSeconds), true);
-	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=exhausted_reel_started SessionId=%s Reeling=%s DistanceToRodTipProjectionCm=%.1f"),
-		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-		bContinueReeling ? TEXT("true") : TEXT("false"),
-		FVector::Dist(ExhaustedLocation, ExhaustedReelTarget));
-	return true;
+	UE_LOG(LogCatFishing, Warning,
+		TEXT("Event=fishing_cat_entered_dangerous_water SessionId=%s DepthCm=%.2f Phase=%s Result=CatInWater %s"),
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), ImmersionDepthCentimeters,
+		*UEnum::GetValueAsString(Snapshot.Phase),
+		*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
+	FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::CatInWater,
+		TEXT("Condition confirmed dangerous foot immersion"));
 }
 
 bool ACatFishingSession::TryResolveExhaustedReelTarget(FVector& OutTarget) const
@@ -1609,106 +1564,6 @@ bool ACatFishingSession::TryResolveExhaustedReelTarget(FVector& OutTarget) const
 	}
 	OutTarget = FVector(RodTip.X, RodTip.Y, TargetSurfaceZ);
 	return !OutTarget.ContainsNaN();
-}
-
-void ACatFishingSession::HandleExhaustedReelStep()
-{
-	// [FishLogic 5/5：耗尽后收至竿尖表面投影]
-	// 这个阶段不再运行随机游向/力量对抗：服务器每个固定步把侧翻鱼朝当前竿尖的水面/地面投影移动，
-	// 持竿者移动或改变竿向会带着目标变化；放到地上后同一 Actor Transform 不动，目标也自然稳定。
-	// 到点后原地生成所有玩家都可拾取的 ACatFishPickupActor。
-	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::ExhaustedReel)
-	{
-		GetWorldTimerManager().ClearTimer(ExhaustedReelTimerHandle);
-		return;
-	}
-	if (!Snapshot.bReeling)
-	{
-		return;
-	}
-	const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
-	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
-	ACatFishingRodActor* Rod = Snapshot.RodActor;
-	if (!FishingSettings || !Encounter || !Rod
-		|| !FMath::IsFinite(FishingSettings->ReelSpeedCentimetersPerSecond)
-		|| FishingSettings->ReelSpeedCentimetersPerSecond <= 0.0)
-	{
-		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
-			TEXT("Exhausted reel dependency unavailable"));
-		return;
-	}
-
-	const FVector Current = Encounter->GetActorLocation();
-	const FVector RodTip = Rod->GetRodTipWorldTransform().GetLocation();
-	FVector CurrentTarget;
-	if (!TryResolveExhaustedReelTarget(CurrentTarget))
-	{
-		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
-			TEXT("Rod-tip water projection unavailable"));
-		return;
-	}
-	ExhaustedReelTarget = CurrentTarget;
-	bHasExhaustedReelTarget = true;
-	const FVector Target = CurrentTarget;
-	const FVector ToTarget = Target - Current;
-	const double RemainingDistance = ToTarget.Size();
-	const double StepDistance = FishingSettings->ReelSpeedCentimetersPerSecond
-		* FishingSettings->FixedFightStepSeconds;
-	const FVector NewLocation = RemainingDistance <= StepDistance
-		? Target : Current + ToTarget.GetSafeNormal() * StepDistance;
-	const double NewLineLength = FVector::Dist(NewLocation, RodTip);
-	if (!Encounter->ApplyFightStepFromAuthority(ECatFishMotionIntent::AutoHauling,
-		NewLineLength, NewLocation, static_cast<float>(FishingSettings->FixedFightStepSeconds)))
-	{
-		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
-			TEXT("Exhausted fish movement failed"));
-		return;
-	}
-	if (!PublishExhaustedReelLineFromAuthority(NewLocation))
-	{
-		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
-			TEXT("Exhausted fishing line presentation failed"));
-		return;
-	}
-	if (RemainingDistance <= StepDistance)
-	{
-		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=exhausted_fish_reached_rod_tip_projection SessionId=%s Location=%s RemainingCm=%.1f"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *NewLocation.ToCompactString(),
-			RemainingDistance);
-		GetWorldTimerManager().ClearTimer(ExhaustedReelTimerHandle);
-		if (!SpawnExhaustedFishPickupFromAuthority(NewLocation))
-		{
-			FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
-				TEXT("Exhausted fish pickup spawn failed"));
-		}
-		return;
-	}
-	Snapshot.FishMotionIntent = ECatFishMotionIntent::AutoHauling;
-	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
-}
-
-bool ACatFishingSession::PublishExhaustedReelLineFromAuthority(const FVector& FishWorldLocation)
-{
-	if (!HasAuthority() || FishWorldLocation.ContainsNaN() || !Snapshot.RodActor)
-	{
-		return false;
-	}
-	ACatFishingHookActor* Hook = Snapshot.HookActor;
-	if (!Hook)
-	{
-		// Session 单元测试和无表现的服务器夹具允许不生成 Hook；正式运行链有 Hook 时必须走下方统一写口。
-		return true;
-	}
-	const double StraightLineDistance = FVector::Distance(
-		Snapshot.RodActor->GetRodTipWorldTransform().GetLocation(), FishWorldLocation);
-	if (!FMath::IsFinite(StraightLineDistance))
-	{
-		return false;
-	}
-	Hook->SetActorLocation(FishWorldLocation, false, nullptr, ETeleportType::TeleportPhysics);
-	return Hook->SetFishingLinePresentationFromAuthority(
-		StraightLineDistance, StraightLineDistance, 0.0, 0.0f, true);
 }
 
 bool ACatFishingSession::CommitCatchEquipmentFromAuthority()
@@ -1803,7 +1658,8 @@ void ACatFishingSession::SuspendOperatorFromAuthority()
 {
 	if (!HasAuthority() || IsTerminal()) return;
 	const ECatFishingPhase Phase = Snapshot.Phase;
-	const bool bFightUnattended = Phase == ECatFishingPhase::HookedFight;
+	const bool bFightUnattended = Phase == ECatFishingPhase::HookedFight
+		|| Phase == ECatFishingPhase::ExhaustedReel;
 	APlayerState* OldFisherPlayerState = Snapshot.FisherPlayerState;
 	ACatCharacter* OldFisherCharacter = FisherCharacter.Get();
 	AController* OldController = OldFisherCharacter ? OldFisherCharacter->GetController() : nullptr;
@@ -2187,7 +2043,6 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	Snapshot.ActiveHelperCount = 0;
 	Snapshot.bReeling = false;
 	Snapshot.bSlacking = false;
-	bHasExhaustedReelTarget = false;
 	if (Snapshot.HookActor)
 	{
 		Snapshot.HookActor->SetBobberPresentationModeFromAuthority(ECatFishingBobberPresentationMode::None);
@@ -2206,7 +2061,6 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
 	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
 	GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
-	GetWorldTimerManager().ClearTimer(ExhaustedReelTimerHandle);
 	// 释放原始抛竿者装备上属于本 Session 的钓具预留；其他鱼竿的并行预留保持不变。
 	if (UCatEquipmentComponent* Equipment = CastEquipment.Get())
 	{
@@ -2312,7 +2166,6 @@ void ACatFishingSession::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
 	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
 	GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
-	GetWorldTimerManager().ClearTimer(ExhaustedReelTimerHandle);
 	if (StateTreeComponent && StateTreeComponent->IsRunning())
 	{
 		StateTreeComponent->StopLogic(TEXT("FishingSession EndPlay"));

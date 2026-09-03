@@ -11,10 +11,10 @@
   → UCatFishingFightRunner：服务器每 0.05 秒推进一次
       1. ST_FishFight：决定当前是发力还是平静，并把 MotionIntent 交给 Runner
       2. FCatFishSteeringModel：结合鱼体力决定向内/向外，再平滑转弯
-      3. FCatFishingFightSimulator：计算鱼线松弛/张力、夹角、位移、体力和竿磨损
+      3. FCatFishingFightSimulator：合并双方运动与卷线意图，求解鱼线约束、位移、做功、体力和竿磨损
       4. ACatFishEncounterActor：应用服务器位置并复制表现状态
   → 鱼体力耗尽
-      5. ACatFishingSession::HandleExhaustedReelStep：侧翻并收至竿尖表面投影，再生成 Pickup
+      5. FishExhausted 事件切换 Session StateTree；同一 Runner 令鱼主动游速归零并继续收至竿尖表面投影，再生成 Pickup
 ```
 
 可以用 Aura 课程里的分层来类比：
@@ -123,13 +123,14 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 相关入口：
 
 - `FCatFishingFightSimulator::Step()`：判定 `FishExhausted`。
-- `ACatFishingSession::BeginExhaustedReelFromAuthority()`：从搏斗切到力竭阶段，立刻发布侧翻状态，冻结竿尖表面投影，并保留左键的按住状态。
-- `ACatFishingSession::HandleExhaustedReelStep()`：每个固定步向冻结的竿尖表面投影移动，绝不超过该点。
+- `Cat.Fishing.FishExhausted`：把 Session StateTree 从 `HookedFight` 切到 `ExhaustedReelHold`。
+- `UCatFishingFightRunner::SetFishExhaustedFromAuthority()`：关闭鱼行为树并改为 `AutoHauling`，但不停止固定步。
+- `FCatFishingFightSimulator::Step()`：继续用同一个双体约束处理收线与鱼的位置。
 - `ACatFishingSession::SpawnExhaustedFishPickupFromAuthority()`：到达投影后在原位置生成所有玩家都可拾取的鱼。
 
 此前调试 HUD 只显示整数百分比，极低的小数体力可能被显示成 `0%`。现在调试值保留一位小数；同时加入 `FishExhaustionThreshold=0.5`：结算后绝对体力不高于 0.5 时，服务器直接将尾数吸附到真正的 0，并立刻进入 `ExhaustedReel`，避免尾数阶段拖得过久。
 
-鱼体力清空或力量碾压的同一服务器帧会保留 Encounter 的当前世界位置，并把 `AutoHauling` 复制给所有客户端驱动 `VisualRoot` 侧翻 90°；结局帧不会再把鱼或 D 直接归零到竿尖。松开左键只停止位移，不会让鱼重新立起。若耗尽时左键正按住，按住状态会跨阶段保留；否则再次按左键才开始移动。鱼随后按固定步逐步靠近、最多到达“竿尖 XY + max(水面 Z, 竿尖下方地面 Z)”，Encounter 隐藏并在原地生成可拾取 Actor。目标 XY 不做岸线限制，目标 Z 只在力竭瞬间查询一次，因此交接时不会二次跳位。
+鱼体力清空的同一服务器帧保留 Encounter 当前位置，并把 `AutoHauling` 复制给所有客户端驱动侧翻。左键按住状态和输入序号跨阶段保留；鱼随后仍由原 Runner 的线长约束逐步靠近竿尖 XY，到达容差后在水面/地面较高点生成可拾取 Actor。没有第二套计时器或收近位移公式。
 
 ## 常用调参位置
 

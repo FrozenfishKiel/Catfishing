@@ -33,12 +33,12 @@ struct CATFISHING_API FCatFishingViewState
 
 	/** 鱼侧搏斗体力的展示比例；数值来自 FishingSession 的运行态归一化结果，UI 不反推鱼真实体力或搏斗公式。 */
 	UPROPERTY(BlueprintReadOnly) double NormalizedFishStamina = 0.0;
-	/** 主位当前蓄力、实际合力和辅助人数；正式 WBP 可直接绑定，不需要客户端重复积分蓄力。 */
-	UPROPERTY(BlueprintReadOnly) float PrimaryPowerAlpha = 0.0f;
+	/** 旧 HUD 兼容二值；新 UI 使用 bReeling，不再显示蓄力条。 */
+	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Use bReeling; charging was removed")) float PrimaryPowerAlpha = 0.0f;
 	UPROPERTY(BlueprintReadOnly) double ActiveCombinedFishingStrength = 0.0;
 	UPROPERTY(BlueprintReadOnly) int32 ActiveHelperCount = 0;
 
-	/** 主位当前是否仍有蓄力并正在收线；命令组件和会话裁决状态才是写口。 */
+	/** 主位当前是否按住收线；命令组件和会话裁决状态才是写口。 */
 	UPROPERTY(BlueprintReadOnly) bool bReeling = false;
 
 	/** 当前玩家是否正在放线；它与 bReeling 都是会话快照事实，Widget 不把按钮状态当成第二份真相。 */

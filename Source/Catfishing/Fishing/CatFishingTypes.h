@@ -178,11 +178,11 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	double CombinedFightStamina = 0.0;
 
-	/** 主位当前蓄力百分比；0=完全放线，1=主位满蓄力。 */
-	UPROPERTY(BlueprintReadOnly)
+	/** 兼容旧 HUD 的二值输入指示：1=正在收线，0=未收线；不再存在蓄力积分。 */
+	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Use bReeling; charging was removed"))
 	float PrimaryPowerAlpha = 0.0f;
 
-	/** 当前固定步真正参与受力的多人力量合计（已经乘各自蓄力百分比，尚未乘竿向/移动修正）。 */
+	/** 当前固定步参与意图求解的多人力量合计，尚未乘竿向修正。 */
 	UPROPERTY(BlueprintReadOnly)
 	double ActiveCombinedFishingStrength = 0.0;
 
@@ -203,11 +203,11 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly, meta=(DisplayName="Line Durability Remaining"))
 	double RodDurabilityRemaining = 0.0;
 
-	/** 当前主位蓄力仍大于 0、正在收线；松开左键后的衰减期间保持 true。 */
+	/** 主位当前是否按住收线；松开边沿立即回到锁线。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bReeling = false;
 
-	/** 当前是否已进入放线；主位蓄力归零或主动按住右键时为 true。 */
+	/** 当前是否主动按住右键自由出线；两键均松开时为锁线。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bSlacking = false;
 
@@ -235,8 +235,8 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	float RodLeverageMultiplier = 1.0f;
 
-	/** 持竿者/竿尖反向移动对本步力量的归一化贡献。 */
-	UPROPERTY(BlueprintReadOnly)
+	/** 兼容旧 HUD，移动不再折算为力量百分比。 */
+	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Carrier movement is an endpoint intent"))
 	float CarrierMovementAlpha = 0.0f;
 
 	/** 鱼线约束实际施加给持竿角色的水平牵引加速度。 */

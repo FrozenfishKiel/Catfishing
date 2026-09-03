@@ -48,8 +48,8 @@ namespace CatFishCatalogSettingsPrivate
 	{
 		const double StrengthRatio = Definition.FishStrength / CombinedFishingStrength;
 		const double StaminaRatio = Definition.FishFightStamina / CombinedFightStamina;
-		// 力量决定瞬时拖落/碾压出口，不能被低体力稀释；体力只有在鱼也具备相称力量时才构成持续挑战。
-		// 调和均值会把“高体力、极低力量”的耐打木桩压回轻松带，避免它占据势均力敌带后又被力量规则秒杀。
+		// 力量是持续约束对抗的危险下限，不能被低体力稀释；体力只有在鱼也具备相称力量时才构成持续挑战。
+		// 调和均值会把“高体力、极低力量”的耐打木桩压回轻松带，避免选择器把它误判为高强度运动对手。
 		const double BalancedRatio = (2.0 * StrengthRatio * StaminaRatio)
 			/ (StrengthRatio + StaminaRatio);
 		return FMath::Max(StrengthRatio, BalancedRatio);

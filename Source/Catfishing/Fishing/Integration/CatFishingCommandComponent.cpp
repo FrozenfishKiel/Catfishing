@@ -621,7 +621,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		}
 		FGuid SessionId;
 		FCatFishingSessionSnapshot Snapshot;
-		// HookedFight 的左键按鱼竿全部操作位路由：主位控制收/放线并蓄力，辅助位只更新自己的蓄力。
+		// HookedFight 的左键按鱼竿全部操作位路由：主位控制收线意图，辅助位提交协作发力意图。
 		// 这条分支必须早于“仅主位活动会话”查询，否则辅助者的输入会被误当成新抛竿。
 		if (ACatFishingRodActor* OperatedRod = Fishing->FindRodOperatedBy(Controller->PlayerState))
 		{

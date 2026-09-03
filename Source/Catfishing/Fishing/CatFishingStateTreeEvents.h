@@ -11,4 +11,6 @@ namespace CatFishingStateTreeEvents
 	 * 否完美中鱼由会话按时间戳另行记录，本事件不携带。
 	 */
 	CATFISHING_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(HookSet);
+	/** 双体求解器确认鱼体力耗尽；只切生命周期叶子，不停止同一 FightRunner。 */
+	CATFISHING_API UE_DECLARE_GAMEPLAY_TAG_EXTERN(FishExhausted);
 }

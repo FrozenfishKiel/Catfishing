@@ -87,13 +87,13 @@ public:
 	double InwardConeHalfAngleDegrees = 60.0;
 
 	/**
-	 * 鱼游向在鱼线向外方向上的投影达到此比例，才进入会触发瞬断/拖下水/碾压的强对抗。
-	 * 普通体力和磨损仍按连续的夹角投影比例计算。
+	 * 鱼游向在鱼线向外方向上的投影达到此比例，才记为强对抗。
+	 * 强对抗用于判定自然僵持和诊断，体力、做功与磨损仍按连续的夹角投影比例计算。
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Steering|Fight", meta=(ClampMin="0.01", ClampMax="1"))
 	double StrongConfrontationAlignmentThreshold = 0.55;
 
-	/** 强对抗角度至少持续多久才允许触发断线/落水/碾压，防止过阈值一帧就跳重大结果。 */
+	/** 强对抗角度至少持续多久才确认僵持，防止方向过阈值一帧就抖动状态。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Steering|Fight", meta=(ClampMin="0", ClampMax="2", Units="s"))
 	double StrongConfrontationConfirmationSeconds = 0.2;
 

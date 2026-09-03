@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Condition/CatConditionTypes.h"
+#include "Environment/CatWaterTypes.h"
 #include "Components/ActorComponent.h"
 #include "CatConditionComponent.generated.h"
 
@@ -30,6 +31,10 @@ public:
 
 	/** 身体表现入口在 authority 设置纯表现 Wet；重复相同值不增加 Revision，也不修改任何 Attribute。 */
 	void SetWetFromAuthority(bool bNewWet);
+
+	/** 由钓鱼固定步提交采样时长；组件自行查询脚点水深并维护滞回/确认。 */
+	ECatWaterExposureUpdate UpdateWaterExposureFromAuthority(const FCatWaterRegionHandle& WaterRegion,
+		double DeltaSeconds, double& OutImmersionDepthCentimeters);
 
 	/** 在实物鱼被不可逆移除前只读校验食用定义、ASC 与倒地阈值；返回 None 才允许上层提交 Items 事务。 */
 	ECatDomainCommandError ValidateFishConsumption(const UCatFishDefinition* FishDefinition) const;
@@ -81,4 +86,5 @@ private:
 
 	/** 身体命令的首次完整终态；防止重复吃鱼或重复恢复。 */
 	TMap<FString, FCatDomainCommandResult> TerminalCache;
+	double DangerousWaterBuildUpSeconds = 0.0;
 };

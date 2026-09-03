@@ -140,6 +140,36 @@ FCatWaterSpatialResult UCatWaterQuerySubsystem::QueryShoreRelation(
 	return Result;
 }
 
+FCatWaterImmersionResult UCatWaterQuerySubsystem::QueryImmersionAtWorldPoint(
+	const FVector& WorldPoint, const FCatWaterRegionHandle& ExpectedHandle) const
+{
+	FCatWaterImmersionResult Immersion;
+	if (!CatWaterQueryPrivate::IsFinite(WorldPoint))
+	{
+		Immersion.Error = ECatWaterQueryError::InvalidLocation;
+		return Immersion;
+	}
+	const ACatWaterRegion* Region = nullptr;
+	if (const ECatWaterQueryError Error = ResolveExactRegion(ExpectedHandle, Region);
+		Error != ECatWaterQueryError::None)
+	{
+		Immersion.Error = Error;
+		return Immersion;
+	}
+	// 浸没查询关心任意高度的脚点，只复用水域平面与二维轮廓，不使用“靠近水面”的查询容差。
+	const FCatWaterSpatialResult Spatial = FCatWaterGeometry::QueryPoint(
+		Region->BakedGeometry, WorldPoint, 1000000000.0);
+	Immersion.bSucceeded = Spatial.bSucceeded;
+	Immersion.Error = Spatial.Error;
+	Immersion.WaterRegion = Spatial.WaterRegion;
+	Immersion.Containment = Spatial.Containment;
+	Immersion.WaterSurfaceWorldPoint = Spatial.WaterSurfaceWorldPoint;
+	Immersion.ImmersionDepthCentimeters = Spatial.bSucceeded
+		&& Spatial.Containment != ECatWaterContainment::Outside
+		? FMath::Max(0.0, -Spatial.VerticalDeltaCm) : 0.0;
+	return Immersion;
+}
+
 FCatWaterSpatialResult UCatWaterQuerySubsystem::ResolveCandidatePointToWater(
 	const FVector& CandidateWorldPoint, const FCatWaterRegionHandle& ExpectedHandle) const
 {

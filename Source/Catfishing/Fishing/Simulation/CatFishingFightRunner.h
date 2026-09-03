@@ -44,16 +44,16 @@ struct CATFISHING_API FCatFishingFightRunnerInit
 	uint64 RandomSeed = 0;
 };
 
-/** 一名鱼竿操作者在本场搏斗中的服务器私有蓄力/体力绑定。 */
+/** 一名鱼竿操作者在本场搏斗中的服务器私有意图/体力绑定。 */
 struct CATFISHING_API FCatFightParticipantRuntime
 {
 	TWeakObjectPtr<APlayerState> PlayerState;
 	TWeakObjectPtr<ACatCharacter> Character;
 	TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
 	double BaseFishingStrength = 0.0;
+	double ActiveFishingStrength = 0.0;
+	double MassKilograms = 0.0;
 	double StaminaMaximum = 0.0;
-	double PowerAlpha = 0.0;
-	double StaminaDrainPerSecond = 0.0;
 	int64 LastInputSequence = 0;
 	bool bPullHeld = false;
 	bool bSlackHeld = false;
@@ -76,6 +76,9 @@ public:
 	bool SetSlacking(APlayerState* InputPlayerState, int64 InputSequence, bool bInSlacking);
 	/** 主操作手离竿后进入无人值守松线；Runner 继续推进，但不再读写旧玩家的力量或体力。 */
 	bool BeginUnattendedSlackFromAuthority();
+	/** 鱼力竭只关闭 AI 意图；固定步和同一个双端约束继续运行。 */
+	bool SetFishExhaustedFromAuthority();
+	bool IsFishExhaustedForAuthority() const { return State.bFishExhausted; }
 	/** 搏斗接力时原子迁移 ASC、力量、体力上限/当前值与新玩家自己的输入序号域。 */
 	bool TransferOperatorFromAuthority(APlayerState* NewPlayerState, UCatAbilitySystemComponent* NewAbilitySystem,
 		double NewCatStrength, double NewCatStaminaMaximum, double NewCatStamina,
@@ -93,8 +96,8 @@ private:
 		bool bInitialPullHeld, bool bInitialSlackHeld, int64 InitialInputSequence);
 	FCatFightParticipantRuntime* FindParticipant(APlayerState* PlayerState);
 	FCatFightParticipantRuntime* FindPrimaryParticipant();
-	bool UpdateParticipantPowerAndStrength(double& OutCombinedHelperDrainPerSecond);
-	bool ApplyHelperStaminaChanges(TArray<TWeakObjectPtr<APlayerState>>& OutDepletedHelpers);
+	bool UpdateParticipantIntentAndProperties();
+	bool ApplyHelperStaminaChanges(double TotalGroupDrain);
 	TWeakObjectPtr<ACatFishingSession> Session;
 	TWeakObjectPtr<ACatFishEncounterActor> FishActor;
 	TWeakObjectPtr<ACatFishingRodActor> RodActor;

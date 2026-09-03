@@ -23,7 +23,6 @@ class FCatFishingSessionSnapshotVersionMutationRulesTest;
 class FCatFishingSessionTerminationOutcomeTest;
 class FCatFishingSessionScoopMouthCarryTest;
 class FCatFishingSessionRejectedFightSummaryPublicationTest;
-class FCatFishingSessionExhaustedReelContinuityTest;
 class FCatFishingSessionLandedTerminalVisibilityTest;
 class FCatFishingSessionOutcomePresentationTagTest;
 class FCatFishingServiceRodBoundSessionRoutingTest;
@@ -68,6 +67,8 @@ public:
 		ECatFishMotionIntent MotionIntent, double RodDurabilityRemaining);
 	/** FightRunner/表现写入遇到不可恢复错误时终止会话；FailureStage 会进入日志，便于区分几何、装备、ASC 等故障。 */
 	void HandleFightRunnerFailureFromAuthority(FName FailureStage = NAME_None);
+	/** Condition 确认当前钓手脚点进入危险水深后的唯一落水终局入口。 */
+	void HandleCatEnteredDangerousWaterFromAuthority(double ImmersionDepthCentimeters);
 
 	/** StateTree EnterPhase Task 的唯一阶段写入口；NearShore 必须提供水域内服务器目标，HookedFight/NearShore 保留合法参与者，其他阶段重置为钓手，终态启动有界销毁。 */
 	FCatFishingPhaseResult EnterPhaseFromStateTree(ECatFishingPhase NewPhase);
@@ -132,7 +133,6 @@ private:
 	friend class FCatFishingSessionTerminationOutcomeTest;
 	friend class FCatFishingSessionScoopMouthCarryTest;
 	friend class FCatFishingSessionRejectedFightSummaryPublicationTest;
-	friend class FCatFishingSessionExhaustedReelContinuityTest;
 	friend class FCatFishingSessionLandedTerminalVisibilityTest;
 	friend class FCatFishingSessionLineBreakKeepsRodOperableTest;
 	friend class FCatFishingSessionOutcomePresentationTagTest;
@@ -171,10 +171,6 @@ private:
 
 	/** 在终态快照强制网络更新后设置有界 Actor lifespan；配置缺失时立即销毁以免无界泄漏。 */
 	void ScheduleTerminalDestroy();
-	bool BeginExhaustedReelFromAuthority();
-	void HandleExhaustedReelStep();
-	/** 力竭回收阶段统一同步鱼嘴 Hook 与绷紧鱼线表现；避免位置移动而客户端仍沿用搏斗末帧的旧 L_paid/Slack。 */
-	bool PublishExhaustedReelLineFromAuthority(const FVector& FishWorldLocation);
 	bool TryResolveExhaustedReelTarget(FVector& OutTarget) const;
 	bool SpawnExhaustedFishPickupFromAuthority(const FVector& SurfaceLocation);
 	/** 抄网成功时生成世界鱼并立即附到抄手嘴部；不读取鱼体力，也不写入鱼护。 */
@@ -270,11 +266,6 @@ private:
 	FTimerHandle BiteWarningTimerHandle;
 	FTimerHandle ProbeTimerHandle;
 	FTimerHandle TrueBiteTimerHandle;
-	FTimerHandle ExhaustedReelTimerHandle;
-	int64 LastExhaustedReelInputSequence = 0;
-	/** 当前竿尖表面投影；手持竿移动时按固定步更新，地面姿态自然保持不变。 */
-	FVector ExhaustedReelTarget = FVector::ZeroVector;
-	bool bHasExhaustedReelTarget = false;
 	TMap<FGuid, FCatFishingCommandResult> HookTerminalByRequest;
 	TMap<FGuid, FCatFishingCommandResult> CancelTerminalByRequest;
 	TMap<FGuid, FCatFishingCommandResult> CutLineTerminalByRequest;

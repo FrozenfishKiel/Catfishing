@@ -62,9 +62,9 @@
 - 第一次 R 的 `PlaceRod` 只把鱼竿部署为空杆，不占槽、不锁角色移动；第二次 R 才进入操作位，保证放杆动画和使用动作是两个独立复制跃迁。
 - 鱼竿只有一个公共 R 交互锚点；能否加入只看这个锚点与容器剩余容量，不会因为下一个人的编号改用另一套交互位置或射线。
 - `OperatorPlayerStates` 是唯一紧凑容器：加入时追加到末尾并取得 `0、1、2...` 编号，任意成员离开后更高编号全部依次减一。
-- `0` 号是当前主位；抛竿、提竿和右键线杯只由它驱动。HookedFight 中所有编号都可用左键控制自己的蓄力，0 号离开后新的 0 号立即接管。
+- `0` 号是当前主位；抛竿、提竿和右键线杯只由它驱动。HookedFight 中所有编号都可用左键提交即时发力意图，0 号离开后新的 0 号立即接管。
 - 每次容器压紧后，服务器按新编号重排所有剩余角色；站位算法按右/左成对向外扩展，配置上限当前为 2、代码有界预留到 8，增加第三、第四人不需要新增专用槽位分支或交互锚点。
-- HookedFight 固定步每次从该容器重建参与集合：主位按 0~100%、辅助位按 0~75% 的个人蓄力贡献 FishingStrength，并分别从各自 ASC 支付体力；主位力量归零时仍发力的辅助位会触发 50% 捣乱附加消耗。
+- HookedFight 固定步每次从该容器重建参与集合：主位提供移动/线杯意图，按住左键的辅助位提供协作力量和质量；统一做功后按有效力量占比分别从各自 ASC 支付体力。
 - `OperatorPlayerState` 只保留为 `OperatorPlayerStates[0]` 的兼容快捷字段；蓝图若要判断双人必须读取数组长度。
 - 活动会话唯一性属于鱼竿，不属于玩家：一根竿最多绑定一个未终态 `FishingSession`，同一玩家可以在多人部署的多根竿之间依次抛线。
 - 按 R 离开只释放操作位，不写 `Escaped` 或 `Terminated`；`HookedFight` 会立刻进入无人值守松线，鱼按实际外游带线，到 `L_max` 后只按真实负载消耗本场鱼线耐久，不借用离开玩家的力量/体力。下一位玩家占据主位时，Session 与 Runner 会原子迁移到其 ASC、力量、体力和输入序号域；HookedFight 左键按本人所占鱼竿路由，其他主位命令与 HUD 按当前主操作鱼竿路由。
@@ -98,18 +98,18 @@
 | Probe | StateTree 的 `EnterPhase` 节点（ProbeTriggered 事件转移后） |
 | TrueBiteWindow | StateTree 的 `OpenTrueBiteWindow` 节点打开通用响应窗；只让浮漂下沉，不选鱼、不生成 Actor、不扣饵 |
 | HookedFight | 真咬窗内收到左键后，`RequestHook` 冻结选鱼上下文、选鱼、生成 Actor、扣饵并启动搏斗 |
-| ExhaustedReel | 鱼体力耗尽或猫形成绝对力量优势后，由 Session 停止搏斗 Runner 并进入 |
+| ExhaustedReel | `FishExhausted` 事件驱动 StateTree 进入；同一个 Runner 继续双端约束，只关闭鱼 AI |
 | Resolved/Terminated | `FinalizeSession()` —— StateTree **禁止**进入终态，且它会停树 |
 
 浮漂正式表现由 `ACatFishingHookActor` 驱动，不依赖 `cat.Fishing.Debug`：Waiting 先保证至少 `MinimumBiteDelaySeconds`（当前 5 秒）的小幅慢浮，再叠加服务器随机安静等待；真咬前 `BiteWarningSeconds`（当前 1.5 秒）只把 Hook 的复制模式切为 `BiteWarning`，此时提前提竿仍是空钩；进入 `TrueBiteWindow` 时切为 `Sunk` 猛然下沉。若响应窗内没有左键，StateTree 走 `WindowExpired → Waiting`，保留鱼竿、鱼线和饵料预约并开始新一轮；每轮使用新的确定性服务器随机种子。`MaximumBiteDelaySeconds`（当前 15 秒）是每轮慢浮开始到下沉的总上限。网络只复制模式和服务器起始时间，各客户端本地计算连续位移，因此不会逐帧复制 Transform。
 
-StateTree（`ST_FishingSession`）只有 4 个状态、3 条事件转移 + 1 条完成转移，逻辑极薄。其中 `WindowExpired` 是 `Probe → Waiting` 的循环边；`EarlyHook` / `Interrupted` 仍由 C++ 直接收敛终态并停树。
+StateTree（`ST_FishingSession`）保持薄编排。其中 `FishExhausted` 是 `HookedFight → ExhaustedReelHold` 的显式事件边；`EarlyHook` / `Interrupted` 仍由 C++ 直接收敛终态并停树。
 
-### 2.4 遛鱼（规格 4.3/4.4 判定表）
+### 2.4 遛鱼（双体约束与统一做功）
 
 `FCatFishingFightSimulator::Step()`：纯静态无副作用函数（有单元测试），每 0.05s 由 Runner 调一次。
 
-三方力量：鱼力=鱼种 FishStrength（完美中鱼×0.8）／ 竿强=RodDefinition.FishingStrength；猫总体力量由 Runner 每个固定步从 `OperatorPlayerStates` 重建，为主位与全部辅助位各自 `FishingStrength × PowerAlpha` 的合计，再乘竿向和持竿移动修正。Config 中的 `PrimaryOperatorCatStrength + SecondCatStrength` 是本步实时贡献，不再是启动时冻结的单人属性。
+力量决定双方主动意图能力；质量决定鱼线绷紧后约束修正如何分配。鱼质量来自本次抽取的真实重量，猫端质量为参与猫的 `CharacterMovement.Mass` 与鱼竿等效质量之和。猫体力下降时有效力量连续降低，归零不产生终局。
 `FCatFishSteeringModel` 用独立服务器随机流产生平滑目标游向；相同种子与固定步长得到相同方向序列，客户端不自行随机。
 
 鱼自己的高层行为由 Encounter 上的 `ST_FishFight` 控制：默认在 `StrugglingOutward` 与 `CalmOrInward` 两个状态间循环。StateTree Task 只把意图和持续时间交给 Runner，不写 Transform、不扣体力，也不直接修改鱼线。未来增加“低体力蓄力冲刺”时，可以在树上增加状态和条件，同时仍复用同一套服务器模拟器。
@@ -121,22 +121,16 @@ LineLoad    = pow(max(Alignment, 0), AngleStrengthExponent)，范围[0,1]
 
 鱼仍在平静 ⇄ 挣扎之间定时交替，但每段内部可平滑转向、横切、绕竿和假动作；上钩瞬间=挣扎。
 每次重选方向先根据鱼体力计算向内概率；朝竿尖 ±60° 属于向内。当前测试鱼满体力为 25%，接近力竭为 80%，中间按指数 1.1 的性格曲线插值；发力期仍只把其中 `FeintProbability` 比例当作向内假动作。
-LineLoad 控制鱼线磨损、牵引效率和强对抗资格：正对外冲满载，斜向按夹角衰减，横向/向内不制造正面鱼线力量。鱼体力继续按实时有效猫力、平静/挣扎档和 LineLoad 结算；猫体力改为主位 `10×PowerAlpha×持竿成本倍率`、辅助位各自 `10×1.5×PowerAlpha`，不再按鱼力反推。
-鱼先按自己的水平游向/游速自由移动，锁线只截住越线部分；左键按 (1-LineLoad) 得到有限牵引位移，并按实际到达的鱼距结算 L_paid，不再用缩短后的三维球面重建位置。
+`LineLoad` 仍表达鱼游向在线方向上的投影，并参与磨损和断线负载。鱼与猫先各自产生候选端点；`Locked/Reeling/FreeSpool` 分别保持、缩短或允许被动增加 `L_paid`。全部变化只汇入一个约束误差，再按双方质量分配鱼端位置修正与猫端牵引加速度。
 
-挣扎 + 拖(或线放尽被绷紧) + LineLoad 连续达到性格阈值/确认时间：进入强对抗并按序裁决
-   ① 钓组承载 ≤ min(猫力,鱼力) → 鱼线瞬断（LineBroken，鱼逃；鱼竿保持可用）
-   ② 鱼力 ≥ 猫力            → 猫被拖下水（CatInWater，鱼逃）
-   ③ 猫力 ≥ 鱼力×2          → 绝对碾压（保留鱼当前位置，结束搏斗→ExhaustedReel）
-   ④ 其余 = 僵持消耗战：竿-=鱼力×0.1×LineLoad · 带载拖时鱼-=实时有效猫力×0.08×StruggleDrainMultiplier · 猫按个人 PowerAlpha 付费
-向外游 + 主位力量归零/右键：在 L_max 内不限制鱼，L_paid 只随鱼实际外游被动增长；没有辅助捣乱时主位体力 +3/s（封顶）
+体力统一使用 `实际沿线位移 + max(意图沿线位移-实际沿线位移,0)×IsometricEffortMultiplier`。因此自由运动、带载运动和实际位移为 0 的僵持使用同一公式。收线是独立执行器做功：原地左键会缩短线长并消耗体力，但不会伪造猫位移；后退只移动端点，不会重复缩短线长。
 
 L_paid = 已放出的线长（左键主动收短；右键只允许鱼外游时被动带线）
 D      = 竿尖到鱼的直线距离
 Slack  = max(L_paid-D, 0)：有余线时 Cable 本地垂坠
 Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消耗资源
 
-归零优先级：鱼体力(在当前位置翻肚→ExhaustedReel) → 猫体力(拖下水) → 本场鱼线耐久(断线)。翻肚/碾压帧不把 D 归零；只有进入 ExhaustedReel 后持续左键才按有限速度收近。
+鱼体力归零发布 `FishExhausted`，StateTree 切入 `ExhaustedReel`，同一 Runner 继续求解；猫体力归零只让主动力量归零。猫进入水中由 Condition 对脚点浸没深度做滞回和持续确认后终止会话；不再存在力量比较直接落水或直接碾压。
 完美中鱼：真咬后 1s 内提竿（服务器时间戳）→ 鱼力/鱼体力/初始线长按性格模板折减，bPerfectHook 复制
 ```
 
