@@ -89,21 +89,28 @@ Root
 │            [Cat Run Wait For Event]
 │     Transitions:
 │       On Event  Cat.Run.QuotaReached  →  NormalNight
-│       On Event  Cat.Run.QuotaFailed   →  FailureNight
+│       On Event  Cat.Run.QuotaFailed   →  FailureSettlementNight
 │
 ├── NormalNight
 │     Tasks Completion: All        ← ⚠️
 │     Tasks: [Cat Run Enter Phase (Phase=NormalNight, Reason=QuotaReached)]
 │            [Cat Run Wait For Event]
 │     Transitions:
+│       On Event  Cat.Run.AllEligibleReady  →  SuccessSettlementNight（需 Cat Run Success Settlement Eligible）
 │       On Event  Cat.Run.AllEligibleReady  →  DayActive
 │
-└── FailureNight
+└── FailureSettlementNight
       Tasks Completion: All        ← ⚠️
       Tasks: [Cat Run Enter Phase (Phase=FailureSettlementNight, Reason=QuotaFailed)]
              [Cat Run Wait For Event]
       Transitions:
-        On Event  Cat.Run.SettlementComplete  →  DayActive
+        On Event  Cat.Run.SettlementComplete  →  Ending
+└── SuccessSettlementNight
+      Tasks Completion: All
+      Tasks: [Cat Run Enter Phase (Phase=SuccessSettlementNight, Reason=AllEligibleReady)]
+             [Cat Run Wait For Event]
+      Transitions:
+        On Event  Cat.Run.SettlementComplete  →  Ending
 ```
 
 **说明与注意事项**
@@ -111,9 +118,8 @@ Root
 - ⚠️ **每个多 Task 的 State 都必须把 `Tasks Completion` 从默认的 `Any` 改成 `All`。** 引擎默认 `Any` 的含义是「任何一个 Task 完成，State 就完成」—— `Cat Run Enter Phase` 一返回 Succeeded，State 立刻退出，`Wait For Event` 白搭。改成 `All` 后要所有 Task 都完成才算完成，而 `Wait For Event` 永远 Running，State 就被钉住了。详见 [StateTree 教程第 4 节](StateTreeTutorial_zh-CN.md#4-️-state-什么时候算完成最大的坑)。
 - Task 顺序有意义：`Enter Phase` 必须排在 `Wait For Event` 之前。
 - **起始状态由排列顺序决定**：树启动时选中 Root 的第一个子状态，所以 `DayActive` 必须排第一。
-- **不要接 `SuccessSettlementNight`**：`EnterRunPhaseFromStateTree` 里有硬校验，`SuccessSettlementPolicy != Enabled` 时进这个阶段会直接返回 `PolicyUndecided`（我在 ini 里没启用这条策略）。
-- MVP 只要 `DayActive` 一个状态能进去就够钓鱼了，`NormalNight`/`FailureNight` 是为了让白天到期后不卡死。嫌麻烦可以先只做 `DayActive`。
-- 进入 `DayActive` 会启动一个 `DayLengthSeconds`（ini 里配的 600 秒）的倒计时，到期额度不够就发 `QuotaFailed`。测试期间如果嫌 10 分钟太短，改 ini 里的 `DayLengthSeconds` 再重启。
+- `NormalNight` 收到 `Cat.Run.AllEligibleReady` 时要有两条边：第一条挂 `Cat Run Success Settlement Eligible` 去 `SuccessSettlementNight`，第二条无条件回 `DayActive` 翻下一天。
+- `DayActive` 会启动 `DayLengthSeconds` 倒计时，到期额度不够就发 `QuotaFailed` 进入失败结算夜。测试期间可以改 ini 里的值后重启，也可以在开发期用 `cat.RunEnvironmentSocial.DayLength <秒数>` 临时改当前白天。
 
 ---
 
@@ -509,7 +515,6 @@ Event=run_phase_entered Day=1 Phase=ECatRunPhase::DayActive Deadline=600.000
 1. 表现：Rod/Hook 蓝图继续实现 `BP_On*PresentationChanged`；鱼 Mesh/骨骼/AnimBP/动画只在 `Fish_* → FishPresentation_*` 直连资产中维护；新建 `BP_CatChumFieldPresentation`（父类 `CatChumFieldPresentationActor`）并把类路径写进 ini
 2. `BP_CatFishingController`：5.4 ConfigureEquipment（4 参数）→ `Server Grant Run Consumable` 发窝料 → 5.1 接 E 键结果缓存 → 5.2 左键长按预览+抛竿 → 5.3 Q 蓄力+打窝
 3. （可选）HUD：用 ViewBridge 订阅会话状态
-4. （可选）`ST_RunFlow` 补夜晚循环
 
 ### ⬜ 待办（我）
 

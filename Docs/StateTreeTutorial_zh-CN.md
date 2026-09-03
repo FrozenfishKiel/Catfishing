@@ -257,7 +257,10 @@ State 的另一个属性，决定"这个 State 被考虑时，是自己上还是
 │   Root               │   选中 State 时显示：              │
 │    ├── DayActive     │     - Type                       │
 │    ├── NormalNight   │     - Selection Behavior         │
-│    └── FailureNight  │     - Tasks Completion  ←重要     │
+│    ├── FailureSettlementNight │ - Tasks Completion  ←重要  │
+│    ├── SuccessSettlementNight │ - Tasks / Transitions        │
+│    ├── Ending        │                                  │
+│    └── Ended         │                                  │
 │                      │     - Enter Conditions           │
 │                      │     - Tasks         ←在这加任务    │
 │                      │     - Transitions   ←在这加过渡    │
@@ -297,15 +300,18 @@ State 的另一个属性，决定"这个 State 被考虑时，是自己上还是
 
 打开资产 → 选中 Root → Details 面板找到 **Context Actor Class** → 设为 **`CatfishingGameModeBase`**
 
-## 3.3 建三个状态
+## 3.3 建六个状态
 
-在 Root 下建三个子状态（右键 Root → Add Child State），依次命名：
+在 Root 下建六个子状态（右键 Root → Add Child State），依次命名：
 
 ```
 Root
  ├── DayActive        ← 第一个 = 起始状态
  ├── NormalNight
- └── FailureNight
+ ├── FailureSettlementNight
+ ├── SuccessSettlementNight
+ ├── Ending
+ └── Ended
 ```
 
 **顺序很重要**：`DayActive` 必须是第一个，因为树启动时会选中 Root 的第一个子状态。
@@ -329,7 +335,7 @@ Root
 | # | Trigger | Event Tag | Target |
 |---|---|---|---|
 | 1 | `On Event` | `Cat.Run.QuotaReached` | `NormalNight` |
-| 2 | `On Event` | `Cat.Run.QuotaFailed` | `FailureNight` |
+| 2 | `On Event` | `Cat.Run.QuotaFailed` | `FailureSettlementNight` |
 
 ## 3.5 配置 NormalNight
 
@@ -338,24 +344,39 @@ Root
   1. `Cat Run Enter Phase`，`Phase` = `NormalNight`，`Reason` = `QuotaReached`
   2. `Cat Run Wait For Event`
 - Transitions：
-  1. `On Event`，Tag = `Cat.Run.AllEligibleReady`，Target = `DayActive`
+  1. `On Event`，Tag = `Cat.Run.AllEligibleReady`，Condition = `Cat Run Success Settlement Eligible`，Target = `SuccessSettlementNight`
+  2. `On Event`，Tag = `Cat.Run.AllEligibleReady`，Target = `DayActive`
 
-## 3.6 配置 FailureNight
+## 3.6 配置 FailureSettlementNight
 
 - `Tasks Completion` → **`All`**
 - Tasks：
   1. `Cat Run Enter Phase`，`Phase` = `FailureSettlementNight`，`Reason` = `QuotaFailed`
   2. `Cat Run Wait For Event`
 - Transitions：
-  1. `On Event`，Tag = `Cat.Run.SettlementComplete`，Target = `DayActive`
+  1. `On Event`，Tag = `Cat.Run.SettlementComplete`，Target = `Ending`
 
-## 3.7 编译保存
+## 3.7 配置 SuccessSettlementNight
+
+- `Tasks Completion` → **`All`**
+- Tasks：
+  1. `Cat Run Enter Phase`，`Phase` = `SuccessSettlementNight`，`Reason` = `AllEligibleReady`
+  2. `Cat Run Wait For Event`
+- Transitions：
+  1. `On Event`，Tag = `Cat.Run.SettlementComplete`，Target = `Ending`
+
+## 3.8 配置 Ending / Ended
+
+- `Ending`：`Cat Run Enter Phase`，`Phase` = `Ending`，`Reason` = `SettlementComplete`；Transition 用 `On State Succeeded` 指向 `Ended`
+- `Ended`：`Cat Run Enter Phase`，`Phase` = `Ended`，`Reason` = `NaturalEnd`
+
+## 3.9 编译保存
 
 点工具栏 **Compile**，看 Compiler Results 没报错，然后 Save。
 
-> **不要接 `SuccessSettlementNight`**：`EnterRunPhaseFromStateTree` 里有硬校验，`SuccessSettlementPolicy != Enabled` 时进这个阶段直接返回 `PolicyUndecided`（当前 ini 没启用这条策略）。
+> **成功结算夜必须接条件**：`NormalNight` 的 `AllEligibleReady` 第一条边要挂 `Cat Run Success Settlement Eligible`，达到 `FinalDayIndex` 才进入 `SuccessSettlementNight`；否则第二条无条件边回 `DayActive` 翻下一天。
 
-> **嫌白天太短**：`DayActive` 会启动一个 `DayLengthSeconds`（ini 里配的 600 秒）倒计时，到期额度不够就发 `QuotaFailed` 跳夜晚。测试期间可以把 ini 里的值调大，改完重启编辑器。
+> **嫌白天太短或太长**：`DayActive` 会启动 `DayLengthSeconds` 倒计时，到期额度不够就发 `QuotaFailed` 跳失败结算夜。测试期间可改 ini 里的值后重启，也可在开发期用 `cat.RunEnvironmentSocial.DayLength <秒数>` 临时改当前白天。
 
 ---
 
@@ -569,6 +590,7 @@ UE 自带可视化调试器：菜单 **Tools → Debug → StateTree Debugger**�
 | `Cat Run Enter Phase` | Task | `Phase`, `Reason` | Succeeded / Failed |
 | `Cat Run Wait For Event` | Task | — | 永远 Running |
 | `Cat Run Result Reason` | Condition | `ExpectedReason` | bool |
+| `Cat Run Success Settlement Eligible` | Condition | — | bool |
 
 **枚举取值**
 
@@ -579,7 +601,7 @@ ECatFishingPhase:
 
 ECatRunPhase:
   NotStarted, DayActive, NormalNight, FailureSettlementNight,
-  SuccessSettlementNight(禁), Ending, Ended
+  SuccessSettlementNight, Ending, Ended
 
 ECatRunTransitionReason:
   None, QuotaReached, QuotaFailed, AllEligibleReady,

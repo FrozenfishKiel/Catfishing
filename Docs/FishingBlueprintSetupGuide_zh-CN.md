@@ -71,11 +71,11 @@
 
 ### 2.2 `Config/DefaultGame.ini`
 
-**已经写好并落盘了**，8 个 section 全部指向 2.1 节创建好的资产。只剩两处 StateTree 软引用需要你建完资产后补上：
+**已经写好并落盘了**，8 个 section 基本都指向正式资产；RunFlow 已经使用项目内固定资产路径：
 
 ```ini
 [/Script/Catfishing.CatRunSettings]
-RunFlowStateTree=/Game/.../ST_RunFlow.ST_RunFlow                        ; ← 待补
+RunFlowStateTree=/Game/Data/StateTrees/ST_RunFlow.ST_RunFlow
 
 [/Script/Catfishing.CatFishingSettings]
 FishingSessionStateTree=/Game/.../ST_FishingSession.ST_FishingSession   ; ← 待补
@@ -97,7 +97,7 @@ FishingSessionStateTree=/Game/.../ST_FishingSession.ST_FishingSession   ; ← �
 
 ### 2.4 StateTree 拓扑（简要重述，细节见前文对话）
 
-- **ST_RunFlow**（Context = `ACatfishingGameModeBase`）：`DayActive → NormalNight/FailureNight → Ending → Ended`，事件只有 `Cat.Run.QuotaReached/QuotaFailed/AllEligibleReady/SettlementComplete`
+- **ST_RunFlow**（Context = `ACatfishingGameModeBase`）：`DayActive → NormalNight/FailureSettlementNight/SuccessSettlementNight → Ending → Ended`，事件只有 `Cat.Run.QuotaReached/QuotaFailed/AllEligibleReady/SettlementComplete`；`NormalNight` 的成功结算分支必须挂 `Cat Run Success Settlement Eligible`
 - **ST_FishingSession**（Context = `ACatFishingSession`）：`Waiting → Probe → HookedFight → ExhaustedReelHold`；鱼体力耗尽/力量碾压时由 C++ 先进入 `ExhaustedReel`，叶子状态只用 `Cat Fishing Wait` 保持树运行。事件只有 `Cat.Fishing.Event.ProbeTriggered/WindowExpired/EarlyHook/HookAccepted/Interrupted`。**树永远不能自然结束**，`Resolved`/`Terminated` 只能由 C++ 写，资产里的 `Enter Phase` Task 选这两个值会直接被拒绝
 
 ---
