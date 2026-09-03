@@ -381,11 +381,11 @@ namespace
 		}
 		if (RunState.Phase.Phase == ECatRunPhase::FailureSettlementNight)
 		{
-			return TEXT("当前是失败结算夜：本局已经因额度失败进入结算，跳到下一天不会再生效；要继续测下一天，需要重新开始一局，完成结算只会进入收口。");
+			return TEXT("当前是失败结算夜：正式机制已经判定本局失败，普通跳天不会生效；人工测试可用 ForceNextDay 作弊继续到下一次白天。");
 		}
 		if (RunState.Phase.Phase == ECatRunPhase::SuccessSettlementNight)
 		{
-			return TEXT("当前是成功结算夜：本局已经到达成功收口阶段，跳到下一天不会再进入普通白天。");
+			return TEXT("当前是成功结算夜：正式机制已经进入局末收口，ForceNextDay 不处理成功局末；要继续看后续流程请重新开局。");
 		}
 		if (AuthoritySnapshot)
 		{
@@ -429,7 +429,10 @@ namespace
 			*WorldName, *NetMode), TextColor });
 		Lines.Add({ TEXT("辅助指令：Dump=cat.RunEnvironmentSocial.Dump ｜ 改白天时长=cat.RunEnvironmentSocial.DayLength <秒>"),
 			TextColor });
-		Lines.Add({ TEXT("辅助指令：跳到下一天=cat.RunEnvironmentSocial.SkipToNextDay"), TextColor });
+		Lines.Add({ TEXT("辅助指令：跳到夜晚=cat.RunEnvironmentSocial.SkipToNight ｜ 正常跳下一天=cat.RunEnvironmentSocial.SkipToNextDay"),
+			TextColor });
+		Lines.Add({ TEXT("作弊救援：强制下一天=cat.RunEnvironmentSocial.ForceNextDay（失败夜继续测，或普通夜全员 ready 卡住时用）"),
+			WarningColor });
 
 		const ACatfishingGameState* GameState = World ? World->GetGameState<ACatfishingGameState>() : nullptr;
 		if (!GameState)

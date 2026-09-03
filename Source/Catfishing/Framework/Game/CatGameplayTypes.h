@@ -176,8 +176,12 @@ public:
 #if !UE_BUILD_SHIPPING
 	/** 开发期调试入口：在服务器开放的 DayActive 上，把当前白天从此刻起的剩余时长重设为可进入 UE timer 的正秒数；成功会重写时间窗口、重排 timer、递增 Revision 并发布 RunPublicState，失败返回 false 且不改天数或客户端本地状态。 */
 	bool ApplyDebugDayLengthSeconds(double NewDayLengthSeconds);
+	/** 开发期调试入口：请求服务器把当前开放白天用正式额度命令推进到普通夜晚；已经处于普通夜晚时只确认状态，不提交 ready、不改天数、不直接写 Phase。 */
+	bool ApplyDebugSkipToNight();
 	/** 开发期调试入口：请求服务器用正式额度与夜晚 ready 命令把当前 Run 加速到下一天；返回 true 表示请求已被接收或同日请求已在等待推进，返回 false 表示当前无 authority、无 World、阶段不支持或正式命令 gate 拒绝；Phase 与 DayIndex 仍只由 StateTree 阶段入口写入。 */
 	bool ApplyDebugSkipToNextDay();
+	/** 开发期作弊救援入口：在非 Shipping 的服务器上重启 ST_RunFlow 到下一次 DayActive，仅用于失败结算夜继续人工测试或普通夜全员 ready 后解卡；它绕过产品拓扑但仍让 StateTree 的 DayActive 入口写正式 Run 快照。 */
+	bool ApplyDebugForceNextDay();
 	/** 开发期只读诊断入口：把 GameMode 不复制的 StateTree、命令门和夜晚 ready 集合折成一次性副本；调用者只能展示，不能据此推进 Run。 */
 	FCatRunAuthorityDebugSnapshot GetAuthorityDebugSnapshotForDebug() const;
 #endif
@@ -246,6 +250,10 @@ private:
 	FCatRunCommandResult SubmitQuotaContributionInternal(const FCatQuotaContributionCommand& ServerCommand);
 	/** 进入普通夜晚时冻结当前 Active 身份集合并清空个人 ready，未裁的晚加入不会隐式扩容。 */
 	void CaptureNightReadyEligibility();
+	/** 判断当前普通夜晚是否已经收齐冻结资格集合里的所有 ready；只读集合事实，不发送 StateTree 事件。 */
+	bool IsAllNightReadyComplete() const;
+	/** 在 ready 已经覆盖资格集合时发送 AllEligibleReady 事件；普通流程只允许首次发送，调试排障可在仍卡普通夜晚时重发同一个正式事件。 */
+	bool SendAllEligibleReadyEventIfComplete(const TCHAR* Trigger, bool bAllowResend);
 	/** ready 集合首次全部完成时发布公开事实并只发送 AllEligibleReady 事件，不在 C++ 改写 Phase。 */
 	void EvaluateAllEligibleReady();
 	/** 清除旧白天计时回调；只停止 deadline 与环境刷新 Timer，不改公开截止字段，供 DayActive 收口缝隙安全使用。 */
@@ -269,10 +277,12 @@ private:
 	bool IsDebugSkipToNextDayRequestCurrent() const;
 	/** 开发期跳天加速收口；进入新天、结算或 World 结束时清掉调试请求，不改正式 Run 状态。 */
 	void ClearDebugSkipToNextDayRequest();
-	/** 开发期跳天加速的玩家选择入口；返回当前仍能走正式 Run 命令 gate 的第一名服务器可见玩家。 */
-	APlayerController* FindDebugSkipToNextDayController() const;
-	/** 开发期跳天加速的额度提交入口；只在开放 DayActive 上构造一条正式额度贡献命令，返回 true 表示额度命令首次提交并发出 QuotaReached，返回 false 表示白天 gate、额度差值或 Active Controller 不满足且不会推进 StateTree。 */
-	bool SubmitDebugQuotaCompletionForCurrentDay();
+	/** 开发期补额度玩家选择入口；返回当前仍能走正式 Run 命令 gate 的第一名服务器可见玩家，供跳到夜晚和正常跳天共同复用。 */
+	APlayerController* FindDebugQuotaCompletionController() const;
+	/** 开发期跳天加速的资格玩家解析入口；按夜晚冻结的 StableNetId 找回当前 Active Controller，避免调试 ready 走错玩家集合。 */
+	AController* FindDebugNightReadyControllerByStableNetId(const FString& StableNetId) const;
+	/** 开发期补足当日额度入口；只在开放 DayActive 上构造一条正式额度贡献命令，返回 true 表示额度命令首次提交并发出 QuotaReached，返回 false 表示白天 gate、额度差值或 Active Controller 不满足且不会推进 StateTree。 */
+	bool SubmitDebugQuotaCompletionForCurrentDay(const TCHAR* Trigger);
 	/** 开发期跳天加速的夜晚 ready 提交入口；对当前服务器可见且合资格玩家调用正式 SubmitNextDayReady，返回 true 表示已经提交到全员 ready 事件或本来就在等待推进，返回 false 表示阶段不符、没有可提交玩家或正式 ready 命令被拒。 */
 	bool SubmitDebugReadyForEligiblePlayers(const TCHAR* Trigger);
 	/** 开发期跳天加速的阶段回调入口；正式 Phase 进入后决定是否安排下一步加速或清掉请求。 */

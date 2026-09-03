@@ -12,7 +12,7 @@ class UGameViewportClient;
 
 /**
  * RunEnvironmentSocial 的开发期诊断入口；中文面板和 Dump 是只读观察口，读取 GameState 复制事实以及服务器本机一次性生成的 GameMode Debug 快照。
- * 打包 Development 可通过 `cat.RunEnvironmentSocial.Debug 1` 打开 Slate 面板，通过 `cat.RunEnvironmentSocial.Dump` 写一次结构化日志，通过 `cat.RunEnvironmentSocial.DayLength 60` 请求服务器正式重排当前白天剩余时长；Shipping 不创建本子系统。
+ * 打包 Development 可通过 `cat.RunEnvironmentSocial.Debug 1` 打开 Slate 面板，通过 `cat.RunEnvironmentSocial.Dump` 写一次结构化日志，通过 `cat.RunEnvironmentSocial.DayLength 60`/`SkipToNight`/`SkipToNextDay`/`ForceNextDay` 辅助人工验证；Shipping 不创建本子系统。
  */
 UCLASS()
 class CATFISHING_API UCatRunEnvironmentDebugSubsystem final : public UTickableWorldSubsystem

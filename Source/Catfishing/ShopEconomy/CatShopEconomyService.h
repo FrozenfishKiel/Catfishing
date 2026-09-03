@@ -149,6 +149,11 @@ public:
 	 */
 	void CloseCommands();
 
+#if !UE_BUILD_SHIPPING
+	/** 开发期救援入口：只在人工 ForceNextDay 需要从失败结算夜回到白天前重新打开商店写口；它不清公款、账本、货架或幂等缓存，后续日进货仍由 AdvanceShopDay 按正式天数处理。 */
+	bool ReopenCommandsForDebugForceNextDay();
+#endif
+
 private:
 	/** 一个摊位库存组件和服务订阅它货架变化时拿到的委托句柄；注销或 World 退出时用它成对解绑。 */
 	struct FRegisteredShopInventorySubscription
