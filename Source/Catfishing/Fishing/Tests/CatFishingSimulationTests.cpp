@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "Fishing/Simulation/CatFishFightMotionSolver.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
 #include "Fishing/Simulation/CatFishingFightWorkModel.h"
 
@@ -49,6 +50,67 @@ namespace CatFishingCoupledSimulationTest
 }
 
 using namespace CatFishingCoupledSimulationTest;
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingShoreBeachingSolveTest,
+	"Catfishing.Unit.Fishing.Simulation.LandwardHaulCanBeachFishWhenOldPointIsOutsideMovedConstraint",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingShoreBeachingSolveTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFishShoreContactInput Input;
+	Input.CurrentFishWorldPosition = FVector(0.0, 300.0, 0.0);
+	Input.CandidateFishWorldPosition = FVector(0.0, 200.0, 0.0);
+	Input.ResolvedWaterWorldPosition = FVector(0.0, 250.0, 0.0);
+	Input.WaterwardDirection = FVector(0.0, 1.0, 0.0);
+	Input.RodTipWorldPosition = FVector::ZeroVector;
+	Input.PreviousLineLengthCentimeters = 200.0;
+	Input.ProposedLineLengthCentimeters = 200.0;
+	Input.MaximumConstraintDistanceCentimeters = 200.0;
+
+	const FCatFishShoreContactResult Blocked =
+		FCatFishFightMotionSolver::ResolveLiveFishShoreContact(Input);
+	TestFalse(TEXT("legacy water-only solve cannot reuse an old point outside the moved line sphere"),
+		Blocked.bSucceeded);
+
+	Input.bAllowBeaching = true;
+	const FCatFishShoreContactResult Beached =
+		FCatFishFightMotionSolver::ResolveLiveFishShoreContact(Input);
+	TestTrue(TEXT("landward haul keeps the reachable shore-crossing candidate"), Beached.bSucceeded);
+	TestTrue(TEXT("shore-crossing result explicitly requests the grounded lifecycle"), Beached.bBeached);
+	TestTrue(TEXT("beaching preserves the candidate XY for the later ground trace"),
+		Beached.FishWorldPosition.Equals(Input.CandidateFishWorldPosition, 1e-6));
+	TestEqual(TEXT("beaching does not manufacture paid-out line"),
+		Beached.LineLengthCentimeters, Input.ProposedLineLengthCentimeters, 1e-9);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingUnforcedShoreContactTest,
+	"Catfishing.Unit.Fishing.Simulation.UnforcedShoreContactStillSlidesInsideWater",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingUnforcedShoreContactTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFishShoreContactInput Input;
+	Input.CurrentFishWorldPosition = FVector(0.0, 300.0, 0.0);
+	Input.CandidateFishWorldPosition = FVector(40.0, 240.0, 0.0);
+	Input.ResolvedWaterWorldPosition = FVector(40.0, 260.0, 0.0);
+	Input.WaterwardDirection = FVector(0.0, 1.0, 0.0);
+	Input.RodTipWorldPosition = FVector::ZeroVector;
+	Input.PreviousLineLengthCentimeters = 400.0;
+	Input.ProposedLineLengthCentimeters = 400.0;
+	Input.MaximumConstraintDistanceCentimeters = 400.0;
+
+	const FCatFishShoreContactResult Result =
+		FCatFishFightMotionSolver::ResolveLiveFishShoreContact(Input);
+	TestTrue(TEXT("ordinary shore contact still solves"), Result.bSucceeded);
+	TestTrue(TEXT("ordinary shore contact is detected"), Result.bShoreContact);
+	TestFalse(TEXT("fish does not beach without cat-side hauling"), Result.bBeached);
+	TestTrue(TEXT("water-only shore response does not use the land candidate"),
+		!Result.FishWorldPosition.Equals(Input.CandidateFishWorldPosition, 1e-6));
+	return !HasAnyErrors();
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingSpoolModesTest,
 	"Catfishing.Unit.Fishing.Simulation.SpoolModesSeparateEndpointMovementFromLineLength",

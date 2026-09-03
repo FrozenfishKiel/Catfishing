@@ -32,6 +32,8 @@ struct CATFISHING_API FCatFishShoreContactInput
 	bool bReeling = false;
 	/** 右键松开线杯；最终 L_paid 只能按岸线校正后的真实鱼距增长，不能按候选点凭空出线。 */
 	bool bSlacking = false;
+	/** 猫端正沿绷紧鱼线把鱼拉向岸上时，允许候选点越过水域边界并交给岸上地面吸附。 */
+	bool bAllowBeaching = false;
 	double CorrectionToleranceCentimeters = 1.0;
 };
 
@@ -39,6 +41,8 @@ struct CATFISHING_API FCatFishShoreContactResult
 {
 	bool bSucceeded = false;
 	bool bShoreContact = false;
+	/** 本步采用了岸上候选点；调用方必须再把 Z 吸附到真实地面，并切换鱼的生命周期。 */
+	bool bBeached = false;
 	FVector FishWorldPosition = FVector::ZeroVector;
 	double LineLengthCentimeters = 0.0;
 };

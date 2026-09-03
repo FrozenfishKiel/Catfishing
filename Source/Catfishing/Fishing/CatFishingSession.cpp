@@ -37,6 +37,7 @@
 #include "Items/CatItemsService.h"
 #include "Items/CatWorldItemSettings.h"
 #include "Items/World/CatFishPickupActor.h"
+#include "Items/World/CatWorldSurfaceResolver.h"
 #include "Net/UnrealNetwork.h"
 #include "StateTree.h"
 #include "TimerManager.h"
@@ -1485,8 +1486,11 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 			return;
 		}
 		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_fish_exhausted SessionId=%s Result=StateTreeEventSent RunnerContinues=true"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens));
+			TEXT("Event=fishing_fish_exhausted SessionId=%s Cause=%s FishStaminaRemaining=%.3f "
+				"Beached=%s Result=StateTreeEventSent RunnerContinues=true"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			Step.bFishBeached ? TEXT("ShoreLanding") : TEXT("StaminaDepleted"),
+			FishStaminaRemaining, Step.bFishBeached ? TEXT("true") : TEXT("false"));
 		Snapshot.FishMotionIntent = ECatFishMotionIntent::AutoHauling;
 		Snapshot.bStrongConfrontation = false;
 		PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
@@ -1497,14 +1501,17 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 	{
 		FVector Target;
 		const ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
+		const UCatWorldItemSettings* ItemSettings = GetDefault<UCatWorldItemSettings>();
 		if (!Encounter || !TryResolveExhaustedReelTarget(Target))
 		{
 			HandleFightRunnerFailureFromAuthority(TEXT("ExhaustedReelTarget"));
 			return;
 		}
-		const double ReachTolerance = FMath::Max(5.0,
-			GetDefault<UCatFishingSettings>()->ReelSpeedCentimetersPerSecond
-				* GetDefault<UCatFishingSettings>()->FixedFightStepSeconds);
+		const double ConfiguredReachTolerance = ItemSettings
+			? ItemSettings->LandingCompletionDistanceToRodCentimeters : 0.0;
+		const double ReachTolerance = FMath::IsFinite(ConfiguredReachTolerance)
+			&& ConfiguredReachTolerance > 0.0
+			? FMath::Max(5.0, ConfiguredReachTolerance) : 5.0;
 		if (FVector::Dist2D(Encounter->GetActorLocation(), Target) <= ReachTolerance
 			&& !SpawnExhaustedFishPickupFromAuthority(Target))
 		{
@@ -1542,35 +1549,32 @@ bool ACatFishingSession::TryResolveExhaustedReelTarget(FVector& OutTarget) const
 		return false;
 	}
 
-	// Encounter 的权威 Z 是本次鱼所在水面的高度。竿尖 XY 若仍在水上，就以该水面为终点；若落在岸上，
-	// 地表命中通常更高，取二者最大值可防止鱼按水面高度钻进岸坡。这里仍然不要求 XY 位于 WaterRegion 内。
+	// 鱼越岸前，竿尖 XY 仍可按水面与地面较高者收尾；鱼一旦越岸，目标必须使用真实地面高度，
+	// 即使岸面低于原水面也不能继续悬在旧 Z。垂直查询贯穿完整关卡高度，不再受短距离探测窗限制。
 	const FVector RodTip = Rod->GetRodTipWorldTransform().GetLocation();
 	const double WaterSurfaceZ = Encounter->GetActorLocation().Z;
 	double TargetSurfaceZ = WaterSurfaceZ;
-	if (FMath::IsFinite(ItemSettings->LandingGroundTraceUpCentimeters)
-		&& FMath::IsFinite(ItemSettings->LandingGroundTraceDownCentimeters)
-		&& ItemSettings->LandingGroundTraceUpCentimeters >= 0.0
-		&& ItemSettings->LandingGroundTraceDownCentimeters > 0.0)
+	TArray<const AActor*> IgnoredActors;
+	IgnoredActors.Add(Encounter);
+	IgnoredActors.Add(Rod);
+	IgnoredActors.Add(Snapshot.HookActor);
+	IgnoredActors.Add(FisherCharacter.Get());
+	const FCatWorldSurfaceResult Surface = FCatWorldSurfaceResolver::ResolveHighestBlockingSurface(
+		World, RodTip, ItemSettings->LandingGroundTraceChannel, IgnoredActors);
+	const bool bFishBeached = FightRunner && FightRunner->IsFishBeachedForAuthority();
+	if (bFishBeached && !Surface.bSucceeded)
 	{
-		FCollisionQueryParams GroundParams(SCENE_QUERY_STAT(CatExhaustedFishTargetSurface), true);
-		GroundParams.AddIgnoredActor(Encounter);
-		GroundParams.AddIgnoredActor(Rod);
-		GroundParams.AddIgnoredActor(Snapshot.HookActor);
-		if (const ACatCharacter* Character = FisherCharacter.Get())
-		{
-			GroundParams.AddIgnoredActor(Character);
-		}
-		const double TraceTopZ = FMath::Max(RodTip.Z, WaterSurfaceZ)
-			+ ItemSettings->LandingGroundTraceUpCentimeters;
-		const double TraceBottomZ = FMath::Min(RodTip.Z, WaterSurfaceZ)
-			- ItemSettings->LandingGroundTraceDownCentimeters;
-		FHitResult GroundHit;
-		if (World->LineTraceSingleByChannel(GroundHit,
-			FVector(RodTip.X, RodTip.Y, TraceTopZ), FVector(RodTip.X, RodTip.Y, TraceBottomZ),
-			ItemSettings->LandingGroundTraceChannel, GroundParams))
-		{
-			TargetSurfaceZ = FMath::Max(WaterSurfaceZ, static_cast<double>(GroundHit.ImpactPoint.Z));
-		}
+		UE_LOG(LogCatFishing, Error,
+			TEXT("Event=fishing_landing_target_rejected SessionId=%s Beached=true RodTip=%s TraceChannel=%d "
+				"Reason=GroundSurfaceMissing"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *RodTip.ToCompactString(),
+			static_cast<int32>(ItemSettings->LandingGroundTraceChannel.GetValue()));
+		return false;
+	}
+	if (Surface.bSucceeded)
+	{
+		TargetSurfaceZ = bFishBeached
+			? Surface.WorldPosition.Z : FMath::Max(WaterSurfaceZ, Surface.WorldPosition.Z);
 	}
 	OutTarget = FVector(RodTip.X, RodTip.Y, TargetSurfaceZ);
 	return !OutTarget.ContainsNaN();

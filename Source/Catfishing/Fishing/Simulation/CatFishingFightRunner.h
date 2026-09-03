@@ -11,6 +11,7 @@ class ACatFishEncounterActor;
 class ACatFishingRodActor;
 class ACatFishingSession;
 class ACatCharacter;
+class AActor;
 class APlayerState;
 class UCatAbilitySystemComponent;
 class UCatWaterQuerySubsystem;
@@ -78,6 +79,8 @@ public:
 	/** 鱼力竭关闭 AI 与鱼端驱动力并立即清除猫端牵引；固定步和同一线长约束继续负责收近。 */
 	bool SetFishExhaustedFromAuthority();
 	bool IsFishExhaustedForAuthority() const { return State.bFishExhausted; }
+	/** 鱼是否已经越过真实岸线；一旦成立，后续拖拽始终走地面吸附，不再回到水面高度。 */
+	bool IsFishBeachedForAuthority() const { return bFishBeached; }
 	/** 搏斗接力时原子迁移 ASC、力量、体力上限/当前值与新玩家自己的输入序号域。 */
 	bool TransferOperatorFromAuthority(APlayerState* NewPlayerState, UCatAbilitySystemComponent* NewAbilitySystem,
 		double NewCatStrength, double NewCatStaminaMaximum, double NewCatStamina,
@@ -97,6 +100,8 @@ private:
 	FCatFightParticipantRuntime* FindPrimaryParticipant();
 	bool UpdateParticipantIntentAndProperties();
 	bool ApplyHelperStaminaChanges(double TotalGroupDrain);
+	bool TryResolveGroundedFishPosition(const FVector& DesiredPosition,
+		FVector& OutGroundedPosition, FVector& OutSurfaceNormal, AActor*& OutSurfaceActor) const;
 	TWeakObjectPtr<ACatFishingSession> Session;
 	TWeakObjectPtr<ACatFishEncounterActor> FishActor;
 	TWeakObjectPtr<ACatFishingRodActor> RodActor;
@@ -121,6 +126,7 @@ private:
 	double NextConstraintDiagnosticWorldSeconds = 0.0;
 	double NextPowerDiagnosticWorldSeconds = 0.0;
 	bool bLastConstraintDiagnosticActive = false;
+	bool bFishBeached = false;
 	bool bInitialized = false;
 	bool bRunning = false;
 };

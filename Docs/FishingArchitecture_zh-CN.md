@@ -98,7 +98,7 @@
 | Probe | StateTree 的 `EnterPhase` 节点（ProbeTriggered 事件转移后） |
 | TrueBiteWindow | StateTree 的 `OpenTrueBiteWindow` 节点打开通用响应窗；只让浮漂下沉，不选鱼、不生成 Actor、不扣饵 |
 | HookedFight | 真咬窗内收到左键后，`RequestHook` 冻结选鱼上下文、选鱼、生成 Actor、扣饵并启动搏斗 |
-| ExhaustedReel | `FishExhausted` 事件驱动 StateTree 进入；同一个 Runner 继续双端运动约束，但关闭鱼 AI 与猫端体力扣费 |
+| ExhaustedReel | 鱼体力归零或被猫端牵引越岸后发送 `FishExhausted` 事件；同一个 Runner 继续双端运动约束，但关闭鱼 AI 与猫端体力扣费 |
 | Resolved/Terminated | `FinalizeSession()` —— StateTree **禁止**进入终态，且它会停树 |
 
 浮漂正式表现由 `ACatFishingHookActor` 驱动，不依赖 `cat.Fishing.Debug`：Waiting 先保证至少 `MinimumBiteDelaySeconds`（当前 5 秒）的小幅慢浮，再叠加服务器随机安静等待；真咬前 `BiteWarningSeconds`（当前 1.5 秒）只把 Hook 的复制模式切为 `BiteWarning`，此时提前提竿仍是空钩；进入 `TrueBiteWindow` 时切为 `Sunk` 猛然下沉。若响应窗内没有左键，StateTree 走 `WindowExpired → Waiting`，保留鱼竿、鱼线和饵料预约并开始新一轮；每轮使用新的确定性服务器随机种子。`MaximumBiteDelaySeconds`（当前 15 秒）是每轮慢浮开始到下沉的总上限。网络只复制模式和服务器起始时间，各客户端本地计算连续位移，因此不会逐帧复制 Transform。
@@ -132,7 +132,7 @@ D      = 竿尖到鱼的直线距离
 Slack  = max(L_paid-D, 0)：有余线时 Cable 本地垂坠
 Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消耗资源
 
-鱼体力归零发布 `FishExhausted`，StateTree 切入 `ExhaustedReel`，同一 Runner 继续求解线长和双端位移，但停止所有猫端做功扣费；左键只负责把力竭鱼逐步收近。猫体力归零只让主动力量归零。猫进入水中由 Condition 对脚点浸没深度做滞回和持续确认后终止会话；不再存在力量比较直接落水或直接碾压。
+鱼体力归零，或竿尖位于陆地方向且猫端沿绷紧鱼线把鱼拖过岸线，都会发布 `FishExhausted` 并让 StateTree 切入 `ExhaustedReel`。同一 Runner 继续求解线长和双端位移，但停止鱼 AI、鱼驱动力和所有猫端做功扣费；鱼自行撞岸而没有猫端牵引时仍沿岸反射回水，不会自动搁浅。猫体力归零只让主动力量归零。猫进入水中由 Condition 对脚点浸没深度做滞回和持续确认后终止会话；不再存在力量比较直接落水或直接碾压。
 完美中鱼：真咬后 1s 内提竿（服务器时间戳）→ 鱼力/鱼体力/初始线长按性格模板折减，bPerfectHook 复制
 ```
 
@@ -164,7 +164,7 @@ Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消�
 
 首个合法 F 会生成一个 `ACatFishPickupActor`，并立即调用与岸上死鱼按 E 相同的嘴叼交接；此时鱼仍是世界 Actor，不进入背包或鱼护。玩家之后对具体地面鱼护按 E，才由 Items 执行唯一容器提交与图鉴归档。一次 F 用同一个 `RequestId` 串联 `scoop_target_selected`（或 `scoop_target_selection_failed`）、`scoop_rejected`、`fishing_scoop_terminal` 与最终 `fishing_command_result`。拒绝日志除逐项谓词和距离/高度/射程外，还同时保留角色中心、胶囊足底和地面命中点三组 WaterQuery 的错误枚举、Inside/Boundary/Outside、Region/几何版本、垂直差和带符号岸距；后两组只用于诊断，不改变当前以角色中心为准的权威规则。由此可以区分“角色中心高度超差”“脚下在水域内/边界”“没对准”“太远”“地面或视线不合法”。
 
-鱼体力耗尽后还有第二条正式收尾路线：服务器立即复制 `AutoHauling`，各端据此让鱼侧翻；继续按住左键时，服务器在 `ExhaustedReel` 中把鱼逐步收向“竿尖 XY + max(水面 Z, 竿尖下方地面 Z)”的冻结投影，最多到该点。目标 XY 不受 WaterRegion 轮廓限制；岸地高于水面时使用地面高度，避免鱼埋进岸坡。到点后原地生成复制的 `ACatFishPickupActor`。所有玩家都能以准星锁定并按 E 请求拾取，服务器复核距离、视线和物品状态，首个合法请求获胜。抄网与岸上拾取从这里开始共用同一条“嘴叼世界鱼 → 对具体鱼护 E → Items 唯一提交”链；Session Outcome 分别为 `Caught` 与 `Landed`。
+鱼进入 `ExhaustedReel` 后还有第二条正式收尾路线：服务器立即复制 `AutoHauling`，各端据此让鱼侧翻；继续按住左键时，服务器仍用同一个约束逐步拖近。鱼干尚在水域轮廓内时保持水面高度；第一次越岸后 Runner 锁定 `Beached`，此后每个固定步按当前 XY 调用 `FCatWorldSurfaceResolver`，从完整关卡高度查询最高阻挡表面并更新权威 Z，因此高岸、低洼和连续斜坡都不会沿旧水面高度穿模。进入竿尖 `LandingCompletionDistanceToRodCentimeters` 后原地生成复制的 `ACatFishPickupActor`。所有玩家都能以准星锁定并按 E 请求拾取，服务器复核距离、视线和物品状态，首个合法请求获胜。抄网与岸上拾取从这里开始共用同一条“嘴叼世界鱼 → 对具体鱼护 E → Items 唯一提交”链；Session Outcome 分别为 `Caught` 与 `Landed`。
 
 ---
 

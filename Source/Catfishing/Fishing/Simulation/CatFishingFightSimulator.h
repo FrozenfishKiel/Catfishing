@@ -148,6 +148,8 @@ struct CATFISHING_API FCatFightStepResult
 	double StrongConfrontationBuildUpSeconds = 0.0;
 	bool bStalemate = false;
 	bool bStrongConfrontation = false;
+	/** Runner 确认本步由猫端牵引越过真实岸线；鱼会复用 FishExhausted 终局进入鱼干拖拽。 */
+	bool bFishBeached = false;
 	ECatFightLineBreakCause LineBreakCause = ECatFightLineBreakCause::None;
 	ECatFightStepOutcome Outcome = ECatFightStepOutcome::None;
 };

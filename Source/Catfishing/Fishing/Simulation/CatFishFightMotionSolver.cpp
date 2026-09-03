@@ -123,7 +123,15 @@ FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContac
 	Result.bShoreContact = FVector::DistSquared2D(Input.CandidateFishWorldPosition,
 		Input.ResolvedWaterWorldPosition) > FMath::Square(Input.CorrectionToleranceCentimeters);
 	FVector DesiredPosition;
-	if (Result.bShoreContact)
+	if (Result.bShoreContact && Input.bAllowBeaching)
+	{
+		// 猫端已经沿绷紧鱼线把鱼拉向岸上：保留越岸候选的 XY，Z 由调用方使用真实地面统一结算。
+		// MaximumConstraintDistance 包含该候选点到竿尖的实际距离，所以即使竿尖快速移动、旧鱼点已经落在
+		// 新约束球之外，也不再因为“起点必须在球内”的旧前提误判为求解失败。
+		DesiredPosition = Input.CandidateFishWorldPosition;
+		Result.bBeached = true;
+	}
+	else if (Result.bShoreContact)
 	{
 		// 当前点是上一固定步已经通过真实水域校验的位置。把安全修正位移拆成“入水法向 + 沿岸切向”，
 		// 丢掉可能很大的法向 MinimumWaterInset 回弹，只保留不超过本步原始位移的沿岸滑动。

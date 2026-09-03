@@ -135,7 +135,7 @@ Root
 | Probe | StateTree 的 `Cat Fishing Enter Phase` 节点 |
 | TrueBiteWindow | `Cat Fishing Open True Bite Window` 节点打开通用响应窗；此时没有鱼 Actor |
 | HookedFight | 真咬窗内收到左键后，`RequestHook` 才选鱼、生成 Actor、扣饵并 EnterPhase |
-| ExhaustedReel | 鱼体力耗尽事件驱动 StateTree 进入；保留当前位置，同一 Runner 仅在持续左键时按双端约束收近，且不再扣猫体力 |
+| ExhaustedReel | 鱼体力耗尽或被猫端牵引越岸后由事件驱动 StateTree 进入；同一 Runner 继续按双端约束收近，水内贴水面、越岸后逐步贴地，且不再扣猫体力 |
 | Resolved / Terminated | `FinalizeSession()`，**StateTree 禁止进入** |
 
 ### 2.3 节点说明
@@ -387,7 +387,7 @@ Event BeginPlay
 | 9 | 持续按住左键收线 | Snapshot 里 `NormalizedFishStamina` 下降 |
 | 10 | 鱼被收到面前（**搏斗中就可以**） | debug 里鱼身上的圈从红变绿 = 现在按 F 抄得到 |
 | 11 | 对着鱼按 F | 不论鱼剩余体力，范围合法即直接变成嘴叼世界鱼；失败按同一 `RequestId` 查看 `scoop_target_* → scoop_rejected → fishing_scoop_terminal → fishing_command_result` |
-| 12 | 或者等鱼翻肚 | `Phase=ExhaustedReel`；仍可按 F 抄，也可继续按住左键把鱼拖上岸 |
+| 12 | 或者等鱼翻肚，或用绷紧鱼线把鱼拖过岸线 | `Phase=ExhaustedReel`；日志出现 `fishing_fish_exhausted Cause=StaminaDepleted/ShoreLanding`，仍可按 F 抄，也可继续按住左键把鱼干沿地面拖近 |
 | 13 | 鱼落到岸上后准星对准并按 E | 服务器只允许一个玩家成功叼起；随后再对具体地面鱼护按 E 才入箱 |
 
 鱼生成时的大小由服务器随机重量决定：每个 `FishPresentation_*` 用自己的 `MeshReferenceWeightKilograms` 定义
