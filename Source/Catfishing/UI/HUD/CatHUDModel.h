@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "TimerManager.h"
 #include "UI/HUD/CatHUDWidget.h"
 #include "UObject/Object.h"
 #include "CatHUDModel.generated.h"
@@ -9,6 +10,7 @@ class APlayerController;
 class ACatCharacter;
 class ACatFishingSession;
 class ACatfishingGameState;
+class UWorld;
 class UAbilitySystemComponent;
 class UCatConditionComponent;
 class UCatFishingCommandComponent;
@@ -42,6 +44,10 @@ public:
 	/** HUD 投影变化通知；Bind、Refresh、属性变化和 Fishing 结果都会触发。 */
 	FCatHUDModelChanged OnViewStateChanged;
 
+protected:
+	/** UObject 销毁兜底；即使外部没有显式 Unbind，也会收掉 Run 订阅和本地等待 Timer。 */
+	virtual void BeginDestroy() override;
+
 private:
 	/** ASC 属性变化入口；忽略单项载荷后重读完整 HUD 事实。 */
 	void HandleAttributeChanged(const FOnAttributeChangeData& ChangeData);
@@ -51,6 +57,21 @@ private:
 
 	/** Growth 快照变化入口；重读完整 HUD 投影。 */
 	void HandleGrowthChanged();
+
+	/** Run GameState 绑定调和入口；客户端 GameState 迟到时会在本地补订阅，但不会创建或推进任何 Run 状态。 */
+	bool RefreshRunGameStateBinding();
+
+	/** Run GameState 解绑入口；移除当前快照通知并停掉等待 GameState 的本地重试。 */
+	void ClearRunGameStateBinding();
+
+	/** Run GameState 等待入口；只在 HUD 已绑定玩家但本机还没有 GameState 时短间隔重试，补上订阅后立即停止。 */
+	void ScheduleRunGameStateBindingRetry();
+
+	/** Run GameState 等待收口入口；World 切换、解绑或订阅成功后清理本地 Timer。 */
+	void ClearRunGameStateBindingRetry();
+
+	/** Run GameState 重试 Tick；发现 GameState 后补订阅并刷新 HUD，否则保持等待。 */
+	void HandleRunGameStateBindingRetry();
 
 	/** Run 公开快照变化入口；重读天数和阶段相关 HUD 投影，避免客户端复制到达后界面继续显示旧天数。 */
 	void HandleRunPublicStateChanged();
@@ -118,6 +139,13 @@ private:
 
 	/** Run 公开快照变化解绑句柄。 */
 	FDelegateHandle RunPublicStateChangedHandle;
+
+	/** 等待客户端 GameState 出现的本地 Timer；它只保证 HUD 订阅接上线，不保存 Run 天数或阶段。 */
+	FTimerHandle RunGameStateBindingRetryTimerHandle;
+
+	/** 当前 GameState 等待 Timer 所属的 World；清理时用它回到创建 Timer 的 TimerManager，避免切图后清错 World。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UWorld> RunGameStateBindingRetryWorld;
 
 	/** FishingViewBridge 投影变化解绑句柄。 */
 	FDelegateHandle FishingViewChangedHandle;

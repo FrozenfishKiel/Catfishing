@@ -1409,7 +1409,7 @@ void ACatfishingGameModeBase::SubmitNaturalChumFieldIfConfigured()
 		Result.ChumFieldSetRevision);
 }
 
-// StateTree 事件提交流程：先验证组件正在运行与 Tag 有效，再保存一份不改变 Phase 的结构化结果并发送事件；资产负责消费 Tag 和选择目标边。
+// StateTree 事件提交流程：先验证组件正在运行与 Tag 有效，再保存一份不改变 Phase 的结构化结果并发送事件；最后写一条默认可见日志，让房主端能核对“事件已入队”和后续“阶段已进入”是否成对出现。
 bool ACatfishingGameModeBase::SendRunStateTreeEvent(const FGameplayTag EventTag, const ECatRunTransitionReason Reason)
 {
 	if (!EventTag.IsValid() || !RunStateTreeComponent || !RunStateTreeComponent->IsRunning())
@@ -1429,6 +1429,10 @@ bool ACatfishingGameModeBase::SendRunStateTreeEvent(const FGameplayTag EventTag,
 	LastRunFlowResult.Error = ECatRunCommandError::None;
 	LastRunFlowResult.Revision = RunPublicState.Revision;
 	RunStateTreeComponent->SendStateTreeEvent(EventTag, FConstStructView(), FName(TEXT("CatRun")));
+	UE_LOG(LogCatRun, Display, TEXT("Event=run_state_tree_event_sent RunId=%s Revision=%lld Day=%d Phase=%s EventTag=%s Reason=%s"),
+		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
+		RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(RunPublicState.Phase.Phase),
+		*EventTag.ToString(), *UEnum::GetValueAsString(Reason));
 	return true;
 }
 
@@ -1839,7 +1843,7 @@ UCatChumFieldReplicationComponent* ACatfishingGameState::GetChumFieldReplication
 void ACatfishingGameState::OnRep_RunPublicState()
 {
 	OnRunPublicStateChanged.Broadcast();
-	UE_LOG(LogCatRun, Verbose, TEXT("Event=run_snapshot_received RunId=%s Revision=%lld Phase=%s Day=%d"),
+	UE_LOG(LogCatRun, Log, TEXT("Event=run_snapshot_received RunId=%s Revision=%lld Phase=%s Day=%d"),
 		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
 		*UEnum::GetValueAsString(RunPublicState.Phase.Phase), RunPublicState.Phase.DayIndex);
 }

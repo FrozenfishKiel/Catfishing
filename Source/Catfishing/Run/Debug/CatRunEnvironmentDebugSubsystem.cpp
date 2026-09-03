@@ -356,7 +356,7 @@ namespace
 		}
 	}
 
-	// 健康判断流程：只用公开状态和可选服务器私有快照做诊断文本，不修复、不推进、不隐藏异常；没有服务器快照时只能评价公开复制态。
+	// 健康判断流程：只用公开状态和可选服务器私有快照做诊断文本，不修复、不推进、不隐藏异常；同时把失败结算夜、全员 ready 后等待推进等常见测试误读翻成人话。
 	FString BuildRunEnvironmentHealthText(const FCatRunPublicState& RunState,
 		const FCatRunAuthorityDebugSnapshot* AuthoritySnapshot)
 	{
@@ -375,11 +375,24 @@ namespace
 		{
 			return TEXT("异常：白天阶段缺少有效截止时间，时间段无法继续计算。");
 		}
+		if (RunState.Phase.Phase == ECatRunPhase::FailureSettlementNight)
+		{
+			return TEXT("当前是失败结算夜：本局已经因额度失败进入结算，跳到下一天不会再生效；要继续测下一天，需要重新开始一局，完成结算只会进入收口。");
+		}
+		if (RunState.Phase.Phase == ECatRunPhase::SuccessSettlementNight)
+		{
+			return TEXT("当前是成功结算夜：本局已经到达成功收口阶段，跳到下一天不会再进入普通白天。");
+		}
 		if (AuthoritySnapshot)
 		{
 			if (!AuthoritySnapshot->bRunStateTreeAssigned || !AuthoritySnapshot->bRunStateTreeRunning)
 			{
 				return TEXT("异常：服务器 StateTree 未配置或未运行，阶段事件无法被消费。");
+			}
+			if (RunState.Phase.Phase == ECatRunPhase::NormalNight
+				&& AuthoritySnapshot->bAllEligibleReadyEventSent)
+			{
+				return TEXT("等待 StateTree 推进：全员 ready 事件已发出，但公开阶段还在普通夜晚；如果持续不变，说明事件没有进入下一天分支。");
 			}
 			if (!AuthoritySnapshot->bRunCommandsOpen
 				&& RunState.Phase.Phase != ECatRunPhase::Ending && RunState.Phase.Phase != ECatRunPhase::Ended)
@@ -554,8 +567,11 @@ namespace
 		}
 
 		const FString HealthText = BuildRunEnvironmentHealthText(RunState, AuthoritySnapshotPtr);
+		const bool bHealthNeedsAttention = HealthText.StartsWith(TEXT("异常"))
+			|| HealthText.StartsWith(TEXT("等待"))
+			|| HealthText.StartsWith(TEXT("当前是"));
 		Lines.Add({ FString::Printf(TEXT("健康判断：%s"), *HealthText),
-			HealthText.StartsWith(TEXT("异常")) ? WarningColor : FLinearColor(0.52f, 1.0f, 0.52f, 1.0f) });
+			bHealthNeedsAttention ? WarningColor : FLinearColor(0.52f, 1.0f, 0.52f, 1.0f) });
 		return Lines;
 	}
 
