@@ -111,9 +111,11 @@ StateTree（`ST_FishingSession`）保持薄编排。其中 `FishExhausted` 是 `
 
 当前模型由鱼的游速候选、已放线长约束、力量差分配和玩法裁决组成，尚未完成鱼、线、杆、猫共同反力驱动的物理系统。鱼/猫质量与力量来源、收线公式、体力和断线条件只维护在 [实现导读](FishFightImplementationGuide_zh-CN.md)，避免在多个入口复制不同版本的公式。
 
-主猫持竿时，PlayerController 在每帧视角旋转完成后把猫身水平朝向同步到 `ControlRotation.Yaw`，并临时关闭面向移动/ControllerDesiredRotation 两条覆盖通道。猫身和移动基准共用控制 Yaw，向后输入不会让猫掉头；离竿或换 Pawn 时恢复角色原有转向配置。是否持竿仍只读鱼竿 `HolderPlayerState`，Controller 不保存平行业务状态。
+主猫持竿等鱼时，猫身与移动基准使用 `ControlRotation.Yaw`。提竿成功进入搏斗后，本人切换到第一人称持杆视角：`UCatFishingCameraComponent` 从实际握把读取镜头位置和朝向，身体与移动也使用实际杆 Yaw。角力使杆自然停转时，镜头同步停转；鼠标仍提供施力意图，回转或卸力后杆与镜头一起恢复。组件不关闭 Look 输入，也不反写杆姿态。协作者和旁观者保留原镜头；搏斗结束、离杆、断杆、失去占有或切换观战目标后恢复原相机与本人身体可见性。持杆查询仍只读权威 Registry 或复制的操作位，原 Controller 私有重复查询已移到该组件共用。
 
-搏斗中的实际杆姿态独立于镜头意图，由 `FCatFishingRodResistanceModel::StepRotation` 按有阻尼的净转矩积分。猫朝请求视角施加不超过当前力量的转矩，接近目标时连续减小；鱼线施加 `cross(杆方向, 牵引方向) × 鱼力量 × LineLoad × Tension × 玩法杆长` 的有向回复转矩。净转矩抵消时自然停转；回看、改变鱼力、猫力或线方向后每帧重新求解，不存在硬角度锁或解锁状态，也不使用原来的全方向零速倍率。保持原有身体俯仰范围与最大角速度；响应时间控制阻尼，1/120 秒亚步降低帧率差异。服务器复制实际 Actor 姿态，Development 日志 `fishing_rod_rotation_resistance_sample` 记录请求/实际朝向、角速度、净转矩与仅用于观察的 `TorqueBalanced`；`fishing_constraint_sample` 记录最大鱼转矩。
+镜头偏移与 FOV 在 `Catfishing Fishing Presentation` 的 `Camera` 分类配置；默认镜头位于握把后方 35cm、左侧 16cm、上方 16cm，让杆位于画面右下。握把标定随 Rod 初始复制发送，客户端组合该标定与服务器复制的实际 Actor 姿态，不用未初始化的本地握把。`LogCatFishing` 的 `fishing_fight_camera` 记录进入、每秒一次的实际/请求朝向和恢复，`fishing_rod_grip_received` 记录客户端收到的标定；用 `RodActorId` 与角力日志交叉检索。
+
+搏斗中的实际杆姿态独立于控制器施力意图，由 `FCatFishingRodResistanceModel::StepRotation` 按有阻尼的净转矩积分。猫朝请求方向施加不超过当前力量的转矩，接近目标时连续减小；鱼线施加 `cross(杆方向, 牵引方向) × 鱼力量 × LineLoad × Tension × 玩法杆长` 的有向回复转矩。净转矩抵消时自然停转；回看、改变鱼力、猫力或线方向后每帧重新求解，不存在硬角度锁或解锁状态，也不使用原来的全方向零速倍率。保持原有身体俯仰范围与最大角速度；响应时间控制阻尼，1/120 秒亚步降低帧率差异。服务器复制实际 Actor 姿态，Development 日志 `fishing_rod_rotation_resistance_sample` 记录请求/实际朝向、角速度、净转矩与仅用于观察的 `TorqueBalanced`；`fishing_constraint_sample` 记录最大鱼转矩。
 `FCatFishSteeringModel` 用独立服务器随机流产生平滑目标游向；相同种子与固定步长得到相同方向序列，客户端不自行随机。
 
 鱼自己的高层行为由 Encounter 上的 `ST_FishFight` 控制：默认在 `StrugglingOutward` 与 `CalmOrInward` 两个状态间循环。StateTree Task 只把意图和持续时间交给 Runner，不写 Transform、不扣体力，也不直接修改鱼线。未来增加“低体力蓄力冲刺”时，可以在树上增加状态和条件，同时仍复用同一套服务器模拟器。

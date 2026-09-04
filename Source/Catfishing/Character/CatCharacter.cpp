@@ -15,6 +15,7 @@
 #include "Logging/CatLog.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
+#include "Fishing/Presentation/CatFishingCameraComponent.h"
 #include "Social/CatSocialService.h"
 
 // 构造流程：一次创建 Character-owned ASC/AttributeSet、离散身体状态、吃鱼成长和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
@@ -28,6 +29,15 @@ ACatCharacter::ACatCharacter()
 	ConditionComponent = CreateDefaultSubobject<UCatConditionComponent>(TEXT("ConditionComponent"));
 	GrowthComponent = CreateDefaultSubobject<UCatGrowthComponent>(TEXT("GrowthComponent"));
 	EquipmentComponent = CreateDefaultSubobject<UCatEquipmentComponent>(TEXT("EquipmentComponent"));
+	FishingCameraComponent = CreateDefaultSubobject<UCatFishingCameraComponent>(TEXT("FishingCameraComponent"));
+}
+
+void ACatCharacter::CalcCamera(const float DeltaTime, FMinimalViewInfo& OutResult)
+{
+	if (!FishingCameraComponent->TryGetCameraView(OutResult))
+	{
+		Super::CalcCamera(DeltaTime, OutResult);
+	}
 }
 
 // ASC 查询流程：直接返回构造期唯一组件；不通过 Controller、PlayerState 或全局管理器寻找第二份身体能力真相。

@@ -248,7 +248,7 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 	Controller->StartJump();
 	TestFalse(TEXT("持竿期间的跳跃输入不会留下起跳意图"), Character->bPressedJump);
 
-	// 真实 Rod 使用同一有向转矩求解；镜头不受限制，力平衡后回看仍可连续回正。
+	// 真实 Rod 使用同一有向转矩求解；控制器保留施力意图，第一人称镜头另读实际杆姿态。
 	Controller->SetControlRotation(FRotator::ZeroRotator);
 	TestTrue(TEXT("初始化实际鱼竿朝向"), Rod->RefreshHeldTransformFromAuthority());
 	TestTrue(TEXT("发布有负载旋转约束"), Rod->SetCarrierConstraintFromAuthority(
@@ -256,7 +256,7 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 	Controller->SetControlRotation(FRotator(0.0, 120.0, 0.0));
 	for (int32 Index = 0; Index < 180; ++Index) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
 	TestEqual(TEXT("实际鱼竿自然停在受力平衡附近"), Rod->GetGripWorldTransform().Rotator().Yaw, 30.0, 0.1);
-	TestEqual(TEXT("视角可以越过鱼竿平衡角"), Controller->GetControlRotation().Yaw, 120.0);
+	TestEqual(TEXT("施力意图可以越过鱼竿平衡角"), Controller->GetControlRotation().Yaw, 120.0);
 	// 猫端没有牵引速度时 bActive=false，但鱼竿的阻力历史必须跨固定步保持。
 	TestFalse(TEXT("转矩与猫端移动 Active 独立"), Rod->GetCarrierConstraintState().bActive);
 	TestTrue(TEXT("鱼线松弛只发布零目标，不清空鱼竿插值历史"), Rod->SetCarrierConstraintFromAuthority(

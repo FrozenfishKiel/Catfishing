@@ -717,7 +717,7 @@ public:
 protected:
 	/** 为本地 Controller 安装玩法输入层，并在可用时把 durable Profile 装备解锁投影给服务器；服务端远端 Controller 不接触本地输入或 Profile 子系统。 */
 	virtual void BeginPlay() override;
-	/** Controller 应用本帧视角输入后，让正在持竿的猫以同一个水平朝向跟随。 */
+	/** 应用施力意图后，让持竿猫跟随可见朝向；搏斗时为实际杆朝向。 */
 	virtual void UpdateRotation(float DeltaTime) override;
 	/** 绑定 Move、Look、Jump、Sprint Enhanced Input Action，并保留父类输入初始化。 */
 	virtual void SetupInputComponent() override;
@@ -765,6 +765,7 @@ protected:
 private:
 	friend class UCatFishingCommandComponent;
 	friend class FCatFishingHeldFacingFollowsControlRotationTest;
+	friend class FCatFishingFirstPersonCameraTest;
 
 	/** 幂等安装当前配置的玩法 Mapping Context；BeginPlay/输入初始化均可安全调用。 */
 	void ApplyInputMappingContext();
@@ -772,7 +773,7 @@ private:
 	void PublishProfileEquipmentUnlocksIfAvailable();
 	/** 移除本 Controller 安装的玩法 Mapping Context，并清空弱绑定记录。 */
 	void RemoveInputMappingContext();
-	/** 按 Controller 的水平朝向把二维输入转成当前 Pawn 的前后/左右移动。 */
+	/** 按当前可见的水平朝向把二维输入转成 Pawn 移动；搏斗时使用实际杆朝向。 */
 	void Move(const FInputActionValue& Value);
 	/** 把二维输入写入 Controller 的 Yaw/Pitch。 */
 	void Look(const FInputActionValue& Value);

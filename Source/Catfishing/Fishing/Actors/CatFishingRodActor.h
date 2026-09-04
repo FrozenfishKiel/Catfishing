@@ -147,6 +147,8 @@ private:
 	void OnRep_PresentationState(const FCatFishingRodPresentationState& Previous);
 	UFUNCTION()
 	void OnRep_CarrierConstraintState();
+	UFUNCTION()
+	void OnRep_GripCanonicalLocalTransform();
 	/** 分发表现变化或延迟到 BeginPlay 后再分发；保证蓝图事件只在组件可用时触发。 */
 	void QueueOrDispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	/** 立即应用皮肤、隐藏状态和蓝图通知；服务器与客户端各自在本地执行这一层表现副作用。 */
@@ -180,7 +182,8 @@ private:
 	FTransform RodTipCanonicalLocalTransform = FTransform::Identity;
 	/** 操作基准位权威本地 Transform；多人站位和交互锚点都从它计算。 */
 	FTransform StandCanonicalLocalTransform = FTransform::Identity;
-	/** 握持点权威本地 Transform；手部对齐读取它而不是直接信任组件当前值。 */
+	/** 不变握把标定随初始复制发送；客户端相机必须组合它与实际 Actor 姿态。 */
+	UPROPERTY(ReplicatedUsing=OnRep_GripCanonicalLocalTransform)
 	FTransform GripCanonicalLocalTransform = FTransform::Identity;
 	FVector AuthoritativeRodTipVelocity = FVector::ZeroVector;
 	FVector AuthoritativeHolderVelocity = FVector::ZeroVector;

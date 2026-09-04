@@ -61,9 +61,20 @@ void ACatFishingRodActor::Tick(const float DeltaSeconds)
 void ACatFishingRodActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	// 只复制这一个聚合结构体；所有客户端可见状态都收敛到 PresentationState，减少复制条目
+	// 离散身份/姿态、连续约束和不变握把标定各自复制，不从客户端视觉组件推导玩法锚点。
 	DOREPLIFETIME(ThisClass, PresentationState);
 	DOREPLIFETIME(ThisClass, CarrierConstraintState);
+	DOREPLIFETIME_CONDITION(ThisClass, GripCanonicalLocalTransform, COND_InitialOnly);
+}
+
+void ACatFishingRodActor::OnRep_GripCanonicalLocalTransform()
+{
+	GripAnchor->SetRelativeTransform(GripCanonicalLocalTransform);
+	UE_LOG(LogCatFishing, Display,
+		TEXT("Event=fishing_rod_grip_received Rod=%s RodActorId=%s GripLocation=%s GripRotation=%s World=%s NetMode=%d Authority=false LocalRole=%d"),
+		*GetName(), *PresentationState.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
+		*GripCanonicalLocalTransform.GetLocation().ToCompactString(), *GripCanonicalLocalTransform.Rotator().ToCompactString(),
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()));
 }
 
 bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActorId, const FGuid InItemInstanceId,

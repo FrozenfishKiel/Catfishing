@@ -16,6 +16,12 @@ class CATFISHING_API UCatFishingPresentationSettings : public UDeveloperSettings
 	GENERATED_BODY()
 
 public:
+	/** 第一人称镜头相对实际握把的偏移：后方、左侧、上方，使杆落在画面右下。 */
+	UPROPERTY(Config, EditAnywhere, Category="Camera", meta=(Units="cm"))
+	FVector FightCameraGripOffsetCentimeters = FVector(-35.0, -16.0, 16.0);
+	UPROPERTY(Config, EditAnywhere, Category="Camera", meta=(ClampMin="30", ClampMax="140", Units="deg"))
+	float FightCameraFieldOfView = 90.0f;
+
 	const UCatRodSkinDefinition* FindRuntimeRodSkin(FName RodSkinDefinitionId, FName RodDefinitionId) const;
 	/** 抛竿后生成的浮漂/鱼钩表现 Actor 类；它属于 Fishing 表现链，不代表某个库存物品实例。 */
 	UPROPERTY(Config, EditAnywhere) TSoftClassPtr<ACatFishingHookActor> HookActorClass;
