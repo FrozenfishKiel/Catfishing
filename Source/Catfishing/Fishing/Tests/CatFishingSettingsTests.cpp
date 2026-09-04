@@ -4,6 +4,8 @@
 
 #include "Animation/AnimSequenceBase.h"
 #include "Engine/SkeletalMesh.h"
+#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Config/CatFishingFightBalanceDefinition.h"
 #include "Fishing/Presentation/CatFishAnimInstance.h"
@@ -62,6 +64,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Fishing.Assets.FormalFightBalancePreservesAcceptedBaseline",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatStarterRodLineDurabilityBaselineTest,
+	"Catfishing.Unit.Fishing.Assets.StarterRodPreservesSessionLineDurabilityBaseline",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
 bool FCatFormalFishingFightBalanceAssetTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -80,6 +87,19 @@ bool FCatFormalFishingFightBalanceAssetTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("猫鱼做功体力价格保持一致"),
 		Balance->FishStaminaCostPerStrengthCentimeter,
 		Balance->CatStaminaCostPerStrengthCentimeter);
+	return !HasAnyErrors();
+}
+
+bool FCatStarterRodLineDurabilityBaselineTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
+	const UCatEquipmentDefinition* StarterRod = EquipmentSettings
+		? EquipmentSettings->FindRuntimeDefinition(TEXT("StarterRodT1")) : nullptr;
+	if (!TestNotNull(TEXT("正式装备目录可加载初级鱼竿"), StarterRod)) return false;
+	TestEqual(TEXT("初级鱼竿定义 ID 稳定"), StarterRod->EquipmentDefinitionId,
+		FName(TEXT("StarterRodT1")));
+	TestEqual(TEXT("初级鱼线保留每场 150 点耐久基线"), StarterRod->MaximumRodDurability, 150.0);
 	return !HasAnyErrors();
 }
 

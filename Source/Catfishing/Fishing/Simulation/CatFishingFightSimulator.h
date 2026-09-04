@@ -127,6 +127,8 @@ struct CATFISHING_API FCatFightStepResult
 	bool bLineTaut = false;
 	double LineLengthCentimeters = 0.0;
 	double AbsoluteRodWear = 0.0;
+	/** 本固定步新增的会话鱼线磨损；保留 AbsoluteRodWear 旧字段名只为兼容现有调用。 */
+	double LineWearDelta = 0.0;
 	FVector ProposedFishWorldPosition = FVector::ZeroVector;
 	double FishLineAlignment = 0.0;
 	double NormalizedLineLoad = 0.0;

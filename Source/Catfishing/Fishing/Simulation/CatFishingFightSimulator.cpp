@@ -306,13 +306,17 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const double FishLineForce = ActiveFishStrength * OutwardLoad;
 	const double CatLineForce = bReeling ? EffectiveCatStrength : 0.0;
 	const double LineForceDemand = FMath::Max(FishLineForce, CatLineForce) * NormalizedTension;
-	const double WearLoad = FMath::Max(OutwardLoad, NormalizedTension);
+	// LineLoad 是鱼主动沿线向外施力的投影，也是鱼线磨损的唯一方向负载。
+	// Tension 只说明几何约束已经介入，不能在鱼回头或横游时替代 LineLoad，
+	// 否则猫端收线制造的张力会让低负载帧继续按满负载磨线。
+	const double WearLoad = OutwardLoad;
 	// 鱼力竭后的收尾只保留线长约束和拖拽位移；死鱼不再施力，
 	// 猫的收线力也不能独自制造鱼线磨损，否则拉鱼干仍会把会话判为断线。
 	const double RodWearDelta = !State.bFishExhausted && bLineRestraining
 		? (FMath::Max(FishLineForce, CatLineForce) * Config.StalemateRodWearPerFishStrength
 			+ (bStruggling ? Config.StruggleHoldRodWearPerSecond : 0.0))
 			* WearLoad * Dt * Config.TautRodWearMultiplier : 0.0;
+	Result.LineWearDelta = RodWearDelta;
 	Result.AbsoluteRodWear = State.AbsoluteRodWear + RodWearDelta;
 
 	Result.CarrierConstraintCorrectionCentimeters = CarrierCorrection;

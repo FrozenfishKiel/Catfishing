@@ -318,7 +318,7 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 	{
 		RodDefinitionId = SessionSnapshot->RodActor->GetPresentationState().RodDefinitionId;
 	}
-	FString RodLine = TEXT("ROD   Durability --  Strength --");
+	FString RodLine = TEXT("LINE  SessionDurability --  ROD Strength --");
 	if (const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
 		RodDefinitionId))
 	{
@@ -335,8 +335,11 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 		{
 			CurrentDurability = Loadout->RodDurability;
 		}
-		RodLine = FString::Printf(TEXT("ROD   Durability %.1f / %.1f  Strength %.1f"),
-			CurrentDurability, RodDefinition->MaximumRodDurability, RodDefinition->FishingStrength);
+		RodLine = bUsesSessionDurability
+			? FString::Printf(TEXT("LINE  SessionDurability %.1f / %.1f  ROD Strength %.1f"),
+				CurrentDurability, RodDefinition->MaximumRodDurability, RodDefinition->FishingStrength)
+			: FString::Printf(TEXT("ROD   EquipmentDurability %.1f / %.1f  Strength %.1f  LINE --"),
+				CurrentDurability, RodDefinition->MaximumRodDurability, RodDefinition->FishingStrength);
 	}
 
 	FString CatLine = TEXT("CAT   Stamina --  Strength --");

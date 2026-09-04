@@ -64,8 +64,8 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Consumption")
 	bool bSpecialBait = false;
 
-	/** Rod 的最大耐久；非 Rod 必须为 0，具体损耗公式不在定义里。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0"))
+	/** 兼容旧资产字段名：Fishing 会把它作为每场重置的鱼线耐久上限；不会写坏装备鱼竿。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0", DisplayName = "本场鱼线耐久上限"))
 	double MaximumRodDurability = 0.0;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0"))
@@ -78,10 +78,10 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "1.0", Units = "cm"))
 	double RodPhysicsLengthCentimeters = 200.0;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0"))
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0", DisplayName = "鱼线基础磨损每秒"))
 	double BaseDurabilityWearPerSecond = 0.0;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0"))
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0", DisplayName = "绷线磨损倍率"))
 	double HighTensionWearMultiplier = 0.0;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod")

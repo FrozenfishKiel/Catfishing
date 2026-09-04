@@ -1462,7 +1462,7 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 		}
 		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fishing_line_broken SessionId=%s FishDefinition=%s Cause=%s RemainingLineDurability=%.2f "
-				"AccumulatedLineWear=%.2f LineLoad=%.3f Alignment=%.3f StrongConfrontation=%s "
+				"AccumulatedLineWear=%.2f LastLineWearDelta=%.3f Tension=%.3f LineLoad=%.3f Alignment=%.3f StrongConfrontation=%s "
 				"RodLeverage=%.3f CarrierMovementAlpha=%.3f CarrierPullAcceleration=%.2f RodPose=%s "
 				"FishLocation=%s Rod=%s RodTip=%s Hook=%s %s"),
 			*Snapshot.FishingSessionId.ToString(),
@@ -1470,6 +1470,8 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 			LineBreakCause,
 			Snapshot.RodDurabilityRemaining,
 			Step.AbsoluteRodWear,
+			Step.LineWearDelta,
+			Step.NormalizedTension,
 			Step.NormalizedLineLoad,
 			Step.FishLineAlignment,
 			Step.bStrongConfrontation ? TEXT("true") : TEXT("false"),

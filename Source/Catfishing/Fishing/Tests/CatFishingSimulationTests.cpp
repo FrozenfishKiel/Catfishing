@@ -341,6 +341,68 @@ bool FCatFishingIsometricWorkTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingInwardReelLineWearTest,
+	"Catfishing.Unit.Fishing.Simulation.TensionWithoutOutwardFishLoadCannotWearLine",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingInwardReelLineWearTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFightSimulationConfig Config = MakeConfig();
+	Config.StalemateRodWearPerFishStrength = 0.1;
+	Config.StruggleHoldRodWearPerSecond = 1.0;
+	Config.TautRodWearMultiplier = 2.0;
+	Config.RodDurability = 1.0;
+	FCatFightSimulationState State = MakeState(ECatFightCatAction::Pull);
+	State.AbsoluteRodWear = 0.99;
+	State.MotionIntent = ECatFishMotionIntent::CalmOrInward;
+	const FCatFightStepResult Step = FCatFishingFightSimulator::Step(
+		Config, State, MakeHeldConstraint(), -FVector::ForwardVector);
+	TestTrue(TEXT("inward reel still creates a real geometric constraint"),
+		Step.bSucceeded && Step.NormalizedTension > 0.0);
+	TestEqual(TEXT("inward fish direction has no outward line load"),
+		Step.NormalizedLineLoad, 0.0, 1e-9);
+	TestEqual(TEXT("tension alone cannot add session line wear"), Step.LineWearDelta, 0.0, 1e-9);
+	TestEqual(TEXT("session line durability is unchanged without outward fish load"),
+		Step.AbsoluteRodWear, State.AbsoluteRodWear, 1e-9);
+	TestEqual(TEXT("inward reeling cannot break a nearly worn line"),
+		Step.Outcome, ECatFightStepOutcome::None);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingDirectionalLineWearTest,
+	"Catfishing.Unit.Fishing.Simulation.LowOutwardLoadScalesWearAndFullLoadCanStillBreakLine",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingDirectionalLineWearTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFightSimulationConfig Config = MakeConfig();
+	Config.StalemateRodWearPerFishStrength = 0.1;
+	Config.StruggleHoldRodWearPerSecond = 1.0;
+	Config.TautRodWearMultiplier = 2.0;
+	Config.RodDurability = 1.0;
+	const FCatFightSimulationState State = MakeState(ECatFightCatAction::Pull);
+	const FVector MostlySideways(0.05, FMath::Sqrt(1.0 - 0.05 * 0.05), 0.0);
+	const FCatFightStepResult LowLoad = FCatFishingFightSimulator::Step(
+		Config, State, MakeHeldConstraint(), MostlySideways);
+	const FCatFightStepResult FullLoad = FCatFishingFightSimulator::Step(
+		Config, State, MakeHeldConstraint(), FVector::ForwardVector);
+	TestTrue(TEXT("both line load cases solve"), LowLoad.bSucceeded && FullLoad.bSucceeded);
+	TestTrue(TEXT("reeling tension is higher than the low outward fish load"),
+		LowLoad.NormalizedTension > LowLoad.NormalizedLineLoad);
+	TestTrue(TEXT("low outward load still causes small positive wear"), LowLoad.LineWearDelta > 0.0);
+	TestEqual(TEXT("wear scales continuously by the outward projection"),
+		LowLoad.LineWearDelta, FullLoad.LineWearDelta * LowLoad.NormalizedLineLoad, 1e-9);
+	TestEqual(TEXT("low load preserves the session despite reeling tension"),
+		LowLoad.Outcome, ECatFightStepOutcome::None);
+	TestEqual(TEXT("full load can still deplete real line durability"),
+		FullLoad.LineBreakCause, ECatFightLineBreakCause::DurabilityDepleted);
+	TestEqual(TEXT("real durability depletion still breaks the line"),
+		FullLoad.Outcome, ECatFightStepOutcome::LineBroken);
+	return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingStrengthNormalizedStaminaTest,
 	"Catfishing.Unit.Fishing.Simulation.FishStrengthChangesMotionNotStaminaCostForSameLineEffort",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
