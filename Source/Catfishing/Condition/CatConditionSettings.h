@@ -29,10 +29,10 @@ public:
 	double WetWaterDepthCentimeters = 1.0;
 	/** 脚点达到该浸没深度并持续确认后，Condition 发布 Dangerous。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Water", meta = (ClampMin = "0.0", Units = "cm"))
-	double DangerousWaterDepthCentimeters = 45.0;
+	double DangerousWaterDepthCentimeters = 35.0;
 	/** 已危险后退回该深度以下才退出，避免水面抖动反复切换。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Water", meta = (ClampMin = "0.0", Units = "cm"))
-	double DangerousWaterExitDepthCentimeters = 35.0;
+	double DangerousWaterExitDepthCentimeters = 25.0;
 	UPROPERTY(Config, EditAnywhere, Category = "Water", meta = (ClampMin = "0.0", Units = "s"))
 	double DangerousWaterConfirmationSeconds = 0.2;
 
