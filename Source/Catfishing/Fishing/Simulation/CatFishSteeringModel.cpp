@@ -165,8 +165,8 @@ bool FCatFishSteeringModel::RedirectFromWaterBoundary(const FCatFishSteeringConf
 	const FVector& WaterwardDirection, FRandomStream& Random, FCatFishSteeringState& InOutState)
 {
 	// [FishLogic 2/5：活鱼撞岸反馈]
-	// 水域查询会把越过岸线的候选点修正到“岸线 + 最小水内缩进”。若不反过来修正 Steering，
-	// 下一固定步仍会朝岸上走，再次落到同一点，看起来就像鱼被岸边吸住。
+	// 岸线求解只保留真实入水与沿岸位移，不把鱼瞬移到最近岸点或抛竿内缩点。
+	// 同时修正 Steering，避免下一固定步继续朝陆地游；岸外间隙也能逐步回到水域内。
 	if (!Config.IsValid() || !InOutState.bInitialized || !IsFiniteDirection(WaterwardDirection)
 		|| WaterwardDirection.IsNearlyZero())
 	{

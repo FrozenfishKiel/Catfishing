@@ -31,7 +31,7 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 	Geometry.RegionId = TEXT("SurfaceTraversalWater");
 	Geometry.WaterPointVerticalToleranceCm = 10.0;
 	Geometry.BankHeightToleranceCm = 20.0;
-	Geometry.BoundaryToleranceCm = 1.0;
+	Geometry.BoundaryToleranceCm = 2.0;
 	Geometry.MaxLandingCorrectionCm = 20.0;
 	Geometry.MinimumWaterInsetCm = 5.0;
 	FCatWaterPolygonBuildInput& Boundary = Geometry.Boundaries.AddDefaulted_GetRef();
@@ -191,6 +191,125 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		const auto DeadTow = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, Water, bJustBeached, Normal, Surface);
 		TestTrue(TEXT("already exhausted fish follows physical line endpoint movement onto shore"), DeadTow.bSucceeded && bJustBeached);
 	}
+
+	// 先用真实收线把活鱼拖进烘焙轮廓与碰撞岸坡的间隙，再放线连续游回湖内。
+	// 单次最近岸点查询成功不能证明可恢复：每步仍须保留鱼自己朝水里的小位移。
+	UCatFishingFightRunner* RecoveryRunner = NewObject<UCatFishingFightRunner>(Session);
+	RecoveryRunner->Session = Session;
+	RecoveryRunner->WaterRegion = Region->GetWaterRegionHandle();
+	RecoveryRunner->Config.FixedStepSeconds = 0.05;
+	RecoveryRunner->Config.PrimaryOperatorCatStrength = 50.0;
+	RecoveryRunner->Config.PrimaryOperatorMassKilograms = 5.0;
+	RecoveryRunner->Config.FishMassKilograms = 0.1;
+	RecoveryRunner->Config.FishStrength = 1.0;
+	RecoveryRunner->Config.RodStrength = 1000.0;
+	RecoveryRunner->Config.RodDurability = 1000.0;
+	RecoveryRunner->Config.MaximumLineLengthCentimeters = 1000.0;
+	RecoveryRunner->Config.CatStaminaMaximum = 100.0;
+	RecoveryRunner->Config.ReelSpeedCentimetersPerSecond = 160.0;
+	RecoveryRunner->Config.FishCalmSpeedCentimetersPerSecond = 25.0;
+	RecoveryRunner->Config.FishStruggleSpeedCentimetersPerSecond = 75.0;
+	if (!TestTrue(TEXT("gap recovery simulation parameters are valid"), RecoveryRunner->Config.IsValid())) return false;
+	RecoveryRunner->State.CatStamina = 100.0;
+	RecoveryRunner->State.FishStamina = 1000.0;
+	RecoveryRunner->State.CatAction = ECatFightCatAction::Pull;
+	RecoveryRunner->State.MotionIntent = ECatFishMotionIntent::CalmOrInward;
+	RecoveryRunner->State.FishWorldPosition = FVector(40.0, 0.0, 0.0);
+	FCatFightRodConstraintInput RecoveryRod;
+	RecoveryRod.RodTipWorldPosition = FVector(-450.0, 0.0, 150.0);
+	RecoveryRod.RodForwardWorld = FVector::ForwardVector;
+	RecoveryRod.bRodHeld = true;
+	RecoveryRunner->State.LineLengthCentimeters = FVector::Distance(
+		RecoveryRod.RodTipWorldPosition, RecoveryRunner->State.FishWorldPosition);
+	RecoveryRunner->SteeringRandom.Initialize(1459);
+	if (!TestTrue(TEXT("gap recovery has initialized runtime shore steering"),
+		FCatFishSteeringModel::Initialize(RecoveryRunner->SteeringConfig, FVector::ForwardVector,
+			RecoveryRunner->State.MotionIntent, 1.0, RecoveryRunner->SteeringRandom,
+			RecoveryRunner->SteeringState))) return false;
+
+	const auto AdvanceRecoveryStep = [&](const FVector& DesiredDirection, const bool bReturningToWater)
+	{
+		const FVector PreviousPosition = RecoveryRunner->State.FishWorldPosition;
+		const double PreviousLineLength = RecoveryRunner->State.LineLengthCentimeters;
+		FCatFightStepResult Step = FCatFishingFightSimulator::Step(RecoveryRunner->Config,
+			RecoveryRunner->State, RecoveryRod, DesiredDirection);
+		if (!TestTrue(TEXT("real simulator advances the live gap recovery"), Step.bSucceeded)) return false;
+		FCatWaterSpatialResult Water;
+		bool bJustBeached = false;
+		FVector Normal;
+		AActor* Surface = nullptr;
+		const auto Motion = RecoveryRunner->ResolveFishSurfaceFromAuthority(
+			Step, RecoveryRod, Water, bJustBeached, Normal, Surface);
+		if (!TestTrue(TEXT("real water query and runner resolve the gap recovery"), Motion.bSucceeded)) return false;
+		TestFalse(TEXT("gap recovery never grants dry-ground pickup eligibility"), RecoveryRunner->bFishBeached || bJustBeached);
+		TestTrue(TEXT("gap recovery does not force the live fish to exhaust"), Step.Outcome != ECatFightStepOutcome::FishExhausted);
+		TestEqual(TEXT("gap recovery remains at the actual water surface"), Motion.FishWorldPosition.Z, 0.0, 0.01);
+		if (bReturningToWater)
+		{
+			TestTrue(TEXT("each free-spool step makes actual progress back into the lake"),
+				Motion.FishWorldPosition.X > PreviousPosition.X + 0.01);
+			TestTrue(TEXT("runtime recovery never snaps from the gap to the shoreline"),
+				FVector::Dist2D(PreviousPosition, Motion.FishWorldPosition)
+					<= RecoveryRunner->Config.FishCalmSpeedCentimetersPerSecond
+						* RecoveryRunner->Config.FixedStepSeconds + 0.01);
+			TestEqual(TEXT("runtime free spool settles line length against the actual recovered fish position"),
+				Step.LineLengthCentimeters, FMath::Max(PreviousLineLength,
+					FVector::Distance(RecoveryRod.RodTipWorldPosition, Motion.FishWorldPosition)), 1e-6);
+		}
+		RecoveryRunner->State.FishWorldPosition = Motion.FishWorldPosition;
+		RecoveryRunner->State.LineLengthCentimeters = Step.LineLengthCentimeters;
+		RecoveryRunner->State.FishStamina = FMath::Max(0.0, RecoveryRunner->State.FishStamina - Step.FishStaminaDrain);
+		RecoveryRunner->State.CatStamina = FMath::Clamp(RecoveryRunner->State.CatStamina - Step.CatStaminaDrain,
+			0.0, RecoveryRunner->Config.CatStaminaMaximum);
+		RecoveryRunner->State.AbsoluteRodWear = Step.AbsoluteRodWear;
+		RecoveryRunner->State.StrongConfrontationBuildUpSeconds = Step.StrongConfrontationBuildUpSeconds;
+		return true;
+	};
+	for (int32 Index = 0; Index < 40 && RecoveryRunner->State.FishWorldPosition.X > -60.0; ++Index)
+	{
+		if (!AdvanceRecoveryStep(-FVector::ForwardVector, false)) return false;
+	}
+	if (!TestTrue(TEXT("actual reeling reaches the outline-to-ground gap before release"),
+		RecoveryRunner->State.FishWorldPosition.X <= -60.0
+			&& RecoveryRunner->State.FishWorldPosition.X > -90.0)) return false;
+	RecoveryRunner->State.CatAction = ECatFightCatAction::Slack;
+	int32 RecoverySteps = 0;
+	for (; RecoverySteps < 120 && RecoveryRunner->State.FishWorldPosition.X < 30.0; ++RecoverySteps)
+	{
+		if (!AdvanceRecoveryStep(FVector::ForwardVector, true)) return false;
+	}
+	TestTrue(TEXT("live fish returns beyond the shoreline band over multiple simulation steps"),
+		RecoveryRunner->State.FishWorldPosition.X >= 30.0 && RecoverySteps > 20);
+	const FCatWaterSpatialResult RecoveredWater = World->GetSubsystem<UCatWaterQuerySubsystem>()
+		->QueryShoreRelation(RecoveryRunner->State.FishWorldPosition, Region->GetWaterRegionHandle());
+	TestTrue(TEXT("the real water query confirms the recovered fish is inside the lake"),
+		RecoveredWater.bSucceeded && RecoveredWater.Containment == ECatWaterContainment::Inside);
+
+	// 岸线容差带会连续返回最近岸点。低速鱼必须累积小于旧 1 cm 阈值的游动，才能走出 2 cm 容差带。
+	RecoveryRunner->State.FishWorldPosition = FVector::ZeroVector;
+	RecoveryRunner->State.LineLengthCentimeters = 600.0;
+	RecoveryRunner->Config.FishCalmSpeedCentimetersPerSecond = 10.0;
+	const UCatWaterQuerySubsystem* RecoveryWater = World->GetSubsystem<UCatWaterQuerySubsystem>();
+	const auto InitialBoundary = RecoveryWater->QueryShoreRelation(
+		RecoveryRunner->State.FishWorldPosition, Region->GetWaterRegionHandle());
+	if (!TestTrue(TEXT("slow recovery starts on the real two-centimeter shoreline band"),
+		InitialBoundary.bSucceeded && InitialBoundary.Containment == ECatWaterContainment::Boundary)) return false;
+	int32 StepsWithinBoundaryBand = 0;
+	for (int32 Index = 0; Index < 8; ++Index)
+	{
+		if (!AdvanceRecoveryStep(FVector::ForwardVector, true)) return false;
+		TestEqual(TEXT("each slow runtime step preserves exactly half a centimeter of waterward swim"),
+			RecoveryRunner->State.FishWorldPosition.X, (Index + 1) * 0.5, 1e-6);
+		const auto SlowWater = RecoveryWater->QueryShoreRelation(
+			RecoveryRunner->State.FishWorldPosition, Region->GetWaterRegionHandle());
+		if (!TestTrue(TEXT("real water query remains valid during slow shore recovery"), SlowWater.bSucceeded)) return false;
+		if (SlowWater.Containment == ECatWaterContainment::Boundary) ++StepsWithinBoundaryBand;
+	}
+	TestEqual(TEXT("slow fish advances through four consecutive steps inside the shoreline tolerance"), StepsWithinBoundaryBand, 4);
+	const auto ClearedBoundary = RecoveryWater->QueryShoreRelation(
+		RecoveryRunner->State.FishWorldPosition, Region->GetWaterRegionHandle());
+	TestTrue(TEXT("half-centimeter swims accumulate until the real query classifies the fish inside water"),
+		ClearedBoundary.bSucceeded && ClearedBoundary.Containment == ECatWaterContainment::Inside);
 	return !HasAnyErrors();
 }
 

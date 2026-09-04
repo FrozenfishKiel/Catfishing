@@ -32,7 +32,6 @@ struct CATFISHING_API FCatFishShoreContactInput
 	bool bReeling = false;
 	/** 右键松开线杯；最终 L_paid 只能按岸线校正后的真实鱼距增长，不能按候选点凭空出线。 */
 	bool bSlacking = false;
-	double CorrectionToleranceCentimeters = 1.0;
 };
 
 struct CATFISHING_API FCatFishShoreContactResult
@@ -66,7 +65,8 @@ public:
 	static FCatFishMotionSolveResult ProjectInitialFishToWater(const FCatFishMotionSolveInput& Input);
 
 	/**
-	 * 活鱼撞岸时移除水域安全点造成的法向跳变，但保留本步沿岸切向位移，让下一步靠 Steering 平滑游离；
+	 * 活鱼撞岸时阻止向陆地的法向位移，保留本步实际入水和沿岸位移；岸外间隙中的鱼也能逐步游回。
+	 * 最近岸点仅提供边界投影，不能作为回水瞬移目标；合成步幅不超过本步原始候选位移。
 	 * 修正后的鱼位置仍截在本步双端求解允许的距离内；松开线杯时，最终线长只跟随岸线校正后的真实鱼距。
 	 */
 	static FCatFishShoreContactResult ResolveLiveFishShoreContact(

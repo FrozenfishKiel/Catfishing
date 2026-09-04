@@ -595,6 +595,7 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 	const bool bSurfaceTow = (State.bFishExhausted || bCatHaulingFish)
 		&& Step.Outcome != ECatFightStepOutcome::LineBroken && Step.Outcome != ECatFightStepOutcome::Escaped;
 	const bool bWasBeached = bFishBeached;
+	bool bShoreContactThisStep = false;
 	FVector GroundedPosition = FVector::ZeroVector;
 	const bool bGroundResolved = (bWasBeached || bSurfaceTow)
 		&& TryResolveGroundedFishPosition(Step.ProposedFishWorldPosition, GroundedPosition,
@@ -629,7 +630,7 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 	}
 	else
 	{
-		// 只有活鱼自己游向岸边/纯甩杆时才沿岸滑动；真实拖拽不经过这个防自游出水分支。
+		// 自游/纯甩杆只阻止继续向陆地，实际入水进度与沿岸滑动保留；真实拖拽不经过此分支。
 		FCatFishShoreContactInput ShoreInput;
 		ShoreInput.CurrentFishWorldPosition = State.FishWorldPosition;
 		ShoreInput.CandidateFishWorldPosition = Step.ProposedFishWorldPosition;
@@ -649,9 +650,46 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 		Motion.bSucceeded = true;
 		Motion.FishWorldPosition = ShoreContact.FishWorldPosition;
 		Step.LineLengthCentimeters = ShoreContact.LineLengthCentimeters;
-		if (ShoreContact.bShoreContact && !FCatFishSteeringModel::RedirectFromWaterBoundary(
-			SteeringConfig, OutWater.WaterwardDirection, SteeringRandom, SteeringState)) return FCatFishMotionSolveResult{};
+		bShoreContactThisStep = ShoreContact.bShoreContact;
+		if (bShoreContactThisStep && !FCatFishSteeringModel::RedirectFromWaterBoundary(
+			SteeringConfig, OutWater.WaterwardDirection, SteeringRandom, SteeringState))
+		{
+			UE_LOG(LogCatFishing, Error,
+				TEXT("Event=fishing_shore_recovery_rejected SessionId=%s FishActor=%s Waterward=%s "
+					"Result=InvalidSteering World=%s NetMode=%d Authority=true LocalRole=%d"),
+				*Session->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				*GetNameSafe(FishActor.Get()), *OutWater.WaterwardDirection.ToCompactString(),
+				*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(Session->GetLocalRole()));
+			return FCatFishMotionSolveResult{};
+		}
 	}
+
+	// 状态边沿必落盘，持续岸线接触最多每秒一次；记录实际进度以区分卡岸和鱼线牵制。
+	const double WorldSeconds = World->GetTimeSeconds();
+	if (bShoreContactThisStep != bLastShoreContactDiagnosticActive
+		|| (bShoreContactThisStep && WorldSeconds >= NextShoreContactDiagnosticWorldSeconds))
+	{
+		const FCatFightParticipantRuntime* Primary = FindPrimaryParticipant();
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_shore_recovery SessionId=%s FishActor=%s RodActor=%s PlayerState=%s RegionId=%s "
+				"Result=%s Containment=%s SignedShoreDistanceCm=%.3f Fish=%s Candidate=%s ResolvedFish=%s "
+				"Waterward=%s CandidateWaterwardCm=%.3f ResolvedWaterwardCm=%.3f CatAction=%s LineLengthCm=%.3f "
+				"World=%s NetMode=%d Authority=true LocalRole=%d"),
+			*Session->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*GetNameSafe(FishActor.Get()), *GetNameSafe(RodActor.Get()),
+			*GetNameSafe(Primary ? Primary->PlayerState.Get() : nullptr), *WaterRegion.RegionId.ToString(),
+			bShoreContactThisStep ? TEXT("ContactResolved") : TEXT("ContactEnded"),
+			*UEnum::GetValueAsString(OutWater.Containment), OutWater.SignedDistanceToShoreCm,
+			*State.FishWorldPosition.ToCompactString(), *Step.ProposedFishWorldPosition.ToCompactString(),
+			*Motion.FishWorldPosition.ToCompactString(), *OutWater.WaterwardDirection.ToCompactString(),
+			FVector::DotProduct(Step.ProposedFishWorldPosition - State.FishWorldPosition, OutWater.WaterwardDirection),
+			FVector::DotProduct(Motion.FishWorldPosition - State.FishWorldPosition, OutWater.WaterwardDirection),
+			State.CatAction == ECatFightCatAction::Pull ? TEXT("Pull")
+				: State.CatAction == ECatFightCatAction::Slack ? TEXT("Slack") : TEXT("None"), Step.LineLengthCentimeters,
+			*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(Session->GetLocalRole()));
+		NextShoreContactDiagnosticWorldSeconds = WorldSeconds + 1.0;
+	}
+	bLastShoreContactDiagnosticActive = bShoreContactThisStep;
 
 	// 地面落点只结算一次，不能随后被水面候选覆盖。坡面改变后的真实距离供复制和下一步共同使用。
 	Step.StraightLineDistanceCentimeters = FVector::Distance(RodConstraint.RodTipWorldPosition, Motion.FishWorldPosition);

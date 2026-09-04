@@ -131,6 +131,8 @@ private:
 	double NextPowerDiagnosticWorldSeconds = 0.0;
 	mutable double NextGroundSurfaceRejectedDiagnosticWorldSeconds = 0.0;
 	double NextSurfaceTowDiagnosticWorldSeconds = 0.0;
+	double NextShoreContactDiagnosticWorldSeconds = 0.0;
+	bool bLastShoreContactDiagnosticActive = false;
 	bool bLastConstraintDiagnosticActive = false;
 	bool bFishBeached = false;
 	bool bInitialized = false;

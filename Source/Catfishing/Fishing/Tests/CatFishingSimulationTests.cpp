@@ -87,6 +87,76 @@ bool FCatFishingUnforcedShoreContactTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingShoreWaterwardRecoveryTest,
+	"Catfishing.Unit.Fishing.Simulation.ShoreContactPreservesWaterwardRecoveryWithoutInsetSnap",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingShoreWaterwardRecoveryTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFishShoreContactInput Input;
+	Input.CurrentFishWorldPosition = FVector(-60.0, 0.0, 0.0);
+	Input.CandidateFishWorldPosition = FVector(-59.0, 0.0, 0.0);
+	Input.ResolvedWaterWorldPosition = FVector(5.0, 0.0, 0.0);
+	Input.WaterwardDirection = FVector::ForwardVector;
+	Input.RodTipWorldPosition = FVector(-500.0, 0.0, 0.0);
+	Input.PreviousLineLengthCentimeters = 600.0;
+	Input.ProposedLineLengthCentimeters = 600.0;
+	Input.MaximumConstraintDistanceCentimeters = 600.0;
+	const auto GapRecovery = FCatFishFightMotionSolver::ResolveLiveFishShoreContact(Input);
+	TestTrue(TEXT("live fish in the collision-to-water-outline gap can recover"), GapRecovery.bSucceeded);
+	TestTrue(TEXT("gap recovery retains exactly the proposed one-centimeter swim"),
+		GapRecovery.FishWorldPosition.Equals(Input.CandidateFishWorldPosition, 1e-6));
+	TestTrue(TEXT("gap recovery does not jump across the gap to the water inset"),
+		GapRecovery.FishWorldPosition.X < 0.0);
+
+	// 0.25 cm 自游小步覆盖旧 1 cm 修正阈值，不能被归为无需处理而吸回最近岸点。
+	Input.CurrentFishWorldPosition = FVector(0.1, 0.0, 0.0);
+	Input.CandidateFishWorldPosition = FVector(0.35, 0.0, 0.0);
+	Input.ResolvedWaterWorldPosition = FVector::ZeroVector;
+	const auto BoundaryRecovery = FCatFishFightMotionSolver::ResolveLiveFishShoreContact(Input);
+	TestTrue(TEXT("shore correction smaller than the former one-centimeter threshold remains valid"), BoundaryRecovery.bSucceeded);
+	TestTrue(TEXT("boundary tolerance cannot erase a small swim into the lake"),
+		BoundaryRecovery.FishWorldPosition.Equals(Input.CandidateFishWorldPosition, 1e-6));
+
+	Input.CurrentFishWorldPosition = FVector(-60.0, 0.0, 0.0);
+	Input.CandidateFishWorldPosition = FVector(-63.0, 4.0, 0.0);
+	Input.ResolvedWaterWorldPosition = FVector(5.0, 4.0, 0.0);
+	const auto Landward = FCatFishFightMotionSolver::ResolveLiveFishShoreContact(Input);
+	TestTrue(TEXT("unforced landward motion still resolves"), Landward.bSucceeded);
+	TestEqual(TEXT("landward normal motion remains blocked"), Landward.FishWorldPosition.X, -60.0, 1e-6);
+	TestEqual(TEXT("blocked landward motion retains its shoreline slide"), Landward.FishWorldPosition.Y, 4.0, 1e-6);
+
+	Input.CandidateFishWorldPosition = FVector(-57.0, 4.0, 0.0);
+	const auto DiagonalRecovery = FCatFishFightMotionSolver::ResolveLiveFishShoreContact(Input);
+	TestTrue(TEXT("diagonal waterward recovery resolves"), DiagonalRecovery.bSucceeded);
+	TestTrue(TEXT("diagonal swim preserves both legitimate motion components"),
+		DiagonalRecovery.FishWorldPosition.Equals(Input.CandidateFishWorldPosition, 1e-6));
+	Input.ResolvedWaterWorldPosition.Y = 40.0;
+	const auto DistantProjection = FCatFishFightMotionSolver::ResolveLiveFishShoreContact(Input);
+	TestTrue(TEXT("distant shoreline projection resolves"), DistantProjection.bSucceeded);
+	TestTrue(TEXT("distant shoreline projection retains positive waterward progress"),
+		DistantProjection.FishWorldPosition.X > Input.CurrentFishWorldPosition.X);
+	TestTrue(TEXT("combined normal and tangential correction stays within the original step budget"),
+		FVector::Dist2D(DistantProjection.FishWorldPosition, Input.CurrentFishWorldPosition) <= 5.0 + 1e-6);
+
+	Input.CandidateFishWorldPosition = FVector(-59.0, 0.0, 0.0);
+	Input.ResolvedWaterWorldPosition = FVector(5.0, 0.0, 0.0);
+	Input.PreviousLineLengthCentimeters = 440.0;
+	Input.ProposedLineLengthCentimeters = 445.0;
+	Input.bSlacking = true;
+	const auto SlackRecovery = FCatFishFightMotionSolver::ResolveLiveFishShoreContact(Input);
+	TestTrue(TEXT("free-spool waterward recovery resolves"), SlackRecovery.bSucceeded);
+	TestEqual(TEXT("free spool pays only for the final one-centimeter fish movement"),
+		SlackRecovery.LineLengthCentimeters, 441.0, 1e-6);
+	Input.PreviousLineLengthCentimeters = 600.0;
+	Input.ProposedLineLengthCentimeters = 600.0;
+	const auto ExistingSlack = FCatFishFightMotionSolver::ResolveLiveFishShoreContact(Input);
+	TestTrue(TEXT("existing slack permits waterward recovery"), ExistingSlack.bSucceeded);
+	TestEqual(TEXT("shore recovery preserves already-paid slack"), ExistingSlack.LineLengthCentimeters, 600.0, 1e-6);
+	return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingBeachingIntentTest,
 	"Catfishing.Unit.Fishing.Simulation.BeachingRequiresReelOrCarrierTranslationNotRodTipSwing",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)

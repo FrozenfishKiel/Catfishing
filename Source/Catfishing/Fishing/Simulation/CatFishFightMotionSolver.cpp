@@ -154,9 +154,7 @@ FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContac
 		|| Input.ProposedLineLengthCentimeters < 0.0
 		|| !FMath::IsFinite(Input.MaximumConstraintDistanceCentimeters)
 		|| Input.MaximumConstraintDistanceCentimeters < 0.0
-		|| Input.bReeling && Input.bSlacking
-		|| !FMath::IsFinite(Input.CorrectionToleranceCentimeters)
-		|| Input.CorrectionToleranceCentimeters < 0.0)
+		|| Input.bReeling && Input.bSlacking)
 	{
 		return Result;
 	}
@@ -176,26 +174,25 @@ FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContac
 			Input.MaximumConstraintDistanceCentimeters)
 		: ProposedLineLength;
 
+	// Boundary 容差带内也可能只返回最近岸点；不能用厘米级死区把慢速回水候选重新吸到岸线上。
 	Result.bShoreContact = FVector::DistSquared2D(Input.CandidateFishWorldPosition,
-		Input.ResolvedWaterWorldPosition) > FMath::Square(Input.CorrectionToleranceCentimeters);
+		Input.ResolvedWaterWorldPosition) > FMath::Square(UE_DOUBLE_SMALL_NUMBER);
 	FVector DesiredPosition;
 	if (Result.bShoreContact)
 	{
-		// 当前点是上一固定步已经通过真实水域校验的位置。把安全修正位移拆成“入水法向 + 沿岸切向”，
-		// 丢掉可能很大的法向 MinimumWaterInset 回弹，只保留不超过本步原始位移的沿岸滑动。
+		// 连续拖行可能把活鱼留在烘焙轮廓外、真实岸面前。只删除候选向陆地的分量，
+		// 保留鱼本步真实的入水进度；不能把它和最近岸点投影带来的大幅法向回弹一起删除。
 		const FVector Waterward = FVector(Input.WaterwardDirection.X, Input.WaterwardDirection.Y, 0.0)
 			.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector);
 		const FVector ResolvedDelta = Input.ResolvedWaterWorldPosition - Input.CurrentFishWorldPosition;
 		const FVector HorizontalResolvedDelta(ResolvedDelta.X, ResolvedDelta.Y, 0.0);
 		FVector TangentialDelta = HorizontalResolvedDelta
 			- Waterward * FVector::DotProduct(HorizontalResolvedDelta, Waterward);
-		const double ProposedStepDistance = FVector::Dist2D(Input.CurrentFishWorldPosition,
-			Input.CandidateFishWorldPosition);
-		if (TangentialDelta.Size2D() > ProposedStepDistance && ProposedStepDistance > 0.0)
-		{
-			TangentialDelta = TangentialDelta.GetSafeNormal2D() * ProposedStepDistance;
-		}
-		DesiredPosition = Input.CurrentFishWorldPosition + TangentialDelta;
+		const FVector ProposedDelta = Input.CandidateFishWorldPosition - Input.CurrentFishWorldPosition;
+		const double WaterwardProgress = FMath::Max(0.0, FVector::DotProduct(ProposedDelta, Waterward));
+		const FVector RecoveryDelta = (TangentialDelta + Waterward * WaterwardProgress)
+			.GetClampedToMaxSize2D(ProposedDelta.Size2D());
+		DesiredPosition = Input.CurrentFishWorldPosition + RecoveryDelta;
 		DesiredPosition.Z = Input.ResolvedWaterWorldPosition.Z;
 	}
 	else
