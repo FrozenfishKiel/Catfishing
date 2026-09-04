@@ -45,4 +45,6 @@ namespace CatFishingAbilityTags
 	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_LineBroken, "Cat.Cosmetic.Fishing.LineBroken");
 	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_CatInWater, "Cat.Cosmetic.Fishing.CatInWater");
 	UE_DEFINE_GAMEPLAY_TAG(Data_Fishing_FightStaminaDelta, "Cat.Data.Fishing.FightStaminaDelta");
+	UE_DEFINE_GAMEPLAY_TAG(Data_Run_BaseQuotaTarget, "Cat.Data.Run.BaseQuotaTarget");
+	UE_DEFINE_GAMEPLAY_TAG(Data_Run_Sacrifice_RawContribution, "Cat.Data.Run.Sacrifice.RawContribution");
 }

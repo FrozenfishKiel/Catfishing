@@ -4,6 +4,13 @@
 #include "AbilitySystem/Config/CatAbilityInputConfig.h"
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Attributes/CatRunAttributeSet.h"
+#include "AbilitySystem/Executions/CatRunApplySacrificeExecutionCalculation.h"
+#include "AbilitySystem/Executions/CatRunStartDayExecutionCalculation.h"
+#include "AbilitySystem/Effects/CatRunStartDayEffect.h"
+#include "AbilitySystem/Effects/CatRunSacrificeContributionEffect.h"
+#include "AbilitySystem/Tags/CatFishingAbilityTags.h"
+#include "AbilitySystemComponent.h"
 #include "AbilitySystem/BodyAction/CatBodyActionAbility.h"
 #include "Logging/CatLog.h"
 #include "Online/CatOnlineSettings.h"
@@ -273,7 +280,6 @@ void ACatfishingGameModeBase::StartPlay()
 		return;
 	}
 
-	RunPublicState.QuotaTarget = QuotaTarget;
 	bRunCommandsOpen = true;
 	RunStateTreeComponent->SetStateTree(RunFlowAsset);
 	bRunStartupInProgress = true;
@@ -813,7 +819,71 @@ FCatRunCommandResult ACatfishingGameModeBase::CacheRunCommandResult(const FStrin
 	return Result;
 }
 
-// 阶段进入流程：先要求 authority、有效 Run 与正在启动/运行的唯一 StateTree，并在写状态前拒绝未裁的成功结算或白天参数。通过后统一清掉旧白天计时与公开截止并复位玩法开关：DayActive 递增天数、清额度/终局原因、重置 Active 玩家 ready、开启 quota/fishing，建立截止与 Morning/Dusk 刷新；NormalNight 冻结当前 ready 资格；两种 settlement 写对应终局原因并清 ready 集合；Ending/Ended/NotStarted 关闭新命令。最后只递增一次 Revision、保存 StateTree 可读结果并刷新 Environment/GameState 组合快照；非 Shipping 跳天加速只在正式阶段已发布后续交正式命令，C++ 始终不选择下一条转移边。
+// 献祭额度预演流程：
+// 1. 只读取得 GameState 上的唯一 Run ASC，并核对 Attribute 目标与公开 DTO 仍保持投影一致。
+// 2. 用献祭 ExecCalc 暴露的同一套公式把冻结贡献和当前效率换算成实际贡献。
+// 3. 在 Items 不可逆提交前检查当前进度与实际贡献相加不会溢出，返回调用方用于 StateTree 达标依赖判断的新进度。
+ECatRunCommandError ACatfishingGameModeBase::PreviewRunSacrificeContribution(const FCatQuotaContributionCommand& Command,
+	int32& OutAppliedContribution, int64& OutNewProgress) const
+{
+	OutAppliedContribution = 0;
+	OutNewProgress = 0;
+	const ACatfishingGameState* RunGameState = GetWorld() ? GetWorld()->GetGameState<ACatfishingGameState>() : nullptr;
+	UAbilitySystemComponent* RunASC = RunGameState ? RunGameState->GetRunAbilitySystemComponentFromAuthority() : nullptr;
+	if (!RunASC)
+	{
+		UE_LOG(LogCatRun, Error, TEXT("Event=RunSacrificePreviewFailed Reason=RunASCUnavailable World=%s RequestId=%s"),
+			GetWorld() ? *GetWorld()->GetName() : TEXT("None"),
+			*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		return ECatRunCommandError::DependencyUnavailable;
+	}
+
+	const float CurrentProgress = RunASC->GetNumericAttribute(UCatRunAttributeSet::GetQuotaProgressAttribute());
+	const float CurrentQuotaTarget = RunASC->GetNumericAttribute(UCatRunAttributeSet::GetQuotaTargetAttribute());
+	if (!FMath::IsFinite(CurrentProgress) || !FMath::IsFinite(CurrentQuotaTarget)
+		|| CurrentProgress < 0.0f || CurrentProgress > MAX_int32 || CurrentQuotaTarget > MAX_int32)
+	{
+		UE_LOG(LogCatRun, Error, TEXT("Event=RunAttributeProjectionMismatch Reason=SacrificePreviewNonFinite AttributeTarget=%.3f AttributeProgress=%.3f DtoTarget=%d DtoProgress=%d RequestId=%s"),
+			CurrentQuotaTarget, CurrentProgress, RunPublicState.QuotaTarget, RunPublicState.QuotaProgress,
+			*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		return ECatRunCommandError::DependencyUnavailable;
+	}
+	const int32 AttributeQuotaTarget = FMath::RoundToInt(CurrentQuotaTarget);
+	const int32 AttributeQuotaProgress = FMath::RoundToInt(CurrentProgress);
+	if (AttributeQuotaTarget <= 0 || AttributeQuotaTarget != RunPublicState.QuotaTarget
+		|| AttributeQuotaProgress != RunPublicState.QuotaProgress
+		|| !FMath::IsNearlyEqual(CurrentQuotaTarget, static_cast<float>(AttributeQuotaTarget))
+		|| !FMath::IsNearlyEqual(CurrentProgress, static_cast<float>(AttributeQuotaProgress)))
+	{
+		UE_LOG(LogCatRun, Error, TEXT("Event=RunAttributeProjectionMismatch Reason=SacrificePreviewInvalid AttributeTarget=%d AttributeProgress=%d DtoTarget=%d DtoProgress=%d RequestId=%s"),
+			AttributeQuotaTarget, AttributeQuotaProgress, RunPublicState.QuotaTarget, RunPublicState.QuotaProgress,
+			*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		return ECatRunCommandError::DependencyUnavailable;
+	}
+
+	const float SacrificeEfficiency = RunASC->GetNumericAttribute(UCatRunAttributeSet::GetSacrificeEfficiencyAttribute());
+	if (!UCatRunApplySacrificeExecutionCalculation::TryCalculateAppliedContribution(static_cast<float>(Command.Contribution),
+		SacrificeEfficiency, OutAppliedContribution))
+	{
+		UE_LOG(LogCatRun, Error, TEXT("Event=RunSacrificePreviewFailed Reason=InvalidAppliedContribution RequestId=%s RawContribution=%d SacrificeEfficiency=%.3f"),
+			*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens), Command.Contribution, SacrificeEfficiency);
+		return ECatRunCommandError::DependencyUnavailable;
+	}
+
+	const double ProjectedProgress = static_cast<double>(AttributeQuotaProgress) + OutAppliedContribution;
+	if (!FMath::IsFinite(ProjectedProgress) || ProjectedProgress > MAX_int32)
+	{
+		UE_LOG(LogCatRun, Error, TEXT("Event=RunSacrificePreviewFailed Reason=ProgressOverflow RequestId=%s AttributeProgress=%.3f AppliedContribution=%d"),
+			*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens), CurrentProgress, OutAppliedContribution);
+		OutAppliedContribution = 0;
+		OutNewProgress = 0;
+		return ECatRunCommandError::InvalidPayload;
+	}
+	OutNewProgress = FMath::RoundToInt64(ProjectedProgress);
+	return ECatRunCommandError::None;
+}
+
+// 阶段进入流程：先要求 authority、有效 Run 与正在启动/运行的唯一 StateTree，并在写公开 Phase 前拒绝未裁策略、白天参数或 Run ASC/GE 额度初始化失败。通过后统一清掉旧白天计时与公开截止并复位玩法开关：DayActive 递增天数、从 AttributeSet 投影目标与零进度、重置 Active 玩家 ready、开启 quota/fishing，建立截止与 Morning/Dusk 刷新；NormalNight 冻结当前 ready 资格；两种 settlement 写对应终局原因并清 ready 集合；Ending/Ended/NotStarted 关闭新命令。最后只递增一次 Revision、保存 StateTree 可读结果并刷新 Environment/GameState 组合快照；非 Shipping 跳天加速只在正式阶段已发布后续交正式命令，C++ 始终不选择下一条转移边。
 FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(const ECatRunPhase NewPhase, const ECatRunTransitionReason Reason)
 {
 	FCatRunTransitionResult Result;
@@ -843,6 +913,82 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		Result.Error = ECatRunCommandError::PolicyUndecided;
 		LastRunFlowResult = Result;
 		return Result;
+	}
+	int32 ExpectedDayQuotaTarget = 0;
+	int32 DayStartAttributeTarget = 0;
+	int32 DayStartAttributeProgress = 0;
+	float DayStartOldTarget = 0.0f;
+	float DayStartQuotaTargetMultiplier = 1.0f;
+	float DayStartDailyPressure = 1.0f;
+	if (NewPhase == ECatRunPhase::DayActive)
+	{
+		ACatfishingGameState* RunGameState = GetWorld() ? GetWorld()->GetGameState<ACatfishingGameState>() : nullptr;
+		UAbilitySystemComponent* DayStartRunASC = RunGameState ? RunGameState->GetRunAbilitySystemComponentFromAuthority() : nullptr;
+		if (!DayStartRunASC)
+		{
+			Result.Error = ECatRunCommandError::DependencyUnavailable;
+			LastRunFlowResult = Result;
+			UE_LOG(LogCatRun, Error, TEXT("Event=RunStartDayGEFailed Reason=RunASCUnavailable World=%s"),
+				GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
+			return Result;
+		}
+		DayStartOldTarget = DayStartRunASC->GetNumericAttribute(UCatRunAttributeSet::GetQuotaTargetAttribute());
+		DayStartQuotaTargetMultiplier = DayStartRunASC->GetNumericAttribute(UCatRunAttributeSet::GetQuotaTargetMultiplierAttribute());
+		DayStartDailyPressure = DayStartRunASC->GetNumericAttribute(UCatRunAttributeSet::GetDailyPressureAttribute());
+		if (!UCatRunStartDayExecutionCalculation::TryCalculateQuotaTarget(static_cast<float>(DayQuotaTarget),
+			DayStartQuotaTargetMultiplier, DayStartDailyPressure, ExpectedDayQuotaTarget))
+		{
+			Result.Error = ECatRunCommandError::DependencyUnavailable;
+			LastRunFlowResult = Result;
+			UE_LOG(LogCatRun, Error, TEXT("Event=RunStartDayGEFailed Reason=InvalidCalculatedTarget World=%s BaseQuotaTarget=%d Multiplier=%.3f DailyPressure=%.3f"),
+				GetWorld() ? *GetWorld()->GetName() : TEXT("None"), DayQuotaTarget,
+				DayStartQuotaTargetMultiplier, DayStartDailyPressure);
+			return Result;
+		}
+		const FGameplayEffectSpecHandle StartDaySpec = DayStartRunASC->MakeOutgoingSpec(UCatGE_RunStartDay::StaticClass(), 1.0f,
+			DayStartRunASC->MakeEffectContext());
+		if (!StartDaySpec.IsValid())
+		{
+			Result.Error = ECatRunCommandError::DependencyUnavailable;
+			LastRunFlowResult = Result;
+			UE_LOG(LogCatRun, Error, TEXT("Event=RunStartDayGEFailed Reason=SpecUnavailable World=%s"),
+				GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
+			return Result;
+		}
+		StartDaySpec.Data->SetSetByCallerMagnitude(CatFishingAbilityTags::Data_Run_BaseQuotaTarget,
+			static_cast<float>(DayQuotaTarget));
+		if (!DayStartRunASC->ApplyGameplayEffectSpecToSelf(*StartDaySpec.Data.Get()).WasSuccessfullyApplied())
+		{
+			Result.Error = ECatRunCommandError::DependencyUnavailable;
+			LastRunFlowResult = Result;
+			UE_LOG(LogCatRun, Error, TEXT("Event=RunStartDayGEFailed Reason=ApplyRejected World=%s"),
+				GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
+			return Result;
+		}
+		const float DayStartCurrentTarget = DayStartRunASC->GetNumericAttribute(UCatRunAttributeSet::GetQuotaTargetAttribute());
+		const float DayStartCurrentProgress = DayStartRunASC->GetNumericAttribute(UCatRunAttributeSet::GetQuotaProgressAttribute());
+		if (!FMath::IsFinite(DayStartCurrentTarget) || !FMath::IsFinite(DayStartCurrentProgress)
+			|| DayStartCurrentTarget <= 0.0f || DayStartCurrentProgress < 0.0f
+			|| DayStartCurrentTarget > MAX_int32 || DayStartCurrentProgress > MAX_int32
+			|| !FMath::IsNearlyZero(DayStartCurrentProgress))
+		{
+			Result.Error = ECatRunCommandError::DependencyUnavailable;
+			LastRunFlowResult = Result;
+			UE_LOG(LogCatRun, Error, TEXT("Event=RunAttributeProjectionMismatch Reason=StartDayNonFinite AttributeTarget=%.3f AttributeProgress=%.3f ExpectedTarget=%d"),
+				DayStartCurrentTarget, DayStartCurrentProgress, ExpectedDayQuotaTarget);
+			return Result;
+		}
+		DayStartAttributeTarget = FMath::RoundToInt(DayStartCurrentTarget);
+		DayStartAttributeProgress = FMath::RoundToInt(DayStartCurrentProgress);
+		if (DayStartAttributeTarget != ExpectedDayQuotaTarget || DayStartAttributeProgress != 0)
+		{
+			Result.Error = ECatRunCommandError::DependencyUnavailable;
+			LastRunFlowResult = Result;
+			UE_LOG(LogCatRun, Error, TEXT("Event=RunAttributeProjectionMismatch Reason=StartDayInvalid AttributeTarget=%d AttributeProgress=%d ExpectedTarget=%d DtoTarget=%d DtoProgress=%d"),
+				DayStartAttributeTarget, DayStartAttributeProgress, ExpectedDayQuotaTarget,
+				RunPublicState.QuotaTarget, RunPublicState.QuotaProgress);
+			return Result;
+		}
 	}
 
 	// 非白天阶段会关闭 Fishing gate；必须在改公开门禁前由服务器释放竿位和 MOVE_None，
@@ -874,8 +1020,13 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 				PublishShopEconomySnapshot();
 			}
 		}
-		RunPublicState.QuotaProgress = 0;
-		RunPublicState.QuotaTarget = DayQuotaTarget;
+		RunPublicState.QuotaTarget = DayStartAttributeTarget;
+		RunPublicState.QuotaProgress = DayStartAttributeProgress;
+		UE_LOG(LogCatRun, Display, TEXT("Event=RunStartDayGEApplied World=%s NetMode=%d Authority=%s Day=%d BaseQuotaTarget=%d Multiplier=%.3f DailyPressure=%.3f OldTarget=%.0f NewTarget=%d Revision=%lld"),
+			GetWorld() ? *GetWorld()->GetName() : TEXT("None"), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1,
+			HasAuthority() ? TEXT("true") : TEXT("false"), RunPublicState.Phase.DayIndex, DayQuotaTarget,
+			DayStartQuotaTargetMultiplier, DayStartDailyPressure, DayStartOldTarget,
+			RunPublicState.QuotaTarget, RunPublicState.Revision);
 		RunPublicState.EndReason = ECatRunEndReason::None;
 		RunPublicState.Phase.bFishingAllowed = true;
 		RunPublicState.Phase.bQuotaOpen = true;
@@ -959,7 +1110,7 @@ bool ACatfishingGameModeBase::DoesLastRunFlowResultMatch(const ECatRunTransition
 		&& LastRunFlowResult.Reason == ExpectedReason;
 }
 
-// 额度提交流程：服务器重建身份并先查幂等缓存，再校验 gate/Phase/Revision/载荷；首次写入更新总量与 Revision，未达标直接发布快照，达标时发布关闭命令的同 Revision 快照，再向 StateTree 发送 QuotaReached。
+// 玩家额度提交流程：服务器重建身份后汇入同一个 Run 写口；身份以外的载荷、属性预演、GE 应用、Revision 和 StateTree 事件都不在 Controller 分支重复实现。
 FCatRunCommandResult ACatfishingGameModeBase::SubmitQuotaContribution(AController* RequestingController, const FCatQuotaContributionCommand& Command)
 {
 	FCatQuotaContributionCommand ServerCommand = Command;
@@ -970,7 +1121,7 @@ FCatRunCommandResult ACatfishingGameModeBase::SubmitQuotaContribution(AControlle
 	return SubmitQuotaContributionInternal(ServerCommand);
 }
 
-// 献祭预检流程：只读验证服务器身份键、命令 gate、Phase、Revision、正贡献与潜在达标事件依赖；不写终态缓存，因 Items 尚可安全取消预留。
+// 献祭预检流程：只读验证服务器身份键、命令 gate、Phase、Revision、正贡献，并用 Run ASC 预演效率后的实际贡献与潜在达标事件依赖；不写终态缓存，因 Items 尚可安全取消预留。
 FCatRunCommandResult ACatfishingGameModeBase::ValidateCommittedQuotaContributionFromCoordinator(const FCatQuotaContributionCommand& Command) const
 {
 	if (Command.Context.StableNetId.IsEmpty())
@@ -993,10 +1144,12 @@ FCatRunCommandResult ACatfishingGameModeBase::ValidateCommittedQuotaContribution
 	{
 		return MakeRunCommandResult(Command.Context.RequestId, false, ECatRunCommandError::RevisionConflict);
 	}
-	const int64 NewProgress = static_cast<int64>(RunPublicState.QuotaProgress) + Command.Contribution;
-	if (NewProgress > MAX_int32)
+	int32 AppliedContribution = 0;
+	int64 NewProgress = 0;
+	const ECatRunCommandError PreviewError = PreviewRunSacrificeContribution(Command, AppliedContribution, NewProgress);
+	if (PreviewError != ECatRunCommandError::None)
 	{
-		return MakeRunCommandResult(Command.Context.RequestId, false, ECatRunCommandError::InvalidPayload);
+		return MakeRunCommandResult(Command.Context.RequestId, false, PreviewError);
 	}
 	if (NewProgress >= RunPublicState.QuotaTarget && (!RunStateTreeComponent || !RunStateTreeComponent->IsRunning()))
 	{
@@ -1016,7 +1169,7 @@ FCatRunCommandResult ACatfishingGameModeBase::SubmitCommittedQuotaContributionFr
 	return SubmitQuotaContributionInternal(Command);
 }
 
-// 额度内部流程：先查完整幂等缓存，再校验 gate/Phase/Revision/载荷；首次写入更新总量与 Revision，未达标发布同阶段快照，达标时先释放钓鱼操作位和移动锁，再关闭写口、停白天计时、发布过渡快照并发送唯一 StateTree 事件。
+// 额度内部流程：先查完整幂等缓存，再校验 gate/Phase/Revision/载荷；首次写入前通过 Run ASC 预演实际贡献、溢出和达标事件依赖，通过后应用献祭 GE 并把 AttributeSet 进度投影到 RunPublicState。未达标直接发布同阶段快照；达标时先释放钓鱼操作位和移动锁，再关闭写口、停白天计时、发布过渡快照并发送唯一 StateTree 事件。
 FCatRunCommandResult ACatfishingGameModeBase::SubmitQuotaContributionInternal(const FCatQuotaContributionCommand& ServerCommand)
 {
 	if (!ServerCommand.Context.RequestId.IsValid())
@@ -1042,18 +1195,73 @@ FCatRunCommandResult ACatfishingGameModeBase::SubmitQuotaContributionInternal(co
 	{
 		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::RevisionConflict));
 	}
-	const int64 NewProgress = static_cast<int64>(RunPublicState.QuotaProgress) + ServerCommand.Contribution;
-	if (ServerCommand.Contribution <= 0 || NewProgress > MAX_int32)
+	if (ServerCommand.Contribution <= 0)
 	{
 		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::InvalidPayload));
 	}
-	const bool bReachesQuota = NewProgress >= RunPublicState.QuotaTarget;
+	int32 AppliedContribution = 0;
+	int64 NewProgress = 0;
+	const ECatRunCommandError PreviewError = PreviewRunSacrificeContribution(ServerCommand, AppliedContribution, NewProgress);
+	if (PreviewError != ECatRunCommandError::None)
+	{
+		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, PreviewError));
+	}
+	bool bReachesQuota = NewProgress >= RunPublicState.QuotaTarget;
 	if (bReachesQuota && (!RunStateTreeComponent || !RunStateTreeComponent->IsRunning()))
 	{
 		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::StateTreeUnavailable));
 	}
+	ACatfishingGameState* RunGameState = GetWorld() ? GetWorld()->GetGameState<ACatfishingGameState>() : nullptr;
+	UAbilitySystemComponent* RunASC = RunGameState ? RunGameState->GetRunAbilitySystemComponentFromAuthority() : nullptr;
+	if (!RunASC)
+	{
+		UE_LOG(LogCatRun, Error, TEXT("Event=RunSacrificeGEFailed Reason=RunASCUnavailable World=%s RequestId=%s"),
+			GetWorld() ? *GetWorld()->GetName() : TEXT("None"), *ServerCommand.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::DependencyUnavailable));
+	}
+	const float OldProgress = RunASC->GetNumericAttribute(UCatRunAttributeSet::GetQuotaProgressAttribute());
+	const FGameplayEffectSpecHandle SacrificeSpec = RunASC->MakeOutgoingSpec(UCatGE_RunApplySacrifice::StaticClass(), 1.0f,
+		RunASC->MakeEffectContext());
+	if (!SacrificeSpec.IsValid())
+	{
+		UE_LOG(LogCatRun, Error, TEXT("Event=RunSacrificeGEFailed Reason=SpecUnavailable RequestId=%s"),
+			*ServerCommand.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::DependencyUnavailable));
+	}
+	SacrificeSpec.Data->SetSetByCallerMagnitude(CatFishingAbilityTags::Data_Run_Sacrifice_RawContribution,
+		static_cast<float>(ServerCommand.Contribution));
+	if (!RunASC->ApplyGameplayEffectSpecToSelf(*SacrificeSpec.Data.Get()).WasSuccessfullyApplied())
+	{
+		UE_LOG(LogCatRun, Error, TEXT("Event=RunSacrificeGEFailed Reason=ApplyRejected RequestId=%s"),
+			*ServerCommand.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, ECatRunCommandError::DependencyUnavailable));
+	}
+	const float NewProgressAttribute = RunASC->GetNumericAttribute(UCatRunAttributeSet::GetQuotaProgressAttribute());
+	const int64 AttributeNewProgress = FMath::RoundToInt64(NewProgressAttribute);
+	const int32 AttributeAppliedContribution = FMath::RoundToInt(NewProgressAttribute - OldProgress);
+	if (AttributeNewProgress != NewProgress || AttributeAppliedContribution != AppliedContribution)
+	{
+		UE_LOG(LogCatRun, Warning, TEXT("Event=RunAttributeProjectionMismatch Reason=SacrificePreviewDrift RequestId=%s PreviewApplied=%d AttributeApplied=%d PreviewProgress=%lld AttributeProgress=%lld"),
+			*ServerCommand.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens), AppliedContribution,
+			AttributeAppliedContribution, NewProgress, AttributeNewProgress);
+		AppliedContribution = AttributeAppliedContribution;
+		NewProgress = AttributeNewProgress;
+		bReachesQuota = NewProgress >= RunPublicState.QuotaTarget;
+	}
 
 	RunPublicState.QuotaProgress = static_cast<int32>(NewProgress);
+	if (FMath::RoundToInt(RunASC->GetNumericAttribute(UCatRunAttributeSet::GetQuotaTargetAttribute())) != RunPublicState.QuotaTarget
+		|| FMath::RoundToInt(NewProgressAttribute) != RunPublicState.QuotaProgress)
+	{
+		UE_LOG(LogCatRun, Warning, TEXT("Event=RunAttributeProjectionMismatch AttributeTarget=%d AttributeProgress=%d DtoTarget=%d DtoProgress=%d"),
+			FMath::RoundToInt(RunASC->GetNumericAttribute(UCatRunAttributeSet::GetQuotaTargetAttribute())),
+			FMath::RoundToInt(NewProgressAttribute), RunPublicState.QuotaTarget, RunPublicState.QuotaProgress);
+	}
+	UE_LOG(LogCatRun, Display, TEXT("Event=RunSacrificeGEApplied World=%s NetMode=%d RequestId=%s RawContribution=%d SacrificeEfficiency=%.3f AppliedContribution=%d OldProgress=%.0f NewProgress=%d QuotaTarget=%d Reached=%s"),
+		GetWorld() ? *GetWorld()->GetName() : TEXT("None"), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1,
+		*ServerCommand.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens), ServerCommand.Contribution,
+		RunASC->GetNumericAttribute(UCatRunAttributeSet::GetSacrificeEfficiencyAttribute()), AppliedContribution,
+		OldProgress, RunPublicState.QuotaProgress, RunPublicState.QuotaTarget, bReachesQuota ? TEXT("true") : TEXT("false"));
 	++RunPublicState.Revision;
 	ECatRunTransitionReason TransitionReason = ECatRunTransitionReason::None;
 	if (bReachesQuota)
@@ -1074,6 +1282,7 @@ FCatRunCommandResult ACatfishingGameModeBase::SubmitQuotaContributionInternal(co
 		RefreshEnvironmentAndPublish();
 	}
 	FCatRunCommandResult Result = MakeRunCommandResult(ServerCommand.Context.RequestId, true, ECatRunCommandError::None, TransitionReason);
+	Result.AppliedContribution = AppliedContribution;
 	Result = CacheRunCommandResult(CacheKey, Result);
 	if (bReachesQuota)
 	{
@@ -2340,17 +2549,57 @@ APlayerState* ACatfishingGameModeBase::ResolvePlayerStateByStableNetId(const FSt
 		? Record->Controller->PlayerState : nullptr;
 }
 
-// GameState 构造流程：只创建 ChumField 公开复制组件，让客户端可读窝点表现事实；Run、Help 和 Shop 快照仍保持默认值，等待 authority setter 写入。
+// GameState 构造流程：创建 ChumField 公开复制组件以及唯一 Run ASC/AttributeSet，并显式把属性集登记到 ASC；Run、Help 和 Shop DTO 仍保持默认值，等待 authority 写入。
 ACatfishingGameState::ACatfishingGameState()
 {
 	ChumFieldReplication = CreateDefaultSubobject<UCatChumFieldReplicationComponent>(TEXT("ChumFieldReplication"));
+	RunAbilitySystemComponent = CreateDefaultSubobject<UAbilitySystemComponent>(TEXT("RunAbilitySystemComponent"));
+	RunAbilitySystemComponent->SetIsReplicated(true);
+	RunAbilitySystemComponent->SetReplicationMode(EGameplayEffectReplicationMode::Mixed);
+	RunAttributes = CreateDefaultSubobject<UCatRunAttributeSet>(TEXT("RunAttributes"));
+	RunAbilitySystemComponent->AddAttributeSetSubobject(RunAttributes.Get());
 }
 
-// GameState 开始流程：先完成父类 BeginPlay，再写一条实际类日志；不在这里补算 Run、Social 或商店快照，避免绕过 GameMode 的唯一写口。
+// ASC 查询流程：直接返回构造期唯一 Run 组件，避免 GameMode、UI 或协调器从全局服务重新查找第二份公共数值宿主。
+UAbilitySystemComponent* ACatfishingGameState::GetAbilitySystemComponent() const
+{
+	return RunAbilitySystemComponent;
+}
+
+// Run ASC 查询流程：提供明确的 Run 域入口给 GameMode 创建 GE Spec；返回值不授予调用方直接改属性的权限。
+UAbilitySystemComponent* ACatfishingGameState::GetRunAbilitySystemComponent() const
+{
+	return RunAbilitySystemComponent;
+}
+
+// 权威 Run ASC 查询流程：先检查 GameState authority，再返回同一组件；客户端得到空以阻止复制回调和 UI 形成旁路写口。
+UAbilitySystemComponent* ACatfishingGameState::GetRunAbilitySystemComponentFromAuthority() const
+{
+	return HasAuthority() ? RunAbilitySystemComponent : nullptr;
+}
+
+// GameState 组件初始化流程：按 Lyra 的 GameState ASC 口径先完成父类组件初始化，再把唯一 Run ASC 的 Owner/Avatar 都绑定为本 GameState；失败只记录依赖缺口，不运行额度兜底公式。
+void ACatfishingGameState::PostInitializeComponents()
+{
+	Super::PostInitializeComponents();
+	if (!RunAbilitySystemComponent || !RunAttributes)
+	{
+		UE_LOG(LogCatRun, Error, TEXT("Event=RunASCInitialized Result=Failed Reason=ComponentOrAttributeMissing World=%s"),
+			GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
+		return;
+	}
+	RunAbilitySystemComponent->InitAbilityActorInfo(this, this);
+	UE_LOG(LogCatRun, Display, TEXT("Event=RunASCInitialized Result=Success World=%s NetMode=%d Authority=%s Owner=%s Avatar=%s"),
+		GetWorld() ? *GetWorld()->GetName() : TEXT("None"), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1,
+		HasAuthority() ? TEXT("true") : TEXT("false"), *GetName(), *GetName());
+}
+
+// GameState 开始流程：只记录实际类和运行 World，Run ASC 已在组件初始化阶段完成绑定；这里不补算 Run、Social 或商店快照，避免绕过 GameMode 的唯一写口。
 void ACatfishingGameState::BeginPlay()
 {
 	Super::BeginPlay();
-	UE_LOG(LogCatfishing, Log, TEXT("Event=gamestate_beginplay Class=%s"), *GetClass()->GetName());
+	UE_LOG(LogCatfishing, Log, TEXT("Event=gamestate_beginplay Class=%s World=%s"),
+		*GetClass()->GetName(), GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
 }
 
 // GameState 复制注册流程：先保留父类网络字段，再注册整结构 RunPublicState 与最近 HelpSignal；两者各带 Revision，客户端只经对应 RepNotify 重读完整快照。

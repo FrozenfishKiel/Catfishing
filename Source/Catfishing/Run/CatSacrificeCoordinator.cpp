@@ -79,7 +79,7 @@ FCatSacrificeResult UCatSacrificeCoordinator::RequestSacrifice(AController* Requ
 	}
 	Record.Result.Stage = ECatSacrificeStage::Reserved;
 	Record.Result.ItemsRevision = Reservation.ContainerRevision;
-	Record.Result.AppliedContribution = Reservation.SacrificeContribution;
+	Record.RawContribution = Reservation.SacrificeContribution;
 	FCatQuotaContributionCommand QuotaCommand;
 	QuotaCommand.Context.RequestId = Record.Command.Context.RequestId;
 	QuotaCommand.Context.ExpectedRevision = Record.Command.ExpectedRunRevision;
@@ -106,7 +106,7 @@ FCatSacrificeResult UCatSacrificeCoordinator::RequestSacrifice(AController* Requ
 	}
 	Record.Result.Stage = ECatSacrificeStage::ItemsCommitted;
 	Record.Result.ItemsRevision = ItemsCommit.ContainerRevision;
-	Record.Result.AppliedContribution = ItemsCommit.SacrificeContribution;
+	Record.RawContribution = ItemsCommit.SacrificeContribution;
 	return ApplyCommittedRecord(Record);
 }
 // Teardown 收口流程：先永久关献祭新入口，Received/Reserved 协议取消可逆锁，ItemsCommitted 之后的协议只重试 Run apply 而绝不还鱼；再终止 Fishing。Social 必须趁 Items 仍开放时清 Timer 并返还 theft escrow，成功后才关 Items/取消剩余预留；任一分支失败都返回 false，上层不得继续 DestroySession。
@@ -180,11 +180,12 @@ ECatDomainCommandError UCatSacrificeCoordinator::MapRunError(const ECatRunComman
 	case ECatRunCommandError::InvalidPayload: return ECatDomainCommandError::InvalidPayload;
 	case ECatRunCommandError::RevisionConflict: return ECatDomainCommandError::RevisionConflict;
 	case ECatRunCommandError::AlreadyResolved: return ECatDomainCommandError::AlreadyResolved;
+	case ECatRunCommandError::DependencyUnavailable: return ECatDomainCommandError::DependencyUnavailable;
 	default: return ECatDomainCommandError::DependencyUnavailable;
 	}
 }
 
-// Run apply 流程：以冻结身份、外部 RequestId、当前 Run Revision 和已 committed 贡献构造写命令；自动化构建可先用 override 模拟 Run 写口短暂失败，未命中才调用真实 GameMode；失败保持 ItemsCommitted 等同 RequestId 只补 Run，成功推进 RunApplied→Completed。
+// Run apply 流程：以冻结身份、外部 RequestId、当前 Run Revision 和 Items 原始贡献构造写命令；自动化构建可先用 override 模拟 Run 写口短暂失败，未命中才调用真实 GameMode；失败保持 ItemsCommitted 等同 RequestId 只补 Run，成功推进 RunApplied→Completed 并回填 Run GE 实际贡献。
 FCatSacrificeResult UCatSacrificeCoordinator::ApplyCommittedRecord(FProtocolRecord& Record)
 {
 	ACatfishingGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
@@ -198,7 +199,7 @@ FCatSacrificeResult UCatSacrificeCoordinator::ApplyCommittedRecord(FProtocolReco
 	// Items 已不可逆提交后不能因旧 Revision 丢鱼；重试以当前 Run Revision 重新校验阶段/写口，并继续复用同一 RequestId 防止重复额度。
 	QuotaCommand.Context.ExpectedRevision = GameMode->GetRunPublicState().Revision;
 	QuotaCommand.Context.StableNetId = Record.Command.Context.StableNetId;
-	QuotaCommand.Contribution = Record.Result.AppliedContribution;
+	QuotaCommand.Contribution = Record.RawContribution;
 	FCatRunCommandResult RunResult;
 	bool bHasAutomationOverride = false;
 #if WITH_DEV_AUTOMATION_TESTS
@@ -225,6 +226,7 @@ FCatSacrificeResult UCatSacrificeCoordinator::ApplyCommittedRecord(FProtocolReco
 		return Record.Result;
 	}
 	Record.Result.Stage = ECatSacrificeStage::RunApplied;
+	Record.Result.AppliedContribution = RunResult.AppliedContribution;
 	Record.Result.Error = ECatDomainCommandError::None;
 	Record.Result.Stage = ECatSacrificeStage::Completed;
 	Record.Result.bCompleted = true;

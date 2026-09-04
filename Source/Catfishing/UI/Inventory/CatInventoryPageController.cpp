@@ -4,6 +4,7 @@
 #include "Character/CatCharacter.h"
 #include "EnhancedInputComponent.h"
 #include "Framework/Game/CatGameplayTypes.h"
+#include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
 #include "InputMappingContext.h"
@@ -738,9 +739,10 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 // 鱼动作按钮流程：
 // 1. 本入口只处理吃鱼、献祭和存入营地鱼缸这类选中鱼动作；库存整理走 Drop，钓具选择走格子右键上下文。
 // 2. 用 Widget 传入的本页选择在最新 ViewState 里复核鱼、容器 ID 和 Revision；吃鱼/献祭允许鱼护或共享鱼缸，存缸只允许鱼护。
-// 3. 生成 RequestId 并记录 pending，使同步 authority 回包也能匹配，但不提前广播刷新库存格。
-// 4. 按动作类型调用 PlayerController 正式服务器入口，绝不让 Widget 直接访问 Items 或 Run。
-// 5. Model 或 Controller 已失效时直接丢弃迟到意图；需要 Character 的吃鱼分支无法解析 Pawn 时发布结构化拒绝。
+// 3. 献祭在提交前读取 GameState 的公开 Run Revision；GameState 缺失时发布结构化拒绝，绝不以 0 猜测并发版本。
+// 4. 生成 RequestId 并记录 pending，使同步 authority 回包也能匹配，但不提前广播刷新库存格。
+// 5. 按动作类型调用 PlayerController 正式服务器入口，绝不让 Widget 直接访问 Items 或 Run。
+// 6. Model 或 Controller 已失效时直接丢弃迟到意图；需要 Character 的吃鱼分支无法解析 Pawn 时发布结构化拒绝。
 void UCatInventoryPageController::RequestInventoryActionFromWidget(const ECatInventoryAction Action,
 	const FCatInventorySlotView& SelectedSlot)
 {
@@ -806,11 +808,26 @@ void UCatInventoryPageController::RequestInventoryActionFromWidget(const ECatInv
 		}
 	case ECatInventoryAction::SacrificeSelectedFish:
 		{
+			const UWorld* World = CatController->GetWorld();
+			const ACatfishingGameState* GameState = World ? World->GetGameState<ACatfishingGameState>() : nullptr;
+			if (!GameState)
+			{
+				UE_LOG(LogCatUI, Warning,
+					TEXT("Event=ui_inventory_sacrifice_rejected Reason=GameStateUnavailable RequestId=%s ContainerId=%s FishInstanceId=%s ContainerRevision=%lld"),
+					*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+					*CurrentSlot->ContainerId.ToString(EGuidFormats::DigitsWithHyphens),
+					*CurrentSlot->Fish.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+					CurrentSlot->ContainerRevision);
+				Model->MarkActionRejected(Action, RequestId, ECatDomainCommandError::DependencyUnavailable,
+					CurrentSlot->ContainerRevision);
+				return;
+			}
 			FCatSacrificeCommand Command;
 			Command.Context.RequestId = RequestId;
 			Command.Context.ExpectedRevision = CurrentSlot->ContainerRevision;
 			Command.FishInstanceId = CurrentSlot->Fish.FishInstanceId;
 			Command.ContainerId = CurrentSlot->ContainerId;
+			Command.ExpectedRunRevision = GameState->GetRunPublicState().Revision;
 			Model->MarkActionSubmitted(Action, RequestId);
 			if (CatController->HasAuthority())
 			{

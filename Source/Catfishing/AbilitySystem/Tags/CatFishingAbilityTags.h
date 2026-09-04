@@ -57,4 +57,8 @@ namespace CatFishingAbilityTags
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cosmetic_Fishing_LineBroken);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cosmetic_Fishing_CatInWater);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Data_Fishing_FightStaminaDelta);
+	/** 新一天 GE 读取的原始额度目标；只由 authority GameMode 写入 Spec，不作为可复制玩法状态。 */
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Data_Run_BaseQuotaTarget);
+	/** 献祭 GE 读取的 Items 冻结原始贡献；协调器不计算效率，实际贡献由 Run ASC 返回。 */
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Data_Run_Sacrifice_RawContribution);
 }

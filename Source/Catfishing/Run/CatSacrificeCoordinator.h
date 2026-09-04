@@ -48,6 +48,8 @@ private:
 	{
 		/** 服务器适配后的原始命令。 */
 		FCatSacrificeCommand Command;
+		/** Items 预留/提交冻结的原始贡献；只供后续同 RequestId 重试 Run GE，绝不作为客户端展示的实际贡献。 */
+		int32 RawContribution = 0;
 		/** 当前可重放协议结果。 */
 		FCatSacrificeResult Result;
 	};

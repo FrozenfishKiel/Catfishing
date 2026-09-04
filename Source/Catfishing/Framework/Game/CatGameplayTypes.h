@@ -9,6 +9,7 @@
 #include "Framework/Core/CatRunContracts.h"
 #include "Framework/Core/CatSacrificeContracts.h"
 #include "GameplayTagContainer.h"
+#include "AbilitySystemInterface.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/PlayerController.h"
@@ -23,6 +24,8 @@ class UCatFishingCommandComponent;
 class UCatInteractionTargetingComponent;
 class UCatChumFieldReplicationComponent;
 class UCatAbilitySystemComponent;
+class UAbilitySystemComponent;
+class UCatRunAttributeSet;
 class UCatBodyActionPayload;
 class UEnhancedInputLocalPlayerSubsystem;
 class UEnhancedInputComponent;
@@ -246,6 +249,8 @@ private:
 	bool TryReplayRunCommand(const FString& CacheKey, FCatRunCommandResult& OutResult) const;
 	/** 保存命令的首次同步终态；后续相同身份、类别与 RequestId 只能读取该记录。 */
 	FCatRunCommandResult CacheRunCommandResult(const FString& CacheKey, const FCatRunCommandResult& Result);
+	/** 只读预演当前 Run ASC 会接受的献祭额度结果；预检和正式提交都通过它在 Items 提交前发现坏倍率、溢出或投影不一致。 */
+	ECatRunCommandError PreviewRunSacrificeContribution(const FCatQuotaContributionCommand& Command, int32& OutAppliedContribution, int64& OutNewProgress) const;
 	/** 已由服务器适配好 StableNetId 的额度唯一实现；玩家 RPC 与献祭协调器都汇入此处。 */
 	FCatRunCommandResult SubmitQuotaContributionInternal(const FCatQuotaContributionCommand& ServerCommand);
 	/** 进入普通夜晚时冻结当前 Active 身份集合并清空个人 ready，未裁的晚加入不会隐式扩容。 */
@@ -372,11 +377,18 @@ private:
 
 /** Lake 共享比赛状态；复制由服务器 GameMode 组合的 Run/Environment 快照与 Social 最近求助事实。 */
 UCLASS()
-class CATFISHING_API ACatfishingGameState : public AGameStateBase
+class CATFISHING_API ACatfishingGameState : public AGameStateBase, public IAbilitySystemInterface
 {
 	GENERATED_BODY()
 public:
+	/** 构造 GameState 的公开复制组件和唯一 Run ASC/属性集；Owner/Avatar 在组件初始化后绑定为本 GameState。 */
 	ACatfishingGameState();
+	/** 返回 GameState 持有的唯一 Run ASC；GAS 查询只读到这一份全队公共数值宿主。 */
+	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
+	/** 返回本局 Run 专用 ASC，供 GameMode 创建 GE Spec；调用方不得直接 SetNumericAttributeBase 写额度。 */
+	UAbilitySystemComponent* GetRunAbilitySystemComponent() const;
+	/** 返回 authority 上可写的 Run ASC；客户端返回空，防止 UI 或复制回调绕过 GameMode 命令协议。 */
+	UAbilitySystemComponent* GetRunAbilitySystemComponentFromAuthority() const;
 	/** 注册 Run/Help/Shop 三类公开快照复制；客户端分别经 RepNotify 消费，不在本地推进领域状态。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	/** 仅允许 authority GameMode 写入组合公开事实；每次写入都会触发网络更新。 */
@@ -402,7 +414,9 @@ public:
 	/** 本机商店公开经济快照变化通知；只提示 UI 重读，不授权客户端确认交付或改余额。 */
 	FCatShopEconomySnapshotChanged OnShopEconomySnapshotChanged;
 protected:
-	/** 实例进入 World 后记录实际类；不增加可写玩法状态。 */
+	/** 组件完成注册后按 Lyra 口径初始化 Run ASC 的 Owner/Avatar；这里不计算额度、不推进 StateTree。 */
+	virtual void PostInitializeComponents() override;
+	/** 实例进入 World 后记录实际类；Run ASC 已在组件初始化阶段绑定，不在这里补算额度或推进 StateTree。 */
 	virtual void BeginPlay() override;
 	/** 客户端收到新 Revision 后记录结构化诊断，UI/玩法只能继续读取复制快照。 */
 	UFUNCTION()
@@ -415,6 +429,14 @@ protected:
 	void OnRep_ShopEconomySnapshot();
 
 private:
+	/** 全队共享 Run 数值的唯一 GAS 组件，构造期创建并复制；GameMode 只通过它应用正式 GE。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Run", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UAbilitySystemComponent> RunAbilitySystemComponent;
+
+	/** Run ASC 持有的额度属性集，保存目标、进度和默认倍率；GameMode 投影它而不维护第二套最终数值公式。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Run", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCatRunAttributeSet> RunAttributes;
+
 	/** 自然事件与玩家打窝的公开复制组件；服务器 ChumFieldSubsystem 写入，客户端只用它驱动窝点表现。 */
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UCatChumFieldReplicationComponent> ChumFieldReplication;

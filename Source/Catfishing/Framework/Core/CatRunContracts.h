@@ -97,7 +97,9 @@ enum class ECatRunCommandError : uint8
 	/** 当前玩家不属于本次普通夜晚的合资格集合。 */
 	NotEligible,
 	/** Run teardown 依赖报告失败，Online 必须保留 Session 并停止退出链。 */
-	TeardownFailed
+	TeardownFailed,
+	/** Run 必需的 ASC、GE、属性投影或运行时配置不可用；命令不写入，调用方只能等待依赖恢复或重试。 */
+	DependencyUnavailable
 };
 
 /** Environment 拥有的正式天气轴；具体出现概率与转移仍由数据配置，不由 Run 推导。 */
@@ -325,6 +327,10 @@ struct FCatRunCommandResult
 	/** 首次提交是否产生 StateTree 转移原因；None 表示只更新数值或个人 ready。 */
 	UPROPERTY(BlueprintReadOnly)
 	ECatRunTransitionReason TransitionReason = ECatRunTransitionReason::None;
+
+	/** 本次 Run GE 实际写入进度的整数贡献；献祭协调器读取它回传结果，不能按效率自行重算。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 AppliedContribution = 0;
 };
 
 /** StateTree Task、Condition 与事件载荷共享的结构化结果；只有 GameMode 能创建并保存最新值。 */
