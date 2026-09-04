@@ -63,7 +63,6 @@ namespace CatRodDurabilityTests
 			Settings->DriftwoodDefinitionId = TEXT("DurabilityTestWood");
 			UCatEquipmentDefinition* Rod = AddDefinition(TEXT("DurabilityTestRod"), ECatEquipmentKind::Rod);
 			Rod->MaximumRodDurability = 100.0;
-			Rod->FishingStrength = 50.0;
 			Rod->MaximumLineLengthCentimeters = 1500.0;
 			Rod->HighTensionWearMultiplier = 1.0;
 			Rod->UseActorClass = ACatFishingRodActor::StaticClass();
@@ -357,7 +356,14 @@ bool FCatRodSessionDurabilityTest::RunTest(const FString& Parameters)
 	FCatFightStepResult Step;
 	Step.RodWearDelta = 25.0;
 	Step.AbsoluteRodWear = 25.0;
+	Step.bStrongConfrontation = true;
+	Step.NormalizedLineLoad = 1.0;
+	Step.NormalizedTension = 1.0;
+	Step.CombinedCatStrength = 50.0;
 	First->HandleFightRunnerStepFromAuthority(Step, 80.0, ECatFishMotionIntent::StrugglingOutward);
+	TestEqual(TEXT("strong confrontation keeps the authority session fighting"), First->GetSnapshot().Phase, ECatFishingPhase::HookedFight);
+	TestEqual(TEXT("strong confrontation does not publish a terminal outcome"), First->GetSnapshot().Outcome, ECatFishingOutcome::None);
+	TestTrue(TEXT("strong confrontation remains visible in the public snapshot"), First->GetSnapshot().bStrongConfrontation);
 	TestEqual(TEXT("fight snapshot mirrors immediately written instance durability"), First->GetSnapshot().RodDurabilityRemaining, 75.0);
 	TestEqual(TEXT("fight wear is already in equipment before termination"), Fixture.Equipment->GetSnapshot().RodDurability, 75.0);
 	AddExpectedErrorPlain(TEXT("Event=fishing_session_terminated"), EAutomationExpectedErrorFlags::Contains, 2);

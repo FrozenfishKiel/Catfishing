@@ -68,7 +68,6 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		Runner->Config.PrimaryOperatorMassKilograms = 5.0;
 		Runner->Config.FishMassKilograms = 0.1;
 		Runner->Config.FishStrength = 1.0;
-		Runner->Config.RodStrength = 1000.0;
 		Runner->Config.RodDurability = 1000.0;
 		Runner->Config.MaximumLineLengthCentimeters = 1000.0;
 		Runner->Config.CatStaminaMaximum = 100.0;
@@ -202,7 +201,6 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 	RecoveryRunner->Config.PrimaryOperatorMassKilograms = 5.0;
 	RecoveryRunner->Config.FishMassKilograms = 0.1;
 	RecoveryRunner->Config.FishStrength = 1.0;
-	RecoveryRunner->Config.RodStrength = 1000.0;
 	RecoveryRunner->Config.RodDurability = 1000.0;
 	RecoveryRunner->Config.MaximumLineLengthCentimeters = 1000.0;
 	RecoveryRunner->Config.CatStaminaMaximum = 100.0;

@@ -57,7 +57,6 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	Runner->Config.FixedStepSeconds = 0.05;
 	Runner->Config.FishMassKilograms = 3.0;
 	Runner->Config.FishStrength = 40.0;
-	Runner->Config.RodStrength = 1000.0;
 	Runner->Config.CatStaminaMaximum = 60.0;
 	Runner->Config.ReelSpeedCentimetersPerSecond = 80.0;
 	Runner->Config.FishCalmSpeedCentimetersPerSecond = 25.0;

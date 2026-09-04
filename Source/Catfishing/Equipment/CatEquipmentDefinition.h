@@ -87,7 +87,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0", DisplayName = "鱼竿耐久上限"))
 	double MaximumRodDurability = 0.0;
 
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0"))
+	/** 旧承载阈值，仅保留既有资产/蓝图字段兼容；运行就绪与搏斗不再读取。 */
+	UPROPERTY(BlueprintReadOnly, Category = "Deprecated", meta = (DeprecatedProperty,
+		DeprecationMessage = "旧承载阈值已停用；力量差由双端约束处理，鱼竿损坏由实例耐久决定。"))
 	double FishingStrength = 0.0;
 
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0"))

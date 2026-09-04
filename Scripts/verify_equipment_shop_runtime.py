@@ -90,8 +90,6 @@ def _validate_equipment_definition(settings, definition_id: str, kind: str, asse
     if kind == "Rod":
         _require(float(_get_property(definition, "maximum_rod_durability", "MaximumRodDurability")) > 0.0,
                  f"{definition_id} Rod 最大耐久无效")
-        _require(float(_get_property(definition, "fishing_strength", "FishingStrength")) > 0.0,
-                 f"{definition_id} FishingStrength 无效")
         _require(float(_get_property(definition, "maximum_line_length_centimeters", "MaximumLineLengthCentimeters")) > 0.0,
                  f"{definition_id} 线长无效")
         _require("None" not in str(_get_property(definition, "use_actor_class", "UseActorClass")),

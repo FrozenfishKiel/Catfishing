@@ -21,7 +21,6 @@ namespace CatExhaustedEscapeTest
 		Value.FishMassKilograms = 0.04;
 		Value.FishStrength = 0.4;
 		Value.CatStaminaMaximum = 60.0;
-		Value.RodStrength = 10.0;
 		Value.RodDurability = 1.0;
 		Value.ReelSpeedCentimetersPerSecond = 80.0;
 		Value.FishCalmSpeedCentimetersPerSecond = 95.0;

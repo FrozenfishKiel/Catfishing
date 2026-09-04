@@ -6,7 +6,7 @@
 
 ## 阅读边界与后续改造
 
-用户要求：人为设定物理参数与施力意图，由同一套受力框架产生位移、僵持和拖动；结果标签只供观察和表现。以下是设计方向，尚未作为整套系统实现：先统一物理量与鱼线反力，再一起接通鱼和有限出力的卷线器，随后接入猫的移动/地面支撑与鱼竿转矩，最后替换状态驱动的断线、上岸和体力特例，并做整链验收。
+用户要求：人为设定物理参数与施力意图，由同一套受力框架产生位移、僵持和拖动；结果标签只供观察和表现。以下是设计方向，尚未作为整套系统实现：先统一物理量与鱼线反力，再一起接通鱼和有限出力的卷线器，随后接入猫的移动/地面支撑与鱼竿转矩，最后统一上岸和体力特例（强对抗过载即断线的旧裁决已删除），并做整链验收。
 
 这些是一个运动系统内部的实施顺序，不是可独立关闭的业务事项。模块状态和验证证据只维护在 [需求对齐差距清单](Development/需求对齐差距清单.md)。本指南下文只描述当前实现；每次替换旧路径时应直接更新相应正文，同轮核对源码引用、配置、资产生成脚本、测试入口和其他文档。无消费者的旧方案及错误说明应删除，历史过程由 Git 保留；仍有资产或兼容消费者时明确写出消费者和迁移限制。
 
@@ -51,7 +51,7 @@
 
 力竭外冲速度为 `max(鱼平静游速, 鱼挣扎游速) × ExhaustedCatEscapeSpeedMultiplier`，正式平衡资产默认倍率 2，已有资产通过新字段默认值获得配置。此时锁线，不允许右键放线回体；猫承担沿线约束位移，牵引目标速度允许达到外冲速度，避免小鱼质量把拖动压到近乎静止。鱼端修正上限同时覆盖外冲步幅，避免高速造成线长误差持续累积。这是用户要求的拖落水玩法规则，不是对鱼力量或猫质量做第二次修改；角色仍通过原有移动与碰撞落位，不瞬移或强行越过障碍。
 
-拖拽期间鱼无自由游动耗体，不新增竿磨损，不积累强度过载，也不以最大鱼距提前逃脱；已有真实坏竿仍按原终局处理。猫脚点达到 35 cm 危险水深并持续 0.2 秒后，Condition 的真实水深查询触发 `CatInWater`，停止 Runner 并复用现有落水表现。运行日志筛选 `LogCatFishing/Event=fishing_exhausted_cat_escape_changed`、`fishing_drag_water_entered`，结合既有牵引、终局和角色水深日志核对。动画资产仍使用项目现有绑定，不能把自动化的水深到达当作画面验收。
+拖拽期间鱼无自由游动耗体，不新增竿磨损，也不以最大鱼距提前逃脱；已有真实坏竿仍按原终局处理。猫脚点达到 35 cm 危险水深并持续 0.2 秒后，Condition 的真实水深查询触发 `CatInWater`，停止 Runner 并复用现有落水表现。运行日志筛选 `LogCatFishing/Event=fishing_exhausted_cat_escape_changed`、`fishing_drag_water_entered`，结合既有牵引、终局和角色水深日志核对。动画资产仍使用项目现有绑定，不能把自动化的水深到达当作画面验收。
 
 为什么不把所有公式都写进 StateTree Task：StateTree 适合让你直观看到“先发力、再平静、以后可插入蓄力冲刺”，但逐帧位移、鱼线和体力结算仍需要固定步长、纯 C++ 和单元测试。Task 只向 Runner 申请一个意图和持续时间，所以策划改树时不会绕过服务器权威规则。
 
@@ -104,7 +104,7 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 - 横向游：90°，`LineLoad=0`；当前鱼向外负载估计为零，但不能据此断言线必然松弛。
 - 朝竿游：点积为负，钳制为 0，不制造反方向的假拉力。
 
-`LineLoad` 是鱼主动游向的向外投影比例，不是以力为单位的线张力。`TensionCentimeters` 是候选端点超过已放线长的距离；`NormalizedTension` 是该误差除以 `TensionResponseRangeCentimeters` 后钳制到 0～1 的值。当前猫端牵引、杆转矩与断线负载仍分别使用这些代理量，尚未共用一份约束反力。
+`LineLoad` 是鱼主动游向的向外投影比例，不是以力为单位的线张力。`TensionCentimeters` 是候选端点超过已放线长的距离；`NormalizedTension` 是该误差除以 `TensionResponseRangeCentimeters` 后钳制到 0～1 的值。当前猫端牵引与杆转矩仍分别使用这些代理量，尚未共用一份约束反力。
 
 当前运动计算顺序：
 
@@ -115,13 +115,13 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 3. 猫的移动输入形成端点候选位移，与鱼候选和已放线长一起生成约束误差。只有鱼的向外对抗加速度高于猫时，其差值才按双方质量分配猫端牵引；猫更强或鱼力竭时，修正主要落到鱼端。相等力量下猫端牵引为零是这套公式的性质，不代表已经完成地面摩擦与合力求解。
 4. `ACatFishingRodActor::ApplyCarrierConstraint()` 在 CharacterMovement 完成移动后平滑追赶目标，补足向鱼速度并限制远离方向速度；这不是共同拉力在角色运动中的积分。
 
-`bStalemate` 在求得候选修正位置后按径向位移阈值生成，只供诊断，不锁位置。`bStrongConfrontation` 则由向外比例阈值与持续时间确认，仍参与过载断线：只有它成立且 `max(鱼向外力量, 收线时猫有效力量) × NormalizedTension >= RodStrength` 才报告 `StrengthOverload` 并以 `LineBroken` 结束本场。鱼竿耐久耗尽走 `RodBroken` 真损坏分支，不要求强对抗；磨损按 `LineLoad` 缩放。不要把“强对抗仅用于表现”写成当前事实。
+`bStalemate` 在求得候选修正位置后按径向位移阈值生成，`bStrongConfrontation` 由向外比例与持续时间确认；两者只供诊断和表现，不锁位置、不裁决终局。力量差继续由同一双端约束产生鱼端运动、猫端牵引与有限收线；已删除承载阈值立即断线的分支、模拟器参数和 Session 终止入口。鱼竿耐久耗尽仍走 `RodBroken` 真损坏分支，磨损按 `LineLoad` 连续缩放。新搏斗不生成 `LineBroken`；公开枚举与已有动画配置仅保留资产兼容，需在编辑器确认所有蓝图引用后再迁移删除。
 
 ### 当前鱼竿耐久归属
 
 耐久只有 `Equipment` 中绑定 `RodItemInstanceId` 的一份实例事实。新会话读取它的实际剩余值；模拟器每个固定步算出磨损增量，由权威装备入口写回同一实例，Session 的 `RodDurabilityRemaining` 只用于复制这一剩余值。辅助位、主位换人和无人值守不会改变受损鱼竿实例；取消、主动切线、收杆和下一次抛竿也不会退还既有磨损。不存在每场补满的独立鱼线耐久池。
 
-耐久归零时，装备实例和对应场景鱼竿进入损坏状态，不能再次抛竿。强度过载的 `LineBroken` 只结束本场，但已经写入的鱼竿磨损仍保留。既有维修领域入口处理同一装备实例，购买获得另一件新实例；本轮不把维修领域代码的存在视为正式玩家维修交互已验收。`MaximumRodDurability` 是新鱼竿和维修的上限，不是会话启动值。起始竿定义基线仍为 150，唯一配置脚本为 `Scripts/configure_starter_rod_tuning.py`，本轮不重平衡资产。
+耐久归零时，装备实例和对应场景鱼竿进入损坏状态，不能再次抛竿。取消或主动切线仍保留已经写入的鱼竿磨损。既有维修领域入口处理同一装备实例，购买获得另一件新实例；本轮不把维修领域代码的存在视为正式玩家维修交互已验收。`MaximumRodDurability` 是新鱼竿和维修的上限，不是会话启动值。起始竿定义基线仍为 150，唯一配置脚本为 `Scripts/configure_starter_rod_tuning.py`，本轮不重平衡资产。
 
 ### 当前体力公式
 
@@ -213,7 +213,7 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 | 猫力量和体力 | `Cat_Default`（或当前角色绑定的 `UCatCharacterDefinition`） |
 | 收近速度和耗尽吸附阈值 | `DA_FishingFightBalance_Default` 的“收线速度 / 鱼力竭吸附阈值” |
 | 张力表现达到满值的响应范围 | `DA_FishingFightBalance_Default` 的“满张力响应距离” |
-| 钓组承载、鱼竿耐久上限、杆长与装备侧磨损参数 | 当前鱼竿引用的 `UCatEquipmentDefinition`；运行时 ID 见 `fishing_fight_started` 的 `RodDefinition`，默认起始 ID 为 `StarterRodT1` |
+| 鱼竿耐久上限、杆长与装备侧磨损参数 | 当前鱼竿引用的 `UCatEquipmentDefinition`；运行时 ID 见 `fishing_fight_started` 的 `RodDefinition`，默认起始 ID 为 `StarterRodT1` |
 | 鱼竿当前剩余耐久与损坏状态 | `Equipment` 中绑定 `RodItemInstanceId` 的实例；Session 只复制同一值，不按定义上限补满 |
 | 全局努力距离、恢复、磨损和约束系数 | `/Game/Catfishing/Data/Fishing/DA_FishingFightBalance_Default`；INI 仅保留 `FightBalanceDefinition` 引用 |
 | 持竿最大角速度、响应时间与身体俯仰范围 | `UCatFishingSettings` 的 `HeldRod*` 字段 |
@@ -227,6 +227,6 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 3. 收线/拖动问题对照 `fishing_coupled_work_sample`、`fishing_constraint_sample` 的操作、收线量和端点修正，以及 `fishing_carrier_smoothing_sample` 的目标/应用速度。杆回转看 `fishing_rod_rotation_resistance_sample`。
    右键回体在 `fishing_effort_configured` 中记录 `SlackRecoveryMode=RightButtonExceptExhaustedDrag` 和实际恢复速度；每秒工作采样用 `SlackRecovery`、`CatRecovery`、四项 `Drain` 和 `FishStaminaDrain` 核对。有回体时 `GroupStaminaDrain` 为负，上限处为零；`fishing_exhausted_cat_escape_changed` 仍用于辨认优先锁线的力竭拖拽。
 4. 上岸与交接看 `fishing_fish_beached`、`exhausted_fish_pickup_spawned`；生成被拒看 `exhausted_fish_pickup_rejected` 的 `Reason`。生成前必须同时确认真实干地和竿尖水平距离。
-5. 耐久对照 `LogCatEquipment` 的 `equipment_rod_wear_applied/rejected`、`equipment_rod_durability_replicated`，以及 Session 镜像与 `ROD Durability` 面板。磨损按 `SessionId + RodItemInstanceId + WearSequence` 关联，跨场继续追踪同一实例；维修看 `equipment_rod_repair_result`。区分强度过载的 `LineBroken` 和鱼竿耐久归零的 `RodBroken`，必须证明下一场沿用剩余耐久，不能用新实例满耐久代替跨场验证。
+5. 耐久对照 `LogCatEquipment` 的 `equipment_rod_wear_applied/rejected`、`equipment_rod_durability_replicated`，以及 Session 镜像与 `ROD Durability` 面板。磨损按 `SessionId + RodItemInstanceId + WearSequence` 关联，跨场继续追踪同一实例；维修看 `equipment_rod_repair_result`。`fishing_fight_started` 的 `StrengthResolution=CoupledEndpoints`、`StrongConfrontationRole=PresentationOnly`、`RodFailure=DurabilityDepleted` 标明现行规则；必须验证强鱼持续受力不会立即结束、耐久归零仍为 `RodBroken`，并证明下一场沿用剩余耐久，不能用新实例满耐久代替跨场验证。
 
 Win64 Development 包无需 `-log` 也应将事件写入 `<打包根目录>/Catfishing/Saved/Logs`。联机验收分别核对房主与客户端的新日志；源码核对或 Automation 通过只提供 contract/runtime_behavior 证据，不能替代 presentation_delivery 验收。

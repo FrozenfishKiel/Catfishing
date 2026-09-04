@@ -19,7 +19,6 @@ namespace CatFishingCoupledSimulationTest
 		Config.StrengthPerKilogram = 10.0;
 		Config.AccelerationPerStrength = 5.0;
 		Config.DriveResponseSeconds = 1.0;
-		Config.RodStrength = 100.0;
 		Config.CatStaminaMaximum = 100.0;
 		Config.ReelSpeedCentimetersPerSecond = 80.0;
 		Config.FishCalmSpeedCentimetersPerSecond = 25.0;
@@ -877,6 +876,80 @@ bool FCatFishingEqualStrengthConstraintTest::RunTest(const FString& Parameters)
 		Step.CarrierConstraintCorrectionCentimeters, 0.0, 1e-6);
 	TestEqual(TEXT("equal strength does not create a carrier target"),
 		Step.CarrierTargetPullSpeedCentimetersPerSecond, 0.0, 1e-6);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingStrongFishContinuousFightTest,
+	"Catfishing.Unit.Fishing.Simulation.StrongerFishContinuesCoupledMotionPastFormerBreakThreshold",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingStrongFishContinuousFightTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	// 最近联机的 72.406 力量黑鱼曾在 0.41 秒被旧承载阈值结束；覆盖松左键和持续收线。
+	for (const double FishStrength : {53.38, 72.406, 150.0})
+	{
+		for (const ECatFightCatAction Action : {ECatFightCatAction::None, ECatFightCatAction::Pull})
+		{
+			auto Config = MakeConfig();
+			Config.FixedStepSeconds = 0.05;
+			Config.PrimaryOperatorMassKilograms = 5.0;
+			Config.FishStrength = FishStrength;
+			Config.FishMassKilograms = FishStrength / Config.StrengthPerKilogram;
+			Config.FishStruggleSpeedCentimetersPerSecond = 180.0;
+			Config.MaximumLineLengthCentimeters = 1500.0;
+			auto State = MakeState(Action);
+			auto Rod = MakeHeldConstraint();
+			bool bSawStrongConfrontation = false;
+			for (int32 Index = 0; Index < 60; ++Index)
+			{
+				const auto Step = FCatFishingFightSimulator::Step(Config, State, Rod, FVector::ForwardVector);
+				if (!TestTrue(TEXT("强鱼的连续受力步骤有效"), Step.bSucceeded)) return false;
+				if (!TestEqual(TEXT("力量高于猫和旧承载值仍继续搏斗"), Step.Outcome, ECatFightStepOutcome::None)) return false;
+				TestTrue(TEXT("鱼占优时仍产生牵引而非取消约束"), Step.CarrierTargetPullSpeedCentimetersPerSecond > 0.0);
+				bSawStrongConfrontation |= Step.bStrongConfrontation;
+				Rod.CarrierVelocityCentimetersPerSecond = FVector::ForwardVector * Step.CarrierTargetPullSpeedCentimetersPerSecond;
+				Rod.RodTipWorldPosition += Rod.CarrierVelocityCentimetersPerSecond * Config.FixedStepSeconds;
+				State.FishWorldPosition = Step.ProposedFishWorldPosition;
+				State.LineLengthCentimeters = Step.LineLengthCentimeters;
+				State.CatStamina -= Step.CatStaminaDrain;
+				State.FishStamina -= Step.FishStaminaDrain;
+				State.AbsoluteRodWear = Step.AbsoluteRodWear;
+				State.StrongConfrontationBuildUpSeconds = Step.StrongConfrontationBuildUpSeconds;
+			}
+			TestTrue(TEXT("已经跨过强对抗确认窗口"), bSawStrongConfrontation);
+			TestTrue(TEXT("猫端持续被鱼牵动"), Rod.RodTipWorldPosition.X > 0.0);
+			TestTrue(TEXT("取消阈值不会取消体力与耐久结算"),
+				State.CatStamina < 100.0 && State.FishStamina < 100.0 && State.AbsoluteRodWear > 0.0);
+		}
+	}
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingConfrontationPresentationOnlyTest,
+	"Catfishing.Unit.Fishing.Simulation.ConfrontationClassificationCannotChangePhysicsOrOutcome",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingConfrontationPresentationOnlyTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	auto Config = MakeConfig();
+	Config.FishStrength = 150.0;
+	auto State = MakeState(ECatFightCatAction::Pull);
+	Config.StrongConfrontationConfirmationSeconds = 0.0;
+	const auto Confirmed = FCatFishingFightSimulator::Step(Config, State, MakeHeldConstraint(), FVector::ForwardVector);
+	Config.StrongConfrontationConfirmationSeconds = 2.0;
+	const auto Pending = FCatFishingFightSimulator::Step(Config, State, MakeHeldConstraint(), FVector::ForwardVector);
+	TestTrue(TEXT("只有表现确认状态不同"), Confirmed.bSucceeded && Pending.bSucceeded
+		&& Confirmed.bStrongConfrontation && !Pending.bStrongConfrontation);
+	TestEqual(TEXT("强对抗不结束仍有耐久的搏斗"), Confirmed.Outcome, ECatFightStepOutcome::None);
+	TestEqual(TEXT("确认时间不改变终局"), Confirmed.Outcome, Pending.Outcome);
+	TestTrue(TEXT("确认时间不改变鱼端位置"), Confirmed.ProposedFishWorldPosition.Equals(Pending.ProposedFishWorldPosition, 1e-9));
+	TestEqual(TEXT("确认时间不改变猫端牵引"), Confirmed.CarrierTargetPullSpeedCentimetersPerSecond, Pending.CarrierTargetPullSpeedCentimetersPerSecond);
+	TestEqual(TEXT("确认时间不改变实际收线"), Confirmed.ActualReelDistanceCentimeters, Pending.ActualReelDistanceCentimeters);
+	TestEqual(TEXT("确认时间不改变猫耗体"), Confirmed.CatStaminaDrain, Pending.CatStaminaDrain);
+	TestEqual(TEXT("确认时间不改变鱼耗体"), Confirmed.FishStaminaDrain, Pending.FishStaminaDrain);
+	TestEqual(TEXT("确认时间不改变耐久磨损"), Confirmed.RodWearDelta, Pending.RodWearDelta);
 	return !HasAnyErrors();
 }
 

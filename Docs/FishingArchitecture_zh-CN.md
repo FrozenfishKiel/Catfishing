@@ -120,11 +120,11 @@ StateTree（`ST_FishingSession`）保持薄编排。其中 `FishExhausted` 是 `
 
 鱼自己的高层行为由 Encounter 上的 `ST_FishFight` 控制：默认在 `StrugglingOutward` 与 `CalmOrInward` 两个状态间循环。StateTree Task 只把意图和持续时间交给 Runner，不写 Transform、不扣体力，也不直接修改鱼线。未来增加“低体力蓄力冲刺”时，可以在树上增加状态和条件，同时仍复用同一套服务器模拟器。
 
-Runner 将模拟器的候选结果交给水域/地面解析，再由 Encounter 应用并复制鱼的位置；Rod 消费猫端目标速度与杆转矩输入。鱼线曲线网格只表现端点和余线，不运行粒子物理，也不向服务器提供约束反力。`bStalemate` 与 `TorqueBalanced` 只观察结果；`bStrongConfrontation` 仍参与过载断线，不能按只读表现标签处理。
+Runner 将模拟器的候选结果交给水域/地面解析，再由 Encounter 应用并复制鱼的位置；Rod 消费猫端目标速度与杆转矩输入。鱼线曲线网格只表现端点和余线，不运行粒子物理，也不向服务器提供约束反力。`bStalemate`、`TorqueBalanced` 与 `bStrongConfrontation` 均只观察和表现结果；力量差由现有约束处理，已取消强对抗过载即断线的终局分支。
 
 鱼体力归零或确认被猫端牵引上岸后，Session 发布 `FishExhausted` 进入 `ExhaustedReel`；同一 Runner 保留运动约束，但停止鱼主动运动和猫端正向扣费。当前上岸清空体力和力竭后零猫消耗都是玩法特例，物理改造尚未替换这些分支。猫危险入水由 Condition 的脚点浸没查询确认。
 
-全局搏斗系数来自 `DA_FishingFightBalance_Default`；鱼的游速、方向概率和阶段倍率来自当前鱼种性格，杆长、承载与鱼竿耐久上限来自当前装备定义。当前剩余耐久只属于绑定 `RodItemInstanceId` 的装备实例，每个固定步的磨损写回该实例，Session 只复制同一值；新会话、切线、换人和收杆不恢复耐久。强度过载以 `LineBroken` 结束本场；耐久归零以 `RodBroken` 写入真实损坏并拒绝再次抛竿。`UCatFishingSettings` 保留资产软引用、固定步与持竿姿态等技术设置。具体字段和诊断过滤词见实现导读，不再从旧 `Fight|Spec` 设置页或测试鱼快照推断现行参数。
+全局搏斗系数来自 `DA_FishingFightBalance_Default`；鱼的游速、方向概率和阶段倍率来自当前鱼种性格，杆长与鱼竿耐久上限来自当前装备定义。当前剩余耐久只属于绑定 `RodItemInstanceId` 的装备实例，每个固定步的磨损写回该实例，Session 只复制同一值；新会话、切线、换人和收杆不恢复耐久。力量超过旧承载值不再结束本场；耐久归零以 `RodBroken` 写入真实损坏并拒绝再次抛竿。`UCatFishingSettings` 保留资产软引用、固定步与持竿姿态等技术设置。具体字段和诊断过滤词见实现导读，不再从旧 `Fight|Spec` 设置页或测试鱼快照推断现行参数。
 
 ### 2.5 抄网（当前实现）
 

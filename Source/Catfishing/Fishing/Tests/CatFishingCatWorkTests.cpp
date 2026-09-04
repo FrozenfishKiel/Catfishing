@@ -14,7 +14,6 @@ namespace CatActualWorkTest
 		Value.PrimaryOperatorMassKilograms = 5.0;
 		Value.FishStrength = 50.0;
 		Value.FishMassKilograms = 5.0;
-		Value.RodStrength = 1000.0;
 		Value.RodDurability = 1000.0;
 		Value.CatStaminaMaximum = 60.0;
 		Value.ReelSpeedCentimetersPerSecond = 80.0;

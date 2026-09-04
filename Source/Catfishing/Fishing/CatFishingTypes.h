@@ -42,8 +42,8 @@ enum class ECatFishingOutcome : uint8
 	CatInWater, Cancelled, Invalidated,
 	/** 会话已把鱼安全释放为独立岸上拾取物；鱼尚未归属任何玩家。 */
 	Landed,
-	/** 钓组承载过载断线；保留鱼竿已经发生的磨损，不额外销毁仍有耐久的鱼竿。 */
-	LineBroken,
+	/** 旧蓝图/表现资产的枚举值兼容；现行搏斗不再生成强度过载断线。保持枚举序号。 */
+	LineBroken UMETA(Hidden),
 	/** 玩家主动切断本场鱼线止损；鱼与已消耗鱼饵丢失，不追加或退还鱼竿磨损。 */
 	LineCut
 };

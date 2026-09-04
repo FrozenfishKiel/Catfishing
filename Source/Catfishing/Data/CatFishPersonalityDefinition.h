@@ -88,7 +88,7 @@ public:
 
 	/**
 	 * 鱼游向在鱼线向外方向上的投影达到此比例，才记为强对抗。
-	 * 强对抗用于判定自然僵持和诊断，体力、做功与磨损仍按连续的夹角投影比例计算。
+	 * 强对抗只用于自然僵持的表现分类和诊断，不裁决终局；体力、做功与磨损仍按连续夹角投影计算。
 	 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Steering|Fight", meta=(ClampMin="0.01", ClampMax="1"))
 	double StrongConfrontationAlignmentThreshold = 0.55;

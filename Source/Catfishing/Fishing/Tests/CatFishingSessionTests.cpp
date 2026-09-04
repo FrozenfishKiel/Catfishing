@@ -71,8 +71,8 @@ bool FCatFishingSessionPublicSnapshotDefaultsTest::RunTest(const FString& Parame
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatFishingSessionLineBreakKeepsRodOperableTest,
-	"Catfishing.Unit.Fishing.Session.LineBreakEndsOnlyCurrentSessionAndKeepsRodOperable",
+	FCatFishingSessionLegacyLineBreakCompatibilityTest,
+	"Catfishing.Unit.Fishing.Session.LegacyLineBreakSnapshotKeepsRodOperable",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -213,7 +213,7 @@ bool FCatFishingSessionGroundedCutLineCommandTest::RunTest(const FString& Parame
 	return !HasAnyErrors();
 }
 
-bool FCatFishingSessionLineBreakKeepsRodOperableTest::RunTest(const FString& Parameters)
+bool FCatFishingSessionLegacyLineBreakCompatibilityTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	FTestWorldWrapper WorldWrapper;
@@ -239,7 +239,7 @@ bool FCatFishingSessionLineBreakKeepsRodOperableTest::RunTest(const FString& Par
 	Session->FightRunner = NewObject<UCatFishingFightRunner>(Session);
 
 	AddExpectedErrorPlain(TEXT("Event=fishing_session_terminated"), EAutomationExpectedErrorFlags::Contains, 1);
-	Session->FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::LineBroken, TEXT("strength overload"));
+	Session->FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::LineBroken, TEXT("legacy line-break snapshot compatibility"));
 
 	TestEqual(TEXT("Line break terminates only the current session"),
 		Session->Snapshot.Phase, ECatFishingPhase::Terminated);

@@ -646,7 +646,7 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 	const bool bCatHaulingFish = FCatFishFightMotionSolver::IsIntentionalLandwardHaul(Intent);
 	// 力竭鱼没有自主游动，所有候选位移都来自同一根鱼线，不再为它加活鱼的防甩杆力竭门槛。
 	const bool bSurfaceTow = (State.bFishExhausted || bCatHaulingFish)
-		&& Step.Outcome != ECatFightStepOutcome::LineBroken && Step.Outcome != ECatFightStepOutcome::RodBroken
+		&& Step.Outcome != ECatFightStepOutcome::RodBroken
 		&& Step.Outcome != ECatFightStepOutcome::Escaped;
 	const bool bWasBeached = bFishBeached;
 	bool bShoreContactThisStep = false;
@@ -763,8 +763,7 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 	if (bOutBeachedThisStep)
 	{
 		Step.bFishBeached = true;
-		if (!State.bFishExhausted && Step.Outcome != ECatFightStepOutcome::LineBroken
-			&& Step.Outcome != ECatFightStepOutcome::RodBroken
+		if (!State.bFishExhausted && Step.Outcome != ECatFightStepOutcome::RodBroken
 			&& Step.Outcome != ECatFightStepOutcome::Escaped)
 		{
 			Step.FishStaminaDrain = State.FishStamina;

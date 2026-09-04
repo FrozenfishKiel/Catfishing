@@ -86,7 +86,7 @@
 | 字段 | 含义 | 规格对应 |
 |---|---|---|
 | MaximumRodDurability | **鱼竿耐久上限**；新鱼竿或维修使用该上限，同一装备实例的剩余耐久跨场累计，归零即损坏；重新抛竿不恢复 | `StarterRodT1` 当前基线 150；其他档以正式资产为准 |
-| FishingStrength | 钓组承载强度（静态） | 25/60/130 档，判定①断线比较用 |
+| FishingStrength | 已停用的旧鱼竿承载字段，仅保留资产/蓝图读取兼容 | 不再编辑、校验或参与搏斗；不要用它调断线阈值 |
 | MaximumLineLengthCentimeters | 线长上限 cm | 放尽绷紧强制按拖判定 |
 | BaseDurabilityWearPerSecond / HighTensionWearMultiplier | 基础磨损/绷紧磨损倍率 | ≥0 / ≥1 |
 | RodTipLocal/StandLocal/GripLocalTransform | 竿尖(抛竿原点+鱼线起点)/操作站位/握持 三个权威锚点 | 表现蓝图只读不写 |
@@ -179,7 +179,7 @@
 | InwardProbabilityExponent | `pow(1-体力比例, 指数)` 的曲线；>1 表示低体力后才明显增加向内概率 |
 | InwardConeHalfAngleDegrees | 朝竿尖方向左右各多少度算向内；默认 60°，完整扇区 120° |
 | StrongConfrontationAlignmentThreshold | 夹角投影达到多少才算强对抗；体力/磨损在阈值以下仍连续按 `LineLoad` 投影计算，张力不把低方向负载抬成满负载 |
-| StrongConfrontationConfirmationSeconds | 强对抗角度需要连续保持多久，才允许按实际线负载触发断线；落水由 Condition 水深判定 |
+| StrongConfrontationConfirmationSeconds | 强对抗角度需要连续保持多久才发布表现标记，不裁决终局；落水由 Condition 水深判定 |
 | AngleStrengthExponent | 对 `max(cos夹角,0)` 做幂变换；1=线性，越大则斜向力量衰减越快 |
 
 ## 6. GAS 资产：`UCatAbilitySet` / `UCatAbilityInputConfig`

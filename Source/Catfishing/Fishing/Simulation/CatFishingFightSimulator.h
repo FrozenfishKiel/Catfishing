@@ -8,15 +8,8 @@ enum class ECatFightStepOutcome : uint8
 {
 	None,
 	FishExhausted,
-	LineBroken,
 	RodBroken,
 	Escaped
-};
-
-enum class ECatFightLineBreakCause : uint8
-{
-	None,
-	StrengthOverload
 };
 
 /** 线杯控制模式：不按=锁线，左键=收线，右键=自由出线。 */
@@ -50,7 +43,6 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double AccelerationPerStrength = 5.0;
 	/** 将猫端对抗加速度投影为收线/牵引响应速度的时长。 */
 	double DriveResponseSeconds = 1.0;
-	double RodStrength = 0.0;
 	/** 转矩模型的玩法杆长；来自鱼竿定义，不读取 Mesh 或锚点间距。 */
 	double RodPhysicsLengthCentimeters = 200.0;
 	double CatStaminaMaximum = 0.0;
@@ -83,6 +75,7 @@ struct CATFISHING_API FCatFightSimulationConfig
 	/** 无可用猫合力时的持续外冲速度，按鱼较快的配置游速放大。 */
 	double ExhaustedCatEscapeSpeedMultiplier = 2.0;
 	double FishExhaustionThreshold = 0.5;
+	/** 仅供强对抗/僵持表现分类，不参与位移、做功或终局裁决。 */
 	double StrongConfrontationAlignmentThreshold = 0.55;
 	double StrongConfrontationConfirmationSeconds = 0.2;
 	double AngleStrengthExponent = 1.0;
@@ -195,7 +188,6 @@ struct CATFISHING_API FCatFightStepResult
 	bool bStrongConfrontation = false;
 	/** Runner 确认本步由猫端牵引越过真实岸线；鱼会复用 FishExhausted 终局进入鱼干拖拽。 */
 	bool bFishBeached = false;
-	ECatFightLineBreakCause LineBreakCause = ECatFightLineBreakCause::None;
 	ECatFightStepOutcome Outcome = ECatFightStepOutcome::None;
 };
 

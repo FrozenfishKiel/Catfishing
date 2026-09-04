@@ -17,7 +17,6 @@ namespace CatFishingEffortTest
 		Config.PrimaryOperatorMassKilograms = 10.0;
 		Config.FishMassKilograms = 3.0;
 		Config.FishStrength = 40.0;
-		Config.RodStrength = 1000.0;
 		Config.CatStaminaMaximum = 1000.0;
 		Config.ReelSpeedCentimetersPerSecond = 80.0;
 		Config.FishCalmSpeedCentimetersPerSecond = 25.0;
