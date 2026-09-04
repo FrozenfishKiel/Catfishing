@@ -110,6 +110,16 @@ bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("未配置资产默认不可进入运行态"), Balance->IsRuntimeDefinitionReady());
 	PopulateValidFightBalance(*Balance);
 	TestTrue(TEXT("完整合法数值可进入运行态"), Balance->IsRuntimeDefinitionReady());
+	TestEqual(TEXT("既有资产获得猫力竭外冲默认倍率"), Balance->ExhaustedCatEscapeSpeedMultiplier, 2.0);
+	Balance->ExhaustedCatEscapeSpeedMultiplier = 3.0;
+	TestTrue(TEXT("猫力竭外冲速度可独立调整"), Balance->IsRuntimeDefinitionReady());
+	for (const double InvalidEscapeSpeed : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),
+		std::numeric_limits<double>::infinity()})
+	{
+		Balance->ExhaustedCatEscapeSpeedMultiplier = InvalidEscapeSpeed;
+		TestFalse(TEXT("非法外冲倍率拒绝正式运行"), Balance->IsRuntimeDefinitionReady());
+	}
+	Balance->ExhaustedCatEscapeSpeedMultiplier = 2.0;
 	TestNotNull(TEXT("资产生成脚本可调用统一运行校验"),
 		UCatFishingFightBalanceDefinition::StaticClass()->FindFunctionByName(
 			GET_FUNCTION_NAME_CHECKED(UCatFishingFightBalanceDefinition, IsRuntimeDefinitionReady)));

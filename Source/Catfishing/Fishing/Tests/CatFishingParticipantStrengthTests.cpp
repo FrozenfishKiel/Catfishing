@@ -144,6 +144,28 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("助手极低体力实际扣尽后停止发力"), Runner->Config.SecondCatStrength, 0.0);
 	TestFalse(TEXT("真正零Delta仍然被拒绝"), PrimaryASC->ApplyFishingStaminaDelta(0.0f));
 
+	// 固定步在能力扣款之后重新读取主猫ASC，再决定是否进入持续外冲。
+	SetStamina(0.0f, 0.0f);
+	Runner->bInitialized = true;
+	Runner->bRunning = true;
+	Runner->CalmDurationRangeSeconds = FVector2D(1.0, 1.0);
+	Runner->InitialFishStamina = 100.0;
+	double CalmDuration = 0.0;
+	TestTrue(TEXT("行为树仍可请求普通平静状态"), Runner->BeginBehaviorStateFromStateTree(
+		ECatFishMotionIntent::CalmOrInward, CalmDuration));
+	Runner->FindParticipant(PrimaryPlayer)->bPullHeld = false;
+	Runner->FindParticipant(PrimaryPlayer)->bSlackHeld = true;
+	TestTrue(TEXT("真实双方ASC耗尽后由Runner接管持续外冲"), Runner->UpdateFishBehaviorForCurrentOperator(true));
+	TestEqual(TEXT("力竭时覆盖休息请求为持续挣扎"), Runner->State.MotionIntent, ECatFishMotionIntent::StrugglingOutward);
+	TestEqual(TEXT("力竭时暂时锁线而非放线回体"), Runner->State.CatAction, ECatFightCatAction::None);
+	SetStamina(0.0f, 30.0f);
+	Runner->UpdateParticipantIntentAndProperties();
+	TestFalse(TEXT("真实助手恢复并发力后解除强制拖拽"), Runner->UpdateFishBehaviorForCurrentOperator(true));
+	TestEqual(TEXT("获救后恢复行为树当前意图而非卡住挣扎"), Runner->State.MotionIntent, ECatFishMotionIntent::CalmOrInward);
+	TestEqual(TEXT("获救后仍保留真实右键状态"), Runner->State.CatAction, ECatFightCatAction::Slack);
+	Runner->FindParticipant(PrimaryPlayer)->bPullHeld = true;
+	Runner->FindParticipant(PrimaryPlayer)->bSlackHeld = false;
+
 	SetStamina(0.0f, 0.0f);
 	Runner->State.bFishExhausted = true;
 	Runner->State.FishStamina = 0.0;

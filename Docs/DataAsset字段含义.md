@@ -49,6 +49,7 @@
 | 每点力量加速度 | AccelerationPerStrength | 5 | 猫/鱼共享的力量→绷线对抗加速度换算；不限制鱼的自由游速 |
 | 猫端驱动力响应时间 | DriveResponseSeconds | 1s | 猫端对抗加速度投影到收线/牵引响应速度的时长 |
 | 收线速度 | ReelSpeedCentimetersPerSecond | 80 cm/s | 左键收线意图速度上限 |
+| 猫力竭后鱼外冲速度倍率 | ExhaustedCatEscapeSpeedMultiplier | 2 | 主位体力为零且没有助手实际出力时，按鱼两档游速中的较大值乘此倍率持续外冲；有限值且至少为 1 |
 | 猫做功体力消耗系数 | CatStaminaCostPerStrengthCentimeter | 默认 0.002 | 每点标准努力强度、每厘米有效努力的体力价格 |
 | 鱼做功体力消耗系数 | FishStaminaCostPerStrengthCentimeter | 默认 0.002 | 每点标准努力强度、每厘米有效对抗努力的体力价格；再乘鱼对抗负载，自由游动不扣体力 |
 | 猫移动体力倍率 | CatMovementStaminaMultiplier | 默认 1 | 绷线时主动远离鱼的身体移动费用；被动位移不计 |

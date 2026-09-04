@@ -50,6 +50,11 @@ public:
 		meta = (DisplayName = "收线速度", ClampMin = "0.001", Units = "cm/s"))
 	double ReelSpeedCentimetersPerSecond = 0.0;
 
+	/** 主猫力竭且无助手出力时，按鱼较快的配置游速持续外冲；拖拽保持锁线直到落水或获救。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "力量与运动",
+		meta = (DisplayName = "猫力竭后鱼外冲速度倍率", ClampMin = "1.0"))
+	double ExhaustedCatEscapeSpeedMultiplier = 2.0;
+
 	/** 猫每 1 点标准努力强度、每 1 cm 有效努力消耗的体力；标准努力强度取 StrengthPerKilogram。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "猫做功体力消耗系数", ClampMin = "0.0"))

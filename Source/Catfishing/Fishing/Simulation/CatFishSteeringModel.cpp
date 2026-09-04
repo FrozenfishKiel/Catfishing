@@ -129,7 +129,7 @@ bool FCatFishSteeringModel::SelectTarget(const FCatFishSteeringConfig& Config,
 bool FCatFishSteeringModel::Step(const FCatFishSteeringConfig& Config,
 	const FVector& LineOutwardDirection, const ECatFishMotionIntent MotionIntent,
 	const double FishStaminaRatio, const double DeltaSeconds,
-	FRandomStream& Random, FCatFishSteeringState& InOutState, FVector& OutDesiredDirection)
+	FRandomStream& Random, FCatFishSteeringState& InOutState, FVector& OutDesiredDirection, const bool bForceOutward)
 {
 	// [FishLogic 2/5：平滑转向]
 	// 目标到期/运动意图改变时才重新抽方向；其他固定步只按最大角速度转过去，所以轨迹连续而非白噪声抖动。
@@ -141,14 +141,35 @@ bool FCatFishSteeringModel::Step(const FCatFishSteeringConfig& Config,
 	{
 		return false;
 	}
-	if (!InOutState.bInitialized
+	if (bForceOutward)
+	{
+		const FVector Outward = FlattenDirection(LineOutwardDirection, FVector::ForwardVector);
+		if (!InOutState.bInitialized)
+		{
+			InOutState = FCatFishSteeringState{};
+			InOutState.bInitialized = true;
+			InOutState.CurrentDirection = Outward;
+		}
+		InOutState.TargetDirection = Outward;
+		if (InOutState.BoundaryAvoidanceSecondsRemaining > 0.0)
+		{
+			const FVector Waterward = InOutState.BoundaryWaterwardDirection;
+			const double IntoWater = FVector::DotProduct(Outward, Waterward);
+			InOutState.TargetDirection = FlattenDirection(Outward
+				+ Waterward * FMath::Max(0.0, 0.2 - IntoWater), Waterward);
+		}
+		// 不抽休息、假动作或随机内游；退出强制外冲后立即交还普通重选逻辑。
+		InOutState.LastMotionIntent = MotionIntent;
+		InOutState.RetargetSecondsRemaining = 0.0;
+	}
+	else if (!InOutState.bInitialized
 		&& !Initialize(Config, LineOutwardDirection, MotionIntent, FishStaminaRatio, Random, InOutState))
 	{
 		return false;
 	}
 
 	InOutState.RetargetSecondsRemaining -= DeltaSeconds;
-	if (InOutState.LastMotionIntent != MotionIntent || InOutState.RetargetSecondsRemaining <= 0.0)
+	if (!bForceOutward && (InOutState.LastMotionIntent != MotionIntent || InOutState.RetargetSecondsRemaining <= 0.0))
 	{
 		if (!SelectTarget(Config, LineOutwardDirection, MotionIntent, FishStaminaRatio, Random, InOutState))
 		{
@@ -157,6 +178,8 @@ bool FCatFishSteeringModel::Step(const FCatFishSteeringConfig& Config,
 	}
 	InOutState.CurrentDirection = TurnToward2D(InOutState.CurrentDirection, InOutState.TargetDirection,
 		Config.MaximumTurnRateDegreesPerSecond * DeltaSeconds);
+	InOutState.BoundaryAvoidanceSecondsRemaining = FMath::Max(0.0,
+		InOutState.BoundaryAvoidanceSecondsRemaining - DeltaSeconds);
 	OutDesiredDirection = InOutState.CurrentDirection;
 	return IsFiniteDirection(OutDesiredDirection) && !OutDesiredDirection.IsNearlyZero();
 }
@@ -174,6 +197,8 @@ bool FCatFishSteeringModel::RedirectFromWaterBoundary(const FCatFishSteeringConf
 	}
 
 	const FVector Waterward = FlattenDirection(WaterwardDirection, InOutState.CurrentDirection);
+	InOutState.BoundaryWaterwardDirection = Waterward;
+	InOutState.BoundaryAvoidanceSecondsRemaining = Config.RetargetDurationRangeSeconds.Y;
 	const FVector Current = FlattenDirection(InOutState.CurrentDirection, Waterward);
 	const double IntoWaterDot = FVector::DotProduct(Current, Waterward);
 	const FVector ShoreTangent(-Waterward.Y, Waterward.X, 0.0);

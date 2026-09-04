@@ -1196,6 +1196,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.ReelSpeedCentimetersPerSecond = FightBalance->ReelSpeedCentimetersPerSecond;
 	Config.FishCalmSpeedCentimetersPerSecond = Personality->CalmMovementSpeedCentimetersPerSecond;
 	Config.FishStruggleSpeedCentimetersPerSecond = Personality->StruggleMovementSpeedCentimetersPerSecond;
+	Config.ExhaustedCatEscapeSpeedMultiplier = FightBalance->ExhaustedCatEscapeSpeedMultiplier;
 	Config.FishExhaustionThreshold = FightBalance->FishExhaustionThreshold;
 	Config.StrongConfrontationAlignmentThreshold = Personality->StrongConfrontationAlignmentThreshold;
 	Config.StrongConfrontationConfirmationSeconds = Personality->StrongConfrontationConfirmationSeconds;
@@ -1392,12 +1393,13 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 			"FishDrainMode=OpposingLoadOnly FishBaseEffortMultiplier=0.000 "
 			"MovementMultiplier=%.3f ReelMultiplier=%.3f RodMultiplier=%.3f HoldMultiplier=%.3f "
 			"CatLoadMultiplier=%.3f FishLoadMultiplier=%.3f IsometricMultiplier=%.3f "
-			"CatCost=%.6f FishCost=%.6f %s"),
+			"CatCost=%.6f FishCost=%.6f ExhaustedCatEscapeSpeedMultiplier=%.3f %s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *FightBalance->BalanceDefinitionId.ToString(),
 		Config.CatMovementStaminaMultiplier, Config.CatReelStaminaMultiplier,
 		Config.CatRodStaminaMultiplier, Config.CatHoldStaminaMultiplier,
 		Config.CatLoadStaminaMultiplier, Config.FishLoadStaminaMultiplier, Config.IsometricEffortMultiplier,
 		Config.CatStaminaCostPerStrengthCentimeter, Config.FishStaminaCostPerStrengthCentimeter,
+		Config.ExhaustedCatEscapeSpeedMultiplier,
 		*CatLogContext::BuildControllerFields(FisherCharacter->GetController()));
 	return true;
 }

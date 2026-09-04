@@ -31,6 +31,9 @@ struct CATFISHING_API FCatFishSteeringState
 	double RetargetSecondsRemaining = 0.0;
 	ECatFishMotionIntent LastMotionIntent = ECatFishMotionIntent::None;
 	bool bInitialized = false;
+	/** 最近真实岸线反馈；强制外冲也需暂时保持朝水内的安全半平面。 */
+	FVector BoundaryWaterwardDirection = FVector::ZeroVector;
+	double BoundaryAvoidanceSecondsRemaining = 0.0;
 };
 
 /** 无 World、无 Actor 的确定性鱼游向模型。 */
@@ -43,7 +46,7 @@ public:
 
 	static bool Step(const FCatFishSteeringConfig& Config, const FVector& LineOutwardDirection,
 		ECatFishMotionIntent MotionIntent, double FishStaminaRatio, double DeltaSeconds, FRandomStream& Random,
-		FCatFishSteeringState& InOutState, FVector& OutDesiredDirection);
+		FCatFishSteeringState& InOutState, FVector& OutDesiredDirection, bool bForceOutward = false);
 
 	/** 纯函数：把剩余体力比例 [0,1] 映射为本次平静重选落入向内 60°扇区的概率。 */
 	static double ComputeInwardProbability(const FCatFishSteeringConfig& Config, double FishStaminaRatio);

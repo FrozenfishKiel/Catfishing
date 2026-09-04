@@ -371,6 +371,37 @@ void UCatFishingFightRunner::RefreshCatAction()
 		: Primary->bSlackHeld ? ECatFightCatAction::Slack : ECatFightCatAction::None;
 }
 
+bool UCatFishingFightRunner::UpdateFishBehaviorForCurrentOperator(const bool bRodHeld)
+{
+	const bool bEscape = FCatFishingFightSimulator::ShouldEscapeExhaustedCat(Config, State, bRodHeld);
+	RefreshCatAction();
+	State.MotionIntent = State.bFishExhausted ? ECatFishMotionIntent::AutoHauling
+		: bEscape ? ECatFishMotionIntent::StrugglingOutward : BehaviorMotionIntent;
+	if (bEscape) State.CatAction = ECatFightCatAction::None;
+	if (bEscape != bLastExhaustedCatEscapeDiagnosticActive)
+	{
+		if (const ACatFishingSession* SessionActor = Session.Get())
+		{
+			const FCatFightParticipantRuntime* Primary = FindPrimaryParticipant();
+			UE_LOG(LogCatFishing, Log,
+				TEXT("Event=fishing_exhausted_cat_escape_changed SessionId=%s RodActor=%s CatActor=%s PlayerId=%d "
+					"Active=%s CatStamina=%.6f CombinedStrength=%.3f FishStamina=%.3f SpeedMultiplier=%.3f "
+					"BehaviorIntent=%s EffectiveIntent=%s Result=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
+				*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				*GetNameSafe(RodActor.Get()), *GetNameSafe(Primary ? Primary->Character.Get() : nullptr),
+				Primary && Primary->PlayerState.IsValid() ? Primary->PlayerState->GetPlayerId() : INDEX_NONE,
+				bEscape ? TEXT("true") : TEXT("false"), State.CatStamina, Config.GetCombinedCatStrength(),
+				State.FishStamina, Config.ExhaustedCatEscapeSpeedMultiplier,
+				*UEnum::GetValueAsString(BehaviorMotionIntent), *UEnum::GetValueAsString(State.MotionIntent),
+				bEscape ? TEXT("OutwardRushWithLockedLine") : TEXT("EscapeOverrideReleased"),
+				*GetNameSafe(SessionActor->GetWorld()), static_cast<int32>(SessionActor->GetNetMode()),
+				static_cast<int32>(SessionActor->GetLocalRole()));
+		}
+		bLastExhaustedCatEscapeDiagnosticActive = bEscape;
+	}
+	return bEscape;
+}
+
 bool UCatFishingFightRunner::SetReeling(APlayerState* InputPlayerState,
 	const int64 InputSequence, const bool bInReeling)
 {
@@ -491,6 +522,7 @@ bool UCatFishingFightRunner::BeginBehaviorStateFromStateTree(const ECatFishMotio
 	{
 		return false;
 	}
+	BehaviorMotionIntent = MotionIntent;
 	State.MotionIntent = MotionIntent;
 	if (MotionIntent == ECatFishMotionIntent::StrugglingOutward)
 	{
@@ -799,22 +831,34 @@ void UCatFishingFightRunner::HandleFixedStep()
 		}
 		if (Exposure == ECatWaterExposureUpdate::DangerousEntered)
 		{
+			UE_LOG(LogCatFishing, Log,
+				TEXT("Event=fishing_drag_water_entered SessionId=%s CatActor=%s PlayerId=%d CatStamina=%.6f "
+					"ImmersionDepthCm=%.3f Result=CatInWaterRequested World=%s NetMode=%d Authority=true LocalRole=%d"),
+				*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				*GetNameSafe(Primary ? Primary->Character.Get() : nullptr),
+				Primary && Primary->PlayerState.IsValid() ? Primary->PlayerState->GetPlayerId() : INDEX_NONE,
+				State.CatStamina, ImmersionDepth, *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
+				static_cast<int32>(SessionActor->GetLocalRole()));
 			SessionActor->HandleCatEnteredDangerousWaterFromAuthority(ImmersionDepth);
 			return;
 		}
 	}
 
-	// 高层意图与状态持续时间由鱼行为 StateTree 推进；Runner 只读取当前意图，不保存第二份阶段倒计时。
+	// 状态持续时间由鱼行为 StateTree 推进；Runner 按体力事实覆盖本步外冲意图，不另建阶段倒计时。
 	// 每步开始都以 Encounter Actor 的实际 Transform 为准同步鱼的位置，避免和上一步的建议位置产生累积误差。
 	State.FishWorldPosition = Encounter->GetActorLocation();
 	const FVector RodTip = Rod->GetRodTipWorldTransform().GetLocation();
-	FVector Outward = State.FishWorldPosition - RodTip; // 竿尖指向鱼的方向即为鱼线“向外”方向
+	const bool bRodHeld = Rod->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Held;
+	const bool bExhaustedCatEscape = UpdateFishBehaviorForCurrentOperator(bRodHeld);
+	const APawn* EscapeHolder = Rod->GetHolderPawnFromAuthority();
+	// 外冲以猫身体为远离基点，避免力竭时被鱼拉转的竿尖把方向绕回岸边。
+	FVector Outward = State.FishWorldPosition - (bExhaustedCatEscape && EscapeHolder ? EscapeHolder->GetActorLocation() : RodTip);
 	if (Outward.IsNearlyZero()) Outward = FVector::ForwardVector;
 	FVector DesiredFishDirection = FVector::ZeroVector;
 	// 服务器按性格和固定随机种子生成连续游向；客户端不参与随机，只接收最终权威 Transform/表现状态。
 	const double FishStaminaRatio = FMath::Clamp(State.FishStamina / InitialFishStamina, 0.0, 1.0);
 	if (!State.bFishExhausted && !FCatFishSteeringModel::Step(SteeringConfig, Outward, State.MotionIntent, FishStaminaRatio,
-		Config.FixedStepSeconds, SteeringRandom, SteeringState, DesiredFishDirection))
+		Config.FixedStepSeconds, SteeringRandom, SteeringState, DesiredFishDirection, bExhaustedCatEscape))
 	{
 		Stop();
 		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("FishSteering"));
@@ -826,7 +870,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 	RodConstraint.RodForwardWorld = Rod->GetAuthoritativeRodForwardVector();
 	RodConstraint.RodTipVelocityCentimetersPerSecond = Rod->GetAuthoritativeRodTipVelocity();
 	RodConstraint.CarrierVelocityCentimetersPerSecond = Rod->GetAuthoritativeHolderVelocity();
-	RodConstraint.bRodHeld = Rod->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Held;
+	RodConstraint.bRodHeld = bRodHeld;
 	if (const ACatCharacter* PrimaryCharacter = FindPrimaryParticipant()
 		? FindPrimaryParticipant()->Character.Get() : nullptr)
 	{

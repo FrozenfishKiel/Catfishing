@@ -3,7 +3,7 @@
 #include "CoreMinimal.h"
 #include "Fishing/CatFishingTypes.h"
 
-/** 单步终局；僵持、猫力竭和鱼被压制都只是连续物理结果，不再是瞬时结局。 */
+/** 单步终局；猫力竭先进入持续拖拽，由真实水深确认落水，不直接结束本场。 */
 enum class ECatFightStepOutcome : uint8
 {
 	None,
@@ -74,6 +74,8 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double ReelSpeedCentimetersPerSecond = 0.0;
 	double FishCalmSpeedCentimetersPerSecond = 0.0;
 	double FishStruggleSpeedCentimetersPerSecond = 0.0;
+	/** 无可用猫合力时的持续外冲速度，按鱼较快的配置游速放大。 */
+	double ExhaustedCatEscapeSpeedMultiplier = 2.0;
 	double FishExhaustionThreshold = 0.5;
 	double StrongConfrontationAlignmentThreshold = 0.55;
 	double StrongConfrontationConfirmationSeconds = 0.2;
@@ -121,6 +123,7 @@ struct CATFISHING_API FCatFightSimulationState
 struct CATFISHING_API FCatFightStepResult
 {
 	bool bSucceeded = false;
+	bool bExhaustedCatEscape = false;
 	double IntendedSwimSpeedCentimetersPerSecond = 0.0;
 	double CatStaminaDrain = 0.0;
 	double FishStaminaDrain = 0.0;
@@ -189,6 +192,9 @@ struct CATFISHING_API FCatFightStepResult
 class CATFISHING_API FCatFishingFightSimulator
 {
 public:
+	/** 活鱼趁持竿主猫力竭且无助手出力时持续外冲；无人持竿/力竭鱼不进入。 */
+	static bool ShouldEscapeExhaustedCat(const FCatFightSimulationConfig& Config,
+		const FCatFightSimulationState& State, bool bRodHeld);
 	static FCatFightStepResult Step(const FCatFightSimulationConfig& Config,
 		const FCatFightSimulationState& State, const FVector& RodTipWorldPosition,
 		const FVector& DesiredFishDirection);

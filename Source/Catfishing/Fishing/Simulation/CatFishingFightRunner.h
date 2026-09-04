@@ -97,6 +97,7 @@ private:
 	friend class FCatFishingParticipantStrengthTest;
 	void HandleFixedStep();
 	void RefreshCatAction();
+	bool UpdateFishBehaviorForCurrentOperator(bool bRodHeld);
 	bool RefreshParticipantsFromRod();
 	bool AddParticipantFromAuthority(APlayerState* PlayerState, bool bPrimary,
 		bool bInitialPullHeld, bool bInitialSlackHeld, int64 InitialInputSequence);
@@ -124,6 +125,8 @@ private:
 	double InitialFishStamina = 0.0;
 	FCatFishSteeringConfig SteeringConfig;
 	FCatFishSteeringState SteeringState;
+	/** StateTree 的请求意图；力竭外冲只覆盖本步有效意图，不另建阶段计时器。 */
+	ECatFishMotionIntent BehaviorMotionIntent = ECatFishMotionIntent::StrugglingOutward;
 	FCatFishingRodEffortSampler RotationEffortSampler;
 	UPROPERTY(Transient)
 	TObjectPtr<UStateTree> BehaviorStateTree = nullptr;
@@ -137,6 +140,7 @@ private:
 	double NextShoreContactDiagnosticWorldSeconds = 0.0;
 	bool bLastShoreContactDiagnosticActive = false;
 	bool bLastConstraintDiagnosticActive = false;
+	bool bLastExhaustedCatEscapeDiagnosticActive = false;
 	bool bFishBeached = false;
 	bool bInitialized = false;
 	bool bRunning = false;

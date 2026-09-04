@@ -16,6 +16,7 @@ bool UCatFishingFightBalanceDefinition::IsRuntimeDefinitionReady() const
 		&& FMath::IsFinite(DriveResponseSeconds) && DriveResponseSeconds > 0.0
 		&& FMath::IsFinite(ReelSpeedCentimetersPerSecond) && ReelSpeedCentimetersPerSecond > 0.0
 		&& IsFishingFightBalanceFiniteNonNegative(CatStaminaCostPerStrengthCentimeter)
+		&& FMath::IsFinite(ExhaustedCatEscapeSpeedMultiplier) && ExhaustedCatEscapeSpeedMultiplier >= 1.0
 		&& IsFishingFightBalanceFiniteNonNegative(FishStaminaCostPerStrengthCentimeter)
 		&& IsFishingFightBalanceFiniteNonNegative(CatMovementStaminaMultiplier)
 		&& IsFishingFightBalanceFiniteNonNegative(CatReelStaminaMultiplier)

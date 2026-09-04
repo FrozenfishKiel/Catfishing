@@ -50,6 +50,7 @@ bool FCatFightSimulationConfig::IsValid() const
 		&& FMath::IsFinite(ReelSpeedCentimetersPerSecond) && ReelSpeedCentimetersPerSecond > 0.0
 		&& IsFiniteNonNegative(FishCalmSpeedCentimetersPerSecond)
 		&& FMath::IsFinite(FishStruggleSpeedCentimetersPerSecond) && FishStruggleSpeedCentimetersPerSecond > 0.0
+		&& FMath::IsFinite(ExhaustedCatEscapeSpeedMultiplier) && ExhaustedCatEscapeSpeedMultiplier >= 1.0
 		&& FMath::IsFinite(FishExhaustionThreshold) && FishExhaustionThreshold >= 0.0
 		&& FishExhaustionThreshold <= 1.0
 		&& FMath::IsFinite(StrongConfrontationAlignmentThreshold)
@@ -67,6 +68,13 @@ bool FCatFightSimulationConfig::IsValid() const
 		&& FMath::IsFinite(MaximumLineLengthCentimeters) && MaximumLineLengthCentimeters > 0.0
 		&& FMath::IsFinite(RodDurability) && RodDurability > 0.0
 		&& IsFiniteNonNegative(EscapeSlackCentimeters);
+}
+
+bool FCatFishingFightSimulator::ShouldEscapeExhaustedCat(const FCatFightSimulationConfig& Config,
+	const FCatFightSimulationState& State, const bool bRodHeld)
+{
+	return bRodHeld && State.bOperatorPresent && !State.bFishExhausted && State.FishStamina > 0.0
+		&& State.CatStamina == 0.0 && Config.GetCombinedCatStrength() <= 0.0;
 }
 
 FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationConfig& Config,
@@ -125,10 +133,13 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	}
 
 	const bool bOperatorPresent = State.bOperatorPresent;
-	const bool bReeling = bOperatorPresent && State.CatAction == ECatFightCatAction::Pull;
-	const bool bFreeSpool = !bOperatorPresent || State.CatAction == ECatFightCatAction::Slack;
+	const bool bExhaustedCatEscape = ShouldEscapeExhaustedCat(Config, State, RodConstraint.bRodHeld);
+	Result.bExhaustedCatEscape = bExhaustedCatEscape;
+	// 力竭拖拽维持锁线；不能靠残留右键在零体力时反复放线回体、恢复全力。
+	const bool bReeling = bOperatorPresent && !bExhaustedCatEscape && State.CatAction == ECatFightCatAction::Pull;
+	const bool bFreeSpool = !bOperatorPresent || (!bExhaustedCatEscape && State.CatAction == ECatFightCatAction::Slack);
 	const bool bStruggling = !State.bFishExhausted
-		&& State.MotionIntent == ECatFishMotionIntent::StrugglingOutward;
+		&& (bExhaustedCatEscape || State.MotionIntent == ECatFishMotionIntent::StrugglingOutward);
 
 	const double Alignment = bHasRadialBasis
 		? FMath::Clamp(FVector::DotProduct(FishDirection, HorizontalOutward), -1.0, 1.0) : 0.0;
@@ -155,7 +166,10 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		: Config.FishCalmSpeedCentimetersPerSecond;
 	// 性格资产给的是鱼在无约束水体中的意图游速。力量换算出的加速度只参与绷线后的双方对抗，
 	// 不能反过来成为自由游动的永久速度上限；否则小鱼即使松开线杯也会近似停在原地。
-	const double SwimSpeed = State.bFishExhausted ? 0.0 : FishSpeedCap;
+	const double SwimSpeed = State.bFishExhausted ? 0.0 : bExhaustedCatEscape
+		? FMath::Max(Config.FishCalmSpeedCentimetersPerSecond, Config.FishStruggleSpeedCentimetersPerSecond)
+			* Config.ExhaustedCatEscapeSpeedMultiplier : FishSpeedCap;
+	if (!FMath::IsFinite(SwimSpeed)) return Result;
 	const FVector FishIntentDisplacement = FishDirection * SwimSpeed * Dt;
 	FVector FreeFishPosition = State.FishWorldPosition + FishIntentDisplacement;
 	FreeFishPosition.Z = State.FishWorldPosition.Z;
@@ -204,15 +218,19 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 			? Config.FishMassKilograms / (CatMass + Config.FishMassKilograms) : 0.0;
 		// 质量决定强鱼取得优势后两端如何分担运动；力量差决定是否取得优势。
 		// 力量相等是自然僵持：鱼的向外意图由鱼端约束抵消，猫不会被“等质量各一半”无条件拖走。
-		const double CarrierCorrectionShare = BaseCarrierCorrectionShare * FishForceDominance;
+		// 力竭后进入拖落水的玩法收尾：猫承担沿线位移，不再由小鱼质量把拖动压到近乎静止。
+		// 仍通过同一鱼线约束和 CharacterMovement 的碰撞移动，不瞬移角色。
+		const double CarrierCorrectionShare = bExhaustedCatEscape ? 1.0 : BaseCarrierCorrectionShare * FishForceDominance;
 		CarrierPullAcceleration = NetFishPullAcceleration
 			* BaseCarrierCorrectionShare * NormalizedTension;
-		const double MaximumCarrierResponseSpeed = FMath::Min(
+		const double MaximumCarrierResponseSpeed = bExhaustedCatEscape ? SwimSpeed : FMath::Min(
 			Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond,
 			CarrierPullAcceleration * Config.DriveResponseSeconds);
 		CarrierCorrection = FMath::Min(ConstraintError * CarrierCorrectionShare,
 			MaximumCarrierResponseSpeed * Dt);
-		const double MaximumFishCorrection = Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond * Dt;
+		const double MaximumFishCorrection = (bExhaustedCatEscape
+			? FMath::Max(SwimSpeed, Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond)
+			: Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond) * Dt;
 		FVector TowardRod = IntendedRodTip - ProposedFishPosition;
 		TowardRod.Z = 0.0;
 		const double HorizontalDistance = TowardRod.Size2D();
@@ -224,7 +242,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 			ProposedFishPosition.Z = State.FishWorldPosition.Z;
 		}
 		CarrierTargetPullSpeed = CarrierCorrection / Dt;
-		CarrierAwaySpeedMultiplier = FMath::Lerp(1.0,
+		if (bExhaustedCatEscape) CarrierPullAcceleration = CarrierTargetPullSpeed / Dt;
+		CarrierAwaySpeedMultiplier = bExhaustedCatEscape ? 0.0 : FMath::Lerp(1.0,
 			Config.MinimumCarrierAwaySpeedMultiplier,
 			NormalizedTension * CarrierCorrectionShare);
 	}
@@ -363,7 +382,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		}
 	}
 
-	const bool bConfrontationCandidate = !State.bFishExhausted && bLineRestraining
+	const bool bConfrontationCandidate = !State.bFishExhausted && !bExhaustedCatEscape && bLineRestraining
 		&& OutwardLoad >= Config.StrongConfrontationAlignmentThreshold;
 	Result.StrongConfrontationBuildUpSeconds = bConfrontationCandidate
 		? State.StrongConfrontationBuildUpSeconds + Dt : 0.0;
@@ -384,7 +403,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const double WearLoad = OutwardLoad;
 	// 鱼力竭后的收尾只保留线长约束和拖拽位移；死鱼不再施力，
 	// 猫的收线力也不能独自制造鱼竿磨损，否则拉鱼干仍会把会话判为断线。
-	const double RodWearDelta = !State.bFishExhausted && bLineRestraining
+	// 拖落水期间不新增磨损或积累过载终局，避免尚未落水就被断竿替代。
+	const double RodWearDelta = !State.bFishExhausted && !bExhaustedCatEscape && bLineRestraining
 		? (FMath::Max(FishLineForce, CatLineForce) * Config.StalemateRodWearPerFishStrength
 			+ (bStruggling ? Config.StruggleHoldRodWearPerSecond : 0.0))
 			* WearLoad * Dt * Config.TautRodWearMultiplier : 0.0;
@@ -434,7 +454,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	{
 		Result.Outcome = ECatFightStepOutcome::FishExhausted;
 	}
-	else if (FreeDistance > Config.MaximumLineLengthCentimeters + Config.EscapeSlackCentimeters)
+	else if (!bExhaustedCatEscape && FreeDistance > Config.MaximumLineLengthCentimeters + Config.EscapeSlackCentimeters)
 	{
 		Result.Outcome = ECatFightStepOutcome::Escaped;
 	}
