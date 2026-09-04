@@ -59,7 +59,7 @@
 |---|---|---|
 | `DA_CatAbilityInputConfig` | `/Game/Data/Abilities/` | `AbilityInputActions` 保存钓鱼 GAS 映射；`NativeInputActions` 额外保存 `IA_Interact` → `Cat.Input.Interact` |
 | `DA_CatAbilitySet_Default` | `/Game/Data/Abilities/` | 5 个原生 Ability 类；Primary=`WhileInputActive`，其余 `OnInputTriggered` |
-| `Equip_ScoopNet_Starter` | `/Game/Catfishing/Data/Equipment/` | 正式目录抄网定义 `StarterScoopNet`；当前由开发期开关默认发放，正式获取接入后关闭该开关 |
+| `Equip_ScoopNet_Starter` | `/Game/Catfishing/Data/Equipment/` | 正式目录抄网定义 `StarterScoopNet`；当前不默认发放，商店/奖励来源接入前暂时没有获取渠道 |
 | `Fish_*` | `/Game/Catfishing/Data/Fish/` | 16 条正式鱼定义；Showcase2 已使用 `RegionId=River`，按生态条件与连续挑战度从该目录选择 |
 | `Bite_*` / `Fight_*` | `/Game/Catfishing/Data/Fish/` | 正式咬钩与搏斗性格；由选中的 `Fish_*` 稳定 ID 解析 |
 | `Curve_ChumDistanceFalloff` / `Curve_ChumTimeFalloff` | `/Game/Data/Curves/` | 1→0 线性衰减 |
@@ -71,11 +71,11 @@
 
 ### 2.2 `Config/DefaultGame.ini`
 
-**已经写好并落盘了**，8 个 section 全部指向 2.1 节创建好的资产。只剩两处 StateTree 软引用需要你建完资产后补上：
+**已经写好并落盘了**，8 个 section 基本都指向正式资产；RunFlow 已经使用项目内固定资产路径：
 
 ```ini
 [/Script/Catfishing.CatRunSettings]
-RunFlowStateTree=/Game/.../ST_RunFlow.ST_RunFlow                        ; ← 待补
+RunFlowStateTree=/Game/Data/StateTrees/ST_RunFlow.ST_RunFlow
 
 [/Script/Catfishing.CatFishingSettings]
 FishingSessionStateTree=/Game/.../ST_FishingSession.ST_FishingSession   ; ← 待补
@@ -97,7 +97,7 @@ FishingSessionStateTree=/Game/.../ST_FishingSession.ST_FishingSession   ; ← �
 
 ### 2.4 StateTree 拓扑（简要重述，细节见前文对话）
 
-- **ST_RunFlow**（Context = `ACatfishingGameModeBase`）：`DayActive → NormalNight/FailureNight → Ending → Ended`，事件只有 `Cat.Run.QuotaReached/QuotaFailed/AllEligibleReady/SettlementComplete`
+- **ST_RunFlow**（Context = `ACatfishingGameModeBase`）：`DayActive → NormalNight/FailureSettlementNight/SuccessSettlementNight → Ending → Ended`，事件只有 `Cat.Run.QuotaReached/QuotaFailed/AllEligibleReady/SettlementComplete`；`NormalNight` 的成功结算分支必须挂 `Cat Run Success Settlement Eligible`
 - **ST_FishingSession**（Context = `ACatFishingSession`）：`Waiting → Probe → HookedFight → ExhaustedReelHold`；鱼体力耗尽时发送 `Cat.Fishing.FishExhausted`，叶子的 `Enter Phase(ExhaustedReel)` 只切生命周期，同一个 Runner 继续运行。**树永远不能自然结束**，`Resolved`/`Terminated` 只能由 C++ 写。
 
 ---
@@ -178,7 +178,8 @@ Make FCatPlaceChumCommand
     RequestId = New Guid
     ExpectedWaterRegionHandle = Region.GetWaterRegionHandle()
     ExpectedEquipmentRevision = Snapshot.Revision
-    ChumDefinitionId = （玩家当前选择的窝料 ID，需要你自己的库存/选择 UI 提供）
+    ChumItemInstanceId = （玩家当前选择的窝料库存格 ItemInstanceId）
+    ChumDefinitionId = （可选；服务器会按 ChumItemInstanceId 复核并覆盖为真实定义）
     Quantity = 1（或 UI 里选的数量）
     ClientCandidateWorldPoint = Trace 命中点
 → FishingCommandComponent.Submit Place Chum (Command)

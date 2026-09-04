@@ -48,13 +48,6 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	bool bAutoConfigureStarterLoadout = false;
 
-	/**
-	 * 开发期临时抄网发放：Character 首次由服务器占有时，若本人库存没有 StarterScoopNetDefinitionId，
-	 * 就通过正式 EquipmentGrant 写入一份并自动选中。正式获取方式接入后关闭，不影响其他 Starter 装备。
-	 */
-	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
-	bool bAutoGrantStarterScoopNet = false;
-
 	/** Starter 兜底鱼竿定义 ID；只在兜底开关打开时读取，且该定义必须已经存在于角色随身库存。 */
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterRodDefinitionId = NAME_None;
@@ -67,7 +60,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterFloatDefinitionId = NAME_None;
 
-	/** Starter 抄网定义 ID；既供完整兜底选择使用，也供开发期临时抄网发放读取。 */
+	/** Starter 兜底希望选择的抄网定义；Character 兜底流程只用它匹配随身库存已有物品，不把它当成获取来源。 */
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterScoopNetDefinitionId = NAME_None;
 

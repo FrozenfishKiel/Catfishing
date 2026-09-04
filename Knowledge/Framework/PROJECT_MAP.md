@@ -124,6 +124,7 @@ Frontend 到 Lake 的唯一正式入口在 `UCatOnlineSubsystem`。UI 通过 `UC
 ## 配置与资产入口
 
 当前默认地图在 `Config/DefaultEngine.ini` 指向 `/Game/Catfishing/Maps/Frontend`；创建或加入 Session 后进入 `CatOnlineSettings.GameplayMap`，当前测试值为 `/Game/NaturePackage/Maps/Showcase2`。Online 的 `Lake`/`TravelingToLake` 枚举名暂作兼容标签保留，其运行含义是“联机玩法地图”。Frontend、Lake 与 Showcase2 都在打包地图白名单中，因此切回正式 Lake 只需修改一行 `GameplayMap` 配置，无需改 C++ 或重新维护 Cook 列表。
+Showcase2 当前包含一个 `BP_CampHUB_C` 实例 `Showcase_CampHub`，位置为 `(4760, 22310, 417)`，它承担唯一营地出生点语义。地图里可以暂留普通 `PlayerStart`，但 `ACatfishingGameModeBase` 运行时只接受唯一的 `ACatCampHubActor`，不会把普通 `PlayerStart` 当作玩家出生点。
 
 Build 依赖在 `Source/Catfishing/Catfishing.Build.cs`。当前是单 Runtime 模块，公开依赖包括 `GameplayAbilities`、`GameplayTags`、`NetCore`、`OnlineSubsystem` 和 `StateTreeModule`；实现侧依赖包括 `GameplayStateTreeModule`、`EnhancedInput` 和 `OnlineSubsystemUtils`。
 

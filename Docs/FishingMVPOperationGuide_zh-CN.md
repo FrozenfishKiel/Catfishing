@@ -89,21 +89,28 @@ Root
 │            [Cat Run Wait For Event]
 │     Transitions:
 │       On Event  Cat.Run.QuotaReached  →  NormalNight
-│       On Event  Cat.Run.QuotaFailed   →  FailureNight
+│       On Event  Cat.Run.QuotaFailed   →  FailureSettlementNight
 │
 ├── NormalNight
 │     Tasks Completion: All        ← ⚠️
 │     Tasks: [Cat Run Enter Phase (Phase=NormalNight, Reason=QuotaReached)]
 │            [Cat Run Wait For Event]
 │     Transitions:
+│       On Event  Cat.Run.AllEligibleReady  →  SuccessSettlementNight（需 Cat Run Success Settlement Eligible）
 │       On Event  Cat.Run.AllEligibleReady  →  DayActive
 │
-└── FailureNight
+└── FailureSettlementNight
       Tasks Completion: All        ← ⚠️
       Tasks: [Cat Run Enter Phase (Phase=FailureSettlementNight, Reason=QuotaFailed)]
              [Cat Run Wait For Event]
       Transitions:
-        On Event  Cat.Run.SettlementComplete  →  DayActive
+        On Event  Cat.Run.SettlementComplete  →  Ending
+└── SuccessSettlementNight
+      Tasks Completion: All
+      Tasks: [Cat Run Enter Phase (Phase=SuccessSettlementNight, Reason=AllEligibleReady)]
+             [Cat Run Wait For Event]
+      Transitions:
+        On Event  Cat.Run.SettlementComplete  →  Ending
 ```
 
 **说明与注意事项**
@@ -111,9 +118,8 @@ Root
 - ⚠️ **每个多 Task 的 State 都必须把 `Tasks Completion` 从默认的 `Any` 改成 `All`。** 引擎默认 `Any` 的含义是「任何一个 Task 完成，State 就完成」—— `Cat Run Enter Phase` 一返回 Succeeded，State 立刻退出，`Wait For Event` 白搭。改成 `All` 后要所有 Task 都完成才算完成，而 `Wait For Event` 永远 Running，State 就被钉住了。详见 [StateTree 教程第 4 节](StateTreeTutorial_zh-CN.md#4-️-state-什么时候算完成最大的坑)。
 - Task 顺序有意义：`Enter Phase` 必须排在 `Wait For Event` 之前。
 - **起始状态由排列顺序决定**：树启动时选中 Root 的第一个子状态，所以 `DayActive` 必须排第一。
-- **不要接 `SuccessSettlementNight`**：`EnterRunPhaseFromStateTree` 里有硬校验，`SuccessSettlementPolicy != Enabled` 时进这个阶段会直接返回 `PolicyUndecided`（我在 ini 里没启用这条策略）。
-- MVP 只要 `DayActive` 一个状态能进去就够钓鱼了，`NormalNight`/`FailureNight` 是为了让白天到期后不卡死。嫌麻烦可以先只做 `DayActive`。
-- 进入 `DayActive` 会启动一个 `DayLengthSeconds`（ini 里配的 600 秒）的倒计时，到期额度不够就发 `QuotaFailed`。测试期间如果嫌 10 分钟太短，改 ini 里的 `DayLengthSeconds` 再重启。
+- `NormalNight` 收到 `Cat.Run.AllEligibleReady` 时要有两条边：第一条挂 `Cat Run Success Settlement Eligible` 去 `SuccessSettlementNight`，第二条无条件回 `DayActive` 翻下一天。
+- `DayActive` 会启动 `DayLengthSeconds` 倒计时，到期额度不够就发 `QuotaFailed` 进入失败结算夜。测试期间可以改 ini 里的值后重启，也可以在开发期用 `cat.RunEnvironmentSocial.DayLength <秒数>` 临时改当前白天。
 
 ---
 
@@ -322,10 +328,10 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 规格 3.1 打窝：蓄力抛掷、抛物线预览。现在的实现：
 
 - **Q 按下**：服务器记时刻
-- **Q 松开**：服务器按按住时长算 `ChargeAlpha = clamp(held / ChumChargeMaxSeconds)`，初速 `Lerp(Min, Max, Alpha)`，用引擎 `PredictProjectilePath` 得到落点，选一份可用窝料（优先 `StarterChumDefinitionId`），走 `PlaceChum` 全部校验（射程/夹角/视线/库存/水域）
+- **Q 松开**：服务器按按住时长算 `ChargeAlpha = clamp(held / ChumChargeMaxSeconds)`，初速 `Lerp(Min, Max, Alpha)`，用引擎 `PredictProjectilePath` 得到落点，选一份足量窝料实例（优先 `StarterChumDefinitionId` 对应实例），把 `ChumItemInstanceId` 交给 `PlaceChum` 做全部校验（射程/夹角/视线/库存/水域）
 - 参数在 `Project Settings → Catfishing Fishing → Chum|Throw`：`ChumChargeMaxSeconds=1.5`、`Min/MaxSpeed=600/1400`、`Elevation=35°`、`ThrowQuantity=1`
 
-结果日志：`Event=chum_throw Held=.. Alpha=.. Landing=..` + `Event=place_chum_result Committed=...`
+结果日志：`Event=chum_throw Held=.. Alpha=.. Landing=.. ChumItem=..` + `Event=place_chum_result Committed=...`
 
 **可选的客户端蓄力预览蓝图**：Q 按下记 `PressTime`，按住期间每帧：
 ```
@@ -359,12 +365,12 @@ Event BeginPlay
          RodDefinitionId      = "Rod_Basic"
          BaitDefinitionId     = "Bait_Basic"
          FloatDefinitionId    = "Float_Basic"
-         ScoopNetDefinitionId = "StarterScoopNet"     ← 第 4 个参数；当前开发配置会另行默认发放并选中
+         ScoopNetDefinitionId = "StarterScoopNet"     ← 第 4 个参数；当前默认配置不会另行发放，必须已有库存实例才会成功
 ```
 
 **怎么知道成功了**：这是个 `Server, Reliable` RPC，没有回执结构体。判断方式是**轮询 `Get Snapshot` 的 `Revision` 是否从 0 变成 1**，或者监听装备组件的复制变化。建议在 UI 上显示当前 `RodDefinitionId`，非 `None` 就说明装配好了。
 
-> `RequestScoop` 仍要求服务器装备快照里存在有效 `ScoopNet`。当前 `bAutoGrantStarterScoopNet=True` 会在服务器首次占有时给每名玩家发放并选中 `StarterScoopNet`，所以手工装配留空也能继续测试抄网；正式获取方式接入后关闭该临时开关，届时必须通过商店/奖励获得并选择抄网。
+> `RequestScoop` 仍要求服务器装备快照里存在有效 `ScoopNet`。临时默认抄网发放配置和启动分支已删除，当前手工装配留空不会再沿用服务器默认抄网；在商店/奖励获取接入前，抄网链路只能通过人工准备好库存实例后再选择验证。
 
 ---
 
@@ -406,7 +412,7 @@ Event BeginPlay
 
 ### ~~1. 抢抄需要 ScoopNet，但装配接口传不进去~~ ✅ 已修
 
-`ServerConfigureEquipment` 现在提交 Rod/Bait/Float/ScoopNet 四个 DefinitionId，并可同时提交对应的四个 ItemInstanceId。库存 UI 应从当前格子带上实例 ID；旧调用没带实例 ID 时，服务器仍会按 DefinitionId 兼容解析一份可用实例。当前正式目录定义填 `"StarterScoopNet"`；开发期默认发放开启时可留空沿用服务器已选中的抄网。
+`ServerConfigureEquipment` 现在提交 Rod/Bait/Float/ScoopNet 四个 DefinitionId，并可同时提交对应的四个 ItemInstanceId。库存 UI 应从当前格子带上实例 ID；旧调用没带实例 ID 时，服务器仍会按 DefinitionId 兼容解析一份可用实例。当前正式目录仍有 `"StarterScoopNet"` 定义，但默认配置不发放它；没有已有库存实例时，抄网选择必须保持失败而不是凭空补发。
 
 ### ~~2. 打窝需要窝料库存，但没有发放入口~~ ✅ 已修
 
@@ -509,11 +515,10 @@ Event=run_phase_entered Day=1 Phase=ECatRunPhase::DayActive Deadline=600.000
 1. 表现：Rod/Hook 蓝图继续实现 `BP_On*PresentationChanged`；鱼 Mesh/骨骼/AnimBP/动画只在 `Fish_* → FishPresentation_*` 直连资产中维护；新建 `BP_CatChumFieldPresentation`（父类 `CatChumFieldPresentationActor`）并把类路径写进 ini
 2. `BP_CatFishingController`：5.4 ConfigureEquipment（4 参数）→ `Server Grant Run Consumable` 发窝料 → 5.1 接 E 键结果缓存 → 5.2 左键长按预览+抛竿 → 5.3 Q 蓄力+打窝
 3. （可选）HUD：用 ViewBridge 订阅会话状态
-4. （可选）`ST_RunFlow` 补夜晚循环
 
 ### ⬜ 待办（我）
 
-- ~~C++ 调试可视化~~ ✅ 已完成：`cat.Fishing.Debug 0/1/2`（默认 0；0=世界标记全关，1=全量，2=只留抄网射线+鱼圈+鱼线+阶段提示）；右上角当前鱼种 ID 与鱼/竿/猫体力、耐久和力量面板由独立的 `cat.Fishing.Stats 0/1` 控制（默认 1）
+- ~~C++ 调试可视化~~ ✅ 已完成：`cat.Fishing.Debug 0/1/2`（默认 0；0=世界标记全关，1=全量，2=只留抄网射线+鱼圈+鱼线+阶段提示）；右上角当前鱼种 ID 与鱼/竿/猫体力、耐久和力量面板由独立的 `cat.Fishing.Stats 0/1` 控制（默认 0，排查时手动打开）
 - 浮漂弹道修正（现在飞行轨迹落不到目标点会"瞬移"）
 - 规格后续：抄网道具化/概率/硬直/无网拾取/翻肚 30s；窝料接入水域面积/鱼量账本、平均分布、共享重叠收敛曲线与面积容量上限；浮漂级计时器读取所在面积单元聚鱼总量；浮漂精准偏移；入夜停咬
 

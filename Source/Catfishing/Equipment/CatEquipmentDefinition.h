@@ -17,8 +17,23 @@ class CATFISHING_API UCatEquipmentDefinition : public UPrimaryDataAsset
 	GENERATED_BODY()
 
 public:
-	/** 校验稳定 ID、类别和类别专属字段；任何 Unset 都阻止装配或消耗。 */
+	/** 校验这条定义能否进入运行目录；服务器目录读取它做 fail-closed，失败会阻止装配、Use 裁决和消耗事务。 */
 	bool IsRuntimeDefinitionReady() const;
+
+	/** 统一物品入口在提交库存事务前调用的 Use 裁决；它只读取当前实例、数量和定义数据，返回值决定 Equipment 是否继续移动或扣量。 */
+	virtual ECatDomainCommandError Use(const FCatRunInventorySlot& Item, int32 Quantity) const;
+
+	/** 统一停止使用入口在放回活动实例前调用的 UnUse 裁决；失败会让 Equipment 保持活动记录，不按定义重新生成物品。 */
+	virtual ECatDomainCommandError UnUse(const FCatRunInventorySlot& Item) const;
+
+	/** 这类物品 Use 成功后是否由活动记录暂存整份实例；Equipment 读取它区分部署型物品和 no-op/扣量型物品。 */
+	virtual bool KeepsInventoryInstanceWhileUsed() const;
+
+	/** 这类物品 Use 成功后是否直接扣库存数量；Equipment 读取它处理已经完成玩法前置裁决的数量耗材。 */
+	virtual bool ConsumesInventoryQuantityOnUse() const;
+
+	/** 读取这类物品声明或兼容推导出的库存影响策略；统一入口用它裁决 no-op、部署占用和简单扣量三条边界。 */
+	virtual ECatEquipmentUseInventoryEffect GetUseInventoryEffect() const;
 
 	/** 装备/道具稳定 ID；Profile 选择、运行装配和鱼偏好只引用该值。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
@@ -48,9 +63,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
 	TSoftObjectPtr<UTexture2D> Thumbnail;
 
-	/** 这类物品通过 Use 部署到世界时生成的 Actor 类；鱼竿放置从实例定义读取它，不再共用全局鱼竿 Actor 配置。 */
+	/** 这类物品通过 Use 部署到世界时生成的 Actor 类；策划数据写入它，具体玩法表现从自己的定义读取，鱼竿只是其中一种。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")
 	TSoftClassPtr<AActor> UseActorClass;
+
+	/** 这类物品 Use 成功后对库存实例的默认影响；策划数据写入它，定义裁决和 Equipment 事务读取它选择 no-op、部署占用或简单扣量。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")
+	ECatEquipmentUseInventoryEffect UseInventoryEffect = ECatEquipmentUseInventoryEffect::Auto;
 
 	/** 单格最大堆叠数；0 表示沿用项目默认规则，1 表示这类物品不可堆叠。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Inventory", meta = (ClampMin = "0"))

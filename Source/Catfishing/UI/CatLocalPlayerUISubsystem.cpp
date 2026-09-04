@@ -10,8 +10,6 @@
 #include "Online/CatOnlineSubsystem.h"
 #include "UI/CatTravelWidget.h"
 #include "UI/CatUISettings.h"
-#include "UI/Collection/CatCollectionModel.h"
-#include "UI/Collection/CatCollectionWidget.h"
 #include "UI/HUD/CatHUDModel.h"
 #include "UI/HUD/CatHUDWidget.h"
 #include "UI/Interaction/CatInteractionPageController.h"
@@ -335,7 +333,7 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 
 // 本地玩家 UI 装配流程：
 // 1. 验证本地设置、当前 Controller/Pawn 和 World；核心 WBP 类缺失或无效时直接 fail-closed，不创建原生白盒替身。
-// 2. 创建 HUD Model/View 并入视口；HUD 展示猫状态、钓鱼反馈、入口按钮和固定屏幕中心准星。
+// 2. 创建 HUD Model/View 并入视口；默认主界面只常驻天数、背包入口和设置入口，背包内容由库存页打开后再显示。
 // 3. 创建 Inventory Model/PageController/普通背包 View，但背包 View 不预先入视口，只通过既有 InputContext 的 Action 打开。
 // 4. 创建 Interaction 提示 View 和控制器；控制器订阅 PlayerController 的唯一准星交互目标，商店、鱼护和未来箱子仍由世界交互对象提供页面上下文。
 void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
@@ -409,7 +407,7 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	const UWorld* World = GetWorld();
 	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	UE_LOG(LogCatUI, Log,
-		TEXT("Event=ui_player_modules_attached World=%s NetMode=%d LocalPlayerIndex=%d Controller=%s LocalController=%s HUD=%s Crosshair=gray_center Inventory=%s Slot=%s Interaction=%s ShopPrecreated=false"),
+		TEXT("Event=ui_player_modules_attached World=%s NetMode=%d LocalPlayerIndex=%d Controller=%s LocalController=%s HUD=%s HUDMode=minimal_main Inventory=%s Slot=%s Interaction=%s ShopPrecreated=false"),
 		World ? *World->GetName() : TEXT("None"),
 		World ? static_cast<int32>(World->GetNetMode()) : -1,
 		LocalPlayer ? LocalPlayer->GetLocalPlayerIndex() : INDEX_NONE,
@@ -424,7 +422,6 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 // 本地玩家 UI 解绑流程：PageController 先恢复输入并移出当前库存页，Model 再解除玩法订阅，最后移除各自 WBP 并清引用。
 void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 {
-	CloseCollection();
 	if (InventoryPageController)
 	{
 		InventoryPageController->Unbind();
@@ -476,66 +473,7 @@ void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 		LocalPlayer ? LocalPlayer->GetLocalPlayerIndex() : INDEX_NONE);
 }
 
-// 图鉴切换流程：存在可见图鉴时关闭；否则按 UI Settings 懒创建 View/Model 并渲染当前 Profile 只读快照。
-void UCatLocalPlayerUISubsystem::ToggleCollection()
-{
-	if (CollectionWidget)
-	{
-		const bool bWasVisible = CollectionWidget->IsInViewport();
-		CloseCollection();
-		if (bWasVisible)
-		{
-			return;
-		}
-	}
-
-	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
-	const TSubclassOf<UCatCollectionWidget> CollectionViewClass = Settings
-		? Settings->LoadCollectionWidgetClass() : nullptr;
-	APlayerController* Controller = BoundPlayerController.Get();
-	if (!Controller || !CollectionViewClass)
-	{
-		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_collection_unavailable Controller=%s ViewClass=%s"),
-			*GetNameSafe(Controller),
-			*GetNameSafe(CollectionViewClass.Get()));
-		return;
-	}
-
-	CollectionModel = NewObject<UCatCollectionModel>(this);
-	CollectionWidget = CreateWidget<UCatCollectionWidget>(Controller, CollectionViewClass);
-	if (!CollectionModel || !CollectionWidget || !CollectionModel->Bind(GetLocalPlayer()))
-	{
-		CloseCollection();
-		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_collection_bind_failed Controller=%s ViewClass=%s"),
-			*GetNameSafe(Controller),
-			*GetNameSafe(CollectionViewClass.Get()));
-		return;
-	}
-
-	CollectionModelViewChangedHandle = CollectionModel->OnViewStateChanged.AddUObject(
-		this, &ThisClass::HandleCollectionModelViewStateChanged);
-	CollectionWidget->AddToViewport(9);
-	HandleCollectionModelViewStateChanged();
-}
-
-// 图鉴关闭流程：先移除 Model 订阅并清空只读投影，再移出 View；重复关闭不会影响 HUD、背包或交互提示。
-void UCatLocalPlayerUISubsystem::CloseCollection()
-{
-	if (CollectionModel)
-	{
-		CollectionModel->OnViewStateChanged.Remove(CollectionModelViewChangedHandle);
-		CollectionModel->Unbind();
-		CollectionModel = nullptr;
-	}
-	CollectionModelViewChangedHandle.Reset();
-	if (CollectionWidget)
-	{
-		CollectionWidget->RemoveFromParent();
-		CollectionWidget = nullptr;
-	}
-}
-
-// HUD 渲染转交流程：Model 已聚合状态和钓鱼反馈；Subsystem 只把它交给 HUD WBP。
+// HUD 渲染转交流程：Model 已聚合天数、入口显隐和可选调试反馈；Subsystem 只把它交给 HUD WBP。
 void UCatLocalPlayerUISubsystem::HandleHUDModelViewStateChanged()
 {
 	if (HUDModel && HUDWidget)
@@ -544,25 +482,13 @@ void UCatLocalPlayerUISubsystem::HandleHUDModelViewStateChanged()
 	}
 }
 
-// 图鉴渲染转交流程：Model 已聚合 Profile 图鉴记录；Subsystem 只把它交给 Collection WBP。
-void UCatLocalPlayerUISubsystem::HandleCollectionModelViewStateChanged()
-{
-	if (CollectionModel && CollectionWidget)
-	{
-		CollectionWidget->RenderCollection(CollectionModel->GetViewState());
-	}
-}
-
-// HUD 入口动作流程：背包和图鉴分别转交现有控制器/模型；菜单仍保留给蓝图或后续页面控制器。
+// HUD 入口动作流程：背包转交现有控制器；菜单仍保留给蓝图或后续页面控制器。
 void UCatLocalPlayerUISubsystem::HandleHUDActionRequested(const ECatHUDAction Action)
 {
 	switch (Action)
 	{
 	case ECatHUDAction::OpenInventory:
 		ToggleInventory();
-		break;
-	case ECatHUDAction::OpenCollection:
-		ToggleCollection();
 		break;
 	case ECatHUDAction::OpenMainMenu:
 		UE_LOG(LogCatUI, Log, TEXT("Event=ui_hud_action_forwarded_without_native_page Action=%s"),

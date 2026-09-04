@@ -44,7 +44,10 @@ public:
 	/** 判断普通夜晚的新加入/重连确认是否可进入资格集合；两项策略必须都显式 Enabled 才允许。 */
 	bool CanAdmitLateNightReady() const;
 
-	/** 裁决 StateTree 是否可以选择成功结算分支；只有产品显式 Enabled 才返回 true，默认值不能推导终局天数。 */
+	/** 裁决 StateTree 是否可以选择成功结算分支；只有产品显式 Enabled 且已经完成最终天，才返回 true。 */
+	bool CanEnterSuccessSettlementNight(int32 CompletedDayIndex) const;
+
+	/** 只读返回成功结算策略是否被允许；它只表达总开关，不包含第几天可结束的判断。 */
 	bool IsSuccessSettlementEnabled() const;
 
 	/** RunFlow 总 gate；默认关闭，关闭时 GameMode 只发布 NotStarted/StartupFailed。 */
@@ -75,7 +78,11 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Admission")
 	ECatRunPolicyDecision NightReconnectReadyPolicy = ECatRunPolicyDecision::Undecided;
 
-	/** 成功终局是否可进入 SuccessSettlementNight；具体天数与达成条件不在本配置表达，未有正式事实时保持不可达。 */
+	/** 一局目标天数；普通夜晚完成该天或更晚的全员 ready 后，StateTree 才允许进入成功结算夜。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Ending")
+	int32 FinalDayIndex = 10;
+
+	/** 成功终局是否可进入 SuccessSettlementNight；它只作为总开关，最终天数由 FinalDayIndex 表达。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Ending")
 	ECatRunPolicyDecision SuccessSettlementPolicy = ECatRunPolicyDecision::Undecided;
 };

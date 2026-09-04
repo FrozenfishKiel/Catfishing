@@ -3,13 +3,12 @@
 #include "EnhancedActionKeyMapping.h"
 #include "InputAction.h"
 #include "InputMappingContext.h"
-#include "UI/Collection/CatCollectionWidget.h"
 #include "UI/HUD/CatHUDWidget.h"
 #include "UI/Interaction/CatInteractionPromptWidget.h"
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
 
-// 构造流程：为正式拆分 UI WBP 和输入资产写入稳定软路径；输入 Action 放在项目既有 InputContext 下维护，运行时代码只加载资产和绑定 Action。
+// 构造流程：为正式拆分的 HUD、背包、交互提示 WBP 和输入资产写入稳定软路径；输入 Action 放在项目既有 InputContext 下维护，运行时代码只加载资产和绑定 Action。
 UCatUISettings::UCatUISettings()
 {
 	HUDWidgetClass = TSoftClassPtr<UCatHUDWidget>(
@@ -20,8 +19,6 @@ UCatUISettings::UCatUISettings()
 		FSoftClassPath(TEXT("/Game/UI/InventorySlot/WBP_CatInventorySlot.WBP_CatInventorySlot_C")));
 	InteractionPromptWidgetClass = TSoftClassPtr<UCatInteractionPromptWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Interaction/WBP_CatInteractionPrompt.WBP_CatInteractionPrompt_C")));
-	CollectionWidgetClass = TSoftClassPtr<UCatCollectionWidget>(
-		FSoftClassPath(TEXT("/Game/UI/Collection/WBP_CatCollection.WBP_CatCollection_C")));
 	InventoryToggleAction = TSoftObjectPtr<UInputAction>(
 		FSoftObjectPath(TEXT("/Game/Input/InputAction/IA_LakeMenu.IA_LakeMenu")));
 	InteractionConfirmAction = TSoftObjectPtr<UInputAction>(
@@ -74,17 +71,6 @@ TSubclassOf<UCatInteractionPromptWidget> UCatUISettings::LoadInteractionPromptWi
 {
 	UClass* LoadedClass = InteractionPromptWidgetClass.LoadSynchronous();
 	if (!LoadedClass || !LoadedClass->IsChildOf(UCatInteractionPromptWidget::StaticClass()))
-	{
-		return nullptr;
-	}
-	return LoadedClass;
-}
-
-// 图鉴 WBP 类加载流程：同步解析配置软类并验证继承图鉴基类；失败返回空，让打开入口 fail-closed。
-TSubclassOf<UCatCollectionWidget> UCatUISettings::LoadCollectionWidgetClass() const
-{
-	UClass* LoadedClass = CollectionWidgetClass.LoadSynchronous();
-	if (!LoadedClass || !LoadedClass->IsChildOf(UCatCollectionWidget::StaticClass()))
 	{
 		return nullptr;
 	}

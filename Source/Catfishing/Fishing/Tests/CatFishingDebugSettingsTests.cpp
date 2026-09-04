@@ -5,7 +5,7 @@
 #include "Misc/AutomationTest.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingDebugSettingsDefaultsTest,
-	"Catfishing.Unit.Fishing.Debug.WorldMarkersDefaultOffAndStatsDefaultOn",
+	"Catfishing.Unit.Fishing.Debug.WorldMarkersAndStatsDefaultOff",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingDebugFishTypeLineTest,
@@ -34,7 +34,7 @@ bool FCatFishingDebugSettingsDefaultsTest::RunTest(const FString& Parameters)
 	{
 		TestTrue(TEXT("world markers and stats are separate console variables"), WorldDebug != StatsDebug);
 		TestEqual(TEXT("world markers default off"), WorldDebug->GetDefaultValue(), FString(TEXT("0")));
-		TestEqual(TEXT("stats panel default on"), StatsDebug->GetDefaultValue(), FString(TEXT("1")));
+		TestEqual(TEXT("stats panel default off"), StatsDebug->GetDefaultValue(), FString(TEXT("0")));
 	}
 	return !HasAnyErrors();
 }

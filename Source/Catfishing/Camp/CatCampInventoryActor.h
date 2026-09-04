@@ -46,7 +46,7 @@ struct FCatCampInventoryAddItemRequest
 /** 营地公共仓库快照变化通知；UI 或营地交互层收到后只能重读快照，不能直接写库存。 */
 DECLARE_MULTICAST_DELEGATE(FCatCampInventorySnapshotChanged);
 
-/** 营地公共装备库 Actor；商店购买物先进入这里，玩家再从公共仓库取到自己的随身装备库存。 */
+/** 营地公共仓库 Actor；商店购买物先进入这里，玩家再从公共仓库取到自己的随身库存。 */
 UCLASS(BlueprintType, Blueprintable)
 class CATFISHING_API ACatCampInventoryActor : public AActor, public ICatInteractable
 {
@@ -95,11 +95,11 @@ public:
 	FCatDomainCommandResult AddItemsFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		const FString& StableNetId, const TArray<FCatCampInventoryAddItemRequest>& Items);
 
-	/** 查询玩家是否能从指定公共格子取物到自己的随身装备库存；它只做预检，不修改两边库存。 */
+	/** 查询玩家是否能从指定公共格子取物到自己的随身库存；它只做预检，不修改两边库存。 */
 	ECatDomainCommandError ValidateWithdrawToEquipment(FGuid RequestId, int32 SourceSlotIndex, int32 Quantity,
 		UCatEquipmentComponent* TargetEquipment) const;
 
-	/** 把公共仓库里的物品取到玩家随身装备库存；成功后公共仓库扣减，玩家随身库存通过自己的授予入口增加。 */
+	/** 把公共仓库里的物品取到玩家随身库存；成功后公共仓库扣减，玩家随身库存通过自己的授予入口增加。 */
 	FCatDomainCommandResult WithdrawToEquipmentFromAuthority(FGuid RequestId, int64 ExpectedCampRevision,
 		int32 SourceSlotIndex, int32 Quantity, UCatEquipmentComponent* TargetEquipment,
 		int64 ExpectedEquipmentRevision);

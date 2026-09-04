@@ -189,7 +189,7 @@ FCatOnlineResult UCatOnlineSubsystem::RejectRequest(const ECatOnlineError Error)
 	return Result;
 }
 
-// Create 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再依次检查前台、SessionAccess 策略、World-aware Session 接口和兼容合同；绑定携带 epoch 的回调后提交平台请求。
+// Create 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再依次检查前台、SessionAccess 策略、World-aware Session 接口和兼容合同；创建平台设置时把公开容量对齐营地自动出生容量，最后绑定携带 epoch 的回调后提交平台请求。
 // UE 5.8 的 OSS 允许在 API 返回前同步触发完成委托，因此返回后必须同时复核 operation、epoch 与句柄；只有回调尚未消费本次提交时，false 才发布一次 RequestRejected。
 FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 {
@@ -235,7 +235,8 @@ FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 	}
 
 	FOnlineSessionSettings SessionSettings;
-	SessionSettings.NumPublicConnections = 8;
+	// 会话公开容量必须与营地自动出生格数一致；否则第 5 名玩家能加入房间却只能在 GameMode 生成阶段被拒绝。
+	SessionSettings.NumPublicConnections = CatGameplayPlayerLimits::MaxCampSpawnPlayers;
 	SessionSettings.NumPrivateConnections = 0;
 	SessionSettings.bAllowJoinInProgress = true;
 	SessionSettings.bAllowInvites = true;
@@ -1204,7 +1205,7 @@ void UCatOnlineSubsystem::BroadcastSnapshot(const TCHAR* EventName)
 	OnSnapshotChanged.Broadcast();
 }
 
-// 兼容合同检查流程：会话必须使用 Presence Lobby，并携带本项目、协议和地图标识；AppId 480 的其他开发房间不会进入公开句柄映射或 Join。
+// 兼容合同检查流程：会话必须使用 Presence Lobby，并携带本项目、协议、地图标识和当前营地出生容量；AppId 480 的其他开发房间或旧 8 人房间不会进入公开句柄映射、Join 或邀请接受。
 bool UCatOnlineSubsystem::HasCompatibleSessionSettings(const FOnlineSessionSettings& Settings) const
 {
 	FString ProjectId;
@@ -1212,6 +1213,7 @@ bool UCatOnlineSubsystem::HasCompatibleSessionSettings(const FOnlineSessionSetti
 	FString MapName;
 	return Settings.bUsesPresence
 		&& Settings.bUseLobbiesIfAvailable
+		&& Settings.NumPublicConnections == CatGameplayPlayerLimits::MaxCampSpawnPlayers
 		&& Settings.Get(CatOnlineNames::ProjectSetting, ProjectId)
 		&& ProjectId == CatOnlineNames::ProjectId
 		&& Settings.Get(CatOnlineNames::ProtocolSetting, ProtocolVersion)

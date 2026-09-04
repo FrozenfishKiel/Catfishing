@@ -89,3 +89,25 @@ struct CATFISHING_API FCatRunResultReasonCondition : public FStateTreeConditionC
 	/** 从 Context Owner 的 GameMode 读取最新 Result 并比较原因；宿主类型不符时返回 false。 */
 	virtual bool TestCondition(FStateTreeExecutionContext& Context) const override;
 };
+
+/** 成功结算资格条件的空参数；最终天数和策略来自服务器 Run 设置，不在资产节点里复制。 */
+USTRUCT()
+struct FCatRunSuccessSettlementEligibleConditionInstanceData
+{
+	GENERATED_BODY()
+};
+
+/** ST_RunFlow 的成功结算只读条件；资产用它在全员 ready 后选择成功结算夜或继续翻天。 */
+USTRUCT(meta = (DisplayName = "Cat Run Success Settlement Eligible", Category = "Catfishing|Run"))
+struct CATFISHING_API FCatRunSuccessSettlementEligibleCondition : public FStateTreeConditionCommonBase
+{
+	GENERATED_BODY()
+
+	using FInstanceDataType = FCatRunSuccessSettlementEligibleConditionInstanceData;
+
+	/** 暴露无字段实例，防止不同 ST_RunFlow 资产实例把最终天数配置出第二套口径。 */
+	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
+
+	/** 从 Context Owner 的 GameMode 读取当前普通夜天数，再按 RunSettings 判断是否允许进入成功结算夜。 */
+	virtual bool TestCondition(FStateTreeExecutionContext& Context) const override;
+};

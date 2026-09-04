@@ -240,34 +240,17 @@ void ACatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-// 开发装备兜底流程：
-// 1. authority 可通过独立开关给每个新 Character 发一份 Starter 抄网；授予仍走 Equipment 正式写口并自动选中，
-//    重占有时先看库存，不会重复发放。正式商店/奖励获取接入后只需关闭该开关。
-// 2. 其余 Starter 选择仍由原开关控制，只选择库存里已有的基础钓组；选择成功后才发可选窝料。
+// Starter 兜底流程：
+// 1. 先要求服务器、EquipmentComponent 和设置存在；兜底开关关闭时返回，不读取或写入随身库存。
+// 2. 读取当前 Equipment 快照后，如果已经有鱼竿选择，就保留玩家/Profile 已建立的选择，不再覆盖。
+// 3. 选择为空时才请求 Equipment 正式配置入口；该入口按目录、解锁、Revision 和随身库存已有物品校验，不会因为配置 ID 创建装备或占用第一格。
+// 4. 只有装配提交成功后才可能通过正式库存命令补发配置窝料；失败、未配置窝料或数量为 0 都保持库存不变。
 void ACatCharacter::ApplyStarterLoadoutIfConfigured()
 {
 	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
 	if (!HasAuthority() || !EquipmentComponent || !Settings)
 	{
 		return;
-	}
-	if (Settings->bAutoGrantStarterScoopNet && !Settings->StarterScoopNetDefinitionId.IsNone())
-	{
-		const FCatEquipmentLoadoutSnapshot& BeforeGrant = EquipmentComponent->GetSnapshot();
-		const bool bAlreadyOwnsStarterScoop = BeforeGrant.InventorySlots.ContainsByPredicate(
-			[Settings](const FCatRunInventorySlot& Slot)
-			{
-				return Slot.DefinitionId == Settings->StarterScoopNetDefinitionId && Slot.Quantity > 0;
-			});
-		if (!bAlreadyOwnsStarterScoop)
-		{
-			const FCatDomainCommandResult Grant = EquipmentComponent->GrantEquipmentFromAuthority(
-				FGuid::NewGuid(), BeforeGrant.Revision, Settings->StarterScoopNetDefinitionId);
-			UE_LOG(LogCatCharacter, Log,
-				TEXT("Event=starter_scoop_grant Committed=%s Error=%s Revision=%lld Definition=%s"),
-				Grant.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Grant.Error),
-				Grant.Revision, *Settings->StarterScoopNetDefinitionId.ToString());
-		}
 	}
 	if (!Settings->bAutoConfigureStarterLoadout)
 	{

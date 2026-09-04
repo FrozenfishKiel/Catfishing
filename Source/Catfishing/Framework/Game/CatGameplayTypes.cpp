@@ -37,6 +37,8 @@
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/GameSession.h"
+#include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
 #include "InputAction.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
@@ -154,6 +156,84 @@ namespace
 		const ACatFishingRodActor* Rod = FindHeldFishingRodOperatedBy(Controller);
 		return Rod && Rod->IsPrimaryOperator(PlayerState);
 	}
+
+	// 容器空鱼格查找流程：按钮存缸没有显式 Drop 目标；调用方已先处理非正容量，这里只在有效容量内寻找第一个空位。
+	int32 FindFirstFreeFishContainerSlot(const FCatContainerSnapshot& Snapshot)
+	{
+		for (int32 SlotIndex = 0; SlotIndex < Snapshot.Capacity; ++SlotIndex)
+		{
+			FCatContainedObjectInstance ExistingObject;
+			if (!CatItems::TryGetContainedObjectAt(Snapshot, SlotIndex, ExistingObject))
+			{
+				return SlotIndex;
+			}
+		}
+		return INDEX_NONE;
+	}
+
+	// 营地出生点扫描流程：遍历当前 World 内所有有效营地，只有恰好一座时返回；零座或多座都写明确日志并保持 fail-closed。
+	ACatCampHubActor* FindUniqueCampPlayerStart(UWorld* World, const AController* Player, const TCHAR* Caller)
+	{
+		ACatCampHubActor* FirstCamp = nullptr;
+		ACatCampHubActor* DuplicateCamp = nullptr;
+		int32 CampCount = 0;
+		if (World)
+		{
+			for (TActorIterator<ACatCampHubActor> It(World); It; ++It)
+			{
+				ACatCampHubActor* Camp = *It;
+				if (!IsValid(Camp))
+				{
+					continue;
+				}
+				++CampCount;
+				if (!FirstCamp)
+				{
+					FirstCamp = Camp;
+				}
+				else if (!DuplicateCamp)
+				{
+					DuplicateCamp = Camp;
+				}
+			}
+		}
+		if (CampCount != 1)
+		{
+			UE_LOG(LogCatfishing, Error,
+				TEXT("Event=camp_player_start_rejected Caller=%s Controller=%s Reason=%s CampCount=%d FirstCamp=%s DuplicateCamp=%s World=%s NetMode=%d"),
+				Caller, *GetNameSafe(Player), CampCount <= 0 ? TEXT("NoCampPlayerStart") : TEXT("DuplicateCampPlayerStart"),
+				CampCount, *GetNameSafe(FirstCamp), *GetNameSafe(DuplicateCamp), *GetNameSafe(World),
+				World ? static_cast<int32>(World->GetNetMode()) : INDEX_NONE);
+			return nullptr;
+		}
+		return FirstCamp;
+	}
+
+	// 当前玩家出生序号解析流程：按 GameState 当前 PlayerArray 中仍活跃且非纯旁观的玩家顺序即时计算；目标尚未出现在数组中时排在当前活跃队列末尾，不写入持久槽位或重连记忆。
+	int32 ResolveCurrentCampEntryIndex(const AGameStateBase* GameState, const AController* NewPlayer)
+	{
+		const APlayerState* TargetPlayerState = NewPlayer ? NewPlayer->PlayerState : nullptr;
+		if (!GameState || !TargetPlayerState || TargetPlayerState->IsInactive()
+			|| TargetPlayerState->IsOnlyASpectator())
+		{
+			return INDEX_NONE;
+		}
+
+		int32 EntryIndex = 0;
+		for (const APlayerState* PlayerState : GameState->PlayerArray)
+		{
+			if (!PlayerState || PlayerState->IsInactive() || PlayerState->IsOnlyASpectator())
+			{
+				continue;
+			}
+			if (PlayerState == TargetPlayerState)
+			{
+				return EntryIndex;
+			}
+			++EntryIndex;
+		}
+		return EntryIndex;
+	}
 }
 
 ACatfishingPlayerController::ACatfishingPlayerController()
@@ -247,10 +327,13 @@ void ACatfishingGameModeBase::StartPlay()
 		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision, *RunFlowAsset->GetName());
 }
 
-// World 收口流程：先关闭新 Run 命令并清白天截止/时段刷新计时，再清 HostExit ACK 计时句柄与远端等待集合；随后解除商店交易和货架刷新订阅，避免旧 World 的委托继续发布快照；然后停止仍运行的 StateTree，最后调父类，使迟到 Task/ACK 不能进入新 World。
+// World 收口流程：先关闭新 Run 命令并清开发期跳天请求、白天截止/时段刷新计时，再清 HostExit ACK 计时句柄与远端等待集合；随后解除商店交易和货架刷新订阅，避免旧 World 的委托继续发布快照；然后停止仍运行的 StateTree，最后调父类，使迟到 Task/ACK 不能进入新 World。
 void ACatfishingGameModeBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	bRunCommandsOpen = false;
+#if !UE_BUILD_SHIPPING
+	ClearDebugSkipToNextDayRequest();
+#endif
 	CloseShopForSettlementNight();
 	ClearDayDeadline();
 	GetWorldTimerManager().ClearTimer(HostExitAckTimerHandle);
@@ -444,6 +527,106 @@ void ACatfishingGameModeBase::HandleStartingNewPlayer_Implementation(APlayerCont
 	}
 	UE_LOG(LogCatOnline, Log, TEXT("Event=identity_before_character Controller=%s Result=Active"), *NewPlayer->GetName());
 	Super::HandleStartingNewPlayer_Implementation(NewPlayer);
+}
+
+// 重启玩家流程：先保持引擎对空 Controller 和待销毁 Controller 的早退，再直接扫描本项目唯一营地，避免蓝图覆盖 Find/ChoosePlayerStart 把普通 PlayerStart 带回主出生链；营地缺失、重复或被非营地替代时调用 FailedToRestartPlayer，绝不沿用旧 StartSpot 或 WorldSettings 原点。
+void ACatfishingGameModeBase::RestartPlayer(AController* NewPlayer)
+{
+	if (!NewPlayer || NewPlayer->IsPendingKillPending())
+	{
+		return;
+	}
+	AActor* StartSpot = FindUniqueCampPlayerStart(GetWorld(), NewPlayer, TEXT("RestartPlayer"));
+	if (!Cast<ACatCampHubActor>(StartSpot))
+	{
+		UE_LOG(LogCatfishing, Error,
+			TEXT("Event=camp_player_restart_rejected Controller=%s Reason=CampPlayerStartUnavailable StartSpot=%s World=%s NetMode=%d"),
+			*GetNameSafe(NewPlayer), *GetNameSafe(StartSpot), *GetNameSafe(GetWorld()),
+			GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
+		FailedToRestartPlayer(NewPlayer);
+		return;
+	}
+	RestartPlayerAtPlayerStart(NewPlayer, StartSpot);
+}
+
+// 玩家出生点查找流程：忽略客户端 Portal 名和 Controller 历史 StartSpot，每次都重新走唯一营地扫描；返回空时由 RestartPlayer 统一拒绝生成，防止引擎默认原点回退。
+AActor* ACatfishingGameModeBase::FindPlayerStart_Implementation(AController* Player, const FString& IncomingName)
+{
+	if (!IncomingName.IsEmpty())
+	{
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=camp_player_start_portal_ignored Controller=%s IncomingName=%s Reason=CampIsOnlyPlayerStart World=%s NetMode=%d"),
+			*GetNameSafe(Player), *IncomingName, *GetNameSafe(GetWorld()),
+			GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
+	}
+	return FindUniqueCampPlayerStart(GetWorld(), Player, TEXT("FindPlayerStart"));
+}
+
+// 玩家出生点选择流程：只接受当前 World 唯一 ACatCampHubActor，普通 PlayerStart、tagged PlayerStart 和历史 StartSpot 都不进入候选；成功日志用于联机包核对服务器裁决。
+AActor* ACatfishingGameModeBase::ChoosePlayerStart_Implementation(AController* Player)
+{
+	ACatCampHubActor* Camp = FindUniqueCampPlayerStart(GetWorld(), Player, TEXT("ChoosePlayerStart"));
+	if (Camp)
+	{
+		UE_LOG(LogCatfishing, Log,
+			TEXT("Event=camp_player_start_selected Controller=%s Camp=%s World=%s NetMode=%d"),
+			*GetNameSafe(Player), *GetNameSafe(Camp), *GetNameSafe(GetWorld()),
+			GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
+	}
+	return Camp;
+}
+
+// StartSpot 复用判断流程：固定返回 false，让重连、重新生成和外部 K2_FindPlayerStart 调用都重新经过唯一营地裁决；本方法不清 Controller 状态，只阻断引擎选择旧点的分支。
+bool ACatfishingGameModeBase::ShouldSpawnAtStartSpot(AController* Player)
+{
+	return false;
+}
+
+// 默认 Pawn 生成流程：先确认 StartSpot 仍是唯一营地，再读取当前 PawnClass 和 CDO 给营地做碰撞可用性判断；解析成功后只调用引擎 SpawnDefaultPawnAtTransform，后续 SetPawn/InitStartSpot/FinishRestartPlayer 继续留给父类 RestartPlayerAtPlayerStart。
+APawn* ACatfishingGameModeBase::SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot)
+{
+	const ACatCampHubActor* Camp = Cast<ACatCampHubActor>(StartSpot);
+	if (!Camp)
+	{
+		UE_LOG(LogCatfishing, Error,
+			TEXT("Event=camp_player_spawn_rejected Controller=%s Reason=NonCampStartSpot StartSpot=%s World=%s NetMode=%d"),
+			*GetNameSafe(NewPlayer), *GetNameSafe(StartSpot), *GetNameSafe(GetWorld()),
+			GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
+		return nullptr;
+	}
+
+	UClass* PawnClass = GetDefaultPawnClassForController(NewPlayer);
+	const APawn* PawnToFit = PawnClass ? Cast<APawn>(PawnClass->GetDefaultObject()) : nullptr;
+	const int32 PreferredEntryIndex = ResolveCurrentCampEntryIndex(GameState, NewPlayer);
+	FTransform SpawnTransform;
+	if (!PawnClass || !PawnToFit || PreferredEntryIndex == INDEX_NONE
+		|| !Camp->TryResolvePlayerEntryTransform(PreferredEntryIndex, PawnToFit, SpawnTransform))
+	{
+		UE_LOG(LogCatfishing, Error,
+			TEXT("Event=camp_player_spawn_rejected Controller=%s Reason=TransformUnavailable PawnClass=%s Camp=%s PreferredIndex=%d World=%s NetMode=%d"),
+			*GetNameSafe(NewPlayer), *GetNameSafe(PawnClass), *GetNameSafe(Camp), PreferredEntryIndex,
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
+		return nullptr;
+	}
+
+	APawn* SpawnedPawn = SpawnDefaultPawnAtTransform(NewPlayer, SpawnTransform);
+	if (!SpawnedPawn)
+	{
+		UE_LOG(LogCatfishing, Error,
+			TEXT("Event=camp_player_spawn_failed Controller=%s PawnClass=%s Camp=%s Transform=%s World=%s NetMode=%d"),
+			*GetNameSafe(NewPlayer), *GetNameSafe(PawnClass), *GetNameSafe(Camp),
+			*SpawnTransform.ToHumanReadableString(), *GetNameSafe(GetWorld()),
+			GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
+	}
+	else
+	{
+		UE_LOG(LogCatfishing, Log,
+			TEXT("Event=camp_player_spawned Controller=%s Pawn=%s Camp=%s Transform=%s World=%s NetMode=%d"),
+			*GetNameSafe(NewPlayer), *GetNameSafe(SpawnedPawn), *GetNameSafe(Camp),
+			*SpawnTransform.ToHumanReadableString(), *GetNameSafe(GetWorld()),
+			GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
+	}
+	return SpawnedPawn;
 }
 
 // Logout 流程：先读取尚未被引擎清理的 PlayerState；只有 StableNetId 命中且 Active 弱引用等于 Exiting 才移除，旧连接永远不能删除同身份的新记录。PIE 无会话身份随连接立即失效并显式跳过重连 TTL，避免下一次测试误恢复旧玩家。
@@ -669,7 +852,7 @@ FCatRunCommandResult ACatfishingGameModeBase::CacheRunCommandResult(const FStrin
 	return Result;
 }
 
-// 阶段进入流程：先要求 authority、有效 Run 与正在启动/运行的唯一 StateTree，并在写状态前拒绝未裁的成功结算或白天参数。通过后统一清掉旧白天计时与公开截止并复位玩法开关：DayActive 递增天数、清额度/终局原因、重置 Active 玩家 ready、开启 quota/fishing，建立截止与 Morning/Dusk 刷新；NormalNight 冻结当前 ready 资格；两种 settlement 写对应终局原因并清 ready 集合；Ending/Ended/NotStarted 关闭新命令。最后只递增一次 Revision、保存 StateTree 可读结果并刷新 Environment/GameState 组合快照；C++ 始终不选择下一条转移边。
+// 阶段进入流程：先要求 authority、有效 Run 与正在启动/运行的唯一 StateTree，并在写状态前拒绝未裁的成功结算或白天参数。通过后统一清掉旧白天计时与公开截止并复位玩法开关：DayActive 递增天数、清额度/终局原因、重置 Active 玩家 ready、开启 quota/fishing，建立截止与 Morning/Dusk 刷新；NormalNight 冻结当前 ready 资格；两种 settlement 写对应终局原因并清 ready 集合；Ending/Ended/NotStarted 关闭新命令。最后只递增一次 Revision、保存 StateTree 可读结果并刷新 Environment/GameState 组合快照；非 Shipping 跳天加速只在正式阶段已发布后续交正式命令，C++ 始终不选择下一条转移边。
 FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(const ECatRunPhase NewPhase, const ECatRunTransitionReason Reason)
 {
 	FCatRunTransitionResult Result;
@@ -802,6 +985,9 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
 		RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(NewPhase), *UEnum::GetValueAsString(Reason),
 		RunPublicState.Phase.DeadlineServerTimeSeconds);
+#if !UE_BUILD_SHIPPING
+	ContinueDebugSkipToNextDayAfterPhaseEntered(NewPhase);
+#endif
 	return Result;
 }
 
@@ -935,7 +1121,11 @@ FCatRunCommandResult ACatfishingGameModeBase::SubmitQuotaContributionInternal(co
 	return Result;
 }
 
-// 翻天确认流程：服务器重建身份并按幂等键/Revision/普通夜资格校验，只在事实变化时改 PlayerState 与 Revision；最后一名合资格玩家确认时只发送 AllEligibleReady 事件。
+// 翻天确认流程：
+// 1. 先由服务器重建命令身份并处理幂等重放，客户端提交的身份字段不能成为权威依据。
+// 2. 再校验命令门、普通夜晚阶段、Revision 和夜晚冻结资格；全员 ready 事件已经发出后，普通玩家重复 ready 仍按窗口关闭拒绝。
+// 3. 通过后只写夜晚 ready 集合和对应 PlayerState；ready 事实真实变化时才递增 Revision 并发布 RunPublicState。
+// 4. 最后调用 EvaluateAllEligibleReady 发送正式 AllEligibleReady 事件；本方法不直接写 Phase 或 DayIndex。
 FCatRunCommandResult ACatfishingGameModeBase::SubmitNextDayReady(AController* RequestingController, const FCatNextDayReadyCommand& Command)
 {
 	FCatNextDayReadyCommand ServerCommand = Command;
@@ -972,7 +1162,6 @@ FCatRunCommandResult ACatfishingGameModeBase::SubmitNextDayReady(AController* Re
 			? ECatRunCommandError::NotEligible : ECatRunCommandError::PolicyUndecided;
 		return CacheRunCommandResult(CacheKey, MakeRunCommandResult(ServerCommand.Context.RequestId, false, Error));
 	}
-
 	ACatfishingPlayerState* PlayerState = RequestingController
 		? RequestingController->GetPlayerState<ACatfishingPlayerState>() : nullptr;
 	if (!PlayerState)
@@ -1055,19 +1244,63 @@ void ACatfishingGameModeBase::CaptureNightReadyEligibility()
 	}
 }
 
-// 全员确认求值流程：仅在普通夜、集合非空、尚未发事件且 ready 覆盖合资格集合时关闭窗口并发送一次事件；本方法不改写 Phase。
-void ACatfishingGameModeBase::EvaluateAllEligibleReady()
+// 夜晚 ready 完整性判断流程：先要求普通夜晚和非空资格集合，再逐个确认资格 StableNetId 都已经进入 ready 集合；额外 ready 不会单独触发翻天。
+bool ACatfishingGameModeBase::IsAllNightReadyComplete() const
 {
-	if (RunPublicState.Phase.Phase != ECatRunPhase::NormalNight || bAllEligibleReadyEventSent
-		|| NightReadyEligibleIds.IsEmpty() || NightReadyIds.Num() != NightReadyEligibleIds.Num())
+	if (RunPublicState.Phase.Phase != ECatRunPhase::NormalNight || NightReadyEligibleIds.IsEmpty())
 	{
-		return;
+		return false;
 	}
+	for (const FString& StableNetId : NightReadyEligibleIds)
+	{
+		if (!NightReadyIds.Contains(StableNetId))
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+// AllEligibleReady 发送流程：先只读确认资格集合已经全员 ready；首次发送会关闭撤销窗口，调试重发只在仍停普通夜晚时再次投递同一个 StateTree 事件，不直接改 Phase 或天数。
+bool ACatfishingGameModeBase::SendAllEligibleReadyEventIfComplete(const TCHAR* Trigger, const bool bAllowResend)
+{
+	const TCHAR* TriggerText = Trigger ? Trigger : TEXT("Unknown");
+	if (!IsAllNightReadyComplete())
+	{
+		return false;
+	}
+	if (bAllEligibleReadyEventSent && !bAllowResend)
+	{
+		return true;
+	}
+
+	const bool bWasAlreadySent = bAllEligibleReadyEventSent;
 	bAllEligibleReadyEventSent = true;
-	if (!SendRunStateTreeEvent(CatRunStateTreeEvents::AllEligibleReady, ECatRunTransitionReason::AllEligibleReady))
+	const bool bSent = SendRunStateTreeEvent(CatRunStateTreeEvents::AllEligibleReady,
+		ECatRunTransitionReason::AllEligibleReady);
+	if (!bSent && !bWasAlreadySent)
 	{
 		bAllEligibleReadyEventSent = false;
 	}
+	if (bWasAlreadySent && bSent)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_all_ready_event_retried Trigger=%s RunId=%s Revision=%lld Day=%d Eligible=%d Ready=%d"),
+			TriggerText, *RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens),
+			RunPublicState.Revision, RunPublicState.Phase.DayIndex,
+			NightReadyEligibleIds.Num(), NightReadyIds.Num());
+	}
+	return bSent;
+}
+
+// 全员确认求值流程：仅在普通夜、集合非空、尚未发事件且 ready 覆盖合资格集合时关闭窗口并发送一次事件；本方法不改写 Phase。
+void ACatfishingGameModeBase::EvaluateAllEligibleReady()
+{
+	if (bAllEligibleReadyEventSent)
+	{
+		return;
+	}
+	SendAllEligibleReadyEventIfComplete(TEXT("EvaluateAllEligibleReady"), false);
 }
 
 // 白天计时清理流程：从当前 World 清除截止、Morning 和 Dusk 三个 one-shot 句柄；只停止未来回调，不改公开 deadline 事实。
@@ -1269,7 +1502,7 @@ void ACatfishingGameModeBase::SubmitNaturalChumFieldIfConfigured()
 		Result.ChumFieldSetRevision);
 }
 
-// StateTree 事件提交流程：先验证组件正在运行与 Tag 有效，再保存一份不改变 Phase 的结构化结果并发送事件；资产负责消费 Tag 和选择目标边。
+// StateTree 事件提交流程：先验证组件正在运行与 Tag 有效，再保存一份不改变 Phase 的结构化结果并发送事件；最后写一条默认可见日志，让房主端能核对“事件已入队”和后续“阶段已进入”是否成对出现。
 bool ACatfishingGameModeBase::SendRunStateTreeEvent(const FGameplayTag EventTag, const ECatRunTransitionReason Reason)
 {
 	if (!EventTag.IsValid() || !RunStateTreeComponent || !RunStateTreeComponent->IsRunning())
@@ -1289,6 +1522,10 @@ bool ACatfishingGameModeBase::SendRunStateTreeEvent(const FGameplayTag EventTag,
 	LastRunFlowResult.Error = ECatRunCommandError::None;
 	LastRunFlowResult.Revision = RunPublicState.Revision;
 	RunStateTreeComponent->SendStateTreeEvent(EventTag, FConstStructView(), FName(TEXT("CatRun")));
+	UE_LOG(LogCatRun, Display, TEXT("Event=run_state_tree_event_sent RunId=%s Revision=%lld Day=%d Phase=%s EventTag=%s Reason=%s"),
+		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
+		RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(RunPublicState.Phase.Phase),
+		*EventTag.ToString(), *UEnum::GetValueAsString(Reason));
 	return true;
 }
 
@@ -1491,6 +1728,557 @@ const FCatRunPublicState& ACatfishingGameModeBase::GetRunPublicState() const
 }
 
 #if !UE_BUILD_SHIPPING
+// 开发期服务器快照流程：先创建一次性副本并标记当前实例是否有 authority；不是服务器时立刻返回空快照。服务器路径只复制私有门禁、StateTree 运行态、最近事件结果和跳天请求诊断给调试面板，既不写 GameState，也不发网络同步，避免形成第二套同步状态。
+FCatRunAuthorityDebugSnapshot ACatfishingGameModeBase::GetAuthorityDebugSnapshotForDebug() const
+{
+	FCatRunAuthorityDebugSnapshot Snapshot;
+	Snapshot.bHasAuthorityGameMode = HasAuthority();
+	if (!Snapshot.bHasAuthorityGameMode)
+	{
+		return Snapshot;
+	}
+
+	Snapshot.bRunCommandsOpen = bRunCommandsOpen;
+	Snapshot.bRunStateTreeAssigned = RunStateTreeComponent != nullptr;
+	Snapshot.bRunStateTreeRunning = RunStateTreeComponent && RunStateTreeComponent->IsRunning();
+	Snapshot.bRunStartupInProgress = bRunStartupInProgress;
+	Snapshot.bAllEligibleReadyEventSent = bAllEligibleReadyEventSent;
+	Snapshot.NightReadyEligibleCount = NightReadyEligibleIds.Num();
+	Snapshot.NightReadyCount = NightReadyIds.Num();
+	Snapshot.LastRunFlowResult = LastRunFlowResult;
+	Snapshot.bDebugSkipToNextDayRequested = bDebugSkipToNextDayRequested;
+	Snapshot.DebugSkipToNextDayRunId = DebugSkipToNextDayRunId;
+	Snapshot.DebugSkipToNextDayDayIndex = DebugSkipToNextDayDayIndex;
+	return Snapshot;
+}
+
+// 开发期跳天请求匹配流程：只比较本 GameMode 当前 RunId 与 DayIndex，判断迟到的下一帧 ready 是否还属于发起时那一天；它不读取客户端、不推进 StateTree。
+bool ACatfishingGameModeBase::IsDebugSkipToNextDayRequestCurrent() const
+{
+	return bDebugSkipToNextDayRequested
+		&& DebugSkipToNextDayRunId == RunPublicState.Phase.RunId
+		&& DebugSkipToNextDayDayIndex == RunPublicState.Phase.DayIndex;
+}
+
+// 开发期跳天请求清理流程：只清空调试输入留下的短生命周期标记，不回滚已经经正式命令写入的额度、ready、Revision 或 Phase。
+void ACatfishingGameModeBase::ClearDebugSkipToNextDayRequest()
+{
+	bDebugSkipToNextDayRequested = false;
+	DebugSkipToNextDayRunId.Invalidate();
+	DebugSkipToNextDayDayIndex = 0;
+}
+
+// 开发期补额度玩家选择流程：扫描服务器当前可见 Controller，返回第一名仍通过正式玩法命令 gate 的 Active 玩家；找不到时调试指令失败，不伪造系统玩家。
+APlayerController* ACatfishingGameModeBase::FindDebugQuotaCompletionController() const
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return nullptr;
+	}
+	for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+	{
+		APlayerController* Controller = It->Get();
+		if (Controller && CanAcceptGameplayCommand(Controller))
+		{
+			return Controller;
+		}
+	}
+	return nullptr;
+}
+
+// 开发期夜晚 ready 玩家解析流程：以夜晚冻结的 StableNetId 为主键读取 AdmissionRecords，只返回仍处于 Active 且通过正式宽命令 gate 的 Controller；调试提交不会因为 World 迭代顺序选错玩家。
+AController* ACatfishingGameModeBase::FindDebugNightReadyControllerByStableNetId(const FString& StableNetId) const
+{
+	const FAdmissionRecord* Record = StableNetId.IsEmpty() ? nullptr : AdmissionRecords.Find(StableNetId);
+	AController* Controller = Record && Record->Phase == EAdmissionPhase::Active ? Record->Controller.Get() : nullptr;
+	return CanAcceptGameplayCommand(Controller) ? Controller : nullptr;
+}
+
+// 开发期补足当日额度流程：
+// 1. 先校验当前仍是额度、钓鱼和截止时间都开放的 DayActive；不满足时只写拒绝日志并返回 false。
+// 2. 再计算还差多少额度，差值无效或超过命令载荷范围时返回 false，避免调试输入制造非法贡献。
+// 3. 然后选择一名真实 Active Controller 作为正式命令发起者；没有玩家时拒绝，不伪造系统身份。
+// 4. 最后调用 SubmitQuotaContribution，只有首次提交成功且产生 QuotaReached 原因才返回 true；调用方只通过 Trigger 区分 SkipToNight 或 SkipToNextDay 诊断来源。
+bool ACatfishingGameModeBase::SubmitDebugQuotaCompletionForCurrentDay(const TCHAR* Trigger)
+{
+	const TCHAR* TriggerText = Trigger ? Trigger : TEXT("Unknown");
+	const FGuid RunId = RunPublicState.Phase.RunId;
+	const int32 DayIndex = RunPublicState.Phase.DayIndex;
+	const int64 Revision = RunPublicState.Revision;
+	if (RunPublicState.Phase.Phase != ECatRunPhase::DayActive || !RunPublicState.Phase.bHasDeadline
+		|| !RunPublicState.Phase.bFishingAllowed || !RunPublicState.Phase.bQuotaOpen || RunPublicState.QuotaTarget <= 0)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_quota_completion_rejected Trigger=%s Reason=DayNotOpen RunId=%s Revision=%lld Day=%d Phase=%s HasDeadline=%s FishingAllowed=%s QuotaOpen=%s QuotaProgress=%d QuotaTarget=%d"),
+			TriggerText, *RunId.ToString(EGuidFormats::DigitsWithHyphens), Revision, DayIndex,
+			*UEnum::GetValueAsString(RunPublicState.Phase.Phase),
+			RunPublicState.Phase.bHasDeadline ? TEXT("true") : TEXT("false"),
+			RunPublicState.Phase.bFishingAllowed ? TEXT("true") : TEXT("false"),
+			RunPublicState.Phase.bQuotaOpen ? TEXT("true") : TEXT("false"),
+			RunPublicState.QuotaProgress, RunPublicState.QuotaTarget);
+		return false;
+	}
+
+	const int64 RequiredContribution = static_cast<int64>(RunPublicState.QuotaTarget) - RunPublicState.QuotaProgress;
+	if (RequiredContribution <= 0 || RequiredContribution > MAX_int32)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_quota_completion_rejected Trigger=%s Reason=InvalidRequiredContribution RunId=%s Revision=%lld Day=%d QuotaProgress=%d QuotaTarget=%d RequiredContribution=%lld"),
+			TriggerText, *RunId.ToString(EGuidFormats::DigitsWithHyphens), Revision, DayIndex,
+			RunPublicState.QuotaProgress, RunPublicState.QuotaTarget, RequiredContribution);
+		return false;
+	}
+
+	APlayerController* Controller = FindDebugQuotaCompletionController();
+	if (!Controller)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_quota_completion_rejected Trigger=%s Reason=NoActiveController RunId=%s Revision=%lld Day=%d"),
+			TriggerText, *RunId.ToString(EGuidFormats::DigitsWithHyphens), Revision, DayIndex);
+		return false;
+	}
+
+	FCatQuotaContributionCommand Command;
+	Command.Context.RequestId = FGuid::NewGuid();
+	Command.Context.ExpectedRevision = Revision;
+	Command.Contribution = static_cast<int32>(RequiredContribution);
+	const FCatRunCommandResult Result = SubmitQuotaContribution(Controller, Command);
+	UE_LOG(LogCatRun, Display,
+		TEXT("Event=run_environment_social_debug_quota_completion_submitted Trigger=%s Controller=%s RequestId=%s Contribution=%d Committed=%s Error=%s ResultRevision=%lld ResultPhase=%s TransitionReason=%s"),
+		TriggerText, *GetNameSafe(Controller), *Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		Command.Contribution, Result.bCommitted ? TEXT("true") : TEXT("false"),
+		*UEnum::GetValueAsString(Result.Error), Result.Revision,
+		*UEnum::GetValueAsString(Result.Phase), *UEnum::GetValueAsString(Result.TransitionReason));
+	return Result.bCommitted && Result.TransitionReason == ECatRunTransitionReason::QuotaReached;
+}
+
+// 开发期跳天 ready 提交流程：
+// 1. 先要求当前已经是普通夜晚；其他阶段返回 false，不把白天或结算伪装成 ready 窗口。
+// 2. 如果全员 ready 事件已经发出但仍停在夜晚，就重投同一个正式 StateTree 事件，给人工调试一个不改 Phase 的解卡入口。
+// 3. 再以夜晚冻结资格集合为驱动逐个找回 Active Controller，用最新 Revision 调 SubmitNextDayReady；不存在的 Controller 会被统计为不可提交，而不是悄悄伪造 ready。
+// 4. 扫描中阶段变化或事件已发出就停止，最后按 attempted/committed/rejected/unavailable 和全员事件状态返回；没有可提交玩家、正式命令被拒或仍未全员 ready 时返回 false。
+bool ACatfishingGameModeBase::SubmitDebugReadyForEligiblePlayers(const TCHAR* Trigger)
+{
+	const TCHAR* TriggerText = Trigger ? Trigger : TEXT("Unknown");
+	if (RunPublicState.Phase.Phase != ECatRunPhase::NormalNight)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_skip_to_next_day_rejected Reason=ReadyRequiresNormalNight Trigger=%s RunId=%s Revision=%lld Day=%d Phase=%s"),
+			TriggerText, *RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens),
+			RunPublicState.Revision, RunPublicState.Phase.DayIndex,
+			*UEnum::GetValueAsString(RunPublicState.Phase.Phase));
+		return false;
+	}
+	if (bAllEligibleReadyEventSent)
+	{
+		const bool bRetried = SendAllEligibleReadyEventIfComplete(TriggerText, true);
+		UE_LOG(LogCatRun, Display,
+			TEXT("Event=run_environment_social_debug_skip_to_next_day_waiting_for_advance Trigger=%s Retried=%s RunId=%s Revision=%lld Day=%d Eligible=%d Ready=%d"),
+			TriggerText, bRetried ? TEXT("true") : TEXT("false"),
+			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens),
+			RunPublicState.Revision, RunPublicState.Phase.DayIndex,
+			NightReadyEligibleIds.Num(), NightReadyIds.Num());
+		return bRetried;
+	}
+	if (NightReadyEligibleIds.IsEmpty())
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_skip_to_next_day_rejected Reason=NoNightReadyEligibility Trigger=%s RunId=%s Revision=%lld Day=%d"),
+			TriggerText, *RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens),
+			RunPublicState.Revision, RunPublicState.Phase.DayIndex);
+		return false;
+	}
+
+	int32 AttemptedCount = 0;
+	int32 AlreadyReadyCount = 0;
+	int32 CommittedCount = 0;
+	int32 RejectedCount = 0;
+	int32 UnavailableCount = 0;
+	for (const FString& StableNetId : NightReadyEligibleIds)
+	{
+		if (NightReadyIds.Contains(StableNetId))
+		{
+			++AlreadyReadyCount;
+			continue;
+		}
+		if (RunPublicState.Phase.Phase != ECatRunPhase::NormalNight || bAllEligibleReadyEventSent)
+		{
+			break;
+		}
+
+		AController* Controller = FindDebugNightReadyControllerByStableNetId(StableNetId);
+		if (!Controller)
+		{
+			++UnavailableCount;
+			UE_LOG(LogCatRun, Warning,
+				TEXT("Event=run_environment_social_debug_skip_to_next_day_ready_skipped Trigger=%s Reason=EligibleControllerUnavailable StableNetId=Valid(Redacted) RunId=%s Revision=%lld Day=%d"),
+				TriggerText, *RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens),
+				RunPublicState.Revision, RunPublicState.Phase.DayIndex);
+			continue;
+		}
+
+		FCatNextDayReadyCommand Command;
+		Command.Context.RequestId = FGuid::NewGuid();
+		Command.Context.ExpectedRevision = RunPublicState.Revision;
+		Command.bReady = true;
+		const FCatRunCommandResult Result = SubmitNextDayReady(Controller, Command);
+		++AttemptedCount;
+		if (Result.bCommitted)
+		{
+			++CommittedCount;
+		}
+		else
+		{
+			++RejectedCount;
+		}
+		UE_LOG(LogCatRun, Display,
+			TEXT("Event=run_environment_social_debug_skip_to_next_day_ready_submitted Trigger=%s Controller=%s RequestId=%s Committed=%s Error=%s ResultRevision=%lld ResultPhase=%s TransitionReason=%s"),
+			TriggerText, *GetNameSafe(Controller),
+			*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			Result.bCommitted ? TEXT("true") : TEXT("false"),
+			*UEnum::GetValueAsString(Result.Error), Result.Revision,
+			*UEnum::GetValueAsString(Result.Phase), *UEnum::GetValueAsString(Result.TransitionReason));
+	}
+
+	if (!bAllEligibleReadyEventSent)
+	{
+		SendAllEligibleReadyEventIfComplete(TriggerText, false);
+	}
+	const bool bReadyCompleted = RunPublicState.Phase.Phase != ECatRunPhase::NormalNight || bAllEligibleReadyEventSent;
+	UE_LOG(LogCatRun, Display,
+		TEXT("Event=run_environment_social_debug_skip_to_next_day_ready_summary Trigger=%s Attempted=%d AlreadyReady=%d Committed=%d Rejected=%d Unavailable=%d Eligible=%d Ready=%d AllReadyEventSent=%s RunId=%s Revision=%lld Day=%d Phase=%s"),
+		TriggerText, AttemptedCount, AlreadyReadyCount, CommittedCount, RejectedCount, UnavailableCount,
+		NightReadyEligibleIds.Num(), NightReadyIds.Num(),
+		bAllEligibleReadyEventSent ? TEXT("true") : TEXT("false"),
+		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
+		RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(RunPublicState.Phase.Phase));
+	return UnavailableCount == 0 && RejectedCount == 0
+		&& (AttemptedCount > 0 || AlreadyReadyCount > 0) && bReadyCompleted;
+}
+
+// 开发期跳天阶段续接流程：只在 StateTree 已经正式进入阶段、且请求仍属于同一 Run 时工作；进普通夜晚就安排下一帧正式 ready，进新白天或结算/结束就清请求。
+void ACatfishingGameModeBase::ContinueDebugSkipToNextDayAfterPhaseEntered(const ECatRunPhase EnteredPhase)
+{
+	if (!bDebugSkipToNextDayRequested || DebugSkipToNextDayRunId != RunPublicState.Phase.RunId)
+	{
+		return;
+	}
+
+	if (EnteredPhase == ECatRunPhase::NormalNight && RunPublicState.Phase.DayIndex == DebugSkipToNextDayDayIndex)
+	{
+		ScheduleDebugSkipToNextDayReadySubmission();
+		return;
+	}
+	if (EnteredPhase == ECatRunPhase::DayActive && RunPublicState.Phase.DayIndex > DebugSkipToNextDayDayIndex)
+	{
+		UE_LOG(LogCatRun, Display,
+			TEXT("Event=run_environment_social_debug_skip_to_next_day_advanced RunId=%s Revision=%lld PreviousDay=%d CurrentDay=%d Phase=%s"),
+			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
+			DebugSkipToNextDayDayIndex, RunPublicState.Phase.DayIndex,
+			*UEnum::GetValueAsString(RunPublicState.Phase.Phase));
+		ClearDebugSkipToNextDayRequest();
+		return;
+	}
+	if (EnteredPhase == ECatRunPhase::FailureSettlementNight || EnteredPhase == ECatRunPhase::SuccessSettlementNight
+		|| EnteredPhase == ECatRunPhase::Ending || EnteredPhase == ECatRunPhase::Ended
+		|| EnteredPhase == ECatRunPhase::NotStarted)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_skip_to_next_day_stopped RunId=%s Revision=%lld RequestedDay=%d CurrentDay=%d Phase=%s"),
+			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
+			DebugSkipToNextDayDayIndex, RunPublicState.Phase.DayIndex,
+			*UEnum::GetValueAsString(RunPublicState.Phase.Phase));
+		ClearDebugSkipToNextDayRequest();
+	}
+}
+
+// 开发期跳天 ready 延迟安排流程：把 ready 提交放到下一帧，避开 StateTree EnterPhase 回调栈内重入 AllEligibleReady；下一帧仍会重新核对 Run 与天数。
+void ACatfishingGameModeBase::ScheduleDebugSkipToNextDayReadySubmission()
+{
+	UWorld* World = GetWorld();
+	if (!World)
+	{
+		return;
+	}
+	World->GetTimerManager().SetTimerForNextTick(
+		FTimerDelegate::CreateUObject(this, &ThisClass::HandleDebugSkipToNextDayReadyElapsed));
+}
+
+// 开发期跳天 ready 延迟执行流程：先确认请求没有跨 Run/跨天，再通过正式 SubmitNextDayReady 提交；提交失败时清掉调试请求，避免界面一直显示一个不会再推进的旧输入。
+void ACatfishingGameModeBase::HandleDebugSkipToNextDayReadyElapsed()
+{
+	if (!IsDebugSkipToNextDayRequestCurrent())
+	{
+		UE_LOG(LogCatRun, Display,
+			TEXT("Event=run_environment_social_debug_skip_to_next_day_stale_ready RunId=%s Revision=%lld RequestedRunId=%s RequestedDay=%d CurrentDay=%d Phase=%s"),
+			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
+			*DebugSkipToNextDayRunId.ToString(EGuidFormats::DigitsWithHyphens), DebugSkipToNextDayDayIndex,
+			RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(RunPublicState.Phase.Phase));
+		ClearDebugSkipToNextDayRequest();
+		return;
+	}
+	if (RunPublicState.Phase.Phase != ECatRunPhase::NormalNight)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_skip_to_next_day_rejected Reason=ReadyDelayWrongPhase RunId=%s Revision=%lld Day=%d Phase=%s"),
+			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
+			RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(RunPublicState.Phase.Phase));
+		ClearDebugSkipToNextDayRequest();
+		return;
+	}
+	if (!SubmitDebugReadyForEligiblePlayers(TEXT("PhaseEnteredNextTick"))
+		&& !bAllEligibleReadyEventSent)
+	{
+		ClearDebugSkipToNextDayRequest();
+	}
+}
+
+// 开发期跳到夜晚入口流程：
+// 1. 先拒绝无 authority 或无 World 的调用，保证指令只在服务器权威侧生效。
+// 2. 如果当前已经是普通夜晚，直接返回 true 并写日志，避免为了确认状态而重复提交 ready。
+// 3. 如果当前白天已经因额度完成关闭 quota/fishing，则认为正在等待 StateTree 入夜，不追加第二条额度命令。
+// 4. 开放 DayActive 才复用正式额度补足入口发送 QuotaReached；其他阶段只拒绝并清掉跳天调试请求。
+bool ACatfishingGameModeBase::ApplyDebugSkipToNight()
+{
+	if (!HasAuthority() || !GetWorld())
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_skip_to_night_rejected Reason=AuthorityOrWorldUnavailable"));
+		return false;
+	}
+
+	if (RunPublicState.Phase.Phase == ECatRunPhase::NormalNight)
+	{
+		UE_LOG(LogCatRun, Display,
+			TEXT("Event=run_environment_social_debug_skip_to_night_already_night RunId=%s Revision=%lld Day=%d"),
+			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens),
+			RunPublicState.Revision, RunPublicState.Phase.DayIndex);
+		return true;
+	}
+	if (RunPublicState.Phase.Phase == ECatRunPhase::DayActive
+		&& (!RunPublicState.Phase.bFishingAllowed || !RunPublicState.Phase.bQuotaOpen))
+	{
+		UE_LOG(LogCatRun, Display,
+			TEXT("Event=run_environment_social_debug_skip_to_night_waiting RunId=%s Revision=%lld Day=%d HasDeadline=%s FishingAllowed=%s QuotaOpen=%s"),
+			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens),
+			RunPublicState.Revision, RunPublicState.Phase.DayIndex,
+			RunPublicState.Phase.bHasDeadline ? TEXT("true") : TEXT("false"),
+			RunPublicState.Phase.bFishingAllowed ? TEXT("true") : TEXT("false"),
+			RunPublicState.Phase.bQuotaOpen ? TEXT("true") : TEXT("false"));
+		return true;
+	}
+	if (RunPublicState.Phase.Phase == ECatRunPhase::DayActive)
+	{
+		const bool bSubmitted = SubmitDebugQuotaCompletionForCurrentDay(TEXT("SkipToNight"));
+		UE_LOG(LogCatRun, Display,
+			TEXT("Event=run_environment_social_debug_skip_to_night_requested Accepted=%s RunId=%s Revision=%lld Day=%d Phase=%s"),
+			bSubmitted ? TEXT("true") : TEXT("false"),
+			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens),
+			RunPublicState.Revision, RunPublicState.Phase.DayIndex,
+			*UEnum::GetValueAsString(RunPublicState.Phase.Phase));
+		return bSubmitted;
+	}
+
+	UE_LOG(LogCatRun, Warning,
+		TEXT("Event=run_environment_social_debug_skip_to_night_rejected Reason=InvalidPhase RunId=%s Revision=%lld Day=%d Phase=%s"),
+		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
+		RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(RunPublicState.Phase.Phase));
+	ClearDebugSkipToNextDayRequest();
+	return false;
+}
+
+// 开发期跳天入口流程：
+// 1. 先拒绝无 authority 或无 World 的调用，保证指令只在服务器权威侧生效。
+// 2. 如果同一 Run/Day 已有请求，夜晚会补一次正式 ready 或重投已达成的 AllEligibleReady 事件，否则返回 true 表示旧请求仍在等待正式推进。
+// 3. DayActive 会先记录请求所属 Run/Day，再提交正式额度补足；额度提交失败会立即清请求并返回 false。
+// 4. NormalNight 会记录同一类请求并提交正式 ready；如果没有形成全员 ready 事件则清请求并返回 false。
+// 5. 其他阶段不支持跳天，写拒绝日志、清理请求并返回 false；整个方法不直接写 Phase、DayIndex 或客户端 HUD。
+bool ACatfishingGameModeBase::ApplyDebugSkipToNextDay()
+{
+	UWorld* World = GetWorld();
+	if (!HasAuthority() || !World)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_skip_to_next_day_rejected Reason=AuthorityOrWorldUnavailable"));
+		return false;
+	}
+
+	if (IsDebugSkipToNextDayRequestCurrent())
+	{
+		if (RunPublicState.Phase.Phase == ECatRunPhase::NormalNight)
+		{
+			return SubmitDebugReadyForEligiblePlayers(TEXT("CommandPendingNight"));
+		}
+		UE_LOG(LogCatRun, Display,
+			TEXT("Event=run_environment_social_debug_skip_to_next_day_pending RunId=%s Revision=%lld Day=%d Phase=%s AllReadyEventSent=%s"),
+			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
+			RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(RunPublicState.Phase.Phase),
+			bAllEligibleReadyEventSent ? TEXT("true") : TEXT("false"));
+		return true;
+	}
+
+	if (RunPublicState.Phase.Phase == ECatRunPhase::DayActive)
+	{
+		const FGuid RequestedRunId = RunPublicState.Phase.RunId;
+		const int32 RequestedDayIndex = RunPublicState.Phase.DayIndex;
+		bDebugSkipToNextDayRequested = true;
+		DebugSkipToNextDayRunId = RequestedRunId;
+		DebugSkipToNextDayDayIndex = RequestedDayIndex;
+		if (!SubmitDebugQuotaCompletionForCurrentDay(TEXT("SkipToNextDay")))
+		{
+			ClearDebugSkipToNextDayRequest();
+			return false;
+		}
+		UE_LOG(LogCatRun, Display,
+			TEXT("Event=run_environment_social_debug_skip_to_next_day_requested RunId=%s RequestedDay=%d StartPhase=%s"),
+			*RequestedRunId.ToString(EGuidFormats::DigitsWithHyphens), RequestedDayIndex,
+			*UEnum::GetValueAsString(ECatRunPhase::DayActive));
+		return true;
+	}
+
+	if (RunPublicState.Phase.Phase == ECatRunPhase::NormalNight)
+	{
+		const FGuid RequestedRunId = RunPublicState.Phase.RunId;
+		const int32 RequestedDayIndex = RunPublicState.Phase.DayIndex;
+		bDebugSkipToNextDayRequested = true;
+		DebugSkipToNextDayRunId = RequestedRunId;
+		DebugSkipToNextDayDayIndex = RequestedDayIndex;
+		if (!SubmitDebugReadyForEligiblePlayers(TEXT("CommandNight"))
+			&& !bAllEligibleReadyEventSent)
+		{
+			ClearDebugSkipToNextDayRequest();
+			return false;
+		}
+		UE_LOG(LogCatRun, Display,
+			TEXT("Event=run_environment_social_debug_skip_to_next_day_requested RunId=%s RequestedDay=%d StartPhase=%s"),
+			*RequestedRunId.ToString(EGuidFormats::DigitsWithHyphens), RequestedDayIndex,
+			*UEnum::GetValueAsString(ECatRunPhase::NormalNight));
+		return true;
+	}
+
+	UE_LOG(LogCatRun, Warning,
+		TEXT("Event=run_environment_social_debug_skip_to_next_day_rejected Reason=InvalidPhase RunId=%s Revision=%lld Day=%d Phase=%s"),
+		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
+		RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(RunPublicState.Phase.Phase));
+	ClearDebugSkipToNextDayRequest();
+	return false;
+}
+
+// 开发期强制下一天流程：
+// 1. 先要求服务器 authority、有效 Run、可用 StateTreeComponent、Run 配置和 ST_RunFlow 资产；未启动、局末、成功结算或 HostExit 拆局时拒绝，避免把正式收口救成半同步新天。
+// 2. 再把救援范围收窄到两类：普通夜晚已经全员 ready 但 StateTree 卡住，或者失败结算夜为了人工测试继续跑后续天数。
+// 3. 失败结算夜救援前只恢复商店命令门，让后续 DayActive 的 AdvanceShopDay 能按正式日推进；若 StateTree 没进入新白天，立刻关回商店，避免失败夜半恢复。
+// 4. 随后清掉普通跳天请求、停止当前 StateTree、重新指定正式 ST_RunFlow，并用 StartLogic 进入初始 DayActive；DayActive 入口仍负责递增 DayIndex、清额度、重排 deadline、刷新 Environment 和复制 GameState。
+// 5. 最后核对公开状态确实进入更大的 DayIndex；失败只写诊断日志，不在本方法里手工补写 Phase 或天数。
+bool ACatfishingGameModeBase::ApplyDebugForceNextDay()
+{
+	UWorld* World = GetWorld();
+	if (!HasAuthority() || !World || !RunPublicState.Phase.RunId.IsValid() || !RunStateTreeComponent)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_force_next_day_rejected Reason=AuthorityRunOrStateTreeUnavailable"));
+		return false;
+	}
+	const ECatRunPhase PreviousPhase = RunPublicState.Phase.Phase;
+	if (RunPublicState.EndReason == ECatRunEndReason::HostExit || ActiveHostExitRequestId.IsValid()
+		|| !PendingHostExitAckStableNetIds.IsEmpty() || HostExitAckTimerHandle.IsValid()
+		|| RunPublicState.bTeardownComplete)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_force_next_day_rejected Reason=HostExitTeardownActive RunId=%s Revision=%lld Day=%d Phase=%s EndReason=%s PendingRemoteAcks=%d TeardownComplete=%s"),
+			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens),
+			RunPublicState.Revision, RunPublicState.Phase.DayIndex,
+			*UEnum::GetValueAsString(PreviousPhase), *UEnum::GetValueAsString(RunPublicState.EndReason),
+			PendingHostExitAckStableNetIds.Num(),
+			RunPublicState.bTeardownComplete ? TEXT("true") : TEXT("false"));
+		return false;
+	}
+	const bool bRecoveringReadyStuckNormalNight = PreviousPhase == ECatRunPhase::NormalNight
+		&& bAllEligibleReadyEventSent && IsAllNightReadyComplete();
+	const bool bRecoveringFailureSettlementNight = PreviousPhase == ECatRunPhase::FailureSettlementNight
+		&& RunPublicState.EndReason == ECatRunEndReason::QuotaFailed;
+	if (!bRecoveringReadyStuckNormalNight && !bRecoveringFailureSettlementNight)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_force_next_day_rejected Reason=UnsupportedRecoveryPhase RunId=%s Revision=%lld Day=%d Phase=%s EndReason=%s AllReadyEventSent=%s ReadyComplete=%s"),
+			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens),
+			RunPublicState.Revision, RunPublicState.Phase.DayIndex,
+			*UEnum::GetValueAsString(PreviousPhase), *UEnum::GetValueAsString(RunPublicState.EndReason),
+			bAllEligibleReadyEventSent ? TEXT("true") : TEXT("false"),
+			IsAllNightReadyComplete() ? TEXT("true") : TEXT("false"));
+		return false;
+	}
+	const UCatRunSettings* Settings = GetDefault<UCatRunSettings>();
+	float DayLengthSeconds = 0.0f;
+	int32 QuotaTarget = 0;
+	UStateTree* RunFlowAsset = Settings ? Settings->RunFlowStateTree.LoadSynchronous() : nullptr;
+	if (!Settings || !Settings->TryGetDayParameters(DayLengthSeconds, QuotaTarget) || !RunFlowAsset)
+	{
+		UE_LOG(LogCatRun, Warning,
+			TEXT("Event=run_environment_social_debug_force_next_day_rejected Reason=RunSettingsOrStateTreeAssetUnavailable RunId=%s Revision=%lld Day=%d Phase=%s"),
+			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens),
+			RunPublicState.Revision, RunPublicState.Phase.DayIndex,
+			*UEnum::GetValueAsString(PreviousPhase));
+		return false;
+	}
+
+	const FGuid RunId = RunPublicState.Phase.RunId;
+	const int32 PreviousDayIndex = RunPublicState.Phase.DayIndex;
+	const int64 PreviousRevision = RunPublicState.Revision;
+	if (bRecoveringFailureSettlementNight)
+	{
+		UCatShopEconomyService* Shop = World->GetSubsystem<UCatShopEconomyService>();
+		if (!Shop || !Shop->ReopenCommandsForDebugForceNextDay())
+		{
+			UE_LOG(LogCatRun, Warning,
+				TEXT("Event=run_environment_social_debug_force_next_day_rejected Reason=ShopRecoveryUnavailable RunId=%s Revision=%lld Day=%d Phase=%s"),
+				*RunId.ToString(EGuidFormats::DigitsWithHyphens), PreviousRevision,
+				PreviousDayIndex, *UEnum::GetValueAsString(PreviousPhase));
+			return false;
+		}
+	}
+	ClearDebugSkipToNextDayRequest();
+	if (RunStateTreeComponent->IsRunning())
+	{
+		RunStateTreeComponent->StopLogic(TEXT("Debug Force Next Day"));
+	}
+	RunStateTreeComponent->SetStateTree(RunFlowAsset);
+	bRunStartupInProgress = true;
+	RunStateTreeComponent->StartLogic();
+	bRunStartupInProgress = false;
+
+	const bool bAdvanced = RunStateTreeComponent->IsRunning()
+		&& RunPublicState.Phase.Phase == ECatRunPhase::DayActive
+		&& RunPublicState.Phase.DayIndex > PreviousDayIndex;
+	if (bAdvanced)
+	{
+		UE_LOG(LogCatRun, Log,
+			TEXT("Event=run_environment_social_debug_force_next_day_result Accepted=true RunId=%s PreviousRevision=%lld CurrentRevision=%lld PreviousDay=%d CurrentDay=%d PreviousPhase=%s CurrentPhase=%s StateTreeRunning=%s"),
+			*RunId.ToString(EGuidFormats::DigitsWithHyphens), PreviousRevision, RunPublicState.Revision,
+			PreviousDayIndex, RunPublicState.Phase.DayIndex,
+			*UEnum::GetValueAsString(PreviousPhase),
+			*UEnum::GetValueAsString(RunPublicState.Phase.Phase),
+			RunStateTreeComponent->IsRunning() ? TEXT("true") : TEXT("false"));
+	}
+	else
+	{
+		if (bRecoveringFailureSettlementNight)
+		{
+			CloseShopForSettlementNight();
+		}
+		UE_LOG(LogCatRun, Error,
+			TEXT("Event=run_environment_social_debug_force_next_day_result Accepted=false ShopRolledBack=%s RunId=%s PreviousRevision=%lld CurrentRevision=%lld PreviousDay=%d CurrentDay=%d PreviousPhase=%s CurrentPhase=%s StateTreeRunning=%s"),
+			bRecoveringFailureSettlementNight ? TEXT("true") : TEXT("false"),
+			*RunId.ToString(EGuidFormats::DigitsWithHyphens), PreviousRevision, RunPublicState.Revision,
+			PreviousDayIndex, RunPublicState.Phase.DayIndex,
+			*UEnum::GetValueAsString(PreviousPhase),
+			*UEnum::GetValueAsString(RunPublicState.Phase.Phase),
+			RunStateTreeComponent->IsRunning() ? TEXT("true") : TEXT("false"));
+	}
+	return bAdvanced;
+}
+
 // 开发期白天长度调整流程：
 // 1. 先校验 authority、World、有限正秒数、可用 timer 秒数和严格未来的服务器截止点；非法输入只写拒绝日志，不改公开状态。
 // 2. 再确认当前仍是钓鱼与额度都开放的 DayActive，防止达标/截止后的过渡态被调试指令续命。
@@ -1591,12 +2379,13 @@ APlayerState* ACatfishingGameModeBase::ResolvePlayerStateByStableNetId(const FSt
 		? Record->Controller->PlayerState : nullptr;
 }
 
-// GameState 开始流程：先完成父类注册，再记录实际类型；Run 快照只由 authority GameMode setter 写入。
+// GameState 构造流程：只创建 ChumField 公开复制组件，让客户端可读窝点表现事实；Run、Help 和 Shop 快照仍保持默认值，等待 authority setter 写入。
 ACatfishingGameState::ACatfishingGameState()
 {
 	ChumFieldReplication = CreateDefaultSubobject<UCatChumFieldReplicationComponent>(TEXT("ChumFieldReplication"));
 }
 
+// GameState 开始流程：先完成父类 BeginPlay，再写一条实际类日志；不在这里补算 Run、Social 或商店快照，避免绕过 GameMode 的唯一写口。
 void ACatfishingGameState::BeginPlay()
 {
 	Super::BeginPlay();
@@ -1648,6 +2437,7 @@ const FCatHelpSignalSnapshot& ACatfishingGameState::GetLastHelpSignal() const
 	return LastHelpSignal;
 }
 
+// 商店经济快照写入流程：只接受服务器 authority，整体替换团队余额、货架和公开交易记录；写入后立即请求网络更新并广播本机 UI 重读事件。
 void ACatfishingGameState::SetShopEconomySnapshotFromAuthority(
 	const FCatShopPublicEconomySnapshot& NewSnapshot)
 {
@@ -1660,11 +2450,13 @@ void ACatfishingGameState::SetShopEconomySnapshotFromAuthority(
 	OnShopEconomySnapshotChanged.Broadcast();
 }
 
+// 商店经济快照读取流程：返回服务器最终值或客户端最近复制值；调用方只能展示，不通过该引用确认交付或修改团队余额。
 const FCatShopPublicEconomySnapshot& ACatfishingGameState::GetShopEconomySnapshot() const
 {
 	return ShopEconomySnapshot;
 }
 
+// ChumField 复制组件写口读取流程：仅 authority 返回可写组件，客户端得到空指针，防止表现层绕过环境/窝点服务发布公共窝点。
 UCatChumFieldReplicationComponent* ACatfishingGameState::GetChumFieldReplicationFromAuthority()
 {
 	return HasAuthority() ? ChumFieldReplication : nullptr;
@@ -1674,7 +2466,7 @@ UCatChumFieldReplicationComponent* ACatfishingGameState::GetChumFieldReplication
 void ACatfishingGameState::OnRep_RunPublicState()
 {
 	OnRunPublicStateChanged.Broadcast();
-	UE_LOG(LogCatRun, Verbose, TEXT("Event=run_snapshot_received RunId=%s Revision=%lld Phase=%s Day=%d"),
+	UE_LOG(LogCatRun, Log, TEXT("Event=run_snapshot_received RunId=%s Revision=%lld Phase=%s Day=%d"),
 		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision,
 		*UEnum::GetValueAsString(RunPublicState.Phase.Phase), RunPublicState.Phase.DayIndex);
 }
@@ -1688,6 +2480,7 @@ void ACatfishingGameState::OnRep_HelpSignal()
 		LastHelpSignal.bGlobal ? TEXT("true") : TEXT("false"));
 }
 
+// 商店经济复制回调流程：客户端收到整份公开快照后只广播重读通知并写诊断日志；不在 RepNotify 中确认订单交付或推导余额变化。
 void ACatfishingGameState::OnRep_ShopEconomySnapshot()
 {
 	OnShopEconomySnapshotChanged.Broadcast();
@@ -2024,6 +2817,7 @@ void ACatfishingPlayerController::NotifyLocalPlayerUISubsystemPawnChanged()
 	}
 }
 
+// 输入后处理流程：先保留父类每帧输入收尾，再把本帧 Delta/GamePaused 交给当前 Pawn 的 ASC；没有有效 ASC 时保持静默，不缓存旧 Pawn。
 void ACatfishingPlayerController::PostProcessInput(const float DeltaTime, const bool bGamePaused)
 {
 	Super::PostProcessInput(DeltaTime, bGamePaused);
@@ -2656,6 +3450,127 @@ void ACatfishingPlayerController::SubmitTransferObjectBetweenContainersFromServe
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
+// 一键存入共享鱼缸 RPC 流程：owning client 只提交鱼护源格和鱼实例；目标鱼缸不接受客户端指定，统一交给服务器从固定营地解析。
+void ACatfishingPlayerController::ServerStoreFishInSharedTank_Implementation(const FGuid RequestId,
+	const FGuid FishInstanceId, const FGuid SourceContainerId, const int32 SourceContainerSlotIndex,
+	const int64 ExpectedSourceRevision)
+{
+	SubmitStoreFishInSharedTankFromServerRequest(RequestId, FishInstanceId, SourceContainerId,
+		SourceContainerSlotIndex, ExpectedSourceRevision);
+}
+
+// 一键存缸服务端提交流程：
+// 1. 先验证按钮请求形状、玩法命令 gate、当前 Character 和 Items 服务，避免在无效局状态下扫描营地。
+// 2. 再从当前 World 的固定营地中寻找已配置、已注册且玩家可触达的 SharedFishTank，并选第一个空鱼格作为目标。
+// 3. 找到目标后立即复用普通容器转移入口；源鱼护身份、同一条鱼、双容器距离、Revision、展示资格和幂等仍由通用路径与 Items 原子裁决。
+void ACatfishingPlayerController::SubmitStoreFishInSharedTankFromServerRequest(const FGuid RequestId,
+	const FGuid FishInstanceId, const FGuid SourceContainerId, const int32 SourceContainerSlotIndex,
+	const int64 ExpectedSourceRevision)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	UWorld* World = GetWorld();
+	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
+	UCatItemsService* Items = World ? World->GetSubsystem<UCatItemsService>() : nullptr;
+	if (!CanForwardGameplayCommand())
+	{
+		Result.Error = ECatDomainCommandError::CommandsClosed;
+	}
+	else if (!RequestId.IsValid() || !FishInstanceId.IsValid() || !SourceContainerId.IsValid()
+		|| SourceContainerSlotIndex == INDEX_NONE)
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	}
+	else if (!World || !ControlledCharacter || !Items)
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	}
+	else
+	{
+		const UCatCampSettings* CampSettings = GetDefault<UCatCampSettings>();
+		AActor* TargetHost = nullptr;
+		FCatContainerSnapshot TargetSnapshot;
+		int32 TargetSlotIndex = INDEX_NONE;
+		bool bFoundSharedTank = false;
+		bool bFoundReachableSharedTank = false;
+		bool bFoundPolicyClosedSharedTank = false;
+		for (TActorIterator<ACatCampHubActor> It(World); It; ++It)
+		{
+			ACatCampHubActor* Camp = *It;
+			FCatContainerSnapshot CandidateSnapshot;
+			if (!IsValid(Camp) || !Camp->TryGetSharedFishTankSnapshot(CandidateSnapshot)
+				|| CandidateSnapshot.Kind != ECatContainerKind::SharedFishTank)
+			{
+				continue;
+			}
+			ECatContainerKind CandidateHostKind = ECatContainerKind::Unknown;
+			AActor* CandidateHost = nullptr;
+			if (!Items->TryGetContainerHost(CandidateSnapshot.ContainerId, CandidateHostKind, CandidateHost)
+				|| CandidateHostKind != ECatContainerKind::SharedFishTank)
+			{
+				continue;
+			}
+			bFoundSharedTank = true;
+			if (!IsContainerHostReachable(CandidateHost, ControlledCharacter, CampSettings))
+			{
+				continue;
+			}
+			bFoundReachableSharedTank = true;
+			if (CandidateSnapshot.Capacity <= 0)
+			{
+				bFoundPolicyClosedSharedTank = true;
+				continue;
+			}
+			const int32 CandidateSlotIndex = FindFirstFreeFishContainerSlot(CandidateSnapshot);
+			if (CandidateSlotIndex == INDEX_NONE)
+			{
+				continue;
+			}
+			TargetHost = CandidateHost;
+			TargetSnapshot = CandidateSnapshot;
+			TargetSlotIndex = CandidateSlotIndex;
+			break;
+		}
+		if (!TargetHost)
+		{
+			Result.Error = !bFoundSharedTank
+				? ECatDomainCommandError::DependencyUnavailable
+				: (!bFoundReachableSharedTank
+					? ECatDomainCommandError::PermissionDenied
+					: (bFoundPolicyClosedSharedTank
+						? ECatDomainCommandError::PolicyUndecided : ECatDomainCommandError::CapacityExceeded));
+		}
+		else
+		{
+			UE_LOG(LogCatItems, Log,
+				TEXT("Event=fish_guard_store_shared_tank_resolved Request=%s Fish=%s SourceContainer=%s SourceSlot=%d TargetTank=%s TargetContainer=%s TargetSlot=%d TargetRevision=%lld"),
+				*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+				*FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+				*SourceContainerId.ToString(EGuidFormats::DigitsWithHyphens), SourceContainerSlotIndex,
+				*GetNameSafe(TargetHost),
+				*TargetSnapshot.ContainerId.ToString(EGuidFormats::DigitsWithHyphens), TargetSlotIndex,
+				TargetSnapshot.Revision);
+			SubmitTransferObjectBetweenContainersFromServerRequest(RequestId, ECatContainedObjectKind::Fish,
+				FishInstanceId,
+				SourceContainerId, ECatContainerKind::FishGuard, SourceContainerSlotIndex,
+				ExpectedSourceRevision,
+				TargetSnapshot.ContainerId, ECatContainerKind::SharedFishTank, TargetSlotIndex,
+				TargetSnapshot.Revision);
+			return;
+		}
+	}
+	if (Result.Error != ECatDomainCommandError::None)
+	{
+		UE_LOG(LogCatItems, Warning,
+			TEXT("Event=fish_guard_store_shared_tank_rejected Request=%s Fish=%s SourceContainer=%s SourceSlot=%d Error=%s Revision=%lld"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			*FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+			*SourceContainerId.ToString(EGuidFormats::DigitsWithHyphens), SourceContainerSlotIndex,
+			*UEnum::GetValueAsString(Result.Error), Result.Revision);
+	}
+	DeliverCampCommandResultToOwningClient(Result);
+}
+
 // 搬运救援 RPC 路由流程：只把目标和营地投给 BodyAction Ability；没有正式 Ability 接管时回送依赖错误。
 void ACatfishingPlayerController::ServerRescueCharacterToCamp_Implementation(ACatCampHubActor* Camp,
 	ACatCharacter* TargetCharacter, const FGuid RequestId)
@@ -3129,9 +4044,9 @@ void ACatfishingPlayerController::SubmitRepairRodAtCampFromBodyActionAbility(ACa
 	}
 }
 
-// 草药 RPC 路由流程：只把施药目标、RequestId、装备 Revision 和草药定义投给 BodyAction Ability；Ability 未接管时静默关闭。
+// 草药 RPC 路由流程：只把施药目标、RequestId、装备 Revision 和草药实例投给 BodyAction Ability；Ability 未接管时静默关闭。
 void ACatfishingPlayerController::ServerUseHerbOnCharacter_Implementation(ACatCharacter* TargetCharacter,
-	const FGuid RequestId, const int64 ExpectedEquipmentRevision, const FName HerbDefinitionId)
+	const FGuid RequestId, const int64 ExpectedEquipmentRevision, const FGuid HerbItemInstanceId)
 {
 	UCatBodyActionPayload* Payload = CreateBodyActionPayload(ECatBodyActionAbilityCommand::UseHerbOnCharacter);
 	if (Payload)
@@ -3139,14 +4054,14 @@ void ACatfishingPlayerController::ServerUseHerbOnCharacter_Implementation(ACatCh
 		Payload->TargetCharacter = TargetCharacter;
 		Payload->RequestId = RequestId;
 		Payload->ExpectedEquipmentRevision = ExpectedEquipmentRevision;
-		Payload->HerbDefinitionId = HerbDefinitionId;
+		Payload->HerbItemInstanceId = HerbItemInstanceId;
 	}
 	SubmitBodyActionThroughAbility(Payload);
 }
 
-// 草药 Ability 提交流程：先过统一玩法 gate，再从当前 Pawn 和目标 Character 读服务器位置，要求施药者未倒地且距离不超显式正范围；最后完成身体 preflight 才不可逆扣草药并恢复目标。
+// 草药 Ability 提交流程：先过统一玩法 gate，再从当前 Pawn 和目标 Character 读服务器位置，要求施药者未倒地且距离不超显式正范围；最后按请求实例通过 Equipment Use 扣量，成功后才恢复目标。
 void ACatfishingPlayerController::SubmitUseHerbOnCharacterFromBodyActionAbility(ACatCharacter* TargetCharacter,
-	const FGuid RequestId, const int64 ExpectedEquipmentRevision, const FName HerbDefinitionId)
+	const FGuid RequestId, const int64 ExpectedEquipmentRevision, const FGuid HerbItemInstanceId)
 {
 	if (!CanForwardGameplayCommand())
 	{
@@ -3156,10 +4071,25 @@ void ACatfishingPlayerController::SubmitUseHerbOnCharacterFromBodyActionAbility(
 	UCatEquipmentComponent* Equipment = ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr;
 	UCatConditionComponent* SourceConditions = ControlledCharacter ? ControlledCharacter->GetConditionComponent() : nullptr;
 	UCatConditionComponent* Conditions = TargetCharacter ? TargetCharacter->GetConditionComponent() : nullptr;
-	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(HerbDefinitionId);
+	const FCatRunInventorySlot* HerbSlot = nullptr;
+	if (Equipment)
+	{
+		for (const FCatRunInventorySlot& Slot : Equipment->GetSnapshot().InventorySlots)
+		{
+			if (Slot.ItemInstanceId == HerbItemInstanceId)
+			{
+				HerbSlot = &Slot;
+				break;
+			}
+		}
+	}
+	UCatEquipmentDefinition* Definition = HerbSlot
+		? GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(HerbSlot->DefinitionId) : nullptr;
 	const UCatConditionSettings* ConditionSettings = GetDefault<UCatConditionSettings>();
-	if (!Equipment || !SourceConditions || SourceConditions->GetSnapshot().bDowned || !Conditions
-		|| !Definition || Definition->Kind != ECatEquipmentKind::Herb || !ConditionSettings
+	if (!HerbItemInstanceId.IsValid() || !Equipment || !SourceConditions || SourceConditions->GetSnapshot().bDowned || !Conditions
+		|| !HerbSlot || HerbSlot->Quantity <= 0
+		|| !Definition || Definition->Kind != ECatEquipmentKind::Herb
+		|| !Definition->ConsumesInventoryQuantityOnUse() || !ConditionSettings
 		|| !FMath::IsFinite(ConditionSettings->HerbUseRangeCentimeters)
 		|| ConditionSettings->HerbUseRangeCentimeters <= 0.0
 		|| TargetCharacter->GetWorld() != GetWorld()
@@ -3169,9 +4099,9 @@ void ACatfishingPlayerController::SubmitUseHerbOnCharacterFromBodyActionAbility(
 	{
 		return;
 	}
-	const FCatDomainCommandResult Consume = Equipment->ConsumeInventoryQuantityFromAuthority(
-		RequestId, ExpectedEquipmentRevision, HerbDefinitionId);
-	if (Consume.bCommitted)
+	const FCatInventoryItemUseResult UseResult =
+		Equipment->Use(RequestId, ExpectedEquipmentRevision, HerbItemInstanceId);
+	if (UseResult.bCommitted)
 	{
 		Conditions->ApplyCommittedHerbRecovery(this, RequestId);
 	}
@@ -3575,7 +4505,7 @@ bool ACatfishingPlayerController::ExecuteBodyActionAbilityPayload(const UCatBody
 		return true;
 	case ECatBodyActionAbilityCommand::UseHerbOnCharacter:
 		SubmitUseHerbOnCharacterFromBodyActionAbility(Payload.TargetCharacter.Get(), Payload.RequestId,
-			Payload.ExpectedEquipmentRevision, Payload.HerbDefinitionId);
+			Payload.ExpectedEquipmentRevision, Payload.HerbItemInstanceId);
 		return true;
 	case ECatBodyActionAbilityCommand::ConsumeFish:
 		SubmitConsumeFishFromBodyActionAbility(Payload.TargetCharacter.Get(), Payload.FishConsumeCommand);

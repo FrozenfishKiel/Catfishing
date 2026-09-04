@@ -324,9 +324,17 @@ bool FCatFishingExhaustedPickupHandoffTest::RunTest(const FString& Parameters)
 	}
 	if (!TestTrue(TEXT("grants bait"), Equipment->GrantInventoryQuantityFromAuthority(
 		FGuid::NewGuid(), Equipment->GetSnapshot().Revision, TEXT("BugBait"), 1).bCommitted)) return false;
+	const FCatEquipmentLoadoutSnapshot Loadout = Equipment->GetSnapshot();
+	if (!TestTrue(TEXT("granted equipment selects real rod, bait and float instances"),
+		Loadout.RodItemInstanceId.IsValid() && Loadout.BaitItemInstanceId.IsValid()
+		&& Loadout.FloatItemInstanceId.IsValid())) return false;
+	if (!TestTrue(TEXT("deploys the real rod instance before reserving fishing use"), Equipment->Use(
+		FGuid::NewGuid(), Loadout.Revision, Loadout.RodItemInstanceId).bCommitted)) return false;
 	const FGuid SessionId = FGuid::NewGuid();
 	if (!TestTrue(TEXT("reserves real fishing bait"), Equipment->BeginFishingUse(SessionId,
-		TEXT("StarterRodT1"), TEXT("BugBait"), TEXT("FeatherFloat"), Equipment->GetSnapshot().Revision).bReserved)) return false;
+		Loadout.RodItemInstanceId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
+		Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId,
+		Equipment->GetSnapshot().Revision).bReserved)) return false;
 	TestTrue(TEXT("tip and grip are separated by a real rod length"), Rod->ConfigureCanonicalAnchorsFromAuthority(
 		FTransform(FVector(250.0, 0.0, 100.0)), FTransform::Identity, FTransform::Identity));
 	Session->Snapshot.FishingSessionId = SessionId;

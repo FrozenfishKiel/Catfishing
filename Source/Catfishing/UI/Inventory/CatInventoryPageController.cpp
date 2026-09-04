@@ -736,8 +736,8 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 }
 
 // 鱼动作按钮流程：
-// 1. 本入口只处理吃鱼和献祭这类按钮动作；库存整理走 Drop，钓具选择走格子右键上下文。
-// 2. 用 Widget 传入的本页选择在最新 ViewState 里复核鱼、容器 ID 和 Revision，拒绝空选择或无效鱼护上下文。
+// 1. 本入口只处理吃鱼、献祭和存入营地鱼缸这类选中鱼动作；库存整理走 Drop，钓具选择走格子右键上下文。
+// 2. 用 Widget 传入的本页选择在最新 ViewState 里复核鱼、容器 ID 和 Revision；吃鱼/献祭允许鱼护或共享鱼缸，存缸只允许鱼护。
 // 3. 生成 RequestId 并记录 pending，使同步 authority 回包也能匹配，但不提前广播刷新库存格。
 // 4. 按动作类型调用 PlayerController 正式服务器入口，绝不让 Widget 直接访问 Items 或 Run。
 // 5. Model 或 Controller 已失效时直接丢弃迟到意图；需要 Character 的吃鱼分支无法解析 Pawn 时发布结构化拒绝。
@@ -758,12 +758,19 @@ void UCatInventoryPageController::RequestInventoryActionFromWidget(const ECatInv
 	}
 	const FCatInventorySlotView* CurrentSlot = FindCurrentSourceSlot(State, SelectedSlot);
 	const bool bHasSelectedFish = CurrentSlot
-		&& CurrentSlot->ContainerKind == ECatContainerKind::FishGuard
 		&& CurrentSlot->ContainerId.IsValid()
 		&& CurrentSlot->bOccupied
 		&& CurrentSlot->ObjectKind == ECatContainedObjectKind::Fish
 		&& CurrentSlot->Fish.FishInstanceId.IsValid();
-	if (!bHasSelectedFish)
+	const bool bIsFishUseAction = Action == ECatInventoryAction::ConsumeSelectedFish
+		|| Action == ECatInventoryAction::SacrificeSelectedFish;
+	const bool bCanUseSelectedFish = CurrentSlot && bIsFishUseAction
+		&& (CurrentSlot->ContainerKind == ECatContainerKind::FishGuard
+			|| CurrentSlot->ContainerKind == ECatContainerKind::SharedFishTank);
+	const bool bCanStoreSelectedFishInSharedTank =
+		CurrentSlot && Action == ECatInventoryAction::StoreSelectedFishInSharedTank
+		&& CurrentSlot->ContainerKind == ECatContainerKind::FishGuard;
+	if (!bHasSelectedFish || (!bCanUseSelectedFish && !bCanStoreSelectedFishInSharedTank))
 	{
 		Model->MarkActionRejected(Action, RequestId, ECatDomainCommandError::InvalidPayload,
 			CurrentSlot ? CurrentSlot->ContainerRevision : SelectedSlot.ContainerRevision);
@@ -812,6 +819,27 @@ void UCatInventoryPageController::RequestInventoryActionFromWidget(const ECatInv
 			else
 			{
 				CatController->ServerRequestSacrifice(Command);
+			}
+			return;
+		}
+	case ECatInventoryAction::StoreSelectedFishInSharedTank:
+		{
+			Model->MarkActionSubmitted(Action, RequestId);
+			if (CatController->HasAuthority())
+			{
+				CatController->ServerStoreFishInSharedTank_Implementation(RequestId,
+					CurrentSlot->Fish.FishInstanceId,
+					CurrentSlot->ContainerId,
+					CurrentSlot->ContainerSlotIndex,
+					CurrentSlot->ContainerRevision);
+			}
+			else
+			{
+				CatController->ServerStoreFishInSharedTank(RequestId,
+					CurrentSlot->Fish.FishInstanceId,
+					CurrentSlot->ContainerId,
+					CurrentSlot->ContainerSlotIndex,
+					CurrentSlot->ContainerRevision);
 			}
 			return;
 		}

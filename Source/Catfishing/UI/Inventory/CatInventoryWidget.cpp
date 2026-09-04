@@ -70,7 +70,9 @@ namespace
 		State.SelectedFish = FCatFishInstance();
 		State.bHasSelectedFish = false;
 		State.bSelectedFishInFishGuard = false;
+		State.bSelectedFishInSharedTank = false;
 		State.bCanSubmitAction = false;
+		State.bCanStoreSelectedFishInSharedTank = false;
 	}
 
 	// 格子详情压缩流程：SlotView 已经带有 Model 投影好的显示文本，Widget 只把换行压成一行，避免再复制一套数据解释规则。
@@ -110,7 +112,7 @@ namespace
 		return State.SelectedFishText;
 	}
 
-	// 本地选择叠加流程：页面把自己的选择写进 ViewState 副本和按钮状态；共享 Model 仍保持无选择。
+	// 本地选择叠加流程：页面把自己的选择写进 ViewState 副本；鱼护和共享鱼缸都能点吃鱼/献祭，只有鱼护鱼能点存入鱼缸，共享 Model 仍保持无选择。
 	void ApplyLocalSelectionToViewState(FCatInventoryViewState& State, const FCatInventorySlotView& SelectedSlot)
 	{
 		ClearLocalSelectionFromViewState(State);
@@ -132,11 +134,16 @@ namespace
 			&& SelectedSlot.Fish.FishInstanceId.IsValid();
 		State.bSelectedFishInFishGuard = State.bHasSelectedFish
 			&& SelectedSlot.ContainerKind == ECatContainerKind::FishGuard;
+		State.bSelectedFishInSharedTank = State.bHasSelectedFish
+			&& SelectedSlot.ContainerKind == ECatContainerKind::SharedFishTank;
 		if (State.bHasSelectedFish)
 		{
 			State.SelectedFish = SelectedSlot.Fish;
 		}
-		State.bCanSubmitAction = State.bOpen && State.bSelectedFishInFishGuard && !State.bActionPending;
+		const bool bCanUseSelectedFish = State.bSelectedFishInFishGuard || State.bSelectedFishInSharedTank;
+		State.bCanSubmitAction = State.bOpen && bCanUseSelectedFish && !State.bActionPending;
+		State.bCanStoreSelectedFishInSharedTank =
+			State.bOpen && State.bSelectedFishInFishGuard && !State.bActionPending;
 		State.SelectedFishText = MakeLocalSelectedSlotText(State, SelectedSlot);
 	}
 }
@@ -163,6 +170,11 @@ void UCatInventoryWidget::NativeConstruct()
 	{
 		SacrificeFishButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleSacrificeClicked);
 		SacrificeFishButton->OnClicked.AddDynamic(this, &ThisClass::HandleSacrificeClicked);
+	}
+	if (StoreFishInTankButton)
+	{
+		StoreFishInTankButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleStoreFishInTankClicked);
+		StoreFishInTankButton->OnClicked.AddDynamic(this, &ThisClass::HandleStoreFishInTankClicked);
 	}
 	if (!InventorySlotWidgetClass)
 	{
@@ -193,6 +205,10 @@ void UCatInventoryWidget::NativeDestruct()
 	if (SacrificeFishButton)
 	{
 		SacrificeFishButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleSacrificeClicked);
+	}
+	if (StoreFishInTankButton)
+	{
+		StoreFishInTankButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleStoreFishInTankClicked);
 	}
 	Super::NativeDestruct();
 }
@@ -273,14 +289,19 @@ void UCatInventoryWidget::RenderInventory(const FCatInventoryViewState& ViewStat
 	{
 		ResultTextBlock->SetText(BlueprintResultText);
 	}
-	const bool bActionEnabled = LastInventoryViewState.bCanSubmitAction;
+	const bool bFishUseActionEnabled = LastInventoryViewState.bCanSubmitAction;
+	const bool bStoreFishInTankActionEnabled = LastInventoryViewState.bCanStoreSelectedFishInSharedTank;
 	if (ConsumeFishButton)
 	{
-		ConsumeFishButton->SetIsEnabled(bActionEnabled);
+		ConsumeFishButton->SetIsEnabled(bFishUseActionEnabled);
 	}
 	if (SacrificeFishButton)
 	{
-		SacrificeFishButton->SetIsEnabled(bActionEnabled);
+		SacrificeFishButton->SetIsEnabled(bFishUseActionEnabled);
+	}
+	if (StoreFishInTankButton)
+	{
+		StoreFishInTankButton->SetIsEnabled(bStoreFishInTankActionEnabled);
 	}
 	RebuildSlotWidgets();
 	BP_RenderInventory(LastInventoryViewState);
@@ -369,23 +390,44 @@ void UCatInventoryWidget::RequestSacrificeSelectedFish()
 	}
 }
 
+// 存入鱼缸请求流程：Widget 只提交本页当前选择身份；目标鱼缸、目标格和距离权限全部留给 PageController/服务器复核。
+void UCatInventoryWidget::RequestStoreSelectedFishInSharedTank()
+{
+	if (UCatInventoryPageController* PageController = ResolveInventoryPageController())
+	{
+		const FCatInventorySlotView SelectedSlot = LastInventoryViewState.bHasSelectedSlot
+			? LastInventoryViewState.SelectedSlot : FCatInventorySlotView();
+		PageController->RequestInventoryActionFromWidget(
+			ECatInventoryAction::StoreSelectedFishInSharedTank, SelectedSlot);
+	}
+}
+
 // 状态读取流程：返回本页最近一次渲染后的 ViewState 副本；蓝图只读展示当前 WBP 自己的选择和动作表现。
 const FCatInventoryViewState& UCatInventoryWidget::GetLastInventoryViewState() const
 {
 	return LastInventoryViewState;
 }
 
-// 数据源选择流程：普通库存页只读取随身背包 Slots；营地仓库和鱼护页面通过派生类改成自己的独立 Slots。
+// 数据源选择流程：普通库存页被鱼缸等外部容器直接打开时优先读外部容器 Slots，否则读取随身背包；专用页通过派生类保持自己的独立 Slots。
 const TArray<FCatInventorySlotView>& UCatInventoryWidget::GetInventorySlotsForWidget(
 	const FCatInventoryViewState& ViewState) const
 {
+	if (ViewState.bHasExternalContainers)
+	{
+		return ViewState.ExternalContainerSlots;
+	}
 	return ViewState.InventorySlots;
 }
 
-// 本页 Slots 回写流程：普通库存页把本地高亮后的数组写回随身库存副本；派生页覆盖到自己的数据源数组。
+// 本页 Slots 回写流程：普通库存页按本次上下文写回外部容器或随身库存副本，保证鱼缸格子的本地高亮和按钮状态能进入蓝图可读 ViewState。
 void UCatInventoryWidget::StoreDisplayedSlotsInViewState(FCatInventoryViewState& ViewState,
 	const TArray<FCatInventorySlotView>& Slots) const
 {
+	if (ViewState.bHasExternalContainers)
+	{
+		ViewState.ExternalContainerSlots = Slots;
+		return;
+	}
 	ViewState.InventorySlots = Slots;
 }
 
@@ -571,4 +613,10 @@ void UCatInventoryWidget::HandleConsumeClicked()
 void UCatInventoryWidget::HandleSacrificeClicked()
 {
 	RequestSacrificeSelectedFish();
+}
+
+// 存鱼缸按钮流程：收口到统一存缸请求，避免鱼护 WBP 自己查找鱼缸或拼 RPC 参数。
+void UCatInventoryWidget::HandleStoreFishInTankClicked()
+{
+	RequestStoreSelectedFishInSharedTank();
 }

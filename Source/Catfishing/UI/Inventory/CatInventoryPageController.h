@@ -62,7 +62,7 @@ public:
 	void RequestInventorySlotDropFromWidget(const FCatInventorySlotView& SourceSlot,
 		const FCatInventorySlotView& TargetSlot);
 
-	/** 库存 WBP 请求执行吃鱼或献祭动作；PageController 用页面传入的本地选择对照最新 Model 快照重建服务器命令。 */
+	/** 库存 WBP 请求执行选中鱼按钮动作；PageController 用页面传入的本地选择对照最新 Model 快照重建吃鱼、献祭或存缸命令。 */
 	void RequestInventoryActionFromWidget(ECatInventoryAction Action, const FCatInventorySlotView& SelectedSlot);
 
 private:

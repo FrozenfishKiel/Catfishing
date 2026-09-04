@@ -931,31 +931,46 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
 	}
-	// 选窝料：优先项目 starter 配置的种类，否则库存格里第一份数量>0 的 Chum 类物品。
+	// 选窝料实例流程：优先 starter 指定类型中的足量实例，否则使用背包里第一份能完整支付本次投放数量的 Chum。
 	const FCatEquipmentLoadoutSnapshot& Loadout = Equipment->GetSnapshot();
-	FName ChumId = GetDefault<UCatEquipmentSettings>()->StarterChumDefinitionId;
-	// 小工具 lambda：判断某个物品 ID 在当前库存格数组里是否还有存量。
-	auto HasStock = [&Loadout](const FName Id)
+	const int32 ChumQuantity = FMath::Max(1, GetDefault<UCatFishingSettings>()->ChumThrowQuantity);
+	const FName PreferredChumDefinitionId = GetDefault<UCatEquipmentSettings>()->StarterChumDefinitionId;
+	const FCatRunInventorySlot* ChumSlot = nullptr;
+	const auto CanUseChumSlot = [ChumQuantity](const FCatRunInventorySlot& Slot,
+		const FName RequiredDefinitionId)
 	{
-		for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
-		{
-			if (Slot.DefinitionId == Id && Slot.Quantity > 0) return true;
-		}
-		return false;
+		const UCatEquipmentDefinition* Definition =
+			GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Slot.DefinitionId);
+		return Slot.ItemInstanceId.IsValid() && Slot.Quantity >= ChumQuantity
+			&& (RequiredDefinitionId.IsNone() || Slot.DefinitionId == RequiredDefinitionId)
+			&& Definition && Definition->Kind == ECatEquipmentKind::Chum
+			&& Definition->ConsumesInventoryQuantityOnUse();
 	};
-	if (ChumId.IsNone() || !HasStock(ChumId))
+	if (!PreferredChumDefinitionId.IsNone())
 	{
-		// 默认窝料未配置，或已配置但库存里已经用光了：退化成遍历库存格找第一份 Kind==Chum 的数量型物品。
-		ChumId = NAME_None;
 		for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
 		{
-			const UCatEquipmentDefinition* Def = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Slot.DefinitionId);
-			if (Def && Def->Kind == ECatEquipmentKind::Chum && Def->bRunConsumable && Slot.Quantity > 0) { ChumId = Slot.DefinitionId; break; }
+			if (CanUseChumSlot(Slot, PreferredChumDefinitionId))
+			{
+				ChumSlot = &Slot;
+				break;
+			}
 		}
 	}
-	if (ChumId.IsNone())
+	if (!ChumSlot)
 	{
-		// 库存里一份可用窝料都没有，直接拒绝，不进入弹道计算。
+		for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
+		{
+			if (CanUseChumSlot(Slot, NAME_None))
+			{
+				ChumSlot = &Slot;
+				break;
+			}
+		}
+	}
+	if (!ChumSlot)
+	{
+		// 库存里没有一份能完整支付本次投放数量的窝料实例，直接拒绝，不进入弹道计算。
 		Result.Error = ECatChumFieldError::EquipmentUnavailable;
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
@@ -979,11 +994,13 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 	Command.RequestId = RequestId;
 	Command.ExpectedWaterRegionHandle = Region;
 	Command.ExpectedEquipmentRevision = Loadout.Revision;
-	Command.ChumDefinitionId = ChumId;
-	Command.Quantity = FMath::Max(1, GetDefault<UCatFishingSettings>()->ChumThrowQuantity);
+	Command.ChumItemInstanceId = ChumSlot->ItemInstanceId;
+	Command.ChumDefinitionId = ChumSlot->DefinitionId;
+	Command.Quantity = ChumQuantity;
 	Command.ClientCandidateWorldPoint = Landing;
-	UE_LOG(LogCatFishing, Log, TEXT("Event=chum_throw Held=%.2f Alpha=%.2f Landing=%s Chum=%s"),
-		HeldSeconds, Alpha, *Landing.ToString(), *ChumId.ToString());
+	UE_LOG(LogCatFishing, Log, TEXT("Event=chum_throw Held=%.2f Alpha=%.2f Landing=%s Chum=%s ChumItem=%s"),
+		HeldSeconds, Alpha, *Landing.ToString(), *ChumSlot->DefinitionId.ToString(),
+		*ChumSlot->ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
 	DeliverPlaceChumResultFromAuthority(Service->PlaceChum(Controller, Command));
 }
 

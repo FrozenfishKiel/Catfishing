@@ -159,7 +159,7 @@ private:
 	/** authority 新 Character 首次 ActorInfo 就绪时整体应用三项显式初值；重占有不重置已消耗的局内状态。 */
 	void ApplyInitialAttributesOnce();
 
-	/** 受控开发兜底入口；可独立默认发放抄网，完整 Starter 装配仍只选择背包已有物品。 */
+	/** authority 新 Character 占有后触发的 Starter 兜底入口；配置关闭或已有鱼竿选择时不改状态，打开时只尝试选择随身库存已有装备，成功后才可能按配置补窝料。 */
 	void ApplyStarterLoadoutIfConfigured();
 
 	/** 在失去占有或销毁前终止本 Character 参与的钓鱼与偷鱼协议，随后才允许身体和 ASC 清理。 */

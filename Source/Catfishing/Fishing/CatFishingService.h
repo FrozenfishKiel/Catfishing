@@ -95,7 +95,7 @@ public:
 	/** 仅统计当前存活且未终态的 Session，不暴露服务器索引。 */
 	int32 GetTrackedSessionCountForDiagnostics() const;
 
-	/** 仅统计 key/value 都存活的鱼竿登记，不暴露服务器 Registry。 */
+	/** 仅统计 key/value 都存活的已部署鱼竿弱索引；诊断只看数量，不暴露服务内部表。 */
 	int32 GetDeployedRodCountForDiagnostics() const;
 
 private:
@@ -141,7 +141,7 @@ private:
 	TMap<FString, FCatBeginCastResult> BeginCastTerminalCache;
 	TSet<FString> BeginCastInProgress;
 
-	/** PlayerState 到其当前唯一部署鱼竿的服务器弱 Registry；不强持 Actor，也不扫描 World 重建。 */
+	/** PlayerState 到其当前唯一部署鱼竿的服务器弱索引；不强持 Actor，也不扫描 World 重建。 */
 	TMap<TWeakObjectPtr<APlayerState>, TWeakObjectPtr<ACatFishingRodActor>> DeployedRodByPlayerState;
 
 	/** teardown 后永久拒绝本 World 新会话。 */

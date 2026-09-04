@@ -738,6 +738,19 @@ void UCatShopEconomyService::CloseCommands()
 	bCommandsOpen = false;
 }
 
+#if !UE_BUILD_SHIPPING
+// 开发期商店救援流程：先要求经济 runtime 本身可用，再只恢复命令 gate；它不重置公款、账本、货架或缓存，让随后的 DayActive 按正式 AdvanceShopDay 补日状态。
+bool UCatShopEconomyService::ReopenCommandsForDebugForceNextDay()
+{
+	if (!bRuntimeReady)
+	{
+		return false;
+	}
+	bCommandsOpen = true;
+	return true;
+}
+#endif
+
 // 设置加载流程：清空旧交易事实后读取默认对象；公款和售鱼价仍是局级配置，商店货架库存由每个摊位库存组件自己生成。
 void UCatShopEconomyService::LoadRuntimeEconomyFromSettings()
 {

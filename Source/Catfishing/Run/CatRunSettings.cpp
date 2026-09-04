@@ -28,7 +28,13 @@ bool UCatRunSettings::CanAdmitLateNightReady() const
 		&& NightReconnectReadyPolicy == ECatRunPolicyDecision::Enabled;
 }
 
-// 成功终局 gate 读取流程：只有显式 Enabled 才允许 StateTree 的 EnterPhase Task 发布成功结算夜；Undecided 与 Disabled 都保持不可达。
+// 成功结算资格计算流程：先要求策略总开关显式启用，再要求已完成的天数达到可配置最终天；天数非正代表配置不可用，普通夜继续翻天而不是误入终局。
+bool UCatRunSettings::CanEnterSuccessSettlementNight(const int32 CompletedDayIndex) const
+{
+	return IsSuccessSettlementEnabled() && FinalDayIndex > 0 && CompletedDayIndex >= FinalDayIndex;
+}
+
+// 成功终局 gate 读取流程：只有显式 Enabled 才表示成功结算功能开放；是否到最终天由 CanEnterSuccessSettlementNight 继续裁决。
 bool UCatRunSettings::IsSuccessSettlementEnabled() const
 {
 	return SuccessSettlementPolicy == ECatRunPolicyDecision::Enabled;

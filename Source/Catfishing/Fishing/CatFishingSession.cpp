@@ -530,7 +530,7 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
 	UCatEquipmentComponent* ScooperEquipment = ScoopingCharacter ? ScoopingCharacter->GetEquipmentComponent() : nullptr;
 	double ScoopReachCentimeters = 0.0;
-	// 全局设置和服务器当前装备的抄网 DA 共同给出有效距离；当前开发配置会为每名玩家默认发放并选中一份。
+	// 全局设置和服务器当前装备快照中的已选抄网 DA 共同给出有效距离；当前流程不提供默认获取，未装备时解析保持失败。
 	const bool bScoopReachReady = UCatFishingAimLibrary::TryResolveScoopReach(
 		ScooperEquipment, ScoopReachCentimeters);
 	// 这里不再要求"鱼处于近岸带内"：射线∩圆本身就是唯一的范围判定，再叠一层离岸距离等于两套口径，
@@ -674,7 +674,7 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	}
 	else
 	{
-		// 饵料只在鱼即将离开水中会话时结算；失败必须终止，避免世界鱼与装备占用事实分叉。
+		// 饵料只在鱼即将离开水中会话时确认消耗；失败必须终止，避免世界鱼与装备预留事实分叉。
 		if (!CommitCatchEquipmentFromAuthority())
 		{
 			Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
@@ -947,7 +947,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	UCatChumFieldSubsystem* Chum = World ? World->GetSubsystem<UCatChumFieldSubsystem>() : nullptr;
 	const ACatfishingGameState* GameState = World ? World->GetGameState<ACatfishingGameState>() : nullptr;
 	UCatFishingService* Service = World ? World->GetSubsystem<UCatFishingService>() : nullptr;
-	UCatEquipmentComponent* Equipment = CastEquipment.Get(); // 饵料预留在抛竿者装备上，选鱼/扣饵必须用同一组件。
+	UCatEquipmentComponent* Equipment = CastEquipment.Get(); // 饵料预留在抛竿者装备上，选鱼/消耗确认必须用同一组件。
 	if (!Chum || !GameState || !Service || !Equipment)
 	{
 		SelectionResolution = ECatFishSelectionResolution::Failed;
@@ -1061,7 +1061,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 		Result.Resolution = SelectionResolution;
 		return Result;
 	}
-	// 到这里才真正扣除（延迟结算的）饵料消耗；扣除失败就销毁鱼并终止，不留下"鱼已生成但饵未扣"的不一致状态。
+	// 到这里才确认消耗 Begin 已经暂存的饵料；失败就销毁鱼并终止，不留下"鱼已生成但饵未结算"的不一致状态。
 	const FCatFishingUseOperationResult BaitCommit = Equipment->CommitFishingBaitDeferred(Snapshot.FishingSessionId);
 	if (!BaitCommit.bApplied)
 	{
@@ -1082,7 +1082,6 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	Snapshot.NormalizedFishStamina = 1.0;
 	Snapshot.FishEncounterActor = Encounter;
 	SelectionResolution = ECatFishSelectionResolution::Selected;
-	Equipment->PublishDeferredFishingBait(Snapshot.FishingSessionId); // 饵料扣除结果对外发布。
 	Result.Resolution = SelectionResolution;
 	Result.FishDefinitionId = SelectedDefinition->FishDefinitionId;
 	Result.Error = ECatDomainCommandError::None;

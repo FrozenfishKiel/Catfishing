@@ -60,6 +60,54 @@ DECLARE_MULTICAST_DELEGATE_OneParam(FCatCampCommandResultReceived, const FCatDom
 /** owning client 收到直接吃鱼结果后的本机通知；UI Model 只用它证明鱼护命令终态并刷新显示。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatFishConsumeResultReceived, const FCatFishConsumeResult&);
 
+namespace CatGameplayPlayerLimits
+{
+	/** 当前固定营地自动出生布局支持的玩家上限；Online 会话容量和 GameMode 出生裁决必须读取同一口径，避免允许无法落地的第 5 名玩家进入玩法世界。 */
+	inline constexpr int32 MaxCampSpawnPlayers = 4;
+}
+
+#if !UE_BUILD_SHIPPING
+/** 服务器 Run 私有调试快照；只在非 Shipping 的服务器本机生成给诊断面板读取，字段来自 GameMode 当前内存事实，不复制给客户端，也不成为第二份玩法真相。 */
+struct FCatRunAuthorityDebugSnapshot
+{
+	/** 当前读取方是否处在 authority GameMode 上；false 表示面板只能依赖 GameState 复制结果，看不到服务器私有门禁。 */
+	bool bHasAuthorityGameMode = false;
+
+	/** Run 玩法命令总门当前是否打开；GameMode 是唯一写方，调试面板只用它解释公开 Phase 与服务器命令门是否一致。 */
+	bool bRunCommandsOpen = false;
+
+	/** ST_RunFlow 组件当前是否挂在 GameMode 上；组件缺失时服务器无法消费额度、ready 或结算事件。 */
+	bool bRunStateTreeAssigned = false;
+
+	/** ST_RunFlow 组件当前是否处于运行态；事件只会在运行态下被 StateTree 正式接收。 */
+	bool bRunStateTreeRunning = false;
+
+	/** Run 启动期间首个 EnterPhase Task 是否仍在回调窗口内；它解释启动阶段短暂“StateTree 已启动但公开阶段尚未稳定”的合法状态。 */
+	bool bRunStartupInProgress = false;
+
+	/** 本轮普通夜晚是否已经发过全员 ready 事件；true 后撤销 ready 不应再重新打开 StateTree 事件窗口。 */
+	bool bAllEligibleReadyEventSent = false;
+
+	/** 普通夜晚被冻结的可提交翻天 ready 的玩家数量；由服务器在进入 NormalNight 时写入，面板用它核对 ready 是否有资格集合。 */
+	int32 NightReadyEligibleCount = 0;
+
+	/** 普通夜晚已经提交 ready 的玩家数量；由服务器命令写口维护，面板只读显示。 */
+	int32 NightReadyCount = 0;
+
+	/** 最近一次 StateTree 事件或 EnterPhase 的处理结果；用来判断事件已经发出但资产没有发生阶段转移的情况。 */
+	FCatRunTransitionResult LastRunFlowResult;
+
+	/** 开发期跳天加速是否正在等待正式流程推进；只暴露调试请求状态，不参与客户端玩法判断。 */
+	bool bDebugSkipToNextDayRequested = false;
+
+	/** 开发期跳天加速请求所属 Run；面板用它判断请求是否仍对应当前一局。 */
+	FGuid DebugSkipToNextDayRunId;
+
+	/** 开发期跳天加速请求所属天数；面板用它解释当前是在等本天进夜晚还是等下一天白天。 */
+	int32 DebugSkipToNextDayDayIndex = 0;
+};
+#endif
+
 /** 前台专用模式；明确不生成默认 Pawn，只承载 LocalPlayer Online UI。 */
 UCLASS()
 class CATFISHING_API ACatFrontendGameMode : public AGameModeBase
@@ -92,6 +140,16 @@ public:
 	virtual void PostLogin(APlayerController* NewPlayer) override;
 	/** 生成 Character 前再次验证 PlayerState 的继承 UniqueId 与 Active Controller 匹配，失败时不调用父类生成。 */
 	virtual void HandleStartingNewPlayer_Implementation(APlayerController* NewPlayer) override;
+	/** 玩家重启时只允许从唯一固定营地进入默认生成链；找不到合法营地时保持无 Pawn，不回退到旧 StartSpot 或世界原点。 */
+	virtual void RestartPlayer(AController* NewPlayer) override;
+	/** 查找玩家出生点时忽略客户端 Portal 和历史 StartSpot，只返回当前 World 唯一营地；缺失或重复营地会返回空。 */
+	virtual AActor* FindPlayerStart_Implementation(AController* Player, const FString& IncomingName = TEXT("")) override;
+	/** 选择玩家出生点时只扫描唯一 ACatCampHubActor；普通 PlayerStart 运行时不会成为候选。 */
+	virtual AActor* ChoosePlayerStart_Implementation(AController* Player) override;
+	/** 禁止沿用 Controller 上一次 StartSpot；每次生成都重新按当前唯一营地和当前玩家队列解析。 */
+	virtual bool ShouldSpawnAtStartSpot(AController* Player) override;
+	/** 在营地作为 StartSpot 时把 Pawn 生成位置改为营地附近合法 Transform；非营地 StartSpot 一律拒绝。 */
+	virtual APawn* SpawnDefaultPawnFor_Implementation(AController* NewPlayer, AActor* StartSpot) override;
 	/** Controller 离开时只清除与它精确匹配的 Active 记录；不把主动离局猜成可恢复网络异常。 */
 	virtual void Logout(AController* Exiting) override;
 
@@ -118,6 +176,14 @@ public:
 #if !UE_BUILD_SHIPPING
 	/** 开发期调试入口：在服务器开放的 DayActive 上，把当前白天从此刻起的剩余时长重设为可进入 UE timer 的正秒数；成功会重写时间窗口、重排 timer、递增 Revision 并发布 RunPublicState，失败返回 false 且不改天数或客户端本地状态。 */
 	bool ApplyDebugDayLengthSeconds(double NewDayLengthSeconds);
+	/** 开发期调试入口：请求服务器把当前开放白天用正式额度命令推进到普通夜晚；已经处于普通夜晚时只确认状态，不提交 ready、不改天数、不直接写 Phase。 */
+	bool ApplyDebugSkipToNight();
+	/** 开发期调试入口：请求服务器用正式额度与夜晚 ready 命令把当前 Run 加速到下一天；返回 true 表示请求已被接收或同日请求已在等待推进，返回 false 表示当前无 authority、无 World、阶段不支持或正式命令 gate 拒绝；Phase 与 DayIndex 仍只由 StateTree 阶段入口写入。 */
+	bool ApplyDebugSkipToNextDay();
+	/** 开发期作弊救援入口：在非 Shipping 的服务器上重启 ST_RunFlow 到下一次 DayActive，仅用于失败结算夜继续人工测试或普通夜全员 ready 后解卡；它绕过产品拓扑但仍让 StateTree 的 DayActive 入口写正式 Run 快照。 */
+	bool ApplyDebugForceNextDay();
+	/** 开发期只读诊断入口：把 GameMode 不复制的 StateTree、命令门和夜晚 ready 集合折成一次性副本；调用者只能展示，不能据此推进 Run。 */
+	FCatRunAuthorityDebugSnapshot GetAuthorityDebugSnapshotForDebug() const;
 #endif
 	/** Online Client 主动离局前标记当前 Controller；Logout 据此按 VoluntaryLeaveRecovery 决定是否保留重连准入。 */
 	void MarkVoluntaryLeave(AController* Controller);
@@ -184,6 +250,10 @@ private:
 	FCatRunCommandResult SubmitQuotaContributionInternal(const FCatQuotaContributionCommand& ServerCommand);
 	/** 进入普通夜晚时冻结当前 Active 身份集合并清空个人 ready，未裁的晚加入不会隐式扩容。 */
 	void CaptureNightReadyEligibility();
+	/** 判断当前普通夜晚是否已经收齐冻结资格集合里的所有 ready；只读集合事实，不发送 StateTree 事件。 */
+	bool IsAllNightReadyComplete() const;
+	/** 在 ready 已经覆盖资格集合时发送 AllEligibleReady 事件；普通流程只允许首次发送，调试排障可在仍卡普通夜晚时重发同一个正式事件。 */
+	bool SendAllEligibleReadyEventIfComplete(const TCHAR* Trigger, bool bAllowResend);
 	/** ready 集合首次全部完成时发布公开事实并只发送 AllEligibleReady 事件，不在 C++ 改写 Phase。 */
 	void EvaluateAllEligibleReady();
 	/** 清除旧白天计时回调；只停止 deadline 与环境刷新 Timer，不改公开截止字段，供 DayActive 收口缝隙安全使用。 */
@@ -202,6 +272,26 @@ private:
 	void SubmitNaturalChumFieldIfConfigured();
 	/** 只向正在运行的 StateTree 发送稳定 GameplayTag；本方法不包含 Phase 转移表。 */
 	bool SendRunStateTreeEvent(FGameplayTag EventTag, ECatRunTransitionReason Reason);
+#if !UE_BUILD_SHIPPING
+	/** 开发期跳天加速的当前 Run/Day 是否仍匹配；只用于避免迟到的调试请求碰到下一局或下一天。 */
+	bool IsDebugSkipToNextDayRequestCurrent() const;
+	/** 开发期跳天加速收口；进入新天、结算或 World 结束时清掉调试请求，不改正式 Run 状态。 */
+	void ClearDebugSkipToNextDayRequest();
+	/** 开发期补额度玩家选择入口；返回当前仍能走正式 Run 命令 gate 的第一名服务器可见玩家，供跳到夜晚和正常跳天共同复用。 */
+	APlayerController* FindDebugQuotaCompletionController() const;
+	/** 开发期跳天加速的资格玩家解析入口；按夜晚冻结的 StableNetId 找回当前 Active Controller，避免调试 ready 走错玩家集合。 */
+	AController* FindDebugNightReadyControllerByStableNetId(const FString& StableNetId) const;
+	/** 开发期补足当日额度入口；只在开放 DayActive 上构造一条正式额度贡献命令，返回 true 表示额度命令首次提交并发出 QuotaReached，返回 false 表示白天 gate、额度差值或 Active Controller 不满足且不会推进 StateTree。 */
+	bool SubmitDebugQuotaCompletionForCurrentDay(const TCHAR* Trigger);
+	/** 开发期跳天加速的夜晚 ready 提交入口；对当前服务器可见且合资格玩家调用正式 SubmitNextDayReady，返回 true 表示已经提交到全员 ready 事件或本来就在等待推进，返回 false 表示阶段不符、没有可提交玩家或正式 ready 命令被拒。 */
+	bool SubmitDebugReadyForEligiblePlayers(const TCHAR* Trigger);
+	/** 开发期跳天加速的阶段回调入口；正式 Phase 进入后决定是否安排下一步加速或清掉请求。 */
+	void ContinueDebugSkipToNextDayAfterPhaseEntered(ECatRunPhase EnteredPhase);
+	/** 开发期跳天加速的夜晚 ready 延迟入口；用下一帧提交 ready，避免在 StateTree Enter 回调内重入发送事件。 */
+	void ScheduleDebugSkipToNextDayReadySubmission();
+	/** 开发期跳天加速的夜晚 ready 延迟回调；重新核对当前 Run/Day 后只走正式 ready 写口。 */
+	void HandleDebugSkipToNextDayReadyElapsed();
+#endif
 	/** 启动 gate 失败时保持 NotStarted、关闭写口并发布 StartupFailed，不回退为 C++ 状态机。 */
 	void FailRunStartup(const TCHAR* Reason);
 	/** Host exit 的远端 Destroy ACK 与 Profile Grant ACK 全部到达或统一超时后广播 Ready；重复完成不会触发第二次 Online Destroy。 */
@@ -270,6 +360,14 @@ private:
 
 	/** 商店货架刷新变化的服务器本机订阅；它只触发快照重建，不创建交易广播。 */
 	FDelegateHandle ShopInventoryRefreshedHandle;
+#if !UE_BUILD_SHIPPING
+	/** 开发期跳天加速请求是否正在等待正式阶段推进；它只表达作弊输入的短生命周期请求，不代表 Run 阶段。 */
+	bool bDebugSkipToNextDayRequested = false;
+	/** 开发期跳天加速请求所属 Run；用于防止上一局的延迟 ready 影响新局。 */
+	FGuid DebugSkipToNextDayRunId;
+	/** 开发期跳天加速请求所属天数；只有同一天进入普通夜晚时才会自动提交 ready。 */
+	int32 DebugSkipToNextDayDayIndex = 0;
+#endif
 };
 
 /** Lake 共享比赛状态；复制由服务器 GameMode 组合的 Run/Environment 快照与 Social 最近求助事实。 */
@@ -476,6 +574,11 @@ public:
 		int32 TargetContainerSlotIndex,
 		int64 ExpectedTargetRevision);
 
+	/** 由 owning client 从鱼护页请求把选中鱼存入营地共享鱼缸；服务器重读源鱼护、固定营地鱼缸和首个空目标格后复用 Items 转移。 */
+	UFUNCTION(Server, Reliable)
+	void ServerStoreFishInSharedTank(FGuid RequestId, FGuid FishInstanceId, FGuid SourceContainerId,
+		int32 SourceContainerSlotIndex, int64 ExpectedSourceRevision);
+
 	/** 由 owning client 发起伙伴救援请求；把倒地目标送往固定营地 RescuePoint 并交给 Camp/Condition 裁决，完成后通过 ClientReceiveCampCommandResult 回送领域结果，不进入死亡或重生旁路。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRescueCharacterToCamp(ACatCampHubActor* Camp, ACatCharacter* TargetCharacter, FGuid RequestId);
@@ -539,10 +642,10 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerRepairRodAtCamp(ACatCampHubActor* Camp, FGuid RequestId, int64 ExpectedEquipmentRevision);
 
-	/** 消费本人一份草药后恢复目标 Character；库存提交成功前不会修改身体。 */
+	/** 消费本人指定草药实例的一份数量后恢复目标 Character；库存提交成功前不会修改身体。 */
 	UFUNCTION(Server, Reliable)
 	void ServerUseHerbOnCharacter(ACatCharacter* TargetCharacter, FGuid RequestId,
-		int64 ExpectedEquipmentRevision, FName HerbDefinitionId);
+		int64 ExpectedEquipmentRevision, FGuid HerbItemInstanceId);
 
 	/** 从地面鱼护箱子或共享鱼缸直接吃一条鱼；Items 移除成功后才按 FishDefinition 修改 Poison 并推进吃鱼成长。 */
 	UFUNCTION(Server, Reliable)
@@ -716,15 +819,18 @@ private:
 		int64 ExpectedSourceRevision, FGuid TargetContainerId, ECatContainerKind TargetContainerKind,
 		int32 TargetContainerSlotIndex,
 		int64 ExpectedTargetRevision);
+	/** 服务器接管鱼护一键存缸；只接受 FishGuard 源容器，并从固定营地解析 SharedFishTank 目标，不允许客户端指定任意目标容器。 */
+	void SubmitStoreFishInSharedTankFromServerRequest(FGuid RequestId, FGuid FishInstanceId,
+		FGuid SourceContainerId, int32 SourceContainerSlotIndex, int64 ExpectedSourceRevision);
 	/** BodyAction Ability 接管后的搬运救援提交；保持 Camp/Condition 对倒地目标和营地落点的裁决。 */
 	void SubmitRescueCharacterToCampFromBodyActionAbility(ACatCampHubActor* Camp, ACatCharacter* TargetCharacter,
 		FGuid RequestId);
 	/** BodyAction Ability 接管后的修竿提交；保持 Equipment 的耗材和耐久事务。 */
 	void SubmitRepairRodAtCampFromBodyActionAbility(ACatCampHubActor* Camp, FGuid RequestId,
 		int64 ExpectedEquipmentRevision);
-	/** BodyAction Ability 接管后的草药救援提交；保持 Equipment 扣除先于 Condition 恢复。 */
+	/** BodyAction Ability 接管后的草药救援提交；保持指定草药实例的 Equipment Use 先于 Condition 恢复。 */
 	void SubmitUseHerbOnCharacterFromBodyActionAbility(ACatCharacter* TargetCharacter, FGuid RequestId,
-		int64 ExpectedEquipmentRevision, FName HerbDefinitionId);
+		int64 ExpectedEquipmentRevision, FGuid HerbItemInstanceId);
 	/** BodyAction Ability 接管后的进食提交；保持 Items 先消费鱼，再由 Condition/Growth 应用效果。 */
 	void SubmitConsumeFishFromBodyActionAbility(ACatCharacter* EatingCharacter, FCatFishConsumeCommand Command);
 	/** BodyAction Ability 接管后的偷鱼开始提交；保持 Social 覆盖身份与 Items escrow 协议。 */

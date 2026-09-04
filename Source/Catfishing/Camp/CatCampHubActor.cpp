@@ -3,23 +3,161 @@
 #include "Camp/CatCampInventoryActor.h"
 #include "Camp/CatCampSettings.h"
 #include "Character/CatCharacter.h"
+#include "CollisionQueryParams.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Condition/CatConditionComponent.h"
 #include "Collection/CatRunImprintService.h"
 #include "Components/SceneComponent.h"
+#include "Engine/World.h"
+#include "GameFramework/Controller.h"
+#include "GameFramework/Pawn.h"
 #include "Items/CatFishTankActor.h"
 #include "Items/CatItemsService.h"
-#include "GameFramework/Controller.h"
+#include "Logging/CatLog.h"
 
-// 构造流程：创建固定根与救援子节点、开启复制并关闭 Tick；营地布局始终来自 Lake 关卡资产而非玩家运行时修改。
-ACatCampHubActor::ACatCampHubActor()
+namespace
+{
+	/** 营地玩家出生环的默认半径，单位厘米；它让初始 Pawn 离开营地中心和 PlayerStart 胶囊，同时仍处在常规营地交互半径内。 */
+	constexpr double CatCampPlayerEntryRingRadiusCentimeters = 300.0;
+
+	/** 营地出生地面探测的上方余量，单位厘米；它允许营地实例按地面设施或 PlayerStart 中心两种编辑器高度摆放。 */
+	constexpr double CatCampPlayerEntryGroundProbeUpCentimeters = 1200.0;
+
+	/** 营地出生地面探测的下方距离，单位厘米；它覆盖 TestMap 这类旧地图里营地 Z 与可站地面高度不一致的情况。 */
+	constexpr double CatCampPlayerEntryGroundProbeDownCentimeters = 4000.0;
+
+	/** Pawn 胶囊底部离地的最小余量，单位厘米；它防止精确贴地时被地面碰撞误判为初始穿插。 */
+	constexpr double CatCampPlayerEntryFloorClearanceCentimeters = 2.0;
+
+	// 营地候选点落地流程：用候选 XY 垂直扫描 WorldStatic 地面；命中后把地面接触点转换成 Pawn 根胶囊中心点，不把营地 Actor 自身高度直接当出生高度。
+	bool TryProjectCampEntryCandidateToGround(UWorld* World, const AActor* Camp,
+		const FVector& CandidateAnchorLocation, const double PawnHalfHeight, FVector& OutSpawnLocation)
+	{
+		OutSpawnLocation = FVector::ZeroVector;
+		if (!World || !Camp || PawnHalfHeight <= 0.0)
+		{
+			return false;
+		}
+
+		const FVector TraceStart =
+			CandidateAnchorLocation + FVector(0.0, 0.0, CatCampPlayerEntryGroundProbeUpCentimeters);
+		const FVector TraceEnd =
+			CandidateAnchorLocation - FVector(0.0, 0.0, CatCampPlayerEntryGroundProbeDownCentimeters);
+		FHitResult GroundHit;
+		const FCollisionObjectQueryParams GroundObjectQueryParams(ECC_WorldStatic);
+		const FCollisionQueryParams GroundQueryParams(SCENE_QUERY_STAT(CatCampPlayerEntryGroundTrace), false, Camp);
+		if (!World->LineTraceSingleByObjectType(GroundHit, TraceStart, TraceEnd, GroundObjectQueryParams,
+			GroundQueryParams) || !GroundHit.bBlockingHit)
+		{
+			return false;
+		}
+
+		OutSpawnLocation = GroundHit.ImpactPoint
+			+ FVector(0.0, 0.0, PawnHalfHeight + CatCampPlayerEntryFloorClearanceCentimeters);
+		return true;
+	}
+}
+
+// 构造流程：先保留 APlayerStart 从 ANavigationObjectBase 建立的胶囊根，再把项目营地根挂在它下面；随后创建救援子节点、开启复制并关闭 Tick。PlayerStartTag 只表达营地出生点身份，不参与客户端自选 Portal。
+ACatCampHubActor::ACatCampHubActor(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer)
 {
 	bReplicates = true;
 	PrimaryActorTick.bCanEverTick = false;
+	PlayerStartTag = TEXT("Camp");
 	CampRoot = CreateDefaultSubobject<USceneComponent>(TEXT("CampRoot"));
-	SetRootComponent(CampRoot);
+	CampRoot->SetupAttachment(GetRootComponent());
 	RescuePoint = CreateDefaultSubobject<USceneComponent>(TEXT("RescuePoint"));
 	RescuePoint->SetupAttachment(CampRoot);
+}
+
+// 玩家出生 Transform 解析流程：
+// 1. 先要求 authority、有效 World、Pawn 原型和 0-3 的当前玩家序号，超过容量时直接拒绝，避免第 5 人复用已有落点。
+// 2. 再读取 Pawn 默认半高，确认后续能把营地附近地面点转换成 Pawn 根胶囊中心点；拿不到有效碰撞高度时 fail-closed。
+// 3. 以营地水平朝向排出前、右、左、后的四个固定候选方向，并从 PreferredEntryIndex 开始循环尝试，保证当前玩家队列决定优先点但不保存重连槽位。
+// 4. 每个候选点先垂直投射到 WorldStatic 地面，再交给 World::FindTeleportSpot 按 Pawn 碰撞做附近调整；只有 UE 确认不阻挡的 Transform 才返回，所有失败都写入可检索日志。
+bool ACatCampHubActor::TryResolvePlayerEntryTransform(const int32 PreferredEntryIndex, const APawn* PawnToFit,
+	FTransform& OutTransform) const
+{
+	OutTransform = FTransform::Identity;
+	UWorld* World = GetWorld();
+	if (!HasAuthority() || !World || !PawnToFit)
+	{
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=camp_player_entry_rejected Camp=%s Reason=AuthorityWorldOrPawnUnavailable World=%s NetMode=%d Authority=%s LocalRole=%d"),
+			*GetNameSafe(this), *GetNameSafe(World), World ? static_cast<int32>(World->GetNetMode()) : INDEX_NONE,
+			HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(GetLocalRole()));
+		return false;
+	}
+	if (PreferredEntryIndex < 0 || PreferredEntryIndex >= CatGameplayPlayerLimits::MaxCampSpawnPlayers)
+	{
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=camp_player_entry_rejected Camp=%s Reason=PlayerCapacityExceeded PreferredIndex=%d Capacity=%d World=%s NetMode=%d Authority=true LocalRole=%d"),
+			*GetNameSafe(this), PreferredEntryIndex, CatGameplayPlayerLimits::MaxCampSpawnPlayers,
+			*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(GetLocalRole()));
+		return false;
+	}
+	const double PawnHalfHeight = PawnToFit->GetDefaultHalfHeight();
+	if (PawnHalfHeight <= 0.0)
+	{
+		UE_LOG(LogCatfishing, Error,
+			TEXT("Event=camp_player_entry_rejected Camp=%s Reason=PawnCollisionUnavailable PreferredIndex=%d PawnClass=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
+			*GetNameSafe(this), PreferredEntryIndex, *GetNameSafe(PawnToFit->GetClass()),
+			*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(GetLocalRole()));
+		return false;
+	}
+
+	const FRotator SpawnRotation(0.0, GetActorRotation().Yaw, 0.0);
+	const FRotationMatrix SpawnBasis(SpawnRotation);
+	const FVector Forward = SpawnBasis.GetScaledAxis(EAxis::X);
+	const FVector Right = SpawnBasis.GetScaledAxis(EAxis::Y);
+	const FVector CandidateDirections[CatGameplayPlayerLimits::MaxCampSpawnPlayers] =
+	{
+		Forward,
+		Right,
+		-Right,
+		-Forward
+	};
+
+	for (int32 AttemptIndex = 0; AttemptIndex < CatGameplayPlayerLimits::MaxCampSpawnPlayers; ++AttemptIndex)
+	{
+		const int32 CandidateIndex =
+			(PreferredEntryIndex + AttemptIndex) % CatGameplayPlayerLimits::MaxCampSpawnPlayers;
+		const FVector CandidateAnchorLocation =
+			GetActorLocation() + CandidateDirections[CandidateIndex] * CatCampPlayerEntryRingRadiusCentimeters;
+		FVector CandidateLocation = FVector::ZeroVector;
+		if (!TryProjectCampEntryCandidateToGround(World, this, CandidateAnchorLocation, PawnHalfHeight,
+			CandidateLocation))
+		{
+			UE_LOG(LogCatfishing, Warning,
+				TEXT("Event=camp_player_entry_candidate_rejected Camp=%s Reason=GroundProbeMiss PreferredIndex=%d SlotIndex=%d Attempt=%d Anchor=%s PawnHalfHeight=%.2f World=%s NetMode=%d Authority=true LocalRole=%d"),
+				*GetNameSafe(this), PreferredEntryIndex, CandidateIndex, AttemptIndex,
+				*CandidateAnchorLocation.ToCompactString(), PawnHalfHeight, *GetNameSafe(World),
+				static_cast<int32>(World->GetNetMode()), static_cast<int32>(GetLocalRole()));
+			continue;
+		}
+		if (World->FindTeleportSpot(PawnToFit, CandidateLocation, SpawnRotation))
+		{
+			OutTransform = FTransform(SpawnRotation, CandidateLocation);
+			UE_LOG(LogCatfishing, Log,
+				TEXT("Event=camp_player_entry_resolved Camp=%s PreferredIndex=%d SlotIndex=%d Attempt=%d Transform=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
+				*GetNameSafe(this), PreferredEntryIndex, CandidateIndex, AttemptIndex,
+				*OutTransform.ToHumanReadableString(), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
+				static_cast<int32>(GetLocalRole()));
+			return true;
+		}
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=camp_player_entry_candidate_rejected Camp=%s Reason=PawnEncroached PreferredIndex=%d SlotIndex=%d Attempt=%d Location=%s PawnHalfHeight=%.2f World=%s NetMode=%d Authority=true LocalRole=%d"),
+			*GetNameSafe(this), PreferredEntryIndex, CandidateIndex, AttemptIndex,
+			*CandidateLocation.ToCompactString(), PawnHalfHeight, *GetNameSafe(World),
+			static_cast<int32>(World->GetNetMode()), static_cast<int32>(GetLocalRole()));
+	}
+
+	UE_LOG(LogCatfishing, Error,
+		TEXT("Event=camp_player_entry_rejected Camp=%s Reason=NoValidNearbySpot PreferredIndex=%d Capacity=%d World=%s NetMode=%d Authority=true LocalRole=%d"),
+		*GetNameSafe(this), PreferredEntryIndex, CatGameplayPlayerLimits::MaxCampSpawnPlayers,
+		*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(GetLocalRole()));
+	return false;
 }
 
 // 休息流程：现取本人 Character 并验证固定范围；随后只调用 Condition 的 CampRest 写口，营地不保存第二份身体数值。

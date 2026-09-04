@@ -47,6 +47,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
 	void RequestSacrificeSelectedFish();
 
+	/** 请求把本页当前本地选中鱼放入营地共享鱼缸；Widget 只交出鱼护格身份，目标鱼缸由服务器按固定营地解析。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
+	void RequestStoreSelectedFishInSharedTank();
+
 	/** 本页最近一次渲染后的只读状态；蓝图只能读取当前 WBP 自己的选择和表现，不能借它回写 Model 或玩法状态。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")
 	const FCatInventoryViewState& GetLastInventoryViewState() const;
@@ -68,11 +72,11 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|Inventory")
 	void BP_RenderInventory(const FCatInventoryViewState& ViewState);
 
-	/** 返回本库存 WBP 对应的数据源 Slots；普通背包页默认读取随身库存，营地或鱼护页用派生类改成自己的数据源。 */
+	/** 返回本库存 WBP 对应的数据源 Slots；普通背包页在鱼缸这类外部容器上下文下读容器格，否则读随身库存，专用页仍可覆盖自己的数据源。 */
 	virtual const TArray<FCatInventorySlotView>& GetInventorySlotsForWidget(
 		const FCatInventoryViewState& ViewState) const;
 
-	/** 把本页渲染后的 Slots 写回本页 ViewState 副本；派生页按自己的独立数据源选择对应数组。 */
+	/** 把本页渲染后的 Slots 写回本页 ViewState 副本；默认页按当前上下文写回外部容器或随身库存，派生页可覆盖到自己的数组。 */
 	virtual void StoreDisplayedSlotsInViewState(FCatInventoryViewState& ViewState,
 		const TArray<FCatInventorySlotView>& Slots) const;
 
@@ -122,6 +126,10 @@ private:
 	UFUNCTION()
 	void HandleSacrificeClicked();
 
+	/** 存鱼缸按钮点击入口；收口到 RequestStoreSelectedFishInSharedTank。 */
+	UFUNCTION()
+	void HandleStoreFishInTankClicked();
+
 	/** 库存格子 WBP 类；本页用它为 WrapBox 每个后端格子创建独立 Widget。 */
 	UPROPERTY(EditDefaultsOnly, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	TSubclassOf<UCatInventorySlotWidget> InventorySlotWidgetClass;
@@ -141,6 +149,10 @@ private:
 	/** WBP Designer 中的献祭按钮；点击只发动作意图。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> SacrificeFishButton;
+
+	/** WBP Designer 中的存入鱼缸按钮；只在鱼护页需要绑定，点击后服务器会重新寻找固定共享鱼缸。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> StoreFishInTankButton;
 
 	/** 本页最近一次渲染后的 ViewState 副本；它只保留属于当前 WBP 的选中和动作表现，蓝图读取它不会拿到其他库存页的选择。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
