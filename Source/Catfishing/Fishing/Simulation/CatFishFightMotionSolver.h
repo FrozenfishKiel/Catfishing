@@ -32,8 +32,6 @@ struct CATFISHING_API FCatFishShoreContactInput
 	bool bReeling = false;
 	/** 右键松开线杯；最终 L_paid 只能按岸线校正后的真实鱼距增长，不能按候选点凭空出线。 */
 	bool bSlacking = false;
-	/** 猫端正沿绷紧鱼线把鱼拉向岸上时，允许候选点越过水域边界并交给岸上地面吸附。 */
-	bool bAllowBeaching = false;
 	double CorrectionToleranceCentimeters = 1.0;
 };
 
@@ -41,8 +39,6 @@ struct CATFISHING_API FCatFishShoreContactResult
 {
 	bool bSucceeded = false;
 	bool bShoreContact = false;
-	/** 本步采用了岸上候选点；调用方必须再把 Z 吸附到真实地面，并切换鱼的生命周期。 */
-	bool bBeached = false;
 	FVector FishWorldPosition = FVector::ZeroVector;
 	double LineLengthCentimeters = 0.0;
 };
@@ -57,15 +53,17 @@ struct CATFISHING_API FCatFishBeachingIntentInput
 	/** 竿尖相对持竿者的本步扫动；旋转扫动不能借一次同时收线取得上岸资格。 */
 	FVector NonCarrierRodTipWorldDisplacement = FVector::ZeroVector;
 	double ActualReelDistanceCentimeters = 0.0;
+	/** 按住收线时已由线约束产生的拖拽，包含线杯到垂直极限后的剩余收近进度。 */
+	double ReelConstraintDistanceCentimeters = 0.0;
 	double MinimumProgressCentimeters = 0.1;
 	bool bLineTaut = false;
 };
 
-/** Pure deterministic projection into the frozen water geometry and rod line reach. */
+/** 初始投影与运行时岸线接触的纯几何工具；初始水域投影不得用于裁剪拖行候选。 */
 class CATFISHING_API FCatFishFightMotionSolver
 {
 public:
-	static FCatFishMotionSolveResult Solve(const FCatFishMotionSolveInput& Input);
+	static FCatFishMotionSolveResult ProjectInitialFishToWater(const FCatFishMotionSolveInput& Input);
 
 	/**
 	 * 活鱼撞岸时移除水域安全点造成的法向跳变，但保留本步沿岸切向位移，让下一步靠 Steering 平滑游离；
@@ -79,9 +77,4 @@ public:
 	 * 竿尖仅由旋转产生的位移不属于猫端平移，不能单独触发上岸/清空体力。
 	 */
 	static bool IsIntentionalLandwardHaul(const FCatFishBeachingIntentInput& Input);
-
-	/** 未命中干地时，保留真实拖拽的水面进度；不能退回烘焙水域内缩点而永远到不了真实岸面。 */
-	static FCatFishMotionSolveResult ResolveExhaustedWaterFallback(
-		const FVector& CurrentFishPosition, const FVector& CandidateFishPosition,
-		double WaterSurfaceZ, bool bIntentionalLandwardHaul);
 };

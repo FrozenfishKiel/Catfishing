@@ -16,6 +16,7 @@ class APlayerState;
 class UCatAbilitySystemComponent;
 class UCatWaterQuerySubsystem;
 class UStateTree;
+struct FCatFishMotionSolveResult;
 
 struct CATFISHING_API FCatFishingFightRunnerInit
 {
@@ -25,7 +26,6 @@ struct CATFISHING_API FCatFishingFightRunnerInit
 	TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
 	TWeakObjectPtr<APlayerState> PrimaryPlayerState;
 	FCatWaterRegionHandle WaterRegion;
-	FBox FrozenWaterBounds = FBox(ForceInit);
 	FCatFightSimulationConfig Config;
 	FCatFightSimulationState InitialState;
 	/** 该玩家服务器已确认的最新连续输入序号；新 Runner 从此序号继续拒绝旧边沿。 */
@@ -79,7 +79,7 @@ public:
 	/** 鱼力竭关闭 AI 与鱼端驱动力并立即清除猫端牵引；固定步和同一线长约束继续负责收近。 */
 	bool SetFishExhaustedFromAuthority();
 	bool IsFishExhaustedForAuthority() const { return State.bFishExhausted; }
-	/** 鱼是否已经越过真实岸线；一旦成立，后续拖拽始终走地面吸附，不再回到水面高度。 */
+	/** 鱼当前是否接触真实干地；水岸转换由连续表面查询裁决，不永久锁在某一种表面。 */
 	bool IsFishBeachedForAuthority() const { return bFishBeached; }
 	/** 搏斗接力时原子迁移 ASC、力量、体力上限/当前值与新玩家自己的输入序号域。 */
 	bool TransferOperatorFromAuthority(APlayerState* NewPlayerState, UCatAbilitySystemComponent* NewAbilitySystem,
@@ -92,6 +92,7 @@ public:
 
 private:
 	friend class FCatFishingExhaustedPickupHandoffTest;
+	friend class FCatFishingSurfaceTraversalTest;
 	void HandleFixedStep();
 	void RefreshCatAction();
 	bool RefreshParticipantsFromRod();
@@ -103,13 +104,15 @@ private:
 	bool ApplyHelperStaminaChanges(double TotalGroupDrain);
 	bool TryResolveGroundedFishPosition(const FVector& DesiredPosition,
 		FVector& OutGroundedPosition, FVector& OutSurfaceNormal, AActor*& OutSurfaceActor) const;
+	FCatFishMotionSolveResult ResolveFishSurfaceFromAuthority(FCatFightStepResult& Step,
+		const FCatFightRodConstraintInput& RodConstraint, FCatWaterSpatialResult& OutWater,
+		bool& bOutBeachedThisStep, FVector& OutGroundNormal, AActor*& OutGroundActor);
 	TWeakObjectPtr<ACatFishingSession> Session;
 	TWeakObjectPtr<ACatFishEncounterActor> FishActor;
 	TWeakObjectPtr<ACatFishingRodActor> RodActor;
 	TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
 	TMap<TWeakObjectPtr<APlayerState>, FCatFightParticipantRuntime> Participants;
 	FCatWaterRegionHandle WaterRegion;
-	FBox FrozenWaterBounds = FBox(ForceInit);
 	FCatFightSimulationConfig Config;
 	FCatFightSimulationState State;
 	FVector2D CalmDurationRangeSeconds = FVector2D::ZeroVector;
@@ -127,7 +130,7 @@ private:
 	double NextConstraintDiagnosticWorldSeconds = 0.0;
 	double NextPowerDiagnosticWorldSeconds = 0.0;
 	mutable double NextGroundSurfaceRejectedDiagnosticWorldSeconds = 0.0;
-	double NextBeachingDeferredDiagnosticWorldSeconds = 0.0;
+	double NextSurfaceTowDiagnosticWorldSeconds = 0.0;
 	bool bLastConstraintDiagnosticActive = false;
 	bool bFishBeached = false;
 	bool bInitialized = false;

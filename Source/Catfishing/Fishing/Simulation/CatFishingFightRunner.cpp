@@ -27,7 +27,7 @@ bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunne
 	// 一次性初始化守卫：已初始化过、Session 无效/非权威、任何依赖弱引用失效、配置非法都直接拒绝。
 	if (bInitialized || !SessionActor || !SessionActor->HasAuthority() || !Init.FishActor.IsValid()
 		|| !Init.RodActor.IsValid() || !Init.AbilitySystem.IsValid() || !Init.PrimaryPlayerState.IsValid()
-		|| !Init.WaterRegion.IsValid() || !Init.FrozenWaterBounds.IsValid
+		|| !Init.WaterRegion.IsValid()
 		|| !Init.Config.IsValid() || Init.RandomSeed == 0
 		|| Init.InitialInputSequence < 0
 		|| Init.CalmDurationRangeSeconds.X <= 0.0 || Init.CalmDurationRangeSeconds.Y < Init.CalmDurationRangeSeconds.X
@@ -44,7 +44,6 @@ bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunne
 	RodActor = Init.RodActor;
 	AbilitySystem = Init.AbilitySystem;
 	WaterRegion = Init.WaterRegion;
-	FrozenWaterBounds = Init.FrozenWaterBounds;
 	Config = Init.Config;
 	State = Init.InitialState;
 	State.bOperatorPresent = true;
@@ -530,7 +529,7 @@ bool UCatFishingFightRunner::TryResolveGroundedFishPosition(const FVector& Desir
 		{
 			UE_LOG(LogCatFishing, Warning,
 				TEXT("Event=fishing_ground_surface_rejected SessionId=%s Candidate=%s Surface=%s SurfaceActor=%s "
-					"WaterSurface=%s Reason=%s"),
+					"WaterSurface=%s Reason=%s World=%s NetMode=%d Authority=true"),
 				Session.IsValid()
 					? *Session->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens)
 					: TEXT("None"),
@@ -538,7 +537,8 @@ bool UCatFishingFightRunner::TryResolveGroundedFishPosition(const FVector& Desir
 				*GetNameSafe(Surface.SurfaceActor.Get()),
 				WaterRelation.bSucceeded
 					? *WaterRelation.WaterSurfaceWorldPoint.ToCompactString() : TEXT("Unavailable"),
-				WaterRelation.bSucceeded ? TEXT("SurfaceNotAboveWater") : TEXT("WaterQueryFailed"));
+				WaterRelation.bSucceeded ? TEXT("SurfaceNotAboveWater") : TEXT("WaterQueryFailed"),
+				*GetNameSafe(World), static_cast<int32>(World->GetNetMode()));
 			NextGroundSurfaceRejectedDiagnosticWorldSeconds = WorldSeconds + 1.0;
 		}
 		return false;
@@ -547,6 +547,141 @@ bool UCatFishingFightRunner::TryResolveGroundedFishPosition(const FVector& Desir
 	OutSurfaceNormal = Surface.SurfaceNormal;
 	OutSurfaceActor = Surface.SurfaceActor.Get();
 	return true;
+}
+
+FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthority(
+	FCatFightStepResult& Step, const FCatFightRodConstraintInput& RodConstraint,
+	FCatWaterSpatialResult& OutWater, bool& bOutBeachedThisStep,
+	FVector& OutGroundNormal, AActor*& OutGroundActor)
+{
+	FCatFishMotionSolveResult Motion;
+	bOutBeachedThisStep = false;
+	OutGroundNormal = FVector::UpVector;
+	OutGroundActor = nullptr;
+	UWorld* World = Session.IsValid() ? Session->GetWorld() : nullptr;
+	const UCatWaterQuerySubsystem* Water = World ? World->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
+	if (!Water || !Step.bSucceeded || Step.ProposedFishWorldPosition.ContainsNaN()) return Motion;
+
+	// 水域轮廓提供水面与岸向，不再用抛竿的内缩安全点或初始落点包围盒裁剪拖鱼运动。
+	// 先投影水面再查岸向，高岸/下坡不会受抛竿高度容差限制。
+	const FCatWaterImmersionResult Immersion = Water->QueryImmersionAtWorldPoint(
+		Step.ProposedFishWorldPosition, WaterRegion);
+	OutWater = Immersion.bSucceeded
+		? Water->QueryShoreRelation(Immersion.WaterSurfaceWorldPoint, WaterRegion) : FCatWaterSpatialResult{};
+	if (!OutWater.bSucceeded)
+	{
+		UE_LOG(LogCatFishing, Error,
+			TEXT("Event=fishing_surface_query_failed SessionId=%s Candidate=%s WaterError=%s World=%s NetMode=%d Authority=true"),
+			*Session->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *Step.ProposedFishWorldPosition.ToCompactString(),
+			*UEnum::GetValueAsString(Immersion.bSucceeded ? OutWater.Error : Immersion.Error),
+			*GetNameSafe(World), static_cast<int32>(World->GetNetMode()));
+		return Motion;
+	}
+
+	FCatFishBeachingIntentInput Intent;
+	Intent.CurrentFishWorldPosition = State.FishWorldPosition;
+	Intent.CandidateFishWorldPosition = Step.ProposedFishWorldPosition;
+	Intent.WaterwardDirection = OutWater.WaterwardDirection;
+	Intent.CarrierActualWorldDisplacement = RodConstraint.CarrierVelocityCentimetersPerSecond * Config.FixedStepSeconds;
+	Intent.NonCarrierRodTipWorldDisplacement = (RodConstraint.RodTipVelocityCentimetersPerSecond
+		- RodConstraint.CarrierVelocityCentimetersPerSecond) * Config.FixedStepSeconds;
+	Intent.ActualReelDistanceCentimeters = Step.ActualReelDistanceCentimeters;
+	Intent.ReelConstraintDistanceCentimeters = State.CatAction == ECatFightCatAction::Pull
+		&& Step.CombinedCatStrength > UE_DOUBLE_SMALL_NUMBER ? Step.FishConstraintCorrectionCentimeters : 0.0;
+	Intent.bLineTaut = Step.bLineTaut;
+	const bool bCatHaulingFish = FCatFishFightMotionSolver::IsIntentionalLandwardHaul(Intent);
+	// 力竭鱼没有自主游动，所有候选位移都来自同一根鱼线，不再为它加活鱼的防甩杆力竭门槛。
+	const bool bSurfaceTow = (State.bFishExhausted || bCatHaulingFish)
+		&& Step.Outcome != ECatFightStepOutcome::LineBroken && Step.Outcome != ECatFightStepOutcome::Escaped;
+	const bool bWasBeached = bFishBeached;
+	FVector GroundedPosition = FVector::ZeroVector;
+	const bool bGroundResolved = (bWasBeached || bSurfaceTow)
+		&& TryResolveGroundedFishPosition(Step.ProposedFishWorldPosition, GroundedPosition,
+			OutGroundNormal, OutGroundActor);
+	bFishBeached = bGroundResolved;
+	if (bGroundResolved)
+	{
+		Motion.bSucceeded = true;
+		Motion.FishWorldPosition = GroundedPosition;
+		bOutBeachedThisStep = !bWasBeached;
+	}
+	else if (bSurfaceTow || bWasBeached)
+	{
+		// 活鱼与鱼干共用连续水面过渡；必须到真实干地才交接，不把烘焙边界当成挡墙。
+		Motion.bSucceeded = true;
+		Motion.FishWorldPosition = Step.ProposedFishWorldPosition;
+		Motion.FishWorldPosition.Z = OutWater.WaterSurfaceWorldPoint.Z;
+		const double WorldSeconds = World->GetTimeSeconds();
+		if (bWasBeached || (OutWater.Containment != ECatWaterContainment::Inside
+			&& WorldSeconds >= NextSurfaceTowDiagnosticWorldSeconds))
+		{
+			UE_LOG(LogCatFishing, Log,
+				TEXT("Event=fishing_surface_tow SessionId=%s Lifecycle=%s Candidate=%s ResolvedFish=%s "
+					"PreviousSurface=%s Result=ContinueSurfaceTow Reason=DryGroundMissing "
+					"ReelDistance=%.3f ReelConstraint=%.3f World=%s NetMode=%d Authority=true"),
+				*Session->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), State.bFishExhausted ? TEXT("Exhausted") : TEXT("Active"),
+				*Step.ProposedFishWorldPosition.ToCompactString(), *Motion.FishWorldPosition.ToCompactString(),
+				bWasBeached ? TEXT("Ground") : TEXT("Water"), Intent.ActualReelDistanceCentimeters,
+				Intent.ReelConstraintDistanceCentimeters, *GetNameSafe(World), static_cast<int32>(World->GetNetMode()));
+			NextSurfaceTowDiagnosticWorldSeconds = WorldSeconds + 1.0;
+		}
+	}
+	else
+	{
+		// 只有活鱼自己游向岸边/纯甩杆时才沿岸滑动；真实拖拽不经过这个防自游出水分支。
+		FCatFishShoreContactInput ShoreInput;
+		ShoreInput.CurrentFishWorldPosition = State.FishWorldPosition;
+		ShoreInput.CandidateFishWorldPosition = Step.ProposedFishWorldPosition;
+		ShoreInput.ResolvedWaterWorldPosition = OutWater.Containment == ECatWaterContainment::Inside
+			? OutWater.WaterSurfaceWorldPoint : OutWater.NearestShoreWorldPoint;
+		ShoreInput.WaterwardDirection = OutWater.WaterwardDirection;
+		ShoreInput.RodTipWorldPosition = RodConstraint.RodTipWorldPosition;
+		ShoreInput.PreviousLineLengthCentimeters = State.LineLengthCentimeters;
+		ShoreInput.ProposedLineLengthCentimeters = Step.LineLengthCentimeters;
+		ShoreInput.MaximumConstraintDistanceCentimeters = FMath::Max3(Step.LineLengthCentimeters,
+			FVector::Distance(RodConstraint.RodTipWorldPosition, Step.ProposedFishWorldPosition),
+			FVector::Distance(RodConstraint.RodTipWorldPosition, State.FishWorldPosition));
+		ShoreInput.bReeling = State.CatAction == ECatFightCatAction::Pull;
+		ShoreInput.bSlacking = State.CatAction == ECatFightCatAction::Slack;
+		const FCatFishShoreContactResult ShoreContact = FCatFishFightMotionSolver::ResolveLiveFishShoreContact(ShoreInput);
+		if (!ShoreContact.bSucceeded) return Motion;
+		Motion.bSucceeded = true;
+		Motion.FishWorldPosition = ShoreContact.FishWorldPosition;
+		Step.LineLengthCentimeters = ShoreContact.LineLengthCentimeters;
+		if (ShoreContact.bShoreContact && !FCatFishSteeringModel::RedirectFromWaterBoundary(
+			SteeringConfig, OutWater.WaterwardDirection, SteeringRandom, SteeringState)) return FCatFishMotionSolveResult{};
+	}
+
+	// 地面落点只结算一次，不能随后被水面候选覆盖。坡面改变后的真实距离供复制和下一步共同使用。
+	Step.StraightLineDistanceCentimeters = FVector::Distance(RodConstraint.RodTipWorldPosition, Motion.FishWorldPosition);
+	Step.SlackLineLengthCentimeters = FMath::Max(0.0, Step.LineLengthCentimeters - Step.StraightLineDistanceCentimeters);
+	Step.bLineTaut = Step.SlackLineLengthCentimeters <= UE_DOUBLE_KINDA_SMALL_NUMBER;
+	if (!Step.bLineTaut)
+	{
+		Step.TensionCentimeters = 0.0;
+		Step.NormalizedTension = 0.0;
+		Step.CarrierPullAccelerationCentimetersPerSecondSquared = 0.0;
+		Step.CarrierTargetPullSpeedCentimetersPerSecond = 0.0;
+		Step.CarrierConstraintCorrectionCentimeters = 0.0;
+		Step.CarrierAwaySpeedMultiplier = 1.0;
+		Step.ConstraintErrorCentimeters = 0.0;
+		Step.RelativeConstraintSpeedCentimetersPerSecond = 0.0;
+	}
+	if (bOutBeachedThisStep)
+	{
+		Step.bFishBeached = true;
+		if (!State.bFishExhausted && Step.Outcome != ECatFightStepOutcome::LineBroken
+			&& Step.Outcome != ECatFightStepOutcome::Escaped)
+		{
+			Step.FishStaminaDrain = State.FishStamina;
+			Step.Outcome = ECatFightStepOutcome::FishExhausted;
+			Step.CarrierPullAccelerationCentimetersPerSecondSquared = 0.0;
+			Step.CarrierTargetPullSpeedCentimetersPerSecond = 0.0;
+			Step.CarrierConstraintCorrectionCentimeters = 0.0;
+			Step.CarrierAwaySpeedMultiplier = 1.0;
+		}
+	}
+	return Motion;
 }
 
 void UCatFishingFightRunner::HandleFixedStep()
@@ -667,301 +802,40 @@ void UCatFishingFightRunner::HandleFixedStep()
 		return;
 	}
 	Step.ActiveHelperCount = FMath::Max(0, Participants.Num() - (State.bOperatorPresent ? 1 : 0));
-	FCatFishMotionSolveResult Motion;
 	FCatWaterSpatialResult Exact;
 	bool bBeachedThisStep = false;
 	FVector GroundSurfaceNormal = FVector::UpVector;
 	AActor* GroundSurfaceActor = nullptr;
-	auto IsIntentionalLandwardHaul = [&](const FVector& CandidateFishPosition,
-		const FVector& WaterwardDirection)
+	const FCatFishMotionSolveResult Motion = ResolveFishSurfaceFromAuthority(Step, RodConstraint,
+		Exact, bBeachedThisStep, GroundSurfaceNormal, GroundSurfaceActor);
+	if (!Motion.bSucceeded)
 	{
-		FCatFishBeachingIntentInput BeachingInput;
-		BeachingInput.CurrentFishWorldPosition = State.FishWorldPosition;
-		BeachingInput.CandidateFishWorldPosition = CandidateFishPosition;
-		BeachingInput.WaterwardDirection = WaterwardDirection;
-		BeachingInput.CarrierActualWorldDisplacement =
-			RodConstraint.CarrierVelocityCentimetersPerSecond * Config.FixedStepSeconds;
-		BeachingInput.NonCarrierRodTipWorldDisplacement =
-			(RodConstraint.RodTipVelocityCentimetersPerSecond
-				- RodConstraint.CarrierVelocityCentimetersPerSecond) * Config.FixedStepSeconds;
-		BeachingInput.ActualReelDistanceCentimeters = Step.ActualReelDistanceCentimeters;
-		BeachingInput.bLineTaut = Step.bLineTaut;
-		return FCatFishFightMotionSolver::IsIntentionalLandwardHaul(BeachingInput);
-	};
-	if (State.bFishExhausted)
-	{
-		// 力竭鱼没有 AI 自游，但仍由同一约束拖动。确认干地前保持水面高度；首次确认后永久切换为
-		// 地面吸附，后续每一步都按当前 XY 重查地面，所以高低岸坡都不会继续沿旧水面 Z 钻地。
-		Motion.bSucceeded = Step.bSucceeded;
-		Motion.FishWorldPosition = Step.ProposedFishWorldPosition;
-		bool bGroundResolvedThisStep = false;
-		if (Step.bSucceeded && !bFishBeached)
-		{
-			Exact = Water->ResolveCandidatePointToWater(Motion.FishWorldPosition, WaterRegion);
-			bool bCrossedShore = false;
-			FVector WaterwardDirection = FVector::ZeroVector;
-			if (Exact.bSucceeded)
-			{
-				bCrossedShore = FVector::DistSquared2D(Motion.FishWorldPosition,
-					Exact.WaterSurfaceWorldPoint) > FMath::Square(1.0);
-				WaterwardDirection = Exact.WaterwardDirection;
-				if (!bCrossedShore)
-				{
-					Motion.FishWorldPosition.Z = Exact.WaterSurfaceWorldPoint.Z;
-				}
-			}
-			else
-			{
-				// ResolveCandidate 只允许有限的岸线安全修正；鱼干被快速拖得更远时，改用原始岸线关系
-				// 判断它确实已经在水外，而不是把“离岸较远”误判成致命水域错误。
-				const FCatWaterSpatialResult Shore = Water->QueryShoreRelation(
-					Motion.FishWorldPosition, WaterRegion);
-				if (Shore.bSucceeded && Shore.Containment != ECatWaterContainment::Inside)
-				{
-					bCrossedShore = true;
-					WaterwardDirection = Shore.WaterwardDirection;
-					Exact = Shore;
-				}
-				else
-				{
-					Motion.bSucceeded = false;
-				}
-			}
-			if (Motion.bSucceeded && bCrossedShore)
-			{
-				const bool bIntentionalHaul = IsIntentionalLandwardHaul(
-					Motion.FishWorldPosition, WaterwardDirection);
-				if (bIntentionalHaul
-					&& TryResolveGroundedFishPosition(Motion.FishWorldPosition,
-						Motion.FishWorldPosition, GroundSurfaceNormal, GroundSurfaceActor))
-				{
-					bFishBeached = true;
-					bBeachedThisStep = true;
-					bGroundResolvedThisStep = true;
-					Exact.bSucceeded = true;
-				}
-				else
-				{
-					// 水域轮廓不一定就是物理岸面。真实拖拽继续越过间隙并在后续步重查干地，
-					// 不把候选点弹回内缩水点；纯旋转仍不能取得上岸资格。
-					Motion = FCatFishFightMotionSolver::ResolveExhaustedWaterFallback(
-						State.FishWorldPosition, Step.ProposedFishWorldPosition,
-						Exact.WaterSurfaceWorldPoint.Z, bIntentionalHaul);
-					if (Motion.bSucceeded)
-					{
-						const double WorldSeconds = World->GetTimeSeconds();
-						if (bIntentionalHaul && WorldSeconds >= NextBeachingDeferredDiagnosticWorldSeconds)
-						{
-							UE_LOG(LogCatFishing, Warning,
-								TEXT("Event=fishing_beaching_deferred SessionId=%s Lifecycle=Exhausted "
-									"Candidate=%s ResolvedFish=%s Result=ContinueSurfaceTow Reason=DryGroundMissing "
-									"NetMode=%d Authority=true"),
-								*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-								*Step.ProposedFishWorldPosition.ToCompactString(),
-								*Motion.FishWorldPosition.ToCompactString(), static_cast<int32>(World->GetNetMode()));
-							NextBeachingDeferredDiagnosticWorldSeconds = WorldSeconds + 1.0;
-						}
-					}
-				}
-			}
-		}
-		if (Motion.bSucceeded && bFishBeached && !bGroundResolvedThisStep
-			&& !TryResolveGroundedFishPosition(Motion.FishWorldPosition, Motion.FishWorldPosition,
-				GroundSurfaceNormal, GroundSurfaceActor))
-		{
-			UE_LOG(LogCatFishing, Error,
-				TEXT("Event=fishing_ground_surface_rejected SessionId=%s Stage=ExhaustedDrag Fish=%s RodTip=%s "
-					"TraceChannel=%d Result=SessionInvalidated"),
-				*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-				*Step.ProposedFishWorldPosition.ToCompactString(), *RodTip.ToCompactString(),
-				static_cast<int32>(GetDefault<UCatWorldItemSettings>()->LandingGroundTraceChannel.GetValue()));
-			Stop();
-			SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("ExhaustedGroundResolve"));
-			return;
-		}
-		if (Motion.bSucceeded && bFishBeached)
-		{
-			// 地面高度可能每步都随坡面变化；鱼线展示与下一步约束必须以吸附后的真实三维位置结算。
-			Step.StraightLineDistanceCentimeters = FVector::Distance(RodTip, Motion.FishWorldPosition);
-			Step.SlackLineLengthCentimeters = FMath::Max(0.0,
-				Step.LineLengthCentimeters - Step.StraightLineDistanceCentimeters);
-			Step.bLineTaut = Step.SlackLineLengthCentimeters <= UE_DOUBLE_KINDA_SMALL_NUMBER;
-			if (!Step.bLineTaut)
-			{
-				Step.TensionCentimeters = 0.0;
-				Step.NormalizedTension = 0.0;
-				Step.ConstraintErrorCentimeters = 0.0;
-				Step.RelativeConstraintSpeedCentimetersPerSecond = 0.0;
-			}
-		}
-		Exact.bSucceeded = Motion.bSucceeded;
-	}
-	else
-	{
-		FCatFishMotionSolveInput MotionInput;
-		MotionInput.RodTipWorldPosition = RodTip;
-		MotionInput.ProposedFishWorldPosition = Step.ProposedFishWorldPosition;
-		MotionInput.WaterBounds = FrozenWaterBounds;
-		MotionInput.MaximumLineLengthCentimeters = Config.MaximumLineLengthCentimeters;
-		Motion = FCatFishFightMotionSolver::Solve(MotionInput);
-		Exact = Motion.bSucceeded
-			? Water->ResolveCandidatePointToWater(Motion.FishWorldPosition, WaterRegion) : FCatWaterSpatialResult{};
-	}
-	if (!Motion.bSucceeded || !Exact.bSucceeded)
-	{
-		// 数学计算、运动解算或水域校正任一环节失败，说明状态已不可信，直接终止搏斗而不是继续跑坏数据。
+		UE_LOG(LogCatFishing, Error,
+			TEXT("Event=fishing_surface_resolve_rejected SessionId=%s Fish=%s Candidate=%s RodTip=%s "
+				"LineLength=%.3f Exhausted=%s CatAction=%s WaterError=%s World=%s NetMode=%d Authority=true Result=SessionInvalidated"),
+			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*State.FishWorldPosition.ToCompactString(), *Step.ProposedFishWorldPosition.ToCompactString(),
+			*RodTip.ToCompactString(), Step.LineLengthCentimeters, State.bFishExhausted ? TEXT("true") : TEXT("false"),
+			State.CatAction == ECatFightCatAction::Pull ? TEXT("Pull") : State.CatAction == ECatFightCatAction::Slack ? TEXT("Slack") : TEXT("None"),
+			*UEnum::GetValueAsString(Exact.Error), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()));
 		Stop();
-		SessionActor->HandleFightRunnerFailureFromAuthority(
-			!Motion.bSucceeded ? TEXT("MotionSolve") : TEXT("WaterResolve"));
+		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("FishSurfaceResolve"));
 		return;
-	}
-	// [FishLogic 2/5：活鱼岸线碰撞反馈]
-	// 水域解析为了保证点严格在水内，可能直接跳到“岸线 + MinimumWaterInset”；这个安全修正适合抛竿落点，
-	// 但用于每 0.05 秒的活鱼运动会形成明显回弹。活鱼撞岸当帧因此保留上一合法位置，下一步再靠反射游向平滑离开。
-	if (!State.bFishExhausted)
-	{
-		FCatFishShoreContactInput ShoreInput;
-		ShoreInput.CurrentFishWorldPosition = State.FishWorldPosition;
-		ShoreInput.CandidateFishWorldPosition = Motion.FishWorldPosition;
-		ShoreInput.ResolvedWaterWorldPosition = Exact.WaterSurfaceWorldPoint;
-		ShoreInput.WaterwardDirection = Exact.WaterwardDirection;
-		ShoreInput.RodTipWorldPosition = RodTip;
-		ShoreInput.PreviousLineLengthCentimeters = State.LineLengthCentimeters;
-		ShoreInput.ProposedLineLengthCentimeters = Step.LineLengthCentimeters;
-		ShoreInput.MaximumConstraintDistanceCentimeters = FMath::Max(
-			FMath::Max(Step.LineLengthCentimeters, FVector::Distance(RodTip, Motion.FishWorldPosition)),
-			FVector::Distance(RodTip, State.FishWorldPosition));
-		ShoreInput.bReeling = State.CatAction == ECatFightCatAction::Pull;
-		ShoreInput.bSlacking = State.CatAction == ECatFightCatAction::Slack;
-		FVector Waterward = Exact.WaterwardDirection;
-		Waterward.Z = 0.0;
-		Waterward.Normalize();
-		FVector ShoreToRod = RodTip - Exact.NearestShoreWorldPoint;
-		ShoreToRod.Z = 0.0;
-		const bool bRodOnLandwardSide = !Waterward.IsNearlyZero()
-			&& FVector::DotProduct(ShoreToRod, Waterward) < -UE_DOUBLE_KINDA_SMALL_NUMBER;
-		const bool bCatHaulingFish = IsIntentionalLandwardHaul(
-			Motion.FishWorldPosition, Exact.WaterwardDirection);
-		ShoreInput.bAllowBeaching = bRodOnLandwardSide && bCatHaulingFish
-			&& Step.Outcome != ECatFightStepOutcome::LineBroken
-			&& Step.Outcome != ECatFightStepOutcome::Escaped;
-		FCatFishShoreContactResult ShoreContact =
-			FCatFishFightMotionSolver::ResolveLiveFishShoreContact(ShoreInput);
-		if (!ShoreContact.bSucceeded)
-		{
-			UE_LOG(LogCatFishing, Error,
-				TEXT("Event=fishing_shore_contact_rejected SessionId=%s CurrentFish=%s CandidateFish=%s "
-					"ResolvedWater=%s Waterward=%s RodTip=%s PreviousLineLength=%.3f ProposedLineLength=%.3f "
-					"MaximumConstraintDistance=%.3f Reeling=%s Slacking=%s AllowBeaching=%s Result=SessionInvalidated"),
-				*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-				*ShoreInput.CurrentFishWorldPosition.ToCompactString(),
-				*ShoreInput.CandidateFishWorldPosition.ToCompactString(),
-				*ShoreInput.ResolvedWaterWorldPosition.ToCompactString(),
-				*ShoreInput.WaterwardDirection.ToCompactString(), *RodTip.ToCompactString(),
-				ShoreInput.PreviousLineLengthCentimeters, ShoreInput.ProposedLineLengthCentimeters,
-				ShoreInput.MaximumConstraintDistanceCentimeters,
-				ShoreInput.bReeling ? TEXT("true") : TEXT("false"),
-				ShoreInput.bSlacking ? TEXT("true") : TEXT("false"),
-				ShoreInput.bAllowBeaching ? TEXT("true") : TEXT("false"));
-			Stop();
-			SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("ShoreContactSolve"));
-			return;
-		}
-		if (ShoreContact.bBeached)
-		{
-			Motion.FishWorldPosition = ShoreContact.FishWorldPosition;
-			if (!TryResolveGroundedFishPosition(Motion.FishWorldPosition, Motion.FishWorldPosition,
-				GroundSurfaceNormal, GroundSurfaceActor))
-			{
-				// 水面阻挡 Mesh 或无真实干地时撤销本步上岸，按普通岸线碰撞留在水内；
-				// 上岸是可重试的空间结果，不再因为一帧地面缺失终止整场搏斗。
-				ShoreInput.bAllowBeaching = false;
-				ShoreContact = FCatFishFightMotionSolver::ResolveLiveFishShoreContact(ShoreInput);
-				const double WorldSeconds = World->GetTimeSeconds();
-				if (WorldSeconds >= NextBeachingDeferredDiagnosticWorldSeconds)
-				{
-					UE_LOG(LogCatFishing, Warning,
-						TEXT("Event=fishing_beaching_deferred SessionId=%s Lifecycle=Active Fish=%s RodTip=%s "
-							"TraceChannel=%d FallbackSucceeded=%s Result=RemainInWater Reason=DryGroundMissing"),
-						*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-						*Step.ProposedFishWorldPosition.ToCompactString(), *RodTip.ToCompactString(),
-						static_cast<int32>(GetDefault<UCatWorldItemSettings>()->LandingGroundTraceChannel.GetValue()),
-						ShoreContact.bSucceeded ? TEXT("true") : TEXT("false"));
-					NextBeachingDeferredDiagnosticWorldSeconds = WorldSeconds + 1.0;
-				}
-				if (!ShoreContact.bSucceeded)
-				{
-					Stop();
-					SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("BeachFallbackSolve"));
-					return;
-				}
-				Motion.FishWorldPosition = ShoreContact.FishWorldPosition;
-				if (ShoreContact.bShoreContact
-					&& !FCatFishSteeringModel::RedirectFromWaterBoundary(SteeringConfig,
-						Exact.WaterwardDirection, SteeringRandom, SteeringState))
-				{
-					Stop();
-					SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("ShoreSteeringRedirect"));
-					return;
-				}
-			}
-			else
-			{
-				bFishBeached = true;
-				bBeachedThisStep = true;
-			}
-		}
-		else if (ShoreContact.bShoreContact
-			&& !FCatFishSteeringModel::RedirectFromWaterBoundary(SteeringConfig,
-				Exact.WaterwardDirection, SteeringRandom, SteeringState))
-		{
-			Stop();
-			SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("ShoreSteeringRedirect"));
-			return;
-		}
-		Motion.FishWorldPosition = ShoreContact.FishWorldPosition;
-		Step.LineLengthCentimeters = ShoreContact.LineLengthCentimeters;
-		Step.StraightLineDistanceCentimeters = FVector::Distance(RodTip, Motion.FishWorldPosition);
-		Step.SlackLineLengthCentimeters = FMath::Max(0.0,
-			Step.LineLengthCentimeters - Step.StraightLineDistanceCentimeters);
-		Step.bLineTaut = Step.SlackLineLengthCentimeters <= UE_DOUBLE_KINDA_SMALL_NUMBER;
-		if (!Step.bLineTaut)
-		{
-			Step.TensionCentimeters = 0.0;
-			Step.NormalizedTension = 0.0;
-			Step.CarrierPullAccelerationCentimetersPerSecondSquared = 0.0;
-			Step.CarrierTargetPullSpeedCentimetersPerSecond = 0.0;
-			Step.CarrierConstraintCorrectionCentimeters = 0.0;
-			Step.CarrierAwaySpeedMultiplier = 1.0;
-			Step.ConstraintErrorCentimeters = 0.0;
-			Step.RelativeConstraintSpeedCentimetersPerSecond = 0.0;
-		}
 	}
 	if (bBeachedThisStep)
 	{
-		Step.bFishBeached = true;
-		if (!State.bFishExhausted && Step.Outcome != ECatFightStepOutcome::LineBroken
-			&& Step.Outcome != ECatFightStepOutcome::Escaped)
-		{
-			// 上岸直接复用鱼力竭生命周期：停止 AI/鱼端驱动力、侧翻成鱼干，并继续由同一根线拖行。
-			Step.FishStaminaDrain = State.FishStamina;
-			Step.Outcome = ECatFightStepOutcome::FishExhausted;
-			Step.CarrierPullAccelerationCentimetersPerSecondSquared = 0.0;
-			Step.CarrierTargetPullSpeedCentimetersPerSecond = 0.0;
-			Step.CarrierConstraintCorrectionCentimeters = 0.0;
-			Step.CarrierAwaySpeedMultiplier = 1.0;
-		}
 		UE_LOG(LogCatFishing, Log,
 			TEXT("Event=fishing_fish_beached SessionId=%s PreviousLifecycle=%s CatAction=%s "
 				"FishStaminaBefore=%.3f Fish=%s GroundNormal=%s GroundActor=%s RodTip=%s "
-				"LineLength=%.3f ConstraintError=%.3f Result=GroundedAutoHauling"),
+				"LineLength=%.3f ConstraintError=%.3f Result=GroundedAutoHauling World=%s NetMode=%d Authority=true"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			State.bFishExhausted ? TEXT("ExhaustedReel") : TEXT("ActiveFight"),
 			State.CatAction == ECatFightCatAction::Pull ? TEXT("Pull")
 				: State.CatAction == ECatFightCatAction::Slack ? TEXT("Slack") : TEXT("None"),
 			State.FishStamina, *Motion.FishWorldPosition.ToCompactString(),
 			*GroundSurfaceNormal.ToCompactString(), *GetNameSafe(GroundSurfaceActor),
-			*RodTip.ToCompactString(), Step.LineLengthCentimeters, Step.ConstraintErrorCentimeters);
+			*RodTip.ToCompactString(), Step.LineLengthCentimeters, Step.ConstraintErrorCentimeters,
+			*GetNameSafe(World), static_cast<int32>(World->GetNetMode()));
 	}
 
 	// 未被猫端牵引越岸时，靠近岸线仍只是空间事实，鱼会沿岸反射；一旦越岸则复用力竭叶子并切到地面吸附。

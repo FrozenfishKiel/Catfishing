@@ -1220,7 +1220,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	InitialState.CatAction = ECatFightCatAction::None;
 	Snapshot.FishFightStaminaRemaining = InitialState.FishStamina; // 把折减后的体力写回公开快照。
 	Snapshot.RodDurabilityRemaining = Config.RodDurability;
-	// 冻结一个以落点为中心、半径=最大线长的世界包围盒，作为本场搏斗全程鱼的运动边界（防止鱼被算出界外）。
+	// 只为初始上钩点建立投影范围；搏斗拖行不再受初始落点包围盒限制，运行时由线长与真实表面负责。
 	const FVector Landing = AttemptSnapshot.ServerCorrectedLandingWorldPoint;
 	const FVector HalfExtent(Config.MaximumLineLengthCentimeters, Config.MaximumLineLengthCentimeters,
 		FMath::Max(500.0, Config.MaximumLineLengthCentimeters * 0.25));
@@ -1233,7 +1233,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	// 关键约束：这里必须使用本次（可能被完美提竿缩短的）初始线长，而不是整根鱼线的最大长度。
 	// 否则 Actor 仍留在原钩点，Runner 第一固定步会发现“鱼在线长球外”并按坏状态终止会话。
 	ProjectionInput.MaximumLineLengthCentimeters = InitialState.LineLengthCentimeters;
-	const FCatFishMotionSolveResult Projected = FCatFishFightMotionSolver::Solve(ProjectionInput);
+	const FCatFishMotionSolveResult Projected = FCatFishFightMotionSolver::ProjectInitialFishToWater(ProjectionInput);
 	// 再用水域子系统把投影点精确吸附到水面上，得到最终的权威落点。
 	const FCatWaterSpatialResult Exact = Projected.bSucceeded
 		? Water->ResolveCandidatePointToWater(Projected.FishWorldPosition, AttemptSnapshot.WaterRegion)
@@ -1268,7 +1268,6 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Init.AbilitySystem = AbilitySystem;
 	Init.PrimaryPlayerState = Snapshot.FisherPlayerState;
 	Init.WaterRegion = AttemptSnapshot.WaterRegion;
-	Init.FrozenWaterBounds = FrozenBounds;
 	Init.Config = Config;
 	Init.InitialState = InitialState;
 	// 按键按住状态挂在玩家 CommandComponent 上，不随上一场断线终止而丢失。

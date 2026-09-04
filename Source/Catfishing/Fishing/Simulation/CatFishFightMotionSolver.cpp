@@ -54,7 +54,7 @@ namespace
 	}
 }
 
-FCatFishMotionSolveResult FCatFishFightMotionSolver::Solve(const FCatFishMotionSolveInput& Input)
+FCatFishMotionSolveResult FCatFishFightMotionSolver::ProjectInitialFishToWater(const FCatFishMotionSolveInput& Input)
 {
 	// 默认 bSucceeded=false；输入的水域边界、坐标、最大线长任一非法都直接返回这个空结果。
 	FCatFishMotionSolveResult Result;
@@ -91,21 +91,6 @@ FCatFishMotionSolveResult FCatFishFightMotionSolver::Solve(const FCatFishMotionS
 	return Result;
 }
 
-FCatFishMotionSolveResult FCatFishFightMotionSolver::ResolveExhaustedWaterFallback(
-	const FVector& CurrentFishPosition, const FVector& CandidateFishPosition,
-	const double WaterSurfaceZ, const bool bIntentionalLandwardHaul)
-{
-	FCatFishMotionSolveResult Result;
-	if (!IsFiniteMotionVector(CurrentFishPosition) || !IsFiniteMotionVector(CandidateFishPosition)
-		|| !FMath::IsFinite(WaterSurfaceZ)) return Result;
-	// 水域烘焙轮廓与真实干地可能存在间隙。这里只延续已经由线长约束求出的位移，
-	// 不自动上岸、不生成 Pickup；纯甩杆则停留在当前水面位置，不倒退回轮廓内。
-	Result.FishWorldPosition = bIntentionalLandwardHaul ? CandidateFishPosition : CurrentFishPosition;
-	Result.FishWorldPosition.Z = WaterSurfaceZ;
-	Result.bSucceeded = true;
-	return Result;
-}
-
 bool FCatFishFightMotionSolver::IsIntentionalLandwardHaul(
 	const FCatFishBeachingIntentInput& Input)
 {
@@ -118,6 +103,8 @@ bool FCatFishFightMotionSolver::IsIntentionalLandwardHaul(
 		|| !IsFiniteMotionVector(Input.NonCarrierRodTipWorldDisplacement)
 		|| !FMath::IsFinite(Input.ActualReelDistanceCentimeters)
 		|| Input.ActualReelDistanceCentimeters < 0.0
+		|| !FMath::IsFinite(Input.ReelConstraintDistanceCentimeters)
+		|| Input.ReelConstraintDistanceCentimeters < 0.0
 		|| !FMath::IsFinite(Input.MinimumProgressCentimeters)
 		|| Input.MinimumProgressCentimeters < 0.0)
 	{
@@ -139,12 +126,15 @@ bool FCatFishFightMotionSolver::IsIntentionalLandwardHaul(
 	NonCarrierRodTipDisplacement.Z = 0.0;
 	const double FishLandwardProgress = FVector::DotProduct(FishDisplacement, LandwardDirection);
 	const double CarrierLandwardProgress = FVector::DotProduct(CarrierDisplacement, LandwardDirection);
-	const double ExplicitCatHaulDistance = Input.ActualReelDistanceCentimeters
+	const double ExplicitCatHaulDistance = FMath::Max(Input.ActualReelDistanceCentimeters,
+		Input.ReelConstraintDistanceCentimeters)
 		+ FMath::Max(0.0, CarrierLandwardProgress);
-	// 若本步主要是竿尖绕 Grip 扫动，先留在水里；旋转稳定后，真实收线/猫平移会自然重获资格。
+	// 只扣除向岸的竿尖扫动，横向/竖向调整不能把真实拖拽一并否掉。
+	const double NonCarrierLandwardProgress = FMath::Max(0.0,
+		FVector::DotProduct(NonCarrierRodTipDisplacement, LandwardDirection));
 	const bool bExplicitCatHaul = ExplicitCatHaulDistance > Input.MinimumProgressCentimeters
 		&& ExplicitCatHaulDistance + Input.MinimumProgressCentimeters
-			>= NonCarrierRodTipDisplacement.Size2D();
+			>= NonCarrierLandwardProgress;
 	return bExplicitCatHaul && FishLandwardProgress > Input.MinimumProgressCentimeters;
 }
 
@@ -189,15 +179,7 @@ FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContac
 	Result.bShoreContact = FVector::DistSquared2D(Input.CandidateFishWorldPosition,
 		Input.ResolvedWaterWorldPosition) > FMath::Square(Input.CorrectionToleranceCentimeters);
 	FVector DesiredPosition;
-	if (Result.bShoreContact && Input.bAllowBeaching)
-	{
-		// 猫端已经沿绷紧鱼线把鱼拉向岸上：保留越岸候选的 XY，Z 由调用方使用真实地面统一结算。
-		// MaximumConstraintDistance 包含该候选点到竿尖的实际距离，所以即使竿尖快速移动、旧鱼点已经落在
-		// 新约束球之外，也不再因为“起点必须在球内”的旧前提误判为求解失败。
-		DesiredPosition = Input.CandidateFishWorldPosition;
-		Result.bBeached = true;
-	}
-	else if (Result.bShoreContact)
+	if (Result.bShoreContact)
 	{
 		// 当前点是上一固定步已经通过真实水域校验的位置。把安全修正位移拆成“入水法向 + 沿岸切向”，
 		// 丢掉可能很大的法向 MinimumWaterInset 回弹，只保留不超过本步原始位移的沿岸滑动。

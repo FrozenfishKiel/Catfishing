@@ -135,6 +135,7 @@ private:
 	friend class FCatFishingSessionRejectedFightSummaryPublicationTest;
 	friend class FCatFishingSessionLandedTerminalVisibilityTest;
 	friend class FCatFishingExhaustedPickupHandoffTest;
+	friend class FCatFishingSurfaceTraversalTest;
 	friend class FCatFishingSessionLineBreakKeepsRodOperableTest;
 	friend class FCatFishingSessionOutcomePresentationTagTest;
 	friend class FCatFishingSessionCutLineCommandTest;
