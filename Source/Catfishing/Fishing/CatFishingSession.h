@@ -64,7 +64,7 @@ public:
 	void SuspendOperatorFromAuthority();
 	bool IsFightRunnerRunning() const;
 	void HandleFightRunnerStepFromAuthority(const FCatFightStepResult& Step, double FishStaminaRemaining,
-		ECatFishMotionIntent MotionIntent, double RodDurabilityRemaining);
+		ECatFishMotionIntent MotionIntent);
 	/** FightRunner/表现写入遇到不可恢复错误时终止会话；FailureStage 会进入日志，便于区分几何、装备、ASC 等故障。 */
 	void HandleFightRunnerFailureFromAuthority(FName FailureStage = NAME_None);
 	/** Condition 确认当前钓手脚点进入危险水深后的唯一落水终局入口。 */
@@ -128,6 +128,7 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	friend class FCatRodSessionDurabilityTest;
 	friend class FCatFishingSessionReplicationContractTest;
 	friend class FCatFishingSessionSnapshotVersionMutationRulesTest;
 	friend class FCatFishingSessionTerminationOutcomeTest;
@@ -195,6 +196,9 @@ private:
 	/** 客户端可观察的会话阶段、鱼种和参与人数；服务器是唯一写者。 */
 	UPROPERTY(ReplicatedUsing=OnRep_Snapshot)
 	FCatFishingSessionSnapshot Snapshot;
+	/** 客户端耐久到达诊断按档位/终态过滤，不参与耐久裁决。 */
+	int32 LastReceivedRodDurabilityBand = INDEX_NONE;
+	bool bReceivedRodTerminal = false;
 
 	/** 当前鱼种数据资产；只在服务器验证/捕获时读取，不复制为运行真相。 */
 	UPROPERTY()
@@ -211,6 +215,8 @@ private:
 	 * 钓手接力转移不改变它——用谁的竿就磨谁的竿、扣抛竿时上的饵。
 	 */
 	TWeakObjectPtr<UCatEquipmentComponent> CastEquipment;
+	/** 仅用于装备磨损事务的去重顺序，不保存第二份鱼竿剩余耐久。 */
+	int64 RodWearSequence = 0;
 
 	/** 鱼运行态在会话创建时冻结的真实重量，单位千克。 */
 	double FishWeightKilograms = 0.0;

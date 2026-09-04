@@ -65,8 +65,8 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatStarterRodLineDurabilityBaselineTest,
-	"Catfishing.Unit.Fishing.Assets.StarterRodPreservesSessionLineDurabilityBaseline",
+	FCatStarterRodDurabilityBaselineTest,
+	"Catfishing.Unit.Fishing.Assets.StarterRodPreservesMaximumDurabilityBaseline",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFormalFishingFightBalanceAssetTest::RunTest(const FString& Parameters)
@@ -90,7 +90,7 @@ bool FCatFormalFishingFightBalanceAssetTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-bool FCatStarterRodLineDurabilityBaselineTest::RunTest(const FString& Parameters)
+bool FCatStarterRodDurabilityBaselineTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
@@ -99,7 +99,7 @@ bool FCatStarterRodLineDurabilityBaselineTest::RunTest(const FString& Parameters
 	if (!TestNotNull(TEXT("正式装备目录可加载初级鱼竿"), StarterRod)) return false;
 	TestEqual(TEXT("初级鱼竿定义 ID 稳定"), StarterRod->EquipmentDefinitionId,
 		FName(TEXT("StarterRodT1")));
-	TestEqual(TEXT("初级鱼线保留每场 150 点耐久基线"), StarterRod->MaximumRodDurability, 150.0);
+	TestEqual(TEXT("初级鱼竿最大耐久为 150，开场读取实例剩余值"), StarterRod->MaximumRodDurability, 150.0);
 	return !HasAnyErrors();
 }
 

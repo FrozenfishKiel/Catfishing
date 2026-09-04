@@ -593,7 +593,8 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 	const bool bCatHaulingFish = FCatFishFightMotionSolver::IsIntentionalLandwardHaul(Intent);
 	// 力竭鱼没有自主游动，所有候选位移都来自同一根鱼线，不再为它加活鱼的防甩杆力竭门槛。
 	const bool bSurfaceTow = (State.bFishExhausted || bCatHaulingFish)
-		&& Step.Outcome != ECatFightStepOutcome::LineBroken && Step.Outcome != ECatFightStepOutcome::Escaped;
+		&& Step.Outcome != ECatFightStepOutcome::LineBroken && Step.Outcome != ECatFightStepOutcome::RodBroken
+		&& Step.Outcome != ECatFightStepOutcome::Escaped;
 	const bool bWasBeached = bFishBeached;
 	bool bShoreContactThisStep = false;
 	FVector GroundedPosition = FVector::ZeroVector;
@@ -710,6 +711,7 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 	{
 		Step.bFishBeached = true;
 		if (!State.bFishExhausted && Step.Outcome != ECatFightStepOutcome::LineBroken
+			&& Step.Outcome != ECatFightStepOutcome::RodBroken
 			&& Step.Outcome != ECatFightStepOutcome::Escaped)
 		{
 			Step.FishStaminaDrain = State.FishStamina;
@@ -1011,7 +1013,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"PrimaryStamina=%.3f GroupStaminaDrain=%.3f FishStamina=%.3f FishStaminaDrain=%.3f "
 				"MotionIntent=%s CatIntentCm=%.3f CatActualCm=%.3f FishIntentCm=%.3f FishActualCm=%.3f "
 				"FishWorldStep2DCm=%.3f FishWorldStep3DCm=%.3f FishWorldDeltaZCm=%.3f "
-				"ReelRequestedCm=%.3f ReelActualCm=%.3f AbsoluteRodWear=%.3f LineWearDelta=%.3f "
+				"ReelRequestedCm=%.3f ReelActualCm=%.3f AbsoluteRodWear=%.3f RodWearDelta=%.3f "
 				"FishExhausted=%s NetMode=%d Authority=true"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
@@ -1040,7 +1042,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.RequestedReelDistanceCentimeters,
 			Step.ActualReelDistanceCentimeters,
 			Step.AbsoluteRodWear,
-			Step.LineWearDelta,
+			Step.RodWearDelta,
 			State.bFishExhausted ? TEXT("true") : TEXT("false"),
 			static_cast<int32>(World->GetNetMode()));
 		LogFishStaminaBreakdown(TEXT("fishing_fish_stamina_sample"), TEXT("Periodic"));
@@ -1117,7 +1119,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("HelperAbilityStaminaWrite"));
 		return;
 	}
-	// 鱼线磨损只存在于本场 Runner 状态，不写入装备永久耐久；新会话从配置上限重新开始。
+	// Runner 只记录本场累计磨损；下面 Session 按差额立即写回绑定鱼竿实例，结束不退款。
 	// 把新的运动意图/线长/位置应用到 Encounter Actor 失败时视为不可恢复，终止本次搏斗。
 	if (!Encounter->ApplyFightStepFromAuthority(State.MotionIntent,
 		Step.LineLengthCentimeters, Motion.FishWorldPosition, static_cast<float>(Config.FixedStepSeconds),
@@ -1136,7 +1138,6 @@ void UCatFishingFightRunner::HandleFixedStep()
 	State.AbsoluteRodWear = Step.AbsoluteRodWear;
 	State.StrongConfrontationBuildUpSeconds = Step.StrongConfrontationBuildUpSeconds;
 	State.FishWorldPosition = Encounter->GetActorLocation(); // 再次以 Actor 实际落点为准，覆盖掉建议值可能的浮点误差
-	// 把本步结果、剩余体力、运动意图和本场剩余鱼线耐久上报给 Session，由它决定是否切换阶段/终止会话。
-	SessionActor->HandleFightRunnerStepFromAuthority(Step, State.FishStamina, State.MotionIntent,
-		Config.RodDurability - Step.AbsoluteRodWear);
+	// 把本步结果（含鱼竿磨损）、剩余体力与运动意图上报给 Session，由它决定是否切换阶段/终止会话。
+	SessionActor->HandleFightRunnerStepFromAuthority(Step, State.FishStamina, State.MotionIntent);
 }

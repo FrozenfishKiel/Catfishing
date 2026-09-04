@@ -672,6 +672,15 @@ FCatFishingCommandResult UCatFishingService::PackRod(AController* Controller, co
 		return Result;
 	}
 	const FCatFishingRodPresentationState RodState = Rod->GetPresentationState();
+	Result.RodActorId = RodState.RodActorId;
+	Result.RodActorRevision = RodState.RodActorRevision;
+	Result.EquipmentRevision = Equipment->GetSnapshot().Revision;
+	// 收回中的实例仍暂留服务索引，库存广播重入时只能观察这份已收起事实，不能再次归还或反向恢复。
+	if (!RodState.bDeployed)
+	{
+		Result.Error = ECatFishingCommandError::AlreadyResolved;
+		return Result;
+	}
 	if (!Command.Context.RequestId.IsValid() || !RodState.ItemInstanceId.IsValid())
 	{
 		Result.Error = ECatFishingCommandError::InvalidPayload;
@@ -688,31 +697,34 @@ FCatFishingCommandResult UCatFishingService::PackRod(AController* Controller, co
 		Result.Error = ECatFishingCommandError::RodActorRevisionConflict;
 		return Result;
 	}
-	// 收杆先提交 UnUse，让库存容量成为能否收回的权威裁决；放不下时 Actor 保持部署，玩家不会凭空复制出第二根竿。
+	// 先完成可逆的世界状态提交，再归还同一库存实例。UnUse 会广播库存变化，
+	// 监听者可能推进 Actor Revision；不能在归还后再因旧 Revision 拒绝，并尝试 Use 一根已断的竿。
+	if (!Rod->SetDeployedFromAuthority(false, Command.Context.ExpectedRodActorRevision))
+	{
+		Result.Error = ECatFishingCommandError::RodActorRevisionConflict;
+		Result.RodActorId = RodState.RodActorId;
+		Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
+		Result.EquipmentRevision = Equipment->GetSnapshot().Revision;
+		return Result;
+	}
 	const FCatInventoryItemUseResult UnUseResult =
 		Equipment->UnUse(Command.Context.RequestId, RodState.ItemInstanceId);
 	if (UnUseResult.Error != ECatDomainCommandError::None)
 	{
-		Result.Error = MapRodInventoryUseError(UnUseResult.Error);
+		// 库存未接收实例时保留原 Use 记录，恢复部署即可；破损状态不参与该回滚。
+		const bool bRestored = Rod->SetDeployedFromAuthority(true,
+			Rod->GetPresentationState().RodActorRevision);
+		Result.Error = bRestored ? MapRodInventoryUseError(UnUseResult.Error)
+			: ECatFishingCommandError::DependencyUnavailable;
+		Result.RodActorId = RodState.RodActorId;
+		Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
 		Result.EquipmentRevision = UnUseResult.EquipmentRevision;
-		return Result;
-	}
-	if (!Rod->SetDeployedFromAuthority(false, Command.Context.ExpectedRodActorRevision))
-	{
-		// 极少数情况下库存已经放回但 Actor 修订冲突，立即把同一实例重新 Use，尽量恢复“场上有竿、背包无竿”的一致状态。
-		const FCatInventoryItemUseResult Rollback =
-			Equipment->Use(FGuid::NewGuid(), UnUseResult.EquipmentRevision, RodState.ItemInstanceId);
-		if (Rollback.Error != ECatDomainCommandError::None
-			&& Rollback.Error != ECatDomainCommandError::AlreadyResolved)
-		{
-			UE_LOG(LogCatFishing, Warning,
-				TEXT("Event=fishing_rod_pack_rollback_failed Reason=%s ItemInstance=%s EquipmentRevision=%lld"),
-				*UEnum::GetValueAsString(Rollback.Error),
-				*RodState.ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-				Rollback.EquipmentRevision);
-		}
-		Result.Error = ECatFishingCommandError::RodActorRevisionConflict;
-		Result.EquipmentRevision = Equipment->GetSnapshot().Revision;
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_rod_pack_rejected RequestId=%s RodActorId=%s RodItemInstanceId=%s Reason=InventoryReturnRejected InventoryError=%s Restored=%s Broken=%s RodActorRevision=%lld EquipmentRevision=%lld %s"),
+			*Command.Context.RequestId.ToString(), *RodState.RodActorId.ToString(),
+			*RodState.ItemInstanceId.ToString(), *UEnum::GetValueAsString(UnUseResult.Error),
+			bRestored ? TEXT("true") : TEXT("false"), RodState.bBroken ? TEXT("true") : TEXT("false"),
+			Result.RodActorRevision, Result.EquipmentRevision, *CatLogContext::BuildControllerFields(Controller));
 		return Result;
 	}
 	UnregisterDeployedRod(PlayerState, Rod);

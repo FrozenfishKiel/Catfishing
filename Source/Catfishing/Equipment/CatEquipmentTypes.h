@@ -130,7 +130,7 @@ struct FCatEquipmentLoadoutSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	double RodDurability = 0.0;
 
-	/** 当前鱼竿是否已断；只有 DamageRod 把耐久降至零时为 true。 */
+	/** 当前鱼竿实例是否已损坏；耐久耗尽后必须维修才可继续使用。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bRodBroken = false;
 

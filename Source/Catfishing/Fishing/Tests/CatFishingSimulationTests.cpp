@@ -607,7 +607,7 @@ bool FCatFishingInwardReelLineWearTest::RunTest(const FString& Parameters)
 		Step.bSucceeded && Step.NormalizedTension > 0.0);
 	TestEqual(TEXT("inward fish direction has no outward line load"),
 		Step.NormalizedLineLoad, 0.0, 1e-9);
-	TestEqual(TEXT("tension alone cannot add session line wear"), Step.LineWearDelta, 0.0, 1e-9);
+	TestEqual(TEXT("tension alone cannot add rod wear"), Step.RodWearDelta, 0.0, 1e-9);
 	TestEqual(TEXT("session line durability is unchanged without outward fish load"),
 		Step.AbsoluteRodWear, State.AbsoluteRodWear, 1e-9);
 	TestEqual(TEXT("inward reeling cannot break a nearly worn line"),
@@ -636,15 +636,19 @@ bool FCatFishingDirectionalLineWearTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("both line load cases solve"), LowLoad.bSucceeded && FullLoad.bSucceeded);
 	TestTrue(TEXT("reeling tension is higher than the low outward fish load"),
 		LowLoad.NormalizedTension > LowLoad.NormalizedLineLoad);
-	TestTrue(TEXT("low outward load still causes small positive wear"), LowLoad.LineWearDelta > 0.0);
+	TestTrue(TEXT("low outward load still causes small positive wear"), LowLoad.RodWearDelta > 0.0);
 	TestEqual(TEXT("wear scales continuously by the outward projection"),
-		LowLoad.LineWearDelta, FullLoad.LineWearDelta * LowLoad.NormalizedLineLoad, 1e-9);
+		LowLoad.RodWearDelta, FullLoad.RodWearDelta * LowLoad.NormalizedLineLoad, 1e-9);
 	TestEqual(TEXT("low load preserves the session despite reeling tension"),
 		LowLoad.Outcome, ECatFightStepOutcome::None);
-	TestEqual(TEXT("full load can still deplete real line durability"),
-		FullLoad.LineBreakCause, ECatFightLineBreakCause::DurabilityDepleted);
-	TestEqual(TEXT("real durability depletion still breaks the line"),
-		FullLoad.Outcome, ECatFightStepOutcome::LineBroken);
+	TestEqual(TEXT("real durability depletion breaks the rod"),
+		FullLoad.Outcome, ECatFightStepOutcome::RodBroken);
+	FCatFightSimulationState ExhaustingFish = State;
+	ExhaustingFish.FishStamina = 0.001;
+	const FCatFightStepResult Simultaneous = FCatFishingFightSimulator::Step(
+		Config, ExhaustingFish, MakeHeldConstraint(), FVector::ForwardVector);
+	TestEqual(TEXT("fish exhaustion cannot hide simultaneous rod depletion"),
+		Simultaneous.Outcome, ECatFightStepOutcome::RodBroken);
 	return !HasAnyErrors();
 }
 
@@ -698,7 +702,7 @@ bool FCatFishingExhaustedVerticalEndpointTest::RunTest(const FString& Parameters
 			Step.ProposedFishWorldPosition.Equals(State.FishWorldPosition, 1e-6));
 		TestEqual(TEXT("dead fish has no outward load"), Step.NormalizedLineLoad, 0.0);
 		TestEqual(TEXT("dead fish causes no stamina drain"), Step.CatStaminaDrain, 0.0);
-		TestEqual(TEXT("dead fish causes no line wear"), Step.LineWearDelta, 0.0);
+		TestEqual(TEXT("dead fish causes no rod wear"), Step.RodWearDelta, 0.0);
 	}
 	State.bFishExhausted = false;
 	State.FishStamina = 100.0;

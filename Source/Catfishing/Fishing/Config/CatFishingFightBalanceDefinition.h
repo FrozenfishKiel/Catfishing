@@ -96,7 +96,7 @@ public:
 
 	/** 强对抗僵持时按鱼线力量结算的每步磨损系数。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "鱼线与张力",
-		meta = (DisplayName = "僵持鱼线磨损系数", ClampMin = "0.0"))
+		meta = (DisplayName = "僵持鱼竿磨损系数", ClampMin = "0.0"))
 	double StalemateRodWearPerFishStrength = -1.0;
 
 	/** 竿身偏离鱼线方向时仍保留的最低有效杠杆。 */

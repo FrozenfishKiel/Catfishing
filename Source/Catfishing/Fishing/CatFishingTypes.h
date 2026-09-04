@@ -37,12 +37,12 @@ enum class ECatFishingOutcome : uint8
 	/** 抄网已把水中鱼交接为抄手嘴叼的世界鱼；尚未写入容器。 */
 	Caught,
 	EmptyHook, HookWindowExpired, Escaped,
-	/** 旧版本曾把鱼线断裂误写成鱼竿永久损坏；仅为已有蓝图/存档保持枚举序号，不再由钓鱼核心产生。 */
-	RodBroken UMETA(Hidden),
+	/** 同一鱼竿实例的累计耐久耗尽；必须维修或换一根可用鱼竿才能继续钓鱼。 */
+	RodBroken,
 	CatInWater, Cancelled, Invalidated,
 	/** 会话已把鱼安全释放为独立岸上拾取物；鱼尚未归属任何玩家。 */
 	Landed,
-	/** 鱼线承载能力或本次线耐久耗尽；只结束当前会话，鱼竿本体保持可用。 */
+	/** 钓组承载过载断线；保留鱼竿已经发生的磨损，不额外销毁仍有耐久的鱼竿。 */
 	LineBroken,
 	/** 玩家主动切断本场鱼线止损；鱼与已消耗鱼饵丢失，但不追加鱼线/鱼竿磨损。 */
 	LineCut
@@ -206,9 +206,8 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	double NormalizedFishStamina = 0.0;
 
-	/** 搏斗中的本场鱼线耐久余量（字段名兼容旧蓝图；进入搏斗时重置，非搏斗阶段保持 0）。 */
-	/** 本场钓鱼的鱼线剩余承载耐久；字段名为兼容既有蓝图保留，不代表场景鱼竿永久损坏。 */
-	UPROPERTY(BlueprintReadOnly, meta=(DisplayName="Line Durability Remaining"))
+	/** 本场绑定鱼竿实例剩余耐久的只读镜像；来自 Equipment，跨场累计，终态不补满。 */
+	UPROPERTY(BlueprintReadOnly, meta=(DisplayName="Rod Durability Remaining"))
 	double RodDurabilityRemaining = 0.0;
 
 	/** 主位当前是否按住收线；松开边沿立即回到锁线。 */

@@ -25,16 +25,12 @@ void CatRunInventorySlotOperations::NormalizeStoredItemSlot(FCatRunInventorySlot
 	}
 	if (Definition.Kind == ECatEquipmentKind::Rod)
 	{
-		const double DefaultDurability = FMath::IsFinite(Definition.MaximumRodDurability)
+		const double MaximumDurability = FMath::IsFinite(Definition.MaximumRodDurability)
 			? FMath::Max(0.0, Definition.MaximumRodDurability) : 0.0;
-		if (!FMath::IsFinite(Slot.RodDurability) || Slot.RodDurability <= 0.0)
-		{
-			Slot.RodDurability = Slot.bRodBroken ? 0.0 : DefaultDurability;
-		}
-		if (Slot.bRodBroken)
-		{
-			Slot.RodDurability = 0.0;
-		}
+		// 归一化只能校正非法值，不能把耗尽或迁移中的旧竿重新生成成满耐久。
+		Slot.RodDurability = Slot.bRodBroken || !FMath::IsFinite(Slot.RodDurability)
+			? 0.0 : FMath::Clamp(Slot.RodDurability, 0.0, MaximumDurability);
+		Slot.bRodBroken = Slot.RodDurability <= 0.0;
 		return;
 	}
 	Slot.RodDurability = 0.0;
@@ -48,6 +44,10 @@ FCatRunInventorySlot CatRunInventorySlotOperations::MakeInventoryItemSlot(
 	FCatRunInventorySlot Slot;
 	Slot.DefinitionId = DefinitionId;
 	Slot.Quantity = Quantity;
+	if (Definition.Kind == ECatEquipmentKind::Rod)
+	{
+		Slot.RodDurability = Definition.MaximumRodDurability;
+	}
 	NormalizeStoredItemSlot(Slot, Definition);
 	return Slot;
 }

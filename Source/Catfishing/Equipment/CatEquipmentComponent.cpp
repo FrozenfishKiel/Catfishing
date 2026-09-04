@@ -6,6 +6,9 @@
 #include "Equipment/CatRunInventorySlotOperations.h"
 #include "GameFramework/Pawn.h"
 #include "Net/UnrealNetwork.h"
+#include "Engine/World.h"
+
+DEFINE_LOG_CATEGORY_STATIC(LogCatEquipment, Log, All);
 
 // 构造流程：开启组件复制并关闭 Tick；Snapshot 初始 Revision=0 表示还没有随身库存提交或钓鱼选择。
 UCatEquipmentComponent::UCatEquipmentComponent()
@@ -758,7 +761,7 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	// 2. 再校验 authority、定义类型、Revision、当前钓鱼选择和三份实例身份，任何不一致都保持快照不变。
 	// 3. 鱼竿实例必须来自活动 Use 记录，鱼饵和鱼漂实例必须仍在库存中，避免场景竿和背包格引用不同物品。
 	// 4. 通过后立即把选中鱼饵实例的一份移进本 Session 记录并发布库存变化；之后玩家整理或转移背包不会破坏结算。
-	// 5. 记录只保存这场 Fishing 自己要消耗或归还的饵料和耐久累计，不再给库存拖放提供通用占用 gate。
+	// 5. 冻结本场鱼竿实例；耐久后续按增量直接写回该实例，不依赖当前选择。
 	if (const FCatFishingUseRecord* ExistingRecord = FindFishingUseRecord(FishingSessionId))
 	{
 		const bool bReserved = ExistingRecord->bBaitQuantityReserved && !ExistingRecord->bBaitCommitted
@@ -813,6 +816,11 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false);
 	}
+	if (RodUseRecord->Item.bRodBroken || !FMath::IsFinite(RodUseRecord->Item.RodDurability)
+		|| RodUseRecord->Item.RodDurability <= 0.0)
+	{
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false);
+	}
 	FCatRunInventorySlot ReservedBaitItem;
 	if (!RemoveInventoryItemQuantityFromInstance(BaitItemInstanceId, 1, ReservedBaitItem))
 	{
@@ -821,11 +829,18 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 
 	FCatFishingUseRecord Record;
 	Record.SessionId = FishingSessionId;
+	Record.RodItemInstanceId = RodItemInstanceId;
+	Record.RodDefinitionId = RodDefinitionId;
 	Record.ReservedBaitDefinitionId = ReservedBaitItem.DefinitionId;
 	Record.bBaitQuantityReserved = true;
 	FishingUseRecords.Add(FishingSessionId, Record);
 	++Snapshot.Revision;
 	PublishSnapshot();
+	UE_LOG(LogCatEquipment, Log,
+		TEXT("Event=equipment_rod_session_bound SessionId=%s RodItemInstanceId=%s Definition=%s Durability=%.3f Revision=%lld World=%s NetMode=%d Authority=true Owner=%s"),
+		*FishingSessionId.ToString(), *RodItemInstanceId.ToString(), *RodDefinitionId.ToString(),
+		RodUseRecord->Item.RodDurability, Snapshot.Revision, *GetNameSafe(GetWorld()),
+		static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone), *GetNameSafe(GetOwner()));
 	return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::None, true);
 }
 
@@ -862,106 +877,81 @@ FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBaitDeferred(
 	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
 }
 
-FCatFishingUseOperationResult UCatEquipmentComponent::SetAccumulatedFishingRodWear(const FGuid FishingSessionId,
+FCatFishingUseOperationResult UCatEquipmentComponent::ApplyFishingRodWear(const FGuid FishingSessionId,
 	const int64 WearSequence, const double AbsoluteTotal)
 {
 	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
-	if (!Record)
+	const auto Reject = [&](const ECatDomainCommandError Error, const TCHAR* Reason)
 	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::NotFound, false);
-	}
-	if (Record->bReleased || Record->bBreakCommitted || Record->bWearCommitted)
-	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false, Record);
-	}
-	if (!IsFishingUseActive(FishingSessionId))
-	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
-	}
-	if (!FMath::IsFinite(AbsoluteTotal) || AbsoluteTotal < 0.0 || AbsoluteTotal < Record->AbsoluteRodWear)
-	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false, Record);
-	}
-	if (Record->LastWearSequence == 0 && WearSequence != 1)
-	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false, Record);
-	}
-	if (WearSequence == Record->LastWearSequence)
-	{
-		const ECatDomainCommandError Error = AbsoluteTotal == Record->AbsoluteRodWear
-			? ECatDomainCommandError::AlreadyResolved : ECatDomainCommandError::InvalidPayload;
+		UE_LOG(LogCatEquipment, Warning,
+			TEXT("Event=equipment_rod_wear_rejected SessionId=%s RodItemInstanceId=%s WearSequence=%lld AbsoluteWear=%.3f Reason=%s Error=%s World=%s NetMode=%d Authority=%s Owner=%s"),
+			*FishingSessionId.ToString(), Record ? *Record->RodItemInstanceId.ToString() : TEXT("None"),
+			WearSequence, AbsoluteTotal, Reason, *UEnum::GetValueAsString(Error), *GetNameSafe(GetWorld()),
+			static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone), GetOwner() && GetOwner()->HasAuthority() ? TEXT("true") : TEXT("false"),
+			*GetNameSafe(GetOwner()));
 		return MakeFishingUseOperationResult(FishingSessionId, Error, false, Record);
-	}
-	if (WearSequence != Record->LastWearSequence + 1)
-	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false, Record);
-	}
+	};
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+		return Reject(ECatDomainCommandError::DependencyUnavailable, TEXT("NotAuthority"));
+	if (!FishingSessionId.IsValid() || WearSequence <= 0 || !FMath::IsFinite(AbsoluteTotal) || AbsoluteTotal < 0.0)
+		return Reject(ECatDomainCommandError::InvalidPayload, TEXT("InvalidPayload"));
+	if (!Record) return Reject(ECatDomainCommandError::NotFound, TEXT("SessionMissing"));
+	if (Record->bReleased)
+		return Reject(ECatDomainCommandError::AlreadyResolved, TEXT("SessionReleased"));
+	if (WearSequence == Record->LastWearSequence && AbsoluteTotal == Record->AbsoluteRodWear)
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false, Record);
+	if (Record->LastWearSequence == MAX_int64 || WearSequence != Record->LastWearSequence + 1
+		|| AbsoluteTotal < Record->AbsoluteRodWear)
+		return Reject(ECatDomainCommandError::InvalidPayload, TEXT("WearSequenceOrTotalConflict"));
+	if (!Record->bBaitCommitted)
+		return Reject(ECatDomainCommandError::InvalidPhase, TEXT("BaitNotCommitted"));
+	FCatRunInventorySlot* RodItem = FindFishingRodInstance(*Record);
+	if (!RodItem || !FMath::IsFinite(RodItem->RodDurability) || RodItem->RodDurability < 0.0)
+		return Reject(ECatDomainCommandError::NotFound, TEXT("BoundRodUnavailable"));
+	const double Before = RodItem->RodDurability;
+	const bool bWasBroken = RodItem->bRodBroken;
+	const double Delta = AbsoluteTotal - Record->AbsoluteRodWear;
+	RodItem->RodDurability = bWasBroken ? 0.0 : FMath::Max(0.0, Before - Delta);
+	RodItem->bRodBroken = RodItem->RodDurability <= 0.0;
 	Record->LastWearSequence = WearSequence;
 	Record->AbsoluteRodWear = AbsoluteTotal;
+	// Snapshot 只投影当前选择；换选另一根竿不能让本会话磨损落在那根竿上。
+	if (Snapshot.RodItemInstanceId == Record->RodItemInstanceId)
+	{
+		Snapshot.RodDurability = RodItem->RodDurability;
+		Snapshot.bRodBroken = RodItem->bRodBroken;
+	}
+	const double Remaining = RodItem->RodDurability;
+	const bool bBroken = RodItem->bRodBroken;
+	const bool bChanged = Before != Remaining || bWasBroken != bBroken;
+	if (bChanged)
+	{
+		++Snapshot.Revision;
+		PublishSnapshot();
+	}
+	if (WearSequence == 1 || bWasBroken != bBroken
+		|| FMath::FloorToDouble(Before / 5.0) != FMath::FloorToDouble(Remaining / 5.0))
+	{
+		UE_LOG(LogCatEquipment, Log,
+			TEXT("Event=equipment_rod_wear_applied SessionId=%s RodItemInstanceId=%s WearSequence=%lld AbsoluteWear=%.3f Delta=%.3f DurabilityBefore=%.3f Durability=%.3f Broken=%s Revision=%lld World=%s NetMode=%d Authority=true Owner=%s"),
+			*FishingSessionId.ToString(), *Record->RodItemInstanceId.ToString(), WearSequence, AbsoluteTotal,
+			Delta, Before, Remaining, bBroken ? TEXT("true") : TEXT("false"), Snapshot.Revision,
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone), *GetNameSafe(GetOwner()));
+	}
 	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
 }
 
-FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingRodWear(const FGuid FishingSessionId)
+bool UCatEquipmentComponent::GetFishingRodDurability(const FGuid FishingSessionId,
+	double& OutDurability, bool& OutBroken) const
 {
-	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
-	if (!Record)
-	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::NotFound, false);
-	}
-	if (Record->bReleased || Record->bWearCommitted || Record->bBreakCommitted)
-	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false, Record);
-	}
-	if (!IsFishingUseActive(FishingSessionId) || Record->LastWearSequence == 0)
-	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
-	}
-	if (Record->bBaitQuantityReserved && !Record->bBaitCommitted)
-	{
-		// 竿状态写回只接受已经确认消耗的会话，避免一个终局同时留下未归还的暂存饵。
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
-	}
-	if (Record->AbsoluteRodWear >= Snapshot.RodDurability)
-	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
-	}
-	Snapshot.RodDurability -= Record->AbsoluteRodWear;
-	SyncSelectedRodStateToSelectedInstance();
-	Record->bWearCommitted = true;
-	Record->bReleased = true;
-	++Snapshot.Revision;
-	PublishSnapshot();
-	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
-}
-
-FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingRodBreak(const FGuid FishingSessionId)
-{
-	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
-	if (!Record)
-	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::NotFound, false);
-	}
-	if (Record->bReleased || Record->bBreakCommitted || Record->bWearCommitted)
-	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false, Record);
-	}
-	if (!IsFishingUseActive(FishingSessionId))
-	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
-	}
-	if (Record->bBaitQuantityReserved && !Record->bBaitCommitted)
-	{
-		// 竿状态写回只接受已经确认消耗的会话，避免一个终局同时留下未归还的暂存饵。
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
-	}
-	Snapshot.RodDurability = 0.0;
-	Snapshot.bRodBroken = true;
-	SyncSelectedRodStateToSelectedInstance();
-	Record->bBreakCommitted = true;
-	Record->bReleased = true;
-	++Snapshot.Revision;
-	PublishSnapshot();
-	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
+	OutDurability = 0.0;
+	OutBroken = false;
+	const FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
+	const FCatRunInventorySlot* RodItem = Record ? FindFishingRodInstance(*Record) : nullptr;
+	if (!RodItem || !FMath::IsFinite(RodItem->RodDurability) || RodItem->RodDurability < 0.0) return false;
+	OutDurability = RodItem->RodDurability;
+	OutBroken = RodItem->bRodBroken || RodItem->RodDurability <= 0.0;
+	return true;
 }
 
 FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FGuid FishingSessionId)
@@ -1014,6 +1004,15 @@ FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FG
 		PublishSnapshot();
 	}
 	Record->bReleased = true;
+	double RemainingDurability = 0.0;
+	bool bRodBroken = false;
+	const bool bRodAvailable = GetFishingRodDurability(FishingSessionId, RemainingDurability, bRodBroken);
+	UE_LOG(LogCatEquipment, Log,
+		TEXT("Event=equipment_rod_session_released SessionId=%s RodItemInstanceId=%s WearSequence=%lld AbsoluteWear=%.3f Durability=%.3f Broken=%s RodAvailable=%s World=%s NetMode=%d Authority=%s Owner=%s"),
+		*FishingSessionId.ToString(), *Record->RodItemInstanceId.ToString(), Record->LastWearSequence,
+		Record->AbsoluteRodWear, RemainingDurability, bRodBroken ? TEXT("true") : TEXT("false"),
+		bRodAvailable ? TEXT("true") : TEXT("false"), *GetNameSafe(GetWorld()), static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone),
+		GetOwner() && GetOwner()->HasAuthority() ? TEXT("true") : TEXT("false"), *GetNameSafe(GetOwner()));
 	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
 }
 
@@ -1038,10 +1037,25 @@ FCatDomainCommandResult UCatEquipmentComponent::RepairRodAtCamp(const FGuid Requ
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
+	const double DurabilityBefore = Snapshot.RodDurability;
+	const auto ReportRepairResult = [&]()
+	{
+		const FString Diagnostic = FString::Printf(
+			TEXT("Event=equipment_rod_repair_result RequestId=%s RodItemInstanceId=%s DurabilityBefore=%.3f Durability=%.3f Broken=%s Committed=%s Error=%s Revision=%lld World=%s NetMode=%d Authority=%s Owner=%s"),
+			*RequestId.ToString(), *Snapshot.RodItemInstanceId.ToString(), DurabilityBefore,
+			Snapshot.RodDurability, Snapshot.bRodBroken ? TEXT("true") : TEXT("false"),
+			Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
+			Snapshot.Revision, *GetNameSafe(GetWorld()),
+			static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone),
+			GetOwner() && GetOwner()->HasAuthority() ? TEXT("true") : TEXT("false"), *GetNameSafe(GetOwner()));
+		if (Result.bCommitted) { UE_LOG(LogCatEquipment, Log, TEXT("%s"), *Diagnostic); }
+		else { UE_LOG(LogCatEquipment, Warning, TEXT("%s"), *Diagnostic); }
+	};
 	if (HasActiveFishingUse() || HasActiveInventoryItemUse())
 	{
 		Result.Error = ECatDomainCommandError::InvalidPhase;
 		Result.Revision = Snapshot.Revision;
+		ReportRepairResult();
 		return Result;
 	}
 	const FString Key = MakeTerminalKey(TEXT("RepairRod"), RequestId);
@@ -1085,12 +1099,29 @@ FCatDomainCommandResult UCatEquipmentComponent::RepairRodAtCamp(const FGuid Requ
 	}
 	Result.Revision = Snapshot.Revision;
 	TerminalCache.Add(Key, Result);
+	ReportRepairResult();
 	return Result;
 }
 
 // Snapshot 复制回调流程：客户端只刷新只读表现；不会自动装备、补充普通饵数量或修复断竿。
 void UCatEquipmentComponent::OnRep_Snapshot()
 {
+	const int32 DurabilityBand = FMath::IsFinite(Snapshot.RodDurability)
+		? FMath::FloorToInt(Snapshot.RodDurability / 5.0) : INDEX_NONE;
+	if (Snapshot.RodItemInstanceId.IsValid()
+		&& (LastLoggedRodInstanceId != Snapshot.RodItemInstanceId
+			|| LastLoggedRodDurabilityBand != DurabilityBand || bLastLoggedRodBroken != Snapshot.bRodBroken))
+	{
+		UE_LOG(LogCatEquipment, Log,
+			TEXT("Event=equipment_rod_durability_replicated RodItemInstanceId=%s Durability=%.3f Broken=%s Revision=%lld World=%s NetMode=%d Authority=%s LocalRole=%d Owner=%s"),
+			*Snapshot.RodItemInstanceId.ToString(), Snapshot.RodDurability,
+			Snapshot.bRodBroken ? TEXT("true") : TEXT("false"), Snapshot.Revision, *GetNameSafe(GetWorld()),
+			static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone), GetOwner() && GetOwner()->HasAuthority() ? TEXT("true") : TEXT("false"),
+			GetOwner() ? static_cast<int32>(GetOwner()->GetLocalRole()) : 0, *GetNameSafe(GetOwner()));
+	}
+	LastLoggedRodInstanceId = Snapshot.RodItemInstanceId;
+	LastLoggedRodDurabilityBand = DurabilityBand;
+	bLastLoggedRodBroken = Snapshot.bRodBroken;
 	OnSnapshotChanged.Broadcast();
 }
 
@@ -1486,6 +1517,30 @@ const UCatEquipmentComponent::FCatFishingUseRecord* UCatEquipmentComponent::Find
 	return FishingUseRecords.Find(FishingSessionId);
 }
 
+FCatRunInventorySlot* UCatEquipmentComponent::FindFishingRodInstance(const FCatFishingUseRecord& Record)
+{
+	FCatRunInventorySlot* Item = FindInventorySlotByInstanceId(Record.RodItemInstanceId);
+	if (!Item)
+	{
+		FCatInventoryItemUseRecord* UseRecord = FindInventoryItemUseRecord(Record.RodItemInstanceId);
+		Item = UseRecord && !UseRecord->bReleased ? &UseRecord->Item : nullptr;
+	}
+	return Item && Item->ItemInstanceId == Record.RodItemInstanceId
+		&& Item->DefinitionId == Record.RodDefinitionId && Item->Quantity == 1 ? Item : nullptr;
+}
+
+const FCatRunInventorySlot* UCatEquipmentComponent::FindFishingRodInstance(const FCatFishingUseRecord& Record) const
+{
+	const FCatRunInventorySlot* Item = FindInventorySlotByInstanceId(Record.RodItemInstanceId);
+	if (!Item)
+	{
+		const FCatInventoryItemUseRecord* UseRecord = FindInventoryItemUseRecord(Record.RodItemInstanceId);
+		Item = UseRecord && !UseRecord->bReleased ? &UseRecord->Item : nullptr;
+	}
+	return Item && Item->ItemInstanceId == Record.RodItemInstanceId
+		&& Item->DefinitionId == Record.RodDefinitionId && Item->Quantity == 1 ? Item : nullptr;
+}
+
 UCatEquipmentComponent::FCatInventoryItemUseRecord* UCatEquipmentComponent::FindInventoryItemUseRecord(
 	const FGuid ItemInstanceId)
 {
@@ -1708,9 +1763,9 @@ FCatFishingUseReservationResult UCatEquipmentComponent::MakeFishingUseReservatio
 	Result.SessionId = FishingSessionId;
 	Result.Error = Error;
 	Result.EquipmentRevision = Snapshot.Revision;
-	Result.RemainingRodDurability = Snapshot.RodDurability;
 	Result.bReserved = bReserved;
-	Result.bRodBroken = Snapshot.bRodBroken;
+	GetFishingRodDurability(FishingSessionId, Result.RemainingRodDurability, Result.bRodBroken);
+	if (!Record) Record = FindFishingUseRecord(FishingSessionId);
 	if (Record)
 	{
 		Result.WearSequence = Record->LastWearSequence;
@@ -1726,9 +1781,9 @@ FCatFishingUseOperationResult UCatEquipmentComponent::MakeFishingUseOperationRes
 	Result.SessionId = FishingSessionId;
 	Result.Error = Error;
 	Result.EquipmentRevision = Snapshot.Revision;
-	Result.RemainingRodDurability = Snapshot.RodDurability;
 	Result.bApplied = bApplied;
-	Result.bRodBroken = Snapshot.bRodBroken;
+	GetFishingRodDurability(FishingSessionId, Result.RemainingRodDurability, Result.bRodBroken);
+	if (!Record) Record = FindFishingUseRecord(FishingSessionId);
 	if (Record)
 	{
 		Result.WearSequence = Record->LastWearSequence;

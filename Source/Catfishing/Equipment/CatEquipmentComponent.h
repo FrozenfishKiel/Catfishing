@@ -71,13 +71,11 @@ public:
 	FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);
 	/** 确认消耗 Begin 已暂存的鱼饵；库存数量已经在 Begin 发布，本函数只收口会话内的饵料事务。 */
 	FCatFishingUseOperationResult CommitFishingBaitDeferred(FGuid FishingSessionId);
-	/** 记录 Fishing 会话当前累计的竿磨损；它只更新会话暂存值，不直接改公开装备快照。 */
-	FCatFishingUseOperationResult SetAccumulatedFishingRodWear(FGuid FishingSessionId, int64 WearSequence,
+	/** 按递增累计磨损的差额立即扣减 Begin 绑定的鱼竿实例；重复序号不重扣，Release 不回滚。 */
+	FCatFishingUseOperationResult ApplyFishingRodWear(FGuid FishingSessionId, int64 WearSequence,
 		double AbsoluteTotal);
-	/** 把已累计的竿磨损写回当前鱼竿实例并结束本会话；调用前饵料事务必须已经确认消耗。 */
-	FCatFishingUseOperationResult CommitFishingRodWear(FGuid FishingSessionId);
-	/** 把当前鱼竿实例标记为断竿并结束本会话；调用前饵料事务必须已经确认消耗。 */
-	FCatFishingUseOperationResult CommitFishingRodBreak(FGuid FishingSessionId);
+	/** 从该会话绑定的库存或活动 Use 实例读取跨场保留的耐久，不读取当前选择的另一根竿。 */
+	bool GetFishingRodDurability(FGuid FishingSessionId, double& OutDurability, bool& OutBroken) const;
 	/** 结束 Fishing 使用记录；未消耗的暂存饵会回到随身库存，已消耗的记录只关闭自身。 */
 	FCatFishingUseOperationResult ReleaseFishingUse(FGuid FishingSessionId);
 	/** 当前是否有仍未结束的 Fishing 使用记录；维修和失败预算用它避开进行中的钓鱼结算。 */
@@ -99,20 +97,19 @@ private:
 	{
 		/** 本场 Fishing 会话身份；后续扣饵、耐久结算和释放都按它找到同一条短生命周期记录。 */
 		FGuid SessionId;
+		/** Begin 冻结的鱼竿实例与定义；后续磨损不得按当前选择重新选竿。 */
+		FGuid RodItemInstanceId;
+		FName RodDefinitionId = NAME_None;
 		/** Begin 从随身库存移出的一份鱼饵定义；数量型物品脱离原堆栈后不再复用原 ItemInstanceId。 */
 		FName ReservedBaitDefinitionId = NAME_None;
 		/** 已接收的竿磨损序号；磨损事件按递增序号提交，重复或跳号不会改耐久。 */
 		int64 LastWearSequence = 0;
-		/** 本场 Fishing 累计的竿耐久损耗；结算时一次性扣到当前选中竿实例，不参与库存拖放判断。 */
+		/** 已按差额写入绑定实例的累计磨损；仅用于序号去重，不是另一份剩余耐久。 */
 		double AbsoluteRodWear = 0.0;
 		/** 当前记录是否仍持有 Begin 移出的那份鱼饵；Commit 消耗或 Release 归还后清掉，防止同一份饵重复收口。 */
 		bool bBaitQuantityReserved = false;
 		/** 鱼饵是否已经被本会话确认消耗；它让重复结算只返回终态，不再次处理暂存物。 */
 		bool bBaitCommitted = false;
-		/** 竿磨损是否已经写回；成功后会释放本会话，防止磨损和断竿同时落地。 */
-		bool bWearCommitted = false;
-		/** 断竿是否已经写回；成功后会释放本会话，防止断竿和磨损同时落地。 */
-		bool bBreakCommitted = false;
 		/** 本会话是否已经结束；结束后的记录只作为重放终态，不再保护鱼饵或接受耐久事件。 */
 		bool bReleased = false;
 	};
@@ -133,6 +130,8 @@ private:
 	const FCatFishingUseRecord* FindFishingUseRecord(FGuid FishingSessionId) const;
 	FCatInventoryItemUseRecord* FindInventoryItemUseRecord(FGuid ItemInstanceId);
 	const FCatInventoryItemUseRecord* FindInventoryItemUseRecord(FGuid ItemInstanceId) const;
+	FCatRunInventorySlot* FindFishingRodInstance(const FCatFishingUseRecord& Record);
+	const FCatRunInventorySlot* FindFishingRodInstance(const FCatFishingUseRecord& Record) const;
 	/** 是否存在尚未收口的物品 Use 记录；维修和失败预算用它避免改写正在由场景持有的物品状态。 */
 	bool HasActiveInventoryItemUse() const;
 	/** 读取某个定义在库存格数组中的可见数量；选择自动切换和商店预检用它判断旧选择是否仍有实物。 */
@@ -216,4 +215,8 @@ private:
 	TMap<FGuid, FCatInventoryItemUseRecord> InventoryItemUseRecords;
 	/** 物品 Use/UnUse 首次终态缓存；简单消耗品重试会读它而不是再次扣量，部署/收回重试也不会重复移动同一实例。 */
 	TMap<FString, FCatInventoryItemUseResult> InventoryItemUseTerminalCache;
+	/** 仅用于客户端复制诊断限频，不参与耐久或玩法裁决。 */
+	FGuid LastLoggedRodInstanceId;
+	int32 LastLoggedRodDurabilityBand = INDEX_NONE;
+	bool bLastLoggedRodBroken = false;
 };

@@ -56,7 +56,7 @@
 | 低体力休息触发比例/时长倍率 | LowStaminaRestThreshold/Multiplier | 0.5 / 1.5 | 低体力鱼延长平静期 |
 | 满张力响应距离 | TensionResponseRangeCentimeters | 10 cm | 只归一化表现张力，不改变权威线长约束 |
 | 逃脱松线余量 | EscapeSlackCentimeters | 100 cm | 无人持竿时超过最大线长后的逃脱余量 |
-| 僵持鱼线磨损系数 | StalemateRodWearPerFishStrength | 0.1 | 按鱼沿线向外负载连续缩放的鱼线磨损；几何张力不能替代方向负载 |
+| 僵持鱼竿磨损系数 | StalemateRodWearPerFishStrength | 0.1 | 按鱼沿线向外负载连续缩放的鱼竿磨损，写回同一装备实例；几何张力不能替代方向负载 |
 | 持竿最低杠杆倍率 | HeldRodMinimumLeverageMultiplier | 0.4 | 竿身偏线时保留的最低有效力量 |
 | 最大约束修正速度 | MaximumFishConstraintCorrectionSpeedCentimetersPerSecond | 160 cm/s | 鱼端修正及猫端牵引目标的安全上限 |
 | 背离鱼方向最低速度倍率 | MinimumCarrierAwaySpeedMultiplier | 0.15 | 满负载且鱼占优时玩家仍保留的最低后退比例 |
@@ -72,7 +72,7 @@
 **Rod（鱼竿）**：
 | 字段 | 含义 | 规格对应 |
 |---|---|---|
-| MaximumRodDurability | **本场鱼线耐久上限**（字段名为兼容资产保留；每次新会话重置，不会写坏鱼竿） | `StarterRodT1` 当前基线 150；其他档以正式资产为准 |
+| MaximumRodDurability | **鱼竿耐久上限**；新鱼竿或维修使用该上限，同一装备实例的剩余耐久跨场累计，归零即损坏；重新抛竿不恢复 | `StarterRodT1` 当前基线 150；其他档以正式资产为准 |
 | FishingStrength | 钓组承载强度（静态） | 25/60/130 档，判定①断线比较用 |
 | MaximumLineLengthCentimeters | 线长上限 cm | 放尽绷紧强制按拖判定 |
 | BaseDurabilityWearPerSecond / HighTensionWearMultiplier | 基础磨损/绷紧磨损倍率 | ≥0 / ≥1 |

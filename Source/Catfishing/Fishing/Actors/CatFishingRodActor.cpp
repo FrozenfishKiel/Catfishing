@@ -746,11 +746,11 @@ void ACatFishingRodActor::DispatchPresentationChanged(const FCatFishingRodPresen
 	// 放在分发路径而不是权威写口：服务器与每个客户端各自在"得知"这次变化的那一刻本地执行；
 	// bHidden 虽是复制属性，但 bActorEnableCollision 不是，只有本地各自执行才能保证两者一致。
 	// 判据用 Current 的绝对状态而非 Previous->Current 跃迁：中途加入的客户端首帧 Previous 是默认结构体，
-	// 跃迁判据会漏掉正处于死亡窗口里的竿。bDeployed 在竿的正常生命周期里恒为 true，故不会误伤。
-	if (Current.RodActorId.IsValid() && !Current.bDeployed)
+	// 跃迁判据会漏掉正处于死亡窗口里的竿；库存拒绝收回时也必须按恢复后的部署事实重新显示并开启碰撞。
+	if (Current.RodActorId.IsValid())
 	{
-		SetActorHiddenInGame(true);
-		SetActorEnableCollision(false);
+		SetActorHiddenInGame(!Current.bDeployed);
+		SetActorEnableCollision(Current.bDeployed);
 	}
 	// 先应用皮肤（视觉资源切换），再广播通用状态变化事件给蓝图做其余表现响应
 	BP_ApplyRodSkin(Current.RodSkinDefinitionId);

@@ -200,7 +200,7 @@ static TAutoConsoleVariable<int32> CVarCatFishingDebug(
 // 独立 CVar 保留手动关闭入口；`cat.Fishing.Debug 0` 不会隐藏本面板，开启本面板也不改变世界调试模式。
 static TAutoConsoleVariable<int32> CVarCatFishingStats(
 	TEXT("cat.Fishing.Stats"), 1,
-	TEXT("屏幕右上角钓鱼数值调试：1=显示（默认，当前鱼种、鱼体力/力量、竿或鱼线耐久/力量、猫体力/力量）；0=关闭。")
+	TEXT("屏幕右上角钓鱼数值调试：1=显示（默认，当前鱼种、鱼体力/力量、鱼竿耐久/力量、猫体力/力量）；0=关闭。")
 	TEXT("本开关与 cat.Fishing.Debug 相互独立。"),
 	ECVF_Default);
 
@@ -271,7 +271,7 @@ FString UCatFishingDebugSubsystem::FormatFishTypeLine(const FName FishDefinition
 }
 
 // 右上角数值面板：每一项都读取与权威玩法相同的公开事实/定义，不从表现位置反推资源。
-// 鱼和本场鱼线读取 Session 复制快照；猫读取本地 Character ASC；力量与上限按稳定 DefinitionId 查正式目录。
+// 鱼读取 Session 复制快照；鱼竿耐久读取同一装备实例在 Session 或 Equipment 中的镜像；猫读取本地 Character ASC。
 void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerController* Controller)
 {
 #if ENABLE_DRAW_DEBUG
@@ -323,28 +323,27 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 	{
 		RodDefinitionId = SessionSnapshot->RodActor->GetPresentationState().RodDefinitionId;
 	}
-	FString RodLine = TEXT("LINE  SessionDurability --  ROD Strength --");
+	FString RodLine = TEXT("ROD   Durability --  Strength --");
 	if (const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
 		RodDefinitionId))
 	{
-		double CurrentDurability = RodDefinition->MaximumRodDurability;
-		const bool bUsesSessionDurability = SessionSnapshot
-			&& (SessionSnapshot->Phase == ECatFishingPhase::HookedFight
-				|| SessionSnapshot->Phase == ECatFishingPhase::NearShore
-				|| SessionSnapshot->Phase == ECatFishingPhase::ExhaustedReel);
-		if (bUsesSessionDurability)
+		double CurrentDurability = 0.0;
+		bool bHasDurability = false;
+		if (SessionSnapshot && SessionSnapshot->RodActor)
 		{
 			CurrentDurability = SessionSnapshot->RodDurabilityRemaining;
+			bHasDurability = true;
 		}
 		else if (Loadout && Loadout->RodDefinitionId == RodDefinitionId)
 		{
 			CurrentDurability = Loadout->RodDurability;
+			bHasDurability = true;
 		}
-		RodLine = bUsesSessionDurability
-			? FString::Printf(TEXT("LINE  SessionDurability %.1f / %.1f  ROD Strength %.1f"),
+		RodLine = bHasDurability
+			? FString::Printf(TEXT("ROD   Durability %.1f / %.1f  Strength %.1f"),
 				CurrentDurability, RodDefinition->MaximumRodDurability, RodDefinition->FishingStrength)
-			: FString::Printf(TEXT("ROD   EquipmentDurability %.1f / %.1f  Strength %.1f  LINE --"),
-				CurrentDurability, RodDefinition->MaximumRodDurability, RodDefinition->FishingStrength);
+			: FString::Printf(TEXT("ROD   Durability -- / %.1f  Strength %.1f"),
+				RodDefinition->MaximumRodDurability, RodDefinition->FishingStrength);
 	}
 
 	FString CatLine = TEXT("CAT   Stamina --  Strength --");
@@ -587,7 +586,7 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 	ACatFishingSession* Session = UCatFishingViewBridge::FindFishingSessionForPlayerState(World, Controller->PlayerState);
 	APawn* Pawn = Controller->GetPawn();
 
-	// 装备/库存常驻显示：世界 Debug 只保留窝料操作提示。竿/线耐久已经迁到独立的右上角 Stats 面板，
+	// 装备/库存常驻显示：世界 Debug 只保留窝料操作提示。鱼竿耐久已经迁到独立的右上角 Stats 面板，
 	// 避免 cat.Fishing.Debug 打开后出现两套不同位置、不同精度的数值入口。
 	if (const ACatCharacter* Character = Cast<ACatCharacter>(Pawn))
 	{

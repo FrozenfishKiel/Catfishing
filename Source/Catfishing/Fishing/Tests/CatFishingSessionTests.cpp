@@ -238,11 +238,8 @@ bool FCatFishingSessionLineBreakKeepsRodOperableTest::RunTest(const FString& Par
 	Session->Snapshot.bSlacking = true;
 	Session->FightRunner = NewObject<UCatFishingFightRunner>(Session);
 
-	FCatFightStepResult Step;
-	Step.Outcome = ECatFightStepOutcome::LineBroken;
 	AddExpectedErrorPlain(TEXT("Event=fishing_session_terminated"), EAutomationExpectedErrorFlags::Contains, 1);
-	Session->HandleFightRunnerStepFromAuthority(Step, 50.0,
-		ECatFishMotionIntent::StrugglingOutward, 0.0);
+	Session->FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::LineBroken, TEXT("strength overload"));
 
 	TestEqual(TEXT("Line break terminates only the current session"),
 		Session->Snapshot.Phase, ECatFishingPhase::Terminated);
@@ -357,17 +354,17 @@ bool FCatFishingExhaustedPickupHandoffTest::RunTest(const FString& Parameters)
 	Step.bSucceeded = true;
 	const FVector LandingPosition(250.0, 0.0, 0.0);
 	Encounter->SetActorLocation(LandingPosition);
-	Session->HandleFightRunnerStepFromAuthority(Step, 0.0, ECatFishMotionIntent::AutoHauling, 100.0);
+	Session->HandleFightRunnerStepFromAuthority(Step, 0.0, ECatFishMotionIntent::AutoHauling);
 	TestFalse(TEXT("water fish cannot become pickup before dry ground is confirmed"), Session->IsTerminal());
 	Session->FightRunner->bFishBeached = true;
 	const double Reach = GetDefault<UCatWorldItemSettings>()->LandingCompletionDistanceToRodCentimeters;
 	Encounter->SetActorLocation(LandingPosition + FVector(Reach + 10.0, 0.0, 0.0));
-	Session->HandleFightRunnerStepFromAuthority(Step, 0.0, ECatFishMotionIntent::AutoHauling, 100.0);
+	Session->HandleFightRunnerStepFromAuthority(Step, 0.0, ECatFishMotionIntent::AutoHauling);
 	TestFalse(TEXT("grounded fish outside tip reach keeps being hauled"), Session->IsTerminal());
 	Encounter->SetActorLocation(LandingPosition);
 	TestTrue(TEXT("landing point is intentionally outside grip reach"),
 		FVector::Dist2D(LandingPosition, Rod->GetGripWorldTransform().GetLocation()) > Reach);
-	Session->HandleFightRunnerStepFromAuthority(Step, 0.0, ECatFishMotionIntent::AutoHauling, 100.0);
+	Session->HandleFightRunnerStepFromAuthority(Step, 0.0, ECatFishMotionIntent::AutoHauling);
 	TestEqual(TEXT("grounded fish at tip resolves as Landed even after releasing reel"),
 		Session->GetSnapshot().Outcome, ECatFishingOutcome::Landed);
 	TestTrue(TEXT("handoff hides old encounter"), Encounter->IsHidden());

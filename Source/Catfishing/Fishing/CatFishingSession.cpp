@@ -763,6 +763,13 @@ bool ACatFishingSession::PrepareSessionFromAuthority(const FCatFishingAttemptSna
 	// Fish identity remains deliberately empty until a valid left-click commits the hook inside TrueBiteWindow.
 	FisherCharacter = InFisherCharacter;
 	CastEquipment = InFisherCharacter->GetEquipmentComponent(); // 冻结原始抛竿者装备：饵料/磨损结算口径不随接力改变。
+	bool bRodBroken = false;
+	if (!CastEquipment.IsValid() || !CastEquipment->GetFishingRodDurability(
+		Attempt.FishingSessionId, Snapshot.RodDurabilityRemaining, bRodBroken) || bRodBroken)
+	{
+		return false;
+	}
+	RodWearSequence = 0;
 	FisherStableNetId = StableNetId;
 	FightParticipantIds.Add(StableNetId);
 	FightParticipantCharacters.Add(StableNetId, InFisherCharacter);
@@ -1193,8 +1200,17 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		FightBalance->MaximumFishConstraintCorrectionSpeedCentimetersPerSecond;
 	Config.MinimumCarrierAwaySpeedMultiplier = FightBalance->MinimumCarrierAwaySpeedMultiplier;
 	Config.MaximumLineLengthCentimeters = RodDefinition->MaximumLineLengthCentimeters;
-	// 当前资产字段仍叫 MaximumRodDurability，但玩法语义是“本场鱼线耐久”：每次新会话重置，不损坏装备鱼竿。
-	Config.RodDurability = RodDefinition->MaximumRodDurability;
+	// 只读取本场绑定的同一根鱼竿实例；定义上限仅用于新购和维修，开场不能补耐久。
+	bool bRodBroken = false;
+	if (!Equipment->GetFishingRodDurability(Snapshot.FishingSessionId, Config.RodDurability, bRodBroken)
+		|| bRodBroken || Config.RodDurability <= 0.0)
+	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_rod_durability_rejected SessionId=%s RodItemInstanceId=%s Reason=UnavailableOrBroken %s"),
+			*Snapshot.FishingSessionId.ToString(), *AttemptSnapshot.RodItemInstanceId.ToString(),
+			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
+		return false;
+	}
 	Config.StruggleHoldRodWearPerSecond = RodDefinition->BaseDurabilityWearPerSecond;
 	Config.TautRodWearMultiplier = FMath::Max(1.0, RodDefinition->HighTensionWearMultiplier);
 	Config.EscapeSlackCentimeters = FightBalance->EscapeSlackCentimeters;
@@ -1329,7 +1345,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		return false;
 	}
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_fight_started SessionId=%s FightBalanceId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryStrength=%.2f InitialHelperStrength=%.2f InitialCombinedStrength=%.2f CatSystemMassKg=%.2f FishMassKg=%.2f MassMode=StrengthDerived FishStrengthBase=%.2f FishStrengthEffective=%.2f StrengthPerKg=%.2f AccelerationPerStrength=%.2f DriveResponseSeconds=%.2f CatStamina=%.2f FishStamina=%.2f LineStrength=%.2f LineDurability=%.2f RodPhysicsLengthCm=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s CatWorkCost=%.5f FishWorkCost=%.5f IsometricMultiplier=%.3f BaseDrainMultiplier=%.3f StruggleDrainMultiplier=%.3f FishCalmSpeedCmPerSec=%.2f FishStruggleSpeedCmPerSec=%.2f FixedStepSeconds=%.3f MinimumLeverage=%.3f MaximumEndpointCorrectionSpeed=%.2f MinimumCarrierAwaySpeedMultiplier=%.3f"),
+		TEXT("Event=fishing_fight_started SessionId=%s FightBalanceId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryStrength=%.2f InitialHelperStrength=%.2f InitialCombinedStrength=%.2f CatSystemMassKg=%.2f FishMassKg=%.2f MassMode=StrengthDerived FishStrengthBase=%.2f FishStrengthEffective=%.2f StrengthPerKg=%.2f AccelerationPerStrength=%.2f DriveResponseSeconds=%.2f CatStamina=%.2f FishStamina=%.2f LineStrength=%.2f RodDurability=%.2f RodPhysicsLengthCm=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s CatWorkCost=%.5f FishWorkCost=%.5f IsometricMultiplier=%.3f BaseDrainMultiplier=%.3f StruggleDrainMultiplier=%.3f FishCalmSpeedCmPerSec=%.2f FishStruggleSpeedCmPerSec=%.2f FixedStepSeconds=%.3f MinimumLeverage=%.3f MaximumEndpointCorrectionSpeed=%.2f MinimumCarrierAwaySpeedMultiplier=%.3f"),
 		*Snapshot.FishingSessionId.ToString(),
 		*FightBalance->BalanceDefinitionId.ToString(),
 		*FishDefinition->FishDefinitionId.ToString(),
@@ -1408,12 +1424,63 @@ bool ACatFishingSession::IsFightRunnerRunning() const
 
 // FightRunner 每完成一步固定步长模拟就回调一次本函数：把模拟结果写回公开快照，并根据步结果决定是否收尾搏斗。
 void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepResult& Step,
-	const double FishStaminaRemaining, const ECatFishMotionIntent MotionIntent, const double RodDurabilityRemaining)
+	const double FishStaminaRemaining, const ECatFishMotionIntent MotionIntent)
 {
 	if (!HasAuthority() || IsTerminal() || (Snapshot.Phase != ECatFishingPhase::HookedFight
 		&& Snapshot.Phase != ECatFishingPhase::ExhaustedReel) || !FightRunner) return;
 	Snapshot.FishFightStaminaRemaining = FMath::Max(0.0, FishStaminaRemaining); // 钳制非负，防止浮点误差产生负值。
-	Snapshot.RodDurabilityRemaining = FMath::Max(0.0, RodDurabilityRemaining);
+	// 磨损先写回绑定实例，公开快照只镜像写回结果；取消、切线和换人均不能退还已消耗耐久。
+	bool bRodBroken = false;
+	UCatEquipmentComponent* Equipment = CastEquipment.Get();
+	if (Step.RodWearDelta > 0.0)
+	{
+		const FCatFishingUseOperationResult Wear = Equipment
+			? Equipment->ApplyFishingRodWear(Snapshot.FishingSessionId, RodWearSequence + 1, Step.AbsoluteRodWear)
+			: FCatFishingUseOperationResult{};
+		if (!Wear.bApplied)
+		{
+			UE_LOG(LogCatFishing, Error,
+				TEXT("Event=fishing_rod_wear_commit_failed SessionId=%s RodItemInstanceId=%s WearSequence=%lld Error=%s %s"),
+				*Snapshot.FishingSessionId.ToString(), *AttemptSnapshot.RodItemInstanceId.ToString(), RodWearSequence + 1,
+				*UEnum::GetValueAsString(Wear.Error),
+				*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
+			FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Rod wear commit failed"));
+			return;
+		}
+		RodWearSequence = Wear.WearSequence;
+		Snapshot.RodDurabilityRemaining = Wear.RemainingRodDurability;
+		bRodBroken = Wear.bRodBroken;
+	}
+	else if (!Equipment || !Equipment->GetFishingRodDurability(
+		Snapshot.FishingSessionId, Snapshot.RodDurabilityRemaining, bRodBroken))
+	{
+		UE_LOG(LogCatFishing, Error,
+			TEXT("Event=fishing_rod_durability_rejected SessionId=%s RodItemInstanceId=%s Reason=BoundInstanceUnavailable %s"),
+			*Snapshot.FishingSessionId.ToString(), *AttemptSnapshot.RodItemInstanceId.ToString(),
+			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Bound rod unavailable"));
+		return;
+	}
+	if (bRodBroken)
+	{
+		ACatFishingRodActor* Rod = Snapshot.RodActor;
+		if (Rod && !Rod->SetBrokenFromAuthority(true, Rod->GetPresentationState().RodActorRevision))
+		{
+			UE_LOG(LogCatFishing, Error, TEXT("Event=fishing_rod_broken_projection_failed SessionId=%s RodItemInstanceId=%s"),
+				*Snapshot.FishingSessionId.ToString(), *AttemptSnapshot.RodItemInstanceId.ToString());
+		}
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_rod_broken SessionId=%s RodItemInstanceId=%s Cause=DurabilityDepleted RodDurability=%.3f AbsoluteRodWear=%.3f %s"),
+			*Snapshot.FishingSessionId.ToString(), *AttemptSnapshot.RodItemInstanceId.ToString(),
+			Snapshot.RodDurabilityRemaining, Step.AbsoluteRodWear,
+			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::RodBroken, TEXT("Rod durability depleted"));
+		if (UCatFishingService* Service = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
+		{
+			Service->ReleaseRodOperators(Rod);
+		}
+		return;
+	}
 	// 钩在鱼嘴里：搏斗期间钩 Actor 跟随鱼的权威位置（含近岸/贴岸吸附后的落点），复制到所有端。
 	if (Snapshot.HookActor && Snapshot.FishEncounterActor)
 	{
@@ -1456,15 +1523,12 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 		case ECatFightLineBreakCause::StrengthOverload:
 			LineBreakCause = TEXT("StrengthOverload");
 			break;
-		case ECatFightLineBreakCause::DurabilityDepleted:
-			LineBreakCause = TEXT("DurabilityDepleted");
-			break;
 		default:
 			break;
 		}
 		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_line_broken SessionId=%s FishDefinition=%s Cause=%s RemainingLineDurability=%.2f "
-				"AccumulatedLineWear=%.2f LastLineWearDelta=%.3f Tension=%.3f LineLoad=%.3f Alignment=%.3f StrongConfrontation=%s "
+			TEXT("Event=fishing_line_broken SessionId=%s FishDefinition=%s Cause=%s RodDurability=%.2f "
+				"AbsoluteRodWear=%.2f LastRodWearDelta=%.3f Tension=%.3f LineLoad=%.3f Alignment=%.3f StrongConfrontation=%s "
 				"RodLeverage=%.3f CarrierMovementAlpha=%.3f CarrierPullAcceleration=%.2f RodPose=%s "
 				"FishLocation=%s Rod=%s RodTip=%s Hook=%s %s"),
 			*Snapshot.FishingSessionId.ToString(),
@@ -1472,7 +1536,7 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 			LineBreakCause,
 			Snapshot.RodDurabilityRemaining,
 			Step.AbsoluteRodWear,
-			Step.LineWearDelta,
+			Step.RodWearDelta,
 			Step.NormalizedTension,
 			Step.NormalizedLineLoad,
 			Step.FishLineAlignment,
@@ -1572,7 +1636,7 @@ bool ACatFishingSession::CommitCatchEquipmentFromAuthority()
 		return false;
 	}
 	const FCatFishingUseOperationResult Bait = Equipment->CommitFishingBaitDeferred(Snapshot.FishingSessionId);
-	// Runner 中的负载耐久代表本场鱼线，新一轮钓鱼会重置；这里不提交鱼竿永久磨损。
+	// 每步磨损已经写回同一鱼竿实例；捕获仅收口饵料，不能再重复扣耐久。
 	return Bait.bApplied || Bait.Error == ECatDomainCommandError::AlreadyResolved;
 }
 
@@ -1945,7 +2009,7 @@ FCatFishingCommandResult ACatFishingSession::CutLineFromAuthority(AController* R
 	}
 	else
 	{
-		const double LineDurabilityBefore = Snapshot.RodDurabilityRemaining;
+		const double RodDurabilityBefore = Snapshot.RodDurabilityRemaining;
 		const double NormalizedLoadBefore = Snapshot.NormalizedLineLoad;
 		// 切线直接抢占终态写口；Finalize 会先写入 LineCut，再停止 Runner/StateTree，避免 Interrupted
 		// 同步回调在同一帧抢先写成另一种终态，保证“第一个终态提交者获胜”的结果可重放。
@@ -1955,14 +2019,14 @@ FCatFishingCommandResult ACatFishingSession::CutLineFromAuthority(AController* R
 		Result.Error = ECatFishingCommandError::None;
 		UE_LOG(LogCatFishing, Display,
 			TEXT("Event=fishing_line_cut_committed SessionId=%s RequestId=%s RodActorId=%s PhaseBefore=%s "
-				"Revision=%lld LineDurabilityBefore=%.3f LineDurabilityAfter=%.3f NormalizedLoadBefore=%.3f %s"),
+				"Revision=%lld RodDurabilityBefore=%.3f RodDurabilityAfter=%.3f NormalizedLoadBefore=%.3f %s"),
 			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 			Snapshot.RodActor
 				? *Snapshot.RodActor->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens)
 				: TEXT("None"),
 			*UEnum::GetValueAsString(PhaseBefore), Snapshot.Revision,
-			LineDurabilityBefore, Snapshot.RodDurabilityRemaining, NormalizedLoadBefore,
+			RodDurabilityBefore, Snapshot.RodDurabilityRemaining, NormalizedLoadBefore,
 			*CatLogContext::BuildControllerFields(RequestingController));
 	}
 	Result.Revision = Snapshot.Revision;
@@ -2178,6 +2242,11 @@ void ACatFishingSession::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	}
 	if (HasAuthority())
 	{
+		if (UCatEquipmentComponent* Equipment = CastEquipment.Get(); Equipment
+			&& Equipment->IsFishingUseActive(Snapshot.FishingSessionId))
+		{
+			Equipment->ReleaseFishingUse(Snapshot.FishingSessionId);
+		}
 		for (const TWeakObjectPtr<ACatCharacter>& WeakParticipant : StaminaParticipantsTouched)
 		{
 			if (ACatCharacter* Participant = WeakParticipant.Get())
@@ -2207,6 +2276,20 @@ FString ACatFishingSession::ResolveStableNetId(const AController* Controller)
 void ACatFishingSession::OnRep_Snapshot()
 {
 	NotifySnapshotChanged();
+	const UWorld* World = GetWorld();
+	const int32 RodDurabilityBand = FMath::FloorToInt(Snapshot.RodDurabilityRemaining / 5.0);
+	if (World && Snapshot.RodActor && (RodDurabilityBand != LastReceivedRodDurabilityBand
+		|| (IsTerminal() && !bReceivedRodTerminal)))
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_rod_durability_received SessionId=%s RodItemInstanceId=%s RodDurability=%.3f Phase=%s Outcome=%s World=%s NetMode=%d Authority=%s LocalRole=%d Result=Replicated"),
+			*Snapshot.FishingSessionId.ToString(), *Snapshot.RodActor->GetPresentationState().ItemInstanceId.ToString(),
+			Snapshot.RodDurabilityRemaining, *UEnum::GetValueAsString(Snapshot.Phase), *UEnum::GetValueAsString(Snapshot.Outcome),
+			*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
+			static_cast<int32>(GetLocalRole()));
+		LastReceivedRodDurabilityBand = RodDurabilityBand;
+		bReceivedRodTerminal = IsTerminal();
+	}
 }
 
 void ACatFishingSession::NotifySnapshotChanged()
