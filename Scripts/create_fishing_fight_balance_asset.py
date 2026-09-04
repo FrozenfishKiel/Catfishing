@@ -25,6 +25,9 @@ VALUES = {
     "reel_speed_centimeters_per_second": 80.0,
     "exhausted_cat_escape_speed_multiplier": 2.0,
     "cat_stamina_cost_per_strength_centimeter": 0.002,
+    "cat_rod_stamina_cost_per_strength_radian": 0.03,
+    "cat_unloaded_work_multiplier": 0.15,
+    "cat_support_stamina_per_second": 2.0,
     "fish_stamina_cost_per_strength_centimeter": 0.002,
     "cat_movement_stamina_multiplier": 1.0,
     "cat_reel_stamina_multiplier": 1.0,
@@ -103,8 +106,11 @@ def main():
         f"AccelerationPerStrength={asset.get_editor_property('acceleration_per_strength'):.3f} "
         f"ExhaustedCatEscapeSpeedMultiplier={asset.get_editor_property('exhausted_cat_escape_speed_multiplier'):.3f} "
         f"CatCost={asset.get_editor_property('cat_stamina_cost_per_strength_centimeter'):.6f} "
+        f"CatRodWorkCostPerRadian={asset.get_editor_property('cat_rod_stamina_cost_per_strength_radian'):.6f} "
+        f"CatUnloadedWorkMultiplier={asset.get_editor_property('cat_unloaded_work_multiplier'):.3f} "
+        f"CatSupportPerSecond={asset.get_editor_property('cat_support_stamina_per_second'):.3f} "
         f"FishCost={asset.get_editor_property('fish_stamina_cost_per_strength_centimeter'):.6f} "
-        f"IsometricMultiplier={asset.get_editor_property('isometric_effort_multiplier'):.3f} "
+        f"FishIsometricMultiplier={asset.get_editor_property('isometric_effort_multiplier'):.3f} "
         f"CatMovementMultiplier={asset.get_editor_property('cat_movement_stamina_multiplier'):.3f} "
         f"CatReelMultiplier={asset.get_editor_property('cat_reel_stamina_multiplier'):.3f} "
         f"CatRodMultiplier={asset.get_editor_property('cat_rod_stamina_multiplier'):.3f} "

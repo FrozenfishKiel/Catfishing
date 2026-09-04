@@ -55,10 +55,25 @@ public:
 		meta = (DisplayName = "猫力竭后鱼外冲速度倍率", ClampMin = "1.0"))
 	double ExhaustedCatEscapeSpeedMultiplier = 2.0;
 
-	/** 猫每 1 点标准努力强度、每 1 cm 有效努力消耗的体力；标准努力强度取 StrengthPerKilogram。 */
+	/** 猫移动/收线每标准力量·cm 实际正功单价；受阻支撑单独按时间收费。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "猫做功体力消耗系数", ClampMin = "0.0"))
 	double CatStaminaCostPerStrengthCentimeter = -1.0;
+
+	/** 转杆实际正功的独立单价；按标准转矩乘归一化转矩加权的实际转角，不借用线性距离单价。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
+		meta = (DisplayName = "猫转杆每标准转矩弧度体力系数", ClampMin = "0.0"))
+	double CatRodStaminaCostPerStrengthRadian = 0.03;
+
+	/** 实际动作无负载时的基础成本倍率；微调较便宜，叠加负载部分仍可独立调节。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
+		meta = (DisplayName = "猫无负载动作成本倍率", ClampMin = "0.0"))
+	double CatUnloadedWorkMultiplier = 0.15;
+
+	/** 满用力/满负载每秒支撑成本，按用力比例平方缩放；各操作共享的支撑只收一次。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
+		meta = (DisplayName = "猫满用力每秒支撑耗体", ClampMin = "0.0"))
+	double CatSupportStaminaPerSecond = 2.0;
 
 	/** 鱼每 1 点标准努力强度、每 1 cm 有效对抗努力的体力价格；再乘对抗负载，自由游动不耗体。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
@@ -70,7 +85,7 @@ public:
 		meta = (DisplayName = "猫移动体力倍率", ClampMin = "0.0"))
 	double CatMovementStaminaMultiplier = 1.0;
 
-	/** 猫主动收线形成的努力体力倍率；受阻时仍按僵持努力结算。 */
+	/** 猫主动收线实际做功的体力倍率；受阻费用由共享持竿支撑承担。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "猫收线体力倍率", ClampMin = "0.0"))
 	double CatReelStaminaMultiplier = 1.0;
@@ -80,12 +95,12 @@ public:
 		meta = (DisplayName = "猫转杆体力倍率", ClampMin = "0.0"))
 	double CatRodStaminaMultiplier = 1.0;
 
-	/** 猫持续持竿顶住鱼的努力体力倍率；与主动操作分别结算。 */
+	/** 猫沿线持续支撑体力倍率；与转杆支撑取较高者，避免同一负担重复计费。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "猫持竿体力倍率", ClampMin = "0.0"))
 	double CatHoldStaminaMultiplier = 1.0;
 
-	/** 猫基础努力体力乘以 (1 + 归一化负载 × 本参数)；负载范围为 0..1。 */
+	/** 猫实际做功价格乘以 (无负载动作倍率 + 归一化负载 × 本参数)，不影响支撑计时。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "猫负载体力倍率", ClampMin = "0.0"))
 	double CatLoadStaminaMultiplier = 1.0;
@@ -95,9 +110,9 @@ public:
 		meta = (DisplayName = "鱼负载体力倍率", ClampMin = "0.0"))
 	double FishLoadStaminaMultiplier = 1.0;
 
-	/** 未形成实际位移的意图距离折算系数；大于 0 时僵持仍消耗体力。 */
+	/** 仅鱼使用：未完成的对抗意图距离折算系数；猫支撑已独立按时间计费。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DisplayName = "僵持努力折算倍率", ClampMin = "0.0"))
+		meta = (DisplayName = "鱼受阻努力折算倍率", ClampMin = "0.0"))
 	double IsometricEffortMultiplier = -1.0;
 
 	/** 正常右键时猫每秒恢复的搏斗体力，不受张力或其他操作限制；强制力竭拖拽除外。 */

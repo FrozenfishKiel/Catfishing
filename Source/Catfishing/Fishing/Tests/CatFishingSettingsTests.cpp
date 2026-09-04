@@ -127,6 +127,21 @@ bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
 	Balance->CatStaminaCostPerStrengthCentimeter = 0.003;
 	Balance->FishStaminaCostPerStrengthCentimeter = 0.001;
 	TestTrue(TEXT("猫鱼可以独立配置不同体力价格"), Balance->IsRuntimeDefinitionReady());
+	TestEqual(TEXT("旧资产通过新字段默认值获得弧度计价"), Balance->CatRodStaminaCostPerStrengthRadian, 0.03);
+	TestEqual(TEXT("旧资产通过新字段默认值获得时间支撑"), Balance->CatSupportStaminaPerSecond, 2.0);
+	TestEqual(TEXT("旧资产默认轻调杆费率"), Balance->CatUnloadedWorkMultiplier, 0.15);
+	for (double* Field : {&Balance->CatRodStaminaCostPerStrengthRadian, &Balance->CatSupportStaminaPerSecond, &Balance->CatUnloadedWorkMultiplier})
+	{
+		const double Original = *Field;
+		for (const double Invalid : {-1.0, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()})
+		{
+			*Field = Invalid;
+			TestFalse(TEXT("非法猫做功/支撑参数拒绝运行"), Balance->IsRuntimeDefinitionReady());
+		}
+		*Field = 0.0;
+		TestTrue(TEXT("各项新费用可以独立关闭"), Balance->IsRuntimeDefinitionReady());
+		*Field = Original;
+	}
 
 	struct FStaminaMultiplierCase
 	{

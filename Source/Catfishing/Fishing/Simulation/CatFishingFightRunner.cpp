@@ -884,8 +884,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 	}
 	const FCatFishingRodRotationEffortSnapshot RotationEffort = RotationEffortSampler.Consume(
 		Rod->GetAuthoritativeRotationEffortSnapshot(), Config.FixedStepSeconds);
-	RodConstraint.CatRodIntentArcCentimeters = RotationEffort.IntentArcCentimeters;
-	RodConstraint.CatRodActualArcCentimeters = RotationEffort.ActualArcCentimeters;
+	RodConstraint.CatRodExertionSquaredSeconds = RotationEffort.ExertionSquaredSeconds;
+	RodConstraint.CatRodPositiveWorkRadians = RotationEffort.PositiveWorkRadians;
 	// 纯模拟器把鱼游向、竿向和持竿者移动合成为有效力量，再得到双方体力、线长、负载和建议位置。
 	FCatFightStepResult Step = FCatFishingFightSimulator::Step(
 		Config, State, RodConstraint, DesiredFishDirection);
@@ -1089,8 +1089,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"MotionIntent=%s CatIntentCm=%.3f CatActualCm=%.3f FishIntentCm=%.3f FishActualCm=%.3f "
 				"FishWorldStep2DCm=%.3f FishWorldStep3DCm=%.3f FishWorldDeltaZCm=%.3f "
 				"ReelRequestedCm=%.3f ReelActualCm=%.3f ReelMode=%s CatAction=%s AbsoluteRodWear=%.3f RodWearDelta=%.3f "
-				"MovementDrain=%.4f ReelDrain=%.4f RodDrain=%.4f HoldDrain=%.4f "
-				"MovementIntentCm=%.3f MovementActualCm=%.3f RodIntentArcCm=%.3f RodActualArcCm=%.3f HoldIntentCm=%.3f "
+				"MovementDrain=%.4f ReelDrain=%.4f RodDrain=%.4f HoldDrain=%.4f RodWorkDrain=%.4f RodSupportExtraDrain=%.4f CatModel=ActualWorkAndTimedSupport "
+				"MovementIntentCm=%.3f MovementActualCm=%.3f RodExertionSquaredSeconds=%.3f RodPositiveWorkRadians=%.3f HoldIntentCm=%.3f "
 				"CatEffortLoad=%.3f RodEffortLoad=%.3f FishEffortLoad=%.3f MovementIntentSource=CharacterMovementAcceleration "
 				"FishExhausted=%s World=%s PlayerState=%s NetMode=%d Authority=true LocalRole=%d"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
@@ -1127,8 +1127,9 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.AbsoluteRodWear,
 			Step.RodWearDelta,
 			Step.CatMovementStaminaDrain, Step.CatReelStaminaDrain, Step.CatRodStaminaDrain, Step.CatHoldStaminaDrain,
+			Step.CatRodWorkStaminaDrain, Step.CatRodSupportStaminaDrain,
 			Step.CatMovementIntentCentimeters, Step.CatMovementActualCentimeters,
-			Step.CatRodIntentArcCentimeters, Step.CatRodActualArcCentimeters, Step.CatHoldIntentCentimeters,
+			Step.CatRodExertionSquaredSeconds, Step.CatRodPositiveWorkRadians, Step.CatHoldIntentCentimeters,
 			Step.CatNormalizedEffortLoad, Step.CatRodNormalizedEffortLoad, Step.FishNormalizedEffortLoad,
 			State.bFishExhausted ? TEXT("true") : TEXT("false"),
 			*GetNameSafe(World), *GetNameSafe(FindPrimaryParticipant() ? FindPrimaryParticipant()->PlayerState.Get() : nullptr),

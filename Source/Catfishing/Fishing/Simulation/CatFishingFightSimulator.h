@@ -54,8 +54,14 @@ struct CATFISHING_API FCatFightSimulationConfig
 	/** 转矩模型的玩法杆长；来自鱼竿定义，不读取 Mesh 或锚点间距。 */
 	double RodPhysicsLengthCentimeters = 200.0;
 	double CatStaminaMaximum = 0.0;
-	/** 双方体力都按 StrengthPerKilogram 这一标准努力强度与沿线有效距离结算，不再乘各自绝对力量。 */
+	/** 猫线性正功使用标准力量与已完成主动距离；受阻支撑独立按时间收费。 */
 	double CatStaminaCostPerStrengthCentimeter = 0.002;
+	/** 转杆使用弧度正功单价，不将最大转速折算为一米弧长。 */
+	double CatRodStaminaCostPerStrengthRadian = 0.03;
+	/** 无负载实际动作的基础价格；负载部分继续由 CatLoadStaminaMultiplier 调节。 */
+	double CatUnloadedWorkMultiplier = 0.15;
+	/** 满负载/满用力的每秒支撑费用，按用力比例平方缩放。 */
+	double CatSupportStaminaPerSecond = 2.0;
 	/** 鱼仅结算有对抗负载的努力，自由游动不产生基础费用。 */
 	double FishStaminaCostPerStrengthCentimeter = 0.002;
 	double IsometricEffortMultiplier = 1.0;
@@ -100,9 +106,9 @@ struct CATFISHING_API FCatFightRodConstraintInput
 	FVector RodTipVelocityCentimetersPerSecond = FVector::ZeroVector;
 	FVector CarrierVelocityCentimetersPerSecond = FVector::ZeroVector;
 	FVector CarrierDesiredVelocityCentimetersPerSecond = FVector::ZeroVector;
-	/** 从权威转矩积分采集本步增量，使用一米参考力臂；不含身体平移或鱼被动拖杆。 */
-	double CatRodIntentArcCentimeters = 0.0;
-	double CatRodActualArcCentimeters = 0.0;
+	/** 从权威转矩积分采集本步用力平方时间和真实正功转角；不含身体平移。 */
+	double CatRodExertionSquaredSeconds = 0.0;
+	double CatRodPositiveWorkRadians = 0.0;
 	bool bRodHeld = false;
 };
 
@@ -133,11 +139,14 @@ struct CATFISHING_API FCatFightStepResult
 	double CatMovementStaminaDrain = 0.0;
 	double CatReelStaminaDrain = 0.0;
 	double CatRodStaminaDrain = 0.0;
+	double CatRodWorkStaminaDrain = 0.0;
+	/** 超出共享持竿支撑的主位转杆支撑费用；同一负载不重复收取。 */
+	double CatRodSupportStaminaDrain = 0.0;
 	double CatHoldStaminaDrain = 0.0;
 	double CatMovementIntentCentimeters = 0.0;
 	double CatMovementActualCentimeters = 0.0;
-	double CatRodIntentArcCentimeters = 0.0;
-	double CatRodActualArcCentimeters = 0.0;
+	double CatRodExertionSquaredSeconds = 0.0;
+	double CatRodPositiveWorkRadians = 0.0;
 	double CatHoldIntentCentimeters = 0.0;
 	double CatNormalizedEffortLoad = 0.0;
 	double CatRodNormalizedEffortLoad = 0.0;

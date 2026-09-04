@@ -151,7 +151,7 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	Runner->State.LineLengthCentimeters = Runner->Config.MaximumLineLengthCentimeters;
 	Runner->State.FishWorldPosition.X = Runner->State.LineLengthCentimeters;
 	Constraint.CarrierDesiredVelocityCentimetersPerSecond = FVector(-100.0, 0.0, 0.0);
-	Constraint.CatRodIntentArcCentimeters = 4.0;
+	Constraint.CatRodExertionSquaredSeconds = 0.04;
 	TestTrue(TEXT("左键已按住时右键仍被接受"), Runner->SetSlacking(PrimaryPlayer, 1, true));
 	TestEqual(TEXT("左右键同时按住优先右键"), Runner->State.CatAction, ECatFightCatAction::Slack);
 	TestTrue(TEXT("右键期间左键再次按下被记录"), Runner->SetReeling(PrimaryPlayer, 2, true));
@@ -172,7 +172,7 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	const auto Resumed = Simulate();
 	TestTrue(TEXT("右键释放后双方恢复对抗耗体"), Resumed.bSucceeded && Resumed.CatStaminaDrain > 0.0 && Resumed.FishStaminaDrain > 0.0);
 	Constraint.CarrierDesiredVelocityCentimetersPerSecond = FVector::ZeroVector;
-	Constraint.CatRodIntentArcCentimeters = 0.0;
+	Constraint.CatRodExertionSquaredSeconds = 0.0;
 
 	// 固定步在能力扣款之后重新读取主猫ASC，再决定是否进入持续外冲。
 	SetStamina(0.0f, 0.0f);

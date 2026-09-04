@@ -579,8 +579,8 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 		RotationInput.DeltaSeconds = DeltaSeconds;
 		RotationStep = FCatFishingRodResistanceModel::StepRotation(RotationInput);
 		if (!RotationStep.bSucceeded) return false;
-		AuthoritativeRotationEffort.IntentArcCentimeters += RotationStep.CatIntentArcCentimeters;
-		AuthoritativeRotationEffort.ActualArcCentimeters += RotationStep.CatActualArcCentimeters;
+		AuthoritativeRotationEffort.ExertionSquaredSeconds += RotationStep.CatExertionSquaredSeconds;
+		AuthoritativeRotationEffort.PositiveWorkRadians += RotationStep.CatPositiveWorkRadians;
 		AuthoritativeRotationEffort.IntegratedSeconds += RotationStep.IntegratedSeconds;
 		AuthoritativeHeldAimRotation = RotationStep.ActualAim;
 		SmoothedRodFishPullStrengthMeters = RotationStep.SmoothedFishPullStrengthMeters;
@@ -613,7 +613,7 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 				"RequestedPitch=%.2f ActualPitch=%.2f AngularSpeed=%.3f NetTorque=%s "
 				"MaximumFishTorque=%.3f CatTorqueCapacity=%.3f TorqueBalanced=%s "
 				"PullAxis=%s AppliedFishPull=%s FishPullSmoothingSeconds=%.3f "
-				"RotationEffortEpoch=%llu RotationIntentArcCm=%.3f RotationActualArcCm=%.3f RotationIntegratedSeconds=%.3f "
+				"RotationEffortEpoch=%llu RotationExertionSquaredSeconds=%.3f RotationPositiveWorkRadians=%.3f RotationIntegratedSeconds=%.3f "
 				"HolderPlayerId=%d Holder=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
 			*PresentationState.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
 			RequestedAimRotation.Yaw, AimRotation.Yaw, RequestedAimRotation.Pitch, AimRotation.Pitch,
@@ -622,8 +622,8 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 			CarrierConstraintState.CatTorqueCapacityStrengthMeters,
 			bTorqueBalanced ? TEXT("true") : TEXT("false"), *FVector(CarrierConstraintState.RodPullAxis).ToCompactString(),
 			*SmoothedRodFishPullStrengthMeters.ToCompactString(), Settings->HeldRodFishPullSmoothingSeconds,
-			AuthoritativeRotationEffort.Epoch, AuthoritativeRotationEffort.IntentArcCentimeters,
-			AuthoritativeRotationEffort.ActualArcCentimeters, AuthoritativeRotationEffort.IntegratedSeconds,
+			AuthoritativeRotationEffort.Epoch, AuthoritativeRotationEffort.ExertionSquaredSeconds,
+			AuthoritativeRotationEffort.PositiveWorkRadians, AuthoritativeRotationEffort.IntegratedSeconds,
 			PresentationState.HolderPlayerState->GetPlayerId(),
 			*GetNameSafe(HolderPawn), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
 			static_cast<int32>(GetLocalRole()));

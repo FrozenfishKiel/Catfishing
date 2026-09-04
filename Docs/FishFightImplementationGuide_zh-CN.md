@@ -125,19 +125,23 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 
 ### 当前体力公式
 
-`FCatFishingFightWorkModel::ComputeDrain()` 计算 `Realized=min(实际完成距离, 主动意图距离)`、`Blocked=max(主动意图距离-Realized,0)`，以 `Realized + Blocked × IsometricEffortMultiplier` 得到有效努力距离。共享公式为 `标准努力强度 × 有效努力距离 × 自身消耗系数 × 阶段倍率 × 动作倍率 × (BaseEffortMultiplier + 自身归一化负载 × 自身负载倍率)`；标准努力强度仍取 `StrengthPerKilogram`，不直接按鱼/猫绝对力量放大费用。共享输入 `BaseEffortMultiplier` 默认 1，猫使用该值；鱼调用时固定为 0，不提供自由游动基础耗体。这是对抗努力的玩法结算，不是完整牛顿约束反力或机械焦耳模型。
+猫的做功与持续支撑现在分别结算，鱼保留独立的对抗努力模型。本轮只替换体力观察量与价格，不改变鱼线约束、卷线长度求解、猫端牵引、鱼游速或有向转矩积分。体力变化会改变进入力竭的时间，但相同输入与力量下的物理求解保持原路径。
 
-猫的移动、收线、转杆分别计费。移动只统计绷线时沿线远离鱼的主动意图，服务器从 `CharacterMovement.GetCurrentAcceleration()/GetMaxAcceleration()` 还原输入强度，房主与网络玩家共用该入口；实际身体位移只取持竿者速度，不借用包含旋转的竿尖速度。收线仍使用请求收线距离，尚未引入负载导致卷线器停转的物理求解。转杆直接从已有旋转积分中的猫主动转矩取得努力，以一米参考力臂折算弧长，反向被拖/鱼额外助力不会冒充主动完成距离。
+`FCatFishingFightWorkModel::ComputeCatWorkDrain()` 使用 `标准做功量 × 对应单位单价 × 动作倍率 × (CatUnloadedWorkMultiplier + 自身归一化负载 × CatLoadStaminaMultiplier)`。线性做功量为 `StrengthPerKilogram × 已完成的主动沿线位移`；移动仍从 CharacterMovement 的已接受加速度判断主动意图，并只使用身体速度，实际量封顶于对应主动意图。收线使用原求解器给出的本步卷线量，目前仍等于请求量；本轮不加入负载限速。转杆做功量为 `StrengthPerKilogram × ∫max(0,角速度·主动转矩方向) × 主动转矩/自身容量 dt`，使用独立弧度单价。反向被拖不计正功，鱼助力时也只按猫实际施力比例计费。猫不再使用鱼的 Base/StruggleDrainMultiplier，实际负载变化本身已参与结算。这是标准强度下的玩法做功量，并非完整牛顿约束或机械焦耳模型。
 
-转杆累计观察量带 `Epoch` 与积分时长；`FCatFishingRodEffortSampler` 按固定步时长分配累计增量，低帧率一次产生的努力可分给多个补步，不能第一步全部收费、后续补步又重复收保持费。换持有人或搏斗重开清除旧 Epoch 积压。转杆能力只取主位当前力量，辅助位的收线力量不能让力竭主位免费转杆。
+转杆另记录 `ExertionSquaredSeconds=∫(主动转矩/自身容量)²dt`，不再以最大转速和一米参考力臂生成虚拟计费距离。转矩积分与角速度计算本身保持原样；`Epoch`、累计积分时长与 `FCatFishingRodEffortSampler` 仍将每帧观察量分配到固定步，补步不重复消费，换人或新搏斗清除旧积压。原意图/实际弧长字段及对应日志已移除，用力时间和正功弧度分别有明确单位。
 
-锁线且鱼向外游时会产生持续保持费用基线；收线费用和主位可支付的移动、转杆费用覆盖这份基线，仅补收剩余保持费用。因此静止用力仍耗体，也不能通过微小晃杆免掉整段保持费用。主位力竭时移动/转杆不生成个人费用；接近力竭时，个人费用最多以当前体力抵扣保持基线，不能用不可支付的动作费用免掉助手的保持消耗。主位单独承担移动/转杆费用，收线与剩余保持费用按实际参与者可用力量分担；辅助位不为主位的独立动作付费。
+共享沿线支撑为 `CatSupportStaminaPerSecond × dt × 猫沿线归一化负载² × CatHoldStaminaMultiplier`，仅在锁线受载时结算。主位转杆支撑候选为 `CatSupportStaminaPerSecond × ExertionSquaredSeconds × CatRodStaminaMultiplier`。总支撑取两者较高值：共享沿线支撑由实际合力者按力量分担，超出共享支撑的转杆部分只由主位承担。移动、收线、转杆正功费用另行相加，不能抵扣支撑；因此微小操作与不可支付的个人费用均不能免掉助手的支撑费用。主位力竭时不产生移动/转杆费用，辅助不能赋予主位免费转杆能力。
+
+新字段通过正式平衡资产默认值接入既有资产：`CatRodStaminaCostPerStrengthRadian=0.03`、`CatUnloadedWorkMultiplier=0.15`、`CatSupportStaminaPerSecond=2.0`，均可独立配置非负有限值。猫线性做功单价、动作和负载倍率继续读取已有资产值。新字段无需重置整份资产，用户既有调参保留。
 
 正常遛鱼按住右键时，主位按 `SlackStaminaRegenPerSecond` 持续恢复至上限，同时关闭全部猫端与鱼端耗体；移动、转杆、助手合力、是否真正解除约束、是否达到最大线长均不影响此规则。左右键同时按住时右键优先，松右键后恢复仍按住的左键收线；旧输入序号仍被拒绝。无人值守放线不会恢复旧操作手体力。零体力已经进入强制拖拽时，仍锁线且不能通过右键回体退出，沿用前述拖落水规则。鱼力竭后关闭所有猫端正向扣费，继续允许收鱼和右键回体。
 
 猫沿线负载为 `约束张力 × clamp(鱼向外力量/猫有效合力,0,1)`；转杆负载另按鱼端力矩与主位转矩容量计算。鱼的负载为 `约束张力 × max(鱼向外对齐度,0) × clamp(猫有效合力/鱼力量,0,1)`，解除约束时均归零。鱼自身游动不扣体力，正常右键回体期间也不扣体；其余时段只有自身沿线努力受到猫端约束时才按 `标准努力强度 × 有效努力距离 × 鱼消耗系数 × 阶段倍率 × 鱼归一化对抗负载 × FishLoadStaminaMultiplier` 结算。单猫体力归零且没有助手出力时，鱼对抗负载为零，不会继续靠游动耗尽；有正体力且按住拉线的助手仍可提供合力，使鱼在非右键、绷线向外对抗时耗体。被拖往意图反方向的位移不计主动完成量，完全被动拖动也不会凭空增加鱼的主动努力。
 
-猫/鱼成本、僵持倍率、四种猫动作倍率及双方负载倍率均从正式平衡资产读取；动作/负载倍率默认 1，可分别调为非负值。`FishLoadStaminaMultiplier=0` 可完全关闭鱼对抗耗体；猫负载倍率为 0 只关闭附加负载费用，仍保留猫基础努力费用。僵持倍率为 1 表示同等意图完成或受阻时有效努力相同，鱼仍须有非零对抗负载才收费。`create_fishing_fight_balance_asset.py` 只对新资产写默认值，已存在资产只校验并记录当前值，非法旧资产明确拒绝而不会静默重置调参；本轮不修改正式资产数值。运行证据使用 `LogCatFishing` 的 `fishing_effort_configured`、`fishing_coupled_work_sample`、`fishing_cat_stamina_applied`、`fishing_fish_stamina_sample`；客户端使用 `fishing_cat_stamina_received` 与 `fishing_fish_stamina_received` 核对复制到达。服务端按 SessionId/PlayerState/PlayerId 关联，不能仅凭单端日志判定联机验收通过。
+鱼仍由 `FCatFishingFightWorkModel::ComputeDrain()` 计算 `Realized=min(实际完成距离,主动意图距离)`、`Blocked=max(主动意图距离-Realized,0)`，以 `Realized + Blocked × IsometricEffortMultiplier` 得到有效对抗努力；该受阻距离模型现在只服务鱼，资产字段显示名同步为“鱼受阻努力折算倍率”。鱼调用时 `BaseEffortMultiplier=0`，自由游动没有基础费用；`FishLoadStaminaMultiplier=0` 可关闭鱼对抗耗体。猫负载倍率为零只关闭实际做功的负载附加部分，基础操作与时间支撑仍由各自参数控制。关闭猫全部费用需要关闭线性单价、转杆单价与每秒支撑三项。
+
+`create_fishing_fight_balance_asset.py` 只对新资产写默认值，已有资产只校验并记录实际配置，非法旧资产明确拒绝。运行证据使用 `LogCatFishing/fishing_effort_configured` 的 `Model=CatActualWorkAndTimedSupport` 与三项新参数；每秒 `fishing_coupled_work_sample` 的 `RodWorkDrain`、`RodSupportExtraDrain`、`HoldDrain` 分别表示转杆正功、超出共享部分的转杆支撑和共享支撑，`RodDrain` 等于前两者之和。旋转观察量用 `RodExertionSquaredSeconds/RodPositiveWorkRadians` 核对。客户端仍用 `fishing_cat_stamina_received/fishing_fish_stamina_received` 检查复制到达，按 SessionId/PlayerId 关联，单端日志不能证明联机验收。
 
 ### 当前鱼竿旋转
 

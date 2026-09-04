@@ -50,15 +50,18 @@
 | 猫端驱动力响应时间 | DriveResponseSeconds | 1s | 猫端对抗加速度投影到收线/牵引响应速度的时长 |
 | 收线速度 | ReelSpeedCentimetersPerSecond | 80 cm/s | 左键收线意图速度上限 |
 | 猫力竭后鱼外冲速度倍率 | ExhaustedCatEscapeSpeedMultiplier | 2 | 主位体力为零且没有助手实际出力时，按鱼两档游速中的较大值乘此倍率持续外冲；有限值且至少为 1 |
-| 猫做功体力消耗系数 | CatStaminaCostPerStrengthCentimeter | 默认 0.002 | 每点标准努力强度、每厘米有效努力的体力价格 |
+| 猫做功体力消耗系数 | CatStaminaCostPerStrengthCentimeter | 默认 0.002 | 猫移动/收线每标准力量·cm 已完成正功的单价 |
+| 猫转杆每标准转矩弧度体力系数 | CatRodStaminaCostPerStrengthRadian | 默认 0.03 | 真实转角按主位主动转矩比例加权后计价，不使用最大转速虚拟弧长 |
+| 猫无负载动作成本倍率 | CatUnloadedWorkMultiplier | 默认 0.15 | 猫实际做功的基础价格，与负载价格相加 |
+| 猫满用力每秒支撑耗体 | CatSupportStaminaPerSecond | 默认 2/s | 支撑按用力/负载比例平方和持续时间结算；共享支撑与转杆支撑取较高者 |
 | 鱼做功体力消耗系数 | FishStaminaCostPerStrengthCentimeter | 默认 0.002 | 每点标准努力强度、每厘米有效对抗努力的体力价格；再乘鱼对抗负载，自由游动不扣体力 |
 | 猫移动体力倍率 | CatMovementStaminaMultiplier | 默认 1 | 绷线时主动远离鱼的身体移动费用；被动位移不计 |
-| 猫收线体力倍率 | CatReelStaminaMultiplier | 默认 1 | 请求收线努力费用 |
-| 猫转杆体力倍率 | CatRodStaminaMultiplier | 默认 1 | 主位主动转矩积分费用，包含受阻努力 |
-| 猫持竿体力倍率 | CatHoldStaminaMultiplier | 默认 1 | 持续顶鱼的费用基线，只补收主动操作尚未覆盖的部分 |
-| 猫负载体力倍率 | CatLoadStaminaMultiplier | 默认 1 | 猫各项努力乘 `(1 + 自身归一化负载 × 倍率)` |
+| 猫收线体力倍率 | CatReelStaminaMultiplier | 默认 1 | 原求解器本步卷线量的正功费用 |
+| 猫转杆体力倍率 | CatRodStaminaMultiplier | 默认 1 | 主位实际转杆正功及其时间支撑的倍率 |
+| 猫持竿体力倍率 | CatHoldStaminaMultiplier | 默认 1 | 共享沿线支撑费用倍率；实际做功费用不再抵扣支撑 |
+| 猫负载体力倍率 | CatLoadStaminaMultiplier | 默认 1 | 猫实际做功乘 `(无负载动作倍率 + 自身归一化负载 × 本倍率)` |
 | 鱼负载体力倍率 | FishLoadStaminaMultiplier | 默认 1 | 鱼有效努力费用仅乘 `自身归一化对抗负载 × 倍率`，无基础游动费用；0 完全关闭鱼对抗耗体 |
-| 僵持努力折算倍率 | IsometricEffortMultiplier | 1 | 未实现位移的意图距离计费倍率 |
+| 鱼受阻努力折算倍率 | IsometricEffortMultiplier | 1 | 仅鱼使用的未完成对抗意图距离倍率；猫支撑改为按时间收费 |
 | 放线体力恢复速度 | SlackStaminaRegenPerSecond | 3/s | 正常按右键时猫的恢复速度，不受张力、移动或转杆限制；零体力强制拖拽除外 |
 | 鱼力竭吸附阈值 | FishExhaustionThreshold | 0.5 | 本步产生正的鱼对抗耗体后，剩余绝对体力不高于该值才吸附归零；零耗体不触发 |
 | 低体力休息触发比例/时长倍率 | LowStaminaRestThreshold/Multiplier | 0.5 / 1.5 | 低体力鱼延长平静期 |
@@ -71,7 +74,7 @@
 
 `DefaultGame.ini` 只保存 `FightBalanceDefinition` 资产引用，不再保存上述数值；C++ 也不提供可偷偷生效的第二套回退。资产缺失、未勾“启用正式运行”或任一字段非法时，Fishing runtime 保持 fail-closed。
 
-上述体力倍率均允许非负有限值。僵持倍率为 1 只表示“同等意图完成或受阻时有效努力相同”，最终费用仍由各自负载与费用规则决定。猫保留基础努力费用，猫负载倍率为 0 只关闭附加负载费用；鱼没有基础游动费用，鱼负载倍率为 0 会关闭全部鱼对抗耗体。鱼对抗负载同时要求张紧鱼线、鱼沿线向外意图与可用猫合力：单猫耗尽且无助手出力时不再扣鱼体力，助手仍有效出力时可以继续形成对抗。共享工作模型的 `BaseEffortMultiplier` 对猫默认 1、对鱼固定 0，不是资产内另一个可调开关。修改资产后下一场搏斗生效；当前默认负载倍率 1 可继续使用。资产创建脚本只为新资产填写默认，已有合法资产保留当前调参；已有非法资产报错，不自动覆盖修复。
+上述费用与倍率均允许非负有限值。猫实际做功与支撑分开，阶段倍率不再额外放大猫费用；正功量只来自已完成的主动身体移动、本步卷线与归一化主动转矩加权转角，受阻时只承担时间支撑。猫负载倍率为 0 只关闭实际做功的负载附加部分；完全关闭猫费用需要关闭线性单价、转杆单价及支撑费。鱼受阻倍率为 1 仍表示同等意图完成或受阻时有效努力相同，但必须同时存在张力、向外反抗与可用猫合力才计费，鱼没有基础游动费用。正常右键恢复与双方免耗体、零体力强制锁线拖拽保持。修改资产后下一场搏斗生效；三个新字段为既有资产提供默认值，创建脚本只初始化新资产，已有合法资产保留调参，非法资产报错而不自动覆盖。
 
 ## 2. 装备/道具：`UCatEquipmentDefinition`（正式目录 `Equip_*`）
 

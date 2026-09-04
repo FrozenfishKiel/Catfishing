@@ -44,10 +44,10 @@ struct CATFISHING_API FCatFishingRodRotationResult
 	FVector NetTorque = FVector::ZeroVector;
 	FVector SmoothedFishPullStrengthMeters = FVector::ZeroVector;
 	double AngularSpeedDegreesPerSecond = 0.0;
-	/** 猫主动转矩按自身容量归一化后的意图弧长，使用一米参考力臂；受阻时仍累积。 */
-	double CatIntentArcCentimeters = 0.0;
-	/** 沿猫主动转矩方向完成的弧长，上限为对应意图；鱼的被动拖动或额外助力不记入。 */
-	double CatActualArcCentimeters = 0.0;
+	/** 主动转矩/自身容量的平方随时间积分；受阻仍支撑，不借用最大转速收费。 */
+	double CatExertionSquaredSeconds = 0.0;
+	/** 沿主动转矩方向完成的真实转角 × 主动转矩/自身容量；反向被拖不计正功。 */
+	double CatPositiveWorkRadians = 0.0;
 	double IntegratedSeconds = 0.0;
 };
 
@@ -55,8 +55,8 @@ struct CATFISHING_API FCatFishingRodRotationResult
 struct CATFISHING_API FCatFishingRodRotationEffortSnapshot
 {
 	uint64 Epoch = 0;
-	double IntentArcCentimeters = 0.0;
-	double ActualArcCentimeters = 0.0;
+	double ExertionSquaredSeconds = 0.0;
+	double PositiveWorkRadians = 0.0;
 	double IntegratedSeconds = 0.0;
 };
 

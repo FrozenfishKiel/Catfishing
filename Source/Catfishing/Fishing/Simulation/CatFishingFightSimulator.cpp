@@ -33,6 +33,9 @@ bool FCatFightSimulationConfig::IsValid() const
 		&& FMath::IsFinite(RodPhysicsLengthCentimeters) && RodPhysicsLengthCentimeters > 0.0
 		&& FMath::IsFinite(CatStaminaMaximum) && CatStaminaMaximum > 0.0
 		&& IsFiniteNonNegative(CatStaminaCostPerStrengthCentimeter)
+		&& IsFiniteNonNegative(CatRodStaminaCostPerStrengthRadian)
+		&& IsFiniteNonNegative(CatUnloadedWorkMultiplier)
+		&& IsFiniteNonNegative(CatSupportStaminaPerSecond)
 		&& IsFiniteNonNegative(FishStaminaCostPerStrengthCentimeter)
 		&& IsFiniteNonNegative(IsometricEffortMultiplier)
 		&& IsFiniteNonNegative(CatMovementStaminaMultiplier)
@@ -103,8 +106,9 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		|| !IsFiniteVector(RodConstraint.RodTipVelocityCentimetersPerSecond)
 		|| !IsFiniteVector(RodConstraint.CarrierVelocityCentimetersPerSecond)
 		|| !IsFiniteVector(RodConstraint.CarrierDesiredVelocityCentimetersPerSecond)
-		|| !IsFiniteNonNegative(RodConstraint.CatRodIntentArcCentimeters)
-		|| !IsFiniteNonNegative(RodConstraint.CatRodActualArcCentimeters)
+		|| !IsFiniteNonNegative(RodConstraint.CatRodExertionSquaredSeconds)
+		|| RodConstraint.CatRodExertionSquaredSeconds > Config.FixedStepSeconds + UE_DOUBLE_KINDA_SMALL_NUMBER
+		|| !IsFiniteNonNegative(RodConstraint.CatRodPositiveWorkRadians)
 		|| (RodConstraint.bRodHeld && RodConstraint.RodForwardWorld.IsNearlyZero())
 		|| !IsFiniteVector(DesiredFishDirection)
 		|| (!State.bFishExhausted && DesiredFishDirection.IsNearlyZero()))
@@ -261,20 +265,20 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const double CatCarrierActual = bOperatorPresent && RodConstraint.bRodHeld
 		? FMath::Max(0.0, -FVector::DotProduct(
 			RodConstraint.CarrierVelocityCentimetersPerSecond * Dt, LineDirection)) : 0.0;
-	// 转杆使用转矩积分的独立努力，身体实际位移只使用 CarrierVelocity，避免竿尖扫动重复扣费。
-	const double CatRodIntent = bOperatorPresent && RodConstraint.bRodHeld && bPrimaryCanPayEffort
-		? RodConstraint.CatRodIntentArcCentimeters : 0.0;
+	// 转杆仅消费转矩积分的支撑时间与真实正功，身体位移只使用 CarrierVelocity。
+	const double CatRodExertion = bOperatorPresent && RodConstraint.bRodHeld && bPrimaryCanPayEffort
+		? RodConstraint.CatRodExertionSquaredSeconds : 0.0;
 	const double CatActiveIntentDistance = RequestedReelDistance + CatCarrierIntent;
 	const double FishOutwardIntentDistance = FMath::Max(0.0,
 		FVector::DotProduct(FishIntentDisplacement, LineDirection));
-	// 未放线且约束已介入时，保持鱼线始终有一份基础努力。
-	// 先保留完整基线，计费时只补主动操作尚未覆盖的费用，避免微小操作免掉整段保持。
+	// 保留沿线意图距离供既有约束诊断；支撑费用另按负载与持续时间结算。
 	const double CatHoldIntentDistance = bLoadedConstraint && !bFreeSpool
 		? FishOutwardIntentDistance * NormalizedTension : 0.0;
 	Result.CatMovementIntentCentimeters = CatCarrierIntent;
 	Result.CatMovementActualCentimeters = FMath::Min(CatCarrierActual, CatCarrierIntent);
-	Result.CatRodIntentArcCentimeters = CatRodIntent;
-	Result.CatRodActualArcCentimeters = FMath::Min(RodConstraint.CatRodActualArcCentimeters, CatRodIntent);
+	Result.CatRodExertionSquaredSeconds = CatRodExertion;
+	Result.CatRodPositiveWorkRadians = bOperatorPresent && RodConstraint.bRodHeld && bPrimaryCanPayEffort
+		? RodConstraint.CatRodPositiveWorkRadians : 0.0;
 	Result.CatHoldIntentCentimeters = CatHoldIntentDistance;
 	Result.RequestedReelDistanceCentimeters = RequestedReelDistance;
 	Result.ActualReelDistanceCentimeters = RequestedReelDistance;
@@ -305,44 +309,43 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	// 鱼力竭后进入纯收尾：仍求解收线和双端位移，但不再向任何猫结算做功消耗。
 	if (!bSlackRecovery && !State.bFishExhausted && bOperatorPresent && EffectiveCatStrength > UE_DOUBLE_SMALL_NUMBER)
 	{
-		FCatFightWorkInput CatWork;
-		// 标准努力强度保留单位标尺；动作倍率与自身负载决定消耗，不按绝对力量放大数十倍。
-		CatWork.Strength = Config.StrengthPerKilogram;
-		CatWork.IsometricEffortMultiplier = Config.IsometricEffortMultiplier;
-		CatWork.CostPerStrengthCentimeter = Config.CatStaminaCostPerStrengthCentimeter;
+		FCatFightCatWorkInput CatWork;
+		// 猫费用不再额外叠加鱼行为阶段倍率；负载变化已经体现在受力观察量里。
+		CatWork.UnloadedWorkMultiplier = Config.CatUnloadedWorkMultiplier;
 		CatWork.LoadStaminaMultiplier = Config.CatLoadStaminaMultiplier;
-		const double Phase = bStruggling ? Config.StruggleDrainMultiplier : Config.BaseDrainMultiplier;
-		const auto ComputeCatChannel = [&](const double Intent, const double Actual, const double Multiplier,
+		const auto ComputeCatChannel = [&](const double ActualAmount, const double UnitCost, const double Multiplier,
 			const double Load, double& OutDrain)
 		{
-			CatWork.IntendedLineDistanceCentimeters = Intent;
-			CatWork.ActualLineDistanceCentimeters = Actual;
-			CatWork.PhaseMultiplier = Phase * Multiplier;
+			CatWork.PositiveWorkUnits = Config.StrengthPerKilogram * ActualAmount;
+			CatWork.CostPerWorkUnit = UnitCost;
+			CatWork.ActionMultiplier = Multiplier;
 			CatWork.NormalizedLoad = Load;
-			return FCatFishingFightWorkModel::ComputeDrain(CatWork, OutDrain, IgnoredEffortDistance);
+			return FCatFishingFightWorkModel::ComputeCatWorkDrain(CatWork, OutDrain);
 		};
-		if (!ComputeCatChannel(CatCarrierIntent, Result.CatMovementActualCentimeters,
+		if (!ComputeCatChannel(Result.CatMovementActualCentimeters, Config.CatStaminaCostPerStrengthCentimeter,
 			Config.CatMovementStaminaMultiplier, Result.CatNormalizedEffortLoad, Result.CatMovementStaminaDrain)
-			|| !ComputeCatChannel(RequestedReelDistance, RequestedReelDistance,
+			|| !ComputeCatChannel(RequestedReelDistance, Config.CatStaminaCostPerStrengthCentimeter,
 				Config.CatReelStaminaMultiplier, Result.CatNormalizedEffortLoad, Result.CatReelStaminaDrain)
-			|| !ComputeCatChannel(CatRodIntent, Result.CatRodActualArcCentimeters,
-				Config.CatRodStaminaMultiplier, Result.CatRodNormalizedEffortLoad, Result.CatRodStaminaDrain)
-			|| !ComputeCatChannel(CatHoldIntentDistance, 0.0,
-				Config.CatHoldStaminaMultiplier, Result.CatNormalizedEffortLoad, Result.CatHoldStaminaDrain))
+			|| !ComputeCatChannel(Result.CatRodPositiveWorkRadians, Config.CatRodStaminaCostPerStrengthRadian,
+				Config.CatRodStaminaMultiplier, Result.CatRodNormalizedEffortLoad, Result.CatRodWorkStaminaDrain))
 		{
 			return FCatFightStepResult{};
 		}
-		const double ActiveDrain = Result.CatMovementStaminaDrain
-			+ Result.CatReelStaminaDrain + Result.CatRodStaminaDrain;
-		if (!IsFiniteNonNegative(ActiveDrain))
+		// 共享沿线支撑先按负载平方和真实步长结算；主位的转杆仅承担超出共享支撑的部分。
+		// 实际做功费用不能抵扣支撑，从而不会因微动或无力主位的不可支付动作而免掉助手费用。
+		Result.CatHoldStaminaDrain = bLoadedConstraint && !bFreeSpool
+			? Config.CatSupportStaminaPerSecond * Dt * FMath::Square(Result.CatNormalizedEffortLoad)
+				* Config.CatHoldStaminaMultiplier : 0.0;
+		const double RodSupport = Config.CatSupportStaminaPerSecond
+			* Result.CatRodExertionSquaredSeconds * Config.CatRodStaminaMultiplier;
+		if (!IsFiniteNonNegative(RodSupport) || !IsFiniteNonNegative(Result.CatHoldStaminaDrain))
 		{
 			return FCatFightStepResult{};
 		}
-		// 个人费用只有主位当下能支付的部分才可覆盖保持；不能用透支请求免掉助手的保持费用。
-		const double PaidHoldCoverage = Result.CatReelStaminaDrain
-			+ FMath::Min(State.CatStamina, Result.GetPrimaryCatStaminaDrain());
-		Result.CatHoldStaminaDrain = FMath::Max(0.0, Result.CatHoldStaminaDrain - PaidHoldCoverage);
-		Result.CatStaminaDrain = ActiveDrain + Result.CatHoldStaminaDrain;
+		Result.CatRodSupportStaminaDrain = FMath::Max(0.0, RodSupport - Result.CatHoldStaminaDrain);
+		Result.CatRodStaminaDrain = Result.CatRodWorkStaminaDrain + Result.CatRodSupportStaminaDrain;
+		Result.CatStaminaDrain = Result.CatMovementStaminaDrain + Result.CatReelStaminaDrain
+			+ Result.CatRodStaminaDrain + Result.CatHoldStaminaDrain;
 		if (!IsFiniteNonNegative(Result.CatStaminaDrain))
 		{
 			return FCatFightStepResult{};
