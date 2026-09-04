@@ -195,7 +195,8 @@ bool UCatAbilitySystemComponent::CancelBodyActionAbilitiesFromAuthority()
 
 bool UCatAbilitySystemComponent::ApplyFishingStaminaDelta(const float Delta)
 {
-	if (!FMath::IsFinite(Delta) || FMath::IsNearlyZero(Delta) || !GetOwnerActor() || !GetAvatarActor()
+	// 极小的非零扣费也可能是在结清最后一点体力；按近零过滤会留下可永久发力的残值。
+	if (!FMath::IsFinite(Delta) || Delta == 0.0f || !GetOwnerActor() || !GetAvatarActor()
 		|| !IsOwnerActorAuthoritative())
 	{
 		return false;

@@ -102,7 +102,7 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 
 当前运动计算顺序：
 
-鱼的个体重量由服务器选择流程冻结，乘平衡资产的 `StrengthPerKilogram` 得到基础力量，再应用完美中鱼的力量倍率。猫的基础 `FishingStrength / StrengthPerKilogram` 是当前玩法等效质量；猫的可用力量随体力降低，质量不随体力降低。`CharacterMovement.Mass` 不作为这套分配公式的猫质量输入。
+鱼的个体重量由服务器选择流程冻结，乘平衡资产的 `StrengthPerKilogram` 得到基础力量，再应用完美中鱼的力量倍率。猫的基础 `FishingStrength / StrengthPerKilogram` 是当前玩法等效质量；主位和辅助位只要有正体力，可用力量就取 ASC 当前 `FishingStrength` 原值，不按剩余体力比例衰减。体力恰好归零才停止主动出力，恢复正体力后恢复完整力量；辅助位仍须按住左键才贡献合力。质量不随体力降低。`CharacterMovement.Mass` 不作为这套分配公式的猫质量输入。
 
 1. 鱼直接以性格资产的平静/挣扎游速乘固定步长生成水平候选位移；没有由鱼力量积分得到自由游速，也没有持久鱼速度状态。
 2. 活鱼阶段猫端收线速度取 `min(ReelSpeedCentimetersPerSecond, 有效猫力量 × AccelerationPerStrength × DriveResponseSeconds)`；鱼力竭后的免耗体收尾直接使用 `ReelSpeedCentimetersPerSecond`，猫体力为零也能继续收回。两种阶段都要求有操作手且按住左键，按剩余可收长度生成请求并直接缩短 `L_paid`，保留垂直距离下限及同一端点/地形约束。模拟器把 `ActualReelDistanceCentimeters` 设为请求距离，没有按鱼线负载求卷线器停转。

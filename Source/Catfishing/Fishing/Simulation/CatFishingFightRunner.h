@@ -53,8 +53,8 @@ struct CATFISHING_API FCatFightParticipantRuntime
 	TWeakObjectPtr<ACatCharacter> Character;
 	TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
 	double BaseFishingStrength = 0.0;
+	/** 有正体力时等于当前基础力量，体力归零时停止主动出力；不按体力比例衰减。 */
 	double ActiveFishingStrength = 0.0;
-	double StaminaMaximum = 0.0;
 	int64 LastInputSequence = 0;
 	bool bPullHeld = false;
 	bool bSlackHeld = false;
@@ -94,6 +94,7 @@ public:
 private:
 	friend class FCatFishingExhaustedPickupHandoffTest;
 	friend class FCatFishingSurfaceTraversalTest;
+	friend class FCatFishingParticipantStrengthTest;
 	void HandleFixedStep();
 	void RefreshCatAction();
 	bool RefreshParticipantsFromRod();

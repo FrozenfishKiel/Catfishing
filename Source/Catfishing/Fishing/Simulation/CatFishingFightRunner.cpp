@@ -169,7 +169,6 @@ bool UCatFishingFightRunner::AddParticipantFromAuthority(APlayerState* PlayerSta
 	Participant.AbilitySystem = ASC;
 	Participant.BaseFishingStrength = Strength;
 	Participant.ActiveFishingStrength = Strength;
-	Participant.StaminaMaximum = StaminaMaximum;
 	Participant.LastInputSequence = InitialInputSequence;
 	Participant.bPullHeld = bInitialPullHeld;
 	// 线杯只属于主位。辅助位右键在命令入口是 no-op。
@@ -281,8 +280,29 @@ bool UCatFishingFightRunner::UpdateParticipantIntentAndProperties()
 		{
 			return false;
 		}
-		const double ActiveStrength = Participant.BaseFishingStrength
-			* FMath::Clamp(CurrentStamina / Participant.StaminaMaximum, 0.0, 1.0);
+		// 体力决定还能坚持多久，正体力期间不削弱力量；只有耗尽才停止主动对抗。
+		const double ActiveStrength = CurrentStamina > 0.0 ? Participant.BaseFishingStrength : 0.0;
+		if (Participant.ActiveFishingStrength != ActiveStrength)
+		{
+			if (const ACatFishingSession* SessionActor = Session.Get())
+			{
+				const UWorld* World = SessionActor->GetWorld();
+				const ACatFishingRodActor* Rod = RodActor.Get();
+				UE_LOG(LogCatFishing, Log,
+					TEXT("Event=fishing_cat_strength_changed SessionId=%s RodActorId=%s PlayerId=%d CatActor=%s "
+						"Primary=%s StrengthBefore=%.3f StrengthAfter=%.3f BaseStrength=%.3f Stamina=%.6f "
+						"StrengthMode=ConstantWhileStaminaPositive Result=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
+					*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+					Rod ? *Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens) : TEXT("None"),
+					Participant.PlayerState.IsValid() ? Participant.PlayerState->GetPlayerId() : INDEX_NONE,
+					*GetNameSafe(Participant.Character.Get()), Participant.bPrimary ? TEXT("true") : TEXT("false"),
+					Participant.ActiveFishingStrength, ActiveStrength, Participant.BaseFishingStrength, CurrentStamina,
+					ActiveStrength == 0.0 ? TEXT("StaminaExhausted")
+						: Participant.ActiveFishingStrength == 0.0 ? TEXT("StrengthRestored") : TEXT("BaseStrengthChanged"),
+					*GetNameSafe(World), World ? static_cast<int32>(World->GetNetMode()) : -1,
+					static_cast<int32>(SessionActor->GetLocalRole()));
+			}
+		}
 		Participant.ActiveFishingStrength = ActiveStrength;
 		if (Participant.bPrimary)
 		{
@@ -293,7 +313,7 @@ bool UCatFishingFightRunner::UpdateParticipantIntentAndProperties()
 		else if (Participant.bPullHeld)
 		{
 			HelperStrength += ActiveStrength;
-			// 辅助猫与主位使用同一力量/质量换算；体力只衰减当前驱动力，不改变等效质量。
+			// 辅助猫与主位使用同一力量/质量换算；体力耗尽停止出力，不改变等效质量。
 			HelperMass += Participant.BaseFishingStrength / Config.StrengthPerKilogram;
 		}
 	}
@@ -312,7 +332,7 @@ bool UCatFishingFightRunner::UpdateParticipantIntentAndProperties()
 
 bool UCatFishingFightRunner::ApplyHelperStaminaChanges(const double TotalGroupDrain)
 {
-	if (TotalGroupDrain <= UE_DOUBLE_SMALL_NUMBER)
+	if (TotalGroupDrain <= 0.0)
 	{
 		return true;
 	}
@@ -333,7 +353,7 @@ bool UCatFishingFightRunner::ApplyHelperStaminaChanges(const double TotalGroupDr
 			? Participant.ActiveFishingStrength / FMath::Max(Config.GetCombinedCatStrength(), UE_DOUBLE_SMALL_NUMBER)
 			: 0.0;
 		const double Drain = FMath::Min(Current, TotalGroupDrain * StrengthShare);
-		if (Drain > UE_DOUBLE_SMALL_NUMBER
+		if (Drain > 0.0
 			&& !ASC->ApplyFishingStaminaDelta(static_cast<float>(-Drain)))
 		{
 			return false;
@@ -1018,7 +1038,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 	{
 		UE_LOG(LogCatFishing, Display,
 			TEXT("Event=fishing_coupled_work_sample SessionId=%s RodActorId=%s "
-				"PrimaryStrength=%.3f HelperStrength=%.3f CombinedStrength=%.3f CatSystemMassKg=%.3f FishMassKg=%.3f MassMode=StrengthDerived StrengthPerKg=%.3f ActiveHelpers=%d "
+				"PrimaryStrength=%.3f HelperStrength=%.3f CombinedStrength=%.3f CatSystemMassKg=%.3f FishMassKg=%.3f MassMode=StrengthDerived StrengthMode=ConstantWhileStaminaPositive StrengthPerKg=%.3f ActiveHelpers=%d "
 				"CatAcceleration=%.3f FishAcceleration=%.3f NetFishPullAcceleration=%.3f "
 				"PrimaryStamina=%.3f GroupStaminaDrain=%.3f FishStamina=%.3f FishStaminaDrain=%.3f "
 				"MotionIntent=%s CatIntentCm=%.3f CatActualCm=%.3f FishIntentCm=%.3f FishActualCm=%.3f "
@@ -1128,7 +1148,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 		? Step.CatStaminaDrain
 		: FMath::Min(State.CatStamina, Step.GetPrimaryCatStaminaDrain()
 			+ Step.GetSharedCatStaminaDrain() * PrimaryDrainShare);
-	if (State.bOperatorPresent && !FMath::IsNearlyZero(PrimaryStaminaDrain)
+	// 正体力保持完整力量，因此最后一点可支付体力也必须实际写回零，不能被容差跳过。
+	if (State.bOperatorPresent && PrimaryStaminaDrain != 0.0
 		&& !ASC->ApplyFishingStaminaDelta(static_cast<float>(-PrimaryStaminaDrain)))
 	{
 		Stop();

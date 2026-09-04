@@ -33,7 +33,7 @@
 | CatDefinitionId | 种类稳定 ID，角色用它选种类 | 必填、清单内唯一 |
 | DisplayName | 表现用显示名 | 不参与数值裁决 |
 | InitialPoison | 初始中毒值 | ≥0 |
-| FishingStrength | **猫力量**（规格 4.2：与鱼力量、竿强度三方比较） | >0 |
+| FishingStrength | **猫力量**（正体力期间完整生效，归零停止主动出力；不按剩余体力比例衰减） | >0 |
 | FightStaminaMaximum | **猫搏斗体力上限**（规格 4.3 消耗与松线喘息回复的基线） | >0 |
 | bEnableRuntimeDefinition | 显式启用 gate | 必须 True |
 
