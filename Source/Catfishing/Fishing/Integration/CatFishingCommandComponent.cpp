@@ -342,6 +342,8 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitPrimaryReleased()
 {
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
 	Edge.ActivationCorrelationId = PrimaryActivationCorrelationId; // 带上按下时记录的关联 ID
+	Edge.bHasCastViewRay = UCatFishingAimLibrary::TryGetLocalCastViewRay(Cast<APlayerController>(GetOwner()),
+		Edge.CastViewOrigin, Edge.CastViewDirection);
 	DispatchAbilityCommand(ECatFishingCommandType::PrimaryReleased, Edge);
 	PrimaryActivationCorrelationId.Invalidate(); // 松开后立即失效，避免误配对到下一次按下
 	return Edge;
@@ -717,7 +719,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				ServerAimingCorrelationId.Invalidate(); // 无论是否命中，本次松开后瞄准态都结束
 				if (bAimingRelease)
 				{
-					BeginCastFromViewOnAuthority(Controller, Edge.RequestId);
+					BeginCastFromViewOnAuthority(Controller, Edge);
 				}
 				return;
 			}
@@ -870,8 +872,9 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 
 // 服务器抛竿流程：要求本人处于某根竿的主操作位（鱼竿可以属于别人）；视线射线∩水面得到候选落点；
 // RodActorId/Revision、Equipment Revision、WaterRegion Handle 全部由服务器事实填充，客户端不传任何载荷。
-void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController* Controller, const FGuid& RequestId)
+void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController* Controller, const FCatFishingInputEdge& Edge)
 {
+	const FGuid RequestId = Edge.RequestId;
 	FCatBeginCastResult Result;
 	Result.Command.CommandType = ECatFishingCommandType::BeginCast;
 	Result.Command.RequestId = RequestId;
@@ -896,9 +899,18 @@ void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController
 	}
 	FCatWaterRegionHandle Region;
 	FVector Landing;
-	// 服务器用自己权威的视点位置/朝向重新解一次瞄准射线与水面的交点，完全不采信客户端上报的落点
-	if (!UCatFishingAimLibrary::ResolveCastAimPoint(this, Character->GetPawnViewLocation(),
-		Controller->GetControlRotation(), Region, Landing))
+	UE_LOG(LogCatFishing, Log, TEXT("Event=cast_aim_request World=%s Request=%s HasViewRay=%d Origin=%s Direction=%s %s"),
+		*GetNameSafe(GetWorld()), *RequestId.ToString(EGuidFormats::DigitsWithHyphens), Edge.bHasCastViewRay,
+		*Edge.CastViewOrigin.ToString(), *Edge.CastViewDirection.ToString(), *CatLogContext::BuildControllerFields(Controller));
+	if (!Edge.bHasCastViewRay || !UCatFishingAimLibrary::IsCastViewRayValid(Edge.CastViewOrigin,
+		Edge.CastViewDirection, Character->GetPawnViewLocation(), Controller->GetControlRotation().Vector()))
+	{
+		Result.Command.Error = ECatFishingCommandError::InvalidPayload;
+		DeliverBeginCastResultFromAuthority(Result);
+		return;
+	}
+	if (!UCatFishingAimLibrary::ResolveCastAimPoint(this, Edge.CastViewOrigin,
+		Edge.CastViewDirection.Rotation(), Region, Landing))
 	{
 		Result.Command.Error = ECatFishingCommandError::InvalidWaterTarget;
 		DeliverBeginCastResultFromAuthority(Result);
@@ -1249,6 +1261,10 @@ void UCatFishingCommandComponent::ReceivePlaceChumResultLocally(const FCatPlaceC
 
 void UCatFishingCommandComponent::ReceiveBeginCastResultLocally(const FCatBeginCastResult& Result)
 {
+	UE_LOG(LogCatFishing, Log, TEXT("Event=begin_cast_received World=%s Request=%s Session=%s CastAttempt=%s Committed=%d Error=%s Landing=%s %s"),
+		*GetNameSafe(GetWorld()), *Result.Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *Result.Command.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Result.Command.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), Result.Command.bCommitted, *UEnum::GetValueAsString(Result.Command.Error),
+		*Result.ServerCorrectedLandingWorldPoint.ToString(), *CatLogContext::BuildControllerFields(Cast<AController>(GetOwner())));
 	const FGuid RequestId = Result.Command.RequestId;
 	if (!IsSupportedOwner() || !RequestId.IsValid() || BeginCastResultsByRequestId.Contains(RequestId)) return;
 	// 专用的抛竿结果缓存（携带服务器修正后的落点等抛竿专属字段），同样按上限淘汰最老记录

@@ -86,7 +86,7 @@
 
 - `UCatChumFieldSubsystem`（服务器）：投放建场（中心/半径/三轴腥香酵/时间衰减曲线）
 - 公开态复制：`GameState → UCatChumFieldReplicationComponent → FCatChumFieldPublicItem[]`
-- 咬钩加速：`ScheduleWaitingProbe` 在钩子位置采样三轴总量 → `BiteRate ×= 1+(1-e^-Total)`
+- 咬钩加速：`ScheduleWaitingProbe` 在服务器冻结的落水点采样三轴总量 → `BiteRate ×= 1+(1-e^-Total)`；首次计时包含剩余飞行时间，避免鱼钩仍在空中就进入预警。
 - 选鱼偏好：三轴采样 · 鱼的 ChumPreference 点积 → 饱和曲线 → 权重放大（最多 ×3）
 - 上述三条是当前实现，不是新版目标；待改为水域面积/鱼量账本、平均分布、重叠区共享收敛曲线、守恒重分配与面积容量上限（见 `Docs/Architecture/项目技术方案.md` §7.1.1 和本文 §6）
 

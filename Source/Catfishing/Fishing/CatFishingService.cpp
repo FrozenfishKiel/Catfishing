@@ -203,10 +203,12 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	const double MaxRange = FMath::Min(RodDefinition->MaximumLineLengthCentimeters,
 		FloatDefinition->MaximumCastDistanceCentimeters);
 	if (!FMath::IsFinite(MaxRange) || MaxRange <= 0.0 || ToLandingFromRod.Length() > MaxRange
-		|| ToLandingFromView.IsNearlyZero() || ToLandingFromRod.IsNearlyZero()
-		|| FVector::DotProduct(FisherController->GetControlRotation().Vector(),
-			ToLandingFromView.GetSafeNormal()) < 0.5)
+		|| ToLandingFromView.IsNearlyZero() || ToLandingFromRod.IsNearlyZero())
 	{
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=cast_range_rejected World=%s Request=%s DistanceCm=%.2f MaximumCm=%.2f Rod=%s Float=%s Landing=%s %s"),
+			*GetNameSafe(World), *Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), ToLandingFromRod.Length(), MaxRange,
+			*Loadout.RodDefinitionId.ToString(), *Loadout.FloatDefinitionId.ToString(),
+			*Water.WaterSurfaceWorldPoint.ToString(), *CatLogContext::BuildControllerFields(FisherController));
 		Result.Command.Error = ECatFishingCommandError::CastOutOfRange;
 		return Finish(Result);
 	}
@@ -263,6 +265,11 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		return ReleaseFishingUseAndFinish(ECatFishingCommandError::DependencyUnavailable);
 	}
 	Hook->FinishSpawning(HookTransform);
+	if (!Hook->BeginAuthoritativeFlight(Water.WaterSurfaceWorldPoint))
+	{
+		Hook->Destroy();
+		return ReleaseFishingUseAndFinish(ECatFishingCommandError::DependencyUnavailable);
+	}
 	ACatFishingSession* Session = World->SpawnActorDeferred<ACatFishingSession>(ACatFishingSession::StaticClass(),
 		Character->GetActorTransform(), FisherController, Character, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	FCatFishingAttemptSnapshot Attempt;
@@ -306,8 +313,6 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	const FCatBeginCastResult Frozen = Finish(Result);
 	Session->PublishPreparedSessionFromAuthority();
 	Hook->PublishInitialPresentationFromAuthority();
-	Hook->BeginAuthoritativeFlight(ToLandingFromRod.GetSafeNormal() * FMath::Min(MaxRange, 1500.0),
-		Water.WaterSurfaceWorldPoint);
 	return Frozen;
 }
 

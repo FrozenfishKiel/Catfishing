@@ -528,8 +528,10 @@ void UCatFishingDebugSubsystem::DrawCastAimPoint(APlayerController* Controller) 
 	if (!Pawn) return;
 	FCatWaterRegionHandle AimRegion;
 	FVector AimLanding;
-	if (UCatFishingAimLibrary::ResolveCastAimPoint(World, Pawn->GetPawnViewLocation(),
-		Controller->GetControlRotation(), AimRegion, AimLanding))
+	FVector ViewOrigin, ViewDirection;
+	if (UCatFishingAimLibrary::TryGetLocalCastViewRay(Controller, ViewOrigin, ViewDirection)
+		&& UCatFishingAimLibrary::ResolveCastAimPoint(World, ViewOrigin,
+			ViewDirection.Rotation(), AimRegion, AimLanding))
 	{
 		DrawDebugSphere(World, AimLanding, 20.0f, 12, FColor::Green, false, -1.0f, 0, 2.0f);
 		DrawDebugCircle(World, AimLanding + FVector(0, 0, 2), 60.0f, 24, FColor::Green, false, -1.0f, 0, 1.5f,

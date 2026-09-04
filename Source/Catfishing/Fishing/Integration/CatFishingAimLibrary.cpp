@@ -9,6 +9,31 @@
 #include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Kismet/GameplayStatics.h"
+#include "GameFramework/PlayerController.h"
+
+bool UCatFishingAimLibrary::TryGetLocalCastViewRay(APlayerController* Controller, FVector& OutOrigin, FVector& OutDirection)
+{
+	OutOrigin = OutDirection = FVector::ZeroVector;
+	if (!Controller || !Controller->IsLocalController()) return false;
+	if (Controller->ShouldShowMouseCursor())
+	{
+		return Controller->DeprojectMousePositionToWorld(OutOrigin, OutDirection);
+	}
+	FRotator Rotation;
+	Controller->GetPlayerViewPoint(OutOrigin, Rotation);
+	OutDirection = Rotation.Vector();
+	return !OutOrigin.ContainsNaN() && !OutDirection.ContainsNaN();
+}
+
+bool UCatFishingAimLibrary::IsCastViewRayValid(const FVector Origin, const FVector Direction,
+	const FVector PawnViewLocation, const FVector ControlDirection)
+{
+	// 容纳第三人称弹簧臂和少量传输期间的角色位移；禁止远处伪造相机或反向射线。
+	return !Origin.ContainsNaN() && !Direction.ContainsNaN() && !PawnViewLocation.ContainsNaN()
+		&& !ControlDirection.ContainsNaN() && Direction.IsNormalized()
+		&& FVector::DistSquared(Origin, PawnViewLocation) <= FMath::Square(1500.0)
+		&& FVector::DotProduct(Direction, ControlDirection.GetSafeNormal()) >= 0.5;
+}
 
 FCatWaterRegionHandle UCatFishingAimLibrary::FindNearestWaterRegion(UObject* WorldContextObject, const FVector WorldPoint)
 {

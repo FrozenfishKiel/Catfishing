@@ -6,7 +6,8 @@
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "GameFramework/GameStateBase.h"
-#include "GameFramework/ProjectileMovementComponent.h"
+#include "Logging/CatLog.h"
+#include "Logging/CatLogContext.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Net/UnrealNetwork.h"
@@ -15,7 +16,7 @@
 ACatFishingHookActor::ACatFishingHookActor()
 {
 	bReplicates = true;
-	SetReplicateMovement(true); // 抛竿飞行轨迹靠引擎内建的 Movement 复制同步到客户端
+	SetReplicateMovement(true); // 落水后使用移动复制；飞行期间复制冻结弹道，避免逐包跳动。
 	bAlwaysRelevant = false;
 	bNetUseOwnerRelevancy = false;
 	bOnlyRelevantToOwner = false; // 其他玩家也要看见钩/浮标飞出去，不能只对抛竿者复制
@@ -64,10 +65,6 @@ ACatFishingHookActor::ACatFishingHookActor()
 	{
 		FishingLine->SetMaterial(0, FishingLineMaterial.Object);
 	}
-	// 抛物线飞行组件：默认不自动启动，只有 BeginAuthoritativeFlight 显式激活时才开始受重力飞行
-	ProjectileMovement = CreateDefaultSubobject<UProjectileMovementComponent>(TEXT("ProjectileMovement"));
-	ProjectileMovement->bAutoActivate = false;
-	ProjectileMovement->ProjectileGravityScale = 1.0f;
 }
 
 void ACatFishingHookActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -161,39 +158,59 @@ bool ACatFishingHookActor::SetFishingLinePresentationFromAuthority(
 	return true;
 }
 
-bool ACatFishingHookActor::BeginAuthoritativeFlight(const FVector& InitialVelocity,
-	const FVector& ExpectedLandingWorldPoint)
+bool ACatFishingHookActor::BeginAuthoritativeFlight(const FVector& ExpectedLandingWorldPoint)
 {
-	// 必须已完成身份初始化且尚未定稿过落点（bLandingFinalized 为一次性锁），初速度/预期落点也不能是 NaN
-	if (!HasAuthority() || !bIdentityInitialized || bLandingFinalized || InitialVelocity.ContainsNaN()
-		|| ExpectedLandingWorldPoint.ContainsNaN())
+	FCatFishingCastTrajectory Trajectory;
+	if (!HasAuthority() || !bIdentityInitialized || bLandingFinalized || !GetWorld()
+		|| PresentationState.CastTrajectory.DurationSeconds > 0.0
+		|| !Trajectory.Initialize(GetActorLocation(), ExpectedLandingWorldPoint,
+			GetWorld()->GetGravityZ(), GetWorld()->GetTimeSeconds()))
 	{
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=cast_flight_rejected World=%s WorldNetMode=%d Authority=%d Role=%s Actor=%s Session=%s CastAttempt=%s Error=InvalidFlight"),
+			*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()), *GetName(),
+			*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *PresentationState.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens));
 		return false;
 	}
-	// 用外部（弹道解算）算好的初速度直接赋值并激活抛物线运动，让引擎物理去演算真实飞行轨迹
-	ProjectileMovement->Velocity = InitialVelocity;
-	ProjectileMovement->Activate(true);
-	// 记录“期望”落点的 Z 高度，作为轮询判断是否已落地的阈值（不是最终写入的权威落点本身）
-	PendingAuthoritativeLandingWorldPoint = ExpectedLandingWorldPoint;
-	// Hook/Bobber 视觉 Mesh 按规范使用 NoCollision，落点靠有界轮询而不是碰撞事件确认；权威落点本身仍由调用方给定。
-	GetWorldTimerManager().SetTimer(LandingPollTimerHandle, this,
-		&ACatFishingHookActor::PollAuthoritativeLanding, 0.05f, true);
+	const FCatFishingHookPresentationState Previous = PresentationState;
+	PresentationState.CastTrajectory = Trajectory;
+	SetReplicateMovement(false);
+	QueueOrDispatchPresentationChanged(Previous, PresentationState);
+	RefreshCastFlight();
+	ForceNetUpdate();
+	UE_LOG(LogCatFishing, Log, TEXT("Event=cast_flight_started World=%s WorldNetMode=%d Authority=%d Role=%s Actor=%s Session=%s CastAttempt=%s Origin=%s Landing=%s Velocity=%s Duration=%.3f %s"),
+		*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()), *GetName(),
+		*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *PresentationState.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Trajectory.Origin.ToString(), *Trajectory.Landing.ToString(), *Trajectory.InitialVelocity.ToString(),
+		Trajectory.DurationSeconds, *CatLogContext::BuildControllerFields(GetInstigatorController()));
 	return true;
 }
 
-void ACatFishingHookActor::PollAuthoritativeLanding()
+void ACatFishingHookActor::RefreshCastFlight()
 {
-	if (!HasAuthority() || bLandingFinalized)
+	if (!GetWorld()) return;
+	if (PresentationState.Phase != ECatFishingHookPresentationPhase::CastFlight
+		|| PresentationState.CastTrajectory.DurationSeconds <= 0.0)
 	{
-		// 落点已经在别处定稿（例如提前被打断），及时清掉计时器避免野调用
-		GetWorldTimerManager().ClearTimer(LandingPollTimerHandle);
+		GetWorldTimerManager().ClearTimer(CastFlightTimerHandle);
 		return;
 	}
-	// 用当前物理飞行位置的高度和目标落点高度比较：一旦降到目标水面高度以下即视为落地
-	if (GetActorLocation().Z <= PendingAuthoritativeLandingWorldPoint.Z)
+	if (!GetWorldTimerManager().IsTimerActive(CastFlightTimerHandle))
 	{
-		GetWorldTimerManager().ClearTimer(LandingPollTimerHandle);
-		FinalizeAuthoritativeLandingOnce(true, PendingAuthoritativeLandingWorldPoint);
+		GetWorldTimerManager().SetTimer(CastFlightTimerHandle, this, &ThisClass::UpdateCastFlight, 1.0f / 60.0f, true);
+	}
+	UpdateCastFlight();
+}
+
+void ACatFishingHookActor::UpdateCastFlight()
+{
+	const FCatFishingCastTrajectory& Flight = PresentationState.CastTrajectory;
+	const AGameStateBase* GameState = GetWorld()->GetGameState();
+	const double Now = !HasAuthority() && GameState ? GameState->GetServerWorldTimeSeconds() : GetWorld()->GetTimeSeconds();
+	SetActorLocation(Flight.Evaluate(Now));
+	if (Now >= Flight.StartedServerTime + Flight.DurationSeconds)
+	{
+		GetWorldTimerManager().ClearTimer(CastFlightTimerHandle);
+		if (HasAuthority()) FinalizeAuthoritativeLandingOnce(true, Flight.Landing);
 	}
 }
 
@@ -206,10 +223,9 @@ bool ACatFishingHookActor::FinalizeAuthoritativeLandingOnce(const bool bSucceede
 		return false;
 	}
 	bLandingFinalized = true;
-	// 停止物理飞行并把 Actor 位置强制吸附到权威落点，消除轮询帧误差，保证落点精确一致
-	ProjectileMovement->StopMovementImmediately();
-	ProjectileMovement->Deactivate();
+	GetWorldTimerManager().ClearTimer(CastFlightTimerHandle);
 	SetActorLocation(LandingWorldPoint);
+	SetReplicateMovement(true);
 	const FCatFishingHookPresentationState Previous = PresentationState;
 	// 落地成功进入 Landed（等待鱼咬钩），失败（例如落在非法区域）进入 Failed 供表现层播放对应反馈
 	PresentationState.Phase = bSucceeded ? ECatFishingHookPresentationPhase::Landed : ECatFishingHookPresentationPhase::Failed;
@@ -234,6 +250,10 @@ bool ACatFishingHookActor::FinalizeAuthoritativeLandingOnce(const bool bSucceede
 	}
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 	ForceNetUpdate();
+	UE_LOG(LogCatFishing, Log, TEXT("Event=cast_flight_landed World=%s WorldNetMode=%d Authority=%d Role=%s Actor=%s Session=%s CastAttempt=%s Succeeded=%d Landing=%s %s"),
+		*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()), *GetName(),
+		*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *PresentationState.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), bSucceeded,
+		*LandingWorldPoint.ToString(), *CatLogContext::BuildControllerFields(GetInstigatorController()));
 	return true;
 }
 
@@ -290,7 +310,7 @@ void ACatFishingHookActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	GetWorldTimerManager().ClearTimer(FishingLinePresentationTimerHandle);
 	GetWorldTimerManager().ClearTimer(BobberPresentationTimerHandle);
-	GetWorldTimerManager().ClearTimer(LandingPollTimerHandle);
+	GetWorldTimerManager().ClearTimer(CastFlightTimerHandle);
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -308,6 +328,14 @@ void ACatFishingHookActor::OnRep_Instigator()
 
 void ACatFishingHookActor::OnRep_PresentationState(const FCatFishingHookPresentationState& Previous)
 {
+	if (Previous.Phase != PresentationState.Phase || Previous.CastTrajectory.DurationSeconds != PresentationState.CastTrajectory.DurationSeconds)
+	{
+		UE_LOG(LogCatFishing, Log, TEXT("Event=cast_flight_received World=%s WorldNetMode=%d Authority=%d Role=%s Actor=%s Session=%s CastAttempt=%s Phase=%s Landing=%s Duration=%.3f %s"),
+			*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()), *GetName(),
+			*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *PresentationState.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens),
+			*UEnum::GetValueAsString(PresentationState.Phase), *PresentationState.CastTrajectory.Landing.ToString(),
+			PresentationState.CastTrajectory.DurationSeconds, *CatLogContext::BuildControllerFields(GetInstigatorController()));
+	}
 	// 客户端复制回调的唯一入口，走和服务器本地相同的排队/派发逻辑
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 }
@@ -333,6 +361,7 @@ void ACatFishingHookActor::QueueOrDispatchPresentationChanged(const FCatFishingH
 void ACatFishingHookActor::DispatchPresentationChanged(const FCatFishingHookPresentationState& Previous,
 	const FCatFishingHookPresentationState& Current)
 {
+	RefreshCastFlight();
 	// 初始复制包到达后 Owner 与 PresentationState 都已具备，此处再接一次可覆盖 BeginPlay 时 Owner 尚未解析的情况。
 	RefreshFishingLineAttachment();
 	RefreshFishingLineShape();

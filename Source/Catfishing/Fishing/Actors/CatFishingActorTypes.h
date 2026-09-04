@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Fishing/CatFishingTypes.h"
+#include "Fishing/Simulation/CatFishingCastTrajectory.h"
 #include "CatFishingActorTypes.generated.h"
 
 class APlayerState;
@@ -66,6 +67,7 @@ struct FCatFishingHookPresentationState
 	UPROPERTY(BlueprintReadOnly) FGuid FishingSessionId;
 	UPROPERTY(BlueprintReadOnly) FGuid CastAttemptId;
 	UPROPERTY(BlueprintReadOnly) ECatFishingHookPresentationPhase Phase = ECatFishingHookPresentationPhase::Unconfigured;
+	UPROPERTY(BlueprintReadOnly) FCatFishingCastTrajectory CastTrajectory;
 	UPROPERTY(BlueprintReadOnly) ECatFishingBobberPresentationMode BobberMode = ECatFishingBobberPresentationMode::None;
 	/** 当前浮漂模式在服务器开始的世界时间；客户端据此保持多人相位一致，不逐帧复制 Transform。 */
 	UPROPERTY(BlueprintReadOnly) double BobberModeStartedServerTime = 0.0;

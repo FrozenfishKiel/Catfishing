@@ -33,6 +33,10 @@ struct FCatFishingInputEdge
 
 	UPROPERTY(BlueprintReadOnly)
 	int64 InputSequence = 0;
+	/** 松开时采集的鼠标/镜头输入，服务器验证后自行与水面求交。 */
+	UPROPERTY() bool bHasCastViewRay = false;
+	UPROPERTY() FVector CastViewOrigin = FVector::ZeroVector;
+	UPROPERTY() FVector CastViewDirection = FVector::ZeroVector;
 };
 
 UCLASS(ClassGroup=(Catfishing), meta=(BlueprintSpawnableComponent))
@@ -127,8 +131,8 @@ private:
 	 * 调用点必须在语义已经确定之后——左键按下有瞄准/提竿/收线三种含义，不能在分派前统一广播。
 	 */
 	void BroadcastCosmeticEventFromAuthority(const FGameplayTag& EventTag) const;
-	/** 服务器按 Controller 视线射线∩水面重建抛竿命令（规格 3.1：点哪落哪、无蓄力）；所有 ID/Revision/Handle 由服务器填。 */
-	void BeginCastFromViewOnAuthority(APlayerController* Controller, const FGuid& RequestId);
+	/** 验证松开时采集的镜头/鼠标射线并与水面求交；所有 ID/Revision/Handle 由服务器填。 */
+	void BeginCastFromViewOnAuthority(APlayerController* Controller, const FCatFishingInputEdge& Edge);
 	/** 服务器按 Q 按住时长换算蓄力并投放窝料（规格 3.1 打窝：蓄力抛掷）；落点用与客户端预览相同的弹道预测。 */
 	void ThrowChumFromChargeOnAuthority(APlayerController* Controller, const FGuid& RequestId, double HeldSeconds);
 	/** 服务器记录的 Q 按下时刻（世界时间）；<0 表示当前未蓄力。 */

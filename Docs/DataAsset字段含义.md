@@ -80,6 +80,8 @@
 
 **Bait（鱼饵）**：`BiteRateMultiplier`(>0,咬钩率倍率) · `MinimumBiteDelayMultiplier`(>0,最短咬钩延迟倍率)
 **Float（浮漂）**：`MaximumCastDistanceCentimeters`(>0,最大抛竿距离) · `CastErrorStandardDeviation/MaximumCastErrorRadiusCentimeters`(落点误差σ/上限,σ≤上限) · `BiteSignalStability`(0~1,咬钩信号稳定度)
+
+当前正式射程：羽毛 1000 cm、毛线球 1500 cm、铃铛 2000 cm。实际可抛距离取浮漂射程与鱼竿 `MaximumLineLengthCentimeters` 的较小值，并从竿尖量至落点；入门竿线长 1500 cm。原 300/500/700 cm 配置由 `Scripts/update_fishing_cast_ranges.py` 定向迁移，其他装备字段保留。
 **ScoopNet（抄网）**：`ScoopReachCentimeters`(>0,**抄手沿 Character 面朝正前方发射的水平线段长度**,语义="网杆多长")。方向取 `Character Actor Forward`，不读取 `Controller/Camera` 朝向。与鱼定义里的 `ScoopTargetRadiusCentimeters`(圆半径)配对构成抄网判定：**俯视投影下线段∩圆**即够得着。实际生效长度取 `min(本值, UCatFishingSettings::ScoopReachCentimeters)`——全局那个是上限闸门。高度差另由 `UCatFishingSettings::MaximumScoopVerticalDeltaCentimeters` 单独限制,判定本身完全不看俯仰角。当前默认配置不发放或自动选中抄网；`StarterScoopNet` 只保留为正式目录定义，商店/奖励来源接入前暂时没有默认获取渠道。
 **Chum（窝料）**：`bRunConsumable` 必须 True，核心在 `ChumInfluence` 结构：
 

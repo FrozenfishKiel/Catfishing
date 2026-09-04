@@ -833,11 +833,11 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 		BiteRate *= Bait->BiteRateMultiplier;
 		MinimumDelay *= Bait->MinimumBiteDelayMultiplier;
 	}
-	// 打窝效果在此处生效：采样钩子当前位置的窝料浓度（鱼腥/香/发酵三个维度求和），
+	// 初次调度时钩子还在飞行；窝料必须采样服务器冻结的水面落点。
 	// 浓度越高上钩率提升越多，但用 1-e^-x 做饱和曲线，避免无限堆窝料导致上钩率失控。
 	if (UCatChumFieldSubsystem* Chum = GetWorld()->GetSubsystem<UCatChumFieldSubsystem>())
 	{
-		const FCatChumSample Sample = Chum->SampleChumAtPoint(Snapshot.HookActor->GetActorLocation(),
+		const FCatChumSample Sample = Chum->SampleChumAtPoint(AttemptSnapshot.ServerCorrectedLandingWorldPoint,
 			AttemptSnapshot.WaterRegion, GetWorld()->GetTimeSeconds());
 		const double TotalChum = Sample.EffectiveChumVector.Fishy + Sample.EffectiveChumVector.Fragrant
 			+ Sample.EffectiveChumVector.Fermented;
@@ -854,7 +854,11 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 	const double SampledAdditionalCalmDelay = -FMath::Loge(1.0 - Unit) / BiteRate;
 	const double MaximumAdditionalCalmDelay = Settings->MaximumBiteDelaySeconds - BiteWarningSeconds - MinimumDelay;
 	if (!FMath::IsFinite(MaximumAdditionalCalmDelay) || MaximumAdditionalCalmDelay < 0.0) return false;
-	const double WarningDelay = MinimumDelay + FMath::Min(SampledAdditionalCalmDelay, MaximumAdditionalCalmDelay);
+	const FCatFishingCastTrajectory& Flight = Snapshot.HookActor->GetPresentationState().CastTrajectory;
+	const double RemainingFlightSeconds = FMath::Max(0.0,
+		Flight.StartedServerTime + Flight.DurationSeconds - GetWorld()->GetTimeSeconds());
+	const double WarningDelay = RemainingFlightSeconds + MinimumDelay
+		+ FMath::Min(SampledAdditionalCalmDelay, MaximumAdditionalCalmDelay);
 	const double Delay = WarningDelay + BiteWarningSeconds;
 	GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
 	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);

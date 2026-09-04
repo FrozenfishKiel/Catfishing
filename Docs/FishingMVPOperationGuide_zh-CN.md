@@ -319,7 +319,7 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 结果日志：`Event=begin_cast_result Committed=true Landing=...` 或 `Committed=false Error=CastOutOfRange/InvalidWaterTarget/...`
 
 **可选的客户端预览蓝图**（纯表现，不影响判定）：按住左键期间每帧调
-`UCatFishingAimLibrary::ResolveCastAimPoint(ViewLocation, ViewRotation) → Landing`，用 `Draw Debug Sphere` 画落点即可。这个函数和服务器用的是**同一份**，预览点 = 真实落点。
+先用 `UCatFishingAimLibrary::TryGetLocalCastViewRay` 取得鼠标射线（隐藏鼠标时取镜头准星），再调用 `ResolveCastAimPoint(Origin, Direction.Rotation()) → Landing`。松开时上传同一射线，服务器验证来源、朝向并重新求水面交点，随后校验遮挡与装备射程。不要使用角色眼睛位置替代第三人称镜头。当前浮漂上限：羽毛 10 米、毛线球 15 米、铃铛 20 米；有效距离取浮漂上限与鱼竿线长的较小值，入门竿线长为 15 米。
 
 ---
 
@@ -428,11 +428,11 @@ Event BeginPlay
 
 ---
 
-### 一个不阻塞的小瑕疵
+### 抛竿飞行与首次等待
 
-`ScheduleWaitingProbeFromStateTree` 里第一次采样窝料浓度时，用的是钩子**刚生成时**的位置（鱼竿竿尖），而不是最终落水点 —— 因为这一步比 `BeginAuthoritativeFlight` 先跑。
+鱼钩按服务器冻结的抛物线连续飞到准确落点，客户端从复制的起始时间重建当前飞行位置。落水后恢复普通移动复制，不再朝水面直射后强制吸附。
 
-只影响第一口的咬钩延迟精度，不影响选鱼（选鱼发生在 Probe 事件触发时，那时钩子已经落水）。后续要精调打窝手感时再处理。
+`ScheduleWaitingProbeFromStateTree` 首次采样使用冻结的落水点，首次预警与咬钩计时包含剩余飞行时间。Development 落盘日志分类为 `LogCatFishing`，可用 `cast_aim_request`、`cast_range_rejected`、`cast_flight_started`、`cast_flight_landed`、`cast_flight_received`、`begin_cast_received` 对照请求、Session 和 CastAttempt；端到端验收需要同时检查房主与客户端日志。
 
 ---
 

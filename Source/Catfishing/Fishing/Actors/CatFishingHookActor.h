@@ -6,7 +6,6 @@
 #include "CatFishingHookActor.generated.h"
 
 class USceneComponent;
-class UProjectileMovementComponent;
 class UCableComponent;
 
 UCLASS(Blueprintable, meta=(ChildCannotTick))
@@ -18,7 +17,7 @@ public:
 	ACatFishingHookActor();
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	bool InitializeAuthoritativeIdentity(FGuid InFishingSessionId, FGuid InCastAttemptId);
-	bool BeginAuthoritativeFlight(const FVector& InitialVelocity, const FVector& ExpectedLandingWorldPoint);
+	bool BeginAuthoritativeFlight(const FVector& ExpectedLandingWorldPoint);
 	bool FinalizeAuthoritativeLandingOnce(bool bSucceeded, const FVector& LandingWorldPoint);
 	/** Authority 只同步离散浮漂模式；客户端按起始服务器时间自行播放连续位移。 */
 	bool SetBobberPresentationModeFromAuthority(ECatFishingBobberPresentationMode Mode);
@@ -58,8 +57,9 @@ private:
 	void DispatchPresentationChanged(const FCatFishingHookPresentationState& Previous, const FCatFishingHookPresentationState& Current);
 	void RefreshBobberPresentationTimer();
 	void UpdateBobberPresentation();
-	/** 用有界轮询计时器（非 Actor Tick）等待抛物线穿过目标水面高度，再一次性提交落水终态。 */
-	void PollAuthoritativeLanding();
+	/** 飞行期间本地按冻结弹道更新；落水后关闭，恢复普通移动复制。 */
+	void RefreshCastFlight();
+	void UpdateCastFlight();
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> SceneRoot;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> VisualRoot;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> HookVisualAnchor;
@@ -73,7 +73,6 @@ private:
 	 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Fishing|Presentation", meta=(AllowPrivateAccess="true"))
 	TObjectPtr<UCableComponent> FishingLine;
-	UPROPERTY(VisibleAnywhere) TObjectPtr<UProjectileMovementComponent> ProjectileMovement;
 	/** 在本机解析鱼竿表现竿尖并接好 Cable；Owner/复制状态尚未到达时保持隐藏。 */
 	void RefreshFishingLineAttachment();
 	/** 把已复制的 L_paid/Slack 写成纯表现目标；实际 Cable 参数由本地定时器平滑追赶。 */
@@ -87,8 +86,7 @@ private:
 	bool bIdentityInitialized = false;
 	bool bLandingFinalized = false;
 	bool bPresentationDeferred = false;
-	FVector PendingAuthoritativeLandingWorldPoint = FVector::ZeroVector;
-	FTimerHandle LandingPollTimerHandle;
+	FTimerHandle CastFlightTimerHandle;
 	FTimerHandle BobberPresentationTimerHandle;
 	FTimerHandle FishingLinePresentationTimerHandle;
 	double TargetFishingLineLengthCentimeters = 75.0;

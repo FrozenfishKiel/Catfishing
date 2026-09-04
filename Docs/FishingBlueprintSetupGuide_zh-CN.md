@@ -41,11 +41,11 @@
 | `Equipment/CatEquipmentComponent.h` | `GetSnapshot()` 加 `BlueprintPure`，蓝图能读当前 `Revision`、装备 DefinitionId 和对应 ItemInstanceId |
 | `Character/CatCharacter.h` | `GetEquipmentComponent()` / `GetConditionComponent()` 加 `BlueprintPure` |
 | `Environment/CatWaterRegion.h` | `GetWaterRegionHandle()` / `HasValidBakedGeometry()` 加 `BlueprintPure`，蓝图能从关卡里放置的湖 Actor 直接拿到抛竿/打窝要用的 `FCatWaterRegionHandle` |
-| `Fishing/Actors/CatFishingHookActor.h/.cpp` | 浮漂现在会在权威落点用有界轮询计时器（不是 Tick）确认落水，`Phase` 会真正走到 `Landed`，蓝图的 `BP_OnHookPresentationChanged` 能收到正确通知 |
+| `Fishing/Actors/CatFishingHookActor.h/.cpp` | 服务器冻结抛物线并复制给客户端；双方按服务器时间更新，到达精确落点后一次性进入 `Landed`，不再使用高度轮询或 ProjectileMovement |
 
 如果你在自己机器上拉了最新代码却发现这些函数没有 `BlueprintCallable`/`BlueprintPure`，说明改动没同步，先确认代码状态再继续。
 
-**一个已知的小瑕疵，不影响功能，先告诉你**：`ScheduleWaitingProbeFromStateTree`（等口阶段）里第一次采样窝料浓度时，用的是钩子刚生成时的位置（鱼竿竿尖），而不是最终落水点，因为这一步比 `BeginAuthoritativeFlight` 先跑。这只影响**第一口的咬钩延迟计算精度**，不影响后续选鱼（选鱼发生在 Probe 事件触发时，那时钩子已经落水）。如果你们后续要精确调打窝手感，这是一个可以优化的点，但不阻塞 MVP。
+`ScheduleWaitingProbeFromStateTree` 首次采样使用服务器冻结的水面落点，等待时间包含剩余飞行时间，因此慢浮等待与咬钩预警从落水后计算。
 
 ---
 
