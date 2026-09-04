@@ -4,17 +4,15 @@
 #include "Tests/AutomationCommon.h"
 #include "UObject/UnrealType.h"
 
-#include "CableComponent.h"
 #include "Animation/AnimMontage.h"
 #include "Character/CatCharacter.h"
-#include "ComponentReregisterContext.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingActorTypes.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
-#include "Fishing/Components/CatFishingLineComponent.h"
+#include "Fishing/Presentation/CatFishingLineCurveComponent.h"
 #include "Fishing/CatFishingTypes.h"
 #include "Fishing/Presentation/CatFishAnimInstance.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
@@ -499,28 +497,24 @@ bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameter
 {
 	(void)Parameters;
 	const UCatFishingPresentationSettings* Settings = GetDefault<UCatFishingPresentationSettings>();
-	const UCatFishingLineComponent* Line = GetDefault<UCatFishingLineComponent>();
-	TestFalse(TEXT("line component does not tick"), Line->PrimaryComponentTick.bCanEverTick);
-	TestFalse(TEXT("line component does not replicate gameplay state"), Line->GetIsReplicated());
 	ACatFishingHookActor* Hook = GetMutableDefault<ACatFishingHookActor>();
 	const USceneComponent* LineStartAnchor = Cast<USceneComponent>(
 		Hook->GetDefaultSubobjectByName(TEXT("FishingLineStartAnchor")));
-	const UCableComponent* Cable = Cast<UCableComponent>(Hook->GetDefaultSubobjectByName(TEXT("FishingLine")));
+	const UCatFishingLineCurveComponent* Curve = Cast<UCatFishingLineCurveComponent>(Hook->GetDefaultSubobjectByName(TEXT("FishingLineCurve")));
 	TestNotNull(TEXT("hook owns a smoothed fishing-line start anchor"), LineStartAnchor);
-	TestNotNull(TEXT("hook owns a native fishing-line cable"), Cable);
+	TestNotNull(TEXT("hook owns a native fishing-line curve"), Curve);
+	TestNull(TEXT("hook no longer creates a legacy Cable subobject"), Hook->GetDefaultSubobjectByName(TEXT("FishingLine")));
 	if (LineStartAnchor)
 	{
 		TestTrue(TEXT("line start anchor is world-space independent from replicated hook jumps"),
 			LineStartAnchor->IsUsingAbsoluteLocation());
 	}
-	if (Cable)
+	if (Curve)
 	{
-		TestFalse(TEXT("visual cable itself is not replicated"), Cable->GetIsReplicated());
-		TestTrue(TEXT("visual cable has both endpoints fixed"), Cable->bAttachStart && Cable->bAttachEnd);
-		TestFalse(TEXT("visual cable collision stays disabled"), Cable->bEnableCollision);
-		TestFalse(TEXT("visual cable does not hard-switch bending stiffness"), Cable->bEnableStiffness);
-		TestTrue(TEXT("visual cable uses stable substeps"), Cable->bUseSubstepping);
-		TestTrue(TEXT("visual cable starts at the smoothing anchor"), Cable->GetAttachParent() == LineStartAnchor);
+		TestFalse(TEXT("visual curve itself is not replicated"), Curve->GetIsReplicated());
+		TestFalse(TEXT("visual curve has no independent simulation tick"), Curve->PrimaryComponentTick.bCanEverTick);
+		TestEqual(TEXT("visual curve collision stays disabled"), Curve->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
+		TestTrue(TEXT("visual curve starts at the smoothing anchor"), Curve->GetAttachParent() == LineStartAnchor);
 	}
 
 	FTestWorldWrapper WorldWrapper;
@@ -530,19 +524,12 @@ bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameter
 		ACatFishingRodActor* Rod = World->SpawnActor<ACatFishingRodActor>();
 		FActorSpawnParameters SpawnParameters;
 		SpawnParameters.Owner = Rod;
+		UClass* FormalHookClass = Settings->HookActorClass.LoadSynchronous();
+		TestNotNull(TEXT("formal configured hook Blueprint loads after curve migration"), FormalHookClass);
+		if (!FormalHookClass) return false;
 		ACatFishingHookActor* RuntimeHook = World->SpawnActor<ACatFishingHookActor>(
-			ACatFishingHookActor::StaticClass(), FTransform::Identity, SpawnParameters);
-		TestNotNull(TEXT("spawn runtime hook for cable binding"), RuntimeHook);
-		if (RuntimeHook)
-		{
-			// 模拟旧蓝图已注册的 8 段 Cable，验证 BeginPlay 同时修正段数和底层粒子，避免越界或保留旧网格。
-			UCableComponent* LegacyCable = Cast<UCableComponent>(RuntimeHook->GetDefaultSubobjectByName(TEXT("FishingLine")));
-			if (LegacyCable)
-			{
-				FComponentReregisterContext ReregisterContext(LegacyCable);
-				LegacyCable->NumSegments = 8;
-			}
-		}
+			FormalHookClass, FTransform::Identity, SpawnParameters);
+		TestNotNull(TEXT("spawn runtime hook for curve binding"), RuntimeHook);
 		WorldWrapper.BeginPlayInTestWorld();
 		if (RuntimeHook)
 		{
@@ -556,37 +543,43 @@ bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameter
 			TestEqual(TEXT("landed line starts without manufactured slack"),
 				RuntimeHook->GetPresentationState().SlackLineLengthCentimeters, 0.0, 0.01);
 			TestTrue(TEXT("landed line starts taut"), RuntimeHook->GetPresentationState().bLineTaut);
-			TestTrue(TEXT("authority can publish slack cable shape"),
+			TestTrue(TEXT("authority can publish slack curve shape"),
 				RuntimeHook->SetFishingLinePresentationFromAuthority(600.0, 500.0, 100.0, 0.25f, false));
-			const UCableComponent* RuntimeCable = Cast<UCableComponent>(
-				RuntimeHook->GetDefaultSubobjectByName(TEXT("FishingLine")));
-			TestNotNull(TEXT("runtime hook keeps its cable"), RuntimeCable);
-			if (RuntimeCable)
+			const UCatFishingLineCurveComponent* RuntimeCurve = Cast<UCatFishingLineCurveComponent>(
+				RuntimeHook->GetDefaultSubobjectByName(TEXT("FishingLineCurve")));
+			TestNotNull(TEXT("runtime hook keeps its curve"), RuntimeCurve);
+			if (RuntimeCurve)
 			{
-				TestTrue(TEXT("runtime cable attaches to the replicated rod owner"),
-					RuntimeCable->GetAttachedActor() == Rod);
-				TestTrue(TEXT("runtime cable does not jump directly to a new paid out length"),
-					RuntimeCable->CableLength < 600.0f);
-				TestEqual(TEXT("runtime cable overrides legacy segment count from presentation settings"),
-					RuntimeCable->NumSegments, Settings->FishingLineNumSegments);
-				TArray<FVector> CableParticles;
-				RuntimeCable->GetCableParticleLocations(CableParticles);
-				TestEqual(TEXT("runtime cable rebuilds particles to match its configured segments"),
-					CableParticles.Num(), RuntimeCable->NumSegments + 1);
+				TestTrue(TEXT("runtime curve does not jump directly to a new paid out length"),
+					RuntimeCurve->GetCurveLengthCentimeters() < 600.0);
 				for (int32 TickIndex = 0; TickIndex < 120; ++TickIndex)
 				{
 					WorldWrapper.TickTestWorld(1.0f / 60.0f);
 				}
-				TestTrue(TEXT("smoothed runtime cable converges to paid out length"),
-					FMath::IsNearlyEqual(RuntimeCable->CableLength, 600.0f, 0.5f));
-				TestTrue(TEXT("slack cable converges to configured low gravity at the actual slack ratio"),
-					FMath::IsNearlyEqual(static_cast<double>(RuntimeCable->CableGravityScale),
-						FMath::Lerp(Settings->FishingLineTautGravityScale, Settings->FishingLineSlackGravityScale, 100.0 / 600.0), 0.001));
-				TestFalse(TEXT("runtime cable keeps one bending mode while slack changes"),
-					RuntimeCable->bEnableStiffness);
-				TestEqual(TEXT("runtime cable keeps configured solver iterations"), RuntimeCable->SolverIterations, Settings->FishingLineSolverIterations);
-				TestTrue(TEXT("runtime cable uses configured substep time"),
-					FMath::IsNearlyEqual(static_cast<double>(RuntimeCable->SubstepTime), Settings->FishingLineSimulationSubstepSeconds, 0.00001));
+				TestTrue(TEXT("smoothed runtime curve converges to paid out length"),
+					FMath::IsNearlyEqual(RuntimeCurve->GetCurveLengthCentimeters(), 600.0, 0.5));
+				const TArray<FVector>& Points = RuntimeCurve->GetCurveWorldPoints();
+				TestEqual(TEXT("runtime curve uses configured subdivision"), Points.Num(), Settings->FishingLineCurveSegments + 1);
+				if (Points.Num() > 1)
+				{
+					TestTrue(TEXT("curve ends at the rod tip"), Points.Last().Equals(Rod->GetRodTipWorldTransform().GetLocation(), 0.1));
+					TestTrue(TEXT("actual slack creates downward curvature"), Points[Points.Num() / 2].Z < -1.0);
+				}
+				const auto BeforeVisualMotion = RuntimeHook->GetPresentationState();
+				Rod->SetActorLocation(FVector(1000.0, 100.0, 200.0));
+				WorldWrapper.TickTestWorld(1.0f / 30.0f);
+				TestEqual(TEXT("visual endpoint motion cannot change authoritative paid line"),
+					RuntimeHook->GetPresentationState().PaidOutLineLengthCentimeters, BeforeVisualMotion.PaidOutLineLengthCentimeters);
+				TestEqual(TEXT("visual endpoint motion cannot change authoritative tension"),
+					RuntimeHook->GetPresentationState().NormalizedTension, BeforeVisualMotion.NormalizedTension);
+				RuntimeHook->SetOwner(nullptr);
+				// 权威状态刷新复用与复制回调相同的端点重接入口。
+				RuntimeHook->SetFishingLinePresentationFromAuthority(600.0, 500.0, 100.0, 0.25f, false);
+				TestFalse(TEXT("curve hides when rod owner is lost"), RuntimeCurve->IsVisible());
+				TestEqual(TEXT("curve clears stale geometry when rod owner is lost"), RuntimeCurve->GetNumSections(), 0);
+				RuntimeHook->SetOwner(Rod);
+				RuntimeHook->SetFishingLinePresentationFromAuthority(600.0, 500.0, 100.0, 0.25f, false);
+				TestTrue(TEXT("curve returns when rod owner resolves again"), RuntimeCurve->IsVisible());
 			}
 			USceneComponent* HookVisualRoot = CatFishingActorContractTest::FindSceneComponent(RuntimeHook, TEXT("VisualRoot"));
 			TestNotNull(TEXT("runtime hook owns visual root"), HookVisualRoot);

@@ -56,31 +56,20 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Bobber", meta=(ClampMin="0", Units="cm"))
 	double BobberBiteSinkDepthCentimeters = 28.0;
 
-	/** Cable 纯表现更新间隔；玩法模拟和网络复制仍使用各自的服务器频率。 */
+	/** 曲线纯表现更新间隔；玩法模拟和网络复制仍使用各自的服务器频率。 */
 	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0.005", Units="s"))
 	double FishingLineVisualUpdateIntervalSeconds = 1.0 / 60.0;
-	/** Hook 复制落点到本地 Cable 起点的插值速度，消除 20Hz 端点阶跃。 */
+	/** Hook 复制落点到本地曲线起点的插值速度，消除 20Hz 端点阶跃。 */
 	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0"))
 	double FishingLineEndpointInterpolationSpeed = 18.0;
-	/** L_paid 到本地 CableLength 的插值速度。 */
+	/** L_paid 到本地曲线弧长的插值速度；不改变权威线长。 */
 	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0"))
 	double FishingLineLengthInterpolationSpeed = 14.0;
-	/** SlackRatio 到本地重力表现的插值速度。 */
-	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0"))
-	double FishingLineSlackInterpolationSpeed = 10.0;
-	/** Cable 分段数；新 Hook 在 BeginPlay 统一应用，覆盖蓝图保存的旧值并重建粒子。 */
-	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="1", ClampMax="128"))
-	int32 FishingLineNumSegments = 32;
-	/** Cable 内部 Verlet 子步；只影响本地视觉稳定性。 */
-	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0.005", ClampMax="0.1", Units="s"))
-	double FishingLineSimulationSubstepSeconds = 0.005;
-	/** 固定约束求解次数；不再在松弛/绷紧间硬切。 */
-	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="1", ClampMax="16"))
-	int32 FishingLineSolverIterations = 16;
-	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0"))
-	double FishingLineTautGravityScale = 0.01;
-	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0"))
-	double FishingLineSlackGravityScale = 0.15;
+	/** 曲线采样段数；只控制网格精度，没有物理迭代、重力或惯性。 */
+	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="4", ClampMax="256"))
+	int32 FishingLineCurveSegments = 64;
+	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0.01", ClampMax="10", Units="cm"))
+	double FishingLineWidthCentimeters = 1.25;
 	/** 客户端窝点表现 Actor 类；留空则用原生基类（无任何可见表现）。 */
 	UPROPERTY(Config, EditAnywhere) TSoftClassPtr<ACatChumFieldPresentationActor> ChumFieldPresentationClass;
 	UPROPERTY(Config, EditAnywhere) TArray<TSoftObjectPtr<UCatRodSkinDefinition>> RodSkinCatalog;

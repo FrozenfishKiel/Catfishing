@@ -157,12 +157,12 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 
 - `L_paid`：已经放出去的实际线长；左键只负责主动收短，右键按住时只允许鱼向外游动被动带出更多线。
 - `D`：竿尖到鱼的直线距离，由鱼的实际位置决定。
-- `Slack=max(L_paid-D, 0)`：余线；大于 0 时 Cable 平滑增加本地重力，形成垂坠。
+- `Slack=max(L_paid-D, 0)`：余线；客户端按平滑已放线长与端点距离生成等弧长下垂曲线，余线越多弧度越大。
 - `TensionCentimeters`：双方候选端点距离超过 `L_paid` 的约束误差。体力、牵引和杆转矩按前述各自公式读取它或其归一化值；鱼竿磨损按实际 `LineLoad` 缩放，不用几何张力替代向外负载。
 
-因此不按任何键时，`L_paid` 保持不变：鱼向内游会自然产生余线，鱼向外游先吃掉余线，碰到线端才绷紧并让猫产生等长保持消耗。正常按住右键相当于打开线杯，它本身不会制造余线；鱼向外游到线端后，`L_paid` 才随鱼距增长，鱼静止或向内游时不会增加。只要还没到 `L_max` 且候选距离未被最大线长截断，松线状态解除约束；整根线被带完后继续外冲会重新形成张力，但正常右键的回体和双方免耗体继续有效。零体力强制拖拽依旧优先锁线。Cable 粒子只在各客户端本地模拟，网络只复制上述几个紧凑标量和端点 Actor，不逐粒子同步。客户端用 60Hz 平滑锚点追赶 Hook 的权威/复制位置，并连续插值 CableLength 与 Slack 重力；Cable 使用固定子步和固定求解次数，避免收线时出现 20Hz 压缩阶跃与刚度模式跳变。
+因此不按任何键时，`L_paid` 保持不变：鱼向内游会自然产生余线，鱼向外游先吃掉余线，碰到线端才绷紧并让猫产生等长保持消耗。正常按住右键相当于打开线杯，它本身不会制造余线；鱼向外游到线端后，`L_paid` 才随鱼距增长，鱼静止或向内游时不会增加。只要还没到 `L_max` 且候选距离未被最大线长截断，松线状态解除约束；整根线被带完后继续外冲会重新形成张力，但正常右键的回体和双方免耗体继续有效。零体力强制拖拽依旧优先锁线。曲线网格只在各客户端本地生成，网络仍只复制上述标量和端点 Actor。客户端保留 60Hz 锚点与已放线长平滑，再由 FCatFishingLineCurve 计算弧长匹配的下垂形状，用一个细管网格绘制；没有粒子速度、重力积分或惯性回弹。接近垂直/重合的端点连续加入小幅侧向开口，避免折返叠线或方向翻转。曲线不提供碰撞或约束反力，服务器线长、张力与牵引系统不读取显示网格。
 
-鱼线表现调参统一位于项目设置 `Catfishing Fishing Presentation → FishingLine`（`Config/DefaultGame.ini` 的同名配置节）。默认使用 32 段、16 次迭代、0.005 秒子步，绷紧/松弛重力倍率为 0.01/0.15；增加段数减轻折线感，低重力减轻垂坠，不改变真实余线、受力判定，也不提供额外阻尼。段数在新 Hook 的 BeginPlay 应用并按需重建 Cable 粒子/渲染数据，因此蓝图旧段数不会覆盖运行配置；改段数后重新抛竿。Development 的 `LogCatFishing` 在本地鱼线初始化时记录 `Event=fishing_line_visual_configured`，携带 Session、CastAttempt、角色上下文及实际参数，不逐帧刷屏，可用于核对房主与客户端配置。
+鱼线表现调参统一位于项目设置 `Catfishing Fishing Presentation → FishingLine`（`Config/DefaultGame.ini` 的同名配置节）：`FishingLineCurveSegments=64` 控制曲线采样精度，`FishingLineWidthCentimeters=1.25` 控制粗细，原有端点/线长插值速度继续有效。旧 Cable 段数、物理子步、求解次数、重力与 Slack 重力插值参数已删除。正式鱼钩蓝图由 `Scripts/migrate_fishing_line_curve.py` 编译重存，保持可视锚点和 Mesh 资源；Development 日志改用 `LogCatFishing/Event=fishing_line_curve_configured`（含 Renderer、Session、CastAttempt、Segments、WidthCm、PaidLengthCm、CurveLengthCm），非法几何只在进入失败状态时记录 `fishing_line_curve_rejected`，不会逐帧刷屏。
 
 ## FishLogic 4：为什么多人看到一致
 

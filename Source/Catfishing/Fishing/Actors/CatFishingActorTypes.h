@@ -71,11 +71,11 @@ struct FCatFishingHookPresentationState
 	UPROPERTY(BlueprintReadOnly) ECatFishingBobberPresentationMode BobberMode = ECatFishingBobberPresentationMode::None;
 	/** 当前浮漂模式在服务器开始的世界时间；客户端据此保持多人相位一致，不逐帧复制 Transform。 */
 	UPROPERTY(BlueprintReadOnly) double BobberModeStartedServerTime = 0.0;
-	/** 权威模拟的已放出线长 L_paid；Cable 只把它当作本地表现长度。 */
+	/** 权威模拟的已放出线长 L_paid；曲线只把它当作本地表现弧长。 */
 	UPROPERTY(BlueprintReadOnly) double PaidOutLineLengthCentimeters = 0.0;
 	/** 竿尖到 Hook/Fish 的实际直线距离 D。 */
 	UPROPERTY(BlueprintReadOnly) double StraightLineDistanceCentimeters = 0.0;
-	/** max(L_paid-D,0)；客户端据此增加 Cable 垂坠。 */
+	/** max(L_paid-D,0)；表现曲线通过已放线长和端点距离体现余线下垂。 */
 	UPROPERTY(BlueprintReadOnly) double SlackLineLengthCentimeters = 0.0;
 	UPROPERTY(BlueprintReadOnly) float NormalizedTension = 0.0f;
 	UPROPERTY(BlueprintReadOnly) bool bLineTaut = false;

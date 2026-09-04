@@ -120,7 +120,7 @@ Rod Actor 的权威 Transform 由 replicated movement 单独复制。耐久不�
 - 组件层级为 `SceneRoot → VisualRoot → HookVisualAnchor / BobberVisualAnchor / BaitVisualAnchor`。
 - Hook、Bobber、Bait 的 Mesh、材质、局部动画、VFX 和 SFX 放在对应 visual anchor 下；阶段 A 建议表现 Mesh 使用 NoCollision。
 
-鱼线模拟参数统一在项目设置 `Catfishing Fishing Presentation → FishingLine` 调整：`FishingLineNumSegments=32`、`FishingLineSolverIterations=16`、`FishingLineSimulationSubstepSeconds=0.005`、`FishingLineTautGravityScale=0.01`、`FishingLineSlackGravityScale=0.15`。段数在新 Hook 的 BeginPlay 应用，并在需要时重新注册 Cable 以重建粒子和渲染数据；蓝图保存的段数不再作为运行配置入口。其余求解参数和重力由本地表现更新读取全局配置，修改段数后重新抛竿生效。`Enable Stiffness` 仍固定关闭，`CableLength` 仍来自实际已放线长和端点距离。
+鱼线显示使用原生 `FishingLineCurve`（`UCatFishingLineCurveComponent`），一个无碰撞的程序化细管网格按端点与已放线长生成下垂曲线，不再运行 Cable 粒子模拟。项目设置 `Catfishing Fishing Presentation → FishingLine` 的 `FishingLineCurveSegments=64` 控制采样精度，`FishingLineWidthCentimeters=1.25` 控制粗细，端点与线长插值速度保留；重力、物理子步、刚度与求解次数已从配置删除。`Scripts/migrate_fishing_line_curve.py` 只编译重存正式 Hook，并检查旧 Cable 不再实例化、可视锚点和 Mesh 资源不变。材质和可见性通过新曲线组件管理，蓝图不得重新添加会驱动物理的鱼线入口。
 
 ### 4.2 anchors 与权威边界
 
