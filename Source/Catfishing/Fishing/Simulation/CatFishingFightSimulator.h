@@ -124,6 +124,8 @@ struct CATFISHING_API FCatFightStepResult
 {
 	bool bSucceeded = false;
 	bool bExhaustedCatEscape = false;
+	/** 正常主位右键回体：屏蔽双方耗体；强制力竭拖拽仍优先。 */
+	bool bSlackRecoveryActive = false;
 	double IntendedSwimSpeedCentimetersPerSecond = 0.0;
 	double CatStaminaDrain = 0.0;
 	double FishStaminaDrain = 0.0;

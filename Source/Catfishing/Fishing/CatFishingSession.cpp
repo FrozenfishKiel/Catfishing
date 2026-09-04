@@ -1297,7 +1297,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Init.Config = Config;
 	Init.InitialState = InitialState;
 	// 按键按住状态挂在玩家 CommandComponent 上，不随上一场断线终止而丢失。
-	// 这里在 Runner 启动前原子快照；两键同时按住时仍由 Runner 保持“收线优先”。
+	// 这里在 Runner 启动前原子快照；两键同时按住时由 Runner 统一裁决为右键优先。
 	if (const ACatfishingPlayerController* FisherController = FisherCharacter.IsValid()
 		? Cast<ACatfishingPlayerController>(FisherCharacter->GetController()) : nullptr)
 	{
@@ -1391,10 +1391,12 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_effort_configured SessionId=%s FightBalanceId=%s Model=IndependentActiveEffort "
 			"FishDrainMode=OpposingLoadOnly FishBaseEffortMultiplier=0.000 "
+			"SlackRecoveryMode=RightButtonExceptExhaustedDrag SlackStaminaCost=WaivedForCatAndFish SlackRegenPerSecond=%.3f "
 			"MovementMultiplier=%.3f ReelMultiplier=%.3f RodMultiplier=%.3f HoldMultiplier=%.3f "
 			"CatLoadMultiplier=%.3f FishLoadMultiplier=%.3f IsometricMultiplier=%.3f "
 			"CatCost=%.6f FishCost=%.6f ExhaustedCatEscapeSpeedMultiplier=%.3f %s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *FightBalance->BalanceDefinitionId.ToString(),
+		Config.SlackStaminaRegenPerSecond,
 		Config.CatMovementStaminaMultiplier, Config.CatReelStaminaMultiplier,
 		Config.CatRodStaminaMultiplier, Config.CatHoldStaminaMultiplier,
 		Config.CatLoadStaminaMultiplier, Config.FishLoadStaminaMultiplier, Config.IsometricEffortMultiplier,

@@ -58,7 +58,7 @@ public:
 		const FCatFishingSessionCommandContext& Context);
 	bool TryEnterHookedFightFromAuthority();
 	bool SetReelingFromAuthority(APlayerState* InputPlayerState, int64 InputSequence, bool bReeling);
-	/** 右键松开线杯写口；仅 HookedFight 且 Runner 运行中生效，收线优先。 */
+	/** 主位右键写口；HookedFight / ExhaustedReel 共用 Runner，正常右键优先于收线并回体。 */
 	bool SetSlackingFromAuthority(APlayerState* InputPlayerState, int64 InputSequence, bool bSlacking);
 	/** 主操作手离开竿位：搏斗期进入无人值守松线，等口期清空当前钓手；都不结束会话。 */
 	void SuspendOperatorFromAuthority();

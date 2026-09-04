@@ -131,9 +131,11 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 
 转杆累计观察量带 `Epoch` 与积分时长；`FCatFishingRodEffortSampler` 按固定步时长分配累计增量，低帧率一次产生的努力可分给多个补步，不能第一步全部收费、后续补步又重复收保持费。换持有人或搏斗重开清除旧 Epoch 积压。转杆能力只取主位当前力量，辅助位的收线力量不能让力竭主位免费转杆。
 
-锁线且鱼向外游时会产生持续保持费用基线；收线费用和主位可支付的移动、转杆费用覆盖这份基线，仅补收剩余保持费用。因此静止用力仍耗体，也不能通过微小晃杆免掉整段保持费用。主位力竭时移动/转杆不生成个人费用；接近力竭时，个人费用最多以当前体力抵扣保持基线，不能用不可支付的动作费用免掉助手的保持消耗。主位单独承担移动/转杆费用，收线与剩余保持费用按实际参与者可用力量分担；辅助位不为主位的独立动作付费。FreeSpool 在 `L_max` 内确实解除约束且本步无猫端正费用时恢复主猫体力，到最大线长重新绷紧后停止恢复。鱼力竭后关闭所有猫端正向扣费，继续允许收鱼。
+锁线且鱼向外游时会产生持续保持费用基线；收线费用和主位可支付的移动、转杆费用覆盖这份基线，仅补收剩余保持费用。因此静止用力仍耗体，也不能通过微小晃杆免掉整段保持费用。主位力竭时移动/转杆不生成个人费用；接近力竭时，个人费用最多以当前体力抵扣保持基线，不能用不可支付的动作费用免掉助手的保持消耗。主位单独承担移动/转杆费用，收线与剩余保持费用按实际参与者可用力量分担；辅助位不为主位的独立动作付费。
 
-猫沿线负载为 `约束张力 × clamp(鱼向外力量/猫有效合力,0,1)`；转杆负载另按鱼端力矩与主位转矩容量计算。鱼的负载为 `约束张力 × max(鱼向外对齐度,0) × clamp(猫有效合力/鱼力量,0,1)`，解除约束时均归零。鱼自身游动不扣体力，只有自身沿线努力受到猫端约束时才按 `标准努力强度 × 有效努力距离 × 鱼消耗系数 × 阶段倍率 × 鱼归一化对抗负载 × FishLoadStaminaMultiplier` 结算。单猫体力归零且没有助手出力时，鱼对抗负载为零，不会继续靠游动耗尽；有正体力且按住拉线的助手仍可提供合力，使鱼在绷线向外对抗时耗体。被拖往意图反方向的位移不计主动完成量，完全被动拖动也不会凭空增加鱼的主动努力。
+正常遛鱼按住右键时，主位按 `SlackStaminaRegenPerSecond` 持续恢复至上限，同时关闭全部猫端与鱼端耗体；移动、转杆、助手合力、是否真正解除约束、是否达到最大线长均不影响此规则。左右键同时按住时右键优先，松右键后恢复仍按住的左键收线；旧输入序号仍被拒绝。无人值守放线不会恢复旧操作手体力。零体力已经进入强制拖拽时，仍锁线且不能通过右键回体退出，沿用前述拖落水规则。鱼力竭后关闭所有猫端正向扣费，继续允许收鱼和右键回体。
+
+猫沿线负载为 `约束张力 × clamp(鱼向外力量/猫有效合力,0,1)`；转杆负载另按鱼端力矩与主位转矩容量计算。鱼的负载为 `约束张力 × max(鱼向外对齐度,0) × clamp(猫有效合力/鱼力量,0,1)`，解除约束时均归零。鱼自身游动不扣体力，正常右键回体期间也不扣体；其余时段只有自身沿线努力受到猫端约束时才按 `标准努力强度 × 有效努力距离 × 鱼消耗系数 × 阶段倍率 × 鱼归一化对抗负载 × FishLoadStaminaMultiplier` 结算。单猫体力归零且没有助手出力时，鱼对抗负载为零，不会继续靠游动耗尽；有正体力且按住拉线的助手仍可提供合力，使鱼在非右键、绷线向外对抗时耗体。被拖往意图反方向的位移不计主动完成量，完全被动拖动也不会凭空增加鱼的主动努力。
 
 猫/鱼成本、僵持倍率、四种猫动作倍率及双方负载倍率均从正式平衡资产读取；动作/负载倍率默认 1，可分别调为非负值。`FishLoadStaminaMultiplier=0` 可完全关闭鱼对抗耗体；猫负载倍率为 0 只关闭附加负载费用，仍保留猫基础努力费用。僵持倍率为 1 表示同等意图完成或受阻时有效努力相同，鱼仍须有非零对抗负载才收费。`create_fishing_fight_balance_asset.py` 只对新资产写默认值，已存在资产只校验并记录当前值，非法旧资产明确拒绝而不会静默重置调参；本轮不修改正式资产数值。运行证据使用 `LogCatFishing` 的 `fishing_effort_configured`、`fishing_coupled_work_sample`、`fishing_cat_stamina_applied`、`fishing_fish_stamina_sample`；客户端使用 `fishing_cat_stamina_received` 与 `fishing_fish_stamina_received` 核对复制到达。服务端按 SessionId/PlayerState/PlayerId 关联，不能仅凭单端日志判定联机验收通过。
 
@@ -154,7 +156,7 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 - `Slack=max(L_paid-D, 0)`：余线；大于 0 时 Cable 平滑增加本地重力，形成垂坠。
 - `TensionCentimeters`：双方候选端点距离超过 `L_paid` 的约束误差。体力、牵引和杆转矩按前述各自公式读取它或其归一化值；鱼竿磨损按实际 `LineLoad` 缩放，不用几何张力替代向外负载。
 
-因此不按任何键时，`L_paid` 保持不变：鱼向内游会自然产生余线，鱼向外游先吃掉余线，碰到线端才绷紧并让猫产生等长保持消耗。按住右键相当于打开线杯，它本身不会制造余线；鱼向外游到线端后，`L_paid` 才随鱼距增长，鱼静止或向内游时不会增加。只要还没到 `L_max` 且候选距离未被最大线长截断，松线状态解除约束并让猫恢复体力；整根线被带完后继续外冲会重新形成张力并停止恢复。Cable 粒子只在各客户端本地模拟，网络只复制上述几个紧凑标量和端点 Actor，不逐粒子同步。客户端用 60Hz 平滑锚点追赶 Hook 的权威/复制位置，并连续插值 CableLength 与 Slack 重力；Cable 使用固定子步和固定求解次数，避免收线时出现 20Hz 压缩阶跃与刚度模式跳变。
+因此不按任何键时，`L_paid` 保持不变：鱼向内游会自然产生余线，鱼向外游先吃掉余线，碰到线端才绷紧并让猫产生等长保持消耗。正常按住右键相当于打开线杯，它本身不会制造余线；鱼向外游到线端后，`L_paid` 才随鱼距增长，鱼静止或向内游时不会增加。只要还没到 `L_max` 且候选距离未被最大线长截断，松线状态解除约束；整根线被带完后继续外冲会重新形成张力，但正常右键的回体和双方免耗体继续有效。零体力强制拖拽依旧优先锁线。Cable 粒子只在各客户端本地模拟，网络只复制上述几个紧凑标量和端点 Actor，不逐粒子同步。客户端用 60Hz 平滑锚点追赶 Hook 的权威/复制位置，并连续插值 CableLength 与 Slack 重力；Cable 使用固定子步和固定求解次数，避免收线时出现 20Hz 压缩阶跃与刚度模式跳变。
 
 鱼线表现调参统一位于项目设置 `Catfishing Fishing Presentation → FishingLine`（`Config/DefaultGame.ini` 的同名配置节）。默认使用 32 段、16 次迭代、0.005 秒子步，绷紧/松弛重力倍率为 0.01/0.15；增加段数减轻折线感，低重力减轻垂坠，不改变真实余线、受力判定，也不提供额外阻尼。段数在新 Hook 的 BeginPlay 应用并按需重建 Cable 粒子/渲染数据，因此蓝图旧段数不会覆盖运行配置；改段数后重新抛竿。Development 的 `LogCatFishing` 在本地鱼线初始化时记录 `Event=fishing_line_visual_configured`，携带 Session、CastAttempt、角色上下文及实际参数，不逐帧刷屏，可用于核对房主与客户端配置。
 
@@ -184,7 +186,7 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 
 本步确实产生正的鱼对抗耗体、且扣除后剩余体力不高于平衡资产的 `FishExhaustionThreshold` 时，服务器把尾数吸附到 0 并进入 `ExhaustedReel`；该值是绝对体力阈值，不是百分比。零耗体步骤不能仅因剩余值已低于阈值就吸附归零，鱼自由游动或关闭鱼耗体系数时仍保留原有体力。排查时以权威日志的剩余体力与转换事件为准，不能用 HUD 四舍五入后的显示代替实际值。
 
-鱼体力清空的同一服务器帧保留 Encounter 当前位置，并把 `AutoHauling` 复制给所有客户端驱动侧翻。左键按住状态和输入序号跨阶段保留；主位与辅助位在 `ExhaustedReel` 新按下/松开左键仍写入原 Runner，主位右键释放也会清除放线状态。鱼随后仍由原 Runner 的线长约束逐步靠近竿尖 XY；该收尾免耗体且不再受猫剩余搏斗力量限制，不会给猫补满体力或恢复转杆力量。只有确认落在真实干地、并进入竿尖水平完成距离后才在鱼当前位置生成 Pickup；水面上的鱼不会仅因靠近竿尖就交接。确认上岸也会直接清空鱼体力并进入同一力竭生命周期。这些收尾条件是当前玩法规则，不能作为“所有结果已由物理产生”的证据。
+鱼体力清空的同一服务器帧保留 Encounter 当前位置，并把 `AutoHauling` 复制给所有客户端驱动侧翻。左键按住状态和输入序号跨阶段保留；主位与辅助位在 `ExhaustedReel` 新按下/松开左键仍写入原 Runner，主位右键按下/释放也继续有效。鱼随后仍由原 Runner 的线长约束逐步靠近竿尖 XY；该收尾免耗体且不再受猫剩余搏斗力量限制，阶段切换不自动补满猫体力，按右键仍按配置逐步回体。只有确认落在真实干地、并进入竿尖水平完成距离后才在鱼当前位置生成 Pickup；水面上的鱼不会仅因靠近竿尖就交接。确认上岸也会直接清空鱼体力并进入同一力竭生命周期。这些收尾条件是当前玩法规则，不能作为“所有结果已由物理产生”的证据。
 
 ## 常用调参位置
 
@@ -217,6 +219,7 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 1. 用 `fishing_fight_started` 确认当前鱼、竿、平衡资产 ID 与实际参数。
 2. 用 `fishing_fish_exhausted` 区分 `Cause=StaminaDepleted` 和 `Cause=ShoreLanding`；显示体力为零不等于已发生权威转换。
 3. 收线/拖动问题对照 `fishing_coupled_work_sample`、`fishing_constraint_sample` 的操作、收线量和端点修正，以及 `fishing_carrier_smoothing_sample` 的目标/应用速度。杆回转看 `fishing_rod_rotation_resistance_sample`。
+   右键回体在 `fishing_effort_configured` 中记录 `SlackRecoveryMode=RightButtonExceptExhaustedDrag` 和实际恢复速度；每秒工作采样用 `SlackRecovery`、`CatRecovery`、四项 `Drain` 和 `FishStaminaDrain` 核对。有回体时 `GroupStaminaDrain` 为负，上限处为零；`fishing_exhausted_cat_escape_changed` 仍用于辨认优先锁线的力竭拖拽。
 4. 上岸与交接看 `fishing_fish_beached`、`exhausted_fish_pickup_spawned`；生成被拒看 `exhausted_fish_pickup_rejected` 的 `Reason`。生成前必须同时确认真实干地和竿尖水平距离。
 5. 耐久对照 `LogCatEquipment` 的 `equipment_rod_wear_applied/rejected`、`equipment_rod_durability_replicated`，以及 Session 镜像与 `ROD Durability` 面板。磨损按 `SessionId + RodItemInstanceId + WearSequence` 关联，跨场继续追踪同一实例；维修看 `equipment_rod_repair_result`。区分强度过载的 `LineBroken` 和鱼竿耐久归零的 `RodBroken`，必须证明下一场沿用剩余耐久，不能用新实例满耐久代替跨场验证。
 

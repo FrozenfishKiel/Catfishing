@@ -279,6 +279,70 @@ bool FCatFishingIsometricEffortTuningTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingRightButtonRecoveryTest,
+	"Catfishing.Unit.Fishing.Effort.RightButtonWaivesAllCostsAndRecoversThroughMovementRodAndFullLine",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingRightButtonRecoveryTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	using namespace CatFishingEffortTest;
+	auto Config = MakeConfig();
+	Config.SlackStaminaRegenPerSecond = 2.75;
+	Config.TensionResponseRangeCentimeters = 1.0;
+	Config.SecondCatStrength = 30.0;
+	const auto Constraint = MakeCombinedEffortConstraint();
+	for (const auto Motion : {ECatFishMotionIntent::CalmOrInward, ECatFishMotionIntent::StrugglingOutward})
+	{
+		for (const bool bAtLineLimit : {false, true})
+		{
+			for (const double Stamina : {1e-9, 500.0, 999.99, 1000.0, 1001.0})
+			{
+				auto State = MakeState(ECatFightCatAction::Slack);
+				State.CatStamina = Stamina;
+				State.FishStamina = 0.1; // 低于力竭尾数阈值，也不能因右键期间的张力被扣空。
+				State.MotionIntent = Motion;
+				State.LineLengthCentimeters = bAtLineLimit ? Config.MaximumLineLengthCentimeters : 800.0;
+				State.FishWorldPosition.X = bAtLineLimit ? Config.MaximumLineLengthCentimeters : 500.0;
+				const auto Result = Step(Config, State, Constraint);
+				if (!TestTrue(TEXT("正常右键在各阶段、线长和体力边界均有效"), Result.bSucceeded && Result.bSlackRecoveryActive)) return false;
+				TestEqual(TEXT("右键移动不扣体"), Result.CatMovementStaminaDrain, 0.0);
+				TestEqual(TEXT("右键收线不扣体"), Result.CatReelStaminaDrain, 0.0);
+				TestEqual(TEXT("右键转杆不扣体"), Result.CatRodStaminaDrain, 0.0);
+				TestEqual(TEXT("右键保持不扣体"), Result.CatHoldStaminaDrain, 0.0);
+				TestEqual(TEXT("辅助出力也不产生共同扣费"), Result.GetSharedCatStaminaDrain(), 0.0);
+				TestEqual(TEXT("右键期间鱼不产生待结算费用"), Result.FishUncappedStaminaDrain, 0.0);
+				TestEqual(TEXT("右键期间鱼不耗体或清空低体力尾数"), Result.FishStaminaDrain, 0.0);
+				TestEqual(TEXT("回体只取配置速度及距上限的余量，已达或超过上限不倒扣"), Result.CatStaminaDrain,
+					-FMath::Min(FMath::Max(0.0, Config.CatStaminaMaximum - Stamina), 0.275), 1e-9);
+				TestEqual(TEXT("左右键裁决后的右键不主动收线"), Result.RequestedReelDistanceCentimeters, 0.0);
+				if (bAtLineLimit)
+				{
+					TestTrue(TEXT("满线仍保留实际对抗张力和鱼负载"), Result.NormalizedTension > 0.0 && Result.FishNormalizedEffortLoad > 0.0);
+					TestEqual(TEXT("回体不会绕过物理最大线长"), Result.LineLengthCentimeters, Config.MaximumLineLengthCentimeters);
+				}
+			}
+		}
+	}
+
+	auto State = MakeState(ECatFightCatAction::Slack);
+	Config.SlackStaminaRegenPerSecond *= 2.0;
+	TestEqual(TEXT("回体速度继续由配置控制"), Step(Config, State, Constraint).CatStaminaDrain, -0.55, 1e-9);
+	State.bFishExhausted = true;
+	State.FishStamina = 0.0;
+	State.CatStamina = 0.0;
+	Config.PrimaryOperatorCatStrength = 0.0;
+	Config.SecondCatStrength = 0.0;
+	const auto ExhaustedFish = Step(Config, State, Constraint);
+	TestTrue(TEXT("鱼已力竭的收尾仍可右键回体"), ExhaustedFish.bSucceeded && ExhaustedFish.bSlackRecoveryActive && !ExhaustedFish.bExhaustedCatEscape);
+	TestEqual(TEXT("收尾零体力回体按原配置结算"), ExhaustedFish.CatStaminaDrain, -0.55, 1e-9);
+	State.bOperatorPresent = false;
+	const auto Unattended = Step(Config, State, Constraint);
+	TestFalse(TEXT("无人值守放线不冒充玩家右键恢复"), Unattended.bSlackRecoveryActive);
+	TestEqual(TEXT("离竿不再给旧玩家回体"), Unattended.CatStaminaDrain, 0.0);
+	return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingLoadEffortTuningTest,
 	"Catfishing.Unit.Fishing.Effort.LoadPricingHonorsZeroOneAndTwoMultipliers",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)

@@ -59,7 +59,7 @@
 | 猫负载体力倍率 | CatLoadStaminaMultiplier | 默认 1 | 猫各项努力乘 `(1 + 自身归一化负载 × 倍率)` |
 | 鱼负载体力倍率 | FishLoadStaminaMultiplier | 默认 1 | 鱼有效努力费用仅乘 `自身归一化对抗负载 × 倍率`，无基础游动费用；0 完全关闭鱼对抗耗体 |
 | 僵持努力折算倍率 | IsometricEffortMultiplier | 1 | 未实现位移的意图距离计费倍率 |
-| 放线体力恢复速度 | SlackStaminaRegenPerSecond | 3/s | 右键完全放线时猫的恢复速度 |
+| 放线体力恢复速度 | SlackStaminaRegenPerSecond | 3/s | 正常按右键时猫的恢复速度，不受张力、移动或转杆限制；零体力强制拖拽除外 |
 | 鱼力竭吸附阈值 | FishExhaustionThreshold | 0.5 | 本步产生正的鱼对抗耗体后，剩余绝对体力不高于该值才吸附归零；零耗体不触发 |
 | 低体力休息触发比例/时长倍率 | LowStaminaRestThreshold/Multiplier | 0.5 / 1.5 | 低体力鱼延长平静期 |
 | 满张力响应距离 | TensionResponseRangeCentimeters | 10 cm | 约束误差换算张力的尺度，参与牵引、转矩和体力负载结算 |

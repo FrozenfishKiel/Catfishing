@@ -31,7 +31,7 @@ struct CATFISHING_API FCatFishingFightRunnerInit
 	FCatFightSimulationState InitialState;
 	/** 该玩家服务器已确认的最新连续输入序号；新 Runner 从此序号继续拒绝旧边沿。 */
 	int64 InitialInputSequence = 0;
-	/** 进入本场搏斗时物理左/右键是否仍被按住；收线优先级仍由 RefreshCatAction 统一裁决。 */
+	/** 进入本场搏斗时物理左/右键是否仍被按住；RefreshCatAction 统一裁决，右键优先。 */
 	bool bInitialPullHeld = false;
 	bool bInitialSlackHeld = false;
 	/** 向内游（休息）时长区间。 */
@@ -71,9 +71,9 @@ public:
 	bool Start();
 	void Stop();
 	bool IsRunning() const { return bRunning; }
-	/** 左键按住/松开；收线优先于松开线杯。 */
+	/** 左键按住/松开；同时按右键时暂停收线，右键释放后恢复。 */
 	bool SetReeling(APlayerState* InputPlayerState, int64 InputSequence, bool bInReeling);
-	/** 右键按住/松开线杯；按住期间鱼可在最大线长内自由带线。 */
+	/** 右键按住/松开线杯并免耗体回体；零体力强制拖拽仍优先。 */
 	bool SetSlacking(APlayerState* InputPlayerState, int64 InputSequence, bool bInSlacking);
 	/** 主操作手离竿后进入无人值守松线；Runner 继续推进，但不再读写旧玩家的力量或体力。 */
 	bool BeginUnattendedSlackFromAuthority();

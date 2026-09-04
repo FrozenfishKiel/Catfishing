@@ -913,7 +913,7 @@ bool FCatFishingStrengthAccelerationTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingHoldAndRecoveryTest,
-	"Catfishing.Unit.Fishing.Simulation.LockedTensionCostsStaminaAndOnlyReleasedFreeSpoolRecovers",
+	"Catfishing.Unit.Fishing.Simulation.LockedTensionCostsStaminaAndRightButtonRecoversAtLineLimit",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingHoldAndRecoveryTest::RunTest(const FString& Parameters)
@@ -938,8 +938,10 @@ bool FCatFishingHoldAndRecoveryTest::RunTest(const FString& Parameters)
 	MaxedState.FishWorldPosition = FVector(Config.MaximumLineLengthCentimeters, 0.0, 0.0);
 	const FCatFightStepResult Maxed = FCatFishingFightSimulator::Step(
 		Config, MaxedState, MakeHeldConstraint(), FVector::ForwardVector);
-	TestEqual(TEXT("free spool blocked by maximum line length cannot restore stamina"),
-		Maxed.CatStaminaDrain, 0.0, 1e-9);
+	TestTrue(TEXT("maximum line length still creates physical tension"), Maxed.NormalizedTension > 0.0);
+	TestEqual(TEXT("right button at maximum line length restores the same stamina"),
+		Maxed.CatStaminaDrain, Released.CatStaminaDrain, 1e-9);
+	TestEqual(TEXT("right button prevents fish stamina cost even at maximum line length"), Maxed.FishStaminaDrain, 0.0);
 	return !HasAnyErrors();
 }
 

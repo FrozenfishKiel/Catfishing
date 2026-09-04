@@ -100,7 +100,7 @@ public:
 		meta = (DisplayName = "僵持努力折算倍率", ClampMin = "0.0"))
 	double IsometricEffortMultiplier = -1.0;
 
-	/** 右键完全放线时猫每秒恢复的搏斗体力。 */
+	/** 正常右键时猫每秒恢复的搏斗体力，不受张力或其他操作限制；强制力竭拖拽除外。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "放线体力恢复速度", ClampMin = "0.0"))
 	double SlackStaminaRegenPerSecond = -1.0;

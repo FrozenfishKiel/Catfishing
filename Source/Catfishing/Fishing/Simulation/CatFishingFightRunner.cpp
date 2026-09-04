@@ -367,8 +367,8 @@ void UCatFishingFightRunner::RefreshCatAction()
 	const FCatFightParticipantRuntime* Primary = FindPrimaryParticipant();
 	State.CatAction = !State.bOperatorPresent || !Primary
 		? ECatFightCatAction::Slack
-		: Primary->bPullHeld ? ECatFightCatAction::Pull
-		: Primary->bSlackHeld ? ECatFightCatAction::Slack : ECatFightCatAction::None;
+		: Primary->bSlackHeld ? ECatFightCatAction::Slack
+		: Primary->bPullHeld ? ECatFightCatAction::Pull : ECatFightCatAction::None;
 }
 
 bool UCatFishingFightRunner::UpdateFishBehaviorForCurrentOperator(const bool bRodHeld)
@@ -1085,7 +1085,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			TEXT("Event=fishing_coupled_work_sample SessionId=%s RodActorId=%s "
 				"PrimaryStrength=%.3f HelperStrength=%.3f CombinedStrength=%.3f CatSystemMassKg=%.3f FishMassKg=%.3f MassMode=StrengthDerived StrengthMode=ConstantWhileStaminaPositive StrengthPerKg=%.3f ActiveHelpers=%d "
 				"CatAcceleration=%.3f FishAcceleration=%.3f NetFishPullAcceleration=%.3f "
-				"PrimaryStamina=%.3f GroupStaminaDrain=%.3f FishStamina=%.3f FishStaminaDrain=%.3f "
+				"PrimaryStamina=%.3f GroupStaminaDrain=%.3f FishStamina=%.3f FishStaminaDrain=%.3f SlackRecovery=%s CatRecovery=%.4f "
 				"MotionIntent=%s CatIntentCm=%.3f CatActualCm=%.3f FishIntentCm=%.3f FishActualCm=%.3f "
 				"FishWorldStep2DCm=%.3f FishWorldStep3DCm=%.3f FishWorldDeltaZCm=%.3f "
 				"ReelRequestedCm=%.3f ReelActualCm=%.3f ReelMode=%s CatAction=%s AbsoluteRodWear=%.3f RodWearDelta=%.3f "
@@ -1109,6 +1109,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.CatStaminaDrain,
 			State.FishStamina,
 			Step.FishStaminaDrain,
+			Step.bSlackRecoveryActive ? TEXT("true") : TEXT("false"),
+			FMath::Max(0.0, -Step.CatStaminaDrain),
 			*UEnum::GetValueAsString(State.MotionIntent),
 			Step.CatIntendedLineDistanceCentimeters,
 			Step.CatActualLineDistanceCentimeters,

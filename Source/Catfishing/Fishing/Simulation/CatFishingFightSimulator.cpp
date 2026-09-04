@@ -137,7 +137,9 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	Result.bExhaustedCatEscape = bExhaustedCatEscape;
 	// 力竭拖拽维持锁线；不能靠残留右键在零体力时反复放线回体、恢复全力。
 	const bool bReeling = bOperatorPresent && !bExhaustedCatEscape && State.CatAction == ECatFightCatAction::Pull;
-	const bool bFreeSpool = !bOperatorPresent || (!bExhaustedCatEscape && State.CatAction == ECatFightCatAction::Slack);
+	const bool bSlackRecovery = bOperatorPresent && !bExhaustedCatEscape && State.CatAction == ECatFightCatAction::Slack;
+	Result.bSlackRecoveryActive = bSlackRecovery;
+	const bool bFreeSpool = !bOperatorPresent || bSlackRecovery;
 	const bool bStruggling = !State.bFishExhausted
 		&& (bExhaustedCatEscape || State.MotionIntent == ECatFishMotionIntent::StrugglingOutward);
 
@@ -301,7 +303,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 
 	double IgnoredEffortDistance = 0.0;
 	// 鱼力竭后进入纯收尾：仍求解收线和双端位移，但不再向任何猫结算做功消耗。
-	if (!State.bFishExhausted && bOperatorPresent && EffectiveCatStrength > UE_DOUBLE_SMALL_NUMBER)
+	if (!bSlackRecovery && !State.bFishExhausted && bOperatorPresent && EffectiveCatStrength > UE_DOUBLE_SMALL_NUMBER)
 	{
 		FCatFightWorkInput CatWork;
 		// 标准努力强度保留单位标尺；动作倍率与自身负载决定消耗，不按绝对力量放大数十倍。
@@ -346,15 +348,15 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 			return FCatFightStepResult{};
 		}
 	}
-	if (Result.CatStaminaDrain <= UE_DOUBLE_SMALL_NUMBER
-		&& bOperatorPresent && bFreeSpool && bFreeSpoolReleased && !bLineRestraining)
+	// 正常右键期间独立回体，移动、转杆和最大线长处的张力均不产生双方费用。
+	// 无人值守放线不恢复旧操作手；零体力强制拖拽也不通过右键退出。
+	if (bSlackRecovery)
 	{
-		const double Capped = FMath::Min(Config.CatStaminaMaximum,
-			State.CatStamina + Config.SlackStaminaRegenPerSecond * Dt);
-		Result.CatStaminaDrain = -(Capped - State.CatStamina);
+		Result.CatStaminaDrain = -FMath::Min(FMath::Max(0.0, Config.CatStaminaMaximum - State.CatStamina),
+			Config.SlackStaminaRegenPerSecond * Dt);
 	}
 
-	if (!State.bFishExhausted && State.FishStamina > 0.0
+	if (!bSlackRecovery && !State.bFishExhausted && State.FishStamina > 0.0
 		&& Result.FishIntendedLineDistanceCentimeters > UE_DOUBLE_SMALL_NUMBER)
 	{
 		FCatFightWorkInput FishWork;
