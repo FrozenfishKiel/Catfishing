@@ -2,6 +2,7 @@
 
 #include "CableComponent.h"
 #include "Character/CatCharacter.h"
+#include "ComponentReregisterContext.h"
 #include "Components/SceneComponent.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
@@ -43,13 +44,13 @@ ACatFishingHookActor::ACatFishingHookActor()
 	FishingLine->bAttachStart = true;
 	FishingLine->bAttachEnd = true;
 	FishingLine->CableLength = 75.0f; // 小于通常竿钩距离，使占位线保持基本绷直；端点仍始终准确连接。
-	FishingLine->NumSegments = 16;
-	FishingLine->SubstepTime = 0.01f;
-	FishingLine->SolverIterations = 10;
+	FishingLine->NumSegments = 32;
+	FishingLine->SubstepTime = 0.005f;
+	FishingLine->SolverIterations = 16;
 	// 鱼线需要弯曲但不应像橡胶棒；长度约束由固定迭代次数稳定求解，不在松弛/绷紧间切换弯曲刚度。
 	FishingLine->bEnableStiffness = false;
 	FishingLine->bUseSubstepping = true;
-	FishingLine->CableGravityScale = 0.15f;
+	FishingLine->CableGravityScale = 0.01f;
 	FishingLine->CableWidth = 1.25f;
 	FishingLine->NumSides = 4;
 	FishingLine->bEnableCollision = false;
@@ -290,6 +291,14 @@ void ACatFishingHookActor::BeginPlay()
 	}
 	else
 	{
+		const UCatFishingPresentationSettings* Settings = GetDefault<UCatFishingPresentationSettings>();
+		const int32 ConfiguredSegments = FMath::Clamp(Settings->FishingLineNumSegments, 1, 128);
+		if (FishingLine->NumSegments != ConfiguredSegments)
+		{
+			// 蓝图可能序列化旧段数；Cable 只在注册时分配粒子和渲染顶点，不能直接改已注册组件的段数。
+			FComponentReregisterContext ReregisterContext(FishingLine);
+			FishingLine->NumSegments = ConfiguredSegments;
+		}
 		if (UMaterialInstanceDynamic* Material = FishingLine->CreateDynamicMaterialInstance(0))
 		{
 			Material->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.72f, 0.78f, 0.82f, 1.0f));
@@ -457,7 +466,8 @@ void ACatFishingHookActor::TryPlayCastMontageFromPresentation()
 
 void ACatFishingHookActor::RefreshFishingLineAttachment()
 {
-	if (!FishingLine || GetNetMode() == NM_DedicatedServer)
+	// 首次 Owner 复制可能早于 BeginPlay；等待段数配置和粒子重建完成，再绑定并记录实际运行参数。
+	if (!HasActorBegunPlay() || !FishingLine || GetNetMode() == NM_DedicatedServer)
 	{
 		return;
 	}
@@ -598,7 +608,8 @@ void ACatFishingHookActor::UpdateFishingLinePresentation()
 	}
 
 	const FVector TargetStart = VisualRoot->GetComponentLocation();
-	if (!bFishingLineSmoothingInitialized)
+	const bool bInitializeSmoothing = !bFishingLineSmoothingInitialized;
+	if (bInitializeSmoothing)
 	{
 		FishingLineStartAnchor->SetWorldLocation(TargetStart);
 		DisplayedFishingLineLengthCentimeters = TargetFishingLineLengthCentimeters;
@@ -625,17 +636,27 @@ void ACatFishingHookActor::UpdateFishingLinePresentation()
 	FishingLine->CableLength = static_cast<float>(FMath::Max(
 		DisplayedFishingLineLengthCentimeters, SmoothedDirectDistance));
 
-	const double Substep = Settings ? Settings->FishingLineSimulationSubstepSeconds : 0.01;
+	const double Substep = Settings ? Settings->FishingLineSimulationSubstepSeconds : 0.005;
 	FishingLine->SubstepTime = static_cast<float>(FMath::Clamp(
-		FMath::IsFinite(Substep) ? Substep : 0.01, 0.005, 0.1));
+		FMath::IsFinite(Substep) ? Substep : 0.005, 0.005, 0.1));
 	FishingLine->SolverIterations = FMath::Clamp(
-		Settings ? Settings->FishingLineSolverIterations : 10, 1, 16);
+		Settings ? Settings->FishingLineSolverIterations : 16, 1, 16);
 	FishingLine->bUseSubstepping = true;
 	FishingLine->bEnableStiffness = false;
 	const double TautGravity = SafeNonNegative(
-		Settings ? Settings->FishingLineTautGravityScale : 0.08, 0.08);
+		Settings ? Settings->FishingLineTautGravityScale : 0.01, 0.01);
 	const double SlackGravity = SafeNonNegative(
-		Settings ? Settings->FishingLineSlackGravityScale : 1.0, 1.0);
+		Settings ? Settings->FishingLineSlackGravityScale : 0.15, 0.15);
 	FishingLine->CableGravityScale = static_cast<float>(FMath::Lerp(
 		TautGravity, SlackGravity, FMath::Clamp(DisplayedFishingLineSlackRatio, 0.0, 1.0)));
+	if (bInitializeSmoothing)
+	{
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_line_visual_configured World=%s WorldNetMode=%d Authority=%d Role=%s Actor=%s Rod=%s Session=%s CastAttempt=%s NumSegments=%d SolverIterations=%d SubstepSeconds=%.4f TautGravityScale=%.3f SlackGravityScale=%.3f Result=Applied %s"),
+			*GetNameSafe(World), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()),
+			*GetName(), *GetNameSafe(GetOwner()),
+			*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*PresentationState.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens),
+			FishingLine->NumSegments, FishingLine->SolverIterations, FishingLine->SubstepTime,
+			TautGravity, SlackGravity, *CatLogContext::BuildControllerFields(GetInstigatorController()));
+	}
 }

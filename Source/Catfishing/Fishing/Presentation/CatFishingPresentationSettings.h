@@ -62,16 +62,19 @@ public:
 	/** SlackRatio 到本地重力表现的插值速度。 */
 	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0"))
 	double FishingLineSlackInterpolationSpeed = 10.0;
+	/** Cable 分段数；新 Hook 在 BeginPlay 统一应用，覆盖蓝图保存的旧值并重建粒子。 */
+	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="1", ClampMax="128"))
+	int32 FishingLineNumSegments = 32;
 	/** Cable 内部 Verlet 子步；只影响本地视觉稳定性。 */
 	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0.005", ClampMax="0.1", Units="s"))
-	double FishingLineSimulationSubstepSeconds = 0.01;
+	double FishingLineSimulationSubstepSeconds = 0.005;
 	/** 固定约束求解次数；不再在松弛/绷紧间硬切。 */
 	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="1", ClampMax="16"))
-	int32 FishingLineSolverIterations = 10;
+	int32 FishingLineSolverIterations = 16;
 	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0"))
-	double FishingLineTautGravityScale = 0.08;
+	double FishingLineTautGravityScale = 0.01;
 	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0"))
-	double FishingLineSlackGravityScale = 1.0;
+	double FishingLineSlackGravityScale = 0.15;
 	/** 客户端窝点表现 Actor 类；留空则用原生基类（无任何可见表现）。 */
 	UPROPERTY(Config, EditAnywhere) TSoftClassPtr<ACatChumFieldPresentationActor> ChumFieldPresentationClass;
 	UPROPERTY(Config, EditAnywhere) TArray<TSoftObjectPtr<UCatRodSkinDefinition>> RodSkinCatalog;

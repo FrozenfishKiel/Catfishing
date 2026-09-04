@@ -7,6 +7,7 @@
 #include "CableComponent.h"
 #include "Animation/AnimMontage.h"
 #include "Character/CatCharacter.h"
+#include "ComponentReregisterContext.h"
 #include "Components/SceneComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
@@ -497,6 +498,7 @@ bool FCatFishingAttemptSnapshotContractTest::RunTest(const FString& Parameters)
 bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
+	const UCatFishingPresentationSettings* Settings = GetDefault<UCatFishingPresentationSettings>();
 	const UCatFishingLineComponent* Line = GetDefault<UCatFishingLineComponent>();
 	TestFalse(TEXT("line component does not tick"), Line->PrimaryComponentTick.bCanEverTick);
 	TestFalse(TEXT("line component does not replicate gameplay state"), Line->GetIsReplicated());
@@ -531,6 +533,16 @@ bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameter
 		ACatFishingHookActor* RuntimeHook = World->SpawnActor<ACatFishingHookActor>(
 			ACatFishingHookActor::StaticClass(), FTransform::Identity, SpawnParameters);
 		TestNotNull(TEXT("spawn runtime hook for cable binding"), RuntimeHook);
+		if (RuntimeHook)
+		{
+			// 模拟旧蓝图已注册的 8 段 Cable，验证 BeginPlay 同时修正段数和底层粒子，避免越界或保留旧网格。
+			UCableComponent* LegacyCable = Cast<UCableComponent>(RuntimeHook->GetDefaultSubobjectByName(TEXT("FishingLine")));
+			if (LegacyCable)
+			{
+				FComponentReregisterContext ReregisterContext(LegacyCable);
+				LegacyCable->NumSegments = 8;
+			}
+		}
 		WorldWrapper.BeginPlayInTestWorld();
 		if (RuntimeHook)
 		{
@@ -555,16 +567,26 @@ bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameter
 					RuntimeCable->GetAttachedActor() == Rod);
 				TestTrue(TEXT("runtime cable does not jump directly to a new paid out length"),
 					RuntimeCable->CableLength < 600.0f);
-				TestTrue(TEXT("slack cable enables visible local gravity"), RuntimeCable->CableGravityScale > 0.08f);
+				TestEqual(TEXT("runtime cable overrides legacy segment count from presentation settings"),
+					RuntimeCable->NumSegments, Settings->FishingLineNumSegments);
+				TArray<FVector> CableParticles;
+				RuntimeCable->GetCableParticleLocations(CableParticles);
+				TestEqual(TEXT("runtime cable rebuilds particles to match its configured segments"),
+					CableParticles.Num(), RuntimeCable->NumSegments + 1);
 				for (int32 TickIndex = 0; TickIndex < 120; ++TickIndex)
 				{
 					WorldWrapper.TickTestWorld(1.0f / 60.0f);
 				}
 				TestTrue(TEXT("smoothed runtime cable converges to paid out length"),
 					FMath::IsNearlyEqual(RuntimeCable->CableLength, 600.0f, 0.5f));
+				TestTrue(TEXT("slack cable converges to configured low gravity at the actual slack ratio"),
+					FMath::IsNearlyEqual(static_cast<double>(RuntimeCable->CableGravityScale),
+						FMath::Lerp(Settings->FishingLineTautGravityScale, Settings->FishingLineSlackGravityScale, 100.0 / 600.0), 0.001));
 				TestFalse(TEXT("runtime cable keeps one bending mode while slack changes"),
 					RuntimeCable->bEnableStiffness);
-				TestEqual(TEXT("runtime cable keeps fixed solver iterations"), RuntimeCable->SolverIterations, 10);
+				TestEqual(TEXT("runtime cable keeps configured solver iterations"), RuntimeCable->SolverIterations, Settings->FishingLineSolverIterations);
+				TestTrue(TEXT("runtime cable uses configured substep time"),
+					FMath::IsNearlyEqual(static_cast<double>(RuntimeCable->SubstepTime), Settings->FishingLineSimulationSubstepSeconds, 0.00001));
 			}
 			USceneComponent* HookVisualRoot = CatFishingActorContractTest::FindSceneComponent(RuntimeHook, TEXT("VisualRoot"));
 			TestNotNull(TEXT("runtime hook owns visual root"), HookVisualRoot);

@@ -110,15 +110,17 @@ Rod Actor 的权威 Transform 由 replicated movement 单独复制。耐久不�
 - 三个 canonical getter 在切换皮肤或移动 `VisualRoot` 后保持相同权威结果。
 - 蓝图图表中没有 Session、Equipment、Items 写入，也没有 Set Actor Transform/Location/Rotation。
 
-## 4. Hook/Bobber：`BP_FishingHook`
+## 4. Hook/Bobber：`BP_CatFishingHookActor`
 
 ### 4.1 父类与组件挂载
 
 - 原生父类：`/Script/Catfishing.CatFishingHookActor`
 - C++ 类：`ACatFishingHookActor`
-- 蓝图资产：`/Game/Catfishing/Fishing/Actors/BP_FishingHook`
+- 蓝图资产：`/Game/Blueprint/Actors/BP_CatFishingHookActor`
 - 组件层级为 `SceneRoot → VisualRoot → HookVisualAnchor / BobberVisualAnchor / BaitVisualAnchor`。
 - Hook、Bobber、Bait 的 Mesh、材质、局部动画、VFX 和 SFX 放在对应 visual anchor 下；阶段 A 建议表现 Mesh 使用 NoCollision。
+
+鱼线模拟参数统一在项目设置 `Catfishing Fishing Presentation → FishingLine` 调整：`FishingLineNumSegments=32`、`FishingLineSolverIterations=16`、`FishingLineSimulationSubstepSeconds=0.005`、`FishingLineTautGravityScale=0.01`、`FishingLineSlackGravityScale=0.15`。段数在新 Hook 的 BeginPlay 应用，并在需要时重新注册 Cable 以重建粒子和渲染数据；蓝图保存的段数不再作为运行配置入口。其余求解参数和重力由本地表现更新读取全局配置，修改段数后重新抛竿生效。`Enable Stiffness` 仍固定关闭，`CableLength` 仍来自实际已放线长和端点距离。
 
 ### 4.2 anchors 与权威边界
 
