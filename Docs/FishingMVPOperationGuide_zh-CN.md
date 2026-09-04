@@ -499,7 +499,7 @@ Event=run_phase_entered Day=1 Phase=ECatRunPhase::DayActive Deadline=600.000
 
 ### ✅ 遛鱼按规格重写（2026-08-19）并 PIE 验证
 
-- `Step()` = 规格 4.3 判定表 + 4.4 消耗战；右键松开线杯（`UCatGA_FishingSlack`）；完美中鱼接线；E 键三态放/操作/离开
+- 本节只记录 2026-08-19 的 PIE 检查点。该检查点的运动方案已被替换；当前运动、收放线入口与诊断按 [鱼运动与遛鱼逻辑实现导读](FishFightImplementationGuide_zh-CN.md) 阅读，不能据本节重建旧判定表。
 - `DA_CatAbilityInputConfig` / `DA_CatAbilitySet_Default` 各 6 条（含 Slack）；PIE 中猫 `FishingStrength=50`、Chum runtime=True、规格系数已加载
 - `UCatFishingViewBridge` 已暴露蓝图（`CreateFishingViewBridge` / `FindFishingSessionForPlayerState` / `BindSession` / `OnViewStateChangedBP`），`ACatFishingSession::GetReplicatedSnapshot()` 可读
 - 窝点表现类可配：`[CatFishingPresentationSettings] ChumFieldPresentationClass=`

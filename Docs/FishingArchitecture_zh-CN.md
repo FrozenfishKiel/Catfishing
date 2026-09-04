@@ -1,6 +1,6 @@
 # 钓鱼核心架构（技术文档）
 
-版本对应：2026-08-25 代码状态。阅读对象：需要理解/修改钓鱼玩法逻辑的人。
+阅读对象：需要理解/修改钓鱼玩法逻辑的人。运动链说明于 2026-09-04 按源码核对，当前细节统一见 [鱼运动与遛鱼逻辑实现导读](FishFightImplementationGuide_zh-CN.md)；本页负责系统关系与入口导航。
 配套文档：蓝图任务步骤见《BlueprintTaskGuide_zh-CN.md》；规格口径见《FishingCoreFlow_zh-CN.md》。
 
 ---
@@ -105,11 +105,11 @@
 
 StateTree（`ST_FishingSession`）保持薄编排。其中 `FishExhausted` 是 `HookedFight → ExhaustedReelHold` 的显式事件边；`EarlyHook` / `Interrupted` 仍由 C++ 直接收敛终态并停树。
 
-### 2.4 遛鱼（双体约束与统一做功）
+### 2.4 遛鱼（当前运动链与模块边界）
 
 `FCatFishingFightSimulator::Step()`：纯静态无副作用函数（有单元测试），每 0.05s 由 Runner 调一次。
 
-鱼的个体力量由本次实际重量乘正式搏斗平衡资产的 `StrengthPerKilogram` 得到；猫的基础 `FishingStrength` 使用同一系数反推等效系统质量。鱼线松弛时，鱼按性格资产给出的平静/挣扎自由游速移动并相应带出线长，弱鱼不会因为力量较小而近似停住。鱼线绷紧后，双方才以当前有效力量乘 `AccelerationPerStrength` 得到沿线对抗加速度：只有鱼占优的差值能生成猫端牵引，质量只决定这部分运动在双端如何分配；`DriveResponseSeconds` 只把猫端加速度投影为收线/牵引响应速度。猫体力下降时有效力量连续降低但质量不变，归零不产生瞬时终局。
+当前模型由鱼的游速候选、已放线长约束、力量差分配和玩法裁决组成，尚未完成鱼、线、杆、猫共同反力驱动的物理系统。鱼/猫质量与力量来源、收线公式、体力和断线条件只维护在 [实现导读](FishFightImplementationGuide_zh-CN.md)，避免在多个入口复制不同版本的公式。
 
 主猫持竿时，PlayerController 在每帧视角旋转完成后把猫身水平朝向同步到 `ControlRotation.Yaw`，并临时关闭面向移动/ControllerDesiredRotation 两条覆盖通道。猫身和移动基准共用控制 Yaw，向后输入不会让猫掉头；离竿或换 Pawn 时恢复角色原有转向配置。是否持竿仍只读鱼竿 `HolderPlayerState`，Controller 不保存平行业务状态。
 
@@ -118,29 +118,11 @@ StateTree（`ST_FishingSession`）保持薄编排。其中 `FishExhausted` 是 `
 
 鱼自己的高层行为由 Encounter 上的 `ST_FishFight` 控制：默认在 `StrugglingOutward` 与 `CalmOrInward` 两个状态间循环。StateTree Task 只把意图和持续时间交给 Runner，不写 Transform、不扣体力，也不直接修改鱼线。未来增加“低体力蓄力冲刺”时，可以在树上增加状态和条件，同时仍复用同一套服务器模拟器。
 
-```
-LineOutward = normalize(鱼位置 - 竿尖位置)（水平面）
-Alignment   = dot(鱼当前游向, LineOutward)，范围[-1,1]
-LineLoad    = pow(max(Alignment, 0), AngleStrengthExponent)，范围[0,1]
+Runner 将模拟器的候选结果交给水域/地面解析，再由 Encounter 应用并复制鱼的位置；Rod 消费猫端目标速度与杆转矩输入。Cable 只表现端点和余线，不向服务器提供约束反力。`bStalemate` 与 `TorqueBalanced` 只观察结果；`bStrongConfrontation` 仍参与过载断线，不能按只读表现标签处理。
 
-鱼仍在平静 ⇄ 挣扎之间定时交替，但每段内部可平滑转向、横切、绕竿和假动作；上钩瞬间=挣扎。
-每次重选方向先根据鱼体力计算向内概率；朝竿尖 ±60° 属于向内。当前测试鱼满体力为 25%，接近力竭为 80%，中间按指数 1.1 的性格曲线插值；发力期仍只把其中 `FeintProbability` 比例当作向内假动作。
-`LineLoad` 仍表达鱼游向在线方向上的投影，并参与磨损和断线负载。鱼先按性格游速产生自由候选端点，鱼线绷紧后鱼与猫再按同一力量→加速度口径求解约束；`Locked/Reeling/FreeSpool` 分别保持、缩短或允许被动增加 `L_paid`。全部变化只汇入一个约束误差，力量差先决定鱼是否能牵引猫，质量再分配占优部分。竿尖平移或旋转只改变约束端点，不能反写 `L_paid`；因此抬竿时若垂直距离暂时超过账面线长，会暂停当步收线并交给约束修正，而不会凭空放线。Rod 在服务器和拥有客户端各自按移动帧对20 Hz目标做一阶平滑，只补足不足的向鱼速度并平滑远离方向限速；它不累加冲量、不直接插值 Character Transform。鱼力竭时 Runner 与 Rod 同帧清除牵引目标和平滑余量，余下张力只用于把鱼随收线/端点运动拖近。
+鱼体力归零或确认被猫端牵引上岸后，Session 发布 `FishExhausted` 进入 `ExhaustedReel`；同一 Runner 保留运动约束，但停止鱼主动运动和猫端正向扣费。当前上岸清空体力和力竭后零猫消耗都是玩法特例，物理改造尚未替换这些分支。猫危险入水由 Condition 的脚点浸没查询确认。
 
-体力统一使用 `实际沿线位移 + max(意图沿线位移-实际沿线位移,0)×IsometricEffortMultiplier`。因此自由运动、带载运动和实际位移为 0 的僵持使用同一公式。锁线绷紧时，鱼的外游意图会形成猫端等长保持意图，所以双方都会消耗；收线是独立执行器做功，原地左键会缩短线长并消耗体力，但不会伪造猫位移，后退只移动端点，不会重复缩短线长。右键只有在 `L_max` 内确实解除约束并允许出线时恢复猫体力；到达最大线长重新绷紧后停止恢复。
-
-Development 运行诊断使用每秒限频的 `fishing_fish_stamina_sample` 记录体力公式的完整输入与结果，包括意图/实际/僵持/有效努力距离、力量、价格、阶段倍率、每秒消耗率、模拟候选与水域解析后的三维位置、`ResolvedDeltaZCm` 和鱼相对水面的高度。单步消耗超过初始体力 10%（且至少 5 点）时额外记录 `fishing_fish_stamina_spike`；体力归零或上岸强制力竭的固定步必定记录 `fishing_fish_stamina_terminal_step`，不受每秒采样限频影响。
-
-L_paid = 已放出的线长（左键主动收短；右键只允许鱼外游时被动带线）
-D      = 竿尖到鱼的直线距离
-Slack  = max(L_paid-D, 0)：有余线时 Cable 本地垂坠
-Tension= 鱼试图超过线端的距离：无输入向外冲也会绷线并消耗资源
-
-鱼体力归零，或竿尖位于陆地方向且猫端沿绷紧鱼线把鱼拖过岸线，都会发布 `FishExhausted` 并让 StateTree 切入 `ExhaustedReel`。同一 Runner 继续求解线长和双端位移，但停止鱼 AI、鱼驱动力和所有猫端做功扣费；鱼自行撞岸而没有猫端牵引时仍沿岸反射回水，不会自动搁浅。猫体力归零只让主动力量归零。猫进入水中由 Condition 对脚点浸没深度做滞回和持续确认后终止会话；不再存在力量比较直接落水或直接碾压。
-完美中鱼：真咬后 1s 内提竿（服务器时间戳）→ 鱼力/鱼体力/初始线长按性格模板折减，bPerfectHook 复制
-```
-
-全局消耗系数在 `Project Settings → Catfishing Fishing → Fight|Spec`；转向、随机倾向、夹角曲线和强对抗阈值在鱼的 `DA_Fight_*` 性格资产。
+全局搏斗系数来自 `DA_FishingFightBalance_Default`；鱼的游速、方向概率和阶段倍率来自当前鱼种性格，杆长、承载与本场鱼线耐久来自当前装备定义。`UCatFishingSettings` 保留资产软引用、固定步与持竿姿态等技术设置。具体字段和诊断过滤词见实现导读，不再从旧 `Fight|Spec` 设置页或测试鱼快照推断现行参数。
 
 ### 2.5 抄网（当前实现）
 
