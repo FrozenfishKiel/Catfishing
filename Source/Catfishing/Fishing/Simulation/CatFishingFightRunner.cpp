@@ -96,7 +96,8 @@ bool UCatFishingFightRunner::Start()
 		: FVector::ZeroVector;
 	if (!Rod || (Rod->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Held
 		&& !Rod->SetCarrierConstraintFromAuthority(InitialPullDirection,
-			0.0, 0.0, 1.0, 0.0, 0.0, true, 1.0, 0.0, Config.GetCombinedCatStrength())))
+			0.0, 0.0, 1.0, 0.0, 0.0, true, 0.0, Config.GetCombinedCatStrength(),
+			InitialPullDirection.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector))))
 	{
 		Encounter->StopFishBehaviorFromAuthority();
 		bRunning = false;
@@ -981,9 +982,10 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.CarrierTargetPullSpeedCentimetersPerSecond,
 			Step.CarrierAwaySpeedMultiplier, Step.NormalizedTension,
 			Step.ConstraintErrorCentimeters, true,
-			RotationResistance.RotationSpeedMultiplier,
-			RotationResistance.FishResistingTorqueStrengthMeters,
-			RotationResistance.CatTorqueCapacityStrengthMeters))
+			RotationResistance.MaximumFishTorqueStrengthMeters,
+			RotationResistance.CatTorqueCapacityStrengthMeters,
+			(Motion.FishWorldPosition - RodTip)
+				.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, Rod->GetAuthoritativeRodForwardVector())))
 		{
 			Stop();
 			SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("CarrierConstraintWrite"));
@@ -1147,7 +1149,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			TEXT("Event=fishing_constraint_sample SessionId=%s RodActorId=%s Active=%s CarrierActive=%s Action=%s "
 				"ConstraintError=%.2f RelativeLineSpeed=%.2f Tension=%.3f FishCorrection=%.2f CarrierCorrection=%.2f "
 				"CarrierAcceleration=%.2f CarrierTargetPullSpeed=%.2f CarrierAwaySpeedMultiplier=%.3f RodLeverage=%.3f "
-				"RodPhysicsLengthCm=%.2f RotationSpeedMultiplier=%.3f FishTorque=%.3f CatTorqueCapacity=%.3f "
+				"RodPhysicsLengthCm=%.2f MaximumFishTorque=%.3f FishTorque=%.3f CatTorqueCapacity=%.3f "
 				"ActiveCombinedStrength=%.3f CatAcceleration=%.3f FishAcceleration=%.3f NetFishPullAcceleration=%.3f FishDominance=%.3f ActiveHelpers=%d GroupStaminaDrain=%.3f "
 				"Stalemate=%s Fish=%s RodTip=%s Holder=%s NetMode=%d Authority=true"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(),
@@ -1165,7 +1167,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.CarrierAwaySpeedMultiplier,
 			Step.RodLeverageMultiplier,
 			Config.RodPhysicsLengthCentimeters,
-			RotationResistance.RotationSpeedMultiplier,
+			RotationResistance.MaximumFishTorqueStrengthMeters,
 			RotationResistance.FishResistingTorqueStrengthMeters,
 			RotationResistance.CatTorqueCapacityStrengthMeters,
 			Step.CombinedCatStrength,

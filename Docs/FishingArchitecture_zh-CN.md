@@ -111,7 +111,9 @@ StateTree（`ST_FishingSession`）保持薄编排。其中 `FishExhausted` 是 `
 
 鱼的个体力量由本次实际重量乘正式搏斗平衡资产的 `StrengthPerKilogram` 得到；猫的基础 `FishingStrength` 使用同一系数反推等效系统质量。鱼线松弛时，鱼按性格资产给出的平静/挣扎自由游速移动并相应带出线长，弱鱼不会因为力量较小而近似停住。鱼线绷紧后，双方才以当前有效力量乘 `AccelerationPerStrength` 得到沿线对抗加速度：只有鱼占优的差值能生成猫端牵引，质量只决定这部分运动在双端如何分配；`DriveResponseSeconds` 只把猫端加速度投影为收线/牵引响应速度。猫体力下降时有效力量连续降低但质量不变，归零不产生瞬时终局。
 
-主猫持竿时，PlayerController 在每帧视角旋转完成后把猫身水平朝向同步到 `ControlRotation.Yaw`，并临时关闭面向移动/ControllerDesiredRotation 两条覆盖通道。因此鱼竿朝向、猫身和移动基准共用同一控制 Yaw，向后输入不会让猫掉头；离竿或换 Pawn 时恢复角色原有转向配置。是否持竿仍只读鱼竿 `HolderPlayerState`，Controller 不保存平行业务状态。
+主猫持竿时，PlayerController 在每帧视角旋转完成后把猫身水平朝向同步到 `ControlRotation.Yaw`，并临时关闭面向移动/ControllerDesiredRotation 两条覆盖通道。猫身和移动基准共用控制 Yaw，向后输入不会让猫掉头；离竿或换 Pawn 时恢复角色原有转向配置。是否持竿仍只读鱼竿 `HolderPlayerState`，Controller 不保存平行业务状态。
+
+搏斗中的实际杆姿态独立于镜头意图，由 `FCatFishingRodResistanceModel::StepRotation` 按有阻尼的净转矩积分。猫朝请求视角施加不超过当前力量的转矩，接近目标时连续减小；鱼线施加 `cross(杆方向, 牵引方向) × 鱼力量 × LineLoad × Tension × 玩法杆长` 的有向回复转矩。净转矩抵消时自然停转；回看、改变鱼力、猫力或线方向后每帧重新求解，不存在硬角度锁或解锁状态，也不使用原来的全方向零速倍率。保持原有身体俯仰范围与最大角速度；响应时间控制阻尼，1/120 秒亚步降低帧率差异。服务器复制实际 Actor 姿态，Development 日志 `fishing_rod_rotation_resistance_sample` 记录请求/实际朝向、角速度、净转矩与仅用于观察的 `TorqueBalanced`；`fishing_constraint_sample` 记录最大鱼转矩。
 `FCatFishSteeringModel` 用独立服务器随机流产生平滑目标游向；相同种子与固定步长得到相同方向序列，客户端不自行随机。
 
 鱼自己的高层行为由 Encounter 上的 `ST_FishFight` 控制：默认在 `StrugglingOutward` 与 `CalmOrInward` 两个状态间循环。StateTree Task 只把意图和持续时间交给 Runner，不写 Transform、不扣体力，也不直接修改鱼线。未来增加“低体力蓄力冲刺”时，可以在树上增加状态和条件，同时仍复用同一套服务器模拟器。

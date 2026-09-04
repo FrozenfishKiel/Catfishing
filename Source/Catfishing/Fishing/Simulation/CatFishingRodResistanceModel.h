@@ -10,7 +10,7 @@ struct CATFISHING_API FCatFishingRodResistanceInput
 	double RodPhysicsLengthCentimeters = 0.0;
 	double NormalizedTension = 0.0;
 	double NormalizedFishLineLoad = 0.0;
-	/** 竿身与鱼线方向夹角的余弦，[0,1]；垂直鱼线时转矩最大。 */
+	/** 竿身与鱼线方向夹角的余弦，[-1,1]；垂直鱼线时转矩最大。 */
 	double RodLineAlignment = 1.0;
 };
 
@@ -19,14 +19,33 @@ struct CATFISHING_API FCatFishingRodResistanceResult
 	bool bSucceeded = false;
 	double FishResistingTorqueStrengthMeters = 0.0;
 	double CatTorqueCapacityStrengthMeters = 0.0;
-	double TorqueLoadRatio = 0.0;
-	double RotationSpeedMultiplier = 1.0;
-	bool bRotationStalled = false;
+	double MaximumFishTorqueStrengthMeters = 0.0;
 };
 
-/** 无状态旋转阻力模型：鱼转矩逐步压低实际杆速，达到猫转矩能力时自然停转。 */
+struct CATFISHING_API FCatFishingRodRotationInput
+{
+	FRotator CurrentAim = FRotator::ZeroRotator;
+	FRotator RequestedAim = FRotator::ZeroRotator;
+	FVector PullAxis = FVector::ForwardVector;
+	double CatTorqueCapacity = 0.0;
+	double MaximumFishTorque = 0.0;
+	double MaximumAngularSpeedDegreesPerSecond = 360.0;
+	double ResponseSeconds = 0.08;
+	double DeltaSeconds = 0.0;
+};
+
+struct CATFISHING_API FCatFishingRodRotationResult
+{
+	bool bSucceeded = false;
+	FRotator ActualAim = FRotator::ZeroRotator;
+	FVector NetTorque = FVector::ZeroVector;
+	double AngularSpeedDegreesPerSecond = 0.0;
+};
+
+/** 有阻尼的连续转矩对抗：净转矩为零才停转，不保存锁定状态，也不裁剪允许角度。 */
 class CATFISHING_API FCatFishingRodResistanceModel
 {
 public:
 	static FCatFishingRodResistanceResult Evaluate(const FCatFishingRodResistanceInput& Input);
+	static FCatFishingRodRotationResult StepRotation(const FCatFishingRodRotationInput& Input);
 };

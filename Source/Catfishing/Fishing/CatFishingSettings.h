@@ -86,10 +86,10 @@ public:
 	double HeldRodMinimumPitchDegrees = -35.0;
 	UPROPERTY(Config, EditAnywhere, Category="Rod|HeldPose", meta=(ClampMin="-89", ClampMax="89", Units="deg"))
 	double HeldRodMaximumPitchDegrees = 70.0;
-	/** 搏斗中无负载时实际鱼竿追随玩家瞄准意图的最大角速度；鱼线转矩在此基础上连续降速。 */
+	/** 实际鱼竿的角速度上限；猫与鱼线的净转矩连续决定本步角速度。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="1", Units="deg/s"))
 	double HeldRodMaximumAngularSpeedDegreesPerSecond = 360.0;
-	/** 旋转速度倍率追随20Hz转矩结果的平滑时间；满负载最终仍会收敛到完全停转。 */
+	/** 猫端瞄准施力的阻尼响应时间；净转矩抵消时自然停转，不设角度锁。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.01", Units="s"))
 	double HeldRodAngularResistanceResponseSeconds = 0.08;
 

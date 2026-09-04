@@ -183,20 +183,101 @@ bool FCatFishingRodResistanceLengthTest::RunTest(const FString& Parameters)
 	Input.RodPhysicsLengthCentimeters = 100.0;
 	const FCatFishingRodResistanceResult OneMeter = FCatFishingRodResistanceModel::Evaluate(Input);
 	TestTrue(TEXT("one-meter configured rod solves"), OneMeter.bSucceeded);
-	TestEqual(TEXT("one-meter rod consumes half the rotation capacity"),
-		OneMeter.RotationSpeedMultiplier, 0.5, 1e-9);
+	TestEqual(TEXT("one-meter rod produces torque from configured length"),
+		OneMeter.MaximumFishTorqueStrengthMeters, 25.0, 1e-9);
 
 	Input.RodPhysicsLengthCentimeters = 200.0;
 	const FCatFishingRodResistanceResult TwoMeters = FCatFishingRodResistanceModel::Evaluate(Input);
 	TestTrue(TEXT("two-meter configured rod solves"), TwoMeters.bSucceeded);
-	TestTrue(TEXT("two-meter configured rod reaches the torque stall"), TwoMeters.bRotationStalled);
-	TestEqual(TEXT("stalled rod has no available angular speed"),
-		TwoMeters.RotationSpeedMultiplier, 0.0, 1e-9);
+	TestEqual(TEXT("two-meter configured rod doubles fish torque without a lock flag"),
+		TwoMeters.MaximumFishTorqueStrengthMeters, 50.0, 1e-9);
 
 	Input.NormalizedTension = 0.0;
 	const FCatFishingRodResistanceResult Slack = FCatFishingRodResistanceModel::Evaluate(Input);
 	TestEqual(TEXT("slack line leaves rod rotation unrestricted"),
-		Slack.RotationSpeedMultiplier, 1.0, 1e-9);
+		Slack.MaximumFishTorqueStrengthMeters, 0.0, 1e-9);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingRodTorqueRecoveryTest,
+	"Catfishing.Unit.Fishing.Simulation.RodTorqueEquilibriumRecoversWithoutAngleLock",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingRodTorqueRecoveryTest::RunTest(const FString& Parameters)
+{
+	FCatFishingRodRotationInput Input;
+	Input.CatTorqueCapacity = 50.0;
+	Input.MaximumFishTorque = 100.0;
+	Input.RequestedAim = FRotator(0.0, 120.0, 0.0);
+	Input.DeltaSeconds = 1.0 / 60.0;
+	FCatFishingRodRotationResult Step;
+	for (int32 Index = 0; Index < 300; ++Index)
+	{
+		Step = FCatFishingRodResistanceModel::StepRotation(Input);
+		if (!TestTrue(TEXT("torque integration succeeds"), Step.bSucceeded)) return false;
+		Input.CurrentAim = Step.ActualAim;
+	}
+	TestEqual(TEXT("50 cat torque balances 100*sin(angle) at 30 degrees"), Step.ActualAim.Yaw, 30.0, 0.01);
+	TestTrue(TEXT("zero net torque naturally stops motion"), Step.AngularSpeedDegreesPerSecond < 0.01);
+	TestEqual(TEXT("camera intent is never clipped"), Input.RequestedAim.Yaw, 120.0);
+	Input.RequestedAim = FRotator::ZeroRotator;
+	Step = FCatFishingRodResistanceModel::StepRotation(Input);
+	TestTrue(TEXT("returning aim immediately moves out of equilibrium"), Step.ActualAim.Yaw < 29.0);
+	Input.CurrentAim = Step.ActualAim;
+	for (int32 Index = 0; Index < 180; ++Index)
+	{
+		Step = FCatFishingRodResistanceModel::StepRotation(Input);
+		Input.CurrentAim = Step.ActualAim;
+	}
+	TestEqual(TEXT("rod recenters over time under the same fish load"), Step.ActualAim.Yaw, 0.0, 0.01);
+
+	Input.CurrentAim.Yaw = 60.0;
+	Input.RequestedAim.Yaw = 120.0;
+	Step = FCatFishingRodResistanceModel::StepRotation(Input);
+	TestTrue(TEXT("outside equilibrium is pulled back gradually, not hard-clamped"),
+		Step.ActualAim.Yaw < 60.0 && Step.ActualAim.Yaw > 30.0);
+	Input.CatTorqueCapacity = 150.0;
+	for (int32 Index = 0; Index < 180; ++Index)
+	{
+		Step = FCatFishingRodResistanceModel::StepRotation(Input);
+		Input.CurrentAim = Step.ActualAim;
+	}
+	TestTrue(TEXT("more cat strength crosses the former balance angle without unlocking"), Step.ActualAim.Yaw > 90.0);
+	Input.MaximumFishTorque = 0.0;
+	for (int32 Index = 0; Index < 180; ++Index)
+	{
+		Step = FCatFishingRodResistanceModel::StepRotation(Input);
+		Input.CurrentAim = Step.ActualAim;
+	}
+	TestEqual(TEXT("slack or exhausted fish releases opposing torque"), Step.ActualAim.Yaw, 120.0, 0.01);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingRodTorqueFrameRateTest,
+	"Catfishing.Unit.Fishing.Simulation.RodTorqueIsStableAcrossFrameRatesAndPitchYaw",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingRodTorqueFrameRateTest::RunTest(const FString& Parameters)
+{
+	FRotator Reference;
+	for (const int32 Rate : {120, 60, 30, 15})
+	{
+		FCatFishingRodRotationInput Input;
+		Input.CatTorqueCapacity = 50.0;
+		Input.MaximumFishTorque = 100.0;
+		Input.RequestedAim = FRotator(45.0, 100.0, 0.0);
+		Input.PullAxis = FRotator(-15.0, -10.0, 0.0).Vector();
+		Input.DeltaSeconds = 1.0 / Rate;
+		for (int32 Index = 0; Index < Rate * 3; ++Index)
+		{
+			const auto Step = FCatFishingRodResistanceModel::StepRotation(Input);
+			if (!TestTrue(TEXT("3D rotation solves"), Step.bSucceeded)) return false;
+			TestTrue(TEXT("angular speed stays bounded"), Step.AngularSpeedDegreesPerSecond <= 360.0 + 1e-6);
+			Input.CurrentAim = Step.ActualAim;
+		}
+		if (Rate == 120) Reference = Input.CurrentAim;
+		TestTrue(TEXT("frame rates converge to the same 3D equilibrium"), Input.CurrentAim.Equals(Reference, 0.01));
+	}
 	return !HasAnyErrors();
 }
 

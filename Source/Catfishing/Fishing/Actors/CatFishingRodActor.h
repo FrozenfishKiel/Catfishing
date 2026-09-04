@@ -31,11 +31,11 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 	/** 当前搏斗是否要求鱼竿使用受力后的实际姿态，而不是瞬时跟随控制器。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bFightActive = false;
-	/** 转矩平衡后的实际角速度倍率；0=鱼线完全压住，1=无负载角速度。 */
 	UPROPERTY(BlueprintReadOnly)
-	float RodRotationSpeedMultiplier = 1.0f;
+	FVector_NetQuantizeNormal RodPullAxis = FVector::ForwardVector;
+	/** 垂直鱼线时的最大转矩；实际有向转矩随杆姿态连续计算。 */
 	UPROPERTY(BlueprintReadOnly)
-	float FishResistingTorqueStrengthMeters = 0.0f;
+	float MaximumFishTorqueStrengthMeters = 0.0f;
 	UPROPERTY(BlueprintReadOnly)
 	float CatTorqueCapacityStrengthMeters = 0.0f;
 	UPROPERTY(BlueprintReadOnly)
@@ -96,9 +96,9 @@ public:
 		double PullAccelerationCentimetersPerSecondSquared, double TargetPullSpeedCentimetersPerSecond,
 		double MaximumAwaySpeedMultiplier,
 		double NormalizedTension, double ConstraintErrorCentimeters,
-		bool bFightActive = false, double RodRotationSpeedMultiplier = 1.0,
-		double FishResistingTorqueStrengthMeters = 0.0,
-		double CatTorqueCapacityStrengthMeters = 0.0);
+		bool bFightActive = false, double MaximumFishTorqueStrengthMeters = 0.0,
+		double CatTorqueCapacityStrengthMeters = 0.0,
+		const FVector& RodPullAxis = FVector::ForwardVector);
 	void ClearCarrierConstraintFromAuthority();
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod")
 	const FCatFishingCarrierConstraintState& GetCarrierConstraintState() const
@@ -144,7 +144,6 @@ private:
 	FVector AuthoritativeRodTipVelocity = FVector::ZeroVector;
 	FVector AuthoritativeHolderVelocity = FVector::ZeroVector;
 	FRotator AuthoritativeHeldAimRotation = FRotator::ZeroRotator;
-	double SmoothedRodRotationSpeedMultiplier = 1.0;
 	TWeakObjectPtr<APawn> AuthoritativeAimHolder;
 	/** 20 Hz 权威目标在本机角色移动帧中的平滑速度；只属于瞬态表现/移动接缝，不复制。 */
 	FVector SmoothedCarrierPullVelocity = FVector::ZeroVector;
@@ -154,7 +153,7 @@ private:
 	double NextCarrierSmoothingDiagnosticWorldSeconds = 0.0;
 	bool bLastCarrierSmoothingDiagnosticActive = false;
 	double NextRodRotationResistanceDiagnosticWorldSeconds = 0.0;
-	bool bLastRodRotationStalled = false;
+	bool bLastRodTorqueBalanced = false;
 	bool bHeldAimInitialized = false;
 	FTransform ResolveOperatorStandLocalTransform(int32 SlotIndex) const;
 	bool bIdentityInitialized = false;

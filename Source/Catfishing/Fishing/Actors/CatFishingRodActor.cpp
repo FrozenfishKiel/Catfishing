@@ -3,6 +3,7 @@
 #include "Components/SceneComponent.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSettings.h"
+#include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
@@ -273,9 +274,8 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 	const double PullAccelerationCentimetersPerSecondSquared,
 	const double TargetPullSpeedCentimetersPerSecond, const double MaximumAwaySpeedMultiplier,
 	const double NormalizedTension, const double ConstraintErrorCentimeters,
-	const bool bFightActive, const double RodRotationSpeedMultiplier,
-	const double FishResistingTorqueStrengthMeters,
-	const double CatTorqueCapacityStrengthMeters)
+	const bool bFightActive, const double MaximumFishTorqueStrengthMeters,
+	const double CatTorqueCapacityStrengthMeters, const FVector& RodPullAxis)
 {
 	FVector HorizontalDirection(PullDirection.X, PullDirection.Y, 0.0);
 	const bool bHasDirection = !HorizontalDirection.ContainsNaN() && HorizontalDirection.Normalize();
@@ -292,12 +292,11 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 		&& MaximumAwaySpeedMultiplier >= 0.0 && MaximumAwaySpeedMultiplier <= 1.0
 		&& FMath::IsFinite(NormalizedTension)
 		&& FMath::IsFinite(ConstraintErrorCentimeters) && ConstraintErrorCentimeters >= 0.0
-		&& FMath::IsFinite(RodRotationSpeedMultiplier)
-		&& RodRotationSpeedMultiplier >= 0.0 && RodRotationSpeedMultiplier <= 1.0
-		&& FMath::IsFinite(FishResistingTorqueStrengthMeters)
-		&& FishResistingTorqueStrengthMeters >= 0.0
+		&& FMath::IsFinite(MaximumFishTorqueStrengthMeters)
+		&& MaximumFishTorqueStrengthMeters >= 0.0
 		&& FMath::IsFinite(CatTorqueCapacityStrengthMeters)
-		&& CatTorqueCapacityStrengthMeters >= 0.0;
+		&& CatTorqueCapacityStrengthMeters >= 0.0
+		&& !RodPullAxis.ContainsNaN() && !RodPullAxis.IsNearlyZero();
 	if (!bValid)
 	{
 		return false;
@@ -313,8 +312,8 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 	Next.NormalizedTension = static_cast<float>(FMath::Clamp(NormalizedTension, 0.0, 1.0));
 	Next.ConstraintErrorCentimeters = static_cast<float>(ConstraintErrorCentimeters);
 	Next.bFightActive = bFightActive;
-	Next.RodRotationSpeedMultiplier = static_cast<float>(RodRotationSpeedMultiplier);
-	Next.FishResistingTorqueStrengthMeters = static_cast<float>(FishResistingTorqueStrengthMeters);
+	Next.RodPullAxis = RodPullAxis.GetSafeNormal();
+	Next.MaximumFishTorqueStrengthMeters = static_cast<float>(MaximumFishTorqueStrengthMeters);
 	Next.CatTorqueCapacityStrengthMeters = static_cast<float>(CatTorqueCapacityStrengthMeters);
 	Next.bActive = Next.TargetPullSpeedCentimetersPerSecond > KINDA_SMALL_NUMBER
 		|| Next.MaximumAwaySpeedMultiplier < 1.0f - KINDA_SMALL_NUMBER;
@@ -345,9 +344,8 @@ void ACatFishingRodActor::ClearCarrierConstraintFromAuthority()
 		return;
 	}
 	CarrierConstraintState = FCatFishingCarrierConstraintState{};
-	SmoothedRodRotationSpeedMultiplier = 1.0;
 	NextRodRotationResistanceDiagnosticWorldSeconds = 0.0;
-	bLastRodRotationStalled = false;
+	bLastRodTorqueBalanced = false;
 	ForceNetUpdate();
 }
 
@@ -522,36 +520,31 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 	RequestedAimRotation.Pitch = FMath::ClampAngle(RequestedAimRotation.Pitch,
 		Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
 	RequestedAimRotation.Roll = 0.0;
+	FCatFishingRodRotationResult RotationStep;
 	const bool bNewHolder = AuthoritativeAimHolder.Get() != HolderPawn;
 	if (!bHeldAimInitialized || bNewHolder || !CarrierConstraintState.bFightActive)
 	{
 		AuthoritativeHeldAimRotation = RequestedAimRotation;
-		SmoothedRodRotationSpeedMultiplier = 1.0;
 		bHeldAimInitialized = true;
 		AuthoritativeAimHolder = HolderPawn;
 	}
 	else if (FMath::IsFinite(DeltaSeconds) && DeltaSeconds > UE_DOUBLE_SMALL_NUMBER)
 	{
-		const double TargetSpeedMultiplier = FMath::Clamp(
-			static_cast<double>(CarrierConstraintState.RodRotationSpeedMultiplier), 0.0, 1.0);
-		const double ResponseSeconds = FMath::Max(
-			Settings->HeldRodAngularResistanceResponseSeconds, 1.0 / 240.0);
-		const double ResponseAlpha = FMath::Clamp(
-			1.0 - FMath::Exp(-DeltaSeconds / ResponseSeconds), 0.0, 1.0);
-		SmoothedRodRotationSpeedMultiplier = FMath::Lerp(
-			SmoothedRodRotationSpeedMultiplier, TargetSpeedMultiplier, ResponseAlpha);
-		if (TargetSpeedMultiplier <= UE_DOUBLE_KINDA_SMALL_NUMBER
-			&& SmoothedRodRotationSpeedMultiplier <= 0.01)
-		{
-			SmoothedRodRotationSpeedMultiplier = 0.0;
-		}
-		const double MaximumAngularSpeed = Settings->HeldRodMaximumAngularSpeedDegreesPerSecond
-			* SmoothedRodRotationSpeedMultiplier;
-		if (MaximumAngularSpeed > UE_DOUBLE_SMALL_NUMBER)
-		{
-			AuthoritativeHeldAimRotation = FMath::RInterpConstantTo(AuthoritativeHeldAimRotation,
-				RequestedAimRotation, static_cast<float>(DeltaSeconds), static_cast<float>(MaximumAngularSpeed));
-		}
+		FCatFishingRodRotationInput RotationInput;
+		RotationInput.CurrentAim = AuthoritativeHeldAimRotation;
+		RotationInput.RequestedAim = RequestedAimRotation;
+		RotationInput.PullAxis = CarrierConstraintState.RodPullAxis;
+		RotationInput.CatTorqueCapacity = CarrierConstraintState.CatTorqueCapacityStrengthMeters;
+		RotationInput.MaximumFishTorque = CarrierConstraintState.MaximumFishTorqueStrengthMeters;
+		RotationInput.MaximumAngularSpeedDegreesPerSecond = Settings->HeldRodMaximumAngularSpeedDegreesPerSecond;
+		RotationInput.ResponseSeconds = Settings->HeldRodAngularResistanceResponseSeconds;
+		RotationInput.DeltaSeconds = DeltaSeconds;
+		RotationStep = FCatFishingRodResistanceModel::StepRotation(RotationInput);
+		if (!RotationStep.bSucceeded) return false;
+		AuthoritativeHeldAimRotation = RotationStep.ActualAim;
+		// 保留握持姿态原有的身体俯仰范围；阻力本身没有角度裁剪。
+		AuthoritativeHeldAimRotation.Pitch = FMath::ClampAngle(AuthoritativeHeldAimRotation.Pitch,
+			Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
 	}
 	const FRotator AimRotation = AuthoritativeHeldAimRotation;
 	const FVector GripLocation = HolderPawn->GetActorLocation()
@@ -563,27 +556,31 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 	AuthoritativeRodTipVelocity = FMath::IsFinite(DeltaSeconds) && DeltaSeconds > UE_DOUBLE_SMALL_NUMBER
 		? (CurrentTip - PreviousTip) / DeltaSeconds : FVector::ZeroVector;
 	AuthoritativeHolderVelocity = HolderPawn->GetVelocity();
-	const bool bRotationStalled = CarrierConstraintState.bFightActive
-		&& SmoothedRodRotationSpeedMultiplier <= 0.01;
+	// 仅诊断观察，不参与下一帧是否允许转动的裁决。
+	const bool bTorqueBalanced = RotationStep.bSucceeded
+		&& RotationStep.AngularSpeedDegreesPerSecond < 0.1
+		&& !AuthoritativeHeldAimRotation.Equals(RequestedAimRotation, 1.0);
 	UWorld* World = GetWorld();
 	const double WorldSeconds = World ? World->GetTimeSeconds() : 0.0;
 	if (World && CarrierConstraintState.bFightActive
-		&& (bRotationStalled != bLastRodRotationStalled
+		&& (bTorqueBalanced != bLastRodTorqueBalanced
 			|| WorldSeconds >= NextRodRotationResistanceDiagnosticWorldSeconds))
 	{
 		UE_LOG(LogCatFishing, Display,
 			TEXT("Event=fishing_rod_rotation_resistance_sample RodActorId=%s RequestedYaw=%.2f ActualYaw=%.2f "
-				"RequestedPitch=%.2f ActualPitch=%.2f SpeedMultiplier=%.3f TargetSpeedMultiplier=%.3f "
-				"FishTorque=%.3f CatTorqueCapacity=%.3f Stalled=%s Holder=%s NetMode=%d Authority=true"),
+				"RequestedPitch=%.2f ActualPitch=%.2f AngularSpeed=%.3f NetTorque=%s "
+				"MaximumFishTorque=%.3f CatTorqueCapacity=%.3f TorqueBalanced=%s "
+				"PullAxis=%s Holder=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
 			*PresentationState.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
 			RequestedAimRotation.Yaw, AimRotation.Yaw, RequestedAimRotation.Pitch, AimRotation.Pitch,
-			SmoothedRodRotationSpeedMultiplier, CarrierConstraintState.RodRotationSpeedMultiplier,
-			CarrierConstraintState.FishResistingTorqueStrengthMeters,
+			RotationStep.AngularSpeedDegreesPerSecond, *RotationStep.NetTorque.ToCompactString(),
+			CarrierConstraintState.MaximumFishTorqueStrengthMeters,
 			CarrierConstraintState.CatTorqueCapacityStrengthMeters,
-			bRotationStalled ? TEXT("true") : TEXT("false"), *GetNameSafe(HolderPawn),
-			static_cast<int32>(World->GetNetMode()));
+			bTorqueBalanced ? TEXT("true") : TEXT("false"), *FVector(CarrierConstraintState.RodPullAxis).ToCompactString(),
+			*GetNameSafe(HolderPawn), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
+			static_cast<int32>(GetLocalRole()));
 		NextRodRotationResistanceDiagnosticWorldSeconds = WorldSeconds + 1.0;
-		bLastRodRotationStalled = bRotationStalled;
+		bLastRodTorqueBalanced = bTorqueBalanced;
 	}
 	return !CurrentTip.ContainsNaN() && !AuthoritativeRodTipVelocity.ContainsNaN()
 		&& !AuthoritativeHolderVelocity.ContainsNaN();
