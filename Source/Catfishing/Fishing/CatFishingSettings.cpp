@@ -13,6 +13,8 @@ bool UCatFishingSettings::IsRuntimeReady() const
 		&& HeldRodMaximumAngularSpeedDegreesPerSecond > 0.0
 		&& FMath::IsFinite(HeldRodAngularResistanceResponseSeconds)
 		&& HeldRodAngularResistanceResponseSeconds > 0.0
+		&& FMath::IsFinite(HeldRodFishPullSmoothingSeconds)
+		&& HeldRodFishPullSmoothingSeconds > 0.0
 		&& bEnableNearShoreValidation
 		&& FMath::IsFinite(ScoopReachCentimeters) && ScoopReachCentimeters > 0.0
 		&& FMath::IsFinite(TerminalReplicationWindowSeconds) && TerminalReplicationWindowSeconds > 0.0;

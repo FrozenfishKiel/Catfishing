@@ -144,6 +144,8 @@ private:
 	FVector AuthoritativeRodTipVelocity = FVector::ZeroVector;
 	FVector AuthoritativeHolderVelocity = FVector::ZeroVector;
 	FRotator AuthoritativeHeldAimRotation = FRotator::ZeroRotator;
+	/** 权威旋转的连续负载状态；不得随猫端牵引 bActive 或一次松线目标清零。 */
+	FVector SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
 	TWeakObjectPtr<APawn> AuthoritativeAimHolder;
 	/** 20 Hz 权威目标在本机角色移动帧中的平滑速度；只属于瞬态表现/移动接缝，不复制。 */
 	FVector SmoothedCarrierPullVelocity = FVector::ZeroVector;

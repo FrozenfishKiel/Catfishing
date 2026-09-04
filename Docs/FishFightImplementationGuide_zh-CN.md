@@ -119,7 +119,11 @@ Locked 绷紧时，鱼的向外意图形成猫的等长保持意图，所以零�
 
 ### 当前鱼竿旋转
 
-`FCatFishingRodResistanceModel::Evaluate()` 用 `鱼力量 × LineLoad × NormalizedTension × 玩法杆长（米）` 估计最大鱼端转矩。`StepRotation()` 将猫朝瞄准方向的有限转矩与 `cross(杆方向, 牵引方向) × 最大鱼端转矩` 相加，通过阻尼得到角速度并推进实际杆朝向。`TorqueBalanced` 只用于诊断；没有全方向零速锁定。鱼线转矩的输入仍是上述负载估计，尚未接入共同约束反力。
+`FCatFishingRodResistanceModel::Evaluate()` 用 `鱼力量 × LineLoad × NormalizedTension × 玩法杆长（米）` 估计最大鱼端转矩。`StepRotation()` 先对 `牵引方向 × 最大鱼端转矩` 这个有向负载作跨帧指数插值，再将 `cross(杆方向, 平滑后的有向负载)` 与猫朝瞄准方向的有限转矩相加，通过阻尼得到角速度并推进实际杆朝向。大小和方向一起平滑，避免鱼游向或 20 Hz 松绷线切换直接造成角速度阶跃；不对欧拉角、视觉 Mesh 单独造第二份姿态，也不增加容易过冲的旋转惯量。鱼线端点继续读取这份权威实际姿态。
+
+`HeldRodFishPullSmoothingSeconds=0.15` 是有向负载的响应时间常数（约 0.15 秒完成 63% 的变化），与猫端瞄准响应 `HeldRodAngularResistanceResponseSeconds=0.08` 分开。亚步使用中点负载、保存终点历史，保持不同帧率下响应一致；只影响过渡，不改变恒定负载下的平衡角。历史不会随猫端移动 `bActive` 或一次零负载目标清空；会话清约束、力竭清驱动力、换持有者或落地时清空，避免旧鱼负载带到新状态。`fishing_rod_rotation_resistance_sample` 保留原始 `MaximumFishTorque/PullAxis`，另记 `AppliedFishPull/FishPullSmoothingSeconds`，可按同一 `RodActorId` 与约束日志对照。
+
+`TorqueBalanced` 只用于诊断；没有全方向零速锁定，也没有阻力角度上限或锁定半径。鱼线转矩的输入仍是上述负载估计，尚未接入共同约束反力。
 
 ### 鱼线为什么会垂、什么时候会绷紧
 

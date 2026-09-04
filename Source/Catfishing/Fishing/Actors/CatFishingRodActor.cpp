@@ -317,6 +317,10 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 	Next.CatTorqueCapacityStrengthMeters = static_cast<float>(CatTorqueCapacityStrengthMeters);
 	Next.bActive = Next.TargetPullSpeedCentimetersPerSecond > KINDA_SMALL_NUMBER
 		|| Next.MaximumAwaySpeedMultiplier < 1.0f - KINDA_SMALL_NUMBER;
+	if (!Next.bFightActive)
+	{
+		SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
+	}
 	CarrierConstraintState = Next;
 	if (!Next.bActive)
 	{
@@ -334,6 +338,7 @@ void ACatFishingRodActor::ClearCarrierConstraintFromAuthority()
 	}
 	// 服务器终止鱼端驱动力时立即停止本地牵引；客户端在复制回调里做同样处理。
 	ResetCarrierConstraintSmoothing();
+	SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
 	if (!CarrierConstraintState.bActive
 		&& !CarrierConstraintState.bFightActive
 		&& CarrierConstraintState.ConstraintErrorCentimeters <= KINDA_SMALL_NUMBER
@@ -509,6 +514,8 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 		|| Settings->HeldRodMaximumAngularSpeedDegreesPerSecond <= 0.0
 		|| !FMath::IsFinite(Settings->HeldRodAngularResistanceResponseSeconds)
 		|| Settings->HeldRodAngularResistanceResponseSeconds <= 0.0
+		|| !FMath::IsFinite(Settings->HeldRodFishPullSmoothingSeconds)
+		|| Settings->HeldRodFishPullSmoothingSeconds <= 0.0
 		|| Settings->HeldRodGripOffsetCentimeters.ContainsNaN())
 	{
 		return false;
@@ -525,6 +532,7 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 	if (!bHeldAimInitialized || bNewHolder || !CarrierConstraintState.bFightActive)
 	{
 		AuthoritativeHeldAimRotation = RequestedAimRotation;
+		SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
 		bHeldAimInitialized = true;
 		AuthoritativeAimHolder = HolderPawn;
 	}
@@ -534,14 +542,17 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 		RotationInput.CurrentAim = AuthoritativeHeldAimRotation;
 		RotationInput.RequestedAim = RequestedAimRotation;
 		RotationInput.PullAxis = CarrierConstraintState.RodPullAxis;
+		RotationInput.PreviousSmoothedFishPullStrengthMeters = SmoothedRodFishPullStrengthMeters;
 		RotationInput.CatTorqueCapacity = CarrierConstraintState.CatTorqueCapacityStrengthMeters;
 		RotationInput.MaximumFishTorque = CarrierConstraintState.MaximumFishTorqueStrengthMeters;
 		RotationInput.MaximumAngularSpeedDegreesPerSecond = Settings->HeldRodMaximumAngularSpeedDegreesPerSecond;
 		RotationInput.ResponseSeconds = Settings->HeldRodAngularResistanceResponseSeconds;
+		RotationInput.FishPullSmoothingSeconds = Settings->HeldRodFishPullSmoothingSeconds;
 		RotationInput.DeltaSeconds = DeltaSeconds;
 		RotationStep = FCatFishingRodResistanceModel::StepRotation(RotationInput);
 		if (!RotationStep.bSucceeded) return false;
 		AuthoritativeHeldAimRotation = RotationStep.ActualAim;
+		SmoothedRodFishPullStrengthMeters = RotationStep.SmoothedFishPullStrengthMeters;
 		// 保留握持姿态原有的身体俯仰范围；阻力本身没有角度裁剪。
 		AuthoritativeHeldAimRotation.Pitch = FMath::ClampAngle(AuthoritativeHeldAimRotation.Pitch,
 			Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
@@ -570,13 +581,16 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 			TEXT("Event=fishing_rod_rotation_resistance_sample RodActorId=%s RequestedYaw=%.2f ActualYaw=%.2f "
 				"RequestedPitch=%.2f ActualPitch=%.2f AngularSpeed=%.3f NetTorque=%s "
 				"MaximumFishTorque=%.3f CatTorqueCapacity=%.3f TorqueBalanced=%s "
-				"PullAxis=%s Holder=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
+				"PullAxis=%s AppliedFishPull=%s FishPullSmoothingSeconds=%.3f "
+				"HolderPlayerId=%d Holder=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
 			*PresentationState.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
 			RequestedAimRotation.Yaw, AimRotation.Yaw, RequestedAimRotation.Pitch, AimRotation.Pitch,
 			RotationStep.AngularSpeedDegreesPerSecond, *RotationStep.NetTorque.ToCompactString(),
 			CarrierConstraintState.MaximumFishTorqueStrengthMeters,
 			CarrierConstraintState.CatTorqueCapacityStrengthMeters,
 			bTorqueBalanced ? TEXT("true") : TEXT("false"), *FVector(CarrierConstraintState.RodPullAxis).ToCompactString(),
+			*SmoothedRodFishPullStrengthMeters.ToCompactString(), Settings->HeldRodFishPullSmoothingSeconds,
+			PresentationState.HolderPlayerState->GetPlayerId(),
 			*GetNameSafe(HolderPawn), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
 			static_cast<int32>(GetLocalRole()));
 		NextRodRotationResistanceDiagnosticWorldSeconds = WorldSeconds + 1.0;
@@ -596,6 +610,7 @@ bool ACatFishingRodActor::PlaceOnGroundFromAuthority(const FTransform& GroundTra
 	SetActorTransform(GroundTransform, false, nullptr, ETeleportType::TeleportPhysics);
 	AuthoritativeRodTipVelocity = FVector::ZeroVector;
 	AuthoritativeHolderVelocity = FVector::ZeroVector;
+	SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
 	bHeldAimInitialized = false;
 	AuthoritativeAimHolder.Reset();
 	CarrierConstraintState = FCatFishingCarrierConstraintState{};
@@ -667,6 +682,7 @@ void ACatFishingRodActor::BeginPlay()
 void ACatFishingRodActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	ResetCarrierConstraintSmoothing();
+	SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
 	// 只有权威端且已绑定 Owner 时才需要清理服务里的“已部署鱼竿”登记，避免野指针残留
 	if (HasAuthority() && PresentationState.OwnerPlayerState)
 	{
@@ -712,6 +728,7 @@ void ACatFishingRodActor::DispatchPresentationChanged(const FCatFishingRodPresen
 		|| Current.HolderPlayerState != Previous.HolderPlayerState)
 	{
 		ResetCarrierConstraintSmoothing();
+		SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
 	}
 	SetActorTickEnabled(Current.PoseMode == ECatFishingRodPoseMode::Held);
 	// 收竿后 Actor 还要活满一个终态复制窗（见 UCatFishingService::PackRod）才销毁，

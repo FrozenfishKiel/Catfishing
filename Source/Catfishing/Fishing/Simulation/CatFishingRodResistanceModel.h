@@ -27,10 +27,13 @@ struct CATFISHING_API FCatFishingRodRotationInput
 	FRotator CurrentAim = FRotator::ZeroRotator;
 	FRotator RequestedAim = FRotator::ZeroRotator;
 	FVector PullAxis = FVector::ForwardVector;
+	/** 上一帧已应用的有向鱼线负载，跨固定步保持；不是额外的鱼端驱动力。 */
+	FVector PreviousSmoothedFishPullStrengthMeters = FVector::ZeroVector;
 	double CatTorqueCapacity = 0.0;
 	double MaximumFishTorque = 0.0;
 	double MaximumAngularSpeedDegreesPerSecond = 360.0;
 	double ResponseSeconds = 0.08;
+	double FishPullSmoothingSeconds = 0.15;
 	double DeltaSeconds = 0.0;
 };
 
@@ -39,10 +42,11 @@ struct CATFISHING_API FCatFishingRodRotationResult
 	bool bSucceeded = false;
 	FRotator ActualAim = FRotator::ZeroRotator;
 	FVector NetTorque = FVector::ZeroVector;
+	FVector SmoothedFishPullStrengthMeters = FVector::ZeroVector;
 	double AngularSpeedDegreesPerSecond = 0.0;
 };
 
-/** 有阻尼的连续转矩对抗：净转矩为零才停转，不保存锁定状态，也不裁剪允许角度。 */
+/** 鱼线负载先连续插值，再做有阻尼的转矩对抗；不保存锁定状态，也不裁剪允许角度。 */
 class CATFISHING_API FCatFishingRodResistanceModel
 {
 public:

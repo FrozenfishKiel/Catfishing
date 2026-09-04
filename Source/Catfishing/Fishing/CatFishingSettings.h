@@ -92,6 +92,9 @@ public:
 	/** 猫端瞄准施力的阻尼响应时间；净转矩抵消时自然停转，不设角度锁。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.01", Units="s"))
 	double HeldRodAngularResistanceResponseSeconds = 0.08;
+	/** 鱼游向/松绷线改变时，有向负载的指数插值时间常数；越大越柔和，不改变稳态平衡角。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.01", Units="s"))
+	double HeldRodFishPullSmoothingSeconds = 0.15;
 
 	/**
 	 * 打窝蓄力（规格 3.1 打窝：蓄力抛掷、抛物线预览）。服务器按按住时长算 ChargeAlpha，客户端预览用同一组参数（UCatFishingAimLibrary）。
