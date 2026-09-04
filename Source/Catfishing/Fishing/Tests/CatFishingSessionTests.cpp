@@ -155,7 +155,7 @@ bool FCatFishingSessionCutLineCommandTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Cut line returns its distinct command type"), First.CommandType, ECatFishingCommandType::CutLine);
 	TestEqual(TEXT("Cut line terminates the session"), Session->Snapshot.Phase, ECatFishingPhase::Terminated);
 	TestEqual(TEXT("Cut line persists its distinct outcome"), Session->Snapshot.Outcome, ECatFishingOutcome::LineCut);
-	TestEqual(TEXT("Cut line preserves accumulated line durability without extra wear"),
+	TestEqual(TEXT("Cut line preserves rod durability without extra wear"),
 		Session->Snapshot.RodDurabilityRemaining, 42.5);
 	TestFalse(TEXT("Cut line clears stale reel input"), Session->Snapshot.bReeling);
 	TestFalse(TEXT("Cut line does not break the reusable rod"), Rod->GetPresentationState().bBroken);

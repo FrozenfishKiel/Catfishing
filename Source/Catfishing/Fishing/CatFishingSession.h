@@ -53,7 +53,7 @@ public:
 	bool OpenTrueBiteWindowFromStateTree();
 	FCatFishingCommandResult RequestHookFromAuthority(FGuid RequestId);
 	FCatFishingCommandResult CancelFromAuthority(FGuid RequestId);
-	/** 上钩后的主动止损写口；只接受当前钓手和精确 Revision，提交后鱼/饵丢失但不追加鱼线磨损。 */
+	/** 上钩后的主动止损写口；只接受当前钓手和精确 Revision，提交后鱼/饵丢失，不追加或退还鱼竿磨损。 */
 	FCatFishingCommandResult CutLineFromAuthority(AController* RequestingController,
 		const FCatFishingSessionCommandContext& Context);
 	bool TryEnterHookedFightFromAuthority();

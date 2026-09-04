@@ -828,7 +828,6 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	}
 
 	FCatFishingUseRecord Record;
-	Record.SessionId = FishingSessionId;
 	Record.RodItemInstanceId = RodItemInstanceId;
 	Record.RodDefinitionId = RodDefinitionId;
 	Record.ReservedBaitDefinitionId = ReservedBaitItem.DefinitionId;

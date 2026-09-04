@@ -95,8 +95,6 @@ private:
 
 	struct FCatFishingUseRecord
 	{
-		/** 本场 Fishing 会话身份；后续扣饵、耐久结算和释放都按它找到同一条短生命周期记录。 */
-		FGuid SessionId;
 		/** Begin 冻结的鱼竿实例与定义；后续磨损不得按当前选择重新选竿。 */
 		FGuid RodItemInstanceId;
 		FName RodDefinitionId = NAME_None;

@@ -586,11 +586,11 @@ bool FCatFishingIsometricWorkTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingInwardReelLineWearTest,
-	"Catfishing.Unit.Fishing.Simulation.TensionWithoutOutwardFishLoadCannotWearLine",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingInwardReelRodWearTest,
+	"Catfishing.Unit.Fishing.Simulation.TensionWithoutOutwardFishLoadCannotWearRod",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-bool FCatFishingInwardReelLineWearTest::RunTest(const FString& Parameters)
+bool FCatFishingInwardReelRodWearTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	FCatFightSimulationConfig Config = MakeConfig();
@@ -608,18 +608,18 @@ bool FCatFishingInwardReelLineWearTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("inward fish direction has no outward line load"),
 		Step.NormalizedLineLoad, 0.0, 1e-9);
 	TestEqual(TEXT("tension alone cannot add rod wear"), Step.RodWearDelta, 0.0, 1e-9);
-	TestEqual(TEXT("session line durability is unchanged without outward fish load"),
+	TestEqual(TEXT("accumulated rod wear is unchanged without outward fish load"),
 		Step.AbsoluteRodWear, State.AbsoluteRodWear, 1e-9);
-	TestEqual(TEXT("inward reeling cannot break a nearly worn line"),
+	TestEqual(TEXT("inward reeling cannot break a nearly worn rod"),
 		Step.Outcome, ECatFightStepOutcome::None);
 	return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingDirectionalLineWearTest,
-	"Catfishing.Unit.Fishing.Simulation.LowOutwardLoadScalesWearAndFullLoadCanStillBreakLine",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingDirectionalRodWearTest,
+	"Catfishing.Unit.Fishing.Simulation.LowOutwardLoadScalesWearAndFullLoadCanStillBreakRod",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-bool FCatFishingDirectionalLineWearTest::RunTest(const FString& Parameters)
+bool FCatFishingDirectionalRodWearTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	FCatFightSimulationConfig Config = MakeConfig();
@@ -748,9 +748,9 @@ bool FCatFishingExhaustedContinuationTest::RunTest(const FString& Parameters)
 		Reeling.CarrierTargetPullSpeedCentimetersPerSecond, 0.0, 1e-9);
 	TestEqual(TEXT("exhausted fish does not restrict backing-away speed"),
 		Reeling.CarrierAwaySpeedMultiplier, 1.0, 1e-9);
-	TestEqual(TEXT("reeling an exhausted fish cannot add line wear"),
+	TestEqual(TEXT("reeling an exhausted fish cannot add rod wear"),
 		Reeling.AbsoluteRodWear, LockedState.AbsoluteRodWear, 1e-9);
-	TestEqual(TEXT("retained wear at the limit cannot break the line after exhaustion"),
+	TestEqual(TEXT("exhausted simulation does not generate another break from retained wear"),
 		Reeling.Outcome, ECatFightStepOutcome::None);
 	return !HasAnyErrors();
 }

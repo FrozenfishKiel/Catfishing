@@ -125,7 +125,7 @@ public:
 		meta = (DisplayName = "逃脱松线余量", ClampMin = "0.0", Units = "cm"))
 	double EscapeSlackCentimeters = -1.0;
 
-	/** 强对抗僵持时按鱼线力量结算的每步磨损系数。 */
+	/** 存在鱼向外负载时，按双方沿线力量与实际负载连续缩放的鱼竿磨损系数。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "鱼线与张力",
 		meta = (DisplayName = "僵持鱼竿磨损系数", ClampMin = "0.0"))
 	double StalemateRodWearPerFishStrength = -1.0;
