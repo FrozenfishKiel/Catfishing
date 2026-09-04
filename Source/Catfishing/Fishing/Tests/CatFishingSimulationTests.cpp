@@ -755,6 +755,74 @@ bool FCatFishingExhaustedContinuationTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingExhaustedReelWithoutCatStaminaTest,
+	"Catfishing.Unit.Fishing.Simulation.ExhaustedFishReelsAtConfiguredSpeedWithoutCatStamina",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingExhaustedReelWithoutCatStaminaTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFightSimulationConfig Config = MakeConfig();
+	FCatFightSimulationState State = MakeState(ECatFightCatAction::Pull);
+	State.bFishExhausted = true;
+	State.FishStamina = 0.0;
+	State.CatStamina = 0.0;
+	State.MotionIntent = ECatFishMotionIntent::AutoHauling;
+	const FCatFightRodConstraintInput Rod = MakeHeldConstraint();
+	for (const double RemainingStrength : {0.0, 0.001, 50.0})
+	{
+		Config.PrimaryOperatorCatStrength = RemainingStrength;
+		const auto Step = FCatFishingFightSimulator::Step(Config, State, Rod, FVector::ZeroVector);
+		TestTrue(TEXT("鱼力竭后各种剩余猫力量都能继续收线"), Step.bSucceeded);
+		TestEqual(TEXT("收尾使用配置速度而非剩余搏斗力量"), Step.RequestedReelDistanceCentimeters,
+			Config.ReelSpeedCentimetersPerSecond * Config.FixedStepSeconds, 1e-6);
+		TestTrue(TEXT("收尾确实缩短鱼线并把鱼拉近"), Step.LineLengthCentimeters < State.LineLengthCentimeters
+			&& Step.ProposedFishWorldPosition.X < State.FishWorldPosition.X);
+		TestEqual(TEXT("收尾不伪造猫当前力量"), Step.CombinedCatStrength, RemainingStrength);
+		TestEqual(TEXT("收尾不扣猫体力"), Step.CatStaminaDrain, 0.0);
+		TestEqual(TEXT("收尾不扣鱼体力"), Step.FishStaminaDrain, 0.0);
+		TestEqual(TEXT("收尾不磨损鱼竿"), Step.RodWearDelta, 0.0);
+	}
+	Config.PrimaryOperatorCatStrength = 0.0;
+	for (int32 Index = 0; Index < 10; ++Index)
+	{
+		const auto Step = FCatFishingFightSimulator::Step(Config, State, Rod, FVector::ZeroVector);
+		TestTrue(TEXT("双方零体力时持续按住仍每步拉近"), Step.bSucceeded
+			&& Step.ProposedFishWorldPosition.X < State.FishWorldPosition.X);
+		State.LineLengthCentimeters = Step.LineLengthCentimeters;
+		State.FishWorldPosition = Step.ProposedFishWorldPosition;
+	}
+	const double ReelingLineLength = State.LineLengthCentimeters;
+	for (const auto Action : {ECatFightCatAction::None, ECatFightCatAction::Slack})
+	{
+		State.CatAction = Action;
+		const auto Step = FCatFishingFightSimulator::Step(Config, State, Rod, FVector::ZeroVector);
+		TestTrue(TEXT("松开左键或放线仍是合法步骤"), Step.bSucceeded);
+		TestEqual(TEXT("松开左键或放线不会自动收线"), Step.RequestedReelDistanceCentimeters, 0.0);
+		TestTrue(TEXT("松开左键或放线不会缩短线长"), Step.LineLengthCentimeters >= ReelingLineLength);
+	}
+	State.CatAction = ECatFightCatAction::Pull;
+	State.bOperatorPresent = false;
+	const auto Unattended = FCatFishingFightSimulator::Step(Config, State, Rod, FVector::ZeroVector);
+	TestTrue(TEXT("没有操作手时步骤有效"), Unattended.bSucceeded);
+	TestEqual(TEXT("没有操作手不能凭残留左键状态自动收线"), Unattended.RequestedReelDistanceCentimeters, 0.0);
+	State.bOperatorPresent = true;
+	State.bFishExhausted = false;
+	State.FishStamina = 100.0;
+	const auto LiveFish = FCatFishingFightSimulator::Step(Config, State, Rod, FVector::ForwardVector);
+	TestTrue(TEXT("活鱼阶段零力量仍是合法步骤"), LiveFish.bSucceeded);
+	TestEqual(TEXT("活鱼阶段仍保留零力量不能收线的限制"), LiveFish.RequestedReelDistanceCentimeters, 0.0);
+	State.bFishExhausted = true;
+	State.FishStamina = 0.0;
+	State.FishWorldPosition = FVector(0.0, 0.0, -100.0);
+	State.LineLengthCentimeters = 102.0;
+	const auto Endpoint = FCatFishingFightSimulator::Step(Config, State, Rod, FVector::ZeroVector);
+	TestTrue(TEXT("零体力收尾在竿尖正下方仍有效"), Endpoint.bSucceeded);
+	TestEqual(TEXT("收尾不能收过垂直距离下限"), Endpoint.LineLengthCentimeters, 100.0);
+	TestTrue(TEXT("收尾不会伪造鱼的水平游动"), Endpoint.ProposedFishWorldPosition.Equals(State.FishWorldPosition, 1e-6));
+	return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingHelperOnlyWorkTest,
 	"Catfishing.Unit.Fishing.Simulation.ExhaustedPrimaryDoesNotSuppressHelperWork",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)

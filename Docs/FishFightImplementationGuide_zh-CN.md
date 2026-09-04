@@ -105,7 +105,7 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 鱼的个体重量由服务器选择流程冻结，乘平衡资产的 `StrengthPerKilogram` 得到基础力量，再应用完美中鱼的力量倍率。猫的基础 `FishingStrength / StrengthPerKilogram` 是当前玩法等效质量；猫的可用力量随体力降低，质量不随体力降低。`CharacterMovement.Mass` 不作为这套分配公式的猫质量输入。
 
 1. 鱼直接以性格资产的平静/挣扎游速乘固定步长生成水平候选位移；没有由鱼力量积分得到自由游速，也没有持久鱼速度状态。
-2. 猫端收线速度取 `min(ReelSpeedCentimetersPerSecond, 有效猫力量 × AccelerationPerStrength × DriveResponseSeconds)`，按剩余可收长度生成请求并直接缩短 `L_paid`。模拟器把 `ActualReelDistanceCentimeters` 设为请求距离，没有按鱼线负载求卷线器停转。
+2. 活鱼阶段猫端收线速度取 `min(ReelSpeedCentimetersPerSecond, 有效猫力量 × AccelerationPerStrength × DriveResponseSeconds)`；鱼力竭后的免耗体收尾直接使用 `ReelSpeedCentimetersPerSecond`，猫体力为零也能继续收回。两种阶段都要求有操作手且按住左键，按剩余可收长度生成请求并直接缩短 `L_paid`，保留垂直距离下限及同一端点/地形约束。模拟器把 `ActualReelDistanceCentimeters` 设为请求距离，没有按鱼线负载求卷线器停转。
 3. 猫的移动输入形成端点候选位移，与鱼候选和已放线长一起生成约束误差。只有鱼的向外对抗加速度高于猫时，其差值才按双方质量分配猫端牵引；猫更强或鱼力竭时，修正主要落到鱼端。相等力量下猫端牵引为零是这套公式的性质，不代表已经完成地面摩擦与合力求解。
 4. `ACatFishingRodActor::ApplyCarrierConstraint()` 在 CharacterMovement 完成移动后平滑追赶目标，补足向鱼速度并限制远离方向速度；这不是共同拉力在角色运动中的积分。
 
@@ -176,7 +176,7 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 
 鱼体力结算后不高于平衡资产的 `FishExhaustionThreshold` 时，服务器把尾数吸附到 0 并进入 `ExhaustedReel`；该值是绝对体力阈值，不是百分比。排查时以权威日志的剩余体力与转换事件为准，不能用 HUD 四舍五入后的显示代替实际值。
 
-鱼体力清空的同一服务器帧保留 Encounter 当前位置，并把 `AutoHauling` 复制给所有客户端驱动侧翻。左键按住状态和输入序号跨阶段保留；鱼随后仍由原 Runner 的线长约束逐步靠近竿尖 XY。只有确认落在真实干地、并进入竿尖水平完成距离后才在鱼当前位置生成 Pickup；水面上的鱼不会仅因靠近竿尖就交接。确认上岸也会直接清空鱼体力并进入同一力竭生命周期。这些收尾条件是当前玩法规则，不能作为“所有结果已由物理产生”的证据。
+鱼体力清空的同一服务器帧保留 Encounter 当前位置，并把 `AutoHauling` 复制给所有客户端驱动侧翻。左键按住状态和输入序号跨阶段保留；主位与辅助位在 `ExhaustedReel` 新按下/松开左键仍写入原 Runner，主位右键释放也会清除放线状态。鱼随后仍由原 Runner 的线长约束逐步靠近竿尖 XY；该收尾免耗体且不再受猫剩余搏斗力量限制，不会给猫补满体力或恢复转杆力量。只有确认落在真实干地、并进入竿尖水平完成距离后才在鱼当前位置生成 Pickup；水面上的鱼不会仅因靠近竿尖就交接。确认上岸也会直接清空鱼体力并进入同一力竭生命周期。这些收尾条件是当前玩法规则，不能作为“所有结果已由物理产生”的证据。
 
 ## 常用调参位置
 

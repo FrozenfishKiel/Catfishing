@@ -164,9 +164,12 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	// 由约束误差表达不可满足的几何状态，不能在按住收线时把线长反写得更长。
 	const double PaidOutLine0 = FMath::Clamp(State.LineLengthCentimeters,
 		0.0, Config.MaximumLineLengthCentimeters);
-	const double ReelIntentSpeed = FMath::Min(Config.ReelSpeedCentimetersPerSecond,
-		CatDriveAcceleration * Config.DriveResponseSeconds);
-	const double RequestedReelDistance = bReeling && EffectiveCatStrength > UE_DOUBLE_SMALL_NUMBER
+	// 力竭鱼的免耗体收尾使用配置收线速度，不能继续被猫的剩余搏斗力量卡住。
+	// 活鱼仍按当前力量限制速度；两种阶段共用按键、线长下限和后续端点约束。
+	const double ReelIntentSpeed = State.bFishExhausted
+		? Config.ReelSpeedCentimetersPerSecond
+		: FMath::Min(Config.ReelSpeedCentimetersPerSecond, CatDriveAcceleration * Config.DriveResponseSeconds);
+	const double RequestedReelDistance = bReeling && (State.bFishExhausted || EffectiveCatStrength > UE_DOUBLE_SMALL_NUMBER)
 		? FMath::Min(ReelIntentSpeed * Dt, FMath::Max(0.0, PaidOutLine0 - VerticalDistance)) : 0.0;
 	double LineLength = PaidOutLine0 - RequestedReelDistance;
 	const double FreeDistance = FVector::Distance(RodTip, FreeFishPosition);

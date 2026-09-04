@@ -623,14 +623,15 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		}
 		FGuid SessionId;
 		FCatFishingSessionSnapshot Snapshot;
-		// HookedFight 的左键按鱼竿全部操作位路由：主位控制收线意图，辅助位提交协作发力意图。
+		// 搏斗与力竭回收都按鱼竿全部操作位路由：主位控制线杯，辅助位提交协作发力意图。
 		// 这条分支必须早于“仅主位活动会话”查询，否则辅助者的输入会被误当成新抛竿。
 		if (ACatFishingRodActor* OperatedRod = Fishing->FindRodOperatedBy(Controller->PlayerState))
 		{
 			if (ACatFishingSession* OperatedSession = Fishing->FindActiveSessionByRod(OperatedRod))
 			{
 				const FCatFishingSessionSnapshot& OperatedSnapshot = OperatedSession->GetSnapshot();
-				if (OperatedSnapshot.Phase == ECatFishingPhase::HookedFight
+				if ((OperatedSnapshot.Phase == ECatFishingPhase::HookedFight
+					|| OperatedSnapshot.Phase == ECatFishingPhase::ExhaustedReel)
 					&& (CommandType == ECatFishingCommandType::RequestHook
 						|| CommandType == ECatFishingCommandType::PrimaryReleased
 						|| CommandType == ECatFishingCommandType::SlackPressed
@@ -820,8 +821,9 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				if (CommandType == ECatFishingCommandType::SlackPressed
 					|| CommandType == ECatFishingCommandType::SlackReleased)
 				{
-					// 右键松开线杯只在搏斗阶段有意义；其他阶段视为无害 no-op，避免 UI 误报。
-					if (Snapshot.Phase == ECatFishingPhase::HookedFight)
+					// 回收沿用搏斗的线杯状态；跨越鱼力竭阶段的右键松开仍必须清除放线意图。
+					if (Snapshot.Phase == ECatFishingPhase::HookedFight
+						|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel)
 					{
 						// 按下/松开都转成同一个权威写口，用命令类型本身当作“是否按下”的布尔值
 						Result.bCommitted = Session->SetSlackingFromAuthority(Controller->PlayerState,

@@ -1023,7 +1023,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"PrimaryStamina=%.3f GroupStaminaDrain=%.3f FishStamina=%.3f FishStaminaDrain=%.3f "
 				"MotionIntent=%s CatIntentCm=%.3f CatActualCm=%.3f FishIntentCm=%.3f FishActualCm=%.3f "
 				"FishWorldStep2DCm=%.3f FishWorldStep3DCm=%.3f FishWorldDeltaZCm=%.3f "
-				"ReelRequestedCm=%.3f ReelActualCm=%.3f AbsoluteRodWear=%.3f RodWearDelta=%.3f "
+				"ReelRequestedCm=%.3f ReelActualCm=%.3f ReelMode=%s CatAction=%s AbsoluteRodWear=%.3f RodWearDelta=%.3f "
 				"MovementDrain=%.4f ReelDrain=%.4f RodDrain=%.4f HoldDrain=%.4f "
 				"MovementIntentCm=%.3f MovementActualCm=%.3f RodIntentArcCm=%.3f RodActualArcCm=%.3f HoldIntentCm=%.3f "
 				"CatEffortLoad=%.3f RodEffortLoad=%.3f FishEffortLoad=%.3f MovementIntentSource=CharacterMovementAcceleration "
@@ -1054,6 +1054,9 @@ void UCatFishingFightRunner::HandleFixedStep()
 			ResolvedFishDelta.Z,
 			Step.RequestedReelDistanceCentimeters,
 			Step.ActualReelDistanceCentimeters,
+			State.bFishExhausted ? TEXT("ExhaustedConfiguredSpeed") : TEXT("ActiveStrengthLimited"),
+			State.CatAction == ECatFightCatAction::Pull ? TEXT("Pull")
+				: State.CatAction == ECatFightCatAction::Slack ? TEXT("Slack") : TEXT("None"),
 			Step.AbsoluteRodWear,
 			Step.RodWearDelta,
 			Step.CatMovementStaminaDrain, Step.CatReelStaminaDrain, Step.CatRodStaminaDrain, Step.CatHoldStaminaDrain,
