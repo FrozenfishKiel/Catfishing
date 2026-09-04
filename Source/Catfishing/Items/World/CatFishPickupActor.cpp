@@ -19,6 +19,9 @@
 #include "Items/CatItemsService.h"
 #include "Items/CatWorldItemSettings.h"
 #include "Fishing/Presentation/CatFishPresentationDefinition.h"
+#include "Fishing/Presentation/CatFishGrounding.h"
+#include "Items/World/CatWorldSurfaceResolver.h"
+#include "Engine/SkeletalMesh.h"
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
 #include "TimerManager.h"
@@ -39,6 +42,8 @@ ACatFishPickupActor::ACatFishPickupActor()
 
 	FishMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("FishMesh"));
 	FishMesh->SetupAttachment(InteractionSphere);
+	// 鱼体使用冻结的世界比例；猫身体/嘴 Socket 的缩放不能把同一条鱼缩小或放大。
+	FishMesh->SetAbsolute(false, false, true);
 	FishMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	FishMesh->SetRenderCustomDepth(false);
 }
@@ -74,6 +79,12 @@ void ACatFishPickupActor::OnRep_AttachmentReplication()
 	ReconcileAttachmentFromPresentation(TEXT("AttachmentReplication"));
 }
 
+void ACatFishPickupActor::OnRep_ReplicatedMovement()
+{
+	Super::OnRep_ReplicatedMovement();
+	if (PresentationState.State == ECatFishPickupState::Available) ApplyLandedVisualTransform();
+}
+
 void ACatFishPickupActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
@@ -82,12 +93,12 @@ void ACatFishPickupActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 
 bool ACatFishPickupActor::InitializeFromAuthority(const FGuid InFishingSessionId, const FGuid InFishInstanceId,
 	UCatFishDefinition* InFishDefinition, const double InWeightKilograms, const double InVisualScale, const FName InRegionId,
-	const TArray<FString>& InFishingParticipantStableNetIds)
+	const TArray<FString>& InFishingParticipantStableNetIds, const FVector GroundNormal)
 {
 	if (!HasAuthority() || bIdentityInitialized || !InFishingSessionId.IsValid() || !InFishInstanceId.IsValid()
 		|| InFishingSessionId == InFishInstanceId || !InFishDefinition || !InFishDefinition->IsRuntimeDefinitionReady()
 		|| !FMath::IsFinite(InWeightKilograms) || InWeightKilograms <= 0.0
-		|| !FMath::IsFinite(InVisualScale) || InVisualScale <= 0.0 || InRegionId.IsNone())
+		|| !FMath::IsFinite(InVisualScale) || InVisualScale <= 0.0 || InRegionId.IsNone() || GroundNormal.ContainsNaN())
 	{
 		return false;
 	}
@@ -96,6 +107,7 @@ bool ACatFishPickupActor::InitializeFromAuthority(const FGuid InFishingSessionId
 	PresentationState.FishDefinitionId = InFishDefinition->FishDefinitionId;
 	PresentationState.WeightKilograms = InWeightKilograms;
 	PresentationState.VisualScale = InVisualScale;
+	PresentationState.GroundNormal = GroundNormal.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::UpVector);
 	PresentationState.State = ECatFishPickupState::Available;
 	FishDefinition = InFishDefinition;
 	FishPresentationDefinition = InFishDefinition->LoadRuntimePresentationDefinition();
@@ -108,6 +120,11 @@ bool ACatFishPickupActor::InitializeFromAuthority(const FGuid InFishingSessionId
 	RefreshFishPresentation();
 	ApplyLandedVisualTransform();
 	ForceNetUpdate();
+	UE_LOG(LogCatItems, Log, TEXT("Event=fish_pickup_grounded SessionId=%s FishInstanceId=%s Pickup=%s Contact=%s Normal=%s MeshLocation=%s MeshScale=%s VisualScale=%.3f World=%s NetMode=%d Authority=%d Role=%s"),
+		*InFishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *InFishInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetName(),
+		*GetActorLocation().ToCompactString(), *PresentationState.GroundNormal.ToCompactString(),
+		*FishMesh->GetComponentLocation().ToCompactString(), *FishMesh->GetComponentScale().ToCompactString(), InVisualScale,
+		*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()));
 	return true;
 }
 
@@ -174,6 +191,9 @@ void ACatFishPickupActor::RefreshFishPresentation()
 	FishMesh->PlayAnimation(LandedAnimation, false);
 	FishMesh->SetPosition(LandedAnimation->GetPlayLength(), false);
 	FishMesh->SetPlayRate(0.0f);
+	// 在第一帧显示前求出冻结姿态，避免用未初始化骨骼的包围盒计算贴地高度。
+	FishMesh->TickAnimation(0.0f, false);
+	FishMesh->RefreshBoneTransforms();
 	AppliedPresentationFishDefinitionId = PresentationState.FishDefinitionId;
 	UE_LOG(LogCatItems, Log,
 		TEXT("Event=fish_pickup_presentation_applied FishDefinition=%s FishInstanceId=%s Pickup=%s NetMode=%s Authority=%s Presentation=%s Mesh=%s Skeleton=%s LandedAnimation=%s VisualScale=%.3f State=%s"),
@@ -193,6 +213,14 @@ void ACatFishPickupActor::ApplyLandedVisualTransform()
 	}
 	FishMesh->SetRelativeTransform(LandedMeshBaseTransform);
 	ApplyVisualScale();
+	if (FishMesh->GetSkeletalMeshAsset())
+	{
+		const FBox Bounds = FishMesh->GetSkeletalMeshAsset()->GetBounds().GetBox()
+			+ FishMesh->CalcBounds(FTransform::Identity).GetBox();
+		const double Lift = CatFishGrounding::ComputeVerticalLift(Bounds, FishMesh->GetComponentTransform(),
+			GetActorLocation(), PresentationState.GroundNormal);
+		FishMesh->AddWorldOffset(FVector(0.0, 0.0, Lift));
+	}
 }
 
 // 嘴叼视觉流程：清掉仅为落地摆放准备的局部位置和旋转，让 FishMesh 原点直接跟随 MouthCarry 骨骼；重量冻结缩放保持不变。
@@ -442,11 +470,23 @@ void ACatFishPickupActor::ReleaseMouthCarryFromAuthority(const FVector& DropLoca
 	{
 		Character->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleAuthorityCarrierDestroyed);
 	}
+	const ACatCharacter* PreviousCarrier = AuthorityCarrier.Get();
 	AuthorityCarrier.Reset();
 	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
 	SetOwner(nullptr);
 	SetInstigator(nullptr);
-	SetActorLocation(DropLocation, false, nullptr, ETeleportType::TeleportPhysics);
+	const UCatWorldItemSettings* Settings = GetDefault<UCatWorldItemSettings>();
+	const FCatWorldSurfaceResult Surface = FCatWorldSurfaceResolver::ResolveHighestBlockingSurface(
+		GetWorld(), DropLocation, Settings->LandingGroundTraceChannel, {this, PreviousCarrier});
+	UE_CLOG(!Surface.bSucceeded, LogCatItems, Warning,
+		TEXT("Event=fish_pickup_ground_query_failed SessionId=%s FishInstanceId=%s Pickup=%s Result=KeepDropLocation Contact=%s World=%s NetMode=%d Authority=%d Role=%s"),
+		*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*GetName(), *DropLocation.ToCompactString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()));
+	FRotator Rotation(0.0, GetActorRotation().Yaw,
+		FishPresentationDefinition ? FishPresentationDefinition->LandedActorRollDegrees : 90.0);
+	SetActorTransform(FTransform(Rotation, Surface.bSucceeded ? Surface.WorldPosition : DropLocation),
+		false, nullptr, ETeleportType::TeleportPhysics);
+	PresentationState.GroundNormal = Surface.bSucceeded ? Surface.SurfaceNormal : FVector::UpVector;
 	PresentationState.State = ECatFishPickupState::Available;
 	PresentationState.CarriedByPlayerState = nullptr;
 	ApplyLandedVisualTransform();
@@ -455,6 +495,10 @@ void ACatFishPickupActor::ReleaseMouthCarryFromAuthority(const FVector& DropLoca
 		InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	}
 	ForceNetUpdate();
+	UE_LOG(LogCatItems, Log, TEXT("Event=fish_pickup_dropped SessionId=%s FishInstanceId=%s Pickup=%s SurfaceFound=%d Contact=%s Normal=%s MeshScale=%s World=%s NetMode=%d Authority=%d"),
+		*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*GetName(), Surface.bSucceeded, *GetActorLocation().ToCompactString(), *PresentationState.GroundNormal.ToCompactString(),
+		*FishMesh->GetComponentScale().ToCompactString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority());
 }
 
 void ACatFishPickupActor::HandleAuthorityCarrierDestroyed(AActor* DestroyedActor)
@@ -706,4 +750,12 @@ void ACatFishPickupActor::OnRep_PresentationState(const FCatFishPickupPresentati
 		}
 	}
 	BP_OnPickupPresentationChanged(Previous, PresentationState);
+	if (Previous.FishInstanceId != PresentationState.FishInstanceId || Previous.State != PresentationState.State)
+	{
+		UE_LOG(LogCatItems, Log, TEXT("Event=fish_pickup_ground_received SessionId=%s FishInstanceId=%s Pickup=%s State=%s Contact=%s Normal=%s VisualScale=%.3f MeshScale=%s World=%s NetMode=%d Role=%s"),
+			*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+			*GetName(), *UEnum::GetValueAsString(PresentationState.State), *GetActorLocation().ToCompactString(),
+			*PresentationState.GroundNormal.ToCompactString(), PresentationState.VisualScale, *FishMesh->GetComponentScale().ToCompactString(),
+			*GetNameSafe(GetWorld()), GetNetMode(), *UEnum::GetValueAsString(GetLocalRole()));
+	}
 }

@@ -59,9 +59,9 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fish|Transform")
 	FTransform EncounterMeshRelativeTransform = FTransform::Identity;
 
-	/** 岸上可拾取状态的 Mesh 局部变换；重量缩放会在其基础比例上继续相乘。 */
+	/** 岸上 Mesh 的美术对齐；贴地高度由缩放后鱼体边界与坡面自动求解，不在这里写固定抬升。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fish|Transform")
-	FTransform LandedMeshRelativeTransform = FTransform(FRotator::ZeroRotator, FVector(0.0, 0.0, 15.0));
+	FTransform LandedMeshRelativeTransform = FTransform::Identity;
 
 	/** Actor 根附着到猫嘴 Socket 后，鱼 Mesh 自己的局部对齐修正。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fish|Transform")

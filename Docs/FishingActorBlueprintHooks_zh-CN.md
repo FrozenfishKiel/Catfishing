@@ -224,6 +224,8 @@ ABPT_CatFishBase（无 Target Skeleton 的 AnimBP Template）
 
 `ABPT_CatFishBase` 保存 `Calm / Struggle / AutoHauling` 状态机、转换条件以及 `SwimPlayRate` 接线；每鱼子 ABP 不复制 Event Graph 或速率公式。`FishPresentation_*` 是 `UDataAsset`，不能作为独立鱼目录枚举；运行时只允许从 `Fish_*::PresentationDefinition` 进入。
 
+死鱼贴地由 `CatFishGrounding` 统一处理：Runner 复制已确认的干地接触和坡面法线，Encounter 与 Pickup 按鱼体包围盒、侧翻姿态和冻结重量缩放计算世界 Z 抬升，使鱼身完整位于接触坡面上方。Actor 根仍是权威接触点，进入水面时清除地面专用抬升。不要再给 `LandedMeshRelativeTransform` 添加固定 15cm 的贴地补偿；原生默认值和资产生成器已改为无固定补偿。16 份正式资产均继承该默认值，重新加载核对为零，无需改写二进制；`Scripts/migrate_fish_ground_offsets.py` 可核对资产并清理显式保存的旧 15cm 值。拾取后 FishMesh 使用独立世界比例，猫嘴骨骼的缩放不会改变鱼的大小；掉落时清理继承的根缩放并重新定位地表。诊断过滤 `fish_ground_presentation`、`fish_pickup_grounded`、`fish_pickup_ground_received`、`fish_pickup_dropped` 与 `fish_pickup_ground_query_failed`。
+
 #### 5.5.2 新增或换鱼资源
 
 1. 在对应 `FishPresentation_*` 配置 Mesh、四类动画和三种局部 Transform。

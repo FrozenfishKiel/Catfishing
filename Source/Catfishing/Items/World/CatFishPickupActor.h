@@ -34,6 +34,8 @@ struct FCatFishPickupPresentationState
 	UPROPERTY(BlueprintReadOnly) double WeightKilograms = 0.0;
 	/** 与水中 Encounter 完全相同的服务器冻结统一 Mesh 缩放。 */
 	UPROPERTY(BlueprintReadOnly) double VisualScale = 1.0;
+	/** 权威地面接触法线；根是接触点，鱼体按自身大小在其上方托起。 */
+	UPROPERTY(BlueprintReadOnly) FVector GroundNormal = FVector::UpVector;
 	UPROPERTY(BlueprintReadOnly) ECatFishPickupState State = ECatFishPickupState::Available;
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> CarriedByPlayerState = nullptr;
 };
@@ -52,7 +54,7 @@ public:
 
 	bool InitializeFromAuthority(FGuid InFishingSessionId, FGuid InFishInstanceId,
 		UCatFishDefinition* InFishDefinition, double InWeightKilograms, double InVisualScale, FName InRegionId,
-		const TArray<FString>& InFishingParticipantStableNetIds);
+		const TArray<FString>& InFishingParticipantStableNetIds, FVector GroundNormal = FVector::UpVector);
 
 	const FCatFishPickupPresentationState& GetPresentationState() const { return PresentationState; }
 
@@ -81,6 +83,7 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void OnRep_AttachmentReplication() override;
+	virtual void OnRep_ReplicatedMovement() override;
 
 private:
 	friend class ACatFishingSession;

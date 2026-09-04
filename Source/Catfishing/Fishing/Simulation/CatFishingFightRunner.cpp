@@ -417,7 +417,8 @@ bool UCatFishingFightRunner::SetFishExhaustedFromAuthority()
 		Encounter->StopFishBehaviorFromAuthority();
 		if (!Encounter->ApplyFightStepFromAuthority(ECatFishMotionIntent::AutoHauling,
 			State.LineLengthCentimeters, Encounter->GetActorLocation(),
-			static_cast<float>(Config.FixedStepSeconds), 0.0f, 0.0f, 0.0f, false))
+			static_cast<float>(Config.FixedStepSeconds), 0.0f, 0.0f, 0.0f, false,
+			bFishBeached, Encounter->GetPresentationState().GroundNormal))
 		{
 			return false;
 		}
@@ -1083,7 +1084,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 	if (!Encounter->ApplyFightStepFromAuthority(State.MotionIntent,
 		Step.LineLengthCentimeters, Motion.FishWorldPosition, static_cast<float>(Config.FixedStepSeconds),
 		static_cast<float>(Step.FishLineAlignment), static_cast<float>(Step.NormalizedLineLoad),
-		static_cast<float>(Step.IntendedSwimSpeedCentimetersPerSecond), Step.bStrongConfrontation))
+		static_cast<float>(Step.IntendedSwimSpeedCentimetersPerSecond), Step.bStrongConfrontation,
+		bFishBeached, GroundSurfaceNormal))
 	{
 		Stop();
 		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("EncounterFightStepWrite"));

@@ -277,8 +277,7 @@ namespace CatFishPresentationAssetTests
 		Presentation->MaximumUniformScale = 1.25;
 		Presentation->EncounterMeshRelativeTransform = FTransform(
 			FRotator::ZeroRotator, FVector(0.0, 0.0, -5.0));
-		Presentation->LandedMeshRelativeTransform = FTransform(
-			FRotator::ZeroRotator, FVector(0.0, 0.0, 15.0));
+		Presentation->LandedMeshRelativeTransform = FTransform::Identity;
 		Presentation->CarriedMeshRelativeTransform = FTransform::Identity;
 		Presentation->ExhaustedVisualRollDegrees = 90.0;
 		Presentation->LandedActorRollDegrees = 90.0;

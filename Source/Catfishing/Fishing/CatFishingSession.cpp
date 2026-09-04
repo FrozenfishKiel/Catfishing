@@ -1627,7 +1627,8 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 		Participants.Add(FisherStableNetId);
 	}
 	if (!Pickup || !Pickup->InitializeFromAuthority(Snapshot.FishingSessionId, FGuid::NewGuid(),
-		FishDefinition, FishWeightKilograms, FishVisualScale, AttemptSnapshot.WaterRegion.RegionId, Participants))
+		FishDefinition, FishWeightKilograms, FishVisualScale, AttemptSnapshot.WaterRegion.RegionId, Participants,
+		Snapshot.FishEncounterActor->GetPresentationState().GroundNormal))
 	{
 		UE_LOG(LogCatFishing, Error,
 			TEXT("Event=exhausted_fish_pickup_rejected SessionId=%s Reason=%s Location=%s"),

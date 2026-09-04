@@ -9,6 +9,7 @@
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Data/CatFishDefinition.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "EngineUtils.h"
@@ -300,6 +301,7 @@ bool FCatFishingExhaustedPickupHandoffTest::RunTest(const FString& Parameters)
 	FTestWorldWrapper WorldWrapper;
 	if (!TestTrue(TEXT("creates exhausted pickup world"), WorldWrapper.CreateTestWorld(EWorldType::Game))) return false;
 	WorldWrapper.ForwardErrorMessages(this);
+	if (!TestTrue(TEXT("starts actor lifecycle for carry and destruction callbacks"), WorldWrapper.BeginPlayInTestWorld())) return false;
 	UWorld* World = WorldWrapper.GetTestWorld();
 	ACatCharacter* Character = World->SpawnActor<ACatCharacter>();
 	ACatfishingPlayerController* Controller = World->SpawnActor<ACatfishingPlayerController>();
@@ -381,9 +383,27 @@ bool FCatFishingExhaustedPickupHandoffTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("world fish is Available"), Pickup->GetPresentationState().State, ECatFishPickupState::Available);
 	TestTrue(TEXT("handoff preserves the actual ground location"), Pickup->GetActorLocation().Equals(LandingPosition, 1e-6));
 	Character->SetActorLocation(LandingPosition + FVector(0.0, 50.0, 0.0));
+	Character->GetMesh()->SetRelativeScale3D(FVector(0.25));
+	USkeletalMeshComponent* PickupMesh = Pickup->FindComponentByClass<USkeletalMeshComponent>();
+	if (!TestNotNull(TEXT("pickup has visible fish mesh"), PickupMesh)) return false;
+	const FVector GroundedFishScale = PickupMesh->GetComponentScale();
 	TestTrue(TEXT("the same E interaction can pick up the exhausted fish"), Pickup->Interact_Implementation(Controller, FGuid::NewGuid()));
 	TestEqual(TEXT("pickup reaches mouth-carry state"), Pickup->GetPresentationState().State, ECatFishPickupState::Carried);
 	TestEqual(TEXT("carried fish is attached to the requesting cat"), ACatFishPickupActor::FindCarriedFish(Character), Pickup);
+	TestTrue(TEXT("scaled cat mesh does not shrink carried fish"), PickupMesh->GetComponentScale().Equals(GroundedFishScale, 0.001));
+	AActor* DropGround = World->SpawnActor<AActor>();
+	UBoxComponent* DropGroundBox = NewObject<UBoxComponent>(DropGround);
+	DropGround->SetRootComponent(DropGroundBox);
+	DropGroundBox->SetBoxExtent(FVector(500.0, 500.0, 5.0));
+	DropGroundBox->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	DropGroundBox->SetCollisionResponseToAllChannels(ECR_Block);
+	DropGroundBox->RegisterComponent();
+	DropGround->SetActorLocation(LandingPosition - FVector(0, 0, 5));
+	TestTrue(TEXT("destroys carrier through the real actor lifecycle"), Character->Destroy());
+	TestEqual(TEXT("carrier destruction releases the same world fish"), Pickup->GetPresentationState().State, ECatFishPickupState::Available);
+	TestEqual(TEXT("drop resolves actual collision floor"), Pickup->GetActorLocation().Z, LandingPosition.Z, 0.01);
+	TestTrue(TEXT("dropped fish preserves its original world size"), PickupMesh->GetComponentScale().Equals(GroundedFishScale, 0.001));
+	TestTrue(TEXT("drop clears inherited parent scale"), Pickup->GetActorScale3D().Equals(FVector::OneVector, 0.001));
 	return !HasAnyErrors();
 }
 

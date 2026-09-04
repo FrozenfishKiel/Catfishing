@@ -438,6 +438,7 @@ bool FCatFishEncounterMovementContractTest::RunTest(const FString& Parameters)
 	const UScriptStruct* StateStruct = FCatFishEncounterPresentationState::StaticStruct();
 	const TSet<FName> ExpectedFields = { TEXT("FishingSessionId"), TEXT("CastAttemptId"), TEXT("FishDefinitionId"),
 		TEXT("VisualScale"), TEXT("MotionIntent"), TEXT("IntendedSwimSpeedCentimetersPerSecond"),
+		TEXT("bGrounded"), TEXT("GroundNormal"),
 		TEXT("CurrentLineLength"), TEXT("FishLineAlignment"),
 		TEXT("NormalizedLineLoad"), TEXT("bStrongConfrontation") };
 	for (TFieldIterator<FProperty> It(StateStruct); It; ++It)
