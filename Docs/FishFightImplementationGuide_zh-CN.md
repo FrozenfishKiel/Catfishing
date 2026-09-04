@@ -151,6 +151,8 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 
 `TorqueBalanced` 只用于诊断；没有全方向零速锁定，也没有阻力角度上限或锁定半径。鱼线转矩的输入仍是上述负载估计，尚未接入共同约束反力。
 
+第一人称镜头另在 `UCatFishingCameraComponent` 中以实际握把为目标平滑跟随，响应时间为 `FightCameraFollowResponseSeconds=0.08`。这份历史只用于镜头，不进入上述转矩、竿尖、身体朝向或体力求解。位置使用指数插值、朝向使用最短弧四元数插值；零时间不推进，长帧最多推进 0.1 秒，离杆/结束/切换观战清除历史。`LogCatFishing/Event=fishing_fight_camera` 在原有每秒日志中记录 `TargetRotation`、`ViewRotation`、`FollowResponseSeconds`、`FollowErrorDegrees`、`MaxTargetStepDegrees` 和 `MaxViewStepDegrees`，按 `RodActorId` 与权威转矩日志关联。最大步幅按相邻镜头帧统计并在输出后重置，不能把它当成网络延迟或整场最大值。
+
 ### 鱼线为什么会垂、什么时候会绷紧
 
 模拟不再把“鱼到竿尖的距离”直接当作线长，而是分别记录：

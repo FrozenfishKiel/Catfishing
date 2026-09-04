@@ -111,7 +111,7 @@ StateTree（`ST_FishingSession`）保持薄编排。其中 `FishExhausted` 是 `
 
 当前模型由鱼的游速候选、已放线长约束、力量差分配和玩法裁决组成，尚未完成鱼、线、杆、猫共同反力驱动的物理系统。鱼/猫质量与力量来源、收线公式、体力和断线条件只维护在 [实现导读](FishFightImplementationGuide_zh-CN.md)，避免在多个入口复制不同版本的公式。
 
-主猫持竿等鱼时，猫身与移动基准使用 `ControlRotation.Yaw`。提竿成功进入搏斗后，本人切换到第一人称持杆视角：`UCatFishingCameraComponent` 从实际握把读取镜头位置和朝向，身体与移动也使用实际杆 Yaw。角力使杆自然停转时，镜头同步停转；鼠标仍提供施力意图，回转或卸力后杆与镜头一起恢复。组件不关闭 Look 输入，也不反写杆姿态。协作者和旁观者保留原镜头；搏斗结束、离杆、断杆、失去占有或切换观战目标后恢复原相机与本人身体可见性。持杆查询仍只读权威 Registry 或复制的操作位，原 Controller 私有重复查询已移到该组件共用。
+主猫持竿等鱼时，猫身与移动基准使用 `ControlRotation.Yaw`。提竿成功进入搏斗后，本人切换到第一人称持杆视角：`UCatFishingCameraComponent` 以实际握把为目标，按 `CalcCamera` 的帧时间平滑位置和四元数朝向，再组合镜头偏移。`FightCameraFollowResponseSeconds=0.08` 为本地跟随响应时间；房主与客户端都使用这条路径，没有新姿态的帧也继续过渡，首帧直接建立当前握把基线。身体与移动仍使用实际杆 Yaw，镜头在短暂跟随后与其对齐。角力使杆自然停转时镜头收敛到实际方向；鼠标仍提供施力意图，回转或卸力后镜头立即开始追随。组件不关闭 Look 输入，也不反写杆姿态或角力状态。协作者和旁观者保留原镜头；搏斗结束、离杆、断杆、失去占有或切换观战目标后清除插值历史、恢复原相机与本人身体可见性，并从最后可见方向继续。持杆查询仍只读权威 Registry 或复制的操作位，原 Controller 私有重复查询已移到该组件共用。
 
 镜头偏移与 FOV 在 `Catfishing Fishing Presentation` 的 `Camera` 分类配置；默认镜头位于握把后方 35cm、左侧 16cm、上方 16cm，让杆位于画面右下。握把标定随 Rod 初始复制发送，客户端组合该标定与服务器复制的实际 Actor 姿态，不用未初始化的本地握把。`LogCatFishing` 的 `fishing_fight_camera` 记录进入、每秒一次的实际/请求朝向和恢复，`fishing_rod_grip_received` 记录客户端收到的标定；用 `RodActorId` 与角力日志交叉检索。
 

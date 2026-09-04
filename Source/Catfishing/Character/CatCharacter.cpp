@@ -34,7 +34,7 @@ ACatCharacter::ACatCharacter()
 
 void ACatCharacter::CalcCamera(const float DeltaTime, FMinimalViewInfo& OutResult)
 {
-	if (!FishingCameraComponent->TryGetCameraView(OutResult))
+	if (!FishingCameraComponent->TryGetCameraView(DeltaTime, OutResult))
 	{
 		Super::CalcCamera(DeltaTime, OutResult);
 	}

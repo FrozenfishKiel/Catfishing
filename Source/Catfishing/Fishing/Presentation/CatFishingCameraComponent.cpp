@@ -65,7 +65,7 @@ const ACatFishingRodActor* UCatFishingCameraComponent::FindLocalViewRod() const
 		&& Controller->GetViewTarget() == Character ? FindFightRodHeldBy(Controller) : nullptr;
 }
 
-bool UCatFishingCameraComponent::TryGetCameraView(FMinimalViewInfo& OutView)
+bool UCatFishingCameraComponent::TryGetCameraView(const float DeltaTime, FMinimalViewInfo& OutView)
 {
 	const ACatFishingRodActor* Rod = FindLocalViewRod();
 	if (!Rod)
@@ -79,6 +79,8 @@ bool UCatFishingCameraComponent::TryGetCameraView(FMinimalViewInfo& OutView)
 	// 配置非法时沿用原镜头；只报告一次，避免每帧重复刷屏。
 	if (Grip.ContainsNaN() || Settings->FightCameraGripOffsetCentimeters.ContainsNaN()
 		|| !FMath::IsFinite(Settings->FightCameraFieldOfView)
+		|| !FMath::IsFinite(Settings->FightCameraFollowResponseSeconds)
+		|| Settings->FightCameraFollowResponseSeconds <= 0.0
 		|| Settings->FightCameraFieldOfView < 30.0f || Settings->FightCameraFieldOfView > 140.0f)
 	{
 		RestoreView();
@@ -107,10 +109,27 @@ bool UCatFishingCameraComponent::TryGetCameraView(FMinimalViewInfo& OutView)
 			Mesh->SetOwnerNoSee(true);
 		}
 		ViewedRodId = Rod->GetPresentationState().RodActorId;
+		SmoothedGrip = Grip;
+		LastTargetRotation = Grip.GetRotation();
 		SetComponentTickEnabled(true);
 	}
-	OutView.Location = Grip.TransformPositionNoScale(Settings->FightCameraGripOffsetCentimeters);
-	OutView.Rotation = Grip.Rotator();
+	else
+	{
+		// 即使本帧没有收到新姿态也继续追随。指数响应跨帧率一致，四元数走最短弧，
+		// 避免僵持慢转、20Hz 复制及 +/-180 度接缝直接变成镜头台阶。
+		const double FollowSeconds = FMath::IsFinite(DeltaTime) ? FMath::Clamp<double>(DeltaTime, 0.0, 0.1) : 0.0;
+		const double Alpha = 1.0 - FMath::Exp(-FollowSeconds / Settings->FightCameraFollowResponseSeconds);
+		const FQuat PreviousRotation = SmoothedGrip.GetRotation();
+		SmoothedGrip.SetRotation(FQuat::Slerp(PreviousRotation, Grip.GetRotation(), Alpha).GetNormalized());
+		SmoothedGrip.SetLocation(FMath::Lerp(SmoothedGrip.GetLocation(), Grip.GetLocation(), Alpha));
+		MaximumTargetStepDegrees = FMath::Max(MaximumTargetStepDegrees,
+			FMath::RadiansToDegrees(LastTargetRotation.AngularDistance(Grip.GetRotation())));
+		MaximumViewStepDegrees = FMath::Max(MaximumViewStepDegrees,
+			FMath::RadiansToDegrees(PreviousRotation.AngularDistance(SmoothedGrip.GetRotation())));
+		LastTargetRotation = Grip.GetRotation();
+	}
+	OutView.Location = SmoothedGrip.TransformPositionNoScale(Settings->FightCameraGripOffsetCentimeters);
+	OutView.Rotation = SmoothedGrip.Rotator();
 	OutView.FOV = Settings->FightCameraFieldOfView;
 	LastViewRotation = OutView.Rotation;
 	const double Now = GetWorld()->GetTimeSeconds();
@@ -118,6 +137,7 @@ bool UCatFishingCameraComponent::TryGetCameraView(FMinimalViewInfo& OutView)
 	{
 		LogView(bNewRod ? TEXT("FirstPerson") : TEXT("FollowingRod"));
 		NextDiagnosticSeconds = Now + 1.0;
+		MaximumTargetStepDegrees = MaximumViewStepDegrees = 0.0;
 	}
 	return true;
 }
@@ -135,6 +155,9 @@ void UCatFishingCameraComponent::RestoreView()
 	HiddenMesh.Reset();
 	ViewingController.Reset();
 	ViewedRodId.Invalidate();
+	SmoothedGrip = FTransform::Identity;
+	LastTargetRotation = FQuat::Identity;
+	MaximumTargetStepDegrees = MaximumViewStepDegrees = 0.0;
 	SetComponentTickEnabled(false);
 }
 
@@ -157,10 +180,15 @@ void UCatFishingCameraComponent::LogView(const TCHAR* Mode) const
 	const APlayerController* Controller = ViewingController.Get();
 	UE_LOG(LogCatFishing, Display,
 		TEXT("Event=fishing_fight_camera Mode=%s RodActorId=%s HolderPlayerId=%d Holder=%s "
-			"ViewRotation=%s RequestedRotation=%s Source=%s World=%s NetMode=%d Authority=%s LocalRole=%d"),
+			"ViewRotation=%s RequestedRotation=%s TargetRotation=%s FollowResponseSeconds=%.3f "
+			"FollowErrorDegrees=%.3f MaxTargetStepDegrees=%.3f MaxViewStepDegrees=%.3f "
+			"Source=%s World=%s NetMode=%d Authority=%s LocalRole=%d"),
 		Mode, *ViewedRodId.ToString(EGuidFormats::DigitsWithHyphens), Controller && Controller->PlayerState ? Controller->PlayerState->GetPlayerId() : INDEX_NONE,
 		*GetNameSafe(GetOwner()), *LastViewRotation.ToCompactString(),
 		Controller ? *Controller->GetControlRotation().ToCompactString() : TEXT("None"),
+		*LastTargetRotation.Rotator().ToCompactString(), GetDefault<UCatFishingPresentationSettings>()->FightCameraFollowResponseSeconds,
+		FMath::RadiansToDegrees(SmoothedGrip.GetRotation().AngularDistance(LastTargetRotation)),
+		MaximumTargetStepDegrees, MaximumViewStepDegrees,
 		!GetOwner()->HasAuthority() ? TEXT("ReplicatedRod") : TEXT("AuthorityRod"),
 		*GetNameSafe(GetWorld()), static_cast<int32>(GetWorld()->GetNetMode()),
 		GetOwner()->HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(GetOwner()->GetLocalRole()));
