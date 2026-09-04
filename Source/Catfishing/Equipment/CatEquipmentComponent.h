@@ -46,7 +46,7 @@ public:
 	FCatDomainCommandResult GrantInventoryQuantityFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName DefinitionId, int32 Quantity);
 
-	/** 商店或其他服务器权威来源授予非数量物品；成功后写入库存数组，并在空选择、旧选择缺货或同定义已选竿不可用时修正当前选择。 */
+	/** 商店或其他服务器权威来源授予非数量物品；写入库存后修正缺失或不可用的选择，部署中的旧竿等收回后再替换。 */
 	FCatDomainCommandResult GrantEquipmentFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName DefinitionId);
 
@@ -134,7 +134,7 @@ private:
 	bool HasActiveInventoryItemUse() const;
 	/** 读取某个定义在库存格数组中的可见数量；选择自动切换和商店预检用它判断旧选择是否仍有实物。 */
 	int32 GetInventoryItemQuantity(FName DefinitionId) const;
-	/** 根据新入库定义修正空选择、无库存旧选择或已断/耐久非法的同定义已选竿；它只改钓鱼选择，不把库存物品移出数组。 */
+	/** 新入库或收回物品后修正钓鱼选择；已收回的坏竿可跨型号替换为库存里的可用竿，部署中与健康选择保持不变。 */
 	void AutoSelectGrantedInventoryItem(const UCatEquipmentDefinition& Definition, FName DefinitionId);
 	/** 把当前选择中的鱼竿状态同步到库存格或活动 Use 记录；耐久、断竿和收杆归还都读这份实例副本。 */
 	void SyncSelectedRodStateToSelectedInstance();

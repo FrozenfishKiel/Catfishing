@@ -378,7 +378,20 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 	if (UseResult.Error != ECatDomainCommandError::None)
 	{
 		Result.Error = MapRodInventoryUseError(UseResult.Error);
+		// 定义侧以 InvalidPhase 拒绝坏竿；此处按实际实例解释，不能把它误报成仍有场景鱼竿占用。
+		if (UseResult.Error == ECatDomainCommandError::InvalidPhase && UseResult.Item.ItemInstanceId.IsValid()
+			&& (UseResult.Item.bRodBroken || !FMath::IsFinite(UseResult.Item.RodDurability)
+				|| UseResult.Item.RodDurability <= 0.0))
+		{
+			Result.Error = ECatFishingCommandError::RodBroken;
+		}
 		Result.EquipmentRevision = UseResult.EquipmentRevision;
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_rod_place_rejected RequestId=%s Definition=%s RodItemInstanceId=%s Durability=%.3f Broken=%s InventoryError=%s Error=%s EquipmentRevision=%lld World=%s %s"),
+			*Command.RequestId.ToString(), *Loadout.RodDefinitionId.ToString(), *Loadout.RodItemInstanceId.ToString(),
+			UseResult.Item.RodDurability, UseResult.Item.bRodBroken ? TEXT("true") : TEXT("false"),
+			*UEnum::GetValueAsString(UseResult.Error), *UEnum::GetValueAsString(Result.Error),
+			Result.EquipmentRevision, *GetNameSafe(World), *CatLogContext::BuildControllerFields(Controller));
 		return Result;
 	}
 	const UCatEquipmentDefinition* UsedRodDefinition =
