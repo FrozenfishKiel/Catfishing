@@ -17,6 +17,7 @@ class CATFISHING_API UCatFishingFightBalanceDefinition : public UPrimaryDataAsse
 
 public:
 	/** 只有 ID、启用位和全部数值均合法时，资产才可进入服务器权威搏斗。 */
+	UFUNCTION(BlueprintPure, Category = "验证", meta = (DisplayName = "搏斗平衡可正式运行"))
 	bool IsRuntimeDefinitionReady() const;
 
 	/** 日志和后续多套预设使用的稳定 ID。 */
@@ -49,15 +50,45 @@ public:
 		meta = (DisplayName = "收线速度", ClampMin = "0.001", Units = "cm/s"))
 	double ReelSpeedCentimetersPerSecond = 0.0;
 
-	/** 猫每 1 点力量、每 1 cm 沿线有效努力消耗的体力。 */
+	/** 猫每 1 点标准努力强度、每 1 cm 有效努力消耗的体力；标准努力强度取 StrengthPerKilogram。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "猫做功体力消耗系数", ClampMin = "0.0"))
 	double CatStaminaCostPerStrengthCentimeter = -1.0;
 
-	/** 鱼每 1 点力量、每 1 cm 沿线有效努力消耗的体力。 */
+	/** 鱼每 1 点标准努力强度、每 1 cm 有效努力消耗的体力；标准努力强度取 StrengthPerKilogram。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "鱼做功体力消耗系数", ClampMin = "0.0"))
 	double FishStaminaCostPerStrengthCentimeter = -1.0;
+
+	/** 猫主动移动形成的对抗努力体力倍率；不会重复计入转杆或收线。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
+		meta = (DisplayName = "猫移动体力倍率", ClampMin = "0.0"))
+	double CatMovementStaminaMultiplier = 1.0;
+
+	/** 猫主动收线形成的努力体力倍率；受阻时仍按僵持努力结算。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
+		meta = (DisplayName = "猫收线体力倍率", ClampMin = "0.0"))
+	double CatReelStaminaMultiplier = 1.0;
+
+	/** 猫主动转杆形成的对抗努力体力倍率。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
+		meta = (DisplayName = "猫转杆体力倍率", ClampMin = "0.0"))
+	double CatRodStaminaMultiplier = 1.0;
+
+	/** 猫持续持竿顶住鱼的努力体力倍率；与主动操作分别结算。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
+		meta = (DisplayName = "猫持竿体力倍率", ClampMin = "0.0"))
+	double CatHoldStaminaMultiplier = 1.0;
+
+	/** 猫基础努力体力乘以 (1 + 归一化负载 × 本参数)；负载范围为 0..1。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
+		meta = (DisplayName = "猫负载体力倍率", ClampMin = "0.0"))
+	double CatLoadStaminaMultiplier = 1.0;
+
+	/** 鱼基础努力体力乘以 (1 + 归一化负载 × 本参数)；被动位移本身不构成鱼的努力。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
+		meta = (DisplayName = "鱼负载体力倍率", ClampMin = "0.0"))
+	double FishLoadStaminaMultiplier = 1.0;
 
 	/** 未形成实际位移的意图距离折算系数；大于 0 时僵持仍消耗体力。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",

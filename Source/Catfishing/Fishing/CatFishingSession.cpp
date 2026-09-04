@@ -1183,6 +1183,12 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.CatStaminaCostPerStrengthCentimeter = FightBalance->CatStaminaCostPerStrengthCentimeter;
 	Config.FishStaminaCostPerStrengthCentimeter = FightBalance->FishStaminaCostPerStrengthCentimeter;
 	Config.IsometricEffortMultiplier = FightBalance->IsometricEffortMultiplier;
+	Config.CatMovementStaminaMultiplier = FightBalance->CatMovementStaminaMultiplier;
+	Config.CatReelStaminaMultiplier = FightBalance->CatReelStaminaMultiplier;
+	Config.CatRodStaminaMultiplier = FightBalance->CatRodStaminaMultiplier;
+	Config.CatHoldStaminaMultiplier = FightBalance->CatHoldStaminaMultiplier;
+	Config.CatLoadStaminaMultiplier = FightBalance->CatLoadStaminaMultiplier;
+	Config.FishLoadStaminaMultiplier = FightBalance->FishLoadStaminaMultiplier;
 	Config.BaseDrainMultiplier = Personality->BaseDrainMultiplier;
 	Config.StruggleDrainMultiplier = Personality->StruggleDrainMultiplier;
 	Config.StalemateRodWearPerFishStrength = FightBalance->StalemateRodWearPerFishStrength;
@@ -1381,6 +1387,17 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		Config.MinimumRodLeverageMultiplier,
 		Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond,
 		Config.MinimumCarrierAwaySpeedMultiplier);
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_effort_configured SessionId=%s FightBalanceId=%s Model=IndependentActiveEffort "
+			"MovementMultiplier=%.3f ReelMultiplier=%.3f RodMultiplier=%.3f HoldMultiplier=%.3f "
+			"CatLoadMultiplier=%.3f FishLoadMultiplier=%.3f IsometricMultiplier=%.3f "
+			"CatCost=%.6f FishCost=%.6f %s"),
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *FightBalance->BalanceDefinitionId.ToString(),
+		Config.CatMovementStaminaMultiplier, Config.CatReelStaminaMultiplier,
+		Config.CatRodStaminaMultiplier, Config.CatHoldStaminaMultiplier,
+		Config.CatLoadStaminaMultiplier, Config.FishLoadStaminaMultiplier, Config.IsometricEffortMultiplier,
+		Config.CatStaminaCostPerStrengthCentimeter, Config.FishStaminaCostPerStrengthCentimeter,
+		*CatLogContext::BuildControllerFields(FisherCharacter->GetController()));
 	return true;
 }
 
@@ -2289,6 +2306,19 @@ void ACatFishingSession::OnRep_Snapshot()
 			static_cast<int32>(GetLocalRole()));
 		LastReceivedRodDurabilityBand = RodDurabilityBand;
 		bReceivedRodTerminal = IsTerminal();
+	}
+	const bool bFightPhase = Snapshot.Phase == ECatFishingPhase::HookedFight
+		|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel;
+	if (World && bFightPhase && World->GetTimeSeconds() >= NextStaminaReceivedDiagnosticSeconds)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_fish_stamina_received SessionId=%s FishStamina=%.4f Phase=%s "
+				"RodActor=%s World=%s NetMode=%d Authority=%s LocalRole=%d Result=Replicated"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), Snapshot.FishFightStaminaRemaining,
+			*UEnum::GetValueAsString(Snapshot.Phase), *GetNameSafe(Snapshot.RodActor), *GetNameSafe(World),
+			static_cast<int32>(World->GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
+			static_cast<int32>(GetLocalRole()));
+		NextStaminaReceivedDiagnosticSeconds = World->GetTimeSeconds() + 1.0;
 	}
 }
 

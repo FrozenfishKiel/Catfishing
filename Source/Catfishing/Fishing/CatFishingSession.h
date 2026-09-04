@@ -196,6 +196,8 @@ private:
 	/** 客户端可观察的会话阶段、鱼种和参与人数；服务器是唯一写者。 */
 	UPROPERTY(ReplicatedUsing=OnRep_Snapshot)
 	FCatFishingSessionSnapshot Snapshot;
+	/** 客户端体力到达诊断限频，不参与会话裁决。 */
+	double NextStaminaReceivedDiagnosticSeconds = 0.0;
 	/** 客户端耐久到达诊断按档位/终态过滤，不参与耐久裁决。 */
 	int32 LastReceivedRodDurabilityBand = INDEX_NONE;
 	bool bReceivedRodTerminal = false;

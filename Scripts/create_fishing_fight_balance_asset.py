@@ -1,11 +1,12 @@
-"""Create or refresh the formal designer-facing fishing fight balance asset.
+"""Create or validate the formal designer-facing fishing fight balance asset.
 
 Run from the Unreal Editor Python console with:
     py "D:/develop/Catfishing/Scripts/create_fishing_fight_balance_asset.py"
 
 ``UCatFishingSettings`` only stores the soft reference to this asset. The values
-below mirror the last accepted project baseline and are intentionally absent
-from ``DefaultGame.ini`` so runtime has one tuning source.
+below initialize new assets only. Existing designer values are preserved and
+validated by the same C++ readiness gate used by runtime. Values are intentionally
+absent from ``DefaultGame.ini`` so runtime has one tuning source.
 """
 
 import unreal
@@ -24,6 +25,12 @@ VALUES = {
     "reel_speed_centimeters_per_second": 80.0,
     "cat_stamina_cost_per_strength_centimeter": 0.002,
     "fish_stamina_cost_per_strength_centimeter": 0.002,
+    "cat_movement_stamina_multiplier": 1.0,
+    "cat_reel_stamina_multiplier": 1.0,
+    "cat_rod_stamina_multiplier": 1.0,
+    "cat_hold_stamina_multiplier": 1.0,
+    "cat_load_stamina_multiplier": 1.0,
+    "fish_load_stamina_multiplier": 1.0,
     "isometric_effort_multiplier": 1.0,
     "slack_stamina_regen_per_second": 3.0,
     "fish_exhaustion_threshold": 0.5,
@@ -64,18 +71,44 @@ def main():
     if not isinstance(asset, unreal.CatFishingFightBalanceDefinition):
         raise RuntimeError(f"wrong asset type: path={ASSET_PATH} actual={type(asset).__name__}")
 
-    for property_name, value in VALUES.items():
-        asset.set_editor_property(property_name, value)
+    if created:
+        for property_name, value in VALUES.items():
+            asset.set_editor_property(property_name, value)
 
-    if not unreal.EditorAssetLibrary.save_loaded_asset(asset, only_if_is_dirty=False):
+    if not asset.is_runtime_definition_ready():
+        actual_values = {
+            property_name: asset.get_editor_property(property_name)
+            for property_name in VALUES
+        }
+        message = (
+            "FISHING_FIGHT_BALANCE_ASSET_REJECTED "
+            f"Asset={asset.get_path_name()} Created={created} "
+            f"PreservedExisting={not created} Reason=RuntimeDefinitionNotReady "
+            f"Values={actual_values!r} "
+            "Action=ReviewEnableFlagIdAndNumericValuesInEditor"
+        )
+        unreal.log_error(message)
+        raise RuntimeError(message)
+
+    if created and not unreal.EditorAssetLibrary.save_loaded_asset(asset, only_if_is_dirty=False):
         raise RuntimeError(f"failed to save fight balance: {ASSET_PATH}")
 
     unreal.log(
         "FISHING_FIGHT_BALANCE_ASSET_PASS "
         f"Asset={asset.get_path_name()} Created={created} "
-        f"BalanceId={VALUES['balance_definition_id']} "
-        f"StrengthPerKg={VALUES['strength_per_kilogram']:.3f} "
-        f"AccelerationPerStrength={VALUES['acceleration_per_strength']:.3f}"
+        f"PreservedExisting={not created} "
+        f"BalanceId={asset.get_editor_property('balance_definition_id')} "
+        f"StrengthPerKg={asset.get_editor_property('strength_per_kilogram'):.3f} "
+        f"AccelerationPerStrength={asset.get_editor_property('acceleration_per_strength'):.3f} "
+        f"CatCost={asset.get_editor_property('cat_stamina_cost_per_strength_centimeter'):.6f} "
+        f"FishCost={asset.get_editor_property('fish_stamina_cost_per_strength_centimeter'):.6f} "
+        f"IsometricMultiplier={asset.get_editor_property('isometric_effort_multiplier'):.3f} "
+        f"CatMovementMultiplier={asset.get_editor_property('cat_movement_stamina_multiplier'):.3f} "
+        f"CatReelMultiplier={asset.get_editor_property('cat_reel_stamina_multiplier'):.3f} "
+        f"CatRodMultiplier={asset.get_editor_property('cat_rod_stamina_multiplier'):.3f} "
+        f"CatHoldMultiplier={asset.get_editor_property('cat_hold_stamina_multiplier'):.3f} "
+        f"CatLoadMultiplier={asset.get_editor_property('cat_load_stamina_multiplier'):.3f} "
+        f"FishLoadMultiplier={asset.get_editor_property('fish_load_stamina_multiplier'):.3f}"
     )
 
 

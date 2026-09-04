@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Fishing/Actors/CatFishingActorTypes.h"
+#include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 #include "CatFishingRodActor.generated.h"
 
 class APlayerState;
@@ -106,6 +107,11 @@ public:
 	{
 		return AuthoritativeHolderVelocity;
 	}
+	/** 仅服务器积分写入；固定步消费累计差值，不能把同一渲染帧的努力重复结算。 */
+	const FCatFishingRodRotationEffortSnapshot& GetAuthoritativeRotationEffortSnapshot() const
+	{
+		return AuthoritativeRotationEffort;
+	}
 	/** FightRunner 发布同一份双端求解目标；服务器与拥有客户端都在移动帧内平滑追赶，不直接写 Actor Transform。 */
 	bool SetCarrierConstraintFromAuthority(const FVector& PullDirection,
 		double PullAccelerationCentimetersPerSecondSquared, double TargetPullSpeedCentimetersPerSecond,
@@ -147,6 +153,7 @@ private:
 	void DispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	void ApplyCarrierConstraint(float DeltaSeconds);
 	void ResetCarrierConstraintSmoothing();
+	void ResetAuthoritativeRotationEffort();
 	void UpdateCarrierConstraintTickDependency(UCharacterMovementComponent* Movement);
 	/** 提交一次权威可变状态；它保留 Actor/Item/Owner 身份，只允许操作位、皮肤、部署和断竿状态变化。 */
 	bool CommitAuthoritativeMutation(const FCatFishingRodPresentationState& Next, int64 ExpectedRevision);
@@ -181,6 +188,7 @@ private:
 	/** 权威旋转的连续负载状态；不得随猫端牵引 bActive 或一次松线目标清零。 */
 	FVector SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
 	TWeakObjectPtr<APawn> AuthoritativeAimHolder;
+	FCatFishingRodRotationEffortSnapshot AuthoritativeRotationEffort;
 	/** 20 Hz 权威目标在本机角色移动帧中的平滑速度；只属于瞬态表现/移动接缝，不复制。 */
 	FVector SmoothedCarrierPullVelocity = FVector::ZeroVector;
 	double SmoothedCarrierAwaySpeedMultiplier = 1.0;

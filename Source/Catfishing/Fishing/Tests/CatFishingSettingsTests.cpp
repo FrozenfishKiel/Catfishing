@@ -13,6 +13,8 @@
 #include "StateTree.h"
 #include "UObject/UnrealType.h"
 
+#include <limits>
+
 namespace
 {
 	void PopulateValidFightBalance(UCatFishingFightBalanceDefinition& Balance)
@@ -61,7 +63,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFormalFishingFightBalanceAssetTest,
-	"Catfishing.Unit.Fishing.Assets.FormalFightBalancePreservesAcceptedBaseline",
+	"Catfishing.Unit.Fishing.Assets.FormalFightBalanceAllowsIndependentStaminaTuning",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -82,11 +84,7 @@ bool FCatFormalFishingFightBalanceAssetTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("保留每公斤十点力量基线"), Balance->StrengthPerKilogram, 10.0);
 	TestEqual(TEXT("保留每点力量五厘米每平方秒加速度基线"),
 		Balance->AccelerationPerStrength, 5.0);
-	TestEqual(TEXT("保留双方做功体力价格"),
-		Balance->CatStaminaCostPerStrengthCentimeter, 0.002);
-	TestEqual(TEXT("猫鱼做功体力价格保持一致"),
-		Balance->FishStaminaCostPerStrengthCentimeter,
-		Balance->CatStaminaCostPerStrengthCentimeter);
+	TestTrue(TEXT("正式资产的独立体力调参通过统一运行校验"), Balance->IsRuntimeDefinitionReady());
 	return !HasAnyErrors();
 }
 
@@ -112,6 +110,43 @@ bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("未配置资产默认不可进入运行态"), Balance->IsRuntimeDefinitionReady());
 	PopulateValidFightBalance(*Balance);
 	TestTrue(TEXT("完整合法数值可进入运行态"), Balance->IsRuntimeDefinitionReady());
+	TestNotNull(TEXT("资产生成脚本可调用统一运行校验"),
+		UCatFishingFightBalanceDefinition::StaticClass()->FindFunctionByName(
+			GET_FUNCTION_NAME_CHECKED(UCatFishingFightBalanceDefinition, IsRuntimeDefinitionReady)));
+
+	Balance->CatStaminaCostPerStrengthCentimeter = 0.003;
+	Balance->FishStaminaCostPerStrengthCentimeter = 0.001;
+	TestTrue(TEXT("猫鱼可以独立配置不同体力价格"), Balance->IsRuntimeDefinitionReady());
+
+	struct FStaminaMultiplierCase
+	{
+		const TCHAR* Name;
+		double UCatFishingFightBalanceDefinition::* Field;
+	};
+	const FStaminaMultiplierCase MultiplierCases[] = {
+		{ TEXT("猫移动"), &UCatFishingFightBalanceDefinition::CatMovementStaminaMultiplier },
+		{ TEXT("猫收线"), &UCatFishingFightBalanceDefinition::CatReelStaminaMultiplier },
+		{ TEXT("猫转杆"), &UCatFishingFightBalanceDefinition::CatRodStaminaMultiplier },
+		{ TEXT("猫持竿"), &UCatFishingFightBalanceDefinition::CatHoldStaminaMultiplier },
+		{ TEXT("猫负载"), &UCatFishingFightBalanceDefinition::CatLoadStaminaMultiplier },
+		{ TEXT("鱼负载"), &UCatFishingFightBalanceDefinition::FishLoadStaminaMultiplier },
+	};
+	for (const FStaminaMultiplierCase& Case : MultiplierCases)
+	{
+		double& Multiplier = Balance->*Case.Field;
+		TestEqual(FString::Printf(TEXT("%s体力倍率为旧资产提供默认值"), Case.Name), Multiplier, 1.0);
+		Multiplier = 0.0;
+		TestTrue(FString::Printf(TEXT("%s体力倍率允许关闭该项"), Case.Name), Balance->IsRuntimeDefinitionReady());
+		Multiplier = 2.5;
+		TestTrue(FString::Printf(TEXT("%s体力倍率允许独立调高"), Case.Name), Balance->IsRuntimeDefinitionReady());
+		Multiplier = -0.1;
+		TestFalse(FString::Printf(TEXT("%s负倍率阻止运行"), Case.Name), Balance->IsRuntimeDefinitionReady());
+		Multiplier = std::numeric_limits<double>::quiet_NaN();
+		TestFalse(FString::Printf(TEXT("%s非数值倍率阻止运行"), Case.Name), Balance->IsRuntimeDefinitionReady());
+		Multiplier = std::numeric_limits<double>::infinity();
+		TestFalse(FString::Printf(TEXT("%s无穷倍率阻止运行"), Case.Name), Balance->IsRuntimeDefinitionReady());
+		Multiplier = 1.0;
+	}
 
 	const FProperty* StrengthProperty = FindFProperty<FProperty>(
 		UCatFishingFightBalanceDefinition::StaticClass(),

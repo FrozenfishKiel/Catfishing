@@ -42,4 +42,9 @@ protected:
 	/** Poison 到达客户端时交给 GAS 标准预测收敛；倒地与表现由服务器 ConditionComponent 单独裁决。 */
 	UFUNCTION()
 	void OnRep_Poison(const FGameplayAttributeData& OldPoison);
+
+private:
+	/** 仅用于客户端复制诊断限频；不参与体力、恢复或复制裁决。 */
+	double NextFightStaminaDiagnosticWorldSeconds = 0.0;
+	bool bHasFightStaminaDiagnostic = false;
 };

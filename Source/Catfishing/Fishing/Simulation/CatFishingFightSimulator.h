@@ -58,6 +58,12 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double CatStaminaCostPerStrengthCentimeter = 0.002;
 	double FishStaminaCostPerStrengthCentimeter = 0.002;
 	double IsometricEffortMultiplier = 1.0;
+	double CatMovementStaminaMultiplier = 1.0;
+	double CatReelStaminaMultiplier = 1.0;
+	double CatRodStaminaMultiplier = 1.0;
+	double CatHoldStaminaMultiplier = 1.0;
+	double CatLoadStaminaMultiplier = 1.0;
+	double FishLoadStaminaMultiplier = 1.0;
 	double BaseDrainMultiplier = 1.0;
 	double StruggleDrainMultiplier = 2.0;
 	double SlackStaminaRegenPerSecond = 1.5;
@@ -91,6 +97,9 @@ struct CATFISHING_API FCatFightRodConstraintInput
 	FVector RodTipVelocityCentimetersPerSecond = FVector::ZeroVector;
 	FVector CarrierVelocityCentimetersPerSecond = FVector::ZeroVector;
 	FVector CarrierDesiredVelocityCentimetersPerSecond = FVector::ZeroVector;
+	/** 从权威转矩积分采集本步增量，使用一米参考力臂；不含身体平移或鱼被动拖杆。 */
+	double CatRodIntentArcCentimeters = 0.0;
+	double CatRodActualArcCentimeters = 0.0;
 	bool bRodHeld = false;
 };
 
@@ -114,6 +123,22 @@ struct CATFISHING_API FCatFightStepResult
 	double IntendedSwimSpeedCentimetersPerSecond = 0.0;
 	double CatStaminaDrain = 0.0;
 	double FishStaminaDrain = 0.0;
+	/** 猫的四类努力独立计价；移动/转杆归主位，收线/保持才由实际合力者分担。 */
+	double CatMovementStaminaDrain = 0.0;
+	double CatReelStaminaDrain = 0.0;
+	double CatRodStaminaDrain = 0.0;
+	double CatHoldStaminaDrain = 0.0;
+	double CatMovementIntentCentimeters = 0.0;
+	double CatMovementActualCentimeters = 0.0;
+	double CatRodIntentArcCentimeters = 0.0;
+	double CatRodActualArcCentimeters = 0.0;
+	double CatHoldIntentCentimeters = 0.0;
+	double CatNormalizedEffortLoad = 0.0;
+	double CatRodNormalizedEffortLoad = 0.0;
+	double FishNormalizedEffortLoad = 0.0;
+	double FishUncappedStaminaDrain = 0.0;
+	double GetSharedCatStaminaDrain() const { return CatReelStaminaDrain + CatHoldStaminaDrain; }
+	double GetPrimaryCatStaminaDrain() const { return CatMovementStaminaDrain + CatRodStaminaDrain; }
 	double CatIntendedLineDistanceCentimeters = 0.0;
 	double CatActualLineDistanceCentimeters = 0.0;
 	double FishIntendedLineDistanceCentimeters = 0.0;

@@ -103,6 +103,7 @@ bool UCatFishingFightRunner::Start()
 		return false;
 	}
 	// 按配置的定步长注册重复定时器，之后每隔 FixedStepSeconds 调用一次 HandleFixedStep 推进一步搏斗模拟。
+	RotationEffortSampler.Reset(Rod->GetAuthoritativeRotationEffortSnapshot());
 	World->GetTimerManager().SetTimer(FixedStepTimer, this, &ThisClass::HandleFixedStep,
 		static_cast<float>(Config.FixedStepSeconds), true);
 	return true;
@@ -810,15 +811,23 @@ void UCatFishingFightRunner::HandleFixedStep()
 		? FindPrimaryParticipant()->Character.Get() : nullptr)
 	{
 		const UCharacterMovementComponent* Movement = PrimaryCharacter->GetCharacterMovement();
-		RodConstraint.CarrierDesiredVelocityCentimetersPerSecond = Movement
-			? PrimaryCharacter->GetLastMovementInputVector().GetClampedToMaxSize(1.0) * Movement->GetMaxSpeed()
+		// 网络移动包在服务器更新 Acceleration，不会填充 Pawn 的本地 LastControlInputVector。
+		// 本地与远端统一读取 CharacterMovement 已接受的加速度，避免客户端后退意图丢失。
+		RodConstraint.CarrierDesiredVelocityCentimetersPerSecond = Movement && Movement->GetMaxAcceleration() > UE_SMALL_NUMBER
+			? (Movement->GetCurrentAcceleration() / Movement->GetMaxAcceleration()).GetClampedToMaxSize(1.0)
+				* Movement->GetMaxSpeed()
 			: FVector::ZeroVector;
 	}
+	const FCatFishingRodRotationEffortSnapshot RotationEffort = RotationEffortSampler.Consume(
+		Rod->GetAuthoritativeRotationEffortSnapshot(), Config.FixedStepSeconds);
+	RodConstraint.CatRodIntentArcCentimeters = RotationEffort.IntentArcCentimeters;
+	RodConstraint.CatRodActualArcCentimeters = RotationEffort.ActualArcCentimeters;
 	// 纯模拟器把鱼游向、竿向和持竿者移动合成为有效力量，再得到双方体力、线长、负载和建议位置。
 	FCatFightStepResult Step = FCatFishingFightSimulator::Step(
 		Config, State, RodConstraint, DesiredFishDirection);
 	FCatFishingRodResistanceInput RotationInput;
-	RotationInput.CatStrength = Step.CombinedCatStrength;
+	// 转杆由主位独立操作与扣体；辅助收线力量不能让已经力竭的主位免费施加转矩。
+	RotationInput.CatStrength = Config.PrimaryOperatorCatStrength;
 	RotationInput.FishStrength = State.bFishExhausted ? 0.0 : Config.FishStrength;
 	RotationInput.RodPhysicsLengthCentimeters = Config.RodPhysicsLengthCentimeters;
 	RotationInput.NormalizedTension = Step.NormalizedTension;
@@ -924,9 +933,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 		+ FishBlockedEffortDistance * Config.IsometricEffortMultiplier;
 	const double FishPhaseDrainMultiplier = State.MotionIntent == ECatFishMotionIntent::StrugglingOutward
 		? Config.StruggleDrainMultiplier : Config.BaseDrainMultiplier;
-	const double FishUncappedStaminaDrain = State.bFishExhausted ? 0.0
-		: Config.StrengthPerKilogram * FishEffectiveEffortDistance
-			* Config.FishStaminaCostPerStrengthCentimeter * FishPhaseDrainMultiplier;
+	const double FishUncappedStaminaDrain = Step.FishUncappedStaminaDrain;
 	const double FishStaminaAfterStep = FMath::Max(0.0, State.FishStamina - Step.FishStaminaDrain);
 	const FVector SimulatorFishDelta = Step.ProposedFishWorldPosition - State.FishWorldPosition;
 	const FVector ResolvedFishDelta = Motion.FishWorldPosition - State.FishWorldPosition;
@@ -948,7 +955,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 		UE_LOG(LogCatFishing, Log,
 			TEXT("Event=%s SessionId=%s Trigger=%s CatAction=%s MotionIntent=%s "
 				"FishStaminaBefore=%.3f FishStaminaDrain=%.3f FishStaminaAfter=%.3f "
-				"DrainPerSecond=%.3f UncappedDrain=%.3f FishStrength=%.3f StaminaReferenceStrength=%.3f CostPerStrengthCm=%.6f "
+				"DrainPerSecond=%.3f UncappedDrain=%.3f FishStrength=%.3f StaminaReferenceStrength=%.3f CostPerStrengthCm=%.6f EffortLoad=%.3f LoadMultiplier=%.3f "
 				"PhaseMultiplier=%.3f IsometricMultiplier=%.3f FixedStepSeconds=%.3f IntendedSwimSpeedCmPerSec=%.3f "
 				"FishIntentLineCm=%.3f FishActualLineCm=%.3f FishRealizedEffortCm=%.3f "
 				"FishBlockedEffortCm=%.3f FishEffectiveEffortCm=%.3f "
@@ -971,6 +978,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Config.FishStrength,
 			Config.StrengthPerKilogram,
 			Config.FishStaminaCostPerStrengthCentimeter,
+			Step.FishNormalizedEffortLoad,
+			Config.FishLoadStaminaMultiplier,
 			FishPhaseDrainMultiplier,
 			Config.IsometricEffortMultiplier,
 			Config.FixedStepSeconds,
@@ -1004,7 +1013,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.bFishBeached ? TEXT("true") : TEXT("false"),
 			static_cast<int32>(World->GetNetMode()));
 	};
-	if (WorldSeconds >= NextPowerDiagnosticWorldSeconds)
+	const bool bLogWorkSample = WorldSeconds >= NextPowerDiagnosticWorldSeconds;
+	if (bLogWorkSample)
 	{
 		UE_LOG(LogCatFishing, Display,
 			TEXT("Event=fishing_coupled_work_sample SessionId=%s RodActorId=%s "
@@ -1014,7 +1024,10 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"MotionIntent=%s CatIntentCm=%.3f CatActualCm=%.3f FishIntentCm=%.3f FishActualCm=%.3f "
 				"FishWorldStep2DCm=%.3f FishWorldStep3DCm=%.3f FishWorldDeltaZCm=%.3f "
 				"ReelRequestedCm=%.3f ReelActualCm=%.3f AbsoluteRodWear=%.3f RodWearDelta=%.3f "
-				"FishExhausted=%s NetMode=%d Authority=true"),
+				"MovementDrain=%.4f ReelDrain=%.4f RodDrain=%.4f HoldDrain=%.4f "
+				"MovementIntentCm=%.3f MovementActualCm=%.3f RodIntentArcCm=%.3f RodActualArcCm=%.3f HoldIntentCm=%.3f "
+				"CatEffortLoad=%.3f RodEffortLoad=%.3f FishEffortLoad=%.3f MovementIntentSource=CharacterMovementAcceleration "
+				"FishExhausted=%s World=%s PlayerState=%s NetMode=%d Authority=true LocalRole=%d"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
 			Config.PrimaryOperatorCatStrength,
@@ -1043,8 +1056,13 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.ActualReelDistanceCentimeters,
 			Step.AbsoluteRodWear,
 			Step.RodWearDelta,
+			Step.CatMovementStaminaDrain, Step.CatReelStaminaDrain, Step.CatRodStaminaDrain, Step.CatHoldStaminaDrain,
+			Step.CatMovementIntentCentimeters, Step.CatMovementActualCentimeters,
+			Step.CatRodIntentArcCentimeters, Step.CatRodActualArcCentimeters, Step.CatHoldIntentCentimeters,
+			Step.CatNormalizedEffortLoad, Step.CatRodNormalizedEffortLoad, Step.FishNormalizedEffortLoad,
 			State.bFishExhausted ? TEXT("true") : TEXT("false"),
-			static_cast<int32>(World->GetNetMode()));
+			*GetNameSafe(World), *GetNameSafe(FindPrimaryParticipant() ? FindPrimaryParticipant()->PlayerState.Get() : nullptr),
+			static_cast<int32>(World->GetNetMode()), static_cast<int32>(SessionActor->GetLocalRole()));
 		LogFishStaminaBreakdown(TEXT("fishing_fish_stamina_sample"), TEXT("Periodic"));
 		NextPowerDiagnosticWorldSeconds = WorldSeconds + 1.0;
 	}
@@ -1105,7 +1123,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 		/ FMath::Max(Config.GetCombinedCatStrength(), UE_DOUBLE_SMALL_NUMBER);
 	const double PrimaryStaminaDrain = Step.CatStaminaDrain < 0.0
 		? Step.CatStaminaDrain
-		: FMath::Min(State.CatStamina, Step.CatStaminaDrain * PrimaryDrainShare);
+		: FMath::Min(State.CatStamina, Step.GetPrimaryCatStaminaDrain()
+			+ Step.GetSharedCatStaminaDrain() * PrimaryDrainShare);
 	if (State.bOperatorPresent && !FMath::IsNearlyZero(PrimaryStaminaDrain)
 		&& !ASC->ApplyFishingStaminaDelta(static_cast<float>(-PrimaryStaminaDrain)))
 	{
@@ -1113,7 +1132,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("AbilityStaminaWrite"));
 		return;
 	}
-	if (!ApplyHelperStaminaChanges(Step.CatStaminaDrain))
+	if (!ApplyHelperStaminaChanges(Step.GetSharedCatStaminaDrain()))
 	{
 		Stop();
 		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("HelperAbilityStaminaWrite"));
@@ -1134,6 +1153,28 @@ void UCatFishingFightRunner::HandleFixedStep()
 	// 所有副作用都成功落地后，才把本步结果正式写回 Runner 自己持有的状态，作为下一步 Step 的输入基准。
 	State.CatStamina = FMath::Clamp(State.CatStamina - PrimaryStaminaDrain, 0.0, Config.CatStaminaMaximum);
 	State.FishStamina = FMath::Max(0.0, State.FishStamina - Step.FishStaminaDrain);
+	if (bLogWorkSample)
+	{
+		for (const auto& Pair : Participants)
+		{
+			const FCatFightParticipantRuntime& Participant = Pair.Value;
+			const UCatAbilitySystemComponent* ParticipantASC = Participant.AbilitySystem.Get();
+			UE_LOG(LogCatFishing, Log,
+				TEXT("Event=fishing_cat_stamina_applied SessionId=%s RodActorId=%s PlayerState=%s PlayerId=%d CatActor=%s "
+					"Primary=%s PullHeld=%s ActiveStrength=%.3f GroupSharedDrain=%.4f PrimaryOnlyDrain=%.4f "
+					"StaminaAfter=%.4f Result=Applied World=%s NetMode=%d Authority=true LocalRole=%d"),
+				*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+				*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
+				*GetNameSafe(Participant.PlayerState.Get()),
+				Participant.PlayerState.IsValid() ? Participant.PlayerState->GetPlayerId() : INDEX_NONE,
+				*GetNameSafe(Participant.Character.Get()),
+				Participant.bPrimary ? TEXT("true") : TEXT("false"), Participant.bPullHeld ? TEXT("true") : TEXT("false"),
+				Participant.ActiveFishingStrength, Step.GetSharedCatStaminaDrain(),
+				Participant.bPrimary ? Step.GetPrimaryCatStaminaDrain() : 0.0,
+				ParticipantASC ? static_cast<double>(ParticipantASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute())) : 0.0,
+				*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(SessionActor->GetLocalRole()));
+		}
+	}
 	State.LineLengthCentimeters = Step.LineLengthCentimeters;
 	State.AbsoluteRodWear = Step.AbsoluteRodWear;
 	State.StrongConfrontationBuildUpSeconds = Step.StrongConfrontationBuildUpSeconds;

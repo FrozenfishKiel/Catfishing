@@ -1,5 +1,60 @@
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 
+void FCatFishingRodEffortSampler::Reset(const FCatFishingRodRotationEffortSnapshot& Snapshot)
+{
+	PreviousSnapshot = Snapshot;
+	PendingEffort = FCatFishingRodRotationEffortSnapshot{};
+	PendingEffort.Epoch = Snapshot.Epoch;
+}
+
+FCatFishingRodRotationEffortSnapshot FCatFishingRodEffortSampler::Consume(
+	const FCatFishingRodRotationEffortSnapshot& Snapshot, const double StepSeconds)
+{
+	FCatFishingRodRotationEffortSnapshot Result;
+	Result.Epoch = Snapshot.Epoch;
+	if (!FMath::IsFinite(StepSeconds) || StepSeconds <= 0.0
+		|| !FMath::IsFinite(Snapshot.IntentArcCentimeters) || Snapshot.IntentArcCentimeters < 0.0
+		|| !FMath::IsFinite(Snapshot.ActualArcCentimeters) || Snapshot.ActualArcCentimeters < 0.0
+		|| !FMath::IsFinite(Snapshot.IntegratedSeconds) || Snapshot.IntegratedSeconds < 0.0)
+	{
+		return Result;
+	}
+	if (Snapshot.Epoch != PreviousSnapshot.Epoch)
+	{
+		// 新 Epoch 的累计值全部属于新持有人/新搏斗，从零接入；旧 Epoch 的积压不能跟随交接。
+		FCatFishingRodRotationEffortSnapshot NewBaseline;
+		NewBaseline.Epoch = Snapshot.Epoch;
+		Reset(NewBaseline);
+	}
+	if (Snapshot.IntentArcCentimeters < PreviousSnapshot.IntentArcCentimeters
+		|| Snapshot.ActualArcCentimeters < PreviousSnapshot.ActualArcCentimeters
+		|| Snapshot.IntegratedSeconds < PreviousSnapshot.IntegratedSeconds)
+	{
+		// 同一 Epoch 的计数必须单调；意外回退只重新建基线，不能生成负努力或重放历史。
+		Reset(Snapshot);
+		return Result;
+	}
+	PendingEffort.IntentArcCentimeters += Snapshot.IntentArcCentimeters - PreviousSnapshot.IntentArcCentimeters;
+	PendingEffort.ActualArcCentimeters += Snapshot.ActualArcCentimeters - PreviousSnapshot.ActualArcCentimeters;
+	PendingEffort.IntegratedSeconds += Snapshot.IntegratedSeconds - PreviousSnapshot.IntegratedSeconds;
+	PreviousSnapshot = Snapshot;
+	if (PendingEffort.IntegratedSeconds <= UE_DOUBLE_SMALL_NUMBER) return Result;
+
+	Result.IntegratedSeconds = FMath::Min(StepSeconds, PendingEffort.IntegratedSeconds);
+	const double Fraction = Result.IntegratedSeconds / PendingEffort.IntegratedSeconds;
+	Result.IntentArcCentimeters = PendingEffort.IntentArcCentimeters * Fraction;
+	Result.ActualArcCentimeters = PendingEffort.ActualArcCentimeters * Fraction;
+	PendingEffort.IntentArcCentimeters -= Result.IntentArcCentimeters;
+	PendingEffort.ActualArcCentimeters -= Result.ActualArcCentimeters;
+	PendingEffort.IntegratedSeconds -= Result.IntegratedSeconds;
+	if (PendingEffort.IntegratedSeconds <= UE_DOUBLE_SMALL_NUMBER)
+	{
+		PendingEffort = FCatFishingRodRotationEffortSnapshot{};
+		PendingEffort.Epoch = Snapshot.Epoch;
+	}
+	return Result;
+}
+
 FCatFishingRodResistanceResult FCatFishingRodResistanceModel::Evaluate(
 	const FCatFishingRodResistanceInput& Input)
 {
@@ -73,6 +128,16 @@ FCatFishingRodRotationResult FCatFishingRodResistanceModel::StepRotation(
 		// 粘性阻尼：不再把阶跃负载直接变成角速度，也不积累会反复过冲的转动惯量。
 		const FVector AngularVelocity = (Result.NetTorque * (MaximumSpeed / TorqueScale)).GetClampedToMaxSize(MaximumSpeed);
 		const double Speed = AngularVelocity.Size();
+		// 只观察本次真实积分里的主动转矩，不由竿尖位移反推猫做功。
+		// 一米参考力臂与 Evaluate 中猫力量的转矩解释一致；没有主动转矩时两项都为零。
+		const double CatEffortFraction = Input.CatTorqueCapacity > UE_DOUBLE_SMALL_NUMBER
+			? FMath::Clamp(CatTorque.Size() / Input.CatTorqueCapacity, 0.0, 1.0) : 0.0;
+		const double IntentArc = MaximumSpeed * CatEffortFraction * StepSeconds * 100.0;
+		const double ActualArc = FMath::Max(0.0, FVector::DotProduct(AngularVelocity, CatAxis))
+			* StepSeconds * 100.0;
+		Result.CatIntentArcCentimeters += IntentArc;
+		Result.CatActualArcCentimeters += FMath::Min(IntentArc, ActualArc);
+		Result.IntegratedSeconds += StepSeconds;
 		if (Speed > UE_DOUBLE_SMALL_NUMBER)
 		{
 			Direction = FQuat(AngularVelocity / Speed, Speed * StepSeconds).RotateVector(Direction).GetSafeNormal();

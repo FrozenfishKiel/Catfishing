@@ -10,9 +10,12 @@ struct CATFISHING_API FCatFightWorkInput
 	double IsometricEffortMultiplier = 1.0;
 	double CostPerStrengthCentimeter = 0.0;
 	double PhaseMultiplier = 1.0;
+	/** 自身主动努力承受的相对负载；被动位移不生成努力。 */
+	double NormalizedLoad = 0.0;
+	double LoadStaminaMultiplier = 0.0;
 };
 
-/** 统一做功模型：实际位移计费；没有实现的意图位移也按等长系数计费，因此僵持自然消耗体力。 */
+/** 主动努力统一结算：完成与受阻努力分别折算，再按自身负载与独立成本扣体。 */
 class CATFISHING_API FCatFishingFightWorkModel
 {
 public:

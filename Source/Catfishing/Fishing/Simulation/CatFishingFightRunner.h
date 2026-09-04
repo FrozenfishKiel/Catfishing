@@ -5,6 +5,7 @@
 #include "Environment/CatWaterTypes.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
 #include "Fishing/Simulation/CatFishSteeringModel.h"
+#include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 #include "CatFishingFightRunner.generated.h"
 
 class ACatFishEncounterActor;
@@ -122,6 +123,7 @@ private:
 	double InitialFishStamina = 0.0;
 	FCatFishSteeringConfig SteeringConfig;
 	FCatFishSteeringState SteeringState;
+	FCatFishingRodEffortSampler RotationEffortSampler;
 	UPROPERTY(Transient)
 	TObjectPtr<UStateTree> BehaviorStateTree = nullptr;
 	FRandomStream Random;

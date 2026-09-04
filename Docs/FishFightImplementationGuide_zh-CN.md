@@ -119,9 +119,17 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 
 ### 当前体力公式
 
-`FCatFishingFightWorkModel::ComputeDrain()` 计算 `Realized=min(实际沿线距离, 意图沿线距离)`、`Blocked=max(意图沿线距离-Realized,0)`，再以 `Realized + Blocked × IsometricEffortMultiplier` 得到有效努力距离。猫和鱼都乘同一个 `StrengthPerKilogram` 标准努力强度、各自消耗系数及性格阶段倍率；不是分别乘各自绝对力量，也不是从统一拉力积分出的机械功。
+`FCatFishingFightWorkModel::ComputeDrain()` 计算 `Realized=min(实际完成距离, 主动意图距离)`、`Blocked=max(主动意图距离-Realized,0)`，以 `Realized + Blocked × IsometricEffortMultiplier` 得到有效努力距离。每项费用为 `标准努力强度 × 有效努力距离 × 自身消耗系数 × 阶段倍率 × 动作倍率 × (1 + 自身归一化负载 × 自身负载倍率)`；标准努力强度仍取 `StrengthPerKilogram`，不直接按鱼/猫绝对力量放大费用。这是对抗努力的玩法结算，不是完整牛顿约束反力或机械焦耳模型。
 
-Locked 绷紧时，鱼的向外意图形成猫的等长保持意图，所以零位移仍可消耗体力；收线或主动后退已给出猫端意图时不重复叠加保持距离。FreeSpool 在 `L_max` 内确实解除约束时恢复主猫体力，到最大线长重新绷紧后停止恢复。鱼力竭后直接关闭所有猫端正向体力扣费，这是仍然生效的玩法特例。
+猫的移动、收线、转杆分别计费。移动只统计绷线时沿线远离鱼的主动意图，服务器从 `CharacterMovement.GetCurrentAcceleration()/GetMaxAcceleration()` 还原输入强度，房主与网络玩家共用该入口；实际身体位移只取持竿者速度，不借用包含旋转的竿尖速度。收线仍使用请求收线距离，尚未引入负载导致卷线器停转的物理求解。转杆直接从已有旋转积分中的猫主动转矩取得努力，以一米参考力臂折算弧长，反向被拖/鱼额外助力不会冒充主动完成距离。
+
+转杆累计观察量带 `Epoch` 与积分时长；`FCatFishingRodEffortSampler` 按固定步时长分配累计增量，低帧率一次产生的努力可分给多个补步，不能第一步全部收费、后续补步又重复收保持费。换持有人或搏斗重开清除旧 Epoch 积压。转杆能力只取主位当前力量，辅助位的收线力量不能让力竭主位免费转杆。
+
+锁线且鱼向外游时会产生持续保持费用基线；收线费用和主位可支付的移动、转杆费用覆盖这份基线，仅补收剩余保持费用。因此静止用力仍耗体，也不能通过微小晃杆免掉整段保持费用。主位力竭时移动/转杆不生成个人费用；接近力竭时，个人费用最多以当前体力抵扣保持基线，不能用不可支付的动作费用免掉助手的保持消耗。主位单独承担移动/转杆费用，收线与剩余保持费用按实际参与者可用力量分担；辅助位不为主位的独立动作付费。FreeSpool 在 `L_max` 内确实解除约束且本步无猫端正费用时恢复主猫体力，到最大线长重新绷紧后停止恢复。鱼力竭后关闭所有猫端正向扣费，继续允许收鱼。
+
+猫沿线负载为 `约束张力 × clamp(鱼向外力量/猫有效合力,0,1)`；转杆负载另按鱼端力矩与主位转矩容量计算。鱼的负载为 `约束张力 × max(鱼向外对齐度,0) × clamp(猫有效合力/鱼力量,0,1)`，解除约束时均归零。鱼仍按自身沿线游动意图消耗，被拖往意图反方向的位移不计主动完成量。即使僵持倍率为 1，相同意图在不同对抗负载下也会产生不同费用；完全被动拖动不会凭空增加鱼的主动努力。
+
+猫/鱼成本、僵持倍率、四种猫动作倍率及双方负载倍率均从正式平衡资产读取；新动作/负载倍率默认 1，可分别调为非负值。`create_fishing_fight_balance_asset.py` 只对新资产写默认值，已存在资产只校验并记录当前值，非法旧资产明确拒绝而不会静默重置调参。运行证据使用 `LogCatFishing` 的 `fishing_effort_configured`、`fishing_coupled_work_sample`、`fishing_cat_stamina_applied`、`fishing_fish_stamina_sample`；客户端使用 `fishing_cat_stamina_received` 与 `fishing_fish_stamina_received` 核对复制到达。服务端按 SessionId/PlayerState/PlayerId 关联，不能仅凭单端日志判定联机验收通过。
 
 ### 当前鱼竿旋转
 

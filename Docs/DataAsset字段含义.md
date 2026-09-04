@@ -1,6 +1,6 @@
 # DataAsset 字段说明手册
 
-对应代码状态：2026-09-03。给配数值/建资产的人看：每个 DataAsset 类型的字段含义、校验规则、注册方法。
+对应代码状态：2026-09-04。给配数值/建资产的人看：每个 DataAsset 类型的字段含义、校验规则、注册方法。
 
 ## 0. 所有 DataAsset 共同的规矩
 
@@ -49,12 +49,18 @@
 | 每点力量加速度 | AccelerationPerStrength | 5 | 猫/鱼共享的力量→绷线对抗加速度换算；不限制鱼的自由游速 |
 | 猫端驱动力响应时间 | DriveResponseSeconds | 1s | 猫端对抗加速度投影到收线/牵引响应速度的时长 |
 | 收线速度 | ReelSpeedCentimetersPerSecond | 80 cm/s | 左键收线意图速度上限 |
-| 猫/鱼做功体力消耗系数 | Cat/FishStaminaCostPerStrengthCentimeter | 0.002 | 每点力量、每厘米有效努力的体力价格 |
+| 猫/鱼做功体力消耗系数 | Cat/FishStaminaCostPerStrengthCentimeter | 各自默认 0.002 | 每点标准努力强度、每厘米有效努力的体力价格；猫鱼独立调参 |
+| 猫移动体力倍率 | CatMovementStaminaMultiplier | 默认 1 | 绷线时主动远离鱼的身体移动费用；被动位移不计 |
+| 猫收线体力倍率 | CatReelStaminaMultiplier | 默认 1 | 请求收线努力费用 |
+| 猫转杆体力倍率 | CatRodStaminaMultiplier | 默认 1 | 主位主动转矩积分费用，包含受阻努力 |
+| 猫持竿体力倍率 | CatHoldStaminaMultiplier | 默认 1 | 持续顶鱼的费用基线，只补收主动操作尚未覆盖的部分 |
+| 猫负载体力倍率 | CatLoadStaminaMultiplier | 默认 1 | 猫各项努力乘 `(1 + 自身归一化负载 × 倍率)` |
+| 鱼负载体力倍率 | FishLoadStaminaMultiplier | 默认 1 | 鱼主动沿线努力乘 `(1 + 自身归一化负载 × 倍率)` |
 | 僵持努力折算倍率 | IsometricEffortMultiplier | 1 | 未实现位移的意图距离计费倍率 |
 | 放线体力恢复速度 | SlackStaminaRegenPerSecond | 3/s | 右键完全放线时猫的恢复速度 |
 | 鱼力竭吸附阈值 | FishExhaustionThreshold | 0.5 | 剩余绝对体力低于该值时直接归零 |
 | 低体力休息触发比例/时长倍率 | LowStaminaRestThreshold/Multiplier | 0.5 / 1.5 | 低体力鱼延长平静期 |
-| 满张力响应距离 | TensionResponseRangeCentimeters | 10 cm | 只归一化表现张力，不改变权威线长约束 |
+| 满张力响应距离 | TensionResponseRangeCentimeters | 10 cm | 约束误差换算张力的尺度，参与牵引、转矩和体力负载结算 |
 | 逃脱松线余量 | EscapeSlackCentimeters | 100 cm | 无人持竿时超过最大线长后的逃脱余量 |
 | 僵持鱼竿磨损系数 | StalemateRodWearPerFishStrength | 0.1 | 按鱼沿线向外负载连续缩放的鱼竿磨损，写回同一装备实例；几何张力不能替代方向负载 |
 | 持竿最低杠杆倍率 | HeldRodMinimumLeverageMultiplier | 0.4 | 竿身偏线时保留的最低有效力量 |
@@ -62,6 +68,8 @@
 | 背离鱼方向最低速度倍率 | MinimumCarrierAwaySpeedMultiplier | 0.15 | 满负载且鱼占优时玩家仍保留的最低后退比例 |
 
 `DefaultGame.ini` 只保存 `FightBalanceDefinition` 资产引用，不再保存上述数值；C++ 也不提供可偷偷生效的第二套回退。资产缺失、未勾“启用正式运行”或任一字段非法时，Fishing runtime 保持 fail-closed。
+
+上述体力倍率均允许非负有限值。僵持倍率为 1 只表示“同等努力完成或受阻时费用相同”，双方负载倍率仍可改变最终费用；0 可关闭对应动作或附加负载费用。修改资产后下一场搏斗生效。资产创建脚本只为新资产填写默认，已有合法资产保留当前调参；已有非法资产报错，不自动覆盖修复。
 
 ## 2. 装备/道具：`UCatEquipmentDefinition`（正式目录 `Equip_*`）
 
