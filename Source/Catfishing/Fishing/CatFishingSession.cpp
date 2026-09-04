@@ -1514,7 +1514,7 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 		StateTreeComponent->SendStateTreeEvent(CatFishingStateTreeEvents::FishExhausted,
 			FConstStructView(), TEXT("CatFishing"));
 	}
-	else if (Snapshot.Phase == ECatFishingPhase::ExhaustedReel && Snapshot.bReeling)
+	else if (Snapshot.Phase == ECatFishingPhase::ExhaustedReel)
 	{
 		const ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
 		const ACatFishingRodActor* Rod = Snapshot.RodActor;
@@ -1535,7 +1535,8 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 		const double ReachTolerance = FMath::IsFinite(ConfiguredReachTolerance)
 			&& ConfiguredReachTolerance > 0.0
 			? FMath::Max(5.0, ConfiguredReachTolerance) : 5.0;
-		const FVector PickupTarget = Rod->GetGripWorldTransform().GetLocation();
+		// 收线约束端点是竿尖，不是相隔一段杆长的握把。已到达干地的鱼也不应因刚松开左键而卡住交接。
+		const FVector PickupTarget = Rod->GetRodTipWorldTransform().GetLocation();
 		if (FVector::Dist2D(Encounter->GetActorLocation(), PickupTarget) <= ReachTolerance
 			&& !SpawnExhaustedFishPickupFromAuthority(Encounter->GetActorLocation()))
 		{
@@ -1645,11 +1646,14 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 		Encounter->ForceNetUpdate();
 	}
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=exhausted_fish_pickup_spawned SessionId=%s Pickup=%s Location=%s Rotation=%s"),
+		TEXT("Event=exhausted_fish_pickup_spawned SessionId=%s Pickup=%s Location=%s Rotation=%s "
+			"LandingTarget=RodTip PickupState=Available WorldNetMode=%d Authority=true %s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Pickup),
-		*Pickup->GetActorLocation().ToCompactString(), *Pickup->GetActorRotation().ToCompactString());
+		*Pickup->GetActorLocation().ToCompactString(), *Pickup->GetActorRotation().ToCompactString(),
+		static_cast<int32>(World->GetNetMode()),
+		*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
 	FinalizeSession(ECatFishingPhase::Resolved, ECatFishingOutcome::Landed,
-		TEXT("Grounded exhausted fish reached the rod grip as world pickup"));
+		TEXT("Grounded exhausted fish reached the rod tip as world pickup"));
 	return true;
 }
 

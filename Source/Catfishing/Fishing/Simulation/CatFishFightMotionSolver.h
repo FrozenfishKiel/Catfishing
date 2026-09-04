@@ -79,4 +79,9 @@ public:
 	 * 竿尖仅由旋转产生的位移不属于猫端平移，不能单独触发上岸/清空体力。
 	 */
 	static bool IsIntentionalLandwardHaul(const FCatFishBeachingIntentInput& Input);
+
+	/** 未命中干地时，保留真实拖拽的水面进度；不能退回烘焙水域内缩点而永远到不了真实岸面。 */
+	static FCatFishMotionSolveResult ResolveExhaustedWaterFallback(
+		const FVector& CurrentFishPosition, const FVector& CandidateFishPosition,
+		double WaterSurfaceZ, bool bIntentionalLandwardHaul);
 };

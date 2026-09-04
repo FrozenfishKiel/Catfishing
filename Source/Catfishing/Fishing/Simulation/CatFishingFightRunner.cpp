@@ -612,14 +612,10 @@ void UCatFishingFightRunner::HandleFixedStep()
 	const FVector RodTip = Rod->GetRodTipWorldTransform().GetLocation();
 	FVector Outward = State.FishWorldPosition - RodTip; // 竿尖指向鱼的方向即为鱼线“向外”方向
 	if (Outward.IsNearlyZero()) Outward = FVector::ForwardVector;
-	FVector DesiredFishDirection;
+	FVector DesiredFishDirection = FVector::ZeroVector;
 	// 服务器按性格和固定随机种子生成连续游向；客户端不参与随机，只接收最终权威 Transform/表现状态。
 	const double FishStaminaRatio = FMath::Clamp(State.FishStamina / InitialFishStamina, 0.0, 1.0);
-	if (State.bFishExhausted)
-	{
-		DesiredFishDirection = -Outward.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector);
-	}
-	else if (!FCatFishSteeringModel::Step(SteeringConfig, Outward, State.MotionIntent, FishStaminaRatio,
+	if (!State.bFishExhausted && !FCatFishSteeringModel::Step(SteeringConfig, Outward, State.MotionIntent, FishStaminaRatio,
 		Config.FixedStepSeconds, SteeringRandom, SteeringState, DesiredFishDirection))
 	{
 		Stop();
@@ -655,6 +651,15 @@ void UCatFishingFightRunner::HandleFixedStep()
 		FCatFishingRodResistanceModel::Evaluate(RotationInput);
 	if (!Step.bSucceeded || !RotationResistance.bSucceeded)
 	{
+		UE_LOG(LogCatFishing, Error,
+			TEXT("Event=fishing_fight_step_rejected SessionId=%s Stage=%s FishExhausted=%s "
+				"Fish=%s RodTip=%s DesiredFishDirection=%s LineLength=%.3f NetMode=%d Authority=true"),
+			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			!Step.bSucceeded ? TEXT("FightSimulation") : TEXT("RodRotationResistance"),
+			State.bFishExhausted ? TEXT("true") : TEXT("false"),
+			*State.FishWorldPosition.ToCompactString(), *RodTip.ToCompactString(),
+			*DesiredFishDirection.ToCompactString(), State.LineLengthCentimeters,
+			static_cast<int32>(World->GetNetMode()));
 		Stop();
 		SessionActor->HandleFightRunnerFailureFromAuthority(
 			!Step.bSucceeded ? TEXT("FightSimulation") : TEXT("RodRotationResistance"));
@@ -684,7 +689,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 	};
 	if (State.bFishExhausted)
 	{
-		// 力竭鱼没有 AI 自游，但仍由同一约束拖动。越岸前保持水面高度；第一次越岸后永久切换为
+		// 力竭鱼没有 AI 自游，但仍由同一约束拖动。确认干地前保持水面高度；首次确认后永久切换为
 		// 地面吸附，后续每一步都按当前 XY 重查地面，所以高低岸坡都不会继续沿旧水面 Z 钻地。
 		Motion.bSucceeded = Step.bSucceeded;
 		Motion.FishWorldPosition = Step.ProposedFishWorldPosition;
@@ -714,6 +719,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 				{
 					bCrossedShore = true;
 					WaterwardDirection = Shore.WaterwardDirection;
+					Exact = Shore;
 				}
 				else
 				{
@@ -735,26 +741,23 @@ void UCatFishingFightRunner::HandleFixedStep()
 				}
 				else
 				{
-					// 甩杆造成的竿尖位移不能把鱼干直接带上岸；真实干地缺失时也继续留在水中，
-					// 不再让湖面 Mesh 冒充地面后生成一个看不见、捡不到的 Pickup。
-					const FCatWaterSpatialResult Fallback = Water->ResolveCandidatePointToWater(
-						State.FishWorldPosition, WaterRegion);
-					if (!Fallback.bSucceeded)
+					// 水域轮廓不一定就是物理岸面。真实拖拽继续越过间隙并在后续步重查干地，
+					// 不把候选点弹回内缩水点；纯旋转仍不能取得上岸资格。
+					Motion = FCatFishFightMotionSolver::ResolveExhaustedWaterFallback(
+						State.FishWorldPosition, Step.ProposedFishWorldPosition,
+						Exact.WaterSurfaceWorldPoint.Z, bIntentionalHaul);
+					if (Motion.bSucceeded)
 					{
-						Motion.bSucceeded = false;
-					}
-					else
-					{
-						Motion.FishWorldPosition = Fallback.WaterSurfaceWorldPoint;
-						Exact = Fallback;
 						const double WorldSeconds = World->GetTimeSeconds();
 						if (bIntentionalHaul && WorldSeconds >= NextBeachingDeferredDiagnosticWorldSeconds)
 						{
 							UE_LOG(LogCatFishing, Warning,
 								TEXT("Event=fishing_beaching_deferred SessionId=%s Lifecycle=Exhausted "
-									"Candidate=%s Result=RemainInWater Reason=DryGroundMissing"),
+									"Candidate=%s ResolvedFish=%s Result=ContinueSurfaceTow Reason=DryGroundMissing "
+									"NetMode=%d Authority=true"),
 								*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-								*Step.ProposedFishWorldPosition.ToCompactString());
+								*Step.ProposedFishWorldPosition.ToCompactString(),
+								*Motion.FishWorldPosition.ToCompactString(), static_cast<int32>(World->GetNetMode()));
 							NextBeachingDeferredDiagnosticWorldSeconds = WorldSeconds + 1.0;
 						}
 					}

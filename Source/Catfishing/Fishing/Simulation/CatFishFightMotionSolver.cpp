@@ -91,6 +91,21 @@ FCatFishMotionSolveResult FCatFishFightMotionSolver::Solve(const FCatFishMotionS
 	return Result;
 }
 
+FCatFishMotionSolveResult FCatFishFightMotionSolver::ResolveExhaustedWaterFallback(
+	const FVector& CurrentFishPosition, const FVector& CandidateFishPosition,
+	const double WaterSurfaceZ, const bool bIntentionalLandwardHaul)
+{
+	FCatFishMotionSolveResult Result;
+	if (!IsFiniteMotionVector(CurrentFishPosition) || !IsFiniteMotionVector(CandidateFishPosition)
+		|| !FMath::IsFinite(WaterSurfaceZ)) return Result;
+	// 水域烘焙轮廓与真实干地可能存在间隙。这里只延续已经由线长约束求出的位移，
+	// 不自动上岸、不生成 Pickup；纯甩杆则停留在当前水面位置，不倒退回轮廓内。
+	Result.FishWorldPosition = bIntentionalLandwardHaul ? CandidateFishPosition : CurrentFishPosition;
+	Result.FishWorldPosition.Z = WaterSurfaceZ;
+	Result.bSucceeded = true;
+	return Result;
+}
+
 bool FCatFishFightMotionSolver::IsIntentionalLandwardHaul(
 	const FCatFishBeachingIntentInput& Input)
 {

@@ -430,6 +430,65 @@ bool FCatFishingStrengthNormalizedStaminaTest::RunTest(const FString& Parameters
 	return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingExhaustedVerticalEndpointTest,
+	"Catfishing.Unit.Fishing.Simulation.ExhaustedFishAtVerticalRodEndpointNeedsNoSwimDirection",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingExhaustedVerticalEndpointTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const FCatFightSimulationConfig Config = MakeConfig();
+	FCatFightSimulationState State = MakeState(ECatFightCatAction::Pull);
+	State.bFishExhausted = true;
+	State.FishStamina = 0.0;
+	State.FishWorldPosition = FVector(0.0, 0.0, -100.0);
+	State.LineLengthCentimeters = 95.0;
+	for (const FVector& Direction : {FVector::ZeroVector, FVector::UpVector, FVector::ForwardVector})
+	{
+		const FCatFightStepResult Step = FCatFishingFightSimulator::Step(
+			Config, State, MakeHeldConstraint(), Direction);
+		TestTrue(TEXT("dead fish remains valid directly below the tip"), Step.bSucceeded);
+		TestEqual(TEXT("vertical endpoint does not terminate the session"), Step.Outcome, ECatFightStepOutcome::None);
+		TestTrue(TEXT("dead fish does not invent horizontal swimming"),
+			Step.ProposedFishWorldPosition.Equals(State.FishWorldPosition, 1e-6));
+		TestEqual(TEXT("dead fish has no outward load"), Step.NormalizedLineLoad, 0.0);
+		TestEqual(TEXT("dead fish causes no stamina drain"), Step.CatStaminaDrain, 0.0);
+		TestEqual(TEXT("dead fish causes no line wear"), Step.LineWearDelta, 0.0);
+	}
+	State.bFishExhausted = false;
+	State.FishStamina = 100.0;
+	TestFalse(TEXT("live fish still rejects a missing swim direction"),
+		FCatFishingFightSimulator::Step(Config, State, MakeHeldConstraint(), FVector::ZeroVector).bSucceeded);
+	TestFalse(TEXT("live fish still rejects purely vertical swimming"),
+		FCatFishingFightSimulator::Step(Config, State, MakeHeldConstraint(), FVector::UpVector).bSucceeded);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingExhaustedShoreGapTest,
+	"Catfishing.Unit.Fishing.Simulation.ExhaustedSurfaceTowCrossesBakedShoreGapWithoutSnappingBack",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingExhaustedShoreGapTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FVector Current(0.0, 0.0, -100.0);
+	for (int32 StepIndex = 0; StepIndex < 20; ++StepIndex)
+	{
+		const FVector Candidate = Current + FVector(8.0, 0.0, 0.0);
+		const FCatFishMotionSolveResult Step = FCatFishFightMotionSolver::ResolveExhaustedWaterFallback(
+			Current, Candidate, -100.0, true);
+		TestTrue(TEXT("missing dry ground preserves constrained surface tow progress"),
+			Step.bSucceeded && Step.FishWorldPosition.Equals(Candidate, 1e-6));
+		Current = Step.FishWorldPosition;
+	}
+	TestEqual(TEXT("repeated steps can reach physical shore beyond the baked outline"), Current.X, 160.0);
+	const FCatFishMotionSolveResult Rotation = FCatFishFightMotionSolver::ResolveExhaustedWaterFallback(
+		Current, Current + FVector(50.0, 0.0, 0.0), -100.0, false);
+	TestTrue(TEXT("rotation alone neither beaches the fish nor snaps it backwards"),
+		Rotation.bSucceeded && Rotation.FishWorldPosition.Equals(Current, 1e-6));
+	return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingExhaustedContinuationTest,
 	"Catfishing.Unit.Fishing.Simulation.ExhaustedFishKeepsSameSolverAndMovesOnlyWhenReeled",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)

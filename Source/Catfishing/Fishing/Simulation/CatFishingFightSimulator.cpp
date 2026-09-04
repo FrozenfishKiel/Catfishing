@@ -89,7 +89,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		|| !IsFiniteVector(RodConstraint.CarrierVelocityCentimetersPerSecond)
 		|| !IsFiniteVector(RodConstraint.CarrierDesiredVelocityCentimetersPerSecond)
 		|| (RodConstraint.bRodHeld && RodConstraint.RodForwardWorld.IsNearlyZero())
-		|| !IsFiniteVector(DesiredFishDirection) || DesiredFishDirection.IsNearlyZero())
+		|| !IsFiniteVector(DesiredFishDirection)
+		|| (!State.bFishExhausted && DesiredFishDirection.IsNearlyZero()))
 	{
 		return Result;
 	}
@@ -105,10 +106,13 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	{
 		HorizontalOutward = FVector::ForwardVector;
 	}
-	FVector FishDirection(DesiredFishDirection.X, DesiredFishDirection.Y, 0.0);
-	if (!FishDirection.Normalize())
+	// 力竭后没有游动意图；到达竿尖正下方时，水平游向为零是合法的收尾状态。
+	// 不能为死鱼伪造方向，更不能用活鱼的游向校验终止其会话。
+	FVector FishDirection = FVector::ZeroVector;
+	if (!State.bFishExhausted)
 	{
-		return Result;
+		FishDirection = FVector(DesiredFishDirection.X, DesiredFishDirection.Y, 0.0);
+		if (!FishDirection.Normalize()) return Result;
 	}
 
 	const bool bOperatorPresent = State.bOperatorPresent;

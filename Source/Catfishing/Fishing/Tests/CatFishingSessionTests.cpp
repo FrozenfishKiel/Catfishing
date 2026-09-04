@@ -10,6 +10,8 @@
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
 #include "Data/CatFishDefinition.h"
+#include "Equipment/CatEquipmentComponent.h"
+#include "EngineUtils.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
@@ -285,6 +287,95 @@ bool FCatFishingSessionLandedTerminalVisibilityTest::RunTest(const FString& Para
 	TestFalse(TEXT("Landed encounter collision is disabled immediately"), Encounter->GetActorEnableCollision());
 	TestFalse(TEXT("Encounter remains alive for terminal replication"), Encounter->IsActorBeingDestroyed());
 	TestTrue(TEXT("Encounter has a bounded terminal lifespan"), Encounter->GetLifeSpan() > 0.0f);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingExhaustedPickupHandoffTest,
+	"Catfishing.Unit.Fishing.Session.GroundedExhaustedFishAtTipBecomesPickupWithoutReelHeld",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingExhaustedPickupHandoffTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper WorldWrapper;
+	if (!TestTrue(TEXT("creates exhausted pickup world"), WorldWrapper.CreateTestWorld(EWorldType::Game))) return false;
+	WorldWrapper.ForwardErrorMessages(this);
+	UWorld* World = WorldWrapper.GetTestWorld();
+	ACatCharacter* Character = World->SpawnActor<ACatCharacter>();
+	ACatfishingPlayerController* Controller = World->SpawnActor<ACatfishingPlayerController>();
+	ACatfishingPlayerState* PlayerState = World->SpawnActor<ACatfishingPlayerState>();
+	ACatFishingSession* Session = World->SpawnActor<ACatFishingSession>();
+	ACatFishingRodActor* Rod = World->SpawnActor<ACatFishingRodActor>();
+	ACatFishEncounterActor* Encounter = World->SpawnActor<ACatFishEncounterActor>();
+	UCatFishDefinition* Definition = LoadObject<UCatFishDefinition>(nullptr,
+		TEXT("/Game/Catfishing/Data/Fish/Fish_RiverPattern.Fish_RiverPattern"));
+	if (!TestTrue(TEXT("all pickup fixtures exist"), Character && Controller && PlayerState && Session && Rod && Encounter && Definition)) return false;
+	const FUniqueNetIdRef UniqueId = FUniqueNetIdString::Create(TEXT("ExhaustedPickupPlayer"), FName(TEXT("CAT_TEST")));
+	PlayerState->SetUniqueId(FUniqueNetIdRepl(UniqueId));
+	Controller->PlayerState = PlayerState;
+	Character->SetPlayerState(PlayerState);
+	Controller->Possess(Character);
+	UCatEquipmentComponent* Equipment = Character->GetEquipmentComponent();
+	if (!TestNotNull(TEXT("equipment exists"), Equipment)) return false;
+	for (const FName EquipmentId : {FName(TEXT("StarterRodT1")), FName(TEXT("FeatherFloat"))})
+	{
+		if (!TestTrue(TEXT("grants formal equipment"), Equipment->GrantEquipmentFromAuthority(
+			FGuid::NewGuid(), Equipment->GetSnapshot().Revision, EquipmentId).bCommitted)) return false;
+	}
+	if (!TestTrue(TEXT("grants bait"), Equipment->GrantInventoryQuantityFromAuthority(
+		FGuid::NewGuid(), Equipment->GetSnapshot().Revision, TEXT("BugBait"), 1).bCommitted)) return false;
+	const FGuid SessionId = FGuid::NewGuid();
+	if (!TestTrue(TEXT("reserves real fishing bait"), Equipment->BeginFishingUse(SessionId,
+		TEXT("StarterRodT1"), TEXT("BugBait"), TEXT("FeatherFloat"), Equipment->GetSnapshot().Revision).bReserved)) return false;
+	TestTrue(TEXT("tip and grip are separated by a real rod length"), Rod->ConfigureCanonicalAnchorsFromAuthority(
+		FTransform(FVector(250.0, 0.0, 100.0)), FTransform::Identity, FTransform::Identity));
+	Session->Snapshot.FishingSessionId = SessionId;
+	Session->Snapshot.Phase = ECatFishingPhase::ExhaustedReel;
+	Session->Snapshot.FishDefinitionId = Definition->FishDefinitionId;
+	Session->Snapshot.FishEncounterActor = Encounter;
+	Session->Snapshot.RodActor = Rod;
+	Session->FishDefinition = Definition;
+	Session->FishWeightKilograms = 1.0;
+	Session->FishVisualScale = 1.0;
+	Session->AttemptSnapshot.WaterRegion.RegionId = TEXT("River");
+	Session->AttemptSnapshot.WaterRegion.GeometryRevision = 1;
+	Session->CastEquipment = Equipment;
+	Session->FightRunner = NewObject<UCatFishingFightRunner>(Session);
+	Session->FightRunner->State.bFishExhausted = true;
+	Session->FightRunner->State.CatAction = ECatFightCatAction::None;
+	FCatFightStepResult Step;
+	Step.bSucceeded = true;
+	const FVector LandingPosition(250.0, 0.0, 0.0);
+	Encounter->SetActorLocation(LandingPosition);
+	Session->HandleFightRunnerStepFromAuthority(Step, 0.0, ECatFishMotionIntent::AutoHauling, 100.0);
+	TestFalse(TEXT("water fish cannot become pickup before dry ground is confirmed"), Session->IsTerminal());
+	Session->FightRunner->bFishBeached = true;
+	const double Reach = GetDefault<UCatWorldItemSettings>()->LandingCompletionDistanceToRodCentimeters;
+	Encounter->SetActorLocation(LandingPosition + FVector(Reach + 10.0, 0.0, 0.0));
+	Session->HandleFightRunnerStepFromAuthority(Step, 0.0, ECatFishMotionIntent::AutoHauling, 100.0);
+	TestFalse(TEXT("grounded fish outside tip reach keeps being hauled"), Session->IsTerminal());
+	Encounter->SetActorLocation(LandingPosition);
+	TestTrue(TEXT("landing point is intentionally outside grip reach"),
+		FVector::Dist2D(LandingPosition, Rod->GetGripWorldTransform().GetLocation()) > Reach);
+	Session->HandleFightRunnerStepFromAuthority(Step, 0.0, ECatFishMotionIntent::AutoHauling, 100.0);
+	TestEqual(TEXT("grounded fish at tip resolves as Landed even after releasing reel"),
+		Session->GetSnapshot().Outcome, ECatFishingOutcome::Landed);
+	TestTrue(TEXT("handoff hides old encounter"), Encounter->IsHidden());
+	TestFalse(TEXT("handoff removes old encounter collision"), Encounter->GetActorEnableCollision());
+	ACatFishPickupActor* Pickup = nullptr;
+	int32 PickupCount = 0;
+	for (TActorIterator<ACatFishPickupActor> It(World); It; ++It)
+	{
+		if (It->GetPresentationState().FishingSessionId == SessionId) { Pickup = *It; ++PickupCount; }
+	}
+	TestEqual(TEXT("handoff creates exactly one pickup"), PickupCount, 1);
+	if (!TestNotNull(TEXT("world fish pickup exists"), Pickup)) return false;
+	TestEqual(TEXT("world fish is Available"), Pickup->GetPresentationState().State, ECatFishPickupState::Available);
+	TestTrue(TEXT("handoff preserves the actual ground location"), Pickup->GetActorLocation().Equals(LandingPosition, 1e-6));
+	Character->SetActorLocation(LandingPosition + FVector(0.0, 50.0, 0.0));
+	TestTrue(TEXT("the same E interaction can pick up the exhausted fish"), Pickup->Interact_Implementation(Controller, FGuid::NewGuid()));
+	TestEqual(TEXT("pickup reaches mouth-carry state"), Pickup->GetPresentationState().State, ECatFishPickupState::Carried);
+	TestEqual(TEXT("carried fish is attached to the requesting cat"), ACatFishPickupActor::FindCarriedFish(Character), Pickup);
 	return !HasAnyErrors();
 }
 

@@ -91,6 +91,7 @@ public:
 	bool BeginBehaviorStateFromStateTree(ECatFishMotionIntent MotionIntent, double& OutDurationSeconds);
 
 private:
+	friend class FCatFishingExhaustedPickupHandoffTest;
 	void HandleFixedStep();
 	void RefreshCatAction();
 	bool RefreshParticipantsFromRod();
