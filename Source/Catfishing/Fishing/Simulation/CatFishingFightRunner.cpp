@@ -974,6 +974,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 	{
 		UE_LOG(LogCatFishing, Log,
 			TEXT("Event=%s SessionId=%s Trigger=%s CatAction=%s MotionIntent=%s "
+				"FishDrainMode=OpposingLoadOnly FishBaseEffortMultiplier=0.000 "
 				"FishStaminaBefore=%.3f FishStaminaDrain=%.3f FishStaminaAfter=%.3f "
 				"DrainPerSecond=%.3f UncappedDrain=%.3f FishStrength=%.3f StaminaReferenceStrength=%.3f CostPerStrengthCm=%.6f EffortLoad=%.3f LoadMultiplier=%.3f "
 				"PhaseMultiplier=%.3f IsometricMultiplier=%.3f FixedStepSeconds=%.3f IntendedSwimSpeedCmPerSec=%.3f "

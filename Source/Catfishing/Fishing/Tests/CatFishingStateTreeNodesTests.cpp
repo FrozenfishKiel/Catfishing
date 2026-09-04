@@ -26,7 +26,7 @@ bool FCatFishingStateTreeNodesDefaultsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("wait task exposes empty data"),
 		WaitTask.GetInstanceDataType() == FCatFishingWaitTaskInstanceData::StaticStruct());
 	const FCatFishingFightExchangeTask FightExchangeTask;
-	TestTrue(TEXT("legacy exchange task remains compatibility-only"),
+	TestTrue(TEXT("historical exchange task preserves its data type pending asset reference audit"),
 		FightExchangeTask.GetInstanceDataType() == FCatFishingFightExchangeTaskInstanceData::StaticStruct());
 	const FCatFishingFightExchangeTaskInstanceData FightData;
 	TestEqual(TEXT("fish stamina cost defaults to zero"), FightData.FishStaminaCost, 0.0);

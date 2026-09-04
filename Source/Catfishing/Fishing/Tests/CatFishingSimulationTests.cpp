@@ -488,6 +488,7 @@ bool FCatFishingFreeSpoolSwimTest::RunTest(const FString& Parameters)
 		Step.ProposedFishWorldPosition.X > State.FishWorldPosition.X + 1.0);
 	TestTrue(TEXT("free spool pays line out for the actual swim"),
 		Step.LineLengthCentimeters > State.LineLengthCentimeters);
+	TestEqual(TEXT("free swimming with released spool costs no fish stamina"), Step.FishStaminaDrain, 0.0);
 	return !HasAnyErrors();
 }
 
@@ -583,6 +584,15 @@ bool FCatFishingIsometricWorkTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("work calculation succeeds"), FCatFishingFightWorkModel::ComputeDrain(Input, Drain, Effort));
 	TestEqual(TEXT("blocked intent remains effective effort"), Effort, 10.0, 1e-9);
 	TestEqual(TEXT("blocked intent drains stamina"), Drain, 1.0, 1e-9);
+	Input.BaseEffortMultiplier = 0.0;
+	TestTrue(TEXT("resistance-only pricing accepts blocked intent with no load"),
+		FCatFishingFightWorkModel::ComputeDrain(Input, Drain, Effort));
+	TestEqual(TEXT("blocked intent alone has no resistance-only cost"), Drain, 0.0);
+	Input.NormalizedLoad = 0.5;
+	Input.LoadStaminaMultiplier = 1.0;
+	TestTrue(TEXT("real opposing load activates resistance-only pricing"),
+		FCatFishingFightWorkModel::ComputeDrain(Input, Drain, Effort));
+	TestEqual(TEXT("resistance-only work charges the observed load"), Drain, 0.5, 1e-9);
 	return !HasAnyErrors();
 }
 
@@ -608,6 +618,7 @@ bool FCatFishingInwardReelRodWearTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("inward fish direction has no outward line load"),
 		Step.NormalizedLineLoad, 0.0, 1e-9);
 	TestEqual(TEXT("tension alone cannot add rod wear"), Step.RodWearDelta, 0.0, 1e-9);
+	TestEqual(TEXT("tension alone cannot charge fish swimming toward the rod"), Step.FishStaminaDrain, 0.0);
 	TestEqual(TEXT("accumulated rod wear is unchanged without outward fish load"),
 		Step.AbsoluteRodWear, State.AbsoluteRodWear, 1e-9);
 	TestEqual(TEXT("inward reeling cannot break a nearly worn rod"),
@@ -653,7 +664,7 @@ bool FCatFishingDirectionalRodWearTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingStrengthNormalizedStaminaTest,
-	"Catfishing.Unit.Fishing.Simulation.FishStrengthChangesMotionNotStaminaCostForSameLineEffort",
+	"Catfishing.Unit.Fishing.Simulation.FreeSwimmingHasNoStaminaCostForWeakOrStrongFish",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingStrengthNormalizedStaminaTest::RunTest(const FString& Parameters)
@@ -673,9 +684,10 @@ bool FCatFishingStrengthNormalizedStaminaTest::RunTest(const FString& Parameters
 	TestTrue(TEXT("松线时相同游速产生相同沿线努力距离"),
 		FMath::IsNearlyEqual(WeakFish.FishIntendedLineDistanceCentimeters,
 			StrongFish.FishIntendedLineDistanceCentimeters, 1e-9));
-	TestEqual(TEXT("相同沿线努力不因绝对力量差产生体力倍率"),
+	TestEqual(TEXT("自由游动不因绝对力量差产生体力费用"),
 		WeakFish.FishStaminaDrain, StrongFish.FishStaminaDrain, 1e-9);
-	TestTrue(TEXT("标准努力仍会消耗鱼体力"), WeakFish.FishStaminaDrain > 0.0);
+	TestEqual(TEXT("弱鱼自由游动不消耗体力"), WeakFish.FishStaminaDrain, 0.0);
+	TestEqual(TEXT("强鱼自由游动不消耗体力"), StrongFish.FishStaminaDrain, 0.0);
 	return !HasAnyErrors();
 }
 

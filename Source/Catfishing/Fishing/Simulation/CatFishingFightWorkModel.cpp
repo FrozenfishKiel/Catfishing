@@ -11,6 +11,7 @@ bool FCatFishingFightWorkModel::ComputeDrain(const FCatFightWorkInput& Input, do
 		|| !FMath::IsFinite(Input.IsometricEffortMultiplier) || Input.IsometricEffortMultiplier < 0.0
 		|| !FMath::IsFinite(Input.CostPerStrengthCentimeter) || Input.CostPerStrengthCentimeter < 0.0
 		|| !FMath::IsFinite(Input.PhaseMultiplier) || Input.PhaseMultiplier < 0.0
+		|| !FMath::IsFinite(Input.BaseEffortMultiplier) || Input.BaseEffortMultiplier < 0.0
 		|| !FMath::IsFinite(Input.NormalizedLoad) || Input.NormalizedLoad < 0.0 || Input.NormalizedLoad > 1.0
 		|| !FMath::IsFinite(Input.LoadStaminaMultiplier) || Input.LoadStaminaMultiplier < 0.0)
 	{
@@ -23,6 +24,6 @@ bool FCatFishingFightWorkModel::ComputeDrain(const FCatFightWorkInput& Input, do
 	OutEffectiveEffortDistanceCentimeters = Realized + Blocked * Input.IsometricEffortMultiplier;
 	OutDrain = Input.Strength * OutEffectiveEffortDistanceCentimeters
 		* Input.CostPerStrengthCentimeter * Input.PhaseMultiplier
-		* (1.0 + Input.NormalizedLoad * Input.LoadStaminaMultiplier);
+		* (Input.BaseEffortMultiplier + Input.NormalizedLoad * Input.LoadStaminaMultiplier);
 	return FMath::IsFinite(OutDrain);
 }

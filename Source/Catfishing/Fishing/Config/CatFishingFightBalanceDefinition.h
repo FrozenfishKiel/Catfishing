@@ -55,7 +55,7 @@ public:
 		meta = (DisplayName = "猫做功体力消耗系数", ClampMin = "0.0"))
 	double CatStaminaCostPerStrengthCentimeter = -1.0;
 
-	/** 鱼每 1 点标准努力强度、每 1 cm 有效努力消耗的体力；标准努力强度取 StrengthPerKilogram。 */
+	/** 鱼每 1 点标准努力强度、每 1 cm 有效对抗努力的体力价格；再乘对抗负载，自由游动不耗体。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "鱼做功体力消耗系数", ClampMin = "0.0"))
 	double FishStaminaCostPerStrengthCentimeter = -1.0;
@@ -85,7 +85,7 @@ public:
 		meta = (DisplayName = "猫负载体力倍率", ClampMin = "0.0"))
 	double CatLoadStaminaMultiplier = 1.0;
 
-	/** 鱼基础努力体力乘以 (1 + 归一化负载 × 本参数)；被动位移本身不构成鱼的努力。 */
+	/** 鱼仅按归一化对抗负载 × 本参数结算有效努力；无自由游动基础费用，设为 0 可关闭鱼对抗耗体。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "鱼负载体力倍率", ClampMin = "0.0"))
 	double FishLoadStaminaMultiplier = 1.0;
@@ -100,7 +100,7 @@ public:
 		meta = (DisplayName = "放线体力恢复速度", ClampMin = "0.0"))
 	double SlackStaminaRegenPerSecond = -1.0;
 
-	/** 剩余鱼体力不高于该绝对值时吸附为 0。 */
+	/** 本步实际扣体后，剩余鱼体力不高于该绝对值时吸附为 0；零费用不触发。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "鱼力竭吸附阈值", ClampMin = "0.0", ClampMax = "1.0"))
 	double FishExhaustionThreshold = -1.0;

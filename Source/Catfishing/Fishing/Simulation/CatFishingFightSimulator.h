@@ -56,6 +56,7 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double CatStaminaMaximum = 0.0;
 	/** 双方体力都按 StrengthPerKilogram 这一标准努力强度与沿线有效距离结算，不再乘各自绝对力量。 */
 	double CatStaminaCostPerStrengthCentimeter = 0.002;
+	/** 鱼仅结算有对抗负载的努力，自由游动不产生基础费用。 */
 	double FishStaminaCostPerStrengthCentimeter = 0.002;
 	double IsometricEffortMultiplier = 1.0;
 	double CatMovementStaminaMultiplier = 1.0;

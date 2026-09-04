@@ -335,10 +335,12 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		Result.CatStaminaDrain = -(Capped - State.CatStamina);
 	}
 
-	if (!State.bFishExhausted && State.FishStamina > UE_DOUBLE_SMALL_NUMBER
+	if (!State.bFishExhausted && State.FishStamina > 0.0
 		&& Result.FishIntendedLineDistanceCentimeters > UE_DOUBLE_SMALL_NUMBER)
 	{
 		FCatFightWorkInput FishWork;
+		// 鱼只为对抗负载付费；自由游动、放线和没有可用猫合力的游动不产生基础耗体。
+		FishWork.BaseEffortMultiplier = 0.0;
 		FishWork.Strength = Config.StrengthPerKilogram;
 		FishWork.IntendedLineDistanceCentimeters = Result.FishIntendedLineDistanceCentimeters;
 		FishWork.ActualLineDistanceCentimeters = Result.FishActualLineDistanceCentimeters;
@@ -353,7 +355,9 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		}
 		Result.FishUncappedStaminaDrain = Result.FishStaminaDrain;
 		Result.FishStaminaDrain = FMath::Min(Result.FishStaminaDrain, State.FishStamina);
-		if (State.FishStamina - Result.FishStaminaDrain <= Config.FishExhaustionThreshold)
+		// 无负载或费用关闭时不能仅因剩余体力低于阈值而把鱼判为力竭。
+		if (Result.FishStaminaDrain > 0.0
+			&& State.FishStamina - Result.FishStaminaDrain <= Config.FishExhaustionThreshold)
 		{
 			Result.FishStaminaDrain = State.FishStamina;
 		}
@@ -426,7 +430,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		Result.Outcome = ECatFightStepOutcome::LineBroken;
 	}
 	else if (!State.bFishExhausted
-		&& State.FishStamina - Result.FishStaminaDrain <= UE_DOUBLE_SMALL_NUMBER)
+		&& State.FishStamina - Result.FishStaminaDrain <= 0.0)
 	{
 		Result.Outcome = ECatFightStepOutcome::FishExhausted;
 	}

@@ -10,6 +10,8 @@ struct CATFISHING_API FCatFightWorkInput
 	double IsometricEffortMultiplier = 1.0;
 	double CostPerStrengthCentimeter = 0.0;
 	double PhaseMultiplier = 1.0;
+	/** 无对抗负载时的基础努力系数；猫保留 1，鱼固定为 0，自由游动不扣体。 */
+	double BaseEffortMultiplier = 1.0;
 	/** 自身主动努力承受的相对负载；被动位移不生成努力。 */
 	double NormalizedLoad = 0.0;
 	double LoadStaminaMultiplier = 0.0;

@@ -49,16 +49,17 @@
 | 每点力量加速度 | AccelerationPerStrength | 5 | 猫/鱼共享的力量→绷线对抗加速度换算；不限制鱼的自由游速 |
 | 猫端驱动力响应时间 | DriveResponseSeconds | 1s | 猫端对抗加速度投影到收线/牵引响应速度的时长 |
 | 收线速度 | ReelSpeedCentimetersPerSecond | 80 cm/s | 左键收线意图速度上限 |
-| 猫/鱼做功体力消耗系数 | Cat/FishStaminaCostPerStrengthCentimeter | 各自默认 0.002 | 每点标准努力强度、每厘米有效努力的体力价格；猫鱼独立调参 |
+| 猫做功体力消耗系数 | CatStaminaCostPerStrengthCentimeter | 默认 0.002 | 每点标准努力强度、每厘米有效努力的体力价格 |
+| 鱼做功体力消耗系数 | FishStaminaCostPerStrengthCentimeter | 默认 0.002 | 每点标准努力强度、每厘米有效对抗努力的体力价格；再乘鱼对抗负载，自由游动不扣体力 |
 | 猫移动体力倍率 | CatMovementStaminaMultiplier | 默认 1 | 绷线时主动远离鱼的身体移动费用；被动位移不计 |
 | 猫收线体力倍率 | CatReelStaminaMultiplier | 默认 1 | 请求收线努力费用 |
 | 猫转杆体力倍率 | CatRodStaminaMultiplier | 默认 1 | 主位主动转矩积分费用，包含受阻努力 |
 | 猫持竿体力倍率 | CatHoldStaminaMultiplier | 默认 1 | 持续顶鱼的费用基线，只补收主动操作尚未覆盖的部分 |
 | 猫负载体力倍率 | CatLoadStaminaMultiplier | 默认 1 | 猫各项努力乘 `(1 + 自身归一化负载 × 倍率)` |
-| 鱼负载体力倍率 | FishLoadStaminaMultiplier | 默认 1 | 鱼主动沿线努力乘 `(1 + 自身归一化负载 × 倍率)` |
+| 鱼负载体力倍率 | FishLoadStaminaMultiplier | 默认 1 | 鱼有效努力费用仅乘 `自身归一化对抗负载 × 倍率`，无基础游动费用；0 完全关闭鱼对抗耗体 |
 | 僵持努力折算倍率 | IsometricEffortMultiplier | 1 | 未实现位移的意图距离计费倍率 |
 | 放线体力恢复速度 | SlackStaminaRegenPerSecond | 3/s | 右键完全放线时猫的恢复速度 |
-| 鱼力竭吸附阈值 | FishExhaustionThreshold | 0.5 | 剩余绝对体力低于该值时直接归零 |
+| 鱼力竭吸附阈值 | FishExhaustionThreshold | 0.5 | 本步产生正的鱼对抗耗体后，剩余绝对体力不高于该值才吸附归零；零耗体不触发 |
 | 低体力休息触发比例/时长倍率 | LowStaminaRestThreshold/Multiplier | 0.5 / 1.5 | 低体力鱼延长平静期 |
 | 满张力响应距离 | TensionResponseRangeCentimeters | 10 cm | 约束误差换算张力的尺度，参与牵引、转矩和体力负载结算 |
 | 逃脱松线余量 | EscapeSlackCentimeters | 100 cm | 无人持竿时超过最大线长后的逃脱余量 |
@@ -69,7 +70,7 @@
 
 `DefaultGame.ini` 只保存 `FightBalanceDefinition` 资产引用，不再保存上述数值；C++ 也不提供可偷偷生效的第二套回退。资产缺失、未勾“启用正式运行”或任一字段非法时，Fishing runtime 保持 fail-closed。
 
-上述体力倍率均允许非负有限值。僵持倍率为 1 只表示“同等努力完成或受阻时费用相同”，双方负载倍率仍可改变最终费用；0 可关闭对应动作或附加负载费用。修改资产后下一场搏斗生效。资产创建脚本只为新资产填写默认，已有合法资产保留当前调参；已有非法资产报错，不自动覆盖修复。
+上述体力倍率均允许非负有限值。僵持倍率为 1 只表示“同等意图完成或受阻时有效努力相同”，最终费用仍由各自负载与费用规则决定。猫保留基础努力费用，猫负载倍率为 0 只关闭附加负载费用；鱼没有基础游动费用，鱼负载倍率为 0 会关闭全部鱼对抗耗体。鱼对抗负载同时要求张紧鱼线、鱼沿线向外意图与可用猫合力：单猫耗尽且无助手出力时不再扣鱼体力，助手仍有效出力时可以继续形成对抗。共享工作模型的 `BaseEffortMultiplier` 对猫默认 1、对鱼固定 0，不是资产内另一个可调开关。修改资产后下一场搏斗生效；当前默认负载倍率 1 可继续使用。资产创建脚本只为新资产填写默认，已有合法资产保留当前调参；已有非法资产报错，不自动覆盖修复。
 
 ## 2. 装备/道具：`UCatEquipmentDefinition`（正式目录 `Equip_*`）
 

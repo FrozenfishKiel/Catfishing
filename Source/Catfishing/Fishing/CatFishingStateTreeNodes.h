@@ -62,7 +62,7 @@ struct CATFISHING_API FCatFishingWaitTask : public FStateTreeTaskCommonBase
 	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
 };
 
-/** 搏斗资源交换 Task 参数；具体消耗由 StateTree 资产显式提供，0 表示未裁并失败。 */
+/** 历史资源交换参数；保留序列化类型待资产引用审计，正式搏斗由 FightRunner 结算。 */
 USTRUCT()
 struct FCatFishingFightExchangeTaskInstanceData
 {
@@ -77,7 +77,7 @@ struct FCatFishingFightExchangeTaskInstanceData
 	double ParticipantStaminaCost = 0.0;
 };
 
-/** ST_FishingSession 的权威搏斗交换节点；只调用 Session 资源写口，不内置阶段转移。 */
+/** 历史搏斗交换节点；无已确认运行消费者，暂待二进制资产引用审计，不用于正式搏斗调参。 */
 USTRUCT(meta = (DisplayName = "Cat Fishing Fight Exchange", Category = "Catfishing|Fishing"))
 struct CATFISHING_API FCatFishingFightExchangeTask : public FStateTreeTaskCommonBase
 {

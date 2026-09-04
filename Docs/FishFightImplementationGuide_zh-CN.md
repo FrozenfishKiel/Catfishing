@@ -119,7 +119,7 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 
 ### 当前体力公式
 
-`FCatFishingFightWorkModel::ComputeDrain()` 计算 `Realized=min(实际完成距离, 主动意图距离)`、`Blocked=max(主动意图距离-Realized,0)`，以 `Realized + Blocked × IsometricEffortMultiplier` 得到有效努力距离。每项费用为 `标准努力强度 × 有效努力距离 × 自身消耗系数 × 阶段倍率 × 动作倍率 × (1 + 自身归一化负载 × 自身负载倍率)`；标准努力强度仍取 `StrengthPerKilogram`，不直接按鱼/猫绝对力量放大费用。这是对抗努力的玩法结算，不是完整牛顿约束反力或机械焦耳模型。
+`FCatFishingFightWorkModel::ComputeDrain()` 计算 `Realized=min(实际完成距离, 主动意图距离)`、`Blocked=max(主动意图距离-Realized,0)`，以 `Realized + Blocked × IsometricEffortMultiplier` 得到有效努力距离。共享公式为 `标准努力强度 × 有效努力距离 × 自身消耗系数 × 阶段倍率 × 动作倍率 × (BaseEffortMultiplier + 自身归一化负载 × 自身负载倍率)`；标准努力强度仍取 `StrengthPerKilogram`，不直接按鱼/猫绝对力量放大费用。共享输入 `BaseEffortMultiplier` 默认 1，猫使用该值；鱼调用时固定为 0，不提供自由游动基础耗体。这是对抗努力的玩法结算，不是完整牛顿约束反力或机械焦耳模型。
 
 猫的移动、收线、转杆分别计费。移动只统计绷线时沿线远离鱼的主动意图，服务器从 `CharacterMovement.GetCurrentAcceleration()/GetMaxAcceleration()` 还原输入强度，房主与网络玩家共用该入口；实际身体位移只取持竿者速度，不借用包含旋转的竿尖速度。收线仍使用请求收线距离，尚未引入负载导致卷线器停转的物理求解。转杆直接从已有旋转积分中的猫主动转矩取得努力，以一米参考力臂折算弧长，反向被拖/鱼额外助力不会冒充主动完成距离。
 
@@ -127,9 +127,9 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 
 锁线且鱼向外游时会产生持续保持费用基线；收线费用和主位可支付的移动、转杆费用覆盖这份基线，仅补收剩余保持费用。因此静止用力仍耗体，也不能通过微小晃杆免掉整段保持费用。主位力竭时移动/转杆不生成个人费用；接近力竭时，个人费用最多以当前体力抵扣保持基线，不能用不可支付的动作费用免掉助手的保持消耗。主位单独承担移动/转杆费用，收线与剩余保持费用按实际参与者可用力量分担；辅助位不为主位的独立动作付费。FreeSpool 在 `L_max` 内确实解除约束且本步无猫端正费用时恢复主猫体力，到最大线长重新绷紧后停止恢复。鱼力竭后关闭所有猫端正向扣费，继续允许收鱼。
 
-猫沿线负载为 `约束张力 × clamp(鱼向外力量/猫有效合力,0,1)`；转杆负载另按鱼端力矩与主位转矩容量计算。鱼的负载为 `约束张力 × max(鱼向外对齐度,0) × clamp(猫有效合力/鱼力量,0,1)`，解除约束时均归零。鱼仍按自身沿线游动意图消耗，被拖往意图反方向的位移不计主动完成量。即使僵持倍率为 1，相同意图在不同对抗负载下也会产生不同费用；完全被动拖动不会凭空增加鱼的主动努力。
+猫沿线负载为 `约束张力 × clamp(鱼向外力量/猫有效合力,0,1)`；转杆负载另按鱼端力矩与主位转矩容量计算。鱼的负载为 `约束张力 × max(鱼向外对齐度,0) × clamp(猫有效合力/鱼力量,0,1)`，解除约束时均归零。鱼自身游动不扣体力，只有自身沿线努力受到猫端约束时才按 `标准努力强度 × 有效努力距离 × 鱼消耗系数 × 阶段倍率 × 鱼归一化对抗负载 × FishLoadStaminaMultiplier` 结算。单猫体力归零且没有助手出力时，鱼对抗负载为零，不会继续靠游动耗尽；有正体力且按住拉线的助手仍可提供合力，使鱼在绷线向外对抗时耗体。被拖往意图反方向的位移不计主动完成量，完全被动拖动也不会凭空增加鱼的主动努力。
 
-猫/鱼成本、僵持倍率、四种猫动作倍率及双方负载倍率均从正式平衡资产读取；新动作/负载倍率默认 1，可分别调为非负值。`create_fishing_fight_balance_asset.py` 只对新资产写默认值，已存在资产只校验并记录当前值，非法旧资产明确拒绝而不会静默重置调参。运行证据使用 `LogCatFishing` 的 `fishing_effort_configured`、`fishing_coupled_work_sample`、`fishing_cat_stamina_applied`、`fishing_fish_stamina_sample`；客户端使用 `fishing_cat_stamina_received` 与 `fishing_fish_stamina_received` 核对复制到达。服务端按 SessionId/PlayerState/PlayerId 关联，不能仅凭单端日志判定联机验收通过。
+猫/鱼成本、僵持倍率、四种猫动作倍率及双方负载倍率均从正式平衡资产读取；动作/负载倍率默认 1，可分别调为非负值。`FishLoadStaminaMultiplier=0` 可完全关闭鱼对抗耗体；猫负载倍率为 0 只关闭附加负载费用，仍保留猫基础努力费用。僵持倍率为 1 表示同等意图完成或受阻时有效努力相同，鱼仍须有非零对抗负载才收费。`create_fishing_fight_balance_asset.py` 只对新资产写默认值，已存在资产只校验并记录当前值，非法旧资产明确拒绝而不会静默重置调参；本轮不修改正式资产数值。运行证据使用 `LogCatFishing` 的 `fishing_effort_configured`、`fishing_coupled_work_sample`、`fishing_cat_stamina_applied`、`fishing_fish_stamina_sample`；客户端使用 `fishing_cat_stamina_received` 与 `fishing_fish_stamina_received` 核对复制到达。服务端按 SessionId/PlayerState/PlayerId 关联，不能仅凭单端日志判定联机验收通过。
 
 ### 当前鱼竿旋转
 
@@ -176,7 +176,7 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 - `FCatFishingFightSimulator::Step()`：继续用同一个双体约束处理收线与鱼的位置。
 - `ACatFishingSession::SpawnExhaustedFishPickupFromAuthority()`：到达投影后在原位置生成所有玩家都可拾取的鱼。
 
-鱼体力结算后不高于平衡资产的 `FishExhaustionThreshold` 时，服务器把尾数吸附到 0 并进入 `ExhaustedReel`；该值是绝对体力阈值，不是百分比。排查时以权威日志的剩余体力与转换事件为准，不能用 HUD 四舍五入后的显示代替实际值。
+本步确实产生正的鱼对抗耗体、且扣除后剩余体力不高于平衡资产的 `FishExhaustionThreshold` 时，服务器把尾数吸附到 0 并进入 `ExhaustedReel`；该值是绝对体力阈值，不是百分比。零耗体步骤不能仅因剩余值已低于阈值就吸附归零，鱼自由游动或关闭鱼耗体系数时仍保留原有体力。排查时以权威日志的剩余体力与转换事件为准，不能用 HUD 四舍五入后的显示代替实际值。
 
 鱼体力清空的同一服务器帧保留 Encounter 当前位置，并把 `AutoHauling` 复制给所有客户端驱动侧翻。左键按住状态和输入序号跨阶段保留；主位与辅助位在 `ExhaustedReel` 新按下/松开左键仍写入原 Runner，主位右键释放也会清除放线状态。鱼随后仍由原 Runner 的线长约束逐步靠近竿尖 XY；该收尾免耗体且不再受猫剩余搏斗力量限制，不会给猫补满体力或恢复转杆力量。只有确认落在真实干地、并进入竿尖水平完成距离后才在鱼当前位置生成 Pickup；水面上的鱼不会仅因靠近竿尖就交接。确认上岸也会直接清空鱼体力并进入同一力竭生命周期。这些收尾条件是当前玩法规则，不能作为“所有结果已由物理产生”的证据。
 

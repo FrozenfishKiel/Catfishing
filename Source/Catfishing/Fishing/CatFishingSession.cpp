@@ -257,7 +257,7 @@ FCatDomainCommandResult ACatFishingSession::ResolveFightExchangeFromStateTree(co
 	FCatDomainCommandResult Result;
 	if (FightRunner && FightRunner->IsRunning())
 	{
-		// 常规搏斗（非巨鱼协作战）已经由 FightRunner 的固定步长模拟接管体力消耗，
+		// 正式搏斗已由 FightRunner 的固定步长模拟接管体力消耗；旧节点的资产引用尚待审计。
 		// StateTree 的这条交换节点在 Runner 运行期间不应该再重复扣体力，直接拒绝。
 		Result.Error = ECatDomainCommandError::InvalidPhase;
 		return Result;
@@ -1389,6 +1389,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		Config.MinimumCarrierAwaySpeedMultiplier);
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_effort_configured SessionId=%s FightBalanceId=%s Model=IndependentActiveEffort "
+			"FishDrainMode=OpposingLoadOnly FishBaseEffortMultiplier=0.000 "
 			"MovementMultiplier=%.3f ReelMultiplier=%.3f RodMultiplier=%.3f HoldMultiplier=%.3f "
 			"CatLoadMultiplier=%.3f FishLoadMultiplier=%.3f IsometricMultiplier=%.3f "
 			"CatCost=%.6f FishCost=%.6f %s"),
