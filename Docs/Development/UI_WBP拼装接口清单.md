@@ -63,7 +63,7 @@ HUD、背包、背包格子和交互提示的默认路径来自 `Source/Catfishi
 | `bInventoryEntryVisible` | 是否显示背包入口。 |
 | `bShowCatStatusDebugText` | 是否显示猫状态调试摘要；当前默认值为 false。 |
 | `bShowFishingFeedbackDebugText` | 是否显示钓鱼调试反馈；当前默认值为 false。 |
-| `bShowCrosshair` | 是否绘制 HUD 中心准星；当前默认值为 false。 |
+| `bShowCrosshair` | 是否绘制 HUD 中心准星；当前默认值为 true，与研发态摘要文本开关独立。 |
 | `Poison` | 当前毒值，只展示，不在 UI 里裁决倒地。 |
 | `FishingStrength` | 当前钓鱼力量，只展示。 |
 | `FightStamina` | 当前搏斗体力，只展示。 |
@@ -398,7 +398,7 @@ HUD、背包、背包格子和交互提示的默认路径来自 `Source/Catfishi
 
 `UCatTravelWidget` 是当前 Frontend/Online 的原生白盒界面。它在 `UCatLocalPlayerUISubsystem` 中用 `UCatTravelWidget::StaticClass()` 创建，没有走 `UCatUISettings` 的 WBP 配置。如果要把联机前端也改成 WBP 样式，需要新增配置项和对应 WBP 基类接线。
 
-`UCatInteractionWidget` 是本地准星和目标提示的原生 View，也是在 `UCatLocalPlayerUISubsystem` 中用 `StaticClass()` 创建。它不是 `WBP_CatInteractionPrompt`。当前可拼样式的交互 WBP 是靠近对象提示 `WBP_CatInteractionPrompt`。
+中心准星由 `UCatHUDWidget::NativePaint` 绘制，随 `WBP_CatHUD` 入视口，默认显示；不存在独立的 `UCatInteractionWidget` 创建入口。靠近对象提示仍由 `WBP_CatInteractionPrompt` 承担。`LogCatUI/Event=ui_hud_crosshair_visibility` 仅在首次投影或显隐变化时记录 Controller、Widget 与 Visible，表示投影已应用，不替代画面验收。
 
 ## 拼装时最容易踩的点
 
@@ -436,4 +436,3 @@ HUD、背包、背包格子和交互提示的默认路径来自 `Source/Catfishi
 - `Source/Catfishing/UI/Interaction/CatInteractionPromptWidget.h`
 - `Source/Catfishing/UI/Collection/CatCollectionWidget.h`
 - `Source/Catfishing/UI/CatTravelWidget.h`
-- `Source/Catfishing/UI/CatInteractionWidget.h`

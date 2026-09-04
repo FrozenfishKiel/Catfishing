@@ -196,11 +196,11 @@ static TAutoConsoleVariable<int32> CVarCatFishingDebug(
 	TEXT("抄网圆圈绿色=当前按 F 抄得到，红色=够不着；颜色直接来自服务器同一个判定函数。"),
 	ECVF_Default);
 
-// 三方资源/力量只在排查时需要观察，不应作为默认主界面内容常驻。
-// 因此它拥有独立 CVar，默认关闭；`cat.Fishing.Debug 0` 不会隐藏本面板，反之开启本面板也不改变世界调试模式。
+// 三方资源/力量默认显示，便于持续观察鱼、竿、猫的实际消耗。
+// 独立 CVar 保留手动关闭入口；`cat.Fishing.Debug 0` 不会隐藏本面板，开启本面板也不改变世界调试模式。
 static TAutoConsoleVariable<int32> CVarCatFishingStats(
-	TEXT("cat.Fishing.Stats"), 0,
-	TEXT("屏幕右上角钓鱼数值调试：1=显示（当前鱼种、鱼体力/力量、竿或鱼线耐久/力量、猫体力/力量）；0=关闭（默认）。")
+	TEXT("cat.Fishing.Stats"), 1,
+	TEXT("屏幕右上角钓鱼数值调试：1=显示（默认，当前鱼种、鱼体力/力量、竿或鱼线耐久/力量、猫体力/力量）；0=关闭。")
 	TEXT("本开关与 cat.Fishing.Debug 相互独立。"),
 	ECVF_Default);
 
@@ -243,6 +243,11 @@ void UCatFishingDebugSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 #if ENABLE_DRAW_DEBUG
 	FishingStatsDrawHandle = UDebugDrawService::Register(TEXT("Game"),
 		FDebugDrawDelegate::CreateUObject(this, &ThisClass::DrawFishingStats));
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_stats_overlay_registered World=%s NetMode=%d Subsystem=%s StatsEnabled=%d WorldDebugMode=%d Registered=%d"),
+		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1,
+		*GetName(), CVarCatFishingStats.GetValueOnGameThread() != 0,
+		CVarCatFishingDebug.GetValueOnGameThread(), FishingStatsDrawHandle.IsValid());
 #endif
 }
 

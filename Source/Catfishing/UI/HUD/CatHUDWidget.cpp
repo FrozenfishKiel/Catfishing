@@ -6,11 +6,23 @@
 #include "Components/Widget.h"
 #include "Engine/World.h"
 #include "GameFramework/GameStateBase.h"
+#include "GameFramework/PlayerController.h"
+#include "Logging/CatLog.h"
 #include "Rendering/DrawElementTypes.h"
 
 // HUD 渲染流程：缓存 Model 生成的只读投影，按 Designer 真实绑定控件写入天数、调试文本、钓鱼反馈、入口按钮状态和进度条，再触发蓝图扩展点。
 void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 {
+	if (!bHasLoggedCrosshairVisibility || LastHUDViewState.bShowCrosshair != ViewState.bShowCrosshair)
+	{
+		const APlayerController* Controller = GetOwningPlayer();
+		UE_LOG(LogCatUI, Log,
+			TEXT("Event=ui_hud_crosshair_visibility World=%s NetMode=%d Controller=%s LocalRole=%d Widget=%s Visible=%d Result=ViewStateApplied"),
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1,
+			*GetNameSafe(Controller), Controller ? static_cast<int32>(Controller->GetLocalRole()) : -1,
+			*GetName(), ViewState.bShowCrosshair);
+		bHasLoggedCrosshairVisibility = true;
+	}
 	LastHUDViewState = ViewState;
 	BlueprintCatStatusText = ViewState.CatStatusText;
 	BlueprintFishingFeedbackText = ViewState.FishingFeedbackText;

@@ -99,9 +99,9 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bShowFishingFeedbackDebugText = false;
 
-	/** 屏幕中心准星是否显示；默认关闭，让正式主界面只保留天数、背包和设置三个常驻信号。 */
+	/** 屏幕中心准星是否显示；默认开启，为瞄准和交互提供持续的视线中心参考。 */
 	UPROPERTY(BlueprintReadOnly)
-	bool bShowCrosshair = false;
+	bool bShowCrosshair = true;
 
 	/** 当前是否显示钓鱼阶段和浮漂反馈；无会话时 HUD 可以保持极简常驻界面。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -227,12 +227,17 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|HUD")
 	void BP_HandleHUDAction(ECatHUDAction Action);
 
-	/** 按 ViewState 绘制可选中心准星；正式主界面默认不绘制，避免压住极简 HUD。 */
+	/** 按 ViewState 绘制中心准星；默认显示，仍可由投影显式隐藏。 */
 	virtual int32 NativePaint(const FPaintArgs& Args, const FGeometry& AllottedGeometry,
 		const FSlateRect& MyCullingRect, FSlateWindowElementList& OutDrawElements, int32 LayerId,
 		const FWidgetStyle& InWidgetStyle, bool bParentEnabled) const override;
 
 private:
+	friend class FCatHUDCrosshairVisibilityTest;
+
+	/** 仅用于首次投影的显隐诊断去重；准星是否显示仍只读取 LastHUDViewState。 */
+	bool bHasLoggedCrosshairVisibility = false;
+
 	/** 统一广播 HUD 入口意图；先通知原生协调层，再给蓝图表现层处理页面或动画。 */
 	void SubmitHUDAction(ECatHUDAction Action);
 
