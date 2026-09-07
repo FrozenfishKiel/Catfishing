@@ -10,6 +10,7 @@
 #include "GameFramework/PlayerController.h"
 #include "Interaction/CatInteractionSettings.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
@@ -127,12 +128,6 @@ bool ACatCampInventoryActor::CanRestoreSnapshotFromAuthority(const FCatCampInven
 		OutFailure = FText::FromString(TEXT("营地仓库恢复不是服务器上下文或保存格数超过容量。"));
 		return false;
 	}
-	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-	if (!Settings)
-	{
-		OutFailure = FText::FromString(TEXT("装备运行目录不可用。"));
-		return false;
-	}
 	TSet<FGuid> SeenInstanceIds;
 	for (const FCatRunInventorySlot& Slot : RestoredSnapshot.InventorySlots)
 	{
@@ -147,7 +142,7 @@ bool ACatCampInventoryActor::CanRestoreSnapshotFromAuthority(const FCatCampInven
 			}
 			continue;
 		}
-		const UCatEquipmentDefinition* Definition = Settings->FindRuntimeDefinition(Slot.DefinitionId);
+		const UCatEquipmentDefinition* Definition = ResolveEquipmentDefinitionForLegacyInventory(Slot.DefinitionId);
 		if (!Slot.ItemInstanceId.IsValid() || SeenInstanceIds.Contains(Slot.ItemInstanceId) || !Definition
 			|| !Definition->IsRuntimeDefinitionReady() || Slot.Quantity <= 0
 			|| Slot.Quantity > GetInventoryStackLimit(*Definition))
@@ -198,14 +193,13 @@ int32 ACatCampInventoryActor::GetInventorySlotCapacityForView() const
 }
 
 // 入库预检流程：
-// 1. 先读取装备定义并验证 RequestId、authority、定义和数量；失败不改公共仓库格子。
+// 1. 先从库存目录读取定义并验证 RequestId、authority、定义和数量；失败不改公共仓库格子。
 // 2. 已有同 RequestId 终态时先比对版本、定义和数量签名，只有同一批货才放行合法重放。
 // 3. 首次预检要求调用方看到的仓库版本仍是当前版本，再按公共仓库容量和堆叠规则判断整批物品能否一次放完。
 ECatDomainCommandError ACatCampInventoryActor::ValidateAddItemFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const FName DefinitionId, const int32 Quantity) const
 {
-	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-	const UCatEquipmentDefinition* Definition = Settings ? Settings->FindRuntimeDefinition(DefinitionId) : nullptr;
+	const UCatEquipmentDefinition* Definition = ResolveEquipmentDefinitionForLegacyInventory(DefinitionId);
 	if (!HasAuthority() || !RequestId.IsValid() || !Definition || Quantity <= 0)
 	{
 		return ECatDomainCommandError::InvalidPayload;
@@ -265,8 +259,7 @@ FCatDomainCommandResult ACatCampInventoryActor::AddItemFromAuthority(const FGuid
 		return Result;
 	}
 
-	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-	UCatEquipmentDefinition* Definition = Settings ? Settings->FindRuntimeDefinition(DefinitionId) : nullptr;
+	const UCatEquipmentDefinition* Definition = ResolveEquipmentDefinitionForLegacyInventory(DefinitionId);
 	const ECatDomainCommandError Rejection =
 		ValidateAddItemFromAuthority(RequestId, ExpectedRevision, DefinitionId, Quantity);
 	if (Rejection != ECatDomainCommandError::None)
@@ -376,12 +369,11 @@ FCatDomainCommandResult ACatCampInventoryActor::AddItemsFromAuthority(const FGui
 	else
 	{
 		TArray<FCatRunInventorySlot> SimulatedSlots = Snapshot.InventorySlots;
-		const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
 		bool bStoredAll = true;
 		for (const FCatCampInventoryAddItemRequest& Item : NormalizedItems)
 		{
 			const UCatEquipmentDefinition* Definition =
-				Settings ? Settings->FindRuntimeDefinition(Item.DefinitionId) : nullptr;
+				ResolveEquipmentDefinitionForLegacyInventory(Item.DefinitionId);
 			if (!Definition || !AddItemQuantityToSlots(SimulatedSlots, *Definition, Item.DefinitionId, Item.Quantity))
 			{
 				bStoredAll = false;
@@ -424,9 +416,8 @@ ECatDomainCommandError ACatCampInventoryActor::ValidateWithdrawToEquipment(const
 		return ECatDomainCommandError::InvalidPayload;
 	}
 	const FCatRunInventorySlot& SourceSlot = Snapshot.InventorySlots[SourceSlotIndex];
-	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
 	const UCatEquipmentDefinition* Definition =
-		Settings ? Settings->FindRuntimeDefinition(SourceSlot.DefinitionId) : nullptr;
+		ResolveEquipmentDefinitionForLegacyInventory(SourceSlot.DefinitionId);
 	if (!Definition || !CatRunInventorySlotOperations::IsInventorySlotOccupied(SourceSlot)
 		|| !SourceSlot.ItemInstanceId.IsValid() || SourceSlot.Quantity < Quantity)
 	{
@@ -505,8 +496,7 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 		return Result;
 	}
 
-	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-	const UCatEquipmentDefinition* Definition = Settings ? Settings->FindRuntimeDefinition(SourceDefinitionId) : nullptr;
+	const UCatEquipmentDefinition* Definition = ResolveEquipmentDefinitionForLegacyInventory(SourceDefinitionId);
 	if (!Definition)
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
@@ -601,8 +591,7 @@ FCatDomainCommandResult ACatCampInventoryActor::MoveInventorySlotFromAuthority(c
 		{
 			const auto ResolveStackLimit = [this](const FName DefinitionId)
 			{
-				const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-				const UCatEquipmentDefinition* Definition = Settings ? Settings->FindRuntimeDefinition(DefinitionId) : nullptr;
+				const UCatEquipmentDefinition* Definition = ResolveEquipmentDefinitionForLegacyInventory(DefinitionId);
 				return Definition ? GetInventoryStackLimit(*Definition) : 1;
 			};
 			const CatRunInventorySlotOperations::FMoveSlotsResult MoveResult =
@@ -678,15 +667,14 @@ FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuth
 			const FName EquipmentReceivedDefinitionId = Snapshot.InventorySlots[TargetCampSlotIndex].DefinitionId;
 			const FName SourceDefinitionId =
 				SourceEquipment->Snapshot.InventorySlots[SourceEquipmentSlotIndex].DefinitionId;
-			const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
 			const UCatEquipmentDefinition* SourceDefinition =
-				Settings ? Settings->FindRuntimeDefinition(SourceDefinitionId) : nullptr;
+				ResolveEquipmentDefinitionForLegacyInventory(SourceDefinitionId);
 			const bool bEquipmentReceivesCampSlot = !EquipmentReceivedDefinitionId.IsNone()
 				&& Snapshot.InventorySlots[TargetCampSlotIndex].Quantity > 0
 				&& EquipmentReceivedDefinitionId != SourceDefinitionId;
 			const UCatEquipmentDefinition* EquipmentReceivedDefinition =
-				Settings && !EquipmentReceivedDefinitionId.IsNone()
-					? Settings->FindRuntimeDefinition(EquipmentReceivedDefinitionId) : nullptr;
+				!EquipmentReceivedDefinitionId.IsNone()
+					? ResolveEquipmentDefinitionForLegacyInventory(EquipmentReceivedDefinitionId) : nullptr;
 			if (SourceDefinitionId.IsNone() || !SourceDefinition
 				|| SourceEquipment->Snapshot.InventorySlots[SourceEquipmentSlotIndex].Quantity <= 0)
 			{
@@ -700,9 +688,8 @@ FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuth
 			{
 				const auto ResolveStackLimit = [this](const FName DefinitionId)
 				{
-					const UCatEquipmentSettings* LocalSettings = GetDefault<UCatEquipmentSettings>();
 					const UCatEquipmentDefinition* Definition =
-						LocalSettings ? LocalSettings->FindRuntimeDefinition(DefinitionId) : nullptr;
+						ResolveEquipmentDefinitionForLegacyInventory(DefinitionId);
 					return Definition ? GetInventoryStackLimit(*Definition) : 1;
 				};
 				const CatRunInventorySlotOperations::FMoveSlotsResult MoveResult =
@@ -786,12 +773,11 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentSlotFromAutho
 			const FName SourceDefinitionId = Snapshot.InventorySlots[SourceCampSlotIndex].DefinitionId;
 			const FName EquipmentTargetDefinitionId =
 				TargetEquipment->Snapshot.InventorySlots[TargetEquipmentSlotIndex].DefinitionId;
-			const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
 			const UCatEquipmentDefinition* SourceDefinition =
-				Settings ? Settings->FindRuntimeDefinition(SourceDefinitionId) : nullptr;
+				ResolveEquipmentDefinitionForLegacyInventory(SourceDefinitionId);
 			const UCatEquipmentDefinition* EquipmentTargetDefinition =
-				Settings && !EquipmentTargetDefinitionId.IsNone()
-					? Settings->FindRuntimeDefinition(EquipmentTargetDefinitionId) : nullptr;
+				!EquipmentTargetDefinitionId.IsNone()
+					? ResolveEquipmentDefinitionForLegacyInventory(EquipmentTargetDefinitionId) : nullptr;
 			if (SourceDefinitionId.IsNone() || !SourceDefinition
 				|| Snapshot.InventorySlots[SourceCampSlotIndex].Quantity <= 0)
 			{
@@ -805,9 +791,8 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentSlotFromAutho
 			{
 				const auto ResolveStackLimit = [this](const FName DefinitionId)
 				{
-					const UCatEquipmentSettings* LocalSettings = GetDefault<UCatEquipmentSettings>();
 					const UCatEquipmentDefinition* Definition =
-						LocalSettings ? LocalSettings->FindRuntimeDefinition(DefinitionId) : nullptr;
+						ResolveEquipmentDefinitionForLegacyInventory(DefinitionId);
 					return Definition ? GetInventoryStackLimit(*Definition) : 1;
 				};
 				const CatRunInventorySlotOperations::FMoveSlotsResult MoveResult =
@@ -864,6 +849,27 @@ int32 ACatCampInventoryActor::GetInventoryStackLimit(const UCatEquipmentDefiniti
 	return ConfiguredLimit > 0 ? ConfiguredLimit : MAX_int32;
 }
 
+// 旧仓库定义解析流程：正式目录已经把“物品是什么”收拢到库存定义；旧 Snapshot 还需要装备字段时，只在这里做一次类型适配和历史回退。
+const UCatEquipmentDefinition* ACatCampInventoryActor::ResolveEquipmentDefinitionForLegacyInventory(
+	const FName DefinitionId) const
+{
+	if (DefinitionId.IsNone())
+	{
+		return nullptr;
+	}
+
+	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+	const UCatInventoryItemDefinition* InventoryDefinition =
+		InventorySettings ? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
+	if (const UCatEquipmentDefinition* EquipmentDefinition = Cast<UCatEquipmentDefinition>(InventoryDefinition))
+	{
+		return EquipmentDefinition;
+	}
+
+	const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
+	return EquipmentSettings ? EquipmentSettings->FindRuntimeDefinition(DefinitionId) : nullptr;
+}
+
 // 容量预检流程：复制当前格子后交给通用写入模拟；模拟能完整放入才返回 true，正式 Snapshot 不会被 const 预检修改。
 bool ACatCampInventoryActor::CanStoreItem(const UCatEquipmentDefinition& Definition,
 	const FName DefinitionId, const int32 Quantity) const
@@ -880,11 +886,10 @@ bool ACatCampInventoryActor::CanStoreItems(const TArray<FCatCampInventoryAddItem
 		return false;
 	}
 	TArray<FCatRunInventorySlot> SimulatedSlots = Snapshot.InventorySlots;
-	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
 	for (const FCatCampInventoryAddItemRequest& Item : Items)
 	{
 		const UCatEquipmentDefinition* Definition =
-			Settings ? Settings->FindRuntimeDefinition(Item.DefinitionId) : nullptr;
+			ResolveEquipmentDefinitionForLegacyInventory(Item.DefinitionId);
 		if (!Definition || !AddItemQuantityToSlots(SimulatedSlots, *Definition, Item.DefinitionId, Item.Quantity))
 		{
 			return false;

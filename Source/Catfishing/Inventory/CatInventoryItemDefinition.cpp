@@ -42,7 +42,45 @@ bool UCatInventoryItemDefinition::HasSemanticTag(const FGameplayTag Tag, const b
 		return false;
 	}
 
-	return bExactMatch ? SemanticTags.HasTagExact(Tag) : SemanticTags.HasTag(Tag);
+	const FGameplayTagContainer& Tags = GetInventorySemanticTags();
+	return bExactMatch ? Tags.HasTagExact(Tag) : Tags.HasTag(Tag);
+}
+
+// 稳定 ID 读取流程：基础库存资产直接返回自己的目录 ID；旧装备资产通过覆盖方法返回 EquipmentDefinitionId。
+FName UCatInventoryItemDefinition::GetInventoryDefinitionId() const
+{
+	return InventoryDefinitionId;
+}
+
+// 展示名读取流程：普通库存资产直接返回库存字段；空文本由 UI 再决定是否回退到稳定 ID。
+FText UCatInventoryItemDefinition::GetInventoryDisplayName() const
+{
+	return InventoryDisplayName;
+}
+
+// 说明文本读取流程：这里只暴露静态描述，不把 Use、装备或商店状态混进库存定义。
+FText UCatInventoryItemDefinition::GetInventoryDescription() const
+{
+	return InventoryDescription;
+}
+
+// 缩略图读取流程：表现资源只从静态定义取得，避免运行格子复制贴图引用。
+TSoftObjectPtr<UTexture2D> UCatInventoryItemDefinition::GetInventoryThumbnail() const
+{
+	return InventoryThumbnail;
+}
+
+// 标签集合读取流程：返回定义自己的集合引用，调用方不得修改返回的静态配置。
+const FGameplayTagContainer& UCatInventoryItemDefinition::GetInventorySemanticTags() const
+{
+	return InventorySemanticTags;
+}
+
+// 运行目录校验流程：库存定义必须有稳定 ID 和可生成的实例类，避免商店发出无法实例化的物品。
+bool UCatInventoryItemDefinition::IsInventoryRuntimeDefinitionReady() const
+{
+	return !GetInventoryDefinitionId().IsNone()
+		&& ResolveItemInstanceClass(this) != nullptr;
 }
 
 // 实例类型读取流程：定义显式配置优先，否则使用通用物品实例，确保收货链总能生成可复制对象。
@@ -56,9 +94,9 @@ TSubclassOf<UCatInventoryItemInstance> UCatInventoryItemDefinition::GetPreferred
 	return UCatInventoryItemInstance::StaticClass();
 }
 
-// 实例类型解析流程：调用方覆盖类用于少数运行来源；普通来源按定义类默认对象读取 PreferredInstanceType。
+// 实例类型解析流程：调用方覆盖类用于少数运行来源；普通来源按定义资产读取 PreferredInstanceType。
 TSubclassOf<UCatInventoryItemInstance> UCatInventoryItemDefinition::ResolveItemInstanceClass(
-	const TSubclassOf<UCatInventoryItemDefinition> ItemDefinitionClass,
+	const UCatInventoryItemDefinition* ItemDefinition,
 	const TSubclassOf<UCatInventoryItemInstance> ItemInstanceOverrideClass)
 {
 	if (ItemInstanceOverrideClass != nullptr)
@@ -66,30 +104,31 @@ TSubclassOf<UCatInventoryItemInstance> UCatInventoryItemDefinition::ResolveItemI
 		return ItemInstanceOverrideClass;
 	}
 
-	if (ItemDefinitionClass == nullptr)
+	if (ItemDefinition == nullptr)
 	{
 		return nullptr;
 	}
 
-	const UCatInventoryItemDefinition* ItemDefinition = GetDefault<UCatInventoryItemDefinition>(ItemDefinitionClass);
-	return ItemDefinition != nullptr ? ItemDefinition->GetPreferredInstanceType() : nullptr;
+	return ItemDefinition->GetPreferredInstanceType();
 }
 
 // 堆叠上限读取流程：把异常配置收束到 1，避免容量预演和正式入库分支各自处理 0 或负数。
 int32 UCatInventoryItemDefinition::GetMaxStackCount() const
 {
-	return FMath::Max(1, MaxStackCount);
+	return FMath::Max(1, InventoryMaxStackCount);
 }
 
-// 堆叠兼容判断流程：迁移期先看稳定 ID，再看定义类；没有稳定 ID 的蓝图定义仍可按同类合并。
+// 堆叠兼容判断流程：稳定 ID 是跨资产主键；没有 ID 时只允许同一资产对象合并，避免同类 DataAsset 串格。
 bool UCatInventoryItemDefinition::CanStackWith(const UCatInventoryItemDefinition& Other) const
 {
-	if (!ItemDefinitionId.IsNone() && ItemDefinitionId == Other.ItemDefinitionId)
+	const FName ThisDefinitionId = GetInventoryDefinitionId();
+	const FName OtherDefinitionId = Other.GetInventoryDefinitionId();
+	if (!ThisDefinitionId.IsNone() && ThisDefinitionId == OtherDefinitionId)
 	{
 		return true;
 	}
 
-	return GetClass() == Other.GetClass();
+	return this == &Other;
 }
 
 // 网络支持声明：定义可被实例引用并在必要时作为子对象参与复制，但业务上仍只应保存静态配置。
@@ -98,16 +137,15 @@ bool UCatInventoryItemDefinition::IsSupportedForNetworking() const
 	return true;
 }
 
-// 蓝图片段读取流程：只访问定义类默认对象，不创建运行实例，不写库存组件。
+// 蓝图片段读取流程：只访问传入定义资产，不创建运行实例，不写库存组件。
 const UCatInventoryItemFragment* UCatInventoryBlueprintLibrary::FindFragmentByClass(
-	const TSubclassOf<UCatInventoryItemDefinition> ItemDefinitionClass,
+	const UCatInventoryItemDefinition* ItemDefinition,
 	const TSubclassOf<UCatInventoryItemFragment> FragmentClass)
 {
-	if (ItemDefinitionClass == nullptr || FragmentClass == nullptr)
+	if (ItemDefinition == nullptr || FragmentClass == nullptr)
 	{
 		return nullptr;
 	}
 
-	const UCatInventoryItemDefinition* ItemDefinition = GetDefault<UCatInventoryItemDefinition>(ItemDefinitionClass);
-	return ItemDefinition != nullptr ? ItemDefinition->FindFragmentByClass(FragmentClass) : nullptr;
+	return ItemDefinition->FindFragmentByClass(FragmentClass);
 }

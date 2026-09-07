@@ -18,9 +18,9 @@ struct FCatInventoryDefinitionEntry
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inventory")
 	int32 Count = 0;
 
-	/** 要生成的物品定义类；库存组件会按定义解析默认实例类型。 */
+	/** 要生成的物品定义资产；库存组件会按定义解析默认实例类型。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inventory")
-	TSubclassOf<UCatInventoryItemDefinition> ItemDefinitionClass = nullptr;
+	TObjectPtr<UCatInventoryItemDefinition> ItemDefinition = nullptr;
 
 	/** 可选的实例类覆盖；特殊来源需要指定运行实例子类时使用，普通来源留空。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Inventory")

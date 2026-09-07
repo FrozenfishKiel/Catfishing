@@ -125,8 +125,8 @@ public:
 	/** 由库存接口暴露自身；统一收货入口据此发现组件。 */
 	virtual UCatInventoryComponent* GetInventoryComponent() override;
 
-	/** 按定义类添加物品；返回第一份被接收的新实例或已有堆叠实例，InOutCount 会变成剩余未接收数量。 */
-	UCatInventoryItemInstance* AddEntry(TSubclassOf<UCatInventoryItemDefinition> ItemDefinitionClass,
+	/** 按定义资产添加物品；返回第一份被接收的新实例或已有堆叠实例，InOutCount 会变成剩余未接收数量。 */
+	UCatInventoryItemInstance* AddEntry(UCatInventoryItemDefinition* ItemDefinition,
 		int32& InOutCount, bool& bOutFullyAdded,
 		TSubclassOf<UCatInventoryItemInstance> ItemInstanceClass = nullptr);
 
@@ -154,9 +154,9 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
 	bool AddItemInstance(UCatInventoryItemInstance* ItemInstance, int32 Count);
 
-	/** 服务器按定义正式生成并入库；调用前建议用批次预检避免部分写入。 */
+	/** 服务器按定义资产正式生成并入库；调用前建议用批次预检避免部分写入。 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
-	bool AddItemDefinition(TSubclassOf<UCatInventoryItemDefinition> ItemDefinitionClass, int32 Count,
+	bool AddItemDefinition(UCatInventoryItemDefinition* ItemDefinition, int32 Count,
 		TSubclassOf<UCatInventoryItemInstance> ItemInstanceClass = nullptr);
 
 	/** 整批收货必须先做容量预演；失败时不触碰正式库存，避免半批成功。 */
@@ -261,9 +261,9 @@ protected:
 		int32 StackCount = 0;
 	};
 
-	/** 解析定义和实例类型并创建真正入库的物品实例；失败时不修改任何格子。 */
+	/** 解析定义资产和实例类型并创建真正入库的物品实例；失败时不修改任何格子。 */
 	UCatInventoryItemInstance* CreateInventoryItemInstance(
-		TSubclassOf<UCatInventoryItemDefinition> ItemDefinitionClass,
+		UCatInventoryItemDefinition* ItemDefinition,
 		TSubclassOf<UCatInventoryItemInstance> ItemInstanceClass = nullptr);
 
 	/** 在模拟格子数组里尝试放入指定数量的同类定义；成功时扣减 InOutRemainingCount。 */

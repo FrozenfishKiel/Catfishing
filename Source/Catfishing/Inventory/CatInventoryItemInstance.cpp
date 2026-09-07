@@ -9,13 +9,18 @@
 UCatInventoryItemInstance::UCatInventoryItemInstance(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer)
 {
+	if (!HasAnyFlags(RF_ClassDefaultObject))
+	{
+		ItemInstanceId = FGuid::NewGuid();
+	}
 }
 
-// 复制声明流程：定义类决定客户端如何读静态配置，运行宿主用于调试和后续下游适配，不复制任何 GAS handle。
+// 复制声明流程：实例 ID 和定义资产决定客户端如何还原库存格，运行宿主用于调试和后续下游适配，不复制任何 GAS handle。
 void UCatInventoryItemInstance::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	DOREPLIFETIME(ThisClass, ItemDefinitionClass);
+	DOREPLIFETIME(ThisClass, ItemInstanceId);
+	DOREPLIFETIME(ThisClass, ItemDefinition);
 	DOREPLIFETIME(ThisClass, RuntimeOwnerActor);
 }
 
@@ -26,39 +31,45 @@ bool UCatInventoryItemInstance::IsSupportedForNetworking() const
 }
 
 // 定义绑定后才允许片段初始化实例；这样运行状态来源稳定，避免实例自己猜配置。
-void UCatInventoryItemInstance::SetItemDefinitionClass(
-	const TSubclassOf<UCatInventoryItemDefinition> InDefinitionClass)
+void UCatInventoryItemInstance::SetItemDefinition(UCatInventoryItemDefinition* InDefinition)
 {
-	ItemDefinitionClass = InDefinitionClass;
+	ItemDefinition = InDefinition;
 
-	const UCatInventoryItemDefinition* ItemDefinition = GetItemDefinition();
-	if (ItemDefinition == nullptr)
+	const UCatInventoryItemDefinition* CurrentDefinition = GetItemDefinition();
+	if (CurrentDefinition == nullptr)
 	{
 		return;
 	}
 
-	for (const UCatInventoryItemFragment* Fragment : ItemDefinition->Fragments)
+	for (const UCatInventoryItemFragment* Fragment : CurrentDefinition->Fragments)
 	{
 		if (Fragment != nullptr)
 		{
 			Fragment->OnInstanceCreated(this);
 		}
 	}
+	HandleItemDefinitionAssigned();
 }
 
-// 静态定义类是实例身份来源；复制这个类引用，避免从显示名或标签反推物品。
-TSubclassOf<UCatInventoryItemDefinition> UCatInventoryItemInstance::GetItemDefinitionClass() const
+// 静态定义资产是实例身份来源；复制这个资产引用，避免从显示名或标签反推物品。
+UCatInventoryItemDefinition* UCatInventoryItemInstance::GetItemDefinition() const
 {
-	return ItemDefinitionClass;
+	return ItemDefinition;
 }
 
-// 定义读取流程：通过类默认对象读取静态配置，避免把定义对象复制成另一份可变状态。
-const UCatInventoryItemDefinition* UCatInventoryItemInstance::GetItemDefinition() const
+// 稳定定义 ID 读取流程：实例自己不缓存第二份 ID，避免定义资产改口径时出现双事实。
+FName UCatInventoryItemInstance::GetItemDefinitionId() const
 {
-	return ItemDefinitionClass != nullptr ? GetDefault<UCatInventoryItemDefinition>(ItemDefinitionClass) : nullptr;
+	return ItemDefinition != nullptr ? ItemDefinition->GetInventoryDefinitionId() : NAME_None;
 }
 
-// 宿主设置流程：跨库存移动只更新运行归属，不改变定义类、数量或物品自身状态。
+// 实例 ID 读取流程：返回服务器创建时冻结的 ID；无效 ID 表示实例还没有进入正式库存链。
+FGuid UCatInventoryItemInstance::GetItemInstanceId() const
+{
+	return ItemInstanceId;
+}
+
+// 宿主设置流程：跨库存移动只更新运行归属，不改变定义资产、数量或物品自身状态。
 void UCatInventoryItemInstance::SetRuntimeOwnerActor(AActor* InRuntimeOwnerActor)
 {
 	RuntimeOwnerActor = InRuntimeOwnerActor;
@@ -93,21 +104,26 @@ bool UCatInventoryItemInstance::TryUseFromInventory(FCatInventoryEntry& Inventor
 	return false;
 }
 
+// 定义绑定扩展流程：基础库存实例没有额外状态要派生；子类可以读取当前定义补齐自己的运行字段。
+void UCatInventoryItemInstance::HandleItemDefinitionAssigned()
+{
+}
+
 // 消耗品预检流程：读取定义上的纯库存消耗片段，并确认当前格子数量足够本次扣减。
 bool UCatInventoryConsumableItemInstance::CanUseFromInventory(const FCatInventoryEntry& InventoryEntry,
 	APawn* UserPawn) const
 {
 	(void)UserPawn;
 
-	const UCatInventoryItemDefinition* ItemDefinition = GetItemDefinition();
-	if (ItemDefinition == nullptr)
+	const UCatInventoryItemDefinition* CurrentDefinition = GetItemDefinition();
+	if (CurrentDefinition == nullptr)
 	{
 		return false;
 	}
 
 	const UCatInventoryConsumableFragment* ConsumableFragment =
 		Cast<UCatInventoryConsumableFragment>(
-			ItemDefinition->FindFragmentByClass(UCatInventoryConsumableFragment::StaticClass()));
+			CurrentDefinition->FindFragmentByClass(UCatInventoryConsumableFragment::StaticClass()));
 	return ConsumableFragment != nullptr
 		&& ConsumableFragment->HasUsableInventoryUse()
 		&& InventoryEntry.StackCount >= ConsumableFragment->GetConsumeCount();
@@ -123,11 +139,11 @@ bool UCatInventoryConsumableItemInstance::TryUseFromInventory(FCatInventoryEntry
 		return false;
 	}
 
-	const UCatInventoryItemDefinition* ItemDefinition = GetItemDefinition();
+	const UCatInventoryItemDefinition* CurrentDefinition = GetItemDefinition();
 	const UCatInventoryConsumableFragment* ConsumableFragment =
-		ItemDefinition != nullptr
+		CurrentDefinition != nullptr
 			? Cast<UCatInventoryConsumableFragment>(
-				ItemDefinition->FindFragmentByClass(UCatInventoryConsumableFragment::StaticClass()))
+				CurrentDefinition->FindFragmentByClass(UCatInventoryConsumableFragment::StaticClass()))
 			: nullptr;
 	if (ConsumableFragment == nullptr)
 	{

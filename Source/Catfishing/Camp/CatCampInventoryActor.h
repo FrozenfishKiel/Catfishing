@@ -147,6 +147,9 @@ private:
 	/** 读取定义在公共仓库单格中的最大堆叠数；未显式声明时复用项目数量型默认堆叠上限。 */
 	int32 GetInventoryStackLimit(const UCatEquipmentDefinition& Definition) const;
 
+	/** 解析旧公共仓库格需要的装备定义；优先走正式库存目录，迁移期才回退旧装备目录。 */
+	const UCatEquipmentDefinition* ResolveEquipmentDefinitionForLegacyInventory(FName DefinitionId) const;
+
 	/** 只读判断指定数量能否完整放进公共仓库；不会为了预检扩容或写入空格。 */
 	bool CanStoreItem(const UCatEquipmentDefinition& Definition, FName DefinitionId, int32 Quantity) const;
 

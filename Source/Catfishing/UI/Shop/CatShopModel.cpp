@@ -1,10 +1,10 @@
 #include "UI/Shop/CatShopModel.h"
 
 #include "Engine/World.h"
-#include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
+#include "Inventory/CatInventoryItemDefinition.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Logging/CatLog.h"
 #include "ShopEconomy/CatShopInventoryComponent.h"
 
@@ -303,16 +303,16 @@ void UCatShopModel::HandleShopInventoryIdentityChanged()
 }
 
 // 商品投影流程：
-// 1. 把 Catalog 展示字段和装备定义展示字段合成中文展示行；商店专属图优先，未配置时回退到定义的通用缩略图。
+// 1. 把 Catalog 展示字段和库存定义展示字段合成中文展示行；商店专属图优先，未配置时回退到定义的通用缩略图。
 // 2. 使用公开货架库存读取有限库存剩余数，并用当前团队公款推导单品是否买得起；加购不受单品余额影响。
 // 3. 这些结果只影响 UI 展示和明显无效点击；真正扣款、数量和公共仓库发货仍在服务器 ShopEconomy/OrderCoordinator。
 FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry,
 	const FCatShopPublicEconomySnapshot& Economy, const bool bEconomyAvailable)
 {
 	const UCatShopInventoryComponent* ShopInventory = BoundShopInventory.Get();
-	const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
-	const UCatEquipmentDefinition* Definition =
-		EquipmentSettings ? EquipmentSettings->FindRuntimeDefinition(Entry.DefinitionId) : nullptr;
+	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+	const UCatInventoryItemDefinition* Definition =
+		InventorySettings ? InventorySettings->FindRuntimeDefinition(Entry.DefinitionId) : nullptr;
 	const FCatShopStockSnapshot* Stock = bEconomyAvailable && ShopInventory
 		? FindPublicStockSnapshot(Economy, ShopInventory->GetShopInventoryId(), Entry.EntryId) : nullptr;
 	FCatShopEntryView View;
@@ -333,7 +333,7 @@ FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry
 	View.CartCount = CartCountsByEntryId.FindRef(Entry.EntryId);
 	View.IconOverride = !Entry.IconOverride.IsNull()
 		? Entry.IconOverride
-		: (Definition ? Definition->Thumbnail : TSoftObjectPtr<UTexture2D>());
+		: (Definition ? Definition->GetInventoryThumbnail() : TSoftObjectPtr<UTexture2D>());
 	if (View.IconOverride.IsNull())
 	{
 		if (!ReportedMissingIconEntryIds.Contains(Entry.EntryId))
@@ -350,12 +350,12 @@ FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry
 	}
 	View.DisplayNameText = !Entry.DisplayNameOverride.IsEmpty()
 		? Entry.DisplayNameOverride
-		: (Definition && !Definition->DisplayName.IsEmpty()
-			? Definition->DisplayName
+		: (Definition && !Definition->GetInventoryDisplayName().IsEmpty()
+			? Definition->GetInventoryDisplayName()
 			: FText::FromName(Entry.DefinitionId.IsNone() ? Entry.EntryId : Entry.DefinitionId));
 	View.DescriptionText = !Entry.DescriptionOverride.IsEmpty()
 		? Entry.DescriptionOverride
-		: (Definition ? Definition->Description : FText());
+		: (Definition ? Definition->GetInventoryDescription() : FText());
 	const FString StockText = !View.bStockAvailable
 		? FString(TEXT("库存：未同步"))
 		: View.bUnlimitedStock

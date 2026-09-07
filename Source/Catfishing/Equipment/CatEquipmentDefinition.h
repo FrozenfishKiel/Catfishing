@@ -1,10 +1,10 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Engine/DataAsset.h"
 #include "Environment/CatChumFieldTypes.h"
 #include "Environment/CatWaterTypes.h"
 #include "Equipment/CatEquipmentTypes.h"
+#include "Inventory/CatInventoryItemDefinition.h"
 #include "CatEquipmentDefinition.generated.h"
 
 class AActor;
@@ -12,11 +12,32 @@ class UTexture2D;
 
 /** 一条功能型装备/道具定义；字段只表达玩法用途，不含等级、战力、随机词条或强制升级。 */
 UCLASS(BlueprintType)
-class CATFISHING_API UCatEquipmentDefinition : public UPrimaryDataAsset
+class CATFISHING_API UCatEquipmentDefinition : public UCatInventoryItemDefinition
 {
 	GENERATED_BODY()
 
 public:
+	/** 库存目录读取装备资产时使用 EquipmentDefinitionId；这样商店和背包不再需要知道 EquipmentSettings 的字段名。 */
+	virtual FName GetInventoryDefinitionId() const override;
+
+	/** 库存表现读取装备资产自己的显示名；避免迁移期维护第二份 InventoryDisplayName。 */
+	virtual FText GetInventoryDisplayName() const override;
+
+	/** 库存详情读取装备资产自己的说明；钓鱼参数仍留给装备/钓鱼系统解释。 */
+	virtual FText GetInventoryDescription() const override;
+
+	/** 库存格读取装备资产自己的缩略图；运行实例和格子不保存表现资源。 */
+	virtual TSoftObjectPtr<UTexture2D> GetInventoryThumbnail() const override;
+
+	/** 装备资产进入库存运行目录仍沿用原运行 gate；失败时库存、商店和钓鱼都应拒绝使用。 */
+	virtual bool IsInventoryRuntimeDefinitionReady() const override;
+
+	/** 装备资产默认生成装备适配实例；鱼竿耐久等专属状态不进入通用库存格。 */
+	virtual TSubclassOf<UCatInventoryItemInstance> GetPreferredInstanceType() const override;
+
+	/** 装备资产的堆叠上限沿用旧库存口径；数量型走项目配置，工具和装备保持一格一件。 */
+	virtual int32 GetMaxStackCount() const override;
+
 	/** 校验这条定义能否进入运行目录；服务器目录读取它做 fail-closed，失败会阻止装配、Use 裁决和消耗事务。 */
 	bool IsRuntimeDefinitionReady() const;
 

@@ -228,10 +228,10 @@ void UCatInventoryComponent::InitializeOrRefreshInventorySlots()
 
 // 实例创建流程：解析最终实例类、以库存拥有者作为 Outer 创建，再绑定定义和运行宿主。
 UCatInventoryItemInstance* UCatInventoryComponent::CreateInventoryItemInstance(
-	const TSubclassOf<UCatInventoryItemDefinition> ItemDefinitionClass,
+	UCatInventoryItemDefinition* ItemDefinition,
 	const TSubclassOf<UCatInventoryItemInstance> ItemInstanceClass)
 {
-	if (ItemDefinitionClass == nullptr)
+	if (ItemDefinition == nullptr)
 	{
 		return nullptr;
 	}
@@ -243,7 +243,7 @@ UCatInventoryItemInstance* UCatInventoryComponent::CreateInventoryItemInstance(
 	}
 
 	const TSubclassOf<UCatInventoryItemInstance> ResolvedItemClass =
-		UCatInventoryItemDefinition::ResolveItemInstanceClass(ItemDefinitionClass, ItemInstanceClass);
+		UCatInventoryItemDefinition::ResolveItemInstanceClass(ItemDefinition, ItemInstanceClass);
 	if (ResolvedItemClass == nullptr)
 	{
 		return nullptr;
@@ -256,7 +256,7 @@ UCatInventoryItemInstance* UCatInventoryComponent::CreateInventoryItemInstance(
 		return nullptr;
 	}
 
-	NewInstance->SetItemDefinitionClass(ItemDefinitionClass);
+	NewInstance->SetItemDefinition(ItemDefinition);
 	NewInstance->SetRuntimeOwnerActor(OwningActor);
 	return NewInstance;
 }
@@ -294,26 +294,25 @@ void UCatInventoryComponent::SyncInventoryItemRuntimeOwner(UCatInventoryItemInst
 
 // 按定义入库流程：先填充同类可堆叠格，再为剩余数量创建新实例和新堆栈。
 UCatInventoryItemInstance* UCatInventoryComponent::AddEntry(
-	const TSubclassOf<UCatInventoryItemDefinition> ItemDefinitionClass,
+	UCatInventoryItemDefinition* ItemDefinition,
 	int32& InOutCount,
 	bool& bOutFullyAdded,
 	const TSubclassOf<UCatInventoryItemInstance> ItemInstanceClass)
 {
 	bOutFullyAdded = false;
-	if (ItemDefinitionClass == nullptr || InOutCount <= 0 || GetOwner() == nullptr || !GetOwner()->HasAuthority())
+	if (ItemDefinition == nullptr || InOutCount <= 0 || GetOwner() == nullptr || !GetOwner()->HasAuthority())
 	{
 		return nullptr;
 	}
 
-	const UCatInventoryItemDefinition* TargetDefinition =
-		GetDefault<UCatInventoryItemDefinition>(ItemDefinitionClass);
-	if (TargetDefinition == nullptr)
+	if (!ItemDefinition->IsInventoryRuntimeDefinitionReady()
+		|| UCatInventoryItemDefinition::ResolveItemInstanceClass(ItemDefinition, ItemInstanceClass) == nullptr)
 	{
 		return nullptr;
 	}
 
 	UCatInventoryItemInstance* FirstAcceptedInstance = nullptr;
-	const int32 MaxStackCount = GetMaxStackCountForDefinition(*TargetDefinition);
+	const int32 MaxStackCount = GetMaxStackCountForDefinition(*ItemDefinition);
 
 	if (MaxStackCount > 1)
 	{
@@ -326,7 +325,7 @@ UCatInventoryItemInstance* UCatInventoryComponent::AddEntry(
 
 			const UCatInventoryItemDefinition* ExistingDefinition =
 				Entry.Instance != nullptr ? Entry.Instance->GetItemDefinition() : nullptr;
-			if (ExistingDefinition == nullptr || !ExistingDefinition->CanStackWith(*TargetDefinition))
+			if (ExistingDefinition == nullptr || !ExistingDefinition->CanStackWith(*ItemDefinition))
 			{
 				continue;
 			}
@@ -356,7 +355,7 @@ UCatInventoryItemInstance* UCatInventoryComponent::AddEntry(
 			break;
 		}
 
-		UCatInventoryItemInstance* NewInstance = CreateInventoryItemInstance(ItemDefinitionClass, ItemInstanceClass);
+		UCatInventoryItemInstance* NewInstance = CreateInventoryItemInstance(ItemDefinition, ItemInstanceClass);
 		if (NewInstance == nullptr)
 		{
 			break;
@@ -458,7 +457,7 @@ void UCatInventoryComponent::AddEntry(UCatInventoryItemInstance* ItemInstance, i
 		else
 		{
 			TargetInstance = CreateInventoryItemInstance(
-				ItemInstance->GetItemDefinitionClass(),
+				ItemInstance->GetItemDefinition(),
 				ItemInstance->GetClass());
 		}
 
@@ -580,13 +579,13 @@ bool UCatInventoryComponent::AddItemInstance(UCatInventoryItemInstance* ItemInst
 
 // 按定义公开添加入口保持服务器事务语义；返回 false 时调用方应把整次发货当失败处理。
 bool UCatInventoryComponent::AddItemDefinition(
-	const TSubclassOf<UCatInventoryItemDefinition> ItemDefinitionClass,
+	UCatInventoryItemDefinition* ItemDefinition,
 	const int32 Count,
 	const TSubclassOf<UCatInventoryItemInstance> ItemInstanceClass)
 {
 	int32 RemainingCount = Count;
 	bool bAdded = false;
-	AddEntry(ItemDefinitionClass, RemainingCount, bAdded, ItemInstanceClass);
+	AddEntry(ItemDefinition, RemainingCount, bAdded, ItemInstanceClass);
 	return bAdded && RemainingCount == 0;
 }
 
@@ -632,7 +631,7 @@ bool UCatInventoryComponent::TryAddInventoryBatch(const FCatInventoryReceiveBatc
 	{
 		int32 RemainingCount = DefinitionEntry.Count;
 		bool bAdded = false;
-		AddEntry(DefinitionEntry.ItemDefinitionClass, RemainingCount, bAdded, DefinitionEntry.ItemInstanceClass);
+		AddEntry(DefinitionEntry.ItemDefinition, RemainingCount, bAdded, DefinitionEntry.ItemInstanceClass);
 		if (!bAdded || RemainingCount != 0)
 		{
 			UE_LOG(LogCatInventory, Error, TEXT("Event=inventory_batch_apply_failed Owner=%s Source=Definition Count=%d Remaining=%d"),
@@ -1168,20 +1167,19 @@ bool UCatInventoryComponent::SimulateAddInventoryBatch(const FCatInventoryReceiv
 
 	for (const FCatInventoryDefinitionEntry& DefinitionEntry : ReceiveBatch.DefinitionEntries)
 	{
-		if (DefinitionEntry.Count <= 0 || DefinitionEntry.ItemDefinitionClass == nullptr)
+		if (DefinitionEntry.Count <= 0 || DefinitionEntry.ItemDefinition == nullptr)
 		{
 			return false;
 		}
 
 		if (UCatInventoryItemDefinition::ResolveItemInstanceClass(
-				DefinitionEntry.ItemDefinitionClass,
+				DefinitionEntry.ItemDefinition,
 				DefinitionEntry.ItemInstanceClass) == nullptr)
 		{
 			return false;
 		}
 
-		const UCatInventoryItemDefinition* ItemDefinition =
-			GetDefault<UCatInventoryItemDefinition>(DefinitionEntry.ItemDefinitionClass);
+		const UCatInventoryItemDefinition* ItemDefinition = DefinitionEntry.ItemDefinition;
 		int32 RemainingCount = DefinitionEntry.Count;
 		if (ItemDefinition == nullptr
 			|| !SimulateAddItemDefinition(SimulatedSlots, *ItemDefinition, RemainingCount))

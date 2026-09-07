@@ -5,7 +5,7 @@
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "CatInventorySettings.generated.h"
 
-/** 库存目录中的一条稳定 ID 到物品定义类映射；迁移期用它把旧 DefinitionId 引到新 InventoryDefinition。 */
+/** 库存目录中的一条稳定 ID 到物品定义资产映射；迁移期可直接挂现有 Equip_* 资产。 */
 USTRUCT(BlueprintType)
 struct FCatInventoryCatalogDefinition
 {
@@ -15,11 +15,11 @@ struct FCatInventoryCatalogDefinition
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Inventory")
 	FName DefinitionId = NAME_None;
 
-	/** 这条稳定 ID 对应的新库存物品定义类；类默认对象保存展示、堆叠和片段语义。 */
+	/** 这条稳定 ID 对应的库存物品定义资产；资产保存展示、堆叠和片段语义。 */
 	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Inventory")
-	TSubclassOf<UCatInventoryItemDefinition> ItemDefinitionClass = nullptr;
+	TSoftObjectPtr<UCatInventoryItemDefinition> ItemDefinition;
 
-	/** 判断这条映射是否能进入运行目录；定义类必须存在，且定义默认对象的稳定 ID 必须与目录 ID 一致。 */
+	/** 目录项必须能加载到运行可用定义，且定义自己的稳定 ID 必须与目录 ID 一致。 */
 	bool IsRuntimeReady() const;
 };
 
@@ -30,14 +30,11 @@ class CATFISHING_API UCatInventorySettings : public UDeveloperSettings
 	GENERATED_BODY()
 
 public:
-	/** 按稳定 ID 查找唯一可运行的库存定义类；重复、缺失或定义配置不一致时返回空。 */
-	TSubclassOf<UCatInventoryItemDefinition> FindRuntimeDefinitionClass(FName DefinitionId) const;
-
-	/** 按稳定 ID 读取库存定义类默认对象；调用方只能把返回值当静态配置。 */
-	const UCatInventoryItemDefinition* FindRuntimeDefinition(FName DefinitionId) const;
+	/** 按稳定 ID 查找唯一可运行的库存定义资产；重复、缺失或定义配置不一致时返回空。 */
+	UCatInventoryItemDefinition* FindRuntimeDefinition(FName DefinitionId) const;
 
 public:
-	/** 正式库存物品目录；迁移期可与旧 EquipmentSettings 并存，最终应成为非鱼随身物品的唯一目录。 */
+	/** 正式库存物品目录；迁移期可与旧 EquipmentSettings 并存，商店、营地和随身物品应逐步改读它。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Catalog")
 	TArray<FCatInventoryCatalogDefinition> Definitions;
 };

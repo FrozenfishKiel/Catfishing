@@ -1,5 +1,60 @@
 #include "Equipment/CatEquipmentDefinition.h"
 
+#include "Equipment/CatEquipmentInventoryItemInstance.h"
+#include "Equipment/CatEquipmentSettings.h"
+
+// 库存 ID 读取流程：装备资产已经用 EquipmentDefinitionId 作为跨商店、背包和钓鱼的稳定钥匙，库存目录直接复用它。
+FName UCatEquipmentDefinition::GetInventoryDefinitionId() const
+{
+	return EquipmentDefinitionId;
+}
+
+// 库存展示名读取流程：装备资产自己的 DisplayName 是当前唯一策划维护文本，不在库存层复制第二份。
+FText UCatEquipmentDefinition::GetInventoryDisplayName() const
+{
+	return DisplayName;
+}
+
+// 库存说明读取流程：装备资产自己的 Description 继续作为详情文本来源，玩法字段仍由下游系统读取。
+FText UCatEquipmentDefinition::GetInventoryDescription() const
+{
+	return Description;
+}
+
+// 库存缩略图读取流程：装备资产自己的 Thumbnail 是当前 UI 资源来源，库存格只保存实例和数量。
+TSoftObjectPtr<UTexture2D> UCatEquipmentDefinition::GetInventoryThumbnail() const
+{
+	return Thumbnail;
+}
+
+// 库存运行校验流程：装备资产先通过原装备 gate，再确认能生成装备适配实例，避免商店把半配置物品发进背包。
+bool UCatEquipmentDefinition::IsInventoryRuntimeDefinitionReady() const
+{
+	return IsRuntimeDefinitionReady() && GetPreferredInstanceType() != nullptr;
+}
+
+// 装备库存实例类型读取流程：装备资产统一生成适配实例，只有适配实例保存鱼竿耐久等装备专属运行状态。
+TSubclassOf<UCatInventoryItemInstance> UCatEquipmentDefinition::GetPreferredInstanceType() const
+{
+	return UCatEquipmentInventoryItemInstance::StaticClass();
+}
+
+// 装备堆叠上限读取流程：显式 MaxStackSize 优先；非数量物一格一件，数量物未显式配置时使用项目默认堆叠容量。
+int32 UCatEquipmentDefinition::GetMaxStackCount() const
+{
+	if (MaxStackSize > 0)
+	{
+		return FMath::Max(1, MaxStackSize);
+	}
+	if (!bRunConsumable)
+	{
+		return 1;
+	}
+	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+	const int32 ConfiguredLimit = Settings ? Settings->InventoryQuantityStackCapacity : 0;
+	return ConfiguredLimit > 0 ? ConfiguredLimit : MAX_int32;
+}
+
 // 定义检查流程：验证总 gate、身份、类别、功能路线和 Use 库存影响策略；装配类要求槽位，部署型要求 Actor 类，Rod 还要具备耐久和三组锚点，Chum 还必须给出服务器读取的三轴增量。
 bool UCatEquipmentDefinition::IsRuntimeDefinitionReady() const
 {
