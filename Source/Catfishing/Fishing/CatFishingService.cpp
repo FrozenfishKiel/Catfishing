@@ -123,8 +123,29 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		return Result;
 	}
 	BeginCastInProgress.Add(Key);
-	const auto Finish = [this, &Key](const FCatBeginCastResult& Candidate)
+	const TCHAR* DependencyStage = TEXT("ActorDependencies");
+	ECatDomainCommandError EquipmentError = ECatDomainCommandError::None;
+	const auto Finish = [this, &Key, &Command, FisherController, &DependencyStage, &EquipmentError](const FCatBeginCastResult& Candidate)
 	{
+		if (Candidate.Command.Error == ECatFishingCommandError::DependencyUnavailable)
+		{
+			const ACatCharacter* Character = FisherController ? Cast<ACatCharacter>(FisherController->GetPawn()) : nullptr;
+			const UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
+			const FCatEquipmentLoadoutSnapshot Loadout = Equipment ? Equipment->GetSnapshot() : FCatEquipmentLoadoutSnapshot{};
+			int32 BaitQuantity = 0;
+			for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
+			{
+				if (Slot.DefinitionId == Loadout.BaitDefinitionId) BaitQuantity += Slot.Quantity;
+			}
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=begin_cast_dependency_rejected Request=%s Stage=%s EquipmentError=%s World=%s RodActorId=%s RodDefinition=%s RodItemInstanceId=%s BaitDefinition=%s BaitItemInstanceId=%s BaitQuantity=%d FloatDefinition=%s FloatItemInstanceId=%s EquipmentRevision=%lld %s"),
+				*Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), DependencyStage,
+				*UEnum::GetValueAsString(EquipmentError), *GetNameSafe(GetWorld()), *Command.RodActorId.ToString(),
+				*Loadout.RodDefinitionId.ToString(), *Loadout.RodItemInstanceId.ToString(),
+				*Loadout.BaitDefinitionId.ToString(), *Loadout.BaitItemInstanceId.ToString(), BaitQuantity,
+				*Loadout.FloatDefinitionId.ToString(), *Loadout.FloatItemInstanceId.ToString(), Loadout.Revision,
+				*CatLogContext::BuildControllerFields(FisherController));
+		}
 		BeginCastInProgress.Remove(Key);
 		BeginCastTerminalCache.FindOrAdd(Key, Candidate);
 		return BeginCastTerminalCache.FindChecked(Key);
@@ -176,6 +197,7 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		Result.Command.Error = ECatFishingCommandError::InvalidPayload;
 		return Finish(Result);
 	}
+	DependencyStage = TEXT("EquipmentDefinitions");
 	const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
 	const UCatEquipmentDefinition* RodDefinition = EquipmentSettings->FindRuntimeDefinition(Loadout.RodDefinitionId);
 	const UCatEquipmentDefinition* FloatDefinition = EquipmentSettings->FindRuntimeDefinition(Loadout.FloatDefinitionId);
@@ -225,12 +247,14 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	FGuid SessionId = FGuid::NewGuid();
 	FGuid CastAttemptId = FGuid::NewGuid();
 	while (CastAttemptId == SessionId) CastAttemptId = FGuid::NewGuid();
+	DependencyStage = TEXT("EquipmentReservation");
 	const FCatFishingUseReservationResult Reserved = Equipment->BeginFishingUse(SessionId,
 		RodState.ItemInstanceId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
 		Loadout.RodDefinitionId, Loadout.BaitDefinitionId,
 		Loadout.FloatDefinitionId, Loadout.Revision);
 	if (Reserved.Error != ECatDomainCommandError::None)
 	{
+		EquipmentError = Reserved.Error;
 		Result.Command.Error = Reserved.Error == ECatDomainCommandError::RevisionConflict
 			? ECatFishingCommandError::EquipmentRevisionConflict : ECatFishingCommandError::DependencyUnavailable;
 		return Finish(Result);
@@ -244,6 +268,7 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		Result.Command.Error = Error;
 		return Finish(Result);
 	};
+	DependencyStage = TEXT("HookClass");
 	const UCatFishingPresentationSettings* Presentation = GetDefault<UCatFishingPresentationSettings>();
 	UClass* HookClass = Presentation ? Presentation->HookActorClass.LoadSynchronous() : nullptr;
 	if (!HookClass || !HookClass->IsChildOf(ACatFishingHookActor::StaticClass()))
@@ -252,6 +277,7 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	}
 	const FTransform HookTransform(Rod->GetRodTipWorldTransform().GetRotation(),
 		Rod->GetRodTipWorldTransform().GetLocation());
+	DependencyStage = TEXT("HookSpawn");
 	ACatFishingHookActor* Hook = World->SpawnActorDeferred<ACatFishingHookActor>(HookClass, HookTransform,
 		Rod, Character, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	if (!Hook)
@@ -259,17 +285,20 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		return ReleaseFishingUseAndFinish(ECatFishingCommandError::DependencyUnavailable);
 	}
 	Hook->DeferInitialPresentationFromAuthority();
+	DependencyStage = TEXT("HookIdentity");
 	if (!Hook->InitializeAuthoritativeIdentity(SessionId, CastAttemptId))
 	{
 		Hook->Destroy();
 		return ReleaseFishingUseAndFinish(ECatFishingCommandError::DependencyUnavailable);
 	}
 	Hook->FinishSpawning(HookTransform);
+	DependencyStage = TEXT("HookFlight");
 	if (!Hook->BeginAuthoritativeFlight(Water.WaterSurfaceWorldPoint))
 	{
 		Hook->Destroy();
 		return ReleaseFishingUseAndFinish(ECatFishingCommandError::DependencyUnavailable);
 	}
+	DependencyStage = TEXT("SessionPreparation");
 	ACatFishingSession* Session = World->SpawnActorDeferred<ACatFishingSession>(ACatFishingSession::StaticClass(),
 		Character->GetActorTransform(), FisherController, Character, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	FCatFishingAttemptSnapshot Attempt;
@@ -294,6 +323,7 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		return ReleaseFishingUseAndFinish(ECatFishingCommandError::DependencyUnavailable);
 	}
 	Session->FinishSpawning(Character->GetActorTransform());
+	DependencyStage = TEXT("SessionStart");
 	if (!Session->StartPreparedSessionLogicFromAuthority())
 	{
 		Session->AbortPreparedSessionFromAuthority();

@@ -907,10 +907,12 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	++Snapshot.Revision;
 	PublishSnapshot();
 	UE_LOG(LogCatEquipment, Log,
-		TEXT("Event=equipment_rod_session_bound SessionId=%s RodItemInstanceId=%s Definition=%s Durability=%.3f Revision=%lld World=%s NetMode=%d Authority=true Owner=%s"),
+		TEXT("Event=equipment_rod_session_bound SessionId=%s RodItemInstanceId=%s Definition=%s Durability=%.3f Revision=%lld World=%s NetMode=%d Authority=true Owner=%s BaitDefinition=%s ReservedBaitItemInstanceId=%s BaitQuantityRemaining=%d SelectedBaitItemInstanceId=%s LocalRole=%d"),
 		*FishingSessionId.ToString(), *RodItemInstanceId.ToString(), *RodDefinitionId.ToString(),
 		RodUseRecord->Item.RodDurability, Snapshot.Revision, *GetNameSafe(GetWorld()),
-		static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone), *GetNameSafe(GetOwner()));
+		static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone), *GetNameSafe(GetOwner()),
+		*BaitDefinitionId.ToString(), *BaitItemInstanceId.ToString(), GetInventoryItemQuantity(BaitDefinitionId),
+		*Snapshot.BaitItemInstanceId.ToString(), GetOwner() ? static_cast<int32>(GetOwner()->GetLocalRole()) : 0);
 	return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::None, true);
 }
 
@@ -1841,12 +1843,28 @@ void UCatEquipmentComponent::AutoSelectGrantedInventoryItem(const UCatEquipmentD
 	}
 	if (Definition.Kind == ECatEquipmentKind::Bait)
 	{
-		if (Snapshot.BaitDefinitionId.IsNone() || GetInventoryItemQuantity(Snapshot.BaitDefinitionId) <= 0)
+		// 入库已发生，不能用同定义总数量判断旧选择是否有效：耗尽后补回同种饵时总量为正，但实例已清空。
+		const FCatRunInventorySlot* SelectedSlot = FindInventorySlotByInstanceId(Snapshot.BaitItemInstanceId);
+		if (SelectedSlot && SelectedSlot->DefinitionId == Snapshot.BaitDefinitionId && SelectedSlot->Quantity > 0)
 		{
-			const FCatRunInventorySlot* GrantedSlot = FindFirstInventorySlotByDefinition(DefinitionId);
-			Snapshot.BaitDefinitionId = DefinitionId;
-			Snapshot.BaitItemInstanceId = GrantedSlot ? GrantedSlot->ItemInstanceId : FGuid();
+			return;
 		}
+		// 优先恢复玩家已选种类的剩余堆栈；该种类确实没有库存时，才选择本次补给的种类。
+		const FCatRunInventorySlot* ReplacementSlot = FindFirstInventorySlotByDefinition(Snapshot.BaitDefinitionId);
+		if (!ReplacementSlot) ReplacementSlot = FindFirstInventorySlotByDefinition(DefinitionId);
+		if (!ReplacementSlot) return;
+		const FName PreviousDefinition = Snapshot.BaitDefinitionId;
+		const FGuid PreviousInstance = Snapshot.BaitItemInstanceId;
+		Snapshot.BaitDefinitionId = ReplacementSlot->DefinitionId;
+		Snapshot.BaitItemInstanceId = ReplacementSlot->ItemInstanceId;
+		const APawn* Pawn = Cast<APawn>(GetOwner());
+		UE_LOG(LogCatEquipment, Log,
+			TEXT("Event=equipment_bait_auto_selected Reason=PreviousSelectionUnavailable PreviousDefinition=%s PreviousBaitItemInstanceId=%s BaitDefinition=%s BaitItemInstanceId=%s Quantity=%d RevisionBefore=%lld World=%s NetMode=%d Authority=%d LocalRole=%d Owner=%s PlayerState=%s Result=Selected"),
+			*PreviousDefinition.ToString(), *PreviousInstance.ToString(), *Snapshot.BaitDefinitionId.ToString(),
+			*Snapshot.BaitItemInstanceId.ToString(), ReplacementSlot->Quantity, Snapshot.Revision,
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone),
+			GetOwner() && GetOwner()->HasAuthority(), GetOwner() ? static_cast<int32>(GetOwner()->GetLocalRole()) : 0,
+			*GetNameSafe(GetOwner()), *GetNameSafe(Pawn ? Pawn->GetPlayerState() : nullptr));
 		return;
 	}
 	if (Definition.Kind == ECatEquipmentKind::Float)
