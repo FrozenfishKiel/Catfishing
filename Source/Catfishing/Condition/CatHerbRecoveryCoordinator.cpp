@@ -10,6 +10,8 @@
 #include "Equipment/CatEquipmentTypes.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "GameFramework/Controller.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
 #include "Logging/CatLog.h"
 
 bool UCatHerbRecoveryCoordinator::ShouldCreateSubsystem(UObject* Outer) const
@@ -26,7 +28,8 @@ FCatDomainCommandResult UCatHerbRecoveryCoordinator::UseHerbOnCharacter(AControl
 	// 草药协调流程：
 	// 1. 先确认请求键、施药者当前 Pawn、双方组件和目标 World，再只读查询 Equipment 终态重放。
 	// 2. 重放命中时按首次库存成功或失败收口；成功重放继续补查身体终态，不被当前倒地、距离或背包格变化截断。
-	// 3. 不是重放时才检查玩法 gate、当前草药定义、施药者状态、范围和目标恢复预检，随后扣草药并提交身体恢复。
+	// 3. 不是重放时才检查玩法 gate、正式库存里的草药实例、施药者状态、范围和目标恢复预检，随后扣草药并提交身体恢复。
+	// 4. 没有正式库存组件的旧宿主才读取 Equipment 快照，避免迁移期测试夹具或临时 Actor 直接失效。
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	UWorld* World = GetWorld();
@@ -88,20 +91,42 @@ FCatDomainCommandResult UCatHerbRecoveryCoordinator::UseHerbOnCharacter(AControl
 		return Result;
 	}
 
-	const FCatRunInventorySlot* HerbSlot = nullptr;
-	for (const FCatRunInventorySlot& Slot : Equipment->GetSnapshot().InventorySlots)
+	UCatEquipmentDefinition* Definition = nullptr;
+	bool bHasCurrentHerb = false;
+	if (const UCatInventoryComponent* OwnerInventory = ControlledCharacter->GetInventoryComponent())
 	{
-		if (Slot.ItemInstanceId == HerbItemInstanceId)
-		{
-			HerbSlot = &Slot;
-			break;
-		}
+		// 正式库存预检：救援命令只信任当前背包里的实例和正数量；旧 Equipment 投影不能证明草药仍在身上。
+		const int32 FormalHerbSlotIndex =
+			OwnerInventory->FindInventorySlotIndexFromInstanceId(HerbItemInstanceId);
+		const FCatInventoryEntry* FormalHerbEntry =
+			OwnerInventory->GetInventoryEntryAtSlot(FormalHerbSlotIndex);
+		const UCatInventoryItemInstance* FormalHerbInstance =
+			FormalHerbEntry != nullptr ? FormalHerbEntry->Instance : nullptr;
+		Definition = FormalHerbInstance != nullptr
+			? Cast<UCatEquipmentDefinition>(FormalHerbInstance->GetItemDefinition()) : nullptr;
+		bHasCurrentHerb = FormalHerbEntry != nullptr
+			&& FormalHerbEntry->StackCount > 0
+			&& Definition != nullptr
+			&& Definition->Kind == ECatEquipmentKind::Herb
+			&& Definition->ConsumesInventoryQuantityOnUse();
 	}
-	UCatEquipmentDefinition* Definition = HerbSlot
-		? GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(HerbSlot->DefinitionId) : nullptr;
-	const bool bHasCurrentHerb = HerbSlot && HerbSlot->Quantity > 0
-		&& Definition && Definition->Kind == ECatEquipmentKind::Herb
-		&& Definition->ConsumesInventoryQuantityOnUse();
+	else
+	{
+		const FCatRunInventorySlot* HerbSlot = nullptr;
+		for (const FCatRunInventorySlot& Slot : Equipment->GetSnapshot().InventorySlots)
+		{
+			if (Slot.ItemInstanceId == HerbItemInstanceId)
+			{
+				HerbSlot = &Slot;
+				break;
+			}
+		}
+		Definition = HerbSlot
+			? GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(HerbSlot->DefinitionId) : nullptr;
+		bHasCurrentHerb = HerbSlot && HerbSlot->Quantity > 0
+			&& Definition && Definition->Kind == ECatEquipmentKind::Herb
+			&& Definition->ConsumesInventoryQuantityOnUse();
+	}
 	if (!bHasCurrentHerb)
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
