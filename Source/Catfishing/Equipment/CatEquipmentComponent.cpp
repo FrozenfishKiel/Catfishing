@@ -1751,11 +1751,21 @@ bool UCatEquipmentComponent::SyncOwnerInventoryComponentFromSnapshot()
 		&& OwnerInventory->ReplaceInventoryEntriesFromAuthority(FormalEntries, GetConfiguredInventorySlotCapacity());
 }
 
+// 公开投影刷新流程：
+// 1. 公开入口只负责把 Owner 正式库存投影回旧格位，不声明新增物品，避免普通同步抢钓具选择。
+// 2. 实际比较、版本推进和发布交给带参数入口，保证营地转移和普通同步共用同一条旧投影规则。
+bool UCatEquipmentComponent::RefreshInventoryProjectionFromInventoryComponentFromAuthority()
+{
+	return RefreshInventoryProjectionFromInventoryComponentFromAuthority(nullptr, NAME_None);
+}
+
 // 正式库存到旧投影刷新流程：
 // 1. 只在 authority 上读取 Owner 的 InventoryComponent；客户端复制读模型不能反向生成服务器快照。
-// 2. 先把正式库存条目投成旧 InventorySlots，并与当前旧投影逐格比较，内容一致时不推进 Equipment Revision。
-// 3. 内容变化时替换旧格数组、推进 Equipment Revision 并发布 Snapshot；Publish 再同步正式库存时会因内容一致而不二次推进正式版本。
-bool UCatEquipmentComponent::RefreshInventoryProjectionFromInventoryComponentFromAuthority()
+// 2. 先把正式库存条目投成旧 InventorySlots，并记录刷新前的钓具选择，用于判断是否需要发布新 Equipment Revision。
+// 3. 调用方传入新增定义时才尝试自动选择；这样营地交换能保留旧体验，普通格位刷新不会无故抢当前选择。
+// 4. 旧格位或选择有任一变化时才推进 Equipment Revision 并发布，Publish 再同步正式库存时会因内容一致而不二次推进正式版本。
+bool UCatEquipmentComponent::RefreshInventoryProjectionFromInventoryComponentFromAuthority(
+	const UCatEquipmentDefinition* GrantedDefinition, const FName GrantedDefinitionId)
 {
 	AActor* Owner = GetOwner();
 	if (Owner == nullptr || !Owner->HasAuthority())
@@ -1769,12 +1779,45 @@ bool UCatEquipmentComponent::RefreshInventoryProjectionFromInventoryComponentFro
 		return false;
 	}
 
-	if (AreLegacyInventorySlotArraysEquivalent(Snapshot.InventorySlots, ProjectedSlots))
+	const FName PreviousRodDefinitionId = Snapshot.RodDefinitionId;
+	const FGuid PreviousRodItemInstanceId = Snapshot.RodItemInstanceId;
+	const double PreviousRodDurability = Snapshot.RodDurability;
+	const bool bPreviousRodBroken = Snapshot.bRodBroken;
+	const FName PreviousBaitDefinitionId = Snapshot.BaitDefinitionId;
+	const FGuid PreviousBaitItemInstanceId = Snapshot.BaitItemInstanceId;
+	const FName PreviousFloatDefinitionId = Snapshot.FloatDefinitionId;
+	const FGuid PreviousFloatItemInstanceId = Snapshot.FloatItemInstanceId;
+	const FName PreviousScoopNetDefinitionId = Snapshot.ScoopNetDefinitionId;
+	const FGuid PreviousScoopNetItemInstanceId = Snapshot.ScoopNetItemInstanceId;
+
+	const bool bInventoryProjectionChanged =
+		!AreLegacyInventorySlotArraysEquivalent(Snapshot.InventorySlots, ProjectedSlots);
+	if (bInventoryProjectionChanged)
+	{
+		Snapshot.InventorySlots = MoveTemp(ProjectedSlots);
+	}
+
+	if (GrantedDefinition != nullptr && !GrantedDefinitionId.IsNone())
+	{
+		AutoSelectGrantedInventoryItem(*GrantedDefinition, GrantedDefinitionId);
+	}
+
+	// 鱼竿耐久是双精度运行值；这里用引擎小容差过滤浮点微差，避免没有真实选择变化时空转推进 Equipment Revision。
+	const bool bSelectionChanged = PreviousRodDefinitionId != Snapshot.RodDefinitionId
+		|| PreviousRodItemInstanceId != Snapshot.RodItemInstanceId
+		|| !FMath::IsNearlyEqual(PreviousRodDurability, Snapshot.RodDurability, KINDA_SMALL_NUMBER)
+		|| bPreviousRodBroken != Snapshot.bRodBroken
+		|| PreviousBaitDefinitionId != Snapshot.BaitDefinitionId
+		|| PreviousBaitItemInstanceId != Snapshot.BaitItemInstanceId
+		|| PreviousFloatDefinitionId != Snapshot.FloatDefinitionId
+		|| PreviousFloatItemInstanceId != Snapshot.FloatItemInstanceId
+		|| PreviousScoopNetDefinitionId != Snapshot.ScoopNetDefinitionId
+		|| PreviousScoopNetItemInstanceId != Snapshot.ScoopNetItemInstanceId;
+	if (!bInventoryProjectionChanged && !bSelectionChanged)
 	{
 		return true;
 	}
 
-	Snapshot.InventorySlots = MoveTemp(ProjectedSlots);
 	++Snapshot.Revision;
 	PublishSnapshot();
 	return true;

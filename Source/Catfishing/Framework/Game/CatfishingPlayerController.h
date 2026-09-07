@@ -154,26 +154,26 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveCampCommandResult(const FCatDomainCommandResult& Result);
 
-	/** 从指定营地公共仓库 Actor 取物到本人随身库存；直接箱子交互使用它，服务器按距离、仓库版本和随身库存版本共同裁决。 */
+	/** 从指定营地公共仓库 Actor 取物到本人随身库存；直接箱子交互使用它，服务器按距离、仓库版本和随身正式库存版本共同裁决。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Camp")
 	void ServerWithdrawCampInventoryItemAtActor(ACatCampInventoryActor* CampInventory, FGuid RequestId,
-		int64 ExpectedCampInventoryRevision, int32 SourceSlotIndex, int32 Quantity, int64 ExpectedEquipmentRevision);
+		int64 ExpectedCampInventoryRevision, int32 SourceSlotIndex, int32 Quantity, int64 ExpectedInventoryRevision);
 
 	/** 整理指定营地公共仓库 Actor 内部两个格子；服务器按仓库距离、版本和槽位下标重读后移动、合并或交换。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Camp")
 	void ServerMoveCampInventorySlotAtActor(ACatCampInventoryActor* CampInventory, FGuid RequestId,
 		int64 ExpectedCampInventoryRevision, int32 SourceSlotIndex, int32 TargetSlotIndex);
 
-	/** 把本人随身库存指定格拖入营地公共仓库指定格；服务器按双方版本和仓库距离同时裁决两份数据源。 */
+	/** 把本人随身库存指定格拖入营地公共仓库指定格；服务器按营地公开版本、随身正式库存版本和仓库距离同时裁决。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Camp")
 	void ServerDepositInventoryItemToCampAtActor(ACatCampInventoryActor* CampInventory, FGuid RequestId,
-		int64 ExpectedCampInventoryRevision, int32 TargetCampSlotIndex, int64 ExpectedEquipmentRevision,
+		int64 ExpectedCampInventoryRevision, int32 TargetCampSlotIndex, int64 ExpectedInventoryRevision,
 		int32 SourceEquipmentSlotIndex);
 
-	/** 把营地公共仓库指定格拖到本人随身库存指定格；服务器按双方版本和仓库距离同时裁决两份数据源。 */
+	/** 把营地公共仓库指定格拖到本人随身库存指定格；服务器按营地公开版本、随身正式库存版本和仓库距离同时裁决。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Camp")
 	void ServerWithdrawCampInventoryItemToSlotAtActor(ACatCampInventoryActor* CampInventory, FGuid RequestId,
-		int64 ExpectedCampInventoryRevision, int32 SourceCampSlotIndex, int64 ExpectedEquipmentRevision,
+		int64 ExpectedCampInventoryRevision, int32 SourceCampSlotIndex, int64 ExpectedInventoryRevision,
 		int32 TargetEquipmentSlotIndex);
 
 	/** 返回本机最近收到的公共领域命令结果供表现层关联请求；该缓存不作为 Camp、Items、Equipment 或 Condition 的权限事实。 */

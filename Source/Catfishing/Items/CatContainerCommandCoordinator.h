@@ -32,26 +32,26 @@ public:
 		ACatCharacter* ControlledCharacter, FGuid RequestId, FGuid FishInstanceId,
 		FGuid SourceContainerId, int32 SourceContainerSlotIndex, int64 ExpectedSourceRevision);
 
-	/** 从可触达营地公共仓库取指定数量到当前玩家随身库存；仓库、距离、双方 Revision 和容量都在服务器重读。 */
+	/** 从可触达营地公共仓库取指定数量到当前玩家随身库存；仓库、距离、营地公开版本和随身正式库存版本都在服务器重读。 */
 	FCatDomainCommandResult WithdrawCampInventoryItem(AController* RequestingController,
 		ACatCharacter* ControlledCharacter, ACatCampInventoryActor* CampInventory, FGuid RequestId,
 		int64 ExpectedCampInventoryRevision, int32 SourceSlotIndex, int32 Quantity,
-		int64 ExpectedEquipmentRevision);
+		int64 ExpectedInventoryRevision);
 
 	/** 在可触达营地公共仓库内部移动、合并或交换两个格子；Controller 不参与公共仓库槽位规则。 */
 	FCatDomainCommandResult MoveCampInventorySlot(AController* RequestingController,
 		ACatCharacter* ControlledCharacter, ACatCampInventoryActor* CampInventory, FGuid RequestId,
 		int64 ExpectedCampInventoryRevision, int32 SourceSlotIndex, int32 TargetSlotIndex);
 
-	/** 把当前玩家随身库存格提交到可触达营地公共仓库目标格；服务器在同一事务中裁决双方快照。 */
+	/** 把当前玩家随身库存格提交到可触达营地公共仓库目标格；服务器在同一事务中裁决双方正式库存并刷新旧投影。 */
 	FCatDomainCommandResult DepositEquipmentSlotToCampInventory(AController* RequestingController,
 		ACatCharacter* ControlledCharacter, ACatCampInventoryActor* CampInventory, FGuid RequestId,
-		int64 ExpectedCampInventoryRevision, int32 TargetCampSlotIndex, int64 ExpectedEquipmentRevision,
+		int64 ExpectedCampInventoryRevision, int32 TargetCampSlotIndex, int64 ExpectedInventoryRevision,
 		int32 SourceEquipmentSlotIndex);
 
-	/** 把可触达营地公共仓库格提交到当前玩家随身库存目标格；服务器在同一事务中裁决双方快照。 */
+	/** 把可触达营地公共仓库格提交到当前玩家随身库存目标格；服务器在同一事务中裁决双方正式库存并刷新旧投影。 */
 	FCatDomainCommandResult WithdrawCampInventoryItemToEquipmentSlot(AController* RequestingController,
 		ACatCharacter* ControlledCharacter, ACatCampInventoryActor* CampInventory, FGuid RequestId,
-		int64 ExpectedCampInventoryRevision, int32 SourceCampSlotIndex, int64 ExpectedEquipmentRevision,
+		int64 ExpectedCampInventoryRevision, int32 SourceCampSlotIndex, int64 ExpectedInventoryRevision,
 		int32 TargetEquipmentSlotIndex);
 };

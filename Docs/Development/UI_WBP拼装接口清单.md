@@ -158,10 +158,10 @@ Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 | `bHasCampInventory` | 是否带有本次交互打开的营地公共仓库。 |
 | `CampInventoryFirstSlotIndex` | 营地公共仓库在 `Slots` 里的起始下标。 |
 | `CampInventorySlotCount` | 营地公共仓库当前展示多少格；空仓库也按配置容量显示空格。 |
-| `CampInventoryRevision` | 营地公共仓库快照版本；右键取用时会提交给服务器复核。 |
+| `CampInventoryRevision` | 营地公共仓库快照版本；营地格整理、右键取用和跨营地拖拽都会把它作为公共仓库侧并发前提提交给服务器。 |
 | `Equipment` | 当前钓鱼选择和旧兼容快照；随身背包格优先读正式 `InventoryComponent`。 |
 | `bInventoryAvailable` | 当前是否已经拿到可展示的随身库存读源；正式库存优先，旧 `Equipment` 投影只作临时 fallback。 |
-| `InventoryRevision` | 随身背包内容版本；随身背包内部拖拽整理提交给服务器时使用，正式库存可用时不再使用 `Equipment.Revision`。 |
+| `InventoryRevision` | 随身背包内容版本；随身背包内部拖拽整理、营地取入和存入公共仓库都会把它作为随身侧并发前提提交给服务器，正式库存可用时不再使用 `Equipment.Revision`。 |
 | `SelectedSlotIndex` | 当前选中的显示格下标。 |
 | `bHasSelectedFish` | 当前是否选中一条鱼。 |
 | `bSelectedFishInFishGuard` | 当前选中鱼是否来自本次打开的地面鱼护。吃鱼/献祭只应该看这个条件。 |
@@ -174,7 +174,7 @@ Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 | `ResultText` | C++ 整理好的最近结果文本。 |
 | `ToggleKeyName` | 当前背包开关键名，来自正式输入资产，不在 WBP 里写死。 |
 
-随身库存的格子来源是 `InventoryObject`，营地公共仓库的格子来源是 `CampInventoryObject`。随身库存显示优先来自角色身上的正式 `UCatInventoryComponent`；客户端刚打开页面、正式库存复制还没完整到位时，Model 才短暂用旧 `Equipment` 投影维持原来的空格和内容显示。随身背包内部拖拽整理提交 `InventoryRevision`，营地仓库整理和存取提交 `CampInventoryRevision`，钓具选择、修竿、草药使用等仍提交 `Equipment.Revision`。组合页面如果要分成“玩家背包区”和“营地仓库区”，可以给对应库存子 WBP 设置格子来源过滤：玩家背包区设为 `InventoryObject`，公共仓库区设为 `CampInventoryObject`；也可以在 `BP_RenderInventory` 里按 `SlotSource` 或 `CampInventoryFirstSlotIndex/CampInventorySlotCount` 自己分栏展示。玩家右键有物品的营地库存格时，PageController 会提交“取到随身库存”的服务器请求；WBP 不需要也不应该直接改公共仓库数组。
+随身库存的格子来源是 `InventoryObject`，营地公共仓库的格子来源是 `CampInventoryObject`。随身库存显示优先来自角色身上的正式 `UCatInventoryComponent`；客户端刚打开页面、正式库存复制还没完整到位时，Model 才短暂用旧 `Equipment` 投影维持原来的空格和内容显示。随身背包内部拖拽整理提交 `InventoryRevision`；营地仓库内部整理提交 `CampInventoryRevision`；营地取入或存入同时提交 `CampInventoryRevision` 和 `InventoryRevision`；钓具选择、修竿、草药使用等仍提交 `Equipment.Revision`。组合页面如果要分成“玩家背包区”和“营地仓库区”，可以给对应库存子 WBP 设置格子来源过滤：玩家背包区设为 `InventoryObject`，公共仓库区设为 `CampInventoryObject`；也可以在 `BP_RenderInventory` 里按 `SlotSource` 或 `CampInventoryFirstSlotIndex/CampInventorySlotCount` 自己分栏展示。玩家右键有物品的营地库存格时，PageController 会提交“取到随身正式库存”的服务器请求；WBP 不需要也不应该直接改公共仓库数组。
 
 ## 营地公共仓库：`WBP_CatCampInventory`
 
@@ -274,7 +274,7 @@ Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 
 ### 操作含义
 
-左键会选中格子。右键随身库存格会尝试把装备设为当前钓鱼选择；右键营地公共仓库格会尝试把物品取到本人随身库存。拖拽到另一个格子会由 PageController 复核后提交服务器移动；WBP 不需要自己写移动逻辑。
+左键会选中格子。右键随身库存格会尝试把装备设为当前钓鱼选择；右键营地公共仓库格会尝试把物品取到本人正式随身库存。拖拽到另一个格子会由 PageController 复核后提交服务器移动；WBP 不需要自己写移动逻辑。
 
 ## 商店：`WBP_CatShop`
 

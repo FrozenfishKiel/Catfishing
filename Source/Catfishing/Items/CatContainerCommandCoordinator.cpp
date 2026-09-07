@@ -123,12 +123,12 @@ FCatDomainCommandResult UCatContainerCommandCoordinator::TransferReachableObject
 FCatDomainCommandResult UCatContainerCommandCoordinator::WithdrawCampInventoryItem(
 	AController* RequestingController, ACatCharacter* ControlledCharacter, ACatCampInventoryActor* CampInventory,
 	const FGuid RequestId, const int64 ExpectedCampInventoryRevision, const int32 SourceSlotIndex,
-	const int32 Quantity, const int64 ExpectedEquipmentRevision)
+	const int32 Quantity, const int64 ExpectedInventoryRevision)
 {
 	// 营地公共仓库取物流程：
-	// 1. 先在服务器侧重读玩法 gate、RequestId、仓库 World 和当前玩家 EquipmentComponent。
+	// 1. 先在服务器侧重读玩法 gate、RequestId、仓库 World 和当前玩家 EquipmentComponent 兼容投影。
 	// 2. 再用仓库自己的交互距离裁决玩家是否仍触达公共仓库，避免 UI 旧引用直接授权移动。
-	// 3. 通过后把公共仓库格、数量和双方 Revision 交给 CampInventoryActor 一次性提交。
+	// 3. 通过后把公共仓库格、数量、营地版本和随身正式库存版本交给 CampInventoryActor 一次性提交。
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	UWorld* World = GetWorld();
@@ -152,7 +152,7 @@ FCatDomainCommandResult UCatContainerCommandCoordinator::WithdrawCampInventoryIt
 		return Result;
 	}
 	return CampInventory->WithdrawToEquipmentFromAuthority(RequestId, ExpectedCampInventoryRevision,
-		SourceSlotIndex, Quantity, Equipment, ExpectedEquipmentRevision);
+		SourceSlotIndex, Quantity, Equipment, ExpectedInventoryRevision);
 }
 
 FCatDomainCommandResult UCatContainerCommandCoordinator::MoveCampInventorySlot(
@@ -209,12 +209,12 @@ FCatDomainCommandResult UCatContainerCommandCoordinator::MoveCampInventorySlot(
 FCatDomainCommandResult UCatContainerCommandCoordinator::DepositEquipmentSlotToCampInventory(
 	AController* RequestingController, ACatCharacter* ControlledCharacter, ACatCampInventoryActor* CampInventory,
 	const FGuid RequestId, const int64 ExpectedCampInventoryRevision, const int32 TargetCampSlotIndex,
-	const int64 ExpectedEquipmentRevision, const int32 SourceEquipmentSlotIndex)
+	const int64 ExpectedInventoryRevision, const int32 SourceEquipmentSlotIndex)
 {
 	// 随身库存存入营地仓库流程：
-	// 1. 先在服务器侧重读玩法 gate、RequestId、仓库 World 和当前玩家 EquipmentComponent。
+	// 1. 先在服务器侧重读玩法 gate、RequestId、仓库 World 和当前玩家 EquipmentComponent 兼容投影。
 	// 2. 再按仓库交互距离确认玩家仍在公共仓库旁，避免远程拖拽旧 UI 数据。
-	// 3. 最后由 CampInventoryActor 在同一事务中提交随身库存扣除和公共仓库写入。
+	// 3. 最后由 CampInventoryActor 在同一事务中提交双方正式库存交换，再刷新旧读模型。
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	UWorld* World = GetWorld();
@@ -238,18 +238,18 @@ FCatDomainCommandResult UCatContainerCommandCoordinator::DepositEquipmentSlotToC
 		return Result;
 	}
 	return CampInventory->DepositFromEquipmentSlotFromAuthority(RequestId, ExpectedCampInventoryRevision,
-		TargetCampSlotIndex, Equipment, ExpectedEquipmentRevision, SourceEquipmentSlotIndex);
+		TargetCampSlotIndex, Equipment, ExpectedInventoryRevision, SourceEquipmentSlotIndex);
 }
 
 FCatDomainCommandResult UCatContainerCommandCoordinator::WithdrawCampInventoryItemToEquipmentSlot(
 	AController* RequestingController, ACatCharacter* ControlledCharacter, ACatCampInventoryActor* CampInventory,
 	const FGuid RequestId, const int64 ExpectedCampInventoryRevision, const int32 SourceCampSlotIndex,
-	const int64 ExpectedEquipmentRevision, const int32 TargetEquipmentSlotIndex)
+	const int64 ExpectedInventoryRevision, const int32 TargetEquipmentSlotIndex)
 {
 	// 营地仓库拖入随身目标格流程：
-	// 1. 先在服务器侧重读玩法 gate、RequestId、仓库 World 和当前玩家 EquipmentComponent。
+	// 1. 先在服务器侧重读玩法 gate、RequestId、仓库 World 和当前玩家 EquipmentComponent 兼容投影。
 	// 2. 再按仓库交互距离确认玩家仍可触达公共仓库，客户端目标格只作为候选输入。
-	// 3. 通过后由 CampInventoryActor 同时裁决公共仓库源格和随身库存目标格。
+	// 3. 通过后由 CampInventoryActor 同时裁决公共仓库源格和随身正式库存目标格。
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	UWorld* World = GetWorld();
@@ -273,7 +273,7 @@ FCatDomainCommandResult UCatContainerCommandCoordinator::WithdrawCampInventoryIt
 		return Result;
 	}
 	return CampInventory->WithdrawToEquipmentSlotFromAuthority(RequestId, ExpectedCampInventoryRevision,
-		SourceCampSlotIndex, Equipment, ExpectedEquipmentRevision, TargetEquipmentSlotIndex);
+		SourceCampSlotIndex, Equipment, ExpectedInventoryRevision, TargetEquipmentSlotIndex);
 }
 
 FCatDomainCommandResult UCatContainerCommandCoordinator::StoreFishInReachableSharedTank(

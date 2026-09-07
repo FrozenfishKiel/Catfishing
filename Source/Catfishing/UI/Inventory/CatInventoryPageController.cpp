@@ -369,10 +369,10 @@ void UCatInventoryPageController::RequestCloseInventoryFromWidget()
 
 // 格子上下文流程：
 // 1. 右键入口直接按传入格子来源处理动作，不再先同步共享选择或刷新所有库存 WBP。
-// 2. 如果目标是营地公共仓库格，先按最新 ViewState 复核公共槽位，再提交“取到随身库存”服务器请求；这里不直接改公共仓库格。
+// 2. 如果目标是营地公共仓库格，先按最新 ViewState 复核公共槽位，再提交“取到正式随身库存”服务器请求；这里不直接改公共仓库格。
 // 3. 如果目标是随身库存格，当前没有 pending 且物品有效时，才继续构造钓具选择命令。
 // 4. 根据随身格装备类别只替换当前组合中的一项；鱼竿、鱼饵、鱼漂三项不完整时本地拒绝，避免提交半套钓鱼选择。
-// 5. 记录 pending 后再调用 PlayerController RPC；服务器会重读目录、解锁、当前快照和库存持有量，UI 不会在数据变化前重画格子。
+// 5. 记录 pending 后再调用 PlayerController RPC；库存搬运提交 InventoryRevision，钓具选择才继续提交 Equipment Revision。
 void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FCatInventorySlotView& Slot)
 {
 	UCatInventoryModel* Model = BoundModel.Get();
@@ -393,7 +393,7 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 		const FCatInventorySlotView* CurrentSlot = FindCurrentRunInventorySlot(State, Slot);
 		if (!CampInventory || !CurrentSlot || !CurrentSlot->bOccupied
 			|| CurrentSlot->CampInventorySlotIndex == INDEX_NONE || CurrentSlot->Quantity <= 0
-			|| !State.bEquipmentAvailable)
+			|| !State.bInventoryAvailable || !State.bEquipmentAvailable)
 		{
 			Model->MarkActionRejected(ECatInventoryAction::WithdrawCampInventoryItem, RequestId,
 				ECatDomainCommandError::DependencyUnavailable, State.CampInventoryRevision);
@@ -402,17 +402,17 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 		const int64 SubmittedCampRevision = CurrentSlot->CampInventoryRevision;
 		const int32 SubmittedCampSlotIndex = CurrentSlot->CampInventorySlotIndex;
 		const int32 SubmittedQuantity = CurrentSlot->Quantity;
-		const int64 SubmittedEquipmentRevision = State.Equipment.Revision;
+		const int64 SubmittedInventoryRevision = State.InventoryRevision;
 		Model->MarkActionSubmitted(ECatInventoryAction::WithdrawCampInventoryItem, RequestId);
 		if (CatController->HasAuthority())
 		{
 			CatController->ServerWithdrawCampInventoryItemAtActor_Implementation(CampInventory, RequestId,
-				SubmittedCampRevision, SubmittedCampSlotIndex, SubmittedQuantity, SubmittedEquipmentRevision);
+				SubmittedCampRevision, SubmittedCampSlotIndex, SubmittedQuantity, SubmittedInventoryRevision);
 		}
 		else
 		{
 			CatController->ServerWithdrawCampInventoryItemAtActor(CampInventory, RequestId,
-				SubmittedCampRevision, SubmittedCampSlotIndex, SubmittedQuantity, SubmittedEquipmentRevision);
+				SubmittedCampRevision, SubmittedCampSlotIndex, SubmittedQuantity, SubmittedInventoryRevision);
 		}
 		return;
 	}
@@ -486,7 +486,7 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 // 2. 运行期库存格同源时整理本数据源，跨背包和营地时提交一条同时改双方数据源的服务器事务。
 // 3. 鱼容器格之间走 Items 容器移动；运行期库存和 Items 容器混拖直接拒绝，避免把两套领域写口塞进一次 Drop。
 // 4. 同格 Drop 视为无操作直接返回；同容器不同格继续提交服务器整理，不能再当 InvalidPayload 拒绝。
-// 5. 在写 pending 前复制完整 RPC 载荷；随身背包整理提交 InventoryRevision，营地仓库和跨源转移继续提交各自宿主版本。
+// 5. 在写 pending 前复制完整 RPC 载荷；随身背包整理和背包/营地跨源转移都提交 InventoryRevision，营地侧提交 CampInventoryRevision。
 // 6. 运行期库存的拒绝和提交都会写出来源、槽位、路线和版本，方便区分营地内部整理是否被 UI 误投成背包整理。
 void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatInventorySlotView& SourceSlot,
 	const FCatInventorySlotView& TargetSlot)
@@ -643,35 +643,35 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 		else if (bCrossEquipmentToCamp)
 		{
 			const int64 SubmittedCampRevision = CurrentTarget->CampInventoryRevision;
-			const int64 SubmittedEquipmentRevision = State.Equipment.Revision;
+			const int64 SubmittedInventoryRevision = State.InventoryRevision;
 			if (CatController->HasAuthority())
 			{
 				CatController->ServerDepositInventoryItemToCampAtActor_Implementation(CampInventory, RequestId,
 					SubmittedCampRevision, SubmittedTargetSlotIndex,
-					SubmittedEquipmentRevision, SubmittedSourceSlotIndex);
+					SubmittedInventoryRevision, SubmittedSourceSlotIndex);
 			}
 			else
 			{
 				CatController->ServerDepositInventoryItemToCampAtActor(CampInventory, RequestId,
 					SubmittedCampRevision, SubmittedTargetSlotIndex,
-					SubmittedEquipmentRevision, SubmittedSourceSlotIndex);
+					SubmittedInventoryRevision, SubmittedSourceSlotIndex);
 			}
 		}
 		else
 		{
 			const int64 SubmittedCampRevision = CurrentSource->CampInventoryRevision;
-			const int64 SubmittedEquipmentRevision = State.Equipment.Revision;
+			const int64 SubmittedInventoryRevision = State.InventoryRevision;
 			if (CatController->HasAuthority())
 			{
 				CatController->ServerWithdrawCampInventoryItemToSlotAtActor_Implementation(CampInventory, RequestId,
 					SubmittedCampRevision, SubmittedSourceSlotIndex,
-					SubmittedEquipmentRevision, SubmittedTargetSlotIndex);
+					SubmittedInventoryRevision, SubmittedTargetSlotIndex);
 			}
 			else
 			{
 				CatController->ServerWithdrawCampInventoryItemToSlotAtActor(CampInventory, RequestId,
 					SubmittedCampRevision, SubmittedSourceSlotIndex,
-					SubmittedEquipmentRevision, SubmittedTargetSlotIndex);
+					SubmittedInventoryRevision, SubmittedTargetSlotIndex);
 			}
 		}
 		return;

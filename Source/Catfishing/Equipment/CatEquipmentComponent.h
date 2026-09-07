@@ -211,6 +211,10 @@ private:
 	/** 从 Owner 的正式库存组件重建旧随身格数组；只做只读投影，不提交库存命令或推进 Equipment Revision。 */
 	bool BuildSnapshotInventorySlotsFromOwnerInventoryComponent(TArray<FCatRunInventorySlot>& OutSlots) const;
 
+	/** 从 Owner 正式库存刷新旧格位并可按新增物品修正当前选择；营地正式转移用它把背包事实和钓具选择放进同一次旧快照发布。 */
+	bool RefreshInventoryProjectionFromInventoryComponentFromAuthority(
+		const UCatEquipmentDefinition* GrantedDefinition, FName GrantedDefinitionId);
+
 	/** 按实例身份查找随身库存格；Use、选择和诊断用它避免只按 DefinitionId 误伤同类物品。 */
 	FCatRunInventorySlot* FindInventorySlotByInstanceId(FGuid ItemInstanceId);
 	const FCatRunInventorySlot* FindInventorySlotByInstanceId(FGuid ItemInstanceId) const;
