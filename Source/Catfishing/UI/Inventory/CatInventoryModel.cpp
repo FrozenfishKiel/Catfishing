@@ -220,6 +220,37 @@ namespace
 		return Count;
 	}
 
+	// 正式库存完整格计数流程：
+	// 1. 空格和非正数量只当作空槽，不影响正式库存能否接管 UI。
+	// 2. 只有实例、定义和稳定定义 ID 都可读时才计入有效格，保证后续 SlotView 能直接从正式定义投影。
+	// 3. 遇到数量已经存在但定义尚未解析的半复制格时标记给调用方，让页面继续使用旧投影避免闪成假空格。
+	int32 CountCompleteFormalInventoryEntries(const TArray<FCatInventoryEntry>& InventoryEntries,
+		const int32 SlotCount, bool& bOutHasIncompleteEntry)
+	{
+		int32 Count = 0;
+		bOutHasIncompleteEntry = false;
+		for (int32 SlotIndex = 0; SlotIndex < SlotCount; ++SlotIndex)
+		{
+			const FCatInventoryEntry* Entry = InventoryEntries.IsValidIndex(SlotIndex)
+				? &InventoryEntries[SlotIndex] : nullptr;
+			if (Entry == nullptr || Entry->StackCount <= 0)
+			{
+				continue;
+			}
+
+			const UCatInventoryItemInstance* ItemInstance = Entry->Instance;
+			const UCatInventoryItemDefinition* ItemDefinition =
+				ItemInstance ? ItemInstance->GetItemDefinition() : nullptr;
+			if (ItemDefinition == nullptr || ItemDefinition->GetInventoryDefinitionId().IsNone())
+			{
+				bOutHasIncompleteEntry = true;
+				break;
+			}
+			++Count;
+		}
+		return Count;
+	}
+
 	// UI 格种类计数流程：用定义 ID 去重，只服务摘要文案，不参与任何库存容量或交易判断。
 	int32 CountActiveInventoryItemKinds(const TArray<FCatInventorySlotView>& InventorySlots)
 	{
@@ -387,8 +418,8 @@ void UCatInventoryModel::ClearExternalContainerContexts()
 
 // 营地公共仓库上下文流程：
 // 1. 先解除鱼容器和上一公共仓库订阅，让本次页面只展示一个明确的世界库存上下文。
-// 2. 绑定有效公共仓库并订阅它的快照变化；空仓库也允许打开，因为容量由 Actor 配置决定。
-// 3. 最后刷新完整投影；随身背包和公共仓库仍是两份独立 Slots，只是监听者会同时收到刷新。
+// 2. 绑定有效公共仓库并订阅营地公开快照和正式库存条目变化；空仓库也允许打开，因为容量由 Actor 配置决定。
+// 3. 最后刷新完整投影；随身背包和公共仓库仍是两份独立 Slots，正式条目晚到时会再触发一次重读。
 void UCatInventoryModel::SetCampInventoryContext(ACatCampInventoryActor* InCampInventory)
 {
 	ClearExternalContainerBindings();
@@ -398,6 +429,11 @@ void UCatInventoryModel::SetCampInventoryContext(ACatCampInventoryActor* InCampI
 		BoundCampInventory = InCampInventory;
 		CampInventoryChangedHandle = InCampInventory->OnSnapshotChanged.AddUObject(
 			this, &ThisClass::HandleCampInventorySnapshotChanged);
+		if (UCatInventoryComponent* CampFormalInventory = InCampInventory->GetInventoryComponent())
+		{
+			CampFormalInventoryChangedHandle = CampFormalInventory->OnInventoryObservedChanged.AddUObject(
+				this, &ThisClass::HandleCampInventorySnapshotChanged);
+		}
 	}
 	Refresh();
 }
@@ -459,7 +495,7 @@ bool UCatInventoryModel::IsActionPending() const
 // 刷新流程：
 // 1. 从正式 Inventory 读取随身背包格和内容版本；正式库存槽位和实例尚未一起复制到位时，才从 Equipment 旧投影维持空格和内容展示。
 // 2. 从当前外部容器复制组件读取容量、Revision 和容器物体投影，写入 ExternalContainerSlots。
-// 3. 从当前营地公共仓库读取装备/耗材格，写入 CampInventorySlots；它和随身背包不会共享显示数组。
+// 3. 从当前营地正式库存读取装备/耗材格；正式组件半复制时才回退旧 Snapshot，公共仓库并发号仍来自营地公开 Revision。
 // 4. 写入打开态、pending、结果和摘要文本；正式库存未绑定时才让旧 Equipment Revision 临时承担随身背包并发前提。
 // 5. 从 UI Settings 解析既有 InputContext 的库存开关键名，最后广播完整投影，所有监听 WBP 都无条件重读自己那份。
 void UCatInventoryModel::Refresh()
@@ -503,28 +539,11 @@ void UCatInventoryModel::Refresh()
 		NewState.InventoryRevision = Inventory->GetInventoryRevision();
 		NewState.InventorySlotCount = Inventory->GetInventorySlotCount();
 		const TArray<FCatInventoryEntry> InventoryEntries = Inventory->GetInventoryEntries();
-		int32 FormalOccupiedSlotCount = 0;
 		bool bHasIncompleteFormalEntry = false;
 		// 正式库存复制可能先到槽位数量、稍后才解析实例 NetGUID；此时回退旧投影可以避免玩家看到一次假的空包。
 		// 如果正式条目少于旧投影里的有效格，也暂时保留旧视图，等同步追平后再切到正式 InventoryComponent。
-		for (int32 InventorySlotIndex = 0; InventorySlotIndex < NewState.InventorySlotCount; ++InventorySlotIndex)
-		{
-			const FCatInventoryEntry* InventoryEntry = InventoryEntries.IsValidIndex(InventorySlotIndex)
-				? &InventoryEntries[InventorySlotIndex] : nullptr;
-			if (InventoryEntry == nullptr || InventoryEntry->StackCount <= 0)
-			{
-				continue;
-			}
-			const UCatInventoryItemInstance* ItemInstance = InventoryEntry->Instance;
-			const UCatInventoryItemDefinition* ItemDefinition =
-				ItemInstance ? ItemInstance->GetItemDefinition() : nullptr;
-			if (ItemDefinition == nullptr || ItemDefinition->GetInventoryDefinitionId().IsNone())
-			{
-				bHasIncompleteFormalEntry = true;
-				break;
-			}
-			++FormalOccupiedSlotCount;
-		}
+		const int32 FormalOccupiedSlotCount = CountCompleteFormalInventoryEntries(
+			InventoryEntries, NewState.InventorySlotCount, bHasIncompleteFormalEntry);
 		const int32 LegacyOccupiedSlotCount = NewState.bEquipmentAvailable
 			? CountOccupiedRunInventorySlots(NewState.Equipment.InventorySlots) : 0;
 		const bool bUseFormalInventoryForView = NewState.InventorySlotCount > 0
@@ -574,19 +593,52 @@ void UCatInventoryModel::Refresh()
 	if (const ACatCampInventoryActor* CampInventory = BoundCampInventory.Get())
 	{
 		const FCatCampInventorySnapshot& CampSnapshot = CampInventory->GetSnapshot();
-		CampOccupiedSlotsForSummary = CountOccupiedRunInventorySlots(CampSnapshot.InventorySlots);
-		const int32 CampSlotCount = FMath::Max(
+		const int32 LegacyCampOccupiedSlotCount = CountOccupiedRunInventorySlots(CampSnapshot.InventorySlots);
+		CampOccupiedSlotsForSummary = LegacyCampOccupiedSlotCount;
+		int32 CampSlotCount = FMath::Max(
 			CampInventory->GetInventorySlotCapacityForView(), CampSnapshot.InventorySlots.Num());
-		const FCatRunInventorySlot EmptyCampSlot;
 		NewState.bHasCampInventory = true;
 		NewState.CampInventorySlotCount = CampSlotCount;
 		NewState.CampInventoryRevision = CampSnapshot.Revision;
-		for (int32 CampSlotIndex = 0; CampSlotIndex < CampSlotCount; ++CampSlotIndex)
+		bool bUseFormalCampInventoryForView = false;
+		TArray<FCatInventoryEntry> CampInventoryEntries;
+		// 营地 UI 优先信任正式 InventoryComponent；只有组件缺失、条目半复制，或正式有效格还没追平旧 Snapshot 时才继续展示旧投影。
+		if (const UCatInventoryComponent* CampInventoryComponent = CampInventory->GetInventoryComponent())
 		{
-			const FCatRunInventorySlot& CampSlot = CampSnapshot.InventorySlots.IsValidIndex(CampSlotIndex)
-				? CampSnapshot.InventorySlots[CampSlotIndex] : EmptyCampSlot;
-			NewState.CampInventorySlots.Add(MakeCampInventorySlotView(CampSlot, CampSlotIndex,
-				CampSnapshot.Revision));
+			const int32 FormalCampSlotCount = CampInventoryComponent->GetInventorySlotCount();
+			CampInventoryEntries = CampInventoryComponent->GetInventoryEntries();
+			CampSlotCount = FMath::Max(CampSlotCount, FormalCampSlotCount);
+			NewState.CampInventorySlotCount = CampSlotCount;
+
+			bool bHasIncompleteFormalCampEntry = false;
+			const int32 FormalCampOccupiedSlotCount = CountCompleteFormalInventoryEntries(
+				CampInventoryEntries, CampSlotCount, bHasIncompleteFormalCampEntry);
+			bUseFormalCampInventoryForView = FormalCampSlotCount > 0
+				&& !bHasIncompleteFormalCampEntry
+				&& (FormalCampOccupiedSlotCount >= LegacyCampOccupiedSlotCount || LegacyCampOccupiedSlotCount == 0);
+			if (bUseFormalCampInventoryForView)
+			{
+				CampOccupiedSlotsForSummary = FormalCampOccupiedSlotCount;
+				const FCatInventoryEntry EmptyCampEntry;
+				for (int32 CampSlotIndex = 0; CampSlotIndex < CampSlotCount; ++CampSlotIndex)
+				{
+					const FCatInventoryEntry& CampEntry = CampInventoryEntries.IsValidIndex(CampSlotIndex)
+						? CampInventoryEntries[CampSlotIndex] : EmptyCampEntry;
+					NewState.CampInventorySlots.Add(MakeCampInventorySlotView(CampEntry, CampSlotIndex,
+						CampSnapshot.Revision));
+				}
+			}
+		}
+		if (!bUseFormalCampInventoryForView)
+		{
+			const FCatRunInventorySlot EmptyCampSlot;
+			for (int32 CampSlotIndex = 0; CampSlotIndex < CampSlotCount; ++CampSlotIndex)
+			{
+				const FCatRunInventorySlot& CampSlot = CampSnapshot.InventorySlots.IsValidIndex(CampSlotIndex)
+					? CampSnapshot.InventorySlots[CampSlotIndex] : EmptyCampSlot;
+				NewState.CampInventorySlots.Add(MakeCampInventorySlotView(CampSlot, CampSlotIndex,
+					CampSnapshot.Revision));
+			}
 		}
 	}
 	NewState.bHasExternalContainers = !NewState.Containers.IsEmpty();
@@ -687,7 +739,7 @@ void UCatInventoryModel::HandleExternalContainerSnapshotChanged()
 	Refresh();
 }
 
-// 营地公共仓库变化流程：公共仓库只通知快照变化；真实数据变化会关闭 pending，Model 再统一重读随身库存和公共格。
+// 营地公共仓库变化流程：公开快照或正式库存条目变化都会关闭 pending，Model 再统一重读随身库存和公共格。
 void UCatInventoryModel::HandleCampInventorySnapshotChanged()
 {
 	ClearPendingAfterObservedSourceChange();
@@ -858,18 +910,28 @@ FCatInventorySlotView UCatInventoryModel::MakeSlotView(const FCatContainerSnapsh
 	return Slot;
 }
 
-// 正式随身库存格投影流程：
-// 1. 先从库存条目读取实例、定义、数量和当前背包内下标；空实例或非正数量只生成占位文本。
-// 2. 对有效格通过库存定义的虚拟展示入口读取名称、说明、缩略图和堆叠上限，避免 UI 继续绑定旧 Equipment 目录。
-// 3. 如果定义同时是 EquipmentDefinition，再补出钓具类别和旧兼容字段；普通库存物品降级为通用物品展示。
-// 4. 把定义、数量和类别同步到通用 Object 字段，让既有 WBP 操作仍可用同一个 SlotView 契约。
-FCatInventorySlotView UCatInventoryModel::MakeInventorySlotView(
-	const FCatInventoryEntry& InventoryEntry, const int32 InventorySlotIndex) const
+// 正式库存通用格投影流程：
+// 1. 先根据 SlotSource 写入随身背包或营地仓库的槽位身份；营地格额外保留公开 Revision，供取用和拖放命令复核。
+// 2. 再从正式库存条目读取实例、定义和数量；空实例、无定义 ID 或非正数量只生成来源内空格占位。
+// 3. 有效格统一通过库存定义读取名称、说明、缩略图和堆叠上限；EquipmentDefinition 只额外补钓具类别兼容字段。
+// 4. 最后把定义和数量同步到通用 Object 字段，让既有 WBP 展示与拖放复核不关心物品来自随身还是营地。
+FCatInventorySlotView UCatInventoryModel::MakeFormalInventorySlotView(
+	const FCatInventoryEntry& InventoryEntry, const int32 SlotIndex, const ECatInventorySlotSource SlotSource,
+	const int64 CampRevision, const TCHAR* SourceDisplayName) const
 {
+	const TCHAR* ResolvedSourceDisplayName = SourceDisplayName ? SourceDisplayName : TEXT("库存");
 	FCatInventorySlotView Slot;
-	Slot.SlotIndex = InventorySlotIndex;
-	Slot.SlotSource = ECatInventorySlotSource::InventoryObject;
-	Slot.InventorySlotIndex = InventorySlotIndex;
+	Slot.SlotIndex = SlotIndex;
+	Slot.SlotSource = SlotSource;
+	if (SlotSource == ECatInventorySlotSource::CampInventoryObject)
+	{
+		Slot.CampInventorySlotIndex = SlotIndex;
+		Slot.CampInventoryRevision = CampRevision;
+	}
+	else
+	{
+		Slot.InventorySlotIndex = SlotIndex;
+	}
 	ApplyInventoryQuantityPresentation(Slot, 0, 1);
 
 	const UCatInventoryItemInstance* ItemInstance = InventoryEntry.Instance;
@@ -902,8 +964,9 @@ FCatInventorySlotView UCatInventoryModel::MakeInventorySlotView(
 		Slot.bCanDrag = true;
 		const FString QuantityText = Slot.bShowQuantity
 			? FString::Printf(TEXT(" %s"), *Slot.QuantityText.ToString()) : FString();
-		Slot.DisplayText = FText::FromString(FString::Printf(TEXT("随身库存\n第 %d 格\n%s\n%s%s"),
-			InventorySlotIndex + 1,
+		Slot.DisplayText = FText::FromString(FString::Printf(TEXT("%s\n第 %d 格\n%s\n%s%s"),
+			ResolvedSourceDisplayName,
+			SlotIndex + 1,
 			*GetEquipmentKindDisplayText(Slot.EquipmentKind),
 			*Slot.DisplayName.ToString(),
 			*QuantityText));
@@ -911,10 +974,19 @@ FCatInventorySlotView UCatInventoryModel::MakeInventorySlotView(
 	else
 	{
 		Slot.ObjectKind = ECatContainedObjectKind::Unknown;
-		Slot.DisplayText = FText::FromString(FString::Printf(TEXT("随身库存\n第 %d 格\n空"),
-			InventorySlotIndex + 1));
+		Slot.DisplayText = FText::FromString(FString::Printf(TEXT("%s\n第 %d 格\n空"),
+			ResolvedSourceDisplayName,
+			SlotIndex + 1));
 	}
 	return Slot;
+}
+
+// 正式随身库存格投影流程：把随身背包槽位身份交给通用正式库存投影，返回一个供普通背包 WBP 显示的只读格。
+FCatInventorySlotView UCatInventoryModel::MakeInventorySlotView(
+	const FCatInventoryEntry& InventoryEntry, const int32 InventorySlotIndex) const
+{
+	return MakeFormalInventorySlotView(InventoryEntry, InventorySlotIndex,
+		ECatInventorySlotSource::InventoryObject, 0, TEXT("随身库存"));
 }
 
 // 旧随身库存格投影流程：
@@ -973,6 +1045,14 @@ FCatInventorySlotView UCatInventoryModel::MakeInventorySlotView(
 			InventorySlotIndex + 1));
 	}
 	return Slot;
+}
+
+// 营地正式库存格投影流程：把正式库存条目交给通用投影并固定为公共仓库来源，返回值保留营地公开 Revision 作为取用和拖放的并发前提。
+FCatInventorySlotView UCatInventoryModel::MakeCampInventorySlotView(const FCatInventoryEntry& InventoryEntry,
+	const int32 CampSlotIndex, const int64 CampRevision) const
+{
+	return MakeFormalInventorySlotView(InventoryEntry, CampSlotIndex,
+		ECatInventorySlotSource::CampInventoryObject, CampRevision, TEXT("营地库存"));
 }
 
 // 营地公共仓库格投影流程：
@@ -1062,13 +1142,18 @@ void UCatInventoryModel::ClearExternalContainerBindings()
 	BoundExternalContainers.Reset();
 }
 
-// 营地公共仓库绑定清理流程：从原 Actor 移除快照变化句柄，再清空弱引用；Actor 失效时只丢本地记录，不创建替代仓库。
+// 营地公共仓库绑定清理流程：从原 Actor 和它当前的正式库存组件移除变化句柄，再清空弱引用；宿主失效时只丢本地记录，不创建替代仓库。
 void UCatInventoryModel::ClearCampInventoryBinding()
 {
 	if (ACatCampInventoryActor* CampInventory = BoundCampInventory.Get())
 	{
 		CampInventory->OnSnapshotChanged.Remove(CampInventoryChangedHandle);
+		if (UCatInventoryComponent* CampFormalInventory = CampInventory->GetInventoryComponent())
+		{
+			CampFormalInventory->OnInventoryObservedChanged.Remove(CampFormalInventoryChangedHandle);
+		}
 	}
 	CampInventoryChangedHandle.Reset();
+	CampFormalInventoryChangedHandle.Reset();
 	BoundCampInventory.Reset();
 }

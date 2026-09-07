@@ -42,7 +42,7 @@ public:
 	/** 清除当前库存的外部容器上下文；普通库存打开和离开交互对象时调用，避免上一容器留在新页面。 */
 	void ClearExternalContainerContexts();
 
-	/** 设置当前库存的营地公共仓库上下文；交互打开公共仓库时调用，Model 只订阅它的只读快照变化。 */
+	/** 设置当前库存的营地公共仓库上下文；交互打开公共仓库时调用，Model 订阅它的公开快照和正式库存只读变化。 */
 	void SetCampInventoryContext(ACatCampInventoryActor* InCampInventory);
 
 	/** 清除当前库存的营地公共仓库上下文；默认库存页或其他箱子打开前调用，避免上一公共仓库格留在新页面。 */
@@ -77,7 +77,7 @@ private:
 	/** 外部容器复制变化入口；任意已绑定外部容器内容变化后会关闭本地等待并重读完整投影。 */
 	void HandleExternalContainerSnapshotChanged();
 
-	/** 营地公共仓库快照变化入口；商店发货或玩家取用后会关闭本地等待并重读公共仓库格和玩家随身库存。 */
+	/** 营地公共仓库变化入口；营地公开快照或正式库存条目变化后会关闭本地等待并重读公共仓库格和玩家随身库存。 */
 	void HandleCampInventorySnapshotChanged();
 
 	/** owning Controller 收到公共领域结果时只消费非成功终态；成功终态等真实库存读源变化来关闭 pending。 */
@@ -103,6 +103,10 @@ private:
 	FCatInventorySlotView MakeSlotView(const FCatContainerSnapshot& Snapshot, int32 ContainerSlotIndex,
 		int32 ExternalSlotIndex, const TCHAR* ContainerDisplayName) const;
 
+	/** 按正式库存条目生成只读 SlotView；Refresh 在随身背包或营地正式组件可用时调用，结果按 SlotSource 保留服务器命令需要的槽位身份和公开版本。 */
+	FCatInventorySlotView MakeFormalInventorySlotView(const FCatInventoryEntry& InventoryEntry,
+		int32 SlotIndex, ECatInventorySlotSource SlotSource, int64 CampRevision, const TCHAR* SourceDisplayName) const;
+
 	/** 按正式随身库存条目生成一个只读物品格；它只暴露本背包内的格子下标、定义、实例和数量，不提供 Items 容器移动授权。 */
 	FCatInventorySlotView MakeInventorySlotView(const FCatInventoryEntry& InventoryEntry,
 		int32 InventorySlotIndex) const;
@@ -110,6 +114,10 @@ private:
 	/** 按旧随身库存数组生成一个只读物品格；只在正式库存复制尚未到位时作为临时展示 fallback。 */
 	FCatInventorySlotView MakeInventorySlotView(const FCatRunInventorySlot& InventorySlot,
 		int32 InventorySlotIndex) const;
+
+	/** 按营地正式库存条目生成一个只读物品格；它保留公共仓库槽位和公开版本，让取用与拖放仍走营地服务器入口。 */
+	FCatInventorySlotView MakeCampInventorySlotView(const FCatInventoryEntry& InventoryEntry,
+		int32 CampSlotIndex, int64 CampRevision) const;
 
 	/** 按营地公共仓库数组生成一个只读物品格；它只暴露本公共仓库内的槽位和版本，取用仍走 PlayerController 服务器入口。 */
 	FCatInventorySlotView MakeCampInventorySlotView(const FCatRunInventorySlot& InventorySlot,
@@ -121,7 +129,7 @@ private:
 	/** 解除所有外部容器复制订阅并清空绑定数组；切换上下文和 Unbind 都走同一流程，避免遗漏句柄。 */
 	void ClearExternalContainerBindings();
 
-	/** 解除营地公共仓库快照订阅并清空弱引用；切换到默认库存页或其他箱子时必须成对执行。 */
+	/** 解除营地公共仓库快照和正式库存订阅并清空弱引用；切换到默认库存页或其他箱子时必须成对执行。 */
 	void ClearCampInventoryBinding();
 
 	/** 一份外部容器读源绑定；每个交互对象可以贡献多份容器，Model 统一订阅它们的复制变化。 */
@@ -165,6 +173,9 @@ private:
 
 	/** 营地公共仓库快照订阅句柄；公共仓库上下文切换时必须从同一 Actor 移除。 */
 	FDelegateHandle CampInventoryChangedHandle;
+
+	/** 当前营地正式库存组件的变化订阅句柄；SetCampInventoryContext 写入，ClearCampInventoryBinding 移除，防止组件复制追平后 UI 仍停在旧快照。 */
+	FDelegateHandle CampFormalInventoryChangedHandle;
 
 	/** PlayerController 公共领域结果订阅句柄；库存用它接收跨容器移动终态。 */
 	FDelegateHandle CampCommandResultHandle;
