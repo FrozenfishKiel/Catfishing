@@ -948,8 +948,15 @@ FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, co
 		MarkInventoryItemUseReplayed(Result);
 		return Result;
 	}
-	const auto Finish = [this, &Key, &PayloadSignature](const FCatInventoryItemUseResult& Completed)
+	const auto Finish = [this, &Key, &PayloadSignature](FCatInventoryItemUseResult Completed)
 	{
+		if (Completed.InventoryRevision == 0)
+		{
+			if (const UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent())
+			{
+				Completed.InventoryRevision = OwnerInventory->GetInventoryRevision();
+			}
+		}
 		InventoryItemUseTerminalCache.Add(Key, Completed);
 		TerminalPayloadByKey.Add(Key, PayloadSignature);
 		return Completed;
@@ -972,6 +979,7 @@ FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, co
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Finish(Result);
 	}
+	Result.InventoryRevision = OwnerInventory->GetInventoryRevision();
 	// 正式角色的 Use 以 InventoryComponent 为事实源；Equipment 在这里临时投影旧载荷，是为了继续复用现有定义裁决。
 	const int32 FormalSlotIndex = OwnerInventory->FindInventorySlotIndexFromInstanceId(ItemInstanceId);
 	const FCatInventoryEntry* FormalEntry = OwnerInventory->GetInventoryEntryAtSlot(FormalSlotIndex);
@@ -1007,12 +1015,14 @@ FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, co
 			OwnerInventory->ReplaceInventoryEntriesFromAuthority(
 				SavedEntries, GetConfiguredInventorySlotCapacity());
 			Snapshot = SavedSnapshot;
+			Result.InventoryRevision = OwnerInventory->GetInventoryRevision();
 			Result.Error = ECatDomainCommandError::DependencyUnavailable;
 			return Finish(Result);
 		}
 
 		Result.Item = SourceItem;
 		Result.Item.Quantity = Quantity;
+		Result.InventoryRevision = OwnerInventory->GetInventoryRevision();
 		Result.EquipmentRevision = Snapshot.Revision;
 		Result.bCommitted = true;
 		Result.Error = ECatDomainCommandError::None;
@@ -1049,6 +1059,7 @@ FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, co
 				SavedEntries, GetConfiguredInventorySlotCapacity());
 		}
 		Snapshot = SavedSnapshot;
+		Result.InventoryRevision = OwnerInventory->GetInventoryRevision();
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Finish(Result);
 	}
@@ -1075,6 +1086,7 @@ FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, co
 	}
 	InventoryItemUseRecords.FindChecked(SourceItem.ItemInstanceId).UseRevision = Snapshot.Revision;
 	Result.Item = SourceItem;
+	Result.InventoryRevision = OwnerInventory->GetInventoryRevision();
 	Result.EquipmentRevision = Snapshot.Revision;
 	Result.bCommitted = true;
 	Result.Error = ECatDomainCommandError::None;
@@ -1091,6 +1103,10 @@ bool UCatEquipmentComponent::TryReplayInventoryItemUseTerminal(const FGuid Reque
 	OutResult = FCatInventoryItemUseResult();
 	OutResult.RequestId = RequestId;
 	OutResult.EquipmentRevision = Snapshot.Revision;
+	if (const UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent())
+	{
+		OutResult.InventoryRevision = OwnerInventory->GetInventoryRevision();
+	}
 	if (!RequestId.IsValid() || !ItemInstanceId.IsValid() || Quantity <= 0)
 	{
 		return false;
@@ -1145,8 +1161,15 @@ FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, 
 		MarkInventoryItemUseReplayed(Result);
 		return Result;
 	}
-	const auto Finish = [this, &Key, &PayloadSignature](const FCatInventoryItemUseResult& Completed)
+	const auto Finish = [this, &Key, &PayloadSignature](FCatInventoryItemUseResult Completed)
 	{
+		if (Completed.InventoryRevision == 0)
+		{
+			if (const UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent())
+			{
+				Completed.InventoryRevision = OwnerInventory->GetInventoryRevision();
+			}
+		}
 		InventoryItemUseTerminalCache.Add(Key, Completed);
 		TerminalPayloadByKey.Add(Key, PayloadSignature);
 		return Completed;
@@ -1184,6 +1207,7 @@ FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, 
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Finish(Result);
 	}
+	Result.InventoryRevision = OwnerInventory->GetInventoryRevision();
 
 	// 正式收口只能归还 Use 时借出的那一个实例；缺少 held entry 说明活动记录和库存事实已经分叉，必须拒绝。
 	const FCatInventoryEntry* HeldEntry =
@@ -1213,6 +1237,7 @@ FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, 
 		RestoredItem.ItemInstanceId, GetConfiguredInventorySlotCapacity(), 0, ReturnedEntry))
 	{
 		FormalInstance->SetRodRuntimeStateFromAuthority(SavedFormalRodDurability, bSavedFormalRodBroken);
+		Result.InventoryRevision = OwnerInventory->GetInventoryRevision();
 		Result.Error = ECatDomainCommandError::CapacityExceeded;
 		return Finish(Result);
 	}
@@ -1241,6 +1266,7 @@ FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, 
 		FormalInstance->SetRodRuntimeStateFromAuthority(SavedFormalRodDurability, bSavedFormalRodBroken);
 		Snapshot = SavedSnapshot;
 		*Record = SavedRecord;
+		Result.InventoryRevision = OwnerInventory->GetInventoryRevision();
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Finish(Result);
 	}
@@ -1252,6 +1278,7 @@ FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, 
 		Snapshot.bRodBroken = RestoredItem.bRodBroken;
 	}
 	Result.Item = RestoredItem;
+	Result.InventoryRevision = OwnerInventory->GetInventoryRevision();
 	Result.EquipmentRevision = Snapshot.Revision;
 	Result.bCommitted = true;
 	Result.Error = ECatDomainCommandError::None;

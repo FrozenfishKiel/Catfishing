@@ -153,6 +153,9 @@ struct FCatFishingCommandResult
 	UPROPERTY(BlueprintReadOnly) FGuid CastAttemptId;
 	UPROPERTY(BlueprintReadOnly) FGuid RodActorId;
 	UPROPERTY(BlueprintReadOnly) int64 RodActorRevision = 0;
+	/** 涉及正式库存事务的命令完成后，服务器看到的背包内容版本；旧命令可保持 0，不参与钓鱼会话或鱼竿 Actor 并发。 */
+	UPROPERTY(BlueprintReadOnly) int64 InventoryRevision = 0;
+	/** 钓具选择或旧库存投影的版本；迁移期仍供旧监听者读取，但不能当作正式库存内容版本。 */
 	UPROPERTY(BlueprintReadOnly) int64 EquipmentRevision = 0;
 	UPROPERTY(BlueprintReadOnly) FGuid SuggestedFishingSessionId;
 };

@@ -1242,12 +1242,13 @@ void UCatFishingCommandComponent::ReceivePlaceChumResultLocally(const FCatPlaceC
 		PlaceChumResultOrder.RemoveAt(0);
 		PlaceChumResultsByRequestId.Remove(Evicted);
 	}
-	// 同时投影出一份“通用命令结果”；字段名仍叫 EquipmentRevision，但打窝路径写正式 InventoryRevision，旧监听者可继续按原字段刷新回执。
+	// 同时投影出一份“通用命令结果”；新字段写正式 InventoryRevision，旧 EquipmentRevision 继续镜像给迁移期监听者。
 	FCatFishingCommandResult Common;
 	Common.CommandType = ECatFishingCommandType::PlaceChum;
 	Common.bCommitted = Result.bCommitted;
 	Common.RequestId = Result.RequestId;
-	Common.EquipmentRevision = Result.GetInventoryRevision();
+	Common.InventoryRevision = Result.GetInventoryRevision();
+	Common.EquipmentRevision = Common.InventoryRevision;
 	Common.Revision = Result.ChumFieldSetRevision;
 	// 打窝子系统用自己的一套错误码，这里逐一映射到通用命令错误码，语义不对齐的兜底为 DependencyUnavailable
 	switch (Result.Error)

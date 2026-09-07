@@ -157,7 +157,11 @@ struct FCatInventoryItemUseResult
 	UPROPERTY(BlueprintReadOnly)
 	ECatDomainCommandError Error = ECatDomainCommandError::InvalidPayload;
 
-	/** 库存事务结束后的 Equipment 版本；前端用它刷新背包，调用方用它写命令回执。 */
+	/** 库存事务结束后的正式库存内容版本；Use/UnUse 成功、失败或回放时都尽量写入，调用方用它确认背包事实推进到哪一版。 */
+	UPROPERTY(BlueprintReadOnly)
+	int64 InventoryRevision = 0;
+
+	/** 库存 Use/UnUse 同步旧 Equipment 读模型后的版本；迁移期保留给旧前端和旧钓鱼命令回执，新调用方应优先读取 InventoryRevision。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 EquipmentRevision = 0;
 
