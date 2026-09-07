@@ -606,9 +606,10 @@ bool UCatFishingFightRunner::TryResolveGroundedFishPosition(const FVector& Desir
 FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthority(
 	FCatFightStepResult& Step, const FCatFightRodConstraintInput& RodConstraint,
 	FCatWaterSpatialResult& OutWater, bool& bOutBeachedThisStep,
-	FVector& OutGroundNormal, AActor*& OutGroundActor)
+	FVector& OutGroundNormal, AActor*& OutGroundActor, FCatFishingRodResistanceResult& OutRotationResistance)
 {
 	FCatFishMotionSolveResult Motion;
+	OutRotationResistance = FCatFishingRodResistanceResult{};
 	bOutBeachedThisStep = false;
 	OutGroundNormal = FVector::UpVector;
 	OutGroundActor = nullptr;
@@ -774,6 +775,29 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 			Step.CarrierAwaySpeedMultiplier = 1.0;
 		}
 	}
+	// 地形可改变距离、解除张力或直接触发上岸力竭。转杆必须消费最终事实，
+	// 不得把地形解析前缓存的负载与解析后的松线/落点一起发布。
+	FCatFishingRodResistanceInput RotationInput;
+	RotationInput.CatStrength = Config.PrimaryOperatorCatStrength;
+	RotationInput.FishStrength = State.bFishExhausted || Step.Outcome != ECatFightStepOutcome::None
+		? 0.0 : Config.FishStrength;
+	RotationInput.RodPhysicsLengthCentimeters = Config.RodPhysicsLengthCentimeters;
+	RotationInput.NormalizedTension = Step.NormalizedTension;
+	RotationInput.NormalizedFishLineLoad = Step.NormalizedLineLoad;
+	RotationInput.RodLineAlignment = FMath::Clamp(FVector::DotProduct(
+		RodConstraint.RodForwardWorld.GetSafeNormal(),
+		(Motion.FishWorldPosition - RodConstraint.RodTipWorldPosition).GetSafeNormal()), -1.0, 1.0);
+	OutRotationResistance = FCatFishingRodResistanceModel::Evaluate(RotationInput);
+	if (!OutRotationResistance.bSucceeded)
+	{
+		UE_LOG(LogCatFishing, Error,
+			TEXT("Event=fishing_rod_resolved_load_rejected SessionId=%s Fish=%s Tension=%.3f LineLoad=%.3f "
+				"World=%s NetMode=%d Authority=true LocalRole=%d Result=InvalidResolvedLoad"),
+			*Session->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*Motion.FishWorldPosition.ToCompactString(), Step.NormalizedTension, Step.NormalizedLineLoad,
+			*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(Session->GetLocalRole()));
+		return FCatFishMotionSolveResult{};
+	}
 	return Motion;
 }
 
@@ -888,30 +912,19 @@ void UCatFishingFightRunner::HandleFixedStep()
 	// 纯模拟器把鱼游向、竿向和持竿者移动合成为有效力量，再得到双方体力、线长、负载和建议位置。
 	FCatFightStepResult Step = FCatFishingFightSimulator::Step(
 		Config, State, RodConstraint, DesiredFishDirection);
-	FCatFishingRodResistanceInput RotationInput;
-	// 转杆由主位独立操作与扣体；辅助收线力量不能让已经力竭的主位免费施加转矩。
-	RotationInput.CatStrength = Config.PrimaryOperatorCatStrength;
-	RotationInput.FishStrength = State.bFishExhausted ? 0.0 : Config.FishStrength;
-	RotationInput.RodPhysicsLengthCentimeters = Config.RodPhysicsLengthCentimeters;
-	RotationInput.NormalizedTension = Step.NormalizedTension;
-	RotationInput.NormalizedFishLineLoad = Step.NormalizedLineLoad;
-	RotationInput.RodLineAlignment = Step.RodLineAlignment;
-	const FCatFishingRodResistanceResult RotationResistance =
-		FCatFishingRodResistanceModel::Evaluate(RotationInput);
-	if (!Step.bSucceeded || !RotationResistance.bSucceeded)
+	if (!Step.bSucceeded)
 	{
 		UE_LOG(LogCatFishing, Error,
 			TEXT("Event=fishing_fight_step_rejected SessionId=%s Stage=%s FishExhausted=%s "
 				"Fish=%s RodTip=%s DesiredFishDirection=%s LineLength=%.3f NetMode=%d Authority=true"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-			!Step.bSucceeded ? TEXT("FightSimulation") : TEXT("RodRotationResistance"),
+			TEXT("FightSimulation"),
 			State.bFishExhausted ? TEXT("true") : TEXT("false"),
 			*State.FishWorldPosition.ToCompactString(), *RodTip.ToCompactString(),
 			*DesiredFishDirection.ToCompactString(), State.LineLengthCentimeters,
 			static_cast<int32>(World->GetNetMode()));
 		Stop();
-		SessionActor->HandleFightRunnerFailureFromAuthority(
-			!Step.bSucceeded ? TEXT("FightSimulation") : TEXT("RodRotationResistance"));
+		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("FightSimulation"));
 		return;
 	}
 	Step.ActiveHelperCount = FMath::Max(0, Participants.Num() - (State.bOperatorPresent ? 1 : 0));
@@ -919,8 +932,9 @@ void UCatFishingFightRunner::HandleFixedStep()
 	bool bBeachedThisStep = false;
 	FVector GroundSurfaceNormal = FVector::UpVector;
 	AActor* GroundSurfaceActor = nullptr;
+	FCatFishingRodResistanceResult RotationResistance;
 	const FCatFishMotionSolveResult Motion = ResolveFishSurfaceFromAuthority(Step, RodConstraint,
-		Exact, bBeachedThisStep, GroundSurfaceNormal, GroundSurfaceActor);
+		Exact, bBeachedThisStep, GroundSurfaceNormal, GroundSurfaceActor, RotationResistance);
 	if (!Motion.bSucceeded)
 	{
 		UE_LOG(LogCatFishing, Error,
@@ -1150,6 +1164,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 	{
 		UE_LOG(LogCatFishing, Display,
 			TEXT("Event=fishing_constraint_sample SessionId=%s RodActorId=%s Active=%s CarrierActive=%s Action=%s "
+				"Geometry=WaterPlaneSphereIntersection RodTorqueSource=ResolvedSurface "
 				"ConstraintError=%.2f RelativeLineSpeed=%.2f Tension=%.3f FishCorrection=%.2f CarrierCorrection=%.2f "
 				"CarrierAcceleration=%.2f CarrierTargetPullSpeed=%.2f CarrierAwaySpeedMultiplier=%.3f RodLeverage=%.3f "
 				"RodPhysicsLengthCm=%.2f MaximumFishTorque=%.3f FishTorque=%.3f CatTorqueCapacity=%.3f "

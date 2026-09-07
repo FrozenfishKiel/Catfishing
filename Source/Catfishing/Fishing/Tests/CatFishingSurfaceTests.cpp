@@ -98,8 +98,14 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 			bool bJustBeached = false;
 			FVector Normal;
 			AActor* Surface = nullptr;
-			const auto Motion = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, Water, bJustBeached, Normal, Surface);
+			FCatFishingRodResistanceResult RotationResistance;
+			const auto Motion = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, Water, bJustBeached, Normal, Surface, RotationResistance);
 			if (!TestTrue(TEXT("real runtime surface solve continues through gap and slope"), Motion.bSucceeded)) return false;
+			TestTrue(TEXT("resolved surface also provides a valid rod load"), RotationResistance.bSucceeded);
+			if (!Step.bLineTaut || Step.Outcome == ECatFightStepOutcome::FishExhausted || Runner->State.bFishExhausted)
+			{
+				TestEqual(TEXT("released or exhausted fish has no stale rod torque"), RotationResistance.MaximumFishTorqueStrengthMeters, 0.0);
+			}
 			TestTrue(TEXT("haul never bounces toward the water inset"), Motion.FishWorldPosition.X <= Runner->State.FishWorldPosition.X + 0.01);
 			if (Motion.FishWorldPosition.X < -30.0 && Motion.FishWorldPosition.X > -90.0)
 			{
@@ -148,7 +154,8 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		bool bJustBeached;
 		FVector Normal;
 		AActor* Surface = nullptr;
-		const auto Reentry = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, Water, bJustBeached, Normal, Surface);
+		FCatFishingRodResistanceResult RotationResistance;
+		const auto Reentry = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, Water, bJustBeached, Normal, Surface, RotationResistance);
 		TestTrue(TEXT("ground-to-water transition is recoverable"), Reentry.bSucceeded);
 		TestFalse(TEXT("water reentry revokes dry-ground pickup eligibility"), Runner->bFishBeached);
 		TestEqual(TEXT("reentry follows current water surface"), Reentry.FishWorldPosition.Z, 0.0, 0.01);
@@ -161,10 +168,13 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		Step.CombinedCatStrength = 50.0;
 		Step.FishConstraintCorrectionCentimeters = 8.0;
 		Step.bLineTaut = true;
-		const auto EarlyGround = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, Water, bJustBeached, Normal, Surface);
+		Step.NormalizedTension = 1.0;
+		Step.NormalizedLineLoad = 1.0;
+		const auto EarlyGround = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, Water, bJustBeached, Normal, Surface, RotationResistance);
 		TestTrue(TEXT("real dry ground inside baked outline still lands"), EarlyGround.bSucceeded && bJustBeached);
 		TestEqual(TEXT("early ground is confirmed by collision"), Surface, static_cast<AActor*>(InsideGround));
 		TestEqual(TEXT("actual dry height retained inside water outline"), EarlyGround.FishWorldPosition.Z, 40.0, 0.05);
+		TestEqual(TEXT("landing removes fish torque before publishing the same step"), RotationResistance.MaximumFishTorqueStrengthMeters, 0.0);
 
 		Runner->bFishBeached = false;
 		Runner->State.FishWorldPosition = FVector(-90.0, 0.0, 0.0);
@@ -179,15 +189,19 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		Step.ActualReelDistanceCentimeters = 2.0;
 		Step.FishConstraintCorrectionCentimeters = 8.0;
 		Step.ProposedFishWorldPosition = FVector(-120.0, 0.0, 0.0);
+		Step.NormalizedTension = 1.0;
+		Step.NormalizedLineLoad = 1.0;
 		Rod.RodTipVelocityCentimetersPerSecond = FVector(-400.0, 0.0, 0.0);
-		const auto Swing = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, Water, bJustBeached, Normal, Surface);
+		const auto Swing = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, Water, bJustBeached, Normal, Surface, RotationResistance);
 		TestTrue(TEXT("live-fish swing shore contact stays valid"), Swing.bSucceeded);
 		TestFalse(TEXT("dominant rod swing does not instantly exhaust the live fish"), bJustBeached);
 		TestEqual(TEXT("rod swing does not force stamina drain"), Step.FishStaminaDrain, 0.0);
+		TestFalse(TEXT("real shoreline correction leaves the line slack"), Step.bLineTaut);
+		TestEqual(TEXT("slack shoreline result cannot publish the old loaded torque"), RotationResistance.MaximumFishTorqueStrengthMeters, 0.0);
 		Runner->State.bFishExhausted = true;
 		Runner->State.FishStamina = 0.0;
 		Runner->State.CatAction = ECatFightCatAction::None;
-		const auto DeadTow = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, Water, bJustBeached, Normal, Surface);
+		const auto DeadTow = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, Water, bJustBeached, Normal, Surface, RotationResistance);
 		TestTrue(TEXT("already exhausted fish follows physical line endpoint movement onto shore"), DeadTow.bSucceeded && bJustBeached);
 	}
 
@@ -236,8 +250,9 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		bool bJustBeached = false;
 		FVector Normal;
 		AActor* Surface = nullptr;
+		FCatFishingRodResistanceResult RotationResistance;
 		const auto Motion = RecoveryRunner->ResolveFishSurfaceFromAuthority(
-			Step, RecoveryRod, Water, bJustBeached, Normal, Surface);
+			Step, RecoveryRod, Water, bJustBeached, Normal, Surface, RotationResistance);
 		if (!TestTrue(TEXT("real water query and runner resolve the gap recovery"), Motion.bSucceeded)) return false;
 		TestFalse(TEXT("gap recovery never grants dry-ground pickup eligibility"), RecoveryRunner->bFishBeached || bJustBeached);
 		TestTrue(TEXT("gap recovery does not force the live fish to exhaust"), Step.Outcome != ECatFightStepOutcome::FishExhausted);

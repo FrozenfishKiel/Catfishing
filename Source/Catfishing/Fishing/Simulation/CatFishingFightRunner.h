@@ -109,7 +109,8 @@ private:
 		FVector& OutGroundedPosition, FVector& OutSurfaceNormal, AActor*& OutSurfaceActor) const;
 	FCatFishMotionSolveResult ResolveFishSurfaceFromAuthority(FCatFightStepResult& Step,
 		const FCatFightRodConstraintInput& RodConstraint, FCatWaterSpatialResult& OutWater,
-		bool& bOutBeachedThisStep, FVector& OutGroundNormal, AActor*& OutGroundActor);
+		bool& bOutBeachedThisStep, FVector& OutGroundNormal, AActor*& OutGroundActor,
+		FCatFishingRodResistanceResult& OutRotationResistance);
 	TWeakObjectPtr<ACatFishingSession> Session;
 	TWeakObjectPtr<ACatFishEncounterActor> FishActor;
 	TWeakObjectPtr<ACatFishingRodActor> RodActor;

@@ -20,7 +20,7 @@
       1. ST_FishFight：决定当前是发力还是平静，并把 MotionIntent 交给 Runner
       2. FCatFishSteeringModel：结合鱼体力决定向内/向外，再平滑转弯
       3. FCatFishingFightSimulator：合并运动与卷线意图，计算约束修正、努力距离、体力和鱼竿磨损增量
-         Runner 再解析真实水面/岸线/地面，发布猫端牵引目标与鱼竿转矩输入
+         Runner 再解析真实水面/岸线/地面，由最终松绷线与生命周期计算鱼竿负载，然后发布牵引与转矩输入
       4. ACatFishEncounterActor：应用服务器位置并复制表现状态
   → 鱼体力耗尽
       5. FishExhausted 事件切换 Session StateTree；同一 Runner 停止鱼主动游动，拖到真实干地且接近竿尖后生成 Pickup
@@ -149,7 +149,7 @@ LineLoad  = pow(max(Alignment, 0), AngleStrengthExponent)
 
 `HeldRodFishPullSmoothingSeconds=0.15` 是有向负载的响应时间常数（约 0.15 秒完成 63% 的变化），与猫端瞄准响应 `HeldRodAngularResistanceResponseSeconds=0.08` 分开。亚步使用中点负载、保存终点历史，保持不同帧率下响应一致；只影响过渡，不改变恒定负载下的平衡角。历史不会随猫端移动 `bActive` 或一次零负载目标清空；会话清约束、力竭清驱动力、换持有者或落地时清空，避免旧鱼负载带到新状态。`fishing_rod_rotation_resistance_sample` 保留原始 `MaximumFishTorque/PullAxis`，另记 `AppliedFishPull/FishPullSmoothingSeconds`，可按同一 `RodActorId` 与约束日志对照。
 
-`TorqueBalanced` 只用于诊断；没有全方向零速锁定，也没有阻力角度上限或锁定半径。鱼线转矩的输入仍是上述负载估计，尚未接入共同约束反力。
+`TorqueBalanced` 只用于诊断；没有全方向零速锁定，也没有阻力角度上限或锁定半径。鱼线转矩的输入仍是上述负载估计，尚未接入共同约束反力。Runner 的 `ResolveFishSurfaceFromAuthority` 在确定最终落点、松绷线与上岸/力竭结果后才输出本步鱼竿负载；松线与终局结果不会继续发布地形修正前的鱼转矩，力臂角度也以最终鱼位置计算。原 `HandleFixedStep` 在地形解析前计算并缓存转矩的入口已删除。`fishing_constraint_sample` 使用 `Geometry=WaterPlaneSphereIntersection`、`RodTorqueSource=ResolvedSurface` 标识当前几何与负载来源；解析失败使用 `fishing_rod_resolved_load_rejected`。这一步只修正本步发布的杆负载，费用与其他玩法观察量的统一后结算仍待后续改造。
 
 第一人称镜头另在 `UCatFishingCameraComponent` 中以实际握把为目标平滑跟随，响应时间为 `FightCameraFollowResponseSeconds=0.08`。这份历史只用于镜头，不进入上述转矩、竿尖、身体朝向或体力求解。位置使用指数插值、朝向使用最短弧四元数插值；零时间不推进，长帧最多推进 0.1 秒，离杆/结束/切换观战清除历史。`LogCatFishing/Event=fishing_fight_camera` 在原有每秒日志中记录 `TargetRotation`、`ViewRotation`、`FollowResponseSeconds`、`FollowErrorDegrees`、`MaxTargetStepDegrees` 和 `MaxViewStepDegrees`，按 `RodActorId` 与权威转矩日志关联。最大步幅按相邻镜头帧统计并在输出后重置，不能把它当成网络延迟或整场最大值。
 
