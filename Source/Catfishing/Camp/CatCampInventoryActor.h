@@ -16,7 +16,7 @@ class USphereComponent;
 struct FCatInventoryEntry;
 struct FCatInventoryReceiveBatch;
 
-/** 营地公共仓库的复制读模型；它只保存公共库存格和版本，不包含玩家当前钓鱼选择。 */
+/** 营地公共仓库的兼容复制读模型；内容由正式库存组件投影而来，不再作为运行时写事实源。 */
 USTRUCT(BlueprintType)
 struct FCatCampInventorySnapshot
 {
@@ -26,7 +26,7 @@ struct FCatCampInventorySnapshot
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 
-	/** 公共仓库格子数组；每个格子沿用运行期物品实例，堆叠语义由装备定义和仓库配置共同决定。 */
+	/** 公共仓库格子数组；存档和迁移期旧读者读取它，运行时写入必须回到正式库存组件。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatRunInventorySlot> InventorySlots;
 };
@@ -49,7 +49,7 @@ struct FCatCampInventoryAddItemRequest
 /** 营地公共仓库快照变化通知；UI 或营地交互层收到后只能重读快照，不能直接写库存。 */
 DECLARE_MULTICAST_DELEGATE(FCatCampInventorySnapshotChanged);
 
-/** 营地公共仓库 Actor；商店购买物先进入这里，玩家再从公共仓库取到自己的随身库存，迁移期同时暴露正式 Inventory 组件。 */
+/** 营地公共仓库 Actor；商店购买物先进入这里，玩家再从公共仓库取到自己的随身正式库存。 */
 UCLASS(BlueprintType, Blueprintable)
 class CATFISHING_API ACatCampInventoryActor : public AActor, public ICatInteractable
 {
@@ -108,7 +108,7 @@ public:
 	FCatDomainCommandResult AddItemsFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		const FString& StableNetId, const TArray<FCatCampInventoryAddItemRequest>& Items);
 
-	/** 查询玩家是否能从指定公共格子取物到自己的随身库存；正式组件存在时只预演正式库存，旧投影仅作缺组件 fallback。 */
+	/** 查询玩家是否能从指定公共格子取物到自己的随身库存；预检只读取营地和玩家的正式库存组件。 */
 	ECatDomainCommandError ValidateWithdrawToEquipment(FGuid RequestId, int32 SourceSlotIndex, int32 Quantity,
 		UCatEquipmentComponent* TargetEquipment) const;
 
@@ -152,7 +152,7 @@ private:
 	/** 解析旧公共仓库格需要的装备定义；优先走正式库存目录，迁移期才回退旧装备目录。 */
 	UCatEquipmentDefinition* ResolveEquipmentDefinitionForLegacyInventory(FName DefinitionId) const;
 
-	/** 把旧发货请求整理成正式库存批次；只有能投影回旧 UI 的装备定义会进入迁移期公共仓库。 */
+	/** 把旧发货请求整理成正式库存批次；只有能投影回旧读模型的装备定义会进入迁移期公共仓库。 */
 	bool BuildFormalReceiveBatchForLegacyInventory(const TArray<FCatCampInventoryAddItemRequest>& Items,
 		FCatInventoryReceiveBatch& OutReceiveBatch) const;
 
@@ -163,11 +163,8 @@ private:
 	/** 只读判断多行物品能否被正式库存整批接收；模拟成功才允许购物车扣款。 */
 	bool CanStoreItems(const TArray<FCatCampInventoryAddItemRequest>& Items) const;
 
-	/** 从正式库存组件重建旧公共仓库快照；迁移期让 UI 和存档继续读旧结构，但写事实来自库存组件。 */
+	/** 从正式库存组件重建旧公共仓库快照；迁移期让存档和旧只读消费者继续读旧结构。 */
 	bool SyncLegacySnapshotFromInventoryComponent();
-
-	/** 从旧公共仓库快照重建正式库存组件；迁移期旧拖拽和存档写口成功后用它保持两边同源。 */
-	bool SyncInventoryComponentFromLegacySnapshot();
 
 	/** 从玩家 Equipment 宿主取得正式随身库存；营地转移只用 Equipment 做旧投影刷新，不再把它当背包事实源。 */
 	UCatInventoryComponent* ResolveFormalInventoryFromEquipment(UCatEquipmentComponent* Equipment) const;
@@ -248,7 +245,7 @@ private:
 		meta = (AllowPrivateAccess = "true", ClampMin = "0"))
 	int32 InventorySlotCapacity = 48;
 
-	/** 营地公共仓库的唯一复制库存事实；服务器写入，客户端只读。 */
+	/** 营地公共仓库的兼容复制读模型；服务器从正式库存投影，客户端只读。 */
 	UPROPERTY(ReplicatedUsing = OnRep_Snapshot)
 	FCatCampInventorySnapshot Snapshot;
 

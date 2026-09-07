@@ -113,7 +113,7 @@ const FCatCampInventorySnapshot& ACatCampInventoryActor::GetSnapshot() const
 	return Snapshot;
 }
 
-// Inventory 读取流程：直接返回构造期正式库存组件；迁移期旧公共仓库快照仍负责现有 UI 和取用兼容。
+// Inventory 读取流程：直接返回构造期正式库存组件；公共仓库命令和 UI 展示都以它作为库存事实源。
 UCatInventoryComponent* ACatCampInventoryActor::GetInventoryComponent() const
 {
 	return InventoryComponent;
@@ -417,8 +417,8 @@ FCatDomainCommandResult ACatCampInventoryActor::AddItemsFromAuthority(const FGui
 
 // 取用预检流程：
 // 1. 先验证 authority、请求身份、目标 Equipment 宿主和数量，让公共仓库取用必须有明确玩家接收方。
-// 2. 营地和玩家正式库存组件都存在时，源格、定义、实例和容量全部从 InventoryComponent 读取并预演；本函数不写任何格子。
-// 3. 营地或玩家任一侧缺正式库存组件时才回退 Snapshot/Equipment 投影；正式组件齐全时不让旧读模型反过来裁决库存。
+// 2. 源格、定义、实例和容量全部从双方 InventoryComponent 读取并预演；本函数不写任何格子。
+// 3. 任一正式库存组件缺失都直接拒绝，避免旧 Snapshot 或 Equipment 投影重新成为库存写事实。
 ECatDomainCommandError ACatCampInventoryActor::ValidateWithdrawToEquipment(const FGuid RequestId,
 	const int32 SourceSlotIndex, const int32 Quantity, UCatEquipmentComponent* TargetEquipment) const
 {
@@ -462,34 +462,14 @@ ECatDomainCommandError ACatCampInventoryActor::ValidateWithdrawToEquipment(const
 		return TargetInventory->CanFullyAcceptInventoryBatch(ReceiveBatch)
 			? ECatDomainCommandError::None : ECatDomainCommandError::CapacityExceeded;
 	}
-	if (!Snapshot.InventorySlots.IsValidIndex(SourceSlotIndex))
-	{
-		return ECatDomainCommandError::InvalidPayload;
-	}
-	const FCatRunInventorySlot& SourceSlot = Snapshot.InventorySlots[SourceSlotIndex];
-	const UCatEquipmentDefinition* Definition =
-		ResolveEquipmentDefinitionForLegacyInventory(SourceSlot.DefinitionId);
-	if (!Definition || !CatRunInventorySlotOperations::IsInventorySlotOccupied(SourceSlot)
-		|| !SourceSlot.ItemInstanceId.IsValid() || SourceSlot.Quantity < Quantity)
-	{
-		return ECatDomainCommandError::InvalidPayload;
-	}
-	if (!Definition->bRunConsumable && Quantity != 1)
-	{
-		return ECatDomainCommandError::InvalidPayload;
-	}
-	FCatRunInventorySlot WithdrawnItem = SourceSlot;
-	WithdrawnItem.Quantity = Quantity;
-	CatRunInventorySlotOperations::NormalizeStoredItemSlot(WithdrawnItem, *Definition);
-	return TargetEquipment->CanStoreInventorySlot(*Definition, WithdrawnItem)
-		? ECatDomainCommandError::None : ECatDomainCommandError::CapacityExceeded;
+	return ECatDomainCommandError::DependencyUnavailable;
 }
 
 // 取用提交流程：
-// 1. 先用 RequestId、源槽、源物定义/实例、数量和双方版本签名处理幂等；源物身份优先从正式 InventoryComponent 读取，缺组件时才用旧 Snapshot。
-// 2. 正式库存可用时优先验证营地公开版本、玩家正式库存版本、容量和源格数量；迁移期仍接受 Equipment 投影版本作为旧 UI/测试兼容前提。
+// 1. 先用 RequestId、源槽、源物定义/实例、数量和双方版本签名处理幂等；源物身份只从正式 InventoryComponent 读取。
+// 2. 正式库存可用时优先验证营地公开版本、玩家正式库存版本、容量和源格数量；迁移期仍接受 Equipment 投影版本作为旧版本调用兼容前提。
 // 3. 满栈取用保留原实例身份，拆栈取用按定义生成接收批次；玩家接收、营地扣减或旧投影刷新任一失败都会恢复双方正式 entries 和旧快照。
-// 4. 没有正式随身库存组件时才走旧 Equipment 授予路径；成功后只推进公共仓库 Revision，玩家侧版本由自己的发布入口维护。
+// 4. 任一正式库存组件缺失都返回依赖不可用，不再用旧 Equipment 或 Snapshot 写入库存。
 FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority(const FGuid RequestId,
 	const int64 ExpectedCampRevision, const int32 SourceSlotIndex, const int32 Quantity,
 	UCatEquipmentComponent* TargetEquipment, const int64 ExpectedInventoryRevision)
@@ -508,11 +488,6 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 			SourceDefinitionId = SourceInstance->GetItemDefinitionId();
 			SourceItemInstanceId = SourceInstance->GetItemInstanceId();
 		}
-	}
-	else if (Snapshot.InventorySlots.IsValidIndex(SourceSlotIndex))
-	{
-		SourceDefinitionId = Snapshot.InventorySlots[SourceSlotIndex].DefinitionId;
-		SourceItemInstanceId = Snapshot.InventorySlots[SourceSlotIndex].ItemInstanceId;
 	}
 	if (!RequestId.IsValid())
 	{
@@ -555,7 +530,7 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 		}
 		else
 		{
-			// 右键取入也先对齐正式容量；旧 UI 仍按快照看空格，正式预检不能因为组件尚未补格而误报满包。
+			// 右键取入也先对齐正式容量；兼容读模型仍按快照看空格，正式预检不能因为组件尚未补格而误报满包。
 			InventoryComponent->SetInventorySlotCountFromAuthority(GetConfiguredSlotCapacity());
 			TargetInventory->SetInventorySlotCountFromAuthority(TargetEquipment->GetConfiguredInventorySlotCapacity());
 			if (!InventoryComponent->IsValidInventorySlotIndex(SourceSlotIndex))
@@ -639,83 +614,7 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 		return Result;
 	}
 
-	const ECatDomainCommandError Rejection =
-		ValidateWithdrawToEquipment(RequestId, SourceSlotIndex, Quantity, TargetEquipment);
-	if (Rejection != ECatDomainCommandError::None)
-	{
-		Result.Error = Rejection;
-		Result.Revision = Snapshot.Revision;
-		TerminalCache.Add(Key, Result);
-		TerminalPayloadByKey.Add(Key, PayloadSignature);
-		return Result;
-	}
-	if (Snapshot.Revision != ExpectedCampRevision)
-	{
-		Result.Error = ECatDomainCommandError::RevisionConflict;
-		Result.Revision = Snapshot.Revision;
-		TerminalCache.Add(Key, Result);
-		TerminalPayloadByKey.Add(Key, PayloadSignature);
-		return Result;
-	}
-
-	const UCatEquipmentDefinition* Definition = ResolveEquipmentDefinitionForLegacyInventory(SourceDefinitionId);
-	if (!Definition)
-	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-		Result.Revision = Snapshot.Revision;
-		TerminalCache.Add(Key, Result);
-		TerminalPayloadByKey.Add(Key, PayloadSignature);
-		return Result;
-	}
-
-	TArray<FCatRunInventorySlot> SavedSlots = Snapshot.InventorySlots;
-	FCatRunInventorySlot& SourceSlot = Snapshot.InventorySlots[SourceSlotIndex];
-	FCatRunInventorySlot WithdrawnItem = SourceSlot;
-	WithdrawnItem.Quantity = Quantity;
-	CatRunInventorySlotOperations::NormalizeStoredItemSlot(WithdrawnItem, *Definition);
-	if (Definition->bRunConsumable && Quantity < SourceSlot.Quantity)
-	{
-		WithdrawnItem.ItemInstanceId = FGuid::NewGuid();
-	}
-	SourceSlot.Quantity -= Quantity;
-	if (SourceSlot.Quantity <= 0)
-	{
-		SourceSlot = FCatRunInventorySlot();
-	}
-
-	if (!SyncInventoryComponentFromLegacySnapshot())
-	{
-		Snapshot.InventorySlots = MoveTemp(SavedSlots);
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-		Result.Revision = Snapshot.Revision;
-		TerminalCache.Add(Key, Result);
-		TerminalPayloadByKey.Add(Key, PayloadSignature);
-		return Result;
-	}
-
-	const FCatDomainCommandResult Grant =
-		TargetEquipment->GrantInventorySlotFromAuthority(RequestId, ExpectedInventoryRevision, WithdrawnItem);
-	const bool bGrantStanding = Grant.bCommitted || Grant.Error == ECatDomainCommandError::AlreadyResolved;
-	if (!bGrantStanding)
-	{
-		Snapshot.InventorySlots = MoveTemp(SavedSlots);
-		Result = Grant;
-		if (!SyncInventoryComponentFromLegacySnapshot())
-		{
-			Result.Error = ECatDomainCommandError::DependencyUnavailable;
-			Result.bCommitted = false;
-		}
-		Result.RequestId = RequestId;
-		Result.Revision = Snapshot.Revision;
-		TerminalCache.Add(Key, Result);
-		TerminalPayloadByKey.Add(Key, PayloadSignature);
-		return Result;
-	}
-
-	++Snapshot.Revision;
-	PublishSnapshot();
-	Result.bCommitted = true;
-	Result.Error = ECatDomainCommandError::None;
+	Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	Result.Revision = Snapshot.Revision;
 	TerminalCache.Add(Key, Result);
 	TerminalPayloadByKey.Add(Key, PayloadSignature);
@@ -817,7 +716,7 @@ FCatDomainCommandResult ACatCampInventoryActor::MoveInventorySlotFromAuthority(c
 // 1. 用 RequestId 和双方版本/槽位做幂等签名；同请求重放只返回首次终态，不重复移动任何格子。
 // 2. 正式库存可用时把玩家正式库存作为源、营地正式库存作为目标，Equipment 只用来定位 Owner 和刷新旧读模型。
 // 3. 目标营地格有不同物品时，把玩家将收到的定义传给旧投影刷新，保留旧钓具自动选择体验。
-// 4. 正式交换失败或投影失败时由共享 helper 回滚双方正式 entries 和旧快照；没有正式库存组件时才走旧快照兜底。
+// 4. 正式交换失败或投影失败时由共享 helper 回滚双方正式 entries 和旧快照；缺正式库存组件时直接拒绝。
 // 5. 成功后公共仓库公开 Revision 由营地推进，玩家 Inventory/Equipment 的版本变化由玩家侧组件自己的发布入口维护。
 FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuthority(const FGuid RequestId,
 	const int64 ExpectedCampRevision, const int32 TargetCampSlotIndex, UCatEquipmentComponent* SourceEquipment,
@@ -873,86 +772,7 @@ FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuth
 		return Result;
 	}
 
-	AActor* EquipmentOwner = SourceEquipment ? SourceEquipment->GetOwner() : nullptr;
-	if (!HasAuthority() || !RequestId.IsValid() || !SourceEquipment || !EquipmentOwner
-		|| !EquipmentOwner->HasAuthority() || SourceEquipmentSlotIndex < 0 || TargetCampSlotIndex < 0)
-	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-	}
-	else if (Snapshot.Revision != ExpectedCampRevision
-		|| SourceEquipment->Snapshot.Revision != ExpectedInventoryRevision)
-	{
-		Result.Error = ECatDomainCommandError::RevisionConflict;
-	}
-	else
-	{
-		EnsureInventorySlotArray();
-		SourceEquipment->EnsureInventorySlotArray();
-		if (!Snapshot.InventorySlots.IsValidIndex(TargetCampSlotIndex)
-			|| !SourceEquipment->Snapshot.InventorySlots.IsValidIndex(SourceEquipmentSlotIndex))
-		{
-			Result.Error = ECatDomainCommandError::InvalidPayload;
-		}
-		else
-		{
-			const FName EquipmentReceivedDefinitionId = Snapshot.InventorySlots[TargetCampSlotIndex].DefinitionId;
-			const FName SourceDefinitionId =
-				SourceEquipment->Snapshot.InventorySlots[SourceEquipmentSlotIndex].DefinitionId;
-			const UCatEquipmentDefinition* SourceDefinition =
-				ResolveEquipmentDefinitionForLegacyInventory(SourceDefinitionId);
-			const bool bEquipmentReceivesCampSlot = !EquipmentReceivedDefinitionId.IsNone()
-				&& Snapshot.InventorySlots[TargetCampSlotIndex].Quantity > 0
-				&& EquipmentReceivedDefinitionId != SourceDefinitionId;
-			const UCatEquipmentDefinition* EquipmentReceivedDefinition =
-				!EquipmentReceivedDefinitionId.IsNone()
-					? ResolveEquipmentDefinitionForLegacyInventory(EquipmentReceivedDefinitionId) : nullptr;
-			if (SourceDefinitionId.IsNone() || !SourceDefinition
-				|| SourceEquipment->Snapshot.InventorySlots[SourceEquipmentSlotIndex].Quantity <= 0)
-			{
-				Result.Error = ECatDomainCommandError::InvalidPayload;
-			}
-			else if (!EquipmentReceivedDefinitionId.IsNone() && !EquipmentReceivedDefinition)
-			{
-				Result.Error = ECatDomainCommandError::InvalidPayload;
-			}
-			else
-			{
-				const auto ResolveStackLimit = [this](const FName DefinitionId)
-				{
-					const UCatEquipmentDefinition* Definition =
-						ResolveEquipmentDefinitionForLegacyInventory(DefinitionId);
-					return Definition ? GetInventoryStackLimit(*Definition) : 1;
-				};
-				TArray<FCatRunInventorySlot> SavedCampSlots = Snapshot.InventorySlots;
-				TArray<FCatRunInventorySlot> SavedEquipmentSlots = SourceEquipment->Snapshot.InventorySlots;
-				const CatRunInventorySlotOperations::FMoveSlotsResult MoveResult =
-					CatRunInventorySlotOperations::MoveItemBetweenSlotArrays(
-						SourceEquipment->Snapshot.InventorySlots, SourceEquipmentSlotIndex,
-						Snapshot.InventorySlots, TargetCampSlotIndex, ResolveStackLimit);
-				Result.bCommitted = MoveResult.bChanged;
-				Result.Error = MoveResult.Error;
-				if (MoveResult.bChanged && !SyncInventoryComponentFromLegacySnapshot())
-				{
-					Snapshot.InventorySlots = MoveTemp(SavedCampSlots);
-					SourceEquipment->Snapshot.InventorySlots = MoveTemp(SavedEquipmentSlots);
-					Result.bCommitted = false;
-					Result.Error = ECatDomainCommandError::InvalidPayload;
-				}
-				else if (MoveResult.bChanged && bEquipmentReceivesCampSlot && EquipmentReceivedDefinition)
-				{
-					SourceEquipment->AutoSelectGrantedInventoryItem(
-						*EquipmentReceivedDefinition, EquipmentReceivedDefinitionId);
-				}
-			}
-		}
-	}
-	if (Result.bCommitted)
-	{
-		++SourceEquipment->Snapshot.Revision;
-		++Snapshot.Revision;
-		SourceEquipment->PublishSnapshot();
-		PublishSnapshot();
-	}
+	Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	Result.Revision = Snapshot.Revision;
 	TerminalCache.Add(Key, Result);
 	TerminalPayloadByKey.Add(Key, PayloadSignature);
@@ -963,7 +783,7 @@ FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuth
 // 1. 用 RequestId 和双方版本/槽位做幂等签名；重放只返回首次终态，不重复扣公共仓库或发背包。
 // 2. 正式库存可用时把营地正式库存作为源、玩家正式库存作为目标，客户端目标格仍只是候选输入。
 // 3. 公共仓库源物会作为玩家收到的新增定义传给旧投影刷新，让拖入背包后钓具选择仍保持旧规则体验。
-// 4. 正式交换失败或投影失败时由共享 helper 回滚双方正式 entries 和旧快照；没有正式库存组件时才走旧快照兜底。
+// 4. 正式交换失败或投影失败时由共享 helper 回滚双方正式 entries 和旧快照；缺正式库存组件时直接拒绝。
 // 5. 成功后营地只推进自己的公开 Revision，玩家随身正式库存和 Equipment 投影由玩家组件发布各自变化。
 FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentSlotFromAuthority(const FGuid RequestId,
 	const int64 ExpectedCampRevision, const int32 SourceCampSlotIndex, UCatEquipmentComponent* TargetEquipment,
@@ -1007,82 +827,7 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentSlotFromAutho
 		return Result;
 	}
 
-	AActor* EquipmentOwner = TargetEquipment ? TargetEquipment->GetOwner() : nullptr;
-	if (!HasAuthority() || !RequestId.IsValid() || !TargetEquipment || !EquipmentOwner
-		|| !EquipmentOwner->HasAuthority() || SourceCampSlotIndex < 0 || TargetEquipmentSlotIndex < 0)
-	{
-		Result.Error = ECatDomainCommandError::InvalidPayload;
-	}
-	else if (Snapshot.Revision != ExpectedCampRevision
-		|| TargetEquipment->Snapshot.Revision != ExpectedInventoryRevision)
-	{
-		Result.Error = ECatDomainCommandError::RevisionConflict;
-	}
-	else
-	{
-		EnsureInventorySlotArray();
-		TargetEquipment->EnsureInventorySlotArray();
-		if (!Snapshot.InventorySlots.IsValidIndex(SourceCampSlotIndex)
-			|| !TargetEquipment->Snapshot.InventorySlots.IsValidIndex(TargetEquipmentSlotIndex))
-		{
-			Result.Error = ECatDomainCommandError::InvalidPayload;
-		}
-		else
-		{
-			const FName SourceDefinitionId = Snapshot.InventorySlots[SourceCampSlotIndex].DefinitionId;
-			const FName EquipmentTargetDefinitionId =
-				TargetEquipment->Snapshot.InventorySlots[TargetEquipmentSlotIndex].DefinitionId;
-			const UCatEquipmentDefinition* SourceDefinition =
-				ResolveEquipmentDefinitionForLegacyInventory(SourceDefinitionId);
-			const UCatEquipmentDefinition* EquipmentTargetDefinition =
-				!EquipmentTargetDefinitionId.IsNone()
-					? ResolveEquipmentDefinitionForLegacyInventory(EquipmentTargetDefinitionId) : nullptr;
-			if (SourceDefinitionId.IsNone() || !SourceDefinition
-				|| Snapshot.InventorySlots[SourceCampSlotIndex].Quantity <= 0)
-			{
-				Result.Error = ECatDomainCommandError::InvalidPayload;
-			}
-			else if (!EquipmentTargetDefinitionId.IsNone() && !EquipmentTargetDefinition)
-			{
-				Result.Error = ECatDomainCommandError::InvalidPayload;
-			}
-			else
-			{
-				const auto ResolveStackLimit = [this](const FName DefinitionId)
-				{
-					const UCatEquipmentDefinition* Definition =
-						ResolveEquipmentDefinitionForLegacyInventory(DefinitionId);
-					return Definition ? GetInventoryStackLimit(*Definition) : 1;
-				};
-				TArray<FCatRunInventorySlot> SavedCampSlots = Snapshot.InventorySlots;
-				TArray<FCatRunInventorySlot> SavedEquipmentSlots = TargetEquipment->Snapshot.InventorySlots;
-				const CatRunInventorySlotOperations::FMoveSlotsResult MoveResult =
-					CatRunInventorySlotOperations::MoveItemBetweenSlotArrays(
-						Snapshot.InventorySlots, SourceCampSlotIndex,
-						TargetEquipment->Snapshot.InventorySlots, TargetEquipmentSlotIndex, ResolveStackLimit);
-				Result.bCommitted = MoveResult.bChanged;
-				Result.Error = MoveResult.Error;
-				if (MoveResult.bChanged && !SyncInventoryComponentFromLegacySnapshot())
-				{
-					Snapshot.InventorySlots = MoveTemp(SavedCampSlots);
-					TargetEquipment->Snapshot.InventorySlots = MoveTemp(SavedEquipmentSlots);
-					Result.bCommitted = false;
-					Result.Error = ECatDomainCommandError::InvalidPayload;
-				}
-				else if (MoveResult.bChanged)
-				{
-					TargetEquipment->AutoSelectGrantedInventoryItem(*SourceDefinition, SourceDefinitionId);
-				}
-			}
-		}
-	}
-	if (Result.bCommitted)
-	{
-		++TargetEquipment->Snapshot.Revision;
-		++Snapshot.Revision;
-		TargetEquipment->PublishSnapshot();
-		PublishSnapshot();
-	}
+	Result.Error = ECatDomainCommandError::DependencyUnavailable;
 	Result.Revision = Snapshot.Revision;
 	TerminalCache.Add(Key, Result);
 	TerminalPayloadByKey.Add(Key, PayloadSignature);
@@ -1221,7 +966,7 @@ bool ACatCampInventoryActor::CanStoreItems(const TArray<FCatCampInventoryAddItem
 		&& InventoryComponent->CanFullyAcceptInventoryBatch(ReceiveBatch);
 }
 
-// 旧快照投影流程：正式库存组件是公共仓库写事实；迁移期把它重建成旧槽位数组，供现有 UI、存档和取用链继续读取。
+// 旧快照投影流程：正式库存组件是公共仓库写事实；迁移期把它重建成旧槽位数组，供存档和旧只读消费者读取。
 bool ACatCampInventoryActor::SyncLegacySnapshotFromInventoryComponent()
 {
 	if (!InventoryComponent)
@@ -1254,15 +999,6 @@ bool ACatCampInventoryActor::SyncLegacySnapshotFromInventoryComponent()
 	return true;
 }
 
-// 正式库存同步流程：旧拖拽、取用和存档恢复仍可能先改 Snapshot；这里把当前旧槽位完整重建为正式库存 entries，保持后续发货预检不会漏算容量。
-bool ACatCampInventoryActor::SyncInventoryComponentFromLegacySnapshot()
-{
-	TArray<FCatInventoryEntry> Entries;
-	return BuildFormalEntriesFromLegacySnapshot(Snapshot, Entries)
-		&& InventoryComponent
-		&& InventoryComponent->ReplaceInventoryEntriesFromAuthority(Entries, GetConfiguredSlotCapacity());
-}
-
 // 玩家正式库存解析流程：从 Equipment 的 Owner 取 InventoryComponent；Equipment 只提供兼容投影入口，不再直接承担背包格事实。
 UCatInventoryComponent* ACatCampInventoryActor::ResolveFormalInventoryFromEquipment(
 	UCatEquipmentComponent* Equipment) const
@@ -1272,7 +1008,7 @@ UCatInventoryComponent* ACatCampInventoryActor::ResolveFormalInventoryFromEquipm
 }
 
 // 旧视图同步流程：
-// 1. 先从营地正式库存重建公共仓库 Snapshot，保证营地 UI 和存档看到正式提交后的格位。
+// 1. 先从营地正式库存重建公共仓库 Snapshot，保证存档和迁移期旧只读消费者看到正式提交后的格位。
 // 2. 再刷新玩家 Equipment 旧投影；传入新增定义时允许它按旧规则修正钓具选择。
 // 3. 任一投影失败都返回 false，调用方负责回滚正式库存，避免旧读者和正式事实分叉。
 bool ACatCampInventoryActor::SyncLegacyViewsFromFormalInventories(UCatEquipmentComponent* Equipment,
@@ -1305,7 +1041,7 @@ bool ACatCampInventoryActor::DoesPlayerInventoryRevisionMatch(UCatEquipmentCompo
 // 玩家/营地正式格交换流程：
 // 1. 先验证营地公开版本、玩家正式库存版本和双方 authority；客户端提交的下标只作为候选。
 // 2. 再按两边配置补齐正式库存空格，避免旧快照有容量而正式 FastArray 尚未初始化时误拒绝。
-// 3. 然后确认源格确有装备/耗材定义，目标非空时也必须能投影回旧读模型，防止正式库存和旧 UI 分叉。
+// 3. 然后确认源格确有装备/耗材定义，目标非空时也必须能投影回旧读模型，防止正式库存和兼容读模型分叉。
 // 4. 正式交换成功后刷新营地 Snapshot 与玩家 Equipment 投影；刷新失败时恢复两份正式 entries 和旧快照。
 // 5. 最后只推进营地公开 Revision；玩家旧投影 Revision 由 Equipment 自己在刷新时维护。
 FCatDomainCommandResult ACatCampInventoryActor::ExecuteFormalPlayerCampSlotExchangeFromAuthority(
