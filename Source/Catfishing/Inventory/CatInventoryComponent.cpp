@@ -1360,7 +1360,7 @@ bool UCatInventoryComponent::CanUseItemAtSlot(const int32 SlotIndex, APawn* User
 	return Entry.Instance->CanUseFromInventory(Entry, UserPawn);
 }
 
-// 使用提交流程：客户端只发请求，服务器让具名实例先完成真实 Use 裁决，再由库存组件统一扣除返回数量。
+// 使用提交流程：客户端只发请求，服务器让具名实例先完成真实 Use 裁决，随后由库存组件按实例返回值决定是否扣数量。
 bool UCatInventoryComponent::TryUseItemAtSlot(const int32 SlotIndex, APawn* UserPawn)
 {
 	if (GetOwner() == nullptr)
@@ -1402,6 +1402,80 @@ bool UCatInventoryComponent::TryUseItemAtSlot(const int32 SlotIndex, APawn* User
 	}
 
 	return true;
+}
+
+// 结构化使用提交流程：
+// 1. 先确认当前组件仍是服务器正式库存，并且 RequestId、来源组件和槽位参数有效。
+// 2. 再用 ExpectedInventoryRevision 拦截陈旧 UI 请求；冲突时只返回当前库存版本，不触碰物品实例。
+// 3. 通过后重读槽位、实例和定义资产，空格或坏实例按正式库存错误返回。
+// 4. 最后调用物品实例自己的结构化 Use；库存组件不认识装备、GAS、草药或窝料的具体效果。
+FCatDomainCommandResult UCatInventoryComponent::UseItemAtSlotFromAuthority(
+	const FCatInventoryItemUseContext& UseContext)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = UseContext.RequestId;
+	Result.Revision = InventoryRevision;
+
+	const AActor* OwningActor = GetOwner();
+	FName DefinitionId = NAME_None;
+	FGuid ItemInstanceId;
+	int32 StackCount = 0;
+	if (OwningActor == nullptr || !OwningActor->HasAuthority())
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	}
+	else if (!UseContext.RequestId.IsValid()
+		|| (UseContext.SourceInventory != nullptr && UseContext.SourceInventory != this)
+		|| UseContext.InventorySlotIndex == INDEX_NONE)
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	}
+	else if (UseContext.ExpectedInventoryRevision != InventoryRevision)
+	{
+		Result.Error = ECatDomainCommandError::RevisionConflict;
+	}
+	else
+	{
+		FCatInventoryEntry* Entry = InventoryList.Entries.IsValidIndex(UseContext.InventorySlotIndex)
+			? &InventoryList.Entries[UseContext.InventorySlotIndex] : nullptr;
+		UCatInventoryItemInstance* Instance = Entry != nullptr ? Entry->Instance.Get() : nullptr;
+		UCatInventoryItemDefinition* Definition = Instance != nullptr ? Instance->GetItemDefinition() : nullptr;
+		if (Entry == nullptr || Instance == nullptr || Entry->StackCount <= 0
+			|| !Instance->GetItemInstanceId().IsValid())
+		{
+			Result.Error = ECatDomainCommandError::NotFound;
+		}
+		else if (Definition == nullptr || Definition->GetInventoryDefinitionId().IsNone())
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+		}
+		else
+		{
+			DefinitionId = Definition->GetInventoryDefinitionId();
+			ItemInstanceId = Instance->GetItemInstanceId();
+			StackCount = Entry->StackCount;
+			Result = Instance->UseFromInventorySlotFromAuthority(*Entry, UseContext);
+			if (!Result.RequestId.IsValid())
+			{
+				Result.RequestId = UseContext.RequestId;
+			}
+		}
+	}
+
+	UE_LOG(LogCatInventory, Log,
+		TEXT("Event=inventory_use_item Owner=%s Request=%s Slot=%d Definition=%s Item=%s Stack=%d ExpectedInventoryRevision=%lld InventoryRevision=%lld Committed=%s Error=%s ResultRevision=%lld"),
+		*GetNameSafe(GetOwner()),
+		*UseContext.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		UseContext.InventorySlotIndex,
+		*DefinitionId.ToString(),
+		*ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		StackCount,
+		UseContext.ExpectedInventoryRevision,
+		InventoryRevision,
+		Result.bCommitted ? TEXT("true") : TEXT("false"),
+		*UEnum::GetValueAsString(Result.Error),
+		Result.Revision);
+	return Result;
 }
 
 // 使用 RPC 流程：服务器收到客户端请求后重新走完整 authority 校验，不信任客户端预检结果。

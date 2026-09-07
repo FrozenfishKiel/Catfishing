@@ -3,7 +3,6 @@
 #include "Character/CatCharacter.h"
 #include "Engine/World.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentDefinition.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "GameFramework/Controller.h"
 #include "Inventory/CatInventoryComponent.h"
@@ -80,7 +79,7 @@ FCatDomainCommandResult UCatInventoryCommandCoordinator::UseInventoryItemFromSlo
 	AController* RequestingController, ACatCharacter* ControlledCharacter, const FGuid RequestId,
 	const int64 ExpectedInventoryRevision, const int32 InventorySlotIndex)
 {
-	// 通用库存 Use 入口流程：UI 只提供 RequestId、库存版本和槽位；内部按服务器当前下游状态决定这件物品能不能使用。
+	// 通用库存 Use 入口流程：UI 只提供 RequestId、库存版本和槽位；协调器不识别物品种类，具体能否使用交给库存实例声明。
 	return UseInventoryItemFromSlotInternal(RequestingController, ControlledCharacter, RequestId,
 		ExpectedInventoryRevision, InventorySlotIndex, false, 0);
 }
@@ -90,7 +89,7 @@ FCatDomainCommandResult UCatInventoryCommandCoordinator::SelectFishingItemFromIn
 	const int64 ExpectedInventoryRevision, const int64 ExpectedEquipmentRevision,
 	const int32 InventorySlotIndex)
 {
-	// 旧钓具选择入口流程：历史 RPC 仍携带 EquipmentRevision，本层保留这份严格校验后复用通用库存 Use 实现。
+	// 旧 SelectFishingItem 兼容入口流程：历史 RPC 仍携带 EquipmentRevision，本层只保留严格校验开关并复用通用库存 Use 实现。
 	return UseInventoryItemFromSlotInternal(RequestingController, ControlledCharacter, RequestId,
 		ExpectedInventoryRevision, InventorySlotIndex, true, ExpectedEquipmentRevision);
 }
@@ -101,18 +100,12 @@ FCatDomainCommandResult UCatInventoryCommandCoordinator::UseInventoryItemFromSlo
 	const bool bRequireEquipmentRevision, const int64 ExpectedEquipmentRevision)
 {
 	// 随身库存物品使用流程：
-	// 1. 先在服务器侧重读玩法 gate 和 RequestId，避免客户端旧 UI 事件在不可提交阶段改选择。
-	// 2. 再用 InventoryRevision 和槽位下标回到正式 InventoryComponent，定义、实例 ID 和物品类别都不信任客户端拼装。
-	// 3. 当前已接入的可使用库存物品是钓具；这里按正式库存实例重建选择，并基于服务器 Equipment 快照补齐其他槽。
-	// 4. 新版入口不把 EquipmentRevision 暴露给 UI；只有旧 RPC 明确携带版本时才额外拒绝并发冲突。
-	// 5. 最后把服务端重建出的完整选择交给 EquipmentComponent；库存事实仍留在 InventoryComponent，Equipment 只保存钓鱼选择和运行态。
+	// 1. 先在服务器侧重读玩法 gate 和 RequestId，避免客户端新旧 Use 事件在不可提交阶段使用物品。
+	// 2. 再解析当前玩家的正式 InventoryComponent；协调器不读取物品定义或装备类别，避免重新长出 UI 层特判。
+	// 3. 组装库存 Use 上下文，把库存版本、槽位、Pawn 和旧 EquipmentRevision 兼容位一起交给 InventoryComponent。
+	// 4. InventoryComponent 会重读槽位并调用物品实例；成功可能改 Equipment 快照，也可能由未来实例改库存数量或其他领域事实。
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	FName SelectedDefinitionId = NAME_None;
-	FGuid SelectedItemInstanceId;
-	ECatEquipmentKind SelectedKind = ECatEquipmentKind::Unknown;
-	int64 ObservedInventoryRevision = 0;
-	int64 ObservedEquipmentRevision = 0;
 
 	UWorld* World = GetWorld();
 	const ACatfishingGameModeBase* GameMode = World ? World->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
@@ -133,125 +126,33 @@ FCatDomainCommandResult UCatInventoryCommandCoordinator::UseInventoryItemFromSlo
 	else
 	{
 		UCatInventoryComponent* Inventory = ControlledCharacter ? ControlledCharacter->GetInventoryComponent() : nullptr;
-		UCatEquipmentComponent* Equipment = ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr;
-		if (!ControlledCharacter || ControlledCharacter->GetWorld() != World || !Inventory || !Equipment)
+		if (!ControlledCharacter || ControlledCharacter->GetWorld() != World || !Inventory)
 		{
 			Result.Error = ECatDomainCommandError::DependencyUnavailable;
 			UE_LOG(LogCatfishing, Warning,
-				TEXT("Event=use_inventory_item_rejected Reason=MissingInventoryOrEquipment Request=%s Slot=%d Character=%s"),
+				TEXT("Event=use_inventory_item_rejected Reason=MissingInventory Request=%s Slot=%d Character=%s"),
 				*RequestId.ToString(EGuidFormats::DigitsWithHyphens), InventorySlotIndex,
 				*GetNameSafe(ControlledCharacter));
 		}
 		else
 		{
-			ObservedInventoryRevision = Inventory->GetInventoryRevision();
-			ObservedEquipmentRevision = Equipment->GetSnapshot().Revision;
-			if (ObservedInventoryRevision != ExpectedInventoryRevision)
-			{
-				Result.Error = ECatDomainCommandError::RevisionConflict;
-				Result.Revision = ObservedInventoryRevision;
-				UE_LOG(LogCatfishing, Warning,
-					TEXT("Event=use_inventory_item_rejected Reason=InventoryRevisionConflict Request=%s Slot=%d ExpectedInventoryRevision=%lld InventoryRevision=%lld"),
-					*RequestId.ToString(EGuidFormats::DigitsWithHyphens), InventorySlotIndex,
-					ExpectedInventoryRevision, ObservedInventoryRevision);
-			}
-			else if (bRequireEquipmentRevision && ObservedEquipmentRevision != ExpectedEquipmentRevision)
-			{
-				Result.Error = ECatDomainCommandError::RevisionConflict;
-				Result.Revision = ObservedEquipmentRevision;
-				UE_LOG(LogCatfishing, Warning,
-					TEXT("Event=use_inventory_item_rejected Reason=EquipmentRevisionConflict Request=%s Slot=%d ExpectedEquipmentRevision=%lld EquipmentRevision=%lld"),
-					*RequestId.ToString(EGuidFormats::DigitsWithHyphens), InventorySlotIndex,
-					ExpectedEquipmentRevision, ObservedEquipmentRevision);
-			}
-			else
-			{
-				const FCatInventoryEntry* Entry = Inventory->GetInventoryEntryAtSlot(InventorySlotIndex);
-				const UCatInventoryItemInstance* Instance = Entry != nullptr ? Entry->Instance.Get() : nullptr;
-				const UCatEquipmentDefinition* Definition = Instance != nullptr
-					? Cast<UCatEquipmentDefinition>(Instance->GetItemDefinition()) : nullptr;
-				if (Entry == nullptr || Instance == nullptr || Entry->StackCount <= 0
-					|| !Instance->GetItemInstanceId().IsValid())
-				{
-					Result.Error = ECatDomainCommandError::NotFound;
-					Result.Revision = ObservedInventoryRevision;
-				}
-				else if (Definition == nullptr || !Definition->IsRuntimeDefinitionReady())
-				{
-					Result.Error = ECatDomainCommandError::InvalidPayload;
-					Result.Revision = ObservedInventoryRevision;
-				}
-				else
-				{
-					SelectedDefinitionId = Definition->EquipmentDefinitionId;
-					SelectedItemInstanceId = Instance->GetItemInstanceId();
-					SelectedKind = Definition->Kind;
-
-					const FCatEquipmentLoadoutSnapshot& Snapshot = Equipment->GetSnapshot();
-					FName RodDefinitionId = Snapshot.RodDefinitionId;
-					FName BaitDefinitionId = Snapshot.BaitDefinitionId;
-					FName FloatDefinitionId = Snapshot.FloatDefinitionId;
-					FName ScoopNetDefinitionId = Snapshot.ScoopNetDefinitionId;
-					FGuid RodItemInstanceId = Snapshot.RodItemInstanceId;
-					FGuid BaitItemInstanceId = Snapshot.BaitItemInstanceId;
-					FGuid FloatItemInstanceId = Snapshot.FloatItemInstanceId;
-					FGuid ScoopNetItemInstanceId = Snapshot.ScoopNetItemInstanceId;
-					bool bSelectedKindSupported = true;
-
-					switch (SelectedKind)
-					{
-					case ECatEquipmentKind::Rod:
-						RodDefinitionId = SelectedDefinitionId;
-						RodItemInstanceId = SelectedItemInstanceId;
-						break;
-					case ECatEquipmentKind::Bait:
-						BaitDefinitionId = SelectedDefinitionId;
-						BaitItemInstanceId = SelectedItemInstanceId;
-						break;
-					case ECatEquipmentKind::Float:
-						FloatDefinitionId = SelectedDefinitionId;
-						FloatItemInstanceId = SelectedItemInstanceId;
-						break;
-					case ECatEquipmentKind::ScoopNet:
-						ScoopNetDefinitionId = SelectedDefinitionId;
-						ScoopNetItemInstanceId = SelectedItemInstanceId;
-						break;
-					default:
-						bSelectedKindSupported = false;
-						break;
-					}
-
-					if (!bSelectedKindSupported)
-					{
-						// 非钓具条目不能进入 Equipment 选择；保留库存版本作为拒绝证据，方便 UI 重读被点击格。
-						Result.Error = ECatDomainCommandError::InvalidPayload;
-						Result.Revision = ObservedInventoryRevision;
-					}
-					else if (RodDefinitionId.IsNone() || BaitDefinitionId.IsNone() || FloatDefinitionId.IsNone())
-					{
-						Result.Error = ECatDomainCommandError::InvalidPayload;
-						Result.Revision = ObservedEquipmentRevision;
-					}
-					else
-					{
-						const int64 EffectiveExpectedEquipmentRevision = bRequireEquipmentRevision
-							? ExpectedEquipmentRevision : ObservedEquipmentRevision;
-						Result = Equipment->ConfigureLoadoutFromAuthority(RequestId, EffectiveExpectedEquipmentRevision,
-							RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId, NAME_None,
-							RodItemInstanceId, BaitItemInstanceId, FloatItemInstanceId, ScoopNetItemInstanceId);
-						ObservedEquipmentRevision = Equipment->GetSnapshot().Revision;
-					}
-				}
-			}
+			FCatInventoryItemUseContext UseContext;
+			UseContext.RequestId = RequestId;
+			UseContext.RequestingController = RequestingController;
+			UseContext.UserPawn = ControlledCharacter;
+			UseContext.SourceInventory = Inventory;
+			UseContext.ExpectedInventoryRevision = ExpectedInventoryRevision;
+			UseContext.InventorySlotIndex = InventorySlotIndex;
+			UseContext.bRequireEquipmentRevision = bRequireEquipmentRevision;
+			UseContext.ExpectedEquipmentRevision = ExpectedEquipmentRevision;
+			Result = Inventory->UseItemAtSlotFromAuthority(UseContext);
 		}
 	}
 
 	UE_LOG(LogCatfishing, Log,
-		TEXT("Event=use_inventory_item Committed=%s Error=%s ResultRevision=%lld Slot=%d Definition=%s Item=%s Kind=%s ExpectedInventoryRevision=%lld InventoryRevision=%lld ExpectedEquipmentRevision=%lld EquipmentRevision=%lld StrictEquipmentRevision=%s"),
+		TEXT("Event=use_inventory_item Committed=%s Error=%s ResultRevision=%lld Slot=%d ExpectedInventoryRevision=%lld ExpectedEquipmentRevision=%lld StrictEquipmentRevision=%s"),
 		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
-		Result.Revision, InventorySlotIndex, *SelectedDefinitionId.ToString(),
-		*SelectedItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-		*UEnum::GetValueAsString(SelectedKind), ExpectedInventoryRevision, ObservedInventoryRevision,
-		ExpectedEquipmentRevision, ObservedEquipmentRevision, bRequireEquipmentRevision ? TEXT("true") : TEXT("false"));
+		Result.Revision, InventorySlotIndex, ExpectedInventoryRevision, ExpectedEquipmentRevision,
+		bRequireEquipmentRevision ? TEXT("true") : TEXT("false"));
 	return Result;
 }

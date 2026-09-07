@@ -7,7 +7,7 @@
 
 class UCatEquipmentDefinition;
 
-/** 装备资产进入正式库存后的运行实例；只承载装备专属状态，不让通用库存格知道鱼竿、鱼饵或鱼漂规则。 */
+/** 装备资产进入正式库存后的运行实例；只承载装备专属状态，不让通用库存格知道鱼竿、鱼饵、鱼漂或抄网规则。 */
 UCLASS(BlueprintType, Blueprintable)
 class CATFISHING_API UCatEquipmentInventoryItemInstance : public UCatInventoryItemInstance
 {
@@ -31,6 +31,17 @@ public:
 
 	/** 把装备库存实例投影成旧运行库存格；迁移期 UI/存档仍读旧结构，但事实来源已经是库存实例。 */
 	bool BuildLegacyRunInventorySlot(int32 StackCount, FCatRunInventorySlot& OutSlot) const;
+
+	/** 装备实例声明自己可作为库存 Use 的候选；真正的选择、权限和版本仍在结构化提交时复核。 */
+	virtual bool CanUseFromInventory(const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const override;
+
+	/** 旧 bool Use 入口复用结构化装备选择语义；没有外部 RequestId 时由服务器即时生成一次内部请求。 */
+	virtual bool TryUseFromInventory(FCatInventoryEntry& InventoryEntry, APawn* UserPawn,
+		int32& OutConsumeCount) override;
+
+	/** 结构化库存 Use 入口；正式库存重读槽位后调用它，让钓具选择规则停留在装备物品实例而不是协调器。 */
+	virtual FCatDomainCommandResult UseFromInventorySlotFromAuthority(
+		const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext) override;
 
 protected:
 	/** 绑定装备定义后补齐装备专属运行初值；通用库存实例状态先由父类完成。 */

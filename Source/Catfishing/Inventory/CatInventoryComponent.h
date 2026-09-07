@@ -14,6 +14,7 @@ class UCatInventoryItemDefinition;
 class UCatInventoryItemInstance;
 class FOutBunch;
 struct FReplicationFlags;
+struct FCatInventoryItemUseContext;
 
 /** 一个库存格的复制条目；格子只记录实例指针和堆叠数量，不持有 GAS、Fishing 或 UI 的下游状态。 */
 USTRUCT(BlueprintType)
@@ -250,9 +251,12 @@ public:
 	/** Use 预检交给实例语义决定；默认使用拥有者 Pawn，库存核心不认识 GAS、装备、草药或窝料目标。 */
 	bool CanUseItemAtSlot(int32 SlotIndex, APawn* UserPawn = nullptr) const;
 
-	/** 从指定槽位发起库存 Use；客户端请求会转到服务器，服务器只接受具名实例完成真实效果裁决后的扣量。 */
+	/** 从指定槽位发起库存 Use；客户端请求会转到服务器，服务器只接受具名实例完成真实效果裁决后的可选扣量。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
 	bool TryUseItemAtSlot(int32 SlotIndex, APawn* UserPawn = nullptr);
+
+	/** 服务器用结构化上下文使用指定槽位；库存组件先裁决 RequestId、版本和槽位，再把真实效果交给物品实例。 */
+	FCatDomainCommandResult UseItemAtSlotFromAuthority(const FCatInventoryItemUseContext& UseContext);
 
 	/** 客户端请求服务器执行跨库存交换；真正写入仍由服务器再次校验。 */
 	UFUNCTION(Server, Reliable)

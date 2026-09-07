@@ -97,7 +97,7 @@ AActor* UCatInventoryItemInstance::GetRuntimeOwnerActor() const
 	return Cast<AActor>(GetOuter());
 }
 
-// 通用使用预检流程：基础实例没有真实物品效果，默认拒绝库存 Use；需要右键使用的物品必须用具名实例把效果和扣量一起声明清楚。
+// 通用使用预检流程：基础实例没有真实物品效果，默认拒绝库存 Use；需要从库存使用的物品必须用具名实例把效果和可选扣量一起声明清楚。
 bool UCatInventoryItemInstance::CanUseFromInventory(const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const
 {
 	(void)InventoryEntry;
@@ -105,7 +105,7 @@ bool UCatInventoryItemInstance::CanUseFromInventory(const FCatInventoryEntry& In
 	return false;
 }
 
-// 通用使用流程：基础实例不提交任何库存变化；库存层不能只扣数量就宣称使用成功，避免草药、窝料这类有目标动作绕过自己的领域系统。
+// 通用使用流程：基础实例不提交任何库存变化；库存层不能只扣数量就宣称使用成功，避免草药、窝料或装备这类有目标动作的物品绕过自己的实例语义。
 bool UCatInventoryItemInstance::TryUseFromInventory(FCatInventoryEntry& InventoryEntry, APawn* UserPawn,
 	int32& OutConsumeCount)
 {
@@ -113,6 +113,18 @@ bool UCatInventoryItemInstance::TryUseFromInventory(FCatInventoryEntry& Inventor
 	(void)UserPawn;
 	OutConsumeCount = 0;
 	return false;
+}
+
+// 结构化使用流程：基础实例仍然拒绝，因为它没有声明任何真实物品效果；返回当前库存版本只是帮助 UI 用同一份回包完成诊断和刷新。
+FCatDomainCommandResult UCatInventoryItemInstance::UseFromInventorySlotFromAuthority(
+	const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext)
+{
+	(void)InventoryEntry;
+	FCatDomainCommandResult Result;
+	Result.RequestId = UseContext.RequestId;
+	Result.Revision = UseContext.SourceInventory ? UseContext.SourceInventory->GetInventoryRevision() : 0;
+	Result.Error = ECatDomainCommandError::InvalidPayload;
+	return Result;
 }
 
 // 定义绑定扩展流程：基础库存实例没有额外状态要派生；子类可以读取当前定义补齐自己的运行字段。
