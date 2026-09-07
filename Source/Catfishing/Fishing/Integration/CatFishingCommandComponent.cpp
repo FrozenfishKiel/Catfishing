@@ -101,7 +101,7 @@ void UCatFishingCommandComponent::DeliverPlaceChumResultFromAuthority(const FCat
 	if (!Controller || !Controller->HasAuthority() || !Result.RequestId.IsValid()) return;
 	const FString ControllerFields = CatLogContext::BuildControllerFields(Controller);
 	const int64 InventoryRevision = Result.GetInventoryRevision();
-	// 回执仍同步旧 EquipmentRevision 字段；日志额外输出正式 InventoryRevision，便于区分打窝库存链和装备选择链。
+	// 回执里的 EquipmentRevision 仍保留为旧监听者的兼容镜像；正式事实看 InventoryRevision，日志同时打出两者方便确认打窝没有再走装备裁决。
 	if (Result.bCommitted)
 	{
 		UE_LOG(LogCatFishing, Log, TEXT("Event=place_chum_result Committed=true Request=%s Field=%s Center=%s InventoryRevision=%lld EquipmentRevision=%lld %s"),
@@ -932,23 +932,22 @@ void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController
 	DeliverBeginCastResultFromAuthority(Fishing->BeginCast(Controller, Command));
 }
 
-// 服务器打窝流程：按按住时长算蓄力 → 与客户端预览同一套弹道预测得到落点 → 优先从正式库存选一份可用窝料 → 交给 PlaceChum 做射程/夹角/视线/库存/水域校验。
+// 服务器打窝流程：按按住时长算蓄力 → 与客户端预览同一套弹道预测得到落点 → 优先从正式库存选一份可用窝料 → 交给 PlaceChum 做射程、夹角、视线、水域和正式库存提交。
 void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerController* Controller, const FGuid& RequestId,
 	const double HeldSeconds)
 {
 	FCatPlaceChumResult Result;
 	Result.RequestId = RequestId;
 	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
-	UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
 	const UCatInventoryComponent* OwnerInventory = Character ? Character->GetInventoryComponent() : nullptr;
 	UCatChumPlacementService* Service = GetWorld() ? GetWorld()->GetSubsystem<UCatChumPlacementService>() : nullptr;
-	if (!Character || !Equipment || !OwnerInventory || !Service)
+	if (!Character || !OwnerInventory || !Service)
 	{
 		Result.Error = ECatChumFieldError::DependencyUnavailable;
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
 	}
-	// 选窝料实例流程：只在正式库存条目里先找 starter 指定类型，再找任意足量 Chum；命令层只保存 PlaceChum 需要复核的定义、实例和库存版本。
+	// 选窝料实例流程：只在正式库存条目里先找 starter 指定类型，再找任意足量 Chum；命令层只携带 PlaceChum 复核所需的定义、实例和库存版本。
 	const int32 ChumQuantity = FMath::Max(1, GetDefault<UCatFishingSettings>()->ChumThrowQuantity);
 	const FName PreferredChumDefinitionId = GetDefault<UCatEquipmentSettings>()->StarterChumDefinitionId;
 	FName SelectedChumDefinitionId = NAME_None;
@@ -1009,7 +1008,7 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
 	}
-	// 组装真正的打窝命令：新字段提交正式库存版本，旧 ExpectedEquipmentRevision 同步同一值，保证迁移期服务端兼容校验不会读到两套版本事实。
+	// 组装真正的打窝命令：ExpectedInventoryRevision 是正式并发依据；旧 ExpectedEquipmentRevision 只镜像同一个值，避免迁移期旧字段被误读成另一套装备事实。
 	FCatPlaceChumCommand Command;
 	Command.RequestId = RequestId;
 	Command.ExpectedWaterRegionHandle = Region;

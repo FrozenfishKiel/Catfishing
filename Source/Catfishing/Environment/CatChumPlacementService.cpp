@@ -41,7 +41,7 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	// 打窝服务流程：
 	// 1. 先验证服务器、玩家身份、命令幂等和玩法 gate，再用 ChumFieldSubsystem 重放首次终态。
 	// 2. 玩家窝料事实只从正式库存按实例 ID 读取，并用正式库存版本裁决并发；没有正式库存组件时不再回退 Equipment Snapshot。
-	// 3. 水域、距离和视线通过后先准备窝点，再直接提交正式库存扣量；Equipment 只刷新旧 UI/存档投影。
+	// 3. 水域、距离和视线通过后先准备窝点，再直接提交正式库存扣量；若旧 Equipment 投影存在，它只跟随正式库存刷新给旧 UI/存档读取。
 	// 4. 库存提交成功后才激活并复制窝点，保证世界影响不会脱离真实物品消耗单独成立。
 	using namespace CatChumPlacementServicePrivate;
 	UWorld* World = GetWorld();
@@ -96,7 +96,7 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	}
 	ACatCharacter* Character = Cast<ACatCharacter>(RequestingController->GetPawn());
 	const UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
-	UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
+	UCatEquipmentComponent* LegacyProjectionEquipment = Character ? Character->GetEquipmentComponent() : nullptr;
 	UCatInventoryComponent* OwnerInventory = Character ? Character->GetInventoryComponent() : nullptr;
 	if (!OwnerInventory)
 	{
@@ -130,7 +130,7 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::EquipmentUnavailable));
 	}
-	if (!Character || !Conditions || Conditions->GetSnapshot().bDowned || !Equipment || !Definition
+	if (!Character || !Conditions || Conditions->GetSnapshot().bDowned || !Definition
 		|| Definition->Kind != ECatEquipmentKind::Chum
 		|| !Definition->IsRuntimeDefinitionReady()
 		|| !Definition->ConsumesInventoryQuantityOnUse()
@@ -197,15 +197,16 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, Prepared.Error));
 	}
-	// 正式库存提交流程：先保存可恢复的库存快照，再扣除本次窝料数量，最后只让 Equipment 刷新兼容投影。
-	// 扣量失败只撤销窝点；扣量后若投影刷新失败，还要恢复库存内容，避免世界窝点和背包事实分叉。
+	// 正式库存提交流程：先保存可恢复的库存快照，再扣除本次窝料数量；正式库存是事实写口，旧 Equipment 投影只是兼容读模型。
+	// 扣量失败只撤销窝点；扣量后若旧投影刷新失败，还要恢复库存并撤销窝点准备，避免世界影响、正式库存和旧读模型看到三种事务结果。
 	const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
 	if (!OwnerInventory->ConsumeItemAtSlot(FormalChumSlotIndex, Command.Quantity))
 	{
 		Fields->AbortPreparedField(Prepared.CommitToken);
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::DependencyUnavailable));
 	}
-	if (!Equipment->RefreshInventoryProjectionFromInventoryComponentFromAuthority())
+	if (LegacyProjectionEquipment != nullptr
+		&& !LegacyProjectionEquipment->RefreshInventoryProjectionFromInventoryComponentFromAuthority())
 	{
 		OwnerInventory->ReplaceInventoryEntriesFromAuthority(SavedEntries, SavedEntries.Num());
 		Fields->AbortPreparedField(Prepared.CommitToken);
