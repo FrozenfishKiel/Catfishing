@@ -20,6 +20,7 @@
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishDefinition.h"
 #include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
@@ -32,6 +33,7 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "HAL/IConsoleManager.h"
+#include "Inventory/CatInventoryComponent.h"
 #include "Items/CatWorldItemSettings.h"
 #include "Items/World/CatFishPickupActor.h"
 #include "Logging/CatLog.h"
@@ -195,11 +197,11 @@ static TAutoConsoleVariable<int32> CVarCatFishingDebug(
 	TEXT("抄网圆圈绿色=当前按 F 抄得到，红色=够不着；颜色直接来自服务器同一个判定函数。"),
 	ECVF_Default);
 
-// 三方资源/力量只在排查时需要观察，不应作为默认主界面内容常驻。
-// 因此它拥有独立 CVar，默认关闭；`cat.Fishing.Debug 0` 不会隐藏本面板，反之开启本面板也不改变世界调试模式。
+// 三方资源/力量需要默认可见，便于 Development 包里快速核对鱼、竿和猫的运行事实。
+// 因此它拥有独立 CVar，默认开启；`cat.Fishing.Debug 0` 不会隐藏本面板，反之开启本面板也不改变世界调试模式。
 static TAutoConsoleVariable<int32> CVarCatFishingStats(
-	TEXT("cat.Fishing.Stats"), 0,
-	TEXT("屏幕右上角钓鱼数值调试：1=显示（当前鱼种、鱼体力/力量、竿或鱼线耐久/力量、猫体力/力量）；0=关闭（默认）。")
+	TEXT("cat.Fishing.Stats"), 1,
+	TEXT("屏幕右上角钓鱼数值调试：1=显示（默认，当前鱼种、鱼体力/力量、鱼竿耐久/力量、猫体力/力量）；0=关闭。")
 	TEXT("本开关与 cat.Fishing.Debug 相互独立。"),
 	ECVF_Default);
 
@@ -264,8 +266,9 @@ FString UCatFishingDebugSubsystem::FormatFishTypeLine(const FName FishDefinition
 		: FString::Printf(TEXT("FISH TYPE  %s"), *FishDefinitionId.ToString());
 }
 
-// 右上角数值面板：每一项都读取与权威玩法相同的公开事实/定义，不从表现位置反推资源。
-// 鱼和本场鱼线读取 Session 复制快照；猫的力量、当前体力和上限都读取本地 Character ASC，避免调试面板出现第二套体力口径。
+// 右上角数值面板：
+// 1. 鱼和战斗中的鱼竿耐久读取 Session 复制快照；猫的力量、当前体力和上限读取本地 Character ASC。
+// 2. 非战斗阶段的鱼竿耐久优先读取正式库存实例；旧宿主没有 InventoryComponent 时才退回 Equipment 兼容快照，避免调试面板出现第二套库存口径。
 void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerController* Controller)
 {
 #if ENABLE_DRAW_DEBUG
@@ -313,6 +316,7 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 	}
 
 	const UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
+	const UCatInventoryComponent* Inventory = Character ? Character->GetInventoryComponent() : nullptr;
 	const FCatEquipmentLoadoutSnapshot* Loadout = Equipment ? &Equipment->GetSnapshot() : nullptr;
 	FName RodDefinitionId = Loadout ? Loadout->RodDefinitionId : NAME_None;
 	if (SessionSnapshot && SessionSnapshot->RodActor)
@@ -323,7 +327,8 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 	if (const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
 		RodDefinitionId))
 	{
-		double CurrentDurability = RodDefinition->MaximumRodDurability;
+		double CurrentDurability = 0.0;
+		bool bHasCurrentDurability = false;
 		const bool bUsesSessionDurability = SessionSnapshot
 			&& (SessionSnapshot->Phase == ECatFishingPhase::HookedFight
 				|| SessionSnapshot->Phase == ECatFishingPhase::NearShore
@@ -331,13 +336,31 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 		if (bUsesSessionDurability)
 		{
 			CurrentDurability = SessionSnapshot->RodDurabilityRemaining;
+			bHasCurrentDurability = true;
 		}
-		else if (Loadout && Loadout->RodDefinitionId == RodDefinitionId)
+		else if (Inventory && Loadout && Loadout->RodDefinitionId == RodDefinitionId)
+		{
+			const int32 RodSlotIndex = Inventory->FindInventorySlotIndexFromInstanceId(Loadout->RodItemInstanceId);
+			const FCatInventoryEntry* RodEntry = Inventory->GetInventoryEntryAtSlot(RodSlotIndex);
+			const UCatEquipmentInventoryItemInstance* RodInstance = RodEntry
+				? Cast<UCatEquipmentInventoryItemInstance>(RodEntry->Instance) : nullptr;
+			if (RodEntry && RodEntry->StackCount > 0
+				&& RodInstance && RodInstance->GetItemDefinitionId() == RodDefinitionId)
+			{
+				CurrentDurability = RodInstance->GetRodDurability();
+				bHasCurrentDurability = true;
+			}
+		}
+		else if (!Inventory && Loadout && Loadout->RodDefinitionId == RodDefinitionId)
 		{
 			CurrentDurability = Loadout->RodDurability;
+			bHasCurrentDurability = true;
 		}
-		RodLine = FString::Printf(TEXT("ROD   Durability %.1f / %.1f  Strength %.1f"),
-			CurrentDurability, RodDefinition->MaximumRodDurability, RodDefinition->FishingStrength);
+		RodLine = bHasCurrentDurability
+			? FString::Printf(TEXT("ROD   Durability %.1f / %.1f  Strength %.1f"),
+				CurrentDurability, RodDefinition->MaximumRodDurability, RodDefinition->FishingStrength)
+			: FString::Printf(TEXT("ROD   Durability -- / %.1f  Strength %.1f"),
+				RodDefinition->MaximumRodDurability, RodDefinition->FishingStrength);
 	}
 
 	FString CatLine = TEXT("CAT   Stamina --  Strength --");
@@ -566,7 +589,7 @@ void UCatFishingDebugSubsystem::DrawChumChargePreview(APlayerController* Control
 }
 
 // 会话状态：钩/鱼位置球、竿尖到鱼的连线、近岸圈与规格 7.1 的状态提示文字。
-// 精简模式关闭完整细节时，只画鱼线和状态文字，跳过钩球/鱼球/近岸圈；浮漂正式表现由 Hook 自己驱动。
+// 精简模式关闭完整细节时，保留鱼线、阶段文字和抄网提示；窝料数量优先读正式库存组件，旧宿主才读 Equipment 兼容快照。
 void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const bool bFullDetail) const
 {
 #if ENABLE_DRAW_DEBUG
@@ -578,10 +601,23 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 	// 避免 cat.Fishing.Debug 打开后出现两套不同位置、不同精度的数值入口。
 	if (const ACatCharacter* Character = Cast<ACatCharacter>(Pawn))
 	{
-		if (const UCatEquipmentComponent* Equipment = Character->GetEquipmentComponent())
+		int32 ChumCount = 0;
+		if (const UCatInventoryComponent* Inventory = Character->GetInventoryComponent())
+		{
+			for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
+			{
+				const UCatEquipmentDefinition* Definition = Entry.Instance
+					? Cast<UCatEquipmentDefinition>(Entry.Instance->GetItemDefinition()) : nullptr;
+				if (Definition && Definition->Kind == ECatEquipmentKind::Chum && Entry.StackCount > 0)
+				{
+					ChumCount += Entry.StackCount;
+				}
+			}
+			PushStatus(1, FColor::White, FString::Printf(TEXT("窝料 x%d"), ChumCount));
+		}
+		else if (const UCatEquipmentComponent* Equipment = Character->GetEquipmentComponent())
 		{
 			const FCatEquipmentLoadoutSnapshot& Loadout = Equipment->GetSnapshot();
-			int32 ChumCount = 0;
 			for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
 			{
 				const UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
