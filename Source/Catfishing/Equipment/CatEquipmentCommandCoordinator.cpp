@@ -6,6 +6,7 @@
 #include "Equipment/CatEquipmentComponent.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "GameFramework/Controller.h"
+#include "Inventory/CatInventoryComponent.h"
 #include "Logging/CatLog.h"
 
 bool UCatEquipmentCommandCoordinator::ShouldCreateSubsystem(UObject* Outer) const
@@ -76,8 +77,9 @@ FCatDomainCommandResult UCatEquipmentCommandCoordinator::MoveInventorySlot(ACont
 {
 	// 随身库存整理流程：
 	// 1. 先在服务器侧重读玩法 gate 和 RequestId，避免无效局状态继续修改背包。
-	// 2. 再解析当前玩家的 EquipmentComponent；不存在装备聚合时只返回依赖错误，不在 Controller 里补规则。
-	// 3. 通过后把槽位和 Revision 交给 Equipment 聚合，移动/合并/交换细节由同一份库存状态提交。
+	// 2. 再解析当前玩家的正式 InventoryComponent；不存在正式库存时只返回依赖错误，不在 Controller 里补规则。
+	// 3. 通过后把槽位和 Revision 交给 InventoryComponent，移动/合并/交换由正式库存提交。
+	// 4. 提交成功后通知 Equipment 刷新旧库存投影；这个投影只服务钓鱼选择、存档和迁移期旧消费者。
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	UWorld* World = GetWorld();
@@ -98,18 +100,27 @@ FCatDomainCommandResult UCatEquipmentCommandCoordinator::MoveInventorySlot(ACont
 	}
 	else
 	{
-		UCatEquipmentComponent* Equipment = ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr;
-		if (!ControlledCharacter || ControlledCharacter->GetWorld() != World || !Equipment)
+		UCatInventoryComponent* Inventory = ControlledCharacter ? ControlledCharacter->GetInventoryComponent() : nullptr;
+		if (!ControlledCharacter || ControlledCharacter->GetWorld() != World || !Inventory)
 		{
 			Result.Error = ECatDomainCommandError::DependencyUnavailable;
 			UE_LOG(LogCatfishing, Warning,
-				TEXT("Event=move_inventory_slot_rejected Reason=NoEquipmentComponent Request=%s"),
+				TEXT("Event=move_inventory_slot_rejected Reason=NoInventoryComponent Request=%s"),
 				*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 		}
 		else
 		{
-			Result = Equipment->MoveInventorySlotFromAuthority(RequestId, ExpectedRevision,
+			Result = Inventory->MoveInventorySlotFromAuthority(RequestId, ExpectedRevision,
 				SourceSlotIndex, TargetSlotIndex);
+			UCatEquipmentComponent* Equipment = ControlledCharacter->GetEquipmentComponent();
+			if (Result.bCommitted && Equipment
+				&& !Equipment->RefreshInventoryProjectionFromInventoryComponentFromAuthority())
+			{
+				UE_LOG(LogCatfishing, Warning,
+					TEXT("Event=move_inventory_slot_projection_sync_failed Request=%s InventoryRevision=%lld Character=%s"),
+					*RequestId.ToString(EGuidFormats::DigitsWithHyphens), Result.Revision,
+					*GetNameSafe(ControlledCharacter));
+			}
 		}
 	}
 	UE_LOG(LogCatfishing, Log,

@@ -83,9 +83,12 @@ public:
 	/** 部署型物品收口时共用的停止使用入口；它按实例调用定义侧 UnUse 裁决，成功才把活动记录里的同一物品放回随身库存。 */
 	FCatInventoryItemUseResult UnUse(FGuid RequestId, FGuid ItemInstanceId);
 
-	/** 整理两个随身库存格；服务器按数组下标移动、合并或交换物品，成功后发布同一份库存快照。 */
+	/** 兼容旧调用的随身库存整理入口；正式 Character 会转交 InventoryComponent，缺少正式库存的旧宿主才回退旧快照并返回对应领域结果。 */
 	FCatDomainCommandResult MoveInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		int32 SourceSlotIndex, int32 TargetSlotIndex);
+
+	/** 正式库存提交后刷新旧随身库存投影；钓鱼选择、存档和旧消费者靠它追上 InventoryComponent 的格位事实，返回 false 表示投影未能完整重建。 */
+	bool RefreshInventoryProjectionFromInventoryComponentFromAuthority();
 
 	/** 提交一次钓鱼失败预算；一个 RequestId 只能选择 None/丢特殊饵/伤竿之一，绝不双罚。 */
 	FCatFishingFailureResult CommitFishingFailure(FGuid RequestId, int64 ExpectedRevision,
@@ -204,6 +207,9 @@ private:
 
 	/** 将当前 Equipment 快照同步进 Owner 的正式库存组件；没有正式库存组件时保持旧兼容路径继续工作。 */
 	bool SyncOwnerInventoryComponentFromSnapshot();
+
+	/** 从 Owner 的正式库存组件重建旧随身格数组；只做只读投影，不提交库存命令或推进 Equipment Revision。 */
+	bool BuildSnapshotInventorySlotsFromOwnerInventoryComponent(TArray<FCatRunInventorySlot>& OutSlots) const;
 
 	/** 按实例身份查找随身库存格；Use、选择和诊断用它避免只按 DefinitionId 误伤同类物品。 */
 	FCatRunInventorySlot* FindInventorySlotByInstanceId(FGuid ItemInstanceId);

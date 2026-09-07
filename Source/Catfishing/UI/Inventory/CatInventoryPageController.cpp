@@ -81,14 +81,14 @@ namespace
 		return INDEX_NONE;
 	}
 
-	// 运行期库存版本读取流程：提交失败或服务器移动前需要把对应宿主的 Revision 带出去，避免用随身背包版本拒绝营地仓库动作。
+	// 运行期库存版本读取流程：随身背包使用正式库存 Revision，营地仓库使用公共仓库 Revision，避免两个宿主互相污染并发前提。
 	int64 GetRunInventoryRevision(const FCatInventoryViewState& State, const ECatInventorySlotSource SlotSource)
 	{
 		if (SlotSource == ECatInventorySlotSource::CampInventoryObject)
 		{
 			return State.CampInventoryRevision;
 		}
-		return State.Equipment.Revision;
+		return State.InventoryRevision;
 	}
 
 	// 同源库存整理判断流程：拖拽整理只改同一份数据源内部顺序；不同库存之间的存取由明确服务器命令修改各自数据源，再靠广播刷新两边 UI。
@@ -486,8 +486,8 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 // 2. 运行期库存格同源时整理本数据源，跨背包和营地时提交一条同时改双方数据源的服务器事务。
 // 3. 鱼容器格之间走 Items 容器移动；运行期库存和 Items 容器混拖直接拒绝，避免把两套领域写口塞进一次 Drop。
 // 4. 同格 Drop 视为无操作直接返回；同容器不同格继续提交服务器整理，不能再当 InvalidPayload 拒绝。
-// 5. 在写 pending 前复制完整 RPC 载荷；随身库存、营地仓库、跨源转移和容器移动分别提交各自的并发前提。
-// 6. 运行期库存的拒绝和提交都会写出来源、槽位和路线，方便区分营地内部整理是否被 UI 误投成背包整理。
+// 5. 在写 pending 前复制完整 RPC 载荷；随身背包整理提交 InventoryRevision，营地仓库和跨源转移继续提交各自宿主版本。
+// 6. 运行期库存的拒绝和提交都会写出来源、槽位、路线和版本，方便区分营地内部整理是否被 UI 误投成背包整理。
 void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatInventorySlotView& SourceSlot,
 	const FCatInventorySlotView& TargetSlot)
 {
@@ -606,11 +606,11 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 			DropRoute = TEXT("InventoryToCamp");
 		}
 		UE_LOG(LogCatUI, Log,
-			TEXT("Event=ui_inventory_slot_drop_submitted Request=%s Route=%s SourceSource=%s SourceIndex=%d TargetSource=%s TargetIndex=%d EquipmentRevision=%lld CampRevision=%lld Camp=%s"),
+			TEXT("Event=ui_inventory_slot_drop_submitted Request=%s Route=%s SourceSource=%s SourceIndex=%d TargetSource=%s TargetIndex=%d InventoryRevision=%lld EquipmentRevision=%lld CampRevision=%lld Camp=%s"),
 			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), DropRoute,
 			*UEnum::GetValueAsString(CurrentSource->SlotSource), SubmittedSourceSlotIndex,
 			*UEnum::GetValueAsString(CurrentTarget->SlotSource), SubmittedTargetSlotIndex,
-			State.Equipment.Revision, State.CampInventoryRevision, *GetNameSafe(CampInventory));
+			State.InventoryRevision, State.Equipment.Revision, State.CampInventoryRevision, *GetNameSafe(CampInventory));
 		Model->MarkActionSubmitted(ECatInventoryAction::MoveInventoryItem, RequestId);
 		if (bSameRunInventory && CurrentSource->SlotSource == ECatInventorySlotSource::CampInventoryObject)
 		{
@@ -628,15 +628,15 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 		}
 		else if (bSameRunInventory)
 		{
-			const int64 SubmittedEquipmentRevision = State.Equipment.Revision;
+			const int64 SubmittedInventoryRevision = State.InventoryRevision;
 			if (CatController->HasAuthority())
 			{
-				CatController->ServerMoveInventorySlot_Implementation(RequestId, SubmittedEquipmentRevision,
+				CatController->ServerMoveInventorySlot_Implementation(RequestId, SubmittedInventoryRevision,
 					SubmittedSourceSlotIndex, SubmittedTargetSlotIndex);
 			}
 			else
 			{
-				CatController->ServerMoveInventorySlot(RequestId, SubmittedEquipmentRevision,
+				CatController->ServerMoveInventorySlot(RequestId, SubmittedInventoryRevision,
 					SubmittedSourceSlotIndex, SubmittedTargetSlotIndex);
 			}
 		}

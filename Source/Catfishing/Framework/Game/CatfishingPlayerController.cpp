@@ -809,7 +809,7 @@ void ACatfishingPlayerController::ServerConfigureEquipment_Implementation(const 
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 随身库存整理 RPC 路由流程：Controller 只提交源/目标槽位，随身库存移动、合并、交换由 Equipment 协调器持有。
+// 随身库存整理 RPC 路由流程：Controller 只提交源/目标槽位，正式库存移动由协调器转给 InventoryComponent 裁决。
 void ACatfishingPlayerController::ServerMoveInventorySlot_Implementation(const FGuid RequestId,
 	const int64 ExpectedRevision, const int32 SourceSlotIndex, const int32 TargetSlotIndex)
 {

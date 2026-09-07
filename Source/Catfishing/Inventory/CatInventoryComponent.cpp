@@ -158,11 +158,12 @@ void UCatInventoryComponent::BeginPlay()
 	InitializeOrRefreshInventorySlots();
 }
 
-// 复制声明流程：只复制库存列表；实例对象通过 registered subobject list 单独登记。
+// 复制声明流程：复制库存列表和内容版本；实例对象通过 registered subobject list 单独登记，终态缓存只留在本机内存。
 void UCatInventoryComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ThisClass, InventoryList);
+	DOREPLIFETIME(ThisClass, InventoryRevision);
 }
 
 // 复制就绪流程：服务器把当前所有非空实例登记为子对象，避免 FastArray 指针到客户端后无法解析。
@@ -197,7 +198,7 @@ UCatInventoryComponent* UCatInventoryComponent::GetInventoryComponent()
 	return this;
 }
 
-// 槽位刷新流程：只在 authority 或单机路径补齐空槽；客户端通过复制拿到服务器数组。
+// 槽位刷新流程：只在 authority 或单机构造路径补齐空槽；新增格子会推进内容版本并广播，客户端只通过复制拿到服务器数组。
 void UCatInventoryComponent::InitializeOrRefreshInventorySlots()
 {
 	AActor* OwningActor = GetOwner();
@@ -223,6 +224,8 @@ void UCatInventoryComponent::InitializeOrRefreshInventorySlots()
 	if (bChanged)
 	{
 		InventoryList.MarkArrayDirty();
+		AdvanceInventoryRevisionFromAuthority();
+		BroadcastInventoryChange();
 	}
 }
 
@@ -292,12 +295,78 @@ void UCatInventoryComponent::SyncInventoryItemRuntimeOwner(UCatInventoryItemInst
 	}
 }
 
-// 按定义入库流程：先填充同类可堆叠格，再为剩余数量创建新实例和新堆栈。
+// 整表等价判断流程：
+// 1. 先按最低容量计算替换后应有的槽位数量，数量不同就代表 UI 可见格位已经变化。
+// 2. 再逐格比较占用状态、实例身份和堆叠数量；空格只要求同为空，不比较临时 owner。
+// 3. 函数不读取 Equipment 或玩法定义，保证库存版本只围绕正式库存自己的内容裁决。
+bool UCatInventoryComponent::AreInventoryEntriesEquivalent(const TArray<FCatInventoryEntry>& NewEntries,
+	const int32 MinimumSlotCount) const
+{
+	const int32 DesiredSlotCount = FMath::Max(FMath::Max(0, MinimumSlotCount), NewEntries.Num());
+	if (InventoryList.Entries.Num() != DesiredSlotCount)
+	{
+		return false;
+	}
+
+	for (int32 SlotIndex = 0; SlotIndex < DesiredSlotCount; ++SlotIndex)
+	{
+		const FCatInventoryEntry& ExistingEntry = InventoryList.Entries[SlotIndex];
+		const FCatInventoryEntry* NewEntry = NewEntries.IsValidIndex(SlotIndex) ? &NewEntries[SlotIndex] : nullptr;
+		const bool bExistingOccupied = ExistingEntry.Instance != nullptr && ExistingEntry.StackCount > 0;
+		const bool bNewOccupied = NewEntry != nullptr && NewEntry->Instance != nullptr && NewEntry->StackCount > 0;
+		if (bExistingOccupied != bNewOccupied)
+		{
+			return false;
+		}
+		if (!bExistingOccupied)
+		{
+			continue;
+		}
+		if (ExistingEntry.Instance != NewEntry->Instance || ExistingEntry.StackCount != NewEntry->StackCount)
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+// 版本推进流程：
+// 1. 客户端直接退出，避免本地预测或 UI 拖放伪造服务器库存版本。
+// 2. 服务器把 0 起始版本推进到至少 1，后续每次真实内容提交单调递增。
+// 3. 拥有 Actor 立即请求复制，让 InventoryRevision 和 FastArray 尽快到达观察端。
+void UCatInventoryComponent::AdvanceInventoryRevisionFromAuthority()
+{
+	AActor* OwningActor = GetOwner();
+	if (OwningActor != nullptr && !OwningActor->HasAuthority())
+	{
+		return;
+	}
+
+	InventoryRevision = FMath::Max<int64>(1, InventoryRevision + 1);
+	if (OwningActor != nullptr)
+	{
+		OwningActor->ForceNetUpdate();
+	}
+}
+
+// 库存版本复制流程：版本字段和 FastArray 没有固定先后顺序；统一广播让 UI 重新读完整状态并由 fallback 处理半包。
+void UCatInventoryComponent::OnRep_InventoryRevision()
+{
+	BroadcastInventoryChange();
+}
+
+// 按定义入库流程：
+// 1. 先拒绝无定义、无数量、非 authority 和运行定义未就绪的请求；失败不会改 Entries 或版本。
+// 2. 再填充同类可堆叠格，并同步观察数量、槽位 owner 和实例运行宿主。
+// 3. 剩余数量按空格创建新实例，登记复制子对象并把 InOutCount 扣到实际剩余数量。
+// 4. 只要接收过至少一份物品就写 bOutFullyAdded；bAdvanceRevision 为 true 时把本次调用作为完整事务推进版本并广播。
 UCatInventoryItemInstance* UCatInventoryComponent::AddEntry(
 	UCatInventoryItemDefinition* ItemDefinition,
 	int32& InOutCount,
 	bool& bOutFullyAdded,
-	const TSubclassOf<UCatInventoryItemInstance> ItemInstanceClass)
+	const TSubclassOf<UCatInventoryItemInstance> ItemInstanceClass,
+	const bool bAdvanceRevision)
 {
 	bOutFullyAdded = false;
 	if (ItemDefinition == nullptr || InOutCount <= 0 || GetOwner() == nullptr || !GetOwner()->HasAuthority())
@@ -381,15 +450,23 @@ UCatInventoryItemInstance* UCatInventoryComponent::AddEntry(
 	bOutFullyAdded = InOutCount == 0;
 	if (FirstAcceptedInstance != nullptr)
 	{
-		BroadcastInventoryChange();
+		if (bAdvanceRevision)
+		{
+			AdvanceInventoryRevisionFromAuthority();
+			BroadcastInventoryChange();
+		}
 	}
 
 	return FirstAcceptedInstance;
 }
 
-// 按实例入库流程：堆叠物优先合并到同定义格；非堆叠或剩余数量再保留原实例并补建同类实例。
+// 按实例入库流程：
+// 1. 先拒绝空实例、无数量、非 authority 和缺定义的请求；失败不会占用或替换任何格子。
+// 2. 堆叠物优先合并到同定义格，并把观察数量、槽位 owner 和运行宿主同步到正式库存事实。
+// 3. 剩余数量先放入传入实例，再按同定义补建实例；每个新占用格都会登记复制子对象并扣减 InOutCount。
+// 4. 接收过物品后更新 bOutFullyAdded；bAdvanceRevision 为 true 时本次调用自成事务，否则等待外层批次统一推进版本。
 void UCatInventoryComponent::AddEntry(UCatInventoryItemInstance* ItemInstance, int32& InOutCount,
-	bool& bOutFullyAdded)
+	bool& bOutFullyAdded, const bool bAdvanceRevision)
 {
 	bOutFullyAdded = false;
 	if (ItemInstance == nullptr || InOutCount <= 0 || GetOwner() == nullptr || !GetOwner()->HasAuthority())
@@ -487,7 +564,11 @@ void UCatInventoryComponent::AddEntry(UCatInventoryItemInstance* ItemInstance, i
 	bOutFullyAdded = InOutCount == 0;
 	if (FirstAcceptedInstance != nullptr)
 	{
-		BroadcastInventoryChange();
+		if (bAdvanceRevision)
+		{
+			AdvanceInventoryRevisionFromAuthority();
+			BroadcastInventoryChange();
+		}
 	}
 }
 
@@ -526,7 +607,7 @@ int32 UCatInventoryComponent::FindAvailableSlot(UCatInventoryItemInstance* ItemI
 	return INDEX_NONE;
 }
 
-// 条目移除流程：清空所有指向该实例的格子，再解除复制登记并广播一次本地通知。
+// 条目移除流程：清空所有指向该实例的格子；确实移除后才解除复制登记、推进内容版本并广播一次完整重读。
 void UCatInventoryComponent::RemoveEntry(UCatInventoryItemInstance* ItemInstance)
 {
 	if (ItemInstance == nullptr || GetOwner() == nullptr || !GetOwner()->HasAuthority())
@@ -552,6 +633,7 @@ void UCatInventoryComponent::RemoveEntry(UCatInventoryItemInstance* ItemInstance
 		{
 			RemoveReplicatedSubObject(ItemInstance);
 		}
+		AdvanceInventoryRevisionFromAuthority();
 		BroadcastInventoryChange();
 	}
 }
@@ -568,7 +650,13 @@ TArray<FCatInventoryEntry> UCatInventoryComponent::GetInventoryEntries() const
 	return InventoryList.Entries;
 }
 
-// 现有实例添加流程：只在服务器执行；返回值表示这次请求的全部数量是否都被接收。
+// 库存版本读取流程：只返回服务器提交过的内容版本，调用方不能用它推断钓鱼选择或外部容器状态。
+int64 UCatInventoryComponent::GetInventoryRevision() const
+{
+	return InventoryRevision;
+}
+
+// 现有实例添加流程：只在服务器执行；成功时 AddEntry 推进内容版本，返回值表示这次请求的全部数量是否都被接收。
 bool UCatInventoryComponent::AddItemInstance(UCatInventoryItemInstance* ItemInstance, const int32 Count)
 {
 	int32 RemainingCount = Count;
@@ -577,7 +665,7 @@ bool UCatInventoryComponent::AddItemInstance(UCatInventoryItemInstance* ItemInst
 	return bAdded && RemainingCount == 0;
 }
 
-// 按定义公开添加入口保持服务器事务语义；返回 false 时调用方应把整次发货当失败处理。
+// 按定义公开添加入口保持服务器事务语义；成功时 AddEntry 推进内容版本，返回 false 时调用方应把整次发货当失败处理。
 bool UCatInventoryComponent::AddItemDefinition(
 	UCatInventoryItemDefinition* ItemDefinition,
 	const int32 Count,
@@ -606,7 +694,11 @@ bool UCatInventoryComponent::CanFullyAcceptInventoryBatch(const FCatInventoryRec
 	return SimulateAddInventoryBatch(ReceiveBatch, SimulatedSlots);
 }
 
-// 批次写入流程：先完整预检，再逐项正式入库；正常情况下不会出现半批失败。
+// 批次写入流程：
+// 1. 先要求 authority 和非空批次，再用容量预演保证正常路径不会半批失败。
+// 2. 逐项正式入库时暂不推进版本，记录是否已经发生任何 Entries 变更。
+// 3. 如果预检后仍遇到创建或登记失败，已经写入的部分会先推进版本并广播，让读者不继续拿旧版本观察新内容。
+// 4. 全批成功且确有变更时只推进一次版本并广播，避免一批收货拆成多次 UI 刷新。
 bool UCatInventoryComponent::TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch)
 {
 	AActor* OwningActor = GetOwner();
@@ -627,13 +719,20 @@ bool UCatInventoryComponent::TryAddInventoryBatch(const FCatInventoryReceiveBatc
 		return false;
 	}
 
+	bool bAnyMutation = false;
 	for (const FCatInventoryDefinitionEntry& DefinitionEntry : ReceiveBatch.DefinitionEntries)
 	{
 		int32 RemainingCount = DefinitionEntry.Count;
 		bool bAdded = false;
-		AddEntry(DefinitionEntry.ItemDefinition, RemainingCount, bAdded, DefinitionEntry.ItemInstanceClass);
+		AddEntry(DefinitionEntry.ItemDefinition, RemainingCount, bAdded, DefinitionEntry.ItemInstanceClass, false);
+		bAnyMutation = bAnyMutation || RemainingCount != DefinitionEntry.Count;
 		if (!bAdded || RemainingCount != 0)
 		{
+			if (bAnyMutation)
+			{
+				AdvanceInventoryRevisionFromAuthority();
+				BroadcastInventoryChange();
+			}
 			UE_LOG(LogCatInventory, Error, TEXT("Event=inventory_batch_apply_failed Owner=%s Source=Definition Count=%d Remaining=%d"),
 				*GetNameSafe(OwningActor), DefinitionEntry.Count, RemainingCount);
 			return false;
@@ -644,19 +743,91 @@ bool UCatInventoryComponent::TryAddInventoryBatch(const FCatInventoryReceiveBatc
 	{
 		int32 RemainingCount = InstanceEntry.Count;
 		bool bAdded = false;
-		AddEntry(InstanceEntry.ItemInstance, RemainingCount, bAdded);
+		AddEntry(InstanceEntry.ItemInstance, RemainingCount, bAdded, false);
+		bAnyMutation = bAnyMutation || RemainingCount != InstanceEntry.Count;
 		if (!bAdded || RemainingCount != 0)
 		{
+			if (bAnyMutation)
+			{
+				AdvanceInventoryRevisionFromAuthority();
+				BroadcastInventoryChange();
+			}
 			UE_LOG(LogCatInventory, Error, TEXT("Event=inventory_batch_apply_failed Owner=%s Source=Instance Count=%d Remaining=%d"),
 				*GetNameSafe(OwningActor), InstanceEntry.Count, RemainingCount);
 			return false;
 		}
 	}
 
+	if (bAnyMutation)
+	{
+		AdvanceInventoryRevisionFromAuthority();
+		BroadcastInventoryChange();
+	}
 	UE_LOG(LogCatInventory, Log, TEXT("Event=inventory_batch_accepted Owner=%s Definitions=%d Instances=%d Slots=%d"),
 		*GetNameSafe(OwningActor), ReceiveBatch.DefinitionEntries.Num(), ReceiveBatch.InstanceEntries.Num(),
 		InventoryList.Entries.Num());
 	return true;
+}
+
+// 正式库存整理流程：
+// 1. 先按 RequestId、库存 Revision、源/目标槽位生成幂等签名；重放只返回首次终态，不再次移动格子。
+// 2. 首次请求必须在 authority 上执行，并且客户端看到的库存版本要等于当前正式库存版本。
+// 3. 真正移动、合并或交换交给库存内部交换规则；成功后只推进正式库存版本并广播一次完整重读。
+// 4. 失败时返回当前库存版本，让 UI 丢弃旧视图后按复制事实重读。
+FCatDomainCommandResult UCatInventoryComponent::MoveInventorySlotFromAuthority(const FGuid RequestId,
+	const int64 ExpectedRevision, const int32 SourceSlotIndex, const int32 TargetSlotIndex)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	const FString Key = MakeTerminalKey(TEXT("MoveInventorySlot"), RequestId);
+	const FString PayloadSignature = FString::Printf(TEXT("ExpectedRevision=%lld|Source=%d|Target=%d"),
+		ExpectedRevision, SourceSlotIndex, TargetSlotIndex);
+	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
+	{
+		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
+		if (!CachedPayload || *CachedPayload != PayloadSignature)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+			Result.Revision = InventoryRevision;
+			return Result;
+		}
+		Result = *Cached;
+		MarkCommandReplayed(Result);
+		return Result;
+	}
+
+	AActor* OwningActor = GetOwner();
+	if (OwningActor == nullptr || !OwningActor->HasAuthority() || !RequestId.IsValid()
+		|| SourceSlotIndex < 0 || TargetSlotIndex < 0 || SourceSlotIndex == TargetSlotIndex)
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	}
+	else if (InventoryRevision != ExpectedRevision)
+	{
+		Result.Error = ECatDomainCommandError::RevisionConflict;
+	}
+	else
+	{
+		const FInventoryExchangeMutation MoveResult =
+			ExecuteExchangeRequestOnAuthorityInternal(this, SourceSlotIndex, this, TargetSlotIndex);
+		Result.bCommitted = MoveResult.bChanged;
+		Result.Error = MoveResult.Error;
+		if (MoveResult.bChanged)
+		{
+			AdvanceInventoryRevisionFromAuthority();
+			BroadcastInventoryChange();
+		}
+	}
+
+	Result.Revision = InventoryRevision;
+	TerminalCache.Add(Key, Result);
+	TerminalPayloadByKey.Add(Key, PayloadSignature);
+	UE_LOG(LogCatInventory, Log,
+		TEXT("Event=inventory_move_slot Owner=%s Request=%s Committed=%s Error=%s Revision=%lld Source=%d Target=%d"),
+		*GetNameSafe(OwningActor), *RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
+		Result.Revision, SourceSlotIndex, TargetSlotIndex);
+	return Result;
 }
 
 // 统一收货开关读取流程：只返回配置事实，不检查容量或 authority。
@@ -686,8 +857,9 @@ void UCatInventoryComponent::SetInventorySlotCountFromAuthority(const int32 NewS
 
 // 整表替换流程：
 // 1. 只允许 authority 或尚未绑定 Actor 的构造/恢复路径写入，客户端不能用它覆盖复制事实。
-// 2. 先移除旧实例复制登记，再按传入槽位顺序重建 Entries，并补足最低格子数量。
-// 3. 每个有效实例都会刷新格子 owner、运行宿主和复制登记，最后广播一次完整库存变化。
+// 2. 先比较格位、实例和数量；内容没变时只补齐本地 owner，不推进库存版本。
+// 3. 内容变化时移除旧实例复制登记，再按传入槽位顺序重建 Entries，并补足最低格子数量。
+// 4. 每个有效实例都会刷新格子 owner、运行宿主和复制登记，最后推进一次库存版本并广播完整变化。
 bool UCatInventoryComponent::ReplaceInventoryEntriesFromAuthority(
 	const TArray<FCatInventoryEntry>& NewEntries, const int32 MinimumSlotCount)
 {
@@ -695,6 +867,16 @@ bool UCatInventoryComponent::ReplaceInventoryEntriesFromAuthority(
 	if (OwningActor != nullptr && !OwningActor->HasAuthority())
 	{
 		return false;
+	}
+
+	if (AreInventoryEntriesEquivalent(NewEntries, MinimumSlotCount))
+	{
+		for (FCatInventoryEntry& Entry : InventoryList.Entries)
+		{
+			Entry.SlotOwnerComponent = this;
+			SyncInventoryItemRuntimeOwner(Entry.Instance);
+		}
+		return true;
 	}
 
 	if (IsUsingRegisteredSubObjectList())
@@ -735,6 +917,7 @@ bool UCatInventoryComponent::ReplaceInventoryEntriesFromAuthority(
 	}
 
 	InventoryList.MarkArrayDirty();
+	AdvanceInventoryRevisionFromAuthority();
 	BroadcastInventoryChange();
 	return true;
 }
@@ -745,7 +928,7 @@ void UCatInventoryComponent::RemoveItemInstance(UCatInventoryItemInstance* ItemI
 	RemoveEntry(ItemInstance);
 }
 
-// 下标移除流程：清空指定槽位，并在实例不再被本库存引用时解除复制登记。
+// 下标移除流程：清空指定槽位；实例不再被本库存引用时解除复制登记，最后推进内容版本并按槽位广播。
 void UCatInventoryComponent::RemoveItemInstanceFromIndex(const int32 TargetIndex)
 {
 	if (GetOwner() == nullptr || !GetOwner()->HasAuthority() || !IsValidInventorySlotIndex(TargetIndex))
@@ -764,10 +947,11 @@ void UCatInventoryComponent::RemoveItemInstanceFromIndex(const int32 TargetIndex
 		RemoveReplicatedSubObject(RemovedInstance);
 	}
 
+	AdvanceInventoryRevisionFromAuthority();
 	BroadcastInventoryChange(TargetIndex);
 }
 
-// 扣量流程：服务器验证槽位和数量后扣减；清空格子时才解除实例复制登记。
+// 扣量流程：服务器验证槽位和数量后扣减；清空格子时才解除实例复制登记，任一成功扣减都会推进内容版本并广播。
 bool UCatInventoryComponent::ConsumeItemAtSlot(const int32 SlotIndex, const int32 ConsumeCount)
 {
 	if (GetOwner() == nullptr
@@ -804,6 +988,7 @@ bool UCatInventoryComponent::ConsumeItemAtSlot(const int32 SlotIndex, const int3
 		}
 	}
 
+	AdvanceInventoryRevisionFromAuthority();
 	BroadcastInventoryChange(SlotIndex);
 	return true;
 }
@@ -983,36 +1168,67 @@ bool UCatInventoryComponent::CanExecuteExchangeRequest(UCatInventoryComponent* D
 	return true;
 }
 
-// authority 交换流程：同定义可堆叠时优先合并，否则交换两个格子的实例和数量。
-bool UCatInventoryComponent::ExecuteExchangeRequestOnAuthority(UCatInventoryComponent* DraggedInventory,
-	const int32 DraggedSlotIndex, UCatInventoryComponent* DropInventory, const int32 DropSlotIndex)
+// 内部交换流程：
+// 1. 先做详细校验并返回结构化错误；源格为空是 NotFound，目标同堆叠已满是 AlreadyResolved。
+// 2. 再按正式库存定义的堆叠规则决定合并、搬空格或交换，期间维护实例 owner、观察数量和复制登记。
+// 3. 函数只标记 FastArray 变脏，不推进 Revision、不广播；外层命令先写版本再通知，避免 UI 读到旧版本新内容。
+UCatInventoryComponent::FInventoryExchangeMutation UCatInventoryComponent::ExecuteExchangeRequestOnAuthorityInternal(
+	UCatInventoryComponent* DraggedInventory, const int32 DraggedSlotIndex,
+	UCatInventoryComponent* DropInventory, const int32 DropSlotIndex)
 {
-	if (!CanExecuteExchangeRequest(DraggedInventory, DraggedSlotIndex, DropInventory, DropSlotIndex))
+	FInventoryExchangeMutation Result;
+	if (DraggedInventory == nullptr || DropInventory == nullptr
+		|| (DraggedInventory == DropInventory && DraggedSlotIndex == DropSlotIndex))
 	{
-		return false;
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+
+	if (!DraggedInventory->IsValidInventorySlotIndex(DraggedSlotIndex)
+		|| !DropInventory->IsValidInventorySlotIndex(DropSlotIndex))
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
 	}
 
 	AActor* DraggedOwner = DraggedInventory->GetOwner();
 	AActor* DropOwner = DropInventory->GetOwner();
-	if (DraggedOwner == nullptr
-		|| DropOwner == nullptr
-		|| !DraggedOwner->HasAuthority()
-		|| !DropOwner->HasAuthority())
+	if (DraggedOwner == nullptr || DropOwner == nullptr
+		|| !DraggedOwner->HasAuthority() || !DropOwner->HasAuthority())
 	{
-		return false;
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		return Result;
 	}
 
 	FCatInventoryEntry& DraggedEntry = DraggedInventory->InventoryList.Entries[DraggedSlotIndex];
 	FCatInventoryEntry& DropEntry = DropInventory->InventoryList.Entries[DropSlotIndex];
+	if (DraggedEntry.Instance == nullptr || DraggedEntry.StackCount <= 0)
+	{
+		Result.Error = ECatDomainCommandError::NotFound;
+		return Result;
+	}
+
+	if (!DropInventory->CanAcceptInventoryEntryAtSlot(DraggedEntry, DropSlotIndex))
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+
+	const bool bDropOccupied = DropEntry.Instance != nullptr && DropEntry.StackCount > 0;
+	if (bDropOccupied && !DraggedInventory->CanAcceptInventoryEntryAtSlot(DropEntry, DraggedSlotIndex))
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+
 	UCatInventoryItemInstance* DraggedInstanceBefore = DraggedEntry.Instance;
 	UCatInventoryItemInstance* DropInstanceBefore = DropEntry.Instance;
-
 	const UCatInventoryItemDefinition* DraggedDefinition =
 		DraggedEntry.Instance != nullptr ? DraggedEntry.Instance->GetItemDefinition() : nullptr;
 	const UCatInventoryItemDefinition* DropDefinition =
 		DropEntry.Instance != nullptr ? DropEntry.Instance->GetItemDefinition() : nullptr;
 
-	if (DropEntry.Instance != nullptr
+	if (bDropOccupied
 		&& DraggedDefinition != nullptr
 		&& DropDefinition != nullptr
 		&& DropDefinition->CanStackWith(*DraggedDefinition)
@@ -1023,7 +1239,8 @@ bool UCatInventoryComponent::ExecuteExchangeRequestOnAuthority(UCatInventoryComp
 		const int32 MovedCount = FMath::Min(AvailableSpace, DraggedEntry.StackCount);
 		if (MovedCount <= 0)
 		{
-			return false;
+			Result.Error = ECatDomainCommandError::AlreadyResolved;
+			return Result;
 		}
 
 		DropEntry.StackCount += MovedCount;
@@ -1043,12 +1260,12 @@ bool UCatInventoryComponent::ExecuteExchangeRequestOnAuthority(UCatInventoryComp
 
 		DraggedInventory->InventoryList.MarkItemDirty(DraggedEntry);
 		DropInventory->InventoryList.MarkItemDirty(DropEntry);
-		DraggedInventory->BroadcastInventoryChange(DraggedSlotIndex);
-		DropInventory->BroadcastInventoryChange(DropSlotIndex);
-		return true;
+		Result.bChanged = true;
+		Result.Error = ECatDomainCommandError::None;
+		return Result;
 	}
 
-	if (DropEntry.Instance == nullptr || DropEntry.StackCount <= 0)
+	if (!bDropOccupied)
 	{
 		DropEntry = DraggedEntry;
 		DraggedEntry = FCatInventoryEntry(DraggedInventory);
@@ -1075,8 +1292,35 @@ bool UCatInventoryComponent::ExecuteExchangeRequestOnAuthority(UCatInventoryComp
 
 	DraggedInventory->InventoryList.MarkItemDirty(DraggedEntry);
 	DropInventory->InventoryList.MarkItemDirty(DropEntry);
+	Result.bChanged = true;
+	Result.Error = ECatDomainCommandError::None;
+	return Result;
+}
+
+// authority 交换流程：
+// 1. 先复用内部交换规则拿到结构化变更结果；没有真实变更时直接返回 false，不推进任何库存版本。
+// 2. 有变更时源库存一定推进版本；跨库存交换时目标库存也推进自己的版本。
+// 3. 同一库存内部整理只广播一次，跨库存才分别广播源格和目标格，避免同一 UI 收到重复重读信号。
+bool UCatInventoryComponent::ExecuteExchangeRequestOnAuthority(UCatInventoryComponent* DraggedInventory,
+	const int32 DraggedSlotIndex, UCatInventoryComponent* DropInventory, const int32 DropSlotIndex)
+{
+	const FInventoryExchangeMutation Result =
+		ExecuteExchangeRequestOnAuthorityInternal(DraggedInventory, DraggedSlotIndex, DropInventory, DropSlotIndex);
+	if (!Result.bChanged)
+	{
+		return false;
+	}
+
+	DraggedInventory->AdvanceInventoryRevisionFromAuthority();
+	if (DropInventory != DraggedInventory)
+	{
+		DropInventory->AdvanceInventoryRevisionFromAuthority();
+	}
 	DraggedInventory->BroadcastInventoryChange(DraggedSlotIndex);
-	DropInventory->BroadcastInventoryChange(DropSlotIndex);
+	if (DropInventory != DraggedInventory)
+	{
+		DropInventory->BroadcastInventoryChange(DropSlotIndex);
+	}
 	return true;
 }
 
@@ -1096,6 +1340,12 @@ bool UCatInventoryComponent::ExecuteExchangeRequest(UCatInventoryComponent* Drag
 
 	DraggedInventory->ServerExchangeInventorySlot(DropInventory, DraggedSlotIndex, DropSlotIndex);
 	return true;
+}
+
+// 幂等键流程：正式库存只按本组件生命周期去重；跨玩家、跨局或存档恢复不复用这份内存缓存。
+FString UCatInventoryComponent::MakeTerminalKey(const TCHAR* Operation, const FGuid RequestId)
+{
+	return FString::Printf(TEXT("%s|%s"), Operation, *RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
 // 实例查找流程：返回匹配实例的格子副本，未命中时返回默认空格。

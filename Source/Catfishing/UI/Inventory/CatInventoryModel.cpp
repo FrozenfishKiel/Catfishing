@@ -457,10 +457,10 @@ bool UCatInventoryModel::IsActionPending() const
 }
 
 // 刷新流程：
-// 1. 从正式 Inventory 读取随身背包格；正式库存槽位和实例尚未一起复制到位时，才从 Equipment 旧投影维持空格和内容展示。
+// 1. 从正式 Inventory 读取随身背包格和内容版本；正式库存槽位和实例尚未一起复制到位时，才从 Equipment 旧投影维持空格和内容展示。
 // 2. 从当前外部容器复制组件读取容量、Revision 和容器物体投影，写入 ExternalContainerSlots。
 // 3. 从当前营地公共仓库读取装备/耗材格，写入 CampInventorySlots；它和随身背包不会共享显示数组。
-// 4. 写入打开态、pending、结果和摘要文本；格子选择不属于共享数据源，留给各个 WBP 自己叠加。
+// 4. 写入打开态、pending、结果和摘要文本；正式库存未绑定时才让旧 Equipment Revision 临时承担随身背包并发前提。
 // 5. 从 UI Settings 解析既有 InputContext 的库存开关键名，最后广播完整投影，所有监听 WBP 都无条件重读自己那份。
 void UCatInventoryModel::Refresh()
 {
@@ -500,6 +500,7 @@ void UCatInventoryModel::Refresh()
 
 	if (const UCatInventoryComponent* Inventory = BoundInventory.Get())
 	{
+		NewState.InventoryRevision = Inventory->GetInventoryRevision();
 		NewState.InventorySlotCount = Inventory->GetInventorySlotCount();
 		const TArray<FCatInventoryEntry> InventoryEntries = Inventory->GetInventoryEntries();
 		int32 FormalOccupiedSlotCount = 0;
@@ -544,6 +545,10 @@ void UCatInventoryModel::Refresh()
 	if (!NewState.bInventoryAvailable && NewState.bEquipmentAvailable)
 	{
 		NewState.bInventoryAvailable = true;
+		if (BoundInventory.Get() == nullptr)
+		{
+			NewState.InventoryRevision = NewState.Equipment.Revision;
+		}
 		NewState.InventorySlotCount = GetInventorySlotCountForView(NewState.Equipment);
 		const FCatRunInventorySlot EmptyInventorySlot;
 		for (int32 InventorySlotIndex = 0; InventorySlotIndex < NewState.InventorySlotCount; ++InventorySlotIndex)

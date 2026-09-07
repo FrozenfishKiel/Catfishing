@@ -196,7 +196,7 @@ public:
 		FGuid RodItemInstanceId, FGuid BaitItemInstanceId, FGuid FloatItemInstanceId,
 		FGuid ScoopNetItemInstanceId);
 
-	/** 整理当前角色随身库存中的两个格子；服务器按 Equipment Revision 和数组下标重读后移动、合并或交换。 */
+	/** 整理当前角色正式随身库存中的两个格子；服务器按 Inventory Revision 和数组下标重读后移动、合并或交换。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
 	void ServerMoveInventorySlot(FGuid RequestId, int64 ExpectedRevision,
 		int32 SourceSlotIndex, int32 TargetSlotIndex);

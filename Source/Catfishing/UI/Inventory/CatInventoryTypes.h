@@ -76,7 +76,7 @@ struct FCatInventorySlotView
 	UPROPERTY(BlueprintReadOnly)
 	int32 ContainerSlotIndex = INDEX_NONE;
 
-	/** 该格在正式随身库存中的槽位下标；只有 InventoryObject 有效，迁移期服务器仍按同一下标回到旧复核入口。 */
+	/** 该格在正式随身库存中的槽位下标；只有 InventoryObject 有效，服务器按同一下标回到 InventoryComponent 复核。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 InventorySlotIndex = INDEX_NONE;
 
@@ -233,6 +233,10 @@ struct FCatInventoryViewState
 	/** 当前是否已经拿到可用于展示的随身库存读源；正式库存优先，旧 Equipment 投影只作临时 fallback。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bInventoryAvailable = false;
+
+	/** 当前随身背包内容版本；正式库存已绑定时来自 InventoryComponent，临时 fallback 时才沿用 Equipment Revision。 */
+	UPROPERTY(BlueprintReadOnly)
+	int64 InventoryRevision = 0;
 
 	/** 随身背包自己的格子数量；优先来自正式 InventoryComponent，正式复制未到位时才从旧 Equipment 投影补空格。 */
 	UPROPERTY(BlueprintReadOnly)

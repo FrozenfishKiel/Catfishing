@@ -161,6 +161,7 @@ Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 | `CampInventoryRevision` | 营地公共仓库快照版本；右键取用时会提交给服务器复核。 |
 | `Equipment` | 当前钓鱼选择和旧兼容快照；随身背包格优先读正式 `InventoryComponent`。 |
 | `bInventoryAvailable` | 当前是否已经拿到可展示的随身库存读源；正式库存优先，旧 `Equipment` 投影只作临时 fallback。 |
+| `InventoryRevision` | 随身背包内容版本；随身背包内部拖拽整理提交给服务器时使用，正式库存可用时不再使用 `Equipment.Revision`。 |
 | `SelectedSlotIndex` | 当前选中的显示格下标。 |
 | `bHasSelectedFish` | 当前是否选中一条鱼。 |
 | `bSelectedFishInFishGuard` | 当前选中鱼是否来自本次打开的地面鱼护。吃鱼/献祭只应该看这个条件。 |
@@ -173,7 +174,7 @@ Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 | `ResultText` | C++ 整理好的最近结果文本。 |
 | `ToggleKeyName` | 当前背包开关键名，来自正式输入资产，不在 WBP 里写死。 |
 
-随身库存的格子来源是 `InventoryObject`，营地公共仓库的格子来源是 `CampInventoryObject`。随身库存显示优先来自角色身上的正式 `UCatInventoryComponent`；客户端刚打开页面、正式库存复制还没完整到位时，Model 才短暂用旧 `Equipment` 投影维持原来的空格和内容显示。组合页面如果要分成“玩家背包区”和“营地仓库区”，可以给对应库存子 WBP 设置格子来源过滤：玩家背包区设为 `InventoryObject`，公共仓库区设为 `CampInventoryObject`；也可以在 `BP_RenderInventory` 里按 `SlotSource` 或 `CampInventoryFirstSlotIndex/CampInventorySlotCount` 自己分栏展示。玩家右键有物品的营地库存格时，PageController 会提交“取到随身库存”的服务器请求；WBP 不需要也不应该直接改公共仓库数组。
+随身库存的格子来源是 `InventoryObject`，营地公共仓库的格子来源是 `CampInventoryObject`。随身库存显示优先来自角色身上的正式 `UCatInventoryComponent`；客户端刚打开页面、正式库存复制还没完整到位时，Model 才短暂用旧 `Equipment` 投影维持原来的空格和内容显示。随身背包内部拖拽整理提交 `InventoryRevision`，营地仓库整理和存取提交 `CampInventoryRevision`，钓具选择、修竿、草药使用等仍提交 `Equipment.Revision`。组合页面如果要分成“玩家背包区”和“营地仓库区”，可以给对应库存子 WBP 设置格子来源过滤：玩家背包区设为 `InventoryObject`，公共仓库区设为 `CampInventoryObject`；也可以在 `BP_RenderInventory` 里按 `SlotSource` 或 `CampInventoryFirstSlotIndex/CampInventorySlotCount` 自己分栏展示。玩家右键有物品的营地库存格时，PageController 会提交“取到随身库存”的服务器请求；WBP 不需要也不应该直接改公共仓库数组。
 
 ## 营地公共仓库：`WBP_CatCampInventory`
 

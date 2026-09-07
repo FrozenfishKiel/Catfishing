@@ -18,6 +18,35 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogCatEquipment, Log, All);
 
+namespace
+{
+	// 旧随身库存投影等价判断流程：按 UI 和存档会读取的全部字段比较；只有真实物品格差异才需要推进兼容 Snapshot 版本。
+	bool AreLegacyInventorySlotArraysEquivalent(const TArray<FCatRunInventorySlot>& Left,
+		const TArray<FCatRunInventorySlot>& Right)
+	{
+		if (Left.Num() != Right.Num())
+		{
+			return false;
+		}
+
+		for (int32 SlotIndex = 0; SlotIndex < Left.Num(); ++SlotIndex)
+		{
+			const FCatRunInventorySlot& LeftSlot = Left[SlotIndex];
+			const FCatRunInventorySlot& RightSlot = Right[SlotIndex];
+			if (LeftSlot.DefinitionId != RightSlot.DefinitionId
+				|| LeftSlot.ItemInstanceId != RightSlot.ItemInstanceId
+				|| LeftSlot.Quantity != RightSlot.Quantity
+				|| !FMath::IsNearlyEqual(LeftSlot.RodDurability, RightSlot.RodDurability)
+				|| LeftSlot.bRodBroken != RightSlot.bRodBroken)
+			{
+				return false;
+			}
+		}
+
+		return true;
+	}
+}
+
 // 构造流程：开启组件复制并关闭 Tick；Snapshot 初始 Revision=0 表示还没有随身库存提交或钓鱼选择。
 UCatEquipmentComponent::UCatEquipmentComponent()
 {
@@ -957,14 +986,32 @@ FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, 
 	return Finish(Result);
 }
 
-// 库存整理流程：
-// 1. 先用 RequestId、Revision 和源/目标下标查询终态缓存，合法重放必须返回首次结果，不受当前 Fishing 阶段影响。
-// 2. 首次请求先检查 authority、RequestId、Revision 和槽位下标，避免陈旧 UI 改写新的随身库存快照。
-// 3. 源格必须有物品，目标格移动/合并/交换复用运行库存格通用规则，不读取物品 Use 或 Fishing 会话状态。
-// 4. 成功移动后推进 Revision 并发布同一份库存快照；View 只通过 OnSnapshotChanged 重刷。
+// 兼容库存整理流程：
+// 1. 正式 Character 先把命令转交 Owner 的 InventoryComponent，由正式库存裁决 RequestId、Revision 和格位移动。
+// 2. 正式提交成功后再从 InventoryComponent 重建旧 InventorySlots，让钓鱼选择、存档和未迁移消费者继续读到同一顺序。
+// 3. 如果宿主没有正式库存组件，才回退旧 Snapshot 数组整理逻辑，保护历史单元测试和临时 Actor。
+// 4. 回退路径仍使用旧 RequestId 缓存和 Equipment Revision；它不再代表正式运行角色的库存事实。
 FCatDomainCommandResult UCatEquipmentComponent::MoveInventorySlotFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const int32 SourceSlotIndex, const int32 TargetSlotIndex)
 {
+	if (AActor* Owner = GetOwner(); Owner != nullptr && Owner->HasAuthority())
+	{
+		if (UCatInventoryComponent* OwnerInventory = Owner->FindComponentByClass<UCatInventoryComponent>())
+		{
+			FCatDomainCommandResult FormalResult = OwnerInventory->MoveInventorySlotFromAuthority(
+				RequestId, ExpectedRevision, SourceSlotIndex, TargetSlotIndex);
+			if (FormalResult.bCommitted && !RefreshInventoryProjectionFromInventoryComponentFromAuthority())
+			{
+				UE_LOG(LogCatEquipment, Warning,
+					TEXT("Event=equipment_inventory_projection_sync_failed Request=%s InventoryRevision=%lld Owner=%s World=%s NetMode=%d"),
+					*RequestId.ToString(EGuidFormats::DigitsWithHyphens), FormalResult.Revision,
+					*GetNameSafe(Owner), *GetNameSafe(GetWorld()),
+					static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone));
+			}
+			return FormalResult;
+		}
+	}
+
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	const FString Key = MakeTerminalKey(TEXT("MoveInventorySlot"), RequestId);
@@ -1702,6 +1749,75 @@ bool UCatEquipmentComponent::SyncOwnerInventoryComponentFromSnapshot()
 	TArray<FCatInventoryEntry> FormalEntries;
 	return BuildFormalEntriesFromSnapshot(*OwnerInventory, FormalEntries)
 		&& OwnerInventory->ReplaceInventoryEntriesFromAuthority(FormalEntries, GetConfiguredInventorySlotCapacity());
+}
+
+// 正式库存到旧投影刷新流程：
+// 1. 只在 authority 上读取 Owner 的 InventoryComponent；客户端复制读模型不能反向生成服务器快照。
+// 2. 先把正式库存条目投成旧 InventorySlots，并与当前旧投影逐格比较，内容一致时不推进 Equipment Revision。
+// 3. 内容变化时替换旧格数组、推进 Equipment Revision 并发布 Snapshot；Publish 再同步正式库存时会因内容一致而不二次推进正式版本。
+bool UCatEquipmentComponent::RefreshInventoryProjectionFromInventoryComponentFromAuthority()
+{
+	AActor* Owner = GetOwner();
+	if (Owner == nullptr || !Owner->HasAuthority())
+	{
+		return false;
+	}
+
+	TArray<FCatRunInventorySlot> ProjectedSlots;
+	if (!BuildSnapshotInventorySlotsFromOwnerInventoryComponent(ProjectedSlots))
+	{
+		return false;
+	}
+
+	if (AreLegacyInventorySlotArraysEquivalent(Snapshot.InventorySlots, ProjectedSlots))
+	{
+		return true;
+	}
+
+	Snapshot.InventorySlots = MoveTemp(ProjectedSlots);
+	++Snapshot.Revision;
+	PublishSnapshot();
+	return true;
+}
+
+// 正式库存投影构建流程：
+// 1. 先从 Owner 取得正式库存组件并按配置容量保留空格数量，确保旧 UI 和存档看到的格位不缩水。
+// 2. 再逐格读取正式库存实例；空格保持默认旧槽位，非空格必须是装备库存实例并能自我投影。
+// 3. 任一非空格无法投影都会失败返回，调用方不能用半份旧快照覆盖现有消费者读模型。
+bool UCatEquipmentComponent::BuildSnapshotInventorySlotsFromOwnerInventoryComponent(
+	TArray<FCatRunInventorySlot>& OutSlots) const
+{
+	OutSlots.Reset();
+	const AActor* Owner = GetOwner();
+	const UCatInventoryComponent* OwnerInventory =
+		Owner != nullptr ? Owner->FindComponentByClass<UCatInventoryComponent>() : nullptr;
+	if (OwnerInventory == nullptr)
+	{
+		return false;
+	}
+
+	const TArray<FCatInventoryEntry> FormalEntries = OwnerInventory->GetInventoryEntries();
+	const int32 SnapshotSlotCount = FMath::Max(GetConfiguredInventorySlotCapacity(), FormalEntries.Num());
+	OutSlots.SetNum(SnapshotSlotCount);
+	for (int32 SlotIndex = 0; SlotIndex < FormalEntries.Num(); ++SlotIndex)
+	{
+		const FCatInventoryEntry& Entry = FormalEntries[SlotIndex];
+		if (Entry.Instance == nullptr || Entry.StackCount <= 0)
+		{
+			continue;
+		}
+
+		const UCatEquipmentInventoryItemInstance* EquipmentInstance =
+			Cast<UCatEquipmentInventoryItemInstance>(Entry.Instance);
+		if (EquipmentInstance == nullptr
+			|| !EquipmentInstance->BuildLegacyRunInventorySlot(Entry.StackCount, OutSlots[SlotIndex]))
+		{
+			OutSlots.Reset();
+			return false;
+		}
+	}
+
+	return true;
 }
 
 // 入库写入流程：
