@@ -8,12 +8,13 @@
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Equipment/CatEquipmentSettings.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "Inventory/CatInventoryComponent.h"
-#include "Inventory/CatInventoryItemInstance.h"
+#include "Logging/CatLog.h"
 
 namespace CatChumPlacementServicePrivate
 {
@@ -57,8 +58,8 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 {
 	// 打窝服务流程：
 	// 1. 先验证服务器、玩家身份、命令幂等和玩法 gate，再用 ChumFieldSubsystem 重放首次终态。
-	// 2. 玩家窝料事实优先从正式库存按实例 ID 读取；没有正式库存组件的旧宿主才回退 Equipment Snapshot。
-	// 3. 水域、距离和视线通过后先准备窝点，再提交库存扣量；扣量失败会撤销待提交窝点。
+	// 2. 玩家窝料事实优先从正式库存按实例 ID 读取，并用正式库存版本裁决并发；没有正式库存组件的旧宿主才回退 Equipment Snapshot。
+	// 3. 水域、距离和视线通过后先准备窝点，再直接提交正式库存扣量；旧宿主继续交给 Equipment Use。
 	// 4. 库存提交成功后才激活并复制窝点，保证世界影响不会脱离真实物品消耗单独成立。
 	using namespace CatChumPlacementServicePrivate;
 	UWorld* World = GetWorld();
@@ -114,21 +115,24 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	ACatCharacter* Character = Cast<ACatCharacter>(RequestingController->GetPawn());
 	const UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
 	UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
+	UCatInventoryComponent* OwnerInventory = Character ? Character->GetInventoryComponent() : nullptr;
 	FName ChumDefinitionId = NAME_None;
 	UCatEquipmentDefinition* Definition = nullptr;
-	if (const UCatInventoryComponent* OwnerInventory = Character ? Character->GetInventoryComponent() : nullptr)
+	int32 FormalChumSlotIndex = INDEX_NONE;
+	FCatRunInventorySlot FormalChumSlot;
+	if (OwnerInventory)
 	{
 		// 正式库存复核：服务层不信任命令里的 DefinitionId，而是用实例当前所在槽位覆盖窝料身份。
-		const int32 FormalChumSlotIndex =
-			OwnerInventory->FindInventorySlotIndexFromInstanceId(Command.ChumItemInstanceId);
+		FormalChumSlotIndex = OwnerInventory->FindInventorySlotIndexFromInstanceId(Command.ChumItemInstanceId);
 		const FCatInventoryEntry* FormalChumEntry =
 			OwnerInventory->GetInventoryEntryAtSlot(FormalChumSlotIndex);
-		const UCatInventoryItemInstance* FormalChumInstance =
-			FormalChumEntry != nullptr ? FormalChumEntry->Instance : nullptr;
+		const UCatEquipmentInventoryItemInstance* FormalChumInstance =
+			FormalChumEntry != nullptr ? Cast<UCatEquipmentInventoryItemInstance>(FormalChumEntry->Instance) : nullptr;
 		if (FormalChumInstance != nullptr
-			&& FormalChumEntry->StackCount >= Command.Quantity)
+			&& FormalChumEntry->StackCount >= Command.Quantity
+			&& FormalChumInstance->BuildLegacyRunInventorySlot(FormalChumEntry->StackCount, FormalChumSlot))
 		{
-			ChumDefinitionId = FormalChumInstance->GetItemDefinitionId();
+			ChumDefinitionId = FormalChumSlot.DefinitionId;
 			Definition = Cast<UCatEquipmentDefinition>(FormalChumInstance->GetItemDefinition());
 		}
 	}
@@ -157,6 +161,19 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::InvalidPayload));
 	}
+	if (OwnerInventory)
+	{
+		// 正式库存路径把历史字段解释为库存版本：命令过期时直接拒绝，避免继续让 Equipment Snapshot 参与数量裁决。
+		if (OwnerInventory->GetInventoryRevision() != Command.ExpectedEquipmentRevision)
+		{
+			return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::EquipmentRevisionConflict));
+		}
+		const ECatDomainCommandError DefinitionUseError = Definition->Use(FormalChumSlot, Command.Quantity);
+		if (DefinitionUseError != ECatDomainCommandError::None)
+		{
+			return FinalizeFirstResult(MakeError(Command.RequestId, MapEquipmentError(DefinitionUseError)));
+		}
+	}
 	UCatWaterQuerySubsystem* WaterQuery = World->GetSubsystem<UCatWaterQuerySubsystem>();
 	if (!WaterQuery)
 	{
@@ -172,6 +189,7 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	const FVector ToTarget = Water.WaterSurfaceWorldPoint - ViewOrigin;
 	const double Distance = ToTarget.Length();
 	const FVector ViewDirection = RequestingController->GetControlRotation().Vector();
+	// 夹角限制用策划配置的最大偏离角转成点积阈值，服务器据此拒绝视线明显偏离落点的投放。
 	const double MinimumAimDot = FMath::Cos(FMath::DegreesToRadians(Settings->MaxAimDeviationDegrees));
 	if (!FMath::IsFinite(Distance) || Distance > Settings->MaxPlacementRangeCentimeters
 		|| ToTarget.IsNearlyZero() || FVector::DotProduct(ViewDirection, ToTarget.GetSafeNormal()) < MinimumAimDot)
@@ -198,6 +216,37 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	if (!Prepared.bPrepared)
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, Prepared.Error));
+	}
+	if (OwnerInventory)
+	{
+		// 正式库存提交流程：先保存可恢复的库存快照，再扣除本次窝料数量，最后只让 Equipment 刷新兼容投影。
+		// 扣量失败只撤销窝点；扣量后若投影刷新失败，还要恢复库存内容，避免世界窝点和背包事实分叉。
+		const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
+		if (!OwnerInventory->ConsumeItemAtSlot(FormalChumSlotIndex, Command.Quantity))
+		{
+			Fields->AbortPreparedField(Prepared.CommitToken);
+			return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::DependencyUnavailable));
+		}
+		if (!Equipment->RefreshInventoryProjectionFromInventoryComponentFromAuthority())
+		{
+			OwnerInventory->ReplaceInventoryEntriesFromAuthority(SavedEntries, SavedEntries.Num());
+			Fields->AbortPreparedField(Prepared.CommitToken);
+			return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::DependencyUnavailable));
+		}
+		UE_LOG(LogCatEnvironment, Log,
+			TEXT("Event=chum_inventory_consumed RequestId=%s Definition=%s ItemInstance=%s Quantity=%d InventoryRevision=%lld"),
+			*Command.RequestId.ToString(EGuidFormats::DigitsWithHyphensLower), *ChumDefinitionId.ToString(),
+			*Command.ChumItemInstanceId.ToString(EGuidFormats::DigitsWithHyphensLower), Command.Quantity,
+			OwnerInventory->GetInventoryRevision());
+		const FCatPlaceChumResult Activated = Fields->ActivatePreparedFieldDeferred(
+			Prepared.CommitToken, OwnerInventory->GetInventoryRevision());
+		if (!Activated.bCommitted)
+		{
+			return FinalizeFirstResult(MakeError(Command.RequestId, Activated.Error));
+		}
+		const FCatPlaceChumResult Frozen = FinalizeFirstResult(Activated);
+		Fields->PublishActivatedField(Frozen.FieldId);
+		return Frozen;
 	}
 	const FCatInventoryItemUseResult UsedChum =
 		Equipment->Use(Command.RequestId, Command.ExpectedEquipmentRevision, Command.ChumItemInstanceId, Command.Quantity);

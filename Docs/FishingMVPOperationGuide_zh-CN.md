@@ -250,13 +250,13 @@ FishingSessionStateTree=/Game/Data/StateTrees/ST_FishingSession.ST_FishingSessio
 | **E** | `IA_Interact` | 准星交互/拾取；本地只选择 Current Target，真正拾取由服务器复核距离、视线和物品状态 | ✅ C++ 已实现，走 Native InputTag 而不是 Gameplay Ability |
 | **左键** | `IA_LMB` | 无会话→**长按预览抛物线（不蓄力）松手抛竿**；真咬窗→**提竿**（1 秒内=完美）；遛鱼→**按住拖** | 提竿/拖 ✅ C++；**抛竿预览+提交走蓝图**（5.2） |
 | **右键** | `IA_RMB` | 遛鱼时**按住松开线杯**（鱼在 L_max 内自由带线，发力期喘气回体力 +1.5/s） | ✅ C++（`UCatGA_FishingSlack`） |
-| **Q** | `IA_BaitSpot` | **长按蓄力打窝**：抛物线越蓄越远，松手投出 | 蓄力预览+提交走蓝图（5.3）；同键上的占位符 Chum Ability 会同时发一条无害的空命令 |
+| **Q** | `IA_BaitSpot` | **长按蓄力打窝**：抛物线越蓄越远，松手投出 | ✅ C++ 已接管提交；蓝图只保留可选预览 |
 | **F** | `IA_CatchFish` | 抢抄 | ✅ C++ |
 | **X** | `IA_CancelFishing` | 取消当前会话 | ✅ C++ |
 
 `DA_CatAbilityInputConfig.AbilityInputActions` 是 **6 条 Fishing InputTag**（含 `Cat.Input.Fishing.Slack` → `IA_RMB`）；`DA_CatAbilitySet_Default` 包含 6 个 Fishing Ability + 6 个无输入 BodyAction 专用 Ability。另有 `NativeInputActions`：`Cat.Input.Interact` → `IA_Interact`，它不授予额外 Ability。
 
-> 左键与 Q 上，GAS Ability 和你的蓝图绑定会**同时触发**（同一个 IA 两条独立绑定）。无会话时按左键，GAS 的 `RequestHook` 会拿到一条 `DependencyUnavailable` 回执，无害；按 Q 时占位符 Chum Ability 同理。UI 若监听 `OnResultReceived` 弹失败提示，请按 `CommandType` 过滤这两种。
+> 左键若仍保留蓝图抛竿提交，要注意它会和 GAS 的提竿/收线 Ability 同时监听同一个 InputAction；UI 监听 `OnResultReceived` 弹失败提示时仍要按 `CommandType` 过滤。Q 打窝当前由 `UCatGA_FishingChum` 提交按下/松开边沿，不再有占位空命令。
 
 ---
 
@@ -420,11 +420,11 @@ Event BeginPlay
 
 > 没有直接给组件方法加 `BlueprintCallable`，而是走 Controller RPC 转发 —— 和 `ServerConfigureEquipment` / `ServerRepairRodAtCamp` 保持一致的权限边界，避免任何蓝图都能直接摸到域写入口。
 
-### 3. `IA_BaitSpot`(Q) 那个 Chum Ability 是占位符
+### 3. `IA_BaitSpot`(Q) 那个 Chum Ability 是输入壳
 
-`UCatGA_FishingChum` 发的是一个**不带载荷**的命令（没有目标点、没有窝料 ID、没有数量），服务器 `HandleAbilityCommandFromAuthority` 里没有 `PlaceChum` 分支，必然落到 `DependencyUnavailable`。
+`UCatGA_FishingChum` 不直接写库存，也不自己创建窝点；它只在按下/松开时提交 `ChumPressed` / `ChumReleased`，服务器根据按住时长预测落点，再从正式库存选一份可用窝料交给 `PlaceChum`。
 
-它存在的唯一原因是 `UCatAbilitySet::IsRuntimeReady()` 强制要求 6 个 Fishing InputTag 齐全。**不要试图修它** —— 打窝本质上需要客户端提供瞄准点和窝料选择，走步骤 5.3 的独立蓝图路径才是对的。Q 键留着当占位就行。
+也就是说，Ability 只负责输入生命周期；窝料数量仍由库存组件扣，窝点仍由环境服务提交。自定义 UI 如果要指定目标点、窝料或数量，才需要走 `SubmitPlaceChum` 的 payload 版本。
 
 ---
 

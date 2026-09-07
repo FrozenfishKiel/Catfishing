@@ -26,14 +26,16 @@ namespace CatChumFieldSubsystemPrivate
 	}
 }
 
+// 子系统创建阶段先做一次幂等清理定时器准备；World 可能还没 BeginPlay，后续 OnWorldBeginPlay 会再校准授权端状态。
 void UCatChumFieldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
-	EnsureCleanupTimer(); // World 还未必 BeginPlay，这里先尝试起一次；真正世界开始时 OnWorldBeginPlay 会再确认一次
+	// World 还未必 BeginPlay，这里只尝试一次；真正世界开始时 OnWorldBeginPlay 会按可靠 NetMode 再确认。
+	EnsureCleanupTimer();
 }
 
+// World BeginPlay 后再次确认过期清理定时器，补齐初始化阶段 NetMode 可能不可靠的生命周期窗口。
 void UCatChumFieldSubsystem::OnWorldBeginPlay(UWorld& InWorld)
-
 {
 	Super::OnWorldBeginPlay(InWorld);
 	EnsureCleanupTimer(); // 世界正式开始后，此时 GetNetMode 等信息才可靠，重新确认定时器状态
@@ -224,7 +226,8 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 }
 
 // 两阶段提交第二阶段：把 Prepare 阶段暂存的窝料场真正落子为"活跃"状态（此时尚未广播给客户端，见 PublishActivatedField）。
-// 分离 Activate 和 Publish 是为了让上层能先在同一事务里扣完装备/背包消耗，再统一对外可见。
+// 分离 Activate 和 Publish 是为了让上层能先在同一事务里扣完随身物品消耗，再统一对外可见。
+// 参数名仍沿用旧回执协议；正式库存路径传入 InventoryRevision，旧宿主路径才传入 Equipment Snapshot Revision。
 FCatPlaceChumResult UCatChumFieldSubsystem::ActivatePreparedFieldDeferred(
 	const FCatChumFieldCommitToken Token, const int64 EquipmentRevision)
 {

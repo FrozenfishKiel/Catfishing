@@ -97,7 +97,7 @@ struct FCatPlaceChumCommand
 {
 	GENERATED_BODY()
 
-	/** 本次打窝请求的幂等身份；输入组件生成，窝料场和库存扣量入口都用它防止重放重复扣量或重复落点。 */
+	/** 本次打窝请求的幂等身份；输入组件生成，打窝终态缓存用它防止 RPC 重放造成重复落点或重复扣量。 */
 	UPROPERTY(BlueprintReadWrite)
 	FGuid RequestId;
 
@@ -105,7 +105,7 @@ struct FCatPlaceChumCommand
 	UPROPERTY(BlueprintReadWrite)
 	FCatWaterRegionHandle ExpectedWaterRegionHandle;
 
-	/** 调用方看到的随身库存兼容版本；字段名保留旧协议口径，正式库存存在时只作为 Use 命令的并发前提。 */
+	/** 提交方读取到的随身物品并发版本；字段名保留旧协议口径，正式库存存在时表示 InventoryRevision，旧宿主才表示 Equipment Snapshot Revision。 */
 	UPROPERTY(BlueprintReadWrite)
 	int64 ExpectedEquipmentRevision = 0;
 
@@ -155,6 +155,7 @@ struct FCatPlaceChumResult
 	UPROPERTY(BlueprintReadOnly)
 	double ExpireServerTime = 0.0;
 
+	/** 本次打窝回执携带的随身物品版本；字段名保留旧协议口径，正式库存成功路径返回 InventoryRevision，旧宿主成功路径返回 Equipment Snapshot Revision。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 EquipmentRevision = 0;
 

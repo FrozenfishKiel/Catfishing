@@ -19,17 +19,17 @@
 | `Cat.Input.Fishing.Primary`（松开） | 同上 `InputReleased` | PrimaryReleased / 停止收线 | ✅ 本轮已补，**开箱可用** |
 | `Cat.Input.Fishing.Cancel` | `UCatGA_FishingCancel` | CancelFishing | ✅ 一直可用 |
 | `Cat.Input.Fishing.Scoop` | `UCatGA_FishingScoop` | RequestScoop | ✅ 本轮已补，**开箱可用** |
-| `Cat.Input.Fishing.Chum` | `UCatGA_FishingChum` | PlaceChum（**无payload**） | ⚠️ **占位符，永远会被服务器拒绝** |
+| `Cat.Input.Fishing.Chum` | `UCatGA_FishingChum` | ChumPressed / ChumReleased → PlaceChum | ✅ Q 蓄力打窝已由 C++ 接管 |
 | `Cat.Input.Fishing.Slack` | `UCatGA_FishingSlack` | 松开线杯 | ✅ 遛鱼时可用 |
 
-**关键结论**：抓竿互动、提竿/收线、取消、抢抄这四个动作，装好 GAS 资产、绑好输入键位之后**不需要再写任何蓝图逻辑**，直接能跑。真正需要你写蓝图节点图的，是下面这几件事：
+**关键结论**：抓竿互动、提竿/收线、取消、抢抄、Q 蓄力打窝这些输入动作，装好 GAS 资产、绑好输入键位之后**不需要再写任何蓝图逻辑**，直接能跑。真正需要你写蓝图节点图的，是下面这几件事：
 
 - **PlaceRod（放竿）**：完全没有原生 Ability，六个钓鱼输入 Ability 里没有它
 - **BeginCast（抛竿）**：同上
-- **PlaceChum（打窝）**：`Cat.Input.Fishing.Chum` 这个键位必须绑（否则 AbilitySet 校验不过），但它背后的 `UCatGA_FishingChum` 只会发一个空命令，永远失败——**真正的打窝要另开一条路**，不走这个键位对应的 Ability
+- **PlaceChum（打窝）**：普通 Q 蓄力已经由 `UCatGA_FishingChum` 提交按下/松开边沿；只有自定义 UI 要指定目标点、窝料或数量时，才需要直接调 payload 版本的 `SubmitPlaceChum`
 - **ConfigureEquipment（首次装配鱼竿/饵/浮漂）**：没有 Ability，且这是钓鱼链路最上游的前置条件
 
-这四个是本文第 3 部分的重点。
+这些是本文第 3 部分的重点。
 
 ---
 
@@ -166,19 +166,19 @@ Make FCatBeginCastCommand
 - `Cat.Input.Fishing.Cancel`：随时取消当前会话
 - `Cat.Input.Fishing.Scoop`：鱼上钩后即可使用，不读取鱼的剩余体力；服务器范围校验成功后直接进入与岸上死鱼按 E 相同的嘴叼状态，不在钓鱼会话里指定鱼护
 
-### 3.5 PlaceChum（打窝）—— 单独走一条路，不挂在 `Cat.Input.Fishing.Chum` 键位对应的 Ability 上
+### 3.5 PlaceChum（打窝）—— 普通 Q 已由 Ability 接管，自定义目标点才走 payload
 
-`UCatGA_FishingChum` 只是为了让 `UCatAbilitySet::IsRuntimeReady()` 校验通过而存在的占位符（它发的是一个不带载荷的命令，服务器永远会拒绝）。**真正的打窝逻辑要单独绑一个输入**（比如做一个"打窝"UI 按钮，或者另一个准星确认键），直接调 payload 版本的函数：
+`UCatGA_FishingChum` 现在只是输入壳：按下提交 `ChumPressed` 开始计时，松开提交 `ChumReleased`，服务器按蓄力时长计算落点、从正式库存选择窝料并交给 `PlaceChum` 扣量。下面这个 payload 版本只给自定义 UI 使用，例如玩家要点选目标水面、指定某格窝料或指定数量：
 
 ```
 Line Trace 拿目标水面点
 Get 关卡 ACatWaterRegion → Get Water Region Handle
-Get Player Character → Get Equipment Component → Get Snapshot   ← Revision
+Get Player Character → Get Inventory Component → Get Inventory Revision   ← 正式库存版本
 
 Make FCatPlaceChumCommand
     RequestId = New Guid
     ExpectedWaterRegionHandle = Region.GetWaterRegionHandle()
-    ExpectedEquipmentRevision = Snapshot.Revision
+    ExpectedEquipmentRevision = InventoryRevision（字段名保留旧协议；正式角色必须传库存版本）
     ChumItemInstanceId = （玩家当前选择的窝料库存格 ItemInstanceId）
     ChumDefinitionId = （可选；服务器会按 ChumItemInstanceId 复核并覆盖为真实定义）
     Quantity = 1（或 UI 里选的数量）

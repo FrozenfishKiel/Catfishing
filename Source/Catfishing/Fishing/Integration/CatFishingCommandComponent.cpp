@@ -100,18 +100,19 @@ void UCatFishingCommandComponent::DeliverPlaceChumResultFromAuthority(const FCat
 	APlayerController* Controller = Cast<APlayerController>(GetOwner());
 	if (!Controller || !Controller->HasAuthority() || !Result.RequestId.IsValid()) return;
 	const FString ControllerFields = CatLogContext::BuildControllerFields(Controller);
+	// 回执和日志键仍沿用旧 EquipmentRevision 名称；正式库存提交成功时这里记录的是 InventoryRevision，便于和库存日志串联。
 	if (Result.bCommitted)
 	{
-		UE_LOG(LogCatFishing, Log, TEXT("Event=place_chum_result Committed=true Request=%s Field=%s Center=%s %s"),
+		UE_LOG(LogCatFishing, Log, TEXT("Event=place_chum_result Committed=true Request=%s Field=%s Center=%s EquipmentRevision=%lld %s"),
 			*Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Result.FieldId.ToString(EGuidFormats::DigitsWithHyphens), *Result.ServerCorrectedCenter.ToString(),
-			*ControllerFields);
+			Result.EquipmentRevision, *ControllerFields);
 	}
 	else
 	{
-		UE_LOG(LogCatFishing, Warning, TEXT("Event=place_chum_result Committed=false Error=%s Request=%s %s"),
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=place_chum_result Committed=false Error=%s Request=%s EquipmentRevision=%lld %s"),
 			*UEnum::GetValueAsString(Result.Error), *Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-			*ControllerFields);
+			Result.EquipmentRevision, *ControllerFields);
 	}
 	if (Controller->IsLocalController()) ReceivePlaceChumResultLocally(Result);
 	else ClientReceivePlaceChumResult(Result);
@@ -946,7 +947,9 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 		return;
 	}
 	// 选窝料实例流程：正式库存里先找 starter 指定类型，再找任意足量 Chum；没有正式库存组件的旧宿主才在 Equipment Snapshot 里按同一顺序兼容。
+	// 命令字段仍沿用旧名 ExpectedEquipmentRevision，但正式库存路径填的是 InventoryRevision，让 PlaceChum 直接裁决背包并发。
 	const FCatEquipmentLoadoutSnapshot& Loadout = Equipment->GetSnapshot();
+	const UCatInventoryComponent* OwnerInventory = Character->GetInventoryComponent();
 	const int32 ChumQuantity = FMath::Max(1, GetDefault<UCatFishingSettings>()->ChumThrowQuantity);
 	const FName PreferredChumDefinitionId = GetDefault<UCatEquipmentSettings>()->StarterChumDefinitionId;
 	FCatRunInventorySlot SelectedChumSlot;
@@ -986,7 +989,7 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 		}
 		return false;
 	};
-	if (const UCatInventoryComponent* OwnerInventory = Character->GetInventoryComponent())
+	if (OwnerInventory)
 	{
 		if (!PreferredChumDefinitionId.IsNone())
 		{
@@ -1049,7 +1052,7 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 	FCatPlaceChumCommand Command;
 	Command.RequestId = RequestId;
 	Command.ExpectedWaterRegionHandle = Region;
-	Command.ExpectedEquipmentRevision = Loadout.Revision;
+	Command.ExpectedEquipmentRevision = OwnerInventory ? OwnerInventory->GetInventoryRevision() : Loadout.Revision;
 	Command.ChumItemInstanceId = SelectedChumSlot.ItemInstanceId;
 	Command.ChumDefinitionId = SelectedChumSlot.DefinitionId;
 	Command.Quantity = ChumQuantity;
