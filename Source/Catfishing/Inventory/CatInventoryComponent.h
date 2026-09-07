@@ -254,6 +254,12 @@ public:
 	/** authority 读取活动区里某个实例的只读 entry；导出或预检只需要观察时用它避免暴露可写库存格。 */
 	const FCatInventoryEntry* FindHeldInventoryEntryFromAuthority(FGuid ItemInstanceId) const;
 
+	/** authority 把当前活动区里的 held entry 追加到输出快照；存档导出用它读取库存正在保管的部署型实例。 */
+	void AppendHeldInventoryEntriesFromAuthority(TArray<FCatInventoryEntry>& OutEntries) const;
+
+	/** authority 查询库存活动区是否仍有部署型实例；恢复、维修和失败预算用它判断库存是否处于可写空闲态。 */
+	bool HasActiveHeldInventoryEntriesFromAuthority() const;
+
 	/** 从指定格扣除数量；数量归零时清空格子并在安全时解除实例复制登记。 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
 	bool ConsumeItemAtSlot(int32 SlotIndex, int32 ConsumeCount);

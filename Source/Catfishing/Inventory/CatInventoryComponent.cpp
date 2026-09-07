@@ -1381,6 +1381,58 @@ const FCatInventoryEntry* UCatInventoryComponent::FindHeldInventoryEntryFromAuth
 	return HeldRecord != nullptr ? &HeldRecord->Entry : nullptr;
 }
 
+// 活动 entry 快照追加流程：
+// 1. 只在服务器侧读取活动区，客户端没有 authority 时拿不到临时保管状态，避免 UI 把它当可见背包。
+// 2. 逐条复核 key、实例 ID、数量和不可堆叠约束，坏记录不会进入保存候选载荷。
+// 3. 输出是 entry 副本，调用方可以投影或校验，但不能通过返回数组修改库存活动区。
+void UCatInventoryComponent::AppendHeldInventoryEntriesFromAuthority(TArray<FCatInventoryEntry>& OutEntries) const
+{
+	if (GetOwner() == nullptr || !GetOwner()->HasAuthority())
+	{
+		return;
+	}
+
+	for (const TPair<FGuid, FCatInventoryHeldEntryRecord>& Pair : ActiveHeldItemEntries)
+	{
+		const FCatInventoryEntry& Entry = Pair.Value.Entry;
+		const UCatInventoryItemDefinition* HeldDefinition =
+			Entry.Instance != nullptr ? Entry.Instance->GetItemDefinition() : nullptr;
+		const FGuid EntryInstanceId = Entry.Instance != nullptr ? Entry.Instance->GetItemInstanceId() : FGuid();
+		if (!Pair.Key.IsValid() || EntryInstanceId != Pair.Key || Entry.StackCount != 1
+			|| HeldDefinition == nullptr || GetMaxStackCountForDefinition(*HeldDefinition) > 1)
+		{
+			continue;
+		}
+		OutEntries.Add(Entry);
+	}
+}
+
+// 活动 entry 存在性查询流程：
+// 1. 只把当前服务器库存活动区视为正式部署占用，旧 Equipment 镜像不能覆盖这份事实。
+// 2. 查询同样复核不可堆叠单实例约束，坏记录不会让恢复或维修永久卡死。
+// 3. 命中任意有效 held entry 就返回 true，调用方据此延后会改写库存或物品状态的事务。
+bool UCatInventoryComponent::HasActiveHeldInventoryEntriesFromAuthority() const
+{
+	if (GetOwner() == nullptr || !GetOwner()->HasAuthority())
+	{
+		return false;
+	}
+
+	for (const TPair<FGuid, FCatInventoryHeldEntryRecord>& Pair : ActiveHeldItemEntries)
+	{
+		const FCatInventoryEntry& Entry = Pair.Value.Entry;
+		const UCatInventoryItemDefinition* HeldDefinition =
+			Entry.Instance != nullptr ? Entry.Instance->GetItemDefinition() : nullptr;
+		const FGuid EntryInstanceId = Entry.Instance != nullptr ? Entry.Instance->GetItemInstanceId() : FGuid();
+		if (Pair.Key.IsValid() && EntryInstanceId == Pair.Key && Entry.StackCount == 1
+			&& HeldDefinition != nullptr && GetMaxStackCountForDefinition(*HeldDefinition) <= 1)
+		{
+			return true;
+		}
+	}
+	return false;
+}
+
 // 扣量流程：服务器验证槽位和数量后扣减；清空格子时才解除实例复制登记，任一成功扣减都会推进内容版本并广播。
 bool UCatInventoryComponent::ConsumeItemAtSlot(const int32 SlotIndex, const int32 ConsumeCount)
 {

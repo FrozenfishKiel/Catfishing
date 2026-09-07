@@ -156,7 +156,8 @@ void UCatEquipmentComponent::ApplyConfiguredStarterLoadoutFromAuthority()
 // 持久化导出流程：
 // 1. 先拒绝尚未结算的 Fishing 预留，避免把仍在会话中的饵料伪装成已提交库存。
 // 2. 正式 Character 从 InventoryComponent 重建库存格；没有正式库存组件的旧宿主才沿用 Snapshot 里的迁移期投影。
-// 3. 最后把成功 Use 后仍由 Equipment 暂存的完整实例合并成收回姿态，完整校验后才交给 Save。
+// 3. 正式库存存在时从 held-entry 活动区读取部署实例并合并成收回姿态；旧宿主才从 Equipment 玩法镜像补部署物。
+// 4. 合并后的候选载荷还要完整校验，Save 只接收不会重复实物、不会超容量且选择引用一致的快照。
 bool UCatEquipmentComponent::ExportSnapshotFromAuthority(FCatEquipmentLoadoutSnapshot& OutSnapshot, FText& OutFailure) const
 {
 	OutSnapshot = FCatEquipmentLoadoutSnapshot();
@@ -166,20 +167,21 @@ bool UCatEquipmentComponent::ExportSnapshotFromAuthority(FCatEquipmentLoadoutSna
 		return false;
 	}
 	FCatEquipmentLoadoutSnapshot Candidate = Snapshot;
-	if (ResolveOwnerInventoryComponent() != nullptr
-		&& !BuildSnapshotInventorySlotsFromOwnerInventoryComponent(Candidate.InventorySlots))
+	UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
+	if (OwnerInventory != nullptr && !BuildSnapshotInventorySlotsFromOwnerInventoryComponent(Candidate.InventorySlots))
 	{
 		OutFailure = FText::FromString(TEXT("正式随身库存无法转换为可保存载荷。"));
 		return false;
 	}
-	for (const TPair<FGuid, FCatInventoryItemUseRecord>& Pair : InventoryItemUseRecords)
+	const auto AppendDeployedItem = [this, &Candidate, &OutFailure](const FCatRunInventorySlot& DeployedItem)
 	{
-		if (Pair.Value.bReleased)
+		if (!CatRunInventorySlotOperations::IsInventorySlotOccupied(DeployedItem))
 		{
-			continue;
+			OutFailure = FText::FromString(TEXT("部署物品载荷无效，不能保存。"));
+			return false;
 		}
-		if (Candidate.InventorySlots.ContainsByPredicate([&Pair](const FCatRunInventorySlot& Slot)
-			{ return Slot.ItemInstanceId == Pair.Key; }))
+		if (Candidate.InventorySlots.ContainsByPredicate([&DeployedItem](const FCatRunInventorySlot& Slot)
+			{ return Slot.ItemInstanceId == DeployedItem.ItemInstanceId; }))
 		{
 			OutFailure = FText::FromString(TEXT("部署实例同时存在于背包，不能保存重复实物。"));
 			return false;
@@ -191,7 +193,36 @@ bool UCatEquipmentComponent::ExportSnapshotFromAuthority(FCatEquipmentLoadoutSna
 			OutFailure = FText::FromString(TEXT("部署物品收回后的库存超过当前容量，必须先腾出背包空间。"));
 			return false;
 		}
-		(Empty ? *Empty : Candidate.InventorySlots.AddDefaulted_GetRef()) = Pair.Value.Item;
+		(Empty ? *Empty : Candidate.InventorySlots.AddDefaulted_GetRef()) = DeployedItem;
+		return true;
+	};
+	if (OwnerInventory != nullptr)
+	{
+		TArray<FCatInventoryEntry> HeldEntries;
+		OwnerInventory->AppendHeldInventoryEntriesFromAuthority(HeldEntries);
+		for (const FCatInventoryEntry& HeldEntry : HeldEntries)
+		{
+			FCatRunInventorySlot DeployedItem;
+			if (!BuildLegacyRunInventorySlotFromFormalEntry(HeldEntry, DeployedItem))
+			{
+				OutFailure = FText::FromString(TEXT("正式部署物品无法转换为可保存载荷。"));
+				return false;
+			}
+			if (!AppendDeployedItem(DeployedItem))
+			{
+				return false;
+			}
+		}
+	}
+	else
+	{
+		for (const TPair<FGuid, FCatInventoryItemUseRecord>& Pair : InventoryItemUseRecords)
+		{
+			if (!Pair.Value.bReleased && !AppendDeployedItem(Pair.Value.Item))
+			{
+				return false;
+			}
+		}
 	}
 	if (!ValidatePersistentSnapshotPayload(Candidate, OutFailure))
 	{
@@ -2854,7 +2885,11 @@ const UCatEquipmentComponent::FCatInventoryItemUseRecord* UCatEquipmentComponent
 
 bool UCatEquipmentComponent::HasActiveInventoryItemUse() const
 {
-	// 活动物品使用 gate 流程：只要存在尚未 Released 的部署型实例记录，就认为场景正持有物品状态；维修和失败预算必须等收口后再改写它。
+	// 活动物品使用 gate 流程：正式库存存在时以 Inventory held-entry 为部署占用事实；没有正式库存组件的旧宿主才读取 Equipment 玩法镜像。
+	if (const UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent())
+	{
+		return OwnerInventory->HasActiveHeldInventoryEntriesFromAuthority();
+	}
 	for (const TPair<FGuid, FCatInventoryItemUseRecord>& Pair : InventoryItemUseRecords)
 	{
 		if (Pair.Key.IsValid() && !Pair.Value.bReleased)
