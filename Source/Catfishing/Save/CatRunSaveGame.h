@@ -7,7 +7,7 @@
 #include "GameFramework/SaveGame.h"
 #include "CatRunSaveGame.generated.h"
 
-/** 磁盘中一格已提交运行库存；Save 拥有这份 DTO，避免改变 Equipment 的运行复制类型来迁就持久化。 */
+/** 磁盘中一格已提交运行库存；Save 拥有这份 DTO，来源可以是正式库存投影或旧宿主兼容快照，不把运行复制类型变成磁盘契约。 */
 USTRUCT()
 struct FCatSavedRunInventorySlot
 {
@@ -34,13 +34,13 @@ struct FCatSavedRunInventorySlot
 	bool bRodBroken = false;
 };
 
-/** 磁盘中的玩家装备载荷；它镜像必要的领域事实，但不替代 Equipment 的运行快照或复制模型。 */
+/** 磁盘中的玩家运行载荷；字段名沿用 EquipmentSnapshot 兼容旧格式，内容表达钓具选择与可恢复随身库存格。 */
 USTRUCT()
 struct FCatSavedEquipmentLoadout
 {
 	GENERATED_BODY()
 
-	/** 保存时的 Equipment 修订号；恢复会产生新的权威修订，原值只保留审计上下文。 */
+	/** 保存时的钓具选择兼容修订号；恢复会产生新的权威修订，原值只保留审计上下文。 */
 	UPROPERTY(SaveGame)
 	int64 Revision = 0;
 
@@ -88,7 +88,7 @@ struct FCatSavedEquipmentLoadout
 	UPROPERTY(SaveGame)
 	bool bRodBroken = false;
 
-	/** 所有已提交随身库存格；顺序保持领域快照顺序，不持久化 FastArray 投影。 */
+	/** 所有已提交随身库存格；正式角色保存时来自 InventoryComponent 投影，旧宿主来自兼容快照，顺序保持玩家整理后的槽位顺序。 */
 	UPROPERTY(SaveGame)
 	TArray<FCatSavedRunInventorySlot> InventorySlots;
 };
@@ -118,7 +118,7 @@ struct FCatSavedPlayerRunState
 	UPROPERTY(SaveGame)
 	FString StableNetId;
 
-	/** 该玩家离开时完整的随身库存、选择和鱼竿耐久；恢复只能通过 Equipment 权威接口提交。 */
+	/** 该玩家离开时的钓具选择、随身库存格和鱼竿耐久；字段名保持兼容，正式角色恢复时会经 Equipment 重建正式库存组件。 */
 	UPROPERTY(SaveGame)
 	FCatSavedEquipmentLoadout EquipmentSnapshot;
 

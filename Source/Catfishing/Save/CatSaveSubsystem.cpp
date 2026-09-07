@@ -244,7 +244,7 @@ namespace
 		return Summary;
 	}
 
-	// 装备磁盘转换流程：只拷贝运行快照的已提交字段到 Save DTO；不把 Equipment 的复制类型或私有缓存变成磁盘契约。
+	// 库存格磁盘转换流程：只拷贝已提交库存格的定义、实例、数量和工具状态；不把运行复制类型或私有缓存变成磁盘契约。
 	FCatSavedRunInventorySlot ToSavedInventorySlot(const FCatRunInventorySlot& Slot)
 	{
 		FCatSavedRunInventorySlot Saved;
@@ -256,7 +256,7 @@ namespace
 		return Saved;
 	}
 
-	// 装备运行转换流程：从磁盘 DTO 重建领域恢复输入；恢复 API 仍是唯一能提交这些字段的 Equipment 写口。
+	// 库存格恢复转换流程：从磁盘 DTO 重建领域恢复输入；恢复 API 后续会把这些格位重建进正式 InventoryComponent。
 	FCatRunInventorySlot ToRuntimeInventorySlot(const FCatSavedRunInventorySlot& Saved)
 	{
 		FCatRunInventorySlot Slot;
@@ -268,7 +268,7 @@ namespace
 		return Slot;
 	}
 
-	// 玩家装备导出流程：完整复制选择、耐久与库存格，保留原修订号只作审计；磁盘读取后领域会建立新的权威修订。
+	// 玩家运行载荷导出流程：复制 ExportSnapshotFromAuthority 交出的钓具选择、耐久和可保存格位；正式角色来自 InventoryComponent 投影，旧宿主保留兼容快照。
 	FCatSavedEquipmentLoadout ToSavedEquipment(const FCatEquipmentLoadoutSnapshot& Snapshot)
 	{
 		FCatSavedEquipmentLoadout Saved;
@@ -292,7 +292,7 @@ namespace
 		return Saved;
 	}
 
-	// 玩家装备恢复输入转换流程：先完整重建领域 DTO，再交给 Equipment 做定义、容量和选择一致性校验；转换本身不修改任何运行库存。
+	// 玩家运行载荷恢复输入转换流程：先完整重建兼容 DTO，再交给 Equipment 校验并同步正式 InventoryComponent；转换本身不修改任何运行库存。
 	FCatEquipmentLoadoutSnapshot ToRuntimeEquipment(const FCatSavedEquipmentLoadout& Saved)
 	{
 		FCatEquipmentLoadoutSnapshot Snapshot;
@@ -414,7 +414,7 @@ namespace
 			|| !HasSelectedInstance(Snapshot.ScoopNetDefinitionId, Snapshot.ScoopNetItemInstanceId,
 				ECatEquipmentKind::ScoopNet))
 		{
-			OutFailure = FText::FromString(TEXT("存档装备选择没有指向同一库存中的合法实例。"));
+			OutFailure = FText::FromString(TEXT("存档钓具选择没有指向同一库存中的合法实例。"));
 			return false;
 		}
 		const FCatRunInventorySlot* SelectedRod = Snapshot.InventorySlots.FindByPredicate(
@@ -898,7 +898,7 @@ bool UCatSaveSubsystem::BuildActiveRunSaveGame(UCatRunSaveGame& OutSaveGame, FTe
 		const FString StableNetId = PlayerState && PlayerState->GetUniqueId().IsValid() ? PlayerState->GetUniqueId()->ToString() : FString();
 		if (!Controller || !Character || !Character->GetEquipmentComponent() || StableNetId.IsEmpty() || SeenStableNetIds.Contains(StableNetId))
 		{
-			OutFailure = FText::FromString(TEXT("在线玩家缺少可持久化的身份、角色或装备状态。"));
+			OutFailure = FText::FromString(TEXT("在线玩家缺少可持久化的身份、角色或钓具库存状态。"));
 			return false;
 		}
 		FCatEquipmentLoadoutSnapshot EquipmentSnapshot;

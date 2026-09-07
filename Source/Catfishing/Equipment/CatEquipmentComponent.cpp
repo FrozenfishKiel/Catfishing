@@ -105,8 +105,10 @@ void UCatEquipmentComponent::ApplyConfiguredStarterLoadoutFromAuthority()
 		*Settings->StarterChumDefinitionId.ToString(), Settings->StarterChumQuantity);
 }
 
-// 持久化导出流程：先拒绝尚未结算的 Fishing 预留，再把公开库存与成功 Use 后持有的完整实例合并成收回姿态。
-// 只填空格或配置容量内追加，始终保留实例 ID 和耐久；不修改当前世界或把预留饵料伪装为已提交库存，完整校验后才交出结果。
+// 持久化导出流程：
+// 1. 先拒绝尚未结算的 Fishing 预留，避免把仍在会话中的饵料伪装成已提交库存。
+// 2. 正式 Character 从 InventoryComponent 重建库存格；没有正式库存组件的旧宿主才沿用 Snapshot 里的迁移期投影。
+// 3. 最后把成功 Use 后仍由 Equipment 暂存的完整实例合并成收回姿态，完整校验后才交给 Save。
 bool UCatEquipmentComponent::ExportSnapshotFromAuthority(FCatEquipmentLoadoutSnapshot& OutSnapshot, FText& OutFailure) const
 {
 	OutSnapshot = FCatEquipmentLoadoutSnapshot();
@@ -116,6 +118,12 @@ bool UCatEquipmentComponent::ExportSnapshotFromAuthority(FCatEquipmentLoadoutSna
 		return false;
 	}
 	FCatEquipmentLoadoutSnapshot Candidate = Snapshot;
+	if (ResolveOwnerInventoryComponent() != nullptr
+		&& !BuildSnapshotInventorySlotsFromOwnerInventoryComponent(Candidate.InventorySlots))
+	{
+		OutFailure = FText::FromString(TEXT("正式随身库存无法转换为可保存载荷。"));
+		return false;
+	}
 	for (const TPair<FGuid, FCatInventoryItemUseRecord>& Pair : InventoryItemUseRecords)
 	{
 		if (Pair.Value.bReleased)
@@ -289,7 +297,7 @@ bool UCatEquipmentComponent::ValidatePersistentSnapshotPayload(const FCatEquipme
 	return true;
 }
 
-// 随身库存恢复提交流程：先重复完整预检，成功后清掉只属于旧 Character 生命周期的请求缓存、活动 Use 记录和正式实例强引用，再整体替换快照并通过既有发布路径复制给客户端。
+// 随身库存恢复提交流程：先重复完整预检，成功后清掉只属于旧 Character 生命周期的请求缓存、活动 Use 记录和正式实例强引用，再替换兼容快照；发布时有正式库存组件才同步它，旧宿主只复制旧读模型。
 bool UCatEquipmentComponent::RestoreSnapshotFromAuthority(const FCatEquipmentLoadoutSnapshot& RestoredSnapshot)
 {
 	FText Failure;

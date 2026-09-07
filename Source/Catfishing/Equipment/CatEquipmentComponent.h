@@ -35,7 +35,7 @@ public:
 	/** Character 被服务器占有后应用配置的开局装备选择；仅在组件所属 Pawn、authority 与设置均有效且尚未选竿时提交，成功后可补发配置窝料。 */
 	void ApplyConfiguredStarterLoadoutFromAuthority();
 
-	/** 导出完整已拥有库存，把已提交部署实例按收回后的格子保存；未结算 Fishing 预留或收回后超容量时明确失败。 */
+	/** 导出存档需要的钓具选择和库存格；正式角色读取 InventoryComponent 投影，旧宿主沿用兼容快照，未结算 Fishing 预留或收回后超容量时明确失败。 */
 	bool ExportSnapshotFromAuthority(FCatEquipmentLoadoutSnapshot& OutSnapshot, FText& OutFailure) const;
 
 	/** 退出快照已被 Save 接收后移除本玩家已登记的部署鱼竿表现；实例仍由退出记录持有，重连只恢复一份。 */
@@ -44,7 +44,7 @@ public:
 	/** 只读验证一份跨地图随身库存快照是否可被本组件接收；检查 authority、定义、容量、实例唯一性和选择引用，但不写入现有库存。 */
 	bool CanRestoreSnapshotFromAuthority(const FCatEquipmentLoadoutSnapshot& RestoredSnapshot, FText& OutFailure) const;
 
-	/** 在 Save 已完成全局预检后整体替换随身库存、选择和鱼竿耐久；活动 Fishing/Use 记录存在或任何局部校验失败时拒绝且不改当前快照。 */
+	/** 在 Save 已完成全局预检后恢复钓具选择与随身库存载荷；有正式库存组件时同步组件内容，旧宿主只替换兼容快照，活动记录或局部校验失败时不改当前状态。 */
 	bool RestoreSnapshotFromAuthority(const FCatEquipmentLoadoutSnapshot& RestoredSnapshot);
 
 	/** 根据服务器目录、可信解锁证明和随身库存持有量设置当前钓鱼选择；当前已部署鱼竿可作为原选择继续沿用，但不能借此切换到另一根鱼竿。 */
