@@ -100,19 +100,20 @@ void UCatFishingCommandComponent::DeliverPlaceChumResultFromAuthority(const FCat
 	APlayerController* Controller = Cast<APlayerController>(GetOwner());
 	if (!Controller || !Controller->HasAuthority() || !Result.RequestId.IsValid()) return;
 	const FString ControllerFields = CatLogContext::BuildControllerFields(Controller);
-	// 回执和日志键仍沿用旧 EquipmentRevision 名称；正式库存提交成功时这里记录的是 InventoryRevision，便于和库存日志串联。
+	const int64 InventoryRevision = Result.GetInventoryRevision();
+	// 回执仍同步旧 EquipmentRevision 字段；日志额外输出正式 InventoryRevision，便于区分打窝库存链和装备选择链。
 	if (Result.bCommitted)
 	{
-		UE_LOG(LogCatFishing, Log, TEXT("Event=place_chum_result Committed=true Request=%s Field=%s Center=%s EquipmentRevision=%lld %s"),
+		UE_LOG(LogCatFishing, Log, TEXT("Event=place_chum_result Committed=true Request=%s Field=%s Center=%s InventoryRevision=%lld EquipmentRevision=%lld %s"),
 			*Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Result.FieldId.ToString(EGuidFormats::DigitsWithHyphens), *Result.ServerCorrectedCenter.ToString(),
-			Result.EquipmentRevision, *ControllerFields);
+			InventoryRevision, Result.EquipmentRevision, *ControllerFields);
 	}
 	else
 	{
-		UE_LOG(LogCatFishing, Warning, TEXT("Event=place_chum_result Committed=false Error=%s Request=%s EquipmentRevision=%lld %s"),
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=place_chum_result Committed=false Error=%s Request=%s InventoryRevision=%lld EquipmentRevision=%lld %s"),
 			*UEnum::GetValueAsString(Result.Error), *Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-			Result.EquipmentRevision, *ControllerFields);
+			InventoryRevision, Result.EquipmentRevision, *ControllerFields);
 	}
 	if (Controller->IsLocalController()) ReceivePlaceChumResultLocally(Result);
 	else ClientReceivePlaceChumResult(Result);
@@ -947,8 +948,7 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
 	}
-	// 选窝料实例流程：只在正式库存条目里先找 starter 指定类型，再找任意足量 Chum；命令层只保存 PlaceChum 需要复核的定义和实例身份。
-	// 命令字段仍沿用旧名 ExpectedEquipmentRevision，但这里填的是 InventoryRevision，让 PlaceChum 直接裁决背包并发。
+	// 选窝料实例流程：只在正式库存条目里先找 starter 指定类型，再找任意足量 Chum；命令层只保存 PlaceChum 需要复核的定义、实例和库存版本。
 	const int32 ChumQuantity = FMath::Max(1, GetDefault<UCatFishingSettings>()->ChumThrowQuantity);
 	const FName PreferredChumDefinitionId = GetDefault<UCatEquipmentSettings>()->StarterChumDefinitionId;
 	FName SelectedChumDefinitionId = NAME_None;
@@ -1009,11 +1009,12 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
 	}
-	// 组装真正的打窝命令，交给 ChumPlacementService 做射程/夹角/视线/库存/水域等完整校验并落地
+	// 组装真正的打窝命令：新字段提交正式库存版本，旧 ExpectedEquipmentRevision 同步同一值，保证迁移期服务端兼容校验不会读到两套版本事实。
 	FCatPlaceChumCommand Command;
 	Command.RequestId = RequestId;
 	Command.ExpectedWaterRegionHandle = Region;
-	Command.ExpectedEquipmentRevision = OwnerInventory->GetInventoryRevision();
+	Command.ExpectedInventoryRevision = OwnerInventory->GetInventoryRevision();
+	Command.ExpectedEquipmentRevision = Command.ExpectedInventoryRevision;
 	Command.ChumItemInstanceId = SelectedChumItemInstanceId;
 	Command.ChumDefinitionId = SelectedChumDefinitionId;
 	Command.Quantity = ChumQuantity;
@@ -1242,12 +1243,12 @@ void UCatFishingCommandComponent::ReceivePlaceChumResultLocally(const FCatPlaceC
 		PlaceChumResultOrder.RemoveAt(0);
 		PlaceChumResultsByRequestId.Remove(Evicted);
 	}
-	// 同时投影出一份“通用命令结果”，让只关心 bCommitted/Error 的通用监听者（不需要打窝专属字段）也能收到
+	// 同时投影出一份“通用命令结果”；字段名仍叫 EquipmentRevision，但打窝路径写正式 InventoryRevision，旧监听者可继续按原字段刷新回执。
 	FCatFishingCommandResult Common;
 	Common.CommandType = ECatFishingCommandType::PlaceChum;
 	Common.bCommitted = Result.bCommitted;
 	Common.RequestId = Result.RequestId;
-	Common.EquipmentRevision = Result.EquipmentRevision;
+	Common.EquipmentRevision = Result.GetInventoryRevision();
 	Common.Revision = Result.ChumFieldSetRevision;
 	// 打窝子系统用自己的一套错误码，这里逐一映射到通用命令错误码，语义不对齐的兜底为 DependencyUnavailable
 	switch (Result.Error)

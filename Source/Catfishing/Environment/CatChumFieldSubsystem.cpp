@@ -227,12 +227,12 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 
 // 两阶段提交第二阶段：把 Prepare 阶段暂存的窝料场真正落子为"活跃"状态（此时尚未广播给客户端，见 PublishActivatedField）。
 // 分离 Activate 和 Publish 是为了让上层能先在同一事务里扣完随身物品消耗，再统一对外可见。
-// 参数名仍沿用旧回执协议；正式库存路径传入 InventoryRevision，旧宿主路径才传入 Equipment Snapshot Revision。
+// 参数版本流程：正式库存路径传入扣量后的 InventoryRevision；结果里仍同步旧 EquipmentRevision 字段，避免迁移期 UI 失去回执。
 FCatPlaceChumResult UCatChumFieldSubsystem::ActivatePreparedFieldDeferred(
-	const FCatChumFieldCommitToken Token, const int64 EquipmentRevision)
+	const FCatChumFieldCommitToken Token, const int64 InventoryRevision)
 {
 	FCatPlaceChumResult Result;
-	Result.EquipmentRevision = EquipmentRevision;
+	Result.SetInventoryRevision(InventoryRevision);
 	if (!GetWorld() || GetWorld()->GetNetMode() == NM_Client || !Token.IsValid())
 	{
 		Result.Error = ECatChumFieldError::DependencyUnavailable;
@@ -260,7 +260,7 @@ FCatPlaceChumResult UCatChumFieldSubsystem::ActivatePreparedFieldDeferred(
 	Result.bCommitted = true; Result.Error = ECatChumFieldError::None; Result.FieldId = Frozen.State.FieldId;
 	Result.WaterRegion = Frozen.State.WaterRegion; Result.ServerCorrectedCenter = Frozen.State.CenterWorldPoint;
 	Result.StartServerTime = Frozen.State.StartServerTime; Result.ExpireServerTime = Frozen.State.ExpireServerTime;
-	Result.EquipmentRevision = EquipmentRevision; Result.ChumFieldSetRevision = Revision;
+	Result.SetInventoryRevision(InventoryRevision); Result.ChumFieldSetRevision = Revision;
 	return Result;
 }
 
