@@ -185,6 +185,9 @@ struct CATFISHING_API FCatFightStepResult
 	double CarrierTargetPullSpeedCentimetersPerSecond = 0.0;
 	/** 共同张力减去有限支撑后，按猫系统质量计算的真实加速度。 */
 	double CarrierPullAccelerationCentimetersPerSecondSquared = 0.0;
+	/** 支撑大于水平张力时的沿线减速度；不推动静止猫反向运动。 */
+	double CarrierBrakingDecelerationCentimetersPerSecondSquared = 0.0;
+	bool bUseContinuousCarrierTraction = false;
 	double ConstraintErrorCentimeters = 0.0;
 	double RelativeConstraintSpeedCentimetersPerSecond = 0.0;
 	double FishConstraintCorrectionCentimeters = 0.0;

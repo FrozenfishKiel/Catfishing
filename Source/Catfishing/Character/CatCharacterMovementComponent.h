@@ -10,6 +10,8 @@ struct FCatExternalTractionInput
 	FGuid SourceId;
 	FVector Direction = FVector::ZeroVector;
 	double AccelerationCentimetersPerSecondSquared = 0.0;
+	/** 已扣除鱼线拉力后剩余的支撑减速度，只能减缓向鱼运动，不能把静止角色推离鱼。 */
+	double BrakingDecelerationCentimetersPerSecondSquared = 0.0;
 	double SpeedLimitCentimetersPerSecond = 0.0;
 	bool bActive = false;
 };

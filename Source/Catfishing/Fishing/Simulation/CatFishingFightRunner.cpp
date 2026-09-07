@@ -987,7 +987,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 			RotationResistance.MaximumFishTorqueStrengthMeters,
 			RotationResistance.CatTorqueCapacityStrengthMeters,
 			(Motion.FishWorldPosition - RodTip)
-				.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, Rod->GetAuthoritativeRodForwardVector())))
+				.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, Rod->GetAuthoritativeRodForwardVector()),
+			Step.CarrierBrakingDecelerationCentimetersPerSecondSquared, Step.bUseContinuousCarrierTraction))
 		{
 			Stop();
 			SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("CarrierConstraintWrite"));
@@ -1167,7 +1168,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			TEXT("Event=fishing_constraint_sample SessionId=%s RodActorId=%s Active=%s CarrierActive=%s Action=%s "
 				"Model=CommonLineForce Geometry=WaterPlaneSphereIntersection RodTorqueSource=ResolvedSurface "
 				"ConstraintError=%.2f RelativeLineSpeed=%.2f Tension=%.3f FishCorrection=%.2f "
-				"CarrierAcceleration=%.2f CarrierTargetPullSpeed=%.2f RodLeverage=%.3f "
+				"CarrierAcceleration=%.2f CarrierBrakingDeceleration=%.2f ContinuousCarrierTraction=%s CarrierTargetPullSpeed=%.2f RodLeverage=%.3f "
 				"RodPhysicsLengthCm=%.2f MaximumFishTorque=%.3f FishTorque=%.3f CatTorqueCapacity=%.3f "
 				"ActiveCombinedStrength=%.3f CatAcceleration=%.3f FishAcceleration=%.3f NetFishPullAcceleration=%.3f LineTensionN=%.3f ActiveHelpers=%d GroupStaminaDrain=%.3f "
 				"Stalemate=%s Fish=%s RodTip=%s Holder=%s NetMode=%d Authority=true"),
@@ -1181,6 +1182,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.NormalizedTension,
 			Step.FishConstraintCorrectionCentimeters,
 			Step.CarrierPullAccelerationCentimetersPerSecondSquared,
+			Step.CarrierBrakingDecelerationCentimetersPerSecondSquared,
+			Step.bUseContinuousCarrierTraction ? TEXT("true") : TEXT("false"),
 			Step.CarrierTargetPullSpeedCentimetersPerSecond,
 			Step.RodLeverageMultiplier,
 			Config.RodPhysicsLengthCentimeters,

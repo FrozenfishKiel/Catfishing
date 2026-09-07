@@ -478,14 +478,20 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 	}
 	else if (bEscaped) Result.Outcome = ECatFightStepOutcome::Escaped;
 	// 岸线/坡面可能改变最终力臂；猫与杆都必须消费最终线方向上的同一张力。
-	Result.NetFishPullAccelerationCentimetersPerSecondSquared = 100.0
-		* FMath::Max(0.0, LineTension * LineDirection.Size2D() - CatForce) / Config.GetCombinedCatMass();
-	Result.CarrierPullAccelerationCentimetersPerSecondSquared = RodConstraint.bRodHeld && bOperatorPresent
-		&& !State.bFishExhausted && Result.Outcome == ECatFightStepOutcome::None
+	const double SignedCarrierAcceleration = 100.0
+		* (LineTension * LineDirection.Size2D() - CatForce) / Config.GetCombinedCatMass();
+	Result.NetFishPullAccelerationCentimetersPerSecondSquared = FMath::Max(0.0, SignedCarrierAcceleration);
+	Result.bUseContinuousCarrierTraction = RodConstraint.bRodHeld && bOperatorPresent
+		&& !State.bFishExhausted && Result.Outcome == ECatFightStepOutcome::None;
+	Result.CarrierPullAccelerationCentimetersPerSecondSquared = Result.bUseContinuousCarrierTraction
 		? Result.NetFishPullAccelerationCentimetersPerSecondSquared : 0.0;
-	Result.CarrierTargetPullSpeedCentimetersPerSecond = Result.CarrierPullAccelerationCentimetersPerSecondSquared > UE_DOUBLE_KINDA_SMALL_NUMBER
+	Result.CarrierBrakingDecelerationCentimetersPerSecondSquared = Result.bUseContinuousCarrierTraction
+		? FMath::Max(0.0, -SignedCarrierAcceleration) : 0.0;
+	// 连续积分中极小的正加速度也必须有有效上限；不能因另一套容差发布零上限，瞬间刹停已有速度。
+	Result.CarrierTargetPullSpeedCentimetersPerSecond = Result.CarrierPullAccelerationCentimetersPerSecondSquared > 0.0
 		? (bExhaustedCatEscape ? SwimSpeed : Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond) : 0.0;
 	return IsFiniteNonNegative(Result.AbsoluteRodWear) && IsFiniteNonNegative(Result.FishStaminaDrain)
 		&& FMath::IsFinite(Result.CatStaminaDrain)
-		&& IsFiniteNonNegative(Result.CarrierPullAccelerationCentimetersPerSecondSquared);
+		&& IsFiniteNonNegative(Result.CarrierPullAccelerationCentimetersPerSecondSquared)
+		&& IsFiniteNonNegative(Result.CarrierBrakingDecelerationCentimetersPerSecondSquared);
 }

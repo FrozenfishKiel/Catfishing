@@ -19,7 +19,7 @@
   → 力竭/上岸后仍由同一 Runner 拖到真实干地，进入原 Pickup/捕获入口
 ```
 
-移动重放只恢复该移动步保存的牵引方向、加速度、速度上限和来源 ID。它不调用 Runner、ASC、装备、随机数或捕获事务。服务器仍只接受自己的受力裁决；客户端没有上传自报力量或张力的权利。受力期间不合并 SavedMove，避免改掉原碰撞积分步长；这会增加该阶段的移动记录/网络开销，需要打包联机测量。
+移动重放只恢复该移动步保存的牵引方向、加速度、支撑减速度、速度上限、有效上下文和来源 ID。它不调用 Runner、ASC、装备、随机数或捕获事务。服务器仍只接受自己的受力裁决；客户端没有上传自报力量或张力的权利。连续牵引上下文有效期间不合并 SavedMove，包括暂时零牵引的减速阶段，避免改掉原碰撞积分步长；这会增加该阶段的移动记录/网络开销，需要打包联机测量。
 
 ## FishLogic 1：发力与休息节奏
 
@@ -95,7 +95,11 @@ T_N = actual_horizontal_correction_cm / (mobility_cm/N × average_horizontal_lin
 
 左键产生 `ReelSpeedCentimetersPerSecond × dt` 的请求。模拟器用同一个约束函数寻找不超过猫可用支撑/卷线力的缩短量：负载超过出力时停转，有余力才实际缩短。`RequestedReelDistanceCentimeters` 与 `ActualReelDistanceCentimeters` 明确分开。力竭鱼使用独立的 `ExhaustedReelForceNewtons`（默认 200 N），保持猫零体力也能免耗体回收，仍不超过配置收线速度。
 
-猫端不使用移动意图构造虚拟竿尖。它只读取 Rod 当前真实端点，最终水平反力为 `max(T × 最终线方向水平比例 - 猫可用支撑力, 0)`，再除以猫质量换成加速度。Rod 只转交输入；`Character/CatCharacterMovementComponent` 在速度积分阶段应用它，由后续 CMC 碰撞/滑动生成位置。旧 Rod Tick 补速度、质量份额分配位移、背离方向速度硬截断均已退出生产链。
+猫端不使用移动意图构造虚拟竿尖。它只读取 Rod 当前真实端点，最终沿线净力为 `T × 最终线方向水平比例 - 猫可用支撑力`。正值除以猫质量并乘 100，输出向鱼加速度；负值的绝对值同样换算为支撑减速度，单位均为 cm/s²。两个输出互斥，由同一最终张力裁决。减速度只能消耗已有的向鱼速度，不能把静止猫推离鱼。
+
+Rod 只转交输入；`Character/CatCharacterMovementComponent::CalcVelocity` 在原移动积分中衔接沿线加速/减速，无输入时替换沿线的普通急刹，有输入时仍保留引擎完成的主动加速并提供牵引速度下限，其余轴和碰撞/滑动由 CMC 处理。`bUseContinuousTraction` 明确表示活鱼、持竿、有主位且未终局的上下文，暂时零牵引仍保持连续减速；它与原 `CarrierConstraintState.bActive` 的正牵引含义分开。非反射的移动输入 `FCatExternalTractionInput.bActive` 表示该来源参与本移动步，因而也包括减速阶段。鱼力竭、终局、离竿、换人和清约束后退出；减速度默认 0、上下文默认 false，启动首帧的原转矩初始化仍使用默认值，首个固定步才发布实际受力。
+
+行走期间 `PerformMovement` 临时将 CMC 最大子步压到不超过 1/120 s，并为本帧（预算至 0.25 s）保留足够迭代数；实时移动和 SavedMove 重放使用同一设置，返回后恢复原设置。该方式复用引擎支持子步的移动模式，不在外层重复执行资源或运动回调。极小正加速度也必须发布非零速度上限，避免近似平衡时被零上限瞬间刹停。旧 Rod Tick 补速度、质量份额分配位移、背离方向速度硬截断均已退出生产链。
 
 `NormalizedLineLoad = pow(max(dot(鱼努力方向, 水平向外方向), 0), AngleStrengthExponent)` 继续供鱼表现和既有方向性磨损规则使用，不能冒充真实张力。`LineTensionNewtons` 是力；`NormalizedTension = clamp(T / DisplayTensionNewtons, 0, 1)` 仅是表现刻度。`TensionCentimeters/ConstraintErrorCentimeters` 仍表示几何误差。强对抗、僵持标记只观察结果，不锁位置、不裁决断线。
 
@@ -129,7 +133,7 @@ T_N = actual_horizontal_correction_cm / (mobility_cm/N × average_horizontal_lin
 
 服务器决定鱼状态、固定随机流、线长、费用和最终 Transform。拥有客户端接收 Rod 约束用于本地移动；模拟代理使用引擎角色移动复制。`FCatSavedMove::SetMoveFor` 保存每次移动使用的约束，`PrepMoveFor` 为纠正重放恢复它，重放结束恢复读取最新复制输入，旧鱼负载不会覆盖实时输入。换持有人、离竿、清约束和来源销毁会卸载实时牵引。
 
-Rod 的约束快照同时保存 `ConstraintHolderPlayerState`，复制乱序时只能作用于快照对应的持有人；服务器在换主位、离竿、坏竿和收起时立即卸载旧牵引，不能等下一次表现 Tick 才清理。竿尖采样仍排在角色碰撞移动之后。
+Rod 的约束快照同时保存 `ConstraintHolderPlayerState`，复制乱序时只能作用于快照对应的持有人；服务器在换主位、离竿、坏竿和收起时立即卸载旧牵引，不能等下一次表现 Tick 才清理。服务器发布和拥有客户端 OnRep 收到暂时零牵引时，保留对应 CMC Tick 前置关系；只有实际解绑或来源不匹配时移除，使竿尖在拉动与减速阶段都采样当帧碰撞后的角色位置。
 
 这保证受力输入参与客户端历史移动重放，不代表已经实现整场物理回滚、服务器按客户端时间戳回溯鱼状态或零延迟网络一致性。仍须在延迟/丢包条件下检查服务器纠正频率、主辅换人、坡面与正式双端手感。自动化碰撞/回放测试属于受控 runtime_behavior，不能替代真人联机验收。
 
@@ -148,15 +152,39 @@ Rod 的约束快照同时保存 `ConstraintHolderPlayerState`，复制乱序时�
 开发包默认落盘日志分类 `LogCatFishing`：
 
 - `fishing_fight_started`：`StrengthResolution=CommonLineForce`、`ForcePerStrengthN`、`MassMode=IndependentCatBodyMass`。
-- `fishing_constraint_sample`：共同 `LineTensionN`、几何误差、最终转矩和牵引加速度。
+- `fishing_constraint_sample`：共同 `LineTensionN`、几何误差、最终转矩、`CarrierAcceleration`、`CarrierBrakingDeceleration`（均 cm/s²）和 `ContinuousCarrierTraction`。
 - `fishing_coupled_work_sample`：请求/实际收线及各项费用；最终结算失败看 `fishing_final_work_rejected`。
-- `fishing_carrier_movement_sample`：RodActorId、角色、速度、实际碰撞位移、NetMode/LocalRole；替代旧 `fishing_carrier_smoothing_sample`。
+- `fishing_carrier_movement_sample`：RodActorId、角色、速度、实际碰撞位移、NetMode/LocalRole、`AccelerationCmS2/BrakingDecelerationCmS2`；`Active` 表示移动受力上下文，包含减速阶段。保留状态变化/每秒限频，替代旧 `fishing_carrier_smoothing_sample`。
 - `fishing_rod_rotation_resistance_sample`：同一限频事件增加 `LoadedAngularDampingRatio` 和 `AppliedAngularDampingMultiplier`，结合原始/平滑负载、转速、控制器意图、实际姿态和努力 Epoch 排查；没有新增逐帧日志。
 - 原 `fishing_surface_tow`、`fishing_fish_beached`、`fishing_drag_water_entered`、装备磨损及捕获日志继续沿用。
 
 Win64 Development 包应在不加 `-log` 时写入 `<打包根目录>/Catfishing/Saved/Logs`。本轮尚未重新打包、采集新房主/客户端双端日志或验收正式画面，不将代码/受控运行通过写成 presentation_delivery 完成。
 
-## 手持杆抖动衔接核对（2026-09-07）
+## 被鱼拖动时的持续抖动衔接核对（2026-09-07）
+
+修改前为 `0cd7866`，工作区干净；上一轮 129 项基线为 125 clean、3 警告、1 既有初级竿 500/150 耐久失败。用户复测确认阻尼减轻抖动，但身体被鱼拖动时仍反复回正。原生产代码与受控复现确认：仅发布正牵引导致张力过平衡点时切回普通急刹，零牵引发布和 OnRep 又撤销 CMC Tick 前置关系；连续积分实施中还定位并移除了极小正加速度对应零速度上限的容差冲突。修改前先在对话列出影响对照，以下为交付核对。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 固定步与受力计算 | `Source/Catfishing/Fishing/Simulation/CatFishingFightRunner.cpp::HandleFixedStep` → `CatFishingFightSimulator.cpp::FinalizeResolvedStep` | 原只发布正牵引；目标为共同张力下连续加速/支撑减速。N、kg、cm/s²、猫力量和固定步契约保持 | 原结果结构新增减速度及上下文；正牵引字段含义不变，修正微小正值的速度上限 | 先接收方，再结果及 Runner 唯一生产调用 | 平衡附近启停、松线、鱼力竭/终局、费用 | 已衔接；20/60/120 FPS 实际地面稳定拖行；完整 Simulation 回归通过 |
+| 角色移动与重放 | `Source/Catfishing/Character/CatCharacterMovementComponent.{h,cpp}::PerformMovement/CalcVelocity`、`FCatSavedMove`；Rod 发布输入 | 零牵引切回普通急刹 → 本来源连续减速；保留碰撞、主动输入与单一移动写口 | 在现有输入新增 cm/s² 减速度，沿线积分保持非负停点；临时收紧 CMC 子步，复用整个输入的 SavedMove 保存/恢复 | 先移动接收方，再 Rod；清理后恢复原制动 | 静止倒滑、退出滑动、顶墙、重放读到实时新力、低 FPS、普通子步设置泄漏 | 扩展 `TractionUsesCollisionAndReplaysSavedForceWithoutLiveOverwrite` 通过；新地面用例验证三档 FPS 和设置恢复 |
+| Rod 复制、绑定与退出 | `Source/Catfishing/Fishing/Actors/CatFishingRodActor.{h,cpp}::SetCarrierConstraintFromAuthority/OnRep_CarrierConstraintState/PublishCarrierConstraintToMovement/ClearCarrierMovementBinding` | 原零牵引撤销 CMC 前置 Tick，下一帧重绑；目标保持身体先移动、竿尖后采样 | 删除两处按正牵引开关解绑的分支；新增反射字段 `PullBrakingDecelerationCentimetersPerSecondSquared=0` 与 `bUseContinuousTraction=false` | 移动接口准备后切生产者；原换人、坏竿、收起、离竿即时清理保留 | 乱序复制套错持有人、旧力残留、交替帧采到旧位置 | 扩展 Handoff 用例验证零牵引发布及 OnRep 不拆前置关系、真实换人会拆；新 World Tick 用例验证实际握把位置，均通过 |
+| 费用、状态与权威 | `CatFishingFightRunner.cpp::Start/HandleFixedStep/Stop` → ASC、Encounter、Session/Equipment | 原启动先发布转矩意图、首固定步实际受力；资源和终局只由服务器提交 | 保留启动/停止时序、原扣费/磨损/捕获写口；仅附加最终运动输出 | 最终地形解析及费用求值后，沿原调用发布输入 | 重放双扣、提前终局、力竭拖水/回收行为 | 未新增任何资源写口；Fishing Service/Simulation、危险水深和岸坡回归通过 |
+| 旋转、朝向、相机与 UI | `CatFishingRodActor.cpp::RefreshHeldTransformFromAuthority` → `Framework/Game/CatGameplayTypes.cpp::ACatfishingPlayerController::RefreshFishingFacingMode`、`Fishing/Presentation/CatFishingCameraComponent.cpp::TryGetCameraView` → `GetGripWorldTransform` | 沿用上一轮阻尼 3 与负载滤波 0.15 s，不再调慢手感；改正其端点输入时序 | 保留唯一实际姿态，调整生产该端点的绑定时序 | CMC 连续移动 → Rod 当帧位置 → 原朝向/相机消费者 | 反复回正、鼠标响应、稳定平衡、努力 Epoch | Camera/RodEffort/Service 回归无新增失败；正式画面仍待用户复测，不能用自动化代替 |
+| 配置、资产、脚本、持久化、Cook | `Config/DefaultGame.ini` 的 `[/Script/Catfishing.CatFishingSettings]`；`/Game/Blueprint/Actors/BP_CatFishingRodActor`、`/Game/Catfishing/Data/Fishing/DA_FishingFightBalance_Default`；`Scripts/create_fishing_fight_balance_asset.py` | 不涉及资产/存档迁移、配置调参、生成脚本及新增 Cook 入口；新增状态按原 Rod 复制，旧反射身份保持 | 保留资产；扩展原约束结构，未新建滤波组件或可选旧运动模式 | C++ 接收方编译后由原生默认值提供新增字段 | 结构加载、正式角色组件、未知二进制绑定 | 原资产契约/蓝图审计运行；旧 WBP 父类缺失仍未确认其全部消费者，六个兼容字段按原条件暂留，未删除资产 |
+| 诊断、测试与文档清理 | `CatFishingFightRunner.cpp` 与 `CatCharacterMovementComponent.cpp` 的 `LogCatFishing`；`Fishing/Tests/CatFishingForceIntegrationTests.cpp`；本指南和唯一差距清单 | 原诊断只有正牵引；增加减速和上下文可区分真正退出。旧正牵引口径需同步 | 扩展原限频事件，复用已有测试文件；更新计算、重放及采样时序描述 | 对照旧复现后验证新代码，最后核对调用与 diff | 新增高频刷屏、重复实现、把试验报告当交付 | 默认落盘新字段已验证；旧断续牵引分支与零上限冲突已替换，不留第二份实现。最终证据见下文 |
+
+contract：`Saved/Automation/FishingPhysics/BuildTractionContinuityEditor.log`、`BuildTractionContinuityGame.log` 的 Editor/Game Win64 Development 构建成功；`TractionContinuityDevelopmentReport/index.json` 最终 131 项为 127 clean、3 警告、1 既有初级竿耐久失败，0 notRun。独立 DebugGame 的 `TractionContinuityFinalDebugReport` 结果相同。未修改既有耐久资产或降低其断言。
+
+上述证据对应本次牵引修复的构建。最终构建后发现 `CatFishingFightSimulator.{h,cpp}` 出现另一项诊断 Trace/拒绝原因扩展，提交时只纳入本轮受力计算及输出字段的差异；并行扩展原样保留，不由本轮测试结果背书。
+
+runtime_behavior：旧实现隔离高度夹具 `TractionContinuityBaselineReport` 复现恒定鱼力下速度反复归零，且零牵引 Tick 绑定断言失败。最终改用真实地面 Walking，覆盖引擎实际摩擦、碰撞和子步；恒定鱼推力 75 N、鱼 3 kg、猫 5 kg、支撑 50 N，运行 20 s 后取末 5 s，20/60/120 FPS 均为 50 N 张力与 25 cm/s 匀速（报告保留四位小数）。另一个真实 World Tick 测试交替发布拉动/减速 120 帧，握把始终跟随当帧碰撞后的身体；真实移动重放、退出恢复普通制动、静止不倒滑、换人和乱序回执保护均通过。`TractionContinuityDevelopmentTests.log` 可检索新减速字段、`fishing_carrier_movement_sample` 与 `fishing_constraint_sample`。
+
+验证边界：前期 `TractionContinuityDebugReport` 和 `TractionContinuityRecheckReport` 是未收口的试验报告，不能当作最终通过。UE `PhysFlying` 不使用 Walking 的子步循环，20 FPS 的 Flying 隔离夹具仍有振荡；已检索的 Character/Fishing/Condition 生产源码未主动设置 Flying，该夹具不能用于声称地面通过，也不能被地面通过掩盖为通用运动已稳定。更大鱼猫质量比、其他移动模式及网络延迟下的完整耦合稳定性未完成验收。
+
+presentation_delivery：编辑器退出后已完成常用 Development DLL 的正式构建和新进程加载回归，可重新打开项目复测。期间请求过 Live Coding，但编辑器在编译期间正常退出，热更新结果不作为交付证据。未重新打包、未采集本轮房主/客户端双端日志，正式场景“不动鼠标且被鱼拖动”的回正抖动仍待实机确认；连续上下文扩大了禁止合并 SavedMove 的时间范围，子步增加了移动碰撞开销，尚需打包联机测量。Fishing 模块仍未整体验收。
+
+## 手持杆抖动衔接核对（2026-09-07，前一阶段）
 
 修改前为 `a4f968a`，工作区干净。上一轮 128 项基线为 124 clean、3 警告、1 既有耐久失败。用户明确反馈中鱼后即使不动鼠标也抖；日志确认权威负载跳变，尚未将该现象唯一归因于某个网络或物理环节。
 

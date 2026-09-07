@@ -19,6 +19,7 @@ void UCatCharacterMovementComponent::SetExternalTraction(const UObject* Source, 
 {
 	if (!Source || Input.Direction.ContainsNaN()
 		|| !FMath::IsFinite(Input.AccelerationCentimetersPerSecondSquared) || Input.AccelerationCentimetersPerSecondSquared < 0.0
+		|| !FMath::IsFinite(Input.BrakingDecelerationCentimetersPerSecondSquared) || Input.BrakingDecelerationCentimetersPerSecondSquared < 0.0
 		|| !FMath::IsFinite(Input.SpeedLimitCentimetersPerSecond) || Input.SpeedLimitCentimetersPerSecond < 0.0)
 	{
 		ClearExternalTraction(Source);
@@ -57,17 +58,26 @@ void UCatCharacterMovementComponent::PerformMovement(const float DeltaSeconds)
 	const bool bReplaying = bUseSavedTraction;
 	if (!bReplaying) MovementTraction = TractionSource.IsValid() ? LiveTraction : FCatExternalTractionInput{};
 	const FVector Before = UpdatedComponent ? UpdatedComponent->GetComponentLocation() : FVector::ZeroVector;
-	Super::PerformMovement(DeltaSeconds);
+	{
+		// 牵引与固定步张力互相反馈；低帧率不能把整段外力一次积分成大位移。
+		// 实时移动和 SavedMove 共用相同的 CMC 子步规则，碰撞/滑动仍由引擎执行。
+		const float TractionStep = MovementTraction.bActive ? FMath::Min(MaxSimulationTimeStep, 1.0f / 120.0f) : MaxSimulationTimeStep;
+		TGuardValue<float> StepGuard(MaxSimulationTimeStep, TractionStep);
+		TGuardValue<int32> IterationGuard(MaxSimulationIterations, MovementTraction.bActive
+			? FMath::Max(MaxSimulationIterations, FMath::CeilToInt(FMath::Clamp(DeltaSeconds, 0.0f, 0.25f) / TractionStep) + 1)
+			: MaxSimulationIterations);
+		Super::PerformMovement(DeltaSeconds);
+	}
 	bUseSavedTraction = false;
 	UWorld* World = GetWorld();
 	if (!bReplaying && World && CharacterOwner && (bLastTractionActive != MovementTraction.bActive
 		|| (MovementTraction.bActive && World->GetTimeSeconds() >= NextTractionDiagnosticSeconds)))
 	{
 		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_carrier_movement_sample RodActorId=%s Holder=%s Active=%s AccelerationCmS2=%.3f "
+			TEXT("Event=fishing_carrier_movement_sample RodActorId=%s Holder=%s Active=%s AccelerationCmS2=%.3f BrakingDecelerationCmS2=%.3f "
 				"Velocity=%s ActualDelta=%s MovementMode=%d World=%s NetMode=%d Authority=%s LocalRole=%d Model=CMCForceIntegration"),
 			*MovementTraction.SourceId.ToString(), *GetNameSafe(CharacterOwner), MovementTraction.bActive ? TEXT("true") : TEXT("false"),
-			MovementTraction.AccelerationCentimetersPerSecondSquared, *Velocity.ToCompactString(),
+			MovementTraction.AccelerationCentimetersPerSecondSquared, MovementTraction.BrakingDecelerationCentimetersPerSecondSquared, *Velocity.ToCompactString(),
 			*(UpdatedComponent ? UpdatedComponent->GetComponentLocation() - Before : FVector::ZeroVector).ToCompactString(),
 			static_cast<int32>(MovementMode), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
 			CharacterOwner->HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(CharacterOwner->GetLocalRole()));
@@ -83,12 +93,20 @@ void UCatCharacterMovementComponent::CalcVelocity(const float DeltaTime, const f
 	Super::CalcVelocity(DeltaTime, Friction, bFluid, BrakingDeceleration);
 	if (!MovementTraction.bActive || DeltaTime <= 0.0f || !HasValidData()
 		|| HasAnimRootMotion() || CurrentRootMotion.HasOverrideVelocity() || MovementMode == MOVE_None) return;
-	// 地面支撑已在外力生产者中扣除。保留外力速度，不让行走制动再次吃掉同一份牵引；
-	// 随后的 SafeMove/SlideAlongSurface 才产生真实位置和碰撞后速度。
-	const double IntegratedPullSpeed = FMath::Min(MovementTraction.SpeedLimitCentimetersPerSecond,
-		PreviousPullSpeed + MovementTraction.AccelerationCentimetersPerSecondSquared * DeltaTime);
+	// 支撑与拉力来自同一权威计算。过平衡点时连续减速，不能突然切回普通行走急刹。
+	// 减速只作用于向鱼运动；静止不会反向滑走，主动远离鱼仍走原行走/制动规则。
+	const double PullAcceleration = MovementTraction.AccelerationCentimetersPerSecondSquared;
+	if (PreviousPullSpeed < 0.0 && PullAcceleration <= 0.0) return;
+	double IntegratedPullSpeed = PreviousPullSpeed + (PullAcceleration
+		- MovementTraction.BrakingDecelerationCentimetersPerSecondSquared) * DeltaTime;
+	if (PreviousPullSpeed >= 0.0) IntegratedPullSpeed = FMath::Max(0.0, IntegratedPullSpeed);
+	if (PullAcceleration > 0.0) IntegratedPullSpeed = FMath::Min(MovementTraction.SpeedLimitCentimetersPerSecond, IntegratedPullSpeed);
 	const double ActualPullSpeed = FVector::DotProduct(Velocity, MovementTraction.Direction);
-	if (ActualPullSpeed < IntegratedPullSpeed) Velocity += MovementTraction.Direction * (IntegratedPullSpeed - ActualPullSpeed);
+	// 无输入时替换沿线制动，保留其余轴；有输入时保留引擎完成的主动加速，牵引仅提供下限。
+	if ((Acceleration.IsNearlyZero() && !bHasRequestedVelocity) || ActualPullSpeed < IntegratedPullSpeed)
+	{
+		Velocity += MovementTraction.Direction * (IntegratedPullSpeed - ActualPullSpeed);
+	}
 }
 
 void FCatSavedMove::Clear()

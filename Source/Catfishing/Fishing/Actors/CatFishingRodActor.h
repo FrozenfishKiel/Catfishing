@@ -24,6 +24,12 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 	FVector_NetQuantizeNormal PullDirection = FVector::ZeroVector;
 	UPROPERTY(BlueprintReadOnly)
 	float PullAccelerationCentimetersPerSecondSquared = 0.0f;
+	/** 当前支撑超过张力的减速度，单位 cm/s²；与正牵引由同一最终负载裁决。 */
+	UPROPERTY(BlueprintReadOnly)
+	float PullBrakingDecelerationCentimetersPerSecondSquared = 0.0f;
+	/** 活鱼搏斗中的连续移动上下文；零张力仍按支撑力减速，终局后恢复普通移动。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bUseContinuousTraction = false;
 	/** 向鱼速度上限；实际速度按发布的有限加速度积分，不瞬间补齐。 */
 	UPROPERTY(BlueprintReadOnly)
 	float TargetPullSpeedCentimetersPerSecond = 0.0f;
@@ -118,13 +124,14 @@ public:
 	{
 		return AuthoritativeRotationEffort;
 	}
-	/** FightRunner 发布同一份双端求解目标；服务器与拥有客户端都在移动帧内平滑追赶，不直接写 Actor Transform。 */
+	/** FightRunner 发布同一份最终受力；服务器与拥有客户端由 CMC 积分加速/减速，不直接写 Actor Transform。 */
 	bool SetCarrierConstraintFromAuthority(const FVector& PullDirection,
 		double PullAccelerationCentimetersPerSecondSquared, double TargetPullSpeedCentimetersPerSecond,
 		double NormalizedTension, double ConstraintErrorCentimeters,
 		bool bFightActive = false, double MaximumFishTorqueStrengthMeters = 0.0,
 		double CatTorqueCapacityStrengthMeters = 0.0,
-		const FVector& RodPullAxis = FVector::ForwardVector);
+		const FVector& RodPullAxis = FVector::ForwardVector,
+		double PullBrakingDecelerationCentimetersPerSecondSquared = 0.0, bool bUseContinuousTraction = false);
 	void ClearCarrierConstraintFromAuthority();
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod")
 	const FCatFishingCarrierConstraintState& GetCarrierConstraintState() const

@@ -301,7 +301,8 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 	const double TargetPullSpeedCentimetersPerSecond,
 	const double NormalizedTension, const double ConstraintErrorCentimeters,
 	const bool bFightActive, const double MaximumFishTorqueStrengthMeters,
-	const double CatTorqueCapacityStrengthMeters, const FVector& RodPullAxis)
+	const double CatTorqueCapacityStrengthMeters, const FVector& RodPullAxis,
+	const double PullBrakingDecelerationCentimetersPerSecondSquared, const bool bUseContinuousTraction)
 {
 	FVector HorizontalDirection(PullDirection.X, PullDirection.Y, 0.0);
 	const bool bHasDirection = !HorizontalDirection.ContainsNaN() && HorizontalDirection.Normalize();
@@ -311,6 +312,9 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 		&& (!bNeedsDirection || bHasDirection)
 		&& FMath::IsFinite(PullAccelerationCentimetersPerSecondSquared)
 		&& PullAccelerationCentimetersPerSecondSquared >= 0.0
+		&& FMath::IsFinite(PullBrakingDecelerationCentimetersPerSecondSquared)
+		&& PullBrakingDecelerationCentimetersPerSecondSquared >= 0.0
+		&& (!bUseContinuousTraction || bFightActive)
 		&& FMath::IsFinite(TargetPullSpeedCentimetersPerSecond)
 		&& TargetPullSpeedCentimetersPerSecond >= 0.0
 		&& FMath::IsFinite(NormalizedTension)
@@ -330,6 +334,8 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 	Next.PullDirection = HorizontalDirection;
 	Next.PullAccelerationCentimetersPerSecondSquared =
 		static_cast<float>(PullAccelerationCentimetersPerSecondSquared);
+	Next.PullBrakingDecelerationCentimetersPerSecondSquared = static_cast<float>(PullBrakingDecelerationCentimetersPerSecondSquared);
+	Next.bUseContinuousTraction = bUseContinuousTraction;
 	Next.TargetPullSpeedCentimetersPerSecond =
 		static_cast<float>(TargetPullSpeedCentimetersPerSecond);
 	Next.NormalizedTension = static_cast<float>(FMath::Clamp(NormalizedTension, 0.0, 1.0));
@@ -350,10 +356,6 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 	}
 	CarrierConstraintState = Next;
 	PublishCarrierConstraintToMovement();
-	if (!Next.bActive)
-	{
-		ClearCarrierMovementBinding();
-	}
 	ForceNetUpdate();
 	return true;
 }
@@ -369,6 +371,7 @@ void ACatFishingRodActor::ClearCarrierConstraintFromAuthority()
 	SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
 	if (!CarrierConstraintState.bActive
 		&& !CarrierConstraintState.bFightActive
+		&& !CarrierConstraintState.bUseContinuousTraction
 		&& CarrierConstraintState.ConstraintErrorCentimeters <= KINDA_SMALL_NUMBER
 		&& CarrierConstraintState.PullAccelerationCentimetersPerSecondSquared <= KINDA_SMALL_NUMBER
 		&& CarrierConstraintState.TargetPullSpeedCentimetersPerSecond <= KINDA_SMALL_NUMBER)
@@ -385,10 +388,6 @@ void ACatFishingRodActor::ClearCarrierConstraintFromAuthority()
 void ACatFishingRodActor::OnRep_CarrierConstraintState()
 {
 	PublishCarrierConstraintToMovement();
-	if (!CarrierConstraintState.bActive)
-	{
-		ClearCarrierMovementBinding();
-	}
 }
 
 void ACatFishingRodActor::ClearCarrierMovementBinding()
@@ -433,8 +432,9 @@ void ACatFishingRodActor::PublishCarrierConstraintToMovement()
 	Input.SourceId = PresentationState.RodActorId;
 	Input.Direction = CarrierConstraintState.PullDirection;
 	Input.AccelerationCentimetersPerSecondSquared = CarrierConstraintState.PullAccelerationCentimetersPerSecondSquared;
+	Input.BrakingDecelerationCentimetersPerSecondSquared = CarrierConstraintState.PullBrakingDecelerationCentimetersPerSecondSquared;
 	Input.SpeedLimitCentimetersPerSecond = CarrierConstraintState.TargetPullSpeedCentimetersPerSecond;
-	Input.bActive = CarrierConstraintState.bActive;
+	Input.bActive = CarrierConstraintState.bUseContinuousTraction || CarrierConstraintState.bActive;
 	Movement->SetExternalTraction(this, Input);
 }
 
