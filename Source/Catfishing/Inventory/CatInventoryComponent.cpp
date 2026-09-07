@@ -928,7 +928,10 @@ void UCatInventoryComponent::RemoveItemInstance(UCatInventoryItemInstance* ItemI
 	RemoveEntry(ItemInstance);
 }
 
-// 下标移除流程：清空指定槽位；实例不再被本库存引用时解除复制登记，最后推进内容版本并按槽位广播。
+// 下标移除流程：
+// 1. 保留旧公开入口的“清空这个位置”语义，合法空槽也会发布一次清空提交，避免外部兼容调用观察不到确认。
+// 2. 非空实例离开最后一个格子时解除复制登记，防止客户端继续收到已经不归库存持有的子对象。
+// 3. 最后推进内容版本并按槽位广播；需要拿走实例身份的部署/转移流程改用带返回值的 entry 移出入口。
 void UCatInventoryComponent::RemoveItemInstanceFromIndex(const int32 TargetIndex)
 {
 	if (GetOwner() == nullptr || !GetOwner()->HasAuthority() || !IsValidInventorySlotIndex(TargetIndex))
@@ -949,6 +952,42 @@ void UCatInventoryComponent::RemoveItemInstanceFromIndex(const int32 TargetIndex
 
 	AdvanceInventoryRevisionFromAuthority();
 	BroadcastInventoryChange(TargetIndex);
+}
+
+// 槽位 entry 移出流程：
+// 1. 只允许服务器移出非空正式格，失败时输出保持空 entry，避免调用方误拿旧实例。
+// 2. 成功时先复制被移出的实例和数量，再清空正式槽位并维护复制子对象登记。
+// 3. 最后推进库存版本并广播具体槽位，让部署或转移流程从库存事实源拿到同一份实例。
+bool UCatInventoryComponent::RemoveInventoryEntryAtSlotFromAuthority(
+	const int32 TargetIndex, FCatInventoryEntry& OutRemovedEntry)
+{
+	OutRemovedEntry = FCatInventoryEntry(this);
+	if (GetOwner() == nullptr || !GetOwner()->HasAuthority() || !IsValidInventorySlotIndex(TargetIndex))
+	{
+		return false;
+	}
+
+	if (InventoryList.Entries[TargetIndex].Instance == nullptr
+		|| InventoryList.Entries[TargetIndex].StackCount <= 0)
+	{
+		return false;
+	}
+
+	OutRemovedEntry = InventoryList.Entries[TargetIndex];
+	UCatInventoryItemInstance* RemovedInstance = OutRemovedEntry.Instance;
+	InventoryList.Entries[TargetIndex] = FCatInventoryEntry(this);
+	InventoryList.MarkItemDirty(InventoryList.Entries[TargetIndex]);
+
+	if (RemovedInstance != nullptr
+		&& !IsItemInstanceReferencedByOtherSlots(RemovedInstance, TargetIndex)
+		&& IsUsingRegisteredSubObjectList())
+	{
+		RemoveReplicatedSubObject(RemovedInstance);
+	}
+
+	AdvanceInventoryRevisionFromAuthority();
+	BroadcastInventoryChange(TargetIndex);
+	return true;
 }
 
 // 扣量流程：服务器验证槽位和数量后扣减；清空格子时才解除实例复制登记，任一成功扣减都会推进内容版本并广播。
@@ -1018,6 +1057,29 @@ int32 UCatInventoryComponent::FindInventorySlotIndexFromInstance(const UCatInven
 	for (int32 SlotIndex = 0; SlotIndex < InventoryList.Entries.Num(); ++SlotIndex)
 	{
 		if (InventoryList.Entries[SlotIndex].Instance == ItemInstance)
+		{
+			return SlotIndex;
+		}
+	}
+
+	return INDEX_NONE;
+}
+
+// 实例 ID 下标查找流程：
+// 1. 先拒绝无效 ID，避免把默认空 ID 当作可匹配物品。
+// 2. 再逐格读取正式实例身份；空槽不会命中，堆叠数量变化也不会改变实例 ID 查询结果。
+// 3. 找不到时返回 INDEX_NONE，让上层按正式库存事实处理 NotFound。
+int32 UCatInventoryComponent::FindInventorySlotIndexFromInstanceId(const FGuid ItemInstanceId) const
+{
+	if (!ItemInstanceId.IsValid())
+	{
+		return INDEX_NONE;
+	}
+
+	for (int32 SlotIndex = 0; SlotIndex < InventoryList.Entries.Num(); ++SlotIndex)
+	{
+		const UCatInventoryItemInstance* Instance = InventoryList.Entries[SlotIndex].Instance;
+		if (Instance != nullptr && Instance->GetItemInstanceId() == ItemInstanceId)
 		{
 			return SlotIndex;
 		}

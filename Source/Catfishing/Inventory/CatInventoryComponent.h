@@ -196,6 +196,9 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
 	void RemoveItemInstanceFromIndex(int32 TargetIndex);
 
+	/** authority 从指定槽位移出完整 entry；部署、跨容器转移等需要保留实例身份的流程用它接走正式库存事实。 */
+	bool RemoveInventoryEntryAtSlotFromAuthority(int32 TargetIndex, FCatInventoryEntry& OutRemovedEntry);
+
 	/** 从指定格扣除数量；数量归零时清空格子并在安全时解除实例复制登记。 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
 	bool ConsumeItemAtSlot(int32 SlotIndex, int32 ConsumeCount);
@@ -211,6 +214,9 @@ public:
 	/** 按实例查找所在槽位；没有找到或实例为空时返回 INDEX_NONE。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")
 	int32 FindInventorySlotIndexFromInstance(const UCatInventoryItemInstance* ItemInstance) const;
+
+	/** 按稳定实例 ID 查找所在槽位；旧 Equipment 投影和网络命令只拿到 ID 时用它回到正式库存格。 */
+	int32 FindInventorySlotIndexFromInstanceId(FGuid ItemInstanceId) const;
 
 	/** 读取当前库存槽位数量；用于 UI 创建格子和交换操作校验下标。 */
 	int32 GetInventorySlotCount() const;
