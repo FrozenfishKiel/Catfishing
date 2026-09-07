@@ -8,7 +8,7 @@
 class AController;
 class ACatCharacter;
 
-/** 随身库存服务器命令协调器；Controller 只交出玩家意图，正式库存事实由 InventoryComponent 重读，移动和按槽选择钓具都从这里进入领域命令。 */
+/** 随身库存服务器命令协调器；Controller 只交出玩家意图，正式库存事实由 InventoryComponent 重读，移动和物品使用都从这里进入领域命令。 */
 UCLASS()
 class CATFISHING_API UCatInventoryCommandCoordinator : public UWorldSubsystem
 {
@@ -22,8 +22,19 @@ public:
 	FCatDomainCommandResult MoveInventorySlot(AController* RequestingController, ACatCharacter* ControlledCharacter,
 		FGuid RequestId, int64 ExpectedRevision, int32 SourceSlotIndex, int32 TargetSlotIndex);
 
-	/** 把当前玩家正式随身库存里的指定槽位设为钓鱼选择；UI 只提交槽位和版本，服务器重读 InventoryComponent 后只让 Equipment 更新选择。 */
+	/** 使用当前玩家正式随身库存里的指定槽位；外部调用方不需要知道物品是钓具、耗材还是未来其他库存行为。 */
+	FCatDomainCommandResult UseInventoryItemFromSlot(AController* RequestingController,
+		ACatCharacter* ControlledCharacter, FGuid RequestId, int64 ExpectedInventoryRevision,
+		int32 InventorySlotIndex);
+
+	/** 旧版按槽位设为钓鱼选择入口；保留给历史 RPC，内部仍会经过正式库存重读和服务器版本裁决。 */
 	FCatDomainCommandResult SelectFishingItemFromInventorySlot(AController* RequestingController,
 		ACatCharacter* ControlledCharacter, FGuid RequestId, int64 ExpectedInventoryRevision,
 		int64 ExpectedEquipmentRevision, int32 InventorySlotIndex);
+
+private:
+	/** 执行库存物品使用的内部流程；新版入口只锁库存版本，旧版入口可额外锁 Equipment 版本以兼容历史调用。 */
+	FCatDomainCommandResult UseInventoryItemFromSlotInternal(AController* RequestingController,
+		ACatCharacter* ControlledCharacter, FGuid RequestId, int64 ExpectedInventoryRevision,
+		int32 InventorySlotIndex, bool bRequireEquipmentRevision, int64 ExpectedEquipmentRevision);
 };

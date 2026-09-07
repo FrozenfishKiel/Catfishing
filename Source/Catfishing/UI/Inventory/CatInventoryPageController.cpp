@@ -4,6 +4,7 @@
 #include "Character/CatCharacter.h"
 #include "EnhancedInputComponent.h"
 #include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
@@ -370,9 +371,9 @@ void UCatInventoryPageController::RequestCloseInventoryFromWidget()
 // 格子上下文流程：
 // 1. 右键入口直接按传入格子来源处理动作，不再先同步共享选择或刷新所有库存 WBP。
 // 2. 如果目标是营地公共仓库格，先按最新 ViewState 复核公共槽位，再提交“取到正式随身库存”服务器请求；这里不直接改公共仓库格。
-// 3. 如果目标是随身库存格，当前没有 pending 且物品有效时，只提交正式库存槽位和两份 Revision。
-// 4. UI 只判断点击物是否属于钓具类别，不在本地拼 Rod/Bait/Float/Scoop 组合，避免表现层持有第二套选择规则。
-// 5. 记录 pending 后再调用 PlayerController RPC；服务器会从 InventoryComponent 重读槽位并交给 Equipment 更新钓鱼选择。
+// 3. 如果目标是随身库存格，当前没有 pending 且物品有效时，只提交正式库存槽位和库存 Revision。
+// 4. UI 不再判断鱼竿、鱼饵、浮漂或抄网类别；“能不能用、用成什么效果”统一交给服务器从正式库存事实继续分发。
+// 5. 记录 pending 后再调用 PlayerController RPC；服务器会从 InventoryComponent 重读槽位，再决定是否更新 Equipment 或拒绝本次 Use。
 void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FCatInventorySlotView& Slot)
 {
 	UCatInventoryModel* Model = BoundModel.Get();
@@ -420,46 +421,29 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 	{
 		return;
 	}
-	// 选择提交前重读当前格：同定义物品也可能是不同实例，必须同时比对槽位、实例 ID 和数量，避免 UI 旧快照选中已经移动或部署的那件物品。
+	// 使用提交前重读当前格：同定义物品也可能是不同实例，必须同时比对槽位、实例 ID 和数量，避免 UI 旧快照用到已经移动或部署的那件物品。
 	const FCatInventorySlotView* CurrentSlot = FindCurrentRunInventorySlot(State, Slot);
-	if (!CurrentSlot || !CurrentSlot->bOccupied || CurrentSlot->EquipmentDefinitionId.IsNone()
+	if (!CurrentSlot || !CurrentSlot->bOccupied || CurrentSlot->DefinitionId.IsNone()
 		|| CurrentSlot->InventorySlotIndex == INDEX_NONE
-		|| CurrentSlot->EquipmentDefinitionId != Slot.EquipmentDefinitionId
+		|| CurrentSlot->DefinitionId != Slot.DefinitionId
 		|| CurrentSlot->InventoryItemInstanceId != Slot.InventoryItemInstanceId
 		|| CurrentSlot->Quantity != Slot.Quantity)
 	{
 		return;
 	}
-	bool bCanSelectFishingItem = true;
-	switch (CurrentSlot->EquipmentKind)
-	{
-	case ECatEquipmentKind::Rod:
-	case ECatEquipmentKind::Bait:
-	case ECatEquipmentKind::Float:
-	case ECatEquipmentKind::ScoopNet:
-		break;
-	default:
-		bCanSelectFishingItem = false;
-		break;
-	}
-	if (!bCanSelectFishingItem)
-	{
-		return;
-	}
 	const FGuid RequestId = FGuid::NewGuid();
 	const int64 SubmittedInventoryRevision = State.InventoryRevision;
-	const int64 ExpectedEquipmentRevision = State.Equipment.Revision;
 	const int32 SubmittedInventorySlotIndex = CurrentSlot->InventorySlotIndex;
-	Model->MarkActionSubmitted(ECatInventoryAction::SelectInventoryFishingItem, RequestId);
+	Model->MarkActionSubmitted(ECatInventoryAction::UseInventoryItem, RequestId);
 	if (CatController->HasAuthority())
 	{
-		CatController->ServerSelectInventoryFishingItem_Implementation(RequestId, SubmittedInventoryRevision,
-			ExpectedEquipmentRevision, SubmittedInventorySlotIndex);
+		CatController->ServerUseInventoryItem_Implementation(RequestId, SubmittedInventoryRevision,
+			SubmittedInventorySlotIndex);
 	}
 	else
 	{
-		CatController->ServerSelectInventoryFishingItem(RequestId, SubmittedInventoryRevision,
-			ExpectedEquipmentRevision, SubmittedInventorySlotIndex);
+		CatController->ServerUseInventoryItem(RequestId, SubmittedInventoryRevision,
+			SubmittedInventorySlotIndex);
 	}
 }
 
@@ -719,7 +703,7 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 }
 
 // 鱼动作按钮流程：
-// 1. 本入口只处理吃鱼、献祭和存入营地鱼缸这类选中鱼动作；库存整理走 Drop，钓具选择走格子右键上下文。
+// 1. 本入口只处理吃鱼、献祭和存入营地鱼缸这类选中鱼动作；库存整理走 Drop，随身库存物品使用走格子右键上下文。
 // 2. 用 Widget 传入的本页选择在最新 ViewState 里复核鱼、容器 ID 和 Revision；吃鱼/献祭允许鱼护或共享鱼缸，存缸只允许鱼护。
 // 3. 献祭在提交前读取 GameState 的公开 Run Revision；GameState 缺失时发布结构化拒绝，绝不以 0 猜测并发版本。
 // 4. 生成 RequestId 并记录 pending，使同步 authority 回包也能匹配，但不提前广播刷新库存格。

@@ -55,7 +55,7 @@ public:
 	/** 库存 WBP 请求关闭当前库存页；关闭状态下的迟到点击不会反向打开。 */
 	void RequestCloseInventoryFromWidget();
 
-	/** 库存 WBP 请求处理一个格子的右键上下文；PageController 会按该格所属数据源决定取用或装备选择。 */
+	/** 库存 WBP 请求处理一个格子的右键上下文；PageController 只按来源决定取用公共仓库或使用随身库存物品。 */
 	void RequestInventorySlotContextFromWidget(const FCatInventorySlotView& Slot);
 
 	/** 库存 WBP 请求处理一次格子 Drop；PageController 从最新 Model 复核来源后提交服务器事务。 */

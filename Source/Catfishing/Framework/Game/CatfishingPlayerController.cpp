@@ -674,7 +674,7 @@ void ACatfishingPlayerController::ServerRescueCharacterToCamp_Implementation(ACa
 	}
 }
 
-// 公共领域结果客户端流程：可靠接收 Camp、容器移动和钓具选择等结果并整体替换本机读模型；随后广播本机通知供 UI Model 刷新，不解释错误、不重算 Revision，也不触发新的领域命令。
+// 公共领域结果客户端流程：可靠接收 Camp、容器移动、库存物品使用和旧钓具选择等结果并整体替换本机读模型；随后广播本机通知供 UI Model 刷新，不解释错误、不重算 Revision，也不触发新的领域命令。
 void ACatfishingPlayerController::ClientReceiveCampCommandResult_Implementation(
 	const FCatDomainCommandResult& Result)
 {
@@ -810,7 +810,27 @@ void ACatfishingPlayerController::ServerConfigureEquipment_Implementation(const 
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 随身库存钓具选择 RPC 路由流程：Controller 只转交槽位意图和两份版本；库存协调器重读正式 InventoryComponent 后再交给 Equipment 更新选择。
+// 随身库存物品使用 RPC 路由流程：Controller 只转交槽位意图和库存版本；库存协调器重读正式 InventoryComponent 后再决定当前钓具选择或后续物品效果。
+void ACatfishingPlayerController::ServerUseInventoryItem_Implementation(
+	const FGuid RequestId, const int64 ExpectedInventoryRevision, const int32 InventorySlotIndex)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
+	if (UCatInventoryCommandCoordinator* Coordinator = GetWorld()
+		? GetWorld()->GetSubsystem<UCatInventoryCommandCoordinator>() : nullptr)
+	{
+		Result = Coordinator->UseInventoryItemFromSlot(this, ControlledCharacter, RequestId,
+			ExpectedInventoryRevision, InventorySlotIndex);
+	}
+	else
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	}
+	DeliverCampCommandResultToOwningClient(Result);
+}
+
+// 旧钓具选择 RPC 路由流程：历史蓝图或旧客户端仍可能发这个请求；服务器保留传入 EquipmentRevision 的严格校验后转入库存协调器。
 void ACatfishingPlayerController::ServerSelectInventoryFishingItem_Implementation(
 	const FGuid RequestId, const int64 ExpectedInventoryRevision,
 	const int64 ExpectedEquipmentRevision, const int32 InventorySlotIndex)

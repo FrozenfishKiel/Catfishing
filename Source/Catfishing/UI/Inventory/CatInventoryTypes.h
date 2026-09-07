@@ -22,14 +22,16 @@ enum class ECatInventoryAction : uint8
 	MoveObjectBetweenContainers = 2,
 	/** 请求整理运行期库存格；同源只改本数据源，背包和营地之间的拖放会由服务器同时改双方数据源。 */
 	MoveInventoryItem = 3,
-	/** 请求把当前选中的正式随身库存格设为钓鱼选择；服务器会重读 InventoryComponent 槽位，并按当前 Equipment 快照补齐未点击的选择项。 */
+	/** 旧版钓具选择动作；现只为蓝图和历史回包兼容保留，新右键入口应使用 UseInventoryItem。 */
 	SelectInventoryFishingItem = 4,
 	/** 请求把当前选中的鱼交给献祭协议；Items 与 Run 的不可逆点继续由 SacrificeCoordinator 处理。 */
 	SacrificeSelectedFish = 5,
 	/** 请求把当前选中的营地公共仓库格取到本人随身库存；服务器仍按公共仓库版本和个人库存版本共同复核。 */
 	WithdrawCampInventoryItem = 6,
 	/** 请求把当前选中的鱼护实物鱼转入营地共享鱼缸；服务器负责寻找固定营地鱼缸和可用目标格。 */
-	StoreSelectedFishInSharedTank = 7
+	StoreSelectedFishInSharedTank = 7,
+	/** 请求使用当前正式随身库存格中的物品；UI 只提交槽位，当前钓具选择和后续其他物品效果都应由服务器重读库存后分发。 */
+	UseInventoryItem = 8
 };
 
 /** 库存格子投影的后端事实来源；UI 用它区分运行期库存格和 Items 容器格，避免把不同宿主的写口混用。 */
@@ -38,7 +40,7 @@ enum class ECatInventorySlotSource : uint8
 {
 	/** 还没有可靠来源；这类格子只能展示占位，不能提交任何后端命令。 */
 	Unknown,
-	/** 当前角色正式随身库存中的一个格子；它不作为 Items 容器移动源，但可整理、转入营地仓库或把钓具设为当前选择。 */
+	/** 当前角色正式随身库存中的一个格子；它不作为 Items 容器移动源，但可整理、转入营地仓库或提交通用库存物品使用。 */
 	InventoryObject,
 	/** Items 容器中的槽位；只有这种来源可以作为鱼或容器物体拖拽的源和目标。 */
 	ContainerObject,
@@ -120,7 +122,7 @@ struct FCatInventorySlotView
 	UPROPERTY(BlueprintReadOnly)
 	FCatFishInstance Fish;
 
-	/** 该格对应的装备类别；运行期库存条目用它展示鱼竿、鱼饵、鱼漂和抄网类别，只有随身库存格右键会用它路由钓具选择命令。 */
+	/** 该格对应的装备类别；运行期库存条目用它展示鱼竿、鱼饵、鱼漂和抄网类别，不再作为 UI 选择服务器命令的依据。 */
 	UPROPERTY(BlueprintReadOnly)
 	ECatEquipmentKind EquipmentKind = ECatEquipmentKind::Unknown;
 

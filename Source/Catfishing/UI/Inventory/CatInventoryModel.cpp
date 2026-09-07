@@ -33,6 +33,8 @@ namespace
 			return TEXT("整理或转移库存");
 		case ECatInventoryAction::SelectInventoryFishingItem:
 			return TEXT("选择钓具");
+		case ECatInventoryAction::UseInventoryItem:
+			return TEXT("使用库存物品");
 		case ECatInventoryAction::WithdrawCampInventoryItem:
 			return TEXT("取出公共物品");
 		case ECatInventoryAction::SacrificeSelectedFish:
@@ -283,7 +285,7 @@ namespace
 // 绑定流程：
 // 1. 先解绑上一来源，避免换 Pawn 后同一个 Model 同时订阅上一装备或外部容器。
 // 2. 校验 LocalPlayer、Controller 与 Character；鱼护箱子只通过交互外部容器上下文进入页面。
-// 3. 订阅正式随身库存、钓鱼选择快照和 PlayerController 的吃鱼、容器移动、钓具选择、献祭结果。
+// 3. 订阅正式随身库存、钓鱼选择快照和 PlayerController 的吃鱼、容器移动、库存物品使用、旧钓具选择兼容、献祭结果。
 // 4. 发布首份 ViewState，让库存第一次打开时已有随身物品、当前外部容器以及可选营地仓库数据。
 bool UCatInventoryModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController,
 	ACatCharacter* InCharacter)
@@ -741,11 +743,12 @@ void UCatInventoryModel::HandleCampInventorySnapshotChanged()
 	Refresh();
 }
 
-// 公共领域结果流程：非成功终态只解锁本地 pending；成功整理、取用、装备选择或存入鱼缸必须等随身/营地/外部容器快照变化来刷新和解锁。
+// 公共领域结果流程：非成功终态只解锁本地 pending；成功整理、取用、库存物品使用或存入鱼缸必须等随身、营地、外部容器或 Equipment 快照变化来刷新和解锁。
 void UCatInventoryModel::HandleCampCommandResult(const FCatDomainCommandResult& Result)
 {
 	if (!IsPendingResult(ECatInventoryAction::MoveObjectBetweenContainers, Result.RequestId)
 		&& !IsPendingResult(ECatInventoryAction::MoveInventoryItem, Result.RequestId)
+		&& !IsPendingResult(ECatInventoryAction::UseInventoryItem, Result.RequestId)
 		&& !IsPendingResult(ECatInventoryAction::SelectInventoryFishingItem, Result.RequestId)
 		&& !IsPendingResult(ECatInventoryAction::WithdrawCampInventoryItem, Result.RequestId)
 		&& !IsPendingResult(ECatInventoryAction::StoreSelectedFishInSharedTank, Result.RequestId))

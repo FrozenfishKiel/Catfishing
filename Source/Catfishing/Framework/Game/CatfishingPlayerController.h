@@ -196,8 +196,13 @@ public:
 		FGuid RodItemInstanceId, FGuid BaitItemInstanceId, FGuid FloatItemInstanceId,
 		FGuid ScoopNetItemInstanceId);
 
-	/** 按本人正式随身库存格选择钓具；Controller 只转交槽位和两份版本，由库存协调器重读库存后更新 Equipment 选择。 */
+	/** 使用本人正式随身库存格中的物品；Controller 只转交槽位和库存版本，当前钓具选择和后续物品效果都由库存协调器在服务器重读后分发。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Inventory")
+	void ServerUseInventoryItem(FGuid RequestId, int64 ExpectedInventoryRevision, int32 InventorySlotIndex);
+
+	/** 旧版钓具选择 RPC；保留给可能还未迁移的蓝图引用，运行时会转入通用库存物品使用入口。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Inventory",
+		meta = (DeprecatedFunction, DeprecationMessage = "Use ServerUseInventoryItem instead."))
 	void ServerSelectInventoryFishingItem(FGuid RequestId, int64 ExpectedInventoryRevision,
 		int64 ExpectedEquipmentRevision, int32 InventorySlotIndex);
 
