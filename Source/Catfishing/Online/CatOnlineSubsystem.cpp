@@ -362,21 +362,27 @@ bool UCatOnlineSubsystem::IsCurrentLobbyReady() const
 #endif
 }
 
-// Host ready 发布流程：先确认目标 Lake 正在 listen，再读取 GameMode 的真实 RunId、阶段、结束原因和 Host 玩法命令门；恢复或 StateTree 启动失败时拒绝发布，由调用方补偿。全部满足才写 Steam Lobby ready。
-bool UCatOnlineSubsystem::PublishLobbyReady()
+// Host 玩法 World 就绪检查流程：先确认当前 World 已经是 listen 玩法图且 GameNetDriver 存在；再读取 authority GameMode 的 Run 公开事实和 Host 命令门。失败代表玩法宿主自身不可用，调用方才需要补偿回前台。
+bool UCatOnlineSubsystem::IsHostGameplayWorldReadyForClientAdmission() const
 {
-#if WITH_STEAMWORKS
 	UWorld* World = GetWorld();
 	if (!World || WorldState != ECatOnlineWorldState::Lake || World->GetNetMode() != NM_ListenServer || !GEngine
-		|| !GEngine->FindNamedNetDriver(World, NAME_GameNetDriver) || CurrentLobbyId.IsEmpty()
-		|| !SteamAPI_IsSteamRunning() || !SteamMatchmaking())
+		|| !GEngine->FindNamedNetDriver(World, NAME_GameNetDriver))
 	{
+		UE_LOG(LogCatOnline, Warning,
+			TEXT("Event=online_lobby_ready_rejected RequestId=%s Epoch=%llu World=%s NetMode=%d Reason=GameplayWorldUnavailable"),
+			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
+			World ? *World->GetName() : TEXT("None"), World ? static_cast<int32>(World->GetNetMode()) : -1);
 		return false;
 	}
 	const ACatfishingGameModeBase* GameMode = World->GetAuthGameMode<ACatfishingGameModeBase>();
 	const APlayerController* HostController = GetGameInstance() ? GetGameInstance()->GetFirstLocalPlayerController() : nullptr;
 	if (!GameMode || !HostController)
 	{
+		UE_LOG(LogCatOnline, Warning,
+			TEXT("Event=online_lobby_ready_rejected RequestId=%s Epoch=%llu World=%s NetMode=%d Reason=%s"),
+			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
+			*World->GetName(), static_cast<int32>(World->GetNetMode()), GameMode ? TEXT("HostControllerMissing") : TEXT("GameModeMissing"));
 		return false;
 	}
 	const FCatRunPublicState& Run = GameMode->GetRunPublicState();
@@ -388,11 +394,31 @@ bool UCatOnlineSubsystem::PublishLobbyReady()
 			*Run.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), *UEnum::GetValueAsString(Run.Phase.Phase), *UEnum::GetValueAsString(Run.EndReason));
 		return false;
 	}
+	return true;
+}
+
+// Host ready 发布流程：这里只处理 Steam Lobby 元数据写入，不再把平台元数据不可写误判为 Host 玩法地图启动失败；返回 false 时调用方保留 Host 的 Lake/Session，只让 Client 继续等待 ready。
+bool UCatOnlineSubsystem::PublishLobbyReady()
+{
+#if WITH_STEAMWORKS
+	UWorld* World = GetWorld();
+	if (CurrentLobbyId.IsEmpty() || !SteamAPI_IsSteamRunning() || !SteamMatchmaking())
+	{
+		UE_LOG(LogCatOnline, Warning,
+			TEXT("Event=online_lobby_ready_publish_rejected RequestId=%s Epoch=%llu LobbyId=%s SteamRunning=%d HasMatchmaking=%d"),
+			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
+			CurrentLobbyId.IsEmpty() ? TEXT("None") : TEXT("Present"),
+			SteamAPI_IsSteamRunning() ? 1 : 0, SteamMatchmaking() ? 1 : 0);
+		return false;
+	}
 	TCHAR* ParseEnd = nullptr;
 	const uint64 NumericLobbyId = FCString::Strtoui64(*CurrentLobbyId, &ParseEnd, 10);
 	const CSteamID LobbyId(NumericLobbyId);
 	if (!ParseEnd || *ParseEnd != TEXT('\0') || !LobbyId.IsLobby())
 	{
+		UE_LOG(LogCatOnline, Warning,
+			TEXT("Event=online_lobby_ready_publish_rejected RequestId=%s Epoch=%llu LobbyId=Invalid Reason=InvalidLobbyId"),
+			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch);
 		return false;
 	}
 	const bool bPublished = SteamMatchmaking()->SetLobbyData(LobbyId, CatOnlineNames::LobbyReadyKey, "1");
@@ -400,10 +426,20 @@ bool UCatOnlineSubsystem::PublishLobbyReady()
 	{
 		bLobbyReadyObserved = true;
 		UE_LOG(LogCatOnline, Log, TEXT("Event=online_lobby_ready_published RequestId=%s Epoch=%llu World=%s NetMode=%d"),
-			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, *World->GetName(), static_cast<int32>(World->GetNetMode()));
+			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
+			World ? *World->GetName() : TEXT("None"), World ? static_cast<int32>(World->GetNetMode()) : -1);
+	}
+	else
+	{
+		UE_LOG(LogCatOnline, Warning,
+			TEXT("Event=online_lobby_ready_publish_rejected RequestId=%s Epoch=%llu LobbyId=Present Reason=SetLobbyDataRejected"),
+			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch);
 	}
 	return bPublished;
 #else
+	UE_LOG(LogCatOnline, Warning,
+		TEXT("Event=online_lobby_ready_publish_rejected RequestId=%s Epoch=%llu Reason=SteamworksUnavailable"),
+		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch);
 	return false;
 #endif
 }
@@ -1614,7 +1650,7 @@ void UCatOnlineSubsystem::HandleDestroySessionComplete(const FName SessionName, 
 		const ECatOnlineError Failure = DeferredFailureAfterDestroy;
 		if (WorldState == ECatOnlineWorldState::Lake)
 		{
-			// Listen 地图已到达后才发现 Lobby ready 无法发布时，先完成 Destroy，再用既有 Host 回前台链路收口；否则只结案会把无房间的玩家滞留在 Lake。
+			// 补偿链已经成功清掉 Session 但仍停在玩法图时，继续走 Host 回前台链路；否则只结案会把无房间的玩家滞留在 Lake。
 			DeferredFailureAfterDestroy = ECatOnlineError::None;
 			DeferredFailureAfterTravel = Failure;
 			if (!BeginTravelToFrontend())
@@ -1790,7 +1826,7 @@ void UCatOnlineSubsystem::ClearPendingAcceptedInvite()
 	PendingInviteOperationEpoch = 0;
 }
 
-// 地图完成流程：先隔离空 World 和其他 GameInstance，再重绑邀请接口；来源包回载时保留 pending 等 TravelFailure，意外包进入补偿。命中 ExpectedPackage 后确认 World 与 Transport；Host 必须通过 listen、Run 启动和玩法命令门检查才发布 ready，否则清理会话并回前台。
+// 地图完成流程：先隔离空 World 和其他 GameInstance，再重绑邀请接口；来源包回载时保留 pending 等 TravelFailure，意外包进入补偿。命中 ExpectedPackage 后确认 World 与 Transport；Host 玩法 World 自身未就绪才清理会话并回前台，Steam ready 元数据不可写只记录警告并让 Client 留在前台。
 void UCatOnlineSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 {
 	if (!LoadedWorld || LoadedWorld->GetGameInstance() != GetGameInstance())
@@ -1835,10 +1871,14 @@ void UCatOnlineSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 			&& WorldState == ECatOnlineWorldState::Lake)
 		{
 			RefreshRoomSnapshotFacts();
-			if (!PublishLobbyReady())
+			if (!IsHostGameplayWorldReadyForClientAdmission())
 			{
 				BeginDestroySession(ECatOnlineError::LobbyReadyPublishFailed);
 				return;
+			}
+			if (!PublishLobbyReady())
+			{
+				BroadcastSnapshot(TEXT("online_lobby_ready_publish_unavailable"));
 			}
 		}
 		if (DeferredFailureAfterTravel != ECatOnlineError::None)

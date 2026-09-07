@@ -124,7 +124,10 @@ private:
 	/** 返回当前已加入 Steam Lobby 是否已由 Host 写入 ready；非 Steam、非成员或数据缺失一律返回 false。 */
 	bool IsCurrentLobbyReady() const;
 
-	/** Host 到达 Lake、listen 驱动已就绪且真实 Run 阶段与本地玩法命令门均可用后写入 Steam Lobby ready；任一启动事实失败都禁止客户端连接。 */
+	/** 校验 Host 玩法 World 是否已真正可接纳客户端；只读 listen 驱动、Run 阶段和玩法命令门，不写 Lobby 元数据。 */
+	bool IsHostGameplayWorldReadyForClientAdmission() const;
+
+	/** Host 玩法 World 已可接纳客户端后尝试写入 Steam Lobby ready；平台元数据不可写只会阻止 Client 自动连接，不代表 Host 地图启动失败。 */
 	bool PublishLobbyReady();
 
 	/** Client 在真实 Lobby ready 且重试预算允许时提交自身玩法包预载并计次；包成功后复核 ready 与 OSS 地址再 ClientTravel，失败统一进入有界退避。 */
@@ -184,7 +187,7 @@ private:
 	/** 废止待提交邀请及其 opaque 映射、身份与期限；提交、失败和反初始化共用，已进入 Join 的操作仍由原 epoch 管线收口。 */
 	void ClearPendingAcceptedInvite();
 
-	/** PostLoadMap 回调：按 GameInstance/ExpectedPackage 隔离后确认 World 与 Transport；Host 通过 Lake listen、Run 阶段和玩法命令门检查才发布 ready，否则清理会话回前台，最后结算操作。 */
+	/** PostLoadMap 回调：按 GameInstance/ExpectedPackage 隔离后确认 World 与 Transport；Host 玩法 World 自身未就绪才回滚，Lobby ready 写入失败只记录并阻止客户端自动连接。 */
 	void HandlePostLoadMap(UWorld* LoadedWorld);
 
 	/** TravelFailure 回调：只消费本 GameInstance 的待确认旅行；Create、Join 与 Start 先 Destroy 补偿，Leave 保留已完成的 Session 清理。 */
