@@ -222,6 +222,9 @@ public:
 	/** 按稳定实例 ID 查找所在槽位；旧 Equipment 投影和网络命令只拿到 ID 时用它回到正式库存格。 */
 	int32 FindInventorySlotIndexFromInstanceId(FGuid ItemInstanceId) const;
 
+	/** 按稳定定义 ID 查找第一格可消费库存；材料消耗和旧选择修复用它回到正式库存事实。 */
+	int32 FindFirstInventorySlotIndexByDefinitionId(FName DefinitionId) const;
+
 	/** 读取当前库存槽位数量；用于 UI 创建格子和交换操作校验下标。 */
 	int32 GetInventorySlotCount() const;
 

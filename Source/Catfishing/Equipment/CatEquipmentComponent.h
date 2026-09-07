@@ -90,7 +90,7 @@ public:
 	/** 正式库存提交后刷新旧随身库存投影；钓鱼选择、存档和旧消费者靠它追上 InventoryComponent 的格位事实，返回 false 表示投影未能完整重建。 */
 	bool RefreshInventoryProjectionFromInventoryComponentFromAuthority();
 
-	/** 提交一次钓鱼失败预算；一个 RequestId 只能选择 None/丢特殊饵/伤竿之一，绝不双罚。 */
+	/** 提交一次钓鱼失败预算；特殊饵和伤竿优先写正式库存事实，一个 RequestId 只能选择一种惩罚且绝不双罚。 */
 	FCatFishingFailureResult CommitFishingFailure(FGuid RequestId, int64 ExpectedRevision,
 		ECatFishingFailurePenalty Penalty);
 
@@ -112,7 +112,7 @@ public:
 	/** 指定 Fishing 会话是否仍处于活动状态；Commit/Release 用它防止旧会话重复改写。 */
 	bool IsFishingUseActive(FGuid FishingSessionId) const;
 
-	/** 固定营地修竿点提交维修；只消费一份显式浮木并恢复到当前 Rod 定义最大耐久。 */
+	/** 固定营地修竿点提交维修；正式库存存在时扣一份浮木并恢复当前鱼竿实例，旧 Snapshot 只接收结果投影。 */
 	FCatDomainCommandResult RepairRodAtCamp(FGuid RequestId, int64 ExpectedRevision, bool bAtCamp);
 
 	/** 本机随身库存或钓鱼选择变化通知；不携带可写指针或客户端授权。 */
@@ -218,6 +218,11 @@ private:
 	bool BuildLegacyRunInventorySlotFromFormalEntry(const FCatInventoryEntry& Entry,
 		FCatRunInventorySlot& OutSlot) const;
 
+	/** 从正式库存定位当前选择的鱼竿实例；修竿和失败伤竿用它直接写实例状态，旧 Snapshot 只接收投影。 */
+	UCatEquipmentInventoryItemInstance* ResolveSelectedFormalRodInstanceFromInventory(
+		UCatInventoryComponent& OwnerInventory, const UCatEquipmentDefinition& RodDefinition,
+		FCatRunInventorySlot& OutProjectedSlot) const;
+
 	/** 从 Owner 正式库存刷新 Equipment 旧格位并可按新增物品修正当前选择；营地正式转移用它把背包事实和钓具选择放进同一次旧快照发布。 */
 	bool RefreshInventoryProjectionFromInventoryComponentFromAuthority(
 		const UCatEquipmentDefinition* GrantedDefinition, FName GrantedDefinitionId);
@@ -242,7 +247,7 @@ private:
 	FCatDomainCommandResult GrantInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		const FCatRunInventorySlot& Item);
 
-	/** 从指定实例所在数量栈扣除数量；Use、钓鱼用饵和维修消耗都用它保证扣的是明确实例，并把本次扣减副本交回调用方。 */
+	/** 旧 Snapshot 回退路径从指定实例所在数量栈扣除数量；正式库存存在时新流程应优先调用 InventoryComponent 扣量入口。 */
 	bool RemoveInventoryItemQuantityFromInstance(FGuid ItemInstanceId, int32 Quantity,
 		FCatRunInventorySlot& OutConsumedItem);
 

@@ -1145,6 +1145,31 @@ int32 UCatInventoryComponent::FindInventorySlotIndexFromInstanceId(const FGuid I
 	return INDEX_NONE;
 }
 
+// 正式库存材料定位规则：
+// 1. 空定义 ID 代表调用方缺配置，直接失败，避免把任意物品误当成可消费材料。
+// 2. 查询只信任已绑定实例和正堆叠数量，因为空格、坏复制或旧投影都不能证明玩家拥有材料。
+// 3. 返回第一格是为了保持旧“先找到先消费”的口径；真正扣量仍由 ConsumeItemAtSlot 重新校验。
+int32 UCatInventoryComponent::FindFirstInventorySlotIndexByDefinitionId(const FName DefinitionId) const
+{
+	if (DefinitionId.IsNone())
+	{
+		return INDEX_NONE;
+	}
+
+	for (int32 SlotIndex = 0; SlotIndex < InventoryList.Entries.Num(); ++SlotIndex)
+	{
+		const FCatInventoryEntry& Entry = InventoryList.Entries[SlotIndex];
+		if (Entry.Instance != nullptr
+			&& Entry.StackCount > 0
+			&& Entry.Instance->GetItemDefinitionId() == DefinitionId)
+		{
+			return SlotIndex;
+		}
+	}
+
+	return INDEX_NONE;
+}
+
 // 槽位数量读取流程：返回当前数组长度，可能大于配置 NumSlots，因为运行期不会截断已有物品。
 int32 UCatInventoryComponent::GetInventorySlotCount() const
 {
