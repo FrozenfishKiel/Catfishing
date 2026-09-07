@@ -231,10 +231,10 @@ public:
 	/** 只读取得某个槽位条目；越界时返回空指针，调用方不得保存为可写引用。 */
 	const FCatInventoryEntry* GetInventoryEntryAtSlot(int32 SlotIndex) const;
 
-	/** Use 预检交给实例语义决定；默认使用拥有者 Pawn，避免库存核心知道具体玩法系统。 */
+	/** Use 预检交给实例语义决定；默认使用拥有者 Pawn，库存核心不认识 GAS、装备、草药或窝料目标。 */
 	bool CanUseItemAtSlot(int32 SlotIndex, APawn* UserPawn = nullptr) const;
 
-	/** 从指定槽位发起库存 Use；客户端请求会转到服务器，服务器按实例语义扣量。 */
+	/** 从指定槽位发起库存 Use；客户端请求会转到服务器，服务器只接受具名实例完成真实效果裁决后的扣量。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
 	bool TryUseItemAtSlot(int32 SlotIndex, APawn* UserPawn = nullptr);
 

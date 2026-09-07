@@ -48,7 +48,7 @@ public:
 	/** Use 能力由具体实例子类声明；通用实例默认拒绝，避免任意物品被库存层扣掉。 */
 	virtual bool CanUseFromInventory(const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const;
 
-	/** 执行这份物品的库存使用裁决；成功时返回应从格子扣除的数量，通用实例默认不产生使用结果。 */
+	/** 执行这份物品的库存使用裁决；成功必须代表物品实例已经完成真实效果裁决并返回应扣数量。 */
 	virtual bool TryUseFromInventory(FCatInventoryEntry& InventoryEntry, APawn* UserPawn, int32& OutConsumeCount);
 
 protected:
@@ -66,18 +66,4 @@ protected:
 	/** 当前运行宿主 Actor；服务器移动实例后刷新它，客户端只用它判断本地归属和调试来源。 */
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Inventory")
 	TObjectPtr<AActor> RuntimeOwnerActor = nullptr;
-};
-
-/** 库存层面的简单消耗品实例；它只完成扣量裁决，实际治疗、窝料或钓鱼效果由调用方在提交后处理。 */
-UCLASS(BlueprintType, Blueprintable)
-class CATFISHING_API UCatInventoryConsumableItemInstance : public UCatInventoryItemInstance
-{
-	GENERATED_BODY()
-
-public:
-	/** 消耗品 Use 需要片段和足够数量同时成立；避免没有消耗语义的物品被右键扣除。 */
-	virtual bool CanUseFromInventory(const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const override;
-
-	/** 返回本次消耗品 Use 应扣的数量；不在这里触发任何 GAS、Condition 或场景副作用。 */
-	virtual bool TryUseFromInventory(FCatInventoryEntry& InventoryEntry, APawn* UserPawn, int32& OutConsumeCount) override;
 };

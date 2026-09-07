@@ -1187,7 +1187,7 @@ const FCatInventoryEntry* UCatInventoryComponent::GetInventoryEntryAtSlot(const 
 	return &InventoryList.Entries[SlotIndex];
 }
 
-// 使用预检流程：默认使用拥有者 Pawn，槽位、实例和定义都有效后才交给实例语义判断。
+// 使用预检流程：默认使用拥有者 Pawn，槽位、实例和定义都有效后才交给实例自己的真实 Use 语义判断。
 bool UCatInventoryComponent::CanUseItemAtSlot(const int32 SlotIndex, APawn* UserPawn) const
 {
 	if (GetOwner() == nullptr)
@@ -1214,7 +1214,7 @@ bool UCatInventoryComponent::CanUseItemAtSlot(const int32 SlotIndex, APawn* User
 	return Entry.Instance->CanUseFromInventory(Entry, UserPawn);
 }
 
-// 使用提交流程：客户端只发请求，服务器让实例裁决是否扣量，扣量仍由库存组件统一执行。
+// 使用提交流程：客户端只发请求，服务器让具名实例先完成真实 Use 裁决，再由库存组件统一扣除返回数量。
 bool UCatInventoryComponent::TryUseItemAtSlot(const int32 SlotIndex, APawn* UserPawn)
 {
 	if (GetOwner() == nullptr)

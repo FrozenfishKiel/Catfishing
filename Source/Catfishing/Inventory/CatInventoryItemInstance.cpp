@@ -2,7 +2,6 @@
 
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemDefinition.h"
-#include "Inventory/Fragments/CatInventoryConsumableFragment.h"
 #include "Net/UnrealNetwork.h"
 
 // 实例构造流程：实例先处于无定义状态，只有被库存组件正式接收后才绑定定义并参与复制。
@@ -98,7 +97,7 @@ AActor* UCatInventoryItemInstance::GetRuntimeOwnerActor() const
 	return Cast<AActor>(GetOuter());
 }
 
-// 通用使用预检流程：基础实例没有物品效果，默认拒绝库存 Use，避免误把任意物品当消耗品扣掉。
+// 通用使用预检流程：基础实例没有真实物品效果，默认拒绝库存 Use；需要右键使用的物品必须用具名实例把效果和扣量一起声明清楚。
 bool UCatInventoryItemInstance::CanUseFromInventory(const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const
 {
 	(void)InventoryEntry;
@@ -106,7 +105,7 @@ bool UCatInventoryItemInstance::CanUseFromInventory(const FCatInventoryEntry& In
 	return false;
 }
 
-// 通用使用流程：基础实例不提交任何库存变化；需要 Use 的物品必须选择具名实例子类。
+// 通用使用流程：基础实例不提交任何库存变化；库存层不能只扣数量就宣称使用成功，避免草药、窝料这类有目标动作绕过自己的领域系统。
 bool UCatInventoryItemInstance::TryUseFromInventory(FCatInventoryEntry& InventoryEntry, APawn* UserPawn,
 	int32& OutConsumeCount)
 {
@@ -119,49 +118,4 @@ bool UCatInventoryItemInstance::TryUseFromInventory(FCatInventoryEntry& Inventor
 // 定义绑定扩展流程：基础库存实例没有额外状态要派生；子类可以读取当前定义补齐自己的运行字段。
 void UCatInventoryItemInstance::HandleItemDefinitionAssigned()
 {
-}
-
-// 消耗品预检流程：读取定义上的纯库存消耗片段，并确认当前格子数量足够本次扣减。
-bool UCatInventoryConsumableItemInstance::CanUseFromInventory(const FCatInventoryEntry& InventoryEntry,
-	APawn* UserPawn) const
-{
-	(void)UserPawn;
-
-	const UCatInventoryItemDefinition* CurrentDefinition = GetItemDefinition();
-	if (CurrentDefinition == nullptr)
-	{
-		return false;
-	}
-
-	const UCatInventoryConsumableFragment* ConsumableFragment =
-		Cast<UCatInventoryConsumableFragment>(
-			CurrentDefinition->FindFragmentByClass(UCatInventoryConsumableFragment::StaticClass()));
-	return ConsumableFragment != nullptr
-		&& ConsumableFragment->HasUsableInventoryUse()
-		&& InventoryEntry.StackCount >= ConsumableFragment->GetConsumeCount();
-}
-
-// 消耗品使用流程：只把应扣数量交给库存组件；治疗、窝料、钓鱼扣饵等真实效果必须由上层在提交后执行。
-bool UCatInventoryConsumableItemInstance::TryUseFromInventory(FCatInventoryEntry& InventoryEntry,
-	APawn* UserPawn, int32& OutConsumeCount)
-{
-	OutConsumeCount = 0;
-	if (!CanUseFromInventory(InventoryEntry, UserPawn))
-	{
-		return false;
-	}
-
-	const UCatInventoryItemDefinition* CurrentDefinition = GetItemDefinition();
-	const UCatInventoryConsumableFragment* ConsumableFragment =
-		CurrentDefinition != nullptr
-			? Cast<UCatInventoryConsumableFragment>(
-				CurrentDefinition->FindFragmentByClass(UCatInventoryConsumableFragment::StaticClass()))
-			: nullptr;
-	if (ConsumableFragment == nullptr)
-	{
-		return false;
-	}
-
-	OutConsumeCount = ConsumableFragment->GetConsumeCount();
-	return true;
 }
