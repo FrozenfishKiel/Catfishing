@@ -35,6 +35,8 @@ private:
 	FCatExternalTractionInput MovementTraction;
 	bool bUseSavedTraction = false;
 	double NextTractionDiagnosticSeconds = 0.0;
+	double NextReplayDiagnosticSeconds = 0.0;
+	FGuid LastTractionDiagnosticSourceId;
 	bool bLastTractionActive = false;
 };
 

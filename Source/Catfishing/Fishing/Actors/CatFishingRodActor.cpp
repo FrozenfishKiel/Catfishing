@@ -4,6 +4,7 @@
 #include "Components/SceneComponent.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSettings.h"
+#include "Fishing/Debug/CatFishingMotionDiagnostics.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
@@ -355,6 +356,7 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 		ResetAuthoritativeRotationEffort();
 	}
 	CarrierConstraintState = Next;
+	LastConstraintUpdateWorldSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : -1.0;
 	PublishCarrierConstraintToMovement();
 	ForceNetUpdate();
 	return true;
@@ -388,6 +390,28 @@ void ACatFishingRodActor::ClearCarrierConstraintFromAuthority()
 void ACatFishingRodActor::OnRep_CarrierConstraintState()
 {
 	PublishCarrierConstraintToMovement();
+	UWorld* World = GetWorld();
+	LastConstraintUpdateWorldSeconds = World ? World->GetTimeSeconds() : -1.0;
+	if (World && (bLastReceivedFightActive != CarrierConstraintState.bFightActive
+		|| (CarrierConstraintState.bFightActive && LastConstraintUpdateWorldSeconds >= NextCarrierReceiptDiagnosticWorldSeconds)))
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_carrier_constraint_received RodActorId=%s Frame=%llu WorldTime=%.6f FightActive=%s ContinuousTraction=%s "
+				"MovementBound=%s SnapshotHolder=%s CurrentHolder=%s AccelerationCmS2=%.3f BrakingDecelerationCmS2=%.3f "
+				"PullAxis=%s FishTorque=%.3f CatTorque=%.3f ObservedRotation=%s GripLocation=%s World=%s NetMode=%d Authority=%s LocalRole=%d"),
+			*PresentationState.RodActorId.ToString(EGuidFormats::DigitsWithHyphens), GFrameCounter, LastConstraintUpdateWorldSeconds,
+			CarrierConstraintState.bFightActive ? TEXT("true") : TEXT("false"),
+			CarrierConstraintState.bUseContinuousTraction ? TEXT("true") : TEXT("false"),
+			CarrierMovement.IsValid() ? TEXT("true") : TEXT("false"),
+			*GetNameSafe(CarrierConstraintState.ConstraintHolderPlayerState), *GetNameSafe(PresentationState.HolderPlayerState),
+			CarrierConstraintState.PullAccelerationCentimetersPerSecondSquared, CarrierConstraintState.PullBrakingDecelerationCentimetersPerSecondSquared,
+			*FVector(CarrierConstraintState.RodPullAxis).ToCompactString(), CarrierConstraintState.MaximumFishTorqueStrengthMeters,
+			CarrierConstraintState.CatTorqueCapacityStrengthMeters, *GetActorRotation().ToCompactString(),
+			*GetGripWorldTransform().GetLocation().ToCompactString(), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
+			HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(GetLocalRole()));
+		NextCarrierReceiptDiagnosticWorldSeconds = LastConstraintUpdateWorldSeconds + CatFishingMotionDiagnostics::SampleIntervalSeconds();
+	}
+	bLastReceivedFightActive = CarrierConstraintState.bFightActive;
 }
 
 void ACatFishingRodActor::ClearCarrierMovementBinding()
@@ -466,6 +490,7 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 	RequestedAimRotation.Pitch = FMath::ClampAngle(RequestedAimRotation.Pitch,
 		Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
 	RequestedAimRotation.Roll = 0.0;
+	const FRotator PreviousAimForDiagnostic = AuthoritativeHeldAimRotation;
 	FCatFishingRodRotationResult RotationStep;
 	const bool bNewHolder = AuthoritativeAimHolder.Get() != HolderPawn;
 	if (!bHeldAimInitialized || bNewHolder || !CarrierConstraintState.bFightActive)
@@ -530,7 +555,9 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 				"MaximumFishTorque=%.3f CatTorqueCapacity=%.3f TorqueBalanced=%s "
 				"PullAxis=%s AppliedFishPull=%s FishPullSmoothingSeconds=%.3f LoadedAngularDampingRatio=%.3f AppliedAngularDampingMultiplier=%.3f "
 				"RotationEffortEpoch=%llu RotationExertionSquaredSeconds=%.3f RotationPositiveWorkRadians=%.3f RotationIntegratedSeconds=%.3f "
-				"HolderPlayerId=%d Holder=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
+				"HolderPlayerId=%d Holder=%s World=%s NetMode=%d Authority=true LocalRole=%d "
+				"Frame=%llu WorldTime=%.6f DeltaSeconds=%.6f DeltaYaw=%.5f DeltaPitch=%.5f "
+				"HolderLocation=%s HolderVelocityCmS=%s RodTip=%s RodTipVelocityCmS=%s ConstraintAgeSeconds=%.6f Integrated=%s"),
 			*PresentationState.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
 			RequestedAimRotation.Yaw, AimRotation.Yaw, RequestedAimRotation.Pitch, AimRotation.Pitch,
 			RotationStep.AngularSpeedDegreesPerSecond, *RotationStep.NetTorque.ToCompactString(),
@@ -543,8 +570,14 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 			AuthoritativeRotationEffort.PositiveWorkRadians, AuthoritativeRotationEffort.IntegratedSeconds,
 			PresentationState.HolderPlayerState->GetPlayerId(),
 			*GetNameSafe(HolderPawn), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
-			static_cast<int32>(GetLocalRole()));
-		NextRodRotationResistanceDiagnosticWorldSeconds = WorldSeconds + 1.0;
+			static_cast<int32>(GetLocalRole()), GFrameCounter, WorldSeconds, DeltaSeconds,
+			FMath::FindDeltaAngleDegrees(PreviousAimForDiagnostic.Yaw, AimRotation.Yaw),
+			FMath::FindDeltaAngleDegrees(PreviousAimForDiagnostic.Pitch, AimRotation.Pitch),
+			*HolderPawn->GetActorLocation().ToCompactString(), *AuthoritativeHolderVelocity.ToCompactString(),
+			*CurrentTip.ToCompactString(), *AuthoritativeRodTipVelocity.ToCompactString(),
+			LastConstraintUpdateWorldSeconds >= 0.0 ? WorldSeconds - LastConstraintUpdateWorldSeconds : -1.0,
+			RotationStep.bSucceeded ? TEXT("true") : TEXT("false"));
+		NextRodRotationResistanceDiagnosticWorldSeconds = WorldSeconds + CatFishingMotionDiagnostics::SampleIntervalSeconds();
 		bLastRodTorqueBalanced = bTorqueBalanced;
 	}
 	return !CurrentTip.ContainsNaN() && !AuthoritativeRodTipVelocity.ContainsNaN()

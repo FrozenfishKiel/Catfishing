@@ -20,6 +20,7 @@
 #include "Items/World/CatWorldSurfaceResolver.h"
 #include "Logging/CatLog.h"
 #include "TimerManager.h"
+#include "Fishing/Debug/CatFishingMotionDiagnostics.h"
 
 namespace
 {
@@ -62,6 +63,8 @@ bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunne
 	WaterRegion = Init.WaterRegion;
 	Config = Init.Config;
 	State = Init.InitialState;
+	DiagnosticFixedStepSequence = 0;
+	LastFixedStepDiagnosticWorldSeconds = -1.0;
 	State.bOperatorPresent = true;
 	bFishBeached = false;
 	CalmDurationRangeSeconds = Init.CalmDurationRangeSeconds;
@@ -539,6 +542,7 @@ bool UCatFishingFightRunner::BeginBehaviorStateFromStateTree(const ECatFishMotio
 	{
 		return false;
 	}
+	const ECatFishMotionIntent PreviousIntent = BehaviorMotionIntent;
 	BehaviorMotionIntent = MotionIntent;
 	State.MotionIntent = MotionIntent;
 	if (MotionIntent == ECatFishMotionIntent::StrugglingOutward)
@@ -551,7 +555,26 @@ bool UCatFishingFightRunner::BeginBehaviorStateFromStateTree(const ECatFishMotio
 			? LowStaminaRestMultiplier : 1.0;
 		OutDurationSeconds = Random.FRandRange(CalmDurationRangeSeconds.X, CalmDurationRangeSeconds.Y) * RestScale;
 	}
-	return FMath::IsFinite(OutDurationSeconds) && OutDurationSeconds > 0.0;
+	const bool bValidDuration = FMath::IsFinite(OutDurationSeconds) && OutDurationSeconds > 0.0;
+	if (const ACatFishingSession* SessionActor = Session.Get())
+	{
+		const UWorld* World = SessionActor->GetWorld();
+		const ACatFishingRodActor* Rod = RodActor.Get();
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_behavior_phase_entered SessionId=%s RodActorId=%s PreviousPhase=%s Phase=%s "
+				"DurationSeconds=%.4f FishStamina=%.4f CatStamina=%.4f DetailedMotionLog=%s Result=%s "
+				"WorldTime=%.6f Frame=%llu World=%s NetMode=%d Authority=%s LocalRole=%d"),
+			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			Rod ? *Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens) : TEXT("None"),
+			*UEnum::GetValueAsString(PreviousIntent), *UEnum::GetValueAsString(MotionIntent),
+			OutDurationSeconds, State.FishStamina, State.CatStamina,
+			CatFishingMotionDiagnostics::IsDetailedEnabled() ? TEXT("true") : TEXT("false"),
+			bValidDuration ? TEXT("Accepted") : TEXT("InvalidDuration"),
+			World ? World->GetTimeSeconds() : -1.0, GFrameCounter, *GetNameSafe(World),
+			World ? static_cast<int32>(World->GetNetMode()) : -1, SessionActor->HasAuthority() ? TEXT("true") : TEXT("false"),
+			static_cast<int32>(SessionActor->GetLocalRole()));
+	}
+	return bValidDuration;
 }
 
 bool UCatFishingFightRunner::TryResolveGroundedFishPosition(const FVector& DesiredPosition,
@@ -1242,7 +1265,11 @@ void UCatFishingFightRunner::HandleFixedStep()
 	{
 		LogFishStaminaBreakdown(TEXT("fishing_fish_stamina_spike"), TEXT("SingleStepThreshold"));
 	}
-	if (bConstraintActive != bLastConstraintDiagnosticActive
+	const double FixedStepWorldGap = LastFixedStepDiagnosticWorldSeconds >= 0.0
+		? WorldSeconds - LastFixedStepDiagnosticWorldSeconds : 0.0;
+	LastFixedStepDiagnosticWorldSeconds = WorldSeconds;
+	++DiagnosticFixedStepSequence;
+	if (CatFishingMotionDiagnostics::IsDetailedEnabled() || bConstraintActive != bLastConstraintDiagnosticActive
 		|| (bConstraintActive && WorldSeconds >= NextConstraintDiagnosticWorldSeconds))
 	{
 		UE_LOG(LogCatFishing, Display,
@@ -1252,9 +1279,13 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"CarrierAcceleration=%.2f CarrierBrakingDeceleration=%.2f ContinuousCarrierTraction=%s CarrierTargetPullSpeed=%.2f RodLeverage=%.3f "
 				"RodPhysicsLengthCm=%.2f MaximumFishTorque=%.3f FishTorque=%.3f CatTorqueCapacity=%.3f "
 				"ActiveCombinedStrength=%.3f CatAcceleration=%.3f FishAcceleration=%.3f NetFishPullAcceleration=%.3f LineTensionN=%.3f ActiveHelpers=%d GroupStaminaDrain=%.3f "
-				"Stalemate=%s Fish=%s RodTip=%s Holder=%s NetMode=%d Authority=true"),
-			*SessionActor->GetSnapshot().FishingSessionId.ToString(),
-			*Rod->GetPresentationState().RodActorId.ToString(),
+				"Stalemate=%s Fish=%s RodTip=%s Holder=%s NetMode=%d Authority=true "
+				"StepId=%llu Frame=%llu WorldTime=%.6f WorldGapSeconds=%.6f FixedStepSeconds=%.6f World=%s LocalRole=%d "
+				"Phase=%s RequestedPhase=%s ForcedEscape=%s Outcome=%s FishBefore=%s FishVelocityBeforeCmS=%s ResolvedFishVelocityCmS=%s "
+				"DesiredFishDirection=%s SteeringTarget=%s RetargetRemainingSeconds=%.4f BoundaryAvoidanceSeconds=%.4f "
+				"RodForward=%s RodTipVelocityCmS=%s HolderVelocityCmS=%s HolderInputVelocityCmS=%s FishStamina=%.4f CatStamina=%.4f"),
+			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
 			bConstraintActive ? TEXT("true") : TEXT("false"),
 			bCarrierConstraintActive ? TEXT("true") : TEXT("false"),
 			CatActionName,
@@ -1282,7 +1313,17 @@ void UCatFishingFightRunner::HandleFixedStep()
 			*Motion.FishWorldPosition.ToCompactString(),
 			*RodTip.ToCompactString(),
 			*GetNameSafe(Rod->GetHolderPawnFromAuthority()),
-			static_cast<int32>(World->GetNetMode()));
+			static_cast<int32>(World->GetNetMode()), DiagnosticFixedStepSequence, GFrameCounter, WorldSeconds,
+			FixedStepWorldGap, Config.FixedStepSeconds, *GetNameSafe(World), static_cast<int32>(SessionActor->GetLocalRole()),
+			*UEnum::GetValueAsString(State.MotionIntent), *UEnum::GetValueAsString(BehaviorMotionIntent),
+			bExhaustedCatEscape ? TEXT("true") : TEXT("false"), SimulationOutcomeName,
+			*State.FishWorldPosition.ToCompactString(), *State.FishVelocityCentimetersPerSecond.ToCompactString(),
+			*((Motion.FishWorldPosition - State.FishWorldPosition) / Config.FixedStepSeconds).ToCompactString(),
+			*DesiredFishDirection.ToCompactString(), *SteeringState.TargetDirection.ToCompactString(),
+			SteeringState.RetargetSecondsRemaining, SteeringState.BoundaryAvoidanceSecondsRemaining,
+			*RodConstraint.RodForwardWorld.ToCompactString(), *RodConstraint.RodTipVelocityCentimetersPerSecond.ToCompactString(),
+			*RodConstraint.CarrierVelocityCentimetersPerSecond.ToCompactString(), *RodConstraint.CarrierDesiredVelocityCentimetersPerSecond.ToCompactString(),
+			State.FishStamina, State.CatStamina);
 		NextConstraintDiagnosticWorldSeconds = WorldSeconds + 1.0;
 		bLastConstraintDiagnosticActive = bConstraintActive;
 	}

@@ -60,6 +60,7 @@ class CATFISHING_API ACatFishingRodActor : public AActor
 {
 	GENERATED_BODY()
 	friend class FCatFishingCarrierHandoffTest;
+	friend class FCatFishingMotionDiagnosticTest;
 
 public:
 	/** 创建鱼竿表现 Actor 的组件和默认复制姿态；身份和锚点仍要等服务器初始化后才可信。 */
@@ -205,6 +206,9 @@ private:
 	FCatFishingRodRotationEffortSnapshot AuthoritativeRotationEffort;
 	TWeakObjectPtr<class UCatCharacterMovementComponent> CarrierMovement;
 	double NextRodRotationResistanceDiagnosticWorldSeconds = 0.0;
+	double LastConstraintUpdateWorldSeconds = -1.0;
+	double NextCarrierReceiptDiagnosticWorldSeconds = 0.0;
+	bool bLastReceivedFightActive = false;
 	bool bLastRodTorqueBalanced = false;
 	bool bHeldAimInitialized = false;
 	/** 根据操作位编号计算本地站位；非法编号回退到基准 Stand，避免上层拿到 NaN 或随机位置。 */

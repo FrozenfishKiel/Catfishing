@@ -156,14 +156,40 @@ Rod 的约束快照同时保存 `ConstraintHolderPlayerState`，复制乱序时�
 开发包默认落盘日志分类 `LogCatFishing`：
 
 - `fishing_fight_started`：`StrengthResolution=CommonLineForce`、`ForcePerStrengthN`、`MassMode=IndependentCatBodyMass`。
-- `fishing_constraint_sample`：共同 `LineTensionN`、几何误差、最终转矩、`CarrierAcceleration`、`CarrierBrakingDeceleration`（均 cm/s²）和 `ContinuousCarrierTraction`。
+- `fishing_behavior_phase_entered`：StateTree 请求的平静/反抗阶段、前一阶段、已抽取的持续秒数、双方体力、会话/鱼竿 ID；不额外调用随机数。
+- `fishing_constraint_sample`：共同 `LineTensionN`、几何误差、最终转矩、`CarrierAcceleration`、`CarrierBrakingDeceleration`（均 cm/s²）和 `ContinuousCarrierTraction`；详细模式每固定步附加 `StepId/Frame/WorldTime/WorldGapSeconds`、实际/请求阶段、期望/目标游向、边界避让时间、鱼的前位置/速度与地形解析后速度、竿尖及角色速度/输入。
 - `fishing_simulation_trace`：固定步的几何、方向负载、力/质量换算、隐式移动质量、收线二分的力上限、所需/实际张力、鱼/猫费用、磨损和终局；按约 1 秒及终局输出，避免无条件刷屏。
 - `fishing_coupled_work_sample`：请求/实际收线及各项费用；最终结算失败看 `fishing_final_work_rejected`。
-- `fishing_carrier_movement_sample`：RodActorId、角色、速度、实际碰撞位移、NetMode/LocalRole、`AccelerationCmS2/BrakingDecelerationCmS2`；`Active` 表示移动受力上下文，包含减速阶段。保留状态变化/每秒限频，替代旧 `fishing_carrier_smoothing_sample`。
-- `fishing_rod_rotation_resistance_sample`：同一限频事件增加 `LoadedAngularDampingRatio` 和 `AppliedAngularDampingMultiplier`，结合原始/平滑负载、转速、控制器意图、实际姿态和努力 Epoch 排查；没有新增逐帧日志。
+- `fishing_carrier_movement_sample`：RodActorId、角色、前后速度、实际碰撞位移、输入加速度、牵引方向/上限、`Frame/WorldTime/DeltaSeconds/Replay`、NetMode/LocalRole、`AccelerationCmS2/BrakingDecelerationCmS2`；`Active` 包含减速阶段，退出帧仍保留最后来源 ID。实时与重放分别限频，重放日志不改变实时采样计时器。替代旧 `fishing_carrier_smoothing_sample`。
+- `fishing_rod_rotation_resistance_sample`：原始/平滑负载、阻尼倍率、转速、控制器意图、实际姿态和努力 Epoch；附加本帧 `DeltaYaw/DeltaPitch`、身体位置/速度、竿尖位置/速度、`ConstraintAgeSeconds` 与 `Integrated`，区分正常积分和初始化姿态。
+- `fishing_carrier_constraint_received`：约束快照持有人、当前持有人、是否成功绑定移动组件、拉力/减速/转矩、接收时观察的鱼竿姿态、握把及本机帧/世界时间；这是复制回调的观察事实，不把未绑定快照记为成功应用。
 - 原 `fishing_surface_tow`、`fishing_fish_beached`、`fishing_drag_water_entered`、装备磨损及捕获日志继续沿用。
 
 Win64 Development 包应在不加 `-log` 时写入 `<打包根目录>/Catfishing/Saved/Logs`。本轮尚未重新打包、采集新房主/客户端双端日志或验收正式画面，不将代码/受控运行通过写成 presentation_delivery 完成。
+
+## 平静/反抗运动日志衔接核对（2026-09-07）
+
+用户复测反馈平静阶段顺滑、反抗阶段左右转动有停顿，要求先增加详细日志。工作开始时存在模拟器 Trace 与鱼竿弯曲表现的并行修改；Trace 在本轮期间形成 `2fc4acb`，本轮沿用它的每秒公式诊断，新增的是阶段和运动时间信息。弯曲组件、Hook/Session、表现设置、资产和对应测试不归本轮提交，保留并行工作。
+
+`cat.Fishing.MotionLog` 在 Development 默认 1，无需打开屏幕调试或附加 `-log`。详细模式每个战斗固定步（当前 20 Hz）记录一条约束样本，包括松线；实际运动、旋转及接收样本按不超过 60 Hz 的时间间隔限频，原有关键状态变化额外保留。控制台设为 0 时恢复原约 1 Hz 运动/约束采样并关闭重放详细采样，阶段切换仍落盘；Shipping 不启用详细模式。记录停止条件沿用真实搏斗/牵引生命周期，没有后台文件写入器或新的玩法历史。高密度文本日志会增加磁盘与格式化开销，排查后可关闭。
+
+分析时先按 `SessionId + RodActorId` 定位 `fishing_behavior_phase_entered` 的 `CalmOrInward/StrugglingOutward`，再关联同一鱼竿的约束、角色和旋转样本。这三条链的鱼竿 ID 统一为带连字符格式；`Frame/WorldTime` 是本进程/本 World 的时间，不能将客户端与服务器数值直接相减当网络延迟。`WorldGapSeconds` 是相邻成功到达日志阶段的固定步之间的世界时间差，第一步为 0；同帧多步且间隔为 0 可用于发现计时器追赶。`ResolvedFishVelocityCmS` 表示地形解析后的候选速度，实际提交失败仍以原失败/终局事件为准。反抗阶段先比较 `SteeringTarget/DesiredFishDirection` 与 `LineTensionN`，再看 `HolderVelocityCmS`、`VelocityBefore/Velocity` 和 `DeltaYaw/NetTorque/AppliedFishPull`，最后核对约束接收/重放时间。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 阶段入口 | `Source/Catfishing/Fishing/Simulation/CatFishingFightRunner.cpp::BeginBehaviorStateFromStateTree`，由原 StateTree 调用 | 缺少平静/反抗切换与持续时长 | 原入口读取已抽取的持续时间并记录双方体力、前后阶段、ID | 沿用原状态和随机流，计算完成后记录 | 日志消耗随机数或改变阶段时长 | 真实入口开关对照测试通过，时长序列和随机流末状态相同；阶段日志落盘 |
+| 固定步/转向/张力 | 同文件 `HandleFixedStep` → Steering/Simulator/地形解析 → Rod | 既有公式日志 1 Hz，短暂方向/负载/时序变化可能漏掉 | 扩展原 `fishing_constraint_sample`；默认逐固定步记录最终候选结果 | 不改变生产调用顺序；编号和时间仅为诊断 | 相同帧追赶、不涉及物理公式、资源或终局更改 | 编译和完整 Fishing 回归无新增失败；正式搏斗固定步密集日志待用户复测采集 |
+| 旋转消费者 | `Source/Catfishing/Fishing/Actors/CatFishingRodActor.cpp::RefreshHeldTransformFromAuthority` → 原 Actor/握把/竿尖消费者 | 原 1 Hz 样本可能漏掉短暂停顿 | 扩展原旋转事件，本帧角度差、身体/竿尖运动、约束年龄 | 已有旋转结果产生后只读观察 | 日志改变真实姿态，或无限逐帧写入 | 120 FPS 受控 World 中验证采样密度与上限，开关前后实际姿态相同 |
+| 移动与复制 | `Character/CatCharacterMovementComponent.{h,cpp}::PerformMovement`；Rod 的 `OnRep_CarrierConstraintState` | 缺前后速度/重放/接收时序，退出时原来源被清空 | 扩展原移动事件，新增限频接收事件；ID 统一，退出保留仅用于诊断的来源 | 原复制/运动绑定完成后观察，复制载荷和 SavedMove 不变 | 旧快照被误称应用、日志恢复旧牵引、退出后刷屏 | 真实接收回调记录绑定结果；开关前后实际移动相同；退出停止详细采样且 ID 保留；原移动重放回归通过 |
+| 开关及生命周期 | `Source/Catfishing/Fishing/Debug/CatFishingMotionDiagnostics.{h,cpp}` → Runner/Rod/Movement | 各层缺少共同的采样控制 | 新增同模块普通辅助函数及 `cat.Fishing.MotionLog`，Development 默认 1 | 各消费者读取同一开关，无 UObject/复制/存档状态 | 关闭无效、采样计时器干扰实时与重放 | 关闭恢复低频、开启增加采样、结束停止的行为测试通过 |
+| 配置/资产/资源/打包 | 原 `DefaultGame.ini`、正式 FightBalance/StateTree、Rod BP/WBP、ASC/Equipment 与 Cook 入口 | 本轮不涉及参数、资产、脚本、费用和持久化变更；未知二进制绑定未重新确认 | 保留接口与反射字段；不改名、不删除资产；复用 LogCatFishing 默认落盘 | 无迁移依赖 | 并行表现资产不能混入日志提交；正式双端需后证 | Editor/Game Development 构建成功；并行内容保留；旧 WBP 与六个兼容字段的删除条件不变 |
+| 测试/文档/残留 | `Fishing/Tests/CatFishingDiagnosticLogTests.cpp`；本指南、差距清单、`Docs/FishingArchitecture_zh-CN.md` | 旧采样说明与架构转矩公式已过时 | 复用原测试文件；更新采样说明与当前共同张力口径 | 先源码/日志核对，再更新说明 | 仅编译不能证明日志落盘或表现正确 | 新日志实际写入文件；本轮无并行滤波/模拟器实现，旧 1 Hz 是同事件的低密度模式；公式 Trace 保持独立用途 |
+
+contract：`Saved/Automation/FishingPhysics/BuildMotionLoggingEditor.log`、`BuildMotionLoggingGame.log` 的 Editor/Game Win64 Development 构建成功。最终 `MotionLoggingFinalReport/index.json` 为 136 项：132 clean、3 警告、1 既有初级竿 500/150 耐久失败，0 notRun；没有本轮新增失败。早期 DebugGame 报告的日志捕获断言失败来自测试未处理 UE 异步日志派发，已在测试中同步排空并使用线程安全捕获；不把早期报告算作通过，也没有为通过测试改变生产日志写入时序。
+
+runtime_behavior：`DetailedMotionLogsPreservePhysicsAndPhaseRandomness` 通过；开关前后阶段时长、随机流末状态、实际角色位移及杆姿态一致，详细采样限频、约束接收字段、退出停采样及来源 ID 通过。`MotionLoggingFinalTests.log` 新进程加载常用 Development DLL，阶段/旋转/接收/移动新字段真实落盘。测试覆盖受控 World 与真实阶段入口，正式战斗的逐固定步采样仍需接下来的用户测试确认；并行弯曲表现尚不由本项宣称交付。
+
+presentation_delivery：尚未重新打包、没有新房主/客户端双端日志或反抗阶段手感验收；此次提供定位信息，不宣称已修复用户刚反馈的剩余停顿。重新打开编辑器可直接测试平静与反抗阶段；编辑器日志在项目 `Saved/Logs/Catfishing.log`，打包后应在 `<打包根目录>/Catfishing/Saved/Logs`，测试后记录发生停顿的大致时间便于定位。
 
 ## 被鱼拖动时的持续抖动衔接核对（2026-09-07）
 

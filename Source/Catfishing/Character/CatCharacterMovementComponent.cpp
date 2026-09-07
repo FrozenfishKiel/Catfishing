@@ -3,6 +3,7 @@
 #include "GameFramework/Character.h"
 #include "Engine/World.h"
 #include "Logging/CatLog.h"
+#include "Fishing/Debug/CatFishingMotionDiagnostics.h"
 
 namespace
 {
@@ -58,6 +59,7 @@ void UCatCharacterMovementComponent::PerformMovement(const float DeltaSeconds)
 	const bool bReplaying = bUseSavedTraction;
 	if (!bReplaying) MovementTraction = TractionSource.IsValid() ? LiveTraction : FCatExternalTractionInput{};
 	const FVector Before = UpdatedComponent ? UpdatedComponent->GetComponentLocation() : FVector::ZeroVector;
+	const FVector VelocityBefore = Velocity;
 	{
 		// 牵引与固定步张力互相反馈；低帧率不能把整段外力一次积分成大位移。
 		// 实时移动和 SavedMove 共用相同的 CMC 子步规则，碰撞/滑动仍由引擎执行。
@@ -70,19 +72,37 @@ void UCatCharacterMovementComponent::PerformMovement(const float DeltaSeconds)
 	}
 	bUseSavedTraction = false;
 	UWorld* World = GetWorld();
-	if (!bReplaying && World && CharacterOwner && (bLastTractionActive != MovementTraction.bActive
+	if (World && CharacterOwner && ((!bReplaying && (bLastTractionActive != MovementTraction.bActive
 		|| (MovementTraction.bActive && World->GetTimeSeconds() >= NextTractionDiagnosticSeconds)))
+		|| (bReplaying && CatFishingMotionDiagnostics::IsDetailedEnabled() && MovementTraction.bActive
+			&& World->GetTimeSeconds() >= NextReplayDiagnosticSeconds)))
 	{
+		// 来源已清除的退出帧仍关联最后一根竿，仅用于日志，不恢复任何旧牵引。
+		const FGuid DiagnosticSourceId = MovementTraction.SourceId.IsValid()
+			? MovementTraction.SourceId : LastTractionDiagnosticSourceId;
 		UE_LOG(LogCatFishing, Log,
 			TEXT("Event=fishing_carrier_movement_sample RodActorId=%s Holder=%s Active=%s AccelerationCmS2=%.3f BrakingDecelerationCmS2=%.3f "
-				"Velocity=%s ActualDelta=%s MovementMode=%d World=%s NetMode=%d Authority=%s LocalRole=%d Model=CMCForceIntegration"),
-			*MovementTraction.SourceId.ToString(), *GetNameSafe(CharacterOwner), MovementTraction.bActive ? TEXT("true") : TEXT("false"),
+				"Velocity=%s ActualDelta=%s MovementMode=%d World=%s NetMode=%d Authority=%s LocalRole=%d Model=CMCForceIntegration "
+				"Frame=%llu WorldTime=%.6f DeltaSeconds=%.6f Replay=%s VelocityBefore=%s LocationBefore=%s InputAccelerationCmS2=%s "
+				"PullDirection=%s SpeedLimitCmS=%.3f"),
+			*DiagnosticSourceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(CharacterOwner), MovementTraction.bActive ? TEXT("true") : TEXT("false"),
 			MovementTraction.AccelerationCentimetersPerSecondSquared, MovementTraction.BrakingDecelerationCentimetersPerSecondSquared, *Velocity.ToCompactString(),
 			*(UpdatedComponent ? UpdatedComponent->GetComponentLocation() - Before : FVector::ZeroVector).ToCompactString(),
 			static_cast<int32>(MovementMode), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
-			CharacterOwner->HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(CharacterOwner->GetLocalRole()));
-		bLastTractionActive = MovementTraction.bActive;
-		NextTractionDiagnosticSeconds = World->GetTimeSeconds() + 1.0;
+			CharacterOwner->HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(CharacterOwner->GetLocalRole()),
+			GFrameCounter, World->GetTimeSeconds(), DeltaSeconds, bReplaying ? TEXT("true") : TEXT("false"),
+			*VelocityBefore.ToCompactString(), *Before.ToCompactString(), *Acceleration.ToCompactString(),
+			*MovementTraction.Direction.ToCompactString(), MovementTraction.SpeedLimitCentimetersPerSecond);
+		if (bReplaying)
+		{
+			NextReplayDiagnosticSeconds = World->GetTimeSeconds() + CatFishingMotionDiagnostics::SampleIntervalSeconds();
+		}
+		else
+		{
+			LastTractionDiagnosticSourceId = DiagnosticSourceId;
+			bLastTractionActive = MovementTraction.bActive;
+			NextTractionDiagnosticSeconds = World->GetTimeSeconds() + CatFishingMotionDiagnostics::SampleIntervalSeconds();
+		}
 	}
 }
 

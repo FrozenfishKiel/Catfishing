@@ -95,6 +95,7 @@ private:
 	friend class FCatFishingExhaustedPickupHandoffTest;
 	friend class FCatFishingSurfaceTraversalTest;
 	friend class FCatFishingParticipantStrengthTest;
+	friend class FCatFishingMotionDiagnosticTest;
 	void HandleFixedStep();
 	void RefreshCatAction();
 	bool UpdateFishBehaviorForCurrentOperator(bool bRodHeld);
@@ -135,6 +136,8 @@ private:
 	FRandomStream SteeringRandom;
 	FTimerHandle FixedStepTimer;
 	double NextConstraintDiagnosticWorldSeconds = 0.0;
+	uint64 DiagnosticFixedStepSequence = 0;
+	double LastFixedStepDiagnosticWorldSeconds = -1.0;
 	double NextPowerDiagnosticWorldSeconds = 0.0;
 	mutable double NextGroundSurfaceRejectedDiagnosticWorldSeconds = 0.0;
 	double NextSurfaceTowDiagnosticWorldSeconds = 0.0;
