@@ -36,6 +36,9 @@ public:
 	/** 读取这份运行实例自己的稳定 ID；堆叠格共享一个实例 ID，非堆叠物每件各自拥有一个。 */
 	FGuid GetItemInstanceId() const;
 
+	/** authority 恢复这份实例的稳定 ID；存档和旧快照迁移用它保留原物品身份，客户端不能伪造。 */
+	void SetItemInstanceIdFromAuthority(FGuid InItemInstanceId);
+
 	/** 运行宿主记录当前拥有者；跨库存移动会刷新它，避免实例行为继续认为自己属于旧 Actor。 */
 	void SetRuntimeOwnerActor(AActor* InRuntimeOwnerActor);
 

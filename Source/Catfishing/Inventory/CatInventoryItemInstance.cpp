@@ -69,6 +69,18 @@ FGuid UCatInventoryItemInstance::GetItemInstanceId() const
 	return ItemInstanceId;
 }
 
+// 实例身份恢复流程：只有服务器拥有的实例能接收外部 ID，非法 ID 保持现有身份，避免客户端或坏存档制造无身份物品。
+void UCatInventoryItemInstance::SetItemInstanceIdFromAuthority(const FGuid InItemInstanceId)
+{
+	AActor* RuntimeOwner = GetRuntimeOwnerActor();
+	if ((RuntimeOwner != nullptr && !RuntimeOwner->HasAuthority()) || !InItemInstanceId.IsValid())
+	{
+		return;
+	}
+
+	ItemInstanceId = InItemInstanceId;
+}
+
 // 宿主设置流程：跨库存移动只更新运行归属，不改变定义资产、数量或物品自身状态。
 void UCatInventoryItemInstance::SetRuntimeOwnerActor(AActor* InRuntimeOwnerActor)
 {

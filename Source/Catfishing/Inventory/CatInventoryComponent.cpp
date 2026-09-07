@@ -684,6 +684,61 @@ void UCatInventoryComponent::SetInventorySlotCountFromAuthority(const int32 NewS
 	InitializeOrRefreshInventorySlots();
 }
 
+// 整表替换流程：
+// 1. 只允许 authority 或尚未绑定 Actor 的构造/恢复路径写入，客户端不能用它覆盖复制事实。
+// 2. 先移除旧实例复制登记，再按传入槽位顺序重建 Entries，并补足最低格子数量。
+// 3. 每个有效实例都会刷新格子 owner、运行宿主和复制登记，最后广播一次完整库存变化。
+bool UCatInventoryComponent::ReplaceInventoryEntriesFromAuthority(
+	const TArray<FCatInventoryEntry>& NewEntries, const int32 MinimumSlotCount)
+{
+	AActor* OwningActor = GetOwner();
+	if (OwningActor != nullptr && !OwningActor->HasAuthority())
+	{
+		return false;
+	}
+
+	if (IsUsingRegisteredSubObjectList())
+	{
+		TSet<UCatInventoryItemInstance*> RemovedInstances;
+		for (const FCatInventoryEntry& ExistingEntry : InventoryList.Entries)
+		{
+			if (ExistingEntry.Instance != nullptr && !RemovedInstances.Contains(ExistingEntry.Instance))
+			{
+				RemoveReplicatedSubObject(ExistingEntry.Instance);
+				RemovedInstances.Add(ExistingEntry.Instance);
+			}
+		}
+	}
+
+	const int32 DesiredSlotCount = FMath::Max(FMath::Max(0, MinimumSlotCount), NewEntries.Num());
+	InventoryList.Entries.Reset(DesiredSlotCount);
+	for (int32 SlotIndex = 0; SlotIndex < DesiredSlotCount; ++SlotIndex)
+	{
+		FCatInventoryEntry& TargetEntry = InventoryList.Entries.AddDefaulted_GetRef();
+		TargetEntry = FCatInventoryEntry(this);
+		if (!NewEntries.IsValidIndex(SlotIndex)
+			|| NewEntries[SlotIndex].Instance == nullptr
+			|| NewEntries[SlotIndex].StackCount <= 0)
+		{
+			continue;
+		}
+
+		TargetEntry.Instance = NewEntries[SlotIndex].Instance;
+		TargetEntry.StackCount = NewEntries[SlotIndex].StackCount;
+		TargetEntry.LastObservedCount = TargetEntry.StackCount;
+		TargetEntry.SlotOwnerComponent = this;
+		SyncInventoryItemRuntimeOwner(TargetEntry.Instance);
+		if (IsUsingRegisteredSubObjectList() && IsReadyForReplication())
+		{
+			AddReplicatedSubObject(TargetEntry.Instance);
+		}
+	}
+
+	InventoryList.MarkArrayDirty();
+	BroadcastInventoryChange();
+	return true;
+}
+
 // 实例移除流程：委托条目移除入口处理清空、复制登记和变化广播，避免形成两套清理规则。
 void UCatInventoryComponent::RemoveItemInstance(UCatInventoryItemInstance* ItemInstance)
 {

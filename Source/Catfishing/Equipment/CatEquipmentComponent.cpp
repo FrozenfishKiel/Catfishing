@@ -1999,9 +1999,10 @@ void UCatEquipmentComponent::SyncSelectedRodStateToSelectedInstance()
 }
 
 // 自动选择流程：
-// 1. 新获得的物品只在当前选择缺失、旧选择无库存/无活动 Use，或同定义已选竿已断/耐久非法时介入。
-// 2. 鱼竿选择刷新会记录具体实例并读取这根实例自己的耐久；鱼饵、鱼漂和抄网也保留被选中的实例身份。
-// 3. 这个流程不移出库存物品，也不创建独立装备栏；Fishing Begin 会按当前选择自行暂存要消耗的那一份饵。
+// 1. 新获得的物品只在当前选择缺失、旧选择无库存/无活动 Use，或已选竿已断/耐久非法时介入。
+// 2. 鱼竿选择刷新会记录具体实例并读取这根实例自己的耐久；断竿收口时会从已有库存中寻找可用替代竿。
+// 3. 鱼饵、鱼漂和抄网也保留被选中的实例身份，但不会因为新增同类物品抢占仍有效的选择。
+// 4. 这个流程不移出库存物品，也不创建独立装备栏；Fishing Begin 会按当前选择自行暂存要消耗的那一份饵。
 void UCatEquipmentComponent::AutoSelectGrantedInventoryItem(const UCatEquipmentDefinition& Definition,
 	const FName DefinitionId)
 {
@@ -2011,70 +2012,152 @@ void UCatEquipmentComponent::AutoSelectGrantedInventoryItem(const UCatEquipmentD
 	}
 	if (Definition.Kind == ECatEquipmentKind::Rod)
 	{
-		const FCatRunInventorySlot* GrantedSlot = nullptr;
+		const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+		const FCatRunInventorySlot* PreferredUsableSlot = nullptr;
+		const FCatRunInventorySlot* FirstUsableSlot = nullptr;
+		// 回退槽只服务“当前选择缺失”的修复路径；断竿替换必须拿到可用竿，不能把另一根坏竿当成替代结果。
+		const FCatRunInventorySlot* PreferredFallbackSlot = nullptr;
+		const FCatRunInventorySlot* FirstFallbackSlot = nullptr;
 		for (const FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
 		{
-			if (Slot.DefinitionId == DefinitionId && CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
+			const UCatEquipmentDefinition* SlotDefinition = Settings != nullptr
+				? Settings->FindRuntimeDefinition(Slot.DefinitionId) : nullptr;
+			if (!CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot)
+				|| SlotDefinition == nullptr || SlotDefinition->Kind != ECatEquipmentKind::Rod)
 			{
-				if (!Slot.bRodBroken && FMath::IsFinite(Slot.RodDurability) && Slot.RodDurability > 0.0)
+				continue;
+			}
+
+			if (FirstFallbackSlot == nullptr)
+			{
+				FirstFallbackSlot = &Slot;
+			}
+			const bool bSlotUsable = !Slot.bRodBroken && FMath::IsFinite(Slot.RodDurability)
+				&& Slot.RodDurability > 0.0;
+			if (bSlotUsable && FirstUsableSlot == nullptr)
+			{
+				FirstUsableSlot = &Slot;
+			}
+			if (Slot.DefinitionId == DefinitionId)
+			{
+				if (PreferredFallbackSlot == nullptr)
 				{
-					GrantedSlot = &Slot;
-					break;
+					PreferredFallbackSlot = &Slot;
 				}
-				if (!GrantedSlot)
+				if (bSlotUsable)
 				{
-					GrantedSlot = &Slot;
+					PreferredUsableSlot = &Slot;
+					break;
 				}
 			}
 		}
-		if (!GrantedSlot)
+		if (FirstFallbackSlot == nullptr)
 		{
+			// 当前库存里没有任何鱼竿实例时不能制造选择；保持原快照，让上层继续看到缺失状态。
 			return;
 		}
+		const FCatRunInventorySlot* SelectedStoredRod =
+			FindInventorySlotByInstanceId(Snapshot.RodItemInstanceId);
+		const bool bSelectedStoredRodMatches = SelectedStoredRod != nullptr
+			&& SelectedStoredRod->DefinitionId == Snapshot.RodDefinitionId;
 		const FCatInventoryItemUseRecord* ActiveSelectedRod =
 			FindInventoryItemUseRecord(Snapshot.RodItemInstanceId);
 		const bool bSelectedRodIsInUse = ActiveSelectedRod && !ActiveSelectedRod->bReleased;
 		const bool bSelectedRodUnavailable = Snapshot.RodDefinitionId.IsNone()
-			|| (GetInventoryItemQuantity(Snapshot.RodDefinitionId) <= 0 && !bSelectedRodIsInUse);
-		const bool bSelectedRodNeedsReplacement = Snapshot.RodDefinitionId == DefinitionId
-			&& (Snapshot.bRodBroken || !FMath::IsFinite(Snapshot.RodDurability) || Snapshot.RodDurability <= 0.0);
-		if (bSelectedRodUnavailable || bSelectedRodNeedsReplacement)
+			|| (!bSelectedStoredRodMatches && !bSelectedRodIsInUse);
+		const bool bStoredSelectedRodBroken = bSelectedStoredRodMatches
+			&& (SelectedStoredRod->bRodBroken || !FMath::IsFinite(SelectedStoredRod->RodDurability)
+				|| SelectedStoredRod->RodDurability <= 0.0);
+		const bool bSelectedRodNeedsReplacement = !bSelectedRodIsInUse
+			&& (Snapshot.bRodBroken || !FMath::IsFinite(Snapshot.RodDurability)
+				|| Snapshot.RodDurability <= 0.0 || bStoredSelectedRodBroken);
+		// 可用替代和身份回退分开计算：断竿替换只能选可用竿，缺失选择才允许回到真实存在的坏竿。
+		const FCatRunInventorySlot* ReplacementSlot = PreferredUsableSlot != nullptr
+			? PreferredUsableSlot : FirstUsableSlot;
+		const FCatRunInventorySlot* FallbackSlot = PreferredFallbackSlot != nullptr
+			? PreferredFallbackSlot : FirstFallbackSlot;
+		// 当前选择完全丢失时允许落到真实存在的任一鱼竿实例；已断选择只接受可用替代竿，保留坏竿给维修链读取。
+		const FCatRunInventorySlot* TargetSlot = bSelectedRodNeedsReplacement
+			? ReplacementSlot
+			: (bSelectedRodUnavailable
+				? (ReplacementSlot != nullptr ? ReplacementSlot : FallbackSlot)
+				: nullptr);
+		if (TargetSlot != nullptr)
 		{
-			Snapshot.RodDefinitionId = DefinitionId;
-			Snapshot.RodItemInstanceId = GrantedSlot->ItemInstanceId;
-			Snapshot.RodDurability = GrantedSlot->RodDurability;
-			Snapshot.bRodBroken = GrantedSlot->bRodBroken;
+			const FName PreviousDefinitionId = Snapshot.RodDefinitionId;
+			const FGuid PreviousItemInstanceId = Snapshot.RodItemInstanceId;
+			const double PreviousRodDurability = Snapshot.RodDurability;
+			const bool bPreviousRodBroken = Snapshot.bRodBroken;
+			Snapshot.RodDefinitionId = TargetSlot->DefinitionId;
+			Snapshot.RodItemInstanceId = TargetSlot->ItemInstanceId;
+			Snapshot.RodDurability = TargetSlot->RodDurability;
+			Snapshot.bRodBroken = TargetSlot->bRodBroken;
+			UE_LOG(LogCatEquipment, Log,
+				TEXT("Event=equipment_rod_auto_selected Reason=%s PreviousDefinition=%s PreviousItem=%s PreviousDurability=%.3f PreviousBroken=%s SelectedDefinition=%s SelectedItem=%s SelectedDurability=%.3f SelectedBroken=%s ActiveUse=%s Revision=%lld Owner=%s World=%s NetMode=%d"),
+				bSelectedRodUnavailable ? TEXT("Unavailable") : TEXT("BrokenOrInvalid"),
+				*PreviousDefinitionId.ToString(),
+				*PreviousItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), PreviousRodDurability,
+				bPreviousRodBroken ? TEXT("true") : TEXT("false"), *Snapshot.RodDefinitionId.ToString(),
+				*Snapshot.RodItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), Snapshot.RodDurability,
+				Snapshot.bRodBroken ? TEXT("true") : TEXT("false"),
+				bSelectedRodIsInUse ? TEXT("true") : TEXT("false"), Snapshot.Revision, *GetNameSafe(GetOwner()),
+				*GetNameSafe(GetWorld()), static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone));
 		}
 		return;
 	}
+	const auto SelectGrantedNonRodItemIfNeeded =
+		[this, DefinitionId](const TCHAR* KindName, FName& InOutDefinitionId, FGuid& InOutItemInstanceId)
+	{
+		const FCatRunInventorySlot* SelectedSlot = FindInventorySlotByInstanceId(InOutItemInstanceId);
+		const bool bSelectedItemValid = SelectedSlot != nullptr
+			&& SelectedSlot->DefinitionId == InOutDefinitionId && SelectedSlot->Quantity > 0;
+		if (!InOutDefinitionId.IsNone() && bSelectedItemValid)
+		{
+			return;
+		}
+
+		const FName PreviousDefinitionId = InOutDefinitionId;
+		const FGuid PreviousItemInstanceId = InOutItemInstanceId;
+		const FName PreferredDefinitionId = InOutDefinitionId.IsNone() ? DefinitionId : InOutDefinitionId;
+		const FCatRunInventorySlot* ReplacementSlot = FindFirstInventorySlotByDefinition(PreferredDefinitionId);
+		if (ReplacementSlot == nullptr && PreferredDefinitionId != DefinitionId)
+		{
+			ReplacementSlot = FindFirstInventorySlotByDefinition(DefinitionId);
+		}
+		if (ReplacementSlot == nullptr)
+		{
+			if (InOutDefinitionId.IsNone())
+			{
+				InOutDefinitionId = DefinitionId;
+				InOutItemInstanceId = FGuid();
+			}
+			return;
+		}
+
+		InOutDefinitionId = ReplacementSlot->DefinitionId;
+		InOutItemInstanceId = ReplacementSlot->ItemInstanceId;
+		UE_LOG(LogCatEquipment, Log,
+			TEXT("Event=equipment_item_auto_selected Kind=%s Reason=%s PreviousDefinition=%s PreviousItem=%s SelectedDefinition=%s SelectedItem=%s Revision=%lld Owner=%s World=%s NetMode=%d"),
+			KindName, PreviousDefinitionId.IsNone() ? TEXT("Unavailable") : TEXT("MissingInstance"),
+			*PreviousDefinitionId.ToString(),
+			*PreviousItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *InOutDefinitionId.ToString(),
+			*InOutItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), Snapshot.Revision, *GetNameSafe(GetOwner()),
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone));
+	};
 	if (Definition.Kind == ECatEquipmentKind::Bait)
 	{
-		if (Snapshot.BaitDefinitionId.IsNone() || GetInventoryItemQuantity(Snapshot.BaitDefinitionId) <= 0)
-		{
-			const FCatRunInventorySlot* GrantedSlot = FindFirstInventorySlotByDefinition(DefinitionId);
-			Snapshot.BaitDefinitionId = DefinitionId;
-			Snapshot.BaitItemInstanceId = GrantedSlot ? GrantedSlot->ItemInstanceId : FGuid();
-		}
+		SelectGrantedNonRodItemIfNeeded(TEXT("Bait"), Snapshot.BaitDefinitionId, Snapshot.BaitItemInstanceId);
 		return;
 	}
 	if (Definition.Kind == ECatEquipmentKind::Float)
 	{
-		if (Snapshot.FloatDefinitionId.IsNone() || GetInventoryItemQuantity(Snapshot.FloatDefinitionId) <= 0)
-		{
-			const FCatRunInventorySlot* GrantedSlot = FindFirstInventorySlotByDefinition(DefinitionId);
-			Snapshot.FloatDefinitionId = DefinitionId;
-			Snapshot.FloatItemInstanceId = GrantedSlot ? GrantedSlot->ItemInstanceId : FGuid();
-		}
+		SelectGrantedNonRodItemIfNeeded(TEXT("Float"), Snapshot.FloatDefinitionId, Snapshot.FloatItemInstanceId);
 		return;
 	}
 	if (Definition.Kind == ECatEquipmentKind::ScoopNet)
 	{
-		if (Snapshot.ScoopNetDefinitionId.IsNone() || GetInventoryItemQuantity(Snapshot.ScoopNetDefinitionId) <= 0)
-		{
-			const FCatRunInventorySlot* GrantedSlot = FindFirstInventorySlotByDefinition(DefinitionId);
-			Snapshot.ScoopNetDefinitionId = DefinitionId;
-			Snapshot.ScoopNetItemInstanceId = GrantedSlot ? GrantedSlot->ItemInstanceId : FGuid();
-		}
+		SelectGrantedNonRodItemIfNeeded(TEXT("ScoopNet"), Snapshot.ScoopNetDefinitionId,
+			Snapshot.ScoopNetItemInstanceId);
 	}
 }
 

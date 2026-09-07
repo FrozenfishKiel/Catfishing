@@ -5,12 +5,16 @@
 #include "Engine/LocalPlayer.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Equipment/CatEquipmentSettings.h"
 #include "Equipment/CatRunInventorySlotOperations.h"
 #include "GameFramework/PlayerController.h"
 #include "Interaction/CatInteractionSettings.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemDefinition.h"
+#include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/CatInventorySettings.h"
+#include "Inventory/CatInventoryStatics.h"
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
@@ -170,11 +174,18 @@ bool ACatCampInventoryActor::CanRestoreSnapshotFromAuthority(const FCatCampInven
 	return true;
 }
 
-// 公共仓库恢复提交流程：先重复预检，成功后清除旧 World 的命令终态缓存，再整体替换保存格并走既有发布路径；失败不写 Snapshot，也不会向客户端推送半恢复结果。
+// 公共仓库恢复提交流程：先重复预检并把旧槽位重建为正式库存实例；两边都成功后才替换快照、清终态缓存并发布。
 bool ACatCampInventoryActor::RestoreSnapshotFromAuthority(const FCatCampInventorySnapshot& RestoredSnapshot)
 {
 	FText Failure;
 	if (!CanRestoreSnapshotFromAuthority(RestoredSnapshot, Failure))
+	{
+		return false;
+	}
+	TArray<FCatInventoryEntry> RestoredEntries;
+	if (!BuildFormalEntriesFromLegacySnapshot(RestoredSnapshot, RestoredEntries)
+		|| !InventoryComponent
+		|| !InventoryComponent->ReplaceInventoryEntriesFromAuthority(RestoredEntries, GetConfiguredSlotCapacity()))
 	{
 		return false;
 	}
@@ -199,8 +210,13 @@ int32 ACatCampInventoryActor::GetInventorySlotCapacityForView() const
 ECatDomainCommandError ACatCampInventoryActor::ValidateAddItemFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const FName DefinitionId, const int32 Quantity) const
 {
-	const UCatEquipmentDefinition* Definition = ResolveEquipmentDefinitionForLegacyInventory(DefinitionId);
-	if (!HasAuthority() || !RequestId.IsValid() || !Definition || Quantity <= 0)
+	TArray<FCatCampInventoryAddItemRequest> Items;
+	FCatCampInventoryAddItemRequest& Item = Items.AddDefaulted_GetRef();
+	Item.DefinitionId = DefinitionId;
+	Item.Quantity = Quantity;
+	FCatInventoryReceiveBatch ReceiveBatch;
+	if (!HasAuthority() || !RequestId.IsValid() || Quantity <= 0
+		|| !BuildFormalReceiveBatchForLegacyInventory(Items, ReceiveBatch))
 	{
 		return ECatDomainCommandError::InvalidPayload;
 	}
@@ -220,14 +236,14 @@ ECatDomainCommandError ACatCampInventoryActor::ValidateAddItemFromAuthority(cons
 	{
 		return ECatDomainCommandError::RevisionConflict;
 	}
-	return CanStoreItem(*Definition, DefinitionId, Quantity)
+	return InventoryComponent && InventoryComponent->CanFullyAcceptInventoryBatch(ReceiveBatch)
 		? ECatDomainCommandError::None : ECatDomainCommandError::CapacityExceeded;
 }
 
 // 入库提交流程：
 // 1. 先用 RequestId 和载荷签名处理幂等重放，防止同一次购买换 DefinitionId 或数量。
 // 2. 首次提交复用扣款前预检，再检查公共仓库 Revision 是否仍匹配调用方看到的事实。
-// 3. 通过后写入公共仓库格子、递增 Revision、复制并缓存终态；失败只返回当前仓库版本。
+// 3. 批次写入和旧 Snapshot 投影都成功后才递增 Revision、复制并缓存终态；预检或写入失败只返回当前仓库版本。
 FCatDomainCommandResult ACatCampInventoryActor::AddItemFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const FName DefinitionId, const int32 Quantity)
 {
@@ -259,14 +275,20 @@ FCatDomainCommandResult ACatCampInventoryActor::AddItemFromAuthority(const FGuid
 		return Result;
 	}
 
-	const UCatEquipmentDefinition* Definition = ResolveEquipmentDefinitionForLegacyInventory(DefinitionId);
+	TArray<FCatCampInventoryAddItemRequest> Items;
+	FCatCampInventoryAddItemRequest& Item = Items.AddDefaulted_GetRef();
+	Item.DefinitionId = DefinitionId;
+	Item.Quantity = Quantity;
+	FCatInventoryReceiveBatch ReceiveBatch;
+	const bool bBatchReady = BuildFormalReceiveBatchForLegacyInventory(Items, ReceiveBatch);
 	const ECatDomainCommandError Rejection =
 		ValidateAddItemFromAuthority(RequestId, ExpectedRevision, DefinitionId, Quantity);
 	if (Rejection != ECatDomainCommandError::None)
 	{
 		Result.Error = Rejection;
 	}
-	else if (Definition && AddItemQuantity(*Definition, DefinitionId, Quantity))
+	else if (bBatchReady && InventoryComponent && InventoryComponent->TryAddInventoryBatch(ReceiveBatch)
+		&& SyncLegacySnapshotFromInventoryComponent())
 	{
 		++Snapshot.Revision;
 		PublishSnapshot();
@@ -286,7 +308,7 @@ FCatDomainCommandResult ACatCampInventoryActor::AddItemFromAuthority(const FGuid
 // 整批入库预检流程：
 // 1. 先验证 RequestId、服务器身份和整批载荷签名；重复 DefinitionId 会合并，行顺序不会制造另一批货。
 // 2. 已有同身份同 RequestId 成功终态时只允许同一批货重放，成功终态继续放行给 AddItemsFromAuthority 返回 AlreadyResolved。
-// 3. 首次预检要求仓库版本仍匹配，然后用临时格子数组模拟整批入库，任何一行放不下都拒绝整批。
+// 3. 首次预检要求仓库版本仍匹配，然后让正式库存组件模拟整批入库，任何一行放不下都拒绝整批。
 ECatDomainCommandError ACatCampInventoryActor::ValidateAddItemsFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const FString& StableNetId,
 	const TArray<FCatCampInventoryAddItemRequest>& Items) const
@@ -320,8 +342,8 @@ ECatDomainCommandError ACatCampInventoryActor::ValidateAddItemsFromAuthority(con
 
 // 整批入库提交流程：
 // 1. 用服务器身份、RequestId 和整批载荷签名处理成功终态重放；失败不写终态缓存，调用方重读状态后仍可重新提交。
-// 2. 首次提交复用整批预检，再把当前仓库格子复制到临时数组里完整写入。
-// 3. 只有临时数组整批成功后才替换正式 Snapshot、推进一次 Revision、广播并缓存；失败时正式格子保持原样。
+// 2. 首次提交复用整批预检，再把批次完整写入正式库存组件。
+// 3. 批次写入和旧 Snapshot 投影都成功后才推进 Revision、广播并缓存；预检或写入失败不写终态缓存。
 FCatDomainCommandResult ACatCampInventoryActor::AddItemsFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const FString& StableNetId,
 	const TArray<FCatCampInventoryAddItemRequest>& Items)
@@ -368,21 +390,12 @@ FCatDomainCommandResult ACatCampInventoryActor::AddItemsFromAuthority(const FGui
 	}
 	else
 	{
-		TArray<FCatRunInventorySlot> SimulatedSlots = Snapshot.InventorySlots;
-		bool bStoredAll = true;
-		for (const FCatCampInventoryAddItemRequest& Item : NormalizedItems)
+		FCatInventoryReceiveBatch ReceiveBatch;
+		if (BuildFormalReceiveBatchForLegacyInventory(NormalizedItems, ReceiveBatch)
+			&& InventoryComponent
+			&& InventoryComponent->TryAddInventoryBatch(ReceiveBatch)
+			&& SyncLegacySnapshotFromInventoryComponent())
 		{
-			const UCatEquipmentDefinition* Definition =
-				ResolveEquipmentDefinitionForLegacyInventory(Item.DefinitionId);
-			if (!Definition || !AddItemQuantityToSlots(SimulatedSlots, *Definition, Item.DefinitionId, Item.Quantity))
-			{
-				bStoredAll = false;
-				break;
-			}
-		}
-		if (bStoredAll)
-		{
-			Snapshot.InventorySlots = MoveTemp(SimulatedSlots);
 			++Snapshot.Revision;
 			PublishSnapshot();
 			Result.bCommitted = true;
@@ -437,8 +450,8 @@ ECatDomainCommandError ACatCampInventoryActor::ValidateWithdrawToEquipment(const
 // 取用提交流程：
 // 1. 先用 RequestId 和源槽/数量/双方版本签名处理幂等，重放不会重复扣公共仓库或重复发玩家随身库存。
 // 2. 首次提交先做公共仓库和玩家随身库存双侧预检，再检查公共仓库 Revision 是否仍是调用方看到的版本。
-// 3. 扣公共仓库槽位前保存一份槽位快照；如果随身库存授予出现意外失败，恢复公共仓库，避免物品凭空消失。
-// 4. 玩家随身库存授予成功后递增公共仓库 Revision、复制并缓存终态；随身库存的 Revision 由 UCatEquipmentComponent 自己返回。
+// 3. 扣公共仓库槽位前保存一份槽位快照，并先把扣减结果同步到正式库存组件；同步失败时不会触碰玩家背包。
+// 4. 玩家随身库存授予失败时把公共仓库旧快照同步回正式库存；双方都站稳后才递增公共仓库 Revision、复制并缓存终态。
 FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority(const FGuid RequestId,
 	const int64 ExpectedCampRevision, const int32 SourceSlotIndex, const int32 Quantity,
 	UCatEquipmentComponent* TargetEquipment, const int64 ExpectedEquipmentRevision)
@@ -521,6 +534,16 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 		SourceSlot = FCatRunInventorySlot();
 	}
 
+	if (!SyncInventoryComponentFromLegacySnapshot())
+	{
+		Snapshot.InventorySlots = MoveTemp(SavedSlots);
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		Result.Revision = Snapshot.Revision;
+		TerminalCache.Add(Key, Result);
+		TerminalPayloadByKey.Add(Key, PayloadSignature);
+		return Result;
+	}
+
 	const FCatDomainCommandResult Grant =
 		TargetEquipment->GrantInventorySlotFromAuthority(RequestId, ExpectedEquipmentRevision, WithdrawnItem);
 	const bool bGrantStanding = Grant.bCommitted || Grant.Error == ECatDomainCommandError::AlreadyResolved;
@@ -528,6 +551,11 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 	{
 		Snapshot.InventorySlots = MoveTemp(SavedSlots);
 		Result = Grant;
+		if (!SyncInventoryComponentFromLegacySnapshot())
+		{
+			Result.Error = ECatDomainCommandError::DependencyUnavailable;
+			Result.bCommitted = false;
+		}
 		Result.RequestId = RequestId;
 		Result.Revision = Snapshot.Revision;
 		TerminalCache.Add(Key, Result);
@@ -548,7 +576,7 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 // 公共仓库整理流程：
 // 1. 用 RequestId、Revision 和源/目标下标处理幂等重放；同 RequestId 换格子会被拒绝。
 // 2. 首次请求要求服务器 authority、版本匹配且容量数组已补齐，再复用运行库存格通用规则移动、合并或交换。
-// 3. 只有格子数组真的变化时才推进公共仓库 Revision 并广播；目标格已满这类无变化结果不刷新库存。
+// 3. 只有格子数组真的变化并同步回正式库存时才推进 Revision；目标格已满这类无变化结果不刷新库存。
 FCatDomainCommandResult ACatCampInventoryActor::MoveInventorySlotFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const int32 SourceSlotIndex, const int32 TargetSlotIndex)
 {
@@ -589,6 +617,7 @@ FCatDomainCommandResult ACatCampInventoryActor::MoveInventorySlotFromAuthority(c
 		}
 		else
 		{
+			TArray<FCatRunInventorySlot> SavedSlots = Snapshot.InventorySlots;
 			const auto ResolveStackLimit = [this](const FName DefinitionId)
 			{
 				const UCatEquipmentDefinition* Definition = ResolveEquipmentDefinitionForLegacyInventory(DefinitionId);
@@ -599,6 +628,12 @@ FCatDomainCommandResult ACatCampInventoryActor::MoveInventorySlotFromAuthority(c
 					Snapshot.InventorySlots, SourceSlotIndex, TargetSlotIndex, ResolveStackLimit);
 			Result.bCommitted = MoveResult.bChanged;
 			Result.Error = MoveResult.Error;
+			if (Result.bCommitted && !SyncInventoryComponentFromLegacySnapshot())
+			{
+				Snapshot.InventorySlots = MoveTemp(SavedSlots);
+				Result.bCommitted = false;
+				Result.Error = ECatDomainCommandError::InvalidPayload;
+			}
 		}
 	}
 	if (Result.bCommitted)
@@ -616,8 +651,9 @@ FCatDomainCommandResult ACatCampInventoryActor::MoveInventorySlotFromAuthority(c
 // 1. 用 RequestId 和双方版本/槽位做幂等签名；同请求重放只返回首次终态，不重复移动任何格子。
 // 2. 首次提交同时验证公共仓库和玩家随身库存的 authority、Revision 和槽位，任一侧不成立都不改数据源。
 // 3. 通过后用同一套运行库存格规则把背包源格移动、合并或交换到公共仓库目标格。
-// 4. 只有不同物品交换让背包收到营地目标物时才修正背包选择；空格存入和同类合并不反向改选择。
-// 5. 只有数组真的变化时才分别推进背包和公共仓库版本，再各自广播完整快照，让两边 UI 自己刷新。
+// 4. 公共仓库正式库存同步失败时回滚双方旧快照，避免公共仓库形成两套事实。
+// 5. 只有不同物品交换让背包收到营地目标物时才修正背包选择；空格存入和同类合并不反向改选择。
+// 6. 只有数组真的变化时才分别推进背包和公共仓库版本，再各自广播完整快照，让两边 UI 自己刷新。
 FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuthority(const FGuid RequestId,
 	const int64 ExpectedCampRevision, const int32 TargetCampSlotIndex, UCatEquipmentComponent* SourceEquipment,
 	const int64 ExpectedEquipmentRevision, const int32 SourceEquipmentSlotIndex)
@@ -692,13 +728,22 @@ FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuth
 						ResolveEquipmentDefinitionForLegacyInventory(DefinitionId);
 					return Definition ? GetInventoryStackLimit(*Definition) : 1;
 				};
+				TArray<FCatRunInventorySlot> SavedCampSlots = Snapshot.InventorySlots;
+				TArray<FCatRunInventorySlot> SavedEquipmentSlots = SourceEquipment->Snapshot.InventorySlots;
 				const CatRunInventorySlotOperations::FMoveSlotsResult MoveResult =
 					CatRunInventorySlotOperations::MoveItemBetweenSlotArrays(
 						SourceEquipment->Snapshot.InventorySlots, SourceEquipmentSlotIndex,
 						Snapshot.InventorySlots, TargetCampSlotIndex, ResolveStackLimit);
 				Result.bCommitted = MoveResult.bChanged;
 				Result.Error = MoveResult.Error;
-				if (MoveResult.bChanged && bEquipmentReceivesCampSlot && EquipmentReceivedDefinition)
+				if (MoveResult.bChanged && !SyncInventoryComponentFromLegacySnapshot())
+				{
+					Snapshot.InventorySlots = MoveTemp(SavedCampSlots);
+					SourceEquipment->Snapshot.InventorySlots = MoveTemp(SavedEquipmentSlots);
+					Result.bCommitted = false;
+					Result.Error = ECatDomainCommandError::InvalidPayload;
+				}
+				else if (MoveResult.bChanged && bEquipmentReceivesCampSlot && EquipmentReceivedDefinition)
 				{
 					SourceEquipment->AutoSelectGrantedInventoryItem(
 						*EquipmentReceivedDefinition, EquipmentReceivedDefinitionId);
@@ -723,7 +768,7 @@ FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuth
 // 1. 用 RequestId 和双方版本/槽位做幂等签名；重放只返回首次终态，不重复扣公共仓库或发背包。
 // 2. 首次提交同时验证公共仓库、玩家随身库存、Revision 和槽位，确保这次拖放可以同时改两份数据源。
 // 3. 通过后把公共仓库源格移动、合并或交换到背包目标格；目标格不是空格时也按玩家拖放目标处理。
-// 4. 成功后两边各自推进版本并广播完整快照，Model 只收到变化信号并让各 WBP 自己刷新。
+// 4. 公共仓库正式库存同步失败时回滚双方旧快照；同步成功后两边才推进版本并广播完整快照。
 FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentSlotFromAuthority(const FGuid RequestId,
 	const int64 ExpectedCampRevision, const int32 SourceCampSlotIndex, UCatEquipmentComponent* TargetEquipment,
 	const int64 ExpectedEquipmentRevision, const int32 TargetEquipmentSlotIndex)
@@ -795,13 +840,22 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentSlotFromAutho
 						ResolveEquipmentDefinitionForLegacyInventory(DefinitionId);
 					return Definition ? GetInventoryStackLimit(*Definition) : 1;
 				};
+				TArray<FCatRunInventorySlot> SavedCampSlots = Snapshot.InventorySlots;
+				TArray<FCatRunInventorySlot> SavedEquipmentSlots = TargetEquipment->Snapshot.InventorySlots;
 				const CatRunInventorySlotOperations::FMoveSlotsResult MoveResult =
 					CatRunInventorySlotOperations::MoveItemBetweenSlotArrays(
 						Snapshot.InventorySlots, SourceCampSlotIndex,
 						TargetEquipment->Snapshot.InventorySlots, TargetEquipmentSlotIndex, ResolveStackLimit);
 				Result.bCommitted = MoveResult.bChanged;
 				Result.Error = MoveResult.Error;
-				if (MoveResult.bChanged)
+				if (MoveResult.bChanged && !SyncInventoryComponentFromLegacySnapshot())
+				{
+					Snapshot.InventorySlots = MoveTemp(SavedCampSlots);
+					TargetEquipment->Snapshot.InventorySlots = MoveTemp(SavedEquipmentSlots);
+					Result.bCommitted = false;
+					Result.Error = ECatDomainCommandError::InvalidPayload;
+				}
+				else if (MoveResult.bChanged)
 				{
 					TargetEquipment->AutoSelectGrantedInventoryItem(*SourceDefinition, SourceDefinitionId);
 				}
@@ -850,7 +904,7 @@ int32 ACatCampInventoryActor::GetInventoryStackLimit(const UCatEquipmentDefiniti
 }
 
 // 旧仓库定义解析流程：正式目录已经把“物品是什么”收拢到库存定义；旧 Snapshot 还需要装备字段时，只在这里做一次类型适配和历史回退。
-const UCatEquipmentDefinition* ACatCampInventoryActor::ResolveEquipmentDefinitionForLegacyInventory(
+UCatEquipmentDefinition* ACatCampInventoryActor::ResolveEquipmentDefinitionForLegacyInventory(
 	const FName DefinitionId) const
 {
 	if (DefinitionId.IsNone())
@@ -859,9 +913,9 @@ const UCatEquipmentDefinition* ACatCampInventoryActor::ResolveEquipmentDefinitio
 	}
 
 	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
-	const UCatInventoryItemDefinition* InventoryDefinition =
+	UCatInventoryItemDefinition* InventoryDefinition =
 		InventorySettings ? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
-	if (const UCatEquipmentDefinition* EquipmentDefinition = Cast<UCatEquipmentDefinition>(InventoryDefinition))
+	if (UCatEquipmentDefinition* EquipmentDefinition = Cast<UCatEquipmentDefinition>(InventoryDefinition))
 	{
 		return EquipmentDefinition;
 	}
@@ -870,32 +924,139 @@ const UCatEquipmentDefinition* ACatCampInventoryActor::ResolveEquipmentDefinitio
 	return EquipmentSettings ? EquipmentSettings->FindRuntimeDefinition(DefinitionId) : nullptr;
 }
 
-// 容量预检流程：复制当前格子后交给通用写入模拟；模拟能完整放入才返回 true，正式 Snapshot 不会被 const 预检修改。
-bool ACatCampInventoryActor::CanStoreItem(const UCatEquipmentDefinition& Definition,
-	const FName DefinitionId, const int32 Quantity) const
+// 正式批次构建流程：旧请求只给 DefinitionId 和数量；这里统一解析成库存定义资产，让容量预检和正式写入都走新库存组件。
+bool ACatCampInventoryActor::BuildFormalReceiveBatchForLegacyInventory(
+	const TArray<FCatCampInventoryAddItemRequest>& Items, FCatInventoryReceiveBatch& OutReceiveBatch) const
 {
-	TArray<FCatRunInventorySlot> SimulatedSlots = Snapshot.InventorySlots;
-	return AddItemQuantityToSlots(SimulatedSlots, Definition, DefinitionId, Quantity);
-}
-
-// 整批容量预检流程：按归一化后的物品顺序逐行模拟写入同一份临时格子，保证“每行单独可放”和“整车一起可放”不会出现两种答案。
-bool ACatCampInventoryActor::CanStoreItems(const TArray<FCatCampInventoryAddItemRequest>& Items) const
-{
+	OutReceiveBatch = FCatInventoryReceiveBatch();
 	if (Items.IsEmpty())
 	{
 		return false;
 	}
-	TArray<FCatRunInventorySlot> SimulatedSlots = Snapshot.InventorySlots;
+
+	OutReceiveBatch.DefinitionEntries.Reserve(Items.Num());
 	for (const FCatCampInventoryAddItemRequest& Item : Items)
 	{
-		const UCatEquipmentDefinition* Definition =
-			ResolveEquipmentDefinitionForLegacyInventory(Item.DefinitionId);
-		if (!Definition || !AddItemQuantityToSlots(SimulatedSlots, *Definition, Item.DefinitionId, Item.Quantity))
+		UCatEquipmentDefinition* Definition = ResolveEquipmentDefinitionForLegacyInventory(Item.DefinitionId);
+		if (Definition == nullptr || Item.Quantity <= 0)
+		{
+			OutReceiveBatch = FCatInventoryReceiveBatch();
+			return false;
+		}
+
+		FCatInventoryDefinitionEntry& DefinitionEntry = OutReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
+		DefinitionEntry.ItemDefinition = Definition;
+		DefinitionEntry.Count = Item.Quantity;
+	}
+
+	return !OutReceiveBatch.IsEmpty();
+}
+
+// 旧快照恢复建模流程：
+// 1. 按旧槽位顺序创建正式库存 entries，空槽保留为空 entry，不让读档改变玩家整理过的位置。
+// 2. 每个占用槽都恢复定义资产、实例 ID、堆叠数量和鱼竿状态，让后续商店发货可以继续从正式库存追加。
+// 3. 任一旧槽无法投影成正式装备实例时整体失败，调用方因此不会写入半份新库存。
+bool ACatCampInventoryActor::BuildFormalEntriesFromLegacySnapshot(
+	const FCatCampInventorySnapshot& SourceSnapshot, TArray<FCatInventoryEntry>& OutEntries)
+{
+	OutEntries.Reset();
+	if (!InventoryComponent)
+	{
+		return false;
+	}
+
+	OutEntries.Reserve(SourceSnapshot.InventorySlots.Num());
+	for (const FCatRunInventorySlot& Slot : SourceSnapshot.InventorySlots)
+	{
+		FCatInventoryEntry& Entry = OutEntries.AddDefaulted_GetRef();
+		Entry = FCatInventoryEntry(InventoryComponent);
+		if (!CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
+		{
+			continue;
+		}
+
+		UCatEquipmentDefinition* Definition = ResolveEquipmentDefinitionForLegacyInventory(Slot.DefinitionId);
+		const TSubclassOf<UCatInventoryItemInstance> InstanceClass =
+			UCatInventoryItemDefinition::ResolveItemInstanceClass(Definition);
+		if (Definition == nullptr || InstanceClass == nullptr || Slot.Quantity <= 0 || !Slot.ItemInstanceId.IsValid())
+		{
+			OutEntries.Reset();
+			return false;
+		}
+
+		UCatInventoryItemInstance* Instance = NewObject<UCatInventoryItemInstance>(this, InstanceClass);
+		if (Instance == nullptr)
+		{
+			OutEntries.Reset();
+			return false;
+		}
+		Instance->SetItemDefinition(Definition);
+		Instance->SetItemInstanceIdFromAuthority(Slot.ItemInstanceId);
+		Instance->SetRuntimeOwnerActor(this);
+		if (UCatEquipmentInventoryItemInstance* EquipmentInstance =
+			Cast<UCatEquipmentInventoryItemInstance>(Instance))
+		{
+			EquipmentInstance->SetRodRuntimeStateFromAuthority(Slot.RodDurability, Slot.bRodBroken);
+		}
+
+		Entry.Instance = Instance;
+		Entry.StackCount = Slot.Quantity;
+		Entry.LastObservedCount = Slot.Quantity;
+		Entry.SlotOwnerComponent = InventoryComponent;
+	}
+
+	return true;
+}
+
+// 整批容量预检流程：把旧发货载荷转成正式库存批次后交给 InventoryComponent 模拟，保证扣款前检查和提交使用同一套堆叠规则。
+bool ACatCampInventoryActor::CanStoreItems(const TArray<FCatCampInventoryAddItemRequest>& Items) const
+{
+	FCatInventoryReceiveBatch ReceiveBatch;
+	return InventoryComponent
+		&& BuildFormalReceiveBatchForLegacyInventory(Items, ReceiveBatch)
+		&& InventoryComponent->CanFullyAcceptInventoryBatch(ReceiveBatch);
+}
+
+// 旧快照投影流程：正式库存组件是公共仓库写事实；迁移期把它重建成旧槽位数组，供现有 UI、存档和取用链继续读取。
+bool ACatCampInventoryActor::SyncLegacySnapshotFromInventoryComponent()
+{
+	if (!InventoryComponent)
+	{
+		return false;
+	}
+
+	const TArray<FCatInventoryEntry> FormalEntries = InventoryComponent->GetInventoryEntries();
+	const int32 SnapshotSlotCount = FMath::Max(GetConfiguredSlotCapacity(), FormalEntries.Num());
+	TArray<FCatRunInventorySlot> ProjectedSlots;
+	ProjectedSlots.SetNum(SnapshotSlotCount);
+	for (int32 SlotIndex = 0; SlotIndex < FormalEntries.Num(); ++SlotIndex)
+	{
+		const FCatInventoryEntry& Entry = FormalEntries[SlotIndex];
+		if (Entry.Instance == nullptr || Entry.StackCount <= 0)
+		{
+			continue;
+		}
+
+		const UCatEquipmentInventoryItemInstance* EquipmentInstance =
+			Cast<UCatEquipmentInventoryItemInstance>(Entry.Instance);
+		if (EquipmentInstance == nullptr
+			|| !EquipmentInstance->BuildLegacyRunInventorySlot(Entry.StackCount, ProjectedSlots[SlotIndex]))
 		{
 			return false;
 		}
 	}
+
+	Snapshot.InventorySlots = MoveTemp(ProjectedSlots);
 	return true;
+}
+
+// 正式库存同步流程：旧拖拽、取用和存档恢复仍可能先改 Snapshot；这里把当前旧槽位完整重建为正式库存 entries，保持后续发货预检不会漏算容量。
+bool ACatCampInventoryActor::SyncInventoryComponentFromLegacySnapshot()
+{
+	TArray<FCatInventoryEntry> Entries;
+	return BuildFormalEntriesFromLegacySnapshot(Snapshot, Entries)
+		&& InventoryComponent
+		&& InventoryComponent->ReplaceInventoryEntriesFromAuthority(Entries, GetConfiguredSlotCapacity());
 }
 
 // 页面类解析流程：同步加载营地仓库自身配置的库存 View，并确认它就是营地仓库页面类型；错配普通背包页时返回空，交互打开链路会记录拒绝。
@@ -917,69 +1078,6 @@ void ACatCampInventoryActor::EnsureInventorySlotArray()
 	{
 		Snapshot.InventorySlots.AddDefaulted(SlotCapacity - Snapshot.InventorySlots.Num());
 	}
-}
-
-// 入库写入流程：单行提交先复用容量预检，再把正式 Snapshot 交给通用格子写入；Revision 和广播仍由提交入口统一处理。
-bool ACatCampInventoryActor::AddItemQuantity(const UCatEquipmentDefinition& Definition,
-	const FName DefinitionId, const int32 Quantity)
-{
-	if (!CanStoreItem(Definition, DefinitionId, Quantity))
-	{
-		return false;
-	}
-	return AddItemQuantityToSlots(Snapshot.InventorySlots, Definition, DefinitionId, Quantity);
-}
-
-// 格子写入流程：
-// 1. 先按配置容量补齐传入数组，调用方传临时数组时就是模拟，传 Snapshot 时就是正式写入。
-// 2. 同定义未满格优先吸收数量并补齐该堆栈实例身份，剩余数量再创建新的运行期实例落到空格。
-// 3. 只有全部数量都放完才返回 true，调用方因此可以用它保证整批入库不产生半批结果。
-bool ACatCampInventoryActor::AddItemQuantityToSlots(TArray<FCatRunInventorySlot>& InventorySlots,
-	const UCatEquipmentDefinition& Definition, const FName DefinitionId, const int32 Quantity) const
-{
-	if (DefinitionId.IsNone() || Quantity <= 0)
-	{
-		return false;
-	}
-	const int32 SlotCapacity = GetConfiguredSlotCapacity();
-	if (InventorySlots.Num() < SlotCapacity)
-	{
-		InventorySlots.AddDefaulted(SlotCapacity - InventorySlots.Num());
-	}
-	const int32 StackLimit = GetInventoryStackLimit(Definition);
-	if (StackLimit <= 0)
-	{
-		return false;
-	}
-	int32 Remaining = Quantity;
-	for (FCatRunInventorySlot& Slot : InventorySlots)
-	{
-		if (Slot.DefinitionId == DefinitionId && Slot.Quantity > 0 && Slot.Quantity < StackLimit)
-		{
-			CatRunInventorySlotOperations::NormalizeStoredItemSlot(Slot, Definition);
-			const int32 Added = FMath::Min(Remaining, StackLimit - Slot.Quantity);
-			Slot.Quantity += Added;
-			Remaining -= Added;
-			if (Remaining <= 0)
-			{
-				return true;
-			}
-		}
-	}
-	for (FCatRunInventorySlot& Slot : InventorySlots)
-	{
-		if (!CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
-		{
-			const int32 Added = FMath::Min(Remaining, StackLimit);
-			Slot = CatRunInventorySlotOperations::MakeInventoryItemSlot(Definition, DefinitionId, Added);
-			Remaining -= Added;
-			if (Remaining <= 0)
-			{
-				return true;
-			}
-		}
-	}
-	return false;
 }
 
 // 整批签名流程：

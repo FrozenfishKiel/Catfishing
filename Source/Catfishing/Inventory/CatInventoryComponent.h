@@ -174,6 +174,9 @@ public:
 	/** authority 按外部配置刷新槽位容量；只补齐新增空槽，不因容量变小删除已有物品。 */
 	void SetInventorySlotCountFromAuthority(int32 NewSlotCount);
 
+	/** authority 用一份完整槽位快照替换当前库存；存档恢复和旧结构迁移靠它保留格子顺序。 */
+	bool ReplaceInventoryEntriesFromAuthority(const TArray<FCatInventoryEntry>& NewEntries, int32 MinimumSlotCount);
+
 	/** 按实例移除物品；实例完全离开当前库存后会解除复制子对象登记。 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
 	void RemoveItemInstance(UCatInventoryItemInstance* ItemInstance);

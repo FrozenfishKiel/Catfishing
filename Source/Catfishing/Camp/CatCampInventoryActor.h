@@ -13,6 +13,8 @@ class UCatCampInventoryWidget;
 class UCatInventoryComponent;
 class USceneComponent;
 class USphereComponent;
+struct FCatInventoryEntry;
+struct FCatInventoryReceiveBatch;
 
 /** 营地公共仓库的复制读模型；它只保存公共库存格和版本，不包含玩家当前钓鱼选择。 */
 USTRUCT(BlueprintType)
@@ -76,14 +78,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|CampInventory")
 	const FCatCampInventorySnapshot& GetSnapshot() const;
 
-	/** 正式库存组件是新收货主线的落点；迁移期旧快照仍保留，避免当前营地 UI 立即断线。 */
+	/** 读取营地公共仓库的正式库存组件；商店发货和容量预检以它为事实源，旧快照只做迁移期投影。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")
 	UCatInventoryComponent* GetInventoryComponent() const;
 
 	/** 只读验证一份跨地图公共仓库快照；检查 authority、定义、容量与运行实例唯一性，不触碰当前仓库。 */
 	bool CanRestoreSnapshotFromAuthority(const FCatCampInventorySnapshot& RestoredSnapshot, FText& OutFailure) const;
 
-	/** 在 Save 完成全局预检后整体替换公共仓库的已提交格子；失败时保留当前世界库存并且不发布复制。 */
+	/** 在 Save 完成全局预检后恢复公共仓库；先重建正式库存再替换旧快照，失败时不发布复制。 */
 	bool RestoreSnapshotFromAuthority(const FCatCampInventorySnapshot& RestoredSnapshot);
 
 	/** 读取公共仓库对 UI 暴露的格子容量；空仓库也靠它显示稳定空格，不把空数组误认为没有仓库。 */
@@ -148,26 +150,30 @@ private:
 	int32 GetInventoryStackLimit(const UCatEquipmentDefinition& Definition) const;
 
 	/** 解析旧公共仓库格需要的装备定义；优先走正式库存目录，迁移期才回退旧装备目录。 */
-	const UCatEquipmentDefinition* ResolveEquipmentDefinitionForLegacyInventory(FName DefinitionId) const;
+	UCatEquipmentDefinition* ResolveEquipmentDefinitionForLegacyInventory(FName DefinitionId) const;
 
-	/** 只读判断指定数量能否完整放进公共仓库；不会为了预检扩容或写入空格。 */
-	bool CanStoreItem(const UCatEquipmentDefinition& Definition, FName DefinitionId, int32 Quantity) const;
+	/** 把旧发货请求整理成正式库存批次；只有能投影回旧 UI 的装备定义会进入迁移期公共仓库。 */
+	bool BuildFormalReceiveBatchForLegacyInventory(const TArray<FCatCampInventoryAddItemRequest>& Items,
+		FCatInventoryReceiveBatch& OutReceiveBatch) const;
 
-	/** 只读判断多行物品能否按当前仓库状态整批放完；模拟成功才允许购物车扣款。 */
+	/** 把读档得到的旧格子恢复成正式库存 entries；保留槽位顺序、实例 ID 和鱼竿耐久。 */
+	bool BuildFormalEntriesFromLegacySnapshot(const FCatCampInventorySnapshot& SourceSnapshot,
+		TArray<FCatInventoryEntry>& OutEntries);
+
+	/** 只读判断多行物品能否被正式库存整批接收；模拟成功才允许购物车扣款。 */
 	bool CanStoreItems(const TArray<FCatCampInventoryAddItemRequest>& Items) const;
+
+	/** 从正式库存组件重建旧公共仓库快照；迁移期让 UI 和存档继续读旧结构，但写事实来自库存组件。 */
+	bool SyncLegacySnapshotFromInventoryComponent();
+
+	/** 从旧公共仓库快照重建正式库存组件；迁移期旧拖拽和存档写口成功后用它保持两边同源。 */
+	bool SyncInventoryComponentFromLegacySnapshot();
 
 	/** 解析公共仓库交互要打开的独立库存页类；路径失效时返回空，让交互明确失败而不是退回默认库存页。 */
 	TSubclassOf<UCatCampInventoryWidget> LoadInventoryViewClass() const;
 
 	/** 补齐公共仓库可见格子；只追加空格，不截断已有物品，避免容量调小吞掉库存。 */
 	void EnsureInventorySlotArray();
-
-	/** 向公共仓库格子写入一批物品；调用前必须已通过 CanStoreItem，成功后只改变 Snapshot.InventorySlots。 */
-	bool AddItemQuantity(const UCatEquipmentDefinition& Definition, FName DefinitionId, int32 Quantity);
-
-	/** 向指定格子数组模拟或写入一批物品；调用方决定传入临时数组还是正式 Snapshot。 */
-	bool AddItemQuantityToSlots(TArray<FCatRunInventorySlot>& InventorySlots,
-		const UCatEquipmentDefinition& Definition, FName DefinitionId, int32 Quantity) const;
 
 	/** 整理整批入库请求并生成幂等载荷签名；重复 DefinitionId 会合并，行顺序不会影响同一请求的重放。 */
 	bool BuildAddItemsPayloadSignature(const TArray<FCatCampInventoryAddItemRequest>& Items,
@@ -192,7 +198,7 @@ private:
 		meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USphereComponent> InteractionCollision;
 
-	/** 营地公共仓库的正式库存组件；迁移期不覆盖旧 Snapshot，先作为统一收货和后续 UI 的目标落点。 */
+	/** 营地公共仓库的正式库存事实源；商店发货先写入这里，迁移期再投影给旧 Snapshot 读者。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Inventory",
 		meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatInventoryComponent> InventoryComponent;
