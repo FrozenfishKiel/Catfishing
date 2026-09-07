@@ -12,6 +12,7 @@ class UCatSurvivalAttributeSet;
 class UCatConditionComponent;
 class UCatEquipmentComponent;
 class UCatGrowthComponent;
+class UCatFishingCameraComponent;
 
 /**
  * Lake 的唯一玩法身体；同时宿主 Character-owned ASC、Condition、Growth 与 Equipment。
@@ -25,7 +26,9 @@ class CATFISHING_API ACatCharacter : public ACharacter, public IAbilitySystemInt
 
 public:
 	/** 构造 ASC/属性集、Condition、Growth 与 Equipment，开启组件复制但不在 CDO 写任何运行数值。 */
-	ACatCharacter();
+	ACatCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+	/** 上鱼时由 Fishing 表现提供持杆第一人称；其余时间保留角色蓝图的相机。 */
+	virtual void CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult) override;
 
 	/** 返回 Character 持有的唯一 ASC；runtime gate 关闭也返回组件，让外部只读接缝不需要第二条查找路径。 */
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
@@ -148,6 +151,10 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** 钓鱼专用第一人称相机组件；只在上鱼表现可提供有效视角时接管 CalcCamera，平时让角色蓝图相机继续生效。 */
+	UPROPERTY(VisibleAnywhere, Category = "Catfishing|Fishing")
+	TObjectPtr<UCatFishingCameraComponent> FishingCameraComponent;
+
 	/** 按正式 ASC gate 初始化 Character=this 的 Owner/Avatar；未裁复制策略时主动 Clear 而不是猜 Mixed。 */
 	void InitializeAbilityActorInfo();
 

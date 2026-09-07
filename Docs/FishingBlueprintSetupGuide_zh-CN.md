@@ -42,11 +42,11 @@
 | `Equipment/CatEquipmentComponent.h` | `GetSnapshot()` 加 `BlueprintPure`，蓝图能读当前 `Revision`、装备 DefinitionId 和对应 ItemInstanceId |
 | `Character/CatCharacter.h` | `GetEquipmentComponent()` / `GetConditionComponent()` 加 `BlueprintPure` |
 | `Environment/CatWaterRegion.h` | `GetWaterRegionHandle()` / `HasValidBakedGeometry()` 加 `BlueprintPure`，蓝图能从关卡里放置的湖 Actor 直接拿到抛竿/打窝要用的 `FCatWaterRegionHandle` |
-| `Fishing/Actors/CatFishingHookActor.h/.cpp` | 浮漂现在会在权威落点用有界轮询计时器（不是 Tick）确认落水，`Phase` 会真正走到 `Landed`，蓝图的 `BP_OnHookPresentationChanged` 能收到正确通知 |
+| `Fishing/Actors/CatFishingHookActor.h/.cpp` | 服务器冻结抛物线并复制给客户端；双方按服务器时间更新，到达精确落点后一次性进入 `Landed`，不再使用高度轮询或 ProjectileMovement |
 
 如果你在自己机器上拉了最新代码却发现这些函数没有 `BlueprintCallable`/`BlueprintPure`，说明改动没同步，先确认代码状态再继续。
 
-**一个已知的小瑕疵，不影响功能，先告诉你**：`ScheduleWaitingProbeFromStateTree`（等口阶段）里第一次采样窝料浓度时，用的是钩子刚生成时的位置（鱼竿竿尖），而不是最终落水点，因为这一步比 `BeginAuthoritativeFlight` 先跑。这只影响**第一口的咬钩延迟计算精度**，不影响后续选鱼（选鱼发生在 Probe 事件触发时，那时钩子已经落水）。如果你们后续要精确调打窝手感，这是一个可以优化的点，但不阻塞 MVP。
+`ScheduleWaitingProbeFromStateTree` 首次采样使用服务器冻结的水面落点，等待时间包含剩余飞行时间，因此慢浮等待与咬钩预警从落水后计算。
 
 ---
 
@@ -99,7 +99,7 @@ FishingSessionStateTree=/Game/.../ST_FishingSession.ST_FishingSession   ; ← �
 ### 2.4 StateTree 拓扑（简要重述，细节见前文对话）
 
 - **ST_RunFlow**（Context = `ACatfishingGameModeBase`）：`DayActive → NormalNight/FailureSettlementNight/SuccessSettlementNight → Ending → Ended`，事件只有 `Cat.Run.QuotaReached/QuotaFailed/AllEligibleReady/SettlementComplete`；`NormalNight` 的成功结算分支必须挂 `Cat Run Success Settlement Eligible`
-- **ST_FishingSession**（Context = `ACatFishingSession`）：`Waiting → Probe → HookedFight → ExhaustedReelHold`；鱼体力耗尽/力量碾压时由 C++ 先进入 `ExhaustedReel`，叶子状态只用 `Cat Fishing Wait` 保持树运行。事件只有 `Cat.Fishing.Event.ProbeTriggered/WindowExpired/EarlyHook/HookAccepted/Interrupted`。**树永远不能自然结束**，`Resolved`/`Terminated` 只能由 C++ 写，资产里的 `Enter Phase` Task 选这两个值会直接被拒绝
+- **ST_FishingSession**（Context = `ACatFishingSession`）：`Waiting → Probe → HookedFight → ExhaustedReelHold`；鱼体力耗尽时发送 `Cat.Fishing.FishExhausted`，叶子的 `Enter Phase(ExhaustedReel)` 只切生命周期，同一个 Runner 继续运行。**树永远不能自然结束**，`Resolved`/`Terminated` 只能由 C++ 写。
 
 ---
 
@@ -220,7 +220,7 @@ Controller.Server Configure Equipment(
 3. 按放竿键，确认 `PlaceRod` 结果 `bCommitted=true`，世界里出现 Rod Actor
 4. 走近竿，按互动键（`RodInteract`），确认角色被吸附到 `StandAnchor`
 5. 瞄水面按抛竿确认键，确认 `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去后 `Phase` 最终变成 `Landed`（Hook 的 `BP_OnHookPresentationChanged` 应该收到一次带 `Landed` 的回调）
-6. 确认浮漂先慢浮至少 `MinimumBiteDelaySeconds`（当前 5 秒），再快速抖动 `BiteWarningSeconds`（当前 3 秒），然后下沉并进入 `Phase=TrueBiteWindow`
+6. 确认默认鱼饵下浮漂先慢浮至少 `MinimumBiteDelaySeconds`（当前 3 秒），再快速抖动 `BiteWarningSeconds`（当前 1.5 秒），然后下沉并进入 `Phase=TrueBiteWindow`；无窝/单份新窝中心/五份重叠新窝中心的平均总等待为20/14/6秒。
 7. 窗口内按住 Primary，确认提竿成功进 `HookedFight`
 8. 鱼仍有体力时先收到抄网射线范围内按 `F`，确认鱼直接挂到猫嘴上；也可继续把鱼力竭后回收，确认岸上生成可交互的死鱼 Actor
 9. F 抄中的鱼应已处于嘴叼状态；力竭落地鱼则先按 `E` 叼起。两条路线都确认随身背包没有新增鱼，再对目标地面鱼护按 `E`，确认只写入该鱼护

@@ -31,7 +31,7 @@ public:
 	bool ApplyFightStepFromAuthority(ECatFishMotionIntent MotionIntent, double CurrentLineLength,
 		const FVector& FishWorldPosition, float StepDeltaSeconds = 0.0f, float FishLineAlignment = 0.0f,
 		float NormalizedLineLoad = 0.0f, float IntendedSwimSpeedCentimetersPerSecond = 0.0f,
-		bool bStrongConfrontation = false);
+		bool bStrongConfrontation = false, bool bGrounded = false, FVector GroundNormal = FVector::UpVector);
 	/** 服务器把高层鱼行为交给独立 StateTree；客户端永不启动平行行为树。 */
 	bool StartFishBehaviorFromAuthority(UStateTree* BehaviorStateTree, UCatFishingFightRunner* FightRunner);
 	void StopFishBehaviorFromAuthority();
@@ -49,6 +49,7 @@ public:
 
 protected:
 	virtual void BeginPlay() override;
+	virtual void OnRep_ReplicatedMovement() override;
 
 	/**
 	 * 转向速率上限（度/秒）：鱼调头不会瞬间完成，避免挣扎/收线切换时朝向瞬移。

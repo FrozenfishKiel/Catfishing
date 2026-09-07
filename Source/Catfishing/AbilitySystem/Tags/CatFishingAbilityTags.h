@@ -48,6 +48,7 @@ namespace CatFishingAbilityTags
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cosmetic_Fishing_ScoopSwing);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cosmetic_Fishing_HookPull);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cosmetic_Fishing_LineBroken);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cosmetic_Fishing_LineCut);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cosmetic_Fishing_CatInWater);
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Data_Fishing_FightStaminaDelta);
 	/** 新一天 GE 读取的原始额度目标；只由 authority GameMode 写入 Spec，不作为可复制玩法状态。 */

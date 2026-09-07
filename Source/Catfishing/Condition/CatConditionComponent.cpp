@@ -3,7 +3,10 @@
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
+#include "Components/CapsuleComponent.h"
+#include "Environment/CatWaterQuerySubsystem.h"
 #include "Logging/CatLog.h"
+#include "Logging/CatLogContext.h"
 #include "Condition/CatConditionSettings.h"
 #include "Data/CatFishDefinition.h"
 #include "Fishing/CatFishingService.h"
@@ -47,6 +50,90 @@ void UCatConditionComponent::SetWetFromAuthority(const bool bNewWet)
 	PublishSnapshot();
 	UE_LOG(LogCatCharacter, Log, TEXT("Event=character_wet_changed Character=%s Wet=%s Revision=%lld"),
 		*Owner->GetName(), Snapshot.bWet ? TEXT("true") : TEXT("false"), Snapshot.Revision);
+}
+
+ECatWaterExposureUpdate UCatConditionComponent::UpdateWaterExposureFromAuthority(
+	const FCatWaterRegionHandle& WaterRegion, const double DeltaSeconds,
+	double& OutImmersionDepthCentimeters)
+{
+	// 水域暴露更新流程：
+	// 1. 先确认 Character、authority、阈值配置、水域子系统和固定步时长齐全，缺任一项都不猜湿身结果。
+	// 2. 再用脚点查询指定 WaterRegion 的浸没深度，并按湿润阈值、危险进入阈值和退出滞回维护离散状态。
+	// 3. 状态没有变化时只返回 Unchanged；危险首次进入用 Warning 记录并交给 Fishing 终局入口处理。
+	OutImmersionDepthCentimeters = 0.0;
+	ACatCharacter* Character = Cast<ACatCharacter>(GetOwner());
+	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
+	UCatWaterQuerySubsystem* Water = GetWorld() ? GetWorld()->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
+	if (!Character || !Character->HasAuthority() || !Settings || !Settings->HasWaterExposureThresholds()
+		|| !Water || !WaterRegion.IsValid() || !FMath::IsFinite(DeltaSeconds) || DeltaSeconds <= 0.0)
+	{
+		return ECatWaterExposureUpdate::Unavailable;
+	}
+	const UCapsuleComponent* Capsule = Character->GetCapsuleComponent();
+	if (!Capsule)
+	{
+		return ECatWaterExposureUpdate::Unavailable;
+	}
+	const FVector FootPoint = Character->GetActorLocation()
+		- FVector::UpVector * Capsule->GetScaledCapsuleHalfHeight();
+	const FCatWaterImmersionResult Immersion = Water->QueryImmersionAtWorldPoint(FootPoint, WaterRegion);
+	if (!Immersion.bSucceeded)
+	{
+		return ECatWaterExposureUpdate::Unavailable;
+	}
+	OutImmersionDepthCentimeters = Immersion.ImmersionDepthCentimeters;
+	const bool bWet = Immersion.Containment != ECatWaterContainment::Outside
+		&& OutImmersionDepthCentimeters >= Settings->WetWaterDepthCentimeters;
+	ECatWaterExposureState NewExposure = bWet ? ECatWaterExposureState::Shallow : ECatWaterExposureState::Dry;
+	if (Snapshot.WaterExposure == ECatWaterExposureState::Dangerous
+		&& bWet && OutImmersionDepthCentimeters > Settings->DangerousWaterExitDepthCentimeters)
+	{
+		NewExposure = ECatWaterExposureState::Dangerous;
+	}
+	else if (bWet && OutImmersionDepthCentimeters >= Settings->DangerousWaterDepthCentimeters)
+	{
+		DangerousWaterBuildUpSeconds += DeltaSeconds;
+		// 危险水域按 World 秒累计；极小容差只吸收浮点边界，避免正好到确认阈值的那帧被漏判。
+		if (DangerousWaterBuildUpSeconds + UE_DOUBLE_KINDA_SMALL_NUMBER
+			>= Settings->DangerousWaterConfirmationSeconds)
+		{
+			NewExposure = ECatWaterExposureState::Dangerous;
+		}
+	}
+	else
+	{
+		DangerousWaterBuildUpSeconds = 0.0;
+	}
+
+	const bool bDangerousEntered = Snapshot.WaterExposure != ECatWaterExposureState::Dangerous
+		&& NewExposure == ECatWaterExposureState::Dangerous;
+	if (Snapshot.bWet == bWet && Snapshot.WaterExposure == NewExposure)
+	{
+		return ECatWaterExposureUpdate::Unchanged;
+	}
+	Snapshot.bWet = bWet;
+	Snapshot.WaterExposure = NewExposure;
+	++Snapshot.Revision;
+	PublishSnapshot();
+	const FString ControllerFields = CatLogContext::BuildControllerFields(Character->GetController());
+	if (bDangerousEntered)
+	{
+		UE_LOG(LogCatCharacter, Warning,
+			TEXT("Event=character_water_exposure_changed Character=%s Region=%s Exposure=%s DepthCm=%.2f Revision=%lld Authority=true %s"),
+			*Character->GetName(), *WaterRegion.RegionId.ToString(),
+			*UEnum::GetValueAsString(NewExposure), OutImmersionDepthCentimeters, Snapshot.Revision,
+			*ControllerFields);
+	}
+	else
+	{
+		UE_LOG(LogCatCharacter, Log,
+			TEXT("Event=character_water_exposure_changed Character=%s Region=%s Exposure=%s DepthCm=%.2f Revision=%lld Authority=true %s"),
+			*Character->GetName(), *WaterRegion.RegionId.ToString(),
+			*UEnum::GetValueAsString(NewExposure), OutImmersionDepthCentimeters, Snapshot.Revision,
+			*ControllerFields);
+	}
+	return bDangerousEntered ? ECatWaterExposureUpdate::DangerousEntered
+		: ECatWaterExposureUpdate::Changed;
 }
 
 // 食用预检流程：只读核对 authority、正式身体 runtime、鱼定义、ASC、倒地阈值与 Growth 入口；不修改实物鱼、Attribute、Snapshot 或终态缓存。

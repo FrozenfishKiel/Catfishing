@@ -342,6 +342,8 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitPrimaryReleased()
 {
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
 	Edge.ActivationCorrelationId = PrimaryActivationCorrelationId; // 带上按下时记录的关联 ID
+	Edge.bHasCastViewRay = UCatFishingAimLibrary::TryGetLocalCastViewRay(Cast<APlayerController>(GetOwner()),
+		Edge.CastViewOrigin, Edge.CastViewDirection);
 	DispatchAbilityCommand(ECatFishingCommandType::PrimaryReleased, Edge);
 	PrimaryActivationCorrelationId.Invalidate(); // 松开后立即失效，避免误配对到下一次按下
 	return Edge;
@@ -384,6 +386,13 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitCancel()
 {
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
 	DispatchAbilityCommand(ECatFishingCommandType::CancelFishing, Edge);
+	return Edge;
+}
+
+FCatFishingInputEdge UCatFishingCommandComponent::SubmitCutLine()
+{
+	FCatFishingInputEdge Edge = MakeDiscreteEdge();
+	DispatchAbilityCommand(ECatFishingCommandType::CutLine, Edge);
 	return Edge;
 }
 
@@ -612,9 +621,84 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		}
 		FGuid SessionId;
 		FCatFishingSessionSnapshot Snapshot;
+		// 搏斗与力竭回收都按鱼竿全部操作位路由：主位控制线杯，辅助位提交协作发力意图。
+		// 这条分支必须早于“仅主位活动会话”查询，否则辅助者的输入会被误当成新抛竿。
+		if (ACatFishingRodActor* OperatedRod = Fishing->FindRodOperatedBy(Controller->PlayerState))
+		{
+			if (ACatFishingSession* OperatedSession = Fishing->FindActiveSessionByRod(OperatedRod))
+			{
+				const FCatFishingSessionSnapshot& OperatedSnapshot = OperatedSession->GetSnapshot();
+				if ((OperatedSnapshot.Phase == ECatFishingPhase::HookedFight
+					|| OperatedSnapshot.Phase == ECatFishingPhase::ExhaustedReel)
+					&& (CommandType == ECatFishingCommandType::RequestHook
+						|| CommandType == ECatFishingCommandType::PrimaryReleased
+						|| CommandType == ECatFishingCommandType::SlackPressed
+						|| CommandType == ECatFishingCommandType::SlackReleased))
+				{
+					Result.FishingSessionId = OperatedSnapshot.FishingSessionId;
+					if (CommandType == ECatFishingCommandType::RequestHook
+						|| CommandType == ECatFishingCommandType::PrimaryReleased)
+					{
+						Result.bCommitted = OperatedSession->SetReelingFromAuthority(
+							Controller->PlayerState, Edge.InputSequence,
+							CommandType == ECatFishingCommandType::RequestHook);
+					}
+					else if (OperatedRod->IsPrimaryOperator(Controller->PlayerState))
+					{
+						Result.bCommitted = OperatedSession->SetSlackingFromAuthority(
+							Controller->PlayerState, Edge.InputSequence,
+							CommandType == ECatFishingCommandType::SlackPressed);
+					}
+					else
+					{
+						// 策划案中辅助位没有线杯控制；右键对辅助位是无害 no-op。
+						Result.bCommitted = true;
+					}
+					Result.Error = Result.bCommitted
+						? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;
+					DeliverResultFromAuthority(Result);
+					return;
+				}
+			}
+		}
 		// 按当前主操作位对应的鱼竿判断是否有会话；玩家留在其他鱼竿上的会话不会截获这里的输入。
 		if (!Fishing->TryGetActiveSessionForController(Controller, SessionId, Snapshot))
 		{
+			// 地面无人值守的上钩会话仍可就近切线：会话会再次校验竿主/最后持竿者和 250cm 距离。
+			// 普通 Cancel 只在可切线阶段优先走止损；等待期仍保留后面的收竿/拒绝语义。
+			if (CommandType == ECatFishingCommandType::CancelFishing
+				|| CommandType == ECatFishingCommandType::CutLine)
+			{
+				const ACatCharacter* Character = Cast<ACatCharacter>(Controller->GetPawn());
+				ACatFishingRodActor* UnattendedRod = Character
+					? Fishing->FindNearestUnattendedSessionRod(Character->GetActorLocation(), 250.0) : nullptr;
+				ACatFishingSession* UnattendedSession = UnattendedRod
+					? Fishing->FindActiveSessionByRod(UnattendedRod) : nullptr;
+				if (UnattendedSession)
+				{
+					const FCatFishingSessionSnapshot& Unattended = UnattendedSession->GetSnapshot();
+					const bool bCuttable = Unattended.Phase == ECatFishingPhase::HookedFight
+						|| Unattended.Phase == ECatFishingPhase::NearShore
+						|| Unattended.Phase == ECatFishingPhase::ExhaustedReel
+						|| Unattended.Phase == ECatFishingPhase::AutoHauling;
+					if (bCuttable)
+					{
+						FCatFishingSessionCommandContext Context;
+						Context.RequestId = Edge.RequestId;
+						Context.FishingSessionId = Unattended.FishingSessionId;
+						Context.ExpectedRevision = Unattended.Revision;
+						Context.CastAttemptId = Unattended.CastAttemptId;
+						DeliverResultFromAuthority(UnattendedSession->CutLineFromAuthority(Controller, Context));
+						return;
+					}
+				}
+				if (CommandType == ECatFishingCommandType::CutLine)
+				{
+					Result.Error = ECatFishingCommandError::SessionNotFound;
+					DeliverResultFromAuthority(Result);
+					return;
+				}
+			}
 			// 没有会话时：左键按下 = 开始瞄准（记录本次按住的关联 ID），左键松开 = 抛竿。
 			// 只有"按下时就无会话"的那次按住的松开才抛竿——提竿把会话打终止后的松开不能误触发重抛。
 			if (CommandType == ECatFishingCommandType::RequestHook)
@@ -634,7 +718,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				ServerAimingCorrelationId.Invalidate(); // 无论是否命中，本次松开后瞄准态都结束
 				if (bAimingRelease)
 				{
-					BeginCastFromViewOnAuthority(Controller, Edge.RequestId);
+					BeginCastFromViewOnAuthority(Controller, Edge);
 				}
 				return;
 			}
@@ -697,7 +781,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 						|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel)
 					{
 						// 搏斗阶段：左键按下语义变成“开始收线”，InputSequence 用于时序仲裁
-						Result.bCommitted = Session->SetReelingFromAuthority(Edge.InputSequence, true);
+						Result.bCommitted = Session->SetReelingFromAuthority(
+							Controller->PlayerState, Edge.InputSequence, true);
 						Result.Error = Result.bCommitted
 							? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;
 						DeliverResultFromAuthority(Result);
@@ -717,7 +802,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 						|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel)
 					{
 						// 搏斗阶段松开左键 = 停止收线
-						Result.bCommitted = Session->SetReelingFromAuthority(Edge.InputSequence, false);
+						Result.bCommitted = Session->SetReelingFromAuthority(
+							Controller->PlayerState, Edge.InputSequence, false);
 						Result.Error = Result.bCommitted
 							? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;
 					}
@@ -733,11 +819,13 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				if (CommandType == ECatFishingCommandType::SlackPressed
 					|| CommandType == ECatFishingCommandType::SlackReleased)
 				{
-					// 右键松开线杯只在搏斗阶段有意义；其他阶段视为无害 no-op，避免 UI 误报。
-					if (Snapshot.Phase == ECatFishingPhase::HookedFight)
+					// 回收沿用搏斗的线杯状态；跨越鱼力竭阶段的右键松开仍必须清除放线意图。
+					if (Snapshot.Phase == ECatFishingPhase::HookedFight
+						|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel)
 					{
 						// 按下/松开都转成同一个权威写口，用命令类型本身当作“是否按下”的布尔值
-						Result.bCommitted = Session->SetSlackingFromAuthority(Edge.InputSequence,
+						Result.bCommitted = Session->SetSlackingFromAuthority(Controller->PlayerState,
+							Edge.InputSequence,
 							CommandType == ECatFishingCommandType::SlackPressed);
 						Result.Error = Result.bCommitted
 							? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;
@@ -750,10 +838,27 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 					DeliverResultFromAuthority(Result);
 					return;
 				}
-				if (CommandType == ECatFishingCommandType::CancelFishing)
+				if (CommandType == ECatFishingCommandType::CancelFishing
+					|| CommandType == ECatFishingCommandType::CutLine)
 				{
-					// 会话内取消（提竿失败/主动放弃等）交给会话自身的取消状态机
-					DeliverResultFromAuthority(Session->CancelFromAuthority(Edge.RequestId));
+					const bool bCuttablePhase = Snapshot.Phase == ECatFishingPhase::HookedFight
+						|| Snapshot.Phase == ECatFishingPhase::NearShore
+						|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel
+						|| Snapshot.Phase == ECatFishingPhase::AutoHauling;
+					if (CommandType == ECatFishingCommandType::CutLine || bCuttablePhase)
+					{
+						FCatFishingSessionCommandContext Context;
+						Context.RequestId = Edge.RequestId;
+						Context.FishingSessionId = SessionId;
+						Context.ExpectedRevision = Snapshot.Revision;
+						Context.CastAttemptId = Snapshot.CastAttemptId;
+						DeliverResultFromAuthority(Session->CutLineFromAuthority(Controller, Context));
+					}
+					else
+					{
+						// 上钩前仍保留普通取消：收回未形成鱼战的会话，不伪装成切线或丢鱼。
+						DeliverResultFromAuthority(Session->CancelFromAuthority(Edge.RequestId));
+					}
 					return;
 				}
 			}
@@ -767,8 +872,9 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 
 // 服务器抛竿流程：要求本人处于某根竿的主操作位（鱼竿可以属于别人）；视线射线∩水面得到候选落点；
 // RodActorId/Revision、Equipment Revision、WaterRegion Handle 全部由服务器事实填充，客户端不传任何载荷。
-void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController* Controller, const FGuid& RequestId)
+void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController* Controller, const FCatFishingInputEdge& Edge)
 {
+	const FGuid RequestId = Edge.RequestId;
 	FCatBeginCastResult Result;
 	Result.Command.CommandType = ECatFishingCommandType::BeginCast;
 	Result.Command.RequestId = RequestId;
@@ -793,9 +899,18 @@ void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController
 	}
 	FCatWaterRegionHandle Region;
 	FVector Landing;
-	// 服务器用自己权威的视点位置/朝向重新解一次瞄准射线与水面的交点，完全不采信客户端上报的落点
-	if (!UCatFishingAimLibrary::ResolveCastAimPoint(this, Character->GetPawnViewLocation(),
-		Controller->GetControlRotation(), Region, Landing))
+	UE_LOG(LogCatFishing, Log, TEXT("Event=cast_aim_request World=%s Request=%s HasViewRay=%d Origin=%s Direction=%s %s"),
+		*GetNameSafe(GetWorld()), *RequestId.ToString(EGuidFormats::DigitsWithHyphens), Edge.bHasCastViewRay,
+		*Edge.CastViewOrigin.ToString(), *Edge.CastViewDirection.ToString(), *CatLogContext::BuildControllerFields(Controller));
+	if (!Edge.bHasCastViewRay || !UCatFishingAimLibrary::IsCastViewRayValid(Edge.CastViewOrigin,
+		Edge.CastViewDirection, Character->GetPawnViewLocation(), Controller->GetControlRotation().Vector()))
+	{
+		Result.Command.Error = ECatFishingCommandError::InvalidPayload;
+		DeliverBeginCastResultFromAuthority(Result);
+		return;
+	}
+	if (!UCatFishingAimLibrary::ResolveCastAimPoint(this, Edge.CastViewOrigin,
+		Edge.CastViewDirection.Rotation(), Region, Landing))
 	{
 		Result.Command.Error = ECatFishingCommandError::InvalidWaterTarget;
 		DeliverBeginCastResultFromAuthority(Result);
@@ -1146,6 +1261,10 @@ void UCatFishingCommandComponent::ReceivePlaceChumResultLocally(const FCatPlaceC
 
 void UCatFishingCommandComponent::ReceiveBeginCastResultLocally(const FCatBeginCastResult& Result)
 {
+	UE_LOG(LogCatFishing, Log, TEXT("Event=begin_cast_received World=%s Request=%s Session=%s CastAttempt=%s Committed=%d Error=%s Landing=%s %s"),
+		*GetNameSafe(GetWorld()), *Result.Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *Result.Command.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Result.Command.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), Result.Command.bCommitted, *UEnum::GetValueAsString(Result.Command.Error),
+		*Result.ServerCorrectedLandingWorldPoint.ToString(), *CatLogContext::BuildControllerFields(Cast<AController>(GetOwner())));
 	const FGuid RequestId = Result.Command.RequestId;
 	if (!IsSupportedOwner() || !RequestId.IsValid() || BeginCastResultsByRequestId.Contains(RequestId)) return;
 	// 专用的抛竿结果缓存（携带服务器修正后的落点等抛竿专属字段），同样按上限淘汰最老记录

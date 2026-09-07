@@ -13,16 +13,7 @@ class CATFISHING_API UCatWorldItemSettings : public UDeveloperSettings
 
 public:
 	UPROPERTY(Config, EditAnywhere, Category="LandedFish", meta=(ClampMin="1.0", Units="cm"))
-	double LandingInlandDistanceCentimeters = 75.0;
-
-	UPROPERTY(Config, EditAnywhere, Category="LandedFish", meta=(ClampMin="1.0", Units="cm"))
 	double LandingCompletionDistanceToRodCentimeters = 75.0;
-
-	UPROPERTY(Config, EditAnywhere, Category="LandedFish", meta=(ClampMin="0.0", Units="cm"))
-	double LandingGroundTraceUpCentimeters = 250.0;
-
-	UPROPERTY(Config, EditAnywhere, Category="LandedFish", meta=(ClampMin="0.0", Units="cm"))
-	double LandingGroundTraceDownCentimeters = 600.0;
 
 	UPROPERTY(Config, EditAnywhere, Category="LandedFish")
 	TEnumAsByte<ECollisionChannel> LandingGroundTraceChannel = ECC_Visibility;

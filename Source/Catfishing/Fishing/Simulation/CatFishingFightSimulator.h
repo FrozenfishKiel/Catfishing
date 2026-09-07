@@ -2,36 +2,18 @@
 
 #include "CoreMinimal.h"
 #include "Fishing/CatFishingTypes.h"
+#include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 
-/** 单步终局；由 Session 映射为公开 Outcome。除 None 外每步最多产生一个。 */
+/** 单步终局；猫力竭先进入持续拖拽，由真实水深确认落水，不直接结束本场。 */
 enum class ECatFightStepOutcome : uint8
 {
 	None,
-	/** 鱼体力归零 → 在当前位置翻肚，可抄或继续收至竿尖水面投影。 */
 	FishExhausted,
-	/** 猫体力归零 → 力竭被拖下水（规格 4.4 归零优先级第 2 位）。 */
-	CatStaminaExhausted,
-	/** 本场鱼线耐久归零，或钓组承载能力不足而瞬间断线；不会损坏场景鱼竿/装备。 */
-	LineBroken,
-	/** 数值异常：鱼距超出线长上限 + 松弛裕度；正常规则下不应出现。 */
-	Escaped,
-	/** 判定②：向外游+拖 且 鱼力 ≥ 猫力 → 猫被拖下水。 */
-	DraggedIntoWater,
-	/** 判定③：向外游+拖 且 猫力 ≥ 鱼力×比 → 碾压，鱼在当前位置直接力竭侧翻。 */
-	Overpowered
+	RodBroken,
+	Escaped
 };
 
-/** 断线的直接数值原因；用于日志和调试，避免把鱼线断裂误判为鱼竿永久损坏。 */
-enum class ECatFightLineBreakCause : uint8
-{
-	None,
-	/** 钓组承载力量不高于猫力与鱼力中的较小值，强对抗确认后瞬断。 */
-	StrengthOverload,
-	/** 本场累计鱼线负载达到配置的耐久上限。 */
-	DurabilityDepleted
-};
-
-/** 猫本步的输入意图；左键=收线，右键=松开线杯，都不按=锁住当前已放出线长。 */
+/** 线杯控制模式：不按=锁线，左键=收线，右键=自由出线。 */
 enum class ECatFightCatAction : uint8
 {
 	None,
@@ -39,132 +21,297 @@ enum class ECatFightCatAction : uint8
 	Slack
 };
 
-/** 冻结自资产/配置的确定性输入；全部为每秒速率或无量纲系数，Step 内按 FixedStepSeconds 折算。 */
+/**
+ * 固定步被拒绝时的可检索原因。模拟器保持纯函数，不在这里写日志；Runner 将该值映射到
+ * Development 日志，避免只看到一个 bSucceeded=false 却无法判断是配置、状态还是几何输入坏了。
+ */
+enum class ECatFightSimulationRejectReason : uint8
+{
+	None,
+	InvalidConfig,
+	InvalidState,
+	InvalidRodConstraint,
+	InvalidFishDirection,
+	InvalidResolvedResult
+};
+
+/** 固定步的冻结参数。力使用 N、质量使用 kg；世界距离和速度保持 UE 的 cm 单位。 */
 struct CATFISHING_API FCatFightSimulationConfig
 {
 	double FixedStepSeconds = 0.0;
-
-	/** 当前唯一能提交搏斗输入的主操作猫力量。 */
 	double PrimaryOperatorCatStrength = 0.0;
-	/** 第二只猫的力量贡献预留槽；参与方式与协作输入确定前，运行时保持为 0。 */
 	double SecondCatStrength = 0.0;
-	/** 猫的总体力量固定为两只猫贡献相加；单人场景的第二项为 0。 */
-	double GetCombinedCatStrength() const
+	double PrimaryOperatorMassKilograms = 0.0;
+	double HelperMassKilograms = 0.0;
+	double FishMassKilograms = 0.0;
+
+	double GetCombinedCatStrength() const { return PrimaryOperatorCatStrength + SecondCatStrength; }
+	double GetCombinedCatMass() const
 	{
-		return PrimaryOperatorCatStrength + SecondCatStrength;
+		return PrimaryOperatorMassKilograms + HelperMassKilograms;
 	}
 
-	/** 三方力量中的另两项：鱼种力量（含完美折减）/ 钓组静态承载强度。 */
 	double FishStrength = 0.0;
-	double RodStrength = 0.0;
-
-	/** 猫体力上限，松线喘息回复不超过它。 */
+	/** 鱼实际重量生成基础力量的换算；同时保留原玩法做功价格的标准强度。 */
+	double StrengthPerKilogram = 10.0;
+	/** 力量属性到推力/支撑力的显式换算，不能复用旧的加速度系数。 */
+	double ForcePerStrengthNewtons = 1.0;
+	double CatBodyMassKilograms = 5.0;
+	/** 力竭鱼免耗体回收的有限辅助力，不依赖猫的剩余体力。 */
+	double ExhaustedReelForceNewtons = 200.0;
+	/** 零体力拖落水规则的辅助推力，以猫系统质量乘该加速度加入鱼端。 */
+	double ExhaustedCatTowAccelerationCentimetersPerSecondSquared = 300.0;
+	/** UI 满张力对应的牛顿数；不参与约束求解。 */
+	double DisplayTensionNewtons = 50.0;
+	/** 转矩模型的玩法杆长；来自鱼竿定义，不读取 Mesh 或锚点间距。 */
+	double RodPhysicsLengthCentimeters = 200.0;
 	double CatStaminaMaximum = 0.0;
-
-	/** 向内游+拖：猫体力消耗 = 鱼力 × 本系数 /秒（规格 0.15）。 */
-	double InwardPullCatDrainPerFishStrength = 0.15;
-	/** 向内游+拖：鱼体力消耗 = 猫力 × 本系数 /秒。拖永远双方掉体力，顺从/挣扎只是系数档位不同。 */
-	double InwardPullFishDrainPerCatStrength = 0.08;
-	/** 鱼性格的平静/顺从期体力消耗倍率。 */
+	/** 猫线性正功使用标准力量与已完成主动距离；受阻支撑独立按时间收费。 */
+	double CatStaminaCostPerStrengthCentimeter = 0.002;
+	/** 转杆使用弧度正功单价，不将最大转速折算为一米弧长。 */
+	double CatRodStaminaCostPerStrengthRadian = 0.03;
+	/** 无负载实际动作的基础价格；负载部分继续由 CatLoadStaminaMultiplier 调节。 */
+	double CatUnloadedWorkMultiplier = 0.15;
+	/** 满负载/满用力的每秒支撑费用，按用力比例平方缩放。 */
+	double CatSupportStaminaPerSecond = 2.0;
+	/** 鱼仅结算有对抗负载的努力，自由游动不产生基础费用。 */
+	double FishStaminaCostPerStrengthCentimeter = 0.002;
+	double IsometricEffortMultiplier = 1.0;
+	double CatMovementStaminaMultiplier = 1.0;
+	double CatReelStaminaMultiplier = 1.0;
+	double CatRodStaminaMultiplier = 1.0;
+	double CatHoldStaminaMultiplier = 1.0;
+	double CatLoadStaminaMultiplier = 1.0;
+	double FishLoadStaminaMultiplier = 1.0;
 	double BaseDrainMultiplier = 1.0;
-	/** 鱼性格的挣扎期体力消耗倍率；必须高于平静倍率。 */
 	double StruggleDrainMultiplier = 2.0;
-	/** 僵持每秒：本场鱼线耐久 -= 鱼力×0.1；鱼体力 -= 猫力×0.08；猫体力 -= 鱼力×0.12。 */
-	double StalemateRodWearPerFishStrength = 0.1;
-	double StalemateFishDrainPerCatStrength = 0.08;
-	double StalemateCatDrainPerFishStrength = 0.12;
-	/** 右键持续按住期间的猫体力回复 /秒（规格 1.5）；不依赖游向、实际出线或当前线长。 */
 	double SlackStaminaRegenPerSecond = 1.5;
-
-	/** 鱼挣扎且线杯未松开、鱼线绷紧时的本场鱼线基础磨损 /秒。 */
+	double StalemateRodWearPerFishStrength = 0.1;
 	double StruggleHoldRodWearPerSecond = 0.0;
-	/** 线放尽绷紧时的磨损倍率（来自鱼竿 DA 的 HighTensionWearMultiplier，≥1）；乘在僵持磨损与基础磨损之上。 */
 	double TautRodWearMultiplier = 1.0;
-	/** 判定③碾压阈值：猫力 ≥ 鱼力 × 本比值（规格 2.0）。 */
-	double OverpowerStrengthRatio = 2.0;
-
-	/** 距离速率（临时值，规格 4.6 标 TODO）：拖回/鱼自游近/鱼外游。 */
 	double ReelSpeedCentimetersPerSecond = 0.0;
 	double FishCalmSpeedCentimetersPerSecond = 0.0;
 	double FishStruggleSpeedCentimetersPerSecond = 0.0;
-	/** 本步结算后的鱼体力 <= 此值时吸附到 0；与只显示整数的 UI 使用同一“耗尽”语义。 */
+	/** 无可用猫合力时的持续外冲速度，按鱼较快的配置游速放大。 */
+	double ExhaustedCatEscapeSpeedMultiplier = 2.0;
 	double FishExhaustionThreshold = 0.5;
-	/** max(cos(鱼游向与鱼线向外方向夹角),0) 达到此值才允许触发瞬时强对抗结局。 */
+	/** 仅供强对抗/僵持表现分类，不参与位移、做功或终局裁决。 */
 	double StrongConfrontationAlignmentThreshold = 0.55;
-	/** 达到角度阈值后至少持续此时间才确认强对抗；0=立即确认。 */
 	double StrongConfrontationConfirmationSeconds = 0.2;
-	/** 对夹角投影做幂变换；1=线性。 */
 	double AngleStrengthExponent = 1.0;
-	/** 将“本步鱼试图超过线长的距离”归一化为表现张力时使用的响应范围。 */
-	double TensionResponseRangeCentimeters = 10.0;
-
+	double MinimumRodLeverageMultiplier = 0.4;
+	/** 历史鱼位置误差的修正速度上限；猫端牵引速度仍沿用此配置上限。 */
+	double MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 160.0;
 	double MaximumLineLengthCentimeters = 0.0;
-	/** 本场鱼线耐久总量；旧字段名为兼容现有配置保留，每次新会话都会重置。 */
 	double RodDurability = TNumericLimits<double>::Max();
 	double EscapeSlackCentimeters = 100.0;
 
 	bool IsValid() const;
 };
 
-/** 可变数值状态；世界位置每步开始从 Encounter Actor 复制。 */
+/** 权威端点事实与玩家本步移动意图。移动改端点，收线只改约束长度。 */
+struct CATFISHING_API FCatFightRodConstraintInput
+{
+	FVector RodTipWorldPosition = FVector::ZeroVector;
+	FVector RodForwardWorld = FVector::ForwardVector;
+	FVector RodTipVelocityCentimetersPerSecond = FVector::ZeroVector;
+	FVector CarrierVelocityCentimetersPerSecond = FVector::ZeroVector;
+	FVector CarrierDesiredVelocityCentimetersPerSecond = FVector::ZeroVector;
+	/** CMC 碰撞探测允许的本步向鱼移动距离（cm）；负值表示该端固定，不预测身体位移。 */
+	double CarrierTravelLimitCentimeters = -1.0;
+	FCatFishingRodRotationPrediction RodRotationPrediction;
+	/** 从权威转矩积分采集本步用力平方时间和真实正功转角；不含身体平移。 */
+	double CatRodExertionSquaredSeconds = 0.0;
+	double CatRodPositiveWorkRadians = 0.0;
+	bool bRodHeld = false;
+};
+
 struct CATFISHING_API FCatFightSimulationState
 {
-	/** 当前是否有主操作手；无人接管时 CatAction 固定为 Slack，但不结算任何玩家力量或体力。 */
 	bool bOperatorPresent = true;
+	bool bFishExhausted = false;
 	double CatStamina = 0.0;
 	double FishStamina = 0.0;
-	/** 已放出的线长 L_paid；左键收短，右键松线时只随鱼实际外游被动增长，不按键时固定。 */
 	double LineLengthCentimeters = 0.0;
-	/** 本场累计鱼线负载；旧字段名为兼容现有测试/配置保留，不写入装备永久耐久。 */
 	double AbsoluteRodWear = 0.0;
 	FVector FishWorldPosition = FVector::ZeroVector;
+	FVector FishVelocityCentimetersPerSecond = FVector::ZeroVector;
 	ECatFightCatAction CatAction = ECatFightCatAction::None;
 	ECatFishMotionIntent MotionIntent = ECatFishMotionIntent::None;
-	/** 连续满足强对抗角度和受力条件的时间；不满足任一条件立即清零。 */
 	double StrongConfrontationBuildUpSeconds = 0.0;
+};
+
+/**
+ * 供诊断与回归测试消费的单步中间量。
+ *
+ * 单位约定：世界距离 cm，速度 cm/s，加速度 cm/s²，质量 kg，力 N，时间 s。
+ * 这些字段是求解过程的只读快照，不参与下一步状态，也不构成第二份玩法状态。
+ * 公式主链为：
+ *   Alignment = dot(FishDirection, HorizontalOutward)
+ *   LineLoad = max(Alignment, 0)^AngleStrengthExponent
+ *   Force = Strength * ForcePerStrengthNewtons
+ *   a = 100 * Force / Mass                         // m/s² 转 UE cm/s²
+ *   T = SolveUnilateralConstraint(FishEnd(T), CollisionBoundedRodEnd(T), LineLength)
+ *   aCarrier = 100 * (T * HorizontalLineFactor - CatForce) / CombinedCatMass
+ */
+struct CATFISHING_API FCatFightSimulationTrace
+{
+	ECatFightSimulationRejectReason RejectReason = ECatFightSimulationRejectReason::None;
+	double FixedStepSeconds = 0.0;
+	double DistanceBeforeCentimeters = 0.0;
+	double HorizontalDistanceCentimeters = 0.0;
+	double VerticalDistanceCentimeters = 0.0;
+	double FishAlignment = 0.0;
+	double NormalizedLineLoad = 0.0;
+	double RodLineAlignment = 1.0;
+	double RodLeverageMultiplier = 1.0;
+	double CombinedCatStrength = 0.0;
+	double EffectiveCatStrength = 0.0;
+	double ActiveFishStrength = 0.0;
+	double CatForceNewtons = 0.0;
+	double FishThrustNewtons = 0.0;
+	double CombinedCatMassKilograms = 0.0;
+	double CatDriveAccelerationCentimetersPerSecondSquared = 0.0;
+	double FishDriveAccelerationCentimetersPerSecondSquared = 0.0;
+	double FishSpeedCapCentimetersPerSecond = 0.0;
+	double SwimSpeedCentimetersPerSecond = 0.0;
+	double MobilityCentimetersPerNewton = 0.0;
+	double ExistingPositionErrorCentimeters = 0.0;
+	double RequiredTensionAtCurrentLengthNewtons = 0.0;
+	double RequiredTensionAtPaidOutLengthNewtons = 0.0;
+	double ReelForceLimitNewtons = 0.0;
+	double FishCorrectionCentimeters = 0.0;
+	double FishPositionCorrectionCentimeters = 0.0;
+	double CarrierTravelLimitCentimeters = -1.0;
+	FVector ConstraintRodEndWorldPosition = FVector::ZeroVector;
+	bool bRodRotationPredicted = false;
+	double LineTensionNewtons = 0.0;
+	double FishLineForceNewtons = 0.0;
+	double CatLineForceNewtons = 0.0;
+	double SignedCarrierAccelerationCentimetersPerSecondSquared = 0.0;
+	double HorizontalLineFactor = 1.0;
+	double CatStaminaAfterStep = 0.0;
+	double FishStaminaAfterStep = 0.0;
+	double FishStaminaDrainBeforeClamp = 0.0;
+	double CatMovementPositiveWorkUnits = 0.0;
+	double CatReelPositiveWorkUnits = 0.0;
+	double CatRodPositiveWorkUnits = 0.0;
+	double CatHoldNormalizedLoad = 0.0;
+	double CatRodNormalizedLoad = 0.0;
+	double FishRealizedEffortDistanceCentimeters = 0.0;
+	double FishBlockedEffortDistanceCentimeters = 0.0;
+	double FishEffectiveEffortDistanceCentimeters = 0.0;
+	double FishPhaseMultiplier = 0.0;
+	double CatRodSupportBeforeSharedStaminaDrain = 0.0;
+	double WearLoad = 0.0;
+	double RodWearDelta = 0.0;
+	bool bInputAccepted = false;
+	bool bFreeSpool = false;
+	bool bLineRestraining = false;
+	bool bReeling = false;
+	bool bStruggling = false;
+	bool bFinalizeInputAccepted = false;
 };
 
 struct CATFISHING_API FCatFightStepResult
 {
 	bool bSucceeded = false;
-	/** 本步鱼主动选择的自由游速，单位 cm/s；在线长、岸线和水域约束前产生，仅供表现层表达游动意图。 */
+	/** 失败时保留 fail-closed 原因；成功时为 None。 */
+	ECatFightSimulationRejectReason RejectReason = ECatFightSimulationRejectReason::None;
+	/** 纯模拟器的可回放中间量；Runner 只读并写入限频诊断日志。 */
+	FCatFightSimulationTrace Trace;
+	bool bExhaustedCatEscape = false;
+	/** 正常主位右键回体：屏蔽双方耗体；强制力竭拖拽仍优先。 */
+	bool bSlackRecoveryActive = false;
 	double IntendedSwimSpeedCentimetersPerSecond = 0.0;
-	/** 正值=消耗，负值=回复（松开线杯喘气）。 */
 	double CatStaminaDrain = 0.0;
 	double FishStaminaDrain = 0.0;
+	/** 猫的四类努力独立计价；移动/转杆归主位，收线/保持才由实际合力者分担。 */
+	double CatMovementStaminaDrain = 0.0;
+	double CatReelStaminaDrain = 0.0;
+	double CatRodStaminaDrain = 0.0;
+	double CatRodWorkStaminaDrain = 0.0;
+	/** 超出共享持竿支撑的主位转杆支撑费用；同一负载不重复收取。 */
+	double CatRodSupportStaminaDrain = 0.0;
+	double CatHoldStaminaDrain = 0.0;
+	double CatMovementIntentCentimeters = 0.0;
+	double CatMovementActualCentimeters = 0.0;
+	double CatRodExertionSquaredSeconds = 0.0;
+	double CatRodPositiveWorkRadians = 0.0;
+	double CatHoldIntentCentimeters = 0.0;
+	double CatNormalizedEffortLoad = 0.0;
+	double CatRodNormalizedEffortLoad = 0.0;
+	double FishNormalizedEffortLoad = 0.0;
+	double FishUncappedStaminaDrain = 0.0;
+	double GetSharedCatStaminaDrain() const { return CatReelStaminaDrain + CatHoldStaminaDrain; }
+	double GetPrimaryCatStaminaDrain() const { return CatMovementStaminaDrain + CatRodStaminaDrain; }
+	double CatIntendedLineDistanceCentimeters = 0.0;
+	double CatActualLineDistanceCentimeters = 0.0;
+	double FishIntendedLineDistanceCentimeters = 0.0;
+	double FishActualLineDistanceCentimeters = 0.0;
+	double RequestedReelDistanceCentimeters = 0.0;
+	double ActualReelDistanceCentimeters = 0.0;
 	double TensionCentimeters = 0.0;
-	/** 竿尖到鱼的实际直线距离 D。 */
 	double StraightLineDistanceCentimeters = 0.0;
-	/** max(L_paid-D,0)；大于 0 时 Cable 应出现垂坠。 */
 	double SlackLineLengthCentimeters = 0.0;
 	double NormalizedTension = 0.0;
 	bool bLineTaut = false;
 	double LineLengthCentimeters = 0.0;
-	/** 本场累计鱼线负载；只参与断线判定。 */
 	double AbsoluteRodWear = 0.0;
+	/** 本固定步新增的鱼竿磨损；由 Session 写回同一装备实例。 */
+	double RodWearDelta = 0.0;
 	FVector ProposedFishWorldPosition = FVector::ZeroVector;
-	/** 鱼游向与“竿尖→鱼”的水平鱼线方向点积，范围 [-1,1]；负值表示鱼正在朝竿尖游。 */
+	/** 受力积分的鱼速度；几何纠偏不注入惯性，地形碰撞再修正该速度。 */
+	FVector ResolvedFishVelocityCentimetersPerSecond = FVector::ZeroVector;
+	/** 本步历史位置误差修正；不计入惯性或鱼主动做功。 */
+	FVector FishPositionCorrectionWorldDisplacement = FVector::ZeroVector;
+	/** 本步实际提交的游动努力方向；地形反馈更新下步转向时不能改写本步费用。 */
+	FVector FishEffortDirection = FVector::ZeroVector;
 	double FishLineAlignment = 0.0;
-	/** pow(max(FishLineAlignment,0), AngleStrengthExponent)，用于体力/磨损的连续力量比例。 */
 	double NormalizedLineLoad = 0.0;
+	double RodLineAlignment = 1.0;
+	double RodLeverageMultiplier = 1.0;
+	double EffectiveCatStrength = 0.0;
+	double CombinedCatStrength = 0.0;
+	double CatDriveAccelerationCentimetersPerSecondSquared = 0.0;
+	double FishDriveAccelerationCentimetersPerSecondSquared = 0.0;
+	double NetFishPullAccelerationCentimetersPerSecondSquared = 0.0;
+	/** 双端运动约束求出的共同张力，不含历史位置纠偏；供猫、杆及负载观察共用。 */
+	double LineTensionNewtons = 0.0;
+	int32 ActiveHelperCount = 0;
+	/** 猫端向鱼速度上限；实际速度按共同张力产生的加速度逐步接近。 */
+	double CarrierTargetPullSpeedCentimetersPerSecond = 0.0;
+	/** 共同张力减去有限支撑后，按猫系统质量计算的真实加速度。 */
+	double CarrierPullAccelerationCentimetersPerSecondSquared = 0.0;
+	/** 支撑大于水平张力时的沿线减速度；不推动静止猫反向运动。 */
+	double CarrierBrakingDecelerationCentimetersPerSecondSquared = 0.0;
+	bool bUseContinuousCarrierTraction = false;
+	double ConstraintErrorCentimeters = 0.0;
+	double RelativeConstraintSpeedCentimetersPerSecond = 0.0;
+	double FishConstraintCorrectionCentimeters = 0.0;
 	double StrongConfrontationBuildUpSeconds = 0.0;
-	/** 本步是否处于僵持消耗战（供表现/日志）。 */
 	bool bStalemate = false;
-	/** 已达到性格配置的强对抗角度阈值；瞬断/拖下水/碾压只在这里裁决。 */
 	bool bStrongConfrontation = false;
-	/** Outcome 为 LineBroken 时给出具体来源；其余终局保持 None。 */
-	ECatFightLineBreakCause LineBreakCause = ECatFightLineBreakCause::None;
+	/** Runner 确认本步由猫端牵引越过真实岸线；鱼会复用 FishExhausted 终局进入鱼干拖拽。 */
+	bool bFishBeached = false;
 	ECatFightStepOutcome Outcome = ECatFightStepOutcome::None;
 };
 
-/**
- * 无状态确定性遛鱼数学。不读 World 时间、Actor、资产或全局随机。
- * 用鱼游向在鱼线方向的投影计算连续力量；确认强对抗后按 ①断线 → ②拖下水 → ③碾压 → ④僵持裁决。
- */
+/** 无副作用的固定步求解。真实猫端点由 CharacterMovement 提供；不预支尚未通过碰撞的移动。 */
 class CATFISHING_API FCatFishingFightSimulator
 {
 public:
+	/** 对最终落点/线长重算费用与终局，幂等且没有 ASC/装备副作用。 */
+	static bool FinalizeResolvedStep(const FCatFightSimulationConfig& Config,
+		const FCatFightSimulationState& State, const FCatFightRodConstraintInput& RodConstraint,
+		FCatFightStepResult& Result);
+	/** 活鱼趁持竿主猫力竭且无助手出力时持续外冲；无人持竿/力竭鱼不进入。 */
+	static bool ShouldEscapeExhaustedCat(const FCatFightSimulationConfig& Config,
+		const FCatFightSimulationState& State, bool bRodHeld);
 	static FCatFightStepResult Step(const FCatFightSimulationConfig& Config,
 		const FCatFightSimulationState& State, const FVector& RodTipWorldPosition,
+		const FVector& DesiredFishDirection);
+	static FCatFightStepResult Step(const FCatFightSimulationConfig& Config,
+		const FCatFightSimulationState& State, const FCatFightRodConstraintInput& RodConstraint,
 		const FVector& DesiredFishDirection);
 };

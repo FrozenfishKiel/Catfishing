@@ -1,12 +1,14 @@
 #include "Fishing/Actors/CatFishingHookActor.h"
 
-#include "CableComponent.h"
 #include "Character/CatCharacter.h"
 #include "Components/SceneComponent.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/Presentation/CatRodBendComponent.h"
+#include "Fishing/Presentation/CatFishingLineCurveComponent.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "GameFramework/GameStateBase.h"
-#include "GameFramework/ProjectileMovementComponent.h"
+#include "Logging/CatLog.h"
+#include "Logging/CatLogContext.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Net/UnrealNetwork.h"
@@ -15,7 +17,7 @@
 ACatFishingHookActor::ACatFishingHookActor()
 {
 	bReplicates = true;
-	SetReplicateMovement(true); // 抛竿飞行轨迹靠引擎内建的 Movement 复制同步到客户端
+	SetReplicateMovement(true); // 落水后使用移动复制；飞行期间复制冻结弹道，避免逐包跳动。
 	bAlwaysRelevant = false;
 	bNetUseOwnerRelevancy = false;
 	bOnlyRelevantToOwner = false; // 其他玩家也要看见钩/浮标飞出去，不能只对抛竿者复制
@@ -32,42 +34,21 @@ ACatFishingHookActor::ACatFishingHookActor()
 	BobberVisualAnchor->SetupAttachment(VisualRoot);
 	BaitVisualAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("BaitVisualAnchor"));
 	BaitVisualAnchor->SetupAttachment(VisualRoot);
-	// Cable 的起点使用本地绝对坐标锚点：Hook 根节点仍按服务器/网络快照移动，锚点在本机用 60Hz 平滑追赶。
+	// 曲线起点使用本地绝对坐标锚点：Hook 根节点仍按服务器/网络快照移动，锚点在本机平滑追赶。
 	FishingLineStartAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("FishingLineStartAnchor"));
 	FishingLineStartAnchor->SetupAttachment(SceneRoot);
 	FishingLineStartAnchor->SetAbsolute(true, true, true);
-	// 鱼线是纯本地程序化表现：两端依附已经复制的 Actor/Component，不复制 Cable 粒子，也不参与玩法判定。
-	FishingLine = CreateDefaultSubobject<UCableComponent>(TEXT("FishingLine"));
-	FishingLine->SetupAttachment(FishingLineStartAnchor);
-	FishingLine->bAttachStart = true;
-	FishingLine->bAttachEnd = true;
-	FishingLine->CableLength = 75.0f; // 小于通常竿钩距离，使占位线保持基本绷直；端点仍始终准确连接。
-	FishingLine->NumSegments = 16;
-	FishingLine->SubstepTime = 0.01f;
-	FishingLine->SolverIterations = 10;
-	// 鱼线需要弯曲但不应像橡胶棒；长度约束由固定迭代次数稳定求解，不在松弛/绷紧间切换弯曲刚度。
-	FishingLine->bEnableStiffness = false;
-	FishingLine->bUseSubstepping = true;
-	FishingLine->CableGravityScale = 0.15f;
-	FishingLine->CableWidth = 1.25f;
-	FishingLine->NumSides = 4;
-	FishingLine->bEnableCollision = false;
-	FishingLine->bSkipCableUpdateWhenNotVisible = true;
-	FishingLine->bResetAfterTeleport = true;
-	FishingLine->TeleportDistanceThreshold = 300.0f;
-	FishingLine->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	FishingLine->SetVisibility(false, true);
-	FishingLine->SetHiddenInGame(true);
+	// 曲线只消费已复制端点和线长，无粒子模拟，不向玩法提供反力。
+	FishingLineCurve = CreateDefaultSubobject<UCatFishingLineCurveComponent>(TEXT("FishingLineCurve"));
+	FishingLineCurve->SetupAttachment(FishingLineStartAnchor);
+	FishingLineCurve->SetVisibility(false, true);
+	FishingLineCurve->SetHiddenInGame(true);
 	static ConstructorHelpers::FObjectFinder<UMaterialInterface> FishingLineMaterial(
 		TEXT("/Engine/BasicShapes/BasicShapeMaterial.BasicShapeMaterial"));
 	if (FishingLineMaterial.Succeeded())
 	{
-		FishingLine->SetMaterial(0, FishingLineMaterial.Object);
+		FishingLineCurve->SetMaterial(0, FishingLineMaterial.Object);
 	}
-	// 抛物线飞行组件：默认不自动启动，只有 BeginAuthoritativeFlight 显式激活时才开始受重力飞行
-	ProjectileMovement = CreateDefaultSubobject<UProjectileMovementComponent>(TEXT("ProjectileMovement"));
-	ProjectileMovement->bAutoActivate = false;
-	ProjectileMovement->ProjectileGravityScale = 1.0f;
 }
 
 void ACatFishingHookActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -140,13 +121,15 @@ bool ACatFishingHookActor::SetBobberPresentationModeFromAuthority(const ECatFish
 
 bool ACatFishingHookActor::SetFishingLinePresentationFromAuthority(
 	const double PaidOutLineLengthCentimeters, const double StraightLineDistanceCentimeters,
-	const double SlackLineLengthCentimeters, const float NormalizedTension, const bool bLineTaut)
+	const double SlackLineLengthCentimeters, const float NormalizedTension, const bool bLineTaut,
+	const double LineTensionNewtons)
 {
 	if (!HasAuthority() || !bIdentityInitialized
 		|| !FMath::IsFinite(PaidOutLineLengthCentimeters) || PaidOutLineLengthCentimeters < 0.0
 		|| !FMath::IsFinite(StraightLineDistanceCentimeters) || StraightLineDistanceCentimeters < 0.0
 		|| !FMath::IsFinite(SlackLineLengthCentimeters) || SlackLineLengthCentimeters < 0.0
-		|| !FMath::IsFinite(NormalizedTension) || NormalizedTension < 0.0f || NormalizedTension > 1.0f)
+		|| !FMath::IsFinite(NormalizedTension) || NormalizedTension < 0.0f || NormalizedTension > 1.0f
+		|| !FMath::IsFinite(LineTensionNewtons) || LineTensionNewtons < 0.0)
 	{
 		return false;
 	}
@@ -156,44 +139,65 @@ bool ACatFishingHookActor::SetFishingLinePresentationFromAuthority(
 	PresentationState.SlackLineLengthCentimeters = SlackLineLengthCentimeters;
 	PresentationState.NormalizedTension = NormalizedTension;
 	PresentationState.bLineTaut = bLineTaut;
+	PresentationState.LineTensionNewtons = bLineTaut ? LineTensionNewtons : 0.0;
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 	ForceNetUpdate();
 	return true;
 }
 
-bool ACatFishingHookActor::BeginAuthoritativeFlight(const FVector& InitialVelocity,
-	const FVector& ExpectedLandingWorldPoint)
+bool ACatFishingHookActor::BeginAuthoritativeFlight(const FVector& ExpectedLandingWorldPoint)
 {
-	// 必须已完成身份初始化且尚未定稿过落点（bLandingFinalized 为一次性锁），初速度/预期落点也不能是 NaN
-	if (!HasAuthority() || !bIdentityInitialized || bLandingFinalized || InitialVelocity.ContainsNaN()
-		|| ExpectedLandingWorldPoint.ContainsNaN())
+	FCatFishingCastTrajectory Trajectory;
+	if (!HasAuthority() || !bIdentityInitialized || bLandingFinalized || !GetWorld()
+		|| PresentationState.CastTrajectory.DurationSeconds > 0.0
+		|| !Trajectory.Initialize(GetActorLocation(), ExpectedLandingWorldPoint,
+			GetWorld()->GetGravityZ(), GetWorld()->GetTimeSeconds()))
 	{
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=cast_flight_rejected World=%s WorldNetMode=%d Authority=%d Role=%s Actor=%s Session=%s CastAttempt=%s Error=InvalidFlight"),
+			*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()), *GetName(),
+			*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *PresentationState.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens));
 		return false;
 	}
-	// 用外部（弹道解算）算好的初速度直接赋值并激活抛物线运动，让引擎物理去演算真实飞行轨迹
-	ProjectileMovement->Velocity = InitialVelocity;
-	ProjectileMovement->Activate(true);
-	// 记录“期望”落点的 Z 高度，作为轮询判断是否已落地的阈值（不是最终写入的权威落点本身）
-	PendingAuthoritativeLandingWorldPoint = ExpectedLandingWorldPoint;
-	// Hook/Bobber 视觉 Mesh 按规范使用 NoCollision，落点靠有界轮询而不是碰撞事件确认；权威落点本身仍由调用方给定。
-	GetWorldTimerManager().SetTimer(LandingPollTimerHandle, this,
-		&ACatFishingHookActor::PollAuthoritativeLanding, 0.05f, true);
+	const FCatFishingHookPresentationState Previous = PresentationState;
+	PresentationState.CastTrajectory = Trajectory;
+	SetReplicateMovement(false);
+	QueueOrDispatchPresentationChanged(Previous, PresentationState);
+	RefreshCastFlight();
+	ForceNetUpdate();
+	UE_LOG(LogCatFishing, Log, TEXT("Event=cast_flight_started World=%s WorldNetMode=%d Authority=%d Role=%s Actor=%s Session=%s CastAttempt=%s Origin=%s Landing=%s Velocity=%s Duration=%.3f %s"),
+		*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()), *GetName(),
+		*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *PresentationState.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Trajectory.Origin.ToString(), *Trajectory.Landing.ToString(), *Trajectory.InitialVelocity.ToString(),
+		Trajectory.DurationSeconds, *CatLogContext::BuildControllerFields(GetInstigatorController()));
 	return true;
 }
 
-void ACatFishingHookActor::PollAuthoritativeLanding()
+void ACatFishingHookActor::RefreshCastFlight()
 {
-	if (!HasAuthority() || bLandingFinalized)
+	if (!GetWorld()) return;
+	if (PresentationState.Phase != ECatFishingHookPresentationPhase::CastFlight
+		|| PresentationState.CastTrajectory.DurationSeconds <= 0.0)
 	{
-		// 落点已经在别处定稿（例如提前被打断），及时清掉计时器避免野调用
-		GetWorldTimerManager().ClearTimer(LandingPollTimerHandle);
+		GetWorldTimerManager().ClearTimer(CastFlightTimerHandle);
 		return;
 	}
-	// 用当前物理飞行位置的高度和目标落点高度比较：一旦降到目标水面高度以下即视为落地
-	if (GetActorLocation().Z <= PendingAuthoritativeLandingWorldPoint.Z)
+	if (!GetWorldTimerManager().IsTimerActive(CastFlightTimerHandle))
 	{
-		GetWorldTimerManager().ClearTimer(LandingPollTimerHandle);
-		FinalizeAuthoritativeLandingOnce(true, PendingAuthoritativeLandingWorldPoint);
+		GetWorldTimerManager().SetTimer(CastFlightTimerHandle, this, &ThisClass::UpdateCastFlight, 1.0f / 60.0f, true);
+	}
+	UpdateCastFlight();
+}
+
+void ACatFishingHookActor::UpdateCastFlight()
+{
+	const FCatFishingCastTrajectory& Flight = PresentationState.CastTrajectory;
+	const AGameStateBase* GameState = GetWorld()->GetGameState();
+	const double Now = !HasAuthority() && GameState ? GameState->GetServerWorldTimeSeconds() : GetWorld()->GetTimeSeconds();
+	SetActorLocation(Flight.Evaluate(Now));
+	if (Now >= Flight.StartedServerTime + Flight.DurationSeconds)
+	{
+		GetWorldTimerManager().ClearTimer(CastFlightTimerHandle);
+		if (HasAuthority()) FinalizeAuthoritativeLandingOnce(true, Flight.Landing);
 	}
 }
 
@@ -206,18 +210,16 @@ bool ACatFishingHookActor::FinalizeAuthoritativeLandingOnce(const bool bSucceede
 		return false;
 	}
 	bLandingFinalized = true;
-	// 停止物理飞行并把 Actor 位置强制吸附到权威落点，消除轮询帧误差，保证落点精确一致
-	ProjectileMovement->StopMovementImmediately();
-	ProjectileMovement->Deactivate();
+	GetWorldTimerManager().ClearTimer(CastFlightTimerHandle);
 	SetActorLocation(LandingWorldPoint);
+	SetReplicateMovement(true);
 	const FCatFishingHookPresentationState Previous = PresentationState;
 	// 落地成功进入 Landed（等待鱼咬钩），失败（例如落在非法区域）进入 Failed 供表现层播放对应反馈
 	PresentationState.Phase = bSucceeded ? ECatFishingHookPresentationPhase::Landed : ECatFishingHookPresentationPhase::Failed;
 	if (bSucceeded)
 	{
-		// 搏斗前也要给 Cable 一份真实的线长基线。此前等待咬钩阶段只有端点距离能把 75cm 占位线撑直，
-		// DisplayedFishingLineLength 仍停在占位值；上钩后的第一份 L_paid 会让积累的余线成段跳出。
-		// 落水时先发布 L_paid=D、Slack=0，利用等待咬钩的时间平滑收敛；不改变任何权威玩法范围。
+		// 落水时发布 L_paid=D、Slack=0，给搏斗前的曲线一份真实基线；不改变权威玩法范围。
+		// 飞行中尚无已放线快照时只按端点距离绘制，不保留旧 Cable 的占位长度制造假余线。
 		if (const ACatFishingRodActor* Rod = Cast<ACatFishingRodActor>(GetOwner()))
 		{
 			const double LandedLineLength = FVector::Distance(
@@ -234,6 +236,10 @@ bool ACatFishingHookActor::FinalizeAuthoritativeLandingOnce(const bool bSucceede
 	}
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 	ForceNetUpdate();
+	UE_LOG(LogCatFishing, Log, TEXT("Event=cast_flight_landed World=%s WorldNetMode=%d Authority=%d Role=%s Actor=%s Session=%s CastAttempt=%s Succeeded=%d Landing=%s %s"),
+		*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()), *GetName(),
+		*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *PresentationState.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), bSucceeded,
+		*LandingWorldPoint.ToString(), *CatLogContext::BuildControllerFields(GetInstigatorController()));
 	return true;
 }
 
@@ -263,14 +269,13 @@ void ACatFishingHookActor::BeginPlay()
 	bVisualRootBaseLocationInitialized = true;
 	if (GetNetMode() == NM_DedicatedServer)
 	{
-		// 专用服务器没有渲染需求，也不应支付 Cable 粒子模拟开销。
-		FishingLine->SetComponentTickEnabled(false);
-		FishingLine->SetVisibility(false, true);
-		FishingLine->SetHiddenInGame(true);
+		// 专用服务器不生成表现网格。
+		FishingLineCurve->SetVisibility(false, true);
+		FishingLineCurve->SetHiddenInGame(true);
 	}
 	else
 	{
-		if (UMaterialInstanceDynamic* Material = FishingLine->CreateDynamicMaterialInstance(0))
+		if (UMaterialInstanceDynamic* Material = FishingLineCurve->CreateDynamicMaterialInstance(0))
 		{
 			Material->SetVectorParameterValue(TEXT("Color"), FLinearColor(0.72f, 0.78f, 0.82f, 1.0f));
 		}
@@ -290,7 +295,7 @@ void ACatFishingHookActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	GetWorldTimerManager().ClearTimer(FishingLinePresentationTimerHandle);
 	GetWorldTimerManager().ClearTimer(BobberPresentationTimerHandle);
-	GetWorldTimerManager().ClearTimer(LandingPollTimerHandle);
+	GetWorldTimerManager().ClearTimer(CastFlightTimerHandle);
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -308,6 +313,14 @@ void ACatFishingHookActor::OnRep_Instigator()
 
 void ACatFishingHookActor::OnRep_PresentationState(const FCatFishingHookPresentationState& Previous)
 {
+	if (Previous.Phase != PresentationState.Phase || Previous.CastTrajectory.DurationSeconds != PresentationState.CastTrajectory.DurationSeconds)
+	{
+		UE_LOG(LogCatFishing, Log, TEXT("Event=cast_flight_received World=%s WorldNetMode=%d Authority=%d Role=%s Actor=%s Session=%s CastAttempt=%s Phase=%s Landing=%s Duration=%.3f %s"),
+			*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()), *GetName(),
+			*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *PresentationState.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens),
+			*UEnum::GetValueAsString(PresentationState.Phase), *PresentationState.CastTrajectory.Landing.ToString(),
+			PresentationState.CastTrajectory.DurationSeconds, *CatLogContext::BuildControllerFields(GetInstigatorController()));
+	}
 	// 客户端复制回调的唯一入口，走和服务器本地相同的排队/派发逻辑
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 }
@@ -333,6 +346,18 @@ void ACatFishingHookActor::QueueOrDispatchPresentationChanged(const FCatFishingH
 void ACatFishingHookActor::DispatchPresentationChanged(const FCatFishingHookPresentationState& Previous,
 	const FCatFishingHookPresentationState& Current)
 {
+	if (Previous.BobberMode != Current.BobberMode
+		|| Previous.BobberModeStartedServerTime != Current.BobberModeStartedServerTime)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_bobber_mode_observed SessionId=%s CastAttemptId=%s World=%s WorldNetMode=%d Authority=%d LocalRole=%d Actor=%s PreviousMode=%s Mode=%s ModeStartedServerTime=%.6f ObservedWorldTime=%.6f Owner=%s"),
+			*Current.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *Current.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(GetWorld()),
+			GetNetMode(), HasAuthority(), static_cast<int32>(GetLocalRole()), *GetName(),
+			*UEnum::GetValueAsString(Previous.BobberMode), *UEnum::GetValueAsString(Current.BobberMode),
+			Current.BobberModeStartedServerTime, GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0,
+			*GetNameSafe(GetOwner()));
+	}
+	RefreshCastFlight();
 	// 初始复制包到达后 Owner 与 PresentationState 都已具备，此处再接一次可覆盖 BeginPlay 时 Owner 尚未解析的情况。
 	RefreshFishingLineAttachment();
 	RefreshFishingLineShape();
@@ -428,7 +453,8 @@ void ACatFishingHookActor::TryPlayCastMontageFromPresentation()
 
 void ACatFishingHookActor::RefreshFishingLineAttachment()
 {
-	if (!FishingLine || GetNetMode() == NM_DedicatedServer)
+	// 首次 Owner 复制可能早于 BeginPlay；由 BeginPlay 或后续复制回调补接。
+	if (!HasActorBegunPlay() || !FishingLineCurve || GetNetMode() == NM_DedicatedServer)
 	{
 		return;
 	}
@@ -436,8 +462,10 @@ void ACatFishingHookActor::RefreshFishingLineAttachment()
 	ACatFishingRodActor* Rod = Cast<ACatFishingRodActor>(GetOwner());
 	if (!IsValid(Rod))
 	{
-		FishingLine->SetVisibility(false, true);
-		FishingLine->SetHiddenInGame(true);
+		FishingLineEndAnchor.Reset();
+		FishingLineCurve->SetVisibility(false, true);
+		FishingLineCurve->SetHiddenInGame(true);
+		FishingLineCurve->ClearCurve();
 		RefreshFishingLinePresentationTimer();
 		return;
 	}
@@ -470,32 +498,34 @@ void ACatFishingHookActor::RefreshFishingLineAttachment()
 	}
 	if (!EndComponent)
 	{
-		FishingLine->SetVisibility(false, true);
-		FishingLine->SetHiddenInGame(true);
+		FishingLineEndAnchor.Reset();
+		FishingLineCurve->SetVisibility(false, true);
+		FishingLineCurve->SetHiddenInGame(true);
+		FishingLineCurve->ClearCurve();
 		RefreshFishingLinePresentationTimer();
 		return;
 	}
 
-	if (FishingLine->GetAttachedComponent() != EndComponent)
+	// RodTipMarker/原生 RodTipAnchor 的组件原点就是线端点，不混入权威锚点偏移。
+	FishingLineEndAnchor = EndComponent;
+	if (UCatRodBendComponent* Bend = Rod->FindComponentByClass<UCatRodBendComponent>())
 	{
-		FishingLine->SetAttachEndToComponent(EndComponent);
+		Bend->BindHook(this);
 	}
-	// RodTipMarker/原生 RodTipAnchor 的组件原点就是线端点；不要再混入权威锚点偏移，否则会绕过蓝图视觉校准。
-	FishingLine->EndLocation = FVector::ZeroVector;
 	const bool bShouldShow = PresentationState.Phase != ECatFishingHookPresentationPhase::Unconfigured;
-	FishingLine->SetVisibility(bShouldShow, true);
-	FishingLine->SetHiddenInGame(!bShouldShow);
+	FishingLineCurve->SetVisibility(bShouldShow, true);
+	FishingLineCurve->SetHiddenInGame(!bShouldShow);
 	RefreshFishingLineShape();
 	RefreshFishingLinePresentationTimer();
 }
 
 void ACatFishingHookActor::RefreshFishingLineShape()
 {
-	if (!FishingLine || GetNetMode() == NM_DedicatedServer)
+	if (!FishingLineCurve || GetNetMode() == NM_DedicatedServer)
 	{
 		return;
 	}
-	// 抛投阶段尚未产生战斗模拟快照，保留构造器/蓝图配置的预览长度，避免 Cable 暂时缩成 0。
+	// 抛投阶段尚无战斗快照，绘制长度以下游端点距离为下限。
 	if (PresentationState.PaidOutLineLengthCentimeters <= KINDA_SMALL_NUMBER
 		&& PresentationState.StraightLineDistanceCentimeters <= KINDA_SMALL_NUMBER)
 	{
@@ -505,11 +535,8 @@ void ACatFishingHookActor::RefreshFishingLineShape()
 		static_cast<double>(PresentationState.StraightLineDistanceCentimeters));
 	const double PaidOut = PresentationState.PaidOutLineLengthCentimeters > 0.0
 		? PresentationState.PaidOutLineLengthCentimeters : DirectDistance;
-	// 这里只更新目标，不直接改 CableLength；本地 60Hz 定时器负责吸收服务器固定步和网络包造成的阶跃。
+	// 这里只更新目标，本地定时器吸收服务器固定步和网络包造成的长度阶跃。
 	TargetFishingLineLengthCentimeters = FMath::Max(PaidOut, DirectDistance);
-	const double SlackRatio = PaidOut > UE_DOUBLE_SMALL_NUMBER
-		? FMath::Clamp(PresentationState.SlackLineLengthCentimeters / PaidOut, 0.0, 1.0) : 0.0;
-	TargetFishingLineSlackRatio = SlackRatio;
 }
 
 void ACatFishingHookActor::RefreshFishingLinePresentationTimer()
@@ -519,8 +546,8 @@ void ACatFishingHookActor::RefreshFishingLinePresentationTimer()
 	{
 		return;
 	}
-	const bool bShouldUpdate = FishingLine && FishingLineStartAnchor && VisualRoot
-		&& FishingLine->GetAttachedComponent()
+	const bool bShouldUpdate = FishingLineCurve && FishingLineStartAnchor && VisualRoot
+		&& FishingLineEndAnchor.IsValid()
 		&& PresentationState.Phase != ECatFishingHookPresentationPhase::Unconfigured;
 	if (!bShouldUpdate)
 	{
@@ -544,10 +571,17 @@ void ACatFishingHookActor::RefreshFishingLinePresentationTimer()
 void ACatFishingHookActor::UpdateFishingLinePresentation()
 {
 	UWorld* World = GetWorld();
-	USceneComponent* EndComponent = FishingLine ? FishingLine->GetAttachedComponent() : nullptr;
-	if (!World || GetNetMode() == NM_DedicatedServer || !FishingLine || !FishingLineStartAnchor
+	USceneComponent* EndComponent = FishingLineEndAnchor.Get();
+	if (!World || GetNetMode() == NM_DedicatedServer || !FishingLineCurve || !FishingLineStartAnchor
 		|| !VisualRoot || !EndComponent)
 	{
+		if (World && FishingLineCurve && !EndComponent)
+		{
+			FishingLineCurve->ClearCurve();
+			FishingLineCurve->SetVisibility(false, true);
+			World->GetTimerManager().ClearTimer(FishingLinePresentationTimerHandle);
+			bFishingLineSmoothingInitialized = false;
+		}
 		return;
 	}
 
@@ -560,8 +594,6 @@ void ACatFishingHookActor::UpdateFishingLinePresentation()
 		Settings ? Settings->FishingLineEndpointInterpolationSpeed : 18.0, 18.0);
 	const double LengthSpeed = SafeNonNegative(
 		Settings ? Settings->FishingLineLengthInterpolationSpeed : 14.0, 14.0);
-	const double SlackSpeed = SafeNonNegative(
-		Settings ? Settings->FishingLineSlackInterpolationSpeed : 10.0, 10.0);
 	double DeltaSeconds = World->GetDeltaSeconds();
 	if (!FMath::IsFinite(DeltaSeconds) || DeltaSeconds <= 0.0)
 	{
@@ -569,11 +601,11 @@ void ACatFishingHookActor::UpdateFishingLinePresentation()
 	}
 
 	const FVector TargetStart = VisualRoot->GetComponentLocation();
-	if (!bFishingLineSmoothingInitialized)
+	const bool bInitializeSmoothing = !bFishingLineSmoothingInitialized;
+	if (bInitializeSmoothing)
 	{
 		FishingLineStartAnchor->SetWorldLocation(TargetStart);
 		DisplayedFishingLineLengthCentimeters = TargetFishingLineLengthCentimeters;
-		DisplayedFishingLineSlackRatio = TargetFishingLineSlackRatio;
 		bFishingLineSmoothingInitialized = true;
 	}
 	else
@@ -584,29 +616,49 @@ void ACatFishingHookActor::UpdateFishingLinePresentation()
 		DisplayedFishingLineLengthCentimeters = FMath::FInterpTo(
 			DisplayedFishingLineLengthCentimeters, TargetFishingLineLengthCentimeters,
 			DeltaSeconds, LengthSpeed);
-		DisplayedFishingLineSlackRatio = FMath::FInterpTo(
-			DisplayedFishingLineSlackRatio, TargetFishingLineSlackRatio,
-			DeltaSeconds, SlackSpeed);
 	}
 
-	const FVector EndWorldPosition = EndComponent->GetComponentTransform().TransformPosition(FishingLine->EndLocation);
-	const double SmoothedDirectDistance = FVector::Distance(
-		FishingLineStartAnchor->GetComponentLocation(), EndWorldPosition);
-	// 表现线长永远不能短于两个平滑端点的直线距离，否则粒子约束会被瞬间压缩并形成“果冻波”。
-	FishingLine->CableLength = static_cast<float>(FMath::Max(
-		DisplayedFishingLineLengthCentimeters, SmoothedDirectDistance));
-
-	const double Substep = Settings ? Settings->FishingLineSimulationSubstepSeconds : 0.01;
-	FishingLine->SubstepTime = static_cast<float>(FMath::Clamp(
-		FMath::IsFinite(Substep) ? Substep : 0.01, 0.005, 0.1));
-	FishingLine->SolverIterations = FMath::Clamp(
-		Settings ? Settings->FishingLineSolverIterations : 10, 1, 16);
-	FishingLine->bUseSubstepping = true;
-	FishingLine->bEnableStiffness = false;
-	const double TautGravity = SafeNonNegative(
-		Settings ? Settings->FishingLineTautGravityScale : 0.08, 0.08);
-	const double SlackGravity = SafeNonNegative(
-		Settings ? Settings->FishingLineSlackGravityScale : 1.0, 1.0);
-	FishingLine->CableGravityScale = static_cast<float>(FMath::Lerp(
-		TautGravity, SlackGravity, FMath::Clamp(DisplayedFishingLineSlackRatio, 0.0, 1.0)));
+	UCatRodBendComponent* RodBend = nullptr;
+	if (const ACatFishingRodActor* Rod = Cast<ACatFishingRodActor>(GetOwner()))
+	{
+		RodBend = Rod->FindComponentByClass<UCatRodBendComponent>();
+		if (RodBend) RodBend->RefreshVisual();
+	}
+	const FVector StartWorldPosition = FishingLineStartAnchor->GetComponentLocation();
+	const FVector EndWorldPosition = EndComponent->GetComponentLocation();
+	double VisualLineLength = DisplayedFishingLineLengthCentimeters;
+	if (RodBend && RodBend->IsVisualReady())
+	{
+		// Preserve the same slack budget when the cosmetic tip moves. The replicated paid-out length is untouched.
+		VisualLineLength += FVector::Distance(StartWorldPosition, EndWorldPosition)
+			- FVector::Distance(StartWorldPosition, RodBend->GetRestTipWorld());
+		VisualLineLength = FMath::Max(VisualLineLength, FVector::Distance(StartWorldPosition, EndWorldPosition));
+	}
+	const int32 Segments = FMath::Clamp(Settings ? Settings->FishingLineCurveSegments : 64, 4, 256);
+	const double Width = FMath::Clamp(SafeNonNegative(Settings ? Settings->FishingLineWidthCentimeters : 1.25, 1.25), 0.01, 10.0);
+	const bool bUpdated = FishingLineCurve->UpdateCurve(StartWorldPosition, EndWorldPosition,
+		VisualLineLength, Segments, Width);
+	if (!bUpdated)
+	{
+		if (!bFishingLineCurveUpdateFailed)
+		{
+			UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_line_curve_rejected World=%s WorldNetMode=%d Authority=%d Role=%s Actor=%s Session=%s CastAttempt=%s Error=InvalidGeometry Start=%s End=%s PaidLengthCm=%.2f"),
+				*GetNameSafe(World), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()), *GetName(),
+				*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *PresentationState.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens),
+				*StartWorldPosition.ToString(), *EndWorldPosition.ToString(), DisplayedFishingLineLengthCentimeters);
+		}
+		bFishingLineCurveUpdateFailed = true;
+		return;
+	}
+	if (bInitializeSmoothing || bFishingLineCurveUpdateFailed)
+	{
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_line_curve_configured World=%s WorldNetMode=%d Authority=%d Role=%s Actor=%s Rod=%s Session=%s CastAttempt=%s Renderer=LengthMatchedCurve Segments=%d WidthCm=%.3f PaidLengthCm=%.2f CurveLengthCm=%.2f Result=Applied %s"),
+			*GetNameSafe(World), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()),
+			*GetName(), *GetNameSafe(GetOwner()),
+			*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*PresentationState.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens),
+			Segments, Width, DisplayedFishingLineLengthCentimeters, FishingLineCurve->GetCurveLengthCentimeters(),
+			*CatLogContext::BuildControllerFields(GetInstigatorController()));
+	}
+	bFishingLineCurveUpdateFailed = false;
 }

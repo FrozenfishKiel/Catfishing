@@ -23,7 +23,6 @@ class FCatFishingSessionSnapshotVersionMutationRulesTest;
 class FCatFishingSessionTerminationOutcomeTest;
 class FCatFishingSessionScoopMouthCarryTest;
 class FCatFishingSessionRejectedFightSummaryPublicationTest;
-class FCatFishingSessionExhaustedReelContinuityTest;
 class FCatFishingSessionLandedTerminalVisibilityTest;
 class FCatFishingSessionOutcomePresentationTagTest;
 class FCatFishingServiceRodBoundSessionRoutingTest;
@@ -54,17 +53,24 @@ public:
 	bool OpenTrueBiteWindowFromStateTree();
 	FCatFishingCommandResult RequestHookFromAuthority(FGuid RequestId);
 	FCatFishingCommandResult CancelFromAuthority(FGuid RequestId);
+	/** 上钩后的主动止损写口；只接受当前钓手和精确 Revision，提交后鱼/饵丢失，不追加或退还鱼竿磨损。 */
+	FCatFishingCommandResult CutLineFromAuthority(AController* RequestingController,
+		const FCatFishingSessionCommandContext& Context);
 	bool TryEnterHookedFightFromAuthority();
-	bool SetReelingFromAuthority(int64 InputSequence, bool bReeling);
-	/** 右键松开线杯写口；仅 HookedFight 且 Runner 运行中生效，收线优先。 */
-	bool SetSlackingFromAuthority(int64 InputSequence, bool bSlacking);
+	bool SetReelingFromAuthority(APlayerState* InputPlayerState, int64 InputSequence, bool bReeling);
+	/** 主位右键写口；HookedFight / ExhaustedReel 共用 Runner，正常右键优先于收线并回体。 */
+	bool SetSlackingFromAuthority(APlayerState* InputPlayerState, int64 InputSequence, bool bSlacking);
 	/** 主操作手离开竿位：搏斗期进入无人值守松线，等口期清空当前钓手；都不结束会话。 */
 	void SuspendOperatorFromAuthority();
+	/** 只读查询 FightRunner 是否仍在推进固定步；服务层用它区分可接力搏斗和已停机阶段。 */
 	bool IsFightRunnerRunning() const;
+	/** Runner 固定步回调；先把累计磨损写回本会话绑定的鱼竿实例，再发布公开搏斗快照并处理终局。 */
 	void HandleFightRunnerStepFromAuthority(const FCatFightStepResult& Step, double FishStaminaRemaining,
-		ECatFishMotionIntent MotionIntent, double RodDurabilityRemaining);
+		ECatFishMotionIntent MotionIntent, double RodDurabilityRemaining = -1.0);
 	/** FightRunner/表现写入遇到不可恢复错误时终止会话；FailureStage 会进入日志，便于区分几何、装备、ASC 等故障。 */
 	void HandleFightRunnerFailureFromAuthority(FName FailureStage = NAME_None);
+	/** Condition 确认当前钓手脚点进入危险水深后的唯一落水终局入口。 */
+	void HandleCatEnteredDangerousWaterFromAuthority(double ImmersionDepthCentimeters);
 
 	/** StateTree EnterPhase Task 的唯一阶段写入口；NearShore 必须提供水域内服务器目标，HookedFight/NearShore 保留合法参与者，其他阶段重置为钓手，终态启动有界销毁。 */
 	FCatFishingPhaseResult EnterPhaseFromStateTree(ECatFishingPhase NewPhase);
@@ -124,16 +130,22 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	friend class FCatRodSessionDurabilityTest;
+	friend class FCatFishingBiteTimingWorldTest;
 	friend class FCatFishingSessionReplicationContractTest;
 	friend class FCatFishingSessionSnapshotVersionMutationRulesTest;
 	friend class FCatFishingSessionTerminationOutcomeTest;
 	friend class FCatFishingSessionScoopMouthCarryTest;
 	friend class FCatFishingSessionRejectedFightSummaryPublicationTest;
-	friend class FCatFishingSessionExhaustedReelContinuityTest;
 	friend class FCatFishingSessionLandedTerminalVisibilityTest;
-	friend class FCatFishingSessionLineBreakKeepsRodOperableTest;
+	friend class FCatFishingExhaustedPickupHandoffTest;
+	friend class FCatFishingSurfaceTraversalTest;
+	friend class FCatFishingSessionLegacyLineBreakCompatibilityTest;
 	friend class FCatFishingSessionOutcomePresentationTagTest;
+	friend class FCatFishingSessionCutLineCommandTest;
+	friend class FCatFishingSessionGroundedCutLineCommandTest;
 	friend class FCatFishingServiceRodBoundSessionRoutingTest;
+	friend class UCatFishingFightRunner;
 
 	/** 客户端收到完整 Snapshot 后只广播重读信号，不推进任何玩法。 */
 	UFUNCTION()
@@ -156,21 +168,30 @@ private:
 
 	/** 用 FishingService 的统一权威谓词重读参与者，更新公开人数、合计 FishingStrength 与 FightStamina。 */
 	bool RefreshFightSummary();
+	/** Runner 登记/释放实际被本会话扣过体力的角色，终态只恢复仍归本会话所有的池。 */
+	void RegisterFightStaminaParticipantFromAuthority(ACatCharacter* Character);
+	/** Runner 在参与者离开或失效时移除体力恢复候选，避免终态恢复不再属于本场的角色。 */
+	void UnregisterFightStaminaParticipantFromAuthority(ACatCharacter* Character);
 
 	/** 仅在失败路径重读摘要实际改变时发出高频复制更新。 */
 	void PublishRefreshedFightSummaryIfChanged(bool bSummaryChanged);
 
 	/** 在终态快照强制网络更新后设置有界 Actor lifespan；配置缺失时立即销毁以免无界泄漏。 */
 	void ScheduleTerminalDestroy();
+	/** 进入鱼已力竭后的收近阶段；冻结岸线目标、同步侧翻表现，并启动独立固定步。 */
 	bool BeginExhaustedReelFromAuthority();
+	/** 力竭收近固定步；只在玩家仍按住收线时推进鱼向冻结目标移动，到达后生成岸上拾取物。 */
 	void HandleExhaustedReelStep();
-	/** 力竭回收阶段统一同步鱼嘴 Hook 与绷紧鱼线表现；避免位置移动而客户端仍沿用搏斗末帧的旧 L_paid/Slack。 */
+	/** 力竭收近阶段同步鱼嘴 Hook 与绷紧鱼线表现；避免客户端继续显示搏斗末帧的松线。 */
 	bool PublishExhaustedReelLineFromAuthority(const FVector& FishWorldLocation);
+	/** 解析力竭鱼最终停靠的竿尖表面投影；Z 取水面与地面较高者，防止岸坡穿插。 */
 	bool TryResolveExhaustedReelTarget(FVector& OutTarget) const;
+	/** 力竭鱼到达冻结表面点后生成正式世界拾取物；成功后收口装备、隐藏 Encounter 并写入捕获终态。 */
 	bool SpawnExhaustedFishPickupFromAuthority(const FVector& SurfaceLocation);
 	/** 抄网成功时生成世界鱼并立即附到抄手嘴部；不读取鱼体力，也不写入鱼护。 */
 	bool SpawnScoopedFishPickupFromAuthority(ACatCharacter* ScoopingCharacter, APlayerState* ScoopingPlayerState,
 		const FString& ScooperStableNetId);
+	/** 捕获终态共用的装备收口入口；只提交本会话预留饵料，鱼竿磨损已在固定步写回。 */
 	bool CommitCatchEquipmentFromAuthority();
 	void HandleBiteWarningTimer();
 	void HandleProbeTimer();
@@ -189,6 +210,11 @@ private:
 	/** 客户端可观察的会话阶段、鱼种和参与人数；服务器是唯一写者。 */
 	UPROPERTY(ReplicatedUsing=OnRep_Snapshot)
 	FCatFishingSessionSnapshot Snapshot;
+	/** 客户端体力到达诊断限频，不参与会话裁决。 */
+	double NextStaminaReceivedDiagnosticSeconds = 0.0;
+	/** 客户端耐久到达诊断按档位/终态过滤，不参与耐久裁决。 */
+	int32 LastReceivedRodDurabilityBand = INDEX_NONE;
+	bool bReceivedRodTerminal = false;
 
 	/** 当前鱼种数据资产；只在服务器验证/捕获时读取，不复制为运行真相。 */
 	UPROPERTY()
@@ -205,6 +231,8 @@ private:
 	 * 钓手接力转移不改变它——用谁的竿就磨谁的竿、扣抛竿时上的饵。
 	 */
 	TWeakObjectPtr<UCatEquipmentComponent> CastEquipment;
+	/** 仅用于装备磨损事务的去重顺序，不保存第二份鱼竿剩余耐久。 */
+	int64 RodWearSequence = 0;
 
 	/** 鱼运行态在会话创建时冻结的真实重量，单位千克。 */
 	double FishWeightKilograms = 0.0;
@@ -243,6 +271,8 @@ private:
 
 	/** 本会话实际初始化或消耗过 stamina 的 Character；终态只恢复这些池。 */
 	TSet<TWeakObjectPtr<ACatCharacter>> StaminaParticipantsTouched;
+	/** 最后一次主动放下鱼竿的钓手；只用于允许其在地面姿态就近切线，不复制、不接管当前输入。 */
+	TWeakObjectPtr<APlayerState> LastSuspendedFisherPlayerState;
 
 	/** 本会话唯一失败预算终态；重放不再次扣特殊饵或鱼竿耐久。 */
 	FCatFishingFailureResult FailureBudgetResult;
@@ -259,11 +289,18 @@ private:
 	FTimerHandle BiteWarningTimerHandle;
 	FTimerHandle ProbeTimerHandle;
 	FTimerHandle TrueBiteTimerHandle;
+	/** 力竭收近阶段的固定步计时器；终态、销毁和阶段失败都会清理它，避免过期 Step 继续移动鱼。 */
 	FTimerHandle ExhaustedReelTimerHandle;
+	/** 力竭收近阶段最近接受的左键输入序号；防止旧边沿在跨阶段后重新打开收线。 */
 	int64 LastExhaustedReelInputSequence = 0;
 	/** 鱼力竭瞬间冻结的竿尖表面投影；Z 取水面与地面较高者，后续不再重新查询或改写目标。 */
 	FVector ExhaustedReelTarget = FVector::ZeroVector;
+	/** 是否已经冻结力竭收近目标；没有目标时固定步 fail-closed，避免把鱼拖向零点。 */
 	bool bHasExhaustedReelTarget = false;
+	/** 提竿命令按 RequestId 记录首次终态；输入重发时返回同一结果，不重复选鱼或重启搏斗。 */
 	TMap<FGuid, FCatFishingCommandResult> HookTerminalByRequest;
+	/** 取消命令按 RequestId 记录首次终态；重复取消不会再次向 StateTree 发送中断事件。 */
 	TMap<FGuid, FCatFishingCommandResult> CancelTerminalByRequest;
+	/** 主动切线命令按 RequestId 记录首次终态；重放不会再次抢占终态写口或改写磨损结果。 */
+	TMap<FGuid, FCatFishingCommandResult> CutLineTerminalByRequest;
 };

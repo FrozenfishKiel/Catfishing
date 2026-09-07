@@ -100,6 +100,11 @@ public:
 	UFUNCTION(BlueprintPure, Category="Catfishing|Interaction")
 	UCatInteractionTargetingComponent* GetInteractionTargetingComponent() const { return InteractionTargetingComponent; }
 
+	/** 按 Controller 的水平朝向把二维输入转成当前 Pawn 的前后/左右移动；自动化夹具也通过同一入口验证正式移动仲裁。 */
+	void Move(const FInputActionValue& Value);
+	/** 对当前已占有的 Character 开始跳跃；自动化夹具复用正式输入入口，避免另建测试专线。 */
+	void StartJump();
+
 	/** 权威交互转发；服务器检查玩法 gate 和通用接口后，在目标 Actor 上重新调用同一 Interact 虚函数。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestInteraction(AActor* Target, FGuid RequestId);
@@ -333,12 +338,8 @@ private:
 	void PublishProfileEquipmentUnlocksIfAvailable();
 	/** 移除本 Controller 安装的玩法 Mapping Context，并清空弱绑定记录。 */
 	void RemoveInputMappingContext();
-	/** 按 Controller 的水平朝向把二维输入转成当前 Pawn 的前后/左右移动。 */
-	void Move(const FInputActionValue& Value);
 	/** 把二维输入写入 Controller 的 Yaw/Pitch。 */
 	void Look(const FInputActionValue& Value);
-	/** 对当前已占有的 Character 开始跳跃。 */
-	void StartJump();
 	/** 对当前已占有的 Character 停止跳跃。 */
 	void StopJump();
 	/** 本地 Started 输入开启疾跑，并把布尔意图可靠同步给 authority。 */

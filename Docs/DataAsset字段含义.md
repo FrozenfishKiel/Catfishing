@@ -1,6 +1,6 @@
 # DataAsset 字段说明手册
 
-对应代码状态：2026-08-19。给配数值/建资产的人看：每个 DataAsset 类型的字段含义、校验规则、注册方法。
+对应代码状态：2026-09-04。给配数值/建资产的人看：每个 DataAsset 类型的字段含义、校验规则、注册方法。
 
 ## 0. 所有 DataAsset 共同的规矩
 
@@ -18,6 +18,7 @@
 | 鱼种 CatFishDefinition | `[CatFishCatalogSettings]` `+Definitions=` | `/Game/Catfishing/Data/Fish/Fish_*`；Showcase2 的 `River` 水域直接使用正式目录 |
 | 咬钩性格 CatBitePersonalityDefinition | `[CatFishingSettings]` `+BitePersonalities=` | `/Game/Catfishing/Data/Fish/Bite_*` |
 | 搏斗性格 CatFightPersonalityDefinition | `[CatFishingSettings]` `+FightPersonalities=` | `/Game/Catfishing/Data/Fish/Fight_*` |
+| 搏斗平衡 CatFishingFightBalanceDefinition | `[CatFishingSettings]` `FightBalanceDefinition=` | `/Game/Catfishing/Data/Fishing/DA_FishingFightBalance_Default` |
 | AbilitySet / InputConfig | `[CatAbilitySettings]` `DefaultAbilitySet=` / `AbilityInputConfig=` | DA_CatAbilitySet_Default 等 |
 | 曲线 CurveFloat | 被上述 DA/设置按字段引用 | Curve_ChumSaturation 等 3 条 |
 
@@ -32,11 +33,48 @@
 | CatDefinitionId | 种类稳定 ID，角色用它选种类 | 必填、清单内唯一 |
 | DisplayName | 表现用显示名 | 不参与数值裁决 |
 | InitialPoison | 初始中毒值 | ≥0 |
-| FishingStrength | **猫力量**（规格 4.2：与鱼力量、竿强度三方比较） | >0 |
+| FishingStrength | **猫力量**（正体力期间完整生效，归零停止主动出力；不按剩余体力比例衰减） | >0 |
 | FightStaminaMaximum | **猫搏斗体力上限**（规格 4.3 消耗与松线喘息回复的基线） | >0 |
 | bEnableRuntimeDefinition | 显式启用 gate | 必须 True |
 
 ⚠️ 角色指定了 ID 但定义缺失/未就绪时**不会悄悄换成全局值**——属性播种直接失败并打 `initial_attributes_unresolved` Warning，钓鱼链整体不可用，方便第一时间发现配错。
+
+### 1.1 全局搏斗平衡：`UCatFishingFightBalanceDefinition`
+
+正式资产是 `/Game/Catfishing/Data/Fishing/DA_FishingFightBalance_Default`，稳定 ID 为 `DefaultFishingFightBalance`。在 Content Browser 打开后，Details 面板按“力量与运动 / 体力 / 鱼线与张力”显示中文字段名；修改会从下一次选鱼/搏斗开始生效，已经开始的搏斗继续使用冻结快照。
+
+| 编辑器字段 | C++ 字段 | 当前值 | 含义 |
+|---|---|---:|---|
+| 每公斤力量 | StrengthPerKilogram | 10 | 实际鱼重→鱼力量；也用于猫基础力量反推等效质量 |
+| 每点力量加速度 | AccelerationPerStrength | 5 | 猫/鱼共享的力量→绷线对抗加速度换算；不限制鱼的自由游速 |
+| 猫端驱动力响应时间 | DriveResponseSeconds | 1s | 猫端对抗加速度投影到收线/牵引响应速度的时长 |
+| 收线速度 | ReelSpeedCentimetersPerSecond | 80 cm/s | 左键收线意图速度上限 |
+| 猫力竭后鱼外冲速度倍率 | ExhaustedCatEscapeSpeedMultiplier | 2 | 主位体力为零且没有助手实际出力时，按鱼两档游速中的较大值乘此倍率持续外冲；有限值且至少为 1 |
+| 猫做功体力消耗系数 | CatStaminaCostPerStrengthCentimeter | 默认 0.002 | 猫移动/收线每标准力量·cm 已完成正功的单价 |
+| 猫转杆每标准转矩弧度体力系数 | CatRodStaminaCostPerStrengthRadian | 默认 0.03 | 真实转角按主位主动转矩比例加权后计价，不使用最大转速虚拟弧长 |
+| 猫无负载动作成本倍率 | CatUnloadedWorkMultiplier | 默认 0.15 | 猫实际做功的基础价格，与负载价格相加 |
+| 猫满用力每秒支撑耗体 | CatSupportStaminaPerSecond | 默认 2/s | 支撑按用力/负载比例平方和持续时间结算；共享支撑与转杆支撑取较高者 |
+| 鱼做功体力消耗系数 | FishStaminaCostPerStrengthCentimeter | 默认 0.002 | 每点标准努力强度、每厘米有效对抗努力的体力价格；再乘鱼对抗负载，自由游动不扣体力 |
+| 猫移动体力倍率 | CatMovementStaminaMultiplier | 默认 1 | 绷线时主动远离鱼的身体移动费用；被动位移不计 |
+| 猫收线体力倍率 | CatReelStaminaMultiplier | 默认 1 | 原求解器本步卷线量的正功费用 |
+| 猫转杆体力倍率 | CatRodStaminaMultiplier | 默认 1 | 主位实际转杆正功及其时间支撑的倍率 |
+| 猫持竿体力倍率 | CatHoldStaminaMultiplier | 默认 1 | 共享沿线支撑费用倍率；实际做功费用不再抵扣支撑 |
+| 猫负载体力倍率 | CatLoadStaminaMultiplier | 默认 1 | 猫实际做功乘 `(无负载动作倍率 + 自身归一化负载 × 本倍率)` |
+| 鱼负载体力倍率 | FishLoadStaminaMultiplier | 默认 1 | 鱼有效努力费用仅乘 `自身归一化对抗负载 × 倍率`，无基础游动费用；0 完全关闭鱼对抗耗体 |
+| 鱼受阻努力折算倍率 | IsometricEffortMultiplier | 1 | 仅鱼使用的未完成对抗意图距离倍率；猫支撑改为按时间收费 |
+| 放线体力恢复速度 | SlackStaminaRegenPerSecond | 3/s | 正常按右键时猫的恢复速度，不受张力、移动或转杆限制；零体力强制拖拽除外 |
+| 鱼力竭吸附阈值 | FishExhaustionThreshold | 0.5 | 本步产生正的鱼对抗耗体后，剩余绝对体力不高于该值才吸附归零；零耗体不触发 |
+| 低体力休息触发比例/时长倍率 | LowStaminaRestThreshold/Multiplier | 0.5 / 1.5 | 低体力鱼延长平静期 |
+| 满张力响应距离 | TensionResponseRangeCentimeters | 10 cm | 约束误差换算张力的尺度，参与牵引、转矩和体力负载结算 |
+| 逃脱松线余量 | EscapeSlackCentimeters | 100 cm | 无人持竿时超过最大线长后的逃脱余量 |
+| 僵持鱼竿磨损系数 | StalemateRodWearPerFishStrength | 0.1 | 按鱼沿线向外负载连续缩放的鱼竿磨损，写回同一装备实例；几何张力不能替代方向负载 |
+| 持竿最低杠杆倍率 | HeldRodMinimumLeverageMultiplier | 0.4 | 竿身偏线时保留的最低有效力量 |
+| 最大约束修正速度 | MaximumFishConstraintCorrectionSpeedCentimetersPerSecond | 160 cm/s | 鱼端修正及猫端牵引目标的安全上限 |
+| 背离鱼方向最低速度倍率 | MinimumCarrierAwaySpeedMultiplier | 0.15 | 满负载且鱼占优时玩家仍保留的最低后退比例 |
+
+`DefaultGame.ini` 只保存 `FightBalanceDefinition` 资产引用，不再保存上述数值；C++ 也不提供可偷偷生效的第二套回退。资产缺失、未勾“启用正式运行”或任一字段非法时，Fishing runtime 保持 fail-closed。
+
+上述费用与倍率均允许非负有限值。猫实际做功与支撑分开，阶段倍率不再额外放大猫费用；正功量只来自已完成的主动身体移动、本步卷线与归一化主动转矩加权转角，受阻时只承担时间支撑。猫负载倍率为 0 只关闭实际做功的负载附加部分；完全关闭猫费用需要关闭线性单价、转杆单价及支撑费。鱼受阻倍率为 1 仍表示同等意图完成或受阻时有效努力相同，但必须同时存在张力、向外反抗与可用猫合力才计费，鱼没有基础游动费用。正常右键恢复与双方免耗体、零体力强制锁线拖拽保持。修改资产后下一场搏斗生效；三个新字段为既有资产提供默认值，创建脚本只初始化新资产，已有合法资产保留调参，非法资产报错而不自动覆盖。
 
 ## 2. 装备/道具：`UCatEquipmentDefinition`（正式目录 `Equip_*`）
 
@@ -47,15 +85,17 @@
 **Rod（鱼竿）**：
 | 字段 | 含义 | 规格对应 |
 |---|---|---|
-| MaximumRodDurability | **本场鱼线耐久上限**（字段名为兼容资产保留；每次新会话重置，不会写坏鱼竿） | 40/70/120 档 |
-| FishingStrength | 钓组承载强度（静态） | 25/60/130 档，判定①断线比较用 |
+| MaximumRodDurability | **鱼竿耐久上限**；新鱼竿或维修使用该上限，同一装备实例的剩余耐久跨场累计，归零即损坏；重新抛竿不恢复 | `StarterRodT1` 当前基线 150；其他档以正式资产为准 |
+| FishingStrength | 已停用的旧鱼竿承载字段，仅保留资产/蓝图读取兼容 | 不再编辑、校验或参与搏斗；不要用它调断线阈值 |
 | MaximumLineLengthCentimeters | 线长上限 cm | 放尽绷紧强制按拖判定 |
 | BaseDurabilityWearPerSecond / HighTensionWearMultiplier | 基础磨损/绷紧磨损倍率 | ≥0 / ≥1 |
 | RodTipLocal/StandLocal/GripLocalTransform | 竿尖(抛竿原点+鱼线起点)/操作站位/握持 三个权威锚点 | 表现蓝图只读不写 |
 
 **Bait（鱼饵）**：`BiteRateMultiplier`(>0,咬钩率倍率) · `MinimumBiteDelayMultiplier`(>0,最短咬钩延迟倍率)
 **Float（浮漂）**：`MaximumCastDistanceCentimeters`(>0,最大抛竿距离) · `CastErrorStandardDeviation/MaximumCastErrorRadiusCentimeters`(落点误差σ/上限,σ≤上限) · `BiteSignalStability`(0~1,咬钩信号稳定度)
-**ScoopNet（抄网）**：`ScoopReachCentimeters`(>0,**抄手沿 Character 面朝正前方发射的水平线段长度**,语义="网杆多长")。方向取 `Character Actor Forward`，不读取 `Controller/Camera` 朝向。与鱼定义里的 `ScoopTargetRadiusCentimeters`(圆半径)配对构成抄网判定：**俯视投影下线段∩圆**即够得着。实际生效长度取 `min(本值, UCatFishingSettings::ScoopReachCentimeters)`——全局那个是上限闸门。高度差另由 `UCatFishingSettings::MaximumScoopVerticalDeltaCentimeters` 单独限制,判定本身完全不看俯仰角。当前默认配置不发放或自动选中抄网；`StarterScoopNet` 只保留为正式目录定义，商店/奖励来源接入前暂时没有默认获取渠道。
+
+当前正式射程：羽毛 1000 cm、毛线球 1500 cm、铃铛 2000 cm。实际可抛距离取浮漂射程与鱼竿 `MaximumLineLengthCentimeters` 的较小值，并从竿尖量至落点；入门竿线长 1500 cm。原 300/500/700 cm 配置由 `Scripts/update_fishing_cast_ranges.py` 定向迁移，其他装备字段保留。
+**ScoopNet（抄网）**：`ScoopReachCentimeters`(>0,**抄手沿 Character 面朝正前方发射的水平线段长度**,语义="网杆多长")。方向取 `Character Actor Forward`，不读取 `Controller/Camera` 朝向。与鱼定义里的 `ScoopTargetRadiusCentimeters`(圆半径)配对构成抄网判定：**俯视投影下线段∩圆**即够得着。实际生效长度取 `min(本值, UCatFishingSettings::ScoopReachCentimeters)`——全局那个是上限闸门。高度差另由 `UCatFishingSettings::MaximumScoopVerticalDeltaCentimeters` 单独限制,判定本身完全不看俯仰角。当前独立临时开关 `bAutoGrantStarterScoopNet=True` 使用正式定义 `StarterScoopNet`，由服务器在玩家占有新角色时补齐一把并自动选中，占一个背包格；已有抄网或同一角色已处理过时不重复发。商店获取接通后删除临时来源，射程和捕获判定保持不变。
 **Chum（窝料）**：`bRunConsumable` 必须 True，核心在 `ChumInfluence` 结构：
 
 | ChumInfluence 字段 | 含义 | 校验 |
@@ -78,7 +118,7 @@
 | 出没 | RegionIds / TimeOfDay / Weather | 可出现的水域 ID/时段(夜晚永不进选择器)/天气;**空数组=未配置=不出现** |
 | 稀有 | RarityTierId / SpawnWeight | 稀有度轴 ID / 选择正权重(稀有度由数据表达,代码无硬编码档位) |
 | 体重 | Minimum/MaximumWeightKilograms | 服务器在区间内抽取真实重量;min≤max |
-| 搏斗 | FishStrength | **鱼力量**(规格 4.2,与猫力/竿强比较);>0 |
+| 搏斗 | FishStrength | 旧二进制资产兼容字段；运行时忽略，重存资产后可逐步清空 |
 | 搏斗 | FishFightStamina | **鱼搏斗体力**(短周期,与稀有度独立);>0 |
 | 搏斗 | MinimumFightParticipants | 需要的协作人数;单人局过滤 >1 的定义 |
 | 抄网 | **ScoopTargetRadiusCentimeters** | **这条鱼的可捞圆圈半径 cm**,圆心随鱼移动;抄手向正前方发射长度=抄网 ScoopReach 的水平线段,与圆相交即够得着。语义="这条鱼有多好捞"——小鱼小圈、巨鱼大圈以降低多人抢抄难度。**必须 >0,为 0 时服务器一律拒绝抢抄** |
@@ -104,7 +144,7 @@
 | EstuaryBass | peacock_bass | Puffer | frontosa |
 | ElectricEel | electric_catfish | Pike | pike |
 
-鱼种没有固定“低级/中级”战斗标签。令力量比 `S=FishStrength/玩家合计力量`、体力比 `T=FishFightStamina/玩家合计搏斗体力`，目录按 `max(S, 2ST/(S+T))` 计算当前上下文里的连续挑战度：力量比是危险下限，力量/体力调和均值只在两项都足够时抬高挑战度，避免“体力高但力量极低、进入搏斗又被 2 倍力量规则秒杀”的鱼占据势均力敌带。`≤ ComfortChallengeMaximumRatio` 为轻松带，之后到 `MatchedChallengeMaximumRatio` 为势均力敌带，再到 `MaximumChallengeRatio` 为高风险带；超过安全上限才不进入池。系统先按三条 `*ChallengeBandWeight` 在当前有候选的难度带之间抽取，再用 `SpawnWeight × 窝料倍率 × 鱼饵倍率 × 连续挑战倍率` 在带内选鱼。某个目标带没有鱼时会在其余有候选的带之间重新归一化；只有生态条件、协作人数或安全上限后确实没有鱼才会空钩。
+鱼种没有固定“低级/中级”战斗标签。服务器为每个候选鱼种按本次机会种子和稳定鱼 ID 独立抽取个体重量，令 `FishStrength=WeightKilograms×StrengthPerKilogram`；其中换算系数来自当前正式搏斗平衡资产。该重量和力量一旦选中便冻结，选择、搏斗和 HUD 不再分别重抽或读取旧静态字段。令力量比 `S=FishStrength/玩家合计力量`、体力比 `T=FishFightStamina/玩家合计搏斗体力`，目录按 `max(S, 2ST/(S+T))` 计算当前上下文里的连续挑战度：力量比是危险下限，力量/体力调和均值只在两项都足够时抬高挑战度，避免力量极低但体力很高的鱼被错误归入势均力敌带。`≤ ComfortChallengeMaximumRatio` 为轻松带，之后到 `MatchedChallengeMaximumRatio` 为势均力敌带，再到 `MaximumChallengeRatio` 为高风险带；超过安全上限才不进入池。系统先按三条 `*ChallengeBandWeight` 在当前有候选的难度带之间抽取，再用 `SpawnWeight × 窝料倍率 × 鱼饵倍率 × 连续挑战倍率` 在带内选鱼。某个目标带没有鱼时会在其余有候选的带之间重新归一化；只有生态条件、协作人数或安全上限后确实没有鱼才会空钩。
 
 ## 4. 咬钩性格：`UCatBitePersonalityDefinition`（DA_Bite_*）
 
@@ -138,8 +178,8 @@
 | ExhaustedInwardProbability | 接近力竭时的向内概率；必须 ≥ 满体力值 |
 | InwardProbabilityExponent | `pow(1-体力比例, 指数)` 的曲线；>1 表示低体力后才明显增加向内概率 |
 | InwardConeHalfAngleDegrees | 朝竿尖方向左右各多少度算向内；默认 60°，完整扇区 120° |
-| StrongConfrontationAlignmentThreshold | 夹角投影达到多少才算强对抗；体力/磨损在阈值以下仍连续按投影计算 |
-| StrongConfrontationConfirmationSeconds | 强对抗角度需要连续保持多久，才允许触发断线/落水/碾压 |
+| StrongConfrontationAlignmentThreshold | 夹角投影达到多少才算强对抗；体力/磨损在阈值以下仍连续按 `LineLoad` 投影计算，张力不把低方向负载抬成满负载 |
+| StrongConfrontationConfirmationSeconds | 强对抗角度需要连续保持多久才发布表现标记，不裁决终局；落水由 Condition 水深判定 |
 | AngleStrengthExponent | 对 `max(cos夹角,0)` 做幂变换；1=线性，越大则斜向力量衰减越快 |
 
 ## 6. GAS 资产：`UCatAbilitySet` / `UCatAbilityInputConfig`

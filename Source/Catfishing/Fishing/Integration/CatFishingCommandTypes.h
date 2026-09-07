@@ -13,7 +13,9 @@ enum class ECatFishingCommandType : uint8
 	/** 右键松开线杯的按下 / 松开边沿；只在 HookedFight 有效。 */
 	SlackPressed, SlackReleased,
 	/** Q 打窝蓄力按下 / 松开；服务器按按住时长换算蓄力并投放。 */
-	ChumPressed, ChumReleased
+	ChumPressed, ChumReleased,
+	/** 主动切断当前上钩会话的鱼线；与自然断线及普通取消分别结算。 */
+	CutLine
 };
 
 UENUM(BlueprintType)
@@ -117,6 +119,9 @@ struct FCatPrimaryReleasedCommand
 
 USTRUCT(BlueprintType)
 struct FCatCancelFishingCommand { GENERATED_BODY() UPROPERTY(BlueprintReadWrite) FCatFishingSessionCommandContext Context; };
+
+USTRUCT(BlueprintType)
+struct FCatCutFishingLineCommand { GENERATED_BODY() UPROPERTY(BlueprintReadWrite) FCatFishingSessionCommandContext Context; };
 
 USTRUCT(BlueprintType)
 struct FCatRequestScoopCommand

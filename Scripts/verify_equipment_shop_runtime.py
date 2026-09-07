@@ -90,8 +90,6 @@ def _validate_equipment_definition(settings, definition_id: str, kind: str, asse
     if kind == "Rod":
         _require(float(_get_property(definition, "maximum_rod_durability", "MaximumRodDurability")) > 0.0,
                  f"{definition_id} Rod 最大耐久无效")
-        _require(float(_get_property(definition, "fishing_strength", "FishingStrength")) > 0.0,
-                 f"{definition_id} FishingStrength 无效")
         _require(float(_get_property(definition, "maximum_line_length_centimeters", "MaximumLineLengthCentimeters")) > 0.0,
                  f"{definition_id} 线长无效")
         _require("None" not in str(_get_property(definition, "use_actor_class", "UseActorClass")),
@@ -192,7 +190,7 @@ def main() -> None:
     _require(not bool(_get_property(equipment_settings, "b_auto_configure_starter_loadout", "bAutoConfigureStarterLoadout")),
              "开发期 Starter Loadout 自动装配必须关闭，第四模块只能由商店或解锁授权等正式入口交付装备")
     _require(bool(_get_property(equipment_settings, "b_auto_grant_starter_scoop_net", "bAutoGrantStarterScoopNet")),
-             "当前开发期默认抄网发放必须显式打开；正式获取接入后应连同本断言一起关闭")
+             "当前每角色一次的临时抄网测试发放必须显式打开；商店获取接入后删除发放入口及本断言")
     _require(int(_get_property(equipment_settings, "starter_chum_quantity", "StarterChumQuantity")) > 0,
              "StarterChumQuantity 必须为正")
 

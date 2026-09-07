@@ -392,7 +392,7 @@ Root
 | Probe | 树的 `Cat Fishing Enter Phase` Task |
 | TrueBiteWindow | `Open True Bite Window` 打开通用窗口；只播放浮漂下沉，不创建鱼 |
 | HookedFight | 真咬窗内收到左键后，`RequestHook` 才选鱼、生成 Actor、扣饵并 EnterPhase |
-| ExhaustedReel | 鱼体力耗尽或力量碾压后，Session 保留鱼当前位置、停止搏斗 Runner 并在 **C++ 内部** EnterPhase |
+| ExhaustedReel | `FishExhausted` 事件进入叶子后执行 `EnterPhase`；保留鱼位置且不停止 Runner |
 | Resolved / Terminated | `FinalizeSession()`，**树禁止进入** |
 
 所以这棵树只有 4 个状态，逻辑非常薄。
@@ -450,7 +450,7 @@ Root
 
 **注意这条转移和前面的不一样** —— 不是 On Event，是 **On State Succeeded**。
 
-**原理**：Task 2 每帧检查搏斗 Runner 还在不在跑。鱼体力耗尽或力量碾压时，C++ 保留死亡帧位置、`Runner->Stop()` 并把阶段写成 `ExhaustedReel`。Task 2 下一帧发现 Runner 停了，返回 Succeeded。此时 Task 1 早就 Succeeded 了，两个都完成 → State 完成（Succeeded）→ 触发到只负责保持树运行的叶子状态。玩家之后持续左键，鱼才会按有限速度收近。
+**原理**：Runner 判定鱼体力耗尽后先把鱼意图改为 `AutoHauling`，再发送 `Cat.Fishing.FishExhausted`。事件边进入 `ExhaustedReelHold`，叶子执行 `EnterPhase(ExhaustedReel)`；Runner 始终继续运行，玩家持续左键时仍由同一双端约束收近。
 
 > 这里正好体现 `Tasks Completion = All` 的必要性：如果是默认的 `Any`，Task 1 一 Succeeded 就立刻跳走了，搏斗根本没机会跑。
 
@@ -561,7 +561,7 @@ UE 自带可视化调试器：菜单 **Tools → Debug → StateTree Debugger**�
 |---|---|
 | 树完全不启动，没有任何 `fishing_phase_entered` | ini 里 `FishingSessionStateTree` 没填，或路径写错 |
 | 只有 `Phase=Waiting` 就再也不动了 | `ProbeTriggered` 转移没配，或 Event Tag 拼错 |
-| `Phase=Waiting` 都没有 | Context Actor Class 设错，或 `Schedule Waiting Probe` 返回了 Failed（检查 ini 里 `BaseBiteRatePerSecond` 等三个咬钩参数是否都 > 0） |
+| `Phase=Waiting` 都没有 | Context Actor Class 设错，或 `Schedule Waiting Probe` 返回了 Failed；检查 `fishing_bite_schedule_rejected`，以及 ini 的三个 MeanBiteDelaySeconds 锚点、Single/FullChumContribution、慢浮/预警/总上限是否通过 `TryGetBiteTimingParameters`；默认20/14/6秒均值、1.7/8.5贡献、3秒慢浮、1.5秒预警、40秒上限 |
 | 提竿后 EmptyHook / No eligible fish | 鱼表没匹配上 —— 检查关卡 RegionId 与正式鱼的 `RegionIds`、时间天气、协作人数和 `MaximumChallengeRatio` |
 | 阶段跳得飞快，几帧就跑完 | **`Tasks Completion` 忘了改成 `All`** |
 | 提竿后没进 HookedFight | 提竿时机不在 TrueBiteWindow 窗口内（默认 3 秒） |

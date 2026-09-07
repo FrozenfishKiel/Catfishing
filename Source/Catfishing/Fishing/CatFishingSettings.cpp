@@ -1,15 +1,30 @@
 #include "Fishing/CatFishingSettings.h"
 
 #include "Data/CatFishPersonalityDefinition.h"
+#include "Fishing/Config/CatFishingFightBalanceDefinition.h"
+#include "Fishing/Simulation/CatFishingBiteTimingModel.h"
 
 // 运行 gate 流程：要求产品显式开启总开关、提供 StateTree 软引用、有限正响应窗/终态复制窗与近岸验证；任一为 Unset 都阻止会话创建。
 bool UCatFishingSettings::IsRuntimeReady() const
 {
 	return bEnableFishingRuntime && !FishingSessionStateTree.IsNull() && !FishBehaviorStateTree.IsNull()
 		&& FMath::IsFinite(TrueBiteWindowSeconds) && TrueBiteWindowSeconds > 0.0
+		&& LoadFightBalanceDefinition()
+		&& FMath::IsFinite(HeldRodMaximumAngularSpeedDegreesPerSecond)
+		&& HeldRodMaximumAngularSpeedDegreesPerSecond > 0.0
+		&& FMath::IsFinite(HeldRodAngularResistanceResponseSeconds)
+		&& HeldRodAngularResistanceResponseSeconds > 0.0
+		&& FMath::IsFinite(HeldRodFishPullSmoothingSeconds)
+		&& HeldRodFishPullSmoothingSeconds > 0.0
 		&& bEnableNearShoreValidation
 		&& FMath::IsFinite(ScoopReachCentimeters) && ScoopReachCentimeters > 0.0
 		&& FMath::IsFinite(TerminalReplicationWindowSeconds) && TerminalReplicationWindowSeconds > 0.0;
+}
+
+const UCatFishingFightBalanceDefinition* UCatFishingSettings::LoadFightBalanceDefinition() const
+{
+	const UCatFishingFightBalanceDefinition* Definition = FightBalanceDefinition.LoadSynchronous();
+	return Definition && Definition->IsRuntimeDefinitionReady() ? Definition : nullptr;
 }
 
 const UCatBitePersonalityDefinition* UCatFishingSettings::FindBitePersonality(const FName PersonalityId) const
@@ -78,6 +93,22 @@ bool UCatFishingSettings::TryGetBiteWarning(double& OutWarningSeconds) const
 		return false;
 	}
 	OutWarningSeconds = BiteWarningSeconds;
+	return true;
+}
+
+bool UCatFishingSettings::TryGetBiteTimingParameters(FCatFishingBiteTimingParameters& OutParameters) const
+{
+	OutParameters = {};
+	FCatFishingBiteTimingParameters Candidate;
+	Candidate.NoChumMeanSeconds = NoChumMeanBiteDelaySeconds;
+	Candidate.SingleChumMeanSeconds = SingleChumMeanBiteDelaySeconds;
+	Candidate.FullChumMeanSeconds = FullChumMeanBiteDelaySeconds;
+	Candidate.SingleChumContribution = SingleChumContribution;
+	Candidate.FullChumContribution = FullChumContribution;
+	Candidate.MinimumCalmSeconds = MinimumBiteDelaySeconds;
+	Candidate.MaximumWaitSeconds = MaximumBiteDelaySeconds;
+	if (!TryGetBiteWarning(Candidate.WarningSeconds) || !Candidate.IsValid()) return false;
+	OutParameters = Candidate;
 	return true;
 }
 

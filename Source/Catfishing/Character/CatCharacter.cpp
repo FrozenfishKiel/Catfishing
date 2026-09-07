@@ -1,4 +1,5 @@
 #include "Character/CatCharacter.h"
+#include "Character/CatCharacterMovementComponent.h"
 
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
@@ -10,9 +11,11 @@
 #include "Equipment/CatEquipmentComponent.h"
 #include "Growth/CatGrowthComponent.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
+#include "Fishing/Presentation/CatFishingCameraComponent.h"
 
 // 构造流程：一次创建 Character-owned ASC/AttributeSet、离散身体状态、吃鱼成长和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
-ACatCharacter::ACatCharacter()
+ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UCatCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
 	AbilitySystemComponent = CreateDefaultSubobject<UCatAbilitySystemComponent>(TEXT("AbilitySystemComponent"));
 	AbilitySystemComponent->SetIsReplicated(true);
@@ -22,6 +25,16 @@ ACatCharacter::ACatCharacter()
 	ConditionComponent = CreateDefaultSubobject<UCatConditionComponent>(TEXT("ConditionComponent"));
 	GrowthComponent = CreateDefaultSubobject<UCatGrowthComponent>(TEXT("GrowthComponent"));
 	EquipmentComponent = CreateDefaultSubobject<UCatEquipmentComponent>(TEXT("EquipmentComponent"));
+	FishingCameraComponent = CreateDefaultSubobject<UCatFishingCameraComponent>(TEXT("FishingCameraComponent"));
+}
+
+void ACatCharacter::CalcCamera(const float DeltaTime, FMinimalViewInfo& OutResult)
+{
+	// 相机裁决流程：先让钓鱼表现组件尝试提供持杆视角；没有活动钓鱼镜头或组件尚未就绪时，回到 ACharacter/蓝图相机，避免普通移动视角被 C++ 抢占。
+	if (!FishingCameraComponent || !FishingCameraComponent->TryGetCameraView(DeltaTime, OutResult))
+	{
+		Super::CalcCamera(DeltaTime, OutResult);
+	}
 }
 
 // ASC 查询流程：直接返回构造期唯一组件；不通过 Controller、PlayerState 或全局管理器寻找第二份身体能力真相。

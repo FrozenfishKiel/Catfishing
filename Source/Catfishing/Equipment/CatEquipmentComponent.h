@@ -62,9 +62,12 @@ public:
 	FCatDomainCommandResult GrantInventoryQuantityFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName DefinitionId, int32 Quantity);
 
-	/** 商店或其他服务器权威来源授予非数量物品；成功后写入库存数组，并在空选择、旧选择缺货或同定义已选竿不可用时修正当前选择。 */
+	/** 商店或其他服务器权威来源授予非数量物品；写入库存后修正缺失或不可用的选择，部署中的旧竿等收回后再替换。 */
 	FCatDomainCommandResult GrantEquipmentFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName DefinitionId);
+
+	/** 临时测试入口，仅由玩家占有后的服务器调用；已有抄网则复用，每个 Character 成功处理一次，商店获取接通后删除。 */
+	void GrantStarterScoopNetIfConfigured();
 
 	/** 背包点击或玩法入口共用的物品使用入口；它按实例调用定义侧 Use 裁决，Equipment 只执行移出实例、扣指定数量或 no-op 的库存事务。 */
 	FCatInventoryItemUseResult Use(FGuid RequestId, int64 ExpectedRevision, FGuid ItemInstanceId,
@@ -91,13 +94,11 @@ public:
 	FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);
 	/** 确认消耗 Begin 已暂存的鱼饵；库存数量已经在 Begin 发布，本函数只收口会话内的饵料事务。 */
 	FCatFishingUseOperationResult CommitFishingBaitDeferred(FGuid FishingSessionId);
-	/** 记录 Fishing 会话当前累计的竿磨损；它只更新会话暂存值，不直接改公开装备快照。 */
-	FCatFishingUseOperationResult SetAccumulatedFishingRodWear(FGuid FishingSessionId, int64 WearSequence,
+	/** 按递增累计磨损的差额立即扣减 Begin 绑定的鱼竿实例；重复序号不重扣，Release 不回滚。 */
+	FCatFishingUseOperationResult ApplyFishingRodWear(FGuid FishingSessionId, int64 WearSequence,
 		double AbsoluteTotal);
-	/** 把已累计的竿磨损写回当前鱼竿实例并结束本会话；调用前饵料事务必须已经确认消耗。 */
-	FCatFishingUseOperationResult CommitFishingRodWear(FGuid FishingSessionId);
-	/** 把当前鱼竿实例标记为断竿并结束本会话；调用前饵料事务必须已经确认消耗。 */
-	FCatFishingUseOperationResult CommitFishingRodBreak(FGuid FishingSessionId);
+	/** 从该会话绑定的库存或活动 Use 实例读取跨场保留的耐久，不读取当前选择的另一根竿。 */
+	bool GetFishingRodDurability(FGuid FishingSessionId, double& OutDurability, bool& OutBroken) const;
 	/** 结束 Fishing 使用记录；未消耗的暂存饵会回到随身库存，已消耗的记录只关闭自身。 */
 	FCatFishingUseOperationResult ReleaseFishingUse(FGuid FishingSessionId);
 	/** 当前是否有仍未结束的 Fishing 使用记录；维修和失败预算用它避开进行中的钓鱼结算。 */
@@ -120,22 +121,19 @@ private:
 
 	struct FCatFishingUseRecord
 	{
-		/** 本场 Fishing 会话身份；后续扣饵、耐久结算和释放都按它找到同一条短生命周期记录。 */
-		FGuid SessionId;
+		/** Begin 冻结的鱼竿实例与定义；后续磨损不得按当前选择重新选竿。 */
+		FGuid RodItemInstanceId;
+		FName RodDefinitionId = NAME_None;
 		/** Begin 从随身库存移出的一份鱼饵定义；数量型物品脱离原堆栈后不再复用原 ItemInstanceId。 */
 		FName ReservedBaitDefinitionId = NAME_None;
 		/** 已接收的竿磨损序号；磨损事件按递增序号提交，重复或跳号不会改耐久。 */
 		int64 LastWearSequence = 0;
-		/** 本场 Fishing 累计的竿耐久损耗；结算时一次性扣到当前选中竿实例，不参与库存拖放判断。 */
+		/** 已按差额写入绑定实例的累计磨损；仅用于序号去重，不是另一份剩余耐久。 */
 		double AbsoluteRodWear = 0.0;
 		/** 当前记录是否仍持有 Begin 移出的那份鱼饵；Commit 消耗或 Release 归还后清掉，防止同一份饵重复收口。 */
 		bool bBaitQuantityReserved = false;
 		/** 鱼饵是否已经被本会话确认消耗；它让重复结算只返回终态，不再次处理暂存物。 */
 		bool bBaitCommitted = false;
-		/** 竿磨损是否已经写回；成功后会释放本会话，防止磨损和断竿同时落地。 */
-		bool bWearCommitted = false;
-		/** 断竿是否已经写回；成功后会释放本会话，防止断竿和磨损同时落地。 */
-		bool bBreakCommitted = false;
 		/** 本会话是否已经结束；结束后的记录只作为重放终态，不再保护鱼饵或接受耐久事件。 */
 		bool bReleased = false;
 	};
@@ -156,11 +154,15 @@ private:
 	const FCatFishingUseRecord* FindFishingUseRecord(FGuid FishingSessionId) const;
 	FCatInventoryItemUseRecord* FindInventoryItemUseRecord(FGuid ItemInstanceId);
 	const FCatInventoryItemUseRecord* FindInventoryItemUseRecord(FGuid ItemInstanceId) const;
+	/** Begin 冻结鱼竿的可写实例查找；优先库存格，部署中则读取活动 Use 记录里的同一件物品。 */
+	FCatRunInventorySlot* FindFishingRodInstance(const FCatFishingUseRecord& Record);
+	/** Begin 冻结鱼竿的只读实例查找；用于会话快照读取，不能因为查询创建或替换实例。 */
+	const FCatRunInventorySlot* FindFishingRodInstance(const FCatFishingUseRecord& Record) const;
 	/** 是否存在尚未收口的物品 Use 记录；维修和失败预算用它避免改写正在由场景持有的物品状态。 */
 	bool HasActiveInventoryItemUse() const;
 	/** 读取某个定义在库存格数组中的可见数量；选择自动切换和商店预检用它判断旧选择是否仍有实物。 */
 	int32 GetInventoryItemQuantity(FName DefinitionId) const;
-	/** 根据新入库定义修正空选择、无库存旧选择或已断/耐久非法的同定义已选竿；它只改钓鱼选择，不把库存物品移出数组。 */
+	/** 新入库或收回物品后修正钓鱼选择；已收回的坏竿可跨型号替换为库存里的可用竿，部署中与健康选择保持不变。 */
 	void AutoSelectGrantedInventoryItem(const UCatEquipmentDefinition& Definition, FName DefinitionId);
 	/** 把当前选择中的鱼竿状态同步到库存格或活动 Use 记录；耐久、断竿和收杆归还都读这份实例副本。 */
 	void SyncSelectedRodStateToSelectedInstance();
@@ -239,4 +241,13 @@ private:
 	TMap<FGuid, FCatInventoryItemUseRecord> InventoryItemUseRecords;
 	/** 物品 Use/UnUse 首次终态缓存；简单消耗品重试会读它而不是再次扣量，部署/收回重试也不会重复移动同一实例。 */
 	TMap<FString, FCatInventoryItemUseResult> InventoryItemUseTerminalCache;
+	/** 临时测试发放的角色生命周期记录；不复制、不存档，避免把抄网移出背包后重占有刷出第二把。 */
+	bool bStarterScoopNetGrantHandled = false;
+	/** 抄网选择复制日志只在定义或实例变化时输出，不参与玩法裁决。 */
+	FName LastLoggedScoopNetDefinitionId = NAME_None;
+	FGuid LastLoggedScoopNetItemInstanceId;
+	/** 仅用于客户端复制诊断限频，不参与耐久或玩法裁决。 */
+	FGuid LastLoggedRodInstanceId;
+	int32 LastLoggedRodDurabilityBand = INDEX_NONE;
+	bool bLastLoggedRodBroken = false;
 };

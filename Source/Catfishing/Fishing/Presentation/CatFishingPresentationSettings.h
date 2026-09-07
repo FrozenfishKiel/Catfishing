@@ -16,6 +16,30 @@ class CATFISHING_API UCatFishingPresentationSettings : public UDeveloperSettings
 	GENERATED_BODY()
 
 public:
+	/** Mesh-local flexible axis of the existing formal rod. The source mesh is authored along +Z. */
+	UPROPERTY(Config, EditAnywhere, Category="RodBend")
+	FVector RodBendAxisLocal = FVector::UpVector;
+	/** Fraction of the source mesh span reserved for the rigid grip/reel. */
+	UPROPERTY(Config, EditAnywhere, Category="RodBend", meta=(ClampMin="0", ClampMax="0.9"))
+	double RodBendRigidFraction = 0.25;
+	/** Transverse line force at half the maximum cosmetic bend. No gameplay stiffness or strength limit. */
+	UPROPERTY(Config, EditAnywhere, Category="RodBend", meta=(ClampMin="1", Units="N"))
+	double RodBendReferenceForceNewtons = 50.0;
+	UPROPERTY(Config, EditAnywhere, Category="RodBend", meta=(ClampMin="0", ClampMax="90", Units="deg"))
+	double RodBendMaximumAngleDegrees = 75.0;
+	/** Exponential response time, also used to relax after slack/Hook destruction. */
+	UPROPERTY(Config, EditAnywhere, Category="RodBend", meta=(ClampMin="0.01", Units="s"))
+	double RodBendResponseSeconds = 0.15;
+
+	/** 第一人称镜头相对实际握把的偏移：后方、左侧、上方，使杆落在画面右下。 */
+	UPROPERTY(Config, EditAnywhere, Category="Camera", meta=(Units="cm"))
+	FVector FightCameraGripOffsetCentimeters = FVector(-35.0, -16.0, 50.0);
+	UPROPERTY(Config, EditAnywhere, Category="Camera", meta=(ClampMin="30", ClampMax="140", Units="deg"))
+	float FightCameraFieldOfView = 90.0f;
+	/** 镜头追随实际握把的响应时间；平滑固定步负载和复制姿态，不改变鱼竿受力。 */
+	UPROPERTY(Config, EditAnywhere, Category="Camera", meta=(ClampMin="0.01", Units="s"))
+	double FightCameraFollowResponseSeconds = 0.08;
+
 	const UCatRodSkinDefinition* FindRuntimeRodSkin(FName RodSkinDefinitionId, FName RodDefinitionId) const;
 	/** 抛竿后生成的浮漂/鱼钩表现 Actor 类；它属于 Fishing 表现链，不代表某个库存物品实例。 */
 	UPROPERTY(Config, EditAnywhere) TSoftClassPtr<ACatFishingHookActor> HookActorClass;
@@ -32,7 +56,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Animation")
 	TSoftObjectPtr<UAnimMontage> LineBrokenMontage;
 
-	/** 服务器确认猫体力耗尽或被鱼拖下水后，在当前钓手身上播放的一次性落水表现。 */
+	/** Condition 确认猫脚点进入危险水深后，在当前钓手身上播放的一次性落水表现。 */
 	UPROPERTY(Config, EditAnywhere, Category="Animation")
 	TSoftObjectPtr<UAnimMontage> CatInWaterMontage;
 
@@ -50,28 +74,20 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Bobber", meta=(ClampMin="0", Units="cm"))
 	double BobberBiteSinkDepthCentimeters = 28.0;
 
-	/** Cable 纯表现更新间隔；玩法模拟和网络复制仍使用各自的服务器频率。 */
+	/** 曲线纯表现更新间隔；玩法模拟和网络复制仍使用各自的服务器频率。 */
 	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0.005", Units="s"))
 	double FishingLineVisualUpdateIntervalSeconds = 1.0 / 60.0;
-	/** Hook 复制落点到本地 Cable 起点的插值速度，消除 20Hz 端点阶跃。 */
+	/** Hook 复制落点到本地曲线起点的插值速度，消除 20Hz 端点阶跃。 */
 	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0"))
 	double FishingLineEndpointInterpolationSpeed = 18.0;
-	/** L_paid 到本地 CableLength 的插值速度。 */
+	/** L_paid 到本地曲线弧长的插值速度；不改变权威线长。 */
 	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0"))
 	double FishingLineLengthInterpolationSpeed = 14.0;
-	/** SlackRatio 到本地重力表现的插值速度。 */
-	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0"))
-	double FishingLineSlackInterpolationSpeed = 10.0;
-	/** Cable 内部 Verlet 子步；只影响本地视觉稳定性。 */
-	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0.005", ClampMax="0.1", Units="s"))
-	double FishingLineSimulationSubstepSeconds = 0.01;
-	/** 固定约束求解次数；不再在松弛/绷紧间硬切。 */
-	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="1", ClampMax="16"))
-	int32 FishingLineSolverIterations = 10;
-	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0"))
-	double FishingLineTautGravityScale = 0.08;
-	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0"))
-	double FishingLineSlackGravityScale = 1.0;
+	/** 曲线采样段数；只控制网格精度，没有物理迭代、重力或惯性。 */
+	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="4", ClampMax="256"))
+	int32 FishingLineCurveSegments = 64;
+	UPROPERTY(Config, EditAnywhere, Category="FishingLine", meta=(ClampMin="0.01", ClampMax="10", Units="cm"))
+	double FishingLineWidthCentimeters = 1.25;
 	/** 客户端窝点表现 Actor 类；留空则用原生基类（无任何可见表现）。 */
 	UPROPERTY(Config, EditAnywhere) TSoftClassPtr<ACatChumFieldPresentationActor> ChumFieldPresentationClass;
 	UPROPERTY(Config, EditAnywhere) TArray<TSoftObjectPtr<UCatRodSkinDefinition>> RodSkinCatalog;

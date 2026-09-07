@@ -11,7 +11,7 @@ class FCatFishingDebugFishTypeLineTest;
 /**
  * 前期无美术资源时的钓鱼调试可视化：水域边界、瞄准落点、蓄力抛物线、窝点圈、钩/鱼/鱼线与阶段提示。
  * 纯本地绘制，不写任何权威状态。世界标记由 `cat.Fishing.Debug`（默认 0）控制；右上角三方数值由
- * 独立的 `cat.Fishing.Stats`（默认 0）控制，需要排查资源/力量时再手动开启；Shipping 构建整体不编译绘制体。
+ * 独立的 `cat.Fishing.Stats`（默认 1）控制，持续显示资源/力量，可手动关闭；Shipping 构建整体不编译绘制体。
  */
 UCLASS()
 class CATFISHING_API UCatFishingDebugSubsystem : public UTickableWorldSubsystem

@@ -17,12 +17,16 @@
 	],
 	"Plugins": [
 		{
+			"Name": "ProceduralMeshComponent",
+			"Enabled": true
+		},
+		{
 			"Name": "EnhancedInput",
 			"Enabled": true
 		},
 		{
 			"Name": "CableComponent",
-			"Enabled": true
+			"Enabled": false
 		},
 		{
 			"Name": "GameplayAbilities",

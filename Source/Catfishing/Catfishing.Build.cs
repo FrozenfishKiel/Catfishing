@@ -12,7 +12,7 @@ public class Catfishing : ModuleRules
 		{
 			"Core", "CoreUObject", "Engine", "DeveloperSettings", "UMG", "AudioMixer",
 			"GameplayAbilities", "GameplayTags", "NetCore", "OnlineSubsystem", "StateTreeModule",
-			"GameplayStateTreeModule"
+			"GameplayStateTreeModule", "ProceduralMeshComponent"
 		});
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{

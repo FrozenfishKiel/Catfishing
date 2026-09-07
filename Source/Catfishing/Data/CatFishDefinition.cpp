@@ -34,7 +34,6 @@ bool UCatFishDefinition::IsRuntimeDefinitionReady() const
 		&& FMath::IsFinite(MinimumWeightKilograms) && MinimumWeightKilograms > 0.0
 		&& FMath::IsFinite(MaximumWeightKilograms) && MaximumWeightKilograms >= MinimumWeightKilograms
 		&& MinimumFightParticipants >= 1 && MinimumFightParticipants <= 8
-		&& FMath::IsFinite(FishStrength) && FishStrength > 0.0
 		&& FMath::IsFinite(FishFightStamina) && FishFightStamina > 0.0
 		&& !BitePersonalityId.IsNone() && !FightPersonalityId.IsNone() && bFoodReady
 		&& bChumPreferenceValid && bBaitMultipliersValid;

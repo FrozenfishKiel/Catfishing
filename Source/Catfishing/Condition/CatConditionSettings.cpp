@@ -5,3 +5,13 @@ bool UCatConditionSettings::HasDownedThresholds() const
 {
 	return bEnableConditionRuntime && FMath::IsFinite(PoisonDownedThreshold) && PoisonDownedThreshold > 0.0;
 }
+
+bool UCatConditionSettings::HasWaterExposureThresholds() const
+{
+	return bEnableConditionRuntime
+		&& FMath::IsFinite(WetWaterDepthCentimeters) && WetWaterDepthCentimeters >= 0.0
+		&& FMath::IsFinite(DangerousWaterDepthCentimeters) && DangerousWaterDepthCentimeters > 0.0
+		&& FMath::IsFinite(DangerousWaterExitDepthCentimeters) && DangerousWaterExitDepthCentimeters >= 0.0
+		&& DangerousWaterExitDepthCentimeters < DangerousWaterDepthCentimeters
+		&& FMath::IsFinite(DangerousWaterConfirmationSeconds) && DangerousWaterConfirmationSeconds >= 0.0;
+}

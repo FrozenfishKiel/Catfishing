@@ -117,6 +117,26 @@ struct FCatWaterSpatialResult
 	double VerticalDeltaCm = 0.0;
 };
 
+/** 指定水域下的脚点浸没事实；深度为正表示脚点位于水面下，不包含玩法危险阈值。 */
+USTRUCT(BlueprintType)
+struct FCatWaterImmersionResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY(BlueprintReadOnly)
+	bool bSucceeded = false;
+	UPROPERTY(BlueprintReadOnly)
+	ECatWaterQueryError Error = ECatWaterQueryError::RegionNotFound;
+	UPROPERTY(BlueprintReadOnly)
+	FCatWaterRegionHandle WaterRegion;
+	UPROPERTY(BlueprintReadOnly)
+	ECatWaterContainment Containment = ECatWaterContainment::Outside;
+	UPROPERTY(BlueprintReadOnly)
+	FVector WaterSurfaceWorldPoint = FVector::ZeroVector;
+	UPROPERTY(BlueprintReadOnly)
+	double ImmersionDepthCentimeters = 0.0;
+};
+
 /** 同一水域共享窝料池的三轴向量；腥、香、酵只表达输入维度，不包含吸引公式。 */
 USTRUCT(BlueprintType)
 struct FCatChumVector

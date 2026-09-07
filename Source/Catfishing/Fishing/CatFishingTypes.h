@@ -37,13 +37,15 @@ enum class ECatFishingOutcome : uint8
 	/** 抄网已把水中鱼交接为抄手嘴叼的世界鱼；尚未写入容器。 */
 	Caught,
 	EmptyHook, HookWindowExpired, Escaped,
-	/** 旧版本曾把鱼线断裂误写成鱼竿永久损坏；仅为已有蓝图/存档保持枚举序号，不再由钓鱼核心产生。 */
-	RodBroken UMETA(Hidden),
+	/** 同一鱼竿实例的累计耐久耗尽；必须维修或换一根可用鱼竿才能继续钓鱼。 */
+	RodBroken,
 	CatInWater, Cancelled, Invalidated,
 	/** 会话已把鱼安全释放为独立岸上拾取物；鱼尚未归属任何玩家。 */
 	Landed,
-	/** 鱼线承载能力或本次线耐久耗尽；只结束当前会话，鱼竿本体保持可用。 */
-	LineBroken
+	/** 旧蓝图/表现资产的枚举值兼容；现行搏斗不再生成强度过载断线。保持枚举序号。 */
+	LineBroken UMETA(Hidden),
+	/** 玩家主动切断本场鱼线止损；鱼与已消耗鱼饵丢失，不追加或退还鱼竿磨损。 */
+	LineCut
 };
 
 UENUM(BlueprintType)
@@ -160,6 +162,14 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	FName FishDefinitionId = NAME_None;
 
+	/** 本次服务器实际抽到的鱼重量；力量、视觉和捕获结果都使用这一份个体事实。 */
+	UPROPERTY(BlueprintReadOnly)
+	double FishWeightKilograms = 0.0;
+
+	/** 本次个体由重量换算、并叠加完美中鱼倍率后的搏斗力量。 */
+	UPROPERTY(BlueprintReadOnly)
+	double FishStrength = 0.0;
+
 	/** 当前鱼是否属于 Giant 档；只影响 HookedFight 是否接收协作者，近岸仍抢抄。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bGiant = false;
@@ -176,7 +186,19 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	double CombinedFightStamina = 0.0;
 
-	/** 当前鱼短周期体力剩余；只由 StateTree FightExchange Task 消耗，进入会话时从 FishDefinition 冻结。 */
+	/** 兼容旧 HUD 的二值输入指示：1=正在收线，0=未收线；不再存在蓄力积分。 */
+	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Use bReeling; charging was removed"))
+	float PrimaryPowerAlpha = 0.0f;
+
+	/** 当前固定步参与意图求解的多人力量合计，尚未乘竿向修正。 */
+	UPROPERTY(BlueprintReadOnly)
+	double ActiveCombinedFishingStrength = 0.0;
+
+	/** 当前实际贡献/消耗体力模型中的辅助位数量。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 ActiveHelperCount = 0;
+
+	/** 当前鱼短周期体力剩余；常规搏斗由固定步 Runner 消耗，兼容巨鱼交换由 StateTree Task 消耗。 */
 	UPROPERTY(BlueprintReadOnly)
 	double FishFightStaminaRemaining = 0.0;
 
@@ -184,16 +206,15 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	double NormalizedFishStamina = 0.0;
 
-	/** 搏斗中的本场鱼线耐久余量（字段名兼容旧蓝图；进入搏斗时重置，非搏斗阶段保持 0）。 */
-	/** 本场钓鱼的鱼线剩余承载耐久；字段名为兼容既有蓝图保留，不代表场景鱼竿永久损坏。 */
-	UPROPERTY(BlueprintReadOnly, meta=(DisplayName="Line Durability Remaining"))
+	/** 本场绑定鱼竿实例剩余耐久的只读镜像；来自 Equipment，跨场累计，终态不补满。 */
+	UPROPERTY(BlueprintReadOnly, meta=(DisplayName="Rod Durability Remaining"))
 	double RodDurabilityRemaining = 0.0;
 
-	/** 当前连续收线（左键拖）输入；高频更新不推进离散命令 Revision。 */
+	/** 主位当前是否按住收线；松开边沿立即回到锁线。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bReeling = false;
 
-	/** 当前是否按住右键松开线杯；收线优先，二者同时按住时以 bReeling 为准。 */
+	/** 当前是否主动按住右键自由出线；两键均松开时为锁线。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bSlacking = false;
 
@@ -216,6 +237,30 @@ struct FCatFishingSessionSnapshot
 	/** 服务器确认的强对抗状态；客户端只消费，不自行按 Transform 猜测。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bStrongConfrontation = false;
+
+	/** 当前竿身朝向产生的有效杠杆倍率；1 为完全对齐，配置下限防止瞬时归零。 */
+	UPROPERTY(BlueprintReadOnly)
+	float RodLeverageMultiplier = 1.0f;
+
+	/** 兼容旧 HUD，移动不再折算为力量百分比。 */
+	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Carrier movement is an endpoint intent"))
+	float CarrierMovementAlpha = 0.0f;
+
+	/** 共同张力超过猫支撑能力后的加速度；由 CMC 进行速度积分与碰撞。 */
+	UPROPERTY(BlueprintReadOnly)
+	float CarrierPullAccelerationCentimetersPerSecondSquared = 0.0f;
+
+	/** 废弃的硬限速观察字段。当前恒为 1；仅保留尚未完整加载的旧 WBP 序列化兼容。 */
+	UPROPERTY(BlueprintReadOnly)
+	float CarrierAwaySpeedMultiplier = 1.0f;
+
+	/** 统一约束求解前的线长误差，用于 Development 包诊断和调试表现。 */
+	UPROPERTY(BlueprintReadOnly)
+	float ConstraintErrorCentimeters = 0.0f;
+
+	/** 同一份约束误差本步实际分配给鱼端的水平修正距离。 */
+	UPROPERTY(BlueprintReadOnly)
+	float FishConstraintCorrectionCentimeters = 0.0f;
 
 	void AdvanceVersion(const ECatFishingSnapshotMutation Mutation)
 	{

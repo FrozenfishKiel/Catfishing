@@ -21,6 +21,11 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Data.FishSelection.FiltersBeforeNormalizingRemainingCandidates",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFormalFishSelectionWeightStrengthTest,
+	"Catfishing.Unit.Data.FishSelection.FormalCatalogFreezesWeightDerivedStrength",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
 namespace CatFishSelectionPolicyTestsPrivate
 {
 	static UCatFishPresentationDefinition* MakePresentationDefinition()
@@ -112,6 +117,8 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
 		TEXT("LightFish"), 1.0, Presentation);
 	UCatFishDefinition* HeavyFish = CatFishSelectionPolicyTestsPrivate::MakeFishDefinition(
 		TEXT("HeavyFish"), 3.0, Presentation);
+	// 旧静态字段故意制造巨大差异；选鱼必须只使用本次抽到的重量和统一换算系数。
+	HeavyFish->FishStrength = 500.0;
 	if (!TestNotNull(TEXT("creates transient catalog settings"), Settings)
 		|| !TestNotNull(TEXT("creates transient saturation curve"), SaturationCurve)
 		|| !TestNotNull(TEXT("creates transient presentation"), Presentation)
@@ -151,6 +158,7 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
 	Context.ActivePlayerCount = 1;
 	Context.CombinedFishingStrength = 10.0;
 	Context.CombinedFightStamina = 10.0;
+	Context.StrengthPerKilogram = 10.0;
 	Context.RandomSeed = 20260901;
 
 	const FCatFishSelectionResult BypassedResult = Settings->SelectRuntimeDefinition(Context);
@@ -163,12 +171,54 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
 	const double ExpectedProbability = BypassedResult.FishDefinitionId == TEXT("HeavyFish") ? 0.75 : 0.25;
 	TestEqual(TEXT("reported probability is normalized only across remaining candidates"),
 		BypassedResult.SelectedNormalizedProbability, ExpectedProbability, UE_DOUBLE_SMALL_NUMBER);
+	TestEqual(TEXT("selected individual weight is frozen once"),
+		BypassedResult.WeightKilograms, 1.0, UE_DOUBLE_SMALL_NUMBER);
+	TestEqual(TEXT("fish strength is sampled weight times shared coefficient"),
+		BypassedResult.BaseFishStrength, 10.0, UE_DOUBLE_SMALL_NUMBER);
 
 	Settings->bEnableTimeOfDayEligibilityFilter = true;
 	const FCatFishSelectionResult EnabledResult = Settings->SelectRuntimeDefinition(Context);
 	TestFalse(TEXT("enabling the time gate activates the existing definition data"), EnabledResult.bSelected);
 	TestEqual(TEXT("unmatched time removes both candidates before normalization"),
 		EnabledResult.EligibleCandidateCount, 0);
+	return !HasAnyErrors();
+}
+
+bool FCatFormalFishSelectionWeightStrengthTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const UCatFishCatalogSettings* Settings = GetDefault<UCatFishCatalogSettings>();
+	if (!TestNotNull(TEXT("loads formal fish catalog"), Settings))
+	{
+		return false;
+	}
+	FCatFishSelectionContext Context;
+	Context.WaterRegion.RegionId = TEXT("River");
+	Context.WaterRegion.GeometryRevision = 1;
+	Context.ChumSample.bSucceeded = true;
+	Context.ChumSample.WaterRegion = Context.WaterRegion;
+	Context.ActivePlayerCount = 1;
+	Context.CombinedFishingStrength = 50.0;
+	Context.CombinedFightStamina = 60.0;
+	Context.StrengthPerKilogram = 10.0;
+	Context.RandomSeed = 20260903;
+	const FCatFishSelectionResult First = Settings->SelectRuntimeDefinition(Context);
+	const FCatFishSelectionResult Replay = Settings->SelectRuntimeDefinition(Context);
+	if (!TestTrue(TEXT("formal River catalog still selects an eligible individual"), First.bSelected)
+		|| !TestEqual(TEXT("same opportunity replays the fish id"),
+			Replay.FishDefinitionId, First.FishDefinitionId)
+		|| !TestEqual(TEXT("same opportunity replays the individual weight"),
+			Replay.WeightKilograms, First.WeightKilograms, UE_DOUBLE_SMALL_NUMBER))
+	{
+		return false;
+	}
+	const UCatFishDefinition* Definition = Settings->FindRuntimeDefinition(First.FishDefinitionId);
+	TestNotNull(TEXT("selected formal fish resolves"), Definition);
+	TestTrue(TEXT("selected weight stays inside its formal definition"), Definition
+		&& First.WeightKilograms >= Definition->MinimumWeightKilograms
+		&& First.WeightKilograms <= Definition->MaximumWeightKilograms);
+	TestEqual(TEXT("formal runtime strength comes from that exact individual weight"),
+		First.BaseFishStrength, First.WeightKilograms * Context.StrengthPerKilogram, 1e-6);
 	return !HasAnyErrors();
 }
 

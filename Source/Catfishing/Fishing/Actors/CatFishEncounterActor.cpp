@@ -1,4 +1,6 @@
 #include "Fishing/Actors/CatFishEncounterActor.h"
+#include "Fishing/Presentation/CatFishGrounding.h"
+#include "Engine/SkeletalMesh.h"
 
 #include "Animation/AnimClassInterface.h"
 #include "Animation/Skeleton.h"
@@ -221,12 +223,21 @@ void ACatFishEncounterActor::ApplyVisualPose()
 	const double VisualRoll = PresentationState.MotionIntent == ECatFishMotionIntent::AutoHauling
 		? AppliedExhaustedVisualRollDegrees : 0.0;
 	VisualRoot->SetRelativeLocationAndRotation(FVector::ZeroVector, FRotator(0.0, 0.0, VisualRoll));
+	if (PresentationState.bGrounded && FishMesh && FishMesh->GetSkeletalMeshAsset())
+	{
+		const FBox Bounds = FishMesh->GetSkeletalMeshAsset()->GetBounds().GetBox()
+			+ FishMesh->CalcBounds(FTransform::Identity).GetBox();
+		const double Lift = CatFishGrounding::ComputeVerticalLift(Bounds,
+			FishMesh->GetComponentTransform(), GetActorLocation(), PresentationState.GroundNormal);
+		VisualRoot->AddWorldOffset(FVector(0.0, 0.0, Lift));
+	}
 }
 
 bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionIntent MotionIntent,
 	const double CurrentLineLength, const FVector& FishWorldPosition, const float StepDeltaSeconds,
 	const float FishLineAlignment, const float NormalizedLineLoad,
-	const float IntendedSwimSpeedCentimetersPerSecond, const bool bStrongConfrontation)
+	const float IntendedSwimSpeedCentimetersPerSecond, const bool bStrongConfrontation,
+	const bool bGrounded, const FVector GroundNormal)
 {
 	// [FishLogic 4/5：权威落位与多人表现]
 	// Simulator 给出事实，本 Actor 只负责在服务器应用 Transform/表现快照；位置和 PresentationState 再复制给客户端。
@@ -235,7 +246,7 @@ bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionInt
 		|| !FMath::IsFinite(FishLineAlignment) || FishLineAlignment < -1.0f || FishLineAlignment > 1.0f
 		|| !FMath::IsFinite(NormalizedLineLoad) || NormalizedLineLoad < 0.0f || NormalizedLineLoad > 1.0f
 		|| !FMath::IsFinite(IntendedSwimSpeedCentimetersPerSecond)
-		|| IntendedSwimSpeedCentimetersPerSecond < 0.0f)
+		|| IntendedSwimSpeedCentimetersPerSecond < 0.0f || GroundNormal.ContainsNaN())
 	{
 		// 必须已经完成身份初始化才允许推进搏斗表现；位置/线长必须是合法有限值，防止把 NaN/负数同步给客户端。
 		return false;
@@ -248,7 +259,8 @@ bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionInt
 	PresentationState.FishLineAlignment = FishLineAlignment;
 	PresentationState.NormalizedLineLoad = NormalizedLineLoad;
 	PresentationState.bStrongConfrontation = bStrongConfrontation;
-	ApplyVisualPose();
+	PresentationState.bGrounded = bGrounded;
+	PresentationState.GroundNormal = bGrounded ? GroundNormal.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::UpVector) : FVector::UpVector;
 
 	// 朝向跟随实际游动方向：取本步位移的水平分量求偏航角。
 	// 只写 Actor 旋转（随 SetReplicateMovement 一起复制），玩法判定（线长/近岸/抄网半圆）全部只用位置，旋转不参与任何裁决。
@@ -277,6 +289,15 @@ bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionInt
 
 	// 用 TeleportPhysics 直接落位而非物理模拟移动：鱼的位置由服务器权威搏斗模拟计算，这里只是把结果“摆”过去。
 	SetActorLocation(FishWorldPosition, false, nullptr, ETeleportType::TeleportPhysics);
+	ApplyVisualPose();
+	if (Previous.bGrounded != PresentationState.bGrounded)
+	{
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fish_ground_presentation SessionId=%s Actor=%s Grounded=%d Contact=%s Normal=%s VisualOffset=%s VisualScale=%.3f World=%s NetMode=%d Authority=%d Role=%s"),
+			*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *GetName(), bGrounded,
+			*FishWorldPosition.ToCompactString(), *PresentationState.GroundNormal.ToCompactString(),
+			*VisualRoot->GetRelativeLocation().ToCompactString(), PresentationState.VisualScale,
+			*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()));
+	}
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 	ForceNetUpdate(); // 搏斗中每一步都需要尽快同步，不等待默认复制频率。
 	return true;
@@ -306,8 +327,8 @@ void ACatFishEncounterActor::BeginPlay()
 	Super::BeginPlay();
 	RefreshFishPresentation();
 	// 每鱼轴向/位置修正已经来自 FishPresentation 并应用到 FishMesh；VisualRoot 只承载复制状态驱动的力竭侧翻。
-	ApplyVisualPose();
 	ApplyVisualScale();
+	ApplyVisualPose();
 	if (bHasPendingPresentationNotification && !bPresentationDeferred)
 	{
 		// BeginPlay 完成、且没有被显式要求继续延迟时，把 BeginPlay 之前排队的表现通知补发出去
@@ -323,7 +344,22 @@ void ACatFishEncounterActor::OnRep_PresentationState(const FCatFishEncounterPres
 	RefreshFishPresentation();
 	ApplyVisualScale();
 	ApplyVisualPose();
+	if (Previous.bGrounded != PresentationState.bGrounded)
+	{
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fish_ground_presentation_received SessionId=%s Actor=%s Grounded=%d Contact=%s Normal=%s VisualOffset=%s VisualScale=%.3f World=%s NetMode=%d Role=%s"),
+			*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *GetName(), PresentationState.bGrounded,
+			*GetActorLocation().ToCompactString(), *PresentationState.GroundNormal.ToCompactString(),
+			*VisualRoot->GetRelativeLocation().ToCompactString(), PresentationState.VisualScale,
+			*GetNameSafe(GetWorld()), GetNetMode(), *UEnum::GetValueAsString(GetLocalRole()));
+	}
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
+}
+
+void ACatFishEncounterActor::OnRep_ReplicatedMovement()
+{
+	Super::OnRep_ReplicatedMovement();
+	// 位置/朝向与表现状态可能分包到达；每次都从未托起的基础姿态重算，不累积偏移。
+	ApplyVisualPose();
 }
 
 void ACatFishEncounterActor::QueueOrDispatchPresentationChanged(const FCatFishEncounterPresentationState& Previous,

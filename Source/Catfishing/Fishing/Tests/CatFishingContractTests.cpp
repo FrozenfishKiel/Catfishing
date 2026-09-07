@@ -4,6 +4,7 @@
 #include "UObject/UnrealType.h"
 
 #include "Fishing/CatFishingGameplayTags.h"
+#include "Fishing/CatFishingStateTreeEvents.h"
 #include "Fishing/CatFishingTypes.h"
 #include "Fishing/Integration/CatFishingCommandTypes.h"
 
@@ -32,15 +33,13 @@ bool FCatFishingNativeEventTagsContractTest::RunTest(const FString& Parameters)
 		{ TEXT("Cat.Fishing.Event.EarlyHook"), &CatFishingGameplayTags::EarlyHook },
 		{ TEXT("Cat.Fishing.Event.HookAccepted"), &CatFishingGameplayTags::HookAccepted },
 		{ TEXT("Cat.Fishing.Event.WindowExpired"), &CatFishingGameplayTags::WindowExpired },
-		{ TEXT("Cat.Fishing.Event.FishStaminaDepleted"), &CatFishingGameplayTags::FishStaminaDepleted },
-		{ TEXT("Cat.Fishing.Event.CatStaminaDepleted"), &CatFishingGameplayTags::CatStaminaDepleted },
-		{ TEXT("Cat.Fishing.Event.CatOverpowered"), &CatFishingGameplayTags::CatOverpowered },
 		{ TEXT("Cat.Fishing.Event.RodBroken"), &CatFishingGameplayTags::RodBroken },
 		{ TEXT("Cat.Fishing.Event.LineBroken"), &CatFishingGameplayTags::LineBroken },
 		{ TEXT("Cat.Fishing.Event.AutoHaulReachedShore"), &CatFishingGameplayTags::AutoHaulReachedShore },
 		{ TEXT("Cat.Fishing.Event.AutoHaulFailed"), &CatFishingGameplayTags::AutoHaulFailed },
 		{ TEXT("Cat.Fishing.Event.ScoopCommitted"), &CatFishingGameplayTags::ScoopCommitted },
 		{ TEXT("Cat.Fishing.Event.Interrupted"), &CatFishingGameplayTags::Interrupted },
+		{ TEXT("Cat.Fishing.FishExhausted"), &CatFishingStateTreeEvents::FishExhausted },
 	};
 
 	for (const FExpectedTag& Expected : ExpectedTags)

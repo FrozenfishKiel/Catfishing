@@ -70,6 +70,9 @@ public:
 
 	/** 最近的可加入竿：已部署、未损坏、容器仍有容量，且公共交互锚点在 MaxDistance 内；不限竿主。 */
 	ACatFishingRodActor* FindNearestOperableRod(const FVector& WorldLocation, double MaxDistanceCentimeters);
+	/** 最近的无人值守活动会话鱼竿；供原持竿者/竿主在不先拾起时主动切线止损。 */
+	ACatFishingRodActor* FindNearestUnattendedSessionRod(const FVector& WorldLocation,
+		double MaxDistanceCentimeters);
 
 	/** 查找绑定在指定竿上的存活未终态会话（操作位与会话解耦后，竿是会话的空间锚）；没有则空。 */
 	ACatFishingSession* FindActiveSessionByRod(const ACatFishingRodActor* RodActor);
@@ -108,14 +111,14 @@ private:
 	/** 终止全部存活会话并释放所有竿位；DiagnosticReason 只进入 Session 终态诊断。 */
 	void TerminateAllSessionsAndReleaseOperators(const TCHAR* DiagnosticReason);
 
-	/** 强制移除指定角色占用的竿位并恢复移动；容器压紧后按新编号重排所有剩余站位。 */
+	/** 强制移除指定角色占用的竿位；最后一人离开时同一鱼竿 Actor 落地。 */
 	void ReleaseOperatorForCharacter(const ACatCharacter* Character);
 
-	/** 清空所有存活鱼竿的操作槽并恢复每个操作角色的移动；鱼竿仍保持部署。 */
-	void ReleaseAllRodOperatorsAndRestoreMovement();
+	/** 清空所有存活鱼竿的操作槽；鱼竿仍保持部署并切到地面姿态。 */
+	void ReleaseAllRodOperators();
 
-	/** 清空单根鱼竿的操作槽并恢复相关角色移动；用于窗口关闭和鱼竿异常注销的同一补偿路径。 */
-	void ReleaseRodOperatorsAndRestoreMovement(ACatFishingRodActor* Rod);
+	/** 清空单根鱼竿的操作槽；用于窗口关闭和鱼竿异常注销的同一补偿路径。 */
+	void ReleaseRodOperators(ACatFishingRodActor* Rod);
 
 	/** 从 Controller 的 APlayerState::UniqueId 读取服务器私有身份；无效身份不能进入开始终态缓存。 */
 	static FString ResolveStableNetId(const AController* Controller);
