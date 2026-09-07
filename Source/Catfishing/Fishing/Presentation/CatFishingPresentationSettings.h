@@ -18,7 +18,7 @@ class CATFISHING_API UCatFishingPresentationSettings : public UDeveloperSettings
 public:
 	/** 第一人称镜头相对实际握把的偏移：后方、左侧、上方，使杆落在画面右下。 */
 	UPROPERTY(Config, EditAnywhere, Category="Camera", meta=(Units="cm"))
-	FVector FightCameraGripOffsetCentimeters = FVector(-35.0, -16.0, 16.0);
+	FVector FightCameraGripOffsetCentimeters = FVector(-35.0, -16.0, 50.0);
 	UPROPERTY(Config, EditAnywhere, Category="Camera", meta=(ClampMin="30", ClampMax="140", Units="deg"))
 	float FightCameraFieldOfView = 90.0f;
 	/** 镜头追随实际握把的响应时间；平滑固定步负载和复制姿态，不改变鱼竿受力。 */

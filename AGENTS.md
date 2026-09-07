@@ -73,7 +73,9 @@
 
 ## Harness 与进度入口
 
-- `Docs/Development/需求对齐差距清单.md` 是本项目唯一人工进度入口；`.codex/state/current-harness.json` 与 `.codex/state/current-graph.json` 只保存机器执行状态，不另建业务进度清单。
-- Harness 中声明为 `single_atomic_module` 的模块只能维护一个模块级状态。内部实现切面、Agent 节点和验证步骤不得拆成可独立关闭的业务事项；只有整套端到端验收同时成立后才能把模块标为完成。
-- 多个分流任务并行写同一工作区时，各模块必须使用 `.codex/state/<module>-harness.json`、`<module>-graph.json` 和 `<module>-context.json` 隔离机器状态，并在 `module_delivery` 中声明对应路径；这些文件不是新的人工进度账本。
+- `Docs/Development/需求对齐差距清单.md` 是本项目唯一人工进度入口；`.codex/state/current-harness.json` 与 `.codex/state/current-graph.json` 只保存机器执行状态，不另建业务进度清单。允许在当前对话、已有对应设计/交付文档或机器执行状态中维护临时计划、执行步骤和检查清单，但不得将其作为第二套业务进度入口。
+- Harness 中声明为 `single_atomic_module` 的模块只能维护一个模块级状态。内部实现切面、Agent 节点和验证步骤不得拆成可独立关闭的业务事项；只有整套端到端验收同时成立后才能把模块标为完成。此约束只限定业务模块的最终关闭，允许拆分实施、记录内部步骤完成及阶段证据，并按本文件的提交约定建立独立检查点；已验证的阶段成果与模块尚未完成可以同时成立。
+- 机器状态文件按实际使用的 Harness 工作流维护；未使用 Harness 的普通任务不必为满足本节而创建整套状态文件。使用 Harness 的多个分流任务并行写同一工作区的机器状态时，各模块必须使用 `.codex/state/<module>-harness.json`、`<module>-graph.json` 和 `<module>-context.json` 隔离机器状态，并在 `module_delivery` 中声明对应路径；这些文件不是新的人工进度账本。已有工作流及其检查脚本要求的状态仍须维护，不得以按需维护为由跳过。
 - 本项目测试 Agent 必须把证据分成 `contract`、`runtime_behavior`、`presentation_delivery` 三层。Automation、FullLoop、静态盘点或编译绿灯只能证明代码契约或运行链路，不能关闭正式资产、正式 WBP/UI、整场 Run/Environment/Social 行为验收或 Delivery readiness；这些高层缺口必须继续挂在对应模块级状态下。
+- 每次改动的验证范围依据影响盘点覆盖实际受影响的职责链及必要消费者；局部修复不因所属模块尚未完成而自动扩大为整场游戏验收。证据仍按上述三层记录，不涉及或未验证的层明确注明；模块最终关闭时必须核对整套端到端验收条件，不得以局部验证替代。
+- 某层验收受环境、资产或外部条件阻塞时，明确记录缺口、阻塞原因及解除条件，并继续推进其他不依赖该阻塞条件的已授权工作；不得仅因模块尚未整体验收而停止可推进的实施，也不得把受阻部分标为完成。需持续跟踪的缺口仍归入唯一人工进度入口的对应模块。
