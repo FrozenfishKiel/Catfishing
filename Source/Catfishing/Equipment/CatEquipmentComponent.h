@@ -6,13 +6,16 @@
 #include "CatEquipmentComponent.generated.h"
 
 class UCatEquipmentDefinition;
+class UCatEquipmentInventoryItemInstance;
+class UCatInventoryComponent;
 class ACatCampInventoryActor;
 class APlayerState;
+struct FCatInventoryEntry;
 
 /** Equipment 随身库存与钓鱼选择快照发生提交或复制变化的本机通知；UI 只把它当重读信号。 */
 DECLARE_MULTICAST_DELEGATE(FCatEquipmentSnapshotChanged);
 
-/** Character 的一局随身库存聚合；复制钓鱼选择、物品数量和鱼竿耐久，不持有永久解锁且不提供任何偷取接口。 */
+/** Character 的一局钓鱼选择和旧库存投影组件；正式物品实例同步到 InventoryComponent，迁移期继续复制旧快照给现有消费者。 */
 UCLASS(ClassGroup = (Catfishing), meta = (BlueprintSpawnableComponent))
 class CATFISHING_API UCatEquipmentComponent : public UActorComponent
 {
@@ -25,7 +28,7 @@ public:
 	/** 注册单一随身库存快照；终态缓存不复制。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
-	/** 提供服务器最终随身库存与钓鱼选择读模型；调用方只能据此显示/校验 Revision，不能通过引用补耐久或改库存。 */
+	/** 提供服务器最终钓鱼选择与迁移期库存投影；调用方只能显示或校验 Revision，不能通过引用补耐久或改正式库存。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Equipment")
 	const FCatEquipmentLoadoutSnapshot& GetSnapshot() const;
 
@@ -66,7 +69,7 @@ public:
 	FCatDomainCommandResult GrantEquipmentFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName DefinitionId);
 
-	/** 临时测试入口，仅由玩家占有后的服务器调用；已有抄网则复用，每个 Character 成功处理一次，商店获取接通后删除。 */
+	/** 临时测试入口，仅由玩家占有后的服务器调用；已有抄网则复用，没有抄网时只在库存容量足以容纳开局四件套后补给，商店获取接通后删除。 */
 	void GrantStarterScoopNetIfConfigured();
 
 	/** 背包点击或玩法入口共用的物品使用入口；它按实例调用定义侧 Use 裁决，Equipment 只执行移出实例、扣指定数量或 no-op 的库存事务。 */
@@ -189,6 +192,19 @@ private:
 	/** 补齐现有库存格的实例身份和工具状态；返回值表示本次是否修正了旧数据。 */
 	bool NormalizeInventorySlots();
 
+	/** 把当前旧随身库存快照转换成正式库存 entries；转换失败时不写入目标组件，避免形成半份正式库存。 */
+	bool BuildFormalEntriesFromSnapshot(UCatInventoryComponent& TargetInventory,
+		TArray<FCatInventoryEntry>& OutEntries);
+
+	/** 为一格旧随身物品创建或复用正式装备实例；实例 ID、定义和鱼竿状态必须跟旧格保持一致。 */
+	UCatEquipmentInventoryItemInstance* CreateOrUpdateFormalItemInstanceFromSlot(
+		const FCatRunInventorySlot& Slot,
+		UCatEquipmentDefinition& Definition,
+		const TMap<FGuid, UCatEquipmentInventoryItemInstance*>& ExistingInstances);
+
+	/** 将当前 Equipment 快照同步进 Owner 的正式库存组件；没有正式库存组件时保持旧兼容路径继续工作。 */
+	bool SyncOwnerInventoryComponentFromSnapshot();
+
 	/** 按实例身份查找随身库存格；Use、选择和诊断用它避免只按 DefinitionId 误伤同类物品。 */
 	FCatRunInventorySlot* FindInventorySlotByInstanceId(FGuid ItemInstanceId);
 	const FCatRunInventorySlot* FindInventorySlotByInstanceId(FGuid ItemInstanceId) const;
@@ -219,10 +235,10 @@ private:
 	/** 构造操作+RequestId 幂等键；只在当前 Character 生命周期使用。 */
 	static FString MakeTerminalKey(const TCHAR* Operation, FGuid RequestId);
 
-	/** authority 提交后请求复制并广播，客户端 RepNotify 只广播；所有 HUD 刷新因此走同一完整快照信号。 */
+	/** authority 发布旧快照前先同步 Owner 正式库存，再请求复制并广播；客户端 RepNotify 只广播，让迁移期新旧消费者都从同一提交刷新。 */
 	void PublishSnapshot();
 
-	/** 随身库存、钓鱼选择与鱼竿耐久的唯一复制读模型。 */
+	/** 钓鱼选择、鱼竿耐久和旧库存投影的复制读模型；正式库存组件已经同步同一份物品实例。 */
 	UPROPERTY(ReplicatedUsing = OnRep_Snapshot)
 	FCatEquipmentLoadoutSnapshot Snapshot;
 

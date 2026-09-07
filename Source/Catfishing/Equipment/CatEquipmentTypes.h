@@ -80,7 +80,7 @@ struct FCatRunInventorySlot
 	UPROPERTY(BlueprintReadOnly)
 	bool bRodBroken = false;
 };
-/** Character 当前随身库存与钓鱼选择的复制读模型；解锁仍在本地 Profile，局内持有量随 Character/World 清空。 */
+/** Character 当前钓鱼选择和迁移期库存投影的复制读模型；正式物品实例由 InventoryComponent 承载，旧消费者暂时继续读取这里。 */
 USTRUCT(BlueprintType)
 struct FCatEquipmentLoadoutSnapshot
 {
@@ -134,7 +134,7 @@ struct FCatEquipmentLoadoutSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bRodBroken = false;
 
-	/** 一局随身库存格子数组；这是库存事实源，鱼饵、窝料、鱼竿和鱼漂都在这里占格，不再另建装备栏库存。 */
+	/** 一局随身库存的迁移期格子投影；正式物品事实已经同步到 InventoryComponent，旧 UI、存档和钓鱼链路暂时读取这份数组。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatRunInventorySlot> InventorySlots;
 };

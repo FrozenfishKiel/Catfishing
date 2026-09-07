@@ -1,5 +1,6 @@
 #include "Equipment/CatEquipmentComponent.h"
 
+#include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
@@ -8,6 +9,9 @@
 #include "Engine/World.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemDefinition.h"
+#include "Inventory/CatInventoryItemInstance.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
 #include "Net/UnrealNetwork.h"
@@ -28,7 +32,7 @@ void UCatEquipmentComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 	DOREPLIFETIME(ThisClass, Snapshot);
 }
 
-// Snapshot 读取流程：返回服务器真相或客户端最近复制值；不从 Profile 或 Items 拼接第二份随身库存事实。
+// Snapshot 读取流程：返回服务器钓鱼选择和旧库存投影；正式物品实例由 Owner 的 InventoryComponent 同步承载。
 const FCatEquipmentLoadoutSnapshot& UCatEquipmentComponent::GetSnapshot() const
 {
 	return Snapshot;
@@ -626,7 +630,9 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantEquipmentFromAuthority(cons
 // 临时抄网补给流程：
 // 1. 先确认玩家 Pawn、authority、配置开关和本 Character 生命周期去重标记，避免客户端或重复占有自动刷物品。
 // 2. 再记录一次诊断请求并校验配置定义确实是抄网，配置错误只写日志，不改随身库存。
-// 3. 如果玩家已有任一完整抄网，就只修正缺失选择并发布必要快照；否则复用正式授予入口生成同一套库存事实。
+// 3. 如果玩家已有任一完整抄网，就只修正缺失选择并发布必要快照，不因容量临时变小移除玩家已有物品。
+// 4. 没有抄网时必须至少给基础竿、漂、饵和抄网留下四格；容量不足只记录拒绝，等容量恢复后允许再次尝试。
+// 5. 最后复用正式授予入口生成同一套库存事实，成功后才写本 Character 生命周期去重标记。
 void UCatEquipmentComponent::GrantStarterScoopNetIfConfigured()
 {
 	const APawn* Pawn = Cast<APawn>(GetOwner());
@@ -676,6 +682,17 @@ void UCatEquipmentComponent::GrantStarterScoopNetIfConfigured()
 			TEXT("Event=equipment_starter_scoop_completed RequestId=%s Result=AlreadyOwned Definition=%s ScoopNetItemInstanceId=%s Revision=%lld %s"),
 			*RequestId.ToString(), *Snapshot.ScoopNetDefinitionId.ToString(),
 			*Snapshot.ScoopNetItemInstanceId.ToString(), Snapshot.Revision, *Context);
+		return;
+	}
+
+	constexpr int32 MinimumStarterScoopCapacity = 4;
+	if (GetConfiguredInventorySlotCapacity() < MinimumStarterScoopCapacity)
+	{
+		UE_LOG(LogCatEquipment, Warning,
+			TEXT("Event=equipment_starter_scoop_rejected RequestId=%s Definition=%s Error=%s RequiredCapacity=%d ConfiguredCapacity=%d Revision=%lld %s"),
+			*RequestId.ToString(), *DefinitionId.ToString(),
+			*UEnum::GetValueAsString(ECatDomainCommandError::CapacityExceeded),
+			MinimumStarterScoopCapacity, GetConfiguredInventorySlotCapacity(), Snapshot.Revision, *Context);
 		return;
 	}
 
@@ -1553,6 +1570,140 @@ bool UCatEquipmentComponent::NormalizeInventorySlots()
 	return bChanged;
 }
 
+// 正式实例投影流程：
+// 1. 先按旧槽位实例 ID 复用正式库存里已有对象，避免每次 Equipment 发布都让客户端看到全新的物品对象身份。
+// 2. 没有可复用对象时按定义声明的库存实例类创建，并要求它仍是装备适配实例，防止普通实例吞掉鱼竿耐久。
+// 3. 最后把定义、实例 ID、运行宿主和鱼竿状态写回实例，让正式库存和旧快照表达同一份物品。
+UCatEquipmentInventoryItemInstance* UCatEquipmentComponent::CreateOrUpdateFormalItemInstanceFromSlot(
+	const FCatRunInventorySlot& Slot,
+	UCatEquipmentDefinition& Definition,
+	const TMap<FGuid, UCatEquipmentInventoryItemInstance*>& ExistingInstances)
+{
+	if (!CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot) || !Slot.ItemInstanceId.IsValid())
+	{
+		return nullptr;
+	}
+
+	UCatEquipmentInventoryItemInstance* Instance = nullptr;
+	if (UCatEquipmentInventoryItemInstance* const* ExistingInstance = ExistingInstances.Find(Slot.ItemInstanceId))
+	{
+		Instance = *ExistingInstance;
+	}
+	if (Instance == nullptr)
+	{
+		const TSubclassOf<UCatInventoryItemInstance> ResolvedInstanceClass =
+			UCatInventoryItemDefinition::ResolveItemInstanceClass(&Definition);
+		UClass* InstanceClass = ResolvedInstanceClass.Get();
+		if (InstanceClass == nullptr
+			|| !InstanceClass->IsChildOf(UCatEquipmentInventoryItemInstance::StaticClass()))
+		{
+			return nullptr;
+		}
+
+		Instance = NewObject<UCatEquipmentInventoryItemInstance>(GetOwner(), InstanceClass);
+	}
+	if (Instance == nullptr)
+	{
+		return nullptr;
+	}
+
+	Instance->SetItemDefinition(&Definition);
+	Instance->SetItemInstanceIdFromAuthority(Slot.ItemInstanceId);
+	Instance->SetRuntimeOwnerActor(GetOwner());
+	Instance->SetRodRuntimeStateFromAuthority(Slot.RodDurability, Slot.bRodBroken);
+	return Instance;
+}
+
+// 旧快照到正式库存建模流程：
+// 1. 先收集目标正式库存里已有的装备实例，后续按 ItemInstanceId 复用，保持正式库存对象身份稳定。
+// 2. 再按旧随身格顺序建立正式 entries，空格保留为空 entry，不改变 UI 和存档目前依赖的格位顺序。
+// 3. 每个占用格必须解析到运行就绪定义、合法数量和唯一实例 ID；任一失败都会清空输出并让同步整体拒绝。
+bool UCatEquipmentComponent::BuildFormalEntriesFromSnapshot(UCatInventoryComponent& TargetInventory,
+	TArray<FCatInventoryEntry>& OutEntries)
+{
+	OutEntries.Reset();
+	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+	if (Settings == nullptr)
+	{
+		return false;
+	}
+
+	TMap<FGuid, UCatEquipmentInventoryItemInstance*> ExistingInstances;
+	for (const FCatInventoryEntry& ExistingEntry : TargetInventory.GetInventoryEntries())
+	{
+		UCatEquipmentInventoryItemInstance* ExistingInstance =
+			Cast<UCatEquipmentInventoryItemInstance>(ExistingEntry.Instance);
+		if (ExistingInstance != nullptr && ExistingInstance->GetItemInstanceId().IsValid())
+		{
+			ExistingInstances.Add(ExistingInstance->GetItemInstanceId(), ExistingInstance);
+		}
+	}
+
+	TSet<FGuid> SeenItemInstanceIds;
+	OutEntries.Reserve(Snapshot.InventorySlots.Num());
+	for (const FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
+	{
+		FCatInventoryEntry& Entry = OutEntries.AddDefaulted_GetRef();
+		Entry = FCatInventoryEntry(&TargetInventory);
+		if (!CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot))
+		{
+			continue;
+		}
+
+		UCatEquipmentDefinition* Definition = Settings->FindRuntimeDefinition(Slot.DefinitionId);
+		const int32 StackLimit = Definition != nullptr ? GetInventoryStackLimit(*Definition) : 0;
+		if (Definition == nullptr
+			|| !Definition->IsInventoryRuntimeDefinitionReady()
+			|| Slot.Quantity <= 0
+			|| Slot.Quantity > StackLimit
+			|| !Slot.ItemInstanceId.IsValid()
+			|| SeenItemInstanceIds.Contains(Slot.ItemInstanceId))
+		{
+			OutEntries.Reset();
+			return false;
+		}
+
+		UCatEquipmentInventoryItemInstance* Instance =
+			CreateOrUpdateFormalItemInstanceFromSlot(Slot, *Definition, ExistingInstances);
+		if (Instance == nullptr)
+		{
+			OutEntries.Reset();
+			return false;
+		}
+
+		SeenItemInstanceIds.Add(Slot.ItemInstanceId);
+		Entry.Instance = Instance;
+		Entry.StackCount = Slot.Quantity;
+		Entry.LastObservedCount = Slot.Quantity;
+		Entry.SlotOwnerComponent = &TargetInventory;
+	}
+
+	return true;
+}
+
+// 正式库存同步流程：
+// 1. 只在 authority Owner 上执行；没有正式库存组件的旧测试宿主直接跳过，不改变既有 Equipment 行为。
+// 2. 先把当前 Snapshot 建模成正式 entries，再用 InventoryComponent 的整表替换入口提交，避免半同步。
+// 3. 失败只返回 false 给发布入口记录诊断；旧消费者仍收到快照，方便迁移期继续暴露问题而不是吞掉提交。
+bool UCatEquipmentComponent::SyncOwnerInventoryComponentFromSnapshot()
+{
+	AActor* Owner = GetOwner();
+	if (Owner == nullptr || !Owner->HasAuthority())
+	{
+		return true;
+	}
+
+	UCatInventoryComponent* OwnerInventory = Owner->FindComponentByClass<UCatInventoryComponent>();
+	if (OwnerInventory == nullptr)
+	{
+		return true;
+	}
+
+	TArray<FCatInventoryEntry> FormalEntries;
+	return BuildFormalEntriesFromSnapshot(*OwnerInventory, FormalEntries)
+		&& OwnerInventory->ReplaceInventoryEntriesFromAuthority(FormalEntries, GetConfiguredInventorySlotCapacity());
+}
+
 // 入库写入流程：
 // 1. 复用预检保证不会半写入；随后补齐配置容量内的空格。
 // 2. 同定义未满格先合并，并补齐该堆栈的实例身份；剩余数量再按定义创建新的运行期实例落到空格。
@@ -2211,11 +2362,18 @@ FString UCatEquipmentComponent::MakeTerminalKey(const TCHAR* Operation, const FG
 	return FString::Printf(TEXT("%s|%s"), Operation, *RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
-// Snapshot 发布流程：authority 提交后要求 Owner 立即复制，再向同机只读订阅者广播；订阅者只能重新读取 GetSnapshot。
+// Snapshot 发布流程：authority 先把旧库存投影同步到正式 InventoryComponent，再要求 Owner 立即复制并广播旧读模型变化。
 void UCatEquipmentComponent::PublishSnapshot()
 {
 	if (AActor* Owner = GetOwner(); Owner && Owner->HasAuthority())
 	{
+		if (!SyncOwnerInventoryComponentFromSnapshot())
+		{
+			UE_LOG(LogCatEquipment, Warning,
+				TEXT("Event=equipment_inventory_sync_failed Revision=%lld Slots=%d Owner=%s World=%s NetMode=%d"),
+				Snapshot.Revision, Snapshot.InventorySlots.Num(), *GetNameSafe(Owner), *GetNameSafe(GetWorld()),
+				static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone));
+		}
 		Owner->ForceNetUpdate();
 	}
 	OnSnapshotChanged.Broadcast();

@@ -191,7 +191,7 @@ void ACatCharacter::BeginPlay()
 }
 
 // 服务端占有流程：父类先建立 Controller/Owner/PlayerState 关系，再把 Character=this 的 Owner/Avatar 建立时机交给 ASC。
-// authority 分别调用 ASC 的配置授予入口和 Equipment 的 starter 入口；角色不读取 AbilitySet、属性默认值或装备设置。
+// authority 先准备正式库存容量，再分别调用 ASC 默认授予、Equipment starter 选择和抄网补给；角色不读取具体定义或库存格。
 void ACatCharacter::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
@@ -211,6 +211,7 @@ void ACatCharacter::PossessedBy(AController* NewController)
 		if (EquipmentComponent)
 		{
 			EquipmentComponent->ApplyConfiguredStarterLoadoutFromAuthority();
+			EquipmentComponent->GrantStarterScoopNetIfConfigured();
 		}
 	}
 }
