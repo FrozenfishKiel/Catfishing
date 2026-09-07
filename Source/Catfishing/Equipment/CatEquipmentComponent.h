@@ -12,7 +12,7 @@ class ACatCampInventoryActor;
 class APlayerState;
 struct FCatInventoryEntry;
 
-/** Equipment 随身库存与钓鱼选择快照发生提交或复制变化的本机通知；UI 只把它当重读信号。 */
+/** Equipment 旧随身库存投影与钓鱼选择快照发生提交或复制变化的本机通知；UI 只把它当重读信号。 */
 DECLARE_MULTICAST_DELEGATE(FCatEquipmentSnapshotChanged);
 
 /** Character 的一局钓鱼选择和旧库存投影组件；正式库存事实由 InventoryComponent 持有，Equipment 在迁移期只复制旧投影并服务钓鱼选择消费者。 */
@@ -25,7 +25,7 @@ public:
 	/** 开启默认复制并关闭 Tick；所有写入由 authority 命令提交。 */
 	UCatEquipmentComponent();
 
-	/** 注册单一随身库存快照；终态缓存不复制。 */
+	/** 注册钓鱼选择和旧库存投影快照；终态缓存不复制。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** 提供服务器最终钓鱼选择与迁移期库存投影；调用方只能显示或校验 Revision，不能通过引用补耐久或改正式库存。 */
@@ -35,7 +35,7 @@ public:
 	/** Character 被服务器占有后应用配置的开局装备选择；仅在组件所属 Pawn、authority 与设置均有效且尚未选竿时提交，成功后可补发配置窝料。 */
 	void ApplyConfiguredStarterLoadoutFromAuthority();
 
-	/** 导出存档需要的钓具选择和库存格；正式角色读取 InventoryComponent 投影，旧宿主沿用兼容快照，未结算 Fishing 预留或收回后超容量时明确失败。 */
+	/** 导出存档需要的钓具选择和库存格；正式角色读取 InventoryComponent 投影，兼容宿主沿用旧快照读模型，未结算 Fishing 预留或收回后超容量时明确失败。 */
 	bool ExportSnapshotFromAuthority(FCatEquipmentLoadoutSnapshot& OutSnapshot, FText& OutFailure) const;
 
 	/** 退出快照已被 Save 接收后移除本玩家已登记的部署鱼竿表现；实例仍由退出记录持有，重连只恢复一份。 */
@@ -44,7 +44,7 @@ public:
 	/** 只读验证一份跨地图随身库存快照是否可被本组件接收；检查 authority、定义、容量、实例唯一性和选择引用，但不写入现有库存。 */
 	bool CanRestoreSnapshotFromAuthority(const FCatEquipmentLoadoutSnapshot& RestoredSnapshot, FText& OutFailure) const;
 
-	/** 在 Save 已完成全局预检后恢复钓具选择与随身库存载荷；正式角色会先把载荷导入 InventoryComponent，旧宿主只替换兼容快照，局部导入失败时不改当前状态。 */
+	/** 在 Save 已完成全局预检后恢复钓具选择与随身库存载荷；正式角色会先把载荷导入 InventoryComponent，兼容宿主只替换旧快照读模型，局部导入失败时不改当前状态。 */
 	bool RestoreSnapshotFromAuthority(const FCatEquipmentLoadoutSnapshot& RestoredSnapshot);
 
 	/** 根据服务器目录、可信解锁证明和随身库存持有量设置当前钓鱼选择；当前已部署鱼竿可作为原选择继续沿用，但不能借此切换到另一根鱼竿。 */
@@ -72,7 +72,7 @@ public:
 	/** 临时测试入口，仅由玩家占有后的服务器调用；已有抄网则复用，没有抄网时只在库存容量足以容纳开局四件套后补给，商店获取接通后删除。 */
 	void GrantStarterScoopNetIfConfigured();
 
-	/** 背包点击或玩法入口共用的物品使用入口；它按实例调用定义侧 Use 裁决，Equipment 只执行移出实例、扣指定数量或 no-op 的库存事务。 */
+	/** 背包点击或玩法入口共用的物品使用入口；它按实例调用定义侧 Use 裁决，Equipment 只编排正式库存事务并刷新旧投影。 */
 	FCatInventoryItemUseResult Use(FGuid RequestId, int64 ExpectedRevision, FGuid ItemInstanceId,
 		int32 Quantity = 1);
 
@@ -80,7 +80,7 @@ public:
 	bool TryReplayInventoryItemUseTerminal(FGuid RequestId, int64 ExpectedRevision, FGuid ItemInstanceId,
 		int32 Quantity, FCatInventoryItemUseResult& OutResult) const;
 
-	/** 部署型物品收口时共用的停止使用入口；它按实例调用定义侧 UnUse 裁决，成功才把活动记录里的同一物品放回随身库存。 */
+	/** 部署型物品收口时共用的停止使用入口；它按实例调用定义侧 UnUse 裁决，成功才通过正式库存归还同一物品实例。 */
 	FCatInventoryItemUseResult UnUse(FGuid RequestId, FGuid ItemInstanceId);
 
 	/** 正式库存提交后刷新旧随身库存投影；钓鱼选择、存档和旧消费者靠它追上 InventoryComponent 的格位事实，返回 false 表示投影未能完整重建。 */
@@ -99,7 +99,7 @@ public:
 	/** 按递增累计磨损的差额立即扣减 Begin 绑定的鱼竿实例；重复序号不重扣，Release 不回滚。 */
 	FCatFishingUseOperationResult ApplyFishingRodWear(FGuid FishingSessionId, int64 WearSequence,
 		double AbsoluteTotal);
-	/** 从该会话绑定的正式库存鱼竿实例或旧宿主 Use 副本读取耐久，不读取当前选择的另一根竿。 */
+	/** 从该会话绑定的正式库存鱼竿实例读取耐久，不读取当前选择的另一根竿。 */
 	bool GetFishingRodDurability(FGuid FishingSessionId, double& OutDurability, bool& OutBroken) const;
 	/** 结束 Fishing 使用记录；未消耗的暂存饵会回到随身库存，已消耗的记录只关闭自身。 */
 	FCatFishingUseOperationResult ReleaseFishingUse(FGuid FishingSessionId);
@@ -144,9 +144,9 @@ private:
 	{
 		/** 正在使用的物品实例身份；同一实例只能存在一条活动记录，防止背包和场景同时持有它。 */
 		FGuid ItemInstanceId;
-		/** 从库存移出的物品副本；UnUse 放回库存时必须沿用它，不能按 DefinitionId 重新生成一件。 */
+		/** Use 时记录的旧槽位投影副本；UnUse 只用它还原定义裁决和耐久状态，归还仍由正式库存执行。 */
 		FCatRunInventorySlot Item;
-		/** Use 成功时的 Equipment 版本；诊断用它串联库存移出和后续世界 Actor 生成。 */
+		/** Use 成功时的 Equipment 版本；诊断用它串联正式库存借出和后续世界 Actor 生成。 */
 		int64 UseRevision = 0;
 		/** 活动记录是否已经收口；收口后的记录不再参与可用性判断。 */
 		bool bReleased = false;
@@ -161,17 +161,13 @@ private:
 	/** Begin 冻结鱼竿的正式实例解析；正式库存存在时，耐久读写必须落到可见格或 held entry 里的同一 UObject。 */
 	UCatEquipmentInventoryItemInstance* ResolveFishingRodFormalInstanceFromInventory(
 		const FCatFishingUseRecord& Record, FCatRunInventorySlot& OutProjectedSlot) const;
-	/** 旧宿主 Begin 冻结鱼竿的可写实例查找；没有正式库存组件时才读取活动 Use 记录里的旧副本。 */
-	FCatRunInventorySlot* FindFishingRodInstance(const FCatFishingUseRecord& Record);
-	/** 旧宿主 Begin 冻结鱼竿的只读实例查找；用于会话快照读取，不能因为查询创建或替换实例。 */
-	const FCatRunInventorySlot* FindFishingRodInstance(const FCatFishingUseRecord& Record) const;
-	/** 是否存在尚未收口的物品 Use 记录；维修和失败预算用它避免改写正在由场景持有的物品状态。 */
+	/** 是否存在正式库存活动区尚未收口的物品 Use；维修和失败预算用它避免改写正在由场景持有的物品状态。 */
 	bool HasActiveInventoryItemUse() const;
-	/** 读取某个定义在库存格数组中的可见数量；选择自动切换和商店预检用它判断旧选择是否仍有实物。 */
+	/** 读取某个定义在旧库存投影中的可见数量；选择自动切换用它判断旧选择是否还能对应到投影实物。 */
 	int32 GetInventoryItemQuantity(FName DefinitionId) const;
 	/** 新入库或收回物品后修正钓鱼选择；已收回的坏竿可跨型号替换为库存里的可用竿，部署中与健康选择保持不变。 */
 	void AutoSelectGrantedInventoryItem(const UCatEquipmentDefinition& Definition, FName DefinitionId);
-	/** 把当前选择中的鱼竿状态同步到正式库存实例或旧宿主 Use 副本；耐久和断竿事实必须跟最终归还的实例一致。 */
+	/** 把当前选择中的鱼竿状态同步到正式库存实例和活动记录镜像；耐久和断竿事实必须跟最终归还的实例一致。 */
 	void SyncSelectedRodStateToSelectedInstance();
 	FCatFishingUseReservationResult MakeFishingUseReservationResult(FGuid FishingSessionId,
 		ECatDomainCommandError Error, bool bReserved, const FCatFishingUseRecord* Record = nullptr) const;
@@ -189,9 +185,6 @@ private:
 
 	/** 读取一个定义在单格里的最大堆叠数；装备型物品固定为 1，数量型物品使用项目配置。 */
 	int32 GetInventoryStackLimit(const UCatEquipmentDefinition& Definition) const;
-
-	/** 只读判断指定数量是否能放进旧库存格数组；只供旧宿主和旧数组辅助路径避免半写入，不代表正式角色主库存。 */
-	bool CanStoreInventoryItem(const UCatEquipmentDefinition& Definition, FName DefinitionId, int32 Quantity) const;
 
 	/** 让复制快照至少拥有配置声明的格子数；只追加空格，不截断已有物品。 */
 	void EnsureInventorySlotArray();
@@ -229,36 +222,16 @@ private:
 	bool RefreshInventoryProjectionFromInventoryComponentFromAuthority(
 		const UCatEquipmentDefinition* GrantedDefinition, FName GrantedDefinitionId);
 
-	/** 按实例身份查找随身库存格；Use、选择和诊断用它避免只按 DefinitionId 误伤同类物品。 */
+	/** 按实例身份查找旧随身库存投影格；选择和诊断用它避免只按 DefinitionId 误认同类物品。 */
 	FCatRunInventorySlot* FindInventorySlotByInstanceId(FGuid ItemInstanceId);
 	const FCatRunInventorySlot* FindInventorySlotByInstanceId(FGuid ItemInstanceId) const;
 
-	/** 按定义和实例身份解析钓鱼选择候选；正式库存容量完整时只从 InventoryComponent 投影，旧 Snapshot 仅在迁移期未绑定或容量未齐时回退。 */
+	/** 按定义和实例身份解析钓鱼选择候选；正式库存容量完整时只从 InventoryComponent 投影，旧 Snapshot 仅在迁移期未绑定或容量未齐时只读回退。 */
 	bool TryResolveSelectionInventorySlot(FName DefinitionId, FGuid ItemInstanceId,
 		FCatRunInventorySlot& OutSlot) const;
 
-	/** 读取某个定义当前可用的第一份实例；旧 UI 仍按定义选择时用它落到具体物品实例，鱼竿会优先返回未断且有耐久的那份。 */
+	/** 读取某个定义在旧投影中可见的第一份实例；旧 UI 仍按定义选择时用它落到具体实例身份，鱼竿会优先返回未断且有耐久的那份。 */
 	const FCatRunInventorySlot* FindFirstInventorySlotByDefinition(FName DefinitionId) const;
-
-	/** 判断一份完整实例副本能否原样放回随身库存；普通入库会拒绝重复非消耗品实例，UnUse 另行收口已有残留。 */
-	bool CanStoreInventorySlot(const UCatEquipmentDefinition& Definition, const FCatRunInventorySlot& Item) const;
-
-	/** 把指定数量放入旧库存格数组；调用前必须已通过旧容量预检，成功后只修改 Equipment 投影数组。 */
-	bool AddInventoryItemQuantity(const UCatEquipmentDefinition& Definition, FName DefinitionId, int32 Quantity);
-
-	/** 把一份完整实例副本放入库存格数组；它保留 ItemInstanceId 和工具状态，不按 DefinitionId 重新生成物品。 */
-	bool AddInventoryItemSlot(const UCatEquipmentDefinition& Definition, const FCatRunInventorySlot& Item);
-
-	/** 服务器内部授予一份完整库存实例；营地取用用它避免按定义重新生成同类装备。 */
-	FCatDomainCommandResult GrantInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedRevision,
-		const FCatRunInventorySlot& Item);
-
-	/** 旧 Snapshot 回退路径从指定实例所在数量栈扣除数量；正式库存存在时新流程应优先调用 InventoryComponent 扣量入口。 */
-	bool RemoveInventoryItemQuantityFromInstance(FGuid ItemInstanceId, int32 Quantity,
-		FCatRunInventorySlot& OutConsumedItem);
-
-	/** 从库存格数组移出指定实例并返回副本；Use 用它保证场景 Actor 和背包不会同时持有同一物品。 */
-	bool RemoveInventoryItemInstance(FGuid ItemInstanceId, FCatRunInventorySlot& OutItem);
 
 	/** 构造操作+RequestId 幂等键；只在当前 Character 生命周期使用。 */
 	static FString MakeTerminalKey(const TCHAR* Operation, FGuid RequestId);
@@ -281,7 +254,7 @@ private:
 
 	/** 当前 Character 生命周期内按 SessionId 隔离的 fishing reservation/tombstone；不复制也不持久化。 */
 	TMap<FGuid, FCatFishingUseRecord> FishingUseRecords;
-	/** 当前 Character 生命周期内部署型 Use 的玩法镜像；正式 UObject 已由 InventoryComponent 活动区保管，这里只服务旧宿主和迁移期投影。 */
+	/** 当前 Character 生命周期内部署型 Use 的玩法镜像；正式 UObject 已由 InventoryComponent 活动区保管，这里只服务收口诊断和迁移期投影。 */
 	TMap<FGuid, FCatInventoryItemUseRecord> InventoryItemUseRecords;
 	/** 物品 Use/UnUse 首次终态缓存；简单消耗品重试会读它而不是再次扣量，部署/收回重试也不会重复移动同一实例。 */
 	TMap<FString, FCatInventoryItemUseResult> InventoryItemUseTerminalCache;
