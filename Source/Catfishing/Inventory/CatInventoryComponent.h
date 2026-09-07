@@ -176,6 +176,14 @@ public:
 	bool TryReturnReservedInventoryBatchFromAuthority(
 		const FCatInventoryReceiveBatch& ReceiveBatch, int32 OverflowSlotCount);
 
+	/** 只读预检稳定物品 ID 能否进入当前正式库存；商店、奖励和初始化发货用它在提交前确认目录、authority 和容量。 */
+	ECatDomainCommandError ValidateInventoryDefinitionGrantFromAuthority(FGuid RequestId, FName DefinitionId,
+		int32 Count) const;
+
+	/** authority 按稳定物品 ID 向当前正式库存发货；库存组件负责目录解析、Revision、幂等和整批写入，并返回提交状态、错误码和最新正式库存版本。 */
+	FCatDomainCommandResult GrantInventoryDefinitionFromAuthority(FGuid RequestId, int64 ExpectedRevision,
+		FName DefinitionId, int32 Count);
+
 	/** 服务器整理本库存里的两个格子；RequestId 和库存 Revision 在正式库存层裁决，返回提交状态、错误和最新库存版本。 */
 	FCatDomainCommandResult MoveInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		int32 SourceSlotIndex, int32 TargetSlotIndex);

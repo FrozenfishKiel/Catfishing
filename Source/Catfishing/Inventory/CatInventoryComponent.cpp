@@ -3,6 +3,7 @@
 #include "GameFramework/Pawn.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
 
@@ -824,6 +825,114 @@ bool UCatInventoryComponent::TryReturnReservedInventoryBatchFromAuthority(
 
 	ReplaceInventoryEntriesFromAuthority(SavedEntries, OriginalSlotCount);
 	return false;
+}
+
+// 稳定 ID 发货预检流程：
+// 1. 先生成缓存键并处理已缓存重放；同一请求只接受相同定义和数量，避免重试预检被当前容量变化误拦。
+// 2. 首次预检再确认 RequestId、authority、数量和库存目录都有效，避免来源系统绕过正式物品目录直接生成实例。
+// 3. 最后把定义和数量组成本库存批次并走容量预演，保证商店、奖励和开局发货共用同一条接收规则。
+ECatDomainCommandError UCatInventoryComponent::ValidateInventoryDefinitionGrantFromAuthority(
+	const FGuid RequestId, const FName DefinitionId, const int32 Count) const
+{
+	const FString Key = MakeTerminalKey(TEXT("GrantInventoryDefinition"), RequestId);
+	const FString PayloadPrefix = FString::Printf(TEXT("Definition=%s|Count=%d|"),
+		*DefinitionId.ToString(), Count);
+	if (const FString* CachedPayload = TerminalPayloadByKey.Find(Key))
+	{
+		return CachedPayload->StartsWith(PayloadPrefix)
+			? ECatDomainCommandError::None
+			: ECatDomainCommandError::InvalidPayload;
+	}
+
+	const AActor* OwningActor = GetOwner();
+	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+	UCatInventoryItemDefinition* ItemDefinition =
+		InventorySettings != nullptr ? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
+	if (!RequestId.IsValid() || OwningActor == nullptr || !OwningActor->HasAuthority()
+		|| Count <= 0 || ItemDefinition == nullptr)
+	{
+		return ECatDomainCommandError::InvalidPayload;
+	}
+
+	FCatInventoryReceiveBatch ReceiveBatch;
+	FCatInventoryDefinitionEntry& DefinitionEntry = ReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
+	DefinitionEntry.ItemDefinition = ItemDefinition;
+	DefinitionEntry.Count = Count;
+	return CanFullyAcceptInventoryBatch(ReceiveBatch)
+		? ECatDomainCommandError::None
+		: ECatDomainCommandError::CapacityExceeded;
+}
+
+// 稳定 ID 发货提交流程：
+// 1. 先按 RequestId、定义、数量和 ExpectedRevision 建立幂等签名；合法重放只返回首次终态。
+// 2. 首次请求必须位于 authority，并且当前库存 Revision 必须等于调用方观察到的正式库存版本。
+// 3. 通过后从正式库存目录解析定义，按统一收货批次写入，成功时只推进 InventoryRevision。
+// 4. 首次请求无论成功、参数非法、容量不足、Revision 冲突还是依赖失败，都会缓存终态并记录日志，后续同载荷重放返回首次结果。
+FCatDomainCommandResult UCatInventoryComponent::GrantInventoryDefinitionFromAuthority(
+	const FGuid RequestId, const int64 ExpectedRevision, const FName DefinitionId, const int32 Count)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	const FString Key = MakeTerminalKey(TEXT("GrantInventoryDefinition"), RequestId);
+	const FString PayloadSignature = FString::Printf(TEXT("Definition=%s|Count=%d|ExpectedRevision=%lld"),
+		*DefinitionId.ToString(), Count, ExpectedRevision);
+	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
+	{
+		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
+		if (!CachedPayload || *CachedPayload != PayloadSignature)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+			Result.Revision = InventoryRevision;
+			return Result;
+		}
+		Result = *Cached;
+		MarkCommandReplayed(Result);
+		return Result;
+	}
+
+	const AActor* OwningActor = GetOwner();
+	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+	UCatInventoryItemDefinition* ItemDefinition =
+		InventorySettings != nullptr ? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
+	if (!RequestId.IsValid() || OwningActor == nullptr || !OwningActor->HasAuthority()
+		|| Count <= 0 || ItemDefinition == nullptr)
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	}
+	else if (InventoryRevision != ExpectedRevision)
+	{
+		Result.Error = ECatDomainCommandError::RevisionConflict;
+	}
+	else
+	{
+		FCatInventoryReceiveBatch ReceiveBatch;
+		FCatInventoryDefinitionEntry& DefinitionEntry = ReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
+		DefinitionEntry.ItemDefinition = ItemDefinition;
+		DefinitionEntry.Count = Count;
+		if (!CanFullyAcceptInventoryBatch(ReceiveBatch))
+		{
+			Result.Error = ECatDomainCommandError::CapacityExceeded;
+		}
+		else if (TryAddInventoryBatch(ReceiveBatch))
+		{
+			Result.bCommitted = true;
+			Result.Error = ECatDomainCommandError::None;
+		}
+		else
+		{
+			Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		}
+	}
+
+	Result.Revision = InventoryRevision;
+	TerminalCache.Add(Key, Result);
+	TerminalPayloadByKey.Add(Key, PayloadSignature);
+	UE_LOG(LogCatInventory, Log,
+		TEXT("Event=inventory_definition_grant Owner=%s Request=%s Committed=%s Error=%s Revision=%lld Definition=%s Count=%d"),
+		*GetNameSafe(OwningActor), *RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
+		Result.Revision, *DefinitionId.ToString(), Count);
+	return Result;
 }
 
 // 正式库存整理流程：

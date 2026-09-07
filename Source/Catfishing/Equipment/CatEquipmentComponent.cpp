@@ -12,6 +12,7 @@
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Inventory/CatInventoryStatics.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
@@ -46,6 +47,15 @@ namespace
 
 		return true;
 	}
+
+	// 库存目录装备解析流程：正式发货先从 Inventory Catalog 认定物品，再把仍需要钓鱼语义的定义窄化为 EquipmentDefinition；目录缺失或类型不匹配返回空，由调用方决定拒绝或只记录投影同步失败。
+	UCatEquipmentDefinition* FindEquipmentDefinitionFromInventoryCatalog(const FName DefinitionId)
+	{
+		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+		UCatInventoryItemDefinition* ItemDefinition =
+			InventorySettings != nullptr ? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
+		return Cast<UCatEquipmentDefinition>(ItemDefinition);
+	}
 }
 
 // 构造流程：开启组件复制并关闭 Tick；Snapshot 初始 Revision=0 表示还没有随身库存提交或钓鱼选择。
@@ -71,8 +81,9 @@ const FCatEquipmentLoadoutSnapshot& UCatEquipmentComponent::GetSnapshot() const
 // 开局装备配置流程：
 // 1. 先要求组件仍有 authority Owner 且装备设置存在；任一依赖缺失时不写入库存，避免生命周期早期或客户端伪造开局提交。
 // 2. 再检查显式开关和当前鱼竿选择，已关闭或玩家/Profile 已有选择时保持现状，不覆盖既有装备事实。
-// 3. 选择为空时通过正式 Configure 入口提交配置的鱼竿、鱼饵、鱼漂与抄网；该入口继续负责目录、解锁、库存和 Revision 裁决。
-// 4. 只有配置真正提交且窝料定义、数量均有效时，才用配置后的 Snapshot Revision 追加窝料；两次提交都保留结构化日志供服务器日志还原。
+// 3. 选择为空时通过正式 Configure 入口提交配置的鱼竿、鱼饵、鱼漂与抄网；该入口继续负责解锁、库存持有量和选择 Revision 裁决。
+// 4. 只有配置真正提交且窝料定义、数量均有效时，正式库存存在就按 InventoryRevision 发货并同步旧投影；没有正式库存的旧宿主才回退 Equipment 兼容入口。
+// 5. 正式库存发货后的投影同步失败只记诊断日志，不回滚正式库存发货，避免 starter 兜底重新制造第二笔库存。
 void UCatEquipmentComponent::ApplyConfiguredStarterLoadoutFromAuthority()
 {
 	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
@@ -98,8 +109,31 @@ void UCatEquipmentComponent::ApplyConfiguredStarterLoadoutFromAuthority()
 	{
 		return;
 	}
-	const FCatDomainCommandResult Grant = GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Snapshot.Revision,
-		Settings->StarterChumDefinitionId, Settings->StarterChumQuantity);
+	const FGuid GrantRequestId = FGuid::NewGuid();
+	FCatDomainCommandResult Grant;
+	if (UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent())
+	{
+		Grant = OwnerInventory->GrantInventoryDefinitionFromAuthority(GrantRequestId,
+			OwnerInventory->GetInventoryRevision(), Settings->StarterChumDefinitionId, Settings->StarterChumQuantity);
+		if (Grant.bCommitted)
+		{
+			const UCatEquipmentDefinition* GrantedDefinition =
+				FindEquipmentDefinitionFromInventoryCatalog(Settings->StarterChumDefinitionId);
+			if (!RefreshInventoryProjectionFromInventoryComponentFromAuthority(
+				GrantedDefinition, Settings->StarterChumDefinitionId))
+			{
+				UE_LOG(LogCatEquipment, Warning,
+					TEXT("Event=starter_chum_projection_sync_failed RequestId=%s Definition=%s InventoryRevision=%lld SnapshotRevision=%lld"),
+					*GrantRequestId.ToString(EGuidFormats::DigitsWithHyphens),
+					*Settings->StarterChumDefinitionId.ToString(), Grant.Revision, Snapshot.Revision);
+			}
+		}
+	}
+	else
+	{
+		Grant = GrantInventoryQuantityFromAuthority(GrantRequestId, Snapshot.Revision,
+			Settings->StarterChumDefinitionId, Settings->StarterChumQuantity);
+	}
 	UE_LOG(LogCatCharacter, Log, TEXT("Event=starter_chum_grant Committed=%s Error=%s Revision=%lld Definition=%s Quantity=%d"),
 		Grant.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Grant.Error), Grant.Revision,
 		*Settings->StarterChumDefinitionId.ToString(), Settings->StarterChumQuantity);
@@ -790,10 +824,11 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantEquipmentFromAuthority(cons
 
 // 临时抄网补给流程：
 // 1. 先确认玩家 Pawn、authority、配置开关和本 Character 生命周期去重标记，避免客户端或重复占有自动刷物品。
-// 2. 再记录一次诊断请求并校验配置定义确实是抄网，配置错误只写日志，不改随身库存。
-// 3. 如果玩家已有任一完整抄网，就只修正缺失选择并发布必要快照，不因容量临时变小移除玩家已有物品。
+// 2. 再记录一次诊断请求并通过库存目录校验配置定义确实是抄网，配置错误只写日志，不改随身库存。
+// 3. 如果正式库存或旧投影已有任一完整抄网，就只修正缺失选择并发布必要快照，不因容量临时变小移除玩家已有物品。
 // 4. 没有抄网时必须至少给基础竿、漂、饵和抄网留下四格；容量不足只记录拒绝，等容量恢复后允许再次尝试。
-// 5. 最后复用正式授予入口生成同一套库存事实，成功后才写本 Character 生命周期去重标记。
+// 5. 最后优先让 InventoryComponent 按正式库存 Revision 发货；没有正式库存的旧宿主才回退 Equipment 兼容入口。
+// 6. 正式库存发货成功后刷新旧投影并写本 Character 生命周期去重标记，投影同步失败只记日志，不回滚正式库存发货。
 void UCatEquipmentComponent::GrantStarterScoopNetIfConfigured()
 {
 	const APawn* Pawn = Cast<APawn>(GetOwner());
@@ -814,13 +849,34 @@ void UCatEquipmentComponent::GrantStarterScoopNetIfConfigured()
 	UE_LOG(LogCatEquipment, Log,
 		TEXT("Event=equipment_starter_scoop_requested RequestId=%s Definition=%s Revision=%lld %s"),
 		*RequestId.ToString(), *DefinitionId.ToString(), Snapshot.Revision, *Context);
-	const UCatEquipmentDefinition* Definition = Settings->FindRuntimeDefinition(DefinitionId);
+	UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
+	const UCatEquipmentDefinition* Definition = FindEquipmentDefinitionFromInventoryCatalog(DefinitionId);
 	if (!Definition || Definition->Kind != ECatEquipmentKind::ScoopNet)
 	{
 		UE_LOG(LogCatEquipment, Warning,
 			TEXT("Event=equipment_starter_scoop_rejected RequestId=%s Definition=%s Error=InvalidScoopDefinition Revision=%lld %s"),
 			*RequestId.ToString(), *DefinitionId.ToString(), Snapshot.Revision, *Context);
 		return;
+	}
+
+	// 正式库存已经有抄网时只刷新旧投影和选择；不依赖旧 Snapshot 才能知道玩家是否已经持有这件物品。
+	if (OwnerInventory != nullptr)
+	{
+		const int32 ExistingFormalSlotIndex = OwnerInventory->FindFirstInventorySlotIndexByDefinitionId(DefinitionId);
+		const FCatInventoryEntry* ExistingFormalEntry =
+			OwnerInventory->GetInventoryEntryAtSlot(ExistingFormalSlotIndex);
+		if (ExistingFormalEntry != nullptr && ExistingFormalEntry->StackCount > 0)
+		{
+			const bool bProjectionSynced =
+				RefreshInventoryProjectionFromInventoryComponentFromAuthority(Definition, DefinitionId);
+			bStarterScoopNetGrantHandled = true;
+			UE_LOG(LogCatEquipment, Log,
+				TEXT("Event=equipment_starter_scoop_completed RequestId=%s Result=AlreadyOwnedFormal Definition=%s Slot=%d ProjectionSynced=%s ScoopNetItemInstanceId=%s Revision=%lld %s"),
+				*RequestId.ToString(), *DefinitionId.ToString(), ExistingFormalSlotIndex,
+				bProjectionSynced ? TEXT("true") : TEXT("false"),
+				*Snapshot.ScoopNetItemInstanceId.ToString(), Snapshot.Revision, *Context);
+			return;
+		}
 	}
 
 	// 已有任一完整抄网即视为满足测试需求；保留玩家已有的有效选择，不额外占用背包格。
@@ -857,14 +913,35 @@ void UCatEquipmentComponent::GrantStarterScoopNetIfConfigured()
 		return;
 	}
 
-	const FCatDomainCommandResult Grant = GrantEquipmentFromAuthority(RequestId, Snapshot.Revision, DefinitionId);
+	FCatDomainCommandResult Grant;
+	bool bProjectionSynced = true;
+	if (OwnerInventory != nullptr)
+	{
+		Grant = OwnerInventory->GrantInventoryDefinitionFromAuthority(
+			RequestId, OwnerInventory->GetInventoryRevision(), DefinitionId, 1);
+		if (Grant.bCommitted)
+		{
+			bProjectionSynced =
+				RefreshInventoryProjectionFromInventoryComponentFromAuthority(Definition, DefinitionId);
+			if (!bProjectionSynced)
+			{
+				UE_LOG(LogCatEquipment, Warning,
+					TEXT("Event=equipment_starter_scoop_projection_sync_failed RequestId=%s Definition=%s InventoryRevision=%lld SnapshotRevision=%lld %s"),
+					*RequestId.ToString(), *DefinitionId.ToString(), Grant.Revision, Snapshot.Revision, *Context);
+			}
+		}
+	}
+	else
+	{
+		Grant = GrantEquipmentFromAuthority(RequestId, Snapshot.Revision, DefinitionId);
+	}
 	bStarterScoopNetGrantHandled = Grant.bCommitted;
 	if (Grant.bCommitted)
 	{
 		UE_LOG(LogCatEquipment, Log,
-			TEXT("Event=equipment_starter_scoop_completed RequestId=%s Result=Granted Definition=%s ScoopNetItemInstanceId=%s Quantity=1 Revision=%lld %s"),
+			TEXT("Event=equipment_starter_scoop_completed RequestId=%s Result=Granted Definition=%s ScoopNetItemInstanceId=%s Quantity=1 ProjectionSynced=%s Revision=%lld %s"),
 			*RequestId.ToString(), *DefinitionId.ToString(), *Snapshot.ScoopNetItemInstanceId.ToString(),
-			Snapshot.Revision, *Context);
+			bProjectionSynced ? TEXT("true") : TEXT("false"), Snapshot.Revision, *Context);
 	}
 	else
 	{
