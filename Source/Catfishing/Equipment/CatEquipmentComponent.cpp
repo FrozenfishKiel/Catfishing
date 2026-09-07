@@ -202,7 +202,7 @@ bool UCatEquipmentComponent::ExportSnapshotFromAuthority(FCatEquipmentLoadoutSna
 }
 
 // 退出部署收口流程：按真实 PlayerState 从 Fishing 查唯一部署竿，核对它仍对应本组件已提交 Use 记录，再销毁表现使 Fishing 正常注销。
-// 不把实例再加回即将销毁的组件；持久化调用方已接管正式记录，销毁失败拒绝退出捕获。Destroy 会触发领域回调，因此返回后按 ID 重找使用记录并清掉正式强引用。
+// 不把实例再加回即将销毁的组件；持久化调用方已接管正式记录，销毁失败拒绝退出捕获。Destroy 后必须先让库存退役 held entry，成功后才把 Equipment 玩法记录标为 released，退役失败时记录保持未收口并返回 false。
 bool UCatEquipmentComponent::RetireDeploymentAfterPersistentCapture(APlayerState& PlayerState)
 {
 	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
@@ -213,17 +213,27 @@ bool UCatEquipmentComponent::RetireDeploymentAfterPersistentCapture(APlayerState
 	}
 	const FGuid ItemInstanceId = Rod->GetPresentationState().ItemInstanceId;
 	const FCatInventoryItemUseRecord* Record = InventoryItemUseRecords.Find(ItemInstanceId);
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !Record || Record->bReleased || !Rod->Destroy())
+	UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
+	const FCatInventoryEntry* HeldEntry =
+		OwnerInventory != nullptr ? OwnerInventory->FindHeldInventoryEntryFromAuthority(ItemInstanceId) : nullptr;
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !Record || Record->bReleased
+		|| (OwnerInventory != nullptr && HeldEntry == nullptr) || !Rod->Destroy())
 	{
 		UE_LOG(LogCatRun, Error, TEXT("Event=persistence_departure_deployment_rejected Owner=%s Rod=%s"),
 			*GetNameSafe(GetOwner()), *GetNameSafe(Rod));
+		return false;
+	}
+	if (OwnerInventory != nullptr && !OwnerInventory->RetireHeldInventoryEntryFromAuthority(ItemInstanceId))
+	{
+		UE_LOG(LogCatRun, Error,
+			TEXT("Event=persistence_departure_deployment_retire_failed Owner=%s Instance=%s"),
+			*GetNameSafe(GetOwner()), *ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
 		return false;
 	}
 	if (FCatInventoryItemUseRecord* RemainingRecord = InventoryItemUseRecords.Find(ItemInstanceId))
 	{
 		RemainingRecord->bReleased = true;
 	}
-	ActiveFormalInventoryUseInstances.Remove(ItemInstanceId);
 	return true;
 }
 
@@ -347,7 +357,7 @@ bool UCatEquipmentComponent::ValidatePersistentSnapshotPayload(const FCatEquipme
 
 // 随身库存恢复提交流程：
 // 1. 先重复完整预检，并在正式角色上把保存载荷导入 InventoryComponent，失败时保持现有背包和选择不变。
-// 2. 成功后清掉只属于旧 Character 生命周期的请求缓存、活动 Use 记录和正式实例强引用。
+// 2. 成功后清掉只属于旧 Character 生命周期的请求缓存、Fishing reservation 和 Equipment 玩法镜像；正式 held entry 在预检阶段被禁止存在。
 // 3. 最后替换兼容快照并发布旧读模型；发布只通知选择和投影变化，不再反向改写正式背包。
 bool UCatEquipmentComponent::RestoreSnapshotFromAuthority(const FCatEquipmentLoadoutSnapshot& RestoredSnapshot)
 {
@@ -367,7 +377,6 @@ bool UCatEquipmentComponent::RestoreSnapshotFromAuthority(const FCatEquipmentLoa
 	FailureTerminalCache.Reset();
 	FishingUseRecords.Reset();
 	InventoryItemUseRecords.Reset();
-	ActiveFormalInventoryUseInstances.Reset();
 	InventoryItemUseTerminalCache.Reset();
 	PublishSnapshot();
 	return true;
@@ -944,8 +953,9 @@ FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, co
 	// 物品使用流程：
 	// 1. 先校验 authority、RequestId 和数量，再用实例载荷签名处理幂等重放，避免数量消耗品重复扣量。
 	// 2. 正式库存存在时按实例 ID 回到 InventoryComponent 槽位，旧槽位只作为定义裁决的只读投影。
-	// 3. 部署型物品由正式库存移出整份 entry，数量消耗物由正式库存扣指定份数；失败会恢复正式 entries 和旧 Snapshot。
-	// 4. 没有正式库存组件的旧宿主才回退 Snapshot 数组写入，保护历史测试夹具和临时 Actor。
+	// 3. 部署型物品通过 InventoryComponent held entry 借出可见格，正式 UObject 仍由库存活动区保管；数量消耗物由正式库存扣指定份数。
+	// 4. 正式路径刷新旧投影失败时先尝试归还 held entry，归还失败才退役活动记录并恢复 entries 与旧 Snapshot。
+	// 5. 没有正式库存组件的旧宿主才回退 Snapshot 数组写入，保护历史测试夹具和临时 Actor。
 	FCatInventoryItemUseResult Result;
 	Result.RequestId = RequestId;
 	Result.EquipmentRevision = Snapshot.Revision;
@@ -1043,26 +1053,28 @@ FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, co
 			return Finish(Result);
 		}
 
-		FCatInventoryEntry RemovedEntry;
-		if (!OwnerInventory->RemoveInventoryEntryAtSlotFromAuthority(FormalSlotIndex, RemovedEntry))
+		FCatInventoryEntry HeldEntry;
+		if (!OwnerInventory->HoldInventoryEntryAtSlotFromAuthority(FormalSlotIndex, HeldEntry))
 		{
 			Result.Error = ECatDomainCommandError::NotFound;
 			return Finish(Result);
 		}
 
-		UCatEquipmentInventoryItemInstance* RemovedInstance =
-			Cast<UCatEquipmentInventoryItemInstance>(RemovedEntry.Instance);
 		FCatInventoryItemUseRecord Record;
 		Record.ItemInstanceId = SourceItem.ItemInstanceId;
 		Record.Item = SourceItem;
 		InventoryItemUseRecords.Add(SourceItem.ItemInstanceId, Record);
-		ActiveFormalInventoryUseInstances.Add(SourceItem.ItemInstanceId, RemovedInstance);
 		if (!RefreshInventoryProjectionFromInventoryComponentFromAuthority())
 		{
-			ActiveFormalInventoryUseInstances.Remove(SourceItem.ItemInstanceId);
 			InventoryItemUseRecords.Remove(SourceItem.ItemInstanceId);
-			OwnerInventory->ReplaceInventoryEntriesFromAuthority(
-				SavedEntries, GetConfiguredInventorySlotCapacity());
+			FCatInventoryEntry ReturnedEntry;
+			if (!OwnerInventory->ReturnHeldInventoryEntryFromAuthority(
+				SourceItem.ItemInstanceId, GetConfiguredInventorySlotCapacity(), 0, ReturnedEntry))
+			{
+				OwnerInventory->RetireHeldInventoryEntryFromAuthority(SourceItem.ItemInstanceId);
+				OwnerInventory->ReplaceInventoryEntriesFromAuthority(
+					SavedEntries, GetConfiguredInventorySlotCapacity());
+			}
 			Snapshot = SavedSnapshot;
 			Result.Error = ECatDomainCommandError::DependencyUnavailable;
 			return Finish(Result);
@@ -1197,9 +1209,10 @@ FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, 
 {
 	// 物品停止使用流程：
 	// 1. 先校验 authority 和 RequestId，再按实例载荷签名处理重放；同一收口请求不会重复放回同一物品。
-	// 2. 正式库存存在时把 Use 期间强持有的同一 UObject 放回 InventoryComponent，不按 DefinitionId 重新生成。
-	// 3. 归还前把正式库存槽位数追上当前配置，正式入库成功后再刷新旧投影和钓具选择。
-	// 4. 没有正式库存组件的旧宿主才回退 Snapshot 数组写入，继续兼容历史夹具。
+	// 2. 正式库存存在时只从 InventoryComponent held entry 取回同一 UObject，不按 DefinitionId 重新生成，也不再让 Equipment 保管实例强引用。
+	// 3. 归还前保存实例耐久、正式 entries、旧 Snapshot 和玩法镜像；归还失败或投影刷新失败时按这些事实回滚。
+	// 4. 投影刷新失败时优先把刚放回的实例重新借回 held entry；无法借回时恢复保存的 entries 并尝试重建活动区，重建失败只记录错误并按失败收口返回。
+	// 5. 没有正式库存组件的旧宿主才回退 Snapshot 数组写入，继续兼容历史夹具。
 	FCatInventoryItemUseResult Result;
 	Result.RequestId = RequestId;
 	Result.EquipmentRevision = Snapshot.Revision;
@@ -1258,9 +1271,11 @@ FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, 
 	}
 	if (UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent())
 	{
-		// 正式收口只能归还 Use 时移出的那一个实例；缺少强引用说明活动记录和库存事实已经分叉，必须拒绝。
+		// 正式收口只能归还 Use 时借出的那一个实例；缺少 held entry 说明活动记录和库存事实已经分叉，必须拒绝。
+		const FCatInventoryEntry* HeldEntry =
+			OwnerInventory->FindHeldInventoryEntryFromAuthority(RestoredItem.ItemInstanceId);
 		UCatEquipmentInventoryItemInstance* FormalInstance =
-			ActiveFormalInventoryUseInstances.FindRef(RestoredItem.ItemInstanceId);
+			HeldEntry != nullptr ? Cast<UCatEquipmentInventoryItemInstance>(HeldEntry->Instance) : nullptr;
 		if (FormalInstance == nullptr)
 		{
 			Result.Error = ECatDomainCommandError::DependencyUnavailable;
@@ -1272,25 +1287,19 @@ FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, 
 			return Finish(Result);
 		}
 
+		const double SavedFormalRodDurability = FormalInstance->GetRodDurability();
+		const bool bSavedFormalRodBroken = FormalInstance->IsRodBroken();
+		const FCatInventoryEntry SavedHeldEntry = *HeldEntry;
 		FormalInstance->SetRodRuntimeStateFromAuthority(RestoredItem.RodDurability, RestoredItem.bRodBroken);
-		// 运行期容量可能被设置或测试夹具调整；正式库存归还必须先跟上配置，不能只让旧 Snapshot 扩容。
-		OwnerInventory->SetInventorySlotCountFromAuthority(GetConfiguredInventorySlotCapacity());
-		FCatInventoryReceiveBatch ReceiveBatch;
-		FCatInventoryInstanceEntry& InstanceEntry = ReceiveBatch.InstanceEntries.AddDefaulted_GetRef();
-		InstanceEntry.ItemInstance = FormalInstance;
-		InstanceEntry.Count = RestoredItem.Quantity;
-		if (!OwnerInventory->CanFullyAcceptInventoryBatch(ReceiveBatch))
-		{
-			Result.Error = ECatDomainCommandError::CapacityExceeded;
-			return Finish(Result);
-		}
-
 		const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
 		const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
 		const FCatInventoryItemUseRecord SavedRecord = *Record;
-		if (!OwnerInventory->TryAddInventoryBatch(ReceiveBatch))
+		FCatInventoryEntry ReturnedEntry;
+		if (!OwnerInventory->ReturnHeldInventoryEntryFromAuthority(
+			RestoredItem.ItemInstanceId, GetConfiguredInventorySlotCapacity(), 0, ReturnedEntry))
 		{
-			Result.Error = ECatDomainCommandError::DependencyUnavailable;
+			FormalInstance->SetRodRuntimeStateFromAuthority(SavedFormalRodDurability, bSavedFormalRodBroken);
+			Result.Error = ECatDomainCommandError::CapacityExceeded;
 			return Finish(Result);
 		}
 
@@ -1299,15 +1308,29 @@ FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, 
 		Record->bReleased = true;
 		if (!RefreshInventoryProjectionFromInventoryComponentFromAuthority(Definition, RestoredItem.DefinitionId))
 		{
-			OwnerInventory->ReplaceInventoryEntriesFromAuthority(
-				SavedEntries, GetConfiguredInventorySlotCapacity());
+			const int32 RestoredSlotIndex = OwnerInventory->FindInventorySlotIndexFromInstance(FormalInstance);
+			FCatInventoryEntry ReheldEntry;
+			const bool bReheld = RestoredSlotIndex != INDEX_NONE
+				&& OwnerInventory->HoldInventoryEntryAtSlotFromAuthority(RestoredSlotIndex, ReheldEntry);
+			if (!bReheld)
+			{
+				OwnerInventory->ReplaceInventoryEntriesFromAuthority(
+					SavedEntries, GetConfiguredInventorySlotCapacity());
+				if (!OwnerInventory->RestoreHeldInventoryEntryForRollbackFromAuthority(SavedHeldEntry))
+				{
+					UE_LOG(LogCatRun, Error,
+						TEXT("Event=equipment_inventory_use_rollback_hold_restore_failed Owner=%s Instance=%s"),
+						*GetNameSafe(GetOwner()),
+						*RestoredItem.ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
+				}
+			}
+			FormalInstance->SetRodRuntimeStateFromAuthority(SavedFormalRodDurability, bSavedFormalRodBroken);
 			Snapshot = SavedSnapshot;
 			*Record = SavedRecord;
 			Result.Error = ECatDomainCommandError::DependencyUnavailable;
 			return Finish(Result);
 		}
 
-		ActiveFormalInventoryUseInstances.Remove(RestoredItem.ItemInstanceId);
 		if (Definition->Kind == ECatEquipmentKind::Rod && Snapshot.RodItemInstanceId == RestoredItem.ItemInstanceId)
 		{
 			Snapshot.RodDefinitionId = RestoredItem.DefinitionId;

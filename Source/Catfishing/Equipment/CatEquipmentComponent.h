@@ -276,11 +276,8 @@ private:
 
 	/** 当前 Character 生命周期内按 SessionId 隔离的 fishing reservation/tombstone；不复制也不持久化。 */
 	TMap<FGuid, FCatFishingUseRecord> FishingUseRecords;
-	/** 当前 Character 生命周期内被部署型 Use 暂时持有的物品实例；简单消耗品不进入这里，场景 Actor 收口前实例不会回到随身库存。 */
+	/** 当前 Character 生命周期内部署型 Use 的玩法镜像；正式 UObject 已由 InventoryComponent 活动区保管，这里只服务钓鱼选择、耐久和旧投影。 */
 	TMap<FGuid, FCatInventoryItemUseRecord> InventoryItemUseRecords;
-	/** 正式库存部署时移出的原始实例强引用；Use 写入，UnUse、持久化退出和快照恢复负责清理，缺少它就不能把同一 UObject 放回正式库存。 */
-	UPROPERTY(Transient)
-	TMap<FGuid, TObjectPtr<UCatEquipmentInventoryItemInstance>> ActiveFormalInventoryUseInstances;
 	/** 物品 Use/UnUse 首次终态缓存；简单消耗品重试会读它而不是再次扣量，部署/收回重试也不会重复移动同一实例。 */
 	TMap<FString, FCatInventoryItemUseResult> InventoryItemUseTerminalCache;
 	/** 临时测试发放的角色生命周期记录；不复制、不存档，避免把抄网移出背包后重占有刷出第二把。 */

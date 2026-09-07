@@ -97,6 +97,21 @@ struct TStructOpsTypeTraits<FCatInventoryList> : public TStructOpsTypeTraitsBase
 	enum { WithNetDeltaSerializer = true };
 };
 
+/** 被库存临时借出的不可堆叠单实例记录；部署型物品离开可见背包后，正式库存仍用它保管同一个数量为 1 的实例。 */
+USTRUCT()
+struct FCatInventoryHeldEntryRecord
+{
+	GENERATED_BODY()
+
+	/** 被借出的完整库存格；它必须是不可堆叠且数量为 1 的单实例，归还时不能按定义重新生成另一件物品。 */
+	UPROPERTY()
+	FCatInventoryEntry Entry;
+
+	/** 借出发生后的库存版本；诊断和回滚路径用它确认这条活动记录来自哪次库存内容变化。 */
+	UPROPERTY()
+	int64 HoldRevision = 0;
+};
+
 /** Aegis 风格库存组件的 Catfishing 适配版；它负责格子、实例、统一收货、使用扣量和跨库存交换。 */
 UCLASS(ClassGroup = (Catfishing), meta = (BlueprintSpawnableComponent))
 class CATFISHING_API UCatInventoryComponent : public UActorComponent, public ICatInventoryInterface
@@ -219,6 +234,25 @@ public:
 
 	/** authority 从指定槽位移出完整 entry；部署、跨容器转移等需要保留实例身份的流程用它接走正式库存事实。 */
 	bool RemoveInventoryEntryAtSlotFromAuthority(int32 TargetIndex, FCatInventoryEntry& OutRemovedEntry);
+
+	/** authority 把指定槽位完整借出到库存内部活动区；部署型物品用它离开可见格子但仍归本库存保管同一不可堆叠实例。 */
+	bool HoldInventoryEntryAtSlotFromAuthority(int32 SlotIndex, FCatInventoryEntry& OutHeldEntry);
+
+	/** authority 把活动区里同一不可堆叠实例放回可见库存；收杆或取消部署时用它走正式入库容量和复制规则。 */
+	bool ReturnHeldInventoryEntryFromAuthority(FGuid ItemInstanceId, int32 MinimumSlotCount,
+		int32 OverflowSlotCount, FCatInventoryEntry& OutReturnedEntry);
+
+	/** authority 用保存的单实例 entry 重建活动区记录；只供外层归还后失败回滚，成功后可见库存不应再持有该实例。 */
+	bool RestoreHeldInventoryEntryForRollbackFromAuthority(const FCatInventoryEntry& HeldEntry);
+
+	/** authority 退役活动区里的同一实例；存档已接管部署物时用它清掉本库存临时保管记录。 */
+	bool RetireHeldInventoryEntryFromAuthority(FGuid ItemInstanceId);
+
+	/** authority 读取活动区里某个实例的可写 entry；调用方只能用于同一服务器事务内同步运行状态。 */
+	FCatInventoryEntry* FindHeldInventoryEntryFromAuthority(FGuid ItemInstanceId);
+
+	/** authority 读取活动区里某个实例的只读 entry；导出或预检只需要观察时用它避免暴露可写库存格。 */
+	const FCatInventoryEntry* FindHeldInventoryEntryFromAuthority(FGuid ItemInstanceId) const;
 
 	/** 从指定格扣除数量；数量归零时清空格子并在安全时解除实例复制登记。 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
@@ -397,6 +431,10 @@ protected:
 	/** Actor 级统一收货优先级；数值越大越先尝试完整接收整批物品。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "InventoryConfig")
 	int32 UnifiedInventoryIntakePriority = 0;
+
+	/** 当前从本库存借出但尚未归还或退役的不可堆叠单实例记录；库存靠它成为部署型物品离格后的唯一 UObject 保管者。 */
+	UPROPERTY(Transient)
+	TMap<FGuid, FCatInventoryHeldEntryRecord> ActiveHeldItemEntries;
 
 	/** 普通库存命令首次终态缓存；重复 RequestId 只返回首次结果，不再次整理格子。 */
 	TMap<FString, FCatDomainCommandResult> TerminalCache;

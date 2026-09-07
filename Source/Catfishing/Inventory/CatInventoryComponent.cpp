@@ -1193,6 +1193,194 @@ bool UCatInventoryComponent::RemoveInventoryEntryAtSlotFromAuthority(
 	return true;
 }
 
+// 临时持有流程：
+// 1. 先要求服务器、合法槽位和有效实例 ID，避免客户端或空格制造活动记录。
+// 2. 再确认这是不可堆叠的完整实例，数量型或可堆叠物继续走 Consume/Reserved 批次，避免归还时被合并到别的栈里。
+// 3. 同一实例不能已经被本库存借出，防止背包和场景同时占有同一个 UObject。
+// 4. 成功后复用正式移出入口清空可见槽位，并把完整 entry 放入活动区继续由库存强持有。
+// 5. 活动 entry 的运行宿主仍同步为库存拥有者，后续归还、退役和诊断都围绕同一实例身份。
+bool UCatInventoryComponent::HoldInventoryEntryAtSlotFromAuthority(
+	const int32 SlotIndex, FCatInventoryEntry& OutHeldEntry)
+{
+	OutHeldEntry = FCatInventoryEntry(this);
+	AActor* OwningActor = GetOwner();
+	if (OwningActor == nullptr || !OwningActor->HasAuthority() || !IsValidInventorySlotIndex(SlotIndex))
+	{
+		return false;
+	}
+
+	const FCatInventoryEntry& SourceEntry = InventoryList.Entries[SlotIndex];
+	const FGuid ItemInstanceId = SourceEntry.Instance != nullptr ? SourceEntry.Instance->GetItemInstanceId() : FGuid();
+	const UCatInventoryItemDefinition* SourceDefinition =
+		SourceEntry.Instance != nullptr ? SourceEntry.Instance->GetItemDefinition() : nullptr;
+	if (!ItemInstanceId.IsValid() || SourceEntry.StackCount != 1 || SourceDefinition == nullptr
+		|| GetMaxStackCountForDefinition(*SourceDefinition) > 1 || ActiveHeldItemEntries.Contains(ItemInstanceId))
+	{
+		return false;
+	}
+
+	FCatInventoryEntry RemovedEntry;
+	if (!RemoveInventoryEntryAtSlotFromAuthority(SlotIndex, RemovedEntry))
+	{
+		return false;
+	}
+
+	RemovedEntry.SlotOwnerComponent = this;
+	RemovedEntry.LastObservedCount = RemovedEntry.StackCount;
+	SyncInventoryItemRuntimeOwner(RemovedEntry.Instance);
+
+	FCatInventoryHeldEntryRecord& HeldRecord = ActiveHeldItemEntries.Add(ItemInstanceId);
+	HeldRecord.Entry = RemovedEntry;
+	HeldRecord.HoldRevision = InventoryRevision;
+	OutHeldEntry = HeldRecord.Entry;
+	UE_LOG(LogCatInventory, Log,
+		TEXT("Event=inventory_hold_item Owner=%s Instance=%s Slot=%d Revision=%lld Count=%d"),
+		*GetNameSafe(OwningActor), *ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		SlotIndex, InventoryRevision, RemovedEntry.StackCount);
+	return true;
+}
+
+// 临时持有归还流程：
+// 1. 先按实例 ID 找到活动区记录，并拒绝已经重新出现在可见库存里的异常状态。
+// 2. 活动记录必须仍是不可堆叠的单实例；这让归还结果一定是同一 UObject 回到可见格，而不是被堆叠规则吞掉。
+// 3. 再把可见槽位容量追到调用方要求的最低值，保持收杆归还和存档恢复看到同一套背包格。
+// 4. 归还仍走批量入库入口；它负责容量预演、堆叠、复制登记、版本推进和广播。
+// 5. 只有正式入库成功后才删除活动记录，失败时实例仍留在活动区，调用方可以继续重试或回滚外层状态。
+bool UCatInventoryComponent::ReturnHeldInventoryEntryFromAuthority(
+	const FGuid ItemInstanceId, const int32 MinimumSlotCount, const int32 OverflowSlotCount,
+	FCatInventoryEntry& OutReturnedEntry)
+{
+	OutReturnedEntry = FCatInventoryEntry(this);
+	AActor* OwningActor = GetOwner();
+	if (OwningActor == nullptr || !OwningActor->HasAuthority() || !ItemInstanceId.IsValid())
+	{
+		return false;
+	}
+
+	FCatInventoryHeldEntryRecord* HeldRecord = ActiveHeldItemEntries.Find(ItemInstanceId);
+	if (HeldRecord == nullptr || HeldRecord->Entry.Instance == nullptr || HeldRecord->Entry.StackCount <= 0)
+	{
+		return false;
+	}
+	const UCatInventoryItemDefinition* HeldDefinition = HeldRecord->Entry.Instance->GetItemDefinition();
+	if (HeldDefinition == nullptr || HeldRecord->Entry.StackCount != 1
+		|| GetMaxStackCountForDefinition(*HeldDefinition) > 1)
+	{
+		return false;
+	}
+	if (FindInventorySlotIndexFromInstance(HeldRecord->Entry.Instance) != INDEX_NONE)
+	{
+		return false;
+	}
+
+	SetInventorySlotCountFromAuthority(MinimumSlotCount);
+	FCatInventoryReceiveBatch ReceiveBatch;
+	FCatInventoryInstanceEntry& InstanceEntry = ReceiveBatch.InstanceEntries.AddDefaulted_GetRef();
+	InstanceEntry.ItemInstance = HeldRecord->Entry.Instance;
+	InstanceEntry.Count = HeldRecord->Entry.StackCount;
+	if (!TryReturnReservedInventoryBatchFromAuthority(ReceiveBatch, OverflowSlotCount))
+	{
+		return false;
+	}
+
+	OutReturnedEntry = HeldRecord->Entry;
+	ActiveHeldItemEntries.Remove(ItemInstanceId);
+	UE_LOG(LogCatInventory, Log,
+		TEXT("Event=inventory_return_held_item Owner=%s Instance=%s Revision=%lld Count=%d"),
+		*GetNameSafe(OwningActor), *ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		InventoryRevision, OutReturnedEntry.StackCount);
+	return true;
+}
+
+// 临时持有回滚恢复流程：
+// 1. 只接受服务器传回的有效不可堆叠单实例 entry，避免把数量栈或空记录塞进活动区。
+// 2. 如果同一实例已经出现在可见库存，说明调用方尚未撤销归还结果，活动区不能再接管它。
+// 3. 如果活动区已有同 ID 记录，必须确认它指向同一个 UObject；否则返回失败暴露身份冲突。
+// 4. 成功时重建活动记录并刷新 owner、观察数量和运行宿主；这一步不推进库存版本，因为它只恢复外层失败前的临时保管状态。
+bool UCatInventoryComponent::RestoreHeldInventoryEntryForRollbackFromAuthority(const FCatInventoryEntry& HeldEntry)
+{
+	AActor* OwningActor = GetOwner();
+	if (OwningActor == nullptr || !OwningActor->HasAuthority()
+		|| HeldEntry.Instance == nullptr || HeldEntry.StackCount != 1)
+	{
+		return false;
+	}
+
+	const FGuid ItemInstanceId = HeldEntry.Instance->GetItemInstanceId();
+	const UCatInventoryItemDefinition* HeldDefinition = HeldEntry.Instance->GetItemDefinition();
+	if (!ItemInstanceId.IsValid() || HeldDefinition == nullptr || GetMaxStackCountForDefinition(*HeldDefinition) > 1
+		|| FindInventorySlotIndexFromInstance(HeldEntry.Instance) != INDEX_NONE)
+	{
+		return false;
+	}
+
+	if (const FCatInventoryHeldEntryRecord* ExistingHeldRecord = ActiveHeldItemEntries.Find(ItemInstanceId);
+		ExistingHeldRecord != nullptr && ExistingHeldRecord->Entry.Instance != HeldEntry.Instance)
+	{
+		return false;
+	}
+
+	FCatInventoryHeldEntryRecord& HeldRecord = ActiveHeldItemEntries.FindOrAdd(ItemInstanceId);
+	HeldRecord.Entry = HeldEntry;
+	HeldRecord.Entry.SlotOwnerComponent = this;
+	HeldRecord.Entry.LastObservedCount = HeldRecord.Entry.StackCount;
+	HeldRecord.HoldRevision = InventoryRevision;
+	SyncInventoryItemRuntimeOwner(HeldRecord.Entry.Instance);
+	UE_LOG(LogCatInventory, Warning,
+		TEXT("Event=inventory_restore_held_item_for_rollback Owner=%s Instance=%s Revision=%lld Count=%d"),
+		*GetNameSafe(OwningActor), *ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		InventoryRevision, HeldRecord.Entry.StackCount);
+	return true;
+}
+
+// 临时持有退役流程：
+// 1. 只允许服务器按实例 ID 移除活动区记录，客户端不能让部署物品从库存生命周期里消失。
+// 2. 退役表示存档或外部权威已经接管这件物品，因此不重新放回可见格，也不推进库存内容版本。
+// 3. 找不到活动记录时返回 false，让调用方暴露库存事实和玩法记录已经分叉。
+bool UCatInventoryComponent::RetireHeldInventoryEntryFromAuthority(const FGuid ItemInstanceId)
+{
+	AActor* OwningActor = GetOwner();
+	if (OwningActor == nullptr || !OwningActor->HasAuthority() || !ItemInstanceId.IsValid())
+	{
+		return false;
+	}
+
+	const int32 RemovedCount = ActiveHeldItemEntries.Remove(ItemInstanceId);
+	if (RemovedCount <= 0)
+	{
+		return false;
+	}
+
+	UE_LOG(LogCatInventory, Log, TEXT("Event=inventory_retire_held_item Owner=%s Instance=%s Revision=%lld"),
+		*GetNameSafe(OwningActor), *ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), InventoryRevision);
+	return true;
+}
+
+// 活动 entry 查找流程：只在服务器侧按稳定实例 ID 返回本库存活动区里的同一份 entry，不触发归还或复制变化。
+FCatInventoryEntry* UCatInventoryComponent::FindHeldInventoryEntryFromAuthority(const FGuid ItemInstanceId)
+{
+	if (GetOwner() == nullptr || !GetOwner()->HasAuthority() || !ItemInstanceId.IsValid())
+	{
+		return nullptr;
+	}
+
+	FCatInventoryHeldEntryRecord* HeldRecord = ActiveHeldItemEntries.Find(ItemInstanceId);
+	return HeldRecord != nullptr ? &HeldRecord->Entry : nullptr;
+}
+
+// 活动 entry 只读查找流程：和可写版本保持同一 authority 与实例 ID 规则，查询本身不会补槽、归还或退役物品。
+const FCatInventoryEntry* UCatInventoryComponent::FindHeldInventoryEntryFromAuthority(
+	const FGuid ItemInstanceId) const
+{
+	if (GetOwner() == nullptr || !GetOwner()->HasAuthority() || !ItemInstanceId.IsValid())
+	{
+		return nullptr;
+	}
+
+	const FCatInventoryHeldEntryRecord* HeldRecord = ActiveHeldItemEntries.Find(ItemInstanceId);
+	return HeldRecord != nullptr ? &HeldRecord->Entry : nullptr;
+}
+
 // 扣量流程：服务器验证槽位和数量后扣减；清空格子时才解除实例复制登记，任一成功扣减都会推进内容版本并广播。
 bool UCatInventoryComponent::ConsumeItemAtSlot(const int32 SlotIndex, const int32 ConsumeCount)
 {
