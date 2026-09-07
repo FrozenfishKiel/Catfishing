@@ -425,6 +425,11 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 	const FGuid RodItemInstanceId, const FGuid BaitItemInstanceId, const FGuid FloatItemInstanceId,
 	const FGuid ScoopNetItemInstanceId)
 {
+	// 钓具配置提交流程：
+	// 1. RequestId 命中终态缓存时直接返回旧结果，避免重放请求重新选择或推进 Revision。
+	// 2. 再校验服务器权威、定义类型、解锁权限和版本；任一失败只写错误码，不改变当前选择和库存投影。
+	// 3. 当前选中鱼竿正在部署时，正式库存存在就从 held-entry 确认同一实例，旧宿主才读取 Equipment 的 Use 镜像。
+	// 4. 所有候选装备都解析成库存里的真实槽位后再写 Snapshot，保证钓鱼选择记录的是实例身份而不只是定义。
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	const FString Key = MakeTerminalKey(TEXT("ConfigureLoadout"), RequestId);
@@ -470,14 +475,32 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 	}
 	else
 	{
-		const FCatInventoryItemUseRecord* ActiveSelectedRod =
-			FindInventoryItemUseRecord(Snapshot.RodItemInstanceId);
-		const bool bSelectedRodIsInUse = ActiveSelectedRod && !ActiveSelectedRod->bReleased
-			&& ActiveSelectedRod->Item.DefinitionId == Snapshot.RodDefinitionId
-			&& ActiveSelectedRod->Item.ItemInstanceId == Snapshot.RodItemInstanceId;
+		FCatRunInventorySlot ActiveSelectedRodSlot;
+		bool bSelectedRodIsInUse = false;
+		if (Snapshot.RodItemInstanceId.IsValid())
+		{
+			if (ResolveOwnerInventoryComponent() != nullptr)
+			{
+				bSelectedRodIsInUse = TryBuildHeldInventoryUseSlot(
+					Snapshot.RodItemInstanceId, ActiveSelectedRodSlot)
+					&& ActiveSelectedRodSlot.DefinitionId == Snapshot.RodDefinitionId
+					&& ActiveSelectedRodSlot.ItemInstanceId == Snapshot.RodItemInstanceId;
+			}
+			else if (const FCatInventoryItemUseRecord* ActiveSelectedRod =
+				FindInventoryItemUseRecord(Snapshot.RodItemInstanceId))
+			{
+				if (!ActiveSelectedRod->bReleased
+					&& ActiveSelectedRod->Item.DefinitionId == Snapshot.RodDefinitionId
+					&& ActiveSelectedRod->Item.ItemInstanceId == Snapshot.RodItemInstanceId)
+				{
+					ActiveSelectedRodSlot = ActiveSelectedRod->Item;
+					bSelectedRodIsInUse = true;
+				}
+			}
+		}
 		const bool bRequestsActiveSelectedRod = bSelectedRodIsInUse
-			&& RodDefinitionId == ActiveSelectedRod->Item.DefinitionId
-			&& (!RodItemInstanceId.IsValid() || RodItemInstanceId == ActiveSelectedRod->Item.ItemInstanceId);
+			&& RodDefinitionId == ActiveSelectedRodSlot.DefinitionId
+			&& (!RodItemInstanceId.IsValid() || RodItemInstanceId == ActiveSelectedRodSlot.ItemInstanceId);
 		if (bSelectedRodIsInUse && !bRequestsActiveSelectedRod)
 		{
 			Result.Error = ECatDomainCommandError::InvalidPhase;
@@ -485,18 +508,13 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 		else
 		{
 			const auto ResolveSelectedRodSlot =
-				[this, ActiveSelectedRod, bRequestsActiveSelectedRod](
+				[this, ActiveSelectedRodSlot, bRequestsActiveSelectedRod](
 					const FName DefinitionId, const FGuid ItemInstanceId,
 					FCatRunInventorySlot& OutSlot) -> bool
 				{
 					if (bRequestsActiveSelectedRod)
 					{
-						if (ActiveSelectedRod == nullptr)
-						{
-							OutSlot = FCatRunInventorySlot();
-							return false;
-						}
-						OutSlot = ActiveSelectedRod->Item;
+						OutSlot = ActiveSelectedRodSlot;
 						return OutSlot.DefinitionId == DefinitionId
 							&& (!ItemInstanceId.IsValid() || OutSlot.ItemInstanceId == ItemInstanceId);
 					}
@@ -1585,7 +1603,7 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	// 建立 Fishing 使用预留的流程：
 	// 1. 先用 SessionId 返回已存在的终态，保证 FishingSession 重放不会再检查或再占库存。
 	// 2. 再校验 authority、定义类型、Revision、当前钓鱼选择和三份实例身份，任何不一致都保持快照不变。
-	// 3. 鱼竿实例必须来自活动 Use 记录，鱼饵和鱼漂实例优先从正式库存确认，避免场景竿和背包格引用不同物品。
+	// 3. 鱼竿实例必须来自正式库存 held-entry 或旧宿主活动 Use 记录，鱼饵和鱼漂实例优先从正式库存确认，避免场景竿和背包格引用不同物品。
 	// 4. 通过后立即从正式库存扣掉选中鱼饵实例的一份，并只把可归还的定义放进本 Session 记录。
 	// 5. 记录只保存这场 Fishing 自己要消耗或归还的饵料和耐久累计，不再给库存拖放提供通用占用 gate。
 	if (const FCatFishingUseRecord* ExistingRecord = FindFishingUseRecord(FishingSessionId))
@@ -1621,24 +1639,25 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false);
 	}
-	if (Snapshot.bRodBroken || !FMath::IsFinite(Snapshot.RodDurability) || Snapshot.RodDurability <= 0.0)
-	{
-		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false);
-	}
 	if (!Bait->bRunConsumable)
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false);
 	}
-	const FCatInventoryItemUseRecord* RodUseRecord = FindInventoryItemUseRecord(RodItemInstanceId);
 	UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
+	FCatRunInventorySlot RodUseSlotStorage;
 	FCatRunInventorySlot FormalBaitSlot;
 	FCatRunInventorySlot FormalFloatSlot;
 	int32 FormalBaitSlotIndex = INDEX_NONE;
+	const FCatRunInventorySlot* RodUseSlot = nullptr;
 	const FCatRunInventorySlot* BaitSlot = nullptr;
 	const FCatRunInventorySlot* FloatSlot = nullptr;
 	if (OwnerInventory != nullptr)
 	{
 		// Fishing 只消费正式库存里的数量物；旧 Snapshot 在这里仅提供当前选择，不能再当库存事实源。
+		if (TryBuildHeldInventoryUseSlot(RodItemInstanceId, RodUseSlotStorage))
+		{
+			RodUseSlot = &RodUseSlotStorage;
+		}
 		FormalBaitSlotIndex = OwnerInventory->FindInventorySlotIndexFromInstanceId(BaitItemInstanceId);
 		const int32 FormalFloatSlotIndex = OwnerInventory->FindInventorySlotIndexFromInstanceId(FloatItemInstanceId);
 		const FCatInventoryEntry* FormalBaitEntry = OwnerInventory->GetInventoryEntryAtSlot(FormalBaitSlotIndex);
@@ -1656,14 +1675,22 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	}
 	else
 	{
+		const FCatInventoryItemUseRecord* RodUseRecord = FindInventoryItemUseRecord(RodItemInstanceId);
+		RodUseSlot = RodUseRecord && !RodUseRecord->bReleased ? &RodUseRecord->Item : nullptr;
 		BaitSlot = FindInventorySlotByInstanceId(BaitItemInstanceId);
 		FloatSlot = FindInventorySlotByInstanceId(FloatItemInstanceId);
 	}
-	if (!RodUseRecord || RodUseRecord->bReleased || RodUseRecord->Item.DefinitionId != RodDefinitionId
+	if (!RodUseSlot || RodUseSlot->DefinitionId != RodDefinitionId
+		|| RodUseSlot->ItemInstanceId != RodItemInstanceId || RodUseSlot->Quantity != 1
 		|| !BaitSlot || BaitSlot->DefinitionId != BaitDefinitionId
 		|| !FloatSlot || FloatSlot->DefinitionId != FloatDefinitionId)
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::NotFound, false);
+	}
+	if (RodUseSlot->bRodBroken || !FMath::IsFinite(RodUseSlot->RodDurability)
+		|| RodUseSlot->RodDurability <= 0.0)
+	{
+		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false);
 	}
 	if (FloatSlot->Quantity <= 0)
 	{
@@ -1751,8 +1778,8 @@ FCatFishingUseOperationResult UCatEquipmentComponent::ApplyFishingRodWear(const 
 {
 	// 鱼竿磨损写回流程：
 	// 1. 先按 Session 读取 Begin 记录并建立统一拒绝日志；authority、载荷、会话状态、序号和饵料提交缺任一项都不写耐久。
-	// 2. 再按 Begin 冻结的实例 ID 查库存或部署 Use 记录，确保跨场耐久扣在原始鱼竿而不是当前选择的另一根竿。
-	// 3. 最后只按累计磨损差额写回实例，并在当前选择仍是同一竿时投影 Snapshot；重复序号只返回终态不重扣。
+	// 2. 再按 Begin 冻结的实例 ID 查正式库存实例；没有正式库存的旧宿主才查部署 Use 记录里的旧副本。
+	// 3. 最后只按累计磨损差额写回实例本体，并在当前选择仍是同一竿时投影 Snapshot；重复序号只返回终态不重扣。
 	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
 	const auto Reject = [&](const ECatDomainCommandError Error, const TCHAR* Reason)
 	{
@@ -1793,26 +1820,66 @@ FCatFishingUseOperationResult UCatEquipmentComponent::ApplyFishingRodWear(const 
 	{
 		return Reject(ECatDomainCommandError::InvalidPhase, TEXT("BaitNotCommitted"));
 	}
-	FCatRunInventorySlot* RodItem = FindFishingRodInstance(*Record);
-	if (!RodItem || !FMath::IsFinite(RodItem->RodDurability) || RodItem->RodDurability < 0.0)
-	{
-		return Reject(ECatDomainCommandError::NotFound, TEXT("BoundRodUnavailable"));
-	}
-	// 到这里才允许改写实例：Record 保存累计磨损用于后续去重，RodItem 保存真实剩余耐久。
-	const double Before = RodItem->RodDurability;
-	const bool bWasBroken = RodItem->bRodBroken;
 	const double Delta = AbsoluteTotal - Record->AbsoluteRodWear;
-	RodItem->RodDurability = bWasBroken ? 0.0 : FMath::Max(0.0, Before - Delta);
-	RodItem->bRodBroken = RodItem->RodDurability <= 0.0;
+	double Before = 0.0;
+	bool bWasBroken = false;
+	double Remaining = 0.0;
+	bool bBroken = false;
+	if (ResolveOwnerInventoryComponent() != nullptr)
+	{
+		FCatRunInventorySlot RodItem;
+		UCatEquipmentInventoryItemInstance* FormalRodInstance =
+			ResolveFishingRodFormalInstanceFromInventory(*Record, RodItem);
+		if (FormalRodInstance == nullptr || !FMath::IsFinite(RodItem.RodDurability)
+			|| RodItem.RodDurability < 0.0)
+		{
+			return Reject(ECatDomainCommandError::NotFound, TEXT("BoundRodUnavailable"));
+		}
+
+		// 正式库存实例是鱼竿状态事实源；旧 Use 记录只在写入后同步投影，避免迁移期读者看到另一份耐久。
+		Before = FormalRodInstance->GetRodDurability();
+		bWasBroken = FormalRodInstance->IsRodBroken();
+		if (!FMath::IsFinite(Before) || Before < 0.0)
+		{
+			return Reject(ECatDomainCommandError::NotFound, TEXT("BoundRodUnavailable"));
+		}
+		Remaining = bWasBroken ? 0.0 : FMath::Max(0.0, Before - Delta);
+		bBroken = bWasBroken || Remaining <= 0.0;
+		FormalRodInstance->SetRodRuntimeStateFromAuthority(Remaining, bBroken);
+		Remaining = FormalRodInstance->GetRodDurability();
+		bBroken = FormalRodInstance->IsRodBroken();
+		if (FCatInventoryItemUseRecord* ActiveUse = FindInventoryItemUseRecord(Record->RodItemInstanceId))
+		{
+			if (!ActiveUse->bReleased && ActiveUse->Item.ItemInstanceId == Record->RodItemInstanceId)
+			{
+				ActiveUse->Item.RodDurability = Remaining;
+				ActiveUse->Item.bRodBroken = bBroken;
+			}
+		}
+	}
+	else
+	{
+		FCatRunInventorySlot* RodItem = FindFishingRodInstance(*Record);
+		if (!RodItem || !FMath::IsFinite(RodItem->RodDurability) || RodItem->RodDurability < 0.0)
+		{
+			return Reject(ECatDomainCommandError::NotFound, TEXT("BoundRodUnavailable"));
+		}
+
+		// 旧宿主没有正式库存组件时，活动 Use 副本仍是可写实例，避免破坏现有单组件运行路径。
+		Before = RodItem->RodDurability;
+		bWasBroken = RodItem->bRodBroken;
+		Remaining = bWasBroken ? 0.0 : FMath::Max(0.0, Before - Delta);
+		bBroken = bWasBroken || Remaining <= 0.0;
+		RodItem->RodDurability = Remaining;
+		RodItem->bRodBroken = bBroken;
+	}
 	Record->LastWearSequence = WearSequence;
 	Record->AbsoluteRodWear = AbsoluteTotal;
 	if (Snapshot.RodItemInstanceId == Record->RodItemInstanceId)
 	{
-		Snapshot.RodDurability = RodItem->RodDurability;
-		Snapshot.bRodBroken = RodItem->bRodBroken;
+		Snapshot.RodDurability = Remaining;
+		Snapshot.bRodBroken = bBroken;
 	}
-	const double Remaining = RodItem->RodDurability;
-	const bool bBroken = RodItem->bRodBroken;
 	const bool bChanged = Before != Remaining || bWasBroken != bBroken;
 	if (bChanged)
 	{
@@ -1835,11 +1902,31 @@ FCatFishingUseOperationResult UCatEquipmentComponent::ApplyFishingRodWear(const 
 bool UCatEquipmentComponent::GetFishingRodDurability(const FGuid FishingSessionId,
 	double& OutDurability, bool& OutBroken) const
 {
-	// 耐久读取流程：按会话短记录找到 Begin 冻结的鱼竿实例，只返回该实例当前耐久和断竿事实，避免换选后把另一根鱼竿当成旧会话结果。
+	// 耐久读取流程：按会话短记录找到 Begin 冻结的鱼竿实例；正式库存存在时读取库存实例本体，旧宿主才读 Use 副本，避免换选后把另一根鱼竿当成旧会话结果。
 	OutDurability = 0.0;
 	OutBroken = false;
 	const FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
-	const FCatRunInventorySlot* RodItem = Record ? FindFishingRodInstance(*Record) : nullptr;
+	if (Record == nullptr)
+	{
+		return false;
+	}
+
+	if (ResolveOwnerInventoryComponent() != nullptr)
+	{
+		FCatRunInventorySlot RodItem;
+		const UCatEquipmentInventoryItemInstance* FormalRodInstance =
+			ResolveFishingRodFormalInstanceFromInventory(*Record, RodItem);
+		if (FormalRodInstance == nullptr || !FMath::IsFinite(RodItem.RodDurability)
+			|| RodItem.RodDurability < 0.0)
+		{
+			return false;
+		}
+		OutDurability = FormalRodInstance->GetRodDurability();
+		OutBroken = FormalRodInstance->IsRodBroken() || OutDurability <= 0.0;
+		return FMath::IsFinite(OutDurability) && OutDurability >= 0.0;
+	}
+
+	const FCatRunInventorySlot* RodItem = FindFishingRodInstance(*Record);
 	if (!RodItem || !FMath::IsFinite(RodItem->RodDurability) || RodItem->RodDurability < 0.0)
 	{
 		return false;
@@ -2843,9 +2930,79 @@ const UCatEquipmentComponent::FCatFishingUseRecord* UCatEquipmentComponent::Find
 	return FishingUseRecords.Find(FishingSessionId);
 }
 
+bool UCatEquipmentComponent::TryBuildHeldInventoryUseSlot(const FGuid ItemInstanceId,
+	FCatRunInventorySlot& OutSlot) const
+{
+	// 正式部署投影流程：只从 Owner 库存活动区读取同一实例，把它转换为旧槽位给配置和 Fishing 预检使用；查询失败必须清空输出，避免继续信任过期镜像。
+	OutSlot = FCatRunInventorySlot();
+	UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
+	const FCatInventoryEntry* HeldEntry =
+		OwnerInventory != nullptr ? OwnerInventory->FindHeldInventoryEntryFromAuthority(ItemInstanceId) : nullptr;
+	if (HeldEntry == nullptr || HeldEntry->StackCount <= 0
+		|| !BuildLegacyRunInventorySlotFromFormalEntry(*HeldEntry, OutSlot))
+	{
+		OutSlot = FCatRunInventorySlot();
+		return false;
+	}
+
+	if (OutSlot.ItemInstanceId != ItemInstanceId || OutSlot.Quantity != 1)
+	{
+		OutSlot = FCatRunInventorySlot();
+		return false;
+	}
+
+	return true;
+}
+
+UCatEquipmentInventoryItemInstance* UCatEquipmentComponent::ResolveFishingRodFormalInstanceFromInventory(
+	const FCatFishingUseRecord& Record, FCatRunInventorySlot& OutProjectedSlot) const
+{
+	// Fishing 鱼竿正式实例解析流程：
+	// 1. 先用 Begin 冻结的实例 ID 查可见库存格；找不到时再查库存活动区，覆盖正在部署的世界鱼竿。
+	// 2. 命中 entry 后必须投影回旧槽位并核对定义、实例和单件数量，防止同定义另一根竿承接磨损。
+	// 3. 只有正式装备实例本体有效时才返回可写指针，调用方随后把耐久写回库存实例而不是写 Equipment 镜像。
+	OutProjectedSlot = FCatRunInventorySlot();
+	if (!Record.RodItemInstanceId.IsValid() || Record.RodDefinitionId.IsNone())
+	{
+		return nullptr;
+	}
+
+	UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
+	if (OwnerInventory == nullptr)
+	{
+		return nullptr;
+	}
+
+	const int32 SlotIndex = OwnerInventory->FindInventorySlotIndexFromInstanceId(Record.RodItemInstanceId);
+	const FCatInventoryEntry* FormalEntry = OwnerInventory->GetInventoryEntryAtSlot(SlotIndex);
+	if (FormalEntry == nullptr)
+	{
+		FormalEntry = OwnerInventory->FindHeldInventoryEntryFromAuthority(Record.RodItemInstanceId);
+	}
+
+	UCatEquipmentInventoryItemInstance* FormalInstance = FormalEntry != nullptr
+		? Cast<UCatEquipmentInventoryItemInstance>(FormalEntry->Instance) : nullptr;
+	if (FormalInstance == nullptr
+		|| !BuildLegacyRunInventorySlotFromFormalEntry(*FormalEntry, OutProjectedSlot))
+	{
+		OutProjectedSlot = FCatRunInventorySlot();
+		return nullptr;
+	}
+
+	if (OutProjectedSlot.ItemInstanceId != Record.RodItemInstanceId
+		|| OutProjectedSlot.DefinitionId != Record.RodDefinitionId
+		|| OutProjectedSlot.Quantity != 1)
+	{
+		OutProjectedSlot = FCatRunInventorySlot();
+		return nullptr;
+	}
+
+	return FormalInstance;
+}
+
 FCatRunInventorySlot* UCatEquipmentComponent::FindFishingRodInstance(const FCatFishingUseRecord& Record)
 {
-	// 绑定鱼竿查找流程：先按实例 ID 查随身库存；如果竿正部署在世界里，再读活动 Use 记录里的副本，并用定义和数量确认没有串到同类物品。
+	// 旧绑定鱼竿查找流程：没有正式库存组件的宿主仍按实例 ID 查旧投影格和活动 Use 副本，并用定义和数量确认没有串到同类物品。
 	FCatRunInventorySlot* Item = FindInventorySlotByInstanceId(Record.RodItemInstanceId);
 	if (!Item)
 	{
@@ -2858,7 +3015,7 @@ FCatRunInventorySlot* UCatEquipmentComponent::FindFishingRodInstance(const FCatF
 
 const FCatRunInventorySlot* UCatEquipmentComponent::FindFishingRodInstance(const FCatFishingUseRecord& Record) const
 {
-	// 绑定鱼竿只读查找流程：与可写版本共用同一实例身份规则，只返回当前仍由库存或活动部署记录持有的那一件。
+	// 旧绑定鱼竿只读查找流程：与可写版本共用同一实例身份规则，只返回旧投影仍持有的那一件，正式库存读者走 held-entry 解析。
 	const FCatRunInventorySlot* Item = FindInventorySlotByInstanceId(Record.RodItemInstanceId);
 	if (!Item)
 	{
@@ -2984,12 +3141,38 @@ const FCatRunInventorySlot* UCatEquipmentComponent::FindFirstInventorySlotByDefi
 void UCatEquipmentComponent::SyncSelectedRodStateToSelectedInstance()
 {
 	// 鱼竿状态同步流程：
-	// 1. 当前选择快照仍服务 UI 与老调用方，但被选实例可能在旧投影格里，也可能已经被 Use 移到活动记录里。
-	// 2. 如果实例还在旧投影格中，直接写回该格的耐久和断竿状态。
-	// 3. 如果实例已经部署到场景，只更新活动记录里的副本，等 UnUse 时再原样归还。
+	// 1. 当前选择快照仍服务 UI 与老调用方；正式库存存在时，可见格或 held-entry 里的实例才是鱼竿状态事实源。
+	// 2. 正式路径先写回库存实例本体，再同步旧活动 Use 镜像，避免收杆前后出现两份耐久。
+	// 3. 没有正式库存组件的旧宿主才直接写旧投影格或活动 Use 副本。
 	// 4. 已收口记录不再改写，避免收杆后的历史记录影响新的实例状态。
 	if (!Snapshot.RodItemInstanceId.IsValid())
 	{
+		return;
+	}
+	if (ResolveOwnerInventoryComponent() != nullptr)
+	{
+		FCatFishingUseRecord SelectedRodRecord;
+		SelectedRodRecord.RodItemInstanceId = Snapshot.RodItemInstanceId;
+		SelectedRodRecord.RodDefinitionId = Snapshot.RodDefinitionId;
+		FCatRunInventorySlot ProjectedRodSlot;
+		UCatEquipmentInventoryItemInstance* FormalRodInstance =
+			ResolveFishingRodFormalInstanceFromInventory(SelectedRodRecord, ProjectedRodSlot);
+		if (FormalRodInstance == nullptr)
+		{
+			return;
+		}
+
+		FormalRodInstance->SetRodRuntimeStateFromAuthority(Snapshot.RodDurability, Snapshot.bRodBroken);
+		Snapshot.RodDurability = FormalRodInstance->GetRodDurability();
+		Snapshot.bRodBroken = FormalRodInstance->IsRodBroken();
+		if (FCatInventoryItemUseRecord* ActiveUse = FindInventoryItemUseRecord(Snapshot.RodItemInstanceId))
+		{
+			if (!ActiveUse->bReleased && ActiveUse->Item.ItemInstanceId == Snapshot.RodItemInstanceId)
+			{
+				ActiveUse->Item.RodDurability = Snapshot.RodDurability;
+				ActiveUse->Item.bRodBroken = Snapshot.bRodBroken;
+			}
+		}
 		return;
 	}
 	if (FCatRunInventorySlot* StoredSlot = FindInventorySlotByInstanceId(Snapshot.RodItemInstanceId))
@@ -3009,7 +3192,7 @@ void UCatEquipmentComponent::SyncSelectedRodStateToSelectedInstance()
 }
 
 // 自动选择流程：
-// 1. 新获得的物品只在当前选择缺失、旧选择无库存/无活动 Use，或已选竿已断/耐久非法时介入。
+// 1. 新获得的物品只在当前选择缺失、旧选择无库存/无正式 held-entry，或已选竿已断/耐久非法时介入。
 // 2. 鱼竿选择刷新会记录具体实例并读取这根实例自己的耐久；断竿收口时会从已有库存中寻找可用替代竿。
 // 3. 鱼饵、鱼漂和抄网也保留被选中的实例身份，但不会因为新增同类物品抢占仍有效的选择。
 // 4. 这个流程不移出库存物品，也不创建独立装备栏；Fishing Begin 会按当前选择自行暂存要消耗的那一份饵。
@@ -3070,9 +3253,19 @@ void UCatEquipmentComponent::AutoSelectGrantedInventoryItem(const UCatEquipmentD
 			FindInventorySlotByInstanceId(Snapshot.RodItemInstanceId);
 		const bool bSelectedStoredRodMatches = SelectedStoredRod != nullptr
 			&& SelectedStoredRod->DefinitionId == Snapshot.RodDefinitionId;
-		const FCatInventoryItemUseRecord* ActiveSelectedRod =
-			FindInventoryItemUseRecord(Snapshot.RodItemInstanceId);
-		const bool bSelectedRodIsInUse = ActiveSelectedRod && !ActiveSelectedRod->bReleased;
+		FCatRunInventorySlot ActiveSelectedRodSlot;
+		bool bSelectedRodIsInUse = false;
+		if (ResolveOwnerInventoryComponent() != nullptr)
+		{
+			bSelectedRodIsInUse = TryBuildHeldInventoryUseSlot(Snapshot.RodItemInstanceId, ActiveSelectedRodSlot)
+				&& ActiveSelectedRodSlot.DefinitionId == Snapshot.RodDefinitionId;
+		}
+		else if (const FCatInventoryItemUseRecord* ActiveSelectedRod =
+			FindInventoryItemUseRecord(Snapshot.RodItemInstanceId))
+		{
+			bSelectedRodIsInUse = !ActiveSelectedRod->bReleased
+				&& ActiveSelectedRod->Item.DefinitionId == Snapshot.RodDefinitionId;
+		}
 		const bool bSelectedRodUnavailable = Snapshot.RodDefinitionId.IsNone()
 			|| (!bSelectedStoredRodMatches && !bSelectedRodIsInUse);
 		const bool bStoredSelectedRodBroken = bSelectedStoredRodMatches

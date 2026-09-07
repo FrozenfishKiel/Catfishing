@@ -93,13 +93,13 @@ public:
 	/** Fishing 会话开始前按 SessionId 申请当前钓鱼选择使用权；Begin 从正式库存暂存一份选中鱼饵，后续由本会话消耗或归还。 */
 	FCatFishingUseReservationResult BeginFishingUse(FGuid FishingSessionId, FGuid RodItemInstanceId,
 		FGuid BaitItemInstanceId, FGuid FloatItemInstanceId, FName RodDefinitionId,
-	FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);
+		FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);
 	/** 确认消耗 Begin 已暂存的鱼饵；正式库存数量已经在 Begin 扣减，本函数只收口会话内的饵料事务。 */
 	FCatFishingUseOperationResult CommitFishingBaitDeferred(FGuid FishingSessionId);
 	/** 按递增累计磨损的差额立即扣减 Begin 绑定的鱼竿实例；重复序号不重扣，Release 不回滚。 */
 	FCatFishingUseOperationResult ApplyFishingRodWear(FGuid FishingSessionId, int64 WearSequence,
 		double AbsoluteTotal);
-	/** 从该会话绑定的库存或活动 Use 实例读取跨场保留的耐久，不读取当前选择的另一根竿。 */
+	/** 从该会话绑定的正式库存鱼竿实例或旧宿主 Use 副本读取耐久，不读取当前选择的另一根竿。 */
 	bool GetFishingRodDurability(FGuid FishingSessionId, double& OutDurability, bool& OutBroken) const;
 	/** 结束 Fishing 使用记录；未消耗的暂存饵会回到随身库存，已消耗的记录只关闭自身。 */
 	FCatFishingUseOperationResult ReleaseFishingUse(FGuid FishingSessionId);
@@ -156,9 +156,14 @@ private:
 	const FCatFishingUseRecord* FindFishingUseRecord(FGuid FishingSessionId) const;
 	FCatInventoryItemUseRecord* FindInventoryItemUseRecord(FGuid ItemInstanceId);
 	const FCatInventoryItemUseRecord* FindInventoryItemUseRecord(FGuid ItemInstanceId) const;
-	/** Begin 冻结鱼竿的可写实例查找；优先库存格，部署中则读取活动 Use 记录里的同一件物品。 */
+	/** 正式库存里部署物品的旧槽位投影；配置和 Fishing Begin 用它从 held entry 确认当前部署实例。 */
+	bool TryBuildHeldInventoryUseSlot(FGuid ItemInstanceId, FCatRunInventorySlot& OutSlot) const;
+	/** Begin 冻结鱼竿的正式实例解析；正式库存存在时，耐久读写必须落到可见格或 held entry 里的同一 UObject。 */
+	UCatEquipmentInventoryItemInstance* ResolveFishingRodFormalInstanceFromInventory(
+		const FCatFishingUseRecord& Record, FCatRunInventorySlot& OutProjectedSlot) const;
+	/** 旧宿主 Begin 冻结鱼竿的可写实例查找；没有正式库存组件时才读取活动 Use 记录里的旧副本。 */
 	FCatRunInventorySlot* FindFishingRodInstance(const FCatFishingUseRecord& Record);
-	/** Begin 冻结鱼竿的只读实例查找；用于会话快照读取，不能因为查询创建或替换实例。 */
+	/** 旧宿主 Begin 冻结鱼竿的只读实例查找；用于会话快照读取，不能因为查询创建或替换实例。 */
 	const FCatRunInventorySlot* FindFishingRodInstance(const FCatFishingUseRecord& Record) const;
 	/** 是否存在尚未收口的物品 Use 记录；维修和失败预算用它避免改写正在由场景持有的物品状态。 */
 	bool HasActiveInventoryItemUse() const;
@@ -166,7 +171,7 @@ private:
 	int32 GetInventoryItemQuantity(FName DefinitionId) const;
 	/** 新入库或收回物品后修正钓鱼选择；已收回的坏竿可跨型号替换为库存里的可用竿，部署中与健康选择保持不变。 */
 	void AutoSelectGrantedInventoryItem(const UCatEquipmentDefinition& Definition, FName DefinitionId);
-	/** 把当前选择中的鱼竿状态同步到库存格或活动 Use 记录；耐久、断竿和收杆归还都读这份实例副本。 */
+	/** 把当前选择中的鱼竿状态同步到正式库存实例或旧宿主 Use 副本；耐久和断竿事实必须跟最终归还的实例一致。 */
 	void SyncSelectedRodStateToSelectedInstance();
 	FCatFishingUseReservationResult MakeFishingUseReservationResult(FGuid FishingSessionId,
 		ECatDomainCommandError Error, bool bReserved, const FCatFishingUseRecord* Record = nullptr) const;
@@ -276,7 +281,7 @@ private:
 
 	/** 当前 Character 生命周期内按 SessionId 隔离的 fishing reservation/tombstone；不复制也不持久化。 */
 	TMap<FGuid, FCatFishingUseRecord> FishingUseRecords;
-	/** 当前 Character 生命周期内部署型 Use 的玩法镜像；正式 UObject 已由 InventoryComponent 活动区保管，这里只服务钓鱼选择、耐久和旧投影。 */
+	/** 当前 Character 生命周期内部署型 Use 的玩法镜像；正式 UObject 已由 InventoryComponent 活动区保管，这里只服务旧宿主和迁移期投影。 */
 	TMap<FGuid, FCatInventoryItemUseRecord> InventoryItemUseRecords;
 	/** 物品 Use/UnUse 首次终态缓存；简单消耗品重试会读它而不是再次扣量，部署/收回重试也不会重复移动同一实例。 */
 	TMap<FString, FCatInventoryItemUseResult> InventoryItemUseTerminalCache;
