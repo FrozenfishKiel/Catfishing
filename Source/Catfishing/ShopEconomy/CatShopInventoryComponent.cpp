@@ -4,6 +4,7 @@
 #include "Engine/World.h"
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
+#include "ShopEconomy/CatShopCartCommandUtils.h"
 #include "ShopEconomy/CatShopEconomySettings.h"
 #include "ShopEconomy/CatShopEconomyService.h"
 
@@ -32,45 +33,6 @@ namespace
 		int32 Weight = 0;
 	};
 
-	// 购物车行归一化流程：先拒绝空车、超长数组、非法 EntryId 和超上限次数，再合并重复 EntryId 并按 ID 排序。
-	// 库存扣减只读取这份规范化结果，避免客户端通过重复行或异常数量绕过整批校验。
-	bool NormalizeCartLinesForStockConsumption(const TArray<FCatShopCartLineCommand>& Lines,
-		TArray<FCatShopCartLineCommand>& OutLines)
-	{
-		OutLines.Reset();
-		if (Lines.IsEmpty() || Lines.Num() > CatShopCartLimits::MaxCartLines)
-		{
-			return false;
-		}
-		TMap<FName, int32> CountsByEntryId;
-		for (const FCatShopCartLineCommand& Line : Lines)
-		{
-			if (Line.EntryId.IsNone() || Line.CartCount <= 0
-				|| Line.CartCount > CatShopCartLimits::MaxCartCountPerEntry)
-			{
-				OutLines.Reset();
-				return false;
-			}
-			int32& Count = CountsByEntryId.FindOrAdd(Line.EntryId);
-			if (Line.CartCount > CatShopCartLimits::MaxCartCountPerEntry - Count)
-			{
-				OutLines.Reset();
-				return false;
-			}
-			Count += Line.CartCount;
-		}
-		for (const TPair<FName, int32>& Pair : CountsByEntryId)
-		{
-			FCatShopCartLineCommand& NormalizedLine = OutLines.AddDefaulted_GetRef();
-			NormalizedLine.EntryId = Pair.Key;
-			NormalizedLine.CartCount = Pair.Value;
-		}
-		OutLines.Sort([](const FCatShopCartLineCommand& Left, const FCatShopCartLineCommand& Right)
-		{
-			return Left.EntryId.ToString() < Right.EntryId.ToString();
-		});
-		return !OutLines.IsEmpty();
-	}
 }
 
 // 构造流程：
@@ -254,7 +216,7 @@ bool UCatShopInventoryComponent::ConsumeCatalogEntriesFromAuthority(
 		return false;
 	}
 	TArray<FCatShopCartLineCommand> NormalizedLines;
-	if (!NormalizeCartLinesForStockConsumption(Lines, NormalizedLines))
+	if (!CatShopCartCommands::NormalizeLines(Lines, NormalizedLines))
 	{
 		return false;
 	}

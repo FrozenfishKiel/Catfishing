@@ -28,11 +28,11 @@ public:
 	/** 写入商店打开状态并刷新投影；打开来源仍归交互对象组件所有。 */
 	void SetOpen(bool bOpen);
 
-	/** 标记 PageController 已经提交购物车支付 RPC；等待服务器回包时禁用重复动作。 */
-	void MarkActionSubmitted(ECatShopUIAction Action, FName EntryId);
+	/** 标记 PageController 已经提交购物车支付 RPC；等待服务器回包时禁用本地购物车继续变化。 */
+	void MarkCartPaymentSubmitted();
 
-	/** 标记一次商店动作被拒绝；本地校验和服务器回包都会用它恢复按钮状态并展示原因。 */
-	void MarkActionRejected(ECatShopUIAction Action, FName EntryId, FText Reason);
+	/** 标记一次商店操作被拒绝；本地校验和服务器回包都会用它恢复按钮状态并展示原因。 */
+	void MarkFeedbackRejected(FText Reason);
 
 	/** 标记当前购物车支付已完成；清空本地选购队列并显示营地公共仓库收货提示。 */
 	void MarkCartPaymentSucceeded();
@@ -102,14 +102,8 @@ private:
 	/** 当前是否已有购物车支付请求提交后等待服务器回包；它由支付提交/回包写入，影响本地加购、删除和支付出口。 */
 	bool bActionPending = false;
 
-	/** 最近一次提交或本地拒绝的动作类型。 */
-	ECatShopUIAction LastAction = ECatShopUIAction::None;
-
-	/** 最近一次提交或本地拒绝的商品目录 ID。 */
-	FName LastEntryId = NAME_None;
-
-	/** 最近一次拒绝原因；本地校验失败和服务器未扣款失败都会写入它，下一次成功提交会清空。 */
-	FText LastRejectedReason;
+	/** 最近一次需要展示给商店页面的本地反馈；Model 直接写可读文本，不再用 UI action enum 二次分发。 */
+	FText FeedbackText;
 
 	/** 本地购物车里每个商品的选购次数；只存在于当前玩家客户端，支付时才转换成服务器命令。 */
 	TMap<FName, int32> CartCountsByEntryId;

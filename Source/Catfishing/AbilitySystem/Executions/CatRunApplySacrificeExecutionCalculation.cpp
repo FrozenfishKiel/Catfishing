@@ -1,20 +1,21 @@
 #include "AbilitySystem/Executions/CatRunApplySacrificeExecutionCalculation.h"
 
 #include "AbilitySystem/Attributes/CatRunAttributeSet.h"
+#include "AbilitySystem/Attributes/CatRunModifierAttributeSet.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 
 namespace
 {
-	// 捕获定义流程：献祭只从目标 Run ASC 取效率，让协调器继续只负责冻结 Items 事务而不拥有数值公式。
+	// 捕获定义流程：献祭只从目标 Run ASC 取来源效率，让协调器继续只负责冻结 Items 事务而不拥有数值公式。
 	struct FRunApplySacrificeStatics
 	{
-		/** 献祭效率的目标属性捕获；GE 应用时读取当前 Run ASC，协调器不持有倍率。 */
+		/** 献祭效率的来源属性捕获；GE 应用时读取当前 Run ASC，协调器不持有倍率。 */
 		FGameplayEffectAttributeCaptureDefinition SacrificeEfficiencyDef;
 		/** 当前进度的目标属性捕获；只用于执行前阻断 int32 溢出，绝不将进度夹到目标。 */
 		FGameplayEffectAttributeCaptureDefinition QuotaProgressDef;
 
 		FRunApplySacrificeStatics()
-			: SacrificeEfficiencyDef(UCatRunAttributeSet::GetSacrificeEfficiencyAttribute(), EGameplayEffectAttributeCaptureSource::Target, false)
+			: SacrificeEfficiencyDef(UCatRunModifierAttributeSet::GetSacrificeEfficiencyAttribute(), EGameplayEffectAttributeCaptureSource::Target, false)
 			, QuotaProgressDef(UCatRunAttributeSet::GetQuotaProgressAttribute(), EGameplayEffectAttributeCaptureSource::Target, false)
 		{
 		}

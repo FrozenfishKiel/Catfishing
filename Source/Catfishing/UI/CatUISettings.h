@@ -5,6 +5,7 @@
 #include "CatUISettings.generated.h"
 
 class UCatHUDWidget;
+class UCatFrontendRootWidget;
 class UCatInteractionPromptWidget;
 class UCatInventorySlotWidget;
 class UCatInventoryWidget;
@@ -26,6 +27,9 @@ public:
 
 	/** 返回正式主 HUD WBP 类；缺失时调用方 fail-closed，不创建原生白盒替身。 */
 	TSubclassOf<UCatHUDWidget> LoadHUDWidgetClass() const;
+
+	/** 返回正式 Frontend Root WBP 类；缺失时 LocalPlayer fail-closed，不创建已废弃旧视图或任何原生替身。 */
+	TSubclassOf<UCatFrontendRootWidget> LoadFrontendRootWidgetClass() const;
 
 	/** 返回正式背包主界面 WBP 类；缺失时调用方 fail-closed，不创建原生白盒替身。 */
 	TSubclassOf<UCatInventoryWidget> LoadInventoryWidgetClass() const;
@@ -58,6 +62,10 @@ public:
 	/** 正式主 HUD WBP 类；默认只常驻天数、背包和设置入口，背包内容由库存页面打开后显示。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|HUD")
 	TSoftClassPtr<UCatHUDWidget> HUDWidgetClass;
+
+	/** 正式 Frontend 根 WBP 类；只在 Frontend World 为本地玩家创建，Root 内装配主菜单、存档、房间、设置和加载子页面。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Frontend")
+	TSoftClassPtr<UCatFrontendRootWidget> FrontendRootWidgetClass;
 
 	/** 正式背包主 WBP 类；它拥有 WrapBox，并按当前打开的容器容量创建格子。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")

@@ -102,6 +102,83 @@ const FCatCampInventorySnapshot& ACatCampInventoryActor::GetSnapshot() const
 	return Snapshot;
 }
 
+// 公共仓库恢复预检流程：
+// 1. 先确认当前 Actor 是 authority 且保存格数没有超过现行容量。
+// 2. 再逐格检查空格残留、运行定义、堆叠上限、实例唯一性和鱼竿专属状态。
+// 3. 此处不写 Snapshot，Save 用它先完成所有领域预检，防止营地先恢复而其他容器失败。
+bool ACatCampInventoryActor::CanRestoreSnapshotFromAuthority(const FCatCampInventorySnapshot& RestoredSnapshot,
+	FText& OutFailure) const
+{
+	OutFailure = FText::GetEmpty();
+	if (!HasAuthority() || RestoredSnapshot.InventorySlots.Num() > GetConfiguredSlotCapacity())
+	{
+		OutFailure = FText::FromString(TEXT("营地仓库恢复不是服务器上下文或保存格数超过容量。"));
+		return false;
+	}
+	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+	if (!Settings)
+	{
+		OutFailure = FText::FromString(TEXT("装备运行目录不可用。"));
+		return false;
+	}
+	TSet<FGuid> SeenInstanceIds;
+	for (const FCatRunInventorySlot& Slot : RestoredSnapshot.InventorySlots)
+	{
+		const bool bOccupied = CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot);
+		if (!bOccupied)
+		{
+			if (!Slot.DefinitionId.IsNone() || Slot.ItemInstanceId.IsValid() || Slot.Quantity != 0
+				|| Slot.RodDurability != 0.0 || Slot.bRodBroken)
+			{
+				OutFailure = FText::FromString(TEXT("营地仓库空格携带了残留运行状态。"));
+				return false;
+			}
+			continue;
+		}
+		const UCatEquipmentDefinition* Definition = Settings->FindRuntimeDefinition(Slot.DefinitionId);
+		if (!Slot.ItemInstanceId.IsValid() || SeenInstanceIds.Contains(Slot.ItemInstanceId) || !Definition
+			|| !Definition->IsRuntimeDefinitionReady() || Slot.Quantity <= 0
+			|| Slot.Quantity > GetInventoryStackLimit(*Definition))
+		{
+			OutFailure = FText::FromString(TEXT("营地仓库含有无效定义、数量或重复实例。"));
+			return false;
+		}
+		if (Definition->Kind == ECatEquipmentKind::Rod)
+		{
+			if (!FMath::IsFinite(Slot.RodDurability) || Slot.RodDurability < 0.0
+				|| Slot.RodDurability > Definition->MaximumRodDurability
+				|| (Slot.bRodBroken && Slot.RodDurability != 0.0))
+			{
+				OutFailure = FText::FromString(TEXT("营地仓库鱼竿耐久与定义约束不一致。"));
+				return false;
+			}
+		}
+		else if (Slot.RodDurability != 0.0 || Slot.bRodBroken)
+		{
+			OutFailure = FText::FromString(TEXT("营地仓库非鱼竿格含有鱼竿状态。"));
+			return false;
+		}
+		SeenInstanceIds.Add(Slot.ItemInstanceId);
+	}
+	return true;
+}
+
+// 公共仓库恢复提交流程：先重复预检，成功后清除旧 World 的命令终态缓存，再整体替换保存格并走既有发布路径；失败不写 Snapshot，也不会向客户端推送半恢复结果。
+bool ACatCampInventoryActor::RestoreSnapshotFromAuthority(const FCatCampInventorySnapshot& RestoredSnapshot)
+{
+	FText Failure;
+	if (!CanRestoreSnapshotFromAuthority(RestoredSnapshot, Failure))
+	{
+		return false;
+	}
+	Snapshot = RestoredSnapshot;
+	Snapshot.Revision = FMath::Max<int64>(1, Snapshot.Revision + 1);
+	TerminalCache.Reset();
+	TerminalPayloadByKey.Reset();
+	PublishSnapshot();
+	return true;
+}
+
 // 容量读取流程：返回公共仓库当前配置容量的安全值；UI 用它展示空格，提交逻辑仍由服务器重新检查容量和版本。
 int32 ACatCampInventoryActor::GetInventorySlotCapacityForView() const
 {

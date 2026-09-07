@@ -2,7 +2,6 @@
 
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
-#include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "Character/CatCharacter.h"
 #include "Condition/CatConditionComponent.h"
 #include "Engine/World.h"
@@ -23,7 +22,7 @@ namespace
 	constexpr float CatHUDRunGameStateBindingRetrySeconds = 0.20f;
 }
 
-// 绑定流程：校验本地玩家、Controller、Character 和 ASC，随后订阅三项属性、Condition、Growth 和 Fishing 命令结果；Run 快照按“先读一次当前 GameState，再订阅后续变化”的观察者口径接线，最后保证至少发布首份 HUD 投影。
+// 绑定流程：校验本地玩家、Controller、Character 和 ASC，随后订阅身体属性、Condition、Growth 和 Fishing 命令结果；Run 快照按“先读一次当前 GameState，再订阅后续变化”的观察者口径接线，最后保证至少发布首份 HUD 投影。
 bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController, ACatCharacter* InCharacter)
 {
 	Unbind();
@@ -44,7 +43,6 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 
 	BoundLocalPlayer = InLocalPlayer;
 	BoundPlayerController = InController;
-	BoundCharacter = InCharacter;
 	BoundAbilitySystem = AbilitySystem;
 	BoundCondition = InCharacter->GetConditionComponent();
 	BoundGrowth = InCharacter->GetGrowthComponent();
@@ -58,6 +56,8 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 		UCatSurvivalAttributeSet::GetFishingStrengthAttribute()).AddUObject(this, &ThisClass::HandleAttributeChanged);
 	FightStaminaChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(
 		UCatSurvivalAttributeSet::GetFightStaminaAttribute()).AddUObject(this, &ThisClass::HandleAttributeChanged);
+	MaxFightStaminaChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(
+		UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()).AddUObject(this, &ThisClass::HandleAttributeChanged);
 	if (UCatConditionComponent* Condition = BoundCondition.Get())
 	{
 		ConditionChangedHandle = Condition->OnSnapshotChanged.AddUObject(this, &ThisClass::HandleConditionChanged);
@@ -89,6 +89,7 @@ void UCatHUDModel::Unbind()
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetPoisonAttribute()).Remove(PoisonChangedHandle);
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFishingStrengthAttribute()).Remove(FishingStrengthChangedHandle);
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFightStaminaAttribute()).Remove(FightStaminaChangedHandle);
+		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()).Remove(MaxFightStaminaChangedHandle);
 	}
 	if (UCatConditionComponent* Condition = BoundCondition.Get())
 	{
@@ -110,12 +111,12 @@ void UCatHUDModel::Unbind()
 	PoisonChangedHandle.Reset();
 	FishingStrengthChangedHandle.Reset();
 	FightStaminaChangedHandle.Reset();
+	MaxFightStaminaChangedHandle.Reset();
 	ConditionChangedHandle.Reset();
 	GrowthChangedHandle.Reset();
 	FishingViewChangedHandle.Reset();
 	BoundLocalPlayer.Reset();
 	BoundPlayerController.Reset();
-	BoundCharacter.Reset();
 	BoundAbilitySystem.Reset();
 	BoundCondition.Reset();
 	BoundGrowth.Reset();
@@ -126,7 +127,7 @@ void UCatHUDModel::Unbind()
 	ViewState = FCatHUDViewState();
 }
 
-// 刷新流程：从已经绑定的 GameState 读取 Run 天数，再读取 ASC 三项数值、Condition、Growth 和 FishingBridge 当前投影，生成 HUD 文本与进度条比例并广播完整状态；它不负责寻找或订阅 GameState。
+// 刷新流程：从已经绑定的 GameState 读取 Run 天数，再读取 ASC 身体数值、Condition、Growth 和 FishingBridge 当前投影，生成 HUD 文本与进度条比例并广播完整状态；它不负责寻找或订阅 GameState。
 void UCatHUDModel::Refresh()
 {
 	FCatHUDViewState NewState;
@@ -145,16 +146,12 @@ void UCatHUDModel::Refresh()
 		NewState.Poison = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute());
 		NewState.FishingStrength = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 		NewState.FightStamina = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
-	}
-	if (const ACatCharacter* Character = BoundCharacter.Get())
-	{
-		float FightStaminaBaseline = 0.0f;
-		if (GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
-			Character->GetCatDefinitionId(), FightStaminaBaseline))
+		NewState.FightStaminaMaximum = AbilitySystem->GetNumericAttribute(
+			UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+		if (NewState.FightStaminaMaximum > 0.0f)
 		{
-			NewState.FightStaminaMaximum = FightStaminaBaseline;
 			NewState.NormalizedFightStamina = FMath::Clamp(
-				NewState.FightStamina / FightStaminaBaseline, 0.0f, 1.0f);
+				NewState.FightStamina / NewState.FightStaminaMaximum, 0.0f, 1.0f);
 		}
 	}
 	if (const UCatConditionComponent* Condition = BoundCondition.Get())

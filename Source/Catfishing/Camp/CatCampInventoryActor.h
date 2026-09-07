@@ -75,6 +75,12 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|CampInventory")
 	const FCatCampInventorySnapshot& GetSnapshot() const;
 
+	/** 只读验证一份跨地图公共仓库快照；检查 authority、定义、容量与运行实例唯一性，不触碰当前仓库。 */
+	bool CanRestoreSnapshotFromAuthority(const FCatCampInventorySnapshot& RestoredSnapshot, FText& OutFailure) const;
+
+	/** 在 Save 完成全局预检后整体替换公共仓库的已提交格子；失败时保留当前世界库存并且不发布复制。 */
+	bool RestoreSnapshotFromAuthority(const FCatCampInventorySnapshot& RestoredSnapshot);
+
 	/** 读取公共仓库对 UI 暴露的格子容量；空仓库也靠它显示稳定空格，不把空数组误认为没有仓库。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|CampInventory")
 	int32 GetInventorySlotCapacityForView() const;

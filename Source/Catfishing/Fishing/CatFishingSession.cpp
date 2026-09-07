@@ -5,7 +5,6 @@
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
 #include "AbilitySystemComponent.h"
-#include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
@@ -425,19 +424,20 @@ bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherContr
 	const FString OldFisherLogValue = CatLogContext::BuildStableNetIdValue(OldFisherPlayerState);
 	if (bFightTakeover)
 	{
+		// 搏斗接力体力流程：新操作手必须已经拥有 ASC 上限属性；接力只读 MaxFightStamina 并回满当前体力，不再从配置回查第二套上限。
 		UCatAbilitySystemComponent* NewAbilitySystem = NewCharacter->GetCatAbilitySystemComponent();
-		float NewStaminaMaximum = 0.0f;
-		const bool bStaminaConfigReady = GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
-			NewCharacter->GetCatDefinitionId(), NewStaminaMaximum)
-			&& FMath::IsFinite(NewStaminaMaximum) && NewStaminaMaximum > 0.0f;
-		if (!FightRunner || !FightRunner->IsRunning() || !NewAbilitySystem || !bStaminaConfigReady
+		const float NewStaminaMaximumFromAttributes = NewAbilitySystem ? NewAbilitySystem->GetNumericAttribute(
+			UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()) : 0.0f;
+		const bool bStaminaAttributeReady = FMath::IsFinite(NewStaminaMaximumFromAttributes)
+			&& NewStaminaMaximumFromAttributes > 0.0f;
+		if (!FightRunner || !FightRunner->IsRunning() || !NewAbilitySystem || !bStaminaAttributeReady
 			|| !NewAbilitySystem->InitializeFishingStaminaForSession())
 		{
 			UE_LOG(LogCatFishing, Warning,
-				TEXT("Event=fishing_fight_takeover_rejected SessionId=%s Reason=StaminaOrRunnerUnavailable Runner=%s StaminaConfig=%s %s"),
+				TEXT("Event=fishing_fight_takeover_rejected SessionId=%s Reason=StaminaOrRunnerUnavailable Runner=%s StaminaAttribute=%s %s"),
 				*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 				FightRunner && FightRunner->IsRunning() ? TEXT("Running") : TEXT("Unavailable"),
-				bStaminaConfigReady ? TEXT("Ready") : TEXT("Invalid"),
+				bStaminaAttributeReady ? TEXT("Ready") : TEXT("Invalid"),
 				*CatLogContext::BuildControllerFields(NewFisherController));
 			return false;
 		}
@@ -456,13 +456,13 @@ bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherContr
 		NewStamina = NewAbilitySystem->GetNumericAttribute(
 			UCatSurvivalAttributeSet::GetFightStaminaAttribute());
 		if (!FightRunner->TransferOperatorFromAuthority(NewAbilitySystem, NewStrength,
-			NewStaminaMaximum, NewStamina, InitialInputSequence, bInitialPullHeld, bInitialSlackHeld))
+			NewStaminaMaximumFromAttributes, NewStamina, InitialInputSequence, bInitialPullHeld, bInitialSlackHeld))
 		{
 			NewAbilitySystem->RequestFishingStaminaReset();
 			UE_LOG(LogCatFishing, Warning,
 				TEXT("Event=fishing_fight_takeover_rejected SessionId=%s Reason=RunnerRebindFailed Strength=%.3f Stamina=%.3f StaminaMaximum=%.3f InputSequence=%lld %s"),
 				*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), NewStrength,
-				NewStamina, static_cast<double>(NewStaminaMaximum), InitialInputSequence,
+				NewStamina, static_cast<double>(NewStaminaMaximumFromAttributes), InitialInputSequence,
 				*CatLogContext::BuildControllerFields(NewFisherController));
 			return false;
 		}
@@ -1116,11 +1116,14 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	const double FishStrengthScale = bPerfect ? Bite->PerfectFishStrengthMultiplier : 1.0;
 	const double FishStaminaScale = bPerfect ? Bite->PerfectFishStaminaMultiplier : 1.0;
 	const double LineLengthScale = bPerfect ? Bite->PerfectInitialLineLengthMultiplier : 1.0;
-	if (!AbilitySystem->InitializeFishingStaminaForSession()) return false; // 初始化搏斗体力属性（非幂等重复调用是安全的）。
-	float CatStaminaBaseline = 0.0f;
-	// 猫的体力上限按其角色定义查表，而不是写死常量。
-	GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
-		FisherCharacter->GetCatDefinitionId(), CatStaminaBaseline);
+	if (!AbilitySystem->InitializeFishingStaminaForSession()) return false; // 按 ASC 上限回满当前体力；非幂等重复调用是安全的。
+	const double CatStaminaMaximumFromAttributes = AbilitySystem->GetNumericAttribute(
+		UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+	if (!FMath::IsFinite(CatStaminaMaximumFromAttributes) || CatStaminaMaximumFromAttributes <= 0.0)
+	{
+		AbilitySystem->RequestFishingStaminaReset();
+		return false;
+	}
 
 	// 三方力量：猫总体力量 = 主操作猫 + 第二只猫的 FishingStrength；鱼力量 = 鱼种 FishStrength（含完美折减）；
 	// 钓组承载 = 鱼竿定义 FishingStrength（静态）。当前只有主操作位能提交搏斗输入，因此本轮只填第一项。
@@ -1134,7 +1137,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.SecondCatStrength = 0.0;
 	Config.FishStrength = FishDefinition->FishStrength * FishStrengthScale; // 完美中鱼可能折减鱼的力量。
 	Config.RodStrength = RodDefinition->FishingStrength;
-	Config.CatStaminaMaximum = CatStaminaBaseline;
+	Config.CatStaminaMaximum = CatStaminaMaximumFromAttributes;
 	Config.InwardPullCatDrainPerFishStrength = Settings->InwardPullCatDrainPerFishStrength;
 	Config.InwardPullFishDrainPerCatStrength = Settings->InwardPullFishDrainPerCatStrength;
 	Config.BaseDrainMultiplier = Personality->BaseDrainMultiplier;

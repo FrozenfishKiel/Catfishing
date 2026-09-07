@@ -3,7 +3,7 @@
 #include "CoreMinimal.h"
 #include "Engine/DeveloperSettings.h"
 #include "Framework/Core/CatDomainCommandTypes.h"
-#include "ShopEconomy/CatShopEconomyTypes.h"
+#include "ShopEconomy/Catalog/CatShopCatalogTypes.h"
 #include "CatShopEconomySettings.generated.h"
 
 class UDataTable;

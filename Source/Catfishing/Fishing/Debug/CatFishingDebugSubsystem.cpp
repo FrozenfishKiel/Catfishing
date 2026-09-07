@@ -3,7 +3,6 @@
 #include "AbilitySystemComponent.h"
 #include "AbilitySystemInterface.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
-#include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "Character/CatCharacter.h"
 #include "CanvasItem.h"
 #include "Data/CatFishPersonalityDefinition.h"
@@ -266,7 +265,7 @@ FString UCatFishingDebugSubsystem::FormatFishTypeLine(const FName FishDefinition
 }
 
 // 右上角数值面板：每一项都读取与权威玩法相同的公开事实/定义，不从表现位置反推资源。
-// 鱼和本场鱼线读取 Session 复制快照；猫读取本地 Character ASC；力量与上限按稳定 DefinitionId 查正式目录。
+// 鱼和本场鱼线读取 Session 复制快照；猫的力量、当前体力和上限都读取本地 Character ASC，避免调试面板出现第二套体力口径。
 void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerController* Controller)
 {
 #if ENABLE_DRAW_DEBUG
@@ -350,13 +349,9 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 				UCatSurvivalAttributeSet::GetFightStaminaAttribute());
 			const double Strength = AbilitySystem->GetNumericAttribute(
 				UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
-			float MaximumStamina = 0.0f;
-			if (Character)
-			{
-				GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
-					Character->GetCatDefinitionId(), MaximumStamina);
-			}
-			CatLine = MaximumStamina > 0.0f
+			const double MaximumStamina = AbilitySystem->GetNumericAttribute(
+				UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+			CatLine = MaximumStamina > 0.0
 				? FString::Printf(TEXT("CAT   Stamina %.1f / %.1f  Strength %.1f"),
 					CurrentStamina, MaximumStamina, Strength)
 				: FString::Printf(TEXT("CAT   Stamina %.1f  Strength %.1f"), CurrentStamina, Strength);
@@ -571,7 +566,7 @@ void UCatFishingDebugSubsystem::DrawChumChargePreview(APlayerController* Control
 }
 
 // 会话状态：钩/鱼位置球、竿尖到鱼的连线、近岸圈与规格 7.1 的状态提示文字。
-// bFullDetail=false（精简模式）：只画鱼线和状态文字，跳过钩球/鱼球/近岸圈；浮漂正式表现由 Hook 自己驱动。
+// 精简模式关闭完整细节时，只画鱼线和状态文字，跳过钩球/鱼球/近岸圈；浮漂正式表现由 Hook 自己驱动。
 void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const bool bFullDetail) const
 {
 #if ENABLE_DRAW_DEBUG

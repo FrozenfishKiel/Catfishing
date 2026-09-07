@@ -43,7 +43,7 @@ _Avoid_: 玩家档案、PlayerState 身体。
 **Condition**：Wet、Downed、Recovery 等离散身体状态，由 `UCatConditionComponent` 持有。
 _Avoid_: ASC 属性、社交状态。
 
-**Survival Attribute**：Hunger、Fatigue、Poison、FishingStrength、FightStamina 等 GAS 属性，由 `UCatSurvivalAttributeSet` 持有。
+**Survival Attribute**：Poison、FishingStrength、FightStamina 三项 GAS 属性，由 `UCatSurvivalAttributeSet` 持有；Hunger 和 Fatigue 是已废弃的运行时数值，不属于当前 AttributeSet。
 _Avoid_: Character 普通字段、PlayerState 属性。
 
 ## 物件、鱼与容器

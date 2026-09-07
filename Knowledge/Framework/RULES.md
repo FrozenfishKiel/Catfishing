@@ -60,7 +60,7 @@ SteamSockets、NetDriverDefinitions、`bInitServerOnClient` 和双账号 Steam �
 
 `UCatSurvivalAttributeSet` 属于 `AbilitySystem/`，因为它表达 GAS 属性，不属于 `Character/`。`UCatConditionComponent` 属于 `Condition/`，因为它表达 Wet、Downed、Recovery 等离散状态。`UCatEquipmentComponent` 属于 `Equipment/`，因为它表达功能装配和一局耗材。
 
-Environment 后端只发布 `RunPublicState.Environment`，不扫描或写 Character、Condition、Wet 或表现状态。下雨导致猫湿、雨停抖水、水体弄湿角色等效果，后续必须作为表现或角色反馈消费层统一设计。
+Environment 后端只发布 `RunPublicState.Environment`，不扫描或写 Character、Condition、Wet 或表现状态。下雨导致猫湿、雨停自然变干、水体弄湿角色等效果，后续必须作为表现或角色反馈消费层统一设计，不能重新包装成玩家技能。
 
 `UnPossessed`、`EndPlay` 和 Controller 变化必须先收口 Fishing/Social、移除自有 MappingContext、取消 Ability，再清 ActorInfo。`ClearActorInfo` 只清 ASC 缓存，不替代领域清理。
 

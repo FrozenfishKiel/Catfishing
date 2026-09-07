@@ -198,8 +198,7 @@ FCatDomainCommandResult ACatCampHubActor::RescueToCamp(AController* HelpingContr
 	if (const FCatDomainCommandResult* Cached = RescueTerminalCache.Find(CacheKey))
 	{
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
 	if (!TargetCharacter->GetConditionComponent()->GetSnapshot().bDowned
@@ -270,8 +269,7 @@ FCatDomainCommandResult ACatCampHubActor::RequestCampfirePlayback(AController* R
 	if (const FCatDomainCommandResult* Cached = CampfirePlaybackTerminalCache.Find(TerminalKey))
 	{
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
 	const auto Finish = [this, &TerminalKey](const FCatDomainCommandResult& TerminalResult)

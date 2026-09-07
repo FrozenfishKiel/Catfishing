@@ -254,7 +254,7 @@ FishingSessionStateTree=/Game/Data/StateTrees/ST_FishingSession.ST_FishingSessio
 | **F** | `IA_CatchFish` | 抢抄 | ✅ C++ |
 | **X** | `IA_CancelFishing` | 取消当前会话 | ✅ C++ |
 
-`DA_CatAbilityInputConfig.AbilityInputActions` 是 **6 条**（5 个核心 + `Cat.Input.Fishing.Slack` → `IA_RMB`）；`DA_CatAbilitySet_Default` 相应 6 个 Ability。另有 `NativeInputActions`：`Cat.Input.Interact` → `IA_Interact`，它不授予第 7 个 Ability。
+`DA_CatAbilityInputConfig.AbilityInputActions` 是 **6 条 Fishing InputTag**（含 `Cat.Input.Fishing.Slack` → `IA_RMB`）；`DA_CatAbilitySet_Default` 包含 6 个 Fishing Ability + 6 个无输入 BodyAction 专用 Ability。另有 `NativeInputActions`：`Cat.Input.Interact` → `IA_Interact`，它不授予额外 Ability。
 
 > 左键与 Q 上，GAS Ability 和你的蓝图绑定会**同时触发**（同一个 IA 两条独立绑定）。无会话时按左键，GAS 的 `RequestHook` 会拿到一条 `DependencyUnavailable` 回执，无害；按 Q 时占位符 Chum Ability 同理。UI 若监听 `OnResultReceived` 弹失败提示，请按 `CommandType` 过滤这两种。
 
@@ -424,7 +424,7 @@ Event BeginPlay
 
 `UCatGA_FishingChum` 发的是一个**不带载荷**的命令（没有目标点、没有窝料 ID、没有数量），服务器 `HandleAbilityCommandFromAuthority` 里没有 `PlaceChum` 分支，必然落到 `DependencyUnavailable`。
 
-它存在的唯一原因是 `UCatAbilitySet::IsRuntimeReady()` 强制要求 5 个 InputTag 齐全。**不要试图修它** —— 打窝本质上需要客户端提供瞄准点和窝料选择，走步骤 5.3 的独立蓝图路径才是对的。Q 键留着当占位就行。
+它存在的唯一原因是 `UCatAbilitySet::IsRuntimeReady()` 强制要求 6 个 Fishing InputTag 齐全。**不要试图修它** —— 打窝本质上需要客户端提供瞄准点和窝料选择，走步骤 5.3 的独立蓝图路径才是对的。Q 键留着当占位就行。
 
 ---
 
@@ -445,7 +445,7 @@ Event BeginPlay
 | 文件 | 改动 |
 |---|---|
 | `CatFishingCommandComponent.cpp` | `HandleAbilityCommandFromAuthority` 新增 OperateRod / 搏斗收线 / Scoop 三条分支 |
-| `CatGameplayTypes.h` | `ServerConfigureEquipment` 加 `BlueprintCallable`，并支持随 DefinitionId 提交 ItemInstanceId |
+| `CatfishingPlayerController.h` | `ServerConfigureEquipment` 加 `BlueprintCallable`，并支持随 DefinitionId 提交 ItemInstanceId |
 | `CatEquipmentComponent.h` | `GetSnapshot()` 加 `BlueprintPure`，快照包含当前选择的实例 ID |
 | `CatCharacter.h` | `GetEquipmentComponent()` / `GetConditionComponent()` 加 `BlueprintPure` |
 | `CatWaterRegion.h` | `GetWaterRegionHandle()` / `HasValidBakedGeometry()` 加 `BlueprintPure` |
@@ -499,7 +499,7 @@ Event=run_phase_entered Day=1 Phase=ECatRunPhase::DayActive Deadline=600.000
 - `ST_RunFlow` 启动并进入 `DayActive` → `bRunCommandsOpen=true`，钓鱼命令门已打开
 - 两个 StateTree 软引用都能正确解析
 - `BP_CatCharacter` / `BP_CatFishingController` 正常生成
-- **五项初始属性从 ini 注入成功**：`Hunger=100 Fatigue=0 Poison=0 FishingStrength=10 FightStamina=100`
+- **三项初始属性从 ini 注入成功**：`Poison=0 FishingStrength=10 FightStamina=100`
   → 这证明 `IsFishingRuntimeReady()` 为 true，即 AbilitySet 和 InputConfig 两个资产都通过了严格校验，Ability 已授予、输入已绑定
 - Equipment Loadout 仍为空（`Revision=0`）—— 符合预期，等 ConfigureEquipment 蓝图
 

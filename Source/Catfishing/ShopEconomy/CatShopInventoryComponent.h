@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
-#include "ShopEconomy/CatShopEconomyTypes.h"
+#include "ShopEconomy/Trading/CatShopTradingTypes.h"
 #include "CatShopInventoryComponent.generated.h"
 
 class UDataTable;

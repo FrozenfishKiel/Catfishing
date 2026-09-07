@@ -75,8 +75,6 @@ void UCatShopPageController::Unbind()
 	BoundView.Reset();
 	BoundSourceShop.Reset();
 	PendingShopRequestId = FGuid();
-	PendingShopAction = ECatShopUIAction::None;
-	PendingShopEntryId = NAME_None;
 	ModalInputModeState = FCatUIModalInputModeState();
 	OnPageCloseRequested.Clear();
 }
@@ -162,7 +160,7 @@ void UCatShopPageController::HandleViewAddEntryToCartRequested(const FName Entry
 	FText FailureReason;
 	if (!Model->AddEntryToCart(EntryId, FailureReason))
 	{
-		Model->MarkActionRejected(ECatShopUIAction::AddEntryToCart, EntryId, FailureReason);
+		Model->MarkFeedbackRejected(FailureReason);
 		return;
 	}
 	UE_LOG(LogCatUI, Log, TEXT("Event=ui_shop_entry_added_to_cart EntryId=%s"),
@@ -184,7 +182,7 @@ void UCatShopPageController::HandleViewRemoveCartLineRequested(const FName Entry
 	FText FailureReason;
 	if (!Model->RemoveOneCartItem(EntryId, FailureReason))
 	{
-		Model->MarkActionRejected(ECatShopUIAction::RemoveCartEntry, EntryId, FailureReason);
+		Model->MarkFeedbackRejected(FailureReason);
 		return;
 	}
 	UE_LOG(LogCatUI, Log, TEXT("Event=ui_shop_entry_removed_from_cart EntryId=%s"),
@@ -207,31 +205,27 @@ void UCatShopPageController::HandleViewPayCartRequested()
 	const FCatShopViewState& State = Model->GetViewState();
 	if (!CatController || !SourceShop)
 	{
-		Model->MarkActionRejected(ECatShopUIAction::PayCart, NAME_None,
-			FText::FromString(TEXT("商店：摊位或控制器上下文已失效")));
+		Model->MarkFeedbackRejected(FText::FromString(TEXT("商店：摊位或控制器上下文已失效")));
 		return;
 	}
 	if (!State.bCanPayCart)
 	{
 		const FText Reason = State.PayDisabledReasonText.IsEmpty()
 			? FText::FromString(TEXT("商店：购物车暂不可支付")) : State.PayDisabledReasonText;
-		Model->MarkActionRejected(ECatShopUIAction::PayCart, NAME_None, Reason);
+		Model->MarkFeedbackRejected(Reason);
 		return;
 	}
 	TArray<FCatShopCartLineCommand> Lines;
 	if (!Model->BuildCartCommandLines(Lines))
 	{
-		Model->MarkActionRejected(ECatShopUIAction::PayCart, NAME_None,
-			FText::FromString(TEXT("请先选购商品")));
+		Model->MarkFeedbackRejected(FText::FromString(TEXT("请先选购商品")));
 		return;
 	}
 
 	const FGuid RequestId = FGuid::NewGuid();
 	const int64 ExpectedWalletRevision = State.Economy.WalletRevision;
 	PendingShopRequestId = RequestId;
-	PendingShopAction = ECatShopUIAction::PayCart;
-	PendingShopEntryId = NAME_None;
-	Model->MarkActionSubmitted(ECatShopUIAction::PayCart, NAME_None);
+	Model->MarkCartPaymentSubmitted();
 	if (CatController->HasAuthority())
 	{
 		CatController->ServerSubmitShopCartAtKiosk_Implementation(
@@ -262,25 +256,19 @@ void UCatShopPageController::HandleCampCommandResultReceived(const FCatDomainCom
 			Model->MarkCartPaymentSucceeded();
 		}
 		PendingShopRequestId = FGuid();
-		PendingShopAction = ECatShopUIAction::None;
-		PendingShopEntryId = NAME_None;
 		return;
 	}
 	UCatShopModel* Model = BoundModel.Get();
 	if (!Model)
 	{
 		PendingShopRequestId = FGuid();
-		PendingShopAction = ECatShopUIAction::None;
-		PendingShopEntryId = NAME_None;
 		return;
 	}
 	const FText Reason = Result.Error == ECatDomainCommandError::DependencyUnavailable
 		? FText::FromString(TEXT("商店：没有可用营地公共仓库，未扣款"))
 		: FText::FromString(TEXT("商店：支付没有完成，请重试或重新打开商店查看公款和仓库"));
-	Model->MarkActionRejected(PendingShopAction, PendingShopEntryId, Reason);
+	Model->MarkFeedbackRejected(Reason);
 	PendingShopRequestId = FGuid();
-	PendingShopAction = ECatShopUIAction::None;
-	PendingShopEntryId = NAME_None;
 }
 
 // 输入模式流程：打开时聚焦本次交互 View、锁住移动/视角并停止当前移动；关闭时释放本商店页申请的输入锁。

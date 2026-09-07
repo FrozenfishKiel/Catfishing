@@ -1,19 +1,22 @@
 #include "AbilitySystem/Executions/CatRunStartDayExecutionCalculation.h"
 
 #include "AbilitySystem/Attributes/CatRunAttributeSet.h"
+#include "AbilitySystem/Attributes/CatRunModifierAttributeSet.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 
 namespace
 {
-	// 捕获定义流程：DayStart 只在目标 Run ASC 捕获两个局内倍率，避免 GameMode 或 UI 再手写同一乘法。
+	// 捕获定义流程：DayStart 只在目标 Run ASC 捕获来源倍率集，避免 GameMode 或 UI 再手写同一乘法。
 	struct FRunStartDayStatics
 	{
+		/** 目标倍率来源捕获；它属于 RunModifierSet，不与最终 QuotaTarget 混在同一个 AttributeSet。 */
 		FGameplayEffectAttributeCaptureDefinition QuotaTargetMultiplierDef;
+		/** 每日压力来源捕获；它只表达数值输入，不把天气、天数或环境事件属性化。 */
 		FGameplayEffectAttributeCaptureDefinition DailyPressureDef;
 
 		FRunStartDayStatics()
-			: QuotaTargetMultiplierDef(UCatRunAttributeSet::GetQuotaTargetMultiplierAttribute(), EGameplayEffectAttributeCaptureSource::Target, false)
-			, DailyPressureDef(UCatRunAttributeSet::GetDailyPressureAttribute(), EGameplayEffectAttributeCaptureSource::Target, false)
+			: QuotaTargetMultiplierDef(UCatRunModifierAttributeSet::GetQuotaTargetMultiplierAttribute(), EGameplayEffectAttributeCaptureSource::Target, false)
+			, DailyPressureDef(UCatRunModifierAttributeSet::GetDailyPressureAttribute(), EGameplayEffectAttributeCaptureSource::Target, false)
 		{
 		}
 	};

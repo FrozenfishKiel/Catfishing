@@ -89,12 +89,14 @@ enum class ECatOnlineOperation : uint8
 {
 	/** 没有平台或退出操作在等待终态。 */
 	None,
-	/** CreateSession 与成功后的 Listen 旅行组成同一个操作。 */
+	/** CreateSession 操作；成功后只建立前台房间，玩法旅行由独立 Start 操作负责。 */
 	Create,
 	/** FindSessions 操作。 */
 	Find,
 	/** 搜索结果或已接受邀请汇入的 Join 操作。 */
 	Join,
+	/** Host 玩法包预载或 Client 收到真实 Host Start 后的旅行操作。 */
+	Start,
 	/** Host 或 Client 的本地 DestroySession 与回前台旅行。 */
 	Leave
 };
@@ -143,7 +145,7 @@ enum class ECatOnlineError : uint8
 	SessionCompatibilityMismatch,
 	/** UI 提交的搜索或邀请句柄不属于当前代际；新搜索、成功 Join、补偿、Leave 或销毁都会让旧句柄失效。 */
 	InvalidHandle,
-	/** Join 成功后无法从 NamedSession 解析连接地址。 */
+	/** Client 预载完成后无法从 NamedSession 解析连接地址。 */
 	ConnectStringUnavailable,
 	/** ServerTravel 无权执行或同步拒绝 URL。 */
 	TravelRejected,
@@ -154,23 +156,33 @@ enum class ECatOnlineError : uint8
 	/** 房主离局前 Run 无法完成权威收口；Session 保持原状且退出链停止。 */
 	RunTeardownFailed,
 	/** 到达的包不符合两地图或当前操作的预期目标。 */
-	UnexpectedMap
-};
-
-/** View 能表达的最小会话意图；LocalPlayer UI 子系统将其翻译成 Online 公共接口调用。 */
-UENUM()
-enum class ECatOnlineUIAction : uint8
-{
-	/** 创建 Session；成功后由 Online 子系统内部进入 Lake Listen Server。 */
-	Host,
-	/** 搜索可加入的 Session。 */
-	Find,
-	/** 使用 View 当前保存的 opaque 搜索句柄加入 Session。 */
-	Join,
-	/** 使用 View 当前保存的 opaque 已接受邀请句柄汇入统一 Join 管线。 */
-	AcceptInvite,
-	/** 根据已确认角色执行 Host exit 或 Client leave。 */
-	Leave
+	UnexpectedMap,
+	/** 当前平台没有提供 Friends 接口，无法刷新 Steam 好友缓存。 */
+	FriendsInterfaceUnavailable,
+	/** Steam 好友列表异步读取失败，保留上一代已确认好友事实。 */
+	FriendsRefreshFailed,
+	/** 当前好友句柄、Host 身份或平台邀请请求无效。 */
+	InviteFailed,
+	/** Host 尚未成功读取可恢复世界存档，不能开始玩法包预载。 */
+	SaveNotLoaded,
+	/** 玩法地图异步预载提交失败或回调未得到有效包，禁止旅行。 */
+	GameplayPreloadFailed,
+	/** Host 已进入玩法地图但 Steam Lobby ready 元数据未能写入，Client 保持前台且不连接。 */
+	LobbyReadyPublishFailed,
+	/** Host 离开前的世界保存被拒绝、Run 或 Index 写盘失败；退出停止且 Session 保持可用。 */
+	HostSaveFailed,
+	/** 同一 Lobby 的 Client 玩法启动尝试已耗尽；停止自动重试并保留房间，玩家可通过现有 Leave 退出后重新加入。 */
+	ClientStartRetryExhausted,
+	/** 平台已接受邀请，但另一个 Online 操作或邀请仍在处理；不抢占当前操作，用户需在空闲后重新接受邀请。 */
+	InviteAcceptanceBusy,
+	/** 当前已拥有 Session，不能自动替用户退出或切换房间；先离房再重新接受邀请。 */
+	InviteSessionConflict,
+	/** 平台邀请无有效结果、接受账号不匹配或当前地图不允许加入；不以另一账号或替代房间继续。 */
+	InviteAcceptanceUnavailable,
+	/** 已接受邀请等待前台和本地 Steam 身份就绪超过期限；意图失效，停止自动提交。 */
+	InviteAcceptanceExpired,
+	/** 会话已离开但本局载荷释放服务缺失或拒绝；不伪造释放成功，后续选槽仍受 Save 的真实状态约束。 */
+	ActiveRunReleaseFailed
 };
 
 /** 对 UI 暴露的搜索句柄；Value 只在当前 GameInstance 的 Online 子系统内部可解析。 */
@@ -243,6 +255,62 @@ struct FCatSessionInviteSummary
 	FString OwnerDisplayName;
 };
 
+/** Steam 好友列表中的不透明平台身份；UI 只能把它交回邀请入口，不能把值解释成账户、票据或房间 ID。 */
+USTRUCT(BlueprintType)
+struct FCatOnlineFriendHandle
+{
+	GENERATED_BODY()
+
+	/** 当前好友缓存代际中的随机键；Online 子系统写入，房间页原样传回，刷新或反初始化后失效。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid Value;
+
+	/** 只检查随机键是否非空，供调用者排除未选择的好友；非空不代表仍属于当前缓存，过期句柄仍由 Online 私有映射拒绝。 */
+	bool IsValid() const { return Value.IsValid(); }
+};
+
+/** 房间页可展示的 Steam 好友事实；显示信息来自 OSS Friends 缓存，邀请权限仍由 Online 子系统在提交时裁决。 */
+USTRUCT(BlueprintType)
+struct FCatOnlineFriendSummary
+{
+	GENERATED_BODY()
+
+	/** 邀请按钮提交时原样交回的当前缓存句柄。 */
+	UPROPERTY(BlueprintReadOnly)
+	FCatOnlineFriendHandle Handle;
+
+	/** 平台公开的好友显示名；仅用于房间页文本，不作为身份键或日志字段。 */
+	UPROPERTY(BlueprintReadOnly)
+	FString DisplayName;
+
+	/** 好友是否在线；由 OSS Friends 缓存报告，离线时邀请入口会明确拒绝。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bIsOnline = false;
+
+	/** 好友是否正在运行本游戏或另一个可加入会话；这是平台观察值，不代表本地 Session 已邀请成功。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bIsPlayingThisGame = false;
+
+	/** 当前好友缓存代际是否已成功提交过一次平台邀请；刷新好友后重置，平台不回执时不把它当作对方已接受。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHasInvited = false;
+};
+
+/** 当前 Steam Lobby 中的一条真实成员记录；成员数组只在平台已确认本地位于 Lobby 时填充，空数组不伪造人数。 */
+USTRUCT(BlueprintType)
+struct FCatOnlineRoomMember
+{
+	GENERATED_BODY()
+
+	/** 平台公开的成员显示名；Steam Friends 接口读取，不能作为稳定身份或权限凭据。 */
+	UPROPERTY(BlueprintReadOnly)
+	FString DisplayName;
+
+	/** 此成员是否是 Steam Lobby 当前 owner；平台 owner 与本地创建者角色同时供 UI 展示，开始权限仍以后者为准。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bIsLobbyOwner = false;
+};
+
 /** Online 的只读合成快照；各字段保留来源边界，UI 不从一个字段推断另一个生命周期。 */
 USTRUCT(BlueprintType)
 struct FCatOnlineSnapshot
@@ -285,9 +353,57 @@ struct FCatOnlineSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatSessionSearchSummary> SearchResults;
 
-	/** 平台层已接受但尚未成功 Join 的邀请摘要；异步 Join 失败时仍可供玩家重试。 */
+	/** 平台层已接受但尚未提交 Join 的邀请摘要；Online 自动消费一次，失败后须在 Steam 重新接受，不要求前端提供确认页。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatSessionInviteSummary> AcceptedInvites;
+
+	/** 已接受的平台邀请正在等待前台和本地身份就绪；Online 在有限期限内写入与清空，Model 只据此显示等待文本。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bIsAcceptedInvitePending = false;
+
+	/** OSS Friends 缓存的公开好友摘要；ReadFriendsList 完成后整代替换，未加载时保持空数组而不是虚构离线好友。 */
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FCatOnlineFriendSummary> Friends;
+
+	/** 当前 Lobby 的真实成员记录；只有 Steam SDK 确认本地是该 Lobby 成员时填充。 */
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FCatOnlineRoomMember> RoomMembers;
+
+	/** 当前房间可展示名称；优先读取 Steam Lobby 元数据，缺失时才保留 OSS 已确认的房主显示名。 */
+	UPROPERTY(BlueprintReadOnly)
+	FString RoomName;
+
+	/** 当前 Session 实际公开的访问策略；从 NamedSession 设置推导，未能验证时保持 Undecided。 */
+	UPROPERTY(BlueprintReadOnly)
+	ECatSessionAccessPolicy SessionAccess = ECatSessionAccessPolicy::Undecided;
+
+	/** 当前 NamedSession 关联的真实 Steam Lobby ID；不存在或非 Steam Lobby 时为空，不生成替代邀请码。 */
+	UPROPERTY(BlueprintReadOnly)
+	FString LobbyId;
+
+	/** 可交给 Steam 客户端的真实 joinlobby URI；只能在 LobbyId 与 owner 均经平台确认时存在。 */
+	UPROPERTY(BlueprintReadOnly)
+	FString JoinLobbyUri;
+
+	/** 当前 Session 设置报告的最大公开连接数；不是 UI 默认值，无法读取时保留零。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 MaxPlayers = 0;
+
+	/** 当前 Session 设置报告的已占用公开连接数；成员列表无法读取时仍不把这个值展开成伪成员。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 CurrentPlayers = 0;
+
+	/** 当前进程是否是创建该 NamedSession 的 Host；只由 Create/Join 回调写入的 SessionRole 推导。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bIsHost = false;
+
+	/** 当前 Host 是否已把玩法地图异步预载请求提交给引擎；完成回调前绝不代表旅行已开始。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bIsGameplayLoadPending = false;
+
+	/** 引擎返回的玩法包异步加载百分比，范围为 0..100；未知或不适用严格为 -1。 */
+	UPROPERTY(BlueprintReadOnly)
+	float GameplayLoadProgress = -1.0f;
 };
 
 /** Online 请求的同步提交结果；Accepted 表示子系统接管了请求，OSS 完成回调可能在本方法返回前就已同步结案，最终事实仍从 Snapshot 读取。 */

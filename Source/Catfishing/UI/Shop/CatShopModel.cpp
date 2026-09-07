@@ -73,9 +73,7 @@ void UCatShopModel::Unbind()
 	BoundShopInventory.Reset();
 	bOpen = false;
 	bActionPending = false;
-	LastAction = ECatShopUIAction::None;
-	LastEntryId = NAME_None;
-	LastRejectedReason = FText();
+	FeedbackText = FText();
 	CartCountsByEntryId.Reset();
 	CartEntryOrder.Reset();
 	ReportedMissingIconEntryIds.Reset();
@@ -93,22 +91,18 @@ void UCatShopModel::SetOpen(const bool bNewOpen)
 	Refresh();
 }
 
-// 提交流程：记录最近动作，pending 状态会禁用继续加购、删除和支付，直到服务器结果明确成功或失败。
-void UCatShopModel::MarkActionSubmitted(const ECatShopUIAction Action, const FName EntryId)
+// 支付提交流程：记录当前只剩服务器回包能收口，pending 状态会禁用继续加购、删除和支付，直到服务器结果明确成功或失败。
+void UCatShopModel::MarkCartPaymentSubmitted()
 {
-	LastAction = Action;
-	LastEntryId = EntryId;
-	LastRejectedReason = FText();
+	FeedbackText = FText::FromString(TEXT("已提交购物车，等待商店结果同步"));
 	bActionPending = true;
 	Refresh();
 }
 
 // 拒绝回显流程：记录本地校验或服务器回包给出的失败原因，清掉 pending 并刷新结果文本；它只改 UI 投影，不写商店账本。
-void UCatShopModel::MarkActionRejected(const ECatShopUIAction Action, const FName EntryId, const FText Reason)
+void UCatShopModel::MarkFeedbackRejected(const FText Reason)
 {
-	LastAction = Action;
-	LastEntryId = EntryId;
-	LastRejectedReason = Reason;
+	FeedbackText = Reason;
 	bActionPending = false;
 	Refresh();
 }
@@ -116,9 +110,7 @@ void UCatShopModel::MarkActionRejected(const ECatShopUIAction Action, const FNam
 // 支付成功流程：清空本地购物车和 pending 状态；服务器事实会继续通过公开经济快照与公共仓库快照各自同步。
 void UCatShopModel::MarkCartPaymentSucceeded()
 {
-	LastAction = ECatShopUIAction::PayCart;
-	LastEntryId = NAME_None;
-	LastRejectedReason = FText();
+	FeedbackText = FText::FromString(TEXT("支付成功，请在营地公共仓库查看新物品"));
 	bActionPending = false;
 	CartCountsByEntryId.Reset();
 	CartEntryOrder.Reset();
@@ -165,9 +157,7 @@ bool UCatShopModel::AddEntryToCart(const FName EntryId, FText& OutFailureReason)
 		CartEntryOrder.Add(EntryId);
 	}
 	CartCountsByEntryId.FindOrAdd(EntryId) = ExistingCount + 1;
-	LastAction = ECatShopUIAction::AddEntryToCart;
-	LastEntryId = EntryId;
-	LastRejectedReason = FText();
+	FeedbackText = FText::FromString(FString::Printf(TEXT("已选购：%s"), *Entry.DisplayNameText.ToString()));
 	Refresh();
 	return true;
 }
@@ -193,9 +183,7 @@ bool UCatShopModel::RemoveOneCartItem(const FName EntryId, FText& OutFailureReas
 		CartCountsByEntryId.Remove(EntryId);
 		CartEntryOrder.Remove(EntryId);
 	}
-	LastAction = ECatShopUIAction::RemoveCartEntry;
-	LastEntryId = EntryId;
-	LastRejectedReason = FText();
+	FeedbackText = FText::FromString(TEXT("已从已选购中移除一份"));
 	Refresh();
 	return true;
 }
@@ -233,8 +221,6 @@ void UCatShopModel::Refresh()
 {
 	FCatShopViewState NewState;
 	NewState.bOpen = bOpen;
-	NewState.LastAction = LastAction;
-	NewState.LastEntryId = LastEntryId;
 	NewState.bActionPending = bActionPending;
 	if (const ACatfishingGameState* GameState = BoundGameState.Get())
 	{
@@ -268,27 +254,13 @@ void UCatShopModel::Refresh()
 		? FText::FromString(FString::Printf(TEXT("商店：团队公款 %d"), NewState.Economy.Balance))
 		: FText::FromString(TEXT("商店：公款数据未同步"));
 
-	if (!LastRejectedReason.IsEmpty())
+	if (!FeedbackText.IsEmpty())
 	{
-		NewState.ResultText = LastRejectedReason;
+		NewState.ResultText = FeedbackText;
 	}
 	else if (NewState.bActionPending)
 	{
 		NewState.ResultText = FText::FromString(TEXT("已提交购物车，等待商店结果同步"));
-	}
-	else if (LastAction == ECatShopUIAction::PayCart)
-	{
-		NewState.ResultText = FText::FromString(TEXT("支付成功，请在营地公共仓库查看新物品"));
-	}
-	else if (LastAction == ECatShopUIAction::AddEntryToCart && !LastEntryId.IsNone())
-	{
-		const FCatShopEntryView* Entry = FindEntryView(NewState.Entries, LastEntryId);
-		NewState.ResultText = FText::FromString(FString::Printf(TEXT("已选购：%s"),
-			Entry ? *Entry->DisplayNameText.ToString() : *LastEntryId.ToString()));
-	}
-	else if (LastAction == ECatShopUIAction::RemoveCartEntry && !LastEntryId.IsNone())
-	{
-		NewState.ResultText = FText::FromString(TEXT("已从已选购中移除一份"));
 	}
 	else
 	{
@@ -345,7 +317,6 @@ FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry
 		? FindPublicStockSnapshot(Economy, ShopInventory->GetShopInventoryId(), Entry.EntryId) : nullptr;
 	FCatShopEntryView View;
 	View.EntryId = Entry.EntryId;
-	View.Kind = Entry.Kind;
 	View.DefinitionId = Entry.DefinitionId;
 	View.DisplayCategoryId = Entry.DisplayCategoryId;
 	View.DisplayCategoryNameText = !Entry.DisplayCategoryNameOverride.IsEmpty()

@@ -2,8 +2,6 @@
 
 #include "CoreMinimal.h"
 #include "AbilitySystemInterface.h"
-#include "AbilitySystem/BodyAction/CatBodyActionAbility.h"
-#include "AbilitySystem/Config/CatAbilitySet.h"
 #include "GameplayTagContainer.h"
 #include "GameFramework/Character.h"
 #include "CatCharacter.generated.h"
@@ -17,7 +15,7 @@ class UCatGrowthComponent;
 
 /**
  * Lake 的唯一玩法身体；同时宿主 Character-owned ASC、Condition、Growth 与 Equipment。
- * Character 同时作为 ASC Owner/Avatar；丢失占有或销毁时先收口 Fishing/Social，所有局内事实都不上移到 Profile/Online。
+ * Character 同时作为 ASC Owner/Avatar；丢失占有或销毁只处理身体和组件生命周期，跨系统会话由 GameMode 等 authority 协调者收口。
  * 鱼护是独立箱子式库存对象，不由 Character 创建、注册或复制；鱼以外的随身物品走 Equipment 的统一库存数组。
  */
 UCLASS()
@@ -45,14 +43,14 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Equipment")
 	UCatEquipmentComponent* GetEquipmentComponent() const;
 
-	/** 返回该角色选择的猫种类定义 ID；None 表示使用 CatAbilitySettings 的正式默认猫种。 */
+	/** 猫种类定义 ID 是角色蓝图选择身体数值模板的稳定键；为空时角色类不猜默认值，而由能力系统配置在播种属性时解析。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Character")
 	FName GetCatDefinitionId() const { return CatDefinitionId; }
 
 	/**
 	 * 该角色使用的猫种类定义 ID（在角色蓝图 Details 里配置，或换皮子类各选一种）。
-	 * 必须与 CatAbilitySettings.CharacterDefinitions 里某个 DA 的 CatDefinitionId 一致；
-	 * 留空时使用 CatAbilitySettings.DefaultCharacterDefinitionId；显式 ID 或默认 ID 找不到定义时属性播种会 fail-closed。
+	 * 必须与能力系统配置里的猫种类清单一致；
+	 * 留空时使用能力系统配置的正式默认猫种；显式 ID 或默认 ID 找不到定义时属性播种会 fail-closed。
 	 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catfishing|Character")
 	FName CatDefinitionId = NAME_None;
@@ -80,11 +78,11 @@ public:
 
 	/**
 	 * 服务器 BodyAction Ability 广播的长动作表现开始事件。
-	 * BodyAction 没有客户端预测实例，所以本地玩家和旁观玩家都必须收到；蓝图按 Command 或 PresentationEventTag 播 Montage、音效或特效。
+	 * BodyAction 没有客户端预测实例，所以本地玩家和旁观玩家都必须收到；蓝图按动作标签与表现标签播 Montage、音效或特效。
 	 * 该事件是 Unreliable，因为它只表达可丢弃的外观提示；正式状态仍来自服务端命令结果和复制快照，蓝图不得依赖它保存不可恢复状态。
 	 */
 	UFUNCTION(NetMulticast, Unreliable)
-	void Multicast_PlayBodyActionPresentation(ECatBodyActionAbilityCommand Command, FGameplayTag PresentationEventTag);
+	void Multicast_PlayBodyActionPresentation(FGameplayTag BodyActionEventTag, FGameplayTag PresentationEventTag);
 
 	/**
 	 * 服务器 BodyAction Ability 广播的长动作表现停止事件。
@@ -92,29 +90,29 @@ public:
 	 * 该事件是 Reliable，因为收到开始表现的客户端必须收到停止信号；正式循环表现仍应保留 Montage 自身或 AnimBP 超时兜底。
 	 */
 	UFUNCTION(NetMulticast, Reliable)
-	void Multicast_StopBodyActionPresentation(ECatBodyActionAbilityCommand Command, FGameplayTag PresentationEventTag);
+	void Multicast_StopBodyActionPresentation(FGameplayTag BodyActionEventTag, FGameplayTag PresentationEventTag);
 
-	/** BodyAction 表现开始的蓝图落点；C++ 只负责广播和可选 Montage，正式表现由角色蓝图决定。 */
+	/** BodyAction 表现开始的蓝图落点；动作标签标识本次生命周期，表现标签标识美术分派键。 */
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|Presentation")
-	void BP_PlayBodyActionPresentation(ECatBodyActionAbilityCommand Command, FGameplayTag PresentationEventTag);
+	void BP_PlayBodyActionPresentation(FGameplayTag BodyActionEventTag, FGameplayTag PresentationEventTag);
 
-	/** BodyAction 表现停止的蓝图落点；蓝图可按同一 Command 或标签停止循环、淡出特效或重置动作层。 */
+	/** BodyAction 表现停止的蓝图落点；蓝图以同一对标签停止循环、淡出特效或重置动作层。 */
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|Presentation")
-	void BP_StopBodyActionPresentation(ECatBodyActionAbilityCommand Command, FGameplayTag PresentationEventTag);
+	void BP_StopBodyActionPresentation(FGameplayTag BodyActionEventTag, FGameplayTag PresentationEventTag);
 
 	/**
 	 * 从 BodyAction 表现配置读取并播放可选 Montage。
 	 * 返回值只说明本机是否播到了动画；没有正式 Montage 时仍会触发 BP_PlayBodyActionPresentation。
 	 */
 	UFUNCTION(BlueprintCallable, BlueprintCosmetic, Category = "Catfishing|Presentation")
-	bool PlayBodyActionMontageFromPresentation(ECatBodyActionAbilityCommand Command);
+	bool PlayBodyActionMontageFromPresentation(FGameplayTag BodyActionEventTag);
 
 	/**
 	 * 从 BodyAction 表现配置读取并停止可选 Montage。
 	 * 返回值只说明本机是否找到了需要停止的配置；蓝图停止事件仍会被广播，用于处理非 Montage 表现。
 	 */
 	UFUNCTION(BlueprintCallable, BlueprintCosmetic, Category = "Catfishing|Presentation")
-	bool StopBodyActionMontageFromPresentation(ECatBodyActionAbilityCommand Command);
+	bool StopBodyActionMontageFromPresentation(FGameplayTag BodyActionEventTag);
 
 	/**
 	 * 由已复制的 Hook CastFlight 表现状态调用，在本机这份角色 Mesh 上播放配置的抛竿 Montage。
@@ -134,7 +132,7 @@ protected:
 	/** 组件注册完成后幂等刷新 Owner/Avatar；未裁 runtime 会清除引擎自动建立的 ActorInfo 并保持 fail-closed。 */
 	virtual void BeginPlay() override;
 
-	/** 父类完成占有后刷新 Owner/Avatar 和一次初值；authority 才授正式 AbilitySet 并应用可选 starter。 */
+	/** 父类完成占有后只触发 ASC 与 Equipment 的边界入口；能力授予、属性播种和 starter 细节分别留在所属组件内。 */
 	virtual void PossessedBy(AController* NewController) override;
 
 	/** Controller 复制变化后刷新拥有客户端 ActorInfo；Controller 失效时 ClearActorInfo，不保留失效 Avatar。 */
@@ -143,33 +141,21 @@ protected:
 	/** 本地 Pawn 重启后刷新 ActorInfo；正式输入由 PlayerController 的 AbilityInputConfig 负责。 */
 	virtual void PawnClientRestart() override;
 
-	/** 失去占有前先收口 Fishing/Social 并取消 Ability；父类断开 Controller 后才清 ActorInfo。 */
+	/** 失去占有时只取消身体 Ability；父类断开 Controller 后才清 ActorInfo，跨系统会话清理由 GameMode 的 Pawn 通知统一负责。 */
 	virtual void UnPossessed() override;
 
-	/** Actor 离开 World 时幂等收口 Fishing/Social，再取消 Ability/清 ActorInfo，最后交父类销毁。 */
+	/** Actor 离开 World 时请求 ASC 撤销自身配置授予并清理身体 Ability；Fishing/Social 会话不由身体生命周期直接操作。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
 	/** 按正式 ASC gate 初始化 Character=this 的 Owner/Avatar；未裁复制策略时主动 Clear 而不是猜 Mixed。 */
 	void InitializeAbilityActorInfo();
 
-	/** authority 在 ActorInfo 就绪后授予一次正式默认 AbilitySet；缺资产或未就绪时保持 fail-closed。 */
-	void GrantDefaultAbilitySetOnce();
-
-	/** authority 新 Character 首次 ActorInfo 就绪时整体应用三项显式初值；重占有不重置已消耗的局内状态。 */
-	void ApplyInitialAttributesOnce();
-
-	/** authority 新 Character 占有后触发的 Starter 兜底入口；配置关闭或已有鱼竿选择时不改状态，打开时只尝试选择随身库存已有装备，成功后才可能按配置补窝料。 */
-	void ApplyStarterLoadoutIfConfigured();
-
-	/** 在失去占有或销毁前终止本 Character 参与的钓鱼与偷鱼协议，随后才允许身体和 ASC 清理。 */
-	void NotifyFishingOwnerUnavailable();
-
 	/** 猫身体唯一 AbilitySystemComponent；构造期创建、随 Character 复制，并拥有本 Actor 的 AttributeSet 与 Ability。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Abilities", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatAbilitySystemComponent> AbilitySystemComponent;
 
-	/** 猫身体唯一 Survival 属性集；构造期显式交给 ASC 持有 Poison、FishingStrength 和 FightStamina 三项真相。 */
+	/** 猫身体唯一 Survival 属性集；构造期显式交给 ASC 持有 Poison、FishingStrength、FightStamina 和 MaxFightStamina。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Survival", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatSurvivalAttributeSet> SurvivalAttributes;
 
@@ -184,13 +170,4 @@ private:
 	/** 一局功能型装配、耗材与鱼竿耐久宿主；没有等级、词条、战力或偷取接口。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Equipment", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatEquipmentComponent> EquipmentComponent;
-
-	/** authority 首次正式授予的默认集合句柄；重占有保留，Character 最终销毁时成组撤销。 */
-	FCatGrantedAbilitySetHandles DefaultAbilitySetHandles;
-
-	/** 默认 AbilitySet 是否已正式授予；只由 authority 读写，避免重占有重复 GiveAbility。 */
-	bool bDefaultAbilitySetGranted = false;
-
-	/** 本 Character 是否已经整体应用过初始属性；只在 authority 写，重占有保持 true，重连新身体重新开始。 */
-	bool bInitialAttributesApplied = false;
 };

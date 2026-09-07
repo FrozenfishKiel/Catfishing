@@ -8,9 +8,9 @@
 
 ---
 
-## 0. 先看清楚：五个原生 Ability 的真实状态
+## 0. 先看清楚：六个钓鱼输入 Ability 的真实状态
 
-项目在 `AbilitySystem/CatFishingAbilities.h` 里已经写好五个 `UGameplayAbility` 原生子类，`UCatAbilitySet::IsRuntimeReady()` 强制要求它们对应的五个 InputTag 必须齐全。它们各自的完成度不同，**这是本文最重要的一张表**，决定了你还要不要为对应功能另写蓝图：
+项目在 `AbilitySystem/Fishing/InputAbilities/` 和 `AbilitySystem/Fishing/CatFishingGameplayAbility.h` 中定义了六个钓鱼输入 `UGameplayAbility` 原生子类，`UCatAbilitySet::IsRuntimeReady()` 强制要求对应的六个 Fishing InputTag 必须齐全。它们各自的完成度不同，**这是本文最重要的一张表**，决定了你还要不要为对应功能另写蓝图：
 
 | InputTag | Ability 类 | 服务器命令 | 状态 |
 |---|---|---|---|
@@ -20,10 +20,11 @@
 | `Cat.Input.Fishing.Cancel` | `UCatGA_FishingCancel` | CancelFishing | ✅ 一直可用 |
 | `Cat.Input.Fishing.Scoop` | `UCatGA_FishingScoop` | RequestScoop | ✅ 本轮已补，**开箱可用** |
 | `Cat.Input.Fishing.Chum` | `UCatGA_FishingChum` | PlaceChum（**无payload**） | ⚠️ **占位符，永远会被服务器拒绝** |
+| `Cat.Input.Fishing.Slack` | `UCatGA_FishingSlack` | 松开线杯 | ✅ 遛鱼时可用 |
 
 **关键结论**：抓竿互动、提竿/收线、取消、抢抄这四个动作，装好 GAS 资产、绑好输入键位之后**不需要再写任何蓝图逻辑**，直接能跑。真正需要你写蓝图节点图的，是下面这几件事：
 
-- **PlaceRod（放竿）**：完全没有原生 Ability，五个 Ability 里没有它
+- **PlaceRod（放竿）**：完全没有原生 Ability，六个钓鱼输入 Ability 里没有它
 - **BeginCast（抛竿）**：同上
 - **PlaceChum（打窝）**：`Cat.Input.Fishing.Chum` 这个键位必须绑（否则 AbilitySet 校验不过），但它背后的 `UCatGA_FishingChum` 只会发一个空命令，永远失败——**真正的打窝要另开一条路**，不走这个键位对应的 Ability
 - **ConfigureEquipment（首次装配鱼竿/饵/浮漂）**：没有 Ability，且这是钓鱼链路最上游的前置条件
@@ -37,7 +38,7 @@
 | 文件 | 改动 |
 |---|---|
 | `Fishing/Integration/CatFishingCommandComponent.cpp` | `HandleAbilityCommandFromAuthority` 新增 OperateRod（服务器自动找“我部署的竿”）、搏斗中 Primary 按下=收线/松开=停止收线、Scoop（服务器找范围内已上钩鱼并直接嘴叼）三条分支 |
-| `Framework/Game/CatGameplayTypes.h` | `ServerConfigureEquipment` 加 `BlueprintCallable`，蓝图现在能直接调用它提交装备定义和实例 ID |
+| `Framework/Game/CatfishingPlayerController.h` | `ServerConfigureEquipment` 加 `BlueprintCallable`，蓝图现在能直接调用它提交装备定义和实例 ID |
 | `Equipment/CatEquipmentComponent.h` | `GetSnapshot()` 加 `BlueprintPure`，蓝图能读当前 `Revision`、装备 DefinitionId 和对应 ItemInstanceId |
 | `Character/CatCharacter.h` | `GetEquipmentComponent()` / `GetConditionComponent()` 加 `BlueprintPure` |
 | `Environment/CatWaterRegion.h` | `GetWaterRegionHandle()` / `HasValidBakedGeometry()` 加 `BlueprintPure`，蓝图能从关卡里放置的湖 Actor 直接拿到抛竿/打窝要用的 `FCatWaterRegionHandle` |
@@ -58,7 +59,7 @@
 | 资产 | 路径 | 关键内容 |
 |---|---|---|
 | `DA_CatAbilityInputConfig` | `/Game/Data/Abilities/` | `AbilityInputActions` 保存钓鱼 GAS 映射；`NativeInputActions` 额外保存 `IA_Interact` → `Cat.Input.Interact` |
-| `DA_CatAbilitySet_Default` | `/Game/Data/Abilities/` | 5 个原生 Ability 类；Primary=`WhileInputActive`，其余 `OnInputTriggered` |
+| `DA_CatAbilitySet_Default` | `/Game/Data/Abilities/` | 6 个 Fishing Ability + 6 个无输入 BodyAction 专用 Ability；Primary=`WhileInputActive`，其余按各自触发策略配置 |
 | `Equip_ScoopNet_Starter` | `/Game/Catfishing/Data/Equipment/` | 正式目录抄网定义 `StarterScoopNet`；当前不默认发放，商店/奖励来源接入前暂时没有获取渠道 |
 | `Fish_*` | `/Game/Catfishing/Data/Fish/` | 16 条正式鱼定义；Showcase2 已使用 `RegionId=River`，按生态条件与连续挑战度从该目录选择 |
 | `Bite_*` / `Fight_*` | `/Game/Catfishing/Data/Fish/` | 正式咬钩与搏斗性格；由选中的 `Fish_*` 稳定 ID 解析 |
@@ -104,7 +105,7 @@ FishingSessionStateTree=/Game/.../ST_FishingSession.ST_FishingSession   ; ← �
 
 ## 3. 必须手写的蓝图节点图
 
-这四件事全部走 `UCatFishingCommandComponent` 上现成的 `BlueprintCallable` 函数，**不需要新建 GameplayAbility**，挂在 Character 或 PlayerController 蓝图的一个普通 Enhanced Input 绑定上就行（和上面五个 GAS Ability 走的是两条不同的输入通道，互不干扰）。
+这四件事全部走 `UCatFishingCommandComponent` 上现成的 `BlueprintCallable` 函数，**不需要新建 GameplayAbility**，挂在 Character 或 PlayerController 蓝图的一个普通 Enhanced Input 绑定上就行（和上面六个钓鱼 GAS Ability 走的是两条不同的输入通道，互不干扰）。
 
 拿命令组件的通用第一步：
 

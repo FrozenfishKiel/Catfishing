@@ -75,6 +75,14 @@ struct FCatDomainCommandResult
 	UPROPERTY(BlueprintReadOnly)
 	bool bCommitted = false;
 
+	/** 本结果是否来自同一 RequestId 的终态缓存；调用方用它区分真正重放和业务自己的 AlreadyResolved 拒绝。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bTerminalReplay = false;
+
+	/** 终态重放对应的首次请求是否已经写入过不可逆事实；失败终态重放保持 false，避免表现或后续事务误当成功。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bReplayedTerminalCommitted = false;
+
 	/** 与输入命令一致的 RequestId，供重试方关联首次终态。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid RequestId;
@@ -83,16 +91,34 @@ struct FCatDomainCommandResult
 	UPROPERTY(BlueprintReadOnly)
 	ECatDomainCommandError Error = ECatDomainCommandError::InvalidPayload;
 
+	/** 终态重放对应的首次错误原因；非重放结果保持默认值，成功重放为 None，失败重放保留真正拒绝原因。 */
+	UPROPERTY(BlueprintReadOnly)
+	ECatDomainCommandError ReplayedTerminalError = ECatDomainCommandError::InvalidPayload;
+
 	/** 处理后目标聚合的 Revision；拒绝时返回当前 Revision，避免调用方继续使用陈旧快照。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 };
 
-/** 把首次终态改写成安全的幂等重放结果，避免上层重复执行扣款、发奖等副作用。 */
+/** 把首次终态改写成可诊断的幂等重放结果；成功重放显示 AlreadyResolved，失败重放继续暴露首次失败原因。 */
 inline void MarkCommandReplayed(FCatDomainCommandResult& Result)
 {
+	const bool bOriginalCommitted = Result.bCommitted;
+	const ECatDomainCommandError OriginalError = Result.Error;
 	Result.bCommitted = false;
-	Result.Error = ECatDomainCommandError::AlreadyResolved;
+	Result.bTerminalReplay = true;
+	Result.bReplayedTerminalCommitted = bOriginalCommitted;
+	Result.Error = bOriginalCommitted && OriginalError == ECatDomainCommandError::None
+		? ECatDomainCommandError::AlreadyResolved : OriginalError;
+	Result.ReplayedTerminalError = OriginalError;
+}
+
+/** 判断领域命令是否已经被服务器接受；只有首次成功或首次成功的终态重放可以继续表现和后续事务。 */
+inline bool CatIsAcceptedDomainCommandResult(const FCatDomainCommandResult& Result)
+{
+	return (Result.bCommitted && Result.Error == ECatDomainCommandError::None)
+		|| (Result.bTerminalReplay && Result.bReplayedTerminalCommitted
+			&& Result.ReplayedTerminalError == ECatDomainCommandError::None);
 }
 
 /** 查询幂等终态缓存后的三种结论。 */

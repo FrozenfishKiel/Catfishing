@@ -1,51 +1,9 @@
 #include "ShopEconomy/CatShopEconomyService.h"
 
 #include "Logging/CatLog.h"
+#include "ShopEconomy/CatShopCartCommandUtils.h"
 #include "ShopEconomy/CatShopInventoryComponent.h"
 #include "ShopEconomy/CatShopEconomySettings.h"
-
-namespace
-{
-	// 购物车行归一化流程：先拒绝空车、超长数组、非法 EntryId 和超上限次数，再合并重复 EntryId 并按 ID 排序。
-	// 这一步让报价、扣库存和幂等签名都不受客户端数组顺序影响，同时把异常输入挡在查表和扣款之前。
-	bool NormalizeCartLines(const TArray<FCatShopCartLineCommand>& Lines,
-		TArray<FCatShopCartLineCommand>& OutLines)
-	{
-		OutLines.Reset();
-		if (Lines.IsEmpty() || Lines.Num() > CatShopCartLimits::MaxCartLines)
-		{
-			return false;
-		}
-		TMap<FName, int32> CountsByEntryId;
-		for (const FCatShopCartLineCommand& Line : Lines)
-		{
-			if (Line.EntryId.IsNone() || Line.CartCount <= 0
-				|| Line.CartCount > CatShopCartLimits::MaxCartCountPerEntry)
-			{
-				OutLines.Reset();
-				return false;
-			}
-			int32& Count = CountsByEntryId.FindOrAdd(Line.EntryId);
-			if (Line.CartCount > CatShopCartLimits::MaxCartCountPerEntry - Count)
-			{
-				OutLines.Reset();
-				return false;
-			}
-			Count += Line.CartCount;
-		}
-		for (const TPair<FName, int32>& Pair : CountsByEntryId)
-		{
-			FCatShopCartLineCommand& NormalizedLine = OutLines.AddDefaulted_GetRef();
-			NormalizedLine.EntryId = Pair.Key;
-			NormalizedLine.CartCount = Pair.Value;
-		}
-		OutLines.Sort([](const FCatShopCartLineCommand& Left, const FCatShopCartLineCommand& Right)
-		{
-			return Left.EntryId.ToString() < Right.EntryId.ToString();
-		});
-		return !OutLines.IsEmpty();
-	}
-}
 
 // 创建条件流程：只允许服务器 Game World 拥有可写经济事实；客户端不能生成第二份公款或库存。
 bool UCatShopEconomyService::ShouldCreateSubsystem(UObject* Outer) const
@@ -208,7 +166,7 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 		return false;
 	}
 	TArray<FCatShopCartLineCommand> NormalizedLines;
-	if (!NormalizeCartLines(Command.Lines, NormalizedLines))
+	if (!CatShopCartCommands::NormalizeLines(Command.Lines, NormalizedLines))
 	{
 		OutError = ECatDomainCommandError::InvalidPayload;
 		return false;
@@ -363,9 +321,8 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 		Record.TransactionId = FGuid::NewGuid();
 		Record.RequestId = Command.Context.RequestId;
 		Record.StableNetId = Command.Context.StableNetId;
-		Record.Kind = ECatShopTransactionKind::Purchase;
-		Record.EntryKind = Line.Entry.Kind;
-		Record.DeliveryState = ECatShopDeliveryState::Pending;
+		Record.bPurchase = true;
+		Record.bDeliveryPending = true;
 		Record.EntryId = Line.Entry.EntryId;
 		Record.ShopInventoryId = Command.ShopInventoryId;
 		Record.DefinitionId = Line.Entry.DefinitionId;
@@ -406,15 +363,14 @@ bool UCatShopEconomyService::TryAppraiseFishSale(const double WeightKilograms, i
 	return UCatShopEconomySettings::TryEvaluateFishPurchasePrice(FishPurchasePriceAnchors, WeightKilograms, OutSaleValue);
 }
 
-// 售鱼预检流程：在 Social 删除 escrow 前只读验证同一售鱼载荷是否能进入公款；这里不写账本，避免预检本身变成第二个提交点。
+// 售鱼预检流程：在 Items 不可逆删除鱼前只读验证同一售鱼载荷是否能进入公款；这里不写账本，避免预检本身变成第二个提交点。
 bool UCatShopEconomyService::ValidateFishSale(const FCatShopFishSaleCommand& Command, ECatDomainCommandError& OutError,
 	int64& OutCurrentWalletRevision) const
 {
 	OutError = ECatDomainCommandError::None;
 	OutCurrentWalletRevision = Wallet.Revision;
 	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
-		|| !Command.FishInstanceId.IsValid() || !Command.ItemsCommitId.IsValid()
-		|| Command.SourceKind == ECatShopFishSaleSource::Unknown)
+		|| !Command.FishInstanceId.IsValid() || !Command.ItemsCommitId.IsValid())
 	{
 		OutError = ECatDomainCommandError::InvalidPayload;
 		return false;
@@ -456,7 +412,7 @@ bool UCatShopEconomyService::ValidateFishSale(const FCatShopFishSaleCommand& Com
 	return true;
 }
 
-// 售鱼入账流程：先要求身份、鱼实例、Items 提交证据和来源都在，再按公款版本并发，最后用重量自己估一次价并和调用方报价核对。
+// 售鱼入账流程：先要求身份、鱼实例和 Items 提交证据都在，再按公款版本并发，最后用重量自己估一次价并和调用方报价核对。
 // 鱼的删除仍然必须先由 Items 完成，这里不碰鱼；价格则相反，只认服务器估出来的那个数。
 FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFishSaleCommand& Command)
 {
@@ -464,8 +420,7 @@ FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFi
 	Result.Command.RequestId = Command.Context.RequestId;
 	Result.Wallet = Wallet;
 	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
-		|| !Command.FishInstanceId.IsValid() || !Command.ItemsCommitId.IsValid()
-		|| Command.SourceKind == ECatShopFishSaleSource::Unknown)
+		|| !Command.FishInstanceId.IsValid() || !Command.ItemsCommitId.IsValid())
 	{
 		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
 		Result.Command.Revision = Wallet.Revision;
@@ -542,10 +497,8 @@ FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFi
 	Record.TransactionId = FGuid::NewGuid();
 	Record.RequestId = Command.Context.RequestId;
 	Record.StableNetId = Command.Context.StableNetId;
-	Record.Kind = ECatShopTransactionKind::FishSale;
-	Record.DeliveryState = ECatShopDeliveryState::None;
+	Record.bFishSale = true;
 	Record.FishInstanceId = Command.FishInstanceId;
-	Record.FishSource = Command.SourceKind;
 	Record.WalletDelta = Command.SaleValue;
 	Record.WalletRevision = Wallet.Revision;
 	Result.Command.bCommitted = true;
@@ -620,18 +573,19 @@ FCatShopTransactionResult UCatShopEconomyService::ConfirmTransactionDelivery(
 		{
 			Result.Command.Error = ECatDomainCommandError::RevisionConflict;
 		}
-		else if (Record->DeliveryState == ECatShopDeliveryState::Delivered)
+		else if (Record->bDeliveryConfirmed)
 		{
 			Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
 		}
-		else if (Record->DeliveryState != ECatShopDeliveryState::Pending
-			|| Record->EntryKind == ECatShopEntryKind::Unknown)
+		else if (!Record->bPurchase || !Record->bDeliveryPending
+			|| Record->DefinitionId.IsNone() || Record->PurchaseQuantity <= 0)
 		{
 			Result.Command.Error = ECatDomainCommandError::InvalidPhase;
 		}
 		else
 		{
-			Record->DeliveryState = ECatShopDeliveryState::Delivered;
+			Record->bDeliveryPending = false;
+			Record->bDeliveryConfirmed = true;
 			Record->DeliveryReceiptId = Command.DeliveryReceiptId;
 			Record->DeliveryRevision = Command.DeliveryRevision;
 			Result.Command.bCommitted = true;
@@ -819,14 +773,16 @@ FCatShopPublicTransaction UCatShopEconomyService::MakePublicTransaction(const FC
 {
 	FCatShopPublicTransaction Public;
 	Public.TransactionId = Record.TransactionId;
-	Public.Kind = Record.Kind;
+	Public.bPurchase = Record.bPurchase;
+	Public.bFishSale = Record.bFishSale;
+	Public.bDeliveryPending = Record.bDeliveryPending;
+	Public.bDeliveryConfirmed = Record.bDeliveryConfirmed;
 	Public.EntryId = Record.EntryId;
 	Public.ShopInventoryId = Record.ShopInventoryId;
 	Public.DefinitionId = Record.DefinitionId;
 	Public.PurchaseQuantity = Record.PurchaseQuantity;
-	Public.FishSource = Record.FishSource;
+	Public.FishInstanceId = Record.FishInstanceId;
 	Public.WalletDelta = Record.WalletDelta;
-	Public.DeliveryState = Record.DeliveryState;
 	return Public;
 }
 
@@ -869,7 +825,7 @@ FString UCatShopEconomyService::MakeTerminalKey(const FString& StableNetId, cons
 FString UCatShopEconomyService::MakeCartPayloadSignature(const FCatShopCartCommand& Command)
 {
 	TArray<FCatShopCartLineCommand> NormalizedLines;
-	const bool bNormalized = NormalizeCartLines(Command.Lines, NormalizedLines);
+	const bool bNormalized = CatShopCartCommands::NormalizeLines(Command.Lines, NormalizedLines);
 	TArray<FString> LineParts;
 	if (bNormalized)
 	{
@@ -895,15 +851,15 @@ FString UCatShopEconomyService::MakeCartPayloadSignature(const FCatShopCartComma
 		*FString::Join(LineParts, TEXT(",")));
 }
 
-// 售鱼载荷签名流程：冻结公款前提、鱼实例、Items 提交证据、来源、重量和估值；同 RequestId 改任一项都不是合法重放。
+// 售鱼载荷签名流程：冻结公款前提、鱼实例、Items 提交证据、重量和估值；同 RequestId 改任一项都不是合法重放。
 // 重量必须进签名：它是收购价的唯一输入，同一个 RequestId 换一条更重的鱼重放就等于换了一笔生意。
 FString UCatShopEconomyService::MakeFishSalePayloadSignature(const FCatShopFishSaleCommand& Command)
 {
-	return FString::Printf(TEXT("Expected=%lld|Fish=%s|ItemsCommit=%s|Source=%d|Weight=%.6f|Value=%d"),
+	return FString::Printf(TEXT("Expected=%lld|Fish=%s|ItemsCommit=%s|Weight=%.6f|Value=%d"),
 		Command.Context.ExpectedRevision,
 		*Command.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
 		*Command.ItemsCommitId.ToString(EGuidFormats::DigitsWithHyphens),
-		static_cast<int32>(Command.SourceKind), Command.WeightKilograms, Command.SaleValue);
+		Command.WeightKilograms, Command.SaleValue);
 }
 
 // 交付载荷签名流程：冻结原交易、下游回执、下游版本和公款前提；回执漂移必须拒绝而不是重放。

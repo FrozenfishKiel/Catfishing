@@ -4,6 +4,7 @@
 #include "InputAction.h"
 #include "InputMappingContext.h"
 #include "UI/HUD/CatHUDWidget.h"
+#include "UI/Frontend/CatFrontendRootWidget.h"
 #include "UI/Interaction/CatInteractionPromptWidget.h"
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
@@ -13,6 +14,8 @@ UCatUISettings::UCatUISettings()
 {
 	HUDWidgetClass = TSoftClassPtr<UCatHUDWidget>(
 		FSoftClassPath(TEXT("/Game/UI/HUD/WBP_CatHUD.WBP_CatHUD_C")));
+	FrontendRootWidgetClass = TSoftClassPtr<UCatFrontendRootWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Frontend/WBP_CatFrontendRoot.WBP_CatFrontendRoot_C")));
 	InventoryWidgetClass = TSoftClassPtr<UCatInventoryWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatInventory.WBP_CatInventory_C")));
 	InventorySlotWidgetClass = TSoftClassPtr<UCatInventorySlotWidget>(
@@ -49,6 +52,17 @@ TSubclassOf<UCatInventoryWidget> UCatUISettings::LoadInventoryWidgetClass() cons
 {
 	UClass* LoadedClass = InventoryWidgetClass.LoadSynchronous();
 	if (!LoadedClass || !LoadedClass->IsChildOf(UCatInventoryWidget::StaticClass()))
+	{
+		return nullptr;
+	}
+	return LoadedClass;
+}
+
+// Frontend Root WBP 类加载流程：同步解析配置软类并验证继承正式 Root 基类；失败返回空，让 LocalPlayer 保持无前端而不是退回旧 TravelWidget。
+TSubclassOf<UCatFrontendRootWidget> UCatUISettings::LoadFrontendRootWidgetClass() const
+{
+	UClass* LoadedClass = FrontendRootWidgetClass.LoadSynchronous();
+	if (!LoadedClass || !LoadedClass->IsChildOf(UCatFrontendRootWidget::StaticClass()))
 	{
 		return nullptr;
 	}

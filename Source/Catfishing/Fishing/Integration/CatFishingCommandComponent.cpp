@@ -14,7 +14,7 @@
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSession.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
 #include "GameFramework/PlayerState.h"
@@ -465,12 +465,10 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	if (CommandType == ECatFishingCommandType::CancelFishing)
 	{
 		// X 先作为通用身体动作取消键处理：只取消还停在 GAS 提交窗口里的 BodyAction，不会吞掉后续 Fishing 收竿/会话取消语义。
-		if (const ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(Controller))
+		if (UCatAbilitySystemComponent* AbilitySystem =
+			UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(Controller->GetPawn()))
 		{
-			if (UCatAbilitySystemComponent* AbilitySystem = CatController->GetCurrentCatAbilitySystemComponent())
-			{
-				AbilitySystem->CancelBodyActionAbilitiesFromAuthority();
-			}
+			AbilitySystem->CancelBodyActionAbilitiesFromAuthority();
 		}
 	}
 	if (const ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(Controller);

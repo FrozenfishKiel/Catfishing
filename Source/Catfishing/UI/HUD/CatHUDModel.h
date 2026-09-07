@@ -94,11 +94,7 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APlayerController> BoundPlayerController;
 
-	/** 当前 HUD 对应的猫身体读源；只用于解析猫种类体力基线，不从这里写 Character 状态。 */
-	UPROPERTY(Transient)
-	TWeakObjectPtr<ACatCharacter> BoundCharacter;
-
-	/** 当前 Character 的 ASC 弱引用；HUD 只读三项数值。 */
+	/** 当前 Character 的 ASC 弱引用；HUD 只读身体数值和搏斗体力上限，不写 Character 状态。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UAbilitySystemComponent> BoundAbilitySystem;
 
@@ -130,6 +126,9 @@ private:
 
 	/** FightStamina 属性变化解绑句柄。 */
 	FDelegateHandle FightStaminaChangedHandle;
+
+	/** MaxFightStamina 属性变化解绑句柄；上限变化时 HUD 必须重算体力文本和进度条比例。 */
+	FDelegateHandle MaxFightStaminaChangedHandle;
 
 	/** Condition 快照变化解绑句柄。 */
 	FDelegateHandle ConditionChangedHandle;

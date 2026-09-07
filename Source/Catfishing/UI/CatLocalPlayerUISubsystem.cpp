@@ -8,8 +8,12 @@
 #include "GameFramework/PlayerController.h"
 #include "Logging/CatLog.h"
 #include "Online/CatOnlineSubsystem.h"
-#include "UI/CatTravelWidget.h"
 #include "UI/CatUISettings.h"
+#include "UI/Frontend/CatFrontendPageController.h"
+#include "UI/Frontend/CatFrontendRootWidget.h"
+#include "UI/Frontend/CatFrontendRoomModel.h"
+#include "UI/Frontend/CatFrontendSaveModel.h"
+#include "UI/Frontend/CatFrontendSettingsModel.h"
 #include "UI/HUD/CatHUDModel.h"
 #include "UI/HUD/CatHUDWidget.h"
 #include "UI/Interaction/CatInteractionPageController.h"
@@ -35,15 +39,15 @@ void UCatLocalPlayerUISubsystem::Initialize(FSubsystemCollectionBase& Collection
 		}
 		BindController(LocalPlayer->GetPlayerController(GetWorld()));
 	}
-	RefreshOnlineWidgetForCurrentController();
+	RefreshFrontendForCurrentController();
 }
 
-// 销毁流程：先释放 HUD、背包和唯一交互提示模块；再解绑 Controller、移除 Frontend View 与 Online 快照订阅。
+// 销毁流程：先释放 HUD、背包和唯一交互提示模块；再解绑 Controller、移除 Frontend Root 与 Online 快照订阅。
 void UCatLocalPlayerUISubsystem::Deinitialize()
 {
 	DetachPlayerLakeUI();
 	UnbindController();
-	RemoveOnlineWidget();
+	RemoveFrontendRoot();
 	if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
 	{
 		if (UGameInstance* GameInstance = LocalPlayer->GetGameInstance())
@@ -58,15 +62,45 @@ void UCatLocalPlayerUISubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
-// Controller 替换流程：旧 Controller 仍可访问时先拆掉本地玩家 UI 和 Frontend UI；父类切换后再只针对 NewController 装配当前 Pawn。
+// Controller 替换流程：
+// 1. 先按当前 Online 快照判断已有 Frontend Root 是否属于 Start 加载、旅行等待或失败恢复保护窗。
+// 2. 局内 HUD、背包和交互提示始终拆掉，因为它们绑定旧 Pawn 和输入；受保护的 Frontend Root 不在这里移除。
+// 3. 父类完成 LocalPlayer 的 Controller 切换后重新绑定新 Controller，并在保留 Root 时显式恢复拥有者、鼠标和键盘焦点。
+// 4. 最后重新调和 Frontend，非受保护状态会按常规 World/配置规则移除或重建。
 void UCatLocalPlayerUISubsystem::PlayerControllerChanged(APlayerController* NewController)
 {
+	bool bShouldKeepFrontendRoot = false;
+	if (FrontendRootWidget)
+	{
+		if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
+		{
+			if (UGameInstance* GameInstance = LocalPlayer->GetGameInstance())
+			{
+				if (UCatOnlineSubsystem* Online = GameInstance->GetSubsystem<UCatOnlineSubsystem>())
+				{
+					bShouldKeepFrontendRoot = ShouldKeepExistingFrontendRoot(Online->GetSnapshot());
+				}
+			}
+		}
+	}
 	DetachPlayerLakeUI();
 	UnbindController();
-	RemoveOnlineWidget();
+	if (!bShouldKeepFrontendRoot)
+	{
+		RemoveFrontendRoot();
+	}
 	Super::PlayerControllerChanged(NewController);
 	BindController(NewController);
-	RefreshOnlineWidgetForCurrentController();
+	if (bShouldKeepFrontendRoot && FrontendRootWidget && NewController && NewController->IsLocalController())
+	{
+		if (FrontendRootWidget->GetOwningPlayer() != NewController)
+		{
+			FrontendRootWidget->SetOwningPlayer(NewController);
+		}
+		NewController->SetShowMouseCursor(true);
+		FrontendRootWidget->SetKeyboardFocus();
+	}
+	RefreshFrontendForCurrentController();
 }
 
 // 背包切换流程：把输入、焦点和 ViewState 更新全部交给 Inventory PageController；Subsystem 不持有背包布尔值或渲染细节。
@@ -145,124 +179,130 @@ UCatInventoryPageController* UCatLocalPlayerUISubsystem::GetInventoryPageControl
 	return InventoryPageController;
 }
 
-// 快照消费流程：Online 变更时只调和 Frontend TravelWidget 和 HUD；库存只听自己的数据源，不把会话状态当库存变化。
+// 快照消费流程：Online 变更时按当前 World 调和正式 Frontend Root，并刷新局内 HUD；库存只听自己的数据源，不把会话状态当库存变化。
 void UCatLocalPlayerUISubsystem::HandleOnlineSnapshotChanged()
 {
-	RefreshOnlineWidgetForCurrentController();
+	RefreshFrontendForCurrentController();
 	if (HUDModel)
 	{
 		HUDModel->Refresh();
 	}
 }
 
-// 动作转交流程：Frontend TravelWidget 的每个意图只调用 Online 的一个公开入口；局内拆分 UI 不在这里预建或转发对象页面。
-void UCatLocalPlayerUISubsystem::HandleActionRequested(const ECatOnlineUIAction Action, const FGuid OpaqueHandle)
-{
-	ULocalPlayer* LocalPlayer = GetLocalPlayer();
-	UGameInstance* GameInstance = LocalPlayer ? LocalPlayer->GetGameInstance() : nullptr;
-	UCatOnlineSubsystem* Online = GameInstance ? GameInstance->GetSubsystem<UCatOnlineSubsystem>() : nullptr;
-	if (!Online)
-	{
-		return;
-	}
-
-	FCatOnlineResult Result;
-	switch (Action)
-	{
-	case ECatOnlineUIAction::Host:
-		Result = Online->RequestCreateSession();
-		break;
-	case ECatOnlineUIAction::Find:
-		Result = Online->RequestFindSessions();
-		break;
-	case ECatOnlineUIAction::Join:
-	{
-		FCatSessionSearchHandle Handle;
-		Handle.Value = OpaqueHandle;
-		Result = Online->RequestJoinSession(Handle);
-		break;
-	}
-	case ECatOnlineUIAction::AcceptInvite:
-	{
-		FCatSessionInviteHandle Handle;
-		Handle.Value = OpaqueHandle;
-		Result = Online->RequestAcceptInvite(Handle);
-		break;
-	}
-	case ECatOnlineUIAction::Leave:
-		Result = Online->RequestLeave();
-		break;
-	default:
-		return;
-	}
-
-	const UWorld* World = GetWorld();
-	UE_LOG(LogCatUI, Log, TEXT("Event=ui_online_action Action=%s RequestId=%s World=%s NetMode=%d Result=%s Error=%s"),
-		*UEnum::GetValueAsString(Action),
-		*Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-		World ? *World->GetName() : TEXT("None"),
-		World ? static_cast<int32>(World->GetNetMode()) : -1,
-		Result.bAccepted ? TEXT("accepted") : TEXT("rejected"),
-		*UEnum::GetValueAsString(Result.Error));
-	if (OnlineWidget)
-	{
-		OnlineWidget->Configure(Online->GetSnapshot());
-	}
-}
-
-// Frontend View 调和流程：读取当前完整 Online 快照；只有 Frontend 或前往 Lake 的等待态保留 TravelWidget，Lake 内正式入口交给局内拆分 UI。
-void UCatLocalPlayerUISubsystem::RefreshOnlineWidgetForCurrentController()
+// Frontend 调和流程：
+// 1. 先读取当前 LocalPlayer、Controller 和 Online 快照；缺 LocalPlayer 或 Online 时拆掉 Root，避免旧前端脱离事实源继续显示。
+// 2. 没有本地 Controller 时只允许已有 Root 在 Start 加载、旅行等待或失败恢复保护窗内短暂保留；其它情况立即拆除。
+// 3. 非 Frontend World 只保留受保护的已有 Root，不在玩法图或异常 World 补建新主界面，避免旧前端变成第二入口。
+// 4. 已有 Root 直接复用；需要新建时必须仍处于 Frontend World，并且配置能加载正式 Root WBP，否则记录失败并保持无原生替身。
+// 5. 创建成功后装配 Root、PageController 和三个只读 Model，最后入视口、打开鼠标并设置键盘焦点。
+void UCatLocalPlayerUISubsystem::RefreshFrontendForCurrentController()
 {
 	ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	APlayerController* Controller = LocalPlayer ? LocalPlayer->GetPlayerController(GetWorld()) : nullptr;
-	const UGameInstance* GameInstance = LocalPlayer ? LocalPlayer->GetGameInstance() : nullptr;
-	const UCatOnlineSubsystem* Online = GameInstance ? GameInstance->GetSubsystem<UCatOnlineSubsystem>() : nullptr;
-	if (!Controller || !Online)
+	UGameInstance* GameInstance = LocalPlayer ? LocalPlayer->GetGameInstance() : nullptr;
+	UCatOnlineSubsystem* Online = GameInstance ? GameInstance->GetSubsystem<UCatOnlineSubsystem>() : nullptr;
+	if (!LocalPlayer || !Online)
 	{
-		RemoveOnlineWidget();
+		RemoveFrontendRoot();
 		return;
 	}
-
 	const FCatOnlineSnapshot Snapshot = Online->GetSnapshot();
-	if (!ShouldShowOnlineTravelWidget(Snapshot))
+	const bool bIsFrontendWorld = Snapshot.WorldState == ECatOnlineWorldState::Frontend;
+	const bool bShouldKeepExistingRoot = ShouldKeepExistingFrontendRoot(Snapshot);
+	if (!Controller || !Controller->IsLocalController())
 	{
-		RemoveOnlineWidget();
+		if (bShouldKeepExistingRoot) { return; }
+		RemoveFrontendRoot();
 		return;
 	}
-
-	if (!OnlineWidget)
+	if (!bIsFrontendWorld && !bShouldKeepExistingRoot)
 	{
-		OnlineWidget = CreateWidget<UCatTravelWidget>(Controller, UCatTravelWidget::StaticClass());
-		if (!OnlineWidget)
-		{
-			return;
-		}
-		ActionHandle = OnlineWidget->OnActionRequested.AddUObject(this, &ThisClass::HandleActionRequested);
-		OnlineWidget->AddToViewport();
-		UE_LOG(LogCatUI, Log, TEXT("Event=ui_online_widget_created World=%s"), GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
+		RemoveFrontendRoot();
+		return;
 	}
-	OnlineWidget->Configure(Snapshot);
-}
-
-// Frontend 面板判断流程：只承认前台和从前台出发去 Lake 的旅行等待；到达 Lake 后玩家入口由 HUD、背包和交互提示接管。
-bool UCatLocalPlayerUISubsystem::ShouldShowOnlineTravelWidget(const FCatOnlineSnapshot& Snapshot)
-{
-	return Snapshot.WorldState == ECatOnlineWorldState::Frontend
-		|| Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake;
-}
-
-// Frontend View 移除流程：先解绑动作广播再移出视口；空实例保持幂等，避免 Controller 切换时重复 removed 日志干扰验收。
-void UCatLocalPlayerUISubsystem::RemoveOnlineWidget()
-{
-	if (!OnlineWidget)
+	if (FrontendRootWidget)
 	{
 		return;
 	}
-	OnlineWidget->OnActionRequested.Remove(ActionHandle);
-	ActionHandle.Reset();
-	OnlineWidget->RemoveFromParent();
-	OnlineWidget = nullptr;
-	UE_LOG(LogCatUI, Log, TEXT("Event=ui_online_widget_removed World=%s"), GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
+	if (!bIsFrontendWorld)
+	{
+		return;
+	}
+	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
+	const TSubclassOf<UCatFrontendRootWidget> RootClass = Settings ? Settings->LoadFrontendRootWidgetClass() : nullptr;
+	if (!RootClass)
+	{
+		UE_LOG(LogCatUI, Error, TEXT("Event=frontend_root_unavailable World=%s Reason=invalid_config"), *GetWorld()->GetName());
+		return;
+	}
+	FrontendRootWidget = CreateWidget<UCatFrontendRootWidget>(Controller, RootClass);
+	FrontendSaveModel = NewObject<UCatFrontendSaveModel>(this);
+	FrontendRoomModel = NewObject<UCatFrontendRoomModel>(this);
+	FrontendSettingsModel = NewObject<UCatFrontendSettingsModel>(this);
+	FrontendPageController = NewObject<UCatFrontendPageController>(this);
+	if (!FrontendRootWidget || !FrontendSaveModel || !FrontendRoomModel || !FrontendSettingsModel || !FrontendPageController)
+	{
+		UE_LOG(LogCatUI, Error, TEXT("Event=frontend_create_failed World=%s"), *GetWorld()->GetName());
+		RemoveFrontendRoot();
+		return;
+	}
+	FrontendSaveModel->Initialize(LocalPlayer);
+	FrontendRoomModel->Initialize(LocalPlayer);
+	FrontendSettingsModel->Initialize(LocalPlayer);
+	FrontendRootWidget->InitializeFrontend(FrontendPageController, FrontendSaveModel, FrontendRoomModel, FrontendSettingsModel);
+	FrontendPageController->Initialize(LocalPlayer, FrontendRootWidget, FrontendSaveModel, FrontendRoomModel, FrontendSettingsModel);
+	FrontendRootWidget->AddToViewport(20);
+	Controller->SetShowMouseCursor(true);
+	FrontendRootWidget->SetKeyboardFocus();
+	UE_LOG(LogCatUI, Log, TEXT("Event=frontend_root_created World=%s NetMode=%d Controller=%s RootClass=%s"), *GetWorld()->GetName(),
+		static_cast<int32>(GetWorld()->GetNetMode()), *GetNameSafe(Controller), *GetNameSafe(RootClass.Get()));
+}
+
+// 已有 Root 保留判断流程：
+// 1. 没有 Root 时直接返回 false；该策略只保护已经可见的加载页，不负责补建任何非 Frontend World UI。
+// 2. Start 请求带有效 RequestId 且处在预载、旅行排队或前往 Lake World 时保留，覆盖 Controller 暂空和 World 切换窗口。
+// 3. Start 失败恢复只在已有 Root 上成立，让错误文本能回到 Frontend/Room；其它 Lake 或无关 World 继续走拆除路径。
+bool UCatLocalPlayerUISubsystem::ShouldKeepExistingFrontendRoot(const FCatOnlineSnapshot& Snapshot) const
+{
+	if (!FrontendRootWidget)
+	{
+		return false;
+	}
+	const bool bGameplayStartLoadingOrTraveling = Snapshot.ActiveOperation == ECatOnlineOperation::Start
+		&& Snapshot.LastError == ECatOnlineError::None && Snapshot.RequestId.IsValid()
+		&& (Snapshot.bIsGameplayLoadPending || Snapshot.TransportState == ECatOnlineTransportState::TravelQueued
+			|| Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake);
+	const bool bGameplayStartFailureRecovering = Snapshot.ActiveOperation == ECatOnlineOperation::None
+		&& (Snapshot.LastError == ECatOnlineError::GameplayPreloadFailed || Snapshot.LastError == ECatOnlineError::TravelRejected
+			|| Snapshot.LastError == ECatOnlineError::TravelFailed || Snapshot.LastError == ECatOnlineError::ConnectStringUnavailable
+			|| Snapshot.LastError == ECatOnlineError::NetworkFailure || Snapshot.LastError == ECatOnlineError::ClientStartRetryExhausted)
+		&& (Snapshot.WorldState == ECatOnlineWorldState::Frontend || Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake
+			|| Snapshot.TransportState == ECatOnlineTransportState::Failed);
+	return bGameplayStartLoadingOrTraveling || bGameplayStartFailureRecovering;
+}
+
+// Frontend 拆除流程：先关闭流程控制器的 Model 订阅和 Root 绑定，再拆 Root，最后关闭三个 Model；若调用时仍有绑定 Controller，才恢复非鼠标前端状态，此路径不碰既有 Lake HUD、背包和交互提示。
+void UCatLocalPlayerUISubsystem::RemoveFrontendRoot()
+{
+	const bool bHadFrontendRoot = FrontendRootWidget != nullptr;
+	if (FrontendPageController) { FrontendPageController->Shutdown(); }
+	if (FrontendRootWidget)
+	{
+		FrontendRootWidget->ResetFrontend();
+		FrontendRootWidget->RemoveFromParent();
+	}
+	if (FrontendSaveModel) { FrontendSaveModel->Shutdown(); }
+	if (FrontendRoomModel) { FrontendRoomModel->Shutdown(); }
+	if (FrontendSettingsModel) { FrontendSettingsModel->Shutdown(); }
+	FrontendPageController = nullptr;
+	FrontendRootWidget = nullptr;
+	FrontendSaveModel = nullptr;
+	FrontendRoomModel = nullptr;
+	FrontendSettingsModel = nullptr;
+	if (bHadFrontendRoot)
+	{
+		if (APlayerController* Controller = BoundPlayerController.Get()) { Controller->SetShowMouseCursor(false); }
+	}
 }
 
 // Controller 刷新流程：

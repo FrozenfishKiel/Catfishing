@@ -26,6 +26,8 @@ ASC 放在 `ACatCharacter`，Character 同时作为 Owner 和 Avatar。PlayerSta
 
 这不是“谁方便复制谁就持有”的选择；它是为区分连接身份、猫身体和跨局档案而做的边界。
 
+Ability 输入路由属于 `AbilitySystem/`。`ACatfishingPlayerController` 可以在 UE 输入生命周期里安装物理按键和转交当前 Pawn，但不能长期持有 ASC 缓存、Ability 输入边沿或 AbilitySpec 激活状态；这些由 `UCatAbilityInputBindingComponent` 和 `UCatAbilitySystemComponent` 收口。
+
 ## Items 表示鱼实例与容器事务
 
 当前 `Items/` 不是传统道具系统，也不是装备系统。它只拥有局内实物鱼、容器、转移、捕获、吃鱼、献祭预留和偷鱼 escrow。

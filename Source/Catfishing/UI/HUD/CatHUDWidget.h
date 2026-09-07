@@ -51,7 +51,7 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	float FightStamina = 0.0f;
 
-	/** 当前猫体力条的上限基线；来源是猫种类配置或全局 Ability 设置，无法解析时保持 0。 */
+	/** 当前猫体力条的上限；来源是 Character ASC 的 MaxFightStamina，未播种或未复制到本地时保持 0。 */
 	UPROPERTY(BlueprintReadOnly)
 	float FightStaminaMaximum = 0.0f;
 
@@ -175,7 +175,7 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	FText FishStateText;
 
-	/** 给玩家体力条旁显示的短文本；数值来自 ASC 当前体力和配置基线。 */
+	/** 给玩家体力条旁显示的短文本；数值来自 ASC 当前体力和 MaxFightStamina 上限。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText CatStaminaText;
 

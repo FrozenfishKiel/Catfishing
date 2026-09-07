@@ -11,6 +11,9 @@ class CATFISHING_API UCatAbilitySystemComponent : public UAbilitySystemComponent
 	GENERATED_BODY()
 
 public:
+	/** 从任意 Actor 解析项目 ASC；调用方只拿到 Cat ASC 能力面，不需要知道当前身体类如何实现 AbilitySystemInterface。 */
+	static UCatAbilitySystemComponent* FindCatAbilitySystemFromActor(AActor* Actor);
+
 	/** 记录某个 Ability Spec 对应的输入标签与激活策略；AbilitySet 授予时写入，输入帧处理时读取。 */
 	void RegisterAbilityInput(FGameplayAbilitySpecHandle Handle, FGameplayTag InputTag,
 		ECatAbilityActivationPolicy ActivationPolicy);
@@ -47,13 +50,25 @@ public:
 	/** authority 通过正式 GameplayEffect 修改搏斗体力；调用方只提交增减量，不直接写 AttributeSet。 */
 	bool ApplyFishingStaminaDelta(float Delta);
 
-	/** 按当前猫种类配置把 FightStamina 初始化到本次搏斗基线；失败时不猜全局兜底。 */
+	/** Character-owned ASC 的运行 gate 与 Owner/Avatar 建立入口；配置未启用时会清除 ActorInfo，成功后后续 Ability 和属性写入才允许继续。 */
+	bool InitializeCharacterOwnerAvatar(AActor* CharacterOwnerAvatar);
+
+	/** authority 在 ActorInfo 就绪后授予一次正式默认 AbilitySet；缺资产或未就绪时保持 fail-closed，重占有不会重复授予。 */
+	bool GrantConfiguredDefaultAbilitySetFromAuthority();
+
+	/** Character 最终销毁时撤销由配置默认授予的 AbilitySet；未授予或客户端空句柄调用保持无副作用。 */
+	void RevokeConfiguredDefaultAbilitySet();
+
+	/** Character 的 ActorInfo 就绪后按 CatDefinitionId 整体播种身体初始属性；仅 authority 写入，已成功播种后重占有不会重置局内消耗。 */
+	bool InitializeCharacterAttributesFromDefinition(FName CatDefinitionId);
+
+	/** 按 ASC 当前 MaxFightStamina 把 FightStamina 回满到本次搏斗上限；上限未播种时 fail-closed。 */
 	bool InitializeFishingStaminaForSession();
 
 	/** 请求下一次 ActorInfo 可用时重置搏斗体力；无 Avatar 时保留待处理标记。 */
 	bool RequestFishingStaminaReset();
 
-	/** 在新搏斗开始前确认 FightStamina 可用；待重置未完成或数值非正都会拒绝进入会话。 */
+	/** 在新搏斗开始前确认 FightStamina 与 MaxFightStamina 都可用；待重置未完成或数值非正都会拒绝进入会话。 */
 	bool EnsureFishingStaminaReadyForNewSession();
 
 #if WITH_DEV_AUTOMATION_TESTS
@@ -96,6 +111,15 @@ private:
 	/** 当前仍被按住的 Ability Spec；WhileInputActive Ability 依赖它在后续帧保持激活。 */
 	TArray<FGameplayAbilitySpecHandle> InputHeldSpecHandles;
 
-	/** FightStamina 等待 ActorInfo 恢复后重置的标记；只由 authority 生命周期和会话入口读写。 */
+	/** FightStamina 等待 ActorInfo 恢复后按 MaxFightStamina 回满的标记；只由 authority 生命周期和会话入口读写。 */
 	bool bPendingFishingStaminaReset = false;
+
+	/** 配置默认 AbilitySet 的授予句柄集合；ASC authority 写入，最终销毁时用它整组撤销输入 Ability 和初始效果。 */
+	FCatGrantedAbilitySetHandles ConfiguredDefaultAbilitySetHandles;
+
+	/** 默认 AbilitySet 是否已经由本 ASC 授予；authority 重占有时读取它避免重复 GiveAbility。 */
+	bool bConfiguredDefaultAbilitySetGranted = false;
+
+	/** 初始身体属性是否已经由本 ASC 成功播种；authority 重占有保持 true，重连新 Character 的新 ASC 重新开始。 */
+	bool bInitialCharacterAttributesApplied = false;
 };

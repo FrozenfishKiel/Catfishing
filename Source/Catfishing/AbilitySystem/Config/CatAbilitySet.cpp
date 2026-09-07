@@ -1,22 +1,28 @@
 #include "AbilitySystem/Config/CatAbilitySet.h"
 
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
-#include "AbilitySystem/BodyAction/CatBodyActionAbility.h"
+#include "AbilitySystem/BodyAction/Camp/CatCampBodyActionAbilities.h"
+#include "AbilitySystem/BodyAction/Social/CatSocialBodyActionAbilities.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "GameplayEffect.h"
 
 bool UCatAbilitySet::IsRuntimeReady() const
 {
-	// 默认 AbilitySet 是 InputConfig 之后的第二道入口门禁：六个正式 Fishing 输入 Tag 必须都有可授予能力，
-	// 非 Fishing 身体动作还必须有无输入的 BodyAction 事件网关，避免 UI/RPC 绕过 GAS 直接撞领域写口。
-	if (GrantedAbilities.Num() < 7)
+	// 默认 AbilitySet 门禁流程：六个 Fishing 输入 Ability 与六个保留 BodyAction Ability 必须完整出现；
+	// BodyAction 只承担 Camp/Social 表现和可取消前摇，库存、献祭、偷鱼事务和 Wet 反馈不能通过 Ability 授予进入运行时。
+	if (GrantedAbilities.Num() != 12)
 	{
 		return false;
 	}
-	// 两个集合只在就绪门禁内去重：能力类不能重复授予，同一输入 Tag 也不能映射到多个技能。
+	// 这些集合只在就绪门禁内做局部校验：能力类和输入 Tag 去重，BodyAction 还要精确命中六个专用事件 Ability。
 	TSet<TSubclassOf<UGameplayAbility>> SeenAbilities;
 	TSet<FGameplayTag> SeenInputTags;
-	bool bHasBodyActionAbility = false;
+	TSet<TSubclassOf<UGameplayAbility>> ExpectedBodyActionAbilities = {
+		UCatGA_BodyActionCampRest::StaticClass(), UCatGA_BodyActionCampfirePlayback::StaticClass(),
+		UCatGA_BodyActionRescueCharacterToCamp::StaticClass(),
+		UCatGA_BodyActionRequestManualHelp::StaticClass(), UCatGA_BodyActionRequestMischief::StaticClass(),
+		UCatGA_BodyActionPlaceProtectionSign::StaticClass() };
+	TSet<TSubclassOf<UGameplayAbility>> SeenBodyActionAbilities;
 	for (const FCatAbilitySetAbility& Entry : GrantedAbilities)
 	{
 		if (!Entry.Ability || Entry.Level < 1 || SeenAbilities.Contains(Entry.Ability)
@@ -25,14 +31,14 @@ bool UCatAbilitySet::IsRuntimeReady() const
 			return false;
 		}
 		SeenAbilities.Add(Entry.Ability);
-		if (Entry.Ability == UCatGA_BodyActionCommand::StaticClass())
+		if (ExpectedBodyActionAbilities.Contains(Entry.Ability))
 		{
-			// BodyAction 是 GameplayEvent 网关，不能占用 EnhancedInput Tag；这里保留默认触发策略只为了让授予记录可读、可校验。
+			// 每个 BodyAction 条目是事件专用 Ability，不能占用 EnhancedInput Tag；保留离散策略只让授予记录与输入组件契约一致。
 			if (Entry.InputTag.IsValid() || Entry.ActivationPolicy != ECatAbilityActivationPolicy::OnInputTriggered)
 			{
 				return false;
 			}
-			bHasBodyActionAbility = true;
+			SeenBodyActionAbilities.Add(Entry.Ability);
 		}
 		if (Entry.InputTag.IsValid())
 		{
@@ -55,12 +61,14 @@ bool UCatAbilitySet::IsRuntimeReady() const
 		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Cancel)
 		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Scoop)
 		&& SeenInputTags.Contains(CatFishingAbilityTags::Input_Fishing_Chum)
-		&& bHasBodyActionAbility;
+		&& SeenBodyActionAbilities.Num() == ExpectedBodyActionAbilities.Num();
 }
 
 bool UCatAbilitySet::GiveToAbilitySystem(UCatAbilitySystemComponent* AbilitySystem,
 	FCatGrantedAbilitySetHandles& OutGrantedHandles) const
 {
+	// 授予流程：先确认服务器 ASC、默认配置完整且输出句柄为空；随后逐条创建 Spec、登记输入标签和可选初始效果。
+	// 任一 Ability 或 Effect 授予失败都会撤销本轮已写入句柄，避免角色留下半套输入能力或保留 BodyAction 事件入口。
 	if (!AbilitySystem || !AbilitySystem->IsOwnerActorAuthoritative() || !IsRuntimeReady()
 		|| !OutGrantedHandles.AbilitySpecHandles.IsEmpty())
 	{
@@ -126,6 +134,7 @@ bool UCatAbilitySet::GiveToAbilitySystem(UCatAbilitySystemComponent* AbilitySyst
 
 void FCatGrantedAbilitySetHandles::TakeFromAbilitySystem(UCatAbilitySystemComponent* AbilitySystem)
 {
+	// 撤销流程：只在服务器 ASC 上按记录句柄反注册输入、清除 Ability 和初始效果；完成后清空本集合，重复调用不会再触碰旧句柄。
 	if (!AbilitySystem || !AbilitySystem->IsOwnerActorAuthoritative())
 	{
 		return;

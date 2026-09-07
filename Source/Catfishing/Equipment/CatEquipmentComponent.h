@@ -7,6 +7,7 @@
 
 class UCatEquipmentDefinition;
 class ACatCampInventoryActor;
+class APlayerState;
 
 /** Equipment 随身库存与钓鱼选择快照发生提交或复制变化的本机通知；UI 只把它当重读信号。 */
 DECLARE_MULTICAST_DELEGATE(FCatEquipmentSnapshotChanged);
@@ -27,6 +28,21 @@ public:
 	/** 提供服务器最终随身库存与钓鱼选择读模型；调用方只能据此显示/校验 Revision，不能通过引用补耐久或改库存。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Equipment")
 	const FCatEquipmentLoadoutSnapshot& GetSnapshot() const;
+
+	/** Character 被服务器占有后应用配置的开局装备选择；仅在组件所属 Pawn、authority 与设置均有效且尚未选竿时提交，成功后可补发配置窝料。 */
+	void ApplyConfiguredStarterLoadoutFromAuthority();
+
+	/** 导出完整已拥有库存，把已提交部署实例按收回后的格子保存；未结算 Fishing 预留或收回后超容量时明确失败。 */
+	bool ExportSnapshotFromAuthority(FCatEquipmentLoadoutSnapshot& OutSnapshot, FText& OutFailure) const;
+
+	/** 退出快照已被 Save 接收后移除本玩家已登记的部署鱼竿表现；实例仍由退出记录持有，重连只恢复一份。 */
+	bool RetireDeploymentAfterPersistentCapture(APlayerState& PlayerState);
+
+	/** 只读验证一份跨地图随身库存快照是否可被本组件接收；检查 authority、定义、容量、实例唯一性和选择引用，但不写入现有库存。 */
+	bool CanRestoreSnapshotFromAuthority(const FCatEquipmentLoadoutSnapshot& RestoredSnapshot, FText& OutFailure) const;
+
+	/** 在 Save 已完成全局预检后整体替换随身库存、选择和鱼竿耐久；活动 Fishing/Use 记录存在或任何局部校验失败时拒绝且不改当前快照。 */
+	bool RestoreSnapshotFromAuthority(const FCatEquipmentLoadoutSnapshot& RestoredSnapshot);
 
 	/** 根据服务器目录、可信解锁证明和随身库存持有量设置当前钓鱼选择；当前已部署鱼竿可作为原选择继续沿用，但不能借此切换到另一根鱼竿。 */
 	FCatDomainCommandResult ConfigureLoadoutFromAuthority(FGuid RequestId, int64 ExpectedRevision,
@@ -53,6 +69,10 @@ public:
 	/** 背包点击或玩法入口共用的物品使用入口；它按实例调用定义侧 Use 裁决，Equipment 只执行移出实例、扣指定数量或 no-op 的库存事务。 */
 	FCatInventoryItemUseResult Use(FGuid RequestId, int64 ExpectedRevision, FGuid ItemInstanceId,
 		int32 Quantity = 1);
+
+	/** 只读查询同一 Use 请求是否已有终态；命中时返回可诊断重放，不命中时不校验当前库存也不产生库存变化。 */
+	bool TryReplayInventoryItemUseTerminal(FGuid RequestId, int64 ExpectedRevision, FGuid ItemInstanceId,
+		int32 Quantity, FCatInventoryItemUseResult& OutResult) const;
 
 	/** 部署型物品收口时共用的停止使用入口；它按实例调用定义侧 UnUse 裁决，成功才把活动记录里的同一物品放回随身库存。 */
 	FCatInventoryItemUseResult UnUse(FGuid RequestId, FGuid ItemInstanceId);
@@ -92,6 +112,9 @@ public:
 	FCatEquipmentSnapshotChanged OnSnapshotChanged;
 
 private:
+	/** 仅验证库存载荷的容量、定义、数量和选择；导出与恢复共用，authority 和活动事务由各自入口控制。 */
+	bool ValidatePersistentSnapshotPayload(const FCatEquipmentLoadoutSnapshot& Candidate, FText& OutFailure) const;
+
 	/** 营地公共仓库负责背包和公共仓库之间的服务器拖放事务；只允许它在同一提交里同时改双方快照并发布广播。 */
 	friend class ACatCampInventoryActor;
 

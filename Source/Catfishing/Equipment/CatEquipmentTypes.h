@@ -164,7 +164,40 @@ struct FCatInventoryItemUseResult
 	/** 本次调用是否实际改变了库存或活动使用记录；重放、无实现或已收口路径会保持 false。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bCommitted = false;
+
+	/** 本结果是否来自同一 Use/UnUse 请求的终态缓存；协调器用它判断是否需要补放后续领域提交。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bTerminalReplay = false;
+
+	/** 终态重放对应的首次库存请求是否真的扣量、移出或放回；失败重放不会驱动草药恢复等后续效果。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bReplayedTerminalCommitted = false;
+
+	/** 终态重放对应的首次库存错误；非重放结果保持默认，成功重放为 None，失败重放继续暴露库存拒绝原因。 */
+	UPROPERTY(BlueprintReadOnly)
+	ECatDomainCommandError ReplayedTerminalError = ECatDomainCommandError::InvalidPayload;
 };
+
+/** 把库存 Use/UnUse 的首次终态改写成可诊断重放；成功重放显示 AlreadyResolved，失败重放继续暴露首次失败。 */
+inline void MarkInventoryItemUseReplayed(FCatInventoryItemUseResult& Result)
+{
+	const bool bOriginalCommitted = Result.bCommitted;
+	const ECatDomainCommandError OriginalError = Result.Error;
+	Result.bCommitted = false;
+	Result.bTerminalReplay = true;
+	Result.bReplayedTerminalCommitted = bOriginalCommitted;
+	Result.Error = bOriginalCommitted && OriginalError == ECatDomainCommandError::None
+		? ECatDomainCommandError::AlreadyResolved : OriginalError;
+	Result.ReplayedTerminalError = OriginalError;
+}
+
+/** 判断库存 Use/UnUse 是否已经被服务器接受；只允许首次成功或成功终态重放驱动后续领域提交。 */
+inline bool CatIsAcceptedInventoryItemUseResult(const FCatInventoryItemUseResult& Result)
+{
+	return (Result.bCommitted && Result.Error == ECatDomainCommandError::None)
+		|| (Result.bTerminalReplay && Result.bReplayedTerminalCommitted
+			&& Result.ReplayedTerminalError == ECatDomainCommandError::None);
+}
 
 /** 一次失败预算提交结果；明确记录唯一选择的惩罚。 */
 USTRUCT(BlueprintType)

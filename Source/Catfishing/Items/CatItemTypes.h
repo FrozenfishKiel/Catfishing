@@ -23,26 +23,27 @@ struct FCatFishInstance
 	GENERATED_BODY()
 
 	/** 捕获提交前由服务器会话分配、并在成功时只写入一次的局内鱼实例 ID；转移、预留、印记和献祭始终引用它。 */
-	UPROPERTY(BlueprintReadOnly)
+	UPROPERTY(SaveGame, BlueprintReadOnly)
 	FGuid FishInstanceId;
 
 	/** 真实鱼表资产中的稳定定义 ID；没有定义时不创建实例。 */
-	UPROPERTY(BlueprintReadOnly)
+	UPROPERTY(SaveGame, BlueprintReadOnly)
 	FName FishDefinitionId = NAME_None;
 
-	/** 鱼实例的服务器私有捕获者 StableNetId；用于吃鱼、售鱼、偷取与归档权限，不代表角色额外拥有容器库存。 */
+	/** 鱼实例的服务器私有捕获者 StableNetId；仅权威领域与存档读写，RepSkip 排除 FastArray 嵌套复制，不向客户端暴露身份。 */
+	UPROPERTY(SaveGame, NotReplicated)
 	FString OwnerStableNetId;
 
 	/** 产生该实例的 FishingSession ID；用于捕获幂等审计，不用于恢复旧会话。 */
-	UPROPERTY(BlueprintReadOnly)
+	UPROPERTY(SaveGame, BlueprintReadOnly)
 	FGuid SourceFishingSessionId;
 
 	/** 从真实鱼定义冻结的献祭贡献；后续资产改值不改变已捕获实例的事务价值。 */
-	UPROPERTY(BlueprintReadOnly)
+	UPROPERTY(SaveGame, BlueprintReadOnly)
 	int32 SacrificeContribution = 0;
 
 	/** 捕获时由服务器鱼运行态给出的真实重量，单位千克；非有限或非正值不得创建实例。 */
-	UPROPERTY(BlueprintReadOnly)
+	UPROPERTY(SaveGame, BlueprintReadOnly)
 	double WeightKilograms = 0.0;
 };
 
@@ -287,6 +288,10 @@ struct FCatFishConsumeResult
 	/** 公共命令终态；Revision 是容器移除后的值。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatDomainCommandResult Command;
+
+	/** 实物鱼移除后提交到 Condition/Growth 的身体终态；用于区分容器成功和身体效果失败。 */
+	UPROPERTY(BlueprintReadOnly)
+	FCatDomainCommandResult Body;
 
 	/** 已被不可逆吃掉的鱼事实；拒绝时保持默认。 */
 	UPROPERTY(BlueprintReadOnly)
