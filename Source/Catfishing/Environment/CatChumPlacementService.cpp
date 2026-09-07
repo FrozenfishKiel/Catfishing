@@ -8,11 +8,11 @@
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
 #include "Logging/CatLog.h"
 
 namespace CatChumPlacementServicePrivate
@@ -33,12 +33,6 @@ namespace CatChumPlacementServicePrivate
 			? ECatChumFieldError::StaleGeometry : ECatChumFieldError::InvalidWaterTarget;
 	}
 
-	// 库存 Use 裁决错误映射流程：命令结构里的历史枚举名先保持兼容，但来源已经是正式 InventoryRevision 和定义规则。
-	static ECatChumFieldError MapInventoryUseError(const ECatDomainCommandError Error)
-	{
-		return Error == ECatDomainCommandError::RevisionConflict
-			? ECatChumFieldError::EquipmentRevisionConflict : ECatChumFieldError::EquipmentUnavailable;
-	}
 }
 
 FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* RequestingController,
@@ -111,19 +105,26 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	FName ChumDefinitionId = NAME_None;
 	UCatEquipmentDefinition* Definition = nullptr;
 	int32 FormalChumSlotIndex = INDEX_NONE;
-	FCatRunInventorySlot FormalChumSlot;
-	// 正式库存复核：服务层不信任命令里的 DefinitionId，而是用实例当前所在槽位覆盖窝料身份。
+	// 正式库存复核：
+	// 1. 服务层不信任命令里的 DefinitionId，而是按实例 ID 回到当前正式库存槽位。
+	// 2. 再直接读取库存实例和定义资产，确认它仍是一份运行就绪、可由库存组件扣量的 Chum。
+	// 3. 这里不再构造 FCatRunInventorySlot，也不再调用 UCatEquipmentDefinition::Use 做旧定义裁决；窝点由环境服务裁决，库存变化由 InventoryComponent 执行。
 	FormalChumSlotIndex = OwnerInventory->FindInventorySlotIndexFromInstanceId(Command.ChumItemInstanceId);
 	const FCatInventoryEntry* FormalChumEntry =
 		OwnerInventory->GetInventoryEntryAtSlot(FormalChumSlotIndex);
-	const UCatEquipmentInventoryItemInstance* FormalChumInstance =
-		FormalChumEntry != nullptr ? Cast<UCatEquipmentInventoryItemInstance>(FormalChumEntry->Instance) : nullptr;
+	const UCatInventoryItemInstance* FormalChumInstance =
+		FormalChumEntry != nullptr ? FormalChumEntry->Instance.Get() : nullptr;
+	Definition = FormalChumInstance != nullptr
+		? Cast<UCatEquipmentDefinition>(FormalChumInstance->GetItemDefinition()) : nullptr;
 	if (FormalChumInstance != nullptr
 		&& FormalChumEntry->StackCount >= Command.Quantity
-		&& FormalChumInstance->BuildLegacyRunInventorySlot(FormalChumEntry->StackCount, FormalChumSlot))
+		&& FormalChumInstance->GetItemInstanceId() == Command.ChumItemInstanceId
+		&& Definition != nullptr
+		&& Definition->IsRuntimeDefinitionReady()
+		&& Definition->Kind == ECatEquipmentKind::Chum
+		&& Definition->ConsumesInventoryQuantityOnUse())
 	{
-		ChumDefinitionId = FormalChumSlot.DefinitionId;
-		Definition = Cast<UCatEquipmentDefinition>(FormalChumInstance->GetItemDefinition());
+		ChumDefinitionId = FormalChumInstance->GetItemDefinitionId();
 	}
 	if (ChumDefinitionId.IsNone())
 	{
@@ -145,11 +146,6 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	if (OwnerInventory->GetInventoryRevision() != Command.ExpectedEquipmentRevision)
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::EquipmentRevisionConflict));
-	}
-	const ECatDomainCommandError DefinitionUseError = Definition->Use(FormalChumSlot, Command.Quantity);
-	if (DefinitionUseError != ECatDomainCommandError::None)
-	{
-		return FinalizeFirstResult(MakeError(Command.RequestId, MapInventoryUseError(DefinitionUseError)));
 	}
 	UCatWaterQuerySubsystem* WaterQuery = World->GetSubsystem<UCatWaterQuerySubsystem>();
 	if (!WaterQuery)

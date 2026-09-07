@@ -939,30 +939,21 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 	Result.RequestId = RequestId;
 	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
 	UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
+	const UCatInventoryComponent* OwnerInventory = Character ? Character->GetInventoryComponent() : nullptr;
 	UCatChumPlacementService* Service = GetWorld() ? GetWorld()->GetSubsystem<UCatChumPlacementService>() : nullptr;
-	if (!Character || !Equipment || !Service)
+	if (!Character || !Equipment || !OwnerInventory || !Service)
 	{
 		Result.Error = ECatChumFieldError::DependencyUnavailable;
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
 	}
-	// 选窝料实例流程：正式库存里先找 starter 指定类型，再找任意足量 Chum；没有正式库存组件的旧宿主才在 Equipment Snapshot 里按同一顺序兼容。
-	// 命令字段仍沿用旧名 ExpectedEquipmentRevision，但正式库存路径填的是 InventoryRevision，让 PlaceChum 直接裁决背包并发。
-	const FCatEquipmentLoadoutSnapshot& Loadout = Equipment->GetSnapshot();
-	const UCatInventoryComponent* OwnerInventory = Character->GetInventoryComponent();
+	// 选窝料实例流程：只在正式库存条目里先找 starter 指定类型，再找任意足量 Chum；命令层只保存 PlaceChum 需要复核的定义和实例身份。
+	// 命令字段仍沿用旧名 ExpectedEquipmentRevision，但这里填的是 InventoryRevision，让 PlaceChum 直接裁决背包并发。
 	const int32 ChumQuantity = FMath::Max(1, GetDefault<UCatFishingSettings>()->ChumThrowQuantity);
 	const FName PreferredChumDefinitionId = GetDefault<UCatEquipmentSettings>()->StarterChumDefinitionId;
-	FCatRunInventorySlot SelectedChumSlot;
+	FName SelectedChumDefinitionId = NAME_None;
+	FGuid SelectedChumItemInstanceId;
 	bool bHasChumSlot = false;
-	const auto CanUseChumSlot = [ChumQuantity](const FCatRunInventorySlot& Slot, const FName RequiredDefinitionId)
-	{
-		const UCatEquipmentDefinition* Definition =
-			GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Slot.DefinitionId);
-		return Slot.ItemInstanceId.IsValid() && Slot.Quantity >= ChumQuantity
-			&& (RequiredDefinitionId.IsNone() || Slot.DefinitionId == RequiredDefinitionId)
-			&& Definition && Definition->Kind == ECatEquipmentKind::Chum
-			&& Definition->ConsumesInventoryQuantityOnUse();
-	};
 	const auto TrySelectFormalChumSlot = [&](const UCatInventoryComponent& OwnerInventory,
 		const FName RequiredDefinitionId)
 	{
@@ -977,55 +968,25 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 				&& Entry->StackCount >= ChumQuantity
 				&& (RequiredDefinitionId.IsNone() || Instance->GetItemDefinitionId() == RequiredDefinitionId)
 				&& Definition != nullptr
+				&& Definition->IsRuntimeDefinitionReady()
 				&& Definition->Kind == ECatEquipmentKind::Chum
 				&& Definition->ConsumesInventoryQuantityOnUse())
 			{
-				SelectedChumSlot.DefinitionId = Instance->GetItemDefinitionId();
-				SelectedChumSlot.ItemInstanceId = Instance->GetItemInstanceId();
-				SelectedChumSlot.Quantity = Entry->StackCount;
+				SelectedChumDefinitionId = Instance->GetItemDefinitionId();
+				SelectedChumItemInstanceId = Instance->GetItemInstanceId();
 				bHasChumSlot = true;
 				return true;
 			}
 		}
 		return false;
 	};
-	if (OwnerInventory)
+	if (!PreferredChumDefinitionId.IsNone())
 	{
-		if (!PreferredChumDefinitionId.IsNone())
-		{
-			TrySelectFormalChumSlot(*OwnerInventory, PreferredChumDefinitionId);
-		}
-		if (!bHasChumSlot)
-		{
-			TrySelectFormalChumSlot(*OwnerInventory, NAME_None);
-		}
+		TrySelectFormalChumSlot(*OwnerInventory, PreferredChumDefinitionId);
 	}
-	else
+	if (!bHasChumSlot)
 	{
-		if (!PreferredChumDefinitionId.IsNone())
-		{
-			for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
-			{
-				if (CanUseChumSlot(Slot, PreferredChumDefinitionId))
-				{
-					SelectedChumSlot = Slot;
-					bHasChumSlot = true;
-					break;
-				}
-			}
-		}
-		if (!bHasChumSlot)
-		{
-			for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
-			{
-				if (CanUseChumSlot(Slot, NAME_None))
-				{
-					SelectedChumSlot = Slot;
-					bHasChumSlot = true;
-					break;
-				}
-			}
-		}
+		TrySelectFormalChumSlot(*OwnerInventory, NAME_None);
 	}
 	if (!bHasChumSlot)
 	{
@@ -1052,14 +1013,14 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 	FCatPlaceChumCommand Command;
 	Command.RequestId = RequestId;
 	Command.ExpectedWaterRegionHandle = Region;
-	Command.ExpectedEquipmentRevision = OwnerInventory ? OwnerInventory->GetInventoryRevision() : Loadout.Revision;
-	Command.ChumItemInstanceId = SelectedChumSlot.ItemInstanceId;
-	Command.ChumDefinitionId = SelectedChumSlot.DefinitionId;
+	Command.ExpectedEquipmentRevision = OwnerInventory->GetInventoryRevision();
+	Command.ChumItemInstanceId = SelectedChumItemInstanceId;
+	Command.ChumDefinitionId = SelectedChumDefinitionId;
 	Command.Quantity = ChumQuantity;
 	Command.ClientCandidateWorldPoint = Landing;
 	UE_LOG(LogCatFishing, Log, TEXT("Event=chum_throw Held=%.2f Alpha=%.2f Landing=%s Chum=%s ChumItem=%s"),
-		HeldSeconds, Alpha, *Landing.ToString(), *SelectedChumSlot.DefinitionId.ToString(),
-		*SelectedChumSlot.ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
+		HeldSeconds, Alpha, *Landing.ToString(), *SelectedChumDefinitionId.ToString(),
+		*SelectedChumItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
 	DeliverPlaceChumResultFromAuthority(Service->PlaceChum(Controller, Command));
 }
 

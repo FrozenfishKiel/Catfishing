@@ -133,7 +133,7 @@ private:
 	void BroadcastCosmeticEventFromAuthority(const FGameplayTag& EventTag) const;
 	/** 验证松开时采集的镜头/鼠标射线并与水面求交；所有 ID/Revision/Handle 由服务器填。 */
 	void BeginCastFromViewOnAuthority(APlayerController* Controller, const FCatFishingInputEdge& Edge);
-	/** 服务器按 Q 按住时长换算蓄力并投放窝料；自动选料优先读正式库存，落点用与客户端预览相同的弹道预测。 */
+	/** 服务器按 Q 按住时长换算蓄力并投放窝料；自动选料只读正式库存条目，落点用与客户端预览相同的弹道预测。 */
 	void ThrowChumFromChargeOnAuthority(APlayerController* Controller, const FGuid& RequestId, double HeldSeconds);
 	/** 服务器记录的 Q 按下时刻（世界时间）；<0 表示当前未蓄力。 */
 	double ChumChargeStartServerTime = -1.0;
