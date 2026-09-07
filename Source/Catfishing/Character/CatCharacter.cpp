@@ -14,6 +14,24 @@
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/Presentation/CatFishingCameraComponent.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventorySettings.h"
+
+namespace
+{
+	// 初始随身库存容量迁移流程：角色创建正式库存时默认读 InventorySettings；旧 EquipmentSettings 被测试或诊断改值时保留一次兼容覆盖。
+	int32 ResolveInitialPlayerInventorySlotCapacity()
+	{
+		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+		const int32 InventorySlotCapacity =
+			InventorySettings != nullptr ? InventorySettings->GetPlayerInventorySlotCapacity() : 0;
+		const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
+		const int32 LegacySlotCapacity =
+			EquipmentSettings != nullptr ? FMath::Max(0, EquipmentSettings->InventorySlotCapacity)
+			: UCatInventorySettings::ProjectDefaultPlayerInventorySlotCapacity;
+		return LegacySlotCapacity != UCatInventorySettings::ProjectDefaultPlayerInventorySlotCapacity
+			? LegacySlotCapacity : InventorySlotCapacity;
+	}
+}
 
 // 构造流程：一次创建 Character-owned ASC/AttributeSet、离散身体状态、吃鱼成长、正式随身库存和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
 ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
@@ -200,9 +218,7 @@ void ACatCharacter::PossessedBy(AController* NewController)
 	{
 		if (InventoryComponent)
 		{
-			const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
-			InventoryComponent->SetInventorySlotCountFromAuthority(
-				EquipmentSettings != nullptr ? EquipmentSettings->InventorySlotCapacity : 0);
+			InventoryComponent->SetInventorySlotCountFromAuthority(ResolveInitialPlayerInventorySlotCapacity());
 		}
 		if (AbilitySystemComponent)
 		{

@@ -22,6 +22,20 @@ DEFINE_LOG_CATEGORY_STATIC(LogCatEquipment, Log, All);
 
 namespace
 {
+	// 玩家随身容量迁移流程：InventorySettings 是正式来源；旧 EquipmentSettings 只有被测试或诊断改成非项目默认值时才临时覆盖。
+	int32 ResolvePlayerInventorySlotCapacity()
+	{
+		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+		const int32 InventorySlotCapacity =
+			InventorySettings != nullptr ? InventorySettings->GetPlayerInventorySlotCapacity() : 0;
+		const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
+		const int32 LegacySlotCapacity =
+			EquipmentSettings != nullptr ? FMath::Max(0, EquipmentSettings->InventorySlotCapacity)
+			: UCatInventorySettings::ProjectDefaultPlayerInventorySlotCapacity;
+		return LegacySlotCapacity != UCatInventorySettings::ProjectDefaultPlayerInventorySlotCapacity
+			? LegacySlotCapacity : InventorySlotCapacity;
+	}
+
 	// 旧随身库存投影等价判断流程：按 UI 和存档会读取的全部字段比较；只有真实物品格差异才需要推进兼容 Snapshot 版本。
 	bool AreLegacyInventorySlotArraysEquivalent(const TArray<FCatRunInventorySlot>& Left,
 		const TArray<FCatRunInventorySlot>& Right)
@@ -2007,11 +2021,10 @@ void UCatEquipmentComponent::OnRep_Snapshot()
 	OnSnapshotChanged.Broadcast();
 }
 
-// 库存容量读取流程：配置是本局随身库存可见格子的来源；负数由属性 Clamp 防住，这里仍做运行期保护。
+// 库存容量读取流程：正式默认来自 InventorySettings，旧 EquipmentSettings 非默认值仅作为迁移期测试和诊断覆盖。
 int32 UCatEquipmentComponent::GetConfiguredInventorySlotCapacity() const
 {
-	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-	return Settings ? FMath::Max(0, Settings->InventorySlotCapacity) : 0;
+	return ResolvePlayerInventorySlotCapacity();
 }
 
 // 正式随身库存解析流程：只从当前 Owner 上读取 InventoryComponent；Equipment 不创建或缓存库存组件，避免迁移期出现第二份背包归属。
@@ -2021,20 +2034,10 @@ UCatInventoryComponent* UCatEquipmentComponent::ResolveOwnerInventoryComponent()
 	return Owner != nullptr ? Owner->FindComponentByClass<UCatInventoryComponent>() : nullptr;
 }
 
-// 单格堆叠读取流程：定义资产可直接声明单格上限；未声明时，非数量型物品一格一件，数量型物品沿用项目默认上限。
+// 单格堆叠读取流程：定义资产统一回答有效上限；Equipment 不再重复解释项目默认堆叠配置。
 int32 UCatEquipmentComponent::GetInventoryStackLimit(const UCatEquipmentDefinition& Definition) const
 {
-	if (Definition.MaxStackSize > 0)
-	{
-		return FMath::Max(1, Definition.MaxStackSize);
-	}
-	if (!Definition.bRunConsumable)
-	{
-		return 1;
-	}
-	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-	const int32 ConfiguredLimit = Settings ? Settings->InventoryQuantityStackCapacity : 0;
-	return ConfiguredLimit > 0 ? ConfiguredLimit : MAX_int32;
+	return Definition.GetMaxStackCount();
 }
 
 // 入库容量检查流程：

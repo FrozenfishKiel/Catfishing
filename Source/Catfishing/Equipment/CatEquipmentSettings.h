@@ -25,13 +25,13 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Loadout")
 	ECatDomainPolicy ProfileLoadoutTrustPolicy = ECatDomainPolicy::Unset;
 
-	/** 随身库存固定格数；后端按它限制入库，Inventory Model 按它渲染空格和已有物品。 */
+	/** 迁移期随身库存格数兼容覆盖；正式默认值已归 UCatInventorySettings，旧测试或诊断显式改值时才读这里。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Inventory", meta = (ClampMin = "0"))
 	int32 InventorySlotCapacity = 24;
 
-	/** 数量型物品在单个随身库存格里的堆叠上限；鱼饵、窝料、草药等共享这条库存格规则，0 表示同类物品可尽量堆在一个格子里。 */
+	/** 迁移期数量型物品堆叠兼容覆盖；正式默认值在 UCatInventorySettings，0 仍表示同类数量物尽量堆进一个格。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Inventory", meta = (ClampMin = "0"))
-	int32 InventoryQuantityStackCapacity = 0;
+	int32 InventoryQuantityStackCapacity = 5;
 
 	/** 一次 DamageRod 失败预算扣除的耐久；0 表示公式/数值未裁。 */
 	UPROPERTY(Config, EditAnywhere, Category = "FailureBudget", meta = (ClampMin = "0.0"))

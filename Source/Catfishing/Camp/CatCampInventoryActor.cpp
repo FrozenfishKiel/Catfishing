@@ -1101,20 +1101,10 @@ int32 ACatCampInventoryActor::GetConfiguredSlotCapacity() const
 	return FMath::Max(0, InventorySlotCapacity);
 }
 
-// 堆叠上限流程：定义显式 MaxStackSize 优先；装备型永远一格一件，数量型未声明时沿用项目默认堆叠上限。
+// 堆叠上限流程：定义资产统一回答单格上限；公共仓库只消费库存定义规则，不重复解释全局堆叠配置。
 int32 ACatCampInventoryActor::GetInventoryStackLimit(const UCatEquipmentDefinition& Definition) const
 {
-	if (Definition.MaxStackSize > 0)
-	{
-		return FMath::Max(1, Definition.MaxStackSize);
-	}
-	if (!Definition.bRunConsumable)
-	{
-		return 1;
-	}
-	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-	const int32 ConfiguredLimit = Settings ? Settings->InventoryQuantityStackCapacity : 0;
-	return ConfiguredLimit > 0 ? ConfiguredLimit : MAX_int32;
+	return Definition.GetMaxStackCount();
 }
 
 // 旧仓库定义解析流程：正式目录已经把“物品是什么”收拢到库存定义；旧 Snapshot 还需要装备字段时，只在这里做一次类型适配和历史回退。

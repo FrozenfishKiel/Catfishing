@@ -10,6 +10,7 @@
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Equipment/CatEquipmentSettings.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
@@ -138,24 +139,10 @@ namespace
 		return bShowQuantity ? FText::FromString(FString::Printf(TEXT("x%d"), Quantity)) : FText::GetEmpty();
 	}
 
-	// 堆叠上限解析流程：每个定义可覆盖单格上限；数量型物品未显式配置时按项目默认上限兜底。
+	// 堆叠上限展示流程：UI 只委托定义资产回答有效单格上限，不再读取或解释全局堆叠配置。
 	int32 ResolveInventoryMaxStackSize(const UCatEquipmentDefinition* Definition)
 	{
-		if (!Definition)
-		{
-			return 1;
-		}
-		if (Definition->MaxStackSize > 0)
-		{
-			return FMath::Max(1, Definition->MaxStackSize);
-		}
-		if (!Definition->bRunConsumable)
-		{
-			return 1;
-		}
-		const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-		const int32 ConfiguredLimit = Settings ? Settings->InventoryQuantityStackCapacity : 0;
-		return ConfiguredLimit > 0 ? ConfiguredLimit : MAX_int32;
+		return Definition != nullptr ? Definition->GetMaxStackCount() : 1;
 	}
 
 	// 数量表现写入流程：后端格子只给 DefinitionId 和 Quantity，所有 UI 可读的堆叠状态都在这里生成。
@@ -184,11 +171,19 @@ namespace
 			*GetDefinitionDisplayText(Equipment.FloatDefinitionId, TEXT("未选择"))));
 	}
 
-	// 随身库存格数 fallback 流程：正式库存复制尚未到位时，用旧 Equipment 快照维持原本固定空格展示。
+	// 随身库存格数 fallback 流程：正式库存复制尚未到位时，用库存项目配置维持固定空格展示；旧配置非默认值只服务迁移期诊断。
 	int32 GetInventorySlotCountForView(const FCatEquipmentLoadoutSnapshot& Equipment)
 	{
-		const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-		const int32 ConfiguredSlotCount = Settings ? FMath::Max(0, Settings->InventorySlotCapacity) : 0;
+		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+		const int32 InventorySlotCount =
+			InventorySettings != nullptr ? InventorySettings->GetPlayerInventorySlotCapacity() : 0;
+		const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
+		const int32 LegacySlotCount =
+			EquipmentSettings != nullptr ? FMath::Max(0, EquipmentSettings->InventorySlotCapacity)
+			: UCatInventorySettings::ProjectDefaultPlayerInventorySlotCapacity;
+		const int32 ConfiguredSlotCount =
+			LegacySlotCount != UCatInventorySettings::ProjectDefaultPlayerInventorySlotCapacity
+				? LegacySlotCount : InventorySlotCount;
 		return FMath::Max(ConfiguredSlotCount, Equipment.InventorySlots.Num());
 	}
 

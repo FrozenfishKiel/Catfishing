@@ -35,7 +35,7 @@ public:
 	/** 装备资产默认生成装备适配实例；鱼竿耐久等专属状态不进入通用库存格。 */
 	virtual TSubclassOf<UCatInventoryItemInstance> GetPreferredInstanceType() const override;
 
-	/** 装备资产的堆叠上限沿用旧库存口径；数量型走项目配置，工具和装备保持一格一件。 */
+	/** 装备资产的库存堆叠上限；数量型默认读库存项目配置，工具和装备保持一格一件。 */
 	virtual int32 GetMaxStackCount() const override;
 
 	/** 校验这条定义能否进入运行目录；服务器目录读取它做 fail-closed，失败会阻止装配、Use 裁决和消耗事务。 */

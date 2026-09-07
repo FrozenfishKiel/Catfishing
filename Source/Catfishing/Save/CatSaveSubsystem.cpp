@@ -15,6 +15,7 @@
 #include "GenericPlatform/GenericPlatformFile.h"
 #include "HAL/PlatformFileManager.h"
 #include "HAL/FileManager.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Items/CatItemsService.h"
 #include "Kismet/GameplayStatics.h"
 #include "Logging/CatLog.h"
@@ -342,11 +343,25 @@ namespace
 		return Snapshot;
 	}
 
+	// 存档随身容量解析流程：正式默认值来自库存设置；旧 Equipment 配置只有偏离项目默认时才作为迁移期覆盖值，避免旧自动化和旧资产马上失效。
+	int32 ResolveSavedPlayerInventorySlotCapacity()
+	{
+		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+		const int32 InventorySlotCapacity =
+			InventorySettings != nullptr ? InventorySettings->GetPlayerInventorySlotCapacity() : 0;
+		const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
+		const int32 LegacySlotCapacity =
+			EquipmentSettings != nullptr ? FMath::Max(0, EquipmentSettings->InventorySlotCapacity)
+			: UCatInventorySettings::ProjectDefaultPlayerInventorySlotCapacity;
+		return LegacySlotCapacity != UCatInventorySettings::ProjectDefaultPlayerInventorySlotCapacity
+			? LegacySlotCapacity : InventorySlotCapacity;
+	}
+
 	// 玩家库存载荷预检流程：在还没旅行到玩法 World 时按当前目录和容量验证格子、实例、耐久及选择引用；这一步不依赖 Pawn，先挡住会导致半恢复的坏磁盘数据。
 	bool ValidateSavedEquipmentSnapshot(const FCatEquipmentLoadoutSnapshot& Snapshot, FText& OutFailure)
 	{
 		const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-		if (!Settings || Snapshot.InventorySlots.Num() > FMath::Max(0, Settings->InventorySlotCapacity))
+		if (!Settings || Snapshot.InventorySlots.Num() > ResolveSavedPlayerInventorySlotCapacity())
 		{
 			OutFailure = FText::FromString(TEXT("存档随身库存缺少运行目录或超过当前容量。"));
 			return false;
@@ -366,10 +381,7 @@ namespace
 				continue;
 			}
 			const UCatEquipmentDefinition* Definition = Settings->FindRuntimeDefinition(Slot.DefinitionId);
-			const int32 StackLimit = Definition
-				? (Definition->MaxStackSize > 0 ? FMath::Max(1, Definition->MaxStackSize)
-					: (!Definition->bRunConsumable ? 1 : (Settings->InventoryQuantityStackCapacity > 0
-						? Settings->InventoryQuantityStackCapacity : MAX_int32))) : 0;
+			const int32 StackLimit = Definition != nullptr ? Definition->GetMaxStackCount() : 0;
 			if (!Slot.ItemInstanceId.IsValid() || SeenInstanceIds.Contains(Slot.ItemInstanceId) || !Definition
 				|| !Definition->IsRuntimeDefinitionReady() || Slot.Quantity > StackLimit)
 			{

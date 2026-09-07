@@ -2,6 +2,27 @@
 
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Equipment/CatEquipmentSettings.h"
+#include "Inventory/CatInventorySettings.h"
+
+namespace
+{
+	// 默认堆叠容量迁移流程：InventorySettings 是正式来源；旧 EquipmentSettings 只有被测试或诊断改成非项目默认值时才临时覆盖。
+	int32 ResolveDefaultInventoryQuantityStackLimit()
+	{
+		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+		const int32 InventoryStackLimit =
+			InventorySettings != nullptr ? InventorySettings->GetDefaultQuantityStackLimit() : MAX_int32;
+		const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
+		const int32 LegacyStackCapacity =
+			EquipmentSettings != nullptr ? FMath::Max(0, EquipmentSettings->InventoryQuantityStackCapacity)
+			: UCatInventorySettings::ProjectDefaultQuantityStackCapacity;
+		if (LegacyStackCapacity != UCatInventorySettings::ProjectDefaultQuantityStackCapacity)
+		{
+			return LegacyStackCapacity > 0 ? LegacyStackCapacity : MAX_int32;
+		}
+		return InventoryStackLimit;
+	}
+}
 
 // 库存 ID 读取流程：装备资产已经用 EquipmentDefinitionId 作为跨商店、背包和钓鱼的稳定钥匙，库存目录直接复用它。
 FName UCatEquipmentDefinition::GetInventoryDefinitionId() const
@@ -39,7 +60,7 @@ TSubclassOf<UCatInventoryItemInstance> UCatEquipmentDefinition::GetPreferredInst
 	return UCatEquipmentInventoryItemInstance::StaticClass();
 }
 
-// 装备堆叠上限读取流程：显式 MaxStackSize 优先；非数量物一格一件，数量物未显式配置时使用项目默认堆叠容量。
+// 装备堆叠上限读取流程：显式 MaxStackSize 优先；非数量物一格一件，数量物未显式配置时使用库存项目默认堆叠容量。
 int32 UCatEquipmentDefinition::GetMaxStackCount() const
 {
 	if (MaxStackSize > 0)
@@ -50,9 +71,7 @@ int32 UCatEquipmentDefinition::GetMaxStackCount() const
 	{
 		return 1;
 	}
-	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-	const int32 ConfiguredLimit = Settings ? Settings->InventoryQuantityStackCapacity : 0;
-	return ConfiguredLimit > 0 ? ConfiguredLimit : MAX_int32;
+	return ResolveDefaultInventoryQuantityStackLimit();
 }
 
 // 定义检查流程：验证总 gate、身份、类别、功能路线和 Use 库存影响策略；装配类要求槽位，部署型要求 Actor 类，Rod 还要具备耐久和三组锚点，Chum 还必须给出服务器读取的三轴增量。

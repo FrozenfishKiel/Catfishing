@@ -38,3 +38,22 @@ UCatInventoryItemDefinition* UCatInventorySettings::FindRuntimeDefinition(const 
 
 	return Match;
 }
+
+// 玩家随身容量读取流程：只把配置值夹到非负；旧 Equipment 覆盖逻辑留在迁移适配层，库存设置本身不反向依赖 Equipment。
+int32 UCatInventorySettings::GetPlayerInventorySlotCapacity() const
+{
+	return FMath::Max(0, PlayerInventorySlotCapacity);
+}
+
+// 默认堆叠配置读取流程：保留 0 作为“不设硬上限”的原始配置语义，调用方需要有效容量时走 GetDefaultQuantityStackLimit。
+int32 UCatInventorySettings::GetDefaultQuantityStackCapacity() const
+{
+	return FMath::Max(0, DefaultQuantityStackCapacity);
+}
+
+// 默认堆叠上限读取流程：正数直接作为单格上限，0 统一提升为 MAX_int32，避免各调用方重复解释 0 的含义。
+int32 UCatInventorySettings::GetDefaultQuantityStackLimit() const
+{
+	const int32 ConfiguredCapacity = GetDefaultQuantityStackCapacity();
+	return ConfiguredCapacity > 0 ? ConfiguredCapacity : MAX_int32;
+}
