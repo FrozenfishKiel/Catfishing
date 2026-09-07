@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include <limits>
+
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 #include "Character/CatCharacter.h"
@@ -8,6 +10,8 @@
 #include "Engine/StaticMesh.h"
 #include "Engine/StaticMeshActor.h"
 #include "GameFramework/PlayerState.h"
+#include "GameFramework/PlayerController.h"
+#include "Equipment/CatEquipmentDefinition.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
@@ -40,9 +44,9 @@ namespace
 		S.CatAction = ECatFightCatAction::Pull;
 		return S;
 	}
-	void AcceptStep(FCatFightSimulationState& S, const FCatFightStepResult& R, double Dt)
+	void AcceptStep(FCatFightSimulationState& S, const FCatFightStepResult& R)
 	{
-		S.FishVelocityCentimetersPerSecond = (R.ProposedFishWorldPosition - S.FishWorldPosition) / Dt;
+		S.FishVelocityCentimetersPerSecond = R.ResolvedFishVelocityCentimetersPerSecond;
 		S.FishWorldPosition = R.ProposedFishWorldPosition;
 		S.LineLengthCentimeters = R.LineLengthCentimeters;
 	}
@@ -81,7 +85,7 @@ bool FCatFishingCommonForceTest::RunTest(const FString& Parameters)
 		const auto Step = FCatFishingFightSimulator::Step(C, WeakState, Rod, FVector::ForwardVector);
 		if (!TestTrue(TEXT("continuous weak-fish reel solves"), Step.bSucceeded)) return false;
 		TestTrue(TEXT("reel never exceeds capacity"), Step.LineTensionNewtons <= 50.0 + 1e-5);
-		AcceptStep(WeakState, Step, C.FixedStepSeconds);
+		AcceptStep(WeakState, Step);
 	}
 	TestTrue(TEXT("finite reel really retrieves weak fish over time"), WeakState.FishWorldPosition.X < 300.0);
 	auto FinalState = S;
@@ -120,7 +124,7 @@ bool FCatFishingActualEndpointTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("desired movement does not change the physical endpoint"), Blocked.ProposedFishWorldPosition.Equals(Still.ProposedFishWorldPosition, 1e-6));
 		TestEqual(TEXT("blocked movement does no movement work"), Blocked.CatMovementStaminaDrain, 0.0);
 		TestTrue(TEXT("line cannot grow indefinitely while cat is blocked"), Blocked.StraightLineDistanceCentimeters <= S.LineLengthCentimeters + 1e-6);
-		AcceptStep(S, Blocked, C.FixedStepSeconds);
+		AcceptStep(S, Blocked);
 	}
 	Rod.RodTipWorldPosition.X = -20.0;
 	Rod.CarrierVelocityCentimetersPerSecond = FVector(-400.0, 0.0, 0.0);
@@ -150,7 +154,7 @@ bool FCatFishingFishInertiaTest::RunTest(const FString& Parameters)
 		{
 			const auto Step = FCatFishingFightSimulator::Step(C, S, Rod, FVector::ForwardVector);
 			TestEqual(TEXT("free spool has no line reaction"), Step.LineTensionNewtons, 0.0);
-			AcceptStep(S, Step, Dt);
+			AcceptStep(S, Step);
 		}
 		TestEqual(TEXT("weak fish approaches its configured free speed"), S.FishVelocityCentimetersPerSecond.X, 75.0, 0.01);
 		const auto Reversed = FCatFishingFightSimulator::Step(C, S, Rod, -FVector::ForwardVector);
@@ -232,6 +236,10 @@ bool FCatFishingMovementReplayTest::RunTest(const FString& Parameters)
 	const FVector BlockedPosition = Cat->GetActorLocation();
 	for (int32 I = 0; I < 100; ++I) Movement->PerformMovement(0.05f);
 	TestTrue(TEXT("blocked traction does not accumulate phantom translation"), Cat->GetActorLocation().Equals(BlockedPosition, 0.1));
+	const double ForwardTravel = Movement->GetExternalTractionTravelLimit(FVector::ForwardVector, 20.0);
+	TestTrue(TEXT("wall contact removes predicted carrier travel"), ForwardTravel < 0.2);
+	TestEqual(TEXT("collision query does not move the body"), Cat->GetActorLocation(), BlockedPosition);
+	TestEqual(TEXT("leaving the wall is not blocked by the old contact"), Movement->GetExternalTractionTravelLimit(-FVector::ForwardVector, 20.0), 20.0);
 	return !HasAnyErrors();
 }
 
@@ -319,6 +327,8 @@ bool FCatFishingSteadyTractionTest::RunTest(const FString& Parameters)
 				Rod.RodTipWorldPosition = Cat->GetActorLocation();
 				Rod.RodTipWorldPosition.Z = 0.0; // 固定握持偏移使测试鱼线保持水平。
 				Rod.CarrierVelocityCentimetersPerSecond = Movement->Velocity;
+				Rod.RodTipVelocityCentimetersPerSecond = Movement->Velocity;
+				Rod.CarrierTravelLimitCentimeters = Movement->GetExternalTractionTravelLimit(FVector::ForwardVector, 20.0);
 				const auto Step = FCatFishingFightSimulator::Step(C, S, Rod, FVector::ForwardVector);
 				if (!TestTrue(TEXT("constant fish thrust solves against the actual moved endpoint"), Step.bSucceeded)) return false;
 				TestTrue(TEXT("even a tiny positive continuous acceleration has a nonzero speed limit"),
@@ -328,7 +338,7 @@ bool FCatFishingSteadyTractionTest::RunTest(const FString& Parameters)
 				Traction.SpeedLimitCentimetersPerSecond = Step.CarrierTargetPullSpeedCentimetersPerSecond;
 				Traction.bActive = Step.bUseContinuousCarrierTraction;
 				Movement->SetExternalTraction(Cat, Traction);
-				AcceptStep(S, Step, C.FixedStepSeconds);
+				AcceptStep(S, Step);
 				if (Frame >= Rate * 15)
 				{
 					MinTension = FMath::Min(MinTension, Step.LineTensionNewtons);
@@ -388,6 +398,155 @@ bool FCatFishingRodMovementOrderTest::RunTest(const FString& Parameters)
 			Rod->GetGripWorldTransform().GetLocation().Equals(Cat->GetActorLocation() + GripOffset, 0.001))) return false;
 	}
 	TestTrue(TEXT("the real world loop actually dragged the character"), Cat->GetActorLocation().X > 80.0);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingShortLineTractionTest,
+	"Catfishing.Unit.Fishing.Runtime.ShortElevatedLineKeepsLoadWhileBodyAndRodMove",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingShortLineTractionTest::RunTest(const FString& Parameters)
+{
+	const auto* Definition = LoadObject<UCatEquipmentDefinition>(nullptr, TEXT("/Game/Catfishing/Data/Equipment/Equip_Rod_StarterT1.Equip_Rod_StarterT1"));
+	if (!TestNotNull(TEXT("formal rod anchor calibration is available"), Definition)) return false;
+	AddInfo(FString::Printf(TEXT("FormalTip=%s FormalGrip=%s"), *Definition->RodTipLocalTransform.ToString(), *Definition->GripLocalTransform.ToString()));
+	for (const double FishMass : {5.535, 15.0})
+	for (const int32 Rate : {20, 60, 120})
+	{
+		FTestWorldWrapper Wrapper;
+		if (!Wrapper.CreateTestWorld(EWorldType::Game)) return false;
+		UWorld* World = Wrapper.GetTestWorld();
+		auto* Cat = World->SpawnActor<ACatCharacter>();
+		auto* Controller = World->SpawnActor<APlayerController>();
+		Controller->Possess(Cat);
+		Controller->SetControlRotation(FRotator(-25.38, 290.63, 0));
+		auto* Player = World->SpawnActor<APlayerState>();
+		Cat->SetPlayerState(Player);
+		auto* Movement = CastChecked<UCatCharacterMovementComponent>(Cat->GetCharacterMovement());
+		Movement->bRunPhysicsWithNoController = true;
+		auto* Floor = World->SpawnActor<AStaticMeshActor>();
+		Floor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Movable);
+		Floor->GetStaticMeshComponent()->SetStaticMesh(LoadObject<UStaticMesh>(nullptr, TEXT("/Engine/BasicShapes/Cube.Cube")));
+		Floor->GetStaticMeshComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		Floor->GetStaticMeshComponent()->SetCollisionResponseToAllChannels(ECR_Block);
+		Floor->SetActorTransform(FTransform(FRotator::ZeroRotator, FVector(0, 0, -140), FVector(100, 100, 1)));
+		Movement->SetMovementMode(MOVE_Walking);
+		auto* Rod = World->SpawnActor<ACatFishingRodActor>();
+		Rod->ConfigureCanonicalAnchorsFromAuthority(Definition->RodTipLocalTransform, Definition->StandLocalTransform, Definition->GripLocalTransform);
+		Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("ShortLineRod"), TEXT("Skin"), Player, Player, true, false);
+		Rod->RefreshHeldTransformFromAuthority();
+		auto C = ForceConfig();
+		C.FishMassKilograms = FishMass;
+		C.FishStrength = FishMass * 10.0;
+		C.FishCalmSpeedCentimetersPerSecond = 95;
+		C.FishStruggleSpeedCentimetersPerSecond = 180;
+		auto S = ForceState();
+		S.CatAction = ECatFightCatAction::None;
+		S.FishWorldPosition = Rod->GetRodTipWorldTransform().GetLocation() + FVector(-55.8, -100, -148.88);
+		S.LineLengthCentimeters = FVector::Distance(S.FishWorldPosition, Rod->GetRodTipWorldTransform().GetLocation());
+		double MinLoad = TNumericLimits<double>::Max(), MaxLoad = 0, MinSpeed = TNumericLimits<double>::Max(), MaxSpeed = 0;
+		int32 UnloadedSteps = 0;
+		for (int32 Frame = 0; Frame < Rate * 6; ++Frame)
+		{
+			if (Frame % (Rate / 20) == 0)
+			{
+				FCatFightRodConstraintInput Input;
+				Input.bRodHeld = true;
+				Input.RodTipWorldPosition = Rod->GetRodTipWorldTransform().GetLocation();
+				Input.RodForwardWorld = Rod->GetAuthoritativeRodForwardVector();
+				Input.RodTipVelocityCentimetersPerSecond = Rod->GetAuthoritativeRodTipVelocity();
+				Input.CarrierVelocityCentimetersPerSecond = Movement->Velocity;
+				Rod->GetRotationPredictionFromAuthority(C.FixedStepSeconds, Input.RodRotationPrediction);
+				Input.CarrierTravelLimitCentimeters = Movement->GetExternalTractionTravelLimit(
+					(S.FishWorldPosition - Input.RodTipWorldPosition).GetSafeNormal2D(), 20.0);
+				const FTransform PoseBeforePrediction = Rod->GetActorTransform();
+				const auto EffortBeforePrediction = Rod->GetAuthoritativeRotationEffortSnapshot();
+				const auto Step = FCatFishingFightSimulator::Step(C, S, Input, FVector(0, -1, 0));
+				if (!TestTrue(TEXT("short elevated fight solves"), Step.bSucceeded)) return false;
+				if (Frame == Rate * 2)
+				{
+					FCatFishingRodRotationPrediction After;
+					TestTrue(TEXT("held rod supplies the shared rotation prediction"), Step.Trace.bRodRotationPredicted
+						&& Rod->GetRotationPredictionFromAuthority(C.FixedStepSeconds, After));
+					TestTrue(TEXT("candidate tensions do not mutate the live pose or smoothing history"),
+						Rod->GetActorTransform().Equals(PoseBeforePrediction)
+						&& After.Input.CurrentAim.Equals(Input.RodRotationPrediction.Input.CurrentAim)
+						&& After.Input.PreviousSmoothedFishPullStrengthMeters.Equals(Input.RodRotationPrediction.Input.PreviousSmoothedFishPullStrengthMeters));
+					const auto& EffortAfter = Rod->GetAuthoritativeRotationEffortSnapshot();
+					TestTrue(TEXT("prediction cannot accumulate or consume player effort"), EffortAfter.Epoch == EffortBeforePrediction.Epoch
+						&& EffortAfter.ExertionSquaredSeconds == EffortBeforePrediction.ExertionSquaredSeconds
+						&& EffortAfter.PositiveWorkRadians == EffortBeforePrediction.PositiveWorkRadians
+						&& EffortAfter.IntegratedSeconds == EffortBeforePrediction.IntegratedSeconds);
+				}
+				const FVector Axis = (Step.ProposedFishWorldPosition - Input.RodTipWorldPosition).GetSafeNormal();
+				Rod->SetCarrierConstraintFromAuthority(Axis, Step.CarrierPullAccelerationCentimetersPerSecondSquared,
+					Step.CarrierTargetPullSpeedCentimetersPerSecond, Step.NormalizedTension, Step.ConstraintErrorCentimeters, true,
+					Step.LineTensionNewtons / C.ForcePerStrengthNewtons * C.RodPhysicsLengthCentimeters / 100,
+					C.PrimaryOperatorCatStrength, Axis, Step.CarrierBrakingDecelerationCentimetersPerSecondSquared, Step.bUseContinuousCarrierTraction);
+				AcceptStep(S, Step);
+				if (Frame >= Rate * 2)
+				{
+					MinLoad = FMath::Min(MinLoad, Step.LineTensionNewtons);
+					MaxLoad = FMath::Max(MaxLoad, Step.LineTensionNewtons);
+					UnloadedSteps += Step.LineTensionNewtons < 0.01 ? 1 : 0;
+				}
+			}
+			Movement->PerformMovement(1.0f / Rate);
+			Rod->RefreshHeldTransformFromAuthority(1.0 / Rate);
+			if (Frame >= Rate * 2)
+			{
+				MinSpeed = FMath::Min(MinSpeed, Movement->Velocity.Size2D());
+				MaxSpeed = FMath::Max(MaxSpeed, Movement->Velocity.Size2D());
+			}
+		}
+		AddInfo(FString::Printf(TEXT("FishMassKg=%.3f FPS=%d ShortLineMinN=%.3f MaxN=%.3f UnloadedSteps=%d MinSpeedCmS=%.3f MaxSpeedCmS=%.3f"),
+			FishMass, Rate, MinLoad, MaxLoad, UnloadedSteps, MinSpeed, MaxSpeed));
+		TestEqual(TEXT("steady outward fight has no periodic complete unloading"), UnloadedSteps, 0);
+		TestTrue(TEXT("loaded body keeps moving"), MinSpeed > 5.0);
+		TestTrue(TEXT("steady load and speed settle without repeated kicks"), MaxLoad - MinLoad < 5.0 && MaxSpeed - MinSpeed < 10.0);
+	}
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingJointMotionContractTest,
+	"Catfishing.Unit.Fishing.Simulation.JointMotionSeparatesPositionRepairAndHonorsCollisionAndSlack",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingJointMotionContractTest::RunTest(const FString& Parameters)
+{
+	auto C = ForceConfig();
+	auto S = ForceState();
+	S.CatAction = ECatFightCatAction::None;
+	FCatFightRodConstraintInput Rod;
+	Rod.bRodHeld = true;
+	Rod.CarrierTravelLimitCentimeters = 20.0;
+	const auto Moving = FCatFishingFightSimulator::Step(C, S, Rod, FVector::ForwardVector);
+	TestTrue(TEXT("both bodies can accelerate under a shared finite load"), Moving.bSucceeded
+		&& Moving.LineTensionNewtons > 50.0 && Moving.LineTensionNewtons < 75.0
+		&& Moving.ResolvedFishVelocityCentimetersPerSecond.X > 0.0 && Moving.CarrierPullAccelerationCentimetersPerSecondSquared > 0.0);
+	Rod.CarrierTravelLimitCentimeters = 0.0;
+	const auto Wall = FCatFishingFightSimulator::Step(C, S, Rod, FVector::ForwardVector);
+	TestEqual(TEXT("a blocked body cannot lend fictitious displacement to the fish"), Wall.ProposedFishWorldPosition.X, S.FishWorldPosition.X, 1e-6);
+	TestEqual(TEXT("wall support balances outward thrust"), Wall.LineTensionNewtons, 75.0, 1e-6);
+	Rod.CarrierTravelLimitCentimeters = 20.0;
+	S.FishWorldPosition.X += 100.0;
+	const auto Repaired = FCatFishingFightSimulator::Step(C, S, Rod, FVector::ForwardVector);
+	TestTrue(TEXT("past position error is repaired toward the line"), Repaired.ProposedFishWorldPosition.X < S.FishWorldPosition.X);
+	TestTrue(TEXT("position repair cannot reverse outward momentum"), Repaired.ResolvedFishVelocityCentimetersPerSecond.X > 0.0);
+	TestEqual(TEXT("old position error cannot become a new force spike"), Repaired.LineTensionNewtons, Moving.LineTensionNewtons, 1e-6);
+	S = ForceState(); S.CatAction = ECatFightCatAction::None;
+	S.LineLengthCentimeters += 100.0;
+	const auto Slack = FCatFishingFightSimulator::Step(C, S, Rod, FVector::ForwardVector);
+	TestEqual(TEXT("real slack has no minimum or held-over line force"), Slack.LineTensionNewtons, 0.0);
+	S = ForceState(); S.CatAction = ECatFightCatAction::Slack;
+	const auto Released = FCatFishingFightSimulator::Step(C, S, Rod, FVector::ForwardVector);
+	TestEqual(TEXT("free spool releases the common physical load"), Released.LineTensionNewtons, 0.0);
+	Rod.CarrierTravelLimitCentimeters = std::numeric_limits<double>::quiet_NaN();
+	TestFalse(TEXT("invalid collision feedback is rejected"), FCatFishingFightSimulator::Step(C, S, Rod, FVector::ForwardVector).bSucceeded);
+	Rod.CarrierTravelLimitCentimeters = 20.0;
+	Rod.RodRotationPrediction.bValid = true;
+	Rod.RodRotationPrediction.HolderWorldPosition.X = std::numeric_limits<double>::quiet_NaN();
+	TestFalse(TEXT("invalid rotation geometry cannot silently release the line"), FCatFishingFightSimulator::Step(C, S, Rod, FVector::ForwardVector).bSucceeded);
 	return !HasAnyErrors();
 }
 

@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Fishing/CatFishingTypes.h"
+#include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 
 /** 单步终局；猫力竭先进入持续拖拽，由真实水深确认落水，不直接结束本场。 */
 enum class ECatFightStepOutcome : uint8
@@ -99,7 +100,7 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double StrongConfrontationConfirmationSeconds = 0.2;
 	double AngleStrengthExponent = 1.0;
 	double MinimumRodLeverageMultiplier = 0.4;
-	/** 鱼端和猫端各自每秒允许承担的最大约束速度修正。 */
+	/** 历史鱼位置误差的修正速度上限；猫端牵引速度仍沿用此配置上限。 */
 	double MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 160.0;
 	double MaximumLineLengthCentimeters = 0.0;
 	double RodDurability = TNumericLimits<double>::Max();
@@ -116,6 +117,9 @@ struct CATFISHING_API FCatFightRodConstraintInput
 	FVector RodTipVelocityCentimetersPerSecond = FVector::ZeroVector;
 	FVector CarrierVelocityCentimetersPerSecond = FVector::ZeroVector;
 	FVector CarrierDesiredVelocityCentimetersPerSecond = FVector::ZeroVector;
+	/** CMC 碰撞探测允许的本步向鱼移动距离（cm）；负值表示该端固定，不预测身体位移。 */
+	double CarrierTravelLimitCentimeters = -1.0;
+	FCatFishingRodRotationPrediction RodRotationPrediction;
 	/** 从权威转矩积分采集本步用力平方时间和真实正功转角；不含身体平移。 */
 	double CatRodExertionSquaredSeconds = 0.0;
 	double CatRodPositiveWorkRadians = 0.0;
@@ -147,7 +151,7 @@ struct CATFISHING_API FCatFightSimulationState
  *   LineLoad = max(Alignment, 0)^AngleStrengthExponent
  *   Force = Strength * ForcePerStrengthNewtons
  *   a = 100 * Force / Mass                         // m/s² 转 UE cm/s²
- *   T = RequiredTension(ResolvedLineLength) * FishCorrection / FullCorrection
+ *   T = SolveUnilateralConstraint(FishEnd(T), CollisionBoundedRodEnd(T), LineLength)
  *   aCarrier = 100 * (T * HorizontalLineFactor - CatForce) / CombinedCatMass
  */
 struct CATFISHING_API FCatFightSimulationTrace
@@ -172,11 +176,15 @@ struct CATFISHING_API FCatFightSimulationTrace
 	double FishSpeedCapCentimetersPerSecond = 0.0;
 	double SwimSpeedCentimetersPerSecond = 0.0;
 	double MobilityCentimetersPerNewton = 0.0;
-	double FullConstraintCorrectionCentimeters = 0.0;
+	double ExistingPositionErrorCentimeters = 0.0;
 	double RequiredTensionAtCurrentLengthNewtons = 0.0;
 	double RequiredTensionAtPaidOutLengthNewtons = 0.0;
 	double ReelForceLimitNewtons = 0.0;
 	double FishCorrectionCentimeters = 0.0;
+	double FishPositionCorrectionCentimeters = 0.0;
+	double CarrierTravelLimitCentimeters = -1.0;
+	FVector ConstraintRodEndWorldPosition = FVector::ZeroVector;
+	bool bRodRotationPredicted = false;
 	double LineTensionNewtons = 0.0;
 	double FishLineForceNewtons = 0.0;
 	double CatLineForceNewtons = 0.0;
@@ -253,6 +261,10 @@ struct CATFISHING_API FCatFightStepResult
 	/** 本固定步新增的鱼竿磨损；由 Session 写回同一装备实例。 */
 	double RodWearDelta = 0.0;
 	FVector ProposedFishWorldPosition = FVector::ZeroVector;
+	/** 受力积分的鱼速度；几何纠偏不注入惯性，地形碰撞再修正该速度。 */
+	FVector ResolvedFishVelocityCentimetersPerSecond = FVector::ZeroVector;
+	/** 本步历史位置误差修正；不计入惯性或鱼主动做功。 */
+	FVector FishPositionCorrectionWorldDisplacement = FVector::ZeroVector;
 	/** 本步实际提交的游动努力方向；地形反馈更新下步转向时不能改写本步费用。 */
 	FVector FishEffortDirection = FVector::ZeroVector;
 	double FishLineAlignment = 0.0;
@@ -264,7 +276,7 @@ struct CATFISHING_API FCatFightStepResult
 	double CatDriveAccelerationCentimetersPerSecondSquared = 0.0;
 	double FishDriveAccelerationCentimetersPerSecondSquared = 0.0;
 	double NetFishPullAccelerationCentimetersPerSecondSquared = 0.0;
-	/** 鱼端约束冲量除以步长所得的共同张力，供猫、杆及负载观察共用。 */
+	/** 双端运动约束求出的共同张力，不含历史位置纠偏；供猫、杆及负载观察共用。 */
 	double LineTensionNewtons = 0.0;
 	int32 ActiveHelperCount = 0;
 	/** 猫端向鱼速度上限；实际速度按共同张力产生的加速度逐步接近。 */

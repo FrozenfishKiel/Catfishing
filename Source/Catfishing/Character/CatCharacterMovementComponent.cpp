@@ -1,6 +1,7 @@
 #include "Character/CatCharacterMovementComponent.h"
 
 #include "GameFramework/Character.h"
+#include "Components/PrimitiveComponent.h"
 #include "Engine/World.h"
 #include "Logging/CatLog.h"
 #include "Fishing/Debug/CatFishingMotionDiagnostics.h"
@@ -43,6 +44,27 @@ void UCatCharacterMovementComponent::RestoreTractionForSavedMove(const FCatExter
 {
 	MovementTraction = Input;
 	bUseSavedTraction = true;
+}
+
+double UCatCharacterMovementComponent::GetExternalTractionTravelLimit(const FVector& Direction, const double MaximumDistance) const
+{
+	if (!HasValidData() || !UpdatedPrimitive || !GetWorld() || MovementMode == MOVE_None || UpdatedPrimitive->IsSimulatingPhysics()
+		|| HasAnimRootMotion() || CurrentRootMotion.HasOverrideVelocity()
+		|| !FMath::IsFinite(MaximumDistance) || MaximumDistance <= 0.0) return 0.0;
+	const FVector Axis = ConstrainDirectionToPlane(Direction.GetSafeNormal2D());
+	if (Axis.IsNearlyZero()) return 0.0;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(FishingTraction), false, CharacterOwner);
+	FCollisionResponseParams Response;
+	InitCollisionParams(Params, Response);
+	FHitResult Hit;
+	const FVector Start = UpdatedComponent->GetComponentLocation();
+	const bool bBlocked = GetWorld()->SweepSingleByChannel(Hit, Start, Start + Axis * MaximumDistance,
+		UpdatedComponent->GetComponentQuat(), UpdatedPrimitive->GetCollisionObjectType(),
+		UpdatedPrimitive->GetCollisionShape(), Params, Response);
+	// 可行走地面仍由 CMC 的坡面/台阶逻辑处理；探测绝不移动角色或触发重叠事件。
+	if (bBlocked && !IsWalkable(Hit) && FVector::DotProduct(Hit.Normal, Axis) < -0.001)
+		return FMath::Max(0.0, MaximumDistance * Hit.Time - 0.1);
+	return MaximumDistance;
 }
 
 FNetworkPredictionData_Client* UCatCharacterMovementComponent::GetPredictionData_Client() const

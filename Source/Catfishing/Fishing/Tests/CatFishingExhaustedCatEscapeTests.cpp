@@ -75,7 +75,7 @@ bool FCatFishingExhaustedCatRushTest::RunTest(const FString& Parameters)
 		Constraint.CarrierVelocityCentimetersPerSecond.X = FMath::Min(360.0,
 			Constraint.CarrierVelocityCentimetersPerSecond.X + Step.CarrierPullAccelerationCentimetersPerSecondSquared * Settings.FixedStepSeconds);
 		Constraint.RodTipWorldPosition += Constraint.CarrierVelocityCentimetersPerSecond * Settings.FixedStepSeconds;
-		Current.FishVelocityCentimetersPerSecond = (Step.ProposedFishWorldPosition - Current.FishWorldPosition) / Settings.FixedStepSeconds;
+		Current.FishVelocityCentimetersPerSecond = Step.ResolvedFishVelocityCentimetersPerSecond;
 		Current.FishWorldPosition = Step.ProposedFishWorldPosition;
 	}
 	TestTrue(TEXT("即使小鱼也能快速拖动无力的猫"), FastestPull >= 350.0);

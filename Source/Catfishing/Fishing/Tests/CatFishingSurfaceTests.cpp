@@ -207,6 +207,49 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("already exhausted fish follows physical line endpoint movement onto shore"), DeadTow.bSucceeded && bJustBeached);
 	}
 
+	// 猫端本步正背离鱼移动：鱼的新位置和旧竿尖会呈现松线，但联合端点仍在承载。
+	{
+		auto* Runner = NewObject<UCatFishingFightRunner>(Session);
+		Runner->Session = Session;
+		Runner->WaterRegion = Region->GetWaterRegionHandle();
+		Runner->Config.FixedStepSeconds = 0.05;
+		Runner->Config.PrimaryOperatorCatStrength = 50.0;
+		Runner->Config.PrimaryOperatorMassKilograms = 5.0;
+		Runner->Config.FishMassKilograms = 3.0;
+		Runner->Config.FishStrength = 75.0;
+		Runner->Config.ReelSpeedCentimetersPerSecond = 80.0;
+		Runner->Config.RodDurability = 1000.0;
+		Runner->Config.MaximumLineLengthCentimeters = 1000.0;
+		Runner->Config.CatStaminaMaximum = 100.0;
+		Runner->Config.FishStruggleSpeedCentimetersPerSecond = 75.0;
+		Runner->State.CatStamina = Runner->State.FishStamina = 100.0;
+		Runner->State.MotionIntent = ECatFishMotionIntent::StrugglingOutward;
+		Runner->State.FishWorldPosition = FVector(500, 500, 0);
+		FCatFightRodConstraintInput Rod;
+		Rod.bRodHeld = true;
+		Rod.RodTipWorldPosition = FVector(0, 500, 150);
+		Rod.CarrierVelocityCentimetersPerSecond = Rod.RodTipVelocityCentimetersPerSecond = FVector(-100, 0, 0);
+		Rod.CarrierTravelLimitCentimeters = 20.0;
+		Runner->State.LineLengthCentimeters = FVector::Distance(Rod.RodTipWorldPosition, Runner->State.FishWorldPosition);
+		if (!TestTrue(TEXT("moving endpoint surface fixture is configured"), Runner->Config.IsValid())) return false;
+		auto Step = FCatFishingFightSimulator::Step(Runner->Config, Runner->State, Rod, FVector::ForwardVector);
+		if (!TestTrue(TEXT("moving endpoint produces load despite old-tip geometric slack"), Step.bSucceeded
+			&& Step.LineTensionNewtons > 0.0 && Step.SlackLineLengthCentimeters > 0.1)) return false;
+		const auto Predicted = Step;
+		FCatWaterSpatialResult Water;
+		bool bJustBeached = false;
+		FVector Normal;
+		AActor* Surface = nullptr;
+		FCatFishingRodResistanceResult RotationResistance;
+		const auto Motion = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, Water, bJustBeached, Normal, Surface, RotationResistance);
+		TestTrue(TEXT("unchanged water candidate delivers shared load to the rod"), Motion.bSucceeded
+			&& Motion.FishWorldPosition.Equals(Predicted.ProposedFishWorldPosition, 0.001)
+			&& Step.bLineTaut && RotationResistance.MaximumFishTorqueStrengthMeters > 0.0);
+		TestEqual(TEXT("surface consumer preserves joint tension"), Step.LineTensionNewtons, Predicted.LineTensionNewtons);
+		TestTrue(TEXT("surface consumer preserves physical velocity without position-derived inertia"),
+			Step.ResolvedFishVelocityCentimetersPerSecond.Equals(Predicted.ResolvedFishVelocityCentimetersPerSecond, 1e-6));
+	}
+
 	// 先用真实收线把活鱼拖进烘焙轮廓与碰撞岸坡的间隙，再放线连续游回湖内。
 	// 单次最近岸点查询成功不能证明可恢复：每步仍须保留鱼自己朝水里的小位移。
 	UCatFishingFightRunner* RecoveryRunner = NewObject<UCatFishingFightRunner>(Session);

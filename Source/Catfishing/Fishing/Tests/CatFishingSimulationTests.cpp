@@ -885,8 +885,8 @@ bool FCatFishingExhaustedReelWithoutCatStaminaTest::RunTest(const FString& Param
 		TestTrue(TEXT("双方零体力时持续按住仍每步拉近"), Step.bSucceeded
 			&& Step.ProposedFishWorldPosition.X < State.FishWorldPosition.X);
 		State.LineLengthCentimeters = Step.LineLengthCentimeters;
-		State.FishVelocityCentimetersPerSecond = (Step.ProposedFishWorldPosition - State.FishWorldPosition) / Config.FixedStepSeconds;
-				State.FishWorldPosition = Step.ProposedFishWorldPosition;
+		State.FishVelocityCentimetersPerSecond = Step.ResolvedFishVelocityCentimetersPerSecond;
+		State.FishWorldPosition = Step.ProposedFishWorldPosition;
 	}
 	const double ReelingLineLength = State.LineLengthCentimeters;
 	for (const auto Action : {ECatFightCatAction::None, ECatFightCatAction::Slack})
@@ -996,7 +996,7 @@ bool FCatFishingStrongFishContinuousFightTest::RunTest(const FString& Parameters
 				Rod.CarrierVelocityCentimetersPerSecond.X = FMath::Min(160.0,
 					Rod.CarrierVelocityCentimetersPerSecond.X + Step.CarrierPullAccelerationCentimetersPerSecondSquared * Config.FixedStepSeconds);
 				Rod.RodTipWorldPosition += Rod.CarrierVelocityCentimetersPerSecond * Config.FixedStepSeconds;
-				State.FishVelocityCentimetersPerSecond = (Step.ProposedFishWorldPosition - State.FishWorldPosition) / Config.FixedStepSeconds;
+				State.FishVelocityCentimetersPerSecond = Step.ResolvedFishVelocityCentimetersPerSecond;
 				State.FishWorldPosition = Step.ProposedFishWorldPosition;
 				State.LineLengthCentimeters = Step.LineLengthCentimeters;
 				State.CatStamina -= Step.CatStaminaDrain;
@@ -1131,7 +1131,7 @@ bool FCatFishingSimulationTraceTest::RunTest(const FString& Parameters)
 		Step.Trace.CombinedCatMassKilograms, Config.GetCombinedCatMass(), 1e-9);
 	TestTrue(TEXT("trace records finite geometry and tension intermediates"),
 		FMath::IsFinite(Step.Trace.DistanceBeforeCentimeters)
-		&& FMath::IsFinite(Step.Trace.FullConstraintCorrectionCentimeters)
+		&& FMath::IsFinite(Step.Trace.ExistingPositionErrorCentimeters)
 		&& FMath::IsFinite(Step.Trace.RequiredTensionAtCurrentLengthNewtons)
 		&& FMath::IsFinite(Step.Trace.LineTensionNewtons));
 	TestEqual(TEXT("trace line load uses the result line load"),

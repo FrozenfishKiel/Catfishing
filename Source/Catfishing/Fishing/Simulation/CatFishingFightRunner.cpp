@@ -4,6 +4,7 @@
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
+#include "Character/CatCharacterMovementComponent.h"
 #include "Condition/CatConditionComponent.h"
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
@@ -682,7 +683,8 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 		- RodConstraint.CarrierVelocityCentimetersPerSecond) * Config.FixedStepSeconds;
 	Intent.ActualReelDistanceCentimeters = Step.ActualReelDistanceCentimeters;
 	Intent.ReelConstraintDistanceCentimeters = State.CatAction == ECatFightCatAction::Pull
-		&& Step.CombinedCatStrength > UE_DOUBLE_SMALL_NUMBER ? Step.FishConstraintCorrectionCentimeters : 0.0;
+		&& Step.CombinedCatStrength > UE_DOUBLE_SMALL_NUMBER
+		? FMath::Max(0.0, Step.FishConstraintCorrectionCentimeters - Step.Trace.FishPositionCorrectionCentimeters) : 0.0;
 	Intent.bLineTaut = Step.bLineTaut;
 	const bool bCatHaulingFish = FCatFishFightMotionSolver::IsIntentionalLandwardHaul(Intent);
 	// 力竭鱼没有自主游动，所有候选位移都来自同一根鱼线，不再为它加活鱼的防甩杆力竭门槛。
@@ -789,7 +791,10 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 	// 地面落点只结算一次，不能随后被水面候选覆盖。坡面改变后的真实距离供复制和下一步共同使用。
 	Step.StraightLineDistanceCentimeters = FVector::Distance(RodConstraint.RodTipWorldPosition, Motion.FishWorldPosition);
 	Step.SlackLineLengthCentimeters = FMath::Max(0.0, Step.LineLengthCentimeters - Step.StraightLineDistanceCentimeters);
-	Step.bLineTaut = Step.SlackLineLengthCentimeters <= UE_DOUBLE_KINDA_SMALL_NUMBER;
+	// 求解输出包含双方同一时间步末的负载；只有地形确实改变候选落点，才按新几何撤销负载。
+	const bool bSurfaceChangedCandidate = !Motion.FishWorldPosition.Equals(Step.ProposedFishWorldPosition, 0.001);
+	Step.bLineTaut = (!bSurfaceChangedCandidate && Step.LineTensionNewtons > UE_DOUBLE_SMALL_NUMBER)
+		|| Step.SlackLineLengthCentimeters <= UE_DOUBLE_KINDA_SMALL_NUMBER;
 	if (!Step.bLineTaut)
 	{
 		Step.TensionCentimeters = 0.0;
@@ -812,6 +817,8 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 			Step.CarrierTargetPullSpeedCentimetersPerSecond = 0.0;
 		}
 	}
+	Step.ResolvedFishVelocityCentimetersPerSecond += (Motion.FishWorldPosition - Step.ProposedFishWorldPosition) / Config.FixedStepSeconds;
+	Step.ResolvedFishVelocityCentimetersPerSecond.Z = 0.0;
 	Step.ProposedFishWorldPosition = Motion.FishWorldPosition;
 	// 费用以最终线长/地形落点重新计算。仍只有 HandleFixedStep 随后向 ASC 和装备各写一次。
 	if (!FCatFishingFightSimulator::FinalizeResolvedStep(Config, State, RodConstraint, Step))
@@ -938,10 +945,19 @@ void UCatFishingFightRunner::HandleFixedStep()
 	RodConstraint.RodTipVelocityCentimetersPerSecond = Rod->GetAuthoritativeRodTipVelocity();
 	RodConstraint.CarrierVelocityCentimetersPerSecond = Rod->GetAuthoritativeHolderVelocity();
 	RodConstraint.bRodHeld = bRodHeld;
+	if (bRodHeld) Rod->GetRotationPredictionFromAuthority(Config.FixedStepSeconds, RodConstraint.RodRotationPrediction);
 	if (const ACatCharacter* PrimaryCharacter = FindPrimaryParticipant()
 		? FindPrimaryParticipant()->Character.Get() : nullptr)
 	{
 		const UCharacterMovementComponent* Movement = PrimaryCharacter->GetCharacterMovement();
+		if (const auto* CatMovement = Cast<UCatCharacterMovementComponent>(Movement); CatMovement && bRodHeld)
+		{
+			const FVector PullAxis = (State.FishWorldPosition - RodTip).GetSafeNormal2D();
+			const double MaximumTravel = FMath::Max(CatMovement->Velocity.Size2D(), FMath::Max(
+				Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond,
+				Config.FishStruggleSpeedCentimetersPerSecond * Config.ExhaustedCatEscapeSpeedMultiplier)) * Config.FixedStepSeconds;
+			RodConstraint.CarrierTravelLimitCentimeters = CatMovement->GetExternalTractionTravelLimit(PullAxis, MaximumTravel);
+		}
 		// 网络移动包在服务器更新 Acceleration，不会填充 Pawn 的本地 LastControlInputVector。
 		// 本地与远端统一读取 CharacterMovement 已接受的加速度，避免客户端后退意图丢失。
 		RodConstraint.CarrierDesiredVelocityCentimetersPerSecond = Movement && Movement->GetMaxAcceleration() > UE_SMALL_NUMBER
@@ -1088,7 +1104,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"CatForceN=%.3f FishThrustN=%.3f CombinedCatMassKg=%.3f "
 				"CatDriveAccelerationCmPerSec2=%.3f FishDriveAccelerationCmPerSec2=%.3f "
 				"FishSpeedCapCmPerSec=%.3f SwimSpeedCmPerSec=%.3f MobilityCmPerNewton=%.6f "
-				"FullCorrectionCm=%.3f RequiredTensionAtCurrentN=%.3f RequiredTensionAtPaidOutN=%.3f "
+				"ExistingPositionErrorCm=%.3f RequiredTensionAtCurrentN=%.3f RequiredTensionAtPaidOutN=%.3f "
 				"ReelForceLimitN=%.3f FishCorrectionCm=%.3f LineTensionN=%.3f "
 				"FishLineForceN=%.3f CatLineForceN=%.3f HorizontalLineFactor=%.5f "
 				"SignedCarrierAccelerationCmPerSec2=%.3f CarrierAccelerationCmPerSec2=%.3f "
@@ -1111,7 +1127,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Trace.FishDriveAccelerationCentimetersPerSecondSquared,
 			Trace.FishSpeedCapCentimetersPerSecond, Trace.SwimSpeedCentimetersPerSecond,
 			Trace.MobilityCentimetersPerNewton,
-			Trace.FullConstraintCorrectionCentimeters, Trace.RequiredTensionAtCurrentLengthNewtons,
+			Trace.ExistingPositionErrorCentimeters, Trace.RequiredTensionAtCurrentLengthNewtons,
 			Trace.RequiredTensionAtPaidOutLengthNewtons, Trace.ReelForceLimitNewtons,
 			Trace.FishCorrectionCentimeters, Trace.LineTensionNewtons,
 			Trace.FishLineForceNewtons, Trace.CatLineForceNewtons, Trace.HorizontalLineFactor,
@@ -1283,6 +1299,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"StepId=%llu Frame=%llu WorldTime=%.6f WorldGapSeconds=%.6f FixedStepSeconds=%.6f World=%s LocalRole=%d "
 				"Phase=%s RequestedPhase=%s ForcedEscape=%s Outcome=%s FishBefore=%s FishVelocityBeforeCmS=%s ResolvedFishVelocityCmS=%s "
 				"DesiredFishDirection=%s SteeringTarget=%s RetargetRemainingSeconds=%.4f BoundaryAvoidanceSeconds=%.4f "
+				"PositionCorrectionCm=%.4f CarrierTravelLimitCm=%.4f ConstraintRodEnd=%s RodRotationPredicted=%s "
 				"RodForward=%s RodTipVelocityCmS=%s HolderVelocityCmS=%s HolderInputVelocityCmS=%s FishStamina=%.4f CatStamina=%.4f"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
@@ -1318,9 +1335,12 @@ void UCatFishingFightRunner::HandleFixedStep()
 			*UEnum::GetValueAsString(State.MotionIntent), *UEnum::GetValueAsString(BehaviorMotionIntent),
 			bExhaustedCatEscape ? TEXT("true") : TEXT("false"), SimulationOutcomeName,
 			*State.FishWorldPosition.ToCompactString(), *State.FishVelocityCentimetersPerSecond.ToCompactString(),
-			*((Motion.FishWorldPosition - State.FishWorldPosition) / Config.FixedStepSeconds).ToCompactString(),
+			*Step.ResolvedFishVelocityCentimetersPerSecond.ToCompactString(),
 			*DesiredFishDirection.ToCompactString(), *SteeringState.TargetDirection.ToCompactString(),
 			SteeringState.RetargetSecondsRemaining, SteeringState.BoundaryAvoidanceSecondsRemaining,
+			Step.Trace.FishPositionCorrectionCentimeters, RodConstraint.CarrierTravelLimitCentimeters,
+			*Step.Trace.ConstraintRodEndWorldPosition.ToCompactString(),
+			Step.Trace.bRodRotationPredicted ? TEXT("true") : TEXT("false"),
 			*RodConstraint.RodForwardWorld.ToCompactString(), *RodConstraint.RodTipVelocityCentimetersPerSecond.ToCompactString(),
 			*RodConstraint.CarrierVelocityCentimetersPerSecond.ToCompactString(), *RodConstraint.CarrierDesiredVelocityCentimetersPerSecond.ToCompactString(),
 			State.FishStamina, State.CatStamina);
@@ -1388,9 +1408,10 @@ void UCatFishingFightRunner::HandleFixedStep()
 	State.LineLengthCentimeters = Step.LineLengthCentimeters;
 	State.AbsoluteRodWear = Step.AbsoluteRodWear;
 	State.StrongConfrontationBuildUpSeconds = Step.StrongConfrontationBuildUpSeconds;
-	// 地形/Actor 已实际执行的位移才可成为下一步速度；上岸/力竭切换不带入旧游动惯性。
+	// 保存受力积分速度，地形修正在 ResolveFishSurface 中反馈；几何纠偏不能变成下一步惯性。
 	State.FishVelocityCentimetersPerSecond = State.bFishExhausted || Step.Outcome != ECatFightStepOutcome::None
-		? FVector::ZeroVector : (Encounter->GetActorLocation() - State.FishWorldPosition) / Config.FixedStepSeconds;
+		? FVector::ZeroVector : Step.ResolvedFishVelocityCentimetersPerSecond
+			+ (Encounter->GetActorLocation() - Step.ProposedFishWorldPosition) / Config.FixedStepSeconds;
 	State.FishVelocityCentimetersPerSecond.Z = 0.0;
 	State.FishWorldPosition = Encounter->GetActorLocation();
 	// 把本步结果（含鱼竿磨损）、剩余体力与运动意图上报给 Session，由它决定是否切换阶段/终止会话。

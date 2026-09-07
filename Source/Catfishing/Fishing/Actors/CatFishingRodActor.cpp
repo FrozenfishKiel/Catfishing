@@ -465,8 +465,9 @@ void ACatFishingRodActor::PublishCarrierConstraintToMovement()
 	Movement->SetExternalTraction(this, Input);
 }
 
-bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSeconds)
+bool ACatFishingRodActor::GetRotationPredictionFromAuthority(const double DeltaSeconds, FCatFishingRodRotationPrediction& OutPrediction) const
 {
+	OutPrediction = {};
 	APawn* HolderPawn = GetHolderPawnFromAuthority();
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
 	if (!HasAuthority() || PresentationState.PoseMode != ECatFishingRodPoseMode::Held
@@ -487,12 +488,41 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 		return false;
 	}
 
-	const FVector PreviousTip = GetRodTipWorldTransform().GetLocation();
 	FRotator RequestedAimRotation = HolderPawn->GetController()
 		? HolderPawn->GetController()->GetControlRotation() : HolderPawn->GetActorRotation();
 	RequestedAimRotation.Pitch = FMath::ClampAngle(RequestedAimRotation.Pitch,
 		Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
 	RequestedAimRotation.Roll = 0.0;
+	FCatFishingRodRotationInput& RotationInput = OutPrediction.Input;
+	RotationInput.CurrentAim = AuthoritativeHeldAimRotation;
+	RotationInput.RequestedAim = RequestedAimRotation;
+	RotationInput.PullAxis = CarrierConstraintState.RodPullAxis;
+	RotationInput.PreviousSmoothedFishPullStrengthMeters = SmoothedRodFishPullStrengthMeters;
+	RotationInput.CatTorqueCapacity = CarrierConstraintState.CatTorqueCapacityStrengthMeters;
+	RotationInput.MaximumFishTorque = CarrierConstraintState.MaximumFishTorqueStrengthMeters;
+	RotationInput.MaximumAngularSpeedDegreesPerSecond = Settings->HeldRodMaximumAngularSpeedDegreesPerSecond;
+	RotationInput.ResponseSeconds = Settings->HeldRodAngularResistanceResponseSeconds;
+	RotationInput.FishPullSmoothingSeconds = Settings->HeldRodFishPullSmoothingSeconds;
+	RotationInput.LoadedAngularDampingRatio = Settings->HeldRodLoadedAngularDampingRatio;
+	RotationInput.DeltaSeconds = DeltaSeconds;
+	OutPrediction.HolderWorldPosition = HolderPawn->GetActorLocation();
+	OutPrediction.TipOffsetInAimSpace = Settings->HeldRodGripOffsetCentimeters
+		+ GripCanonicalLocalTransform.InverseTransformPosition(RodTipCanonicalLocalTransform.GetLocation());
+	OutPrediction.MinimumPitchDegrees = Settings->HeldRodMinimumPitchDegrees;
+	OutPrediction.MaximumPitchDegrees = Settings->HeldRodMaximumPitchDegrees;
+	OutPrediction.bValid = true;
+	return true;
+}
+
+bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSeconds)
+{
+	FCatFishingRodRotationPrediction Prediction;
+	if (!GetRotationPredictionFromAuthority(DeltaSeconds, Prediction)) return false;
+	APawn* HolderPawn = GetHolderPawnFromAuthority();
+	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+
+	const FVector PreviousTip = GetRodTipWorldTransform().GetLocation();
+	const FRotator RequestedAimRotation = Prediction.Input.RequestedAim;
 	const FRotator PreviousAimForDiagnostic = AuthoritativeHeldAimRotation;
 	FCatFishingRodRotationResult RotationStep;
 	const bool bNewHolder = AuthoritativeAimHolder.Get() != HolderPawn;
@@ -509,18 +539,7 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 	}
 	else if (FMath::IsFinite(DeltaSeconds) && DeltaSeconds > UE_DOUBLE_SMALL_NUMBER)
 	{
-		FCatFishingRodRotationInput RotationInput;
-		RotationInput.CurrentAim = AuthoritativeHeldAimRotation;
-		RotationInput.RequestedAim = RequestedAimRotation;
-		RotationInput.PullAxis = CarrierConstraintState.RodPullAxis;
-		RotationInput.PreviousSmoothedFishPullStrengthMeters = SmoothedRodFishPullStrengthMeters;
-		RotationInput.CatTorqueCapacity = CarrierConstraintState.CatTorqueCapacityStrengthMeters;
-		RotationInput.MaximumFishTorque = CarrierConstraintState.MaximumFishTorqueStrengthMeters;
-		RotationInput.MaximumAngularSpeedDegreesPerSecond = Settings->HeldRodMaximumAngularSpeedDegreesPerSecond;
-		RotationInput.ResponseSeconds = Settings->HeldRodAngularResistanceResponseSeconds;
-		RotationInput.FishPullSmoothingSeconds = Settings->HeldRodFishPullSmoothingSeconds;
-		RotationInput.LoadedAngularDampingRatio = Settings->HeldRodLoadedAngularDampingRatio;
-		RotationInput.DeltaSeconds = DeltaSeconds;
+		const FCatFishingRodRotationInput& RotationInput = Prediction.Input;
 		RotationStep = FCatFishingRodResistanceModel::StepRotation(RotationInput);
 		if (!RotationStep.bSucceeded) return false;
 		AuthoritativeRotationEffort.ExertionSquaredSeconds += RotationStep.CatExertionSquaredSeconds;

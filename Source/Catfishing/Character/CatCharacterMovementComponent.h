@@ -26,6 +26,8 @@ public:
 	void ClearExternalTraction(const UObject* Source);
 	FCatExternalTractionInput GetExternalTraction() const { return TractionSource.IsValid() ? LiveTraction : FCatExternalTractionInput{}; }
 	void RestoreTractionForSavedMove(const FCatExternalTractionInput& Input);
+	/** 只读胶囊探测，供外力求解约束下一步可移动距离；实际落位仍由 CMC 完成。 */
+	double GetExternalTractionTravelLimit(const FVector& Direction, double MaximumDistance) const;
 	virtual FNetworkPredictionData_Client* GetPredictionData_Client() const override;
 	virtual void PerformMovement(float DeltaSeconds) override;
 	virtual void CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration) override;

@@ -110,6 +110,8 @@ public:
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetGripWorldTransform() const;
 	/** 服务器规范握持跟随：只读 PlayerController/Pawn 权威姿态，不信任客户端 Socket Transform。 */
 	bool RefreshHeldTransformFromAuthority(double DeltaSeconds = 0.0);
+	/** 预测和实际旋转使用同一组输入；该函数只读取当前权威状态。 */
+	bool GetRotationPredictionFromAuthority(double DeltaSeconds, FCatFishingRodRotationPrediction& OutPrediction) const;
 	/** 最后一名操作者离开后把同一 Actor 放到服务器裁定的地面 Transform；不改会话或物品身份。 */
 	bool PlaceOnGroundFromAuthority(const FTransform& GroundTransform);
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FVector GetAuthoritativeRodForwardVector() const;

@@ -54,6 +54,17 @@ struct CATFISHING_API FCatFishingRodRotationResult
 	double IntegratedSeconds = 0.0;
 };
 
+/** 权威旋转求解的只读输入快照；预测不得写回姿态、滤波历史或努力累计量。 */
+struct CATFISHING_API FCatFishingRodRotationPrediction
+{
+	FCatFishingRodRotationInput Input;
+	FVector HolderWorldPosition = FVector::ZeroVector;
+	FVector TipOffsetInAimSpace = FVector::ZeroVector;
+	double MinimumPitchDegrees = -89.0;
+	double MaximumPitchDegrees = 89.0;
+	bool bValid = false;
+};
+
 /** 权威旋转积分的累计观察量；同一 Epoch 求差，换持有人或搏斗生命周期后重新计数。 */
 struct CATFISHING_API FCatFishingRodRotationEffortSnapshot
 {
