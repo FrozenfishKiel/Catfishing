@@ -6,11 +6,10 @@
 #include "Engine/World.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentInventoryItemInstance.h"
-#include "Equipment/CatEquipmentTypes.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "GameFramework/Controller.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
 #include "Logging/CatLog.h"
 
 namespace CatHerbRecoveryCoordinatorPrivate
@@ -131,21 +130,25 @@ FCatDomainCommandResult UCatHerbRecoveryCoordinator::UseHerbOnCharacter(AControl
 	UCatEquipmentDefinition* Definition = nullptr;
 	bool bHasCurrentHerb = false;
 	int32 FormalHerbSlotIndex = INDEX_NONE;
-	FCatRunInventorySlot FormalHerbSlot;
-	// 正式库存预检：救援命令只信任当前背包里的实例、正数量和装备定义适配实例；LegacySlot 只给定义规则复用，旧 Equipment 投影不能证明草药仍在身上。
+	// 正式库存预检：
+	// 1. 先按客户端提交的实例 ID 回到当前库存槽位，旧 Equipment 投影不能证明草药仍在身上。
+	// 2. 再直接读取库存实例和定义资产，确认它仍是一份运行就绪、可由库存组件扣量的 Herb。
+	// 3. 这里不再构造 FCatRunInventorySlot，也不再调用 UCatEquipmentDefinition::Use 做旧定义裁决；草药真实效果由 Condition 裁决，库存变化由 InventoryComponent 执行。
 	FormalHerbSlotIndex = OwnerInventory->FindInventorySlotIndexFromInstanceId(HerbItemInstanceId);
 	const FCatInventoryEntry* FormalHerbEntry =
 		OwnerInventory->GetInventoryEntryAtSlot(FormalHerbSlotIndex);
-	const UCatEquipmentInventoryItemInstance* FormalHerbInstance =
-		FormalHerbEntry != nullptr ? Cast<UCatEquipmentInventoryItemInstance>(FormalHerbEntry->Instance) : nullptr;
+	const UCatInventoryItemInstance* FormalHerbInstance =
+		FormalHerbEntry != nullptr ? FormalHerbEntry->Instance.Get() : nullptr;
 	Definition = FormalHerbInstance != nullptr
 		? Cast<UCatEquipmentDefinition>(FormalHerbInstance->GetItemDefinition()) : nullptr;
 	bHasCurrentHerb = FormalHerbEntry != nullptr
 		&& FormalHerbEntry->StackCount > 0
+		&& FormalHerbInstance != nullptr
+		&& FormalHerbInstance->GetItemInstanceId() == HerbItemInstanceId
 		&& Definition != nullptr
+		&& Definition->IsRuntimeDefinitionReady()
 		&& Definition->Kind == ECatEquipmentKind::Herb
-		&& Definition->ConsumesInventoryQuantityOnUse()
-		&& FormalHerbInstance->BuildLegacyRunInventorySlot(FormalHerbEntry->StackCount, FormalHerbSlot);
+		&& Definition->ConsumesInventoryQuantityOnUse();
 	if (!bHasCurrentHerb)
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
@@ -158,18 +161,12 @@ FCatDomainCommandResult UCatHerbRecoveryCoordinator::UseHerbOnCharacter(AControl
 	}
 	// 正式库存提交流程：
 	// 1. 先复核客户端看到的 InventoryRevision，防止基于旧背包状态扣错草药。
-	// 2. 再用 LegacySlot 跑装备定义的草药规则校验；这一步只读定义，不提交旧 Equipment 事务。
+	// 2. 草药实例和定义已经由正式库存 entry 证明，这里不再通过旧装备槽结构重复推导。
 	// 3. 真正的数量变化只发生在 UCatInventoryComponent::ConsumeItemAtSlot，提交成功后才刷新 Equipment 的历史投影。
 	// 4. 如果投影同步失败，立即把正式库存回滚到扣药前快照；身体恢复必须等库存和旧投影都收口后才提交。
 	if (OwnerInventory->GetInventoryRevision() != ExpectedInventoryRevision)
 	{
 		Result.Error = ECatDomainCommandError::RevisionConflict;
-		Result.Revision = OwnerInventory->GetInventoryRevision();
-		return StoreFormalTerminal(Result);
-	}
-	Result.Error = Definition ? Definition->Use(FormalHerbSlot, 1) : ECatDomainCommandError::InvalidPayload;
-	if (Result.Error != ECatDomainCommandError::None)
-	{
 		Result.Revision = OwnerInventory->GetInventoryRevision();
 		return StoreFormalTerminal(Result);
 	}
