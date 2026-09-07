@@ -12,6 +12,7 @@
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
+#include "Inventory/CatInventoryStatics.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
 #include "Net/UnrealNetwork.h"
@@ -61,7 +62,7 @@ void UCatEquipmentComponent::GetLifetimeReplicatedProps(TArray<FLifetimeProperty
 	DOREPLIFETIME(ThisClass, Snapshot);
 }
 
-// Snapshot 读取流程：返回服务器钓鱼选择和旧库存投影；正式物品实例由 Owner 的 InventoryComponent 同步承载。
+// Snapshot 读取流程：返回服务器钓鱼选择和旧库存投影；正式物品实例由 Owner 的 InventoryComponent 持有。
 const FCatEquipmentLoadoutSnapshot& UCatEquipmentComponent::GetSnapshot() const
 {
 	return Snapshot;
@@ -473,12 +474,13 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 // 数量型库存授予预检流程：
 // 1. 先从目录读取正式定义，并确认 RequestId、authority、定义类型和授予数量都成立；失败时不读取或补写库存格。
 // 2. 已经缓存过同 RequestId 的授予结果时放行重放，让商店重试能拿回原回执而不是被当前容量误拦。
-// 3. 最后用统一库存格容量做只读预检；这里不扩容数组、不合并数量，只回答整批物品能否一次性交付。
+// 3. Owner 正式库存已按配置补齐时，用 InventoryComponent 的整批收货预演回答容量；这里不扩容数组，保证 Validate 纯只读。
+// 4. 旧测试宿主或尚未初始化正式槽位时才回看 Equipment 旧投影，避免历史入口在迁移期被错误拒绝。
 ECatDomainCommandError UCatEquipmentComponent::ValidateInventoryQuantityGrant(const FGuid RequestId,
 	const FName DefinitionId, const int32 Quantity) const
 {
 	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-	const UCatEquipmentDefinition* Definition = Settings->FindRuntimeDefinition(DefinitionId);
+	UCatEquipmentDefinition* Definition = Settings->FindRuntimeDefinition(DefinitionId);
 	if (!RequestId.IsValid() || !GetOwner() || !GetOwner()->HasAuthority() || !Definition
 		|| !Definition->bRunConsumable || Quantity <= 0)
 	{
@@ -489,6 +491,17 @@ ECatDomainCommandError UCatEquipmentComponent::ValidateInventoryQuantityGrant(co
 	{
 		return ECatDomainCommandError::None;
 	}
+	const UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
+	if (OwnerInventory != nullptr && OwnerInventory->GetInventorySlotCount() >= GetConfiguredInventorySlotCapacity())
+	{
+		FCatInventoryReceiveBatch ReceiveBatch;
+		FCatInventoryDefinitionEntry& DefinitionEntry = ReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
+		DefinitionEntry.ItemDefinition = Definition;
+		DefinitionEntry.Count = Quantity;
+		return OwnerInventory->CanFullyAcceptInventoryBatch(ReceiveBatch)
+			? ECatDomainCommandError::None
+			: ECatDomainCommandError::CapacityExceeded;
+	}
 	if (!CanStoreInventoryItem(*Definition, DefinitionId, Quantity))
 	{
 		return ECatDomainCommandError::CapacityExceeded;
@@ -498,10 +511,10 @@ ECatDomainCommandError UCatEquipmentComponent::ValidateInventoryQuantityGrant(co
 
 // 数量型库存物品入库流程：
 // 1. 先拒绝无效 RequestId，并用 RequestId、定义和数量签名保护终态重放；载荷漂移直接拒绝且不改库存。
-// 2. 首次提交复用商店扣款前预检；定义无效、数量无效或容量不足都会保持 Snapshot 不变。
-// 3. ExpectedRevision 必须匹配当前随身库存快照，避免陈旧 UI 把较新的持有量覆盖掉。
-// 4. 成功时写入随身库存格数组，并按空选择、无库存旧选择或已断/耐久非法同定义竿的规则修正当前选择。
-// 5. 最后递增 Revision、发布完整快照并缓存终态，后续同请求只读首次结果。
+// 2. 正式库存组件存在时先按配置补齐槽位，再用 InventoryComponent 整批收货成为物品事实源。
+// 3. 正式库存写入成功后从 InventoryComponent 重建 Equipment 旧投影，并按新增定义修正钓鱼选择。
+// 4. 正式写入或投影失败会恢复正式 entries 和旧 Snapshot，避免背包事实与钓鱼读模型只提交一边。
+// 5. 没有正式库存组件的旧宿主才走旧数组入库，并继续缓存首次终态供重放返回。
 FCatDomainCommandResult UCatEquipmentComponent::GrantInventoryQuantityFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const FName DefinitionId, const int32 Quantity)
 {
@@ -530,6 +543,52 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantInventoryQuantityFromAuthor
 		return Result;
 	}
 	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(DefinitionId);
+	if (UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent())
+	{
+		if (!GetOwner() || !GetOwner()->HasAuthority() || !Definition || !Definition->bRunConsumable
+			|| Quantity <= 0)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+		}
+		else if (Snapshot.Revision != ExpectedRevision)
+		{
+			Result.Error = ECatDomainCommandError::RevisionConflict;
+		}
+		else
+		{
+			OwnerInventory->SetInventorySlotCountFromAuthority(GetConfiguredInventorySlotCapacity());
+			FCatInventoryReceiveBatch ReceiveBatch;
+			FCatInventoryDefinitionEntry& DefinitionEntry = ReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
+			DefinitionEntry.ItemDefinition = Definition;
+			DefinitionEntry.Count = Quantity;
+			if (!OwnerInventory->CanFullyAcceptInventoryBatch(ReceiveBatch))
+			{
+				Result.Error = ECatDomainCommandError::CapacityExceeded;
+			}
+			else
+			{
+				const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
+				const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
+				if (!OwnerInventory->TryAddInventoryBatch(ReceiveBatch)
+					|| !RefreshInventoryProjectionFromInventoryComponentFromAuthority(Definition, DefinitionId))
+				{
+					OwnerInventory->ReplaceInventoryEntriesFromAuthority(
+						SavedEntries, GetConfiguredInventorySlotCapacity());
+					Snapshot = SavedSnapshot;
+					Result.Error = ECatDomainCommandError::DependencyUnavailable;
+				}
+				else
+				{
+					Result.bCommitted = true;
+					Result.Error = ECatDomainCommandError::None;
+				}
+			}
+		}
+		Result.Revision = Snapshot.Revision;
+		TerminalCache.Add(Key, Result);
+		TerminalPayloadByKey.Add(Key, PayloadSignature);
+		return Result;
+	}
 	const ECatDomainCommandError Rejection = ValidateInventoryQuantityGrant(RequestId, DefinitionId, Quantity);
 	if (Rejection != ECatDomainCommandError::None)
 	{
@@ -563,8 +622,8 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantInventoryQuantityFromAuthor
 // 商店非数量物品入库预检流程：
 // 1. 先按 RequestId 和定义 ID 查询既有终态载荷，合法重放放行，载荷漂移拒绝。
 // 2. 再确认当前组件属于 authority 角色，并读取正式定义和单实例容量。
-// 3. 最后只要求定义是非数量型运行物品；鱼竿、鱼漂、抄网和后续工具都走同一条单实例入库规则。
-// 4. 非数量物品也占用同一份随身库存格容量，超出当前库存上限时必须在商店扣款前返回 CapacityExceeded。
+// 3. 正式库存已按配置补齐时使用 InventoryComponent 预演单实例收货，让背包容量和堆叠规则只由正式库存回答。
+// 4. 旧测试宿主或尚未初始化正式槽位时才回看 Equipment 旧投影；非数量物品仍按单件容量判断。
 ECatDomainCommandError UCatEquipmentComponent::ValidateEquipmentGrantFromAuthority(const FGuid RequestId,
 	const FName DefinitionId) const
 {
@@ -580,10 +639,21 @@ ECatDomainCommandError UCatEquipmentComponent::ValidateEquipmentGrantFromAuthori
 			: ECatDomainCommandError::InvalidPayload;
 	}
 	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-	const UCatEquipmentDefinition* Definition = Settings->FindRuntimeDefinition(DefinitionId);
+	UCatEquipmentDefinition* Definition = Settings->FindRuntimeDefinition(DefinitionId);
 	if (!Definition || Definition->bRunConsumable)
 	{
 		return ECatDomainCommandError::InvalidPayload;
+	}
+	const UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
+	if (OwnerInventory != nullptr && OwnerInventory->GetInventorySlotCount() >= GetConfiguredInventorySlotCapacity())
+	{
+		FCatInventoryReceiveBatch ReceiveBatch;
+		FCatInventoryDefinitionEntry& DefinitionEntry = ReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
+		DefinitionEntry.ItemDefinition = Definition;
+		DefinitionEntry.Count = 1;
+		return OwnerInventory->CanFullyAcceptInventoryBatch(ReceiveBatch)
+			? ECatDomainCommandError::None
+			: ECatDomainCommandError::CapacityExceeded;
 	}
 	if (!CanStoreInventoryItem(*Definition, DefinitionId, 1))
 	{
@@ -594,9 +664,9 @@ ECatDomainCommandError UCatEquipmentComponent::ValidateEquipmentGrantFromAuthori
 
 // 商店非数量物品入库流程：
 // 1. 先用 RequestId 和定义 ID 找终态缓存；合法重放只返回首次结果，不重复增加库存数量或推进 Revision。
-// 2. 首次提交复用扣款前预检同一套准入规则，并用 ExpectedRevision 防止陈旧 UI 覆盖较新的本人库存。
-// 3. 把非数量定义加入随身库存格数组，并按空选择、无库存旧选择或已断/耐久非法同定义竿的规则修正当前选择。
-// 4. 成功后发布完整快照；UI 从库存格展示所有库存物品，不再生成单独装备栏格子。
+// 2. 正式库存组件存在时先按配置补齐槽位，再把单件定义写入 InventoryComponent。
+// 3. 正式库存写入成功后刷新 Equipment 旧投影和钓鱼选择；失败时恢复两边，避免出现双账本分叉。
+// 4. 没有正式库存组件的旧宿主才走旧数组入库，并保留原先的 ExpectedRevision 和终态缓存语义。
 FCatDomainCommandResult UCatEquipmentComponent::GrantEquipmentFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const FName DefinitionId)
 {
@@ -626,6 +696,51 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantEquipmentFromAuthority(cons
 
 	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
 	UCatEquipmentDefinition* Definition = Settings->FindRuntimeDefinition(DefinitionId);
+	if (UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent())
+	{
+		if (!GetOwner() || !GetOwner()->HasAuthority() || !Definition || Definition->bRunConsumable)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPayload;
+		}
+		else if (Snapshot.Revision != ExpectedRevision)
+		{
+			Result.Error = ECatDomainCommandError::RevisionConflict;
+		}
+		else
+		{
+			OwnerInventory->SetInventorySlotCountFromAuthority(GetConfiguredInventorySlotCapacity());
+			FCatInventoryReceiveBatch ReceiveBatch;
+			FCatInventoryDefinitionEntry& DefinitionEntry = ReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
+			DefinitionEntry.ItemDefinition = Definition;
+			DefinitionEntry.Count = 1;
+			if (!OwnerInventory->CanFullyAcceptInventoryBatch(ReceiveBatch))
+			{
+				Result.Error = ECatDomainCommandError::CapacityExceeded;
+			}
+			else
+			{
+				const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
+				const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
+				if (!OwnerInventory->TryAddInventoryBatch(ReceiveBatch)
+					|| !RefreshInventoryProjectionFromInventoryComponentFromAuthority(Definition, DefinitionId))
+				{
+					OwnerInventory->ReplaceInventoryEntriesFromAuthority(
+						SavedEntries, GetConfiguredInventorySlotCapacity());
+					Snapshot = SavedSnapshot;
+					Result.Error = ECatDomainCommandError::DependencyUnavailable;
+				}
+				else
+				{
+					Result.bCommitted = true;
+					Result.Error = ECatDomainCommandError::None;
+				}
+			}
+		}
+		Result.Revision = Snapshot.Revision;
+		TerminalCache.Add(Key, Result);
+		TerminalPayloadByKey.Add(Key, PayloadSignature);
+		return Result;
+	}
 	const ECatDomainCommandError Admission = ValidateEquipmentGrantFromAuthority(RequestId, DefinitionId);
 	if (Admission != ECatDomainCommandError::None)
 	{
@@ -996,7 +1111,7 @@ FCatDomainCommandResult UCatEquipmentComponent::MoveInventorySlotFromAuthority(c
 {
 	if (AActor* Owner = GetOwner(); Owner != nullptr && Owner->HasAuthority())
 	{
-		if (UCatInventoryComponent* OwnerInventory = Owner->FindComponentByClass<UCatInventoryComponent>())
+		if (UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent())
 		{
 			FCatDomainCommandResult FormalResult = OwnerInventory->MoveInventorySlotFromAuthority(
 				RequestId, ExpectedRevision, SourceSlotIndex, TargetSlotIndex);
@@ -1516,6 +1631,13 @@ int32 UCatEquipmentComponent::GetConfiguredInventorySlotCapacity() const
 	return Settings ? FMath::Max(0, Settings->InventorySlotCapacity) : 0;
 }
 
+// 正式随身库存解析流程：只从当前 Owner 上读取 InventoryComponent；Equipment 不创建或缓存库存组件，避免迁移期出现第二份背包归属。
+UCatInventoryComponent* UCatEquipmentComponent::ResolveOwnerInventoryComponent() const
+{
+	AActor* Owner = GetOwner();
+	return Owner != nullptr ? Owner->FindComponentByClass<UCatInventoryComponent>() : nullptr;
+}
+
 // 单格堆叠读取流程：定义资产可直接声明单格上限；未声明时，非数量型物品一格一件，数量型物品沿用项目默认上限。
 int32 UCatEquipmentComponent::GetInventoryStackLimit(const UCatEquipmentDefinition& Definition) const
 {
@@ -1589,7 +1711,7 @@ void UCatEquipmentComponent::EnsureInventorySlotArray()
 bool UCatEquipmentComponent::NormalizeInventorySlots()
 {
 	// 存量格修复流程：
-	// 1. 只遍历当前随身库存事实，不改活动 Use 记录和选择快照。
+	// 1. 只遍历当前旧随身库存格，不改活动 Use 记录和选择快照。
 	// 2. 有内容的格子交给定义归一化，给旧数据补实例身份并补齐鱼竿状态。
 	// 3. 空格清回默认值，避免残留实例 ID 让 Use 误以为还有物品。
 	// 4. 返回是否真的改动过格子字段，让上层决定是否推进 Revision 和发布快照。
@@ -1617,10 +1739,10 @@ bool UCatEquipmentComponent::NormalizeInventorySlots()
 	return bChanged;
 }
 
-// 正式实例投影流程：
-// 1. 先按旧槽位实例 ID 复用正式库存里已有对象，避免每次 Equipment 发布都让客户端看到全新的物品对象身份。
+// 旧投影到正式实例的兼容建模流程：
+// 1. 先按旧槽位实例 ID 复用正式库存里已有对象，避免旧入口发布时让客户端看到全新的物品对象身份。
 // 2. 没有可复用对象时按定义声明的库存实例类创建，并要求它仍是装备适配实例，防止普通实例吞掉鱼竿耐久。
-// 3. 最后把定义、实例 ID、运行宿主和鱼竿状态写回实例，让正式库存和旧快照表达同一份物品。
+// 3. 最后把定义、实例 ID、运行宿主和鱼竿状态写回实例，让旧入口回写出的正式库存和旧快照表达同一份物品。
 UCatEquipmentInventoryItemInstance* UCatEquipmentComponent::CreateOrUpdateFormalItemInstanceFromSlot(
 	const FCatRunInventorySlot& Slot,
 	UCatEquipmentDefinition& Definition,
@@ -1661,9 +1783,9 @@ UCatEquipmentInventoryItemInstance* UCatEquipmentComponent::CreateOrUpdateFormal
 	return Instance;
 }
 
-// 旧快照到正式库存建模流程：
+// 旧快照到正式库存的兼容建模流程：
 // 1. 先收集目标正式库存里已有的装备实例，后续按 ItemInstanceId 复用，保持正式库存对象身份稳定。
-// 2. 再按旧随身格顺序建立正式 entries，空格保留为空 entry，不改变 UI 和存档目前依赖的格位顺序。
+// 2. 再按旧投影格顺序建立正式 entries，空格保留为空 entry，不改变 UI 和存档目前依赖的格位顺序。
 // 3. 每个占用格必须解析到运行就绪定义、合法数量和唯一实例 ID；任一失败都会清空输出并让同步整体拒绝。
 bool UCatEquipmentComponent::BuildFormalEntriesFromSnapshot(UCatInventoryComponent& TargetInventory,
 	TArray<FCatInventoryEntry>& OutEntries)
@@ -1728,10 +1850,10 @@ bool UCatEquipmentComponent::BuildFormalEntriesFromSnapshot(UCatInventoryCompone
 	return true;
 }
 
-// 正式库存同步流程：
+// 旧入口回写正式库存流程：
 // 1. 只在 authority Owner 上执行；没有正式库存组件的旧测试宿主直接跳过，不改变既有 Equipment 行为。
-// 2. 先把当前 Snapshot 建模成正式 entries，再用 InventoryComponent 的整表替换入口提交，避免半同步。
-// 3. 失败只返回 false 给发布入口记录诊断；旧消费者仍收到快照，方便迁移期继续暴露问题而不是吞掉提交。
+// 2. 先把当前旧 Snapshot 建模成正式 entries，再用 InventoryComponent 的整表替换入口提交，避免旧入口留下半同步状态。
+// 3. 失败只返回 false 给发布入口记录诊断；正式发放路径已经先写 InventoryComponent，本流程只保留迁移期兼容回写能力。
 bool UCatEquipmentComponent::SyncOwnerInventoryComponentFromSnapshot()
 {
 	AActor* Owner = GetOwner();
@@ -1740,7 +1862,7 @@ bool UCatEquipmentComponent::SyncOwnerInventoryComponentFromSnapshot()
 		return true;
 	}
 
-	UCatInventoryComponent* OwnerInventory = Owner->FindComponentByClass<UCatInventoryComponent>();
+	UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
 	if (OwnerInventory == nullptr)
 	{
 		return true;
@@ -1763,7 +1885,7 @@ bool UCatEquipmentComponent::RefreshInventoryProjectionFromInventoryComponentFro
 // 1. 只在 authority 上读取 Owner 的 InventoryComponent；客户端复制读模型不能反向生成服务器快照。
 // 2. 先把正式库存条目投成旧 InventorySlots，并记录刷新前的钓具选择，用于判断是否需要发布新 Equipment Revision。
 // 3. 调用方传入新增定义时才尝试自动选择；这样营地交换能保留旧体验，普通格位刷新不会无故抢当前选择。
-// 4. 旧格位或选择有任一变化时才推进 Equipment Revision 并发布，Publish 再同步正式库存时会因内容一致而不二次推进正式版本。
+// 4. 旧格位或选择有任一变化时才推进 Equipment Revision 并发布；Publish 的兼容回写会因内容一致而不二次推进正式版本。
 bool UCatEquipmentComponent::RefreshInventoryProjectionFromInventoryComponentFromAuthority(
 	const UCatEquipmentDefinition* GrantedDefinition, const FName GrantedDefinitionId)
 {
@@ -1831,9 +1953,7 @@ bool UCatEquipmentComponent::BuildSnapshotInventorySlotsFromOwnerInventoryCompon
 	TArray<FCatRunInventorySlot>& OutSlots) const
 {
 	OutSlots.Reset();
-	const AActor* Owner = GetOwner();
-	const UCatInventoryComponent* OwnerInventory =
-		Owner != nullptr ? Owner->FindComponentByClass<UCatInventoryComponent>() : nullptr;
+	const UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
 	if (OwnerInventory == nullptr)
 	{
 		return false;
@@ -2284,10 +2404,10 @@ const FCatRunInventorySlot* UCatEquipmentComponent::FindFirstInventorySlotByDefi
 void UCatEquipmentComponent::SyncSelectedRodStateToSelectedInstance()
 {
 	// 鱼竿状态同步流程：
-	// 1. 当前选择快照仍服务 UI 与老调用方，但真正实例可能在背包格里，也可能已经被 Use 移到活动记录里。
-	// 2. 如果实例还在库存中，直接写回该格的耐久和断竿状态。
+	// 1. 当前选择快照仍服务 UI 与老调用方，但被选实例可能在旧投影格里，也可能已经被 Use 移到活动记录里。
+	// 2. 如果实例还在旧投影格中，直接写回该格的耐久和断竿状态。
 	// 3. 如果实例已经部署到场景，只更新活动记录里的副本，等 UnUse 时再原样归还。
-	// 4. 已收口记录不再改写，避免收杆后的历史记录影响新的库存事实。
+	// 4. 已收口记录不再改写，避免收杆后的历史记录影响新的实例状态。
 	if (!Snapshot.RodItemInstanceId.IsValid())
 	{
 		return;
@@ -2521,7 +2641,7 @@ FString UCatEquipmentComponent::MakeTerminalKey(const TCHAR* Operation, const FG
 	return FString::Printf(TEXT("%s|%s"), Operation, *RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
-// Snapshot 发布流程：authority 先把旧库存投影同步到正式 InventoryComponent，再要求 Owner 立即复制并广播旧读模型变化。
+// Snapshot 发布流程：authority 保留旧入口到正式 InventoryComponent 的兼容同步，再要求 Owner 立即复制并广播旧读模型变化；正式发放路径走到这里时正式库存已经先提交。
 void UCatEquipmentComponent::PublishSnapshot()
 {
 	if (AActor* Owner = GetOwner(); Owner && Owner->HasAuthority())
