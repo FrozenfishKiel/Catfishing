@@ -79,6 +79,8 @@ struct FCatFishingHookPresentationState
 	UPROPERTY(BlueprintReadOnly) double SlackLineLengthCentimeters = 0.0;
 	UPROPERTY(BlueprintReadOnly) float NormalizedTension = 0.0f;
 	UPROPERTY(BlueprintReadOnly) bool bLineTaut = false;
+	/** Final authoritative line load in newtons, before display normalization; cosmetic rod bending only. */
+	UPROPERTY(BlueprintReadOnly) double LineTensionNewtons = 0.0;
 };
 
 USTRUCT(BlueprintType)

@@ -9,6 +9,7 @@
 class APlayerState;
 class USceneComponent;
 class UCharacterMovementComponent;
+class UCatRodBendComponent;
 
 /** 高频复制的手持鱼线约束目标；不推进鱼竿业务 Revision，也不保存第二份搏斗终态。 */
 USTRUCT(BlueprintType)
@@ -175,6 +176,8 @@ private:
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> SceneRoot;
 	/** 美术表现根节点；皮肤和特效挂在这里，不参与权威锚点计算。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> VisualRoot;
+	/** Local deformation of the existing art; never changes canonical anchors or the fight simulation. */
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatRodBendComponent> RodBend;
 	/** 竿尖的本地锚点组件；鱼线和浮漂表现从它换算世界坐标。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> RodTipAnchor;
 	/** 默认操作站位的本地锚点组件；旧单人逻辑和交互基准都从这里派生。 */

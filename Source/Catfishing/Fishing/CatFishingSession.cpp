@@ -1513,7 +1513,8 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 		Snapshot.HookActor->SetActorLocation(Snapshot.FishEncounterActor->GetActorLocation());
 		if (!Snapshot.HookActor->SetFishingLinePresentationFromAuthority(
 			Step.LineLengthCentimeters, Step.StraightLineDistanceCentimeters,
-			Step.SlackLineLengthCentimeters, static_cast<float>(Step.NormalizedTension), Step.bLineTaut))
+			Step.SlackLineLengthCentimeters, static_cast<float>(Step.NormalizedTension), Step.bLineTaut,
+			Step.LineTensionNewtons))
 		{
 			HandleFightRunnerFailureFromAuthority(TEXT("HookLinePresentation"));
 			return;

@@ -3,6 +3,7 @@
 #include "Character/CatCharacter.h"
 #include "Components/SceneComponent.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/Presentation/CatRodBendComponent.h"
 #include "Fishing/Presentation/CatFishingLineCurveComponent.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "GameFramework/GameStateBase.h"
@@ -120,13 +121,15 @@ bool ACatFishingHookActor::SetBobberPresentationModeFromAuthority(const ECatFish
 
 bool ACatFishingHookActor::SetFishingLinePresentationFromAuthority(
 	const double PaidOutLineLengthCentimeters, const double StraightLineDistanceCentimeters,
-	const double SlackLineLengthCentimeters, const float NormalizedTension, const bool bLineTaut)
+	const double SlackLineLengthCentimeters, const float NormalizedTension, const bool bLineTaut,
+	const double LineTensionNewtons)
 {
 	if (!HasAuthority() || !bIdentityInitialized
 		|| !FMath::IsFinite(PaidOutLineLengthCentimeters) || PaidOutLineLengthCentimeters < 0.0
 		|| !FMath::IsFinite(StraightLineDistanceCentimeters) || StraightLineDistanceCentimeters < 0.0
 		|| !FMath::IsFinite(SlackLineLengthCentimeters) || SlackLineLengthCentimeters < 0.0
-		|| !FMath::IsFinite(NormalizedTension) || NormalizedTension < 0.0f || NormalizedTension > 1.0f)
+		|| !FMath::IsFinite(NormalizedTension) || NormalizedTension < 0.0f || NormalizedTension > 1.0f
+		|| !FMath::IsFinite(LineTensionNewtons) || LineTensionNewtons < 0.0)
 	{
 		return false;
 	}
@@ -136,6 +139,7 @@ bool ACatFishingHookActor::SetFishingLinePresentationFromAuthority(
 	PresentationState.SlackLineLengthCentimeters = SlackLineLengthCentimeters;
 	PresentationState.NormalizedTension = NormalizedTension;
 	PresentationState.bLineTaut = bLineTaut;
+	PresentationState.LineTensionNewtons = bLineTaut ? LineTensionNewtons : 0.0;
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 	ForceNetUpdate();
 	return true;
@@ -493,6 +497,10 @@ void ACatFishingHookActor::RefreshFishingLineAttachment()
 
 	// RodTipMarker/原生 RodTipAnchor 的组件原点就是线端点，不混入权威锚点偏移。
 	FishingLineEndAnchor = EndComponent;
+	if (UCatRodBendComponent* Bend = Rod->FindComponentByClass<UCatRodBendComponent>())
+	{
+		Bend->BindHook(this);
+	}
 	const bool bShouldShow = PresentationState.Phase != ECatFishingHookPresentationPhase::Unconfigured;
 	FishingLineCurve->SetVisibility(bShouldShow, true);
 	FishingLineCurve->SetHiddenInGame(!bShouldShow);
@@ -599,12 +607,26 @@ void ACatFishingHookActor::UpdateFishingLinePresentation()
 			DeltaSeconds, LengthSpeed);
 	}
 
+	UCatRodBendComponent* RodBend = nullptr;
+	if (const ACatFishingRodActor* Rod = Cast<ACatFishingRodActor>(GetOwner()))
+	{
+		RodBend = Rod->FindComponentByClass<UCatRodBendComponent>();
+		if (RodBend) RodBend->RefreshVisual();
+	}
 	const FVector StartWorldPosition = FishingLineStartAnchor->GetComponentLocation();
 	const FVector EndWorldPosition = EndComponent->GetComponentLocation();
+	double VisualLineLength = DisplayedFishingLineLengthCentimeters;
+	if (RodBend && RodBend->IsVisualReady())
+	{
+		// Preserve the same slack budget when the cosmetic tip moves. The replicated paid-out length is untouched.
+		VisualLineLength += FVector::Distance(StartWorldPosition, EndWorldPosition)
+			- FVector::Distance(StartWorldPosition, RodBend->GetRestTipWorld());
+		VisualLineLength = FMath::Max(VisualLineLength, FVector::Distance(StartWorldPosition, EndWorldPosition));
+	}
 	const int32 Segments = FMath::Clamp(Settings ? Settings->FishingLineCurveSegments : 64, 4, 256);
 	const double Width = FMath::Clamp(SafeNonNegative(Settings ? Settings->FishingLineWidthCentimeters : 1.25, 1.25), 0.01, 10.0);
 	const bool bUpdated = FishingLineCurve->UpdateCurve(StartWorldPosition, EndWorldPosition,
-		DisplayedFishingLineLengthCentimeters, Segments, Width);
+		VisualLineLength, Segments, Width);
 	if (!bUpdated)
 	{
 		if (!bFishingLineCurveUpdateFailed)

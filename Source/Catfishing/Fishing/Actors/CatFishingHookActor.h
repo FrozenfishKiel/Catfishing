@@ -24,7 +24,7 @@ public:
 	/** 服务器只复制鱼线标量；客户端据此生成曲线，不反向参与物理约束。 */
 	bool SetFishingLinePresentationFromAuthority(double PaidOutLineLengthCentimeters,
 		double StraightLineDistanceCentimeters, double SlackLineLengthCentimeters,
-		float NormalizedTension, bool bLineTaut);
+		float NormalizedTension, bool bLineTaut, double LineTensionNewtons = 0.0);
 	void DeferInitialPresentationFromAuthority();
 	void PublishInitialPresentationFromAuthority();
 	const FCatFishingHookPresentationState& GetPresentationState() const;

@@ -16,6 +16,21 @@ class CATFISHING_API UCatFishingPresentationSettings : public UDeveloperSettings
 	GENERATED_BODY()
 
 public:
+	/** Mesh-local flexible axis of the existing formal rod. The source mesh is authored along +Z. */
+	UPROPERTY(Config, EditAnywhere, Category="RodBend")
+	FVector RodBendAxisLocal = FVector::UpVector;
+	/** Fraction of the source mesh span reserved for the rigid grip/reel. */
+	UPROPERTY(Config, EditAnywhere, Category="RodBend", meta=(ClampMin="0", ClampMax="0.9"))
+	double RodBendRigidFraction = 0.25;
+	/** Transverse line force at half the maximum cosmetic bend. No gameplay stiffness or strength limit. */
+	UPROPERTY(Config, EditAnywhere, Category="RodBend", meta=(ClampMin="1", Units="N"))
+	double RodBendReferenceForceNewtons = 50.0;
+	UPROPERTY(Config, EditAnywhere, Category="RodBend", meta=(ClampMin="0", ClampMax="90", Units="deg"))
+	double RodBendMaximumAngleDegrees = 75.0;
+	/** Exponential response time, also used to relax after slack/Hook destruction. */
+	UPROPERTY(Config, EditAnywhere, Category="RodBend", meta=(ClampMin="0.01", Units="s"))
+	double RodBendResponseSeconds = 0.15;
+
 	/** 第一人称镜头相对实际握把的偏移：后方、左侧、上方，使杆落在画面右下。 */
 	UPROPERTY(Config, EditAnywhere, Category="Camera", meta=(Units="cm"))
 	FVector FightCameraGripOffsetCentimeters = FVector(-35.0, -16.0, 50.0);

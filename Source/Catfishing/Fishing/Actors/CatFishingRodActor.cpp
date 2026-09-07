@@ -5,6 +5,7 @@
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Debug/CatFishingMotionDiagnostics.h"
+#include "Fishing/Presentation/CatRodBendComponent.h"
 #include "GameFramework/Character.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/Controller.h"
@@ -30,6 +31,8 @@ ACatFishingRodActor::ACatFishingRodActor()
 	// VisualRoot 承载美术表现（皮肤/特效），与权威判定用的锚点分层，便于蓝图独立驱动视觉
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
 	VisualRoot->SetupAttachment(SceneRoot);
+	RodBend = CreateDefaultSubobject<UCatRodBendComponent>(TEXT("RodBend"));
+	RodBend->SetupAttachment(VisualRoot);
 	// RodTip/Stand/Grip 三个锚点分别对应竿尖(挂线)、插竿点、握持点，供表现和玩法逻辑取世界坐标
 	RodTipAnchor = CreateDefaultSubobject<USceneComponent>(TEXT("RodTipAnchor"));
 	RodTipAnchor->SetupAttachment(SceneRoot);
