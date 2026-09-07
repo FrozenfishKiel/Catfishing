@@ -218,6 +218,15 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	double CarrierAwaySpeedMultiplier = 1.0;
 	if (bLineRestraining && !bFreeSpoolReleased)
 	{
+		FVector TowardRod = IntendedRodTip - ProposedFishPosition;
+		const double ConstraintHeight = FMath::Abs(TowardRod.Z);
+		TowardRod.Z = 0.0;
+		const double HorizontalDistance = TowardRod.Size2D();
+		// 鱼端与猫端当前只执行水平修正。可行半径必须由线长球与该水平面的交线求出，
+		// 不能把三维超长厘米数当成水平位移；高差超过线长时只收近 XY，保留无法消除的高差。
+		const double HeightRatio = LineLength > ConstraintHeight ? ConstraintHeight / LineLength : 1.0;
+		const double AllowedHorizontalDistance = LineLength * FMath::Sqrt(FMath::Max(0.0, 1.0 - HeightRatio * HeightRatio));
+		const double HorizontalConstraintError = FMath::Max(0.0, HorizontalDistance - AllowedHorizontalDistance);
 		const double CatMass = Config.GetCombinedCatMass();
 		const double BaseCarrierCorrectionShare = RodConstraint.bRodHeld
 			? Config.FishMassKilograms / (CatMass + Config.FishMassKilograms) : 0.0;
@@ -231,15 +240,12 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		const double MaximumCarrierResponseSpeed = bExhaustedCatEscape ? SwimSpeed : FMath::Min(
 			Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond,
 			CarrierPullAcceleration * Config.DriveResponseSeconds);
-		CarrierCorrection = FMath::Min(ConstraintError * CarrierCorrectionShare,
+		CarrierCorrection = FMath::Min(HorizontalConstraintError * CarrierCorrectionShare,
 			MaximumCarrierResponseSpeed * Dt);
 		const double MaximumFishCorrection = (bExhaustedCatEscape
 			? FMath::Max(SwimSpeed, Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond)
 			: Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond) * Dt;
-		FVector TowardRod = IntendedRodTip - ProposedFishPosition;
-		TowardRod.Z = 0.0;
-		const double HorizontalDistance = TowardRod.Size2D();
-		FishCorrection = FMath::Min3(FMath::Max(0.0, ConstraintError - CarrierCorrection),
+		FishCorrection = FMath::Min3(FMath::Max(0.0, HorizontalConstraintError - CarrierCorrection),
 			MaximumFishCorrection, HorizontalDistance);
 		if (FishCorrection > UE_DOUBLE_SMALL_NUMBER && HorizontalDistance > UE_DOUBLE_SMALL_NUMBER)
 		{
