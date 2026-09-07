@@ -44,7 +44,7 @@ public:
 	/** 只读验证一份跨地图随身库存快照是否可被本组件接收；检查 authority、定义、容量、实例唯一性和选择引用，但不写入现有库存。 */
 	bool CanRestoreSnapshotFromAuthority(const FCatEquipmentLoadoutSnapshot& RestoredSnapshot, FText& OutFailure) const;
 
-	/** 在 Save 已完成全局预检后恢复钓具选择与随身库存载荷；有正式库存组件时同步组件内容，旧宿主只替换兼容快照，活动记录或局部校验失败时不改当前状态。 */
+	/** 在 Save 已完成全局预检后恢复钓具选择与随身库存载荷；正式角色会先把载荷导入 InventoryComponent，旧宿主只替换兼容快照，局部导入失败时不改当前状态。 */
 	bool RestoreSnapshotFromAuthority(const FCatEquipmentLoadoutSnapshot& RestoredSnapshot);
 
 	/** 根据服务器目录、可信解锁证明和随身库存持有量设置当前钓鱼选择；当前已部署鱼竿可作为原选择继续沿用，但不能借此切换到另一根鱼竿。 */
@@ -198,8 +198,9 @@ private:
 	/** 补齐现有库存格的实例身份和工具状态；返回值表示本次是否修正了旧数据。 */
 	bool NormalizeInventorySlots();
 
-	/** 把当前旧随身库存投影转换成正式库存 entries；只服务迁移期旧入口回写，转换失败时不写入目标组件。 */
-	bool BuildFormalEntriesFromSnapshot(UCatInventoryComponent& TargetInventory,
+	/** 把指定兼容随身库存载荷转换成正式库存 entries；只服务存档恢复或旧格式导入，转换失败时不写入目标组件。 */
+	bool BuildFormalEntriesFromSnapshot(const FCatEquipmentLoadoutSnapshot& SourceSnapshot,
+		UCatInventoryComponent& TargetInventory,
 		TArray<FCatInventoryEntry>& OutEntries);
 
 	/** 为一格旧投影物品创建或复用正式装备实例；实例 ID、定义和鱼竿状态必须跟旧格保持一致。 */
@@ -208,8 +209,8 @@ private:
 		UCatEquipmentDefinition& Definition,
 		const TMap<FGuid, UCatEquipmentInventoryItemInstance*>& ExistingInstances);
 
-	/** 迁移期为仍先改 Equipment 快照的旧入口补做正式库存同步；正式物品发放路径已经以 InventoryComponent 为事实源。 */
-	bool SyncOwnerInventoryComponentFromSnapshot();
+	/** 把存档或旧格式中的随身库存载荷显式导入 Owner 正式库存；普通 Equipment 发布不能调用它反写背包事实。 */
+	bool ImportSnapshotInventoryToOwnerInventoryComponent(const FCatEquipmentLoadoutSnapshot& SourceSnapshot);
 
 	/** 从 Owner 的正式库存组件重建旧随身格数组；只做只读投影，不提交库存命令或推进 Equipment Revision。 */
 	bool BuildSnapshotInventorySlotsFromOwnerInventoryComponent(TArray<FCatRunInventorySlot>& OutSlots) const;
@@ -257,7 +258,7 @@ private:
 	/** 构造操作+RequestId 幂等键；只在当前 Character 生命周期使用。 */
 	static FString MakeTerminalKey(const TCHAR* Operation, FGuid RequestId);
 
-	/** authority 发布旧快照前保留旧入口到正式库存的兼容同步，再请求复制并广播；正式发放路径发布时 InventoryComponent 已经先提交。 */
+	/** 发布钓鱼选择和旧库存投影读模型；正式背包事实必须已经由 InventoryComponent 或恢复导入入口提交。 */
 	void PublishSnapshot();
 
 	/** 钓鱼选择、鱼竿耐久和旧库存投影的复制读模型；正式库存组件持有物品事实，Snapshot 只服务旧消费者。 */

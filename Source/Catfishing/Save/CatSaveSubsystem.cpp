@@ -292,7 +292,7 @@ namespace
 		return Saved;
 	}
 
-	// 玩家运行载荷恢复输入转换流程：先完整重建兼容 DTO，再交给 Equipment 校验并同步正式 InventoryComponent；转换本身不修改任何运行库存。
+	// 玩家运行载荷恢复输入转换流程：先完整重建兼容 DTO，再交给 Equipment 校验并显式导入正式 InventoryComponent；转换本身不修改任何运行库存。
 	FCatEquipmentLoadoutSnapshot ToRuntimeEquipment(const FCatSavedEquipmentLoadout& Saved)
 	{
 		FCatEquipmentLoadoutSnapshot Snapshot;

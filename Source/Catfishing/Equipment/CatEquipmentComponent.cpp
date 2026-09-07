@@ -297,11 +297,18 @@ bool UCatEquipmentComponent::ValidatePersistentSnapshotPayload(const FCatEquipme
 	return true;
 }
 
-// 随身库存恢复提交流程：先重复完整预检，成功后清掉只属于旧 Character 生命周期的请求缓存、活动 Use 记录和正式实例强引用，再替换兼容快照；发布时有正式库存组件才同步它，旧宿主只复制旧读模型。
+// 随身库存恢复提交流程：
+// 1. 先重复完整预检，并在正式角色上把保存载荷导入 InventoryComponent，失败时保持现有背包和选择不变。
+// 2. 成功后清掉只属于旧 Character 生命周期的请求缓存、活动 Use 记录和正式实例强引用。
+// 3. 最后替换兼容快照并发布旧读模型；发布只通知选择和投影变化，不再反向改写正式背包。
 bool UCatEquipmentComponent::RestoreSnapshotFromAuthority(const FCatEquipmentLoadoutSnapshot& RestoredSnapshot)
 {
 	FText Failure;
 	if (!CanRestoreSnapshotFromAuthority(RestoredSnapshot, Failure))
+	{
+		return false;
+	}
+	if (!ImportSnapshotInventoryToOwnerInventoryComponent(RestoredSnapshot))
 	{
 		return false;
 	}
@@ -2161,10 +2168,10 @@ bool UCatEquipmentComponent::NormalizeInventorySlots()
 	return bChanged;
 }
 
-// 旧投影到正式实例的兼容建模流程：
-// 1. 先按旧槽位实例 ID 复用正式库存里已有对象，避免旧入口发布时让客户端看到全新的物品对象身份。
+// 兼容载荷到正式实例的建模流程：
+// 1. 先按载荷槽位实例 ID 复用正式库存里已有对象，避免存档恢复或旧格式导入时让客户端看到全新的物品对象身份。
 // 2. 没有可复用对象时按定义声明的库存实例类创建，并要求它仍是装备适配实例，防止普通实例吞掉鱼竿耐久。
-// 3. 最后把定义、实例 ID、运行宿主和鱼竿状态写回实例，让旧入口回写出的正式库存和旧快照表达同一份物品。
+// 3. 最后把定义、实例 ID、运行宿主和鱼竿状态写回实例，让正式库存和输入载荷表达同一份物品。
 UCatEquipmentInventoryItemInstance* UCatEquipmentComponent::CreateOrUpdateFormalItemInstanceFromSlot(
 	const FCatRunInventorySlot& Slot,
 	UCatEquipmentDefinition& Definition,
@@ -2205,11 +2212,12 @@ UCatEquipmentInventoryItemInstance* UCatEquipmentComponent::CreateOrUpdateFormal
 	return Instance;
 }
 
-// 旧快照到正式库存的兼容建模流程：
+// 兼容载荷到正式库存的建模流程：
 // 1. 先收集目标正式库存里已有的装备实例，后续按 ItemInstanceId 复用，保持正式库存对象身份稳定。
-// 2. 再按旧投影格顺序建立正式 entries，空格保留为空 entry，不改变 UI 和存档目前依赖的格位顺序。
-// 3. 每个占用格必须解析到运行就绪定义、合法数量和唯一实例 ID；任一失败都会清空输出并让同步整体拒绝。
-bool UCatEquipmentComponent::BuildFormalEntriesFromSnapshot(UCatInventoryComponent& TargetInventory,
+// 2. 再按输入载荷的格位顺序建立正式 entries，空格保留为空 entry，不改变 UI 和存档目前依赖的格位顺序。
+// 3. 每个占用格必须解析到运行就绪定义、合法数量和唯一实例 ID；任一失败都会清空输出并让导入整体拒绝。
+bool UCatEquipmentComponent::BuildFormalEntriesFromSnapshot(const FCatEquipmentLoadoutSnapshot& SourceSnapshot,
+	UCatInventoryComponent& TargetInventory,
 	TArray<FCatInventoryEntry>& OutEntries)
 {
 	OutEntries.Reset();
@@ -2231,8 +2239,8 @@ bool UCatEquipmentComponent::BuildFormalEntriesFromSnapshot(UCatInventoryCompone
 	}
 
 	TSet<FGuid> SeenItemInstanceIds;
-	OutEntries.Reserve(Snapshot.InventorySlots.Num());
-	for (const FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
+	OutEntries.Reserve(SourceSnapshot.InventorySlots.Num());
+	for (const FCatRunInventorySlot& Slot : SourceSnapshot.InventorySlots)
 	{
 		FCatInventoryEntry& Entry = OutEntries.AddDefaulted_GetRef();
 		Entry = FCatInventoryEntry(&TargetInventory);
@@ -2272,11 +2280,12 @@ bool UCatEquipmentComponent::BuildFormalEntriesFromSnapshot(UCatInventoryCompone
 	return true;
 }
 
-// 旧入口回写正式库存流程：
+// 兼容载荷导入正式库存流程：
 // 1. 只在 authority Owner 上执行；没有正式库存组件的旧测试宿主直接跳过，不改变既有 Equipment 行为。
-// 2. 先把当前旧 Snapshot 建模成正式 entries，再用 InventoryComponent 的整表替换入口提交，避免旧入口留下半同步状态。
-// 3. 失败只返回 false 给发布入口记录诊断；正式发放路径已经先写 InventoryComponent，本流程只保留迁移期兼容回写能力。
-bool UCatEquipmentComponent::SyncOwnerInventoryComponentFromSnapshot()
+// 2. 先把指定保存载荷建模成正式 entries，再用 InventoryComponent 的整表替换入口提交，避免恢复路径留下半同步状态。
+// 3. 普通 Equipment 发布不调用这里，防止钓具选择变化把旧投影反向写成背包事实。
+bool UCatEquipmentComponent::ImportSnapshotInventoryToOwnerInventoryComponent(
+	const FCatEquipmentLoadoutSnapshot& SourceSnapshot)
 {
 	AActor* Owner = GetOwner();
 	if (Owner == nullptr || !Owner->HasAuthority())
@@ -2291,13 +2300,13 @@ bool UCatEquipmentComponent::SyncOwnerInventoryComponentFromSnapshot()
 	}
 
 	TArray<FCatInventoryEntry> FormalEntries;
-	return BuildFormalEntriesFromSnapshot(*OwnerInventory, FormalEntries)
+	return BuildFormalEntriesFromSnapshot(SourceSnapshot, *OwnerInventory, FormalEntries)
 		&& OwnerInventory->ReplaceInventoryEntriesFromAuthority(FormalEntries, GetConfiguredInventorySlotCapacity());
 }
 
 // 公开投影刷新流程：
 // 1. 公开入口只负责把 Owner 正式库存投影回旧格位，不声明新增物品，避免普通同步抢钓具选择。
-// 2. 实际比较、版本推进和发布交给带参数入口，保证营地转移和普通同步共用同一条旧投影规则。
+// 2. 实际比较、版本推进和发布交给带参数入口，保证营地转移和普通投影刷新共用同一条旧投影规则。
 bool UCatEquipmentComponent::RefreshInventoryProjectionFromInventoryComponentFromAuthority()
 {
 	return RefreshInventoryProjectionFromInventoryComponentFromAuthority(nullptr, NAME_None);
@@ -2307,7 +2316,7 @@ bool UCatEquipmentComponent::RefreshInventoryProjectionFromInventoryComponentFro
 // 1. 只在 authority 上读取 Owner 的 InventoryComponent；客户端复制读模型不能反向生成服务器快照。
 // 2. 先把正式库存条目投成旧 InventorySlots，并记录刷新前的钓具选择，用于判断是否需要发布新 Equipment Revision。
 // 3. 调用方传入新增定义时才尝试自动选择；这样营地交换能保留旧体验，普通格位刷新不会无故抢当前选择。
-// 4. 旧格位或选择有任一变化时才推进 Equipment Revision 并发布；Publish 的兼容回写会因内容一致而不二次推进正式版本。
+// 4. 旧格位或选择有任一变化时才推进 Equipment Revision 并发布旧读模型；正式背包事实仍只来自 InventoryComponent。
 bool UCatEquipmentComponent::RefreshInventoryProjectionFromInventoryComponentFromAuthority(
 	const UCatEquipmentDefinition* GrantedDefinition, const FName GrantedDefinitionId)
 {
@@ -3115,18 +3124,11 @@ FString UCatEquipmentComponent::MakeTerminalKey(const TCHAR* Operation, const FG
 	return FString::Printf(TEXT("%s|%s"), Operation, *RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
-// Snapshot 发布流程：authority 保留旧入口到正式 InventoryComponent 的兼容同步，再要求 Owner 立即复制并广播旧读模型变化；正式发放路径走到这里时正式库存已经先提交。
+// Snapshot 发布流程：只要求 Owner 立即复制并广播旧读模型变化；正式背包事实必须由 InventoryComponent 或显式恢复导入入口提交。
 void UCatEquipmentComponent::PublishSnapshot()
 {
 	if (AActor* Owner = GetOwner(); Owner && Owner->HasAuthority())
 	{
-		if (!SyncOwnerInventoryComponentFromSnapshot())
-		{
-			UE_LOG(LogCatEquipment, Warning,
-				TEXT("Event=equipment_inventory_sync_failed Revision=%lld Slots=%d Owner=%s World=%s NetMode=%d"),
-				Snapshot.Revision, Snapshot.InventorySlots.Num(), *GetNameSafe(Owner), *GetNameSafe(GetWorld()),
-				static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone));
-		}
 		Owner->ForceNetUpdate();
 	}
 	OnSnapshotChanged.Broadcast();
