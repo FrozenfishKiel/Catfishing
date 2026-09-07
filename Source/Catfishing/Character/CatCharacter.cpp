@@ -9,11 +9,13 @@
 #include "Animation/AnimMontage.h"
 #include "Condition/CatConditionComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatEquipmentSettings.h"
 #include "Growth/CatGrowthComponent.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/Presentation/CatFishingCameraComponent.h"
+#include "Inventory/CatInventoryComponent.h"
 
-// 构造流程：一次创建 Character-owned ASC/AttributeSet、离散身体状态、吃鱼成长和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
+// 构造流程：一次创建 Character-owned ASC/AttributeSet、离散身体状态、吃鱼成长、正式随身库存和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
 ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UCatCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
@@ -24,6 +26,7 @@ ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
 	AbilitySystemComponent->AddAttributeSetSubobject(SurvivalAttributes.Get());
 	ConditionComponent = CreateDefaultSubobject<UCatConditionComponent>(TEXT("ConditionComponent"));
 	GrowthComponent = CreateDefaultSubobject<UCatGrowthComponent>(TEXT("GrowthComponent"));
+	InventoryComponent = CreateDefaultSubobject<UCatInventoryComponent>(TEXT("InventoryComponent"));
 	EquipmentComponent = CreateDefaultSubobject<UCatEquipmentComponent>(TEXT("EquipmentComponent"));
 	FishingCameraComponent = CreateDefaultSubobject<UCatFishingCameraComponent>(TEXT("FishingCameraComponent"));
 }
@@ -174,6 +177,12 @@ UCatEquipmentComponent* ACatCharacter::GetEquipmentComponent() const
 	return EquipmentComponent;
 }
 
+// Inventory 读取流程：直接返回构造期正式库存组件；后续商店、拾取和营地迁移都应从这个组件进入统一收货。
+UCatInventoryComponent* ACatCharacter::GetInventoryComponent() const
+{
+	return InventoryComponent;
+}
+
 // BeginPlay 流程：先让 Actor 与组件完成注册（ASC 此时会按引擎默认临时建立 ActorInfo），再用项目 gate 幂等刷新或清除，避免未裁 runtime 偷跑。
 void ACatCharacter::BeginPlay()
 {
@@ -189,6 +198,12 @@ void ACatCharacter::PossessedBy(AController* NewController)
 	InitializeAbilityActorInfo();
 	if (HasAuthority())
 	{
+		if (InventoryComponent)
+		{
+			const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
+			InventoryComponent->SetInventorySlotCountFromAuthority(
+				EquipmentSettings != nullptr ? EquipmentSettings->InventorySlotCapacity : 0);
+		}
 		if (AbilitySystemComponent)
 		{
 			AbilitySystemComponent->GrantConfiguredDefaultAbilitySetFromAuthority();

@@ -11,13 +11,14 @@ class UCatAbilitySystemComponent;
 class UCatSurvivalAttributeSet;
 class UCatConditionComponent;
 class UCatEquipmentComponent;
+class UCatInventoryComponent;
 class UCatGrowthComponent;
 class UCatFishingCameraComponent;
 
 /**
- * Lake 的唯一玩法身体；同时宿主 Character-owned ASC、Condition、Growth 与 Equipment。
+ * Lake 的唯一玩法身体；同时宿主 Character-owned ASC、Condition、Growth、Inventory 与 Equipment。
  * Character 同时作为 ASC Owner/Avatar；丢失占有或销毁只处理身体和组件生命周期，跨系统会话由 GameMode 等 authority 协调者收口。
- * 鱼护是独立箱子式库存对象，不由 Character 创建、注册或复制；鱼以外的随身物品走 Equipment 的统一库存数组。
+ * 鱼护是独立箱子式库存对象，不由 Character 创建、注册或复制；鱼以外的随身物品新主线走 Inventory，Equipment 暂时保留钓鱼选择和旧快照兼容。
  */
 UCLASS()
 class CATFISHING_API ACatCharacter : public ACharacter, public IAbilitySystemInterface
@@ -25,7 +26,7 @@ class CATFISHING_API ACatCharacter : public ACharacter, public IAbilitySystemInt
 	GENERATED_BODY()
 
 public:
-	/** 构造 ASC/属性集、Condition、Growth 与 Equipment，开启组件复制但不在 CDO 写任何运行数值。 */
+	/** 构造 ASC/属性集、Condition、Growth、Inventory 与 Equipment，开启组件复制但不在 CDO 写任何运行数值。 */
 	ACatCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 	/** 上鱼时由 Fishing 表现提供持杆第一人称；其余时间保留角色蓝图的相机。 */
 	virtual void CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult) override;
@@ -45,6 +46,10 @@ public:
 	/** 返回 Character 唯一一局装备组件；永久解锁/选择仍在 LocalPlayer Profile。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Equipment")
 	UCatEquipmentComponent* GetEquipmentComponent() const;
+
+	/** 返回 Character 正式随身库存组件；新拾取、商店和营地发货入口应优先围绕它迁移。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")
+	UCatInventoryComponent* GetInventoryComponent() const;
 
 	/** 猫种类定义 ID 是角色蓝图选择身体数值模板的稳定键；为空时角色类不猜默认值，而由能力系统配置在播种属性时解析。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Character")
@@ -173,6 +178,10 @@ private:
 	/** 猫身体唯一吃鱼成长组件；复制经验槽与待选次数，Buff 内容未裁时不生成第二套效果状态。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Growth", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatGrowthComponent> GrowthComponent;
+
+	/** Character 的正式随身库存组件；它按 Aegis 主线承载物品实例和堆叠，旧 Equipment 快照迁移完成前只作为新入口落点。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCatInventoryComponent> InventoryComponent;
 
 	/** 一局功能型装配、耗材与鱼竿耐久宿主；没有等级、词条、战力或偷取接口。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Equipment", meta = (AllowPrivateAccess = "true"))

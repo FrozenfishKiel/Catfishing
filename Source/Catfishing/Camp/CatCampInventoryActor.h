@@ -10,6 +10,7 @@
 class UCatEquipmentComponent;
 class UCatEquipmentDefinition;
 class UCatCampInventoryWidget;
+class UCatInventoryComponent;
 class USceneComponent;
 class USphereComponent;
 
@@ -46,7 +47,7 @@ struct FCatCampInventoryAddItemRequest
 /** 营地公共仓库快照变化通知；UI 或营地交互层收到后只能重读快照，不能直接写库存。 */
 DECLARE_MULTICAST_DELEGATE(FCatCampInventorySnapshotChanged);
 
-/** 营地公共仓库 Actor；商店购买物先进入这里，玩家再从公共仓库取到自己的随身库存。 */
+/** 营地公共仓库 Actor；商店购买物先进入这里，玩家再从公共仓库取到自己的随身库存，迁移期同时暴露正式 Inventory 组件。 */
 UCLASS(BlueprintType, Blueprintable)
 class CATFISHING_API ACatCampInventoryActor : public AActor, public ICatInteractable
 {
@@ -74,6 +75,10 @@ public:
 	/** 读取当前公共仓库快照；返回 const 引用防止外部绕过 Actor 写口修改格子。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|CampInventory")
 	const FCatCampInventorySnapshot& GetSnapshot() const;
+
+	/** 正式库存组件是新收货主线的落点；迁移期旧快照仍保留，避免当前营地 UI 立即断线。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")
+	UCatInventoryComponent* GetInventoryComponent() const;
 
 	/** 只读验证一份跨地图公共仓库快照；检查 authority、定义、容量与运行实例唯一性，不触碰当前仓库。 */
 	bool CanRestoreSnapshotFromAuthority(const FCatCampInventorySnapshot& RestoredSnapshot, FText& OutFailure) const;
@@ -183,6 +188,11 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Interaction",
 		meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<USphereComponent> InteractionCollision;
+
+	/** 营地公共仓库的正式库存组件；迁移期不覆盖旧 Snapshot，先作为统一收货和后续 UI 的目标落点。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Inventory",
+		meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCatInventoryComponent> InventoryComponent;
 
 	/** 公共仓库当前是否允许玩家交互；编辑器或蓝图可关闭它，提示和打开请求都会一起停用。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Catfishing|Interaction",

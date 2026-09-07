@@ -9,6 +9,7 @@
 #include "Equipment/CatRunInventorySlotOperations.h"
 #include "GameFramework/PlayerController.h"
 #include "Interaction/CatInteractionSettings.h"
+#include "Inventory/CatInventoryComponent.h"
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
@@ -28,6 +29,7 @@ ACatCampInventoryActor::ACatCampInventoryActor()
 	InteractionCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
 	InteractionCollision->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	InteractionCollision->SetGenerateOverlapEvents(false);
+	InventoryComponent = CreateDefaultSubobject<UCatInventoryComponent>(TEXT("InventoryComponent"));
 	InventoryViewClass = TSoftClassPtr<UCatCampInventoryWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatCampInventory.WBP_CatCampInventory_C")));
 	InteractionPrompt = NSLOCTEXT("Catfishing", "CampInventoryInteractionPrompt", "打开营地库存");
@@ -47,6 +49,10 @@ void ACatCampInventoryActor::BeginPlay()
 	if (const UCatInteractionSettings* Settings = GetDefault<UCatInteractionSettings>(); Settings && InteractionCollision)
 	{
 		InteractionCollision->SetCollisionResponseToChannel(Settings->TargetingTraceChannel, ECR_Block);
+	}
+	if (HasAuthority() && InventoryComponent)
+	{
+		InventoryComponent->SetInventorySlotCountFromAuthority(InventorySlotCapacity);
 	}
 }
 
@@ -100,6 +106,12 @@ bool ACatCampInventoryActor::Interact_Implementation(AController* RequestingCont
 const FCatCampInventorySnapshot& ACatCampInventoryActor::GetSnapshot() const
 {
 	return Snapshot;
+}
+
+// Inventory 读取流程：直接返回构造期正式库存组件；迁移期旧公共仓库快照仍负责现有 UI 和取用兼容。
+UCatInventoryComponent* ACatCampInventoryActor::GetInventoryComponent() const
+{
+	return InventoryComponent;
 }
 
 // 公共仓库恢复预检流程：
