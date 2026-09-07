@@ -376,9 +376,9 @@ bool UCatEquipmentComponent::RestoreSnapshotFromAuthority(const FCatEquipmentLoa
 // 当前钓鱼选择配置流程：
 // 1. 先用 RequestId 返回既有终态；部署中的当前鱼竿可继续作为选择上下文，但不能切到另一根鱼竿。
 // 2. 每次提交都必须通过服务器目录、authority、Revision、定义类别、消耗属性和 Profile 解锁证明。
-// 3. 鱼饵、鱼漂和可选抄网必须存在于随身库存；鱼竿来自库存格，或来自当前尚未收口的同一条 Use 记录。
+// 3. 钓具实例优先从正式 InventoryComponent 解析；鱼竿也可以沿用当前尚未收口的同一条 Use 记录。
 // 4. 同一套定义和实例选择直接返回 AlreadyResolved；不同选择会切换当前钓鱼选择，并从鱼竿实例读取耐久。
-// 5. 成功时只写钓鱼选择、实例身份和当前鱼竿状态，并发布同一份随身库存快照。
+// 5. 成功时只写钓鱼选择、实例身份和当前鱼竿运行态，并发布给迁移期旧消费者的投影快照。
 FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const FName RodDefinitionId, const FName BaitDefinitionId,
 	const FName FloatDefinitionId, const FName ScoopNetDefinitionId, const FName RodSkinDefinitionId,
@@ -444,67 +444,75 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 		}
 		else
 		{
-			const auto ResolveSelectedInventorySlot =
-				[this](const FName DefinitionId, const FGuid ItemInstanceId) -> const FCatRunInventorySlot*
-				{
-					if (ItemInstanceId.IsValid())
-					{
-						const FCatRunInventorySlot* Slot = FindInventorySlotByInstanceId(ItemInstanceId);
-						return Slot && Slot->DefinitionId == DefinitionId ? Slot : nullptr;
-					}
-					return FindFirstInventorySlotByDefinition(DefinitionId);
-				};
 			const auto ResolveSelectedRodSlot =
-				[ActiveSelectedRod, bRequestsActiveSelectedRod, &ResolveSelectedInventorySlot](
-					const FName DefinitionId, const FGuid ItemInstanceId) -> const FCatRunInventorySlot*
+				[this, ActiveSelectedRod, bRequestsActiveSelectedRod](
+					const FName DefinitionId, const FGuid ItemInstanceId,
+					FCatRunInventorySlot& OutSlot) -> bool
 				{
 					if (bRequestsActiveSelectedRod)
 					{
-						return ActiveSelectedRod ? &ActiveSelectedRod->Item : nullptr;
+						if (ActiveSelectedRod == nullptr)
+						{
+							OutSlot = FCatRunInventorySlot();
+							return false;
+						}
+						OutSlot = ActiveSelectedRod->Item;
+						return OutSlot.DefinitionId == DefinitionId
+							&& (!ItemInstanceId.IsValid() || OutSlot.ItemInstanceId == ItemInstanceId);
 					}
-					return ResolveSelectedInventorySlot(DefinitionId, ItemInstanceId);
+					return TryResolveSelectionInventorySlot(DefinitionId, ItemInstanceId, OutSlot);
 				};
-			const FCatRunInventorySlot* RodSlotBeforeNormalize = ResolveSelectedRodSlot(RodDefinitionId,
-				RodItemInstanceId);
-			const FCatRunInventorySlot* BaitSlotBeforeNormalize = ResolveSelectedInventorySlot(BaitDefinitionId,
-				BaitItemInstanceId);
-			const FCatRunInventorySlot* FloatSlotBeforeNormalize = ResolveSelectedInventorySlot(FloatDefinitionId,
-				FloatItemInstanceId);
-			const FCatRunInventorySlot* ScoopSlotBeforeNormalize = ScoopNetDefinitionId.IsNone()
-				? nullptr : ResolveSelectedInventorySlot(ScoopNetDefinitionId, ScoopNetItemInstanceId);
-			if (!RodSlotBeforeNormalize || !BaitSlotBeforeNormalize || !FloatSlotBeforeNormalize
-				|| (!ScoopNetDefinitionId.IsNone() && !ScoopSlotBeforeNormalize))
+			FCatRunInventorySlot RodSlotBeforeNormalize;
+			FCatRunInventorySlot BaitSlotBeforeNormalize;
+			FCatRunInventorySlot FloatSlotBeforeNormalize;
+			FCatRunInventorySlot ScoopSlotBeforeNormalize;
+			const bool bHasRodSlotBeforeNormalize =
+				ResolveSelectedRodSlot(RodDefinitionId, RodItemInstanceId, RodSlotBeforeNormalize);
+			const bool bHasBaitSlotBeforeNormalize =
+				TryResolveSelectionInventorySlot(BaitDefinitionId, BaitItemInstanceId, BaitSlotBeforeNormalize);
+			const bool bHasFloatSlotBeforeNormalize =
+				TryResolveSelectionInventorySlot(FloatDefinitionId, FloatItemInstanceId, FloatSlotBeforeNormalize);
+			const bool bHasScoopSlotBeforeNormalize = ScoopNetDefinitionId.IsNone()
+				|| TryResolveSelectionInventorySlot(ScoopNetDefinitionId, ScoopNetItemInstanceId,
+					ScoopSlotBeforeNormalize);
+			if (!bHasRodSlotBeforeNormalize || !bHasBaitSlotBeforeNormalize || !bHasFloatSlotBeforeNormalize
+				|| !bHasScoopSlotBeforeNormalize)
 			{
 				Result.Error = ECatDomainCommandError::NotFound;
 			}
 			else
 			{
 				const bool bNormalized = NormalizeInventorySlots();
-				const FCatRunInventorySlot* RodSlot = ResolveSelectedRodSlot(RodDefinitionId, RodItemInstanceId);
-				const FCatRunInventorySlot* BaitSlot =
-					ResolveSelectedInventorySlot(BaitDefinitionId, BaitItemInstanceId);
-				const FCatRunInventorySlot* FloatSlot =
-					ResolveSelectedInventorySlot(FloatDefinitionId, FloatItemInstanceId);
-				const FCatRunInventorySlot* ScoopSlot = ScoopNetDefinitionId.IsNone()
-					? nullptr : ResolveSelectedInventorySlot(ScoopNetDefinitionId, ScoopNetItemInstanceId);
-				if (!RodSlot || !BaitSlot || !FloatSlot || (!ScoopNetDefinitionId.IsNone() && !ScoopSlot))
+				FCatRunInventorySlot RodSlot;
+				FCatRunInventorySlot BaitSlot;
+				FCatRunInventorySlot FloatSlot;
+				FCatRunInventorySlot ScoopSlot;
+				const bool bHasRodSlot = ResolveSelectedRodSlot(RodDefinitionId, RodItemInstanceId, RodSlot);
+				const bool bHasBaitSlot = TryResolveSelectionInventorySlot(BaitDefinitionId, BaitItemInstanceId,
+					BaitSlot);
+				const bool bHasFloatSlot = TryResolveSelectionInventorySlot(FloatDefinitionId, FloatItemInstanceId,
+					FloatSlot);
+				const bool bHasScoopSlot = ScoopNetDefinitionId.IsNone()
+					|| TryResolveSelectionInventorySlot(ScoopNetDefinitionId, ScoopNetItemInstanceId, ScoopSlot);
+				if (!bHasRodSlot || !bHasBaitSlot || !bHasFloatSlot || !bHasScoopSlot)
 				{
 					Result.Error = ECatDomainCommandError::NotFound;
 				}
 				else
 				{
-					const FGuid NewScoopItemInstanceId = ScoopSlot ? ScoopSlot->ItemInstanceId : FGuid();
+					const FGuid NewScoopItemInstanceId = ScoopNetDefinitionId.IsNone()
+						? FGuid() : ScoopSlot.ItemInstanceId;
 					const bool bSameLoadout = Snapshot.RodDefinitionId == RodDefinitionId
-						&& Snapshot.RodItemInstanceId == RodSlot->ItemInstanceId
+						&& Snapshot.RodItemInstanceId == RodSlot.ItemInstanceId
 						&& Snapshot.BaitDefinitionId == BaitDefinitionId
-						&& Snapshot.BaitItemInstanceId == BaitSlot->ItemInstanceId
+						&& Snapshot.BaitItemInstanceId == BaitSlot.ItemInstanceId
 						&& Snapshot.FloatDefinitionId == FloatDefinitionId
-						&& Snapshot.FloatItemInstanceId == FloatSlot->ItemInstanceId
+						&& Snapshot.FloatItemInstanceId == FloatSlot.ItemInstanceId
 						&& Snapshot.ScoopNetDefinitionId == ScoopNetDefinitionId
 						&& Snapshot.ScoopNetItemInstanceId == NewScoopItemInstanceId
 						&& Snapshot.RodSkinDefinitionId == RodSkinDefinitionId
-						&& Snapshot.RodDurability == RodSlot->RodDurability
-						&& Snapshot.bRodBroken == RodSlot->bRodBroken;
+						&& Snapshot.RodDurability == RodSlot.RodDurability
+						&& Snapshot.bRodBroken == RodSlot.bRodBroken;
 					if (bSameLoadout && !bNormalized)
 					{
 						Result.Error = ECatDomainCommandError::AlreadyResolved;
@@ -513,16 +521,16 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 						return Result;
 					}
 					Snapshot.RodDefinitionId = RodDefinitionId;
-					Snapshot.RodItemInstanceId = RodSlot->ItemInstanceId;
+					Snapshot.RodItemInstanceId = RodSlot.ItemInstanceId;
 					Snapshot.BaitDefinitionId = BaitDefinitionId;
-					Snapshot.BaitItemInstanceId = BaitSlot->ItemInstanceId;
+					Snapshot.BaitItemInstanceId = BaitSlot.ItemInstanceId;
 					Snapshot.FloatDefinitionId = FloatDefinitionId;
-					Snapshot.FloatItemInstanceId = FloatSlot->ItemInstanceId;
+					Snapshot.FloatItemInstanceId = FloatSlot.ItemInstanceId;
 					Snapshot.ScoopNetDefinitionId = ScoopNetDefinitionId;
 					Snapshot.ScoopNetItemInstanceId = NewScoopItemInstanceId;
 					Snapshot.RodSkinDefinitionId = RodSkinDefinitionId;
-					Snapshot.RodDurability = RodSlot->RodDurability;
-					Snapshot.bRodBroken = RodSlot->bRodBroken;
+					Snapshot.RodDurability = RodSlot.RodDurability;
+					Snapshot.bRodBroken = RodSlot.bRodBroken;
 					++Snapshot.Revision;
 					PublishSnapshot();
 					Result.bCommitted = true;
@@ -2382,6 +2390,80 @@ bool UCatEquipmentComponent::BuildLegacyRunInventorySlotFromFormalEntry(
 		Cast<UCatEquipmentInventoryItemInstance>(Entry.Instance);
 	return EquipmentInstance != nullptr
 		&& EquipmentInstance->BuildLegacyRunInventorySlot(Entry.StackCount, OutSlot);
+}
+
+// 钓鱼选择库存候选解析流程：
+// 1. 先拒绝空定义，并清空输出槽位，避免调用方误用上一次的局部缓存。
+// 2. Owner 正式库存容量完整时，把 InventoryComponent 当成唯一库存事实；实例 ID 优先精确定位，没有实例 ID 时按定义扫描正式槽位。
+// 3. 扫描时沿用旧鱼竿选择的“可用优先、否则第一命中”口径，保证旧按定义选择入口不会意外选中断竿。
+// 4. 正式 entry 必须能投影成旧槽位且定义一致，才允许 Equipment 更新钓鱼选择和鱼竿运行态。
+// 5. 只有没有正式库存或正式库存尚未完成迁移容量初始化时，才回退旧 Snapshot，避免新链路继续信任过期投影。
+bool UCatEquipmentComponent::TryResolveSelectionInventorySlot(const FName DefinitionId,
+	const FGuid ItemInstanceId, FCatRunInventorySlot& OutSlot) const
+{
+	OutSlot = FCatRunInventorySlot();
+	if (DefinitionId.IsNone())
+	{
+		return false;
+	}
+
+	const UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
+	if (OwnerInventory != nullptr && OwnerInventory->GetInventorySlotCount() >= GetConfiguredInventorySlotCapacity())
+	{
+		if (ItemInstanceId.IsValid())
+		{
+			const int32 SlotIndex = OwnerInventory->FindInventorySlotIndexFromInstanceId(ItemInstanceId);
+			const FCatInventoryEntry* FormalEntry = OwnerInventory->GetInventoryEntryAtSlot(SlotIndex);
+			if (FormalEntry == nullptr || FormalEntry->StackCount <= 0
+				|| !BuildLegacyRunInventorySlotFromFormalEntry(*FormalEntry, OutSlot)
+				|| OutSlot.DefinitionId != DefinitionId)
+			{
+				OutSlot = FCatRunInventorySlot();
+				return false;
+			}
+			return true;
+		}
+
+		FCatRunInventorySlot FirstMatchedSlot;
+		bool bFoundFirstMatchedSlot = false;
+		const TArray<FCatInventoryEntry> FormalEntries = OwnerInventory->GetInventoryEntries();
+		for (const FCatInventoryEntry& FormalEntry : FormalEntries)
+		{
+			FCatRunInventorySlot ProjectedSlot;
+			if (FormalEntry.StackCount <= 0
+				|| !BuildLegacyRunInventorySlotFromFormalEntry(FormalEntry, ProjectedSlot)
+				|| ProjectedSlot.DefinitionId != DefinitionId)
+			{
+				continue;
+			}
+			if (!bFoundFirstMatchedSlot)
+			{
+				FirstMatchedSlot = ProjectedSlot;
+				bFoundFirstMatchedSlot = true;
+			}
+			if (!ProjectedSlot.bRodBroken && FMath::IsFinite(ProjectedSlot.RodDurability)
+				&& ProjectedSlot.RodDurability > 0.0)
+			{
+				OutSlot = ProjectedSlot;
+				return true;
+			}
+		}
+		if (!bFoundFirstMatchedSlot)
+		{
+			return false;
+		}
+		OutSlot = FirstMatchedSlot;
+		return true;
+	}
+
+	const FCatRunInventorySlot* LegacySlot = ItemInstanceId.IsValid()
+		? FindInventorySlotByInstanceId(ItemInstanceId) : FindFirstInventorySlotByDefinition(DefinitionId);
+	if (LegacySlot == nullptr || LegacySlot->DefinitionId != DefinitionId)
+	{
+		return false;
+	}
+	OutSlot = *LegacySlot;
+	return true;
 }
 
 // 选中鱼竿正式实例解析流程：

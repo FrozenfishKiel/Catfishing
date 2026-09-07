@@ -228,6 +228,10 @@ private:
 	FCatRunInventorySlot* FindInventorySlotByInstanceId(FGuid ItemInstanceId);
 	const FCatRunInventorySlot* FindInventorySlotByInstanceId(FGuid ItemInstanceId) const;
 
+	/** 按定义和实例身份解析钓鱼选择候选；正式库存容量完整时只从 InventoryComponent 投影，旧 Snapshot 仅在迁移期未绑定或容量未齐时回退。 */
+	bool TryResolveSelectionInventorySlot(FName DefinitionId, FGuid ItemInstanceId,
+		FCatRunInventorySlot& OutSlot) const;
+
 	/** 读取某个定义当前可用的第一份实例；旧 UI 仍按定义选择时用它落到具体物品实例，鱼竿会优先返回未断且有耐久的那份。 */
 	const FCatRunInventorySlot* FindFirstInventorySlotByDefinition(FName DefinitionId) const;
 

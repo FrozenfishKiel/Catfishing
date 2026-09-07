@@ -810,6 +810,27 @@ void ACatfishingPlayerController::ServerConfigureEquipment_Implementation(const 
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
+// 随身库存钓具选择 RPC 路由流程：Controller 只转交槽位意图和两份版本；库存协调器重读正式 InventoryComponent 后再交给 Equipment 更新选择。
+void ACatfishingPlayerController::ServerSelectInventoryFishingItem_Implementation(
+	const FGuid RequestId, const int64 ExpectedInventoryRevision,
+	const int64 ExpectedEquipmentRevision, const int32 InventorySlotIndex)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
+	if (UCatInventoryCommandCoordinator* Coordinator = GetWorld()
+		? GetWorld()->GetSubsystem<UCatInventoryCommandCoordinator>() : nullptr)
+	{
+		Result = Coordinator->SelectFishingItemFromInventorySlot(this, ControlledCharacter, RequestId,
+			ExpectedInventoryRevision, ExpectedEquipmentRevision, InventorySlotIndex);
+	}
+	else
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	}
+	DeliverCampCommandResultToOwningClient(Result);
+}
+
 // 随身库存整理 RPC 路由流程：Controller 只提交源/目标槽位，正式库存移动由 Inventory 协调器转给 InventoryComponent 裁决。
 void ACatfishingPlayerController::ServerMoveInventorySlot_Implementation(const FGuid RequestId,
 	const int64 ExpectedRevision, const int32 SourceSlotIndex, const int32 TargetSlotIndex)

@@ -196,6 +196,11 @@ public:
 		FGuid RodItemInstanceId, FGuid BaitItemInstanceId, FGuid FloatItemInstanceId,
 		FGuid ScoopNetItemInstanceId);
 
+	/** 按本人正式随身库存格选择钓具；Controller 只转交槽位和两份版本，由库存协调器重读库存后更新 Equipment 选择。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Inventory")
+	void ServerSelectInventoryFishingItem(FGuid RequestId, int64 ExpectedInventoryRevision,
+		int64 ExpectedEquipmentRevision, int32 InventorySlotIndex);
+
 	/** 整理当前角色正式随身库存中的两个格子；服务器按 Inventory Revision 和数组下标重读后移动、合并或交换。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
 	void ServerMoveInventorySlot(FGuid RequestId, int64 ExpectedRevision,

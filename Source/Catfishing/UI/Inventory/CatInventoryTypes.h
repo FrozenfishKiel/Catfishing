@@ -22,7 +22,7 @@ enum class ECatInventoryAction : uint8
 	MoveObjectBetweenContainers = 2,
 	/** 请求整理运行期库存格；同源只改本数据源，背包和营地之间的拖放会由服务器同时改双方数据源。 */
 	MoveInventoryItem = 3,
-	/** 请求把当前选中的随身库存物品设为钓鱼选择；服务器仍会重读整套鱼竿、鱼饵和鱼漂持有量。 */
+	/** 请求把当前选中的正式随身库存格设为钓鱼选择；服务器会重读 InventoryComponent 槽位，并按当前 Equipment 快照补齐未点击的选择项。 */
 	SelectInventoryFishingItem = 4,
 	/** 请求把当前选中的鱼交给献祭协议；Items 与 Run 的不可逆点继续由 SacrificeCoordinator 处理。 */
 	SacrificeSelectedFish = 5,
@@ -222,7 +222,7 @@ struct FCatInventoryViewState
 	UPROPERTY(BlueprintReadOnly)
 	int64 CampInventoryRevision = 0;
 
-	/** 当前 Character 的钓鱼选择和旧兼容快照；背包格优先读正式 InventoryComponent，Equipment 只保留选择摘要与迁移期 fallback。 */
+	/** 当前 Character 的钓鱼选择和旧兼容快照；背包格优先读正式 InventoryComponent，Equipment 只保留选择摘要与迁移期回退。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatEquipmentLoadoutSnapshot Equipment;
 
@@ -230,11 +230,11 @@ struct FCatInventoryViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bEquipmentAvailable = false;
 
-	/** 当前是否已经拿到可用于展示的随身库存读源；正式库存优先，旧 Equipment 投影只作临时 fallback。 */
+	/** 当前是否已经拿到可用于展示的随身库存读源；正式库存优先，旧 Equipment 投影只作临时回退。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bInventoryAvailable = false;
 
-	/** 当前随身背包内容版本；正式库存已绑定时来自 InventoryComponent，临时 fallback 时才沿用 Equipment Revision。 */
+	/** 当前随身背包内容版本；正式库存已绑定时来自 InventoryComponent，临时回退时才沿用 Equipment Revision。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 InventoryRevision = 0;
 

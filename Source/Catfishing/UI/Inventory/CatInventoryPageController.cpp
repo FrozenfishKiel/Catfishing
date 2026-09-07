@@ -370,9 +370,9 @@ void UCatInventoryPageController::RequestCloseInventoryFromWidget()
 // 格子上下文流程：
 // 1. 右键入口直接按传入格子来源处理动作，不再先同步共享选择或刷新所有库存 WBP。
 // 2. 如果目标是营地公共仓库格，先按最新 ViewState 复核公共槽位，再提交“取到正式随身库存”服务器请求；这里不直接改公共仓库格。
-// 3. 如果目标是随身库存格，当前没有 pending 且物品有效时，才继续构造钓具选择命令。
-// 4. 根据随身格装备类别只替换当前组合中的一项；鱼竿、鱼饵、鱼漂三项不完整时本地拒绝，避免提交半套钓鱼选择。
-// 5. 记录 pending 后再调用 PlayerController RPC；库存搬运提交 InventoryRevision，钓具选择才继续提交 Equipment Revision。
+// 3. 如果目标是随身库存格，当前没有 pending 且物品有效时，只提交正式库存槽位和两份 Revision。
+// 4. UI 只判断点击物是否属于钓具类别，不在本地拼 Rod/Bait/Float/Scoop 组合，避免表现层持有第二套选择规则。
+// 5. 记录 pending 后再调用 PlayerController RPC；服务器会从 InventoryComponent 重读槽位并交给 Equipment 更新钓鱼选择。
 void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FCatInventorySlotView& Slot)
 {
 	UCatInventoryModel* Model = BoundModel.Get();
@@ -420,64 +420,46 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 	{
 		return;
 	}
-	// 选择提交前重读当前格：同定义物品也可能是不同实例，必须同时比对实例 ID 和数量，避免 UI 旧快照选中已经移动或部署的那件物品。
+	// 选择提交前重读当前格：同定义物品也可能是不同实例，必须同时比对槽位、实例 ID 和数量，避免 UI 旧快照选中已经移动或部署的那件物品。
 	const FCatInventorySlotView* CurrentSlot = FindCurrentRunInventorySlot(State, Slot);
 	if (!CurrentSlot || !CurrentSlot->bOccupied || CurrentSlot->EquipmentDefinitionId.IsNone()
+		|| CurrentSlot->InventorySlotIndex == INDEX_NONE
 		|| CurrentSlot->EquipmentDefinitionId != Slot.EquipmentDefinitionId
 		|| CurrentSlot->InventoryItemInstanceId != Slot.InventoryItemInstanceId
 		|| CurrentSlot->Quantity != Slot.Quantity)
 	{
 		return;
 	}
-	FName RodDefinitionId = State.Equipment.RodDefinitionId;
-	FName BaitDefinitionId = State.Equipment.BaitDefinitionId;
-	FName FloatDefinitionId = State.Equipment.FloatDefinitionId;
-	FName ScoopNetDefinitionId = State.Equipment.ScoopNetDefinitionId;
-	FGuid RodItemInstanceId = State.Equipment.RodItemInstanceId;
-	FGuid BaitItemInstanceId = State.Equipment.BaitItemInstanceId;
-	FGuid FloatItemInstanceId = State.Equipment.FloatItemInstanceId;
-	FGuid ScoopNetItemInstanceId = State.Equipment.ScoopNetItemInstanceId;
-	const int64 ExpectedEquipmentRevision = State.Equipment.Revision;
+	bool bCanSelectFishingItem = true;
 	switch (CurrentSlot->EquipmentKind)
 	{
 	case ECatEquipmentKind::Rod:
-		RodDefinitionId = CurrentSlot->EquipmentDefinitionId;
-		RodItemInstanceId = CurrentSlot->InventoryItemInstanceId;
-		break;
 	case ECatEquipmentKind::Bait:
-		BaitDefinitionId = CurrentSlot->EquipmentDefinitionId;
-		BaitItemInstanceId = CurrentSlot->InventoryItemInstanceId;
-		break;
 	case ECatEquipmentKind::Float:
-		FloatDefinitionId = CurrentSlot->EquipmentDefinitionId;
-		FloatItemInstanceId = CurrentSlot->InventoryItemInstanceId;
-		break;
 	case ECatEquipmentKind::ScoopNet:
-		ScoopNetDefinitionId = CurrentSlot->EquipmentDefinitionId;
-		ScoopNetItemInstanceId = CurrentSlot->InventoryItemInstanceId;
 		break;
 	default:
+		bCanSelectFishingItem = false;
+		break;
+	}
+	if (!bCanSelectFishingItem)
+	{
 		return;
 	}
 	const FGuid RequestId = FGuid::NewGuid();
-	if (RodDefinitionId.IsNone() || BaitDefinitionId.IsNone() || FloatDefinitionId.IsNone())
-	{
-		Model->MarkActionRejected(ECatInventoryAction::SelectInventoryFishingItem, RequestId,
-			ECatDomainCommandError::InvalidPayload, State.Equipment.Revision);
-		return;
-	}
+	const int64 SubmittedInventoryRevision = State.InventoryRevision;
+	const int64 ExpectedEquipmentRevision = State.Equipment.Revision;
+	const int32 SubmittedInventorySlotIndex = CurrentSlot->InventorySlotIndex;
 	Model->MarkActionSubmitted(ECatInventoryAction::SelectInventoryFishingItem, RequestId);
 	if (CatController->HasAuthority())
 	{
-		CatController->ServerConfigureEquipment_Implementation(RequestId, ExpectedEquipmentRevision,
-			RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId,
-			RodItemInstanceId, BaitItemInstanceId, FloatItemInstanceId, ScoopNetItemInstanceId);
+		CatController->ServerSelectInventoryFishingItem_Implementation(RequestId, SubmittedInventoryRevision,
+			ExpectedEquipmentRevision, SubmittedInventorySlotIndex);
 	}
 	else
 	{
-		CatController->ServerConfigureEquipment(RequestId, ExpectedEquipmentRevision,
-			RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId,
-			RodItemInstanceId, BaitItemInstanceId, FloatItemInstanceId, ScoopNetItemInstanceId);
+		CatController->ServerSelectInventoryFishingItem(RequestId, SubmittedInventoryRevision,
+			ExpectedEquipmentRevision, SubmittedInventorySlotIndex);
 	}
 }
 
