@@ -99,6 +99,7 @@ public:
 	int32 GetDeployedRodCountForDiagnostics() const;
 
 private:
+	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class ACatFishingSession;
 	friend class FCatFishingServiceRodBoundSessionRoutingTest;
 

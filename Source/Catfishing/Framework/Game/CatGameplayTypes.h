@@ -125,6 +125,7 @@ UCLASS()
 class CATFISHING_API ACatfishingGameModeBase : public AGameModeBase
 {
 	GENERATED_BODY()
+	friend class FCatFishingSlackAimCommandRoutingTest;
 public:
 	/** 建立 Lake 原生宿主装配；身份注册表属于 GameMode 实例，不进入类默认对象或客户端。 */
 	ACatfishingGameModeBase();
@@ -479,6 +480,7 @@ UCLASS()
 class CATFISHING_API ACatfishingPlayerController : public APlayerController
 {
 	GENERATED_BODY()
+	friend class FCatFishingSlackAimCommandRoutingTest;
 public:
 	/** 控制器接管 Pawn 后记录装配结果；不缓存 Pawn 或创建第二条 Online 旅行入口。 */
 	virtual void OnPossess(APawn* InPawn) override;

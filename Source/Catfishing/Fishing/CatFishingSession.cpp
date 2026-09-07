@@ -1454,14 +1454,39 @@ bool ACatFishingSession::SetReelingFromAuthority(APlayerState* InputPlayerState,
 }
 
 bool ACatFishingSession::SetSlackingFromAuthority(APlayerState* InputPlayerState,
-	const int64 InputSequence, const bool bSlacking)
+	const int64 InputSequence, const bool bSlacking, const FCatFishingRodAimSample* AimRebaseSample, const FGuid RequestId)
 {
 	if (!HasAuthority() || (Snapshot.Phase != ECatFishingPhase::HookedFight
 		&& Snapshot.Phase != ECatFishingPhase::ExhaustedReel) || !FightRunner
-		|| InputPlayerState != Snapshot.FisherPlayerState
-		|| !FightRunner->SetSlacking(InputPlayerState, InputSequence, bSlacking))
+		|| InputPlayerState != Snapshot.FisherPlayerState)
 	{
 		return false;
+	}
+	const bool bRebaseAim = AimRebaseSample && !FightRunner->IsSlackInputHeldForAuthority(InputPlayerState);
+	if (bRebaseAim && (!bSlacking || !Snapshot.RodActor
+		|| !Snapshot.RodActor->CanRebaseHeldAimFromAuthority(InputPlayerState, *AimRebaseSample)))
+	{
+		const TCHAR* Reason = !bSlacking ? TEXT("NotPress") : !Snapshot.RodActor ? TEXT("NoRod")
+			: !AimRebaseSample->IsValid() ? TEXT("InvalidAimSample")
+			: AimRebaseSample->RodActorId.IsValid() && AimRebaseSample->RodActorId != Snapshot.RodActor->GetPresentationState().RodActorId
+				? TEXT("RodMismatch")
+			: AimRebaseSample->InputEpoch != 0 && AimRebaseSample->InputEpoch != Snapshot.RodActor->GetCarrierConstraintState().AimInputEpoch
+				? TEXT("AimEpochMismatch") : TEXT("StaleAimOrHeldPoseNotReady");
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_rod_aim_rebase_rejected RequestId=%s InputSequence=%lld SessionId=%s RodActorId=%s "
+				"AimInputEpoch=%u CurrentAimInputEpoch=%u AimSequence=%lld Reason=%s PlayerId=%d "
+				"World=%s NetMode=%d Authority=true LocalRole=%d"),
+			*RequestId.ToString(), InputSequence, *Snapshot.FishingSessionId.ToString(), *AimRebaseSample->RodActorId.ToString(),
+			AimRebaseSample->InputEpoch, Snapshot.RodActor ? Snapshot.RodActor->GetCarrierConstraintState().AimInputEpoch : 0,
+			AimRebaseSample->Sequence, Reason, InputPlayerState ? InputPlayerState->GetPlayerId() : INDEX_NONE,
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()));
+		return false;
+	}
+	if (!FightRunner->SetSlacking(InputPlayerState, InputSequence, bSlacking)) return false;
+	// 先验证完整转换，再改 Runner 和输入基准，最后才发布可能触发消费者的快照。
+	if (bRebaseAim)
+	{
+		Snapshot.RodActor->RebaseHeldAimFromAuthority(InputPlayerState, *AimRebaseSample, RequestId, InputSequence);
 	}
 	Snapshot.bReeling = FightRunner->GetCatAction() == ECatFightCatAction::Pull;
 	Snapshot.bSlacking = FightRunner->GetCatAction() == ECatFightCatAction::Slack;

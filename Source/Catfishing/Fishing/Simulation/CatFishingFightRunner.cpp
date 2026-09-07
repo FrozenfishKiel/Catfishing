@@ -459,6 +459,12 @@ bool UCatFishingFightRunner::SetSlacking(APlayerState* InputPlayerState,
 	return true;
 }
 
+bool UCatFishingFightRunner::IsSlackInputHeldForAuthority(APlayerState* InputPlayerState) const
+{
+	const FCatFightParticipantRuntime* Participant = Participants.Find(TWeakObjectPtr<APlayerState>(InputPlayerState));
+	return Participant && Participant->bPrimary && Participant->bSlackHeld;
+}
+
 bool UCatFishingFightRunner::BeginUnattendedSlackFromAuthority()
 {
 	if (!bInitialized) return false;

@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Fishing/Actors/CatFishingActorTypes.h"
+#include "Fishing/Integration/CatFishingRodAimState.h"
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 #include "CatFishingRodActor.generated.h"
 
@@ -44,6 +45,9 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 	/** 当前搏斗是否要求鱼竿使用受力后的实际姿态，而不是瞬时跟随控制器。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bFightActive = false;
+	/** 每次开始搏斗/更换持有人生成的新输入域，阻止同一根竿上一场的迟到采样。 */
+	UPROPERTY()
+	uint32 AimInputEpoch = 0;
 	UPROPERTY(BlueprintReadOnly)
 	FVector_NetQuantizeNormal RodPullAxis = FVector::ForwardVector;
 	/** 垂直鱼线时的最大转矩；实际有向转矩随杆姿态连续计算。 */
@@ -112,6 +116,10 @@ public:
 	bool RefreshHeldTransformFromAuthority(double DeltaSeconds = 0.0);
 	/** 预测和实际旋转使用同一组输入；该函数只读取当前权威状态。 */
 	bool GetRotationPredictionFromAuthority(double DeltaSeconds, FCatFishingRodRotationPrediction& OutPrediction) const;
+	bool CanRebaseHeldAimFromAuthority(APlayerState* Player, const FCatFishingRodAimSample& Sample) const;
+	void RebaseHeldAimFromAuthority(APlayerState* Player, const FCatFishingRodAimSample& Sample,
+		FGuid RequestId, int64 InputSequence);
+	bool AcceptHeldAimSampleFromAuthority(APlayerState* Player, const FCatFishingRodAimSample& Sample);
 	/** 最后一名操作者离开后把同一 Actor 放到服务器裁定的地面 Transform；不改会话或物品身份。 */
 	bool PlaceOnGroundFromAuthority(const FTransform& GroundTransform);
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FVector GetAuthoritativeRodForwardVector() const;
@@ -205,6 +213,8 @@ private:
 	FVector AuthoritativeRodTipVelocity = FVector::ZeroVector;
 	FVector AuthoritativeHolderVelocity = FVector::ZeroVector;
 	FRotator AuthoritativeHeldAimRotation = FRotator::ZeroRotator;
+	FCatFishingRodAimState HeldAimInput;
+	uint32 NextAimInputEpoch = 0;
 	/** 权威旋转的连续负载状态；不得随猫端牵引 bActive 或一次松线目标清零。 */
 	FVector SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
 	TWeakObjectPtr<APawn> AuthoritativeAimHolder;

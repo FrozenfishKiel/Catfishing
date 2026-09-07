@@ -75,6 +75,8 @@ public:
 	bool SetReeling(APlayerState* InputPlayerState, int64 InputSequence, bool bInReeling);
 	/** 右键按住/松开线杯并免耗体回体；零体力强制拖拽仍优先。 */
 	bool SetSlacking(APlayerState* InputPlayerState, int64 InputSequence, bool bInSlacking);
+	/** 读取本场已接受的右键状态；区别于 CommandComponent 在拒绝请求后仍保留的物理按键事实。 */
+	bool IsSlackInputHeldForAuthority(APlayerState* InputPlayerState) const;
 	/** 主操作手离竿后进入无人值守松线；Runner 继续推进，但不再读写旧玩家的力量或体力。 */
 	bool BeginUnattendedSlackFromAuthority();
 	/** 鱼力竭关闭 AI 与鱼端驱动力并立即清除猫端牵引；固定步和同一线长约束继续负责收近。 */
@@ -92,6 +94,7 @@ public:
 	bool BeginBehaviorStateFromStateTree(ECatFishMotionIntent MotionIntent, double& OutDurationSeconds);
 
 private:
+	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatFishingExhaustedPickupHandoffTest;
 	friend class FCatFishingSurfaceTraversalTest;
 	friend class FCatFishingParticipantStrengthTest;

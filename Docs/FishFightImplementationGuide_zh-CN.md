@@ -142,6 +142,36 @@ Development 权威日志 `Event=fishing_simulation_trace` 默认按约 1 秒和�
 
 杆负载使用地形后的线方向；松线、上岸力竭、终局均不发布旧鱼转矩，现有负载历史继续渐退。实际竿尖、Actor Transform、握把/镜头和努力采样继续消费同一积分结果。该层仍没有独立鱼竿转动惯量，不是完整刚体角动力学，也不声称已经解决所有猫端牵引及网络纠正抖动。
 
+### 右键放线时重设转向意图
+
+2026-09-07 的反馈是：先向右拉住鱼竿，再按右键放线，杆会突然追向右侧。原实现把 `ControlRotation` 保留为目标，镜头却只显示受力后的实际握把；负载和受载阻尼下降后，未完成的目标角仍在驱动猫端转矩。右键现在明确表示撤掉这份旧转向意图：第一次按下通过 Session 校验后，把目标基准设为当前权威握把；之后只接新的鼠标转动，松开右键不会恢复旧目标。是否已经按住由 Runner 已接受状态裁决，拒绝过的请求不阻止合法重试重设。真实鱼力仍可带动杆，不瞬移或锁死实际姿态。
+
+输入从 `ACatfishingPlayerController::UpdateRotation` 采集经过灵敏度和 IgnoreLookInput 处理的 `RotationInput`，按 X=Yaw/Y=Pitch、单位度累计。右键所在帧尚未处理的鼠标量作为第一份新输入且只计一次。本地输入在重设时以可见握把建立 Pitch 基准，逐帧去掉超出原 `HeldRodMinimumPitchDegrees=-35` / `HeldRodMaximumPitchDegrees=70` 的量；尚未见到搏斗约束时先用已见持杆握把，无杆时用当前控制角建立限位，约束抵达后只绑定输入域，不改累计量。服务器从不变的本次权威基准角加上累计差量重建目标，再保留权威限位，避免分包/合包/丢包改变最终目标。客户端握把存在复制延迟，极限附近仍可能有与该角差对应的输入范围偏差，正式高延迟手感需要双端实测。
+
+主机每帧直接提交，远端最高 30 Hz 通过 `ServerSubmitRodAimSample` 发送 Unreliable 全量累计快照，停手后也继续重发。独立递增 `Sequence` 拒绝旧样本，右键 Reliable Edge 携带按下时累计量，较新样本先到时保留其新增量。`AimInputEpoch` 随当前搏斗/持有人进入约束复制，隔离同杆旧生命周期；累计量和采样序号在整个 Controller 生命周期内连续，不随 `ResetTransientCommandState` 回绕。输入域尚未复制到客户端时，Session 可在本次合法右键上按当前权威域建立基准；明确携带旧域时整次转换拒绝。回执只确认结果，不修改控制角或输入目标。
+
+修改前工作区仅 `Source/Catfishing/Fishing/Tests/CatFishingEffortTests.cpp` 已有修改标记，本轮不编辑或提交该文件。修改前定向基线 `Saved/Automation/SlackAimReset-Baseline-20260907/Report/index.json`：56 Success，0 failed/notRun。新的实现/测试验证结果见本节末尾。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 入口和状态转换 | `AbilitySystem/Fishing/InputAbilities/CatFishingSlackAbility.cpp` → `Fishing/Integration/CatFishingCommandComponent.cpp::SubmitSlackPressed` → `CatFishingSession::SetSlackingFromAuthority` → Runner | 原先只切线杯；现在首次被接受的按下同时撤掉旧转向目标。重复、释放、拒绝和辅助位不重设；物理按键记录不能把已拒绝请求误算成已接受 | 保留原 Ability/Session 入口，Edge 新增输入采样，Session 读取 Runner 已接受的 `bSlackHeld`，校验后在发布快照前重设 | 先验证完整转换，再修改 Runner 与目标，最后发布 | Command→Session→Runner，左右键优先级、重复边沿、拒绝后重试、拒绝原子性 | 已接入；最终 Unit 报告中 CommandSessionRunner 用例通过，重复、释放、主辅拒绝及拒绝后重试均验证 |
+| 转向与共同预测 | `CatFishingRodActor::GetRotationPredictionFromAuthority` 同供实际 Tick 与联合端点预测 | 重设前继续用控制角；重设后只读 `HeldAimInput`。目标角仍为度，转矩/力量单位不变 | 新增 `Fishing/Integration/CatFishingRodAimState`，复用原 `StepRotation` | 统一目标输入之后才积分和提交实际姿态 | 旧 CMC 角回灌、+5° 新输入、负载/努力保留、只读预测 | 已接入；LoadedRod 与共同预测回归通过，重设前后实际姿态、鱼力历史及努力累计未清空 |
+| 网络和输入生命周期 | `Framework/Game/CatGameplayTypes.cpp::UpdateRotation` → CommandComponent 采样 RPC → Rod；`CarrierConstraintState.AimInputEpoch` | 新采样能跨包恢复；旧 CMC 流继续用于角色网络移动，但不覆盖重设目标；首帧未见约束也需建立本地俯仰限位 | 有序累计增量，静止重发；无域按下先按已见握把（无杆时当前视角）夹限，复制到达后绑定同一累计流；换人/退出/落地清理 Rod 目标与域 | 客户端采样 → 当前主位校验 → 权威接收 → 原 Actor 姿态复制 | 乱序、未来样本先到、丢末包、首次绑定、输入重置、换人、新搏斗 | 累计流与发送端生命周期回归通过；DebugFinal 中真实 Listen/Client RPC、100% 丢失最后 3° 输入、停手补发及量化后姿态对照通过 |
+| 线杯、资源、持久化与终局 | Session → Runner → Simulator / Equipment / ASC | 保留右键优先、松开恢复左键、满线、零体力强制拖拽、同一体力/耐久写口 | 原计算和写口保留；新增资源与持久化写入不涉及 | 新目标进入原转矩积分，其后仍按实际运动结算 | Participant、Effort、Session/Simulation 回归 | 原公式与写口未改；Participant/Effort/Simulation/Session 回归无新增失败；两项既有收竿库存夹具失败保留 |
+| 相机、身体、UI/动画 | `CatFishingCameraComponent::TryGetCameraView/ResolveFacingRotation`、Controller、竿 Blueprint / RodBend 从实际握把/姿态取值 | 保留相机 0.08 s 跟随、负载 0.15 s 滤波、阻尼 3、最高 360°/s；不强制清鱼力或动画状态 | 保留实际姿态与表现消费者，没有另加视觉转杆实现 | 权威实际姿态 → 复制 → 原相机/网格/鱼线 | Camera、真实 Rod、Listen/Client 回归；真人观感单列 | Camera/真实 Rod 回归通过，未改表现资产；正式手感与打包双端尚未验证 |
+| 配置、资产、生成脚本、Cook | `DefaultGame.ini` AbilityInputConfig / StateTree / FightBalance / MapsToCook；`verify_stage_a_map.py`；`configure_formal_rod_use_actor_class.py`；`configure_formal_rod_anchor_baseline.py` | 输入仍为 `/Game/Input/InputContext/IMC_InputContext` → `/Game/Blueprint/Abilities/BP_GA_Slack`；正式竿仍为 `/Game/Blueprint/Actors/BP_CatFishingRodActor`；数值不变 | 原反射入口、T1/T2 UseActorClass、锚点与 Cook 地图保留；迁移不涉及 | 无资产切换或删除 | 正式 BP 加载及 Development 构建；未逐个核验 WBP 二进制内部图 | 正式 BP 加载和资产审计已运行；旧 WBP 缺父类仍未消除，六个序列化兼容字段继续按原条件暂留；无资产迁移或新增 Cook 入口 |
+| 日志、文档、旧入口 | `LogCatFishing`；本节与 `FishingArchitecture_zh-CN.md`；`Build/Automation/RunCatAutomation.ps1` | 增加按下、重设/拒绝、采样发送/接收和回执；明确第一次右键后的目标来源 | 复用默认落盘日志及既有测试入口；同步旧的持续意图说明 | 测试和最终 diff 核对后填写证据 | 按 RequestId 和 RodActorId/AimInputEpoch/AimSequence 检索；无第二套转矩算法可清理 | 新目标已接入唯一旋转模型，原控制角仅服务未重设/非搏斗消费者；两份指南同步，保留明确消费者，无无主废弃入口 |
+
+默认落盘过滤：`LogCatFishing` 的 `fishing_slack_aim_requested`、`fishing_rod_aim_rebased`、`fishing_rod_aim_rebase_rejected`、`fishing_rod_aim_sent/received`、`fishing_slack_aim_result_received`；原旋转采样增加 `AimRebased/AimInputEpoch/AimSequence`。高频输入日志限为每秒一条，按下/裁决只在边沿记录。
+
+contract：`Saved/Automation/SlackAimReset/BuildEditorFinal.log` 与 `BuildEditorRegression.log` 完成主体代码和回归测试的 Editor Win64 Development 构建；最终游戏目标见 `BuildGameDelivery.log`，全部最终源码的独立 Editor DebugGame 构建见 `BuildEditorDebugDelivery.log`，均 Succeeded。完整 `Saved/Automation/SlackAimReset-FinalUnit-20260907/Report/index.json` 为 146 项（138 clean、5 警告、3 既有失败，0 notRun）；原初级竿 500/150 耐久和两项收竿库存夹具失败保留，无新增失败。随后仅补日志上下文及网络夹具，最终 `SlackAimReset-DebugFinal-20260907/Report/index.json` 的四项 SlackAim 与一项 Listen/Client 全部通过（4 clean、1 临时 PIE 地图 NetGUID 警告，0 failed/notRun）。该报告日志明确加载两个 `UnrealEditor-Catfishing*-Win64-DebugGame.dll`，不能用普通 Cmd 上附加 `-debug` 的中间运行代替。
+
+runtime_behavior：真实 Command→Session→Runner 验证首次/重复/释放、左右键优先级、主辅身份、拒绝原子性及无 Release 的合法重试；Controller 同帧鼠标只计一次，俯仰限位后反向立即生效，首帧待绑定发送端也不积压越限量。真实受载 Rod 重设不改姿态、鱼力历史或努力累计，旧控制角不能回灌，换人/新搏斗隔离旧域。独立 Listen Server＋客户端加载正式 Rod BP，控制服务器在权威 rebase API 建立边界，后续实际 CommandComponent RPC 输入 +5°；100% 丢包期间额外 +3° 未到达，恢复网络后只发送静止累计快照即补齐。最终目标 37.999°，实际服务器 37.844°、客户端 38.327°，客户端姿态严格等于既有 Actor 角量化后组合握把的预期，镜头最大单步 0.654°。完整右键 Ability/Session 路由由前一个受控 World 测试覆盖；网络夹具没有假装执行完整正式 Session 或 Steam 准入。
+
+默认落盘证据：`Saved/Automation/SlackAimReset-FinalUnit-20260907/Automation.log` 和 `Saved/Automation/SlackAimReset-DebugFinal-20260907/Automation.log`。后者同一文件包含 NetMode=2 权威侧及 NetMode=3 客户端，可按 RodActorId 和 `fishing_rod_aim_sent/received/rebased`、`slack_aim_network_loss_verified/recovered` 交叉核对。前两次网络试验因夹具类装配、丢包尺寸上限溢出和忽略 Actor 量化而失败，均为中间报告，不作为最终通过证据；这些错误只修在测试，没有改生产复制精度或放宽服务器目标精度。
+
+presentation_delivery：未验证正式地图真人鼠标操作、Steam 双机、高延迟和新 Development 包无 `-log` 双端落盘。用户在验证期间重新打开 Editor；`BuildEditorDelivery.log` 记录最终普通 Editor 重编译被 Live Coding 锁阻止，当前常用模块已包含主体修复，最后新增日志上下文和修正后的网络测试尚待保存关闭编辑器后重编译。独立 DebugGame 已验证最终源码，但不等同于更新用户当前进程。Fishing 模块保持未整体验收。`verify_fishing_player_entry.ps1` 硬要求 Lake、当前 GameplayMap=Showcase2 的既有差异不在本轮修改范围，不能用该地图检查替代输入验收。
+
 ## FishLogic 4：网络与移动重放
 
 服务器决定鱼状态、固定随机流、线长、费用和最终 Transform。拥有客户端接收 Rod 约束用于本地移动；模拟代理使用引擎角色移动复制。`FCatSavedMove::SetMoveFor` 保存每次移动使用的约束，`PrepMoveFor` 为纠正重放恢复它，重放结束恢复读取最新复制输入，旧鱼负载不会覆盖实时输入。换持有人、离竿、清约束和来源销毁会卸载实时牵引。

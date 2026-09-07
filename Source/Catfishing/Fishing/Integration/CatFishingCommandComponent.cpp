@@ -14,6 +14,7 @@
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSession.h"
+#include "Fishing/Presentation/CatFishingCameraComponent.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
@@ -39,6 +40,15 @@ bool FCatFishingCooldownGate::TryConsume(const double NowSeconds, const double D
 
 namespace
 {
+	FString BuildRodAimControllerFields(const AController* Controller)
+	{
+		return FString::Printf(TEXT("World=%s Authority=%s LocalRole=%d %s"),
+			*GetNameSafe(Controller ? Controller->GetWorld() : nullptr),
+			Controller && Controller->HasAuthority() ? TEXT("true") : TEXT("false"),
+			Controller ? static_cast<int32>(Controller->GetLocalRole()) : INDEX_NONE,
+			*CatLogContext::BuildControllerFields(Controller));
+	}
+
 	/** 构造阶段 gate 拒绝时的统一竿命令回执；旧直连 RPC 用它保留 RequestId，让 UI/Ability 能结束等待态。 */
 	FCatFishingCommandResult MakeRodCommandsClosedResult(const ECatFishingCommandType CommandType, const FGuid RequestId)
 	{
@@ -256,6 +266,10 @@ void UCatFishingCommandComponent::ResetTransientCommandState()
 	ServerAimingCorrelationId.Invalidate();
 	bServerPrimaryHeld = false;
 	bServerSlackHeld = false;
+	bLocalSlackHeld = false;
+	LocalPitchAimRod.Reset();
+	LocalPitchAimEpoch = 0;
+	bLocalPitchAimInitialized = false;
 	LastServerHeldInputSequence = 0;
 	LocalChumChargeStartTime = -1.0; // 关卡/会话切换时收起残留的蓄力预览线。
 	ChumChargeStartServerTime = -1.0;
@@ -354,13 +368,119 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitPrimaryReleased()
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitSlackPressed()
 {
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
+	const APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindFightRodHeldBy(Controller);
+	if (!bLocalSlackHeld)
+	{
+		const ACatFishingRodActor* VisibleRod = Rod ? Rod : UCatFishingCameraComponent::FindHeldRodOperatedBy(Controller);
+		const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+		LocalPitchAimRod = Rod;
+		LocalPitchAimEpoch = Rod ? Rod->GetCarrierConstraintState().AimInputEpoch : 0;
+		const double VisiblePitch = VisibleRod ? VisibleRod->GetGripWorldTransform().Rotator().Pitch
+			: Controller ? Controller->GetControlRotation().Pitch : 0.0;
+		LocalRequestedRodPitch = FMath::Clamp(FRotator::NormalizeAxis(VisiblePitch),
+			Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
+		bLocalPitchAimInitialized = true;
+	}
+	bLocalSlackHeld = true;
+	Edge.RodAimSample = MakeRodAimSample(Rod);
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_slack_aim_requested RequestId=%s InputSequence=%lld RodActorId=%s AimInputEpoch=%u "
+			"AimSequence=%lld CumulativeLookDegrees=%s %s"),
+		*Edge.RequestId.ToString(), Edge.InputSequence, *Edge.RodAimSample.RodActorId.ToString(),
+		Edge.RodAimSample.InputEpoch, Edge.RodAimSample.Sequence, *Edge.RodAimSample.CumulativeLookDegrees.ToString(),
+		*BuildRodAimControllerFields(Controller));
 	DispatchAbilityCommand(ECatFishingCommandType::SlackPressed, Edge);
 	return Edge;
+}
+
+FCatFishingRodAimSample UCatFishingCommandComponent::MakeRodAimSample(const ACatFishingRodActor* Rod)
+{
+	FCatFishingRodAimSample Sample;
+	Sample.Sequence = ++NextRodAimSequence;
+	Sample.CumulativeLookDegrees = CumulativeRodLookDegrees;
+	if (Rod)
+	{
+		Sample.RodActorId = Rod->GetPresentationState().RodActorId;
+		Sample.InputEpoch = Rod->GetCarrierConstraintState().AimInputEpoch;
+	}
+	return Sample;
+}
+
+void UCatFishingCommandComponent::UpdateLocalRodAimInput(const double DeltaSeconds, const FRotator& LookDeltaDegrees)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->IsLocalController() || !GetWorld() || LookDeltaDegrees.ContainsNaN()) return;
+	// RotationInput 已经经过 AddYaw/PitchInput 的灵敏度与 IgnoreLookInput 处理。
+	// 不用 ControlRotation 差量：旧隐藏目标顶到镜头 Pitch 限位后，仍必须能从实际竿角重新抬竿。
+	const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindFightRodHeldBy(Controller);
+	double AppliedPitchDelta = LookDeltaDegrees.Pitch;
+	// 首帧未见约束的合法按下也先逐帧夹限；域抵达时只绑定，不重设累计量或丢掉新增输入。
+	if (bLocalPitchAimInitialized && LocalPitchAimEpoch == 0 && Rod)
+	{
+		LocalPitchAimRod = Rod;
+		LocalPitchAimEpoch = Rod->GetCarrierConstraintState().AimInputEpoch;
+	}
+	if (bLocalPitchAimInitialized && (LocalPitchAimEpoch == 0
+		|| (Rod && LocalPitchAimRod.Get() == Rod && LocalPitchAimEpoch == Rod->GetCarrierConstraintState().AimInputEpoch)))
+	{
+		const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+		const double NextPitch = FMath::Clamp(LocalRequestedRodPitch + AppliedPitchDelta,
+			Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
+		AppliedPitchDelta = NextPitch - LocalRequestedRodPitch;
+		LocalRequestedRodPitch = NextPitch;
+	}
+	else
+	{
+		LocalPitchAimRod.Reset();
+		LocalPitchAimEpoch = 0;
+		bLocalPitchAimInitialized = false;
+	}
+	CumulativeRodLookDegrees += FVector2D(LookDeltaDegrees.Yaw, AppliedPitchDelta);
+	if (!Rod || Rod->GetCarrierConstraintState().AimInputEpoch == 0)
+	{
+		RodAimSendElapsedSeconds = 0.0;
+		return;
+	}
+	RodAimSendElapsedSeconds += FMath::IsFinite(DeltaSeconds) ? FMath::Max(0.0, DeltaSeconds) : 0.0;
+	if (!Controller->HasAuthority() && RodAimSendElapsedSeconds < 1.0 / 30.0) return;
+	RodAimSendElapsedSeconds = 0.0;
+	const FCatFishingRodAimSample Sample = MakeRodAimSample(Rod);
+	if (Controller->HasAuthority()) ServerSubmitRodAimSample_Implementation(Sample);
+	else ServerSubmitRodAimSample(Sample);
+	// 静止时也持续发送全量累计快照，最后一次鼠标输入丢包后可由下一包补齐。
+	if (GetWorld()->GetTimeSeconds() >= NextLocalRodAimDiagnosticSeconds)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_rod_aim_sent RodActorId=%s AimInputEpoch=%u AimSequence=%lld CumulativeLookDegrees=%s %s"),
+			*Sample.RodActorId.ToString(), Sample.InputEpoch, Sample.Sequence, *Sample.CumulativeLookDegrees.ToString(),
+			*BuildRodAimControllerFields(Controller));
+		NextLocalRodAimDiagnosticSeconds = GetWorld()->GetTimeSeconds() + 1.0;
+	}
+}
+
+void UCatFishingCommandComponent::ServerSubmitRodAimSample_Implementation(const FCatFishingRodAimSample Sample)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
+	if (!Controller || !Controller->HasAuthority() || !Fishing) return;
+	ACatFishingRodActor* Rod = Fishing->FindRodOperatedBy(Controller->PlayerState);
+	const bool bAccepted = Rod && Rod->AcceptHeldAimSampleFromAuthority(Controller->PlayerState, Sample);
+	if (GetWorld()->GetTimeSeconds() >= NextServerRodAimDiagnosticSeconds)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_rod_aim_received RodActorId=%s AimInputEpoch=%u AimSequence=%lld "
+				"CumulativeLookDegrees=%s Result=%s %s"),
+			*Sample.RodActorId.ToString(), Sample.InputEpoch, Sample.Sequence, *Sample.CumulativeLookDegrees.ToString(),
+			bAccepted ? TEXT("Accepted") : TEXT("IgnoredStaleOrInactiveInput"), *BuildRodAimControllerFields(Controller));
+		NextServerRodAimDiagnosticSeconds = GetWorld()->GetTimeSeconds() + 1.0;
+	}
 }
 
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitSlackReleased()
 {
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
+	bLocalSlackHeld = false;
 	DispatchAbilityCommand(ECatFishingCommandType::SlackReleased, Edge);
 	return Edge;
 }
@@ -649,7 +769,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 					{
 						Result.bCommitted = OperatedSession->SetSlackingFromAuthority(
 							Controller->PlayerState, Edge.InputSequence,
-							CommandType == ECatFishingCommandType::SlackPressed);
+							CommandType == ECatFishingCommandType::SlackPressed,
+							CommandType == ECatFishingCommandType::SlackPressed ? &Edge.RodAimSample : nullptr, Edge.RequestId);
 					}
 					else
 					{
@@ -828,7 +949,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 						// 按下/松开都转成同一个权威写口，用命令类型本身当作“是否按下”的布尔值
 						Result.bCommitted = Session->SetSlackingFromAuthority(Controller->PlayerState,
 							Edge.InputSequence,
-							CommandType == ECatFishingCommandType::SlackPressed);
+							CommandType == ECatFishingCommandType::SlackPressed,
+							CommandType == ECatFishingCommandType::SlackPressed ? &Edge.RodAimSample : nullptr, Edge.RequestId);
 						Result.Error = Result.bCommitted
 							? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;
 					}
@@ -1219,6 +1341,15 @@ void UCatFishingCommandComponent::ReceiveResultLocally(const FCatFishingCommandR
 		ResultsByRequestId.Remove(EvictedRequestId);
 	}
 
+	if (Result.CommandType == ECatFishingCommandType::SlackPressed || Result.CommandType == ECatFishingCommandType::SlackReleased)
+	{
+		// 只确认按键结果；迟到回执不能再重设转向，更不能抹掉按下后的鼠标输入。
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_slack_aim_result_received RequestId=%s SessionId=%s Command=%s Committed=%s Error=%s %s"),
+			*Result.RequestId.ToString(), *Result.FishingSessionId.ToString(), *UEnum::GetValueAsString(Result.CommandType),
+			Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
+			*BuildRodAimControllerFields(Cast<APlayerController>(GetOwner())));
+	}
 	// 通知所有订阅者（通常是 GA/UI）这条命令有了终态结果
 	OnResultReceived.Broadcast(Result);
 }

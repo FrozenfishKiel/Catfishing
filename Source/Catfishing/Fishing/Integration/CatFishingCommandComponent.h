@@ -4,6 +4,7 @@
 #include "Components/ActorComponent.h"
 #include "GameplayTagContainer.h"
 #include "Fishing/Integration/CatFishingCommandTypes.h"
+#include "Fishing/Integration/CatFishingRodAimState.h"
 #include "CatFishingCommandComponent.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
@@ -37,6 +38,8 @@ struct FCatFishingInputEdge
 	UPROPERTY() bool bHasCastViewRay = false;
 	UPROPERTY() FVector CastViewOrigin = FVector::ZeroVector;
 	UPROPERTY() FVector CastViewDirection = FVector::ZeroVector;
+	/** 右键按下时的输入累计量；不携带任何客户端权威竿角。 */
+	UPROPERTY() FCatFishingRodAimSample RodAimSample;
 };
 
 UCLASS(ClassGroup=(Catfishing), meta=(BlueprintSpawnableComponent))
@@ -81,6 +84,8 @@ public:
 	FCatFishingInputEdge SubmitPrimaryReleased();
 	FCatFishingInputEdge SubmitSlackPressed();
 	FCatFishingInputEdge SubmitSlackReleased();
+	/** 由本地 Controller::UpdateRotation 每帧提交一次已缩放的鼠标增量；组件自身不 Tick。 */
+	void UpdateLocalRodAimInput(double DeltaSeconds, const FRotator& LookDeltaDegrees);
 	FCatFishingInputEdge SubmitChumPressed();
 	FCatFishingInputEdge SubmitChumReleased();
 	FCatFishingInputEdge SubmitCancel();
@@ -96,6 +101,7 @@ public:
 	FCatFishingCommandResultReceived OnResultReceived;
 
 private:
+	friend class FCatFishingSlackAimCommandRoutingTest;
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveFishingCommandResult(const FCatFishingCommandResult& Result);
 
@@ -113,6 +119,8 @@ private:
 
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitFishingAbilityCommand(ECatFishingCommandType CommandType, FCatFishingInputEdge Edge);
+	UFUNCTION(Server, Unreliable)
+	void ServerSubmitRodAimSample(FCatFishingRodAimSample Sample);
 
 	static constexpr int32 MaxStoredResults = 32;
 
@@ -122,6 +130,7 @@ private:
 		const FCatFishingInputEdge& Edge);
 	void ReceiveResultLocally(const FCatFishingCommandResult& Result);
 	FCatFishingInputEdge MakeDiscreteEdge();
+	FCatFishingRodAimSample MakeRodAimSample(const class ACatFishingRodActor* Rod);
 	void DispatchAbilityCommand(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge);
 	/** 权威侧统一处理 Ability 输入命令；抄网会搜索已上钩目标并交给 Session 完成嘴叼世界鱼交接。 */
 	void HandleAbilityCommandFromAuthority(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge);
@@ -156,6 +165,19 @@ private:
 	bool bServerPrimaryHeld = false;
 	bool bServerSlackHeld = false;
 	int64 LastServerHeldInputSequence = 0;
+
+	// 输入采样序号与累计量只在 Controller 构造时归零。ResetTransientCommandState 不得回绕，
+	// 否则同一根竿尚未退出时新的采样会被误判为旧包。
+	int64 NextRodAimSequence = 0;
+	FVector2D CumulativeRodLookDegrees = FVector2D::ZeroVector;
+	TWeakObjectPtr<const class ACatFishingRodActor> LocalPitchAimRod;
+	uint32 LocalPitchAimEpoch = 0;
+	double LocalRequestedRodPitch = 0.0;
+	bool bLocalPitchAimInitialized = false;
+	bool bLocalSlackHeld = false;
+	double RodAimSendElapsedSeconds = 0.0;
+	double NextLocalRodAimDiagnosticSeconds = 0.0;
+	double NextServerRodAimDiagnosticSeconds = 0.0;
 
 	/** 每个 PlayerController 独立的抄网权威冷却；目标鱼/Session 切换不会绕过。 */
 	FCatFishingCooldownGate ScoopCooldownGate;

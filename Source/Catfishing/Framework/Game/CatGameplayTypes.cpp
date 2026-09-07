@@ -2629,10 +2629,16 @@ void ACatfishingPlayerController::BeginPlay()
 	PublishProfileEquipmentUnlocksIfAvailable();
 }
 
-// 保留 ControlRotation 作为持续施力意图；上鱼后的身体、移动与可见镜头跟随实际杆姿态。
+// 上鱼后的身体、移动与可见镜头跟随实际杆姿态；右键重设之后，转杆只消费新鼠标增量。
 void ACatfishingPlayerController::UpdateRotation(const float DeltaTime)
 {
+	const FRotator LookDeltaDegrees = RotationInput;
 	Super::UpdateRotation(DeltaTime);
+	if (FishingCommandComponent)
+	{
+		// PostProcessInput 中的右键边沿先采基准，本帧尚未处理的鼠标量在这里且只累计一次。
+		FishingCommandComponent->UpdateLocalRodAimInput(DeltaTime, LookDeltaDegrees);
+	}
 	RefreshFishingFacingMode(DeltaTime);
 }
 
