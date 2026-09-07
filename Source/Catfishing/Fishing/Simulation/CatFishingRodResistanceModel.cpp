@@ -94,6 +94,7 @@ FCatFishingRodRotationResult FCatFishingRodResistanceModel::StepRotation(
 		|| !FMath::IsFinite(Input.MaximumAngularSpeedDegreesPerSecond) || Input.MaximumAngularSpeedDegreesPerSecond <= 0.0
 		|| !FMath::IsFinite(Input.ResponseSeconds) || Input.ResponseSeconds <= 0.0
 		|| !FMath::IsFinite(Input.FishPullSmoothingSeconds) || Input.FishPullSmoothingSeconds <= 0.0
+		|| !FMath::IsFinite(Input.LoadedAngularDampingRatio) || Input.LoadedAngularDampingRatio < 0.0
 		|| !FMath::IsFinite(Input.DeltaSeconds) || Input.DeltaSeconds < 0.0) return Result;
 
 	FVector Direction = Input.CurrentAim.Vector();
@@ -123,8 +124,13 @@ FCatFishingRodRotationResult FCatFishingRodResistanceModel::StepRotation(
 			* FMath::Clamp(AimError / (MaximumSpeed * Response), 0.0, 1.0);
 		const FVector FishTorque = FVector::CrossProduct(Direction, AppliedFishPull);
 		Result.NetTorque = CatTorque + FishTorque;
-		// 粘性阻尼：不再把阶跃负载直接变成角速度，也不积累会反复过冲的转动惯量。
-		const FVector AngularVelocity = (Result.NetTorque * (MaximumSpeed / TorqueScale)).GetClampedToMaxSize(MaximumSpeed);
+		// 仅平滑鱼线负载不足以抑制“竿尖移动 -> 下步张力改变 -> 再转杆”的反馈。
+		// 受载时增加整体粘性阻尼，猫/鱼净转矩同乘一个速度响应，不削弱任一方的稳态力量。
+		// 使用连续负载渐入/渐出；空载倍率严格为 1，不给鼠标意图再叠一层延迟或保存角动量。
+		const double LoadFraction = AppliedFishPull.Size() / TorqueScale;
+		Result.AppliedAngularDampingMultiplier = 1.0 + Input.LoadedAngularDampingRatio * LoadFraction;
+		const FVector AngularVelocity = (Result.NetTorque * (MaximumSpeed / TorqueScale))
+			.GetClampedToMaxSize(MaximumSpeed) / Result.AppliedAngularDampingMultiplier;
 		const double Speed = AngularVelocity.Size();
 		// 只观察实际积分，不改变转矩或运动。支撑按归一化用力平方的时间积分，
 		// 做功按主动转矩方向的真实转角加权；受阻不能再用最大转速伪造已完成弧长。

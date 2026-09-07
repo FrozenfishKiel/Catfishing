@@ -254,7 +254,8 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 	TestTrue(TEXT("发布有负载旋转约束"), Rod->SetCarrierConstraintFromAuthority(
 		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, true, 100.0, 50.0));
 	Controller->SetControlRotation(FRotator(0.0, 120.0, 0.0));
-	for (int32 Index = 0; Index < 180; ++Index) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
+	// 先等待新增受载阻尼进入平衡，再比较松线首帧与恢复行为；不放宽角度精度。
+	for (int32 Index = 0; Index < 360; ++Index) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
 	TestEqual(TEXT("实际鱼竿自然停在受力平衡附近"), Rod->GetGripWorldTransform().Rotator().Yaw, 30.0, 0.1);
 	TestEqual(TEXT("施力意图可以越过鱼竿平衡角"), Controller->GetControlRotation().Yaw, 120.0);
 	// 猫端没有牵引速度时 bActive=false，但鱼竿的阻力历史必须跨固定步保持。

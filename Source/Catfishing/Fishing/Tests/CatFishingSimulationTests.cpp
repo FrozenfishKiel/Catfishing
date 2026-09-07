@@ -261,7 +261,8 @@ bool FCatFishingRodTorqueRecoveryTest::RunTest(const FString& Parameters)
 	Input.RequestedAim = FRotator(0.0, 120.0, 0.0);
 	Input.DeltaSeconds = 1.0 / 60.0;
 	FCatFishingRodRotationResult Step;
-	for (int32 Index = 0; Index < 300; ++Index)
+	// 追加受载阻尼只延长趋近平衡的过程；保留原有平衡角与停转精度。
+	for (int32 Index = 0; Index < 480; ++Index)
 	{
 		Step = AdvanceRodRotation(Input);
 		if (!TestTrue(TEXT("torque integration succeeds"), Step.bSucceeded)) return false;
@@ -346,7 +347,8 @@ bool FCatFishingRodLoadJitterTest::RunTest(const FString& Parameters)
 		double MaxYaw[2] = {-180.0, -180.0};
 		double PreviousVelocity[2] = {0.0, 0.0};
 		double MaximumVelocityJump[2] = {0.0, 0.0};
-		for (int32 Frame = 0; Frame < 600; ++Frame)
+		// 等平均负载约等于猫容量的缓慢过渡结束，再测周期摆动，避免把趋近平衡当作抖动。
+		for (int32 Frame = 0; Frame < 2400; ++Frame)
 		{
 			// 复现日志中的每 0.05 秒松/绷线翻转，再单独复现鱼左右换向。
 			const bool bEvenStep = (Frame / 6) % 2 == 0;
@@ -365,7 +367,7 @@ bool FCatFishingRodLoadJitterTest::RunTest(const FString& Parameters)
 				const auto Step = AdvanceRodRotation(Input);
 				if (!TestTrue(TEXT("alternating load solves"), Step.bSucceeded)) return false;
 				const double Velocity = FMath::FindDeltaAngleDegrees(PreviousYaw, Step.ActualAim.Yaw) / Input.DeltaSeconds;
-				if (Frame >= 360)
+				if (Frame >= 2160)
 				{
 					MinYaw[Path] = FMath::Min(MinYaw[Path], Step.ActualAim.Yaw);
 					MaxYaw[Path] = FMath::Max(MaxYaw[Path], Step.ActualAim.Yaw);
@@ -438,6 +440,89 @@ bool FCatFishingRodLoadSmoothingTimeTest::RunTest(const FString& Parameters)
 		Input.FishPullSmoothingSeconds = 0.0;
 		TestFalse(TEXT("invalid smoothing time is rejected"), FCatFishingRodResistanceModel::StepRotation(Input).bSucceeded);
 	}
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingRodLoadedDampingTest,
+	"Catfishing.Unit.Fishing.Simulation.LoadedRodDampingReducesFixedAimJitterWithoutChangingBalance",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingRodLoadedDampingTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	for (const int32 Rate : {120, 60, 20})
+	{
+		FCatFishingRodRotationInput Inputs[2];
+		double MinYaw[2] = {180.0, 180.0}, MaxYaw[2] = {-180.0, -180.0};
+		double SpeedSquared[2] = {0.0, 0.0};
+		for (int32 Path = 0; Path < 2; ++Path)
+		{
+			auto& Input = Inputs[Path];
+			Input.CurrentAim.Yaw = 30.0;
+			Input.RequestedAim.Yaw = 120.0; // 整段不动鼠标。
+			Input.CatTorqueCapacity = 50.0;
+			Input.DeltaSeconds = 1.0 / Rate;
+			if (Path == 0) Input.LoadedAngularDampingRatio = 0.0; // 同一模型关闭追加阻尼，重现修改前。
+		}
+		// 前八秒供受载响应稳定，随后三秒比较同一周期负载下的摆幅，不修改幅度门槛。
+		for (int32 Frame = 0; Frame < Rate * 11; ++Frame)
+		{
+			const bool bTaut = (Frame / (Rate / 20)) % 2 == 0;
+			for (int32 Path = 0; Path < 2; ++Path)
+			{
+				auto& Input = Inputs[Path];
+				// 保留两条路径相同的 0.15 s 负载滤波，覆盖日志中的大转矩松绷切换。
+				Input.MaximumFishTorque = bTaut ? 300.0 : 0.0;
+				Input.PullAxis = FRotator(0.0, bTaut ? -20.0 : 20.0, 0.0).Vector();
+				const double PreviousYaw = Input.CurrentAim.Yaw;
+				const auto Step = AdvanceRodRotation(Input);
+				if (!TestTrue(TEXT("fixed-aim loaded rotation remains valid"), Step.bSucceeded)) return false;
+				if (Frame >= Rate * 8)
+				{
+					MinYaw[Path] = FMath::Min(MinYaw[Path], Step.ActualAim.Yaw);
+					MaxYaw[Path] = FMath::Max(MaxYaw[Path], Step.ActualAim.Yaw);
+					SpeedSquared[Path] += FMath::Square(FMath::FindDeltaAngleDegrees(PreviousYaw, Step.ActualAim.Yaw) / Input.DeltaSeconds);
+				}
+			}
+		}
+		const double OldSwing = MaxYaw[0] - MinYaw[0], NewSwing = MaxYaw[1] - MinYaw[1];
+		const double OldRms = FMath::Sqrt(SpeedSquared[0] / (Rate * 3)), NewRms = FMath::Sqrt(SpeedSquared[1] / (Rate * 3));
+		AddInfo(FString::Printf(TEXT("FPS=%d PreviousSwingDeg=%.4f DampedSwingDeg=%.4f PreviousRmsDegS=%.4f DampedRmsDegS=%.4f"),
+			Rate, OldSwing, NewSwing, OldRms, NewRms));
+		TestTrue(TEXT("same-filter comparison reduces stationary-input swing by at least half"), NewSwing < OldSwing * 0.5);
+		TestTrue(TEXT("same-filter comparison reduces angular motion by at least half"), NewRms < OldRms * 0.5);
+		for (auto& Input : Inputs)
+		{
+			Input.MaximumFishTorque = 100.0;
+			Input.PullAxis = FVector::ForwardVector;
+			for (int32 Frame = 0; Frame < Rate * 8; ++Frame) AdvanceRodRotation(Input);
+			TestEqual(TEXT("damping preserves the 50 versus 100 torque equilibrium at 30 degrees"), Input.CurrentAim.Yaw, 30.0, 0.02);
+			Input.MaximumFishTorque = 0.0;
+			for (int32 Frame = 0; Frame < Rate * 3; ++Frame) AdvanceRodRotation(Input);
+			TestTrue(TEXT("sustained slack releases load and returns to the unchanged aim"), Input.CurrentAim.Equals(Input.RequestedAim, 0.02));
+		}
+	}
+	FCatFishingRodRotationInput Free;
+	Free.CatTorqueCapacity = 50.0;
+	Free.RequestedAim = FRotator(20.0, 120.0, 0.0);
+	Free.DeltaSeconds = 1.0 / 60.0;
+	const auto DampedFree = FCatFishingRodResistanceModel::StepRotation(Free);
+	Free.LoadedAngularDampingRatio = 0.0;
+	const auto PreviousFree = FCatFishingRodResistanceModel::StepRotation(Free);
+	TestTrue(TEXT("unloaded player input keeps its exact original response"), DampedFree.ActualAim.Equals(PreviousFree.ActualAim, 1e-9));
+	TestEqual(TEXT("unloaded active work is unchanged"), DampedFree.CatPositiveWorkRadians, PreviousFree.CatPositiveWorkRadians, 1e-9);
+	FCatFishingRodRotationInput Assisted;
+	Assisted.CurrentAim.Yaw = 45.0;
+	Assisted.RequestedAim.Yaw = -120.0;
+	Assisted.CatTorqueCapacity = 50.0;
+	Assisted.MaximumFishTorque = 100.0;
+	Assisted.PreviousSmoothedFishPullStrengthMeters = FVector(100.0, 0.0, 0.0);
+	Assisted.DeltaSeconds = 1.0 / 60.0;
+	const auto AssistedStep = FCatFishingRodResistanceModel::StepRotation(Assisted);
+	TestTrue(TEXT("cat and fish pulling in the same rotation direction cannot bypass the loaded speed bound"),
+		AssistedStep.bSucceeded && AssistedStep.AngularSpeedDegreesPerSecond <= 90.0 + 1e-6);
+	Free.LoadedAngularDampingRatio = -1.0;
+	TestFalse(TEXT("negative damping cannot amplify the feedback"), FCatFishingRodResistanceModel::StepRotation(Free).bSucceeded);
 	return !HasAnyErrors();
 }
 

@@ -117,7 +117,13 @@ T_N = actual_horizontal_correction_cm / (mobility_cm/N × average_horizontal_lin
 
 `CatFishingRodResistanceModel::Evaluate` 读取同一 `LineTensionNewtons`，不再乘一次鱼力量、游向负载和表现张力。为保持现有旋转参数及复制字段的单位，它将牛顿数除以 `ForcePerStrengthNewtons`，再乘配置杆长（m）得到 `StrengthMeters` 转矩；字段含义没有改为牛顿米。
 
-现有有向阻尼转矩积分、负载平滑、实际竿尖跟随和主动转杆用力采样保持。杆负载使用地形后的线方向；松线、上岸力竭、终局均不发布旧鱼转矩。该层仍没有独立鱼竿转动惯量，不是完整刚体角动力学。
+有向负载仍使用 0.15 s 指数平滑。2026-09-07 的实机反馈和 `Saved/Logs/Catfishing.log` 显示：不动鼠标也有摆动，权威张力在约 0.05～0.15 s 内多次松绷切换，计算转速一度约 339.8°/s。已有滤波后仍会出现大幅快速转动；竿尖又参与下一固定步的线约束，因此本次在同一积分器增加受载粘性阻尼，限制这条反馈链的转动响应，不再叠加独立滤波组件。
+
+`HeldRodLoadedAngularDampingRatio` 来自 `DefaultGame.ini` 的 `[/Script/Catfishing.CatFishingSettings]`，原生默认和正式配置均为 3，无量纲。设平滑后的鱼负载大小为 P，原转矩尺度为 `S = max(猫转矩容量, P, 数值下限)`，本亚步阻尼倍率为 `1 + 3 × P/S`；原净转矩对应的角速度除以此倍率后，继续使用原角速度上限。鱼负载达到或超过猫容量时倍率为 4，计算转速上限由 360°/s 降到 90°/s；负载很小则连续接近原响应，完全空载严格保持原响应。配置为 0 时禁用追加阻尼，仍走同一个公式和原负载滤波，无第二套运行实现。
+
+猫、鱼净转矩统一减缓，不改变静态力量平衡、方向或单位。受载时玩家主动调杆也会减缓，趋近平衡所需时间更长，这是本次明确的手感变化；实际做功依旧由最终积分转角观察，单价及支付入口不变，支撑持续时间可能随运动过程变化。默认倍率仍需用户复测手感后调节。没有新增角速度历史、复制字段、资产迁移或退出清理状态。
+
+杆负载使用地形后的线方向；松线、上岸力竭、终局均不发布旧鱼转矩，现有负载历史继续渐退。实际竿尖、Actor Transform、握把/镜头和努力采样继续消费同一积分结果。该层仍没有独立鱼竿转动惯量，不是完整刚体角动力学，也不声称已经解决所有猫端牵引及网络纠正抖动。
 
 ## FishLogic 4：网络与移动重放
 
@@ -145,11 +151,31 @@ Rod 的约束快照同时保存 `ConstraintHolderPlayerState`，复制乱序时�
 - `fishing_constraint_sample`：共同 `LineTensionN`、几何误差、最终转矩和牵引加速度。
 - `fishing_coupled_work_sample`：请求/实际收线及各项费用；最终结算失败看 `fishing_final_work_rejected`。
 - `fishing_carrier_movement_sample`：RodActorId、角色、速度、实际碰撞位移、NetMode/LocalRole；替代旧 `fishing_carrier_smoothing_sample`。
+- `fishing_rod_rotation_resistance_sample`：同一限频事件增加 `LoadedAngularDampingRatio` 和 `AppliedAngularDampingMultiplier`，结合原始/平滑负载、转速、控制器意图、实际姿态和努力 Epoch 排查；没有新增逐帧日志。
 - 原 `fishing_surface_tow`、`fishing_fish_beached`、`fishing_drag_water_entered`、装备磨损及捕获日志继续沿用。
 
 Win64 Development 包应在不加 `-log` 时写入 `<打包根目录>/Catfishing/Saved/Logs`。本轮尚未重新打包、采集新房主/客户端双端日志或验收正式画面，不将代码/受控运行通过写成 presentation_delivery 完成。
 
-## 本轮衔接核对（2026-09-07）
+## 手持杆抖动衔接核对（2026-09-07）
+
+修改前为 `a4f968a`，工作区干净。上一轮 128 项基线为 124 clean、3 警告、1 既有耐久失败。用户明确反馈中鱼后即使不动鼠标也抖；日志确认权威负载跳变，尚未将该现象唯一归因于某个网络或物理环节。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 张力入口 | `Source/Catfishing/Fishing/Simulation/CatFishingFightRunner.cpp::ResolveFishSurfaceFromAuthority` → `RodResistanceModel::Evaluate` → `Rod::SetCarrierConstraintFromAuthority` | 保留牛顿张力、StrengthMeters 转矩、地形后线方向、固定步和服务器权威 | 保留同一生产者，不在 Runner 另建平滑张力或付费入口 | 接收方模型就绪后接 Settings | 力竭、松线、共同张力与终局 | 原链路未修改；Fishing 全回归无新增失败 |
+| 旋转积分 | `Source/Catfishing/Fishing/Simulation/CatFishingRodResistanceModel.{h,cpp}::StepRotation` → `Rod::RefreshHeldTransformFromAuthority` | 原 0.15 s 负载滤波保留；受载净转矩的速度响应减缓，静态平衡不变 | 原公式追加无量纲阻尼，默认 3；不另建组件或旋转状态 | 先纯模型对比，再接实际 Actor | 固定视角/20 Hz 负载切换、20/60/120 FPS、静态平衡、卸载 | 新 `LoadedRodDampingReducesFixedAimJitterWithoutChangingBalance` 通过；摆幅分别下降约 84%/76%/75% |
+| 配置及生命周期 | `Source/Catfishing/Fishing/CatFishingSettings.h::HeldRodLoadedAngularDampingRatio`、`Config/DefaultGame.ini` 的 `[/Script/Catfishing.CatFishingSettings]` → `CatFishingRodActor.cpp::RefreshHeldTransformFromAuthority` | 新默认 3，单位为倍率；空载 360°/s、0.08 s 瞄准响应保持，非法值拒绝 | 原 Actor 读取/校验配置并传入模型；不新增历史或复制字段 | 模型后接入；换人/清约束沿用原流程 | 配置实际接入、Epoch、重启会话与卸载 | 受控 Actor 从真实 Settings 获取倍率，验证实际 Transform、原平衡角和 Epoch；日志输出 Ratio=3、Multiplier=4 |
+| 资源及实际运动消费者 | `StepRotation::CatPositiveWorkRadians/ExertionSquaredSeconds` → Runner 单次结算；`Rod::GetRodTipWorldTransform` → Runner/Hook；`Fishing/Presentation/CatFishingCameraComponent.cpp::TryGetCameraView` → `Rod::GetGripWorldTransform` | 不改价格、单位和写入权威；受载动作更慢，实际做功和支撑持续时间据此变化 | 保留同一姿态与努力采样入口，不滤波最终 Mesh 或镜头事实 | 先真实姿态，再核对既有消费者 | 努力、相机、身体朝向、松线和恢复 | RodEffort/Camera/Service 回归通过；原平衡精度保留，测试等待阶段改为覆盖更慢的受载收敛 |
+| 资产、持久化和打包 | `/Game/Blueprint/Actors/BP_CatFishingRodActor`；`/Game/Catfishing/Data/Fishing/DA_FishingFightBalance_Default`；既有 Cook 和资产生成脚本 | 不涉及资产迁移、存档结构、生成脚本或新增 Cook 入口；二进制内部消费者本轮未重新确认 | 不删除或改名反射接口、资产字段；新增原生 Settings 参数 | 原有资产消费 Actor Transform；风险项继续保留 | 构建与资产契约；真人联机/正式画面需另证 | 本轮无资产改动；旧 WBP 与六个兼容字段的既有不确定性保持，没有新增废弃入口 |
+| 测试与诊断 | `CatFishingSimulationTests.cpp`、`CatFishingRodEffortTests.cpp`、`CatFishingCameraTests.cpp`、`CatFishingServiceTests.cpp`；Rod 旋转采样事件 | 比较两条使用相同负载滤波的路径；稳定后取样，不把慢收敛计入摆幅 | 复用原测试文件和日志分类；同一模型系数 0 作为对照 | 原精度/幅度断言不变，先充分等待平衡再测；最后核对 diff | 原有行为、Development 日志和运行模块身份 | 最终 Development 129 项：125 clean、3 警告、1 既有耐久失败；新代码实际加载路径由日志确认 |
+
+contract：`Saved/Automation/FishingPhysics/BuildRodDampingEditor.log` 与 `BuildRodDampingGame.log` 的 Editor/Game Win64 Development 构建成功；最终报告 `RodDampingDevelopmentReport/index.json` 为 129 项（125 clean、3 警告、1 既有初级竿 500/150 耐久基线失败，0 notRun）。`RodDampingDevelopmentTests.log` 明确加载新 `UnrealEditor-Catfishing.dll` 并输出新增阻尼字段；覆盖猫与鱼同向转动也不能越过受载转速上限。独立 DebugGame 构建和 `RodDampingFinalReport` 曾用于编辑器打开期间的阶段验证；初次普通启动器仍加载旧模块的 `RodDampingInitialReport` 只能作为旧版本复核；`RodDampingDebugReport` 是首次未收口的试验报告。最终交付以 Development 报告为准。
+
+runtime_behavior：受控 World 中实际 Rod/Controller 的配置接入、受载 Transform、相机/朝向消费者和努力生命周期通过；日志见最终测试日志的 `fishing_rod_rotation_resistance_sample`。纯模型以固定视角、相同 0.15 s 滤波和每 50 ms 松绷切换进行对比：120 FPS 摆幅 0.5109° → 0.1259°，角速度均方根 11.7774°/s → 2.9014°/s；60/20 FPS 的摆幅也分别下降约 76%/84%。这些是受控输入的比较，不是实机全链路摆幅保证。
+
+presentation_delivery：尚未在正式场景重试或重新打包联机验收。用户已保存并关闭编辑器，解除 Live Coding 构建锁，常规 Editor Development 模块已构建并通过加载验证；重新打开项目可复测。不能将受控摆幅降低比例当作正式场景或房主/客户端画面验收。
+
+## 共同张力衔接核对（2026-09-07）
 
 修改前为 `8930c90`，工作区干净；用户此前配置/地图/资产改动保存在 `881fa15`，本轮不覆盖。验证基线为 GeometryReport 的 122 项：119 clean、2 警告、1 既有耐久失败。本表是实现与审查对照，模块进度仍只在需求对齐差距清单维护。
 

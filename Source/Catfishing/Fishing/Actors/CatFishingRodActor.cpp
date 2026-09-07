@@ -453,6 +453,8 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 		|| Settings->HeldRodAngularResistanceResponseSeconds <= 0.0
 		|| !FMath::IsFinite(Settings->HeldRodFishPullSmoothingSeconds)
 		|| Settings->HeldRodFishPullSmoothingSeconds <= 0.0
+		|| !FMath::IsFinite(Settings->HeldRodLoadedAngularDampingRatio)
+		|| Settings->HeldRodLoadedAngularDampingRatio < 0.0
 		|| Settings->HeldRodGripOffsetCentimeters.ContainsNaN())
 	{
 		return false;
@@ -489,6 +491,7 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 		RotationInput.MaximumAngularSpeedDegreesPerSecond = Settings->HeldRodMaximumAngularSpeedDegreesPerSecond;
 		RotationInput.ResponseSeconds = Settings->HeldRodAngularResistanceResponseSeconds;
 		RotationInput.FishPullSmoothingSeconds = Settings->HeldRodFishPullSmoothingSeconds;
+		RotationInput.LoadedAngularDampingRatio = Settings->HeldRodLoadedAngularDampingRatio;
 		RotationInput.DeltaSeconds = DeltaSeconds;
 		RotationStep = FCatFishingRodResistanceModel::StepRotation(RotationInput);
 		if (!RotationStep.bSucceeded) return false;
@@ -525,7 +528,7 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 			TEXT("Event=fishing_rod_rotation_resistance_sample RodActorId=%s RequestedYaw=%.2f ActualYaw=%.2f "
 				"RequestedPitch=%.2f ActualPitch=%.2f AngularSpeed=%.3f NetTorque=%s "
 				"MaximumFishTorque=%.3f CatTorqueCapacity=%.3f TorqueBalanced=%s "
-				"PullAxis=%s AppliedFishPull=%s FishPullSmoothingSeconds=%.3f "
+				"PullAxis=%s AppliedFishPull=%s FishPullSmoothingSeconds=%.3f LoadedAngularDampingRatio=%.3f AppliedAngularDampingMultiplier=%.3f "
 				"RotationEffortEpoch=%llu RotationExertionSquaredSeconds=%.3f RotationPositiveWorkRadians=%.3f RotationIntegratedSeconds=%.3f "
 				"HolderPlayerId=%d Holder=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
 			*PresentationState.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
@@ -535,6 +538,7 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 			CarrierConstraintState.CatTorqueCapacityStrengthMeters,
 			bTorqueBalanced ? TEXT("true") : TEXT("false"), *FVector(CarrierConstraintState.RodPullAxis).ToCompactString(),
 			*SmoothedRodFishPullStrengthMeters.ToCompactString(), Settings->HeldRodFishPullSmoothingSeconds,
+			Settings->HeldRodLoadedAngularDampingRatio, RotationStep.AppliedAngularDampingMultiplier,
 			AuthoritativeRotationEffort.Epoch, AuthoritativeRotationEffort.ExertionSquaredSeconds,
 			AuthoritativeRotationEffort.PositiveWorkRadians, AuthoritativeRotationEffort.IntegratedSeconds,
 			PresentationState.HolderPlayerState->GetPlayerId(),

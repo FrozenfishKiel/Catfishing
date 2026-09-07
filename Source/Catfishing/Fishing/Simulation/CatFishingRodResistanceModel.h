@@ -33,6 +33,8 @@ struct CATFISHING_API FCatFishingRodRotationInput
 	double MaximumAngularSpeedDegreesPerSecond = 360.0;
 	double ResponseSeconds = 0.08;
 	double FishPullSmoothingSeconds = 0.15;
+	/** 鱼负载下追加的粘性阻尼倍率，无量纲；零负载时不改变瞄准响应，零值可禁用追加阻尼。 */
+	double LoadedAngularDampingRatio = 3.0;
 	double DeltaSeconds = 0.0;
 };
 
@@ -43,6 +45,8 @@ struct CATFISHING_API FCatFishingRodRotationResult
 	FVector NetTorque = FVector::ZeroVector;
 	FVector SmoothedFishPullStrengthMeters = FVector::ZeroVector;
 	double AngularSpeedDegreesPerSecond = 0.0;
+	/** 本步最后一个亚步实际使用的阻尼倍率，供开发包诊断。 */
+	double AppliedAngularDampingMultiplier = 1.0;
 	/** 主动转矩/自身容量的平方随时间积分；受阻仍支撑，不借用最大转速收费。 */
 	double CatExertionSquaredSeconds = 0.0;
 	/** 沿主动转矩方向完成的真实转角 × 主动转矩/自身容量；反向被拖不计正功。 */

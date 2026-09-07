@@ -147,6 +147,21 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 	TestTrue(TEXT("zero-time refresh succeeds"), Rod->RefreshHeldTransformFromAuthority());
 	TestEqual(TEXT("zero-time refresh retains the same effort snapshot"),
 		Rod->GetAuthoritativeRotationEffortSnapshot().ExertionSquaredSeconds, First.ExertionSquaredSeconds);
+	// 通过生产 Actor 接入配置和实际 Transform；固定控制器意图，不能只让纯模型测试使用新参数。
+	for (int32 Frame = 0; Frame < 360; ++Frame)
+	{
+		const double PreviousYaw = Rod->GetActorRotation().Yaw;
+		if (!TestTrue(TEXT("held actor integrates loaded pose"), Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0))) return false;
+		if (Frame >= 60)
+		{
+			TestTrue(TEXT("production held transform respects the damped loaded speed"),
+				FMath::Abs(FMath::FindDeltaAngleDegrees(PreviousYaw, Rod->GetActorRotation().Yaw)) <= 1.5 + 1e-6);
+		}
+	}
+	TestEqual(TEXT("production actor keeps the same torque equilibrium under unchanged controller intent"),
+		Rod->GetActorRotation().Yaw, 30.0, 0.02);
+	TestEqual(TEXT("loaded integration preserves the original holder effort epoch"),
+		Rod->GetAuthoritativeRotationEffortSnapshot().Epoch, First.Epoch);
 	TestTrue(TEXT("slack update retains the same fight"), Rod->SetCarrierConstraintFromAuthority(
 		FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true, 0.0, 50.0));
 	TestEqual(TEXT("load changes cannot erase unconsumed effort"),

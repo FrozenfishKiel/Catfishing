@@ -95,6 +95,9 @@ public:
 	/** 鱼游向/松绷线改变时，有向负载的指数插值时间常数；越大越柔和，不改变稳态平衡角。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.01", Units="s"))
 	double HeldRodFishPullSmoothingSeconds = 0.15;
+	/** 鱼负载下追加的粘性阻尼倍率；3 表示满负载时以四倍阻尼减缓摆动，空载与平衡角不变。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0"))
+	double HeldRodLoadedAngularDampingRatio = 3.0;
 
 	/**
 	 * 打窝蓄力（规格 3.1 打窝：蓄力抛掷、抛物线预览）。服务器按按住时长算 ChargeAlpha，客户端预览用同一组参数（UCatFishingAimLibrary）。
