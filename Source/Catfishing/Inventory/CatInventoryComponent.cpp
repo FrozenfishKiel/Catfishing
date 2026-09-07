@@ -769,6 +769,63 @@ bool UCatInventoryComponent::TryAddInventoryBatch(const FCatInventoryReceiveBatc
 	return true;
 }
 
+// 预留批次归还流程：
+// 1. 普通容量能接收时复用标准批次入口，保持商店、拾取和返还的堆叠规则一致。
+// 2. 普通容量放不下时只按调用方给出的返还格预算追加空槽，再重新预检整批，避免把“满包返还”扩散到 Equipment 或 Fishing。
+// 3. 追加后如果正式写入仍失败，回滚到追加前 entries；成功时由标准批次入口推进版本和广播。
+bool UCatInventoryComponent::TryReturnReservedInventoryBatchFromAuthority(
+	const FCatInventoryReceiveBatch& ReceiveBatch, const int32 OverflowSlotCount)
+{
+	AActor* OwningActor = GetOwner();
+	if (OwningActor == nullptr || !OwningActor->HasAuthority())
+	{
+		return false;
+	}
+
+	if (ReceiveBatch.IsEmpty())
+	{
+		return true;
+	}
+
+	if (CanFullyAcceptInventoryBatch(ReceiveBatch))
+	{
+		return TryAddInventoryBatch(ReceiveBatch);
+	}
+
+	const int32 SafeOverflowSlotCount = FMath::Max(0, OverflowSlotCount);
+	if (SafeOverflowSlotCount <= 0)
+	{
+		return false;
+	}
+
+	const TArray<FCatInventoryEntry> SavedEntries = InventoryList.Entries;
+	const int32 OriginalSlotCount = InventoryList.Entries.Num();
+	for (int32 AddedSlotIndex = 0; AddedSlotIndex < SafeOverflowSlotCount; ++AddedSlotIndex)
+	{
+		InventoryList.Entries.Add(FCatInventoryEntry(this));
+	}
+	InventoryList.MarkArrayDirty();
+
+	if (!CanFullyAcceptInventoryBatch(ReceiveBatch))
+	{
+		InventoryList.Entries = SavedEntries;
+		InventoryList.MarkArrayDirty();
+		return false;
+	}
+
+	if (TryAddInventoryBatch(ReceiveBatch))
+	{
+		UE_LOG(LogCatInventory, Log,
+			TEXT("Event=inventory_reserved_return_overflow Owner=%s OriginalSlots=%d NewSlots=%d Definitions=%d Instances=%d"),
+			*GetNameSafe(OwningActor), OriginalSlotCount, InventoryList.Entries.Num(),
+			ReceiveBatch.DefinitionEntries.Num(), ReceiveBatch.InstanceEntries.Num());
+		return true;
+	}
+
+	ReplaceInventoryEntriesFromAuthority(SavedEntries, OriginalSlotCount);
+	return false;
+}
+
 // 正式库存整理流程：
 // 1. 先按 RequestId、库存 Revision、源/目标槽位生成幂等签名；重放只返回首次终态，不再次移动格子。
 // 2. 首次请求必须在 authority 上执行，并且客户端看到的库存版本要等于当前正式库存版本。

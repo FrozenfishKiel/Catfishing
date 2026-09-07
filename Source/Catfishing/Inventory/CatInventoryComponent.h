@@ -172,6 +172,10 @@ public:
 	/** 先预检整批载荷，再把它写入当前库存组件；成功后只由这一份组件成为事实源。 */
 	bool TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch);
 
+	/** authority 归还已经从本库存预留出去的批次；普通入库放不下时可补少量返还格，避免收口流程吞掉预留物。 */
+	bool TryReturnReservedInventoryBatchFromAuthority(
+		const FCatInventoryReceiveBatch& ReceiveBatch, int32 OverflowSlotCount);
+
 	/** 服务器整理本库存里的两个格子；RequestId 和库存 Revision 在正式库存层裁决，返回提交状态、错误和最新库存版本。 */
 	FCatDomainCommandResult MoveInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		int32 SourceSlotIndex, int32 TargetSlotIndex);

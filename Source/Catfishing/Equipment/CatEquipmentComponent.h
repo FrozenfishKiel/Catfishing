@@ -94,11 +94,11 @@ public:
 	FCatFishingFailureResult CommitFishingFailure(FGuid RequestId, int64 ExpectedRevision,
 		ECatFishingFailurePenalty Penalty);
 
-	/** Fishing 会话开始前按 SessionId 申请当前钓鱼选择使用权；Begin 会从随身库存暂存一份选中鱼饵，后续由本会话消耗或归还。 */
+	/** Fishing 会话开始前按 SessionId 申请当前钓鱼选择使用权；Begin 从正式库存暂存一份选中鱼饵，后续由本会话消耗或归还。 */
 	FCatFishingUseReservationResult BeginFishingUse(FGuid FishingSessionId, FGuid RodItemInstanceId,
 		FGuid BaitItemInstanceId, FGuid FloatItemInstanceId, FName RodDefinitionId,
 	FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);
-	/** 确认消耗 Begin 已暂存的鱼饵；库存数量已经在 Begin 发布，本函数只收口会话内的饵料事务。 */
+	/** 确认消耗 Begin 已暂存的鱼饵；正式库存数量已经在 Begin 扣减，本函数只收口会话内的饵料事务。 */
 	FCatFishingUseOperationResult CommitFishingBaitDeferred(FGuid FishingSessionId);
 	/** 按递增累计磨损的差额立即扣减 Begin 绑定的鱼竿实例；重复序号不重扣，Release 不回滚。 */
 	FCatFishingUseOperationResult ApplyFishingRodWear(FGuid FishingSessionId, int64 WearSequence,
@@ -130,7 +130,7 @@ private:
 		/** Begin 冻结的鱼竿实例与定义；后续磨损不得按当前选择重新选竿。 */
 		FGuid RodItemInstanceId;
 		FName RodDefinitionId = NAME_None;
-		/** Begin 从随身库存移出的一份鱼饵定义；数量型物品脱离原堆栈后不再复用原 ItemInstanceId。 */
+		/** Begin 从正式库存移出的一份鱼饵定义；数量型物品脱离原堆栈后不再复用原 ItemInstanceId。 */
 		FName ReservedBaitDefinitionId = NAME_None;
 		/** 已接收的竿磨损序号；磨损事件按递增序号提交，重复或跳号不会改耐久。 */
 		int64 LastWearSequence = 0;

@@ -1361,7 +1361,7 @@ FCatDomainCommandResult UCatEquipmentComponent::MoveInventorySlotFromAuthority(c
 	return Result;
 }
 
-// 失败预算流程：先重放完整终态并校验 authority/Revision；部署中的物品不允许被这条预算旁路改写，None 不写物资，丢饵只扣特殊饵一份，伤竿只扣显式耐久并可断竿。
+// 失败预算流程：先重放完整终态并校验 authority/Revision；部署中的物品不允许被这条预算旁路改写，None 不写物资，丢饵通过正式库存扣特殊饵一份，伤竿只扣显式耐久并可断竿。
 FCatFishingFailureResult UCatEquipmentComponent::CommitFishingFailure(const FGuid RequestId,
 	const int64 ExpectedRevision, const ECatFishingFailurePenalty Penalty)
 {
@@ -1396,12 +1396,55 @@ FCatFishingFailureResult UCatEquipmentComponent::CommitFishingFailure(const FGui
 	}
 	else if (Penalty == ECatFishingFailurePenalty::LoseSpecialBait)
 	{
-		UCatEquipmentDefinition* Bait = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Snapshot.BaitDefinitionId);
-		const FCatRunInventorySlot* BaitSlot = FindInventorySlotByInstanceId(Snapshot.BaitItemInstanceId);
+		UCatEquipmentDefinition* Bait =
+			GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Snapshot.BaitDefinitionId);
+		UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
+		FCatRunInventorySlot FormalBaitSlot;
+		int32 FormalBaitSlotIndex = INDEX_NONE;
+		const FCatRunInventorySlot* BaitSlot = nullptr;
+		if (OwnerInventory != nullptr)
+		{
+			// 正式库存存在时，失败惩罚只把旧选择实例 ID 映射回 InventoryComponent 槽位；旧 Snapshot 不再直接扣量。
+			FormalBaitSlotIndex = OwnerInventory->FindInventorySlotIndexFromInstanceId(Snapshot.BaitItemInstanceId);
+			const FCatInventoryEntry* FormalBaitEntry =
+				OwnerInventory->GetInventoryEntryAtSlot(FormalBaitSlotIndex);
+			if (FormalBaitEntry != nullptr
+				&& BuildLegacyRunInventorySlotFromFormalEntry(*FormalBaitEntry, FormalBaitSlot))
+			{
+				BaitSlot = &FormalBaitSlot;
+			}
+		}
+		else
+		{
+			BaitSlot = FindInventorySlotByInstanceId(Snapshot.BaitItemInstanceId);
+		}
 		if (!Bait || !Bait->bSpecialBait || !BaitSlot
 			|| BaitSlot->DefinitionId != Snapshot.BaitDefinitionId || BaitSlot->Quantity <= 0)
 		{
 			Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
+		}
+		else if (OwnerInventory != nullptr)
+		{
+			const FName LostBaitDefinitionId = Snapshot.BaitDefinitionId;
+			const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
+			const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
+			if (BaitSlot->Quantity <= 1)
+			{
+				Snapshot.BaitItemInstanceId = FGuid();
+			}
+			if (OwnerInventory->ConsumeItemAtSlot(FormalBaitSlotIndex, 1)
+				&& RefreshInventoryProjectionFromInventoryComponentFromAuthority(Bait, LostBaitDefinitionId))
+			{
+				Result.Command.bCommitted = true;
+				Result.Command.Error = ECatDomainCommandError::None;
+			}
+			else
+			{
+				OwnerInventory->ReplaceInventoryEntriesFromAuthority(
+					SavedEntries, GetConfiguredInventorySlotCapacity());
+				Snapshot = SavedSnapshot;
+				Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
+			}
 		}
 		else
 		{
@@ -1458,8 +1501,8 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	// 建立 Fishing 使用预留的流程：
 	// 1. 先用 SessionId 返回已存在的终态，保证 FishingSession 重放不会再检查或再占库存。
 	// 2. 再校验 authority、定义类型、Revision、当前钓鱼选择和三份实例身份，任何不一致都保持快照不变。
-	// 3. 鱼竿实例必须来自活动 Use 记录，鱼饵和鱼漂实例必须仍在库存中，避免场景竿和背包格引用不同物品。
-	// 4. 通过后立即把选中鱼饵实例的一份移进本 Session 记录并发布库存变化；之后玩家整理或转移背包不会破坏结算。
+	// 3. 鱼竿实例必须来自活动 Use 记录，鱼饵和鱼漂实例优先从正式库存确认，避免场景竿和背包格引用不同物品。
+	// 4. 通过后立即从正式库存扣掉选中鱼饵实例的一份，并只把可归还的定义放进本 Session 记录。
 	// 5. 记录只保存这场 Fishing 自己要消耗或归还的饵料和耐久累计，不再给库存拖放提供通用占用 gate。
 	if (const FCatFishingUseRecord* ExistingRecord = FindFishingUseRecord(FishingSessionId))
 	{
@@ -1503,8 +1546,35 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false);
 	}
 	const FCatInventoryItemUseRecord* RodUseRecord = FindInventoryItemUseRecord(RodItemInstanceId);
-	const FCatRunInventorySlot* BaitSlot = FindInventorySlotByInstanceId(BaitItemInstanceId);
-	const FCatRunInventorySlot* FloatSlot = FindInventorySlotByInstanceId(FloatItemInstanceId);
+	UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
+	FCatRunInventorySlot FormalBaitSlot;
+	FCatRunInventorySlot FormalFloatSlot;
+	int32 FormalBaitSlotIndex = INDEX_NONE;
+	const FCatRunInventorySlot* BaitSlot = nullptr;
+	const FCatRunInventorySlot* FloatSlot = nullptr;
+	if (OwnerInventory != nullptr)
+	{
+		// Fishing 只消费正式库存里的数量物；旧 Snapshot 在这里仅提供当前选择，不能再当库存事实源。
+		FormalBaitSlotIndex = OwnerInventory->FindInventorySlotIndexFromInstanceId(BaitItemInstanceId);
+		const int32 FormalFloatSlotIndex = OwnerInventory->FindInventorySlotIndexFromInstanceId(FloatItemInstanceId);
+		const FCatInventoryEntry* FormalBaitEntry = OwnerInventory->GetInventoryEntryAtSlot(FormalBaitSlotIndex);
+		const FCatInventoryEntry* FormalFloatEntry = OwnerInventory->GetInventoryEntryAtSlot(FormalFloatSlotIndex);
+		if (FormalBaitEntry != nullptr
+			&& BuildLegacyRunInventorySlotFromFormalEntry(*FormalBaitEntry, FormalBaitSlot))
+		{
+			BaitSlot = &FormalBaitSlot;
+		}
+		if (FormalFloatEntry != nullptr
+			&& BuildLegacyRunInventorySlotFromFormalEntry(*FormalFloatEntry, FormalFloatSlot))
+		{
+			FloatSlot = &FormalFloatSlot;
+		}
+	}
+	else
+	{
+		BaitSlot = FindInventorySlotByInstanceId(BaitItemInstanceId);
+		FloatSlot = FindInventorySlotByInstanceId(FloatItemInstanceId);
+	}
 	if (!RodUseRecord || RodUseRecord->bReleased || RodUseRecord->Item.DefinitionId != RodDefinitionId
 		|| !BaitSlot || BaitSlot->DefinitionId != BaitDefinitionId
 		|| !FloatSlot || FloatSlot->DefinitionId != FloatDefinitionId)
@@ -1516,7 +1586,31 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false);
 	}
 	FCatRunInventorySlot ReservedBaitItem;
-	if (!RemoveInventoryItemQuantityFromInstance(BaitItemInstanceId, 1, ReservedBaitItem))
+	if (OwnerInventory != nullptr)
+	{
+		const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
+		const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
+		ReservedBaitItem = *BaitSlot;
+		ReservedBaitItem.Quantity = 1;
+		if (BaitSlot->Quantity <= 1)
+		{
+			Snapshot.BaitItemInstanceId = FGuid();
+		}
+		if (!OwnerInventory->ConsumeItemAtSlot(FormalBaitSlotIndex, 1))
+		{
+			Snapshot = SavedSnapshot;
+			return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false);
+		}
+		if (!RefreshInventoryProjectionFromInventoryComponentFromAuthority(Bait, BaitDefinitionId))
+		{
+			OwnerInventory->ReplaceInventoryEntriesFromAuthority(
+				SavedEntries, GetConfiguredInventorySlotCapacity());
+			Snapshot = SavedSnapshot;
+			return MakeFishingUseReservationResult(FishingSessionId,
+				ECatDomainCommandError::DependencyUnavailable, false);
+		}
+	}
+	else if (!RemoveInventoryItemQuantityFromInstance(BaitItemInstanceId, 1, ReservedBaitItem))
 	{
 		return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false);
 	}
@@ -1527,8 +1621,11 @@ FCatFishingUseReservationResult UCatEquipmentComponent::BeginFishingUse(const FG
 	Record.ReservedBaitDefinitionId = ReservedBaitItem.DefinitionId;
 	Record.bBaitQuantityReserved = true;
 	FishingUseRecords.Add(FishingSessionId, Record);
-	++Snapshot.Revision;
-	PublishSnapshot();
+	if (OwnerInventory == nullptr)
+	{
+		++Snapshot.Revision;
+		PublishSnapshot();
+	}
 	return MakeFishingUseReservationResult(FishingSessionId, ECatDomainCommandError::None, true);
 }
 
@@ -1672,8 +1769,8 @@ FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FG
 {
 	// Fishing 使用释放流程：
 	// 1. 先按 SessionId 找到 Begin 留下的短生命周期记录；旧会话和重复释放只返回稳定终态。
-	// 2. 如果饵料还没确认消耗，就把这一份按 DefinitionId 作为数量物品归还到随身库存，背包已满时追加返还格。
-	// 3. 归还后显式修正同定义空选择，再关闭记录；已确认消耗的会话只关闭记录，不再碰库存。
+	// 2. 如果饵料还没确认消耗，就把这一份按 DefinitionId 归还给正式库存，背包已满时由库存事务追加返还格。
+	// 3. 归还后刷新旧投影并修正同定义空选择，再关闭记录；已确认消耗的会话只关闭记录，不再碰库存。
 	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
 	if (!Record)
 	{
@@ -1690,7 +1787,7 @@ FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FG
 	if (Record->bBaitQuantityReserved && !Record->bBaitCommitted)
 	{
 		const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-		const UCatEquipmentDefinition* Bait = Settings
+		UCatEquipmentDefinition* Bait = Settings
 			? Settings->FindRuntimeDefinition(Record->ReservedBaitDefinitionId) : nullptr;
 		if (!Bait || Bait->Kind != ECatEquipmentKind::Bait || !Bait->bRunConsumable
 			|| GetInventoryStackLimit(*Bait) <= 0)
@@ -1699,23 +1796,62 @@ FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FG
 				false, Record);
 		}
 		const FName RestoredDefinitionId = Record->ReservedBaitDefinitionId;
-		if (!AddInventoryItemQuantity(*Bait, RestoredDefinitionId, 1))
+		if (UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent())
 		{
-			// 这是归还 Begin 暂存物，不是普通入库；背包被玩家填满时追加返还格，避免终态会话卡住或吞掉鱼饵。
-			Snapshot.InventorySlots.Add(CatRunInventorySlotOperations::MakeInventoryItemSlot(*Bait,
-				RestoredDefinitionId, 1));
+			const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
+			const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
+			const FCatFishingUseRecord SavedRecord = *Record;
+			FCatInventoryReceiveBatch ReceiveBatch;
+			FCatInventoryDefinitionEntry& DefinitionEntry =
+				ReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
+			DefinitionEntry.ItemDefinition = Bait;
+			DefinitionEntry.Count = 1;
+			const bool bShouldRepairBaitSelection = Snapshot.BaitDefinitionId == RestoredDefinitionId
+				|| Snapshot.BaitDefinitionId.IsNone()
+				|| GetInventoryItemQuantity(Snapshot.BaitDefinitionId) <= 0;
+			if (bShouldRepairBaitSelection)
+			{
+				Snapshot.BaitDefinitionId = RestoredDefinitionId;
+				Snapshot.BaitItemInstanceId = FGuid();
+			}
+			if (!OwnerInventory->TryReturnReservedInventoryBatchFromAuthority(ReceiveBatch, 1))
+			{
+				Snapshot = SavedSnapshot;
+				return MakeFishingUseOperationResult(FishingSessionId,
+					ECatDomainCommandError::DependencyUnavailable, false, Record);
+			}
+			Record->ReservedBaitDefinitionId = NAME_None;
+			Record->bBaitQuantityReserved = false;
+			if (!RefreshInventoryProjectionFromInventoryComponentFromAuthority(Bait, RestoredDefinitionId))
+			{
+				OwnerInventory->ReplaceInventoryEntriesFromAuthority(
+					SavedEntries, GetConfiguredInventorySlotCapacity());
+				Snapshot = SavedSnapshot;
+				*Record = SavedRecord;
+				return MakeFishingUseOperationResult(FishingSessionId,
+					ECatDomainCommandError::DependencyUnavailable, false, Record);
+			}
 		}
-		Record->ReservedBaitDefinitionId = NAME_None;
-		Record->bBaitQuantityReserved = false;
-		if (Snapshot.BaitDefinitionId == RestoredDefinitionId || Snapshot.BaitDefinitionId.IsNone()
-			|| GetInventoryItemQuantity(Snapshot.BaitDefinitionId) <= 0)
+		else
 		{
-			const FCatRunInventorySlot* RestoredSlot = FindFirstInventorySlotByDefinition(RestoredDefinitionId);
-			Snapshot.BaitDefinitionId = RestoredDefinitionId;
-			Snapshot.BaitItemInstanceId = RestoredSlot ? RestoredSlot->ItemInstanceId : FGuid();
+			if (!AddInventoryItemQuantity(*Bait, RestoredDefinitionId, 1))
+			{
+				// 这是归还 Begin 暂存物，不是普通入库；背包被玩家填满时追加返还格，避免终态会话卡住或吞掉鱼饵。
+				Snapshot.InventorySlots.Add(CatRunInventorySlotOperations::MakeInventoryItemSlot(*Bait,
+					RestoredDefinitionId, 1));
+			}
+			Record->ReservedBaitDefinitionId = NAME_None;
+			Record->bBaitQuantityReserved = false;
+			if (Snapshot.BaitDefinitionId == RestoredDefinitionId || Snapshot.BaitDefinitionId.IsNone()
+				|| GetInventoryItemQuantity(Snapshot.BaitDefinitionId) <= 0)
+			{
+				const FCatRunInventorySlot* RestoredSlot = FindFirstInventorySlotByDefinition(RestoredDefinitionId);
+				Snapshot.BaitDefinitionId = RestoredDefinitionId;
+				Snapshot.BaitItemInstanceId = RestoredSlot ? RestoredSlot->ItemInstanceId : FGuid();
+			}
+			++Snapshot.Revision;
+			PublishSnapshot();
 		}
-		++Snapshot.Revision;
-		PublishSnapshot();
 	}
 	Record->bReleased = true;
 	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
