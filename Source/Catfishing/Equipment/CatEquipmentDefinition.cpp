@@ -6,6 +6,22 @@
 
 namespace
 {
+	// 旧装备 Use 策略迁移流程：只把历史 enum 映射成库存层语义，避免运行代码继续把库存处理理解为 Equipment 私有概念。
+	ECatInventoryItemUseEffect ConvertEquipmentUseInventoryEffect(const ECatEquipmentUseInventoryEffect Effect)
+	{
+		switch (Effect)
+		{
+		case ECatEquipmentUseInventoryEffect::HoldInstanceUntilUnUse:
+			return ECatInventoryItemUseEffect::HoldInstanceUntilUnUse;
+		case ECatEquipmentUseInventoryEffect::ConsumeQuantity:
+			return ECatInventoryItemUseEffect::ConsumeQuantity;
+		case ECatEquipmentUseInventoryEffect::None:
+		case ECatEquipmentUseInventoryEffect::Auto:
+		default:
+			return ECatInventoryItemUseEffect::None;
+		}
+	}
+
 	// 默认堆叠容量迁移流程：InventorySettings 是正式来源；旧 EquipmentSettings 只有被测试或诊断改成非项目默认值时才临时覆盖。
 	int32 ResolveDefaultInventoryQuantityStackLimit()
 	{
@@ -74,6 +90,12 @@ int32 UCatEquipmentDefinition::GetMaxStackCount() const
 	return ResolveDefaultInventoryQuantityStackLimit();
 }
 
+ECatInventoryItemUseEffect UCatEquipmentDefinition::GetInventoryUseEffect() const
+{
+	// 库存层策略读取流程：先保留旧装备字段和 Auto 推导，再只返回 Inventory 命名的结果，让调用方不再依赖 Equipment enum。
+	return ConvertEquipmentUseInventoryEffect(GetUseInventoryEffect());
+}
+
 // 定义检查流程：验证总 gate、身份、类别、功能路线和 Use 库存影响策略；装配类要求槽位，部署型要求 Actor 类，Rod 还要具备耐久和三组锚点，Chum 还必须给出服务器读取的三轴增量。
 bool UCatEquipmentDefinition::IsRuntimeDefinitionReady() const
 {
@@ -93,20 +115,20 @@ bool UCatEquipmentDefinition::IsRuntimeDefinitionReady() const
 	{
 		return false;
 	}
-	const ECatEquipmentUseInventoryEffect ResolvedUseInventoryEffect = GetUseInventoryEffect();
-	if (ResolvedUseInventoryEffect == ECatEquipmentUseInventoryEffect::HoldInstanceUntilUnUse
+	const ECatInventoryItemUseEffect ResolvedUseInventoryEffect = GetInventoryUseEffect();
+	if (ResolvedUseInventoryEffect == ECatInventoryItemUseEffect::HoldInstanceUntilUnUse
 		&& (UseActorClass.IsNull() || bRunConsumable))
 	{
 		return false;
 	}
-	if (ResolvedUseInventoryEffect == ECatEquipmentUseInventoryEffect::ConsumeQuantity && !bRunConsumable)
+	if (ResolvedUseInventoryEffect == ECatInventoryItemUseEffect::ConsumeQuantity && !bRunConsumable)
 	{
 		return false;
 	}
 	if (Kind == ECatEquipmentKind::Rod)
 	{
 		return !bRunConsumable && !bSpecialBait && !UseActorClass.IsNull()
-			&& ResolvedUseInventoryEffect == ECatEquipmentUseInventoryEffect::HoldInstanceUntilUnUse
+			&& ResolvedUseInventoryEffect == ECatInventoryItemUseEffect::HoldInstanceUntilUnUse
 			&& FMath::IsFinite(MaximumRodDurability) && MaximumRodDurability > 0.0
 			&& FMath::IsFinite(MaximumLineLengthCentimeters) && MaximumLineLengthCentimeters > 0.0
 			&& FMath::IsFinite(RodPhysicsLengthCentimeters) && RodPhysicsLengthCentimeters > 0.0
@@ -141,13 +163,13 @@ bool UCatEquipmentDefinition::IsRuntimeDefinitionReady() const
 	if (Kind == ECatEquipmentKind::Chum)
 	{
 		return bRunConsumable && !bSpecialBait && FMath::IsNearlyZero(MaximumRodDurability)
-			&& ResolvedUseInventoryEffect == ECatEquipmentUseInventoryEffect::ConsumeQuantity
+			&& ResolvedUseInventoryEffect == ECatInventoryItemUseEffect::ConsumeQuantity
 			&& ChumInfluence.IsRuntimeReady();
 	}
 	if (Kind == ECatEquipmentKind::Herb)
 	{
 		return bRunConsumable && !bSpecialBait && FMath::IsNearlyZero(MaximumRodDurability)
-			&& ResolvedUseInventoryEffect == ECatEquipmentUseInventoryEffect::ConsumeQuantity
+			&& ResolvedUseInventoryEffect == ECatInventoryItemUseEffect::ConsumeQuantity
 			&& ChumInfluence.IsUnconfigured();
 	}
 	return FMath::IsNearlyZero(MaximumRodDurability) && !bSpecialBait && ChumInfluence.IsUnconfigured();
@@ -166,17 +188,17 @@ ECatDomainCommandError UCatEquipmentDefinition::Use(const FCatRunInventorySlot& 
 	{
 		return ECatDomainCommandError::InvalidPayload;
 	}
-	const ECatEquipmentUseInventoryEffect InventoryEffect = GetUseInventoryEffect();
-	if (InventoryEffect == ECatEquipmentUseInventoryEffect::None)
+	const ECatInventoryItemUseEffect InventoryEffect = GetInventoryUseEffect();
+	if (InventoryEffect == ECatInventoryItemUseEffect::None)
 	{
 		return ECatDomainCommandError::AlreadyResolved;
 	}
-	if (InventoryEffect == ECatEquipmentUseInventoryEffect::HoldInstanceUntilUnUse
+	if (InventoryEffect == ECatInventoryItemUseEffect::HoldInstanceUntilUnUse
 		&& (UseActorClass.IsNull() || bRunConsumable || Item.Quantity != 1 || Quantity != 1))
 	{
 		return ECatDomainCommandError::InvalidPhase;
 	}
-	if (InventoryEffect == ECatEquipmentUseInventoryEffect::ConsumeQuantity && !bRunConsumable)
+	if (InventoryEffect == ECatInventoryItemUseEffect::ConsumeQuantity && !bRunConsumable)
 	{
 		return ECatDomainCommandError::InvalidPhase;
 	}
@@ -205,18 +227,18 @@ ECatDomainCommandError UCatEquipmentDefinition::UnUse(const FCatRunInventorySlot
 bool UCatEquipmentDefinition::KeepsInventoryInstanceWhileUsed() const
 {
 	// 使用持有策略读取流程：只把“世界对象暂时代替背包实例”的模式交给活动记录，其余效果由自己的库存影响策略继续区分。
-	return GetUseInventoryEffect() == ECatEquipmentUseInventoryEffect::HoldInstanceUntilUnUse;
+	return GetInventoryUseEffect() == ECatInventoryItemUseEffect::HoldInstanceUntilUnUse;
 }
 
 bool UCatEquipmentDefinition::ConsumesInventoryQuantityOnUse() const
 {
 	// 数量消耗策略读取流程：只有声明为 Use 后扣数量的定义返回 true；调用方必须先完成本物品自己的目标、距离和效果前置裁决。
-	return GetUseInventoryEffect() == ECatEquipmentUseInventoryEffect::ConsumeQuantity;
+	return GetInventoryUseEffect() == ECatInventoryItemUseEffect::ConsumeQuantity;
 }
 
 ECatEquipmentUseInventoryEffect UCatEquipmentDefinition::GetUseInventoryEffect() const
 {
-	// 库存影响策略解析流程：
+	// 旧装备字段解析流程：
 	// 1. 先尊重定义资产显式声明，后续新物品只改自己的数据或定义子类，不改 Equipment 入口。
 	// 2. 旧部署型资产在新增字段前已经通过 UseActorClass 表达部署行为，因此这里保留兼容推导，避免一次数据迁移阻塞运行。
 	// 3. 窝料和草药都在各自玩法 preflight 成功后通过 Use 扣库存数量；鱼饵仍由 Fishing 会话预算独立提交。

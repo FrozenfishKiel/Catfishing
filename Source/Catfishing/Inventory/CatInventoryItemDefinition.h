@@ -9,6 +9,20 @@
 class UCatInventoryItemInstance;
 class UTexture2D;
 
+/** 库存物品 Use 成功后的库存处理策略；它描述实例仍由谁持有、是否扣数量，不描述具体装备、GAS 或 Fishing 效果。 */
+UENUM(BlueprintType)
+enum class ECatInventoryItemUseEffect : uint8
+{
+	/** 当前定义不声明通用库存 Use，具体子类也没有兼容推导时按无效果处理。 */
+	Auto,
+	/** 这类物品没有通用库存 Use；右键使用可以返回稳定终态，但不移动实例也不扣数量。 */
+	None,
+	/** Use 成功后整份不可堆叠实例离开可见背包，由库存活动区保管到停止使用再放回。 */
+	HoldInstanceUntilUnUse,
+	/** Use 成功后从同一槽位扣减指定数量；真实效果必须已由物品实例或下游领域先裁决成功。 */
+	ConsumeQuantity
+};
+
 /** 物品定义上的可组合语义片段；定义负责静态配置，片段负责声明某类物品额外具备的库存语义。 */
 UCLASS(Abstract, DefaultToInstanced, EditInlineNew, BlueprintType)
 class CATFISHING_API UCatInventoryItemFragment : public UObject
@@ -66,6 +80,15 @@ public:
 
 	/** 读取这类物品在单格内允许的最大数量；返回值始终至少为 1，调用方不用处理非法配置。 */
 	virtual int32 GetMaxStackCount() const;
+
+	/** 读取 Use 成功后的库存处理策略；基础库存定义默认无通用 Use，装备和后续道具定义可以覆盖。 */
+	virtual ECatInventoryItemUseEffect GetInventoryUseEffect() const;
+
+	/** 判断 Use 成功后是否应由库存活动区暂存整份实例；部署物和长期占用物用它离开可见背包但不丢身份。 */
+	virtual bool KeepsInventoryInstanceWhileUsed() const;
+
+	/** 消费类物品的统一清算口径；草药、窝料这类效果已成立的物品通过它交给库存组件扣减同一槽位数量。 */
+	virtual bool ConsumesInventoryQuantityOnUse() const;
 
 	/** 判断两份定义是否可以作为同一种堆叠物合并；稳定 ID 一致或同一资产对象才允许合并。 */
 	virtual bool CanStackWith(const UCatInventoryItemDefinition& Other) const;

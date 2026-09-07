@@ -118,6 +118,24 @@ int32 UCatInventoryItemDefinition::GetMaxStackCount() const
 	return FMath::Max(1, InventoryMaxStackCount);
 }
 
+// 库存 Use 策略读取流程：基础定义不从显示名、标签或片段猜 Use 后果；没有子类覆盖时返回 None，让库存组件保持 fail-closed。
+ECatInventoryItemUseEffect UCatInventoryItemDefinition::GetInventoryUseEffect() const
+{
+	return ECatInventoryItemUseEffect::None;
+}
+
+// 库存实例持有策略判断流程：只把明确声明为 Hold 的物品移入活动区；基础定义默认不让可见槽位消失。
+bool UCatInventoryItemDefinition::KeepsInventoryInstanceWhileUsed() const
+{
+	return GetInventoryUseEffect() == ECatInventoryItemUseEffect::HoldInstanceUntilUnUse;
+}
+
+// 库存扣量策略判断流程：只有明确声明为 ConsumeQuantity 的物品由库存组件扣数量；基础定义默认不扣。
+bool UCatInventoryItemDefinition::ConsumesInventoryQuantityOnUse() const
+{
+	return GetInventoryUseEffect() == ECatInventoryItemUseEffect::ConsumeQuantity;
+}
+
 // 堆叠兼容判断流程：稳定 ID 是跨资产主键；没有 ID 时只允许同一资产对象合并，避免同类 DataAsset 串格。
 bool UCatInventoryItemDefinition::CanStackWith(const UCatInventoryItemDefinition& Other) const
 {

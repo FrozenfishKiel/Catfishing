@@ -28,7 +28,7 @@ enum class ECatEquipmentKind : uint8
 	Utility
 };
 
-/** 统一物品 Use 成功后对库存实例的处理方式；定义资产声明策略，Equipment 入口只按结果移动、扣量或保持不变。 */
+/** 旧装备资产保存的 Use 库存影响配置；运行时会映射成 ECatInventoryItemUseEffect，保留它是为了不破坏现有 DataAsset 和测试字段。 */
 UENUM(BlueprintType)
 enum class ECatEquipmentUseInventoryEffect : uint8
 {
