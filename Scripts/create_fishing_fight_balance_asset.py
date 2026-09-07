@@ -20,8 +20,10 @@ VALUES = {
     "balance_definition_id": unreal.Name("DefaultFishingFightBalance"),
     "enable_runtime_definition": True,
     "strength_per_kilogram": 10.0,
-    "acceleration_per_strength": 5.0,
-    "drive_response_seconds": 1.0,
+    "force_per_strength_newtons": 1.0,
+    "cat_body_mass_kilograms": 5.0,
+    "exhausted_reel_force_newtons": 200.0,
+    "exhausted_cat_tow_acceleration_centimeters_per_second_squared": 300.0,
     "reel_speed_centimeters_per_second": 80.0,
     "exhausted_cat_escape_speed_multiplier": 2.0,
     "cat_stamina_cost_per_strength_centimeter": 0.002,
@@ -40,12 +42,11 @@ VALUES = {
     "fish_exhaustion_threshold": 0.5,
     "low_stamina_rest_threshold": 0.5,
     "low_stamina_rest_multiplier": 1.5,
-    "tension_response_range_centimeters": 10.0,
+    "display_tension_newtons": 50.0,
     "escape_slack_centimeters": 100.0,
     "stalemate_rod_wear_per_fish_strength": 0.1,
     "held_rod_minimum_leverage_multiplier": 0.4,
     "maximum_fish_constraint_correction_speed_centimeters_per_second": 160.0,
-    "minimum_carrier_away_speed_multiplier": 0.15,
 }
 
 
@@ -79,6 +80,11 @@ def main():
         for property_name, value in VALUES.items():
             asset.set_editor_property(property_name, value)
 
+    # 新力单位字段有独立默认值；旧加速度/几何阈值不做数值套用，也不重置任何现有策划值。
+    migrated = asset.get_editor_property("force_model_version") < 1
+    if migrated:
+        asset.set_editor_property("force_model_version", 1)
+
     if not asset.is_runtime_definition_ready():
         actual_values = {
             property_name: asset.get_editor_property(property_name)
@@ -94,7 +100,7 @@ def main():
         unreal.log_error(message)
         raise RuntimeError(message)
 
-    if created and not unreal.EditorAssetLibrary.save_loaded_asset(asset, only_if_is_dirty=False):
+    if (created or migrated) and not unreal.EditorAssetLibrary.save_loaded_asset(asset, only_if_is_dirty=False):
         raise RuntimeError(f"failed to save fight balance: {ASSET_PATH}")
 
     unreal.log(
@@ -103,7 +109,9 @@ def main():
         f"PreservedExisting={not created} "
         f"BalanceId={asset.get_editor_property('balance_definition_id')} "
         f"StrengthPerKg={asset.get_editor_property('strength_per_kilogram'):.3f} "
-        f"AccelerationPerStrength={asset.get_editor_property('acceleration_per_strength'):.3f} "
+        f"ForcePerStrengthN={asset.get_editor_property('force_per_strength_newtons'):.3f} "
+        f"CatBodyMassKg={asset.get_editor_property('cat_body_mass_kilograms'):.3f} "
+        f"ForceModelMigrated={migrated} "
         f"ExhaustedCatEscapeSpeedMultiplier={asset.get_editor_property('exhausted_cat_escape_speed_multiplier'):.3f} "
         f"CatCost={asset.get_editor_property('cat_stamina_cost_per_strength_centimeter'):.6f} "
         f"CatRodWorkCostPerRadian={asset.get_editor_property('cat_rod_stamina_cost_per_strength_radian'):.6f} "

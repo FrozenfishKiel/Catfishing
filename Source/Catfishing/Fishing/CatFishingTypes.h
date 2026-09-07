@@ -246,11 +246,11 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Carrier movement is an endpoint intent"))
 	float CarrierMovementAlpha = 0.0f;
 
-	/** 鱼占优部分传到猫端的加速度；实际运动由 Rod 平滑追赶同一步的目标牵引速度。 */
+	/** 共同张力超过猫支撑能力后的加速度；由 CMC 进行速度积分与碰撞。 */
 	UPROPERTY(BlueprintReadOnly)
 	float CarrierPullAccelerationCentimetersPerSecondSquared = 0.0f;
 
-	/** 持竿者沿远离鱼方向的权威速度倍率；1 表示当前没有运动约束。 */
+	/** 废弃的硬限速观察字段。当前恒为 1；仅保留尚未完整加载的旧 WBP 序列化兼容。 */
 	UPROPERTY(BlueprintReadOnly)
 	float CarrierAwaySpeedMultiplier = 1.0f;
 

@@ -12,8 +12,10 @@ bool UCatFishingFightBalanceDefinition::IsRuntimeDefinitionReady() const
 {
 	return bEnableRuntimeDefinition && !BalanceDefinitionId.IsNone()
 		&& FMath::IsFinite(StrengthPerKilogram) && StrengthPerKilogram > 0.0
-		&& FMath::IsFinite(AccelerationPerStrength) && AccelerationPerStrength > 0.0
-		&& FMath::IsFinite(DriveResponseSeconds) && DriveResponseSeconds > 0.0
+		&& FMath::IsFinite(ForcePerStrengthNewtons) && ForcePerStrengthNewtons > 0.0
+		&& FMath::IsFinite(CatBodyMassKilograms) && CatBodyMassKilograms > 0.0
+		&& FMath::IsFinite(ExhaustedReelForceNewtons) && ExhaustedReelForceNewtons > 0.0
+		&& IsFishingFightBalanceFiniteNonNegative(ExhaustedCatTowAccelerationCentimetersPerSecondSquared)
 		&& FMath::IsFinite(ReelSpeedCentimetersPerSecond) && ReelSpeedCentimetersPerSecond > 0.0
 		&& IsFishingFightBalanceFiniteNonNegative(CatStaminaCostPerStrengthCentimeter)
 		&& IsFishingFightBalanceFiniteNonNegative(CatRodStaminaCostPerStrengthRadian)
@@ -34,13 +36,11 @@ bool UCatFishingFightBalanceDefinition::IsRuntimeDefinitionReady() const
 		&& FMath::IsFinite(LowStaminaRestThreshold)
 		&& LowStaminaRestThreshold >= 0.0 && LowStaminaRestThreshold <= 1.0
 		&& FMath::IsFinite(LowStaminaRestMultiplier) && LowStaminaRestMultiplier >= 1.0
-		&& FMath::IsFinite(TensionResponseRangeCentimeters) && TensionResponseRangeCentimeters > 0.0
+		&& FMath::IsFinite(DisplayTensionNewtons) && DisplayTensionNewtons > 0.0
 		&& IsFishingFightBalanceFiniteNonNegative(EscapeSlackCentimeters)
 		&& IsFishingFightBalanceFiniteNonNegative(StalemateRodWearPerFishStrength)
 		&& FMath::IsFinite(HeldRodMinimumLeverageMultiplier)
 		&& HeldRodMinimumLeverageMultiplier > 0.0 && HeldRodMinimumLeverageMultiplier <= 1.0
 		&& FMath::IsFinite(MaximumFishConstraintCorrectionSpeedCentimetersPerSecond)
-		&& MaximumFishConstraintCorrectionSpeedCentimetersPerSecond > 0.0
-		&& FMath::IsFinite(MinimumCarrierAwaySpeedMultiplier)
-		&& MinimumCarrierAwaySpeedMultiplier >= 0.0 && MinimumCarrierAwaySpeedMultiplier <= 1.0;
+		&& MaximumFishConstraintCorrectionSpeedCentimetersPerSecond > 0.0;
 }

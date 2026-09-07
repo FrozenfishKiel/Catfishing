@@ -1167,15 +1167,16 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 	// 辅助位合力不能在会话启动瞬间静态冻结；Runner 每个固定步从鱼竿操作位重建并覆盖此合计。
 	Config.SecondCatStrength = 0.0;
-	// 猫和鱼共用“质量 × 系数 = 基础力量”口径；CharacterMovement 的 Mass 只属于引擎推挤，不进入玩法公式。
-	Config.PrimaryOperatorMassKilograms = Config.PrimaryOperatorCatStrength
-		/ FightBalance->StrengthPerKilogram;
+	// 猫系统质量独立于力量成长；CharacterMovement 的推挤 Mass 不作为搏斗质量来源。
+	Config.PrimaryOperatorMassKilograms = FightBalance->CatBodyMassKilograms;
 	Config.HelperMassKilograms = 0.0;
 	Config.FishMassKilograms = FishWeightKilograms;
 	Config.FishStrength = FrozenSelectionResult.BaseFishStrength * FishStrengthScale;
 	Config.StrengthPerKilogram = FightBalance->StrengthPerKilogram;
-	Config.AccelerationPerStrength = FightBalance->AccelerationPerStrength;
-	Config.DriveResponseSeconds = FightBalance->DriveResponseSeconds;
+	Config.ForcePerStrengthNewtons = FightBalance->ForcePerStrengthNewtons;
+	Config.CatBodyMassKilograms = FightBalance->CatBodyMassKilograms;
+	Config.ExhaustedReelForceNewtons = FightBalance->ExhaustedReelForceNewtons;
+	Config.ExhaustedCatTowAccelerationCentimetersPerSecondSquared = FightBalance->ExhaustedCatTowAccelerationCentimetersPerSecondSquared;
 	Snapshot.FishStrength = Config.FishStrength;
 	Config.RodPhysicsLengthCentimeters = RodDefinition->RodPhysicsLengthCentimeters;
 	Config.CatStaminaMaximum = CatStaminaBaseline;
@@ -1203,11 +1204,10 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.StrongConfrontationAlignmentThreshold = Personality->StrongConfrontationAlignmentThreshold;
 	Config.StrongConfrontationConfirmationSeconds = Personality->StrongConfrontationConfirmationSeconds;
 	Config.AngleStrengthExponent = Personality->AngleStrengthExponent;
-	Config.TensionResponseRangeCentimeters = FightBalance->TensionResponseRangeCentimeters;
+	Config.DisplayTensionNewtons = FightBalance->DisplayTensionNewtons;
 	Config.MinimumRodLeverageMultiplier = FightBalance->HeldRodMinimumLeverageMultiplier;
 	Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond =
 		FightBalance->MaximumFishConstraintCorrectionSpeedCentimetersPerSecond;
-	Config.MinimumCarrierAwaySpeedMultiplier = FightBalance->MinimumCarrierAwaySpeedMultiplier;
 	Config.MaximumLineLengthCentimeters = RodDefinition->MaximumLineLengthCentimeters;
 	// 只读取本场绑定的同一根鱼竿实例；定义上限仅用于新购和维修，开场不能补耐久。
 	bool bRodBroken = false;
@@ -1354,7 +1354,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		return false;
 	}
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_fight_started SessionId=%s FightBalanceId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryStrength=%.2f InitialHelperStrength=%.2f InitialCombinedStrength=%.2f CatSystemMassKg=%.2f FishMassKg=%.2f MassMode=StrengthDerived FishStrengthBase=%.2f FishStrengthEffective=%.2f StrengthPerKg=%.2f AccelerationPerStrength=%.2f DriveResponseSeconds=%.2f CatStamina=%.2f FishStamina=%.2f RodDurability=%.2f RodPhysicsLengthCm=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s CatLinearWorkCost=%.5f FishWorkCost=%.5f FishIsometricMultiplier=%.3f FishBaseDrainMultiplier=%.3f FishStruggleDrainMultiplier=%.3f FishCalmSpeedCmPerSec=%.2f FishStruggleSpeedCmPerSec=%.2f FixedStepSeconds=%.3f MinimumLeverage=%.3f MaximumEndpointCorrectionSpeed=%.2f MinimumCarrierAwaySpeedMultiplier=%.3f StrengthResolution=CoupledEndpoints StrongConfrontationRole=PresentationOnly RodFailure=DurabilityDepleted World=%s NetMode=%d Authority=%s LocalRole=%d RodActor=%s"),
+		TEXT("Event=fishing_fight_started SessionId=%s FightBalanceId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryStrength=%.2f InitialHelperStrength=%.2f InitialCombinedStrength=%.2f CatSystemMassKg=%.2f FishMassKg=%.2f MassMode=IndependentCatBodyMass FishStrengthBase=%.2f FishStrengthEffective=%.2f StrengthPerKg=%.2f ForcePerStrengthN=%.2f ExhaustedReelForceN=%.2f CatStamina=%.2f FishStamina=%.2f RodDurability=%.2f RodPhysicsLengthCm=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s CatLinearWorkCost=%.5f FishWorkCost=%.5f FishIsometricMultiplier=%.3f FishBaseDrainMultiplier=%.3f FishStruggleDrainMultiplier=%.3f FishCalmSpeedCmPerSec=%.2f FishStruggleSpeedCmPerSec=%.2f FixedStepSeconds=%.3f MinimumLeverage=%.3f MaximumEndpointCorrectionSpeed=%.2f StrengthResolution=CommonLineForce StrongConfrontationRole=PresentationOnly RodFailure=DurabilityDepleted World=%s NetMode=%d Authority=%s LocalRole=%d RodActor=%s"),
 		*Snapshot.FishingSessionId.ToString(),
 		*FightBalance->BalanceDefinitionId.ToString(),
 		*FishDefinition->FishDefinitionId.ToString(),
@@ -1368,8 +1368,8 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		FrozenSelectionResult.BaseFishStrength,
 		Config.FishStrength,
 		Config.StrengthPerKilogram,
-		Config.AccelerationPerStrength,
-		Config.DriveResponseSeconds,
+		Config.ForcePerStrengthNewtons,
+		Config.ExhaustedReelForceNewtons,
 		InitialState.CatStamina,
 		InitialState.FishStamina,
 		Config.RodDurability,
@@ -1388,7 +1388,6 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		Config.FixedStepSeconds,
 		Config.MinimumRodLeverageMultiplier,
 		Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond,
-		Config.MinimumCarrierAwaySpeedMultiplier,
 		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
 		static_cast<int32>(GetLocalRole()), *GetNameSafe(Snapshot.RodActor));
 	UE_LOG(LogCatFishing, Log,
@@ -1536,7 +1535,7 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 	Snapshot.bSlacking = FightRunner->GetCatAction() == ECatFightCatAction::Slack;
 	Snapshot.CarrierPullAccelerationCentimetersPerSecondSquared =
 		static_cast<float>(Step.CarrierPullAccelerationCentimetersPerSecondSquared);
-	Snapshot.CarrierAwaySpeedMultiplier = static_cast<float>(Step.CarrierAwaySpeedMultiplier);
+	Snapshot.CarrierAwaySpeedMultiplier = 1.0f; // 旧序列化观察字段；新移动只应用有限加速度。
 	Snapshot.ConstraintErrorCentimeters = static_cast<float>(Step.ConstraintErrorCentimeters);
 	Snapshot.FishConstraintCorrectionCentimeters =
 		static_cast<float>(Step.FishConstraintCorrectionCentimeters);

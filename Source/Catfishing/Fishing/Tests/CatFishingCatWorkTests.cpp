@@ -19,7 +19,6 @@ namespace CatActualWorkTest
 		Value.ReelSpeedCentimetersPerSecond = 80.0;
 		Value.FishCalmSpeedCentimetersPerSecond = 95.0;
 		Value.FishStruggleSpeedCentimetersPerSecond = 180.0;
-		Value.TensionResponseRangeCentimeters = 1.0;
 		Value.MaximumLineLengthCentimeters = 1500.0;
 		return Value;
 	}
@@ -83,7 +82,7 @@ bool FCatFishingTimedSupportTorqueTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingCatWorkPacingTest,
-	"Catfishing.Unit.Fishing.Effort.ActualWorkAndSupportHavePlayableReferenceRatesWithoutChangingMotion",
+	"Catfishing.Unit.Fishing.Effort.ActualWorkAndSupportPreservePricingIndependenceUnderFiniteReel",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingCatWorkPacingTest::RunTest(const FString& Parameters)
@@ -97,6 +96,8 @@ bool FCatFishingCatWorkPacingTest::RunTest(const FString& Parameters)
 	const double BlockedRate = Blocked.CatStaminaDrain / Settings.FixedStepSeconds;
 	TestTrue(TEXT("持续受阻的参考耗体约两点每秒"), Blocked.bSucceeded && BlockedRate >= 1.9 && BlockedRate <= 2.1);
 	Current.CatAction = ECatFightCatAction::Pull;
+	Settings.FishStrength = 20.0;
+	Current.FishVelocityCentimetersPerSecond = FVector(-80.0, 0.0, 0.0);
 	Constraint.CarrierDesiredVelocityCentimetersPerSecond = FVector(-40.0, 0.0, 0.0);
 	Constraint.CarrierVelocityCentimetersPerSecond = Constraint.CarrierDesiredVelocityCentimetersPerSecond;
 	Constraint.CatRodPositiveWorkRadians = 0.16;
@@ -122,6 +123,7 @@ bool FCatFishingCatWorkPacingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("费用不改变鱼竿磨损"), Repriced.RodWearDelta, Heavy.RodWearDelta);
 
 	Settings = Config();
+	Settings.FishStrength = 20.0;
 	Settings.BaseDrainMultiplier = 2.0;
 	Settings.StruggleDrainMultiplier = 20.0;
 	const auto PhaseChanged = Step(Settings, Current, Constraint);

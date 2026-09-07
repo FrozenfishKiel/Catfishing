@@ -252,7 +252,7 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 	Controller->SetControlRotation(FRotator::ZeroRotator);
 	TestTrue(TEXT("初始化实际鱼竿朝向"), Rod->RefreshHeldTransformFromAuthority());
 	TestTrue(TEXT("发布有负载旋转约束"), Rod->SetCarrierConstraintFromAuthority(
-		FVector::ForwardVector, 0.0, 0.0, 1.0, 1.0, 0.0, true, 100.0, 50.0));
+		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, true, 100.0, 50.0));
 	Controller->SetControlRotation(FRotator(0.0, 120.0, 0.0));
 	for (int32 Index = 0; Index < 180; ++Index) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
 	TestEqual(TEXT("实际鱼竿自然停在受力平衡附近"), Rod->GetGripWorldTransform().Rotator().Yaw, 30.0, 0.1);
@@ -260,7 +260,7 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 	// 猫端没有牵引速度时 bActive=false，但鱼竿的阻力历史必须跨固定步保持。
 	TestFalse(TEXT("转矩与猫端移动 Active 独立"), Rod->GetCarrierConstraintState().bActive);
 	TestTrue(TEXT("鱼线松弛只发布零目标，不清空鱼竿插值历史"), Rod->SetCarrierConstraintFromAuthority(
-		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, 0.0, true, 0.0, 50.0));
+		FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true, 0.0, 50.0));
 	Rod->RefreshHeldTransformFromAuthority();
 	TestEqual(TEXT("零时间刷新不推进平滑"), Rod->GetGripWorldTransform().Rotator().Yaw, 30.0, 0.1);
 	const FVector PreviousTip = Rod->GetRodTipWorldTransform().GetLocation();
@@ -270,7 +270,7 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 	TestTrue(TEXT("玩法竿尖速度与同一平滑姿态一致"), Rod->GetAuthoritativeRodTipVelocity().Equals(
 		(Rod->GetRodTipWorldTransform().GetLocation() - PreviousTip) * 60.0, 1e-6));
 	TestTrue(TEXT("恢复原负载"), Rod->SetCarrierConstraintFromAuthority(
-		FVector::ForwardVector, 0.0, 0.0, 1.0, 1.0, 0.0, true, 100.0, 50.0));
+		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, true, 100.0, 50.0));
 	for (int32 Index = 0; Index < 180; ++Index) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
 	Controller->SetControlRotation(FRotator::ZeroRotator);
 	Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
@@ -282,7 +282,7 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 	// 死亡/会话结束清约束后，即使同帧开始新的无负载约束也不能带入旧鱼阻力。
 	Controller->SetControlRotation(FRotator(0.0, 60.0, 0.0));
 	TestTrue(TEXT("清理后建立新的无负载约束"), Rod->SetCarrierConstraintFromAuthority(
-		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, 0.0, true, 0.0, 50.0));
+		FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true, 0.0, 50.0));
 	Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
 	TestEqual(TEXT("清理不保留上一条鱼的平滑负载"), Rod->GetGripWorldTransform().Rotator().Yaw, 6.0, 0.01);
 	Rod->ClearCarrierConstraintFromAuthority();

@@ -61,23 +61,20 @@ FCatFishingRodResistanceResult FCatFishingRodResistanceModel::Evaluate(
 {
 	FCatFishingRodResistanceResult Result;
 	if (!FMath::IsFinite(Input.CatStrength) || Input.CatStrength < 0.0
-		|| !FMath::IsFinite(Input.FishStrength) || Input.FishStrength < 0.0
+		|| !FMath::IsFinite(Input.LineTensionNewtons) || Input.LineTensionNewtons < 0.0
+		|| !FMath::IsFinite(Input.ForcePerStrengthNewtons) || Input.ForcePerStrengthNewtons <= 0.0
 		|| !FMath::IsFinite(Input.RodPhysicsLengthCentimeters)
 		|| Input.RodPhysicsLengthCentimeters <= 0.0
-		|| !FMath::IsFinite(Input.NormalizedTension) || Input.NormalizedTension < 0.0
-		|| !FMath::IsFinite(Input.NormalizedFishLineLoad) || Input.NormalizedFishLineLoad < 0.0
 		|| !FMath::IsFinite(Input.RodLineAlignment))
 	{
 		return Result;
 	}
 
-	const double Tension = FMath::Clamp(Input.NormalizedTension, 0.0, 1.0);
-	const double FishLineLoad = FMath::Clamp(Input.NormalizedFishLineLoad, 0.0, 1.0);
 	const double Alignment = FMath::Clamp(Input.RodLineAlignment, -1.0, 1.0);
 	const double PerpendicularLever = FMath::Sqrt(FMath::Max(0.0, 1.0 - Alignment * Alignment));
 	const double RodPhysicsLengthMeters = Input.RodPhysicsLengthCentimeters / 100.0;
 
-	Result.MaximumFishTorqueStrengthMeters = Input.FishStrength * FishLineLoad * Tension * RodPhysicsLengthMeters;
+	Result.MaximumFishTorqueStrengthMeters = Input.LineTensionNewtons / Input.ForcePerStrengthNewtons * RodPhysicsLengthMeters;
 	Result.FishResistingTorqueStrengthMeters = Result.MaximumFishTorqueStrengthMeters * PerpendicularLever;
 	// 猫力量以一米参考力臂解释为可用转矩；配置杆长越长，鱼端杠杆越占优势。
 	Result.CatTorqueCapacityStrengthMeters = Input.CatStrength;

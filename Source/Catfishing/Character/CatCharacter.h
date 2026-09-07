@@ -28,7 +28,7 @@ class CATFISHING_API ACatCharacter : public ACharacter, public IAbilitySystemInt
 
 public:
 	/** 构造 ASC/属性集、Condition、Growth 与 Equipment，开启组件复制但不在 CDO 写任何运行数值。 */
-	ACatCharacter();
+	ACatCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
 	/** 上鱼时由 Fishing 表现提供持杆第一人称；其余时间保留角色蓝图的相机。 */
 	virtual void CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult) override;
 

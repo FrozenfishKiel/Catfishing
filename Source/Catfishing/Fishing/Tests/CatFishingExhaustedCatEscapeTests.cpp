@@ -72,7 +72,10 @@ bool FCatFishingExhaustedCatRushTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("持续外冲不由普通失败终局提前停止"), Step.Outcome, ECatFightStepOutcome::None);
 		TestEqual(TEXT("持续使用快速游速而非平静休息速度"), Step.IntendedSwimSpeedCentimetersPerSecond, 360.0);
 		FastestPull = FMath::Max(FastestPull, Step.CarrierTargetPullSpeedCentimetersPerSecond);
-		Constraint.RodTipWorldPosition.X += Step.CarrierTargetPullSpeedCentimetersPerSecond * Settings.FixedStepSeconds;
+		Constraint.CarrierVelocityCentimetersPerSecond.X = FMath::Min(360.0,
+			Constraint.CarrierVelocityCentimetersPerSecond.X + Step.CarrierPullAccelerationCentimetersPerSecondSquared * Settings.FixedStepSeconds);
+		Constraint.RodTipWorldPosition += Constraint.CarrierVelocityCentimetersPerSecond * Settings.FixedStepSeconds;
+		Current.FishVelocityCentimetersPerSecond = (Step.ProposedFishWorldPosition - Current.FishWorldPosition) / Settings.FixedStepSeconds;
 		Current.FishWorldPosition = Step.ProposedFishWorldPosition;
 	}
 	TestTrue(TEXT("即使小鱼也能快速拖动无力的猫"), FastestPull >= 350.0);

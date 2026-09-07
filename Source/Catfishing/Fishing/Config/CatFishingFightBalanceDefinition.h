@@ -30,20 +30,29 @@ public:
 		meta = (DisplayName = "启用正式运行"))
 	bool bEnableRuntimeDefinition = false;
 
-	/** 鱼使用实际重量生成力量；猫使用基础力量反推玩法等效质量。 */
+	/** 鱼使用实际重量生成力量；猫质量独立配置，不随力量成长而增加。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "力量与运动",
 		meta = (DisplayName = "每公斤力量", ClampMin = "0.001"))
 	double StrengthPerKilogram = 0.0;
 
-	/** 猫和鱼共享的“力量→对抗加速度”换算，单位 cm/s² / Strength；鱼的自由游速由性格资产决定。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "力量与运动",
-		meta = (DisplayName = "每点力量加速度", ClampMin = "0.001"))
+	/** 旧资产序列化载荷。无运行读取；外部蓝图引用未完成审计前保留原字段身份。 */
+	UPROPERTY(BlueprintReadOnly, Category="已废弃（仅资产载荷）", meta=(DeprecationMessage="Use ForcePerStrengthNewtons"))
 	double AccelerationPerStrength = 0.0;
-
-	/** 将猫端对抗加速度投影为收线/牵引响应速度的时长；不限制鱼在松线阶段的自由游速。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "力量与运动",
-		meta = (DisplayName = "猫端驱动力响应时间", ClampMin = "0.001", Units = "s"))
+	UPROPERTY(BlueprintReadOnly, Category="已废弃（仅资产载荷）", meta=(DeprecationMessage="Force integration replaces drive response"))
 	double DriveResponseSeconds = 0.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="每点力量推力（牛顿）", ClampMin="0.001"))
+	double ForcePerStrengthNewtons = 1.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="单猫系统质量", Units="kg", ClampMin="0.001"))
+	double CatBodyMassKilograms = 5.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="力竭鱼回收辅助力（牛顿）", ClampMin="0.001"))
+	double ExhaustedReelForceNewtons = 200.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="猫力竭拖行辅助加速度", ClampMin="0.0"))
+	double ExhaustedCatTowAccelerationCentimetersPerSecondSquared = 300.0;
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="鱼线与张力", meta=(DisplayName="满表现张力（牛顿）", ClampMin="0.001"))
+	double DisplayTensionNewtons = 50.0;
+	/** 显式资产迁移版本；不会据此重置已经编辑的新参数。 */
+	UPROPERTY(EditDefaultsOnly, Category="身份", AdvancedDisplay)
+	int32 ForceModelVersion = 0;
 
 	/** 左键收线意图的速度上限。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "力量与运动",
@@ -135,9 +144,8 @@ public:
 		meta = (DisplayName = "低体力休息时长倍率", ClampMin = "1.0"))
 	double LowStaminaRestMultiplier = 0.0;
 
-	/** 超出线长多少厘米视为满表现张力。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "鱼线与张力",
-		meta = (DisplayName = "满张力响应距离", ClampMin = "0.1", Units = "cm"))
+	/** 废弃几何表现阈值，仅保留旧资产载荷，不参与新张力计算。 */
+	UPROPERTY(BlueprintReadOnly, Category="已废弃（仅资产载荷）", meta=(DeprecationMessage="Use DisplayTensionNewtons"))
 	double TensionResponseRangeCentimeters = 0.0;
 
 	/** 无人持竿且鱼超出最大线长后的逃脱余量。 */
@@ -160,8 +168,7 @@ public:
 		meta = (DisplayName = "最大约束修正速度", ClampMin = "1.0", Units = "cm/s"))
 	double MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 0.0;
 
-	/** 满负载且鱼占优时，玩家沿远离鱼方向保留的最小速度比例。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "鱼线与张力",
-		meta = (DisplayName = "背离鱼方向最低速度倍率", ClampMin = "0.0", ClampMax = "1.0"))
+	/** 废弃速度硬截断参数；旧 WBP 引用未完整加载，保留载荷但没有运行读取。 */
+	UPROPERTY(BlueprintReadOnly, Category="已废弃（仅资产载荷）")
 	double MinimumCarrierAwaySpeedMultiplier = -1.0;
 };

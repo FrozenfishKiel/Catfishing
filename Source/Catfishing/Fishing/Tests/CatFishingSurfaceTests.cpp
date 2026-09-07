@@ -201,6 +201,8 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		Runner->State.bFishExhausted = true;
 		Runner->State.FishStamina = 0.0;
 		Runner->State.CatAction = ECatFightCatAction::None;
+		// 上一次解析已经把 Step 替换为真实水面结果；新收尾步骤重新提交同一个岸上候选。
+		Step.ProposedFishWorldPosition = FVector(-120.0, 0.0, 0.0);
 		const auto DeadTow = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, Water, bJustBeached, Normal, Surface, RotationResistance);
 		TestTrue(TEXT("already exhausted fish follows physical line endpoint movement onto shore"), DeadTow.bSucceeded && bJustBeached);
 	}
@@ -302,6 +304,8 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 	RecoveryRunner->State.FishWorldPosition = FVector::ZeroVector;
 	RecoveryRunner->State.LineLengthCentimeters = 600.0;
 	RecoveryRunner->Config.FishCalmSpeedCentimetersPerSecond = 10.0;
+	// 该用例专门验证岸线容差穿越，使用已经达到目标的稳态速度；起步惯性另有回归。
+	RecoveryRunner->State.FishVelocityCentimetersPerSecond = FVector(10.0, 0.0, 0.0);
 	const UCatWaterQuerySubsystem* RecoveryWater = World->GetSubsystem<UCatWaterQuerySubsystem>();
 	const auto InitialBoundary = RecoveryWater->QueryShoreRelation(
 		RecoveryRunner->State.FishWorldPosition, Region->GetWaterRegionHandle());

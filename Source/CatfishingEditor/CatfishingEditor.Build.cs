@@ -11,7 +11,7 @@ public class CatfishingEditor : ModuleRules
 		});
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
-			"UnrealEd", "AssetRegistry", "StateTreeModule", "StateTreeEditorModule",
+			"UnrealEd", "AssetRegistry", "BlueprintGraph", "StateTreeModule", "StateTreeEditorModule",
 			"GameplayStateTreeModule", "PropertyBindingUtils", "PropertyBindingUtilsEditor"
 		});
 	}

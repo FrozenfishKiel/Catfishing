@@ -22,8 +22,7 @@ namespace
 		Balance.BalanceDefinitionId = TEXT("TestFishingFightBalance");
 		Balance.bEnableRuntimeDefinition = true;
 		Balance.StrengthPerKilogram = 10.0;
-		Balance.AccelerationPerStrength = 5.0;
-		Balance.DriveResponseSeconds = 1.0;
+		Balance.ForcePerStrengthNewtons = 1.0;
 		Balance.ReelSpeedCentimetersPerSecond = 80.0;
 		Balance.CatStaminaCostPerStrengthCentimeter = 0.002;
 		Balance.FishStaminaCostPerStrengthCentimeter = 0.002;
@@ -32,12 +31,11 @@ namespace
 		Balance.FishExhaustionThreshold = 0.5;
 		Balance.LowStaminaRestThreshold = 0.5;
 		Balance.LowStaminaRestMultiplier = 1.5;
-		Balance.TensionResponseRangeCentimeters = 10.0;
+		Balance.DisplayTensionNewtons = 50.0;
 		Balance.EscapeSlackCentimeters = 100.0;
 		Balance.StalemateRodWearPerFishStrength = 0.1;
 		Balance.HeldRodMinimumLeverageMultiplier = 0.4;
 		Balance.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 160.0;
-		Balance.MinimumCarrierAwaySpeedMultiplier = 0.15;
 	}
 }
 
@@ -82,8 +80,8 @@ bool FCatFormalFishingFightBalanceAssetTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("正式平衡资产 ID 稳定"), Balance->BalanceDefinitionId,
 		FName(TEXT("DefaultFishingFightBalance")));
 	TestEqual(TEXT("保留每公斤十点力量基线"), Balance->StrengthPerKilogram, 10.0);
-	TestEqual(TEXT("保留每点力量五厘米每平方秒加速度基线"),
-		Balance->AccelerationPerStrength, 5.0);
+	TestEqual(TEXT("每点力量显式换算为一牛顿，不沿用旧加速度值"),
+		Balance->ForcePerStrengthNewtons, 1.0);
 	TestTrue(TEXT("正式资产的独立体力调参通过统一运行校验"), Balance->IsRuntimeDefinitionReady());
 	return !HasAnyErrors();
 }
@@ -185,7 +183,7 @@ bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
 	}
 #endif
 
-	Balance->AccelerationPerStrength = 0.0;
+	Balance->ForcePerStrengthNewtons = 0.0;
 	TestFalse(TEXT("非法加速度系数阻止运行"), Balance->IsRuntimeDefinitionReady());
 	return !HasAnyErrors();
 }

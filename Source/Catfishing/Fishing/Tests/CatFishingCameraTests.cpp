@@ -71,7 +71,7 @@ bool FCatFishingFirstPersonCameraTest::RunTest(const FString& Parameters)
 		[GripProperty](const FLifetimeProperty& P) { return P.RepIndex == GripProperty->RepIndex && P.Condition == COND_InitialOnly; }));
 
 	TestTrue(TEXT("进入角力"), Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector,
-		0, 0, 1, 1, 0, true, 100, 50));
+		0, 0, 1, 0, true, 100, 50));
 	Controller->SetControlRotation(FRotator(0, 120, 0));
 	for (int32 I = 0; I < 180; ++I) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
 	Character->CalcCamera(0.016f, View);
@@ -108,7 +108,7 @@ bool FCatFishingFirstPersonCameraTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("恢复身体可见性"), Character->GetMesh()->bOwnerNoSee);
 	TestTrue(TEXT("退出从最后看见的方向继续"), Controller->GetControlRotation().Equals(LastVisible, 0.01));
 
-	Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 0, 0, 1, 1, 0, true, 100, 50);
+	Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 0, 0, 1, 0, true, 100, 50);
 	Character->CalcCamera(0.016f, View);
 	AActor* SpectatorTarget = World->SpawnActor<AActor>();
 	Controller->SetViewTarget(SpectatorTarget);
@@ -153,7 +153,7 @@ bool FCatFishingCameraContinuousFollowTest::RunTest(const FString& Parameters)
 		if (!Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(),
 			TEXT("SteppedCameraRod"), TEXT("Skin"), Player, Player, true, false)
 			|| !Fishing->RegisterDeployedRod(Player, Rod)) return false;
-		Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 0, 0, 1, 1, 0, true, 100, 50);
+		Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 0, 0, 1, 0, true, 100, 50);
 		Controller->SetControlRotation(FRotator(0, 120, 0));
 		const auto EffortBefore = Rod->GetAuthoritativeRotationEffortSnapshot();
 		const float DeltaTime = 1.0f / Rate;
@@ -205,7 +205,7 @@ bool FCatFishingCameraContinuousFollowTest::RunTest(const FString& Parameters)
 		Rod->ClearCarrierConstraintFromAuthority();
 		Character->CalcCamera(DeltaTime, View);
 		Rod->SetActorRotation(FRotator(0, 60, 0));
-		Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 0, 0, 1, 1, 0, true, 100, 50);
+		Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 0, 0, 1, 0, true, 100, 50);
 		Character->CalcCamera(DeltaTime, View);
 		TestTrue(TEXT("重新上鱼首帧不沿用上场平滑历史"), View.Rotation.Equals(Rod->GetGripWorldTransform().Rotator(), 0.001));
 	}

@@ -92,11 +92,11 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("配置收到主位完整力量"), Runner->Config.PrimaryOperatorCatStrength, 50.0);
 		TestEqual(TEXT("按住拉线的辅助完整参与合力"), Runner->Config.SecondCatStrength, 30.0);
 		TestEqual(TEXT("主位等效质量不随体力改变"), Runner->Config.PrimaryOperatorMassKilograms, 5.0);
-		TestEqual(TEXT("辅助等效质量不随体力改变"), Runner->Config.HelperMassKilograms, 3.0);
+		TestEqual(TEXT("辅助等效质量不随体力改变"), Runner->Config.HelperMassKilograms, 5.0);
 		const auto Step = Simulate();
 		TestTrue(TEXT("真实刷新后的力量能进入模拟"), Step.bSucceeded);
 		TestEqual(TEXT("模拟器在各正体力档使用同一完整合力"), Step.CombinedCatStrength, 80.0);
-		TestEqual(TEXT("模拟器对抗加速度不随正体力降低"), Step.CatDriveAccelerationCentimetersPerSecondSquared, 400.0);
+		TestEqual(TEXT("模拟器对抗加速度不随正体力降低"), Step.CatDriveAccelerationCentimetersPerSecondSquared, 800.0);
 	}
 
 	SetStamina(0.0f, 30.0f);
@@ -205,7 +205,7 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	const auto ExhaustedReel = Simulate();
 	TestTrue(TEXT("零合力不阻断鱼力竭后的收尾收线"), ExhaustedReel.bSucceeded && ExhaustedReel.RequestedReelDistanceCentimeters > 0.0);
 	TestEqual(TEXT("力竭后的收线不扣猫体力"), ExhaustedReel.CatStaminaDrain, 0.0);
-	TestEqual(TEXT("体力归零不会改变双方基础等效质量"), Runner->Config.GetCombinedCatMass(), 12.0);
+	TestEqual(TEXT("体力归零不会改变双方基础等效质量"), Runner->Config.GetCombinedCatMass(), 10.0);
 	return !HasAnyErrors();
 }
 

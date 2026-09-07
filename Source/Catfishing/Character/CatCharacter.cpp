@@ -1,4 +1,5 @@
 #include "Character/CatCharacter.h"
+#include "Character/CatCharacterMovementComponent.h"
 
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Config/CatAbilitySet.h"
@@ -19,7 +20,8 @@
 #include "Social/CatSocialService.h"
 
 // 构造流程：一次创建 Character-owned ASC/AttributeSet、离散身体状态、吃鱼成长和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
-ACatCharacter::ACatCharacter()
+ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
+	: Super(ObjectInitializer.SetDefaultSubobjectClass<UCatCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
 	AbilitySystemComponent = CreateDefaultSubobject<UCatAbilitySystemComponent>(TEXT("AbilitySystemComponent"));
 	AbilitySystemComponent->SetIsReplicated(true);

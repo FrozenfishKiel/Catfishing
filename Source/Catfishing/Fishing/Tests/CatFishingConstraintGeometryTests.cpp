@@ -74,7 +74,7 @@ bool FCatFishingPlanarCorrectionBoundTest::RunTest(const FString& Parameters)
 		const auto Step = FCatFishingFightSimulator::Step(Config, State, Rod, FVector::ForwardVector);
 		if (!TestTrue(TEXT("高差僵持步骤成功"), Step.bSucceeded)) return false;
 		TestTrue(TEXT("相同对抗力在高差下也能抵消外游"), Step.ProposedFishWorldPosition.Equals(State.FishWorldPosition, 1e-6));
-		TestEqual(TEXT("无需猫端承担额外位移"), Step.CarrierConstraintCorrectionCentimeters, 0.0);
+		TestEqual(TEXT("无需猫端承担额外位移"), Step.CarrierPullAccelerationCentimetersPerSecondSquared, 0.0);
 	}
 	Config.FixedStepSeconds = 0.05;
 	Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 160.0;

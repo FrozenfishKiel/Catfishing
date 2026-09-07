@@ -16,13 +16,18 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 {
 	GENERATED_BODY()
 
+	/** 将受力快照绑定到当时的持有人，拒绝与换人复制乱序的旧快照。 */
+	UPROPERTY()
+	TObjectPtr<APlayerState> ConstraintHolderPlayerState;
+
 	UPROPERTY(BlueprintReadOnly)
 	FVector_NetQuantizeNormal PullDirection = FVector::ZeroVector;
 	UPROPERTY(BlueprintReadOnly)
 	float PullAccelerationCentimetersPerSecondSquared = 0.0f;
-	/** 本约束步要求猫端达到的向鱼速度；本地移动帧平滑追赶该目标，不作为可累积冲量。 */
+	/** 向鱼速度上限；实际速度按发布的有限加速度积分，不瞬间补齐。 */
 	UPROPERTY(BlueprintReadOnly)
 	float TargetPullSpeedCentimetersPerSecond = 0.0f;
+	/** 旧蓝图载荷兼容，恒为 1；新移动不读取这个硬限速字段。 */
 	UPROPERTY(BlueprintReadOnly)
 	float MaximumAwaySpeedMultiplier = 1.0f;
 	UPROPERTY(BlueprintReadOnly)
@@ -48,6 +53,7 @@ UCLASS(Blueprintable, meta=(ChildCannotTick))
 class CATFISHING_API ACatFishingRodActor : public AActor
 {
 	GENERATED_BODY()
+	friend class FCatFishingCarrierHandoffTest;
 
 public:
 	/** 创建鱼竿表现 Actor 的组件和默认复制姿态；身份和锚点仍要等服务器初始化后才可信。 */
@@ -115,7 +121,6 @@ public:
 	/** FightRunner 发布同一份双端求解目标；服务器与拥有客户端都在移动帧内平滑追赶，不直接写 Actor Transform。 */
 	bool SetCarrierConstraintFromAuthority(const FVector& PullDirection,
 		double PullAccelerationCentimetersPerSecondSquared, double TargetPullSpeedCentimetersPerSecond,
-		double MaximumAwaySpeedMultiplier,
 		double NormalizedTension, double ConstraintErrorCentimeters,
 		bool bFightActive = false, double MaximumFishTorqueStrengthMeters = 0.0,
 		double CatTorqueCapacityStrengthMeters = 0.0,
@@ -153,10 +158,9 @@ private:
 	void QueueOrDispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	/** 立即应用皮肤、隐藏状态和蓝图通知；服务器与客户端各自在本地执行这一层表现副作用。 */
 	void DispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
-	void ApplyCarrierConstraint(float DeltaSeconds);
-	void ResetCarrierConstraintSmoothing();
+	void PublishCarrierConstraintToMovement();
+	void ClearCarrierMovementBinding();
 	void ResetAuthoritativeRotationEffort();
-	void UpdateCarrierConstraintTickDependency(UCharacterMovementComponent* Movement);
 	/** 提交一次权威可变状态；它保留 Actor/Item/Owner 身份，只允许操作位、皮肤、部署和断竿状态变化。 */
 	bool CommitAuthoritativeMutation(const FCatFishingRodPresentationState& Next, int64 ExpectedRevision);
 	/** 鱼竿 Actor 的场景根节点；所有可视锚点跟随它接受 Actor Transform。 */
@@ -192,13 +196,7 @@ private:
 	FVector SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
 	TWeakObjectPtr<APawn> AuthoritativeAimHolder;
 	FCatFishingRodRotationEffortSnapshot AuthoritativeRotationEffort;
-	/** 20 Hz 权威目标在本机角色移动帧中的平滑速度；只属于瞬态表现/移动接缝，不复制。 */
-	FVector SmoothedCarrierPullVelocity = FVector::ZeroVector;
-	double SmoothedCarrierAwaySpeedMultiplier = 1.0;
-	TWeakObjectPtr<APawn> SmoothedConstraintHolder;
-	TWeakObjectPtr<UCharacterMovementComponent> CarrierConstraintTickDependency;
-	double NextCarrierSmoothingDiagnosticWorldSeconds = 0.0;
-	bool bLastCarrierSmoothingDiagnosticActive = false;
+	TWeakObjectPtr<class UCatCharacterMovementComponent> CarrierMovement;
 	double NextRodRotationResistanceDiagnosticWorldSeconds = 0.0;
 	bool bLastRodTorqueBalanced = false;
 	bool bHeldAimInitialized = false;

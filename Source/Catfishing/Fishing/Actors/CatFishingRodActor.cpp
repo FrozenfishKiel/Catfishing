@@ -1,4 +1,5 @@
 #include "Fishing/Actors/CatFishingRodActor.h"
+#include "Character/CatCharacterMovementComponent.h"
 
 #include "Components/SceneComponent.h"
 #include "Fishing/CatFishingService.h"
@@ -55,7 +56,7 @@ void ACatFishingRodActor::Tick(const float DeltaSeconds)
 	{
 		RefreshHeldTransformFromAuthority(DeltaSeconds);
 	}
-	ApplyCarrierConstraint(DeltaSeconds);
+	PublishCarrierConstraintToMovement();
 }
 
 void ACatFishingRodActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -178,6 +179,8 @@ bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresen
 		|| (PresentationState.bBroken && !Previous.bBroken))
 	{
 		ResetAuthoritativeRotationEffort();
+		ClearCarrierMovementBinding();
+		CarrierConstraintState = FCatFishingCarrierConstraintState{};
 	}
 	if (PresentationState.PoseMode != ECatFishingRodPoseMode::Held)
 	{
@@ -295,15 +298,14 @@ FVector ACatFishingRodActor::GetAuthoritativeRodForwardVector() const
 
 bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullDirection,
 	const double PullAccelerationCentimetersPerSecondSquared,
-	const double TargetPullSpeedCentimetersPerSecond, const double MaximumAwaySpeedMultiplier,
+	const double TargetPullSpeedCentimetersPerSecond,
 	const double NormalizedTension, const double ConstraintErrorCentimeters,
 	const bool bFightActive, const double MaximumFishTorqueStrengthMeters,
 	const double CatTorqueCapacityStrengthMeters, const FVector& RodPullAxis)
 {
 	FVector HorizontalDirection(PullDirection.X, PullDirection.Y, 0.0);
 	const bool bHasDirection = !HorizontalDirection.ContainsNaN() && HorizontalDirection.Normalize();
-	const bool bNeedsDirection = TargetPullSpeedCentimetersPerSecond > UE_DOUBLE_SMALL_NUMBER
-		|| MaximumAwaySpeedMultiplier < 1.0 - UE_DOUBLE_SMALL_NUMBER;
+	const bool bNeedsDirection = TargetPullSpeedCentimetersPerSecond > UE_DOUBLE_SMALL_NUMBER;
 	const bool bValid = HasAuthority()
 		&& PresentationState.PoseMode == ECatFishingRodPoseMode::Held
 		&& (!bNeedsDirection || bHasDirection)
@@ -311,8 +313,6 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 		&& PullAccelerationCentimetersPerSecondSquared >= 0.0
 		&& FMath::IsFinite(TargetPullSpeedCentimetersPerSecond)
 		&& TargetPullSpeedCentimetersPerSecond >= 0.0
-		&& FMath::IsFinite(MaximumAwaySpeedMultiplier)
-		&& MaximumAwaySpeedMultiplier >= 0.0 && MaximumAwaySpeedMultiplier <= 1.0
 		&& FMath::IsFinite(NormalizedTension)
 		&& FMath::IsFinite(ConstraintErrorCentimeters) && ConstraintErrorCentimeters >= 0.0
 		&& FMath::IsFinite(MaximumFishTorqueStrengthMeters)
@@ -326,12 +326,12 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 	}
 
 	FCatFishingCarrierConstraintState Next;
+	Next.ConstraintHolderPlayerState = PresentationState.HolderPlayerState;
 	Next.PullDirection = HorizontalDirection;
 	Next.PullAccelerationCentimetersPerSecondSquared =
 		static_cast<float>(PullAccelerationCentimetersPerSecondSquared);
 	Next.TargetPullSpeedCentimetersPerSecond =
 		static_cast<float>(TargetPullSpeedCentimetersPerSecond);
-	Next.MaximumAwaySpeedMultiplier = static_cast<float>(MaximumAwaySpeedMultiplier);
 	Next.NormalizedTension = static_cast<float>(FMath::Clamp(NormalizedTension, 0.0, 1.0));
 	Next.ConstraintErrorCentimeters = static_cast<float>(ConstraintErrorCentimeters);
 	Next.bFightActive = bFightActive;
@@ -339,7 +339,7 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 	Next.MaximumFishTorqueStrengthMeters = static_cast<float>(MaximumFishTorqueStrengthMeters);
 	Next.CatTorqueCapacityStrengthMeters = static_cast<float>(CatTorqueCapacityStrengthMeters);
 	Next.bActive = Next.TargetPullSpeedCentimetersPerSecond > KINDA_SMALL_NUMBER
-		|| Next.MaximumAwaySpeedMultiplier < 1.0f - KINDA_SMALL_NUMBER;
+		&& Next.PullAccelerationCentimetersPerSecondSquared > KINDA_SMALL_NUMBER;
 	if (!Next.bFightActive)
 	{
 		SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
@@ -349,9 +349,10 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 		ResetAuthoritativeRotationEffort();
 	}
 	CarrierConstraintState = Next;
+	PublishCarrierConstraintToMovement();
 	if (!Next.bActive)
 	{
-		ResetCarrierConstraintSmoothing();
+		ClearCarrierMovementBinding();
 	}
 	ForceNetUpdate();
 	return true;
@@ -364,14 +365,13 @@ void ACatFishingRodActor::ClearCarrierConstraintFromAuthority()
 		return;
 	}
 	// 服务器终止鱼端驱动力时立即停止本地牵引；客户端在复制回调里做同样处理。
-	ResetCarrierConstraintSmoothing();
+	ClearCarrierMovementBinding();
 	SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
 	if (!CarrierConstraintState.bActive
 		&& !CarrierConstraintState.bFightActive
 		&& CarrierConstraintState.ConstraintErrorCentimeters <= KINDA_SMALL_NUMBER
 		&& CarrierConstraintState.PullAccelerationCentimetersPerSecondSquared <= KINDA_SMALL_NUMBER
-		&& CarrierConstraintState.TargetPullSpeedCentimetersPerSecond <= KINDA_SMALL_NUMBER
-		&& FMath::IsNearlyEqual(CarrierConstraintState.MaximumAwaySpeedMultiplier, 1.0f))
+		&& CarrierConstraintState.TargetPullSpeedCentimetersPerSecond <= KINDA_SMALL_NUMBER)
 	{
 		return;
 	}
@@ -384,40 +384,21 @@ void ACatFishingRodActor::ClearCarrierConstraintFromAuthority()
 
 void ACatFishingRodActor::OnRep_CarrierConstraintState()
 {
+	PublishCarrierConstraintToMovement();
 	if (!CarrierConstraintState.bActive)
 	{
-		ResetCarrierConstraintSmoothing();
+		ClearCarrierMovementBinding();
 	}
 }
 
-void ACatFishingRodActor::UpdateCarrierConstraintTickDependency(UCharacterMovementComponent* Movement)
+void ACatFishingRodActor::ClearCarrierMovementBinding()
 {
-	UCharacterMovementComponent* Previous = CarrierConstraintTickDependency.Get();
-	if (Previous == Movement)
+	if (UCatCharacterMovementComponent* Movement = CarrierMovement.Get())
 	{
-		return;
+		Movement->ClearExternalTraction(this);
+		PrimaryActorTick.RemovePrerequisite(Movement, Movement->PrimaryComponentTick);
 	}
-	if (Previous)
-	{
-		PrimaryActorTick.RemovePrerequisite(Previous, Previous->PrimaryComponentTick);
-	}
-	CarrierConstraintTickDependency = Movement;
-	if (Movement)
-	{
-		// 先让 CharacterMovement 完成本帧输入、制动与碰撞，再施加平滑约束速度；
-		// 否则默认行走制动会在同一帧静默吃掉低强度牵引。
-		PrimaryActorTick.AddPrerequisite(Movement, Movement->PrimaryComponentTick);
-	}
-}
-
-void ACatFishingRodActor::ResetCarrierConstraintSmoothing()
-{
-	UpdateCarrierConstraintTickDependency(nullptr);
-	SmoothedCarrierPullVelocity = FVector::ZeroVector;
-	SmoothedCarrierAwaySpeedMultiplier = 1.0;
-	SmoothedConstraintHolder.Reset();
-	NextCarrierSmoothingDiagnosticWorldSeconds = 0.0;
-	bLastCarrierSmoothingDiagnosticActive = false;
+	CarrierMovement.Reset();
 }
 
 void ACatFishingRodActor::ResetAuthoritativeRotationEffort()
@@ -427,113 +408,34 @@ void ACatFishingRodActor::ResetAuthoritativeRotationEffort()
 	AuthoritativeRotationEffort.Epoch = NextEpoch;
 }
 
-void ACatFishingRodActor::ApplyCarrierConstraint(const float DeltaSeconds)
+void ACatFishingRodActor::PublishCarrierConstraintToMovement()
 {
-	if (PresentationState.PoseMode != ECatFishingRodPoseMode::Held
-		|| !FMath::IsFinite(DeltaSeconds) || DeltaSeconds <= 0.0f
-		|| !PresentationState.HolderPlayerState)
+	ACharacter* Holder = PresentationState.HolderPlayerState
+		? Cast<ACharacter>(PresentationState.HolderPlayerState->GetPawn()) : nullptr;
+	UCatCharacterMovementComponent* Movement = Holder
+		? Cast<UCatCharacterMovementComponent>(Holder->GetCharacterMovement()) : nullptr;
+	if (!Movement || PresentationState.PoseMode != ECatFishingRodPoseMode::Held
+		|| !PresentationState.bDeployed || PresentationState.bBroken
+		|| CarrierConstraintState.ConstraintHolderPlayerState != PresentationState.HolderPlayerState
+		|| (!HasAuthority() && !Holder->IsLocallyControlled()))
 	{
-		ResetCarrierConstraintSmoothing();
+		ClearCarrierMovementBinding();
 		return;
 	}
-	ACharacter* Holder = Cast<ACharacter>(PresentationState.HolderPlayerState->GetPawn());
-	// 模拟代理只消费 Character 的正常移动复制；服务器和拥有该角色的客户端平滑追赶同一个目标，兼顾权威和本地手感。
-	if (!Holder || (!HasAuthority() && !Holder->IsLocallyControlled()))
+	if (CarrierMovement.Get() != Movement)
 	{
-		ResetCarrierConstraintSmoothing();
-		return;
+		ClearCarrierMovementBinding();
+		CarrierMovement = Movement;
+		// 仅保持姿态采样时序：竿尖跟随碰撞后的身体。牵引不在 Rod Tick 中执行。
+		PrimaryActorTick.AddPrerequisite(Movement, Movement->PrimaryComponentTick);
 	}
-	UCharacterMovementComponent* Movement = Holder->GetCharacterMovement();
-	if (!Movement)
-	{
-		ResetCarrierConstraintSmoothing();
-		return;
-	}
-	if (SmoothedConstraintHolder.Get() != Holder)
-	{
-		ResetCarrierConstraintSmoothing();
-		SmoothedConstraintHolder = Holder;
-	}
-	UpdateCarrierConstraintTickDependency(Movement);
-
-	FVector TargetPullVelocity = FVector::ZeroVector;
-	double TargetAwaySpeedMultiplier = 1.0;
-	FVector TargetPullDirection(CarrierConstraintState.PullDirection);
-	TargetPullDirection.Z = 0.0;
-	if (CarrierConstraintState.bActive && TargetPullDirection.Normalize())
-	{
-		TargetPullVelocity = TargetPullDirection
-			* FMath::Max(0.0f, CarrierConstraintState.TargetPullSpeedCentimetersPerSecond);
-		TargetAwaySpeedMultiplier = FMath::Clamp(
-			static_cast<double>(CarrierConstraintState.MaximumAwaySpeedMultiplier), 0.0, 1.0);
-	}
-
-	// 权威目标每 FixedFightStepSeconds 更新一次。用同一时长作为一阶响应常数，
-	// 让速度连续穿过相邻目标，也让短暂的 Active 开关抖振衰减，而不直接插值 Actor 位置。
-	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
-	const double ResponseSeconds = Settings && FMath::IsFinite(Settings->FixedFightStepSeconds)
-		? FMath::Max(Settings->FixedFightStepSeconds, 1.0 / 120.0) : 0.05;
-	const double SmoothingAlpha = FMath::Clamp(
-		1.0 - FMath::Exp(-static_cast<double>(DeltaSeconds) / ResponseSeconds), 0.0, 1.0);
-	SmoothedCarrierPullVelocity = FMath::Lerp(
-		SmoothedCarrierPullVelocity, TargetPullVelocity, SmoothingAlpha);
-	SmoothedCarrierAwaySpeedMultiplier = FMath::Lerp(
-		SmoothedCarrierAwaySpeedMultiplier, TargetAwaySpeedMultiplier, SmoothingAlpha);
-	if (TargetPullVelocity.IsNearlyZero() && SmoothedCarrierPullVelocity.SizeSquared() < 1.0)
-	{
-		SmoothedCarrierPullVelocity = FVector::ZeroVector;
-	}
-	if (FMath::IsNearlyEqual(TargetAwaySpeedMultiplier, 1.0)
-		&& FMath::IsNearlyEqual(SmoothedCarrierAwaySpeedMultiplier, 1.0, 0.001))
-	{
-		SmoothedCarrierAwaySpeedMultiplier = 1.0;
-	}
-
-	const double SmoothedPullSpeed = SmoothedCarrierPullVelocity.Size2D();
-	FVector SmoothedPullDirection = SmoothedCarrierPullVelocity.GetSafeNormal2D();
-	if (SmoothedPullSpeed > KINDA_SMALL_NUMBER && !SmoothedPullDirection.IsNearlyZero())
-	{
-		// 这是有上限的目标速度，不是每步累加的 DeltaV。只有当前向鱼速度不足时才补齐，
-		// 因此连续相同的20 Hz目标不会把角色越推越快。
-		const double CurrentPullSpeed = FVector::DotProduct(Movement->Velocity, SmoothedPullDirection);
-		if (CurrentPullSpeed < SmoothedPullSpeed)
-		{
-			Movement->Velocity += SmoothedPullDirection * (SmoothedPullSpeed - CurrentPullSpeed);
-		}
-	}
-
-	// 平滑后的径向速度上限让持续后退输入不能无视张力，同时避免目标切换时瞬间截断速度。
-	const FVector AwayDirection = -SmoothedPullDirection;
-	const double AwaySpeed = FVector::DotProduct(Movement->Velocity, AwayDirection);
-	const double MaximumAwaySpeed = FMath::Max(0.0f, Movement->MaxWalkSpeed)
-		* FMath::Clamp(SmoothedCarrierAwaySpeedMultiplier, 0.0, 1.0);
-	if (!AwayDirection.IsNearlyZero() && AwaySpeed > MaximumAwaySpeed)
-	{
-		Movement->Velocity -= AwayDirection * (AwaySpeed - MaximumAwaySpeed);
-	}
-
-	const bool bSmoothingActive = SmoothedPullSpeed > 1.0
-		|| SmoothedCarrierAwaySpeedMultiplier < 0.999;
-	UWorld* World = GetWorld();
-	const double WorldSeconds = World ? World->GetTimeSeconds() : 0.0;
-	if (World && (bSmoothingActive != bLastCarrierSmoothingDiagnosticActive
-		|| (bSmoothingActive && WorldSeconds >= NextCarrierSmoothingDiagnosticWorldSeconds)))
-	{
-		UE_LOG(LogCatFishing, Display,
-			TEXT("Event=fishing_carrier_smoothing_sample RodActorId=%s TargetActive=%s AppliedActive=%s "
-				"TargetPullSpeed=%.2f AppliedPullSpeed=%.2f TargetAwaySpeedMultiplier=%.3f AppliedAwaySpeedMultiplier=%.3f "
-				"HolderVelocity=%s HolderPlayerId=%d Holder=%s World=%s NetMode=%d Authority=%s HolderLocalRole=%d"),
-			*PresentationState.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
-			CarrierConstraintState.bActive ? TEXT("true") : TEXT("false"),
-			bSmoothingActive ? TEXT("true") : TEXT("false"),
-			TargetPullVelocity.Size2D(), SmoothedPullSpeed,
-			TargetAwaySpeedMultiplier, SmoothedCarrierAwaySpeedMultiplier,
-			*Movement->Velocity.ToCompactString(), PresentationState.HolderPlayerState->GetPlayerId(),
-			*GetNameSafe(Holder), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
-			HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(Holder->GetLocalRole()));
-		NextCarrierSmoothingDiagnosticWorldSeconds = WorldSeconds + 1.0;
-		bLastCarrierSmoothingDiagnosticActive = bSmoothingActive;
-	}
+	FCatExternalTractionInput Input;
+	Input.SourceId = PresentationState.RodActorId;
+	Input.Direction = CarrierConstraintState.PullDirection;
+	Input.AccelerationCentimetersPerSecondSquared = CarrierConstraintState.PullAccelerationCentimetersPerSecondSquared;
+	Input.SpeedLimitCentimetersPerSecond = CarrierConstraintState.TargetPullSpeedCentimetersPerSecond;
+	Input.bActive = CarrierConstraintState.bActive;
+	Movement->SetExternalTraction(this, Input);
 }
 
 bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSeconds)
@@ -660,7 +562,7 @@ bool ACatFishingRodActor::PlaceOnGroundFromAuthority(const FTransform& GroundTra
 	AuthoritativeAimHolder.Reset();
 	ResetAuthoritativeRotationEffort();
 	CarrierConstraintState = FCatFishingCarrierConstraintState{};
-	ResetCarrierConstraintSmoothing();
+	ClearCarrierMovementBinding();
 	SetActorTickEnabled(false);
 	ForceNetUpdate();
 	return true;
@@ -730,7 +632,7 @@ void ACatFishingRodActor::BeginPlay()
 void ACatFishingRodActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	ResetAuthoritativeRotationEffort();
-	ResetCarrierConstraintSmoothing();
+	ClearCarrierMovementBinding();
 	SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
 	// 只有权威端且已绑定 Owner 时才需要清理服务里的“已部署鱼竿”登记，避免野指针残留。
 	if (HasAuthority() && PresentationState.OwnerPlayerState)
@@ -778,7 +680,7 @@ void ACatFishingRodActor::DispatchPresentationChanged(const FCatFishingRodPresen
 	if (Current.PoseMode != ECatFishingRodPoseMode::Held
 		|| Current.HolderPlayerState != Previous.HolderPlayerState)
 	{
-		ResetCarrierConstraintSmoothing();
+		ClearCarrierMovementBinding();
 		SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
 	}
 	SetActorTickEnabled(Current.PoseMode == ECatFishingRodPoseMode::Held);

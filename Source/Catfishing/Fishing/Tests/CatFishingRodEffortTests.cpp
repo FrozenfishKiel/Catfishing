@@ -134,7 +134,7 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("EffortRod"), TEXT("Skin"), PlayerState, PlayerState, true, false));
 	TestTrue(TEXT("initialize held aim"), Rod->RefreshHeldTransformFromAuthority());
 	TestTrue(TEXT("start fight rotation"), Rod->SetCarrierConstraintFromAuthority(
-		FVector::ForwardVector, 0.0, 0.0, 1.0, 1.0, 0.0, true, 100.0, 50.0));
+		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, true, 100.0, 50.0));
 	Controller->SetControlRotation(FRotator(0.0, 120.0, 0.0));
 	TestTrue(TEXT("integrate active rotation"), Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0));
 	const auto First = Rod->GetAuthoritativeRotationEffortSnapshot();
@@ -148,7 +148,7 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 	TestEqual(TEXT("zero-time refresh retains the same effort snapshot"),
 		Rod->GetAuthoritativeRotationEffortSnapshot().ExertionSquaredSeconds, First.ExertionSquaredSeconds);
 	TestTrue(TEXT("slack update retains the same fight"), Rod->SetCarrierConstraintFromAuthority(
-		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, 0.0, true, 0.0, 50.0));
+		FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true, 0.0, 50.0));
 	TestEqual(TEXT("load changes cannot erase unconsumed effort"),
 		Rod->GetAuthoritativeRotationEffortSnapshot().Epoch, First.Epoch);
 	Rod->ClearCarrierConstraintFromAuthority();
@@ -156,7 +156,7 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 	TestTrue(TEXT("fight cleanup starts a new epoch"), Cleared.Epoch > First.Epoch);
 	TestEqual(TEXT("fight cleanup drops previous fight effort"), Cleared.ExertionSquaredSeconds, 0.0);
 	TestTrue(TEXT("restart fight rotation"), Rod->SetCarrierConstraintFromAuthority(
-		FVector::ForwardVector, 0.0, 0.0, 1.0, 1.0, 0.0, true, 100.0, 50.0));
+		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, true, 100.0, 50.0));
 	TestTrue(TEXT("new fight collects fresh effort"), Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0));
 	const auto Restarted = Rod->GetAuthoritativeRotationEffortSnapshot();
 	TestTrue(TEXT("restart gets a new epoch and effort"),

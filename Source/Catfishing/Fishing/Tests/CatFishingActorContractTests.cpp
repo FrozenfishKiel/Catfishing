@@ -322,18 +322,18 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 		Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Held);
 	TestTrue(TEXT("held rod accepts the authoritative coupled carrier constraint"),
 		Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector,
-			600.0, 30.0, 0.4, 0.75, 8.0));
+			600.0, 30.0, 0.75, 8.0));
 	TestTrue(TEXT("coupled carrier constraint becomes active"),
 		Rod->GetCarrierConstraintState().bActive);
-	TestEqual(TEXT("coupled carrier constraint keeps the server speed multiplier"),
-		Rod->GetCarrierConstraintState().MaximumAwaySpeedMultiplier, 0.4f);
+	TestEqual(TEXT("coupled carrier constraint keeps the server acceleration"),
+		Rod->GetCarrierConstraintState().PullAccelerationCentimetersPerSecondSquared, 600.0f);
 	TestEqual(TEXT("coupled carrier constraint carries a target pull speed"),
 		Rod->GetCarrierConstraintState().TargetPullSpeedCentimetersPerSecond, 30.0f);
 	Rod->ClearCarrierConstraintFromAuthority();
 	TestFalse(TEXT("clearing the fight constraint removes stale carrier drag"),
 		Rod->GetCarrierConstraintState().bActive);
 	TestEqual(TEXT("clearing the fight constraint restores unrestricted movement"),
-		Rod->GetCarrierConstraintState().MaximumAwaySpeedMultiplier, 1.0f);
+		Rod->GetCarrierConstraintState().PullAccelerationCentimetersPerSecondSquared, 0.0f);
 	TestTrue(TEXT("second operator joins left auxiliary slot"), Rod->AddOperatorFromAuthority(Helper, 2, JoinedSlot));
 	TestEqual(TEXT("second operator slot index is one"), JoinedSlot, 1);
 	TestEqual(TEXT("two-player occupancy is derived from compact array"), Rod->GetOperatorCount(), 2);

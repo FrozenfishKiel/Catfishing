@@ -6,10 +6,9 @@
 struct CATFISHING_API FCatFishingRodResistanceInput
 {
 	double CatStrength = 0.0;
-	double FishStrength = 0.0;
+	double LineTensionNewtons = 0.0;
+	double ForcePerStrengthNewtons = 1.0;
 	double RodPhysicsLengthCentimeters = 0.0;
-	double NormalizedTension = 0.0;
-	double NormalizedFishLineLoad = 0.0;
 	/** 竿身与鱼线方向夹角的余弦，[-1,1]；垂直鱼线时转矩最大。 */
 	double RodLineAlignment = 1.0;
 };
