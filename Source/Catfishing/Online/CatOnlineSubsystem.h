@@ -118,16 +118,16 @@ private:
 	/** 停止当前 Lobby 轮询；离开、反初始化与会话销毁时成对清理，不让旧 Lobby 驱动新 World。 */
 	void StopLobbyFactPolling();
 
-	/** 低频读取当前 Lobby 的成员、元数据和 ready 标记；事实变化才广播，Client 在本 Lobby 的次数预算与退避时间允许时开始自己的包预载。 */
+	/** 低频读取当前 Lobby 的成员、元数据和 ready 标记；Host 到达玩法图后按单调秒截止点重试 ready 发布且不回前台，Client 在预算与退避允许时开始自己的包预载。 */
 	bool TickLobbyFacts(float DeltaSeconds);
 
 	/** 返回当前已加入 Steam Lobby 是否已由 Host 写入 ready；非 Steam、非成员或数据缺失一律返回 false。 */
 	bool IsCurrentLobbyReady() const;
 
-	/** 校验 Host 玩法 World 是否已真正可接纳客户端；只读 listen 驱动、Run 阶段和玩法命令门，不写 Lobby 元数据。 */
+	/** 校验 Host 玩法 World 是否已真正可接纳客户端；只读 listen 驱动、Run 阶段和玩法命令门，失败只让本次 ready 不发布，不销毁 Session 或回前台。 */
 	bool IsHostGameplayWorldReadyForClientAdmission() const;
 
-	/** Host 玩法 World 已可接纳客户端后尝试写入 Steam Lobby ready；平台元数据不可写只会阻止 Client 自动连接，不代表 Host 地图启动失败。 */
+	/** Host 玩法 World 已可接纳客户端后尝试写入 Steam Lobby ready；平台元数据不可写只阻止 Client 自动进图，Host 的 Lake 与 Session 保持成功态。 */
 	bool PublishLobbyReady();
 
 	/** Client 在真实 Lobby ready 且重试预算允许时提交自身玩法包预载并计次；包成功后复核 ready 与 OSS 地址再 ClientTravel，失败统一进入有界退避。 */
@@ -187,7 +187,7 @@ private:
 	/** 废止待提交邀请及其 opaque 映射、身份与期限；提交、失败和反初始化共用，已进入 Join 的操作仍由原 epoch 管线收口。 */
 	void ClearPendingAcceptedInvite();
 
-	/** PostLoadMap 回调：按 GameInstance/ExpectedPackage 隔离后确认 World 与 Transport；Host 玩法 World 自身未就绪才回滚，Lobby ready 写入失败只记录并阻止客户端自动连接。 */
+	/** PostLoadMap 回调：按 GameInstance/ExpectedPackage 隔离后确认 World 与 Transport；Host 到达玩法图后不因 ready 缺失回前台，只安排低频重试，真实 TravelFailure、NetworkFailure 和 Leave 仍走各自回前台管线。 */
 	void HandlePostLoadMap(UWorld* LoadedWorld);
 
 	/** TravelFailure 回调：只消费本 GameInstance 的待确认旅行；Create、Join 与 Start 先 Destroy 补偿，Leave 保留已完成的 Session 清理。 */
@@ -316,6 +316,9 @@ private:
 
 	/** 上次轮询观察到的 Host ready 元数据；只由 TickLobbyFacts 写入，用于识别 false→true 并触发 Client 预载。 */
 	bool bLobbyReadyObserved = false;
+
+	/** Host 下一次允许重试发布 ready 元数据的单调时间，单位秒；PostLoadMap 和 TickLobbyFacts 在失败时写入、成功或离开 Lobby 时归零，只有 Host 侧轮询读取它。 */
+	double NextHostLobbyReadyPublishAttemptTime = 0.0;
 
 	/** 当前 Lobby 中 Client 已提交的玩法启动次数；每次受理 Start 时递增，离开 Lobby 才清零，ready 抖动不会重置失败预算。 */
 	int32 ClientGameplayStartAttempts = 0;

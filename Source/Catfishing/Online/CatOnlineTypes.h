@@ -167,7 +167,7 @@ enum class ECatOnlineError : uint8
 	SaveNotLoaded,
 	/** 玩法地图异步预载提交失败或回调未得到有效包，禁止旅行。 */
 	GameplayPreloadFailed,
-	/** Host 未能提供客户端可加入的 ready 事实；真实玩法 World 不可用会回滚，元数据不可写时 Client 保持前台等待。 */
+	/** Client 无法确认 Host 已提供可加入的 ready 事实；只阻止 Client 自动进图，Host Start 不因此回滚，真实旅行或网络故障使用对应错误。 */
 	LobbyReadyPublishFailed,
 	/** Host 离开前的世界保存被拒绝、Run 或 Index 写盘失败；退出停止且 Session 保持可用。 */
 	HostSaveFailed,

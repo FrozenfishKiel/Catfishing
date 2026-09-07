@@ -46,6 +46,8 @@ namespace CatOnlineNames
 	static const ANSICHAR* LobbyReadyKey = "CAT_GAME_READY";
 	/** 单个 Lobby 内 Client 自动启动的最大次数；轮询和失败收口共用，耗尽后必须由用户退出再加入以开启新预算。 */
 	static constexpr int32 MaxClientGameplayStartAttempts = 3;
+	/** Host ready 失败后等待下一次发布尝试的秒数；PostLoadMap 与 Lobby 轮询用它写入单调时间，轮询只在 Steam Lobby 可写时消费以避免 NULL 后端刷屏。 */
+	static constexpr double HostLobbyReadyRetrySeconds = 2.0;
 	/** 平台已确认邀请等待前台和本地身份的最长秒数；接受时冻结期限，持续未就绪也不能重新开始计时。 */
 	static constexpr double AcceptedInviteWaitSeconds = 30.0;
 }
@@ -279,7 +281,7 @@ void UCatOnlineSubsystem::StartLobbyFactPolling()
 		FTickerDelegate::CreateUObject(this, &ThisClass::TickLobbyFacts), 0.5f);
 }
 
-// Lobby 轮询停止流程：仅移除本子系统自己注册的 ticker，再清空 ready 观察值、Client 尝试次数和退避时间；只有离开旧 Lobby 才为下一次加入释放完整重试预算。
+// Lobby 轮询停止流程：仅移除本子系统自己注册的 ticker，再清空 ready 观察值、Host 发布截止点、Client 尝试次数和退避时间；只有离开旧 Lobby 才为下一次加入释放完整重试预算。
 void UCatOnlineSubsystem::StopLobbyFactPolling()
 {
 	if (LobbyFactPollHandle.IsValid())
@@ -288,11 +290,14 @@ void UCatOnlineSubsystem::StopLobbyFactPolling()
 	}
 	LobbyFactPollHandle.Reset();
 	bLobbyReadyObserved = false;
+	NextHostLobbyReadyPublishAttemptTime = 0.0;
 	ClientGameplayStartAttempts = 0;
 	NextClientGameplayStartTime = 0.0;
 }
 
-// Lobby 轮询流程：先保存公开事实，再从 Steam SDK 重建成员与 ready；Client 仅在本 Lobby 未耗尽三次启动且退避已到期时开始预载，ready 消失不重置预算。其余轮询只有事实变化才广播。
+// Lobby 轮询流程：先保存公开事实，再从 Steam SDK 重建成员与 ready。
+// Host 已在玩法图、当前空闲且 ready 未写入时，只有 Steam Lobby 可写并到达 NextHostLobbyReadyPublishAttemptTime 才重试发布；失败只推迟下一次尝试，不触发 DestroySession 或 Frontend travel。
+// Client 只在 ready 成立、预算未耗尽且退避到期时开始预载；其余轮询只有事实变化才广播，避免 NULL 后端每 0.5 秒刷 ready 失败日志。
 bool UCatOnlineSubsystem::TickLobbyFacts(const float DeltaSeconds)
 {
 	(void)DeltaSeconds;
@@ -307,6 +312,25 @@ bool UCatOnlineSubsystem::TickLobbyFacts(const float DeltaSeconds)
 
 	RefreshRoomSnapshotFacts();
 	bLobbyReadyObserved = IsCurrentLobbyReady();
+	bool bCanAttemptHostReadyPublish = false;
+#if WITH_STEAMWORKS
+	bCanAttemptHostReadyPublish = !CurrentLobbyId.IsEmpty() && SteamAPI_IsSteamRunning() && SteamMatchmaking();
+#endif
+	const double CurrentTime = FPlatformTime::Seconds();
+	if (SessionRole == ECatOnlineSessionRole::Host && WorldState == ECatOnlineWorldState::Lake
+		&& ActiveOperation == ECatOnlineOperation::None && !bLobbyReadyObserved && bCanAttemptHostReadyPublish
+		&& CurrentTime >= NextHostLobbyReadyPublishAttemptTime)
+	{
+		if (IsHostGameplayWorldReadyForClientAdmission() && PublishLobbyReady())
+		{
+			NextHostLobbyReadyPublishAttemptTime = 0.0;
+			bLobbyReadyObserved = true;
+		}
+		else
+		{
+			NextHostLobbyReadyPublishAttemptTime = CurrentTime + CatOnlineNames::HostLobbyReadyRetrySeconds;
+		}
+	}
 
 	bool bMembersChanged = PreviousMembers.Num() != RoomMembers.Num();
 	if (!bMembersChanged)
@@ -362,7 +386,8 @@ bool UCatOnlineSubsystem::IsCurrentLobbyReady() const
 #endif
 }
 
-// Host 玩法 World 就绪检查流程：先确认当前 World 已经是 listen 玩法图且 GameNetDriver 存在；再读取 authority GameMode 的 Run 公开事实和 Host 命令门。失败代表玩法宿主自身不可用，调用方才需要补偿回前台。
+// Host 玩法 World 就绪检查流程：先确认当前 World 已经是 listen 玩法图且 GameNetDriver 存在；再读取 authority GameMode 的 Run 公开事实和 Host 命令门。
+// 返回值只决定是否发布客户端准入 ready；失败会记录原因并让本次 ready 不发布，不提交 DestroySession 或 Frontend travel。
 bool UCatOnlineSubsystem::IsHostGameplayWorldReadyForClientAdmission() const
 {
 	UWorld* World = GetWorld();
@@ -397,7 +422,8 @@ bool UCatOnlineSubsystem::IsHostGameplayWorldReadyForClientAdmission() const
 	return true;
 }
 
-// Host ready 发布流程：这里只处理 Steam Lobby 元数据写入，不再把平台元数据不可写误判为 Host 玩法地图启动失败；返回 false 时调用方保留 Host 的 Lake/Session，只让 Client 继续等待 ready。
+// Host ready 发布流程：这里只处理 Steam Lobby 元数据写入，不再把平台元数据不可写误判为 Host 玩法地图启动失败。
+// 返回 false 表示当前平台无法写 CAT_GAME_READY；Host 仍留在 Lake/Session，Client 只会在前台继续等待 ready 或沿自身失败路径提示退出重加入。
 bool UCatOnlineSubsystem::PublishLobbyReady()
 {
 #if WITH_STEAMWORKS
@@ -1826,7 +1852,8 @@ void UCatOnlineSubsystem::ClearPendingAcceptedInvite()
 	PendingInviteOperationEpoch = 0;
 }
 
-// 地图完成流程：先隔离空 World 和其他 GameInstance，再重绑邀请接口；来源包回载时保留 pending 等 TravelFailure，意外包进入补偿。命中 ExpectedPackage 后确认 World 与 Transport；Host 玩法 World 自身未就绪才清理会话并回前台，Steam ready 元数据不可写只记录警告并让 Client 留在前台。
+// 地图完成流程：先隔离空 World 和其他 GameInstance，再重绑邀请接口；来源包回载时保留 pending 等 TravelFailure，意外包进入补偿。
+// 命中 ExpectedPackage 后确认 World 与 Transport；Host 到达玩法图后即收口 Start，ready 缺失只影响 Client 准入并写入 Host 低频重试截止点，真正的 TravelFailure、NetworkFailure 和 Leave 仍由各自入口回前台。
 void UCatOnlineSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 {
 	if (!LoadedWorld || LoadedWorld->GetGameInstance() != GetGameInstance())
@@ -1871,14 +1898,22 @@ void UCatOnlineSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 			&& WorldState == ECatOnlineWorldState::Lake)
 		{
 			RefreshRoomSnapshotFacts();
-			if (!IsHostGameplayWorldReadyForClientAdmission())
+			if (IsHostGameplayWorldReadyForClientAdmission())
 			{
-				BeginDestroySession(ECatOnlineError::LobbyReadyPublishFailed);
-				return;
+				if (!PublishLobbyReady())
+				{
+					NextHostLobbyReadyPublishAttemptTime = FPlatformTime::Seconds() + CatOnlineNames::HostLobbyReadyRetrySeconds;
+					BroadcastSnapshot(TEXT("online_lobby_ready_publish_unavailable"));
+				}
+				else
+				{
+					NextHostLobbyReadyPublishAttemptTime = 0.0;
+				}
 			}
-			if (!PublishLobbyReady())
+			else
 			{
-				BroadcastSnapshot(TEXT("online_lobby_ready_publish_unavailable"));
+				NextHostLobbyReadyPublishAttemptTime = FPlatformTime::Seconds() + CatOnlineNames::HostLobbyReadyRetrySeconds;
+				BroadcastSnapshot(TEXT("online_lobby_ready_withheld"));
 			}
 		}
 		if (DeferredFailureAfterTravel != ECatOnlineError::None)
