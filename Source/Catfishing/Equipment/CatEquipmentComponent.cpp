@@ -525,7 +525,7 @@ FCatDomainCommandResult UCatEquipmentComponent::ConfigureLoadoutFromAuthority(co
 // 数量型库存授予预检流程：
 // 1. 先从目录读取正式定义，并确认 RequestId、authority、定义类型和授予数量都成立；失败时不读取或补写库存格。
 // 2. 已经缓存过同 RequestId 的授予结果时放行重放，让商店重试能拿回原回执而不是被当前容量误拦。
-// 3. Owner 正式库存已按配置补齐时，用 InventoryComponent 的整批收货预演回答容量；这里不扩容数组，保证 Validate 纯只读。
+// 3. Owner 正式库存已按配置补齐时，把容量和堆叠预检交给 InventoryComponent；这里不扩容数组，保证 Validate 纯只读。
 // 4. 旧测试宿主或尚未初始化正式槽位时才回看 Equipment 旧投影，避免历史入口在迁移期被错误拒绝。
 ECatDomainCommandError UCatEquipmentComponent::ValidateInventoryQuantityGrant(const FGuid RequestId,
 	const FName DefinitionId, const int32 Quantity) const
@@ -545,13 +545,8 @@ ECatDomainCommandError UCatEquipmentComponent::ValidateInventoryQuantityGrant(co
 	const UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
 	if (OwnerInventory != nullptr && OwnerInventory->GetInventorySlotCount() >= GetConfiguredInventorySlotCapacity())
 	{
-		FCatInventoryReceiveBatch ReceiveBatch;
-		FCatInventoryDefinitionEntry& DefinitionEntry = ReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
-		DefinitionEntry.ItemDefinition = Definition;
-		DefinitionEntry.Count = Quantity;
-		return OwnerInventory->CanFullyAcceptInventoryBatch(ReceiveBatch)
-			? ECatDomainCommandError::None
-			: ECatDomainCommandError::CapacityExceeded;
+		return OwnerInventory->ValidateResolvedInventoryDefinitionGrantFromAuthority(
+			RequestId, Definition, Quantity);
 	}
 	if (!CanStoreInventoryItem(*Definition, DefinitionId, Quantity))
 	{
@@ -562,9 +557,9 @@ ECatDomainCommandError UCatEquipmentComponent::ValidateInventoryQuantityGrant(co
 
 // 数量型库存物品入库流程：
 // 1. 先拒绝无效 RequestId，并用 RequestId、定义和数量签名保护终态重放；载荷漂移直接拒绝且不改库存。
-// 2. 正式库存组件存在时先按配置补齐槽位，再用 InventoryComponent 整批收货成为物品事实源。
-// 3. 正式库存写入成功后从 InventoryComponent 重建 Equipment 旧投影，并按新增定义修正钓鱼选择。
-// 4. 正式写入或投影失败会恢复正式 entries 和旧 Snapshot，避免背包事实与钓鱼读模型只提交一边。
+// 2. 正式库存组件存在时先按配置补齐槽位，再把已解析定义交给 InventoryComponent 的统一发货事务。
+// 3. 正式库存写入成功后只从 InventoryComponent 重建 Equipment 旧投影，并按新增定义修正钓鱼选择。
+// 4. 投影同步失败只记录诊断，不回滚正式库存事实；后续刷新仍以 InventoryComponent 为准。
 // 5. 没有正式库存组件的旧宿主才走旧数组入库，并继续缓存首次终态供重放返回。
 FCatDomainCommandResult UCatEquipmentComponent::GrantInventoryQuantityFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const FName DefinitionId, const int32 Quantity)
@@ -608,31 +603,18 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantInventoryQuantityFromAuthor
 		else
 		{
 			OwnerInventory->SetInventorySlotCountFromAuthority(GetConfiguredInventorySlotCapacity());
-			FCatInventoryReceiveBatch ReceiveBatch;
-			FCatInventoryDefinitionEntry& DefinitionEntry = ReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
-			DefinitionEntry.ItemDefinition = Definition;
-			DefinitionEntry.Count = Quantity;
-			if (!OwnerInventory->CanFullyAcceptInventoryBatch(ReceiveBatch))
+			const FCatDomainCommandResult InventoryGrant =
+				OwnerInventory->GrantResolvedInventoryDefinitionFromAuthority(
+					RequestId, OwnerInventory->GetInventoryRevision(), Definition, Quantity);
+			Result.bCommitted = InventoryGrant.bCommitted;
+			Result.Error = InventoryGrant.Error;
+			if (InventoryGrant.bCommitted
+				&& !RefreshInventoryProjectionFromInventoryComponentFromAuthority(Definition, DefinitionId))
 			{
-				Result.Error = ECatDomainCommandError::CapacityExceeded;
-			}
-			else
-			{
-				const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
-				const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
-				if (!OwnerInventory->TryAddInventoryBatch(ReceiveBatch)
-					|| !RefreshInventoryProjectionFromInventoryComponentFromAuthority(Definition, DefinitionId))
-				{
-					OwnerInventory->ReplaceInventoryEntriesFromAuthority(
-						SavedEntries, GetConfiguredInventorySlotCapacity());
-					Snapshot = SavedSnapshot;
-					Result.Error = ECatDomainCommandError::DependencyUnavailable;
-				}
-				else
-				{
-					Result.bCommitted = true;
-					Result.Error = ECatDomainCommandError::None;
-				}
+				UE_LOG(LogCatEquipment, Warning,
+					TEXT("Event=equipment_inventory_projection_sync_failed Operation=GrantInventoryQuantity Owner=%s Request=%s Definition=%s InventoryRevision=%lld SnapshotRevision=%lld"),
+					*GetNameSafe(GetOwner()), *RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+					*DefinitionId.ToString(), InventoryGrant.Revision, Snapshot.Revision);
 			}
 		}
 		Result.Revision = Snapshot.Revision;
@@ -673,7 +655,7 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantInventoryQuantityFromAuthor
 // 商店非数量物品入库预检流程：
 // 1. 先按 RequestId 和定义 ID 查询既有终态载荷，合法重放放行，载荷漂移拒绝。
 // 2. 再确认当前组件属于 authority 角色，并读取正式定义和单实例容量。
-// 3. 正式库存已按配置补齐时使用 InventoryComponent 预演单实例收货，让背包容量和堆叠规则只由正式库存回答。
+// 3. 正式库存已按配置补齐时使用 InventoryComponent 的已解析定义预检，让背包容量和堆叠规则只由正式库存回答。
 // 4. 旧测试宿主或尚未初始化正式槽位时才回看 Equipment 旧投影；非数量物品仍按单件容量判断。
 ECatDomainCommandError UCatEquipmentComponent::ValidateEquipmentGrantFromAuthority(const FGuid RequestId,
 	const FName DefinitionId) const
@@ -698,13 +680,8 @@ ECatDomainCommandError UCatEquipmentComponent::ValidateEquipmentGrantFromAuthori
 	const UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
 	if (OwnerInventory != nullptr && OwnerInventory->GetInventorySlotCount() >= GetConfiguredInventorySlotCapacity())
 	{
-		FCatInventoryReceiveBatch ReceiveBatch;
-		FCatInventoryDefinitionEntry& DefinitionEntry = ReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
-		DefinitionEntry.ItemDefinition = Definition;
-		DefinitionEntry.Count = 1;
-		return OwnerInventory->CanFullyAcceptInventoryBatch(ReceiveBatch)
-			? ECatDomainCommandError::None
-			: ECatDomainCommandError::CapacityExceeded;
+		return OwnerInventory->ValidateResolvedInventoryDefinitionGrantFromAuthority(
+			RequestId, Definition, 1);
 	}
 	if (!CanStoreInventoryItem(*Definition, DefinitionId, 1))
 	{
@@ -715,8 +692,8 @@ ECatDomainCommandError UCatEquipmentComponent::ValidateEquipmentGrantFromAuthori
 
 // 商店非数量物品入库流程：
 // 1. 先用 RequestId 和定义 ID 找终态缓存；合法重放只返回首次结果，不重复增加库存数量或推进 Revision。
-// 2. 正式库存组件存在时先按配置补齐槽位，再把单件定义写入 InventoryComponent。
-// 3. 正式库存写入成功后刷新 Equipment 旧投影和钓鱼选择；失败时恢复两边，避免出现双账本分叉。
+// 2. 正式库存组件存在时先按配置补齐槽位，再把已解析定义交给 InventoryComponent 的统一发货事务。
+// 3. 正式库存写入成功后刷新 Equipment 旧投影和钓鱼选择；投影失败只记诊断，库存事实不再反向回滚。
 // 4. 没有正式库存组件的旧宿主才走旧数组入库，并保留原先的 ExpectedRevision 和终态缓存语义。
 FCatDomainCommandResult UCatEquipmentComponent::GrantEquipmentFromAuthority(const FGuid RequestId,
 	const int64 ExpectedRevision, const FName DefinitionId)
@@ -760,31 +737,18 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantEquipmentFromAuthority(cons
 		else
 		{
 			OwnerInventory->SetInventorySlotCountFromAuthority(GetConfiguredInventorySlotCapacity());
-			FCatInventoryReceiveBatch ReceiveBatch;
-			FCatInventoryDefinitionEntry& DefinitionEntry = ReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
-			DefinitionEntry.ItemDefinition = Definition;
-			DefinitionEntry.Count = 1;
-			if (!OwnerInventory->CanFullyAcceptInventoryBatch(ReceiveBatch))
+			const FCatDomainCommandResult InventoryGrant =
+				OwnerInventory->GrantResolvedInventoryDefinitionFromAuthority(
+					RequestId, OwnerInventory->GetInventoryRevision(), Definition, 1);
+			Result.bCommitted = InventoryGrant.bCommitted;
+			Result.Error = InventoryGrant.Error;
+			if (InventoryGrant.bCommitted
+				&& !RefreshInventoryProjectionFromInventoryComponentFromAuthority(Definition, DefinitionId))
 			{
-				Result.Error = ECatDomainCommandError::CapacityExceeded;
-			}
-			else
-			{
-				const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
-				const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
-				if (!OwnerInventory->TryAddInventoryBatch(ReceiveBatch)
-					|| !RefreshInventoryProjectionFromInventoryComponentFromAuthority(Definition, DefinitionId))
-				{
-					OwnerInventory->ReplaceInventoryEntriesFromAuthority(
-						SavedEntries, GetConfiguredInventorySlotCapacity());
-					Snapshot = SavedSnapshot;
-					Result.Error = ECatDomainCommandError::DependencyUnavailable;
-				}
-				else
-				{
-					Result.bCommitted = true;
-					Result.Error = ECatDomainCommandError::None;
-				}
+				UE_LOG(LogCatEquipment, Warning,
+					TEXT("Event=equipment_inventory_projection_sync_failed Operation=GrantEquipment Owner=%s Request=%s Definition=%s InventoryRevision=%lld SnapshotRevision=%lld"),
+					*GetNameSafe(GetOwner()), *RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+					*DefinitionId.ToString(), InventoryGrant.Revision, Snapshot.Revision);
 			}
 		}
 		Result.Revision = Snapshot.Revision;

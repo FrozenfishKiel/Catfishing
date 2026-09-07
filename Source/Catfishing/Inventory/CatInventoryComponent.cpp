@@ -827,12 +827,30 @@ bool UCatInventoryComponent::TryReturnReservedInventoryBatchFromAuthority(
 	return false;
 }
 
-// 稳定 ID 发货预检流程：
-// 1. 先生成缓存键并处理已缓存重放；同一请求只接受相同定义和数量，避免重试预检被当前容量变化误拦。
-// 2. 首次预检再确认 RequestId、authority、数量和库存目录都有效，避免来源系统绕过正式物品目录直接生成实例。
-// 3. 最后把定义和数量组成本库存批次并走容量预演，保证商店、奖励和开局发货共用同一条接收规则。
+// 稳定 ID 发货预检入口流程：先从正式库存目录解析定义资产，再进入共用预检；目录缺失时让内部流程统一返回无效载荷。
 ECatDomainCommandError UCatInventoryComponent::ValidateInventoryDefinitionGrantFromAuthority(
 	const FGuid RequestId, const FName DefinitionId, const int32 Count) const
+{
+	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+	UCatInventoryItemDefinition* ItemDefinition =
+		InventorySettings != nullptr ? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
+	return ValidateInventoryDefinitionGrantFromAuthorityInternal(RequestId, DefinitionId, ItemDefinition, Count);
+}
+
+// 已解析定义发货预检流程：调用方已经完成业务目录解析时，库存仍按定义自己的稳定 ID 建立同一份载荷口径。
+ECatDomainCommandError UCatInventoryComponent::ValidateResolvedInventoryDefinitionGrantFromAuthority(
+	const FGuid RequestId, UCatInventoryItemDefinition* ItemDefinition, const int32 Count) const
+{
+	const FName DefinitionId = ItemDefinition != nullptr ? ItemDefinition->GetInventoryDefinitionId() : NAME_None;
+	return ValidateInventoryDefinitionGrantFromAuthorityInternal(RequestId, DefinitionId, ItemDefinition, Count);
+}
+
+// 稳定定义发货预检共用流程：
+// 1. 先处理已缓存载荷，允许同一请求在提交前后重复询问，但不允许换定义或数量。
+// 2. 首次预检必须确认 authority、稳定 ID、定义运行配置和数量都有效，避免来源系统传入半配置资产。
+// 3. 最后只用正式库存批次预演容量，调用方不能在自己系统里复制堆叠和格子规则。
+ECatDomainCommandError UCatInventoryComponent::ValidateInventoryDefinitionGrantFromAuthorityInternal(
+	const FGuid RequestId, const FName DefinitionId, UCatInventoryItemDefinition* ItemDefinition, const int32 Count) const
 {
 	const FString Key = MakeTerminalKey(TEXT("GrantInventoryDefinition"), RequestId);
 	const FString PayloadPrefix = FString::Printf(TEXT("Definition=%s|Count=%d|"),
@@ -845,11 +863,10 @@ ECatDomainCommandError UCatInventoryComponent::ValidateInventoryDefinitionGrantF
 	}
 
 	const AActor* OwningActor = GetOwner();
-	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
-	UCatInventoryItemDefinition* ItemDefinition =
-		InventorySettings != nullptr ? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
 	if (!RequestId.IsValid() || OwningActor == nullptr || !OwningActor->HasAuthority()
-		|| Count <= 0 || ItemDefinition == nullptr)
+		|| DefinitionId.IsNone() || Count <= 0 || ItemDefinition == nullptr
+		|| !ItemDefinition->IsInventoryRuntimeDefinitionReady()
+		|| ItemDefinition->GetInventoryDefinitionId() != DefinitionId)
 	{
 		return ECatDomainCommandError::InvalidPayload;
 	}
@@ -863,13 +880,34 @@ ECatDomainCommandError UCatInventoryComponent::ValidateInventoryDefinitionGrantF
 		: ECatDomainCommandError::CapacityExceeded;
 }
 
-// 稳定 ID 发货提交流程：
-// 1. 先按 RequestId、定义、数量和 ExpectedRevision 建立幂等签名；合法重放只返回首次终态。
-// 2. 首次请求必须位于 authority，并且当前库存 Revision 必须等于调用方观察到的正式库存版本。
-// 3. 通过后从正式库存目录解析定义，按统一收货批次写入，成功时只推进 InventoryRevision。
-// 4. 首次请求无论成功、参数非法、容量不足、Revision 冲突还是依赖失败，都会缓存终态并记录日志，后续同载荷重放返回首次结果。
+// 稳定 ID 发货提交入口流程：先从正式库存目录解析定义资产，再进入共用发货事务；版本、幂等和写入不在公开入口重复实现。
 FCatDomainCommandResult UCatInventoryComponent::GrantInventoryDefinitionFromAuthority(
 	const FGuid RequestId, const int64 ExpectedRevision, const FName DefinitionId, const int32 Count)
+{
+	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+	UCatInventoryItemDefinition* ItemDefinition =
+		InventorySettings != nullptr ? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
+	return GrantInventoryDefinitionFromAuthorityInternal(
+		RequestId, ExpectedRevision, DefinitionId, ItemDefinition, Count);
+}
+
+// 已解析定义发货提交流程：旧适配层只把业务定义交给库存，实际幂等、容量和写入仍落在统一库存命令上。
+FCatDomainCommandResult UCatInventoryComponent::GrantResolvedInventoryDefinitionFromAuthority(
+	const FGuid RequestId, const int64 ExpectedRevision, UCatInventoryItemDefinition* ItemDefinition, const int32 Count)
+{
+	const FName DefinitionId = ItemDefinition != nullptr ? ItemDefinition->GetInventoryDefinitionId() : NAME_None;
+	return GrantInventoryDefinitionFromAuthorityInternal(
+		RequestId, ExpectedRevision, DefinitionId, ItemDefinition, Count);
+}
+
+// 稳定定义发货提交共用流程：
+// 1. 先按稳定 ID、数量和正式库存 Revision 建立幂等签名，所有来源共享同一条重放规则。
+// 2. 首次请求必须在 authority 且定义运行配置完整，当前 InventoryRevision 也必须等于调用方观察值。
+// 3. 通过后只调用库存批次收货；堆叠、实例创建、版本推进和广播都不再散落到外层系统。
+// 4. 所有首次终态都会缓存并写入诊断日志，便于商店、奖励或旧 Equipment 入口跨端追查。
+FCatDomainCommandResult UCatInventoryComponent::GrantInventoryDefinitionFromAuthorityInternal(
+	const FGuid RequestId, const int64 ExpectedRevision, const FName DefinitionId,
+	UCatInventoryItemDefinition* ItemDefinition, const int32 Count)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
@@ -891,11 +929,10 @@ FCatDomainCommandResult UCatInventoryComponent::GrantInventoryDefinitionFromAuth
 	}
 
 	const AActor* OwningActor = GetOwner();
-	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
-	UCatInventoryItemDefinition* ItemDefinition =
-		InventorySettings != nullptr ? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
 	if (!RequestId.IsValid() || OwningActor == nullptr || !OwningActor->HasAuthority()
-		|| Count <= 0 || ItemDefinition == nullptr)
+		|| DefinitionId.IsNone() || Count <= 0 || ItemDefinition == nullptr
+		|| !ItemDefinition->IsInventoryRuntimeDefinitionReady()
+		|| ItemDefinition->GetInventoryDefinitionId() != DefinitionId)
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
 	}

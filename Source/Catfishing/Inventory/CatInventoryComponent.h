@@ -184,6 +184,14 @@ public:
 	FCatDomainCommandResult GrantInventoryDefinitionFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName DefinitionId, int32 Count);
 
+	/** 只读预检已经解析出的物品定义能否进入当前正式库存；旧 Equipment 适配层用它把容量和堆叠裁决交回 Inventory。 */
+	ECatDomainCommandError ValidateResolvedInventoryDefinitionGrantFromAuthority(
+		FGuid RequestId, UCatInventoryItemDefinition* ItemDefinition, int32 Count) const;
+
+	/** authority 按已经解析出的物品定义发货；调用方可另有业务 Revision，但这里的 ExpectedRevision 仍按正式库存版本裁决。 */
+	FCatDomainCommandResult GrantResolvedInventoryDefinitionFromAuthority(FGuid RequestId,
+		int64 ExpectedRevision, UCatInventoryItemDefinition* ItemDefinition, int32 Count);
+
 	/** 服务器整理本库存里的两个格子；RequestId 和库存 Revision 在正式库存层裁决，返回提交状态、错误和最新库存版本。 */
 	FCatDomainCommandResult MoveInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		int32 SourceSlotIndex, int32 TargetSlotIndex);
@@ -318,6 +326,15 @@ protected:
 	/** 用整批输入预演当前库存能否完整接收；成功时不会创建实例，也不会改变正式库存。 */
 	bool SimulateAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch,
 		TArray<FSimulatedInventorySlot>& SimulatedSlots) const;
+
+	/** 稳定物品发货预检的共用裁决；调用方可以来自目录 ID 或已解析定义，但最终都按同一份库存载荷签名回答。 */
+	ECatDomainCommandError ValidateInventoryDefinitionGrantFromAuthorityInternal(
+		FGuid RequestId, FName DefinitionId, UCatInventoryItemDefinition* ItemDefinition, int32 Count) const;
+
+	/** 稳定物品发货提交的共用事务；它是正式库存写入的唯一实现，外层系统只负责把自己的业务意图解析成库存定义。 */
+	FCatDomainCommandResult GrantInventoryDefinitionFromAuthorityInternal(
+		FGuid RequestId, int64 ExpectedRevision, FName DefinitionId,
+		UCatInventoryItemDefinition* ItemDefinition, int32 Count);
 
 	/** 读取某个定义的有效堆叠上限；集中处理非法配置，确保预演和正式入库口径一致。 */
 	int32 GetMaxStackCountForDefinition(const UCatInventoryItemDefinition& ItemDefinition) const;
