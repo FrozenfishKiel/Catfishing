@@ -416,15 +416,53 @@ FCatDomainCommandResult ACatCampInventoryActor::AddItemsFromAuthority(const FGui
 }
 
 // 取用预检流程：
-// 1. 先验证公共仓库槽位、数量、authority 和目标玩家随身库存组件，确保取用有明确来源和接收方。
-// 2. 再复制源格形成本次要取出的完整实例；消耗品取指定数量，装备型只允许一次取一件。
-// 3. 目标玩家能原样接收该实例时才返回 None；本函数不修改公共仓库，也不调用玩家入库提交。
+// 1. 先验证 authority、请求身份、目标 Equipment 宿主和数量，让公共仓库取用必须有明确玩家接收方。
+// 2. 营地和玩家正式库存组件都存在时，源格、定义、实例和容量全部从 InventoryComponent 读取并预演；本函数不写任何格子。
+// 3. 营地或玩家任一侧缺正式库存组件时才回退 Snapshot/Equipment 投影；正式组件齐全时不让旧读模型反过来裁决库存。
 ECatDomainCommandError ACatCampInventoryActor::ValidateWithdrawToEquipment(const FGuid RequestId,
 	const int32 SourceSlotIndex, const int32 Quantity, UCatEquipmentComponent* TargetEquipment) const
 {
 	const AActor* TargetOwner = TargetEquipment ? TargetEquipment->GetOwner() : nullptr;
 	if (!HasAuthority() || !RequestId.IsValid() || !TargetEquipment || Quantity <= 0
-		|| !TargetOwner || !TargetOwner->HasAuthority() || !Snapshot.InventorySlots.IsValidIndex(SourceSlotIndex))
+		|| !TargetOwner || !TargetOwner->HasAuthority() || SourceSlotIndex < 0)
+	{
+		return ECatDomainCommandError::InvalidPayload;
+	}
+	const UCatInventoryComponent* TargetInventory = ResolveFormalInventoryFromEquipment(TargetEquipment);
+	if (InventoryComponent && TargetInventory)
+	{
+		const FCatInventoryEntry* SourceEntry = InventoryComponent->GetInventoryEntryAtSlot(SourceSlotIndex);
+		UCatInventoryItemDefinition* InventoryDefinition =
+			SourceEntry && SourceEntry->Instance ? SourceEntry->Instance->GetItemDefinition() : nullptr;
+		UCatEquipmentDefinition* Definition = Cast<UCatEquipmentDefinition>(InventoryDefinition);
+		if (SourceEntry == nullptr || SourceEntry->Instance == nullptr || SourceEntry->StackCount <= 0
+			|| !Definition || InventoryDefinition->GetInventoryDefinitionId().IsNone()
+			|| SourceEntry->StackCount < Quantity)
+		{
+			return ECatDomainCommandError::InvalidPayload;
+		}
+		if (!Definition->bRunConsumable && Quantity != 1)
+		{
+			return ECatDomainCommandError::InvalidPayload;
+		}
+		FCatInventoryReceiveBatch ReceiveBatch;
+		if (Quantity == SourceEntry->StackCount)
+		{
+			FCatInventoryInstanceEntry& InstanceEntry = ReceiveBatch.InstanceEntries.AddDefaulted_GetRef();
+			InstanceEntry.ItemInstance = SourceEntry->Instance;
+			InstanceEntry.Count = Quantity;
+		}
+		else
+		{
+			FCatInventoryDefinitionEntry& DefinitionEntry = ReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
+			DefinitionEntry.ItemDefinition = Definition;
+			DefinitionEntry.ItemInstanceClass = SourceEntry->Instance->GetClass();
+			DefinitionEntry.Count = Quantity;
+		}
+		return TargetInventory->CanFullyAcceptInventoryBatch(ReceiveBatch)
+			? ECatDomainCommandError::None : ECatDomainCommandError::CapacityExceeded;
+	}
+	if (!Snapshot.InventorySlots.IsValidIndex(SourceSlotIndex))
 	{
 		return ECatDomainCommandError::InvalidPayload;
 	}
@@ -448,8 +486,8 @@ ECatDomainCommandError ACatCampInventoryActor::ValidateWithdrawToEquipment(const
 }
 
 // 取用提交流程：
-// 1. 先用 RequestId 和源槽/数量/双方版本签名处理幂等，重放不会重复扣公共仓库或重复发玩家随身库存。
-// 2. 正式库存可用时优先验证营地公开版本、玩家正式库存版本、容量和源格数量，旧 Equipment 只提供兼容 Owner 与投影。
+// 1. 先用 RequestId、源槽、源物定义/实例、数量和双方版本签名处理幂等；源物身份优先从正式 InventoryComponent 读取，缺组件时才用旧 Snapshot。
+// 2. 正式库存可用时优先验证营地公开版本、玩家正式库存版本、容量和源格数量；迁移期仍接受 Equipment 投影版本作为旧 UI/测试兼容前提。
 // 3. 满栈取用保留原实例身份，拆栈取用按定义生成接收批次；玩家接收、营地扣减或旧投影刷新任一失败都会恢复双方正式 entries 和旧快照。
 // 4. 没有正式随身库存组件时才走旧 Equipment 授予路径；成功后只推进公共仓库 Revision，玩家侧版本由自己的发布入口维护。
 FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority(const FGuid RequestId,
@@ -460,7 +498,18 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 	Result.RequestId = RequestId;
 	FName SourceDefinitionId = NAME_None;
 	FGuid SourceItemInstanceId;
-	if (Snapshot.InventorySlots.IsValidIndex(SourceSlotIndex))
+	if (InventoryComponent)
+	{
+		const FCatInventoryEntry* SourceEntry = InventoryComponent->GetInventoryEntryAtSlot(SourceSlotIndex);
+		const UCatInventoryItemInstance* SourceInstance =
+			SourceEntry && SourceEntry->Instance ? SourceEntry->Instance.Get() : nullptr;
+		if (SourceInstance)
+		{
+			SourceDefinitionId = SourceInstance->GetItemDefinitionId();
+			SourceItemInstanceId = SourceInstance->GetItemInstanceId();
+		}
+	}
+	else if (Snapshot.InventorySlots.IsValidIndex(SourceSlotIndex))
 	{
 		SourceDefinitionId = Snapshot.InventorySlots[SourceSlotIndex].DefinitionId;
 		SourceItemInstanceId = Snapshot.InventorySlots[SourceSlotIndex].ItemInstanceId;

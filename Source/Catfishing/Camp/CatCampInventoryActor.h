@@ -108,7 +108,7 @@ public:
 	FCatDomainCommandResult AddItemsFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		const FString& StableNetId, const TArray<FCatCampInventoryAddItemRequest>& Items);
 
-	/** 查询玩家是否能从指定公共格子取物到自己的随身库存；旧兼容预检只读投影，不修改两边库存。 */
+	/** 查询玩家是否能从指定公共格子取物到自己的随身库存；正式组件存在时只预演正式库存，旧投影仅作缺组件 fallback。 */
 	ECatDomainCommandError ValidateWithdrawToEquipment(FGuid RequestId, int32 SourceSlotIndex, int32 Quantity,
 		UCatEquipmentComponent* TargetEquipment) const;
 
