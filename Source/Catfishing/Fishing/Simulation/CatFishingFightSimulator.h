@@ -20,6 +20,20 @@ enum class ECatFightCatAction : uint8
 	Slack
 };
 
+/**
+ * 固定步被拒绝时的可检索原因。模拟器保持纯函数，不在这里写日志；Runner 将该值映射到
+ * Development 日志，避免只看到一个 bSucceeded=false 却无法判断是配置、状态还是几何输入坏了。
+ */
+enum class ECatFightSimulationRejectReason : uint8
+{
+	None,
+	InvalidConfig,
+	InvalidState,
+	InvalidRodConstraint,
+	InvalidFishDirection,
+	InvalidResolvedResult
+};
+
 /** 固定步的冻结参数。力使用 N、质量使用 kg；世界距离和速度保持 UE 的 cm 单位。 */
 struct CATFISHING_API FCatFightSimulationConfig
 {
@@ -123,9 +137,81 @@ struct CATFISHING_API FCatFightSimulationState
 	double StrongConfrontationBuildUpSeconds = 0.0;
 };
 
+/**
+ * 供诊断与回归测试消费的单步中间量。
+ *
+ * 单位约定：世界距离 cm，速度 cm/s，加速度 cm/s²，质量 kg，力 N，时间 s。
+ * 这些字段是求解过程的只读快照，不参与下一步状态，也不构成第二份玩法状态。
+ * 公式主链为：
+ *   Alignment = dot(FishDirection, HorizontalOutward)
+ *   LineLoad = max(Alignment, 0)^AngleStrengthExponent
+ *   Force = Strength * ForcePerStrengthNewtons
+ *   a = 100 * Force / Mass                         // m/s² 转 UE cm/s²
+ *   T = RequiredTension(ResolvedLineLength) * FishCorrection / FullCorrection
+ *   aCarrier = 100 * (T * HorizontalLineFactor - CatForce) / CombinedCatMass
+ */
+struct CATFISHING_API FCatFightSimulationTrace
+{
+	ECatFightSimulationRejectReason RejectReason = ECatFightSimulationRejectReason::None;
+	double FixedStepSeconds = 0.0;
+	double DistanceBeforeCentimeters = 0.0;
+	double HorizontalDistanceCentimeters = 0.0;
+	double VerticalDistanceCentimeters = 0.0;
+	double FishAlignment = 0.0;
+	double NormalizedLineLoad = 0.0;
+	double RodLineAlignment = 1.0;
+	double RodLeverageMultiplier = 1.0;
+	double CombinedCatStrength = 0.0;
+	double EffectiveCatStrength = 0.0;
+	double ActiveFishStrength = 0.0;
+	double CatForceNewtons = 0.0;
+	double FishThrustNewtons = 0.0;
+	double CombinedCatMassKilograms = 0.0;
+	double CatDriveAccelerationCentimetersPerSecondSquared = 0.0;
+	double FishDriveAccelerationCentimetersPerSecondSquared = 0.0;
+	double FishSpeedCapCentimetersPerSecond = 0.0;
+	double SwimSpeedCentimetersPerSecond = 0.0;
+	double MobilityCentimetersPerNewton = 0.0;
+	double FullConstraintCorrectionCentimeters = 0.0;
+	double RequiredTensionAtCurrentLengthNewtons = 0.0;
+	double RequiredTensionAtPaidOutLengthNewtons = 0.0;
+	double ReelForceLimitNewtons = 0.0;
+	double FishCorrectionCentimeters = 0.0;
+	double LineTensionNewtons = 0.0;
+	double FishLineForceNewtons = 0.0;
+	double CatLineForceNewtons = 0.0;
+	double SignedCarrierAccelerationCentimetersPerSecondSquared = 0.0;
+	double HorizontalLineFactor = 1.0;
+	double CatStaminaAfterStep = 0.0;
+	double FishStaminaAfterStep = 0.0;
+	double FishStaminaDrainBeforeClamp = 0.0;
+	double CatMovementPositiveWorkUnits = 0.0;
+	double CatReelPositiveWorkUnits = 0.0;
+	double CatRodPositiveWorkUnits = 0.0;
+	double CatHoldNormalizedLoad = 0.0;
+	double CatRodNormalizedLoad = 0.0;
+	double FishRealizedEffortDistanceCentimeters = 0.0;
+	double FishBlockedEffortDistanceCentimeters = 0.0;
+	double FishEffectiveEffortDistanceCentimeters = 0.0;
+	double FishPhaseMultiplier = 0.0;
+	double CatRodSupportBeforeSharedStaminaDrain = 0.0;
+	double WearLoad = 0.0;
+	double RodWearDelta = 0.0;
+	bool bInputAccepted = false;
+	bool bFreeSpool = false;
+	bool bLineRestraining = false;
+	bool bReeling = false;
+	bool bStruggling = false;
+	bool bFinalizeInputAccepted = false;
+};
+
 struct CATFISHING_API FCatFightStepResult
 {
 	bool bSucceeded = false;
+	/** 失败时保留 fail-closed 原因；成功时为 None。 */
+	ECatFightSimulationRejectReason RejectReason = ECatFightSimulationRejectReason::None;
+	/** 纯模拟器的可回放中间量；Runner 只读并写入限频诊断日志。 */
+	FCatFightSimulationTrace Trace;
 	bool bExhaustedCatEscape = false;
 	/** 正常主位右键回体：屏蔽双方耗体；强制力竭拖拽仍优先。 */
 	bool bSlackRecoveryActive = false;

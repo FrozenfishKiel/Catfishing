@@ -103,6 +103,10 @@ Rod 只转交输入；`Character/CatCharacterMovementComponent::CalcVelocity` �
 
 `NormalizedLineLoad = pow(max(dot(鱼努力方向, 水平向外方向), 0), AngleStrengthExponent)` 继续供鱼表现和既有方向性磨损规则使用，不能冒充真实张力。`LineTensionNewtons` 是力；`NormalizedTension = clamp(T / DisplayTensionNewtons, 0, 1)` 仅是表现刻度。`TensionCentimeters/ConstraintErrorCentimeters` 仍表示几何误差。强对抗、僵持标记只观察结果，不锁位置、不裁决断线。
 
+为使每个固定步都能从落盘数据复核，`FCatFightStepResult::Trace` 保存本次纯求解的中间量，但不作为下一步输入，也不写 ASC、装备或 Actor。Trace 的字段顺序对应实现顺序：先记录竿尖到鱼的三维距离 `DistanceBeforeCm`、水平/垂直分量；再记录方向投影 `FishAlignment`、`LineLoad`、竿线夹角和杠杆倍率；然后记录 `Strength → Force → Acceleration` 的换算、隐式阻力后的 `MobilityCmPerNewton`；最后记录线长几何、收线力上限、所需张力、实际张力和最终载体带符号加速度。这样可以区分“没有几何误差”“有误差但鱼端修正预算为零”“张力存在但猫力足以制动”三种容易混淆的结果。
+
+Development 权威日志 `Event=fishing_simulation_trace` 默认按约 1 秒和终局额外输出一次，包含上述中间量、猫移动/收线/转杆做功单位、共享支撑负载、鱼的实际/受阻/等效努力距离、原始/封顶鱼体力费用、猫体力前后值、方向性磨损、`InputAccepted/FinalizeAccepted` 与终局名。它不会在 `FCatFishingFightSimulator` 内直接写日志，保证测试仍是无副作用纯函数；非法输入会在 `fishing_fight_step_rejected` 中写出 `RejectReason`（配置、状态、竿约束、鱼方向或最终结果）。要复盘单步时，以 `SessionId + RodActorId` 关联 `fishing_simulation_trace`、`fishing_constraint_sample`、`fishing_surface_tow` 和资源写回事件。
+
 ### 最终费用和耐久
 
 `FinalizeResolvedStep` 从输入状态和最终落点重算，可重复调用但不会累计费用或写资源。Runner 地形解析后调用一次，随后仍由原 ASC/Equipment 权威入口支付。冻结本步 `FishEffortDirection`，防止岸线反馈修改下步 Steering 时反写本步努力方向。
@@ -153,6 +157,7 @@ Rod 的约束快照同时保存 `ConstraintHolderPlayerState`，复制乱序时�
 
 - `fishing_fight_started`：`StrengthResolution=CommonLineForce`、`ForcePerStrengthN`、`MassMode=IndependentCatBodyMass`。
 - `fishing_constraint_sample`：共同 `LineTensionN`、几何误差、最终转矩、`CarrierAcceleration`、`CarrierBrakingDeceleration`（均 cm/s²）和 `ContinuousCarrierTraction`。
+- `fishing_simulation_trace`：固定步的几何、方向负载、力/质量换算、隐式移动质量、收线二分的力上限、所需/实际张力、鱼/猫费用、磨损和终局；按约 1 秒及终局输出，避免无条件刷屏。
 - `fishing_coupled_work_sample`：请求/实际收线及各项费用；最终结算失败看 `fishing_final_work_rejected`。
 - `fishing_carrier_movement_sample`：RodActorId、角色、速度、实际碰撞位移、NetMode/LocalRole、`AccelerationCmS2/BrakingDecelerationCmS2`；`Active` 表示移动受力上下文，包含减速阶段。保留状态变化/每秒限频，替代旧 `fishing_carrier_smoothing_sample`。
 - `fishing_rod_rotation_resistance_sample`：同一限频事件增加 `LoadedAngularDampingRatio` 和 `AppliedAngularDampingMultiplier`，结合原始/平滑负载、转速、控制器意图、实际姿态和努力 Epoch 排查；没有新增逐帧日志。

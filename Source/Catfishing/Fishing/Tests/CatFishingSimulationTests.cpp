@@ -1103,4 +1103,69 @@ bool FCatFishingHoldAndRecoveryTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingSimulationTraceTest,
+	"Catfishing.Unit.Fishing.Simulation.TraceContainsUnitCheckedForceAndConstraintInputs",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingSimulationTraceTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const FCatFightSimulationConfig Config = MakeConfig();
+	const FCatFightSimulationState State = MakeState(ECatFightCatAction::Pull);
+	const FCatFightStepResult Step = FCatFishingFightSimulator::Step(
+		Config, State, MakeHeldConstraint(), FVector::ForwardVector);
+	TestTrue(TEXT("trace sample solves"), Step.bSucceeded);
+	TestEqual(TEXT("successful trace has no rejection reason"),
+		Step.RejectReason, ECatFightSimulationRejectReason::None);
+	TestTrue(TEXT("trace records accepted input and finalization"),
+		Step.Trace.bInputAccepted && Step.Trace.bFinalizeInputAccepted);
+	TestEqual(TEXT("trace records the configured fixed step"),
+		Step.Trace.FixedStepSeconds, Config.FixedStepSeconds, 1e-9);
+	TestEqual(TEXT("trace force conversion matches strength times newtons per strength"),
+		Step.Trace.CatForceNewtons,
+		Step.Trace.EffectiveCatStrength * Config.ForcePerStrengthNewtons, 1e-9);
+	TestEqual(TEXT("trace fish force conversion matches active strength"),
+		Step.Trace.FishThrustNewtons,
+		Step.Trace.ActiveFishStrength * Config.ForcePerStrengthNewtons, 1e-9);
+	TestEqual(TEXT("trace exposes the shared cat mass"),
+		Step.Trace.CombinedCatMassKilograms, Config.GetCombinedCatMass(), 1e-9);
+	TestTrue(TEXT("trace records finite geometry and tension intermediates"),
+		FMath::IsFinite(Step.Trace.DistanceBeforeCentimeters)
+		&& FMath::IsFinite(Step.Trace.FullConstraintCorrectionCentimeters)
+		&& FMath::IsFinite(Step.Trace.RequiredTensionAtCurrentLengthNewtons)
+		&& FMath::IsFinite(Step.Trace.LineTensionNewtons));
+	TestEqual(TEXT("trace line load uses the result line load"),
+		Step.Trace.NormalizedLineLoad, Step.NormalizedLineLoad, 1e-9);
+	TestEqual(TEXT("trace wear load uses the directional line load"),
+		Step.Trace.WearLoad, Step.NormalizedLineLoad, 1e-9);
+	TestEqual(TEXT("trace stamina after-step is derived from the input state"),
+		Step.Trace.FishStaminaAfterStep, FMath::Max(0.0, State.FishStamina - Step.FishStaminaDrain), 1e-9);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingSimulationRejectReasonTest,
+	"Catfishing.Unit.Fishing.Simulation.InvalidStepExposesFailClosedReason",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingSimulationRejectReasonTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FCatFightSimulationConfig InvalidConfig = MakeConfig();
+	InvalidConfig.FixedStepSeconds = 0.0;
+	const FCatFightStepResult ConfigRejected = FCatFishingFightSimulator::Step(
+		InvalidConfig, MakeState(ECatFightCatAction::None), MakeHeldConstraint(), FVector::ForwardVector);
+	TestFalse(TEXT("invalid config is rejected"), ConfigRejected.bSucceeded);
+	TestEqual(TEXT("invalid config exposes its reason"), ConfigRejected.RejectReason,
+		ECatFightSimulationRejectReason::InvalidConfig);
+
+	const FCatFightStepResult DirectionRejected = FCatFishingFightSimulator::Step(
+		MakeConfig(), MakeState(ECatFightCatAction::None), MakeHeldConstraint(), FVector::UpVector);
+	TestFalse(TEXT("vertical-only live fish direction is rejected"), DirectionRejected.bSucceeded);
+	TestEqual(TEXT("invalid fish direction exposes its reason"), DirectionRejected.RejectReason,
+		ECatFightSimulationRejectReason::InvalidFishDirection);
+	TestTrue(TEXT("rejected trace also carries the same reason"),
+		DirectionRejected.Trace.RejectReason == DirectionRejected.RejectReason);
+	return !HasAnyErrors();
+}
+
 #endif

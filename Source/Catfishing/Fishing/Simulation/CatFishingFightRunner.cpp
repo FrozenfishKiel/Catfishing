@@ -21,6 +21,22 @@
 #include "Logging/CatLog.h"
 #include "TimerManager.h"
 
+namespace
+{
+	const TCHAR* SimulationRejectReasonName(const ECatFightSimulationRejectReason Reason)
+	{
+		switch (Reason)
+		{
+		case ECatFightSimulationRejectReason::InvalidConfig: return TEXT("InvalidConfig");
+		case ECatFightSimulationRejectReason::InvalidState: return TEXT("InvalidState");
+		case ECatFightSimulationRejectReason::InvalidRodConstraint: return TEXT("InvalidRodConstraint");
+		case ECatFightSimulationRejectReason::InvalidFishDirection: return TEXT("InvalidFishDirection");
+		case ECatFightSimulationRejectReason::InvalidResolvedResult: return TEXT("InvalidResolvedResult");
+		default: return TEXT("None");
+		}
+	}
+}
+
 bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunnerInit& Init)
 {
 	ACatFishingSession* SessionActor = Init.Session.Get();
@@ -920,10 +936,14 @@ void UCatFishingFightRunner::HandleFixedStep()
 	if (!Step.bSucceeded)
 	{
 		UE_LOG(LogCatFishing, Error,
-			TEXT("Event=fishing_fight_step_rejected SessionId=%s Stage=%s FishExhausted=%s "
-				"Fish=%s RodTip=%s DesiredFishDirection=%s LineLength=%.3f NetMode=%d Authority=true"),
+			TEXT("Event=fishing_fight_step_rejected SessionId=%s Stage=%s RejectReason=%s RejectReasonCode=%d InputAccepted=%s FinalizeAccepted=%s "
+				"FishExhausted=%s Fish=%s RodTip=%s DesiredFishDirection=%s LineLength=%.3f NetMode=%d Authority=true"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			TEXT("FightSimulation"),
+			SimulationRejectReasonName(Step.RejectReason),
+			static_cast<int32>(Step.RejectReason),
+			Step.Trace.bInputAccepted ? TEXT("true") : TEXT("false"),
+			Step.Trace.bFinalizeInputAccepted ? TEXT("true") : TEXT("false"),
 			State.bFishExhausted ? TEXT("true") : TEXT("false"),
 			*State.FishWorldPosition.ToCompactString(), *RodTip.ToCompactString(),
 			*DesiredFishDirection.ToCompactString(), State.LineLengthCentimeters,
@@ -1004,6 +1024,9 @@ void UCatFishingFightRunner::HandleFixedStep()
 	const double WorldSeconds = World->GetTimeSeconds();
 	const TCHAR* CatActionName = State.CatAction == ECatFightCatAction::Pull ? TEXT("Pull")
 		: State.CatAction == ECatFightCatAction::Slack ? TEXT("Slack") : TEXT("None");
+	const TCHAR* SimulationOutcomeName = Step.Outcome == ECatFightStepOutcome::FishExhausted ? TEXT("FishExhausted")
+		: Step.Outcome == ECatFightStepOutcome::RodBroken ? TEXT("RodBroken")
+			: Step.Outcome == ECatFightStepOutcome::Escaped ? TEXT("Escaped") : TEXT("None");
 	const double FishRealizedEffortDistance = FMath::Min(
 		Step.FishActualLineDistanceCentimeters, Step.FishIntendedLineDistanceCentimeters);
 	const double FishBlockedEffortDistance = FMath::Max(0.0,
@@ -1029,6 +1052,64 @@ void UCatFishingFightRunner::HandleFixedStep()
 		&& Step.Outcome == ECatFightStepOutcome::FishExhausted;
 	const bool bFishStaminaSpike = !State.bFishExhausted && !bFishStaminaTerminalStep
 		&& Step.FishStaminaDrain >= FMath::Max(5.0, InitialFishStamina * 0.1);
+	const bool bLogSimulationTrace = WorldSeconds >= NextPowerDiagnosticWorldSeconds
+		|| Step.Outcome != ECatFightStepOutcome::None;
+	if (bLogSimulationTrace)
+	{
+		const FCatFightSimulationTrace& Trace = Step.Trace;
+		UE_LOG(LogCatFishing, Display,
+			TEXT("Event=fishing_simulation_trace SessionId=%s RodActorId=%s FixedStepSeconds=%.5f "
+				"DistanceBeforeCm=%.3f HorizontalDistanceCm=%.3f VerticalDistanceCm=%.3f "
+				"FishAlignment=%.5f LineLoad=%.5f RodLineAlignment=%.5f RodLeverage=%.5f "
+				"CombinedCatStrength=%.3f EffectiveCatStrength=%.3f ActiveFishStrength=%.3f "
+				"CatForceN=%.3f FishThrustN=%.3f CombinedCatMassKg=%.3f "
+				"CatDriveAccelerationCmPerSec2=%.3f FishDriveAccelerationCmPerSec2=%.3f "
+				"FishSpeedCapCmPerSec=%.3f SwimSpeedCmPerSec=%.3f MobilityCmPerNewton=%.6f "
+				"FullCorrectionCm=%.3f RequiredTensionAtCurrentN=%.3f RequiredTensionAtPaidOutN=%.3f "
+				"ReelForceLimitN=%.3f FishCorrectionCm=%.3f LineTensionN=%.3f "
+				"FishLineForceN=%.3f CatLineForceN=%.3f HorizontalLineFactor=%.5f "
+				"SignedCarrierAccelerationCmPerSec2=%.3f CarrierAccelerationCmPerSec2=%.3f "
+				"CarrierBrakingCmPerSec2=%.3f CarrierTargetSpeedCmPerSec=%.3f ContinuousTraction=%s "
+				"FishStaminaDrainBeforeClamp=%.5f FishStaminaDrain=%.5f FishStaminaAfter=%.5f "
+				"CatStaminaDrain=%.5f CatStaminaAfter=%.5f WearLoad=%.5f RodWearDelta=%.5f "
+				"CatMovementWorkUnits=%.5f CatReelWorkUnits=%.5f CatRodWorkUnits=%.5f "
+				"CatHoldLoad=%.5f CatRodLoad=%.5f CatRodSupportBeforeSharedDrain=%.5f "
+				"FishRealizedEffortCm=%.5f FishBlockedEffortCm=%.5f FishEffectiveEffortCm=%.5f FishPhaseMultiplier=%.5f "
+				"FreeSpool=%s LineRestraining=%s Reeling=%s Struggling=%s Outcome=%s "
+				"InputAccepted=%s FinalizeAccepted=%s NetMode=%d Authority=true"),
+			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
+			Trace.FixedStepSeconds,
+			Trace.DistanceBeforeCentimeters, Trace.HorizontalDistanceCentimeters, Trace.VerticalDistanceCentimeters,
+			Trace.FishAlignment, Trace.NormalizedLineLoad, Trace.RodLineAlignment, Trace.RodLeverageMultiplier,
+			Trace.CombinedCatStrength, Trace.EffectiveCatStrength, Trace.ActiveFishStrength,
+			Trace.CatForceNewtons, Trace.FishThrustNewtons, Trace.CombinedCatMassKilograms,
+			Trace.CatDriveAccelerationCentimetersPerSecondSquared,
+			Trace.FishDriveAccelerationCentimetersPerSecondSquared,
+			Trace.FishSpeedCapCentimetersPerSecond, Trace.SwimSpeedCentimetersPerSecond,
+			Trace.MobilityCentimetersPerNewton,
+			Trace.FullConstraintCorrectionCentimeters, Trace.RequiredTensionAtCurrentLengthNewtons,
+			Trace.RequiredTensionAtPaidOutLengthNewtons, Trace.ReelForceLimitNewtons,
+			Trace.FishCorrectionCentimeters, Trace.LineTensionNewtons,
+			Trace.FishLineForceNewtons, Trace.CatLineForceNewtons, Trace.HorizontalLineFactor,
+			Trace.SignedCarrierAccelerationCentimetersPerSecondSquared,
+			Step.CarrierPullAccelerationCentimetersPerSecondSquared,
+			Step.CarrierBrakingDecelerationCentimetersPerSecondSquared,
+			Step.CarrierTargetPullSpeedCentimetersPerSecond,
+			Step.bUseContinuousCarrierTraction ? TEXT("true") : TEXT("false"),
+			Trace.FishStaminaDrainBeforeClamp, Step.FishStaminaDrain, Trace.FishStaminaAfterStep,
+			Step.CatStaminaDrain, Trace.CatStaminaAfterStep, Trace.WearLoad, Trace.RodWearDelta,
+			Trace.CatMovementPositiveWorkUnits, Trace.CatReelPositiveWorkUnits, Trace.CatRodPositiveWorkUnits,
+			Trace.CatHoldNormalizedLoad, Trace.CatRodNormalizedLoad,
+			Trace.CatRodSupportBeforeSharedStaminaDrain,
+			Trace.FishRealizedEffortDistanceCentimeters, Trace.FishBlockedEffortDistanceCentimeters,
+			Trace.FishEffectiveEffortDistanceCentimeters, Trace.FishPhaseMultiplier,
+			Trace.bFreeSpool ? TEXT("true") : TEXT("false"),
+			Trace.bLineRestraining ? TEXT("true") : TEXT("false"),
+			Trace.bReeling ? TEXT("true") : TEXT("false"), Trace.bStruggling ? TEXT("true") : TEXT("false"),
+			SimulationOutcomeName, Trace.bInputAccepted ? TEXT("true") : TEXT("false"),
+			Trace.bFinalizeInputAccepted ? TEXT("true") : TEXT("false"), static_cast<int32>(World->GetNetMode()));
+	}
 	const auto LogFishStaminaBreakdown = [&](const TCHAR* EventName, const TCHAR* Trigger)
 	{
 		UE_LOG(LogCatFishing, Log,
