@@ -39,7 +39,7 @@ public:
 	/** 在实物鱼被不可逆移除前只读校验食用定义、ASC 与倒地阈值；返回 None 才允许上层提交 Items 事务。 */
 	ECatDomainCommandError ValidateFishConsumption(const UCatFishDefinition* FishDefinition) const;
 
-	/** 在草药库存被不可逆扣除前只读校验施药者距离、ASC、倒地阈值与正式恢复数值；返回 None 才允许上层提交 Equipment 事务。 */
+	/** 在草药库存被不可逆扣除前只读校验施药者距离、ASC、倒地阈值与正式恢复数值；返回 None 才允许上层提交库存事务。 */
 	ECatDomainCommandError ValidateHerbRecovery(AController* HelpingController) const;
 
 	/** 实物鱼消费提交后读取 FishDefinition 食用字段，增加可选 Poison、推进成长经验，并重新裁决倒地。 */

@@ -890,16 +890,16 @@ void ACatfishingPlayerController::ServerRepairRodAtCamp_Implementation(ACatCampH
 	}
 }
 
-// 草药 RPC 路由流程：草药救援是库存 + Condition 事务，不进入 BodyAction；完整扣草药和恢复顺序由 Condition 协调器处理。
+// 草药 RPC 路由流程：草药救援是库存 + Condition 事务，不进入 BodyAction；Controller 不碰 Equipment，完整扣草药和恢复顺序由 Condition 协调器处理。
 void ACatfishingPlayerController::ServerUseHerbOnCharacter_Implementation(ACatCharacter* TargetCharacter,
-	const FGuid RequestId, const int64 ExpectedEquipmentRevision, const FGuid HerbItemInstanceId)
+	const FGuid RequestId, const int64 ExpectedInventoryRevision, const FGuid HerbItemInstanceId)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	if (UCatHerbRecoveryCoordinator* Coordinator = GetWorld()
 		? GetWorld()->GetSubsystem<UCatHerbRecoveryCoordinator>() : nullptr)
 	{
-		Result = Coordinator->UseHerbOnCharacter(this, TargetCharacter, RequestId, ExpectedEquipmentRevision,
+		Result = Coordinator->UseHerbOnCharacter(this, TargetCharacter, RequestId, ExpectedInventoryRevision,
 			HerbItemInstanceId);
 	}
 	else

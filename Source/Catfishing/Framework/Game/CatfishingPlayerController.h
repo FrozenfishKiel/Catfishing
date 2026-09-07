@@ -215,10 +215,10 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerRepairRodAtCamp(ACatCampHubActor* Camp, FGuid RequestId, int64 ExpectedEquipmentRevision);
 
-	/** 消费本人指定草药实例的一份数量后恢复目标 Character；库存提交成功前不会修改身体。 */
+	/** 消费本人指定草药实例的一份数量后恢复目标 Character；正式库存角色传 InventoryRevision，旧宿主由协调器兼容旧 Equipment 版本，库存提交成功前不会修改身体。 */
 	UFUNCTION(Server, Reliable)
 	void ServerUseHerbOnCharacter(ACatCharacter* TargetCharacter, FGuid RequestId,
-		int64 ExpectedEquipmentRevision, FGuid HerbItemInstanceId);
+		int64 ExpectedInventoryRevision, FGuid HerbItemInstanceId);
 
 	/** 从地面鱼护箱子或共享鱼缸直接吃一条鱼；Items 移除成功后才按 FishDefinition 修改 Poison 并推进吃鱼成长。 */
 	UFUNCTION(Server, Reliable)
