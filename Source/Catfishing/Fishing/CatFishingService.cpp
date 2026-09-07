@@ -21,6 +21,8 @@
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
 #include "Social/CatSocialService.h"
 #include "GameFramework/PlayerState.h"
 #include "GameFramework/PlayerController.h"
@@ -102,6 +104,11 @@ void UCatFishingService::Deinitialize()
 	Super::Deinitialize();
 }
 
+// 抛竿请求的服务器流程：
+// 1. 先用玩家稳定身份和 RequestId 形成幂等键，重复请求复用首次终态，正在处理的同键请求直接拒绝。
+// 2. 再按 GameMode、身体状态、鱼竿占用、装备版本和水域依赖逐层校验；任一依赖缺失都会进入统一 Finish 收口。
+// 3. Finish 负责清理进行中标记、缓存终态，并在依赖缺失时输出诊断；鱼饵余量优先读取正式库存组件，旧宿主没有库存组件时才回退旧装备快照。
+// 4. 全部依赖成立后才创建服务器 Session、扣减鱼饵并推进鱼竿/会话事实，客户端只通过复制观察结果。
 FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	const FCatBeginCastCommand& Command)
 {
@@ -131,11 +138,26 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		{
 			const ACatCharacter* Character = FisherController ? Cast<ACatCharacter>(FisherController->GetPawn()) : nullptr;
 			const UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
+			const UCatInventoryComponent* Inventory = Character ? Character->GetInventoryComponent() : nullptr;
 			const FCatEquipmentLoadoutSnapshot Loadout = Equipment ? Equipment->GetSnapshot() : FCatEquipmentLoadoutSnapshot{};
 			int32 BaitQuantity = 0;
-			for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
+			if (Inventory && !Loadout.BaitDefinitionId.IsNone())
 			{
-				if (Slot.DefinitionId == Loadout.BaitDefinitionId) BaitQuantity += Slot.Quantity;
+				for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
+				{
+					const UCatInventoryItemInstance* Instance = Entry.Instance.Get();
+					if (Instance && Instance->GetItemDefinitionId() == Loadout.BaitDefinitionId && Entry.StackCount > 0)
+					{
+						BaitQuantity += Entry.StackCount;
+					}
+				}
+			}
+			else if (!Loadout.BaitDefinitionId.IsNone())
+			{
+				for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
+				{
+					if (Slot.DefinitionId == Loadout.BaitDefinitionId) BaitQuantity += Slot.Quantity;
+				}
 			}
 			UE_LOG(LogCatFishing, Warning,
 				TEXT("Event=begin_cast_dependency_rejected Request=%s Stage=%s EquipmentError=%s World=%s RodActorId=%s RodDefinition=%s RodItemInstanceId=%s BaitDefinition=%s BaitItemInstanceId=%s BaitQuantity=%d FloatDefinition=%s FloatItemInstanceId=%s EquipmentRevision=%lld %s"),
