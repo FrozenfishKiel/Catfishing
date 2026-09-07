@@ -83,10 +83,6 @@ public:
 	/** 部署型物品收口时共用的停止使用入口；它按实例调用定义侧 UnUse 裁决，成功才把活动记录里的同一物品放回随身库存。 */
 	FCatInventoryItemUseResult UnUse(FGuid RequestId, FGuid ItemInstanceId);
 
-	/** 兼容旧调用的随身库存整理入口；正式 Character 会转交 InventoryComponent，缺少正式库存的旧宿主才回退旧快照并返回对应领域结果。 */
-	FCatDomainCommandResult MoveInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedRevision,
-		int32 SourceSlotIndex, int32 TargetSlotIndex);
-
 	/** 正式库存提交后刷新旧随身库存投影；钓鱼选择、存档和旧消费者靠它追上 InventoryComponent 的格位事实，返回 false 表示投影未能完整重建。 */
 	bool RefreshInventoryProjectionFromInventoryComponentFromAuthority();
 
@@ -183,7 +179,7 @@ private:
 	/** 读取随身库存配置容量；0 表示本局没有可用格子，写入路径必须拒绝新物品。 */
 	int32 GetConfiguredInventorySlotCapacity() const;
 
-	/** 解析 Owner 身上的正式随身库存组件；存在时物品发放和整理以它为库存事实源，Equipment 只从它刷新旧投影和钓鱼选择。 */
+	/** 解析 Owner 身上的正式随身库存组件；存在时物品发放、消耗和存档导入以它为库存事实源，Equipment 只从它刷新旧投影和钓鱼选择。 */
 	UCatInventoryComponent* ResolveOwnerInventoryComponent() const;
 
 	/** 读取一个定义在单格里的最大堆叠数；装备型物品固定为 1，数量型物品使用项目配置。 */
@@ -265,7 +261,7 @@ private:
 	UPROPERTY(ReplicatedUsing = OnRep_Snapshot)
 	FCatEquipmentLoadoutSnapshot Snapshot;
 
-	/** 普通随身库存命令首次终态缓存。 */
+	/** 装备选择、物品发放和迁移期物品命令的首次终态缓存；背包整理已由 InventoryComponent 自己维护幂等结果。 */
 	TMap<FString, FCatDomainCommandResult> TerminalCache;
 
 	/** 库存命令载荷签名；普通入库和 Use/UnUse 共用它防止同一 RequestId 被换定义、数量或实例后再次利用。 */

@@ -31,6 +31,7 @@
 #include "Interaction/CatInteractable.h"
 #include "Interaction/CatInteractionTags.h"
 #include "Interaction/CatInteractionTargetingComponent.h"
+#include "Inventory/CatInventoryCommandCoordinator.h"
 #include "Net/UnrealNetwork.h"
 #include "Profile/CatProfileSubsystem.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
@@ -809,15 +810,15 @@ void ACatfishingPlayerController::ServerConfigureEquipment_Implementation(const 
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 随身库存整理 RPC 路由流程：Controller 只提交源/目标槽位，正式库存移动由协调器转给 InventoryComponent 裁决。
+// 随身库存整理 RPC 路由流程：Controller 只提交源/目标槽位，正式库存移动由 Inventory 协调器转给 InventoryComponent 裁决。
 void ACatfishingPlayerController::ServerMoveInventorySlot_Implementation(const FGuid RequestId,
 	const int64 ExpectedRevision, const int32 SourceSlotIndex, const int32 TargetSlotIndex)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	if (UCatEquipmentCommandCoordinator* Coordinator = GetWorld()
-		? GetWorld()->GetSubsystem<UCatEquipmentCommandCoordinator>() : nullptr)
+	if (UCatInventoryCommandCoordinator* Coordinator = GetWorld()
+		? GetWorld()->GetSubsystem<UCatInventoryCommandCoordinator>() : nullptr)
 	{
 		Result = Coordinator->MoveInventorySlot(this, ControlledCharacter, RequestId, ExpectedRevision,
 			SourceSlotIndex, TargetSlotIndex);
