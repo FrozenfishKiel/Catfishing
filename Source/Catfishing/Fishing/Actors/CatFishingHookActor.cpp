@@ -346,6 +346,17 @@ void ACatFishingHookActor::QueueOrDispatchPresentationChanged(const FCatFishingH
 void ACatFishingHookActor::DispatchPresentationChanged(const FCatFishingHookPresentationState& Previous,
 	const FCatFishingHookPresentationState& Current)
 {
+	if (Previous.BobberMode != Current.BobberMode
+		|| Previous.BobberModeStartedServerTime != Current.BobberModeStartedServerTime)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_bobber_mode_observed SessionId=%s CastAttemptId=%s World=%s WorldNetMode=%d Authority=%d LocalRole=%d Actor=%s PreviousMode=%s Mode=%s ModeStartedServerTime=%.6f ObservedWorldTime=%.6f Owner=%s"),
+			*Current.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *Current.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(GetWorld()),
+			GetNetMode(), HasAuthority(), static_cast<int32>(GetLocalRole()), *GetName(),
+			*UEnum::GetValueAsString(Previous.BobberMode), *UEnum::GetValueAsString(Current.BobberMode),
+			Current.BobberModeStartedServerTime, GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0,
+			*GetNameSafe(GetOwner()));
+	}
 	RefreshCastFlight();
 	// 初始复制包到达后 Owner 与 PresentationState 都已具备，此处再接一次可覆盖 BeginPlay 时 Owner 尚未解析的情况。
 	RefreshFishingLineAttachment();

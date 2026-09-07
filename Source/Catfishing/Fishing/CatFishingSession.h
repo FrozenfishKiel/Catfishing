@@ -129,6 +129,7 @@ protected:
 
 private:
 	friend class FCatRodSessionDurabilityTest;
+	friend class FCatFishingBiteTimingWorldTest;
 	friend class FCatFishingSessionReplicationContractTest;
 	friend class FCatFishingSessionSnapshotVersionMutationRulesTest;
 	friend class FCatFishingSessionTerminationOutcomeTest;

@@ -561,7 +561,7 @@ UE 自带可视化调试器：菜单 **Tools → Debug → StateTree Debugger**�
 |---|---|
 | 树完全不启动，没有任何 `fishing_phase_entered` | ini 里 `FishingSessionStateTree` 没填，或路径写错 |
 | 只有 `Phase=Waiting` 就再也不动了 | `ProbeTriggered` 转移没配，或 Event Tag 拼错 |
-| `Phase=Waiting` 都没有 | Context Actor Class 设错，或 `Schedule Waiting Probe` 返回了 Failed（检查 ini 里 `BaseBiteRatePerSecond` 等三个咬钩参数是否都 > 0） |
+| `Phase=Waiting` 都没有 | Context Actor Class 设错，或 `Schedule Waiting Probe` 返回了 Failed；检查 `fishing_bite_schedule_rejected`，以及 ini 的三个 MeanBiteDelaySeconds 锚点、Single/FullChumContribution、慢浮/预警/总上限是否通过 `TryGetBiteTimingParameters`；默认20/14/6秒均值、1.7/8.5贡献、3秒慢浮、1.5秒预警、40秒上限 |
 | 提竿后 EmptyHook / No eligible fish | 鱼表没匹配上 —— 检查关卡 RegionId 与正式鱼的 `RegionIds`、时间天气、协作人数和 `MaximumChallengeRatio` |
 | 阶段跳得飞快，几帧就跑完 | **`Tasks Completion` 忘了改成 `All`** |
 | 提竿后没进 HookedFight | 提竿时机不在 TrueBiteWindow 窗口内（默认 3 秒） |

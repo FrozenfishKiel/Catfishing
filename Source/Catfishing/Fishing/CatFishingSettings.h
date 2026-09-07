@@ -8,6 +8,7 @@ class UStateTree;
 class UCatBitePersonalityDefinition;
 class UCatFishingFightBalanceDefinition;
 class UCatFightPersonalityDefinition;
+struct FCatFishingBiteTimingParameters;
 
 /** Fishing 长流程与未裁数值的 fail-closed 配置；默认不启动会话且不制造响应窗口或公式。 */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "Catfishing Fishing"))
@@ -25,6 +26,8 @@ public:
 	bool TryGetScoopCooldown(double& OutCooldownSeconds) const;
 	/** 读取真咬前有限正预警时长；调度器保证预警完整播放后才允许进入真咬。 */
 	bool TryGetBiteWarning(double& OutWarningSeconds) const;
+	/** 读取中性鱼饵的窝料/平均等待锚点；均值包含慢浮和预警，非法或不可达配置拒绝。 */
+	bool TryGetBiteTimingParameters(FCatFishingBiteTimingParameters& OutParameters) const;
 	/** 读取有界操作位数量与左右间距；槽位 0 从右侧开始，后续左右交替向外扩展。 */
 	bool TryGetRodOperatorLayout(int32& OutMaximumSlots, double& OutSlotSpacingCentimeters) const;
 
@@ -57,14 +60,26 @@ public:
 	/** 真咬响应窗口秒数；0 表示 Unset，资产 Task 不应启动计时。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))
 	double TrueBiteWindowSeconds = 0.0;
-	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0")) double BaseBiteRatePerSecond = 0.0;
+	/** 无窝时落水到真咬的目标平均秒数；替代旧的每秒频率调参，计入等待上限。 */
+	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
+	double NoChumMeanBiteDelaySeconds = 0.0;
+	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
+	double SingleChumMeanBiteDelaySeconds = 0.0;
+	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
+	double FullChumMeanBiteDelaySeconds = 0.0;
+	/** 单份锚点的有效三轴总贡献；当前正式单份新窝中心为 1+0.5+0.2=1.7，无距离/时间衰减。 */
+	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0"))
+	double SingleChumContribution = 0.0;
+	/** 满窝锚点的有效三轴总贡献，达到后提速饱和；并非投放数量或库存硬上限。 */
+	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0"))
+	double FullChumContribution = 0.0;
 	/** 抛竿落水后、开始快速抖动前，浮漂至少保持慢浮的秒数。 */
 	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0", Units="s"))
 	double MinimumBiteDelaySeconds = 0.0;
 	/** 从落水到真咬下沉的总时间上限，必须容纳慢浮下限与完整预警。 */
 	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0", Units="s"))
 	double MaximumBiteDelaySeconds = 0.0;
-	/** 真咬前浮漂快速点动的服务器权威预警时长；当前产品口径为 3 秒。 */
+	/** 真咬前浮漂快速点动的服务器权威预警时长；当前产品口径为 1.5 秒。 */
 	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0", Units="s"))
 	double BiteWarningSeconds = 1.5;
 

@@ -219,7 +219,7 @@ Controller.Server Configure Equipment(
 3. 按放竿键，确认 `PlaceRod` 结果 `bCommitted=true`，世界里出现 Rod Actor
 4. 走近竿，按互动键（`RodInteract`），确认角色被吸附到 `StandAnchor`
 5. 瞄水面按抛竿确认键，确认 `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去后 `Phase` 最终变成 `Landed`（Hook 的 `BP_OnHookPresentationChanged` 应该收到一次带 `Landed` 的回调）
-6. 确认浮漂先慢浮至少 `MinimumBiteDelaySeconds`（当前 5 秒），再快速抖动 `BiteWarningSeconds`（当前 3 秒），然后下沉并进入 `Phase=TrueBiteWindow`
+6. 确认默认鱼饵下浮漂先慢浮至少 `MinimumBiteDelaySeconds`（当前 3 秒），再快速抖动 `BiteWarningSeconds`（当前 1.5 秒），然后下沉并进入 `Phase=TrueBiteWindow`；无窝/单份新窝中心/五份重叠新窝中心的平均总等待为20/14/6秒。
 7. 窗口内按住 Primary，确认提竿成功进 `HookedFight`
 8. 鱼仍有体力时先收到抄网射线范围内按 `F`，确认鱼直接挂到猫嘴上；也可继续把鱼力竭后回收，确认岸上生成可交互的死鱼 Actor
 9. F 抄中的鱼应已处于嘴叼状态；力竭落地鱼则先按 `E` 叼起。两条路线都确认随身背包没有新增鱼，再对目标地面鱼护按 `E`，确认只写入该鱼护

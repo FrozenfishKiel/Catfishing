@@ -278,6 +278,7 @@ bool FCatFishingSettingsRuntimeReadinessTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("非正真咬预警配置被拒绝"), Settings->TryGetBiteWarning(BiteWarning));
 	TestEqual(TEXT("预警读取失败时输出清零"), BiteWarning, 0.0);
 	Settings->BiteWarningSeconds = 3.0;
+	Settings->MinimumBiteDelaySeconds = 5.0; // 本例单独验证五秒慢浮，不能依赖项目当前默认值。
 	Settings->MaximumBiteDelaySeconds = 7.0;
 	TestFalse(TEXT("总时间上限不足以容纳慢浮下限和完整预警时拒绝"),
 		Settings->TryGetBiteWarning(BiteWarning));

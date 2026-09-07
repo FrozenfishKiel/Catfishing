@@ -1,4 +1,5 @@
 #include "Fishing/CatFishingSession.h"
+#include "Fishing/Simulation/CatFishingBiteTimingModel.h"
 
 #include "Character/CatCharacter.h"
 #include "Framework/Game/CatGameplayTypes.h"
@@ -782,21 +783,26 @@ bool ACatFishingSession::PrepareSessionFromAuthority(const FCatFishingAttemptSna
 bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 {
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
-	double BiteWarningSeconds = 0.0;
-	if (!HasAuthority() || !bPrepared || IsTerminal() || !Settings
-		|| !FMath::IsFinite(Settings->BaseBiteRatePerSecond) || Settings->BaseBiteRatePerSecond <= 0.0
-		|| !FMath::IsFinite(Settings->MinimumBiteDelaySeconds) || Settings->MinimumBiteDelaySeconds < 0.0
-		|| !FMath::IsFinite(Settings->MaximumBiteDelaySeconds)
-		|| Settings->MaximumBiteDelaySeconds < Settings->MinimumBiteDelaySeconds
-		|| !Settings->TryGetBiteWarning(BiteWarningSeconds))
+	const auto RejectSchedule = [this](const TCHAR* Reason)
 	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_bite_schedule_rejected SessionId=%s CastAttemptId=%s Opportunity=%u Reason=%s World=%s WorldNetMode=%d Authority=%d LocalRole=%d Actor=%s Hook=%s"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *Snapshot.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), BiteOpportunitySequence, Reason,
+			*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), static_cast<int32>(GetLocalRole()),
+			*GetName(), *GetNameSafe(Snapshot.HookActor));
 		return false;
+	};
+	FCatFishingBiteTimingParameters TimingParameters;
+	if (!HasAuthority() || !bPrepared || IsTerminal() || !Settings
+		|| !Snapshot.HookActor || !Settings->TryGetBiteTimingParameters(TimingParameters))
+	{
+		return RejectSchedule(TEXT("SessionOrTimingConfigurationUnavailable"));
 	}
 	// Waiting 可以由“首次抛竿”或“上一轮真咬窗口漏按”进入。漏按不会释放鱼竿/鱼线/饵料预约，
 	// 这里只清理尚未确认的咬钩机会；若已有鱼 Actor，说明错误地试图把已确认搏斗倒回 Waiting，拒绝重入。
 	if (Snapshot.FishEncounterActor || FishDefinition || SelectionResolution == ECatFishSelectionResolution::Selected)
 	{
-		return false;
+		return RejectSchedule(TEXT("FishAlreadySelected"));
 	}
 	GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
 	bTrueBiteWindowAcceptingHook = false;
@@ -830,43 +836,49 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 	if (Snapshot.Phase != ECatFishingPhase::Waiting)
 	{
 		// 只在尚未进入 Waiting 时才写一次阶段；重复调度（如 StateTree 重入）不重复写阶段事件。
-		if (!EnterPhaseFromStateTree(ECatFishingPhase::Waiting).bApplied) return false;
+		if (!EnterPhaseFromStateTree(ECatFishingPhase::Waiting).bApplied)
+			return RejectSchedule(TEXT("WaitingPhaseRejected"));
 	}
-	double BiteRate = Settings->BaseBiteRatePerSecond;
-	double MinimumDelay = Settings->MinimumBiteDelaySeconds;
+	double BaitRateMultiplier = 1.0;
+	double BaitMinimumDelayMultiplier = 1.0;
 	// 鱼饵按其配置的倍率修正基础上钩率与最小延迟。
 	if (const UCatEquipmentDefinition* Bait = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(AttemptSnapshot.BaitDefinitionId))
 	{
-		BiteRate *= Bait->BiteRateMultiplier;
-		MinimumDelay *= Bait->MinimumBiteDelayMultiplier;
+		BaitRateMultiplier = Bait->BiteRateMultiplier;
+		BaitMinimumDelayMultiplier = Bait->MinimumBiteDelayMultiplier;
 	}
 	// 初次调度时钩子还在飞行；窝料必须采样服务器冻结的水面落点。
-	// 浓度越高上钩率提升越多，但用 1-e^-x 做饱和曲线，避免无限堆窝料导致上钩率失控。
+	FCatChumSample ChumSample;
 	if (UCatChumFieldSubsystem* Chum = GetWorld()->GetSubsystem<UCatChumFieldSubsystem>())
 	{
-		const FCatChumSample Sample = Chum->SampleChumAtPoint(AttemptSnapshot.ServerCorrectedLandingWorldPoint,
+		ChumSample = Chum->SampleChumAtPoint(AttemptSnapshot.ServerCorrectedLandingWorldPoint,
 			AttemptSnapshot.WaterRegion, GetWorld()->GetTimeSeconds());
-		const double TotalChum = Sample.EffectiveChumVector.Fishy + Sample.EffectiveChumVector.Fragrant
-			+ Sample.EffectiveChumVector.Fermented;
-		if (Sample.bSucceeded && FMath::IsFinite(TotalChum) && TotalChum > 0.0)
-		{
-			BiteRate *= 1.0 + (1.0 - FMath::Exp(-TotalChum));
-		}
 	}
-	if (!FMath::IsFinite(BiteRate) || BiteRate <= 0.0 || MinimumDelay > Settings->MaximumBiteDelaySeconds) return false;
-	// 用服务器种子生成确定性随机数，再按泊松过程的逆变换采样法算出额外的安静等待时间。
-	// MinimumDelay 是浮漂必须慢浮的下限，MaximumBiteDelaySeconds 仍是从落水到真咬的总时间上限。
+	if (!ChumSample.bSucceeded)
+	{
+		// 保留采样失败时按无窝调度的既有契约，但不再把失败静默伪装成有效零浓度。
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_bite_chum_sample_failed SessionId=%s CastAttemptId=%s Opportunity=%u Error=%s Result=UnchummedFallback World=%s WorldNetMode=%d Authority=%d LocalRole=%d Actor=%s"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *Snapshot.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), BiteOpportunitySequence,
+			*UEnum::GetValueAsString(ChumSample.Error), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(),
+			static_cast<int32>(GetLocalRole()), *GetName());
+	}
+	const double TotalChum = ChumSample.bSucceeded ? ChumSample.EffectiveChumVector.Fishy
+		+ ChumSample.EffectiveChumVector.Fragrant + ChumSample.EffectiveChumVector.Fermented : 0.0;
+	FCatFishingBiteTimingDistribution Distribution;
+	if (!FCatFishingBiteTimingModel::BuildDistribution(TimingParameters, TotalChum,
+		BaitRateMultiplier, BaitMinimumDelayMultiplier, Distribution))
+		return RejectSchedule(TEXT("InvalidContributionOrBaitTiming"));
+	// 每轮仍只消费原随机流的第一个随机数，保留鱼种抽样与机会种子的既有关系。
 	FRandomStream Random(static_cast<int32>(CurrentBiteRandomSeed));
-	const double Unit = FMath::Clamp(static_cast<double>(Random.FRand()), UE_DOUBLE_SMALL_NUMBER, 1.0 - UE_DOUBLE_SMALL_NUMBER);
-	const double SampledAdditionalCalmDelay = -FMath::Loge(1.0 - Unit) / BiteRate;
-	const double MaximumAdditionalCalmDelay = Settings->MaximumBiteDelaySeconds - BiteWarningSeconds - MinimumDelay;
-	if (!FMath::IsFinite(MaximumAdditionalCalmDelay) || MaximumAdditionalCalmDelay < 0.0) return false;
+	double WaitSeconds = 0.0;
+	if (!Distribution.TrySample(static_cast<double>(Random.FRand()), WaitSeconds))
+		return RejectSchedule(TEXT("InvalidWaitSample"));
 	const FCatFishingCastTrajectory& Flight = Snapshot.HookActor->GetPresentationState().CastTrajectory;
 	const double RemainingFlightSeconds = FMath::Max(0.0,
 		Flight.StartedServerTime + Flight.DurationSeconds - GetWorld()->GetTimeSeconds());
-	const double WarningDelay = RemainingFlightSeconds + MinimumDelay
-		+ FMath::Min(SampledAdditionalCalmDelay, MaximumAdditionalCalmDelay);
-	const double Delay = WarningDelay + BiteWarningSeconds;
+	const double WarningDelay = RemainingFlightSeconds + WaitSeconds - Distribution.WarningSeconds;
+	const double Delay = RemainingFlightSeconds + WaitSeconds;
 	GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
 	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
 	if (WarningDelay <= UE_DOUBLE_SMALL_NUMBER)
@@ -879,6 +891,20 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 			&ThisClass::HandleBiteWarningTimer, WarningDelay, false);
 	}
 	GetWorldTimerManager().SetTimer(ProbeTimerHandle, this, &ThisClass::HandleProbeTimer, Delay, false);
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_bite_scheduled Model=ChumMeanAnchors SessionId=%s CastAttemptId=%s Opportunity=%u Seed=%llu World=%s WorldNetMode=%d Authority=%d LocalRole=%d Actor=%s Hook=%s Region=%s Landing=%s SampleServerTime=%.3f ChumFields=%d ChumFishy=%.6f ChumFragrant=%.6f ChumFermented=%.6f TotalChum=%.6f NeutralMeanSeconds=%.6f ExpectedMeanSeconds=%.6f RatePerSecond=%.9f Bait=%s BaitRateMultiplier=%.3f BaitMinimumMultiplier=%.3f MinimumCalmSeconds=%.3f WarningSeconds=%.3f MaximumWaitSeconds=%.3f WaitSeconds=%.6f RemainingFlightSeconds=%.6f WarningAtServerTime=%.6f BiteAtServerTime=%.6f %s"),
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *Snapshot.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), BiteOpportunitySequence,
+		CurrentBiteRandomSeed, *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), static_cast<int32>(GetLocalRole()),
+		*GetName(), *GetNameSafe(Snapshot.HookActor), *AttemptSnapshot.WaterRegion.RegionId.ToString(),
+		*AttemptSnapshot.ServerCorrectedLandingWorldPoint.ToString(), ChumSample.SampleServerTime,
+		ChumSample.ContributingFieldCount, ChumSample.EffectiveChumVector.Fishy,
+		ChumSample.EffectiveChumVector.Fragrant, ChumSample.EffectiveChumVector.Fermented, TotalChum,
+		Distribution.NeutralMeanSeconds, Distribution.ExpectedMeanSeconds, Distribution.RatePerSecond,
+		*AttemptSnapshot.BaitDefinitionId.ToString(), BaitRateMultiplier, BaitMinimumDelayMultiplier,
+		Distribution.MinimumCalmSeconds, Distribution.WarningSeconds, Distribution.MaximumWaitSeconds,
+		WaitSeconds, RemainingFlightSeconds, GetWorld()->GetTimeSeconds() + WarningDelay,
+		GetWorld()->GetTimeSeconds() + Delay,
+		*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
 	return true;
 }
 
