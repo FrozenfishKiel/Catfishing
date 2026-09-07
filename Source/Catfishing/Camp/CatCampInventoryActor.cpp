@@ -416,19 +416,18 @@ FCatDomainCommandResult ACatCampInventoryActor::AddItemsFromAuthority(const FGui
 }
 
 // 取用预检流程：
-// 1. 先验证 authority、请求身份、目标 Equipment 宿主和数量，让公共仓库取用必须有明确玩家接收方。
+// 1. 先验证 authority、请求身份、目标 Inventory 宿主和数量，让公共仓库取用必须有明确正式库存接收方。
 // 2. 源格、定义、实例和容量全部从双方 InventoryComponent 读取并预演；本函数不写任何格子。
 // 3. 任一正式库存组件缺失都直接拒绝，避免旧 Snapshot 或 Equipment 投影重新成为库存写事实。
-ECatDomainCommandError ACatCampInventoryActor::ValidateWithdrawToEquipment(const FGuid RequestId,
-	const int32 SourceSlotIndex, const int32 Quantity, UCatEquipmentComponent* TargetEquipment) const
+ECatDomainCommandError ACatCampInventoryActor::ValidateWithdrawToInventory(const FGuid RequestId,
+	const int32 SourceSlotIndex, const int32 Quantity, UCatInventoryComponent* TargetInventory) const
 {
-	const AActor* TargetOwner = TargetEquipment ? TargetEquipment->GetOwner() : nullptr;
-	if (!HasAuthority() || !RequestId.IsValid() || !TargetEquipment || Quantity <= 0
+	const AActor* TargetOwner = TargetInventory ? TargetInventory->GetOwner() : nullptr;
+	if (!HasAuthority() || !RequestId.IsValid() || !TargetInventory || Quantity <= 0
 		|| !TargetOwner || !TargetOwner->HasAuthority() || SourceSlotIndex < 0)
 	{
 		return ECatDomainCommandError::InvalidPayload;
 	}
-	const UCatInventoryComponent* TargetInventory = ResolveFormalInventoryFromEquipment(TargetEquipment);
 	if (InventoryComponent && TargetInventory)
 	{
 		const FCatInventoryEntry* SourceEntry = InventoryComponent->GetInventoryEntryAtSlot(SourceSlotIndex);
@@ -465,14 +464,23 @@ ECatDomainCommandError ACatCampInventoryActor::ValidateWithdrawToEquipment(const
 	return ECatDomainCommandError::DependencyUnavailable;
 }
 
+// 旧取用预检流程：只把 Equipment 宿主翻译成 Owner 上的正式随身库存，随后复用新的 Inventory-first 预检；旧 Snapshot 不参与可取性裁决。
+ECatDomainCommandError ACatCampInventoryActor::ValidateWithdrawToEquipment(const FGuid RequestId,
+	const int32 SourceSlotIndex, const int32 Quantity, UCatEquipmentComponent* TargetEquipment) const
+{
+	return ValidateWithdrawToInventory(RequestId, SourceSlotIndex, Quantity,
+		ResolveFormalInventoryFromEquipment(TargetEquipment));
+}
+
 // 取用提交流程：
 // 1. 先用 RequestId、源槽、源物定义/实例、数量和双方版本签名处理幂等；源物身份只从正式 InventoryComponent 读取。
-// 2. 正式库存可用时优先验证营地公开版本、玩家正式库存版本、容量和源格数量；迁移期仍接受 Equipment 投影版本作为旧版本调用兼容前提。
-// 3. 满栈取用保留原实例身份，拆栈取用按定义生成接收批次；玩家接收、营地扣减或旧投影刷新任一失败都会恢复双方正式 entries 和旧快照。
+// 2. 正式库存可用时优先验证营地公开版本、玩家正式库存版本、容量和源格数量；只有旧 wrapper 开启兼容开关时才允许旧投影版本回退。
+// 3. 满栈取用保留原实例身份，拆栈取用按定义生成接收批次；玩家接收、营地扣减或可选旧投影刷新失败都会恢复双方正式 entries 和已存在的旧快照。
 // 4. 任一正式库存组件缺失都返回依赖不可用，不再用旧 Equipment 或 Snapshot 写入库存。
-FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority(const FGuid RequestId,
+FCatDomainCommandResult ACatCampInventoryActor::WithdrawToInventoryFromAuthority(const FGuid RequestId,
 	const int64 ExpectedCampRevision, const int32 SourceSlotIndex, const int32 Quantity,
-	UCatEquipmentComponent* TargetEquipment, const int64 ExpectedInventoryRevision)
+	UCatInventoryComponent* TargetInventory, const int64 ExpectedInventoryRevision,
+	UCatEquipmentComponent* LegacyProjectionEquipment, const bool bAllowLegacyProjectionRevisionFallback)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
@@ -495,11 +503,12 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 		Result.Revision = Snapshot.Revision;
 		return Result;
 	}
-	const FString Key = MakeTerminalKey(TEXT("WithdrawToEquipment"), RequestId);
+	const FString Key = MakeTerminalKey(TEXT("WithdrawToInventory"), RequestId);
 	const FString PayloadSignature = FString::Printf(
-		TEXT("ExpectedCamp=%lld|Slot=%d|Definition=%s|Instance=%s|Quantity=%d|ExpectedInventory=%lld"),
+		TEXT("ExpectedCamp=%lld|Slot=%d|Definition=%s|Instance=%s|Quantity=%d|TargetInventory=%s|ExpectedInventory=%lld"),
 		ExpectedCampRevision, SourceSlotIndex, *SourceDefinitionId.ToString(),
-		*SourceItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), Quantity, ExpectedInventoryRevision);
+		*SourceItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), Quantity,
+		*GetPathNameSafe(TargetInventory), ExpectedInventoryRevision);
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
@@ -514,17 +523,17 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 		return Result;
 	}
 
-	UCatInventoryComponent* TargetInventory = ResolveFormalInventoryFromEquipment(TargetEquipment);
 	if (InventoryComponent && TargetInventory)
 	{
-		AActor* TargetOwner = TargetEquipment ? TargetEquipment->GetOwner() : nullptr;
-		if (!HasAuthority() || !TargetEquipment || !TargetOwner || !TargetOwner->HasAuthority()
+		AActor* TargetOwner = TargetInventory->GetOwner();
+		if (!HasAuthority() || !TargetOwner || !TargetOwner->HasAuthority()
 			|| !RequestId.IsValid() || Quantity <= 0)
 		{
 			Result.Error = ECatDomainCommandError::InvalidPayload;
 		}
 		else if (Snapshot.Revision != ExpectedCampRevision
-			|| !DoesPlayerInventoryRevisionMatch(TargetEquipment, TargetInventory, ExpectedInventoryRevision))
+			|| !DoesPlayerInventoryRevisionMatch(TargetInventory, ExpectedInventoryRevision,
+				LegacyProjectionEquipment, bAllowLegacyProjectionRevisionFallback))
 		{
 			Result.Error = ECatDomainCommandError::RevisionConflict;
 		}
@@ -532,7 +541,10 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 		{
 			// 右键取入也先对齐正式容量；兼容读模型仍按快照看空格，正式预检不能因为组件尚未补格而误报满包。
 			InventoryComponent->SetInventorySlotCountFromAuthority(GetConfiguredSlotCapacity());
-			TargetInventory->SetInventorySlotCountFromAuthority(TargetEquipment->GetConfiguredInventorySlotCapacity());
+			const int32 TargetMinimumSlotCount = LegacyProjectionEquipment
+				? LegacyProjectionEquipment->GetConfiguredInventorySlotCapacity()
+				: TargetInventory->GetInventorySlotCount();
+			TargetInventory->SetInventorySlotCountFromAuthority(TargetMinimumSlotCount);
 			if (!InventoryComponent->IsValidInventorySlotIndex(SourceSlotIndex))
 			{
 				Result.Error = ECatDomainCommandError::InvalidPayload;
@@ -582,19 +594,24 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 						const TArray<FCatInventoryEntry> SavedCampEntries = InventoryComponent->GetInventoryEntries();
 						const TArray<FCatInventoryEntry> SavedTargetEntries = TargetInventory->GetInventoryEntries();
 						const FCatCampInventorySnapshot SavedCampSnapshot = Snapshot;
-						const FCatEquipmentLoadoutSnapshot SavedEquipmentSnapshot = TargetEquipment->Snapshot;
+						const FCatEquipmentLoadoutSnapshot SavedEquipmentSnapshot = LegacyProjectionEquipment
+							? LegacyProjectionEquipment->Snapshot : FCatEquipmentLoadoutSnapshot();
 						const bool bAccepted = TargetInventory->TryAddInventoryBatch(ReceiveBatch);
 						const bool bConsumed =
 							bAccepted && InventoryComponent->ConsumeItemAtSlot(SourceSlotIndex, Quantity);
 						if (!bAccepted || !bConsumed
-							|| !SyncLegacyViewsFromFormalInventories(TargetEquipment, Definition, FormalDefinitionId))
+							|| !SyncLegacyViewsFromFormalInventories(
+								LegacyProjectionEquipment, Definition, FormalDefinitionId))
 						{
 							InventoryComponent->ReplaceInventoryEntriesFromAuthority(
 								SavedCampEntries, GetConfiguredSlotCapacity());
 							TargetInventory->ReplaceInventoryEntriesFromAuthority(
-								SavedTargetEntries, TargetEquipment->GetConfiguredInventorySlotCapacity());
+								SavedTargetEntries, TargetMinimumSlotCount);
 							Snapshot = SavedCampSnapshot;
-							TargetEquipment->Snapshot = SavedEquipmentSnapshot;
+							if (LegacyProjectionEquipment)
+							{
+								LegacyProjectionEquipment->Snapshot = SavedEquipmentSnapshot;
+							}
 							Result.Error = ECatDomainCommandError::DependencyUnavailable;
 						}
 						else
@@ -619,6 +636,15 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority
 	TerminalCache.Add(Key, Result);
 	TerminalPayloadByKey.Add(Key, PayloadSignature);
 	return Result;
+}
+
+// 旧取用提交流程：旧函数只负责把 Equipment 翻译成正式库存和可选投影刷新者，ExpectedInventoryRevision 也先交给 Inventory-first 入口按正式版本优先校验。
+FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentFromAuthority(const FGuid RequestId,
+	const int64 ExpectedCampRevision, const int32 SourceSlotIndex, const int32 Quantity,
+	UCatEquipmentComponent* TargetEquipment, const int64 ExpectedInventoryRevision)
+{
+	return WithdrawToInventoryFromAuthority(RequestId, ExpectedCampRevision, SourceSlotIndex, Quantity,
+		ResolveFormalInventoryFromEquipment(TargetEquipment), ExpectedInventoryRevision, TargetEquipment, true);
 }
 
 // 公共仓库整理流程：
@@ -714,20 +740,22 @@ FCatDomainCommandResult ACatCampInventoryActor::MoveInventorySlotFromAuthority(c
 
 // 背包存入公共仓库流程：
 // 1. 用 RequestId 和双方版本/槽位做幂等签名；同请求重放只返回首次终态，不重复移动任何格子。
-// 2. 正式库存可用时把玩家正式库存作为源、营地正式库存作为目标，Equipment 只用来定位 Owner 和刷新旧读模型。
+// 2. 正式库存可用时把玩家正式库存作为源、营地正式库存作为目标，Equipment 只作为可选旧读模型刷新者。
 // 3. 目标营地格有不同物品时，把玩家将收到的定义传给旧投影刷新，保留旧钓具自动选择体验。
-// 4. 正式交换失败或投影失败时由共享 helper 回滚双方正式 entries 和旧快照；缺正式库存组件时直接拒绝。
+// 4. 正式交换失败或可选投影刷新失败时由共享 helper 回滚双方正式 entries 和已存在的旧快照；缺正式库存组件时直接拒绝。
 // 5. 成功后公共仓库公开 Revision 由营地推进，玩家 Inventory/Equipment 的版本变化由玩家侧组件自己的发布入口维护。
-FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuthority(const FGuid RequestId,
-	const int64 ExpectedCampRevision, const int32 TargetCampSlotIndex, UCatEquipmentComponent* SourceEquipment,
-	const int64 ExpectedInventoryRevision, const int32 SourceEquipmentSlotIndex)
+FCatDomainCommandResult ACatCampInventoryActor::DepositFromInventorySlotFromAuthority(const FGuid RequestId,
+	const int64 ExpectedCampRevision, const int32 TargetCampSlotIndex, UCatInventoryComponent* SourceInventory,
+	const int64 ExpectedInventoryRevision, const int32 SourceInventorySlotIndex,
+	UCatEquipmentComponent* LegacyProjectionEquipment, const bool bAllowLegacyProjectionRevisionFallback)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	const FString Key = MakeTerminalKey(TEXT("DepositFromEquipmentSlot"), RequestId);
+	const FString Key = MakeTerminalKey(TEXT("DepositFromInventorySlot"), RequestId);
 	const FString PayloadSignature = FString::Printf(
-		TEXT("ExpectedCamp=%lld|TargetCamp=%d|ExpectedInventory=%lld|SourceEquipment=%d"),
-		ExpectedCampRevision, TargetCampSlotIndex, ExpectedInventoryRevision, SourceEquipmentSlotIndex);
+		TEXT("ExpectedCamp=%lld|TargetCamp=%d|ExpectedInventory=%lld|SourceInventory=%s|SourceSlot=%d"),
+		ExpectedCampRevision, TargetCampSlotIndex, ExpectedInventoryRevision,
+		*GetPathNameSafe(SourceInventory), SourceInventorySlotIndex);
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
@@ -742,11 +770,10 @@ FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuth
 		return Result;
 	}
 
-	UCatInventoryComponent* SourceInventory = ResolveFormalInventoryFromEquipment(SourceEquipment);
 	if (SourceInventory && InventoryComponent)
 	{
 		const FCatInventoryEntry* SourceEntry =
-			SourceInventory->GetInventoryEntryAtSlot(SourceEquipmentSlotIndex);
+			SourceInventory->GetInventoryEntryAtSlot(SourceInventorySlotIndex);
 		const FCatInventoryEntry* CampTargetEntry =
 			InventoryComponent->GetInventoryEntryAtSlot(TargetCampSlotIndex);
 		const UCatInventoryItemDefinition* SourceDefinition =
@@ -763,10 +790,11 @@ FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuth
 			&& !EquipmentReceivedDefinitionId.IsNone()
 			&& EquipmentReceivedDefinitionId != SourceDefinitionId;
 		Result = ExecuteFormalPlayerCampSlotExchangeFromAuthority(RequestId, ExpectedCampRevision,
-			SourceEquipment, ExpectedInventoryRevision, SourceInventory, SourceEquipmentSlotIndex,
-			InventoryComponent, TargetCampSlotIndex,
+			SourceInventory, ExpectedInventoryRevision, LegacyProjectionEquipment,
+			SourceInventory, SourceInventorySlotIndex, InventoryComponent, TargetCampSlotIndex,
 			bEquipmentReceivesCampSlot ? EquipmentReceivedDefinition : nullptr,
-			bEquipmentReceivesCampSlot ? EquipmentReceivedDefinitionId : NAME_None);
+			bEquipmentReceivesCampSlot ? EquipmentReceivedDefinitionId : NAME_None,
+			bAllowLegacyProjectionRevisionFallback);
 		TerminalCache.Add(Key, Result);
 		TerminalPayloadByKey.Add(Key, PayloadSignature);
 		return Result;
@@ -779,22 +807,34 @@ FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuth
 	return Result;
 }
 
+// 旧背包存入公共仓库流程：旧函数只从 Equipment Owner 解析玩家正式库存并转发；传入的旧槽位下标被当作正式库存下标兼容，不再让 Equipment 写库存。
+FCatDomainCommandResult ACatCampInventoryActor::DepositFromEquipmentSlotFromAuthority(const FGuid RequestId,
+	const int64 ExpectedCampRevision, const int32 TargetCampSlotIndex, UCatEquipmentComponent* SourceEquipment,
+	const int64 ExpectedInventoryRevision, const int32 SourceEquipmentSlotIndex)
+{
+	return DepositFromInventorySlotFromAuthority(RequestId, ExpectedCampRevision, TargetCampSlotIndex,
+		ResolveFormalInventoryFromEquipment(SourceEquipment), ExpectedInventoryRevision,
+		SourceEquipmentSlotIndex, SourceEquipment, true);
+}
+
 // 公共仓库拖入背包流程：
 // 1. 用 RequestId 和双方版本/槽位做幂等签名；重放只返回首次终态，不重复扣公共仓库或发背包。
 // 2. 正式库存可用时把营地正式库存作为源、玩家正式库存作为目标，客户端目标格仍只是候选输入。
 // 3. 公共仓库源物会作为玩家收到的新增定义传给旧投影刷新，让拖入背包后钓具选择仍保持旧规则体验。
-// 4. 正式交换失败或投影失败时由共享 helper 回滚双方正式 entries 和旧快照；缺正式库存组件时直接拒绝。
+// 4. 正式交换失败或可选投影刷新失败时由共享 helper 回滚双方正式 entries 和已存在的旧快照；缺正式库存组件时直接拒绝。
 // 5. 成功后营地只推进自己的公开 Revision，玩家随身正式库存和 Equipment 投影由玩家组件发布各自变化。
-FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentSlotFromAuthority(const FGuid RequestId,
-	const int64 ExpectedCampRevision, const int32 SourceCampSlotIndex, UCatEquipmentComponent* TargetEquipment,
-	const int64 ExpectedInventoryRevision, const int32 TargetEquipmentSlotIndex)
+FCatDomainCommandResult ACatCampInventoryActor::WithdrawToInventorySlotFromAuthority(const FGuid RequestId,
+	const int64 ExpectedCampRevision, const int32 SourceCampSlotIndex, UCatInventoryComponent* TargetInventory,
+	const int64 ExpectedInventoryRevision, const int32 TargetInventorySlotIndex,
+	UCatEquipmentComponent* LegacyProjectionEquipment, const bool bAllowLegacyProjectionRevisionFallback)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	const FString Key = MakeTerminalKey(TEXT("WithdrawToEquipmentSlot"), RequestId);
+	const FString Key = MakeTerminalKey(TEXT("WithdrawToInventorySlot"), RequestId);
 	const FString PayloadSignature = FString::Printf(
-		TEXT("ExpectedCamp=%lld|SourceCamp=%d|ExpectedInventory=%lld|TargetEquipment=%d"),
-		ExpectedCampRevision, SourceCampSlotIndex, ExpectedInventoryRevision, TargetEquipmentSlotIndex);
+		TEXT("ExpectedCamp=%lld|SourceCamp=%d|ExpectedInventory=%lld|TargetInventory=%s|TargetSlot=%d"),
+		ExpectedCampRevision, SourceCampSlotIndex, ExpectedInventoryRevision,
+		*GetPathNameSafe(TargetInventory), TargetInventorySlotIndex);
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
@@ -809,7 +849,6 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentSlotFromAutho
 		return Result;
 	}
 
-	UCatInventoryComponent* TargetInventory = ResolveFormalInventoryFromEquipment(TargetEquipment);
 	if (InventoryComponent && TargetInventory)
 	{
 		const FCatInventoryEntry* CampSourceEntry =
@@ -820,8 +859,9 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentSlotFromAutho
 		const FName GrantedDefinitionId =
 			CampSourceDefinition ? CampSourceDefinition->GetInventoryDefinitionId() : NAME_None;
 		Result = ExecuteFormalPlayerCampSlotExchangeFromAuthority(RequestId, ExpectedCampRevision,
-			TargetEquipment, ExpectedInventoryRevision, InventoryComponent, SourceCampSlotIndex,
-			TargetInventory, TargetEquipmentSlotIndex, GrantedDefinition, GrantedDefinitionId);
+			TargetInventory, ExpectedInventoryRevision, LegacyProjectionEquipment,
+			InventoryComponent, SourceCampSlotIndex, TargetInventory, TargetInventorySlotIndex,
+			GrantedDefinition, GrantedDefinitionId, bAllowLegacyProjectionRevisionFallback);
 		TerminalCache.Add(Key, Result);
 		TerminalPayloadByKey.Add(Key, PayloadSignature);
 		return Result;
@@ -832,6 +872,16 @@ FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentSlotFromAutho
 	TerminalCache.Add(Key, Result);
 	TerminalPayloadByKey.Add(Key, PayloadSignature);
 	return Result;
+}
+
+// 旧公共仓库拖入背包流程：旧函数只从 Equipment Owner 解析目标正式库存并转发；传入的旧槽位下标被当作正式库存下标兼容，不再让 Equipment 写库存。
+FCatDomainCommandResult ACatCampInventoryActor::WithdrawToEquipmentSlotFromAuthority(const FGuid RequestId,
+	const int64 ExpectedCampRevision, const int32 SourceCampSlotIndex, UCatEquipmentComponent* TargetEquipment,
+	const int64 ExpectedInventoryRevision, const int32 TargetEquipmentSlotIndex)
+{
+	return WithdrawToInventorySlotFromAuthority(RequestId, ExpectedCampRevision, SourceCampSlotIndex,
+		ResolveFormalInventoryFromEquipment(TargetEquipment), ExpectedInventoryRevision,
+		TargetEquipmentSlotIndex, TargetEquipment, true);
 }
 
 // 复制回调流程：客户端拿到服务器公共仓库快照后广播读模型变化；提交、扣减和取用仍只能回服务器。
@@ -1025,37 +1075,40 @@ bool ACatCampInventoryActor::SyncLegacyViewsFromFormalInventories(UCatEquipmentC
 }
 
 // 玩家版本兼容流程：
-// 1. 正式 UI 提交 InventoryComponent 的内容版本时直接放行，这是新的库存并发事实。
-// 2. 旧测试和过渡期内部调用仍可能提交 Equipment Snapshot 版本；投影版本匹配时也放行，但不让 Equipment 执行库存写入。
+// 1. 正式 UI 提交 InventoryComponent 的内容版本时直接放行，这是随身库存新的并发事实。
+// 2. 旧测试和过渡期内部调用必须同时传入 Equipment 投影并显式开启兼容开关，才允许用旧 Snapshot 版本回退。
 // 3. 两个版本都不匹配才视为陈旧请求，调用方保持无副作用返回 RevisionConflict。
-bool ACatCampInventoryActor::DoesPlayerInventoryRevisionMatch(UCatEquipmentComponent* Equipment,
-	const UCatInventoryComponent* PlayerInventory, const int64 ExpectedInventoryRevision) const
+bool ACatCampInventoryActor::DoesPlayerInventoryRevisionMatch(const UCatInventoryComponent* PlayerInventory,
+	const int64 ExpectedInventoryRevision, const UCatEquipmentComponent* LegacyProjectionEquipment,
+	const bool bAllowLegacyProjectionRevisionFallback) const
 {
 	if (PlayerInventory != nullptr && PlayerInventory->GetInventoryRevision() == ExpectedInventoryRevision)
 	{
 		return true;
 	}
-	return Equipment != nullptr && Equipment->Snapshot.Revision == ExpectedInventoryRevision;
+	return bAllowLegacyProjectionRevisionFallback && LegacyProjectionEquipment != nullptr
+		&& LegacyProjectionEquipment->Snapshot.Revision == ExpectedInventoryRevision;
 }
 
 // 玩家/营地正式格交换流程：
 // 1. 先验证营地公开版本、玩家正式库存版本和双方 authority；客户端提交的下标只作为候选。
 // 2. 再按两边配置补齐正式库存空格，避免旧快照有容量而正式 FastArray 尚未初始化时误拒绝。
 // 3. 然后确认源格确有装备/耗材定义，目标非空时也必须能投影回旧读模型，防止正式库存和兼容读模型分叉。
-// 4. 正式交换成功后刷新营地 Snapshot 与玩家 Equipment 投影；刷新失败时恢复两份正式 entries 和旧快照。
-// 5. 最后只推进营地公开 Revision；玩家旧投影 Revision 由 Equipment 自己在刷新时维护。
+// 4. 正式交换成功后刷新营地 Snapshot，并在传入旧 Equipment 时同步玩家投影；刷新失败时恢复两份正式 entries 和已存在的旧快照。
+// 5. 最后只推进营地公开 Revision；玩家 Inventory 的 Revision 由库存组件推进，旧投影 Revision 由 Equipment 自己维护。
 FCatDomainCommandResult ACatCampInventoryActor::ExecuteFormalPlayerCampSlotExchangeFromAuthority(
-	const FGuid RequestId, const int64 ExpectedCampRevision, UCatEquipmentComponent* Equipment,
-	const int64 ExpectedInventoryRevision, UCatInventoryComponent* SourceInventory, const int32 SourceSlotIndex,
+	const FGuid RequestId, const int64 ExpectedCampRevision, UCatInventoryComponent* PlayerInventory,
+	const int64 ExpectedInventoryRevision, UCatEquipmentComponent* LegacyProjectionEquipment,
+	UCatInventoryComponent* SourceInventory, const int32 SourceSlotIndex,
 	UCatInventoryComponent* TargetInventory, const int32 TargetSlotIndex,
-	const UCatEquipmentDefinition* GrantedDefinition, const FName GrantedDefinitionId)
+	const UCatEquipmentDefinition* GrantedDefinition, const FName GrantedDefinitionId,
+	const bool bAllowLegacyProjectionRevisionFallback)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	UCatInventoryComponent* PlayerInventory = ResolveFormalInventoryFromEquipment(Equipment);
-	AActor* EquipmentOwner = Equipment ? Equipment->GetOwner() : nullptr;
-	if (!HasAuthority() || !RequestId.IsValid() || !InventoryComponent || !Equipment || !EquipmentOwner
-		|| !EquipmentOwner->HasAuthority() || !PlayerInventory || !SourceInventory || !TargetInventory
+	AActor* PlayerInventoryOwner = PlayerInventory ? PlayerInventory->GetOwner() : nullptr;
+	if (!HasAuthority() || !RequestId.IsValid() || !InventoryComponent || !PlayerInventoryOwner
+		|| !PlayerInventoryOwner->HasAuthority() || !PlayerInventory || !SourceInventory || !TargetInventory
 		|| SourceSlotIndex < 0 || TargetSlotIndex < 0)
 	{
 		Result.Error = ECatDomainCommandError::InvalidPayload;
@@ -1063,7 +1116,8 @@ FCatDomainCommandResult ACatCampInventoryActor::ExecuteFormalPlayerCampSlotExcha
 		return Result;
 	}
 	if (Snapshot.Revision != ExpectedCampRevision
-		|| !DoesPlayerInventoryRevisionMatch(Equipment, PlayerInventory, ExpectedInventoryRevision))
+		|| !DoesPlayerInventoryRevisionMatch(PlayerInventory, ExpectedInventoryRevision, LegacyProjectionEquipment,
+			bAllowLegacyProjectionRevisionFallback))
 	{
 		Result.Error = ECatDomainCommandError::RevisionConflict;
 		Result.Revision = Snapshot.Revision;
@@ -1071,7 +1125,10 @@ FCatDomainCommandResult ACatCampInventoryActor::ExecuteFormalPlayerCampSlotExcha
 	}
 	// 这里属于迁移期桥接：外部仍按旧 Snapshot 看到容量，正式库存写入前必须把空格补齐到同一容量口径。
 	InventoryComponent->SetInventorySlotCountFromAuthority(GetConfiguredSlotCapacity());
-	PlayerInventory->SetInventorySlotCountFromAuthority(Equipment->GetConfiguredInventorySlotCapacity());
+	const int32 PlayerMinimumSlotCount = LegacyProjectionEquipment
+		? LegacyProjectionEquipment->GetConfiguredInventorySlotCapacity()
+		: PlayerInventory->GetInventorySlotCount();
+	PlayerInventory->SetInventorySlotCountFromAuthority(PlayerMinimumSlotCount);
 	if (!SourceInventory->IsValidInventorySlotIndex(SourceSlotIndex)
 		|| !TargetInventory->IsValidInventorySlotIndex(TargetSlotIndex))
 	{
@@ -1111,7 +1168,8 @@ FCatDomainCommandResult ACatCampInventoryActor::ExecuteFormalPlayerCampSlotExcha
 	const TArray<FCatInventoryEntry> SavedCampEntries = InventoryComponent->GetInventoryEntries();
 	const TArray<FCatInventoryEntry> SavedPlayerEntries = PlayerInventory->GetInventoryEntries();
 	const FCatCampInventorySnapshot SavedCampSnapshot = Snapshot;
-	const FCatEquipmentLoadoutSnapshot SavedEquipmentSnapshot = Equipment->Snapshot;
+	const FCatEquipmentLoadoutSnapshot SavedEquipmentSnapshot = LegacyProjectionEquipment
+		? LegacyProjectionEquipment->Snapshot : FCatEquipmentLoadoutSnapshot();
 	const bool bFormalChanged = UCatInventoryComponent::ExecuteExchangeRequestOnAuthority(
 		SourceInventory, SourceSlotIndex, TargetInventory, TargetSlotIndex);
 	if (!bFormalChanged)
@@ -1120,13 +1178,15 @@ FCatDomainCommandResult ACatCampInventoryActor::ExecuteFormalPlayerCampSlotExcha
 		Result.Revision = Snapshot.Revision;
 		return Result;
 	}
-	if (!SyncLegacyViewsFromFormalInventories(Equipment, GrantedDefinition, GrantedDefinitionId))
+	if (!SyncLegacyViewsFromFormalInventories(LegacyProjectionEquipment, GrantedDefinition, GrantedDefinitionId))
 	{
 		InventoryComponent->ReplaceInventoryEntriesFromAuthority(SavedCampEntries, GetConfiguredSlotCapacity());
-		PlayerInventory->ReplaceInventoryEntriesFromAuthority(
-			SavedPlayerEntries, Equipment->GetConfiguredInventorySlotCapacity());
+		PlayerInventory->ReplaceInventoryEntriesFromAuthority(SavedPlayerEntries, PlayerMinimumSlotCount);
 		Snapshot = SavedCampSnapshot;
-		Equipment->Snapshot = SavedEquipmentSnapshot;
+		if (LegacyProjectionEquipment)
+		{
+			LegacyProjectionEquipment->Snapshot = SavedEquipmentSnapshot;
+		}
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		Result.Revision = Snapshot.Revision;
 		return Result;

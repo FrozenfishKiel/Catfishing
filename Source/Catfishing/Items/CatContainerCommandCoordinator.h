@@ -32,7 +32,7 @@ public:
 		ACatCharacter* ControlledCharacter, FGuid RequestId, FGuid FishInstanceId,
 		FGuid SourceContainerId, int32 SourceContainerSlotIndex, int64 ExpectedSourceRevision);
 
-	/** 从可触达营地公共仓库取指定数量到当前玩家随身库存；仓库、距离、营地公开版本和随身正式库存版本都在服务器重读。 */
+	/** 从可触达营地公共仓库取指定数量到当前玩家随身库存；服务器重读仓库、距离和玩家正式 InventoryComponent，ExpectedInventoryRevision 不再代表 Equipment 快照。 */
 	FCatDomainCommandResult WithdrawCampInventoryItem(AController* RequestingController,
 		ACatCharacter* ControlledCharacter, ACatCampInventoryActor* CampInventory, FGuid RequestId,
 		int64 ExpectedCampInventoryRevision, int32 SourceSlotIndex, int32 Quantity,
@@ -43,15 +43,15 @@ public:
 		ACatCharacter* ControlledCharacter, ACatCampInventoryActor* CampInventory, FGuid RequestId,
 		int64 ExpectedCampInventoryRevision, int32 SourceSlotIndex, int32 TargetSlotIndex);
 
-	/** 把当前玩家随身库存格提交到可触达营地公共仓库目标格；服务器在同一事务中裁决双方正式库存并刷新旧投影。 */
-	FCatDomainCommandResult DepositEquipmentSlotToCampInventory(AController* RequestingController,
+	/** 把当前玩家随身库存格提交到可触达营地公共仓库目标格；SourceInventorySlotIndex 指向正式库存槽位，旧 Equipment 只在提交后跟随投影刷新。 */
+	FCatDomainCommandResult DepositInventorySlotToCampInventory(AController* RequestingController,
 		ACatCharacter* ControlledCharacter, ACatCampInventoryActor* CampInventory, FGuid RequestId,
 		int64 ExpectedCampInventoryRevision, int32 TargetCampSlotIndex, int64 ExpectedInventoryRevision,
-		int32 SourceEquipmentSlotIndex);
+		int32 SourceInventorySlotIndex);
 
-	/** 把可触达营地公共仓库格提交到当前玩家随身库存目标格；服务器在同一事务中裁决双方正式库存并刷新旧投影。 */
-	FCatDomainCommandResult WithdrawCampInventoryItemToEquipmentSlot(AController* RequestingController,
+	/** 把可触达营地公共仓库格提交到当前玩家随身库存目标格；TargetInventorySlotIndex 指向正式库存槽位，旧 Equipment 只在提交后跟随投影刷新。 */
+	FCatDomainCommandResult WithdrawCampInventoryItemToInventorySlot(AController* RequestingController,
 		ACatCharacter* ControlledCharacter, ACatCampInventoryActor* CampInventory, FGuid RequestId,
 		int64 ExpectedCampInventoryRevision, int32 SourceCampSlotIndex, int64 ExpectedInventoryRevision,
-		int32 TargetEquipmentSlotIndex);
+		int32 TargetInventorySlotIndex);
 };

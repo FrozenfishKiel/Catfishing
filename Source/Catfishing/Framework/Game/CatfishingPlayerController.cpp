@@ -743,10 +743,10 @@ void ACatfishingPlayerController::ServerMoveCampInventorySlotAtActor_Implementat
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 背包存入公共仓库 RPC 路由流程：Controller 只保留网络入口，跨随身库存和公共仓库的原子事务由 Items 协调器持有。
+// 背包存入公共仓库 RPC 路由流程：Controller 只保留网络入口，跨随身正式库存和公共仓库的原子事务由 Items 协调器持有。
 void ACatfishingPlayerController::ServerDepositInventoryItemToCampAtActor_Implementation(
 	ACatCampInventoryActor* CampInventory, const FGuid RequestId, const int64 ExpectedCampInventoryRevision,
-	const int32 TargetCampSlotIndex, const int64 ExpectedInventoryRevision, const int32 SourceEquipmentSlotIndex)
+	const int32 TargetCampSlotIndex, const int64 ExpectedInventoryRevision, const int32 SourceInventorySlotIndex)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
@@ -754,9 +754,9 @@ void ACatfishingPlayerController::ServerDepositInventoryItemToCampAtActor_Implem
 	if (UCatContainerCommandCoordinator* Coordinator = GetWorld()
 		? GetWorld()->GetSubsystem<UCatContainerCommandCoordinator>() : nullptr)
 	{
-		Result = Coordinator->DepositEquipmentSlotToCampInventory(this, ControlledCharacter, CampInventory,
+		Result = Coordinator->DepositInventorySlotToCampInventory(this, ControlledCharacter, CampInventory,
 			RequestId, ExpectedCampInventoryRevision, TargetCampSlotIndex, ExpectedInventoryRevision,
-			SourceEquipmentSlotIndex);
+			SourceInventorySlotIndex);
 	}
 	else
 	{
@@ -765,10 +765,10 @@ void ACatfishingPlayerController::ServerDepositInventoryItemToCampAtActor_Implem
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 公共仓库拖入背包 RPC 路由流程：Controller 不读取公共仓库或装备细节，只把候选槽位交给 Items 协调器。
+// 公共仓库拖入背包 RPC 路由流程：Controller 不读取公共仓库、随身库存或旧 Equipment 投影细节，只把候选槽位交给 Items 协调器。
 void ACatfishingPlayerController::ServerWithdrawCampInventoryItemToSlotAtActor_Implementation(
 	ACatCampInventoryActor* CampInventory, const FGuid RequestId, const int64 ExpectedCampInventoryRevision,
-	const int32 SourceCampSlotIndex, const int64 ExpectedInventoryRevision, const int32 TargetEquipmentSlotIndex)
+	const int32 SourceCampSlotIndex, const int64 ExpectedInventoryRevision, const int32 TargetInventorySlotIndex)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
@@ -776,9 +776,9 @@ void ACatfishingPlayerController::ServerWithdrawCampInventoryItemToSlotAtActor_I
 	if (UCatContainerCommandCoordinator* Coordinator = GetWorld()
 		? GetWorld()->GetSubsystem<UCatContainerCommandCoordinator>() : nullptr)
 	{
-		Result = Coordinator->WithdrawCampInventoryItemToEquipmentSlot(this, ControlledCharacter, CampInventory,
+		Result = Coordinator->WithdrawCampInventoryItemToInventorySlot(this, ControlledCharacter, CampInventory,
 			RequestId, ExpectedCampInventoryRevision, SourceCampSlotIndex, ExpectedInventoryRevision,
-			TargetEquipmentSlotIndex);
+			TargetInventorySlotIndex);
 	}
 	else
 	{

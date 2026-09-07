@@ -108,11 +108,21 @@ public:
 	FCatDomainCommandResult AddItemsFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		const FString& StableNetId, const TArray<FCatCampInventoryAddItemRequest>& Items);
 
-	/** 查询玩家是否能从指定公共格子取物到自己的随身库存；预检只读取营地和玩家的正式库存组件。 */
+	/** 查询玩家是否能从指定公共格子取物到目标正式随身库存；SourceSlotIndex 和 Quantity 描述公共仓库输出，TargetInventory 是唯一接收事实源，预检只读两份 InventoryComponent，不要求 Equipment 参与。 */
+	ECatDomainCommandError ValidateWithdrawToInventory(FGuid RequestId, int32 SourceSlotIndex, int32 Quantity,
+		UCatInventoryComponent* TargetInventory) const;
+
+	/** 把公共仓库里的物品取到目标正式随身库存；ExpectedCampRevision 和 ExpectedInventoryRevision 分别保护两份正式库存，LegacyProjectionEquipment 只刷新旧读模型，旧版本号回退默认关闭。 */
+	FCatDomainCommandResult WithdrawToInventoryFromAuthority(FGuid RequestId, int64 ExpectedCampRevision,
+		int32 SourceSlotIndex, int32 Quantity, UCatInventoryComponent* TargetInventory,
+		int64 ExpectedInventoryRevision, UCatEquipmentComponent* LegacyProjectionEquipment = nullptr,
+		bool bAllowLegacyProjectionRevisionFallback = false);
+
+	/** 旧取物预检入口；保留给冻结测试和旧蓝图引用，TargetEquipment 只用来找到 Owner 上的正式 InventoryComponent，实际裁决不会读取旧背包格。 */
 	ECatDomainCommandError ValidateWithdrawToEquipment(FGuid RequestId, int32 SourceSlotIndex, int32 Quantity,
 		UCatEquipmentComponent* TargetEquipment) const;
 
-	/** 把公共仓库里的物品取到玩家随身库存；正式库存存在时先写 InventoryComponent，再刷新旧 Equipment 投影。 */
+	/** 旧取物提交入口；保留给冻结测试和旧蓝图引用，TargetEquipment 只提供正式库存解析和投影刷新，库存写入仍转到 WithdrawToInventoryFromAuthority。 */
 	FCatDomainCommandResult WithdrawToEquipmentFromAuthority(FGuid RequestId, int64 ExpectedCampRevision,
 		int32 SourceSlotIndex, int32 Quantity, UCatEquipmentComponent* TargetEquipment,
 		int64 ExpectedInventoryRevision);
@@ -121,12 +131,24 @@ public:
 	FCatDomainCommandResult MoveInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		int32 SourceSlotIndex, int32 TargetSlotIndex);
 
-	/** 把玩家随身正式库存的一个格子拖入本公共仓库指定格；成功时正式库存交换，旧投影只跟随刷新。 */
+	/** 把玩家正式库存的一个格子拖入本公共仓库指定格；SourceInventorySlotIndex 描述玩家源格，ExpectedInventoryRevision 校验玩家正式库存，旧投影只在提交后跟随刷新且默认不参与版本兼容。 */
+	FCatDomainCommandResult DepositFromInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedCampRevision,
+		int32 TargetCampSlotIndex, UCatInventoryComponent* SourceInventory, int64 ExpectedInventoryRevision,
+		int32 SourceInventorySlotIndex, UCatEquipmentComponent* LegacyProjectionEquipment = nullptr,
+		bool bAllowLegacyProjectionRevisionFallback = false);
+
+	/** 旧存入提交入口；保留给冻结测试和旧蓝图引用，SourceEquipment 只解析玩家正式库存并作为可选投影刷新对象，不再承担库存交换事实。 */
 	FCatDomainCommandResult DepositFromEquipmentSlotFromAuthority(FGuid RequestId, int64 ExpectedCampRevision,
 		int32 TargetCampSlotIndex, UCatEquipmentComponent* SourceEquipment, int64 ExpectedInventoryRevision,
 		int32 SourceEquipmentSlotIndex);
 
-	/** 把本公共仓库的一个格子拖到玩家随身正式库存指定格；成功时正式库存交换，旧投影只跟随刷新。 */
+	/** 把本公共仓库的一个格子拖到玩家正式库存指定格；TargetInventorySlotIndex 描述玩家目标格，ExpectedInventoryRevision 校验玩家正式库存，旧投影只在提交后跟随刷新且默认不参与版本兼容。 */
+	FCatDomainCommandResult WithdrawToInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedCampRevision,
+		int32 SourceCampSlotIndex, UCatInventoryComponent* TargetInventory, int64 ExpectedInventoryRevision,
+		int32 TargetInventorySlotIndex, UCatEquipmentComponent* LegacyProjectionEquipment = nullptr,
+		bool bAllowLegacyProjectionRevisionFallback = false);
+
+	/** 旧指定格取出提交入口；保留给冻结测试和旧蓝图引用，TargetEquipment 只解析玩家正式库存并作为可选投影刷新对象，不再承担库存交换事实。 */
 	FCatDomainCommandResult WithdrawToEquipmentSlotFromAuthority(FGuid RequestId, int64 ExpectedCampRevision,
 		int32 SourceCampSlotIndex, UCatEquipmentComponent* TargetEquipment, int64 ExpectedInventoryRevision,
 		int32 TargetEquipmentSlotIndex);
@@ -173,15 +195,18 @@ private:
 	bool SyncLegacyViewsFromFormalInventories(UCatEquipmentComponent* Equipment,
 		const UCatEquipmentDefinition* GrantedDefinition, FName GrantedDefinitionId);
 
-	/** 迁移期随身侧版本复核；正式 UI 提交 InventoryRevision，旧测试或内部调用仍可能提交 Equipment 投影版本。 */
-	bool DoesPlayerInventoryRevisionMatch(UCatEquipmentComponent* Equipment,
-		const UCatInventoryComponent* PlayerInventory, int64 ExpectedInventoryRevision) const;
+	/** 迁移期随身侧版本复核；PlayerInventory 是正式并发事实，只有旧 wrapper 显式开启兼容开关时才读取 Equipment Snapshot 版本。 */
+	bool DoesPlayerInventoryRevisionMatch(const UCatInventoryComponent* PlayerInventory,
+		int64 ExpectedInventoryRevision, const UCatEquipmentComponent* LegacyProjectionEquipment,
+		bool bAllowLegacyProjectionRevisionFallback) const;
 
-	/** 在玩家正式库存和本营地正式库存之间移动、合并或交换指定格；同时校验公开版本、回滚失败投影，并维护旧读模型。 */
+	/** 在玩家正式库存和本营地正式库存之间移动、合并或交换指定格；PlayerInventory 提供玩家版本边界，Source/TargetInventory 承担真实写入，Equipment 只作为可选旧投影刷新者。 */
 	FCatDomainCommandResult ExecuteFormalPlayerCampSlotExchangeFromAuthority(FGuid RequestId,
-		int64 ExpectedCampRevision, UCatEquipmentComponent* Equipment, int64 ExpectedInventoryRevision,
-		UCatInventoryComponent* SourceInventory, int32 SourceSlotIndex, UCatInventoryComponent* TargetInventory,
-		int32 TargetSlotIndex, const UCatEquipmentDefinition* GrantedDefinition, FName GrantedDefinitionId);
+		int64 ExpectedCampRevision, UCatInventoryComponent* PlayerInventory, int64 ExpectedInventoryRevision,
+		UCatEquipmentComponent* LegacyProjectionEquipment, UCatInventoryComponent* SourceInventory,
+		int32 SourceSlotIndex, UCatInventoryComponent* TargetInventory, int32 TargetSlotIndex,
+		const UCatEquipmentDefinition* GrantedDefinition, FName GrantedDefinitionId,
+		bool bAllowLegacyProjectionRevisionFallback);
 
 	/** 解析公共仓库交互要打开的独立库存页类；路径失效时返回空，让交互明确失败而不是退回默认库存页。 */
 	TSubclassOf<UCatCampInventoryWidget> LoadInventoryViewClass() const;

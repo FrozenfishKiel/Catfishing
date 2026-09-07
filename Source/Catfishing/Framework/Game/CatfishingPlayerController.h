@@ -164,17 +164,17 @@ public:
 	void ServerMoveCampInventorySlotAtActor(ACatCampInventoryActor* CampInventory, FGuid RequestId,
 		int64 ExpectedCampInventoryRevision, int32 SourceSlotIndex, int32 TargetSlotIndex);
 
-	/** 把本人随身库存指定格拖入营地公共仓库指定格；服务器按营地公开版本、随身正式库存版本和仓库距离同时裁决。 */
+	/** 把本人随身库存指定格拖入营地公共仓库指定格；SourceInventorySlotIndex 是 UI 看到的正式库存槽位，Controller 只转发版本和候选下标。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Camp")
 	void ServerDepositInventoryItemToCampAtActor(ACatCampInventoryActor* CampInventory, FGuid RequestId,
 		int64 ExpectedCampInventoryRevision, int32 TargetCampSlotIndex, int64 ExpectedInventoryRevision,
-		int32 SourceEquipmentSlotIndex);
+		int32 SourceInventorySlotIndex);
 
-	/** 把营地公共仓库指定格拖到本人随身库存指定格；服务器按营地公开版本、随身正式库存版本和仓库距离同时裁决。 */
+	/** 把营地公共仓库指定格拖到本人随身库存指定格；TargetInventorySlotIndex 是 UI 看到的正式库存槽位，Controller 只转发版本和候选下标。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Camp")
 	void ServerWithdrawCampInventoryItemToSlotAtActor(ACatCampInventoryActor* CampInventory, FGuid RequestId,
 		int64 ExpectedCampInventoryRevision, int32 SourceCampSlotIndex, int64 ExpectedInventoryRevision,
-		int32 TargetEquipmentSlotIndex);
+		int32 TargetInventorySlotIndex);
 
 	/** 返回本机最近收到的公共领域命令结果供表现层关联请求；该缓存不作为 Camp、Items、Equipment 或 Condition 的权限事实。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Camp")

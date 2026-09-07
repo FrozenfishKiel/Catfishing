@@ -370,7 +370,7 @@ void UCatInventoryPageController::RequestCloseInventoryFromWidget()
 
 // 格子上下文流程：
 // 1. 右键入口直接按传入格子来源处理动作，不再先同步共享选择或刷新所有库存 WBP。
-// 2. 如果目标是营地公共仓库格，先按最新 ViewState 复核公共槽位，再提交“取到正式随身库存”服务器请求；这里不直接改公共仓库格。
+// 2. 如果目标是营地公共仓库格，先按最新 ViewState 复核公共槽位，再提交“取到正式随身库存”服务器请求；这里不直接改公共仓库格，也不要求旧 Equipment 投影可用。
 // 3. 如果目标是随身库存格，当前没有 pending 且物品有效时，只提交正式库存槽位和库存 Revision。
 // 4. UI 不再判断鱼竿、鱼饵、浮漂或抄网类别；“能不能用、用成什么效果”统一交给服务器从正式库存事实继续分发。
 // 5. 记录 pending 后再调用 PlayerController RPC；服务器会从 InventoryComponent 重读槽位，再决定是否更新 Equipment 或拒绝本次 Use。
@@ -394,7 +394,7 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 		const FCatInventorySlotView* CurrentSlot = FindCurrentRunInventorySlot(State, Slot);
 		if (!CampInventory || !CurrentSlot || !CurrentSlot->bOccupied
 			|| CurrentSlot->CampInventorySlotIndex == INDEX_NONE || CurrentSlot->Quantity <= 0
-			|| !State.bInventoryAvailable || !State.bEquipmentAvailable)
+			|| !State.bInventoryAvailable)
 		{
 			Model->MarkActionRejected(ECatInventoryAction::WithdrawCampInventoryItem, RequestId,
 				ECatDomainCommandError::DependencyUnavailable, State.CampInventoryRevision);
@@ -449,10 +449,10 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 
 // Drop 提交流程：
 // 1. 从最新 ViewState 复核源物体和目标格；已有请求等待回包时只忽略新的 Drop，避免覆盖上一次 pending。
-// 2. 运行期库存格同源时整理本数据源，跨背包和营地时提交一条同时改双方数据源的服务器事务。
+// 2. 运行期库存格同源时整理本数据源，跨随身正式库存和营地时提交一条同时改双方 InventoryComponent 的服务器事务。
 // 3. 鱼容器格之间走 Items 容器移动；运行期库存和 Items 容器混拖直接拒绝，避免把两套领域写口塞进一次 Drop。
 // 4. 同格 Drop 视为无操作直接返回；同容器不同格继续提交服务器整理，不能再当 InvalidPayload 拒绝。
-// 5. 在写 pending 前复制完整 RPC 载荷；随身背包整理和背包/营地跨源转移都提交 InventoryRevision，营地侧提交 CampInventoryRevision。
+// 5. 在写 pending 前复制完整 RPC 载荷；随身背包整理和背包/营地跨源转移都提交正式 InventoryRevision，营地侧提交 CampInventoryRevision。
 // 6. 运行期库存的拒绝和提交都会写出来源、槽位、路线和版本，方便区分营地内部整理是否被 UI 误投成背包整理。
 void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatInventorySlotView& SourceSlot,
 	const FCatInventorySlotView& TargetSlot)
@@ -528,10 +528,10 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 				*UEnum::GetValueAsString(CurrentSource->SlotSource), SubmittedSourceSlotIndex);
 			return;
 		}
-		const bool bCrossEquipmentToCamp =
+		const bool bCrossInventoryToCamp =
 			CurrentSource->SlotSource == ECatInventorySlotSource::InventoryObject
 			&& CurrentTarget->SlotSource == ECatInventorySlotSource::CampInventoryObject;
-		const bool bCrossCampToEquipment =
+		const bool bCrossCampToInventory =
 			CurrentSource->SlotSource == ECatInventorySlotSource::CampInventoryObject
 			&& CurrentTarget->SlotSource == ECatInventorySlotSource::InventoryObject;
 		ACatCampInventoryActor* CampInventory = BoundCampInventory.Get();
@@ -546,7 +546,7 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 				ECatDomainCommandError::DependencyUnavailable, RejectRevision);
 			return;
 		}
-		if (!bSameRunInventory && (!CampInventory || (!bCrossEquipmentToCamp && !bCrossCampToEquipment)))
+		if (!bSameRunInventory && (!CampInventory || (!bCrossInventoryToCamp && !bCrossCampToInventory)))
 		{
 			UE_LOG(LogCatUI, Warning,
 				TEXT("Event=ui_inventory_slot_drop_rejected Reason=InvalidCampRoute Request=%s SourceSource=%s SourceIndex=%d TargetSource=%s TargetIndex=%d Camp=%s RejectRevision=%lld"),
@@ -567,16 +567,16 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 		{
 			DropRoute = TEXT("InventoryInternal");
 		}
-		else if (bCrossEquipmentToCamp)
+		else if (bCrossInventoryToCamp)
 		{
 			DropRoute = TEXT("InventoryToCamp");
 		}
 		UE_LOG(LogCatUI, Log,
-			TEXT("Event=ui_inventory_slot_drop_submitted Request=%s Route=%s SourceSource=%s SourceIndex=%d TargetSource=%s TargetIndex=%d InventoryRevision=%lld EquipmentRevision=%lld CampRevision=%lld Camp=%s"),
+			TEXT("Event=ui_inventory_slot_drop_submitted Request=%s Route=%s SourceSource=%s SourceIndex=%d TargetSource=%s TargetIndex=%d InventoryRevision=%lld CampRevision=%lld Camp=%s"),
 			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), DropRoute,
 			*UEnum::GetValueAsString(CurrentSource->SlotSource), SubmittedSourceSlotIndex,
 			*UEnum::GetValueAsString(CurrentTarget->SlotSource), SubmittedTargetSlotIndex,
-			State.InventoryRevision, State.Equipment.Revision, State.CampInventoryRevision, *GetNameSafe(CampInventory));
+			State.InventoryRevision, State.CampInventoryRevision, *GetNameSafe(CampInventory));
 		Model->MarkActionSubmitted(ECatInventoryAction::MoveInventoryItem, RequestId);
 		if (bSameRunInventory && CurrentSource->SlotSource == ECatInventorySlotSource::CampInventoryObject)
 		{
@@ -606,7 +606,7 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 					SubmittedSourceSlotIndex, SubmittedTargetSlotIndex);
 			}
 		}
-		else if (bCrossEquipmentToCamp)
+		else if (bCrossInventoryToCamp)
 		{
 			const int64 SubmittedCampRevision = CurrentTarget->CampInventoryRevision;
 			const int64 SubmittedInventoryRevision = State.InventoryRevision;
