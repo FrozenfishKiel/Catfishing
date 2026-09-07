@@ -589,7 +589,7 @@ void UCatFishingDebugSubsystem::DrawChumChargePreview(APlayerController* Control
 }
 
 // 会话状态：钩/鱼位置球、竿尖到鱼的连线、近岸圈与规格 7.1 的状态提示文字。
-// 精简模式关闭完整细节时，保留鱼线、阶段文字和抄网提示；窝料数量优先读正式库存组件，旧宿主才读 Equipment 兼容快照。
+// 精简模式关闭完整细节时，保留鱼线、阶段文字和抄网提示；窝料数量只读正式库存组件，避免调试层继续把旧投影当库存事实。
 void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const bool bFullDetail) const
 {
 #if ENABLE_DRAW_DEBUG
@@ -613,22 +613,8 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 					ChumCount += Entry.StackCount;
 				}
 			}
-			PushStatus(1, FColor::White, FString::Printf(TEXT("窝料 x%d"), ChumCount));
 		}
-		else if (const UCatEquipmentComponent* Equipment = Character->GetEquipmentComponent())
-		{
-			const FCatEquipmentLoadoutSnapshot& Loadout = Equipment->GetSnapshot();
-			for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
-			{
-				const UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
-					Slot.DefinitionId);
-				if (Definition && Definition->Kind == ECatEquipmentKind::Chum && Slot.Quantity > 0)
-				{
-					ChumCount += Slot.Quantity;
-				}
-			}
-			PushStatus(1, FColor::White, FString::Printf(TEXT("窝料 x%d"), ChumCount));
-		}
+		PushStatus(1, FColor::White, FString::Printf(TEXT("窝料 x%d"), ChumCount));
 	}
 
 	if (!Session)

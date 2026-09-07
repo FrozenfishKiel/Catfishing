@@ -107,7 +107,7 @@ void UCatFishingService::Deinitialize()
 // 抛竿请求的服务器流程：
 // 1. 先用玩家稳定身份和 RequestId 形成幂等键，重复请求复用首次终态，正在处理的同键请求直接拒绝。
 // 2. 再按 GameMode、身体状态、鱼竿占用、装备版本和水域依赖逐层校验；任一依赖缺失都会进入统一 Finish 收口。
-// 3. Finish 负责清理进行中标记、缓存终态，并在依赖缺失时输出诊断；鱼饵余量优先读取正式库存组件，旧宿主没有库存组件时才回退旧装备快照。
+// 3. Finish 负责清理进行中标记、缓存终态，并在依赖缺失时输出诊断；鱼饵余量只读取正式库存组件，旧 Equipment Snapshot 仅提供当前选择标识。
 // 4. 全部依赖成立后才创建服务器 Session、扣减鱼饵并推进鱼竿/会话事实，客户端只通过复制观察结果。
 FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	const FCatBeginCastCommand& Command)
@@ -141,6 +141,7 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 			const UCatInventoryComponent* Inventory = Character ? Character->GetInventoryComponent() : nullptr;
 			const FCatEquipmentLoadoutSnapshot Loadout = Equipment ? Equipment->GetSnapshot() : FCatEquipmentLoadoutSnapshot{};
 			int32 BaitQuantity = 0;
+			// 依赖拒绝日志里的数量只从正式库存读；旧 Equipment Snapshot 保留选择字段，但不再代表玩家实际还持有多少鱼饵。
 			if (Inventory && !Loadout.BaitDefinitionId.IsNone())
 			{
 				for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
@@ -150,13 +151,6 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 					{
 						BaitQuantity += Entry.StackCount;
 					}
-				}
-			}
-			else if (!Loadout.BaitDefinitionId.IsNone())
-			{
-				for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
-				{
-					if (Slot.DefinitionId == Loadout.BaitDefinitionId) BaitQuantity += Slot.Quantity;
 				}
 			}
 			UE_LOG(LogCatFishing, Warning,
