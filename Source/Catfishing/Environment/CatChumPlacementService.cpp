@@ -12,6 +12,8 @@
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
 
 namespace CatChumPlacementServicePrivate
 {
@@ -35,10 +37,10 @@ namespace CatChumPlacementServicePrivate
 			? ECatChumFieldError::EquipmentRevisionConflict : ECatChumFieldError::EquipmentUnavailable;
 	}
 
-	static const FCatRunInventorySlot* FindChumUseSlot(const UCatEquipmentComponent& Equipment,
+	static const FCatRunInventorySlot* FindLegacyChumUseSlot(const UCatEquipmentComponent& Equipment,
 		const FGuid ChumItemInstanceId, const int32 Quantity)
 	{
-		// 窝料实例解析流程：玩家命令必须带真实 ItemInstanceId；服务器只在自己的库存快照里复核这个实例仍然存在、仍有足量。
+		// 旧窝料投影解析流程：没有正式库存组件的宿主才读取 Equipment Snapshot；正式角色必须回到 InventoryComponent。
 		for (const FCatRunInventorySlot& Slot : Equipment.GetSnapshot().InventorySlots)
 		{
 			if (Slot.ItemInstanceId == ChumItemInstanceId && Slot.Quantity >= Quantity)
@@ -53,6 +55,11 @@ namespace CatChumPlacementServicePrivate
 FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* RequestingController,
 	const FCatPlaceChumCommand& Command)
 {
+	// 打窝服务流程：
+	// 1. 先验证服务器、玩家身份、命令幂等和玩法 gate，再用 ChumFieldSubsystem 重放首次终态。
+	// 2. 玩家窝料事实优先从正式库存按实例 ID 读取；没有正式库存组件的旧宿主才回退 Equipment Snapshot。
+	// 3. 水域、距离和视线通过后先准备窝点，再提交库存扣量；扣量失败会撤销待提交窝点。
+	// 4. 库存提交成功后才激活并复制窝点，保证世界影响不会脱离真实物品消耗单独成立。
 	using namespace CatChumPlacementServicePrivate;
 	UWorld* World = GetWorld();
 	if (!World || World->GetNetMode() == NM_Client || !RequestingController
@@ -107,14 +114,37 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	ACatCharacter* Character = Cast<ACatCharacter>(RequestingController->GetPawn());
 	const UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
 	UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
-	const FCatRunInventorySlot* ChumSlot = Equipment
-		? FindChumUseSlot(*Equipment, Command.ChumItemInstanceId, Command.Quantity) : nullptr;
-	if (!ChumSlot)
+	FName ChumDefinitionId = NAME_None;
+	UCatEquipmentDefinition* Definition = nullptr;
+	if (const UCatInventoryComponent* OwnerInventory = Character ? Character->GetInventoryComponent() : nullptr)
+	{
+		// 正式库存复核：服务层不信任命令里的 DefinitionId，而是用实例当前所在槽位覆盖窝料身份。
+		const int32 FormalChumSlotIndex =
+			OwnerInventory->FindInventorySlotIndexFromInstanceId(Command.ChumItemInstanceId);
+		const FCatInventoryEntry* FormalChumEntry =
+			OwnerInventory->GetInventoryEntryAtSlot(FormalChumSlotIndex);
+		const UCatInventoryItemInstance* FormalChumInstance =
+			FormalChumEntry != nullptr ? FormalChumEntry->Instance : nullptr;
+		if (FormalChumInstance != nullptr
+			&& FormalChumEntry->StackCount >= Command.Quantity)
+		{
+			ChumDefinitionId = FormalChumInstance->GetItemDefinitionId();
+			Definition = Cast<UCatEquipmentDefinition>(FormalChumInstance->GetItemDefinition());
+		}
+	}
+	else if (Equipment)
+	{
+		if (const FCatRunInventorySlot* LegacyChumSlot =
+			FindLegacyChumUseSlot(*Equipment, Command.ChumItemInstanceId, Command.Quantity))
+		{
+			ChumDefinitionId = LegacyChumSlot->DefinitionId;
+			Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(ChumDefinitionId);
+		}
+	}
+	if (ChumDefinitionId.IsNone())
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::EquipmentUnavailable));
 	}
-	const FName ChumDefinitionId = ChumSlot ? ChumSlot->DefinitionId : NAME_None;
-	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(ChumDefinitionId);
 	if (!Character || !Conditions || Conditions->GetSnapshot().bDowned || !Equipment || !Definition
 		|| Definition->Kind != ECatEquipmentKind::Chum
 		|| !Definition->IsRuntimeDefinitionReady()

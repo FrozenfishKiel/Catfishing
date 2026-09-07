@@ -15,6 +15,8 @@
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSession.h"
 #include "Framework/Game/CatfishingPlayerController.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
 #include "GameFramework/PlayerState.h"
@@ -928,7 +930,7 @@ void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController
 	DeliverBeginCastResultFromAuthority(Fishing->BeginCast(Controller, Command));
 }
 
-// 服务器打窝流程：按按住时长算蓄力 → 与客户端预览同一套弹道预测得到落点 → 选一份可用窝料 → 交给 PlaceChum 做射程/夹角/视线/库存/水域校验。
+// 服务器打窝流程：按按住时长算蓄力 → 与客户端预览同一套弹道预测得到落点 → 优先从正式库存选一份可用窝料 → 交给 PlaceChum 做射程/夹角/视线/库存/水域校验。
 void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerController* Controller, const FGuid& RequestId,
 	const double HeldSeconds)
 {
@@ -943,13 +945,13 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
 	}
-	// 选窝料实例流程：优先 starter 指定类型中的足量实例，否则使用背包里第一份能完整支付本次投放数量的 Chum。
+	// 选窝料实例流程：正式库存里先找 starter 指定类型，再找任意足量 Chum；没有正式库存组件的旧宿主才在 Equipment Snapshot 里按同一顺序兼容。
 	const FCatEquipmentLoadoutSnapshot& Loadout = Equipment->GetSnapshot();
 	const int32 ChumQuantity = FMath::Max(1, GetDefault<UCatFishingSettings>()->ChumThrowQuantity);
 	const FName PreferredChumDefinitionId = GetDefault<UCatEquipmentSettings>()->StarterChumDefinitionId;
-	const FCatRunInventorySlot* ChumSlot = nullptr;
-	const auto CanUseChumSlot = [ChumQuantity](const FCatRunInventorySlot& Slot,
-		const FName RequiredDefinitionId)
+	FCatRunInventorySlot SelectedChumSlot;
+	bool bHasChumSlot = false;
+	const auto CanUseChumSlot = [ChumQuantity](const FCatRunInventorySlot& Slot, const FName RequiredDefinitionId)
 	{
 		const UCatEquipmentDefinition* Definition =
 			GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Slot.DefinitionId);
@@ -958,29 +960,71 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 			&& Definition && Definition->Kind == ECatEquipmentKind::Chum
 			&& Definition->ConsumesInventoryQuantityOnUse();
 	};
-	if (!PreferredChumDefinitionId.IsNone())
+	const auto TrySelectFormalChumSlot = [&](const UCatInventoryComponent& OwnerInventory,
+		const FName RequiredDefinitionId)
 	{
-		for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
+		// 正式库存自动选料：按槽位顺序读取实例和数量，避免 Equipment 旧投影决定本次要扣哪一堆窝料。
+		for (int32 SlotIndex = 0; SlotIndex < OwnerInventory.GetInventorySlotCount(); ++SlotIndex)
 		{
-			if (CanUseChumSlot(Slot, PreferredChumDefinitionId))
+			const FCatInventoryEntry* Entry = OwnerInventory.GetInventoryEntryAtSlot(SlotIndex);
+			const UCatInventoryItemInstance* Instance = Entry != nullptr ? Entry->Instance : nullptr;
+			UCatEquipmentDefinition* Definition =
+				Instance != nullptr ? Cast<UCatEquipmentDefinition>(Instance->GetItemDefinition()) : nullptr;
+			if (Instance != nullptr
+				&& Entry->StackCount >= ChumQuantity
+				&& (RequiredDefinitionId.IsNone() || Instance->GetItemDefinitionId() == RequiredDefinitionId)
+				&& Definition != nullptr
+				&& Definition->Kind == ECatEquipmentKind::Chum
+				&& Definition->ConsumesInventoryQuantityOnUse())
 			{
-				ChumSlot = &Slot;
-				break;
+				SelectedChumSlot.DefinitionId = Instance->GetItemDefinitionId();
+				SelectedChumSlot.ItemInstanceId = Instance->GetItemInstanceId();
+				SelectedChumSlot.Quantity = Entry->StackCount;
+				bHasChumSlot = true;
+				return true;
+			}
+		}
+		return false;
+	};
+	if (const UCatInventoryComponent* OwnerInventory = Character->GetInventoryComponent())
+	{
+		if (!PreferredChumDefinitionId.IsNone())
+		{
+			TrySelectFormalChumSlot(*OwnerInventory, PreferredChumDefinitionId);
+		}
+		if (!bHasChumSlot)
+		{
+			TrySelectFormalChumSlot(*OwnerInventory, NAME_None);
+		}
+	}
+	else
+	{
+		if (!PreferredChumDefinitionId.IsNone())
+		{
+			for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
+			{
+				if (CanUseChumSlot(Slot, PreferredChumDefinitionId))
+				{
+					SelectedChumSlot = Slot;
+					bHasChumSlot = true;
+					break;
+				}
+			}
+		}
+		if (!bHasChumSlot)
+		{
+			for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
+			{
+				if (CanUseChumSlot(Slot, NAME_None))
+				{
+					SelectedChumSlot = Slot;
+					bHasChumSlot = true;
+					break;
+				}
 			}
 		}
 	}
-	if (!ChumSlot)
-	{
-		for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
-		{
-			if (CanUseChumSlot(Slot, NAME_None))
-			{
-				ChumSlot = &Slot;
-				break;
-			}
-		}
-	}
-	if (!ChumSlot)
+	if (!bHasChumSlot)
 	{
 		// 库存里没有一份能完整支付本次投放数量的窝料实例，直接拒绝，不进入弹道计算。
 		Result.Error = ECatChumFieldError::EquipmentUnavailable;
@@ -1006,13 +1050,13 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 	Command.RequestId = RequestId;
 	Command.ExpectedWaterRegionHandle = Region;
 	Command.ExpectedEquipmentRevision = Loadout.Revision;
-	Command.ChumItemInstanceId = ChumSlot->ItemInstanceId;
-	Command.ChumDefinitionId = ChumSlot->DefinitionId;
+	Command.ChumItemInstanceId = SelectedChumSlot.ItemInstanceId;
+	Command.ChumDefinitionId = SelectedChumSlot.DefinitionId;
 	Command.Quantity = ChumQuantity;
 	Command.ClientCandidateWorldPoint = Landing;
 	UE_LOG(LogCatFishing, Log, TEXT("Event=chum_throw Held=%.2f Alpha=%.2f Landing=%s Chum=%s ChumItem=%s"),
-		HeldSeconds, Alpha, *Landing.ToString(), *ChumSlot->DefinitionId.ToString(),
-		*ChumSlot->ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
+		HeldSeconds, Alpha, *Landing.ToString(), *SelectedChumSlot.DefinitionId.ToString(),
+		*SelectedChumSlot.ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
 	DeliverPlaceChumResultFromAuthority(Service->PlaceChum(Controller, Command));
 }
 

@@ -97,7 +97,7 @@ struct FCatPlaceChumCommand
 {
 	GENERATED_BODY()
 
-	/** 本次打窝请求的幂等身份；输入组件生成，窝料场和 Equipment 都用它防止重放重复扣量或重复落点。 */
+	/** 本次打窝请求的幂等身份；输入组件生成，窝料场和库存扣量入口都用它防止重放重复扣量或重复落点。 */
 	UPROPERTY(BlueprintReadWrite)
 	FGuid RequestId;
 
@@ -105,11 +105,11 @@ struct FCatPlaceChumCommand
 	UPROPERTY(BlueprintReadWrite)
 	FCatWaterRegionHandle ExpectedWaterRegionHandle;
 
-	/** 调用方看到的随身库存版本；Equipment Use 用它拒绝基于旧背包事实的扣量。 */
+	/** 调用方看到的随身库存兼容版本；字段名保留旧协议口径，正式库存存在时只作为 Use 命令的并发前提。 */
 	UPROPERTY(BlueprintReadWrite)
 	int64 ExpectedEquipmentRevision = 0;
 
-	/** 玩家实际要消耗的窝料物品实例；PlaceChum 用它锁定背包中的那一格，避免同类多堆窝料被误扣。 */
+	/** 玩家实际要消耗的窝料物品实例；PlaceChum 用它锁定正式库存中的那一格，避免同类多堆窝料被误扣。 */
 	UPROPERTY(BlueprintReadWrite)
 	FGuid ChumItemInstanceId;
 
@@ -117,7 +117,7 @@ struct FCatPlaceChumCommand
 	UPROPERTY(BlueprintReadWrite)
 	FName ChumDefinitionId = NAME_None;
 
-	/** 本次投放消耗的窝料份数；Equipment Use 会从 ChumItemInstanceId 对应数量栈扣除这份数量。 */
+	/** 本次投放消耗的窝料份数；库存扣量提交会从 ChumItemInstanceId 对应数量栈扣除这份数量。 */
 	UPROPERTY(BlueprintReadWrite)
 	int32 Quantity = 0;
 
