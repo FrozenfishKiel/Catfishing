@@ -364,15 +364,15 @@ Event BeginPlay
   └─ Server Configure Equipment              ← BlueprintCallable（本轮新加的）
          RequestId            = New Guid
          ExpectedRevision     = Snapshot.Revision     ← 首次是 0
-         RodDefinitionId      = "Rod_Basic"
-         BaitDefinitionId     = "Bait_Basic"
-         FloatDefinitionId    = "Float_Basic"
-         ScoopNetDefinitionId = "StarterScoopNet"     ← 第 4 个参数；当前默认配置不会另行发放，必须已有库存实例才会成功
+         RodDefinitionId      = "StarterRodT1"
+         BaitDefinitionId     = "BugBait"
+         FloatDefinitionId    = "FeatherFloat"
+         ScoopNetDefinitionId = "StarterScoopNet"     ← 第 4 个参数；当前临时测试路径在新角色占有时发一把，选择仍要求已有库存实例
 ```
 
-**怎么知道成功了**：这是个 `Server, Reliable` RPC，没有回执结构体。判断方式是**轮询 `Get Snapshot` 的 `Revision` 是否从 0 变成 1**，或者监听装备组件的复制变化。建议在 UI 上显示当前 `RodDefinitionId`，非 `None` 就说明装配好了。
+**怎么知道成功了**：先准备好对应钓具的库存实例，再调用 `Server, Reliable` RPC。监听装备组件快照变化，核对 Rod/Bait/Float/ScoopNet 的定义与实例 ID 是否为本次选择；版本应与请求前的快照比较，不能把 `Revision=1` 当作装配成功，因为临时发网本身也会推进库存版本。相同装配的幂等请求可能不推进版本，应以当前选择实例为准。
 
-> `RequestScoop` 仍要求服务器装备快照里存在有效 `ScoopNet`。临时默认抄网发放配置和启动分支已删除，当前手工装配留空不会再沿用服务器默认抄网；在商店/奖励获取接入前，抄网链路只能通过人工准备好库存实例后再选择验证。
+> `RequestScoop` 仍要求服务器装备快照里存在有效 `ScoopNet`。当前启用独立临时测试开关 `bAutoGrantStarterScoopNet=True`：单人、房主和加入玩家在新 Character 被占有时，由服务器补齐一把正式 `StarterScoopNet` 并自动选中，占一个背包格；已有抄网不重复增加，同一角色重占有也不会再次补发。手工装配若把抄网参数留空仍会清除选择，应带上这份已有库存实例。测试时新开局后检查背包抄网及 F 的射程；日志用 `equipment_starter_scoop_completed` 和 `equipment_scoop_selection_replicated`，按 `ScoopNetItemInstanceId` 对照服务器与客户端。商店获取接通后关闭开关并删除临时来源，清理位置见 `FishingArchitecture_zh-CN.md` §2.5。
 
 ---
 
@@ -414,7 +414,7 @@ Event BeginPlay
 
 ### ~~1. 抢抄需要 ScoopNet，但装配接口传不进去~~ ✅ 已修
 
-`ServerConfigureEquipment` 现在提交 Rod/Bait/Float/ScoopNet 四个 DefinitionId，并可同时提交对应的四个 ItemInstanceId。库存 UI 应从当前格子带上实例 ID；旧调用没带实例 ID 时，服务器仍会按 DefinitionId 兼容解析一份可用实例。当前正式目录仍有 `"StarterScoopNet"` 定义，但默认配置不发放它；没有已有库存实例时，抄网选择必须保持失败而不是凭空补发。
+`ServerConfigureEquipment` 现在提交 Rod/Bait/Float/ScoopNet 四个 DefinitionId，并可同时提交对应的四个 ItemInstanceId。库存 UI 应从当前格子带上实例 ID；旧调用没带实例 ID 时，服务器仍会按 DefinitionId 兼容解析一份可用实例。当前临时测试来源只在新角色占有时补齐 `"StarterScoopNet"`；装配 RPC 自身不发物品，没有已有库存实例时抄网选择仍拒绝。
 
 ### ~~2. 打窝需要窝料库存，但没有发放入口~~ ✅ 已修
 

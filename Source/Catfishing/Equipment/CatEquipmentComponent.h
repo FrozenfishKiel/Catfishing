@@ -50,6 +50,9 @@ public:
 	FCatDomainCommandResult GrantEquipmentFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName DefinitionId);
 
+	/** 临时测试入口，仅由玩家占有后的服务器调用；已有抄网则复用，每个 Character 成功处理一次，商店获取接通后删除。 */
+	void GrantStarterScoopNetIfConfigured();
+
 	/** 背包点击或玩法入口共用的物品使用入口；它按实例调用定义侧 Use 裁决，Equipment 只执行移出实例、扣指定数量或 no-op 的库存事务。 */
 	FCatInventoryItemUseResult Use(FGuid RequestId, int64 ExpectedRevision, FGuid ItemInstanceId,
 		int32 Quantity = 1);
@@ -213,6 +216,11 @@ private:
 	TMap<FGuid, FCatInventoryItemUseRecord> InventoryItemUseRecords;
 	/** 物品 Use/UnUse 首次终态缓存；简单消耗品重试会读它而不是再次扣量，部署/收回重试也不会重复移动同一实例。 */
 	TMap<FString, FCatInventoryItemUseResult> InventoryItemUseTerminalCache;
+	/** 临时测试发放的角色生命周期记录；不复制、不存档，避免把抄网移出背包后重占有刷出第二把。 */
+	bool bStarterScoopNetGrantHandled = false;
+	/** 抄网选择复制日志只在定义或实例变化时输出，不参与玩法裁决。 */
+	FName LastLoggedScoopNetDefinitionId = NAME_None;
+	FGuid LastLoggedScoopNetItemInstanceId;
 	/** 仅用于客户端复制诊断限频，不参与耐久或玩法裁决。 */
 	FGuid LastLoggedRodInstanceId;
 	int32 LastLoggedRodDurabilityBand = INDEX_NONE;

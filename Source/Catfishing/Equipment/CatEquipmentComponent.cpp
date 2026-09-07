@@ -5,6 +5,7 @@
 #include "Equipment/CatEquipmentSettings.h"
 #include "Equipment/CatRunInventorySlotOperations.h"
 #include "GameFramework/Pawn.h"
+#include "Logging/CatLogContext.h"
 #include "Net/UnrealNetwork.h"
 #include "Engine/World.h"
 
@@ -316,7 +317,7 @@ ECatDomainCommandError UCatEquipmentComponent::ValidateEquipmentGrantFromAuthori
 	return ECatDomainCommandError::None;
 }
 
-// 商店非数量物品入库流程：
+// 商店、奖励或临时测试来源的非数量物品入库流程：
 // 1. 先用 RequestId 和定义 ID 找终态缓存；合法重放只返回首次结果，不重复增加库存数量或推进 Revision。
 // 2. 首次提交复用扣款前预检同一套准入规则，并用 ExpectedRevision 防止陈旧 UI 覆盖较新的本人库存。
 // 3. 把非数量定义加入随身库存格数组，并在当前选择缺失或旧竿不可用且已收回时修正选择。
@@ -378,6 +379,76 @@ FCatDomainCommandResult UCatEquipmentComponent::GrantEquipmentFromAuthority(cons
 	TerminalCache.Add(Key, Result);
 	TerminalPayloadByKey.Add(Key, PayloadSignature);
 	return Result;
+}
+
+// 临时测试路径：只在玩家占有后的 authority 调用；复用正式库存事务，绝不从客户端或 Tick 自动补货。
+void UCatEquipmentComponent::GrantStarterScoopNetIfConfigured()
+{
+	const APawn* Pawn = Cast<APawn>(GetOwner());
+	const AController* Controller = Pawn ? Pawn->GetController() : nullptr;
+	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
+	if (!Pawn || !Pawn->HasAuthority() || !Controller || !Controller->IsPlayerController()
+		|| !Settings->bAutoGrantStarterScoopNet || bStarterScoopNetGrantHandled)
+	{
+		return;
+	}
+
+	const FGuid RequestId = FGuid::NewGuid();
+	const FName DefinitionId = Settings->StarterScoopNetDefinitionId;
+	// PossessedBy 期间 Controller->GetPawn() 尚可能指向旧身体；实际写入对象必须直接记录组件 Owner。
+	const FString Context = FString::Printf(TEXT("World=%s Owner=%s LocalRole=%d Authority=true %s"),
+		*GetPathNameSafe(GetWorld()), *GetNameSafe(Pawn), static_cast<int32>(Pawn->GetLocalRole()),
+		*CatLogContext::BuildControllerFields(Controller));
+	UE_LOG(LogCatEquipment, Log,
+		TEXT("Event=equipment_starter_scoop_requested RequestId=%s Definition=%s Revision=%lld %s"),
+		*RequestId.ToString(), *DefinitionId.ToString(), Snapshot.Revision, *Context);
+	const UCatEquipmentDefinition* Definition = Settings->FindRuntimeDefinition(DefinitionId);
+	if (!Definition || Definition->Kind != ECatEquipmentKind::ScoopNet)
+	{
+		UE_LOG(LogCatEquipment, Warning,
+			TEXT("Event=equipment_starter_scoop_rejected RequestId=%s Definition=%s Error=InvalidScoopDefinition Revision=%lld %s"),
+			*RequestId.ToString(), *DefinitionId.ToString(), Snapshot.Revision, *Context);
+		return;
+	}
+
+	// 已有任一完整抄网即视为满足测试需求；保留玩家已有的有效选择，不额外占用背包格。
+	for (const FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
+	{
+		const UCatEquipmentDefinition* OwnedDefinition = Slot.Quantity > 0 && Slot.ItemInstanceId.IsValid()
+			? Settings->FindRuntimeDefinition(Slot.DefinitionId) : nullptr;
+		if (!OwnedDefinition || OwnedDefinition->Kind != ECatEquipmentKind::ScoopNet) continue;
+		const FName PreviousDefinitionId = Snapshot.ScoopNetDefinitionId;
+		const FGuid PreviousItemInstanceId = Snapshot.ScoopNetItemInstanceId;
+		AutoSelectGrantedInventoryItem(*OwnedDefinition, Slot.DefinitionId);
+		bStarterScoopNetGrantHandled = true;
+		if (PreviousDefinitionId != Snapshot.ScoopNetDefinitionId || PreviousItemInstanceId != Snapshot.ScoopNetItemInstanceId)
+		{
+			++Snapshot.Revision;
+			PublishSnapshot();
+		}
+		UE_LOG(LogCatEquipment, Log,
+			TEXT("Event=equipment_starter_scoop_completed RequestId=%s Result=AlreadyOwned Definition=%s ScoopNetItemInstanceId=%s Revision=%lld %s"),
+			*RequestId.ToString(), *Snapshot.ScoopNetDefinitionId.ToString(), *Snapshot.ScoopNetItemInstanceId.ToString(),
+			Snapshot.Revision, *Context);
+		return;
+	}
+
+	const FCatDomainCommandResult Grant = GrantEquipmentFromAuthority(RequestId, Snapshot.Revision, DefinitionId);
+	bStarterScoopNetGrantHandled = Grant.bCommitted;
+	if (Grant.bCommitted)
+	{
+		UE_LOG(LogCatEquipment, Log,
+			TEXT("Event=equipment_starter_scoop_completed RequestId=%s Result=Granted Definition=%s ScoopNetItemInstanceId=%s Quantity=1 Revision=%lld %s"),
+			*RequestId.ToString(), *DefinitionId.ToString(), *Snapshot.ScoopNetItemInstanceId.ToString(),
+			Snapshot.Revision, *Context);
+	}
+	else
+	{
+		UE_LOG(LogCatEquipment, Warning,
+			TEXT("Event=equipment_starter_scoop_rejected RequestId=%s Definition=%s Error=%s Revision=%lld %s"),
+			*RequestId.ToString(), *DefinitionId.ToString(), *UEnum::GetValueAsString(Grant.Error),
+			Snapshot.Revision, *Context);
+	}
 }
 
 FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, const int64 ExpectedRevision,
@@ -1105,6 +1176,21 @@ FCatDomainCommandResult UCatEquipmentComponent::RepairRodAtCamp(const FGuid Requ
 // Snapshot 复制回调流程：客户端只刷新只读表现；不会自动装备、补充普通饵数量或修复断竿。
 void UCatEquipmentComponent::OnRep_Snapshot()
 {
+	if (LastLoggedScoopNetDefinitionId != Snapshot.ScoopNetDefinitionId
+		|| LastLoggedScoopNetItemInstanceId != Snapshot.ScoopNetItemInstanceId)
+	{
+		const APawn* Pawn = Cast<APawn>(GetOwner());
+		UE_LOG(LogCatEquipment, Log,
+			TEXT("Event=equipment_scoop_selection_replicated Definition=%s ScoopNetItemInstanceId=%s Revision=%lld World=%s NetMode=%d Authority=%s LocalRole=%d Owner=%s PlayerState=%s StableNetId=%s"),
+			*Snapshot.ScoopNetDefinitionId.ToString(), *Snapshot.ScoopNetItemInstanceId.ToString(), Snapshot.Revision,
+			*GetPathNameSafe(GetWorld()), static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone),
+			GetOwner() && GetOwner()->HasAuthority() ? TEXT("true") : TEXT("false"),
+			GetOwner() ? static_cast<int32>(GetOwner()->GetLocalRole()) : 0, *GetNameSafe(GetOwner()),
+			*GetNameSafe(Pawn ? Pawn->GetPlayerState() : nullptr),
+			*CatLogContext::BuildStableNetIdValue(Pawn ? Pawn->GetPlayerState() : nullptr));
+		LastLoggedScoopNetDefinitionId = Snapshot.ScoopNetDefinitionId;
+		LastLoggedScoopNetItemInstanceId = Snapshot.ScoopNetItemInstanceId;
+	}
 	const int32 DurabilityBand = FMath::IsFinite(Snapshot.RodDurability)
 		? FMath::FloorToInt(Snapshot.RodDurability / 5.0) : INDEX_NONE;
 	if (Snapshot.RodItemInstanceId.IsValid()

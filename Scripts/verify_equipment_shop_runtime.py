@@ -190,7 +190,7 @@ def main() -> None:
     _require(not bool(_get_property(equipment_settings, "b_auto_configure_starter_loadout", "bAutoConfigureStarterLoadout")),
              "开发期 Starter Loadout 自动装配必须关闭，第四模块只能由商店或解锁授权等正式入口交付装备")
     _require(bool(_get_property(equipment_settings, "b_auto_grant_starter_scoop_net", "bAutoGrantStarterScoopNet")),
-             "当前开发期默认抄网发放必须显式打开；正式获取接入后应连同本断言一起关闭")
+             "当前每角色一次的临时抄网测试发放必须显式打开；商店获取接入后删除发放入口及本断言")
     _require(int(_get_property(equipment_settings, "starter_chum_quantity", "StarterChumQuantity")) > 0,
              "StarterChumQuantity 必须为正")
 

@@ -48,6 +48,10 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	bool bAutoConfigureStarterLoadout = false;
 
+	/** 临时抄网测试来源：玩家占有新角色时，服务器补齐一把抄网并自动选择；商店获取接通后删除本开关和对应发放入口。 */
+	UPROPERTY(Config, EditAnywhere, Category = "TemporaryTesting")
+	bool bAutoGrantStarterScoopNet = false;
+
 	/** Starter 兜底鱼竿定义 ID；只在兜底开关打开时读取，且该定义必须已经存在于角色随身库存。 */
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterRodDefinitionId = NAME_None;
@@ -60,7 +64,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterFloatDefinitionId = NAME_None;
 
-	/** Starter 兜底希望选择的抄网定义；Character 兜底流程只用它匹配随身库存已有物品，不把它当成获取来源。 */
+	/** Starter 选择及临时抄网测试发放使用的定义；只有 bAutoGrantStarterScoopNet 打开时才允许据此创建库存实例。 */
 	UPROPERTY(Config, EditAnywhere, Category = "StarterFallback")
 	FName StarterScoopNetDefinitionId = NAME_None;
 

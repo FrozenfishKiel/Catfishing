@@ -187,7 +187,7 @@ void ACatCharacter::BeginPlay()
 	InitializeAbilityActorInfo();
 }
 
-// 服务端占有流程：父类先建立 Controller/Owner/PlayerState 关系，再幂等刷新 Character=this 的 ASC Owner/Avatar 并尝试整体应用一次初值；最后仅 authority 授予正式 AbilitySet 并应用可选 starter 选择。
+// 服务端占有流程：建立身份与 ASC 后授予 AbilitySet，再由 Equipment 执行独立临时抄网发放，最后应用可选 Starter 选择。
 void ACatCharacter::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
@@ -195,6 +195,10 @@ void ACatCharacter::PossessedBy(AController* NewController)
 	if (HasAuthority())
 	{
 		GrantDefaultAbilitySetOnce();
+		if (EquipmentComponent)
+		{
+			EquipmentComponent->GrantStarterScoopNetIfConfigured();
+		}
 		ApplyStarterLoadoutIfConfigured();
 	}
 }

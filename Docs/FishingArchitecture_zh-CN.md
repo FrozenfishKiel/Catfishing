@@ -147,7 +147,7 @@ Runner 将模拟器的候选结果交给水域/地面解析，再由 Encounter �
 **开放阶段：`HookedFight` + `NearShore` + `ExhaustedReel`。** 鱼身上的圈**一直存在**，鱼的剩余体力完全不参与抄网判定——满体力鱼只要已经上钩并进入射线范围也能直接抄走。更早的阶段不开放：鱼还没被提上钩，抄它等于绕过提竿机制。
 
 其余谓词：抄手在岸上（Outside 水域）+ 地面坡度 ≤ `MaximumScoopGroundSlopeDegrees` + 视线不被遮挡 + 装了 ScoopNet。
-当前默认配置不再发放或自动选中 `StarterScoopNet`；临时默认抄网发放配置和 Character 启动分支已删除。`Equip_ScoopNet_Starter` 仍是正式目录定义，但在商店或奖励来源接入前，玩家暂时没有默认获取渠道。
+当前测试配置启用独立的 `bAutoGrantStarterScoopNet=True`，`StarterScoopNetDefinitionId=StarterScoopNet`。每个玩家占有新 Character 后，由 Equipment 的 `GrantStarterScoopNetIfConfigured` 通过正式库存事务补齐一把抄网并自动选中，占一个背包格；已持有任一完整抄网时复用已有装备，同一 Character 成功处理后不因重复占有或移出背包再次补发。新角色/新世界使用新库存，重新执行一次。定义无效或库存满时明确拒绝并记录日志，不覆盖已有物品。整套 `bAutoConfigureStarterLoadout` 仍关闭。这是商店接通前的临时测试来源，正式抄网资产为 `/Game/Catfishing/Data/Equipment/Equip_ScoopNet_Starter`；后续先关闭开关，再删除临时发放入口、占有调用、一次性记录及专项发放测试/脚本断言，保留正式资产、普通入库和抄网捕获链。
 **不再要求"鱼在近岸带内"**——射线∩圆已是唯一范围口径，再叠一层离岸距离会出现"debug 圈画成绿色但服务器拒绝"的表现/判定打架。`NearShoreWidthCentimeters` 仅用于外部 StateTree 请求进入 NearShore 时校验真实鱼位置，不参与抢抄距离或自动推进会话阶段。
 
 首个合法 F 会生成一个 `ACatFishPickupActor`，并立即调用与岸上死鱼按 E 相同的嘴叼交接；此时鱼仍是世界 Actor，不进入背包或鱼护。玩家之后对具体地面鱼护按 E，才由 Items 执行唯一容器提交与图鉴归档。一次 F 用同一个 `RequestId` 串联 `scoop_target_selected`（或 `scoop_target_selection_failed`）、`scoop_rejected`、`fishing_scoop_terminal` 与最终 `fishing_command_result`。拒绝日志除逐项谓词和距离/高度/射程外，还同时保留角色中心、胶囊足底和地面命中点三组 WaterQuery 的错误枚举、Inside/Boundary/Outside、Region/几何版本、垂直差和带符号岸距；后两组只用于诊断，不改变当前以角色中心为准的权威规则。由此可以区分“角色中心高度超差”“脚下在水域内/边界”“没对准”“太远”“地面或视线不合法”。
@@ -206,7 +206,7 @@ Config/DefaultGame.ini    10 个 section（改后必须重启 Editor；软引用
 无 Target Skeleton 的 `ABPT_CatFishBase`，播放速率与状态机只维护一次。
 
 数值快照：猫力50 体力100 ／ 竿强60 耐久70 线长1500 ／ 鱼力40 体力50 ／ 真咬窗3s 完美窗1s ／ 近岸100cm ／ 鱼竿操作位2个、左右间距140cm。
-开发便利开关：整套 `bAutoConfigureStarterLoadout=False`；临时默认抄网发放已经删除，默认进游戏不会创建或选中抄网。
+开发便利开关：整套 `bAutoConfigureStarterLoadout=False`；独立临时测试开关 `bAutoGrantStarterScoopNet=True` 只为新玩家角色补齐一把抄网并选中，商店获取接通后删除这条路径。
 
 ## 6. 已知待办（都在契约后面，不影响表现层）
 

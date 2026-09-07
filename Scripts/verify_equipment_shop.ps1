@@ -80,7 +80,8 @@ function Invoke-ModuleStaticCheck {
     Assert-TextPattern "equipment_shop_runtime" ".harness/harness.json" "runtime verification entry"
     Assert-TextPattern "Equipment / Shop" "Docs/Development" "human progress entry"
     Assert-TextPattern "bAutoConfigureStarterLoadout=False" "Config/DefaultGame.ini" "developer starter auto loadout disabled"
-    Assert-TextPattern "bAutoGrantStarterScoopNet=True" "Config/DefaultGame.ini" "temporary starter scoop grant is explicitly enabled"
+    # 临时测试来源；商店抄网获取接通时，连同发放代码和这两条临时断言一起删除。
+    Assert-TextPattern "bAutoGrantStarterScoopNet=True" "Config/DefaultGame.ini" "temporary per-character scoop test grant is explicitly enabled"
     Assert-TextPattern "bAutoGrantStarterScoopNet" "Docs/Development" "temporary starter scoop grant is tracked in the human progress entry"
     Assert-TextPattern "Equip_Rod_StarterT1" "Config/DefaultGame.ini" "formal starter rod asset entry"
     Assert-TextPattern "Equip_Rod_ShopT2" "Config/DefaultGame.ini" "formal glass fiber rod asset entry"
