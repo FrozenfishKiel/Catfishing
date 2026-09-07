@@ -108,7 +108,7 @@ public:
 	/** 指定 Fishing 会话是否仍处于活动状态；Commit/Release 用它防止旧会话重复改写。 */
 	bool IsFishingUseActive(FGuid FishingSessionId) const;
 
-	/** 固定营地修竿点提交维修；正式库存存在时扣一份浮木并恢复当前鱼竿实例，旧 Snapshot 只接收结果投影。 */
+	/** 固定营地修竿点提交维修；必须从正式库存扣一份浮木并恢复当前鱼竿实例，旧 Snapshot 只接收结果投影。 */
 	FCatDomainCommandResult RepairRodAtCamp(FGuid RequestId, int64 ExpectedRevision, bool bAtCamp);
 
 	/** 本机随身库存或钓鱼选择变化通知；不携带可写指针或客户端授权。 */

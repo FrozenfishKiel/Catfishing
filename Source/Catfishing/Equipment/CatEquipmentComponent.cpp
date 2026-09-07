@@ -2045,10 +2045,10 @@ bool UCatEquipmentComponent::IsFishingUseActive(const FGuid FishingSessionId) co
 
 // 营地修竿提交流程：
 // 1. 先拒绝正在 Use 或 Fishing Use 的物品，再按 RequestId 返回已缓存终态，避免重放时再次扣材料。
-// 2. 读取当前鱼竿、浮木定义和 Owner 正式库存；正式库存存在时只从 InventoryComponent 查询可消费浮木。
+// 2. 读取当前鱼竿、浮木定义和 Owner 正式库存；没有正式库存时直接拒绝，避免维修继续写旧 InventorySlots。
 // 3. 校验营地、authority、Revision、鱼竿/浮木定义和材料数量；任一失败都不改库存或旧投影。
 // 4. 正式路径先解析当前选择的鱼竿实例，再扣一份浮木并写回同一实例的耐久和断竿状态。
-// 5. 投影刷新失败会恢复浮木 entry、鱼竿实例和旧 Snapshot；没有正式库存的历史宿主才沿用旧数组扣材料。
+// 5. 投影刷新失败会恢复浮木 entry、鱼竿实例和旧 Snapshot；旧 Snapshot 只作为 UI/存档读模型接收结果。
 FCatDomainCommandResult UCatEquipmentComponent::RepairRodAtCamp(const FGuid RequestId, const int64 ExpectedRevision,
 	const bool bAtCamp)
 {
@@ -2071,28 +2071,22 @@ FCatDomainCommandResult UCatEquipmentComponent::RepairRodAtCamp(const FGuid Requ
 	UCatEquipmentDefinition* Rod = Settings->FindRuntimeDefinition(Snapshot.RodDefinitionId);
 	UCatEquipmentDefinition* Driftwood = Settings->FindRuntimeDefinition(Settings->DriftwoodDefinitionId);
 	UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
-	int32 FormalDriftwoodSlotIndex = INDEX_NONE;
-	FCatRunInventorySlot FormalDriftwoodSlot;
-	const FCatRunInventorySlot* DriftwoodSlot = nullptr;
-	if (OwnerInventory != nullptr)
-	{
-		// 修竿材料只从正式库存确认；旧 Snapshot 在这里不再决定浮木数量。
-		FormalDriftwoodSlotIndex =
-			OwnerInventory->FindFirstInventorySlotIndexByDefinitionId(Settings->DriftwoodDefinitionId);
-		const FCatInventoryEntry* FormalDriftwoodEntry =
-			OwnerInventory->GetInventoryEntryAtSlot(FormalDriftwoodSlotIndex);
-		if (FormalDriftwoodEntry != nullptr
-			&& BuildLegacyRunInventorySlotFromFormalEntry(*FormalDriftwoodEntry, FormalDriftwoodSlot))
-		{
-			DriftwoodSlot = &FormalDriftwoodSlot;
-		}
-	}
-	else
-	{
-		DriftwoodSlot = FindFirstInventorySlotByDefinition(Settings->DriftwoodDefinitionId);
-	}
+	const int32 FormalDriftwoodSlotIndex = OwnerInventory != nullptr
+		? OwnerInventory->FindFirstInventorySlotIndexByDefinitionId(Settings->DriftwoodDefinitionId) : INDEX_NONE;
+	const FCatInventoryEntry* FormalDriftwoodEntry = OwnerInventory != nullptr
+		? OwnerInventory->GetInventoryEntryAtSlot(FormalDriftwoodSlotIndex) : nullptr;
+	const UCatInventoryItemInstance* FormalDriftwoodInstance =
+		FormalDriftwoodEntry != nullptr ? FormalDriftwoodEntry->Instance.Get() : nullptr;
+	const UCatEquipmentDefinition* FormalDriftwoodDefinition = FormalDriftwoodInstance != nullptr
+		? Cast<UCatEquipmentDefinition>(FormalDriftwoodInstance->GetItemDefinition()) : nullptr;
+	// 浮木在修竿里是领域命令材料，不是玩家对物品本身执行 Use；因此只要求它是正式库存里的 Driftwood，实际扣量交给 InventoryComponent。
 	if (!bAtCamp || !GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid() || !Rod || !Driftwood
-		|| Driftwood->Kind != ECatEquipmentKind::Driftwood || !DriftwoodSlot || DriftwoodSlot->Quantity <= 0)
+		|| OwnerInventory == nullptr || FormalDriftwoodEntry == nullptr || FormalDriftwoodInstance == nullptr
+		|| FormalDriftwoodDefinition == nullptr
+		|| FormalDriftwoodInstance->GetItemDefinitionId() != Settings->DriftwoodDefinitionId
+		|| FormalDriftwoodDefinition->Kind != ECatEquipmentKind::Driftwood
+		|| !FormalDriftwoodDefinition->IsRuntimeDefinitionReady()
+		|| Driftwood->Kind != ECatEquipmentKind::Driftwood || FormalDriftwoodEntry->StackCount <= 0)
 	{
 		Result.Error = ECatDomainCommandError::PolicyUndecided;
 	}
@@ -2102,56 +2096,35 @@ FCatDomainCommandResult UCatEquipmentComponent::RepairRodAtCamp(const FGuid Requ
 	}
 	else
 	{
-		if (OwnerInventory != nullptr)
+		FCatRunInventorySlot FormalRodSlot;
+		UCatEquipmentInventoryItemInstance* FormalRodInstance =
+			ResolveSelectedFormalRodInstanceFromInventory(*OwnerInventory, *Rod, FormalRodSlot);
+		if (FormalRodInstance == nullptr)
 		{
-			FCatRunInventorySlot FormalRodSlot;
-			UCatEquipmentInventoryItemInstance* FormalRodInstance =
-				ResolveSelectedFormalRodInstanceFromInventory(*OwnerInventory, *Rod, FormalRodSlot);
-			if (FormalRodInstance == nullptr)
-			{
-				Result.Error = ECatDomainCommandError::PolicyUndecided;
-			}
-			else
-			{
-				const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
-				const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
-				const double SavedRodDurability = FormalRodInstance->GetRodDurability();
-				const bool bSavedRodBroken = FormalRodInstance->IsRodBroken();
-				if (OwnerInventory->ConsumeItemAtSlot(FormalDriftwoodSlotIndex, 1))
-				{
-					FormalRodInstance->SetRodRuntimeStateFromAuthority(Rod->MaximumRodDurability, false);
-					if (RefreshInventoryProjectionFromInventoryComponentFromAuthority(Rod, FormalRodSlot.DefinitionId))
-					{
-						Result.bCommitted = true;
-						Result.Error = ECatDomainCommandError::None;
-					}
-					else
-					{
-						FormalRodInstance->SetRodRuntimeStateFromAuthority(SavedRodDurability, bSavedRodBroken);
-						OwnerInventory->ReplaceInventoryEntriesFromAuthority(
-							SavedEntries, GetConfiguredInventorySlotCapacity());
-						Snapshot = SavedSnapshot;
-						Result.Error = ECatDomainCommandError::PolicyUndecided;
-					}
-				}
-				else
-				{
-					Result.Error = ECatDomainCommandError::PolicyUndecided;
-				}
-			}
+			Result.Error = ECatDomainCommandError::PolicyUndecided;
 		}
 		else
 		{
-			FCatRunInventorySlot ConsumedDriftwood;
-			if (RemoveInventoryItemQuantityFromInstance(DriftwoodSlot->ItemInstanceId, 1, ConsumedDriftwood))
+			const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
+			const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
+			const double SavedRodDurability = FormalRodInstance->GetRodDurability();
+			const bool bSavedRodBroken = FormalRodInstance->IsRodBroken();
+			if (OwnerInventory->ConsumeItemAtSlot(FormalDriftwoodSlotIndex, 1))
 			{
-				Snapshot.RodDurability = Rod->MaximumRodDurability;
-				Snapshot.bRodBroken = false;
-				SyncSelectedRodStateToSelectedInstance();
-				++Snapshot.Revision;
-				PublishSnapshot();
-				Result.bCommitted = true;
-				Result.Error = ECatDomainCommandError::None;
+				FormalRodInstance->SetRodRuntimeStateFromAuthority(Rod->MaximumRodDurability, false);
+				if (RefreshInventoryProjectionFromInventoryComponentFromAuthority(Rod, FormalRodSlot.DefinitionId))
+				{
+					Result.bCommitted = true;
+					Result.Error = ECatDomainCommandError::None;
+				}
+				else
+				{
+					FormalRodInstance->SetRodRuntimeStateFromAuthority(SavedRodDurability, bSavedRodBroken);
+					OwnerInventory->ReplaceInventoryEntriesFromAuthority(
+						SavedEntries, GetConfiguredInventorySlotCapacity());
+					Snapshot = SavedSnapshot;
+					Result.Error = ECatDomainCommandError::PolicyUndecided;
+				}
 			}
 			else
 			{
