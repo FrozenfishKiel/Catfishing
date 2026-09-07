@@ -10,7 +10,9 @@ class ACatCampInventoryActor;
 class ACatCharacter;
 class UCatContainerReplicationComponent;
 class UCatEquipmentComponent;
+class UCatInventoryComponent;
 class ULocalPlayer;
+struct FCatInventoryEntry;
 
 /** 库存 Model 完整投影变化通知；每个库存 WBP 自己监听后重读 ViewState，并只刷新自己对应的数据源格子。 */
 DECLARE_MULTICAST_DELEGATE(FCatInventoryModelChanged);
@@ -22,13 +24,13 @@ class CATFISHING_API UCatInventoryModel : public UObject
 	GENERATED_BODY()
 
 public:
-	/** 绑定当前 LocalPlayer、Controller 和随身库存读源；成功后立即发布完整库存投影。 */
+	/** 绑定当前 LocalPlayer、Controller、正式随身库存和钓鱼选择读源；成功后立即发布完整库存投影。 */
 	bool Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController, ACatCharacter* InCharacter);
 
 	/** 成对解除外部容器、随身库存和 PlayerController 结果订阅，并清空 pending、结果和 ViewState。 */
 	void Unbind();
 
-	/** 返回 Model 是否仍绑定有效玩家库存读源；PageController 用它拒绝已失效 Widget 意图。 */
+	/** 返回 Model 是否仍绑定有效玩家上下文；PageController 用它拒绝已失效 Widget 意图。 */
 	bool IsBound() const;
 
 	/** 写入库存打开状态并刷新投影；打开状态由 PageController 持有，Model 只把它合入 ViewState。 */
@@ -66,7 +68,10 @@ public:
 	FCatInventoryModelChanged OnViewStateChanged;
 
 private:
-	/** 随身库存快照变化入口；物品数量或耐久变化会关闭本地等待并让库存重读完整投影。 */
+	/** 正式随身库存变化入口；物品数量、实例或槽位变化会关闭本地等待并让库存重读完整投影。 */
+	void HandleInventoryObservedChanged();
+
+	/** 钓鱼选择或旧随身库存投影变化入口；迁移期仍用它刷新选择摘要，并在正式库存未完整复制时触发 fallback。 */
 	void HandleEquipmentSnapshotChanged();
 
 	/** 外部容器复制变化入口；任意已绑定外部容器内容变化后会关闭本地等待并重读完整投影。 */
@@ -98,7 +103,11 @@ private:
 	FCatInventorySlotView MakeSlotView(const FCatContainerSnapshot& Snapshot, int32 ContainerSlotIndex,
 		int32 ExternalSlotIndex, const TCHAR* ContainerDisplayName) const;
 
-	/** 按当前随身库存数组生成一个只读物品格；它只暴露本随身库存内的格子下标、定义和数量，不提供 Items 容器移动授权。 */
+	/** 按正式随身库存条目生成一个只读物品格；它只暴露本背包内的格子下标、定义、实例和数量，不提供 Items 容器移动授权。 */
+	FCatInventorySlotView MakeInventorySlotView(const FCatInventoryEntry& InventoryEntry,
+		int32 InventorySlotIndex) const;
+
+	/** 按旧随身库存数组生成一个只读物品格；只在正式库存复制尚未到位时作为临时展示 fallback。 */
 	FCatInventorySlotView MakeInventorySlotView(const FCatRunInventorySlot& InventorySlot,
 		int32 InventorySlotIndex) const;
 
@@ -133,7 +142,11 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APlayerController> BoundPlayerController;
 
-	/** 当前 Character 的 Equipment 复制出口；库存从这里读取随身物品和钓鱼选择，不把它们写入鱼护容器。 */
+	/** 当前 Character 的正式随身库存读源；背包格展示优先从这里读取实例、定义和数量。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UCatInventoryComponent> BoundInventory;
+
+	/** 当前 Character 的 Equipment 复制出口；Model 只从这里读取钓鱼选择，并在正式库存尚未形成完整 SlotView 时短暂 fallback。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatEquipmentComponent> BoundEquipment;
 
@@ -144,7 +157,10 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<ACatCampInventoryActor> BoundCampInventory;
 
-	/** 随身库存快照订阅句柄；Unbind 必须从同一组件移除。 */
+	/** 正式随身库存变化订阅句柄；Unbind 必须从同一组件移除，避免换 Pawn 后旧库存继续驱动 UI。 */
+	FDelegateHandle InventoryChangedHandle;
+
+	/** 钓鱼选择和旧随身库存投影订阅句柄；Unbind 必须从同一组件移除，避免迁移期 fallback 读到上一角色。 */
 	FDelegateHandle EquipmentChangedHandle;
 
 	/** 营地公共仓库快照订阅句柄；公共仓库上下文切换时必须从同一 Actor 移除。 */

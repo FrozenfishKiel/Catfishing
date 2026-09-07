@@ -38,7 +38,7 @@ enum class ECatInventorySlotSource : uint8
 {
 	/** 还没有可靠来源；这类格子只能展示占位，不能提交任何后端命令。 */
 	Unknown,
-	/** 当前角色随身库存数组中的一个格子；它不作为 Items 容器移动源，但可整理、转入营地仓库或把钓具设为当前选择。 */
+	/** 当前角色正式随身库存中的一个格子；它不作为 Items 容器移动源，但可整理、转入营地仓库或把钓具设为当前选择。 */
 	InventoryObject,
 	/** Items 容器中的槽位；只有这种来源可以作为鱼或容器物体拖拽的源和目标。 */
 	ContainerObject,
@@ -76,7 +76,7 @@ struct FCatInventorySlotView
 	UPROPERTY(BlueprintReadOnly)
 	int32 ContainerSlotIndex = INDEX_NONE;
 
-	/** 该格在随身库存数组中的槽位下标；只有 InventoryObject 有效，拖拽整理、背包/营地转移和右键选择都会让服务器按它复核。 */
+	/** 该格在正式随身库存中的槽位下标；只有 InventoryObject 有效，迁移期服务器仍按同一下标回到旧复核入口。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 InventorySlotIndex = INDEX_NONE;
 
@@ -88,7 +88,7 @@ struct FCatInventorySlotView
 	UPROPERTY(BlueprintReadOnly)
 	int32 CampInventorySlotIndex = INDEX_NONE;
 
-	/** 运行期库存物品的实例 ID；随身库存和营地仓库会填写它，UI 只读展示，服务器仍按槽位和版本重读真相。 */
+	/** 运行期库存物品的实例 ID；正式随身库存和营地仓库会填写它，UI 只读展示，服务器仍按槽位和版本重读真相。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid InventoryItemInstanceId;
 
@@ -124,7 +124,7 @@ struct FCatInventorySlotView
 	UPROPERTY(BlueprintReadOnly)
 	ECatEquipmentKind EquipmentKind = ECatEquipmentKind::Unknown;
 
-	/** 该格对应的装备定义 ID；随身库存和营地公共仓库都从各自 FCatRunInventorySlot 投影它，服务器仍按对应宿主重读权威数组。 */
+	/** 该格对应的兼容定义 ID；随身库存从正式物品定义投影它，营地公共仓库从旧槽位投影它，服务器仍重读对应宿主真相。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName EquipmentDefinitionId = NAME_None;
 
@@ -222,15 +222,19 @@ struct FCatInventoryViewState
 	UPROPERTY(BlueprintReadOnly)
 	int64 CampInventoryRevision = 0;
 
-	/** 当前 Character 的随身库存和钓鱼选择快照；EquipmentComponent 写入，库存只读展示格子数组和当前钓鱼选择。 */
+	/** 当前 Character 的钓鱼选择和旧兼容快照；背包格优先读正式 InventoryComponent，Equipment 只保留选择摘要与迁移期 fallback。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatEquipmentLoadoutSnapshot Equipment;
 
-	/** 当前是否已经绑定到本角色 EquipmentComponent；false 表示随身库存事实还不能可靠展示。 */
+	/** 当前是否已经绑定到本角色 EquipmentComponent；false 表示钓鱼选择摘要还不能可靠展示。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bEquipmentAvailable = false;
 
-	/** 随身背包自己的格子数量；只来自 EquipmentComponent 的 InventorySlots 和配置容量。 */
+	/** 当前是否已经拿到可用于展示的随身库存读源；正式库存优先，旧 Equipment 投影只作临时 fallback。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bInventoryAvailable = false;
+
+	/** 随身背包自己的格子数量；优先来自正式 InventoryComponent，正式复制未到位时才从旧 Equipment 投影补空格。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 InventorySlotCount = 0;
 
