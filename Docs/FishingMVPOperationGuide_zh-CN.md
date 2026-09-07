@@ -250,13 +250,13 @@ FishingSessionStateTree=/Game/Data/StateTrees/ST_FishingSession.ST_FishingSessio
 | **E** | `IA_Interact` | 准星交互/拾取；本地只选择 Current Target，真正拾取由服务器复核距离、视线和物品状态 | ✅ C++ 已实现，走 Native InputTag 而不是 Gameplay Ability |
 | **左键** | `IA_LMB` | 无会话→**长按预览抛物线（不蓄力）松手抛竿**；真咬窗→**提竿**（1 秒内=完美）；遛鱼→**按住拖** | 提竿/拖 ✅ C++；**抛竿预览+提交走蓝图**（5.2） |
 | **右键** | `IA_RMB` | 遛鱼时**按住松开线杯**（L_max 内确实自由出线时按配置恢复体力；线放尽重新绷紧后停止恢复） | ✅ C++（`UCatGA_FishingSlack`） |
-| **Q** | `IA_BaitSpot` | **长按蓄力打窝**：抛物线越蓄越远，松手投出 | 蓄力预览+提交走蓝图（5.3）；同键上的占位符 Chum Ability 会同时发一条无害的空命令 |
+| **Q** | `IA_BaitSpot` | **长按蓄力打窝**：抛物线越蓄越远，松手投出 | `UCatGA_FishingChum` → Pressed/Released → 服务器投放（5.3）；预览可接蓝图，不再另接投放 |
 | **F** | `IA_CatchFish` | 抢抄 | ✅ C++ |
 | **X** | `IA_CancelFishing` | 取消当前会话 | ✅ C++ |
 
 `DA_CatAbilityInputConfig.AbilityInputActions` 是 **6 条**（5 个核心 + `Cat.Input.Fishing.Slack` → `IA_RMB`）；`DA_CatAbilitySet_Default` 相应 6 个 Ability。另有 `NativeInputActions`：`Cat.Input.Interact` → `IA_Interact`，它不授予第 7 个 Ability。
 
-> 左键与 Q 上，GAS Ability 和你的蓝图绑定会**同时触发**（同一个 IA 两条独立绑定）。无会话时按左键，GAS 的 `RequestHook` 会拿到一条 `DependencyUnavailable` 回执，无害；按 Q 时占位符 Chum Ability 同理。UI 若监听 `OnResultReceived` 弹失败提示，请按 `CommandType` 过滤这两种。
+> Q 已由 GAS 的 `UCatGA_FishingChum` 处理蓄力按下和松开，正常投放会收到明确的成功/失败回执。若旧蓝图仍独立绑定 Q 并提交 `PlaceChum`，需在编辑器检查该图并迁移至 5.3 的单一投放入口，避免重复投放；不要用 UI 过滤失败来掩盖重复请求。本文不把未审计的二进制蓝图视为已经迁移。
 
 ---
 
@@ -422,11 +422,9 @@ Event BeginPlay
 
 > 没有直接给组件方法加 `BlueprintCallable`，而是走 Controller RPC 转发 —— 和 `ServerConfigureEquipment` / `ServerRepairRodAtCamp` 保持一致的权限边界，避免任何蓝图都能直接摸到域写入口。
 
-### 3. `IA_BaitSpot`(Q) 那个 Chum Ability 是占位符
+### 3. 窝料类型差异仍未配置
 
-`UCatGA_FishingChum` 发的是一个**不带载荷**的命令（没有目标点、没有窝料 ID、没有数量），服务器 `HandleAbilityCommandFromAuthority` 里没有 `PlaceChum` 分支，必然落到 `DependencyUnavailable`。
-
-它存在的唯一原因是 `UCatAbilitySet::IsRuntimeReady()` 强制要求 5 个 InputTag 齐全。**不要试图修它** —— 打窝本质上需要客户端提供瞄准点和窝料选择，走步骤 5.3 的独立蓝图路径才是对的。Q 键留着当占位就行。
+`UCatGA_FishingChum` 已负责 Q 按下/松开，服务器从库存选择窝料并调用 `PlaceChum`，不是占位能力。当前四种正式窝料的三轴贡献完全相同；Q 还会优先使用足量 BugChum。不同类型的筛选测试需要先确认实际投放的 Definition，再在测试资产上准备不同的三轴配方。正式配方调参尚未完成，详见下方测试方案。
 
 ---
 
@@ -437,6 +435,117 @@ Event BeginPlay
 `ScheduleWaitingProbeFromStateTree` 首次采样使用冻结的落水点，首次预警与咬钩计时包含剩余飞行时间。Development 落盘日志分类为 `LogCatFishing`，可用 `cast_aim_request`、`cast_range_rejected`、`cast_flight_started`、`cast_flight_landed`、`cast_flight_received`、`begin_cast_received` 对照请求、Session 和 CastAttempt；端到端验收需要同时检查房主与客户端日志。
 
 ---
+
+## 窝料效果测试（2026-09-07）
+
+本节区分当前代码事实、理论预测和待执行实验；不会把理论数值当成游戏实测。
+
+### 当前到底有什么效果
+
+正式四种 `Equip_Chum_{Bug,FermentedGrain,FruitFragrance,HolyLight}` 的影响半径基础值都为 300 cm，时长现为 180 s。全局 `InfluenceAreaMultiplier=8` 使实际半径约 8.485 m、直径约 16.971 m；相比原面积倍率 2，直径翻倍、覆盖面积变成四倍。中心初始贡献不因扩大面积而稀释，时间曲线按新时长拉长，因此固定实际距离/经过秒数上的贡献也可能增大。
+
+当前四种配方都是 `(腥=1, 香=0.5, 酵=0.2)`。换名字不会换效果；圣光窝料也没有绕过巨鱼人数、挑战度、水域门的逻辑。
+
+默认 BugBait 的咬钩频率倍率与最小等待倍率都为 1。按 `ACatFishingSession::ScheduleWaitingProbeFromStateTree`，令抛竿调度时冻结落点的三轴有效贡献总和为 C：
+
+```text
+频率 λ = 0.2 × (2 - exp(-C))                  单位：每秒
+落水至真咬 T = 5 + min(-ln(1-U)/λ, 8.5) + 1.5 单位：秒，U 为随机数
+理论平均 T = 6.5 + (1-exp(-8.5λ))/λ
+```
+
+| 调度时的采样条件 | C | 频率倍率 | 理论平均等待 |
+| --- | --- | --- | --- |
+| 无窝料 | 0 | 1.000 | 10.59 s |
+| 一份新窝料中心 | 1.7 | 1.817 | 9.13 s |
+| 三份新窝料完全重叠中心 | 5.1 | 1.994 | 8.92 s |
+| 浓度趋于无限的上限 | 趋于无限 | 趋于 2 | 8.92 s |
+
+这里的新窝料中心是理想条件，实际投放、瞄准耗时会使贡献开始衰减。约 14% 的平均提速是单份理想值；“频率接近翻倍”并不等于“总等待减半”。本轮没有调整无窝速度、频率公式或 5 s 慢浮/1.5 s 预警。
+
+选鱼则在有效提竿时重新调用 `SampleChumAtPoint`：先按水域、挑战度、人数等筛候选并选择挑战档，再在该档内乘上窝料权重和鱼饵权重。正式曲线为 `1+2x`，`x=Affinity/(Affinity+10)`。一份新窝料对偏腥、偏香、偏酵三组鱼的权重倍率分别约为 1.197、1.119、1.077；偏腥相对偏酵的额外优势只有约 11.2%，不是增加 11.2 个百分点。最终鱼种占比还受基础权重、鱼饵、个体重量和挑战档影响。
+
+### 先固定实验条件
+
+- 使用同一地图和水域、同一准确落点、同一鱼饵/装备、同一猫力量和体力、同一在场人数；统计期间不吃鱼升级。时段/天气固定，并记录实际 gate 开关。
+- 排除自然窝点和其他玩家打窝：`ConfiguredWeather=Rain` 可触发 `RainBloom` 的自然 BugChum；“我没按 Q”不等于落点没有窝。先检查 `natural_chum_terminal` 和圆环，在独立测试环境隔离该事件。
+- 按 `chum_throw` 中的 `Chum` 和 `chum_field_prepared` 中的 `Definition` 确认真正投了什么。Q 优先用足量 BugChum；测试其他类型时让测试库存只含被测类型，或用已有显式 `SubmitPlaceChum` 携带对应实例/Definition。不要只看背包选中格。
+- 每轮先打窝，再抛竿。等待调度只采样一次，中途补窝不会让已经排定的本次咬钩提前。过期回归也要在过期后重新抛竿，不能拿到期前已排好的计时器判断失效。
+- 每轮控制窝料年龄和叠加数量。不能连续向同一个旧窝补一份，再把每次都标成“一份新窝料”；必须隔离旧场。手工测试可重进测试关卡，自动测试应每轮重新创建 World/场并使用指定服务器时间。
+
+### A. 提速与衰减
+
+先每组做 10 次操作检查，再用每组至少 60～100 次独立首次咬钩做初步统计。交错执行 A/B，或自动化使用同一组随机种子配对比较，避免时段、疲劳、随机序列恰好偏向某组。理论约 1.46 s 的差值不能用三五竿断言。
+
+| 组别 | 布置 | 观察和判据 |
+| --- | --- | --- |
+| A0 无窝 | 全新场，没有人工/自然窝覆盖落点 | 建立平均值、中位数、P90 和 15 s 截断占比基线 |
+| A1 单份中心 | 一份窝，固定投放至抛竿间隔，钩落中心 | 平均值应比 A0 低；核对下降幅度及置信区间，不要求每一竿更快 |
+| A3 三份中心 | 三份同种窝近同时完全重叠，记录各自年龄 | 应接近饱和；相对 A1 的额外收益很小，不能要求三倍提速 |
+| A距离 | 单份，落点分别为中心、0.5R、0.99R、1.01R | 同年龄下浓度随距离下降；1.01R 重新抛竿应回到无窝基线。R≈8.485 m，边缘误差需用实际落点核对 |
+| A时间 | 单份，在年龄 0、90、179、180、185 s 采样/重抛 | 曲线倍率约 1、0.6、接近 0、0、0；180 s 已无贡献，默认清理最多约晚 5 s，网络显示另有传输延迟 |
+| A补窝时序 | 无窝抛竿后再补窝；与先补窝后抛竿对照 | 当前前者不重算本轮等待，后者才用于检验提速 |
+
+时间指标统一为“落水成功 → 首次 `TrueBiteWindow`”，不要从按下抛竿、进入 Waiting、开始预警计时，也不要包含遛鱼/抄鱼。每轮计时后取消并开启新试验；漏按造成的第二次机会另记，不能与首次等待混合。配对自动化记录每个种子的差值和均值置信区间；一般随机人工样本用两组均值差的置信区间，不拿单竿输赢作判据。
+
+### B. 筛选鱼类
+
+先做内容前置检查：**现在直接拿四种正式窝料互相比，理论结果就应该相同**。如果同种子、同状态、同数量/年龄/位置下换类型，结果发生系统性差异，应先排查实际投放类型和测试污染。
+
+要验证筛选算法本身，在独立测试夹具中准备总量相同的三种配方，例如腥 `(1.7,0,0)`、香 `(0,1.7,0)`、酵 `(0,0,1.7)`；这些是测试刺激，不是本轮写入的正式平衡值。先构造同一挑战档内、基础权重/体重/鱼饵倍率均相同、只在偏好上不同的候选，验证喜腥/喜香/喜酵鱼的**归一化概率**确实随配方切换。再使用正式鱼库复验，确保目标鱼没有被水域、人数或挑战度提前排除。
+
+正式鱼库可观察：偏香组 `LittleColorFish/PetalFish/WindbellFish`，偏酵组 `LittleSilverFish/Loach/StinkyFish`；偏腥组包含 `SaltedFish/PufferFish/Blackfish`，但必须先核对其在该玩家状态下的候选资格和挑战档，不能把不同档强行当等权样本。
+
+每组先做约 300 次选鱼作分布初筛；当前效应很小，定量确认建议自动化每组 5,000 次以上并报告各鱼种/偏好组占比、差值和 95% 置信区间，必要时增加样本。批量测试应直接调用生产 `UCatFishCatalogSettings::SelectRuntimeDefinition`，使用一组共同种子，固定其余上下文；不要只重写一份公式来证明生产选择器有效。
+
+统计“成功提竿时选中的鱼”，不统计“最后抓到的鱼”。以 `fishing_fish_selection_resolved` 的 `Selected=true/FishId` 为准，失败选鱼单列。`NormalizedProbability` 是**所选挑战档内部**概率，不能当全鱼库概率；实测总占比须按所有成功选鱼统计。圣光窝料不会凭名字获得巨鱼特许。
+
+### 日志和记录格式
+
+Development 包无需加 `-log` 即应写入 `<打包根目录>/Catfishing/Saved/Logs`；编辑器在项目 `Saved/Logs`。正式联机验收分别保存房主和客户端的新日志。本轮尚未执行打包双端实验。
+
+| 事件/字段 | 用途 |
+| --- | --- |
+| `chum_throw`、`chum_field_prepared`、`place_chum_result` | 实际 Definition、数量、落点、FieldId、半径、起止时间及提交是否成功；prepared 不能单独证明已提交 |
+| `cast_flight_landed` 的 `Succeeded=1`、`Session` | 房主落水时间与实际落点；统一按服务器日志计算等待 |
+| `fishing_phase_entered` 的 `Phase=TrueBiteWindow`、`SessionId` | 同 Session 第一次真咬时间；枚举文本可能包含类型前缀 |
+| `fishing_fish_selection_resolved` | 提竿抽到的 FishId、有效候选数、档内概率、当时贡献场数量 |
+| `natural_chum_terminal` | 识别自然窝料污染 |
+
+建议每行一轮：`Group, Trial, SessionId, Seed(自动化), ChumDefinition, Quantity, DistanceCm, ChumAgeAtScheduleSec, LandedTime, FirstTrueBiteTime, WaitSec, FishId, SelectionSucceeded, ChumFieldsAtHook, Notes`。按试验条件额外记录水域、猫力量/体力、人数、鱼饵、天气和时段。
+
+现有日志能测时长、投放身份和选鱼结果，**没有直接输出完整三轴采样及最终 λ**。若要逐点验证浓度数值，应在 C++ Automation 中调用生产 `SampleChumAtPoint`，或后续添加一次性的调度诊断；不能只凭 `ChumFields>0` 推断有效浓度大于零，因为半径边缘的衰减可以为零。
+
+### 三层验收与迁移入口
+
+- `contract`：四种正式资产时长 180 s、配置倍率 8、其他影响字段保持；原有面积倍率自动化检查属于此层。范围/时长迁移入口是 `Scripts/update_chum_duration.py`，只接受旧值 60 或新值 180，多次执行不重复加 120；带 `-VerifyChumTuning` 时只读取验证。
+- `runtime_behavior`：生产采样的距离/年龄/重叠/到期边界、首次等待对照、正式选鱼分布、客户端投放只扣一次，以及双方看到同一场的起止事实。新进程加载资产不能替代这些行为证据。
+- `presentation_delivery`：实际地图上约 16.97 m 的圆环与有效覆盖吻合、180 s 后正确消失、两端一致；正式 WBP 和整体模块交付仍按对应模块验收。
+
+迁移和只读重载示例（先关闭会保存这些资产的编辑器实例，避免旧内存值覆盖新文件）：
+
+```powershell
+& D:/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe D:/develop/Catfishing/Catfishing.uproject -run=pythonscript -script=D:/develop/Catfishing/Scripts/update_chum_duration.py -unattended -nop4 -NullRHI -nosound -DDC=InstalledNoZenLocalFallback
+& D:/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe D:/develop/Catfishing/Catfishing.uproject -run=pythonscript -script=D:/develop/Catfishing/Scripts/update_chum_duration.py -VerifyChumTuning -unattended -nop4 -NullRHI -nosound -DDC=InstalledNoZenLocalFallback
+```
+
+两次均应输出四行 `CHUM_TUNING_VERIFIED` 和 `CHUM_TUNING_PASS`，第二次 Mode 为 VerifyOnly。实际引擎/项目位置不同可替换路径。
+
+### 本轮影响盘点与交付核对
+
+修改前已在对话列出下表；当前补记实际结果。基线为四种正式窝料 300 cm 基础半径、60 s、同配方，配置面积倍率 2；工作区原有鱼竿/角色/鱼钩/会话等并行改动未纳入本次修改。证据根目录为 `Saved/Automation/ChumTuning`，本轮不新建人工进度入口。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 输入/扣量 | `Source/Catfishing/AbilitySystem/Fishing/InputAbilities/CatFishingChumAbility.cpp` → `Fishing/Integration/CatFishingCommandComponent.cpp::ThrowChumFromChargeOnAuthority` → `Environment/CatChumPlacementService.cpp::PlaceChum` | Q 蓄力、BugChum 优先、权威事务扣一份不变 | 保留源码入口；纠正文档中的占位说法 | 原调用链直接读取新配置/资产 | 重复请求/失败扣量需游戏实测；不涉及新增持久化 | 源码未改；`BP_GA_Chum` 的注册表引用包含 `/Game/Data/Abilities/DA_CatAbilitySet_Default`，未删除能力资产 |
+| 半径 | `Config/DefaultGame.ini` 的 `CatChumFieldSettings.InfluenceAreaMultiplier` → `Environment/CatChumFieldSubsystem.cpp::PrepareField` | 面积倍率 2→8；直径约 8.49→16.97 m，基础半径仍 300 cm | 原配置改值；沿用 sqrt 换算和一次性缩放 | 接收端已有半径字段，无结构迁移 | 单位混淆；配置重载及已有面积换算 Automation | `VerifyConsumers.log` 读取倍率 8，四种实际半径 848.528137 cm；`Contract/index.json` 1/1 Success |
+| 时长/生命周期 | `/Game/Catfishing/Data/Equipment/Equip_Chum_{Bug,FermentedGrain,FruitFragrance,HolyLight}` 的 `ChumInfluence.DurationSeconds` → `PrepareField/ActivatePreparedFieldDeferred` | 60→180 s，按新生命周期归一化时间衰减 | 原字段迁移；`Scripts/update_chum_duration.py` 检查旧值并防止重复加时 | 全量预检→保存四资产→新进程只读重载 | 原配方/曲线/数量/表现引用保留 | `Migrate.log` 保存通过；`VerifyConsumers.log` 四资产 180 s 重载通过 |
+| 自然窝与清理 | `Framework/Game/CatGameplayTypes.cpp::SubmitNaturalChumFieldIfConfigured` 引用 BugChum；`Environment/CatChumFieldSubsystem.cpp::CleanupExpiredFields/Deinitialize` | 同样扩大/延长；到期停止采样、默认 5 s 清理不变 | 保留共用实现 | 使用同一资产和到期时间 | 自然场污染基线、清理与采样时间差 | 源码链已核对；实际 180 s 到期和双端消失尚未验证 |
+| 提速/选鱼 | `Fishing/CatFishingSession.cpp::ScheduleWaitingProbeFromStateTree/ResolveHookSelectionFromAuthority` → `Data/CatFishCatalogSettings.cpp::SelectRuntimeDefinition` | 算法不改；区分三轴影响值与尚未实现的鱼量密度 | 原实现保留，增加本节实验设计并更新 `Docs/FishingCoreFlow_zh-CN.md` | 先独立测有无窝，再以不同配方测选鱼 | 调度快照、挑战档、鱼饵偏好、抓获幸存偏差 | 资产审计确认同配方；数值为理论预测。正式配方差异及统计实测未完成，挂原模块 |
+| 复制/表现/日志 | `Environment/CatChumFieldReplicationComponent.cpp::ReconcileFieldFromAuthority` → `Environment/Presentation/CatChumFieldPresentationActor.cpp::ApplyPublicState`；既有 `chum_field_prepared/place_chum_result` | 半径、起止秒数共用服务器事实；事件不改 | 保留字段、日志及 BP 回调，不增加第二套状态 | 复制新半径/起止值后重建圆环 | 正式 WBP/BP 外部消费者未完整审计；打包双端表现未验证 | 源码投影已核对；无新网络格式或 C++ 改动；实测留待本节方案 |
+| 配置/目录/Cook/旧路径 | `CatEquipmentSettings.Definitions`、`CatShopEconomySettings.DefaultShopCatalogTable`；`Scripts/verify_equipment_shop_runtime.py`；两份现有 Fishing 指南 | 正式四资产原路径继续生效，清除文档旧 Q 入口/已实现鱼群模型的误导 | 复用原定义/商店校验函数；不新增 Cook 路径 | 参数迁移后核对消费者及最终 diff | `/Game/Data/Equipment/DA_Chum_Basic` 未在正式目录；注册表直接引用为空，但未做加载全部地图/BP 的引用确认 | `VerifyConsumers.log` 中 Definitions=4、ShopRows=4 PASS。旧 Basic 二进制暂留原路径且仍为旧值，待编辑器完整引用审计后安全删除，不作为调参入口；完整商店检查因既有 PlayerStart 断言失败，见 `VerifySaved.log` |
+
+未重编译、未 Cook/打包；本轮是资产和配置调整。资产重载与 Automation 仅属于 `contract`，不代替上述 `runtime_behavior` 或 `presentation_delivery` 待验项。
 
 ## 当前完成度
 
