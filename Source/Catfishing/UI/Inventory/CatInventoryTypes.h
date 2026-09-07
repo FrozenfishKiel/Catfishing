@@ -224,7 +224,7 @@ struct FCatInventoryViewState
 	UPROPERTY(BlueprintReadOnly)
 	int64 CampInventoryRevision = 0;
 
-	/** 当前 Character 的钓鱼选择和旧兼容快照；背包格优先读正式 InventoryComponent，Equipment 只保留选择摘要与迁移期回退。 */
+	/** 当前 Character 的钓鱼选择快照；背包格只读正式 InventoryComponent，Equipment 不再承担库存内容来源。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatEquipmentLoadoutSnapshot Equipment;
 
@@ -232,15 +232,15 @@ struct FCatInventoryViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bEquipmentAvailable = false;
 
-	/** 当前是否已经拿到可用于展示的随身库存读源；正式库存优先，旧 Equipment 投影只作临时回退。 */
+	/** 当前是否已经拿到可用于展示的随身库存读源；只有正式 InventoryComponent 会让它成立。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bInventoryAvailable = false;
 
-	/** 当前随身背包内容版本；正式库存已绑定时来自 InventoryComponent，临时回退时才沿用 Equipment Revision。 */
+	/** 当前随身背包内容版本；它来自正式 InventoryComponent，用作库存命令的并发前提。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 InventoryRevision = 0;
 
-	/** 随身背包自己的格子数量；优先来自正式 InventoryComponent，正式复制未到位时才从旧 Equipment 投影补空格。 */
+	/** 随身背包自己的格子数量；来自正式 InventoryComponent，复制未到位时保持 0 并显示等待同步。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 InventorySlotCount = 0;
 

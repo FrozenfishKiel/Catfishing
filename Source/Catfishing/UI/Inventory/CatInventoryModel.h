@@ -71,7 +71,7 @@ private:
 	/** 正式随身库存变化入口；物品数量、实例或槽位变化会关闭本地等待并让库存重读完整投影。 */
 	void HandleInventoryObservedChanged();
 
-	/** 钓鱼选择或旧随身库存投影变化入口；迁移期仍用它刷新选择摘要，并在正式库存未完整复制时触发 fallback。 */
+	/** 钓鱼选择变化入口；Equipment 只提供当前钓具选择摘要，随身背包内容不再从它回退。 */
 	void HandleEquipmentSnapshotChanged();
 
 	/** 外部容器复制变化入口；任意已绑定外部容器内容变化后会关闭本地等待并重读完整投影。 */
@@ -111,16 +111,8 @@ private:
 	FCatInventorySlotView MakeInventorySlotView(const FCatInventoryEntry& InventoryEntry,
 		int32 InventorySlotIndex) const;
 
-	/** 按旧随身库存数组生成一个只读物品格；只在正式库存复制尚未到位时作为临时展示 fallback。 */
-	FCatInventorySlotView MakeInventorySlotView(const FCatRunInventorySlot& InventorySlot,
-		int32 InventorySlotIndex) const;
-
 	/** 按营地正式库存条目生成一个只读物品格；它保留公共仓库槽位和公开版本，让取用与拖放仍走营地服务器入口。 */
 	FCatInventorySlotView MakeCampInventorySlotView(const FCatInventoryEntry& InventoryEntry,
-		int32 CampSlotIndex, int64 CampRevision) const;
-
-	/** 按营地公共仓库数组生成一个只读物品格；它只暴露本公共仓库内的槽位和版本，取用仍走 PlayerController 服务器入口。 */
-	FCatInventorySlotView MakeCampInventorySlotView(const FCatRunInventorySlot& InventorySlot,
 		int32 CampSlotIndex, int64 CampRevision) const;
 
 	/** 按容器种类和顺序生成玩家可读名称；具体容器以后可在上下文层覆盖，Model 默认只做稳定 fallback。 */
@@ -154,7 +146,7 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatInventoryComponent> BoundInventory;
 
-	/** 当前 Character 的 Equipment 复制出口；Model 只从这里读取钓鱼选择，并在正式库存尚未形成完整 SlotView 时短暂 fallback。 */
+	/** 当前 Character 的 Equipment 复制出口；Model 只从这里读取钓鱼选择，不再把 Equipment 快照当背包内容。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatEquipmentComponent> BoundEquipment;
 
@@ -168,13 +160,13 @@ private:
 	/** 正式随身库存变化订阅句柄；Unbind 必须从同一组件移除，避免换 Pawn 后旧库存继续驱动 UI。 */
 	FDelegateHandle InventoryChangedHandle;
 
-	/** 钓鱼选择和旧随身库存投影订阅句柄；Unbind 必须从同一组件移除，避免迁移期 fallback 读到上一角色。 */
+	/** 钓鱼选择订阅句柄；Unbind 必须从同一组件移除，避免上一角色的选择变化继续驱动当前 UI。 */
 	FDelegateHandle EquipmentChangedHandle;
 
 	/** 营地公共仓库快照订阅句柄；公共仓库上下文切换时必须从同一 Actor 移除。 */
 	FDelegateHandle CampInventoryChangedHandle;
 
-	/** 当前营地正式库存组件的变化订阅句柄；SetCampInventoryContext 写入，ClearCampInventoryBinding 移除，防止组件复制追平后 UI 仍停在旧快照。 */
+	/** 当前营地正式库存组件的变化订阅句柄；SetCampInventoryContext 写入，ClearCampInventoryBinding 移除，防止公共仓库 UI 停在旧组件。 */
 	FDelegateHandle CampFormalInventoryChangedHandle;
 
 	/** PlayerController 公共领域结果订阅句柄；库存用它接收跨容器移动终态。 */

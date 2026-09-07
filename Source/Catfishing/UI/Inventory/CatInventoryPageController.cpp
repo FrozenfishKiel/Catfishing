@@ -61,14 +61,14 @@ namespace
 		});
 	}
 
-	// 运行期库存来源判断流程：随身背包和营地公共仓库都使用 FCatRunInventorySlot，只是宿主不同；UI 复核应先按这一类库存处理。
+	// 正式库存来源判断流程：随身背包和营地公共仓库都已经投影成 InventoryComponent SlotView，UI 这里只区分槽位身份和命令路由。
 	bool IsRunInventorySlotSource(const ECatInventorySlotSource SlotSource)
 	{
 		return SlotSource == ECatInventorySlotSource::InventoryObject
 			|| SlotSource == ECatInventorySlotSource::CampInventoryObject;
 	}
 
-	// 运行期库存槽位读取流程：把不同宿主的槽位字段统一成可比较的数组下标；非运行期库存来源返回无效下标。
+	// 正式库存槽位读取流程：把不同宿主的槽位字段统一成可比较的数组下标；非正式库存来源返回无效下标。
 	int32 GetRunInventorySlotIndex(const FCatInventorySlotView& Slot)
 	{
 		if (Slot.SlotSource == ECatInventorySlotSource::InventoryObject)
@@ -82,7 +82,7 @@ namespace
 		return INDEX_NONE;
 	}
 
-	// 运行期库存版本读取流程：随身背包使用正式库存 Revision，营地仓库使用公共仓库 Revision，避免两个宿主互相污染并发前提。
+	// 正式库存版本读取流程：随身背包使用正式库存 Revision，营地仓库暂用公共仓库协议 Revision，避免两个宿主互相污染并发前提。
 	int64 GetRunInventoryRevision(const FCatInventoryViewState& State, const ECatInventorySlotSource SlotSource)
 	{
 		if (SlotSource == ECatInventorySlotSource::CampInventoryObject)
