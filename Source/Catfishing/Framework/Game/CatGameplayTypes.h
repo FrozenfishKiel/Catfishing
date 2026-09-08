@@ -127,6 +127,7 @@ class CATFISHING_API ACatfishingGameModeBase : public AGameModeBase
 	GENERATED_BODY()
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatFishingFirstRodHeldTest;
+	friend class FCatFishingBorrowedRodCastTest;
 public:
 	/** 建立 Lake 原生宿主装配；身份注册表属于 GameMode 实例，不进入类默认对象或客户端。 */
 	ACatfishingGameModeBase();

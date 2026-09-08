@@ -82,6 +82,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingBaitRestockTest,
 bool FCatFishingBaitRestockTest::RunTest(const FString& Parameters)
 {
 	using namespace CatFishingBaitRestockTests;
+	AddExpectedErrorPlain(TEXT("Event=equipment_rod_session_rejected"), EAutomationExpectedErrorFlags::Contains, 2);
 	for (const bool bDrag : {false, true})
 	{
 		FFixture Fixture;

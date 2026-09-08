@@ -337,7 +337,7 @@ FCatDomainCommandResult ACatFishingSession::ResolveFightExchangeFromStateTree(co
 	return Result;
 }
 
-// 失败预算流程：先重放本会话唯一终态，再验证 StateTree/钓手 Equipment；首次把随机 RequestId 和当前 Equipment Revision 交给互斥惩罚事务，成功即关闭第二刀。
+// 历史失败预算任务的兼容入口；正式树生成器不接入此任务，Equipment 仍拒绝活动会话旁路伤竿。
 FCatFishingFailureResult ACatFishingSession::CommitFailureBudgetFromStateTree(const ECatFishingFailurePenalty Penalty)
 {
 	if (bFailureBudgetCommitted)
@@ -350,13 +350,13 @@ FCatFishingFailureResult ACatFishingSession::CommitFailureBudgetFromStateTree(co
 	}
 	FCatFishingFailureResult Result;
 	Result.Command.RequestId = FGuid::NewGuid();
-	UCatEquipmentComponent* Equipment = CastEquipment.Get(); // 失败惩罚（丢饵/伤竿）结算到抛竿者装备。
+	UCatEquipmentComponent* Equipment = CastEquipment.Get();
 	if (!HasAuthority() || !StateTreeComponent || !StateTreeComponent->IsRunning() || !Equipment)
 	{
 		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;
 	}
-	// 真正的惩罚事务委托给装备组件，按其当前 Revision 提交（丢特殊饵或伤竿由 Penalty 参数决定）。
+	// 保留既有 gate；不能为借竿改调竿主的“当前选择”预算，实际竿磨损只走绑定实例事务。
 	Result = Equipment->CommitFishingFailure(Result.Command.RequestId, Equipment->GetSnapshot().Revision, Penalty);
 	if (Result.Command.bCommitted)
 	{
@@ -763,7 +763,7 @@ bool ACatFishingSession::PrepareSessionFromAuthority(const FCatFishingAttemptSna
 	AttemptSnapshot = Attempt;
 	// Fish identity remains deliberately empty until a valid left-click commits the hook inside TrueBiteWindow.
 	FisherCharacter = InFisherCharacter;
-	CastEquipment = InFisherCharacter->GetEquipmentComponent(); // 冻结原始抛竿者装备：饵料/磨损结算口径不随接力改变。
+	CastEquipment = InFisherCharacter->GetEquipmentComponent(); // 冻结饵料/会话协调器；它已记录真实竿宿主，接力不重新绑定。
 	bool bRodBroken = false;
 	if (!CastEquipment.IsValid() || !CastEquipment->GetFishingRodDurability(
 		Attempt.FishingSessionId, Snapshot.RodDurabilityRemaining, bRodBroken) || bRodBroken)
@@ -2215,7 +2215,7 @@ FGameplayTag ACatFishingSession::ResolveTerminalFisherPresentationTag(const ECat
 	}
 }
 
-// Character 关联查询流程：比较初始钓手和协作者弱引用；不以名字或网络地址猜测。
+// 生命周期同时覆盖当前参与者和两个冻结资源宿主；接力后原抛钩者及未参战的竿主仍参与清理。
 bool ACatFishingSession::InvolvesCharacter(const ACatCharacter* Character) const
 {
 	if (!Character)
@@ -2225,6 +2225,15 @@ bool ACatFishingSession::InvolvesCharacter(const ACatCharacter* Character) const
 	if (FisherCharacter.Get() == Character)
 	{
 		return true;
+	}
+	// pending-kill 读取仅用于 EndPlay 身份比较，不能据此发起新的库存操作。
+	if (const UCatEquipmentComponent* Equipment = CastEquipment.Get(true))
+	{
+		const UCatEquipmentComponent* RodEquipment = Equipment->GetFishingRodEquipment(Snapshot.FishingSessionId);
+		if (Equipment->GetOwner() == Character || (RodEquipment && RodEquipment->GetOwner() == Character))
+		{
+			return true;
+		}
 	}
 	for (const TPair<FString, TWeakObjectPtr<ACatCharacter>>& Pair : FightParticipantCharacters)
 	{

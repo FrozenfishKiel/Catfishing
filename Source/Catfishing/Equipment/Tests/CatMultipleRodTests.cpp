@@ -179,7 +179,7 @@ bool FCatMultipleRodIndependentSessionsTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("另一根实体竿可同时预留"), Fixture.Begin(SecondSession, Fixture.SecondRodId, TEXT("MultipleRodB")).bReserved)) return false;
 	TestEqual(TEXT("两根各预留一份饵"), Fixture.BaitQuantity(), 6);
 	const int64 BeforeRejectedBegin = Equipment->GetSnapshot().Revision;
-	AddExpectedErrorPlain(TEXT("Event=equipment_rod_session_rejected"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedErrorPlain(TEXT("Event=equipment_rod_session_rejected"), EAutomationExpectedErrorFlags::Contains, 4);
 	TestEqual(TEXT("同一实体竿不能同时绑定第二个会话"), Fixture.Begin(FGuid::NewGuid(), Fixture.FirstRodId, TEXT("MultipleRodA")).Error,
 		ECatDomainCommandError::InvalidPhase);
 	TestEqual(TEXT("已知实例不能伪报另一种型号"), Fixture.Begin(FGuid::NewGuid(), Fixture.FirstRodId, TEXT("MultipleRodB")).Error,

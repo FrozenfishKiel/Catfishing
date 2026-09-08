@@ -100,19 +100,34 @@ bool FCatBorrowedRodReservationAudit::RunTest(const FString& Parameters)
 	const FGuid OwnerRodId = OwnerEquipment->GetSnapshot().RodItemInstanceId;
 	const auto FisherLoadout = FisherEquipment->GetSnapshot();
 	TestNotEqual(TEXT("rod instances belong to different players"), OwnerRodId, FisherLoadout.RodItemInstanceId);
-	// 与 FishingService::BeginCast 的真实调用完全一致：使用操作者 Equipment，但传入场景鱼竿实例。
-	const auto Borrowed = FisherEquipment->BeginFishingUse(FGuid::NewGuid(), OwnerRodId,
+	// 与 FishingService::BeginCast 一样由抛竿者协调，但显式指定场景竿的原库存宿主。
+	const FGuid BorrowedSessionId = FGuid::NewGuid();
+	const auto Borrowed = FisherEquipment->BeginFishingUse(BorrowedSessionId, OwnerRodId,
 		FisherLoadout.BaitItemInstanceId, FisherLoadout.FloatItemInstanceId, FisherLoadout.RodDefinitionId,
-		FisherLoadout.BaitDefinitionId, FisherLoadout.FloatDefinitionId, FisherLoadout.Revision);
+		FisherLoadout.BaitDefinitionId, FisherLoadout.FloatDefinitionId, FisherLoadout.Revision,
+		OwnerEquipment, OwnerEquipment->GetSnapshot().Revision);
 	AddInfo(FString::Printf(TEXT("Event=multiplayer_borrowed_rod_probe Reserved=%s Error=%s"),
 		Borrowed.bReserved ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Borrowed.Error)));
 	// 对照组走同一生产入口，证明不是装备夹具缺配置导致一切抛竿均失败。
 	const auto CurrentLoadout = FisherEquipment->GetSnapshot();
-	const auto Own = FisherEquipment->BeginFishingUse(FGuid::NewGuid(), CurrentLoadout.RodItemInstanceId,
+	const FGuid OwnSessionId = FGuid::NewGuid();
+	const auto Own = FisherEquipment->BeginFishingUse(OwnSessionId, CurrentLoadout.RodItemInstanceId,
 		CurrentLoadout.BaitItemInstanceId, CurrentLoadout.FloatItemInstanceId, CurrentLoadout.RodDefinitionId,
 		CurrentLoadout.BaitDefinitionId, CurrentLoadout.FloatDefinitionId, CurrentLoadout.Revision);
 	TestTrue(TEXT("control: own deployed rod can reserve bait"), Own.bReserved);
 	TestTrue(TEXT("shared rod: another fisher can reserve their own bait for the owner's rod"), Borrowed.bReserved);
+	if (Borrowed.bReserved)
+	{
+		TestEqual(TEXT("borrowed session freezes original rod inventory host"),
+			FisherEquipment->GetFishingRodEquipment(BorrowedSessionId), OwnerEquipment);
+		TestTrue(TEXT("borrowed session returns unused bait to fisher"),
+			FisherEquipment->ReleaseFishingUse(BorrowedSessionId).bApplied);
+	}
+	if (Own.bReserved)
+	{
+		TestTrue(TEXT("own control releases its independent reservation"),
+			FisherEquipment->ReleaseFishingUse(OwnSessionId).bApplied);
+	}
 	return !HasAnyErrors();
 }
 

@@ -23,6 +23,12 @@ public:
 
 	/** 注册单一随身库存快照；终态缓存不复制。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	/** 协调者宿主退出时关闭其会话，并释放可能保存在其他玩家竿实例上的占用。 */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	/** 原生初始化阶段也可能预留钓具；未 BeginPlay 的组件销毁同样要解除协调会话。 */
+	virtual void OnComponentDestroyed(bool bDestroyingHierarchy) override;
+	/** 在引擎注销组件和移除宿主关系之前释放钓具；清理广播中的重复销毁不会提前执行引擎销毁。 */
+	virtual void DestroyComponent(bool bPromoteChildren = false) override;
 
 	/** 提供服务器最终随身库存与钓鱼选择读模型；调用方只能据此显示/校验 Revision，不能通过引用补耐久或改库存。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Equipment")
@@ -80,10 +86,11 @@ public:
 	FCatFishingFailureResult CommitFishingFailure(FGuid RequestId, int64 ExpectedRevision,
 		ECatFishingFailurePenalty Penalty);
 
-	/** Fishing 会话按 SessionId 绑定本组件已部署的指定竿实例（每竿最多一个活动会话），并暂存一份当前选中鱼饵。 */
+	/** Fishing 会话暂存本组件选中鱼饵并绑定 RodEquipment 的部署竿；省略宿主时使用本组件，-1 只供 native 首次读取宿主版本。 */
 	FCatFishingUseReservationResult BeginFishingUse(FGuid FishingSessionId, FGuid RodItemInstanceId,
 		FGuid BaitItemInstanceId, FGuid FloatItemInstanceId, FName RodDefinitionId,
-	FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);
+		FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision,
+		UCatEquipmentComponent* RodEquipment = nullptr, int64 ExpectedRodEquipmentRevision = -1);
 	/** 确认消耗 Begin 已暂存的鱼饵；库存数量已经在 Begin 发布，本函数只收口会话内的饵料事务。 */
 	FCatFishingUseOperationResult CommitFishingBaitDeferred(FGuid FishingSessionId);
 	/** 按递增累计磨损的差额立即扣减 Begin 绑定的鱼竿实例；重复序号不重扣，Release 不回滚。 */
@@ -91,9 +98,11 @@ public:
 		double AbsoluteTotal);
 	/** 从该会话绑定的库存或活动 Use 实例读取跨场保留的耐久，不读取当前选择的另一根竿。 */
 	bool GetFishingRodDurability(FGuid FishingSessionId, double& OutDurability, bool& OutBroken) const;
+	/** 返回 Begin 冻结的竿库存宿主；会话生命周期据此观察借出者退出，不重选当前装备。 */
+	UCatEquipmentComponent* GetFishingRodEquipment(FGuid FishingSessionId) const;
 	/** 结束 Fishing 使用记录；未消耗的暂存饵会回到随身库存，已消耗的记录只关闭自身。 */
 	FCatFishingUseOperationResult ReleaseFishingUse(FGuid FishingSessionId);
-	/** 当前是否有仍未结束的 Fishing 使用记录；维修和失败预算用它避开进行中的钓鱼结算。 */
+	/** 本组件是否协调活动会话或仍有借出竿的会话锁；维修和失败预算用它避开进行中的钓鱼结算。 */
 	bool HasActiveFishingUse() const;
 	/** 指定 Fishing 会话是否仍处于活动状态；Commit/Release 用它防止旧会话重复改写。 */
 	bool IsFishingUseActive(FGuid FishingSessionId) const;
@@ -107,9 +116,15 @@ public:
 private:
 	struct FCatFishingUseRecord
 	{
-		/** Begin 冻结的鱼竿实例与定义；后续磨损不得按当前选择重新选竿。 */
+		/** Begin 冻结的宿主和物品身份；版本只在首次预检，相同 SessionId 不允许换物品借用旧预留。 */
+		TWeakObjectPtr<UCatEquipmentComponent> RodEquipment;
+		FGuid SessionId;
 		FGuid RodItemInstanceId;
 		FName RodDefinitionId = NAME_None;
+		FGuid BaitItemInstanceId;
+		FGuid FloatItemInstanceId;
+		FName BaitDefinitionId = NAME_None;
+		FName FloatDefinitionId = NAME_None;
 		/** Begin 从随身库存移出的一份鱼饵定义；数量型物品脱离原堆栈后不再复用原 ItemInstanceId。 */
 		FName ReservedBaitDefinitionId = NAME_None;
 		/** 已接收的竿磨损序号；磨损事件按递增序号提交，重复或跳号不会改耐久。 */
@@ -132,6 +147,9 @@ private:
 		FCatRunInventorySlot Item;
 		/** Use 成功时的 Equipment 版本；诊断用它串联库存移出和后续世界 Actor 生成。 */
 		int64 UseRevision = 0;
+		/** 该实体竿活动会话的唯一锁；协调者可能属于借用者，释放必须同时匹配会话与协调者。 */
+		FGuid BoundFishingSessionId;
+		TWeakObjectPtr<UCatEquipmentComponent> FishingUseCoordinator;
 		/** 活动记录是否已经收口；收口后的记录不再参与可用性判断。 */
 		bool bReleased = false;
 	};
@@ -142,6 +160,8 @@ private:
 	const FCatInventoryItemUseRecord* FindInventoryItemUseRecord(FGuid ItemInstanceId) const;
 	FCatRunInventorySlot* FindFishingRodInstance(const FCatFishingUseRecord& Record);
 	const FCatRunInventorySlot* FindFishingRodInstance(const FCatFishingUseRecord& Record) const;
+	/** EndPlay 与直接销毁共用的幂等收口；关闭新请求后逐个归还本组件暂存物并清除竿主锁。 */
+	void ReleaseFishingUsesForShutdown(const TCHAR* Reason);
 	/** 是否存在尚未收口的物品 Use 记录；维修和失败预算用它避免改写正在由场景持有的物品状态。 */
 	bool HasActiveInventoryItemUse() const;
 	/** 读取某个定义在库存格数组中的可见数量；选择自动切换和商店预检用它判断旧选择是否仍有实物。 */
@@ -217,6 +237,10 @@ private:
 	TMap<FString, FCatInventoryItemUseResult> InventoryItemUseTerminalCache;
 	/** 临时测试发放的角色生命周期记录；不复制、不存档，避免把抄网移出背包后重占有刷出第二把。 */
 	bool bStarterScoopNetGrantHandled = false;
+	/** 退出期间拒绝新预留，避免释放广播回调重新占用即将销毁的组件。 */
+	bool bEndingPlay = false;
+	/** DestroyComponent 前置清理的重入保护；同次广播中的重复销毁由外层统一交给引擎。 */
+	bool bDestroyComponentInProgress = false;
 	/** 抄网选择复制日志只在定义或实例变化时输出，不参与玩法裁决。 */
 	FName LastLoggedScoopNetDefinitionId = NAME_None;
 	FGuid LastLoggedScoopNetItemInstanceId;

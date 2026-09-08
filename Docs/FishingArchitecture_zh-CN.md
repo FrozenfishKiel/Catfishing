@@ -70,11 +70,32 @@
 - `OperatorPlayerState` 只保留为 `OperatorPlayerStates[0]` 的兼容快捷字段；蓝图若要判断双人必须读取数组长度。
 - 活动会话唯一性属于鱼竿，不属于玩家：一根竿最多绑定一个未终态 `FishingSession`，同一玩家可在本人已部署的两根竿之间依次抛线，离开一根竿不会结束其会话。
 - 按 R 离开只释放操作位，不写 `Escaped` 或 `Terminated`；`HookedFight` 会立刻进入无人值守松线，鱼按实际外游带线，到 `L_max` 后只按真实负载消耗绑定装备实例的鱼竿耐久，不借用离开玩家的力量/体力。下一位玩家占据主位时，Session 与 Runner 会原子迁移到其 ASC、力量、体力和输入序号域，但耐久仍写同一个 `RodItemInstanceId`，不改扣接手者所选的另一把竿；HookedFight 左键按本人所占鱼竿路由，其他主位命令与 HUD 按当前主操作鱼竿路由。
-- 原始抛竿者的 Equipment 以 `FishingSessionId` 隔离多份鱼饵预留；一场结束只释放自己的预留，不会误释放其他鱼竿会话。
+- 原始抛竿者的 Equipment 以 `FishingSessionId` 协调每场预留：鱼饵与鱼漂使用抛钩者的实物，竿宿主固定为部署时的角色装备，耐久写回该宿主的准确 `RodItemInstanceId`。竿主 UseRecord 的会话锁防止同一根竿重复开场或在使用中被库存转移；一场结束只退还未消费的本场鱼饵并释放自己的竿锁。
 
-另一个容易混淆的身份是 `OwnerPlayerState`：它代表部署归属和当前收纳权限，并不限制谁能占位。服务器按公开 `RodActorId` 找全场鱼竿，再单独验证命令权限。`BeginCast` 按当前主操作位定位竿；不过完整借用他人空竿新开会话仍有装备所有权及 `UseRecord` 绑定缺口，不能把可加入操作位或接力已有会话当成借竿新抛线已经交付。
+另一个容易混淆的身份是 `OwnerPlayerState`：它代表部署归属和当前收纳权限，并不限制谁能占位。服务器按公开 `RodActorId` 找全场鱼竿，再单独验证命令权限。`BeginCast` 按当前主操作位定位竿，通过该竿部署时冻结的 Instigator 找到原竿主装备，并校验同 World、PlayerState 身份和实际 UseRecord；不能沿竿主重生后的新 Pawn 重新绑定。借用他人空竿可以发起新会话，使用者无需拥有同款鱼竿，但必须有自己的可用鱼饵、鱼漂。射程仍取实际竿最大线长和使用者鱼漂抛距的较小值。
+
+跨宿主 Begin 先校验双方，再静默提交鱼饵预留、原竿锁与双方版本，最后才发布通知；磨损序号归会话协调器，剩余耐久与竿主选中态镜像只在原竿宿主更新。`EquipmentRevision` 仍指抛钩者库存版本，日志另外记录 `RodEquipmentRevision`，不改变客户端原字段含义。接力仅迁移操作猫的能力与输入，不改变原抛钩者和竿主；任一资源宿主所在 Character 失去占有或销毁时，Session 会终止并释放预留。后续阶段准备失败同样由一次 Release 完成退饵和解锁，原部署归属、手持上限及收纳权限保持原契约。
+
+历史 `CommitFailureBudgetFromStateTree` 入口仍保留供未完成引用审计的资产兼容；正式 Session 树生成器不使用它，Equipment 继续拒绝对活动会话/部署实例走“当前选择”失败预算。借竿磨损不绕过此 gate，而是始终使用绑定实例的 `ApplyFishingRodWear`。
 
 X 优先处理当前操作竿；本人没有操作竿时，只寻找公共交互锚点 250cm 内本人无人占位的竿，避免收错另一根远处鱼竿。有活动会话仍按原阶段走取消或切线裁决，无活动会话才进入离位与收纳。`PackRod` 按具体 `RodActorId` 查找并独立验证 `OwnerPlayerState`，当前不允许把别人的竿收进自己背包。`Equipment::UnUse` 已通过 `UCatInventoryTransferService` 将 `ActiveUse` 归还自身 `Stored`；同一通道也支持原生服务器把完整实例转给另一库存，保留耐久、校验容量并处理重放。未来开放他人收竿时，仍需把权限、世界竿收起/失败恢复、注册表解除和目标背包接到这笔事务；不能只放开 Owner 校验。通道契约见 `Docs/Architecture/商店库存与营地公共仓库子技术方案.md`。
+
+#### 借竿抛钩修复影响核对（2026-09-08）
+
+修改前基线为 `01b8b75`，工作区只有用户未跟踪的 `Scripts/Art/`、`SourceArt/`，本轮保留。原借竿审计中本人竿对照成功、借竿预留失败；证据在 `Saved/Automation/BorrowedRod-20260908/BaselineReport/index.json`。下表只覆盖本次资源归属修复，不关闭 Fishing 或 Equipment / Shop 模块。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 输入与权威抛钩 | `Fishing/Integration/CatFishingCommandComponent.cpp::BeginCastFromViewOnAuthority/ServerSubmitBeginCast` → `Fishing/CatFishingService.cpp::BeginCast` | 输入已按正在操作的竿路由，旧预留仍只查操作者库存；借竿返回依赖失败 | 保留输入/RPC，在 Service 用部署 Instigator 冻结真实竿宿主，重查占有关系和既有 gate | 先准备跨宿主预留，再切换 Service；保持 RequestId 缓存和失败回执 | 实际 Place/Leave/Operate/Begin、Hook 飞行落水、预留后失败与广播中 UnPossess | 已衔接；Service 的 5 个正式资源场景通过，见下方 FinalReport |
+| 装备事实与资源写入 | `Equipment/CatEquipmentComponent.h/.cpp::BeginFishingUse/ApplyFishingRodWear/ReleaseFishingUse`；Session 调用这些入口 | 原竿/饵/漂都在同组件；目标为竿归原主，饵/漂归抛钩者 | 协调记录冻结 RodEquipment；原主 UseRecord 保存会话锁。磨损仍以累计值差额写准确实例，不改耐久单位、饵数量与消费时机 | 双方预检 → 静默扣饵/锁竿/增版 → 通知；先闭合记录再退款通知，禁止重复扣退 | 双版本冲突、重放、换选择、双方回调重入、同主双竿回归 | 已替换本地竿查找；6 项 BorrowedRod 装备回归通过，见下方 FinalReport |
+| 通用库存转移与收竿 | `CatEquipmentComponent::ReadInventoryTransferEndpoint` → `Equipment/Inventory/CatInventoryTransferService.cpp`；Service Pack → UnUse | 旧 ActiveUse 锁只扫描本组件协调记录，不能识别借出的竿 | 改读原竿 UseRecord 唯一锁；转移事务与 OwnerPlayerState 收纳权限保留 | 先建立锁，再开放借竿 Begin；Release 后才允许转移 | 活动竿转移拒绝，取消后释放，原有库存转移与满包收竿回归 | 已移除旧本地记录扫描路径；InventoryTransfer 与 BrokenRodPack 回归通过；未新增拾取/扔出玩家入口 |
+| 退出与接力 | `Character/CatCharacter.cpp::UnPossessed/EndPlay` → Service Terminate → `CatFishingSession::InvolvesCharacter`；Equipment DestroyComponent/EndPlay/OnComponentDestroyed | 接力后仅查现任参与者会漏掉原抛钩者与竿主；未 BeginPlay 销毁不进 EndPlay | 关联两个冻结资源宿主；组件在基类 DestroyComponent 前完成一次性清理并防止通知重入销毁，EndPlay/OnComponentDestroyed 复用同一 Release | Character 通知先于组件销毁；预留通知时 Session 未注册，Service 另做重入校验 | 接力后两个资源宿主分别退出、预留中 UnPossess、未 BeginPlay 销毁协调者 | 已衔接正常角色退出和组件协调记录释放；直接销毁竿主组件只验证后续 Release 可退款，未宣称立即终止 Session |
+| UI、复制、资产与旧任务 | `UI/CatFishingViewBridge.cpp` 消费 Session/当前操作竿；`CatFishingSession::CommitFailureBudgetFromStateTree` → Equipment gate；`CatFishStateTreeAuthoringLibrary.cpp` 正式生成器不接失败预算任务 | 不改公开字段或 Blueprint 签名；EquipmentRevision 始终为抛钩者库存，不能换成竿主版本 | 保留 Snapshot/回执入口，日志增加 RodEquipmentRevision；保留未完成二进制引用审计的失败预算兼容入口及拒绝 gate | 原正式 Rod/Hook BP 与 Session 树继续加载；无资产迁移、配置默认值、存档或 Cook 入口修改 | 正式 BP 本地飞行/会话验证；WBP 图内引用未确认，需编辑器审计及双端实操 | 新逻辑不删除反射入口或二进制资产；正式双端表现/打包落盘未验收 |
+| 诊断、测试、文档 | `LogCatEquipment/equipment_rod_session_*`、`LogCatFishing/begin_cast_*`；Equipment/Fishing 新 BorrowedRod 测试、Editor MultiplayerAudit；本页和 Blueprint 指南 | 旧日志无法分辨两份装备归属，旧审计暴露失败 | 增加 SessionId、原竿实例/宿主和双方版本；迁移原借竿审计、保留自有竿对照；旧指南缺口口径改正 | 静态与构建后跑正式资源调用链；进度只记 `Docs/Development/需求对齐差距清单.md` | contract / runtime_behavior / presentation_delivery 分层记录 | 最终 54 项通过；默认日志已在 FinalTests.log 落盘；指南与唯一进度文档已更正 |
+
+本轮验证：`contract` 为 EquipmentShop Static PASS 和 Editor/Game Win64 Development 构建成功；`runtime_behavior` 为 54/54 Success（53 clean、1 条既有无人接管 RunnerTransition=false 警告、0 failed/notRun）。证据根目录 `Saved/Automation/BorrowedRod-20260908/`：`FinalReport/index.json`、`FinalTests.log`、`BuildEditorDelivery.log`、`BuildGameDelivery.log`、`StaticDelivery.log`。6 项新装备回归、Service 的 5 个正式资源场景、原借竿审计及原双竿/转移/收竿回归均通过；`equipment_fishing_shutdown_completed` 实际记录未 BeginPlay 销毁后 UnreleasedSessions=0。首轮仅依赖销毁回调的兜底未通过新增测试，具体回调跳过点未确认；最终改在 DestroyComponent 的 Super 前释放并验证重入安全，未删除或放宽失败断言。
+
+构建/运行位于 `Saved/Validation/BorrowedRod-20260908`，11 个修改源文件与共享工作区 SHA256 相同（`SourceManifest.json`）。这保留了当前开启 Live Coding 的用户编辑器现场；当前编辑器尚未加载此修复。`presentation_delivery` 未运行 Cook/打包、正式 WBP/真人双端借竿或无 `-log` 双端默认日志验收，仍需保存退出编辑器后构建共享项目并实测；单世界正式 BP 飞行不替代双端表现证据。
 
 ### 2.1 水域（样条烘焙 → 只读缓存）
 
