@@ -238,6 +238,10 @@ public:
 	/** authority 把指定槽位完整借出到库存内部活动区；部署型物品用它离开可见格子但仍归本库存保管同一不可堆叠实例。 */
 	bool HoldInventoryEntryAtSlotFromAuthority(int32 SlotIndex, FCatInventoryEntry& OutHeldEntry);
 
+	/** authority 按实例身份借出部署型物品；正式库存负责 Revision、槽位解析和 held entry，返回值交给部署/回滚调用方串联同一实例。 */
+	FCatDomainCommandResult HoldInventoryItemInstanceFromAuthority(FGuid RequestId, int64 ExpectedRevision,
+		FGuid ItemInstanceId, FCatInventoryEntry& OutHeldEntry);
+
 	/** authority 把活动区里同一不可堆叠实例放回可见库存；收杆或取消部署时用它走正式入库容量和复制规则。 */
 	bool ReturnHeldInventoryEntryFromAuthority(FGuid ItemInstanceId, int32 MinimumSlotCount,
 		int32 OverflowSlotCount, FCatInventoryEntry& OutReturnedEntry);

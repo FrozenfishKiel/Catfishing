@@ -439,7 +439,8 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 	// 表现 Mesh 的碰撞不能否决生成，故 AlwaysSpawn。
 	// 放杆的库存事务必须先于 Actor 生成提交：Use 成功后这根实例已经离开背包，后续任一生成或注册失败都要 UnUse 回滚同一实例。
 	const FCatInventoryItemUseResult UseResult =
-		Equipment->Use(Command.RequestId, Command.ExpectedEquipmentRevision, Loadout.RodItemInstanceId);
+		Equipment->Use(Command.RequestId, Command.ExpectedEquipmentRevision, Loadout.RodItemInstanceId,
+			1, Command.ExpectedInventoryRevision);
 	if (UseResult.Error != ECatDomainCommandError::None)
 	{
 		Result.Error = MapRodInventoryUseError(UseResult.Error);
@@ -471,7 +472,8 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		RefreshResultRevisions();
 		return Result;
 	}
-	// 鱼竿 Actor 类在 Use 成功后按被移出的实例定义重读；Equipment 只保证库存事务，表现类型仍由钓鱼服务按鱼竿规则裁决。
+	// 鱼竿 Actor 类在 Use 成功后按被移出的实例定义重读；正式 InventoryComponent 已完成借出，Equipment 这里只是旧投影适配层。
+	// 表现类型仍由钓鱼服务按鱼竿规则裁决，不能让旧装备快照重新拥有库存事实。
 	UClass* RodClass = UsedRodDefinition->UseActorClass.LoadSynchronous();
 	if (!RodClass || !RodClass->IsChildOf(ACatFishingRodActor::StaticClass()))
 	{

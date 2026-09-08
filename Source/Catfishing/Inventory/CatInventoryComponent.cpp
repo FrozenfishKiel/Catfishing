@@ -1240,6 +1240,62 @@ bool UCatInventoryComponent::HoldInventoryEntryAtSlotFromAuthority(
 	return true;
 }
 
+// 按实例借出流程：
+// 1. 先确认调用来自 authority，并且调用方观察到的 InventoryRevision 仍等于当前正式背包版本。
+// 2. 再由库存自己按实例 ID 找可见槽位，调用方不用知道这个实例当前落在哪个格子。
+// 3. 找到槽位后复用 held 规则检查不可堆叠、未借出和复制登记，成功才把可见格移入活动区。
+// 4. 本函数不缓存终态，因为放竿等外层流程可能在 Actor 生成失败后回滚借出；RequestId 只用于把日志和外层命令串起来。
+// 5. 成功或失败都返回最新库存版本，让上层刷新而不是继续猜测槽位。
+FCatDomainCommandResult UCatInventoryComponent::HoldInventoryItemInstanceFromAuthority(
+	const FGuid RequestId, const int64 ExpectedRevision, const FGuid ItemInstanceId,
+	FCatInventoryEntry& OutHeldEntry)
+{
+	OutHeldEntry = FCatInventoryEntry(this);
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	Result.Revision = InventoryRevision;
+
+	AActor* OwningActor = GetOwner();
+	if (OwningActor == nullptr || !OwningActor->HasAuthority() || !RequestId.IsValid()
+		|| !ItemInstanceId.IsValid())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	}
+	else if (InventoryRevision != ExpectedRevision)
+	{
+		Result.Error = ECatDomainCommandError::RevisionConflict;
+	}
+	else if (ActiveHeldItemEntries.Contains(ItemInstanceId))
+	{
+		Result.Error = ECatDomainCommandError::InvalidPhase;
+	}
+	else
+	{
+		const int32 SlotIndex = FindInventorySlotIndexFromInstanceId(ItemInstanceId);
+		if (SlotIndex == INDEX_NONE)
+		{
+			Result.Error = ECatDomainCommandError::NotFound;
+		}
+		else if (HoldInventoryEntryAtSlotFromAuthority(SlotIndex, OutHeldEntry))
+		{
+			Result.bCommitted = true;
+			Result.Error = ECatDomainCommandError::None;
+		}
+		else
+		{
+			Result.Error = ECatDomainCommandError::InvalidPhase;
+		}
+	}
+
+	Result.Revision = InventoryRevision;
+	UE_LOG(LogCatInventory, Log,
+		TEXT("Event=inventory_hold_item_instance Owner=%s Request=%s Item=%s ExpectedRevision=%lld Committed=%s Error=%s Revision=%lld"),
+		*GetNameSafe(OwningActor), *RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		*ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), ExpectedRevision,
+		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error), Result.Revision);
+	return Result;
+}
+
 // 临时持有归还流程：
 // 1. 先按实例 ID 找到活动区记录，并拒绝已经重新出现在可见库存里的异常状态。
 // 2. 活动记录必须仍是不可堆叠的单实例；这让归还结果一定是同一 UObject 回到可见格，而不是被堆叠规则吞掉。

@@ -72,13 +72,13 @@ public:
 	/** 临时测试入口，仅由玩家占有后的服务器调用；已有抄网则复用，没有抄网时只在库存容量足以容纳开局四件套后补给，商店获取接通后删除。 */
 	void GrantStarterScoopNetIfConfigured();
 
-	/** 背包点击或玩法入口共用的物品使用入口；它按实例调用定义侧 Use 裁决，Equipment 只编排正式库存事务并刷新旧投影。 */
+	/** 背包点击或玩法入口共用的物品使用入口；ExpectedRevision 是旧装备选择投影版本，调用方提供的正式库存版本只交给 InventoryComponent 做并发复核。 */
 	FCatInventoryItemUseResult Use(FGuid RequestId, int64 ExpectedRevision, FGuid ItemInstanceId,
-		int32 Quantity = 1);
+		int32 Quantity = 1, int64 ExpectedInventoryRevision = 0);
 
-	/** 只读查询同一 Use 请求是否已有终态；命中时返回可诊断重放，不命中时不校验当前库存也不产生库存变化。 */
+	/** 只读查询同一 Use 请求是否已有终态；库存版本属于载荷签名的一部分，命中时返回可诊断重放，不命中时不读写当前库存。 */
 	bool TryReplayInventoryItemUseTerminal(FGuid RequestId, int64 ExpectedRevision, FGuid ItemInstanceId,
-		int32 Quantity, FCatInventoryItemUseResult& OutResult) const;
+		int32 Quantity, FCatInventoryItemUseResult& OutResult, int64 ExpectedInventoryRevision = 0) const;
 
 	/** 部署型物品收口时共用的停止使用入口；它按实例调用定义侧 UnUse 裁决，成功才通过正式库存归还同一物品实例。 */
 	FCatInventoryItemUseResult UnUse(FGuid RequestId, FGuid ItemInstanceId);

@@ -916,14 +916,15 @@ void UCatEquipmentComponent::GrantStarterScoopNetIfConfigured()
 }
 
 FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, const int64 ExpectedRevision,
-	const FGuid ItemInstanceId, const int32 Quantity)
+	const FGuid ItemInstanceId, const int32 Quantity, const int64 ExpectedInventoryRevision)
 {
 	// 物品使用流程：
 	// 1. 先校验 authority、RequestId 和数量，再用实例载荷签名处理幂等重放，避免数量消耗品重复扣量。
-	// 2. 正式库存存在时按实例 ID 回到 InventoryComponent 槽位，旧槽位只作为定义裁决的只读投影。
-	// 3. 部署型物品通过 InventoryComponent held entry 借出可见格，正式 UObject 仍由库存活动区保管；数量消耗物由正式库存扣指定份数。
+	// 2. 正式库存存在时按实例 ID 回到 InventoryComponent 槽位，旧槽位只作为定义裁决的只读投影；外部提供的非 0 库存版本会继续传给正式库存入口复核。
+	// 3. 部署型物品通过 InventoryComponent 的按实例 held 命令借出可见格，正式 UObject 仍由库存活动区保管；数量消耗物暂时由正式库存扣指定份数。
 	// 4. 正式路径刷新旧投影失败时先尝试归还 held entry，归还失败才退役活动记录并恢复 entries 与旧 Snapshot。
-	// 5. 没有正式库存组件时返回依赖错误；Equipment 不再移出或扣除旧 Snapshot 数组里的物品。
+	// 5. ExpectedInventoryRevision 为 0 只表示旧调用方没有外部库存观察点；此时用服务器当前库存版本进入正式库存入口，不跳过库存事实层。
+	// 6. 没有正式库存组件时返回依赖错误；Equipment 不再移出或扣除旧 Snapshot 数组里的物品。
 	FCatInventoryItemUseResult Result;
 	Result.RequestId = RequestId;
 	Result.EquipmentRevision = Snapshot.Revision;
@@ -934,8 +935,10 @@ FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, co
 		return Result;
 	}
 	const FString Key = MakeTerminalKey(TEXT("UseInventoryItem"), RequestId);
-	const FString PayloadSignature = FString::Printf(TEXT("ExpectedRevision=%lld|ItemInstance=%s|Quantity=%d"),
-		ExpectedRevision, *ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), Quantity);
+	const FString PayloadSignature = FString::Printf(
+		TEXT("ExpectedRevision=%lld|ExpectedInventoryRevision=%lld|ItemInstance=%s|Quantity=%d"),
+		ExpectedRevision, ExpectedInventoryRevision,
+		*ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), Quantity);
 	if (const FCatInventoryItemUseResult* Cached = InventoryItemUseTerminalCache.Find(Key))
 	{
 		const FString* CachedPayload = TerminalPayloadByKey.Find(Key);
@@ -980,6 +983,13 @@ FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, co
 		return Finish(Result);
 	}
 	Result.InventoryRevision = OwnerInventory->GetInventoryRevision();
+	const int64 EffectiveExpectedInventoryRevision = ExpectedInventoryRevision != 0
+		? ExpectedInventoryRevision : Result.InventoryRevision;
+	if (Result.InventoryRevision != EffectiveExpectedInventoryRevision)
+	{
+		Result.Error = ECatDomainCommandError::RevisionConflict;
+		return Finish(Result);
+	}
 	// 正式角色的 Use 以 InventoryComponent 为事实源；Equipment 在这里临时投影旧载荷，是为了继续复用现有定义裁决。
 	const int32 FormalSlotIndex = OwnerInventory->FindInventorySlotIndexFromInstanceId(ItemInstanceId);
 	const FCatInventoryEntry* FormalEntry = OwnerInventory->GetInventoryEntryAtSlot(FormalSlotIndex);
@@ -1037,9 +1047,12 @@ FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, co
 	const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
 	const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
 	FCatInventoryEntry HeldEntry;
-	if (!OwnerInventory->HoldInventoryEntryAtSlotFromAuthority(FormalSlotIndex, HeldEntry))
+	const FCatDomainCommandResult HoldResult = OwnerInventory->HoldInventoryItemInstanceFromAuthority(
+		RequestId, EffectiveExpectedInventoryRevision, SourceItem.ItemInstanceId, HeldEntry);
+	if (!HoldResult.bCommitted || HoldResult.Error != ECatDomainCommandError::None)
 	{
-		Result.Error = ECatDomainCommandError::NotFound;
+		Result.InventoryRevision = HoldResult.Revision;
+		Result.Error = HoldResult.Error;
 		return Finish(Result);
 	}
 
@@ -1094,12 +1107,14 @@ FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, co
 }
 
 bool UCatEquipmentComponent::TryReplayInventoryItemUseTerminal(const FGuid RequestId, const int64 ExpectedRevision,
-	const FGuid ItemInstanceId, const int32 Quantity, FCatInventoryItemUseResult& OutResult) const
+	const FGuid ItemInstanceId, const int32 Quantity, FCatInventoryItemUseResult& OutResult,
+	const int64 ExpectedInventoryRevision) const
 {
 	// 库存 Use 重放查询流程：
-	// 1. 先复原 Use 使用的终态键和载荷签名，不读取当前库存格或定义，避免成功扣除后的空格阻断二段提交。
-	// 2. 没有缓存返回 false，调用方继续执行首次提交 preflight；载荷漂移返回 true+InvalidPayload，阻止同 RequestId 改目标。
-	// 3. 命中缓存时返回 MarkInventoryItemUseReplayed 后的结果，让协调器按首次成功或失败决定是否补放后续领域提交。
+	// 1. 先复原 Use 使用的终态键和载荷签名，ExpectedInventoryRevision 也参与签名，避免同一 RequestId 被换成另一份库存观察点。
+	// 2. 查询不读取当前库存格或定义，避免成功扣除后的空格阻断二段提交。
+	// 3. 没有缓存返回 false，调用方继续执行首次提交 preflight；载荷漂移返回 true+InvalidPayload，阻止同 RequestId 改目标。
+	// 4. 命中缓存时返回 MarkInventoryItemUseReplayed 后的结果，让协调器按首次成功或失败决定是否补放后续领域提交。
 	OutResult = FCatInventoryItemUseResult();
 	OutResult.RequestId = RequestId;
 	OutResult.EquipmentRevision = Snapshot.Revision;
@@ -1112,8 +1127,10 @@ bool UCatEquipmentComponent::TryReplayInventoryItemUseTerminal(const FGuid Reque
 		return false;
 	}
 	const FString Key = MakeTerminalKey(TEXT("UseInventoryItem"), RequestId);
-	const FString PayloadSignature = FString::Printf(TEXT("ExpectedRevision=%lld|ItemInstance=%s|Quantity=%d"),
-		ExpectedRevision, *ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), Quantity);
+	const FString PayloadSignature = FString::Printf(
+		TEXT("ExpectedRevision=%lld|ExpectedInventoryRevision=%lld|ItemInstance=%s|Quantity=%d"),
+		ExpectedRevision, ExpectedInventoryRevision,
+		*ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), Quantity);
 	const FCatInventoryItemUseResult* Cached = InventoryItemUseTerminalCache.Find(Key);
 	if (!Cached)
 	{
