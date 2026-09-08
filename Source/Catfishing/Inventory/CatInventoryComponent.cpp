@@ -1787,7 +1787,8 @@ bool UCatInventoryComponent::TryUseItemAtSlot(const int32 SlotIndex, APawn* User
 // 1. 先确认当前组件仍是服务器正式库存，并且 RequestId、来源组件和槽位参数有效。
 // 2. 再用 ExpectedInventoryRevision 拦截陈旧 UI 请求；冲突时只返回当前库存版本，不触碰物品实例。
 // 3. 通过后重读槽位、实例和定义资产，空格或坏实例按正式库存错误返回。
-// 4. 最后调用物品实例自己的结构化 Use；库存组件不认识装备、GAS、草药或窝料的具体效果。
+// 4. 通过物品实例提交具体领域效果；库存组件不认识装备、GAS、草药或窝料的内部规则。
+// 5. 收尾时把公共结果头统一收回当前 InventoryRevision，避免装备等下游版本冒充库存 Use 的并发事实。
 FCatDomainCommandResult UCatInventoryComponent::UseItemAtSlotFromAuthority(
 	const FCatInventoryItemUseContext& UseContext)
 {
@@ -1840,6 +1841,7 @@ FCatDomainCommandResult UCatInventoryComponent::UseItemAtSlotFromAuthority(
 			}
 		}
 	}
+	Result.Revision = InventoryRevision;
 
 	UE_LOG(LogCatInventory, Log,
 		TEXT("Event=inventory_use_item Owner=%s Request=%s Slot=%d Definition=%s Item=%s Stack=%d ExpectedInventoryRevision=%lld InventoryRevision=%lld Committed=%s Error=%s ResultRevision=%lld"),
