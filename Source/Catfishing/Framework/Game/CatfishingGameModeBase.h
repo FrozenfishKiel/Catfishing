@@ -139,7 +139,7 @@ public:
 #endif
 	/** Online Client 主动离局前标记当前 Controller；Logout 据此按 VoluntaryLeaveRecovery 决定是否保留重连准入。 */
 	void MarkVoluntaryLeave(AController* Controller);
-	/** 远端 Client 完成本地 DestroySession 后确认同一 Host exit RequestId；全部确认会提前结束有界等待。 */
+	/** 远端 Client 完成本地 DestroySession 后确认同一 Host exit RequestId；全部确认后再复核最终 Grant ACK。 */
 	void AcknowledgeHostExitClient(AController* Controller, FGuid RequestId);
 	/** owning client 完成真实 Profile Grant ACK 后复核 Host exit 的全部依赖；只在远端 Destroy ACK 也齐全时提前 Ready。 */
 	void NotifyHostExitGrantAckProgress();
@@ -252,10 +252,8 @@ private:
 #endif
 	/** 启动 gate 失败时保持 NotStarted、关闭写口并发布 StartupFailed，不回退为 C++ 状态机。 */
 	void FailRunStartup(const TCHAR* Reason);
-	/** Host exit 的远端 Destroy ACK 与 Profile Grant ACK 全部到达或统一超时后广播 Ready；重复完成不会触发第二次 Online Destroy。 */
-	void CompleteHostExitAckWait(bool bTimedOut);
-	/** Host exit 统一有界等待的超时回调；只消费当前 GameMode 的单一 Timer，且不把超时写成真实 ACK。 */
-	void HandleHostExitAckTimeout();
+	/** Host exit 的远端 Destroy ACK 与 Profile Grant ACK 全部真实到达后广播 Ready；重复完成不会触发第二次 Online Destroy。 */
+	void CompleteHostExitAckWait();
 	/** 把商店当前余额、货架库存和公开交易记录整体发布给 GameState。 */
 	void PublishShopEconomySnapshot();
 	/** 将服务器私有 StableNetId 解析成可复制的 PlayerState。 */
@@ -305,13 +303,11 @@ private:
 	TSet<FString> SubmittedNaturalChumFieldKeys;
 	/** 当前 Host exit 仍待确认的远端 StableNetId；服务器只保存私有键，不复制原始身份。 */
 	TSet<FString> PendingHostExitAckStableNetIds;
-	/** 当前 Host exit 的关联 RequestId；远端 ACK 和超时必须匹配它。 */
+	/** 当前 Host exit 的关联 RequestId；远端 Destroy ACK 与最终 Grant ACK 进度必须匹配它。 */
 	FGuid ActiveHostExitRequestId;
 	/** 当前 Host exit 的 Online epoch；完成广播原样返回，迟到 ACK 不进入下一代。 */
 	int64 ActiveHostExitOperationEpoch = 0;
-	/** 远端 ACK 的唯一有界等待计时器；EndPlay 和完成路径成对清除。 */
-	FTimerHandle HostExitAckTimerHandle;
-	/** 当前 Host exit 是否已完成远端 Destroy ACK 与最终 Grant ACK 的统一有界等待；超时完成不修改各自真实 ACK 记录。 */
+	/** 当前 Host exit 是否已完成远端 Destroy ACK 与最终 Grant ACK 的真实等待；只有全部到达才会推进回主菜单链路。 */
 	bool bHostExitAckWaitComplete = false;
 	/** 商店公开经济变化的服务器本机订阅；EndPlay 成对解除，避免旧 World 回调。 */
 	FDelegateHandle ShopPublicTransactionHandle;
