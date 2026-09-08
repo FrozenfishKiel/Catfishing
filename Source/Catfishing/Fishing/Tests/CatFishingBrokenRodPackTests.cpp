@@ -18,6 +18,7 @@ namespace CatFishingBrokenRodPackTests
 	{
 		UCatEquipmentSettings* Settings = GetMutableDefault<UCatEquipmentSettings>();
 		int32 SavedCapacity = Settings->InventorySlotCapacity;
+		bool bSavedAutoGrantStarterScoopNet = Settings->bAutoGrantStarterScoopNet;
 		FTestWorldWrapper WorldWrapper;
 		ACatfishingPlayerController* Controller = nullptr;
 		ACatfishingPlayerState* PlayerState = nullptr;
@@ -27,11 +28,16 @@ namespace CatFishingBrokenRodPackTests
 		UCatFishingService* Fishing = nullptr;
 		FGuid RodItemId;
 
-		~FFixture() { Settings->InventorySlotCapacity = SavedCapacity; }
+		~FFixture()
+		{
+			Settings->InventorySlotCapacity = SavedCapacity;
+			Settings->bAutoGrantStarterScoopNet = bSavedAutoGrantStarterScoopNet;
+		}
 
 		bool Initialize(FAutomationTestBase& Test)
 		{
 			Settings->InventorySlotCapacity = 3;
+			Settings->bAutoGrantStarterScoopNet = false;
 			if (!Test.TestTrue(TEXT("creates a real service world"), WorldWrapper.CreateTestWorld(EWorldType::Game))) return false;
 			WorldWrapper.ForwardErrorMessages(&Test);
 			if (!Test.TestTrue(TEXT("starts actor presentation lifecycle"), WorldWrapper.BeginPlayInTestWorld())) return false;
@@ -119,6 +125,7 @@ bool FCatBrokenRodPackCapacityTest::RunTest(const FString& Parameters)
 	const int64 EquipmentRevision = Fixture.Equipment->GetSnapshot().Revision;
 	const int64 RodRevision = Fixture.Rod->GetPresentationState().RodActorRevision;
 	AddExpectedErrorPlain(TEXT("Event=fishing_rod_pack_rejected"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedErrorPlain(TEXT("Event=inventory_transfer_rejected"), EAutomationExpectedErrorFlags::Contains, 1);
 	const FCatFishingCommandResult Rejected = Fixture.Fishing->PackRod(Fixture.Controller, Fixture.PackCommand());
 	TestFalse(TEXT("full inventory rejects pack"), Rejected.bCommitted);
 	TestEqual(TEXT("capacity rejection keeps its domain error"), Rejected.Error, ECatFishingCommandError::GuardCapacityExceeded);

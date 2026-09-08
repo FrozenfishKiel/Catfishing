@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Equipment/CatEquipmentTypes.h"
+#include "Equipment/Inventory/CatInventoryTransferEndpoint.h"
 #include "GameFramework/Actor.h"
 #include "Framework/Core/CatDomainCommandTypes.h"
 #include "Interaction/CatInteractable.h"
@@ -48,7 +49,7 @@ DECLARE_MULTICAST_DELEGATE(FCatCampInventorySnapshotChanged);
 
 /** 营地公共仓库 Actor；商店购买物先进入这里，玩家再从公共仓库取到自己的随身库存。 */
 UCLASS(BlueprintType, Blueprintable)
-class CATFISHING_API ACatCampInventoryActor : public AActor, public ICatInteractable
+class CATFISHING_API ACatCampInventoryActor : public AActor, public ICatInteractable, public ICatInventoryTransferEndpoint
 {
 	GENERATED_BODY()
 
@@ -95,11 +96,16 @@ public:
 	FCatDomainCommandResult AddItemsFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		const FString& StableNetId, const TArray<FCatCampInventoryAddItemRequest>& Items);
 
-	/** 查询玩家是否能从指定公共格子取物到自己的随身库存；它只做预检，不修改两边库存。 */
-	ECatDomainCommandError ValidateWithdrawToEquipment(FGuid RequestId, int32 SourceSlotIndex, int32 Quantity,
-		UCatEquipmentComponent* TargetEquipment) const;
+	/** 通用转移通道的库存宿主适配；没有独立于 Snapshot 的第二份库存。 */
+	virtual const AActor* GetInventoryTransferAuthorityActor() const override;
+	virtual ECatDomainCommandError ReadInventoryTransferEndpoint(FName Channel, FGuid EntryId,
+		FCatInventoryEndpointSnapshot& OutSnapshot) const override;
+	virtual int32 GetInventoryTransferStackLimit(FName DefinitionId) const override;
+	virtual void ApplyInventoryTransferWritesSilently(TConstArrayView<FCatInventoryEndpointWrite> Writes,
+		int64 NewRevision) override;
+	virtual void PublishInventoryTransfer() override;
 
-	/** 把公共仓库里的物品取到玩家随身库存；成功后公共仓库扣减，玩家随身库存通过自己的授予入口增加。 */
+	/** 把公共仓库实例通过统一事务移入背包；双方静默提交和缓存终态后才发布快照。 */
 	FCatDomainCommandResult WithdrawToEquipmentFromAuthority(FGuid RequestId, int64 ExpectedCampRevision,
 		int32 SourceSlotIndex, int32 Quantity, UCatEquipmentComponent* TargetEquipment,
 		int64 ExpectedEquipmentRevision);

@@ -3,17 +3,17 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "Equipment/CatEquipmentTypes.h"
+#include "Equipment/Inventory/CatInventoryTransferEndpoint.h"
 #include "CatEquipmentComponent.generated.h"
 
 class UCatEquipmentDefinition;
-class ACatCampInventoryActor;
 
 /** Equipment 随身库存与钓鱼选择快照发生提交或复制变化的本机通知；UI 只把它当重读信号。 */
 DECLARE_MULTICAST_DELEGATE(FCatEquipmentSnapshotChanged);
 
 /** Character 的一局随身库存聚合；复制钓鱼选择、物品数量和鱼竿耐久，不持有永久解锁且不提供任何偷取接口。 */
 UCLASS(ClassGroup = (Catfishing), meta = (BlueprintSpawnableComponent))
-class CATFISHING_API UCatEquipmentComponent : public UActorComponent
+class CATFISHING_API UCatEquipmentComponent : public UActorComponent, public ICatInventoryTransferEndpoint
 {
 	GENERATED_BODY()
 
@@ -27,6 +27,15 @@ public:
 	/** 提供服务器最终随身库存与钓鱼选择读模型；调用方只能据此显示/校验 Revision，不能通过引用补耐久或改库存。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Equipment")
 	const FCatEquipmentLoadoutSnapshot& GetSnapshot() const;
+
+	/** 通用库存通道适配；Stored 是原库存数组，ActiveUse 按实例暴露可归还的活动部署记录。 */
+	virtual const AActor* GetInventoryTransferAuthorityActor() const override;
+	virtual ECatDomainCommandError ReadInventoryTransferEndpoint(FName Channel, FGuid EntryId,
+		FCatInventoryEndpointSnapshot& OutSnapshot) const override;
+	virtual int32 GetInventoryTransferStackLimit(FName DefinitionId) const override;
+	virtual void ApplyInventoryTransferWritesSilently(TConstArrayView<FCatInventoryEndpointWrite> Writes,
+		int64 NewRevision) override;
+	virtual void PublishInventoryTransfer() override;
 
 	/** 只读选择下一根可部署的库存鱼竿；优先当前选中实例，否则按库存顺序返回健康竿，不改变选择或库存。 */
 	bool TryGetInventoryRodForDeployment(FCatRunInventorySlot& OutRod) const;
@@ -60,7 +69,7 @@ public:
 	FCatInventoryItemUseResult Use(FGuid RequestId, int64 ExpectedRevision, FGuid ItemInstanceId,
 		int32 Quantity = 1);
 
-	/** 部署型物品收口时共用的停止使用入口；它按实例调用定义侧 UnUse 裁决，成功才把活动记录里的同一物品放回随身库存。 */
+	/** 部署型物品收口的旧签名适配；由通用通道校验并把本组件 ActiveUse 的同一实例归还 Stored。 */
 	FCatInventoryItemUseResult UnUse(FGuid RequestId, FGuid ItemInstanceId);
 
 	/** 整理两个随身库存格；服务器按数组下标移动、合并或交换物品，成功后发布同一份库存快照。 */
@@ -96,9 +105,6 @@ public:
 	FCatEquipmentSnapshotChanged OnSnapshotChanged;
 
 private:
-	/** 营地公共仓库负责背包和公共仓库之间的服务器拖放事务；只允许它在同一提交里同时改双方快照并发布广播。 */
-	friend class ACatCampInventoryActor;
-
 	struct FCatFishingUseRecord
 	{
 		/** Begin 冻结的鱼竿实例与定义；后续磨损不得按当前选择重新选竿。 */
@@ -174,18 +180,8 @@ private:
 	/** 读取某个定义当前可用的第一份实例；旧 UI 仍按定义选择时用它落到具体物品实例，鱼竿会优先返回未断且有耐久的那份。 */
 	const FCatRunInventorySlot* FindFirstInventorySlotByDefinition(FName DefinitionId) const;
 
-	/** 判断一份完整实例副本能否原样放回随身库存；普通入库会拒绝重复非消耗品实例，UnUse 另行收口已有残留。 */
-	bool CanStoreInventorySlot(const UCatEquipmentDefinition& Definition, const FCatRunInventorySlot& Item) const;
-
 	/** 把指定数量放入库存格数组；调用前必须已通过 CanStoreInventoryItem，成功后只修改这份库存事实。 */
 	bool AddInventoryItemQuantity(const UCatEquipmentDefinition& Definition, FName DefinitionId, int32 Quantity);
-
-	/** 把一份完整实例副本放入库存格数组；它保留 ItemInstanceId 和工具状态，不按 DefinitionId 重新生成物品。 */
-	bool AddInventoryItemSlot(const UCatEquipmentDefinition& Definition, const FCatRunInventorySlot& Item);
-
-	/** 服务器内部授予一份完整库存实例；营地取用用它避免按定义重新生成同类装备。 */
-	FCatDomainCommandResult GrantInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedRevision,
-		const FCatRunInventorySlot& Item);
 
 	/** 从指定实例所在数量栈扣除数量；Use、钓鱼用饵和维修消耗都用它保证扣的是明确实例，并把本次扣减副本交回调用方。 */
 	bool RemoveInventoryItemQuantityFromInstance(FGuid ItemInstanceId, int32 Quantity,
@@ -207,7 +203,7 @@ private:
 	/** 普通随身库存命令首次终态缓存。 */
 	TMap<FString, FCatDomainCommandResult> TerminalCache;
 
-	/** 库存命令载荷签名；普通入库和 Use/UnUse 共用它防止同一 RequestId 被换定义、数量或实例后再次利用。 */
+	/** 本组件库存命令载荷签名；普通入库和 Use 用它防止同一 RequestId 被换定义、数量或实例后再次利用。 */
 	TMap<FString, FString> TerminalPayloadByKey;
 
 	/** 失败预算命令首次完整终态缓存；重放不会再次扣饵或耐久。 */
@@ -217,7 +213,7 @@ private:
 	TMap<FGuid, FCatFishingUseRecord> FishingUseRecords;
 	/** 当前 Character 生命周期内被部署型 Use 暂时持有的物品实例；简单消耗品不进入这里，场景 Actor 收口前实例不会回到随身库存。 */
 	TMap<FGuid, FCatInventoryItemUseRecord> InventoryItemUseRecords;
-	/** 物品 Use/UnUse 首次终态缓存；简单消耗品重试会读它而不是再次扣量，部署/收回重试也不会重复移动同一实例。 */
+	/** 物品 Use 首次终态缓存；简单消耗品和部署重试不再次扣量或移出实例，UnUse 终态由通用转移通道持有。 */
 	TMap<FString, FCatInventoryItemUseResult> InventoryItemUseTerminalCache;
 	/** 临时测试发放的角色生命周期记录；不复制、不存档，避免把抄网移出背包后重占有刷出第二把。 */
 	bool bStarterScoopNetGrantHandled = false;

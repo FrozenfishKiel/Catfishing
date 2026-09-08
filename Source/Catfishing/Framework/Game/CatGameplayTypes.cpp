@@ -3592,6 +3592,12 @@ void ACatfishingPlayerController::SubmitRescueCharacterToCampFromBodyActionAbili
 void ACatfishingPlayerController::ClientReceiveCampCommandResult_Implementation(
 	const FCatDomainCommandResult& Result)
 {
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=camp_command_result_received RequestId=%s Committed=%s Error=%s Revision=%lld World=%s NetMode=%d Authority=%s LocalRole=%d Controller=%s PlayerId=%d"),
+		*Result.RequestId.ToString(), Result.bCommitted ? TEXT("true") : TEXT("false"),
+		*UEnum::GetValueAsString(Result.Error), Result.Revision, *GetNameSafe(GetWorld()),
+		static_cast<int32>(GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
+		static_cast<int32>(GetLocalRole()), *GetNameSafe(this), PlayerState ? PlayerState->GetPlayerId() : INDEX_NONE);
 	LastCampCommandResult = Result;
 	OnCampCommandResultReceived.Broadcast(Result);
 }
@@ -4212,6 +4218,12 @@ void ACatfishingPlayerController::DeliverSacrificeResultToOwningClient(const FCa
 // 公共领域回执投递流程：单机或 listen server 本地玩家没有远端连接可回送时，直接复用 Client 实现刷新本机缓存；远端玩家保持可靠 RPC 语义。
 void ACatfishingPlayerController::DeliverCampCommandResultToOwningClient(const FCatDomainCommandResult& Result)
 {
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=camp_command_result_sent RequestId=%s Committed=%s Error=%s Revision=%lld World=%s NetMode=%d Authority=%s LocalRole=%d Controller=%s PlayerId=%d"),
+		*Result.RequestId.ToString(), Result.bCommitted ? TEXT("true") : TEXT("false"),
+		*UEnum::GetValueAsString(Result.Error), Result.Revision, *GetNameSafe(GetWorld()),
+		static_cast<int32>(GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
+		static_cast<int32>(GetLocalRole()), *GetNameSafe(this), PlayerState ? PlayerState->GetPlayerId() : INDEX_NONE);
 	if (HasAuthority() && IsLocalController())
 	{
 		ClientReceiveCampCommandResult_Implementation(Result);
