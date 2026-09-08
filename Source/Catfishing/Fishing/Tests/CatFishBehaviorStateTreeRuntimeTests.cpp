@@ -1,13 +1,25 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Config/CatAbilitySettings.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "Character/CatCharacter.h"
 #include "Components/StateTreeComponent.h"
+#include "Data/CatFishDefinition.h"
+#include "Environment/CatWaterQuerySubsystem.h"
+#include "Environment/Tests/CatWaterTestFixtures.h"
+#include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
+#include "Framework/Game/CatGameplayTypes.h"
 #include "StateTree.h"
 #include "Tests/AutomationCommon.h"
+#include "UObject/StrongObjectPtr.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishBehaviorStateTreeRuntimeTest,
 	"Catfishing.Unit.Fishing.Behavior.FormalTreeSelectsFeedbackBranchesOnlyAtFixedSteps",
@@ -192,6 +204,195 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("停止后固定步不能推进树"), Free.Key->TickFishBehaviorFromAuthority(0.05f));
 	TestFalse(TEXT("退出清除Runner行为代理"), Free.Key->AuthorityFightRunner.IsValid());
 	Free.Value->bRunning = Blocked.Value->bRunning = Tired.Value->bRunning = false;
+
+	// 补齐生产消费者：只准备已经中鱼的事务状态，之后由真正的 HandleFixedStep
+	// 执行树、受力、最终水面落位、ASC 付款及 Session 发布，不手工提交 Step 或余额。
+	UCatEquipmentSettings* EquipmentSettings = GetMutableDefault<UCatEquipmentSettings>();
+	TGuardValue<TArray<TSoftObjectPtr<UCatEquipmentDefinition>>> SavedDefinitions(EquipmentSettings->Definitions, {});
+	TGuardValue<ECatDomainPolicy> SavedTrust(EquipmentSettings->ProfileLoadoutTrustPolicy, ECatDomainPolicy::Enabled);
+	TGuardValue<int32> SavedSlots(EquipmentSettings->InventorySlotCapacity, 12);
+	TGuardValue<int32> SavedStacks(EquipmentSettings->InventoryQuantityStackCapacity, 20);
+	TGuardValue<FName> SavedWood(EquipmentSettings->DriftwoodDefinitionId, FName(TEXT("IntentRuntimeWood")));
+	TArray<TStrongObjectPtr<UCatEquipmentDefinition>> Definitions;
+	const auto AddDefinition = [&](const FName Id, const ECatEquipmentKind Kind)
+	{
+		UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>();
+		Definitions.Emplace(Definition);
+		Definition->EquipmentDefinitionId = Id;
+		Definition->FunctionalRouteId = Definition->LoadoutSlotId = Id;
+		Definition->Kind = Kind;
+		Definition->bEnableRuntimeDefinition = true;
+		EquipmentSettings->Definitions.Add(TSoftObjectPtr<UCatEquipmentDefinition>(Definition));
+		return Definition;
+	};
+	UCatEquipmentDefinition* RodDefinition = AddDefinition(TEXT("IntentRuntimeRod"), ECatEquipmentKind::Rod);
+	RodDefinition->MaximumRodDurability = 1000.0;
+	RodDefinition->MaximumLineLengthCentimeters = 1500.0;
+	RodDefinition->HighTensionWearMultiplier = 1.0;
+	RodDefinition->UseActorClass = ACatFishingRodActor::StaticClass();
+	RodDefinition->UseInventoryEffect = ECatEquipmentUseInventoryEffect::HoldInstanceUntilUnUse;
+	UCatEquipmentDefinition* BaitDefinition = AddDefinition(TEXT("IntentRuntimeBait"), ECatEquipmentKind::Bait);
+	BaitDefinition->bRunConsumable = true;
+	BaitDefinition->BiteRateMultiplier = BaitDefinition->MinimumBiteDelayMultiplier = 1.0;
+	AddDefinition(TEXT("IntentRuntimeFloat"), ECatEquipmentKind::Float)->MaximumCastDistanceCentimeters = 1000.0;
+	AddDefinition(EquipmentSettings->DriftwoodDefinitionId, ECatEquipmentKind::Driftwood)->bRunConsumable = true;
+	for (const TStrongObjectPtr<UCatEquipmentDefinition>& Definition : Definitions)
+		if (!TestTrue(TEXT("生产付款夹具的装备定义完整"), Definition->IsRuntimeDefinitionReady())) return false;
+
+	double PreviousFishDrain = 0.0;
+	double ReferenceCatDrain = 0.0;
+	FVector ReferenceFishLocation = FVector::ZeroVector;
+	for (const double Price : {0.0, 2.25, 4.5})
+	{
+		FTestWorldWrapper PaymentWorld;
+		if (!TestTrue(TEXT("创建独立生产付款世界"), PaymentWorld.CreateTestWorld(EWorldType::Game))) return false;
+		PaymentWorld.ForwardErrorMessages(this);
+		UWorld* Payment = PaymentWorld.GetTestWorld();
+		ACatCharacter* Character = Payment->SpawnActor<ACatCharacter>(FVector(-200.0, 0.0, 200.0), FRotator::ZeroRotator);
+		ACatfishingPlayerState* Player = Payment->SpawnActor<ACatfishingPlayerState>();
+		ACatWaterRegion* Region = Payment->SpawnActor<ACatWaterRegion>();
+		ACatFishingSession* Session = Payment->SpawnActor<ACatFishingSession>();
+		ACatFishingRodActor* Rod = Payment->SpawnActor<ACatFishingRodActor>();
+		ACatFishEncounterActor* Fish = Payment->SpawnActor<ACatFishEncounterActor>();
+		if (!TestTrue(TEXT("生产步骤依赖全部生成"), Character && Player && Region && Session && Rod && Fish)) return false;
+		Character->SetPlayerState(Player);
+		FCatWaterGeometryBuildInput Geometry;
+		Geometry.RegionId = TEXT("IntentRuntimeWater");
+		Geometry.WaterPointVerticalToleranceCm = 10.0;
+		Geometry.BankHeightToleranceCm = 20.0;
+		Geometry.BoundaryToleranceCm = 2.0;
+		Geometry.MaxLandingCorrectionCm = 20.0;
+		Geometry.MinimumWaterInsetCm = 5.0;
+		FCatWaterPolygonBuildInput& Boundary = Geometry.Boundaries.AddDefaulted_GetRef();
+		Boundary.BoundaryId = TEXT("Outer");
+		Boundary.Vertices = {FVector2D(-2000.0, -2000.0), FVector2D(2000.0, -2000.0),
+			FVector2D(2000.0, 2000.0), FVector2D(-2000.0, 2000.0)};
+		const auto Baked = FCatWaterGeometry::Build(Geometry);
+		if (!TestTrue(TEXT("烘焙付款夹具真实水域"), Baked.bSucceeded)) return false;
+		FCatWaterRegionTestAccess::InjectBakedGeometry(*Region, Baked.Cache);
+		PaymentWorld.BeginPlayInTestWorld();
+		if (!TestTrue(TEXT("生产付款水域已注册"), Payment->GetSubsystem<UCatWaterQuerySubsystem>()
+			->QueryShoreRelation(FVector(500.0, 0.0, 0.0), Region->GetWaterRegionHandle()).bSucceeded)) return false;
+		UCatAbilitySystemComponent* ASC = Character->GetCatAbilitySystemComponent();
+		UCatEquipmentComponent* Equipment = Character->GetEquipmentComponent();
+		float CatStaminaMaximum = 0.0f;
+		if (!TestTrue(TEXT("生产猫具有ASC、装备和有效体力基线"), ASC && Equipment
+			&& GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
+				Character->GetCatDefinitionId(), CatStaminaMaximum))) return false;
+		ASC->InitAbilityActorInfo(Character, Character);
+		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50.0f);
+		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), CatStaminaMaximum);
+		for (const FName Id : {FName(TEXT("IntentRuntimeRod")), FName(TEXT("IntentRuntimeFloat"))})
+			if (!TestTrue(TEXT("公开入口授予真实装备实例"), Equipment->GrantEquipmentFromAuthority(
+				FGuid::NewGuid(), Equipment->GetSnapshot().Revision, Id).bCommitted)) return false;
+		if (!TestTrue(TEXT("公开入口授予一份鱼饵"), Equipment->GrantInventoryQuantityFromAuthority(
+			FGuid::NewGuid(), Equipment->GetSnapshot().Revision, TEXT("IntentRuntimeBait"), 1).bCommitted)) return false;
+		const FGuid RodItemId = Equipment->GetSnapshot().RodItemInstanceId;
+		if (!TestTrue(TEXT("部署已授予的同一鱼竿实例"), Equipment->Use(
+			FGuid::NewGuid(), Equipment->GetSnapshot().Revision, RodItemId).bCommitted)) return false;
+		const FCatEquipmentLoadoutSnapshot Loadout = Equipment->GetSnapshot();
+		const FGuid SessionId = FGuid::NewGuid();
+		if (!TestTrue(TEXT("会话预留真实鱼竿和饵漂"), Equipment->BeginFishingUse(SessionId,
+			RodItemId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
+			Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bReserved)
+			|| !TestTrue(TEXT("会话完成中鱼扣饵"), Equipment->CommitFishingBaitDeferred(SessionId).bApplied)) return false;
+		if (!TestTrue(TEXT("配置固定规范竿尖"), Rod->ConfigureCanonicalAnchorsFromAuthority(
+			FTransform::Identity, FTransform::Identity, FTransform(FVector(-200.0, 0.0, 0.0))))
+			|| !TestTrue(TEXT("鱼竿绑定真实操作者及库存实例"), Rod->InitializeAuthoritativeIdentity(
+				FGuid::NewGuid(), RodItemId, Loadout.RodDefinitionId, NAME_None, Player, Player, true, false))) return false;
+		const FVector InitialFishPosition(500.0, 0.0, 0.0);
+		Fish->SetActorLocation(InitialFishPosition);
+		Fish->bIdentityInitialized = true;
+		UCatFishDefinition* FishDefinition = NewObject<UCatFishDefinition>(Session);
+		FishDefinition->FishFightStamina = 100.0;
+		Session->FishDefinition = FishDefinition;
+		Session->Snapshot.FishingSessionId = SessionId;
+		Session->Snapshot.Phase = ECatFishingPhase::HookedFight;
+		Session->Snapshot.RodActor = Rod;
+		Session->Snapshot.FishEncounterActor = Fish;
+		Session->Snapshot.FishFightStaminaRemaining = FishDefinition->FishFightStamina;
+		Session->AttemptSnapshot.RodItemInstanceId = RodItemId;
+		Session->CastEquipment = Equipment;
+		Session->FisherCharacter = Character;
+		UCatFishingFightRunner* Runner = NewObject<UCatFishingFightRunner>(Session);
+		Session->FightRunner = Runner;
+		FCatFishingFightRunnerInit Init;
+		Init.Session = Session;
+		Init.RodActor = Rod;
+		Init.FishActor = Fish;
+		Init.PrimaryPlayerState = Player;
+		Init.AbilitySystem = ASC;
+		Init.WaterRegion = Region->GetWaterRegionHandle();
+		Init.BehaviorStateTree = Tree;
+		Init.RandomSeed = 2003;
+		Init.bInitialPullHeld = true;
+		Init.Config.FixedStepSeconds = FixedStepSeconds;
+		Init.Config.PrimaryOperatorCatStrength = 50.0;
+		Init.Config.PrimaryOperatorMassKilograms = 5.0;
+		Init.Config.FishMassKilograms = 3.0;
+		Init.Config.FishStrength = 30.0;
+		Init.Config.CatStaminaMaximum = CatStaminaMaximum;
+		Init.Config.FishFullEffortSpeedCentimetersPerSecond = 180.0;
+		Init.Config.FishStaminaPerUnfulfilledMeter = Price;
+		Init.Config.MaximumLineLengthCentimeters = RodDefinition->MaximumLineLengthCentimeters;
+		Init.Config.RodDurability = RodDefinition->MaximumRodDurability;
+		Init.Config.ReelSpeedCentimetersPerSecond = 80.0;
+		Init.InitialState.CatStamina = CatStaminaMaximum;
+		Init.InitialState.FishStamina = FishDefinition->FishFightStamina;
+		Init.InitialState.FishWorldPosition = InitialFishPosition;
+		Init.InitialState.LineLengthCentimeters = FVector::Distance(Rod->GetRodTipWorldTransform().GetLocation(), InitialFishPosition);
+		Init.SteeringConfig.OutwardEffortRange = FVector2D(0.8, 0.8);
+		Init.SteeringConfig.OutwardAngularSpreadDegrees = 0.0;
+		if (!TestTrue(TEXT("生产Runner读取冻结配置并登记ASC参与者"), Runner->InitializeFromAuthority(Init))
+			|| !TestTrue(TEXT("生产Runner启动正式树及固定步调度"), Runner->Start())) return false;
+		int32 CatStaminaWrites = 0;
+		int32 SessionPublications = 0;
+		const FDelegateHandle StaminaHandle = ASC->GetGameplayAttributeValueChangeDelegate(
+			UCatSurvivalAttributeSet::GetFightStaminaAttribute()).AddLambda(
+			[&](const FOnAttributeChangeData&) { ++CatStaminaWrites; });
+		const FDelegateHandle SnapshotHandle = Session->OnSnapshotChanged.AddLambda([&]() { ++SessionPublications; });
+		Runner->HandleFixedStep();
+		ASC->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFightStaminaAttribute()).Remove(StaminaHandle);
+		Session->OnSnapshotChanged.Remove(SnapshotHandle);
+		TestTrue(TEXT("最终水面落位和所有资源消费者均成功"), Runner->IsRunning() && !Session->IsTerminal());
+		TestEqual(TEXT("真实ASC每固定步仅有一次体力写入"), CatStaminaWrites, 1);
+		TestEqual(TEXT("真实Session每固定步仅发布一次数值快照"), SessionPublications, 1);
+		TestEqual(TEXT("真实Encounter已接收同一步实际鱼位置"), Runner->State.FishWorldPosition, Fish->GetActorLocation());
+		// 初始鱼恰在线长球面上，因此本步没有历史超长误差；当前受力约束产生的
+		// 实际收线位移仍须完整参与投影，不能误把总 ConstraintCorrection 全部扣除。
+		const double IntendedDistance = Runner->State.FishEffortRatio * Init.Config.FishFullEffortSpeedCentimetersPerSecond * FixedStepSeconds;
+		const double ActualProgress = FVector::DotProduct(Fish->GetActorLocation() - InitialFishPosition,
+			Runner->PreviousFishEffortDirection);
+		const double MissingDistance = FMath::Max(0.0, IntendedDistance - ActualProgress);
+		const double FishDrain = FishDefinition->FishFightStamina - Runner->State.FishStamina;
+		const double CatDrain = CatStaminaMaximum - ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+		TestTrue(TEXT("生产运动确实产生未完成意图和猫端工作"), MissingDistance > 0.0 && CatDrain > 0.0);
+		TestEqual(TEXT("最终实际位移按冻结米价只付一次鱼费用"), FishDrain, MissingDistance / 100.0 * Price, 1e-8);
+		TestEqual(TEXT("Session镜像实际鱼余额而不再次扣费"), Session->GetSnapshot().FishFightStaminaRemaining, Runner->State.FishStamina, 1e-8);
+		TestEqual(TEXT("Runner猫余额与ASC付款结果一致"), Runner->State.CatStamina,
+			static_cast<double>(ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute())), 1e-4);
+		TestEqual(TEXT("Session鱼体力比例由实际余额更新"), Session->GetSnapshot().NormalizedFishStamina,
+			Runner->State.FishStamina / FishDefinition->FishFightStamina, 1e-8);
+		if (Price == 0.0)
+		{
+			ReferenceCatDrain = CatDrain;
+			ReferenceFishLocation = Fish->GetActorLocation();
+		}
+		else
+		{
+			TestEqual(TEXT("只改鱼米价不改变真实猫费用"), CatDrain, ReferenceCatDrain, 1e-6);
+			TestEqual(TEXT("只改鱼米价不改变本步真实运动"), Fish->GetActorLocation(), ReferenceFishLocation);
+			if (Price == 4.5) TestEqual(TEXT("生产Runner双倍米价只支付双倍鱼费用"), FishDrain, PreviousFishDrain * 2.0, 1e-8);
+			PreviousFishDrain = FishDrain;
+		}
+		double RemainingRodDurability = 0.0;
+		bool bBroken = false;
+		TestTrue(TEXT("生产Session仍持有可结算的真实竿实例"), Equipment->GetFishingRodDurability(SessionId, RemainingRodDurability, bBroken) && !bBroken);
+		TestEqual(TEXT("生产Session耐久镜像同一库存实例"), Session->GetSnapshot().RodDurabilityRemaining, RemainingRodDurability, 1e-8);
+		AddInfo(FString::Printf(TEXT("Event=fish_intent_runtime_paid Price=%.6f IntentCm=%.6f ActualCm=%.6f MissingCm=%.6f FishDrain=%.6f CatDrain=%.6f ASCWrites=%d SessionPublications=%d"),
+			Price, IntendedDistance, ActualProgress, MissingDistance, FishDrain, CatDrain, CatStaminaWrites, SessionPublications));
+		Runner->Stop();
+	}
 	return !HasAnyErrors();
 }
 

@@ -74,8 +74,8 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double CatUnloadedWorkMultiplier = 0.15;
 	/** 满负载/满用力的每秒支撑费用，按用力比例平方缩放。 */
 	double CatSupportStaminaPerSecond = 2.0;
-	/** 满主动出力且满有效对抗时的每秒体力点数；实际费用为 k*u²*G*dt。 */
-	double FishEffortStaminaPerSecond = 3.0;
+	/** 沿本步主动方向未完成的游动距离，每米消耗的体力点数；反向进展可使缺失超过意图距离。 */
+	double FishStaminaPerUnfulfilledMeter = 5.0 / 3.0;
 	double CatMovementStaminaMultiplier = 1.0;
 	double CatReelStaminaMultiplier = 1.0;
 	double CatRodStaminaMultiplier = 1.0;
@@ -87,7 +87,7 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double FishFullEffortRodWearPerSecond = 0.0;
 	double TautRodWearMultiplier = 1.0;
 	double ReelSpeedCentimetersPerSecond = 0.0;
-	/** 满出力的参考自由游速，只用于固定水阻校准；不随行为切换水阻。 */
+	/** 满出力参考游速，校准固定水阻并生成 u*参考游速*dt 的本步主动意图。 */
 	double FishFullEffortSpeedCentimetersPerSecond = 0.0;
 	/** 无可用猫合力时的持续外冲速度，按满出力参考游速放大。 */
 	double ExhaustedCatEscapeSpeedMultiplier = 2.0;
@@ -176,8 +176,10 @@ struct CATFISHING_API FCatFightSimulationTrace
 	double FishEffortRatio = 0.0;
 	double FishFullEffortThrustNewtons = 0.0;
 	double FishLinearDragKilogramsPerSecond = 0.0;
-	double FishOppositionRatio = 0.0;
-	double FishEffortStaminaPerSecond = 0.0;
+	double FishIntendedDistanceCentimeters = 0.0;
+	double FishActualIntentProgressCentimeters = 0.0;
+	double FishUnfulfilledDistanceCentimeters = 0.0;
+	double FishStaminaPerUnfulfilledMeter = 0.0;
 	double SwimSpeedCentimetersPerSecond = 0.0;
 	double MobilityCentimetersPerNewton = 0.0;
 	double ExistingPositionErrorCentimeters = 0.0;
@@ -241,7 +243,10 @@ struct CATFISHING_API FCatFightStepResult
 	double CatHoldIntentCentimeters = 0.0;
 	double CatNormalizedEffortLoad = 0.0;
 	double CatRodNormalizedEffortLoad = 0.0;
-	double FishNormalizedEffortLoad = 0.0;
+	double FishIntendedDistanceCentimeters = 0.0;
+	/** 沿主动方向的有符号实际进展；已剔除历史位置纠偏。 */
+	double FishActualIntentProgressCentimeters = 0.0;
+	double FishUnfulfilledDistanceCentimeters = 0.0;
 	double FishUncappedStaminaDrain = 0.0;
 	double GetSharedCatStaminaDrain() const { return CatReelStaminaDrain + CatHoldStaminaDrain; }
 	double GetPrimaryCatStaminaDrain() const { return CatMovementStaminaDrain + CatRodStaminaDrain; }

@@ -1210,7 +1210,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.CatRodStaminaCostPerStrengthRadian = FightBalance->CatRodStaminaCostPerStrengthRadian;
 	Config.CatUnloadedWorkMultiplier = FightBalance->CatUnloadedWorkMultiplier;
 	Config.CatSupportStaminaPerSecond = FightBalance->CatSupportStaminaPerSecond;
-	Config.FishEffortStaminaPerSecond = FightBalance->FishEffortStaminaPerSecond;
+	Config.FishStaminaPerUnfulfilledMeter = FightBalance->FishStaminaPerUnfulfilledMeter;
 	Config.CatMovementStaminaMultiplier = FightBalance->CatMovementStaminaMultiplier;
 	Config.CatReelStaminaMultiplier = FightBalance->CatReelStaminaMultiplier;
 	Config.CatRodStaminaMultiplier = FightBalance->CatRodStaminaMultiplier;
@@ -1364,7 +1364,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		return false;
 	}
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_fight_started SessionId=%s FightBalanceId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryStrength=%.2f InitialHelperStrength=%.2f InitialCombinedStrength=%.2f CatSystemMassKg=%.2f FishMassKg=%.2f MassMode=IndependentCatBodyMass FishStrengthBase=%.2f FishStrengthEffective=%.2f StrengthPerKg=%.2f ForcePerStrengthN=%.2f ExhaustedReelForceN=%.2f CatStamina=%.2f FishStamina=%.2f RodDurability=%.2f RodPhysicsLengthCm=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s CatLinearWorkCost=%.5f FishEffortPerSecond=%.5f FishFullEffortSpeedCmPerSec=%.2f FixedStepSeconds=%.3f MinimumLeverage=%.3f MaximumEndpointCorrectionSpeed=%.2f StrengthResolution=CommonLineForce StrongConfrontationRole=PresentationOnly RodFailure=DurabilityDepleted World=%s NetMode=%d Authority=%s LocalRole=%d RodActor=%s"),
+		TEXT("Event=fishing_fight_started SessionId=%s FightBalanceId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryStrength=%.2f InitialHelperStrength=%.2f InitialCombinedStrength=%.2f CatSystemMassKg=%.2f FishMassKg=%.2f MassMode=IndependentCatBodyMass FishStrengthBase=%.2f FishStrengthEffective=%.2f StrengthPerKg=%.2f ForcePerStrengthN=%.2f ExhaustedReelForceN=%.2f CatStamina=%.2f FishStamina=%.2f RodDurability=%.2f RodPhysicsLengthCm=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s CatLinearWorkCost=%.5f FishStaminaPerUnfulfilledMeter=%.5f FishFullEffortSpeedCmPerSec=%.2f FixedStepSeconds=%.3f MinimumLeverage=%.3f MaximumEndpointCorrectionSpeed=%.2f StrengthResolution=CommonLineForce StrongConfrontationRole=PresentationOnly RodFailure=DurabilityDepleted World=%s NetMode=%d Authority=%s LocalRole=%d RodActor=%s"),
 		*Snapshot.FishingSessionId.ToString(),
 		*FightBalance->BalanceDefinitionId.ToString(),
 		*FishDefinition->FishDefinitionId.ToString(),
@@ -1389,7 +1389,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		Snapshot.RodActor && Snapshot.RodActor->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Held
 			? TEXT("Held") : TEXT("Grounded"),
 		Config.CatStaminaCostPerStrengthCentimeter,
-		Config.FishEffortStaminaPerSecond,
+		Config.FishStaminaPerUnfulfilledMeter,
 		Config.FishFullEffortSpeedCentimetersPerSecond,
 		Config.FixedStepSeconds,
 		Config.MinimumRodLeverageMultiplier,
@@ -1398,18 +1398,18 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		static_cast<int32>(GetLocalRole()), *GetNameSafe(Snapshot.RodActor));
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_effort_configured SessionId=%s FightBalanceId=%s Model=CatActualWorkAndTimedSupport CatPhaseMultiplier=1 "
-			"FishDrainMode=ContinuousEffortSquared FishReferenceForce=FullEffort "
+			"FishDrainMode=UnfulfilledIntentDistance FishIntentSpeed=ActualEffortTimesFullEffortSpeed "
 			"SlackRecoveryMode=RightButtonWithLineCapacityExceptExhaustedDrag SlackStaminaCost=WaivedOnlyWithLineCapacity LineLimitMode=NormalLockedContest SlackRegenPerSecond=%.3f "
 			"MovementMultiplier=%.3f ReelMultiplier=%.3f RodMultiplier=%.3f HoldMultiplier=%.3f "
 			"CatLoadMultiplier=%.3f "
-			"CatLinearWorkCost=%.6f FishEffortPerSecond=%.6f CatRodWorkCostPerRadian=%.6f CatUnloadedWorkMultiplier=%.3f CatSupportPerSecond=%.3f "
+			"CatLinearWorkCost=%.6f FishStaminaPerUnfulfilledMeter=%.6f CatRodWorkCostPerRadian=%.6f CatUnloadedWorkMultiplier=%.3f CatSupportPerSecond=%.3f "
 			"ExhaustedCatEscapeSpeedMultiplier=%.3f %s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *FightBalance->BalanceDefinitionId.ToString(),
 		Config.SlackStaminaRegenPerSecond,
 		Config.CatMovementStaminaMultiplier, Config.CatReelStaminaMultiplier,
 		Config.CatRodStaminaMultiplier, Config.CatHoldStaminaMultiplier,
 		Config.CatLoadStaminaMultiplier,
-		Config.CatStaminaCostPerStrengthCentimeter, Config.FishEffortStaminaPerSecond,
+		Config.CatStaminaCostPerStrengthCentimeter, Config.FishStaminaPerUnfulfilledMeter,
 		Config.CatRodStaminaCostPerStrengthRadian, Config.CatUnloadedWorkMultiplier, Config.CatSupportStaminaPerSecond,
 		Config.ExhaustedCatEscapeSpeedMultiplier,
 		*CatLogContext::BuildControllerFields(FisherCharacter->GetController()));

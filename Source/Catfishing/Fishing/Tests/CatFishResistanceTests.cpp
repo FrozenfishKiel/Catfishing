@@ -160,11 +160,11 @@ bool FCatFishLateralResistanceTest::RunTest(const FString& Parameters)
 			&& NewLateral.ReelSpeed() < 60.0 && NewLateral.ReelSpeed() < OldLateral.ReelSpeed() * 0.75);
 		TestTrue(TEXT("新横切真实张力增加并守住猫的有限收线能力"), NewLateral.MeanTension() > OldLateral.MeanTension() + 5.0
 			&& NewLateral.MaximumTensionNewtons <= 50.0 + 1e-4);
-		TestTrue(TEXT("更高有效对抗实际扣除更多鱼体力"), NewLateral.FishStaminaDrain > OldLateral.FishStaminaDrain * 4.0);
+		TestTrue(TEXT("较强横切在实际进展受阻时持续消耗鱼体力"), NewLateral.FishStaminaDrain > 0.0);
 		TestTrue(TEXT("停止主动向内游后缓游仍保留有效回收窗口"), OldEase.ReelSpeed() > 70.0
 			&& NewEase.ReelSpeed() > 70.0 && NewEase.ReelSpeed() > NewLateral.ReelSpeed() + 15.0);
 		TestTrue(TEXT("缓游的实际张力与鱼耗体低于横切对抗"), NewEase.MeanTension() < NewLateral.MeanTension()
-			&& NewEase.FishStaminaDrain < NewLateral.FishStaminaDrain * 0.2);
+			&& NewEase.FishStaminaDrain < NewLateral.FishStaminaDrain);
 		TestTrue(TEXT("六秒对抗没有把鱼体力快速清零"), NewLateral.RemainingFishStamina > 80.0
 			&& NewEase.RemainingFishStamina > 80.0);
 	}

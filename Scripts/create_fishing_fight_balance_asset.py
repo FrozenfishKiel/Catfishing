@@ -6,8 +6,9 @@ Run from the Unreal Editor Python console with:
 ``UCatFishingSettings`` only stores the soft reference to this asset. The values
 below initialize new assets only. Existing designer values are preserved and
 validated by the same C++ readiness gate used by runtime. Saving writes the current
-schema, including the independent fish effort price; the old per-centimeter price
-is never converted numerically. Values are intentionally absent from
+schema, including the independent fish unfulfilled-distance price; neither the
+old per-second nor the old strength-centimeter price is converted numerically.
+Values are intentionally absent from
 ``DefaultGame.ini`` so runtime has one tuning source.
 """
 
@@ -32,7 +33,7 @@ VALUES = {
     "cat_rod_stamina_cost_per_strength_radian": 0.03,
     "cat_unloaded_work_multiplier": 0.15,
     "cat_support_stamina_per_second": 2.0,
-    "fish_effort_stamina_per_second": 3.0,
+    "fish_stamina_per_unfulfilled_meter": 5.0 / 3.0,
     "cat_movement_stamina_multiplier": 1.0,
     "cat_reel_stamina_multiplier": 1.0,
     "cat_rod_stamina_multiplier": 1.0,
@@ -98,7 +99,7 @@ def main():
         unreal.log_error(message)
         raise RuntimeError(message)
 
-    # 新每秒价格使用原生独立默认值或资产已有策划值；不读取、换算或覆盖旧每厘米价格。
+    # 新每米价格使用原生独立默认值或资产已有策划值；不换算旧每秒/力量乘厘米价格。
     # 即使旧资产载入后没有 dirty 标记，也显式保存当前 schema；重复运行仍保留已有调参。
     if not unreal.EditorAssetLibrary.save_loaded_asset(asset, only_if_is_dirty=False):
         raise RuntimeError(f"failed to save fight balance: {ASSET_PATH}")
@@ -117,7 +118,7 @@ def main():
         f"CatRodWorkCostPerRadian={asset.get_editor_property('cat_rod_stamina_cost_per_strength_radian'):.6f} "
         f"CatUnloadedWorkMultiplier={asset.get_editor_property('cat_unloaded_work_multiplier'):.3f} "
         f"CatSupportPerSecond={asset.get_editor_property('cat_support_stamina_per_second'):.3f} "
-        f"FishEffortPerSecond={asset.get_editor_property('fish_effort_stamina_per_second'):.6f} "
+        f"FishStaminaPerUnfulfilledMeter={asset.get_editor_property('fish_stamina_per_unfulfilled_meter'):.6f} "
         f"CatMovementMultiplier={asset.get_editor_property('cat_movement_stamina_multiplier'):.3f} "
         f"CatReelMultiplier={asset.get_editor_property('cat_reel_stamina_multiplier'):.3f} "
         f"CatRodMultiplier={asset.get_editor_property('cat_rod_stamina_multiplier'):.3f} "

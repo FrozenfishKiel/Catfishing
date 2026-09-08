@@ -123,7 +123,7 @@ bool FCatFishingCatWorkPacingTest::RunTest(const FString& Parameters)
 
 	Settings = Config();
 	Settings.FishStrength = 20.0;
-	Settings.FishEffortStaminaPerSecond = 20.0;
+	Settings.FishStaminaPerUnfulfilledMeter = 20.0;
 	const auto PhaseChanged = Step(Settings, Current, Constraint);
 	TestEqual(TEXT("鱼每秒耗体价格不放大猫的同一工作量"), PhaseChanged.CatStaminaDrain, Heavy.CatStaminaDrain, 1e-9);
 

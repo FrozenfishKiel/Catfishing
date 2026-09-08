@@ -130,7 +130,7 @@ Runner 将模拟器的候选结果交给水域/地面解析，再由 Encounter �
 
 鱼体力归零或确认被猫端牵引上岸后，Session 发布 `FishExhausted` 进入 `ExhaustedReel`；同一 Runner 保留运动约束，但停止鱼主动运动和猫端正向扣费。当前上岸清空体力和力竭后零猫消耗都是玩法特例，物理改造尚未替换这些分支。猫危险入水由 Condition 的脚点浸没查询确认。
 
-全局搏斗系数来自 `DA_FishingFightBalance_Default`，新增鱼费用为 `FishEffortStaminaPerSecond×u²×G×dt`；满出力参考游速与 `AdaptiveSteeringConfig` 来自鱼种性格，旧方向概率/阶段倍率退出运行。杆长、满出力基础磨损和鱼竿耐久上限来自当前装备定义。当前剩余耐久只属于绑定 `RodItemInstanceId` 的装备实例，每个固定步的磨损写回该实例，Session 只复制同一值；新会话、切线、换人和收杆不恢复耐久。力量超过旧承载值不再结束本场；耐久归零以 `RodBroken` 写入真实损坏并拒绝再次抛竿。`UCatFishingSettings` 保留资产软引用、固定步与持竿姿态等技术设置。具体字段和诊断过滤词见实现导读，不再从旧 `Fight|Spec` 设置页或测试鱼快照推断现行参数。
+全局搏斗系数来自 `DA_FishingFightBalance_Default`，鱼费用为沿主动意图未完成的米数乘 `FishStaminaPerUnfulfilledMeter`（默认5/3点/米），实际进展使用最终位移扣除历史纠偏后的主动方向投影，反拖不封顶，零意图免耗；满出力参考游速与 `AdaptiveSteeringConfig` 来自鱼种性格，旧方向概率/阶段倍率退出运行。杆长、满出力基础磨损和鱼竿耐久上限来自当前装备定义。当前剩余耐久只属于绑定 `RodItemInstanceId` 的装备实例，每个固定步的磨损写回该实例，Session 只复制同一值；新会话、切线、换人和收杆不恢复耐久。力量超过旧承载值不再结束本场；耐久归零以 `RodBroken` 写入真实损坏并拒绝再次抛竿。`UCatFishingSettings` 保留资产软引用、固定步与持竿姿态等技术设置。具体字段和诊断过滤词见实现导读，不再从旧 `Fight|Spec` 设置页或测试鱼快照推断现行参数。
 
 ### 2.5 抄网（当前实现）
 

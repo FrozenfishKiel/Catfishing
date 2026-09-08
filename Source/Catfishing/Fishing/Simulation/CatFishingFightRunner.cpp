@@ -1122,7 +1122,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"CatStaminaDrain=%.5f CatStaminaAfter=%.5f WearLoad=%.5f RodWearDelta=%.5f "
 				"CatMovementWorkUnits=%.5f CatReelWorkUnits=%.5f CatRodWorkUnits=%.5f "
 				"CatHoldLoad=%.5f CatRodLoad=%.5f CatRodSupportBeforeSharedDrain=%.5f "
-				"FishEffortRatio=%.5f FishOppositionRatio=%.5f FishEffortPerSecond=%.5f FishDragKgPerSec=%.5f "
+				"FishEffortRatio=%.5f FishIntendedDistanceCm=%.5f FishActualIntentProgressCm=%.5f FishUnfulfilledDistanceCm=%.5f FishStaminaPerUnfulfilledMeter=%.5f FishDragKgPerSec=%.5f "
 				"FreeSpool=%s LineRestraining=%s Reeling=%s Struggling=%s Outcome=%s "
 				"InputAccepted=%s FinalizeAccepted=%s NetMode=%d Authority=true"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
@@ -1150,7 +1150,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Trace.CatMovementPositiveWorkUnits, Trace.CatReelPositiveWorkUnits, Trace.CatRodPositiveWorkUnits,
 			Trace.CatHoldNormalizedLoad, Trace.CatRodNormalizedLoad,
 			Trace.CatRodSupportBeforeSharedStaminaDrain,
-			Trace.FishEffortRatio, Trace.FishOppositionRatio, Trace.FishEffortStaminaPerSecond, Trace.FishLinearDragKilogramsPerSecond,
+			Trace.FishEffortRatio, Trace.FishIntendedDistanceCentimeters, Trace.FishActualIntentProgressCentimeters,
+			Trace.FishUnfulfilledDistanceCentimeters, Trace.FishStaminaPerUnfulfilledMeter, Trace.FishLinearDragKilogramsPerSecond,
 			Trace.bFreeSpool ? TEXT("true") : TEXT("false"),
 			Trace.bLineRestraining ? TEXT("true") : TEXT("false"),
 			Trace.bReeling ? TEXT("true") : TEXT("false"), Trace.bStruggling ? TEXT("true") : TEXT("false"),
@@ -1161,8 +1162,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 	{
 		UE_LOG(LogCatFishing, Log,
 			TEXT("Event=%s SessionId=%s RodActorId=%s Trigger=%s CatAction=%s Behavior=%s "
-				"FishDrainMode=ContinuousEffortSquared FishStaminaBefore=%.4f FishStaminaDrain=%.4f FishStaminaAfter=%.4f "
-				"DrainPerSecond=%.4f UncappedDrain=%.4f TargetEffort=%.4f ActualEffort=%.4f OppositionRatio=%.4f ReferenceDrainPerSecond=%.4f "
+				"FishDrainMode=UnfulfilledIntentDistance FishStaminaBefore=%.4f FishStaminaDrain=%.4f FishStaminaAfter=%.4f "
+				"DrainPerSecond=%.4f UncappedDrain=%.4f TargetEffort=%.4f ActualEffort=%.4f IntendedDistanceCm=%.4f ActualIntentProgressCm=%.4f UnfulfilledDistanceCm=%.4f StaminaPerUnfulfilledMeter=%.4f "
 				"FullEffortThrustN=%.4f ActualThrustN=%.4f DragKgPerSec=%.4f FixedStepSeconds=%.4f "
 				"IntendedSwimSpeedCmPerSec=%.4f FishBefore=%s ResolvedFish=%s ResolvedDelta=%s ResolvedDeltaZCm=%.4f "
 				"DesiredFishDirection=%s RodTip=%s LineLengthBefore=%.4f LineLengthAfter=%.4f "
@@ -1171,8 +1172,9 @@ void UCatFishingFightRunner::HandleFixedStep()
 			*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens), Trigger, CatActionName,
 			*UEnum::GetValueAsString(SteeringState.Behavior), State.FishStamina, Step.FishStaminaDrain, FishStaminaAfterStep,
 			Step.FishStaminaDrain / Config.FixedStepSeconds, FishUncappedStaminaDrain,
-			SteeringState.TargetEffortRatio, Step.Trace.FishEffortRatio, Step.Trace.FishOppositionRatio,
-			Config.FishEffortStaminaPerSecond, Step.Trace.FishFullEffortThrustNewtons, Step.Trace.FishThrustNewtons,
+			SteeringState.TargetEffortRatio, Step.Trace.FishEffortRatio, Step.FishIntendedDistanceCentimeters,
+			Step.FishActualIntentProgressCentimeters, Step.FishUnfulfilledDistanceCentimeters,
+			Config.FishStaminaPerUnfulfilledMeter, Step.Trace.FishFullEffortThrustNewtons, Step.Trace.FishThrustNewtons,
 			Step.Trace.FishLinearDragKilogramsPerSecond, Config.FixedStepSeconds, Step.IntendedSwimSpeedCentimetersPerSecond,
 			*State.FishWorldPosition.ToCompactString(), *Motion.FishWorldPosition.ToCompactString(),
 			*ResolvedFishDelta.ToCompactString(), ResolvedFishDelta.Z, *DesiredFishDirection.ToCompactString(),
@@ -1188,12 +1190,12 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"PrimaryStrength=%.3f HelperStrength=%.3f CombinedStrength=%.3f CatSystemMassKg=%.3f FishMassKg=%.3f MassMode=IndependentCatBodyMass StrengthMode=ConstantWhileStaminaPositive StrengthPerKg=%.3f ActiveHelpers=%d "
 				"CatAcceleration=%.3f FishAcceleration=%.3f NetFishPullAcceleration=%.3f "
 				"PrimaryStamina=%.3f GroupStaminaDrain=%.3f FishStamina=%.3f FishStaminaDrain=%.3f SlackRecovery=%s CatRecovery=%.4f "
-				"MotionIntent=%s CatIntentCm=%.3f CatActualCm=%.3f FishIntentCm=%.3f FishActualCm=%.3f "
+				"MotionIntent=%s CatIntentCm=%.3f CatActualCm=%.3f FishLineIntentCm=%.3f FishLineActualCm=%.3f "
 				"FishWorldStep2DCm=%.3f FishWorldStep3DCm=%.3f FishWorldDeltaZCm=%.3f "
 				"ReelRequestedCm=%.3f ReelActualCm=%.3f ReelMode=%s CatAction=%s AbsoluteRodWear=%.3f RodWearDelta=%.3f "
 				"MovementDrain=%.4f ReelDrain=%.4f RodDrain=%.4f HoldDrain=%.4f RodWorkDrain=%.4f RodSupportExtraDrain=%.4f CatModel=ActualWorkAndTimedSupport "
 				"MovementIntentCm=%.3f MovementActualCm=%.3f RodExertionSquaredSeconds=%.3f RodPositiveWorkRadians=%.3f HoldIntentCm=%.3f "
-				"CatEffortLoad=%.3f RodEffortLoad=%.3f FishEffortLoad=%.3f MovementIntentSource=CharacterMovementAcceleration "
+				"CatEffortLoad=%.3f RodEffortLoad=%.3f FishUnfulfilledDistanceCm=%.3f MovementIntentSource=CharacterMovementAcceleration "
 				"FishExhausted=%s World=%s PlayerState=%s NetMode=%d Authority=true LocalRole=%d"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
@@ -1232,7 +1234,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Step.CatRodWorkStaminaDrain, Step.CatRodSupportStaminaDrain,
 			Step.CatMovementIntentCentimeters, Step.CatMovementActualCentimeters,
 			Step.CatRodExertionSquaredSeconds, Step.CatRodPositiveWorkRadians, Step.CatHoldIntentCentimeters,
-			Step.CatNormalizedEffortLoad, Step.CatRodNormalizedEffortLoad, Step.FishNormalizedEffortLoad,
+			Step.CatNormalizedEffortLoad, Step.CatRodNormalizedEffortLoad, Step.FishUnfulfilledDistanceCentimeters,
 			State.bFishExhausted ? TEXT("true") : TEXT("false"),
 			*GetNameSafe(World), *GetNameSafe(FindPrimaryParticipant() ? FindPrimaryParticipant()->PlayerState.Get() : nullptr),
 			static_cast<int32>(World->GetNetMode()), static_cast<int32>(SessionActor->GetLocalRole()));

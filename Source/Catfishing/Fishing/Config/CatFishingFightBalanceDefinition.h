@@ -84,14 +84,19 @@ public:
 		meta = (DisplayName = "猫满用力每秒支撑耗体", ClampMin = "0.0"))
 	double CatSupportStaminaPerSecond = 2.0;
 
-	/** 鱼满主动出力且满有效对抗时的每秒体力点数；实际费用为本值*u²*G*dt。 */
+	/** 沿鱼本步主动意图未完成的位移单价（体力点/m）；180 cm/s 满出力且完全受阻时独立标定为 3 点/s。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DisplayName = "鱼满出力每秒对抗耗体", ClampMin = "0.0"))
+		meta = (DisplayName = "鱼每米未完成意图耗体", ClampMin = "0.0"))
+	double FishStaminaPerUnfulfilledMeter = 5.0 / 3.0;
+
+	/** 仅保留旧资产和未完成审计的 Blueprint 字段身份；旧每秒价不读取、不换算为每米价。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
+		meta = (DeprecatedProperty, DeprecationMessage = "旧每秒鱼价格不再使用；请设置FishStaminaPerUnfulfilledMeter，单位为体力点/m。"))
 	double FishEffortStaminaPerSecond = 3.0;
 
-	/** 仅保留旧资产序列化兼容，运行费用已改为FishEffortStaminaPerSecond。 */
+	/** 仅保留旧资产序列化兼容；旧力量乘厘米单价不换算为沿意图缺失位移单价。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DeprecatedProperty, DeprecationMessage = "旧每厘米鱼价格不再使用；请设置FishEffortStaminaPerSecond。"))
+		meta = (DeprecatedProperty, DeprecationMessage = "旧每厘米鱼价格不再使用；请设置FishStaminaPerUnfulfilledMeter。"))
 	double FishStaminaCostPerStrengthCentimeter = -1.0;
 
 	/** 猫主动移动形成的对抗努力体力倍率；不会重复计入转杆或收线。 */
@@ -121,12 +126,12 @@ public:
 
 	/** 仅保留旧资产序列化兼容，运行不再叠加负载价格倍率。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DeprecatedProperty, DeprecationMessage = "旧鱼负载倍率不再使用；请设置FishEffortStaminaPerSecond。"))
+		meta = (DeprecatedProperty, DeprecationMessage = "旧鱼负载倍率不再使用；请设置FishStaminaPerUnfulfilledMeter。"))
 	double FishLoadStaminaMultiplier = 1.0;
 
-	/** 仅保留旧资产序列化兼容，受阻出力现按时间结算。 */
+	/** 仅保留旧资产序列化兼容；当前沿意图缺失位移不使用旧等效受阻倍率。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DeprecatedProperty, DeprecationMessage = "旧受阻距离倍率不再使用；鱼按实际出力与时间结算。"))
+		meta = (DeprecatedProperty, DeprecationMessage = "旧受阻距离倍率不再使用；沿意图缺失位移按FishStaminaPerUnfulfilledMeter结算。"))
 	double IsometricEffortMultiplier = -1.0;
 
 	/** 正常右键时猫每秒恢复的搏斗体力，不受张力或其他操作限制；强制力竭拖拽除外。 */

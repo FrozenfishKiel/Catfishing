@@ -56,16 +56,17 @@
 | 猫转杆每标准转矩弧度体力系数 | CatRodStaminaCostPerStrengthRadian | 默认 0.03 | 真实转角按主位主动转矩比例加权后计价，不使用最大转速虚拟弧长 |
 | 猫无负载动作成本倍率 | CatUnloadedWorkMultiplier | 默认 0.15 | 猫实际做功的基础价格，与负载价格相加 |
 | 猫满用力每秒支撑耗体 | CatSupportStaminaPerSecond | 默认 2/s | 支撑按用力/负载比例平方和持续时间结算；共享支撑与转杆支撑取较高者 |
-| 鱼满出力每秒对抗耗体 | FishEffortStaminaPerSecond | 新原生默认 3 点/s | 鱼费用=`本值×实际u²×G×dt`；G为最终沿线主动方向投影×张力/固定满力推力的夹限值，不用u×满力作分母；自由游动/正常右键免耗 |
-| 旧鱼每厘米体力价格 | FishStaminaCostPerStrengthCentimeter | 仅旧载荷 | 不再运行，旧0.002不得作为新每秒价格直接套用 |
+| 鱼每米未完成意图耗体 | FishStaminaPerUnfulfilledMeter | 新原生默认 5/3 点/m（约 1.666667） | 沿本步鱼主动朝向，将期望位移减去最终实际位移的投影，负值取 0；厘米转米后乘本价格，不再乘 u²、鱼线夹角或张力比例 |
+| 旧鱼每秒对抗耗体 | FishEffortStaminaPerSecond | 仅旧载荷，旧默认 3 点/s | 已标 Deprecated，不参与费用或运行校验，不换算为新每米价格；全 Content/外部 Blueprint 字段消费者未完成审计前保留反射身份 |
+| 旧鱼每厘米体力价格 | FishStaminaCostPerStrengthCentimeter | 仅旧载荷 | 不再运行，旧力量乘厘米单价不得直接作为新意图缺失位移单价 |
 | 猫移动体力倍率 | CatMovementStaminaMultiplier | 默认 1 | 绷线时主动远离鱼的身体移动费用；被动位移不计 |
 | 猫收线体力倍率 | CatReelStaminaMultiplier | 默认 1 | 原求解器本步卷线量的正功费用 |
 | 猫转杆体力倍率 | CatRodStaminaMultiplier | 默认 1 | 主位实际转杆正功及其时间支撑的倍率 |
 | 猫持竿体力倍率 | CatHoldStaminaMultiplier | 默认 1 | 共享沿线支撑费用倍率；实际做功费用不再抵扣支撑 |
 | 猫负载体力倍率 | CatLoadStaminaMultiplier | 默认 1 | 猫实际做功乘 `(无负载动作倍率 + 自身归一化负载 × 本倍率)` |
-| 旧鱼负载体力倍率 | FishLoadStaminaMultiplier | 仅旧载荷 | 不再叠加连续出力费用；关闭鱼对抗费用改设 FishEffortStaminaPerSecond=0 |
-| 旧鱼受阻努力折算倍率 | IsometricEffortMultiplier | 仅旧载荷 | 受阻鱼按实际出力和对抗时间结算，不再折算未完成距离 |
-| 放线体力恢复速度 | SlackStaminaRegenPerSecond | 3/s | 正常按右键时猫的恢复速度，不受张力、移动或转杆限制；零体力强制拖拽除外 |
+| 旧鱼负载体力倍率 | FishLoadStaminaMultiplier | 仅旧载荷 | 不再叠加鱼费用；关闭鱼耗体改设 FishStaminaPerUnfulfilledMeter=0 |
+| 旧鱼受阻努力折算倍率 | IsometricEffortMultiplier | 仅旧载荷 | 不参与当前意图缺失位移计算，不把旧等效努力倍率叠加到新每米价格 |
+| 放线体力恢复速度 | SlackStaminaRegenPerSecond | 3/s | 正常右键且线杯还有可放容量时猫的恢复速度；满线恢复正常对抗计费，零体力强制拖拽除外 |
 | 鱼力竭吸附阈值 | FishExhaustionThreshold | 0.5 | 本步产生正的鱼对抗耗体后，剩余绝对体力不高于该值才吸附归零；零耗体不触发 |
 | 旧低体力休息触发比例/时长倍率 | LowStaminaRestThreshold/Multiplier | 仅旧载荷 | 运行已迁入人格 AdaptiveSteeringConfig 的体力阈值和行为时长倍率 |
 | 满表现张力 | DisplayTensionNewtons | 默认 50 N | 仅将真实张力归一化供表现，不产生玩法张力 |
@@ -78,7 +79,13 @@
 
 `DefaultGame.ini` 只保存 `FightBalanceDefinition` 资产引用，不再保存上述数值；C++ 也不提供可偷偷生效的第二套回退。资产缺失、未勾“启用正式运行”或任一现行字段非法时，Fishing runtime 保持 fail-closed。
 
-上述费用与倍率均允许非负有限值。猫实际做功与支撑分开，阶段倍率不再额外放大猫费用；正功量只来自已完成的主动身体移动、本步卷线与归一化主动转矩加权转角，受阻时只承担时间支撑。猫负载倍率为 0 只关闭实际做功的负载附加部分；完全关闭猫费用需要关闭线性单价、转杆单价及支撑费。鱼受阻倍率为 1 仍表示同等意图完成或受阻时有效努力相同，但必须同时存在张力、向外反抗与可用猫合力才计费，鱼没有基础游动费用。正常右键恢复与双方免耗体、零体力强制锁线拖拽保持。修改资产后下一场搏斗生效；三个新字段为既有资产提供默认值，创建脚本只初始化新资产，已有合法资产保留调参，非法资产报错而不自动覆盖。
+上述现行费用与倍率均允许非负有限值。猫实际做功与支撑分开，阶段倍率不再额外放大猫费用；正功量只来自已完成的主动身体移动、本步卷线与归一化主动转矩加权转角，受阻时只承担时间支撑。猫负载倍率为 0 只关闭实际做功的负载附加部分；完全关闭猫费用需要关闭线性单价、转杆单价及支撑费。
+
+鱼当前按 `D_cm=max(0, desiredSpeed_cm/s(u)×dt_s-dot(finalActualDelta_cm, heading))` 计算未完成意图位移，再按 `FishStaminaPerUnfulfilledMeter×D_cm/100` 计费。意图为零时费用为零；达到期望速度的自由游动也为零，但起步、转弯或被拉回导致实际进展小于意图时会产生费用，不要求有张力或特定鱼线夹角。结算仍要求有持有人、猫有可用合力、鱼未力竭且仍有体力，并排除有效右键放线恢复和强制力竭拖拽。满线时右键不属于有效放线恢复。
+
+每米价格默认 `5/3` 是新模型的独立标定：180 cm/s 满出力且完全受阻时为 3 点/s，不是旧每秒价的单位换算，也不读取旧每厘米价格或受阻倍率。修改资产后下一场搏斗生效；创建脚本只初始化新资产，已有合法的新价格保留，非法资产报错而不自动覆盖。`migrate_fish_adaptive_behavior.py` 的 `-AuditFishUnfulfilledStamina` 只读审计，`-ApplyFishUnfulfilledStamina` 只保存已知指纹的 Balance 并保护其余 55 个鱼相关包。
+
+本轮已在完整构建后的两个独立 DebugGame 进程中完成保存与重载。`Saved/Automation/FishIntentStamina-20260908/AssetVerification.json` 的 15 项资产检查通过：新价格为 `1.6666666666666667` 点/m，其余 Balance 运行参数、旧载荷、55 个保护包指纹和正式引用不变。保存后的 Balance SHA256 仍为 `4042ca6ea1ae526e1cccf8c763d85d14b7555b85b3b2014b9ac5e7e89dca5d1b`；新价格等于原生默认，成功保存没有产生不同的包字节，独立重载由新原生类读出该值，不能据此声称产生了资产二进制改动。保存与重载原始报告分别为该目录的 `MigrationRetry/Migration.json` 和 `FreshReload/Audit.json`。首轮因文件占用保存失败的记录仍保留，失败后也已核对全部 56 包未变；上述资产检查不替代真人手感或打包联机验收。
 
 ## 2. 装备/道具：`UCatEquipmentDefinition`（正式目录 `Equip_*`）
 
@@ -164,7 +171,7 @@
 
 ## 5. 搏斗性格：`UCatFightPersonalityDefinition`（Fight_*）
 
-以下为 2026-09-08 连续出力第一版的当前源码字段；正式四性格和鱼树已迁移并经独立进程重载：四性格版本1、满出力速度110/140/180/240cm/s、全局新每秒价格3；交付证据见 [鱼运动实现导读](FishFightImplementationGuide_zh-CN.md)。运行不再用两档游速、阶段费用或疲劳向内概率。
+以下为当前连续出力性格字段；正式四性格和鱼树已在 2026-09-08 完成迁移并经独立进程重载：四性格版本 1、满出力速度 110/140/180/240 cm/s。本轮改鱼耗体不修改这些行为资产；全局每米价格见上文 Balance，交付证据见 [鱼运动实现导读](FishFightImplementationGuide_zh-CN.md)。运行不再用两档游速、阶段费用或疲劳向内概率。
 
 | 字段 | 含义 |
 |---|---|

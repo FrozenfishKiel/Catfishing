@@ -22,7 +22,7 @@ bool UCatFishingFightBalanceDefinition::IsRuntimeDefinitionReady() const
 		&& IsFishingFightBalanceFiniteNonNegative(CatUnloadedWorkMultiplier)
 		&& IsFishingFightBalanceFiniteNonNegative(CatSupportStaminaPerSecond)
 		&& FMath::IsFinite(ExhaustedCatEscapeSpeedMultiplier) && ExhaustedCatEscapeSpeedMultiplier >= 1.0
-		&& IsFishingFightBalanceFiniteNonNegative(FishEffortStaminaPerSecond)
+		&& IsFishingFightBalanceFiniteNonNegative(FishStaminaPerUnfulfilledMeter)
 		&& IsFishingFightBalanceFiniteNonNegative(CatMovementStaminaMultiplier)
 		&& IsFishingFightBalanceFiniteNonNegative(CatReelStaminaMultiplier)
 		&& IsFishingFightBalanceFiniteNonNegative(CatRodStaminaMultiplier)

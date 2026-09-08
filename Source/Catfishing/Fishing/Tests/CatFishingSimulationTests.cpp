@@ -3,7 +3,6 @@
 #include "Misc/AutomationTest.h"
 #include "Fishing/Simulation/CatFishFightMotionSolver.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
-#include "Fishing/Simulation/CatFishingFightWorkModel.h"
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 
 namespace CatFishingCoupledSimulationTest
@@ -650,37 +649,29 @@ bool FCatFishingMassSplitTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingContinuousFishEffortCostTest,
-	"Catfishing.Unit.Fishing.Simulation.FishEffortCostUsesSquaredActualEffortAndOppositionTime",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingStalledFishIntentCostTest,
+	"Catfishing.Unit.Fishing.Simulation.StalledFishIntentCostUsesCurrentEffortOnce",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-bool FCatFishingContinuousFishEffortCostTest::RunTest(const FString& Parameters)
+bool FCatFishingStalledFishIntentCostTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	FCatFightFishEffortInput Input;
-	Input.EffortRatio = 1.0;
-	Input.OppositionRatio = 0.5;
-	Input.StaminaPerSecond = 3.0;
-	Input.DeltaSeconds = 0.1;
-	double Drain = 0.0;
-	TestTrue(TEXT("continuous effort calculation succeeds"), FCatFishingFightWorkModel::ComputeFishEffortDrain(Input, Drain));
-	const double FullDrain = Drain;
-	TestEqual(TEXT("full effort pays the observed opposition for the elapsed time"), FullDrain, 0.15, 1e-9);
-	Input.EffortRatio = 0.5;
-	TestTrue(TEXT("half effort is valid"), FCatFishingFightWorkModel::ComputeFishEffortDrain(Input, Drain));
-	TestEqual(TEXT("same opposition at half effort costs one quarter"), Drain, FullDrain * 0.25, 1e-9);
-	Input.OppositionRatio = 0.0;
-	TestTrue(TEXT("free swimming is valid"), FCatFishingFightWorkModel::ComputeFishEffortDrain(Input, Drain));
-	TestEqual(TEXT("free swimming has no base cost"), Drain, 0.0);
-	Input.EffortRatio = 0.0;
-	Input.OppositionRatio = 1.0;
-	TestTrue(TEXT("passive load is valid"), FCatFishingFightWorkModel::ComputeFishEffortDrain(Input, Drain));
-	TestEqual(TEXT("tension without active effort has no fish cost"), Drain, 0.0);
-	Input.EffortRatio = 1.1;
-	TestFalse(TEXT("out of range effort is rejected"), FCatFishingFightWorkModel::ComputeFishEffortDrain(Input, Drain));
-	Input.EffortRatio = 1.0;
-	Input.OppositionRatio = -0.1;
-	TestFalse(TEXT("negative opposition is rejected"), FCatFishingFightWorkModel::ComputeFishEffortDrain(Input, Drain));
+	const auto Config = MakeConfig();
+	const double FullIntentDistance = Config.FishFullEffortSpeedCentimetersPerSecond * Config.FixedStepSeconds;
+	for (const double Effort : {0.0, 0.25, 0.5, 1.0})
+	{
+		auto State = MakeState(ECatFightCatAction::None);
+		State.FishEffortRatio = Effort;
+		const auto Step = FCatFishingFightSimulator::Step(Config, State, MakeHeldConstraint(), FVector::ForwardVector);
+		if (!TestTrue(TEXT("各出力的真实锁线求解有效"), Step.bSucceeded)) return false;
+		TestTrue(TEXT("固定竿端锁线确实阻止鱼向外位移"), Step.ProposedFishWorldPosition.Equals(State.FishWorldPosition, 1e-9));
+		TestEqual(TEXT("期望意图距离只按当前出力缩放一次"),
+			Step.FishIntendedDistanceCentimeters, FullIntentDistance * Effort, 1e-9);
+		TestEqual(TEXT("未完成距离保留全部僵持意图"),
+			Step.FishUnfulfilledDistanceCentimeters, FullIntentDistance * Effort, 1e-9);
+		TestEqual(TEXT("僵持鱼费用按米价结算，不再额外平方出力"), Step.FishStaminaDrain,
+			FullIntentDistance * Effort / 100.0 * Config.FishStaminaPerUnfulfilledMeter, 1e-9);
+	}
 	return !HasAnyErrors();
 }
 
@@ -706,7 +697,9 @@ bool FCatFishingInwardReelRodWearTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("inward fish direction has no outward line load"),
 		Step.NormalizedLineLoad, 0.0, 1e-9);
 	TestEqual(TEXT("tension alone cannot add rod wear"), Step.RodWearDelta, 0.0, 1e-9);
-	TestEqual(TEXT("tension alone cannot charge fish swimming toward the rod"), Step.FishStaminaDrain, 0.0);
+	TestTrue(TEXT("inward reeling completes at least the fish's intended progress"),
+		Step.FishActualIntentProgressCentimeters >= Step.FishIntendedDistanceCentimeters);
+	TestEqual(TEXT("completed inward intent has no unfulfilled-distance cost"), Step.FishStaminaDrain, 0.0);
 	TestEqual(TEXT("accumulated rod wear is unchanged without outward fish load"),
 		Step.AbsoluteRodWear, State.AbsoluteRodWear, 1e-9);
 	TestEqual(TEXT("inward reeling cannot break a nearly worn rod"),
@@ -752,7 +745,7 @@ bool FCatFishingDirectionalRodWearTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingStrengthNormalizedStaminaTest,
-	"Catfishing.Unit.Fishing.Simulation.FreeSwimmingHasNoStaminaCostForWeakOrStrongFish",
+	"Catfishing.Unit.Fishing.Simulation.RightButtonRecoveryWaivesCostForWeakOrStrongFish",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingStrengthNormalizedStaminaTest::RunTest(const FString& Parameters)
@@ -772,10 +765,11 @@ bool FCatFishingStrengthNormalizedStaminaTest::RunTest(const FString& Parameters
 	TestTrue(TEXT("松线时相同游速产生相同沿线努力距离"),
 		FMath::IsNearlyEqual(WeakFish.FishIntendedLineDistanceCentimeters,
 			StrongFish.FishIntendedLineDistanceCentimeters, 1e-9));
-	TestEqual(TEXT("自由游动不因绝对力量差产生体力费用"),
+	TestTrue(TEXT("强弱鱼都由未满线右键恢复规则豁免费用"), WeakFish.bSlackRecoveryActive && StrongFish.bSlackRecoveryActive);
+	TestEqual(TEXT("右键恢复不因绝对力量差产生体力费用"),
 		WeakFish.FishStaminaDrain, StrongFish.FishStaminaDrain, 1e-9);
-	TestEqual(TEXT("弱鱼自由游动不消耗体力"), WeakFish.FishStaminaDrain, 0.0);
-	TestEqual(TEXT("强鱼自由游动不消耗体力"), StrongFish.FishStaminaDrain, 0.0);
+	TestEqual(TEXT("右键恢复期间弱鱼不消耗体力"), WeakFish.FishStaminaDrain, 0.0);
+	TestEqual(TEXT("右键恢复期间强鱼不消耗体力"), StrongFish.FishStaminaDrain, 0.0);
 	return !HasAnyErrors();
 }
 
@@ -1164,7 +1158,7 @@ bool FCatFishingContinuousFishPropulsionTest::RunTest(const FString& Parameters)
 					Config.FishStrength * Config.ForcePerStrengthNewtons * Effort, 1e-9);
 				TestEqual(TEXT("水阻保持满出力参考校准"), Step.Trace.FishLinearDragKilogramsPerSecond,
 					100.0 * Config.FishStrength * Config.ForcePerStrengthNewtons / Config.FishFullEffortSpeedCentimetersPerSecond, 1e-9);
-				TestEqual(TEXT("自由游动仍免鱼耗体"), Step.FishStaminaDrain, 0.0);
+				TestEqual(TEXT("未满线右键恢复仍免鱼耗体"), Step.FishStaminaDrain, 0.0);
 				State.FishWorldPosition = Step.ProposedFishWorldPosition;
 				State.FishVelocityCentimetersPerSecond = Step.ResolvedFishVelocityCentimetersPerSecond;
 				State.LineLengthCentimeters = Step.LineLengthCentimeters;
@@ -1213,11 +1207,11 @@ bool FCatFishingZeroEffortInertiaTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFishOppositionGeometryTest,
-	"Catfishing.Unit.Fishing.Simulation.FishOppositionUsesFinalDirectionAndFixedMaximumForce",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFishIntentProgressGeometryTest,
+	"Catfishing.Unit.Fishing.Simulation.FishIntentCostUsesFinalProgressWithoutLineAngleOrTensionGate",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-bool FCatFishingFishOppositionGeometryTest::RunTest(const FString& Parameters)
+bool FCatFishingFishIntentProgressGeometryTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	const auto Config = MakeConfig();
@@ -1229,20 +1223,27 @@ bool FCatFishingFishOppositionGeometryTest::RunTest(const FString& Parameters)
 		auto Step = FCatFishingFightSimulator::Step(Config, State, Rod, FVector::ForwardVector);
 		Step.ProposedFishWorldPosition = State.FishWorldPosition;
 		Step.LineTensionNewtons = Config.FishStrength * Config.ForcePerStrengthNewtons * 0.5;
-		TestTrue(TEXT("受控最终负载快照可重新结算"), FCatFishingFightSimulator::FinalizeResolvedStep(Config, State, Rod, Step));
-		TestEqual(TEXT("固定满推力归一化不会随小出力放大对抗"), Step.FishNormalizedEffortLoad, 0.5, 1e-9);
-		TestEqual(TEXT("鱼虽被挡住仍按实际出力平方和真实时间结算"), Step.FishStaminaDrain,
-			Config.FishEffortStaminaPerSecond * Effort * Effort * 0.5 * Config.FixedStepSeconds, 1e-9);
+		TestTrue(TEXT("受控最终落点快照可重新结算"), FCatFishingFightSimulator::FinalizeResolvedStep(Config, State, Rod, Step));
+		const double IntendedDistance = Config.FishFullEffortSpeedCentimetersPerSecond * Effort * Config.FixedStepSeconds;
+		TestEqual(TEXT("最终没有移动时保留全部未完成意图"), Step.FishUnfulfilledDistanceCentimeters, IntendedDistance, 1e-9);
+		TestEqual(TEXT("最终停住按未完成意图米数计费"), Step.FishStaminaDrain,
+			IntendedDistance / 100.0 * Config.FishStaminaPerUnfulfilledMeter, 1e-9);
 		const double OutwardCost = Step.FishStaminaDrain;
 		State.MotionIntent = ECatFishMotionIntent::CalmOrInward;
 		TestTrue(TEXT("旧表现意图不参与鱼费用"), FCatFishingFightSimulator::FinalizeResolvedStep(Config, State, Rod, Step));
-		TestEqual(TEXT("同出力同对抗不因平静标签降价"), Step.FishStaminaDrain, OutwardCost, 1e-9);
+		TestEqual(TEXT("同一意图缺失不因平静标签降价"), Step.FishStaminaDrain, OutwardCost, 1e-9);
 		Step.FishEffortDirection = FVector::RightVector;
 		TestTrue(TEXT("纯横向主动方向接受同一张力快照"), FCatFishingFightSimulator::FinalizeResolvedStep(Config, State, Rod, Step));
-		TestEqual(TEXT("张力不能替代横游缺失的沿线对抗"), Step.FishStaminaDrain, 0.0);
+		TestEqual(TEXT("横向主动意图被挡住仍按同一缺失距离收费"), Step.FishStaminaDrain, OutwardCost, 1e-9);
 		Step.FishEffortDirection = -FVector::ForwardVector;
 		TestTrue(TEXT("向竿尖主动游动接受同一张力快照"), FCatFishingFightSimulator::FinalizeResolvedStep(Config, State, Rod, Step));
-		TestEqual(TEXT("朝内主动游动不收沿线对抗费"), Step.FishStaminaDrain, 0.0);
+		TestEqual(TEXT("向内主动意图被挡住仍按同一缺失距离收费"), Step.FishStaminaDrain, OutwardCost, 1e-9);
+		Step.LineTensionNewtons = 0.0;
+		TestTrue(TEXT("无张力最终快照也可重算"), FCatFishingFightSimulator::FinalizeResolvedStep(Config, State, Rod, Step));
+		TestEqual(TEXT("张力归零不会豁免实际未完成的主动意图"), Step.FishStaminaDrain, OutwardCost, 1e-9);
+		Step.ProposedFishWorldPosition = State.FishWorldPosition + Step.FishEffortDirection * IntendedDistance * 0.4;
+		TestTrue(TEXT("最终落点增加主动进展后重算"), FCatFishingFightSimulator::FinalizeResolvedStep(Config, State, Rod, Step));
+		TestEqual(TEXT("最终实际完成四成意图后只支付六成缺失"), Step.FishStaminaDrain, OutwardCost * 0.6, 1e-9);
 	}
 	return !HasAnyErrors();
 }

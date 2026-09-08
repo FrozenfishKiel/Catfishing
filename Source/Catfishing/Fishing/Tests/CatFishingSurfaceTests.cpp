@@ -188,13 +188,17 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		Step.ActualReelDistanceCentimeters = 2.0;
 		Step.FishConstraintCorrectionCentimeters = 8.0;
 		Step.ProposedFishWorldPosition = FVector(-120.0, 0.0, 0.0);
+		Step.FishEffortDirection = FVector::ForwardVector;
+		Step.IntendedSwimSpeedCentimetersPerSecond = 60.0;
 		Step.NormalizedTension = 1.0;
 		Step.NormalizedLineLoad = 1.0;
 		Rod.RodTipVelocityCentimetersPerSecond = FVector(-400.0, 0.0, 0.0);
 		const auto Swing = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, Water, bJustBeached, Normal, Surface, RotationResistance);
 		TestTrue(TEXT("live-fish swing shore contact stays valid"), Swing.bSucceeded);
 		TestFalse(TEXT("dominant rod swing does not instantly exhaust the live fish"), bJustBeached);
-		TestEqual(TEXT("rod swing does not force stamina drain"), Step.FishStaminaDrain, 0.0);
+		TestTrue(TEXT("real shore resolution retains unfulfilled active swim intent even after unloading"),
+			Step.FishUnfulfilledDistanceCentimeters > 0.0 && Step.FishStaminaDrain > 0.0
+			&& Step.FishStaminaDrain < Runner->State.FishStamina);
 		TestFalse(TEXT("real shoreline correction leaves the line slack"), Step.bLineTaut);
 		TestEqual(TEXT("slack shoreline result cannot publish the old loaded torque"), RotationResistance.MaximumFishTorqueStrengthMeters, 0.0);
 		Runner->State.bFishExhausted = true;

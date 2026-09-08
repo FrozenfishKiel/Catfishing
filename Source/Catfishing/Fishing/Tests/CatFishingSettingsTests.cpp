@@ -25,7 +25,7 @@ namespace
 		Balance.ForcePerStrengthNewtons = 1.0;
 		Balance.ReelSpeedCentimetersPerSecond = 80.0;
 		Balance.CatStaminaCostPerStrengthCentimeter = 0.002;
-		Balance.FishEffortStaminaPerSecond = 3.0;
+		Balance.FishStaminaPerUnfulfilledMeter = 5.0 / 3.0;
 		Balance.SlackStaminaRegenPerSecond = 3.0;
 		Balance.FishExhaustionThreshold = 0.5;
 		Balance.DisplayTensionNewtons = 50.0;
@@ -103,7 +103,9 @@ bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("可创建瞬态搏斗平衡资产"), Balance)) return false;
 
 	TestFalse(TEXT("未配置资产默认不可进入运行态"), Balance->IsRuntimeDefinitionReady());
-	TestEqual(TEXT("新鱼出力价格使用每秒三点的试验基线"), Balance->FishEffortStaminaPerSecond, 3.0);
+	TestEqual(TEXT("鱼未完成意图使用独立每米价格"), Balance->FishStaminaPerUnfulfilledMeter, 5.0 / 3.0);
+	TestEqual(TEXT("180厘米每秒满出力全受阻时独立标定为每秒三点"),
+		Balance->FishStaminaPerUnfulfilledMeter * 180.0 / 100.0, 3.0, 1e-9);
 	PopulateValidFightBalance(*Balance);
 	TestTrue(TEXT("完整合法数值可进入运行态"), Balance->IsRuntimeDefinitionReady());
 	TestEqual(TEXT("既有资产获得猫力竭外冲默认倍率"), Balance->ExhaustedCatEscapeSpeedMultiplier, 2.0);
@@ -121,18 +123,31 @@ bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
 			GET_FUNCTION_NAME_CHECKED(UCatFishingFightBalanceDefinition, IsRuntimeDefinitionReady)));
 
 	Balance->CatStaminaCostPerStrengthCentimeter = 0.003;
-	Balance->FishEffortStaminaPerSecond = 1.5;
+	Balance->FishStaminaPerUnfulfilledMeter = 1.5;
 	TestTrue(TEXT("猫鱼可以独立配置不同体力价格"), Balance->IsRuntimeDefinitionReady());
+	Balance->FishEffortStaminaPerSecond = std::numeric_limits<double>::quiet_NaN();
+	TestTrue(TEXT("旧每秒鱼价格不参与运行校验"), Balance->IsRuntimeDefinitionReady());
+	TestEqual(TEXT("旧每秒价不覆盖已调的新每米价"), Balance->FishStaminaPerUnfulfilledMeter, 1.5);
+	const FProperty* LegacyFishPrice = FindFProperty<FProperty>(
+		UCatFishingFightBalanceDefinition::StaticClass(),
+		GET_MEMBER_NAME_CHECKED(UCatFishingFightBalanceDefinition, FishEffortStaminaPerSecond));
+	TestNotNull(TEXT("旧每秒价保留既有反射身份"), LegacyFishPrice);
+#if WITH_EDITOR
+	if (LegacyFishPrice)
+	{
+		TestTrue(TEXT("旧每秒价具有蓝图DeprecatedProperty标记"), LegacyFishPrice->HasMetaData(TEXT("DeprecatedProperty")));
+	}
+#endif
 	TestEqual(TEXT("旧资产通过新字段默认值获得弧度计价"), Balance->CatRodStaminaCostPerStrengthRadian, 0.03);
 	TestEqual(TEXT("旧资产通过新字段默认值获得时间支撑"), Balance->CatSupportStaminaPerSecond, 2.0);
 	TestEqual(TEXT("旧资产默认轻调杆费率"), Balance->CatUnloadedWorkMultiplier, 0.15);
-	for (double* Field : {&Balance->FishEffortStaminaPerSecond, &Balance->CatRodStaminaCostPerStrengthRadian, &Balance->CatSupportStaminaPerSecond, &Balance->CatUnloadedWorkMultiplier})
+	for (double* Field : {&Balance->FishStaminaPerUnfulfilledMeter, &Balance->CatRodStaminaCostPerStrengthRadian, &Balance->CatSupportStaminaPerSecond, &Balance->CatUnloadedWorkMultiplier})
 	{
 		const double Original = *Field;
 		for (const double Invalid : {-1.0, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()})
 		{
 			*Field = Invalid;
-			TestFalse(TEXT("非法做功或每秒费率参数拒绝运行"), Balance->IsRuntimeDefinitionReady());
+			TestFalse(TEXT("非法做功、每米或每秒费率参数拒绝运行"), Balance->IsRuntimeDefinitionReady());
 		}
 		*Field = 0.0;
 		TestTrue(TEXT("各项新费用可以独立关闭"), Balance->IsRuntimeDefinitionReady());

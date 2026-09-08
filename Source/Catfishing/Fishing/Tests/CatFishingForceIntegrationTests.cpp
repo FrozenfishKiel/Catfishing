@@ -96,10 +96,15 @@ bool FCatFishingCommonForceTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("surface result can finalize work without committing resources"), FCatFishingFightSimulator::FinalizeResolvedStep(C, FinalState, Rod, Final));
 	TestEqual(TEXT("canceled reel cannot charge requested work"), Final.CatReelStaminaDrain, 0.0);
 	TestEqual(TEXT("resolved slack clears support cost"), Final.CatHoldStaminaDrain, 0.0);
-	TestEqual(TEXT("resolved slack clears fish resistance cost"), Final.FishStaminaDrain, 0.0);
+	TestEqual(TEXT("final displacement against 3.75 cm intent retains 13.75 cm shortfall without tension"),
+		Final.FishUnfulfilledDistanceCentimeters, 13.75, 1e-6);
+	TestEqual(TEXT("actual reverse progress remains billable after surface unloads the line"),
+		Final.FishStaminaDrain, 0.1375 * C.FishStaminaPerUnfulfilledMeter, 1e-6);
 	const double Cost = Final.CatStaminaDrain;
+	const double FishCost = Final.FishStaminaDrain;
 	FCatFishingFightSimulator::FinalizeResolvedStep(C, FinalState, Rod, Final);
 	TestEqual(TEXT("finalizing twice does not accumulate cost"), Final.CatStaminaDrain, Cost);
+	TestEqual(TEXT("finalizing twice does not accumulate fish cost"), Final.FishStaminaDrain, FishCost);
 	return !HasAnyErrors();
 }
 

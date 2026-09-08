@@ -7,7 +7,10 @@ Add -AuditFishResistanceTuning for a read-only preview of the explicit resistanc
 tuning, or -ApplyFishResistanceTuning to apply it to the five fingerprinted
 adaptive packages. These modes require the new ActiveBoutDurationRangeSeconds
 native field; compile first. Resistance tuning never saves the balance asset.
-The three mode switches are mutually exclusive. Optional
+Add -AuditFishUnfulfilledStamina to preview the independent per-meter price, or
+-ApplyFishUnfulfilledStamina to save only the fingerprinted balance package after
+a complete native rebuild. Its loaded new price is preserved, never reset.
+All explicit mode switches are mutually exclusive. Optional
 -FishAdaptiveEvidenceDir=<directory under project Saved> selects the evidence root.
 
 Personality PostLoad may migrate values in memory; an audit never saves them.
@@ -32,6 +35,26 @@ import unreal
 
 TREE_PATH = "/Game/Data/StateTrees/ST_FishFight"
 BALANCE_PATH = "/Game/Catfishing/Data/Fishing/DA_FishingFightBalance_Default"
+UNFULFILLED_BALANCE_BASELINE_SHA256 = "4042ca6ea1ae526e1cccf8c763d85d14b7555b85b3b2014b9ac5e7e89dca5d1b"
+UNFULFILLED_STAMINA_DEFAULT = 5.0 / 3.0
+BALANCE_VALUE_FIELDS = (
+    "balance_definition_id", "enable_runtime_definition", "force_model_version",
+    "strength_per_kilogram", "force_per_strength_newtons", "cat_body_mass_kilograms",
+    "exhausted_reel_force_newtons", "exhausted_cat_tow_acceleration_centimeters_per_second_squared",
+    "reel_speed_centimeters_per_second", "exhausted_cat_escape_speed_multiplier",
+    "cat_stamina_cost_per_strength_centimeter", "cat_rod_stamina_cost_per_strength_radian",
+    "cat_unloaded_work_multiplier", "cat_support_stamina_per_second", "cat_movement_stamina_multiplier",
+    "cat_reel_stamina_multiplier", "cat_rod_stamina_multiplier", "cat_hold_stamina_multiplier",
+    "cat_load_stamina_multiplier", "slack_stamina_regen_per_second", "fish_exhaustion_threshold",
+    "display_tension_newtons", "escape_slack_centimeters", "stalemate_rod_wear_per_fish_strength",
+    "held_rod_minimum_leverage_multiplier", "maximum_fish_constraint_correction_speed_centimeters_per_second",
+)
+BALANCE_LEGACY_FIELDS = (
+    "fish_effort_stamina_per_second", "fish_stamina_cost_per_strength_centimeter",
+    "fish_load_stamina_multiplier", "isometric_effort_multiplier", "low_stamina_rest_threshold",
+    "low_stamina_rest_multiplier", "acceleration_per_strength", "drive_response_seconds",
+    "tension_response_range_centimeters", "minimum_carrier_away_speed_multiplier",
+)
 LEGACY_TREE_SHA256 = "c8e826124eeb8715aa437206a3d9b456a47fe8264c797bb74e752d7c6b81d0ad"
 PERSONALITIES = ("SmallRestless", "MediumSteady", "LargePredator", "GiantHeavy")
 # Independent FreshReload/Audit.json plus the resistance disk-hash audit establish
@@ -188,7 +211,19 @@ def _steering_values(config):
     return result
 
 
-def _snapshot(tree, personalities, balance, protect_balance=False):
+def _balance_snapshot(balance):
+    try:
+        new_price = float(balance.get_editor_property("fish_stamina_per_unfulfilled_meter"))
+    except Exception:
+        new_price = None  # Read-only evidence may still come from the old binary.
+    return {"path": BALANCE_PATH, "sha256": _hash(BALANCE_PATH),
+            "fish_stamina_per_unfulfilled_meter": new_price,
+            "runtime_values": _properties(balance, BALANCE_VALUE_FIELDS),
+            "legacy_values_not_used_for_pricing": _properties(balance, BALANCE_LEGACY_FIELDS),
+            "runtime_ready": bool(balance.is_runtime_definition_ready())}
+
+
+def _snapshot(tree, personalities, balance, protect_balance=False, protect_behavior=False):
     personality_rows = [{
         "path": path,
         "sha256": _hash(path),
@@ -213,11 +248,10 @@ def _snapshot(tree, personalities, balance, protect_balance=False):
         "engine_version": unreal.SystemLibrary.get_engine_version(),
         "runtime_config": _properties(settings, ("FishBehaviorStateTree", "FightPersonalities", "FightBalanceDefinition")),
         "tree": _tree_snapshot(tree), "personalities": personality_rows, "fish": fish_rows,
-        "balance": {"path": BALANCE_PATH, "sha256": _hash(BALANCE_PATH),
-                    "fish_effort_stamina_per_second": float(balance.get_editor_property("fish_effort_stamina_per_second")),
-                    "runtime_ready": bool(balance.is_runtime_definition_ready())},
+        "balance": _balance_snapshot(balance),
         "protected_asset_hashes": {path: _hash(path) for path in (
-            _protected_paths() + ([BALANCE_PATH] if protect_balance else []))},
+            _protected_paths() + ([BALANCE_PATH] if protect_balance else [])
+            + ([TREE_PATH] + [path for path, _ in personalities] if protect_behavior else []))},
     }
 
 
@@ -353,6 +387,59 @@ def _apply_resistance_tuning(tree, personalities, balance, before, evidence, rep
     _write(report_path, report)
 
 
+def _unfulfilled_price_preview(before):
+    price = before["balance"]["fish_stamina_per_unfulfilled_meter"]
+    _require(price is not None and math.isfinite(price) and price >= 0.0,
+             "A finite nonnegative FishStaminaPerUnfulfilledMeter requires the completely rebuilt native module")
+    return {"balance_fingerprint_matches": before["balance"]["sha256"] == UNFULFILLED_BALANCE_BASELINE_SHA256,
+            "loaded_price_to_preserve": price, "independent_native_default": UNFULFILLED_STAMINA_DEFAULT,
+            "matches_native_default": math.isclose(price, UNFULFILLED_STAMINA_DEFAULT, rel_tol=0.0, abs_tol=1e-9),
+            "price_unit": "stamina_points_per_unfulfilled_meter", "legacy_price_converted": False,
+            "protected_package_count": len(before["protected_asset_hashes"])}
+
+
+def _apply_unfulfilled_stamina(tree, personalities, balance, before, evidence, report, report_path):
+    _require(report["unfulfilled_stamina"]["balance_fingerprint_matches"],
+             "Balance package changed since the audited baseline; inspect it before saving the new schema")
+    _require(not report["dirty_target_packages_before_load"], "Balance has unsaved editor changes")
+    _require(_hash(BALANCE_PATH) == UNFULFILLED_BALANCE_BASELINE_SHA256, "Balance changed during preflight")
+    _require(all(_hash(path) == expected for path, expected in before["protected_asset_hashes"].items()),
+             "A protected asset changed during preflight")
+    source = _file(BALANCE_PATH)
+    backup = evidence / "BeforePackages" / source.relative_to(PROJECT_DIR)
+    _require(not backup.exists(), "Balance backup already exists")
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, backup)
+    _require(hashlib.sha256(backup.read_bytes()).hexdigest() == UNFULFILLED_BALANCE_BASELINE_SHA256,
+             "Balance backup hash mismatch")
+    report.update(status="backed_up_ready_to_apply", save_attempted=False)
+    _write(report_path, report)
+    try:
+        # Loading introduces the independent native default for old packages.
+        # Never assign a default here: a designer may already have a new price.
+        _require(balance.is_runtime_definition_ready(), "Balance is not ready for the new price model")
+        report["save_attempted"] = True
+        _write(report_path, report)
+        _require(unreal.EditorAssetLibrary.save_loaded_asset(balance, only_if_is_dirty=False), "Save failed: " + BALANCE_PATH)
+        report["saved_assets"].append(BALANCE_PATH)
+        after = _snapshot(tree, personalities, balance, protect_behavior=True)
+        report["after"] = after
+        _require(before["balance"]["fish_stamina_per_unfulfilled_meter"] == after["balance"]["fish_stamina_per_unfulfilled_meter"],
+                 "An existing new per-meter price was overwritten")
+        _require(before["balance"]["runtime_values"] == after["balance"]["runtime_values"],
+                 "Another balance runtime value changed")
+        _require(before["protected_asset_hashes"] == after["protected_asset_hashes"], "A protected package changed")
+        _require(all(before[key] == after[key] for key in ("tree", "personalities", "fish", "runtime_config")),
+                 "Behavior assets, formal fish references, or runtime configuration changed")
+        report.update(status="saved_requires_fresh_process_verification", unfulfilled_stamina_after=_unfulfilled_price_preview(after))
+    except Exception as exc:
+        report.update(status=("failed_may_have_partial_saves" if report["save_attempted"] else "failed_before_asset_save"),
+                      error=str(exc))
+        _write(report_path, report)
+        raise
+    _write(report_path, report)
+
+
 def main():
     command_line = unreal.SystemLibrary.get_command_line()
     def flag(name):
@@ -360,9 +447,13 @@ def main():
     apply_adaptive = flag("ApplyFishAdaptiveMotion")
     apply_resistance = flag("ApplyFishResistanceTuning")
     audit_resistance = flag("AuditFishResistanceTuning")
-    _require(sum((apply_adaptive, apply_resistance, audit_resistance)) <= 1, "Migration modes are mutually exclusive")
+    apply_unfulfilled = flag("ApplyFishUnfulfilledStamina")
+    audit_unfulfilled = flag("AuditFishUnfulfilledStamina")
+    _require(sum((apply_adaptive, apply_resistance, audit_resistance, apply_unfulfilled, audit_unfulfilled)) <= 1,
+             "Migration modes are mutually exclusive")
     resistance = apply_resistance or audit_resistance
-    apply = apply_adaptive or apply_resistance
+    unfulfilled = apply_unfulfilled or audit_unfulfilled
+    apply = apply_adaptive or apply_resistance or apply_unfulfilled
     match = re.search(r'-FishAdaptiveEvidenceDir=(?:"([^"]+)"|(\S+))', command_line, re.IGNORECASE)
     evidence = Path(match.group(1) or match.group(2)).resolve() if match else (
         PROJECT_DIR / "Saved/Automation/FishAdaptiveMotion" / datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
@@ -370,22 +461,32 @@ def main():
     evidence.mkdir(parents=True, exist_ok=True)
     report_path = evidence / ("Migration.json" if apply else "Audit.json")
     _require(not report_path.exists(), "Evidence already exists; use a new evidence directory")
+    owned_paths = [BALANCE_PATH] if unfulfilled else list(RESISTANCE_BASELINE_SHA256)
     dirty_targets = ([package.get_path_name() for package in unreal.EditorLoadingAndSavingUtils.get_dirty_content_packages()
-                      if package.get_path_name() in RESISTANCE_BASELINE_SHA256] if resistance else [])
+                      if package.get_path_name() in owned_paths] if resistance or unfulfilled else [])
     tree = _load(TREE_PATH)
     personalities = [("/Game/Catfishing/Data/Fish/Fight_" + name,
                       _load("/Game/Catfishing/Data/Fish/Fight_" + name)) for name in PERSONALITIES]
     balance = _load(BALANCE_PATH)
-    before = _snapshot(tree, personalities, balance, protect_balance=resistance)
+    before = _snapshot(tree, personalities, balance, protect_balance=resistance, protect_behavior=unfulfilled)
     kind = _tree_kind(before["tree"])
-    report = {"apply": apply, "mode": "resistance_tuning" if resistance else "adaptive_migration",
+    report = {"apply": apply, "mode": "unfulfilled_stamina" if unfulfilled else (
+                  "resistance_tuning" if resistance else "adaptive_migration"),
               "status": "audited", "tree_kind": kind, "before": before, "saved_assets": [],
               "dirty_target_packages_before_load": dirty_targets}
     _write(report_path, report)
     _require(kind != "unrecognized", "Fish tree differs from both audited legacy and adaptive topology; review before replacing")
     _require(all(row["runtime_ready"] for row in before["personalities"]), "A personality fails native readiness")
     _require(before["balance"]["runtime_ready"], "Fight balance fails native readiness")
-    if resistance:
+    if apply:
+        _require(before["balance"]["fish_stamina_per_unfulfilled_meter"] is not None,
+                 "Rebuild the native price field before saving any current balance schema")
+    if unfulfilled:
+        report["unfulfilled_stamina"] = _unfulfilled_price_preview(before)
+        _write(report_path, report)
+        if apply_unfulfilled:
+            _apply_unfulfilled_stamina(tree, personalities, balance, before, evidence, report, report_path)
+    elif resistance:
         report["resistance_tuning"] = _resistance_preview(before)
         _write(report_path, report)
         _require(kind == "adaptive", "Resistance tuning requires the audited adaptive source tree")
@@ -421,8 +522,8 @@ def main():
             _require(_tree_kind(after["tree"]) == "adaptive", "Saved tree does not use all three adaptive behaviors")
             _require(before["protected_asset_hashes"] == after["protected_asset_hashes"], "An asset outside migration scope changed")
             _require(before["fish"] == after["fish"], "Formal fish references changed")
-            _require(before["balance"]["fish_effort_stamina_per_second"] == after["balance"]["fish_effort_stamina_per_second"],
-                     "Existing new fish effort price was overwritten")
+            _require(before["balance"]["fish_stamina_per_unfulfilled_meter"] == after["balance"]["fish_stamina_per_unfulfilled_meter"],
+                     "Existing new fish unfulfilled-distance price was overwritten")
             report.update(status="saved_requires_fresh_process_verification", after=after)
         except Exception as exc:
             report.update(status="failed_may_have_partial_saves", error=str(exc))

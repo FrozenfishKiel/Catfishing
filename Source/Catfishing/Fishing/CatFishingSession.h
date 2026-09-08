@@ -129,6 +129,7 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	friend class FCatFishBehaviorStateTreeRuntimeTest;
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatRodSessionDurabilityTest;
 	friend class FCatFishingBiteTimingWorldTest;

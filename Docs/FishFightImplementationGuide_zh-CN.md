@@ -1,8 +1,8 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
-本文件持续维护鱼、线、杆、猫的运动设计与实际代码。最近更新：2026-09-08，补充线放尽后忽略右键、停止回体并复用原对抗结算的规则，验证状态见“线放尽后的输入与费用”。同日第二轮鱼阻力反馈修正已增加跨外冲/横切的连续对抗时限，并调整方向、出力和恢复窗口；该轮Editor/Game构建成功，165项测试中164项通过，唯一失败仍为既有初级竿150/500耐久基线，正式五包已保存并通过独立重载及当前编辑器实读确认。这些历史结果不能代替本次满线修改的验证，也不能声明修正后的真人手感通过。第一轮163项测试中162项通过的结果保留为历史基线。
+本文件持续维护鱼、线、杆、猫的运动设计与实际代码。最近更新：2026-09-08，已接入沿主动意图未完成距离的鱼耗体，并与满线右键规则完成组合回归。当前公式见“鱼和猫如何耗体”，完整衔接及验证见“主动意图耗体衔接”：Editor/Game Development 构建成功，173项回归172项通过，唯一失败仍为既有初级竿150/500耐久基线；新编辑器已重启并读取新字段。真人手感和新打包双端验收尚未完成。
 
-- 本文开头描述第二轮当前源码和已迁移的正式资产。`/Game/Data/StateTrees/ST_FishFight` 在第一轮已从两个计时叶子迁成三行为树；第二轮的新反馈边已保存并经独立进程和当前编辑器重载确认。
+- 本文开头的行为部分描述第二轮阻力修正，费用部分描述本轮意图缺失模型；正式行为资产沿用第二轮已迁移结果。`/Game/Data/StateTrees/ST_FishFight` 在第一轮已从两个计时叶子迁成三行为树；第二轮的新反馈边已保存并经独立进程和当前编辑器重载确认。
 - 后面的日期衔接核对保留历史改动和当时的证据；其中旧两档游速、阶段耗体、旧入口只描述相应历史版本，不作为当前公式或新验收证据。
 - 折返、近岸反扑、水下三维运动、完整效用评分选路和真人双端丝滑验收均未完成；仍没有专门的鱼 Actor 网络运动插值器。
 - 后续讨论继续更新本文件。业务进度与持续验收缺口只维护在 [需求对齐差距清单](Development/需求对齐差距清单.md)，本文不另建模块进度账本。
@@ -15,7 +15,7 @@
 
 首轮实机证据为 `Saved/Automation/FishResistance-20260908/UserBefore.log`，会话 `D246F483-4C18-A639-50AC-4791567AA3DD`：约3.04 kg的电鳗正常最大推力约27.34 N，猫原始合力50 N，受杆姿态影响，本次日志有效力量约20～25 N（前两步为20和24.862 N，最大可达50 N）；鱼约24.6 s上岸，着岸前仍有72.2689/76.5体力。日志出现外冲约0.95 s即受阻转横切，以及4.1～4.8 s的缓游。着岸后原终局会把鱼体力清零，不能把这一清零误记为遛鱼已耗尽体力。这份反馈证明第一轮受控测试通过仍不足以确认对抗手感；本轮修正后的真人结果尚未取得。
 
-第一轮横切同时降低出力和向外投影，稳态主动沿线推力仅约0.078～0.137倍正常最大推力；缓游又默认主动向内。第二轮分别修正这两处，并延长有效动作的承诺时间。在猫能实际提供50 N有效力量的条件下，27.34 N鱼仅靠正常主动推力不能保证静态顶住；这项一般力量边界不能替代本次日志中实际有效猫力的判断。本轮不修改鱼力量、猫力量或物理收费公式来制造静态顶住的保证。
+第一轮横切同时降低出力和向外投影，稳态主动沿线推力仅约0.078～0.137倍正常最大推力；缓游又默认主动向内。第二轮分别修正这两处，并延长有效动作的承诺时间。在猫能实际提供50 N有效力量的条件下，27.34 N鱼仅靠正常主动推力不能保证静态顶住；这项一般力量边界不能替代本次日志中实际有效猫力的判断。第二轮未修改鱼力量、猫力量或当时的收费公式来制造静态顶住的保证；本轮费用公式另见下节。
 
 保留 `ACatFishEncounterActor + UStateTreeComponent`，不增加 AIController、Pawn 寻路或 MoveTo 位置写口。`ECatFishBehavior` 的 `OutwardRush/LateralArc/EaseOff` 表达策略；旧 `ECatFishMotionIntent` 留作现有三种动画角色的兼容投影，不再决定鱼推力、游速或阶段费用。
 
@@ -79,23 +79,29 @@ drag_kg_per_s = F_max_N × 100 / max(1, FullEffortSpeed_cm_per_s)
 
 ### 鱼和猫如何耗体
 
-第一轮已接入以下鱼费用，本轮保持该公式及唯一收费入口：
+当前鱼耗体按本步主动方向上未完成的游动距离计费，替换此前的 `u² × 沿线投影 × 张力比例`：
 
 ```text
-G = clamp(dot(SwimDirection, FinalLineDirection), 0, 1)
-    × clamp(FinalLineTension_N / F_max_N, 0, 1)
-FishDrain_points = FishEffortStaminaPerSecond × u² × G × dt_seconds
+I_cm = 本步主动单位方向 × 实际出力u × 满出力参考游速cm/s × dt
+A_cm = 最终鱼位置 − 步初鱼位置 − 本步历史位置纠偏
+Progress_cm = dot(A_cm, normalize(I_cm))
+Missing_cm = max(0, length(I_cm) − Progress_cm)
+FishDrain_points = Missing_cm / 100 × FishStaminaPerUnfulfilledMeter
 ```
 
-`FinalLineDirection` 是最终竿尖到鱼的三维单位方向，鱼的主动方向为水平单位向量。`G` 范围 `[0,1]`，分母使用固定正常最大推力，并有数值保护；不使用可能趋近零的 `u×F_max`。猫合力为零时 `G=0`。全局新价格 `FishEffortStaminaPerSecond` 原生默认 3 体力点/s；它与旧每厘米价格不同，没有把旧 0.002 直接套用。指数 2 当前写在 `ComputeFishEffortDrain` 中，不是已暴露的策划参数，也不表示生理定律。
+仅把不超过 `UE_DOUBLE_SMALL_NUMBER cm` 的缺失归零，以消除斜向稳速及世界位置加减的舍入误差；超过容差时完整计入缺失，不减去容差，也不按费用金额过滤。真实 `1e-4 cm` 缺失即使只有约 `1e-9` 点费用仍保留原结算与尾数规则。`I=0` 时四项输出都为零，即使被动拖动也不会产生此项费用。实际进展保留正负号，缺失量不限制在意图距离以内；不额外乘 `u` 或 `u²`，不以鱼线夹角或张力作为收费门槛。方向取 `Step` 已提交的 `FishEffortDirection`，不取岸线改道后的下一步目标。意图速度来自 `u × FullEffortSpeed`，没有使用受惯性影响的自由积分候选速度，因此零张力的起步、转弯也可能产生缺失；达到意图速度的自由游动不收费。这是玩法消耗指标，不将其称为严格物理机械功，也没有另加基础游动费用。
 
-费用读取实际平滑后的 `u` 和最终约束张力。鱼原地使力但被线挡住仍能付费；被动位移、历史纠偏与目标出力本身不产生费用。没有再叠加 `BaseDrainMultiplier/StruggleDrainMultiplier`、鱼负载倍率或鱼等效努力距离，也没有新增一笔主动位移费用。纯横切的沿线投影为零时，这版鱼对抗费用为零；带载绕弧额外消耗、转弯代价仍未实现，不能声称所有绕游都能耗鱼。
+例如同一步意图5米、实际3米，实际位移与意图夹角为0°、60°、90°、120°、180°时，缺失分别为2、3.5、5、6.5、8米；原地僵持缺5米。实际前进7米、或已前进5米同时被侧移，缺失均为0。它不采用向量差的长度，侧向位移自身不会增加费用。
 
-鱼自由游动及既有免耗条件保留。正常右键只在线杯尚有可放线余量时恢复猫体力并免双方费用；已放线长度到达上限后，右键失去放线和回体效果，按原不放线规则结算，详见“线放尽后的输入与费用”。猫零体力且无有效助手时的强制拖水优先，普通行为时钟、连续对抗预算和策略随机流均暂停，实际出力覆盖为1，不能借缓游解除。鱼力竭、上岸、坏竿和捕获仍由原权威入口裁决。
+新字段 `FishStaminaPerUnfulfilledMeter` 是体力点/米，原生默认 `5/3`。独立标定基准为满出力参考游速180cm/s、完全僵持时耗3点/s；相同条件下四个正式参考速度110/140/180/240对应约1.833/2.333/3/4点/s。旧每秒价、每厘米价都不直接换算到此字段。新值为0可关闭这项费用，且不会因残余体力低于阈值而强制归零。
+
+实际扣除保留明确豁免：无人操作、没有可用猫合力、猫力竭强制拖拽、鱼已力竭以及有效右键放线均不扣鱼体力。右键只在线杯尚有容量时恢复猫体力并免双方费用；满线右键按普通锁线/仍按住的左键处理，缺失耗体没有额外满线倍率。鱼上岸、坏竿和捕获仍由原权威入口裁决，上岸清空残余体力属于原玩法终局，不能记为距离费用耗尽。
 
 猫不按鱼状态名追加倍率。移动和收线使用实际主动距离与负载，转杆使用实际主动正功，共享支撑按相对负载平方与时间收费。鱼降低出力可以间接减少猫的负担，但惯性和几何约束可能继续维持张力；进入缓游既不免猫收线费，也不使猫自动回血。
 
-### 正式资产、表现与当前验证边界
+### 行为资产迁移历史、表现与验证边界
+
+本节“本轮”指第二轮阻力调整；此次只保存Balance的过程与现行鱼价格另见“主动意图耗体衔接”。
 
 `UCatFightPersonalityDefinition::PostLoad/MigrateLegacyMotionSettings` 保留版本0到1的首次迁移契约：用原两档游速最大值建立满出力参考游速；同为秒/角度单位的时长、重选间隔、转速上限和外冲扇区几何迁入新结构。三档出力、横切和受阻配置用独立默认值，不由旧速度比例或旧耗体倍率换算。版本1的非法配置不回退旧字段，也不因原生默认值变化而自动覆盖已有调参。本轮四个正式版本1性格的调整必须走显式、可核对的资产迁移，不借 `PostLoad` 全局重写策划配置。
 
@@ -105,7 +111,7 @@ FishDrain_points = FishEffortStaminaPerSecond × u² × G × dt_seconds
 
 身体朝向继续使用主动 `SwimHeading`，服务器按角速度上限转向；鱼可以朝外游却被线侧拖。位置和旋转保留原Actor `RepMovement`，没有新增客户端位置平滑。动画读取复制的 `Behavior/u`，期望游速为 `u×FullEffortSpeed`，再用原播放倍率插值。旧三动画映射仍按实际出力滞回分类：从缓游表现升到挣扎需达到0.55，已处于挣扎则低于0.4才降档；力竭仍为 `AutoHauling`。本轮不修改WBP或17个正式AnimBP；第一轮只读审计已确认这些包共26个图、4个MotionIntent节点与2个SwimPlayRate节点，属于保留契约的消费者证据。出力区间改变会影响原阈值的触发时机，真人画面仍需检查，不能由方向连续或复制快照抵达就宣称客户端画面丝滑。
 
-### 第二轮影响盘点与衔接结果
+### 第二轮影响盘点与衔接结果（历史公式与证据）
 
 本轮修改前以第一轮已落地的连续出力版本为基线；首次实机日志另存为 `Saved/Automation/FishResistance-20260908/UserBefore.log`。本轮启动时Git工作区clean，无用户并行源码改动；本轮内部Agent按职责文件分工，其他任务的历史提交保留。正式五包与51个受保护包的修改前指纹记录于本轮 `AssetsBefore.json`。下表区分已修改源码、已验证受控行为、已完成的独立重载及未取得的真人结果；不另建人工进度账本。
 
@@ -171,7 +177,7 @@ FishDrain_points = FishEffortStaminaPerSecond × u² × G × dt_seconds
 
 输入入口仍为 Ability → CommandComponent → Session → Runner。Runner 保留原始 `bSlackHeld` 按键事实；线杯有余量时右键优先于左键，满线时 `RefreshCatAction` 忽略右键，恢复仍按住的左键 `Pull`，否则为 `None` 锁线。右键首次按下的转向意图重设仍沿用原 Session 入口，不因满线伪造释放或二次按下。未满线开始、在本步实际出线至上限时，`FinalizeResolvedStep` 按最终线长取消本步回体与双方免耗；后续步继续按有效输入走同一个求解器。
 
-满线不新增全员固定扣费、第二份体力算法或耐久惩罚。猫仍按已经完成的移动/收线、转杆正功和持续支撑付费，主辅共享费用沿用原力量贡献分摊；鱼仍按实际出力 `u²`、有效对抗 `G` 和持续时间付费；耐久仍只磨损本场绑定的鱼竿实例。余线或向内游动没有有效张力时，也不会仅因满线强行扣对抗费用。
+满线不新增全员固定扣费、第二份体力算法或耐久惩罚。猫仍按已经完成的移动/收线、转杆正功和持续支撑付费，主辅共享费用沿用原力量贡献分摊；鱼现按沿本步主动意图未完成的距离付费（下方满线历史验证仍对应当时旧公式）；耐久仍只磨损本场绑定的鱼竿实例。满线本身不额外收费；是否扣鱼体力由实际意图缺失决定，余线或向内游动不是独立的免耗条件。
 
 `ResolveFishSurfaceFromAuthority` 在开步线杯尚有余量时，允许按最终岸线落点重算并封顶本步实际出线；候选碰到上限、随后被岸线阻挡且实际没有放满时，不提前取消回体。最终费用重算后，Runner 按最终线长刷新有效动作再交给 Session 快照，原 ASC/Equipment 仍只提交一次。零体力强制拖水已覆盖成 `None` 的动作不在最终刷新时被残留右键改回放线；无人值守、鱼力竭回收免耗、坏竿和逃脱终局仍保留各自既定规则，力竭收尾处于满线时同样不能借右键回体。
 
@@ -186,6 +192,29 @@ runtime_behavior：本轮三项满线用例通过，覆盖满线右键与锁线�
 日志核对使用 `LogCatFishing` 的 `fishing_line_limit_changed`，以 `SessionId/RodActorId` 关联 `AtLimit/SlackHeld/EffectiveAction/SlackRecovery`、线长和单步费用；该事件仅在首步或满线状态边沿输出，已编译进 Game Development，尚未取得完整 `HandleFixedStep` 实际触发该新事件的日志。既有 `fishing_fish_stamina_received` 增加 `Slacking/Reeling`，继续配合 `fishing_coupled_work_sample` 与 `fishing_cat_stamina_applied` 检索。新鲜受控回归日志是 `Saved/Automation/LineLimit-20260908/DebugTests.log`，不能将它当成打包双端落盘证据。
 
 presentation_delivery：未运行本轮 Cook/打包、正式地图真人操作及无 `-log` 房主/客户端双端落盘验收。当前已打开的普通 Editor 仍使用旧 Development DLL；须关闭 Editor 后完成普通 Development 完整构建，再在新模块上体验。上述局部验证不关闭 Fishing 模块级验收缺口。
+
+## 主动意图耗体衔接（2026-09-08）
+
+本轮开始时工作区已有满线右键修复及其测试/文档修改，已记录于 `Saved/Automation/FishIntentStamina-20260908/ParallelBeforeImplementation.patch`；本轮按最新文件定点衔接，不回退该规则。此前165项回归的初级竿150/500默认值失败为既有基线。满线修复已独立提交为 `11e4730`；本轮末尾新增的 `Scripts/Art/` 与 `SourceArt/` 为并行工作，保留且不纳入本次提交。本节记录当前迁移，前面的满线和两轮行为调整表保留其历史证据。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 意图与运动结算 | `Source/Catfishing/Fishing/Simulation/CatFishingFightSimulator.cpp::Step/FinalizeResolvedStep`；Runner地形后再Finalize | 旧鱼线方向负载改为本步主动方向缺失；位置cm、速度cm/s | 保留动力学；最终位置减步初位置及历史纠偏生成实际位移 | WorkModel接收方→Simulator→地形最终重算 | 夹角、反拖、起步、岸挡、纠偏、重复结算 | 已接入；FinalReport中6项IntentCost、Simulation/Effort及真实Surface测试通过；最终位置、反拖、纠偏和幂等均已覆盖 |
+| 费用和生命周期 | `CatFishingFightWorkModel::ComputeFishIntentDrain`→Runner→Session/ASC | 新点/米替换旧点/秒；反拖无比例封顶，u不重复相乘 | 新native输入/输出替换旧接口；原资源/终局单写口保留 | 单步最终结果只支付一次 | 零意图、豁免、残余体力、满线右键与猫四渠道回归 | 已替换；全套满线/放线/强拖/零价回归通过；稳速斜游尾数保护及豁免分支高价溢出保护通过；旧native接口及G字段已删除 |
+| 配置与资产 | BalanceDefinition→`CatFishingSession.cpp`冻结；`Config/DefaultGame.ini`软绑定 `/Game/Catfishing/Data/Fishing/DA_FishingFightBalance_Default` | 新字段默认5/3点/米，0关闭；旧每秒值不换算 | 新运行字段；旧BlueprintReadOnly字段暂留Deprecated | 新二进制→仅保存Balance→独立重载 | 非法新值拒绝、已有新调价保留、55包指纹保护 | 新字段与冻结配置已生效；AssetVerification.json共15项通过，ConnectedEditorAudit确认5/3及ready。正式Balance保存成功但hash不变（原生默认未产生不同序列化数据）。全量BP/外部消费者未确认，禁止删除旧反射字段；完成变量节点引用迁移后才可删 |
+| AI/网络/表现/退出 | Runner反馈→ST_FishFight/Steering；Encounter复制→既有动画；Session终局 | 费用反馈变化，方向/出力、树边、快照语义及退出清理保留 | 不新增AIController、状态资源或位置写口 | 现有ASC/Equipment/Session权威裁决 | 行为、实际消费者、Listen/Client快照；真人手感另验 | 组合回归通过；正式树、Runner及Listen/Client快照通过；WBP/AnimBP/四性格/树未编辑，真人表现未验收 |
+| Development诊断 | Session开始/配置日志；Runner周期/终局/尖峰/耦合工作事件 | 旧G/每秒价格改为意图cm、进展cm、缺失cm、每米费率 | 原事件限频和SessionId/RodActorId/World关联保留 | 与最终费用同结果读取 | 新模块落盘单位、费用与实际终局区分 | FinalTests.log含3组原生产fishing_fish_stamina_sample、simulation_trace及ASC付款事件，价格/最终缺失/费用对应；未取得打包双端日志 |
+| 脚本/Cook/持久化 | `Scripts/create_fishing_fight_balance_asset.py`、`migrate_fish_adaptive_behavior.py` | 创建及当前审计改读新价；旧字段只作legacy记录 | 只保存已盘点Balance，保护其他包 | 完整构建后应用并独立重载 | 新值保留、旧guard不破坏、包指纹 | 两脚本语法与11项guard通过；MigrationRetry成功保存、FreshReload独立重载，55保护hash相同；Cook入口保留，游戏存档不涉及 |
+| 测试和文档 | Fishing Effort/Simulation/Surface/Resistance/Settings及新FishIntent测试；本文件与字段/架构/流程说明 | 替换旧公式专属断言，保留物理和既定操作契约 | 同步当前口径，旧阶段表明确历史 | 契约→运行链路→表现交付分层 | 编译不能替代消费者衔接或真人手感 | 173项最终回归172通过、1既有耐久失败，文档已同步；真人/打包未验，不关闭Fishing模块 |
+| 生产扣费消费者 | `CatFishBehaviorStateTreeRuntimeTests.cpp::RunTest`；Session测试友元，原Runner/Encounter友元 | 原树夹具只推进行为，现补完整固定步及实际装备事务绑定 | 公开Equipment Grant/Use/BeginFishingUse/CommitBait→Runner Initialize/Start/HandleFixedStep→ASC/Encounter/Session | 完成真实水域与资源接收方后调用生产固定步，不手动提交Step或余额 | 三档独立价格、实际位移、ASC/Session写入计数、猫费用与装备镜像 | FinalTests.log的fish_intent_runtime_paid三组通过；每组ASCWrites=1、SessionPublications=1，Session保持非终局 |
+
+`contract`：证据根为 `Saved/Automation/FishIntentStamina-20260908/`。`BuildEditorFinal.log` 与 `BuildGameFinal.log` 均为 Win64 Development 完整链接成功；最终 `FinalReport/index.json` 为173项，167 clean、5 warning、1 failed、0 notRun，172项通过。唯一失败为 `Catfishing.Unit.Fishing.Assets.StarterRodPreservesMaximumDurabilityBaseline`，期望150、正式资产500，保持既有范围外差异。六项IntentCost、新稳速斜向尾数回归、旧物理/猫费用/右键/收尾回归全部通过。`FinalVerification.json` 的11项检查全true；早期 `Report` 的172项是本轮最终数值保护和生产夹具补齐前的阶段基线，不能冒充最终证据。
+
+`runtime_behavior`：`FinalTests.log` 明确加载 Development 模块，真实Runner固定步先执行正式树和水面消费者，再提交ASC及Session。三档米价0/2.25/4.5在相同本步意图8.73cm、实际进展约−13.437505cm、缺失约22.167505cm时，鱼费用为0/0.498769/0.997538；猫费用均约0.099998点，每组ASC和Session各写一次，实际位移一致。该夹具含初始竿运动，不用于代表稳态搏斗每秒价格。对应生产 `fishing_fish_stamina_sample` 的SessionId为 `A05CAAA5-453D-BD3F-33F4-7E997162CF38`、`964D4D86-4467-4020-A366-6082EE5A43DC`、`BB4BF9E3-4DAC-EDF5-6314-2984082D008A`。真正水域/岸线测试覆盖最终落点计费和满线转换；Listen/Client用例仅证明既有鱼表现快照的实际网络复制，不能冒充联网Runner完整付款链。
+
+资产证据为 `Saved/Automation/FishUnfulfilledStamina-20260908/MigrationRetry/Migration.json` 与 `FreshReload/Audit.json`，综合检查见本轮 `AssetVerification.json`（15项全true）。首轮保存因文件占用错误32失败，`Migration/AfterFailedSave.json` 确认56包未变；用户授权关闭编辑器后重试成功，仅保存Balance。新值等于原生默认，Balance保存前后hash相同，不能声称改动了uasset字节。其余55包、原Balance参数与引用全部保留。
+
+`presentation_delivery`：用户授权后已重启普通Development Editor，PID35636，Frontend地图、Idle；`ConnectedEditorAudit.json` 实读新价1.6666666666666667、readiness=true且无dirty地图/资产。尚未取得新公式下的真人操作反馈、正式地图房主/客户端完整付款体验或新包无`-log`落盘证据；本轮没有Cook/打包，不关闭Fishing模块。排查新局使用 `LogCatFishing` 的 `fishing_fish_stamina_sample`、`fishing_simulation_trace`、`fishing_cat_stamina_applied` 与 `fishing_line_limit_changed`，以SessionId/RodActorId关联。
 
 ## 一条完整调用链
 
@@ -271,7 +300,7 @@ Rod 只转交输入；`Character/CatCharacterMovementComponent::CalcVelocity` �
 
 为使每个固定步都能从落盘数据复核，`FCatFightStepResult::Trace` 保存本次纯求解的中间量，但不作为下一步输入，也不写 ASC、装备或 Actor。保留方向、力与质量换算、收线力上限、实际张力和最终带符号加速度。旧 `FullCorrectionCm` 替换为含义明确的 `ExistingPositionErrorCm`；约束采样新增 `PositionCorrectionCm`、`CarrierTravelLimitCm`、`ConstraintRodEnd` 和 `RodRotationPredicted`，区分历史误差修正、碰撞上限和本步受力预测，并确认正式杆旋转已参与约束。`ResolvedFishVelocityCmS` 现在记录受力积分并经地形反馈后的速度，已排除历史位置纠偏。
 
-Development 权威日志 `Event=fishing_simulation_trace` 默认按约 1 秒和终局额外输出一次，包含上述中间量、猫移动/收线/转杆做功单位、共享支撑负载、鱼的实际出力、有效对抗G、每秒参考费率、固定水阻及原始/封顶鱼体力费用、猫体力前后值、方向性磨损、`InputAccepted/FinalizeAccepted` 与终局名。它不会在 `FCatFishingFightSimulator` 内直接写日志，保证测试仍是无副作用纯函数；非法输入会在 `fishing_fight_step_rejected` 中写出 `RejectReason`（配置、状态、竿约束、鱼方向或最终结果）。要复盘单步时，以 `SessionId + RodActorId` 关联 `fishing_simulation_trace`、`fishing_constraint_sample`、`fishing_surface_tow` 和资源写回事件。
+Development 权威日志 `Event=fishing_simulation_trace` 默认按约 1 秒和终局额外输出一次，包含上述中间量、猫移动/收线/转杆做功单位、共享支撑负载、鱼的实际出力、意图距离、沿意图有符号进展、缺失距离、每米费率、固定水阻及原始/封顶鱼体力费用、猫体力前后值、方向性磨损、`InputAccepted/FinalizeAccepted` 与终局名。它不会在 `FCatFishingFightSimulator` 内直接写日志，保证测试仍是无副作用纯函数；非法输入会在 `fishing_fight_step_rejected` 中写出 `RejectReason`（配置、状态、竿约束、鱼方向或最终结果）。要复盘单步时，以 `SessionId + RodActorId` 关联 `fishing_simulation_trace`、`fishing_constraint_sample`、`fishing_surface_tow` 和资源写回事件。
 
 ### 最终费用和耐久
 
@@ -284,7 +313,7 @@ Development 权威日志 `Event=fishing_simulation_trace` 默认按约 1 秒和�
 - 移动和收线按 `StrengthPerKilogram × 完成的主动厘米数` 计价，移动意图只用于识别主动做功，不能凭受阻输入收费；收线按实际完成量收费。
 - 转杆按独立的正功弧度单价计费，转矩积分的 Epoch 与累计时长继续防止换人或补步重复消费。
 - 共享支撑按 `CatSupportStaminaPerSecond × dt × 自身相对负载²`，转杆只补超过共享支撑的部分。停转没有收线正功，仍可能有持竿支撑费用。
-- 鱼按 `FishEffortStaminaPerSecond × u² × G × dt` 支付对抗出力费用，G 使用最终张力相对固定正常最大推力及主动方向的沿线投影；自由游动免耗，不把被拖位移或旧等效努力距离另收费。
+- 鱼按沿主动意图缺失的米数乘 `FishStaminaPerUnfulfilledMeter` 付费；历史纠偏剔除，真实反向进展保留，零意图免耗，不按鱼线夹角/张力再门控。
 - 线杯尚有余量时，正常右键恢复猫体力并免除双方费用；达到已放线长度上限后停止回体与该项免耗，复用无右键的原对抗结算，不另加一笔满线费用。零体力强制拖拽优先，鱼已力竭后回收仍免猫耗体。
 
 耐久继续只有 Equipment 中绑定 `RodItemInstanceId` 的一份实例事实，Session 只复制镜像。方向性磨损仍受最终真实约束及向外负载控制，原按 `bStruggling` 加的基础磨损改为 `FishFullEffortRodWearPerSecond × u²`，该新运行字段从 `RodDefinition.BaseDurabilityWearPerSecond` 冻结，不读取动画分类；最终解除张力后不按临时负载收费；坏竿优先于同期鱼力竭。取消、换人、收杆、开新会话都不恢复已磨损耐久。初级竿当前正式资产为 500，既有测试仍要求 150；本轮不重新平衡或覆盖该用户资产。
@@ -347,7 +376,7 @@ Rod 的约束快照同时保存 `ConstraintHolderPlayerState`，复制乱序时�
 
 ## 参数、兼容载荷与诊断
 
-正式数值仍从 `/Game/Catfishing/Data/Fishing/DA_FishingFightBalance_Default` 唯一读取，`DefaultGame.ini` 保留原软引用。`Scripts/create_fishing_fight_balance_asset.py` 验证并保存当前结构，已有调参不重置；鱼新每秒价由独立默认或已编辑的新值进入，不从旧每厘米价换算。新默认值为鱼满出力每秒对抗耗体 3 点、每点力量 1 N、单猫质量 5 kg、力竭回收辅助力 200 N、零体力拖行辅助加速度 300 cm/s²、满表现张力 50 N。
+正式数值仍从 `/Game/Catfishing/Data/Fishing/DA_FishingFightBalance_Default` 唯一读取，`DefaultGame.ini` 保留原软引用。`Scripts/create_fishing_fight_balance_asset.py` 验证并保存当前结构，已有调参不重置；鱼新每米价由独立默认或已编辑的新值进入，不从旧每秒价或每厘米价换算。新默认值为沿主动意图未完成距离每米耗体 5/3 点、每点力量 1 N、单猫质量 5 kg、力竭回收辅助力 200 N、零体力拖行辅助加速度 300 cm/s²、满表现张力 50 N。
 
 以下旧字段没有新模型运行读取，但保留序列化/只读蓝图身份：平衡资产的 `AccelerationPerStrength`、`DriveResponseSeconds`、`TensionResponseRangeCentimeters`、`MinimumCarrierAwaySpeedMultiplier`，以及 Rod/Snapshot 的两个旧背离速度倍率字段（当前恒为 1）。项目蓝图图表引用有 `CatFishingForceMigrationTests.cpp` 审计入口；历史记录曾报告旧 `/Game/UI/WBP_CatLakeReach` 的父类问题，本轮未独立复核它的当前状态，不能将历史问题列为本轮新增失败，也不能宣称全部Content类和外部Blueprint字段消费者已确认。删除条件是完成当前全Content类型、旧包及外部字段引用审计，对实际仍有消费者的包先迁移，再移除兼容载荷。没有保留第二套旧模拟器或速度写口。
 
