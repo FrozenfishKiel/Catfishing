@@ -56,8 +56,12 @@ struct FCatPlaceRodCommand
 {
 	GENERATED_BODY()
 
+	/** 本次放竿意图的幂等键；服务端用它串联库存借出、鱼竿生成和失败回滚。 */
 	UPROPERTY(BlueprintReadWrite) FGuid RequestId;
+	/** 放竿命令发起时观察到的钓具选择投影版本；它和正式库存版本不是替代关系，只保护当前选中的竿、皮肤等装备视图。 */
 	UPROPERTY(BlueprintReadWrite) int64 ExpectedEquipmentRevision = 0;
+	/** 新输入分派在提交放竿时写入的正式随身库存版本；PlaceRod 用它判断鱼竿实例离开背包前，背包是否仍是同一份事实。0 表示旧调用方未提供该版本，只跳过库存版本校验，不代表当前库存版本为 0。 */
+	UPROPERTY(BlueprintReadWrite) int64 ExpectedInventoryRevision = 0;
 };
 
 USTRUCT(BlueprintType)

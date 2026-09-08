@@ -596,9 +596,12 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				DeliverResultFromAuthority(Fishing->OperateRod(Controller, OperateCommand));
 				return;
 			}
-			// 分支三：近旁没有可接管的竿 → 在脚下放一根自己的竿；装备 Revision 由服务器当前事实读取，不信任客户端
+			const UCatInventoryComponent* OwnerInventory = Character ? Character->GetInventoryComponent() : nullptr;
+			// 分支三：近旁没有可接管的竿 → 在脚下放一根自己的竿；服务器同时冻结正式库存版本和旧钓具选择版本。
+			// 前者保护实例离包，后者只保护当前选中钓具投影，避免把背包并发继续塞进 EquipmentRevision。
 			FCatPlaceRodCommand PlaceCommand;
 			PlaceCommand.RequestId = Edge.RequestId;
+			PlaceCommand.ExpectedInventoryRevision = OwnerInventory ? OwnerInventory->GetInventoryRevision() : 0;
 			PlaceCommand.ExpectedEquipmentRevision = Character && Character->GetEquipmentComponent()
 				? Character->GetEquipmentComponent()->GetSnapshot().Revision : 0;
 			DeliverResultFromAuthority(Fishing->PlaceRod(Controller, PlaceCommand));
