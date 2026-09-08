@@ -74,25 +74,22 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double CatUnloadedWorkMultiplier = 0.15;
 	/** 满负载/满用力的每秒支撑费用，按用力比例平方缩放。 */
 	double CatSupportStaminaPerSecond = 2.0;
-	/** 鱼仅结算有对抗负载的努力，自由游动不产生基础费用。 */
-	double FishStaminaCostPerStrengthCentimeter = 0.002;
-	double IsometricEffortMultiplier = 1.0;
+	/** 满主动出力且满有效对抗时的每秒体力点数；实际费用为 k*u²*G*dt。 */
+	double FishEffortStaminaPerSecond = 3.0;
 	double CatMovementStaminaMultiplier = 1.0;
 	double CatReelStaminaMultiplier = 1.0;
 	double CatRodStaminaMultiplier = 1.0;
 	double CatHoldStaminaMultiplier = 1.0;
 	double CatLoadStaminaMultiplier = 1.0;
-	double FishLoadStaminaMultiplier = 1.0;
-	double BaseDrainMultiplier = 1.0;
-	double StruggleDrainMultiplier = 2.0;
 	double SlackStaminaRegenPerSecond = 1.5;
 	double StalemateRodWearPerFishStrength = 0.1;
-	double StruggleHoldRodWearPerSecond = 0.0;
+	/** 鱼满主动出力的基础每秒磨损，来源为竿定义；按实际u²和方向负载缩放，不读取动画档位。 */
+	double FishFullEffortRodWearPerSecond = 0.0;
 	double TautRodWearMultiplier = 1.0;
 	double ReelSpeedCentimetersPerSecond = 0.0;
-	double FishCalmSpeedCentimetersPerSecond = 0.0;
-	double FishStruggleSpeedCentimetersPerSecond = 0.0;
-	/** 无可用猫合力时的持续外冲速度，按鱼较快的配置游速放大。 */
+	/** 满出力的参考自由游速，只用于固定水阻校准；不随行为切换水阻。 */
+	double FishFullEffortSpeedCentimetersPerSecond = 0.0;
+	/** 无可用猫合力时的持续外冲速度，按满出力参考游速放大。 */
 	double ExhaustedCatEscapeSpeedMultiplier = 2.0;
 	double FishExhaustionThreshold = 0.5;
 	/** 仅供强对抗/僵持表现分类，不参与位移、做功或终局裁决。 */
@@ -132,6 +129,8 @@ struct CATFISHING_API FCatFightSimulationState
 	bool bFishExhausted = false;
 	double CatStamina = 0.0;
 	double FishStamina = 0.0;
+	/** 行为层已平滑的实际主动出力，范围[0,1]；零出力仍保留活鱼惯性。 */
+	double FishEffortRatio = 1.0;
 	double LineLengthCentimeters = 0.0;
 	double AbsoluteRodWear = 0.0;
 	FVector FishWorldPosition = FVector::ZeroVector;
@@ -173,7 +172,12 @@ struct CATFISHING_API FCatFightSimulationTrace
 	double CombinedCatMassKilograms = 0.0;
 	double CatDriveAccelerationCentimetersPerSecondSquared = 0.0;
 	double FishDriveAccelerationCentimetersPerSecondSquared = 0.0;
-	double FishSpeedCapCentimetersPerSecond = 0.0;
+	double FishFullEffortSpeedCentimetersPerSecond = 0.0;
+	double FishEffortRatio = 0.0;
+	double FishFullEffortThrustNewtons = 0.0;
+	double FishLinearDragKilogramsPerSecond = 0.0;
+	double FishOppositionRatio = 0.0;
+	double FishEffortStaminaPerSecond = 0.0;
 	double SwimSpeedCentimetersPerSecond = 0.0;
 	double MobilityCentimetersPerNewton = 0.0;
 	double ExistingPositionErrorCentimeters = 0.0;
@@ -198,10 +202,6 @@ struct CATFISHING_API FCatFightSimulationTrace
 	double CatRodPositiveWorkUnits = 0.0;
 	double CatHoldNormalizedLoad = 0.0;
 	double CatRodNormalizedLoad = 0.0;
-	double FishRealizedEffortDistanceCentimeters = 0.0;
-	double FishBlockedEffortDistanceCentimeters = 0.0;
-	double FishEffectiveEffortDistanceCentimeters = 0.0;
-	double FishPhaseMultiplier = 0.0;
 	double CatRodSupportBeforeSharedStaminaDrain = 0.0;
 	double WearLoad = 0.0;
 	double RodWearDelta = 0.0;

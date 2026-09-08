@@ -84,9 +84,14 @@ public:
 		meta = (DisplayName = "猫满用力每秒支撑耗体", ClampMin = "0.0"))
 	double CatSupportStaminaPerSecond = 2.0;
 
-	/** 鱼每 1 点标准努力强度、每 1 cm 有效对抗努力的体力价格；再乘对抗负载，自由游动不耗体。 */
+	/** 鱼满主动出力且满有效对抗时的每秒体力点数；实际费用为本值*u²*G*dt。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DisplayName = "鱼做功体力消耗系数", ClampMin = "0.0"))
+		meta = (DisplayName = "鱼满出力每秒对抗耗体", ClampMin = "0.0"))
+	double FishEffortStaminaPerSecond = 3.0;
+
+	/** 仅保留旧资产序列化兼容，运行费用已改为FishEffortStaminaPerSecond。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
+		meta = (DeprecatedProperty, DeprecationMessage = "旧每厘米鱼价格不再使用；请设置FishEffortStaminaPerSecond。"))
 	double FishStaminaCostPerStrengthCentimeter = -1.0;
 
 	/** 猫主动移动形成的对抗努力体力倍率；不会重复计入转杆或收线。 */
@@ -114,14 +119,14 @@ public:
 		meta = (DisplayName = "猫负载体力倍率", ClampMin = "0.0"))
 	double CatLoadStaminaMultiplier = 1.0;
 
-	/** 鱼仅按归一化对抗负载 × 本参数结算有效努力；无自由游动基础费用，设为 0 可关闭鱼对抗耗体。 */
+	/** 仅保留旧资产序列化兼容，运行不再叠加负载价格倍率。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DisplayName = "鱼负载体力倍率", ClampMin = "0.0"))
+		meta = (DeprecatedProperty, DeprecationMessage = "旧鱼负载倍率不再使用；请设置FishEffortStaminaPerSecond。"))
 	double FishLoadStaminaMultiplier = 1.0;
 
-	/** 仅鱼使用：未完成的对抗意图距离折算系数；猫支撑已独立按时间计费。 */
+	/** 仅保留旧资产序列化兼容，受阻出力现按时间结算。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DisplayName = "鱼受阻努力折算倍率", ClampMin = "0.0"))
+		meta = (DeprecatedProperty, DeprecationMessage = "旧受阻距离倍率不再使用；鱼按实际出力与时间结算。"))
 	double IsometricEffortMultiplier = -1.0;
 
 	/** 正常右键时猫每秒恢复的搏斗体力，不受张力或其他操作限制；强制力竭拖拽除外。 */
@@ -134,14 +139,14 @@ public:
 		meta = (DisplayName = "鱼力竭吸附阈值", ClampMin = "0.0", ClampMax = "1.0"))
 	double FishExhaustionThreshold = -1.0;
 
-	/** 鱼体力比例低于该值后延长平静期。 */
+	/** 仅保留旧资产序列化兼容；疲劳反馈由连续行为配置控制。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DisplayName = "低体力休息触发比例", ClampMin = "0.0", ClampMax = "1.0"))
+		meta = (DeprecatedProperty, DeprecationMessage = "旧平静计时不再使用；疲劳反馈由鱼行为配置控制。"))
 	double LowStaminaRestThreshold = -1.0;
 
-	/** 低体力状态下平静期时长倍率。 */
+	/** 仅保留旧资产序列化兼容；疲劳反馈由连续行为配置控制。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DisplayName = "低体力休息时长倍率", ClampMin = "1.0"))
+		meta = (DeprecatedProperty, DeprecationMessage = "旧平静计时不再使用；疲劳反馈由鱼行为配置控制。"))
 	double LowStaminaRestMultiplier = 0.0;
 
 	/** 废弃几何表现阈值，仅保留旧资产载荷，不参与新张力计算。 */

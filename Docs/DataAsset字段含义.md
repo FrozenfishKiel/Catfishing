@@ -45,34 +45,38 @@
 
 | 编辑器字段 | C++ 字段 | 当前值 | 含义 |
 |---|---|---:|---|
-| 每公斤力量 | StrengthPerKilogram | 10 | 实际鱼重→鱼力量；也用于猫基础力量反推等效质量 |
-| 每点力量加速度 | AccelerationPerStrength | 5 | 猫/鱼共享的力量→绷线对抗加速度换算；不限制鱼的自由游速 |
-| 猫端驱动力响应时间 | DriveResponseSeconds | 1s | 猫端对抗加速度投影到收线/牵引响应速度的时长 |
+| 每公斤力量 | StrengthPerKilogram | 10 | 冻结实际鱼重→鱼力量；猫系统质量独立配置，不随力量成长 |
+| 每点力量推力 | ForcePerStrengthNewtons | 默认 1 N/力量 | 正常满力推力基准；鱼实际主动推力再乘连续出力 u，质量另参与积分 |
+| 单猫系统质量 | CatBodyMassKilograms | 默认 5 kg | 按实际参与的猫组合系统质量，与鱼力量和成长独立 |
+| 旧每点力量加速度 | AccelerationPerStrength | 仅旧载荷 | 已停用，不能拿旧 5 cm/s² 数值套用新牛顿换算 |
+| 旧猫端驱动力响应时间 | DriveResponseSeconds | 仅旧载荷 | 当前使用共同张力和质量积分，不参与运行 |
 | 收线速度 | ReelSpeedCentimetersPerSecond | 80 cm/s | 左键收线意图速度上限 |
-| 猫力竭后鱼外冲速度倍率 | ExhaustedCatEscapeSpeedMultiplier | 2 | 主位体力为零且没有助手实际出力时，按鱼两档游速中的较大值乘此倍率持续外冲；有限值且至少为 1 |
+| 猫力竭后鱼外冲速度倍率 | ExhaustedCatEscapeSpeedMultiplier | 2 | 主位体力为零且没有助手实际出力时，按人格满出力参考游速乘此倍率持续外冲；有限值且至少为 1 |
 | 猫做功体力消耗系数 | CatStaminaCostPerStrengthCentimeter | 默认 0.002 | 猫移动/收线每标准力量·cm 已完成正功的单价 |
 | 猫转杆每标准转矩弧度体力系数 | CatRodStaminaCostPerStrengthRadian | 默认 0.03 | 真实转角按主位主动转矩比例加权后计价，不使用最大转速虚拟弧长 |
 | 猫无负载动作成本倍率 | CatUnloadedWorkMultiplier | 默认 0.15 | 猫实际做功的基础价格，与负载价格相加 |
 | 猫满用力每秒支撑耗体 | CatSupportStaminaPerSecond | 默认 2/s | 支撑按用力/负载比例平方和持续时间结算；共享支撑与转杆支撑取较高者 |
-| 鱼做功体力消耗系数 | FishStaminaCostPerStrengthCentimeter | 默认 0.002 | 每点标准努力强度、每厘米有效对抗努力的体力价格；再乘鱼对抗负载，自由游动不扣体力 |
+| 鱼满出力每秒对抗耗体 | FishEffortStaminaPerSecond | 新原生默认 3 点/s | 鱼费用=`本值×实际u²×G×dt`；G为最终沿线主动方向投影×张力/固定满力推力的夹限值，不用u×满力作分母；自由游动/正常右键免耗 |
+| 旧鱼每厘米体力价格 | FishStaminaCostPerStrengthCentimeter | 仅旧载荷 | 不再运行，旧0.002不得作为新每秒价格直接套用 |
 | 猫移动体力倍率 | CatMovementStaminaMultiplier | 默认 1 | 绷线时主动远离鱼的身体移动费用；被动位移不计 |
 | 猫收线体力倍率 | CatReelStaminaMultiplier | 默认 1 | 原求解器本步卷线量的正功费用 |
 | 猫转杆体力倍率 | CatRodStaminaMultiplier | 默认 1 | 主位实际转杆正功及其时间支撑的倍率 |
 | 猫持竿体力倍率 | CatHoldStaminaMultiplier | 默认 1 | 共享沿线支撑费用倍率；实际做功费用不再抵扣支撑 |
 | 猫负载体力倍率 | CatLoadStaminaMultiplier | 默认 1 | 猫实际做功乘 `(无负载动作倍率 + 自身归一化负载 × 本倍率)` |
-| 鱼负载体力倍率 | FishLoadStaminaMultiplier | 默认 1 | 鱼有效努力费用仅乘 `自身归一化对抗负载 × 倍率`，无基础游动费用；0 完全关闭鱼对抗耗体 |
-| 鱼受阻努力折算倍率 | IsometricEffortMultiplier | 1 | 仅鱼使用的未完成对抗意图距离倍率；猫支撑改为按时间收费 |
+| 旧鱼负载体力倍率 | FishLoadStaminaMultiplier | 仅旧载荷 | 不再叠加连续出力费用；关闭鱼对抗费用改设 FishEffortStaminaPerSecond=0 |
+| 旧鱼受阻努力折算倍率 | IsometricEffortMultiplier | 仅旧载荷 | 受阻鱼按实际出力和对抗时间结算，不再折算未完成距离 |
 | 放线体力恢复速度 | SlackStaminaRegenPerSecond | 3/s | 正常按右键时猫的恢复速度，不受张力、移动或转杆限制；零体力强制拖拽除外 |
 | 鱼力竭吸附阈值 | FishExhaustionThreshold | 0.5 | 本步产生正的鱼对抗耗体后，剩余绝对体力不高于该值才吸附归零；零耗体不触发 |
-| 低体力休息触发比例/时长倍率 | LowStaminaRestThreshold/Multiplier | 0.5 / 1.5 | 低体力鱼延长平静期 |
-| 满张力响应距离 | TensionResponseRangeCentimeters | 10 cm | 约束误差换算张力的尺度，参与牵引、转矩和体力负载结算 |
+| 旧低体力休息触发比例/时长倍率 | LowStaminaRestThreshold/Multiplier | 仅旧载荷 | 运行已迁入人格 AdaptiveSteeringConfig 的体力阈值和行为时长倍率 |
+| 满表现张力 | DisplayTensionNewtons | 默认 50 N | 仅将真实张力归一化供表现，不产生玩法张力 |
+| 旧满张力响应距离 | TensionResponseRangeCentimeters | 仅旧载荷 | 不再由几何误差换算玩法张力 |
 | 逃脱松线余量 | EscapeSlackCentimeters | 100 cm | 无人持竿时超过最大线长后的逃脱余量 |
 | 僵持鱼竿磨损系数 | StalemateRodWearPerFishStrength | 0.1 | 按鱼沿线向外负载连续缩放的鱼竿磨损，写回同一装备实例；几何张力不能替代方向负载 |
 | 持竿最低杠杆倍率 | HeldRodMinimumLeverageMultiplier | 0.4 | 竿身偏线时保留的最低有效力量 |
 | 最大约束修正速度 | MaximumFishConstraintCorrectionSpeedCentimetersPerSecond | 160 cm/s | 鱼端修正及猫端牵引目标的安全上限 |
-| 背离鱼方向最低速度倍率 | MinimumCarrierAwaySpeedMultiplier | 0.15 | 满负载且鱼占优时玩家仍保留的最低后退比例 |
+| 旧背离鱼方向最低速度倍率 | MinimumCarrierAwaySpeedMultiplier | 仅旧载荷 | CMC 现按共同张力/支撑积分，不再硬乘后退速度 |
 
-`DefaultGame.ini` 只保存 `FightBalanceDefinition` 资产引用，不再保存上述数值；C++ 也不提供可偷偷生效的第二套回退。资产缺失、未勾“启用正式运行”或任一字段非法时，Fishing runtime 保持 fail-closed。
+`DefaultGame.ini` 只保存 `FightBalanceDefinition` 资产引用，不再保存上述数值；C++ 也不提供可偷偷生效的第二套回退。资产缺失、未勾“启用正式运行”或任一现行字段非法时，Fishing runtime 保持 fail-closed。
 
 上述费用与倍率均允许非负有限值。猫实际做功与支撑分开，阶段倍率不再额外放大猫费用；正功量只来自已完成的主动身体移动、本步卷线与归一化主动转矩加权转角，受阻时只承担时间支撑。猫负载倍率为 0 只关闭实际做功的负载附加部分；完全关闭猫费用需要关闭线性单价、转杆单价及支撑费。鱼受阻倍率为 1 仍表示同等意图完成或受阻时有效努力相同，但必须同时存在张力、向外反抗与可用猫合力才计费，鱼没有基础游动费用。正常右键恢复与双方免耗体、零体力强制锁线拖拽保持。修改资产后下一场搏斗生效；三个新字段为既有资产提供默认值，创建脚本只初始化新资产，已有合法资产保留调参，非法资产报错而不自动覆盖。
 
@@ -88,7 +92,7 @@
 | MaximumRodDurability | **鱼竿耐久上限**；新鱼竿或维修使用该上限，同一装备实例的剩余耐久跨场累计，归零即损坏；重新抛竿不恢复 | `StarterRodT1` 当前基线 150；其他档以正式资产为准 |
 | FishingStrength | 已停用的旧鱼竿承载字段，仅保留资产/蓝图读取兼容 | 不再编辑、校验或参与搏斗；不要用它调断线阈值 |
 | MaximumLineLengthCentimeters | 线长上限 cm | 放尽绷紧强制按拖判定 |
-| BaseDurabilityWearPerSecond / HighTensionWearMultiplier | 基础磨损/绷紧磨损倍率 | ≥0 / ≥1 |
+| BaseDurabilityWearPerSecond / HighTensionWearMultiplier | 满出力基础磨损/绷紧磨损倍率；前者冻结为 FishFullEffortRodWearPerSecond，按实际u²缩放，不按动画挣扎标签收费 | ≥0 / ≥1 |
 | RodTipLocal/StandLocal/GripLocalTransform | 竿尖(抛竿原点+鱼线起点)/操作站位/握持 三个权威锚点 | 表现蓝图只读不写 |
 
 **Bait（鱼饵）**：`BiteRateMultiplier`(>0,咬钩率倍率) · `MinimumBiteDelayMultiplier`(>0,最短咬钩延迟倍率)
@@ -158,29 +162,32 @@
 | PerfectFishStaminaMultiplier | 完美中鱼时鱼体力折减(0~1,规格 0.85) |
 | PerfectInitialLineLengthMultiplier | 完美中鱼时初始线长折减(0~1,鱼更近) |
 
-## 5. 搏斗性格：`UCatFightPersonalityDefinition`（DA_Fight_*）
+## 5. 搏斗性格：`UCatFightPersonalityDefinition`（Fight_*）
+
+以下为 2026-09-08 连续出力第一版的当前源码字段；正式四性格和鱼树已迁移并经独立进程重载：四性格版本1、满出力速度110/140/180/240cm/s、全局新每秒价格3；交付证据见 [鱼运动实现导读](FishFightImplementationGuide_zh-CN.md)。运行不再用两档游速、阶段费用或疲劳向内概率。
 
 | 字段 | 含义 |
 |---|---|
-| FightPersonalityId | 唯一 ID,被 FishDefinition.FightPersonalityId 引用 |
-| CalmDurationRangeSeconds | 顺从期(向内游)时长区间,服务器每段随机抽;鱼体力<50% 后休息期 ×1.5 |
-| StruggleDurationRangeSeconds | 挣扎期(向外游)时长区间;上钩瞬间必从挣扎开始 |
-| CalmMovementSpeedCentimetersPerSecond | 顺从期游速(向内) |
-| StruggleMovementSpeedCentimetersPerSecond | 挣扎期游速(向外) |
-| BaseDrainMultiplier / StruggleDrainMultiplier | 该鱼种体力消耗基础/挣扎倍率(在规格系数之上再乘) |
-| DirectionRetargetDurationRangeSeconds | 每段目标游向持续时间；到期才重新随机，不是每帧随机 |
-| MaximumTurnRateDegreesPerSecond | 当前游向追向目标游向的最大角速度，控制鱼转弯灵活度 |
-| StruggleOutwardDirectionBias | 挣扎时偏向鱼线外向的程度；越高越常正面对抗 |
-| CalmInwardDirectionBias | 平静时偏向竿尖方向的程度；越高越容易出现安全收线窗口 |
-| LateralMovementBias | 横向绕竿/切线运动倾向 |
-| FeintProbability | 挣扎阶段先选一次反向目标的概率，用于假动作 |
-| FullStaminaInwardProbability | 满体力重选方向时进入“朝竿尖扇区”的概率；低值可防止高体力鱼过早贴岸 |
-| ExhaustedInwardProbability | 接近力竭时的向内概率；必须 ≥ 满体力值 |
-| InwardProbabilityExponent | `pow(1-体力比例, 指数)` 的曲线；>1 表示低体力后才明显增加向内概率 |
-| InwardConeHalfAngleDegrees | 朝竿尖方向左右各多少度算向内；默认 60°，完整扇区 120° |
-| StrongConfrontationAlignmentThreshold | 夹角投影达到多少才算强对抗；体力/磨损在阈值以下仍连续按 `LineLoad` 投影计算，张力不把低方向负载抬成满负载 |
-| StrongConfrontationConfirmationSeconds | 强对抗角度需要连续保持多久才发布表现标记，不裁决终局；落水由 Condition 水深判定 |
-| AngleStrengthExponent | 对 `max(cos夹角,0)` 做幂变换；1=线性，越大则斜向力量衰减越快 |
+| FightPersonalityId | 稳定ID，被 FishDefinition.FightPersonalityId 引用；16正式鱼共用4份性格 |
+| AdaptiveMotionVersion | 0=旧序列化格式，1=新格式；只迁移0，不覆盖版本1的调参或以旧值修补非法新参数 |
+| FullEffortMovementSpeedCentimetersPerSecond | 满出力参考自由游速 cm/s，必须为正；校准固定水阻，实际推进随u变化。旧资产取原两档速度最大值，不把速度比例换成u |
+| AdaptiveSteeringConfig | 新的连续行为配置，Session 开始搏斗时整体冻结；下列带此前缀的字段均属于此结构 |
+| AdaptiveSteeringConfig.OutwardEffortRange / LateralEffortRange / EaseOffEffortRange | 外冲/横切/缓游目标出力区间，默认0.8～1 / 0.4～0.7 / 0.15～0.35，无量纲[0,1] |
+| AdaptiveSteeringConfig.EffortRisePerSecond / EffortFallPerSecond | 实际出力升/降速率，默认0.8 / 0.6比例每秒；切状态保留当前u |
+| AdaptiveSteeringConfig.OutwardDurationRangeSeconds / LateralDurationRangeSeconds / EaseOffDurationRangeSeconds | 新结构默认最长区间2～4 / 1.5～3 / 1～2秒；版本0迁移保留原挣扎/平静秒数到外冲/缓游，因此正式资产值可不同 |
+| AdaptiveSteeringConfig.MinimumBehaviorDurationSeconds | 允许低体力/受阻切换前的最短承诺，默认0.65秒；最长时长也不会短于它 |
+| AdaptiveSteeringConfig.RetargetDurationRangeSeconds | 有限偏角重新采样间隔，默认0.6～1.4秒；不逐步随机换侧 |
+| AdaptiveSteeringConfig.MaximumTurnRateDegreesPerSecond | 实际游向的最大水平转速，默认120°/秒；旧人格迁移保留原角速度 |
+| AdaptiveSteeringConfig.OutwardAngularSpreadDegrees | 外冲随机偏角半宽，默认25°；旧扇区只按角度几何迁入，旧内游概率退出 |
+| AdaptiveSteeringConfig.LateralOutwardBias / EaseOffInwardBias | 横切保留向外分量/缓游混合向内权重，默认0.2 / 0.45；横切侧向在当前行为期间固定 |
+| AdaptiveSteeringConfig.LowStaminaRatio | 低体力条件阈值，默认0.3；不直接减弱正常最大力量 |
+| AdaptiveSteeringConfig.LowStaminaActiveDurationMultiplier / LowStaminaEaseOffDurationMultiplier | 低体力进入强动作时最长时长×0.7，进入缓游时×1.5；缓游不恢复鱼体力 |
+| AdaptiveSteeringConfig.BlockedLoadThreshold / BlockedProgressFraction | 受阻需真实承载，默认平滑负载≥0.2且主动方向实际速度低于期望自由游速的0.4 |
+| AdaptiveSteeringConfig.BlockedConfirmationSeconds / LoadSmoothingSeconds | 受阻确认时长/负载平滑时间常数，默认0.35 / 0.15秒；只用上一完整物理步反馈 |
+| StrongConfrontationAlignmentThreshold / StrongConfrontationConfirmationSeconds | 强对抗表现阈值/确认时长，不选择终局，不代替鱼费用G |
+| AngleStrengthExponent | 方向性负载/磨损/表现的夹角指数，不衰减整份主动推进；新的鱼耗体G独立使用沿线正投影 |
+
+旧 `CalmDurationRangeSeconds/StruggleDurationRangeSeconds`、两档 `*MovementSpeedCentimetersPerSecond`、重选/角速度/扇区字段作为版本0迁移载荷暂留；`BaseDrainMultiplier/StruggleDrainMultiplier` 和旧向内概率/假动作字段不再进入运行链。本轮四份正式性格均已版本1；其他旧包重载迁移及全Content类型/外部Blueprint字段引用尚未全部确认，不能仅凭源码无读取删除反射身份。迁移入口为 `Scripts/migrate_fish_adaptive_behavior.py`，版本1使用上表新字段调参。
 
 ## 6. GAS 资产：`UCatAbilitySet` / `UCatAbilityInputConfig`
 

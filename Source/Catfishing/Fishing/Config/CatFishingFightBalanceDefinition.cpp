@@ -22,20 +22,15 @@ bool UCatFishingFightBalanceDefinition::IsRuntimeDefinitionReady() const
 		&& IsFishingFightBalanceFiniteNonNegative(CatUnloadedWorkMultiplier)
 		&& IsFishingFightBalanceFiniteNonNegative(CatSupportStaminaPerSecond)
 		&& FMath::IsFinite(ExhaustedCatEscapeSpeedMultiplier) && ExhaustedCatEscapeSpeedMultiplier >= 1.0
-		&& IsFishingFightBalanceFiniteNonNegative(FishStaminaCostPerStrengthCentimeter)
+		&& IsFishingFightBalanceFiniteNonNegative(FishEffortStaminaPerSecond)
 		&& IsFishingFightBalanceFiniteNonNegative(CatMovementStaminaMultiplier)
 		&& IsFishingFightBalanceFiniteNonNegative(CatReelStaminaMultiplier)
 		&& IsFishingFightBalanceFiniteNonNegative(CatRodStaminaMultiplier)
 		&& IsFishingFightBalanceFiniteNonNegative(CatHoldStaminaMultiplier)
 		&& IsFishingFightBalanceFiniteNonNegative(CatLoadStaminaMultiplier)
-		&& IsFishingFightBalanceFiniteNonNegative(FishLoadStaminaMultiplier)
-		&& IsFishingFightBalanceFiniteNonNegative(IsometricEffortMultiplier)
 		&& IsFishingFightBalanceFiniteNonNegative(SlackStaminaRegenPerSecond)
 		&& FMath::IsFinite(FishExhaustionThreshold)
 		&& FishExhaustionThreshold >= 0.0 && FishExhaustionThreshold <= 1.0
-		&& FMath::IsFinite(LowStaminaRestThreshold)
-		&& LowStaminaRestThreshold >= 0.0 && LowStaminaRestThreshold <= 1.0
-		&& FMath::IsFinite(LowStaminaRestMultiplier) && LowStaminaRestMultiplier >= 1.0
 		&& FMath::IsFinite(DisplayTensionNewtons) && DisplayTensionNewtons > 0.0
 		&& IsFishingFightBalanceFiniteNonNegative(EscapeSlackCentimeters)
 		&& IsFishingFightBalanceFiniteNonNegative(StalemateRodWearPerFishStrength)

@@ -25,12 +25,9 @@ namespace
 		Balance.ForcePerStrengthNewtons = 1.0;
 		Balance.ReelSpeedCentimetersPerSecond = 80.0;
 		Balance.CatStaminaCostPerStrengthCentimeter = 0.002;
-		Balance.FishStaminaCostPerStrengthCentimeter = 0.002;
-		Balance.IsometricEffortMultiplier = 1.0;
+		Balance.FishEffortStaminaPerSecond = 3.0;
 		Balance.SlackStaminaRegenPerSecond = 3.0;
 		Balance.FishExhaustionThreshold = 0.5;
-		Balance.LowStaminaRestThreshold = 0.5;
-		Balance.LowStaminaRestMultiplier = 1.5;
 		Balance.DisplayTensionNewtons = 50.0;
 		Balance.EscapeSlackCentimeters = 100.0;
 		Balance.StalemateRodWearPerFishStrength = 0.1;
@@ -106,6 +103,7 @@ bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("可创建瞬态搏斗平衡资产"), Balance)) return false;
 
 	TestFalse(TEXT("未配置资产默认不可进入运行态"), Balance->IsRuntimeDefinitionReady());
+	TestEqual(TEXT("新鱼出力价格使用每秒三点的试验基线"), Balance->FishEffortStaminaPerSecond, 3.0);
 	PopulateValidFightBalance(*Balance);
 	TestTrue(TEXT("完整合法数值可进入运行态"), Balance->IsRuntimeDefinitionReady());
 	TestEqual(TEXT("既有资产获得猫力竭外冲默认倍率"), Balance->ExhaustedCatEscapeSpeedMultiplier, 2.0);
@@ -123,18 +121,18 @@ bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
 			GET_FUNCTION_NAME_CHECKED(UCatFishingFightBalanceDefinition, IsRuntimeDefinitionReady)));
 
 	Balance->CatStaminaCostPerStrengthCentimeter = 0.003;
-	Balance->FishStaminaCostPerStrengthCentimeter = 0.001;
+	Balance->FishEffortStaminaPerSecond = 1.5;
 	TestTrue(TEXT("猫鱼可以独立配置不同体力价格"), Balance->IsRuntimeDefinitionReady());
 	TestEqual(TEXT("旧资产通过新字段默认值获得弧度计价"), Balance->CatRodStaminaCostPerStrengthRadian, 0.03);
 	TestEqual(TEXT("旧资产通过新字段默认值获得时间支撑"), Balance->CatSupportStaminaPerSecond, 2.0);
 	TestEqual(TEXT("旧资产默认轻调杆费率"), Balance->CatUnloadedWorkMultiplier, 0.15);
-	for (double* Field : {&Balance->CatRodStaminaCostPerStrengthRadian, &Balance->CatSupportStaminaPerSecond, &Balance->CatUnloadedWorkMultiplier})
+	for (double* Field : {&Balance->FishEffortStaminaPerSecond, &Balance->CatRodStaminaCostPerStrengthRadian, &Balance->CatSupportStaminaPerSecond, &Balance->CatUnloadedWorkMultiplier})
 	{
 		const double Original = *Field;
 		for (const double Invalid : {-1.0, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()})
 		{
 			*Field = Invalid;
-			TestFalse(TEXT("非法猫做功/支撑参数拒绝运行"), Balance->IsRuntimeDefinitionReady());
+			TestFalse(TEXT("非法做功或每秒费率参数拒绝运行"), Balance->IsRuntimeDefinitionReady());
 		}
 		*Field = 0.0;
 		TestTrue(TEXT("各项新费用可以独立关闭"), Balance->IsRuntimeDefinitionReady());
@@ -152,7 +150,6 @@ bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
 		{ TEXT("猫转杆"), &UCatFishingFightBalanceDefinition::CatRodStaminaMultiplier },
 		{ TEXT("猫持竿"), &UCatFishingFightBalanceDefinition::CatHoldStaminaMultiplier },
 		{ TEXT("猫负载"), &UCatFishingFightBalanceDefinition::CatLoadStaminaMultiplier },
-		{ TEXT("鱼负载"), &UCatFishingFightBalanceDefinition::FishLoadStaminaMultiplier },
 	};
 	for (const FStaminaMultiplierCase& Case : MultiplierCases)
 	{

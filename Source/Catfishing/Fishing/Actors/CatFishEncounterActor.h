@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Fishing/Actors/CatFishingActorTypes.h"
+#include "Fishing/Behavior/CatFishBehaviorTypes.h"
 #include "CatFishEncounterActor.generated.h"
 
 class USceneComponent;
@@ -24,19 +25,24 @@ public:
 	void DeferInitialPresentationFromAuthority();
 	void PublishInitialPresentationFromAuthority();
 	/**
-	 * 推进一步搏斗表现：写运动意图/线长、落位到权威位置，并把朝向转向本步的移动方向。
+	 * 推进一步搏斗表现：写行为/发力/线长、落位到权威位置，活鱼朝向主动游动方向。
 	 * StepDeltaSeconds > 0 时按 MaximumTurnRateDegreesPerSecond 限速转向（搏斗固定步进传 FixedStepSeconds）；
 	 * <= 0 表示首次落位，直接对准不插值。
 	 */
 	bool ApplyFightStepFromAuthority(ECatFishMotionIntent MotionIntent, double CurrentLineLength,
 		const FVector& FishWorldPosition, float StepDeltaSeconds = 0.0f, float FishLineAlignment = 0.0f,
 		float NormalizedLineLoad = 0.0f, float IntendedSwimSpeedCentimetersPerSecond = 0.0f,
-		bool bStrongConfrontation = false, bool bGrounded = false, FVector GroundNormal = FVector::UpVector);
+		bool bStrongConfrontation = false, bool bGrounded = false, FVector GroundNormal = FVector::UpVector,
+		FVector SwimHeading = FVector::ZeroVector, ECatFishBehavior Behavior = ECatFishBehavior::None,
+		float FishEffortRatio = 0.0f);
 	/** 服务器把高层鱼行为交给独立 StateTree；客户端永不启动平行行为树。 */
 	bool StartFishBehaviorFromAuthority(UStateTree* BehaviorStateTree, UCatFishingFightRunner* FightRunner);
 	void StopFishBehaviorFromAuthority();
-	/** StateTree Task 的唯一意图写口；具体时长和随机流仍由权威 Runner/性格 DA 决定。 */
-	bool BeginBehaviorStateFromStateTree(ECatFishMotionIntent MotionIntent, double& OutDurationSeconds);
+	/** 仅由 Runner 固定步推进；组件不再独立按帧计时。 */
+	bool TickFishBehaviorFromAuthority(float FixedStepSeconds);
+	/** StateTree Task 只提交行为，Condition 只读取固定步反馈。 */
+	bool BeginFishBehaviorFromStateTree(ECatFishBehavior Behavior);
+	bool TestFishBehaviorConditionFromStateTree(ECatFishBehaviorCondition Condition) const;
 	UFUNCTION(BlueprintPure, Category="Fishing|Fish")
 	const FCatFishEncounterPresentationState& GetPresentationState() const;
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category="Fishing|Fish")
@@ -59,6 +65,7 @@ protected:
 	float MaximumTurnRateDegreesPerSecond = 180.0f;
 
 private:
+	friend class FCatFishBehaviorStateTreeRuntimeTest;
 	UFUNCTION()
 	void OnRep_PresentationState(const FCatFishEncounterPresentationState& Previous);
 	void QueueOrDispatchPresentationChanged(const FCatFishEncounterPresentationState& Previous, const FCatFishEncounterPresentationState& Current);
@@ -71,7 +78,7 @@ private:
 	/** 鱼种库表现定义的唯一可见 Mesh 消费者；蓝图子类不得再添加平行鱼 Mesh。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
 	TObjectPtr<USkeletalMeshComponent> FishMesh;
-	/** 只在服务器启动；树管理发力/平静拓扑，不直接移动 Actor。 */
+	/** 只在服务器启动；树选择冲刺/侧游/缓游，不直接移动 Actor。 */
 	UPROPERTY(VisibleAnywhere, Category="Fishing|Behavior") TObjectPtr<UStateTreeComponent> FishBehaviorStateTree;
 	UPROPERTY(ReplicatedUsing=OnRep_PresentationState, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
 	FCatFishEncounterPresentationState PresentationState;

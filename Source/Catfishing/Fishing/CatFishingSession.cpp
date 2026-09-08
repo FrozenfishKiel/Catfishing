@@ -1210,21 +1210,16 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	Config.CatRodStaminaCostPerStrengthRadian = FightBalance->CatRodStaminaCostPerStrengthRadian;
 	Config.CatUnloadedWorkMultiplier = FightBalance->CatUnloadedWorkMultiplier;
 	Config.CatSupportStaminaPerSecond = FightBalance->CatSupportStaminaPerSecond;
-	Config.FishStaminaCostPerStrengthCentimeter = FightBalance->FishStaminaCostPerStrengthCentimeter;
-	Config.IsometricEffortMultiplier = FightBalance->IsometricEffortMultiplier;
+	Config.FishEffortStaminaPerSecond = FightBalance->FishEffortStaminaPerSecond;
 	Config.CatMovementStaminaMultiplier = FightBalance->CatMovementStaminaMultiplier;
 	Config.CatReelStaminaMultiplier = FightBalance->CatReelStaminaMultiplier;
 	Config.CatRodStaminaMultiplier = FightBalance->CatRodStaminaMultiplier;
 	Config.CatHoldStaminaMultiplier = FightBalance->CatHoldStaminaMultiplier;
 	Config.CatLoadStaminaMultiplier = FightBalance->CatLoadStaminaMultiplier;
-	Config.FishLoadStaminaMultiplier = FightBalance->FishLoadStaminaMultiplier;
-	Config.BaseDrainMultiplier = Personality->BaseDrainMultiplier;
-	Config.StruggleDrainMultiplier = Personality->StruggleDrainMultiplier;
 	Config.StalemateRodWearPerFishStrength = FightBalance->StalemateRodWearPerFishStrength;
 	Config.SlackStaminaRegenPerSecond = FightBalance->SlackStaminaRegenPerSecond;
 	Config.ReelSpeedCentimetersPerSecond = FightBalance->ReelSpeedCentimetersPerSecond;
-	Config.FishCalmSpeedCentimetersPerSecond = Personality->CalmMovementSpeedCentimetersPerSecond;
-	Config.FishStruggleSpeedCentimetersPerSecond = Personality->StruggleMovementSpeedCentimetersPerSecond;
+	Config.FishFullEffortSpeedCentimetersPerSecond = Personality->FullEffortMovementSpeedCentimetersPerSecond;
 	Config.ExhaustedCatEscapeSpeedMultiplier = FightBalance->ExhaustedCatEscapeSpeedMultiplier;
 	Config.FishExhaustionThreshold = FightBalance->FishExhaustionThreshold;
 	Config.StrongConfrontationAlignmentThreshold = Personality->StrongConfrontationAlignmentThreshold;
@@ -1246,7 +1241,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
 		return false;
 	}
-	Config.StruggleHoldRodWearPerSecond = RodDefinition->BaseDurabilityWearPerSecond;
+	Config.FishFullEffortRodWearPerSecond = RodDefinition->BaseDurabilityWearPerSecond;
 	Config.TautRodWearMultiplier = FMath::Max(1.0, RodDefinition->HighTensionWearMultiplier);
 	Config.EscapeSlackCentimeters = FightBalance->EscapeSlackCentimeters;
 	if (!Config.IsValid()) return false; // 配置自检（如任何数值非有限/非法组合）未通过则拒绝启动搏斗。
@@ -1302,7 +1297,9 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		|| !Encounter->ApplyFightStepFromAuthority(ECatFishMotionIntent::StrugglingOutward,
 			ReconciledInitialLineLength,
 			Exact.WaterSurfaceWorldPoint, 0.0f, 0.0f, 0.0f,
-			static_cast<float>(Config.FishStruggleSpeedCentimetersPerSecond), false))
+			static_cast<float>(Config.FishFullEffortSpeedCentimetersPerSecond), false, false, FVector::UpVector,
+			(Exact.WaterSurfaceWorldPoint - RodTipWorldPosition).GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector),
+			ECatFishBehavior::OutwardRush, static_cast<float>(InitialState.FishEffortRatio)))
 	{
 		// 求解/吸附/表现应用任一环节失败：回滚已初始化的体力属性，不进入搏斗。
 		AbilitySystem->RequestFishingStaminaReset();
@@ -1314,7 +1311,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	InitialState.FishWorldPosition = Encounter->GetActorLocation(); // 用刚落位的实际权威位置覆盖，作为 Runner 的真正起点。
 
 	// 组装 FightRunner 的初始化参数：把 Session/Actor 引用、模拟配置/初始状态、性格模板节奏参数、
-	// 低体力歇息倍率、以及本场搏斗用的随机种子一并交给它，随后驱动固定步长的搏斗推进。
+	// 连续出力/反馈参数与本场随机种子一并交给它，随后驱动固定步长的搏斗推进。
 	FCatFishingFightRunnerInit Init;
 	Init.Session = this;
 	Init.FishActor = Encounter;
@@ -1335,20 +1332,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 				Init.bInitialSlackHeld, Init.InitialInputSequence);
 		}
 	}
-	Init.CalmDurationRangeSeconds = Personality->CalmDurationRangeSeconds;
-	Init.StruggleDurationRangeSeconds = Personality->StruggleDurationRangeSeconds;
-	Init.LowStaminaRestThreshold = FightBalance->LowStaminaRestThreshold;
-	Init.LowStaminaRestMultiplier = FightBalance->LowStaminaRestMultiplier;
-	Init.SteeringConfig.RetargetDurationRangeSeconds = Personality->DirectionRetargetDurationRangeSeconds;
-	Init.SteeringConfig.MaximumTurnRateDegreesPerSecond = Personality->MaximumTurnRateDegreesPerSecond;
-	Init.SteeringConfig.StruggleOutwardBias = Personality->StruggleOutwardDirectionBias;
-	Init.SteeringConfig.CalmInwardBias = Personality->CalmInwardDirectionBias;
-	Init.SteeringConfig.LateralMovementBias = Personality->LateralMovementBias;
-	Init.SteeringConfig.FeintProbability = Personality->FeintProbability;
-	Init.SteeringConfig.FullStaminaInwardProbability = Personality->FullStaminaInwardProbability;
-	Init.SteeringConfig.ExhaustedInwardProbability = Personality->ExhaustedInwardProbability;
-	Init.SteeringConfig.InwardProbabilityExponent = Personality->InwardProbabilityExponent;
-	Init.SteeringConfig.InwardConeHalfAngleDegrees = Personality->InwardConeHalfAngleDegrees;
+	Init.SteeringConfig = Personality->AdaptiveSteeringConfig;
 	Init.BehaviorStateTree = FishBehaviorStateTree;
 	// 使用玩家实际点击确认的那一轮咬钩机会种子；漏按后下一轮鱼种与搏斗节奏都能变化，同时服务器仍可复现。
 	Init.RandomSeed = CurrentBiteRandomSeed != 0
@@ -1380,7 +1364,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		return false;
 	}
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_fight_started SessionId=%s FightBalanceId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryStrength=%.2f InitialHelperStrength=%.2f InitialCombinedStrength=%.2f CatSystemMassKg=%.2f FishMassKg=%.2f MassMode=IndependentCatBodyMass FishStrengthBase=%.2f FishStrengthEffective=%.2f StrengthPerKg=%.2f ForcePerStrengthN=%.2f ExhaustedReelForceN=%.2f CatStamina=%.2f FishStamina=%.2f RodDurability=%.2f RodPhysicsLengthCm=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s CatLinearWorkCost=%.5f FishWorkCost=%.5f FishIsometricMultiplier=%.3f FishBaseDrainMultiplier=%.3f FishStruggleDrainMultiplier=%.3f FishCalmSpeedCmPerSec=%.2f FishStruggleSpeedCmPerSec=%.2f FixedStepSeconds=%.3f MinimumLeverage=%.3f MaximumEndpointCorrectionSpeed=%.2f StrengthResolution=CommonLineForce StrongConfrontationRole=PresentationOnly RodFailure=DurabilityDepleted World=%s NetMode=%d Authority=%s LocalRole=%d RodActor=%s"),
+		TEXT("Event=fishing_fight_started SessionId=%s FightBalanceId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryStrength=%.2f InitialHelperStrength=%.2f InitialCombinedStrength=%.2f CatSystemMassKg=%.2f FishMassKg=%.2f MassMode=IndependentCatBodyMass FishStrengthBase=%.2f FishStrengthEffective=%.2f StrengthPerKg=%.2f ForcePerStrengthN=%.2f ExhaustedReelForceN=%.2f CatStamina=%.2f FishStamina=%.2f RodDurability=%.2f RodPhysicsLengthCm=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s CatLinearWorkCost=%.5f FishEffortPerSecond=%.5f FishFullEffortSpeedCmPerSec=%.2f FixedStepSeconds=%.3f MinimumLeverage=%.3f MaximumEndpointCorrectionSpeed=%.2f StrengthResolution=CommonLineForce StrongConfrontationRole=PresentationOnly RodFailure=DurabilityDepleted World=%s NetMode=%d Authority=%s LocalRole=%d RodActor=%s"),
 		*Snapshot.FishingSessionId.ToString(),
 		*FightBalance->BalanceDefinitionId.ToString(),
 		*FishDefinition->FishDefinitionId.ToString(),
@@ -1405,12 +1389,8 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		Snapshot.RodActor && Snapshot.RodActor->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Held
 			? TEXT("Held") : TEXT("Grounded"),
 		Config.CatStaminaCostPerStrengthCentimeter,
-		Config.FishStaminaCostPerStrengthCentimeter,
-		Config.IsometricEffortMultiplier,
-		Config.BaseDrainMultiplier,
-		Config.StruggleDrainMultiplier,
-		Config.FishCalmSpeedCentimetersPerSecond,
-		Config.FishStruggleSpeedCentimetersPerSecond,
+		Config.FishEffortStaminaPerSecond,
+		Config.FishFullEffortSpeedCentimetersPerSecond,
 		Config.FixedStepSeconds,
 		Config.MinimumRodLeverageMultiplier,
 		Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond,
@@ -1418,18 +1398,18 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		static_cast<int32>(GetLocalRole()), *GetNameSafe(Snapshot.RodActor));
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_effort_configured SessionId=%s FightBalanceId=%s Model=CatActualWorkAndTimedSupport CatPhaseMultiplier=1 "
-			"FishDrainMode=OpposingLoadOnly FishBaseEffortMultiplier=0.000 "
+			"FishDrainMode=ContinuousEffortSquared FishReferenceForce=FullEffort "
 			"SlackRecoveryMode=RightButtonExceptExhaustedDrag SlackStaminaCost=WaivedForCatAndFish SlackRegenPerSecond=%.3f "
 			"MovementMultiplier=%.3f ReelMultiplier=%.3f RodMultiplier=%.3f HoldMultiplier=%.3f "
-			"CatLoadMultiplier=%.3f FishLoadMultiplier=%.3f FishIsometricMultiplier=%.3f "
-			"CatLinearWorkCost=%.6f FishCost=%.6f CatRodWorkCostPerRadian=%.6f CatUnloadedWorkMultiplier=%.3f CatSupportPerSecond=%.3f "
+			"CatLoadMultiplier=%.3f "
+			"CatLinearWorkCost=%.6f FishEffortPerSecond=%.6f CatRodWorkCostPerRadian=%.6f CatUnloadedWorkMultiplier=%.3f CatSupportPerSecond=%.3f "
 			"ExhaustedCatEscapeSpeedMultiplier=%.3f %s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *FightBalance->BalanceDefinitionId.ToString(),
 		Config.SlackStaminaRegenPerSecond,
 		Config.CatMovementStaminaMultiplier, Config.CatReelStaminaMultiplier,
 		Config.CatRodStaminaMultiplier, Config.CatHoldStaminaMultiplier,
-		Config.CatLoadStaminaMultiplier, Config.FishLoadStaminaMultiplier, Config.IsometricEffortMultiplier,
-		Config.CatStaminaCostPerStrengthCentimeter, Config.FishStaminaCostPerStrengthCentimeter,
+		Config.CatLoadStaminaMultiplier,
+		Config.CatStaminaCostPerStrengthCentimeter, Config.FishEffortStaminaPerSecond,
 		Config.CatRodStaminaCostPerStrengthRadian, Config.CatUnloadedWorkMultiplier, Config.CatSupportStaminaPerSecond,
 		Config.ExhaustedCatEscapeSpeedMultiplier,
 		*CatLogContext::BuildControllerFields(FisherCharacter->GetController()));

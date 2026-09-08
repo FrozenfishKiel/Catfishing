@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Fishing/CatFishingTypes.h"
 #include "Fishing/Simulation/CatFishingCastTrajectory.h"
+#include "Fishing/Behavior/CatFishBehaviorTypes.h"
 #include "CatFishingActorTypes.generated.h"
 
 class APlayerState;
@@ -93,6 +94,12 @@ struct FCatFishEncounterPresentationState
 	/** 服务器由本鱼冻结重量计算的一次性统一 Mesh 缩放；客户端只消费，不自行随机。 */
 	UPROPERTY(BlueprintReadOnly) double VisualScale = 1.0;
 	UPROPERTY(BlueprintReadOnly) ECatFishMotionIntent MotionIntent = ECatFishMotionIntent::None;
+	/** 独立策略事实；旧 MotionIntent 仅适配正式动画的三种表现角色。 */
+	UPROPERTY(BlueprintReadOnly) ECatFishBehavior Behavior = ECatFishBehavior::None;
+	/** 当前实际出力比例，[0,1]；不是剩余体力。 */
+	UPROPERTY(BlueprintReadOnly) float FishEffortRatio = 0.0f;
+	/** 主动游向与受约束后的平移分开，允许鱼朝外挣扎却被侧向拖动。 */
+	UPROPERTY(BlueprintReadOnly) FVector SwimHeading = FVector::ZeroVector;
 	/** 行为意图选择的自由游速（cm/s），不受鱼线、岸线或最终位移限制；用于驱动 AnimBP 播放倍率。 */
 	UPROPERTY(BlueprintReadOnly) float IntendedSwimSpeedCentimetersPerSecond = 0.0f;
 	UPROPERTY(BlueprintReadOnly) double CurrentLineLength = 0.0;

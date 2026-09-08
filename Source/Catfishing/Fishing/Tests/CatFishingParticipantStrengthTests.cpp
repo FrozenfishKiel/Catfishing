@@ -7,6 +7,8 @@
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
 #include "Engine/World.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/CatFishingSession.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "GameFramework/PlayerState.h"
 
@@ -40,7 +42,12 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	PrimaryASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50.0f);
 	HelperASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 30.0f);
 
-	UCatFishingFightRunner* Runner = NewObject<UCatFishingFightRunner>(GetTransientPackage());
+	ACatFishingSession* Session = World->SpawnActor<ACatFishingSession>();
+	ACatFishingRodActor* Rod = World->SpawnActor<ACatFishingRodActor>();
+	if (!TestTrue(TEXT("行为入口具备真实权威Session与鱼竿宿主"), Session && Session->HasAuthority() && Rod)) return false;
+	UCatFishingFightRunner* Runner = NewObject<UCatFishingFightRunner>(Session);
+	Runner->Session = Session;
+	Runner->RodActor = Rod;
 	FCatFightParticipantRuntime PrimaryParticipant;
 	PrimaryParticipant.PlayerState = PrimaryPlayer;
 	PrimaryParticipant.Character = PrimaryCharacter;
@@ -59,8 +66,7 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	Runner->Config.FishStrength = 40.0;
 	Runner->Config.CatStaminaMaximum = 60.0;
 	Runner->Config.ReelSpeedCentimetersPerSecond = 80.0;
-	Runner->Config.FishCalmSpeedCentimetersPerSecond = 25.0;
-	Runner->Config.FishStruggleSpeedCentimetersPerSecond = 75.0;
+	Runner->Config.FishFullEffortSpeedCentimetersPerSecond = 75.0;
 	Runner->Config.MaximumLineLengthCentimeters = 1000.0;
 	Runner->Config.RodDurability = 1000.0;
 	Runner->State.FishStamina = 100.0;
@@ -176,11 +182,22 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	// 固定步在能力扣款之后重新读取主猫ASC，再决定是否进入持续外冲。
 	SetStamina(0.0f, 0.0f);
 	Runner->UpdateParticipantIntentAndProperties();
-	Runner->CalmDurationRangeSeconds = FVector2D(1.0, 1.0);
 	Runner->InitialFishStamina = 100.0;
-	double CalmDuration = 0.0;
-	TestTrue(TEXT("行为树仍可请求普通平静状态"), Runner->BeginBehaviorStateFromStateTree(
-		ECatFishMotionIntent::CalmOrInward, CalmDuration));
+	Runner->SteeringRandom.Initialize(1427);
+	if (!TestTrue(TEXT("行为树仍可请求缓游调整"), Runner->BeginFishBehaviorFromStateTree(ECatFishBehavior::EaseOff))) return false;
+	FVector DesiredDirection;
+	const auto AdvanceEffort = [&](const bool bForceOutward)
+	{
+		// 此夹具覆盖参与者策略与连续执行器；正式树计时/显示分类由独立Runner与StateTree回归覆盖。
+		const bool bAdvanced = FCatFishSteeringModel::Step(Runner->SteeringConfig, FVector::ForwardVector,
+			Runner->Config.FixedStepSeconds, Runner->SteeringRandom, Runner->SteeringState, DesiredDirection, bForceOutward);
+		if (bAdvanced) Runner->State.FishEffortRatio = Runner->SteeringState.CurrentEffortRatio;
+		return bAdvanced;
+	};
+	const double EaseOffTarget = Runner->SteeringState.TargetEffortRatio;
+	for (int32 Index = 0; Index < 60; ++Index)
+		if (!TestTrue(TEXT("原缓游命令通过真实连续执行器降力"), AdvanceEffort(false))) return false;
+	TestEqual(TEXT("夹具先形成已降低的实际出力"), Runner->State.FishEffortRatio, EaseOffTarget, 1e-9);
 	Runner->FindParticipant(PrimaryPlayer)->bPullHeld = false;
 	Runner->FindParticipant(PrimaryPlayer)->bSlackHeld = true;
 	TestTrue(TEXT("真实双方ASC耗尽后由Runner接管持续外冲"), Runner->UpdateFishBehaviorForCurrentOperator(true));
@@ -188,12 +205,35 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("力竭时暂时锁线而非放线回体"), Runner->State.CatAction, ECatFightCatAction::None);
 	TestTrue(TEXT("力竭后新的右键按下仍能记录"), Runner->SetSlacking(PrimaryPlayer, 6, true));
 	TestTrue(TEXT("新右键按下不能解除零体力强制拖拽"), Runner->UpdateFishBehaviorForCurrentOperator(true));
+	if (!TestTrue(TEXT("强拖在同一执行记忆中发布真实满出力"), AdvanceEffort(true))) return false;
+	TestEqual(TEXT("强拖实际出力同步到一"), Runner->State.FishEffortRatio, 1.0);
+	TestEqual(TEXT("强拖保留缓游命令而不重选状态"), Runner->SteeringState.Behavior, ECatFishBehavior::EaseOff);
+	TestEqual(TEXT("强拖保留获救后要恢复的目标出力"), Runner->SteeringState.TargetEffortRatio, EaseOffTarget);
 	TestEqual(TEXT("力竭强制拖拽不会被右键恢复体力"), Simulate().CatStaminaDrain, 0.0);
 	SetStamina(0.0f, 30.0f);
 	Runner->UpdateParticipantIntentAndProperties();
 	TestFalse(TEXT("真实助手恢复并发力后解除强制拖拽"), Runner->UpdateFishBehaviorForCurrentOperator(true));
-	TestEqual(TEXT("获救后恢复行为树当前意图而非卡住挣扎"), Runner->State.MotionIntent, ECatFishMotionIntent::CalmOrInward);
+	TestTrue(TEXT("解除覆盖来自助手实际合力而非改写主位体力"), Runner->Config.SecondCatStrength > 0.0 && Runner->State.CatStamina == 0.0);
+	TestEqual(TEXT("获救保留原行为树缓游命令"), Runner->SteeringState.Behavior, ECatFishBehavior::EaseOff);
+	TestEqual(TEXT("获救当刻实际出力仍是满力，不瞬间套入目标"), Runner->State.FishEffortRatio, 1.0);
 	TestEqual(TEXT("获救后仍保留真实右键状态"), Runner->State.CatAction, ECatFightCatAction::Slack);
+	const auto RescuedStep = Simulate();
+	TestTrue(TEXT("真实助手使模拟器交回普通右键规则"), RescuedStep.bSucceeded && !RescuedStep.bExhaustedCatEscape
+		&& RescuedStep.bSlackRecoveryActive);
+	for (int32 Index = 0; Index < 60; ++Index)
+	{
+		const double PreviousEffort = Runner->State.FishEffortRatio;
+		if (!TestTrue(TEXT("获救后执行同一缓游命令"), AdvanceEffort(false))) return false;
+		TestTrue(TEXT("获救后的每步降力受既定速度上限约束"), PreviousEffort >= Runner->State.FishEffortRatio
+			&& PreviousEffort - Runner->State.FishEffortRatio
+				<= Runner->SteeringConfig.EffortFallPerSecond * Runner->Config.FixedStepSeconds + 1e-9);
+		TestEqual(TEXT("平滑恢复期间不会另选行为"), Runner->SteeringState.Behavior, ECatFishBehavior::EaseOff);
+	}
+	TestEqual(TEXT("获救后最终回到原缓游出力而非永久满力"), Runner->State.FishEffortRatio, EaseOffTarget, 1e-9);
+	const auto EasedStep = Simulate();
+	TestTrue(TEXT("低出力已进入实际物理推进"), EasedStep.bSucceeded && !EasedStep.bExhaustedCatEscape
+		&& EasedStep.Trace.FishThrustNewtons < RescuedStep.Trace.FishThrustNewtons
+		&& EasedStep.IntendedSwimSpeedCentimetersPerSecond < RescuedStep.IntendedSwimSpeedCentimetersPerSecond);
 	Runner->FindParticipant(PrimaryPlayer)->bPullHeld = true;
 	Runner->FindParticipant(PrimaryPlayer)->bSlackHeld = false;
 

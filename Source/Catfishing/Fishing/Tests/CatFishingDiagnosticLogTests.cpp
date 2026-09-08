@@ -145,24 +145,23 @@ bool FCatFishingMotionDiagnosticTest::RunTest(const FString& Parameters)
 		auto* Runner = NewObject<UCatFishingFightRunner>(Session);
 		Runner->Session = Session; Runner->RodActor = Rod; Runner->bInitialized = Runner->bRunning = true;
 		Runner->InitialFishStamina = Runner->State.FishStamina = 100.0;
-		Runner->CalmDurationRangeSeconds = FVector2D(2.0, 4.0);
-		Runner->StruggleDurationRangeSeconds = FVector2D(3.0, 5.0);
-		Runner->Random.Initialize(314159);
+		Runner->SteeringConfig.EaseOffDurationRangeSeconds = FVector2D(2.0, 4.0);
+		Runner->SteeringConfig.OutwardDurationRangeSeconds = FVector2D(3.0, 5.0);
+		Runner->SteeringRandom.Initialize(314159);
 		TArray<double> Durations;
-		for (const auto Phase : {ECatFishMotionIntent::CalmOrInward, ECatFishMotionIntent::StrugglingOutward})
+		for (const auto Phase : {ECatFishBehavior::EaseOff, ECatFishBehavior::OutwardRush})
 		{
-			double Duration = 0.0;
-			TestTrue(TEXT("real phase entry accepts the existing duration policy"), Runner->BeginBehaviorStateFromStateTree(Phase, Duration));
-			Durations.Add(Duration);
+			TestTrue(TEXT("real behavior entry accepts configured duration ranges"), Runner->BeginFishBehaviorFromStateTree(Phase));
+			Durations.Add(Runner->SteeringState.BehaviorDurationSeconds);
 		}
 		GLog->FlushThreadedLogs();
 		TestEqual(TEXT("each phase entry is recorded even with detailed sampling disabled"), Capture.Count(TEXT("Event=fishing_behavior_phase_entered")), 2);
 		if (Detailed)
 		{
 			TestTrue(TEXT("logging does not change random phase duration"), Durations == PreviousDurations);
-			TestEqual(TEXT("logging consumes no additional phase random values"), Runner->Random.GetCurrentSeed(), PreviousSeed);
+			TestEqual(TEXT("logging consumes no additional phase random values"), Runner->SteeringRandom.GetCurrentSeed(), PreviousSeed);
 		}
-		else { PreviousDurations = Durations; PreviousSeed = Runner->Random.GetCurrentSeed(); }
+		else { PreviousDurations = Durations; PreviousSeed = Runner->SteeringRandom.GetCurrentSeed(); }
 		Runner->bRunning = false;
 		Rod->ClearCarrierConstraintFromAuthority();
 		GLog->FlushThreadedLogs();

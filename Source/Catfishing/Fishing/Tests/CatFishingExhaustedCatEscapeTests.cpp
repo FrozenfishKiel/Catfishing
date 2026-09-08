@@ -23,8 +23,7 @@ namespace CatExhaustedEscapeTest
 		Value.CatStaminaMaximum = 60.0;
 		Value.RodDurability = 1.0;
 		Value.ReelSpeedCentimetersPerSecond = 80.0;
-		Value.FishCalmSpeedCentimetersPerSecond = 95.0;
-		Value.FishStruggleSpeedCentimetersPerSecond = 180.0;
+		Value.FishFullEffortSpeedCentimetersPerSecond = 180.0;
 		Value.MaximumLineLengthCentimeters = 1500.0;
 		return Value;
 	}
@@ -123,30 +122,31 @@ bool FCatFishingExhaustedCatRescueTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingExhaustedCatSteeringTest,
-	"Catfishing.Unit.Fishing.Steering.ExhaustedCatRushOverridesRestFeintsAndRespectsShore",
+	"Catfishing.Unit.Fishing.Steering.ExhaustedCatRushOverridesEaseOffAndRespectsShore",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingExhaustedCatSteeringTest::RunTest(const FString& Parameters)
 {
 	FCatFishSteeringConfig Settings;
-	Settings.FullStaminaInwardProbability = 1.0;
-	Settings.ExhaustedInwardProbability = 1.0;
-	Settings.FeintProbability = 1.0;
+	Settings.EaseOffInwardBias = 1.0;
 	FRandomStream Random(123);
 	FCatFishSteeringState Current;
+	if (!TestTrue(TEXT("初始化低体力缓游命令"), FCatFishSteeringModel::Initialize(Settings,
+		FVector::ForwardVector, ECatFishBehavior::EaseOff, 0.001, Random, Current))) return false;
+	const int32 SeedBeforeEscape = Random.GetCurrentSeed();
 	FVector Direction;
 	for (int32 Index = 0; Index < 200; ++Index)
 	{
-		const auto Intent = Index % 2 ? ECatFishMotionIntent::CalmOrInward : ECatFishMotionIntent::StrugglingOutward;
 		if (!TestTrue(TEXT("最偏向回头的性格也可持续外冲"), FCatFishSteeringModel::Step(
-			Settings, FVector::ForwardVector, Intent, 0.001, 0.05, Random, Current, Direction, true))) return false;
+			Settings, FVector::ForwardVector, 0.05, Random, Current, Direction, true))) return false;
 		TestTrue(TEXT("阶段变化和低体力不能让鱼回头"), Direction.Equals(FVector::ForwardVector, 1e-6));
 	}
-	TestEqual(TEXT("强制外冲不消耗随机抽样"), Random.GetCurrentSeed(), 123);
+	TestEqual(TEXT("强制外冲不消耗随机抽样"), Random.GetCurrentSeed(), SeedBeforeEscape);
+	TestEqual(TEXT("强制外冲不切换普通策略"), Current.Behavior, ECatFishBehavior::EaseOff);
+	TestEqual(TEXT("强制外冲执行不会另推进普通行为时长"), Current.BehaviorElapsedSeconds, 0.0);
 	TestTrue(TEXT("真实岸线可把冲向陆地的鱼导回水里"), FCatFishSteeringModel::RedirectFromWaterBoundary(
 		Settings, -FVector::ForwardVector, Random, Current));
-	FCatFishSteeringModel::Step(Settings, FVector::ForwardVector, ECatFishMotionIntent::StrugglingOutward,
-		0.001, 0.05, Random, Current, Direction, true);
+	FCatFishSteeringModel::Step(Settings, FVector::ForwardVector, 0.05, Random, Current, Direction, true);
 	TestTrue(TEXT("强制外冲不会立即覆盖岸线的安全方向"), FVector::DotProduct(Current.TargetDirection, -FVector::ForwardVector) > 0.0);
 	return !HasAnyErrors();
 }

@@ -393,6 +393,23 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 			Fish->GetActorLocation(), 0.05f, 1.0f, 1.0f, 75.0f, true));
 	TestEqual(TEXT("restrained fish publishes intent speed even without displacement"),
 		Fish->GetPresentationState().IntendedSwimSpeedCentimetersPerSecond, 75.0f);
+	const FVector PassiveTowPosition = Fish->GetActorLocation() - FVector(5.0, 0.0, 0.0);
+	TestTrue(TEXT("live fish publishes continuous effort and independent swim heading"),
+		Fish->ApplyFightStepFromAuthority(ECatFishMotionIntent::CalmOrInward, 12.0,
+			PassiveTowPosition, 0.05f, 1.0f, 0.3f, 22.5f, false, false, FVector::UpVector,
+			FVector::ForwardVector, ECatFishBehavior::EaseOff, 0.3f));
+	TestEqual(TEXT("presentation preserves behavior separately from animation role"),
+		Fish->GetPresentationState().Behavior, ECatFishBehavior::EaseOff);
+	TestEqual(TEXT("presentation preserves actual effort"), Fish->GetPresentationState().FishEffortRatio, 0.3f);
+	TestTrue(TEXT("being towed backward does not reverse the live fish body"),
+		Fish->GetActorForwardVector().Equals(FVector::ForwardVector, 1e-6));
+	TestTrue(TEXT("body heading does not alter authoritative tow displacement"),
+		Fish->GetActorLocation().Equals(PassiveTowPosition, 1e-6));
+	TestFalse(TEXT("invalid effort cannot replace the last valid presentation snapshot"),
+		Fish->ApplyFightStepFromAuthority(ECatFishMotionIntent::CalmOrInward, 12.0,
+			PassiveTowPosition, 0.05f, 0, 0, 0, false, false, FVector::UpVector,
+			FVector::ForwardVector, ECatFishBehavior::EaseOff, 1.1f));
+	TestEqual(TEXT("rejected presentation preserves actual effort"), Fish->GetPresentationState().FishEffortRatio, 0.3f);
 	TestFalse(TEXT("fish rejects a negative intended swim speed"),
 		Fish->ApplyFightStepFromAuthority(ECatFishMotionIntent::StrugglingOutward, 12.0,
 			Fish->GetActorLocation(), 0.05f, 1.0f, 1.0f, -1.0f, true));
@@ -437,6 +454,7 @@ bool FCatFishEncounterMovementContractTest::RunTest(const FString& Parameters)
 	const UScriptStruct* StateStruct = FCatFishEncounterPresentationState::StaticStruct();
 	const TSet<FName> ExpectedFields = { TEXT("FishingSessionId"), TEXT("CastAttemptId"), TEXT("FishDefinitionId"),
 		TEXT("VisualScale"), TEXT("MotionIntent"), TEXT("IntendedSwimSpeedCentimetersPerSecond"),
+		TEXT("Behavior"), TEXT("FishEffortRatio"), TEXT("SwimHeading"),
 		TEXT("bGrounded"), TEXT("GroundNormal"),
 		TEXT("CurrentLineLength"), TEXT("FishLineAlignment"),
 		TEXT("NormalizedLineLoad"), TEXT("bStrongConfrontation") };
@@ -446,6 +464,7 @@ bool FCatFishEncounterMovementContractTest::RunTest(const FString& Parameters)
 	}
 	const UClass* FishAnimClass = UCatFishAnimInstance::StaticClass();
 	for (const FName PropertyName : { FName(TEXT("MotionIntent")), FName(TEXT("IntendedSwimSpeedCentimetersPerSecond")),
+		FName(TEXT("Behavior")), FName(TEXT("FishEffortRatio")),
 		FName(TEXT("SwimPlayRate")), FName(TEXT("FishLineAlignment")), FName(TEXT("NormalizedLineLoad")),
 		FName(TEXT("bStrongConfrontation")) })
 	{

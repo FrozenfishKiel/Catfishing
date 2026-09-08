@@ -34,13 +34,6 @@ struct CATFISHING_API FCatFishingFightRunnerInit
 	/** 进入本场搏斗时物理左/右键是否仍被按住；RefreshCatAction 统一裁决，右键优先。 */
 	bool bInitialPullHeld = false;
 	bool bInitialSlackHeld = false;
-	/** 向内游（休息）时长区间。 */
-	FVector2D CalmDurationRangeSeconds = FVector2D::ZeroVector;
-	/** 向外游（发力）时长区间。 */
-	FVector2D StruggleDurationRangeSeconds = FVector2D::ZeroVector;
-	/** 鱼体力低于该比例后休息期乘以 LowStaminaRestMultiplier（规格 4.6 临时口径）。 */
-	double LowStaminaRestThreshold = 0.5;
-	double LowStaminaRestMultiplier = 1.5;
 	FCatFishSteeringConfig SteeringConfig;
 	TObjectPtr<UStateTree> BehaviorStateTree = nullptr;
 	uint64 RandomSeed = 0;
@@ -90,8 +83,9 @@ public:
 		int64 InitialInputSequence, bool bInitialPullHeld, bool bInitialSlackHeld);
 	ECatFightCatAction GetCatAction() const { return State.CatAction; }
 	bool IsOperatorPresentForAuthority() const { return State.bOperatorPresent; }
-	/** StateTree 状态入口的唯一行为意图写口；返回本状态应持续的服务器秒数。 */
-	bool BeginBehaviorStateFromStateTree(ECatFishMotionIntent MotionIntent, double& OutDurationSeconds);
+	/** StateTree 是策略选择唯一入口；耗体与运动仍由固定步模型裁决。 */
+	bool BeginFishBehaviorFromStateTree(ECatFishBehavior Behavior);
+	bool TestFishBehaviorConditionFromStateTree(ECatFishBehaviorCondition Condition) const;
 
 private:
 	friend class FCatFishingSlackAimCommandRoutingTest;
@@ -99,6 +93,7 @@ private:
 	friend class FCatFishingSurfaceTraversalTest;
 	friend class FCatFishingParticipantStrengthTest;
 	friend class FCatFishingMotionDiagnosticTest;
+	friend class FCatFishBehaviorStateTreeRuntimeTest;
 	void HandleFixedStep();
 	void RefreshCatAction();
 	bool UpdateFishBehaviorForCurrentOperator(bool bRodHeld);
@@ -123,19 +118,16 @@ private:
 	FCatWaterRegionHandle WaterRegion;
 	FCatFightSimulationConfig Config;
 	FCatFightSimulationState State;
-	FVector2D CalmDurationRangeSeconds = FVector2D::ZeroVector;
-	FVector2D StruggleDurationRangeSeconds = FVector2D::ZeroVector;
-	double LowStaminaRestThreshold = 0.5;
-	double LowStaminaRestMultiplier = 1.5;
 	double InitialFishStamina = 0.0;
 	FCatFishSteeringConfig SteeringConfig;
 	FCatFishSteeringState SteeringState;
-	/** StateTree 的请求意图；力竭外冲只覆盖本步有效意图，不另建阶段计时器。 */
-	ECatFishMotionIntent BehaviorMotionIntent = ECatFishMotionIntent::StrugglingOutward;
+	/** 上一步已结算的物理反馈；不持有第二份体力或费用。 */
+	double PreviousFishLineTensionNewtons = 0.0;
+	FVector PreviousFishEffortDirection = FVector::ForwardVector;
+	double PreviousFishExpectedSwimSpeedCentimetersPerSecond = 0.0;
 	FCatFishingRodEffortSampler RotationEffortSampler;
 	UPROPERTY(Transient)
 	TObjectPtr<UStateTree> BehaviorStateTree = nullptr;
-	FRandomStream Random;
 	FRandomStream SteeringRandom;
 	FTimerHandle FixedStepTimer;
 	double NextConstraintDiagnosticWorldSeconds = 0.0;

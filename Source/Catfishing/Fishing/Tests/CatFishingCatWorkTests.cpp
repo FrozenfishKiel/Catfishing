@@ -17,8 +17,7 @@ namespace CatActualWorkTest
 		Value.RodDurability = 1000.0;
 		Value.CatStaminaMaximum = 60.0;
 		Value.ReelSpeedCentimetersPerSecond = 80.0;
-		Value.FishCalmSpeedCentimetersPerSecond = 95.0;
-		Value.FishStruggleSpeedCentimetersPerSecond = 180.0;
+		Value.FishFullEffortSpeedCentimetersPerSecond = 180.0;
 		Value.MaximumLineLengthCentimeters = 1500.0;
 		return Value;
 	}
@@ -124,10 +123,9 @@ bool FCatFishingCatWorkPacingTest::RunTest(const FString& Parameters)
 
 	Settings = Config();
 	Settings.FishStrength = 20.0;
-	Settings.BaseDrainMultiplier = 2.0;
-	Settings.StruggleDrainMultiplier = 20.0;
+	Settings.FishEffortStaminaPerSecond = 20.0;
 	const auto PhaseChanged = Step(Settings, Current, Constraint);
-	TestEqual(TEXT("鱼阶段倍率不再二次放大猫的同一工作量"), PhaseChanged.CatStaminaDrain, Heavy.CatStaminaDrain, 1e-9);
+	TestEqual(TEXT("鱼每秒耗体价格不放大猫的同一工作量"), PhaseChanged.CatStaminaDrain, Heavy.CatStaminaDrain, 1e-9);
 
 	Current = State();
 	Current.LineLengthCentimeters = 800.0;

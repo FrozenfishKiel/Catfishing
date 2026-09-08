@@ -72,8 +72,7 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		Runner->Config.MaximumLineLengthCentimeters = 1000.0;
 		Runner->Config.CatStaminaMaximum = 100.0;
 		Runner->Config.ReelSpeedCentimetersPerSecond = 160.0;
-		Runner->Config.FishCalmSpeedCentimetersPerSecond = 25.0;
-		Runner->Config.FishStruggleSpeedCentimetersPerSecond = 75.0;
+		Runner->Config.FishFullEffortSpeedCentimetersPerSecond = 75.0;
 		if (!TestTrue(TEXT("surface test uses valid simulation parameters"), Runner->Config.IsValid())) return false;
 		Runner->State.CatStamina = 100.0;
 		Runner->State.FishStamina = bInitiallyExhausted ? 0.0 : 1000.0;
@@ -180,7 +179,7 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		Runner->State.FishWorldPosition = FVector(-90.0, 0.0, 0.0);
 		Runner->State.LineLengthCentimeters = 500.0;
 		TestTrue(TEXT("initialize real shore steering"), FCatFishSteeringModel::Initialize(Runner->SteeringConfig,
-			FVector::ForwardVector, ECatFishMotionIntent::CalmOrInward, 1.0, Runner->SteeringRandom, Runner->SteeringState));
+			FVector::ForwardVector, ECatFishBehavior::EaseOff, 1.0, Runner->SteeringRandom, Runner->SteeringState));
 		Step = FCatFightStepResult{};
 		Step.bSucceeded = true;
 		Step.bLineTaut = true;
@@ -221,7 +220,7 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		Runner->Config.RodDurability = 1000.0;
 		Runner->Config.MaximumLineLengthCentimeters = 1000.0;
 		Runner->Config.CatStaminaMaximum = 100.0;
-		Runner->Config.FishStruggleSpeedCentimetersPerSecond = 75.0;
+		Runner->Config.FishFullEffortSpeedCentimetersPerSecond = 75.0;
 		Runner->State.CatStamina = Runner->State.FishStamina = 100.0;
 		Runner->State.MotionIntent = ECatFishMotionIntent::StrugglingOutward;
 		Runner->State.FishWorldPosition = FVector(500, 500, 0);
@@ -264,8 +263,7 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 	RecoveryRunner->Config.MaximumLineLengthCentimeters = 1000.0;
 	RecoveryRunner->Config.CatStaminaMaximum = 100.0;
 	RecoveryRunner->Config.ReelSpeedCentimetersPerSecond = 160.0;
-	RecoveryRunner->Config.FishCalmSpeedCentimetersPerSecond = 25.0;
-	RecoveryRunner->Config.FishStruggleSpeedCentimetersPerSecond = 75.0;
+	RecoveryRunner->Config.FishFullEffortSpeedCentimetersPerSecond = 75.0;
 	if (!TestTrue(TEXT("gap recovery simulation parameters are valid"), RecoveryRunner->Config.IsValid())) return false;
 	RecoveryRunner->State.CatStamina = 100.0;
 	RecoveryRunner->State.FishStamina = 1000.0;
@@ -281,9 +279,10 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 	RecoveryRunner->SteeringRandom.Initialize(1459);
 	if (!TestTrue(TEXT("gap recovery has initialized runtime shore steering"),
 		FCatFishSteeringModel::Initialize(RecoveryRunner->SteeringConfig, FVector::ForwardVector,
-			RecoveryRunner->State.MotionIntent, 1.0, RecoveryRunner->SteeringRandom,
+			ECatFishBehavior::EaseOff, 1.0, RecoveryRunner->SteeringRandom,
 			RecoveryRunner->SteeringState))) return false;
 
+	bool bHasStartedWaterwardRecovery = false;
 	const auto AdvanceRecoveryStep = [&](const FVector& DesiredDirection, const bool bReturningToWater)
 	{
 		const FVector PreviousPosition = RecoveryRunner->State.FishWorldPosition;
@@ -291,6 +290,7 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		FCatFightStepResult Step = FCatFishingFightSimulator::Step(RecoveryRunner->Config,
 			RecoveryRunner->State, RecoveryRod, DesiredDirection);
 		if (!TestTrue(TEXT("real simulator advances the live gap recovery"), Step.bSucceeded)) return false;
+		const FVector CandidateBeforeSurface = Step.ProposedFishWorldPosition;
 		FCatWaterSpatialResult Water;
 		bool bJustBeached = false;
 		FVector Normal;
@@ -304,17 +304,32 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("gap recovery remains at the actual water surface"), Motion.FishWorldPosition.Z, 0.0, 0.01);
 		if (bReturningToWater)
 		{
-			TestTrue(TEXT("each free-spool step makes actual progress back into the lake"),
-				Motion.FishWorldPosition.X > PreviousPosition.X + 0.01);
+			if (CandidateBeforeSurface.X > PreviousPosition.X + 0.01)
+			{
+				TestTrue(TEXT("each waterward candidate makes actual progress back into the lake"),
+					Motion.FishWorldPosition.X > PreviousPosition.X + 0.01);
+				bHasStartedWaterwardRecovery = true;
+			}
+			else
+			{
+				// 释放收线时可能仍有被拖向岸的负速度。岸线先刹住越界惯性，不能伪造瞬间反向位移。
+				TestTrue(TEXT("initial landward inertia cannot move the released fish farther outside"),
+					Motion.FishWorldPosition.X >= PreviousPosition.X - 0.01);
+				TestFalse(TEXT("once waterward recovery starts it cannot stall again"), bHasStartedWaterwardRecovery);
+			}
 			TestTrue(TEXT("runtime recovery never snaps from the gap to the shoreline"),
 				FVector::Dist2D(PreviousPosition, Motion.FishWorldPosition)
-					<= RecoveryRunner->Config.FishCalmSpeedCentimetersPerSecond
+					<= RecoveryRunner->Config.FishFullEffortSpeedCentimetersPerSecond * RecoveryRunner->State.FishEffortRatio
 						* RecoveryRunner->Config.FixedStepSeconds + 0.01);
 			TestEqual(TEXT("runtime free spool settles line length against the actual recovered fish position"),
 				Step.LineLengthCentimeters, FMath::Max(PreviousLineLength,
 					FVector::Distance(RecoveryRod.RodTipWorldPosition, Motion.FishWorldPosition)), 1e-6);
 		}
 		RecoveryRunner->State.FishWorldPosition = Motion.FishWorldPosition;
+		// 与生产 Runner 一样跨步持有地形修正后的速度。旧夹具漏掉此写回，
+		// 固定水阻接入后每步重复起步，120步只能走60cm，首次暴露其假停滞。
+		RecoveryRunner->State.FishVelocityCentimetersPerSecond = RecoveryRunner->State.bFishExhausted
+			|| Step.Outcome != ECatFightStepOutcome::None ? FVector::ZeroVector : Step.ResolvedFishVelocityCentimetersPerSecond;
 		RecoveryRunner->State.LineLengthCentimeters = Step.LineLengthCentimeters;
 		RecoveryRunner->State.FishStamina = FMath::Max(0.0, RecoveryRunner->State.FishStamina - Step.FishStaminaDrain);
 		RecoveryRunner->State.CatStamina = FMath::Clamp(RecoveryRunner->State.CatStamina - Step.CatStaminaDrain,
@@ -331,11 +346,17 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		RecoveryRunner->State.FishWorldPosition.X <= -60.0
 			&& RecoveryRunner->State.FishWorldPosition.X > -90.0)) return false;
 	RecoveryRunner->State.CatAction = ECatFightCatAction::Slack;
+	RecoveryRunner->State.FishEffortRatio = 25.0 / RecoveryRunner->Config.FishFullEffortSpeedCentimetersPerSecond;
+	const double ReleasePositionX = RecoveryRunner->State.FishWorldPosition.X;
 	int32 RecoverySteps = 0;
 	for (; RecoverySteps < 120 && RecoveryRunner->State.FishWorldPosition.X < 30.0; ++RecoverySteps)
 	{
 		if (!AdvanceRecoveryStep(FVector::ForwardVector, true)) return false;
 	}
+	AddInfo(FString::Printf(TEXT("SurfaceRecovery ReleaseX=%.6f FinalX=%.6f Steps=%d Seconds=%.3f VelocityCmS=%s"),
+		ReleasePositionX, RecoveryRunner->State.FishWorldPosition.X, RecoverySteps,
+		RecoverySteps * RecoveryRunner->Config.FixedStepSeconds,
+		*RecoveryRunner->State.FishVelocityCentimetersPerSecond.ToCompactString()));
 	TestTrue(TEXT("live fish returns beyond the shoreline band over multiple simulation steps"),
 		RecoveryRunner->State.FishWorldPosition.X >= 30.0 && RecoverySteps > 20);
 	const FCatWaterSpatialResult RecoveredWater = World->GetSubsystem<UCatWaterQuerySubsystem>()
@@ -346,7 +367,7 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 	// 岸线容差带会连续返回最近岸点。低速鱼必须累积小于旧 1 cm 阈值的游动，才能走出 2 cm 容差带。
 	RecoveryRunner->State.FishWorldPosition = FVector::ZeroVector;
 	RecoveryRunner->State.LineLengthCentimeters = 600.0;
-	RecoveryRunner->Config.FishCalmSpeedCentimetersPerSecond = 10.0;
+	RecoveryRunner->State.FishEffortRatio = 10.0 / RecoveryRunner->Config.FishFullEffortSpeedCentimetersPerSecond;
 	// 该用例专门验证岸线容差穿越，使用已经达到目标的稳态速度；起步惯性另有回归。
 	RecoveryRunner->State.FishVelocityCentimetersPerSecond = FVector(10.0, 0.0, 0.0);
 	const UCatWaterQuerySubsystem* RecoveryWater = World->GetSubsystem<UCatWaterQuerySubsystem>();

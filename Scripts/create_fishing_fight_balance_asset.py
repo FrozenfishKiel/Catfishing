@@ -5,8 +5,10 @@ Run from the Unreal Editor Python console with:
 
 ``UCatFishingSettings`` only stores the soft reference to this asset. The values
 below initialize new assets only. Existing designer values are preserved and
-validated by the same C++ readiness gate used by runtime. Values are intentionally
-absent from ``DefaultGame.ini`` so runtime has one tuning source.
+validated by the same C++ readiness gate used by runtime. Saving writes the current
+schema, including the independent fish effort price; the old per-centimeter price
+is never converted numerically. Values are intentionally absent from
+``DefaultGame.ini`` so runtime has one tuning source.
 """
 
 import unreal
@@ -30,18 +32,14 @@ VALUES = {
     "cat_rod_stamina_cost_per_strength_radian": 0.03,
     "cat_unloaded_work_multiplier": 0.15,
     "cat_support_stamina_per_second": 2.0,
-    "fish_stamina_cost_per_strength_centimeter": 0.002,
+    "fish_effort_stamina_per_second": 3.0,
     "cat_movement_stamina_multiplier": 1.0,
     "cat_reel_stamina_multiplier": 1.0,
     "cat_rod_stamina_multiplier": 1.0,
     "cat_hold_stamina_multiplier": 1.0,
     "cat_load_stamina_multiplier": 1.0,
-    "fish_load_stamina_multiplier": 1.0,
-    "isometric_effort_multiplier": 1.0,
     "slack_stamina_regen_per_second": 3.0,
     "fish_exhaustion_threshold": 0.5,
-    "low_stamina_rest_threshold": 0.5,
-    "low_stamina_rest_multiplier": 1.5,
     "display_tension_newtons": 50.0,
     "escape_slack_centimeters": 100.0,
     "stalemate_rod_wear_per_fish_strength": 0.1,
@@ -100,7 +98,9 @@ def main():
         unreal.log_error(message)
         raise RuntimeError(message)
 
-    if (created or migrated) and not unreal.EditorAssetLibrary.save_loaded_asset(asset, only_if_is_dirty=False):
+    # 新每秒价格使用原生独立默认值或资产已有策划值；不读取、换算或覆盖旧每厘米价格。
+    # 即使旧资产载入后没有 dirty 标记，也显式保存当前 schema；重复运行仍保留已有调参。
+    if not unreal.EditorAssetLibrary.save_loaded_asset(asset, only_if_is_dirty=False):
         raise RuntimeError(f"failed to save fight balance: {ASSET_PATH}")
 
     unreal.log(
@@ -117,14 +117,12 @@ def main():
         f"CatRodWorkCostPerRadian={asset.get_editor_property('cat_rod_stamina_cost_per_strength_radian'):.6f} "
         f"CatUnloadedWorkMultiplier={asset.get_editor_property('cat_unloaded_work_multiplier'):.3f} "
         f"CatSupportPerSecond={asset.get_editor_property('cat_support_stamina_per_second'):.3f} "
-        f"FishCost={asset.get_editor_property('fish_stamina_cost_per_strength_centimeter'):.6f} "
-        f"FishIsometricMultiplier={asset.get_editor_property('isometric_effort_multiplier'):.3f} "
+        f"FishEffortPerSecond={asset.get_editor_property('fish_effort_stamina_per_second'):.6f} "
         f"CatMovementMultiplier={asset.get_editor_property('cat_movement_stamina_multiplier'):.3f} "
         f"CatReelMultiplier={asset.get_editor_property('cat_reel_stamina_multiplier'):.3f} "
         f"CatRodMultiplier={asset.get_editor_property('cat_rod_stamina_multiplier'):.3f} "
         f"CatHoldMultiplier={asset.get_editor_property('cat_hold_stamina_multiplier'):.3f} "
-        f"CatLoadMultiplier={asset.get_editor_property('cat_load_stamina_multiplier'):.3f} "
-        f"FishLoadMultiplier={asset.get_editor_property('fish_load_stamina_multiplier'):.3f}"
+        f"CatLoadMultiplier={asset.get_editor_property('cat_load_stamina_multiplier'):.3f}"
     )
 
 

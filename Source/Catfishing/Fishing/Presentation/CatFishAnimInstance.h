@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Animation/AnimInstance.h"
 #include "Fishing/CatFishingTypes.h"
+#include "Fishing/Behavior/CatFishBehaviorTypes.h"
 #include "CatFishAnimInstance.generated.h"
 
 /**
@@ -41,6 +42,12 @@ protected:
 	/** 复制到本机的高层运动意图，可在 AnimGraph 中切换平静、挣扎和力竭状态。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category="Fishing|Animation")
 	ECatFishMotionIntent MotionIntent = ECatFishMotionIntent::None;
+
+	/** 复制的策略和实际出力；动画只读，不在客户端决策。 */
+	UPROPERTY(BlueprintReadOnly, Transient, Category="Fishing|Animation")
+	ECatFishBehavior Behavior = ECatFishBehavior::None;
+	UPROPERTY(BlueprintReadOnly, Transient, Category="Fishing|Animation")
+	float FishEffortRatio = 0.0f;
 
 	/** 在线长/岸线约束前由鱼主动选择的自由游速；鱼被挡住时仍保持冲刺值。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category="Fishing|Animation", meta=(Units="cm/s"))

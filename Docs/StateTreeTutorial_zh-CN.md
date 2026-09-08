@@ -491,25 +491,36 @@ Root
 
 # 第五部分：单条鱼行为树 ST_FishFight
 
-这棵树挂在 `ACatFishEncounterActor` 的 `FishBehaviorStateTree` 组件上，并且**只在服务器启动**。默认拓扑很小：
+树挂在 `ACatFishEncounterActor::FishBehaviorStateTree`，仅服务器运行，不需要 AIController。2026-09-08 第一版生成器包含以下三个真实行为叶子；正式树与四性格已完成迁移和独立进程重载，正式树固定步分支测试通过；实际交付证据见 [鱼运动实现导读](FishFightImplementationGuide_zh-CN.md)。
 
 ```text
 Hooked Fish Behavior
- ├─ Struggling Outward       [Cat Fish Behavior State: StrugglingOutward]
- │        └─ On State Completed → Calm Direction Selection
- └─ Calm Direction Selection [Cat Fish Behavior State: CalmOrInward]
-          └─ On State Completed → Struggling Outward
+ ├─ Outward Rush [Behavior=OutwardRush]
+ ├─ Lateral Arc  [Behavior=LateralArc]
+ └─ Ease Off     [Behavior=EaseOff]
 ```
 
-每个 Task 进入时只做两件事：把 `MotionIntent` 交给 FightRunner，并从鱼性格 DA 的时长区间抽出本状态持续时间；倒计时结束后 Task 成功，让树切到另一个状态。位置、转向、鱼线、力量、体力和鱼竿磨损全部仍由服务器固定步模拟器处理。
+三个叶子使用 `Cat Fish Run Behavior State` Task，只在 Enter 时提交 `Behavior`，不自建倒计时或 Tick。Runner 在每个固定步先更新上一完整物理结果形成的反馈，再手动 Tick 树的条件，最后连续执行游向/出力和物理求解。组件自动 Tick 关闭，时长、受阻与体力观察都归 Runner 同一份行为记忆。
 
-使用自定义 `CatFishBehaviorStateTreeSchema` 的好处是编辑器会把 Context Actor 限定为鱼 Encounter，鱼专用 Task 不会误挂到 Session 或 GameState。编译好 Editor 模块后，可用命令行编辑器稳定生成/重建默认资产：
+全部转移为 `On Tick`，按下表顺序检查，条件由 `FCatFishBehaviorFeedbackCondition` 只读测试；不是 `On State Completed` 的两状态循环：
+
+| 来源 | 条件与目标（从先到后） |
+|---|---|
+| Outward Rush | 最短承诺+低体力→Ease Off；最短承诺+持续受阻→Lateral Arc；最长时长到期→Ease Off |
+| Lateral Arc | 最短承诺+低体力→Ease Off；最短承诺+持续受阻→Ease Off；最长时长到期→Ease Off |
+| Ease Off | 到期+持续受阻→Lateral Arc；到期→Outward Rush |
+
+`CatFishBehaviorStateTreeSchema` 将 Context Actor 限定为鱼 Encounter。Task/条件不写位置、线长、ASC、耐久和终局。它们也不使用旧 `MotionIntent` 决定行为，旧枚举只保留正式三动画兼容投影。新的出力比例、转向、时长和受阻阈值由人格 `AdaptiveSteeringConfig` 配置；鱼费用由独立实际出力与物理对抗计算。
+
+编译好 Editor 模块后，先通过受控脚本只读检查；确认的旧树指纹匹配且数据均就绪时，可附加 `-ApplyFishAdaptiveMotion` 迁移。脚本在写入前备份限定的六个包，保护现有鱼目录和动画资产；新版本的调参和树不被重建覆盖。
 
 ```text
-D:/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe D:/develop/Catfishing/Catfishing.uproject -ExecutePythonScript=D:/develop/Catfishing/Scripts/create_fish_behavior_state_tree.py -unattended -nop4 -NullRHI
+D:/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe D:/develop/Catfishing/Catfishing.uproject -ExecutePythonScript=D:/develop/Catfishing/Scripts/migrate_fish_adaptive_behavior.py -unattended -nop4 -NullRHI -DDC-ForceMemoryCache
 ```
 
-未来添加“低体力蓄力冲刺”时，推荐新增一个 StateTree 状态和一个新的 `MotionIntent`，条件只负责决定何时进入；冲刺速度、体力门槛与网络结果仍写在纯 C++ 模拟层并加单元测试。这样 StateTree 是可视化编排，不会变成无法验证的第二套战斗逻辑。
+`Scripts/create_fish_behavior_state_tree.py` 仍是整份重建默认树的作者入口，会替换 EditorData；已有手工编辑的资产应先做引用/拓扑盘点。日常资产迁移优先使用上述带指纹与备份的脚本，保存后用新进程重新加载检查。
+
+折返、近岸反扑与效用评分选路尚未实现。扩展时在新 `ECatFishBehavior` 与树条件中表达策略，继续由同一 Steering/Simulator 执行，不能另开一套位置或扣体逻辑。
 
 ---
 

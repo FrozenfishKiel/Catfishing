@@ -40,7 +40,7 @@
    └─ FCatFishingSessionSnapshot（ReplicatedUsing）← 唯一复制出口，只读
         │
         └─ ACatFishEncounterActor
-             └─ UStateTreeComponent（ST_FishFight）← 只选发力/平静意图；仅服务器运行
+             └─ UStateTreeComponent（ST_FishFight）← 外冲/横切/缓游；Runner固定步触发，仅服务器运行
         ▼
 【表现层】只订阅，永不写回（单向依赖）
    Snapshot/ViewBridge、表现 Actor 的 BP_On* 事件、Ability 的 BP_OnLocalInput* 钩子
@@ -113,7 +113,7 @@ StateTree（`ST_FishingSession`）保持薄编排。其中 `FishExhausted` 是 `
 
 `FCatFishingFightSimulator::Step()`：纯静态无副作用函数（有单元测试），每 0.05s 由 Runner 调一次。
 
-当前模型由鱼的游速候选、已放线长约束、力量差分配和玩法裁决组成，尚未完成鱼、线、杆、猫共同反力驱动的物理系统。鱼/猫质量与力量来源、收线公式、体力和断线条件只维护在 [实现导读](FishFightImplementationGuide_zh-CN.md)，避免在多个入口复制不同版本的公式。
+当前源码用连续主动推力、持久鱼速度、固定正常水阻与共同鱼线张力求解，收线受真实出力限制；CMC 执行猫端碰撞移动，仍不是完整三维刚体/接触求解器。鱼/猫质量与力量来源、收线公式、体力和断线条件只维护在 [实现导读](FishFightImplementationGuide_zh-CN.md)，避免在多个入口复制不同版本的公式。
 
 主猫持竿等鱼时，猫身与移动基准使用 `ControlRotation.Yaw`。提竿成功进入搏斗后，本人切换到第一人称持杆视角：`UCatFishingCameraComponent` 以实际握把为目标，按 `CalcCamera` 的帧时间平滑位置和四元数朝向，再组合镜头偏移。`FightCameraFollowResponseSeconds=0.08` 为本地跟随响应时间；房主与客户端都使用这条路径，没有新姿态的帧也继续过渡，首帧直接建立当前握把基线。身体与移动仍使用实际杆 Yaw，镜头在短暂跟随后与其对齐。角力使杆自然停转时镜头收敛到实际方向；鼠标仍提供施力意图，回转或卸力后镜头立即开始追随。组件不关闭 Look 输入，也不反写杆姿态或角力状态。协作者和旁观者保留原镜头；搏斗结束、离杆、断杆、失去占有或切换观战目标后清除插值历史、恢复原相机与本人身体可见性，并从最后可见方向继续。持杆查询仍只读权威 Registry 或复制的操作位，原 Controller 私有重复查询已移到该组件共用。
 
@@ -124,13 +124,13 @@ StateTree（`ST_FishingSession`）保持薄编排。其中 `FishExhausted` 是 `
 
 右键放线首次按下时，`CommandComponent → Session` 在验证完整输入后，以当前权威握把朝向重设转杆目标。此后目标只消费 `UpdateRotation` 采集的新鼠标增量，`ControlRotation` 的旧目标和迟到的 CMC 控制角不再驱动杆；尚未重设的搏斗保持原控制器目标契约。松开右键、重复按下通知和命令回执都不再重设方向，仍按住的左键照常恢复收线。实际姿态、负载滤波、努力累计和镜头平滑均连续保留。输入顺序、限位及验证边界见 [实现导读](FishFightImplementationGuide_zh-CN.md) 的“右键放线时重设转向意图”。
 
-鱼自己的高层行为由 Encounter 上的 `ST_FishFight` 控制：默认在 `StrugglingOutward` 与 `CalmOrInward` 两个状态间循环。StateTree Task 只把意图和持续时间交给 Runner，不写 Transform、不扣体力，也不直接修改鱼线。未来增加“低体力蓄力冲刺”时，可以在树上增加状态和条件，同时仍复用同一套服务器模拟器。
+鱼高层行为由 Encounter 上的 `ST_FishFight` 控制：当前生成器含 `OutwardRush/LateralArc/EaseOff` 三叶，按固定步更新的持续受阻、体力和时长条件转移。Task 只提交行为，Runner 唯一推进反馈/时钟并手动Tick树，然后连续执行方向和实际出力u；不增加 AIController，也不让树写 Transform、ASC、鱼线或装备。旧 `MotionIntent` 仅投影正式三动画，物理、鱼费用和基础磨损不读它。四性格/正式树已迁移并独立重载，Editor/Game构建和受控行为/复制回归已完成；真人及新打包验收仍未完成，分层证据见实现导读。
 
 Runner 将模拟器的候选结果交给水域/地面解析，再由 Encounter 应用并复制鱼的位置；Rod 消费猫端目标速度与杆转矩输入。鱼线曲线网格只表现端点和余线，不运行粒子物理，也不向服务器提供约束反力。`bStalemate`、`TorqueBalanced` 与 `bStrongConfrontation` 均只观察和表现结果；力量差由现有约束处理，已取消强对抗过载即断线的终局分支。
 
 鱼体力归零或确认被猫端牵引上岸后，Session 发布 `FishExhausted` 进入 `ExhaustedReel`；同一 Runner 保留运动约束，但停止鱼主动运动和猫端正向扣费。当前上岸清空体力和力竭后零猫消耗都是玩法特例，物理改造尚未替换这些分支。猫危险入水由 Condition 的脚点浸没查询确认。
 
-全局搏斗系数来自 `DA_FishingFightBalance_Default`；鱼的游速、方向概率和阶段倍率来自当前鱼种性格，杆长与鱼竿耐久上限来自当前装备定义。当前剩余耐久只属于绑定 `RodItemInstanceId` 的装备实例，每个固定步的磨损写回该实例，Session 只复制同一值；新会话、切线、换人和收杆不恢复耐久。力量超过旧承载值不再结束本场；耐久归零以 `RodBroken` 写入真实损坏并拒绝再次抛竿。`UCatFishingSettings` 保留资产软引用、固定步与持竿姿态等技术设置。具体字段和诊断过滤词见实现导读，不再从旧 `Fight|Spec` 设置页或测试鱼快照推断现行参数。
+全局搏斗系数来自 `DA_FishingFightBalance_Default`，新增鱼费用为 `FishEffortStaminaPerSecond×u²×G×dt`；满出力参考游速与 `AdaptiveSteeringConfig` 来自鱼种性格，旧方向概率/阶段倍率退出运行。杆长、满出力基础磨损和鱼竿耐久上限来自当前装备定义。当前剩余耐久只属于绑定 `RodItemInstanceId` 的装备实例，每个固定步的磨损写回该实例，Session 只复制同一值；新会话、切线、换人和收杆不恢复耐久。力量超过旧承载值不再结束本场；耐久归零以 `RodBroken` 写入真实损坏并拒绝再次抛竿。`UCatFishingSettings` 保留资产软引用、固定步与持竿姿态等技术设置。具体字段和诊断过滤词见实现导读，不再从旧 `Fight|Spec` 设置页或测试鱼快照推断现行参数。
 
 ### 2.5 抄网（当前实现）
 

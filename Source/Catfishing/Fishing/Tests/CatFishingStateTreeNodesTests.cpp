@@ -43,11 +43,15 @@ bool FCatFishingStateTreeNodesDefaultsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("legacy serialized selection node remains load-compatible"),
 		LegacyOpenBiteWindowTask.GetInstanceDataType() == FCatFishingWaitTaskInstanceData::StaticStruct());
 	const FCatFishBehaviorStateTask FishBehaviorTask;
-	TestTrue(TEXT("fish behavior task exposes only intent and per-entry remaining time"),
+	TestTrue(TEXT("fish behavior task exposes only its selected strategy"),
 		FishBehaviorTask.GetInstanceDataType() == FCatFishBehaviorStateTaskInstanceData::StaticStruct());
 	const FCatFishBehaviorStateTaskInstanceData FishBehaviorData;
-	TestEqual(TEXT("fish behavior intent fails closed"), FishBehaviorData.MotionIntent, ECatFishMotionIntent::None);
-	TestEqual(TEXT("fish behavior duration starts unset"), FishBehaviorData.RemainingSeconds, 0.0);
+	TestEqual(TEXT("fish behavior strategy fails closed"), FishBehaviorData.Behavior, ECatFishBehavior::None);
+	TestNull(TEXT("fish task does not keep a second clock"),
+		FindFProperty<FProperty>(FCatFishBehaviorStateTaskInstanceData::StaticStruct(), TEXT("RemainingSeconds")));
+	const FCatFishBehaviorConditionInstanceData FishConditionData;
+	TestEqual(TEXT("fish feedback condition fails closed"), FishConditionData.Condition, ECatFishBehaviorCondition::None);
+	TestFalse(TEXT("fish feedback condition is not inverted by default"), FishConditionData.bInvert);
 	const UCatFishBehaviorStateTreeSchema* FishSchema = GetDefault<UCatFishBehaviorStateTreeSchema>();
 	TestTrue(TEXT("fish behavior schema binds directly to encounter actor"),
 		FishSchema && FishSchema->GetContextActorClass() == ACatFishEncounterActor::StaticClass());

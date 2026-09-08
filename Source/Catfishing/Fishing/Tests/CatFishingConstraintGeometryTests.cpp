@@ -15,8 +15,7 @@ namespace
 		Config.FishStrength = 50.0;
 		Config.CatStaminaMaximum = 100.0;
 		Config.ReelSpeedCentimetersPerSecond = 80.0;
-		Config.FishCalmSpeedCentimetersPerSecond = 25.0;
-		Config.FishStruggleSpeedCentimetersPerSecond = 75.0;
+		Config.FishFullEffortSpeedCentimetersPerSecond = 75.0;
 		Config.MaximumLineLengthCentimeters = 1000.0;
 		Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 10000.0;
 		Config.RodDurability = 1000.0;

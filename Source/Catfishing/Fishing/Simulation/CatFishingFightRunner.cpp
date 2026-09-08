@@ -48,10 +48,6 @@ bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunne
 		|| !Init.WaterRegion.IsValid()
 		|| !Init.Config.IsValid() || Init.RandomSeed == 0
 		|| Init.InitialInputSequence < 0
-		|| Init.CalmDurationRangeSeconds.X <= 0.0 || Init.CalmDurationRangeSeconds.Y < Init.CalmDurationRangeSeconds.X
-		|| Init.StruggleDurationRangeSeconds.X <= 0.0 || Init.StruggleDurationRangeSeconds.Y < Init.StruggleDurationRangeSeconds.X
-		|| !FMath::IsFinite(Init.LowStaminaRestThreshold) || Init.LowStaminaRestThreshold < 0.0 || Init.LowStaminaRestThreshold > 1.0
-		|| !FMath::IsFinite(Init.LowStaminaRestMultiplier) || Init.LowStaminaRestMultiplier < 1.0
 		|| !Init.SteeringConfig.IsValid() || !Init.BehaviorStateTree)
 	{
 		return false;
@@ -68,17 +64,12 @@ bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunne
 	LastFixedStepDiagnosticWorldSeconds = -1.0;
 	State.bOperatorPresent = true;
 	bFishBeached = false;
-	CalmDurationRangeSeconds = Init.CalmDurationRangeSeconds;
-	StruggleDurationRangeSeconds = Init.StruggleDurationRangeSeconds;
-	LowStaminaRestThreshold = Init.LowStaminaRestThreshold;
-	LowStaminaRestMultiplier = Init.LowStaminaRestMultiplier;
 	SteeringConfig = Init.SteeringConfig;
 	BehaviorStateTree = Init.BehaviorStateTree;
 	// 记录鱼的初始体力（至少为一个极小正数，避免后面用它做分母时除零），用于低体力判定的比例基准。
 	InitialFishStamina = FMath::Max(State.FishStamina, UE_DOUBLE_SMALL_NUMBER);
 	// 用服务器分配的种子初始化随机流，保证同一次搏斗在权威端是确定性可复算的。
-	Random.Initialize(static_cast<int32>(Init.RandomSeed));
-	// 转向与阶段时长使用两个独立随机流：以后增加转向抽样不会悄悄改变发力/休息时长序列。
+	// 同一固定步行为随机流冻结目标出力、时长和侧向；诊断不得消耗随机数。
 	SteeringRandom.Initialize(static_cast<int32>(Init.RandomSeed ^ 0x9E3779B9u));
 	// StateTree 的第一个可选状态同样是向外发力；这里先放一个合法初值，StartLogic 同步进入状态时会从唯一写口覆盖。
 	State.MotionIntent = ECatFishMotionIntent::StrugglingOutward;
@@ -396,7 +387,7 @@ bool UCatFishingFightRunner::UpdateFishBehaviorForCurrentOperator(const bool bRo
 	const bool bEscape = FCatFishingFightSimulator::ShouldEscapeExhaustedCat(Config, State, bRodHeld);
 	RefreshCatAction();
 	State.MotionIntent = State.bFishExhausted ? ECatFishMotionIntent::AutoHauling
-		: bEscape ? ECatFishMotionIntent::StrugglingOutward : BehaviorMotionIntent;
+		: bEscape ? ECatFishMotionIntent::StrugglingOutward : State.MotionIntent;
 	if (bEscape) State.CatAction = ECatFightCatAction::None;
 	if (bEscape != bLastExhaustedCatEscapeDiagnosticActive)
 	{
@@ -406,13 +397,13 @@ bool UCatFishingFightRunner::UpdateFishBehaviorForCurrentOperator(const bool bRo
 			UE_LOG(LogCatFishing, Log,
 				TEXT("Event=fishing_exhausted_cat_escape_changed SessionId=%s RodActor=%s CatActor=%s PlayerId=%d "
 					"Active=%s CatStamina=%.6f CombinedStrength=%.3f FishStamina=%.3f SpeedMultiplier=%.3f "
-					"BehaviorIntent=%s EffectiveIntent=%s Result=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
+					"Behavior=%s EffectiveIntent=%s Result=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
 				*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 				*GetNameSafe(RodActor.Get()), *GetNameSafe(Primary ? Primary->Character.Get() : nullptr),
 				Primary && Primary->PlayerState.IsValid() ? Primary->PlayerState->GetPlayerId() : INDEX_NONE,
 				bEscape ? TEXT("true") : TEXT("false"), State.CatStamina, Config.GetCombinedCatStrength(),
 				State.FishStamina, Config.ExhaustedCatEscapeSpeedMultiplier,
-				*UEnum::GetValueAsString(BehaviorMotionIntent), *UEnum::GetValueAsString(State.MotionIntent),
+				*UEnum::GetValueAsString(SteeringState.Behavior), *UEnum::GetValueAsString(State.MotionIntent),
 				bEscape ? TEXT("OutwardRushWithLockedLine") : TEXT("EscapeOverrideReleased"),
 				*GetNameSafe(SessionActor->GetWorld()), static_cast<int32>(SessionActor->GetNetMode()),
 				static_cast<int32>(SessionActor->GetLocalRole()));
@@ -482,6 +473,7 @@ bool UCatFishingFightRunner::SetFishExhaustedFromAuthority()
 		return false;
 	}
 	State.bFishExhausted = true;
+	State.FishEffortRatio = 0.0;
 	State.FishStamina = 0.0;
 	State.FishVelocityCentimetersPerSecond = FVector::ZeroVector;
 	State.MotionIntent = ECatFishMotionIntent::AutoHauling;
@@ -539,51 +531,46 @@ bool UCatFishingFightRunner::TransferOperatorFromAuthority(APlayerState* NewPlay
 	return true;
 }
 
-bool UCatFishingFightRunner::BeginBehaviorStateFromStateTree(const ECatFishMotionIntent MotionIntent,
-	double& OutDurationSeconds)
+bool UCatFishingFightRunner::BeginFishBehaviorFromStateTree(const ECatFishBehavior Behavior)
 {
-	OutDurationSeconds = 0.0;
-	if (!bInitialized || !bRunning
-		|| (MotionIntent != ECatFishMotionIntent::StrugglingOutward
-			&& MotionIntent != ECatFishMotionIntent::CalmOrInward))
-	{
-		return false;
-	}
-	const ECatFishMotionIntent PreviousIntent = BehaviorMotionIntent;
-	BehaviorMotionIntent = MotionIntent;
-	State.MotionIntent = MotionIntent;
-	if (MotionIntent == ECatFishMotionIntent::StrugglingOutward)
-	{
-		OutDurationSeconds = Random.FRandRange(StruggleDurationRangeSeconds.X, StruggleDurationRangeSeconds.Y);
-	}
-	else
-	{
-		const double RestScale = State.FishStamina / InitialFishStamina < LowStaminaRestThreshold
-			? LowStaminaRestMultiplier : 1.0;
-		OutDurationSeconds = Random.FRandRange(CalmDurationRangeSeconds.X, CalmDurationRangeSeconds.Y) * RestScale;
-	}
-	const bool bValidDuration = FMath::IsFinite(OutDurationSeconds) && OutDurationSeconds > 0.0;
-	if (const ACatFishingSession* SessionActor = Session.Get())
-	{
-		const UWorld* World = SessionActor->GetWorld();
-		const ACatFishingRodActor* Rod = RodActor.Get();
-		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_behavior_phase_entered SessionId=%s RodActorId=%s PreviousPhase=%s Phase=%s "
-				"DurationSeconds=%.4f FishStamina=%.4f CatStamina=%.4f DetailedMotionLog=%s Result=%s "
-				"WorldTime=%.6f Frame=%llu World=%s NetMode=%d Authority=%s LocalRole=%d"),
-			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-			Rod ? *Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens) : TEXT("None"),
-			*UEnum::GetValueAsString(PreviousIntent), *UEnum::GetValueAsString(MotionIntent),
-			OutDurationSeconds, State.FishStamina, State.CatStamina,
-			CatFishingMotionDiagnostics::IsDetailedEnabled() ? TEXT("true") : TEXT("false"),
-			bValidDuration ? TEXT("Accepted") : TEXT("InvalidDuration"),
-			World ? World->GetTimeSeconds() : -1.0, GFrameCounter, *GetNameSafe(World),
-			World ? static_cast<int32>(World->GetNetMode()) : -1, SessionActor->HasAuthority() ? TEXT("true") : TEXT("false"),
-			static_cast<int32>(SessionActor->GetLocalRole()));
-	}
-	return bValidDuration;
+	if (!bInitialized || !bRunning || State.bFishExhausted) return false;
+	const ACatFishingRodActor* Rod = RodActor.Get();
+	const ACatFishingSession* SessionActor = Session.Get();
+	if (!Rod || !SessionActor || !SessionActor->HasAuthority()) return false;
+	FVector Outward = (State.FishWorldPosition - Rod->GetRodTipWorldTransform().GetLocation()).GetSafeNormal2D();
+	if (Outward.IsNearlyZero()) Outward = FVector::ForwardVector;
+	const ECatFishBehavior PreviousBehavior = SteeringState.Behavior;
+	// 进入行为会清除累计计时，诊断必须保留选边之前的事实，不能把重置后的零当作原因。
+	const double PreviousElapsed = SteeringState.BehaviorElapsedSeconds;
+	const double PreviousDuration = SteeringState.BehaviorDurationSeconds;
+	const double PreviousBlocked = SteeringState.BlockedSeconds;
+	const double StaminaRatio = FMath::Clamp(State.FishStamina / InitialFishStamina, 0.0, 1.0);
+	const bool bAccepted = SteeringState.bInitialized
+		? FCatFishSteeringModel::BeginBehavior(SteeringConfig, Outward, Behavior, StaminaRatio, SteeringRandom, SteeringState)
+		: FCatFishSteeringModel::Initialize(SteeringConfig, Outward, Behavior, StaminaRatio, SteeringRandom, SteeringState);
+	const UWorld* World = SessionActor->GetWorld();
+	const FString Fields = FString::Printf(
+		TEXT("Event=fishing_behavior_phase_entered SessionId=%s RodActorId=%s PreviousBehavior=%s Behavior=%s "
+			"DurationSeconds=%.4f TargetEffort=%.4f ActualEffort=%.4f BlockedSeconds=%.4f LineLoad=%.4f "
+			"PreviousElapsedSeconds=%.4f PreviousDurationSeconds=%.4f FishStamina=%.4f CatStamina=%.4f "
+			"Reason=StateTreeTransition Result=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
+		*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
+		*UEnum::GetValueAsString(PreviousBehavior), *UEnum::GetValueAsString(Behavior),
+		SteeringState.BehaviorDurationSeconds, SteeringState.TargetEffortRatio, SteeringState.CurrentEffortRatio,
+		PreviousBlocked, SteeringState.SmoothedLineLoad, PreviousElapsed, PreviousDuration, State.FishStamina, State.CatStamina,
+		bAccepted ? TEXT("Accepted") : TEXT("InvalidBehavior"), *GetNameSafe(World),
+		World ? static_cast<int32>(World->GetNetMode()) : -1, static_cast<int32>(SessionActor->GetLocalRole()));
+	if (bAccepted) { UE_LOG(LogCatFishing, Log, TEXT("%s"), *Fields); }
+	else { UE_LOG(LogCatFishing, Warning, TEXT("%s"), *Fields); }
+	return bAccepted;
 }
 
+bool UCatFishingFightRunner::TestFishBehaviorConditionFromStateTree(const ECatFishBehaviorCondition Condition) const
+{
+	return bInitialized && bRunning && !State.bFishExhausted
+		&& FCatFishSteeringModel::TestCondition(SteeringConfig, SteeringState, Condition);
+}
 bool UCatFishingFightRunner::TryResolveGroundedFishPosition(const FVector& DesiredPosition,
 	FVector& OutGroundedPosition, FVector& OutSurfaceNormal, AActor*& OutSurfaceActor) const
 {
@@ -924,7 +911,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 		}
 	}
 
-	// 状态持续时间由鱼行为 StateTree 推进；Runner 按体力事实覆盖本步外冲意图，不另建阶段倒计时。
+	// 行为时钟、反馈和树转移共用本固定步；强制拖水期间暂停普通行为的计时和选择。
 	// 每步开始都以 Encounter Actor 的实际 Transform 为准同步鱼的位置，避免和上一步的建议位置产生累积误差。
 	State.FishWorldPosition = Encounter->GetActorLocation();
 	const FVector RodTip = Rod->GetRodTipWorldTransform().GetLocation();
@@ -937,12 +924,38 @@ void UCatFishingFightRunner::HandleFixedStep()
 	FVector DesiredFishDirection = FVector::ZeroVector;
 	// 服务器按性格和固定随机种子生成连续游向；客户端不参与随机，只接收最终权威 Transform/表现状态。
 	const double FishStaminaRatio = FMath::Clamp(State.FishStamina / InitialFishStamina, 0.0, 1.0);
-	if (!State.bFishExhausted && !FCatFishSteeringModel::Step(SteeringConfig, Outward, State.MotionIntent, FishStaminaRatio,
+	if (!State.bFishExhausted && !bExhaustedCatEscape)
+	{
+		FCatFishBehaviorFeedback Feedback;
+		Feedback.NormalizedLineLoad = FMath::Clamp(PreviousFishLineTensionNewtons
+			/ (Config.FishStrength * Config.ForcePerStrengthNewtons), 0.0, 1.0);
+		Feedback.ActualFishVelocityCentimetersPerSecond = State.FishVelocityCentimetersPerSecond;
+		Feedback.ActiveSwimDirection = PreviousFishEffortDirection;
+		Feedback.ExpectedFreeSpeedCentimetersPerSecond = PreviousFishExpectedSwimSpeedCentimetersPerSecond;
+		Feedback.FishStaminaRatio = FishStaminaRatio;
+		Feedback.bLineTaut = PreviousFishLineTensionNewtons > UE_DOUBLE_SMALL_NUMBER;
+		if (!FCatFishSteeringModel::AdvanceFeedback(SteeringConfig, Feedback, Config.FixedStepSeconds, SteeringState)
+			|| !Encounter->TickFishBehaviorFromAuthority(static_cast<float>(Config.FixedStepSeconds)))
+		{
+			Stop();
+			SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("FishBehaviorFixedStep"));
+			return;
+		}
+	}
+	if (!State.bFishExhausted && !FCatFishSteeringModel::Step(SteeringConfig, Outward,
 		Config.FixedStepSeconds, SteeringRandom, SteeringState, DesiredFishDirection, bExhaustedCatEscape))
 	{
 		Stop();
 		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("FishSteering"));
 		return;
+	}
+	State.FishEffortRatio = State.bFishExhausted ? 0.0 : bExhaustedCatEscape ? 1.0 : SteeringState.CurrentEffortRatio;
+	// 正式动画仍消费旧三角色枚举，采用实际出力的滞回分类；物理与费用不读取此分类。
+	if (!State.bFishExhausted && !bExhaustedCatEscape)
+	{
+		const bool bWasStrong = State.MotionIntent == ECatFishMotionIntent::StrugglingOutward;
+		State.MotionIntent = State.FishEffortRatio >= (bWasStrong ? 0.4 : 0.55)
+			? ECatFishMotionIntent::StrugglingOutward : ECatFishMotionIntent::CalmOrInward;
 	}
 	// 从同一根权威 Rod Actor 读取规范竿尖/竿向/速度；客户端动画 Socket 与客户端自报受力均不参与裁决。
 	FCatFightRodConstraintInput RodConstraint;
@@ -961,7 +974,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			const FVector PullAxis = (State.FishWorldPosition - RodTip).GetSafeNormal2D();
 			const double MaximumTravel = FMath::Max(CatMovement->Velocity.Size2D(), FMath::Max(
 				Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond,
-				Config.FishStruggleSpeedCentimetersPerSecond * Config.ExhaustedCatEscapeSpeedMultiplier)) * Config.FixedStepSeconds;
+				Config.FishFullEffortSpeedCentimetersPerSecond * Config.ExhaustedCatEscapeSpeedMultiplier)) * Config.FixedStepSeconds;
 			RodConstraint.CarrierTravelLimitCentimeters = CatMovement->GetExternalTractionTravelLimit(PullAxis, MaximumTravel);
 		}
 		// 网络移动包在服务器更新 Acceleration，不会填充 Pawn 的本地 LastControlInputVector。
@@ -1072,27 +1085,9 @@ void UCatFishingFightRunner::HandleFixedStep()
 	const TCHAR* SimulationOutcomeName = Step.Outcome == ECatFightStepOutcome::FishExhausted ? TEXT("FishExhausted")
 		: Step.Outcome == ECatFightStepOutcome::RodBroken ? TEXT("RodBroken")
 			: Step.Outcome == ECatFightStepOutcome::Escaped ? TEXT("Escaped") : TEXT("None");
-	const double FishRealizedEffortDistance = FMath::Min(
-		Step.FishActualLineDistanceCentimeters, Step.FishIntendedLineDistanceCentimeters);
-	const double FishBlockedEffortDistance = FMath::Max(0.0,
-		Step.FishIntendedLineDistanceCentimeters - FishRealizedEffortDistance);
-	const double FishEffectiveEffortDistance = FishRealizedEffortDistance
-		+ FishBlockedEffortDistance * Config.IsometricEffortMultiplier;
-	const double FishPhaseDrainMultiplier = State.MotionIntent == ECatFishMotionIntent::StrugglingOutward
-		? Config.StruggleDrainMultiplier : Config.BaseDrainMultiplier;
 	const double FishUncappedStaminaDrain = Step.FishUncappedStaminaDrain;
 	const double FishStaminaAfterStep = FMath::Max(0.0, State.FishStamina - Step.FishStaminaDrain);
-	const FVector SimulatorFishDelta = Step.ProposedFishWorldPosition - State.FishWorldPosition;
 	const FVector ResolvedFishDelta = Motion.FishWorldPosition - State.FishWorldPosition;
-	const double ResolvedLineDistance2D = FVector::Dist2D(RodTip, Motion.FishWorldPosition);
-	const double ResolvedLineVerticalDistance = FMath::Abs(RodTip.Z - Motion.FishWorldPosition.Z);
-	const double ResolvedLineDistance3D = FVector::Distance(RodTip, Motion.FishWorldPosition);
-	// 活鱼与尚未上岸的鱼干都在本步解析过水面；已经吸附地面的鱼干只解析地面，不能把 Exact 的默认零值冒充水面。
-	const bool bWaterSurfaceAvailableForDiagnostic = !State.bFishExhausted || !bFishBeached;
-	const double WaterSurfaceZ = bWaterSurfaceAvailableForDiagnostic
-		? Exact.WaterSurfaceWorldPoint.Z : Motion.FishWorldPosition.Z;
-	const double FishWaterSurfaceOffsetZ = bWaterSurfaceAvailableForDiagnostic
-		? Motion.FishWorldPosition.Z - WaterSurfaceZ : 0.0;
 	const bool bFishStaminaTerminalStep = !State.bFishExhausted
 		&& Step.Outcome == ECatFightStepOutcome::FishExhausted;
 	const bool bFishStaminaSpike = !State.bFishExhausted && !bFishStaminaTerminalStep
@@ -1109,7 +1104,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"CombinedCatStrength=%.3f EffectiveCatStrength=%.3f ActiveFishStrength=%.3f "
 				"CatForceN=%.3f FishThrustN=%.3f CombinedCatMassKg=%.3f "
 				"CatDriveAccelerationCmPerSec2=%.3f FishDriveAccelerationCmPerSec2=%.3f "
-				"FishSpeedCapCmPerSec=%.3f SwimSpeedCmPerSec=%.3f MobilityCmPerNewton=%.6f "
+				"FishFullEffortSpeedCmPerSec=%.3f SwimSpeedCmPerSec=%.3f MobilityCmPerNewton=%.6f "
 				"ExistingPositionErrorCm=%.3f RequiredTensionAtCurrentN=%.3f RequiredTensionAtPaidOutN=%.3f "
 				"ReelForceLimitN=%.3f FishCorrectionCm=%.3f LineTensionN=%.3f "
 				"FishLineForceN=%.3f CatLineForceN=%.3f HorizontalLineFactor=%.5f "
@@ -1119,7 +1114,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"CatStaminaDrain=%.5f CatStaminaAfter=%.5f WearLoad=%.5f RodWearDelta=%.5f "
 				"CatMovementWorkUnits=%.5f CatReelWorkUnits=%.5f CatRodWorkUnits=%.5f "
 				"CatHoldLoad=%.5f CatRodLoad=%.5f CatRodSupportBeforeSharedDrain=%.5f "
-				"FishRealizedEffortCm=%.5f FishBlockedEffortCm=%.5f FishEffectiveEffortCm=%.5f FishPhaseMultiplier=%.5f "
+				"FishEffortRatio=%.5f FishOppositionRatio=%.5f FishEffortPerSecond=%.5f FishDragKgPerSec=%.5f "
 				"FreeSpool=%s LineRestraining=%s Reeling=%s Struggling=%s Outcome=%s "
 				"InputAccepted=%s FinalizeAccepted=%s NetMode=%d Authority=true"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
@@ -1131,7 +1126,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Trace.CatForceNewtons, Trace.FishThrustNewtons, Trace.CombinedCatMassKilograms,
 			Trace.CatDriveAccelerationCentimetersPerSecondSquared,
 			Trace.FishDriveAccelerationCentimetersPerSecondSquared,
-			Trace.FishSpeedCapCentimetersPerSecond, Trace.SwimSpeedCentimetersPerSecond,
+			Trace.FishFullEffortSpeedCentimetersPerSecond, Trace.SwimSpeedCentimetersPerSecond,
 			Trace.MobilityCentimetersPerNewton,
 			Trace.ExistingPositionErrorCentimeters, Trace.RequiredTensionAtCurrentLengthNewtons,
 			Trace.RequiredTensionAtPaidOutLengthNewtons, Trace.ReelForceLimitNewtons,
@@ -1147,8 +1142,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			Trace.CatMovementPositiveWorkUnits, Trace.CatReelPositiveWorkUnits, Trace.CatRodPositiveWorkUnits,
 			Trace.CatHoldNormalizedLoad, Trace.CatRodNormalizedLoad,
 			Trace.CatRodSupportBeforeSharedStaminaDrain,
-			Trace.FishRealizedEffortDistanceCentimeters, Trace.FishBlockedEffortDistanceCentimeters,
-			Trace.FishEffectiveEffortDistanceCentimeters, Trace.FishPhaseMultiplier,
+			Trace.FishEffortRatio, Trace.FishOppositionRatio, Trace.FishEffortStaminaPerSecond, Trace.FishLinearDragKilogramsPerSecond,
 			Trace.bFreeSpool ? TEXT("true") : TEXT("false"),
 			Trace.bLineRestraining ? TEXT("true") : TEXT("false"),
 			Trace.bReeling ? TEXT("true") : TEXT("false"), Trace.bStruggling ? TEXT("true") : TEXT("false"),
@@ -1158,66 +1152,25 @@ void UCatFishingFightRunner::HandleFixedStep()
 	const auto LogFishStaminaBreakdown = [&](const TCHAR* EventName, const TCHAR* Trigger)
 	{
 		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=%s SessionId=%s Trigger=%s CatAction=%s MotionIntent=%s "
-				"FishDrainMode=OpposingLoadOnly FishBaseEffortMultiplier=0.000 "
-				"FishStaminaBefore=%.3f FishStaminaDrain=%.3f FishStaminaAfter=%.3f "
-				"DrainPerSecond=%.3f UncappedDrain=%.3f FishStrength=%.3f StaminaReferenceStrength=%.3f CostPerStrengthCm=%.6f EffortLoad=%.3f LoadMultiplier=%.3f "
-				"PhaseMultiplier=%.3f IsometricMultiplier=%.3f FixedStepSeconds=%.3f IntendedSwimSpeedCmPerSec=%.3f "
-				"FishIntentLineCm=%.3f FishActualLineCm=%.3f FishRealizedEffortCm=%.3f "
-				"FishBlockedEffortCm=%.3f FishEffectiveEffortCm=%.3f "
-				"FishBefore=%s SimulatorCandidate=%s ResolvedFish=%s SimulatorDelta=%s ResolvedDelta=%s "
-				"ResolvedDelta2DCm=%.3f ResolvedDelta3DCm=%.3f ResolvedDeltaZCm=%.3f "
-				"WaterSurfaceAvailable=%s WaterSurfaceZ=%.3f FishWaterSurfaceOffsetZ=%.3f "
-				"DesiredFishDirection=%s RodTip=%s "
-				"LineLengthBefore=%.3f LineLengthAfter=%.3f LineDistance2D=%.3f LineVerticalDistance=%.3f "
-				"LineDistance3D=%.3f Tension=%.3f LineLoad=%.3f Alignment=%.3f Beached=%s NetMode=%d Authority=true"),
-			EventName,
-			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-			Trigger,
-			CatActionName,
-			*UEnum::GetValueAsString(State.MotionIntent),
-			State.FishStamina,
-			Step.FishStaminaDrain,
-			FishStaminaAfterStep,
-			Step.FishStaminaDrain / Config.FixedStepSeconds,
-			FishUncappedStaminaDrain,
-			Config.FishStrength,
-			Config.StrengthPerKilogram,
-			Config.FishStaminaCostPerStrengthCentimeter,
-			Step.FishNormalizedEffortLoad,
-			Config.FishLoadStaminaMultiplier,
-			FishPhaseDrainMultiplier,
-			Config.IsometricEffortMultiplier,
-			Config.FixedStepSeconds,
-			Step.IntendedSwimSpeedCentimetersPerSecond,
-			Step.FishIntendedLineDistanceCentimeters,
-			Step.FishActualLineDistanceCentimeters,
-			FishRealizedEffortDistance,
-			FishBlockedEffortDistance,
-			FishEffectiveEffortDistance,
-			*State.FishWorldPosition.ToCompactString(),
-			*Step.ProposedFishWorldPosition.ToCompactString(),
-			*Motion.FishWorldPosition.ToCompactString(),
-			*SimulatorFishDelta.ToCompactString(),
-			*ResolvedFishDelta.ToCompactString(),
-			ResolvedFishDelta.Size2D(),
-			ResolvedFishDelta.Size(),
-			ResolvedFishDelta.Z,
-			bWaterSurfaceAvailableForDiagnostic ? TEXT("true") : TEXT("false"),
-			WaterSurfaceZ,
-			FishWaterSurfaceOffsetZ,
-			*DesiredFishDirection.ToCompactString(),
-			*RodTip.ToCompactString(),
-			State.LineLengthCentimeters,
-			Step.LineLengthCentimeters,
-			ResolvedLineDistance2D,
-			ResolvedLineVerticalDistance,
-			ResolvedLineDistance3D,
-			Step.NormalizedTension,
-			Step.NormalizedLineLoad,
-			Step.FishLineAlignment,
-			Step.bFishBeached ? TEXT("true") : TEXT("false"),
-			static_cast<int32>(World->GetNetMode()));
+			TEXT("Event=%s SessionId=%s RodActorId=%s Trigger=%s CatAction=%s Behavior=%s "
+				"FishDrainMode=ContinuousEffortSquared FishStaminaBefore=%.4f FishStaminaDrain=%.4f FishStaminaAfter=%.4f "
+				"DrainPerSecond=%.4f UncappedDrain=%.4f TargetEffort=%.4f ActualEffort=%.4f OppositionRatio=%.4f ReferenceDrainPerSecond=%.4f "
+				"FullEffortThrustN=%.4f ActualThrustN=%.4f DragKgPerSec=%.4f FixedStepSeconds=%.4f "
+				"IntendedSwimSpeedCmPerSec=%.4f FishBefore=%s ResolvedFish=%s ResolvedDelta=%s ResolvedDeltaZCm=%.4f "
+				"DesiredFishDirection=%s RodTip=%s LineLengthBefore=%.4f LineLengthAfter=%.4f "
+				"LineTensionN=%.4f Alignment=%.4f Beached=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
+			EventName, *SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens), Trigger, CatActionName,
+			*UEnum::GetValueAsString(SteeringState.Behavior), State.FishStamina, Step.FishStaminaDrain, FishStaminaAfterStep,
+			Step.FishStaminaDrain / Config.FixedStepSeconds, FishUncappedStaminaDrain,
+			SteeringState.TargetEffortRatio, Step.Trace.FishEffortRatio, Step.Trace.FishOppositionRatio,
+			Config.FishEffortStaminaPerSecond, Step.Trace.FishFullEffortThrustNewtons, Step.Trace.FishThrustNewtons,
+			Step.Trace.FishLinearDragKilogramsPerSecond, Config.FixedStepSeconds, Step.IntendedSwimSpeedCentimetersPerSecond,
+			*State.FishWorldPosition.ToCompactString(), *Motion.FishWorldPosition.ToCompactString(),
+			*ResolvedFishDelta.ToCompactString(), ResolvedFishDelta.Z, *DesiredFishDirection.ToCompactString(),
+			*RodTip.ToCompactString(), State.LineLengthCentimeters, Step.LineLengthCentimeters,
+			Step.LineTensionNewtons, Step.FishLineAlignment, bBeachedThisStep ? TEXT("true") : TEXT("false"),
+			*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(SessionActor->GetLocalRole()));
 	};
 	const bool bLogWorkSample = WorldSeconds >= NextPowerDiagnosticWorldSeconds;
 	if (bLogWorkSample)
@@ -1303,7 +1256,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"ActiveCombinedStrength=%.3f CatAcceleration=%.3f FishAcceleration=%.3f NetFishPullAcceleration=%.3f LineTensionN=%.3f ActiveHelpers=%d GroupStaminaDrain=%.3f "
 				"Stalemate=%s Fish=%s RodTip=%s Holder=%s NetMode=%d Authority=true "
 				"StepId=%llu Frame=%llu WorldTime=%.6f WorldGapSeconds=%.6f FixedStepSeconds=%.6f World=%s LocalRole=%d "
-				"Phase=%s RequestedPhase=%s ForcedEscape=%s Outcome=%s FishBefore=%s FishVelocityBeforeCmS=%s ResolvedFishVelocityCmS=%s "
+				"Phase=%s Behavior=%s ForcedEscape=%s Outcome=%s FishBefore=%s FishVelocityBeforeCmS=%s ResolvedFishVelocityCmS=%s "
 				"DesiredFishDirection=%s SteeringTarget=%s RetargetRemainingSeconds=%.4f BoundaryAvoidanceSeconds=%.4f "
 				"PositionCorrectionCm=%.4f CarrierTravelLimitCm=%.4f ConstraintRodEnd=%s RodRotationPredicted=%s "
 				"RodForward=%s RodTipVelocityCmS=%s HolderVelocityCmS=%s HolderInputVelocityCmS=%s FishStamina=%.4f CatStamina=%.4f"),
@@ -1338,7 +1291,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			*GetNameSafe(Rod->GetHolderPawnFromAuthority()),
 			static_cast<int32>(World->GetNetMode()), DiagnosticFixedStepSequence, GFrameCounter, WorldSeconds,
 			FixedStepWorldGap, Config.FixedStepSeconds, *GetNameSafe(World), static_cast<int32>(SessionActor->GetLocalRole()),
-			*UEnum::GetValueAsString(State.MotionIntent), *UEnum::GetValueAsString(BehaviorMotionIntent),
+			*UEnum::GetValueAsString(State.MotionIntent), *UEnum::GetValueAsString(SteeringState.Behavior),
 			bExhaustedCatEscape ? TEXT("true") : TEXT("false"), SimulationOutcomeName,
 			*State.FishWorldPosition.ToCompactString(), *State.FishVelocityCentimetersPerSecond.ToCompactString(),
 			*Step.ResolvedFishVelocityCentimetersPerSecond.ToCompactString(),
@@ -1380,7 +1333,9 @@ void UCatFishingFightRunner::HandleFixedStep()
 		Step.LineLengthCentimeters, Motion.FishWorldPosition, static_cast<float>(Config.FixedStepSeconds),
 		static_cast<float>(Step.FishLineAlignment), static_cast<float>(Step.NormalizedLineLoad),
 		static_cast<float>(Step.IntendedSwimSpeedCentimetersPerSecond), Step.bStrongConfrontation,
-		bFishBeached, GroundSurfaceNormal))
+		bFishBeached, GroundSurfaceNormal, DesiredFishDirection,
+		State.bFishExhausted ? ECatFishBehavior::None : SteeringState.Behavior,
+		static_cast<float>(State.FishEffortRatio)))
 	{
 		Stop();
 		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("EncounterFightStepWrite"));
@@ -1421,5 +1376,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 	State.FishVelocityCentimetersPerSecond.Z = 0.0;
 	State.FishWorldPosition = Encounter->GetActorLocation();
 	// 把本步结果（含鱼竿磨损）、剩余体力与运动意图上报给 Session，由它决定是否切换阶段/终止会话。
+	PreviousFishLineTensionNewtons = Step.LineTensionNewtons;
+	PreviousFishEffortDirection = Step.FishEffortDirection;
+	PreviousFishExpectedSwimSpeedCentimetersPerSecond = Step.IntendedSwimSpeedCentimetersPerSecond;
 	SessionActor->HandleFightRunnerStepFromAuthority(Step, State.FishStamina, State.MotionIntent);
 }

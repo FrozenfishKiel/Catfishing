@@ -14,30 +14,18 @@ bool FCatFishingFightWorkModel::ComputeCatWorkDrain(const FCatFightCatWorkInput&
 	return FMath::IsFinite(OutDrain);
 }
 
-bool FCatFishingFightWorkModel::ComputeDrain(const FCatFightWorkInput& Input, double& OutDrain,
-	double& OutEffectiveEffortDistanceCentimeters)
+bool FCatFishingFightWorkModel::ComputeFishEffortDrain(const FCatFightFishEffortInput& Input, double& OutDrain)
 {
 	OutDrain = 0.0;
-	OutEffectiveEffortDistanceCentimeters = 0.0;
-	if (!FMath::IsFinite(Input.Strength) || Input.Strength < 0.0
-		|| !FMath::IsFinite(Input.IntendedLineDistanceCentimeters) || Input.IntendedLineDistanceCentimeters < 0.0
-		|| !FMath::IsFinite(Input.ActualLineDistanceCentimeters) || Input.ActualLineDistanceCentimeters < 0.0
-		|| !FMath::IsFinite(Input.IsometricEffortMultiplier) || Input.IsometricEffortMultiplier < 0.0
-		|| !FMath::IsFinite(Input.CostPerStrengthCentimeter) || Input.CostPerStrengthCentimeter < 0.0
-		|| !FMath::IsFinite(Input.PhaseMultiplier) || Input.PhaseMultiplier < 0.0
-		|| !FMath::IsFinite(Input.BaseEffortMultiplier) || Input.BaseEffortMultiplier < 0.0
-		|| !FMath::IsFinite(Input.NormalizedLoad) || Input.NormalizedLoad < 0.0 || Input.NormalizedLoad > 1.0
-		|| !FMath::IsFinite(Input.LoadStaminaMultiplier) || Input.LoadStaminaMultiplier < 0.0)
+	if (!FMath::IsFinite(Input.EffortRatio) || Input.EffortRatio < 0.0 || Input.EffortRatio > 1.0
+		|| !FMath::IsFinite(Input.OppositionRatio) || Input.OppositionRatio < 0.0 || Input.OppositionRatio > 1.0
+		|| !FMath::IsFinite(Input.StaminaPerSecond) || Input.StaminaPerSecond < 0.0
+		|| !FMath::IsFinite(Input.DeltaSeconds) || Input.DeltaSeconds < 0.0)
 	{
 		return false;
 	}
 
-	const double Realized = FMath::Min(Input.ActualLineDistanceCentimeters,
-		Input.IntendedLineDistanceCentimeters);
-	const double Blocked = FMath::Max(0.0, Input.IntendedLineDistanceCentimeters - Realized);
-	OutEffectiveEffortDistanceCentimeters = Realized + Blocked * Input.IsometricEffortMultiplier;
-	OutDrain = Input.Strength * OutEffectiveEffortDistanceCentimeters
-		* Input.CostPerStrengthCentimeter * Input.PhaseMultiplier
-		* (Input.BaseEffortMultiplier + Input.NormalizedLoad * Input.LoadStaminaMultiplier);
+	OutDrain = Input.StaminaPerSecond * FMath::Square(Input.EffortRatio)
+		* Input.OppositionRatio * Input.DeltaSeconds;
 	return FMath::IsFinite(OutDrain);
 }

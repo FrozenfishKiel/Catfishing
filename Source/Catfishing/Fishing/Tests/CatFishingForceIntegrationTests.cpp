@@ -28,8 +28,7 @@ namespace
 		C.FishStrength = 75.0;
 		C.CatStaminaMaximum = 100.0;
 		C.ReelSpeedCentimetersPerSecond = 80.0;
-		C.FishCalmSpeedCentimetersPerSecond = 25.0;
-		C.FishStruggleSpeedCentimetersPerSecond = 75.0;
+		C.FishFullEffortSpeedCentimetersPerSecond = 75.0;
 		C.MaximumLineLengthCentimeters = 1000.0;
 		C.RodDurability = 1000.0;
 		return C;
@@ -139,11 +138,12 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFishInertiaTest,
 
 bool FCatFishingFishInertiaTest::RunTest(const FString& Parameters)
 {
-	auto RestConfig = ForceConfig(); RestConfig.FishCalmSpeedCentimetersPerSecond = 0.0;
+	auto RestConfig = ForceConfig();
 	auto RestState = ForceState(); RestState.CatAction = ECatFightCatAction::Slack;
+	RestState.FishEffortRatio = 0.0;
 	RestState.MotionIntent = ECatFishMotionIntent::CalmOrInward;
 	const auto Rest = FCatFishingFightSimulator::Step(RestConfig, RestState, FVector::ZeroVector, FVector::ForwardVector);
-	TestTrue(TEXT("zero calm speed is a valid resting configuration"), Rest.bSucceeded);
+	TestTrue(TEXT("zero effort is a valid live-fish rest"), Rest.bSucceeded);
 	TestTrue(TEXT("resting fish cannot acquire propulsion from the drag denominator safeguard"), Rest.ProposedFishWorldPosition.Equals(RestState.FishWorldPosition));
 	for (double Dt : {0.025, 0.05, 0.1})
 	{
@@ -438,8 +438,7 @@ bool FCatFishingShortLineTractionTest::RunTest(const FString& Parameters)
 		auto C = ForceConfig();
 		C.FishMassKilograms = FishMass;
 		C.FishStrength = FishMass * 10.0;
-		C.FishCalmSpeedCentimetersPerSecond = 95;
-		C.FishStruggleSpeedCentimetersPerSecond = 180;
+		C.FishFullEffortSpeedCentimetersPerSecond = 180;
 		auto S = ForceState();
 		S.CatAction = ECatFightCatAction::None;
 		S.FishWorldPosition = Rod->GetRodTipWorldTransform().GetLocation() + FVector(-55.8, -100, -148.88);
