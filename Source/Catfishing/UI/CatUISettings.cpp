@@ -10,7 +10,7 @@
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
 
-// 构造流程：为正式拆分的 HUD、背包、交互提示、局内菜单和输入资产写入稳定软路径；输入 Action 放在项目既有 InputContext 下维护，运行时代码只加载资产和绑定 Action。
+// 构造流程：为正式拆分的 HUD、背包、交互提示、局内菜单 WBP 和输入资产写入稳定软路径；输入 Action 放在项目既有 InputContext 下维护，运行时代码只加载资产和绑定 Action。
 UCatUISettings::UCatUISettings()
 {
 	HUDWidgetClass = TSoftClassPtr<UCatHUDWidget>(
@@ -24,7 +24,7 @@ UCatUISettings::UCatUISettings()
 	InteractionPromptWidgetClass = TSoftClassPtr<UCatInteractionPromptWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Interaction/WBP_CatInteractionPrompt.WBP_CatInteractionPrompt_C")));
 	LakeMainMenuWidgetClass = TSoftClassPtr<UCatLakeMainMenuWidget>(
-		FSoftClassPath(TEXT("/Script/Catfishing.CatLakeMainMenuWidget")));
+		FSoftClassPath(TEXT("/Game/UI/Save/WBP_CatLakeMainMenu.WBP_CatLakeMainMenu_C")));
 	MainMenuToggleAction = TSoftObjectPtr<UInputAction>(
 		FSoftObjectPath(TEXT("/Game/Input/InputAction/IA_LakeMenu.IA_LakeMenu")));
 	InventoryToggleAction = TSoftObjectPtr<UInputAction>(

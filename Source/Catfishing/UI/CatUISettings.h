@@ -89,7 +89,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Interaction")
 	TSoftClassPtr<UCatInteractionPromptWidget> InteractionPromptWidgetClass;
 
-	/** 局内 ESC 主菜单类；默认使用原生 fallback，正式 WBP 可在这里替换并继续复用同一 Controller。 */
+	/** 局内 ESC 主菜单 WBP 类；默认指向正式资产，Controller 只通过这个 View 接收设置、保存和退出意图。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Save")
 	TSoftClassPtr<UCatLakeMainMenuWidget> LakeMainMenuWidgetClass;
 

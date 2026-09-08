@@ -4,8 +4,6 @@
 #include "Blueprint/UserWidget.h"
 #include "CatLakeMainMenuWidget.generated.h"
 
-class SButton;
-class STextBlock;
 class UButton;
 class UTextBlock;
 
@@ -52,7 +50,7 @@ struct FCatLakeMainMenuViewState
 	bool bExitEnabled = true;
 };
 
-/** 局内 ESC 主菜单的 WBP 基类；默认提供原生居中竖排布局，正式 WBP 可用同名按钮覆盖表现。 */
+/** 局内 ESC 主菜单的 WBP 基类；它只绑定正式资产中的同名控件，不在 C++ 里另画一套菜单表现。 */
 UCLASS(BlueprintType, Blueprintable)
 class CATFISHING_API UCatLakeMainMenuWidget : public UUserWidget
 {
@@ -98,12 +96,6 @@ protected:
 	/** 菜单根拿到键盘焦点时消费 ESC 关闭键；预览未命中的其它键继续交还父类。 */
 	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
-	/** 没有正式 WBP 根控件时构建一个原生居中竖排 fallback，避免缺资产时打开菜单变成黑屏或空白。 */
-	virtual TSharedRef<SWidget> RebuildWidget() override;
-
-	/** 释放原生 fallback 的 Slate 指针；WBP 控件生命周期仍交给父类 WidgetTree。 */
-	virtual void ReleaseSlateResources(bool bReleaseChildren) override;
-
 	/** WBP 可选渲染扩展点；正式资产可以读取 ViewState 决定动画、焦点或局部文案。 */
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|LakeMenu")
 	void BP_RenderMenu(const FCatLakeMainMenuViewState& ViewState);
@@ -113,7 +105,7 @@ protected:
 	void BP_HandleMenuAction(ECatLakeMainMenuAction Action);
 
 private:
-	/** 绑定 Designer 里同名按钮到统一意图入口；缺少某个按钮时原生逻辑仍可通过 fallback 或蓝图调用工作。 */
+	/** 绑定 Designer 里同名按钮到统一意图入口；缺少某个按钮时只跳过该资产控件，不创建第二套表现入口。 */
 	void BindDesignerButtons();
 
 	/** 解除 Designer 按钮绑定；每个控件只移除本对象的委托，不影响蓝图自己追加的表现逻辑。 */
@@ -125,22 +117,7 @@ private:
 	/** 判断当前键盘事件是否代表关闭菜单；这里只处理已聚焦 UI 内的 Escape，不负责运行时输入映射。 */
 	bool ShouldCloseMenuFromKey(const FKeyEvent& InKeyEvent) const;
 
-	/** 构建无 WBP 时的原生菜单树；它只提供能点击的三项竖排按钮和一行结果文本。 */
-	TSharedRef<SWidget> RebuildNativeFallbackMenu();
-
-	/** 刷新原生 fallback 的按钮启用态和状态文本；正式 WBP 继续由 RenderMenu 直接写 BindWidgetOptional 控件。 */
-	void RefreshNativeFallbackControls();
-
-	/** 原生 fallback 的设置按钮回调；转成标准 Widget 意图后返回 Slate 已处理。 */
-	FReply HandleNativeSettingsClicked();
-
-	/** 原生 fallback 的保存按钮回调；转成标准 Widget 意图后返回 Slate 已处理。 */
-	FReply HandleNativeSaveClicked();
-
-	/** 原生 fallback 的退出按钮回调；转成标准 Widget 意图后返回 Slate 已处理。 */
-	FReply HandleNativeExitGameClicked();
-
-	/** 最近一次 Controller 写入的菜单显示状态；蓝图和原生 fallback 都只读这一份。 */
+	/** 最近一次 Controller 写入的菜单显示状态；WBP 只读这一份 ViewState，不另存保存或退出结果。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|LakeMenu", meta = (AllowPrivateAccess = "true"))
 	FCatLakeMainMenuViewState LastMenuViewState;
 
@@ -163,16 +140,4 @@ private:
 	/** WBP Designer 中的结果文本；存在时显示保存、设置或退出入口返回的明确反馈。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> StatusTextBlock;
-
-	/** 原生 fallback 设置按钮的 Slate 指针；RenderMenu 通过它更新禁用状态。 */
-	TSharedPtr<SButton> NativeSettingsButton;
-
-	/** 原生 fallback 保存按钮的 Slate 指针；RenderMenu 通过它更新禁用状态。 */
-	TSharedPtr<SButton> NativeSaveButton;
-
-	/** 原生 fallback 退出按钮的 Slate 指针；RenderMenu 通过它更新禁用状态。 */
-	TSharedPtr<SButton> NativeExitGameButton;
-
-	/** 原生 fallback 状态文本的 Slate 指针；RenderMenu 通过它更新最近反馈。 */
-	TSharedPtr<STextBlock> NativeStatusTextBlock;
 };

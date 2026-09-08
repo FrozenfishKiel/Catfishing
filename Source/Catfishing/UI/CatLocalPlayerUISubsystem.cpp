@@ -375,7 +375,7 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 }
 
 // 本地玩家 UI 装配流程：
-// 1. 验证本地设置、当前 Controller/Pawn 和 World；核心 WBP 类缺失或无效时直接 fail-closed，局内菜单可用原生 fallback。
+// 1. 验证本地设置、当前 Controller/Pawn 和 World；任一正式 WBP 类缺失或无效时直接 fail-closed，不创建脱离项目资产的原生替身。
 // 2. 创建 HUD Model/View 并入视口；默认常驻天数、背包入口、设置入口和中心准星，背包内容由库存页打开后再显示。
 // 3. 创建 Inventory Model/PageController/普通背包 View，但背包 View 不预先入视口，只通过既有 InputContext 的 Action 打开。
 // 4. 创建局内主菜单 View/Controller；菜单不常驻视口，只在主菜单 Action 或 HUD 按钮触发时打开。
@@ -557,7 +557,7 @@ void UCatLocalPlayerUISubsystem::ToggleLakeMainMenu()
 	LakeMainMenuController->ToggleMenu();
 }
 
-// HUD 入口动作流程：背包和主菜单都转交已有控制器；HUD 不再保留没有原生页面的旧空转分支。
+// HUD 入口动作流程：背包和主菜单都转交已有控制器；HUD 不兜底拼页面，也不持有保存或离局业务。
 void UCatLocalPlayerUISubsystem::HandleHUDActionRequested(const ECatHUDAction Action)
 {
 	switch (Action)

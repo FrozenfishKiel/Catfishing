@@ -2,6 +2,7 @@
 
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "UI/Frontend/CatFrontendRootWidget.h"
+#include "UI/Save/CatLakeMainMenuWidget.h"
 #include "Blueprint/WidgetBlueprintGeneratedClass.h"
 #include "Components/Border.h"
 #include "Components/Button.h"
@@ -51,6 +52,8 @@ namespace CatFrontendWidgetAuthoring
 {
 	/** 所有正式 Frontend WBP 的唯一内容目录；资产构造器只在此目录检查或新建对象。 */
 	const FString WidgetDirectory = TEXT("/Game/UI/Frontend");
+	/** 局内玩家菜单 WBP 的唯一内容目录；它归属 Save/UI 链路，和 Frontend 页面资产分开维护。 */
+	const FString LakeMenuWidgetDirectory = TEXT("/Game/UI/Save");
 	/** 正式声音设置资源目录；它与关卡、角色和既有音乐素材隔离，供 Settings 的软引用精确 Cook。 */
 	const FString AudioDirectory = TEXT("/Game/Audio/Settings");
 	/** 前端正式中文 Font 资产路径；作者器用它覆盖 CoreStyle 默认西文字体，避免中文在 WBP 预览和打包中变成缺字占位。 */
@@ -532,6 +535,77 @@ namespace CatFrontendWidgetAuthoring
 		return true;
 	}
 
+	/** 构造局内 ESC 菜单的正式 WBP；它只提供暂停菜单的显示和按钮控件，不触碰保存、设置或离局业务。 */
+	bool BuildLakeMainMenuWidget(UWidgetBlueprint* WidgetBlueprint)
+	{
+		// 局内菜单布局流程：先铺全屏半透明遮罩，再把固定宽度命令列锚到屏幕中心；三个命令按钮按策划顺序纵排，状态文本默认折叠等待 Controller 写入结果。
+		if (!WidgetBlueprint || !WidgetBlueprint->WidgetTree)
+		{
+			return false;
+		}
+		UCanvasPanel* Canvas = Cast<UCanvasPanel>(WidgetBlueprint->WidgetTree->RootWidget);
+		if (!Canvas)
+		{
+			return false;
+		}
+		UWidgetTree* Tree = WidgetBlueprint->WidgetTree;
+		UBorder* Scrim = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("LakeMainMenuScrim"));
+		USizeBox* MenuBounds = Tree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("LakeMainMenuBounds"));
+		UBorder* MenuSurface = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("LakeMainMenuSurface"));
+		UVerticalBox* MenuColumn = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("LakeMainMenuColumn"));
+		if (!Scrim || !MenuBounds || !MenuSurface || !MenuColumn)
+		{
+			return false;
+		}
+
+		Scrim->SetBrush(FSlateColorBrush(FLinearColor(0.0f, 0.0f, 0.0f, 0.58f)));
+		AddFullCanvasChild(Canvas, Scrim, 0);
+
+		MenuBounds->SetWidthOverride(340.0f);
+		MenuBounds->SetMinDesiredWidth(300.0f);
+		MenuSurface->SetBrush(FSlateColorBrush(FLinearColor(0.035f, 0.045f, 0.042f, 0.96f)));
+		MenuSurface->SetPadding(FMargin(26.0f, 24.0f));
+		MenuSurface->SetContent(MenuColumn);
+		MenuBounds->SetContent(MenuSurface);
+		if (UCanvasPanelSlot* MenuSlot = Canvas->AddChildToCanvas(MenuBounds))
+		{
+			MenuSlot->SetAnchors(FAnchors(0.5f, 0.5f));
+			MenuSlot->SetAlignment(FVector2D(0.5f, 0.5f));
+			MenuSlot->SetPosition(FVector2D::ZeroVector);
+			MenuSlot->SetAutoSize(true);
+			MenuSlot->SetZOrder(1);
+		}
+
+		UTextBlock* Title = AddText(Tree, MenuColumn, TEXT("LakeMainMenuTitleText"), TEXT("暂停菜单"), 28);
+		if (!Title)
+		{
+			return false;
+		}
+		Title->SetJustification(ETextJustify::Center);
+		SetBoxSlot(Title, false, FMargin(0.0f, 0.0f, 0.0f, 18.0f));
+
+		UButton* Settings = AddButton(Tree, MenuColumn, TEXT("SettingsButton"), TEXT("设置"));
+		UButton* Save = AddButton(Tree, MenuColumn, TEXT("SaveButton"), TEXT("保存"));
+		UButton* ExitGame = AddButton(Tree, MenuColumn, TEXT("ExitGameButton"), TEXT("退出游戏"));
+		UTextBlock* Status = AddText(Tree, MenuColumn, TEXT("StatusTextBlock"), TEXT(""), 14);
+		if (!Settings || !Save || !ExitGame || !Status)
+		{
+			return false;
+		}
+		for (UButton* Button : { Settings, Save, ExitGame })
+		{
+			if (UVerticalBoxSlot* ButtonSlot = Cast<UVerticalBoxSlot>(Button->Slot))
+			{
+				ButtonSlot->SetPadding(FMargin(0.0f, 0.0f, 0.0f, 10.0f));
+			}
+		}
+		Status->SetVisibility(ESlateVisibility::Collapsed);
+		Status->SetJustification(ETextJustify::Center);
+		Status->SetColorAndOpacity(FLinearColor(0.68f, 0.76f, 0.72f));
+		SetBoxSlot(Status, false, FMargin(0.0f, 4.0f, 0.0f, 0.0f));
+		return true;
+	}
+
 	/** 构造保留大块目录空间的纵向存档页；命名输入和操作位于列表下方，不随目录是否为空改变页面结构。 */
 	bool BuildSaveListWidget(UWidgetBlueprint* WidgetBlueprint)
 	{
@@ -988,12 +1062,12 @@ namespace CatFrontendWidgetAuthoring
 		return UPackage::SavePackage(WidgetBlueprint->GetOutermost(), WidgetBlueprint, *Filename, SaveArgs);
 	}
 
-	/** 创建一个尚不存在的 WBP；已存在资产直接返回成功，确保重复执行不会破坏美术、蓝图事件或人工布局。 */
-	bool CreateMissingWidget(const TCHAR* AssetName, TSubclassOf<UUserWidget> ParentClass, TSubclassOf<UWidget> RootWidgetClass,
-		TFunctionRef<bool(UWidgetBlueprint*)> BuildWidget)
+	/** 在指定内容目录创建一个尚不存在的 WBP；已存在资产直接返回成功，确保重复执行不会破坏美术、蓝图事件或人工布局。 */
+	bool CreateMissingWidgetInDirectory(const FString& Directory, const TCHAR* AssetName, TSubclassOf<UUserWidget> ParentClass,
+		TSubclassOf<UWidget> RootWidgetClass, const TCHAR* AuthoringTag, TFunctionRef<bool(UWidgetBlueprint*)> BuildWidget)
 	{
-		// WBP 创建流程：先检查同名正式资产，缺失时按页面或行的根类型创建 Blueprint、拼装首份结构、编译保存；任一步失败都记录路径并返回 false。
-		const FString PackageName = FString::Printf(TEXT("%s/%s"), *WidgetDirectory, AssetName);
+		// WBP 创建流程：先检查指定目录下的同名正式资产，缺失时按页面、行或菜单根类型创建 Blueprint、拼装首份结构、编译保存；任一步失败都记录路径并返回 false。
+		const FString PackageName = FString::Printf(TEXT("%s/%s"), *Directory, AssetName);
 		const FString ObjectPath = FString::Printf(TEXT("%s.%s"), *PackageName, AssetName);
 		if (LoadObject<UWidgetBlueprint>(nullptr, *ObjectPath))
 		{
@@ -1001,14 +1075,23 @@ namespace CatFrontendWidgetAuthoring
 		}
 		UPackage* Package = CreatePackage(*PackageName);
 		UWidgetBlueprint* WidgetBlueprint = FWidgetBlueprintOperationUtils::CreateWidgetBlueprint(Package, FName(AssetName), BPTYPE_Normal,
-			ParentClass, RootWidgetClass, TEXT("CatFrontendWidgetAuthoring"), false);
+			ParentClass, RootWidgetClass, FName(AuthoringTag), false);
 		if (!WidgetBlueprint || !BuildWidget(WidgetBlueprint) || !CompileRegisterAndSaveWidget(WidgetBlueprint, true))
 		{
-			UE_LOG(LogTemp, Error, TEXT("Event=frontend_widget_authoring_failed Asset=%s"), *PackageName);
+			UE_LOG(LogTemp, Error, TEXT("Event=ui_widget_authoring_failed Tag=%s Asset=%s"), AuthoringTag, *PackageName);
 			return false;
 		}
-		UE_LOG(LogTemp, Display, TEXT("Event=frontend_widget_authoring_created Asset=%s"), *PackageName);
+		UE_LOG(LogTemp, Display, TEXT("Event=ui_widget_authoring_created Tag=%s Asset=%s"), AuthoringTag, *PackageName);
 		return true;
+	}
+
+	/** 创建一个 Frontend 目录下尚不存在的 WBP；它把旧入口保持为前端资产的薄包装，避免改动既有调用点。 */
+	bool CreateMissingWidget(const TCHAR* AssetName, TSubclassOf<UUserWidget> ParentClass, TSubclassOf<UWidget> RootWidgetClass,
+		TFunctionRef<bool(UWidgetBlueprint*)> BuildWidget)
+	{
+		// 前端 WBP 创建流程：固定使用 Frontend 资产目录和作者标签，确保九个旧资产的包路径不因局内菜单作者入口而变化。
+		return CreateMissingWidgetInDirectory(WidgetDirectory, AssetName, ParentClass, RootWidgetClass,
+			TEXT("CatFrontendWidgetAuthoring"), BuildWidget);
 	}
 
 	/** 修复一个既有正式前端 WBP 的字体引用；加载成功后统一编译保存，Root 这类无直接文本的资产也会保留最新编译状态。 */
@@ -1153,11 +1236,12 @@ namespace CatFrontendWidgetAuthoring
 		return ExistingCount == 0 || bOutComplete;
 	}
 
-	/** 核验一个已创建 WBP 的核心控件合同；只读检查 Designer 树，绝不对已有资产补控件或重排布局。 */
-	bool ValidateWidgetContract(const TCHAR* AssetName, TConstArrayView<FRequiredWidgetControl> RequiredControls)
+	/** 核验指定目录下已创建 WBP 的核心控件合同；只读检查 Designer 树，绝不对已有资产补控件或重排布局。 */
+	bool ValidateWidgetContractInDirectory(const FString& Directory, const TCHAR* AssetName,
+		TConstArrayView<FRequiredWidgetControl> RequiredControls)
 	{
-		// WBP 合同核验流程：加载正式资产与其 WidgetTree，逐项按名称查找并核对类型；任一项缺失都会给出资产、控件和期望类型。
-		const FString ObjectPath = FString::Printf(TEXT("%s/%s.%s"), *WidgetDirectory, AssetName, AssetName);
+		// WBP 合同核验流程：加载指定目录内的正式资产与其 WidgetTree，逐项按名称查找并核对类型；任一项缺失都会给出资产、控件和期望类型。
+		const FString ObjectPath = FString::Printf(TEXT("%s/%s.%s"), *Directory, AssetName, AssetName);
 		UWidgetBlueprint* WidgetBlueprint = LoadObject<UWidgetBlueprint>(nullptr, *ObjectPath);
 		if (!WidgetBlueprint || !WidgetBlueprint->WidgetTree)
 		{
@@ -1178,11 +1262,18 @@ namespace CatFrontendWidgetAuthoring
 		return true;
 	}
 
-	/** 核验 WBP 的原生父类合同；动态列表行必须继承对应行 View，不能因同名控件齐全而丢失稳定标识与点击回调。 */
-	bool ValidateWidgetParent(const TCHAR* AssetName, UClass* RequiredParentClass)
+	/** 核验一个已创建前端 WBP 的核心控件合同；固定读取 Frontend 目录，保持既有九资产合同入口不变。 */
+	bool ValidateWidgetContract(const TCHAR* AssetName, TConstArrayView<FRequiredWidgetControl> RequiredControls)
 	{
-		// 父类核验流程：加载正式 WBP 的生成类，确认其仍继承指定原生 View；已有资产不被重建，但错误继承会阻止作者脚本报成功。
-		const FString ObjectPath = FString::Printf(TEXT("%s/%s.%s"), *WidgetDirectory, AssetName, AssetName);
+		// 前端 WBP 合同核验流程：把旧调用继续限定在 Frontend 目录，不因局内菜单新增而改变已有资产查找路径。
+		return ValidateWidgetContractInDirectory(WidgetDirectory, AssetName, RequiredControls);
+	}
+
+	/** 核验指定目录下 WBP 的 C++ 父类合同；动态列表行或局内菜单必须继承对应 View，不能因同名控件齐全而丢失稳定回调。 */
+	bool ValidateWidgetParentInDirectory(const FString& Directory, const TCHAR* AssetName, UClass* RequiredParentClass)
+	{
+		// 父类核验流程：加载正式 WBP 的生成类，确认其仍继承指定 C++ View 基类；已有资产不被重建，但错误继承会阻止作者脚本报成功。
+		const FString ObjectPath = FString::Printf(TEXT("%s/%s.%s"), *Directory, AssetName, AssetName);
 		UWidgetBlueprint* WidgetBlueprint = LoadObject<UWidgetBlueprint>(nullptr, *ObjectPath);
 		if (!WidgetBlueprint || !WidgetBlueprint->GeneratedClass || !RequiredParentClass
 			|| !WidgetBlueprint->GeneratedClass->IsChildOf(RequiredParentClass))
@@ -1192,6 +1283,29 @@ namespace CatFrontendWidgetAuthoring
 			return false;
 		}
 		return true;
+	}
+
+	/** 核验一个 Frontend 目录下 WBP 的原生父类合同；动态列表行继续走旧目录和旧事件口径。 */
+	bool ValidateWidgetParent(const TCHAR* AssetName, UClass* RequiredParentClass)
+	{
+		// 前端父类合同核验流程：固定使用 Frontend 目录，确保列表行和 Root 的原生类型检查不被局内菜单路径影响。
+		return ValidateWidgetParentInDirectory(WidgetDirectory, AssetName, RequiredParentClass);
+	}
+
+	/** 核验正式局内菜单 WBP 的父类与命名控件；它证明 C++ View 只绑定项目资产，不创建 C++ 菜单替身。 */
+	bool ValidateLakeMainMenuWidgetContract()
+	{
+		// 局内菜单合同核验流程：先检查 WBP 继承 UCatLakeMainMenuWidget，再核对三个按钮和状态文本的 Designer 变量；任一项缺失都会让资产脚本失败。
+		const FRequiredWidgetControl LakeMenuControls[] = {
+			{ TEXT("SettingsButton"), UButton::StaticClass() },
+			{ TEXT("SaveButton"), UButton::StaticClass() },
+			{ TEXT("ExitGameButton"), UButton::StaticClass() },
+			{ TEXT("StatusTextBlock"), UTextBlock::StaticClass() }
+		};
+		return ValidateWidgetParentInDirectory(LakeMenuWidgetDirectory, TEXT("WBP_CatLakeMainMenu"),
+				UCatLakeMainMenuWidget::StaticClass())
+			&& ValidateWidgetContractInDirectory(LakeMenuWidgetDirectory, TEXT("WBP_CatLakeMainMenu"),
+				LakeMenuControls);
 	}
 
 	/** 核验九个正式 WBP 的 Root 与子树接线点；它证明对象树可供 Root 原生解析，但不替代 Editor 中的运行期交互验收。 */
@@ -1319,6 +1433,16 @@ bool UCatFrontendWidgetAuthoringLibrary::CreateMissingFrontendWidgetBlueprints()
 		&& CreateMissingWidget(TEXT("WBP_CatRoomPlayerSlot"), UCatFrontendRoomPlayerSlotWidget::StaticClass(), USizeBox::StaticClass(), BuildRoomPlayerSlotWidget)
 		&& CreateMissingWidget(TEXT("WBP_CatFrontendRoot"), UCatFrontendRootWidget::StaticClass(), UCanvasPanel::StaticClass(), BuildRootWidget);
 	return bCreated && RepairFrontendWidgetFonts() && ValidateFrontendWidgetContracts();
+}
+
+bool UCatFrontendWidgetAuthoringLibrary::CreateMissingLakeMainMenuWidgetBlueprint()
+{
+	// 局内菜单 WBP 创建流程：固定在 /Game/UI/Save 下生成正式菜单资产；已有同名资产只做合同核验，避免覆盖后续手工布局。
+	using namespace CatFrontendWidgetAuthoring;
+	const bool bCreated = CreateMissingWidgetInDirectory(LakeMenuWidgetDirectory, TEXT("WBP_CatLakeMainMenu"),
+		UCatLakeMainMenuWidget::StaticClass(), UCanvasPanel::StaticClass(), TEXT("CatLakeMainMenuWidgetAuthoring"),
+		BuildLakeMainMenuWidget);
+	return bCreated && ValidateLakeMainMenuWidgetContract();
 }
 
 bool UCatFrontendWidgetAuthoringLibrary::RepairFrontendWidgetBlueprintFonts()

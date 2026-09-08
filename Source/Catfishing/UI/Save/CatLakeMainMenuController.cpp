@@ -16,7 +16,7 @@
 // 1. 先解除可能残留的旧 Controller、输入绑定和系统订阅，确保复用对象不会向旧 World 回写 UI。
 // 2. 只接受本地 Controller 和有效菜单 View；服务缺失不阻止菜单创建，只会让对应按钮禁用或显示明确反馈。
 // 3. 订阅 Widget 意图、Save 变化和 Online 快照，再安装 Enhanced Input Action。
-// 4. 最后渲染一份初始状态，让原生 fallback 和正式 WBP 都拿到按钮可用性。
+// 4. 最后渲染一份初始状态，让正式 WBP 拿到按钮可用性。
 bool UCatLakeMainMenuController::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController,
 	UCatLakeMainMenuWidget* InView)
 {

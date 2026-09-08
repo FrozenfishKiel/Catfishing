@@ -22,6 +22,13 @@ public:
 	static bool CreateMissingFrontendWidgetBlueprints();
 
 	/**
+	 * 创建缺失的局内 ESC 菜单 WBP，并核验它继承局内菜单 View 基类且提供设置、保存、退出与状态文本控件。
+	 * 该入口沿用项目正式 WBP 作者链路；已有同名资产只做只读合同核验，不覆盖 UI 策划或美术后续调整。
+	 */
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Lake")
+	static bool CreateMissingLakeMainMenuWidgetBlueprint();
+
+	/**
 	 * 修复已存在正式 Frontend WBP 的中文字体引用；它只替换文本类控件的字体对象，不改控件树、绑定名、布局和蓝图逻辑。
 	 * 该入口由资产构造脚本在缺失资产创建后调用；成功时所有前端中文文案都引用项目中文 Font 资产，避免预览和打包运行时显示缺字占位。
 	 */
