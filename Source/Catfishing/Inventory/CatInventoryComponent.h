@@ -302,7 +302,7 @@ public:
 	/** Use 预检交给实例语义决定；默认使用拥有者 Pawn，库存核心不认识 GAS、装备、草药或窝料目标。 */
 	bool CanUseItemAtSlot(int32 SlotIndex, APawn* UserPawn = nullptr) const;
 
-	/** 从指定槽位发起库存 Use；客户端请求会转到服务器，服务器只接受具名实例完成真实效果裁决后的可选扣量。 */
+	/** 从指定槽位发起旧版库存 Use；蓝图和旧 UI 仍可调用它，客户端只提交 RPC，服务器会收口到结构化 Use 命令，返回值按旧 bool 口径表达请求是否被接受或结果是否可视为成功。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
 	bool TryUseItemAtSlot(int32 SlotIndex, APawn* UserPawn = nullptr);
 
@@ -424,7 +424,7 @@ protected:
 	UFUNCTION()
 	void OnRep_InventoryRevision();
 
-	/** 客户端请求服务器使用槽位；服务器实现会重新走 TryUseItemAtSlot 的 authority 校验。 */
+	/** 客户端请求服务器使用槽位；RPC 不信任客户端预检，服务器复用旧兼容外壳组装正式 Use 上下文，最终状态依靠结构化命令日志和库存复制回到客户端。 */
 	UFUNCTION(Server, Reliable)
 	void ServerTryUseItemAtSlot(int32 SlotIndex, APawn* UserPawn);
 

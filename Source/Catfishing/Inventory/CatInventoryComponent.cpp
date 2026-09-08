@@ -1743,7 +1743,11 @@ bool UCatInventoryComponent::CanUseItemAtSlot(const int32 SlotIndex, APawn* User
 	return Entry.Instance->CanUseFromInventory(Entry, UserPawn);
 }
 
-// 使用提交流程：客户端只发请求，服务器让具名实例先完成真实 Use 裁决，随后由库存组件按实例返回值决定是否扣数量。
+// 旧 Use 外壳提交流程：
+// 1. 客户端仍只把槽位和使用 Pawn 发给服务器，当前调用先返回 true 表示请求已发出，真实结果等服务器库存复制和日志体现。
+// 2. 服务器或本地 authority 路径先补齐默认 Pawn，再把旧参数组装成结构化 Use 上下文，并以当前 InventoryRevision 作为即时请求的版本前提。
+// 3. 真正的槽位复核、实例语义、幂等日志和错误码都交给 UseItemAtSlotFromAuthority，避免旧外壳再维护第二套库存 Use 路径。
+// 4. 旧 bool 契约只消费结构化命令结果；AlreadyResolved 这类无重复副作用的成功态仍视为成功，避免迁移期蓝图把等价选择或重复完成当成失败提示。
 bool UCatInventoryComponent::TryUseItemAtSlot(const int32 SlotIndex, APawn* UserPawn)
 {
 	if (GetOwner() == nullptr)
@@ -1762,29 +1766,21 @@ bool UCatInventoryComponent::TryUseItemAtSlot(const int32 SlotIndex, APawn* User
 		return true;
 	}
 
-	if (!IsValidInventorySlotIndex(SlotIndex) || UserPawn == nullptr)
+	if (UserPawn == nullptr)
 	{
 		return false;
 	}
 
-	FCatInventoryEntry& Entry = InventoryList.Entries[SlotIndex];
-	if (Entry.Instance == nullptr || Entry.StackCount <= 0 || Entry.Instance->GetItemDefinition() == nullptr)
-	{
-		return false;
-	}
-
-	int32 ConsumeCount = 0;
-	if (!Entry.Instance->TryUseFromInventory(Entry, UserPawn, ConsumeCount))
-	{
-		return false;
-	}
-
-	if (ConsumeCount > 0 && !ConsumeItemAtSlot(SlotIndex, ConsumeCount))
-	{
-		return false;
-	}
-
-	return true;
+	FCatInventoryItemUseContext UseContext;
+	UseContext.RequestId = FGuid::NewGuid();
+	UseContext.RequestingController = UserPawn->GetController();
+	UseContext.UserPawn = UserPawn;
+	UseContext.SourceInventory = this;
+	UseContext.ExpectedInventoryRevision = InventoryRevision;
+	UseContext.InventorySlotIndex = SlotIndex;
+	const FCatDomainCommandResult Result = UseItemAtSlotFromAuthority(UseContext);
+	return CatIsAcceptedDomainCommandResult(Result)
+		|| Result.Error == ECatDomainCommandError::AlreadyResolved;
 }
 
 // 结构化使用提交流程：
@@ -1861,7 +1857,7 @@ FCatDomainCommandResult UCatInventoryComponent::UseItemAtSlotFromAuthority(
 	return Result;
 }
 
-// 使用 RPC 流程：服务器收到客户端请求后重新走完整 authority 校验，不信任客户端预检结果。
+// 使用 RPC 流程：服务器收到客户端请求后复用旧 Use 外壳，让它统一补齐 Pawn 并转入结构化命令；客户端预检只作交互提示，不作为服务器裁决依据。
 void UCatInventoryComponent::ServerTryUseItemAtSlot_Implementation(const int32 SlotIndex, APawn* UserPawn)
 {
 	TryUseItemAtSlot(SlotIndex, UserPawn);
