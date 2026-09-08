@@ -30,7 +30,7 @@
 
 namespace
 {
-	// 物品 Use/UnUse 到钓鱼命令错误的映射：这里按放杆/收杆语义解释库存错误，避免复用会话错误码导致日志误导。
+	// 物品 Use/UnUse 到钓鱼命令错误的映射：放杆外层已单独校验装备选择版本；这里遇到 RevisionConflict 只说明库存借出或归还看到的事实过期。
 	ECatFishingCommandError MapRodInventoryUseError(const ECatDomainCommandError Error)
 	{
 		switch (Error)
@@ -40,7 +40,7 @@ namespace
 		case ECatDomainCommandError::InvalidIdentity: return ECatFishingCommandError::InvalidIdentity;
 		case ECatDomainCommandError::InvalidPhase: return ECatFishingCommandError::ActiveSessionExists;
 		case ECatDomainCommandError::NotFound: return ECatFishingCommandError::NoRod;
-		case ECatDomainCommandError::RevisionConflict: return ECatFishingCommandError::EquipmentRevisionConflict;
+		case ECatDomainCommandError::RevisionConflict: return ECatFishingCommandError::RevisionConflict;
 		case ECatDomainCommandError::AlreadyResolved: return ECatFishingCommandError::AlreadyResolved;
 		case ECatDomainCommandError::CommandsClosed: return ECatFishingCommandError::CommandsClosed;
 		case ECatDomainCommandError::CapacityExceeded: return ECatFishingCommandError::GuardCapacityExceeded;
