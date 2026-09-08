@@ -93,7 +93,7 @@ bool UCatEquipmentInventoryItemInstance::BuildLegacyRunInventorySlot(
 	return true;
 }
 
-// 装备 Use 预检流程：只在装备物品实例这一层识别 Rod/Bait/Float/ScoopNet，并确认条目、数量、定义和使用目标足够进入正式提交。
+// 装备 Use 预检流程：这里只读条目、定义和使用目标，确认 Rod/Bait/Float/ScoopNet 是否足够进入后续正式提交，不在预检阶段提交选择。
 bool UCatEquipmentInventoryItemInstance::CanUseFromInventory(
 	const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const
 {
@@ -114,28 +114,7 @@ bool UCatEquipmentInventoryItemInstance::CanUseFromInventory(
 		&& Character->GetEquipmentComponent() != nullptr;
 }
 
-// 旧 bool 使用流程：
-// 1. 先把旧接口的 Pawn 和当前库存 owner 重组为结构化 Use 上下文。
-// 2. 再走同一个装备库存 Use 提交流程，让右键 UI、蓝图旧入口和直接组件调用不会分叉出第二套钓具规则。
-// 3. 钓具选择不会立即扣库存数量，因此成功或同选择 AlreadyResolved 都返回零扣量。
-bool UCatEquipmentInventoryItemInstance::TryUseFromInventory(FCatInventoryEntry& InventoryEntry, APawn* UserPawn,
-	int32& OutConsumeCount)
-{
-	OutConsumeCount = 0;
-	UCatInventoryComponent* SourceInventory = InventoryEntry.SlotOwnerComponent;
-	FCatInventoryItemUseContext UseContext;
-	UseContext.RequestId = FGuid::NewGuid();
-	UseContext.RequestingController = UserPawn ? UserPawn->GetController() : nullptr;
-	UseContext.UserPawn = UserPawn;
-	UseContext.SourceInventory = SourceInventory;
-	UseContext.ExpectedInventoryRevision = SourceInventory ? SourceInventory->GetInventoryRevision() : 0;
-	UseContext.InventorySlotIndex = SourceInventory ? SourceInventory->FindInventorySlotIndexFromInstance(this) : INDEX_NONE;
-	const FCatDomainCommandResult Result = UseFromInventorySlotFromAuthority(InventoryEntry, UseContext);
-	return Result.Error == ECatDomainCommandError::None
-		|| Result.Error == ECatDomainCommandError::AlreadyResolved;
-}
-
-// 装备库存 Use 提交流程：
+// 装备库存 Use 正式提交流程：
 // 1. 先复核库存 entry、使用 Pawn 和 Equipment 组件，避免装备实例被其他宿主或空格冒用。
 // 2. 再按服务器当前 Equipment 快照补齐未点击的 Rod/Bait/Float/ScoopNet 选择；客户端不提交完整 loadout。
 // 3. 旧 SelectFishingItem 兼容路径需要严格 EquipmentRevision 时在这里拒绝并发冲突；新通用 Use 直接以服务器快照为基线。

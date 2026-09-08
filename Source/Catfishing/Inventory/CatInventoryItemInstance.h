@@ -76,13 +76,10 @@ public:
 	/** 读取当前运行宿主；没有显式宿主时回退到 Outer Actor，方便刚创建的实例立即可用。 */
 	AActor* GetRuntimeOwnerActor() const;
 
-	/** Use 能力由具体实例子类声明；通用实例默认拒绝，避免任意物品被库存层扣掉。 */
+	/** Use 预检只读地声明实例是否可进入正式提交；通用实例默认拒绝，避免库存层绕过物品语义直接结算。 */
 	virtual bool CanUseFromInventory(const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const;
 
-	/** 执行这份物品的库存使用裁决；成功必须代表实例已经完成真实效果裁决，OutConsumeCount 可以为 0 表示不扣库存数量。 */
-	virtual bool TryUseFromInventory(FCatInventoryEntry& InventoryEntry, APawn* UserPawn, int32& OutConsumeCount);
-
-	/** 执行结构化库存 Use；服务器命令入口用它拿到 RequestId、Revision 和错误码，避免把装备、草药或窝料规则写回协调器。 */
+	/** 正式库存 Use 的唯一实例扩展面；服务器命令入口用它传递 RequestId、Revision 和错误码，具体物品效果只通过结构化回包提交。 */
 	virtual FCatDomainCommandResult UseFromInventorySlotFromAuthority(
 		const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext);
 
