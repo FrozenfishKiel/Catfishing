@@ -178,16 +178,19 @@ namespace CatFrontendWidgetAuthoring
 		return true;
 	}
 
-	/** 将新建控件注册为 Blueprint 变量，使 Root 的 BindWidgetOptional 合同能在编译阶段解析。 */
+	/** 将新建控件注册为 Blueprint 变量，使 Root 的 BindWidgetOptional 合同能在编译阶段解析；重复生成时同名映射保持幂等。 */
 	void ExposeWidget(UWidgetBlueprint* WidgetBlueprint, UWidget* Widget)
 	{
-		// 控件变量注册流程：先标记 Designer 变量，再记录稳定名称，最后由外层统一结构化编译生成运行时绑定。
+		// 控件变量注册流程：先标记 Designer 变量，再只为尚未登记的名称分配 GUID，最后由外层统一结构化编译生成运行时绑定。
 		if (!WidgetBlueprint || !Widget)
 		{
 			return;
 		}
 		FWidgetBlueprintOperationUtils::ToggleWidgetAsVariable(WidgetBlueprint, Widget, true, false);
-		WidgetBlueprint->OnVariableAdded(Widget->GetFName());
+		if (!WidgetBlueprint->WidgetVariableNameToGuidMap.Contains(Widget->GetFName()))
+		{
+			WidgetBlueprint->OnVariableAdded(Widget->GetFName());
+		}
 	}
 
 	/** 把控件铺满 Canvas；全屏背景、遮罩和页面缩放层都用同一锚点，避免固定分辨率在窄视口发生重叠。 */
@@ -648,10 +651,10 @@ namespace CatFrontendWidgetAuthoring
 		return true;
 	}
 
-	/** 构造局内 ESC 菜单的正式 WBP；它提供暂停命令页、设置页容器和同名设置控件，业务仍交给 Controller 与 SettingsModel。 */
+	/** 构造局内 ESC 菜单的正式 WBP；它提供暂停命令页、设置页、回主菜单等待页和同名设置控件，业务仍交给 Controller 与 SettingsModel。 */
 	bool BuildLakeMainMenuWidget(UWidgetBlueprint* WidgetBlueprint)
 	{
-		// 局内菜单布局流程：先铺全屏半透明遮罩，再用 Switcher 承载命令页和设置页；命令页居中纵排，设置页复用主界面同名控件合同。
+		// 局内菜单布局流程：先铺全屏半透明遮罩，再用 Switcher 承载命令页、设置页和回主菜单等待页；命令页居中纵排，设置页复用主界面同名控件合同。
 		if (!WidgetBlueprint || !WidgetBlueprint->WidgetTree)
 		{
 			return false;
@@ -666,7 +669,8 @@ namespace CatFrontendWidgetAuthoring
 		UWidgetSwitcher* PageSwitcher = Tree->ConstructWidget<UWidgetSwitcher>(UWidgetSwitcher::StaticClass(), TEXT("LakeMainMenuPageSwitcher"));
 		UOverlay* CommandPage = Tree->ConstructWidget<UOverlay>(UOverlay::StaticClass(), TEXT("LakeCommandPanel"));
 		UOverlay* SettingsPage = Tree->ConstructWidget<UOverlay>(UOverlay::StaticClass(), TEXT("LakeSettingsPanel"));
-		if (!Scrim || !PageSwitcher || !CommandPage || !SettingsPage)
+		UOverlay* ExitLoadingPage = Tree->ConstructWidget<UOverlay>(UOverlay::StaticClass(), TEXT("LakeExitLoadingPanel"));
+		if (!Scrim || !PageSwitcher || !CommandPage || !SettingsPage || !ExitLoadingPage)
 		{
 			return false;
 		}
@@ -676,9 +680,11 @@ namespace CatFrontendWidgetAuthoring
 		AddFullCanvasChild(Canvas, PageSwitcher, 1);
 		PageSwitcher->AddChild(CommandPage);
 		PageSwitcher->AddChild(SettingsPage);
+		PageSwitcher->AddChild(ExitLoadingPage);
 		ExposeWidget(WidgetBlueprint, PageSwitcher);
 		ExposeWidget(WidgetBlueprint, CommandPage);
 		ExposeWidget(WidgetBlueprint, SettingsPage);
+		ExposeWidget(WidgetBlueprint, ExitLoadingPage);
 
 		USizeBox* MenuBounds = Tree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("LakeMainMenuBounds"));
 		UBorder* MenuSurface = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("LakeMainMenuSurface"));
@@ -711,13 +717,14 @@ namespace CatFrontendWidgetAuthoring
 		UButton* Close = AddButton(Tree, MenuColumn, TEXT("CloseButton"), TEXT("返回游戏"));
 		UButton* Settings = AddButton(Tree, MenuColumn, TEXT("SettingsButton"), TEXT("设置"));
 		UButton* Save = AddButton(Tree, MenuColumn, TEXT("SaveButton"), TEXT("保存"));
+		UButton* ReturnToMainMenu = AddButton(Tree, MenuColumn, TEXT("ReturnToMainMenuButton"), TEXT("退出到主菜单"));
 		UButton* ExitGame = AddButton(Tree, MenuColumn, TEXT("ExitGameButton"), TEXT("退出游戏"));
 		UTextBlock* Status = AddText(Tree, MenuColumn, TEXT("StatusTextBlock"), TEXT(""), 14);
-		if (!Close || !Settings || !Save || !ExitGame || !Status)
+		if (!Close || !Settings || !Save || !ReturnToMainMenu || !ExitGame || !Status)
 		{
 			return false;
 		}
-		for (UButton* Button : { Close, Settings, Save, ExitGame })
+		for (UButton* Button : { Close, Settings, Save, ReturnToMainMenu, ExitGame })
 		{
 			if (UVerticalBoxSlot* ButtonSlot = Cast<UVerticalBoxSlot>(Button->Slot))
 			{
@@ -728,6 +735,43 @@ namespace CatFrontendWidgetAuthoring
 		Status->SetJustification(ETextJustify::Center);
 		Status->SetColorAndOpacity(FLinearColor(0.68f, 0.76f, 0.72f));
 		SetBoxSlot(Status, false, FMargin(0.0f, 4.0f, 0.0f, 0.0f));
+
+		USizeBox* ExitLoadingBounds = Tree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("LakeExitLoadingBounds"));
+		UBorder* ExitLoadingSurface = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("LakeExitLoadingSurface"));
+		UVerticalBox* ExitLoadingColumn = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("LakeExitLoadingColumn"));
+		if (!ExitLoadingBounds || !ExitLoadingSurface || !ExitLoadingColumn)
+		{
+			return false;
+		}
+		ExitLoadingBounds->SetWidthOverride(420.0f);
+		ExitLoadingBounds->SetMinDesiredWidth(340.0f);
+		ExitLoadingSurface->SetBrush(FSlateColorBrush(FLinearColor(0.035f, 0.045f, 0.042f, 0.96f)));
+		ExitLoadingSurface->SetPadding(FMargin(28.0f, 24.0f));
+		ExitLoadingSurface->SetContent(ExitLoadingColumn);
+		ExitLoadingBounds->SetContent(ExitLoadingSurface);
+		if (UOverlaySlot* ExitLoadingSlot = ExitLoadingPage->AddChildToOverlay(ExitLoadingBounds))
+		{
+			ExitLoadingSlot->SetHorizontalAlignment(HAlign_Center);
+			ExitLoadingSlot->SetVerticalAlignment(VAlign_Center);
+		}
+		UTextBlock* ExitLoadingTitle = AddText(Tree, ExitLoadingColumn, TEXT("ExitLoadingTitleText"), TEXT("正在返回主菜单"), 28);
+		UTextBlock* ExitLoadingStatus = AddText(Tree, ExitLoadingColumn, TEXT("ExitLoadingStatusTextBlock"), TEXT("正在准备返回主菜单。"), 16);
+		UProgressBar* ExitLoadingProgress = Tree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass(), TEXT("ExitLoadingProgressBar"));
+		if (!ExitLoadingTitle || !ExitLoadingStatus || !ExitLoadingProgress)
+		{
+			return false;
+		}
+		ExitLoadingTitle->SetJustification(ETextJustify::Center);
+		ExitLoadingStatus->SetJustification(ETextJustify::Center);
+		ExitLoadingStatus->SetColorAndOpacity(FLinearColor(0.68f, 0.76f, 0.72f));
+		ExitLoadingProgress->SetIsMarquee(true);
+		ExitLoadingProgress->SetPercent(0.0f);
+		SetBoxSlot(ExitLoadingTitle, false, FMargin(0.0f, 0.0f, 0.0f, 18.0f));
+		SetBoxSlot(ExitLoadingStatus, false, FMargin(0.0f, 0.0f, 0.0f, 18.0f));
+		ExitLoadingColumn->AddChild(ExitLoadingProgress);
+		SetBoxSlot(ExitLoadingProgress, false);
+		ExposeWidget(WidgetBlueprint, ExitLoadingProgress);
+		ExitLoadingPage->SetVisibility(ESlateVisibility::Collapsed);
 
 		UScaleBox* SettingsScale = Tree->ConstructWidget<UScaleBox>(UScaleBox::StaticClass(), TEXT("LakeSettingsScale"));
 		USizeBox* SettingsBounds = Tree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("LakeSettingsBounds"));
@@ -1515,16 +1559,20 @@ namespace CatFrontendWidgetAuthoring
 	/** 核验正式局内菜单 WBP 的父类与命名控件；它证明 C++ View 只绑定项目资产，不创建 C++ 菜单替身。 */
 	bool ValidateLakeMainMenuWidgetContract()
 	{
-		// 局内菜单合同核验流程：先检查 WBP 继承 UCatLakeMainMenuWidget，再核对命令页和设置页同名控件；任一项缺失都会让资产脚本失败。
+		// 局内菜单合同核验流程：先检查 WBP 继承 UCatLakeMainMenuWidget，再核对命令页、设置页和回主菜单等待页同名控件；任一项缺失都会让资产脚本失败。
 		const FRequiredWidgetControl LakeMenuControls[] = {
 			{ TEXT("LakeMainMenuPageSwitcher"), UWidgetSwitcher::StaticClass() },
 			{ TEXT("LakeCommandPanel"), UPanelWidget::StaticClass() },
 			{ TEXT("LakeSettingsPanel"), UPanelWidget::StaticClass() },
+			{ TEXT("LakeExitLoadingPanel"), UPanelWidget::StaticClass() },
 			{ TEXT("CloseButton"), UButton::StaticClass() },
 			{ TEXT("SettingsButton"), UButton::StaticClass() },
 			{ TEXT("SaveButton"), UButton::StaticClass() },
+			{ TEXT("ReturnToMainMenuButton"), UButton::StaticClass() },
 			{ TEXT("ExitGameButton"), UButton::StaticClass() },
 			{ TEXT("StatusTextBlock"), UTextBlock::StaticClass() },
+			{ TEXT("ExitLoadingStatusTextBlock"), UTextBlock::StaticClass() },
+			{ TEXT("ExitLoadingProgressBar"), UProgressBar::StaticClass() },
 			{ TEXT("GameSettingsCategoryButton"), UButton::StaticClass() },
 			{ TEXT("GraphicsSettingsCategoryButton"), UButton::StaticClass() },
 			{ TEXT("AudioSettingsCategoryButton"), UButton::StaticClass() },

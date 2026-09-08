@@ -269,8 +269,6 @@ void ACatfishingGameModeBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	ClearDayDeadline();
 	GetWorldTimerManager().ClearTimer(PersistenceCheckpointTimerHandle);
 	PersistenceCheckpointTimerHandle.Invalidate();
-	GetWorldTimerManager().ClearTimer(HostExitAckTimerHandle);
-	HostExitAckTimerHandle.Invalidate();
 	PendingHostExitAckStableNetIds.Reset();
 	if (UWorld* World = GetWorld())
 	{
@@ -1764,7 +1762,7 @@ void ACatfishingGameModeBase::FailRunStartup(const TCHAR* Reason)
 		*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunPublicState.Revision, Reason);
 }
 
-// Host teardown 流程：先重放已 Ready 的新 Online 关联键，Pending 期则只接受原 RequestId/epoch；首次请求必须同时具备 Imprint/牺牲协调器与正超时。领域协调器按 Social→Items 等顺序关不可逆命令，Imprint 先最终重投 Grant，然后才关 Run/Timer/StateTree、发 HostExit 并等远端 Destroy ACK；只有远端 ACK 与 durable Grant ACK 全齐才 Ready，超时会报告风险而不伪造 ACK。
+// Host teardown 流程：先重放已 Ready 的新 Online 关联键，Pending 期则只接受原 RequestId/epoch；首次请求必须同时具备 Imprint 与牺牲协调器。领域协调器按 Social→Items 等顺序关不可逆命令，Imprint 先最终重投 Grant，然后才关 Run/Timer/StateTree、发 HostExit 并等远端 Destroy ACK；只有远端 ACK 与 durable Grant ACK 全齐才 Ready，不用计时器把等待伪装成完成。
 FCatRunTeardownResult ACatfishingGameModeBase::RequestRunTeardown(const FCatRunTeardownRequest& Request)
 {
 	FCatRunTeardownResult Result;
@@ -1812,14 +1810,6 @@ FCatRunTeardownResult ACatfishingGameModeBase::RequestRunTeardown(const FCatRunT
 		Result.Error = ECatRunCommandError::TeardownFailed;
 		return Result;
 	}
-	const bool bNeedsBoundedAckWait = !RemoteControllers.IsEmpty() || !ImprintService->AreAllGrantAcksComplete();
-	double HostExitAckTimeoutSeconds = 0.0;
-	if (bNeedsBoundedAckWait && !GetDefault<UCatOnlineSettings>()->TryGetHostExitAckTimeout(HostExitAckTimeoutSeconds))
-	{
-		Result.Status = ECatRunTeardownStatus::Failed;
-		Result.Error = ECatRunCommandError::TeardownFailed;
-		return Result;
-	}
 	if (!SacrificeCoordinator->PrepareForRunTeardown())
 	{
 		Result.Status = ECatRunTeardownStatus::Failed;
@@ -1852,16 +1842,12 @@ FCatRunTeardownResult ACatfishingGameModeBase::RequestRunTeardown(const FCatRunT
 	}
 	++RunPublicState.Revision;
 	RefreshEnvironmentAndPublish();
-	if (!bHostExitAckWaitComplete)
-	{
-		GetWorldTimerManager().SetTimer(HostExitAckTimerHandle, this, &ThisClass::HandleHostExitAckTimeout,
-			static_cast<float>(HostExitAckTimeoutSeconds), false);
-	}
 	Result.Status = bHostExitAckWaitComplete ? ECatRunTeardownStatus::Ready : ECatRunTeardownStatus::Pending;
-	UE_LOG(LogCatRun, Log, TEXT("Event=run_teardown_%s RequestId=%s Epoch=%lld Revision=%lld PendingRemoteAcks=%d"),
+	const int32 PendingGrantAcks = ImprintService->GetPendingGrantAckCount();
+	UE_LOG(LogCatRun, Log, TEXT("Event=run_teardown_%s RequestId=%s Epoch=%lld Revision=%lld PendingRemoteAcks=%d PendingGrantAcks=%d"),
 		bHostExitAckWaitComplete ? TEXT("ready") : TEXT("pending"),
 		*Request.RequestId.ToString(EGuidFormats::DigitsWithHyphens), Request.OperationEpoch, RunPublicState.Revision,
-		PendingHostExitAckStableNetIds.Num());
+		PendingHostExitAckStableNetIds.Num(), PendingGrantAcks);
 	return Result;
 }
 
@@ -1894,20 +1880,18 @@ void ACatfishingGameModeBase::NotifyHostExitGrantAckProgress()
 	const UCatRunImprintService* ImprintService = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr;
 	if (ImprintService && ImprintService->AreAllGrantAcksComplete())
 	{
-		CompleteHostExitAckWait(false);
+		CompleteHostExitAckWait();
 	}
 }
 
-// Host exit ACK 完成流程：幂等清统一计时器并发布真正的 teardown complete；超时只释放有界等待，日志仍保留缺失 Destroy/Grant ACK，绝不改写它们为已确认。
-void ACatfishingGameModeBase::CompleteHostExitAckWait(const bool bTimedOut)
+// Host exit ACK 完成流程：只在远端 Destroy ACK 与最终 Grant ACK 全部真实到达后发布 teardown complete；重复调用保持幂等。
+void ACatfishingGameModeBase::CompleteHostExitAckWait()
 {
 	if (bHostExitAckWaitComplete || !ActiveHostExitRequestId.IsValid() || ActiveHostExitOperationEpoch <= 0)
 	{
 		return;
 	}
 	bHostExitAckWaitComplete = true;
-	GetWorldTimerManager().ClearTimer(HostExitAckTimerHandle);
-	HostExitAckTimerHandle.Invalidate();
 	const int32 MissingAckCount = PendingHostExitAckStableNetIds.Num();
 	const UCatRunImprintService* ImprintService = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr;
 	const int32 MissingGrantAckCount = ImprintService ? ImprintService->GetPendingGrantAckCount() : 0;
@@ -1920,15 +1904,9 @@ void ACatfishingGameModeBase::CompleteHostExitAckWait(const bool bTimedOut)
 	Result.OperationEpoch = ActiveHostExitOperationEpoch;
 	Result.Status = ECatRunTeardownStatus::Ready;
 	RunTeardownCompleted.Broadcast(Result);
-	UE_LOG(LogCatRun, Log, TEXT("Event=run_teardown_acks_complete RequestId=%s Epoch=%lld TimedOut=%s MissingRemoteAcks=%d MissingGrantAcks=%d"),
+	UE_LOG(LogCatRun, Log, TEXT("Event=run_teardown_acks_complete RequestId=%s Epoch=%lld MissingRemoteAcks=%d MissingGrantAcks=%d"),
 		*Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens), Result.OperationEpoch,
-		bTimedOut ? TEXT("true") : TEXT("false"), MissingAckCount, MissingGrantAckCount);
-}
-
-// Host exit ACK 超时流程：只完成当前统一有界等待；关联键原样广播，迟到 ACK 仍保留各自真实记录但不能推进下一代退出。
-void ACatfishingGameModeBase::HandleHostExitAckTimeout()
-{
-	CompleteHostExitAckWait(true);
+		MissingAckCount, MissingGrantAckCount);
 }
 
 // Teardown 委托读取流程：返回 GameMode 生命周期内的唯一完成广播；订阅者必须自行比对 RequestId/epoch。
@@ -2398,8 +2376,7 @@ bool ACatfishingGameModeBase::ApplyDebugForceNextDay()
 	}
 	const ECatRunPhase PreviousPhase = RunPublicState.Phase.Phase;
 	if (RunPublicState.EndReason == ECatRunEndReason::HostExit || ActiveHostExitRequestId.IsValid()
-		|| !PendingHostExitAckStableNetIds.IsEmpty() || HostExitAckTimerHandle.IsValid()
-		|| RunPublicState.bTeardownComplete)
+		|| !PendingHostExitAckStableNetIds.IsEmpty() || RunPublicState.bTeardownComplete)
 	{
 		UE_LOG(LogCatRun, Warning,
 			TEXT("Event=run_environment_social_debug_force_next_day_rejected Reason=HostExitTeardownActive RunId=%s Revision=%lld Day=%d Phase=%s EndReason=%s PendingRemoteAcks=%d TeardownComplete=%s"),

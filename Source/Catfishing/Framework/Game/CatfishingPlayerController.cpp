@@ -1127,7 +1127,7 @@ void ACatfishingPlayerController::ServerMarkVoluntaryLeave_Implementation()
 	}
 }
 
-// Host exit 客户端流程：从本地 GameInstance 取得唯一 Online 子系统并提交服务器关联 RequestId；子系统只在本地 DestroySession 成功后回 ACK，失败由 Host 有界超时收口。
+// Host exit 客户端流程：从本地 GameInstance 取得唯一 Online 子系统并提交服务器关联 RequestId；子系统只在本地 DestroySession 成功后回 ACK，失败会让 Host 继续等待真实回执。
 void ACatfishingPlayerController::ClientPrepareForHostExit_Implementation(const FGuid RequestId)
 {
 	UGameInstance* GameInstance = GetGameInstance();
