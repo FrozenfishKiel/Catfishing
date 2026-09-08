@@ -52,7 +52,7 @@ Rod 的 canonical 中心锚与当前左右站位参考组件都位于 `SceneRoot
 
 - `RodTipAnchor`：权威抛竿原点与鱼线起点。
 - `StandAnchor`：左右操作位的 canonical 中心。
-- `RightStandAnchor` / `LeftStandAnchor`：当前两个权威操作位的编辑器参考组件；主位默认右侧。
+- `RightStandAnchor` / `LeftStandAnchor`：兼容站位的编辑器参考组件；四人运行时通过共同运动根与个人偏移保持位置，不按编号传送角色。
 - `GripAnchor`：权威握持/IK 目标。
 
 蓝图只能调用以下 Blueprint Pure 值 getter：
@@ -115,7 +115,7 @@ getter 返回的是原生 private canonical local transform 与 Actor Transform 
 - `RodSkinDefinitionId`
 - `OwnerPlayerState`
 - `OperatorPlayerState`
-- `OperatorPlayerStates`（紧凑有序数组；0=右主位，1=左辅助位；单/多人状态只看当前数组长度）
+- `OperatorPlayerStates`（紧凑有序数组；0=主位，其余为只控制移动的辅助；默认最多4人，单/多人状态只看当前数组长度，身份不能用下标表示）
 - `bDeployed`
 - `bBroken`
 

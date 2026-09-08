@@ -23,7 +23,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Fishing|View", meta = (DefaultToSelf = "Outer"))
 	static UCatFishingViewBridge* CreateFishingViewBridge(UObject* Outer);
 
-	/** 在客户端按 PlayerState 当前占据的主操作鱼竿查找会话；玩家离竿后不显示留在旧竿上的会话。 */
+	/** 在客户端按 PlayerState 当前参与的鱼竿查找会话；主位和辅助共用投影，玩家离竿后不显示旧会话。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Fishing|View", meta = (WorldContext = "WorldContextObject"))
 	static ACatFishingSession* FindFishingSessionForPlayerState(UObject* WorldContextObject, APlayerState* PlayerState);
 

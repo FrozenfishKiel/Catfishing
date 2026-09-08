@@ -68,7 +68,7 @@ private:
 	/** 校验 Recovery 配置并对 Poison 应用非负减量；随后按阈值更新 Downed/RecoveryMode。 */
 	FCatDomainCommandResult ApplyRecovery(FGuid RequestId, ECatRecoveryMode Mode, double PoisonRelief);
 
-	/** 通过项目 ASC 读取 Poison 阈值结果并更新 Downed；首次倒地会终止该 Character 的 FishingSession。 */
+	/** 通过项目 ASC 读取 Poison 阈值并更新 Downed；首次倒地移除该身体的钓鱼占位，由剩余成员接力。 */
 	void EvaluateDownedFromAttributes(ECatRecoveryMode RecoveryMode);
 
 	/** 定位 Owner Character 的项目 ASC 供阈值读取与 GE 提交；Owner 类型不匹配时返回空，避免创建平行身体属性源。 */

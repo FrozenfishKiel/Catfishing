@@ -62,6 +62,8 @@ struct CATFISHING_API FCatFishingRodRotationPrediction
 	FVector TipOffsetInAimSpace = FVector::ZeroVector;
 	double MinimumPitchDegrees = -89.0;
 	double MaximumPitchDegrees = 89.0;
+	/** 接力等待新主位瞄准时保持实际姿态，载体平移仍继续预测。 */
+	bool bHoldActualAim = false;
 	bool bValid = false;
 };
 

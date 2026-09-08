@@ -109,6 +109,19 @@ bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
 	PopulateValidFightBalance(*Balance);
 	TestTrue(TEXT("完整合法数值可进入运行态"), Balance->IsRuntimeDefinitionReady());
 	TestEqual(TEXT("既有资产获得猫力竭外冲默认倍率"), Balance->ExhaustedCatEscapeSpeedMultiplier, 2.0);
+	TestEqual(TEXT("既有资产获得独立的辅助力量折扣，不修改个人体力余额"), Balance->HelperStrengthMultiplier, 0.5);
+	for (const double ValidHelperStrength : {0.0, 0.25, 1.0})
+	{
+		Balance->HelperStrengthMultiplier = ValidHelperStrength;
+		TestTrue(TEXT("辅助力量贡献可在零到完整力量之间调整"), Balance->IsRuntimeDefinitionReady());
+	}
+	for (const double InvalidHelperStrength : {-0.1, 1.01, std::numeric_limits<double>::quiet_NaN(),
+		std::numeric_limits<double>::infinity()})
+	{
+		Balance->HelperStrengthMultiplier = InvalidHelperStrength;
+		TestFalse(TEXT("辅助力量倍率非法时拒绝运行"), Balance->IsRuntimeDefinitionReady());
+	}
+	Balance->HelperStrengthMultiplier = 0.5;
 	Balance->ExhaustedCatEscapeSpeedMultiplier = 3.0;
 	TestTrue(TEXT("猫力竭外冲速度可独立调整"), Balance->IsRuntimeDefinitionReady());
 	for (const double InvalidEscapeSpeed : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),

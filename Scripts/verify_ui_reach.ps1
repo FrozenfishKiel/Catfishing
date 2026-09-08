@@ -13,6 +13,7 @@ $DotNet = Join-Path $EngineRoot "Engine\Binaries\ThirdParty\DotNet\10.0\win-x64\
 $UnrealBuildTool = Join-Path $EngineRoot "Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.dll"
 $EvidenceRoot = Join-Path $ProjectRoot "Saved\Automation\UIReach"
 $RuntimeProbe = Join-Path $ProjectRoot "Scripts\verify_ui_reach_runtime.py"
+$CooperativeHUDMigration = Join-Path $ProjectRoot "Scripts\migrate_cooperative_fishing_hud.py"
 
 function Assert-ToolFile {
     <#
@@ -188,8 +189,8 @@ function Invoke-UIReachStaticCheck {
     Assert-TextPattern "ShopPrecreated=false" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "LocalPlayer explicitly does not precreate shop"
     Assert-TextPattern "FCatContainerSnapshot" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory view comes from container snapshot"
     Assert-TextPattern "Capacity" "Source/Catfishing/Items/CatItemTypes.h" "container snapshot exposes backend capacity"
-    Assert-TextPattern "Catfishing.Editor.UIModules.CreateFormalWBPAssets" "Source/Catfishing/UI/Tests/CatUIModuleWidgetAssetTests.cpp" "split WBP asset generation automation"
-    Assert-TextPattern "CREATE_UI_MODULE_WBPS_PASS" "Source/Catfishing/UI/Tests/CatUIModuleWidgetAssetTests.cpp" "split WBP asset pass marker"
+    Assert-TextPattern "COOPERATIVE_HUD_MIGRATION_PASS" "Scripts/migrate_cooperative_fishing_hud.py" "formal HUD migration entry"
+    Assert-TextPattern "FormalWidgetRendersCooperativeStamina" "Source/Catfishing/UI/Tests/CatHUDCooperativeFishingTests.cpp" "formal HUD runtime consumer test"
     Assert-TextPattern "IA_Interact" "Source/Catfishing/UI/Tests/CatUIModuleWidgetAssetTests.cpp" "interaction input action generated into existing IMC"
 }
 
@@ -217,35 +218,27 @@ function Invoke-UIReachBuild {
 
 function Invoke-UIReachWBPCreate {
     <#
-    创建或刷新拆分后的正式 UI WBP 资产。
-    该模式只运行 UI 模块的 Editor 资产自动化，并要求报告证明 HUD、背包、鱼护库存、格子、商店、交互提示和图鉴七个 WBP 保存成功。
+    在既有正式 HUD 内幂等补齐同竿总体力控件。
+    原来的整套 WBP 生成 Automation 已删除；此入口保留现有正式资产布局，不再调用不存在的生成器。
     #>
     Assert-ToolFile $ProjectFile "Catfishing project"
     Assert-ToolFile $Editor "Unreal Editor commandlet"
+    Assert-ToolFile $CooperativeHUDMigration "cooperative formal HUD migration"
     $RunRoot = Join-Path $EvidenceRoot ("CreateWBP-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
-    $ReportRoot = Join-Path $RunRoot "Report"
     $LogFile = Join-Path $RunRoot "CreateWBP.log"
     New-Item -ItemType Directory -Path $RunRoot -Force | Out-Null
     & $Editor $ProjectFile -unattended -nop4 -nosplash -nullrhi -DDC-ForceMemoryCache `
-        "-ExecCmds=Automation RunTests Catfishing.Editor.UIModules.CreateFormalWBPAssets;Quit" `
-        "-TestExit=Automation Test Queue Empty" `
-        "-ReportExportPath=$ReportRoot" `
+        "-ExecutePythonScript=$CooperativeHUDMigration" `
         "-abslog=$LogFile"
     if ($LASTEXITCODE -ne 0) {
-        throw ("UIReach WBP create automation failed with exit code {0}" -f $LASTEXITCODE)
+        throw ("UIReach HUD migration failed with exit code {0}" -f $LASTEXITCODE)
     }
-    $IndexFile = Join-Path $ReportRoot "index.json"
-    if (-not (Test-Path -LiteralPath $IndexFile) -or -not (Test-Path -LiteralPath $LogFile)) {
-        throw "UIReach WBP create did not produce a fresh report and log"
+    if (-not (Test-Path -LiteralPath $LogFile)) {
+        throw "UIReach HUD migration did not produce a fresh log"
     }
-    Assert-AutomationReport -IndexFile $IndexFile -LogFile $LogFile -ExpectedTests @(
-        "Catfishing.Editor.UIModules.CreateFormalWBPAssets"
-    )
-    # 拆分模块和关键控件名是生成脚本与正式 WBP 之间的最小握手信号。
-    # 这里不检查美术细节，只防止仍生成旧总入口或漏掉背包格子、鱼护箱子页、商店和提示模块。
     $LogText = Get-Content -LiteralPath $LogFile -Raw
-    if ($LogText -notmatch "CREATE_UI_MODULE_WBPS_PASS" -or $LogText -notmatch "InventorySlotRoot=UserWidgetNotButton" -or $LogText -notmatch "SlotContainer=InventorySlotWrapBox" -or $LogText -notmatch "FishGuardInventory=/Game/UI/Inventory/WBP_CatFishGuardInventory" -or $LogText -notmatch "FishGuardPlayerSlotContainer=InventoryObjectSlotWrapBox" -or $LogText -notmatch "FishGuardContainerSlotContainer=ExternalContainerSlotWrapBox" -or $LogText -notmatch "InventoryEquipmentText=EquipmentTextBlock" -or $LogText -notmatch "InventoryItemsText=InventoryItemsTextBlock" -or $LogText -notmatch "ShopOwner=InteractionObject" -or $LogText -notmatch "ShopKiosk=/Game/ShopEconomy/BP_CatShopKiosk" -or $LogText -notmatch "InteractAction=/Game/Input/InputAction/IA_Interact" -or $LogText -notmatch "InteractContext=/Game/Input/InputContext/IMC_InputContext" -or $LogText -notmatch "InteractKey=E" -or $LogText -match "EnsureFailed|LogPython: Error") {
-        throw ("UIReach WBP create log is not green: {0}" -f $LogFile)
+    if ($LogText -notmatch "COOPERATIVE_HUD_MIGRATION_PASS" -or $LogText -notmatch "TotalStaminaText=CatStaminaTextBlock" -or $LogText -notmatch "TotalStaminaBar=CatStaminaProgressBar" -or $LogText -match "EnsureFailed|LogPython: Error") {
+        throw ("UIReach formal HUD migration log is not green: {0}" -f $LogFile)
     }
 }
 

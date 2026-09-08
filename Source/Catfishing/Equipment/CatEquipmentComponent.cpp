@@ -9,6 +9,7 @@
 #include "Logging/CatLogContext.h"
 #include "Net/UnrealNetwork.h"
 #include "Engine/World.h"
+#include "Fishing/CatFishingService.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCatEquipment, Log, All);
 
@@ -64,6 +65,14 @@ void UCatEquipmentComponent::ReleaseFishingUsesForShutdown(const TCHAR* Reason)
 	}
 	if (bEndingPlay) return;
 	bEndingPlay = true;
+	if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
+	{
+		Fishing->PreserveFishingResourcesForEquipmentShutdown(this);
+		// 迁移已移除原记录。未被正式 Session 接收的 Begin 暂存仍沿原回滚路径收口。
+		SessionIds.Reset();
+		for (const auto& Pair : FishingUseRecords)
+			if (!Pair.Value.bReleased) SessionIds.Add(Pair.Key);
+	}
 	if (GetOwner() && GetOwner()->HasAuthority())
 	{
 		for (const FGuid SessionId : SessionIds)
@@ -110,6 +119,67 @@ void UCatEquipmentComponent::ReleaseFishingUsesForShutdown(const TCHAR* Reason)
 			GetOwner() && GetOwner()->HasAuthority() ? TEXT("true") : TEXT("false"),
 			GetOwner() ? static_cast<int32>(GetOwner()->GetLocalRole()) : 0, *GetNameSafe(GetOwner()));
 	}
+}
+
+bool UCatEquipmentComponent::MoveFishingResourcesToCustodian(UCatEquipmentComponent* Target,
+	const TArray<FGuid>& SessionIds, const TArray<FGuid>& RodItemInstanceIds)
+{
+	if (!Target || Target == this || !GetOwner() || !GetOwner()->HasAuthority()
+		|| !Target->GetOwner() || !Target->GetOwner()->HasAuthority() || Target->GetWorld() != GetWorld()
+		|| Target->bEndingPlay) return false;
+	// 所有跨宿主锁在修改前检查。整个转存不广播，调用者重绑所有消费者后再发布。
+	for (const FGuid SessionId : SessionIds)
+	{
+		const FCatFishingUseRecord* Record = FindFishingUseRecord(SessionId);
+		UCatEquipmentComponent* RodEquipment = Record ? Record->RodEquipment.Get(true) : nullptr;
+		const FCatInventoryItemUseRecord* Use = RodEquipment && Record
+			? RodEquipment->FindInventoryItemUseRecord(Record->RodItemInstanceId) : nullptr;
+		if (!Record || Record->bReleased || Target->FishingUseRecords.Contains(SessionId)
+			|| !Use || Use->bReleased || Use->BoundFishingSessionId != SessionId
+			|| Use->FishingUseCoordinator.Get(true) != this
+			|| (RodEquipment == this && !RodItemInstanceIds.Contains(Record->RodItemInstanceId))) return false;
+	}
+	for (const FGuid ItemId : RodItemInstanceIds)
+	{
+		const FCatInventoryItemUseRecord* Use = FindInventoryItemUseRecord(ItemId);
+		if (!Use || Use->bReleased || Use->Item.ItemInstanceId != ItemId || Use->Item.Quantity != 1
+			|| FindInventorySlotByInstanceId(ItemId) || Target->InventoryItemUseRecords.Contains(ItemId)) return false;
+		if (Use->BoundFishingSessionId.IsValid())
+		{
+			UCatEquipmentComponent* Coordinator = Use->FishingUseCoordinator.Get(true);
+			const FCatFishingUseRecord* Record = Coordinator ? Coordinator->FindFishingUseRecord(Use->BoundFishingSessionId) : nullptr;
+			if (!Record || Record->bReleased || Record->RodEquipment.Get(true) != this || Record->RodItemInstanceId != ItemId
+				|| (Coordinator == this && !SessionIds.Contains(Use->BoundFishingSessionId))) return false;
+		}
+	}
+	for (const FGuid SessionId : SessionIds)
+	{
+		FCatFishingUseRecord Record = MoveTemp(FishingUseRecords.FindChecked(SessionId));
+		FishingUseRecords.Remove(SessionId);
+		if (Record.RodEquipment.Get(true) == this) Record.RodEquipment = Target;
+		Target->FishingUseRecords.Add(SessionId, MoveTemp(Record));
+	}
+	for (const FGuid ItemId : RodItemInstanceIds)
+	{
+		FCatInventoryItemUseRecord Use = MoveTemp(InventoryItemUseRecords.FindChecked(ItemId));
+		InventoryItemUseRecords.Remove(ItemId);
+		if (Use.FishingUseCoordinator.Get(true) == this) Use.FishingUseCoordinator = Target;
+		if (Use.BoundFishingSessionId.IsValid())
+		{
+			UCatEquipmentComponent* Coordinator = Use.FishingUseCoordinator.Get(true);
+			Coordinator->FishingUseRecords.FindChecked(Use.BoundFishingSessionId).RodEquipment = Target;
+		}
+		Target->InventoryItemUseRecords.Add(ItemId, MoveTemp(Use));
+	}
+	for (const FGuid SessionId : SessionIds)
+	{
+		const FCatFishingUseRecord& Record = Target->FishingUseRecords.FindChecked(SessionId);
+		UCatEquipmentComponent* RodEquipment = Record.RodEquipment.Get(true);
+		RodEquipment->InventoryItemUseRecords.FindChecked(Record.RodItemInstanceId).FishingUseCoordinator = Target;
+	}
+	++Snapshot.Revision;
+	++Target->Snapshot.Revision;
+	return true;
 }
 
 // Snapshot 读取流程：返回服务器真相或客户端最近复制值；不从 Profile 或 Items 拼接第二份随身库存事实。

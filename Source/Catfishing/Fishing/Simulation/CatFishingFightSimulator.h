@@ -57,6 +57,8 @@ struct CATFISHING_API FCatFightSimulationConfig
 	/** 力量属性到推力/支撑力的显式换算，不能复用旧的加速度系数。 */
 	double ForcePerStrengthNewtons = 1.0;
 	double CatBodyMassKilograms = 5.0;
+	/** Role discount used when freezing member strength, never a stamina discount. */
+	double HelperStrengthMultiplier = 0.5;
 	/** 力竭鱼免耗体回收的有限辅助力，不依赖猫的剩余体力。 */
 	double ExhaustedReelForceNewtons = 200.0;
 	/** 零体力拖落水规则的辅助推力，以猫系统质量乘该加速度加入鱼端。 */
@@ -114,6 +116,18 @@ struct CATFISHING_API FCatFightRodConstraintInput
 	FVector RodTipVelocityCentimetersPerSecond = FVector::ZeroVector;
 	FVector CarrierVelocityCentimetersPerSecond = FVector::ZeroVector;
 	FVector CarrierDesiredVelocityCentimetersPerSecond = FVector::ZeroVector;
+	/** Signed group resistance / total available strength, within [-1, 1]. */
+	double CatSupportAlignment = 1.0;
+	/** One force budget; active members may move through zero toward this group target. */
+	FVector GroupDesiredVelocity = FVector::ZeroVector;
+	FVector GroupLateralAcceleration = FVector::ZeroVector;
+	/** Effective CMC braking friction in 1/s and deceleration in cm/s^2. */
+	double GroupFriction = 0.0;
+	double GroupBrakingDeceleration = 0.0;
+	/** Negative means no independent bound; production supplies collision-probed travel in cm. */
+	double GroupLateralTravelLimitCm = -1.0;
+	double CarrierBackwardTravelLimitCm = -1.0;
+	bool bGroupDriven = false;
 	/** CMC 碰撞探测允许的本步向鱼移动距离（cm）；负值表示该端固定，不预测身体位移。 */
 	double CarrierTravelLimitCentimeters = -1.0;
 	FCatFishingRodRotationPrediction RodRotationPrediction;
@@ -228,12 +242,12 @@ struct CATFISHING_API FCatFightStepResult
 	double IntendedSwimSpeedCentimetersPerSecond = 0.0;
 	double CatStaminaDrain = 0.0;
 	double FishStaminaDrain = 0.0;
-	/** 猫的四类努力独立计价；移动/转杆归主位，收线/保持才由实际合力者分担。 */
+	/** 四类努力独立计价；收线、转杆和保持共担，Runner按逐人真实输入另结移动费。 */
 	double CatMovementStaminaDrain = 0.0;
 	double CatReelStaminaDrain = 0.0;
 	double CatRodStaminaDrain = 0.0;
 	double CatRodWorkStaminaDrain = 0.0;
-	/** 超出共享持竿支撑的主位转杆支撑费用；同一负载不重复收取。 */
+	/** 超出沿线持竿支撑的转杆支撑费用；并入共同负担，同一负载不重复收取。 */
 	double CatRodSupportStaminaDrain = 0.0;
 	double CatHoldStaminaDrain = 0.0;
 	double CatMovementIntentCentimeters = 0.0;
@@ -248,8 +262,7 @@ struct CATFISHING_API FCatFightStepResult
 	double FishActualIntentProgressCentimeters = 0.0;
 	double FishUnfulfilledDistanceCentimeters = 0.0;
 	double FishUncappedStaminaDrain = 0.0;
-	double GetSharedCatStaminaDrain() const { return CatReelStaminaDrain + CatHoldStaminaDrain; }
-	double GetPrimaryCatStaminaDrain() const { return CatMovementStaminaDrain + CatRodStaminaDrain; }
+	double GetSharedCatStaminaDrain() const { return CatReelStaminaDrain + CatRodStaminaDrain + CatHoldStaminaDrain; }
 	double CatIntendedLineDistanceCentimeters = 0.0;
 	double CatActualLineDistanceCentimeters = 0.0;
 	double FishIntendedLineDistanceCentimeters = 0.0;

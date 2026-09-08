@@ -341,7 +341,7 @@ FCatDomainCommandResult UCatConditionComponent::ApplyRecovery(const FGuid Reques
 	return Result;
 }
 
-// 倒地裁决流程：读取 ASC Poison 与显式阈值，更新唯一 Downed/RecoveryMode；首次进入倒地时终止相关 FishingSession，始终没有死亡分支。
+// 倒地裁决流程：读取 ASC Poison 与显式阈值，更新唯一 Downed/RecoveryMode；首次进入倒地时释放个人钓鱼操作位，始终没有死亡分支。
 void UCatConditionComponent::EvaluateDownedFromAttributes(const ECatRecoveryMode RecoveryMode)
 {
 	UCatAbilitySystemComponent* ASC = ResolveAbilitySystem();
@@ -361,7 +361,7 @@ void UCatConditionComponent::EvaluateDownedFromAttributes(const ECatRecoveryMode
 			*GetOwner()->GetName(), Snapshot.Revision, *UEnum::GetValueAsString(Snapshot.RecoveryMode));
 		if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
 		{
-			Fishing->TerminateSessionsForCharacter(Cast<ACatCharacter>(GetOwner()));
+			Fishing->ReleaseFishingOperatorForCharacter(Cast<ACatCharacter>(GetOwner()));
 		}
 	}
 }

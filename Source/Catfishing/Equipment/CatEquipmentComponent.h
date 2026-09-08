@@ -114,6 +114,12 @@ public:
 	FCatEquipmentSnapshotChanged OnSnapshotChanged;
 
 private:
+	friend class UCatFishingService;
+	/** 转移精确的运行记录，调用者负责先准备托管宿主并在发布前重绑 Session/竿索引。 */
+	bool MoveFishingResourcesToCustodian(UCatEquipmentComponent* Target,
+		const TArray<FGuid>& SessionIds, const TArray<FGuid>& RodItemInstanceIds);
+	/** 第一次抛竿/部署时冻结；UnPossessed 会清 Pawn.PlayerState，不能等 EndPlay 再追溯。 */
+	FString FishingResourceOwnerStableId;
 	struct FCatFishingUseRecord
 	{
 		/** Begin 冻结的宿主和物品身份；版本只在首次预检，相同 SessionId 不允许换物品借用旧预留。 */
@@ -160,7 +166,7 @@ private:
 	const FCatInventoryItemUseRecord* FindInventoryItemUseRecord(FGuid ItemInstanceId) const;
 	FCatRunInventorySlot* FindFishingRodInstance(const FCatFishingUseRecord& Record);
 	const FCatRunInventorySlot* FindFishingRodInstance(const FCatFishingUseRecord& Record) const;
-	/** EndPlay 与直接销毁共用的幂等收口；关闭新请求后逐个归还本组件暂存物并清除竿主锁。 */
+	/** EndPlay 与直接销毁共用的幂等收口；先托管已登记场上竿/会话，未发布的预留仍由原账本归还。 */
 	void ReleaseFishingUsesForShutdown(const TCHAR* Reason);
 	/** 是否存在尚未收口的物品 Use 记录；维修和失败预算用它避免改写正在由场景持有的物品状态。 */
 	bool HasActiveInventoryItemUse() const;

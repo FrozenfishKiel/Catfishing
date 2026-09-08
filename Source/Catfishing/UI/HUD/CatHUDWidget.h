@@ -59,6 +59,15 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	float NormalizedFightStamina = 0.0f;
 
+	/** 当前同竿各成员个人体力的合计，只读 Session 摘要；FightStamina 仍保留本人的余额语义。 */
+	UPROPERTY(BlueprintReadOnly)
+	double TotalFightStamina = 0.0;
+	UPROPERTY(BlueprintReadOnly)
+	double TotalFightStaminaMaximum = 0.0;
+	/** 同竿总体力条比例；没有可解析的团队上限时为零，不借用主位的个人上限。 */
+	UPROPERTY(BlueprintReadOnly)
+	float NormalizedTotalFightStamina = 0.0f;
+
 	/** Character 离散状态快照；Wet、Downed 和恢复仍由 Condition 模块拥有。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatConditionSnapshot Condition;
@@ -175,7 +184,7 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	FText FishStateText;
 
-	/** 给玩家体力条旁显示的短文本；数值来自 ASC 当前体力和配置基线。 */
+	/** 给体力条旁显示的短文本；钓鱼时展示同竿总体力和人数，离竿后展示本人余额。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText CatStaminaText;
 
@@ -234,9 +243,12 @@ protected:
 
 private:
 	friend class FCatHUDCrosshairVisibilityTest;
+	friend class FCatHUDCooperativeStaminaTest;
 
 	/** 仅用于首次投影的显隐诊断去重；准星是否显示仍只读取 LastHUDViewState。 */
 	bool bHasLoggedCrosshairVisibility = false;
+	/** 正式 WBP 缺失钓鱼体力控件时只记录一次，避免固定步投影反复刷屏。 */
+	bool bHasLoggedMissingFishingMeter = false;
 
 	/** 统一广播 HUD 入口意图；先通知原生协调层，再给蓝图表现层处理页面或动画。 */
 	void SubmitHUDAction(ECatHUDAction Action);
@@ -305,7 +317,7 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> FishStateTextBlock;
 
-	/** WBP Designer 中的玩家体力文本控件；存在时显示当前体力和可解析上限。 */
+	/** WBP Designer 中的体力文本控件；同竿参与者显示相同的总体力，本人的属性仍独立。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> CatStaminaTextBlock;
 
@@ -321,7 +333,7 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> InventoryButton;
 
-	/** WBP Designer 中的玩家体力条；存在时直接绑定 NormalizedFightStamina。 */
+	/** WBP Designer 中的体力条；钓鱼时读取 NormalizedTotalFightStamina，离竿后读取个人比例。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UProgressBar> CatStaminaProgressBar;
 

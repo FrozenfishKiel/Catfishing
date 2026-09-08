@@ -38,6 +38,16 @@ enum class ECatFishingBobberPresentationMode : uint8
 	Sunk
 };
 
+/** 稳定玩家身份对应的一次握持；下标改变不改变加入轮次或身体相对位置。 */
+USTRUCT(BlueprintType)
+struct FCatFishingOperatorMembership
+{
+	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> PlayerState = nullptr;
+	UPROPERTY() uint32 Epoch = 0;
+	UPROPERTY(BlueprintReadOnly) FVector FormationOffsetWorld = FVector::ZeroVector;
+};
+
 USTRUCT(BlueprintType)
 struct FCatFishingRodPresentationState
 {
@@ -53,6 +63,11 @@ struct FCatFishingRodPresentationState
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> OperatorPlayerState = nullptr;
 	/** 有序占位容器：加入时追加，离开时压紧；0=主位，之后按编号公式左右交替向外扩展，始终无空洞。 */
 	UPROPERTY(BlueprintReadOnly) TArray<TObjectPtr<APlayerState>> OperatorPlayerStates;
+	/** 由唯一成员变更写口生成的元数据，按玩家身份匹配，不另作可写名单。 */
+	UPROPERTY(BlueprintReadOnly) TArray<FCatFishingOperatorMembership> OperatorMemberships;
+	/** 每次实际成员集合或顺序变化推进，独立于皮肤、耐久与主位控制权。 */
+	UPROPERTY() uint32 RosterVersion = 0;
+	UPROPERTY() uint32 ControlEpoch = 0;
 	/** 当前真正握住鱼竿的玩家；始终镜像 OperatorPlayerStates[0]，地面姿态为空。 */
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> HolderPlayerState = nullptr;
 	/** 只描述同一根 Rod Actor 在手里还是地上，不参与 FishingSession 阶段推进。 */

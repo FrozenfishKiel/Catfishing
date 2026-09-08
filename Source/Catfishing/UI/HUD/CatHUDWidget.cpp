@@ -7,12 +7,38 @@
 #include "Engine/World.h"
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerState.h"
 #include "Logging/CatLog.h"
 #include "Rendering/DrawElementTypes.h"
 
 // HUD 渲染流程：缓存 Model 生成的只读投影，按 Designer 真实绑定控件写入天数、调试文本、钓鱼反馈、入口按钮状态和进度条，再触发蓝图扩展点。
 void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 {
+	if (ViewState.bShowFightMeters && (!CatStaminaTextBlock || !CatStaminaProgressBar)
+		&& !bHasLoggedMissingFishingMeter)
+	{
+		const APlayerController* Controller = GetOwningPlayer();
+		UE_LOG(LogCatUI, Warning,
+			TEXT("Event=ui_hud_fishing_meter_missing World=%s NetMode=%d Authority=%d LocalRole=%d PlayerId=%d Widget=%s SessionId=%s TextBound=%d BarBound=%d Result=FormalWidgetNeedsMigration"),
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE,
+			Controller && Controller->HasAuthority(), Controller ? static_cast<int32>(Controller->GetLocalRole()) : INDEX_NONE,
+			Controller && Controller->PlayerState ? Controller->PlayerState->GetPlayerId() : INDEX_NONE,
+			*GetName(), *ViewState.Fishing.FishingSessionId.ToString(), CatStaminaTextBlock != nullptr, CatStaminaProgressBar != nullptr);
+		bHasLoggedMissingFishingMeter = true;
+	}
+	if (ViewState.bHasFishingSession && (!LastHUDViewState.bHasFishingSession
+		|| LastHUDViewState.Fishing.FishingSessionId != ViewState.Fishing.FishingSessionId
+		|| LastHUDViewState.Fishing.FightParticipantCount != ViewState.Fishing.FightParticipantCount))
+	{
+		const APlayerController* Controller = GetOwningPlayer();
+		UE_LOG(LogCatUI, Log,
+			TEXT("Event=ui_hud_fishing_group_applied World=%s NetMode=%d Authority=%d LocalRole=%d PlayerId=%d SessionId=%s ParticipantCount=%d TotalFightStamina=%.3f TotalFightStaminaMaximum=%.3f PersonalFightStamina=%.3f Result=ViewStateApplied"),
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE,
+			Controller && Controller->HasAuthority(), Controller ? static_cast<int32>(Controller->GetLocalRole()) : INDEX_NONE,
+			Controller && Controller->PlayerState ? Controller->PlayerState->GetPlayerId() : INDEX_NONE,
+			*ViewState.Fishing.FishingSessionId.ToString(), ViewState.Fishing.FightParticipantCount,
+			ViewState.TotalFightStamina, ViewState.TotalFightStaminaMaximum, ViewState.FightStamina);
+	}
 	if (!bHasLoggedCrosshairVisibility || LastHUDViewState.bShowCrosshair != ViewState.bShowCrosshair)
 	{
 		const APlayerController* Controller = GetOwningPlayer();
@@ -104,7 +130,8 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 	}
 	if (CatStaminaProgressBar)
 	{
-		CatStaminaProgressBar->SetPercent(ViewState.NormalizedFightStamina);
+		CatStaminaProgressBar->SetPercent(ViewState.bHasFishingSession
+			? ViewState.NormalizedTotalFightStamina : ViewState.NormalizedFightStamina);
 		CatStaminaProgressBar->SetVisibility(ViewState.bShowFightMeters
 			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}

@@ -267,20 +267,24 @@ bool FCatFishingCarrierHandoffTest::RunTest(const FString& Parameters)
 	auto* SecondMovement = CastChecked<UCatCharacterMovementComponent>(SecondCat->GetCharacterMovement());
 	if (!TestTrue(TEXT("initialize rod before BeginPlay"), Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(),
 		TEXT("HandoffRod"), TEXT("Skin"), First, First, true, false))) return false;
-	TestTrue(TEXT("publish first holder force"), Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 100.0, 100.0, 1.0, 1.0));
+	TestTrue(TEXT("publish first holder force"), Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 100.0, 100.0, 1.0, 1.0, true));
+	TestTrue(TEXT("publish first holder group solve"), Rod->SetGroupMotionFromAuthority(FVector::ZeroVector, FVector::ZeroVector));
 	TestTrue(TEXT("first character receives actual movement input"), FirstMovement->GetExternalTraction().bActive);
 	const FTickPrerequisite FirstMovementTick(FirstMovement, FirstMovement->PrimaryComponentTick);
 	TestTrue(TEXT("loaded rod samples its endpoint after actual movement"), Rod->PrimaryActorTick.GetPrerequisites().Contains(FirstMovementTick));
 	Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true);
+	TestTrue(TEXT("zero pull retains a complete group solve"), Rod->SetGroupMotionFromAuthority(FVector::ZeroVector, FVector::ZeroVector));
 	TestTrue(TEXT("temporary zero pull must retain endpoint sampling order"), Rod->PrimaryActorTick.GetPrerequisites().Contains(FirstMovementTick));
 	Rod->OnRep_CarrierConstraintState();
 	TestTrue(TEXT("receiving a zero-pull snapshot must retain the same order"), Rod->PrimaryActorTick.GetPrerequisites().Contains(FirstMovementTick));
 	Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true, 0.0, 50.0,
 		FVector::ForwardVector, 200.0, true);
+	TestTrue(TEXT("publish the continuous braking group solve"), Rod->SetGroupMotionFromAuthority(FVector::ZeroVector, FVector::ZeroVector));
 	TestTrue(TEXT("zero pulling force can still publish a continuous braking phase"), FirstMovement->GetExternalTraction().bActive);
 	TestEqual(TEXT("rod delivers the authority braking decision to actual movement"),
 		FirstMovement->GetExternalTraction().BrakingDecelerationCentimetersPerSecondSquared, 200.0);
-	Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 100.0, 100.0, 1.0, 1.0);
+	Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 100.0, 100.0, 1.0, 1.0, true);
+	TestTrue(TEXT("restore first holder complete force solve"), Rod->SetGroupMotionFromAuthority(FVector::ZeroVector, FVector::ZeroVector));
 	const auto OldConstraint = Rod->CarrierConstraintState;
 	TestTrue(TEXT("handoff succeeds"), Rod->SetOperatorFromAuthority(Second, Rod->GetPresentationState().RodActorRevision));
 	TestFalse(TEXT("old holder releases immediately even before presentation BeginPlay"), FirstMovement->GetExternalTraction().bActive);
@@ -288,7 +292,8 @@ bool FCatFishingCarrierHandoffTest::RunTest(const FString& Parameters)
 	Rod->CarrierConstraintState = OldConstraint;
 	Rod->OnRep_CarrierConstraintState();
 	TestFalse(TEXT("out-of-order old force cannot attach to the new holder"), SecondMovement->GetExternalTraction().bActive);
-	TestTrue(TEXT("new holder can receive a new authority solve"), Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 200.0, 100.0, 1.0, 1.0));
+	TestTrue(TEXT("new holder can receive a new authority solve"), Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 200.0, 100.0, 1.0, 1.0, true));
+	TestTrue(TEXT("new holder completes the current group solve"), Rod->SetGroupMotionFromAuthority(FVector::ZeroVector, FVector::ZeroVector));
 	TestEqual(TEXT("new character receives new force"), SecondMovement->GetExternalTraction().AccelerationCentimetersPerSecondSquared, 200.0);
 	TestTrue(TEXT("last holder leaves"), Rod->SetOperatorFromAuthority(nullptr, Rod->GetPresentationState().RodActorRevision));
 	TestFalse(TEXT("leaving clears force before ticking is disabled"), SecondMovement->GetExternalTraction().bActive);
@@ -456,6 +461,10 @@ bool FCatFishingShortLineTractionTest::RunTest(const FString& Parameters)
 			{
 				FCatFightRodConstraintInput Input;
 				Input.bRodHeld = true;
+				Input.bGroupDriven = true;
+				Input.GroupFriction = (Movement->bUseSeparateBrakingFriction ? Movement->BrakingFriction : Movement->GroundFriction)
+					* Movement->BrakingFrictionFactor;
+				Input.GroupBrakingDeceleration = Movement->GetMaxBrakingDeceleration();
 				Input.RodTipWorldPosition = Rod->GetRodTipWorldTransform().GetLocation();
 				Input.RodForwardWorld = Rod->GetAuthoritativeRodForwardVector();
 				Input.RodTipVelocityCentimetersPerSecond = Rod->GetAuthoritativeRodTipVelocity();
@@ -487,6 +496,9 @@ bool FCatFishingShortLineTractionTest::RunTest(const FString& Parameters)
 					Step.CarrierTargetPullSpeedCentimetersPerSecond, Step.NormalizedTension, Step.ConstraintErrorCentimeters, true,
 					Step.LineTensionNewtons / C.ForcePerStrengthNewtons * C.RodPhysicsLengthCentimeters / 100,
 					C.PrimaryOperatorCatStrength, Axis, Step.CarrierBrakingDecelerationCentimetersPerSecondSquared, Step.bUseContinuousCarrierTraction);
+				// 单成员无主动移动，仍按 Runner 的 Carrier -> Group 顺序发布相同受力。
+				if (!TestTrue(TEXT("short elevated fight publishes its complete group motion"),
+					Rod->SetGroupMotionFromAuthority(FVector::ZeroVector, FVector::ZeroVector))) return false;
 				AcceptStep(S, Step);
 				if (Frame >= Rate * 2)
 				{

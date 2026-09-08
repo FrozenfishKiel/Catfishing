@@ -88,7 +88,7 @@ public:
 
 	/** 一根部署鱼竿最多可占用的操作位；当前产品使用左右两位，数组/站位算法预留到更多协作者。 */
 	UPROPERTY(Config, EditAnywhere, Category="Rod|Operators", meta=(ClampMin="1", ClampMax="8"))
-	int32 MaximumRodOperatorSlots = 2;
+	int32 MaximumRodOperatorSlots = 4;
 	/** 左右第一对站位中心之间的距离；0 表示所有槽位暂时共用原 Stand 锚点。 */
 	UPROPERTY(Config, EditAnywhere, Category="Rod|Operators", meta=(ClampMin="0", Units="cm"))
 	double RodOperatorSlotSpacingCentimeters = 140.0;

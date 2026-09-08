@@ -44,6 +44,9 @@ public:
 	double ForcePerStrengthNewtons = 1.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="单猫系统质量", Units="kg", ClampMin="0.001"))
 	double CatBodyMassKilograms = 5.0;
+	/** 辅助的个人力量折扣；移动与静止支撑共用折扣后的同一份力量，体力余额不打折。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="多人协作", meta=(DisplayName="辅助力量贡献倍率", ClampMin="0.0", ClampMax="1.0"))
+	double HelperStrengthMultiplier = 0.5;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="力竭鱼回收辅助力（牛顿）", ClampMin="0.001"))
 	double ExhaustedReelForceNewtons = 200.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="猫力竭拖行辅助加速度", ClampMin="0.0"))

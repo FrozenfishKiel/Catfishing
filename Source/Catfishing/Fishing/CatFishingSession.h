@@ -63,18 +63,27 @@ public:
 		const struct FCatFishingRodAimSample* AimRebaseSample = nullptr, FGuid RequestId = FGuid());
 	/** 主操作手离开竿位：搏斗期进入无人值守松线，等口期清空当前钓手；都不结束会话。 */
 	void SuspendOperatorFromAuthority();
+	/** 成员变更的离散发布；搏斗合计由 Runner 在固定步发布，其他阶段从鱼竿名单读取。 */
+	void RefreshOperatorMembershipFromAuthority();
+	/** Runner 唯一合力计算结果的只读汇总投影；总体力是所有成员当前余额之和。 */
+	void PublishGroupSummaryFromAuthority(double TotalStrength, double TotalStamina,
+		double TotalStaminaMaximum, int32 ParticipantCount);
+	void BeginFixedStepMutationBoundary() { bFixedStepMutationBoundary = true; }
+	void EndFixedStepMutationBoundary();
+	bool IsFixedStepMutationBoundaryActive() const { return bFixedStepMutationBoundary; }
 	bool IsFightRunnerRunning() const;
 	void HandleFightRunnerStepFromAuthority(const FCatFightStepResult& Step, double FishStaminaRemaining,
 		ECatFishMotionIntent MotionIntent);
 	/** FightRunner/表现写入遇到不可恢复错误时终止会话；FailureStage 会进入日志，便于区分几何、装备、ASC 等故障。 */
 	void HandleFightRunnerFailureFromAuthority(FName FailureStage = NAME_None);
-	/** Condition 确认当前钓手脚点进入危险水深后的唯一落水终局入口。 */
-	void HandleCatEnteredDangerousWaterFromAuthority(double ImmersionDepthCentimeters);
+	/** Condition 确认个人进入危险水深后播放其入水表现并移除该成员；其他人继续同一会话。 */
+	void HandleCatEnteredDangerousWaterFromAuthority(double ImmersionDepthCentimeters,
+		ACatCharacter* AffectedCharacter = nullptr);
 
 	/** StateTree EnterPhase Task 的唯一阶段写入口；NearShore 必须提供水域内服务器目标，HookedFight/NearShore 保留合法参与者，其他阶段重置为钓手，终态启动有界销毁。 */
 	FCatFishingPhaseResult EnterPhaseFromStateTree(ECatFishingPhase NewPhase);
 
-	/** 巨鱼 HookedFight 中按统一参战能力谓词登记一次协作者；非 Active、倒地、力量/体力非正、阶段不符或重复 RequestId 都不增加参与集合。 */
+	/** 旧蓝图协作协议的兼容转发；统一通过 Service::OperateRod 加入当前鱼竿，不维护额外名单。 */
 	FCatDomainCommandResult SubmitFightAssist(AController* AssistingController, FGuid RequestId, int64 ExpectedRevision);
 
 	/** StateTree 搏斗节点的唯一资源交换写口；读取 Character ASC 与 FishDefinition 后原子消耗双方短周期体力。 */
@@ -101,11 +110,8 @@ public:
 	/** 会话当前钓手的服务器私有身份（转移后为新钓手）；仅服务读取用于索引维护。 */
 	const FString& GetFisherStableNetIdForAuthority() const { return FisherStableNetId; }
 
-	/** 掉线、倒地、局末或依赖失效时幂等写 Terminated、停树并释放参与者；Resolved 保持捕获终态，两种终态都只保留配置的复制窗口后销毁 Actor。 */
+	/** 局末或整场依赖失效时幂等写 Terminated；个人掉线/倒地走 Service 成员移除，不调用此入口。 */
 	void TerminateSession(ECatFishingOutcome Outcome, const TCHAR* DiagnosticReason);
-
-	/** 判断 Character 是否为钓手或已登记协作者；FishingService 用于生命周期中断。 */
-	bool InvolvesCharacter(const ACatCharacter* Character) const;
 
 	/** 提供当前复制阶段和协作摘要供服务/表现读取；私有参与身份、鱼资产和事务缓存不会随返回值泄露。 */
 	const FCatFishingSessionSnapshot& GetSnapshot() const;
@@ -129,6 +135,8 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	friend class UCatFishingService;
+	bool bFixedStepMutationBoundary = false;
 	friend class FCatFishBehaviorStateTreeRuntimeTest;
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatRodSessionDurabilityTest;
@@ -167,7 +175,7 @@ private:
 	/** 只有断线/猫落水拥有当前猫 Montage；其余终局返回空 Tag，不借用错误表现。 */
 	static FGameplayTag ResolveTerminalFisherPresentationTag(ECatFishingOutcome Outcome);
 
-	/** 用 FishingService 的统一权威谓词重读参与者，更新公开人数、合计 FishingStrength 与 FightStamina。 */
+	/** 非搏斗阶段从鱼竿名单重读个人余额/上限；运行中的 Runner 保持唯一搏斗合力与扣费来源。 */
 	bool RefreshFightSummary();
 	/** Runner 登记/释放实际被本会话扣过体力的角色，终态只恢复仍归本会话所有的池。 */
 	void RegisterFightStaminaParticipantFromAuthority(ACatCharacter* Character);
@@ -210,7 +218,7 @@ private:
 	UPROPERTY()
 	TObjectPtr<UCatFishDefinition> FishDefinition;
 
-	/** 当前钓手 Character 弱引用（接力转移后指向新钓手）；失效时服务终止本会话。 */
+	/** 当前主位身体弱引用；失效时 Service 移除个人并按加入顺序接力，无人时继续无人值守。 */
 	TWeakObjectPtr<ACatCharacter> FisherCharacter;
 
 	/** 当前钓手服务器私有 StableNetId（接力转移后为新钓手）。 */
@@ -218,7 +226,7 @@ private:
 
 	/**
 	 * 抛钩时冻结的会话协调组件：鱼饵预留属于原抛钩者，竿宿主/实例由其 FishingUseRecord 冻结。
-	 * 接力不改变这两个资源宿主；磨损经协调器写原竿实例，不写当前操作者的选中竿。
+	 * 接力不改物资归属；原身体销毁时 Service 将精确未结记录移入服务器托管组件并重绑定此入口。
 	 */
 	TWeakObjectPtr<UCatEquipmentComponent> CastEquipment;
 	/** 仅用于装备磨损事务的去重顺序，不保存第二份鱼竿剩余耐久。 */
@@ -230,10 +238,10 @@ private:
 	/** 由冻结重量计算的一次性表现缩放；水中 Encounter 与岸上 Pickup 共用，避免交接时尺寸跳变。 */
 	double FishVisualScale = 1.0;
 
-	/** HookedFight 的服务器私有参与者身份集合；巨鱼进入 NearShore 后保留到候选生成，普通鱼始终只含初始钓手。 */
+	/** 当前鱼竿名单的服务器私有身份投影，供终局参与事实和旧资产兼容查询；普通鱼与巨鱼共用。 */
 	TSet<FString> FightParticipantIds;
 
-	/** 参与者身份到 Character 弱引用；只用于掉线/倒地中断检查，不复制。 */
+	/** 当前成员身体弱引用投影；非搏斗摘要从鱼竿名单重建，Runner 登记实际触及的体力池，不复制。 */
 	TMap<FString, TWeakObjectPtr<ACatCharacter>> FightParticipantCharacters;
 
 	/** 协作命令首次终态缓存。 */

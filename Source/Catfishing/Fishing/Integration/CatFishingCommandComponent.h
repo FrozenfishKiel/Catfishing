@@ -34,6 +34,9 @@ struct FCatFishingInputEdge
 
 	UPROPERTY(BlueprintReadOnly)
 	int64 InputSequence = 0;
+	/** 收线/放线按键绑定产生时看到的操竿权；换主后的迟到包不能获得新权限。 */
+	UPROPERTY() FGuid ControlRodActorId;
+	UPROPERTY() uint32 ControlEpoch = 0;
 	/** 松开时采集的鼠标/镜头输入，服务器验证后自行与水面求交。 */
 	UPROPERTY() bool bHasCastViewRay = false;
 	UPROPERTY() FVector CastViewOrigin = FVector::ZeroVector;
@@ -73,6 +76,8 @@ public:
 	void ConsumeResult(FGuid RequestId);
 
 	void ResetTransientCommandState();
+	/** 交接操竿权时清持续按键但保留递增输入序号，要求新主位重新按键。 */
+	void ClearHeldFightInputForControlTransferFromAuthority();
 	/**
 	 * 读取服务器最后确认的连续搏斗输入。该状态属于玩家输入生命周期，不属于某个 FishingSession；
 	 * 新 Runner 用它恢复跨断线边界仍真实按住的按键，避免必须松开再按一次。
@@ -101,6 +106,7 @@ public:
 	FCatFishingCommandResultReceived OnResultReceived;
 
 private:
+	friend class FCatFishingGroupNetworkTest;
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveFishingCommandResult(const FCatFishingCommandResult& Result);

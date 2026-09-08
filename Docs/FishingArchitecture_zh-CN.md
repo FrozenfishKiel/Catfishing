@@ -1,7 +1,7 @@
 # 钓鱼核心架构（技术文档）
 
 阅读对象：需要理解/修改钓鱼玩法逻辑的人。运动链说明于 2026-09-04 按源码核对，当前细节统一见 [鱼运动与遛鱼逻辑实现导读](FishFightImplementationGuide_zh-CN.md)；本页负责系统关系与入口导航。
-配套文档：蓝图任务步骤见《BlueprintTaskGuide_zh-CN.md》；规格口径见《FishingCoreFlow_zh-CN.md》。
+配套文档：蓝图配置见 [FishingBlueprintSetupGuide_zh-CN.md](FishingBlueprintSetupGuide_zh-CN.md)；规格口径见 [FishingCoreFlow_zh-CN.md](FishingCoreFlow_zh-CN.md)。
 
 ---
 
@@ -53,34 +53,33 @@
 
 ## 2. 关键子系统
 
-### 2.0 鱼竿放置、共享与左右操作位
+### 2.0 鱼竿放置、共享与多人操作
 
 `PlaceRod` 现在只检查角色前方 150cm 是否存在可站立实体地面（地面法线 Z≥0.7），不再要求放置点位于水域样条外侧或距岸 4m 内。因此营地、远岸和测试区都可以先架杆。**架杆自由不等于抛线无限**：`BeginCast` 仍要求准星命中有效水域，并同时满足 `min(鱼竿最大线长, 浮漂最大抛距)`、前向夹角与无遮挡视线。
 
-鱼竿公开状态以紧凑数组 `OperatorPlayerStates` 表示占位，服务器复制给所有客户端：
+鱼竿公开状态以 `OperatorPlayerStates` 保存唯一有序成员名单，默认容量 `MaximumRodOperatorSlots=4`。部署数量仍是每人最多两根；每人同时最多操作一根。空手 R 优先加入公共锚点 250 cm 内有空位的鱼竿，否则取出本人现有库存实例，首次取出直接持握。再按 R 离开。加入不瞬移角色。
 
-- 每人场上最多部署两根鱼竿，地上和手持合计计数；每人同时最多操作一根，包括主位和协作位。部署额度与同一根竿的 `MaximumRodOperatorSlots=2` 操作人数容量分别校验。
-- 空手按 R 时，优先拿起或加入公共交互锚点 250cm 内有空位的竿；附近没有可加入竿时，才从本人库存取出尚未使用的鱼竿实例。部署第二根需要背包原本就有第二根实体竿，不复制第一根，也不免费补发装备。
-- `PlaceRod` 取出每根鱼竿后直接由本人占据主位，初始 `PresentationState` 即为 `Held`，握把在 Construction/BeginPlay 前对齐当前持握位置；不另发一次 `OperateRod`，不重复占用库存。已占位时按 R 通过 `LeaveRod` 放下或退出协作；在同一根地面竿附近再次按 R 通过 `OperateRod` 拿起，始终不吸附角色、不锁移动。
-- 鱼竿只有一个公共 R 交互锚点；能否加入只看这个锚点与容器剩余容量，不会因为下一个人的编号改用另一套交互位置或射线。
-- `OperatorPlayerStates` 是唯一紧凑容器：加入时追加到末尾并取得 `0、1、2...` 编号，任意成员离开后更高编号全部依次减一。
-- `0` 号是当前主位；抛竿、提竿和右键线杯只由它驱动。HookedFight 中所有编号都可用左键提交即时发力意图，0 号离开后新的 0 号立即接管。
-- 每次容器压紧后，服务器按新编号重排所有剩余角色；站位算法按右/左成对向外扩展，配置上限当前为 2、代码有界预留到 8，增加第三、第四人不需要新增专用槽位分支或交互锚点。
-- HookedFight 固定步每次从该容器重建参与集合：主位提供移动/线杯意图，按住左键的辅助位提供协作力量和质量；统一做功后按有效力量占比分别从各自 ASC 支付体力。
-- `OperatorPlayerState` 只保留为 `OperatorPlayerStates[0]` 的兼容快捷字段；蓝图若要判断双人必须读取数组长度。
-- 活动会话唯一性属于鱼竿，不属于玩家：一根竿最多绑定一个未终态 `FishingSession`，同一玩家可在本人已部署的两根竿之间依次抛线，离开一根竿不会结束其会话。
-- 按 R 离开只释放操作位，不写 `Escaped` 或 `Terminated`；`HookedFight` 会立刻进入无人值守松线，鱼按实际外游带线，到 `L_max` 后只按真实负载消耗绑定装备实例的鱼竿耐久，不借用离开玩家的力量/体力。下一位玩家占据主位时，Session 与 Runner 会原子迁移到其 ASC、力量、体力和输入序号域，但耐久仍写同一个 `RodItemInstanceId`，不改扣接手者所选的另一把竿；HookedFight 左键按本人所占鱼竿路由，其他主位命令与 HUD 按当前主操作鱼竿路由。
-- 原始抛竿者的 Equipment 以 `FishingSessionId` 协调每场预留：鱼饵与鱼漂使用抛钩者的实物，竿宿主固定为部署时的角色装备，耐久写回该宿主的准确 `RodItemInstanceId`。竿主 UseRecord 的会话锁防止同一根竿重复开场或在使用中被库存转移；一场结束只退还未消费的本场鱼饵并释放自己的竿锁。
+名单首位负责收线、放线和转向；其余成员只提交自己的移动。任意离开后名单压紧，最早仍可操作的成员接任。个人 `MembershipEpoch`、整组 `RosterVersion` 与主控 `ControlEpoch` 分别隔离重入、名单变更与接力后的旧输入/运动快照；下标只是显示顺序，不能作为身份或角色位置。角色的体力为零不自动失去主控权，也不产生力量；倒地、离竿和断线走同一个 Service 移除入口。
 
-另一个容易混淆的身份是 `OwnerPlayerState`：它代表部署归属和当前收纳权限，并不限制谁能占位。服务器按公开 `RodActorId` 找全场鱼竿，再单独验证命令权限。`BeginCast` 按当前主操作位定位竿，通过该竿部署时冻结的 Instigator 找到原竿主装备，并校验同 World、PlayerState 身份和实际 UseRecord；不能沿竿主重生后的新 Pawn 重新绑定。借用他人空竿可以发起新会话，使用者无需拥有同款鱼竿，但必须有自己的可用鱼饵、鱼漂。射程仍取实际竿最大线长和使用者鱼漂抛距的较小值。
+HookedFight 每个固定步冻结成员、ASC、个人体力/上限和 CMC 已接受的移动意图。`FCatFishingGroupModel` 使用同一套 N 人向量计算：主位系数 1，辅助默认 `HelperStrengthMultiplier=0.5`（来自正式 FightBalance，范围 0–1）；有正体力即贡献完整角色系数力量，零体力贡献为零。站定沿远离鱼方向支撑；移动与站定分享同一个力量预算，反向移动抵消，侧向移动改变合力方向。队伍速度不随人数相乘。鱼的行为、体力公式、正式 StateTree、最大线长放线规则保持原契约。
 
-跨宿主 Begin 先校验双方，再静默提交鱼饵预留、原竿锁与双方版本，最后才发布通知；磨损序号归会话协调器，剩余耐久与竿主选中态镜像只在原竿宿主更新。`EquipmentRevision` 仍指抛钩者库存版本，日志另外记录 `RodEquipmentRevision`，不改变客户端原字段含义。接力仅迁移操作猫的能力与输入，不改变原抛钩者和竿主；任一资源宿主所在 Character 失去占有或销毁时，Session 会终止并释放预留。后续阶段准备失败同样由一次 Release 完成退饵和解锁，原部署归属、手持上限及收纳权限保持原契约。
+鱼竿握把以共同运动根为位置基准，成员各自保留连续的队形偏移；入退和换主只重定偏移基准，不瞬移剩余角色或重置鱼、线、耐久与身体速度。服务器唯一求解合力，Rod 转交带成员/整组版本的运动快照，CMC 执行每个身体的碰撞和网络移动，队形修正与动力速度分离。旧左右 StandAnchor 只保留编辑器参考/兼容查询用途，运行时不按压紧下标重排身体。
+
+体力账本仍是每人的 ASC：共同收线、转杆与去重后的沿线支撑只生成一次账单，按仍能出力的成员均分，余额不足者付到零后由其他有余额成员补齐。个人主动移动与受阻用力另记本人，不能用队友体力透支自己的余额。HUD 总体力只读求和 `ΣCurrent / ΣMaximum`，入退只加减本人现有值，不补满、转移或重新分配体力。有效放线时全组按各人上限恢复；满线不恢复；鱼力竭保持免正向费用。固定步边界内普通入退命令可重试，生命周期强制退出排到步末，防止属性通知改变本步付款集合。
+
+一根竿只有一个未终态 Session。主位离开且有人接替时继续同一场；最后一人离开才进入无人值守松线，到最大线长后继续按真实负载磨损原竿，不扣离开者体力。新主位使用自己的输入序号域，初始左右键均释放，必须重新提交当前控制世代的输入。
+
+`OwnerPlayerState`/部署时稳定归属 ID 代表原竿归属与收纳权限，接力不转让物品。BeginCast 按当前主位和实际部署的 UseRecord 冻结原竿装备宿主，鱼饵/鱼漂仍来自抛钩者。跨宿主 Begin 先预检并静默提交精确预留和锁，再发布通知；`EquipmentRevision` 保持抛钩者语义，原竿宿主版本另记。磨损只写 `RodItemInstanceId`，退出不改扣新主位选中的另一把竿。
+
+资源宿主失去占有不再强制终止其他人的钓鱼；真实 Destroy/EndPlay 时，尚在场的原竿 UseRecord 和未结束的 FishingUseRecord 转入当前 World 的服务器 `Equipment/CatFishingResourceCustodian`，原记录移除，Coordinator/Session 引用在通知前重绑。只托管这些记录，不复制普通背包、不授予接力者所有权，也不实现整背包断线恢复或重连领取。当前 World/Run 关闭时统一清理。准备失败和真正终局仍由单一 Release 退还未消费预留并解锁。
 
 历史 `CommitFailureBudgetFromStateTree` 入口仍保留供未完成引用审计的资产兼容；正式 Session 树生成器不使用它，Equipment 继续拒绝对活动会话/部署实例走“当前选择”失败预算。借竿磨损不绕过此 gate，而是始终使用绑定实例的 `ApplyFishingRodWear`。
 
 X 优先处理当前操作竿；本人没有操作竿时，只寻找公共交互锚点 250cm 内本人无人占位的竿，避免收错另一根远处鱼竿。有活动会话仍按原阶段走取消或切线裁决，无活动会话才进入离位与收纳。`PackRod` 按具体 `RodActorId` 查找并独立验证 `OwnerPlayerState`，当前不允许把别人的竿收进自己背包。`Equipment::UnUse` 已通过 `UCatInventoryTransferService` 将 `ActiveUse` 归还自身 `Stored`；同一通道也支持原生服务器把完整实例转给另一库存，保留耐久、校验容量并处理重放。未来开放他人收竿时，仍需把权限、世界竿收起/失败恢复、注册表解除和目标背包接到这笔事务；不能只放开 Owner 校验。通道契约见 `Docs/Architecture/商店库存与营地公共仓库子技术方案.md`。
 
-#### 借竿抛钩修复影响核对（2026-09-08）
+#### 借竿抛钩修复影响核对（2026-09-08，历史检查点）
+
+以下保留借竿修复当时的验证证据；其中“资源宿主退出即释放整场”已被后续四人接力与资源托管替代，当前规则以上文和 2.0.2 为准。
 
 修改前基线为 `01b8b75`，工作区只有用户未跟踪的 `Scripts/Art/`、`SourceArt/`，本轮保留。原借竿审计中本人竿对照成功、借竿预留失败；证据在 `Saved/Automation/BorrowedRod-20260908/BaselineReport/index.json`。下表只覆盖本次资源归属修复，不关闭 Fishing 或 Equipment / Shop 模块。
 
@@ -96,6 +95,41 @@ X 优先处理当前操作竿；本人没有操作竿时，只寻找公共交互
 本轮验证：`contract` 为 EquipmentShop Static PASS 和 Editor/Game Win64 Development 构建成功；`runtime_behavior` 为 54/54 Success（53 clean、1 条既有无人接管 RunnerTransition=false 警告、0 failed/notRun）。证据根目录 `Saved/Automation/BorrowedRod-20260908/`：`FinalReport/index.json`、`FinalTests.log`、`BuildEditorDelivery.log`、`BuildGameDelivery.log`、`StaticDelivery.log`。6 项新装备回归、Service 的 5 个正式资源场景、原借竿审计及原双竿/转移/收竿回归均通过；`equipment_fishing_shutdown_completed` 实际记录未 BeginPlay 销毁后 UnreleasedSessions=0。首轮仅依赖销毁回调的兜底未通过新增测试，具体回调跳过点未确认；最终改在 DestroyComponent 的 Super 前释放并验证重入安全，未删除或放宽失败断言。
 
 构建/运行位于 `Saved/Validation/BorrowedRod-20260908`，11 个修改源文件与共享工作区 SHA256 相同（`SourceManifest.json`）。这保留了当前开启 Live Coding 的用户编辑器现场；当前编辑器尚未加载此修复。`presentation_delivery` 未运行 Cook/打包、正式 WBP/真人双端借竿或无 `-log` 双端默认日志验收，仍需保存退出编辑器后构建共享项目并实测；单世界正式 BP 飞行不替代双端表现证据。
+
+### 2.0.2 四人移动合力的影响与验证（2026-09-08）
+
+修改前基线：HEAD `f767a13`；仅已有未跟踪 `Scripts/Art/`、`SourceArt/`，原样保留。隔离源副本完成 Editor Development 构建；Fishing/UI/Equipment 199 项中 198 通过（含 5 项警告）、1 项既有失败，初级竿资产 500 与测试要求 150 不一致。报告 `Saved/Automation/CooperativeFishing-20260908/BaselineReport/index.json`；基线源码来自 HEAD，Content 使用正式目录引用，HUD 迁移并行发生，不能把该源码基线称为旧 HUD 资产基线。
+
+执行期间外部任务独立提交 `b675838`（胖猫造型与基础骨骼动画，21 个 `Scripts/Art/` / `SourceArt/Characters/CreamCat/` 文件）。该提交不含本轮运行源码，完整保留；本轮不修改或重复提交这些美术文件。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 入口、权限、世代 | `Source/Catfishing/Fishing/Integration/CatFishingCommandComponent::ApplyInputEdge` → Service/Session；`CatFishingRodActor::CommitAuthoritativeMutation` | 辅助左键发力、槽号压紧；目标主控独占1/2、所有人移动且身份不随下标改变 | 保留R/收放入口，增加ControlEpoch/个人Epoch/名单版本，拒绝过时主控 | 先Rod元数据，再命令校验，最后Runner消费 | 四人入退、旧按键、重入；Service/SlackAim/网络测试 | 已接线；Integrated8Report 的 Actors/Service/CommandComponent/SlackAim 与四端 GroupListenThreeClients 全部通过，真实RPC拒绝旧ControlEpoch |
+| 成员生命周期 | Service `RemoveOperatorAndReconcileSession` → Session接力；Character UnPossessed/EndPlay、Condition倒地 | 主位离开不能让幸存成员整场失败 | 统一候选遍历，允许零体力主位；最后一人才无人值守；固定步内退出延迟到步末 | 清旧输入→迁移主控→发布名单；不重置鱼线和磨损 | 两个原资源宿主退出、四人→零人、通知重入 | 真实 BorrowedRod 11 场景与 GroupRunnerIntegration 通过：零体力接力、四到零人、UnPossess/Destroy、倒地与逐人危险落水、扣体通知中销毁后步末移除 |
+| 力量与核心计算 | Runner `UpdateParticipantIntentAndProperties` → GroupModel → Simulator `Step/FinalizeResolvedStep` | 旧辅助按键/全量叠加与主位独付；目标单预算方向合力和个人账本 | 新纯N人模型；主1/辅0.5，无人数专用分支；有符号支撑只进入一次物理求解 | 冻结集合→方向聚合→求解→最终地形→费用 | 同/反/侧向、微量体力、零主位、多人费用守恒 | GroupModel 7 项、GroupSimulation、ParticipantStrength 和真实四 ASC Runner 通过；保留鱼意图耗体、满线与鱼力竭旧行为回归 |
+| 身体、碰撞、网络移动 | Rod组根/组快照 → `Character/CatCharacterMovementComponent::CalcVelocity/PerformMovement`；SavedMove | 旧主位独走；成员加入不能瞬移或重复叠加自身走路推力 | 共同根与偏移，单次合力驱动每个身体；独立碰撞队形修正，跨世代不重放旧力 | 约束和组快照同版本后绑定CMC；结束立即清理 | 修正增速、名单变化跳位、120Hz/低帧率、障碍和客户端复制 | 5项GroupMovement、短线/交接/日志回归及四端真实CMC移动通过；临时World改用UE稳定网络名称和原生StaticMesh地面后，保留原收敛/位移断言通过 |
+| 体力与终局副作用 | Runner `ApplyGroupStaminaChanges` → `UCatAbilitySystemComponent::ApplyFishingStaminaDelta`；Session唯一磨损/终局 | 总体力是sum，只能各付各账；保留有效放线/满线/鱼力竭规则 | 冻结每人的ASC与上限；每人每步至多一次写；共同费用均分，个人移动独付 | 最终求解后一次结算，世代变更步末执行 | 零余额、未付尾额、加入不补满、共享/个人支撑重复 | 四 ASC 守恒、重复结算拒绝、零主位、费用通知销毁、有效放线/满线/力竭回归通过；实际写入由同一个 ApplyGroupStaminaChanges 完成 |
+| 原竿资源与持久化 | `Equipment/CatEquipmentComponent::ReleaseFishingUsesForShutdown` → 新 `CatFishingResourceCustodian`；Session冻结CastEquipment | 旧宿主销毁释放全场；目标当前World保留原竿及本场预留 | 原精确记录移入权威托管，删除原记录并重绑协调者；普通背包/Profile存档不涉及 | 静默迁移→重绑全部引用→通知→销毁原宿主 | 原竿与抛钩者分别Destroy、通知重入、重复Commit/Wear | 真实资源宿主 Destroy/EndPlay 与借竿预留场景通过，原实例/协调记录精确迁移；普通背包和 Profile 未改；跨 World 恢复不涉及 |
+| 配置、正式资产、生成入口 | `Config/DefaultGame.ini [/Script/Catfishing.CatFishingSettings] MaximumRodOperatorSlots`；FightBalance DA；`Scripts/create_fishing_fight_balance_asset.py` | 默认2→4；新增独立无单位辅助系数0.5，不挪用旧字段单位 | Config与类默认同步；生成脚本只给新资产初始化，保留已有调参 | Native默认→DA读取→Session构造配置 | 正式DA加载与非法范围；Cook仍沿已有MapsToCook，未改打包入口 | Settings 与正式 DA 加载回归通过，新字段默认0.5；配置仅改2→4；Python语法通过；Cook/打包未运行 |
+| UI/动画/Blueprint | Session snapshot → `UI/CatFishingViewBridge` → HUDModel/Widget；`/Game/UI/HUD/WBP_CatHUD` | 旧桥只主位且正式WBP缺体力控件 | 辅助绑定同会话，加入total max字段；正式WBP补控件保留按钮；0.2s调和复制顺序 | 先DTO/绑定再正式控件；旧个人字段含义不变 | 正式WBP实例验证；Rod/Character主图已导出无瞬移调用，Rod剩余Montage生成回调未确认 | 正式 WBP 幂等迁移、实际实例控件和3项HUD回归通过；SHA/备份见UI拼装文档；5张Rod Montage生成回调图仍未确认，兼容事件/StandAnchor保留 |
+| Editor 联机验证构建入口 | `Source/CatfishingEditor/CatfishingEditor.Build.cs` → `Fishing/Tests/CatFishingGroupNetworkTests.cpp`；实际 ASC / Region / BoundarySpline | 新四端测试跨模块读取 GAS、创建实际烘焙水域，原模块缺显式 GAS 依赖 | 增加私有 GameplayAbilities 依赖，使用导出 Region/BoundarySpline → BakeGeometry；不导出纯内部几何 API | 先构建依赖，再真实 PIE 四端运行 | 链接与真实成员 RPC、CMC、主控世代复制 | BuildIntegrated8完整链接通过，GroupListenThreeClients成功；空鱼、碰撞与临时World引用的早期失败报告保留，不计通过证据 |
+| 日志、检查、文档与旧口径 | `LogCatFishing/LogCatEquipment`；Unit/Editor tests；本页、实现导读、UI拼装清单 | 旧辅助按键/主独付/2位说明会误导 | 清旧帮助者扣费入口，更新费用断言；结构化Session/Rod/Player/Step日志；保留未核实二进制兼容入口 | 清已确认旧调用后跑受影响测试；不扩大全项目重构 | 默认落盘、原有静态脚本与三层证据 | 默认事件已在Integrated8Tests.log落盘，PIE房主/客户端按World和NetMode关联；Equipment Static通过，原FishingEntry/UI静态gate仍失败（见下文）；真人与打包双端未验收 |
+| 低帧率移动账单 | Runner 成员采样 → GroupModel 个人费用；Timer 可同帧执行多个固定步 | 原单步吃掉全部位置差，追赶步误判受阻 | Runner 按成员保存厘米位移/秒时间及接受意图，逐步消费；公式不变 | 采样→分配本步进展→一次结算；成员世代变化清旧样本 | 真实 Runner 比较一次0.1秒与两次0.05秒采样；被动拖移/瞬移不成为主动进展 | 真实四CMC/四ASC回归通过：一次0.1秒与两次0.05秒运动和扣费一致，剩余样本消费守恒，瞬移不冒充进展，无输入被动移动不收费 |
+| 操作指南与规格消费者 | `Docs/FishingCoreFlow_zh-CN.md` 遛鱼；`Docs/FishingMVPOperationGuide_zh-CN.md` 多人占位；本页蓝图导航 | 仍写辅助左键、力量占比分摊、任意离开无人值守、落水整场终局 | 改为当前合力/独立账本/幸存接力，修复已失效的蓝图指南链接 | 依据已衔接的Service/Runner口径改文档，不另建业务账本 | 定向旧关键词和实际入口核对 | CoreFlow/MVP操作指南已改为合力、均分共同账单、个人移动独付与幸存接力；已失效BlueprintTaskGuide导航改为实际SetupGuide |
+
+本轮最终证据根目录为 `Saved/Automation/CooperativeFishing-20260908/`。`contract`：`BuildIntegrated8.log` 与 `BuildGameFinal.log` 分别为 Editor/Game Win64 Development 完整构建成功；`SourceManifest.json` 核对58个源码/配置文件与隔离项目完全一致，正式HUD SHA为 `6696c60fd0ac67473efcf385422d30b13444f95178c6d46d9cfe105f9dc53bba`。没有关闭或热替换用户编辑器，也没有更改外部美术检查点。
+
+`runtime_behavior`：`Integrated8Report/index.json` 共217项，211 clean、5 warning、1 failed、0 notRun，即216通过；唯一失败仍是修改前的 `StarterRodPreservesMaximumDurabilityBaseline`（测试150、正式资产500），保留原资产与断言。新增及迁移后的Unit和既有职责链回归通过：方向合力/个人账本、真实四ASC与CMC、低帧率样本守恒、5项组移动/复制世代、3项HUD；扩展BorrowedRod包含11个独立World场景，覆盖真实Destroy/UnPossess、个人危险落水/倒地以及扣体通知销毁后的步末移除和原资源托管。
+
+真实 `GroupListenThreeClients` 使用一个Listen World和3个客户端，通过拥有者RPC加入、实际移动输入与CMC、客户端/服务器位置收敛、4→3成员复制、最早辅助补位、旧控制世代输入拒绝、总体力DTO与原竿实例锁。最终会话 `CD4C5D4C40AF2F6A1D886AACEA99B8AF`，竿 `BCABD2A2480961C7FA3EEE9BBB9C80DC`，57次受控短搏斗采样，竿/鱼分别移动9.933/32.998cm，ControlEpoch从1到2，3名剩余成员的复制体力176.901/180。原空鱼、互穿站位和临时World网络寻址失败均通过修正场景解决，未放宽移动、收敛、费用或接力断言。
+
+默认落盘证据为 `Integrated8Tests.log`，过滤 `LogCatFishing` 的 `fishing_group_stamina_settled`、`fishing_group_budget_exhausted`、`fishing_rod_operator_left`、`fishing_control_input_rejected`、`fishing_resource_*`，以及 `LogCatUI/ui_hud_fishing_*`。PIE多World日志共存于同一文件，以SessionId/RodActorId/PlayerId和World/NetMode区分双方；它不是新打包房主与客户端两份默认日志的替代证明。
+
+`presentation_delivery`：正式WBP真实实例和复制DTO已验证，尚未进行Cook/打包、真人4端整场手感、正式地图联机画面及不加`-log`的新包双端落盘验收。当前用户Editor仍加载旧DLL；保存退出后须在共享项目构建Development再体验。Fishing/UI/Equipment模块级缺口继续保留，不能以本轮受控短搏斗关闭整套模块。
+
+本轮静态边界：`EquipmentStatic.log` 为 PASS；`FishingEntryStaticFinal.log` 被脚本固定要求 GameplayMap=Lake 拦截，当前配置为 Showcase2；`UIStaticFinal.log` 被缺少 `/Game/UI/Collection` 显式 Cook 目录拦截。这两处配置本轮未改，仅 `MaximumRodOperatorSlots` 从2改为4，不把上述脚本计为通过，也不扩展到地图或图鉴模块改造。三个变更 Python 脚本及 UI PowerShell 脚本语法通过。
+
+兼容残留：正式 Rod/Character 主图已导出核对，未见按旧StandAnchor瞬移身体调用；Rod 的5张Montage生成回调图未完成导出，2026-09-08 末次 RiderLink health 为 disconnected。因此不删除反射事件、兼容站位查询及未确认二进制消费者的旧 StateTree 交换入口；后续须编辑器完成图/引用审计并迁移消费者后再删。`ApplyHelperStaminaChanges`、`GetPrimaryCatStaminaDrain`、旧 Character 整场终止调用与旧辅助按键运行路径已移除，无第二套生产体力账本。
 
 ### 2.1 水域（样条烘焙 → 只读缓存）
 
@@ -232,7 +266,7 @@ Config/DefaultGame.ini    10 个 section（改后必须重启 Editor；软引用
 参考重量、最小/最大缩放和三种局部 Transform；运行时没有按鱼名猜 Mesh/比例的平行配置。所有子 ABP 继承同一个
 无 Target Skeleton 的 `ABPT_CatFishBase`，播放速率与状态机只维护一次。
 
-数值快照：猫力50 体力100 ／ 竿强60 耐久70 线长1500 ／ 鱼力40 体力50 ／ 真咬窗3s 完美窗1s ／ 近岸100cm ／ 鱼竿操作位2个、左右间距140cm。
+数值快照：猫力50 体力100 ／ 竿强60 耐久70 线长1500 ／ 鱼力40 体力50 ／ 真咬窗3s 完美窗1s ／ 近岸100cm ／ 鱼竿操作位默认4个；140 cm 仍为兼容站位参考间距，不驱动加入瞬移。
 开发便利开关：整套 `bAutoConfigureStarterLoadout=False`；独立临时测试开关 `bAutoGrantStarterScoopNet=True` 只为新玩家角色补齐一把抄网并选中，商店获取接通后删除这条路径。
 
 ## 6. 已知待办（都在契约后面，不影响表现层）
@@ -242,4 +276,4 @@ Config/DefaultGame.ini    10 个 section（改后必须重启 Editor；软引用
 - 窝料改版：水域面积/鱼总量/鱼种库存账本、鱼种平均分布、互斥面积单元、共享重叠收敛曲线、守恒重分配与面积容量上限
 - 抄网规格版：概率/硬直/无网拾取/翻肚 30s 苏醒（会新增 Phase/Intent 枚举值→表现层届时"补分支"）
 - 浮漂精准偏移、入夜停咬、拽尾巴救援(W3)、巨鱼协作表现输入
-- 多人实时力量与独立体力已接入常规 FightRunner；仍待接的是低体力换人广播/超时、虚脱双倍恢复与 50% 再入门槛，以及正式多人力量/体力 HUD。`FCatFishingFightExchangeTask` 是历史 StateTree 交换入口：源码仅保留对应节点调用，正式资产生成器只接入 FightRunner，Runner 运行期间 Session 拒绝旧交换入口。目前没有已确认的巨鱼或其他运行消费者；由于二进制资产引用尚未完全核实，暂留待编辑器引用审计，不能作为常规耗体调参路径或已确认的巨鱼兼容方案。
+- 多人采用本页 2.0 的移动合力与个人账本方案；低体力强制换人、虚脱双倍恢复和 50% 再入门槛不属于当前已确认规则。正式多人 HUD 已接线，交付验收状态见下表。`FCatFishingFightExchangeTask` 是历史 StateTree 交换入口：源码仅保留对应节点调用，正式资产生成器只接入 FightRunner，Runner 运行期间 Session 拒绝旧交换入口。目前没有已确认的巨鱼或其他运行消费者；由于二进制资产引用尚未完全核实，暂留待编辑器引用审计，不能作为常规耗体调参路径或已确认的巨鱼兼容方案。

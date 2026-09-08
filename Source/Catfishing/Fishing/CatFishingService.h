@@ -11,6 +11,8 @@ class ACatFishingRodActor;
 class ACatFishingSession;
 class APlayerState;
 class UCatFishDefinition;
+class UCatEquipmentComponent;
+class ACatFishingResourceCustodian;
 class FCatFishingServiceRodBoundSessionRoutingTest;
 
 /** 一局服务器 Fishing 入口；创建/查询/终止会话并把所有阶段写入留给会话内 StateTree。 */
@@ -36,15 +38,19 @@ public:
 	FCatFishingCommandResult LeaveRod(AController* Controller, const FCatLeaveRodCommand& Command);
 	FCatFishingCommandResult PackRod(AController* Controller, const FCatPackRodCommand& Command);
 
-	/** 把巨鱼搏斗协作意图转给指定会话；会话用统一谓词拒绝非 Active、倒地、无当前 Character 或力量/体力非正的请求者。 */
+	/** 旧协作协议转到指定会话，再统一走 OperateRod 的距离、资格与容量校验。 */
 	FCatDomainCommandResult SubmitFightAssist(FGuid FishingSessionId, AController* AssistingController,
 		FGuid RequestId, int64 ExpectedRevision);
 
 	/** 把 NearShore 抢抄意图转给指定会话；服务不自己创建鱼或选择胜者。 */
 	FCatScoopResult RequestScoop(FGuid FishingSessionId, AController* ScoopingController, const FCatScoopCommand& Command);
 
-	/** Character 失去占有、倒地或销毁时终止所有相关未结算会话；不恢复旧半场。 */
-	void TerminateSessionsForCharacter(const ACatCharacter* Character);
+	/** Character 失去占有、倒地或销毁时仅移除其操作身份；剩余成员按加入顺序接力。 */
+	void ReleaseFishingOperatorForCharacter(const ACatCharacter* Character);
+	/** 原角色装备真正销毁前转存精确场上竿/预约饵；保留原物资归属，不复制普通背包。 */
+	bool PreserveFishingResourcesForEquipmentShutdown(UCatEquipmentComponent* Equipment);
+	/** Runner 完成一次冻结参与者结算后处理不能丢弃的身体失效通知。 */
+	void FlushDeferredOperatorRemovalsFromAuthority();
 
 	/**
 	 * Run 暂停钓鱼（白天结束、额度完成或进入夜晚）时终止当前会话、释放全部竿位并恢复角色移动。
@@ -114,14 +120,15 @@ private:
 	/** 清除已销毁或已终态 Session 弱引用；活动会话由其绑定鱼竿定位，不维护玩家唯一槽位。 */
 	void CompactSessions();
 
-	/** 清除 PlayerState 或 Rod Actor 任一端已经失效的部署登记。 */
+	/** 清除失效的竿登记；原 PlayerState 已离场但精确竿资源仍在托管时保留同一 RodActorId 定位。 */
 	void CompactDeployedRods();
 
 	/** 终止全部存活会话并释放所有竿位；DiagnosticReason 只进入 Session 终态诊断。 */
 	void TerminateAllSessionsAndReleaseOperators(const TCHAR* DiagnosticReason);
 
-	/** 强制移除指定角色占用的竿位；最后一人离开时同一鱼竿 Actor 落地。 */
-	void ReleaseOperatorForCharacter(const ACatCharacter* Character);
+	/** 正常离开与异常失效共用的成员变更事务；主位变化后同步会话，跳过不能操竿的候选。 */
+	bool RemoveOperatorAndReconcileSession(ACatFishingRodActor* Rod, APlayerState* PlayerState,
+		int64 ExpectedRevision, const ACatCharacter* LeavingCharacter, const TCHAR* Reason);
 
 	/** 清空所有存活鱼竿的操作槽；鱼竿仍保持部署并切到地面姿态。 */
 	void ReleaseAllRodOperators();
@@ -152,6 +159,18 @@ private:
 
 	/** PlayerState 到其场上实体竿的多值弱索引；所有权不随操作手变化，不强持 Actor。 */
 	TMultiMap<TWeakObjectPtr<APlayerState>, TWeakObjectPtr<ACatFishingRodActor>> DeployedRodsByPlayerState;
+
+	/** 已离场原宿主的精确竿实例结算入口；RodActorId 仍由原部署登记唯一定位。 */
+	TMap<FGuid, TWeakObjectPtr<UCatEquipmentComponent>> PreservedRodEquipment;
+	UPROPERTY(Transient)
+	TArray<TObjectPtr<ACatFishingResourceCustodian>> ResourceCustodians;
+	struct FDeferredOperatorRemoval
+	{
+		FGuid RodActorId;
+		TWeakObjectPtr<APlayerState> PlayerState;
+		TWeakObjectPtr<ACatCharacter> Character;
+	};
+	TArray<FDeferredOperatorRemoval> DeferredOperatorRemovals;
 
 	/** teardown 后永久拒绝本 World 新会话。 */
 	bool bCommandsOpen = true;

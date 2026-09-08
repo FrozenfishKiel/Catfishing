@@ -14,6 +14,17 @@ struct FCatExternalTractionInput
 	double BrakingDecelerationCentimetersPerSecondSquared = 0.0;
 	double SpeedLimitCentimetersPerSecond = 0.0;
 	bool bActive = false;
+	/** 同竿组驱动代替个人普通行走；原始 Acceleration 仍由网络移动入口接收。 */
+	bool bGroupDriven = false;
+	/** 成员身份已确认，受力快照尚未齐全；保留惯性/制动，但禁止个人加速和旧组外力。 */
+	bool bWaitingForGroupSolve = false;
+	uint32 RosterVersion = 0;
+	uint32 ControlEpoch = 0;
+	uint32 MembershipEpoch = 0;
+	uint32 AimInputEpoch = 0;
+	FVector GroupDesiredVelocity = FVector::ZeroVector;
+	FVector GroupLateralAcceleration = FVector::ZeroVector;
+	FVector FormationCorrectionVelocity = FVector::ZeroVector;
 };
 
 /** 外力进入 CMC 的速度积分和碰撞流程，并随 SavedMove 重放。 */
@@ -28,16 +39,22 @@ public:
 	void RestoreTractionForSavedMove(const FCatExternalTractionInput& Input);
 	/** 只读胶囊探测，供外力求解约束下一步可移动距离；实际落位仍由 CMC 完成。 */
 	double GetExternalTractionTravelLimit(const FVector& Direction, double MaximumDistance) const;
+	FVector GetAcceptedFishingMoveIntent() const;
 	virtual FNetworkPredictionData_Client* GetPredictionData_Client() const override;
 	virtual void PerformMovement(float DeltaSeconds) override;
 	virtual void CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration) override;
 private:
+	friend class FCatFishingGroupRunnerIntegrationTest;
+	friend class FCatFishingGroupMovementContinuityTest;
+	friend class FCatFishingGroupMovementEpochTest;
+	friend class FCatFishingGroupWaitingTest;
 	TWeakObjectPtr<const UObject> TractionSource;
 	FCatExternalTractionInput LiveTraction;
 	FCatExternalTractionInput MovementTraction;
 	bool bUseSavedTraction = false;
 	double NextTractionDiagnosticSeconds = 0.0;
 	double NextReplayDiagnosticSeconds = 0.0;
+	double NextSourceConflictDiagnosticSeconds = 0.0;
 	FGuid LastTractionDiagnosticSourceId;
 	bool bLastTractionActive = false;
 };

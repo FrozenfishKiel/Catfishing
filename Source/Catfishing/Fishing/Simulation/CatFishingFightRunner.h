@@ -4,6 +4,7 @@
 #include "UObject/Object.h"
 #include "Environment/CatWaterTypes.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
+#include "Fishing/Simulation/CatFishingGroupModel.h"
 #include "Fishing/Simulation/CatFishSteeringModel.h"
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 #include "CatFishingFightRunner.generated.h"
@@ -39,6 +40,15 @@ struct CATFISHING_API FCatFishingFightRunnerInit
 	uint64 RandomSeed = 0;
 };
 
+/** 一段服务器已接受移动的观察量；按真实采样时间分给固定步，不能重复消费身体位移。 */
+struct FCatFightParticipantMovementSample
+{
+	double DurationSeconds = 0.0;
+	FVector MoveIntentWorld = FVector::ZeroVector;
+	FVector ActualDisplacementCentimeters = FVector::ZeroVector;
+	double MaximumMoveSpeedCentimetersPerSecond = 0.0;
+};
+
 /** 一名鱼竿操作者在本场搏斗中的服务器私有意图/体力绑定。 */
 struct CATFISHING_API FCatFightParticipantRuntime
 {
@@ -46,12 +56,18 @@ struct CATFISHING_API FCatFightParticipantRuntime
 	TWeakObjectPtr<ACatCharacter> Character;
 	TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
 	double BaseFishingStrength = 0.0;
-	/** 有正体力时等于当前基础力量，体力归零时停止主动出力；不按体力比例衰减。 */
+	/** 有正体力时为基础力量乘角色贡献系数，归零时停止出力；不按体力比例衰减。 */
 	double ActiveFishingStrength = 0.0;
 	int64 LastInputSequence = 0;
 	bool bPullHeld = false;
 	bool bSlackHeld = false;
 	bool bPrimary = false;
+	uint32 MembershipEpoch = 0;
+	double StaminaMaximum = 0.0;
+	FVector LastSampledPosition = FVector::ZeroVector;
+	double LastMovementSampleWorldSeconds = 0.0;
+	TArray<FCatFightParticipantMovementSample> PendingMovementSamples;
+	bool bHasSampledPosition = false;
 };
 
 /** Authority-only fixed-step owner of fight simulation and resource side effects. */
@@ -92,6 +108,7 @@ private:
 	friend class FCatFishingExhaustedPickupHandoffTest;
 	friend class FCatFishingSurfaceTraversalTest;
 	friend class FCatFishingParticipantStrengthTest;
+	friend class FCatFishingGroupRunnerIntegrationTest;
 	friend class FCatFishingMotionDiagnosticTest;
 	friend class FCatFishBehaviorStateTreeRuntimeTest;
 	void HandleFixedStep();
@@ -103,7 +120,7 @@ private:
 	FCatFightParticipantRuntime* FindParticipant(APlayerState* PlayerState);
 	FCatFightParticipantRuntime* FindPrimaryParticipant();
 	bool UpdateParticipantIntentAndProperties();
-	bool ApplyHelperStaminaChanges(double TotalGroupDrain);
+	bool ApplyGroupStaminaChanges(const FCatFightStepResult& Step);
 	bool TryResolveGroundedFishPosition(const FVector& DesiredPosition,
 		FVector& OutGroundedPosition, FVector& OutSurfaceNormal, AActor*& OutSurfaceActor) const;
 	FCatFishMotionSolveResult ResolveFishSurfaceFromAuthority(FCatFightStepResult& Step,
@@ -115,6 +132,13 @@ private:
 	TWeakObjectPtr<ACatFishingRodActor> RodActor;
 	TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
 	TMap<TWeakObjectPtr<APlayerState>, FCatFightParticipantRuntime> Participants;
+	FCatFightGroupInput GroupInput;
+	FCatFightGroupResult GroupResult;
+	TArray<TWeakObjectPtr<APlayerState>> FrozenParticipantPlayers;
+	TArray<TWeakObjectPtr<UCatAbilitySystemComponent>> FrozenParticipantAbilitySystems;
+	TArray<TArray<FCatFightParticipantMovementSample>> FrozenParticipantMovementSamples;
+	double LastGroupStaminaDrain = 0.0;
+	bool bGroupSettlementPending = false;
 	FCatWaterRegionHandle WaterRegion;
 	FCatFightSimulationConfig Config;
 	FCatFightSimulationState State;

@@ -25,6 +25,7 @@ VALUES = {
     "strength_per_kilogram": 10.0,
     "force_per_strength_newtons": 1.0,
     "cat_body_mass_kilograms": 5.0,
+    "helper_strength_multiplier": 0.5,
     "exhausted_reel_force_newtons": 200.0,
     "exhausted_cat_tow_acceleration_centimeters_per_second_squared": 300.0,
     "reel_speed_centimeters_per_second": 80.0,
@@ -112,6 +113,7 @@ def main():
         f"StrengthPerKg={asset.get_editor_property('strength_per_kilogram'):.3f} "
         f"ForcePerStrengthN={asset.get_editor_property('force_per_strength_newtons'):.3f} "
         f"CatBodyMassKg={asset.get_editor_property('cat_body_mass_kilograms'):.3f} "
+        f"HelperStrengthMultiplier={asset.get_editor_property('helper_strength_multiplier'):.3f} "
         f"ForceModelMigrated={migrated} "
         f"ExhaustedCatEscapeSpeedMultiplier={asset.get_editor_property('exhausted_cat_escape_speed_multiplier'):.3f} "
         f"CatCost={asset.get_editor_property('cat_stamina_cost_per_strength_centimeter'):.6f} "

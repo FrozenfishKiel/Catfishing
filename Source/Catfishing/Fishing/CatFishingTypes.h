@@ -185,6 +185,9 @@ struct FCatFishingSessionSnapshot
 	/** 当前服务器认定的合法参与者 FightStamina 合计；与人数和力量一起描述当下协作可达性。 */
 	UPROPERTY(BlueprintReadOnly)
 	double CombinedFightStamina = 0.0;
+	/** 当前成员各自体力上限之和；只读展示，不是可转移的公共余额。 */
+	UPROPERTY(BlueprintReadOnly)
+	double CombinedFightStaminaMaximum = 0.0;
 
 	/** 兼容旧 HUD 的二值输入指示：1=正在收线，0=未收线；不再存在蓄力积分。 */
 	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Use bReeling; charging was removed"))

@@ -293,7 +293,7 @@ void ACatCharacter::ApplyStarterLoadoutIfConfigured()
 		*Settings->StarterChumDefinitionId.ToString(), Settings->StarterChumQuantity);
 }
 
-// 会话中断通知流程：向当前 authority World 的 Fishing 与 Social 服务报告身体失效；前者终止半场搏斗，后者返还仍在追回窗口的鱼，二者都不跨 World 保存协议。
+// 会话中断通知流程：向当前 authority World 的 Fishing 与 Social 服务报告身体失效；前者释放个人操作位并让队友接力，后者返还仍在追回窗口的鱼，二者都不跨 World 保存协议。
 void ACatCharacter::NotifyFishingOwnerUnavailable()
 {
 	if (!HasAuthority())
@@ -302,7 +302,7 @@ void ACatCharacter::NotifyFishingOwnerUnavailable()
 	}
 	if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
 	{
-		Fishing->TerminateSessionsForCharacter(this);
+		Fishing->ReleaseFishingOperatorForCharacter(this);
 	}
 	if (UCatSocialService* Social = GetWorld() ? GetWorld()->GetSubsystem<UCatSocialService>() : nullptr)
 	{

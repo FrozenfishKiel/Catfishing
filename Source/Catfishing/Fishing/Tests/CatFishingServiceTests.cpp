@@ -171,7 +171,7 @@ bool FCatFishingServiceRodOperationsPreserveMovementTest::RunTest(const FString&
 	TestEqual(TEXT("重新进入主位"), RejoinedSlot, 0);
 	TestEqual(TEXT("重新拾取切回手持姿态"), Rod->GetPresentationState().PoseMode,
 		ECatFishingRodPoseMode::Held);
-	Fishing->TerminateSessionsForCharacter(Character);
+	Fishing->ReleaseFishingOperatorForCharacter(Character);
 	TestEqual(TEXT("Character 中断清空自身操作槽"), Rod->GetOperatorCount(), 0);
 	TestEqual(TEXT("Character 中断不改角色移动模式"), Movement->MovementMode.GetValue(), MOVE_Walking);
 
@@ -182,7 +182,7 @@ bool FCatFishingServiceRodOperationsPreserveMovementTest::RunTest(const FString&
 	TestEqual(TEXT("鱼竿异常销毁不改角色移动模式"), Movement->MovementMode.GetValue(), MOVE_Walking);
 	TestNull(TEXT("鱼竿异常销毁移除部署登记"), Fishing->FindDeployedRod(PlayerState));
 
-	Fishing->TerminateSessionsForCharacter(Character);
+	Fishing->ReleaseFishingOperatorForCharacter(Character);
 	TestEqual(TEXT("鱼竿登记失效后的中断仍不改移动模式"), Movement->MovementMode.GetValue(), MOVE_Walking);
 	return !HasAnyErrors();
 }

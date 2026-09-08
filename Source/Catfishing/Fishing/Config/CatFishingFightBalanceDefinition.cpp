@@ -14,6 +14,7 @@ bool UCatFishingFightBalanceDefinition::IsRuntimeDefinitionReady() const
 		&& FMath::IsFinite(StrengthPerKilogram) && StrengthPerKilogram > 0.0
 		&& FMath::IsFinite(ForcePerStrengthNewtons) && ForcePerStrengthNewtons > 0.0
 		&& FMath::IsFinite(CatBodyMassKilograms) && CatBodyMassKilograms > 0.0
+		&& IsFishingFightBalanceFiniteNonNegative(HelperStrengthMultiplier) && HelperStrengthMultiplier <= 1.0
 		&& FMath::IsFinite(ExhaustedReelForceNewtons) && ExhaustedReelForceNewtons > 0.0
 		&& IsFishingFightBalanceFiniteNonNegative(ExhaustedCatTowAccelerationCentimetersPerSecondSquared)
 		&& FMath::IsFinite(ReelSpeedCentimetersPerSecond) && ReelSpeedCentimetersPerSecond > 0.0

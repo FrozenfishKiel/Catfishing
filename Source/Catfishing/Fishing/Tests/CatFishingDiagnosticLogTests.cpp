@@ -116,6 +116,9 @@ bool FCatFishingMotionDiagnosticTest::RunTest(const FString& Parameters)
 		Movement->SetMovementMode(MOVE_Flying);
 		Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 100.0, 100.0, 1.0, 0.0,
 			true, 100.0, 50.0, FVector::RightVector, 0.0, true);
+		// 与 Runner 一样完整发布本轮组解；只有 Carrier 的中间态必须等待，不能产生旧式个人牵引。
+		TestTrue(TEXT("complete the one-member group solve before observing motion"),
+			Rod->SetGroupMotionFromAuthority(FVector::ZeroVector, FVector::ZeroVector));
 		FFishingMotionLogCapture Capture;
 		GLog->FlushThreadedLogs();
 		GLog->AddOutputDevice(&Capture);

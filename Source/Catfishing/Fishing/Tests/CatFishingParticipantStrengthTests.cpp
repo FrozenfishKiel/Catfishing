@@ -34,6 +34,8 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("生成两名角色与玩家身份"), PrimaryCharacter && HelperCharacter && PrimaryPlayer && HelperPlayer)) return false;
 	PrimaryCharacter->SetPlayerState(PrimaryPlayer);
 	HelperCharacter->SetPlayerState(HelperPlayer);
+	PrimaryPlayer->SetPlayerId(1);
+	HelperPlayer->SetPlayerId(2);
 	UCatAbilitySystemComponent* PrimaryASC = PrimaryCharacter->GetCatAbilitySystemComponent();
 	UCatAbilitySystemComponent* HelperASC = HelperCharacter->GetCatAbilitySystemComponent();
 	if (!TestTrue(TEXT("两个角色均有真实ASC"), PrimaryASC && HelperASC)) return false;
@@ -48,17 +50,20 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	UCatFishingFightRunner* Runner = NewObject<UCatFishingFightRunner>(Session);
 	Runner->Session = Session;
 	Runner->RodActor = Rod;
+	Runner->AbilitySystem = PrimaryASC;
 	FCatFightParticipantRuntime PrimaryParticipant;
 	PrimaryParticipant.PlayerState = PrimaryPlayer;
 	PrimaryParticipant.Character = PrimaryCharacter;
 	PrimaryParticipant.AbilitySystem = PrimaryASC;
+	PrimaryParticipant.StaminaMaximum = 60.0;
 	PrimaryParticipant.bPrimary = true;
 	PrimaryParticipant.bPullHeld = true;
 	FCatFightParticipantRuntime HelperParticipant;
 	HelperParticipant.PlayerState = HelperPlayer;
 	HelperParticipant.Character = HelperCharacter;
 	HelperParticipant.AbilitySystem = HelperASC;
-	HelperParticipant.bPullHeld = true;
+	HelperParticipant.StaminaMaximum = 60.0;
+	HelperParticipant.bPullHeld = false;
 	Runner->Participants.Add(TWeakObjectPtr<APlayerState>(PrimaryPlayer), PrimaryParticipant);
 	Runner->Participants.Add(TWeakObjectPtr<APlayerState>(HelperPlayer), HelperParticipant);
 	Runner->Config.FixedStepSeconds = 0.05;
@@ -94,46 +99,44 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("满体、半体及极低正体力均可刷新真实参与者"), Runner->UpdateParticipantIntentAndProperties())) return false;
 		TestTrue(TEXT("极低正体力没有在ASC中被抹成零"), Runner->State.CatStamina > 0.0);
 		TestEqual(TEXT("主位有效力量不随正体力比例降低"), Runner->FindParticipant(PrimaryPlayer)->ActiveFishingStrength, 50.0);
-		TestEqual(TEXT("辅助有效力量不随正体力比例降低"), Runner->FindParticipant(HelperPlayer)->ActiveFishingStrength, 30.0);
+		TestEqual(TEXT("辅助折扣后的有效力量不随正体力比例降低"), Runner->FindParticipant(HelperPlayer)->ActiveFishingStrength, 15.0);
 		TestEqual(TEXT("配置收到主位完整力量"), Runner->Config.PrimaryOperatorCatStrength, 50.0);
-		TestEqual(TEXT("按住拉线的辅助完整参与合力"), Runner->Config.SecondCatStrength, 30.0);
+		TestEqual(TEXT("辅助无需左键，站定默认贡献五成力量"), Runner->Config.SecondCatStrength, 15.0);
 		TestEqual(TEXT("主位等效质量不随体力改变"), Runner->Config.PrimaryOperatorMassKilograms, 5.0);
 		TestEqual(TEXT("辅助等效质量不随体力改变"), Runner->Config.HelperMassKilograms, 5.0);
 		const auto Step = Simulate();
 		TestTrue(TEXT("真实刷新后的力量能进入模拟"), Step.bSucceeded);
-		TestEqual(TEXT("模拟器在各正体力档使用同一完整合力"), Step.CombinedCatStrength, 80.0);
-		TestEqual(TEXT("模拟器对抗加速度不随正体力降低"), Step.CatDriveAccelerationCentimetersPerSecondSquared, 800.0);
+		TestEqual(TEXT("模拟器在各正体力档使用同一完整折扣合力"), Step.CombinedCatStrength, 65.0);
+		TestEqual(TEXT("模拟器对抗加速度不随正体力降低"), Step.CatDriveAccelerationCentimetersPerSecondSquared, 650.0);
 	}
 
 	SetStamina(0.0f, 30.0f);
 	if (!TestTrue(TEXT("主位恰好零体力时刷新成功"), Runner->UpdateParticipantIntentAndProperties())) return false;
 	TestEqual(TEXT("主位恰好零体力才停止贡献力量"), Runner->Config.PrimaryOperatorCatStrength, 0.0);
-	TestEqual(TEXT("主位力竭不会关闭有体力的辅助"), Runner->Config.SecondCatStrength, 30.0);
+	TestEqual(TEXT("主位力竭不会关闭有体力的辅助"), Runner->Config.SecondCatStrength, 15.0);
 	const auto HelperOnly = Simulate();
 	TestTrue(TEXT("主位力竭时辅助合力仍能收线"), HelperOnly.bSucceeded && HelperOnly.RequestedReelDistanceCentimeters > 0.0);
+	Runner->FindParticipant(HelperPlayer)->bPullHeld = true;
+	if (!TestTrue(TEXT("旧辅助按钮记录变化后重新刷新"), Runner->UpdateParticipantIntentAndProperties())) return false;
+	TestEqual(TEXT("旧辅助左键记录不再是出力开关"), Runner->Config.SecondCatStrength, 15.0);
 	Runner->FindParticipant(HelperPlayer)->bPullHeld = false;
-	if (!TestTrue(TEXT("辅助松键后重新刷新"), Runner->UpdateParticipantIntentAndProperties())) return false;
-	TestEqual(TEXT("辅助松键不再参与合力"), Runner->Config.SecondCatStrength, 0.0);
-	TestEqual(TEXT("辅助松键不改变其自身完整力量"), Runner->FindParticipant(HelperPlayer)->ActiveFishingStrength, 30.0);
-	TestEqual(TEXT("零合力时活鱼收线停止"), Simulate().RequestedReelDistanceCentimeters, 0.0);
 
 	SetStamina(1e-9f, 30.0f);
 	if (!TestTrue(TEXT("主位从零恢复极少体力后立即刷新"), Runner->UpdateParticipantIntentAndProperties())) return false;
 	TestEqual(TEXT("恢复任意正体力立即恢复主位完整力量"), Runner->Config.PrimaryOperatorCatStrength, 50.0);
 	PrimaryASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 80.0f);
 	HelperASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 40.0f);
-	Runner->FindParticipant(HelperPlayer)->bPullHeld = true;
 	if (!TestTrue(TEXT("力量属性实际改变后重新刷新"), Runner->UpdateParticipantIntentAndProperties())) return false;
 	TestEqual(TEXT("主位使用ASC最新力量而非入场缓存"), Runner->Config.PrimaryOperatorCatStrength, 80.0);
-	TestEqual(TEXT("辅助使用ASC最新力量而非入场缓存"), Runner->Config.SecondCatStrength, 40.0);
-	TestEqual(TEXT("模拟器收到属性修改后的合力"), Simulate().CombinedCatStrength, 120.0);
+	TestEqual(TEXT("辅助使用ASC最新力量再施加独立五成折扣"), Runner->Config.SecondCatStrength, 20.0);
+	TestEqual(TEXT("模拟器收到属性修改后的合力"), Simulate().CombinedCatStrength, 100.0);
 
 	SetStamina(30.0f, 0.0f);
 	if (!TestTrue(TEXT("辅助恰好零体力后重新刷新"), Runner->UpdateParticipantIntentAndProperties())) return false;
-	TestEqual(TEXT("辅助按住按钮但零体力时不提供力量"), Runner->Config.SecondCatStrength, 0.0);
+	TestEqual(TEXT("辅助恰好零体力时不提供力量"), Runner->Config.SecondCatStrength, 0.0);
 	SetStamina(30.0f, 1e-9f);
 	if (!TestTrue(TEXT("辅助恢复极少正体力后重新刷新"), Runner->UpdateParticipantIntentAndProperties())) return false;
-	TestEqual(TEXT("辅助恢复后立即提供自身最新完整力量"), Runner->Config.SecondCatStrength, 40.0);
+	TestEqual(TEXT("辅助恢复后立即提供自身最新折扣力量"), Runner->Config.SecondCatStrength, 20.0);
 
 	SetStamina(1e-9f, 1e-9f);
 	if (!TestTrue(TEXT("双方极低正体力仍先保持完整力量"), Runner->UpdateParticipantIntentAndProperties())) return false;
@@ -141,7 +144,10 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("真实GAS接受扣尽主位极低正体力的非零Delta"), PrimaryASC->ApplyFishingStaminaDelta(-TinyPrimaryStamina));
 	TestEqual(TEXT("主位极低剩余体力确实扣至零"),
 		PrimaryASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 0.0f);
-	TestTrue(TEXT("助手生产扣费路径处理极低正体力"), Runner->ApplyHelperStaminaChanges(0.1));
+	if (!TestTrue(TEXT("支付主位后重新冻结真实余额，不能重复用旧账单"), Runner->UpdateParticipantIntentAndProperties())) return false;
+	const auto TinyBalanceStep = Simulate();
+	TestTrue(TEXT("实际鱼线负担能生成极低体力共同账单"), TinyBalanceStep.bSucceeded && TinyBalanceStep.GetSharedCatStaminaDrain() > 0.0);
+	TestTrue(TEXT("共同生产扣费路径处理辅助极低正体力"), Runner->ApplyGroupStaminaChanges(TinyBalanceStep));
 	TestEqual(TEXT("助手极低剩余体力确实扣至零"),
 		HelperASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 0.0f);
 	if (!TestTrue(TEXT("实际支付耗尽后重新刷新双方力量"), Runner->UpdateParticipantIntentAndProperties())) return false;
@@ -151,11 +157,13 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 
 	Runner->bInitialized = true;
 	Runner->bRunning = true;
+	TestFalse(TEXT("辅助左键不能获得线杯操作权"), Runner->SetReeling(HelperPlayer, 1, true));
+	TestFalse(TEXT("辅助右键不能获得线杯操作权"), Runner->SetSlacking(HelperPlayer, 2, true));
 	SetStamina(30.0f, 30.0f);
 	Runner->UpdateParticipantIntentAndProperties();
 	Runner->State.LineLengthCentimeters = Runner->Config.MaximumLineLengthCentimeters;
 	Runner->State.FishWorldPosition.X = Runner->State.LineLengthCentimeters;
-	Constraint.CarrierDesiredVelocityCentimetersPerSecond = FVector(-100.0, 0.0, 0.0);
+	Constraint.CarrierDesiredVelocityCentimetersPerSecond = FVector::ZeroVector;
 	Constraint.CatRodExertionSquaredSeconds = 0.04;
 	const auto WithoutRightButton = Simulate();
 	TestTrue(TEXT("满线时右键按下仍记录为真实输入"), Runner->SetSlacking(PrimaryPlayer, 1, true));
@@ -170,15 +178,12 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("满线同时按右键不改变原左键的鱼耗体"), FullLine.FishStaminaDrain, WithoutRightButton.FishStaminaDrain, 1e-9);
 	TestEqual(TEXT("满线同时按右键不改变原左键的磨损"), FullLine.RodWearDelta, WithoutRightButton.RodWearDelta, 1e-9);
 	TestTrue(TEXT("满线同时按右键不改变原左键的鱼位移"), FullLine.ProposedFishWorldPosition.Equals(WithoutRightButton.ProposedFishWorldPosition, 1e-9));
-	const double PrimaryDrain = FullLine.GetPrimaryCatStaminaDrain()
-		+ FullLine.GetSharedCatStaminaDrain() * Runner->Config.PrimaryOperatorCatStrength / Runner->Config.GetCombinedCatStrength();
-	TestTrue(TEXT("满线主位费用通过真实GAS写口扣除"), PrimaryASC->ApplyFishingStaminaDelta(static_cast<float>(-PrimaryDrain)));
-	TestTrue(TEXT("满线共享费用经过生产助手扣费入口"), Runner->ApplyHelperStaminaChanges(FullLine.GetSharedCatStaminaDrain()));
+	TestTrue(TEXT("满线收线、转杆与支撑经唯一生产写口共同支付"), Runner->ApplyGroupStaminaChanges(FullLine));
 	const double PrimaryPaid = 30.0 - PrimaryASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
 	const double HelperPaid = 30.0 - HelperASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
 	TestTrue(TEXT("满线主位与实际出力助手均实际扣体"), PrimaryPaid > 0.0 && HelperPaid > 0.0);
 	TestEqual(TEXT("主辅实际总扣费只有一份模拟结果"), PrimaryPaid + HelperPaid, FullLine.CatStaminaDrain, 1e-5);
-	TestEqual(TEXT("主位操作费之外共享费用按八十比四十分摊"), PrimaryPaid - FullLine.GetPrimaryCatStaminaDrain(), HelperPaid * 2.0, 1e-5);
+	TestEqual(TEXT("主位与辅助均分操作负担，不按八十比二十力量转嫁主位"), PrimaryPaid, HelperPaid, 1e-5);
 	TestTrue(TEXT("满线右键期间左键释放被接受"), Runner->SetReeling(PrimaryPlayer, 3, false));
 	TestEqual(TEXT("满线松左键后进入普通锁线"), Runner->State.CatAction, ECatFightCatAction::None);
 	const auto LockedAtLimit = Simulate();
@@ -189,16 +194,15 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("之前正常左键确实完成收线"), FullLine.LineLengthCentimeters < Runner->Config.MaximumLineLengthCentimeters);
 	Runner->State.LineLengthCentimeters = FullLine.LineLengthCentimeters;
 	Runner->State.FishWorldPosition = FullLine.ProposedFishWorldPosition;
-	Runner->RefreshCatAction();
+	if (!TestTrue(TEXT("下一步恢复前重新冻结双ASC实际余额"), Runner->UpdateParticipantIntentAndProperties())) return false;
 	TestEqual(TEXT("真正收短线杯后持续右键重新生效"), Runner->State.CatAction, ECatFightCatAction::Slack);
 	const auto Recovery = Simulate();
 	TestTrue(TEXT("收短后的持续右键恢复正常回体"), Recovery.bSucceeded && Recovery.bSlackRecoveryActive && Recovery.CatStaminaDrain < 0.0);
 	const double PrimaryBeforeRecovery = PrimaryASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
 	const double HelperBeforeRecovery = HelperASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
-	TestTrue(TEXT("收短后的恢复通过真实GAS写口到账"), PrimaryASC->ApplyFishingStaminaDelta(static_cast<float>(-Recovery.CatStaminaDrain)));
+	TestTrue(TEXT("收短后的恢复通过唯一生产写口分别到账"), Runner->ApplyGroupStaminaChanges(Recovery));
 	TestTrue(TEXT("主位实际体力恢复"), PrimaryASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) > PrimaryBeforeRecovery);
-	TestTrue(TEXT("未满线右键结算仍经过生产助手入口"), Runner->ApplyHelperStaminaChanges(Recovery.GetSharedCatStaminaDrain()));
-	TestEqual(TEXT("未满线右键期间助手体力保持"), static_cast<double>(HelperASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute())), HelperBeforeRecovery);
+	TestTrue(TEXT("有效放线期间辅助恢复自己的体力"), static_cast<double>(HelperASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute())) > HelperBeforeRecovery);
 	TestEqual(TEXT("未满线右键期间鱼不耗体"), Recovery.FishStaminaDrain, 0.0);
 	TestTrue(TEXT("重新按下左键仍记录为按住"), Runner->SetReeling(PrimaryPlayer, 4, true));
 	TestEqual(TEXT("未满线时恢复原右键优先级"), Runner->State.CatAction, ECatFightCatAction::Slack);

@@ -46,6 +46,8 @@ HUD、背包、背包格子和交互提示的默认路径来自 `Source/Catfishi
 | `InventoryButton` | `Button` | 左下角背包入口，点击后广播 `OpenInventory`，由背包控制器打开页面。 |
 | `CatStatusTextBlock` | `TextBlock` | 猫状态调试摘要，默认隐藏；只在临时排查布局里显式打开。 |
 | `FishingFeedbackTextBlock` | `TextBlock` | 钓鱼流程调试反馈，默认隐藏；只在临时排查布局里显式打开。 |
+| `CatStaminaTextBlock` | `TextBlock` | 钓鱼时显示同竿总体力、总体力上限和人数；个人体力仍分别记账。 |
+| `CatStaminaProgressBar` | `ProgressBar` | 钓鱼时读取 `NormalizedTotalFightStamina`；只在搏斗相关阶段显示。 |
 
 ### 蓝图接口
 
@@ -66,12 +68,33 @@ HUD、背包、背包格子和交互提示的默认路径来自 `Source/Catfishi
 | `bShowCrosshair` | 是否绘制 HUD 中心准星；当前默认值为 true，与研发态摘要文本开关独立。 |
 | `Poison` | 当前毒值，只展示，不在 UI 里裁决倒地。 |
 | `FishingStrength` | 当前钓鱼力量，只展示。 |
-| `FightStamina` | 当前搏斗体力，只展示。 |
+| `FightStamina` / `FightStaminaMaximum` / `NormalizedFightStamina` | 本人当前搏斗体力、本人上限与比例，始终保留个人语义。 |
+| `TotalFightStamina` / `TotalFightStaminaMaximum` / `NormalizedTotalFightStamina` | 同竿所有当前成员个人余额与上限的合计、合计比例；来源是服务器 Session 摘要，不是共享资源账户。 |
+| `Fishing.FightParticipantCount` | 当前同竿人数，零体力成员仍可占位；加退人改变合计，不等于恢复或伤害。 |
+| `Fishing.CombinedFishingStrength` / `Fishing.ActiveCombinedFishingStrength` | 服务器公开的成员力量摘要和当前有效合力，UI 不重算辅助系数。 |
 | `Condition` | 湿身、倒地、恢复等状态快照。 |
 | `Growth` | 成长经验和待选次数快照。 |
 | `Fishing` | 当前钓鱼会话投影。 |
 | `CatStatusText` | C++ 已经整理好的猫状态文本。 |
 | `FishingFeedbackText` | C++ 已经整理好的钓鱼反馈文本。 |
+
+### 同竿总体力接线与迁移（2026-09-08）
+
+`UCatFishingViewBridge::FindFishingSessionForPlayerState` 按复制的 `Rod.PresentationState.OperatorPlayerStates` 查当前鱼竿，再匹配 `Session.Snapshot.RodActor`。主位和辅助读取同一会话；主位补位不改变会话身份。`UCatHUDModel` 每 0.2 秒幂等调和一次绑定，补上成员、Actor 和命令回执乱序到达的窗口，`Unbind` / `BeginDestroy` 清理该 Timer。体力值仍随 Session 快照变化刷新，不依靠对账 Timer 生成玩法状态。
+
+总体力单位沿用个人 `FightStamina` 点数，`TotalFightStamina = Snapshot.CombinedFightStamina`，上限取 `CombinedFightStaminaMaximum`，比例夹到 `[0,1]`，上限为零时比例为零。个人 `FightStamina` 字段继续从本人 ASC 读取。原生 `RenderHUD` 为正式控件写入总体力比例和“总体力 X / Y（N 人）”，辅助不需要按收线按钮才能看到它。
+
+正式 `/Game/UI/HUD/WBP_CatHUD` 保留原天数、背包和设置布局，新增的总体力文字和进度条锚定屏幕底部中心，默认隐藏，进入搏斗由 `bShowFightMeters` 显示。`Scripts/migrate_cooperative_fishing_hud.py` 是唯一补齐这两个控件的迁移入口，接入 `Scripts/verify_ui_reach.ps1 -Mode WBPCreate`；可在编辑器 Python 执行同一个脚本。脚本拒绝目标包未保存改动，按原包 SHA256 在 `Saved/Automation/UIReach/CooperativeHUD` 备份，只补缺失控件并核对生成类模板，重复运行不保存、不生成重复控件。旧 WBPCreate 指向已删除 `CatUIModuleWidgetAssetTests.cpp` 的路径已改正，不能再把该模式理解为重建整套 UI。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 成员查询、加入退出与补位显示 | `UI/CatFishingViewBridge.cpp::FindFishingSessionForPlayerState` 原先额外要求 `IsPrimaryOperator`；`HUD/CatHUDModel.cpp::Bind/HandleFishingCommandResult` 原先只有回执触发重查 | 辅助原先无会话投影；目标是所有当前成员共享会话显示，离队自动解除，接力不换会话 | 移除主位过滤；Model 增加 0.2 秒只读对账与成对清理 | Rod 名单和 Session 独立复制，允许先后到达；绑定变化后立即投影 | 辅助加入、无回执离队、接力、销毁/切图；Automation `HelpersBindSameSessionAndReconcileDeparture` | HelpersBindSameSessionAndReconcileDeparture在Integrated8Report通过，四端加入/补位后的实际UI日志齐全；真人画面仍未验收 |
+| 总体力与个人余额 | `CatFishingViewTypes::FromSnapshot` → `CatHUDModel::Refresh` → `CatHUDWidget::RenderHUD` → 两个原生绑定控件 | 原控件只显示本人的 ASC 体力；目标显示成员余额/上限合计，个人字段含义不变 | 投影 `CombinedFightStamina/Maximum` 和人数/力量；HUD 新增明确的 `Total*` 字段并实际消费 | Session/Runner 是合计事实写者，UI 只读取；成员先变更再发新快照 | 4→1、个人为零但团队有余额、离竿清理；Automation `CooperativeStaminaKeepsPersonalBalanceAndRendersTotal` | CooperativeStaminaKeepsPersonalBalanceAndRendersTotal在Integrated8Report通过，生产控件实际消费总体力；UI无扣费或第二份共享账户 |
+| 正式 WBP、生成与 Cook | `/Game/UI/HUD/WBP_CatHUD` 由 `CatUISettings` 软类装配；`DefaultGame.ini` 的 `DirectoriesToAlwaysCook=/Game/UI/HUD` 收集；2026-09-08 编辑器加载树确认原资产只有天数/两个按钮 | 原正式资产没有钓鱼体力控件，原生可选绑定为空；目标实际正式资产接收新总槽 | 原包加入 `CatStaminaTextBlock`、`CatStaminaProgressBar`；迁移脚本及现有 WBPCreate/Runtime 检查入口同步更新 | 先确认包不 dirty，SHA 备份，再补控件、编译、保存并核对生成类模板；不更换资产路径 | 原按钮保留、重复迁移不重复控件、正式实例绑定和显隐；Automation `FormalWidgetRendersCooperativeStamina` | 迁移与第二次 `Changed=[]` 已执行；原 SHA `16fd868ef7b8f58080f6b4b304514193cf351aaeea7ea61ca0fa1a61463a2930`，迁移后 SHA `6696c60fd0ac67473efcf385422d30b13444f95178c6d46d9cfe105f9dc53bba`；生成类模板真实具备两控件；新包画面仍须实机验收 |
+| 诊断、失败与退出清理 | `HUDModel::RefreshFishingSessionBinding/Unbind`、`HUDWidget::RenderHUD`，`LogCatUI` | 原来没有同竿绑定/合计显示的落盘证据；目标两端可定位 Session 与人数，不刷固定步日志 | 新增 `ui_hud_fishing_session_binding`、`ui_hud_fishing_group_applied`；缺正式控件时一次 `ui_hud_fishing_meter_missing` Warning | 使用 SessionId、PlayerId、World、NetMode、Authority/LocalRole；身份变化才记录，离队解除旧委托和 Timer | 默认 Development 日志落盘；分别核对房主/客户端，UI 自动化不替代打包双端证据 | Integrated8Tests.log实发ui_hud_fishing_group_applied，房主NetMode=2与三客户端NetMode=3均有；打包双端日志未运行 |
+| 资源写入与其他消费者 | 本轮 UI 只读 Session/ASC；Config Cook 路径与原正式 WBP 包名保留 | 体力扣费、装备持久化、鱼状态、网络裁决与动画不由 UI 改写 | 不涉及 UI 侧资源/持久化写入；除正式 WBP 外不迁移其他资产 | 玩法计算与成员版本由 Fishing 主链处理，UI 等待复制事实 | `contract` 验证字段与控件接线；`runtime_behavior` 检查真实实例；`presentation_delivery` 仍需双端画面 | 无新增业务进度账本；本表仅记录此职责链实施与证据，模块状态仍归唯一差距清单 |
+
+本轮统一验证已完成：`Saved/Automation/CooperativeFishing-20260908/Integrated8Report/index.json` 的3项 `Catfishing.Unit.UI.HUD` 合作体力回归全部通过，涵盖个人/总量字段、辅助绑定/离队和正式WBP实际控件。`GroupListenThreeClients` 另外验证4→3接力后的复制总体力DTO；尚未取得真人多端正式WBP画面或新打包默认日志证据。Editor/Game Development完整构建成功，完整影响结果和静态脚本残留见 `Docs/FishingArchitecture_zh-CN.md` 2.0.2；UI模块保持原有整体交付缺口。
 
 ## 默认背包：`WBP_CatInventory`
 

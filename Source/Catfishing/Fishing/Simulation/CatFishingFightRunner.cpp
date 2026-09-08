@@ -17,10 +17,12 @@
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerState.h"
+#include "GameFramework/PhysicsVolume.h"
 #include "Items/CatWorldItemSettings.h"
 #include "Items/World/CatWorldSurfaceResolver.h"
 #include "Logging/CatLog.h"
 #include "TimerManager.h"
+#include "Misc/ScopeExit.h"
 #include "Fishing/Debug/CatFishingMotionDiagnostics.h"
 
 namespace
@@ -167,7 +169,7 @@ bool UCatFishingFightRunner::AddParticipantFromAuthority(APlayerState* PlayerSta
 		? ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) : 0.0;
 	if (!PlayerState || !Character || !ASC || InitialInputSequence < 0
 		|| !FMath::IsFinite(Strength) || Strength <= 0.0
-		|| !FMath::IsFinite(Stamina) || Stamina <= 0.0
+		|| !FMath::IsFinite(Stamina) || Stamina < 0.0
 		|| !GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
 			Character->GetCatDefinitionId(), StaminaMaximum)
 		|| !FMath::IsFinite(StaminaMaximum) || StaminaMaximum <= 0.0f)
@@ -175,13 +177,23 @@ bool UCatFishingFightRunner::AddParticipantFromAuthority(APlayerState* PlayerSta
 		return false;
 	}
 	FCatFightParticipantRuntime& Participant = Participants.FindOrAdd(TWeakObjectPtr<APlayerState>(PlayerState));
+	const uint32 MembershipEpoch = RodActor.IsValid() ? RodActor->GetOperatorMembershipEpoch(PlayerState) : 0;
+	if (!Participant.bHasSampledPosition || Participant.Character != Character || Participant.MembershipEpoch != MembershipEpoch)
+	{
+		Participant.LastSampledPosition = Character->GetActorLocation();
+		Participant.LastMovementSampleWorldSeconds = Character->GetWorld()->GetTimeSeconds();
+		Participant.PendingMovementSamples.Reset();
+		Participant.bHasSampledPosition = true;
+	}
 	Participant.PlayerState = PlayerState;
 	Participant.Character = Character;
 	Participant.AbilitySystem = ASC;
 	Participant.BaseFishingStrength = Strength;
-	Participant.ActiveFishingStrength = Strength;
+	Participant.ActiveFishingStrength = Stamina > 0.0 ? Strength : 0.0;
+	Participant.StaminaMaximum = StaminaMaximum;
+	Participant.MembershipEpoch = MembershipEpoch;
 	Participant.LastInputSequence = InitialInputSequence;
-	Participant.bPullHeld = bInitialPullHeld;
+	Participant.bPullHeld = bPrimary && bInitialPullHeld;
 	// 线杯只属于主位。辅助位右键在命令入口是 no-op。
 	Participant.bSlackHeld = bPrimary && bInitialSlackHeld;
 	Participant.bPrimary = bPrimary;
@@ -203,7 +215,6 @@ bool UCatFishingFightRunner::RefreshParticipantsFromRod()
 
 	const TArray<TObjectPtr<APlayerState>>& Operators = Rod->GetPresentationState().OperatorPlayerStates;
 	TSet<TWeakObjectPtr<APlayerState>> CurrentOperators;
-	TArray<TWeakObjectPtr<APlayerState>> InvalidHelpers;
 	for (int32 Index = 0; Index < Operators.Num(); ++Index)
 	{
 		APlayerState* PlayerState = Operators[Index];
@@ -212,7 +223,8 @@ bool UCatFishingFightRunner::RefreshParticipantsFromRod()
 			continue;
 		}
 		CurrentOperators.Add(PlayerState);
-		if (FCatFightParticipantRuntime* Existing = FindParticipant(PlayerState))
+		if (FCatFightParticipantRuntime* Existing = FindParticipant(PlayerState);
+			Existing && Existing->MembershipEpoch == Rod->GetOperatorMembershipEpoch(PlayerState))
 		{
 			Existing->bPrimary = Index == 0;
 			continue;
@@ -229,27 +241,8 @@ bool UCatFishingFightRunner::RefreshParticipantsFromRod()
 				Commands->TryGetHeldFightInputStateFromAuthority(bPullHeld, bSlackHeld, InputSequence);
 			}
 		}
-		// 新辅助位与接手主位立即输出意图；体力直接读取该角色当下 ASC，不做补满。
-		if (!AddParticipantFromAuthority(PlayerState, Index == 0, bPullHeld, bSlackHeld, InputSequence)
-			&& Index > 0)
-		{
-			CurrentOperators.Remove(PlayerState);
-			InvalidHelpers.Add(PlayerState);
-		}
-	}
-	for (const TWeakObjectPtr<APlayerState>& WeakHelper : InvalidHelpers)
-	{
-		APlayerState* Helper = WeakHelper.Get();
-		const int32 SlotIndex = Helper ? Rod->GetOperatorSlotIndex(Helper) : INDEX_NONE;
-		APlayerState* IgnoredPromotion = nullptr;
-		const int64 ExpectedRevision = Rod->GetPresentationState().RodActorRevision;
-		if (SlotIndex > 0 && Rod->RemoveOperatorFromAuthority(Helper, ExpectedRevision, IgnoredPromotion))
-		{
-			UE_LOG(LogCatFishing, Warning,
-				TEXT("Event=fishing_helper_join_rejected SessionId=%s RodActorId=%s Slot=%d Reason=FightCapabilityUnavailable Result=AutoUnloaded"),
-				*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-				*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens), SlotIndex);
-		}
+		// Membership is owned by Service. Do not silently remove a rod slot from this reader.
+		if (!AddParticipantFromAuthority(PlayerState, Index == 0, false, false, InputSequence)) return false;
 	}
 
 	for (auto It = Participants.CreateIterator(); It; ++It)
@@ -265,111 +258,220 @@ bool UCatFishingFightRunner::RefreshParticipantsFromRod()
 
 bool UCatFishingFightRunner::UpdateParticipantIntentAndProperties()
 {
-	double PrimaryStrength = 0.0;
-	double HelperStrength = 0.0;
-	double PrimaryMass = 0.0;
-	double HelperMass = 0.0;
-	FCatFightParticipantRuntime* Primary = nullptr;
-	for (TPair<TWeakObjectPtr<APlayerState>, FCatFightParticipantRuntime>& Pair : Participants)
+	bGroupSettlementPending = false;
+	GroupInput = {};
+	GroupResult = {};
+	FrozenParticipantPlayers.Reset();
+	FrozenParticipantAbilitySystems.Reset();
+	FrozenParticipantMovementSamples.Reset();
+	GroupInput.HelperStrengthMultiplier = Config.HelperStrengthMultiplier;
+	const ACatFishingRodActor* Rod = RodActor.Get();
+	GroupInput.ResistanceDirectionWorld = (Rod ? Rod->GetRodTipWorldTransform().GetLocation() - State.FishWorldPosition
+		: -State.FishWorldPosition).GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, -FVector::ForwardVector);
+	// Stable membership order also fixes the order of rounding and payment. Tests without a rod roster use stable player IDs.
+	if (Rod && !Rod->GetPresentationState().OperatorPlayerStates.IsEmpty())
 	{
-		FCatFightParticipantRuntime& Participant = Pair.Value;
-		UCatAbilitySystemComponent* ASC = Participant.AbilitySystem.Get();
-		if (!ASC)
+		for (APlayerState* Player : Rod->GetPresentationState().OperatorPlayerStates) FrozenParticipantPlayers.Add(Player);
+	}
+	else
+	{
+		Participants.GetKeys(FrozenParticipantPlayers);
+		FrozenParticipantPlayers.Sort([](const auto& A, const auto& B)
+		{ return A.IsValid() && B.IsValid() ? A->GetPlayerId() < B->GetPlayerId() : A.IsValid(); });
+	}
+	double PrimaryStrength = 0.0, HelperStrength = 0.0, PrimaryMass = 0.0, HelperMass = 0.0;
+	bool bHasPrimary = false;
+	for (const auto& Player : FrozenParticipantPlayers)
+	{
+		FCatFightParticipantRuntime* Participant = Participants.Find(Player);
+		UCatAbilitySystemComponent* ASC = Participant ? Participant->AbilitySystem.Get() : nullptr;
+		ACatCharacter* Character = Participant ? Participant->Character.Get() : nullptr;
+		if (!ASC || !Character) return false;
+		float Baseline = 0.0f;
+		if (!GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(Character->GetCatDefinitionId(), Baseline)) return false;
+		FCatFightGroupParticipantInput& Input = GroupInput.Participants.AddDefaulted_GetRef();
+		Input.FishingStrength = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
+		Input.CurrentStamina = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+		Input.MaximumStamina = Participant->StaminaMaximum > 0.0 ? Participant->StaminaMaximum : Baseline;
+		Input.MassKilograms = Config.CatBodyMassKilograms;
+		Input.bPrimary = Participant->bPrimary;
+		const auto* Movement = Cast<UCatCharacterMovementComponent>(Character->GetCharacterMovement());
+		if (Movement)
 		{
-			return false;
+			Input.MoveIntentWorld = Movement->GetAcceptedFishingMoveIntent();
+			Input.MaximumMoveSpeedCentimetersPerSecond = Movement->GetMaxSpeed();
 		}
-		const double CurrentStrength = ASC->GetNumericAttribute(
-			UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
-		if (!FMath::IsFinite(CurrentStrength) || CurrentStrength <= 0.0)
+		FrozenParticipantAbilitySystems.Add(ASC);
+		const double SampleWorldSeconds = Character->GetWorld()->GetTimeSeconds();
+		if (!Participant->bHasSampledPosition)
 		{
-			return false;
+			Participant->LastSampledPosition = Character->GetActorLocation();
+			Participant->LastMovementSampleWorldSeconds = SampleWorldSeconds;
+			Participant->bHasSampledPosition = true;
 		}
-		Participant.BaseFishingStrength = CurrentStrength;
-		const double CurrentStamina = ASC->GetNumericAttribute(
-			UCatSurvivalAttributeSet::GetFightStaminaAttribute());
-		if (!FMath::IsFinite(CurrentStamina) || CurrentStamina < 0.0)
+		else if (SampleWorldSeconds > Participant->LastMovementSampleWorldSeconds)
 		{
-			return false;
-		}
-		// 体力决定还能坚持多久，正体力期间不削弱力量；只有耗尽才停止主动对抗。
-		const double ActiveStrength = CurrentStamina > 0.0 ? Participant.BaseFishingStrength : 0.0;
-		if (Participant.ActiveFishingStrength != ActiveStrength)
-		{
-			if (const ACatFishingSession* SessionActor = Session.Get())
+			FCatFightParticipantMovementSample& Sample = Participant->PendingMovementSamples.AddDefaulted_GetRef();
+			Sample.DurationSeconds = SampleWorldSeconds - Participant->LastMovementSampleWorldSeconds;
+			Sample.MoveIntentWorld = Input.MoveIntentWorld;
+			Sample.MaximumMoveSpeedCentimetersPerSecond = Input.MaximumMoveSpeedCentimetersPerSecond;
+			const FVector Intent = FVector(Input.MoveIntentWorld.X, Input.MoveIntentWorld.Y, 0.0).GetClampedToMaxSize(1.0);
+			const double Magnitude = Intent.Size();
+			if (Movement && !Movement->bJustTeleported && Magnitude > 0.0)
 			{
-				const UWorld* World = SessionActor->GetWorld();
-				const ACatFishingRodActor* Rod = RodActor.Get();
-				UE_LOG(LogCatFishing, Log,
-					TEXT("Event=fishing_cat_strength_changed SessionId=%s RodActorId=%s PlayerId=%d CatActor=%s "
-						"Primary=%s StrengthBefore=%.3f StrengthAfter=%.3f BaseStrength=%.3f Stamina=%.6f "
-						"StrengthMode=ConstantWhileStaminaPositive Result=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
-					*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-					Rod ? *Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens) : TEXT("None"),
-					Participant.PlayerState.IsValid() ? Participant.PlayerState->GetPlayerId() : INDEX_NONE,
-					*GetNameSafe(Participant.Character.Get()), Participant.bPrimary ? TEXT("true") : TEXT("false"),
-					Participant.ActiveFishingStrength, ActiveStrength, Participant.BaseFishingStrength, CurrentStamina,
-					ActiveStrength == 0.0 ? TEXT("StaminaExhausted")
-						: Participant.ActiveFishingStrength == 0.0 ? TEXT("StrengthRestored") : TEXT("BaseStrengthChanged"),
-					*GetNameSafe(World), World ? static_cast<int32>(World->GetNetMode()) : -1,
-					static_cast<int32>(SessionActor->GetLocalRole()));
+				const FVector Direction = Intent / Magnitude;
+				const double Progress = FVector::DotProduct(Character->GetActorLocation() - Participant->LastSampledPosition, Direction);
+				// Passive dragging without input and explicit teleports cannot become active work.
+				Sample.ActualDisplacementCentimeters = Direction * FMath::Clamp(Progress, 0.0,
+					Magnitude * Sample.MaximumMoveSpeedCentimetersPerSecond * Sample.DurationSeconds);
 			}
+			Participant->LastSampledPosition = Character->GetActorLocation();
+			Participant->LastMovementSampleWorldSeconds = SampleWorldSeconds;
 		}
-		Participant.ActiveFishingStrength = ActiveStrength;
-		if (Participant.bPrimary)
+		TArray<FCatFightParticipantMovementSample>& FrozenMovement = FrozenParticipantMovementSamples.AddDefaulted_GetRef();
+		double RemainingStepSeconds = Config.FixedStepSeconds;
+		while (RemainingStepSeconds > UE_DOUBLE_SMALL_NUMBER && !Participant->PendingMovementSamples.IsEmpty())
 		{
-			Primary = &Participant;
-			PrimaryStrength = ActiveStrength;
-			PrimaryMass = Config.CatBodyMassKilograms;
+			FCatFightParticipantMovementSample& Pending = Participant->PendingMovementSamples[0];
+			const double SliceSeconds = FMath::Min(RemainingStepSeconds, Pending.DurationSeconds);
+			FCatFightParticipantMovementSample Slice = Pending;
+			Slice.DurationSeconds = SliceSeconds;
+			Slice.ActualDisplacementCentimeters *= SliceSeconds / Pending.DurationSeconds;
+			FrozenMovement.Add(Slice);
+			Pending.ActualDisplacementCentimeters -= Slice.ActualDisplacementCentimeters;
+			Pending.DurationSeconds -= SliceSeconds;
+			RemainingStepSeconds -= SliceSeconds;
+			if (Pending.DurationSeconds <= UE_DOUBLE_SMALL_NUMBER) Participant->PendingMovementSamples.RemoveAt(0);
 		}
-		else if (Participant.bPullHeld)
+		Participant->BaseFishingStrength = Input.FishingStrength;
+		Participant->ActiveFishingStrength = Input.CurrentStamina > 0.0
+			? Input.FishingStrength * (Input.bPrimary ? 1.0 : Config.HelperStrengthMultiplier) : 0.0;
+		if (Input.bPrimary)
 		{
-			HelperStrength += ActiveStrength;
-			// 辅助猫与主位使用同一独立系统质量；体力耗尽停止出力，不改变质量。
-			HelperMass += Config.CatBodyMassKilograms;
+			bHasPrimary = true;
+			PrimaryStrength += Participant->ActiveFishingStrength;
+			PrimaryMass += Input.MassKilograms;
+			State.CatStamina = Input.CurrentStamina;
+			Config.CatStaminaMaximum = Input.MaximumStamina;
 		}
+		else { HelperStrength += Participant->ActiveFishingStrength; HelperMass += Input.MassKilograms; }
 	}
-
-	if (State.bOperatorPresent && !Primary)
-	{
-		return false;
-	}
+	if ((State.bOperatorPresent && !bHasPrimary) || !FCatFishingGroupModel::ComputeForces(GroupInput, GroupResult)) return false;
 	Config.PrimaryOperatorCatStrength = PrimaryStrength;
 	Config.SecondCatStrength = HelperStrength;
-	Config.PrimaryOperatorMassKilograms = PrimaryMass;
+	// Unattended solving keeps a positive inertial denominator; no body receives that force.
+	Config.PrimaryOperatorMassKilograms = GroupInput.Participants.IsEmpty() ? Config.CatBodyMassKilograms : PrimaryMass;
 	Config.HelperMassKilograms = HelperMass;
+	if (ACatFishingSession* OwnerSession = Session.Get())
+		OwnerSession->PublishGroupSummaryFromAuthority(GroupResult.TotalActiveStrength, GroupResult.TotalCurrentStamina,
+			GroupResult.TotalMaximumStamina, GroupInput.Participants.Num());
 	RefreshCatAction();
-	return Config.IsValid();
+	bGroupSettlementPending = Config.IsValid();
+	return bGroupSettlementPending;
 }
 
-bool UCatFishingFightRunner::ApplyHelperStaminaChanges(const double TotalGroupDrain)
+bool UCatFishingFightRunner::ApplyGroupStaminaChanges(const FCatFightStepResult& Step)
 {
-	if (TotalGroupDrain <= 0.0)
+	if (!bGroupSettlementPending) return false;
+	LastGroupStaminaDrain = 0.0;
+	FCatFightGroupStaminaInput Bill;
+	Bill.Participants = GroupInput.Participants;
+	Bill.Contributions = GroupResult.Participants;
+	const bool bFreeEffort = Step.bSlackRecoveryActive || State.bFishExhausted;
+	Bill.SharedStaminaDrain = bFreeEffort ? 0.0 : Step.CatReelStaminaDrain + Step.CatRodStaminaDrain + Step.CatHoldStaminaDrain;
+	Bill.RecoveryPerParticipant = Step.bSlackRecoveryActive ? Config.SlackStaminaRegenPerSecond * Config.FixedStepSeconds : 0.0;
+	if (FrozenParticipantAbilitySystems.Num() != Bill.Participants.Num()
+		|| FrozenParticipantMovementSamples.Num() != Bill.Participants.Num()) return false;
+	// Validate the entire frozen payment set before any ASC notification can reenter gameplay.
+	for (int32 Index = 0; Index < Bill.Participants.Num(); ++Index)
 	{
-		return true;
-	}
-	for (TPair<TWeakObjectPtr<APlayerState>, FCatFightParticipantRuntime>& Pair : Participants)
-	{
-		FCatFightParticipantRuntime& Participant = Pair.Value;
-		if (Participant.bPrimary)
+		const UCatAbilitySystemComponent* ASC = FrozenParticipantAbilitySystems[Index].Get();
+		if (!IsValid(ASC) || !ASC->GetOwner() || ASC->GetOwner()->IsActorBeingDestroyed())
 		{
+			// A disposed body cannot retain debt. Its force snapshot expires at this step's boundary.
+			Bill.Participants[Index].CurrentStamina = 0.0;
+			Bill.Contributions[Index].ActiveStrength = 0.0;
+			Bill.PersonalMovementDrains.Add(0.0);
 			continue;
 		}
-		UCatAbilitySystemComponent* ASC = Participant.AbilitySystem.Get();
-		if (!ASC)
-		{
-			return false;
-		}
 		const double Current = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
-		const double StrengthShare = Participant.bPullHeld
-			? Participant.ActiveFishingStrength / FMath::Max(Config.GetCombinedCatStrength(), UE_DOUBLE_SMALL_NUMBER)
-			: 0.0;
-		const double Drain = FMath::Min(Current, TotalGroupDrain * StrengthShare);
-		if (Drain > 0.0
-			&& !ASC->ApplyFishingStaminaDelta(static_cast<float>(-Drain)))
+		if (Current != Bill.Participants[Index].CurrentStamina) return false;
+		FCatFightGroupMovementCostInput Cost;
+		Cost.ActiveStrength = Bill.Contributions[Index].ActiveStrength;
+		Cost.StandardStrength = Config.StrengthPerKilogram;
+		Cost.CostPerStrengthCentimeter = Config.CatStaminaCostPerStrengthCentimeter;
+		Cost.NormalizedLoad = Step.CatNormalizedEffortLoad;
+		Cost.UnloadedWorkMultiplier = Config.CatUnloadedWorkMultiplier;
+		Cost.LoadStaminaMultiplier = Config.CatLoadStaminaMultiplier;
+		Cost.MovementStaminaMultiplier = Config.CatMovementStaminaMultiplier;
+		Cost.SupportStaminaPerSecond = Config.CatSupportStaminaPerSecond;
+		double PersonalMovementDrain = 0.0;
+		for (const FCatFightParticipantMovementSample& Sample : FrozenParticipantMovementSamples[Index])
 		{
-			return false;
+			Cost.MoveIntentWorld = Sample.MoveIntentWorld;
+			Cost.ActualDisplacementCentimeters = Sample.ActualDisplacementCentimeters;
+			Cost.MaximumMoveSpeedCentimetersPerSecond = Sample.MaximumMoveSpeedCentimetersPerSecond;
+			Cost.FixedStepSeconds = Sample.DurationSeconds;
+			FCatFightGroupMovementCostResult CostResult;
+			if (!FCatFishingGroupModel::ComputeMovementStaminaDrain(Cost, CostResult)) return false;
+			PersonalMovementDrain += CostResult.StaminaDrain;
+		}
+		Bill.PersonalMovementDrains.Add(bFreeEffort ? 0.0 : PersonalMovementDrain);
+	}
+	FCatFightGroupStaminaResult Settlement;
+	if (!FCatFishingGroupModel::SettleStamina(Bill, Settlement)) return false;
+	if (Settlement.UnpaidSharedStaminaDrain > 0.0)
+	{
+		if (const ACatFishingSession* OwnerSession = Session.Get())
+			UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_group_budget_exhausted SessionId=%s Step=%llu UnpaidDrain=%.6f Result=BalancesSaturated World=%s NetMode=%d Authority=true LocalRole=%d"),
+				*OwnerSession->GetSnapshot().FishingSessionId.ToString(), DiagnosticFixedStepSequence,
+				Settlement.UnpaidSharedStaminaDrain, *GetNameSafe(OwnerSession->GetWorld()),
+				int32(OwnerSession->GetNetMode()), int32(OwnerSession->GetLocalRole()));
+	}
+	// Consume the frozen bill before notifications; even a zero-delta recovery cannot be replayed.
+	bGroupSettlementPending = false;
+	double ActualTotal = 0.0;
+	for (int32 Index = 0; Index < Settlement.Participants.Num(); ++Index)
+	{
+		UCatAbilitySystemComponent* ASC = FrozenParticipantAbilitySystems[Index].Get();
+		if (!IsValid(ASC) || !ASC->GetOwner() || ASC->GetOwner()->IsActorBeingDestroyed())
+		{
+			if (const ACatFishingSession* OwnerSession = Session.Get())
+				UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_group_stamina_skipped SessionId=%s Step=%llu PlayerId=%d Result=DisposedMember World=%s NetMode=%d Authority=true LocalRole=%d"),
+					*OwnerSession->GetSnapshot().FishingSessionId.ToString(), DiagnosticFixedStepSequence,
+					FrozenParticipantPlayers[Index].IsValid() ? FrozenParticipantPlayers[Index]->GetPlayerId() : INDEX_NONE,
+					*GetNameSafe(OwnerSession->GetWorld()), int32(OwnerSession->GetNetMode()), int32(OwnerSession->GetLocalRole()));
+			continue;
+		}
+		const auto& Payment = Settlement.Participants[Index];
+		if (Payment.StaminaDelta != 0.0 && !ASC->ApplyFishingStaminaDelta(static_cast<float>(Payment.StaminaDelta))) return false;
+		LastGroupStaminaDrain -= Payment.StaminaDelta;
+		if (ACatFishingSession* OwnerSession = Session.Get(); OwnerSession && (DiagnosticFixedStepSequence % 20 == 1 || Payment.RemainingStamina == 0.0 && Bill.Participants[Index].CurrentStamina > 0.0))
+		{
+			UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_group_stamina_settled SessionId=%s Step=%llu PlayerId=%d PersonalDrain=%.6f SharedDrain=%.6f Recovery=%.6f StaminaAfter=%.6f Result=Applied World=%s NetMode=%d Authority=true LocalRole=%d"),
+				*OwnerSession->GetSnapshot().FishingSessionId.ToString(), DiagnosticFixedStepSequence,
+				FrozenParticipantPlayers[Index].IsValid() ? FrozenParticipantPlayers[Index]->GetPlayerId() : INDEX_NONE,
+				Payment.PersonalMovementDrain, Payment.SharedDrain, Payment.Recovery, Payment.RemainingStamina,
+				*GetNameSafe(OwnerSession->GetWorld()), int32(OwnerSession->GetNetMode()), int32(OwnerSession->GetLocalRole()));
 		}
 	}
+	// A later member's notification may also dispose an earlier payer. Project live balances only after all writes.
+	double ActualMaximum = 0.0;
+	int32 LiveCount = 0;
+	for (int32 Index = 0; Index < FrozenParticipantAbilitySystems.Num(); ++Index)
+	{
+		const UCatAbilitySystemComponent* ASC = FrozenParticipantAbilitySystems[Index].Get();
+		if (!IsValid(ASC) || !ASC->GetOwner() || ASC->GetOwner()->IsActorBeingDestroyed()) continue;
+		const double Balance = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+		ActualTotal += Balance;
+		ActualMaximum += Bill.Participants[Index].MaximumStamina;
+		++LiveCount;
+		if (Bill.Participants[Index].bPrimary) State.CatStamina = Balance;
+	}
+	GroupResult.TotalCurrentStamina = ActualTotal;
+	if (ACatFishingSession* OwnerSession = Session.Get())
+		OwnerSession->PublishGroupSummaryFromAuthority(GroupResult.TotalActiveStrength, ActualTotal,
+			ActualMaximum, LiveCount);
 	return true;
 }
 
@@ -422,7 +524,7 @@ bool UCatFishingFightRunner::SetReeling(APlayerState* InputPlayerState,
 	{
 		Participant = FindParticipant(InputPlayerState);
 	}
-	if (!bInitialized || !bRunning || !Participant || InputSequence <= Participant->LastInputSequence)
+	if (!bInitialized || !bRunning || !Participant || !Participant->bPrimary || InputSequence <= Participant->LastInputSequence)
 	{
 		return false;
 	}
@@ -507,7 +609,7 @@ bool UCatFishingFightRunner::TransferOperatorFromAuthority(APlayerState* NewPlay
 	CandidateConfig.PrimaryOperatorCatStrength = NewCatStrength;
 	CandidateConfig.CatStaminaMaximum = NewCatStaminaMaximum;
 	if (!bInitialized || !NewPlayerState || !NewAbilitySystem || InitialInputSequence < 0 || !CandidateConfig.IsValid()
-		|| !FMath::IsFinite(NewCatStamina) || NewCatStamina <= 0.0
+		|| !FMath::IsFinite(NewCatStamina) || NewCatStamina < 0.0
 		|| NewCatStamina > NewCatStaminaMaximum + UE_DOUBLE_KINDA_SMALL_NUMBER)
 	{
 		return false;
@@ -521,8 +623,8 @@ bool UCatFishingFightRunner::TransferOperatorFromAuthority(APlayerState* NewPlay
 	{
 		Pair.Value.bPrimary = false;
 	}
-	if (!AddParticipantFromAuthority(NewPlayerState, true, bInitialPullHeld,
-		bInitialSlackHeld, InitialInputSequence))
+	if (!AddParticipantFromAuthority(NewPlayerState, true, false,
+		false, InitialInputSequence))
 	{
 		return false;
 	}
@@ -831,7 +933,7 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 	// 地形可改变距离、解除张力或直接触发上岸力竭。转杆必须消费最终事实，
 	// 不得把地形解析前缓存的负载与解析后的松线/落点一起发布。
 	FCatFishingRodResistanceInput RotationInput;
-	RotationInput.CatStrength = Config.PrimaryOperatorCatStrength;
+	RotationInput.CatStrength = FMath::Max(0.0, GroupResult.SignedResistanceStrength);
 	RotationInput.LineTensionNewtons = State.bFishExhausted || Step.Outcome != ECatFightStepOutcome::None
 		? 0.0 : Step.LineTensionNewtons;
 	RotationInput.ForcePerStrengthNewtons = Config.ForcePerStrengthNewtons;
@@ -873,6 +975,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 		if (SessionActor) SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("DependencyResolution"));
 		return;
 	}
+	SessionActor->BeginFixedStepMutationBoundary();
+	ON_SCOPE_EXIT { if (IsValid(SessionActor)) SessionActor->EndFixedStepMutationBoundary(); };
 	if (!RefreshParticipantsFromRod()
 		|| !UpdateParticipantIntentAndProperties())
 	{
@@ -891,9 +995,13 @@ void UCatFishingFightRunner::HandleFixedStep()
 		}
 		State.CatStamina = FMath::Clamp(ASC->GetNumericAttribute(
 			UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 0.0, Config.CatStaminaMaximum);
-		FCatFightParticipantRuntime* Primary = FindPrimaryParticipant();
-		UCatConditionComponent* Condition = Primary && Primary->Character.IsValid()
-			? Primary->Character->GetConditionComponent() : nullptr;
+	}
+	bool bWaterDepartureRequested = false;
+	for (const auto& Player : FrozenParticipantPlayers)
+	{
+		const FCatFightParticipantRuntime* Member = Participants.Find(Player);
+		ACatCharacter* Character = Member ? Member->Character.Get() : nullptr;
+		UCatConditionComponent* Condition = Character ? Character->GetConditionComponent() : nullptr;
 		double ImmersionDepth = 0.0;
 		const ECatWaterExposureUpdate Exposure = Condition
 			? Condition->UpdateWaterExposureFromAuthority(WaterRegion, Config.FixedStepSeconds, ImmersionDepth)
@@ -904,20 +1012,15 @@ void UCatFishingFightRunner::HandleFixedStep()
 			SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("WaterExposureQuery"));
 			return;
 		}
-		if (Exposure == ECatWaterExposureUpdate::DangerousEntered)
+		if (Exposure == ECatWaterExposureUpdate::DangerousEntered
+			|| Condition->GetSnapshot().WaterExposure == ECatWaterExposureState::Dangerous)
 		{
-			UE_LOG(LogCatFishing, Log,
-				TEXT("Event=fishing_drag_water_entered SessionId=%s CatActor=%s PlayerId=%d CatStamina=%.6f "
-					"ImmersionDepthCm=%.3f Result=CatInWaterRequested World=%s NetMode=%d Authority=true LocalRole=%d"),
-				*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-				*GetNameSafe(Primary ? Primary->Character.Get() : nullptr),
-				Primary && Primary->PlayerState.IsValid() ? Primary->PlayerState->GetPlayerId() : INDEX_NONE,
-				State.CatStamina, ImmersionDepth, *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
-				static_cast<int32>(SessionActor->GetLocalRole()));
-			SessionActor->HandleCatEnteredDangerousWaterFromAuthority(ImmersionDepth);
-			return;
+			SessionActor->HandleCatEnteredDangerousWaterFromAuthority(ImmersionDepth, Character);
+			bWaterDepartureRequested = true;
 		}
 	}
+	// Flush all departing members before the next force snapshot; no old-member bill is applied on this transition.
+	if (bWaterDepartureRequested) return;
 
 	// 行为时钟、反馈和树转移共用本固定步；强制拖水期间暂停普通行为的计时和选择。
 	// 每步开始都以 Encounter Actor 的实际 Transform 为准同步鱼的位置，避免和上一步的建议位置产生累积误差。
@@ -970,27 +1073,63 @@ void UCatFishingFightRunner::HandleFixedStep()
 	RodConstraint.RodTipWorldPosition = RodTip;
 	RodConstraint.RodForwardWorld = Rod->GetAuthoritativeRodForwardVector();
 	RodConstraint.RodTipVelocityCentimetersPerSecond = Rod->GetAuthoritativeRodTipVelocity();
-	RodConstraint.CarrierVelocityCentimetersPerSecond = Rod->GetAuthoritativeHolderVelocity();
+	RodConstraint.CarrierVelocityCentimetersPerSecond = Rod->GetGroupVelocity();
+	RodConstraint.bGroupDriven = bRodHeld;
+	RodConstraint.CatSupportAlignment = GroupResult.TotalActiveStrength > UE_DOUBLE_SMALL_NUMBER
+		? FMath::Clamp(GroupResult.SignedResistanceStrength / GroupResult.TotalActiveStrength, -1.0, 1.0) : 0.0;
+	RodConstraint.GroupDesiredVelocity = GroupResult.DesiredVelocityCentimetersPerSecond;
+	RodConstraint.CarrierDesiredVelocityCentimetersPerSecond = GroupResult.DesiredVelocityCentimetersPerSecond;
+	const FVector GroupPullAxis = (State.FishWorldPosition - RodTip).GetSafeNormal2D();
+	RodConstraint.GroupLateralAcceleration = (GroupResult.AppliedStrengthWorld
+		- GroupPullAxis * FVector::DotProduct(GroupResult.AppliedStrengthWorld, GroupPullAxis))
+		* (100.0 * Config.ForcePerStrengthNewtons / FMath::Max(GroupResult.TotalMassKilograms, UE_DOUBLE_SMALL_NUMBER));
 	RodConstraint.bRodHeld = bRodHeld;
 	if (bRodHeld) Rod->GetRotationPredictionFromAuthority(Config.FixedStepSeconds, RodConstraint.RodRotationPrediction);
-	if (const ACatCharacter* PrimaryCharacter = FindPrimaryParticipant()
-		? FindPrimaryParticipant()->Character.Get() : nullptr)
+	if (bRodHeld)
 	{
-		const UCharacterMovementComponent* Movement = PrimaryCharacter->GetCharacterMovement();
-		if (const auto* CatMovement = Cast<UCatCharacterMovementComponent>(Movement); CatMovement && bRodHeld)
+		const FVector PullAxis = (State.FishWorldPosition - RodTip).GetSafeNormal2D();
+		const FVector LateralVelocity = RodConstraint.CarrierVelocityCentimetersPerSecond
+			- PullAxis * FVector::DotProduct(RodConstraint.CarrierVelocityCentimetersPerSecond, PullAxis);
+		const FVector LateralTarget = RodConstraint.GroupDesiredVelocity
+			- PullAxis * FVector::DotProduct(RodConstraint.GroupDesiredVelocity, PullAxis);
+		// Probe the lateral travel direction independently of the along-line tension search.
+		const FVector LateralProbe = (LateralVelocity + RodConstraint.GroupLateralAcceleration * Config.FixedStepSeconds)
+			.GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, LateralTarget.GetSafeNormal2D());
+		int32 MovementCount = 0;
+		for (const auto& Player : FrozenParticipantPlayers)
 		{
-			const FVector PullAxis = (State.FishWorldPosition - RodTip).GetSafeNormal2D();
-			const double MaximumTravel = FMath::Max(CatMovement->Velocity.Size2D(), FMath::Max(
+			const FCatFightParticipantRuntime* Member = Participants.Find(Player);
+			const ACatCharacter* Cat = Member ? Member->Character.Get() : nullptr;
+			const auto* Movement = Cat ? Cast<UCatCharacterMovementComponent>(Cat->GetCharacterMovement()) : nullptr;
+			if (!Movement) continue;
+			double MovementFriction = Movement->IsFalling() ? Movement->FallingLateralFriction : Movement->GroundFriction;
+			if (Movement->MovementMode == MOVE_Flying || Movement->MovementMode == MOVE_Swimming)
+				MovementFriction = Movement->GetPhysicsVolume() ? 0.5 * Movement->GetPhysicsVolume()->FluidFriction : 0.0;
+			const double Friction = Movement->bUseSeparateBrakingFriction ? Movement->BrakingFriction : MovementFriction;
+			RodConstraint.GroupFriction += Friction * Movement->BrakingFrictionFactor;
+			RodConstraint.GroupBrakingDeceleration += Movement->GetMaxBrakingDeceleration();
+			++MovementCount;
+			// The query is an upper envelope, not this frame's pre-acceleration travel distance.
+			// Along-line drag and lateral walking can coexist; include both before probing a wall.
+			const double SpeedEnvelope = FMath::Max3(GroupResult.DesiredVelocityCentimetersPerSecond.Size2D(),
 				Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond,
-				Config.FishFullEffortSpeedCentimetersPerSecond * Config.ExhaustedCatEscapeSpeedMultiplier)) * Config.FixedStepSeconds;
-			RodConstraint.CarrierTravelLimitCentimeters = CatMovement->GetExternalTractionTravelLimit(PullAxis, MaximumTravel);
+				Config.FishFullEffortSpeedCentimetersPerSecond * Config.ExhaustedCatEscapeSpeedMultiplier);
+			const double Travel = FMath::Max(Movement->Velocity.Size2D(), 2.0 * SpeedEnvelope) * Config.FixedStepSeconds;
+			const double MemberLimit = Movement->GetExternalTractionTravelLimit(PullAxis, Travel);
+			RodConstraint.CarrierTravelLimitCentimeters = RodConstraint.CarrierTravelLimitCentimeters < 0.0
+				? MemberLimit : FMath::Min(RodConstraint.CarrierTravelLimitCentimeters, MemberLimit);
+			const double BackLimit = Movement->GetExternalTractionTravelLimit(-PullAxis, Travel);
+			RodConstraint.CarrierBackwardTravelLimitCm = RodConstraint.CarrierBackwardTravelLimitCm < 0.0
+				? BackLimit : FMath::Min(RodConstraint.CarrierBackwardTravelLimitCm, BackLimit);
+			const double SideLimit = LateralProbe.IsNearlyZero() ? 0.0 : Movement->GetExternalTractionTravelLimit(LateralProbe, Travel);
+			RodConstraint.GroupLateralTravelLimitCm = RodConstraint.GroupLateralTravelLimitCm < 0.0
+				? SideLimit : FMath::Min(RodConstraint.GroupLateralTravelLimitCm, SideLimit);
 		}
-		// 网络移动包在服务器更新 Acceleration，不会填充 Pawn 的本地 LastControlInputVector。
-		// 本地与远端统一读取 CharacterMovement 已接受的加速度，避免客户端后退意图丢失。
-		RodConstraint.CarrierDesiredVelocityCentimetersPerSecond = Movement && Movement->GetMaxAcceleration() > UE_SMALL_NUMBER
-			? (Movement->GetCurrentAcceleration() / Movement->GetMaxAcceleration()).GetClampedToMaxSize(1.0)
-				* Movement->GetMaxSpeed()
-			: FVector::ZeroVector;
+		if (MovementCount > 0)
+		{
+			RodConstraint.GroupFriction /= MovementCount;
+			RodConstraint.GroupBrakingDeceleration /= MovementCount;
+		}
 	}
 	const FCatFishingRodRotationEffortSnapshot RotationEffort = RotationEffortSampler.Consume(
 		Rod->GetAuthoritativeRotationEffortSnapshot(), Config.FixedStepSeconds);
@@ -1080,6 +1219,15 @@ void UCatFishingFightRunner::HandleFixedStep()
 			SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("CarrierConstraintWrite"));
 			return;
 		}
+		const FVector Axis = PullDirection.GetSafeNormal2D();
+		const FVector LateralStrength = GroupResult.AppliedStrengthWorld - Axis * FVector::DotProduct(GroupResult.AppliedStrengthWorld, Axis);
+		if (!Rod->SetGroupMotionFromAuthority(GroupResult.DesiredVelocityCentimetersPerSecond,
+			LateralStrength * (100.0 * Config.ForcePerStrengthNewtons / FMath::Max(GroupResult.TotalMassKilograms, UE_DOUBLE_SMALL_NUMBER))))
+		{
+			Stop();
+			SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("GroupMovementWrite"));
+			return;
+		}
 	}
 	else
 	{
@@ -1119,7 +1267,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"SignedCarrierAccelerationCmPerSec2=%.3f CarrierAccelerationCmPerSec2=%.3f "
 				"CarrierBrakingCmPerSec2=%.3f CarrierTargetSpeedCmPerSec=%.3f ContinuousTraction=%s "
 				"FishStaminaDrainBeforeClamp=%.5f FishStaminaDrain=%.5f FishStaminaAfter=%.5f "
-				"CatStaminaDrain=%.5f CatStaminaAfter=%.5f WearLoad=%.5f RodWearDelta=%.5f "
+				"CarrierEstimatedStaminaDrain=%.5f PrimaryEstimatedStaminaAfter=%.5f WearLoad=%.5f RodWearDelta=%.5f "
 				"CatMovementWorkUnits=%.5f CatReelWorkUnits=%.5f CatRodWorkUnits=%.5f "
 				"CatHoldLoad=%.5f CatRodLoad=%.5f CatRodSupportBeforeSharedDrain=%.5f "
 				"FishEffortRatio=%.5f FishIntendedDistanceCm=%.5f FishActualIntentProgressCm=%.5f FishUnfulfilledDistanceCm=%.5f FishStaminaPerUnfulfilledMeter=%.5f FishDragKgPerSec=%.5f "
@@ -1189,7 +1337,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			TEXT("Event=fishing_coupled_work_sample SessionId=%s RodActorId=%s "
 				"PrimaryStrength=%.3f HelperStrength=%.3f CombinedStrength=%.3f CatSystemMassKg=%.3f FishMassKg=%.3f MassMode=IndependentCatBodyMass StrengthMode=ConstantWhileStaminaPositive StrengthPerKg=%.3f ActiveHelpers=%d "
 				"CatAcceleration=%.3f FishAcceleration=%.3f NetFishPullAcceleration=%.3f "
-				"PrimaryStamina=%.3f GroupStaminaDrain=%.3f FishStamina=%.3f FishStaminaDrain=%.3f SlackRecovery=%s CatRecovery=%.4f "
+				"PrimaryStamina=%.3f CarrierEstimatedStaminaDrain=%.3f FishStamina=%.3f FishStaminaDrain=%.3f SlackRecovery=%s CatRecovery=%.4f "
 				"MotionIntent=%s CatIntentCm=%.3f CatActualCm=%.3f FishLineIntentCm=%.3f FishLineActualCm=%.3f "
 				"FishWorldStep2DCm=%.3f FishWorldStep3DCm=%.3f FishWorldDeltaZCm=%.3f "
 				"ReelRequestedCm=%.3f ReelActualCm=%.3f ReelMode=%s CatAction=%s AbsoluteRodWear=%.3f RodWearDelta=%.3f "
@@ -1263,7 +1411,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"ConstraintError=%.2f RelativeLineSpeed=%.2f Tension=%.3f FishCorrection=%.2f "
 				"CarrierAcceleration=%.2f CarrierBrakingDeceleration=%.2f ContinuousCarrierTraction=%s CarrierTargetPullSpeed=%.2f RodLeverage=%.3f "
 				"RodPhysicsLengthCm=%.2f MaximumFishTorque=%.3f FishTorque=%.3f CatTorqueCapacity=%.3f "
-				"ActiveCombinedStrength=%.3f CatAcceleration=%.3f FishAcceleration=%.3f NetFishPullAcceleration=%.3f LineTensionN=%.3f ActiveHelpers=%d GroupStaminaDrain=%.3f "
+				"ActiveCombinedStrength=%.3f CatAcceleration=%.3f FishAcceleration=%.3f NetFishPullAcceleration=%.3f LineTensionN=%.3f ActiveHelpers=%d CarrierEstimatedStaminaDrain=%.3f "
 				"Stalemate=%s Fish=%s RodTip=%s Holder=%s NetMode=%d Authority=true "
 				"StepId=%llu Frame=%llu WorldTime=%.6f WorldGapSeconds=%.6f FixedStepSeconds=%.6f World=%s LocalRole=%d "
 				"Phase=%s Behavior=%s ForcedEscape=%s Outcome=%s FishBefore=%s FishVelocityBeforeCmS=%s ResolvedFishVelocityCmS=%s "
@@ -1316,27 +1464,14 @@ void UCatFishingFightRunner::HandleFixedStep()
 		NextConstraintDiagnosticWorldSeconds = WorldSeconds + 1.0;
 		bLastConstraintDiagnosticActive = bConstraintActive;
 	}
-	// 把猫的体力消耗（正值）转成负的 Delta 施加到 ASC；只有真正非零变化才需要写一次，且写入失败也视为致命错误。
-	const double PrimaryDrainShare = Config.PrimaryOperatorCatStrength
-		/ FMath::Max(Config.GetCombinedCatStrength(), UE_DOUBLE_SMALL_NUMBER);
-	const double PrimaryStaminaDrain = Step.CatStaminaDrain < 0.0
-		? Step.CatStaminaDrain
-		: FMath::Min(State.CatStamina, Step.GetPrimaryCatStaminaDrain()
-			+ Step.GetSharedCatStaminaDrain() * PrimaryDrainShare);
-	// 正体力保持完整力量，因此最后一点可支付体力也必须实际写回零，不能被容差跳过。
-	if (State.bOperatorPresent && PrimaryStaminaDrain != 0.0
-		&& !ASC->ApplyFishingStaminaDelta(static_cast<float>(-PrimaryStaminaDrain)))
+	if (!ApplyGroupStaminaChanges(Step))
 	{
 		Stop();
-		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("AbilityStaminaWrite"));
+		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("GroupAbilityStaminaWrite"));
 		return;
 	}
-	if (!ApplyHelperStaminaChanges(Step.GetSharedCatStaminaDrain()))
-	{
-		Stop();
-		SessionActor->HandleFightRunnerFailureFromAuthority(TEXT("HelperAbilityStaminaWrite"));
-		return;
-	}
+	// The simulator's carrier-only estimate is replaced with the actual N-member ledger total.
+	Step.CatStaminaDrain = LastGroupStaminaDrain;
 	// Runner 只记录本场累计磨损；下面 Session 按差额立即写回绑定鱼竿实例，结束不退款。
 	// 把新的运动意图/线长/位置应用到 Encounter Actor 失败时视为不可恢复，终止本次搏斗。
 	if (!Encounter->ApplyFightStepFromAuthority(State.MotionIntent,
@@ -1352,30 +1487,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 		return;
 	}
 	// 所有副作用都成功落地后，才把本步结果正式写回 Runner 自己持有的状态，作为下一步 Step 的输入基准。
-	State.CatStamina = FMath::Clamp(State.CatStamina - PrimaryStaminaDrain, 0.0, Config.CatStaminaMaximum);
 	State.FishStamina = FMath::Max(0.0, State.FishStamina - Step.FishStaminaDrain);
-	if (bLogWorkSample)
-	{
-		for (const auto& Pair : Participants)
-		{
-			const FCatFightParticipantRuntime& Participant = Pair.Value;
-			const UCatAbilitySystemComponent* ParticipantASC = Participant.AbilitySystem.Get();
-			UE_LOG(LogCatFishing, Log,
-				TEXT("Event=fishing_cat_stamina_applied SessionId=%s RodActorId=%s PlayerState=%s PlayerId=%d CatActor=%s "
-					"Primary=%s PullHeld=%s ActiveStrength=%.3f GroupSharedDrain=%.4f PrimaryOnlyDrain=%.4f "
-					"StaminaAfter=%.4f Result=Applied World=%s NetMode=%d Authority=true LocalRole=%d"),
-				*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-				*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
-				*GetNameSafe(Participant.PlayerState.Get()),
-				Participant.PlayerState.IsValid() ? Participant.PlayerState->GetPlayerId() : INDEX_NONE,
-				*GetNameSafe(Participant.Character.Get()),
-				Participant.bPrimary ? TEXT("true") : TEXT("false"), Participant.bPullHeld ? TEXT("true") : TEXT("false"),
-				Participant.ActiveFishingStrength, Step.GetSharedCatStaminaDrain(),
-				Participant.bPrimary ? Step.GetPrimaryCatStaminaDrain() : 0.0,
-				ParticipantASC ? static_cast<double>(ParticipantASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute())) : 0.0,
-				*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(SessionActor->GetLocalRole()));
-		}
-	}
 	const double PreviousLineLength = State.LineLengthCentimeters;
 	State.LineLengthCentimeters = Step.LineLengthCentimeters;
 	// 保留原始按键，按最终线杯容量刷新有效动作；本步放尽后发布的快照立即退出放线。
@@ -1389,7 +1501,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 		UE_LOG(LogCatFishing, Log,
 			TEXT("Event=fishing_line_limit_changed SessionId=%s RodActorId=%s PlayerId=%d "
 				"PreviousLineLengthCm=%.3f LineLengthCm=%.3f MaximumLineLengthCm=%.3f AtLimit=%s "
-				"SlackHeld=%s EffectiveAction=%s SlackRecovery=%s CatStaminaDrain=%.4f SharedCatStaminaDrain=%.4f "
+				"SlackHeld=%s EffectiveAction=%s SlackRecovery=%s ActualGroupStaminaDrain=%.4f SharedBillEstimate=%.4f "
 				"FishStaminaDrain=%.4f RodWearDelta=%.4f Result=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),

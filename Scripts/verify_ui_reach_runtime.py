@@ -156,6 +156,13 @@ def main() -> None:
     shop_base_class = _load_class("/Script/Catfishing.CatShopWidget")
     collection_base_class = _load_class("/Script/Catfishing.CatCollectionWidget")
     hud_wbp_class = _load_class("/Game/UI/HUD/WBP_CatHUD.WBP_CatHUD_C")
+    unreal.load_asset("/Game/UI/HUD/WBP_CatHUD")
+    for widget_name, widget_type in (
+        ("CatStaminaTextBlock", unreal.TextBlock),
+        ("CatStaminaProgressBar", unreal.ProgressBar),
+    ):
+        widget = unreal.find_object(None, "/Game/UI/HUD/WBP_CatHUD.WBP_CatHUD_C:WidgetTree." + widget_name)
+        _require(isinstance(widget, widget_type), "正式 HUD 编译模板缺失总体力控件: " + widget_name)
     inventory_wbp_class = _load_class("/Game/UI/Inventory/WBP_CatInventory.WBP_CatInventory_C")
     slot_wbp_class = _load_class("/Game/UI/InventorySlot/WBP_CatInventorySlot.WBP_CatInventorySlot_C")
     interaction_wbp_class = _load_class("/Game/UI/Interaction/WBP_CatInteractionPrompt.WBP_CatInteractionPrompt_C")

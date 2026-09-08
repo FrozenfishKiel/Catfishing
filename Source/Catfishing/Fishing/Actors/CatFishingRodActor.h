@@ -12,6 +12,21 @@ class USceneComponent;
 class UCharacterMovementComponent;
 class UCatRodBendComponent;
 
+/** 组移动的复制结果；只描述运动，成员身份仍来自 PresentationState。 */
+USTRUCT()
+struct FCatFishingGroupMotionState
+{
+	GENERATED_BODY()
+	UPROPERTY() FVector AnchorWorld = FVector::ZeroVector;
+	UPROPERTY() FVector DesiredVelocity = FVector::ZeroVector;
+	UPROPERTY() FVector LateralAcceleration = FVector::ZeroVector;
+	UPROPERTY() uint32 RosterVersion = 0;
+	UPROPERTY() uint32 ControlEpoch = 0;
+	UPROPERTY() uint32 AimInputEpoch = 0;
+	UPROPERTY() bool bActive = false;
+	UPROPERTY() bool bAwaitingSolve = false;
+};
+
 /** 高频复制的手持鱼线约束目标；不推进鱼竿业务 Revision，也不保存第二份搏斗终态。 */
 USTRUCT(BlueprintType)
 struct CATFISHING_API FCatFishingCarrierConstraintState
@@ -21,6 +36,8 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 	/** 将受力快照绑定到当时的持有人，拒绝与换人复制乱序的旧快照。 */
 	UPROPERTY()
 	TObjectPtr<APlayerState> ConstraintHolderPlayerState;
+	UPROPERTY() uint32 RosterVersion = 0;
+	UPROPERTY() uint32 ControlEpoch = 0;
 
 	UPROPERTY(BlueprintReadOnly)
 	FVector_NetQuantizeNormal PullDirection = FVector::ZeroVector;
@@ -45,7 +62,7 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 	/** 当前搏斗是否要求鱼竿使用受力后的实际姿态，而不是瞬时跟随控制器。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bFightActive = false;
-	/** 每次开始搏斗/更换持有人生成的新输入域，阻止同一根竿上一场的迟到采样。 */
+	/** 开始搏斗/换主生成新域；停止后保留末次域作为拒绝旧组快照的边界。 */
 	UPROPERTY()
 	uint32 AimInputEpoch = 0;
 	UPROPERTY(BlueprintReadOnly)
@@ -66,6 +83,9 @@ class CATFISHING_API ACatFishingRodActor : public AActor
 	GENERATED_BODY()
 	friend class FCatFishingCarrierHandoffTest;
 	friend class FCatFishingMotionDiagnosticTest;
+	friend class FCatFishingGroupMembershipContinuityTest;
+	friend class FCatFishingGroupWaitingTest;
+	friend class FCatFishingGroupHandoffAimTest;
 
 public:
 	/** 创建鱼竿表现 Actor 的组件和默认复制姿态；身份和锚点仍要等服务器初始化后才可信。 */
@@ -110,6 +130,12 @@ public:
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") bool IsPrimaryOperator(APlayerState* PlayerState) const;
 	/** 读取下一个可用操作位编号；满员或布局配置无效时返回 INDEX_NONE。 */
 	int32 GetFirstFreeOperatorSlotIndex() const;
+	uint32 GetOperatorMembershipEpoch(APlayerState* PlayerState) const;
+	uint32 GetControlEpoch() const { return PresentationState.ControlEpoch; }
+	uint32 GetRosterVersion() const { return PresentationState.RosterVersion; }
+	FVector GetGroupAnchorWorld() const;
+	FVector GetGroupVelocity() const;
+	bool SetGroupMotionFromAuthority(const FVector& DesiredVelocity, const FVector& LateralAcceleration);
 	/** 读取握持点世界坐标；角色手部 IK 和竿体表现用它对齐。 */
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetGripWorldTransform() const;
 	/** 服务器规范握持跟随：只读 PlayerController/Pawn 权威姿态，不信任客户端 Socket Transform。 */
@@ -179,6 +205,9 @@ private:
 	void DispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	void PublishCarrierConstraintToMovement();
 	void ClearCarrierMovementBinding();
+	void RefreshGroupAnchorFromAuthority();
+	/** 初始化与变更共用一次成员元数据提交；保留组根并以实际身体位置重定基。 */
+	void PrepareOperatorMemberships(FCatFishingRodPresentationState& Next);
 	void ResetAuthoritativeRotationEffort();
 	/** 提交一次权威可变状态；它保留 Actor/Item/Owner 身份，只允许操作位、皮肤、部署和断竿状态变化。 */
 	bool CommitAuthoritativeMutation(const FCatFishingRodPresentationState& Next, int64 ExpectedRevision);
@@ -203,6 +232,13 @@ private:
 	FCatFishingRodPresentationState PresentationState;
 	UPROPERTY(ReplicatedUsing=OnRep_CarrierConstraintState, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
 	FCatFishingCarrierConstraintState CarrierConstraintState;
+	UPROPERTY(ReplicatedUsing=OnRep_CarrierConstraintState)
+	FCatFishingGroupMotionState GroupMotionState;
+	TArray<TWeakObjectPtr<class UCatCharacterMovementComponent>> GroupMovements;
+	FVector GroupAnchorWorld = FVector::ZeroVector;
+	FVector GroupVelocity = FVector::ZeroVector;
+	bool bGroupAnchorInitialized = false;
+	uint32 NextMembershipEpoch = 0;
 	/** 竿尖权威本地 Transform；配置后不再读蓝图组件作为数据源，避免表现改动反向污染玩法坐标。 */
 	FTransform RodTipCanonicalLocalTransform = FTransform::Identity;
 	/** 操作基准位权威本地 Transform；多人站位和交互锚点都从它计算。 */
@@ -226,6 +262,8 @@ private:
 	bool bLastReceivedFightActive = false;
 	bool bLastRodTorqueBalanced = false;
 	bool bHeldAimInitialized = false;
+	/** 换主保留实际竿向，直到新主在新输入域提交首个有效采样。 */
+	bool bAwaitingNewHolderAim = false;
 	/** 根据操作位编号计算本地站位；非法编号回退到基准 Stand，避免上层拿到 NaN 或随机位置。 */
 	FTransform ResolveOperatorStandLocalTransform(int32 SlotIndex) const;
 	/** 身份是否已经完成权威初始化；为真后 Actor/Item/Owner 身份不可再改。 */

@@ -13,14 +13,14 @@ UCatFishingViewBridge* UCatFishingViewBridge::CreateFishingViewBridge(UObject* O
 	return NewObject<UCatFishingViewBridge>(Outer ? Outer : GetTransientPackage());
 }
 
-// 客户端只能看到复制事实；先找玩家当前占据的主操作鱼竿，再按 RodActor 匹配会话，避免同一玩家多竿抛线后随机绑定旧会话。
+// 客户端只读复制事实；按当前成员身份找鱼竿，再匹配会话，辅助与接力后的主位都观察同一场钓鱼。
 ACatFishingSession* UCatFishingViewBridge::FindFishingSessionForPlayerState(UObject* WorldContextObject,
 	APlayerState* PlayerState)
 {
 	UWorld* World = WorldContextObject ? WorldContextObject->GetWorld() : nullptr;
 	if (!World || !PlayerState) return nullptr;
 	ACatFishingRodActor* OperatedRod = FindRodOperatedByPlayerState(WorldContextObject, PlayerState);
-	if (!OperatedRod || !OperatedRod->IsPrimaryOperator(PlayerState)) return nullptr;
+	if (!OperatedRod) return nullptr;
 	for (TActorIterator<ACatFishingSession> It(World); It; ++It)
 	{
 		ACatFishingSession* Session = *It;

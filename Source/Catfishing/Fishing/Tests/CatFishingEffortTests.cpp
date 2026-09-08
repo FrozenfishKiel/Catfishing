@@ -146,7 +146,7 @@ bool FCatFishingCombinedEffortAccountingTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("总耗体等于三操作实际费用及一次共享支撑"), Result.CatStaminaDrain,
 		Result.CatMovementStaminaDrain + Result.CatReelStaminaDrain + Result.CatRodStaminaDrain + Result.CatHoldStaminaDrain, 1e-6);
 	TestEqual(TEXT("主位与共同分担的耗体之和守恒"), Result.CatStaminaDrain,
-		Result.GetPrimaryCatStaminaDrain() + Result.GetSharedCatStaminaDrain(), 1e-6);
+		Result.CatMovementStaminaDrain + Result.GetSharedCatStaminaDrain(), 1e-6);
 	return !HasAnyErrors();
 }
 
@@ -251,7 +251,7 @@ bool FCatFishingEffortReleaseAndExhaustionTest::RunTest(const FString& Parameter
 		Released.bSlackRecoveryActive && Released.FishUnfulfilledDistanceCentimeters > 0.0);
 	TestEqual(TEXT("右键恢复期间鱼自身游动不扣体力"), Released.FishStaminaDrain, 0.0);
 	TestEqual(TEXT("无主动操作时放线不收取分项费用"),
-		Released.GetPrimaryCatStaminaDrain() + Released.GetSharedCatStaminaDrain(), 0.0);
+		Released.CatMovementStaminaDrain + Released.GetSharedCatStaminaDrain(), 0.0);
 	TestTrue(TEXT("解除约束且无主动努力时猫恢复体力"), Released.CatStaminaDrain < 0.0);
 	TestTrue(TEXT("放线恢复不突破体力上限"),
 		MakeState().CatStamina - Released.CatStaminaDrain <= Config.CatStaminaMaximum);
@@ -449,7 +449,7 @@ bool FCatFishingLoadEffortTuningTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingExhaustedPrimaryEffortOwnershipTest,
-	"Catfishing.Unit.Fishing.Effort.ExhaustedPrimaryCannotBorrowFreeRotationFromHelper",
+	"Catfishing.Unit.Fishing.Effort.ExhaustedPrimaryDirectsTeamPoweredRotationWithSharedCost",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingExhaustedPrimaryEffortOwnershipTest::RunTest(const FString& Parameters)
@@ -466,15 +466,15 @@ bool FCatFishingExhaustedPrimaryEffortOwnershipTest::RunTest(const FString& Para
 
 	// 这里验证 Runner 所需的纯模型连接契约；真实多人 ASC 分摊仍由运行验收覆盖。
 	FCatFishingRodRotationInput RotationInput;
-	RotationInput.CatTorqueCapacity = Config.PrimaryOperatorCatStrength;
-	RotationInput.MaximumFishTorque = 100.0;
+	RotationInput.CatTorqueCapacity = Config.GetCombinedCatStrength();
+	RotationInput.MaximumFishTorque = 10.0;
 	RotationInput.CurrentAim = FRotator(0.0, 30.0, 0.0);
 	RotationInput.RequestedAim = FRotator(0.0, 90.0, 0.0);
 	RotationInput.PullAxis = FVector::ForwardVector;
 	RotationInput.DeltaSeconds = Config.FixedStepSeconds;
 	const auto Rotation = FCatFishingRodResistanceModel::StepRotation(RotationInput);
-	TestTrue(TEXT("主位力竭后仍能求解鱼对竿的被动拖动"), Rotation.bSucceeded);
-	TestEqual(TEXT("辅助位力量不能生成主位主动转杆努力"), Rotation.CatExertionSquaredSeconds, 0.0);
+	TestTrue(TEXT("主位力竭后仍可指挥队友力量转杆"), Rotation.bSucceeded);
+	TestTrue(TEXT("转杆由有力队友提供真实主动努力"), Rotation.CatExertionSquaredSeconds > 0.0 && Rotation.CatPositiveWorkRadians > 0.0);
 	Constraint.CatRodExertionSquaredSeconds = Rotation.CatExertionSquaredSeconds;
 	Constraint.CatRodPositiveWorkRadians = Rotation.CatPositiveWorkRadians;
 	const auto Result = Step(Config, State, Constraint);
@@ -483,8 +483,8 @@ bool FCatFishingExhaustedPrimaryEffortOwnershipTest::RunTest(const FString& Para
 	TestTrue(TEXT("辅助支持的收线仍产生共同费用"), Result.GetSharedCatStaminaDrain() > 0.0);
 	TestTrue(TEXT("主位力竭时辅助的有效力量仍能给鱼造成对抗耗体"),
 		Result.FishUnfulfilledDistanceCentimeters > 0.0 && Result.FishStaminaDrain > 0.0);
-	TestEqual(TEXT("没有主位主动转矩就没有转杆扣费"), Result.CatRodStaminaDrain, 0.0);
-	TestEqual(TEXT("无身体输入时该步全部费用属于共同收线"),
+	TestTrue(TEXT("实际转杆做功产生共同支付费用，不是免费借力"), Result.CatRodStaminaDrain > 0.0);
+	TestEqual(TEXT("无身体输入时收线转杆支撑全部属于共同负担"),
 		Result.CatStaminaDrain, Result.GetSharedCatStaminaDrain(), 1e-6);
 	return !HasAnyErrors();
 }
@@ -591,7 +591,7 @@ bool FCatFishingSmallActionsPreserveHoldFloorTest::RunTest(const FString& Parame
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingPersonalEffortCoverageBudgetTest,
-	"Catfishing.Unit.Fishing.Effort.UnpaidPrimaryEffortCannotEraseHelperHoldCost",
+	"Catfishing.Unit.Fishing.Effort.TeamOperationsCannotEraseSharedHoldCost",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingPersonalEffortCoverageBudgetTest::RunTest(const FString& Parameters)
@@ -610,10 +610,12 @@ bool FCatFishingPersonalEffortCoverageBudgetTest::RunTest(const FString& Paramet
 	TestTrue(TEXT("主位力竭且辅助发力时两种步骤都有效"),
 		ExhaustedBaseline.bSucceeded && ExhaustedActive.bSucceeded);
 	TestTrue(TEXT("辅助承担的完整保持费用存在"), ExhaustedBaseline.GetSharedCatStaminaDrain() > 0.0);
-	TestEqual(TEXT("力竭主位的后退输入不生成个人计费意图"), ExhaustedActive.CatMovementIntentCentimeters, 0.0);
-	TestEqual(TEXT("力竭主位的转杆快照不生成个人计费意图"), ExhaustedActive.CatRodExertionSquaredSeconds, 0.0);
-	TestEqual(TEXT("力竭主位不能用无支付能力的动作减少助手保持费用"),
-		ExhaustedActive.GetSharedCatStaminaDrain(), ExhaustedBaseline.GetSharedCatStaminaDrain(), 1e-6);
+	TestTrue(TEXT("载体运动与转杆的团队努力不因主位个人耗尽被删掉"),
+		ExhaustedActive.CatMovementIntentCentimeters > 0.0 && ExhaustedActive.CatRodExertionSquaredSeconds > 0.0);
+	TestEqual(TEXT("额外团队操作不能抵扣已有沿线保持费用"),
+		ExhaustedActive.CatHoldStaminaDrain, ExhaustedBaseline.CatHoldStaminaDrain, 1e-6);
+	TestTrue(TEXT("转杆支撑与做功完整计入共同负担"),
+		ExhaustedActive.GetSharedCatStaminaDrain() >= ExhaustedBaseline.GetSharedCatStaminaDrain());
 	TestEqual(TEXT("未完成的身体意图不再伪造额外端点误差"), ExhaustedActive.ConstraintErrorCentimeters, ExhaustedBaseline.ConstraintErrorCentimeters, 1e-6);
 
 	Config.PrimaryOperatorCatStrength = 0.001;
@@ -623,13 +625,13 @@ bool FCatFishingPersonalEffortCoverageBudgetTest::RunTest(const FString& Paramet
 	TestTrue(TEXT("主位接近力竭时两种步骤都有效"),
 		NearlyExhaustedBaseline.bSucceeded && NearlyExhaustedActive.bSucceeded);
 	TestTrue(TEXT("该用例个人原始费用确实超过当下支付能力"),
-		NearlyExhaustedActive.GetPrimaryCatStaminaDrain() > State.CatStamina);
-	TestEqual(TEXT("个人费用完全不抵扣助手支撑"),
-		NearlyExhaustedBaseline.GetSharedCatStaminaDrain() - NearlyExhaustedActive.GetSharedCatStaminaDrain(),
+		NearlyExhaustedActive.CatMovementStaminaDrain > State.CatStamina);
+	TestEqual(TEXT("个人费用完全不抵扣沿线支撑"),
+		NearlyExhaustedBaseline.CatHoldStaminaDrain - NearlyExhaustedActive.CatHoldStaminaDrain,
 		0.0, 1e-6);
 	TestTrue(TEXT("不可支付的个人费用不能免除其余保持"), NearlyExhaustedActive.GetSharedCatStaminaDrain() > 0.0);
 	TestEqual(TEXT("个人请求费用与剩余共享费用仍可完整诊断"), NearlyExhaustedActive.CatStaminaDrain,
-		NearlyExhaustedActive.GetPrimaryCatStaminaDrain() + NearlyExhaustedActive.GetSharedCatStaminaDrain(), 1e-6);
+		NearlyExhaustedActive.CatMovementStaminaDrain + NearlyExhaustedActive.GetSharedCatStaminaDrain(), 1e-6);
 	return !HasAnyErrors();
 }
 

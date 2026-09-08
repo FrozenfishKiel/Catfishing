@@ -139,7 +139,7 @@ bool FCatFishingCatWorkPacingTest::RunTest(const FString& Parameters)
 	Current.CatAction = ECatFightCatAction::Slack;
 	const auto Recovery = Step(Settings, Current, Constraint);
 	TestTrue(TEXT("右键仍恢复体力且双方无正向费用"), Recovery.bSucceeded && Recovery.CatStaminaDrain < 0.0
-		&& Recovery.GetPrimaryCatStaminaDrain() == 0.0 && Recovery.GetSharedCatStaminaDrain() == 0.0 && Recovery.FishStaminaDrain == 0.0);
+		&& Recovery.CatMovementStaminaDrain == 0.0 && Recovery.GetSharedCatStaminaDrain() == 0.0 && Recovery.FishStaminaDrain == 0.0);
 	AddInfo(FString::Printf(TEXT("Event=fishing_cat_work_reference_rates Source=ControlledSnapshot LightPerSecond=%.3f BlockedPerSecond=%.3f HeavyPerSecond=%.3f StaminaPool=60"),
 		LightRate, BlockedRate, HeavyRate));
 	return !HasAnyErrors();

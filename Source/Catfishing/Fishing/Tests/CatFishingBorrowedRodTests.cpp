@@ -3,21 +3,32 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
 #include "Components/BoxComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "Condition/CatConditionComponent.h"
+#include "Condition/CatConditionSettings.h"
+#include "Data/CatFishCatalogSettings.h"
+#include "Data/CatFishDefinition.h"
 #include "EngineUtils.h"
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Environment/Tests/CatWaterTestFixtures.h"
 #include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatFishingResourceCustodian.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
+#include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSession.h"
+#include "Fishing/CatFishingSettings.h"
+#include "Fishing/Config/CatFishingFightBalanceDefinition.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Framework/Game/CatGameplayTypes.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "OnlineSubsystemTypes.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingBorrowedRodCastTest,
@@ -27,9 +38,22 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingBorrowedRodCastTest,
 bool FCatFishingBorrowedRodCastTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	// 独立 World 验证取消、接力后两宿主离场，以及预留广播中两宿主失去占有。
+	FName CatalogWaterRegion;
+	const auto* Catalog = GetDefault<UCatFishCatalogSettings>();
+	for (const auto& Reference : Catalog->Definitions)
+	{
+		const UCatFishDefinition* Definition = Reference.LoadSynchronous();
+		if (Definition && Catalog->FindRuntimeDefinition(Definition->FishDefinitionId) == Definition
+			&& !Definition->RegionIds.IsEmpty())
+		{
+			CatalogWaterRegion = Definition->RegionIds[0];
+			break;
+		}
+	}
+	if (!TestFalse(TEXT("formal fish catalog supplies a real water region"), CatalogWaterRegion.IsNone())) return false;
+	// 独立 World 覆盖取消、两资源宿主真实离场、预留通知重入，以及搏斗中个人身体失效与支付通知毁人。
 	// 仅注入入场身份/测试岸线；装备、正式 Actor/StateTree 和会话事务均走生产入口。
-	for (int32 ExitScenario = 0; ExitScenario < 5; ++ExitScenario)
+	for (int32 ExitScenario = 0; ExitScenario < 11; ++ExitScenario)
 	{
 		UCatEquipmentSettings* EquipmentSettings = GetMutableDefault<UCatEquipmentSettings>();
 		TGuardValue<bool> NoStarterNet(EquipmentSettings->bAutoGrantStarterScoopNet, false);
@@ -42,7 +66,7 @@ bool FCatFishingBorrowedRodCastTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("creates real project game mode"), World->SetGameMode(URL))) return false;
 
 		FCatWaterGeometryBuildInput Geometry;
-		Geometry.RegionId = TEXT("BorrowedRodWater");
+		Geometry.RegionId = CatalogWaterRegion;
 		Geometry.WaterPointVerticalToleranceCm = 100.0;
 		Geometry.BankHeightToleranceCm = 50.0;
 		Geometry.BoundaryToleranceCm = 1.0;
@@ -108,13 +132,14 @@ bool FCatFishingBorrowedRodCastTest::RunTest(const FString& Parameters)
 				return Result;
 			}
 			ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 10.0f);
-			ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 100.0f);
+			if (!ASC->InitializeFishingStaminaForSession()) Result.Equipment = nullptr;
 			return Result;
 		};
 		const FPlayer Owner = MakePlayer(TEXT("BorrowedRodOwner"), FVector(0.0, 0.0, 100.0));
 		const FPlayer Caster = MakePlayer(TEXT("BorrowedRodCaster"), FVector(0.0, 120.0, 100.0));
 		const FPlayer Relay = MakePlayer(TEXT("BorrowedRodRelay"), FVector(-100.0, 250.0, 100.0));
-		for (const FPlayer& Player : {Owner, Caster, Relay})
+		const FPlayer Anchor = MakePlayer(TEXT("BorrowedRodAnchor"), FVector(-120.0, 200.0, 100.0));
+		for (const FPlayer& Player : {Owner, Caster, Relay, Anchor})
 		{
 			if (!TestTrue(TEXT("real player passes production fishing gate"), Player.Equipment
 				&& GameMode->CanAcceptFishingCommand(Player.Controller))) return false;
@@ -177,7 +202,7 @@ bool FCatFishingBorrowedRodCastTest::RunTest(const FString& Parameters)
 			return Result;
 		};
 
-		if (ExitScenario >= 3)
+		if (ExitScenario >= 3 && ExitScenario <= 4)
 		{
 			const FPlayer& Exiting = ExitScenario == 3 ? Caster : Owner;
 			bool bExitTriggered = false;
@@ -277,6 +302,9 @@ bool FCatFishingBorrowedRodCastTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("landed borrowed-rod session remains active"), Session->IsTerminal());
 		TestTrue(TEXT("formal hook reaches the server corrected water point"), Hook->GetActorLocation().Equals(CastResult.ServerCorrectedLandingWorldPoint, 1.0));
 
+		UCatEquipmentComponent* ReservationEquipment = Caster.Equipment;
+		UCatEquipmentComponent* RodLedger = Owner.Equipment;
+		double ExpectedDurability = OwnerBeforeDeploy.RodDurability;
 		if (ExitScenario == 0)
 		{
 			const FGuid CancelRequest = FGuid::NewGuid();
@@ -289,26 +317,246 @@ bool FCatFishingBorrowedRodCastTest::RunTest(const FString& Parameters)
 		}
 		else
 		{
+			// 正式 Service 入口建立四人队列；三名辅助只加入同一竿，不各建会话或预留鱼饵。
+			for (const FPlayer& Helper : {Relay, Anchor, Owner})
+			{
+				Helper.Character->SetActorLocation(Rod->GetOperatorInteractionWorldTransform().GetLocation());
+				Operate.Context = Context();
+				if (!TestTrue(TEXT("helper joins the existing rod through production service"),
+					Fishing->OperateRod(Helper.Controller, Operate).bCommitted)) return false;
+			}
+			TestEqual(TEXT("four members share one rod"), Rod->GetOperatorCount(), 4);
+			TestEqual(TEXT("four members still have one session"), Fishing->GetTrackedSessionCountForDiagnostics(), 1);
+			double ExpectedWaitingMaximum = 0.0;
+			double ExpectedWaitingStamina = 0.0;
+			for (const FPlayer& Player : {Caster, Relay, Anchor, Owner})
+			{
+				float Baseline = 0.0f;
+				if (!TestTrue(TEXT("every member resolves their formal stamina baseline"),
+					GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
+						Player.Character->GetCatDefinitionId(), Baseline))) return false;
+				ExpectedWaitingMaximum += Baseline;
+				ExpectedWaitingStamina += Player.Character->GetCatAbilitySystemComponent()->GetNumericAttribute(
+					UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+			}
+			TestEqual(TEXT("waiting-stage total uses all four current balances"), Session->GetSnapshot().CombinedFightStamina, ExpectedWaitingStamina);
+			TestEqual(TEXT("waiting-stage maximum sums actual member baselines"),
+				Session->GetSnapshot().CombinedFightStaminaMaximum, ExpectedWaitingMaximum);
+			const auto* Balance = GetDefault<UCatFishingSettings>()->LoadFightBalanceDefinition();
+			if (!TestNotNull(TEXT("waiting summary uses the same formal fight balance"), Balance)) return false;
+			TestEqual(TEXT("waiting strength applies the same helper contribution coefficient"),
+				Session->GetSnapshot().CombinedFishingStrength, 10.0 * (1.0 + 3.0 * Balance->HelperStrengthMultiplier));
+			if (ExitScenario >= 7)
+			{
+				// 本单元测真实固定步的身体/资源通知；冻结 CMC 只避免无输入夹具在等待期被相互碰撞推离岸台。
+				for (const FPlayer& Player : {Caster, Relay, Anchor, Owner})
+				{
+					Player.Character->GetCharacterMovement()->SetComponentTickEnabled(false);
+					Player.Character->GetCatAbilitySystemComponent()->SetNumericAttributeBase(
+						UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50.0f);
+				}
+				Session->RefreshOperatorMembershipFromAuthority();
+				const double StrengthBeforeFight = Session->GetSnapshot().CombinedFishingStrength;
+				for (int32 Frame = 0; Frame < 4500 && !Session->IsTerminal()
+					&& Session->GetSnapshot().Phase != ECatFishingPhase::TrueBiteWindow; ++Frame)
+					Wrapper.TickTestWorld(0.01f);
+				if (!TestEqual(TEXT("real waiting timers reach a true bite before body regression"),
+					Session->GetSnapshot().Phase, ECatFishingPhase::TrueBiteWindow)) return false;
+				if (!TestTrue(TEXT("production hook selection starts the fixed-step fight"),
+					Session->RequestHookFromAuthority(FGuid::NewGuid()).bCommitted)) return false;
+				if (!TestTrue(TEXT("hook confirmation selected a fish and entered HookedFight"),
+					Session->GetSnapshot().Phase == ECatFishingPhase::HookedFight
+					&& IsValid(Session->GetSnapshot().FishEncounterActor))) return false;
+				TestEqual(TEXT("fight entry preserves the waiting summary's strength meaning"),
+					Session->GetSnapshot().CombinedFishingStrength, StrengthBeforeFight);
+				for (int32 Frame = 0; Frame < 6 && !Session->IsTerminal(); ++Frame) Wrapper.TickTestWorld(0.01f);
+				TestEqual(TEXT("first real group calculation preserves the same role-weighted strength"),
+					Session->GetSnapshot().CombinedFishingStrength, StrengthBeforeFight);
+				ACatFishEncounterActor* FishActor = Session->GetSnapshot().FishEncounterActor.Get();
+				if (!TestNotNull(TEXT("body regression retains a real fish encounter"), FishActor)) return false;
+				const uint32 PreviousControlEpoch = Rod->GetControlEpoch();
+				const UCatConditionSettings* Conditions = GetDefault<UCatConditionSettings>();
+				if (ExitScenario == 7 || ExitScenario == 8)
+				{
+					const FPlayer& WetPlayer = ExitScenario == 7 ? Caster : Relay;
+					WetPlayer.Character->SetActorLocation(FVector(1000.0, 900.0,
+						WetPlayer.Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight()
+						- Conditions->DangerousWaterDepthCentimeters - 5.0));
+					AddExpectedErrorPlain(TEXT("Event=fishing_cat_entered_dangerous_water"), EAutomationExpectedErrorFlags::Contains, 1);
+					for (int32 Frame = 0; Frame < 150 && Rod->GetOperatorCount() == 4 && !Session->IsTerminal(); ++Frame)
+						Wrapper.TickTestWorld(0.01f);
+					TestEqual(TEXT("real dangerous water removes exactly the affected member"), Rod->GetOperatorCount(), 3);
+					TestEqual(TEXT("affected body preserves the real Dangerous condition"),
+						WetPlayer.Character->GetConditionComponent()->GetSnapshot().WaterExposure, ECatWaterExposureState::Dangerous);
+					TestEqual(TEXT("wet body no longer holds any rod slot"), Rod->GetOperatorSlotIndex(WetPlayer.State), INDEX_NONE);
+					TestEqual(TEXT("only primary water departure promotes the earliest helper"),
+						Session->GetSnapshot().FisherPlayerState.Get(), static_cast<APlayerState*>(ExitScenario == 7 ? Relay.State : Caster.State));
+					TestEqual(TEXT("only primary water departure advances control epoch"),
+						Rod->GetControlEpoch() != PreviousControlEpoch, ExitScenario == 7);
+				}
+				else if (ExitScenario == 9)
+				{
+					// 构造已超过阈值的 Poison，仍由正式恢复命令经过 GE 与 Condition 唯一倒地裁决口。
+					for (const FPlayer& Downing : {Relay, Caster})
+					{
+						Downing.Character->GetCatAbilitySystemComponent()->SetNumericAttributeBase(
+							UCatSurvivalAttributeSet::GetPoisonAttribute(),
+							Conditions->PoisonDownedThreshold + Conditions->FieldRestPoisonRelief + 1.0);
+						AddExpectedErrorPlain(TEXT("Event=character_downed"), EAutomationExpectedErrorFlags::Contains, 1);
+						TestTrue(TEXT("production body command evaluates downed state"),
+							Downing.Character->GetConditionComponent()->RequestFieldSelfRecovery(Downing.Controller, FGuid::NewGuid()).bCommitted);
+						TestTrue(TEXT("body retains downed state"), Downing.Character->GetConditionComponent()->GetSnapshot().bDowned);
+						TestEqual(TEXT("downed member is removed without requesting a user leave"), Rod->GetOperatorSlotIndex(Downing.State), INDEX_NONE);
+					}
+					TestEqual(TEXT("helper and primary downing leaves two active members"), Rod->GetOperatorCount(), 2);
+					TestEqual(TEXT("primary succession skips the already downed helper"),
+						Session->GetSnapshot().FisherPlayerState.Get(), static_cast<APlayerState*>(Anchor.State));
+				}
+				else
+				{
+					bool bDestroyedDuringPayment = false;
+					bool bBoundaryObserved = false;
+					int32 MembershipDuringNotification = 0;
+					UCatAbilitySystemComponent* PayingASC = Caster.Character->GetCatAbilitySystemComponent();
+					const FDelegateHandle DestroyObserver = PayingASC->GetGameplayAttributeValueChangeDelegate(
+						UCatSurvivalAttributeSet::GetFightStaminaAttribute()).AddLambda([&](const FOnAttributeChangeData& Change)
+						{
+							if (bDestroyedDuringPayment || Change.NewValue >= Change.OldValue) return;
+							bBoundaryObserved = Session->IsFixedStepMutationBoundaryActive();
+							bDestroyedDuringPayment = Owner.Character->Destroy();
+							MembershipDuringNotification = Rod->GetOperatorCount();
+						});
+					int32 DebitNotifications[3] = {0, 0, 0};
+					TArray<TPair<UCatAbilitySystemComponent*, FDelegateHandle>> DebitObservers;
+					int32 ParticipantIndex = 0;
+					for (const FPlayer& Remaining : {Caster, Relay, Anchor})
+					{
+						const int32 Index = ParticipantIndex++;
+						UCatAbilitySystemComponent* ASC = Remaining.Character->GetCatAbilitySystemComponent();
+						DebitObservers.Emplace(ASC, ASC->GetGameplayAttributeValueChangeDelegate(
+							UCatSurvivalAttributeSet::GetFightStaminaAttribute()).AddLambda([&, Index](const FOnAttributeChangeData& Change)
+							{ if (Change.NewValue < Change.OldValue) ++DebitNotifications[Index]; }));
+					}
+					AddExpectedErrorPlain(TEXT("Event=fishing_group_stamina_skipped"), EAutomationExpectedErrorFlags::Contains, 1);
+					TestTrue(TEXT("primary starts actual paid reeling"), Session->SetReelingFromAuthority(Caster.State, 1, true));
+					for (int32 Frame = 0; Frame < 100 && !bDestroyedDuringPayment && !Session->IsTerminal(); ++Frame)
+						Wrapper.TickTestWorld(0.01f);
+					PayingASC->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFightStaminaAttribute()).Remove(DestroyObserver);
+					for (const auto& Observer : DebitObservers)
+						Observer.Key->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFightStaminaAttribute()).Remove(Observer.Value);
+					TestTrue(TEXT("real GAS debit notification destroyed the original rod resource host"), bDestroyedDuringPayment);
+					TestTrue(TEXT("ASC notification observes the fixed-step mutation boundary"), bBoundaryObserved);
+					TestEqual(TEXT("forced removal waits until the frozen payment finishes"), MembershipDuringNotification, 4);
+					TestEqual(TEXT("boundary flush removes disposed member exactly once"), Rod->GetOperatorCount(), 3);
+					for (int32 Count : DebitNotifications)
+						TestTrue(TEXT("each surviving ASC receives at most one debit in the interrupted step"), Count <= 1);
+					for (TActorIterator<ACatFishingResourceCustodian> It(World); It; ++It)
+						if (IsValid(*It)) RodLedger = It->GetEquipment();
+					TestNotEqual(TEXT("original rod ledger moved before its body is disposed"), RodLedger, Owner.Equipment);
+				}
+				TestFalse(TEXT("individual body failure preserves the current fish session"), Session->IsTerminal());
+				TestEqual(TEXT("individual body failure preserves the exact fish actor"), Session->GetSnapshot().FishEncounterActor.Get(), FishActor);
+				TestEqual(TEXT("individual body failure preserves the exact hook actor"), Session->GetSnapshot().HookActor.Get(), Hook);
+				for (int32 Frame = 0; Frame < 10 && !Session->IsTerminal(); ++Frame) Wrapper.TickTestWorld(0.01f);
+				TestFalse(TEXT("remaining members continue through subsequent fixed steps"), Session->IsTerminal());
+				TestEqual(TEXT("step summary converges to the surviving membership"), Session->GetSnapshot().FightParticipantCount, Rod->GetOperatorCount());
+				double ExpectedTotal = 0.0;
+				for (const FPlayer& Remaining : {Caster, Relay, Anchor, Owner})
+					if (IsValid(Remaining.Character) && Rod->GetOperatorSlotIndex(Remaining.State) != INDEX_NONE)
+						ExpectedTotal += Remaining.Character->GetCatAbilitySystemComponent()->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+				TestTrue(TEXT("published total equals exactly the remaining personal balances"),
+					FMath::IsNearlyEqual(Session->GetSnapshot().CombinedFightStamina, ExpectedTotal, 0.001));
+				FCatInventoryEndpointSnapshot LiveLock;
+				TestEqual(TEXT("body departure keeps the original rod resource lock"), RodLedger->ReadInventoryTransferEndpoint(
+					TEXT("ActiveUse"), OwnerRodId, LiveLock), ECatDomainCommandError::InvalidPhase);
+				TestEqual(TEXT("body departure never spends another original bait"), Quantity(Caster.Equipment, TEXT("BugBait")), 3);
+				AddInfo(FString::Printf(TEXT("Event=fishing_group_body_departure_verified Scenario=%d Members=%d SessionId=%s ControlEpoch=%u Evidence=runtime_behavior"),
+					ExitScenario, Rod->GetOperatorCount(), *Session->GetSnapshot().FishingSessionId.ToString(), Rod->GetControlEpoch()));
+				AddExpectedErrorPlain(TEXT("Outcome=ECatFishingOutcome::Cancelled"), EAutomationExpectedErrorFlags::Contains, 1);
+				Session->CancelFromAuthority(FGuid::NewGuid());
+				continue;
+			}
+			const double RelayInitialStamina = Relay.Character->GetCatAbilitySystemComponent()->GetNumericAttribute(
+				UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+			Relay.Character->GetCatAbilitySystemComponent()->SetNumericAttributeBase(
+				UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 0.0f);
+			Session->RefreshOperatorMembershipFromAuthority();
+			TestEqual(TEXT("empty personal balance still counts as one of four members"), Session->GetSnapshot().FightParticipantCount, 4);
+			TestEqual(TEXT("zero stamina changes the total balance but not member maximum"),
+				Session->GetSnapshot().CombinedFightStamina, ExpectedWaitingStamina - RelayInitialStamina);
+			TestEqual(TEXT("zero stamina retains that member's configured maximum"),
+				Session->GetSnapshot().CombinedFightStaminaMaximum, ExpectedWaitingMaximum);
+			const uint32 OldControlEpoch = Rod->GetControlEpoch();
 			Leave.Context = Context();
 			if (!TestTrue(TEXT("caster leaves without ending their reservation"), Fishing->LeaveRod(Caster.Controller, Leave).bCommitted)) return false;
-			Relay.Character->SetActorLocation(FVector(0.0, 150.0, 100.0));
-			Operate.Context = Context();
-			if (!TestTrue(TEXT("third player takes over the existing borrowed session"), Fishing->OperateRod(Relay.Controller, Operate).bCommitted)) return false;
-			TestEqual(TEXT("session follows the new primary player"), Session->GetSnapshot().FisherPlayerState.Get(), static_cast<APlayerState*>(Relay.State));
+			TestEqual(TEXT("earliest helper with zero stamina becomes primary"), Session->GetSnapshot().FisherPlayerState.Get(), static_cast<APlayerState*>(Relay.State));
+			TestTrue(TEXT("primary departure advances control epoch"), Rod->GetControlEpoch() != OldControlEpoch);
+			TestEqual(TEXT("takeover preserves zero individual stamina"), Relay.Character->GetCatAbilitySystemComponent()->GetNumericAttribute(
+				UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 0.0f);
 			TestEqual(TEXT("takeover does not reserve more original caller bait"), Quantity(Caster.Equipment, TEXT("BugBait")), 3);
 			TestFalse(TEXT("relay does not acquire an equipment reservation"), Relay.Equipment->HasActiveFishingUse());
-			AddExpectedErrorPlain(TEXT("Reason=\"Character unavailable\""), EAutomationExpectedErrorFlags::Contains, 1);
-			Fishing->TerminateSessionsForCharacter(ExitScenario == 1 ? Owner.Character : Caster.Character);
-			TestTrue(TEXT("a frozen equipment host leaving terminates the relayed session"), Session->IsTerminal());
+			Fishing->ReleaseFishingOperatorForCharacter(ExitScenario == 1 ? Owner.Character : Caster.Character);
+			TestFalse(TEXT("equipment host losing participation does not terminate the relayed session"), Session->IsTerminal());
+			TestTrue(TEXT("original bait reservation remains live"), Caster.Equipment->HasActiveFishingUse());
+			Relay.Controller->UnPossess();
+			TestFalse(TEXT("real UnPossess preserves the same session"), Session->IsTerminal());
+			TestEqual(TEXT("real UnPossess promotes the next joined helper"), Session->GetSnapshot().FisherPlayerState.Get(), static_cast<APlayerState*>(Anchor.State));
+			TestEqual(TEXT("handoff retains the existing hook actor"), Session->GetSnapshot().HookActor.Get(), Hook);
+			TestEqual(TEXT("handoff retains session identity"), Session->GetSnapshot().FishingSessionId, CastResult.Command.FishingSessionId);
+			if (ExitScenario >= 5)
+			{
+				const FPlayer& Destroying = ExitScenario == 5 ? Owner : Caster;
+				const FString OriginalId = Destroying.State->GetUniqueId()->ToString();
+				bool bObservedMovedState = false;
+				bool bSecondMigrationCommitted = false;
+				const FDelegateHandle MigrationObserver = Destroying.Equipment->OnSnapshotChanged.AddLambda([&]()
+				{
+					bObservedMovedState = true;
+					bSecondMigrationCommitted |= Fishing->PreserveFishingResourcesForEquipmentShutdown(Destroying.Equipment);
+				});
+				TestTrue(TEXT("destroying the original equipment host runs real EndPlay"), Destroying.Character->Destroy());
+				Destroying.Equipment->OnSnapshotChanged.Remove(MigrationObserver);
+				TestTrue(TEXT("original player identity can also leave the world"), Destroying.State->Destroy());
+				TestTrue(TEXT("custody publishes after moving the old records"), bObservedMovedState);
+				TestFalse(TEXT("publication reentry cannot transfer the same records twice"), bSecondMigrationCommitted);
+				ACatFishingResourceCustodian* Custodian = nullptr;
+				int32 CustodianCount = 0;
+				for (TActorIterator<ACatFishingResourceCustodian> It(World); It; ++It)
+				{
+					if (IsValid(*It)) { Custodian = *It; ++CustodianCount; }
+				}
+				if (!TestEqual(TEXT("exactly one server custodian survives actual owner destruction"), CustodianCount, 1)) return false;
+				TestEqual(TEXT("custody retains original private ownership identity"), Custodian->GetOriginalOwnerStableId(), OriginalId);
+				TestTrue(TEXT("custodian is server-only"), !Custodian->GetIsReplicated());
+				TestTrue(TEXT("ordinary backpack is not copied to custody"), Custodian->GetEquipment()->GetSnapshot().InventorySlots.IsEmpty());
+				if (ExitScenario == 5) RodLedger = Custodian->GetEquipment();
+				else ReservationEquipment = Custodian->GetEquipment();
+				TestFalse(TEXT("real resource host destruction preserves the session"), Session->IsTerminal());
+				TestEqual(TEXT("existing rod stays registered after original host destruction"), Fishing->FindDeployedRodById(Placed.RodActorId), Rod);
+				TestTrue(TEXT("rebased coordinator still owns the original bait reservation"), ReservationEquipment->IsFishingUseActive(CastResult.Command.FishingSessionId));
+				const auto Commit = ReservationEquipment->CommitFishingBaitDeferred(CastResult.Command.FishingSessionId);
+				TestTrue(TEXT("future bait settlement succeeds through moved exact locks"), Commit.bApplied);
+				TestEqual(TEXT("repeat bait commit cannot spend another bait"), ReservationEquipment->CommitFishingBaitDeferred(
+					CastResult.Command.FishingSessionId).Error, ECatDomainCommandError::AlreadyResolved);
+				const auto Wear = ReservationEquipment->ApplyFishingRodWear(CastResult.Command.FishingSessionId, 1, 2.0);
+				TestTrue(TEXT("future wear still updates the original rod instance"), Wear.bApplied);
+				ExpectedDurability -= 2.0;
+				TestEqual(TEXT("custody preserves monotone wear sequence"), ReservationEquipment->ApplyFishingRodWear(
+					CastResult.Command.FishingSessionId, 1, 2.0).Error, ECatDomainCommandError::AlreadyResolved);
+				TestFalse(TEXT("original disposed coordinator no longer owns an active reservation"),
+					ExitScenario == 6 && Caster.Equipment->HasActiveFishingUse());
+			}
+			AddExpectedErrorPlain(TEXT("Outcome=ECatFishingOutcome::Cancelled"), EAutomationExpectedErrorFlags::Contains, 1);
+			TestTrue(TEXT("explicit cancellation closes preserved reservation"), Session->CancelFromAuthority(FGuid::NewGuid()).bCommitted);
 		}
-		TestEqual(TEXT("closing before a bite returns bait to original caller"), Quantity(Caster.Equipment, TEXT("BugBait")), 4);
-		TestFalse(TEXT("terminal closes original caller reservation"), Caster.Equipment->HasActiveFishingUse());
+		TestEqual(TEXT("closing before a bite returns bait to original caller"), Quantity(Caster.Equipment, TEXT("BugBait")), ExitScenario >= 5 ? 3 : 4);
+		TestFalse(TEXT("terminal closes original caller reservation"), ReservationEquipment->HasActiveFishingUse());
 		FCatInventoryEndpointSnapshot ReleasedRod;
-		TestEqual(TEXT("terminal releases the original rod's inventory transfer lock"), Owner.Equipment->ReadInventoryTransferEndpoint(
+		TestEqual(TEXT("terminal releases the original rod's inventory transfer lock"), RodLedger->ReadInventoryTransferEndpoint(
 			TEXT("ActiveUse"), OwnerRodId, ReleasedRod), ECatDomainCommandError::None);
 		if (!TestEqual(TEXT("original owner still holds exactly one active physical rod"), ReleasedRod.Slots.Num(), 1)) return false;
 		TestEqual(TEXT("physical rod identity never changes"), ReleasedRod.Slots[0].ItemInstanceId, OwnerRodId);
-		TestEqual(TEXT("unused physical rod durability survives rollback and cancellation"), ReleasedRod.Slots[0].RodDurability, OwnerBeforeDeploy.RodDurability);
+		TestEqual(TEXT("unused physical rod durability survives rollback and cancellation"), ReleasedRod.Slots[0].RodDurability, ExpectedDurability);
 		TestFalse(TEXT("borrowed rod was never copied to the caller inventory"), Caster.Equipment->GetSnapshot().InventorySlots.ContainsByPredicate(
 			[OwnerRodId](const FCatRunInventorySlot& Slot) { return Slot.ItemInstanceId == OwnerRodId; }));
 		AddInfo(FString::Printf(TEXT("Event=borrowed_rod_service_verified Scenario=%d SessionId=%s RodItemInstanceId=%s CallerBait=%d OwnerDurability=%.3f"),

@@ -49,10 +49,22 @@ bool FCatFishingServiceSharedRodSlotsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("helper joins auxiliary slot"), Rod->AddOperatorFromAuthority(Helper, 1, JoinedSlot));
 	TestEqual(TEXT("helper occupies slot one"), JoinedSlot, 1);
 	TestEqual(TEXT("helper lookup finds someone else's rod"), Fishing->FindRodOperatedBy(Helper), Rod);
-	TestNull(TEXT("full two-person rod is not offered as operable"),
+	TestEqual(TEXT("two occupied slots still leave room on a four-person rod"),
+		Fishing->FindNearestOperableRod(SharedInteractionLocation, 1.0), Rod);
+	for (int32 Slot = 2; Slot < 4; ++Slot)
+	{
+		APlayerState* AdditionalHelper = World->SpawnActor<APlayerState>();
+		if (!TestNotNull(TEXT("additional helper exists"), AdditionalHelper)) return false;
+		TestTrue(TEXT("additional helper joins the next available slot"), Rod->AddOperatorFromAuthority(
+			AdditionalHelper, Rod->GetPresentationState().RodActorRevision, JoinedSlot));
+		TestEqual(TEXT("join order determines slot order"), JoinedSlot, Slot);
+	}
+	TestEqual(TEXT("same rod contains the complete four-person group"), Rod->GetOperatorCount(), 4);
+	TestNull(TEXT("full four-person rod is not offered as operable"),
 		Fishing->FindNearestOperableRod(Rod->GetActorLocation(), 1000.0));
 	APlayerState* Promoted = nullptr;
-	TestTrue(TEXT("helper leaves auxiliary slot"), Rod->RemoveOperatorFromAuthority(Helper, 2, Promoted));
+	TestTrue(TEXT("helper leaves auxiliary slot"), Rod->RemoveOperatorFromAuthority(
+		Helper, Rod->GetPresentationState().RodActorRevision, Promoted));
 	TestNull(TEXT("auxiliary departure does not promote anyone"), Promoted);
 	TestEqual(TEXT("rod with free container position is offered again from the same interaction point"),
 		Fishing->FindNearestOperableRod(SharedInteractionLocation, 1.0), Rod);

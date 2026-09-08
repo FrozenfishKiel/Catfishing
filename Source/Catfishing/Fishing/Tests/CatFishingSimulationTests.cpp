@@ -1124,7 +1124,7 @@ bool FCatFishingHoldAndRecoveryTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("满线右键不改变猫刹车"), RightHeld.CarrierBrakingDecelerationCentimetersPerSecondSquared, NoRightButton.CarrierBrakingDecelerationCentimetersPerSecondSquared, 1e-9);
 			TestEqual(TEXT("满线右键不改变已放线长"), RightHeld.LineLengthCentimeters, NoRightButton.LineLengthCentimeters, 1e-9);
 			TestEqual(TEXT("满线右键不改变猫总耗体"), RightHeld.CatStaminaDrain, NoRightButton.CatStaminaDrain, 1e-9);
-			TestEqual(TEXT("满线右键不改变主位操作耗体"), RightHeld.GetPrimaryCatStaminaDrain(), NoRightButton.GetPrimaryCatStaminaDrain(), 1e-9);
+			TestEqual(TEXT("满线右键不改变载体移动耗体"), RightHeld.CatMovementStaminaDrain, NoRightButton.CatMovementStaminaDrain, 1e-9);
 			TestEqual(TEXT("满线右键不改变共享支撑耗体"), RightHeld.GetSharedCatStaminaDrain(), NoRightButton.GetSharedCatStaminaDrain(), 1e-9);
 			TestEqual(TEXT("满线右键不改变鱼耗体"), RightHeld.FishStaminaDrain, NoRightButton.FishStaminaDrain, 1e-9);
 			TestEqual(TEXT("满线右键不增加第二份磨损"), RightHeld.RodWearDelta, NoRightButton.RodWearDelta, 1e-9);

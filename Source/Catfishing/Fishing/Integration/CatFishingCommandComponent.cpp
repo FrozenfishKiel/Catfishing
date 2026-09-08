@@ -294,6 +294,14 @@ bool UCatFishingCommandComponent::TryGetHeldFightInputStateFromAuthority(bool& O
 	return true;
 }
 
+void UCatFishingCommandComponent::ClearHeldFightInputForControlTransferFromAuthority()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority()) return;
+	bServerPrimaryHeld = false;
+	bServerSlackHeld = false;
+	ServerAimingCorrelationId.Invalidate();
+}
+
 void UCatFishingCommandComponent::TrackHeldFightInputFromAuthority(
 	const ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge)
 {
@@ -330,6 +338,12 @@ FCatFishingInputEdge UCatFishingCommandComponent::MakeDiscreteEdge()
 	FCatFishingInputEdge Edge;
 	Edge.RequestId = FGuid::NewGuid();
 	Edge.InputSequence = ++NextInputSequence;
+	if (const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindHeldRodOperatedBy(
+		Cast<APlayerController>(GetOwner())))
+	{
+		Edge.ControlRodActorId = Rod->GetPresentationState().RodActorId;
+		Edge.ControlEpoch = Rod->GetControlEpoch();
+	}
 	return Edge;
 }
 
@@ -589,12 +603,45 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	{
 		return;
 	}
-	// 按键事实先于 Session 路由更新：断线后暂时没有活跃会话时，Release 仍必须清掉持续按住状态。
-	TrackHeldFightInputFromAuthority(CommandType, Edge);
 	FCatFishingCommandResult Result;
 	Result.CommandType = CommandType;
 	Result.RequestId = Edge.RequestId;
 	Result.bCommitted = false;
+	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
+	const bool bRodControlEdge = CommandType == ECatFishingCommandType::RequestHook
+		|| CommandType == ECatFishingCommandType::PrimaryReleased
+		|| CommandType == ECatFishingCommandType::SlackPressed
+		|| CommandType == ECatFishingCommandType::SlackReleased;
+	if (bRodControlEdge && Fishing)
+	{
+		if (ACatFishingRodActor* Rod = Fishing->FindRodOperatedBy(Controller->PlayerState))
+		{
+			const bool bPrimary = Rod->IsPrimaryOperator(Controller->PlayerState);
+			const bool bCurrentControl = Edge.ControlRodActorId == Rod->GetPresentationState().RodActorId
+				&& Edge.ControlEpoch != 0 && Edge.ControlEpoch == Rod->GetControlEpoch();
+			if (!bPrimary || !bCurrentControl)
+			{
+				Result.Error = bPrimary ? ECatFishingCommandError::InputSequenceStale : ECatFishingCommandError::NotFisher;
+				Result.RodActorId = Rod->GetPresentationState().RodActorId;
+				Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
+				if (const ACatFishingSession* BoundSession = Fishing->FindActiveSessionByRod(Rod))
+				{
+					Result.FishingSessionId = BoundSession->GetSnapshot().FishingSessionId;
+					Result.Revision = BoundSession->GetSnapshot().Revision;
+				}
+				UE_LOG(LogCatFishing, Warning,
+					TEXT("Event=fishing_control_input_rejected RequestId=%s RodActorId=%s SessionId=%s InputControlEpoch=%u CurrentControlEpoch=%u Reason=%s World=%s Authority=%d LocalRole=%d %s"),
+					*Edge.RequestId.ToString(), *Result.RodActorId.ToString(), *Result.FishingSessionId.ToString(),
+					Edge.ControlEpoch, Rod->GetControlEpoch(), bPrimary ? TEXT("StaleControl") : TEXT("AuxiliaryMovementOnly"),
+					*GetNameSafe(GetWorld()), Controller->HasAuthority(), int32(Controller->GetLocalRole()),
+					*CatLogContext::BuildControllerFields(Controller));
+				DeliverResultFromAuthority(Result);
+				return;
+			}
+		}
+	}
+	// 只有当前操竿权下的边沿才能改持续按键；无竿时仍接受 Release 清除物理持有状态。
+	TrackHeldFightInputFromAuthority(CommandType, Edge);
 	if (CommandType == ECatFishingCommandType::CancelFishing)
 	{
 		// X 先作为通用身体动作取消键处理：只取消还停在 GAS 提交窗口里的 BodyAction，不会吞掉后续 Fishing 收竿/会话取消语义。
@@ -615,7 +662,6 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		return;
 	}
 
-	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
 	if (CommandType == ECatFishingCommandType::RequestScoop)
 	{
 		double CooldownSeconds = 0.0;
@@ -747,8 +793,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		}
 		FGuid SessionId;
 		FCatFishingSessionSnapshot Snapshot;
-		// 搏斗与力竭回收都按鱼竿全部操作位路由：主位控制线杯，辅助位提交协作发力意图。
-		// 这条分支必须早于“仅主位活动会话”查询，否则辅助者的输入会被误当成新抛竿。
+		// 辅助位已在统一权限门禁拒绝；搏斗与力竭回收只接受当前主位的线杯输入。
 		if (ACatFishingRodActor* OperatedRod = Fishing->FindRodOperatedBy(Controller->PlayerState))
 		{
 			if (ACatFishingSession* OperatedSession = Fishing->FindActiveSessionByRod(OperatedRod))
@@ -769,17 +814,12 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 							Controller->PlayerState, Edge.InputSequence,
 							CommandType == ECatFishingCommandType::RequestHook);
 					}
-					else if (OperatedRod->IsPrimaryOperator(Controller->PlayerState))
+					else
 					{
 						Result.bCommitted = OperatedSession->SetSlackingFromAuthority(
 							Controller->PlayerState, Edge.InputSequence,
 							CommandType == ECatFishingCommandType::SlackPressed,
 							CommandType == ECatFishingCommandType::SlackPressed ? &Edge.RodAimSample : nullptr, Edge.RequestId);
-					}
-					else
-					{
-						// 策划案中辅助位没有线杯控制；右键对辅助位是无害 no-op。
-						Result.bCommitted = true;
 					}
 					Result.Error = Result.bCommitted
 						? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;

@@ -284,9 +284,11 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 	APlayerState* Owner = World ? World->SpawnActor<APlayerState>() : nullptr;
 	APlayerState* Helper = World ? World->SpawnActor<APlayerState>() : nullptr;
 	APlayerState* Third = World ? World->SpawnActor<APlayerState>() : nullptr;
+	APlayerState* Fourth = World ? World->SpawnActor<APlayerState>() : nullptr;
+	APlayerState* Fifth = World ? World->SpawnActor<APlayerState>() : nullptr;
 	TestNotNull(TEXT("identity actors spawn"), Rod);
 	TestNotNull(TEXT("identity owner spawns"), Owner);
-	if (!Rod || !Hook || !Fish || !Owner || !Helper || !Third)
+	if (!Rod || !Hook || !Fish || !Owner || !Helper || !Third || !Fourth || !Fifth)
 	{
 		return false;
 	}
@@ -337,21 +339,29 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("second operator joins left auxiliary slot"), Rod->AddOperatorFromAuthority(Helper, 2, JoinedSlot));
 	TestEqual(TEXT("second operator slot index is one"), JoinedSlot, 1);
 	TestEqual(TEXT("two-player occupancy is derived from compact array"), Rod->GetOperatorCount(), 2);
-	TestFalse(TEXT("third operator is rejected by current two-slot configuration"),
+	TestTrue(TEXT("third operator joins the same roster"),
 		Rod->AddOperatorFromAuthority(Third, 3, JoinedSlot));
+	TestTrue(TEXT("fourth operator joins the same roster"),
+		Rod->AddOperatorFromAuthority(Fourth, 4, JoinedSlot));
+	TestFalse(TEXT("fifth operator exceeds the default four-person capacity"),
+		Rod->AddOperatorFromAuthority(Fifth, 5, JoinedSlot));
 	APlayerState* PromotedPrimary = nullptr;
-	TestTrue(TEXT("primary can leave two-player occupancy"),
-		Rod->RemoveOperatorFromAuthority(Owner, 3, PromotedPrimary));
+	TestTrue(TEXT("primary can leave four-player occupancy"),
+		Rod->RemoveOperatorFromAuthority(Owner, 5, PromotedPrimary));
 	TestEqual(TEXT("left operator is explicitly reported as promoted"), PromotedPrimary, Helper);
 	TestEqual(TEXT("promoted operator becomes slot zero"), Rod->GetOperatorSlotIndex(Helper), 0);
-	TestEqual(TEXT("two-to-one transition clears cooperative occupancy immediately"), Rod->GetOperatorCount(), 1);
+	TestEqual(TEXT("four-to-three transition publishes remaining membership immediately"), Rod->GetOperatorCount(), 3);
 	TestEqual(TEXT("primary mirror follows promoted operator"),
 		Rod->GetPresentationState().OperatorPlayerState.Get(), Helper);
 	TestEqual(TEXT("promotion atomically transfers holder"),
 		Rod->GetPresentationState().HolderPlayerState.Get(), Helper);
 	TestEqual(TEXT("promotion keeps rod held"), Rod->GetPresentationState().PoseMode,
 		ECatFishingRodPoseMode::Held);
-	TestTrue(TEXT("last operator can leave"), Rod->RemoveOperatorFromAuthority(Helper, 4, PromotedPrimary));
+	TestTrue(TEXT("next primary can leave"), Rod->RemoveOperatorFromAuthority(Helper, 6, PromotedPrimary));
+	TestEqual(TEXT("next surviving member is promoted in order"), PromotedPrimary, Third);
+	TestTrue(TEXT("third primary can leave"), Rod->RemoveOperatorFromAuthority(Third, 7, PromotedPrimary));
+	TestEqual(TEXT("last surviving member is promoted"), PromotedPrimary, Fourth);
+	TestTrue(TEXT("last operator can leave"), Rod->RemoveOperatorFromAuthority(Fourth, 8, PromotedPrimary));
 	TestEqual(TEXT("empty occupancy has zero count"), Rod->GetOperatorCount(), 0);
 	TestNull(TEXT("empty occupancy clears primary mirror"), Rod->GetPresentationState().OperatorPlayerState);
 	TestNull(TEXT("empty occupancy clears holder"), Rod->GetPresentationState().HolderPlayerState);

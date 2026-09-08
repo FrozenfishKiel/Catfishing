@@ -342,6 +342,17 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 
 	const int64 ParticipantSequence = Runner->FindParticipant(Fixture.Player)->LastInputSequence;
 	const int64 SnapshotSequence = Session->GetSnapshot().SnapshotSequence;
+	FCatFishingInputEdge StaleControl = Commands->MakeDiscreteEdge();
+	++StaleControl.ControlEpoch;
+	AddExpectedErrorPlain(TEXT("Event=fishing_control_input_rejected"), EAutomationExpectedErrorFlags::Contains, 1);
+	AddExpectedErrorPlain(TEXT("Error=ECatFishingCommandError::InputSequenceStale"), EAutomationExpectedErrorFlags::Contains, 1);
+	Commands->HandleAbilityCommandFromAuthority(ECatFishingCommandType::PrimaryReleased, StaleControl);
+	TestTrue(TEXT("old control epoch cannot release a new primary's reel"),
+		Commands->TryGetResult(StaleControl.RequestId, Result) && !Result.bCommitted
+		&& Result.Error == ECatFishingCommandError::InputSequenceStale);
+	TestEqual(TEXT("stale control cannot consume current runner input sequence"),
+		Runner->FindParticipant(Fixture.Player)->LastInputSequence, ParticipantSequence);
+	TestEqual(TEXT("stale control preserves active reeling"), Runner->GetCatAction(), ECatFightCatAction::Pull);
 	auto WrongEpoch = Sample(1000, 900.0, 0.0, Fixture.Rod);
 	++WrongEpoch.InputEpoch;
 	const FGuid RejectedSessionRequest = FGuid::NewGuid();
@@ -361,6 +372,7 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 		|| !TestTrue(TEXT("helper joins the same rod"), Fixture.Rod->AddOperatorFromAuthority(
 			Helper, Fixture.Rod->GetPresentationState().RodActorRevision, HelperSlot))) return false;
 	const auto HelperPress = Sample(1001, 900.0, 0.0, Fixture.Rod);
+	TestFalse(TEXT("helper cannot submit primary-only reeling"), Session->SetReelingFromAuthority(Helper, 1, true));
 	TestFalse(TEXT("helper cannot use primary-only Session slack rebase"),
 		Session->SetSlackingFromAuthority(Helper, 1, true, &HelperPress, FGuid::NewGuid()));
 	TestEqual(TEXT("helper rejection preserves the primary's runner sequence"), Runner->FindParticipant(Fixture.Player)->LastInputSequence, ParticipantSequence);

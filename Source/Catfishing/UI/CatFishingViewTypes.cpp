@@ -15,6 +15,10 @@ FCatFishingViewState FCatFishingViewState::FromSnapshot(const FCatFishingSession
 	View.PrimaryPowerAlpha = Snapshot.PrimaryPowerAlpha;
 	View.ActiveCombinedFishingStrength = Snapshot.ActiveCombinedFishingStrength;
 	View.ActiveHelperCount = Snapshot.ActiveHelperCount;
+	View.FightParticipantCount = Snapshot.FightParticipantCount;
+	View.CombinedFishingStrength = Snapshot.CombinedFishingStrength;
+	View.CombinedFightStamina = Snapshot.CombinedFightStamina;
+	View.CombinedFightStaminaMaximum = Snapshot.CombinedFightStaminaMaximum;
 	View.bReeling = Snapshot.bReeling;
 	View.bSlacking = Snapshot.bSlacking;
 	View.bPerfectHook = Snapshot.bPerfectHook;
