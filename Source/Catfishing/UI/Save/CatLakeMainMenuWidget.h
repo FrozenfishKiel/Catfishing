@@ -13,7 +13,7 @@ class UTextBlock;
 class UWidgetSwitcher;
 class UCatFrontendSettingsModel;
 
-/** 局内主菜单的一次玩家意图；Widget 只声明按钮语义，真正保存、设置或离开由 Controller 裁决。 */
+/** 局内主菜单的一次玩家意图；Widget 只声明按钮语义，真正保存、设置或退出由 Controller 裁决。 */
 UENUM(BlueprintType)
 enum class ECatLakeMainMenuAction : uint8
 {
@@ -26,7 +26,7 @@ enum class ECatLakeMainMenuAction : uint8
 	/** 请求把当前活动世界写入现有活动槽；是否可保存由 Save 子系统按 Host 和活动槽状态裁决。 */
 	Save,
 
-	/** 请求离开当前游戏局；实际路径走 Online 子系统，Host 会沿用离开前保存链路。 */
+	/** 请求直接退出本地游戏进程；PIE 中等价于停止当前编辑器运行，不走回前台离局链路。 */
 	ExitGame,
 
 	/** 请求应用局内设置页草稿；真正写入仍由 SettingsModel 和 Controller 共同裁决。 */
@@ -67,19 +67,19 @@ struct FCatLakeMainMenuViewState
 	UPROPERTY(BlueprintReadOnly)
 	FText StatusText;
 
-	/** 设置按钮是否可点击；退出流程已经受理后会关闭，避免玩家在旅行期间继续打开新页面。 */
+	/** 设置按钮是否可点击；当前由 Controller 根据局内设置模型是否可用写入。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bSettingsEnabled = true;
 
-	/** 返回游戏按钮是否可点击；退出流程已接管时关闭，避免玩家隐藏正在退出的菜单状态。 */
+	/** 返回游戏按钮是否可点击；当前保持可点，让玩家能随时关闭暂停菜单回到游戏。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bCloseEnabled = true;
 
-	/** 保存按钮是否可点击；Save 忙碌、服务缺失或退出流程在途时为 false。 */
+	/** 保存按钮是否可点击；Save 服务缺失或正在处理其它保存请求时为 false。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bSaveEnabled = true;
 
-	/** 退出游戏按钮是否可点击；Online 离开请求已经受理后禁用，避免重复提交同一离局意图。 */
+	/** 退出游戏按钮是否可点击；点击后走本地 Quit，通常不会停留在菜单里等待异步离局。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bExitEnabled = true;
 };
@@ -97,7 +97,7 @@ public:
 	/** 解除局内设置页的 Model 订阅和显示映射；Controller 拆除菜单时调用，不应用或保存任何草稿。 */
 	void ResetLakeMenuSettings();
 
-	/** 接收 Controller 的最新只读状态并刷新按钮、状态文本和蓝图扩展点；Widget 不缓存 Save 或 Online 来源。 */
+	/** 接收 Controller 的最新只读状态并刷新按钮、状态文本和蓝图扩展点；Widget 不缓存 Save、Settings 或退出来源。 */
 	void RenderMenu(const FCatLakeMainMenuViewState& ViewState);
 
 	/** 显示暂停菜单命令页；设置页取消、应用成功和首次打开菜单都经这里回到纵向按钮列表。 */
@@ -106,10 +106,10 @@ public:
 	/** 显示局内设置页；它复用主界面设置 Model 的字段、分类和应用规则，不创建第二套设置来源。 */
 	void ShowSettingsPanel();
 
-	/** 局内设置页可见性是 ESC 输入的分流条件；设置页内按 ESC 只放弃本次编辑，命令页按 ESC 才恢复游戏输入。 */
+	/** 局内设置页可见性是普通 Escape 输入的分流条件；PIE 的 Shift+Escape 会透传给编辑器停止运行。 */
 	bool IsShowingSettingsPanel() const;
 
-	/** 暴露最近一次菜单投影给 WBP；它只用于表现，不代表可写的保存、设置或联机状态。 */
+	/** 暴露最近一次菜单投影给 WBP；它只用于表现，不代表可写的保存、设置或退出状态。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|LakeMenu")
 	const FCatLakeMainMenuViewState& GetLastMenuViewState() const;
 
@@ -125,7 +125,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|LakeMenu")
 	void RequestSave();
 
-	/** 提交退出当前游戏局意图；实际保存和回前台流程由 Online 子系统处理。 */
+	/** 提交直接退出游戏意图；是否先保存由玩家显式点击保存按钮决定。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|LakeMenu")
 	void RequestExitGame();
 
@@ -171,17 +171,17 @@ protected:
 	/** 离开视口时解除命令与设置控件绑定，避免 WBP 重建或 Slate 重建后重复广播同一点击。 */
 	virtual void NativeDestruct() override;
 
-	/** 预览键盘输入时优先消费 ESC；设置页内回命令页，命令页内关闭菜单并恢复游戏输入。 */
+	/** 预览键盘输入时优先消费普通 Escape；设置页内回命令页，命令页内关闭菜单，Shift+Escape 留给编辑器。 */
 	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
-	/** 菜单根拿到键盘焦点时复用 ESC 分流；预览未命中的其它键继续交还父类。 */
+	/** 菜单根拿到键盘焦点时复用普通 Escape 分流；Shift+Escape 和其它键继续交还父类。 */
 	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 	/** WBP 可选渲染扩展点；正式资产可以读取 ViewState 决定动画、焦点或局部文案。 */
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|LakeMenu")
 	void BP_RenderMenu(const FCatLakeMainMenuViewState& ViewState);
 
-	/** WBP 可选意图扩展点；只用于表现响应，不替代 Controller 的保存、设置或离开裁决。 */
+	/** WBP 可选意图扩展点；只用于表现响应，不替代 Controller 的保存、设置或退出裁决。 */
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|LakeMenu")
 	void BP_HandleMenuAction(ECatLakeMainMenuAction Action);
 
@@ -214,7 +214,7 @@ private:
 	/** 广播指定菜单意图并通知蓝图表现扩展；它不读取任何业务系统，也不改变菜单打开状态。 */
 	void SubmitMenuAction(ECatLakeMainMenuAction Action);
 
-	/** 判断当前键盘事件是否代表关闭菜单；这里只处理已聚焦 UI 内的 Escape，不负责运行时输入映射。 */
+	/** 判断当前键盘事件是否代表关闭菜单；这里只处理已聚焦 UI 内的普通 Escape，Shift+Escape 透传给编辑器。 */
 	bool ShouldCloseMenuFromKey(const FKeyEvent& InKeyEvent) const;
 
 	/** 语言下拉输入处理；只把 SettingsModel 提供的已打包 culture 写入草稿，应用前不改变运行语言。 */
@@ -286,11 +286,11 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> SaveButton;
 
-	/** WBP Designer 中的退出当前游戏按钮；存在时点击广播 ExitGame，后续由 Online 子系统执行正式离局。 */
+	/** WBP Designer 中的退出游戏按钮；存在时点击广播 ExitGame，后续由 Controller 调用本地 Quit。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> ExitGameButton;
 
-	/** WBP Designer 中的可选关闭按钮；存在时只关闭菜单并恢复输入，不提交保存或离局。 */
+	/** WBP Designer 中的可选关闭按钮；存在时只关闭菜单并恢复输入，不提交保存或退出游戏。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> CloseButton;
 

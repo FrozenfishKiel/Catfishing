@@ -8,27 +8,26 @@
 class APlayerController;
 class UCatLakeMainMenuWidget;
 class UCatFrontendSettingsModel;
-class UCatOnlineSubsystem;
 class UCatSaveSubsystem;
 class UEnhancedInputComponent;
 class UInputAction;
 class ULocalPlayer;
 enum class ECatLakeMainMenuAction : uint8;
 
-/** 局内 ESC 菜单控制器；它拥有菜单打开态、输入绑定和对 Save/Online 权威入口的转交，不负责绘制控件。 */
+/** 局内 ESC 菜单控制器；它拥有菜单打开态、输入绑定和对 Save、Settings 与本地 Quit 入口的转交，不负责绘制控件。 */
 UCLASS()
 class CATFISHING_API UCatLakeMainMenuController : public UObject
 {
 	GENERATED_BODY()
 
 public:
-	/** 绑定本地玩家、Controller 和菜单 View；成功后安装主菜单 Action，并订阅保存与联机状态变化。 */
+	/** 绑定本地玩家、Controller 和菜单 View；成功后安装主菜单 Action，并订阅保存忙闲与完成变化。 */
 	bool Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController, UCatLakeMainMenuWidget* InView);
 
 	/** 成对关闭菜单、恢复输入、解除 Action 绑定和系统订阅；换 Pawn、旅行或 LocalPlayer 销毁时调用。 */
 	void Unbind();
 
-	/** 切换局内菜单打开状态；真实视口、焦点和输入锁由 SetMenuOpen 统一处理。 */
+	/** 切换局内菜单打开状态；PIE 中 Shift+Escape 会被跳过并交还编辑器，普通菜单键才由 SetMenuOpen 处理视口、焦点和输入锁。 */
 	void ToggleMenu();
 
 	/** 返回菜单是否由本 Controller 保持打开；不从 Widget 可见性反推。 */
@@ -46,7 +45,7 @@ public:
 	/** Widget 请求保存当前活动世界；Controller 只转交 Save 子系统并显示同步或异步结果文本。 */
 	void RequestSaveFromWidget();
 
-	/** Widget 请求退出当前游戏局；Controller 只转交 Online 子系统并防止重复离局提交。 */
+	/** Widget 请求直接退出本地游戏进程；PIE 中交给引擎退出入口停止当前编辑器运行。 */
 	void RequestExitGameFromWidget();
 
 	/** Widget 请求应用局内设置草稿；成功后回到暂停菜单，失败时留在设置页显示 SettingsModel 反馈。 */
@@ -86,26 +85,20 @@ private:
 	/** 根据菜单打开态应用或释放模态 UI 输入锁；打开时玩家移动和视角被本菜单暂停。 */
 	void ApplyMenuInputMode(bool bOpen);
 
-	/** 按 Controller 当前事实重绘菜单状态；按钮可用性只读取 Save busy、Online pending 和服务是否存在。 */
+	/** 按 Controller 当前事实重绘菜单状态；按钮可用性只读取 Save busy 和服务是否存在。 */
 	void UpdateView();
 
-	/** 响应 Widget 的统一菜单 Action；这里把按钮语义分发到关闭、设置、保存和离开四个明确入口。 */
+	/** 响应 Widget 的统一菜单 Action；这里把按钮语义分发到关闭、设置、保存和退出四个明确入口。 */
 	void HandleMenuActionRequested(ECatLakeMainMenuAction Action);
 
 	/** Save 子系统目录或忙闲状态变化入口；这里只刷新按钮可用性，手动保存文案由匹配请求 ID 的完成回调写入。 */
 	void HandleSaveChanged();
-
-	/** Online 快照变化入口；离开请求异步失败回到空闲时恢复按钮并显示可重试反馈。 */
-	void HandleOnlineSnapshotChanged();
 
 	/** Save 子系统完成回调；只消费本菜单发起的手动保存请求，避免目录读取等文本覆盖保存反馈。 */
 	void HandleSaveCompleted(FGuid RequestId, bool bSuccess);
 
 	/** 通过绑定的 LocalPlayer 定位当前 GameInstance 级 Save 子系统；任一生命周期层失效时返回空。 */
 	UCatSaveSubsystem* GetSaveSubsystem() const;
-
-	/** 通过绑定的 LocalPlayer 定位当前 GameInstance 级 Online 子系统；任一生命周期层失效时返回空。 */
-	UCatOnlineSubsystem* GetOnlineSubsystem() const;
 
 	/** 返回局内菜单持有的 SettingsModel；它与主界面模型同类同规则，但生命周期随当前玩法 UI。 */
 	UCatFrontendSettingsModel* GetSettingsModel() const;
@@ -140,17 +133,11 @@ private:
 	/** Save 子系统 OnChanged 的配对解绑句柄；只在 Bind 成功并且 Save 来源有效时存在。 */
 	FDelegateHandle SaveChangedHandle;
 
-	/** Online 子系统 OnSnapshotChanged 的配对解绑句柄；用于恢复异步离开失败后的按钮状态。 */
-	FDelegateHandle OnlineSnapshotHandle;
-
 	/** Save 子系统 OnSaveCompleted 的配对解绑句柄；只用于手动保存结果的明确完成文案。 */
 	FDelegateHandle SaveCompletedHandle;
 
 	/** 菜单当前是否打开的唯一状态；Toggle 写入，输入模式和 ViewState 只读取。 */
 	bool bMenuOpen = false;
-
-	/** 离开请求已被 Online 接管的本地等待标记；期间禁用重复保存、设置和退出按钮。 */
-	bool bExitPending = false;
 
 	/** 当前等待回执的手动保存请求 ID；无效值表示没有由本菜单发起且尚未结案的保存。 */
 	FGuid PendingManualSaveRequestId;

@@ -6,8 +6,9 @@
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
 #include "InputMappingContext.h"
+#include "InputCoreTypes.h"
+#include "Kismet/KismetSystemLibrary.h"
 #include "Logging/CatLog.h"
-#include "Online/CatOnlineSubsystem.h"
 #include "Save/CatSaveSubsystem.h"
 #include "UI/CatUISettings.h"
 #include "UI/Frontend/CatFrontendSettingsModel.h"
@@ -17,7 +18,7 @@
 // 1. 先解除可能残留的旧 Controller、输入绑定和系统订阅，确保复用对象不会向旧 World 回写 UI。
 // 2. 只接受本地 Controller 和有效菜单 View；服务缺失不阻止菜单创建，只会让对应按钮禁用或显示明确反馈。
 // 3. 创建局内设置 Model 并注入 View，复用主界面设置来源与草稿规则。
-// 4. 订阅 Widget 意图、Save 变化和 Online 快照，再安装 Enhanced Input Action。
+// 4. 订阅 Widget 意图和 Save 变化，再安装 Enhanced Input Action。
 // 5. 最后渲染一份初始状态，让正式 WBP 拿到按钮可用性。
 bool UCatLakeMainMenuController::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController,
 	UCatLakeMainMenuWidget* InView)
@@ -47,10 +48,6 @@ bool UCatLakeMainMenuController::Bind(ULocalPlayer* InLocalPlayer, APlayerContro
 		SaveChangedHandle = Save->OnChanged.AddUObject(this, &ThisClass::HandleSaveChanged);
 		SaveCompletedHandle = Save->OnSaveCompleted.AddUObject(this, &ThisClass::HandleSaveCompleted);
 	}
-	if (UCatOnlineSubsystem* Online = GetOnlineSubsystem())
-	{
-		OnlineSnapshotHandle = Online->OnSnapshotChanged.AddUObject(this, &ThisClass::HandleOnlineSnapshotChanged);
-	}
 	InstallMenuInput();
 	UpdateView();
 	UE_LOG(LogCatUI, Log, TEXT("Event=ui_lake_menu_bound Controller=%s View=%s"),
@@ -60,7 +57,7 @@ bool UCatLakeMainMenuController::Bind(ULocalPlayer* InLocalPlayer, APlayerContro
 
 // 解绑流程：
 // 1. 若菜单打开，先关闭菜单并释放本页申请的输入锁。
-// 2. 再移除 Enhanced Input 绑定、Widget 意图订阅、设置模型连接和 Save/Online 订阅。
+// 2. 再移除 Enhanced Input 绑定、Widget 意图订阅、设置模型连接和 Save 订阅。
 // 3. 最后清空弱引用、等待标记和结果文本，避免下一次 Pawn 装配继承旧反馈。
 void UCatLakeMainMenuController::Unbind()
 {
@@ -80,10 +77,6 @@ void UCatLakeMainMenuController::Unbind()
 	{
 		Save->OnSaveCompleted.Remove(SaveCompletedHandle);
 	}
-	if (UCatOnlineSubsystem* Online = GetOnlineSubsystem(); Online && OnlineSnapshotHandle.IsValid())
-	{
-		Online->OnSnapshotChanged.Remove(OnlineSnapshotHandle);
-	}
 	if (SettingsModel)
 	{
 		SettingsModel->Shutdown();
@@ -91,20 +84,27 @@ void UCatLakeMainMenuController::Unbind()
 	}
 	SaveChangedHandle.Reset();
 	SaveCompletedHandle.Reset();
-	OnlineSnapshotHandle.Reset();
 	BoundLocalPlayer.Reset();
 	BoundPlayerController.Reset();
 	BoundView.Reset();
 	bMenuOpen = false;
-	bExitPending = false;
 	PendingManualSaveRequestId.Invalidate();
 	ModalInputModeState = FCatUIModalInputModeState();
 	LastStatusText = FText::GetEmpty();
 }
 
-// 菜单切换流程：只反转本 Controller 的打开态；实际视口、输入模式和结果刷新交给 SetMenuOpen。
+// 菜单切换流程：PIE 约定 Shift+Escape 交给编辑器停止运行；普通 Escape 只反转本 Controller 的打开态，实际视口、输入模式和结果刷新交给 SetMenuOpen。
 void UCatLakeMainMenuController::ToggleMenu()
 {
+#if WITH_EDITOR
+	if (const APlayerController* Controller = BoundPlayerController.Get();
+		Controller && (Controller->IsInputKeyDown(EKeys::LeftShift) || Controller->IsInputKeyDown(EKeys::RightShift)))
+	{
+		UE_LOG(LogCatUI, Log, TEXT("Event=ui_lake_menu_toggle_ignored Reason=EditorStopChord Controller=%s"),
+			*GetNameSafe(Controller));
+		return;
+	}
+#endif
 	SetMenuOpen(!bMenuOpen);
 }
 
@@ -120,7 +120,7 @@ void UCatLakeMainMenuController::RefreshInputBinding()
 	InstallMenuInput();
 }
 
-// 关闭请求流程：只关闭菜单，不清 Save/Online 已经受理的异步工作。
+// 关闭请求流程：只关闭菜单，不清 Save 已经受理的异步工作。
 void UCatLakeMainMenuController::RequestCloseFromWidget()
 {
 	SetMenuOpen(false);
@@ -188,39 +188,24 @@ void UCatLakeMainMenuController::RequestSaveFromWidget()
 		*Result.Message.ToString());
 }
 
-// 退出流程：只提交 Online Leave；Host 保存、Run teardown、Session 销毁和回前台仍沿用 Online 的唯一生命周期。
+// 退出流程：先确认本地 Player、World 和 Controller 都仍有效；缺上下文时写入失败文本、刷新 View 并记录可定位日志。
+// 成功分支按主界面同一语义直接请求本地 Quit，不再走 Online Leave 的保存、拆局、DestroySession 和回前台等待链。
 void UCatLakeMainMenuController::RequestExitGameFromWidget()
 {
-	if (bExitPending)
+	ULocalPlayer* Player = BoundLocalPlayer.Get();
+	UWorld* World = Player ? Player->GetWorld() : nullptr;
+	APlayerController* Controller = BoundPlayerController.Get();
+	if (!Player || !World || !Controller)
 	{
-		return;
-	}
-	UCatOnlineSubsystem* Online = GetOnlineSubsystem();
-	if (!Online)
-	{
-		LastStatusText = FText::FromString(TEXT("房间服务当前不可用。"));
+		LastStatusText = FText::FromString(TEXT("当前无法退出游戏。"));
 		UpdateView();
-		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_lake_menu_exit_unavailable Reason=OnlineSubsystemMissing"));
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_lake_menu_exit_unavailable Reason=LocalQuitContextMissing Player=%s World=%s Controller=%s"),
+			*GetNameSafe(Player), *GetNameSafe(World), *GetNameSafe(Controller));
 		return;
 	}
-	const FCatOnlineResult Result = Online->RequestLeave();
-	bExitPending = Result.bAccepted;
-	LastStatusText = Result.bAccepted
-		? FText::FromString(TEXT("正在退出当前游戏。"))
-		: FText::FromString(TEXT("当前无法退出游戏。"));
-	UpdateView();
-	if (Result.bAccepted)
-	{
-		UE_LOG(LogCatUI, Log,
-			TEXT("Event=ui_lake_menu_exit_requested RequestId=%s Accepted=true Error=%s"),
-			*Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-			*UEnum::GetValueAsString(Result.Error));
-		return;
-	}
-	UE_LOG(LogCatUI, Warning,
-		TEXT("Event=ui_lake_menu_exit_requested RequestId=%s Accepted=false Error=%s"),
-		*Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-		*UEnum::GetValueAsString(Result.Error));
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_lake_menu_exit_confirmed World=%s NetMode=%d Controller=%s"),
+		*World->GetName(), static_cast<int32>(World->GetNetMode()), *GetNameSafe(Controller));
+	UKismetSystemLibrary::QuitGame(World, Controller, EQuitPreference::Quit, false);
 }
 
 // 设置应用流程：SettingsModel 负责实际提交；成功时回暂停菜单，失败时留在设置页让玩家看到具体失败原因。
@@ -398,7 +383,7 @@ void UCatLakeMainMenuController::ApplyMenuInputMode(const bool bOpen)
 	CatUIModalInputMode::Close(Controller, ModalInputModeState);
 }
 
-// ViewState 刷新流程：Save busy 决定保存按钮，Online 离开 pending 决定所有会产生新流程的按钮；状态文本只显示最近入口反馈。
+// ViewState 刷新流程：状态文本来自最近入口反馈，设置按钮由 SettingsModel 存在性决定，保存按钮要求 Save 服务存在且不忙，返回与退出按钮保持可用。
 void UCatLakeMainMenuController::UpdateView()
 {
 	UCatLakeMainMenuWidget* View = BoundView.Get();
@@ -409,14 +394,14 @@ void UCatLakeMainMenuController::UpdateView()
 	UCatSaveSubsystem* Save = GetSaveSubsystem();
 	FCatLakeMainMenuViewState ViewState;
 	ViewState.StatusText = LastStatusText;
-	ViewState.bSettingsEnabled = !bExitPending;
-	ViewState.bCloseEnabled = !bExitPending;
-	ViewState.bSaveEnabled = Save && !Save->IsBusy() && !bExitPending;
-	ViewState.bExitEnabled = !bExitPending;
+	ViewState.bSettingsEnabled = SettingsModel != nullptr;
+	ViewState.bCloseEnabled = true;
+	ViewState.bSaveEnabled = Save && !Save->IsBusy();
+	ViewState.bExitEnabled = true;
 	View->RenderMenu(ViewState);
 }
 
-// 菜单意图分发流程：Widget 只广播语义，这里才根据语义调用关闭、设置、保存、离开和设置页命令入口。
+// 菜单意图分发流程：Widget 只广播语义，这里才根据语义调用关闭、设置、保存、退出和设置页命令入口。
 void UCatLakeMainMenuController::HandleMenuActionRequested(const ECatLakeMainMenuAction Action)
 {
 	switch (Action)
@@ -469,28 +454,6 @@ void UCatLakeMainMenuController::HandleSaveChanged()
 	UpdateView();
 }
 
-// Online 变化流程：如果离开请求已经回到无活动操作但 UI 仍在 Lake 中，就说明玩家可以重试，按钮恢复可用。
-void UCatLakeMainMenuController::HandleOnlineSnapshotChanged()
-{
-	UCatOnlineSubsystem* Online = GetOnlineSubsystem();
-	if (!Online)
-	{
-		bExitPending = false;
-		UpdateView();
-		return;
-	}
-	const FCatOnlineSnapshot Snapshot = Online->GetSnapshot();
-	if (bExitPending && Snapshot.ActiveOperation == ECatOnlineOperation::None)
-	{
-		bExitPending = false;
-		if (Snapshot.LastError != ECatOnlineError::None)
-		{
-			LastStatusText = FText::FromString(TEXT("退出当前游戏失败，请稍后重试。"));
-		}
-	}
-	UpdateView();
-}
-
 // 保存完成流程：只匹配本菜单发起的手动保存；成功使用玩家可读完成文案，失败再展示 Save 子系统的具体原因。
 void UCatLakeMainMenuController::HandleSaveCompleted(const FGuid RequestId, const bool bSuccess)
 {
@@ -515,14 +478,6 @@ UCatSaveSubsystem* UCatLakeMainMenuController::GetSaveSubsystem() const
 	const ULocalPlayer* Player = BoundLocalPlayer.Get();
 	UGameInstance* GameInstance = Player ? Player->GetGameInstance() : nullptr;
 	return GameInstance ? GameInstance->GetSubsystem<UCatSaveSubsystem>() : nullptr;
-}
-
-// Online 来源定位流程：只从当前 LocalPlayer 的 GameInstance 读取正式联机系统，避免 PIE 多 World 串线。
-UCatOnlineSubsystem* UCatLakeMainMenuController::GetOnlineSubsystem() const
-{
-	const ULocalPlayer* Player = BoundLocalPlayer.Get();
-	UGameInstance* GameInstance = Player ? Player->GetGameInstance() : nullptr;
-	return GameInstance ? GameInstance->GetSubsystem<UCatOnlineSubsystem>() : nullptr;
 }
 
 // 设置来源定位流程：返回本 Controller 创建的局内设置 Model；空值表示菜单尚未绑定或已经拆除。

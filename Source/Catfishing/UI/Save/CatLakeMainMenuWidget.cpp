@@ -35,7 +35,7 @@ void UCatLakeMainMenuWidget::ResetLakeMenuSettings()
 }
 
 // 渲染流程：
-// 1. 保存 Controller 给出的唯一菜单投影，避免 Widget 从按钮状态反推 Save 或 Online 事实。
+// 1. 保存 Controller 给出的唯一菜单投影，避免 Widget 从按钮状态反推 Save、Settings 或退出事实。
 // 2. 写入可选 WBP 控件；返回、设置、保存和退出都只反映 Controller 投影，不读取业务系统。
 // 3. 最后通知蓝图扩展点，让动画或自定义控件读取同一份 LastMenuViewState。
 void UCatLakeMainMenuWidget::RenderMenu(const FCatLakeMainMenuViewState& ViewState)
@@ -120,7 +120,7 @@ bool UCatLakeMainMenuWidget::IsShowingSettingsPanel() const
 		&& LakeSettingsPanel->GetVisibility() != ESlateVisibility::Hidden;
 }
 
-// 状态读取流程：返回最后一次 Controller 渲染输入；调用方不能据此提交保存或离局，只能用于表现绑定。
+// 状态读取流程：返回最后一次 Controller 渲染输入；调用方不能据此提交保存或退出游戏，只能用于表现绑定。
 const FCatLakeMainMenuViewState& UCatLakeMainMenuWidget::GetLastMenuViewState() const
 {
 	return LastMenuViewState;
@@ -144,7 +144,7 @@ void UCatLakeMainMenuWidget::RequestSave()
 	SubmitMenuAction(ECatLakeMainMenuAction::Save);
 }
 
-// 退出请求流程：只广播离开当前局意图；Online 子系统负责保存、Session teardown 和回前台。
+// 退出请求流程：只广播直接退出游戏意图；是否保存由玩家显式点击保存按钮决定。
 void UCatLakeMainMenuWidget::RequestExitGame()
 {
 	SubmitMenuAction(ECatLakeMainMenuAction::ExitGame);
@@ -216,7 +216,7 @@ void UCatLakeMainMenuWidget::NativeDestruct()
 	Super::NativeDestruct();
 }
 
-// 预览键流程：子按钮处理前先识别 Escape；设置页中先取消回暂停菜单，命令页中才关闭菜单恢复游戏输入。
+// 预览键流程：子按钮处理前只识别普通 Escape；设置页中先取消回暂停菜单，命令页中才关闭菜单，Shift+Escape 继续透传。
 FReply UCatLakeMainMenuWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
 	if (ShouldCloseMenuFromKey(InKeyEvent))
@@ -227,7 +227,7 @@ FReply UCatLakeMainMenuWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometr
 	return Super::NativeOnPreviewKeyDown(InGeometry, InKeyEvent);
 }
 
-// 键盘流程：当菜单根直接持有焦点时复用同一 Escape 分支；其它按键继续走父类默认处理。
+// 键盘流程：当菜单根直接持有焦点时复用普通 Escape 分支；Shift+Escape 和其它按键继续走父类默认处理。
 FReply UCatLakeMainMenuWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
 	if (ShouldCloseMenuFromKey(InKeyEvent))
@@ -542,10 +542,20 @@ void UCatLakeMainMenuWidget::SubmitMenuAction(const ECatLakeMainMenuAction Actio
 	BP_HandleMenuAction(Action);
 }
 
-// 关闭键判断流程：只消费菜单已经获得焦点后的 Escape；运行时 ESC 绑定仍由 Enhanced Input Action 负责。
+// 关闭键判断流程：只消费菜单已经获得焦点后的普通 Escape；PIE 的 Shift+Escape 停止运行快捷键继续交给编辑器处理。
 bool UCatLakeMainMenuWidget::ShouldCloseMenuFromKey(const FKeyEvent& InKeyEvent) const
 {
-	return InKeyEvent.GetKey() == EKeys::Escape;
+	if (InKeyEvent.GetKey() != EKeys::Escape)
+	{
+		return false;
+	}
+#if WITH_EDITOR
+	if (InKeyEvent.IsShiftDown())
+	{
+		return false;
+	}
+#endif
+	return true;
 }
 
 // 语言选择流程：回填保护外把玩家选择交给 SettingsModel；未打包语言会由 Model 拒绝并刷新结果文本。
