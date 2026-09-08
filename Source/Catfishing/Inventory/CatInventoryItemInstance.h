@@ -31,12 +31,6 @@ struct FCatInventoryItemUseContext
 
 	/** 被使用物品所在的正式库存槽位；库存组件按它重读条目，实例不能信任 UI 传来的定义或类别。 */
 	int32 InventorySlotIndex = INDEX_NONE;
-
-	/** 是否要求下游 Equipment 版本也必须匹配；只给旧钓具选择 RPC 保留，新通用 Use 不暴露这个前提。 */
-	bool bRequireEquipmentRevision = false;
-
-	/** 旧钓具选择 RPC 观察到的 Equipment 版本；只有 bRequireEquipmentRevision 为 true 时才参与校验。 */
-	int64 ExpectedEquipmentRevision = 0;
 };
 
 /** 运行期的一份物品身份；库存格保存数量，实例保存这件物品跨移动、使用和复制时不该丢的身份与行为入口。 */

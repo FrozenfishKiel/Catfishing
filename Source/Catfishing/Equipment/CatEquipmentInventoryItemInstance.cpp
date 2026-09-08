@@ -117,8 +117,8 @@ bool UCatEquipmentInventoryItemInstance::CanUseFromInventory(
 // 装备库存 Use 正式提交流程：
 // 1. 先复核库存 entry、使用 Pawn 和 Equipment 组件，避免装备实例被其他宿主或空格冒用。
 // 2. 再按服务器当前 Equipment 快照补齐未点击的 Rod/Bait/Float/ScoopNet 选择；客户端不提交完整 loadout。
-// 3. 旧 SelectFishingItem 兼容路径需要严格 EquipmentRevision 时在这里拒绝并发冲突；新通用 Use 直接以服务器快照为基线。
-// 4. 最后调用 Equipment 的正式选择提交入口，让解锁、消耗属性、断竿和同选择 AlreadyResolved 仍由原权威路径裁决。
+// 3. 旧 SelectFishingItem 的 EquipmentRevision 参数不再参与库存 Use 裁决，避免旧装备投影决定正式库存槽位使用。
+// 4. 最后用当前 Equipment 版本调用正式选择提交入口，让解锁、消耗属性、断竿和同选择 AlreadyResolved 仍由原权威路径裁决。
 FCatDomainCommandResult UCatEquipmentInventoryItemInstance::UseFromInventorySlotFromAuthority(
 	const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext)
 {
@@ -149,11 +149,6 @@ FCatDomainCommandResult UCatEquipmentInventoryItemInstance::UseFromInventorySlot
 	else if (Character == nullptr || Equipment == nullptr)
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	else if (UseContext.bRequireEquipmentRevision
-		&& ObservedEquipmentRevision != UseContext.ExpectedEquipmentRevision)
-	{
-		Result.Error = ECatDomainCommandError::RevisionConflict;
 	}
 	else
 	{
@@ -205,9 +200,7 @@ FCatDomainCommandResult UCatEquipmentInventoryItemInstance::UseFromInventorySlot
 		}
 		else
 		{
-			const int64 EffectiveExpectedEquipmentRevision = UseContext.bRequireEquipmentRevision
-				? UseContext.ExpectedEquipmentRevision : ObservedEquipmentRevision;
-			Result = Equipment->ConfigureLoadoutFromAuthority(UseContext.RequestId, EffectiveExpectedEquipmentRevision,
+			Result = Equipment->ConfigureLoadoutFromAuthority(UseContext.RequestId, ObservedEquipmentRevision,
 				RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId, NAME_None,
 				RodItemInstanceId, BaitItemInstanceId, FloatItemInstanceId, ScoopNetItemInstanceId);
 		}
@@ -215,15 +208,13 @@ FCatDomainCommandResult UCatEquipmentInventoryItemInstance::UseFromInventorySlot
 
 	const int64 FinalEquipmentRevision = Equipment ? Equipment->GetSnapshot().Revision : ObservedEquipmentRevision;
 	UE_LOG(LogCatEquipmentInventoryItem, Log,
-		TEXT("Event=equipment_inventory_item_use Request=%s Character=%s Slot=%d Definition=%s Item=%s Kind=%s StrictEquipmentRevision=%s ExpectedEquipmentRevision=%lld EquipmentRevision=%lld FinalEquipmentRevision=%lld Committed=%s Error=%s ResultRevision=%lld"),
+		TEXT("Event=equipment_inventory_item_use Request=%s Character=%s Slot=%d Definition=%s Item=%s Kind=%s EquipmentRevision=%lld FinalEquipmentRevision=%lld Committed=%s Error=%s ResultRevision=%lld"),
 		*UseContext.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 		*GetNameSafe(Character),
 		UseContext.InventorySlotIndex,
 		*SelectedDefinitionId.ToString(),
 		*SelectedItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
 		*UEnum::GetValueAsString(SelectedKind),
-		UseContext.bRequireEquipmentRevision ? TEXT("true") : TEXT("false"),
-		UseContext.ExpectedEquipmentRevision,
 		ObservedEquipmentRevision,
 		FinalEquipmentRevision,
 		Result.bCommitted ? TEXT("true") : TEXT("false"),

@@ -200,7 +200,7 @@ public:
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Inventory")
 	void ServerUseInventoryItem(FGuid RequestId, int64 ExpectedInventoryRevision, int32 InventorySlotIndex);
 
-	/** 旧版钓具选择 RPC；保留给可能还未迁移的蓝图引用，运行时会转入通用库存物品使用入口。 */
+	/** 旧版钓具选择 RPC；保留给可能还未迁移的蓝图引用，运行时会转入通用库存物品使用入口并忽略旧 EquipmentRevision。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Inventory",
 		meta = (DeprecatedFunction, DeprecationMessage = "Use ServerUseInventoryItem instead."))
 	void ServerSelectInventoryFishingItem(FGuid RequestId, int64 ExpectedInventoryRevision,

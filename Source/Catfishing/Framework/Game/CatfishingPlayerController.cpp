@@ -830,7 +830,7 @@ void ACatfishingPlayerController::ServerUseInventoryItem_Implementation(
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 旧钓具选择 RPC 路由流程：历史蓝图或旧客户端仍可能发这个请求；服务器保留传入 EquipmentRevision 的严格校验后转入库存协调器。
+// 旧钓具选择 RPC 路由流程：历史蓝图或旧客户端仍可能发这个请求；服务器只保留参数形状，实际转入库存协调器后按正式库存版本裁决。
 void ACatfishingPlayerController::ServerSelectInventoryFishingItem_Implementation(
 	const FGuid RequestId, const int64 ExpectedInventoryRevision,
 	const int64 ExpectedEquipmentRevision, const int32 InventorySlotIndex)

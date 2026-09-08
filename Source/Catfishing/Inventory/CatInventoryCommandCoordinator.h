@@ -27,14 +27,14 @@ public:
 		ACatCharacter* ControlledCharacter, FGuid RequestId, int64 ExpectedInventoryRevision,
 		int32 InventorySlotIndex);
 
-	/** 旧版按槽位设为钓鱼选择入口；保留给历史 RPC，内部仍会经过正式库存重读和服务器版本裁决。 */
+	/** 旧版按槽位设为钓鱼选择入口；保留给历史 RPC，旧 EquipmentRevision 参数不再参与库存 Use 裁决。 */
 	FCatDomainCommandResult SelectFishingItemFromInventorySlot(AController* RequestingController,
 		ACatCharacter* ControlledCharacter, FGuid RequestId, int64 ExpectedInventoryRevision,
 		int64 ExpectedEquipmentRevision, int32 InventorySlotIndex);
 
 private:
-	/** 执行库存物品使用的内部流程；新版入口只锁库存版本，旧版入口可额外锁 Equipment 版本以兼容历史调用。 */
+	/** 执行库存物品使用的内部流程；无论新旧入口都只用正式库存版本保护被点击槽位。 */
 	FCatDomainCommandResult UseInventoryItemFromSlotInternal(AController* RequestingController,
 		ACatCharacter* ControlledCharacter, FGuid RequestId, int64 ExpectedInventoryRevision,
-		int32 InventorySlotIndex, bool bRequireEquipmentRevision, int64 ExpectedEquipmentRevision);
+		int32 InventorySlotIndex);
 };

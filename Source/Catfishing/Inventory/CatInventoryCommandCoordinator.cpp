@@ -81,28 +81,27 @@ FCatDomainCommandResult UCatInventoryCommandCoordinator::UseInventoryItemFromSlo
 {
 	// 通用库存 Use 入口流程：UI 只提供 RequestId、库存版本和槽位；协调器不识别物品种类，具体能否使用交给库存实例声明。
 	return UseInventoryItemFromSlotInternal(RequestingController, ControlledCharacter, RequestId,
-		ExpectedInventoryRevision, InventorySlotIndex, false, 0);
+		ExpectedInventoryRevision, InventorySlotIndex);
 }
 
 FCatDomainCommandResult UCatInventoryCommandCoordinator::SelectFishingItemFromInventorySlot(
 	AController* RequestingController, ACatCharacter* ControlledCharacter, const FGuid RequestId,
-	const int64 ExpectedInventoryRevision, const int64 ExpectedEquipmentRevision,
+	const int64 ExpectedInventoryRevision, const int64,
 	const int32 InventorySlotIndex)
 {
-	// 旧 SelectFishingItem 兼容入口流程：历史 RPC 仍携带 EquipmentRevision，本层只保留严格校验开关并复用通用库存 Use 实现。
+	// 旧 SelectFishingItem 兼容入口流程：历史 RPC 仍携带 EquipmentRevision，但库存 Use 只按正式库存版本复核槽位；装备效果使用服务器当前选择快照作为基线。
 	return UseInventoryItemFromSlotInternal(RequestingController, ControlledCharacter, RequestId,
-		ExpectedInventoryRevision, InventorySlotIndex, true, ExpectedEquipmentRevision);
+		ExpectedInventoryRevision, InventorySlotIndex);
 }
 
 FCatDomainCommandResult UCatInventoryCommandCoordinator::UseInventoryItemFromSlotInternal(
 	AController* RequestingController, ACatCharacter* ControlledCharacter, const FGuid RequestId,
-	const int64 ExpectedInventoryRevision, const int32 InventorySlotIndex,
-	const bool bRequireEquipmentRevision, const int64 ExpectedEquipmentRevision)
+	const int64 ExpectedInventoryRevision, const int32 InventorySlotIndex)
 {
 	// 随身库存物品使用流程：
 	// 1. 先在服务器侧重读玩法 gate 和 RequestId，避免客户端新旧 Use 事件在不可提交阶段使用物品。
 	// 2. 再解析当前玩家的正式 InventoryComponent；协调器不读取物品定义或装备类别，避免重新长出 UI 层特判。
-	// 3. 组装库存 Use 上下文，把库存版本、槽位、Pawn 和旧 EquipmentRevision 兼容位一起交给 InventoryComponent。
+	// 3. 组装库存 Use 上下文，只把库存版本、槽位、Pawn 和请求身份交给 InventoryComponent。
 	// 4. InventoryComponent 会重读槽位并调用物品实例；成功可能改 Equipment 快照，也可能由未来实例改库存数量或其他领域事实。
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
@@ -143,16 +142,13 @@ FCatDomainCommandResult UCatInventoryCommandCoordinator::UseInventoryItemFromSlo
 			UseContext.SourceInventory = Inventory;
 			UseContext.ExpectedInventoryRevision = ExpectedInventoryRevision;
 			UseContext.InventorySlotIndex = InventorySlotIndex;
-			UseContext.bRequireEquipmentRevision = bRequireEquipmentRevision;
-			UseContext.ExpectedEquipmentRevision = ExpectedEquipmentRevision;
 			Result = Inventory->UseItemAtSlotFromAuthority(UseContext);
 		}
 	}
 
 	UE_LOG(LogCatfishing, Log,
-		TEXT("Event=use_inventory_item Committed=%s Error=%s ResultRevision=%lld Slot=%d ExpectedInventoryRevision=%lld ExpectedEquipmentRevision=%lld StrictEquipmentRevision=%s"),
+		TEXT("Event=use_inventory_item Committed=%s Error=%s ResultRevision=%lld Slot=%d ExpectedInventoryRevision=%lld"),
 		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
-		Result.Revision, InventorySlotIndex, ExpectedInventoryRevision, ExpectedEquipmentRevision,
-		bRequireEquipmentRevision ? TEXT("true") : TEXT("false"));
+		Result.Revision, InventorySlotIndex, ExpectedInventoryRevision);
 	return Result;
 }
