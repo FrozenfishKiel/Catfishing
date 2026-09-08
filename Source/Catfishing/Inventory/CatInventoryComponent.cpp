@@ -1296,6 +1296,69 @@ FCatDomainCommandResult UCatInventoryComponent::HoldInventoryItemInstanceFromAut
 	return Result;
 }
 
+// 按实例归还流程：
+// 1. 先校验 authority、RequestId 和实例身份，避免外层收杆或 Use 回滚在错误宿主、空载荷上推进库存状态。
+// 2. 再由库存自己读取 held entry；缺失返回 NotFound，空实例、可堆叠物、数量异常或可见库存重复实例返回 InvalidPhase。
+// 3. 预检通过后复用低层归还流程；低层入口负责补足最低槽数、容量预演、复制登记、版本推进和活动记录删除。
+// 4. 本函数不缓存终态，因为外层 Equipment::Use/UnUse 仍可能在旧投影刷新失败后把刚归还的实例重新借回活动区。
+// 5. 成功或失败都把最新 Revision 写回结果，并输出包含 RequestId 的诊断日志，方便串联外层部署/收口请求。
+FCatDomainCommandResult UCatInventoryComponent::ReturnHeldInventoryItemInstanceFromAuthority(
+	const FGuid RequestId, const FGuid ItemInstanceId, const int32 MinimumSlotCount,
+	const int32 OverflowSlotCount, FCatInventoryEntry& OutReturnedEntry)
+{
+	OutReturnedEntry = FCatInventoryEntry(this);
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	Result.Revision = InventoryRevision;
+
+	AActor* OwningActor = GetOwner();
+	if (OwningActor == nullptr || !OwningActor->HasAuthority() || !RequestId.IsValid()
+		|| !ItemInstanceId.IsValid())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	}
+	else
+	{
+		const FCatInventoryHeldEntryRecord* HeldRecord = ActiveHeldItemEntries.Find(ItemInstanceId);
+		if (HeldRecord == nullptr)
+		{
+			Result.Error = ECatDomainCommandError::NotFound;
+		}
+		else if (HeldRecord->Entry.Instance == nullptr || HeldRecord->Entry.StackCount <= 0)
+		{
+			Result.Error = ECatDomainCommandError::InvalidPhase;
+		}
+		else
+		{
+			const UCatInventoryItemDefinition* HeldDefinition = HeldRecord->Entry.Instance->GetItemDefinition();
+			if (HeldDefinition == nullptr || HeldRecord->Entry.StackCount != 1
+				|| GetMaxStackCountForDefinition(*HeldDefinition) > 1
+				|| FindInventorySlotIndexFromInstance(HeldRecord->Entry.Instance) != INDEX_NONE)
+			{
+				Result.Error = ECatDomainCommandError::InvalidPhase;
+			}
+			else if (ReturnHeldInventoryEntryFromAuthority(
+				ItemInstanceId, MinimumSlotCount, OverflowSlotCount, OutReturnedEntry))
+			{
+				Result.bCommitted = true;
+				Result.Error = ECatDomainCommandError::None;
+			}
+			else
+			{
+				Result.Error = ECatDomainCommandError::CapacityExceeded;
+			}
+		}
+	}
+
+	Result.Revision = InventoryRevision;
+	UE_LOG(LogCatInventory, Log,
+		TEXT("Event=inventory_return_held_item_instance Owner=%s Request=%s Item=%s MinimumSlotCount=%d OverflowSlotCount=%d Committed=%s Error=%s Revision=%lld"),
+		*GetNameSafe(OwningActor), *RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		*ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), MinimumSlotCount, OverflowSlotCount,
+		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error), Result.Revision);
+	return Result;
+}
+
 // 临时持有归还流程：
 // 1. 先按实例 ID 找到活动区记录，并拒绝已经重新出现在可见库存里的异常状态。
 // 2. 活动记录必须仍是不可堆叠的单实例；这让归还结果一定是同一 UObject 回到可见格，而不是被堆叠规则吞掉。

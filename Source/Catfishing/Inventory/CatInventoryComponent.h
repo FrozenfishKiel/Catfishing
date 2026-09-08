@@ -242,7 +242,11 @@ public:
 	FCatDomainCommandResult HoldInventoryItemInstanceFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FGuid ItemInstanceId, FCatInventoryEntry& OutHeldEntry);
 
-	/** authority 把活动区里同一不可堆叠实例放回可见库存；收杆或取消部署时用它走正式入库容量和复制规则。 */
+	/** authority 按实例身份把部署型物品从活动区归还可见库存；收杆和 Use 回滚只消费结构化结果，库存负责同一实例、容量、复制和 Revision，且不缓存终态以便外层失败后重新借回。 */
+	FCatDomainCommandResult ReturnHeldInventoryItemInstanceFromAuthority(FGuid RequestId, FGuid ItemInstanceId,
+		int32 MinimumSlotCount, int32 OverflowSlotCount, FCatInventoryEntry& OutReturnedEntry);
+
+	/** authority 把活动区里同一不可堆叠实例放回可见库存；这是库存内部低层拼装点，正式外部调用优先走结构化归还入口。 */
 	bool ReturnHeldInventoryEntryFromAuthority(FGuid ItemInstanceId, int32 MinimumSlotCount,
 		int32 OverflowSlotCount, FCatInventoryEntry& OutReturnedEntry);
 

@@ -922,7 +922,7 @@ FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, co
 	// 1. 先校验 authority、RequestId 和数量，再用实例载荷签名处理幂等重放，避免数量消耗品重复扣量。
 	// 2. 正式库存存在时按实例 ID 回到 InventoryComponent 槽位，旧槽位只作为定义裁决的只读投影；外部提供的非 0 库存版本会继续传给正式库存入口复核。
 	// 3. 部署型物品通过 InventoryComponent 的按实例 held 命令借出可见格，正式 UObject 仍由库存活动区保管；数量消耗物暂时由正式库存扣指定份数。
-	// 4. 正式路径刷新旧投影失败时先尝试归还 held entry，归还失败才退役活动记录并恢复 entries 与旧 Snapshot。
+	// 4. 正式路径刷新旧投影失败时先通过 InventoryComponent 结构化归还入口把刚借出的实例放回可见库存，归还失败才退役活动记录并恢复 entries 与旧 Snapshot。
 	// 5. ExpectedInventoryRevision 为 0 只表示旧调用方没有外部库存观察点；此时用服务器当前库存版本进入正式库存入口，不跳过库存事实层。
 	// 6. 没有正式库存组件时返回依赖错误；Equipment 不再移出或扣除旧 Snapshot 数组里的物品。
 	FCatInventoryItemUseResult Result;
@@ -1064,8 +1064,9 @@ FCatInventoryItemUseResult UCatEquipmentComponent::Use(const FGuid RequestId, co
 	{
 		InventoryItemUseRecords.Remove(SourceItem.ItemInstanceId);
 		FCatInventoryEntry ReturnedEntry;
-		if (!OwnerInventory->ReturnHeldInventoryEntryFromAuthority(
-			SourceItem.ItemInstanceId, GetConfiguredInventorySlotCapacity(), 0, ReturnedEntry))
+		const FCatDomainCommandResult ReturnResult = OwnerInventory->ReturnHeldInventoryItemInstanceFromAuthority(
+			RequestId, SourceItem.ItemInstanceId, GetConfiguredInventorySlotCapacity(), 0, ReturnedEntry);
+		if (!ReturnResult.bCommitted || ReturnResult.Error != ECatDomainCommandError::None)
 		{
 			OwnerInventory->RetireHeldInventoryEntryFromAuthority(SourceItem.ItemInstanceId);
 			OwnerInventory->ReplaceInventoryEntriesFromAuthority(
@@ -1151,8 +1152,8 @@ FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, 
 {
 	// 物品停止使用流程：
 	// 1. 先校验 authority 和 RequestId，再按实例载荷签名处理重放；同一收口请求不会重复放回同一物品。
-	// 2. 正式库存存在时只从 InventoryComponent held entry 取回同一 UObject，不按 DefinitionId 重新生成，也不再让 Equipment 保管实例强引用。
-	// 3. 归还前保存实例耐久、正式 entries、旧 Snapshot 和玩法镜像；归还失败或投影刷新失败时按这些事实回滚。
+	// 2. 正式库存存在时只通过 InventoryComponent 结构化归还入口取回 Use 借出的同一 UObject，不按 DefinitionId 重新生成，也不再让 Equipment 保管实例强引用。
+	// 3. 归还前保存实例耐久、正式 entries、旧 Snapshot 和玩法镜像；归还命令失败或归还后的投影刷新失败时按这些事实回滚。
 	// 4. 投影刷新失败时优先把刚放回的实例重新借回 held entry；无法借回时恢复保存的 entries 并尝试重建活动区，重建失败只记录错误并按失败收口返回。
 	// 5. 没有正式库存组件时返回依赖错误；Equipment 不再按 DefinitionId 或旧副本重建库存格。
 	FCatInventoryItemUseResult Result;
@@ -1250,12 +1251,13 @@ FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, 
 	const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
 	const FCatInventoryItemUseRecord SavedRecord = *Record;
 	FCatInventoryEntry ReturnedEntry;
-	if (!OwnerInventory->ReturnHeldInventoryEntryFromAuthority(
-		RestoredItem.ItemInstanceId, GetConfiguredInventorySlotCapacity(), 0, ReturnedEntry))
+	const FCatDomainCommandResult ReturnResult = OwnerInventory->ReturnHeldInventoryItemInstanceFromAuthority(
+		RequestId, RestoredItem.ItemInstanceId, GetConfiguredInventorySlotCapacity(), 0, ReturnedEntry);
+	if (!ReturnResult.bCommitted || ReturnResult.Error != ECatDomainCommandError::None)
 	{
 		FormalInstance->SetRodRuntimeStateFromAuthority(SavedFormalRodDurability, bSavedFormalRodBroken);
-		Result.InventoryRevision = OwnerInventory->GetInventoryRevision();
-		Result.Error = ECatDomainCommandError::CapacityExceeded;
+		Result.InventoryRevision = ReturnResult.Revision;
+		Result.Error = ReturnResult.Error;
 		return Finish(Result);
 	}
 
