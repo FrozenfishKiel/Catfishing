@@ -10,13 +10,15 @@
 #include "Online/CatOnlineSubsystem.h"
 #include "Save/CatSaveSubsystem.h"
 #include "UI/CatUISettings.h"
+#include "UI/Frontend/CatFrontendSettingsModel.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
 
 // 绑定流程：
 // 1. 先解除可能残留的旧 Controller、输入绑定和系统订阅，确保复用对象不会向旧 World 回写 UI。
 // 2. 只接受本地 Controller 和有效菜单 View；服务缺失不阻止菜单创建，只会让对应按钮禁用或显示明确反馈。
-// 3. 订阅 Widget 意图、Save 变化和 Online 快照，再安装 Enhanced Input Action。
-// 4. 最后渲染一份初始状态，让正式 WBP 拿到按钮可用性。
+// 3. 创建局内设置 Model 并注入 View，复用主界面设置来源与草稿规则。
+// 4. 订阅 Widget 意图、Save 变化和 Online 快照，再安装 Enhanced Input Action。
+// 5. 最后渲染一份初始状态，让正式 WBP 拿到按钮可用性。
 bool UCatLakeMainMenuController::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController,
 	UCatLakeMainMenuWidget* InView)
 {
@@ -32,10 +34,18 @@ bool UCatLakeMainMenuController::Bind(ULocalPlayer* InLocalPlayer, APlayerContro
 	BoundPlayerController = InController;
 	BoundView = InView;
 	LastStatusText = FText::GetEmpty();
+	PendingManualSaveRequestId.Invalidate();
+	SettingsModel = NewObject<UCatFrontendSettingsModel>(this);
+	if (SettingsModel)
+	{
+		SettingsModel->Initialize(InLocalPlayer);
+		InView->InitializeLakeMenuSettings(SettingsModel);
+	}
 	InView->OnActionRequested.AddUObject(this, &ThisClass::HandleMenuActionRequested);
 	if (UCatSaveSubsystem* Save = GetSaveSubsystem())
 	{
 		SaveChangedHandle = Save->OnChanged.AddUObject(this, &ThisClass::HandleSaveChanged);
+		SaveCompletedHandle = Save->OnSaveCompleted.AddUObject(this, &ThisClass::HandleSaveCompleted);
 	}
 	if (UCatOnlineSubsystem* Online = GetOnlineSubsystem())
 	{
@@ -50,7 +60,7 @@ bool UCatLakeMainMenuController::Bind(ULocalPlayer* InLocalPlayer, APlayerContro
 
 // 解绑流程：
 // 1. 若菜单打开，先关闭菜单并释放本页申请的输入锁。
-// 2. 再移除 Enhanced Input 绑定、Widget 意图订阅和 Save/Online 订阅。
+// 2. 再移除 Enhanced Input 绑定、Widget 意图订阅、设置模型连接和 Save/Online 订阅。
 // 3. 最后清空弱引用、等待标记和结果文本，避免下一次 Pawn 装配继承旧反馈。
 void UCatLakeMainMenuController::Unbind()
 {
@@ -58,6 +68,7 @@ void UCatLakeMainMenuController::Unbind()
 	RemoveMenuInput();
 	if (UCatLakeMainMenuWidget* View = BoundView.Get())
 	{
+		View->ResetLakeMenuSettings();
 		View->OnActionRequested.RemoveAll(this);
 		View->RemoveFromParent();
 	}
@@ -65,17 +76,28 @@ void UCatLakeMainMenuController::Unbind()
 	{
 		Save->OnChanged.Remove(SaveChangedHandle);
 	}
+	if (UCatSaveSubsystem* Save = GetSaveSubsystem(); Save && SaveCompletedHandle.IsValid())
+	{
+		Save->OnSaveCompleted.Remove(SaveCompletedHandle);
+	}
 	if (UCatOnlineSubsystem* Online = GetOnlineSubsystem(); Online && OnlineSnapshotHandle.IsValid())
 	{
 		Online->OnSnapshotChanged.Remove(OnlineSnapshotHandle);
 	}
+	if (SettingsModel)
+	{
+		SettingsModel->Shutdown();
+		SettingsModel = nullptr;
+	}
 	SaveChangedHandle.Reset();
+	SaveCompletedHandle.Reset();
 	OnlineSnapshotHandle.Reset();
 	BoundLocalPlayer.Reset();
 	BoundPlayerController.Reset();
 	BoundView.Reset();
 	bMenuOpen = false;
 	bExitPending = false;
+	PendingManualSaveRequestId.Invalidate();
 	ModalInputModeState = FCatUIModalInputModeState();
 	LastStatusText = FText::GetEmpty();
 }
@@ -104,15 +126,26 @@ void UCatLakeMainMenuController::RequestCloseFromWidget()
 	SetMenuOpen(false);
 }
 
-// 设置请求流程：当前项目没有正式局内设置页资产或控制器；保留入口并显示明确缺口，避免按钮点击静默空转。
+// 设置请求流程：切到局内设置页并清理暂停菜单底部反馈；设置内容复用 UCatFrontendSettingsModel，不再显示“未接入”的旧缺口。
 void UCatLakeMainMenuController::RequestSettingsFromWidget()
 {
-	LastStatusText = FText::FromString(TEXT("局内设置页尚未接入；当前请在主界面设置中调整。"));
+	UCatLakeMainMenuWidget* View = BoundView.Get();
+	if (!View || !SettingsModel)
+	{
+		LastStatusText = FText::FromString(TEXT("设置服务当前不可用。"));
+		UpdateView();
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_lake_menu_settings_unavailable View=%s SettingsModel=%s"),
+			*GetNameSafe(View), *GetNameSafe(SettingsModel));
+		return;
+	}
+	LastStatusText = FText::GetEmpty();
 	UpdateView();
-	UE_LOG(LogCatUI, Log, TEXT("Event=ui_lake_menu_settings_requested Result=missing_in_game_settings_page"));
+	View->ShowSettingsPanel();
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_lake_menu_settings_opened View=%s SettingsModel=%s"),
+		*GetNameSafe(View), *GetNameSafe(SettingsModel));
 }
 
-// 手动保存流程：只向 Save 子系统提交活动世界保存；同步拒绝和异步终态都通过同一结果文本显示，不在 UI 复制槽位状态。
+// 手动保存流程：只向 Save 子系统提交活动世界保存；受理后记录请求 ID，完成前不让目录刷新文本覆盖“正在保存”。
 void UCatLakeMainMenuController::RequestSaveFromWidget()
 {
 	UCatSaveSubsystem* Save = GetSaveSubsystem();
@@ -124,7 +157,18 @@ void UCatLakeMainMenuController::RequestSaveFromWidget()
 		return;
 	}
 	const FCatSaveResult Result = Save->RequestSaveActiveRun();
-	LastStatusText = Result.Message;
+	if (Result.bAccepted)
+	{
+		PendingManualSaveRequestId = Result.RequestId;
+		LastStatusText = FText::FromString(TEXT("正在保存当前游戏。"));
+	}
+	else
+	{
+		PendingManualSaveRequestId.Invalidate();
+		LastStatusText = Save->GetActiveSlotId().IsNone()
+			? FText::FromString(TEXT("当前没有可保存的游戏进度。"))
+			: !Result.Message.IsEmpty() ? Result.Message : FText::FromString(TEXT("保存失败，请稍后重试。"));
+	}
 	UpdateView();
 	if (Result.bAccepted)
 	{
@@ -179,9 +223,97 @@ void UCatLakeMainMenuController::RequestExitGameFromWidget()
 		*UEnum::GetValueAsString(Result.Error));
 }
 
+// 设置应用流程：SettingsModel 负责实际提交；成功时回暂停菜单，失败时留在设置页让玩家看到具体失败原因。
+void UCatLakeMainMenuController::RequestApplySettingsFromWidget()
+{
+	UCatFrontendSettingsModel* Settings = GetSettingsModel();
+	UCatLakeMainMenuWidget* View = BoundView.Get();
+	if (!Settings || !Settings->Apply())
+	{
+		LastStatusText = FText::GetEmpty();
+		if (View)
+		{
+			View->ShowSettingsPanel();
+		}
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_lake_menu_settings_apply_failed SettingsModel=%s"),
+			*GetNameSafe(Settings));
+		return;
+	}
+	LastStatusText = FText::FromString(TEXT("设置已应用。"));
+	UpdateView();
+	if (View)
+	{
+		View->ShowCommandMenu();
+	}
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_lake_menu_settings_applied SettingsModel=%s"),
+		*GetNameSafe(Settings));
+}
+
+// 设置取消流程：丢弃未应用草稿并回暂停菜单；它不关闭 ESC 菜单，方便玩家继续保存或退出。
+void UCatLakeMainMenuController::RequestCancelSettingsFromWidget()
+{
+	if (UCatFrontendSettingsModel* Settings = GetSettingsModel())
+	{
+		Settings->Cancel();
+	}
+	LastStatusText = FText::GetEmpty();
+	UpdateView();
+	if (UCatLakeMainMenuWidget* View = BoundView.Get())
+	{
+		View->ShowCommandMenu();
+	}
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_lake_menu_settings_cancelled"));
+}
+
+// 设置恢复默认流程：只改 SettingsModel 草稿；View 会通过模型通知刷新，不把默认值直接写进正式配置。
+void UCatLakeMainMenuController::RequestRestoreSettingsDefaultsFromWidget()
+{
+	if (UCatFrontendSettingsModel* Settings = GetSettingsModel())
+	{
+		Settings->RestoreDefaults();
+	}
+}
+
+// 输出设备刷新流程：转交 SettingsModel 的正式异步枚举入口；同步拒绝留在设置页自身反馈文本。
+void UCatLakeMainMenuController::RequestRefreshAudioOutputDevicesFromWidget()
+{
+	UCatFrontendSettingsModel* Settings = GetSettingsModel();
+	if (!Settings || !Settings->RefreshAudioOutputDevices())
+	{
+		if (UCatLakeMainMenuWidget* View = BoundView.Get())
+		{
+			View->ShowSettingsPanel();
+		}
+	}
+}
+
+// 游戏分类流程：通过 SettingsModel 命名接口切分类，避免 View 用字符串或索引保存状态。
+void UCatLakeMainMenuController::RequestSelectGameSettingsFromWidget()
+{
+	if (UCatFrontendSettingsModel* Settings = GetSettingsModel()) { Settings->SelectGame(); }
+}
+
+// 画面分类流程：通过 SettingsModel 命名接口切分类，避免 View 用字符串或索引保存状态。
+void UCatLakeMainMenuController::RequestSelectGraphicsSettingsFromWidget()
+{
+	if (UCatFrontendSettingsModel* Settings = GetSettingsModel()) { Settings->SelectGraphics(); }
+}
+
+// 声音分类流程：通过 SettingsModel 命名接口切分类，避免 View 用字符串或索引保存状态。
+void UCatLakeMainMenuController::RequestSelectAudioSettingsFromWidget()
+{
+	if (UCatFrontendSettingsModel* Settings = GetSettingsModel()) { Settings->SelectAudio(); }
+}
+
+// 控制分类流程：通过 SettingsModel 命名接口进入受限分类；控制设置未开放的事实仍由 Model 和 View 展示。
+void UCatLakeMainMenuController::RequestSelectControlsSettingsFromWidget()
+{
+	if (UCatFrontendSettingsModel* Settings = GetSettingsModel()) { Settings->SelectControls(); }
+}
+
 // 打开态写入流程：
 // 1. 缺 Controller 或 View 时不改状态，避免留下无法恢复输入的半打开菜单。
-// 2. 打开时先入视口、写 ViewState，再切 UIOnly 并锁移动/视角。
+// 2. 打开时先入视口、回到命令页、写 ViewState，再切 UIOnly 并锁移动/视角。
 // 3. 关闭时先释放输入模式，再从视口移除，让玩家立即回到游戏输入。
 void UCatLakeMainMenuController::SetMenuOpen(const bool bOpen)
 {
@@ -198,6 +330,7 @@ void UCatLakeMainMenuController::SetMenuOpen(const bool bOpen)
 			View->AddToViewport(30);
 		}
 		bMenuOpen = true;
+		View->ShowCommandMenu();
 		UpdateView();
 		ApplyMenuInputMode(true);
 		UE_LOG(LogCatUI, Log, TEXT("Event=ui_lake_menu_opened Controller=%s View=%s"),
@@ -277,12 +410,13 @@ void UCatLakeMainMenuController::UpdateView()
 	FCatLakeMainMenuViewState ViewState;
 	ViewState.StatusText = LastStatusText;
 	ViewState.bSettingsEnabled = !bExitPending;
+	ViewState.bCloseEnabled = !bExitPending;
 	ViewState.bSaveEnabled = Save && !Save->IsBusy() && !bExitPending;
 	ViewState.bExitEnabled = !bExitPending;
 	View->RenderMenu(ViewState);
 }
 
-// 菜单意图分发流程：Widget 只广播语义，这里才根据语义调用本 Controller 的明确业务入口。
+// 菜单意图分发流程：Widget 只广播语义，这里才根据语义调用关闭、设置、保存、离开和设置页命令入口。
 void UCatLakeMainMenuController::HandleMenuActionRequested(const ECatLakeMainMenuAction Action)
 {
 	switch (Action)
@@ -299,19 +433,39 @@ void UCatLakeMainMenuController::HandleMenuActionRequested(const ECatLakeMainMen
 	case ECatLakeMainMenuAction::ExitGame:
 		RequestExitGameFromWidget();
 		break;
+	case ECatLakeMainMenuAction::ApplySettings:
+		RequestApplySettingsFromWidget();
+		break;
+	case ECatLakeMainMenuAction::CancelSettings:
+		RequestCancelSettingsFromWidget();
+		break;
+	case ECatLakeMainMenuAction::RestoreSettingsDefaults:
+		RequestRestoreSettingsDefaultsFromWidget();
+		break;
+	case ECatLakeMainMenuAction::RefreshAudioOutputDevices:
+		RequestRefreshAudioOutputDevicesFromWidget();
+		break;
+	case ECatLakeMainMenuAction::SelectGameSettings:
+		RequestSelectGameSettingsFromWidget();
+		break;
+	case ECatLakeMainMenuAction::SelectGraphicsSettings:
+		RequestSelectGraphicsSettingsFromWidget();
+		break;
+	case ECatLakeMainMenuAction::SelectAudioSettings:
+		RequestSelectAudioSettingsFromWidget();
+		break;
+	case ECatLakeMainMenuAction::SelectControlsSettings:
+		RequestSelectControlsSettingsFromWidget();
+		break;
 	default:
 		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_lake_menu_action_unknown Action=%d"), static_cast<int32>(Action));
 		break;
 	}
 }
 
-// Save 变化流程：只在菜单绑定期间读取 Save 的正式结果文本；关闭菜单不取消已排队的保存。
+// Save 变化流程：只刷新 busy 驱动的按钮可用性；手动保存的用户文案等待请求 ID 完成回调，避免被目录读取提示覆盖。
 void UCatLakeMainMenuController::HandleSaveChanged()
 {
-	if (UCatSaveSubsystem* Save = GetSaveSubsystem())
-	{
-		LastStatusText = Save->GetLastResultText();
-	}
 	UpdateView();
 }
 
@@ -337,6 +491,24 @@ void UCatLakeMainMenuController::HandleOnlineSnapshotChanged()
 	UpdateView();
 }
 
+// 保存完成流程：只匹配本菜单发起的手动保存；成功使用玩家可读完成文案，失败再展示 Save 子系统的具体原因。
+void UCatLakeMainMenuController::HandleSaveCompleted(const FGuid RequestId, const bool bSuccess)
+{
+	if (!PendingManualSaveRequestId.IsValid() || PendingManualSaveRequestId != RequestId)
+	{
+		return;
+	}
+	PendingManualSaveRequestId.Invalidate();
+	UCatSaveSubsystem* Save = GetSaveSubsystem();
+	LastStatusText = bSuccess
+		? FText::FromString(TEXT("游戏已保存。"))
+		: (Save && !Save->GetLastResultText().IsEmpty()
+			? Save->GetLastResultText() : FText::FromString(TEXT("保存失败，请稍后重试。")));
+	UpdateView();
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_lake_menu_manual_save_completed RequestId=%s Success=%d"),
+		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), bSuccess);
+}
+
 // Save 来源定位流程：LocalPlayer 是本地 UI 与 GameInstance 子系统的生命周期锚点；失效时不退回全局对象。
 UCatSaveSubsystem* UCatLakeMainMenuController::GetSaveSubsystem() const
 {
@@ -351,4 +523,10 @@ UCatOnlineSubsystem* UCatLakeMainMenuController::GetOnlineSubsystem() const
 	const ULocalPlayer* Player = BoundLocalPlayer.Get();
 	UGameInstance* GameInstance = Player ? Player->GetGameInstance() : nullptr;
 	return GameInstance ? GameInstance->GetSubsystem<UCatOnlineSubsystem>() : nullptr;
+}
+
+// 设置来源定位流程：返回本 Controller 创建的局内设置 Model；空值表示菜单尚未绑定或已经拆除。
+UCatFrontendSettingsModel* UCatLakeMainMenuController::GetSettingsModel() const
+{
+	return SettingsModel;
 }

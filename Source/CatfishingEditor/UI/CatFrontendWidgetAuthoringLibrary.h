@@ -22,8 +22,8 @@ public:
 	static bool CreateMissingFrontendWidgetBlueprints();
 
 	/**
-	 * 创建缺失的局内 ESC 菜单 WBP，并核验它继承局内菜单 View 基类且提供设置、保存、退出与状态文本控件。
-	 * 该入口沿用项目正式 WBP 作者链路；已有同名资产只做只读合同核验，不覆盖 UI 策划或美术后续调整。
+	 * 创建或重建局内 ESC 菜单 WBP，并核验它继承局内菜单 View 基类且提供返回、设置、保存、退出和设置页控件。
+	 * 该入口沿用项目正式 WBP 作者链路；当前菜单资产由本工具生成，升级时重建同一路径以清除旧三按钮残留。
 	 */
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Lake")
 	static bool CreateMissingLakeMainMenuWidgetBlueprint();

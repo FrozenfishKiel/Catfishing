@@ -535,10 +535,123 @@ namespace CatFrontendWidgetAuthoring
 		return true;
 	}
 
-	/** 构造局内 ESC 菜单的正式 WBP；它只提供暂停菜单的显示和按钮控件，不触碰保存、设置或离局业务。 */
+	/** 构造一套与主界面一致的设置控件内容；调用方提供页面容器，运行时仍由对应 View 和 SettingsModel 完成草稿回填。 */
+	bool BuildLakeSettingsContent(UWidgetBlueprint* WidgetBlueprint, UVerticalBox* Column)
+	{
+		// 局内设置内容流程：先生成分类栏和左右详情布局，再按主界面同名合同添加游戏、画面、声音和控制面板。
+		// 语音输入与麦克风只放正式禁用占位，声音页保留输出设备刷新入口，底部提供应用、恢复默认和取消动作；任一关键容器缺失都返回失败阻止保存半成品。
+		if (!WidgetBlueprint || !WidgetBlueprint->WidgetTree || !Column)
+		{
+			return false;
+		}
+		UWidgetTree* Tree = WidgetBlueprint->WidgetTree;
+		AddText(Tree, Column, TEXT("SettingsTitleText"), TEXT("设置"), 30);
+		UHorizontalBox* Categories = Tree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("SettingsCategories"));
+		Column->AddChild(Categories);
+		SetBoxSlot(Categories, false, FMargin(0.0f, 12.0f, 0.0f, 20.0f));
+		AddButton(Tree, Categories, TEXT("GameSettingsCategoryButton"), TEXT("游戏"));
+		AddButton(Tree, Categories, TEXT("GraphicsSettingsCategoryButton"), TEXT("画面"));
+		AddButton(Tree, Categories, TEXT("AudioSettingsCategoryButton"), TEXT("声音"));
+		AddButton(Tree, Categories, TEXT("ControlsSettingsCategoryButton"), TEXT("控制"));
+
+		UHorizontalBox* SettingsLayout = Tree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("SettingsLayout"));
+		Column->AddChild(SettingsLayout);
+		SetBoxSlot(SettingsLayout, true);
+		UScrollBox* DetailsScroll = Tree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass(), TEXT("SettingsDetailsScrollBox"));
+		UVerticalBox* Details = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("SettingsDetails"));
+		DetailsScroll->AddChild(Details);
+		DetailsScroll->SetClipping(EWidgetClipping::ClipToBounds);
+		SettingsLayout->AddChild(DetailsScroll);
+		SetBoxSlot(DetailsScroll, true, FMargin(0.0f, 0.0f, 32.0f, 0.0f));
+		CastChecked<UHorizontalBoxSlot>(DetailsScroll->Slot)->SetVerticalAlignment(VAlign_Fill);
+		ExposeWidget(WidgetBlueprint, DetailsScroll);
+
+		USizeBox* DescriptionBounds = Tree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("SettingsDescriptionBounds"));
+		DescriptionBounds->SetWidthOverride(300.0f);
+		UScrollBox* DescriptionScroll = Tree->ConstructWidget<UScrollBox>(UScrollBox::StaticClass(), TEXT("SettingsDescriptionScrollBox"));
+		DescriptionBounds->SetContent(DescriptionScroll);
+		SettingsLayout->AddChild(DescriptionBounds);
+		SetBoxSlot(DescriptionBounds, false);
+		CastChecked<UHorizontalBoxSlot>(DescriptionBounds->Slot)->SetVerticalAlignment(VAlign_Fill);
+		UTextBlock* Description = AddText(Tree, DescriptionScroll, TEXT("SettingsDescriptionTextBlock"), TEXT("调整语言、语音聊天与手柄震动。"));
+		Description->SetWrapTextAt(280.0f);
+
+		UVerticalBox* GamePanel = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("GameSettingsPanel"));
+		UVerticalBox* GraphicsPanel = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("GraphicsSettingsPanel"));
+		UVerticalBox* AudioPanel = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("AudioSettingsPanel"));
+		UVerticalBox* ControlsPanel = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("ControlsSettingsPanel"));
+		for (UVerticalBox* Panel : { GamePanel, GraphicsPanel, AudioPanel, ControlsPanel })
+		{
+			Details->AddChild(Panel);
+			SetBoxSlot(Panel, false);
+			Panel->SetVisibility(Panel == GamePanel ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+			ExposeWidget(WidgetBlueprint, Panel);
+		}
+
+		const TCHAR* const Languages[] = { TEXT("简体中文"), TEXT("English") };
+		const TCHAR* const FullscreenModes[] = { TEXT("全屏"), TEXT("无边框窗口"), TEXT("窗口") };
+		const TCHAR* const Resolutions[] = { TEXT("1920 x 1080"), TEXT("1600 x 900"), TEXT("1280 x 720") };
+		const TCHAR* const QualityLevels[] = { TEXT("低"), TEXT("中"), TEXT("高"), TEXT("史诗") };
+		const TCHAR* const UnavailableVoiceOptions[] = { TEXT("当前平台不支持此设置") };
+		AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("Language"), TEXT("语言")), TEXT("LanguageComboBox"), Languages);
+		AddCheckBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("VoiceChat"), TEXT("语音聊天")), TEXT("VoiceChatCheckBox"), TEXT(""));
+		UComboBoxString* VoiceInputMode = AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("VoiceInputMode"), TEXT("语音输入模式")), TEXT("VoiceInputModeComboBox"), UnavailableVoiceOptions);
+		UTextBlock* VoiceInputModeUnavailable = AddText(Tree, GamePanel, TEXT("VoiceInputModeUnavailableText"),
+			TEXT("当前语音服务不支持切换输入模式。"), 14);
+		UComboBoxString* Microphone = AddComboBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("Microphone"), TEXT("麦克风设备")), TEXT("MicrophoneComboBox"), UnavailableVoiceOptions);
+		UTextBlock* MicrophoneUnavailable = AddText(Tree, GamePanel, TEXT("MicrophoneUnavailableText"),
+			TEXT("当前语音服务不支持选择麦克风，请在系统声音设置中更改默认输入设备。"), 14);
+		if (!VoiceInputMode || !Microphone)
+		{
+			return false;
+		}
+		VoiceInputMode->SetIsEnabled(false);
+		Microphone->SetIsEnabled(false);
+		VoiceInputModeUnavailable->SetColorAndOpacity(FLinearColor(0.60f, 0.67f, 0.65f));
+		MicrophoneUnavailable->SetColorAndOpacity(FLinearColor(0.60f, 0.67f, 0.65f));
+		SetBoxSlot(VoiceInputModeUnavailable, false, FMargin(12.0f, 0.0f, 12.0f, 8.0f));
+		SetBoxSlot(MicrophoneUnavailable, false, FMargin(12.0f, 0.0f, 12.0f, 8.0f));
+		AddCheckBox(Tree, AddSettingRow(Tree, GamePanel, TEXT("Vibration"), TEXT("手柄震动")), TEXT("VibrationCheckBox"), TEXT(""));
+
+		AddComboBox(Tree, AddSettingRow(Tree, GraphicsPanel, TEXT("FullscreenMode"), TEXT("窗口模式")), TEXT("FullscreenModeComboBox"), FullscreenModes);
+		AddComboBox(Tree, AddSettingRow(Tree, GraphicsPanel, TEXT("ScreenResolution"), TEXT("分辨率")), TEXT("ScreenResolutionComboBox"), Resolutions);
+		AddComboBox(Tree, AddSettingRow(Tree, GraphicsPanel, TEXT("OverallQuality"), TEXT("画面质量")), TEXT("OverallQualityComboBox"), QualityLevels);
+		AddCheckBox(Tree, AddSettingRow(Tree, GraphicsPanel, TEXT("VSync"), TEXT("垂直同步")), TEXT("VSyncCheckBox"), TEXT(""));
+		AddSlider(Tree, AddSettingRow(Tree, GraphicsPanel, TEXT("Brightness"), TEXT("亮度")), TEXT("BrightnessSlider"), (2.2f - 0.5f) / 4.5f);
+		AddSlider(Tree, AddSettingRow(Tree, GraphicsPanel, TEXT("UIScale"), TEXT("界面缩放")), TEXT("UIScaleSlider"), (1.0f - 0.75f) / 1.25f);
+
+		AddSlider(Tree, AddSettingRow(Tree, AudioPanel, TEXT("MasterVolume"), TEXT("主音量")), TEXT("MasterVolumeSlider"), 1.0f);
+		AddSlider(Tree, AddSettingRow(Tree, AudioPanel, TEXT("MusicVolume"), TEXT("音乐")), TEXT("MusicVolumeSlider"), 1.0f);
+		AddSlider(Tree, AddSettingRow(Tree, AudioPanel, TEXT("SFXVolume"), TEXT("音效")), TEXT("SFXVolumeSlider"), 1.0f);
+		AddSlider(Tree, AddSettingRow(Tree, AudioPanel, TEXT("AmbienceVolume"), TEXT("环境音")), TEXT("AmbienceVolumeSlider"), 1.0f);
+		AddSlider(Tree, AddSettingRow(Tree, AudioPanel, TEXT("VoiceVolume"), TEXT("语音")), TEXT("VoiceVolumeSlider"), 1.0f);
+		AddCheckBox(Tree, AddSettingRow(Tree, AudioPanel, TEXT("MuteAudioWhenUnfocused"), TEXT("失焦时静音")), TEXT("MuteAudioWhenUnfocusedCheckBox"), TEXT(""));
+		UComboBoxString* AudioOutputDevice = AddComboBox(Tree, AddSettingRow(Tree, AudioPanel, TEXT("AudioOutputDevice"), TEXT("输出设备")), TEXT("AudioOutputDeviceComboBox"), {});
+		if (!AudioOutputDevice)
+		{
+			return false;
+		}
+		AudioOutputDevice->SetIsEnabled(false);
+		UButton* RefreshDevices = AddButton(Tree, AudioPanel, TEXT("RefreshAudioOutputDevicesButton"), TEXT("刷新输出设备"));
+		CastChecked<UVerticalBoxSlot>(RefreshDevices->Slot)->SetHorizontalAlignment(HAlign_Right);
+
+		AddText(Tree, Column, TEXT("FrontendSettingsResultTextBlock"), TEXT(""), 16);
+		UHorizontalBox* Actions = Tree->ConstructWidget<UHorizontalBox>(UHorizontalBox::StaticClass(), TEXT("SettingsActions"));
+		Column->AddChild(Actions);
+		SetBoxSlot(Actions, false, FMargin(0.0f, 12.0f, 0.0f, 0.0f));
+		SetBoxSlot(AddButton(Tree, Actions, TEXT("ApplySettingsButton"), TEXT("应用")), false, FMargin(0.0f, 0.0f, 12.0f, 0.0f));
+		SetBoxSlot(AddButton(Tree, Actions, TEXT("RestoreSettingsDefaultsButton"), TEXT("恢复默认")), false);
+		USpacer* ActionSpace = Tree->ConstructWidget<USpacer>(USpacer::StaticClass(), TEXT("SettingsActionsSpace"));
+		Actions->AddChild(ActionSpace);
+		SetBoxSlot(ActionSpace, true);
+		SetBoxSlot(AddButton(Tree, Actions, TEXT("CancelSettingsButton"), TEXT("取消")), false);
+		return true;
+	}
+
+	/** 构造局内 ESC 菜单的正式 WBP；它提供暂停命令页、设置页容器和同名设置控件，业务仍交给 Controller 与 SettingsModel。 */
 	bool BuildLakeMainMenuWidget(UWidgetBlueprint* WidgetBlueprint)
 	{
-		// 局内菜单布局流程：先铺全屏半透明遮罩，再把固定宽度命令列锚到屏幕中心；三个命令按钮按策划顺序纵排，状态文本默认折叠等待 Controller 写入结果。
+		// 局内菜单布局流程：先铺全屏半透明遮罩，再用 Switcher 承载命令页和设置页；命令页居中纵排，设置页复用主界面同名控件合同。
 		if (!WidgetBlueprint || !WidgetBlueprint->WidgetTree)
 		{
 			return false;
@@ -550,16 +663,30 @@ namespace CatFrontendWidgetAuthoring
 		}
 		UWidgetTree* Tree = WidgetBlueprint->WidgetTree;
 		UBorder* Scrim = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("LakeMainMenuScrim"));
-		USizeBox* MenuBounds = Tree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("LakeMainMenuBounds"));
-		UBorder* MenuSurface = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("LakeMainMenuSurface"));
-		UVerticalBox* MenuColumn = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("LakeMainMenuColumn"));
-		if (!Scrim || !MenuBounds || !MenuSurface || !MenuColumn)
+		UWidgetSwitcher* PageSwitcher = Tree->ConstructWidget<UWidgetSwitcher>(UWidgetSwitcher::StaticClass(), TEXT("LakeMainMenuPageSwitcher"));
+		UOverlay* CommandPage = Tree->ConstructWidget<UOverlay>(UOverlay::StaticClass(), TEXT("LakeCommandPanel"));
+		UOverlay* SettingsPage = Tree->ConstructWidget<UOverlay>(UOverlay::StaticClass(), TEXT("LakeSettingsPanel"));
+		if (!Scrim || !PageSwitcher || !CommandPage || !SettingsPage)
 		{
 			return false;
 		}
 
 		Scrim->SetBrush(FSlateColorBrush(FLinearColor(0.0f, 0.0f, 0.0f, 0.58f)));
 		AddFullCanvasChild(Canvas, Scrim, 0);
+		AddFullCanvasChild(Canvas, PageSwitcher, 1);
+		PageSwitcher->AddChild(CommandPage);
+		PageSwitcher->AddChild(SettingsPage);
+		ExposeWidget(WidgetBlueprint, PageSwitcher);
+		ExposeWidget(WidgetBlueprint, CommandPage);
+		ExposeWidget(WidgetBlueprint, SettingsPage);
+
+		USizeBox* MenuBounds = Tree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("LakeMainMenuBounds"));
+		UBorder* MenuSurface = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("LakeMainMenuSurface"));
+		UVerticalBox* MenuColumn = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("LakeMainMenuColumn"));
+		if (!MenuBounds || !MenuSurface || !MenuColumn)
+		{
+			return false;
+		}
 
 		MenuBounds->SetWidthOverride(340.0f);
 		MenuBounds->SetMinDesiredWidth(300.0f);
@@ -567,13 +694,10 @@ namespace CatFrontendWidgetAuthoring
 		MenuSurface->SetPadding(FMargin(26.0f, 24.0f));
 		MenuSurface->SetContent(MenuColumn);
 		MenuBounds->SetContent(MenuSurface);
-		if (UCanvasPanelSlot* MenuSlot = Canvas->AddChildToCanvas(MenuBounds))
+		if (UOverlaySlot* MenuSlot = CommandPage->AddChildToOverlay(MenuBounds))
 		{
-			MenuSlot->SetAnchors(FAnchors(0.5f, 0.5f));
-			MenuSlot->SetAlignment(FVector2D(0.5f, 0.5f));
-			MenuSlot->SetPosition(FVector2D::ZeroVector);
-			MenuSlot->SetAutoSize(true);
-			MenuSlot->SetZOrder(1);
+			MenuSlot->SetHorizontalAlignment(HAlign_Center);
+			MenuSlot->SetVerticalAlignment(VAlign_Center);
 		}
 
 		UTextBlock* Title = AddText(Tree, MenuColumn, TEXT("LakeMainMenuTitleText"), TEXT("暂停菜单"), 28);
@@ -584,15 +708,16 @@ namespace CatFrontendWidgetAuthoring
 		Title->SetJustification(ETextJustify::Center);
 		SetBoxSlot(Title, false, FMargin(0.0f, 0.0f, 0.0f, 18.0f));
 
+		UButton* Close = AddButton(Tree, MenuColumn, TEXT("CloseButton"), TEXT("返回游戏"));
 		UButton* Settings = AddButton(Tree, MenuColumn, TEXT("SettingsButton"), TEXT("设置"));
 		UButton* Save = AddButton(Tree, MenuColumn, TEXT("SaveButton"), TEXT("保存"));
 		UButton* ExitGame = AddButton(Tree, MenuColumn, TEXT("ExitGameButton"), TEXT("退出游戏"));
 		UTextBlock* Status = AddText(Tree, MenuColumn, TEXT("StatusTextBlock"), TEXT(""), 14);
-		if (!Settings || !Save || !ExitGame || !Status)
+		if (!Close || !Settings || !Save || !ExitGame || !Status)
 		{
 			return false;
 		}
-		for (UButton* Button : { Settings, Save, ExitGame })
+		for (UButton* Button : { Close, Settings, Save, ExitGame })
 		{
 			if (UVerticalBoxSlot* ButtonSlot = Cast<UVerticalBoxSlot>(Button->Slot))
 			{
@@ -603,7 +728,32 @@ namespace CatFrontendWidgetAuthoring
 		Status->SetJustification(ETextJustify::Center);
 		Status->SetColorAndOpacity(FLinearColor(0.68f, 0.76f, 0.72f));
 		SetBoxSlot(Status, false, FMargin(0.0f, 4.0f, 0.0f, 0.0f));
-		return true;
+
+		UScaleBox* SettingsScale = Tree->ConstructWidget<UScaleBox>(UScaleBox::StaticClass(), TEXT("LakeSettingsScale"));
+		USizeBox* SettingsBounds = Tree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("LakeSettingsBounds"));
+		UBorder* SettingsSurface = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("LakeSettingsSurface"));
+		UVerticalBox* SettingsColumn = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("LakeSettingsColumn"));
+		if (!SettingsScale || !SettingsBounds || !SettingsSurface || !SettingsColumn)
+		{
+			return false;
+		}
+		SettingsScale->SetStretch(EStretch::ScaleToFit);
+		SettingsBounds->SetMinDesiredWidth(760.0f);
+		SettingsBounds->SetMinDesiredHeight(500.0f);
+		SettingsBounds->SetWidthOverride(980.0f);
+		SettingsBounds->SetHeightOverride(620.0f);
+		SettingsSurface->SetBrush(FSlateColorBrush(FLinearColor(0.035f, 0.045f, 0.042f, 0.96f)));
+		SettingsSurface->SetPadding(FMargin(28.0f, 24.0f));
+		SettingsSurface->SetContent(SettingsColumn);
+		SettingsBounds->SetContent(SettingsSurface);
+		SettingsScale->SetContent(SettingsBounds);
+		if (UOverlaySlot* SettingsSlot = SettingsPage->AddChildToOverlay(SettingsScale))
+		{
+			SettingsSlot->SetHorizontalAlignment(HAlign_Center);
+			SettingsSlot->SetVerticalAlignment(VAlign_Center);
+		}
+		SettingsPage->SetVisibility(ESlateVisibility::Collapsed);
+		return BuildLakeSettingsContent(WidgetBlueprint, SettingsColumn);
 	}
 
 	/** 构造保留大块目录空间的纵向存档页；命名输入和操作位于列表下方，不随目录是否为空改变页面结构。 */
@@ -1026,24 +1176,49 @@ namespace CatFrontendWidgetAuthoring
 		return true;
 	}
 
-	/** 为新建或修复的 WBP 补齐全部源控件的 GUID 登记并编译保存；只有全新资产才额外通知资产注册表。 */
-	bool CompileRegisterAndSaveWidget(UWidgetBlueprint* WidgetBlueprint, const bool bRegisterNewAsset)
+	/** 同步 WBP 当前源控件的变量 GUID 表；重建资产会替换整棵 WidgetTree，这一步负责移除旧树残留并补齐新树控件。 */
+	void SyncWidgetVariableGuids(UWidgetBlueprint* WidgetBlueprint)
 	{
-		// WBP 保存流程：空蓝图直接失败；先为尚未登记的源控件补 GUID，再标记结构变化并编译，编译成功后标记包脏并按挂载路径保存。
+		// GUID 同步流程：收集当前 WidgetTree 下的源控件名，移除不再存在的旧名，再为缺少 GUID 的当前控件补登记，保证 UE 编译器不会在修复阶段报残留或缺项。
 		if (!WidgetBlueprint)
 		{
-			return false;
+			return;
 		}
-		// UE 编译器在 GUID 表非空时检查全部源控件，包括非变量布局容器；仅登记缺失名称，避免重建已有 GUID 或触发 OnVariableAdded 的重复登记 ensure。
-		WidgetBlueprint->ForEachSourceWidget([WidgetBlueprint](UWidget* Widget)
+
+		TSet<FName> SourceWidgetNames;
+		WidgetBlueprint->ForEachSourceWidget([&SourceWidgetNames](UWidget* Widget)
 		{
 			const FName WidgetName = Widget->GetFName();
+			SourceWidgetNames.Add(WidgetName);
+		});
+		for (auto It = WidgetBlueprint->WidgetVariableNameToGuidMap.CreateIterator(); It; ++It)
+		{
+			if (!SourceWidgetNames.Contains(It.Key()))
+			{
+				It.RemoveCurrent();
+			}
+		}
+		// UE 编译器在 GUID 表非空时检查全部源控件，包括非变量布局容器；只同步当前 WidgetTree，避免重建资产时把旧树残留带进编译。
+		for (const FName WidgetName : SourceWidgetNames)
+		{
 			if (!WidgetBlueprint->WidgetVariableNameToGuidMap.Contains(WidgetName))
 			{
 				WidgetBlueprint->OnVariableAdded(WidgetName);
 			}
-		});
+		}
+	}
+
+	/** 为新建、修复或重建的 WBP 执行结构刷新、编译和保存；只有全新资产才额外通知资产注册表。 */
+	bool CompileRegisterAndSaveWidget(UWidgetBlueprint* WidgetBlueprint, const bool bRegisterNewAsset)
+	{
+		// WBP 保存流程：空蓝图直接失败；先给 UE 内部结构刷新准备好 GUID，再标记结构变化，随后按刷新后的源控件再次同步并显式编译保存。
+		if (!WidgetBlueprint)
+		{
+			return false;
+		}
+		SyncWidgetVariableGuids(WidgetBlueprint);
 		FBlueprintEditorUtils::MarkBlueprintAsStructurallyModified(WidgetBlueprint);
+		SyncWidgetVariableGuids(WidgetBlueprint);
 		FKismetEditorUtilities::CompileBlueprint(WidgetBlueprint);
 		if (WidgetBlueprint->Status == BS_Error)
 		{
@@ -1082,6 +1257,51 @@ namespace CatFrontendWidgetAuthoring
 			return false;
 		}
 		UE_LOG(LogTemp, Display, TEXT("Event=ui_widget_authoring_created Tag=%s Asset=%s"), AuthoringTag, *PackageName);
+		return true;
+	}
+
+	/** 重建指定目录中的单个正式 WBP；当前只用于局内菜单资产升级，避免旧三按钮布局继续通过“已存在”分支残留。 */
+	bool RebuildWidgetInDirectory(const FString& Directory, const TCHAR* AssetName, TSubclassOf<UUserWidget> ParentClass,
+		TSubclassOf<UWidget> RootWidgetClass, const TCHAR* AuthoringTag, TFunctionRef<bool(UWidgetBlueprint*)> BuildWidget)
+	{
+		// WBP 重建流程：缺失时沿用创建路径；存在时确认父类合同，先清掉旧控件变量 GUID，再换入新的 WidgetTree 根并重新构造、编译和保存，不影响其它 Frontend 页面资产。
+		const FString PackageName = FString::Printf(TEXT("%s/%s"), *Directory, AssetName);
+		const FString ObjectPath = FString::Printf(TEXT("%s.%s"), *PackageName, AssetName);
+		UWidgetBlueprint* WidgetBlueprint = LoadObject<UWidgetBlueprint>(nullptr, *ObjectPath);
+		if (!WidgetBlueprint)
+		{
+			return CreateMissingWidgetInDirectory(Directory, AssetName, ParentClass, RootWidgetClass, AuthoringTag, BuildWidget);
+		}
+		if (!WidgetBlueprint->GeneratedClass || !WidgetBlueprint->GeneratedClass->IsChildOf(ParentClass))
+		{
+			UE_LOG(LogTemp, Error, TEXT("Event=ui_widget_rebuild_parent_mismatch Tag=%s Asset=%s ExpectedParent=%s"),
+				AuthoringTag, *ObjectPath, ParentClass ? *ParentClass->GetName() : TEXT("None"));
+			return false;
+		}
+		WidgetBlueprint->Modify();
+		WidgetBlueprint->WidgetVariableNameToGuidMap.Reset();
+		WidgetBlueprint->WidgetTree = NewObject<UWidgetTree>(WidgetBlueprint, TEXT("WidgetTree"), RF_Transactional);
+		if (!WidgetBlueprint->WidgetTree)
+		{
+			UE_LOG(LogTemp, Error, TEXT("Event=ui_widget_rebuild_tree_failed Tag=%s Asset=%s"), AuthoringTag, *ObjectPath);
+			return false;
+		}
+		if (RootWidgetClass)
+		{
+			const FName RootWidgetName(*FString::Printf(TEXT("%sRoot"), AssetName));
+			WidgetBlueprint->WidgetTree->RootWidget = WidgetBlueprint->WidgetTree->ConstructWidget<UWidget>(RootWidgetClass, RootWidgetName);
+			if (WidgetBlueprint->WidgetTree->RootWidget)
+			{
+				WidgetBlueprint->OnVariableAdded(WidgetBlueprint->WidgetTree->RootWidget->GetFName());
+			}
+		}
+		if (!WidgetBlueprint->WidgetTree->RootWidget || !BuildWidget(WidgetBlueprint)
+			|| !CompileRegisterAndSaveWidget(WidgetBlueprint, false))
+		{
+			UE_LOG(LogTemp, Error, TEXT("Event=ui_widget_rebuild_failed Tag=%s Asset=%s"), AuthoringTag, *PackageName);
+			return false;
+		}
+		UE_LOG(LogTemp, Display, TEXT("Event=ui_widget_rebuilt Tag=%s Asset=%s"), AuthoringTag, *PackageName);
 		return true;
 	}
 
@@ -1295,12 +1515,50 @@ namespace CatFrontendWidgetAuthoring
 	/** 核验正式局内菜单 WBP 的父类与命名控件；它证明 C++ View 只绑定项目资产，不创建 C++ 菜单替身。 */
 	bool ValidateLakeMainMenuWidgetContract()
 	{
-		// 局内菜单合同核验流程：先检查 WBP 继承 UCatLakeMainMenuWidget，再核对三个按钮和状态文本的 Designer 变量；任一项缺失都会让资产脚本失败。
+		// 局内菜单合同核验流程：先检查 WBP 继承 UCatLakeMainMenuWidget，再核对命令页和设置页同名控件；任一项缺失都会让资产脚本失败。
 		const FRequiredWidgetControl LakeMenuControls[] = {
+			{ TEXT("LakeMainMenuPageSwitcher"), UWidgetSwitcher::StaticClass() },
+			{ TEXT("LakeCommandPanel"), UPanelWidget::StaticClass() },
+			{ TEXT("LakeSettingsPanel"), UPanelWidget::StaticClass() },
+			{ TEXT("CloseButton"), UButton::StaticClass() },
 			{ TEXT("SettingsButton"), UButton::StaticClass() },
 			{ TEXT("SaveButton"), UButton::StaticClass() },
 			{ TEXT("ExitGameButton"), UButton::StaticClass() },
-			{ TEXT("StatusTextBlock"), UTextBlock::StaticClass() }
+			{ TEXT("StatusTextBlock"), UTextBlock::StaticClass() },
+			{ TEXT("GameSettingsCategoryButton"), UButton::StaticClass() },
+			{ TEXT("GraphicsSettingsCategoryButton"), UButton::StaticClass() },
+			{ TEXT("AudioSettingsCategoryButton"), UButton::StaticClass() },
+			{ TEXT("ControlsSettingsCategoryButton"), UButton::StaticClass() },
+			{ TEXT("ApplySettingsButton"), UButton::StaticClass() },
+			{ TEXT("RestoreSettingsDefaultsButton"), UButton::StaticClass() },
+			{ TEXT("CancelSettingsButton"), UButton::StaticClass() },
+			{ TEXT("FrontendSettingsResultTextBlock"), UTextBlock::StaticClass() },
+			{ TEXT("SettingsDescriptionTextBlock"), UTextBlock::StaticClass() },
+			{ TEXT("GameSettingsPanel"), UPanelWidget::StaticClass() },
+			{ TEXT("GraphicsSettingsPanel"), UPanelWidget::StaticClass() },
+			{ TEXT("AudioSettingsPanel"), UPanelWidget::StaticClass() },
+			{ TEXT("ControlsSettingsPanel"), UPanelWidget::StaticClass() },
+			{ TEXT("LanguageComboBox"), UComboBoxString::StaticClass() },
+			{ TEXT("FullscreenModeComboBox"), UComboBoxString::StaticClass() },
+			{ TEXT("ScreenResolutionComboBox"), UComboBoxString::StaticClass() },
+			{ TEXT("OverallQualityComboBox"), UComboBoxString::StaticClass() },
+			{ TEXT("VSyncCheckBox"), UCheckBox::StaticClass() },
+			{ TEXT("BrightnessSlider"), USlider::StaticClass() },
+			{ TEXT("VibrationCheckBox"), UCheckBox::StaticClass() },
+			{ TEXT("VoiceChatCheckBox"), UCheckBox::StaticClass() },
+			{ TEXT("MuteAudioWhenUnfocusedCheckBox"), UCheckBox::StaticClass() },
+			{ TEXT("AudioOutputDeviceComboBox"), UComboBoxString::StaticClass() },
+			{ TEXT("RefreshAudioOutputDevicesButton"), UButton::StaticClass() },
+			{ TEXT("VoiceInputModeComboBox"), UComboBoxString::StaticClass() },
+			{ TEXT("MicrophoneComboBox"), UComboBoxString::StaticClass() },
+			{ TEXT("VoiceInputModeUnavailableText"), UTextBlock::StaticClass() },
+			{ TEXT("MicrophoneUnavailableText"), UTextBlock::StaticClass() },
+			{ TEXT("UIScaleSlider"), USlider::StaticClass() },
+			{ TEXT("MasterVolumeSlider"), USlider::StaticClass() },
+			{ TEXT("MusicVolumeSlider"), USlider::StaticClass() },
+			{ TEXT("SFXVolumeSlider"), USlider::StaticClass() },
+			{ TEXT("AmbienceVolumeSlider"), USlider::StaticClass() },
+			{ TEXT("VoiceVolumeSlider"), USlider::StaticClass() }
 		};
 		return ValidateWidgetParentInDirectory(LakeMenuWidgetDirectory, TEXT("WBP_CatLakeMainMenu"),
 				UCatLakeMainMenuWidget::StaticClass())
@@ -1437,9 +1695,9 @@ bool UCatFrontendWidgetAuthoringLibrary::CreateMissingFrontendWidgetBlueprints()
 
 bool UCatFrontendWidgetAuthoringLibrary::CreateMissingLakeMainMenuWidgetBlueprint()
 {
-	// 局内菜单 WBP 创建流程：固定在 /Game/UI/Save 下生成正式菜单资产；已有同名资产只做合同核验，避免覆盖后续手工布局。
+	// 局内菜单 WBP 创建流程：固定在 /Game/UI/Save 下创建或重建正式菜单资产，升级旧三按钮布局并立即核验全部控件合同。
 	using namespace CatFrontendWidgetAuthoring;
-	const bool bCreated = CreateMissingWidgetInDirectory(LakeMenuWidgetDirectory, TEXT("WBP_CatLakeMainMenu"),
+	const bool bCreated = RebuildWidgetInDirectory(LakeMenuWidgetDirectory, TEXT("WBP_CatLakeMainMenu"),
 		UCatLakeMainMenuWidget::StaticClass(), UCanvasPanel::StaticClass(), TEXT("CatLakeMainMenuWidgetAuthoring"),
 		BuildLakeMainMenuWidget);
 	return bCreated && ValidateLakeMainMenuWidgetContract();
