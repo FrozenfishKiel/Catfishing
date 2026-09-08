@@ -1074,7 +1074,7 @@ bool FCatFishingStrengthAccelerationTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingHoldAndRecoveryTest,
-	"Catfishing.Unit.Fishing.Simulation.LockedTensionCostsStaminaAndRightButtonRecoversAtLineLimit",
+	"Catfishing.Unit.Fishing.Simulation.RightButtonAtLineLimitUsesOrdinaryLockedConstraint",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingHoldAndRecoveryTest::RunTest(const FString& Parameters)
@@ -1100,9 +1100,43 @@ bool FCatFishingHoldAndRecoveryTest::RunTest(const FString& Parameters)
 	const FCatFightStepResult Maxed = FCatFishingFightSimulator::Step(
 		Config, MaxedState, MakeHeldConstraint(), FVector::ForwardVector);
 	TestTrue(TEXT("maximum line length still creates physical tension"), Maxed.NormalizedTension > 0.0);
-	TestEqual(TEXT("right button at maximum line length restores the same stamina"),
-		Maxed.CatStaminaDrain, Released.CatStaminaDrain, 1e-9);
-	TestEqual(TEXT("right button prevents fish stamina cost even at maximum line length"), Maxed.FishStaminaDrain, 0.0);
+	TestFalse(TEXT("right button at maximum line length cannot restore stamina"), Maxed.bSlackRecoveryActive);
+	TestTrue(TEXT("outward opposition at maximum line length costs both participants and rod durability"),
+		Maxed.CatStaminaDrain > 0.0 && Maxed.FishStaminaDrain > 0.0 && Maxed.RodWearDelta > 0.0);
+
+	// 保留同一物理状态，只改变右键输入；整个受力与资源结果应与普通锁线一致。
+	FCatFightRodConstraintInput MovingConstraint = MakeHeldConstraint();
+	MovingConstraint.CarrierTravelLimitCentimeters = 100.0;
+	MovingConstraint.CarrierVelocityCentimetersPerSecond = FVector(10.0, 0.0, 0.0);
+	MovingConstraint.CatRodExertionSquaredSeconds = 0.04;
+	MovingConstraint.CatRodPositiveWorkRadians = 0.02;
+	Config.FishStrength = 80.0;
+	for (const auto& Constraint : {MakeHeldConstraint(), MovingConstraint})
+	{
+		for (const auto& FishDirection : {FVector::ForwardVector, -FVector::ForwardVector})
+		{
+			MaxedState.CatAction = ECatFightCatAction::Slack;
+			const auto RightHeld = FCatFishingFightSimulator::Step(Config, MaxedState, Constraint, FishDirection);
+			MaxedState.CatAction = ECatFightCatAction::None;
+			const auto NoRightButton = FCatFishingFightSimulator::Step(Config, MaxedState, Constraint, FishDirection);
+			if (!TestTrue(TEXT("满线右键与无右键的固定端和可移动端均可求解"), RightHeld.bSucceeded && NoRightButton.bSucceeded)) return false;
+			TestEqual(TEXT("满线右键不切换自由线杯"), RightHeld.Trace.bFreeSpool, NoRightButton.Trace.bFreeSpool);
+			TestEqual(TEXT("满线右键不改变约束张力"), RightHeld.LineTensionNewtons, NoRightButton.LineTensionNewtons, 1e-9);
+			TestEqual(TEXT("满线右键不改变约束修正"), RightHeld.FishConstraintCorrectionCentimeters, NoRightButton.FishConstraintCorrectionCentimeters, 1e-9);
+			TestTrue(TEXT("满线右键不改变鱼落点"), RightHeld.ProposedFishWorldPosition.Equals(NoRightButton.ProposedFishWorldPosition, 1e-9));
+			TestTrue(TEXT("满线右键不改变鱼速度"), RightHeld.ResolvedFishVelocityCentimetersPerSecond.Equals(NoRightButton.ResolvedFishVelocityCentimetersPerSecond, 1e-9));
+			TestTrue(TEXT("满线右键不改变竿端约束落点"), RightHeld.Trace.ConstraintRodEndWorldPosition.Equals(NoRightButton.Trace.ConstraintRodEndWorldPosition, 1e-9));
+			TestEqual(TEXT("满线右键不改变猫牵引"), RightHeld.CarrierPullAccelerationCentimetersPerSecondSquared, NoRightButton.CarrierPullAccelerationCentimetersPerSecondSquared, 1e-9);
+			TestEqual(TEXT("满线右键不改变猫刹车"), RightHeld.CarrierBrakingDecelerationCentimetersPerSecondSquared, NoRightButton.CarrierBrakingDecelerationCentimetersPerSecondSquared, 1e-9);
+			TestEqual(TEXT("满线右键不改变已放线长"), RightHeld.LineLengthCentimeters, NoRightButton.LineLengthCentimeters, 1e-9);
+			TestEqual(TEXT("满线右键不改变猫总耗体"), RightHeld.CatStaminaDrain, NoRightButton.CatStaminaDrain, 1e-9);
+			TestEqual(TEXT("满线右键不改变主位操作耗体"), RightHeld.GetPrimaryCatStaminaDrain(), NoRightButton.GetPrimaryCatStaminaDrain(), 1e-9);
+			TestEqual(TEXT("满线右键不改变共享支撑耗体"), RightHeld.GetSharedCatStaminaDrain(), NoRightButton.GetSharedCatStaminaDrain(), 1e-9);
+			TestEqual(TEXT("满线右键不改变鱼耗体"), RightHeld.FishStaminaDrain, NoRightButton.FishStaminaDrain, 1e-9);
+			TestEqual(TEXT("满线右键不增加第二份磨损"), RightHeld.RodWearDelta, NoRightButton.RodWearDelta, 1e-9);
+			TestEqual(TEXT("满线右键不改变终局"), RightHeld.Outcome, NoRightButton.Outcome);
+		}
+	}
 	return !HasAnyErrors();
 }
 

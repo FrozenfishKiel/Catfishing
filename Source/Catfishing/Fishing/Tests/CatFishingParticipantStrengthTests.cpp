@@ -157,20 +157,51 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	Runner->State.FishWorldPosition.X = Runner->State.LineLengthCentimeters;
 	Constraint.CarrierDesiredVelocityCentimetersPerSecond = FVector(-100.0, 0.0, 0.0);
 	Constraint.CatRodExertionSquaredSeconds = 0.04;
-	TestTrue(TEXT("左键已按住时右键仍被接受"), Runner->SetSlacking(PrimaryPlayer, 1, true));
-	TestEqual(TEXT("左右键同时按住优先右键"), Runner->State.CatAction, ECatFightCatAction::Slack);
-	TestTrue(TEXT("右键期间左键再次按下被记录"), Runner->SetReeling(PrimaryPlayer, 2, true));
-	TestEqual(TEXT("按键到达次序不改变右键优先级"), Runner->State.CatAction, ECatFightCatAction::Slack);
+	const auto WithoutRightButton = Simulate();
+	TestTrue(TEXT("满线时右键按下仍记录为真实输入"), Runner->SetSlacking(PrimaryPlayer, 1, true));
+	TestTrue(TEXT("满线不会清除已按住的右键"), Runner->IsSlackInputHeldForAuthority(PrimaryPlayer));
+	TestEqual(TEXT("满线忽略右键后保留已按住的左键收线"), Runner->State.CatAction, ECatFightCatAction::Pull);
+	TestTrue(TEXT("满线右键期间左键再次按下被记录"), Runner->SetReeling(PrimaryPlayer, 2, true));
+	TestEqual(TEXT("按键次序不改变满线时左键的有效收线"), Runner->State.CatAction, ECatFightCatAction::Pull);
+	const auto FullLine = Simulate();
+	TestTrue(TEXT("真实主辅满线时恢复普通收线对抗且不回体"), FullLine.bSucceeded && !FullLine.bSlackRecoveryActive
+		&& FullLine.CatStaminaDrain > 0.0 && FullLine.FishStaminaDrain > 0.0);
+	TestEqual(TEXT("满线同时按右键不改变原左键的总耗体"), FullLine.CatStaminaDrain, WithoutRightButton.CatStaminaDrain, 1e-9);
+	TestEqual(TEXT("满线同时按右键不改变原左键的鱼耗体"), FullLine.FishStaminaDrain, WithoutRightButton.FishStaminaDrain, 1e-9);
+	TestEqual(TEXT("满线同时按右键不改变原左键的磨损"), FullLine.RodWearDelta, WithoutRightButton.RodWearDelta, 1e-9);
+	TestTrue(TEXT("满线同时按右键不改变原左键的鱼位移"), FullLine.ProposedFishWorldPosition.Equals(WithoutRightButton.ProposedFishWorldPosition, 1e-9));
+	const double PrimaryDrain = FullLine.GetPrimaryCatStaminaDrain()
+		+ FullLine.GetSharedCatStaminaDrain() * Runner->Config.PrimaryOperatorCatStrength / Runner->Config.GetCombinedCatStrength();
+	TestTrue(TEXT("满线主位费用通过真实GAS写口扣除"), PrimaryASC->ApplyFishingStaminaDelta(static_cast<float>(-PrimaryDrain)));
+	TestTrue(TEXT("满线共享费用经过生产助手扣费入口"), Runner->ApplyHelperStaminaChanges(FullLine.GetSharedCatStaminaDrain()));
+	const double PrimaryPaid = 30.0 - PrimaryASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	const double HelperPaid = 30.0 - HelperASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	TestTrue(TEXT("满线主位与实际出力助手均实际扣体"), PrimaryPaid > 0.0 && HelperPaid > 0.0);
+	TestEqual(TEXT("主辅实际总扣费只有一份模拟结果"), PrimaryPaid + HelperPaid, FullLine.CatStaminaDrain, 1e-5);
+	TestEqual(TEXT("主位操作费之外共享费用按八十比四十分摊"), PrimaryPaid - FullLine.GetPrimaryCatStaminaDrain(), HelperPaid * 2.0, 1e-5);
+	TestTrue(TEXT("满线右键期间左键释放被接受"), Runner->SetReeling(PrimaryPlayer, 3, false));
+	TestEqual(TEXT("满线松左键后进入普通锁线"), Runner->State.CatAction, ECatFightCatAction::None);
+	const auto LockedAtLimit = Simulate();
+	TestTrue(TEXT("只剩右键时满线仍承担正常支撑和鱼耗体"), LockedAtLimit.bSucceeded
+		&& !LockedAtLimit.bSlackRecoveryActive && LockedAtLimit.GetSharedCatStaminaDrain() > 0.0 && LockedAtLimit.FishStaminaDrain > 0.0);
+
+	// 与生产固定步相同，实际收线落点写回后刷新；保留的右键无需再按一次。
+	TestTrue(TEXT("之前正常左键确实完成收线"), FullLine.LineLengthCentimeters < Runner->Config.MaximumLineLengthCentimeters);
+	Runner->State.LineLengthCentimeters = FullLine.LineLengthCentimeters;
+	Runner->State.FishWorldPosition = FullLine.ProposedFishWorldPosition;
+	Runner->RefreshCatAction();
+	TestEqual(TEXT("真正收短线杯后持续右键重新生效"), Runner->State.CatAction, ECatFightCatAction::Slack);
 	const auto Recovery = Simulate();
-	TestTrue(TEXT("真实主辅ASC出力且满线时仍进入右键回体"), Recovery.bSucceeded && Recovery.bSlackRecoveryActive && Recovery.CatStaminaDrain < 0.0);
-	TestTrue(TEXT("恢复通过真实GAS写口到账"), PrimaryASC->ApplyFishingStaminaDelta(static_cast<float>(-Recovery.CatStaminaDrain)));
-	TestTrue(TEXT("主位实际体力增加"), PrimaryASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) > 30.0f);
-	TestTrue(TEXT("右键结算经过生产助手扣费入口"), Runner->ApplyHelperStaminaChanges(Recovery.GetSharedCatStaminaDrain()));
-	TestEqual(TEXT("仍按住左键的助手体力保持"), HelperASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 30.0f);
-	TestEqual(TEXT("有助手合力也不扣鱼体力"), Recovery.FishStaminaDrain, 0.0);
-	TestTrue(TEXT("右键期间左键释放被接受"), Runner->SetReeling(PrimaryPlayer, 3, false));
-	TestEqual(TEXT("松左键后继续右键回体"), Runner->State.CatAction, ECatFightCatAction::Slack);
+	TestTrue(TEXT("收短后的持续右键恢复正常回体"), Recovery.bSucceeded && Recovery.bSlackRecoveryActive && Recovery.CatStaminaDrain < 0.0);
+	const double PrimaryBeforeRecovery = PrimaryASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	const double HelperBeforeRecovery = HelperASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	TestTrue(TEXT("收短后的恢复通过真实GAS写口到账"), PrimaryASC->ApplyFishingStaminaDelta(static_cast<float>(-Recovery.CatStaminaDrain)));
+	TestTrue(TEXT("主位实际体力恢复"), PrimaryASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) > PrimaryBeforeRecovery);
+	TestTrue(TEXT("未满线右键结算仍经过生产助手入口"), Runner->ApplyHelperStaminaChanges(Recovery.GetSharedCatStaminaDrain()));
+	TestEqual(TEXT("未满线右键期间助手体力保持"), static_cast<double>(HelperASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute())), HelperBeforeRecovery);
+	TestEqual(TEXT("未满线右键期间鱼不耗体"), Recovery.FishStaminaDrain, 0.0);
 	TestTrue(TEXT("重新按下左键仍记录为按住"), Runner->SetReeling(PrimaryPlayer, 4, true));
+	TestEqual(TEXT("未满线时恢复原右键优先级"), Runner->State.CatAction, ECatFightCatAction::Slack);
 	TestFalse(TEXT("过期右键释放不能结束回体"), Runner->SetSlacking(PrimaryPlayer, 3, false));
 	TestTrue(TEXT("最新右键释放被接受"), Runner->SetSlacking(PrimaryPlayer, 5, false));
 	TestEqual(TEXT("松右键后立即恢复仍按住的左键收线"), Runner->State.CatAction, ECatFightCatAction::Pull);
@@ -178,6 +209,8 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("右键释放后双方恢复对抗耗体"), Resumed.bSucceeded && Resumed.CatStaminaDrain > 0.0 && Resumed.FishStaminaDrain > 0.0);
 	Constraint.CarrierDesiredVelocityCentimetersPerSecond = FVector::ZeroVector;
 	Constraint.CatRodExertionSquaredSeconds = 0.0;
+	Runner->State.LineLengthCentimeters = 500.0;
+	Runner->State.FishWorldPosition = FVector(500.0, 0.0, 0.0);
 
 	// 固定步在能力扣款之后重新读取主猫ASC，再决定是否进入持续外冲。
 	SetStamina(0.0f, 0.0f);

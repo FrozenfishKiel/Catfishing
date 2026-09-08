@@ -13,7 +13,7 @@ enum class ECatFightStepOutcome : uint8
 	Escaped
 };
 
-/** 线杯控制模式：不按=锁线，左键=收线，右键=自由出线。 */
+/** 线杯控制模式：不按=锁线，左键=收线，右键在未放尽时自由出线。 */
 enum class ECatFightCatAction : uint8
 {
 	None,
@@ -221,7 +221,7 @@ struct CATFISHING_API FCatFightStepResult
 	/** 纯模拟器的可回放中间量；Runner 只读并写入限频诊断日志。 */
 	FCatFightSimulationTrace Trace;
 	bool bExhaustedCatEscape = false;
-	/** 正常主位右键回体：屏蔽双方耗体；强制力竭拖拽仍优先。 */
+	/** 主位右键且尚有线杯容量时回体并屏蔽双方耗体；满线和强制力竭拖拽不回体。 */
 	bool bSlackRecoveryActive = false;
 	double IntendedSwimSpeedCentimetersPerSecond = 0.0;
 	double CatStaminaDrain = 0.0;
@@ -301,6 +301,8 @@ struct CATFISHING_API FCatFightStepResult
 class CATFISHING_API FCatFishingFightSimulator
 {
 public:
+	/** 已放线长耗尽线杯容量；鱼游近产生的余线不会恢复容量。距离单位为 cm。 */
+	static bool IsLineAtMaximum(const FCatFightSimulationConfig& Config, double LineLengthCentimeters);
 	/** 对最终落点/线长重算费用与终局，幂等且没有 ASC/装备副作用。 */
 	static bool FinalizeResolvedStep(const FCatFightSimulationConfig& Config,
 		const FCatFightSimulationState& State, const FCatFightRodConstraintInput& RodConstraint,

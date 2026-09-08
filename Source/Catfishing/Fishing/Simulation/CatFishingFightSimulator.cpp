@@ -67,6 +67,12 @@ bool FCatFightSimulationConfig::IsValid() const
 		&& IsFiniteNonNegative(EscapeSlackCentimeters);
 }
 
+bool FCatFishingFightSimulator::IsLineAtMaximum(const FCatFightSimulationConfig& Config,
+	const double LineLengthCentimeters)
+{
+	return LineLengthCentimeters >= Config.MaximumLineLengthCentimeters - UE_DOUBLE_KINDA_SMALL_NUMBER;
+}
+
 bool FCatFishingFightSimulator::ShouldEscapeExhaustedCat(const FCatFightSimulationConfig& Config,
 	const FCatFightSimulationState& State, const bool bRodHeld)
 {
@@ -174,7 +180,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	Result.bExhaustedCatEscape = bExhaustedCatEscape;
 	// 力竭拖拽维持锁线；不能靠残留右键在零体力时反复放线回体、恢复全力。
 	const bool bReeling = bOperatorPresent && !bExhaustedCatEscape && State.CatAction == ECatFightCatAction::Pull;
-	const bool bSlackRecovery = bOperatorPresent && !bExhaustedCatEscape && State.CatAction == ECatFightCatAction::Slack;
+	const bool bSlackRecovery = bOperatorPresent && !bExhaustedCatEscape
+		&& State.CatAction == ECatFightCatAction::Slack && !IsLineAtMaximum(Config, State.LineLengthCentimeters);
 	Result.bSlackRecoveryActive = bSlackRecovery;
 	const bool bFreeSpool = !bOperatorPresent || bSlackRecovery;
 	const bool bStruggling = !State.bFishExhausted
@@ -475,7 +482,10 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 	const double Dt = Config.FixedStepSeconds;
 	const bool bOperatorPresent = State.bOperatorPresent;
 	const bool bExhaustedCatEscape = Result.bExhaustedCatEscape;
-	const bool bSlackRecovery = Result.bSlackRecoveryActive;
+	// 使用最终已放线长，覆盖本步刚好放尽和岸线解析后的重算；满线完全复用普通锁线费用。
+	const bool bSlackRecovery = bOperatorPresent && !bExhaustedCatEscape
+		&& State.CatAction == ECatFightCatAction::Slack && !IsLineAtMaximum(Config, Result.LineLengthCentimeters);
+	Result.bSlackRecoveryActive = bSlackRecovery;
 	const bool bFreeSpool = !bOperatorPresent || bSlackRecovery;
 	const bool bReeling = bOperatorPresent && !bExhaustedCatEscape && State.CatAction == ECatFightCatAction::Pull;
 	const bool bStruggling = !State.bFishExhausted
@@ -605,7 +615,7 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 			return RejectResolvedResult();
 		}
 	}
-	// 正常右键期间独立回体，移动、转杆和最大线长处的张力均不产生双方费用。
+	// 尚有线杯容量时右键独立回体；已放尽则恢复正常做功、支撑与鱼出力费用。
 	// 无人值守放线不恢复旧操作手；零体力强制拖拽也不通过右键退出。
 	if (bSlackRecovery)
 	{

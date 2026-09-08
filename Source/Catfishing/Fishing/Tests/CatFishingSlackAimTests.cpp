@@ -284,6 +284,8 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 	Runner->bInitialized = true;
 	Runner->bRunning = true;
 	Runner->State.bOperatorPresent = true;
+	Runner->Config.MaximumLineLengthCentimeters = 1000.0;
+	Runner->State.LineLengthCentimeters = 500.0;
 	Runner->Session = Session;
 	Runner->RodActor = Fixture.Rod;
 	FCatFightParticipantRuntime Participant;

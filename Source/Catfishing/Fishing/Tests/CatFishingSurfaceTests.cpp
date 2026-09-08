@@ -249,6 +249,74 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 			Step.ResolvedFishVelocityCentimetersPerSecond.Equals(Predicted.ResolvedFishVelocityCentimetersPerSecond, 1e-6));
 	}
 
+	// 满线右键和普通锁线经过真实岸线解析后仍交付同一张力、转矩和费用。
+	// 此处故意保留原始 Slack，覆盖 Runner 在本步放尽时尚未刷新有效操作的边界。
+	FCatFightStepResult LockedAtLimit;
+	FCatFishingRodResistanceResult LockedAtLimitResistance;
+	for (const bool bAlreadyAtLimit : {true, false})
+	for (const auto Action : {ECatFightCatAction::None, ECatFightCatAction::Slack})
+	{
+		if (!bAlreadyAtLimit && Action == ECatFightCatAction::None) continue;
+		auto* Runner = NewObject<UCatFishingFightRunner>(Session);
+		Runner->Session = Session;
+		Runner->WaterRegion = Region->GetWaterRegionHandle();
+		Runner->Config.FixedStepSeconds = 0.05;
+		Runner->Config.PrimaryOperatorCatStrength = 50.0;
+		Runner->Config.PrimaryOperatorMassKilograms = 5.0;
+		Runner->Config.FishMassKilograms = 3.0;
+		Runner->Config.FishStrength = 75.0;
+		Runner->Config.ReelSpeedCentimetersPerSecond = 80.0;
+		Runner->Config.RodDurability = 1000.0;
+		Runner->Config.CatStaminaMaximum = 100.0;
+		Runner->Config.FishFullEffortSpeedCentimetersPerSecond = 75.0;
+		Runner->State.CatStamina = Runner->State.FishStamina = 50.0;
+		Runner->State.CatAction = Action;
+		Runner->State.MotionIntent = ECatFishMotionIntent::StrugglingOutward;
+		Runner->State.FishWorldPosition = FVector(999.9, 500, 0);
+		FCatFightRodConstraintInput Rod;
+		Rod.bRodHeld = true;
+		Rod.RodTipWorldPosition = FVector(499.9, 500, 150);
+		Rod.CarrierTravelLimitCentimeters = 20.0;
+		Runner->State.LineLengthCentimeters = FVector::Distance(Rod.RodTipWorldPosition, Runner->State.FishWorldPosition);
+		Runner->Config.MaximumLineLengthCentimeters = Runner->State.LineLengthCentimeters + (bAlreadyAtLimit ? 0.0 : 0.05);
+		Runner->SteeringRandom.Initialize(1459);
+		if (!FCatFishSteeringModel::Initialize(Runner->SteeringConfig, FVector::ForwardVector,
+			ECatFishBehavior::OutwardRush, 1.0, Runner->SteeringRandom, Runner->SteeringState)) return false;
+		auto Step = FCatFishingFightSimulator::Step(Runner->Config, Runner->State, Rod, FVector::ForwardVector);
+		const double CandidateLineLength = Step.LineLengthCentimeters;
+		FCatWaterSpatialResult Water;
+		bool bJustBeached = false;
+		FVector Normal;
+		AActor* Surface = nullptr;
+		FCatFishingRodResistanceResult Resistance;
+		const auto Motion = Runner->ResolveFishSurfaceFromAuthority(Step, Rod, Water, bJustBeached, Normal, Surface, Resistance);
+		if (!TestTrue(TEXT("满线角力通过真实水域及岸线消费者"), Motion.bSucceeded && Resistance.bSucceeded)) return false;
+		TestTrue(TEXT("测试确实在岸线发生水域修正"), Runner->bLastShoreContactDiagnosticActive);
+		if (!bAlreadyAtLimit)
+		{
+			TestEqual(TEXT("本步候选出线确实曾达到上限"), CandidateLineLength, Runner->Config.MaximumLineLengthCentimeters);
+			TestEqual(TEXT("真实岸线挡回后不提交未实际放出的线"), Step.LineLengthCentimeters, Runner->State.LineLengthCentimeters);
+			TestTrue(TEXT("最终未实际满线时保留正常回体"), Step.bSlackRecoveryActive && Step.CatStaminaDrain < 0.0);
+			continue;
+		}
+		TestEqual(TEXT("岸线不重新放出超过线杯容量的线"), Step.LineLengthCentimeters, Runner->Config.MaximumLineLengthCentimeters);
+		TestFalse(TEXT("岸线后满线仍不回体"), Step.bSlackRecoveryActive);
+		if (Action == ECatFightCatAction::None)
+		{
+			LockedAtLimit = Step;
+			LockedAtLimitResistance = Resistance;
+		}
+		else
+		{
+			TestTrue(TEXT("满线右键交付与锁线相同的岸线位置"), Step.ProposedFishWorldPosition.Equals(LockedAtLimit.ProposedFishWorldPosition, 1e-6));
+			TestEqual(TEXT("满线右键交付相同张力"), Step.LineTensionNewtons, LockedAtLimit.LineTensionNewtons);
+			TestEqual(TEXT("满线右键交付相同杆阻力"), Resistance.MaximumFishTorqueStrengthMeters, LockedAtLimitResistance.MaximumFishTorqueStrengthMeters);
+			TestEqual(TEXT("岸线后猫体力只按锁线结算一次"), Step.CatStaminaDrain, LockedAtLimit.CatStaminaDrain);
+			TestEqual(TEXT("岸线后鱼体力只按锁线结算一次"), Step.FishStaminaDrain, LockedAtLimit.FishStaminaDrain);
+			TestEqual(TEXT("岸线后鱼竿磨损只按锁线结算一次"), Step.RodWearDelta, LockedAtLimit.RodWearDelta);
+		}
+	}
+
 	// 先用真实收线把活鱼拖进烘焙轮廓与碰撞岸坡的间隙，再放线连续游回湖内。
 	// 单次最近岸点查询成功不能证明可恢复：每步仍须保留鱼自己朝水里的小位移。
 	UCatFishingFightRunner* RecoveryRunner = NewObject<UCatFishingFightRunner>(Session);

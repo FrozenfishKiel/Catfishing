@@ -31,7 +31,7 @@ struct CATFISHING_API FCatFishingFightRunnerInit
 	FCatFightSimulationState InitialState;
 	/** 该玩家服务器已确认的最新连续输入序号；新 Runner 从此序号继续拒绝旧边沿。 */
 	int64 InitialInputSequence = 0;
-	/** 进入本场搏斗时物理左/右键是否仍被按住；RefreshCatAction 统一裁决，右键优先。 */
+	/** 进入本场搏斗时物理左/右键是否仍被按住；RefreshCatAction 按线杯容量统一裁决。 */
 	bool bInitialPullHeld = false;
 	bool bInitialSlackHeld = false;
 	FCatFishSteeringConfig SteeringConfig;
@@ -64,9 +64,9 @@ public:
 	bool Start();
 	void Stop();
 	bool IsRunning() const { return bRunning; }
-	/** 左键按住/松开；同时按右键时暂停收线，右键释放后恢复。 */
+	/** 左键按住/松开；有线杯容量时右键优先，满线或右键释放后恢复收线。 */
 	bool SetReeling(APlayerState* InputPlayerState, int64 InputSequence, bool bInReeling);
-	/** 右键按住/松开线杯并免耗体回体；零体力强制拖拽仍优先。 */
+	/** 记录右键；尚有线杯容量才放线并免耗回体，满线按其余输入锁线或收线。 */
 	bool SetSlacking(APlayerState* InputPlayerState, int64 InputSequence, bool bInSlacking);
 	/** 读取本场已接受的右键状态；区别于 CommandComponent 在拒绝请求后仍保留的物理按键事实。 */
 	bool IsSlackInputHeldForAuthority(APlayerState* InputPlayerState) const;

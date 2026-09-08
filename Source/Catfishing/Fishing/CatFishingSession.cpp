@@ -1399,7 +1399,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_effort_configured SessionId=%s FightBalanceId=%s Model=CatActualWorkAndTimedSupport CatPhaseMultiplier=1 "
 			"FishDrainMode=ContinuousEffortSquared FishReferenceForce=FullEffort "
-			"SlackRecoveryMode=RightButtonExceptExhaustedDrag SlackStaminaCost=WaivedForCatAndFish SlackRegenPerSecond=%.3f "
+			"SlackRecoveryMode=RightButtonWithLineCapacityExceptExhaustedDrag SlackStaminaCost=WaivedOnlyWithLineCapacity LineLimitMode=NormalLockedContest SlackRegenPerSecond=%.3f "
 			"MovementMultiplier=%.3f ReelMultiplier=%.3f RodMultiplier=%.3f HoldMultiplier=%.3f "
 			"CatLoadMultiplier=%.3f "
 			"CatLinearWorkCost=%.6f FishEffortPerSecond=%.6f CatRodWorkCostPerRadian=%.6f CatUnloadedWorkMultiplier=%.3f CatSupportPerSecond=%.3f "
@@ -2314,10 +2314,11 @@ void ACatFishingSession::OnRep_Snapshot()
 	if (World && bFightPhase && World->GetTimeSeconds() >= NextStaminaReceivedDiagnosticSeconds)
 	{
 		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_fish_stamina_received SessionId=%s FishStamina=%.4f Phase=%s "
+			TEXT("Event=fishing_fish_stamina_received SessionId=%s FishStamina=%.4f Phase=%s Slacking=%s Reeling=%s "
 				"RodActor=%s World=%s NetMode=%d Authority=%s LocalRole=%d Result=Replicated"),
 			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), Snapshot.FishFightStaminaRemaining,
-			*UEnum::GetValueAsString(Snapshot.Phase), *GetNameSafe(Snapshot.RodActor), *GetNameSafe(World),
+			*UEnum::GetValueAsString(Snapshot.Phase), Snapshot.bSlacking ? TEXT("true") : TEXT("false"),
+			Snapshot.bReeling ? TEXT("true") : TEXT("false"), *GetNameSafe(Snapshot.RodActor), *GetNameSafe(World),
 			static_cast<int32>(World->GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
 			static_cast<int32>(GetLocalRole()));
 		NextStaminaReceivedDiagnosticSeconds = World->GetTimeSeconds() + 1.0;

@@ -1,6 +1,6 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
-本文件持续维护鱼、线、杆、猫的运动设计与实际代码。最近更新：2026-09-08，第二轮针对首轮实机“鱼缺少对抗、容易上岸”的反馈修正策略。源码已增加跨外冲/横切的连续对抗时限，并调整方向、出力和恢复窗口。本轮Editor/Game构建成功，165项测试中164项通过，唯一失败仍为既有初级竿150/500耐久基线；正式五包已保存，并通过独立重载及当前编辑器实读确认。尚不能声明修正后的真人手感通过。第一轮163项测试中162项通过的结果保留为历史基线。
+本文件持续维护鱼、线、杆、猫的运动设计与实际代码。最近更新：2026-09-08，补充线放尽后忽略右键、停止回体并复用原对抗结算的规则，验证状态见“线放尽后的输入与费用”。同日第二轮鱼阻力反馈修正已增加跨外冲/横切的连续对抗时限，并调整方向、出力和恢复窗口；该轮Editor/Game构建成功，165项测试中164项通过，唯一失败仍为既有初级竿150/500耐久基线，正式五包已保存并通过独立重载及当前编辑器实读确认。这些历史结果不能代替本次满线修改的验证，也不能声明修正后的真人手感通过。第一轮163项测试中162项通过的结果保留为历史基线。
 
 - 本文开头描述第二轮当前源码和已迁移的正式资产。`/Game/Data/StateTrees/ST_FishFight` 在第一轮已从两个计时叶子迁成三行为树；第二轮的新反馈边已保存并经独立进程和当前编辑器重载确认。
 - 后面的日期衔接核对保留历史改动和当时的证据；其中旧两档游速、阶段耗体、旧入口只描述相应历史版本，不作为当前公式或新验收证据。
@@ -91,7 +91,7 @@ FishDrain_points = FishEffortStaminaPerSecond × u² × G × dt_seconds
 
 费用读取实际平滑后的 `u` 和最终约束张力。鱼原地使力但被线挡住仍能付费；被动位移、历史纠偏与目标出力本身不产生费用。没有再叠加 `BaseDrainMultiplier/StruggleDrainMultiplier`、鱼负载倍率或鱼等效努力距离，也没有新增一笔主动位移费用。纯横切的沿线投影为零时，这版鱼对抗费用为零；带载绕弧额外消耗、转弯代价仍未实现，不能声称所有绕游都能耗鱼。
 
-鱼自由游动、正常右键回体及既有免耗条件保留。正常右键仍恢复猫体力并免双方费用；猫零体力且无有效助手时的强制拖水优先，普通行为时钟、连续对抗预算和策略随机流均暂停，实际出力覆盖为1，不能借缓游解除。鱼力竭、上岸、坏竿和捕获仍由原权威入口裁决。
+鱼自由游动及既有免耗条件保留。正常右键只在线杯尚有可放线余量时恢复猫体力并免双方费用；已放线长度到达上限后，右键失去放线和回体效果，按原不放线规则结算，详见“线放尽后的输入与费用”。猫零体力且无有效助手时的强制拖水优先，普通行为时钟、连续对抗预算和策略随机流均暂停，实际出力覆盖为1，不能借缓游解除。鱼力竭、上岸、坏竿和捕获仍由原权威入口裁决。
 
 猫不按鱼状态名追加倍率。移动和收线使用实际主动距离与负载，转杆使用实际主动正功，共享支撑按相对负载平方与时间收费。鱼降低出力可以间接减少猫的负担，但惯性和几何约束可能继续维持张力；进入缓游既不免猫收线费，也不使猫自动回血。
 
@@ -164,6 +164,28 @@ FishDrain_points = FishEffortStaminaPerSecond × u² × G × dt_seconds
 ## 当前实现概况
 
 当前源码使用连续主动推力、固定正常水阻、共同鱼线张力、有限出力收线和持久鱼速度。猫端由 CharacterMovement 执行真实移动与碰撞，鱼端使用服务器固定步；这是交错推进的约束模型，尚不是完整的三维刚体/接触摩擦求解器。鱼仍在水面平面上求解，再由现有地形入口解析岸线和坡面。不可满足的竿尖高差保留几何误差，不凭空抬鱼或放线。
+
+### 线放尽后的输入与费用（2026-09-08）
+
+用户确认：已放线长度达到鱼竿最大线长后，继续按右键等同于没有按右键，不恢复猫体力；鱼向外发力且鱼线绷紧时，直接进入现有锁线角力。判据由 `FCatFishingFightSimulator::IsLineAtMaximum` 统一比较已放出的 `LineLengthCentimeters` 与 `MaximumLineLengthCentimeters`，单位均为 cm，不是鱼与竿尖的直线距离。线放尽后鱼游近形成余线也不恢复右键回体；只有实际收短到上限以下，线杯重新有余量，持续按住的右键才可再次放线回体。线杯有余量时，仍不要求鱼正在向外游或本步实际出线。
+
+输入入口仍为 Ability → CommandComponent → Session → Runner。Runner 保留原始 `bSlackHeld` 按键事实；线杯有余量时右键优先于左键，满线时 `RefreshCatAction` 忽略右键，恢复仍按住的左键 `Pull`，否则为 `None` 锁线。右键首次按下的转向意图重设仍沿用原 Session 入口，不因满线伪造释放或二次按下。未满线开始、在本步实际出线至上限时，`FinalizeResolvedStep` 按最终线长取消本步回体与双方免耗；后续步继续按有效输入走同一个求解器。
+
+满线不新增全员固定扣费、第二份体力算法或耐久惩罚。猫仍按已经完成的移动/收线、转杆正功和持续支撑付费，主辅共享费用沿用原力量贡献分摊；鱼仍按实际出力 `u²`、有效对抗 `G` 和持续时间付费；耐久仍只磨损本场绑定的鱼竿实例。余线或向内游动没有有效张力时，也不会仅因满线强行扣对抗费用。
+
+`ResolveFishSurfaceFromAuthority` 在开步线杯尚有余量时，允许按最终岸线落点重算并封顶本步实际出线；候选碰到上限、随后被岸线阻挡且实际没有放满时，不提前取消回体。最终费用重算后，Runner 按最终线长刷新有效动作再交给 Session 快照，原 ASC/Equipment 仍只提交一次。零体力强制拖水已覆盖成 `None` 的动作不在最终刷新时被残留右键改回放线；无人值守、鱼力竭回收免耗、坏竿和逃脱终局仍保留各自既定规则，力竭收尾处于满线时同样不能借右键回体。
+
+本次不增加平衡参数、INI 绑定、DataAsset 字段或资产迁移入口，既有 `SlackStaminaRegenPerSecond` 的单位和未满线行为不变。修改前工作区干净；历史已记录初级竿500/150耐久断言及两项坏竿收纳夹具准备失败。旧满线免耗/回体断言与文档口径已替换，不新增独立满线费用算法；原始按键和首次重设入口仍有明确的 Command/Session 消费者。历史“满线张力不阻止右键回体”规则与相应通过报告只说明当时版本，不再作为现行契约或本次验收证据。
+
+本轮验证后发现外部并行任务正在修改 `Source/Catfishing/Fishing/Simulation/CatFishingFightWorkModel.cpp/.h`，将 `ComputeFishEffortDrain` 迁至 `ComputeFishIntentDrain`。这两文件的改动保留且不纳入本次满线修复提交；下列构建与回归对应迁移前鱼费用模型上的满线修复，尚未验证与该进行中迁移组合后的行为。本节费用说明也以这一已验证版本为边界，不能据此判断并行迁移已经完成或无需组合回归。
+
+contract：证据位于 `Saved/Automation/LineLimit-20260908/`。`BuildGame.log` 的 Game Win64 Development 与 `BuildEditorDebug.log` 的 Editor Win64 DebugGame 构建成功；`BuildEditor.log` 的普通 Editor Development 源码编译成功，但已打开的 UnrealEditor 占用 DLL，完整链接失败。最终 `DebugReport/index.json` 为162项：155 clean、6 warning、1 failed、0 notRun；唯一失败仍是 `StarterRodPreservesMaximumDurabilityBaseline` 要求150、正式资产实际500，未改此范围外资产。警告涉及既有旧 `WBP_CatLakeReach` 父类缺失、终态/危险水深诊断，日志另含 EOS_NoConnection 环境信息。`DebugTests.log` 明确记录 `Build Configuration: DebugGame` 并加载本轮新 DebugGame DLL。`BaselineReport` 的旧用例1/1和 `Report/index.json` 的161项（160通过、1既有耐久失败）均实际运行旧 Development DLL，只作为修改前基线，不能替代本次回归。
+
+runtime_behavior：本轮三项满线用例通过，覆盖满线右键与锁线的同模型受力/体力/耐久对照、当步放满、最终实际线长重算、鱼游近形成余线、实际收短后恢复，以及线杯有余量时移动/转杆不妨碍回体。真实 ASC/Runner 的参与者用例验证原始右键保留、满线有效输入、主辅资源与恢复；`LiveAndExhaustedFishTraverseRealShoreGapAndSlope` 通过实际水域/岸线消费者覆盖候选满线但岸挡回未实际放满、原已满线不因鱼游近回体。四项 SlackAim 通过，继续验证 Command→Session→Runner 输入边沿及真实 Rod 转向/努力契约；零体力拖水与既有收尾回归通过。这些是纯模型和受控真实消费者证据，没有运行完整的新版本房主/客户端固定步链。
+
+日志核对使用 `LogCatFishing` 的 `fishing_line_limit_changed`，以 `SessionId/RodActorId` 关联 `AtLimit/SlackHeld/EffectiveAction/SlackRecovery`、线长和单步费用；该事件仅在首步或满线状态边沿输出，已编译进 Game Development，尚未取得完整 `HandleFixedStep` 实际触发该新事件的日志。既有 `fishing_fish_stamina_received` 增加 `Slacking/Reeling`，继续配合 `fishing_coupled_work_sample` 与 `fishing_cat_stamina_applied` 检索。新鲜受控回归日志是 `Saved/Automation/LineLimit-20260908/DebugTests.log`，不能将它当成打包双端落盘证据。
+
+presentation_delivery：未运行本轮 Cook/打包、正式地图真人操作及无 `-log` 房主/客户端双端落盘验收。当前已打开的普通 Editor 仍使用旧 Development DLL；须关闭 Editor 后完成普通 Development 完整构建，再在新模块上体验。上述局部验证不关闭 Fishing 模块级验收缺口。
 
 ## 一条完整调用链
 
@@ -263,7 +285,7 @@ Development 权威日志 `Event=fishing_simulation_trace` 默认按约 1 秒和�
 - 转杆按独立的正功弧度单价计费，转矩积分的 Epoch 与累计时长继续防止换人或补步重复消费。
 - 共享支撑按 `CatSupportStaminaPerSecond × dt × 自身相对负载²`，转杆只补超过共享支撑的部分。停转没有收线正功，仍可能有持竿支撑费用。
 - 鱼按 `FishEffortStaminaPerSecond × u² × G × dt` 支付对抗出力费用，G 使用最终张力相对固定正常最大推力及主动方向的沿线投影；自由游动免耗，不把被拖位移或旧等效努力距离另收费。
-- 正常右键恢复猫体力并免除双方费用；零体力强制拖拽优先。鱼已力竭后回收仍免猫耗体。
+- 线杯尚有余量时，正常右键恢复猫体力并免除双方费用；达到已放线长度上限后停止回体与该项免耗，复用无右键的原对抗结算，不另加一笔满线费用。零体力强制拖拽优先，鱼已力竭后回收仍免猫耗体。
 
 耐久继续只有 Equipment 中绑定 `RodItemInstanceId` 的一份实例事实，Session 只复制镜像。方向性磨损仍受最终真实约束及向外负载控制，原按 `bStruggling` 加的基础磨损改为 `FishFullEffortRodWearPerSecond × u²`，该新运行字段从 `RodDefinition.BaseDurabilityWearPerSecond` 冻结，不读取动画分类；最终解除张力后不按临时负载收费；坏竿优先于同期鱼力竭。取消、换人、收杆、开新会话都不恢复已磨损耐久。初级竿当前正式资产为 500，既有测试仍要求 150；本轮不重新平衡或覆盖该用户资产。
 

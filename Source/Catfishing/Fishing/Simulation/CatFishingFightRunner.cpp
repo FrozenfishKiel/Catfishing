@@ -378,7 +378,8 @@ void UCatFishingFightRunner::RefreshCatAction()
 	const FCatFightParticipantRuntime* Primary = FindPrimaryParticipant();
 	State.CatAction = !State.bOperatorPresent || !Primary
 		? ECatFightCatAction::Slack
-		: Primary->bSlackHeld ? ECatFightCatAction::Slack
+		: Primary->bSlackHeld && !FCatFishingFightSimulator::IsLineAtMaximum(Config, State.LineLengthCentimeters)
+			? ECatFightCatAction::Slack
 		: Primary->bPullHeld ? ECatFightCatAction::Pull : ECatFightCatAction::None;
 }
 
@@ -739,12 +740,14 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 			FVector::Distance(RodConstraint.RodTipWorldPosition, Step.ProposedFishWorldPosition),
 			FVector::Distance(RodConstraint.RodTipWorldPosition, State.FishWorldPosition));
 		ShoreInput.bReeling = State.CatAction == ECatFightCatAction::Pull;
-		ShoreInput.bSlacking = State.CatAction == ECatFightCatAction::Slack;
+		// 开步尚有容量时允许按最终岸线落点校正本步出线；候选放满不等于实际已放满。
+		ShoreInput.bSlacking = State.CatAction == ECatFightCatAction::Slack
+			&& (!State.bOperatorPresent || !FCatFishingFightSimulator::IsLineAtMaximum(Config, State.LineLengthCentimeters));
 		const FCatFishShoreContactResult ShoreContact = FCatFishFightMotionSolver::ResolveLiveFishShoreContact(ShoreInput);
 		if (!ShoreContact.bSucceeded) return Motion;
 		Motion.bSucceeded = true;
 		Motion.FishWorldPosition = ShoreContact.FishWorldPosition;
-		Step.LineLengthCentimeters = ShoreContact.LineLengthCentimeters;
+		Step.LineLengthCentimeters = FMath::Min(Config.MaximumLineLengthCentimeters, ShoreContact.LineLengthCentimeters);
 		bShoreContactThisStep = ShoreContact.bShoreContact;
 		if (bShoreContactThisStep && !FCatFishSteeringModel::RedirectFromWaterBoundary(
 			SteeringConfig, OutWater.WaterwardDirection, SteeringRandom, SteeringState))
@@ -1371,7 +1374,31 @@ void UCatFishingFightRunner::HandleFixedStep()
 				*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(SessionActor->GetLocalRole()));
 		}
 	}
+	const double PreviousLineLength = State.LineLengthCentimeters;
 	State.LineLengthCentimeters = Step.LineLengthCentimeters;
+	// 保留原始按键，按最终线杯容量刷新有效动作；本步放尽后发布的快照立即退出放线。
+	// 本步强制拖水已经把动作覆盖为 None；最终刷新不得用残留右键重新标成放线。
+	if (!Step.bExhaustedCatEscape) RefreshCatAction();
+	const bool bLineAtMaximum = FCatFishingFightSimulator::IsLineAtMaximum(Config, State.LineLengthCentimeters);
+	if (DiagnosticFixedStepSequence == 1
+		|| bLineAtMaximum != FCatFishingFightSimulator::IsLineAtMaximum(Config, PreviousLineLength))
+	{
+		const FCatFightParticipantRuntime* Primary = FindPrimaryParticipant();
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_line_limit_changed SessionId=%s RodActorId=%s PlayerId=%d "
+				"PreviousLineLengthCm=%.3f LineLengthCm=%.3f MaximumLineLengthCm=%.3f AtLimit=%s "
+				"SlackHeld=%s EffectiveAction=%s SlackRecovery=%s CatStaminaDrain=%.4f SharedCatStaminaDrain=%.4f "
+				"FishStaminaDrain=%.4f RodWearDelta=%.4f Result=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
+			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
+			Primary && Primary->PlayerState.IsValid() ? Primary->PlayerState->GetPlayerId() : INDEX_NONE,
+			PreviousLineLength, State.LineLengthCentimeters, Config.MaximumLineLengthCentimeters,
+			bLineAtMaximum ? TEXT("true") : TEXT("false"), Primary && Primary->bSlackHeld ? TEXT("true") : TEXT("false"),
+			State.CatAction == ECatFightCatAction::Pull ? TEXT("Pull") : State.CatAction == ECatFightCatAction::Slack ? TEXT("Slack") : TEXT("None"),
+			Step.bSlackRecoveryActive ? TEXT("true") : TEXT("false"), Step.CatStaminaDrain, Step.GetSharedCatStaminaDrain(),
+			Step.FishStaminaDrain, Step.RodWearDelta, bLineAtMaximum ? TEXT("NormalLockedContest") : TEXT("LineCapacityAvailable"),
+			*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(SessionActor->GetLocalRole()));
+	}
 	State.AbsoluteRodWear = Step.AbsoluteRodWear;
 	State.StrongConfrontationBuildUpSeconds = Step.StrongConfrontationBuildUpSeconds;
 	// 保存受力积分速度，地形修正在 ResolveFishSurface 中反馈；几何纠偏不能变成下一步惯性。
