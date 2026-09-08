@@ -148,11 +148,11 @@ FCatPlaceChumResult UCatChumPlacementService::PlaceChum(APlayerController* Reque
 	{
 		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::InvalidPayload));
 	}
-	// 正式库存版本裁决：新命令读 ExpectedInventoryRevision，旧蓝图只填历史字段时才兼容回退，Equipment Snapshot 不再参与数量并发判断。
+	// 正式库存版本裁决：新命令读 ExpectedInventoryRevision，旧蓝图只填历史字段时才兼容回退；冲突返回库存错误码，避免日志和 UI 把扣量失败误读成装备选择过期。
 	const int64 ExpectedInventoryRevision = Command.GetExpectedInventoryRevision();
 	if (OwnerInventory->GetInventoryRevision() != ExpectedInventoryRevision)
 	{
-		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::EquipmentRevisionConflict));
+		return FinalizeFirstResult(MakeError(Command.RequestId, ECatChumFieldError::InventoryRevisionConflict));
 	}
 	UCatWaterQuerySubsystem* WaterQuery = World->GetSubsystem<UCatWaterQuerySubsystem>();
 	if (!WaterQuery)

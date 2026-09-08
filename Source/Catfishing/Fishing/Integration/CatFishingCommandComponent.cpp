@@ -1264,6 +1264,7 @@ void UCatFishingCommandComponent::ReceivePlaceChumResultLocally(const FCatPlaceC
 	case ECatChumFieldError::InvalidWaterTarget: Common.Error = ECatFishingCommandError::InvalidWaterTarget; break;
 	case ECatChumFieldError::StaleGeometry: Common.Error = ECatFishingCommandError::RevisionConflict; break;
 	case ECatChumFieldError::PlacementOutOfRange: Common.Error = ECatFishingCommandError::CastOutOfRange; break;
+	case ECatChumFieldError::InventoryRevisionConflict: Common.Error = ECatFishingCommandError::RevisionConflict; break;
 	case ECatChumFieldError::EquipmentRevisionConflict: Common.Error = ECatFishingCommandError::EquipmentRevisionConflict; break;
 	case ECatChumFieldError::AlreadyResolved: Common.Error = ECatFishingCommandError::AlreadyResolved; break;
 	default: Common.Error = ECatFishingCommandError::DependencyUnavailable; break;

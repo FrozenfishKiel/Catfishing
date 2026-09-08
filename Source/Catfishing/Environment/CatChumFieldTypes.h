@@ -30,11 +30,14 @@ enum class ECatChumFieldError : uint8
 	StaleGeometry,
 	PlacementOutOfRange,
 	PlacementOccluded,
+	/** 旧打窝协议留下的装备版本冲突值；保留给历史结果和蓝图枚举兼容，新库存扣量路径不再主动返回它。 */
 	EquipmentRevisionConflict,
 	EquipmentUnavailable,
 	FieldCapacityExceeded,
 	AlreadyResolved,
-	DependencyUnavailable
+	DependencyUnavailable,
+	/** 正式库存版本已经过期；打窝服务用它表达窝料扣量看到的背包事实和提交方不一致。 */
+	InventoryRevisionConflict
 };
 
 struct FCatChumRuntimeInfluence;
