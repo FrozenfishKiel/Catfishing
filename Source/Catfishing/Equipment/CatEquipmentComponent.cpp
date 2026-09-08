@@ -1761,7 +1761,8 @@ FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FG
 	// Fishing 使用释放流程：
 	// 1. 先按 SessionId 找到 Begin 留下的短生命周期记录；旧会话和重复释放只返回稳定终态。
 	// 2. 如果饵料还没确认消耗，就把这一份按 DefinitionId 归还给正式库存，背包已满时由库存事务追加返还格。
-	// 3. 归还后刷新旧投影并修正同定义空选择，再关闭记录；已确认消耗的会话只关闭记录，不再碰库存。
+	// 3. 归还前用正式库存确认当前选择是否还有可见数量；归还后刷新旧投影并修正空选择，再关闭记录。
+	// 4. 已确认消耗的会话只关闭记录，不再碰库存或旧投影。
 	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
 	if (!Record)
 	{
@@ -1801,9 +1802,10 @@ FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FG
 			ReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
 		DefinitionEntry.ItemDefinition = Bait;
 		DefinitionEntry.Count = 1;
+		// 鱼饵选择修复只问正式 InventoryComponent 还有没有同定义可见数量；旧 Snapshot 在这里只保存当前选择字段，不再当数量来源。
 		const bool bShouldRepairBaitSelection = Snapshot.BaitDefinitionId == RestoredDefinitionId
 			|| Snapshot.BaitDefinitionId.IsNone()
-			|| GetInventoryItemQuantity(Snapshot.BaitDefinitionId) <= 0;
+			|| OwnerInventory->CountVisibleInventoryQuantityByDefinitionId(Snapshot.BaitDefinitionId) <= 0;
 		if (bShouldRepairBaitSelection)
 		{
 			Snapshot.BaitDefinitionId = RestoredDefinitionId;
@@ -2479,24 +2481,6 @@ bool UCatEquipmentComponent::HasActiveInventoryItemUse() const
 		return OwnerInventory->HasActiveHeldInventoryEntriesFromAuthority();
 	}
 	return false;
-}
-
-// 库存数量读取流程：按定义 ID 汇总当前随身库存格数组；None、空格和非正数量都统一视为没有可用实物。
-int32 UCatEquipmentComponent::GetInventoryItemQuantity(const FName DefinitionId) const
-{
-	if (DefinitionId.IsNone())
-	{
-		return 0;
-	}
-	int32 Quantity = 0;
-	for (const FCatRunInventorySlot& Slot : Snapshot.InventorySlots)
-	{
-		if (Slot.DefinitionId == DefinitionId && Slot.Quantity > 0)
-		{
-			Quantity += Slot.Quantity;
-		}
-	}
-	return Quantity;
 }
 
 FCatRunInventorySlot* UCatEquipmentComponent::FindInventorySlotByInstanceId(const FGuid ItemInstanceId)

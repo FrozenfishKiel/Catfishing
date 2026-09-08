@@ -290,6 +290,9 @@ public:
 	/** 按稳定定义 ID 查找第一格可消费库存；材料消耗和旧选择修复用它回到正式库存事实。 */
 	int32 FindFirstInventorySlotIndexByDefinitionId(FName DefinitionId) const;
 
+	/** 当前可见库存数量表示玩家背包格里仍可整理、可选择的同定义总数；选择修复和可用性判断读取它，不包含 held 活动区、Fishing 会话预留或其他已离开可见槽位的实例。 */
+	int32 CountVisibleInventoryQuantityByDefinitionId(FName DefinitionId) const;
+
 	/** 读取当前库存槽位数量；用于 UI 创建格子和交换操作校验下标。 */
 	int32 GetInventorySlotCount() const;
 

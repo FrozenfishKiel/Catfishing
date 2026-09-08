@@ -163,8 +163,6 @@ private:
 		const FCatFishingUseRecord& Record, FCatRunInventorySlot& OutProjectedSlot) const;
 	/** 是否存在正式库存活动区尚未收口的物品 Use；维修和失败预算用它避免改写正在由场景持有的物品状态。 */
 	bool HasActiveInventoryItemUse() const;
-	/** 读取某个定义在旧库存投影中的可见数量；选择自动切换用它判断旧选择是否还能对应到投影实物。 */
-	int32 GetInventoryItemQuantity(FName DefinitionId) const;
 	/** 新入库或收回物品后修正钓鱼选择；已收回的坏竿可跨型号替换为库存里的可用竿，部署中与健康选择保持不变。 */
 	void AutoSelectGrantedInventoryItem(const UCatEquipmentDefinition& Definition, FName DefinitionId);
 	/** 把当前选择中的鱼竿状态同步到正式库存实例和活动记录镜像；耐久和断竿事实必须跟最终归还的实例一致。 */

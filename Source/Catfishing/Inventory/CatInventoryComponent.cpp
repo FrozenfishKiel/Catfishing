@@ -1675,6 +1675,30 @@ int32 UCatInventoryComponent::FindFirstInventorySlotIndexByDefinitionId(const FN
 	return INDEX_NONE;
 }
 
+// 可见库存数量汇总流程：
+// 1. 空定义 ID 直接返回 0，避免调用方把缺配置当成“任意物品都有数量”。
+// 2. 只遍历 InventoryList 的正式可见槽位，要求实例有效、数量为正且定义 ID 精确匹配。
+// 3. held 活动区和 Fishing 会话预留不从这里叠加，因为它们已经离开玩家当前可整理、可选择的背包格。
+int32 UCatInventoryComponent::CountVisibleInventoryQuantityByDefinitionId(const FName DefinitionId) const
+{
+	if (DefinitionId.IsNone())
+	{
+		return 0;
+	}
+
+	int32 Quantity = 0;
+	for (const FCatInventoryEntry& Entry : InventoryList.Entries)
+	{
+		if (Entry.Instance != nullptr
+			&& Entry.StackCount > 0
+			&& Entry.Instance->GetItemDefinitionId() == DefinitionId)
+		{
+			Quantity += Entry.StackCount;
+		}
+	}
+	return Quantity;
+}
+
 // 槽位数量读取流程：返回当前数组长度，可能大于配置 NumSlots，因为运行期不会截断已有物品。
 int32 UCatInventoryComponent::GetInventorySlotCount() const
 {
