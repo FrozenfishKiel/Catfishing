@@ -69,7 +69,7 @@ private:
 	/** 设置库存打开态并成对处理视口、输入模式和 Model 打开投影；普通切换和交互打开共用这条生命周期。 */
 	void SetInventoryOpen(bool bOpen);
 
-	/** 加载 Settings 中配置的库存 Action，并绑定到当前 EnhancedInputComponent；按键映射必须来自既有 InputContext。 */
+	/** 加载 Settings 中配置的库存 Action，并绑定到当前 EnhancedInputComponent；若与主菜单 Action 相同则主动避让主菜单。 */
 	void InstallInventoryInput();
 
 	/** 从原 EnhancedInputComponent 精确移除库存 Action 绑定，再释放配置资产强引用。 */

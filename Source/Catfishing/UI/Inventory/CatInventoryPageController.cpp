@@ -865,7 +865,8 @@ void UCatInventoryPageController::SetInventoryOpen(const bool bOpen)
 // 输入安装流程：
 // 1. 要求 Controller 当前 InputComponent 是 EnhancedInputComponent。
 // 2. 从 UI Settings 加载已有 InputContext 中的库存 Action，并把 IMC 加载作为资产接线校验。
-// 3. 只 BindAction，不 AddMappingContext、不 MapKey，避免运行时代码写死按键或生成第二套 IMC。
+// 3. 如果库存 Action 与主菜单 Action 相同，本页主动不绑定，避免 Escape 同时打开背包和局内菜单。
+// 4. 只 BindAction，不 AddMappingContext、不 MapKey，避免运行时代码写死按键或生成第二套 IMC。
 void UCatInventoryPageController::InstallInventoryInput()
 {
 	RemoveInventoryInput();
@@ -873,6 +874,7 @@ void UCatInventoryPageController::InstallInventoryInput()
 	UEnhancedInputComponent* Input = Controller ? Cast<UEnhancedInputComponent>(Controller->InputComponent) : nullptr;
 	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
 	UInputAction* ToggleAction = Settings ? Settings->LoadInventoryToggleAction() : nullptr;
+	UInputAction* MainMenuAction = Settings ? Settings->LoadMainMenuToggleAction() : nullptr;
 	const UInputMappingContext* MappingContext = Settings ? Settings->LoadGameplayInputMappingContext() : nullptr;
 	if (!Input || !Settings || !ToggleAction || !MappingContext)
 	{
@@ -880,6 +882,13 @@ void UCatInventoryPageController::InstallInventoryInput()
 			*GetNameSafe(Controller),
 			Settings ? *Settings->InventoryToggleAction.ToSoftObjectPath().ToString() : TEXT("None"),
 			Settings ? *Settings->GameplayInputMappingContext.ToSoftObjectPath().ToString() : TEXT("None"));
+		return;
+	}
+	if (MainMenuAction && ToggleAction == MainMenuAction)
+	{
+		UE_LOG(LogCatUI, Log,
+			TEXT("Event=ui_inventory_input_reserved_for_lake_menu Controller=%s Action=%s"),
+			*GetNameSafe(Controller), *GetNameSafe(ToggleAction));
 		return;
 	}
 	AppliedInventoryToggleAction = ToggleAction;

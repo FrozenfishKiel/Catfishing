@@ -8,8 +8,9 @@
 #include "UI/Interaction/CatInteractionPromptWidget.h"
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
+#include "UI/Save/CatLakeMainMenuWidget.h"
 
-// 构造流程：为正式拆分的 HUD、背包、交互提示 WBP 和输入资产写入稳定软路径；输入 Action 放在项目既有 InputContext 下维护，运行时代码只加载资产和绑定 Action。
+// 构造流程：为正式拆分的 HUD、背包、交互提示、局内菜单和输入资产写入稳定软路径；输入 Action 放在项目既有 InputContext 下维护，运行时代码只加载资产和绑定 Action。
 UCatUISettings::UCatUISettings()
 {
 	HUDWidgetClass = TSoftClassPtr<UCatHUDWidget>(
@@ -22,6 +23,10 @@ UCatUISettings::UCatUISettings()
 		FSoftClassPath(TEXT("/Game/UI/InventorySlot/WBP_CatInventorySlot.WBP_CatInventorySlot_C")));
 	InteractionPromptWidgetClass = TSoftClassPtr<UCatInteractionPromptWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Interaction/WBP_CatInteractionPrompt.WBP_CatInteractionPrompt_C")));
+	LakeMainMenuWidgetClass = TSoftClassPtr<UCatLakeMainMenuWidget>(
+		FSoftClassPath(TEXT("/Script/Catfishing.CatLakeMainMenuWidget")));
+	MainMenuToggleAction = TSoftObjectPtr<UInputAction>(
+		FSoftObjectPath(TEXT("/Game/Input/InputAction/IA_LakeMenu.IA_LakeMenu")));
 	InventoryToggleAction = TSoftObjectPtr<UInputAction>(
 		FSoftObjectPath(TEXT("/Game/Input/InputAction/IA_LakeMenu.IA_LakeMenu")));
 	InteractionConfirmAction = TSoftObjectPtr<UInputAction>(
@@ -91,6 +96,23 @@ TSubclassOf<UCatInteractionPromptWidget> UCatUISettings::LoadInteractionPromptWi
 	return LoadedClass;
 }
 
+// 局内菜单类加载流程：同步解析配置软类并验证继承菜单基类；失败返回空，避免 LocalPlayer 创建无交互空页。
+TSubclassOf<UCatLakeMainMenuWidget> UCatUISettings::LoadLakeMainMenuWidgetClass() const
+{
+	UClass* LoadedClass = LakeMainMenuWidgetClass.LoadSynchronous();
+	if (!LoadedClass || !LoadedClass->IsChildOf(UCatLakeMainMenuWidget::StaticClass()))
+	{
+		return nullptr;
+	}
+	return LoadedClass;
+}
+
+// 主菜单 Action 加载流程：同步解析配置软引用；失败返回空，让菜单控制器记录降级且不硬写 Escape。
+UInputAction* UCatUISettings::LoadMainMenuToggleAction() const
+{
+	return MainMenuToggleAction.LoadSynchronous();
+}
+
 // 背包 Action 加载流程：同步解析配置软引用；失败返回空，让 PageController 记录降级并保留鼠标按钮入口。
 UInputAction* UCatUISettings::LoadInventoryToggleAction() const
 {
@@ -111,11 +133,39 @@ UInputMappingContext* UCatUISettings::LoadGameplayInputMappingContext() const
 
 // 背包键名解析流程：
 // 1. 先加载配置的 Action 和 Mapping Context，缺任一资产都返回 None。
-// 2. 再遍历 IMC 默认映射，找到该 Action 的第一条有效按键。
-// 3. 结果只用于 UIOnly 焦点下关闭背包和提示文案，不参与运行时重新 MapKey。
+// 2. 如果该 Action 已被局内主菜单占用，背包快捷键提示返回 None，避免把 Escape 继续显示成背包键。
+// 3. 再遍历 IMC 默认映射，找到该 Action 的第一条有效按键。
+// 4. 结果只用于 UIOnly 焦点下关闭背包和提示文案，不参与运行时重新 MapKey。
 FName UCatUISettings::ResolveInventoryToggleKeyName() const
 {
 	const UInputAction* Action = LoadInventoryToggleAction();
+	const UInputAction* MainMenuAction = LoadMainMenuToggleAction();
+	const UInputMappingContext* MappingContext = LoadGameplayInputMappingContext();
+	if (!Action || !MappingContext)
+	{
+		return NAME_None;
+	}
+	if (MainMenuAction && Action == MainMenuAction)
+	{
+		return NAME_None;
+	}
+	for (const FEnhancedActionKeyMapping& Mapping : MappingContext->GetMappings())
+	{
+		if (Mapping.Action == Action && Mapping.Key.IsValid())
+		{
+			return Mapping.Key.GetFName();
+		}
+	}
+	return NAME_None;
+}
+
+// 主菜单键名解析流程：
+// 1. 先加载配置的 Action 和 Mapping Context，缺任一资产都返回 None。
+// 2. 再遍历 IMC 默认映射，找到该 Action 的第一条有效按键。
+// 3. 结果只用于菜单提示或未来 WBP 文案，不参与运行时重新 MapKey。
+FName UCatUISettings::ResolveMainMenuToggleKeyName() const
+{
+	const UInputAction* Action = LoadMainMenuToggleAction();
 	const UInputMappingContext* MappingContext = LoadGameplayInputMappingContext();
 	if (!Action || !MappingContext)
 	{

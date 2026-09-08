@@ -23,6 +23,8 @@
 #include "UI/Inventory/CatInventoryPageController.h"
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
+#include "UI/Save/CatLakeMainMenuController.h"
+#include "UI/Save/CatLakeMainMenuWidget.h"
 
 // 初始化流程：先订阅唯一 Online 快照，再弱绑定当前 Controller；本地玩家 UI 模块是否装配由 AttachPlayerLakeUI 统一验证 WBP 配置。
 void UCatLocalPlayerUISubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -347,16 +349,17 @@ void UCatLocalPlayerUISubsystem::UnbindController()
 }
 
 // Pawn 变化流程：
-// 1. 先把 NewPawn 裁成项目猫身体；同一个已装配身体的重复通知只刷新输入绑定，库存数据继续等自己的读源广播。
+// 1. 先把 NewPawn 裁成项目猫身体；同一个已装配身体的重复通知只刷新输入绑定，库存和菜单数据继续等自己的读源广播。
 // 2. 新身体或空身体会先完整拆掉上一套本地玩家 UI，避免跨 Pawn 复用 Model、View 或输入锁。
 // 3. 只有新的 ACatCharacter 通过配置校验时才重新装配 HUD、背包、交互提示和拾取提示层。
 void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 {
 	ACatCharacter* Character = Cast<ACatCharacter>(NewPawn);
 	if (Character && AttachedPlayerLakeCharacter.Get() == Character
-		&& HUDWidget && InventoryPageController && InteractionPageController)
+		&& HUDWidget && InventoryPageController && LakeMainMenuController && InteractionPageController)
 	{
 		InventoryPageController->RefreshInputBinding();
+		LakeMainMenuController->RefreshInputBinding();
 		return;
 	}
 	DetachPlayerLakeUI();
@@ -365,17 +368,18 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 		return;
 	}
 	AttachPlayerLakeUI(Character);
-	if (HUDWidget && InventoryPageController && InteractionPageController)
+	if (HUDWidget && InventoryPageController && LakeMainMenuController && InteractionPageController)
 	{
 		AttachedPlayerLakeCharacter = Character;
 	}
 }
 
 // 本地玩家 UI 装配流程：
-// 1. 验证本地设置、当前 Controller/Pawn 和 World；核心 WBP 类缺失或无效时直接 fail-closed，不创建原生白盒替身。
+// 1. 验证本地设置、当前 Controller/Pawn 和 World；核心 WBP 类缺失或无效时直接 fail-closed，局内菜单可用原生 fallback。
 // 2. 创建 HUD Model/View 并入视口；默认常驻天数、背包入口、设置入口和中心准星，背包内容由库存页打开后再显示。
 // 3. 创建 Inventory Model/PageController/普通背包 View，但背包 View 不预先入视口，只通过既有 InputContext 的 Action 打开。
-// 4. 创建 Interaction 提示 View 和控制器；控制器订阅 PlayerController 的唯一准星交互目标，商店、鱼护和未来箱子仍由世界交互对象提供页面上下文。
+// 4. 创建局内主菜单 View/Controller；菜单不常驻视口，只在主菜单 Action 或 HUD 按钮触发时打开。
+// 5. 创建 Interaction 提示 View 和控制器；控制器订阅 PlayerController 的唯一准星交互目标，商店、鱼护和未来箱子仍由世界交互对象提供页面上下文。
 void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 {
 	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
@@ -394,14 +398,17 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	const TSubclassOf<UCatInventorySlotWidget> InventorySlotViewClass = Settings->LoadInventorySlotWidgetClass();
 	const TSubclassOf<UCatInteractionPromptWidget> InteractionPromptViewClass =
 		Settings->LoadInteractionPromptWidgetClass();
-	if (!HUDViewClass || !InventoryViewClass || !InventorySlotViewClass || !InteractionPromptViewClass)
+	const TSubclassOf<UCatLakeMainMenuWidget> LakeMainMenuViewClass = Settings->LoadLakeMainMenuWidgetClass();
+	if (!HUDViewClass || !InventoryViewClass || !InventorySlotViewClass || !InteractionPromptViewClass
+		|| !LakeMainMenuViewClass)
 	{
 		UE_LOG(LogCatUI, Warning,
-			TEXT("Event=ui_player_module_class_missing HUD=%s Inventory=%s Slot=%s Interaction=%s"),
+			TEXT("Event=ui_player_module_class_missing HUD=%s Inventory=%s Slot=%s Interaction=%s LakeMenu=%s"),
 			*Settings->HUDWidgetClass.ToSoftObjectPath().ToString(),
 			*Settings->InventoryWidgetClass.ToSoftObjectPath().ToString(),
 			*Settings->InventorySlotWidgetClass.ToSoftObjectPath().ToString(),
-			*Settings->InteractionPromptWidgetClass.ToSoftObjectPath().ToString());
+			*Settings->InteractionPromptWidgetClass.ToSoftObjectPath().ToString(),
+			*Settings->LakeMainMenuWidgetClass.ToSoftObjectPath().ToString());
 		return;
 	}
 
@@ -410,10 +417,12 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	InventoryModel = NewObject<UCatInventoryModel>(this);
 	InventoryPageController = NewObject<UCatInventoryPageController>(this);
 	InventoryWidget = CreateWidget<UCatInventoryWidget>(Controller, InventoryViewClass);
+	LakeMainMenuController = NewObject<UCatLakeMainMenuController>(this);
+	LakeMainMenuWidget = CreateWidget<UCatLakeMainMenuWidget>(Controller, LakeMainMenuViewClass);
 	InteractionPageController = NewObject<UCatInteractionPageController>(this);
 	InteractionPromptWidget = CreateWidget<UCatInteractionPromptWidget>(Controller, InteractionPromptViewClass);
 	if (!HUDModel || !HUDWidget || !InventoryModel || !InventoryPageController || !InventoryWidget
-		|| !InteractionPageController || !InteractionPromptWidget)
+		|| !LakeMainMenuController || !LakeMainMenuWidget || !InteractionPageController || !InteractionPromptWidget)
 	{
 		DetachPlayerLakeUI();
 		return;
@@ -430,7 +439,8 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	HUDWidget->AddToViewport(1);
 	HandleHUDModelViewStateChanged();
 	if (!InventoryModel->Bind(GetLocalPlayer(), Controller, Character)
-		|| !InventoryPageController->Bind(GetLocalPlayer(), Controller, InventoryModel, InventoryWidget))
+		|| !InventoryPageController->Bind(GetLocalPlayer(), Controller, InventoryModel, InventoryWidget)
+		|| !LakeMainMenuController->Bind(GetLocalPlayer(), Controller, LakeMainMenuWidget))
 	{
 		DetachPlayerLakeUI();
 		return;
@@ -447,7 +457,7 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	const UWorld* World = GetWorld();
 	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	UE_LOG(LogCatUI, Log,
-		TEXT("Event=ui_player_modules_attached World=%s NetMode=%d LocalPlayerIndex=%d Controller=%s LocalController=%s HUD=%s HUDMode=minimal_main Inventory=%s Slot=%s Interaction=%s ShopPrecreated=false"),
+		TEXT("Event=ui_player_modules_attached World=%s NetMode=%d LocalPlayerIndex=%d Controller=%s LocalController=%s HUD=%s HUDMode=minimal_main Inventory=%s Slot=%s LakeMenu=%s Interaction=%s ShopPrecreated=false"),
 		World ? *World->GetName() : TEXT("None"),
 		World ? static_cast<int32>(World->GetNetMode()) : -1,
 		LocalPlayer ? LocalPlayer->GetLocalPlayerIndex() : INDEX_NONE,
@@ -456,12 +466,23 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 		*GetNameSafe(HUDWidget->GetClass()),
 		*GetNameSafe(InventoryWidget->GetClass()),
 		*GetNameSafe(InventorySlotViewClass.Get()),
+		*GetNameSafe(LakeMainMenuWidget ? LakeMainMenuWidget->GetClass() : nullptr),
 		*GetNameSafe(InteractionPromptWidget ? InteractionPromptWidget->GetClass() : nullptr));
 }
 
-// 本地玩家 UI 解绑流程：PageController 先恢复输入并移出当前库存页，Model 再解除玩法订阅，最后移除各自 WBP 并清引用。
+// 本地玩家 UI 解绑流程：PageController 先恢复输入并移出当前模态页，Model 再解除玩法订阅，最后移除各自 WBP 并清引用。
 void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 {
+	if (LakeMainMenuController)
+	{
+		LakeMainMenuController->Unbind();
+		LakeMainMenuController = nullptr;
+	}
+	if (LakeMainMenuWidget)
+	{
+		LakeMainMenuWidget->RemoveFromParent();
+		LakeMainMenuWidget = nullptr;
+	}
 	if (InventoryPageController)
 	{
 		InventoryPageController->Unbind();
@@ -522,7 +543,21 @@ void UCatLocalPlayerUISubsystem::HandleHUDModelViewStateChanged()
 	}
 }
 
-// HUD 入口动作流程：背包转交现有控制器；菜单仍保留给蓝图或后续页面控制器。
+// 局内菜单切换流程：打开菜单前先关闭当前背包页面，保证同一 Controller 上只有一个模态输入恢复记录处于打开状态。
+void UCatLocalPlayerUISubsystem::ToggleLakeMainMenu()
+{
+	if (!LakeMainMenuController)
+	{
+		return;
+	}
+	if (!LakeMainMenuController->IsMenuOpen() && InventoryPageController && InventoryPageController->IsInventoryOpen())
+	{
+		InventoryPageController->RequestCloseInventoryFromWidget();
+	}
+	LakeMainMenuController->ToggleMenu();
+}
+
+// HUD 入口动作流程：背包和主菜单都转交已有控制器；HUD 不再保留没有原生页面的旧空转分支。
 void UCatLocalPlayerUISubsystem::HandleHUDActionRequested(const ECatHUDAction Action)
 {
 	switch (Action)
@@ -531,8 +566,7 @@ void UCatLocalPlayerUISubsystem::HandleHUDActionRequested(const ECatHUDAction Ac
 		ToggleInventory();
 		break;
 	case ECatHUDAction::OpenMainMenu:
-		UE_LOG(LogCatUI, Log, TEXT("Event=ui_hud_action_forwarded_without_native_page Action=%s"),
-			*UEnum::GetValueAsString(Action));
+		ToggleLakeMainMenu();
 		break;
 	default:
 		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_hud_action_unknown Action=%d"), static_cast<int32>(Action));

@@ -1,0 +1,122 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "UI/CatUIModalInputMode.h"
+#include "UObject/Object.h"
+#include "CatLakeMainMenuController.generated.h"
+
+class APlayerController;
+class UCatLakeMainMenuWidget;
+class UCatOnlineSubsystem;
+class UCatSaveSubsystem;
+class UEnhancedInputComponent;
+class UInputAction;
+class ULocalPlayer;
+enum class ECatLakeMainMenuAction : uint8;
+
+/** 局内 ESC 菜单控制器；它拥有菜单打开态、输入绑定和对 Save/Online 权威入口的转交，不负责绘制控件。 */
+UCLASS()
+class CATFISHING_API UCatLakeMainMenuController : public UObject
+{
+	GENERATED_BODY()
+
+public:
+	/** 绑定本地玩家、Controller 和菜单 View；成功后安装主菜单 Action，并订阅保存与联机状态变化。 */
+	bool Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController, UCatLakeMainMenuWidget* InView);
+
+	/** 成对关闭菜单、恢复输入、解除 Action 绑定和系统订阅；换 Pawn、旅行或 LocalPlayer 销毁时调用。 */
+	void Unbind();
+
+	/** 切换局内菜单打开状态；真实视口、焦点和输入锁由 SetMenuOpen 统一处理。 */
+	void ToggleMenu();
+
+	/** 返回菜单是否由本 Controller 保持打开；不从 Widget 可见性反推。 */
+	bool IsMenuOpen() const;
+
+	/** Controller 的 EnhancedInputComponent 可能晚于 UI 创建；拥有者用本入口重新安装主菜单 Action。 */
+	void RefreshInputBinding();
+
+	/** Widget 请求关闭菜单；关闭状态下的迟到点击不会反向打开。 */
+	void RequestCloseFromWidget();
+
+	/** Widget 请求打开设置；当前没有正式局内设置页时只回显明确缺口，不创建临时设置模型。 */
+	void RequestSettingsFromWidget();
+
+	/** Widget 请求保存当前活动世界；Controller 只转交 Save 子系统并显示同步或异步结果文本。 */
+	void RequestSaveFromWidget();
+
+	/** Widget 请求退出当前游戏局；Controller 只转交 Online 子系统并防止重复离局提交。 */
+	void RequestExitGameFromWidget();
+
+private:
+	/** 菜单打开态是模态输入恢复的唯一闸口；所有入口都经这里成对处理视口、焦点、鼠标和移动锁。 */
+	void SetMenuOpen(bool bOpen);
+
+	/** 加载 UI Settings 中的主菜单 Action 并绑定到当前 EnhancedInputComponent；按键映射只来自既有 IMC。 */
+	void InstallMenuInput();
+
+	/** 从安装时记录的 EnhancedInputComponent 精确移除主菜单 Action 绑定，再释放配置资产强引用。 */
+	void RemoveMenuInput();
+
+	/** 根据菜单打开态应用或释放模态 UI 输入锁；打开时玩家移动和视角被本菜单暂停。 */
+	void ApplyMenuInputMode(bool bOpen);
+
+	/** 按 Controller 当前事实重绘菜单状态；按钮可用性只读取 Save busy、Online pending 和服务是否存在。 */
+	void UpdateView();
+
+	/** 响应 Widget 的统一菜单 Action；这里把按钮语义分发到关闭、设置、保存和离开四个明确入口。 */
+	void HandleMenuActionRequested(ECatLakeMainMenuAction Action);
+
+	/** Save 子系统状态变化入口；菜单打开时读取最新结果文本和 busy 状态刷新表现。 */
+	void HandleSaveChanged();
+
+	/** Online 快照变化入口；离开请求异步失败回到空闲时恢复按钮并显示可重试反馈。 */
+	void HandleOnlineSnapshotChanged();
+
+	/** 通过绑定的 LocalPlayer 定位当前 GameInstance 级 Save 子系统；任一生命周期层失效时返回空。 */
+	UCatSaveSubsystem* GetSaveSubsystem() const;
+
+	/** 通过绑定的 LocalPlayer 定位当前 GameInstance 级 Online 子系统；任一生命周期层失效时返回空。 */
+	UCatOnlineSubsystem* GetOnlineSubsystem() const;
+
+	/** 当前菜单绑定的本地玩家；只用于定位本机 GameInstance 子系统，不保存跨 World 状态。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<ULocalPlayer> BoundLocalPlayer;
+
+	/** 当前菜单绑定的本地 Controller；输入绑定、焦点和鼠标恢复都只作用于这一只 Controller。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<APlayerController> BoundPlayerController;
+
+	/** 当前菜单 View；Controller 只把它加入或移出视口，并向它写只读 ViewState。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UCatLakeMainMenuWidget> BoundView;
+
+	/** 当前页面安装的主菜单开关 Action；保存强引用只为输入绑定生命周期配对。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UInputAction> AppliedMainMenuToggleAction;
+
+	/** Action 实际绑定的 EnhancedInputComponent；Controller 输入链重建时从旧组件精确移除。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UEnhancedInputComponent> BoundMenuInputComponent;
+
+	/** Enhanced Input 中主菜单 Action 的唯一绑定句柄；0 表示当前没有可移除绑定。 */
+	uint32 MenuInputBindingHandle = 0;
+
+	/** Save 子系统 OnChanged 的配对解绑句柄；只在 Bind 成功并且 Save 来源有效时存在。 */
+	FDelegateHandle SaveChangedHandle;
+
+	/** Online 子系统 OnSnapshotChanged 的配对解绑句柄；用于恢复异步离开失败后的按钮状态。 */
+	FDelegateHandle OnlineSnapshotHandle;
+
+	/** 菜单当前是否打开的唯一状态；Toggle 写入，输入模式和 ViewState 只读取。 */
+	bool bMenuOpen = false;
+
+	/** 离开请求已被 Online 接管的本地等待标记；期间禁用重复保存、设置和退出按钮。 */
+	bool bExitPending = false;
+
+	/** 菜单打开期间的模态输入恢复记录；它只记录本菜单申请的一层移动/视角锁和鼠标状态。 */
+	FCatUIModalInputModeState ModalInputModeState;
+
+	/** 最近一次按钮操作得到的可展示反馈；Save 或 Online 状态变化会用正式来源文本覆盖它。 */
+	FText LastStatusText;
+};

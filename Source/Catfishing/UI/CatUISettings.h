@@ -9,6 +9,7 @@ class UCatFrontendRootWidget;
 class UCatInteractionPromptWidget;
 class UCatInventorySlotWidget;
 class UCatInventoryWidget;
+class UCatLakeMainMenuWidget;
 class UInputAction;
 class UInputMappingContext;
 
@@ -40,6 +41,12 @@ public:
 	/** 读取正式交互提示 WBP 类；缺失时只关闭提示表现，不影响交互目标自己的服务器裁决。 */
 	TSubclassOf<UCatInteractionPromptWidget> LoadInteractionPromptWidgetClass() const;
 
+	/** 读取局内 ESC 主菜单类；缺失时 LocalPlayer 不创建空白菜单，也不把保存入口塞回 HUD。 */
+	TSubclassOf<UCatLakeMainMenuWidget> LoadLakeMainMenuWidgetClass() const;
+
+	/** 返回配置的局内主菜单 Input Action；它应由项目既有 InputContext 映射到 Escape 或等价菜单键。 */
+	UInputAction* LoadMainMenuToggleAction() const;
+
 	/** 返回配置的背包开关 Input Action；它仍位于项目既有 InputContext 中。 */
 	UInputAction* LoadInventoryToggleAction() const;
 
@@ -51,6 +58,9 @@ public:
 
 	/** 从正式 IMC 中解析背包开关 Action 的第一个按键名；解析失败时返回 None。 */
 	FName ResolveInventoryToggleKeyName() const;
+
+	/** 从正式 IMC 中解析主菜单 Action 的第一个按键名；解析失败时返回 None。 */
+	FName ResolveMainMenuToggleKeyName() const;
 
 	/** 从正式 IMC 中解析交互确认 Action 的第一个按键名；解析失败时返回 None。 */
 	FName ResolveInteractionConfirmKeyName() const;
@@ -79,7 +89,15 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Interaction")
 	TSoftClassPtr<UCatInteractionPromptWidget> InteractionPromptWidgetClass;
 
-	/** 背包开关的正式 Enhanced Input Action 资产；项目应把它维护在既有 InputContext 内，运行时代码只绑定 Action。 */
+	/** 局内 ESC 主菜单类；默认使用原生 fallback，正式 WBP 可在这里替换并继续复用同一 Controller。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Lake|Save")
+	TSoftClassPtr<UCatLakeMainMenuWidget> LakeMainMenuWidgetClass;
+
+	/** 局内主菜单的正式 Enhanced Input Action 资产；项目应把它维护在既有 InputContext 内，运行时代码只绑定 Action。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Lake|Input")
+	TSoftObjectPtr<UInputAction> MainMenuToggleAction;
+
+	/** 背包开关的正式 Enhanced Input Action 资产；若与主菜单 Action 相同，背包会避让主菜单并保留 HUD 按钮入口。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Input")
 	TSoftObjectPtr<UInputAction> InventoryToggleAction;
 

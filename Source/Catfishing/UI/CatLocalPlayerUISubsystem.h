@@ -22,6 +22,8 @@ class UCatInteractionPromptWidget;
 class UCatInventoryModel;
 class UCatInventoryPageController;
 class UCatInventoryWidget;
+class UCatLakeMainMenuController;
+class UCatLakeMainMenuWidget;
 enum class ECatHUDAction : uint8;
 struct FCatOnlineSnapshot;
 
@@ -94,7 +96,7 @@ private:
 	/** 当前 Controller Pawn 变化入口；同 Pawn 刷新库存读模型和输入绑定，换 Pawn 或空 Pawn 才拆装本地玩家 UI 模块。 */
 	void HandleControllerPawnChanged(APawn* NewPawn);
 
-	/** 当配置 WBP、当前 Controller 与 Character 有效时创建 HUD、Inventory 和 Interaction 三个本地玩家模块。 */
+	/** 当配置 WBP、当前 Controller 与 Character 有效时创建 HUD、Inventory、Interaction 和局内菜单模块。 */
 	void AttachPlayerLakeUI(ACatCharacter* Character);
 
 	/** 先解绑各模块 PageController/Model，再移除 View，最后清理所有本地玩家 UI 引用。 */
@@ -103,7 +105,10 @@ private:
 	/** HUD Model 投影变化入口；只把最新状态交给 HUD WBP，不访问背包或商店。 */
 	void HandleHUDModelViewStateChanged();
 
-	/** HUD 入口动作入口；背包交给既有库存控制器，菜单只保留给蓝图或未来页面控制器。 */
+	/** 切换局内主菜单；打开菜单前会关闭已打开的背包，避免两个模态输入层同时争抢焦点。 */
+	void ToggleLakeMainMenu();
+
+	/** HUD 入口动作入口；背包和局内菜单都转交各自控制器，HUD 不创建或持有业务页面。 */
 	void HandleHUDActionRequested(ECatHUDAction Action);
 
 	/** 当前 LocalPlayer 的正式 Frontend 根 WBP，代表进入玩法前的顶层主界面；只在 Frontend World 创建，Start 加载保护窗命中时可短暂跨旅行阶段保留。 */
@@ -145,6 +150,14 @@ private:
 	/** 当前 LocalPlayer 的背包 PageController；它管理背包输入、外部容器打开和玩家库存操作转交。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryPageController> InventoryPageController;
+
+	/** 当前 LocalPlayer 的局内主菜单 WBP；它只展示设置、保存和退出入口，不持有 Save 或 Online 系统。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatLakeMainMenuWidget> LakeMainMenuWidget;
+
+	/** 当前 LocalPlayer 的局内主菜单 Controller；它管理 ESC 输入、模态焦点和保存/退出意图转交。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatLakeMainMenuController> LakeMainMenuController;
 
 	/** 当前 LocalPlayer 的交互提示 WBP；只显示靠近对象提示，不打开具体对象 UI。 */
 	UPROPERTY(Transient)
