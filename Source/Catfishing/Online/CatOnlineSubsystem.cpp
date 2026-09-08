@@ -48,6 +48,10 @@ namespace CatOnlineNames
 	static constexpr int32 MaxClientGameplayStartAttempts = 3;
 	/** Host ready 失败后等待下一次发布尝试的秒数；PostLoadMap 与 Lobby 轮询用它写入单调时间，轮询只在 Steam Lobby 可写时消费以避免 NULL 后端刷屏。 */
 	static constexpr double HostLobbyReadyRetrySeconds = 2.0;
+	/** 地图包进度采样间隔，单位秒；它只控制 UI 快照刷新频率，不参与加载完成判断。 */
+	static constexpr float MapLoadProgressSampleSeconds = 0.1f;
+	/** 地图包百分比变化达到该阈值才广播快照，避免异步加载线程的细碎小数刷新刷屏。 */
+	static constexpr float MapLoadProgressBroadcastDeltaPercent = 0.5f;
 	/** 平台已确认邀请等待前台和本地身份的最长秒数；接受时冻结期限，持续未就绪也不能重新开始计时。 */
 	static constexpr double AcceptedInviteWaitSeconds = 30.0;
 }
@@ -116,6 +120,7 @@ void UCatOnlineSubsystem::Deinitialize()
 	ClearOperationDelegates();
 	ClearInviteDelegate();
 	StopLobbyFactPolling();
+	StopMapPreloadProgressTracking();
 	if (GEngine && TravelFailureHandle.IsValid())
 	{
 		GEngine->OnTravelFailure().Remove(TravelFailureHandle);
@@ -144,6 +149,8 @@ void UCatOnlineSubsystem::Deinitialize()
 	CurrentSessionAccess = ECatSessionAccessPolicy::Undecided;
 	GameplayPreloadRequestId = INDEX_NONE;
 	PreloadedGameplayPackage = nullptr;
+	FrontendPreloadRequestId = INDEX_NONE;
+	PreloadedFrontendPackage = nullptr;
 	SearchResultsByHandle.Reset();
 	SearchSummaries.Reset();
 	InvitesByHandle.Reset();
@@ -470,6 +477,93 @@ bool UCatOnlineSubsystem::PublishLobbyReady()
 #endif
 }
 
+// 地图包等待判断流程：同时查看进入玩法和返回前台两类 LoadPackageAsync 请求 ID；哨兵值也算等待，因为同步回调可能在请求 ID 返回前先到。
+bool UCatOnlineSubsystem::IsAnyMapPreloadPending() const
+{
+	return GameplayPreloadRequestId != INDEX_NONE || FrontendPreloadRequestId != INDEX_NONE;
+}
+
+// 地图包进度读取流程：
+// 1. 预载仍在队列里时，用当前包名向引擎查询真实异步加载百分比，负值代表该阶段没有可读进度。
+// 2. 预载已经成功且旅行已提交时，把包加载进度固定为 100%，等待 PostLoadMap 处理世界切换终态。
+// 3. 保存、销毁 Session 或网络补偿这类非地图包阶段返回 false，让 UI 显示等待文案而不是用本地时间造假进度。
+bool UCatOnlineSubsystem::TryGetMapPreloadProgressPercent(float& OutProgressPercent) const
+{
+	OutProgressPercent = 0.0f;
+	if (IsAnyMapPreloadPending() && !ActiveMapLoadPackage.IsEmpty())
+	{
+		const float EnginePercent = GetAsyncLoadPercentage(FName(*ActiveMapLoadPackage));
+		if (EnginePercent >= 0.0f)
+		{
+			OutProgressPercent = FMath::Clamp(EnginePercent, 0.0f, 100.0f);
+			return true;
+		}
+		return false;
+	}
+	if (!ExpectedPackage.IsEmpty())
+	{
+		const bool bGameplayPackageReady = ExpectedPackage == GameplayMapPackage && PreloadedGameplayPackage;
+		const bool bFrontendPackageReady = ExpectedPackage == CatOnlineNames::Frontend && PreloadedFrontendPackage;
+		if (bGameplayPackageReady || bFrontendPackageReady)
+		{
+			OutProgressPercent = 100.0f;
+			return true;
+		}
+	}
+	return false;
+}
+
+// 地图包进度跟踪流程：记录当前包名并注册一个只读采样器；采样器只把引擎百分比变更广播到 Online 快照，完成和失败仍完全由异步加载回调收口。
+void UCatOnlineSubsystem::BeginMapPreloadProgressTracking(const FString& PackageName)
+{
+	ActiveMapLoadPackage = PackageName;
+	bLastMapLoadProgressAvailable = false;
+	LastMapLoadProgressPercent = 0.0f;
+	if (!MapLoadProgressTickHandle.IsValid())
+	{
+		MapLoadProgressTickHandle = FTSTicker::GetCoreTicker().AddTicker(
+			FTickerDelegate::CreateUObject(this, &ThisClass::TickMapPreloadProgress),
+			CatOnlineNames::MapLoadProgressSampleSeconds);
+	}
+}
+
+// 地图包进度跟踪停止流程：先移除 CoreTicker 句柄，再清掉包名和上次观测值；是否继续保留已加载 UPackage 由对应旅行流程决定。
+void UCatOnlineSubsystem::StopMapPreloadProgressTracking()
+{
+	FTSTicker::RemoveTicker(MapLoadProgressTickHandle);
+	MapLoadProgressTickHandle.Reset();
+	ActiveMapLoadPackage.Reset();
+	bLastMapLoadProgressAvailable = false;
+	LastMapLoadProgressPercent = 0.0f;
+}
+
+// 地图包进度采样流程：只在真实预载请求还挂起时读取引擎百分比；百分比可用性或数值发生有意义变化才广播快照，预载结束则注销自身。
+bool UCatOnlineSubsystem::TickMapPreloadProgress(const float DeltaSeconds)
+{
+	(void)DeltaSeconds;
+	if (!IsAnyMapPreloadPending())
+	{
+		MapLoadProgressTickHandle.Reset();
+		ActiveMapLoadPackage.Reset();
+		bLastMapLoadProgressAvailable = false;
+		LastMapLoadProgressPercent = 0.0f;
+		return false;
+	}
+
+	float ProgressPercent = 0.0f;
+	const bool bProgressAvailable = TryGetMapPreloadProgressPercent(ProgressPercent);
+	const bool bShouldBroadcast = bProgressAvailable != bLastMapLoadProgressAvailable
+		|| (bProgressAvailable && FMath::Abs(ProgressPercent - LastMapLoadProgressPercent)
+			>= CatOnlineNames::MapLoadProgressBroadcastDeltaPercent);
+	if (bShouldBroadcast)
+	{
+		bLastMapLoadProgressAvailable = bProgressAvailable;
+		LastMapLoadProgressPercent = ProgressPercent;
+		BroadcastSnapshot(TEXT("online_map_preload_progress"));
+	}
+	return true;
+}
+
 // Client 预载启动流程：确认前台 Client、真实 Lobby ready、次数预算和退避截止点后受理 Start 并计次；随后提交真实异步预载，失败统一进入退避，成功回调复核 ready 后才发起 ClientTravel。
 void UCatOnlineSubsystem::BeginClientGameplayPreload()
 {
@@ -489,6 +583,7 @@ void UCatOnlineSubsystem::BeginClientGameplayPreload()
 	++ClientGameplayStartAttempts;
 	const uint64 SubmittedEpoch = OperationEpoch;
 	GameplayPreloadRequestId = INDEX_NONE - 1;
+	BeginMapPreloadProgressTracking(GameplayMapPackage);
 	const int32 SubmittedRequestId = LoadPackageAsync(GameplayMapPackage,
 		FLoadPackageAsyncDelegate::CreateUObject(this, &ThisClass::HandleGameplayPackagePreloadComplete, SubmittedEpoch));
 	if (ActiveOperation == ECatOnlineOperation::Start && OperationEpoch == SubmittedEpoch
@@ -497,6 +592,7 @@ void UCatOnlineSubsystem::BeginClientGameplayPreload()
 		GameplayPreloadRequestId = SubmittedRequestId;
 		if (SubmittedRequestId == INDEX_NONE)
 		{
+			StopMapPreloadProgressTracking();
 			FinishOperationFailure(ECatOnlineError::GameplayPreloadFailed);
 			return;
 		}
@@ -666,6 +762,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestStartHostedGame()
 	const uint64 SubmittedEpoch = OperationEpoch;
 	// -2 表示 LoadPackageAsync 尚未返回请求 ID；引擎若同步回调会先清成 INDEX_NONE，返回后不得把旧 ID 重新写回。
 	GameplayPreloadRequestId = INDEX_NONE - 1;
+	BeginMapPreloadProgressTracking(GameplayMapPackage);
 	const int32 SubmittedRequestId = LoadPackageAsync(GameplayMapPackage,
 		FLoadPackageAsyncDelegate::CreateUObject(this, &ThisClass::HandleGameplayPackagePreloadComplete, SubmittedEpoch));
 	if (ActiveOperation == ECatOnlineOperation::Start && OperationEpoch == SubmittedEpoch
@@ -674,6 +771,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestStartHostedGame()
 		GameplayPreloadRequestId = SubmittedRequestId;
 		if (SubmittedRequestId == INDEX_NONE)
 		{
+			StopMapPreloadProgressTracking();
 			FinishOperationFailure(ECatOnlineError::GameplayPreloadFailed);
 			Result.bAccepted = false;
 			Result.Error = LastError;
@@ -682,17 +780,6 @@ FCatOnlineResult UCatOnlineSubsystem::RequestStartHostedGame()
 		BroadcastSnapshot(TEXT("online_gameplay_preload_queued"));
 	}
 	return Result;
-}
-
-// 预载进度读取流程：只在当前确有 LoadPackageAsync 请求时查询引擎；引擎返回 -1 表示未知，其他值夹在公开合同的 0..100 内，绝不合成时间驱动的百分比。
-float UCatOnlineSubsystem::GetGameplayLoadProgress() const
-{
-	if (GameplayPreloadRequestId == INDEX_NONE || GameplayMapPackage.IsEmpty())
-	{
-		return -1.0f;
-	}
-	const float Progress = GetAsyncLoadPercentage(FName(*GameplayMapPackage));
-	return Progress < 0.0f ? -1.0f : FMath::Clamp(Progress, 0.0f, 100.0f);
 }
 
 // 预载完成流程：先拒绝旧 epoch、错误包名或非 Start 回调；成功时保活实际包，Host 提交 Listen 旅行，Client 复核真实 Lobby ready 后才解析 OSS 地址并 ClientTravel，失败时不旅行。
@@ -707,6 +794,7 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
 		return;
 	}
 	GameplayPreloadRequestId = INDEX_NONE;
+	StopMapPreloadProgressTracking();
 	if (Result != EAsyncLoadingResult::Succeeded || !LoadedPackage)
 	{
 		PreloadedGameplayPackage = nullptr;
@@ -1358,7 +1446,8 @@ FCatOnlineSnapshot UCatOnlineSubsystem::GetSnapshot() const
 	Snapshot.CurrentPlayers = RoomCurrentPlayers;
 	Snapshot.bIsHost = SessionRole == ECatOnlineSessionRole::Host;
 	Snapshot.bIsGameplayLoadPending = GameplayPreloadRequestId != INDEX_NONE;
-	Snapshot.GameplayLoadProgress = GetGameplayLoadProgress();
+	Snapshot.bIsMapPreloadPending = IsAnyMapPreloadPending();
+	Snapshot.bHasMapLoadProgress = TryGetMapPreloadProgressPercent(Snapshot.MapLoadProgressPercent);
 	return Snapshot;
 }
 
@@ -1479,11 +1568,44 @@ bool UCatOnlineSubsystem::BeginClientTravelToGameplayMap(const FString& ConnectS
 	return true;
 }
 
-// 回前台流程：若已经在 Frontend 则幂等结案；Host 用绝对 ServerTravel 切断 listen，Client 用本地 ClientTravel，均不把 DestroySession 误当作驱动关闭。
+// 前台预载完成流程：先拒绝旧 epoch、错误包名或无效角色；成功时保活 Frontend 包并提交真实旅行，失败时停止进度跟踪并按旅行拒绝收口。
+void UCatOnlineSubsystem::HandleFrontendPackagePreloadComplete(const FName& PackageName, UPackage* LoadedPackage,
+	const EAsyncLoadingResult::Type Result, const uint64 CallbackEpoch)
+{
+	if (ActiveOperation == ECatOnlineOperation::None
+		|| (OperationRole != ECatOnlineSessionRole::Host && OperationRole != ECatOnlineSessionRole::Client)
+		|| CallbackEpoch != OperationEpoch || PackageName.ToString() != CatOnlineNames::Frontend)
+	{
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_callback_ignored Callback=FrontendPreload Epoch=%llu CurrentEpoch=%llu"), CallbackEpoch, OperationEpoch);
+		return;
+	}
+	FrontendPreloadRequestId = INDEX_NONE;
+	StopMapPreloadProgressTracking();
+	if (Result != EAsyncLoadingResult::Succeeded || !LoadedPackage)
+	{
+		PreloadedFrontendPackage = nullptr;
+		FinishOperationFailure(ECatOnlineError::TravelRejected);
+		return;
+	}
+	PreloadedFrontendPackage = LoadedPackage;
+	if (!CommitFrontendTravelAfterPreload())
+	{
+		PreloadedFrontendPackage = nullptr;
+		FinishOperationFailure(ECatOnlineError::TravelRejected);
+	}
+}
+
+// 回前台流程：
+// 1. 已经在 Frontend 时清掉预载残留并按延迟错误或成功结案。
+// 2. 只有有效 Host/Client 操作才能继续，避免 View 或外部调用绕过 Online 状态机直接切图。
+// 3. 尚未预载 Frontend 时提交真实 LoadPackageAsync 并开始进度采样；成功回调才会按 Host/Client 分支发起旅行。
 bool UCatOnlineSubsystem::BeginTravelToFrontend()
 {
 	if (WorldState == ECatOnlineWorldState::Frontend)
 	{
+		FrontendPreloadRequestId = INDEX_NONE;
+		PreloadedFrontendPackage = nullptr;
+		StopMapPreloadProgressTracking();
 		TransportState = ECatOnlineTransportState::Idle;
 		if (DeferredFailureAfterTravel != ECatOnlineError::None)
 		{
@@ -1497,6 +1619,44 @@ bool UCatOnlineSubsystem::BeginTravelToFrontend()
 		return true;
 	}
 
+	if (ActiveOperation == ECatOnlineOperation::None
+		|| (OperationRole != ECatOnlineSessionRole::Host && OperationRole != ECatOnlineSessionRole::Client))
+	{
+		return false;
+	}
+
+	if (FrontendPreloadRequestId != INDEX_NONE)
+	{
+		WorldState = ECatOnlineWorldState::TravelingToFrontend;
+		TransportState = ECatOnlineTransportState::TravelQueued;
+		BroadcastSnapshot(TEXT("online_frontend_preload_already_pending"));
+		return true;
+	}
+
+	const uint64 SubmittedEpoch = OperationEpoch;
+	FrontendPreloadRequestId = INDEX_NONE - 1;
+	BeginMapPreloadProgressTracking(CatOnlineNames::Frontend);
+	const int32 SubmittedRequestId = LoadPackageAsync(CatOnlineNames::Frontend,
+		FLoadPackageAsyncDelegate::CreateUObject(this, &ThisClass::HandleFrontendPackagePreloadComplete, SubmittedEpoch));
+	if (ActiveOperation != ECatOnlineOperation::None && OperationEpoch == SubmittedEpoch
+		&& FrontendPreloadRequestId == INDEX_NONE - 1)
+	{
+		FrontendPreloadRequestId = SubmittedRequestId;
+		if (SubmittedRequestId == INDEX_NONE)
+		{
+			StopMapPreloadProgressTracking();
+			return false;
+		}
+		WorldState = ECatOnlineWorldState::TravelingToFrontend;
+		TransportState = ECatOnlineTransportState::TravelQueued;
+		BroadcastSnapshot(TEXT("online_frontend_preload_queued"));
+	}
+	return true;
+}
+
+// 前台旅行提交流程：复用原回前台的 Host/Client 分支；这里只提交旅行、设置 ExpectedPackage 并广播 100% 包进度，真正成功仍由 PostLoadMap 确认。
+bool UCatOnlineSubsystem::CommitFrontendTravelAfterPreload()
+{
 	UWorld* World = GetWorld();
 	if (!World)
 	{
@@ -2126,6 +2286,7 @@ void UCatOnlineSubsystem::FinishOperationSuccess()
 	ClearHostLeaveSaveDelegate();
 	ClearRunTeardownDelegate();
 	ClearOperationDelegates();
+	StopMapPreloadProgressTracking();
 	ActiveSearch.Reset();
 	ExpectedPackage.Reset();
 	ActiveOperation = ECatOnlineOperation::None;
@@ -2138,6 +2299,8 @@ void UCatOnlineSubsystem::FinishOperationSuccess()
 		GameplayPreloadRequestId = INDEX_NONE;
 		PreloadedGameplayPackage = nullptr;
 	}
+	FrontendPreloadRequestId = INDEX_NONE;
+	PreloadedFrontendPackage = nullptr;
 	LastError = ECatOnlineError::None;
 	++OperationEpoch;
 	BroadcastSnapshot(TEXT("online_operation_succeeded"));
@@ -2163,6 +2326,7 @@ void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 	ClearHostLeaveSaveDelegate();
 	ClearRunTeardownDelegate();
 	ClearOperationDelegates();
+	StopMapPreloadProgressTracking();
 	ActiveSearch.Reset();
 	ExpectedPackage.Reset();
 	ActiveOperation = ECatOnlineOperation::None;
@@ -2175,6 +2339,8 @@ void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 		GameplayPreloadRequestId = INDEX_NONE;
 		PreloadedGameplayPackage = nullptr;
 	}
+	FrontendPreloadRequestId = INDEX_NONE;
+	PreloadedFrontendPackage = nullptr;
 	LastError = Error;
 	if (bRetryableClientStart)
 	{

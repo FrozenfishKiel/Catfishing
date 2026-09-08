@@ -8,7 +8,6 @@ class UButton;
 class UCheckBox;
 class UComboBoxString;
 class UPanelWidget;
-class UProgressBar;
 class USlider;
 class UTextBlock;
 class UWidgetSwitcher;
@@ -91,7 +90,7 @@ struct FCatLakeMainMenuViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bExitEnabled = true;
 
-	/** 当前是否处于退出到主菜单的等待画面；View 据此锁住命令页输入并展示真实异步阶段文本。 */
+	/** 当前是否处于退出到主菜单的等待状态；View 据此锁住命令页输入，实际等待遮罩由全局 UI 显示。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bReturnToMainMenuPending = false;
 };
@@ -118,14 +117,8 @@ public:
 	/** 显示局内设置页；它复用主界面设置 Model 的字段、分类和应用规则，不创建第二套设置来源。 */
 	void ShowSettingsPanel();
 
-	/** 显示退出到主菜单等待页；该页只呈现 Controller 从 Online 快照派生的真实异步阶段，不提供取消或假进度。 */
-	void ShowReturnToMainMenuLoadingPanel();
-
 	/** 局内设置页可见性是普通 Escape 输入的分流条件；PIE 的 Shift+Escape 会透传给编辑器停止运行。 */
 	bool IsShowingSettingsPanel() const;
-
-	/** 返回当前是否显示退出到主菜单等待页；ESC 会用它保持等待画面而不是关闭菜单。 */
-	bool IsShowingReturnToMainMenuLoadingPanel() const;
 
 	/** 暴露最近一次菜单投影给 WBP；它只用于表现，不代表可写的保存、设置、离局或退出进程状态。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|LakeMenu")
@@ -193,10 +186,10 @@ protected:
 	/** 离开视口时解除命令与设置控件绑定，避免 WBP 重建或 Slate 重建后重复广播同一点击。 */
 	virtual void NativeDestruct() override;
 
-	/** 预览键盘输入时优先消费普通 Escape；设置页内回命令页，命令页内关闭菜单，Shift+Escape 留给编辑器。 */
+	/** 预览键盘输入时优先消费普通 Escape；回主菜单等待中只锁住输入，设置页内回命令页，命令页内关闭菜单，Shift+Escape 留给编辑器。 */
 	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
-	/** 菜单根拿到键盘焦点时复用普通 Escape 分流；Shift+Escape 和其它键继续交还父类。 */
+	/** 菜单根拿到键盘焦点时复用普通 Escape 分流；回主菜单等待中只锁住输入，Shift+Escape 和其它键继续交还父类。 */
 	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 	/** WBP 可选渲染扩展点；正式资产可以读取 ViewState 决定动画、焦点或局部文案。 */
@@ -288,7 +281,7 @@ private:
 	/** 原生回填设置草稿到控件时的重入保护；回填阶段的 UMG 输入回调不会被误认作玩家修改。 */
 	bool bRefreshingSettingsControls = false;
 
-	/** 局内菜单页切换器；WBP 提供时在暂停命令页、设置页和回主菜单等待页之间显式切换，不用可见性猜流程。 */
+	/** 局内菜单页切换器；WBP 提供时在暂停命令页和设置页之间显式切换，不用可见性猜流程。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UWidgetSwitcher> LakeMainMenuPageSwitcher;
 
@@ -299,10 +292,6 @@ private:
 	/** 局内设置页根容器；它承载和主界面同名的设置控件，供同一 SettingsModel 回填。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UPanelWidget> LakeSettingsPanel;
-
-	/** 退出到主菜单等待页根容器；它只在 Online Leave 已受理后显示，避免命令页继续提交重复操作。 */
-	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UPanelWidget> LakeExitLoadingPanel;
 
 	/** WBP Designer 中的设置按钮；存在时点击广播 OpenSettings，不直接创建设置页。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
@@ -327,14 +316,6 @@ private:
 	/** WBP Designer 中的结果文本；存在时显示保存、设置、回主菜单或退出进程入口返回的明确反馈。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> StatusTextBlock;
-
-	/** 退出到主菜单等待页中的阶段文本；Controller 用 Online 快照刷新它，未知进度不显示伪百分比。 */
-	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UTextBlock> ExitLoadingStatusTextBlock;
-
-	/** 退出到主菜单等待页中的忙碌进度条；它只用不确定进度动画表达异步处理中，不承诺完成百分比。 */
-	UPROPERTY(Transient, meta = (BindWidgetOptional))
-	TObjectPtr<UProgressBar> ExitLoadingProgressBar;
 
 	/** 设置页游戏分类按钮；点击只广播选择分类意图，分类状态仍由 SettingsModel 持有。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))

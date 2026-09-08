@@ -2,6 +2,9 @@
 
 #include "Camp/CatCampInventoryActor.h"
 #include "Character/CatCharacter.h"
+#include "Blueprint/UserWidget.h"
+#include "Components/ProgressBar.h"
+#include "Components/TextBlock.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
@@ -26,6 +29,15 @@
 #include "UI/Save/CatLakeMainMenuController.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
 
+namespace CatLocalPlayerUILoadingScreen
+{
+	/** 全局加载遮罩必须盖过 Frontend Root、HUD、背包和局内 ESC 菜单，避免等待表现落在某个业务页面下面。 */
+	constexpr int32 ViewportZOrder = 10000;
+
+	/** 正式 Loading WBP 的固定类路径；它原本属于 Frontend 资产组，现在直接由 LocalPlayer UI 挂成全局遮罩。 */
+	constexpr const TCHAR* WidgetClassPath = TEXT("/Game/UI/Frontend/WBP_CatFrontendLoading.WBP_CatFrontendLoading_C");
+}
+
 // 初始化流程：先订阅唯一 Online 快照，再弱绑定当前 Controller；本地玩家 UI 模块是否装配由 AttachPlayerLakeUI 统一验证 WBP 配置。
 void UCatLocalPlayerUISubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
@@ -49,6 +61,7 @@ void UCatLocalPlayerUISubsystem::Deinitialize()
 {
 	DetachPlayerLakeUI();
 	UnbindController();
+	HideGlobalLoadingScreen();
 	RemoveFrontendRoot();
 	if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
 	{
@@ -65,10 +78,10 @@ void UCatLocalPlayerUISubsystem::Deinitialize()
 }
 
 // Controller 替换流程：
-// 1. 先按当前 Online 快照判断已有 Frontend Root 是否属于 Start 加载、旅行等待或失败恢复保护窗。
+// 1. 先按当前 Online 快照判断已有 Frontend Root 是否只处于 Start 失败恢复保护窗。
 // 2. 局内 HUD、背包和交互提示始终拆掉，因为它们绑定旧 Pawn 和输入；受保护的 Frontend Root 不在这里移除。
 // 3. 父类完成 LocalPlayer 的 Controller 切换后重新绑定新 Controller，并在保留 Root 时显式恢复拥有者、鼠标和键盘焦点。
-// 4. 最后重新调和 Frontend，非受保护状态会按常规 World/配置规则移除或重建。
+// 4. 最后重新调和 Frontend 和全局加载遮罩，非受保护状态会按常规 World/配置规则移除或重建。
 void UCatLocalPlayerUISubsystem::PlayerControllerChanged(APlayerController* NewController)
 {
 	bool bShouldKeepFrontendRoot = false;
@@ -192,11 +205,12 @@ void UCatLocalPlayerUISubsystem::HandleOnlineSnapshotChanged()
 }
 
 // Frontend 调和流程：
-// 1. 先读取当前 LocalPlayer、Controller 和 Online 快照；缺 LocalPlayer 或 Online 时拆掉 Root，避免旧前端脱离事实源继续显示。
-// 2. 没有本地 Controller 时只允许已有 Root 在 Start 加载、旅行等待或失败恢复保护窗内短暂保留；其它情况立即拆除。
-// 3. 非 Frontend World 只保留受保护的已有 Root，不在玩法图或异常 World 补建新主界面，避免旧前端变成第二入口。
-// 4. 已有 Root 直接复用；需要新建时必须仍处于 Frontend World，并且配置能加载正式 Root WBP，否则记录失败并保持无原生替身。
-// 5. 创建成功后装配 Root、PageController 和三个只读 Model，最后入视口、打开鼠标并设置键盘焦点。
+// 1. 先读取当前 LocalPlayer、Controller 和 Online 快照；缺 LocalPlayer 或 Online 时拆掉 Root 与全局遮罩，避免旧 UI 脱离事实源继续显示。
+// 2. 全局遮罩先消费 Start/Leave 快照并独立入视口；Root 不再为了加载表现跨 World 保留。
+// 3. 没有本地 Controller 时只允许已有 Root 在 Start 失败恢复保护窗内短暂保留；其它情况立即拆除。
+// 4. 非 Frontend World 只保留受保护的已有 Root，不在玩法图或异常 World 补建新主界面，避免旧前端变成第二入口。
+// 5. 已有 Root 直接复用；需要新建时必须仍处于 Frontend World，并且配置能加载正式 Root WBP，否则记录失败并保持无原生替身。
+// 6. 创建成功后装配 Root、PageController 和三个只读 Model，最后入视口、打开鼠标并设置键盘焦点。
 void UCatLocalPlayerUISubsystem::RefreshFrontendForCurrentController()
 {
 	ULocalPlayer* LocalPlayer = GetLocalPlayer();
@@ -205,10 +219,12 @@ void UCatLocalPlayerUISubsystem::RefreshFrontendForCurrentController()
 	UCatOnlineSubsystem* Online = GameInstance ? GameInstance->GetSubsystem<UCatOnlineSubsystem>() : nullptr;
 	if (!LocalPlayer || !Online)
 	{
+		HideGlobalLoadingScreen();
 		RemoveFrontendRoot();
 		return;
 	}
 	const FCatOnlineSnapshot Snapshot = Online->GetSnapshot();
+	RefreshGlobalLoadingScreen(Snapshot);
 	const bool bIsFrontendWorld = Snapshot.WorldState == ECatOnlineWorldState::Frontend;
 	const bool bShouldKeepExistingRoot = ShouldKeepExistingFrontendRoot(Snapshot);
 	if (!Controller || !Controller->IsLocalController())
@@ -260,9 +276,189 @@ void UCatLocalPlayerUISubsystem::RefreshFrontendForCurrentController()
 		static_cast<int32>(GetWorld()->GetNetMode()), *GetNameSafe(Controller), *GetNameSafe(RootClass.Get()));
 }
 
+// 全局遮罩刷新流程：先把 Online 快照翻译成是否显示和阶段文本；需要显示时创建或复用最高层 WBP，空闲、成功或失败时释放遮罩。
+void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot)
+{
+	FText StatusText;
+	if (ShouldShowGlobalLoadingScreen(Snapshot, StatusText))
+	{
+		ShowGlobalLoadingScreen(Snapshot, StatusText);
+		return;
+	}
+	HideGlobalLoadingScreen();
+}
+
+// 全局遮罩 gate 流程：只响应 Start/Leave 的正式 Online 操作以及已排队的地图旅行；错误快照让业务页面恢复显示失败文本，不再把失败盖在遮罩下面。
+bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
+	const FCatOnlineSnapshot& Snapshot, FText& OutStatusText) const
+{
+	OutStatusText = FText::GetEmpty();
+	if (Snapshot.LastError != ECatOnlineError::None)
+	{
+		return false;
+	}
+	const bool bGameplayStartPending = Snapshot.ActiveOperation == ECatOnlineOperation::Start
+		&& Snapshot.RequestId.IsValid()
+		&& (Snapshot.bIsGameplayLoadPending || Snapshot.TransportState == ECatOnlineTransportState::TravelQueued
+			|| Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake);
+	if (bGameplayStartPending)
+	{
+		if (Snapshot.bIsGameplayLoadPending)
+		{
+			OutStatusText = FText::FromString(TEXT("正在加载游戏世界。"));
+		}
+		else if (Snapshot.bHasMapLoadProgress && Snapshot.MapLoadProgressPercent >= 100.0f)
+		{
+			OutStatusText = FText::FromString(TEXT("游戏世界加载完成，正在进入。"));
+		}
+		else
+		{
+			OutStatusText = FText::FromString(TEXT("正在进入游戏世界。"));
+		}
+		return true;
+	}
+
+	const bool bReturnToMenuPending = Snapshot.ActiveOperation == ECatOnlineOperation::Leave
+		&& Snapshot.RequestId.IsValid();
+	if (bReturnToMenuPending)
+	{
+		if (Snapshot.bIsMapPreloadPending && Snapshot.WorldState == ECatOnlineWorldState::TravelingToFrontend)
+		{
+			OutStatusText = FText::FromString(TEXT("正在加载主菜单。"));
+		}
+		else if (Snapshot.WorldState == ECatOnlineWorldState::TravelingToFrontend
+			|| Snapshot.TransportState == ECatOnlineTransportState::TravelQueued)
+		{
+			OutStatusText = FText::FromString(TEXT("正在返回主菜单。"));
+		}
+		else if (Snapshot.SessionState == ECatOnlineSessionState::Destroying)
+		{
+			OutStatusText = FText::FromString(TEXT("正在关闭当前房间。"));
+		}
+		else if (Snapshot.WorldState == ECatOnlineWorldState::Lake)
+		{
+			OutStatusText = Snapshot.SessionRole == ECatOnlineSessionRole::Host
+				? FText::FromString(TEXT("正在保存并收尾当前游戏。"))
+				: FText::FromString(TEXT("正在离开当前游戏。"));
+		}
+		else
+		{
+			OutStatusText = FText::FromString(TEXT("正在退出到主菜单。"));
+		}
+		return true;
+	}
+
+	if (Snapshot.TransportState == ECatOnlineTransportState::TravelQueued
+		&& (Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake
+			|| Snapshot.WorldState == ECatOnlineWorldState::TravelingToFrontend))
+	{
+		OutStatusText = Snapshot.WorldState == ECatOnlineWorldState::TravelingToFrontend
+			? FText::FromString(TEXT("正在返回主菜单。"))
+			: FText::FromString(TEXT("正在进入游戏世界。"));
+		return true;
+	}
+	return false;
+}
+
+// 全局遮罩显示流程：优先复用当前实例；首次显示时用 GameInstance 创建正式 Loading WBP 并加到最高层，随后按 Online 快照刷新阶段文本和真实进度。
+void UCatLocalPlayerUISubsystem::ShowGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot, const FText& StatusText)
+{
+	if (!GlobalLoadingScreenWidget)
+	{
+		const TSubclassOf<UUserWidget> LoadingClass = LoadClass<UUserWidget>(nullptr, CatLocalPlayerUILoadingScreen::WidgetClassPath);
+		UGameInstance* GameInstance = GetLocalPlayer() ? GetLocalPlayer()->GetGameInstance() : nullptr;
+		if (!LoadingClass || !GameInstance)
+		{
+			UE_LOG(LogCatUI, Error, TEXT("Event=ui_global_loading_screen_unavailable Class=%s GameInstance=%s"),
+				CatLocalPlayerUILoadingScreen::WidgetClassPath,
+				*GetNameSafe(GameInstance));
+			return;
+		}
+		GlobalLoadingScreenWidget = CreateWidget<UUserWidget>(GameInstance, LoadingClass);
+		if (!GlobalLoadingScreenWidget)
+		{
+			UE_LOG(LogCatUI, Error, TEXT("Event=ui_global_loading_screen_create_failed Class=%s"),
+				*GetNameSafe(LoadingClass.Get()));
+			return;
+		}
+		GlobalLoadingScreenWidget->AddToViewport(CatLocalPlayerUILoadingScreen::ViewportZOrder);
+		UE_LOG(LogCatUI, Log, TEXT("Event=ui_global_loading_screen_shown Class=%s Status=\"%s\""),
+			*GetNameSafe(LoadingClass.Get()), *StatusText.ToString());
+	}
+	else if (!GlobalLoadingScreenWidget->IsInViewport())
+	{
+		GlobalLoadingScreenWidget->AddToViewport(CatLocalPlayerUILoadingScreen::ViewportZOrder);
+	}
+	RefreshGlobalLoadingScreenPresentation(Snapshot, StatusText);
+}
+
+// 全局遮罩隐藏流程：移除最高层 WBP 并清空本地文本缓存；Online 终态和错误展示仍由对应 Controller/Model 自己处理。
+void UCatLocalPlayerUISubsystem::HideGlobalLoadingScreen()
+{
+	if (!GlobalLoadingScreenWidget)
+	{
+		LastGlobalLoadingStatusText = FText::GetEmpty();
+		return;
+	}
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_global_loading_screen_hidden LastStatus=\"%s\""),
+		*LastGlobalLoadingStatusText.ToString());
+	GlobalLoadingScreenWidget->RemoveFromParent();
+	GlobalLoadingScreenWidget = nullptr;
+	LastGlobalLoadingStatusText = FText::GetEmpty();
+}
+
+// 全局遮罩表现刷新流程：
+// 1. 先把阶段文本写入正式 Loading WBP，让玩家知道 Start、Leave 或 Travel 卡在哪个 Online 模型事实上。
+// 2. 如果 Online 快照提供真实地图包百分比，就关闭 marquee 并写入 0-1 进度条和百分比文字。
+// 3. 如果当前阶段没有地图包百分比，就只显示等待态，避免 View 用时间或本地估算制造假进度。
+void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreenPresentation(const FCatOnlineSnapshot& Snapshot, const FText& StatusText)
+{
+	if (!GlobalLoadingScreenWidget)
+	{
+		return;
+	}
+	LastGlobalLoadingStatusText = StatusText;
+	const float ClampedPercent = FMath::Clamp(Snapshot.MapLoadProgressPercent, 0.0f, 100.0f);
+	const int32 DisplayPercent = FMath::RoundToInt(ClampedPercent);
+	const FText EffectiveStatusText = StatusText.IsEmpty()
+		? FText::FromString(TEXT("正在加载。")) : StatusText;
+	if (UTextBlock* StatusTextBlock = Cast<UTextBlock>(
+		GlobalLoadingScreenWidget->GetWidgetFromName(TEXT("LoadingProgressTextBlock"))))
+	{
+		StatusTextBlock->SetText(Snapshot.bHasMapLoadProgress
+			? FText::FromString(FString::Printf(TEXT("%s %d%%"), *EffectiveStatusText.ToString(), DisplayPercent))
+			: EffectiveStatusText);
+	}
+	if (UTextBlock* DayTextBlock = Cast<UTextBlock>(
+		GlobalLoadingScreenWidget->GetWidgetFromName(TEXT("LoadingDayTextBlock"))))
+	{
+		DayTextBlock->SetText(FText::FromString(TEXT("正在切换世界")));
+	}
+	if (UTextBlock* SacrificeTextBlock = Cast<UTextBlock>(
+		GlobalLoadingScreenWidget->GetWidgetFromName(TEXT("LoadingSacrificeProgressTextBlock"))))
+	{
+		SacrificeTextBlock->SetText(Snapshot.bHasMapLoadProgress
+			? FText::FromString(FString::Printf(TEXT("地图加载 %d%%"), DisplayPercent))
+			: FText::FromString(TEXT("等待切换确认")));
+	}
+	if (UTextBlock* HintTextBlock = Cast<UTextBlock>(
+		GlobalLoadingScreenWidget->GetWidgetFromName(TEXT("LoadingHintText"))))
+	{
+		HintTextBlock->SetText(Snapshot.bIsMapPreloadPending
+			? FText::FromString(TEXT("正在读取地图包"))
+			: FText::FromString(TEXT("旅程即将开始")));
+	}
+	if (UProgressBar* ProgressBar = Cast<UProgressBar>(
+		GlobalLoadingScreenWidget->GetWidgetFromName(TEXT("LoadingProgressBar"))))
+	{
+		ProgressBar->SetIsMarquee(!Snapshot.bHasMapLoadProgress);
+		ProgressBar->SetPercent(Snapshot.bHasMapLoadProgress ? ClampedPercent / 100.0f : 0.0f);
+	}
+}
+
 // 已有 Root 保留判断流程：
-// 1. 没有 Root 时直接返回 false；该策略只保护已经可见的加载页，不负责补建任何非 Frontend World UI。
-// 2. Start 请求带有效 RequestId 且处在预载、旅行排队或前往 Lake World 时保留，覆盖 Controller 暂空和 World 切换窗口。
+// 1. 没有 Root 时直接返回 false；该策略只保护 Start 失败后仍需要显示错误的既有前端，不负责补建任何非 Frontend World UI。
+// 2. Start 加载和旅行期间由全局遮罩接管，Root 不再跨 World 保留，避免 Root 局部页面成为第二套表现。
 // 3. Start 失败恢复只在已有 Root 上成立，让错误文本能回到 Frontend/Room；其它 Lake 或无关 World 继续走拆除路径。
 bool UCatLocalPlayerUISubsystem::ShouldKeepExistingFrontendRoot(const FCatOnlineSnapshot& Snapshot) const
 {
@@ -270,17 +466,13 @@ bool UCatLocalPlayerUISubsystem::ShouldKeepExistingFrontendRoot(const FCatOnline
 	{
 		return false;
 	}
-	const bool bGameplayStartLoadingOrTraveling = Snapshot.ActiveOperation == ECatOnlineOperation::Start
-		&& Snapshot.LastError == ECatOnlineError::None && Snapshot.RequestId.IsValid()
-		&& (Snapshot.bIsGameplayLoadPending || Snapshot.TransportState == ECatOnlineTransportState::TravelQueued
-			|| Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake);
 	const bool bGameplayStartFailureRecovering = Snapshot.ActiveOperation == ECatOnlineOperation::None
 		&& (Snapshot.LastError == ECatOnlineError::GameplayPreloadFailed || Snapshot.LastError == ECatOnlineError::TravelRejected
 			|| Snapshot.LastError == ECatOnlineError::TravelFailed || Snapshot.LastError == ECatOnlineError::ConnectStringUnavailable
 			|| Snapshot.LastError == ECatOnlineError::NetworkFailure || Snapshot.LastError == ECatOnlineError::ClientStartRetryExhausted)
 		&& (Snapshot.WorldState == ECatOnlineWorldState::Frontend || Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake
 			|| Snapshot.TransportState == ECatOnlineTransportState::Failed);
-	return bGameplayStartLoadingOrTraveling || bGameplayStartFailureRecovering;
+	return bGameplayStartFailureRecovering;
 }
 
 // Frontend 拆除流程：先关闭流程控制器的 Model 订阅和 Root 绑定，再拆 Root，最后关闭三个 Model；若调用时仍有绑定 Controller，才恢复非鼠标前端状态，此路径不碰既有 Lake HUD、背包和交互提示。

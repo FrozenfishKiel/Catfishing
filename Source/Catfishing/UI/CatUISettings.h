@@ -73,7 +73,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|HUD")
 	TSoftClassPtr<UCatHUDWidget> HUDWidgetClass;
 
-	/** 正式 Frontend 根 WBP 类；只在 Frontend World 为本地玩家创建，Root 内装配主菜单、存档、房间、设置和加载子页面。 */
+	/** 正式 Frontend 根 WBP 类；只在 Frontend World 为本地玩家创建，Root 内只装配主菜单、存档、房间和设置页面。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Frontend")
 	TSoftClassPtr<UCatFrontendRootWidget> FrontendRootWidgetClass;
 

@@ -332,7 +332,7 @@ void UCatFrontendPageController::RequestLeaveRoom()
 	SetLocalResultText(FText::FromString(TEXT("房间服务当前不可用。")), RoomModel.Get());
 }
 
-// 开始游戏流程：先拒绝无权启动的请求，再提交 RoomModel Start；同步拒绝保留正式错误，受理后重新消费当前快照以兼容回调已经同步结案，Loading 只由真实 Start 预载、TravelQueued 或 TravelingToLake 事实触发。
+// 开始游戏流程：先拒绝无权启动的请求，再提交 RoomModel Start；同步拒绝保留正式错误，受理后重新消费当前快照，加载遮罩只由真实 Start 预载、TravelQueued 或 TravelingToLake 事实触发。
 void UCatFrontendPageController::RequestStartRoomGame()
 {
 	UCatFrontendRoomModel* Room = RoomModel.Get();
@@ -478,8 +478,9 @@ void UCatFrontendPageController::HandleSaveModelChanged()
 // 房间变化流程：
 // 1. 自己提交的 Create 先等待调用返回，再只处理同一 RequestId 的终态；失败先清等待再释放未入房载荷，避免 Save 同步广播重入。
 // 2. 初始化已有或新加入的正式 Frontend Host/Client 只切 Room 一次；好友轮询及成员刷新不抢走设置。邀请等待、加入和拒绝以文本加 RequestId 去重，定向提示当前页而不导航。
-// 3. 真实 Start 预载或预载完成后的旅行进入 Loading，并用 RequestId 去重显示；Start 链路失败时有房间退回 Room，房间已被补偿清理则回开始流程页或菜单。
-// 4. 只有显示 Room/Loading 才响应普通离房返回，并等待 ActiveOperation=None，保证 Online 已完成释放；这里不重复清理已成立会话。
+// 3. 真实 Start 预载或预载完成后的旅行交给全局遮罩表现，Controller 只刷新房间反馈和 RequestId 去重日志。
+// 4. Start 链路失败时有房间退回 Room，房间已被补偿清理则回开始流程页或菜单。
+// 5. 只有显示 Room 才响应普通离房返回，并等待 ActiveOperation=None，保证 Online 已完成释放；这里不重复清理已成立会话。
 void UCatFrontendPageController::HandleRoomModelChanged()
 {
 	UCatFrontendRoomModel* Room = RoomModel.Get();
@@ -522,7 +523,7 @@ void UCatFrontendPageController::HandleRoomModelChanged()
 		|| Snapshot.LastError == ECatOnlineError::NetworkFailure
 		|| Snapshot.LastError == ECatOnlineError::ClientStartRetryExhausted;
 	const bool bGameplayStartFailureRecovering = Snapshot.ActiveOperation == ECatOnlineOperation::None && bGameplayStartFailed;
-	const bool bCanShowGameplayLoading = bHasFrontendRoom || bPresentedFrontendRoom || Root->IsShowingRoomOrLoading();
+	const bool bCanShowGameplayLoading = bHasFrontendRoom || bPresentedFrontendRoom || Root->IsShowingRoom();
 	if (!bHasFrontendRoom && !bGameplayStartInProgress && !bGameplayStartFailureRecovering) { bPresentedFrontendRoom = false; }
 	if (bHasFrontendRoom && !bPresentedFrontendRoom && Snapshot.ActiveOperation == ECatOnlineOperation::None)
 	{
@@ -554,22 +555,20 @@ void UCatFrontendPageController::HandleRoomModelChanged()
 	}
 	if (bGameplayStartInProgress && bCanShowGameplayLoading)
 	{
-		if (Snapshot.RequestId != PresentedGameplayLoadRequestId || !Root->IsShowingLoading())
+		bPresentedFrontendRoom = true;
+		SetLocalResultText(Room->GetGameplayLoadStatusText(), Room);
+		Root->RefreshFlowFeedback();
+		if (Snapshot.RequestId != PresentedGameplayLoadRequestId)
 		{
-			bPresentedFrontendRoom = true;
-			SetLocalResultText(Room->GetGameplayLoadStatusText(), Room);
-			Root->ShowLoading();
-			if (!Root->IsShowingLoading()) { return; }
 			PresentedGameplayLoadRequestId = Snapshot.RequestId;
-			UE_LOG(LogCatUI, Log, TEXT("Event=frontend_gameplay_loading_shown RequestId=%s Epoch=%lld World=%s NetMode=%d"),
+			UE_LOG(LogCatUI, Log, TEXT("Event=frontend_gameplay_loading_covered RequestId=%s Epoch=%lld World=%s NetMode=%d"),
 				*Snapshot.RequestId.ToString(EGuidFormats::DigitsWithHyphens), Snapshot.OperationEpoch,
 				*GetNameSafe(Root->GetWorld()), Root->GetWorld() ? static_cast<int32>(Root->GetWorld()->GetNetMode()) : -1);
 		}
 		return;
 	}
-	const bool bWasShowingLoading = Root->IsShowingLoading();
-	const bool bWasShowingRoomOrLoading = Root->IsShowingRoomOrLoading();
-	if (bGameplayStartFailureRecovering && (bWasShowingRoomOrLoading || bPresentedFrontendRoom || bStartGameFlowActive))
+	const bool bWasShowingRoom = Root->IsShowingRoom();
+	if (bGameplayStartFailureRecovering && (bWasShowingRoom || bPresentedFrontendRoom || bStartGameFlowActive))
 	{
 		const FText FailureText = Room->GetLastResultText();
 		if (bHasFrontendRoom)
@@ -598,7 +597,7 @@ void UCatFrontendPageController::HandleRoomModelChanged()
 			return;
 		}
 	}
-	if (!bWasShowingRoomOrLoading)
+	if (!bWasShowingRoom)
 	{
 		return;
 	}

@@ -79,7 +79,7 @@ public:
 	/** 请求离开当前房间；RoomModel 收口 Host 与 Client 的退出差异，完成后 Controller 回到存档列表。 */
 	void RequestLeaveRoom();
 
-	/** 请求由房主开始游戏并消费可能同步结案的快照；正式 Start 预载或旅行已成立才显示 Loading，失败保留 RoomModel 的正式反馈。 */
+	/** 请求由房主开始游戏并消费可能同步结案的快照；正式 Start 预载或旅行已成立时交给全局遮罩表现，失败保留 RoomModel 的正式反馈。 */
 	void RequestStartRoomGame();
 
 	/** 请求应用设置草稿；具体字段和提交结果由 SettingsModel 定义，Controller 只维持页面流程。 */
@@ -122,7 +122,7 @@ private:
 	/** Model 变化处理入口；重新检查选中/确认槽位有效性，识别读档终态，并请求 Root 重绘当前业务页面。 */
 	void HandleSaveModelChanged();
 
-	/** 消费已有或新成立房间、关联创建终态及邀请反馈；真实 Start 的预载和旅行阶段都按请求进入 Loading，同请求失败退回 Room，普通刷新不抢走设置或菜单。 */
+	/** 消费已有或新成立房间、关联创建终态及邀请反馈；真实 Start 的预载和旅行阶段只刷新房间反馈并交给全局遮罩，同请求失败退回 Room。 */
 	void HandleRoomModelChanged();
 
 	/** Model 变化处理入口；只请求设置页重绘并更新结果文本，不从设置变化触发存档或房间操作。 */
@@ -187,7 +187,7 @@ private:
 	/** 最近一次邀请反馈对应的正式请求身份；同请求下文本变化仍重新呈现，兼容忙碌拒绝不更新 Snapshot.RequestId 的 Online 合同。 */
 	FGuid PresentedInviteFeedbackRequestId;
 
-	/** 最近一次实际进入 Loading 的 Online 预载请求标识；房间通知写入并用于匹配失败，重复通知不能抢回页面，新重试以新 RequestId 重新进入，Shutdown 清空。 */
+	/** 最近一次已交给全局遮罩表现的 Online 预载请求标识；房间通知写入并用于去重记录，新重试以新 RequestId 重新呈现，Shutdown 清空。 */
 	FGuid PresentedGameplayLoadRequestId;
 
 	/** Controller 最近一次本地流程反馈；占位、确认与输入校验写入，WBP 只读显示。 */

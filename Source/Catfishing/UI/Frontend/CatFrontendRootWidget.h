@@ -10,7 +10,6 @@
 class UButton;
 class UImage;
 class UPanelWidget;
-class UProgressBar;
 class UScrollBox;
 class UEditableTextBox;
 class UTextBlock;
@@ -172,17 +171,8 @@ public:
 	 */
 	void ShowFrontendSettings();
 
-	/**
-	 * 显示异步加载页面；Controller 在 Online 真实玩法包预载或地图旅行开始后调用，进度和阶段经 RoomModel 读取。
-	 * 本方法只显式切换 LoadingPage，绝不填充固定百分比、发起旅行或自行结束 Start 操作。
-	 */
-	void ShowLoading();
-
-	/** 返回当前显式显示的页面是否为 Loading；Controller 仅用它保护失败回退的显示目标，加载成功与否仍必须读取 Online 正式事实。 */
-	bool IsShowingLoading() const;
-
-	/** 返回当前是否仍显示房间或加载界面；Controller 用它避免迟到的房间终态覆盖菜单与设置，不据此推导 Session 或旅行状态。 */
-	bool IsShowingRoomOrLoading() const;
+	/** 返回当前是否仍显示房间页面；Controller 用它避免迟到的房间终态覆盖菜单与设置，不据此推导 Session 或旅行状态。 */
+	bool IsShowingRoom() const;
 
 	/** 返回当前可见业务面的只读 Model 身份；仅供 Controller 定向投递跨页邀请提示，菜单返回空，不据此裁决业务操作。 */
 	UObject* GetVisibleFeedbackSource() const;
@@ -266,7 +256,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestLeaveRoom();
 
-	/** 房主开始游戏意图；Controller 只在 RoomModel 确认真实预载开始后显示 LoadingPage，Root 不伪造加载状态。 */
+	/** 房主开始游戏意图；Controller 只提交正式 Start 请求，全局加载遮罩由 LocalPlayer UI 根据 Online 快照显示。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestStartRoomGame();
 
@@ -341,13 +331,9 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, Category = "Catfishing|Frontend")
 	void BP_RenderFrontendSettings();
 
-	/** Loading WBP 的蓝图钩子只允许装饰已经写入的阶段和进度；正式进度由 Controller 从 Online 快照推进，防止资产脚本再造一条假进度来源。 */
-	UFUNCTION(BlueprintImplementableEvent, Category = "Catfishing|Frontend")
-	void BP_RenderLoading();
-
 private:
 	/**
-	 * 从五个已强制装配的子 WBP 中显式解析页面控件；UMG 的 BindWidget 不穿透嵌套 UserWidget，因此页面内部按钮必须在这里按所属 WidgetTree 查询。
+	 * 从四个已强制装配的子 WBP 中显式解析页面控件；UMG 的 BindWidget 不穿透嵌套 UserWidget，因此页面内部按钮必须在这里按所属 WidgetTree 查询。
 	 * 缺少必需控件时记录明确资产接线错误并保持该页面不可操作，避免空蓝图事件被误认为已交付交互。
 	 */
 	void ResolvePageControls();
@@ -391,9 +377,6 @@ private:
 
 	/** SettingsModel 变化后按四个命名分类查询切换具名 Panel 可见性，回填合法选项与草稿；反馈只读取设置来源。 */
 	void HandleSettingsModelChanged();
-
-	/** 更新真实预载进度与 marquee；Host 仅展示匹配已加载槽的历史天数/献祭记录，Client 或未知数据明确说明，不构造当前 Run 状态。 */
-	void RefreshLoadingPresentation();
 
 	/** 依据 SaveModel 当前真实摘要重建紧凑存档行；每行使用稳定 SlotId 的原生 View 类，列表为空时不生成假槽位。 */
 	void RebuildSaveRows();
@@ -475,7 +458,7 @@ private:
 	UPROPERTY(meta = (BindWidgetOptional))
 	TObjectPtr<UPanelWidget> DynamicBackgroundContainer;
 
-	/** 五个正式业务页面的可见性承载器；Root 的 Show 函数显式写入它，不能用当前索引反推流程。 */
+	/** 四个正式业务页面的可见性承载器；Root 的 Show 函数显式写入它，不能用当前索引反推流程。 */
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UWidgetSwitcher> FrontendPageSwitcher;
 
@@ -494,10 +477,6 @@ private:
 	/** WBP_CatFrontendSettings 的根实例；它承载游戏、画面、声音、控制四类设置，不把控制分类拆为临时页面。 */
 	UPROPERTY(meta = (BindWidget))
 	TObjectPtr<UUserWidget> FrontendSettingsPage;
-
-	/** WBP_CatFrontendLoading 的根实例；它只在真实加载期间显示，进度从正式异步链读取。 */
-	UPROPERTY(meta = (BindWidget))
-	TObjectPtr<UUserWidget> LoadingPage;
 
 	/** MenuPage 子 WidgetTree 中的开始游戏按钮；ResolvePageControls 显式解析并绑定，缺失时该页会记录资产接线错误。 */
 	UPROPERTY(Transient)
@@ -614,14 +593,6 @@ private:
 	/** FrontendSettingsPage 子 WidgetTree 中的结果文本；Root 原生写入 SettingsModel 的真实反馈，草稿控件仍由资产图读取 Model。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UTextBlock> FrontendSettingsResultTextBlock;
-
-	/** LoadingPage 子 WidgetTree 中的进度文本；Root 只写真实进度或阶段文字，绝不填充伪百分比。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UTextBlock> LoadingProgressTextBlock;
-
-	/** LoadingPage 子 WidgetTree 中的进度条；Root 仅在 RoomModel 返回 0..100 的真实引擎预载比例时写入，未知进度保持阶段表现。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UProgressBar> LoadingProgressBar;
 
 	/** 输出设备下拉显示项到正式 AudioMixer ID 的瞬态映射；SettingsModel 刷新时重建，选择回调只读它以避免从名称或索引猜设备身份。 */
 	TMap<FString, FString> AudioOutputDeviceIdsByOption;

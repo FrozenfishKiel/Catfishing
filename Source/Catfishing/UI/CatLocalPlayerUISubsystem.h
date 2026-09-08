@@ -24,6 +24,7 @@ class UCatInventoryPageController;
 class UCatInventoryWidget;
 class UCatLakeMainMenuController;
 class UCatLakeMainMenuWidget;
+class UUserWidget;
 enum class ECatHUDAction : uint8;
 struct FCatOnlineSnapshot;
 
@@ -81,7 +82,22 @@ private:
 	/** 根据当前本地 Controller、World 和 Online 快照调和 Frontend Root；完成后要么存在唯一有效 Root，要么已拆除失效前端。 */
 	void RefreshFrontendForCurrentController();
 
-	/** 判断已有 Frontend Root 是否处于 Start 加载、旅行等待或失败恢复保护窗；返回值只授权保留旧 Root，不授权在非 Frontend World 新建 Root。 */
+	/** 根据 Online 快照刷新全局加载遮罩；Start 和 Leave 等待期显示最高层遮罩，并把模型层地图进度传给 WBP。 */
+	void RefreshGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot);
+
+	/** 从 Online 快照判断全局遮罩是否需要显示，并输出玩家可读阶段文本；它只消费事实，不发起保存、Session 或旅行。 */
+	bool ShouldShowGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot, FText& OutStatusText) const;
+
+	/** 创建或复用全局加载遮罩并写入阶段和真实进度；遮罩复用正式 Loading WBP 资产，但不再属于 Frontend Root 子页。 */
+	void ShowGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot, const FText& StatusText);
+
+	/** 移除全局加载遮罩并清空最后阶段文本；它不改变 Online 操作，只释放本地 UMG 表现。 */
+	void HideGlobalLoadingScreen();
+
+	/** 将当前阶段文本和 Online 快照里的地图加载百分比写入全局 Loading WBP；缺百分比时只显示等待，不由 View 伪造进度。 */
+	void RefreshGlobalLoadingScreenPresentation(const FCatOnlineSnapshot& Snapshot, const FText& StatusText);
+
+	/** 判断已有 Frontend Root 是否处于 Start 失败恢复保护窗；返回值只授权保留旧 Root，不授权在非 Frontend World 新建 Root。 */
 	bool ShouldKeepExistingFrontendRoot(const FCatOnlineSnapshot& Snapshot) const;
 
 	/** 先成对 Shutdown Frontend Controller 和三个 Model，再从视口移除 Root；调用时若仍有绑定 Controller，才恢复前端鼠标状态。 */
@@ -111,9 +127,16 @@ private:
 	/** HUD 入口动作入口；背包和局内菜单都转交各自控制器，HUD 不创建或持有业务页面。 */
 	void HandleHUDActionRequested(ECatHUDAction Action);
 
-	/** 当前 LocalPlayer 的正式 Frontend 根 WBP，代表进入玩法前的顶层主界面；只在 Frontend World 创建，Start 加载保护窗命中时可短暂跨旅行阶段保留。 */
+	/** 当前 LocalPlayer 的正式 Frontend 根 WBP，代表进入玩法前的顶层主界面；只在 Frontend World 创建，加载表现交给全局遮罩。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatFrontendRootWidget> FrontendRootWidget;
+
+	/** 当前 LocalPlayer 的全局加载遮罩实例；Start/Leave 等待期加到最高层，空闲或错误时立即从视口移除。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UUserWidget> GlobalLoadingScreenWidget;
+
+	/** 最近一次写入全局加载遮罩的阶段文本；只用于重复刷新去抖和日志，不作为 Online 状态来源。 */
+	FText LastGlobalLoadingStatusText;
 
 	/** 当前 LocalPlayer 的 Frontend 流程协调器；它只持有流程、确认槽位和命令等待事实，Root 按明确意图调用它。 */
 	UPROPERTY(Transient)

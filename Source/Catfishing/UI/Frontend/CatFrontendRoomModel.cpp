@@ -56,7 +56,7 @@ namespace CatFrontendRoomModelText
 		}
 	}
 
-	/** 加载阶段文本只从 Online 快照派生，不新增前端阶段枚举：预载 pending 说明包还在引擎队列里，TravelQueued/TravelingToLake 说明 Lyra 式加载保留原因已经转为地图旅行。 */
+	/** 进入阶段文本只从 Online 快照派生，不新增前端阶段枚举：预载 pending 说明包还在引擎队列里，TravelQueued/TravelingToLake 说明全局遮罩保留原因已经转为地图旅行。 */
 	static FText MakeGameplayLoadStatusText(const FCatOnlineSnapshot& Snapshot)
 	{
 		if (Snapshot.LastError != ECatOnlineError::None)
@@ -67,7 +67,12 @@ namespace CatFrontendRoomModelText
 		{
 			if (Snapshot.bIsGameplayLoadPending)
 			{
-				return FText::FromString(TEXT("正在预载游戏世界，进度暂不可用。"));
+				if (Snapshot.bHasMapLoadProgress)
+				{
+					return FText::FromString(FString::Printf(TEXT("正在加载游戏世界 %d%%。"),
+						FMath::RoundToInt(FMath::Clamp(Snapshot.MapLoadProgressPercent, 0.0f, 100.0f))));
+				}
+				return FText::FromString(TEXT("正在加载游戏世界。"));
 			}
 			if (Snapshot.TransportState == ECatOnlineTransportState::TravelQueued
 				|| Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake)
@@ -152,7 +157,7 @@ FCatOnlineResult UCatFrontendRoomModel::LeaveRoom()
 	return Result;
 }
 
-// 开始游戏流程：先由 Online 核验 Host、房间和已加载存档前置条件；受理后不在 Model 自行旅行，加载页应通过同一 Online 快照的预载、TravelQueued/TravelingToLake 状态读取真实进度。
+// 开始游戏流程：先由 Online 核验 Host、房间和已加载存档前置条件；受理后不在前端 Model 自行旅行，房间反馈与全局遮罩都从同一 Online 快照读取真实阶段。
 FCatOnlineResult UCatFrontendRoomModel::StartGame()
 {
 	UCatOnlineSubsystem* OnlineSubsystem = Online.Get();
@@ -230,17 +235,7 @@ bool UCatFrontendRoomModel::CanStartGame() const
 		&& !Snapshot.bIsGameplayLoadPending;
 }
 
-// 加载进度读取流程：只代理已绑定 Online 返回的引擎百分比；来源失效时返回 -1，调用者据此展示未知加载阶段而不是伪造进度。
-float UCatFrontendRoomModel::GetGameplayLoadProgress() const
-{
-	if (const UCatOnlineSubsystem* OnlineSubsystem = Online.Get())
-	{
-		return OnlineSubsystem->GetGameplayLoadProgress();
-	}
-	return -1.0f;
-}
-
-// 加载阶段读取流程：读取当前 Online 快照并只做展示语义转换；百分比仍由 GetGameplayLoadProgress 单独提供，避免文本阶段和数值进度互相伪造。
+// 进入阶段读取流程：读取当前 Online 快照并只做展示语义转换；百分比来自 Online 的引擎包进度，缺失时不在前端 Model 里补假值。
 FText UCatFrontendRoomModel::GetGameplayLoadStatusText() const
 {
 	return CatFrontendRoomModelText::MakeGameplayLoadStatusText(GetSnapshot());

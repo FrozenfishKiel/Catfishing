@@ -397,13 +397,21 @@ struct FCatOnlineSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bIsHost = false;
 
-	/** 当前 Host 是否已把玩法地图异步预载请求提交给引擎；完成回调前绝不代表旅行已开始。 */
+	/** 当前 Start 流程是否已把玩法地图异步预载请求提交给引擎；Host 和 Client 都会写入，完成回调前只代表包请求仍挂起，不代表旅行已开始。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bIsGameplayLoadPending = false;
 
-	/** 引擎返回的玩法包异步加载百分比，范围为 0..100；未知或不适用严格为 -1。 */
+	/** 当前 Start 或回主菜单流程是否有地图包预载请求仍在引擎异步队列中；它只说明包还没回调，不代表世界已经切换完成。 */
 	UPROPERTY(BlueprintReadOnly)
-	float GameplayLoadProgress = -1.0f;
+	bool bIsMapPreloadPending = false;
+
+	/** 当前地图包是否提供可读取的引擎加载百分比；false 表示 Online 此刻没有可量化进度，UI 不能用时间或动画自行编百分比。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHasMapLoadProgress = false;
+
+	/** 当前地图包加载百分比，单位是 0 到 100；只有 bHasMapLoadProgress 为 true 时才是有效 Model 数据，View 才允许写入进度条。 */
+	UPROPERTY(BlueprintReadOnly)
+	float MapLoadProgressPercent = 0.0f;
 };
 
 /** Online 请求的同步提交结果；Accepted 表示子系统接管了请求，OSS 完成回调可能在本方法返回前就已同步结案，最终事实仍从 Snapshot 读取。 */
