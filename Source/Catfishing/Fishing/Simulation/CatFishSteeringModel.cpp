@@ -66,7 +66,7 @@ bool FCatFishSteeringConfig::IsValid() const
 		&& FMath::IsFinite(EffortRisePerSecond) && EffortRisePerSecond > 0.0
 		&& FMath::IsFinite(EffortFallPerSecond) && EffortFallPerSecond > 0.0
 		&& IsPositiveRange(OutwardDurationRangeSeconds) && IsPositiveRange(LateralDurationRangeSeconds)
-		&& IsPositiveRange(EaseOffDurationRangeSeconds)
+		&& IsPositiveRange(EaseOffDurationRangeSeconds) && IsPositiveRange(ActiveBoutDurationRangeSeconds)
 		&& FMath::IsFinite(MinimumBehaviorDurationSeconds) && MinimumBehaviorDurationSeconds >= 0.0
 		&& IsUnitInterval(LowStaminaRatio)
 		&& FMath::IsFinite(LowStaminaActiveDurationMultiplier) && LowStaminaActiveDurationMultiplier > 0.0
@@ -108,6 +108,15 @@ bool FCatFishSteeringModel::BeginBehavior(const FCatFishSteeringConfig& Config,
 		? (Behavior == ECatFishBehavior::EaseOff ? Config.LowStaminaEaseOffDurationMultiplier
 			: Config.LowStaminaActiveDurationMultiplier) : 1.0;
 
+	// 只在一轮对抗开始时抽总时限。受阻改道保留已付出的时间，不能靠反复切状态无限冲刺。
+	if (Behavior != ECatFishBehavior::EaseOff && (InOutState.Behavior == ECatFishBehavior::None
+		|| InOutState.Behavior == ECatFishBehavior::EaseOff))
+	{
+		InOutState.ActiveBoutElapsedSeconds = 0.0;
+		InOutState.ActiveBoutDurationSeconds = FMath::Max(Config.MinimumBehaviorDurationSeconds,
+			Random.FRandRange(Config.ActiveBoutDurationRangeSeconds.X, Config.ActiveBoutDurationRangeSeconds.Y)
+			* DurationMultiplier);
+	}
 	// 随机只在树真正进入行为时冻结目标出力/时长；不从模型选择下一状态。
 	InOutState.Behavior = Behavior;
 	InOutState.TargetEffortRatio = Random.FRandRange(EffortRange.X, EffortRange.Y);
@@ -144,9 +153,13 @@ bool FCatFishSteeringModel::AdvanceFeedback(const FCatFishSteeringConfig& Config
 		|| !FMath::IsFinite(Feedback.ExpectedFreeSpeedCentimetersPerSecond)
 		|| Feedback.ExpectedFreeSpeedCentimetersPerSecond < 0.0 || !IsUnitInterval(Feedback.FishStaminaRatio)
 		|| !FMath::IsFinite(InOutState.BehaviorElapsedSeconds) || !FMath::IsFinite(InOutState.BlockedSeconds)
-		|| !FMath::IsFinite(InOutState.SmoothedLineLoad)) return false;
+		|| !FMath::IsFinite(InOutState.SmoothedLineLoad)
+		|| !FMath::IsFinite(InOutState.ActiveBoutElapsedSeconds) || InOutState.ActiveBoutElapsedSeconds < 0.0
+		|| !FMath::IsFinite(InOutState.ActiveBoutDurationSeconds) || InOutState.ActiveBoutDurationSeconds < 0.0) return false;
 
 	InOutState.BehaviorElapsedSeconds += DeltaSeconds;
+	if (InOutState.Behavior != ECatFishBehavior::EaseOff)
+		InOutState.ActiveBoutElapsedSeconds += DeltaSeconds;
 	InOutState.FishStaminaRatio = Feedback.FishStaminaRatio;
 	const double Alpha = Config.LoadSmoothingSeconds <= 0.0 ? 1.0 : 1.0 - FMath::Exp(-DeltaSeconds / Config.LoadSmoothingSeconds);
 	InOutState.SmoothedLineLoad = FMath::Lerp(InOutState.SmoothedLineLoad,
@@ -176,6 +189,9 @@ bool FCatFishSteeringModel::TestCondition(const FCatFishSteeringConfig& Config,
 			&& State.BlockedSeconds + UE_DOUBLE_SMALL_NUMBER >= Config.BlockedConfirmationSeconds;
 	case ECatFishBehaviorCondition::LowStamina:
 		return State.FishStaminaRatio <= Config.LowStaminaRatio;
+	case ECatFishBehaviorCondition::NeedsRecovery:
+		return State.Behavior != ECatFishBehavior::EaseOff && State.ActiveBoutDurationSeconds > 0.0
+			&& State.ActiveBoutElapsedSeconds + UE_DOUBLE_SMALL_NUMBER >= State.ActiveBoutDurationSeconds;
 	default:
 		return false;
 	}

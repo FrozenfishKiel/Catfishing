@@ -544,6 +544,8 @@ bool UCatFishingFightRunner::BeginFishBehaviorFromStateTree(const ECatFishBehavi
 	const double PreviousElapsed = SteeringState.BehaviorElapsedSeconds;
 	const double PreviousDuration = SteeringState.BehaviorDurationSeconds;
 	const double PreviousBlocked = SteeringState.BlockedSeconds;
+	const double PreviousBoutElapsed = SteeringState.ActiveBoutElapsedSeconds;
+	const double PreviousBoutDuration = SteeringState.ActiveBoutDurationSeconds;
 	const double StaminaRatio = FMath::Clamp(State.FishStamina / InitialFishStamina, 0.0, 1.0);
 	const bool bAccepted = SteeringState.bInitialized
 		? FCatFishSteeringModel::BeginBehavior(SteeringConfig, Outward, Behavior, StaminaRatio, SteeringRandom, SteeringState)
@@ -552,13 +554,16 @@ bool UCatFishingFightRunner::BeginFishBehaviorFromStateTree(const ECatFishBehavi
 	const FString Fields = FString::Printf(
 		TEXT("Event=fishing_behavior_phase_entered SessionId=%s RodActorId=%s PreviousBehavior=%s Behavior=%s "
 			"DurationSeconds=%.4f TargetEffort=%.4f ActualEffort=%.4f BlockedSeconds=%.4f LineLoad=%.4f "
-			"PreviousElapsedSeconds=%.4f PreviousDurationSeconds=%.4f FishStamina=%.4f CatStamina=%.4f "
+			"PreviousElapsedSeconds=%.4f PreviousDurationSeconds=%.4f ActiveBoutElapsedSeconds=%.4f ActiveBoutDurationSeconds=%.4f "
+			"PreviousBoutElapsedSeconds=%.4f PreviousBoutDurationSeconds=%.4f FishStamina=%.4f CatStamina=%.4f "
 			"Reason=StateTreeTransition Result=%s World=%s NetMode=%d Authority=true LocalRole=%d"),
 		*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 		*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
 		*UEnum::GetValueAsString(PreviousBehavior), *UEnum::GetValueAsString(Behavior),
 		SteeringState.BehaviorDurationSeconds, SteeringState.TargetEffortRatio, SteeringState.CurrentEffortRatio,
-		PreviousBlocked, SteeringState.SmoothedLineLoad, PreviousElapsed, PreviousDuration, State.FishStamina, State.CatStamina,
+		PreviousBlocked, SteeringState.SmoothedLineLoad, PreviousElapsed, PreviousDuration,
+		SteeringState.ActiveBoutElapsedSeconds, SteeringState.ActiveBoutDurationSeconds, PreviousBoutElapsed, PreviousBoutDuration,
+		State.FishStamina, State.CatStamina,
 		bAccepted ? TEXT("Accepted") : TEXT("InvalidBehavior"), *GetNameSafe(World),
 		World ? static_cast<int32>(World->GetNetMode()) : -1, static_cast<int32>(SessionActor->GetLocalRole()));
 	if (bAccepted) { UE_LOG(LogCatFishing, Log, TEXT("%s"), *Fields); }

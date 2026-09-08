@@ -75,13 +75,13 @@ bool UCatFishStateTreeAuthoringLibrary::CreateOrUpdateDefaultFishBehaviorStateTr
 		}
 	};
 	using ECondition = ECatFishBehaviorCondition;
-	// 树资产明确拥有选择顺序；模型只报告承诺时长、持续受阻和体力事实。
-	AddFeedbackTransition(Outward, EaseOff, { ECondition::MinimumDurationElapsed, ECondition::LowStamina });
+	// 总对抗时限优先于局部承诺，保证反复改道也能给玩家恢复窗口。
+	AddFeedbackTransition(Outward, EaseOff, { ECondition::NeedsRecovery });
 	AddFeedbackTransition(Outward, Lateral, { ECondition::MinimumDurationElapsed, ECondition::SustainedBlocked });
 	AddFeedbackTransition(Outward, EaseOff, { ECondition::DurationExpired });
-	AddFeedbackTransition(Lateral, EaseOff, { ECondition::MinimumDurationElapsed, ECondition::LowStamina });
-	AddFeedbackTransition(Lateral, EaseOff, { ECondition::MinimumDurationElapsed, ECondition::SustainedBlocked });
-	AddFeedbackTransition(Lateral, EaseOff, { ECondition::DurationExpired });
+	AddFeedbackTransition(Lateral, EaseOff, { ECondition::NeedsRecovery });
+	AddFeedbackTransition(Lateral, Outward, { ECondition::MinimumDurationElapsed, ECondition::SustainedBlocked });
+	AddFeedbackTransition(Lateral, Outward, { ECondition::DurationExpired });
 	AddFeedbackTransition(EaseOff, Lateral, { ECondition::DurationExpired, ECondition::SustainedBlocked });
 	AddFeedbackTransition(EaseOff, Outward, { ECondition::DurationExpired });
 

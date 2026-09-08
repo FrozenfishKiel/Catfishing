@@ -172,16 +172,17 @@
 | AdaptiveMotionVersion | 0=旧序列化格式，1=新格式；只迁移0，不覆盖版本1的调参或以旧值修补非法新参数 |
 | FullEffortMovementSpeedCentimetersPerSecond | 满出力参考自由游速 cm/s，必须为正；校准固定水阻，实际推进随u变化。旧资产取原两档速度最大值，不把速度比例换成u |
 | AdaptiveSteeringConfig | 新的连续行为配置，Session 开始搏斗时整体冻结；下列带此前缀的字段均属于此结构 |
-| AdaptiveSteeringConfig.OutwardEffortRange / LateralEffortRange / EaseOffEffortRange | 外冲/横切/缓游目标出力区间，默认0.8～1 / 0.4～0.7 / 0.15～0.35，无量纲[0,1] |
+| AdaptiveSteeringConfig.OutwardEffortRange / LateralEffortRange / EaseOffEffortRange | 外冲/横切/缓游目标出力区间，默认0.8～1 / 0.75～0.95 / 0.3～0.45，无量纲[0,1]；横切仍主动抗线 |
 | AdaptiveSteeringConfig.EffortRisePerSecond / EffortFallPerSecond | 实际出力升/降速率，默认0.8 / 0.6比例每秒；切状态保留当前u |
-| AdaptiveSteeringConfig.OutwardDurationRangeSeconds / LateralDurationRangeSeconds / EaseOffDurationRangeSeconds | 新结构默认最长区间2～4 / 1.5～3 / 1～2秒；版本0迁移保留原挣扎/平静秒数到外冲/缓游，因此正式资产值可不同 |
-| AdaptiveSteeringConfig.MinimumBehaviorDurationSeconds | 允许低体力/受阻切换前的最短承诺，默认0.65秒；最长时长也不会短于它 |
+| AdaptiveSteeringConfig.OutwardDurationRangeSeconds / LateralDurationRangeSeconds / EaseOffDurationRangeSeconds | 新结构默认最长区间2～4 / 1.5～3 / 1.25～2秒；四正式性格缓游区间见鱼运动文档。版本0载荷迁移仍保留原秒数，已知正式旧资产另经显式调参迁移 |
+| AdaptiveSteeringConfig.MinimumBehaviorDurationSeconds | 受阻改道前的最短承诺，默认1.25秒；采样的局部/整轮时长不短于它。整轮恢复优先，允许越过局部承诺 |
+| AdaptiveSteeringConfig.ActiveBoutDurationRangeSeconds | 连续外冲/横切的整轮最长时限，默认6～10秒；跨改道累计，缓游结束才重新采样，避免无限反复冲刺 |
 | AdaptiveSteeringConfig.RetargetDurationRangeSeconds | 有限偏角重新采样间隔，默认0.6～1.4秒；不逐步随机换侧 |
 | AdaptiveSteeringConfig.MaximumTurnRateDegreesPerSecond | 实际游向的最大水平转速，默认120°/秒；旧人格迁移保留原角速度 |
 | AdaptiveSteeringConfig.OutwardAngularSpreadDegrees | 外冲随机偏角半宽，默认25°；旧扇区只按角度几何迁入，旧内游概率退出 |
-| AdaptiveSteeringConfig.LateralOutwardBias / EaseOffInwardBias | 横切保留向外分量/缓游混合向内权重，默认0.2 / 0.45；横切侧向在当前行为期间固定 |
-| AdaptiveSteeringConfig.LowStaminaRatio | 低体力条件阈值，默认0.3；不直接减弱正常最大力量 |
-| AdaptiveSteeringConfig.LowStaminaActiveDurationMultiplier / LowStaminaEaseOffDurationMultiplier | 低体力进入强动作时最长时长×0.7，进入缓游时×1.5；缓游不恢复鱼体力 |
+| AdaptiveSteeringConfig.LateralOutwardBias / EaseOffInwardBias | 横切向外系数/缓游向内混合权重，默认0.9 / 0；横切目标为normalize(切向+0.9×向外)，默认缓游只横游，不主动帮收线 |
+| AdaptiveSteeringConfig.LowStaminaRatio | 低体力阈值，默认0.3；影响入态时长采样，不直接减弱正常最大力量，也不让正式树立即退出外冲 |
+| AdaptiveSteeringConfig.LowStaminaActiveDurationMultiplier / LowStaminaEaseOffDurationMultiplier | 低体力进入强动作时局部时长及新一轮对抗时限×0.7，进入缓游时×1.5；已采样整轮时限不在途中重抽，缓游不恢复鱼体力 |
 | AdaptiveSteeringConfig.BlockedLoadThreshold / BlockedProgressFraction | 受阻需真实承载，默认平滑负载≥0.2且主动方向实际速度低于期望自由游速的0.4 |
 | AdaptiveSteeringConfig.BlockedConfirmationSeconds / LoadSmoothingSeconds | 受阻确认时长/负载平滑时间常数，默认0.35 / 0.15秒；只用上一完整物理步反馈 |
 | StrongConfrontationAlignmentThreshold / StrongConfrontationConfirmationSeconds | 强对抗表现阈值/确认时长，不选择终局，不代替鱼费用G |

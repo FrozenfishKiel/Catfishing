@@ -183,6 +183,19 @@ bool FCatFishBehaviorEscapeResumeTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("助手恢复出力后执行原策略"), FCatFishSteeringModel::Step(Config, FVector::ForwardVector,
 		0.05, Random, State, Direction))) return false;
 	TestEqual(TEXT("恢复第一步从满力按下降速率衔接，不跳回旧两成"), State.CurrentEffortRatio, 0.97, 1e-9);
+	// 活跃对抗也必须暂停整轮预算；仅检查缓游的零计时不能证明这一契约。
+	if (!FCatFishSteeringModel::BeginBehavior(Config, FVector::ForwardVector,
+		ECatFishBehavior::OutwardRush, 0.2, Random, State)
+		|| !FCatFishSteeringModel::AdvanceFeedback(Config, Feedback, 0.5, State)) return false;
+	const double BeforeBoutElapsed = State.ActiveBoutElapsedSeconds;
+	const double BeforeBoutDuration = State.ActiveBoutDurationSeconds;
+	const int32 BeforeActiveSeed = Random.GetCurrentSeed();
+	for (int32 Index = 0; Index < 100; ++Index)
+		if (!FCatFishSteeringModel::Step(Config, FVector::ForwardVector, 0.05, Random, State, Direction, true)) return false;
+	TestTrue(TEXT("夹具确实已累计一段活跃对抗时间"), BeforeBoutElapsed > 0.0);
+	TestEqual(TEXT("强拖不会耗尽整轮对抗时间"), State.ActiveBoutElapsedSeconds, BeforeBoutElapsed);
+	TestEqual(TEXT("强拖不会重采整轮对抗时限"), State.ActiveBoutDurationSeconds, BeforeBoutDuration);
+	TestEqual(TEXT("活跃对抗强拖也不推进随机流"), Random.GetCurrentSeed(), BeforeActiveSeed);
 	return !HasAnyErrors();
 }
 

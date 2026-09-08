@@ -18,16 +18,16 @@ struct CATFISHING_API FCatFishSteeringConfig
 	double OutwardAngularSpreadDegrees = 25.0;
 	/** 横切方向中保留多少向外分量；线方向改变时保持同一侧，形成连续弧线。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Direction", meta=(ClampMin="0", ClampMax="1"))
-	double LateralOutwardBias = 0.2;
-	/** 缓游以横移和向内调整混合，低出力不等于瞬间朝玩家掉头。 */
+	double LateralOutwardBias = 0.9;
+	/** 缓游向内混合权重；默认0保持横游，只降低出力，避免主动帮玩家收线。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Direction", meta=(ClampMin="0", ClampMax="1"))
-	double EaseOffInwardBias = 0.45;
+	double EaseOffInwardBias = 0.0;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Effort")
 	FVector2D OutwardEffortRange = FVector2D(0.8, 1.0);
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Effort")
-	FVector2D LateralEffortRange = FVector2D(0.4, 0.7);
+	FVector2D LateralEffortRange = FVector2D(0.75, 0.95);
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Effort")
-	FVector2D EaseOffEffortRange = FVector2D(0.15, 0.35);
+	FVector2D EaseOffEffortRange = FVector2D(0.3, 0.45);
 	/** 单位为出力比例/秒。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Effort", meta=(ClampMin="0.01"))
 	double EffortRisePerSecond = 0.8;
@@ -38,9 +38,12 @@ struct CATFISHING_API FCatFishSteeringConfig
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Duration")
 	FVector2D LateralDurationRangeSeconds = FVector2D(1.5, 3.0);
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Duration")
-	FVector2D EaseOffDurationRangeSeconds = FVector2D(1.0, 2.0);
+	FVector2D EaseOffDurationRangeSeconds = FVector2D(1.25, 2.0);
+	/** 连续外冲/横切的总时限；换路线不重置，只在缓游后重新开始一轮。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Duration")
+	FVector2D ActiveBoutDurationRangeSeconds = FVector2D(6.0, 10.0);
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Duration", meta=(ClampMin="0", Units="s"))
-	double MinimumBehaviorDurationSeconds = 0.65;
+	double MinimumBehaviorDurationSeconds = 1.25;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Feedback", meta=(ClampMin="0", ClampMax="1"))
 	double LowStaminaRatio = 0.3;
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Duration", meta=(ClampMin="0.1", ClampMax="1"))
@@ -82,6 +85,8 @@ struct CATFISHING_API FCatFishSteeringState
 	double TargetEffortRatio = 1.0;
 	double BehaviorElapsedSeconds = 0.0;
 	double BehaviorDurationSeconds = 0.0;
+	double ActiveBoutElapsedSeconds = 0.0;
+	double ActiveBoutDurationSeconds = 0.0;
 	double FishStaminaRatio = 1.0;
 	double BlockedSeconds = 0.0;
 	double SmoothedLineLoad = 0.0;

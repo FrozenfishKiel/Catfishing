@@ -491,7 +491,7 @@ Root
 
 # 第五部分：单条鱼行为树 ST_FishFight
 
-树挂在 `ACatFishEncounterActor::FishBehaviorStateTree`，仅服务器运行，不需要 AIController。2026-09-08 第一版生成器包含以下三个真实行为叶子；正式树与四性格已完成迁移和独立进程重载，正式树固定步分支测试通过；实际交付证据见 [鱼运动实现导读](FishFightImplementationGuide_zh-CN.md)。
+树挂在 `ACatFishEncounterActor::FishBehaviorStateTree`，仅服务器运行，不需要 AIController。2026-09-08 阻力修正继续使用以下三个真实行为叶子，增加跨外冲/横切的主动行为总时限，并调整受阻后的选边；当前资产与运行验证证据见 [鱼运动实现导读](FishFightImplementationGuide_zh-CN.md)。
 
 ```text
 Hooked Fish Behavior
@@ -506,19 +506,31 @@ Hooked Fish Behavior
 
 | 来源 | 条件与目标（从先到后） |
 |---|---|
-| Outward Rush | 最短承诺+低体力→Ease Off；最短承诺+持续受阻→Lateral Arc；最长时长到期→Ease Off |
-| Lateral Arc | 最短承诺+低体力→Ease Off；最短承诺+持续受阻→Ease Off；最长时长到期→Ease Off |
+| Outward Rush | 需要恢复→Ease Off；最短承诺+持续受阻→Lateral Arc；最长时长到期→Ease Off |
+| Lateral Arc | 需要恢复→Ease Off；最短承诺+持续受阻→Outward Rush；最长时长到期→Outward Rush |
 | Ease Off | 到期+持续受阻→Lateral Arc；到期→Outward Rush |
+
+`NeedsRecovery` 表示主动行为总时限耗尽，优先于受阻换招，且不受最短承诺时间门控。低体力在开始一轮主动行为时缩短该总时限，不再作为当前正式树独立的立即退让条件。外冲与横切之间切换会保留这份总计时；这样横切受阻时可以重新外冲，又不会靠反复换招无限延长强动作。每个叶子的自身最长时长仍保留：外冲自然到期进入缓游，横切自然到期重新外冲。
 
 `CatFishBehaviorStateTreeSchema` 将 Context Actor 限定为鱼 Encounter。Task/条件不写位置、线长、ASC、耐久和终局。它们也不使用旧 `MotionIntent` 决定行为，旧枚举只保留正式三动画兼容投影。新的出力比例、转向、时长和受阻阈值由人格 `AdaptiveSteeringConfig` 配置；鱼费用由独立实际出力与物理对抗计算。
 
-编译好 Editor 模块后，先通过受控脚本只读检查；确认的旧树指纹匹配且数据均就绪时，可附加 `-ApplyFishAdaptiveMotion` 迁移。脚本在写入前备份限定的六个包，保护现有鱼目录和动画资产；新版本的调参和树不被重建覆盖。
+完整编译 Editor 模块后，用新进程运行受控脚本。新增 `USTRUCT` 字段需要新进程重新加载原生类型和 Python 包装；不能以旧编辑器中的热重载对象作为资产保存依据。脚本默认只读；三个显式模式互斥：
+
+| 参数 | 作用与写入范围 |
+|---|---|
+| `-ApplyFishAdaptiveMotion` | 旧模型迁移入口。保存四个性格与 Balance，仅在已知旧树指纹匹配时重建鱼树；已有版本 1 调参和自定义新树保持原值。 |
+| `-AuditFishResistanceTuning` | 只读检查当前值、预期调参、五包基线指纹和八条目标边；也用于阻力调参保存后的独立重载验证。 |
+| `-ApplyFishResistanceTuning` | 仅接受已盘点的五个正式包指纹，检查无目标包未保存改动和新原生字段，再备份四性格与鱼树。只写七个约定的方向/出力/时长配置，经同一个原生生成器更新鱼树；拒绝未知改动或已经部分保存的包。 |
+
+阻力模式保留性格 ID、`AdaptiveMotionVersion=1`、满出力参考速度，以及其余转向、外冲时长等配置。保护包共 51 个：16 Fish、16 Presentation、17 AnimBP、`ST_FishingSession` 和 Balance；Balance 不保存，体力单价不变。四性格的主动行为总时限分别为 6～8 / 7～10 / 8～12 / 10～14 秒；缓游分别为 1.25～1.5 / 1.25～1.75 / 1.25～2 / 1.25～2 秒，最短承诺均为 1.25 秒。
 
 ```text
-D:/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe D:/develop/Catfishing/Catfishing.uproject -ExecutePythonScript=D:/develop/Catfishing/Scripts/migrate_fish_adaptive_behavior.py -unattended -nop4 -NullRHI -DDC-ForceMemoryCache
+D:/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe D:/develop/Catfishing/Catfishing.uproject -ExecutePythonScript=D:/develop/Catfishing/Scripts/migrate_fish_adaptive_behavior.py -AuditFishResistanceTuning -FishAdaptiveEvidenceDir=D:/develop/Catfishing/Saved/Automation/FishResistance-20260908/ReadOnlyExample -unattended -nop4 -NullRHI -DDC=NoZenLocalFallback -DDC-ForceMemoryCache
 ```
 
-`Scripts/create_fish_behavior_state_tree.py` 仍是整份重建默认树的作者入口，会替换 EditorData；已有手工编辑的资产应先做引用/拓扑盘点。日常资产迁移优先使用上述带指纹与备份的脚本，保存后用新进程重新加载检查。
+每次使用新的证据目录。保存后在另一进程执行只读模式，核对目标值、八条边、全部保护包指纹和正式鱼引用；`saved_requires_fresh_process_verification` 只表示保存成功，需要该重载证据才能确认资产持久化。`Scripts/create_fish_behavior_state_tree.py` 仍是整份重建默认树的作者入口，会替换 EditorData；已有手工编辑的资产应先做引用/拓扑盘点。日常资产迁移使用上述带指纹与备份的脚本。
+
+本轮已完成上述五包保存和独立进程重载，证据在 `Saved/Automation/FishResistance-20260908/Migration/Migration.json`、`FreshReload/Audit.json` 与 `Verification.json`。11 项资产核对通过：四性格目标值和实际八边符合预期，51 个保护包指纹、16 鱼引用与运行配置不变；四性格仍为版本 1，满出力速度仍为 110/140/180/240 cm/s。该证据确认资产持久化，不代替真实场景的阻力手感或打包联机验收。
 
 折返、近岸反扑与效用评分选路尚未实现。扩展时在新 `ECatFishBehavior` 与树条件中表达策略，继续由同一 Steering/Simulator 执行，不能另开一套位置或扣体逻辑。
 

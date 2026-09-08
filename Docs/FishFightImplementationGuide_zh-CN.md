@@ -1,17 +1,21 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
-本文件持续维护鱼、线、杆、猫的运动设计与实际代码。最近实现更新：2026-09-08。第一版连续出力、三个反馈行为及新耗体公式已接入原生产调用链，六个正式资产包已迁移并经独立进程重新加载，Editor/Game Win64 Development 构建成功。最终163项测试通过162项，仅保留既有初级竿150/500耐久基线失败；尚未完成新打包版本或真人双端手感验收。
+本文件持续维护鱼、线、杆、猫的运动设计与实际代码。最近更新：2026-09-08，第二轮针对首轮实机“鱼缺少对抗、容易上岸”的反馈修正策略。源码已增加跨外冲/横切的连续对抗时限，并调整方向、出力和恢复窗口。本轮Editor/Game构建成功，165项测试中164项通过，唯一失败仍为既有初级竿150/500耐久基线；正式五包已保存，并通过独立重载及当前编辑器实读确认。尚不能声明修正后的真人手感通过。第一轮163项测试中162项通过的结果保留为历史基线。
 
-- 本文“第一版实现”和“当前源码”描述本轮代码；正式 `/Game/Data/StateTrees/ST_FishFight` 已从修改前的两个计时叶子迁为三行为反馈树，独立重载确认使用新结构。
+- 本文开头描述第二轮当前源码和已迁移的正式资产。`/Game/Data/StateTrees/ST_FishFight` 在第一轮已从两个计时叶子迁成三行为树；第二轮的新反馈边已保存并经独立进程和当前编辑器重载确认。
 - 后面的日期衔接核对保留历史改动和当时的证据；其中旧两档游速、阶段耗体、旧入口只描述相应历史版本，不作为当前公式或新验收证据。
-- 折返、近岸反扑、水下三维运动、完整效用评分选路和真人双端丝滑验收均未完成。第一版也没有实现专门的鱼 Actor 网络运动插值器。
+- 折返、近岸反扑、水下三维运动、完整效用评分选路和真人双端丝滑验收均未完成；仍没有专门的鱼 Actor 网络运动插值器。
 - 后续讨论继续更新本文件。业务进度与持续验收缺口只维护在 [需求对齐差距清单](Development/需求对齐差距清单.md)，本文不另建模块进度账本。
 
-## 连续出力与三个反馈行为：第一版（2026-09-08）
+## 连续出力与三个反馈行为：阻力反馈修正（2026-09-08，第二轮）
 
 ### 玩法目标与实现范围
 
-目标是让玩家利用走位、转杆和收线时机创造牵引窗口：鱼外冲受阻后尝试横切，持续受压或疲劳后降低主动出力，玩家在实际负载允许时收近。当前代码提供形成这一过程的行为与物理条件；它是否足够好玩、是否所有正式鱼种都能产生有利的体力交换，尚未经过真人实机验证。
+目标是让玩家利用走位、转杆和收线时机创造牵引窗口：鱼外冲受阻后保持出力尝试横切，横切仍受阻时重试外冲；连续对抗达到时限或外冲自然结束后短暂降低出力，再开始下一轮。恢复时限保证鱼不会靠不断换向无限维持强动作；它是玩法调度预算，不是新增的体力资源或扣费入口。
+
+首轮实机证据为 `Saved/Automation/FishResistance-20260908/UserBefore.log`，会话 `D246F483-4C18-A639-50AC-4791567AA3DD`：约3.04 kg的电鳗正常最大推力约27.34 N，猫原始合力50 N，受杆姿态影响，本次日志有效力量约20～25 N（前两步为20和24.862 N，最大可达50 N）；鱼约24.6 s上岸，着岸前仍有72.2689/76.5体力。日志出现外冲约0.95 s即受阻转横切，以及4.1～4.8 s的缓游。着岸后原终局会把鱼体力清零，不能把这一清零误记为遛鱼已耗尽体力。这份反馈证明第一轮受控测试通过仍不足以确认对抗手感；本轮修正后的真人结果尚未取得。
+
+第一轮横切同时降低出力和向外投影，稳态主动沿线推力仅约0.078～0.137倍正常最大推力；缓游又默认主动向内。第二轮分别修正这两处，并延长有效动作的承诺时间。在猫能实际提供50 N有效力量的条件下，27.34 N鱼仅靠正常主动推力不能保证静态顶住；这项一般力量边界不能替代本次日志中实际有效猫力的判断。本轮不修改鱼力量、猫力量或物理收费公式来制造静态顶住的保证。
 
 保留 `ACatFishEncounterActor + UStateTreeComponent`，不增加 AIController、Pawn 寻路或 MoveTo 位置写口。`ECatFishBehavior` 的 `OutwardRush/LateralArc/EaseOff` 表达策略；旧 `ECatFishMotionIntent` 留作现有三种动画角色的兼容投影，不再决定鱼推力、游速或阶段费用。
 
@@ -30,19 +34,28 @@ flowchart LR
 
 ### StateTree 转移与唯一行为时钟
 
-入口为 `FCatFishBehaviorStateTask::EnterState` → `ACatFishEncounterActor::BeginFishBehaviorFromStateTree` → `UCatFishingFightRunner::BeginFishBehaviorFromStateTree`。Task 只提交行为，关闭自身 Tick；进入时由 Runner 持有的随机流冻结目标出力与最长持续时间。`HandleFixedStep` 先调用 `AdvanceFeedback`，再手动 `TickFishBehaviorFromAuthority(FixedStepSeconds)` 评估树的 `OnTick` 条件，最后执行连续转向与本步物理。
+入口为 `FCatFishBehaviorStateTask::EnterState` → `ACatFishEncounterActor::BeginFishBehaviorFromStateTree` → `UCatFishingFightRunner::BeginFishBehaviorFromStateTree`。Task 只提交行为，关闭自身 Tick；进入时由 Runner 持有的随机流冻结目标出力与最长持续时间。首次主动行为、或缓游结束重新进入主动行为时，另外采样本轮 `ActiveBoutDurationSeconds` 并清零 `ActiveBoutElapsedSeconds`；外冲与横切互换时保留两者。`HandleFixedStep` 先调用 `AdvanceFeedback`，再手动 `TickFishBehaviorFromAuthority(FixedStepSeconds)` 评估树的 `OnTick` 条件，最后执行连续转向与本步物理。
 
-组件自动 Tick 已关闭，行为计时、负载记忆和树评估使用同一固定步。StateTree 只读取 `MinimumDurationElapsed/DurationExpired/SustainedBlocked/LowStamina`，不持有第二份鱼体力或扣费状态。生成器使用明确优先顺序的条件边，尚未使用效用评分选择器。
+组件自动 Tick 已关闭，行为计时、负载记忆和树评估使用同一固定步。正式树读取 `MinimumDurationElapsed/DurationExpired/SustainedBlocked/NeedsRecovery`；`NeedsRecovery` 表示累计主动时长达到本轮预算，优先于受阻改道，且不被刚进入行为的局部最短承诺挡住。缓游不累计主动时长。`LowStamina` 仍是合法的作者条件接口，但正式树不再用它在每次最短承诺后立刻退出主动行为。树不持有第二份鱼体力或扣费状态，仍使用明确优先顺序的条件边，尚未使用效用评分选择器。
 
 | 行为 | 当前目标出力默认值 | 当前树的退出顺序 | 玩家可利用的机会及边界 |
 | --- | --- | --- | --- |
-| `OutwardRush` 外冲 | 0.8～1.0 | 最短承诺后低体力 → 缓游；否则持续受阻 → 横切；最长时长到期 → 缓游 | 让鱼承受实际牵制；不会只按一个固定计时器来回切换 |
-| `LateralArc` 横切 | 0.4～0.7 | 最短承诺后低体力或持续受阻 → 缓游；到期也 → 缓游 | 在同一侧沿当前鱼线切向游，玩家换位会改变弧线；不保证该侧是最优路线 |
-| `EaseOff` 缓游 | 0.15～0.35 | 到期且仍受阻 → 横切；否则 → 外冲 | 降低主动推力，争取收线或调整站位窗口；不回血，也不保证张力立即消失 |
+| `OutwardRush` 外冲 | 0.8～1.0 | 总对抗预算到期 → 缓游；否则最短承诺后持续受阻 → 横切；本状态最长时长到期 → 缓游 | 玩家可以持续牵制，但受阻首先触发有力改道，不直接等同于鱼该卸力 |
+| `LateralArc` 横切 | 0.75～0.95 | 总对抗预算到期 → 缓游；否则最短承诺后持续受阻 → 外冲；本状态到期也 → 外冲 | 保持同侧弧线并保留较强向外分量；重试不会重置总预算，不保证该侧是最优路线 |
+| `EaseOff` 缓游 | 0.3～0.45 | 到期且仍受阻 → 横切；否则 → 外冲 | 默认横游并降低出力，提供短窗口；不默认主动向内，不回血，也不保证张力立即消失 |
 
-`FCatFishSteeringConfig` 新资产默认最长区间为外冲 2～4 s、横切 1.5～3 s、缓游 1～2 s，最短承诺 0.65 s。旧正式性格迁移时保留原外冲/平静时长的秒数，分别进入新的外冲/缓游区间；因此不能把这些新结构默认值直接写成四个正式资产已验证的时长。
+`FCatFishSteeringConfig` 原生默认最长区间为外冲2～4 s、横切1.5～3 s、缓游1.25～2 s，连续对抗预算6～10 s，局部最短承诺1.25 s。正式四性格保留第一轮外冲时长与满出力参考游速，显式更新缓游和总对抗预算；下表是本轮独立重载确认的正式数值；原生默认值和正式包配置分开记录。
 
-负载按 `T_previous/F_max` 归一化并以 0.15 s 时间常数平滑。线有实际张力、平滑负载至少 0.2、主动方向上的实际速度低于上一期望自由游速的 40%，才累计受阻；持续 0.35 s 才确认。条件消失即清受阻累计。低体力阈值默认 30%；进入行为时低于阈值，强动作最长时长乘 0.7，缓游最长时长乘 1.5，但不降低鱼的正常力量上限。低体力也可以触发当前强动作在最短承诺后结束；短暂再次外冲仍可能发生。
+| 正式性格包 `/Game/Catfishing/Data/Fish/` | 满出力参考游速 cm/s（保留） | 外冲最长区间 s（保留） | 连续对抗预算 s（本轮已重载） | 缓游最长区间 s（本轮已重载） |
+| --- | --- | --- | --- | --- |
+| `Fight_SmallRestless` | 110 | 3～5 | 6～8 | 1.25～1.5 |
+| `Fight_MediumSteady` | 140 | 3.5～5.5 | 7～10 | 1.25～1.75 |
+| `Fight_LargePredator` | 180 | 4～6 | 8～12 | 1.25～2 |
+| `Fight_GiantHeavy` | 240 | 5～7 | 10～14 | 1.25～2 |
+
+负载按 `T_previous/F_max` 归一化并以0.15 s时间常数平滑。线有实际张力、平滑负载至少0.2、主动方向上的实际速度低于上一期望自由游速的40%，才累计受阻；持续0.35 s才确认，条件消失即清累计。受阻含义和阈值本轮保留，改变的是树收到受阻事实后的选择。
+
+低体力阈值默认30%。进入状态时低于阈值，主动状态最长时长乘0.7、缓游最长时长乘1.5；开始新一轮主动行为时，总预算也乘0.7，采样结果均受局部最短承诺下限保护。途中体力变化不会重抽已冻结的总预算，也不再凭低体力条件在1.25 s一到就退出。正常力量上限不随体力比例缩小。两种时间累计均由Runner同一固定步推进，不新增独立Ticker或体力恢复公式。
 
 ### 主动推力、连续转向和独立水阻
 
@@ -56,7 +69,9 @@ drag_kg_per_s = F_max_N × 100 / max(1, FullEffortSpeed_cm_per_s)
 
 `u=FishEffortRatio` 是 `[0,1]` 的实际出力，不是鱼体力百分比。目标范围由行为提供；实际值每秒最多上升 0.8、下降 0.6，切状态保留当前值、方向和物理速度。水平转向继续受角速度上限约束；新结构默认 120°/s，迁移资产保留自己的旧上限。当前尚未按高速自动降低转弯能力。
 
-外冲在有限角度内重选偏角；横切冻结左右侧并随鱼线方向连续更新切向目标，保留默认 0.2 的向外分量；缓游混合该侧横向与向内方向，默认向内权重 0.45。重新选偏角和持续时间使用固定随机流；不每步随机换边。缓游表示少使力，不等于立即朝玩家掉头。
+外冲在有限角度内重选偏角；横切冻结左右侧并随鱼线方向连续更新目标 `normalize(Tangent + 0.9 × Outward)`。0.9是混合系数，不是归一化后的向外比例：实际向外投影约0.669，结合0.75～0.95的目标出力，稳态主动沿线推力约为0.502～0.636倍正常最大推力，同时保留切向运动。以上是主动推力投影，不是最终张力保证。
+
+缓游仍采用 `normalize(Tangent × (1 - EaseOffInwardBias) - Outward × EaseOffInwardBias)`，本轮默认 `EaseOffInwardBias=0`，所以目标为横向；字段保留原“向内混合权重”语义供作者调整，不改名后偷偷换义，也不把恢复动作写成默认向玩家游。切入缓游时实际游向和出力继续平滑，岸线约束仍可改变目标。重新选偏角和持续时间使用固定随机流，不每步随机换边。
 
 正常水阻只按固定满出力及满出力参考游速校准，不随 `u` 缩小。参考速度的数值下限为 1 cm/s；当前四个正式性格均高于此下限，稳定自由游速因此趋近 `u × FullEffortSpeed`。若配置低于 1 cm/s，水阻按该下限校准。实际速度仍由惯性、鱼线和岸线决定。`u=0` 只关闭主动推进，仍有水阻、惯性与牵引；它不是鱼力竭，真正力竭继续使用既定清速度与回收规则。
 
@@ -64,7 +79,7 @@ drag_kg_per_s = F_max_N × 100 / max(1, FullEffortSpeed_cm_per_s)
 
 ### 鱼和猫如何耗体
 
-本版已固定使用以下完整鱼费用，不再是未定候选公式：
+第一轮已接入以下鱼费用，本轮保持该公式及唯一收费入口：
 
 ```text
 G = clamp(dot(SwimDirection, FinalLineDirection), 0, 1)
@@ -76,19 +91,52 @@ FishDrain_points = FishEffortStaminaPerSecond × u² × G × dt_seconds
 
 费用读取实际平滑后的 `u` 和最终约束张力。鱼原地使力但被线挡住仍能付费；被动位移、历史纠偏与目标出力本身不产生费用。没有再叠加 `BaseDrainMultiplier/StruggleDrainMultiplier`、鱼负载倍率或鱼等效努力距离，也没有新增一笔主动位移费用。纯横切的沿线投影为零时，这版鱼对抗费用为零；带载绕弧额外消耗、转弯代价仍未实现，不能声称所有绕游都能耗鱼。
 
-鱼自由游动、正常右键回体及既有免耗条件保留。正常右键仍恢复猫体力并免双方费用；猫零体力且无有效助手时的强制拖水优先，普通行为时钟暂停并覆盖实际出力为 1，不能借缓游解除。鱼力竭、上岸、坏竿和捕获仍由原权威入口裁决。
+鱼自由游动、正常右键回体及既有免耗条件保留。正常右键仍恢复猫体力并免双方费用；猫零体力且无有效助手时的强制拖水优先，普通行为时钟、连续对抗预算和策略随机流均暂停，实际出力覆盖为1，不能借缓游解除。鱼力竭、上岸、坏竿和捕获仍由原权威入口裁决。
 
 猫不按鱼状态名追加倍率。移动和收线使用实际主动距离与负载，转杆使用实际主动正功，共享支撑按相对负载平方与时间收费。鱼降低出力可以间接减少猫的负担，但惯性和几何约束可能继续维持张力；进入缓游既不免猫收线费，也不使猫自动回血。
 
 ### 正式资产、表现与当前验证边界
 
-`UCatFightPersonalityDefinition::PostLoad/MigrateLegacyMotionSettings` 将版本 0 迁到 1：用原两档游速最大值建立满出力参考游速；同为秒/角度单位的时长、重选间隔、转速上限和外冲扇区几何迁入新结构。新的三档出力、横切和受阻配置用独立默认值，不由旧速度比例或旧耗体倍率换算。版本 1 的非法配置不回退旧字段，也不覆盖已有新调参。
+`UCatFightPersonalityDefinition::PostLoad/MigrateLegacyMotionSettings` 保留版本0到1的首次迁移契约：用原两档游速最大值建立满出力参考游速；同为秒/角度单位的时长、重选间隔、转速上限和外冲扇区几何迁入新结构。三档出力、横切和受阻配置用独立默认值，不由旧速度比例或旧耗体倍率换算。版本1的非法配置不回退旧字段，也不因原生默认值变化而自动覆盖已有调参。本轮四个正式版本1性格的调整必须走显式、可核对的资产迁移，不借 `PostLoad` 全局重写策划配置。
 
-修改前已用 UE 5.8.1 独立 Cmd 只读加载真实树、四性格和 16 Fish；`Saved/Automation/FishAdaptiveMotion-20260908/AssetsBeforeDetailed.json` 记录了真实两叶 Task 与互跳目标、性格数值和 Fish 引用。树没有发现生成器以外的手工拓扑。`Scripts/migrate_fish_adaptive_behavior.py` 默认只读，显式 Apply 才备份并保存四性格、Balance 和已核实指纹的旧树；保护 16 Fish、16 Presentation、17 AnimBP 和会话树共 50 个包。正式保存已完成：`MigrationNativeSettings/Migration.json` 记录四性格、Balance、树共六包，随后 `FreshReload/Audit.json` 在独立进程确认 tree=adaptive、四性格版本均为1、满出力参考游速依次为110/140/180/240 cm/s、新费用k=3。50个受保护包前后hash一致，16鱼的性格/表现引用未改变；迁移报告原有 `saved_requires_fresh_process_verification` 状态由这份独立重载证据补齐。
+本轮使用 `Scripts/migrate_fish_adaptive_behavior.py -AuditFishResistanceTuning` 只读预览及独立重载，使用互斥的 `-ApplyFishResistanceTuning` 显式更新阻力调参；原 `-ApplyFishAdaptiveMotion` 仍只负责旧模型首次迁移。新的Apply要求五个目标包匹配已审计SHA256、目标没有未保存修改、原生新字段可读，先备份，再只调整四性格的七个配置字段并调用原生成器重建树。保护范围为16 Fish、16 Presentation、17 AnimBP、`ST_FishingSession`和Balance，共51包；Balance本轮不保存，费用k不变。不增加包路径、INI绑定、Cook入口或游戏存档字段。五包保存及51包hash不变已记录于本轮 `Migration/Migration.json`，独立重载由本轮 `FreshReload/Audit.json` 和11项全true的 `Verification.json` 确认。
 
-身体朝向已从最终位移改为主动 `SwimHeading`，仍在服务器按角速度上限转向；鱼可以朝外游却被线侧拖。位置和旋转继续走原 Actor `RepMovement`，没有新增专门的客户端位置平滑。动画读取复制的 `Behavior/u`，期望游速为 `u×FullEffortSpeed`，再用原播放倍率插值。旧三动画映射按实际出力滞回分类：从缓游表现升到挣扎需达到 0.55，已处于挣扎则低于 0.4 才降档；力竭仍为 `AutoHauling`。正式 AnimBP 资产本轮未改；只读审计确认17包共26个图、4个MotionIntent节点与2个SwimPlayRate节点，因此保留旧三动画契约有实际消费者证据。瞬态PIE真实Listen/Client复制测试通过，但不能由服务器方向连续或快照抵达就宣称客户端画面已经丝滑。
+第一轮资产历史：修改前已用 UE 5.8.1 独立 Cmd 只读加载真实树、四性格和 16 Fish；`Saved/Automation/FishAdaptiveMotion-20260908/AssetsBeforeDetailed.json` 记录了真实两叶 Task 与互跳目标、性格数值和 Fish 引用。树没有发现生成器以外的手工拓扑。第一轮脚本显式保存了四性格、Balance和树，共六包；`MigrationNativeSettings/Migration.json` 与独立进程 `FreshReload/Audit.json` 确认三行为树、四性格版本1、参考游速110/140/180/240 cm/s及k=3，50个当时受保护包hash不变。这些证据只确认第一轮迁移，不能证明第二轮反馈边与新数值已经生效。
 
-最终证据统一位于 `Saved/Automation/FishAdaptiveMotion-20260908/`，下列短路径均相对该目录。
+身体朝向继续使用主动 `SwimHeading`，服务器按角速度上限转向；鱼可以朝外游却被线侧拖。位置和旋转保留原Actor `RepMovement`，没有新增客户端位置平滑。动画读取复制的 `Behavior/u`，期望游速为 `u×FullEffortSpeed`，再用原播放倍率插值。旧三动画映射仍按实际出力滞回分类：从缓游表现升到挣扎需达到0.55，已处于挣扎则低于0.4才降档；力竭仍为 `AutoHauling`。本轮不修改WBP或17个正式AnimBP；第一轮只读审计已确认这些包共26个图、4个MotionIntent节点与2个SwimPlayRate节点，属于保留契约的消费者证据。出力区间改变会影响原阈值的触发时机，真人画面仍需检查，不能由方向连续或复制快照抵达就宣称客户端画面丝滑。
+
+### 第二轮影响盘点与衔接结果
+
+本轮修改前以第一轮已落地的连续出力版本为基线；首次实机日志另存为 `Saved/Automation/FishResistance-20260908/UserBefore.log`。本轮启动时Git工作区clean，无用户并行源码改动；本轮内部Agent按职责文件分工，其他任务的历史提交保留。正式五包与51个受保护包的修改前指纹记录于本轮 `AssetsBefore.json`。下表区分已修改源码、已验证受控行为、已完成的独立重载及未取得的真人结果；不另建人工进度账本。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 入口、状态归属与时序 | `Source/Catfishing/Fishing/Simulation/CatFishingFightRunner.cpp::HandleFixedStep/BeginFishBehaviorFromStateTree` → `CatFishSteeringModel.cpp::AdvanceFeedback/BeginBehavior`；Encounter代理仍由正式树Task调用 | 第一轮只累计单行为时长；本轮追加跨外冲/横切的总时长，单位s，缓游不累计，初次主动及恢复后才重新采样 | 新增 `FCatFishSteeringConfig::ActiveBoutDurationRangeSeconds` 和State的 `ActiveBoutElapsedSeconds/ActiveBoutDurationSeconds`；保留Runner唯一固定步、同一随机流、Actor+StateTree宿主 | 先接收配置和状态，再更新条件/生成器，最后保存正式树 | 换向重置造成无限对抗、重复Tick、预算和随机漂移；纯模型与真实树固定步测试 | 源码已接入；本轮正式树运行测试通过，验证多次受阻保留预算、恢复冻结及新一轮重置，普通WorldTick不推进；无AIController新入口 |
+| 策略选择与旧条件接口 | `Source/Catfishing/Fishing/Behavior/CatFishBehaviorTypes.h`、`CatFishBehaviorStateTree.cpp`；`Source/CatfishingEditor/Fishing/CatFishStateTreeAuthoringLibrary.cpp::CreateOrUpdateDefaultFishBehaviorStateTree` → `/Game/Data/StateTrees/ST_FishFight` | 第一轮低体力最短承诺后早退、横切所有出口缓游；本轮预算恢复优先，横切受阻/到期重试外冲 | 新增只读 `NeedsRecovery`；保留8条真实树边，恢复边不受局部Min阻挡；`LowStamina`保留作者接口，正式树不再引用其早退边 | 模型条件先就绪，再生成及迁移已确认指纹的树；不在Step内建立第二棵策略树 | 恢复优先级被受阻边抢占、低体力来不及转向；实际正式树与Steering同跑 | 正式树运行测试通过，包括恢复越过局部Min、低体力缓游后完成转向/出力且仍有有效外冲；树与四性格五包已保存并经独立重载确认 |
+| 连续方向与实际出力 | `Source/Catfishing/Fishing/Simulation/CatFishSteeringModel.h/.cpp::UpdateTargetDirection/Step` 被Runner调用 | 横切0.4～0.7且bias0.2 → 0.75～0.95且bias0.9；缓游0.15～0.35且inward0.45 → 0.3～0.45且inward0；Min0.65 → 1.25 s | 原字段保留含义并显式调值，连续转速120°/s、出力升0.8/s降0.6/s继续；不改实际位置写口或瞬间反射 | 先新配置，再原Step执行，物理仍只读实际u和方向 | 朝向/出力跳变、横切退化为直游、缓游主动帮收线；连续输出与相同物理输入对照 | 本轮受控Steering+Simulator三种子测量显示强鱼横切减慢实际收线、弱鱼提高承载；真实树连续输出测试通过；不等于真人手感验收 |
+| 原生默认与四正式性格 | `FCatFishSteeringConfig` → `Source/Catfishing/Data/CatFishPersonalityDefinition.cpp::MigrateLegacyMotionSettings` → `CatFishingSession::TryEnterHookedFightFromAuthority`冻结配置；四个`Fight_*`包见上表 | 原生总预算6～10 s；正式四类分别6～8/7～10/8～12/10～14 s，缓游缩为1.25～1.5/1.25～1.75/1.25～2/1.25～2 s | 显式迁移七字段；保留版本1、参考游速、原外冲/横切时长、低体力倍率及版本0首次迁移契约，不自动覆盖其他新调参 | 确认原包与新反射字段后保存，再独立进程读取数值及引用 | 只改C++默认而正式DA仍旧值、覆盖策划并行改动；SHA256、迁移JSON、独立重载及原生迁移测试 | 本轮Migration报告五包保存、七字段和八边符合目标；51保护hash相同；独立重载及相关代码回归已通过 |
+| 物理与鱼猫费用 | `CatFishingFightRunner.cpp::HandleFixedStep` → `CatFishingFightSimulator.cpp::Step/FinalizeResolvedStep` → `CatFishingFightWorkModel.cpp::ComputeFishEffortDrain` | 本轮只改变方向、实际u及动作持续比例；`uFmax`、固定水阻、`ku²Gdt`和猫原费用不变 | 保留力量上限、k=3及共同张力；不加状态倍率、重复式费用或保证鱼力胜过猫力 | 同一物理步读取平滑输出，最终地形结算后仍单次支付 | 调AI时暗改力量/费用、主动投影与实际张力混淆；强弱鱼同猫力、横切与恢复对照及原费用回归 | `Tests.log` 的 `fish_resistance_measured` 有强鱼65 N/猫50 N及弱鱼27.34 N对照；原费用契约回归通过，完整真人交换效率仍未验收 |
+| 岸线、强拖与失败退出 | `CatFishSteeringModel.cpp::RedirectFromWaterBoundary/Step`、`CatFishingFightRunner.cpp::ResolveFishSurfaceFromAuthority/Stop`、Encounter停止代理 | 保留真实岸线约束、连续转向、猫零体力无助手强拖和原力竭/上岸/坏竿终局；强拖时新增总预算也应冻结 | 沿原优先级和清理入口；不新增自主Teleport、放线或免除强拖条件 | 普通反馈/树Tick只在非强拖阶段运行，Step执行强拖覆盖，退出恢复原连续控制 | 新预算在强拖期间偷偷到期、近岸反射或停树残留；强拖暂停恢复、地形与退出回归 | 本轮相关回归及真实树停止/代理清理通过；无新增终局入口，真人岸线全程画面未验收 |
+| 网络权威、复制与回执 | Runner服务器权威状态 → `Source/Catfishing/Fishing/Actors/CatFishEncounterActor` 的原表现快照和RepMovement → `CatFishAnimInstance` | 新预算仅Runner内部记忆；客户端仍接收既有Behavior/u/位置旋转，不上传自报鱼力或预算 | 保留原服务器裁决与复制路径，不新增RPC、输入回执或网络状态副本 | 固定步最终结果后仍沿原发布顺序 | 房主有变化而客户端未收到、单端日志冒充联机；同Session的applied/received事件核对 | 本轮Listen/Client四份快照在同一Session成功复制，见下方证据；新Development包及真人双端未验收 |
+| 持久化、装备与副作用 | `CatFishingSession` → 原ASC、Equipment同一鱼竿实例与捕获事务；Balance保持原包 | 行为时长和预算不进入存档，不新增鱼/猫扣费和耐久写入；玩法结果仍由原入口提交 | 不涉及新存档格式、持久化键或事务入口；配置资产保存仅限已确认五包 | 最终物理和终局提交顺序保留 | 新策略引发重复扣体/磨损或覆盖Balance；相关原生产链回归、保护包hash | 本轮原链回归无新增失败；Balance在51个保护包内且hash相同；既有StarterRod150/500差异单独保留 |
+| 正式资产、脚本与Cook | `Scripts/migrate_fish_adaptive_behavior.py` 的 `-AuditFishResistanceTuning/-ApplyFishResistanceTuning`；四`Fight_*`与`ST_FishFight`；原Settings/INI绑定 | 第一轮自适应树已落盘，不能再用“两叶首次迁移”冒充本轮升级；本轮按已知五包指纹显式改七字段/八边 | 原脚本新增互斥阻力调参入口，先备份再保存；保护16 Fish+16 Presentation+17 AnimBP+会话树+Balance共51包 | 目标无未保存修改、原生字段可读、SHA256符合才写；写后独立重载 | 重建策划手工树、误存其他包、旧默认未被Cook；目标/保护hash和独立加载 | 五包迁移已保存、51包不变；`Verification.json`独立重载11项检查全true。包路径、INI绑定和Cook入口不增加，本轮未重新Cook或打包 |
+| UI、动画与身体表现 | Encounter原 `FCatFishEncounterPresentationState` → `Source/Catfishing/Fishing/Presentation/CatFishAnimInstance`；17个正式AnimBP和原WBP | 行为/实际u数值节奏改变，三动画滞回0.55/0.4、主动SwimHeading、播放率与RepMovement保留 | 不改WBP/AnimBP资产，不增加动画接口；`MotionIntent`仍是有已确认消费者的表现投影 | 原生产u和方向→原复制→原动画消费 | Ease实际u仍可能跨表现滞回区、身体侧拖与画面跳动；消费者回归及真人双端 | 本轮复制回归通过；17AnimBP在保护范围，第一轮图审计作消费者证据；真人画面未验收，不宣称专用插值已实现 |
+| 测试、日志与文档 | `Fishing/Tests/CatFishBehaviorStateTreeRuntimeTests.cpp`与行为/阻力相关测试；`CatFishingFightRunner.cpp::BeginFishBehaviorFromStateTree`；本文、`Docs/DataAsset字段含义.md`、`Docs/FishingCoreFlow_zh-CN.md`、`Docs/StateTreeTutorial_zh-CN.md` | 第一轮只验证分支正确但实机偏弱；本轮增加预算与实际受力结果验证，日志保留切换前事实 | `fishing_behavior_phase_entered`保留原PreviousElapsed/Duration，仅新增ActiveBoutElapsedSeconds、ActiveBoutDurationSeconds、PreviousBoutElapsedSeconds、PreviousBoutDurationSeconds四字段，保持Session/Actor/World/Authority关联与状态变化输出；同步当前口径并标历史 | 先源码/正式资产，后受控回归与双端事件，再真人；持续缺口仍归唯一进度入口 | 旧报告冒充本轮通过、热更脏资产或只有编辑器日志；新报告和时间核对 | Editor/Game构建成功；165项159clean+5warning+1既有失败、0未运行。文档与历史边界本轮同步；热更过程异常仅存档，不当作有效验收 |
+
+### 第二轮验证证据与仍需验收的内容
+
+本节短路径相对 `Saved/Automation/FishResistance-20260908/`。
+
+- `contract`：`BuildEditor.log/BuildGame.log` 均为Succeeded；`Report/index.json` 共165项，159 clean、5 warning、1 failed、0 notRun/inProcess，即164项通过。唯一失败仍为 `StarterRodPreservesMaximumDurabilityBaseline` 的150/500既有差异。正式树、总预算、低体力有效动作、连续输出及原费用/强拖等本轮回归通过。
+- `runtime_behavior`：`Tests.log` 中 `Event=fish_resistance_measured` 使用真实Steering+Simulator，连续运行6 s，前2 s用于稳定，统计后4 s，三个随机种子下，65 N鱼对50 N猫的新横切实际收线速度为28.188/30.598/38.463 cm/s，旧横切均为80 cm/s；新横切张力为50 N，旧为35.611～37.339 N。新缓游仍可收线80 cm/s、张力29.037～29.058 N。27.34 N弱鱼的新横切仍可被收线80 cm/s，但张力由旧14.980～15.707 N提高到27.350～28.915 N。这是受控模型对照，不能替代真实玩家输入、整场地形和手感验收。
+- `runtime_behavior`：实际Listen/Client收到外冲、横切、缓游、力竭四份快照，同一 `SessionId=B1C7CAD1-43E9-850A-0B69-E6948CC97FFB` 的 `fishing_behavior_applied/fishing_behavior_received` 分别对应权威端和客户端。五包迁移成功、51保护包hash相同见 `Migration/Migration.json`；`FreshReload/Audit.json` 为独立进程只读审计，`saved_assets=[]`；`Verification.json` 的11项检查全部为true，确认四DA数值、八条真实树边、51保护包、16 Fish引用、Settings及全部56包磁盘hash与记录一致。
+- `presentation_delivery`：本轮未重新Cook或打包，未取得修正后的真人房主/客户端手感、高延迟及鱼/线/杆/角色全程画面证据；新Development包不加 `-log` 的双端落盘也未验收。不能关闭Fishing模块。
+
+过程记录：`HotReloadAttempt.log` 保留热更重实例结构不一致的失败尝试，当时未保存任何脏资产；随后使用完整重启和正式构建取得上述代码验证结果。热更过程日志不作为迁移成功或运行生效的证据。`MigrationGuardChecks.json` 的10项迁移保护检查通过，属于脚本契约证据；`ConnectedEditorAudit.json` 在重新启动的Editor进程17300中实读新原生配置、四DA和八边均符合预期，`dirty_content=[]`，当前编辑器世界为原Frontend入口。当前进程已加载新实现，不等于修正后的真人操作已验收。
+
+### 第一轮验证证据（历史，不替代第二轮结果）
+
+第一轮证据统一位于 `Saved/Automation/FishAdaptiveMotion-20260908/`，下列短路径均相对该目录；本节“本轮”指当时的第一轮实现。
 
 - `contract`：`FinalEditorBuild.log/FinalGameBuild.log` 均为 Succeeded；最终清理未使用友元和旧诊断临时变量后，`CleanupEditorBuild.log/CleanupGameBuild.log` 也均通过，玩法计算未再改变。`FinalReport/index.json` 为163项，157 clean、5 warning、1 failed、0 notRun/inProcess，即162项通过。唯一失败是既有 `StarterRodPreservesMaximumDurabilityBaseline`：测试仍期望150，用户正式资产实际500；未覆盖该资产或降低断言。连续出力/固定水阻、`u²G`、零出力与力竭区别、猫费用独立、右键免耗、强拖、性格版本及正式树反馈分支等本轮用例通过。
 - `runtime_behavior`：正式树固定步分支、方向/出力连续性、强拖暂停/恢复、Runner参与者、原ASC/Equipment相关回归和真实地形夹具通过。`FinalTests.log` 的 `SurfaceRecovery` 记录 ReleaseX=-61.507352、FinalX=30.367648、76步/3.8秒；原120步上限保留。真实 Listen/Client 在同一 `SessionId=8E2A353D-41A8-474A-81B6-FBAC85B7EA63` 收到外冲、横切、缓游、力竭四份快照，`fishing_behavior_applied` 为 NetMode=2/Authority=true，`fishing_behavior_received` 为 NetMode=3/Authority=false。这是受控瞬态PIE的真实复制，尚未覆盖整场正式地图输入、Steam准入、真人走位及全部会话端到端行为。
@@ -96,7 +144,7 @@ FishDrain_points = FishEffortStaminaPerSecond × u² × G × dt_seconds
 
 基线与中间失败单独保留：`BaselineReport/index.json` 最初147项，139 clean、4 warning、4 failed；除耐久外的两项BrokenRodPack和一项FirstRodInteract属于并行Service问题，最终报告中已消失，不能归功于鱼AI。首轮 `ImplementationBuild.log` 在并行Inventory语法及日志分类编译错误处失败，后续重试及最终构建成功。`DeliveryReport` 还出现两项本轮夹具问题：Participant缺少真实Session/Rod且保留立即Calm旧断言；Surface未逐步回写惯性速度。两者修正夹具后在FinalReport通过，未用放宽120步等原行为条件来掩盖失败。两次早期 `Migration*.log` 的Settings反射读取失败均发生在保存前；脚本改用 `load_class` 加原生CamelCase字段后完成六包保存和独立重载，不以中间报告冒充成功。
 
-### 本轮影响盘点与衔接结果
+### 第一轮影响盘点与衔接结果（历史，2026-09-08）
 
 修改前记录：本轮接入前资产相关 `git status` 无并行修改，源码工作区存在其他任务的 Inventory 等改动；只读资产快照已保存。本表按最终源码、迁移和测试结果填写；尚未完成的真人、打包和整链验收明确保留，不另设业务进度入口。
 

@@ -21,5 +21,6 @@ enum class ECatFishBehaviorCondition : uint8
 	MinimumDurationElapsed,
 	DurationExpired,
 	SustainedBlocked,
-	LowStamina
+	LowStamina,
+	NeedsRecovery
 };
