@@ -28,7 +28,7 @@ UCatUISettings::UCatUISettings()
 	MainMenuToggleAction = TSoftObjectPtr<UInputAction>(
 		FSoftObjectPath(TEXT("/Game/Input/InputAction/IA_LakeMenu.IA_LakeMenu")));
 	InventoryToggleAction = TSoftObjectPtr<UInputAction>(
-		FSoftObjectPath(TEXT("/Game/Input/InputAction/IA_LakeMenu.IA_LakeMenu")));
+		FSoftObjectPath(TEXT("/Game/Input/InputAction/IA_Inventory.IA_Inventory")));
 	InteractionConfirmAction = TSoftObjectPtr<UInputAction>(
 		FSoftObjectPath(TEXT("/Game/Input/InputAction/IA_Interact.IA_Interact")));
 	GameplayInputMappingContext = TSoftObjectPtr<UInputMappingContext>(
