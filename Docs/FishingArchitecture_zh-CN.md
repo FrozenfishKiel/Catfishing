@@ -28,11 +28,11 @@
    ├─ 右键→ HookedFight 中 按住=松开线杯 / 松开=锁住当前线长
    ├─ Q   → 按下记时刻 / 松开=按时长算蓄力 → 弹道预测落点 → PlaceChum
    ├─ F   → RequestScoop（服务器找范围内已上钩的鱼；成功直接变成抄手嘴叼世界鱼）
-   └─ X   → 有会话=Cancel（咬钩前零损失）/ 无会话=收竿（操作中先 Leave 再 Pack）
+   └─ X   → 优先当前操作竿；空手只找 250cm 内本人无人占位竿；有会话=取消或切线 / 无会话=Leave 后 Pack
         ▼
 【服务层】UCatFishingService（World Subsystem，只在服务器存在）
    PlaceRod/OperateRod/LeaveRod/PackRod/BeginCast/RequestScoop/SubmitFightAssist
-   持有：每人一根部署竿的 Registry、每人一个活跃会话的槽位、BeginCast 幂等缓存
+   持有：按 RodActorId 登记的全场竿 Registry、每人最多两根部署额度、每根竿一个活跃会话、BeginCast 幂等缓存
         ▼
 【会话层】ACatFishingSession（一次钓鱼长流程的宿主 Actor）
    ├─ UStateTreeComponent（ST_FishingSession）  ← 只拥有"阶段拓扑"
@@ -59,18 +59,22 @@
 
 鱼竿公开状态以紧凑数组 `OperatorPlayerStates` 表示占位，服务器复制给所有客户端：
 
-- 第一次 R 的 `PlaceRod` 取出鱼竿后直接由本人占据主位，初始 `PresentationState` 即为 `Held`，握把在 Construction/BeginPlay 前对齐当前持握位置；不另发一次 `OperateRod`，不重复占用库存。后续 R 在 `LeaveRod` 放下与 `OperateRod` 拿起之间切换，始终不吸附角色、不锁移动。
+- 每人场上最多部署两根鱼竿，地上和手持合计计数；每人同时最多操作一根，包括主位和协作位。部署额度与同一根竿的 `MaximumRodOperatorSlots=2` 操作人数容量分别校验。
+- 空手按 R 时，优先拿起或加入公共交互锚点 250cm 内有空位的竿；附近没有可加入竿时，才从本人库存取出尚未使用的鱼竿实例。部署第二根需要背包原本就有第二根实体竿，不复制第一根，也不免费补发装备。
+- `PlaceRod` 取出每根鱼竿后直接由本人占据主位，初始 `PresentationState` 即为 `Held`，握把在 Construction/BeginPlay 前对齐当前持握位置；不另发一次 `OperateRod`，不重复占用库存。已占位时按 R 通过 `LeaveRod` 放下或退出协作；在同一根地面竿附近再次按 R 通过 `OperateRod` 拿起，始终不吸附角色、不锁移动。
 - 鱼竿只有一个公共 R 交互锚点；能否加入只看这个锚点与容器剩余容量，不会因为下一个人的编号改用另一套交互位置或射线。
 - `OperatorPlayerStates` 是唯一紧凑容器：加入时追加到末尾并取得 `0、1、2...` 编号，任意成员离开后更高编号全部依次减一。
 - `0` 号是当前主位；抛竿、提竿和右键线杯只由它驱动。HookedFight 中所有编号都可用左键提交即时发力意图，0 号离开后新的 0 号立即接管。
 - 每次容器压紧后，服务器按新编号重排所有剩余角色；站位算法按右/左成对向外扩展，配置上限当前为 2、代码有界预留到 8，增加第三、第四人不需要新增专用槽位分支或交互锚点。
 - HookedFight 固定步每次从该容器重建参与集合：主位提供移动/线杯意图，按住左键的辅助位提供协作力量和质量；统一做功后按有效力量占比分别从各自 ASC 支付体力。
 - `OperatorPlayerState` 只保留为 `OperatorPlayerStates[0]` 的兼容快捷字段；蓝图若要判断双人必须读取数组长度。
-- 活动会话唯一性属于鱼竿，不属于玩家：一根竿最多绑定一个未终态 `FishingSession`，同一玩家可以在多人部署的多根竿之间依次抛线。
+- 活动会话唯一性属于鱼竿，不属于玩家：一根竿最多绑定一个未终态 `FishingSession`，同一玩家可在本人已部署的两根竿之间依次抛线，离开一根竿不会结束其会话。
 - 按 R 离开只释放操作位，不写 `Escaped` 或 `Terminated`；`HookedFight` 会立刻进入无人值守松线，鱼按实际外游带线，到 `L_max` 后只按真实负载消耗绑定装备实例的鱼竿耐久，不借用离开玩家的力量/体力。下一位玩家占据主位时，Session 与 Runner 会原子迁移到其 ASC、力量、体力和输入序号域，但耐久仍写同一个 `RodItemInstanceId`，不改扣接手者所选的另一把竿；HookedFight 左键按本人所占鱼竿路由，其他主位命令与 HUD 按当前主操作鱼竿路由。
 - 原始抛竿者的 Equipment 以 `FishingSessionId` 隔离多份鱼饵预留；一场结束只释放自己的预留，不会误释放其他鱼竿会话。
 
-另一个容易混淆的身份是 `OwnerPlayerState`：它代表谁部署/谁能最终收走鱼竿，并不限制谁能占位。服务器按公开 `RodActorId` 找全场鱼竿；接管别人鱼竿后，抛竿也按“当前主操作位”查竿，不再误查“自己部署的竿”。
+另一个容易混淆的身份是 `OwnerPlayerState`：它代表部署归属和当前收纳权限，并不限制谁能占位。服务器按公开 `RodActorId` 找全场鱼竿，再单独验证命令权限。`BeginCast` 按当前主操作位定位竿；不过完整借用他人空竿新开会话仍有装备所有权及 `UseRecord` 绑定缺口，不能把可加入操作位或接力已有会话当成借竿新抛线已经交付。
+
+X 优先处理当前操作竿；本人没有操作竿时，只寻找公共交互锚点 250cm 内本人无人占位的竿，避免收错另一根远处鱼竿。有活动会话仍按原阶段走取消或切线裁决，无活动会话才进入离位与收纳。`PackRod` 按具体 `RodActorId` 查找并独立验证 `OwnerPlayerState`，当前不允许把别人的竿收进自己背包。未来若开放该玩法，必须把原持有者的使用记录、同一物品实例及其剩余耐久原子迁入接收方库存，统一处理容量失败、重复请求和回滚后再切换归属；仅放开 Owner 校验会产生物品复制或丢失。
 
 ### 2.1 水域（样条烘焙 → 只读缓存）
 

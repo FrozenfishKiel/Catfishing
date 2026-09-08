@@ -28,7 +28,10 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Equipment")
 	const FCatEquipmentLoadoutSnapshot& GetSnapshot() const;
 
-	/** 根据服务器目录、可信解锁证明和随身库存持有量设置当前钓鱼选择；当前已部署鱼竿可作为原选择继续沿用，但不能借此切换到另一根鱼竿。 */
+	/** 只读选择下一根可部署的库存鱼竿；优先当前选中实例，否则按库存顺序返回健康竿，不改变选择或库存。 */
+	bool TryGetInventoryRodForDeployment(FCatRunInventorySlot& OutRod) const;
+
+	/** 根据服务器目录、可信解锁证明和随身库存持有量设置当前钓鱼选择；允许从已部署竿切换到另一根库存竿，活动会话仍绑定原实例。 */
 	FCatDomainCommandResult ConfigureLoadoutFromAuthority(FGuid RequestId, int64 ExpectedRevision,
 		FName RodDefinitionId, FName BaitDefinitionId, FName FloatDefinitionId,
 		FName ScoopNetDefinitionId = NAME_None, FName RodSkinDefinitionId = NAME_None,
@@ -68,7 +71,7 @@ public:
 	FCatFishingFailureResult CommitFishingFailure(FGuid RequestId, int64 ExpectedRevision,
 		ECatFishingFailurePenalty Penalty);
 
-	/** Fishing 会话开始前按 SessionId 申请当前钓鱼选择使用权；Begin 会从随身库存暂存一份选中鱼饵，后续由本会话消耗或归还。 */
+	/** Fishing 会话按 SessionId 绑定本组件已部署的指定竿实例（每竿最多一个活动会话），并暂存一份当前选中鱼饵。 */
 	FCatFishingUseReservationResult BeginFishingUse(FGuid FishingSessionId, FGuid RodItemInstanceId,
 		FGuid BaitItemInstanceId, FGuid FloatItemInstanceId, FName RodDefinitionId,
 	FName BaitDefinitionId, FName FloatDefinitionId, int64 ExpectedRevision);

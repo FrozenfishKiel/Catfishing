@@ -115,7 +115,7 @@ Get Controller (Cast to ACatfishingPlayerController)
 
 ### 3.1 PlaceRod（取出并持握鱼竿）
 
-触发时机：玩家没有占用鱼竿、附近没有可加入的竿且自己尚未部署鱼竿，按 R。成功后直接进入主位持握，无需再次调用 OperateRod。
+触发时机：玩家没有占用鱼竿、公共交互锚点 250cm 内没有可加入的竿、本人场上不足两根竿且背包还有未使用的鱼竿实例，按 R。成功后直接进入主位持握，无需再次调用 OperateRod。地上和手持合计最多两根，同时最多操作一根；第二根必须是背包中原有的另一物品实例。
 
 ```
 Get Player Character → Get Equipment Component → Get Snapshot   ← Revision
@@ -127,11 +127,15 @@ Make FCatPlaceRodCommand
 
 - 结果通过 `OnResultReceived`（`BlueprintAssignable` 委托）回调，或用 `TryGetResult(RequestId, OutResult)` 轮询
 - 成功后 `FCatFishingCommandResult` 里的 `RodActorId` / `RodActorRevision` / `EquipmentRevision` **要缓存下来**，BeginCast 要用
-- 失败常见原因：角色前方没有实体地面或地面太斜（`InvalidPayload`，法线 Z 必须 ≥ 0.7）、已经有一根部署中的竿（`ActiveSessionExists`）、没有可用装备或持握依赖无效（`DependencyUnavailable`）。水域合法性在抛竿时检查。
+- 失败常见原因：角色前方没有实体地面或地面太斜（`InvalidPayload`，法线 Z 必须 ≥ 0.7）、本人场上已有两根竿（`RodDeploymentLimitReached`）、已占用另一根竿、没有可用库存实例或持握依赖无效。水域合法性在抛竿时检查。
 
 ### 3.2 OperateRod（走近操作）
 
 **不需要写蓝图**——`UCatGA_FishingRodInteract` 已经原生实现。首次 R 成功后已在持握；后续放下的鱼竿可在公共交互锚点 250cm 范围内按 R 拿起，也可加入仍有空位的其他玩家鱼竿。鱼竿跟随当前持有人，角色不会吸附到 StandAnchor，移动保持自由。
+
+要部署第二根，先按 R 放下第一根，走到附近没有可加入鱼竿的位置后再按 R；仍在第一根竿附近时，R 优先拿起原竿。每人最多操作一根，主位和协作位共用这一限制。加入他人鱼竿及接力已有会话沿用当前链路；借他人空竿重新抛线的装备归属绑定尚未完整交付。
+
+X 优先处理当前操作竿；空手时只选择 250cm 内本人无人占位的竿。有活动会话先按原阶段走取消或切线裁决，无活动会话再离位并收纳。收纳请求按具体 `RodActorId` 定位，服务器另验归属；目前不能把别人的地面竿收进自己背包。以后开放时，需要先完成原使用记录到接收方库存的原子迁移和失败回滚，不能只删除归属检查。
 
 ### 3.3 BeginCast（抛竿）
 
@@ -206,7 +210,7 @@ Controller.Server Configure Equipment(
 
 - 这是个 `Server, Reliable` RPC，没有直接的成功/失败回调结构体传回客户端——**成功与否要靠 `UCatEquipmentComponent` 的 `OnSnapshotChanged`（复制驱动）或直接监听 `Get Snapshot` 的 `Revision` 是否变化来判断**
 - 建议做法：进图 BeginPlay 时（或一个"装备"菜单确认按钮）调用一次，然后在 Character/PlayerState 的 Tick 或 Snapshot 变化事件里检查 `RodDefinitionId != NAME_None` 作为"已装配完成"的信号，再解锁"放竿"按钮
-- 只在库存为空（`Snapshot.RodDefinitionId.IsNone()`）时允许调用；重复调用会因为"同一套新 Request 只读取既有耐久"规则被拒绝换装
+- 配置只选择本人真实持有的装备实例，不能通过重复配置重置耐久或生成另一根竿。部署备用竿继续走 R 的原生 `PlaceRod` 链路，背包必须已有第二根未使用的实例；不要在蓝图里另外复制 Actor 或重建装备快照。
 
 ---
 
@@ -224,5 +228,7 @@ Controller.Server Configure Equipment(
 8. 鱼仍有体力时先收到抄网射线范围内按 `F`，确认鱼直接挂到猫嘴上；也可继续把鱼力竭后回收，确认岸上生成可交互的死鱼 Actor
 9. F 抄中的鱼应已处于嘴叼状态；力竭落地鱼则先按 `E` 叼起。两条路线都确认随身背包没有新增鱼，再对目标地面鱼护按 `E`，确认只写入该鱼护
 10. 单独测打窝：调用 `SubmitPlaceChum`，确认 `TryGetPlaceChumResult` 返回 `bCommitted=true`，且第 6 步的等待时间因为窝料明显缩短
+
+双竿专项回归：背包准备两根独立鱼竿实例；取出第一根后放下并离开交互范围，再取出第二根。确认场上合计两根、同时只有一根被本人操作、第三根部署被拒绝；切换两根竿后分别开会话，检查 HUD 跟随当前主位、实例耐久独立写回。X 收起其中一根不得改变另一根的 Actor、会话或使用记录；库存满时收纳失败应恢复原竿。正式地图的房主与客户端都需核对这一整条流程，以及地面/手持姿态和落盘回执。
 
 任何一步卡住，先看对应阶段在本文第 0/1 节里是"开箱可用"还是"需要你自己接线"，再去查 Config/DataAsset 校验链（第 2 节）。

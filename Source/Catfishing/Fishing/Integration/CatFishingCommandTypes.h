@@ -26,7 +26,9 @@ enum class ECatFishingCommandError : uint8
 	CastOutOfRange, WaterNotFound, AmbiguousWater, ActiveSessionExists, SessionNotFound, NotFisher,
 	RevisionConflict, CastAttemptConflict, InputSequenceStale, InputSequenceGapTooLarge, InvalidPhase,
 	WindowClosed, AlreadyResolved, NotNearShore, StaleScoopTarget, ScoopGeometryFailed, CooldownActive,
-	GuardCapacityExceeded, CaptureAlreadyCommitted
+	GuardCapacityExceeded, CaptureAlreadyCommitted,
+	/** 本人场上实体竿已达到部署上限；独立于当前是否有钓鱼会话。 */
+	RodDeploymentLimitReached
 };
 
 USTRUCT(BlueprintType)

@@ -20,6 +20,9 @@ class CATFISHING_API UCatFishingService : public UWorldSubsystem
 	GENERATED_BODY()
 
 public:
+	/** 每人场上合计最多两根实体竿；手持和损坏但尚未收回的竿也占名额。 */
+	static constexpr int32 MaximumDeployedRodsPerPlayer = 2;
+
 	/** 只在 authority Game World 创建服务；客户端通过复制 Session 观察。 */
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 
@@ -59,8 +62,13 @@ public:
 	bool TryGetActiveSessionForController(const AController* Controller, FGuid& OutFishingSessionId,
 		FCatFishingSessionSnapshot& OutSnapshot);
 
-	/** 查询 PlayerState 当前登记的存活部署鱼竿；未知身份返回空。 */
+	/** 只读查询该玩家任意一根存活登记竿；不表示当前操作或收纳目标，业务命令须按 RodActorId 解析。 */
 	ACatFishingRodActor* FindDeployedRod(const APlayerState* PlayerState);
+	/** 统计本人场上实体竿；拥有与操作分离，替别人持竿不改变双方名额。 */
+	int32 GetDeployedRodCount(const APlayerState* PlayerState) const;
+	/** 本人范围内最近的无人操作、无活动会话部署竿；损坏竿也能收回。跨玩家收纳尚未开放。 */
+	ACatFishingRodActor* FindNearestPackableRod(const APlayerState* PlayerState,
+		const FVector& WorldLocation, double MaxDistanceCentimeters);
 
 	/** 按公开 RodActorId 在全部部署鱼竿中查找（多人：允许操作别人的竿）；未知返回空。 */
 	ACatFishingRodActor* FindDeployedRodById(FGuid RodActorId);
@@ -86,7 +94,7 @@ public:
 	 */
 	bool TransferSessionFisher(ACatFishingSession* Session, AController* NewFisherController);
 
-	/** 为 PlayerState 登记唯一部署鱼竿；相同 Actor 重放成功，不同存活 Actor 被拒绝。 */
+	/** 为 PlayerState 登记部署竿；同一 Actor 重放成功，超过两根或跨玩家重复登记被拒绝。 */
 	bool RegisterDeployedRod(APlayerState* PlayerState, ACatFishingRodActor* RodActor);
 
 	/** 仅当当前登记值精确匹配 ExpectedRodActor 时注销，避免旧 Actor 迟到回调删除替代鱼竿。 */
@@ -142,8 +150,8 @@ private:
 	TMap<FString, FCatBeginCastResult> BeginCastTerminalCache;
 	TSet<FString> BeginCastInProgress;
 
-	/** PlayerState 到其当前唯一部署鱼竿的服务器弱索引；不强持 Actor，也不扫描 World 重建。 */
-	TMap<TWeakObjectPtr<APlayerState>, TWeakObjectPtr<ACatFishingRodActor>> DeployedRodByPlayerState;
+	/** PlayerState 到其场上实体竿的多值弱索引；所有权不随操作手变化，不强持 Actor。 */
+	TMultiMap<TWeakObjectPtr<APlayerState>, TWeakObjectPtr<ACatFishingRodActor>> DeployedRodsByPlayerState;
 
 	/** teardown 后永久拒绝本 World 新会话。 */
 	bool bCommandsOpen = true;

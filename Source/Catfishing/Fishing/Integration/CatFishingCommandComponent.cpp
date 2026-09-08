@@ -687,7 +687,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		// R 的鱼竿三态（服务器按当前事实分派，客户端不需要知道自己处于哪一态；多人：竿不限竿主）：
 		//   正在操作某根竿（自己的或别人的） → LeaveRod（离开竿位，自由活动）
 		//   公共交互锚点附近且容器仍有容量      → OperateRod（追加编号，共享同一根竿的会话）
-		//   附近没有可加入的竿               → PlaceRod（取出自己的竿并直接持握；已有部署竿会被服务器拒绝）
+		//   附近没有可加入的竿               → PlaceRod（取出本人库存实体竿并持握；场上合计上限两根）
 		// R 在会话期间同样可用（多人接力钓别人竿）：
 		//   任意阶段离开 → 只释放竿位和持续输入，会话、竿、钩与鱼都保持；
 		//   玩家可去另一根空竿抛线，之后再回到原竿继续；等口与搏斗阶段都允许其他玩家接力。
@@ -852,10 +852,11 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 			// X 无会话 = 收竿回包（规格：咬钩前收竿零损失）。正在操作则先离开竿位再收。
 			if (CommandType == ECatFishingCommandType::CancelFishing)
 			{
+				ACatFishingRodActor* Rod = Fishing->FindRodOperatedBy(Controller->PlayerState);
 				// 多人：正在操作别人的竿 → X 只是离开竿位（不能收走别人的竿）。
-				if (ACatFishingRodActor* OperatedRod = Fishing->FindRodOperatedBy(Controller->PlayerState))
+				if (Rod)
 				{
-					const FCatFishingRodPresentationState& OperatedState = OperatedRod->GetPresentationState();
+					const FCatFishingRodPresentationState& OperatedState = Rod->GetPresentationState();
 					if (OperatedState.OwnerPlayerState != Controller->PlayerState)
 					{
 						FCatLeaveRodCommand Leave;
@@ -866,7 +867,12 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 						return;
 					}
 				}
-				ACatFishingRodActor* Rod = Fishing->FindDeployedRod(Controller->PlayerState);
+				if (!Rod)
+				{
+					const ACatCharacter* Character = Cast<ACatCharacter>(Controller->GetPawn());
+					Rod = Character ? Fishing->FindNearestPackableRod(Controller->PlayerState,
+						Character->GetActorLocation(), 250.0) : nullptr;
+				}
 				if (!Rod)
 				{
 					// 压根没竿可收，直接返回 NoRod 错误
@@ -875,14 +881,22 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 					DeliverResultFromAuthority(Result);
 					return;
 				}
-				if (Rod->GetPresentationState().OperatorPlayerState == Controller->PlayerState)
+				if (Rod->GetOperatorSlotIndex(Controller->PlayerState) != INDEX_NONE)
 				{
 					// 收竿前必须先释放操作权，否则竿处于“被占用”状态无法直接打包
 					FCatLeaveRodCommand Leave;
 					Leave.Context.RequestId = FGuid::NewGuid();
 					Leave.Context.RodActorId = Rod->GetPresentationState().RodActorId;
 					Leave.Context.ExpectedRodActorRevision = Rod->GetPresentationState().RodActorRevision;
-					Fishing->LeaveRod(Controller, Leave);
+					const FCatFishingCommandResult Left = Fishing->LeaveRod(Controller, Leave);
+					if (!Left.bCommitted)
+					{
+						FCatFishingCommandResult Rejected = Left;
+						Rejected.RequestId = Edge.RequestId;
+						Rejected.CommandType = ECatFishingCommandType::PackRod;
+						DeliverResultFromAuthority(Rejected);
+						return;
+					}
 				}
 				// LeaveRod 可能已经推进了 Revision，这里重新读一次最新状态再打包，避免用过期 Revision 触发冲突
 				const FCatFishingRodPresentationState& Fresh = Rod->GetPresentationState();

@@ -290,9 +290,11 @@ void UCatHUDModel::Refresh()
 		: FText::FromString(TEXT("钓鱼反馈：当前没有进行中的钓鱼会话"));
 	if (NewState.bHasFishingCommandResult)
 	{
-		NewState.FishingFeedbackText = FText::FromString(FString::Printf(TEXT("钓鱼反馈：最近命令 %s，版本 %lld"),
-			*UEnum::GetValueAsString(NewState.LastFishingCommandResult.Error),
-			NewState.LastFishingCommandResult.Revision));
+		NewState.FishingFeedbackText = NewState.LastFishingCommandResult.Error == ECatFishingCommandError::RodDeploymentLimitReached
+			? FText::FromString(TEXT("场上鱼竿已达上限，请先收起一根。"))
+			: FText::FromString(FString::Printf(TEXT("钓鱼反馈：最近命令 %s，版本 %lld"),
+				*UEnum::GetValueAsString(NewState.LastFishingCommandResult.Error),
+				NewState.LastFishingCommandResult.Revision));
 	}
 	ViewState = MoveTemp(NewState);
 	OnViewStateChanged.Broadcast();
