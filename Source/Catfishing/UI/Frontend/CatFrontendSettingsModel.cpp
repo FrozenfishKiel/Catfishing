@@ -83,6 +83,7 @@ void UCatFrontendSettingsModel::Shutdown()
 	}
 	ActiveAudioOutputRequest = nullptr;
 	bDraftDefaultsRequested = false;
+	bPendingAudioOutputDefaultRestore = false;
 	LastResultText = FText::GetEmpty();
 	OnChanged.Broadcast();
 }
@@ -572,9 +573,11 @@ bool UCatFrontendSettingsModel::IsAudioOutputDeviceOperationPending() const
 }
 
 // 应用流程：
-// 1. 先把窗口、分辨率、画质与垂直同步草稿交给 UGameUserSettings，并由其统一应用和保存平台渲染设置。
-// 2. 再独立尝试语言、Slate 缩放、Gamma、震动、OSS 语音、失焦音量和当前 World 的分类混音；任一缺口不阻断其它真实能力。
-// 3. 输出设备变化发起有界的活动确认请求；仅最终确认回调持久化 ID，受理回执保持 pending，其它成功项立即保存，目标草稿保留到确认或重试。
+// 1. 先缓存恢复默认标志、旧输出设备偏好和需要真实重放的运行时差异，随后才允许 SetToDefaults 改写设置对象。
+// 2. 若草稿来自恢复默认，让正式设置宿主回到干净默认状态，再把窗口、分辨率、画质与垂直同步草稿交给 UGameUserSettings。
+// 3. 独立尝试语言、Slate 缩放、Gamma、震动、OSS 语音、失焦音量和当前 World 的分类混音；失败项只影响返回值，不撤销其它已成功设置。
+// 4. 输出设备变化发起有界的活动确认请求；恢复系统默认时热切换使用枚举 ID，确认前临时保留旧偏好，确认后才保存为空。
+// 5. 保存可立即确认的设置并重读草稿；如果存在输出设备 pending，View 会继续显示请求目标，等待回调给出最终文本。
 bool UCatFrontendSettingsModel::Apply()
 {
 	if (!UserSettings)
@@ -583,6 +586,15 @@ bool UCatFrontendSettingsModel::Apply()
 		return false;
 	}
 
+	const bool bDefaultsWereRequested = bDraftDefaultsRequested;
+	const FString SavedAudioOutputDeviceIdBeforeApply = UserSettings->GetAudioOutputDeviceId();
+	const bool bVibrationWasRequested = bDraftVibrationEnabled != UserSettings->IsVibrationEnabled();
+	const bool bVoiceChatWasRequested = bDraftVoiceChatEnabled != UserSettings->IsVoiceChatEnabled();
+	const bool bAudioWasRequested = !FMath::IsNearlyEqual(DraftMasterVolume, UserSettings->GetMasterVolume())
+		|| !FMath::IsNearlyEqual(DraftMusicVolume, UserSettings->GetMusicVolume())
+		|| !FMath::IsNearlyEqual(DraftSFXVolume, UserSettings->GetSFXVolume())
+		|| !FMath::IsNearlyEqual(DraftAmbienceVolume, UserSettings->GetAmbienceVolume())
+		|| !FMath::IsNearlyEqual(DraftVoiceVolume, UserSettings->GetVoiceVolume());
 	if (bDraftDefaultsRequested)
 	{
 		UserSettings->SetToDefaults();
@@ -599,24 +611,20 @@ bool UCatFrontendSettingsModel::Apply()
 	const bool bLanguageApplied = UserSettings->ApplyLanguage(DraftLanguage);
 	const bool bUIScaleApplied = UserSettings->ApplyUIScale(DraftUIScale);
 	const bool bBrightnessApplied = UserSettings->ApplyDisplayGamma(DraftDisplayGamma);
-	const bool bVibrationWasRequested = bDraftVibrationEnabled != UserSettings->IsVibrationEnabled();
 	const bool bVibrationApplied = !bVibrationWasRequested
 		|| UserSettings->ApplyVibration(GetLocalPlayerController(), bDraftVibrationEnabled);
-	const bool bVoiceChatWasRequested = bDraftVoiceChatEnabled != UserSettings->IsVoiceChatEnabled();
 	const bool bVoiceChatApplied = !bVoiceChatWasRequested || (BoundLocalPlayer.IsValid() && IsVoiceChatSettingAvailable()
 		&& UserSettings->ApplyVoiceChat(GetLocalPlayerWorld(), static_cast<uint8>(BoundLocalPlayer->GetControllerId()),
 			bDraftVoiceChatEnabled));
 	const bool bBackgroundMuteApplied = UserSettings->ApplyMuteAudioWhenUnfocused(bDraftMuteAudioWhenUnfocused);
-	const bool bAudioWasRequested = !FMath::IsNearlyEqual(DraftMasterVolume, UserSettings->GetMasterVolume())
-		|| !FMath::IsNearlyEqual(DraftMusicVolume, UserSettings->GetMusicVolume())
-		|| !FMath::IsNearlyEqual(DraftSFXVolume, UserSettings->GetSFXVolume())
-		|| !FMath::IsNearlyEqual(DraftAmbienceVolume, UserSettings->GetAmbienceVolume())
-		|| !FMath::IsNearlyEqual(DraftVoiceVolume, UserSettings->GetVoiceVolume());
 	const bool bAudioApplied = !bAudioWasRequested || UserSettings->ApplyAudioVolumes(GetLocalPlayerWorld(), DraftMasterVolume,
 		DraftMusicVolume, DraftSFXVolume, DraftAmbienceVolume, DraftVoiceVolume);
-	const bool bOutputDeviceWasRequested = !DraftAudioOutputDeviceId.IsEmpty()
-		&& DraftAudioOutputDeviceId != UserSettings->GetAudioOutputDeviceId();
 	const FString RequestedAudioOutputDeviceId = DraftAudioOutputDeviceId;
+	const bool bOutputDeviceDefaultRestoreWasRequested = bDefaultsWereRequested && !RequestedAudioOutputDeviceId.IsEmpty()
+		&& RequestedAudioOutputDeviceId == SystemDefaultAudioOutputDeviceId;
+	const bool bOutputDeviceWasRequested = !RequestedAudioOutputDeviceId.IsEmpty()
+		&& (!DoesDraftAudioOutputMatchSavedPreference()
+			|| (bOutputDeviceDefaultRestoreWasRequested && !SavedAudioOutputDeviceIdBeforeApply.IsEmpty()));
 	bool bOutputDeviceSwapStarted = !bOutputDeviceWasRequested
 		|| (ActiveAudioOutputRequest && ActiveAudioOutputRequest->GetRequestedDeviceId() == RequestedAudioOutputDeviceId);
 	if (bOutputDeviceWasRequested && !ActiveAudioOutputRequest
@@ -627,9 +635,20 @@ bool UCatFrontendSettingsModel::Apply()
 		ActiveAudioOutputRequest = NewObject<UCatAudioOutputRequest>(this);
 		ActiveAudioOutputRequest->Start(GetLocalPlayerWorld(), RequestedAudioOutputDeviceId,
 			UCatAudioOutputRequest::FOnCompleted::CreateUObject(this, &ThisClass::HandleAudioOutputRequestCompleted, RequestGeneration));
+		bPendingAudioOutputDefaultRestore = bOutputDeviceDefaultRestoreWasRequested;
 		bOutputDeviceSwapStarted = true;
 	}
+	else if (!bOutputDeviceWasRequested && !ActiveAudioOutputRequest)
+	{
+		bPendingAudioOutputDefaultRestore = false;
+	}
 
+	if (bPendingAudioOutputDefaultRestore && ActiveAudioOutputRequest
+		&& ActiveAudioOutputRequest->GetRequestedDeviceId() == RequestedAudioOutputDeviceId)
+	{
+		// 恢复系统默认要等活动设备确认；这里保留旧覆盖，避免切换失败后无法兑现“未保存新选择”的回退承诺。
+		UserSettings->SetAudioOutputDeviceId(SavedAudioOutputDeviceIdBeforeApply);
+	}
 	UserSettings->SaveSettings();
 	ReloadDraftFromSettings();
 	if (bLanguageApplied && bUIScaleApplied && bBrightnessApplied && bVibrationApplied && bVoiceChatApplied
@@ -666,7 +685,7 @@ void UCatFrontendSettingsModel::Cancel()
 }
 
 // 恢复默认流程：
-// 1. 读取引擎静态默认窗口值与设置类 CDO 的项目默认值，只覆盖本 Model 草稿，绝不修改当前已应用的 UserSettings 实例。
+// 1. 从 UCatGameUserSettings 读取不受本机 ini 影响的干净默认快照，只覆盖本 Model 草稿，绝不修改当前已应用的 UserSettings 实例。
 // 2. 将语言、UI、亮度、震动、语音、静音、分类音量与输出设备草稿设为正式默认候选，不调用任何运行时应用 API。
 // 3. 发布草稿变化；Cancel 因而仍能从未变的权威设置完整恢复进入页面前的已应用值。
 void UCatFrontendSettingsModel::RestoreDefaults()
@@ -677,24 +696,25 @@ void UCatFrontendSettingsModel::RestoreDefaults()
 		return;
 	}
 
-	const UCatGameUserSettings* DefaultSettings = GetDefault<UCatGameUserSettings>();
-	DraftFullscreenMode = UGameUserSettings::GetDefaultWindowMode();
-	DraftScreenResolution = UGameUserSettings::GetDefaultResolution();
-	DraftOverallScalabilityLevel = DefaultSettings->GetOverallScalabilityLevel();
-	bDraftVSyncEnabled = DefaultSettings->IsVSyncEnabled();
-	DraftLanguage = FInternationalization::Get().GetDefaultLanguage()->GetName();
-	DraftUIScale = DefaultSettings->GetUIScale();
-	DraftDisplayGamma = DefaultSettings->GetDisplayGamma();
-	bDraftVibrationEnabled = DefaultSettings->IsVibrationEnabled();
-	bDraftVoiceChatEnabled = DefaultSettings->IsVoiceChatEnabled();
-	bDraftMuteAudioWhenUnfocused = DefaultSettings->IsMuteAudioWhenUnfocused();
-	DraftMasterVolume = DefaultSettings->GetMasterVolume();
-	DraftMusicVolume = DefaultSettings->GetMusicVolume();
-	DraftSFXVolume = DefaultSettings->GetSFXVolume();
-	DraftAmbienceVolume = DefaultSettings->GetAmbienceVolume();
-	DraftVoiceVolume = DefaultSettings->GetVoiceVolume();
+	const FCatGameUserSettingsDefaultSnapshot Defaults = UCatGameUserSettings::MakeDefaultSnapshot();
+	DraftFullscreenMode = Defaults.FullscreenMode;
+	DraftScreenResolution = Defaults.ScreenResolution;
+	DraftOverallScalabilityLevel = Defaults.OverallScalabilityLevel;
+	bDraftVSyncEnabled = Defaults.bVSyncEnabled;
+	DraftLanguage = Defaults.FrontendLanguage;
+	DraftUIScale = Defaults.UIScale;
+	DraftDisplayGamma = Defaults.DisplayGamma;
+	bDraftVibrationEnabled = Defaults.bVibrationEnabled;
+	bDraftVoiceChatEnabled = Defaults.bVoiceChatEnabled;
+	bDraftMuteAudioWhenUnfocused = Defaults.bMuteAudioWhenUnfocused;
+	DraftMasterVolume = Defaults.MasterVolume;
+	DraftMusicVolume = Defaults.MusicVolume;
+	DraftSFXVolume = Defaults.SFXVolume;
+	DraftAmbienceVolume = Defaults.AmbienceVolume;
+	DraftVoiceVolume = Defaults.VoiceVolume;
 	DraftAudioOutputDeviceId = ActiveAudioOutputRequest && !ActiveAudioOutputRequest->GetRequestedDeviceId().IsEmpty()
-		? ActiveAudioOutputRequest->GetRequestedDeviceId() : SystemDefaultAudioOutputDeviceId;
+		? ActiveAudioOutputRequest->GetRequestedDeviceId()
+		: (!SystemDefaultAudioOutputDeviceId.IsEmpty() ? SystemDefaultAudioOutputDeviceId : Defaults.AudioOutputDeviceId);
 	bDraftDefaultsRequested = true;
 	PublishChanged(LOCTEXT("DefaultsRestored", "默认设置等待应用。"));
 }
@@ -721,7 +741,7 @@ bool UCatFrontendSettingsModel::HasPendingChanges() const
 		|| (IsVibrationSettingAvailable() && bDraftVibrationEnabled != UserSettings->IsVibrationEnabled())
 		|| (IsVoiceChatSettingAvailable() && bDraftVoiceChatEnabled != UserSettings->IsVoiceChatEnabled())
 		|| bDraftMuteAudioWhenUnfocused != UserSettings->IsMuteAudioWhenUnfocused()
-		|| (IsOutputDeviceSettingAvailable() && DraftAudioOutputDeviceId != UserSettings->GetAudioOutputDeviceId()))
+		|| !DoesDraftAudioOutputMatchSavedPreference())
 	{
 		return true;
 	}
@@ -785,7 +805,7 @@ APlayerController* UCatFrontendSettingsModel::GetLocalPlayerController() const
 
 // 设备请求完成流程：
 // 1. 同时核对页面代次和单次请求身份；Shutdown、重初始化或新请求之后的旧通知不修改列表、草稿或配置。
-// 2. 解除当前等待；切换失败保留目标草稿供重试，只有活动设备已确认才写入并保存 ID，平台受理不走此成功路径。
+// 2. 解除当前等待并消费恢复系统默认标志；切换失败保留目标草稿供重试，成功后按普通设备 ID 或空默认偏好保存。
 // 3. 枚举成功时整代替换名称/ID 和系统默认值，只接收有名称与 ID 的设备，再建立可用草稿并通知 View。
 void UCatFrontendSettingsModel::HandleAudioOutputRequestCompleted(UCatAudioOutputRequest* Request,
 	const FName Error, const uint64 RequestGeneration)
@@ -798,6 +818,8 @@ void UCatFrontendSettingsModel::HandleAudioOutputRequestCompleted(UCatAudioOutpu
 	}
 
 	const FString RequestedDeviceId = Request->GetRequestedDeviceId();
+	const bool bShouldPersistPlatformDefault = bPendingAudioOutputDefaultRestore;
+	bPendingAudioOutputDefaultRestore = false;
 	ActiveAudioOutputRequest = nullptr;
 	if (!UserSettings)
 	{
@@ -814,10 +836,12 @@ void UCatFrontendSettingsModel::HandleAudioOutputRequestCompleted(UCatAudioOutpu
 	}
 	if (!RequestedDeviceId.IsEmpty())
 	{
-		UserSettings->SetAudioOutputDeviceId(RequestedDeviceId);
+		UserSettings->SetAudioOutputDeviceId(bShouldPersistPlatformDefault ? FString() : RequestedDeviceId);
 		UserSettings->SaveSettings();
 		DraftAudioOutputDeviceId = RequestedDeviceId;
-		PublishChanged(LOCTEXT("AudioOutputDeviceConfirmed", "音频输出设备已确认切换。"));
+		PublishChanged(bShouldPersistPlatformDefault
+			? LOCTEXT("AudioOutputDeviceDefaultConfirmed", "音频输出设备已恢复为系统默认。")
+			: LOCTEXT("AudioOutputDeviceConfirmed", "音频输出设备已确认切换。"));
 		return;
 	}
 
@@ -860,6 +884,23 @@ void UCatFrontendSettingsModel::HandleAudioOutputRequestCompleted(UCatAudioOutpu
 		DraftAudioOutputDeviceId = AudioOutputDeviceIds[0];
 	}
 	PublishChanged(LOCTEXT("AudioOutputDevicesReady", "音频输出设备已读取。"));
+}
+
+// 输出设备草稿匹配流程：
+// 1. 设置来源或设备枚举不可用时不参与脏状态计算，避免禁用控件制造伪 pending。
+// 2. 草稿与已保存设备 ID 完全相同则视为无改动。
+// 3. 已保存偏好为空时代表跟随系统默认；如果草稿等于本次枚举到的系统默认 ID，也视为同一选择。
+bool UCatFrontendSettingsModel::DoesDraftAudioOutputMatchSavedPreference() const
+{
+	if (!UserSettings || !IsOutputDeviceSettingAvailable())
+	{
+		return true;
+	}
+
+	const FString& SavedAudioOutputDeviceId = UserSettings->GetAudioOutputDeviceId();
+	return DraftAudioOutputDeviceId == SavedAudioOutputDeviceId
+		|| (SavedAudioOutputDeviceId.IsEmpty() && !SystemDefaultAudioOutputDeviceId.IsEmpty()
+			&& DraftAudioOutputDeviceId == SystemDefaultAudioOutputDeviceId);
 }
 
 // 变更发布流程：先替换最近结果文本，再广播无参原生通知；View 收到通知后重新读取 Model，不能缓存或写回本次草稿。

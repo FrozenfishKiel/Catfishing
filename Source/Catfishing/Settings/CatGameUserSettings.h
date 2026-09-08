@@ -15,6 +15,60 @@ class UWorld;
 class UCatAudioOutputRequest;
 
 /**
+ * 恢复默认时使用的干净设置快照；它描述项目第一次启动时应回到的值，不读取本机 GameUserSettings.ini，也不代表当前运行时已经应用这些值。
+ */
+struct CATFISHING_API FCatGameUserSettingsDefaultSnapshot
+{
+	/** 默认窗口模式；恢复默认页读取它填充画面草稿，应用阶段再交给 UGameUserSettings 切换实际窗口状态。 */
+	EWindowMode::Type FullscreenMode = EWindowMode::WindowedFullscreen;
+
+	/** 默认分辨率像素尺寸；零值沿用 UE 的启动默认策略，页面只把它作为恢复默认候选而不立即改窗口。 */
+	FIntPoint ScreenResolution = FIntPoint::ZeroValue;
+
+	/** 默认整体画质档位；-1 保留 UE 默认的自定义组合语义，应用时不强行替换为某个手动档。 */
+	int32 OverallScalabilityLevel = -1;
+
+	/** 默认垂直同步开关；恢复默认应用时写回 UGameUserSettings，避免已保存的 VSync 选择继续污染默认草稿。 */
+	bool bVSyncEnabled = false;
+
+	/** 默认语言 culture 名称；恢复默认页用它回到引擎启动语言，应用成功后才由国际化系统持久化。 */
+	FString FrontendLanguage;
+
+	/** 默认 Slate UI 比例；恢复默认和 SetToDefaults 共用它，避免上次保存的界面缩放成为新默认。 */
+	float UIScale = 1.0f;
+
+	/** 默认显示 Gamma；恢复默认和 SetToDefaults 共用它，避免上次保存的亮度成为新默认。 */
+	float DisplayGamma = 2.2f;
+
+	/** 默认震动开关；恢复默认应用时写回本地 PlayerController 的反馈 gate。 */
+	bool bVibrationEnabled = true;
+
+	/** 默认网络语音开关；恢复默认保持新配置不主动发送语音，已有会话仍由应用阶段显式提交。 */
+	bool bVoiceChatEnabled = false;
+
+	/** 默认后台静音偏好；恢复默认时重新交给 FApp 的失焦音量倍率。 */
+	bool bMuteAudioWhenUnfocused = true;
+
+	/** 默认主音量比例；恢复默认应用时写入正式 SoundMix，资产缺失时保持失败闭合。 */
+	float MasterVolume = 1.0f;
+
+	/** 默认音乐音量比例；恢复默认应用时写入音乐 SoundClass 覆盖。 */
+	float MusicVolume = 1.0f;
+
+	/** 默认音效音量比例；恢复默认应用时写入音效 SoundClass 覆盖。 */
+	float SFXVolume = 1.0f;
+
+	/** 默认环境音音量比例；恢复默认应用时写入环境 SoundClass 覆盖。 */
+	float AmbienceVolume = 1.0f;
+
+	/** 默认语音播放音量比例；恢复默认应用时写入语音 SoundClass 覆盖。 */
+	float VoiceVolume = 1.0f;
+
+	/** 默认输出设备偏好；空值表示跟随平台系统默认设备，不把某次枚举到的设备 ID 固定保存。 */
+	FString AudioOutputDeviceId;
+};
+
+/**
  * 本机玩家可持久化的正式设置宿主；继承 UE 的分辨率、窗口模式和画质设置，补充项目已接线的语言、UI 缩放、Gamma、震动、网络语音、音频分类与输出设备偏好。
  * 页面 Model 只在正式 API 确认或完成调用后写入这些偏好；没有输入设备选择或控制映射来源的字段不在这里伪装成已生效设置。
  */
@@ -33,6 +87,11 @@ public:
 	 * 返回当前进程使用的正式项目设置单例；GameUserSettings 类配置错误或引擎尚未创建设置对象时返回空，调用方必须保持 fail-closed。
 	 */
 	static UCatGameUserSettings* Get();
+
+	/**
+	 * 创建不读取本机用户配置的恢复默认快照；设置页和 SetToDefaults 共用同一来源，防止 Config CDO 把上次保存值误当项目默认值。
+	 */
+	static FCatGameUserSettingsDefaultSnapshot MakeDefaultSnapshot();
 
 	/**
 	 * 将玩家选择的语言立即交给国际化系统并要求其持久化；只有引擎接受该 culture 名称时才返回成功，失败不会改写已生效语言。
@@ -66,6 +125,11 @@ public:
 	 * 在引擎重载用户配置后恢复本项目额外设置；先让父类读取窗口和画质，再尽力恢复语言与 Slate 比例，失败项保留引擎当前安全状态。
 	 */
 	virtual void LoadSettings(bool bForceReload = false) override;
+
+	/**
+	 * 将 UE 画面默认和项目额外默认写回本设置实例；恢复默认的应用阶段调用，调用方随后仍需按能力 Apply 与 SaveSettings。
+	 */
+	virtual void SetToDefaults() override;
 
 	/**
 	 * 在设置宿主销毁时解除世界、控制器和异步回调关联；只清理本对象注册的委托，避免旅行或进程退出后旧 World 回调访问已销毁的设置实例。

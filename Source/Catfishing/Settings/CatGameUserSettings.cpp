@@ -18,6 +18,7 @@
 #include "Misc/App.h"
 #include "OnlineSubsystem.h"
 #include "OnlineSubsystemUtils.h"
+#include "Scalability.h"
 #include "Sound/SoundClass.h"
 #include "Sound/SoundMix.h"
 
@@ -48,6 +49,23 @@ UCatGameUserSettings::UCatGameUserSettings()
 UCatGameUserSettings* UCatGameUserSettings::Get()
 {
 	return Cast<UCatGameUserSettings>(UGameUserSettings::GetGameUserSettings());
+}
+
+// 默认快照创建流程：
+// 1. 画面默认沿用 UE SetToDefaults 同源入口，保持窗口、分辨率和画质组合与引擎版本一致。
+// 2. 项目字段使用结构体中不读 Config 的初始值，避免 GameUserSettings.ini 覆盖过的 CDO 反向污染恢复默认。
+// 3. 语言写入引擎启动默认 culture，输出设备保持空偏好以表达“跟随平台系统默认”。
+FCatGameUserSettingsDefaultSnapshot UCatGameUserSettings::MakeDefaultSnapshot()
+{
+	FCatGameUserSettingsDefaultSnapshot Defaults;
+	Defaults.FullscreenMode = UGameUserSettings::GetDefaultWindowMode();
+	Defaults.ScreenResolution = UGameUserSettings::GetDefaultResolution();
+
+	Scalability::FQualityLevels DefaultQualityLevels;
+	DefaultQualityLevels.SetDefaults();
+	Defaults.OverallScalabilityLevel = DefaultQualityLevels.GetSingleQualityLevel();
+	Defaults.FrontendLanguage = FInternationalization::Get().GetDefaultLanguage()->GetName();
+	return Defaults;
 }
 
 // 语言应用流程：
@@ -211,6 +229,30 @@ void UCatGameUserSettings::LoadSettings(const bool bForceReload)
 	}
 	FApp::SetUnfocusedVolumeMultiplier(bMuteAudioWhenUnfocused ? 0.0f : 1.0f);
 	RegisterWorldLifecycle();
+}
+
+// 默认恢复写入流程：
+// 1. 先执行 UE 基类默认逻辑，恢复窗口、分辨率、画质、HDR 等引擎内建字段。
+// 2. 再用项目干净默认快照覆盖本类额外偏好和基类未主动重置的 VSync，确保恢复默认不读取用户 ini。
+// 3. 这里只改设置对象状态，不直接触发语言、Slate、Gamma、SoundMix 或输出设备切换；调用方负责按可用能力应用并保存。
+void UCatGameUserSettings::SetToDefaults()
+{
+	Super::SetToDefaults();
+
+	const FCatGameUserSettingsDefaultSnapshot Defaults = MakeDefaultSnapshot();
+	SetVSyncEnabled(Defaults.bVSyncEnabled);
+	FrontendLanguage = Defaults.FrontendLanguage;
+	UIScale = Defaults.UIScale;
+	DisplayGamma = Defaults.DisplayGamma;
+	bVibrationEnabled = Defaults.bVibrationEnabled;
+	bVoiceChatEnabled = Defaults.bVoiceChatEnabled;
+	bMuteAudioWhenUnfocused = Defaults.bMuteAudioWhenUnfocused;
+	MasterVolume = Defaults.MasterVolume;
+	MusicVolume = Defaults.MusicVolume;
+	SFXVolume = Defaults.SFXVolume;
+	AmbienceVolume = Defaults.AmbienceVolume;
+	VoiceVolume = Defaults.VoiceVolume;
+	AudioOutputDeviceId = Defaults.AudioOutputDeviceId;
 }
 
 // 销毁流程：

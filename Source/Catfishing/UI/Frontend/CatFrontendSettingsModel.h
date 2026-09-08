@@ -200,7 +200,7 @@ public:
 	/** 返回输出设备枚举或热切换是否仍在等待 AudioMixer 回调；等待期间 View 必须禁用同类操作以避免覆盖关联结果。 */
 	bool IsAudioOutputDeviceOperationPending() const;
 
-	/** 将所有可实际生效的草稿提交给正式来源；画面、语言、UI 比例和音频彼此独立处理，缺少音频资产不能阻断可用画面设置。 */
+	/** 将所有可实际生效的草稿提交给正式来源；返回 false 只表示存在部分能力未提交成功，已成功的画面、语言、UI 或音频设置仍会保存。 */
 	bool Apply();
 
 	/** 放弃所有未应用草稿并从正式设置来源重新读取；不会调用引擎 ApplySettings，也不会恢复已经提交的运行时设置。 */
@@ -237,8 +237,13 @@ private:
 	/** 返回绑定 LocalPlayer 的当前 Controller；震动只能写本地 Controller，切图或 Controller 未就绪时返回空。 */
 	APlayerController* GetLocalPlayerController() const;
 
-	/** 接收枚举或切换的最终结果；代次与对象身份均匹配才释放 pending，实际目标已活动才保存 ID，超时或拒绝保留旧偏好并开放重试。 */
+	/** 接收枚举或切换的最终结果；代次与对象身份均匹配才释放 pending，普通切换保存设备 ID，恢复系统默认则保存空偏好。 */
 	void HandleAudioOutputRequestCompleted(UCatAudioOutputRequest* Request, FName Error, uint64 RequestGeneration);
+
+	/**
+	 * 判断输出设备草稿是否等价于当前保存偏好；空保存值代表跟随系统默认，因此系统默认设备 ID 与空偏好应视为同一个默认选择。
+	 */
+	bool DoesDraftAudioOutputMatchSavedPreference() const;
 
 	/** 当前设置页绑定的本地玩家；Initialize 写入、Shutdown 清空，只用于定位本机 World 和生命周期，不保存设置真相。 */
 	UPROPERTY(Transient)
@@ -262,6 +267,9 @@ private:
 
 	/** 当前草稿是否要求在 Apply 时调用 UE 的 SetToDefaults；RestoreDefaults 写入、ReloadDraftFromSettings 清除，确保取消不会提前修改权威设置。 */
 	bool bDraftDefaultsRequested = false;
+
+	/** 当前输出设备请求完成后是否应保存为空偏好；RestoreDefaults+Apply 写入，回调消费，避免把系统默认设备 ID 固化成用户覆盖。 */
+	bool bPendingAudioOutputDefaultRestore = false;
 
 	/** 待应用的语言 culture 名称；页面输入写入、Apply 成功后由国际化系统持久化，Cancel 从当前语言重读。 */
 	FString DraftLanguage;
