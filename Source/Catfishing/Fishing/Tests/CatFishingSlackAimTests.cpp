@@ -13,7 +13,9 @@
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Fishing/Integration/CatFishingRodAimState.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "Framework/Game/CatfishingPlayerState.h"
 #include "GameFramework/PlayerState.h"
 #include "OnlineSubsystemTypes.h"
 

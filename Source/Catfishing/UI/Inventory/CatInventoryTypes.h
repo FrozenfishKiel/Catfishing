@@ -22,14 +22,16 @@ enum class ECatInventoryAction : uint8
 	MoveObjectBetweenContainers = 2,
 	/** 请求整理运行期库存格；同源只改本数据源，背包和营地之间的拖放会由服务器同时改双方数据源。 */
 	MoveInventoryItem = 3,
-	/** 请求把当前选中的随身库存物品设为钓鱼选择；服务器仍会重读整套鱼竿、鱼饵和鱼漂持有量。 */
+	/** 旧版钓具选择动作；现只为蓝图和历史回包兼容保留，新右键入口应使用 UseInventoryItem。 */
 	SelectInventoryFishingItem = 4,
 	/** 请求把当前选中的鱼交给献祭协议；Items 与 Run 的不可逆点继续由 SacrificeCoordinator 处理。 */
 	SacrificeSelectedFish = 5,
 	/** 请求把当前选中的营地公共仓库格取到本人随身库存；服务器仍按公共仓库版本和个人库存版本共同复核。 */
 	WithdrawCampInventoryItem = 6,
 	/** 请求把当前选中的鱼护实物鱼转入营地共享鱼缸；服务器负责寻找固定营地鱼缸和可用目标格。 */
-	StoreSelectedFishInSharedTank = 7
+	StoreSelectedFishInSharedTank = 7,
+	/** 请求使用当前正式随身库存格中的物品；UI 只提交槽位，当前钓具选择和后续其他物品效果都应由服务器重读库存后分发。 */
+	UseInventoryItem = 8
 };
 
 /** 库存格子投影的后端事实来源；UI 用它区分运行期库存格和 Items 容器格，避免把不同宿主的写口混用。 */
@@ -38,7 +40,7 @@ enum class ECatInventorySlotSource : uint8
 {
 	/** 还没有可靠来源；这类格子只能展示占位，不能提交任何后端命令。 */
 	Unknown,
-	/** 当前角色随身库存数组中的一个格子；它不作为 Items 容器移动源，但可整理、转入营地仓库或把钓具设为当前选择。 */
+	/** 当前角色正式随身库存中的一个格子；它不作为 Items 容器移动源，但可整理、转入营地仓库或提交通用库存物品使用。 */
 	InventoryObject,
 	/** Items 容器中的槽位；只有这种来源可以作为鱼或容器物体拖拽的源和目标。 */
 	ContainerObject,
@@ -76,7 +78,7 @@ struct FCatInventorySlotView
 	UPROPERTY(BlueprintReadOnly)
 	int32 ContainerSlotIndex = INDEX_NONE;
 
-	/** 该格在随身库存数组中的槽位下标；只有 InventoryObject 有效，拖拽整理、背包/营地转移和右键选择都会让服务器按它复核。 */
+	/** 该格在正式随身库存中的槽位下标；只有 InventoryObject 有效，服务器按同一下标回到 InventoryComponent 复核。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 InventorySlotIndex = INDEX_NONE;
 
@@ -88,7 +90,7 @@ struct FCatInventorySlotView
 	UPROPERTY(BlueprintReadOnly)
 	int32 CampInventorySlotIndex = INDEX_NONE;
 
-	/** 运行期库存物品的实例 ID；随身库存和营地仓库会填写它，UI 只读展示，服务器仍按槽位和版本重读真相。 */
+	/** 运行期库存物品的实例 ID；正式随身库存和营地仓库会填写它，UI 只读展示，服务器仍按槽位和版本重读真相。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid InventoryItemInstanceId;
 
@@ -120,11 +122,11 @@ struct FCatInventorySlotView
 	UPROPERTY(BlueprintReadOnly)
 	FCatFishInstance Fish;
 
-	/** 该格对应的装备类别；运行期库存条目用它展示鱼竿、鱼饵、鱼漂和抄网类别，只有随身库存格右键会用它路由钓具选择命令。 */
+	/** 该格对应的装备类别；运行期库存条目用它展示鱼竿、鱼饵、鱼漂和抄网类别，不再作为 UI 选择服务器命令的依据。 */
 	UPROPERTY(BlueprintReadOnly)
 	ECatEquipmentKind EquipmentKind = ECatEquipmentKind::Unknown;
 
-	/** 该格对应的装备定义 ID；随身库存和营地公共仓库都从各自 FCatRunInventorySlot 投影它，服务器仍按对应宿主重读权威数组。 */
+	/** 该格对应的兼容定义 ID；随身库存从正式物品定义投影它，营地公共仓库从旧槽位投影它，服务器仍重读对应宿主真相。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName EquipmentDefinitionId = NAME_None;
 
@@ -222,15 +224,23 @@ struct FCatInventoryViewState
 	UPROPERTY(BlueprintReadOnly)
 	int64 CampInventoryRevision = 0;
 
-	/** 当前 Character 的随身库存和钓鱼选择快照；EquipmentComponent 写入，库存只读展示格子数组和当前钓鱼选择。 */
+	/** 当前 Character 的钓鱼选择快照；背包格只读正式 InventoryComponent，Equipment 不再承担库存内容来源。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatEquipmentLoadoutSnapshot Equipment;
 
-	/** 当前是否已经绑定到本角色 EquipmentComponent；false 表示随身库存事实还不能可靠展示。 */
+	/** 当前是否已经绑定到本角色 EquipmentComponent；false 表示钓鱼选择摘要还不能可靠展示。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bEquipmentAvailable = false;
 
-	/** 随身背包自己的格子数量；只来自 EquipmentComponent 的 InventorySlots 和配置容量。 */
+	/** 当前是否已经拿到可用于展示的随身库存读源；只有正式 InventoryComponent 会让它成立。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bInventoryAvailable = false;
+
+	/** 当前随身背包内容版本；它来自正式 InventoryComponent，用作库存命令的并发前提。 */
+	UPROPERTY(BlueprintReadOnly)
+	int64 InventoryRevision = 0;
+
+	/** 随身背包自己的格子数量；来自正式 InventoryComponent，复制未到位时保持 0 并显示等待同步。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 InventorySlotCount = 0;
 

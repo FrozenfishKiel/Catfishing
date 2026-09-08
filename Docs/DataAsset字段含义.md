@@ -136,7 +136,7 @@
 | 性格 | BitePersonalityId / FightPersonalityId | 引用下面两类模板的 ID |
 | 偏好 | ChumPreference (三轴) | 与窝点三轴点积→经饱和曲线→选择权重放大(封顶 MaximumChumModifier) |
 | 偏好 | BaitWeightMultipliers | 特定鱼饵 ID→权重倍率;普通饵不用列 |
-| 食用 | FoodSafety / HungerRelief / PoisonIncrease | Safe/Toxic 结论 + 吃后减饥/增毒量(Safe 必须 0 毒) |
+| 食用 | FoodSafety / EatingExperience / PoisonIncrease | Safe/Toxic 结论 + 吃后体验/增毒量(Safe 必须 0 毒) |
 | 其他 | SacrificeContribution / CaptureImprintEventId / bTankDisplayEligible | 献祭额度 / 捕获成像事件 / 可否入展示鱼缸 |
 | gate | bEnableRuntimeDefinition | 必须 True |
 
@@ -208,7 +208,7 @@
 
 **InputConfig**（DA_CatAbilityInputConfig）分两组：
 
-- `AbilityInputActions`：`InputAction` ↔ Fishing `InputTag`，用于把输入送进 ASC/GAS；须覆盖五个核心 Fishing Tag。
+- `AbilityInputActions`：`InputAction` ↔ Fishing `InputTag`，用于把输入送进 ASC/GAS；须覆盖 6 个 Fishing InputTag：RodInteract、Primary、Slack、Cancel、Scoop、Chum。
 - `NativeInputActions`：不需要 Gameplay Ability 的意图映射。当前为 `IA_Interact` ↔ `Cat.Input.Interact`，由 PlayerController 分发给交互组件。
 
 这里采用 Lyra 风格的“设备输入 → InputTag → 消费者”：改 `E/R` 键位只动 IMC，玩法代码仍按稳定 Tag 工作。

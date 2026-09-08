@@ -62,16 +62,20 @@
       "title": "Frontend / Online——前端进局与 Steam 联机闭环",
       "delivery_mode": "single_atomic_module",
       "human_status_source": "Docs/Development/需求对齐差距清单.md",
-      "machine_status_source": ".harness/frontend-online-harness.json",
+      "machine_status_source": ".codex/state/frontend-online-harness.json",
+      "graph_status_source": ".codex/state/frontend-online-graph.json",
+      "context_status_source": ".codex/state/frontend-online-context.json",
       "facets": [
-        "FrontendEntry",
-        "SteamSession",
-        "TwoMapTravel",
-        "LeaveAndHostExit"
+        "FrontendPageFlow",
+        "SavePersistence",
+        "RoomInviteAndOnline",
+        "FrontendSettings",
+        "RealAsyncLoading",
+        "LegacyTravelRemoval"
       ],
-      "tracking_rule": "FrontendEntry、SteamSession、TwoMapTravel、LeaveAndHostExit 只是同一前端进局与联机闭环的实现切面；Host、Find、Join、Invite、Leave、Host exit、失败补偿和 UI 可见性不得拆成可独立关闭的业务事项。",
-      "completion_rule": "只有默认入口为 Frontend、Create/Join 通过 UCatOnlineSubsystem 进入同一个 Lake Fishing Run、Lake 内不显示 Host/Find/Join 白盒、Leave/Host exit 统一经 Online 收口、无 UI 旅行旁路、构建/自动化/源码边界核对和打包 Steam 双端实玩证据整体成立时，模块才能整体关闭；Host Migration、Lobby/Ready Room、深度重连恢复、生产 Steam AppId、正式美术 UI 和正式鱼表资产不属于本模块关闭条件。",
-      "handoff_rule": "换 Agent、换会话或失败回边时必须携带 Frontend/Online 的同一组端到端证据；静态配置、单机 Steam 初始化或局部 UI 绿灯不能替代打包 Steam 联机实玩与 Create/Find/Join/Leave 主链路证据，也不能把 Host Migration 作为本模块补丁追加。"
+      "tracking_rule": "FrontendPageFlow、SavePersistence、RoomInviteAndOnline、FrontendSettings、RealAsyncLoading、LegacyTravelRemoval 只是同一正式主界面与联机闭环的实现切面；主流程、三个 Model 与 Controller、正式 WBP、Save、房间邀请、Settings、加载和旧入口清理不得拆成可独立关闭的业务事项。",
+      "completion_rule": "只有默认入口为正式 Frontend Root，开始游戏依次进入 Minecraft 风格存档列表、Steam 好友/当前房间和显示真实进度的异步加载，Save/Persistence 的槽位创建/保存/读取/删除与库存内容和角色位置恢复成立，选择存档并创建房间后停留 Frontend，房间提供玩家槽、房主身份、访问策略、Steam 好友邀请和真实可用邀请码，房主无需等待准备状态即可开始，游戏/画面/声音/控制 Settings 边界成立，UCatFrontendPageController 与 SaveModel、RoomModel、SettingsModel 保持职责分离，旧 UCatTravelWidget 及无消费者的 Travel UI 入口已从受影响功能闭包清理，Online 仍是 Session/邀请/旅行/失败的唯一事实与收口点，并且构建、运行、打包 Steam 双端和玩家可见表现证据整体成立时，模块才能关闭；任一环节缺失时只保留一个模块级未完成状态。",
+      "handoff_rule": "换 Agent、换会话或失败回边时必须携带 2026-09-07 主界面方案、三个隔离机器状态入口和 Frontend/Online 的同一组端到端证据；2026-08-24 创建即旅行到 Lake 的旧闭环只作为历史可玩基线，不能替代当前 Save、房间停留与邀请、Settings、真实异步加载、正式 WBP 和旧 Travel 入口清理的完成证据。"
     },
     "DataWorldProfileAlbum": {
       "title": "Data / World / Profile / Album——长期进度与相册闭环",

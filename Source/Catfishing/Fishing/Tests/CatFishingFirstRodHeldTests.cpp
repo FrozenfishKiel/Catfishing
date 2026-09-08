@@ -12,8 +12,11 @@
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "Framework/Game/CatfishingPlayerState.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "Inventory/CatInventoryComponent.h"
 #include "OnlineSubsystemTypes.h"
 #include "UObject/StrongObjectPtr.h"
 
@@ -143,6 +146,7 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		FCatPlaceRodCommand HeldPlaceCommand;
 		HeldPlaceCommand.RequestId = FGuid::NewGuid();
 		HeldPlaceCommand.ExpectedEquipmentRevision = Equipment->GetSnapshot().Revision;
+		HeldPlaceCommand.ExpectedInventoryRevision = Character->GetInventoryComponent()->GetInventoryRevision();
 		AddExpectedErrorPlain(TEXT("Reason=AlreadyOperatingRod"), EAutomationExpectedErrorFlags::Contains, 1);
 		AddExpectedErrorPlain(TEXT("Event=fishing_command_result Type=ECatFishingCommandType::PlaceRod Committed=false"),
 			EAutomationExpectedErrorFlags::Contains, 1);

@@ -5,7 +5,8 @@
 #include "Character/CatCharacter.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "Framework/Game/CatfishingPlayerState.h"
 #include "GameFramework/PlayerState.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingRodEffortSeparatesActiveAndPassiveTest,

@@ -1,9 +1,8 @@
-"""Create and verify the formal BodyAction Montage assets used by DefaultGame.
+"""创建并校验 DefaultGame 使用的正式 BodyAction Montage 资产。
 
-This script runs inside Unreal Editor Python. It converts existing Animalia cat
-AnimSequence assets into saved UAnimMontage assets under one BodyAction package
-root, so the C++ BodyAction presentation settings can load real Montage assets
-without putting asset-generation code on the runtime path.
+脚本在 Unreal Editor Python 内运行，把 Animalia 的猫 AnimSequence 转成
+BodyAction 包下的 UAnimMontage。清单只保留当前六个身体动作；库存、献祭、偷鱼
+和湿身反馈等事务属于各自系统表现，不再生成 BodyAction Montage。
 """
 
 import unreal
@@ -11,26 +10,19 @@ import unreal
 
 PACKAGE_ROOT = "/Game/Catfishing/Animation/BodyAction"
 
+# 当前仍属于 BodyAction 的 Montage 清单；配置脚本逐项加载源动画并创建或复核对应 Montage。
 BODY_ACTION_MONTAGES = [
-    ("AM_BodyAction_RequestSacrifice", "/Game/Animalia/Cat/Animations/InPlace/Sitting_02-IP.Sitting_02-IP"),
     ("AM_BodyAction_CampRest", "/Game/Animalia/Cat/Animations/InPlace/Lying_00-IP.Lying_00-IP"),
     ("AM_BodyAction_CampfirePlayback", "/Game/Animalia/Cat/Animations/InPlace/Sitting_01-IP.Sitting_01-IP"),
-    ("AM_BodyAction_TransferFishToTank", "/Game/Animalia/Cat/Animations/InPlace/Stand_00-IP.Stand_00-IP"),
     ("AM_BodyAction_RescueCharacterToCamp", "/Game/Animalia/Cat/Animations/InPlace/Trans_Sitting_To_Stand-IP.Trans_Sitting_To_Stand-IP"),
-    ("AM_BodyAction_RepairRodAtCamp", "/Game/Animalia/Cat/Animations/InPlace/Action_Scratching-IP.Action_Scratching-IP"),
-    ("AM_BodyAction_UseHerbOnCharacter", "/Game/Animalia/Cat/Animations/InPlace/Stand_Drinking_01-IP.Stand_Drinking_01-IP"),
-    ("AM_BodyAction_ConsumeFish", "/Game/Animalia/Cat/Animations/InPlace/Eating_01-IP.Eating_01-IP"),
-    ("AM_BodyAction_BeginTheft", "/Game/Animalia/Cat/Animations/InPlace/Loco_Sneak-IP.Loco_Sneak-IP"),
-    ("AM_BodyAction_CatchTheft", "/Game/Animalia/Cat/Animations/InPlace/Attack_Left-IP.Attack_Left-IP"),
     ("AM_BodyAction_RequestManualHelp", "/Game/Animalia/Cat/Animations/InPlace/Agressive_01-IP.Agressive_01-IP"),
     ("AM_BodyAction_RequestMischief", "/Game/Animalia/Cat/Animations/InPlace/Attack_Right-IP.Attack_Right-IP"),
     ("AM_BodyAction_PlaceProtectionSign", "/Game/Animalia/Cat/Animations/InPlace/Action_Scratching-IP.Action_Scratching-IP"),
-    ("AM_BodyAction_CompleteShakeDry", "/Game/Animalia/Cat/Animations/InPlace/Stand_03_LookAround-IP.Stand_03_LookAround-IP"),
 ]
 
 
 def _load_asset(path, expected_type):
-    """Load one existing asset and fail loudly if the configured source path drifts."""
+    """加载一个已存在的源资产；路径漂移或类型不符时立即失败，避免生成错误 Montage。"""
     asset = unreal.EditorAssetLibrary.load_asset(path)
     if asset is None:
         raise RuntimeError(f"missing source asset: {path}")
@@ -40,7 +32,7 @@ def _load_asset(path, expected_type):
 
 
 def _create_or_load_montage(asset_name, source_animation):
-    """Create a Montage from one sequence only when it is missing; existing Montage assets are left for art polish."""
+    """为一个动作创建或复核 Montage；已有资产保持原样，只保存以确认它仍可被加载。"""
     asset_path = f"{PACKAGE_ROOT}/{asset_name}.{asset_name}"
     montage = unreal.EditorAssetLibrary.load_asset(asset_path)
     created = False
@@ -65,7 +57,7 @@ def _create_or_load_montage(asset_name, source_animation):
 
 
 def main():
-    """Generate every BodyAction Montage in one pass and emit the stable evidence marker."""
+    """按当前 BodyAction 清单逐项复核 Montage，并输出稳定日志标记供自动化读取。"""
     created_or_verified = 0
     for asset_name, source_path in BODY_ACTION_MONTAGES:
         source_animation = _load_asset(source_path, unreal.AnimSequence)

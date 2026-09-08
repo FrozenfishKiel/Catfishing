@@ -1,10 +1,10 @@
 #include "UI/Shop/CatShopModel.h"
 
 #include "Engine/World.h"
-#include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
+#include "Inventory/CatInventoryItemDefinition.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Logging/CatLog.h"
 #include "ShopEconomy/CatShopInventoryComponent.h"
 
@@ -73,9 +73,7 @@ void UCatShopModel::Unbind()
 	BoundShopInventory.Reset();
 	bOpen = false;
 	bActionPending = false;
-	LastAction = ECatShopUIAction::None;
-	LastEntryId = NAME_None;
-	LastRejectedReason = FText();
+	FeedbackText = FText();
 	CartCountsByEntryId.Reset();
 	CartEntryOrder.Reset();
 	ReportedMissingIconEntryIds.Reset();
@@ -93,22 +91,18 @@ void UCatShopModel::SetOpen(const bool bNewOpen)
 	Refresh();
 }
 
-// 提交流程：记录最近动作，pending 状态会禁用继续加购、删除和支付，直到服务器结果明确成功或失败。
-void UCatShopModel::MarkActionSubmitted(const ECatShopUIAction Action, const FName EntryId)
+// 支付提交流程：记录当前只剩服务器回包能收口，pending 状态会禁用继续加购、删除和支付，直到服务器结果明确成功或失败。
+void UCatShopModel::MarkCartPaymentSubmitted()
 {
-	LastAction = Action;
-	LastEntryId = EntryId;
-	LastRejectedReason = FText();
+	FeedbackText = FText::FromString(TEXT("已提交购物车，等待商店结果同步"));
 	bActionPending = true;
 	Refresh();
 }
 
 // 拒绝回显流程：记录本地校验或服务器回包给出的失败原因，清掉 pending 并刷新结果文本；它只改 UI 投影，不写商店账本。
-void UCatShopModel::MarkActionRejected(const ECatShopUIAction Action, const FName EntryId, const FText Reason)
+void UCatShopModel::MarkFeedbackRejected(const FText Reason)
 {
-	LastAction = Action;
-	LastEntryId = EntryId;
-	LastRejectedReason = Reason;
+	FeedbackText = Reason;
 	bActionPending = false;
 	Refresh();
 }
@@ -116,9 +110,7 @@ void UCatShopModel::MarkActionRejected(const ECatShopUIAction Action, const FNam
 // 支付成功流程：清空本地购物车和 pending 状态；服务器事实会继续通过公开经济快照与公共仓库快照各自同步。
 void UCatShopModel::MarkCartPaymentSucceeded()
 {
-	LastAction = ECatShopUIAction::PayCart;
-	LastEntryId = NAME_None;
-	LastRejectedReason = FText();
+	FeedbackText = FText::FromString(TEXT("支付成功，请在营地公共仓库查看新物品"));
 	bActionPending = false;
 	CartCountsByEntryId.Reset();
 	CartEntryOrder.Reset();
@@ -165,9 +157,7 @@ bool UCatShopModel::AddEntryToCart(const FName EntryId, FText& OutFailureReason)
 		CartEntryOrder.Add(EntryId);
 	}
 	CartCountsByEntryId.FindOrAdd(EntryId) = ExistingCount + 1;
-	LastAction = ECatShopUIAction::AddEntryToCart;
-	LastEntryId = EntryId;
-	LastRejectedReason = FText();
+	FeedbackText = FText::FromString(FString::Printf(TEXT("已选购：%s"), *Entry.DisplayNameText.ToString()));
 	Refresh();
 	return true;
 }
@@ -193,9 +183,7 @@ bool UCatShopModel::RemoveOneCartItem(const FName EntryId, FText& OutFailureReas
 		CartCountsByEntryId.Remove(EntryId);
 		CartEntryOrder.Remove(EntryId);
 	}
-	LastAction = ECatShopUIAction::RemoveCartEntry;
-	LastEntryId = EntryId;
-	LastRejectedReason = FText();
+	FeedbackText = FText::FromString(TEXT("已从已选购中移除一份"));
 	Refresh();
 	return true;
 }
@@ -233,8 +221,6 @@ void UCatShopModel::Refresh()
 {
 	FCatShopViewState NewState;
 	NewState.bOpen = bOpen;
-	NewState.LastAction = LastAction;
-	NewState.LastEntryId = LastEntryId;
 	NewState.bActionPending = bActionPending;
 	if (const ACatfishingGameState* GameState = BoundGameState.Get())
 	{
@@ -268,27 +254,13 @@ void UCatShopModel::Refresh()
 		? FText::FromString(FString::Printf(TEXT("商店：团队公款 %d"), NewState.Economy.Balance))
 		: FText::FromString(TEXT("商店：公款数据未同步"));
 
-	if (!LastRejectedReason.IsEmpty())
+	if (!FeedbackText.IsEmpty())
 	{
-		NewState.ResultText = LastRejectedReason;
+		NewState.ResultText = FeedbackText;
 	}
 	else if (NewState.bActionPending)
 	{
 		NewState.ResultText = FText::FromString(TEXT("已提交购物车，等待商店结果同步"));
-	}
-	else if (LastAction == ECatShopUIAction::PayCart)
-	{
-		NewState.ResultText = FText::FromString(TEXT("支付成功，请在营地公共仓库查看新物品"));
-	}
-	else if (LastAction == ECatShopUIAction::AddEntryToCart && !LastEntryId.IsNone())
-	{
-		const FCatShopEntryView* Entry = FindEntryView(NewState.Entries, LastEntryId);
-		NewState.ResultText = FText::FromString(FString::Printf(TEXT("已选购：%s"),
-			Entry ? *Entry->DisplayNameText.ToString() : *LastEntryId.ToString()));
-	}
-	else if (LastAction == ECatShopUIAction::RemoveCartEntry && !LastEntryId.IsNone())
-	{
-		NewState.ResultText = FText::FromString(TEXT("已从已选购中移除一份"));
 	}
 	else
 	{
@@ -331,21 +303,20 @@ void UCatShopModel::HandleShopInventoryIdentityChanged()
 }
 
 // 商品投影流程：
-// 1. 把 Catalog 展示字段和装备定义展示字段合成中文展示行；商店专属图优先，未配置时回退到定义的通用缩略图。
+// 1. 把 Catalog 展示字段和库存定义展示字段合成中文展示行；商店专属图优先，未配置时回退到定义的通用缩略图。
 // 2. 使用公开货架库存读取有限库存剩余数，并用当前团队公款推导单品是否买得起；加购不受单品余额影响。
 // 3. 这些结果只影响 UI 展示和明显无效点击；真正扣款、数量和公共仓库发货仍在服务器 ShopEconomy/OrderCoordinator。
 FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry,
 	const FCatShopPublicEconomySnapshot& Economy, const bool bEconomyAvailable)
 {
 	const UCatShopInventoryComponent* ShopInventory = BoundShopInventory.Get();
-	const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
-	const UCatEquipmentDefinition* Definition =
-		EquipmentSettings ? EquipmentSettings->FindRuntimeDefinition(Entry.DefinitionId) : nullptr;
+	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+	const UCatInventoryItemDefinition* Definition =
+		InventorySettings ? InventorySettings->FindRuntimeDefinition(Entry.DefinitionId) : nullptr;
 	const FCatShopStockSnapshot* Stock = bEconomyAvailable && ShopInventory
 		? FindPublicStockSnapshot(Economy, ShopInventory->GetShopInventoryId(), Entry.EntryId) : nullptr;
 	FCatShopEntryView View;
 	View.EntryId = Entry.EntryId;
-	View.Kind = Entry.Kind;
 	View.DefinitionId = Entry.DefinitionId;
 	View.DisplayCategoryId = Entry.DisplayCategoryId;
 	View.DisplayCategoryNameText = !Entry.DisplayCategoryNameOverride.IsEmpty()
@@ -362,7 +333,7 @@ FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry
 	View.CartCount = CartCountsByEntryId.FindRef(Entry.EntryId);
 	View.IconOverride = !Entry.IconOverride.IsNull()
 		? Entry.IconOverride
-		: (Definition ? Definition->Thumbnail : TSoftObjectPtr<UTexture2D>());
+		: (Definition ? Definition->GetInventoryThumbnail() : TSoftObjectPtr<UTexture2D>());
 	if (View.IconOverride.IsNull())
 	{
 		if (!ReportedMissingIconEntryIds.Contains(Entry.EntryId))
@@ -379,12 +350,12 @@ FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry
 	}
 	View.DisplayNameText = !Entry.DisplayNameOverride.IsEmpty()
 		? Entry.DisplayNameOverride
-		: (Definition && !Definition->DisplayName.IsEmpty()
-			? Definition->DisplayName
+		: (Definition && !Definition->GetInventoryDisplayName().IsEmpty()
+			? Definition->GetInventoryDisplayName()
 			: FText::FromName(Entry.DefinitionId.IsNone() ? Entry.EntryId : Entry.DefinitionId));
 	View.DescriptionText = !Entry.DescriptionOverride.IsEmpty()
 		? Entry.DescriptionOverride
-		: (Definition ? Definition->Description : FText());
+		: (Definition ? Definition->GetInventoryDescription() : FText());
 	const FString StockText = !View.bStockAvailable
 		? FString(TEXT("库存：未同步"))
 		: View.bUnlimitedStock

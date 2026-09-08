@@ -5,6 +5,8 @@
 #include "Camp/CatCampInventoryActor.h"
 #include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatEquipmentInventoryItemInstance.h"
+#include "Inventory/CatInventoryComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
 #include "Equipment/Inventory/CatInventoryTransferService.h"
@@ -512,6 +514,59 @@ bool FCatInventoryTransferSelectionRepairTest::RunTest(const FString& Parameters
 		TestEqual(TEXT("selection recovery prefers remaining original definition over newly received alternative"), SelectedItem(F.A), FirstId);
 		TestTrue(TEXT("alternate received tool is still available without replacing the old choice"), FindItem(F.A, IncomingId) != INDEX_NONE);
 	}
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFormalInventoryFishingTransferTest,
+	"Catfishing.Unit.Equipment.InventoryTransfer.FormalObjectIdentityAndAtomicObservers",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFormalInventoryFishingTransferTest::RunTest(const FString& Parameters)
+{
+	using namespace CatInventoryTransferTests;
+	FFixture F;
+	if (!F.Initialize(*this) || !F.Grant(*this, F.A, RodId)) return false;
+	UCatInventoryComponent* Source = F.A->GetInventoryTransferInventory();
+	UCatInventoryComponent* Target = F.B->GetInventoryTransferInventory();
+	const int32 InitialIndex = FindDefinition(F.A, RodId);
+	const FGuid ItemId = F.A->GetSnapshot().InventorySlots[InitialIndex].ItemInstanceId;
+	UCatInventoryItemInstance* Original = Source->GetInventoryEntryAtSlot(
+		Source->FindInventorySlotIndexFromInstanceId(ItemId))->Instance;
+	const FCatInventoryTransferRequest Request = F.Request(F.A, F.B, InitialIndex);
+	int32 Observations = 0;
+	const auto Observe = [&]()
+	{
+		++Observations;
+		TestEqual(TEXT("formal observer sees source already empty"), Source->FindInventorySlotIndexFromInstanceId(ItemId), INDEX_NONE);
+		const int32 Index = Target->FindInventorySlotIndexFromInstanceId(ItemId);
+		TestTrue(TEXT("formal observer sees destination already committed"), Index != INDEX_NONE);
+		if (Index != INDEX_NONE) TestTrue(TEXT("formal transfer preserves exact UObject"), Target->GetInventoryEntryAtSlot(Index)->Instance == Original);
+		TestEqual(TEXT("formal observer reentry replays frozen terminal"), F.Service->TransferFromAuthority(Request).Error, ECatDomainCommandError::AlreadyResolved);
+	};
+	const FDelegateHandle SourceObserver = Source->OnInventoryObservedChanged.AddLambda(Observe);
+	const FDelegateHandle TargetObserver = Target->OnInventoryObservedChanged.AddLambda(Observe);
+	const FCatInventoryTransferResult Moved = F.Service->TransferFromAuthority(Request);
+	Source->OnInventoryObservedChanged.Remove(SourceObserver);
+	Target->OnInventoryObservedChanged.Remove(TargetObserver);
+	if (!TestTrue(TEXT("formal transfer commits"), Moved.bCommitted)) return false;
+	TestEqual(TEXT("each formal endpoint publishes once"), Observations, 2);
+	if (!F.Grant(*this, F.B, FloatId) || !F.Grant(*this, F.B, BaitId, 2)) return false;
+	if (!TestTrue(TEXT("formal transferred rod deploys"), F.B->Use(FGuid::NewGuid(),
+		F.B->GetSnapshot().Revision, ItemId, 1, Target->GetInventoryRevision()).bCommitted)) return false;
+	const FCatInventoryEntry* Held = Target->FindHeldInventoryEntryFromAuthority(ItemId);
+	if (!TestNotNull(TEXT("formal inventory holds deployed object"), Held)) return false;
+	TestTrue(TEXT("deployment keeps exact UObject"), Held->Instance == Original);
+	const FGuid SessionId = FGuid::NewGuid();
+	if (!TestTrue(TEXT("transferred rod supports reservation"), F.Begin(F.B, SessionId, ItemId).bReserved)
+		|| !TestTrue(TEXT("bait commits"), F.B->CommitFishingBaitDeferred(SessionId).bApplied)
+		|| !TestTrue(TEXT("wear commits"), F.B->ApplyFishingRodWear(SessionId, 1, 17.0).bApplied)) return false;
+	TestEqual(TEXT("wear is authoritative on original UObject"), CastChecked<UCatEquipmentInventoryItemInstance>(Original)->GetRodDurability(), 83.0);
+	if (!TestTrue(TEXT("fishing releases"), F.B->ReleaseFishingUse(SessionId).bApplied)
+		|| !TestTrue(TEXT("same instance returns"), F.B->UnUse(FGuid::NewGuid(), ItemId).bCommitted)) return false;
+	TestNull(TEXT("returned object no longer has held owner"), Target->FindHeldInventoryEntryFromAuthority(ItemId));
+	const int32 ReturnedIndex = Target->FindInventorySlotIndexFromInstanceId(ItemId);
+	if (!TestTrue(TEXT("formal returned object exists"), ReturnedIndex != INDEX_NONE)) return false;
+	TestTrue(TEXT("return preserves UObject and does not recreate by definition"), Target->GetInventoryEntryAtSlot(ReturnedIndex)->Instance == Original);
 	return !HasAnyErrors();
 }
 

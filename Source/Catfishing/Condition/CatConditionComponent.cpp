@@ -3,15 +3,17 @@
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
+#include "Components/CapsuleComponent.h"
+#include "Environment/CatWaterQuerySubsystem.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
 #include "Condition/CatConditionSettings.h"
 #include "Data/CatFishDefinition.h"
 #include "Fishing/CatFishingService.h"
-#include "Environment/CatWaterQuerySubsystem.h"
-#include "Components/CapsuleComponent.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerState.h"
 #include "Growth/CatGrowthComponent.h"
 #include "Net/UnrealNetwork.h"
 
@@ -35,7 +37,7 @@ const FCatConditionSnapshot& UCatConditionComponent::GetSnapshot() const
 	return Snapshot;
 }
 
-// Wet 写入流程：只接受 authority 和真实变化；提交后增加 Revision/强制更新，明确不触碰 Poison、成长、搏斗体力或移动能力。
+// Wet 写入流程：只接受落水、天气等 authority 反馈和真实变化；提交后增加 Revision/强制更新，明确不触碰 Poison、成长、搏斗体力、移动能力或 BodyAction。
 void UCatConditionComponent::SetWetFromAuthority(const bool bNewWet)
 {
 	AActor* Owner = GetOwner();
@@ -54,6 +56,10 @@ ECatWaterExposureUpdate UCatConditionComponent::UpdateWaterExposureFromAuthority
 	const FCatWaterRegionHandle& WaterRegion, const double DeltaSeconds,
 	double& OutImmersionDepthCentimeters)
 {
+	// 水域暴露更新流程：
+	// 1. 先确认 Character、authority、阈值配置、水域子系统和固定步时长齐全，缺任一项都不猜湿身结果。
+	// 2. 再用脚点查询指定 WaterRegion 的浸没深度，并按湿润阈值、危险进入阈值和退出滞回维护离散状态。
+	// 3. 状态没有变化时只返回 Unchanged；危险首次进入用 Warning 记录并交给 Fishing 终局入口处理。
 	OutImmersionDepthCentimeters = 0.0;
 	ACatCharacter* Character = Cast<ACatCharacter>(GetOwner());
 	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
@@ -87,6 +93,7 @@ ECatWaterExposureUpdate UCatConditionComponent::UpdateWaterExposureFromAuthority
 	else if (bWet && OutImmersionDepthCentimeters >= Settings->DangerousWaterDepthCentimeters)
 	{
 		DangerousWaterBuildUpSeconds += DeltaSeconds;
+		// 危险水域按 World 秒累计；极小容差只吸收浮点边界，避免正好到确认阈值的那帧被漏判。
 		if (DangerousWaterBuildUpSeconds + UE_DOUBLE_KINDA_SMALL_NUMBER
 			>= Settings->DangerousWaterConfirmationSeconds)
 		{
@@ -159,7 +166,7 @@ ECatDomainCommandError UCatConditionComponent::ValidateHerbRecovery(AController*
 }
 
 // 进食流程：先按 RequestId 重放，再验证 authority/定义/项目 ASC/Growth；Toxic 鱼只通过 ApplyPoisonDelta/GE 增加 Poison。
-// Poison 提交失败时不推进 Growth 或 Downed，避免实物鱼已消费后写出半套身体事实；成功后才推进经验槽、裁决倒地并缓存终态。
+// Poison 或 Growth 任一提交失败都不裁决 Downed；全部身体后置事实成立后才推进 Snapshot 并缓存完整终态。
 FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid RequestId,
 	const UCatFishDefinition* FishDefinition)
 {
@@ -169,8 +176,7 @@ FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
 	UCatAbilitySystemComponent* ASC = ResolveAbilitySystem();
@@ -189,11 +195,19 @@ FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid
 		}
 		else
 		{
-			Growth->ApplyCommittedFish(RequestId, FishDefinition);
-			EvaluateDownedFromAttributes(ECatRecoveryMode::None);
-			Result.bCommitted = true;
-			Result.Error = ECatDomainCommandError::None;
-			Result.Revision = Snapshot.Revision;
+			const FCatDomainCommandResult GrowthResult = Growth->ApplyCommittedFish(RequestId, FishDefinition);
+			if (!CatIsAcceptedDomainCommandResult(GrowthResult))
+			{
+				Result.Error = GrowthResult.bTerminalReplay ? GrowthResult.ReplayedTerminalError : GrowthResult.Error;
+				Result.Revision = Snapshot.Revision;
+			}
+			else
+			{
+				EvaluateDownedFromAttributes(ECatRecoveryMode::None);
+				Result.bCommitted = true;
+				Result.Error = ECatDomainCommandError::None;
+				Result.Revision = Snapshot.Revision;
+			}
 		}
 	}
 	TerminalCache.Add(Key, Result);
@@ -244,8 +258,7 @@ FCatDomainCommandResult UCatConditionComponent::ApplyCommittedHerbRecovery(ACont
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
 	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
@@ -268,8 +281,7 @@ FCatDomainCommandResult UCatConditionComponent::CompleteCarryToCamp(AController*
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !HelpingController || !RequestId.IsValid() || !bAtCampRescuePoint)
@@ -311,8 +323,7 @@ FCatDomainCommandResult UCatConditionComponent::ApplyRecovery(const FGuid Reques
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
 	UCatAbilitySystemComponent* ASC = ResolveAbilitySystem();

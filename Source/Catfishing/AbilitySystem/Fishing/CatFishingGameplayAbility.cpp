@@ -1,7 +1,7 @@
 #include "AbilitySystem/Fishing/CatFishingGameplayAbility.h"
 
 #include "Fishing/Integration/CatFishingCommandComponent.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 
 UCatFishingGameplayAbility::UCatFishingGameplayAbility()
 {

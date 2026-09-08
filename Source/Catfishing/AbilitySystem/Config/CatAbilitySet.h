@@ -75,21 +75,21 @@ private:
 	TArray<FActiveGameplayEffectHandle> GameplayEffectHandles;
 };
 
-/** 项目默认能力授予资产；Character authority 读取它给 ASC 建立 Fishing 输入能力、BodyAction 事件网关和初始效果的唯一默认集合。 */
+/** 项目默认能力授予资产；Character authority 读取它给 ASC 建立 Fishing 输入能力、保留 BodyAction 事件能力和初始效果的唯一默认集合。 */
 UCLASS(BlueprintType, Const)
 class CATFISHING_API UCatAbilitySet : public UPrimaryDataAsset
 {
 	GENERATED_BODY()
 
 public:
-	/** 判断默认能力集是否足以支撑正式 Fishing 输入和 BodyAction 事件入口；缺少任一稳定入口都会 fail-closed。 */
+	/** 判断默认能力集是否足以支撑正式 Fishing 输入和保留 BodyAction 事件入口；Wet 反馈不是玩家技能或 BodyAction，缺少任一稳定入口都会 fail-closed。 */
 	bool IsRuntimeReady() const;
 
 	/** 在服务器 ASC 上整组授予能力与初始效果；任一授予失败会回滚本次已授予内容并返回 false。 */
 	bool GiveToAbilitySystem(UCatAbilitySystemComponent* AbilitySystem,
 		FCatGrantedAbilitySetHandles& OutGrantedHandles) const;
 
-	/** 设计资产配置的授予条目列表；运行时门禁读取它验证六个 Fishing 输入能力和无输入 BodyAction 网关都齐全且无重复。 */
+	/** 设计资产配置的授予条目列表；运行时门禁读取它验证六个 Fishing 输入能力和六个无输入 BodyAction 能力都齐全且无重复，不承载 Wet 反馈。 */
 	UPROPERTY(EditDefaultsOnly, Category="Abilities")
 	TArray<FCatAbilitySetAbility> GrantedAbilities;
 };

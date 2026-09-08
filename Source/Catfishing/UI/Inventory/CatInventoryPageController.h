@@ -55,7 +55,7 @@ public:
 	/** 库存 WBP 请求关闭当前库存页；关闭状态下的迟到点击不会反向打开。 */
 	void RequestCloseInventoryFromWidget();
 
-	/** 库存 WBP 请求处理一个格子的右键上下文；PageController 会按该格所属数据源决定取用或装备选择。 */
+	/** 库存 WBP 请求处理一个格子的右键上下文；PageController 只按来源决定取用公共仓库或使用随身库存物品。 */
 	void RequestInventorySlotContextFromWidget(const FCatInventorySlotView& Slot);
 
 	/** 库存 WBP 请求处理一次格子 Drop；PageController 从最新 Model 复核来源后提交服务器事务。 */
@@ -69,7 +69,7 @@ private:
 	/** 设置库存打开态并成对处理视口、输入模式和 Model 打开投影；普通切换和交互打开共用这条生命周期。 */
 	void SetInventoryOpen(bool bOpen);
 
-	/** 加载 Settings 中配置的库存 Action，并绑定到当前 EnhancedInputComponent；按键映射必须来自既有 InputContext。 */
+	/** 加载 Settings 中配置的库存 Action，并绑定到当前 EnhancedInputComponent；若与主菜单 Action 相同则主动避让主菜单。 */
 	void InstallInventoryInput();
 
 	/** 从原 EnhancedInputComponent 精确移除库存 Action 绑定，再释放配置资产强引用。 */

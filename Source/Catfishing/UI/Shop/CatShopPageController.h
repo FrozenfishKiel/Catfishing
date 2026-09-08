@@ -100,12 +100,6 @@ private:
 	/** 本页最近一次已提交但尚未由服务器结果或经济快照收束的商店请求；只用于匹配回包，不参与权威结算。 */
 	FGuid PendingShopRequestId;
 
-	/** 本页最近一次 pending 请求的动作类型；服务器失败回包要用它恢复支付反馈。 */
-	ECatShopUIAction PendingShopAction = ECatShopUIAction::None;
-
-	/** 本页最近一次 pending 请求关联的商品条目；购物车支付保持 None，兼容本地拒绝提示接口。 */
-	FName PendingShopEntryId = NAME_None;
-
 	/** 商店打开期间的模态输入恢复记录；关闭页面时用它撤销本页面的移动/视角锁和鼠标状态。 */
 	FCatUIModalInputModeState ModalInputModeState;
 

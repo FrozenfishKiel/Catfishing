@@ -1,5 +1,6 @@
 #include "Equipment/CatFishingResourceCustodian.h"
 #include "Equipment/CatEquipmentComponent.h"
+#include "Inventory/CatInventoryComponent.h"
 
 ACatFishingResourceCustodian::ACatFishingResourceCustodian()
 {
@@ -9,4 +10,6 @@ ACatFishingResourceCustodian::ACatFishingResourceCustodian()
 	SetActorEnableCollision(false);
 	Equipment = CreateDefaultSubobject<UCatEquipmentComponent>(TEXT("PreservedFishingEquipment"));
 	Equipment->SetIsReplicated(false);
+	Inventory = CreateDefaultSubobject<UCatInventoryComponent>(TEXT("PreservedFishingInventory"));
+	Inventory->SetIsReplicated(false);
 }

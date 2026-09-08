@@ -53,6 +53,7 @@ bool FCatHUDCooperativeStaminaTest::RunTest(const FString& Parameters)
 	UAbilitySystemComponent* AbilitySystem = Cat ? Cat->GetAbilitySystemComponent() : nullptr;
 	if (!TestNotNull(TEXT("使用真实角色拥有的 ASC"), AbilitySystem)) return false;
 	AbilitySystem->InitAbilityActorInfo(Cat, Cat);
+	AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), 100.0f);
 	AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 35.0f);
 	Model->BoundAbilitySystem = AbilitySystem;
 	Model->FishingViewBridge = NewObject<UCatFishingViewBridge>(Model);

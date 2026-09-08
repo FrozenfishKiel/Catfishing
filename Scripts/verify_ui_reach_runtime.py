@@ -141,10 +141,10 @@ def main() -> None:
     _require("WBP_CatInteractionPrompt" in configured_interaction, f"Interaction 默认 WBP 配置异常: {configured_interaction}")
     _require("WBP_CatShop" in configured_shop, f"Shop 默认 WBP 配置异常: {configured_shop}")
     _require("WBP_CatCollection" in configured_collection, f"Collection 默认 WBP 配置异常: {configured_collection}")
-    _require("IA_LakeMenu" in inventory_action_path, f"背包 Action 配置异常: {inventory_action_path}")
+    _require("IA_Inventory" in inventory_action_path, f"背包 Action 配置异常: {inventory_action_path}")
     _require("IA_Interact" in interact_action_path, f"交互 Action 配置异常: {interact_action_path}")
     _require("IMC_InputContext" in gameplay_context_path, f"Gameplay IMC 配置异常: {gameplay_context_path}")
-    _require(unreal.load_asset("/Game/Input/InputAction/IA_LakeMenu") is not None, "无法加载 IA_LakeMenu 输入资产")
+    _require(unreal.load_asset("/Game/Input/InputAction/IA_Inventory") is not None, "无法加载 IA_Inventory 输入资产")
     _require(unreal.load_asset("/Game/Input/InputAction/IA_Interact") is not None, "无法加载 IA_Interact 输入资产")
     _require(unreal.load_asset("/Game/Input/InputContext/IMC_InputContext") is not None, "无法加载 IMC_InputContext 输入资产")
 

@@ -13,7 +13,7 @@ class UCatFishDefinition;
 /** Condition 完整快照发生提交或复制变化的本机通知；订阅者必须重新读取 GetSnapshot，不使用增量载荷拼状态。 */
 DECLARE_MULTICAST_DELEGATE(FCatConditionSnapshotChanged);
 
-/** Character 局内离散身体状态组件；ASC 拥有数值，本组件只裁决 Wet/Downed/恢复生命周期且绝不产生死亡。 */
+/** Character 局内离散身体状态组件；ASC 拥有数值，本组件只裁决 Wet/Downed/恢复生命周期，Wet 不代表玩家技能或 BodyAction 入口。 */
 UCLASS(ClassGroup = (Catfishing), meta = (BlueprintSpawnableComponent))
 class CATFISHING_API UCatConditionComponent : public UActorComponent
 {
@@ -29,7 +29,7 @@ public:
 	/** 提供身体条件的服务器最终值或客户端复制值；外部只据此判断交互资格，不能借返回值改写 Wet/Downed。 */
 	const FCatConditionSnapshot& GetSnapshot() const;
 
-	/** 身体表现入口在 authority 设置纯表现 Wet；重复相同值不增加 Revision，也不修改任何 Attribute。 */
+	/** 落水、天气等非技能反馈在 authority 设置纯表现 Wet；重复相同值不增加 Revision，也不修改任何 Attribute。 */
 	void SetWetFromAuthority(bool bNewWet);
 
 	/** 由钓鱼固定步提交采样时长；组件自行查询脚点水深并维护滞回/确认。 */
@@ -39,7 +39,7 @@ public:
 	/** 在实物鱼被不可逆移除前只读校验食用定义、ASC 与倒地阈值；返回 None 才允许上层提交 Items 事务。 */
 	ECatDomainCommandError ValidateFishConsumption(const UCatFishDefinition* FishDefinition) const;
 
-	/** 在草药库存被不可逆扣除前只读校验施药者距离、ASC、倒地阈值与正式恢复数值；返回 None 才允许上层提交 Equipment 事务。 */
+	/** 在草药库存被不可逆扣除前只读校验施药者距离、ASC、倒地阈值与正式恢复数值；返回 None 才允许上层提交库存事务。 */
 	ECatDomainCommandError ValidateHerbRecovery(AController* HelpingController) const;
 
 	/** 实物鱼消费提交后读取 FishDefinition 食用字段，增加可选 Poison、推进成长经验，并重新裁决倒地。 */
@@ -80,7 +80,7 @@ private:
 	/** authority 提交后请求复制并广播，客户端 RepNotify 只广播；集中保证 UI 不漏掉任何完整快照变化。 */
 	void PublishSnapshot();
 
-	/** Wet/Downed/Recovery 的唯一复制事实。 */
+	/** Wet/Downed/Recovery 的唯一复制事实；Condition 写入、UI 和表现层读取，Wet 本身不由任何 Ability 清除或触发。 */
 	UPROPERTY(ReplicatedUsing = OnRep_Snapshot)
 	FCatConditionSnapshot Snapshot;
 

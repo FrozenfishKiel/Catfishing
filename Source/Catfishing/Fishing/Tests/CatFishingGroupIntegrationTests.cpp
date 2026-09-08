@@ -59,6 +59,7 @@ bool FCatFishingGroupRunnerIntegrationTest::RunTest(const FString& Parameters)
 		UCatCharacterMovementComponent* Movement = Cast<UCatCharacterMovementComponent>(Cat->GetCharacterMovement());
 		if (!TestTrue(TEXT("每位成员使用真实ASC与项目CMC"), ASC && Movement)) return false;
 		ASC->InitAbilityActorInfo(Cat, Cat);
+		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), 60.0f);
 		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 30.0f);
 		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 100.0f);
 		Movement->bRunPhysicsWithNoController = true;
@@ -87,6 +88,27 @@ bool FCatFishingGroupRunnerIntegrationTest::RunTest(const FString& Parameters)
 		[](const FCatFightGroupParticipantInput& Participant) { return Participant.bPrimary; }).Num(), 1);
 	TestFalse(TEXT("辅助不能通过旧左键入口改变线杯操作"), Runner->SetReeling(Players[3], 1, true));
 	TestFalse(TEXT("辅助不能替代主位放线"), Runner->SetSlacking(Players[3], 2, true));
+
+	// 身体上限与默认配置、入场缓存独立；下一次生产刷新必须消费真实 ASC 的当前上限。
+	AbilitySystems[0]->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), 75.0f);
+	AbilitySystems[1]->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), 90.0f);
+	if (!TestTrue(TEXT("运行中修改真实ASC上限后下一固定步刷新成功"), Runner->UpdateParticipantIntentAndProperties())) return false;
+	TestEqual(TEXT("主位模拟上限采用75而非默认配置或入场缓存60"), Runner->Config.CatStaminaMaximum, 75.0);
+	TestEqual(TEXT("不同身体ASC上限按实际值合计"), Runner->GroupResult.TotalMaximumStamina, 285.0);
+	TestEqual(TEXT("辅助上限观察缓存跟随其最新ASC属性"), Runner->FindParticipant(Players[1])->StaminaMaximum, 90.0);
+	TestEqual(TEXT("上限增加不补满任何成员的真实余额"), Runner->GroupResult.TotalCurrentStamina, 120.0);
+	AbilitySystems[1]->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), 20.0f);
+	if (!TestTrue(TEXT("真实ASC降低上限后下一固定步刷新成功"), Runner->UpdateParticipantIntentAndProperties())) return false;
+	TestEqual(TEXT("降低上限时只由ASC把本人余额夹到新上限"),
+		AbilitySystems[1]->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 20.0f);
+	TestEqual(TEXT("降低后的成员上限没有保留旧缓存"), Runner->GroupResult.TotalMaximumStamina, 215.0);
+	TestEqual(TEXT("上限下降不影响其他三名成员余额"), Runner->GroupResult.TotalCurrentStamina, 110.0);
+	for (UCatAbilitySystemComponent* ASC : AbilitySystems)
+	{
+		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), 60.0f);
+		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 30.0f);
+	}
+	if (!TestTrue(TEXT("恢复原费用测试的相同身体初值"), Runner->UpdateParticipantIntentAndProperties())) return false;
 
 	// Use the actual CMC network-input acceptance path. Do not replace the Runner's group output.
 	for (UCatCharacterMovementComponent* Movement : Movements)
@@ -243,6 +265,23 @@ bool FCatFishingGroupRunnerIntegrationTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("重新加入沿用同一刷新入口"), Runner->UpdateParticipantIntentAndProperties())) return false;
 	TestEqual(TEXT("重新加入只加回本人剩余量，不能免费回满"), Runner->GroupResult.TotalCurrentStamina, ThreeMemberTotal + LeavingStamina, 1e-5);
 	TestEqual(TEXT("退出再加入期间本人真实余额未改"), AbilitySystems[3]->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), LeavingStamina);
+	AbilitySystems[3]->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 0.0f);
+	const FVector FishBeforeTransfer = Runner->State.FishWorldPosition;
+	const FVector VelocityBeforeTransfer = Runner->State.FishVelocityCentimetersPerSecond;
+	const double FishStaminaBeforeTransfer = Runner->State.FishStamina;
+	const double LineBeforeTransfer = Runner->State.LineLengthCentimeters;
+	const double WearBeforeTransfer = Runner->State.AbsoluteRodWear;
+	const float OtherStaminaBeforeTransfer = AbilitySystems[1]->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	TestTrue(TEXT("真实零体力辅助可以通过生产Runner入口接管主位"), Runner->TransferOperatorFromAuthority(
+		Players[3], AbilitySystems[3], 100.0, 60.0, 0.0, 10, false, false));
+	TestEqual(TEXT("接力不会回满新主位真实ASC体力"), AbilitySystems[3]->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 0.0f);
+	TestEqual(TEXT("接力不会改写其他成员真实ASC体力"), AbilitySystems[1]->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), OtherStaminaBeforeTransfer);
+	TestTrue(TEXT("接力保留同一Runner鱼的位置与速度"), Runner->State.FishWorldPosition == FishBeforeTransfer
+		&& Runner->State.FishVelocityCentimetersPerSecond == VelocityBeforeTransfer);
+	TestEqual(TEXT("接力保留同一条鱼的体力"), Runner->State.FishStamina, FishStaminaBeforeTransfer);
+	TestEqual(TEXT("接力保留已经收放的线长"), Runner->State.LineLengthCentimeters, LineBeforeTransfer);
+	TestEqual(TEXT("接力保留本场绝对累计磨损"), Runner->State.AbsoluteRodWear, WearBeforeTransfer);
+	TestTrue(TEXT("零体力接力后的新主位仍能提交收线指令"), Runner->SetReeling(Players[3], 11, true));
 	Runner->Participants.Reset();
 	Runner->State.bOperatorPresent = false;
 	if (!TestTrue(TEXT("无人值守仍可刷新空组快照"), Runner->UpdateParticipantIntentAndProperties())) return false;

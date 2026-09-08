@@ -13,7 +13,7 @@ class UTexture2D;
 /** 库存格子选中事件；参数是该格自己的来源身份，不能被解释成跨库存共享下标。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatInventorySlotSelected, const FCatInventorySlotView&);
 
-/** 库存格子右键上下文事件；主界面收到后按该格所属数据源决定取用营地物品或设置随身钓具。 */
+/** 库存格子右键上下文事件；主界面收到后按该格所属数据源决定取用营地物品或使用随身库存物品。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatInventorySlotContextRequested, const FCatInventorySlotView&);
 
 /** 库存格子 Drop 事件；源和目标都是 Model 投影的只读副本，真正移动仍由 PageController 重读后提交服务器。 */

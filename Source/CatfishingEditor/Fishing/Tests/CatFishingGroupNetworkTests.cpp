@@ -26,8 +26,11 @@
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "GameFramework/PlayerState.h"
 #include "GameFramework/WorldSettings.h"
+#include "Inventory/CatInventoryComponent.h"
 #include "Settings/LevelEditorPlaySettings.h"
 #include "UI/CatFishingViewBridge.h"
 #include "UI/CatFishingViewTypes.h"
@@ -149,6 +152,7 @@ namespace CatFishingGroupNetwork
 				FCatPlaceRodCommand Place;
 				Place.RequestId = FGuid::NewGuid();
 				Place.ExpectedEquipmentRevision = Equipment->GetSnapshot().Revision;
+				Place.ExpectedInventoryRevision = PrimaryCat->GetInventoryComponent()->GetInventoryRevision();
 				const auto Placed = Fishing->PlaceRod(Primary, Place);
 				if (!Test->TestTrue(TEXT("real Service places the formal rod"), Placed.bCommitted)) return true;
 				RodId = Placed.RodActorId;

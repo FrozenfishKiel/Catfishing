@@ -7,6 +7,9 @@
 #include "Equipment/Inventory/CatInventoryTransferEndpoint.h"
 #include "GameFramework/Actor.h"
 #include "Logging/CatLog.h"
+#include "Inventory/CatInventoryMutationScope.h"
+#include "Inventory/CatInventoryItemInstance.h"
+#include "Equipment/CatEquipmentInventoryItemInstance.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCatInventoryTransfer, Log, All);
 
@@ -297,6 +300,71 @@ FCatInventoryTransferResult UCatInventoryTransferService::TransferFromAuthority(
 	}
 	Result.SourceRevision = Source.Revision + 1;
 	Result.TargetRevision = Target.Revision + 1;
+	UCatInventoryComponent* SourceInventory = SourceEndpoint->GetInventoryTransferInventory();
+	UCatInventoryComponent* TargetInventory = TargetEndpoint->GetInventoryTransferInventory();
+	if (!SourceInventory || !TargetInventory)
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		return Finish(Result);
+	}
+	// 两端正式实例先同时冻结。完整移动复用同一 UObject，只有数量分栈才创建新身份。
+	TMap<FGuid, UCatInventoryItemInstance*> Instances;
+	TMap<FName, UCatInventoryItemInstance*> Definitions;
+	const auto Gather = [&](UCatInventoryComponent* Inventory)
+	{
+		TArray<FCatInventoryEntry> Entries = Inventory->GetInventoryEntries();
+		Inventory->AppendHeldInventoryEntriesFromAuthority(Entries);
+		for (const FCatInventoryEntry& Entry : Entries)
+		{
+			if (!Entry.Instance || Entry.StackCount <= 0) continue;
+			const FGuid Id = Entry.Instance->GetItemInstanceId();
+			if (UCatInventoryItemInstance* const* Existing = Instances.Find(Id); Existing && *Existing != Entry.Instance) return false;
+			Instances.Add(Id, Entry.Instance);
+			Definitions.Add(Entry.Instance->GetItemDefinitionId(), Entry.Instance);
+		}
+		return true;
+	};
+	const auto PrepareFormal = [&](TArray<FCatInventoryEndpointWrite>& Writes, UCatInventoryComponent* Inventory)
+	{
+		for (FCatInventoryEndpointWrite& Write : Writes)
+		{
+			if (Write.Channel != TEXT("Stored")) continue;
+			Write.FormalEntries.SetNum(Write.Slots.Num());
+			for (int32 Index = 0; Index < Write.Slots.Num(); ++Index)
+			{
+				const FCatRunInventorySlot& Slot = Write.Slots[Index];
+				FCatInventoryEntry& Entry = Write.FormalEntries[Index];
+				Entry = FCatInventoryEntry(Inventory);
+				if (!CatRunInventorySlotOperations::IsInventorySlotOccupied(Slot)) continue;
+				UCatInventoryItemInstance* Instance = Instances.FindRef(Slot.ItemInstanceId);
+				if (!Instance)
+				{
+					UCatInventoryItemInstance* Template = Definitions.FindRef(Slot.DefinitionId);
+					const UCatEquipmentDefinition* Definition = Template ? Cast<UCatEquipmentDefinition>(Template->GetItemDefinition()) : nullptr;
+					if (!Definition || !Definition->bRunConsumable) return false;
+					Instance = DuplicateObject<UCatInventoryItemInstance>(Template, Inventory->GetOwner());
+					Instance->SetRuntimeOwnerActor(Inventory->GetOwner());
+					Instance->SetItemInstanceIdFromAuthority(Slot.ItemInstanceId);
+					Instances.Add(Slot.ItemInstanceId, Instance);
+				}
+				if (Instance->GetItemDefinitionId() != Slot.DefinitionId) return false;
+				Entry.Instance = Instance;
+				Entry.StackCount = Slot.Quantity;
+				if (Inventory->IsValidInventorySlotIndex(Index) && !Inventory->CanAcceptInventoryEntryAtSlot(Entry, Index)) return false;
+			}
+		}
+		return true;
+	};
+	if (!Gather(SourceInventory) || !Gather(TargetInventory)
+		|| !PrepareFormal(SourceWrites, SourceInventory) || !PrepareFormal(TargetWrites, TargetInventory))
+	{
+		Result.SourceRevision = Source.Revision;
+		Result.TargetRevision = Target.Revision;
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Finish(Result);
+	}
+	FCatInventoryMutationScope SourceMutation(SourceInventory);
+	FCatInventoryMutationScope TargetMutation(TargetInventory);
 	SourceEndpoint->ApplyInventoryTransferWritesSilently(SourceWrites, Result.SourceRevision);
 	if (SourceHost != TargetHost) TargetEndpoint->ApplyInventoryTransferWritesSilently(TargetWrites, Result.TargetRevision);
 	Result.bCommitted = true;

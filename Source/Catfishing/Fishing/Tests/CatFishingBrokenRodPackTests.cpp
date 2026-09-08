@@ -9,7 +9,8 @@
 #include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "Framework/Game/CatfishingPlayerState.h"
 #include "OnlineSubsystemTypes.h"
 
 namespace CatFishingBrokenRodPackTests

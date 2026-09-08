@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "Equipment/CatEquipmentTypes.h"
 #include "Framework/Core/CatDomainCommandTypes.h"
+#include "Inventory/CatInventoryComponent.h"
 
 class AActor;
 
@@ -56,6 +57,8 @@ struct CATFISHING_API FCatInventoryEndpointWrite
 	FName Channel = TEXT("Stored");
 	FGuid EntryId;
 	TArray<FCatRunInventorySlot> Slots;
+	/** 提交前由通道从两端正式实例准备；投影不能反向生成另一份同身份物品。 */
+	TArray<FCatInventoryEntry> FormalEntries;
 };
 
 struct CATFISHING_API FCatInventoryTransferResult

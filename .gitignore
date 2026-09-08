@@ -81,6 +81,8 @@ DerivedDataCache/*
 output/
 tmp/
 Temp/
+__pycache__/
+*.py[cod]
 
 # Local packaged builds and machine-specific assistant settings
 打包/

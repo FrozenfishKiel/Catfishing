@@ -2,7 +2,6 @@
 
 #include "Misc/AutomationTest.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
-#include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
 #include "Components/StateTreeComponent.h"
@@ -16,7 +15,7 @@
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingPlayerState.h"
 #include "StateTree.h"
 #include "Tests/AutomationCommon.h"
 #include "UObject/StrongObjectPtr.h"
@@ -275,11 +274,12 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 			->QueryShoreRelation(FVector(500.0, 0.0, 0.0), Region->GetWaterRegionHandle()).bSucceeded)) return false;
 		UCatAbilitySystemComponent* ASC = Character->GetCatAbilitySystemComponent();
 		UCatEquipmentComponent* Equipment = Character->GetEquipmentComponent();
-		float CatStaminaMaximum = 0.0f;
-		if (!TestTrue(TEXT("生产猫具有ASC、装备和有效体力基线"), ASC && Equipment
-			&& GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
-				Character->GetCatDefinitionId(), CatStaminaMaximum))) return false;
+		if (!TestTrue(TEXT("生产猫具有ASC与装备"), ASC && Equipment)) return false;
 		ASC->InitAbilityActorInfo(Character, Character);
+		if (!TestTrue(TEXT("生产ASC按正式身体定义播种属性"), ASC->InitializeCharacterAttributesFromDefinition(
+			Character->GetCatDefinitionId()))) return false;
+		const float CatStaminaMaximum = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+		if (!TestTrue(TEXT("生产猫具有有效ASC体力上限"), FMath::IsFinite(CatStaminaMaximum) && CatStaminaMaximum > 0.0f)) return false;
 		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50.0f);
 		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), CatStaminaMaximum);
 		for (const FName Id : {FName(TEXT("IntentRuntimeRod")), FName(TEXT("IntentRuntimeFloat"))})

@@ -2,6 +2,8 @@
 
 #include "CoreMinimal.h"
 #include "Framework/Core/CatDomainCommandTypes.h"
+/** 库存运行类型已经归到 Inventory；这里继续包含新头文件，只为保留旧 EquipmentTypes 包含路径的编译兼容。 */
+#include "Inventory/CatInventoryRuntimeTypes.h"
 #include "CatEquipmentTypes.generated.h"
 
 /** 功能型装备/道具类别；不存在品质、等级、随机词条或通用战力轴。 */
@@ -28,7 +30,7 @@ enum class ECatEquipmentKind : uint8
 	Utility
 };
 
-/** 统一物品 Use 成功后对库存实例的处理方式；定义资产声明策略，Equipment 入口只按结果移动、扣量或保持不变。 */
+/** 旧装备资产保存的 Use 库存影响配置；运行时会映射成 ECatInventoryItemUseEffect，保留它是为了不破坏现有 DataAsset 和测试字段。 */
 UENUM(BlueprintType)
 enum class ECatEquipmentUseInventoryEffect : uint8
 {
@@ -54,33 +56,7 @@ enum class ECatFishingFailurePenalty : uint8
 	DamageRod
 };
 
-/** 一局随身库存的单个格子；数组下标就是玩家看到和操作的格子位置，空格保持默认值。 */
-USTRUCT(BlueprintType)
-struct FCatRunInventorySlot
-{
-	GENERATED_BODY()
-
-	/** 这个格子里物品对应的 EquipmentDefinition 稳定 ID；为空表示格子没有内容，商店、使用和 UI 都按同一个库存数组读取它。 */
-	UPROPERTY(BlueprintReadOnly)
-	FName DefinitionId = NAME_None;
-
-	/** 这个格子里这份运行期物品或堆栈的实例身份；放置 Actor、仓库转移和收回都会用它确认自己处理的是同一份物品。 */
-	UPROPERTY(BlueprintReadOnly)
-	FGuid ItemInstanceId;
-
-	/** 这个格子里的堆叠数量；装备型物品固定为 1，数量型物品按配置上限在同一个格子内堆叠。 */
-	UPROPERTY(BlueprintReadOnly)
-	int32 Quantity = 0;
-
-	/** 这份实例当前携带的鱼竿耐久；只有 Rod 会读写它，其他物品保持 0，避免把工具状态藏在选择快照里。 */
-	UPROPERTY(BlueprintReadOnly)
-	double RodDurability = 0.0;
-
-	/** 这份实例是否已经断竿；只有 Rod 使用它，部署 Actor 和库存 UI 都从同一实例状态同步。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bRodBroken = false;
-};
-/** Character 当前随身库存与钓鱼选择的复制读模型；解锁仍在本地 Profile，局内持有量随 Character/World 清空。 */
+/** Character 当前钓鱼选择和迁移期库存投影的复制读模型；正式物品实例由 InventoryComponent 承载，旧消费者暂时继续读取这里。 */
 USTRUCT(BlueprintType)
 struct FCatEquipmentLoadoutSnapshot
 {
@@ -134,36 +110,9 @@ struct FCatEquipmentLoadoutSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bRodBroken = false;
 
-	/** 一局随身库存格子数组；这是库存事实源，鱼饵、窝料、鱼竿和鱼漂都在这里占格，不再另建装备栏库存。 */
+	/** 一局随身库存的迁移期格子投影；正式物品事实已经同步到 InventoryComponent，旧 UI、存档和钓鱼链路暂时读取这份数组。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatRunInventorySlot> InventorySlots;
-};
-
-/** 一次运行期物品 Use/UnUse 的结果；调用方拿到的是实例副本和库存版本，不需要自己改库存数组。 */
-USTRUCT(BlueprintType)
-struct FCatInventoryItemUseResult
-{
-	GENERATED_BODY()
-
-	/** 本次使用或收回请求的关联 ID；日志、回执和上层命令用它把库存变化与世界 Actor 变化串起来。 */
-	UPROPERTY(BlueprintReadOnly)
-	FGuid RequestId;
-
-	/** 本次被移出、扣减或放回库存的运行期实例副本；部署回滚和收回归还都必须沿用同一 ItemInstanceId。 */
-	UPROPERTY(BlueprintReadOnly)
-	FCatRunInventorySlot Item;
-
-	/** Use/UnUse 的领域结果；成功只表示库存事务成立，不代表调用方后续 Actor 生成一定成功。 */
-	UPROPERTY(BlueprintReadOnly)
-	ECatDomainCommandError Error = ECatDomainCommandError::InvalidPayload;
-
-	/** 库存事务结束后的 Equipment 版本；前端用它刷新背包，调用方用它写命令回执。 */
-	UPROPERTY(BlueprintReadOnly)
-	int64 EquipmentRevision = 0;
-
-	/** 本次调用是否实际改变了库存或活动使用记录；重放、无实现或已收口路径会保持 false。 */
-	UPROPERTY(BlueprintReadOnly)
-	bool bCommitted = false;
 };
 
 /** 一次失败预算提交结果；明确记录唯一选择的惩罚。 */

@@ -251,6 +251,8 @@ namespace
 			return TEXT("不在资格集合");
 		case ECatRunCommandError::TeardownFailed:
 			return TEXT("拆场失败");
+		case ECatRunCommandError::DependencyUnavailable:
+			return TEXT("依赖不可用");
 		default:
 			return TEXT("未知错误");
 		}

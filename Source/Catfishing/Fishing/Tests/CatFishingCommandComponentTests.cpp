@@ -7,7 +7,7 @@
 
 #include "Fishing/CatFishingTypes.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/Actor.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(

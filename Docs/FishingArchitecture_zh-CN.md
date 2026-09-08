@@ -71,7 +71,7 @@ HookedFight 每个固定步冻结成员、ASC、个人体力/上限和 CMC 已�
 
 `OwnerPlayerState`/部署时稳定归属 ID 代表原竿归属与收纳权限，接力不转让物品。BeginCast 按当前主位和实际部署的 UseRecord 冻结原竿装备宿主，鱼饵/鱼漂仍来自抛钩者。跨宿主 Begin 先预检并静默提交精确预留和锁，再发布通知；`EquipmentRevision` 保持抛钩者语义，原竿宿主版本另记。磨损只写 `RodItemInstanceId`，退出不改扣新主位选中的另一把竿。
 
-资源宿主失去占有不再强制终止其他人的钓鱼；真实 Destroy/EndPlay 时，尚在场的原竿 UseRecord 和未结束的 FishingUseRecord 转入当前 World 的服务器 `Equipment/CatFishingResourceCustodian`，原记录移除，Coordinator/Session 引用在通知前重绑。只托管这些记录，不复制普通背包、不授予接力者所有权，也不实现整背包断线恢复或重连领取。当前 World/Run 关闭时统一清理。准备失败和真正终局仍由单一 Release 退还未消费预留并解锁。
+资源宿主失去占有不再强制终止其他人的钓鱼；`UnPossessed/EndPlay` 在 PlayerState 与 ASC 清除前先经 GameMode 协調 Service 移除本人，再把尚在场原竿的正式 held UObject、UseRecord 和未结束的 FishingUseRecord 转入当前 World 的服务器 `Equipment/CatFishingResourceCustodian`。原记录移除，正式实例只变更运行时归属，不复制为第二件物品；Coordinator/Session 引用在通知前重绑。后置 Save 导出只接收原 Equipment 仍持有的物品，退役不能销毁已经托管、队友仍在使用的竿。普通背包不随之复制，不授予接力者所有权，也不实现整背包断线恢复、重连领取或离线托管物跨存档重载；当前 World/Run 关闭时统一清理。准备失败和真正终局仍由单一 Release 退还未消费预留并解锁。
 
 历史 `CommitFailureBudgetFromStateTree` 入口仍保留供未完成引用审计的资产兼容；正式 Session 树生成器不使用它，Equipment 继续拒绝对活动会话/部署实例走“当前选择”失败预算。借竿磨损不绕过此 gate，而是始终使用绑定实例的 `ApplyFishingRodWear`。
 
@@ -130,6 +130,31 @@ X 优先处理当前操作竿；本人没有操作竿时，只寻找公共交互
 本轮静态边界：`EquipmentStatic.log` 为 PASS；`FishingEntryStaticFinal.log` 被脚本固定要求 GameplayMap=Lake 拦截，当前配置为 Showcase2；`UIStaticFinal.log` 被缺少 `/Game/UI/Collection` 显式 Cook 目录拦截。这两处配置本轮未改，仅 `MaximumRodOperatorSlots` 从2改为4，不把上述脚本计为通过，也不扩展到地图或图鉴模块改造。三个变更 Python 脚本及 UI PowerShell 脚本语法通过。
 
 兼容残留：正式 Rod/Character 主图已导出核对，未见按旧StandAnchor瞬移身体调用；Rod 的5张Montage生成回调图未完成导出，2026-09-08 末次 RiderLink health 为 disconnected。因此不删除反射事件、兼容站位查询及未确认二进制消费者的旧 StateTree 交换入口；后续须编辑器完成图/引用审计并迁移消费者后再删。`ApplyHelperStaminaChanges`、`GetPrimaryCatStaminaDrain`、旧 Character 整场终止调用与旧辅助按键运行路径已移除，无第二套生产体力账本。
+
+### 2.0.3 合入上游架构时保留本地钓鱼玩法（2026-09-08）
+
+本次合并固定本地 `b3eb453` 与上游 `4380d03`，共同基线 `7daa9d5`；本地备份分支 `codex/pre-upstream-fishing-20260908`。修改前工作区、暂存区均干净。历史基线 `Saved/Automation/CooperativeFishing-20260908/Integrated8Report/index.json` 为 217 项中 216 项通过（211 clean、5 warning），既有失败为 `StarterRodPreservesMaximumDurabilityBaseline` 要求 150 而正式资产为 500；本轮修改前未重新构建/运行，历史报告不作为本轮通过证据。
+
+合并契约：上游负责拆分后的框架宿主、正式 Inventory 实例与 AS 的个人属性；钓鱼核心以本地为准。保留每人两根竿、同竿默认四人、首次 R 直接持握、借竿使用自己的钓组、零体力可占主位但不出力、向量合力与 CMC 身体移动、共同账单均分与个人移动独付、入退不转移或补满体力、同一 Runner 无缝接力和力竭收近。固定步 0.05 秒，长度/速度仍使用厘米及厘米每秒，力使用牛顿；鱼主动意图缺失距离耗体、自适应三状态/连续出力、满线不回体及原竿绝对磨损公式保持本地语义。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 输入/宿主 | `Framework/Game/CatGameplayTypes.cpp` 旧 Controller → `Fishing/Integration/CatFishingCommandComponent`；上游拆为 `CatfishingPlayerController` | 拆分时遗漏的转杆增量、持竿朝向/移动基准/跳跃抑制必须保留 | 迁入新 Controller；保留本地 R/右键/主辅权限；切线确认表现继续由服务器裁决 | 先新宿主与组件，再命令参数 | 首次持竿/转杆/旧输入/切线回归 | 已迁入新 Controller，UpdateRotation 保持公开；Editor/Game构建、Camera/Service/首次持竿与 SlackAimListenClient 通过 |
+| AS/生命周期 | `AbilitySystem/Attributes/CatSurvivalAttributeSet`；Character `UnPossessed/EndPlay` → GameMode 协调 → Service | 上限从配置查询迁至 `MaxFightStamina`；UE UnPossess 后 PlayerState 已清，不能依赖后置通知释放成员 | 在身份和 ASC 有效时先释放成员并托管；后置保存读取最终个人库存；微量正体力扣费不以 NearlyZero 丢弃 | 属性就绪→前置清理→后置 Capture | 零体力、上限变化、倒地/销毁/断线、扣费通知重入 | 真实ASC微量扣费、ActorInfo重建、动态上限、零体力接力与 BorrowedRod 生命周期回归通过；清理在身份丢失前执行 |
+| 模拟/会话 | `CatFishingSession` → `CatFishingFightRunner` → Simulator/GroupModel/SteeringModel → CMC | 保留全部本地公式、输入输出/单位、固定步和终局时序；只替换上限读源 | Session/Runner 保留本地核心；不恢复上游独立力竭计时器/接力补满/旧行为参数 | 先 AS 与资源接口，再会话消费 | 鱼行为、几何/力学、四人费用、接力连续性 | CoreGameplayIntegrity 核对26个核心文件，25个与本地完全相同，Runner仅上限接缝不同；模拟/合力/鱼行为与四人网络通过 |
+| 库存/托管/保存 | `Equipment::BeginFishingUse/ApplyFishingRodWear/UnUse`、Camp、TransferService；上游 Inventory/Save | 旧 Snapshot 写库存被正式实例取代；借竿宿主、RequestId/版本、精确物品与耐久不得漂移 | 正式 Inventory 负责物品持有/批次提交；Custodian 持有迁移来的同一部署 UObject；Equipment 保留选择/会话锁 | 正式事务接收方→本地多竿消费者→保存/归还 | 双端原子性、幂等、失败回滚、全包与跨宿主归还、退出保存不复制托管物品 | FormalObjectIdentityAndAtomicObservers、借竿磨损、耗尽补饵、开局前仓库入库通过；真实托管后Export/Retire不销毁在用竿通过；离线托管跨存档未实现 |
+| 复制/诊断/HUD | Session/Equipment RepNotify、Controller 回执 → `HUDModel/HUDWidget` → `/Game/UI/HUD/WBP_CatHUD`；`CatFishingDebugSubsystem::DrawFishingStats/DrawCastAimPoint` | 保留总体力/人数与本地默认日志；诊断面板必须读本场鱼力量、部署竿剩余耐久和实际相机瞄准射线，不能退回资产力量/Pawn视点；个人 AS 上限和正式库存版本进入读模型 | 单次权威结算；总值只读求和；恢复被自动合并覆盖的诊断/瞄准消费者；日志保持 SessionId/RequestId/原竿实例可关联 | 提交完成→冻结结果→通知/复制 | 真实 Listen+3 clients、HUD、Camera/Service与耐久日志 | 三项真实网络与4项HUD回归通过；体力接收/叠层注册/保存退役事件见Integrated2Tests.log；打包双端默认落盘未验收 |
+| 资产/配置/Cook | `DefaultGame.ini` 的 `CatFishingSettings`、`CatOnlineSettings.GameplayMap`、`CatRunSettings.DayLengthSeconds`、Packaging；`ST_FishingSession/ST_FishFight`；平衡/性格资产；HUD/鱼迁移脚本 | 保留4槽与本地物理资产；上游默认地图改Lake、白天改60秒会改变本地钓鱼环境，本次保持Showcase2及99999秒；接入上游正式菜单/输入/库存资产 | 保留本地玩法默认值；原生接线后只读加载/编译正式资产；核对生成器/软引用，不靠文本证明二进制无引用 | 核心接口→资产加载→Editor/Game Development构建 | 状态树/鱼竿/角色BP/WBP与输入资产；未跑Cook不得记通过 | 保留本地玩法配置；15资产只读审计、8个BP/WBP内存编译通过且审计前后哈希相同；两StateTree加载及真实运行通过；未Cook/打包 |
+| 测试/文档/清理 | Fishing/Equipment/UI/Editor tests；既有 `Scripts/verify_*`；本页与唯一差距清单 | 旧测试只写 Current、旧宿主/配置读取失效；保留玩法断言，纠正现行文档旧口径 | 先播种 Max 再 Current，增加AS上限/零体力回归；删除已替换原生路径，保留未确认BP兼容入口 | 测试适配→构建→受影响回归→逐项diff复核 | contract/runtime_behavior/presentation_delivery分别记结果 | 最终227项中226成功、1既有耐久断言失败；4项Static及脚本语法通过；旧宿主/脚本引用已迁移，必要兼容及模块级缺口见下文 |
+
+本次证据归档：`Saved/Automation/UpstreamFishingMerge-20260908/`。
+
+- `contract`：`BuildEditor3.log` 与 `BuildGameFinal.log` 均为 Win64 Development 完整链接成功；EquipmentShop、ItemsTankSacrificeCamp、CharacterGrowthCondition、UIReach 的 Static 均退出0，4个变更 PowerShell 与 UI Runtime Python 语法通过。`CoreGameplayIntegrity.log` 记录26个核心文件的本地 blob 对照；Runner只改ASC上限读源、合法性检查与逐步刷新，其他25个公式/行为/CMC/接口文件完全不变。两根正式竿、猫种定义、FightBalance、两StateTree及HUD共7个保护资产的当前SHA256均等于本地提交的LFS oid。
+- `runtime_behavior`：`Integrated2Report/index.json` 共227项，220 clean、6 warning、1 failed、0 notRun。唯一失败仍是 `StarterRodPreservesMaximumDurabilityBaseline` 断言150与正式资产500不一致，本次未改断言或数值。首轮两个新增库存失败均已修复并在最终报告通过。新测试覆盖正式物品UObject身份、两端完整提交后的观察与幂等重入、ASC微量支付/动态上限/零体力接力、托管后导出不重复原竿且保存退役不破坏同Session。`GroupListenThreeClients`、`SlackAimListenClient`、`FishBehaviorListenClientSnapshots` 都成功；后两项仍有临时PIE关卡NetGUID警告，其他警告包含主动退出与临时World清理诊断，不计为clean。
+- 资产只读 `contract`：`FormalFishingAssetsAuditFinal.log` 读取15个资产，0失败、2项StateTree受保护数据读取限制；8个角色/竿/Controller/GameMode/HUD/库存BP与WBP内存编译成功。正式猫力量50、体力上限60；AbilitySet六钓鱼与六BodyAction类齐全且InitialEffect全空；正式IMC含全部六钓鱼输入。`FormalFishingAssetsAuditHashIntegrity.json` 确認15资产审计前后完全相同，未保存资产。StateTree真实执行由上述运行回归证明，Python加载不代替图审计。
+- `presentation_delivery`：未Cook/打包，未进行真人四端整场手感、正式界面全流程或打包房主/客户端无`-log`默认落盘验收。实际新日志在 `Integrated2Tests.log`，可按 `fishing_group_stamina_settled`、`fishing_cat_stamina_received`、`fishing_resource_*`、`inventory_held_resources_transferred`、`persistence_departure_deployment_retired`、`fishing_stats_overlay_registered` 关联服务器和客户端World；同进程PIE多World不等于打包双端证据。
+
+清理与边界：旧 `CatGameplayTypes.cpp` 已移除，本地Controller的转向/移动/朝向/禁跳迁入新宿主，6行聚合头仍供尚存原生include使用；旧AS上限配置查询已无生产消费者。保留未完成全量BP引用审计的历史反射事件、站位查询及旧 `IMC_Lake`，后者不是已核对的正式Controller入口，必须先完成其他二进制消费者审计再删除。UIReach Static随架构迁移恢复通过，但其Automation/Runtime仍要求上游已删除的6项高层测试，不能以现存HUD测试替代；FishingEntry Static仍因本次保留Showcase2而不满足固定Lake门禁。世界内托管与退出保存防重复已验证，离线托管资源跨存档重载仍未实现/验收；这些缺口归唯一差距清单对应模块，不关闭任何模块级交付。
 
 ### 2.1 水域（样条烘焙 → 只读缓存）
 

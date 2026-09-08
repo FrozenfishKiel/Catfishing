@@ -2,8 +2,6 @@
 #include "Character/CatCharacterMovementComponent.h"
 
 #include "AbilitySystemComponent.h"
-#include "AbilitySystem/Config/CatAbilitySet.h"
-#include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/BodyAction/CatBodyActionPresentationSettings.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
@@ -13,13 +11,30 @@
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentSettings.h"
 #include "Growth/CatGrowthComponent.h"
-#include "Logging/CatLog.h"
-#include "Fishing/CatFishingService.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/Presentation/CatFishingCameraComponent.h"
-#include "Social/CatSocialService.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventorySettings.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
 
-// 构造流程：一次创建 Character-owned ASC/AttributeSet、离散身体状态、吃鱼成长和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
+namespace
+{
+	// 初始随身库存容量迁移流程：角色创建正式库存时默认读 InventorySettings；旧 EquipmentSettings 被测试或诊断改值时保留一次兼容覆盖。
+	int32 ResolveInitialPlayerInventorySlotCapacity()
+	{
+		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+		const int32 InventorySlotCapacity =
+			InventorySettings != nullptr ? InventorySettings->GetPlayerInventorySlotCapacity() : 0;
+		const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
+		const int32 LegacySlotCapacity =
+			EquipmentSettings != nullptr ? FMath::Max(0, EquipmentSettings->InventorySlotCapacity)
+			: UCatInventorySettings::ProjectDefaultPlayerInventorySlotCapacity;
+		return LegacySlotCapacity != UCatInventorySettings::ProjectDefaultPlayerInventorySlotCapacity
+			? LegacySlotCapacity : InventorySlotCapacity;
+	}
+}
+
+// 构造流程：一次创建 Character-owned ASC/AttributeSet、离散身体状态、吃鱼成长、正式随身库存和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
 ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
 	: Super(ObjectInitializer.SetDefaultSubobjectClass<UCatCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
 {
@@ -30,13 +45,15 @@ ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
 	AbilitySystemComponent->AddAttributeSetSubobject(SurvivalAttributes.Get());
 	ConditionComponent = CreateDefaultSubobject<UCatConditionComponent>(TEXT("ConditionComponent"));
 	GrowthComponent = CreateDefaultSubobject<UCatGrowthComponent>(TEXT("GrowthComponent"));
+	InventoryComponent = CreateDefaultSubobject<UCatInventoryComponent>(TEXT("InventoryComponent"));
 	EquipmentComponent = CreateDefaultSubobject<UCatEquipmentComponent>(TEXT("EquipmentComponent"));
 	FishingCameraComponent = CreateDefaultSubobject<UCatFishingCameraComponent>(TEXT("FishingCameraComponent"));
 }
 
 void ACatCharacter::CalcCamera(const float DeltaTime, FMinimalViewInfo& OutResult)
 {
-	if (!FishingCameraComponent->TryGetCameraView(DeltaTime, OutResult))
+	// 相机裁决流程：先让钓鱼表现组件尝试提供持杆视角；没有活动钓鱼镜头或组件尚未就绪时，回到 ACharacter/蓝图相机，避免普通移动视角被 C++ 抢占。
+	if (!FishingCameraComponent || !FishingCameraComponent->TryGetCameraView(DeltaTime, OutResult))
 	{
 		Super::CalcCamera(DeltaTime, OutResult);
 	}
@@ -85,53 +102,53 @@ void ACatCharacter::Multicast_PlayCosmeticEvent_Implementation(const FGameplayTa
 
 // BodyAction 表现开始流程：服务器只广播，真正播放发生在每台客户端；没有配置 Montage 时仍触发蓝图事件，保证正式资源接入点稳定。
 void ACatCharacter::Multicast_PlayBodyActionPresentation_Implementation(
-	const ECatBodyActionAbilityCommand Command, const FGameplayTag PresentationEventTag)
+	const FGameplayTag BodyActionEventTag, const FGameplayTag PresentationEventTag)
 {
-	if (GetNetMode() == NM_DedicatedServer || Command == ECatBodyActionAbilityCommand::Unknown
+	if (GetNetMode() == NM_DedicatedServer || !BodyActionEventTag.IsValid()
 		|| !PresentationEventTag.IsValid())
 	{
 		return;
 	}
-	PlayBodyActionMontageFromPresentation(Command);
-	BP_PlayBodyActionPresentation(Command, PresentationEventTag);
+	PlayBodyActionMontageFromPresentation(BodyActionEventTag);
+	BP_PlayBodyActionPresentation(BodyActionEventTag, PresentationEventTag);
 }
 
 // BodyAction 表现停止流程：取消或拒绝提交时停止同一动作的可选 Montage，再通知蓝图清理非 Montage 表现。
 void ACatCharacter::Multicast_StopBodyActionPresentation_Implementation(
-	const ECatBodyActionAbilityCommand Command, const FGameplayTag PresentationEventTag)
+	const FGameplayTag BodyActionEventTag, const FGameplayTag PresentationEventTag)
 {
-	if (GetNetMode() == NM_DedicatedServer || Command == ECatBodyActionAbilityCommand::Unknown
+	if (GetNetMode() == NM_DedicatedServer || !BodyActionEventTag.IsValid()
 		|| !PresentationEventTag.IsValid())
 	{
 		return;
 	}
-	StopBodyActionMontageFromPresentation(Command);
-	BP_StopBodyActionPresentation(Command, PresentationEventTag);
+	StopBodyActionMontageFromPresentation(BodyActionEventTag);
+	BP_StopBodyActionPresentation(BodyActionEventTag, PresentationEventTag);
 }
 
-bool ACatCharacter::PlayBodyActionMontageFromPresentation(const ECatBodyActionAbilityCommand Command)
+bool ACatCharacter::PlayBodyActionMontageFromPresentation(const FGameplayTag BodyActionEventTag)
 {
-	// Montage 播放流程：专服和 Unknown 动作直接拒绝；客户端读取共享表现设置并同步加载可选 Montage，返回值只表示本机是否实际播放成功。
+	// Montage 播放流程：专服和空动作标签直接拒绝；客户端读取共享表现设置并同步加载可选 Montage，返回值只表示本机是否实际播放成功。
 	// 没配置正式 Montage 时返回 false，但上层 multicast 仍会继续触发 BP_PlayBodyActionPresentation，给蓝图音效、特效或后续正式资产保留入口。
-	if (GetNetMode() == NM_DedicatedServer || Command == ECatBodyActionAbilityCommand::Unknown)
+	if (GetNetMode() == NM_DedicatedServer || !BodyActionEventTag.IsValid())
 	{
 		return false;
 	}
 	const UCatBodyActionPresentationSettings* Presentation = GetDefault<UCatBodyActionPresentationSettings>();
-	UAnimMontage* Montage = Presentation ? Presentation->LoadMontageForCommand(Command) : nullptr;
+	UAnimMontage* Montage = Presentation ? Presentation->LoadMontage(BodyActionEventTag) : nullptr;
 	return Montage && PlayAnimMontage(Montage) > 0.0f;
 }
 
-bool ACatCharacter::StopBodyActionMontageFromPresentation(const ECatBodyActionAbilityCommand Command)
+bool ACatCharacter::StopBodyActionMontageFromPresentation(const FGameplayTag BodyActionEventTag)
 {
-	// Montage 停止流程：专服和 Unknown 动作直接拒绝；客户端按同一表现设置找到本动作 Montage，缺配置时不做动画副作用并返回 false。
+	// Montage 停止流程：专服和空动作标签直接拒绝；客户端按同一表现设置找到本动作 Montage，缺配置时不做动画副作用并返回 false。
 	// 返回 false 不代表停止表现广播失败，上层仍会调用 BP_StopBodyActionPresentation，正式蓝图可用它清理非 Montage 表现或执行兜底恢复。
-	if (GetNetMode() == NM_DedicatedServer || Command == ECatBodyActionAbilityCommand::Unknown)
+	if (GetNetMode() == NM_DedicatedServer || !BodyActionEventTag.IsValid())
 	{
 		return false;
 	}
 	const UCatBodyActionPresentationSettings* Presentation = GetDefault<UCatBodyActionPresentationSettings>();
-	UAnimMontage* Montage = Presentation ? Presentation->LoadMontageForCommand(Command) : nullptr;
+	UAnimMontage* Montage = Presentation ? Presentation->LoadMontage(BodyActionEventTag) : nullptr;
 	if (!Montage)
 	{
 		return false;
@@ -180,6 +197,12 @@ UCatEquipmentComponent* ACatCharacter::GetEquipmentComponent() const
 	return EquipmentComponent;
 }
 
+// Inventory 读取流程：直接返回构造期正式库存组件；后续商店、拾取和营地迁移都应从这个组件进入统一收货。
+UCatInventoryComponent* ACatCharacter::GetInventoryComponent() const
+{
+	return InventoryComponent;
+}
+
 // BeginPlay 流程：先让 Actor 与组件完成注册（ASC 此时会按引擎默认临时建立 ActorInfo），再用项目 gate 幂等刷新或清除，避免未裁 runtime 偷跑。
 void ACatCharacter::BeginPlay()
 {
@@ -187,19 +210,27 @@ void ACatCharacter::BeginPlay()
 	InitializeAbilityActorInfo();
 }
 
-// 服务端占有流程：建立身份与 ASC 后授予 AbilitySet，再由 Equipment 执行独立临时抄网发放，最后应用可选 Starter 选择。
+// 服务端占有流程：父类先建立 Controller/Owner/PlayerState 关系，再把 Character=this 的 Owner/Avatar 建立时机交给 ASC。
+// authority 先准备正式库存容量，再分别调用 ASC 默认授予、Equipment starter 选择和抄网补给；角色不读取具体定义或库存格。
 void ACatCharacter::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
 	InitializeAbilityActorInfo();
 	if (HasAuthority())
 	{
-		GrantDefaultAbilitySetOnce();
+		if (InventoryComponent)
+		{
+			InventoryComponent->SetInventorySlotCountFromAuthority(ResolveInitialPlayerInventorySlotCapacity());
+		}
+		if (AbilitySystemComponent)
+		{
+			AbilitySystemComponent->GrantConfiguredDefaultAbilitySetFromAuthority();
+		}
 		if (EquipmentComponent)
 		{
+			EquipmentComponent->ApplyConfiguredStarterLoadoutFromAuthority();
 			EquipmentComponent->GrantStarterScoopNetIfConfigured();
 		}
-		ApplyStarterLoadoutIfConfigured();
 	}
 }
 
@@ -227,10 +258,10 @@ void ACatCharacter::PawnClientRestart()
 	InitializeAbilityActorInfo();
 }
 
-// 临时失去占有流程：Controller 尚有效时先通知 Fishing/Social 终止该身体的半场协议，再取消 Ability；父类断开占有后才 ClearActorInfo，保留正式 Ability Spec 供同 Actor 重占有。
+// 失去占有流程：身份和 ASC 尚有效时先进入 GameMode 协调入口释放操作位并托管资源；随后取消身体 Ability 并断开占有。父类返回后清 ActorInfo，存档捕获由 Controller 的后置 Pawn 通知执行。
 void ACatCharacter::UnPossessed()
 {
-	NotifyFishingOwnerUnavailable();
+	ACatfishingGameModeBase::HandleCharacterUnavailable(this);
 	if (AbilitySystemComponent)
 	{
 		AbilitySystemComponent->CancelAllAbilities();
@@ -242,131 +273,28 @@ void ACatCharacter::UnPossessed()
 	}
 }
 
-// 最终清理流程：无论此前是否经历 UnPossessed，都先幂等终止 Fishing/Social；随后撤销默认 AbilitySet、取消 Ability 并清 ActorInfo，最后才交还父类销毁组件。
+// 最终清理流程：直接 Destroy 或无占有的身体也先经过同一 GameMode 幂等协调入口；随后撤销默认授予、取消 Ability 并清 ActorInfo，最后交父类销毁组件。
 void ACatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	NotifyFishingOwnerUnavailable();
+	ACatfishingGameModeBase::HandleCharacterUnavailable(this);
 	if (AbilitySystemComponent)
 	{
-		DefaultAbilitySetHandles.TakeFromAbilitySystem(AbilitySystemComponent);
-		bDefaultAbilitySetGranted = false;
+		AbilitySystemComponent->RevokeConfiguredDefaultAbilitySet();
 		AbilitySystemComponent->CancelAllAbilities();
 		AbilitySystemComponent->ClearActorInfo();
 	}
 	Super::EndPlay(EndPlayReason);
 }
 
-// Starter 兜底流程：
-// 1. 先要求服务器、EquipmentComponent 和设置存在；兜底开关关闭时返回，不读取或写入随身库存。
-// 2. 读取当前 Equipment 快照后，如果已经有鱼竿选择，就保留玩家/Profile 已建立的选择，不再覆盖。
-// 3. 选择为空时才请求 Equipment 正式配置入口；该入口按目录、解锁、Revision 和随身库存已有物品校验，不会因为配置 ID 创建装备或占用第一格。
-// 4. 只有装配提交成功后才可能通过正式库存命令补发配置窝料；失败、未配置窝料或数量为 0 都保持库存不变。
-void ACatCharacter::ApplyStarterLoadoutIfConfigured()
-{
-	const UCatEquipmentSettings* Settings = GetDefault<UCatEquipmentSettings>();
-	if (!HasAuthority() || !EquipmentComponent || !Settings)
-	{
-		return;
-	}
-	if (!Settings->bAutoConfigureStarterLoadout)
-	{
-		return;
-	}
-	const FCatEquipmentLoadoutSnapshot& Snapshot = EquipmentComponent->GetSnapshot();
-	if (!Snapshot.RodDefinitionId.IsNone())
-	{
-		return;
-	}
-	const FCatDomainCommandResult Configure = EquipmentComponent->ConfigureLoadoutFromAuthority(FGuid::NewGuid(),
-		Snapshot.Revision, Settings->StarterRodDefinitionId, Settings->StarterBaitDefinitionId,
-		Settings->StarterFloatDefinitionId, Settings->StarterScoopNetDefinitionId);
-	UE_LOG(LogCatCharacter, Log, TEXT("Event=starter_loadout_configure Committed=%s Error=%s Revision=%lld"),
-		Configure.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Configure.Error), Configure.Revision);
-	if (!Configure.bCommitted || Settings->StarterChumDefinitionId.IsNone() || Settings->StarterChumQuantity <= 0)
-	{
-		return;
-	}
-	const FCatDomainCommandResult Grant = EquipmentComponent->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(),
-		EquipmentComponent->GetSnapshot().Revision, Settings->StarterChumDefinitionId, Settings->StarterChumQuantity);
-	UE_LOG(LogCatCharacter, Log, TEXT("Event=starter_chum_grant Committed=%s Error=%s Revision=%lld Definition=%s Quantity=%d"),
-		Grant.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Grant.Error), Grant.Revision,
-		*Settings->StarterChumDefinitionId.ToString(), Settings->StarterChumQuantity);
-}
-
-// 会话中断通知流程：向当前 authority World 的 Fishing 与 Social 服务报告身体失效；前者释放个人操作位并让队友接力，后者返还仍在追回窗口的鱼，二者都不跨 World 保存协议。
-void ACatCharacter::NotifyFishingOwnerUnavailable()
-{
-	if (!HasAuthority())
-	{
-		return;
-	}
-	if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
-	{
-		Fishing->ReleaseFishingOperatorForCharacter(this);
-	}
-	if (UCatSocialService* Social = GetWorld() ? GetWorld()->GetSubsystem<UCatSocialService>() : nullptr)
-	{
-		Social->CancelTheftsForCharacter(this);
-	}
-}
-
-// ActorInfo 初始化流程：未配置组件或 runtime 时清除引擎自动信息；显式 Full 策略成立时设置复制模式，并以 this/this 幂等刷新 Owner 与 Avatar。
+// ActorInfo 初始化流程：角色只把自身交给项目 ASC；ASC 负责 runtime gate、复制策略和一次性身体属性播种，失败时保留生命周期重试机会。
 void ACatCharacter::InitializeAbilityActorInfo()
 {
 	if (!AbilitySystemComponent)
 	{
 		return;
 	}
-	if (!GetDefault<UCatAbilitySettings>()->IsRuntimeEnabled())
+	if (AbilitySystemComponent->InitializeCharacterOwnerAvatar(this))
 	{
-		AbilitySystemComponent->ClearActorInfo();
-		return;
+		AbilitySystemComponent->InitializeCharacterAttributesFromDefinition(CatDefinitionId);
 	}
-	AbilitySystemComponent->SetReplicationMode(EGameplayEffectReplicationMode::Full);
-	AbilitySystemComponent->InitAbilityActorInfo(this, this);
-	ApplyInitialAttributesOnce();
-}
-
-// 初始属性流程：只在 authority、ASC 已就绪且尚未应用时整体读取配置；三项全部有效才写基值并设置一次性标记，配置不完整时保留重试机会。
-void ACatCharacter::ApplyInitialAttributesOnce()
-{
-	if (!HasAuthority() || !AbilitySystemComponent || bInitialAttributesApplied)
-	{
-		return;
-	}
-	float Poison = 0.0f;
-	float FishingStrength = 0.0f;
-	float FightStamina = 0.0f;
-	if (!GetDefault<UCatAbilitySettings>()->TryGetInitialAttributesForCharacter(CatDefinitionId,
-		Poison, FishingStrength, FightStamina))
-	{
-		if (!CatDefinitionId.IsNone())
-		{
-			UE_LOG(LogCatCharacter, Warning,
-				TEXT("Event=initial_attributes_unresolved CatDefinitionId=%s Reason=DefinitionMissingOrNotReady"),
-				*CatDefinitionId.ToString());
-		}
-		return;
-	}
-	AbilitySystemComponent->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), Poison);
-	AbilitySystemComponent->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), FishingStrength);
-	if (!AbilitySystemComponent->InitializeFishingStaminaForSession())
-	{
-		return;
-	}
-	bInitialAttributesApplied = true;
-}
-
-// 默认 AbilitySet 授予流程：只接受 authority、有效 ASC、尚未授予和完整正式资产配置；失败不创建临时代用品。
-void ACatCharacter::GrantDefaultAbilitySetOnce()
-{
-	const UCatAbilitySettings* Settings = GetDefault<UCatAbilitySettings>();
-	if (!HasAuthority() || !AbilitySystemComponent || bDefaultAbilitySetGranted
-		|| !Settings || !Settings->IsFishingRuntimeReady())
-	{
-		return;
-	}
-	const UCatAbilitySet* AbilitySet = Settings->DefaultAbilitySet.LoadSynchronous();
-	bDefaultAbilitySetGranted = AbilitySet
-		&& AbilitySet->GiveToAbilitySystem(AbilitySystemComponent, DefaultAbilitySetHandles);
 }

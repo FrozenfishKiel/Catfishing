@@ -1,6 +1,6 @@
 # UI WBP 拼装接口清单
 
-文档状态：当前代码核对版（2026-09-01）
+文档状态：当前代码与 Frontend 实施中接口核对版（2026-09-07）
 
 范围：这份文档只说明当前项目给 WBP 预留了哪些父类、控件名、蓝图事件、蓝图可调用函数和只读数据。它用于手工重做 UI 样式，不作为验收文档，也不规定最终美术风格。
 
@@ -14,7 +14,7 @@
 
 模态页面打开后会切到 UIOnly 输入模式，并把焦点交给当前 Widget。根 WBP 必须保持继承正确；商店、背包关闭应走对应 `RequestClose...` 函数，不要在蓝图里直接 `RemoveFromParent`。
 
-旧的一体化页面 `Content/UI/WBP_CatLakeReach.uasset` 不是当前正式拼装入口。现在正式入口是下面这些拆分 WBP。
+历史一体化页面已经从仓库删除，不再作为当前正式拼装入口。现在正式入口是下面这些拆分 WBP。
 
 ## 正式 WBP 入口
 
@@ -30,6 +30,48 @@
 | `/Game/UI/Collection/WBP_CatCollection` | `UCatCollectionWidget` | 图鉴/相册只读页面；当前不是 HUD 常驻入口 | 当前没有运行时创建入口，也不由 `CatUISettings` 装配 |
 
 HUD、背包、背包格子和交互提示的默认路径来自 `Source/Catfishing/UI/CatUISettings.cpp`。鱼护箱子页面类跟随 `ACatFishGuardActor` 自己的 `InventoryViewClass`；营地公共仓库页面类跟随 `ACatCampInventoryActor` 自己的 `InventoryViewClass`；图鉴只保留 View 接口，后续需要正式入口时再接创建链路。营地公共仓库仍然要用自己的根 WBP，但这张根 WBP 可以嵌入其他库存子 WBP；父页会把同一份完整库存 ViewState 分发给子页。如果 `InventoryViewClass` 没有指到有效的库存 WBP，交互会打开失败并记录日志。
+
+## Frontend：`WBP_CatFrontendRoot`
+
+正式 Frontend Root 目标路径是 `/Game/UI/Frontend/WBP_CatFrontendRoot`，父类是 `UCatFrontendRootWidget`。整套 Frontend 共九个资产：一个 Root、五个业务子 WBP 和三个动态列表行资产。Root 是 `UCatLocalPlayerUISubsystem` 的唯一创建目标；五个业务子 WBP 嵌入 Root，三个行资产由存档页和房间页动态创建。
+
+| 资产 | 父类 / 装配位置 | 用途 |
+| --- | --- | --- |
+| `/Game/UI/Frontend/WBP_CatFrontendRoot` | `UCatFrontendRootWidget` | 唯一 Frontend 根视图，持有背景层、页面切换器和五个业务子 WBP |
+| `/Game/UI/Frontend/WBP_CatFrontendMenu` | `UUserWidget`，装到 `MenuPage` | 首页、退出确认，以及当前只保留按钮的“加入队伍” |
+| `/Game/UI/Frontend/WBP_CatFrontendSaveList` | `UUserWidget`，装到 `SaveListPage` | Minecraft 风格单页存档列表 |
+| `/Game/UI/Frontend/WBP_CatFrontendRoom` | `UUserWidget`，装到 `RoomPage` | Steam 好友、邀请、当前房间和房主开始游戏 |
+| `/Game/UI/Frontend/WBP_CatFrontendSettings` | `UUserWidget`，装到 `FrontendSettingsPage` | 游戏、画面、声音、控制四类设置 |
+| `/Game/UI/Frontend/WBP_CatFrontendLoading` | `UUserWidget`，装到 `LoadingPage` | 显示正式异步链返回的加载阶段或真实进度 |
+| `/Game/UI/Frontend/WBP_CatSaveSlotRow` | `UCatFrontendSaveSlotRowWidget`，存档页动态行 | 显示 `UCatFrontendSaveModel` 提供的世界存档槽摘要 |
+| `/Game/UI/Frontend/WBP_CatRoomFriendRow` | `UCatFrontendRoomFriendRowWidget`，房间页动态行 | 显示 `UCatFrontendRoomModel` 提供的 Steam 好友摘要并提交邀请意图 |
+| `/Game/UI/Frontend/WBP_CatRoomPlayerSlot` | `UCatFrontendRoomPlayerSlotWidget`，房间页动态行 | 显示当前房间真实成员槽，不自行补假成员 |
+
+### Root 必需装配
+
+`FrontendPageSwitcher`、`MenuPage`、`SaveListPage`、`RoomPage`、`FrontendSettingsPage` 和 `LoadingPage` 是 Root 的必需控件。`StaticBackgroundImage` 和 `DynamicBackgroundContainer` 是两个可选背景资产位；静态图和动态材质、媒体或场景子 WBP 都由资产侧承载，Controller 和 Model 不感知背景形态。
+
+五个页面按业务通信边界拆分，不再为每个页面增加 C++ 基类。Root 通过 `BP_RenderMenu()`、`BP_RenderSaveList()`、`BP_RenderRoom()`、`BP_RenderFrontendSettings()` 和 `BP_RenderLoading()` 通知蓝图重绘；子 WBP 分别通过 Root 的 `GetSaveModel()`、`GetRoomModel()`、`GetSettingsModel()` 读取数据，并通过 `GetPageController()` 或 Root 的 `Request...` 函数提交玩家意图。
+
+Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：菜单页的 `StartGameButton`、`JoinPartyButton`、`FrontendSettingsButton`、`ExitGameButton`、`ConfirmExitButton`、`CancelExitButton`；设置页的 `GameSettingsCategoryButton`、`GraphicsSettingsCategoryButton`、`AudioSettingsCategoryButton`、`ControlsSettingsCategoryButton`；以及各业务页的 `SaveResultTextBlock`、`RoomResultTextBlock`、`FrontendSettingsResultTextBlock`、`LoadingProgressTextBlock`。这些名称来自已新增的 Root 头文件合同，Root `.cpp` 已在并行实现中落盘；正式资产仍未生成，实际解析与绑定结果尚未经过编译或资产加载确认。
+
+### 数据与流程边界
+
+`UCatFrontendPageController` 只管理“首页 -> 存档 -> 房间 -> 加载”的页面流程、当前选中槽和确认状态。`UCatFrontendSaveModel`、`UCatFrontendRoomModel`、`UCatFrontendSettingsModel` 分别读取 Save、Online 和正式设置来源，Root 不复制第二份业务状态。
+
+世界 Save 独立于 Profile：`UCatSaveSubsystem` 和 `UCatRunSaveGame` 负责世界槽、库存内容和角色位置；`UCatProfileSubsystem` 继续负责 Grant Journal、图鉴、解锁与装备选择，不能拿 Profile 拼主界面存档行。
+
+创建房间与开始游戏是两个阶段：Online 创建成功后应停留在 Frontend 房间页，只有房主显式点击“开始游戏”才提交异步预载和旅行。设置页固定为游戏、画面、声音、控制四类；控制分类当前只保留正式入口，不虚构控制字段。“加入队伍”同样只保留首页按钮，不接搜索、加入或本地替身房间。
+
+人工已允许麦克风选择和语音输入模式本轮暂不可用。设置页保留 `MicrophoneComboBox`、`VoiceInputModeComboBox` 两行并禁用，用 `MicrophoneUnavailableText`、`VoiceInputModeUnavailableText` 分别说明现有 Steam 语音未接通设备选择、输入模式切换；麦克风可提示在系统声音设置中调整默认输入设备。占位文本只供展示，不保存为偏好；其他设置范围不变。控件与禁用逻辑已在 Root 和资产生成器源码中落地，尚无正式 WBP 的运行证据。
+
+### 当前实施边界
+
+截至本轮源码核对（2026-09-07），Root、PageController、三个 Model 和 LocalPlayer 接线已落 `.h/.cpp`；`UCatSaveSubsystem` 已实现槽目录、异步创建/读写及删除入口，库存与角色位置恢复已接领域接口。旧 `CatTravelWidget.h/.cpp` 及 LocalPlayer 创建、刷新、事件转发专线已删除。`CatUISettings` 软类指向 `/Game/UI/Frontend/WBP_CatFrontendRoot.WBP_CatFrontendRoot_C`，`Config/DefaultGame.ini` 已精确 Cook `/Game/UI/Frontend` 和 `/Game/Audio/Settings`。
+
+`Source/CatfishingEditor/UI/CatFrontendWidgetAuthoringLibrary.h/.cpp` 与 `Scripts/create_frontend_assets.py` 已提供资产生成入口，目标为上述 9 个 WBP，以及 `/Game/Audio/Settings` 下的 1 个 SoundMix（`SMX_CatFrontendSettings`）和 5 个 SoundClass（`SC_CatMaster`、`SC_CatMusic`、`SC_CatSFX`、`SC_CatAmbience`、`SC_CatVoice`），共 6 个音频资产。生成器源码存在不代表生成成功：对应 `.uasset` 尚未生成，正式 Root 未生效。
+
+完整构建仍未通过。`Saved/Logs/FrontendIntegrationBuild.log`（Build1）与 `Saved/Logs/FrontendIntegrationBuild2.log`（Build2）保留失败证据；按主线程最新交接，Build1 的真实 C++ 错误已部分修正，Build2 的旧 `generated.h` 错配待源码静态冻结后强制 UHT 重编。尚无重编成功、资产生成或 runtime 证据，不能声明正式交付或完成。
 
 ## HUD：`WBP_CatHUD`
 
@@ -65,7 +107,7 @@ HUD、背包、背包格子和交互提示的默认路径来自 `Source/Catfishi
 | `bInventoryEntryVisible` | 是否显示背包入口。 |
 | `bShowCatStatusDebugText` | 是否显示猫状态调试摘要；当前默认值为 false。 |
 | `bShowFishingFeedbackDebugText` | 是否显示钓鱼调试反馈；当前默认值为 false。 |
-| `bShowCrosshair` | 是否绘制 HUD 中心准星；当前默认值为 true，与研发态摘要文本开关独立。 |
+| `bShowCrosshair` | 是否绘制 HUD 中心准星；当前默认值为 false。 |
 | `Poison` | 当前毒值，只展示，不在 UI 里裁决倒地。 |
 | `FishingStrength` | 当前钓鱼力量，只展示。 |
 | `FightStamina` / `FightStaminaMaximum` / `NormalizedFightStamina` | 本人当前搏斗体力、本人上限与比例，始终保留个人语义。 |
@@ -139,8 +181,10 @@ HUD、背包、背包格子和交互提示的默认路径来自 `Source/Catfishi
 | `bHasCampInventory` | 是否带有本次交互打开的营地公共仓库。 |
 | `CampInventoryFirstSlotIndex` | 营地公共仓库在 `Slots` 里的起始下标。 |
 | `CampInventorySlotCount` | 营地公共仓库当前展示多少格；空仓库也按配置容量显示空格。 |
-| `CampInventoryRevision` | 营地公共仓库快照版本；右键取用时会提交给服务器复核。 |
-| `Equipment` | 当前随身库存和当前钓鱼选择快照。 |
+| `CampInventoryRevision` | 营地公共仓库快照版本；营地格整理、右键取用和跨营地拖拽都会把它作为公共仓库侧并发前提提交给服务器。 |
+| `Equipment` | 当前钓鱼选择和旧兼容快照；随身背包格优先读正式 `InventoryComponent`。 |
+| `bInventoryAvailable` | 当前是否已经拿到可展示的随身库存读源；正式库存优先，旧 `Equipment` 投影只作临时 fallback。 |
+| `InventoryRevision` | 随身背包内容版本；随身背包内部拖拽整理、营地取入和存入公共仓库都会把它作为随身侧并发前提提交给服务器，正式库存可用时不再使用 `Equipment.Revision`。 |
 | `SelectedSlotIndex` | 当前选中的显示格下标。 |
 | `bHasSelectedFish` | 当前是否选中一条鱼。 |
 | `bSelectedFishInFishGuard` | 当前选中鱼是否来自本次打开的地面鱼护。吃鱼/献祭只应该看这个条件。 |
@@ -153,7 +197,7 @@ HUD、背包、背包格子和交互提示的默认路径来自 `Source/Catfishi
 | `ResultText` | C++ 整理好的最近结果文本。 |
 | `ToggleKeyName` | 当前背包开关键名，来自正式输入资产，不在 WBP 里写死。 |
 
-随身库存的格子来源是 `InventoryObject`，营地公共仓库的格子来源是 `CampInventoryObject`。组合页面如果要分成“玩家背包区”和“营地仓库区”，可以给对应库存子 WBP 设置格子来源过滤：玩家背包区设为 `InventoryObject`，公共仓库区设为 `CampInventoryObject`；也可以在 `BP_RenderInventory` 里按 `SlotSource` 或 `CampInventoryFirstSlotIndex/CampInventorySlotCount` 自己分栏展示。玩家右键有物品的营地库存格时，PageController 会提交“取到随身库存”的服务器请求；WBP 不需要也不应该直接改公共仓库数组。
+随身库存的格子来源是 `InventoryObject`，营地公共仓库的格子来源是 `CampInventoryObject`。随身库存显示优先来自角色身上的正式 `UCatInventoryComponent`；客户端刚打开页面、正式库存复制还没完整到位时，Model 才短暂用旧 `Equipment` 投影维持原来的空格和内容显示。随身背包内部拖拽整理提交 `InventoryRevision`；营地仓库内部整理提交 `CampInventoryRevision`；营地取入或存入同时提交 `CampInventoryRevision` 和 `InventoryRevision`；钓具选择、修竿、草药使用等仍提交 `Equipment.Revision`。组合页面如果要分成“玩家背包区”和“营地仓库区”，可以给对应库存子 WBP 设置格子来源过滤：玩家背包区设为 `InventoryObject`，公共仓库区设为 `CampInventoryObject`；也可以在 `BP_RenderInventory` 里按 `SlotSource` 或 `CampInventoryFirstSlotIndex/CampInventorySlotCount` 自己分栏展示。玩家右键有物品的营地库存格时，PageController 会提交“取到随身正式库存”的服务器请求；WBP 不需要也不应该直接改公共仓库数组。
 
 ## 营地公共仓库：`WBP_CatCampInventory`
 
@@ -253,7 +297,7 @@ HUD、背包、背包格子和交互提示的默认路径来自 `Source/Catfishi
 
 ### 操作含义
 
-左键会选中格子。右键随身库存格会尝试把装备设为当前钓鱼选择；右键营地公共仓库格会尝试把物品取到本人随身库存。拖拽到另一个格子会由 PageController 复核后提交服务器移动；WBP 不需要自己写移动逻辑。
+左键会选中格子。右键随身库存格会尝试把装备设为当前钓鱼选择；右键营地公共仓库格会尝试把物品取到本人正式随身库存。拖拽到另一个格子会由 PageController 复核后提交服务器移动；WBP 不需要自己写移动逻辑。
 
 ## 商店：`WBP_CatShop`
 
@@ -419,9 +463,9 @@ HUD、背包、背包格子和交互提示的默认路径来自 `Source/Catfishi
 
 ## 当前不是 WBP 拼装合同的 UI
 
-`UCatTravelWidget` 是当前 Frontend/Online 的原生白盒界面。它在 `UCatLocalPlayerUISubsystem` 中用 `UCatTravelWidget::StaticClass()` 创建，没有走 `UCatUISettings` 的 WBP 配置。如果要把联机前端也改成 WBP 样式，需要新增配置项和对应 WBP 基类接线。
+`UCatTravelWidget` 的旧原生白盒源码及 LocalPlayer 专线已删除，不再提供拼装或 fallback 入口。Frontend 唯一 Root 路径是 `/Game/UI/Frontend/WBP_CatFrontendRoot`；资产缺失时暴露加载失败，不创建原生替身。
 
-中心准星由 `UCatHUDWidget::NativePaint` 绘制，随 `WBP_CatHUD` 入视口，默认显示；不存在独立的 `UCatInteractionWidget` 创建入口。靠近对象提示仍由 `WBP_CatInteractionPrompt` 承担。`LogCatUI/Event=ui_hud_crosshair_visibility` 仅在首次投影或显隐变化时记录 Controller、Widget 与 Visible，表示投影已应用，不替代画面验收。
+`UCatInteractionWidget` 是本地准星和目标提示的原生 View，也是在 `UCatLocalPlayerUISubsystem` 中用 `StaticClass()` 创建。它不是 `WBP_CatInteractionPrompt`。当前可拼样式的交互 WBP 是靠近对象提示 `WBP_CatInteractionPrompt`。
 
 ## 拼装时最容易踩的点
 
@@ -437,7 +481,7 @@ HUD、背包、背包格子和交互提示的默认路径来自 `Source/Catfishi
 
 不要在 `UCatLocalPlayerUISubsystem` 里给世界库存对象继续加专用成员。LocalPlayer 只保留 HUD、普通背包和交互提示这些本地玩家模块；鱼护、鱼缸和以后新增的箱子应从自己的交互对象传入容器上下文和页面类。
 
-不要把 `Content/UI/WBP_CatLakeReach.uasset` 当正式入口继续改。当前正式拆分 WBP 在 `/Game/UI/...` 下。
+不要再恢复历史一体化主页面作为正式入口。当前正式拆分 WBP 在 `/Game/UI/...` 下。
 
 ## 事实来源
 
@@ -458,4 +502,20 @@ HUD、背包、背包格子和交互提示的默认路径来自 `Source/Catfishi
 - `Source/Catfishing/UI/Shop/CatShopTypes.h`
 - `Source/Catfishing/UI/Interaction/CatInteractionPromptWidget.h`
 - `Source/Catfishing/UI/Collection/CatCollectionWidget.h`
-- `Source/Catfishing/UI/CatTravelWidget.h`
+- `Docs/Development/主界面重构设计笔记.md`
+- `Docs/Development/主界面子技术文档.md`
+- `.codex/state/frontend-online-context.json`
+- `Source/Catfishing/UI/Frontend/CatFrontendRootWidget.h/.cpp`
+- `Source/Catfishing/UI/Frontend/CatFrontendPageController.h/.cpp`
+- `Source/Catfishing/UI/Frontend/CatFrontendSaveModel.h/.cpp`
+- `Source/Catfishing/UI/Frontend/CatFrontendRoomModel.h/.cpp`
+- `Source/Catfishing/UI/Frontend/CatFrontendSettingsModel.h/.cpp`
+- `Source/Catfishing/Settings/CatGameUserSettings.h/.cpp`
+- `Source/Catfishing/Save/CatSaveSubsystem.h/.cpp`
+- `Source/Catfishing/Online/CatOnlineSubsystem.h/.cpp`
+- `Source/CatfishingEditor/UI/CatFrontendWidgetAuthoringLibrary.h/.cpp`
+- `Scripts/create_frontend_assets.py`
+- `Config/DefaultGame.ini`
+- `Saved/Logs/FrontendIntegrationBuild.log`、`Saved/Logs/FrontendIntegrationBuild2.log`（失败记录，非完整构建通过证据）
+- 本轮人工决策与主线程交接（2026-09-07）：仅麦克风选择和语音输入模式允许暂不可用；Build1 部分修复、Build2 待冻结后强制 UHT 重编，正式资产与 runtime 未验证。
+- `Source/Catfishing/UI/CatInteractionWidget.h`

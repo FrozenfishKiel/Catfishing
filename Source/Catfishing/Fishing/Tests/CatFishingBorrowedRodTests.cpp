@@ -3,7 +3,6 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
-#include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
 #include "Components/BoxComponent.h"
@@ -27,8 +26,11 @@
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Config/CatFishingFightBalanceDefinition.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "Framework/Game/CatfishingPlayerState.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "Inventory/CatInventoryComponent.h"
 #include "OnlineSubsystemTypes.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingBorrowedRodCastTest,
@@ -166,6 +168,7 @@ bool FCatFishingBorrowedRodCastTest::RunTest(const FString& Parameters)
 		FCatPlaceRodCommand Place;
 		Place.RequestId = FGuid::NewGuid();
 		Place.ExpectedEquipmentRevision = OwnerBeforeDeploy.Revision;
+		Place.ExpectedInventoryRevision = Owner.Character->GetInventoryComponent()->GetInventoryRevision();
 		const FCatFishingCommandResult Placed = Fishing->PlaceRod(Owner.Controller, Place);
 		if (!TestTrue(TEXT("production PlaceRod deploys owner's physical rod"), Placed.bCommitted)) return false;
 		ACatFishingRodActor* Rod = Fishing->FindDeployedRodById(Placed.RodActorId);
@@ -331,11 +334,11 @@ bool FCatFishingBorrowedRodCastTest::RunTest(const FString& Parameters)
 			double ExpectedWaitingStamina = 0.0;
 			for (const FPlayer& Player : {Caster, Relay, Anchor, Owner})
 			{
-				float Baseline = 0.0f;
-				if (!TestTrue(TEXT("every member resolves their formal stamina baseline"),
-					GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
-						Player.Character->GetCatDefinitionId(), Baseline))) return false;
-				ExpectedWaitingMaximum += Baseline;
+				const float Maximum = Player.Character->GetCatAbilitySystemComponent()->GetNumericAttribute(
+					UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+				if (!TestTrue(TEXT("every member resolves their current ASC stamina maximum"),
+					FMath::IsFinite(Maximum) && Maximum > 0.0f)) return false;
+				ExpectedWaitingMaximum += Maximum;
 				ExpectedWaitingStamina += Player.Character->GetCatAbilitySystemComponent()->GetNumericAttribute(
 					UCatSurvivalAttributeSet::GetFightStaminaAttribute());
 			}
@@ -509,16 +512,38 @@ bool FCatFishingBorrowedRodCastTest::RunTest(const FString& Parameters)
 				const FString OriginalId = Destroying.State->GetUniqueId()->ToString();
 				bool bObservedMovedState = false;
 				bool bSecondMigrationCommitted = false;
+				bool bDepartureSnapshotExported = false;
+				bool bDepartureDeploymentRetired = false;
+				bool bRetirementPreservedRod = false;
+				FCatEquipmentLoadoutSnapshot DepartureSnapshot;
+				FText DepartureExportFailure;
 				const FDelegateHandle MigrationObserver = Destroying.Equipment->OnSnapshotChanged.AddLambda([&]()
 				{
+					if (bObservedMovedState) return;
 					bObservedMovedState = true;
 					bSecondMigrationCommitted |= Fishing->PreserveFishingResourcesForEquipmentShutdown(Destroying.Equipment);
+					// 真正 EndPlay 的托管发布点仍有原 PlayerState：保存只能捕获留下的普通背包，不能收走队友的在用竿。
+					bDepartureSnapshotExported = Destroying.Equipment->ExportSnapshotFromAuthority(
+						DepartureSnapshot, DepartureExportFailure);
+					if (bDepartureSnapshotExported)
+						bDepartureDeploymentRetired = Destroying.Equipment->RetireDeploymentAfterPersistentCapture(*Destroying.State);
+					bRetirementPreservedRod = IsValid(Rod) && Fishing->FindDeployedRodById(Placed.RodActorId) == Rod;
 				});
 				TestTrue(TEXT("destroying the original equipment host runs real EndPlay"), Destroying.Character->Destroy());
 				Destroying.Equipment->OnSnapshotChanged.Remove(MigrationObserver);
 				TestTrue(TEXT("original player identity can also leave the world"), Destroying.State->Destroy());
 				TestTrue(TEXT("custody publishes after moving the old records"), bObservedMovedState);
 				TestFalse(TEXT("publication reentry cannot transfer the same records twice"), bSecondMigrationCommitted);
+				TestTrue(*FString::Printf(TEXT("departing host exports after custody: %s"),
+					*DepartureExportFailure.ToString()), bDepartureSnapshotExported);
+				TestFalse(TEXT("departing save cannot duplicate the live borrowed rod"), DepartureSnapshot.InventorySlots.ContainsByPredicate(
+					[OwnerRodId](const FCatRunInventorySlot& Slot) { return Slot.ItemInstanceId == OwnerRodId; }));
+				TestNotEqual(TEXT("departing selection cannot refer to the custody rod"), DepartureSnapshot.RodItemInstanceId, OwnerRodId);
+				if (ExitScenario == 6)
+					TestTrue(TEXT("departing caster still saves their own ordinary rod"), DepartureSnapshot.InventorySlots.ContainsByPredicate(
+						[&CasterBefore](const FCatRunInventorySlot& Slot) { return Slot.ItemInstanceId == CasterBefore.RodItemInstanceId; }));
+				TestTrue(TEXT("departing deployment retirement succeeds after custody"), bDepartureDeploymentRetired);
+				TestTrue(TEXT("departing persistence never destroys the custody rod"), bRetirementPreservedRod);
 				ACatFishingResourceCustodian* Custodian = nullptr;
 				int32 CustodianCount = 0;
 				for (TActorIterator<ACatFishingResourceCustodian> It(World); It; ++It)

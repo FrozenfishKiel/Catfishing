@@ -1,7 +1,6 @@
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
-#include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
 #include "Character/CatCharacterMovementComponent.h"
@@ -162,17 +161,18 @@ bool UCatFishingFightRunner::AddParticipantFromAuthority(APlayerState* PlayerSta
 {
 	ACatCharacter* Character = PlayerState ? Cast<ACatCharacter>(PlayerState->GetPawn()) : nullptr;
 	UCatAbilitySystemComponent* ASC = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
-	float StaminaMaximum = 0.0f;
 	const double Strength = ASC
 		? ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute()) : 0.0;
 	const double Stamina = ASC
 		? ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) : 0.0;
+	const double StaminaMaximum = ASC
+		? ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()) : 0.0;
+	// 零体力仍能占操作位；上限只读同一身体 ASC，实际出力由个人当前余额决定。
 	if (!PlayerState || !Character || !ASC || InitialInputSequence < 0
 		|| !FMath::IsFinite(Strength) || Strength <= 0.0
 		|| !FMath::IsFinite(Stamina) || Stamina < 0.0
-		|| !GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
-			Character->GetCatDefinitionId(), StaminaMaximum)
-		|| !FMath::IsFinite(StaminaMaximum) || StaminaMaximum <= 0.0f)
+		|| !FMath::IsFinite(StaminaMaximum) || StaminaMaximum <= 0.0
+		|| Stamina > StaminaMaximum + UE_DOUBLE_KINDA_SMALL_NUMBER)
 	{
 		return false;
 	}
@@ -287,12 +287,14 @@ bool UCatFishingFightRunner::UpdateParticipantIntentAndProperties()
 		UCatAbilitySystemComponent* ASC = Participant ? Participant->AbilitySystem.Get() : nullptr;
 		ACatCharacter* Character = Participant ? Participant->Character.Get() : nullptr;
 		if (!ASC || !Character) return false;
-		float Baseline = 0.0f;
-		if (!GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(Character->GetCatDefinitionId(), Baseline)) return false;
+		const double StaminaMaximum = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+		if (!FMath::IsFinite(StaminaMaximum) || StaminaMaximum <= 0.0) return false;
+		// 每步采样当前上限，ASC 上限改变后不再使用加入鱼竿时冻结的旧值。
+		Participant->StaminaMaximum = StaminaMaximum;
 		FCatFightGroupParticipantInput& Input = GroupInput.Participants.AddDefaulted_GetRef();
 		Input.FishingStrength = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 		Input.CurrentStamina = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
-		Input.MaximumStamina = Participant->StaminaMaximum > 0.0 ? Participant->StaminaMaximum : Baseline;
+		Input.MaximumStamina = StaminaMaximum;
 		Input.MassKilograms = Config.CatBodyMassKilograms;
 		Input.bPrimary = Participant->bPrimary;
 		const auto* Movement = Cast<UCatCharacterMovementComponent>(Character->GetCharacterMovement());

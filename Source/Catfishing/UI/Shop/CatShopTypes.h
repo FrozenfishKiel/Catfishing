@@ -1,22 +1,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "ShopEconomy/CatShopEconomyTypes.h"
+#include "ShopEconomy/Trading/CatShopTradingTypes.h"
 #include "CatShopTypes.generated.h"
-
-/** 商店 UI 发给控制器的意图类型；Widget 只描述点击，不携带价格、库存或交付结果。 */
-UENUM(BlueprintType)
-enum class ECatShopUIAction : uint8
-{
-	/** 没有有效动作；用于默认空值和拒绝旧点击。 */
-	None,
-	/** 点击商品卡片后把该目录项加入本地购物车；不会立刻扣钱或发货。 */
-	AddEntryToCart,
-	/** 点击购物车垃圾桶后移除该目录项的一次选购；数量大于 1 时只减少一份。 */
-	RemoveCartEntry,
-	/** 点击支付按钮后把当前购物车一次提交给服务器结算。 */
-	PayCart
-};
 
 /** 商店目录中一行商品的展示投影；它由摊位目录和公开经济快照拼出，不能写回商店后端。 */
 USTRUCT(BlueprintType)
@@ -27,10 +13,6 @@ struct FCatShopEntryView
 	/** 商品目录稳定 ID；UI 点击只回传它，不回传价格或库存。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName EntryId = NAME_None;
-
-	/** 商品最终交付类别；只用于展示“装备/耗材”，真正交付仍在服务器订单协调器里发生。 */
-	UPROPERTY(BlueprintReadOnly)
-	ECatShopEntryKind Kind = ECatShopEntryKind::Unknown;
 
 	/** 商品指向的装备或消耗品定义；UI 用它显示名字，不能据此直接发放物品。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -100,7 +82,7 @@ struct FCatShopEntryView
 	UPROPERTY(BlueprintReadOnly)
 	FText DescriptionText;
 
-	/** 商品行最终显示图标；Model 已按“商店覆盖图优先、装备定义 Thumbnail 兜底”解析，WBP 不再二次查目录。 */
+	/** 商品行最终显示图标；Model 已按“商店覆盖图优先、库存定义缩略图兜底”解析，WBP 不再二次查目录。 */
 	UPROPERTY(BlueprintReadOnly)
 	TSoftObjectPtr<UTexture2D> IconOverride;
 };
@@ -178,7 +160,7 @@ struct FCatShopCartLineView
 	UPROPERTY(BlueprintReadOnly)
 	FText DisplayText;
 
-	/** 购物车行最终显示图标；沿用商品投影已经解析完成的覆盖图或装备定义 Thumbnail。 */
+	/** 购物车行最终显示图标；沿用商品投影已经解析完成的覆盖图或库存定义缩略图。 */
 	UPROPERTY(BlueprintReadOnly)
 	TSoftObjectPtr<UTexture2D> IconOverride;
 };
@@ -224,14 +206,6 @@ struct FCatShopViewState
 	/** 当前支付按钮是否可点击；空车、pending、数据未同步、购物车失效或资金不足都会置 false。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bCanPayCart = false;
-
-	/** 最近一次 UI 提交的动作；用于展示“已提交/被本地拒绝”的结果提示。 */
-	UPROPERTY(BlueprintReadOnly)
-	ECatShopUIAction LastAction = ECatShopUIAction::None;
-
-	/** 最近一次提交或拒绝的条目 ID；用于把结果提示和商品行关联起来。 */
-	UPROPERTY(BlueprintReadOnly)
-	FName LastEntryId = NAME_None;
 
 	/** 当前是否已有支付请求提交后等待服务器回包；Model 和 WBP 用它禁用加购、删除和支付，避免本地购物车与已提交订单脱节。 */
 	UPROPERTY(BlueprintReadOnly)

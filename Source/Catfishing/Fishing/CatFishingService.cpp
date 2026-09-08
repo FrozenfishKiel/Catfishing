@@ -2,7 +2,8 @@
 
 #include "Character/CatCharacter.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
 #include "AbilitySystemComponent.h"
@@ -23,6 +24,8 @@
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
 #include "Social/CatSocialService.h"
 #include "GameFramework/PlayerState.h"
 #include "GameFramework/PlayerController.h"
@@ -30,7 +33,7 @@
 
 namespace
 {
-	// 物品 Use/UnUse 到钓鱼命令错误的映射：这里按放杆/收杆语义解释库存错误，避免复用会话错误码导致日志误导。
+	// 物品 Use/UnUse 到钓鱼命令错误的映射：放杆外层已单独校验装备选择版本；这里遇到 RevisionConflict 只说明库存借出或归还看到的事实过期。
 	ECatFishingCommandError MapRodInventoryUseError(const ECatDomainCommandError Error)
 	{
 		switch (Error)
@@ -40,7 +43,7 @@ namespace
 		case ECatDomainCommandError::InvalidIdentity: return ECatFishingCommandError::InvalidIdentity;
 		case ECatDomainCommandError::InvalidPhase: return ECatFishingCommandError::ActiveSessionExists;
 		case ECatDomainCommandError::NotFound: return ECatFishingCommandError::NoRod;
-		case ECatDomainCommandError::RevisionConflict: return ECatFishingCommandError::EquipmentRevisionConflict;
+		case ECatDomainCommandError::RevisionConflict: return ECatFishingCommandError::RevisionConflict;
 		case ECatDomainCommandError::AlreadyResolved: return ECatFishingCommandError::AlreadyResolved;
 		case ECatDomainCommandError::CommandsClosed: return ECatFishingCommandError::CommandsClosed;
 		case ECatDomainCommandError::CapacityExceeded: return ECatFishingCommandError::GuardCapacityExceeded;
@@ -106,6 +109,11 @@ void UCatFishingService::Deinitialize()
 	Super::Deinitialize();
 }
 
+// 抛竿请求的服务器流程：
+// 1. 先用玩家稳定身份和 RequestId 形成幂等键，重复请求复用首次终态，正在处理的同键请求直接拒绝。
+// 2. 再按 GameMode、身体状态、鱼竿占用、装备版本和水域依赖逐层校验；任一依赖缺失都会进入统一 Finish 收口。
+// 3. Finish 负责清理进行中标记、缓存终态，并在依赖缺失时输出诊断；鱼饵余量只读取正式库存组件，旧 Equipment Snapshot 仅提供当前选择标识。
+// 4. 全部依赖成立后才创建服务器 Session、扣减鱼饵并推进鱼竿/会话事实，客户端只通过复制观察结果。
 FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 	const FCatBeginCastCommand& Command)
 {
@@ -136,14 +144,23 @@ FCatBeginCastResult UCatFishingService::BeginCast(AController* FisherController,
 		{
 			const ACatCharacter* Character = FisherController ? Cast<ACatCharacter>(FisherController->GetPawn()) : nullptr;
 			const UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
+			const UCatInventoryComponent* Inventory = Character ? Character->GetInventoryComponent() : nullptr;
 			const FCatEquipmentLoadoutSnapshot Loadout = Equipment ? Equipment->GetSnapshot() : FCatEquipmentLoadoutSnapshot{};
 			const ACatFishingRodActor* RequestedRod = FindDeployedRodById(Command.RodActorId);
 			const FCatFishingRodPresentationState RequestedRodState = RequestedRod
 				? RequestedRod->GetPresentationState() : FCatFishingRodPresentationState{};
 			int32 BaitQuantity = 0;
-			for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
+			// 依赖拒绝日志里的数量只从正式库存读；旧 Equipment Snapshot 保留选择字段，但不再代表玩家实际还持有多少鱼饵。
+			if (Inventory && !Loadout.BaitDefinitionId.IsNone())
 			{
-				if (Slot.DefinitionId == Loadout.BaitDefinitionId) BaitQuantity += Slot.Quantity;
+				for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
+				{
+					const UCatInventoryItemInstance* Instance = Entry.Instance.Get();
+					if (Instance && Instance->GetItemDefinitionId() == Loadout.BaitDefinitionId && Entry.StackCount > 0)
+					{
+						BaitQuantity += Entry.StackCount;
+					}
+				}
 			}
 			UE_LOG(LogCatFishing, Warning,
 				TEXT("Event=begin_cast_dependency_rejected RequestId=%s Stage=%s EquipmentError=%s World=%s RodActorId=%s RodDefinition=%s RodItemInstanceId=%s BaitDefinition=%s BaitItemInstanceId=%s BaitQuantity=%d FloatDefinition=%s FloatItemInstanceId=%s EquipmentRevision=%lld CastEquipment=%s RodEquipment=%s %s"),
@@ -416,10 +433,14 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 	FCatFishingCommandResult Result;
 	Result.CommandType = ECatFishingCommandType::PlaceRod;
 	Result.RequestId = Command.RequestId;
+	// 放竿从玩家身上同时读取正式库存、旧钓具选择投影和身份事实：库存版本先写入回包并保护实例离包，装备版本只保护当前选中竿与皮肤。
+	// Use 成功后鱼竿实例已经临时离开背包，服务再按该实例定义生成 Actor 并注册部署事实；后续任一步失败都要回滚同一实例。
+	// 回滚后的回包必须重新读取两套版本，调用方才能知道背包内容和旧装备投影最终停在哪个事实点。
 	UWorld* World = GetWorld();
 	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
 	APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
 	UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
+	UCatInventoryComponent* OwnerInventory = Character ? Character->GetInventoryComponent() : nullptr;
 	if (!Command.RequestId.IsValid() || ResolveStableNetId(Controller).IsEmpty())
 	{
 		Result.Error = ECatFishingCommandError::InvalidIdentity;
@@ -432,9 +453,20 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		Result.Error = ECatFishingCommandError::CommandsClosed;
 		return Result;
 	}
-	if (!World || !Character || !PlayerState || !Equipment)
+	if (!World || !Character || !PlayerState || !Equipment || !OwnerInventory)
 	{
 		Result.Error = ECatFishingCommandError::DependencyUnavailable;
+		return Result;
+	}
+	Result.InventoryRevision = OwnerInventory->GetInventoryRevision();
+	Result.EquipmentRevision = Equipment->GetSnapshot().Revision;
+	if (Command.ExpectedInventoryRevision != 0 && Result.InventoryRevision != Command.ExpectedInventoryRevision)
+	{
+		Result.Error = ECatFishingCommandError::RevisionConflict;
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_rod_place_rejected RequestId=%s Reason=InventoryRevisionConflict ExpectedInventoryRevision=%lld InventoryRevision=%lld EquipmentRevision=%lld World=%s %s"),
+			*Command.RequestId.ToString(), Command.ExpectedInventoryRevision, Result.InventoryRevision,
+			Result.EquipmentRevision, *GetNameSafe(World), *CatLogContext::BuildControllerFields(Controller));
 		return Result;
 	}
 	if (ACatFishingRodActor* OperatedRod = FindRodOperatedBy(PlayerState))
@@ -477,6 +509,12 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 			static_cast<int32>(Controller->GetLocalRole()), *CatLogContext::BuildControllerFields(Controller));
 		return Result;
 	}
+	const auto RefreshResultRevisions = [OwnerInventory, Equipment, &Result]()
+	{
+		// Use 成功后的失败路径会先改背包再回滚，装备投影也可能随回滚递增；回包必须返回两套最新版本，避免上层继续拿旧事实重试。
+		Result.InventoryRevision = OwnerInventory ? OwnerInventory->GetInventoryRevision() : 0;
+		Result.EquipmentRevision = Equipment ? Equipment->GetSnapshot().Revision : 0;
+	};
 	const FVector Candidate = Character->GetActorLocation() + Character->GetActorForwardVector() * 150.0;
 	FHitResult GroundHit;
 	FCollisionQueryParams GroundParams(SCENE_QUERY_STAT(CatPlaceRodGround), false, Character);
@@ -491,7 +529,8 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 	// 表现 Mesh 的碰撞不能否决生成，故 AlwaysSpawn。
 	// 放杆的库存事务必须先于 Actor 生成提交：Use 成功后这根实例已经离开背包，后续任一生成或注册失败都要 UnUse 回滚同一实例。
 	const FCatInventoryItemUseResult UseResult =
-		Equipment->Use(Command.RequestId, Command.ExpectedEquipmentRevision, InventoryRod.ItemInstanceId);
+		Equipment->Use(Command.RequestId, Command.ExpectedEquipmentRevision, InventoryRod.ItemInstanceId,
+			1, Command.ExpectedInventoryRevision);
 	if (UseResult.Error != ECatDomainCommandError::None)
 	{
 		Result.Error = MapRodInventoryUseError(UseResult.Error);
@@ -503,12 +542,14 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 			Result.Error = ECatFishingCommandError::RodBroken;
 		}
 		Result.EquipmentRevision = UseResult.EquipmentRevision;
+		Result.InventoryRevision = UseResult.InventoryRevision;
 		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_rod_place_rejected RequestId=%s Definition=%s RodItemInstanceId=%s Durability=%.3f Broken=%s InventoryError=%s Error=%s EquipmentRevision=%lld World=%s %s"),
+			TEXT("Event=fishing_rod_place_rejected RequestId=%s Definition=%s RodItemInstanceId=%s Durability=%.3f Broken=%s InventoryError=%s Error=%s InventoryRevision=%lld EquipmentRevision=%lld World=%s %s"),
 			*Command.RequestId.ToString(), *InventoryRod.DefinitionId.ToString(), *InventoryRod.ItemInstanceId.ToString(),
 			UseResult.Item.RodDurability, UseResult.Item.bRodBroken ? TEXT("true") : TEXT("false"),
 			*UEnum::GetValueAsString(UseResult.Error), *UEnum::GetValueAsString(Result.Error),
-			Result.EquipmentRevision, *GetNameSafe(World), *CatLogContext::BuildControllerFields(Controller));
+			Result.InventoryRevision, Result.EquipmentRevision, *GetNameSafe(World),
+			*CatLogContext::BuildControllerFields(Controller));
 		return Result;
 	}
 	const UCatEquipmentDefinition* UsedRodDefinition =
@@ -518,16 +559,17 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 	{
 		Equipment->UnUse(FGuid::NewGuid(), UseResult.Item.ItemInstanceId);
 		Result.Error = ECatFishingCommandError::DependencyUnavailable;
-		Result.EquipmentRevision = Equipment->GetSnapshot().Revision;
+		RefreshResultRevisions();
 		return Result;
 	}
-	// 鱼竿 Actor 类在 Use 成功后按被移出的实例定义重读；Equipment 只保证库存事务，表现类型仍由钓鱼服务按鱼竿规则裁决。
+	// 鱼竿 Actor 类在 Use 成功后按被移出的实例定义重读；正式 InventoryComponent 已完成借出，Equipment 这里只是旧投影适配层。
+	// 表现类型仍由钓鱼服务按鱼竿规则裁决，不能让旧装备快照重新拥有库存事实。
 	UClass* RodClass = UsedRodDefinition->UseActorClass.LoadSynchronous();
 	if (!RodClass || !RodClass->IsChildOf(ACatFishingRodActor::StaticClass()))
 	{
 		Equipment->UnUse(FGuid::NewGuid(), UseResult.Item.ItemInstanceId);
 		Result.Error = ECatFishingCommandError::DependencyUnavailable;
-		Result.EquipmentRevision = Equipment->GetSnapshot().Revision;
+		RefreshResultRevisions();
 		return Result;
 	}
 	const auto RollbackUsedRod = [Equipment, &UseResult]()
@@ -539,10 +581,10 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 			&& Rollback.Error != ECatDomainCommandError::AlreadyResolved)
 		{
 			UE_LOG(LogCatFishing, Warning,
-				TEXT("Event=fishing_rod_use_rollback_failed Reason=%s ItemInstance=%s EquipmentRevision=%lld"),
+				TEXT("Event=fishing_rod_use_rollback_failed Reason=%s ItemInstance=%s InventoryRevision=%lld EquipmentRevision=%lld"),
 				*UEnum::GetValueAsString(Rollback.Error),
 				*UseResult.Item.ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-				Rollback.EquipmentRevision);
+				Rollback.InventoryRevision, Rollback.EquipmentRevision);
 		}
 	};
 	const FTransform SpawnTransform(Character->GetActorRotation(), GroundHit.ImpactPoint);
@@ -559,7 +601,7 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		if (Rod) Rod->Destroy();
 		RollbackUsedRod();
 		Result.Error = ECatFishingCommandError::DependencyUnavailable;
-		Result.EquipmentRevision = Equipment->GetSnapshot().Revision;
+		RefreshResultRevisions();
 		UE_LOG(LogCatFishing, Warning,
 			TEXT("Event=fishing_rod_place_rejected RequestId=%s RodActorId=%s Stage=PrepareHeldRod Error=DependencyUnavailable World=%s Authority=true LocalRole=%d %s"),
 			*Command.RequestId.ToString(), *RodActorId.ToString(), *GetNameSafe(World),
@@ -575,7 +617,7 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		Rod->Destroy();
 		RollbackUsedRod();
 		Result.Error = ECatFishingCommandError::ActiveSessionExists;
-		Result.EquipmentRevision = Equipment->GetSnapshot().Revision;
+		RefreshResultRevisions();
 		return Result;
 	}
 	// 后续 R 沿既有 LeaveRod / OperateRod 切换放下与拿起，不重复生成或占用库存。
@@ -583,13 +625,15 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 	Result.Error = ECatFishingCommandError::None;
 	Result.RodActorId = RodActorId;
 	Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
+	Result.InventoryRevision = UseResult.InventoryRevision;
 	Result.EquipmentRevision = UseResult.EquipmentRevision;
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_rod_placed RequestId=%s Rod=%s RodActorId=%s ItemInstance=%s Definition=%s Pose=Held Holder=%s OperatorCount=%d RodActorRevision=%lld EquipmentRevision=%lld DeployedRodCount=%d MaximumDeployedRods=%d World=%s NetMode=%d Authority=true LocalRole=%d %s"),
+		TEXT("Event=fishing_rod_placed RequestId=%s Rod=%s RodActorId=%s ItemInstance=%s Definition=%s Pose=Held Holder=%s OperatorCount=%d RodActorRevision=%lld EquipmentRevision=%lld InventoryRevision=%lld DeployedRodCount=%d MaximumDeployedRods=%d World=%s NetMode=%d Authority=true LocalRole=%d %s"),
 		*Command.RequestId.ToString(), *GetNameSafe(Rod), *RodActorId.ToString(),
 		*UseResult.Item.ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
 		*UseResult.Item.DefinitionId.ToString(), *GetNameSafe(Rod->GetPresentationState().HolderPlayerState),
 		Rod->GetOperatorCount(), Rod->GetPresentationState().RodActorRevision, UseResult.EquipmentRevision,
+		UseResult.InventoryRevision,
 		GetDeployedRodCount(PlayerState), MaximumDeployedRodsPerPlayer,
 		*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), static_cast<int32>(Controller->GetLocalRole()),
 		*CatLogContext::BuildControllerFields(Controller));
@@ -839,13 +883,15 @@ FCatFishingCommandResult UCatFishingService::PackRod(AController* Controller, co
 			: ECatFishingCommandError::DependencyUnavailable;
 		Result.RodActorId = RodState.RodActorId;
 		Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
+		Result.InventoryRevision = UnUseResult.InventoryRevision;
 		Result.EquipmentRevision = UnUseResult.EquipmentRevision;
 		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_rod_pack_rejected RequestId=%s RodActorId=%s RodItemInstanceId=%s Reason=InventoryReturnRejected InventoryError=%s Restored=%s Broken=%s RodActorRevision=%lld EquipmentRevision=%lld %s"),
+			TEXT("Event=fishing_rod_pack_rejected RequestId=%s RodActorId=%s RodItemInstanceId=%s Reason=InventoryReturnRejected InventoryError=%s Restored=%s Broken=%s RodActorRevision=%lld InventoryRevision=%lld EquipmentRevision=%lld %s"),
 			*Command.Context.RequestId.ToString(), *RodState.RodActorId.ToString(),
 			*RodState.ItemInstanceId.ToString(), *UEnum::GetValueAsString(UnUseResult.Error),
 			bRestored ? TEXT("true") : TEXT("false"), RodState.bBroken ? TEXT("true") : TEXT("false"),
-			Result.RodActorRevision, Result.EquipmentRevision, *CatLogContext::BuildControllerFields(Controller));
+			Result.RodActorRevision, Result.InventoryRevision, Result.EquipmentRevision,
+			*CatLogContext::BuildControllerFields(Controller));
 		return Result;
 	}
 	UnregisterDeployedRod(PlayerState, Rod);
@@ -853,11 +899,13 @@ FCatFishingCommandResult UCatFishingService::PackRod(AController* Controller, co
 	Result.Error = ECatFishingCommandError::None;
 	Result.RodActorId = Command.Context.RodActorId;
 	Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
+	Result.InventoryRevision = UnUseResult.InventoryRevision;
 	Result.EquipmentRevision = UnUseResult.EquipmentRevision;
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_rod_packed RequestId=%s Rod=%s RodActorId=%s ItemInstance=%s EquipmentRevision=%lld DeployedRodCount=%d MaximumDeployedRods=%d World=%s NetMode=%d Authority=%s LocalRole=%d %s"),
+		TEXT("Event=fishing_rod_packed RequestId=%s Rod=%s RodActorId=%s ItemInstance=%s EquipmentRevision=%lld InventoryRevision=%lld DeployedRodCount=%d MaximumDeployedRods=%d World=%s NetMode=%d Authority=%s LocalRole=%d %s"),
 		*Command.Context.RequestId.ToString(), *GetNameSafe(Rod), *Command.Context.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
 		*RodState.ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens), UnUseResult.EquipmentRevision,
+		UnUseResult.InventoryRevision,
 		GetDeployedRodCount(PlayerState), MaximumDeployedRodsPerPlayer, *GetNameSafe(GetWorld()),
 		static_cast<int32>(GetWorld()->GetNetMode()), Rod->HasAuthority() ? TEXT("true") : TEXT("false"),
 		static_cast<int32>(Rod->GetLocalRole()),

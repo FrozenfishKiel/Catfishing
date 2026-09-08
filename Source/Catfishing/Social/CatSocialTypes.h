@@ -91,6 +91,10 @@ struct FCatTheftResult
 	UPROPERTY(BlueprintReadOnly)
 	FCatDomainCommandResult Command;
 
+	/** 进食窗口到期后提交到 Condition/Growth 的身体终态；追回或 Begin 拒绝时保持默认。 */
+	UPROPERTY(BlueprintReadOnly)
+	FCatDomainCommandResult Body;
+
 	/** 首次合法 Begin 后由服务器分配的协议 ID；追回 RPC、Timer 和 Items escrow 只使用此键。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid TheftProtocolId;

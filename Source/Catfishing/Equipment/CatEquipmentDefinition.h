@@ -1,10 +1,10 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Engine/DataAsset.h"
 #include "Environment/CatChumFieldTypes.h"
 #include "Environment/CatWaterTypes.h"
 #include "Equipment/CatEquipmentTypes.h"
+#include "Inventory/CatInventoryItemDefinition.h"
 #include "CatEquipmentDefinition.generated.h"
 
 class AActor;
@@ -12,11 +12,35 @@ class UTexture2D;
 
 /** 一条功能型装备/道具定义；字段只表达玩法用途，不含等级、战力、随机词条或强制升级。 */
 UCLASS(BlueprintType)
-class CATFISHING_API UCatEquipmentDefinition : public UPrimaryDataAsset
+class CATFISHING_API UCatEquipmentDefinition : public UCatInventoryItemDefinition
 {
 	GENERATED_BODY()
 
 public:
+	/** 库存目录读取装备资产时使用 EquipmentDefinitionId；这样商店和背包不再需要知道 EquipmentSettings 的字段名。 */
+	virtual FName GetInventoryDefinitionId() const override;
+
+	/** 库存表现读取装备资产自己的显示名；避免迁移期维护第二份 InventoryDisplayName。 */
+	virtual FText GetInventoryDisplayName() const override;
+
+	/** 库存详情读取装备资产自己的说明；钓鱼参数仍留给装备/钓鱼系统解释。 */
+	virtual FText GetInventoryDescription() const override;
+
+	/** 库存格读取装备资产自己的缩略图；运行实例和格子不保存表现资源。 */
+	virtual TSoftObjectPtr<UTexture2D> GetInventoryThumbnail() const override;
+
+	/** 装备资产进入库存运行目录仍沿用原运行 gate；失败时库存、商店和钓鱼都应拒绝使用。 */
+	virtual bool IsInventoryRuntimeDefinitionReady() const override;
+
+	/** 装备资产默认生成装备适配实例；鱼竿耐久等专属状态不进入通用库存格。 */
+	virtual TSubclassOf<UCatInventoryItemInstance> GetPreferredInstanceType() const override;
+
+	/** 装备资产的库存堆叠上限；数量型默认读库存项目配置，工具和装备保持一格一件。 */
+	virtual int32 GetMaxStackCount() const override;
+
+	/** 把装备旧配置解析为库存层 Use 策略；资产仍保留旧字段，运行裁决读库存统一口径。 */
+	virtual ECatInventoryItemUseEffect GetInventoryUseEffect() const override;
+
 	/** 校验这条定义能否进入运行目录；服务器目录读取它做 fail-closed，失败会阻止装配、Use 裁决和消耗事务。 */
 	bool IsRuntimeDefinitionReady() const;
 
@@ -27,12 +51,12 @@ public:
 	virtual ECatDomainCommandError UnUse(const FCatRunInventorySlot& Item) const;
 
 	/** 这类物品 Use 成功后是否由活动记录暂存整份实例；Equipment 读取它区分部署型物品和 no-op/扣量型物品。 */
-	virtual bool KeepsInventoryInstanceWhileUsed() const;
+	virtual bool KeepsInventoryInstanceWhileUsed() const override;
 
 	/** 这类物品 Use 成功后是否直接扣库存数量；Equipment 读取它处理已经完成玩法前置裁决的数量耗材。 */
-	virtual bool ConsumesInventoryQuantityOnUse() const;
+	virtual bool ConsumesInventoryQuantityOnUse() const override;
 
-	/** 读取这类物品声明或兼容推导出的库存影响策略；统一入口用它裁决 no-op、部署占用和简单扣量三条边界。 */
+	/** 读取旧装备资产声明或兼容推导出的库存影响策略；运行代码随后会映射到库存层策略，保留它只为旧资产和测试字段。 */
 	virtual ECatEquipmentUseInventoryEffect GetUseInventoryEffect() const;
 
 	/** 装备/道具稳定 ID；Profile 选择、运行装配和鱼偏好只引用该值。 */
@@ -67,7 +91,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")
 	TSoftClassPtr<AActor> UseActorClass;
 
-	/** 这类物品 Use 成功后对库存实例的默认影响；策划数据写入它，定义裁决和 Equipment 事务读取它选择 no-op、部署占用或简单扣量。 */
+	/** 旧装备资产声明的库存影响；当前运行会映射成 ECatInventoryItemUseEffect，字段暂留以保护 DataAsset 和历史测试。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")
 	ECatEquipmentUseInventoryEffect UseInventoryEffect = ECatEquipmentUseInventoryEffect::Auto;
 

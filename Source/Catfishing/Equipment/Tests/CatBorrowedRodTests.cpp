@@ -4,6 +4,8 @@
 #include "Tests/AutomationCommon.h"
 #include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatEquipmentInventoryItemInstance.h"
+#include "Inventory/CatInventoryComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentSettings.h"
 #include "Equipment/Inventory/CatInventoryTransferService.h"
@@ -222,6 +224,10 @@ bool FCatBorrowedRodWearTest::RunTest(const FString& Parameters)
 	const int64 OwnerRevision = F.Owner->GetSnapshot().Revision;
 	const FCatEquipmentLoadoutSnapshot BeforeFisher = F.Fisher->GetSnapshot();
 	const auto Worn = F.Fisher->ApplyFishingRodWear(SessionId, 1, 12.5);
+	const FCatInventoryEntry* FormalHeld = F.Owner->GetInventoryTransferInventory()->FindHeldInventoryEntryFromAuthority(F.OwnerRodId);
+	if (!TestNotNull(TEXT("borrowed rod remains in original formal inventory"), FormalHeld)) return false;
+	TestEqual(TEXT("borrowed wear updates formal owner UObject"), CastChecked<UCatEquipmentInventoryItemInstance>(FormalHeld->Instance)->GetRodDurability(), 87.5);
+	TestNull(TEXT("borrower never acquires duplicate held instance"), F.Fisher->GetInventoryTransferInventory()->FindHeldInventoryEntryFromAuthority(F.OwnerRodId));
 	TestTrue(TEXT("wear request applies through fisher coordinator"), Worn.bApplied);
 	TestEqual(TEXT("wear reports original rod's remaining durability"), Worn.RemainingRodDurability, 87.5);
 	TestEqual(TEXT("wear receipt revision is still caller inventory revision"), Worn.EquipmentRevision, BeforeFisher.Revision);

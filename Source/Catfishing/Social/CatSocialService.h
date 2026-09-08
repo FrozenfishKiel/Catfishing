@@ -72,7 +72,7 @@ private:
 		FTimerHandle EatingWindowTimer;
 	};
 
-	/** 进食窗口到期回调；依赖完整时先由 Items 不可逆吃掉，再向小偷 Character 提交食用效果。 */
+	/** 进食窗口到期回调；依赖完整时先由 Items 不可逆吃掉，再向小偷 Character 提交食用效果并回送最终协议。 */
 	void HandleTheftWindowExpired(FGuid TheftProtocolId);
 
 	/** 让 Items 按 ProtocolId 原位返还并在成功后移除 Social 协议；依赖失败时保留活跃记录，调用方可继续有界收口且不会伪造 returned。 */

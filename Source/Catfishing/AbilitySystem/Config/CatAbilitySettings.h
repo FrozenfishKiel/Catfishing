@@ -28,27 +28,22 @@ public:
 	/** 判断 Character ASC 正式运行链是否显式启用；当前只接受已有安全语义的 Full 策略。 */
 	bool IsRuntimeEnabled() const;
 
-	/** 读取新 Character 的三项局内初始属性；任一非法值都会清空输出并保持 fail-closed。 */
-	bool TryGetInitialAttributes(float& OutPoison, float& OutFishingStrength, float& OutFightStamina) const;
+	/** 读取新 Character 的三项局内初始属性；体力输出代表 MaxFightStamina，任一非法值都会清空输出并保持 fail-closed。 */
+	bool TryGetInitialAttributes(float& OutPoison, float& OutFishingStrength, float& OutMaxFightStamina) const;
 
 	/** 正式 Fishing GAS 资产必须同时存在且 InputConfig 完整，缺任一项都不授予或绑定输入。 */
 	bool IsFishingRuntimeReady() const;
-
-	/** 只读取已验证的正 FightStamina 基线，供 SetByCaller 初始化/恢复 GE 使用。 */
-	bool TryGetInitialFightStamina(float& OutFightStamina) const;
 
 	/** 同步解析猫种类清单并只接受唯一就绪匹配；重复或未就绪返回空，防止两端选到不同数值。 */
 	const UCatCharacterDefinition* FindRuntimeCharacterDefinition(FName CatDefinitionId) const;
 
 	/**
 	 * 按猫种类读取三项初始属性：Id 为 None 时先读默认猫种定义，默认 ID 也为 None 时才回退全局初值；
+	 * 第三项输出是 MaxFightStamina 的播种源，不直接写当前 FightStamina，当前体力由 ASC 按上限回满。
 	 * Id 已指定但定义缺失/未就绪时 fail-closed 返回 false，不悄悄换成全局值。
 	 */
 	bool TryGetInitialAttributesForCharacter(FName CatDefinitionId, float& OutPoison,
-		float& OutFishingStrength, float& OutFightStamina) const;
-
-	/** 按猫种类读取搏斗体力基线；解析语义与上项一致，供 ASC 会话初始化与搏斗装配共用。 */
-	bool TryGetFightStaminaBaselineForCharacter(FName CatDefinitionId, float& OutFightStamina) const;
+		float& OutFishingStrength, float& OutMaxFightStamina) const;
 
 	/** Character-owned ASC 正式运行总 gate；默认关闭，项目接线后可在所有构建配置显式启用。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
@@ -70,7 +65,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Attributes", meta = (ClampMin = "-1.0"))
 	float InitialFishingStrength = -1.0f;
 
-	/** 新 Character 初始 FightStamina；必须为正才能支持正式搏斗。 */
+	/** 新 Character 初始 MaxFightStamina；播种后当前 FightStamina 会由 ASC 回满到该上限，必须为正才能支持正式搏斗。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Attributes", meta = (ClampMin = "-1.0"))
 	float InitialFightStamina = -1.0f;
 

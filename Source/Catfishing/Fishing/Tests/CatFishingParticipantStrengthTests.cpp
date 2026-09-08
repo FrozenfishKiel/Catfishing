@@ -41,6 +41,8 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("两个角色均有真实ASC"), PrimaryASC && HelperASC)) return false;
 	PrimaryASC->InitAbilityActorInfo(PrimaryCharacter, PrimaryCharacter);
 	HelperASC->InitAbilityActorInfo(HelperCharacter, HelperCharacter);
+	PrimaryASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), 60.0f);
+	HelperASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), 60.0f);
 	PrimaryASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50.0f);
 	HelperASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 30.0f);
 

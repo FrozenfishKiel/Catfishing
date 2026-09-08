@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
-#include "ShopEconomy/CatShopEconomyTypes.h"
+#include "ShopEconomy/Trading/CatShopTradingTypes.h"
 #include "CatShopEconomyService.generated.h"
 
 class UCatShopInventoryComponent;

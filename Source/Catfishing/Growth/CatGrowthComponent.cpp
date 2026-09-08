@@ -44,8 +44,7 @@ FCatDomainCommandResult UCatGrowthComponent::ApplyCommittedFish(const FGuid Requ
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
 	if (!RequestId.IsValid() || ValidateFishGrowth(FishDefinition) != ECatDomainCommandError::None)
