@@ -783,6 +783,17 @@ void ACatFishingRodActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 void ACatFishingRodActor::OnRep_PresentationState(const FCatFishingRodPresentationState& Previous)
 {
 	// Previous 由引擎在应用新值前自动传入旧值，蓝图可以据此区分皮肤、部署或操作位变化。
+	if (Previous.PoseMode != PresentationState.PoseMode
+		|| Previous.HolderPlayerState != PresentationState.HolderPlayerState
+		|| Previous.RodActorId != PresentationState.RodActorId)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_rod_pose_received RodActorId=%s RodActorRevision=%lld Pose=%s Holder=%s OperatorCount=%d World=%s NetMode=%d Authority=%s LocalRole=%d"),
+			*PresentationState.RodActorId.ToString(), PresentationState.RodActorRevision,
+			*UEnum::GetValueAsString(PresentationState.PoseMode), *GetNameSafe(PresentationState.HolderPlayerState),
+			PresentationState.OperatorPlayerStates.Num(), *GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()),
+			HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(GetLocalRole()));
+	}
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 }
 

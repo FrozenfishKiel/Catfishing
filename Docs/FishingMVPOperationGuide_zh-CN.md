@@ -246,7 +246,7 @@ FishingSessionStateTree=/Game/Data/StateTrees/ST_FishingSession.ST_FishingSessio
 
 | 键 | InputAction | 用途 | 走哪条路 |
 |---|---|---|---|
-| **R** | `IA_PutDownFishingRod` | **鱼竿一键三态**：已在操作容器→离开 / 公共交互锚点附近且容器有容量→追加加入 / 否则→放自己的竿 | ✅ C++ 已实现，服务器按事实自动分派 |
+| **R** | `IA_PutDownFishingRod` | **鱼竿交互**：已在操作容器→离开 / 公共交互锚点附近且容器有容量→追加加入 / 否则→取出自己的竿并直接持握 | ✅ C++ 已实现，服务器按事实自动分派 |
 | **E** | `IA_Interact` | 准星交互/拾取；本地只选择 Current Target，真正拾取由服务器复核距离、视线和物品状态 | ✅ C++ 已实现，走 Native InputTag 而不是 Gameplay Ability |
 | **左键** | `IA_LMB` | 无会话→**长按预览抛物线（不蓄力）松手抛竿**；真咬窗→**提竿**（1 秒内=完美）；遛鱼→**按住拖** | 提竿/拖 ✅ C++；**抛竿预览+提交走蓝图**（5.2） |
 | **右键** | `IA_RMB` | 遛鱼时**按住松开线杯**（L_max 内确实自由出线时按配置恢复体力；线放尽重新绷紧后停止恢复） | ✅ C++（`UCatGA_FishingSlack`） |
@@ -287,7 +287,7 @@ Get Fishing Command Component      ← BlueprintPure，Controller 自己身上�
 
 ### 5.1 放竿 / 操作 / 离开 —— 已由 R 键 C++ 三态接管，**不用做蓝图**
 
-按 R 服务器自动分派 PlaceRod / OperateRod / LeaveRod。第一次 R 只部署空杆并播放放杆表现，第二次 R 才进入右侧主位，第三次 R 离开；不能把部署和使用合并。架杆不再要求靠近岸线，只要角色前方有坡度合法的实体地面即可；抛竿阶段仍受有效水域和射程限制。你只需要**接结果并缓存**：
+按 R 服务器自动分派 PlaceRod / OperateRod / LeaveRod。第一次 R 取出鱼竿后直接拿在手上，本人已占据主位；第二次 R 放下，第三次 R 拿起，后续循环。首次成功复制即为 `Held`，无需蓝图补发 OperateRod 或播放落地空竿过渡。取竿仍要求角色前方有坡度合法的实体地面，不要求靠近岸线；抛竿阶段仍受有效水域和射程限制。你只需要**接结果并缓存**：
 
 ```
 Get Fishing Command Component → Bind Event to On Result Received
@@ -384,8 +384,8 @@ Event BeginPlay
 |---|---|---|
 | 1 | PIE 启动 | `Event=run_started` 且 `Event=run_phase_entered ... Phase=DayActive` |
 | 2 | （自动）装配 | Equipment `Revision` 从 0 → 1，`RodDefinitionId = Rod_Basic` |
-| 3 | 在任意合法地面第一次按 R | 世界里出现无人操作的 Rod Actor并播放放杆表现；角色不吸附、不锁移动 |
-| 3.1 | 放置者再次按 R | 放置者进入右侧主位并开始操作，`OperatorPlayerStates.Num=1` |
+| 3 | 在任意合法地面第一次按 R | 鱼竿直接拿在手上，`Pose=Held`、`OperatorPlayerStates.Num=1`；角色不吸附、不锁移动 |
+| 3.1 | 本人再按 R，然后再次按 R | 先放下为 `Grounded`，再拿起为 `Held`；仍是同一个 Actor 和装备实例 |
 | 4 | 主位仍有人时，第二个玩家走近同一个公共交互锚点按 R | 第二人追加为编号 1；两端都看到 `OperatorPlayerStates.Num=2` |
 | 4.1 | 编号 0 的玩家按 R 离开 | 原编号 1 自动变为 0、按新编号重新站位并接管当前会话；若容器为空，搏斗才进入无人值守松线 |
 | 5 | 瞄水面按住再松开左键 | `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去 |

@@ -465,15 +465,23 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 	if (!Rod || !Rod->ConfigureCanonicalAnchorsFromAuthority(UsedRodDefinition->RodTipLocalTransform,
 		UsedRodDefinition->StandLocalTransform, UsedRodDefinition->GripLocalTransform)
 		|| !Rod->InitializeAuthoritativeIdentity(RodActorId, UseResult.Item.ItemInstanceId,
-			UseResult.Item.DefinitionId, Loadout.RodSkinDefinitionId, PlayerState, nullptr, true,
-			UseResult.Item.bRodBroken))
+			UseResult.Item.DefinitionId, Loadout.RodSkinDefinitionId, PlayerState, PlayerState, true,
+			UseResult.Item.bRodBroken)
+		|| !Rod->RefreshHeldTransformFromAuthority())
 	{
 		if (Rod) Rod->Destroy();
 		RollbackUsedRod();
 		Result.Error = ECatFishingCommandError::DependencyUnavailable;
 		Result.EquipmentRevision = Equipment->GetSnapshot().Revision;
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_rod_place_rejected RequestId=%s RodActorId=%s Stage=PrepareHeldRod Error=DependencyUnavailable World=%s Authority=true LocalRole=%d %s"),
+			*Command.RequestId.ToString(), *RodActorId.ToString(), *GetNameSafe(World),
+			static_cast<int32>(Controller->GetLocalRole()), *CatLogContext::BuildControllerFields(Controller));
 		return Result;
 	}
+	// 首次取竿直接占主位，并在 Construction/BeginPlay 发布表现前对齐握把，避免先显示地面空竿。
+	// 不额外提交 OperateRod：库存只 Use 一次，初始复制即携带同一份 Held 身份与姿态。
+	// 传回原始 SpawnTransform，让 FinishSpawning 保留已更新的根变换，不再叠加一次相对初始落点的位移。
 	Rod->FinishSpawning(SpawnTransform);
 	if (!RegisterDeployedRod(PlayerState, Rod))
 	{
@@ -483,18 +491,19 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		Result.EquipmentRevision = Equipment->GetSnapshot().Revision;
 		return Result;
 	}
-	// PlaceRod 只提交“鱼竿已部署且暂时无人操作”这一件事实，不能在同一帧顺带占用主位。
-	// 第一次 R 只生成 Grounded 鱼竿；第二次 R 由 OperateRod 原子写入主操作手并切到 Held。
+	// 后续 R 沿既有 LeaveRod / OperateRod 切换放下与拿起，不重复生成或占用库存。
 	Result.bCommitted = true;
 	Result.Error = ECatFishingCommandError::None;
 	Result.RodActorId = RodActorId;
 	Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
 	Result.EquipmentRevision = UseResult.EquipmentRevision;
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_rod_placed Rod=%s RodId=%s ItemInstance=%s Definition=%s Pose=Grounded EquipmentRevision=%lld %s"),
-		*GetNameSafe(Rod), *RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
+		TEXT("Event=fishing_rod_placed RequestId=%s Rod=%s RodActorId=%s ItemInstance=%s Definition=%s Pose=Held Holder=%s OperatorCount=%d RodActorRevision=%lld EquipmentRevision=%lld World=%s Authority=true LocalRole=%d %s"),
+		*Command.RequestId.ToString(), *GetNameSafe(Rod), *RodActorId.ToString(),
 		*UseResult.Item.ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-		*UseResult.Item.DefinitionId.ToString(), UseResult.EquipmentRevision,
+		*UseResult.Item.DefinitionId.ToString(), *GetNameSafe(Rod->GetPresentationState().HolderPlayerState),
+		Rod->GetOperatorCount(), Rod->GetPresentationState().RodActorRevision, UseResult.EquipmentRevision,
+		*GetNameSafe(World), static_cast<int32>(Controller->GetLocalRole()),
 		*CatLogContext::BuildControllerFields(Controller));
 	return Result;
 }

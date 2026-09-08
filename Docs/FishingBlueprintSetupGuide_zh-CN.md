@@ -113,9 +113,9 @@ Get Controller (Cast to ACatfishingPlayerController)
   → Get Fishing Command Component   ← 已是 BlueprintPure
 ```
 
-### 3.1 PlaceRod（放竿）
+### 3.1 PlaceRod（取出并持握鱼竿）
 
-触发时机：玩家手上没有已部署的竿，按下"放竿"键。
+触发时机：玩家没有占用鱼竿、附近没有可加入的竿且自己尚未部署鱼竿，按 R。成功后直接进入主位持握，无需再次调用 OperateRod。
 
 ```
 Get Player Character → Get Equipment Component → Get Snapshot   ← Revision
@@ -127,15 +127,15 @@ Make FCatPlaceRodCommand
 
 - 结果通过 `OnResultReceived`（`BlueprintAssignable` 委托）回调，或用 `TryGetResult(RequestId, OutResult)` 轮询
 - 成功后 `FCatFishingCommandResult` 里的 `RodActorId` / `RodActorRevision` / `EquipmentRevision` **要缓存下来**，BeginCast 要用
-- 失败常见原因：站的地面坡度不够平（服务器要求法线 Z ≥ 0.7）、站在水里（会判 `InvalidWaterTarget`）、已经有一根部署中的竿（`ActiveSessionExists`）
+- 失败常见原因：角色前方没有实体地面或地面太斜（`InvalidPayload`，法线 Z 必须 ≥ 0.7）、已经有一根部署中的竿（`ActiveSessionExists`）、没有可用装备或持握依赖无效（`DependencyUnavailable`）。水域合法性在抛竿时检查。
 
 ### 3.2 OperateRod（走近操作）
 
-**不需要写蓝图**——`UCatGA_FishingRodInteract` 已经原生实现，只要 `Cat.Input.Fishing.RodInteract` 绑好键位、Character 站在 `StandAnchor` 250cm 范围内按键即可，服务器会自动找到"我部署的那根竿"并把角色吸附过去。
+**不需要写蓝图**——`UCatGA_FishingRodInteract` 已经原生实现。首次 R 成功后已在持握；后续放下的鱼竿可在公共交互锚点 250cm 范围内按 R 拿起，也可加入仍有空位的其他玩家鱼竿。鱼竿跟随当前持有人，角色不会吸附到 StandAnchor，移动保持自由。
 
 ### 3.3 BeginCast（抛竿）
 
-触发时机：玩家已经是竿的 Operator（`OperateRod` 成功之后），瞄准水面按下"抛竿确认"键。
+触发时机：玩家已经是竿的主 Operator（首次 `PlaceRod` 成功，或 `OperateRod` 加入空主位之后），瞄准水面按下"抛竿确认"键。
 
 ```
 Line Trace（从摄像机沿准星方向），命中点作为 CandidateWorldPoint
@@ -216,8 +216,8 @@ Controller.Server Configure Equipment(
 
 1. PIE 启动，确认 `Event=run_phase_entered ... Phase=DayActive`
 2. 调 `ConfigureEquipment`，确认 Equipment `Revision` 从 0 变 1
-3. 按放竿键，确认 `PlaceRod` 结果 `bCommitted=true`，世界里出现 Rod Actor
-4. 走近竿，按互动键（`RodInteract`），确认角色被吸附到 `StandAnchor`
+3. 第一次按 R，确认 `PlaceRod` 结果 `bCommitted=true`，鱼竿直接拿在手上，本人已为主 Operator
+4. 再按 R 放下，再按 R 拿起；确认同一根竿在 `Grounded/Held` 之间切换，角色不吸附、不锁移动
 5. 瞄水面按抛竿确认键，确认 `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去后 `Phase` 最终变成 `Landed`（Hook 的 `BP_OnHookPresentationChanged` 应该收到一次带 `Landed` 的回调）
 6. 确认默认鱼饵下浮漂先慢浮至少 `MinimumBiteDelaySeconds`（当前 3 秒），再快速抖动 `BiteWarningSeconds`（当前 1.5 秒），然后下沉并进入 `Phase=TrueBiteWindow`；无窝/单份新窝中心/五份重叠新窝中心的平均总等待为20/14/6秒。
 7. 窗口内按住 Primary，确认提竿成功进 `HookedFight`

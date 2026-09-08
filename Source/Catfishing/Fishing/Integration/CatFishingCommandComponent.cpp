@@ -335,8 +335,12 @@ FCatFishingInputEdge UCatFishingCommandComponent::MakeDiscreteEdge()
 
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitRodInteract()
 {
-	// R 对应的鱼竿 Ability：具体是插竿/操作/离开由服务器根据当前竿状态三态判定，见 HandleAbilityCommandFromAuthority。
+	// R 对应的鱼竿 Ability：首次取竿即持握，后续拿起/放下由服务器按当前占位分派。
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_rod_interact_requested RequestId=%s InputSequence=%lld %s"),
+		*Edge.RequestId.ToString(), Edge.InputSequence,
+		*BuildRodAimControllerFields(Cast<APlayerController>(GetOwner())));
 	DispatchAbilityCommand(ECatFishingCommandType::OperateRod, Edge);
 	return Edge;
 }
@@ -683,7 +687,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		// R 的鱼竿三态（服务器按当前事实分派，客户端不需要知道自己处于哪一态；多人：竿不限竿主）：
 		//   正在操作某根竿（自己的或别人的） → LeaveRod（离开竿位，自由活动）
 		//   公共交互锚点附近且容器仍有容量      → OperateRod（追加编号，共享同一根竿的会话）
-		//   附近没有可加入的竿               → PlaceRod（在脚下放自己的竿；已有部署竿会被服务器拒绝）
+		//   附近没有可加入的竿               → PlaceRod（取出自己的竿并直接持握；已有部署竿会被服务器拒绝）
 		// R 在会话期间同样可用（多人接力钓别人竿）：
 		//   任意阶段离开 → 只释放竿位和持续输入，会话、竿、钩与鱼都保持；
 		//   玩家可去另一根空竿抛线，之后再回到原竿继续；等口与搏斗阶段都允许其他玩家接力。
@@ -714,7 +718,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				DeliverResultFromAuthority(Fishing->OperateRod(Controller, OperateCommand));
 				return;
 			}
-			// 分支三：近旁没有可接管的竿 → 在脚下放一根自己的竿；装备 Revision 由服务器当前事实读取，不信任客户端
+			// 分支三：近旁没有可接管的竿 → 取出自己的竿并直接持握；装备 Revision 由服务器当前事实读取，不信任客户端
 			FCatPlaceRodCommand PlaceCommand;
 			PlaceCommand.RequestId = Edge.RequestId;
 			PlaceCommand.ExpectedEquipmentRevision = Character && Character->GetEquipmentComponent()
@@ -1349,6 +1353,16 @@ void UCatFishingCommandComponent::ReceiveResultLocally(const FCatFishingCommandR
 			*Result.RequestId.ToString(), *Result.FishingSessionId.ToString(), *UEnum::GetValueAsString(Result.CommandType),
 			Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
 			*BuildRodAimControllerFields(Cast<APlayerController>(GetOwner())));
+	}
+	if (Result.CommandType == ECatFishingCommandType::PlaceRod
+		|| Result.CommandType == ECatFishingCommandType::OperateRod
+		|| Result.CommandType == ECatFishingCommandType::LeaveRod)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_rod_result_received RequestId=%s RodActorId=%s RodActorRevision=%lld Command=%s Committed=%s Error=%s %s"),
+			*Result.RequestId.ToString(), *Result.RodActorId.ToString(), Result.RodActorRevision,
+			*UEnum::GetValueAsString(Result.CommandType), Result.bCommitted ? TEXT("true") : TEXT("false"),
+			*UEnum::GetValueAsString(Result.Error), *BuildRodAimControllerFields(Cast<APlayerController>(GetOwner())));
 	}
 	// 通知所有订阅者（通常是 GA/UI）这条命令有了终态结果
 	OnResultReceived.Broadcast(Result);

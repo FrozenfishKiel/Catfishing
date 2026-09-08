@@ -301,11 +301,11 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 	const FCatFishingRodPresentationState RodFirst = Rod->GetPresentationState();
 	TestEqual(TEXT("rod starts at revision one"), RodFirst.RodActorRevision, int64{1});
 	TestEqual(TEXT("rod publishes immutable item instance identity"), RodFirst.ItemInstanceId, RodItemInstanceId);
-	TestTrue(TEXT("first place transition deploys the rod"), RodFirst.bDeployed);
-	TestEqual(TEXT("first place transition leaves all operator slots empty"), Rod->GetOperatorCount(), 0);
-	TestNull(TEXT("first place transition has no primary operator"), RodFirst.OperatorPlayerState);
+	TestTrue(TEXT("explicit empty initialization deploys the rod"), RodFirst.bDeployed);
+	TestEqual(TEXT("explicit empty initialization leaves all operator slots empty"), Rod->GetOperatorCount(), 0);
+	TestNull(TEXT("explicit empty initialization has no primary operator"), RodFirst.OperatorPlayerState);
 	TestNull(TEXT("grounded rod has no holder"), RodFirst.HolderPlayerState);
-	TestEqual(TEXT("first place transition is grounded"), RodFirst.PoseMode, ECatFishingRodPoseMode::Grounded);
+	TestEqual(TEXT("explicit empty initialization is grounded"), RodFirst.PoseMode, ECatFishingRodPoseMode::Grounded);
 	TestTrue(TEXT("rod exact identity replay succeeds"), Rod->InitializeAuthoritativeIdentity(
 		RodId, RodItemInstanceId, TEXT("Rod"), TEXT("SkinB"), Owner, Owner, false, true));
 	TestEqual(TEXT("rod replay preserves state"), Rod->GetPresentationState().RodSkinDefinitionId, RodFirst.RodSkinDefinitionId);
