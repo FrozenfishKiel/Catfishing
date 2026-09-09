@@ -122,13 +122,13 @@ private:
 	/** 移除全局加载遮罩并清空最后阶段文本与本地过渡记忆；它不改变 Online 操作，只释放本地 UMG 表现。 */
 	void HideGlobalLoadingScreen();
 
-	/** 请求在完成态进入一次 Slate 刷新周期后移除全局遮罩；Start/Leave 已完成但最后一帧状态还需要交给 UI 系统呈现时调用。 */
+	/** 请求在完成态短暂停留后移除全局遮罩；Start/Leave 已完成但玩家还需要看清 100% 或完成状态时调用。 */
 	void RequestGlobalLoadingDismissalAfterPresentation(ECatOnlineOperation CompletedOperation);
 
-	/** 全局遮罩完成态刷新后的回调；它只响应 Slate PostTick 来收起遮罩，不按时间等待。 */
+	/** 全局遮罩完成态停留的刷新回调；它只在 Slate 刷新周期里检查展示时长是否到达，不参与加载进度。 */
 	void HandleGlobalLoadingDismissalPostTick(float DeltaTime);
 
-	/** 清理全局遮罩完成态绘制回调；隐藏遮罩、错误收口或重新进入等待态时都要成对移除。 */
+	/** 清理全局遮罩完成态停留回调；隐藏遮罩、错误收口或重新进入等待态时都要成对移除。 */
 	void ClearGlobalLoadingDismissalPostTick();
 
 	/** 将当前表现快照写入全局 Loading WBP；进入游戏显示合成总进度，返回主菜单折叠进度条。 */
@@ -197,16 +197,19 @@ private:
 	/** 当前全局遮罩跟随的请求关联键；新 Start/Leave 请求会覆盖它，日志和迟到 UI 刷新可据此识别同一段等待。 */
 	FGuid GlobalLoadingRequestId;
 
-	/** 是否已经安排在完成态绘制后移除遮罩；它代表 UI 收口等待，不代表 Online 还有加载任务。 */
+	/** 是否已经安排在完成态停留后移除遮罩；它代表 UI 收口等待，不代表 Online 还有加载任务。 */
 	bool bGlobalLoadingDismissalPending = false;
 
-	/** 正在等待完成态绘制的操作类型；用于把 Start 和 Leave 的最后一帧状态写成不同文案。 */
+	/** 正在等待完成态停留的操作类型；用于把 Start 和 Leave 的最后一段状态写成不同文案。 */
 	ECatOnlineOperation GlobalLoadingDismissalOperation = ECatOnlineOperation::None;
 
-	/** 正在等待完成态绘制的请求关联键；用于日志定位最后一帧对应哪一次 Start/Leave。 */
+	/** 正在等待完成态停留的请求关联键；用于日志定位这段完成展示对应哪一次 Start/Leave。 */
 	FGuid GlobalLoadingDismissalRequestId;
 
-	/** Slate PostTick 通知 UI 收口的句柄；只用于撤遮罩时成对解绑，不驱动加载进度。 */
+	/** 全局加载完成态允许撤遮罩的最早单调时间，单位秒；只在真实完成后写入，值到达前不改变任何 Online 状态。 */
+	double GlobalLoadingDismissalReadyTimeSeconds = 0.0;
+
+	/** Slate PostTick 通知 UI 收口的句柄；只用于完成态停留期间成对解绑，不驱动加载进度。 */
 	FDelegateHandle GlobalLoadingDismissalPostTickHandle;
 
 	/** 当前 LocalPlayer 的 Frontend 流程协调器；它只持有流程、确认槽位和命令等待事实，Root 按明确意图调用它。 */

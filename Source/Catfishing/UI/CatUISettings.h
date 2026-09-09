@@ -56,6 +56,9 @@ public:
 	/** 返回项目唯一 Gameplay Mapping Context；UI 只解析资产接线，不安装第二套 Context。 */
 	UInputMappingContext* LoadGameplayInputMappingContext() const;
 
+	/** 返回全局加载完成态最短展示秒数；调用方只在真实完成后读取它控制撤遮罩时机，不用它推进加载进度。 */
+	float GetGlobalLoadingCompletionHoldSeconds() const;
+
 	/** 从正式 IMC 中解析背包开关 Action 的第一个按键名；解析失败时返回 None。 */
 	FName ResolveInventoryToggleKeyName() const;
 
@@ -108,5 +111,9 @@ public:
 	/** 背包开关所在的项目唯一 Mapping Context；它只用于资产接线和键名解析，不由 UI PageController 重复安装。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Input")
 	TSoftObjectPtr<UInputMappingContext> GameplayInputMappingContext;
+
+	/** 全局加载遮罩完成态的最短停留时间，单位秒；只影响真实加载完成后的视觉收口，不参与 Online 状态、资源加载或进度合成。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Loading", meta = (ClampMin = "0.0", UIMin = "0.0", UIMax = "1.0"))
+	float GlobalLoadingCompletionHoldSeconds = 0.35f;
 
 };

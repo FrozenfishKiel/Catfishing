@@ -365,9 +365,9 @@ void UCatLocalPlayerUISubsystem::RefreshFrontendForCurrentController()
 }
 
 // 全局遮罩刷新流程：
-// 1. 先记录本次刷新前仍在跟随的 Start/Leave 请求，方便完成态同帧到达时还能写出最后一帧状态。
-// 2. 再按 Online、引擎和本地 UI 就绪事实决定显示；仍在真实等待时取消延迟移除并刷新正式 WBP。
-// 3. 已经真实完成时请求完成态经过一次 Slate 刷新周期，再移除遮罩；错误或非 Start/Leave 状态则立刻释放。
+// 1. 先记录本次刷新前仍在跟随的 Start/Leave 请求，方便完成态同帧到达时还能写出完成状态。
+// 2. 再按 Online、引擎和本地 UI 就绪事实决定显示；仍在真实等待时取消完成态停留并刷新正式 WBP。
+// 3. 已经真实完成时只进入视觉层的短暂完成展示，再移除遮罩；错误或非 Start/Leave 状态则立刻释放。
 void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot)
 {
 	const ECatOnlineOperation PreviousLoadingOperation = GlobalLoadingOperation;
@@ -600,7 +600,7 @@ void UCatLocalPlayerUISubsystem::ShowGlobalLoadingScreen(const FCatGlobalLoading
 	RefreshGlobalLoadingScreenPresentation(Presentation);
 }
 
-// 全局遮罩隐藏流程：先成对解绑完成态绘制回调并清掉本地 Start/Leave 过渡记忆，再移除最高层 WBP 和文本缓存；Online 终态和错误展示仍由对应 Controller/Model 自己处理。
+// 全局遮罩隐藏流程：先成对解绑完成态停留回调并清掉本地 Start/Leave 过渡记忆，再移除最高层 WBP 和文本缓存；Online 终态和错误展示仍由对应 Controller/Model 自己处理。
 void UCatLocalPlayerUISubsystem::HideGlobalLoadingScreen()
 {
 	ClearGlobalLoadingDismissalPostTick();
@@ -619,9 +619,9 @@ void UCatLocalPlayerUISubsystem::HideGlobalLoadingScreen()
 }
 
 // 完成态遮罩移除请求流程：
-// 1. 根据刚完成的 Start/Leave 写入最后一帧真实完成文案，Start 明确显示总进度 100%，Leave 仍不显示进度条。
-// 2. 若 Slate 可用则注册 PostTick 回调，让完成文案至少进入一次界面刷新周期；不可用时直接清理，不构造时间兜底。
-// 3. 重复请求只刷新同一个遮罩和同一个回调句柄，不增加第二条等待路径。
+// 1. 根据刚完成的 Start/Leave 写入真实完成文案，Start 明确显示总进度 100%，Leave 仍不显示进度条。
+// 2. 从 UI 设置读取最短展示秒数并换成单调时间；这段等待发生在加载全部完成之后，只服务玩家看清完成态。
+// 3. 若 Slate 可用则注册 PostTick 回调按界面刷新周期检查到点时间；PostTick 只是展示层检查点，不构造加载兜底。
 void UCatLocalPlayerUISubsystem::RequestGlobalLoadingDismissalAfterPresentation(
 	const ECatOnlineOperation CompletedOperation)
 {
@@ -639,7 +639,7 @@ void UCatLocalPlayerUISubsystem::RequestGlobalLoadingDismissalAfterPresentation(
 		Presentation.HeadingText = FText::FromString(TEXT("正在进入游戏"));
 		Presentation.StatusText = FText::FromString(TEXT("游戏世界准备完成。"));
 		Presentation.DetailText = FText::FromString(TEXT("本地玩家界面已就绪。"));
-		Presentation.ReasonText = FText::FromString(TEXT("等待本轮界面绘制完成后移除遮罩。"));
+		Presentation.ReasonText = FText::FromString(TEXT("准备完成，马上开始旅程。"));
 		Presentation.bShowProgressBar = true;
 		Presentation.bHasProgressPercent = true;
 		Presentation.ProgressPercent = 100.0f;
@@ -648,12 +648,15 @@ void UCatLocalPlayerUISubsystem::RequestGlobalLoadingDismissalAfterPresentation(
 	{
 		Presentation.HeadingText = FText::FromString(TEXT("正在返回主菜单"));
 		Presentation.StatusText = FText::FromString(TEXT("主菜单准备完成。"));
-		Presentation.DetailText = FText::FromString(TEXT("Frontend Root 已进入视口。"));
-		Presentation.ReasonText = FText::FromString(TEXT("等待本轮界面绘制完成后移除遮罩。"));
+		Presentation.DetailText = FText::FromString(TEXT("主菜单界面已就绪。"));
+		Presentation.ReasonText = FText::FromString(TEXT("准备完成，马上返回主菜单。"));
 		Presentation.bShowProgressBar = false;
 		Presentation.bHasProgressPercent = false;
 	}
 	ShowGlobalLoadingScreen(Presentation);
+	const UCatUISettings* UISettings = GetDefault<UCatUISettings>();
+	const double HoldSeconds = UISettings ? UISettings->GetGlobalLoadingCompletionHoldSeconds() : 0.0;
+	GlobalLoadingDismissalReadyTimeSeconds = FPlatformTime::Seconds() + HoldSeconds;
 	if (!FSlateApplication::IsInitialized())
 	{
 		HideGlobalLoadingScreen();
@@ -666,13 +669,17 @@ void UCatLocalPlayerUISubsystem::RequestGlobalLoadingDismissalAfterPresentation(
 	}
 }
 
-// 完成态刷新后收口流程：只响应已经安排过的完成态请求；Slate PostTick 说明当前完成文案已经交给界面刷新周期，然后移除遮罩并清理本地 UI 记忆。
+// 完成态停留后收口流程：只响应已经安排过的完成态请求；每次 Slate PostTick 都只检查真实时间是否越过最短展示点，未到点时继续保留遮罩且不改写 Online 状态。
 void UCatLocalPlayerUISubsystem::HandleGlobalLoadingDismissalPostTick(const float DeltaTime)
 {
 	(void)DeltaTime;
 	if (!bGlobalLoadingDismissalPending)
 	{
 		ClearGlobalLoadingDismissalPostTick();
+		return;
+	}
+	if (FPlatformTime::Seconds() < GlobalLoadingDismissalReadyTimeSeconds)
+	{
 		return;
 	}
 	const ECatOnlineOperation CompletedOperation = GlobalLoadingDismissalOperation;
@@ -686,7 +693,7 @@ void UCatLocalPlayerUISubsystem::HandleGlobalLoadingDismissalPostTick(const floa
 	HideGlobalLoadingScreen();
 }
 
-// 完成态绘制回调清理流程：如果曾经注册 Slate PostTick 就成对移除；随后清空完成态请求字段，避免新一次 Start/Leave 继承旧完成帧。
+// 完成态停留回调清理流程：如果曾经注册 Slate PostTick 就成对移除；随后清空完成态请求字段，避免新一次 Start/Leave 继承旧完成展示。
 void UCatLocalPlayerUISubsystem::ClearGlobalLoadingDismissalPostTick()
 {
 	if (GlobalLoadingDismissalPostTickHandle.IsValid() && FSlateApplication::IsInitialized())
@@ -697,6 +704,7 @@ void UCatLocalPlayerUISubsystem::ClearGlobalLoadingDismissalPostTick()
 	bGlobalLoadingDismissalPending = false;
 	GlobalLoadingDismissalOperation = ECatOnlineOperation::None;
 	GlobalLoadingDismissalRequestId.Invalidate();
+	GlobalLoadingDismissalReadyTimeSeconds = 0.0;
 }
 
 // 全局遮罩表现刷新流程：
