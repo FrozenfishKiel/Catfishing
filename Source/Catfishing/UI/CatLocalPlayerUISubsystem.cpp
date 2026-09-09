@@ -38,26 +38,10 @@ namespace CatLocalPlayerUILoadingScreen
 	/** 正式 Loading WBP 的固定类路径；它原本属于 Frontend 资产组，现在直接由 LocalPlayer UI 挂成全局遮罩。 */
 	constexpr const TCHAR* WidgetClassPath = TEXT("/Game/UI/Frontend/WBP_CatFrontendLoading.WBP_CatFrontendLoading_C");
 
-	/** 进入游戏的包加载只占前段整体感知进度；后续旅行、BeginPlay 和 UI 就绪必须继续等待真实状态。 */
-	constexpr float GameplayPackageProgressStart = 5.0f;
-
-	/** 玩法地图包预载完成后保留的阶段上限；它故意低于 100，避免“包完成”被误读为“已经可玩”。 */
-	constexpr float GameplayPackageProgressEnd = 70.0f;
-
-	/** 旅行请求已经交给引擎时的阶段位置；数值只跟状态跳变，不随时间增长。 */
-	constexpr float GameplayTravelQueuedProgress = 78.0f;
-
-	/** 引擎 LoadMap 或 PendingNetGame 仍在处理时的阶段位置；它表达真实 gate 还没放行，不是假进度。 */
-	constexpr float GameplayEngineLoadingProgress = 88.0f;
-
-	/** 目标玩法 World 已出现但 HUD/Pawn/UI 还没装配完成时的阶段位置；完成后直接隐藏而不是停在 100。 */
-	constexpr float GameplayUIPendingProgress = 95.0f;
-
-	// 进入游戏进度映射流程：把引擎包加载百分比压到整体流程前段，后面的切图和 UI 就绪不再复用包进度。
-	static float MapGameplayPackageProgress(const float PackagePercent)
+	// 可见百分比裁剪流程：AsyncLoading 偶尔会在最终回调前报告 100；遮罩仍在等真实回调时保留 99，避免把“包读完”误说成“已经可玩”。
+	static float ClampVisiblePackageProgressWhilePending(const float PackagePercent)
 	{
-		const float ClampedPackagePercent = FMath::Clamp(PackagePercent, 0.0f, 100.0f);
-		return FMath::Lerp(GameplayPackageProgressStart, GameplayPackageProgressEnd, ClampedPackagePercent / 100.0f);
+		return FMath::Min(FMath::Clamp(PackagePercent, 0.0f, 100.0f), 99.0f);
 	}
 
 	// Start 等待识别流程：只认 Online 明确的 Start、玩法包预载、玩法旅行排队或正在前往 Lake 的状态。
@@ -368,19 +352,19 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 	if (bGameplayStartPending && !IsGameplayLoadingReadyToDismiss(Snapshot))
 	{
 		OutPresentation.HeadingText = FText::FromString(TEXT("正在进入游戏"));
-		OutPresentation.bShowProgressBar = true;
 		if (Snapshot.bIsGameplayLoadPending)
 		{
-			const int32 PackageDisplayPercent = FMath::RoundToInt(FMath::Clamp(Snapshot.MapLoadProgressPercent, 0.0f, 100.0f));
+			const float VisiblePackagePercent = CatLocalPlayerUILoadingScreen::ClampVisiblePackageProgressWhilePending(
+				Snapshot.MapLoadProgressPercent);
+			const int32 PackageDisplayPercent = FMath::RoundToInt(VisiblePackagePercent);
 			OutPresentation.StatusText = FText::FromString(TEXT("正在读取游戏世界"));
 			OutPresentation.DetailText = Snapshot.bHasMapLoadProgress
 				? FText::FromString(FString::Printf(TEXT("地图包加载 %d%%"), PackageDisplayPercent))
 				: FText::FromString(TEXT("等待引擎提供地图包进度。"));
 			OutPresentation.ReasonText = FText::FromString(TEXT("等待 LoadPackageAsync 完成。"));
+			OutPresentation.bShowProgressBar = Snapshot.bHasMapLoadProgress;
 			OutPresentation.bHasProgressPercent = Snapshot.bHasMapLoadProgress;
-			OutPresentation.ProgressPercent = Snapshot.bHasMapLoadProgress
-				? CatLocalPlayerUILoadingScreen::MapGameplayPackageProgress(Snapshot.MapLoadProgressPercent)
-				: CatLocalPlayerUILoadingScreen::GameplayPackageProgressStart;
+			OutPresentation.ProgressPercent = Snapshot.bHasMapLoadProgress ? VisiblePackagePercent : 0.0f;
 			return true;
 		}
 		FText EngineStatusText;
@@ -391,7 +375,6 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 			OutPresentation.StatusText = EngineStatusText;
 			OutPresentation.DetailText = EngineDetailText;
 			OutPresentation.ReasonText = EngineReasonText;
-			OutPresentation.ProgressPercent = CatLocalPlayerUILoadingScreen::GameplayEngineLoadingProgress;
 			return true;
 		}
 		if (Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake
@@ -400,7 +383,6 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 			OutPresentation.StatusText = FText::FromString(TEXT("正在切换到游戏世界。"));
 			OutPresentation.DetailText = FText::FromString(TEXT("等待 PostLoadMap 确认玩法地图。"));
 			OutPresentation.ReasonText = FText::FromString(TEXT("等待 ServerTravel 或 ClientTravel 完成。"));
-			OutPresentation.ProgressPercent = CatLocalPlayerUILoadingScreen::GameplayTravelQueuedProgress;
 			return true;
 		}
 		OutPresentation.StatusText = FText::FromString(TEXT("正在准备玩家界面。"));
@@ -425,7 +407,6 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 			OutPresentation.DetailText = FText::FromString(TEXT("等待玩家 UI 就绪确认。"));
 		}
 		OutPresentation.ReasonText = FText::FromString(TEXT("等待 LocalPlayer UI 装配完成。"));
-		OutPresentation.ProgressPercent = CatLocalPlayerUILoadingScreen::GameplayUIPendingProgress;
 		return true;
 	}
 	if (bReturnToMenuPending && !IsFrontendLoadingReadyToDismiss(Snapshot))
@@ -534,7 +515,7 @@ void UCatLocalPlayerUISubsystem::HideGlobalLoadingScreen()
 
 // 全局遮罩表现刷新流程：
 // 1. 先写高层目标和当前真实步骤，让玩家能看到正在等保存、销毁房间、切图还是 UI 装配。
-// 2. 只有 Presentation 标记有真实可展示百分比时才追加百分号；阶段里程碑只移动条，不把它写成“实际百分比”。
+// 2. 只有 Presentation 标记有真实可展示百分比时才显示进度条并追加百分号；不可量化阶段只更新文字。
 // 3. 返回主菜单和其它不可量化阶段会折叠进度条，后续可由资产侧替换成旋转动画，代码不做定时器兜底。
 void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreenPresentation(const FCatGlobalLoadingPresentation& Presentation)
 {
