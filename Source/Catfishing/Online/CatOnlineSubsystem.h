@@ -17,6 +17,7 @@ class UCatSaveSubsystem;
 class IOnlineSubsystem;
 class UNetDriver;
 class UPackage;
+struct FStreamableHandle;
 struct FCatRunTeardownResult;
 
 /** Online 快照变更通知；订阅者收到通知后重新读取只读 Snapshot，不持有平台对象。 */
@@ -70,7 +71,7 @@ public:
 	/** 接受服务器 Host exit 通知；并发先于关联键/角色校验拒绝且不覆盖活动关联键，Client 绕过主动离局策略复用 Destroy/Frontend 管线，返回后释放本机载荷。 */
 	FCatOnlineResult RequestRemoteHostExit(FGuid HostExitRequestId);
 
-	/** 组装当前四类事实、RequestId/epoch 与 opaque 摘要；实现只复制数据，不推进异步状态。 */
+	/** 组装当前四类事实、RequestId/epoch、opaque 摘要和真实加载进度；实现只复制 Online 已观察到的资源/包/旅行事实，不推进异步状态。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Online")
 	FCatOnlineSnapshot GetSnapshot() const;
 
@@ -130,8 +131,32 @@ private:
 	/** Host 玩法 World 已可接纳客户端后尝试写入 Steam Lobby ready；平台元数据不可写只阻止 Client 自动进图，Host 的 Lake 与 Session 保持成功态。 */
 	bool PublishLobbyReady();
 
-	/** Client 在真实 Lobby ready 且本 Lobby 尚未提交过 Start 时提交自身玩法包预载并计次；包成功后复核 ready 与 OSS 地址再 ClientTravel，失败只保留真实错误，不由本地时间再次发起 Start。 */
+	/** Client 在真实 Lobby ready 且本 Lobby 尚未提交过 Start 时提交自身玩法启动加载管线并计次；完成后复核 ready 与 OSS 地址再 ClientTravel，失败只保留真实错误。 */
 	void BeginClientGameplayPreload();
+
+	/** 启动进入游戏的 Lyra 式真实加载管线；先等配置软引用资源集合，再提交地图包预载，任一同步拒绝都会用当前 Start epoch 收口。 */
+	bool BeginGameplayStartPreloadPipeline(uint64 CallbackEpoch);
+
+	/** 提交进入玩法前必须预热的软资源集合；返回 true 表示真实 StreamableHandle 已接管等待，false 表示没有可等资源、已同步完成或已同步失败。 */
+	bool BeginGameplayStartupAssetsPreload(uint64 CallbackEpoch);
+
+	/** 提交玩法地图包的真实 LoadPackageAsync 预载；Host 和 Client 共用同一完成回调，成功后才进入各自旅行分支。 */
+	bool BeginGameplayMapPackagePreload(uint64 CallbackEpoch);
+
+	/** 从现有设置对象收集进入玩法前会被同步使用的软引用；只读取配置声明的资产，不扫描 Content 或按命名猜资源。 */
+	void CollectGameplayStartupAssetPaths(TArray<FSoftObjectPath>& OutAssetPaths) const;
+
+	/** 接收 StreamableHandle 的加载更新；只在当前 Start epoch 内写入资源集合进度并广播快照。 */
+	void HandleGameplayStartupAssetsPreloadUpdated(TSharedRef<FStreamableHandle> Handle, uint64 CallbackEpoch);
+
+	/** 接收玩法启动资源集合完成事件；成功后保留 handle 防止预热资源被 GC，并继续提交地图包预载。 */
+	void HandleGameplayStartupAssetsPreloadComplete(uint64 CallbackEpoch);
+
+	/** 接收玩法启动资源集合取消事件；只有当前 Start epoch 的真实取消会结束 Start，清理路径中的迟到取消会被 epoch 拒绝。 */
+	void HandleGameplayStartupAssetsPreloadCancelled(uint64 CallbackEpoch);
+
+	/** 释放玩法启动资源集合的 handle；Start 失败或返回前台后清空进度，Start 成功时保留已加载资源直到离开本局。 */
+	void ClearGameplayStartupAssetsPreload(bool bClearProgress);
 
 	/** 当前是否存在任意地图包预载请求；Start 和 Leave 共用该事实给 UI 判断全局遮罩是否有 Online 模型层来源。 */
 	bool IsAnyMapPreloadPending() const;
@@ -220,7 +245,7 @@ private:
 	/** 地图包名归类流程；只写 WorldState，不借包名猜测 NamedSession 或 NetDriver 终态。 */
 	bool SetWorldStateForPackage(const FString& PackageName);
 
-	/** 完成当前操作并清空错误；获准释放的 Leave 先等 Frontend 载荷清理，随后解绑回调、废止 epoch 并广播稳定快照。 */
+	/** 完成当前操作并清空错误；获准释放的 Leave 先等 Frontend 载荷清理，Start 成功保留玩法预热资源，其他终态解绑回调、废止 epoch 并广播稳定快照。 */
 	void FinishOperationSuccess();
 
 	/** 以结构化错误结束操作；已安全退出的 Leave 先释放载荷并保留原错，其他失败不释放。前台 Client Start 失败保留 Lobby、真实错误和已提交标记，用户显式离开后才会释放下一次进入机会。 */
@@ -319,8 +344,23 @@ private:
 	/** 当前 NamedSession 的真实占用连接数；从 SessionSettings/NumOpenPublicConnections 读取，不能读成员时也不扩展为伪成员。 */
 	int32 RoomCurrentPlayers = 0;
 
-	/** 当前 Host 或 Client Start 对应的 LoadPackageAsync 请求 ID；非 INDEX_NONE 表示等待引擎回调，取消、失败或旅行终态都会清空。 */
+	/** 当前 Host 或 Client Start 对应的 LoadPackageAsync 请求 ID；非 INDEX_NONE 表示地图包预载仍在等待引擎回调。 */
 	int32 GameplayPreloadRequestId = INDEX_NONE;
+
+	/** 当前 Start 预热的玩法启动资源 handle；它代表 UI、输入、鱼表、装备、钓鱼和 Run 等配置软引用的真实异步加载集合。 */
+	TSharedPtr<FStreamableHandle> GameplayStartupAssetsHandle;
+
+	/** 当前 Start 是否仍在等待玩法启动资源集合完成；StreamableHandle 完成前为 true，地图包预载开始后为 false。 */
+	bool bGameplayStartupAssetLoadPending = false;
+
+	/** 当前玩法启动资源集合是否已有可展示进度；只由 StreamableHandle 更新或完成事件写入。 */
+	bool bGameplayStartupAssetLoadProgressAvailable = false;
+
+	/** 当前玩法启动资源集合加载百分比，单位 0 到 100；来自 StreamableHandle::GetProgress，不按时间自增。 */
+	float CurrentGameplayStartupAssetLoadProgressPercent = 0.0f;
+
+	/** 当前玩法启动资源集合的可读阶段；UI 用它说明资源数量进展，日志用它定位卡住的加载阶段。 */
+	FString CurrentGameplayStartupAssetLoadProgressStatus;
 
 	/** 玩法地图预载成功后暂存的包对象；在 Host/Client 旅行提交和 PostLoadMap 收口之间保持强引用，防止 GC 卸载刚完成的包。 */
 	UPROPERTY(Transient)

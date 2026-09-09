@@ -53,39 +53,6 @@ namespace CatFrontendRoomModelText
 			return FText::FromString(TEXT("房间操作未完成。"));
 		}
 	}
-
-	/** 进入阶段文本只从 Online 快照派生，不新增前端阶段枚举：预载 pending 说明包还在引擎队列里，TravelQueued/TravelingToLake 说明全局遮罩保留原因已经转为地图旅行。 */
-	static FText MakeGameplayLoadStatusText(const FCatOnlineSnapshot& Snapshot)
-	{
-		if (Snapshot.LastError != ECatOnlineError::None)
-		{
-			return MakeErrorText(Snapshot.LastError);
-		}
-		if (Snapshot.ActiveOperation == ECatOnlineOperation::Start)
-		{
-			if (Snapshot.bIsGameplayLoadPending)
-			{
-				if (Snapshot.bHasMapLoadProgress)
-				{
-					return FText::FromString(FString::Printf(TEXT("%s %d%%。"),
-						*Snapshot.MapLoadProgressStatus, FMath::RoundToInt(Snapshot.MapLoadProgressPercent)));
-				}
-				return FText::FromString(TEXT("正在加载游戏世界。"));
-			}
-			if (Snapshot.TransportState == ECatOnlineTransportState::TravelQueued
-				|| Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake)
-			{
-				return FText::FromString(TEXT("预载完成，正在进入游戏世界。"));
-			}
-			return FText::FromString(TEXT("正在准备进入游戏世界。"));
-		}
-		if (Snapshot.TransportState == ECatOnlineTransportState::TravelQueued
-			|| Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake)
-		{
-			return FText::FromString(TEXT("正在进入游戏世界。"));
-		}
-		return FText::GetEmpty();
-	}
 }
 
 // 初始化流程：先成对拆除旧来源，再从 LocalPlayer 的 GameInstance 获取唯一 Online 子系统并订阅；绑定后立即读取已有快照，接住 Model 创建前到达的冷启动邀请或失败，来源缺失则发布不可用文本。
@@ -155,7 +122,7 @@ FCatOnlineResult UCatFrontendRoomModel::LeaveRoom()
 	return Result;
 }
 
-// 开始游戏流程：先由 Online 核验 Host、房间和已加载存档前置条件；受理后不在前端 Model 自行旅行，房间反馈与全局遮罩都从同一 Online 快照读取真实阶段。
+// 开始游戏流程：先由 Online 核验 Host、房间和已加载存档前置条件；受理后不在前端 Model 自行旅行，进入过程只交给 LocalPlayer 全局遮罩读取 Online 真实阶段。
 FCatOnlineResult UCatFrontendRoomModel::StartGame()
 {
 	UCatOnlineSubsystem* OnlineSubsystem = Online.Get();
@@ -231,12 +198,6 @@ bool UCatFrontendRoomModel::CanStartGame() const
 		&& Snapshot.SessionState == ECatOnlineSessionState::Host
 		&& Snapshot.ActiveOperation == ECatOnlineOperation::None
 		&& !Snapshot.bIsGameplayLoadPending;
-}
-
-// 进入阶段读取流程：读取当前 Online 快照并只做展示语义转换；百分比来自 Online 的引擎包进度，缺失时不在前端 Model 里补假值。
-FText UCatFrontendRoomModel::GetGameplayLoadStatusText() const
-{
-	return CatFrontendRoomModelText::MakeGameplayLoadStatusText(GetSnapshot());
 }
 
 // Online 通知流程：先读取唯一快照，错误优先，其次为已接受邀请的有界等待和真实 Join 提交生成文本，其他状态清除旧文本；最后广播，Controller 再读取房间事实决定显示，不要求玩家再次确认邀请。

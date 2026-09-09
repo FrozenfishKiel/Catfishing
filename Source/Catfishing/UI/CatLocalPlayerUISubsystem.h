@@ -97,7 +97,7 @@ private:
 		/** 进度值是否允许对外显示成百分号；进入游戏使用真实 gate 合成值，退出主菜单不显示百分号。 */
 		bool bHasProgressPercent = false;
 
-		/** 遮罩条形控件使用的百分制总进度；只由 Start、包加载、Travel、World、BeginPlay、Transport 和本地 UI 的真实完成事实累加。 */
+		/** 遮罩条形控件使用的百分制总进度；只由 Start 受理、玩法软资源预热、地图包加载、Travel、World、BeginPlay、Transport 和本地 UI 的真实完成事实累加。 */
 		float ProgressPercent = 0.0f;
 	};
 
@@ -122,10 +122,19 @@ private:
 	/** 移除全局加载遮罩并清空最后阶段文本与本地过渡记忆；它不改变 Online 操作，只释放本地 UMG 表现。 */
 	void HideGlobalLoadingScreen();
 
+	/** 请求在完成态进入一次 Slate 刷新周期后移除全局遮罩；Start/Leave 已完成但最后一帧状态还需要交给 UI 系统呈现时调用。 */
+	void RequestGlobalLoadingDismissalAfterPresentation(ECatOnlineOperation CompletedOperation);
+
+	/** 全局遮罩完成态刷新后的回调；它只响应 Slate PostTick 来收起遮罩，不按时间等待。 */
+	void HandleGlobalLoadingDismissalPostTick(float DeltaTime);
+
+	/** 清理全局遮罩完成态绘制回调；隐藏遮罩、错误收口或重新进入等待态时都要成对移除。 */
+	void ClearGlobalLoadingDismissalPostTick();
+
 	/** 将当前表现快照写入全局 Loading WBP；进入游戏显示合成总进度，返回主菜单折叠进度条。 */
 	void RefreshGlobalLoadingScreenPresentation(const FCatGlobalLoadingPresentation& Presentation);
 
-	/** 合成进入玩法的总进度；Start、地图包、Travel、World、BeginPlay、Connected 和本地 UI 都必须来自真实 gate，不在显示层改写。 */
+	/** 合成进入玩法的总进度；Start、玩法软资源预热、地图包、Travel、World、BeginPlay、Connected 和本地 UI 都必须来自真实 gate，不在显示层改写。 */
 	float GetGameplayLoadingProgressPercent(const FCatOnlineSnapshot& Snapshot) const;
 
 	/** 根据最新 Online 快照更新 Start/Leave 过渡记忆；这份记忆只延续真实请求到 UI 就绪事件，不承担完成判断。 */
@@ -187,6 +196,18 @@ private:
 
 	/** 当前全局遮罩跟随的请求关联键；新 Start/Leave 请求会覆盖它，日志和迟到 UI 刷新可据此识别同一段等待。 */
 	FGuid GlobalLoadingRequestId;
+
+	/** 是否已经安排在完成态绘制后移除遮罩；它代表 UI 收口等待，不代表 Online 还有加载任务。 */
+	bool bGlobalLoadingDismissalPending = false;
+
+	/** 正在等待完成态绘制的操作类型；用于把 Start 和 Leave 的最后一帧状态写成不同文案。 */
+	ECatOnlineOperation GlobalLoadingDismissalOperation = ECatOnlineOperation::None;
+
+	/** 正在等待完成态绘制的请求关联键；用于日志定位最后一帧对应哪一次 Start/Leave。 */
+	FGuid GlobalLoadingDismissalRequestId;
+
+	/** Slate PostTick 通知 UI 收口的句柄；只用于撤遮罩时成对解绑，不驱动加载进度。 */
+	FDelegateHandle GlobalLoadingDismissalPostTickHandle;
 
 	/** 当前 LocalPlayer 的 Frontend 流程协调器；它只持有流程、确认槽位和命令等待事实，Root 按明确意图调用它。 */
 	UPROPERTY(Transient)

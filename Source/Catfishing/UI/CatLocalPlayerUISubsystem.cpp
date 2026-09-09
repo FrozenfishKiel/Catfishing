@@ -12,6 +12,7 @@
 #include "GameFramework/GameStateBase.h"
 #include "Logging/CatLog.h"
 #include "Online/CatOnlineSubsystem.h"
+#include "Framework/Application/SlateApplication.h"
 #include "UI/CatUISettings.h"
 #include "UI/Frontend/CatFrontendPageController.h"
 #include "UI/Frontend/CatFrontendRootWidget.h"
@@ -41,8 +42,11 @@ namespace CatLocalPlayerUILoadingScreen
 	/** Start 请求已被 Online 接受这一真实 gate 在总进度中的权重；它只在请求事实存在时计入。 */
 	constexpr float GameplayStartAcceptedWeight = 3.0f;
 
+	/** 玩法启动软资源预热在总进度中的权重；这一段按 StreamableHandle 的真实加载进度推进。 */
+	constexpr float GameplayStartupAssetWeight = 30.0f;
+
 	/** 地图包异步加载在总进度中的权重；这一段按引擎 LoadPackageAsync 的真实进度事件推进。 */
-	constexpr float GameplayPackageWeight = 65.0f;
+	constexpr float GameplayPackageWeight = 35.0f;
 
 	/** ServerTravel 或 ClientTravel 已提交这一真实 gate 在总进度中的权重。 */
 	constexpr float GameplayTravelSubmittedWeight = 6.0f;
@@ -77,7 +81,13 @@ namespace CatLocalPlayerUILoadingScreen
 		return GameplayPackageWeight * (PackagePercent / 100.0f);
 	}
 
-	// Start 等待识别流程：只认 Online 明确的 Start、玩法包预载、玩法旅行排队或正在前往 Lake 的状态。
+	// 启动软资源进度贡献流程：把 Online 从 StreamableHandle 读取到的真实百分比换成本项目总进度中的贡献值，显示层不做补值或限速。
+	static float GetStartupAssetProgressContribution(const float AssetPercent)
+	{
+		return GameplayStartupAssetWeight * (AssetPercent / 100.0f);
+	}
+
+	// Start 等待识别流程：只认 Online 明确的 Start、玩法启动资源预热、地图包预载、玩法旅行排队或正在前往 Lake 的状态。
 	static bool IsGameplayStartLoadingSnapshot(const FCatOnlineSnapshot& Snapshot)
 	{
 		return (Snapshot.ActiveOperation == ECatOnlineOperation::Start && Snapshot.RequestId.IsValid())
@@ -265,7 +275,7 @@ void UCatLocalPlayerUISubsystem::HandleOnlineSnapshotChanged()
 
 // Frontend 调和流程：
 // 1. 先读取当前 LocalPlayer、Controller 和 Online 快照；缺 LocalPlayer 或 Online 时拆掉 Root 与全局遮罩，避免旧 UI 脱离事实源继续显示。
-// 2. 全局遮罩先消费 Start/Leave 快照并独立入视口；Root 不再为了加载表现跨 World 保留。
+// 2. 全局遮罩先消费 Start/Leave 快照并独立入视口；Start 加载一旦成立，Root 立即拆除，避免旧前端在地图包异步加载期间继续创建动态行。
 // 3. 没有本地 Controller 时只允许已有 Root 在 Start 失败恢复保护窗内短暂保留；其它情况立即拆除。
 // 4. 非 Frontend World 只保留受保护的已有 Root，不在玩法图或异常 World 补建新主界面，避免旧前端变成第二入口。
 // 5. 已有 Root 直接复用；需要新建时必须仍处于 Frontend World，并且配置能加载正式 Root WBP，否则记录失败并保持无原生替身。
@@ -284,6 +294,24 @@ void UCatLocalPlayerUISubsystem::RefreshFrontendForCurrentController()
 	}
 	const FCatOnlineSnapshot Snapshot = Online->GetSnapshot();
 	RefreshGlobalLoadingScreen(Snapshot);
+	const bool bGameplayStartLoadingOwnsViewport = Snapshot.LastError == ECatOnlineError::None
+		&& CatLocalPlayerUILoadingScreen::IsGameplayStartLoadingSnapshot(Snapshot)
+		&& !IsGameplayLoadingReadyToDismiss(Snapshot);
+	if (bGameplayStartLoadingOwnsViewport)
+	{
+		if (FrontendRootWidget)
+		{
+			UE_LOG(LogCatUI, Log,
+				TEXT("Event=frontend_root_removed_for_global_loading RequestId=%s Epoch=%lld World=%s Operation=%s Transport=%s"),
+				*Snapshot.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+				Snapshot.OperationEpoch,
+				*GetNameSafe(GetWorld()),
+				*UEnum::GetValueAsString(Snapshot.ActiveOperation),
+				*UEnum::GetValueAsString(Snapshot.TransportState));
+		}
+		RemoveFrontendRoot();
+		return;
+	}
 	const bool bIsFrontendWorld = Snapshot.WorldState == ECatOnlineWorldState::Frontend;
 	const bool bShouldKeepExistingRoot = ShouldKeepExistingFrontendRoot(Snapshot);
 	if (!Controller || !Controller->IsLocalController())
@@ -336,14 +364,36 @@ void UCatLocalPlayerUISubsystem::RefreshFrontendForCurrentController()
 	RefreshGlobalLoadingScreen(Online->GetSnapshot());
 }
 
-// 全局遮罩刷新流程：先记录 Start/Leave 的真实过渡意图，再按 Online、引擎和本地 UI 就绪事实决定显示；没有真实等待原因时立刻释放遮罩。
+// 全局遮罩刷新流程：
+// 1. 先记录本次刷新前仍在跟随的 Start/Leave 请求，方便完成态同帧到达时还能写出最后一帧状态。
+// 2. 再按 Online、引擎和本地 UI 就绪事实决定显示；仍在真实等待时取消延迟移除并刷新正式 WBP。
+// 3. 已经真实完成时请求完成态经过一次 Slate 刷新周期，再移除遮罩；错误或非 Start/Leave 状态则立刻释放。
 void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot)
 {
+	const ECatOnlineOperation PreviousLoadingOperation = GlobalLoadingOperation;
+	const FGuid PreviousLoadingRequestId = GlobalLoadingRequestId;
+	const bool bHadVisibleLoadingScreen = GlobalLoadingScreenWidget && GlobalLoadingScreenWidget->IsInViewport();
 	TrackGlobalLoadingTransition(Snapshot);
 	FCatGlobalLoadingPresentation Presentation;
 	if (ShouldShowGlobalLoadingScreen(Snapshot, Presentation))
 	{
+		ClearGlobalLoadingDismissalPostTick();
 		ShowGlobalLoadingScreen(Presentation);
+		return;
+	}
+	const bool bCanPresentGameplayCompletion = PreviousLoadingOperation == ECatOnlineOperation::Start
+		&& IsGameplayLoadingReadyToDismiss(Snapshot);
+	const bool bCanPresentFrontendCompletion = PreviousLoadingOperation == ECatOnlineOperation::Leave
+		&& IsFrontendLoadingReadyToDismiss(Snapshot);
+	if (Snapshot.LastError == ECatOnlineError::None && bHadVisibleLoadingScreen
+		&& (bCanPresentGameplayCompletion || bCanPresentFrontendCompletion))
+	{
+		GlobalLoadingRequestId = PreviousLoadingRequestId;
+		RequestGlobalLoadingDismissalAfterPresentation(PreviousLoadingOperation);
+		return;
+	}
+	if (bGlobalLoadingDismissalPending && Snapshot.LastError == ECatOnlineError::None)
+	{
 		return;
 	}
 	HideGlobalLoadingScreen();
@@ -359,6 +409,7 @@ void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreenFromCurrentSnapshot()
 	{
 		GlobalLoadingOperation = ECatOnlineOperation::None;
 		GlobalLoadingRequestId.Invalidate();
+		ClearGlobalLoadingDismissalPostTick();
 		HideGlobalLoadingScreen();
 		return;
 	}
@@ -367,7 +418,7 @@ void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreenFromCurrentSnapshot()
 
 // 全局遮罩 gate 流程：
 // 1. 错误快照直接放行，让业务页面显示失败原因，不把失败藏在遮罩下面。
-// 2. 进入游戏时显示总进度；Start、地图包、Travel、World、BeginPlay、Connected 和本地 UI 都只按真实 gate 推进。
+// 2. 进入游戏时显示总进度；Start、玩法软资源预热、地图包、Travel、World、BeginPlay、Connected 和本地 UI 都只按真实 gate 推进。
 // 3. 返回主菜单时不显示进度条，只展示保存、拆局、销毁房间、切图和主菜单 UI 就绪这些真实步骤。
 // 4. Start/Leave 操作已结案但 UI 尚未就绪时，依靠本地过渡记忆继续显示，直到真实就绪事件触发刷新。
 bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
@@ -388,7 +439,18 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 		OutPresentation.bShowProgressBar = true;
 		OutPresentation.bHasProgressPercent = true;
 		OutPresentation.ProgressPercent = GetGameplayLoadingProgressPercent(Snapshot);
-		if (Snapshot.bIsGameplayLoadPending)
+		if (Snapshot.bIsGameplayStartupAssetLoadPending)
+		{
+			const int32 AssetDisplayPercent = FMath::RoundToInt(Snapshot.GameplayStartupAssetLoadProgressPercent);
+			OutPresentation.StatusText = FText::FromString(TEXT("正在预热游戏资源"));
+			OutPresentation.DetailText = Snapshot.bHasGameplayStartupAssetLoadProgress
+				? FText::FromString(FString::Printf(TEXT("%s %d%%"),
+					*Snapshot.GameplayStartupAssetLoadProgressStatus, AssetDisplayPercent))
+				: FText::FromString(TEXT("等待资源管理器返回启动资源加载阶段。"));
+			OutPresentation.ReasonText = FText::FromString(TEXT("等待 StreamableHandle 完成玩法启动资源预热。"));
+			return true;
+		}
+		if (Snapshot.bIsGameplayLoadPending && Snapshot.bIsMapPreloadPending)
 		{
 			const int32 PackageDisplayPercent = FMath::RoundToInt(Snapshot.MapLoadProgressPercent);
 			OutPresentation.StatusText = FText::FromString(TEXT("正在读取游戏世界"));
@@ -415,6 +477,14 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 			OutPresentation.StatusText = FText::FromString(TEXT("正在切换到游戏世界。"));
 			OutPresentation.DetailText = FText::FromString(TEXT("等待 PostLoadMap 确认玩法地图。"));
 			OutPresentation.ReasonText = FText::FromString(TEXT("等待 ServerTravel 或 ClientTravel 完成。"));
+			return true;
+		}
+		if (Snapshot.ActiveOperation == ECatOnlineOperation::Start
+			&& Snapshot.WorldState == ECatOnlineWorldState::Frontend)
+		{
+			OutPresentation.StatusText = FText::FromString(TEXT("正在准备游戏世界。"));
+			OutPresentation.DetailText = FText::FromString(TEXT("等待 Online 提交地图包预载。"));
+			OutPresentation.ReasonText = FText::FromString(TEXT("Start 操作已受理，等待 LoadPackageAsync 请求。"));
 			return true;
 		}
 		OutPresentation.StatusText = FText::FromString(TEXT("正在准备玩家界面。"));
@@ -530,9 +600,10 @@ void UCatLocalPlayerUISubsystem::ShowGlobalLoadingScreen(const FCatGlobalLoading
 	RefreshGlobalLoadingScreenPresentation(Presentation);
 }
 
-// 全局遮罩隐藏流程：先清掉本地 Start/Leave 过渡记忆，再移除最高层 WBP 和文本缓存；Online 终态和错误展示仍由对应 Controller/Model 自己处理。
+// 全局遮罩隐藏流程：先成对解绑完成态绘制回调并清掉本地 Start/Leave 过渡记忆，再移除最高层 WBP 和文本缓存；Online 终态和错误展示仍由对应 Controller/Model 自己处理。
 void UCatLocalPlayerUISubsystem::HideGlobalLoadingScreen()
 {
+	ClearGlobalLoadingDismissalPostTick();
 	GlobalLoadingOperation = ECatOnlineOperation::None;
 	GlobalLoadingRequestId.Invalidate();
 	if (!GlobalLoadingScreenWidget)
@@ -545,6 +616,87 @@ void UCatLocalPlayerUISubsystem::HideGlobalLoadingScreen()
 	GlobalLoadingScreenWidget->RemoveFromParent();
 	GlobalLoadingScreenWidget = nullptr;
 	LastGlobalLoadingStatusText = FText::GetEmpty();
+}
+
+// 完成态遮罩移除请求流程：
+// 1. 根据刚完成的 Start/Leave 写入最后一帧真实完成文案，Start 明确显示总进度 100%，Leave 仍不显示进度条。
+// 2. 若 Slate 可用则注册 PostTick 回调，让完成文案至少进入一次界面刷新周期；不可用时直接清理，不构造时间兜底。
+// 3. 重复请求只刷新同一个遮罩和同一个回调句柄，不增加第二条等待路径。
+void UCatLocalPlayerUISubsystem::RequestGlobalLoadingDismissalAfterPresentation(
+	const ECatOnlineOperation CompletedOperation)
+{
+	if (CompletedOperation != ECatOnlineOperation::Start && CompletedOperation != ECatOnlineOperation::Leave)
+	{
+		HideGlobalLoadingScreen();
+		return;
+	}
+	bGlobalLoadingDismissalPending = true;
+	GlobalLoadingDismissalOperation = CompletedOperation;
+	GlobalLoadingDismissalRequestId = GlobalLoadingRequestId;
+	FCatGlobalLoadingPresentation Presentation;
+	if (CompletedOperation == ECatOnlineOperation::Start)
+	{
+		Presentation.HeadingText = FText::FromString(TEXT("正在进入游戏"));
+		Presentation.StatusText = FText::FromString(TEXT("游戏世界准备完成。"));
+		Presentation.DetailText = FText::FromString(TEXT("本地玩家界面已就绪。"));
+		Presentation.ReasonText = FText::FromString(TEXT("等待本轮界面绘制完成后移除遮罩。"));
+		Presentation.bShowProgressBar = true;
+		Presentation.bHasProgressPercent = true;
+		Presentation.ProgressPercent = 100.0f;
+	}
+	else
+	{
+		Presentation.HeadingText = FText::FromString(TEXT("正在返回主菜单"));
+		Presentation.StatusText = FText::FromString(TEXT("主菜单准备完成。"));
+		Presentation.DetailText = FText::FromString(TEXT("Frontend Root 已进入视口。"));
+		Presentation.ReasonText = FText::FromString(TEXT("等待本轮界面绘制完成后移除遮罩。"));
+		Presentation.bShowProgressBar = false;
+		Presentation.bHasProgressPercent = false;
+	}
+	ShowGlobalLoadingScreen(Presentation);
+	if (!FSlateApplication::IsInitialized())
+	{
+		HideGlobalLoadingScreen();
+		return;
+	}
+	if (!GlobalLoadingDismissalPostTickHandle.IsValid())
+	{
+		GlobalLoadingDismissalPostTickHandle = FSlateApplication::Get().OnPostTick().AddUObject(
+			this, &ThisClass::HandleGlobalLoadingDismissalPostTick);
+	}
+}
+
+// 完成态刷新后收口流程：只响应已经安排过的完成态请求；Slate PostTick 说明当前完成文案已经交给界面刷新周期，然后移除遮罩并清理本地 UI 记忆。
+void UCatLocalPlayerUISubsystem::HandleGlobalLoadingDismissalPostTick(const float DeltaTime)
+{
+	(void)DeltaTime;
+	if (!bGlobalLoadingDismissalPending)
+	{
+		ClearGlobalLoadingDismissalPostTick();
+		return;
+	}
+	const ECatOnlineOperation CompletedOperation = GlobalLoadingDismissalOperation;
+	const FGuid CompletedRequestId = GlobalLoadingDismissalRequestId;
+	ClearGlobalLoadingDismissalPostTick();
+	UE_LOG(LogCatUI, Log,
+		TEXT("Event=ui_global_loading_dismissal_presented Operation=%d RequestId=%s LastStatus=\"%s\""),
+		static_cast<int32>(CompletedOperation),
+		*CompletedRequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		*LastGlobalLoadingStatusText.ToString());
+	HideGlobalLoadingScreen();
+}
+
+// 完成态绘制回调清理流程：如果曾经注册 Slate PostTick 就成对移除；随后清空完成态请求字段，避免新一次 Start/Leave 继承旧完成帧。
+void UCatLocalPlayerUISubsystem::ClearGlobalLoadingDismissalPostTick()
+{
+	if (GlobalLoadingDismissalPostTickHandle.IsValid() && FSlateApplication::IsInitialized())
+	{
+		FSlateApplication::Get().OnPostTick().Remove(GlobalLoadingDismissalPostTickHandle);
+	}
+	GlobalLoadingDismissalPostTickHandle.Reset();
+	bGlobalLoadingDismissalPending = false;
+	GlobalLoadingDismissalOperation = ECatOnlineOperation::None;
+	GlobalLoadingDismissalRequestId.Invalidate();
 }
 
 // 全局遮罩表现刷新流程：
@@ -598,7 +750,7 @@ void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreenPresentation(const FC
 
 // 进入游戏总进度合成流程：
 // 1. 先用 Online 的 Start/预载/旅行事实确认请求至少已经受理，再把这个事实计入总进度。
-// 2. 地图包阶段只消费引擎给出的真实 LoadPackageAsync 百分比，包完成后才计入完整包加载权重。
+// 2. 启动资源阶段只消费 StreamableHandle 百分比，地图包阶段只消费 LoadPackageAsync 事件百分比。
 // 3. 后续 Travel、LoadMap、World 到达、BeginPlay、Transport Connected、Controller/Pawn/HUD 和页面控制器只在对应真实 gate 成立时继续累加。
 // 4. 返回值保持由真实事实累加得出的结果；如果展示异常，应修正事实来源和权重对应关系，不在显示层改写数值。
 float UCatLocalPlayerUISubsystem::GetGameplayLoadingProgressPercent(const FCatOnlineSnapshot& Snapshot) const
@@ -610,6 +762,18 @@ float UCatLocalPlayerUISubsystem::GetGameplayLoadingProgressPercent(const FCatOn
 	if (bStartAccepted)
 	{
 		ProgressPercent += GameplayStartAcceptedWeight;
+	}
+	if (Snapshot.bIsGameplayStartupAssetLoadPending)
+	{
+		if (Snapshot.bHasGameplayStartupAssetLoadProgress)
+		{
+			ProgressPercent += GetStartupAssetProgressContribution(Snapshot.GameplayStartupAssetLoadProgressPercent);
+		}
+		return ProgressPercent;
+	}
+	if (Snapshot.bHasGameplayStartupAssetLoadProgress)
+	{
+		ProgressPercent += GameplayStartupAssetWeight;
 	}
 	if (Snapshot.bIsGameplayLoadPending)
 	{
@@ -629,6 +793,10 @@ float UCatLocalPlayerUISubsystem::GetGameplayLoadingProgressPercent(const FCatOn
 		|| Snapshot.TransportState == ECatOnlineTransportState::Connected;
 	if (bGameplayTravelSubmitted)
 	{
+		if (!Snapshot.bHasGameplayStartupAssetLoadProgress)
+		{
+			ProgressPercent += GameplayStartupAssetWeight;
+		}
 		ProgressPercent += GameplayPackageWeight;
 		ProgressPercent += GameplayTravelSubmittedWeight;
 	}
@@ -708,7 +876,7 @@ void UCatLocalPlayerUISubsystem::TrackGlobalLoadingTransition(const FCatOnlineSn
 	}
 }
 
-// 进入玩法收口流程：只有 Online 确认 Lake/Connected、引擎 World 已 BeginPlay，且本地 Controller 的猫 Pawn、HUD、局内菜单和交互控制器都装配好，遮罩才允许消失。
+// 进入玩法收口流程：只有资源/地图包预载和引擎 LoadMap 都结束，Online 确认 Lake/Connected、World 已 BeginPlay，且本地 Controller 的猫 Pawn、HUD、局内菜单和交互控制器都装配好，遮罩才允许消失。
 bool UCatLocalPlayerUISubsystem::IsGameplayLoadingReadyToDismiss(const FCatOnlineSnapshot& Snapshot) const
 {
 	if (Snapshot.WorldState != ECatOnlineWorldState::Lake
@@ -868,7 +1036,7 @@ bool UCatLocalPlayerUISubsystem::ShouldKeepExistingFrontendRoot(const FCatOnline
 	return bGameplayStartFailureRecovering;
 }
 
-// Frontend 拆除流程：先关闭流程控制器的 Model 订阅和 Root 绑定，再拆 Root，最后关闭三个 Model；若调用时仍有绑定 Controller，才恢复非鼠标前端状态，此路径不碰既有 Lake HUD、背包和交互提示。
+// Frontend 拆除流程：先关闭流程控制器的 Model 订阅和 Root 绑定，再拆 Root，最后关闭三个 Model；若调用时仍有绑定 Controller，记录一次真实拆除并恢复非鼠标前端状态，此路径不碰既有 Lake HUD、背包和交互提示。
 void UCatLocalPlayerUISubsystem::RemoveFrontendRoot()
 {
 	const bool bHadFrontendRoot = FrontendRootWidget != nullptr;
@@ -888,6 +1056,10 @@ void UCatLocalPlayerUISubsystem::RemoveFrontendRoot()
 	FrontendSettingsModel = nullptr;
 	if (bHadFrontendRoot)
 	{
+		UE_LOG(LogCatUI, Log, TEXT("Event=frontend_root_removed World=%s NetMode=%d Controller=%s"),
+			*GetNameSafe(GetWorld()),
+			GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1,
+			*GetNameSafe(BoundPlayerController.Get()));
 		if (APlayerController* Controller = BoundPlayerController.Get()) { Controller->SetShowMouseCursor(false); }
 	}
 }

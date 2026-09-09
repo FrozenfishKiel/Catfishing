@@ -395,9 +395,25 @@ struct FCatOnlineSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bIsHost = false;
 
-	/** 当前 Start 流程是否已把玩法地图异步预载请求提交给引擎；Host 和 Client 都会写入，完成回调前只代表包请求仍挂起，不代表旅行已开始。 */
+	/** 当前 Start 流程是否仍在真实加载阶段；玩法启动资源预热或地图包预载未完成时为 true，不代表旅行已经开始。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bIsGameplayLoadPending = false;
+
+	/** 当前 Start 流程是否正在等待玩法启动资源集合；这组资源来自现有设置软引用，由 StreamableHandle 报告真实进度。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bIsGameplayStartupAssetLoadPending = false;
+
+	/** 当前玩法启动资源集合是否有可读进度；false 表示还没有真实 handle 进度，UI 不能自行估算。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHasGameplayStartupAssetLoadProgress = false;
+
+	/** 当前玩法启动资源集合的加载百分比，单位是 0 到 100；只随 StreamableHandle 的真实更新或完成事件变化。 */
+	UPROPERTY(BlueprintReadOnly)
+	float GameplayStartupAssetLoadProgressPercent = 0.0f;
+
+	/** 当前玩法启动资源集合的可读阶段；它说明正在等多少个真实软引用完成，而不是 UI 自己编写的提示。 */
+	UPROPERTY(BlueprintReadOnly)
+	FString GameplayStartupAssetLoadProgressStatus;
 
 	/** 当前 Start 或回主菜单流程是否有地图包预载请求仍在引擎异步队列中；它只说明包还没回调，不代表世界已经切换完成。 */
 	UPROPERTY(BlueprintReadOnly)
