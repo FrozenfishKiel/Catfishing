@@ -83,6 +83,7 @@ void UCatOnlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	GetDefault<UCatOnlineSettings>()->TryGetGameplayMapPackage(GameplayMapPackage);
+	PreLoadMapHandle = FCoreUObjectDelegates::PreLoadMapWithContext.AddUObject(this, &ThisClass::HandlePreLoadMap);
 	PostLoadMapHandle = FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(this, &ThisClass::HandlePostLoadMap);
 	if (GEngine)
 	{
@@ -131,6 +132,8 @@ void UCatOnlineSubsystem::Deinitialize()
 		GEngine->OnNetworkFailure().Remove(NetworkFailureHandle);
 	}
 	NetworkFailureHandle.Reset();
+	FCoreUObjectDelegates::PreLoadMapWithContext.Remove(PreLoadMapHandle);
+	PreLoadMapHandle.Reset();
 	FCoreUObjectDelegates::PostLoadMapWithWorld.Remove(PostLoadMapHandle);
 	PostLoadMapHandle.Reset();
 
@@ -151,6 +154,8 @@ void UCatOnlineSubsystem::Deinitialize()
 	PreloadedGameplayPackage = nullptr;
 	FrontendPreloadRequestId = INDEX_NONE;
 	PreloadedFrontendPackage = nullptr;
+	bIsEngineLoadMapPending = false;
+	EngineLoadMapName.Reset();
 	SearchResultsByHandle.Reset();
 	SearchSummaries.Reset();
 	InvitesByHandle.Reset();
@@ -484,9 +489,9 @@ bool UCatOnlineSubsystem::IsAnyMapPreloadPending() const
 }
 
 // 地图包进度读取流程：
-// 1. 预载仍在队列里时，用当前包名向引擎查询真实异步加载百分比，负值代表该阶段没有可读进度。
-// 2. 预载已经成功且旅行已提交时，把包加载进度固定为 100%，等待 PostLoadMap 处理世界切换终态。
-// 3. 保存、销毁 Session 或网络补偿这类非地图包阶段返回 false，让 UI 显示等待文案而不是用本地时间造假进度。
+// 1. 只有预载请求仍在队列里时，才用当前包名向引擎查询真实异步加载百分比，负值代表该阶段没有可读进度。
+// 2. 预载回调成功后立刻停止报告包百分比，因为后续 ServerTravel、ClientTravel、LoadMap 和 UI 就绪不是同一个可量化进度。
+// 3. 保存、销毁 Session 或网络补偿这类非地图包阶段返回 false，让 UI 显示真实等待文案而不是用本地时间造假进度。
 bool UCatOnlineSubsystem::TryGetMapPreloadProgressPercent(float& OutProgressPercent) const
 {
 	OutProgressPercent = 0.0f;
@@ -499,16 +504,6 @@ bool UCatOnlineSubsystem::TryGetMapPreloadProgressPercent(float& OutProgressPerc
 			return true;
 		}
 		return false;
-	}
-	if (!ExpectedPackage.IsEmpty())
-	{
-		const bool bGameplayPackageReady = ExpectedPackage == GameplayMapPackage && PreloadedGameplayPackage;
-		const bool bFrontendPackageReady = ExpectedPackage == CatOnlineNames::Frontend && PreloadedFrontendPackage;
-		if (bGameplayPackageReady || bFrontendPackageReady)
-		{
-			OutProgressPercent = 100.0f;
-			return true;
-		}
 	}
 	return false;
 }
@@ -1447,6 +1442,8 @@ FCatOnlineSnapshot UCatOnlineSubsystem::GetSnapshot() const
 	Snapshot.bIsHost = SessionRole == ECatOnlineSessionRole::Host;
 	Snapshot.bIsGameplayLoadPending = GameplayPreloadRequestId != INDEX_NONE;
 	Snapshot.bIsMapPreloadPending = IsAnyMapPreloadPending();
+	Snapshot.bIsEngineLoadMapPending = bIsEngineLoadMapPending;
+	Snapshot.EngineLoadMapName = EngineLoadMapName;
 	Snapshot.bHasMapLoadProgress = TryGetMapPreloadProgressPercent(Snapshot.MapLoadProgressPercent);
 	return Snapshot;
 }
@@ -1654,7 +1651,7 @@ bool UCatOnlineSubsystem::BeginTravelToFrontend()
 	return true;
 }
 
-// 前台旅行提交流程：复用原回前台的 Host/Client 分支；这里只提交旅行、设置 ExpectedPackage 并广播 100% 包进度，真正成功仍由 PostLoadMap 确认。
+// 前台旅行提交流程：复用原回前台的 Host/Client 分支；这里只提交旅行、设置 ExpectedPackage 并广播旅行事实，真正成功仍由 PostLoadMap 确认。
 bool UCatOnlineSubsystem::CommitFrontendTravelAfterPreload()
 {
 	UWorld* World = GetWorld();
@@ -2012,6 +2009,21 @@ void UCatOnlineSubsystem::ClearPendingAcceptedInvite()
 	PendingInviteOperationEpoch = 0;
 }
 
+// 引擎切图入口流程：只消费属于本 GameInstance 的 PreLoadMap；记录目标名并立刻广播，让全局遮罩知道现在确实进入了 LoadMap，而不是靠 UI 延迟猜测。
+void UCatOnlineSubsystem::HandlePreLoadMap(const FWorldContext& WorldContext, const FString& MapName)
+{
+	if (WorldContext.OwningGameInstance != GetGameInstance())
+	{
+		return;
+	}
+	bIsEngineLoadMapPending = true;
+	EngineLoadMapName = MapName;
+	UE_LOG(LogCatOnline, Log, TEXT("Event=online_engine_loadmap_started RequestId=%s Epoch=%llu Operation=%s Map=%s"),
+		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
+		*UEnum::GetValueAsString(ActiveOperation), *EngineLoadMapName);
+	BroadcastSnapshot(TEXT("online_engine_loadmap_started"));
+}
+
 // 地图完成流程：先隔离空 World 和其他 GameInstance，再重绑邀请接口；来源包回载时保留 pending 等 TravelFailure，意外包进入补偿。
 // 命中 ExpectedPackage 后确认 World 与 Transport；Host 到达玩法图后即收口 Start，ready 缺失只影响 Client 准入并写入 Host 低频重试截止点，真正的 TravelFailure、NetworkFailure 和 Leave 仍由各自入口回前台。
 void UCatOnlineSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
@@ -2020,6 +2032,8 @@ void UCatOnlineSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 	{
 		return;
 	}
+	bIsEngineLoadMapPending = false;
+	EngineLoadMapName.Reset();
 	RebindInviteDelegate();
 	const FString PackageName = UWorld::StripPIEPrefixFromPackageName(LoadedWorld->GetPackage()->GetName(), LoadedWorld->StreamingLevelsPrefix);
 	if (!ExpectedPackage.IsEmpty())
@@ -2103,6 +2117,9 @@ void UCatOnlineSubsystem::HandleTravelFailure(UWorld* FailureWorld, const ETrave
 	{
 		return;
 	}
+	// TravelFailure 已经把这次切图等待收口到失败分支；清掉 PreLoadMap 观测，避免 UI 继续显示“等待 PostLoadMap”的旧状态。
+	bIsEngineLoadMapPending = false;
+	EngineLoadMapName.Reset();
 	const FString PackageName = UWorld::StripPIEPrefixFromPackageName(FailureWorld->GetPackage()->GetName(), FailureWorld->StreamingLevelsPrefix);
 	SetWorldStateForPackage(PackageName);
 	ExpectedPackage.Reset();
@@ -2172,6 +2189,9 @@ void UCatOnlineSubsystem::HandleNetworkFailure(UWorld* FailureWorld, UNetDriver*
 		return;
 	}
 
+	// NetworkFailure 已经替代 PostLoadMap 成为本次引擎等待的终点；清掉 LoadMap 观测，避免失败后的补偿或重试仍被显示成正在切图。
+	bIsEngineLoadMapPending = false;
+	EngineLoadMapName.Reset();
 	TransportState = ECatOnlineTransportState::Failed;
 	UE_LOG(LogCatOnline, Error, TEXT("Event=online_network_failure RequestId=%s Epoch=%llu Operation=%s Driver=%s Type=%s Reason=%s"),
 		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, *UEnum::GetValueAsString(ActiveOperation),

@@ -205,6 +205,9 @@ private:
 	/** 废止待提交邀请及其 opaque 映射、身份与期限；提交、失败和反初始化共用，已进入 Join 的操作仍由原 epoch 管线收口。 */
 	void ClearPendingAcceptedInvite();
 
+	/** PreLoadMap 回调：只记录本 GameInstance 正在进入引擎 LoadMap 阻塞段，让全局遮罩按真实切图生命周期保留而不是靠定时器兜底。 */
+	void HandlePreLoadMap(const FWorldContext& WorldContext, const FString& MapName);
+
 	/** PostLoadMap 回调：按 GameInstance/ExpectedPackage 隔离后确认 World 与 Transport；Host 到达玩法图后不因 ready 缺失回前台，只安排低频重试，真实 TravelFailure、NetworkFailure 和 Leave 仍走各自回前台管线。 */
 	void HandlePostLoadMap(UWorld* LoadedWorld);
 
@@ -342,6 +345,12 @@ private:
 	/** 地图包进度采样在 CoreTicker 中的句柄；它只读 GetAsyncLoadPercentage，不把时间当作进度或完成依据。 */
 	FTSTicker::FDelegateHandle MapLoadProgressTickHandle;
 
+	/** 当前 GameInstance 是否处于引擎 LoadMap 阻塞段；PreLoadMap 写入、PostLoadMap 清空，UI 只把它当真实等待原因。 */
+	bool bIsEngineLoadMapPending = false;
+
+	/** 当前引擎 LoadMap 目标名；它来自 PreLoadMap 回调，只用于状态展示和日志，不参与地图到达判定。 */
+	FString EngineLoadMapName;
+
 	/** 当前好友刷新代际；每次 Friends 请求递增，完成回调用它拒绝旧 World 或旧请求的结果。 */
 	uint64 FriendsRefreshEpoch = 0;
 
@@ -434,6 +443,9 @@ private:
 
 	/** SessionUserInviteAccepted 全局委托的配对解绑句柄。 */
 	FDelegateHandle InviteAcceptedHandle;
+
+	/** PreLoadMapWithContext 全局委托的配对解绑句柄。 */
+	FDelegateHandle PreLoadMapHandle;
 
 	/** PostLoadMapWithWorld 全局委托的配对解绑句柄。 */
 	FDelegateHandle PostLoadMapHandle;

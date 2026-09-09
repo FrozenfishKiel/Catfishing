@@ -405,6 +405,14 @@ struct FCatOnlineSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bIsMapPreloadPending = false;
 
+	/** 当前 GameInstance 是否已经进入引擎 LoadMap 阻塞段；由 PreLoadMap/PostLoadMap 成对写入，UI 用它保持真实切图遮罩而不靠时间兜底。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bIsEngineLoadMapPending = false;
+
+	/** 最近一次进入引擎 LoadMap 的目标地图名；只用于展示和诊断当前正在等待哪个引擎切图阶段，PostLoadMap 后清空。 */
+	UPROPERTY(BlueprintReadOnly)
+	FString EngineLoadMapName;
+
 	/** 当前地图包是否提供可读取的引擎加载百分比；false 表示 Online 此刻没有可量化进度，UI 不能用时间或动画自行编百分比。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasMapLoadProgress = false;

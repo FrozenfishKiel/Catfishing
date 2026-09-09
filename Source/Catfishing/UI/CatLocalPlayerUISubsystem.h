@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Online/CatOnlineTypes.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
 #include "CatLocalPlayerUISubsystem.generated.h"
 
@@ -26,7 +27,6 @@ class UCatLakeMainMenuController;
 class UCatLakeMainMenuWidget;
 class UUserWidget;
 enum class ECatHUDAction : uint8;
-struct FCatOnlineSnapshot;
 
 /** 每个 LocalPlayer 的 UI 生命周期协调器；只装配本地玩家拥有的 HUD、背包和交互提示，不预建商店或聚合业务页面。 */
 UCLASS()
@@ -76,26 +76,67 @@ public:
 	void RefreshPlayerLakeUIForController(APlayerController* Controller);
 
 private:
+	/** 全局 Loading WBP 的一次渲染快照；它把“正在等什么”和“是否有真实可量化进度”分开，避免 View 把不可量化阶段显示成假百分比。 */
+	struct FCatGlobalLoadingPresentation
+	{
+		/** 遮罩正在承载的高层目标，例如进入游戏或返回主菜单；由 LocalPlayer UI 根据当前 Start/Leave 过渡写入。 */
+		FText HeadingText;
+
+		/** 玩家此刻真正等待的当前步骤；它来自 Online、引擎 WorldContext 或本地 UI 就绪事实，会直接显示在主状态行。 */
+		FText StatusText;
+
+		/** 当前步骤的补充说明；用于说明正在等待包回调、旅行确认、BeginPlay 或某个 UI 模块就绪。 */
+		FText DetailText;
+
+		/** 当前等待原因的工程侧锚点；它让开发包里能看到卡住的是 PreLoadMap、PostLoadMap、DestroySession 还是 UI 装配。 */
+		FText ReasonText;
+
+		/** 是否显示 Loading WBP 里的条形控件；返回主菜单等不可量化流程固定为 false，避免表现层制造假进度。 */
+		bool bShowProgressBar = false;
+
+		/** 进度值是否来自可对外展示的真实百分比；false 时进度条最多表示真实阶段位置，状态文案不会追加百分号。 */
+		bool bHasProgressPercent = false;
+
+		/** 遮罩条形控件的 0 到 100 位置；进入游戏阶段由真实地图包百分比或真实阶段里程碑写入，永远不由时间推进。 */
+		float ProgressPercent = 0.0f;
+	};
+
 	/** 响应 Online 事实变更；实现按当前 World 调和 Frontend Root，并刷新局内 HUD 的只读投影。 */
 	void HandleOnlineSnapshotChanged();
 
 	/** 根据当前本地 Controller、World 和 Online 快照调和 Frontend Root；完成后要么存在唯一有效 Root，要么已拆除失效前端。 */
 	void RefreshFrontendForCurrentController();
 
-	/** 根据 Online 快照刷新全局加载遮罩；Start 和 Leave 等待期显示最高层遮罩，并把模型层地图进度传给 WBP。 */
+	/** 根据 Online 快照刷新全局加载遮罩；Start 和 Leave 等待期显示最高层遮罩，并把合成后的表现快照写给正式 Loading WBP。 */
 	void RefreshGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot);
 
-	/** 从 Online 快照判断全局遮罩是否需要显示，并输出玩家可读阶段文本；它只消费事实，不发起保存、Session 或旅行。 */
-	bool ShouldShowGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot, FText& OutStatusText) const;
+	/** 从当前 Online 子系统重新读取快照并刷新遮罩；Pawn/UI 真实就绪事件会调用它来收起等待态，不走定时器兜底。 */
+	void RefreshGlobalLoadingScreenFromCurrentSnapshot();
 
-	/** 创建或复用全局加载遮罩并写入阶段和真实进度；遮罩复用正式 Loading WBP 资产，但不再属于 Frontend Root 子页。 */
-	void ShowGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot, const FText& StatusText);
+	/** 从 Online、Lyra 式引擎 gate 与本地 UI 就绪事实生成遮罩表现；返回 false 表示没有真实等待原因。 */
+	bool ShouldShowGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot, FCatGlobalLoadingPresentation& OutPresentation) const;
 
-	/** 移除全局加载遮罩并清空最后阶段文本；它不改变 Online 操作，只释放本地 UMG 表现。 */
+	/** 创建或复用全局加载遮罩并写入本轮表现快照；遮罩复用正式 Loading WBP 资产，但不再属于 Frontend Root 子页。 */
+	void ShowGlobalLoadingScreen(const FCatGlobalLoadingPresentation& Presentation);
+
+	/** 移除全局加载遮罩并清空最后阶段文本与本地过渡记忆；它不改变 Online 操作，只释放本地 UMG 表现。 */
 	void HideGlobalLoadingScreen();
 
-	/** 将当前阶段文本和 Online 快照里的地图加载百分比写入全局 Loading WBP；缺百分比时只显示等待，不由 View 伪造进度。 */
-	void RefreshGlobalLoadingScreenPresentation(const FCatOnlineSnapshot& Snapshot, const FText& StatusText);
+	/** 将当前表现快照写入全局 Loading WBP；进度条显隐和百分号展示都由 Presentation 的真实来源标记决定。 */
+	void RefreshGlobalLoadingScreenPresentation(const FCatGlobalLoadingPresentation& Presentation);
+
+	/** 根据最新 Online 快照更新 Start/Leave 过渡记忆；这份记忆只延续真实请求到 UI 就绪事件，不承担完成判断。 */
+	void TrackGlobalLoadingTransition(const FCatOnlineSnapshot& Snapshot);
+
+	/** 判断进入玩法的等待是否可以收口；必须同时看到 Online 到达 Lake、旅行空闲和本地 HUD/菜单/交互 UI 装配完成。 */
+	bool IsGameplayLoadingReadyToDismiss(const FCatOnlineSnapshot& Snapshot) const;
+
+	/** 判断回主菜单的等待是否可以收口；必须同时看到 Online 回到 Frontend、旅行空闲和正式 Frontend Root 入视口。 */
+	bool IsFrontendLoadingReadyToDismiss(const FCatOnlineSnapshot& Snapshot) const;
+
+	/** 读取 Lyra/CommonLoadingScreen 同类的引擎等待原因；返回 true 时说明 WorldContext、LoadMap、连接或 BeginPlay 仍未完成。 */
+	bool TryGetEngineLoadingReason(const FCatOnlineSnapshot& Snapshot, bool bReturningToFrontend,
+		FText& OutStatusText, FText& OutDetailText, FText& OutReasonText) const;
 
 	/** 判断已有 Frontend Root 是否处于 Start 失败恢复保护窗；返回值只授权保留旧 Root，不授权在非 Frontend World 新建 Root。 */
 	bool ShouldKeepExistingFrontendRoot(const FCatOnlineSnapshot& Snapshot) const;
@@ -137,6 +178,12 @@ private:
 
 	/** 最近一次写入全局加载遮罩的阶段文本；只用于重复刷新去抖和日志，不作为 Online 状态来源。 */
 	FText LastGlobalLoadingStatusText;
+
+	/** 当前全局遮罩正在跟随的 Online 过渡意图；它只区分 Start/Leave，完成与否仍由 Online/World/UI 事实共同裁决。 */
+	ECatOnlineOperation GlobalLoadingOperation = ECatOnlineOperation::None;
+
+	/** 当前全局遮罩跟随的请求关联键；新 Start/Leave 请求会覆盖它，日志和迟到 UI 刷新可据此识别同一段等待。 */
+	FGuid GlobalLoadingRequestId;
 
 	/** 当前 LocalPlayer 的 Frontend 流程协调器；它只持有流程、确认槽位和命令等待事实，Root 按明确意图调用它。 */
 	UPROPERTY(Transient)
