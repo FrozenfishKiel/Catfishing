@@ -7,7 +7,7 @@
 事实来源清单：
 
 - `Source/Catfishing/UI/CatUISettings.h/.cpp`：正式 UI 资产软引用、输入 Action 与 IMC 配置入口。
-- `Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp`：Frontend 与局内玩家 UI 的创建、绑定和拆除入口。
+- `Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp`：Frontend、全局加载遮罩与局内玩家 UI 的创建、绑定和拆除入口。
 - `Source/Catfishing/UI/Frontend/CatFrontendRootWidget.h/.cpp`：主界面 Root、子页面控件解析、SettingsModel 复用边界。
 - `Source/Catfishing/UI/Save/CatLakeMainMenuWidget.h/.cpp`：局内 ESC 菜单 WBP 父类、控件名、蓝图事件和设置页输入回填。
 - `Source/Catfishing/UI/Save/CatLakeMainMenuController.h/.cpp`：局内菜单打开态、输入模式、保存、设置和退出请求的 Controller 边界。
@@ -44,27 +44,27 @@ HUD、背包、背包格子、交互提示和局内 ESC 菜单的默认路径来
 
 ## Frontend：`WBP_CatFrontendRoot`
 
-正式 Frontend Root 目标路径是 `/Game/UI/Frontend/WBP_CatFrontendRoot`，父类是 `UCatFrontendRootWidget`。整套 Frontend 共九个资产：一个 Root、五个业务子 WBP 和三个动态列表行资产。Root 是 `UCatLocalPlayerUISubsystem` 的唯一创建目标；五个业务子 WBP 嵌入 Root，三个行资产由存档页和房间页动态创建。
+正式 Frontend Root 目标路径是 `/Game/UI/Frontend/WBP_CatFrontendRoot`，父类是 `UCatFrontendRootWidget`。整套 Frontend 共九个资产：一个 Root、四个业务子 WBP、一个全局 Loading WBP 和三个动态列表行资产。Root 是 `UCatLocalPlayerUISubsystem` 的主界面创建目标；Loading WBP 由同一个 LocalPlayer UI 作为最高层遮罩创建，不嵌入 Root。
 
 | 资产 | 父类 / 装配位置 | 用途 |
 | --- | --- | --- |
-| `/Game/UI/Frontend/WBP_CatFrontendRoot` | `UCatFrontendRootWidget` | 唯一 Frontend 根视图，持有背景层、页面切换器和五个业务子 WBP |
+| `/Game/UI/Frontend/WBP_CatFrontendRoot` | `UCatFrontendRootWidget` | 唯一 Frontend 根视图，持有背景层、页面切换器和四个业务子 WBP |
 | `/Game/UI/Frontend/WBP_CatFrontendMenu` | `UUserWidget`，装到 `MenuPage` | 首页、退出确认，以及当前只保留按钮的“加入队伍” |
 | `/Game/UI/Frontend/WBP_CatFrontendSaveList` | `UUserWidget`，装到 `SaveListPage` | Minecraft 风格单页存档列表 |
 | `/Game/UI/Frontend/WBP_CatFrontendRoom` | `UUserWidget`，装到 `RoomPage` | Steam 好友、邀请、当前房间和房主开始游戏 |
 | `/Game/UI/Frontend/WBP_CatFrontendSettings` | `UUserWidget`，装到 `FrontendSettingsPage` | 游戏、画面、声音、控制四类设置 |
-| `/Game/UI/Frontend/WBP_CatFrontendLoading` | `UUserWidget`，装到 `LoadingPage` | 显示正式异步链返回的加载阶段或真实进度 |
+| `/Game/UI/Frontend/WBP_CatFrontendLoading` | `UUserWidget`，全局遮罩内容 | 进入游戏时用真实 gate 合成总进度；退出到主菜单时只显示真实等待状态，不要求条形进度 |
 | `/Game/UI/Frontend/WBP_CatSaveSlotRow` | `UCatFrontendSaveSlotRowWidget`，存档页动态行 | 显示 `UCatFrontendSaveModel` 提供的世界存档槽摘要 |
 | `/Game/UI/Frontend/WBP_CatRoomFriendRow` | `UCatFrontendRoomFriendRowWidget`，房间页动态行 | 显示 `UCatFrontendRoomModel` 提供的 Steam 好友摘要并提交邀请意图 |
 | `/Game/UI/Frontend/WBP_CatRoomPlayerSlot` | `UCatFrontendRoomPlayerSlotWidget`，房间页动态行 | 显示当前房间真实成员槽，不自行补假成员 |
 
 ### Root 必需装配
 
-`FrontendPageSwitcher`、`MenuPage`、`SaveListPage`、`RoomPage`、`FrontendSettingsPage` 和 `LoadingPage` 是 Root 的必需控件。`StaticBackgroundImage` 和 `DynamicBackgroundContainer` 是两个可选背景资产位；静态图和动态材质、媒体或场景子 WBP 都由资产侧承载，Controller 和 Model 不感知背景形态。
+`FrontendPageSwitcher`、`MenuPage`、`SaveListPage`、`RoomPage` 和 `FrontendSettingsPage` 是 Root 的必需控件。`StaticBackgroundImage` 和 `DynamicBackgroundContainer` 是两个可选背景资产位；静态图和动态材质、媒体或场景子 WBP 都由资产侧承载，Controller 和 Model 不感知背景形态。
 
-五个页面按业务通信边界拆分，不再为每个页面增加 C++ 基类。Root 通过 `BP_RenderMenu()`、`BP_RenderSaveList()`、`BP_RenderRoom()`、`BP_RenderFrontendSettings()` 和 `BP_RenderLoading()` 通知蓝图重绘；子 WBP 分别通过 Root 的 `GetSaveModel()`、`GetRoomModel()`、`GetSettingsModel()` 读取数据，并通过 `GetPageController()` 或 Root 的 `Request...` 函数提交玩家意图。
+四个页面按业务通信边界拆分，不再为每个页面增加 C++ 基类。Root 通过 `BP_RenderMenu()`、`BP_RenderSaveList()`、`BP_RenderRoom()` 和 `BP_RenderFrontendSettings()` 通知蓝图重绘；子 WBP 分别通过 Root 的 `GetSaveModel()`、`GetRoomModel()`、`GetSettingsModel()` 读取数据，并通过 `GetPageController()` 或 Root 的 `Request...` 函数提交玩家意图。全局 Loading WBP 不读取这些 Model，也不向 Root 提交意图。
 
-Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：菜单页的 `StartGameButton`、`JoinPartyButton`、`FrontendSettingsButton`、`ExitGameButton`、`ConfirmExitButton`、`CancelExitButton`；设置页的 `GameSettingsCategoryButton`、`GraphicsSettingsCategoryButton`、`AudioSettingsCategoryButton`、`ControlsSettingsCategoryButton`；以及各业务页的 `SaveResultTextBlock`、`RoomResultTextBlock`、`FrontendSettingsResultTextBlock`、`LoadingProgressTextBlock`。这些名称来自已新增的 Root 头文件合同，Root `.cpp` 已在并行实现中落盘；正式资产仍未生成，实际解析与绑定结果尚未经过编译或资产加载确认。
+Root 会在四个子 WBP 的 WidgetTree 内按名称解析以下关键控件：菜单页的 `StartGameButton`、`JoinPartyButton`、`FrontendSettingsButton`、`ExitGameButton`、`ConfirmExitButton`、`CancelExitButton`；设置页的 `GameSettingsCategoryButton`、`GraphicsSettingsCategoryButton`、`AudioSettingsCategoryButton`、`ControlsSettingsCategoryButton`；以及各业务页的 `SaveResultTextBlock`、`RoomResultTextBlock`、`FrontendSettingsResultTextBlock`。全局 Loading WBP 由 `UCatLocalPlayerUISubsystem` 写入 `LoadingProgressTextBlock`、`LoadingProgressBar` 和等待原因文本；进入游戏用 Start、地图包、旅行、World、BeginPlay 和本地 UI 的真实 gate 合成总进度，退出到主菜单会折叠进度条。
 
 ### 数据与流程边界
 
@@ -78,7 +78,7 @@ Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 
 ### 当前实施边界
 
-截至本轮源码核对（2026-09-07），Root、PageController、三个 Model 和 LocalPlayer 接线已落 `.h/.cpp`；`UCatSaveSubsystem` 已实现槽目录、异步创建/读写及删除入口，库存与角色位置恢复已接领域接口。旧 `CatTravelWidget.h/.cpp` 及 LocalPlayer 创建、刷新、事件转发专线已删除。`CatUISettings` 软类指向 `/Game/UI/Frontend/WBP_CatFrontendRoot.WBP_CatFrontendRoot_C`，`Config/DefaultGame.ini` 已精确 Cook `/Game/UI/Frontend` 和 `/Game/Audio/Settings`。
+截至本轮源码核对（2026-09-08），Root、PageController、三个 Model、LocalPlayer 全局 Loading 遮罩接线已落 `.h/.cpp`；`UCatSaveSubsystem` 已实现槽目录、异步创建/读写及删除入口，库存与角色位置恢复已接领域接口。旧 `CatTravelWidget.h/.cpp` 及 LocalPlayer 创建、刷新、事件转发专线已删除，Root 不再绑定旧加载子控件，局内菜单不再绑定回主菜单等待面板。`CatUISettings` 软类指向 `/Game/UI/Frontend/WBP_CatFrontendRoot.WBP_CatFrontendRoot_C`，`Config/DefaultGame.ini` 已精确 Cook `/Game/UI/Frontend` 和 `/Game/Audio/Settings`。
 
 `Source/CatfishingEditor/UI/CatFrontendWidgetAuthoringLibrary.h/.cpp` 与 `Scripts/create_frontend_assets.py` 已提供资产生成入口，目标为上述 9 个 WBP，以及 `/Game/Audio/Settings` 下的 1 个 SoundMix（`SMX_CatFrontendSettings`）和 5 个 SoundClass（`SC_CatMaster`、`SC_CatMusic`、`SC_CatSFX`、`SC_CatAmbience`、`SC_CatVoice`），共 6 个音频资产。生成器源码存在不代表生成成功：对应 `.uasset` 尚未生成，正式 Root 未生效。
 
@@ -94,7 +94,7 @@ Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 
 普通 Escape 对应 `IA_LakeMenu`，用于打开或关闭局内菜单；PIE 里的 Shift+Escape 保留给编辑器停止运行。这个键位关系由局内菜单 Controller 和 `Source/CatfishingEditor/CatfishingEditor.cpp` 一起维护，WBP 不需要自己判断编辑器停止运行。
 
-`退出到主菜单` 和 `退出游戏` 是两条不同意图：前者交给 Online 的 Leave 链路异步完成保存、拆局、Session 销毁和回前台旅行，等待期间显示专门等待页且不使用固定倒计时上限；后者直接调用本地 `QuitGame` 退出游戏进程。
+`退出到主菜单` 和 `退出游戏` 是两条不同意图：前者交给 Online 的 Leave 链路异步完成保存、拆局、Session 销毁和回前台旅行，等待期间显示全局加载遮罩且不使用固定倒计时上限；后者直接调用本地 `QuitGame` 退出游戏进程。
 
 ### 运行链路
 
@@ -120,13 +120,14 @@ Root 会在五个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 | `ExitGameButton` | `Button` | 退出游戏。点击后走本地 `QuitGame`，不走回前台、离局等待或 DestroySession 链路。 |
 | `StatusTextBlock` | `TextBlock` | 显示保存、设置或退出入口返回的反馈，例如“正在保存当前游戏。”或失败原因。 |
 
-### 退出到主菜单等待页控件名（稳定合同）
+### 全局 Loading 遮罩控件名（稳定合同）
 
 | 控件名 | 类型 | 人话说明 |
 | --- | --- | --- |
-| `LakeExitLoadingPanel` | `PanelWidget` | 退出到主菜单等待页根容器；Online Leave 已受理后显示，普通 ESC 不关闭它。 |
-| `ExitLoadingStatusTextBlock` | `TextBlock` | 等待页阶段文本；Controller 从 Online 快照派生，不显示伪进度。 |
-| `ExitLoadingProgressBar` | `ProgressBar` | 忙碌进度条；只表达异步处理中，不承诺固定完成时间。 |
+| `LoadingProgressTextBlock` | `TextBlock` | Start、Leave 或 Travel 的阶段文本；由 LocalPlayer UI 从 Online 快照派生。 |
+| `LoadingProgressBar` | `ProgressBar` | 进入游戏时按真实 gate 合成总进度，其中地图包区间读取引擎异步百分比；退出到主菜单会被 C++ 折叠，资产侧可改成旋转等待动画。 |
+| `LoadingDayTextBlock` | `TextBlock` | 全局遮罩下显示“正在切换世界”，不再读取存档天数。 |
+| `LoadingSacrificeProgressTextBlock` | `TextBlock` | 全局遮罩下显示当前真实等待细节，例如地图包百分比、DestroySession 回调、PostLoadMap 确认或 Frontend Root 入视口，不再读取献祭记录。 |
 
 ### 设置页控件名
 
