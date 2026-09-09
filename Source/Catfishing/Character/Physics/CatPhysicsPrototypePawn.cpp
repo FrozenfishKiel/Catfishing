@@ -255,6 +255,7 @@ void ACatPhysicsPrototypePawn::UpdatePhysicalMovement(const float DeltaSeconds)
 		+ FVector(0.0, 0.0, YawError * (bGrounded ? 24.0 : 2.0)) - AngularVelocity * (bGrounded ? 9.0 : 0.7))
 		.GetClampedToMaxSize(100.0);
 	Body->AddTorqueInRadians(AngularAcceleration, NAME_None, true);
+	bSupportSampleReady = true;
 }
 
 void ACatPhysicsPrototypePawn::CaptureSnapshot()
@@ -265,6 +266,7 @@ void ACatPhysicsPrototypePawn::CaptureSnapshot()
 	Snapshot.LeftHandLocation = LeftHand->GetComponentLocation();
 	Snapshot.RightHandLocation = RightHand->GetComponentLocation();
 	Snapshot.bGrounded = bGrounded;
+	Snapshot.bSupportSampleReady = bSupportSampleReady;
 	++Snapshot.Revision;
 }
 
@@ -364,6 +366,7 @@ void ACatPhysicsPrototypePawn::ReleaseConnections(const FName Reason)
 
 void ACatPhysicsPrototypePawn::ResetFromAuthority()
 {
+	bSupportSampleReady = false;
 	ReleaseConnections(TEXT("Reset"));
 	LeftArm->BreakConstraint();
 	RightArm->BreakConstraint();

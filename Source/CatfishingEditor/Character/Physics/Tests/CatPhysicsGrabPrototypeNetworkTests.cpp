@@ -2,11 +2,16 @@
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationEditorCommon.h"
+#include "Animation/AnimSingleNodeInstance.h"
 #include "Character/Physics/CatPhysicsPrototypePawn.h"
+#include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Components/PoseableMeshComponent.h"
+#include "Engine/SkeletalMesh.h"
 #include "Editor.h"
 #include "Engine/Engine.h"
 #include "Engine/GameViewportClient.h"
@@ -196,7 +201,7 @@ public:
 		}
 		return false;
 	}
-private:
+public:
 	void CaptureViewport(UWorld* World, const TCHAR* Label)
 	{
 		UGameViewportClient* ViewportClient = World ? World->GetGameViewport() : nullptr;
@@ -225,6 +230,7 @@ private:
 			Body->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);
 		}
 	}
+private:
 	FAutomationTestBase* Test;
 	double Started;
 	double StageStarted = 0.0;
@@ -234,24 +240,159 @@ private:
 	FVector TargetStart = FVector::ZeroVector;
 };
 
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPhysicsPrototypeNetworkTest,
-	"Catfishing.PhysicsGrabPrototype.Network.ListenClientGripForceReleaseAndTargetExit",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
-
-bool FCatPhysicsPrototypeNetworkTest::RunTest(const FString& Parameters)
+class FVerifyJump final : public IAutomationLatentCommand
 {
-	if (!TestTrue(TEXT("requires its own idle validation editor"), GEditor && GEngine && !GEditor->PlayWorld)) return false;
+public:
+	explicit FVerifyJump(FAutomationTestBase* InTest) : Test(InTest), Evidence(InTest), Started(FPlatformTime::Seconds()) {}
+	bool Update() override
+	{
+		const double Now = FPlatformTime::Seconds();
+		if (Now - Started > 45.0)
+		{
+			Test->AddError(FString::Printf(TEXT("Physics jump network timed out Stage=%d ServerPhases=%u ClientPhases=%u"), Stage, ServerPhases, ClientPhases));
+			return true;
+		}
+		UWorld* Server = nullptr;
+		UWorld* Client = nullptr;
+		for (const auto& Context : GEngine->GetWorldContexts())
+		{
+			if (Context.WorldType != EWorldType::PIE || !Context.World()) continue;
+			if (Context.World()->GetNetMode() == NM_ListenServer) Server = Context.World();
+			if (Context.World()->GetNetMode() == NM_Client) Client = Context.World();
+		}
+		if (!Server || !Client) return false;
+		auto* Local = Client->GetFirstPlayerController();
+		auto* ClientPawn = Local ? Cast<ACatPhysicsPrototypePawn>(Local->GetPawn()) : nullptr;
+		if (!ClientPawn || !Local->PlayerState) return false;
+		ACatPhysicsPrototypePawn* AuthorityPawn = nullptr;
+		for (TActorIterator<ACatPhysicsPrototypePawn> It(Server); It; ++It)
+			if (It->GetPlayerState() && It->GetPlayerState()->GetPlayerId() == Local->PlayerState->GetPlayerId()) AuthorityPawn = *It;
+		if (!AuthorityPawn || !AuthorityPawn->HasPrototypeMovementSample() || !ClientPawn->HasPrototypeMovementSample()) return false;
+		if (Stage == 0)
+		{
+			Local->SetActorTickEnabled(false);
+			for (auto It = Server->GetPlayerControllerIterator(); It; ++It)
+				if (It->Get()) It->Get()->SetActorTickEnabled(false);
+			FVerify::Place(AuthorityPawn, FVector(0, -150, 20));
+			if (FApp::CanEverRender())
+			{
+				ACameraActor* Camera = Client->SpawnActor<ACameraActor>();
+				if (!Test->TestNotNull(TEXT("jump presentation has an independent observer camera"), Camera)) return true;
+				const FVector Position(-40, -245, 55);
+				Camera->SetActorLocationAndRotation(Position, (FVector(0, -150, 33) - Position).Rotation());
+				Camera->GetCameraComponent()->SetFieldOfView(60.0f);
+				Local->SetViewTarget(Camera);
+			}
+			Stage = 1;
+			StageStarted = Now;
+		}
+		ClientPawn->SetPrototypeInput(FVector2D::ZeroVector, FRotator::ZeroRotator);
+		if (Stage == 1)
+		{
+			if (Now - StageStarted < 0.8 || !AuthorityPawn->IsPrototypeGrounded() || !ClientPawn->IsPrototypeGrounded()
+				|| FVector::Distance(AuthorityPawn->GetActorLocation(), ClientPawn->GetActorLocation()) > 3.0) return false;
+			InitialServerZ = MaximumServerZ = AuthorityPawn->GetActorLocation().Z;
+			InitialClientZ = MaximumClientZ = ClientPawn->GetActorLocation().Z;
+			ClientPawn->RequestJump(); // Owning-client reliable RPC is the only source of the jump.
+			Stage = 2;
+			StageStarted = Now;
+		}
+		if (Stage == 2)
+		{
+			const uint8 ServerPhase = AnimationPhase(AuthorityPawn);
+			const uint8 ClientPhase = AnimationPhase(ClientPawn);
+			ServerPhases |= ServerPhase;
+			ClientPhases |= ClientPhase;
+			MaximumServerZ = FMath::Max(MaximumServerZ, AuthorityPawn->GetActorLocation().Z);
+			MaximumClientZ = FMath::Max(MaximumClientZ, ClientPawn->GetActorLocation().Z);
+			bServerAirborne |= !AuthorityPawn->IsPrototypeGrounded();
+			bClientAirborne |= !ClientPawn->IsPrototypeGrounded();
+			if (FApp::CanEverRender() && ClientPhase && !(CapturedPhases & ClientPhase))
+			{
+				auto* Visual = ClientPawn->FindComponentByClass<UCatPhysicsPrototypeVisualComponent>();
+				auto* Source = Visual->GetAnimationSource();
+				const FTransform ReferenceRoot = Source->GetSkeletalMeshAsset()->GetRefSkeleton().GetRefBonePose()[0];
+				Test->TestTrue(TEXT("rendered client root removes authored displacement before physics movement is displayed"),
+					Visual->GetVisualMesh()->BoneSpaceTransforms[0].Equals(ReferenceRoot, 0.001f));
+				Test->AddInfo(FString::Printf(TEXT("Event=physics_prototype_jump_pose_sample Phase=%u BodyLocation=%s MeshLocation=%s RootBone=%s RootTranslation=%s VisibleRootTranslation=%s RootWorld=%s"),
+					ClientPhase, *ClientPawn->GetActorLocation().ToCompactString(), *Source->GetComponentLocation().ToCompactString(),
+					*Source->GetBoneName(0).ToString(), *Source->GetBoneSpaceTransforms()[0].GetTranslation().ToCompactString(),
+					*Visual->GetVisualMesh()->BoneSpaceTransforms[0].GetTranslation().ToCompactString(), *Source->GetBoneLocation(Source->GetBoneName(0)).ToCompactString()));
+				Test->AddInfo(FString::Printf(TEXT("Event=physics_prototype_jump_root_transforms Phase=%u SourceRoot=%s ReferenceRoot=%s VisibleRoot=%s"),
+					ClientPhase, *Source->GetBoneSpaceTransforms()[0].ToString(), *ReferenceRoot.ToString(), *Visual->GetVisualMesh()->BoneSpaceTransforms[0].ToString()));
+				Evidence.CaptureViewport(Client, ClientPhase == 1 ? TEXT("jump-takeoff") : ClientPhase == 2 ? TEXT("jump-airborne") : TEXT("jump-landing"));
+				CapturedPhases |= ClientPhase;
+			}
+			if (Now - StageStarted < 1.5) return false;
+			if (!Test->TestTrue(TEXT("server and client consume all three real jump animation assets"), ServerPhases == 7 && ClientPhases == 7)) return true;
+			Test->TestTrue(TEXT("client jump RPC causes actual server flight and visible client interpolation"), bServerAirborne && bClientAirborne
+				&& MaximumServerZ > InitialServerZ + 8.0 && MaximumClientZ > InitialClientZ + 6.0);
+			Test->TestTrue(TEXT("both endpoints finish the authored landing and return to the ground gait"), ServerPhase == 0 && ClientPhase == 0
+				&& AuthorityPawn->IsPrototypeGrounded() && ClientPawn->IsPrototypeGrounded());
+			if (FApp::CanEverRender()) Test->TestEqual(TEXT("all three delivered jump phases have viewport evidence"), CapturedPhases, static_cast<uint8>(7));
+			BeforeResetEpoch = ClientPawn->GetPrototypeResetEpoch();
+			ClientPawn->RequestJump();
+			Stage = 3;
+		}
+		if (Stage == 3)
+		{
+			if (AuthorityPawn->IsPrototypeGrounded() || ClientPawn->IsPrototypeGrounded() || AnimationPhase(ClientPawn) == 0) return false;
+			ClientPawn->RequestReset();
+			Stage = 4;
+		}
+		if (Stage == 4)
+		{
+			if (ClientPawn->GetPrototypeResetEpoch() <= BeforeResetEpoch || AuthorityPawn->GetPrototypeResetEpoch() <= BeforeResetEpoch) return false;
+			Stage = 5;
+			StageStarted = Now;
+		}
+		if (Stage == 5)
+		{
+			if (!Test->TestTrue(TEXT("replicated reset does not masquerade as a landing animation"), AnimationPhase(AuthorityPawn) != 4 && AnimationPhase(ClientPawn) != 4)) return true;
+			if (Now - StageStarted < 0.5) return false;
+			Test->AddInfo(FString::Printf(TEXT("Event=physics_prototype_jump_network_verified ServerHeightGainCm=%.3f ClientHeightGainCm=%.3f ServerPhases=%u ClientPhases=%u Result=ClientRpcStartLoopLandingAndReset"),
+				MaximumServerZ - InitialServerZ, MaximumClientZ - InitialClientZ, ServerPhases, ClientPhases));
+			return true;
+		}
+		return false;
+	}
+private:
+	static uint8 AnimationPhase(ACatPhysicsPrototypePawn* Pawn)
+	{
+		auto* Visual = Pawn ? Pawn->FindComponentByClass<UCatPhysicsPrototypeVisualComponent>() : nullptr;
+		auto* Source = Visual ? Visual->GetAnimationSource() : nullptr;
+		auto* Instance = Source ? Source->GetSingleNodeInstance() : nullptr;
+		auto* Asset = Instance ? Instance->GetCurrentAsset() : nullptr;
+		if (!Asset) return 0;
+		const FString Path = Asset->GetPathName();
+		if (Path == TEXT("/Game/Animalia/Cat/Animations/InPlace/JumpX_Start-IP.JumpX_Start-IP")) return 1;
+		if (Path == TEXT("/Game/Animalia/Cat/Animations/InPlace/JumpX_Loop-IP.JumpX_Loop-IP")) return 2;
+		if (Path == TEXT("/Game/Animalia/Cat/Animations/InPlace/JumpX_End-IP.JumpX_End-IP")) return 4;
+		return 0;
+	}
+	FAutomationTestBase* Test;
+	FVerify Evidence;
+	double Started;
+	double StageStarted = 0.0;
+	int32 Stage = 0;
+	uint8 ServerPhases = 0, ClientPhases = 0, CapturedPhases = 0;
+	uint32 BeforeResetEpoch = 0;
+	bool bServerAirborne = false, bClientAirborne = false;
+	double InitialServerZ = 0.0, InitialClientZ = 0.0, MaximumServerZ = 0.0, MaximumClientZ = 0.0;
+};
+
+bool QueueNetworkTest(FAutomationTestBase* Test, const TSharedPtr<IAutomationLatentCommand>& Verify)
+{
+	if (!Test->TestTrue(TEXT("requires its own idle validation editor"), GEditor && GEngine && !GEditor->PlayWorld)) return false;
 	const auto Restore = MakeShared<CatPhysicsGrabNetwork::FRestore>();
 	UWorld* Map = nullptr;
 	if (FApp::CanEverRender())
 	{
 		const FString MapFile = FPaths::ProjectContentDir() / TEXT("Catfishing/Prototypes/PhysicsGrabPrototype.umap");
-		if (!TestTrue(TEXT("rendering validation loads the generated prototype map; run CreateMap first"),
+		if (!Test->TestTrue(TEXT("rendering validation loads the generated prototype map; run CreateMap first"),
 			FEditorFileUtils::LoadMap(MapFile, false, false))) return false;
 		Map = GEditor->GetEditorWorldContext().World();
-		if (!TestTrue(TEXT("generated map binds the independent native prototype GameMode"), Map
+		if (!Test->TestTrue(TEXT("generated map binds the independent native prototype GameMode"), Map
 			&& Map->GetWorldSettings()->DefaultGameMode == ACatPhysicsPrototypeGameMode::StaticClass())) return false;
 	}
 	else Map = FAutomationEditorCommonUtils::CreateNewMap();
@@ -266,10 +407,30 @@ bool FCatPhysicsPrototypeNetworkTest::RunTest(const FString& Parameters)
 		if (Driver.DefName == TEXT("GameNetDriver"))
 			Driver.DriverClassName = Driver.DriverClassNameFallback = TEXT("/Script/OnlineSubsystemUtils.IpNetDriver");
 	ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
-	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatPhysicsGrabNetwork::FVerify>(this));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(Verify);
 	ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
 	FAutomationTestFramework::Get().EnqueueLatentCommand(Restore);
 	return true;
+}
+
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPhysicsPrototypeNetworkTest,
+	"Catfishing.PhysicsGrabPrototype.Network.ListenClientGripForceReleaseAndTargetExit",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatPhysicsPrototypeNetworkTest::RunTest(const FString& Parameters)
+{
+	return CatPhysicsGrabNetwork::QueueNetworkTest(this, MakeShared<CatPhysicsGrabNetwork::FVerify>(this));
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPhysicsPrototypeJumpNetworkTest,
+	"Catfishing.PhysicsGrabPrototype.Network.ListenClientJumpAnimationAndReset",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatPhysicsPrototypeJumpNetworkTest::RunTest(const FString& Parameters)
+{
+	return CatPhysicsGrabNetwork::QueueNetworkTest(this, MakeShared<CatPhysicsGrabNetwork::FVerifyJump>(this));
 }
 
 #endif

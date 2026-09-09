@@ -2,6 +2,8 @@
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
+#include "Animation/AnimSequence.h"
+#include "Animation/AnimSingleNodeInstance.h"
 #include "Character/Physics/CatPhysicsPrototypePawn.h"
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
 #include "Components/BoxComponent.h"
@@ -9,6 +11,7 @@
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/SphereComponent.h"
 #include "Engine/StaticMesh.h"
+#include "Engine/SkeletalMesh.h"
 #include "Engine/StaticMeshActor.h"
 #include "Framework/Game/PhysicsPrototype/CatPhysicsPrototypePlayerController.h"
 #include "GameFramework/GameModeBase.h"
@@ -64,6 +67,19 @@ struct FScene
 		}
 	}
 };
+
+UAnimationAsset* CurrentAnimation(ACatPhysicsPrototypePawn* Pawn)
+{
+	auto* Visual = Pawn ? Pawn->FindComponentByClass<UCatPhysicsPrototypeVisualComponent>() : nullptr;
+	auto* Source = Visual ? Visual->GetAnimationSource() : nullptr;
+	auto* Instance = Source ? Source->GetSingleNodeInstance() : nullptr;
+	return Instance ? Instance->GetCurrentAsset() : nullptr;
+}
+
+UAnimSequence* JumpAsset(const TCHAR* Name)
+{
+	return LoadObject<UAnimSequence>(nullptr, *FString::Printf(TEXT("/Game/Animalia/Cat/Animations/InPlace/%s.%s"), Name, Name));
+}
 
 }
 
@@ -358,6 +374,133 @@ bool FCatPhysicsPrototypeTwoHandResetTest::RunTest(const FString& Parameters)
 	TestNull(TEXT("incoming grip no longer retains the reset target"), Incoming->GetGrabComponent()->GetGripTarget(true));
 	TestFalse(TEXT("incoming reaching is stopped until a fresh input after reset"), Incoming->GetGrabComponent()->IsReaching(true));
 	AddInfo(FString::Printf(TEXT("Event=physics_prototype_two_hand_reset_verified RightOnlyZ=%.3f Result=RightSupportsAndAllDirectionsReleased"), RightOnlyHeight));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPhysicsPrototypeJumpAnimationTest,
+	"Catfishing.PhysicsGrabPrototype.Runtime.PhysicalJumpPlaysAuthoredPhasesAndKeepsPawIK",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatPhysicsPrototypeJumpAnimationTest::RunTest(const FString& Parameters)
+{
+	using namespace CatPhysicsGrabTest;
+	CatPhysicsGrabTest::FScene Scene;
+	if (!Scene.Initialize(this)) return false;
+	auto* Pawn = Scene.Spawn(FVector(0, 0, 20));
+	auto* Start = JumpAsset(TEXT("JumpX_Start-IP"));
+	auto* Loop = JumpAsset(TEXT("JumpX_Loop-IP"));
+	auto* End = JumpAsset(TEXT("JumpX_End-IP"));
+	if (!Pawn || !Start || !Loop || !End) return false;
+	Scene.Step(60);
+	if (!TestTrue(TEXT("jump begins from actual sampled floor support"), Pawn->HasPrototypeMovementSample() && Pawn->IsPrototypeGrounded())) return false;
+	auto* Visual = Pawn->FindComponentByClass<UCatPhysicsPrototypeVisualComponent>();
+	if (!Visual || !Visual->GetVisualMesh() || !Visual->GetAnimationSource()) return false;
+	const FTransform ReferenceRoot = Visual->GetAnimationSource()->GetSkeletalMeshAsset()->GetRefSkeleton().GetRefBonePose()[0];
+	for (auto* Asset : {Start, Loop, End})
+	{
+		TestEqual(TEXT("jump animation shares the existing Cat skeleton"), Asset->GetSkeleton(), Visual->GetAnimationSource()->GetSkeletalMeshAsset()->GetSkeleton());
+		TestFalse(TEXT("visual jump clips do not supply a competing root-motion writer"), Asset->bEnableRootMotion);
+	}
+	Pawn->SetGrabInput(true, true);
+	Scene.Step(20, Pawn);
+	const double GroundZ = Pawn->GetActorLocation().Z;
+	Pawn->RequestJump();
+	const FName Bones[] = {TEXT("RigLFLeg1"), TEXT("RigLFLeg2"), TEXT("RigLFLeg3"), TEXT("RigLFLegAnkle")};
+	bool bSawStart = false, bSawLoop = false, bSawEnd = false, bSawAir = false, bRejectedRepeat = false;
+	double MaximumHeight = GroundZ, MaximumAirborneIKImprovement = 0.0;
+	for (int32 Frame = 0; Frame < 150; ++Frame)
+	{
+		Scene.Step(1, Pawn);
+		auto* Current = CurrentAnimation(Pawn);
+		if (!TestTrue(TEXT("visible jump root remains at the skeleton reference so only the body moves the cat through space"),
+			Visual->GetVisualMesh()->BoneSpaceTransforms[0].Equals(ReferenceRoot, 0.001f))) return false;
+		bSawStart |= Current == Start;
+		bSawLoop |= Current == Loop;
+		if (Current == End)
+		{
+			TestTrue(TEXT("landing animation follows a real airborne interval"), bSawAir);
+			TestTrue(TEXT("landing animation is driven by regained physical support"), Pawn->IsPrototypeGrounded());
+			bSawEnd = true;
+		}
+		MaximumHeight = FMath::Max(MaximumHeight, Pawn->GetActorLocation().Z);
+		if (!Pawn->IsPrototypeGrounded())
+		{
+			bSawAir = true;
+			if (!bRejectedRepeat && Frame > 3)
+			{
+				const FVector Before = Pawn->GetVelocity();
+				Pawn->RequestJump();
+				// Chaos consumes AddImpulse on the next physics step, so an immediate velocity read cannot prove rejection.
+				Scene.Step(1, Pawn);
+				TestTrue(TEXT("an airborne repeat cannot inject another jump impulse on the next physics step"), Pawn->GetVelocity().Z < Before.Z + 50.0);
+				bRejectedRepeat = true;
+			}
+			const FVector Target = Pawn->GetLeftHand()->GetComponentLocation();
+			auto* Source = Visual->GetAnimationSource();
+			const FVector AuthoredHandComponent = Source->GetComponentTransform().InverseTransformPosition(Source->GetBoneLocation(Bones[3]));
+			const FVector AuthoredHandAtReferenceRoot = Source->GetComponentTransform().TransformPosition(
+				ReferenceRoot.TransformPosition(Source->GetBoneSpaceTransforms()[0].InverseTransformPosition(AuthoredHandComponent)));
+			const double AuthoredError = FVector::Distance(AuthoredHandAtReferenceRoot, Target);
+			const double VisibleError = FVector::Distance(Visual->GetVisualHandWorldLocation(true), Target);
+			MaximumAirborneIKImprovement = FMath::Max(MaximumAirborneIKImprovement, AuthoredError - VisibleError);
+			for (int32 Link = 0; Link < 3; ++Link)
+			{
+				const double AuthoredLength = FVector::Distance(Visual->GetAnimationSource()->GetBoneLocation(Bones[Link]), Visual->GetAnimationSource()->GetBoneLocation(Bones[Link + 1]));
+				const double VisibleLength = FVector::Distance(Visual->GetVisualMesh()->GetBoneLocationByName(Bones[Link], EBoneSpaces::WorldSpace), Visual->GetVisualMesh()->GetBoneLocationByName(Bones[Link + 1], EBoneSpaces::WorldSpace));
+				if (!TestEqual(TEXT("airborne reaching preserves authored leg segment lengths"), VisibleLength, AuthoredLength, 0.1)) return false;
+			}
+		}
+	}
+	TestTrue(TEXT("actual impulse visibly lifts the physical body"), MaximumHeight > GroundZ + 8.0);
+	TestTrue(TEXT("actual animation assets cover takeoff, flight and landing"), bSawStart && bSawLoop && bSawEnd);
+	TestTrue(TEXT("airborne paw IK improves contact tracking after the jump pose is copied"), MaximumAirborneIKImprovement > 2.0);
+	TestTrue(TEXT("settled body returns from landing to a ground gait"), Pawn->IsPrototypeGrounded() && CurrentAnimation(Pawn) != Start && CurrentAnimation(Pawn) != Loop && CurrentAnimation(Pawn) != End);
+	Pawn->SetGrabInput(true, false);
+	AddInfo(FString::Printf(TEXT("Event=physics_prototype_jump_animation_verified HeightGainCm=%.3f AirborneIKImprovementCm=%.3f Result=StartLoopLandAndReach"), MaximumHeight - GroundZ, MaximumAirborneIKImprovement));
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPhysicsPrototypeJumpResetAnimationTest,
+	"Catfishing.PhysicsGrabPrototype.Runtime.JumpLandingCanBeInterruptedAndResetDoesNotFakeLanding",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatPhysicsPrototypeJumpResetAnimationTest::RunTest(const FString& Parameters)
+{
+	using namespace CatPhysicsGrabTest;
+	CatPhysicsGrabTest::FScene Scene;
+	if (!Scene.Initialize(this)) return false;
+	auto* Pawn = Scene.Spawn(FVector(0, 0, 20));
+	auto* Start = JumpAsset(TEXT("JumpX_Start-IP"));
+	auto* Loop = JumpAsset(TEXT("JumpX_Loop-IP"));
+	auto* End = JumpAsset(TEXT("JumpX_End-IP"));
+	if (!Pawn || !Start || !Loop || !End) return false;
+	for (int32 Frame = 0; Frame < 60; ++Frame)
+	{
+		Scene.Step(1);
+		if (!TestTrue(TEXT("initial ground acquisition does not fabricate a landing"), CurrentAnimation(Pawn) != End)) return false;
+	}
+	Pawn->RequestJump();
+	bool bSawLanding = false;
+	for (int32 Frame = 0; Frame < 120; ++Frame)
+	{
+		Scene.Step(1, Pawn);
+		if (CurrentAnimation(Pawn) == End) { bSawLanding = true; break; }
+	}
+	if (!TestTrue(TEXT("first physical jump reaches its landing clip"), bSawLanding)) return false;
+	Pawn->RequestJump();
+	Scene.Step(2, Pawn);
+	TestFalse(TEXT("new grounded jump leaves support again"), Pawn->IsPrototypeGrounded());
+	TestTrue(TEXT("new takeoff interrupts landing before its clip finishes"), CurrentAnimation(Pawn) == Start);
+	const uint32 BeforeReset = Pawn->GetPrototypeResetEpoch();
+	Pawn->RequestReset();
+	TestTrue(TEXT("reset advances the actual authority reset epoch"), Pawn->GetPrototypeResetEpoch() > BeforeReset);
+	for (int32 Frame = 0; Frame < 60; ++Frame)
+	{
+		Scene.Step(1, Pawn);
+		if (!TestTrue(TEXT("reset clears airborne history without playing a false landing"), CurrentAnimation(Pawn) != End)) return false;
+	}
+	TestTrue(TEXT("reset settles into a real supported ground gait"), Pawn->IsPrototypeGrounded() && CurrentAnimation(Pawn) != Start && CurrentAnimation(Pawn) != Loop);
+	AddInfo(TEXT("Event=physics_prototype_jump_interrupt_reset_verified Result=NewTakeoffInterruptsLandingAndResetClearsHistory"));
 	return !HasAnyErrors();
 }
 

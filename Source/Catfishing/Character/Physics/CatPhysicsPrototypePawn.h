@@ -23,6 +23,7 @@ struct FCatPhysicsPrototypeSnapshot
 	UPROPERTY() uint32 Revision = 0;
 	UPROPERTY() uint32 ResetEpoch = 0;
 	UPROPERTY() bool bGrounded = false;
+	UPROPERTY() bool bSupportSampleReady = false;
 };
 
 /** Isolated physical-body experiment. The production ACatCharacter/CMC is not a second motion writer. */
@@ -49,6 +50,8 @@ public:
 	UCatPhysicsGrabComponent* GetGrabComponent() const { return Grab; }
 	FRotator GetPrototypeView() const { return ViewInput; }
 	bool IsPrototypeGrounded() const { return HasAuthority() ? bGrounded : Snapshot.bGrounded; }
+	bool HasPrototypeMovementSample() const { return HasAuthority() ? bSupportSampleReady : bReceivedSnapshot && Snapshot.bSupportSampleReady; }
+	uint32 GetPrototypeResetEpoch() const { return Snapshot.ResetEpoch; }
 	FGuid GetPrototypeId() const { return PrototypeId; }
 	virtual FVector GetVelocity() const override;
 	virtual void Tick(float DeltaSeconds) override;
@@ -93,5 +96,6 @@ private:
 	double NextInputRejectLogSeconds = 0.0;
 	bool bShowDiagnostics = true;
 	bool bGrounded = false;
+	bool bSupportSampleReady = false;
 	bool bReceivedSnapshot = false;
 };

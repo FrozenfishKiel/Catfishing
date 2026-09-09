@@ -38,6 +38,9 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	enum class EAnimationState : uint8 { Idle, Walk, Takeoff, Airborne, Landing };
+	void UpdateBaseAnimation(float DeltaTime);
+	void PlayBaseAnimation(EAnimationState NewState);
 	void RefreshVisualPose(float DeltaTime);
 	void SolveHandReach(bool bLeftHand, const FVector& TargetWorld, float Alpha);
 	void RebuildComponentPose();
@@ -53,6 +56,13 @@ private:
 
 	UPROPERTY(EditDefaultsOnly, Category = "Catfishing|PhysicsPrototype|Visual")
 	TObjectPtr<UAnimSequence> WalkAnimation;
+
+	UPROPERTY(EditDefaultsOnly, Category = "Catfishing|PhysicsPrototype|Visual")
+	TObjectPtr<UAnimSequence> JumpStartAnimation;
+	UPROPERTY(EditDefaultsOnly, Category = "Catfishing|PhysicsPrototype|Visual")
+	TObjectPtr<UAnimSequence> JumpLoopAnimation;
+	UPROPERTY(EditDefaultsOnly, Category = "Catfishing|PhysicsPrototype|Visual")
+	TObjectPtr<UAnimSequence> JumpEndAnimation;
 
 	UPROPERTY(Transient)
 	TObjectPtr<UPoseableMeshComponent> VisualMesh;
@@ -70,13 +80,21 @@ private:
 	TWeakObjectPtr<UPrimitiveComponent> RightHand;
 
 	TArray<FTransform> ComponentPose;
+	TArray<FTransform> TransitionFromPose;
+	TArray<FTransform> LastBasePose;
+	EAnimationState AnimationState = EAnimationState::Idle;
+	float AnimationStateSeconds = 0.0f;
+	float TransitionSeconds = 1.0f;
+	float TakeoffConfirmationSeconds = 0.0f;
+	uint32 ObservedResetEpoch = 0;
+	bool bHasMovementSample = false;
+	bool bWasGrounded = false;
 	int32 LeftChain[4] = { INDEX_NONE, INDEX_NONE, INDEX_NONE, INDEX_NONE };
 	int32 RightChain[4] = { INDEX_NONE, INDEX_NONE, INDEX_NONE, INDEX_NONE };
 	float LeftReachAlpha = 0.0f;
 	float RightReachAlpha = 0.0f;
 	bool bLeftActive = false;
 	bool bRightActive = false;
-	bool bUsingWalkAnimation = false;
 	bool bLeftReachClamped = false;
 	bool bRightReachClamped = false;
 	bool bReportedInvalidPose = false;

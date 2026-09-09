@@ -1,6 +1,6 @@
 # 物理抓握原型使用说明
 
-这是独立的身体与抓握试验场。使用当前猫模型、Idle/Walk 动画和程序前爪姿势，验证真正的刚体接触、双向传力、固定支点承重与释放。正式 `ACatCharacter`、CMC、按键加入鱼竿、钓鱼费用和存档入口保持原有运行路径。
+这是独立的身体与抓握试验场。使用当前猫模型、Idle/Walk/JumpX 动画和程序前爪姿势，验证真正的刚体接触、双向传力、固定支点承重与释放。正式 `ACatCharacter`、CMC、按键加入鱼竿、钓鱼费用和存档入口保持原有运行路径。
 
 ## 入口
 
@@ -44,7 +44,7 @@ pwsh -File Scripts/launch_physics_grab_prototype.ps1 -Mode Client
 ## 运行边界
 
 - 身体是一个受控刚体，两只前爪各是球刚体。肩驱动和接触约束传递双方反作用力；脚点支撑与有限姿态驱动辅助站稳。它还不是完整多关节主动布娃娃，也没有正式的摔倒起身或爬回平台动作。
-- 当前模型和动画只作为表现源，程序 CCD 让前爪追随物理手的位置，保留骨段长度。原模型、ABP 和原 Physics Asset 不需要保存修改。
+- 当前模型和动画只作为表现源，起跳、空中与落地使用已有 JumpX 片段，程序 CCD 在身体动画和过渡混合之后让前爪追随物理手，保留骨段长度。原模型、ABP 和原 Physics Asset 不需要保存修改。
 - 服务器唯一模拟身体、手爪、道具与抓握。客户端提交输入并插值权威快照，没有实现完整物理预测和回滚。延迟手感需要单独评估。
 - 抓握快照包含独立 GripId、版本、目标 Actor / Component、骨骼和目标局部接触点。松手、失焦、切换控制、目标销毁、断线和复位都走明确的解除入口。
 - 原型的抓握关系没有投影到正式鱼竿名册；旧共同速度、固定队形、鱼线张力和账单尚未迁移。试验通过不能据此关闭 Fishing 或角色相关模块。
@@ -59,7 +59,7 @@ pwsh -File Build/Automation/verify_physics_grab_prototype.ps1 -Mode BuildGame
 
 报告在 `Saved/Automation/PhysicsGrabPrototype-20260909`，隔离工程的默认游戏日志在 `Saved/Validation/PhysicsGrabPrototype-20260909/Saved/Logs`。启动脚本不需要 `-log` 窗口。
 
-主要过滤词：`LogCatPhysicsGrab`、`physics_grip_created`、`physics_grip_observed`、`physics_grip_released`、`physics_body_motion`、`physics_prototype_visual_ready`。用 `GripId` 关联同一抓握，用 `BodyId` 关联身体；分别核对房主与客户端的 World / NetMode 和状态。
+主要过滤词：`LogCatPhysicsGrab`、`physics_grip_created`、`physics_grip_observed`、`physics_grip_released`、`physics_body_motion`、`physics_prototype_visual_ready`、`physics_prototype_animation_changed`。用 `GripId` 关联同一抓握，用 `BodyId` 关联身体；分别核对房主与客户端的 World / NetMode 和状态。
 
 测试分层：类型与骨长约束属于 `contract`；真实 World/Chaos 与 Listen 客户端 RPC 测试属于 `runtime_behavior`；渲染截图与实际操作属于原型的可视验证，不等于正式模型、正式动画或打包联机的 `presentation_delivery` 完成。实际结果与持续缺口归入 `Docs/Development/需求对齐差距清单.md`。
 
@@ -92,3 +92,18 @@ pwsh -File Build/Automation/verify_physics_grab_prototype.ps1 -Mode BuildGame
 原型 `presentation_delivery`：`Report-20260909-114801-453/index.json` 的实际地图侧视渲染网络用例通过，真实拉动 21.901 cm；有一条引擎 `r.MotionVectorSimulation` render-thread flag 警告，无抓握用例失败。图片 `Saved/Validation/PhysicsGrabPrototype-20260909/Saved/Automation/PhysicsGrabPrototype/Images/20260909-034821-gripped-and-pulling.png` 已目视检查：两猫、伸爪接触、彩色场地和中文 HUD 可见，旧多日光争用警告已消失。侧视相机仅供测试截图；玩家默认使用第三人称操作镜头。
 
 2026-09-09 11:50 通过启动脚本打开 Solo 独立窗口，未使用 `-log` 或 `-abslog`。实际默认文件为 `D:/develop/Catfishing/Saved/Validation/PhysicsGrabPrototype-20260909/Saved/Logs/Catfishing.log`，已确认新的 `physics_prototype_arena_ready`、两个 `physics_prototype_visual_ready`、`physics_body_started` 及抓握创建/释放事件；启动与操作日志快照留在证据目录 `Solo-20260909-115036.log`。这证明单机编辑器 Game 窗口落盘；Cook、打包后双进程联机及延迟手感仍未验收，不等同于正式表现交付完成。
+
+## 试玩反馈修复：跳跃表现
+
+触发：原型 Space 已给身体施加跳跃冲量，但 `RefreshVisualPose` 只按水平速度选择 Idle/Walk，所以模型不播跳跃。原型首轮 8 项测试没有覆盖这一消费者。修改前仅骨架资产有并行改动，本轮继续保留且不保存原动画资产。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 起落输入与生命周期 | 原型 Controller Space → Pawn `RequestJump` → 物理状态与 `Snapshot` → Visual | 跳力仍为 220 cm/s 增量、禁支撑 0.25 s；初生/Reset 原有支撑布尔暂时无效 | 增加 `bSupportSampleReady` 快照有效位与只读 ResetEpoch 查询，不复制动画枚举 | 先准备可辨识的新样本，再由 Visual 消费；Reset 清除样本有效性 | 初生不误播落地、空中 Reset、客户端接收时序 | 真实 World 与 Listen 客户端跳跃/Reset 测试通过 |
+| 动画与抓爪 | Visual 原 Idle/Walk 二态，PostPhysics 复制动画再 CCD | 起跳/空中/落地有对应姿势，原伸爪状态仍生效 | 复用 `JumpX_Start-IP/Loop-IP/End-IP`；起跳窗口 0.12 s、落地 0.18 s、姿态过渡 0.08 s；缓存 CCD 前的已混合姿势供重跳打断 | 基础选态 → 动画推进 → 根锁与混合 → CCD；离地可打断落地，真实落地可打断起跳 | 三态实际动画资产、空中 CCD、骨长、落地再跳 | 两项 Runtime 及 owning-client 网络测试通过；短离地保留 0.12 s 确认窗口，兼容支撑先变化、冲量后消费 |
+| 根骨与资产 | JumpX 三段同 Cat_Skeleton；Start/Loop/End 分别 0.583/1.083/0.833 s，RootMotion 关闭 | 渲染发现 Loop/End 的 RigRoot 仍额外上移约 51/48 cm，使模型叠加刚体高度 | 仅在原型跳跃 Poseable 副本中，将根骨完整锁为参考变换，等价 RefPose RootLock；不写共享动画资产 | CopyPose 后先锁根，混合后缓存基础姿势，再解前爪 | 可见根骨每帧等于参考根，原距离镜头截图复核 | 根锁断言通过；原二态分支与 `bUsingWalkAnimation` 已由统一状态选择替换，无第二个动画播放入口 |
+| 配置、正式消费者与交付 | 原型使用说明、专项脚本、正式 CMC/ABP 与现有地图配置 | 操作、正式钓鱼与持久化不变；无新增 WBP/DataAsset 或地图迁移 | 更新本说明与唯一进度入口；日志增加 `physics_prototype_animation_changed` | 验证新消费者后刷新独立试玩 DLL | Editor/Game、原抓握回归、运行时事件、实际渲染 | 已构建并运行；原 ABP/PhysicsAsset 仍有正式消费者，不删除；正式 Cook/打包未运行 |
+
+最终集成验证：`Saved/Automation/PhysicsGrabPrototype-20260909/BuildEditor-20260909-121928-221.log` 与 `BuildGame-20260909-122003-953.log` 成功；`Report-20260909-121959-622/index.json` 为 13/13 clean（含同期倒地修复回归）。跳跃专项为 `PhysicalJumpPlaysAuthoredPhasesAndKeepsPawIK`、`JumpLandingCanBeInterruptedAndResetDoesNotFakeLanding`、`ListenClientJumpAnimationAndReset`。运行测试证明真实身体离地、两端三段动画资产、落地后重跳、空中重置、根骨对齐与 CCD；不把仅 `IsPlaying` 当作跳跃通过证据。
+
+`presentation_delivery` 的原型渲染复核为 `Report-20260909-122034-046/index.json`，网络用例通过，仅保留引擎 `r.MotionVectorSimulation` 警告。三图在隔离工程 `Saved/Automation/PhysicsGrabPrototype/Images/20260909-042053-jump-{takeoff,airborne,landing}.png`，已目视猫留在原镜头内、空中姿态可见。完整变换日志显示源 RigRoot 额外 Z 约 51/49 cm，而可见根与参考根均为零位置、零旋转、单位缩放。截图保留默认运动模糊，落地图是阶段首帧；不能用单张图证明完整落地动作或正式美术验收。
