@@ -5,8 +5,8 @@
 #include "CatFrontendWidgetAuthoringLibrary.generated.h"
 
 /**
- * 正式 Frontend WBP 的编辑器构造入口；只在编辑器中创建缺失资产并保存，不向运行时模块泄漏 UMGEditor API。
- * 主线程或资产脚本调用它建立首份可编辑控件树；已有资产始终保留给美术和 UI 程序继续编辑，避免重复执行覆盖人工布局。
+ * 正式 Frontend WBP 的编辑器构造入口；只在编辑器中创建或修正目标资产并保存，不向运行时模块泄漏 UMGEditor API。
+ * 主线程或资产脚本调用它建立首份可编辑控件树；普通子页面保留人工布局，Root 与 Loading 会在合同变化时重建来移除旧加载子页。
  */
 UCLASS()
 class CATFISHINGEDITOR_API UCatFrontendWidgetAuthoringLibrary : public UBlueprintFunctionLibrary
@@ -15,8 +15,8 @@ class CATFISHINGEDITOR_API UCatFrontendWidgetAuthoringLibrary : public UBlueprin
 
 public:
 	/**
-	 * 创建当前缺失的九个正式 Frontend WBP，并用对应 C++ 父类和 BindWidget 合同拼装首份基础布局。
-	 * 该入口由编辑器内的资产构造脚本调用；成功时每个新包已经编译、登记并保存，已有同名资产只接受字体修复，不覆盖人工布局。
+	 * 创建当前缺失的 Frontend 子页面，并重建 Root 与全局 Loading WBP 来落实最新 C++ / BindWidget 合同。
+	 * 该入口由编辑器内的资产构造脚本调用；成功时相关包已经编译、登记并保存，普通业务子页面不会被重复执行覆盖。
 	 */
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Frontend")
 	static bool CreateMissingFrontendWidgetBlueprints();

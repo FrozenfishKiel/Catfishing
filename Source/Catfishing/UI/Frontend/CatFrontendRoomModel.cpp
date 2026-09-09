@@ -42,8 +42,6 @@ namespace CatFrontendRoomModelText
 			return FText::FromString(TEXT("世界存档未能完成，已保留当前房间，请重试。"));
 		case ECatOnlineError::ActiveRunReleaseFailed:
 			return FText::FromString(TEXT("已离开房间，但本局存档状态未能释放，暂时无法切换存档。"));
-		case ECatOnlineError::ClientStartRetryExhausted:
-			return FText::FromString(TEXT("进入游戏多次失败，请退出房间后重新加入。"));
 		case ECatOnlineError::ConnectStringUnavailable:
 			return FText::FromString(TEXT("无法取得房主连接地址。"));
 		case ECatOnlineError::NetworkFailure:
@@ -54,34 +52,6 @@ namespace CatFrontendRoomModelText
 		default:
 			return FText::FromString(TEXT("房间操作未完成。"));
 		}
-	}
-
-	/** 加载阶段文本只从 Online 快照派生，不新增前端阶段枚举：预载 pending 说明包还在引擎队列里，TravelQueued/TravelingToLake 说明 Lyra 式加载保留原因已经转为地图旅行。 */
-	static FText MakeGameplayLoadStatusText(const FCatOnlineSnapshot& Snapshot)
-	{
-		if (Snapshot.LastError != ECatOnlineError::None)
-		{
-			return MakeErrorText(Snapshot.LastError);
-		}
-		if (Snapshot.ActiveOperation == ECatOnlineOperation::Start)
-		{
-			if (Snapshot.bIsGameplayLoadPending)
-			{
-				return FText::FromString(TEXT("正在预载游戏世界，进度暂不可用。"));
-			}
-			if (Snapshot.TransportState == ECatOnlineTransportState::TravelQueued
-				|| Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake)
-			{
-				return FText::FromString(TEXT("预载完成，正在进入游戏世界。"));
-			}
-			return FText::FromString(TEXT("正在准备进入游戏世界。"));
-		}
-		if (Snapshot.TransportState == ECatOnlineTransportState::TravelQueued
-			|| Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake)
-		{
-			return FText::FromString(TEXT("正在进入游戏世界。"));
-		}
-		return FText::GetEmpty();
 	}
 }
 
@@ -152,7 +122,7 @@ FCatOnlineResult UCatFrontendRoomModel::LeaveRoom()
 	return Result;
 }
 
-// 开始游戏流程：先由 Online 核验 Host、房间和已加载存档前置条件；受理后不在 Model 自行旅行，加载页应通过同一 Online 快照的预载、TravelQueued/TravelingToLake 状态读取真实进度。
+// 开始游戏流程：先由 Online 核验 Host、房间和已加载存档前置条件；受理后不在前端 Model 自行旅行，进入过程只交给 LocalPlayer 全局遮罩读取 Online 真实阶段。
 FCatOnlineResult UCatFrontendRoomModel::StartGame()
 {
 	UCatOnlineSubsystem* OnlineSubsystem = Online.Get();
@@ -228,22 +198,6 @@ bool UCatFrontendRoomModel::CanStartGame() const
 		&& Snapshot.SessionState == ECatOnlineSessionState::Host
 		&& Snapshot.ActiveOperation == ECatOnlineOperation::None
 		&& !Snapshot.bIsGameplayLoadPending;
-}
-
-// 加载进度读取流程：只代理已绑定 Online 返回的引擎百分比；来源失效时返回 -1，调用者据此展示未知加载阶段而不是伪造进度。
-float UCatFrontendRoomModel::GetGameplayLoadProgress() const
-{
-	if (const UCatOnlineSubsystem* OnlineSubsystem = Online.Get())
-	{
-		return OnlineSubsystem->GetGameplayLoadProgress();
-	}
-	return -1.0f;
-}
-
-// 加载阶段读取流程：读取当前 Online 快照并只做展示语义转换；百分比仍由 GetGameplayLoadProgress 单独提供，避免文本阶段和数值进度互相伪造。
-FText UCatFrontendRoomModel::GetGameplayLoadStatusText() const
-{
-	return CatFrontendRoomModelText::MakeGameplayLoadStatusText(GetSnapshot());
 }
 
 // Online 通知流程：先读取唯一快照，错误优先，其次为已接受邀请的有界等待和真实 Join 提交生成文本，其他状态清除旧文本；最后广播，Controller 再读取房间事实决定显示，不要求玩家再次确认邀请。

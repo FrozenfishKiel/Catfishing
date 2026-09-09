@@ -651,10 +651,10 @@ namespace CatFrontendWidgetAuthoring
 		return true;
 	}
 
-	/** 构造局内 ESC 菜单的正式 WBP；它提供暂停命令页、设置页、回主菜单等待页和同名设置控件，业务仍交给 Controller 与 SettingsModel。 */
+	/** 构造局内 ESC 菜单的正式 WBP；它提供暂停命令页、设置页和同名设置控件，回主菜单等待表现由全局 Loading WBP 负责。 */
 	bool BuildLakeMainMenuWidget(UWidgetBlueprint* WidgetBlueprint)
 	{
-		// 局内菜单布局流程：先铺全屏半透明遮罩，再用 Switcher 承载命令页、设置页和回主菜单等待页；命令页居中纵排，设置页复用主界面同名控件合同。
+		// 局内菜单布局流程：先铺全屏半透明遮罩，再用 Switcher 承载命令页和设置页；命令页居中纵排，设置页复用主界面同名控件合同。
 		if (!WidgetBlueprint || !WidgetBlueprint->WidgetTree)
 		{
 			return false;
@@ -669,8 +669,7 @@ namespace CatFrontendWidgetAuthoring
 		UWidgetSwitcher* PageSwitcher = Tree->ConstructWidget<UWidgetSwitcher>(UWidgetSwitcher::StaticClass(), TEXT("LakeMainMenuPageSwitcher"));
 		UOverlay* CommandPage = Tree->ConstructWidget<UOverlay>(UOverlay::StaticClass(), TEXT("LakeCommandPanel"));
 		UOverlay* SettingsPage = Tree->ConstructWidget<UOverlay>(UOverlay::StaticClass(), TEXT("LakeSettingsPanel"));
-		UOverlay* ExitLoadingPage = Tree->ConstructWidget<UOverlay>(UOverlay::StaticClass(), TEXT("LakeExitLoadingPanel"));
-		if (!Scrim || !PageSwitcher || !CommandPage || !SettingsPage || !ExitLoadingPage)
+		if (!Scrim || !PageSwitcher || !CommandPage || !SettingsPage)
 		{
 			return false;
 		}
@@ -680,11 +679,9 @@ namespace CatFrontendWidgetAuthoring
 		AddFullCanvasChild(Canvas, PageSwitcher, 1);
 		PageSwitcher->AddChild(CommandPage);
 		PageSwitcher->AddChild(SettingsPage);
-		PageSwitcher->AddChild(ExitLoadingPage);
 		ExposeWidget(WidgetBlueprint, PageSwitcher);
 		ExposeWidget(WidgetBlueprint, CommandPage);
 		ExposeWidget(WidgetBlueprint, SettingsPage);
-		ExposeWidget(WidgetBlueprint, ExitLoadingPage);
 
 		USizeBox* MenuBounds = Tree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("LakeMainMenuBounds"));
 		UBorder* MenuSurface = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("LakeMainMenuSurface"));
@@ -735,43 +732,6 @@ namespace CatFrontendWidgetAuthoring
 		Status->SetJustification(ETextJustify::Center);
 		Status->SetColorAndOpacity(FLinearColor(0.68f, 0.76f, 0.72f));
 		SetBoxSlot(Status, false, FMargin(0.0f, 4.0f, 0.0f, 0.0f));
-
-		USizeBox* ExitLoadingBounds = Tree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("LakeExitLoadingBounds"));
-		UBorder* ExitLoadingSurface = Tree->ConstructWidget<UBorder>(UBorder::StaticClass(), TEXT("LakeExitLoadingSurface"));
-		UVerticalBox* ExitLoadingColumn = Tree->ConstructWidget<UVerticalBox>(UVerticalBox::StaticClass(), TEXT("LakeExitLoadingColumn"));
-		if (!ExitLoadingBounds || !ExitLoadingSurface || !ExitLoadingColumn)
-		{
-			return false;
-		}
-		ExitLoadingBounds->SetWidthOverride(420.0f);
-		ExitLoadingBounds->SetMinDesiredWidth(340.0f);
-		ExitLoadingSurface->SetBrush(FSlateColorBrush(FLinearColor(0.035f, 0.045f, 0.042f, 0.96f)));
-		ExitLoadingSurface->SetPadding(FMargin(28.0f, 24.0f));
-		ExitLoadingSurface->SetContent(ExitLoadingColumn);
-		ExitLoadingBounds->SetContent(ExitLoadingSurface);
-		if (UOverlaySlot* ExitLoadingSlot = ExitLoadingPage->AddChildToOverlay(ExitLoadingBounds))
-		{
-			ExitLoadingSlot->SetHorizontalAlignment(HAlign_Center);
-			ExitLoadingSlot->SetVerticalAlignment(VAlign_Center);
-		}
-		UTextBlock* ExitLoadingTitle = AddText(Tree, ExitLoadingColumn, TEXT("ExitLoadingTitleText"), TEXT("正在返回主菜单"), 28);
-		UTextBlock* ExitLoadingStatus = AddText(Tree, ExitLoadingColumn, TEXT("ExitLoadingStatusTextBlock"), TEXT("正在准备返回主菜单。"), 16);
-		UProgressBar* ExitLoadingProgress = Tree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass(), TEXT("ExitLoadingProgressBar"));
-		if (!ExitLoadingTitle || !ExitLoadingStatus || !ExitLoadingProgress)
-		{
-			return false;
-		}
-		ExitLoadingTitle->SetJustification(ETextJustify::Center);
-		ExitLoadingStatus->SetJustification(ETextJustify::Center);
-		ExitLoadingStatus->SetColorAndOpacity(FLinearColor(0.68f, 0.76f, 0.72f));
-		ExitLoadingProgress->SetIsMarquee(true);
-		ExitLoadingProgress->SetPercent(0.0f);
-		SetBoxSlot(ExitLoadingTitle, false, FMargin(0.0f, 0.0f, 0.0f, 18.0f));
-		SetBoxSlot(ExitLoadingStatus, false, FMargin(0.0f, 0.0f, 0.0f, 18.0f));
-		ExitLoadingColumn->AddChild(ExitLoadingProgress);
-		SetBoxSlot(ExitLoadingProgress, false);
-		ExposeWidget(WidgetBlueprint, ExitLoadingProgress);
-		ExitLoadingPage->SetVisibility(ESlateVisibility::Collapsed);
 
 		UScaleBox* SettingsScale = Tree->ConstructWidget<UScaleBox>(UScaleBox::StaticClass(), TEXT("LakeSettingsScale"));
 		USizeBox* SettingsBounds = Tree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("LakeSettingsBounds"));
@@ -1005,11 +965,11 @@ namespace CatFrontendWidgetAuthoring
 		return true;
 	}
 
-	/** 构造加载页的真实状态展示位；天数、献祭和加载百分比由原生 Root 刷新，不由资产模拟。 */
+	/** 构造全局 Loading 遮罩的真实状态展示位；资产只提供 View 控件，阶段和地图包百分比由 LocalPlayer UI 从 Online 快照写入。 */
 	bool BuildLoadingWidget(UWidgetBlueprint* WidgetBlueprint)
 	{
-		// 加载布局流程：检查页面根，保留上方标题和背景空间，再把两项旅程数据、提示与细进度条排列在底部；初始值明确未知。
-		// 进度条默认 marquee，由 Root 在有真实百分比时关闭；不创建计时器或随时间增长的进度。
+		// 加载遮罩布局流程：检查页面根，保留上方标题和背景空间，再把阶段文本、提示与细条形控件排列在底部；初始值只是占位，运行时以 Online 快照为准。
+		// 条形控件默认确定进度，由 LocalPlayer UI 在 Online 没有真实包百分比时才切成 marquee；资产本身不创建计时器、不伪造百分比。
 		UVerticalBox* Column = CreatePageColumn(WidgetBlueprint, TEXT("LoadingRoot"));
 		if (!Column)
 		{
@@ -1020,10 +980,10 @@ namespace CatFrontendWidgetAuthoring
 		USpacer* Space = Tree->ConstructWidget<USpacer>(USpacer::StaticClass(), TEXT("LoadingOpenSpace"));
 		Column->AddChild(Space);
 		SetBoxSlot(Space, true);
-		AddText(Tree, Column, TEXT("LoadingDayTextBlock"), TEXT("天数：未提供"));
-		AddText(Tree, Column, TEXT("LoadingSacrificeProgressTextBlock"), TEXT("献祭进度：未提供"));
+		AddText(Tree, Column, TEXT("LoadingDayTextBlock"), TEXT("正在切换世界"));
+		AddText(Tree, Column, TEXT("LoadingSacrificeProgressTextBlock"), TEXT("请稍候"));
 		AddText(Tree, Column, TEXT("LoadingHintText"), TEXT("旅程即将开始"), 16);
-		AddText(Tree, Column, TEXT("LoadingProgressTextBlock"), TEXT("正在准备旅程。"));
+		AddText(Tree, Column, TEXT("LoadingProgressTextBlock"), TEXT("正在加载。"));
 		USizeBox* ProgressBounds = Tree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("LoadingProgressBounds"));
 		ProgressBounds->SetHeightOverride(12.0f);
 		UProgressBar* ProgressBar = Tree->ConstructWidget<UProgressBar>(UProgressBar::StaticClass(), TEXT("LoadingProgressBar"));
@@ -1032,7 +992,8 @@ namespace CatFrontendWidgetAuthoring
 		Style.SetFillImage(FSlateColorBrush(FLinearColor::White));
 		ProgressBar->SetWidgetStyle(Style);
 		ProgressBar->SetFillColorAndOpacity(FLinearColor(0.08f, 0.67f, 0.52f));
-		ProgressBar->SetIsMarquee(true);
+		ProgressBar->SetIsMarquee(false);
+		ProgressBar->SetPercent(0.0f);
 		ProgressBounds->SetContent(ProgressBar);
 		Column->AddChild(ProgressBounds);
 		SetBoxSlot(ProgressBounds, false, FMargin(0.0f, 12.0f, 0.0f, 8.0f));
@@ -1192,8 +1153,7 @@ namespace CatFrontendWidgetAuthoring
 		const TSubclassOf<UUserWidget> SaveListClass = LoadChildWidgetClass(TEXT("WBP_CatFrontendSaveList"));
 		const TSubclassOf<UUserWidget> RoomClass = LoadChildWidgetClass(TEXT("WBP_CatFrontendRoom"));
 		const TSubclassOf<UUserWidget> SettingsClass = LoadChildWidgetClass(TEXT("WBP_CatFrontendSettings"));
-		const TSubclassOf<UUserWidget> LoadingClass = LoadChildWidgetClass(TEXT("WBP_CatFrontendLoading"));
-		if (!MenuClass || !SaveListClass || !RoomClass || !SettingsClass || !LoadingClass)
+		if (!MenuClass || !SaveListClass || !RoomClass || !SettingsClass)
 		{
 			return false;
 		}
@@ -1202,8 +1162,7 @@ namespace CatFrontendWidgetAuthoring
 		UUserWidget* SaveListPage = WidgetBlueprint->WidgetTree->ConstructWidget<UUserWidget>(SaveListClass, TEXT("SaveListPage"));
 		UUserWidget* RoomPage = WidgetBlueprint->WidgetTree->ConstructWidget<UUserWidget>(RoomClass, TEXT("RoomPage"));
 		UUserWidget* FrontendSettingsPage = WidgetBlueprint->WidgetTree->ConstructWidget<UUserWidget>(SettingsClass, TEXT("FrontendSettingsPage"));
-		UUserWidget* LoadingPage = WidgetBlueprint->WidgetTree->ConstructWidget<UUserWidget>(LoadingClass, TEXT("LoadingPage"));
-		if (!MenuPage || !SaveListPage || !RoomPage || !FrontendSettingsPage || !LoadingPage)
+		if (!MenuPage || !SaveListPage || !RoomPage || !FrontendSettingsPage)
 		{
 			return false;
 		}
@@ -1211,12 +1170,10 @@ namespace CatFrontendWidgetAuthoring
 		PageSwitcher->AddChild(SaveListPage);
 		PageSwitcher->AddChild(RoomPage);
 		PageSwitcher->AddChild(FrontendSettingsPage);
-		PageSwitcher->AddChild(LoadingPage);
 		ExposeWidget(WidgetBlueprint, MenuPage);
 		ExposeWidget(WidgetBlueprint, SaveListPage);
 		ExposeWidget(WidgetBlueprint, RoomPage);
 		ExposeWidget(WidgetBlueprint, FrontendSettingsPage);
-		ExposeWidget(WidgetBlueprint, LoadingPage);
 		return true;
 	}
 
@@ -1349,11 +1306,11 @@ namespace CatFrontendWidgetAuthoring
 		return true;
 	}
 
-	/** 创建一个 Frontend 目录下尚不存在的 WBP；它把旧入口保持为前端资产的薄包装，避免改动既有调用点。 */
+	/** 创建一个 Frontend 目录下尚不存在的 WBP；它把正式入口固定在 Frontend 资产目录，避免运行时再创建原生替身。 */
 	bool CreateMissingWidget(const TCHAR* AssetName, TSubclassOf<UUserWidget> ParentClass, TSubclassOf<UWidget> RootWidgetClass,
 		TFunctionRef<bool(UWidgetBlueprint*)> BuildWidget)
 	{
-		// 前端 WBP 创建流程：固定使用 Frontend 资产目录和作者标签，确保九个旧资产的包路径不因局内菜单作者入口而变化。
+		// 前端 WBP 创建流程：固定使用 Frontend 资产目录和作者标签，确保九个正式资产的包路径不因局内菜单作者入口而变化。
 		return CreateMissingWidgetInDirectory(WidgetDirectory, AssetName, ParentClass, RootWidgetClass,
 			TEXT("CatFrontendWidgetAuthoring"), BuildWidget);
 	}
@@ -1559,20 +1516,17 @@ namespace CatFrontendWidgetAuthoring
 	/** 核验正式局内菜单 WBP 的父类与命名控件；它证明 C++ View 只绑定项目资产，不创建 C++ 菜单替身。 */
 	bool ValidateLakeMainMenuWidgetContract()
 	{
-		// 局内菜单合同核验流程：先检查 WBP 继承 UCatLakeMainMenuWidget，再核对命令页、设置页和回主菜单等待页同名控件；任一项缺失都会让资产脚本失败。
+		// 局内菜单合同核验流程：先检查 WBP 继承 UCatLakeMainMenuWidget，再核对命令页和设置页同名控件；任一项缺失都会让资产脚本失败。
 		const FRequiredWidgetControl LakeMenuControls[] = {
 			{ TEXT("LakeMainMenuPageSwitcher"), UWidgetSwitcher::StaticClass() },
 			{ TEXT("LakeCommandPanel"), UPanelWidget::StaticClass() },
 			{ TEXT("LakeSettingsPanel"), UPanelWidget::StaticClass() },
-			{ TEXT("LakeExitLoadingPanel"), UPanelWidget::StaticClass() },
 			{ TEXT("CloseButton"), UButton::StaticClass() },
 			{ TEXT("SettingsButton"), UButton::StaticClass() },
 			{ TEXT("SaveButton"), UButton::StaticClass() },
 			{ TEXT("ReturnToMainMenuButton"), UButton::StaticClass() },
 			{ TEXT("ExitGameButton"), UButton::StaticClass() },
 			{ TEXT("StatusTextBlock"), UTextBlock::StaticClass() },
-			{ TEXT("ExitLoadingStatusTextBlock"), UTextBlock::StaticClass() },
-			{ TEXT("ExitLoadingProgressBar"), UProgressBar::StaticClass() },
 			{ TEXT("GameSettingsCategoryButton"), UButton::StaticClass() },
 			{ TEXT("GraphicsSettingsCategoryButton"), UButton::StaticClass() },
 			{ TEXT("AudioSettingsCategoryButton"), UButton::StaticClass() },
@@ -1614,17 +1568,16 @@ namespace CatFrontendWidgetAuthoring
 				LakeMenuControls);
 	}
 
-	/** 核验九个正式 WBP 的 Root 与子树接线点；它证明对象树可供 Root 原生解析，但不替代 Editor 中的运行期交互验收。 */
+	/** 核验九个正式 WBP 的 Root、全局 Loading 与子树接线点；它证明对象树可供原生代码解析，但不替代 Editor 中的运行期交互验收。 */
 	bool ValidateFrontendWidgetContracts()
 	{
-		// 整体合同核验流程：逐页检查具名控件的类型和变量标记，再检查 Root 与三类行的原生父类；设置包含真实输入、设备刷新、语音禁用下拉框及原因文本，全部满足才报告成功。
+		// 整体合同核验流程：逐页检查具名控件的类型和变量标记，再检查 Root、全局 Loading 与三类行的原生父类；设置包含真实输入、设备刷新、语音禁用下拉框及原因文本，全部满足才报告成功。
 		const FRequiredWidgetControl RootControls[] = {
 			{ TEXT("FrontendPageSwitcher"), UWidgetSwitcher::StaticClass() },
 			{ TEXT("MenuPage"), UUserWidget::StaticClass() },
 			{ TEXT("SaveListPage"), UUserWidget::StaticClass() },
 			{ TEXT("RoomPage"), UUserWidget::StaticClass() },
-			{ TEXT("FrontendSettingsPage"), UUserWidget::StaticClass() },
-			{ TEXT("LoadingPage"), UUserWidget::StaticClass() }
+			{ TEXT("FrontendSettingsPage"), UUserWidget::StaticClass() }
 		};
 		const FRequiredWidgetControl MenuControls[] = {
 			{ TEXT("StartGameButton"), UButton::StaticClass() },
@@ -1727,17 +1680,19 @@ namespace CatFrontendWidgetAuthoring
 
 bool UCatFrontendWidgetAuthoringLibrary::CreateMissingFrontendWidgetBlueprints()
 {
-	// 前端 WBP 创建流程：先建立八个独立子资产并完成各自编译，再建立引用它们的 Root；随后只修复文本字体并核验 Root 与子树合同。
+	// 前端 WBP 创建流程：先补齐普通业务子资产，再重建全局 Loading 和 Root，确保旧 Root 子加载页被实际移出资产树；最后修复文本字体并核验全部合同。
 	using namespace CatFrontendWidgetAuthoring;
 	const bool bCreated = CreateMissingWidget(TEXT("WBP_CatFrontendMenu"), UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), BuildMenuWidget)
 		&& CreateMissingWidget(TEXT("WBP_CatFrontendSaveList"), UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), BuildSaveListWidget)
 		&& CreateMissingWidget(TEXT("WBP_CatFrontendRoom"), UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), BuildRoomWidget)
 		&& CreateMissingWidget(TEXT("WBP_CatFrontendSettings"), UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), BuildSettingsWidget)
-		&& CreateMissingWidget(TEXT("WBP_CatFrontendLoading"), UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), BuildLoadingWidget)
 		&& CreateMissingWidget(TEXT("WBP_CatSaveSlotRow"), UCatFrontendSaveSlotRowWidget::StaticClass(), USizeBox::StaticClass(), BuildSaveSlotRowWidget)
 		&& CreateMissingWidget(TEXT("WBP_CatRoomFriendRow"), UCatFrontendRoomFriendRowWidget::StaticClass(), USizeBox::StaticClass(), BuildRoomFriendRowWidget)
 		&& CreateMissingWidget(TEXT("WBP_CatRoomPlayerSlot"), UCatFrontendRoomPlayerSlotWidget::StaticClass(), USizeBox::StaticClass(), BuildRoomPlayerSlotWidget)
-		&& CreateMissingWidget(TEXT("WBP_CatFrontendRoot"), UCatFrontendRootWidget::StaticClass(), UCanvasPanel::StaticClass(), BuildRootWidget);
+		&& RebuildWidgetInDirectory(WidgetDirectory, TEXT("WBP_CatFrontendLoading"),
+			UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), TEXT("CatFrontendWidgetAuthoring"), BuildLoadingWidget)
+		&& RebuildWidgetInDirectory(WidgetDirectory, TEXT("WBP_CatFrontendRoot"),
+			UCatFrontendRootWidget::StaticClass(), UCanvasPanel::StaticClass(), TEXT("CatFrontendWidgetAuthoring"), BuildRootWidget);
 	return bCreated && RepairFrontendWidgetFonts() && ValidateFrontendWidgetContracts();
 }
 

@@ -1,10 +1,22 @@
 #include "Online/CatOnlineSubsystem.h"
 
+#include "AbilitySystem/BodyAction/CatBodyActionPresentationSettings.h"
+#include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "Async/Async.h"
+#include "Data/CatFishCatalogSettings.h"
+#include "Engine/AssetManager.h"
+#include "Engine/StreamableManager.h"
+#include "Equipment/CatEquipmentSettings.h"
+#include "Fishing/CatFishingSettings.h"
+#include "Fishing/Presentation/CatFishingPresentationSettings.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Logging/CatLog.h"
 #include "Online/CatOnlineSettings.h"
+#include "Run/CatRunSettings.h"
 #include "Save/CatSaveSubsystem.h"
 #include "Settings/CatGameUserSettings.h"
+#include "ShopEconomy/CatShopEconomySettings.h"
+#include "UI/CatUISettings.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
@@ -44,12 +56,90 @@ namespace CatOnlineNames
 	static const ANSICHAR* RoomNameLobbyKey = "CAT_ROOM_NAME";
 	/** Steam Lobby 的 Host ready 元数据；只有 Lake 的 GameNetDriver 已创建后才由 Host 写入，Client 用它决定何时预载并连接。 */
 	static const ANSICHAR* LobbyReadyKey = "CAT_GAME_READY";
-	/** 单个 Lobby 内 Client 自动启动的最大次数；轮询和失败收口共用，耗尽后必须由用户退出再加入以开启新预算。 */
-	static constexpr int32 MaxClientGameplayStartAttempts = 3;
 	/** Host ready 失败后等待下一次发布尝试的秒数；PostLoadMap 与 Lobby 轮询用它写入单调时间，轮询只在 Steam Lobby 可写时消费以避免 NULL 后端刷屏。 */
 	static constexpr double HostLobbyReadyRetrySeconds = 2.0;
 	/** 平台已确认邀请等待前台和本地身份的最长秒数；接受时冻结期限，持续未就绪也不能重新开始计时。 */
 	static constexpr double AcceptedInviteWaitSeconds = 30.0;
+}
+
+namespace CatOnlineMapPreloadProgress
+{
+	// 地图包阶段换算流程：UE5.8 的 LoadPackageAsync 只给离散阶段事件，不给连续百分比；这里把真实阶段映射成包内进度，供总进度合成使用。
+	static float GetPercent(const EAsyncLoadingProgress ProgressType)
+	{
+		switch (ProgressType)
+		{
+		case EAsyncLoadingProgress::Started:
+			return 0.0f;
+		case EAsyncLoadingProgress::Read:
+			return 35.0f;
+		case EAsyncLoadingProgress::Serialized:
+			return 75.0f;
+		case EAsyncLoadingProgress::FullyLoaded:
+			return 100.0f;
+		case EAsyncLoadingProgress::Failed:
+		default:
+			return 0.0f;
+		}
+	}
+
+	// 地图包阶段文案流程：把引擎进度事件翻译成玩家能看懂的等待点，避免 UI 只显示一个没有来处的百分比。
+	static const TCHAR* GetStatus(const EAsyncLoadingProgress ProgressType)
+	{
+		switch (ProgressType)
+		{
+		case EAsyncLoadingProgress::Started:
+			return TEXT("地图包请求已进入异步加载队列。");
+		case EAsyncLoadingProgress::Read:
+			return TEXT("地图包磁盘数据已读取完成。");
+		case EAsyncLoadingProgress::Serialized:
+			return TEXT("地图对象序列化已完成。");
+		case EAsyncLoadingProgress::FullyLoaded:
+			return TEXT("地图包已完全加载，正在提交旅行。");
+		case EAsyncLoadingProgress::Failed:
+		default:
+			return TEXT("地图包加载失败。");
+		}
+	}
+
+	// 地图包阶段日志流程：用稳定英文枚举名写入 Development 日志，便于和引擎加载事件一起检索。
+	static const TCHAR* GetName(const EAsyncLoadingProgress ProgressType)
+	{
+		switch (ProgressType)
+		{
+		case EAsyncLoadingProgress::Started:
+			return TEXT("Started");
+		case EAsyncLoadingProgress::Read:
+			return TEXT("Read");
+		case EAsyncLoadingProgress::Serialized:
+			return TEXT("Serialized");
+		case EAsyncLoadingProgress::FullyLoaded:
+			return TEXT("FullyLoaded");
+		case EAsyncLoadingProgress::Failed:
+		default:
+			return TEXT("Failed");
+		}
+	}
+}
+
+namespace CatOnlineStartupAssetPreload
+{
+	// 资源集合去重流程：只接收配置里明确声明的软引用；空引用表示对应功能尚未配置，不在加载阶段伪造失败或扫描替代资源。
+	static void AddUniquePath(TArray<FSoftObjectPath>& OutAssetPaths, const FSoftObjectPath& AssetPath)
+	{
+		if (!AssetPath.IsNull())
+		{
+			OutAssetPaths.AddUnique(AssetPath);
+		}
+	}
+
+	// 资源集合文案流程：StreamableHandle 只报告对象完成数，这里把数量和百分比落成可读状态，方便 UI 与 Development 日志对齐。
+	static FString MakeProgressStatus(const int32 LoadedCount, const int32 RequestedCount)
+	{
+		return RequestedCount > 0
+			? FString::Printf(TEXT("玩法启动资源 %d/%d。"), LoadedCount, RequestedCount)
+			: FString(TEXT("没有需要预热的玩法启动资源。"));
+	}
 }
 
 namespace CatOnlineRoomFacts
@@ -79,6 +169,7 @@ void UCatOnlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
 	GetDefault<UCatOnlineSettings>()->TryGetGameplayMapPackage(GameplayMapPackage);
+	PreLoadMapHandle = FCoreUObjectDelegates::PreLoadMapWithContext.AddUObject(this, &ThisClass::HandlePreLoadMap);
 	PostLoadMapHandle = FCoreUObjectDelegates::PostLoadMapWithWorld.AddUObject(this, &ThisClass::HandlePostLoadMap);
 	if (GEngine)
 	{
@@ -97,7 +188,7 @@ void UCatOnlineSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	BroadcastSnapshot(TEXT("online_initialized"));
 }
 
-// 销毁流程：先推进 epoch 并移除邀请检查，记录尚未提交的邀请已随 GameInstance 关闭而失效；随后撤销载荷释放许可并解绑 Save 等待，不在关闭时释放或另存世界，最后解除其余委托、清缓存与广播并交还父类。
+// 销毁流程：先推进 epoch 并移除邀请检查，记录尚未提交的邀请已随 GameInstance 关闭而失效；随后撤销载荷释放许可、释放玩法预热 handle 并解绑 Save 等待，不在关闭时释放或另存世界，最后解除其余委托、清缓存与广播并交还父类。
 void UCatOnlineSubsystem::Deinitialize()
 {
 	++OperationEpoch;
@@ -116,6 +207,8 @@ void UCatOnlineSubsystem::Deinitialize()
 	ClearOperationDelegates();
 	ClearInviteDelegate();
 	StopLobbyFactPolling();
+	ClearGameplayStartupAssetsPreload(true);
+	StopMapPreloadProgressTracking();
 	if (GEngine && TravelFailureHandle.IsValid())
 	{
 		GEngine->OnTravelFailure().Remove(TravelFailureHandle);
@@ -126,6 +219,8 @@ void UCatOnlineSubsystem::Deinitialize()
 		GEngine->OnNetworkFailure().Remove(NetworkFailureHandle);
 	}
 	NetworkFailureHandle.Reset();
+	FCoreUObjectDelegates::PreLoadMapWithContext.Remove(PreLoadMapHandle);
+	PreLoadMapHandle.Reset();
 	FCoreUObjectDelegates::PostLoadMapWithWorld.Remove(PostLoadMapHandle);
 	PostLoadMapHandle.Reset();
 
@@ -144,6 +239,10 @@ void UCatOnlineSubsystem::Deinitialize()
 	CurrentSessionAccess = ECatSessionAccessPolicy::Undecided;
 	GameplayPreloadRequestId = INDEX_NONE;
 	PreloadedGameplayPackage = nullptr;
+	FrontendPreloadRequestId = INDEX_NONE;
+	PreloadedFrontendPackage = nullptr;
+	bIsEngineLoadMapPending = false;
+	EngineLoadMapName.Reset();
 	SearchResultsByHandle.Reset();
 	SearchSummaries.Reset();
 	InvitesByHandle.Reset();
@@ -281,7 +380,7 @@ void UCatOnlineSubsystem::StartLobbyFactPolling()
 		FTickerDelegate::CreateUObject(this, &ThisClass::TickLobbyFacts), 0.5f);
 }
 
-// Lobby 轮询停止流程：仅移除本子系统自己注册的 ticker，再清空 ready 观察值、Host 发布截止点、Client 尝试次数和退避时间；只有离开旧 Lobby 才为下一次加入释放完整重试预算。
+// Lobby 轮询停止流程：仅移除本子系统自己注册的 ticker，再清空 ready 观察值、Host 发布截止点和 Client 已提交标记；只有离开旧 Lobby 才允许下一次真实 ready 重新触发进入。
 void UCatOnlineSubsystem::StopLobbyFactPolling()
 {
 	if (LobbyFactPollHandle.IsValid())
@@ -292,12 +391,11 @@ void UCatOnlineSubsystem::StopLobbyFactPolling()
 	bLobbyReadyObserved = false;
 	NextHostLobbyReadyPublishAttemptTime = 0.0;
 	ClientGameplayStartAttempts = 0;
-	NextClientGameplayStartTime = 0.0;
 }
 
 // Lobby 轮询流程：先保存公开事实，再从 Steam SDK 重建成员与 ready。
 // Host 已在玩法图、当前空闲且 ready 未写入时，只有 Steam Lobby 可写并到达 NextHostLobbyReadyPublishAttemptTime 才重试发布；失败只推迟下一次尝试，不触发 DestroySession 或 Frontend travel。
-// Client 只在 ready 成立、预算未耗尽且退避到期时开始预载；其余轮询只有事实变化才广播，避免 NULL 后端每 0.5 秒刷 ready 失败日志。
+// Client 只在同一个 Lobby 的第一次 ready 事实到达时开始预载；失败后保留真实错误，不由本地时间自动伪造下一次进入。
 bool UCatOnlineSubsystem::TickLobbyFacts(const float DeltaSeconds)
 {
 	(void)DeltaSeconds;
@@ -351,8 +449,7 @@ bool UCatOnlineSubsystem::TickLobbyFacts(const float DeltaSeconds)
 		|| bMembersChanged || bWasReady != bLobbyReadyObserved;
 	if (SessionRole == ECatOnlineSessionRole::Client && WorldState == ECatOnlineWorldState::Frontend
 		&& ActiveOperation == ECatOnlineOperation::None && bLobbyReadyObserved
-		&& ClientGameplayStartAttempts < CatOnlineNames::MaxClientGameplayStartAttempts
-		&& FPlatformTime::Seconds() >= NextClientGameplayStartTime)
+		&& ClientGameplayStartAttempts == 0)
 	{
 		BeginClientGameplayPreload();
 		return true;
@@ -470,13 +567,480 @@ bool UCatOnlineSubsystem::PublishLobbyReady()
 #endif
 }
 
-// Client 预载启动流程：确认前台 Client、真实 Lobby ready、次数预算和退避截止点后受理 Start 并计次；随后提交真实异步预载，失败统一进入退避，成功回调复核 ready 后才发起 ClientTravel。
+// 进入游戏预载管线流程：
+// 1. 先确认仍处在当前 Start epoch，避免 Host/Client 同步失败后继续提交加载。
+// 2. 再按 Lyra Experience 的思路提交一组真实软资源预热；若有异步 handle，后续由完成回调继续。
+// 3. 没有额外资源或资源已同步完成时，马上进入玩法地图包 LoadPackageAsync 预载。
+// 4. 任一阶段同步失败都会在当前 epoch 内结案，调用方据返回值修正同步提交结果。
+bool UCatOnlineSubsystem::BeginGameplayStartPreloadPipeline(const uint64 CallbackEpoch)
+{
+	if (ActiveOperation != ECatOnlineOperation::Start || CallbackEpoch != OperationEpoch)
+	{
+		return false;
+	}
+	ClearGameplayStartupAssetsPreload(true);
+	if (BeginGameplayStartupAssetsPreload(CallbackEpoch))
+	{
+		return true;
+	}
+	if (ActiveOperation != ECatOnlineOperation::Start || CallbackEpoch != OperationEpoch)
+	{
+		return false;
+	}
+	return BeginGameplayMapPackagePreload(CallbackEpoch);
+}
+
+// 玩法启动资源预热流程：
+// 1. 从项目设置收集正式软引用，形成一个 StreamableHandle 管理的真实加载集合。
+// 2. 没有可加载资源时写入“无额外资源”事实并让调用方继续地图包预载。
+// 3. 有 handle 时先记录初始数量进度，再绑定 update/complete/cancel 三个真实回调。
+// 4. 如果资源在提交时已经完成，保留 handle 作为预热资源 pin，并让调用方同帧继续地图包预载。
+bool UCatOnlineSubsystem::BeginGameplayStartupAssetsPreload(const uint64 CallbackEpoch)
+{
+	TArray<FSoftObjectPath> AssetPaths;
+	CollectGameplayStartupAssetPaths(AssetPaths);
+	if (AssetPaths.IsEmpty())
+	{
+		bGameplayStartupAssetLoadPending = false;
+		bGameplayStartupAssetLoadProgressAvailable = true;
+		CurrentGameplayStartupAssetLoadProgressPercent = 100.0f;
+		CurrentGameplayStartupAssetLoadProgressStatus = CatOnlineStartupAssetPreload::MakeProgressStatus(0, 0);
+		UE_LOG(LogCatOnline, Log, TEXT("Event=online_gameplay_startup_assets_skipped RequestId=%s Epoch=%llu Reason=NoConfiguredAssets"),
+			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch);
+		BroadcastSnapshot(TEXT("online_gameplay_startup_assets_skipped"));
+		return false;
+	}
+
+	bGameplayStartupAssetLoadPending = true;
+	bGameplayStartupAssetLoadProgressAvailable = true;
+	CurrentGameplayStartupAssetLoadProgressPercent = 0.0f;
+	CurrentGameplayStartupAssetLoadProgressStatus = CatOnlineStartupAssetPreload::MakeProgressStatus(0, AssetPaths.Num());
+	GameplayStartupAssetsHandle = UAssetManager::GetStreamableManager().RequestAsyncLoad(
+		MoveTemp(AssetPaths),
+		FStreamableDelegate(),
+		FStreamableManager::AsyncLoadHighPriority,
+		true,
+		false,
+		TEXT("CatGameplayStartupAssets"));
+
+	if (!GameplayStartupAssetsHandle.IsValid())
+	{
+		ClearGameplayStartupAssetsPreload(true);
+		FinishOperationFailure(ECatOnlineError::GameplayPreloadFailed);
+		return false;
+	}
+
+	int32 LoadedCount = 0;
+	int32 RequestedCount = 0;
+	GameplayStartupAssetsHandle->GetLoadedCount(LoadedCount, RequestedCount);
+	CurrentGameplayStartupAssetLoadProgressPercent = GameplayStartupAssetsHandle->GetProgress() * 100.0f;
+	CurrentGameplayStartupAssetLoadProgressStatus = CatOnlineStartupAssetPreload::MakeProgressStatus(LoadedCount, RequestedCount);
+	if (GameplayStartupAssetsHandle->HasLoadCompleted())
+	{
+		bGameplayStartupAssetLoadPending = false;
+		CurrentGameplayStartupAssetLoadProgressPercent = 100.0f;
+		CurrentGameplayStartupAssetLoadProgressStatus = FString(TEXT("玩法启动资源已加载。"));
+		UE_LOG(LogCatOnline, Log,
+			TEXT("Event=online_gameplay_startup_assets_loaded RequestId=%s Epoch=%llu Loaded=%d Total=%d Percent=100.0 Mode=Synchronous"),
+			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, LoadedCount, RequestedCount);
+		BroadcastSnapshot(TEXT("online_gameplay_startup_assets_loaded"));
+		return false;
+	}
+
+	// 这三个委托都挂在同一个 StreamableHandle 上，生命周期由成员 handle 保持；取消或终态清理时 ReleaseHandle 会成对断开后续更新。
+	GameplayStartupAssetsHandle->BindUpdateDelegate(FStreamableUpdateDelegate::CreateUObject(
+		this, &ThisClass::HandleGameplayStartupAssetsPreloadUpdated, CallbackEpoch));
+	if (!GameplayStartupAssetsHandle->BindCompleteDelegate(FStreamableDelegate::CreateUObject(
+		this, &ThisClass::HandleGameplayStartupAssetsPreloadComplete, CallbackEpoch)))
+	{
+		bGameplayStartupAssetLoadPending = false;
+		CurrentGameplayStartupAssetLoadProgressPercent = 100.0f;
+		CurrentGameplayStartupAssetLoadProgressStatus = FString(TEXT("玩法启动资源已加载。"));
+		BroadcastSnapshot(TEXT("online_gameplay_startup_assets_loaded"));
+		return false;
+	}
+	GameplayStartupAssetsHandle->BindCancelDelegate(FStreamableDelegate::CreateUObject(
+		this, &ThisClass::HandleGameplayStartupAssetsPreloadCancelled, CallbackEpoch));
+	UE_LOG(LogCatOnline, Log,
+		TEXT("Event=online_gameplay_startup_assets_queued RequestId=%s Epoch=%llu Loaded=%d Total=%d Percent=%.1f"),
+		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		OperationEpoch,
+		LoadedCount,
+		RequestedCount,
+		CurrentGameplayStartupAssetLoadProgressPercent);
+	BroadcastSnapshot(TEXT("online_gameplay_startup_assets_queued"));
+	return true;
+}
+
+// 玩法地图包预载提交流程：
+// 1. 使用 -2 哨兵覆盖 LoadPackageAsync 同步回调窗口，防止请求 ID 返回前被完成回调清理。
+// 2. 注册真实地图包进度委托，Start/Read/Serialized/FullyLoaded 都回写 Online 快照。
+// 3. 请求提交失败时立刻停止地图包观测并用 GameplayPreloadFailed 结案。
+// 4. 请求成功后广播 queued，让 UI 从资源预热阶段切换到地图包阶段。
+bool UCatOnlineSubsystem::BeginGameplayMapPackagePreload(const uint64 CallbackEpoch)
+{
+	if (ActiveOperation != ECatOnlineOperation::Start || CallbackEpoch != OperationEpoch || GameplayMapPackage.IsEmpty())
+	{
+		return false;
+	}
+	GameplayPreloadRequestId = INDEX_NONE - 1;
+	BeginMapPreloadProgressTracking(GameplayMapPackage, CallbackEpoch);
+	FLoadPackageAsyncOptionalParams LoadParams;
+	LoadParams.CompletionDelegate = MakeUnique<FLoadPackageAsyncDelegate>(
+		FLoadPackageAsyncDelegate::CreateUObject(this, &ThisClass::HandleGameplayPackagePreloadComplete, CallbackEpoch));
+	LoadParams.ProgressDelegate = MapLoadProgressDelegate;
+	const int32 SubmittedRequestId = LoadPackageAsync(GameplayMapPackage, MoveTemp(LoadParams));
+	if (ActiveOperation == ECatOnlineOperation::Start && OperationEpoch == CallbackEpoch
+		&& GameplayPreloadRequestId == INDEX_NONE - 1)
+	{
+		GameplayPreloadRequestId = SubmittedRequestId;
+		if (SubmittedRequestId == INDEX_NONE)
+		{
+			StopMapPreloadProgressTracking();
+			FinishOperationFailure(ECatOnlineError::GameplayPreloadFailed);
+			return false;
+		}
+		BroadcastSnapshot(OperationRole == ECatOnlineSessionRole::Client
+			? TEXT("online_client_gameplay_preload_queued")
+			: TEXT("online_gameplay_preload_queued"));
+	}
+	return true;
+}
+
+// 玩法启动资源收集流程：
+// 1. 只读取已有 DeveloperSettings 和它们声明的软引用，保持资产清单的所有权仍在各系统配置里。
+// 2. UI/输入、Ability、BodyAction、鱼表、库存/装备、钓鱼、Run 和商店表都属于进入玩法后会立即或高频同步解析的资源。
+// 3. 空软引用说明该系统尚未配置，加载阶段不把它变成失败；真正的运行 gate 仍由原系统自己的 IsRuntimeReady/FindRuntimeDefinition 裁决。
+// 4. AddUnique 去重后交给 StreamableHandle，让进度来自真实请求数量和已完成数量。
+void UCatOnlineSubsystem::CollectGameplayStartupAssetPaths(TArray<FSoftObjectPath>& OutAssetPaths) const
+{
+	OutAssetPaths.Reset();
+	using CatOnlineStartupAssetPreload::AddUniquePath;
+
+	const UCatUISettings* UISettings = GetDefault<UCatUISettings>();
+	if (UISettings && UISettings->IsPlayerLakeUIEnabled())
+	{
+		AddUniquePath(OutAssetPaths, UISettings->HUDWidgetClass.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, UISettings->InventoryWidgetClass.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, UISettings->InventorySlotWidgetClass.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, UISettings->InteractionPromptWidgetClass.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, UISettings->LakeMainMenuWidgetClass.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, UISettings->MainMenuToggleAction.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, UISettings->InventoryToggleAction.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, UISettings->InteractionConfirmAction.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, UISettings->GameplayInputMappingContext.ToSoftObjectPath());
+	}
+
+	const UCatAbilitySettings* AbilitySettings = GetDefault<UCatAbilitySettings>();
+	if (AbilitySettings)
+	{
+		for (const TSoftObjectPtr<UCatCharacterDefinition>& CharacterDefinition : AbilitySettings->CharacterDefinitions)
+		{
+			AddUniquePath(OutAssetPaths, CharacterDefinition.ToSoftObjectPath());
+		}
+		AddUniquePath(OutAssetPaths, AbilitySettings->DefaultAbilitySet.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, AbilitySettings->AbilityInputConfig.ToSoftObjectPath());
+	}
+
+	const UCatBodyActionPresentationSettings* BodyActionSettings = GetDefault<UCatBodyActionPresentationSettings>();
+	if (BodyActionSettings)
+	{
+		for (const FCatBodyActionPresentationConfig& Config : BodyActionSettings->ActionPresentationConfigs)
+		{
+			AddUniquePath(OutAssetPaths, Config.Montage.ToSoftObjectPath());
+		}
+	}
+
+	const UCatFishCatalogSettings* FishCatalogSettings = GetDefault<UCatFishCatalogSettings>();
+	if (FishCatalogSettings)
+	{
+		for (const TSoftObjectPtr<UCatFishDefinition>& Definition : FishCatalogSettings->Definitions)
+		{
+			AddUniquePath(OutAssetPaths, Definition.ToSoftObjectPath());
+		}
+		AddUniquePath(OutAssetPaths, FishCatalogSettings->ChumSaturationCurve.ToSoftObjectPath());
+	}
+
+	const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
+	if (EquipmentSettings)
+	{
+		for (const TSoftObjectPtr<UCatEquipmentDefinition>& Definition : EquipmentSettings->Definitions)
+		{
+			AddUniquePath(OutAssetPaths, Definition.ToSoftObjectPath());
+		}
+	}
+
+	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+	if (InventorySettings)
+	{
+		for (const FCatInventoryCatalogDefinition& Definition : InventorySettings->Definitions)
+		{
+			AddUniquePath(OutAssetPaths, Definition.ItemDefinition.ToSoftObjectPath());
+		}
+	}
+
+	const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
+	if (FishingSettings)
+	{
+		AddUniquePath(OutAssetPaths, FishingSettings->FishingSessionStateTree.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, FishingSettings->FishBehaviorStateTree.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, FishingSettings->FightBalanceDefinition.ToSoftObjectPath());
+		for (const TSoftObjectPtr<UCatBitePersonalityDefinition>& Personality : FishingSettings->BitePersonalities)
+		{
+			AddUniquePath(OutAssetPaths, Personality.ToSoftObjectPath());
+		}
+		for (const TSoftObjectPtr<UCatFightPersonalityDefinition>& Personality : FishingSettings->FightPersonalities)
+		{
+			AddUniquePath(OutAssetPaths, Personality.ToSoftObjectPath());
+		}
+	}
+
+	const UCatFishingPresentationSettings* FishingPresentationSettings = GetDefault<UCatFishingPresentationSettings>();
+	if (FishingPresentationSettings)
+	{
+		AddUniquePath(OutAssetPaths, FishingPresentationSettings->HookActorClass.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, FishingPresentationSettings->FishEncounterActorClass.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, FishingPresentationSettings->CastMontage.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, FishingPresentationSettings->LineBrokenMontage.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, FishingPresentationSettings->CatInWaterMontage.ToSoftObjectPath());
+		AddUniquePath(OutAssetPaths, FishingPresentationSettings->ChumFieldPresentationClass.ToSoftObjectPath());
+		for (const TSoftObjectPtr<UCatRodSkinDefinition>& RodSkin : FishingPresentationSettings->RodSkinCatalog)
+		{
+			AddUniquePath(OutAssetPaths, RodSkin.ToSoftObjectPath());
+		}
+	}
+
+	const UCatRunSettings* RunSettings = GetDefault<UCatRunSettings>();
+	if (RunSettings)
+	{
+		AddUniquePath(OutAssetPaths, RunSettings->RunFlowStateTree.ToSoftObjectPath());
+	}
+
+	const UCatShopEconomySettings* ShopEconomySettings = GetDefault<UCatShopEconomySettings>();
+	if (ShopEconomySettings)
+	{
+		AddUniquePath(OutAssetPaths, ShopEconomySettings->DefaultShopCatalogTable.ToSoftObjectPath());
+	}
+}
+
+// 玩法启动资源更新流程：只消费当前 Start epoch 的 handle 进度；Loaded/Total 和百分比都直接来自 StreamableHandle，不使用时间推进或显示层补值。
+void UCatOnlineSubsystem::HandleGameplayStartupAssetsPreloadUpdated(TSharedRef<FStreamableHandle> Handle,
+	const uint64 CallbackEpoch)
+{
+	if (ActiveOperation != ECatOnlineOperation::Start || CallbackEpoch != OperationEpoch
+		|| !bGameplayStartupAssetLoadPending || !GameplayStartupAssetsHandle.IsValid())
+	{
+		UE_LOG(LogCatOnline, Warning,
+			TEXT("Event=online_gameplay_startup_assets_progress_ignored RequestId=%s Epoch=%llu CurrentEpoch=%llu"),
+			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), CallbackEpoch, OperationEpoch);
+		return;
+	}
+	int32 LoadedCount = 0;
+	int32 RequestedCount = 0;
+	Handle->GetLoadedCount(LoadedCount, RequestedCount);
+	bGameplayStartupAssetLoadProgressAvailable = true;
+	CurrentGameplayStartupAssetLoadProgressPercent = Handle->GetProgress() * 100.0f;
+	CurrentGameplayStartupAssetLoadProgressStatus = CatOnlineStartupAssetPreload::MakeProgressStatus(LoadedCount, RequestedCount);
+	UE_LOG(LogCatOnline, Log,
+		TEXT("Event=online_gameplay_startup_assets_progress RequestId=%s Epoch=%llu Loaded=%d Total=%d Percent=%.1f"),
+		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		OperationEpoch,
+		LoadedCount,
+		RequestedCount,
+		CurrentGameplayStartupAssetLoadProgressPercent);
+	BroadcastSnapshot(TEXT("online_gameplay_startup_assets_progress"));
+}
+
+// 玩法启动资源完成流程：
+// 1. 只消费当前 Start epoch，迟到完成不改变新操作。
+// 2. 先把资源阶段写成真实 100%，并保留 handle 直到离开本局，避免预热资源被立即释放。
+// 3. 再提交地图包预载；提交失败时使用同一 Start 错误收口。
+void UCatOnlineSubsystem::HandleGameplayStartupAssetsPreloadComplete(const uint64 CallbackEpoch)
+{
+	if (ActiveOperation != ECatOnlineOperation::Start || CallbackEpoch != OperationEpoch
+		|| !bGameplayStartupAssetLoadPending || !GameplayStartupAssetsHandle.IsValid())
+	{
+		UE_LOG(LogCatOnline, Warning,
+			TEXT("Event=online_callback_ignored Callback=GameplayStartupAssets Epoch=%llu CurrentEpoch=%llu"),
+			CallbackEpoch, OperationEpoch);
+		return;
+	}
+	int32 LoadedCount = 0;
+	int32 RequestedCount = 0;
+	GameplayStartupAssetsHandle->GetLoadedCount(LoadedCount, RequestedCount);
+	bGameplayStartupAssetLoadPending = false;
+	bGameplayStartupAssetLoadProgressAvailable = true;
+	CurrentGameplayStartupAssetLoadProgressPercent = 100.0f;
+	CurrentGameplayStartupAssetLoadProgressStatus = FString(TEXT("玩法启动资源已加载。"));
+	UE_LOG(LogCatOnline, Log,
+		TEXT("Event=online_gameplay_startup_assets_loaded RequestId=%s Epoch=%llu Loaded=%d Total=%d Percent=100.0"),
+		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		OperationEpoch,
+		LoadedCount,
+		RequestedCount);
+	BroadcastSnapshot(TEXT("online_gameplay_startup_assets_loaded"));
+	if (!BeginGameplayMapPackagePreload(CallbackEpoch) && ActiveOperation == ECatOnlineOperation::Start
+		&& OperationEpoch == CallbackEpoch)
+	{
+		FinishOperationFailure(ECatOnlineError::GameplayPreloadFailed);
+	}
+}
+
+// 玩法启动资源取消流程：StreamableHandle 的真实取消才会进入这里；清理路径中的迟到取消由 epoch 和 pending gate 拒绝，不能误伤下一次 Start。
+void UCatOnlineSubsystem::HandleGameplayStartupAssetsPreloadCancelled(const uint64 CallbackEpoch)
+{
+	if (ActiveOperation != ECatOnlineOperation::Start || CallbackEpoch != OperationEpoch
+		|| !bGameplayStartupAssetLoadPending)
+	{
+		UE_LOG(LogCatOnline, Warning,
+			TEXT("Event=online_callback_ignored Callback=GameplayStartupAssetsCancel Epoch=%llu CurrentEpoch=%llu"),
+			CallbackEpoch, OperationEpoch);
+		return;
+	}
+	ClearGameplayStartupAssetsPreload(true);
+	FinishOperationFailure(ECatOnlineError::GameplayPreloadFailed);
+}
+
+// 玩法启动资源清理流程：Start 成功进入局内后不调用本函数，让预热资源留到离局；Start 失败、离开到 Frontend 或 GameInstance 销毁时释放 handle 并按需清掉 UI 进度事实。
+void UCatOnlineSubsystem::ClearGameplayStartupAssetsPreload(const bool bClearProgress)
+{
+	if (GameplayStartupAssetsHandle.IsValid())
+	{
+		GameplayStartupAssetsHandle->ReleaseHandle();
+		GameplayStartupAssetsHandle.Reset();
+	}
+	bGameplayStartupAssetLoadPending = false;
+	if (bClearProgress)
+	{
+		bGameplayStartupAssetLoadProgressAvailable = false;
+		CurrentGameplayStartupAssetLoadProgressPercent = 0.0f;
+		CurrentGameplayStartupAssetLoadProgressStatus.Reset();
+	}
+}
+
+// 地图包等待判断流程：同时查看进入玩法和返回前台两类 LoadPackageAsync 请求 ID；哨兵值也算等待，因为同步回调可能在请求 ID 返回前先到。
+bool UCatOnlineSubsystem::IsAnyMapPreloadPending() const
+{
+	return GameplayPreloadRequestId != INDEX_NONE || FrontendPreloadRequestId != INDEX_NONE;
+}
+
+// 地图包进度读取流程：
+// 1. 只有预载请求仍在队列里且已经收到 LoadPackageAsync 进度事件时，才把当前阶段百分比交给 UI。
+// 2. 预载回调成功后立刻停止报告包阶段；后续 ServerTravel、ClientTravel、LoadMap 和 UI 就绪会由 UI 按真实 gate 合成进入游戏总进度。
+// 3. 保存、销毁 Session 或网络补偿这类非地图包阶段返回 false，让 UI 使用对应真实状态，而不是用本地时间造假进度。
+bool UCatOnlineSubsystem::TryGetMapPreloadProgressPercent(float& OutProgressPercent) const
+{
+	OutProgressPercent = 0.0f;
+	if (IsAnyMapPreloadPending() && !ActiveMapLoadPackage.IsEmpty() && bMapLoadProgressAvailable)
+	{
+		OutProgressPercent = CurrentMapLoadProgressPercent;
+		return true;
+	}
+	return false;
+}
+
+// 地图包进度跟踪流程：记录当前包名并创建 LoadPackageAsync 进度委托；事件可能来自异步加载线程，因此只把包名、阶段和 epoch 投递回 GameThread 后再写状态。
+void UCatOnlineSubsystem::BeginMapPreloadProgressTracking(const FString& PackageName, const uint64 CallbackEpoch)
+{
+	ActiveMapLoadPackage = PackageName;
+	bMapLoadProgressAvailable = false;
+	CurrentMapLoadProgressPercent = 0.0f;
+	CurrentMapLoadProgressStatus.Reset();
+	const TWeakObjectPtr<UCatOnlineSubsystem> WeakThis(this);
+	MapLoadProgressDelegate = MakeShared<FLoadPackageAsyncProgressDelegate>(
+		FLoadPackageAsyncProgressDelegate::DelegateType::CreateLambda(
+			[WeakThis, CallbackEpoch](FLoadPackageAsyncProgressParams& Params)
+			{
+				const FName ReportedPackageName = Params.PackageName;
+				const EAsyncLoadingProgress ReportedProgressType = Params.ProgressType;
+				// FullyLoaded 可能在 GameThread 上紧贴完成回调触发；原地消费能先记录 100% 事实，再进入完成回调的清理和旅行提交。
+				if (IsInGameThread())
+				{
+					if (UCatOnlineSubsystem* StrongThis = WeakThis.Get())
+					{
+						StrongThis->HandleMapPreloadProgressOnGameThread(
+							ReportedPackageName, ReportedProgressType, CallbackEpoch);
+					}
+					return;
+				}
+				AsyncTask(ENamedThreads::GameThread,
+					[WeakThis, ReportedPackageName, ReportedProgressType, CallbackEpoch]()
+					{
+						if (UCatOnlineSubsystem* StrongThis = WeakThis.Get())
+						{
+							StrongThis->HandleMapPreloadProgressOnGameThread(
+								ReportedPackageName, ReportedProgressType, CallbackEpoch);
+						}
+					});
+			}),
+		FLoadPackageAsyncProgressDelegate::BuildMask(
+			EAsyncLoadingProgress::Started,
+			EAsyncLoadingProgress::Read,
+			EAsyncLoadingProgress::Serialized,
+			EAsyncLoadingProgress::FullyLoaded,
+			EAsyncLoadingProgress::Failed));
+}
+
+// 地图包进度跟踪停止流程：释放进度委托并清掉包名、阶段和百分比；是否继续保留已加载 UPackage 由对应旅行流程决定。
+void UCatOnlineSubsystem::StopMapPreloadProgressTracking()
+{
+	MapLoadProgressDelegate.Reset();
+	ActiveMapLoadPackage.Reset();
+	bMapLoadProgressAvailable = false;
+	CurrentMapLoadProgressPercent = 0.0f;
+	CurrentMapLoadProgressStatus.Reset();
+}
+
+// 地图包进度事件收口流程：GameThread 只消费当前 epoch 和当前包名的事件；成功阶段写入可读状态和百分比，失败阶段只广播真实失败观察，最终失败仍由完成回调统一结案。
+void UCatOnlineSubsystem::HandleMapPreloadProgressOnGameThread(const FName PackageName,
+	const EAsyncLoadingProgress ProgressType, const uint64 CallbackEpoch)
+{
+	const bool bExpectedLateFullyLoaded = ProgressType == EAsyncLoadingProgress::FullyLoaded
+		&& CallbackEpoch == OperationEpoch && !IsAnyMapPreloadPending() && ActiveMapLoadPackage.IsEmpty();
+	if (CallbackEpoch != OperationEpoch || !IsAnyMapPreloadPending() || ActiveMapLoadPackage.IsEmpty()
+		|| PackageName.ToString() != ActiveMapLoadPackage)
+	{
+		if (!bExpectedLateFullyLoaded)
+		{
+			UE_LOG(LogCatOnline, Warning,
+				TEXT("Event=online_map_preload_progress_ignored Package=%s Progress=%s Epoch=%llu CurrentEpoch=%llu ActivePackage=%s"),
+				*PackageName.ToString(),
+				CatOnlineMapPreloadProgress::GetName(ProgressType),
+				CallbackEpoch,
+				OperationEpoch,
+				*ActiveMapLoadPackage);
+		}
+		return;
+	}
+	if (ProgressType == EAsyncLoadingProgress::Failed)
+	{
+		bMapLoadProgressAvailable = false;
+		CurrentMapLoadProgressPercent = 0.0f;
+		CurrentMapLoadProgressStatus = CatOnlineMapPreloadProgress::GetStatus(ProgressType);
+		UE_LOG(LogCatOnline, Warning,
+			TEXT("Event=online_map_preload_progress Package=%s Progress=%s Percent=0.0"),
+			*PackageName.ToString(),
+			CatOnlineMapPreloadProgress::GetName(ProgressType));
+		BroadcastSnapshot(TEXT("online_map_preload_progress_failed"));
+		return;
+	}
+	bMapLoadProgressAvailable = true;
+	CurrentMapLoadProgressPercent = CatOnlineMapPreloadProgress::GetPercent(ProgressType);
+	CurrentMapLoadProgressStatus = CatOnlineMapPreloadProgress::GetStatus(ProgressType);
+	UE_LOG(LogCatOnline, Log,
+		TEXT("Event=online_map_preload_progress Package=%s Progress=%s Percent=%.1f"),
+		*PackageName.ToString(),
+		CatOnlineMapPreloadProgress::GetName(ProgressType),
+		CurrentMapLoadProgressPercent);
+	BroadcastSnapshot(TEXT("online_map_preload_progress"));
+}
+
+// Client 预载启动流程：确认前台 Client、真实 Lobby ready 且本 Lobby 尚未提交过 Start 后受理并计次；随后进入统一 Start 预载管线，失败直接进入错误分支，成功回调复核 ready 后才发起 ClientTravel。
 void UCatOnlineSubsystem::BeginClientGameplayPreload()
 {
 	if (ActiveOperation != ECatOnlineOperation::None || WorldState != ECatOnlineWorldState::Frontend
 		|| SessionRole != ECatOnlineSessionRole::Client || GameplayMapPackage.IsEmpty() || !IsCurrentLobbyReady()
-		|| ClientGameplayStartAttempts >= CatOnlineNames::MaxClientGameplayStartAttempts
-		|| FPlatformTime::Seconds() < NextClientGameplayStartTime)
+		|| ClientGameplayStartAttempts > 0)
 	{
 		return;
 	}
@@ -488,19 +1052,10 @@ void UCatOnlineSubsystem::BeginClientGameplayPreload()
 	OperationRole = ECatOnlineSessionRole::Client;
 	++ClientGameplayStartAttempts;
 	const uint64 SubmittedEpoch = OperationEpoch;
-	GameplayPreloadRequestId = INDEX_NONE - 1;
-	const int32 SubmittedRequestId = LoadPackageAsync(GameplayMapPackage,
-		FLoadPackageAsyncDelegate::CreateUObject(this, &ThisClass::HandleGameplayPackagePreloadComplete, SubmittedEpoch));
-	if (ActiveOperation == ECatOnlineOperation::Start && OperationEpoch == SubmittedEpoch
-		&& GameplayPreloadRequestId == INDEX_NONE - 1)
+	if (!BeginGameplayStartPreloadPipeline(SubmittedEpoch)
+		&& ActiveOperation == ECatOnlineOperation::Start && OperationEpoch == SubmittedEpoch)
 	{
-		GameplayPreloadRequestId = SubmittedRequestId;
-		if (SubmittedRequestId == INDEX_NONE)
-		{
-			FinishOperationFailure(ECatOnlineError::GameplayPreloadFailed);
-			return;
-		}
-		BroadcastSnapshot(TEXT("online_client_gameplay_preload_queued"));
+		FinishOperationFailure(ECatOnlineError::GameplayPreloadFailed);
 	}
 }
 
@@ -628,7 +1183,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestInviteFriend(const FCatOnlineFriend
 	return Result;
 }
 
-// 房主开始流程：先在 Frontend 验证 Host Session、无并发操作和 Save 已加载许可；再冻结操作 epoch 并提交玩法包预载，任何同步拒绝、失败回调或旧 epoch 都不会进入 ServerTravel。
+// 房主开始流程：先在 Frontend 验证 Host Session、无并发操作和 Save 已加载许可；再冻结操作 epoch 并提交统一 Start 预载管线，任何同步拒绝、失败回调或旧 epoch 都不会进入 ServerTravel。
 FCatOnlineResult UCatOnlineSubsystem::RequestStartHostedGame()
 {
 	if (ActiveOperation != ECatOnlineOperation::None)
@@ -664,35 +1219,19 @@ FCatOnlineResult UCatOnlineSubsystem::RequestStartHostedGame()
 	}
 
 	const uint64 SubmittedEpoch = OperationEpoch;
-	// -2 表示 LoadPackageAsync 尚未返回请求 ID；引擎若同步回调会先清成 INDEX_NONE，返回后不得把旧 ID 重新写回。
-	GameplayPreloadRequestId = INDEX_NONE - 1;
-	const int32 SubmittedRequestId = LoadPackageAsync(GameplayMapPackage,
-		FLoadPackageAsyncDelegate::CreateUObject(this, &ThisClass::HandleGameplayPackagePreloadComplete, SubmittedEpoch));
-	if (ActiveOperation == ECatOnlineOperation::Start && OperationEpoch == SubmittedEpoch
-		&& GameplayPreloadRequestId == INDEX_NONE - 1)
+	if (!BeginGameplayStartPreloadPipeline(SubmittedEpoch)
+		&& ActiveOperation == ECatOnlineOperation::Start && OperationEpoch == SubmittedEpoch)
 	{
-		GameplayPreloadRequestId = SubmittedRequestId;
-		if (SubmittedRequestId == INDEX_NONE)
-		{
-			FinishOperationFailure(ECatOnlineError::GameplayPreloadFailed);
-			Result.bAccepted = false;
-			Result.Error = LastError;
-			return Result;
-		}
-		BroadcastSnapshot(TEXT("online_gameplay_preload_queued"));
+		FinishOperationFailure(ECatOnlineError::GameplayPreloadFailed);
+		Result.bAccepted = false;
+		Result.Error = LastError;
+	}
+	else if (ActiveOperation == ECatOnlineOperation::None && LastError != ECatOnlineError::None)
+	{
+		Result.bAccepted = false;
+		Result.Error = LastError;
 	}
 	return Result;
-}
-
-// 预载进度读取流程：只在当前确有 LoadPackageAsync 请求时查询引擎；引擎返回 -1 表示未知，其他值夹在公开合同的 0..100 内，绝不合成时间驱动的百分比。
-float UCatOnlineSubsystem::GetGameplayLoadProgress() const
-{
-	if (GameplayPreloadRequestId == INDEX_NONE || GameplayMapPackage.IsEmpty())
-	{
-		return -1.0f;
-	}
-	const float Progress = GetAsyncLoadPercentage(FName(*GameplayMapPackage));
-	return Progress < 0.0f ? -1.0f : FMath::Clamp(Progress, 0.0f, 100.0f);
 }
 
 // 预载完成流程：先拒绝旧 epoch、错误包名或非 Start 回调；成功时保活实际包，Host 提交 Listen 旅行，Client 复核真实 Lobby ready 后才解析 OSS 地址并 ClientTravel，失败时不旅行。
@@ -706,13 +1245,18 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
 		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_callback_ignored Callback=GameplayPreload Epoch=%llu CurrentEpoch=%llu"), CallbackEpoch, OperationEpoch);
 		return;
 	}
-	GameplayPreloadRequestId = INDEX_NONE;
 	if (Result != EAsyncLoadingResult::Succeeded || !LoadedPackage)
 	{
+		GameplayPreloadRequestId = INDEX_NONE;
+		StopMapPreloadProgressTracking();
 		PreloadedGameplayPackage = nullptr;
 		FinishOperationFailure(ECatOnlineError::GameplayPreloadFailed);
 		return;
 	}
+	// 完成回调会紧接着清掉请求 ID；先同步发布 FullyLoaded，避免真实 100% 事件被终态清理当成迟到事件忽略。
+	HandleMapPreloadProgressOnGameThread(PackageName, EAsyncLoadingProgress::FullyLoaded, CallbackEpoch);
+	GameplayPreloadRequestId = INDEX_NONE;
+	StopMapPreloadProgressTracking();
 	PreloadedGameplayPackage = LoadedPackage;
 	if (OperationRole == ECatOnlineSessionRole::Host)
 	{
@@ -1324,7 +1868,7 @@ bool UCatOnlineSubsystem::BeginHostRunTeardown()
 	return BeginDestroySession(ECatOnlineError::None);
 }
 
-// Snapshot 读取流程：逐字段复制四类事实和公开摘要，并从唯一待提交邀请派生等待标记；平台搜索对象、连接字符串、接受者账号与委托句柄均不会离开子系统。
+// Snapshot 读取流程：逐字段复制四类事实、公开摘要和 Start 的资源/地图包加载进度，并从唯一待提交邀请派生等待标记；平台搜索对象、连接字符串、接受者账号、StreamableHandle 与委托句柄均不会离开子系统。
 FCatOnlineSnapshot UCatOnlineSubsystem::GetSnapshot() const
 {
 	FCatOnlineSnapshot Snapshot;
@@ -1357,8 +1901,16 @@ FCatOnlineSnapshot UCatOnlineSubsystem::GetSnapshot() const
 	Snapshot.MaxPlayers = RoomMaxPlayers;
 	Snapshot.CurrentPlayers = RoomCurrentPlayers;
 	Snapshot.bIsHost = SessionRole == ECatOnlineSessionRole::Host;
-	Snapshot.bIsGameplayLoadPending = GameplayPreloadRequestId != INDEX_NONE;
-	Snapshot.GameplayLoadProgress = GetGameplayLoadProgress();
+	Snapshot.bIsGameplayStartupAssetLoadPending = bGameplayStartupAssetLoadPending;
+	Snapshot.bHasGameplayStartupAssetLoadProgress = bGameplayStartupAssetLoadProgressAvailable;
+	Snapshot.GameplayStartupAssetLoadProgressPercent = CurrentGameplayStartupAssetLoadProgressPercent;
+	Snapshot.GameplayStartupAssetLoadProgressStatus = CurrentGameplayStartupAssetLoadProgressStatus;
+	Snapshot.bIsGameplayLoadPending = bGameplayStartupAssetLoadPending || GameplayPreloadRequestId != INDEX_NONE;
+	Snapshot.bIsMapPreloadPending = IsAnyMapPreloadPending();
+	Snapshot.bIsEngineLoadMapPending = bIsEngineLoadMapPending;
+	Snapshot.EngineLoadMapName = EngineLoadMapName;
+	Snapshot.bHasMapLoadProgress = TryGetMapPreloadProgressPercent(Snapshot.MapLoadProgressPercent);
+	Snapshot.MapLoadProgressStatus = Snapshot.bHasMapLoadProgress ? CurrentMapLoadProgressStatus : FString();
 	return Snapshot;
 }
 
@@ -1479,11 +2031,48 @@ bool UCatOnlineSubsystem::BeginClientTravelToGameplayMap(const FString& ConnectS
 	return true;
 }
 
-// 回前台流程：若已经在 Frontend 则幂等结案；Host 用绝对 ServerTravel 切断 listen，Client 用本地 ClientTravel，均不把 DestroySession 误当作驱动关闭。
+// 前台预载完成流程：先拒绝旧 epoch、错误包名或无效角色；成功时保活 Frontend 包并提交真实旅行，失败时停止进度跟踪并按旅行拒绝收口。
+void UCatOnlineSubsystem::HandleFrontendPackagePreloadComplete(const FName& PackageName, UPackage* LoadedPackage,
+	const EAsyncLoadingResult::Type Result, const uint64 CallbackEpoch)
+{
+	if (ActiveOperation == ECatOnlineOperation::None
+		|| (OperationRole != ECatOnlineSessionRole::Host && OperationRole != ECatOnlineSessionRole::Client)
+		|| CallbackEpoch != OperationEpoch || PackageName.ToString() != CatOnlineNames::Frontend)
+	{
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_callback_ignored Callback=FrontendPreload Epoch=%llu CurrentEpoch=%llu"), CallbackEpoch, OperationEpoch);
+		return;
+	}
+	if (Result != EAsyncLoadingResult::Succeeded || !LoadedPackage)
+	{
+		FrontendPreloadRequestId = INDEX_NONE;
+		StopMapPreloadProgressTracking();
+		PreloadedFrontendPackage = nullptr;
+		FinishOperationFailure(ECatOnlineError::TravelRejected);
+		return;
+	}
+	// Frontend 包也可能在完成回调同帧结束进度观测；这里先固定真实完成事实，避免 UI 只能看到上一阶段而看不到返回旅行前的包加载完成。
+	HandleMapPreloadProgressOnGameThread(PackageName, EAsyncLoadingProgress::FullyLoaded, CallbackEpoch);
+	FrontendPreloadRequestId = INDEX_NONE;
+	StopMapPreloadProgressTracking();
+	PreloadedFrontendPackage = LoadedPackage;
+	if (!CommitFrontendTravelAfterPreload())
+	{
+		PreloadedFrontendPackage = nullptr;
+		FinishOperationFailure(ECatOnlineError::TravelRejected);
+	}
+}
+
+// 回前台流程：
+// 1. 已经在 Frontend 时清掉预载残留并按延迟错误或成功结案。
+// 2. 只有有效 Host/Client 操作才能继续，避免 View 或外部调用绕过 Online 状态机直接切图。
+// 3. 尚未预载 Frontend 时提交真实 LoadPackageAsync 并开始进度采样；成功回调才会按 Host/Client 分支发起旅行。
 bool UCatOnlineSubsystem::BeginTravelToFrontend()
 {
 	if (WorldState == ECatOnlineWorldState::Frontend)
 	{
+		FrontendPreloadRequestId = INDEX_NONE;
+		PreloadedFrontendPackage = nullptr;
+		StopMapPreloadProgressTracking();
 		TransportState = ECatOnlineTransportState::Idle;
 		if (DeferredFailureAfterTravel != ECatOnlineError::None)
 		{
@@ -1497,6 +2086,47 @@ bool UCatOnlineSubsystem::BeginTravelToFrontend()
 		return true;
 	}
 
+	if (ActiveOperation == ECatOnlineOperation::None
+		|| (OperationRole != ECatOnlineSessionRole::Host && OperationRole != ECatOnlineSessionRole::Client))
+	{
+		return false;
+	}
+
+	if (FrontendPreloadRequestId != INDEX_NONE)
+	{
+		WorldState = ECatOnlineWorldState::TravelingToFrontend;
+		TransportState = ECatOnlineTransportState::TravelQueued;
+		BroadcastSnapshot(TEXT("online_frontend_preload_already_pending"));
+		return true;
+	}
+
+	const uint64 SubmittedEpoch = OperationEpoch;
+	FrontendPreloadRequestId = INDEX_NONE - 1;
+	BeginMapPreloadProgressTracking(CatOnlineNames::Frontend, SubmittedEpoch);
+	FLoadPackageAsyncOptionalParams LoadParams;
+	LoadParams.CompletionDelegate = MakeUnique<FLoadPackageAsyncDelegate>(
+		FLoadPackageAsyncDelegate::CreateUObject(this, &ThisClass::HandleFrontendPackagePreloadComplete, SubmittedEpoch));
+	LoadParams.ProgressDelegate = MapLoadProgressDelegate;
+	const int32 SubmittedRequestId = LoadPackageAsync(CatOnlineNames::Frontend, MoveTemp(LoadParams));
+	if (ActiveOperation != ECatOnlineOperation::None && OperationEpoch == SubmittedEpoch
+		&& FrontendPreloadRequestId == INDEX_NONE - 1)
+	{
+		FrontendPreloadRequestId = SubmittedRequestId;
+		if (SubmittedRequestId == INDEX_NONE)
+		{
+			StopMapPreloadProgressTracking();
+			return false;
+		}
+		WorldState = ECatOnlineWorldState::TravelingToFrontend;
+		TransportState = ECatOnlineTransportState::TravelQueued;
+		BroadcastSnapshot(TEXT("online_frontend_preload_queued"));
+	}
+	return true;
+}
+
+// 前台旅行提交流程：复用原回前台的 Host/Client 分支；这里只提交旅行、设置 ExpectedPackage 并广播旅行事实，真正成功仍由 PostLoadMap 确认。
+bool UCatOnlineSubsystem::CommitFrontendTravelAfterPreload()
+{
 	UWorld* World = GetWorld();
 	if (!World)
 	{
@@ -1852,6 +2482,21 @@ void UCatOnlineSubsystem::ClearPendingAcceptedInvite()
 	PendingInviteOperationEpoch = 0;
 }
 
+// 引擎切图入口流程：只消费属于本 GameInstance 的 PreLoadMap；记录目标名并立刻广播，让全局遮罩知道现在确实进入了 LoadMap，而不是靠 UI 延迟猜测。
+void UCatOnlineSubsystem::HandlePreLoadMap(const FWorldContext& WorldContext, const FString& MapName)
+{
+	if (WorldContext.OwningGameInstance != GetGameInstance())
+	{
+		return;
+	}
+	bIsEngineLoadMapPending = true;
+	EngineLoadMapName = MapName;
+	UE_LOG(LogCatOnline, Log, TEXT("Event=online_engine_loadmap_started RequestId=%s Epoch=%llu Operation=%s Map=%s"),
+		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
+		*UEnum::GetValueAsString(ActiveOperation), *EngineLoadMapName);
+	BroadcastSnapshot(TEXT("online_engine_loadmap_started"));
+}
+
 // 地图完成流程：先隔离空 World 和其他 GameInstance，再重绑邀请接口；来源包回载时保留 pending 等 TravelFailure，意外包进入补偿。
 // 命中 ExpectedPackage 后确认 World 与 Transport；Host 到达玩法图后即收口 Start，ready 缺失只影响 Client 准入并写入 Host 低频重试截止点，真正的 TravelFailure、NetworkFailure 和 Leave 仍由各自入口回前台。
 void UCatOnlineSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
@@ -1860,6 +2505,8 @@ void UCatOnlineSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 	{
 		return;
 	}
+	bIsEngineLoadMapPending = false;
+	EngineLoadMapName.Reset();
 	RebindInviteDelegate();
 	const FString PackageName = UWorld::StripPIEPrefixFromPackageName(LoadedWorld->GetPackage()->GetName(), LoadedWorld->StreamingLevelsPrefix);
 	if (!ExpectedPackage.IsEmpty())
@@ -1936,13 +2583,16 @@ void UCatOnlineSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 	BroadcastSnapshot(TEXT("online_world_observed"));
 }
 
-// 旅行失败流程：先按 GameInstance 过滤并记录来源 World；Client Start 仍在 Frontend 时保留 Lobby 进入有界重试，重复失败通知不再消耗预算；其他已建会话走 Destroy 补偿，Leave 不触发第二次旅行。
+// 旅行失败流程：先按 GameInstance 过滤并记录来源 World；Client Start 仍在 Frontend 时只结束本次进入并保留 Lobby 与真实错误，重复失败通知不再改变已提交标记；其他已建会话走 Destroy 补偿，Leave 不触发第二次旅行。
 void UCatOnlineSubsystem::HandleTravelFailure(UWorld* FailureWorld, const ETravelFailure::Type FailureType, const FString& Reason)
 {
 	if (!FailureWorld || FailureWorld->GetGameInstance() != GetGameInstance())
 	{
 		return;
 	}
+	// TravelFailure 已经把这次切图等待收口到失败分支；清掉 PreLoadMap 观测，避免 UI 继续显示“等待 PostLoadMap”的旧状态。
+	bIsEngineLoadMapPending = false;
+	EngineLoadMapName.Reset();
 	const FString PackageName = UWorld::StripPIEPrefixFromPackageName(FailureWorld->GetPackage()->GetName(), FailureWorld->StreamingLevelsPrefix);
 	SetWorldStateForPackage(PackageName);
 	ExpectedPackage.Reset();
@@ -1987,7 +2637,7 @@ void UCatOnlineSubsystem::HandleTravelFailure(UWorld* FailureWorld, const ETrave
 
 // 网络失败流程：UE 的全局事件会广播任意 NetDriver，先把来源收窄到本 GameInstance 的当前 GameNetDriver 或 PendingNetDriver，再与 TravelFailure 独立记录和补偿。
 // 已建立连接的 Client 与 Listen Host 都落在 GameNetDriver；Join 握手失败则由 PendingNetDriver 广播且 FailureWorld 可能为空，所以两条路径必须分别用注册表和 WorldContext 验证，Beacon 等驱动一律忽略。
-// 前台 Client 的 PendingNetDriver 连接失败只结束本次 Start 并退避；引擎负责释放失败驱动，本地 Lobby 保留供下一次尝试，耗尽预算后由用户显式离开。
+// 前台 Client 的 PendingNetDriver 连接失败只结束本次 Start；引擎负责释放失败驱动，本地 Lobby 保留错误事实且不按秒提交下一次 Start，重新进入必须由用户显式离开后再加入。
 // 空闲时的断线复用 Leave：Lake Host 仍须先通过持久化回执，失败不自行 Destroy；前台房间和 Client 可清理，完成返回后再释放本机载荷。
 void UCatOnlineSubsystem::HandleNetworkFailure(UWorld* FailureWorld, UNetDriver* NetDriver, const ENetworkFailure::Type FailureType, const FString& Reason)
 {
@@ -2012,6 +2662,9 @@ void UCatOnlineSubsystem::HandleNetworkFailure(UWorld* FailureWorld, UNetDriver*
 		return;
 	}
 
+	// NetworkFailure 已经替代 PostLoadMap 成为本次引擎等待的终点；清掉 LoadMap 观测，避免失败后的补偿继续被显示成正在切图。
+	bIsEngineLoadMapPending = false;
+	EngineLoadMapName.Reset();
 	TransportState = ECatOnlineTransportState::Failed;
 	UE_LOG(LogCatOnline, Error, TEXT("Event=online_network_failure RequestId=%s Epoch=%llu Operation=%s Driver=%s Type=%s Reason=%s"),
 		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, *UEnum::GetValueAsString(ActiveOperation),
@@ -2110,7 +2763,7 @@ bool UCatOnlineSubsystem::SetWorldStateForPackage(const FString& PackageName)
 }
 
 // 成功结案流程：获准释放的 Leave 先确认无会话且回到 Frontend，再交给释放收口；busy 时不提前宣告退出完成。
-// 释放已完成或无需释放时，撤销许可并解绑两类 Save、Run 与平台回调，清操作和预载引用、推进 epoch，最后广播成功；不改真实 Session/World/Transport。
+// 释放已完成或无需释放时，撤销许可并解绑两类 Save、Run 与平台回调；Start 成功只清地图包请求并保留玩法预热 handle，回到 Frontend 的终态才释放本局预热资源；最后推进 epoch 并广播成功，不改真实 Session/World/Transport。
 void UCatOnlineSubsystem::FinishOperationSuccess()
 {
 	if (ActiveOperation == ECatOnlineOperation::Leave && bReleaseActiveRunOnFrontend
@@ -2126,6 +2779,7 @@ void UCatOnlineSubsystem::FinishOperationSuccess()
 	ClearHostLeaveSaveDelegate();
 	ClearRunTeardownDelegate();
 	ClearOperationDelegates();
+	StopMapPreloadProgressTracking();
 	ActiveSearch.Reset();
 	ExpectedPackage.Reset();
 	ActiveOperation = ECatOnlineOperation::None;
@@ -2138,13 +2792,19 @@ void UCatOnlineSubsystem::FinishOperationSuccess()
 		GameplayPreloadRequestId = INDEX_NONE;
 		PreloadedGameplayPackage = nullptr;
 	}
+	if (WorldState == ECatOnlineWorldState::Frontend)
+	{
+		ClearGameplayStartupAssetsPreload(true);
+	}
+	FrontendPreloadRequestId = INDEX_NONE;
+	PreloadedFrontendPackage = nullptr;
 	LastError = ECatOnlineError::None;
 	++OperationEpoch;
 	BroadcastSnapshot(TEXT("online_operation_succeeded"));
 }
 
 // 失败结案流程：若 Leave 已安全清会话并回 Frontend 且获释放许可，保留原错误并等待载荷释放；保存失败没有许可，Destroy/返回失败未达到终态，均不清载荷。
-// 其他情况撤销释放许可并解绑所有等待，清操作和预载、废止 epoch；前台 Client Start 前两次按 2 秒、4 秒退避，第三次明确停止，其余失败保持原错误。
+// 其他情况撤销释放许可并解绑所有等待，清操作和预载、废止 epoch；Start 失败或已经回到 Frontend 的 Leave 失败都会释放玩法预热资源，不按本地时间安排兜底重试。
 void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 {
 	if (ActiveOperation == ECatOnlineOperation::Leave && bReleaseActiveRunOnFrontend
@@ -2156,13 +2816,12 @@ void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 		return;
 	}
 	const bool bFinishingGameplayStart = ActiveOperation == ECatOnlineOperation::Start;
-	const bool bRetryableClientStart = bFinishingGameplayStart && OperationRole == ECatOnlineSessionRole::Client
-		&& SessionState == ECatOnlineSessionState::Client && WorldState == ECatOnlineWorldState::Frontend;
 	bReleaseActiveRunOnFrontend = false;
 	ClearRunReleaseDelegate();
 	ClearHostLeaveSaveDelegate();
 	ClearRunTeardownDelegate();
 	ClearOperationDelegates();
+	StopMapPreloadProgressTracking();
 	ActiveSearch.Reset();
 	ExpectedPackage.Reset();
 	ActiveOperation = ECatOnlineOperation::None;
@@ -2172,26 +2831,17 @@ void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 	PendingHostExitAckRequestId.Invalidate();
 	if (bFinishingGameplayStart)
 	{
+		ClearGameplayStartupAssetsPreload(true);
 		GameplayPreloadRequestId = INDEX_NONE;
 		PreloadedGameplayPackage = nullptr;
 	}
-	LastError = Error;
-	if (bRetryableClientStart)
+	else if (WorldState == ECatOnlineWorldState::Frontend)
 	{
-		if (ClientGameplayStartAttempts >= CatOnlineNames::MaxClientGameplayStartAttempts)
-		{
-			LastError = ECatOnlineError::ClientStartRetryExhausted;
-			UE_LOG(LogCatOnline, Warning, TEXT("Event=online_client_start_retry_exhausted RequestId=%s Epoch=%llu Attempts=%d Cause=%s Recovery=LeaveAndRejoin"),
-				*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, ClientGameplayStartAttempts, *UEnum::GetValueAsString(Error));
-		}
-		else
-		{
-			const double RetryDelaySeconds = 2.0 * ClientGameplayStartAttempts;
-			NextClientGameplayStartTime = FPlatformTime::Seconds() + RetryDelaySeconds;
-			UE_LOG(LogCatOnline, Warning, TEXT("Event=online_client_start_retry_scheduled RequestId=%s Epoch=%llu Attempts=%d DelaySeconds=%.1f Cause=%s"),
-				*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, ClientGameplayStartAttempts, RetryDelaySeconds, *UEnum::GetValueAsString(Error));
-		}
+		ClearGameplayStartupAssetsPreload(true);
 	}
+	FrontendPreloadRequestId = INDEX_NONE;
+	PreloadedFrontendPackage = nullptr;
+	LastError = Error;
 	++OperationEpoch;
 	BroadcastSnapshot(TEXT("online_operation_failed"));
 }

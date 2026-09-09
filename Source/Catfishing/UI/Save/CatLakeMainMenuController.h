@@ -146,7 +146,7 @@ private:
 	/** Save 子系统 OnSaveCompleted 的配对解绑句柄；只用于手动保存结果的明确完成文案。 */
 	FDelegateHandle SaveCompletedHandle;
 
-	/** Online 快照广播的配对解绑句柄；只用于退出到主菜单等待页读取真实异步阶段和失败结果。 */
+	/** Online 快照广播的配对解绑句柄；只用于退出到主菜单等待状态读取真实异步阶段和失败结果。 */
 	FDelegateHandle OnlineChangedHandle;
 
 	/** 菜单当前是否打开的唯一状态；Toggle 写入，输入模式和 ViewState 只读取。 */

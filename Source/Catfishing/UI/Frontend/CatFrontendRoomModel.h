@@ -48,12 +48,6 @@ public:
 	/** 当前用户是否可点击开始游戏；必须已经确认是 Host、没有并发操作且尚未预载。 */
 	bool CanStartGame() const;
 
-	/** 返回 Online 的真实玩法包异步加载比例；引擎未知或尚未预载时为 -1，房间页和加载页不得自行补百分比。 */
-	float GetGameplayLoadProgress() const;
-
-	/** 返回玩法进入过程的可读阶段；加载页用它区分包预载、旅行排队和失败文本，不新增前端枚举或复制 Online 状态。 */
-	FText GetGameplayLoadStatusText() const;
-
 	/** 房间页的 native 变化入口；Online 快照变化和同步拒绝都会广播，View 随后重新读取查询。 */
 	FCatFrontendRoomModelChanged OnChanged;
 

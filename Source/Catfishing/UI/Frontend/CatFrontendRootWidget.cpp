@@ -4,7 +4,6 @@
 #include "Components/CheckBox.h"
 #include "Components/ComboBoxString.h"
 #include "Components/PanelWidget.h"
-#include "Components/ProgressBar.h"
 #include "Components/EditableTextBox.h"
 #include "Components/ScrollBox.h"
 #include "Components/Slider.h"
@@ -123,7 +122,6 @@ void UCatFrontendRootWidget::InitializeFrontend(UCatFrontendPageController* InCo
 	HandleSaveModelChanged();
 	HandleRoomModelChanged();
 	HandleSettingsModelChanged();
-	RefreshLoadingPresentation();
 }
 
 // 协作者拆除流程：先解除 Model 与按钮委托，再清空协作者引用；Root 不主动取消 Session、存档或设置操作，避免 View 生命周期反向改写业务。
@@ -177,23 +175,10 @@ void UCatFrontendRootWidget::ShowFrontendSettings()
 	HandleSettingsModelChanged();
 }
 
-// 加载显示流程：显式选择 LoadingPage，并只写 Controller 已确认的真实加载阶段文字；百分比必须由正式进度接口提供后再显示。
-void UCatFrontendRootWidget::ShowLoading()
+// 房间显示查询流程：只比较当前显示的房间 Widget；菜单、设置、存档页或未装配状态均返回 false，作为异步呈现保护。
+bool UCatFrontendRootWidget::IsShowingRoom() const
 {
-	ShowPage(LoadingPage, TEXT("LoadingPage"));
-	RefreshLoadingPresentation();
-}
-
-// 加载页显示查询流程：确认必需控件仍有效后比较 Switcher 实际显示的 Widget；缺失时返回 false，使迟到失败不能切换其他页面。
-bool UCatFrontendRootWidget::IsShowingLoading() const
-{
-	return FrontendPageSwitcher && LoadingPage && FrontendPageSwitcher->GetActiveWidget() == LoadingPage;
-}
-
-// 房间显示范围查询流程：只比较当前显示的房间和加载 Widget；菜单、设置、存档页或未装配状态均返回 false，作为异步呈现保护。
-bool UCatFrontendRootWidget::IsShowingRoomOrLoading() const
-{
-	return (FrontendPageSwitcher && RoomPage && FrontendPageSwitcher->GetActiveWidget() == RoomPage) || IsShowingLoading();
+	return FrontendPageSwitcher && RoomPage && FrontendPageSwitcher->GetActiveWidget() == RoomPage;
 }
 
 // 当前反馈来源查询流程：只用 Switcher 实际激活控件定位文本所属 Model；未装配或菜单返回空，不从可见页推断存档许可、Session 角色或设置分类。
@@ -202,11 +187,11 @@ UObject* UCatFrontendRootWidget::GetVisibleFeedbackSource() const
 	const UWidget* ActiveWidget = FrontendPageSwitcher ? FrontendPageSwitcher->GetActiveWidget() : nullptr;
 	if (ActiveWidget && ActiveWidget == SaveListPage) { return SaveModel; }
 	if (ActiveWidget && ActiveWidget == FrontendSettingsPage) { return SettingsModel; }
-	if (ActiveWidget && (ActiveWidget == RoomPage || ActiveWidget == LoadingPage)) { return RoomModel; }
+	if (ActiveWidget && ActiveWidget == RoomPage) { return RoomModel; }
 	return nullptr;
 }
 
-// 反馈刷新流程：各文本先取属于自身 Model 的局部提示，为空再读该 Model 正式结果；菜单仅取空来源提示，加载阶段另按 Room 事实更新。不会因一个来源通知而把其错误复制到其他页面。
+// 反馈刷新流程：各文本先取属于自身 Model 的局部提示，为空再读该 Model 正式结果；菜单仅取空来源提示。不会因一个来源通知而把其错误复制到其他页面。
 void UCatFrontendRootWidget::RefreshFlowFeedback()
 {
 	const FText SaveFeedback = PageController ? PageController->GetLastResultText(SaveModel) : FText::GetEmpty();
@@ -221,7 +206,6 @@ void UCatFrontendRootWidget::RefreshFlowFeedback()
 		MenuFeedback->SetAutoWrapText(true);
 		MenuFeedback->SetText(MenuText.IsEmpty() ? FText::FromString(TEXT("与朋友一同启程")) : MenuText);
 	}
-	RefreshLoadingPresentation();
 }
 
 // Controller 查询流程：只返回已注入协作者；空值表示 Root 处于未装配或拆除阶段，WBP 应禁用提交而非绕过 Controller。
@@ -293,7 +277,7 @@ void UCatFrontendRootWidget::RequestInviteFriend(const FCatOnlineFriendHandle Fr
 // 离房点击流程：交给有效 Controller 提交正式离开意图，再刷新同步反馈；最终返回页由后续 Session 事实决定。
 void UCatFrontendRootWidget::RequestLeaveRoom() { if (PageController) { PageController->RequestLeaveRoom(); } HandleRoomModelChanged(); }
 
-// 房主开始点击流程：交给有效 Controller 提交 Start 并消费真实预载事实，再刷新房间反馈和加载文本；切到 Loading 的权限仍属于 Controller。
+// 房主开始点击流程：交给有效 Controller 提交 Start 并消费真实预载事实；全局加载遮罩由 LocalPlayer UI 响应 Online 快照显示。
 void UCatFrontendRootWidget::RequestStartRoomGame() { if (PageController) { PageController->RequestStartRoomGame(); } HandleRoomModelChanged(); }
 
 // 设置应用点击流程：交给有效 Controller 请求提交草稿并决定留页或返回，再回填设置控件和反馈；设备切换终态仍由 SettingsModel 通知。
@@ -408,10 +392,6 @@ void UCatFrontendRootWidget::ResolvePageControls()
 	FindPageControl<UComboBoxString>(FrontendSettingsPage, TEXT("MicrophoneComboBox"), TEXT("FrontendSettingsPage"));
 	FindPageControl<UTextBlock>(FrontendSettingsPage, TEXT("VoiceInputModeUnavailableText"), TEXT("FrontendSettingsPage"));
 	FindPageControl<UTextBlock>(FrontendSettingsPage, TEXT("MicrophoneUnavailableText"), TEXT("FrontendSettingsPage"));
-	LoadingProgressTextBlock = FindPageControl<UTextBlock>(LoadingPage, TEXT("LoadingProgressTextBlock"), TEXT("LoadingPage"));
-	LoadingProgressBar = FindPageControl<UProgressBar>(LoadingPage, TEXT("LoadingProgressBar"), TEXT("LoadingPage"));
-	FindPageControl<UTextBlock>(LoadingPage, TEXT("LoadingDayTextBlock"), TEXT("LoadingPage"));
-	FindPageControl<UTextBlock>(LoadingPage, TEXT("LoadingSacrificeProgressTextBlock"), TEXT("LoadingPage"));
 }
 
 // 所属页面控件查找流程：页面缺失时记录页面与控件名并返回空；否则仅在该页面树按名查找和 Cast，缺失或类型不符记录合同错误并返回空，不跨页搜索或构造替身。
@@ -564,7 +544,6 @@ void UCatFrontendRootWidget::HandleRoomModelChanged()
 	HandleSaveModelChanged();
 	RefreshRoomPresentation();
 	RebuildRoomRows();
-	RefreshLoadingPresentation();
 	BP_RenderRoom();
 }
 
@@ -691,52 +670,6 @@ void UCatFrontendRootWidget::HandleSettingsModelChanged()
 		bRefreshingSettingsControls = false;
 	}
 	BP_RenderFrontendSettings();
-}
-
-// 加载表现流程：先按 RoomModel 真实比例切换确定进度或 marquee，未知时优先读取 RoomModel 从 Online 派生的阶段原因；Host 再按正式活动槽匹配 Save 摘要，显示最后保存的天数和献祭记录，Client 无来源和新槽无记录均明示未知，不冒充当前 Run。
-void UCatFrontendRootWidget::RefreshLoadingPresentation()
-{
-	const FCatOnlineSnapshot Snapshot = RoomModel ? RoomModel->GetSnapshot() : FCatOnlineSnapshot();
-	const float Progress = RoomModel ? RoomModel->GetGameplayLoadProgress() : -1.0f;
-	if (Progress >= 0.0f && Progress <= 100.0f)
-	{
-		if (LoadingProgressTextBlock) { LoadingProgressTextBlock->SetText(FText::FromString(FString::Printf(TEXT("载入中 %.0f%%"), Progress))); }
-		if (LoadingProgressBar) { LoadingProgressBar->SetIsMarquee(false); LoadingProgressBar->SetPercent(Progress / 100.0f); }
-	}
-	else
-	{
-		const FText LocalFeedback = PageController ? PageController->GetLastResultText(RoomModel) : FText::GetEmpty();
-		const FText GameplayLoadStatus = RoomModel ? RoomModel->GetGameplayLoadStatusText() : FText::GetEmpty();
-		if (LoadingProgressTextBlock)
-		{
-			LoadingProgressTextBlock->SetText(!GameplayLoadStatus.IsEmpty() ? GameplayLoadStatus
-				: !LocalFeedback.IsEmpty() ? LocalFeedback
-				: RoomModel && !RoomModel->GetLastResultText().IsEmpty() ? RoomModel->GetLastResultText()
-				: FText::FromString(TEXT("正在等待正式加载状态。")));
-		}
-		if (LoadingProgressBar) { LoadingProgressBar->SetIsMarquee(true); }
-	}
-	const FCatSaveSlotSummary* LoadedSummary = nullptr;
-	if (Snapshot.SessionRole == ECatOnlineSessionRole::Host && SaveModel && SaveModel->HasLoadedRunForTravel())
-	{
-		for (const FCatSaveSlotSummary& Summary : SaveModel->GetSlotSummaries())
-		{
-			if (Summary.SlotId == SaveModel->GetActiveSlotId()) { LoadedSummary = &Summary; break; }
-		}
-	}
-	if (UTextBlock* DayText = FindPageControl<UTextBlock>(LoadingPage, TEXT("LoadingDayTextBlock"), TEXT("LoadingPage")))
-	{
-		DayText->SetText(LoadedSummary && LoadedSummary->DayIndex > 0
-			? FText::FromString(FString::Printf(TEXT("存档记录：第 %d 天"), LoadedSummary->DayIndex))
-			: FText::FromString(Snapshot.SessionRole == ECatOnlineSessionRole::Client ? TEXT("天数：房主尚未提供") : TEXT("天数：存档尚无记录")));
-	}
-	if (UTextBlock* SacrificeText = FindPageControl<UTextBlock>(LoadingPage, TEXT("LoadingSacrificeProgressTextBlock"), TEXT("LoadingPage")))
-	{
-		SacrificeText->SetText(LoadedSummary && LoadedSummary->SacrificeTarget > 0
-			? FText::FromString(FString::Printf(TEXT("存档献祭记录：%d / %d"), LoadedSummary->SacrificeProgress, LoadedSummary->SacrificeTarget))
-			: FText::FromString(Snapshot.SessionRole == ECatOnlineSessionRole::Client ? TEXT("献祭进度：房主尚未提供") : TEXT("献祭进度：存档尚无记录")));
-	}
-	BP_RenderLoading();
 }
 
 // 存档行重建流程：清空旧行后仅从 SaveModel 的当前真实摘要创建紧凑 WBP；每行在 ConfigureRow 中保存稳定 SlotId，列表为空时不补虚构条目。

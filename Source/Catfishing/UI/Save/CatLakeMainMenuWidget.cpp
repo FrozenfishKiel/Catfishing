@@ -5,7 +5,6 @@
 #include "Components/CheckBox.h"
 #include "Components/ComboBoxString.h"
 #include "Components/PanelWidget.h"
-#include "Components/ProgressBar.h"
 #include "Components/Slider.h"
 #include "Components/TextBlock.h"
 #include "Components/WidgetSwitcher.h"
@@ -38,7 +37,7 @@ void UCatLakeMainMenuWidget::ResetLakeMenuSettings()
 // 渲染流程：
 // 1. 保存 Controller 给出的唯一菜单投影，避免 Widget 从按钮状态反推 Save、Settings 或退出事实。
 // 2. 写入可选 WBP 控件；返回、设置、保存、回主菜单和退出都只反映 Controller 投影，不读取业务系统。
-// 3. 若等待页存在，用同一份状态文本刷新异步阶段并保持不确定进度条；最后通知蓝图扩展点读取 LastMenuViewState。
+// 3. 回主菜单等待中只禁用命令按钮并保留状态文本；全局遮罩负责真正的等待表现，最后通知蓝图扩展点读取 LastMenuViewState。
 void UCatLakeMainMenuWidget::RenderMenu(const FCatLakeMainMenuViewState& ViewState)
 {
 	LastMenuViewState = ViewState;
@@ -68,19 +67,10 @@ void UCatLakeMainMenuWidget::RenderMenu(const FCatLakeMainMenuViewState& ViewSta
 	{
 		ExitGameButton->SetIsEnabled(LastMenuViewState.bExitEnabled);
 	}
-	if (ExitLoadingStatusTextBlock)
-	{
-		ExitLoadingStatusTextBlock->SetText(LastMenuViewState.StatusText.IsEmpty()
-			? FText::FromString(TEXT("正在返回主菜单。")) : LastMenuViewState.StatusText);
-	}
-	if (ExitLoadingProgressBar)
-	{
-		ExitLoadingProgressBar->SetIsMarquee(true);
-	}
 	BP_RenderMenu(LastMenuViewState);
 }
 
-// 命令页显示流程：显式切回暂停菜单的纵向按钮列表并隐藏设置/等待页；没有 Switcher 的旧资产用根容器显隐兜底，但不创建新控件。
+// 命令页显示流程：显式切回暂停菜单的纵向按钮列表并隐藏设置页；没有 Switcher 的资产用根容器显隐兜底，但不创建新控件。
 void UCatLakeMainMenuWidget::ShowCommandMenu()
 {
 	if (LakeMainMenuPageSwitcher && LakeCommandPanel)
@@ -95,17 +85,13 @@ void UCatLakeMainMenuWidget::ShowCommandMenu()
 	{
 		LakeSettingsPanel->SetVisibility(ESlateVisibility::Collapsed);
 	}
-	if (LakeExitLoadingPanel)
-	{
-		LakeExitLoadingPanel->SetVisibility(ESlateVisibility::Collapsed);
-	}
 	if (UButton* FocusButton = CloseButton ? CloseButton.Get() : SettingsButton.Get(); FocusButton && GetOwningPlayer())
 	{
 		FocusButton->SetUserFocus(GetOwningPlayer());
 	}
 }
 
-// 设置页显示流程：切到局内设置面板、隐藏退出等待页并刷新全部同名设置控件；焦点给分类按钮，保证键盘手柄导航有稳定起点。
+// 设置页显示流程：切到局内设置面板并刷新全部同名设置控件；焦点给分类按钮，保证键盘手柄导航有稳定起点。
 void UCatLakeMainMenuWidget::ShowSettingsPanel()
 {
 	if (LakeMainMenuPageSwitcher && LakeSettingsPanel)
@@ -120,47 +106,10 @@ void UCatLakeMainMenuWidget::ShowSettingsPanel()
 	{
 		LakeSettingsPanel->SetVisibility(ESlateVisibility::Visible);
 	}
-	if (LakeExitLoadingPanel)
-	{
-		LakeExitLoadingPanel->SetVisibility(ESlateVisibility::Collapsed);
-	}
 	HandleSettingsModelChanged();
 	if (GameSettingsCategoryButton && GetOwningPlayer())
 	{
 		GameSettingsCategoryButton->SetUserFocus(GetOwningPlayer());
-	}
-}
-
-// 退出等待页显示流程：切到专门的异步等待页并隐藏命令/设置区域；如果旧资产没有等待页，只保留状态文本让玩家看到当前阶段。
-void UCatLakeMainMenuWidget::ShowReturnToMainMenuLoadingPanel()
-{
-	if (!LakeExitLoadingPanel)
-	{
-		if (LakeCommandPanel)
-		{
-			LakeCommandPanel->SetVisibility(ESlateVisibility::Visible);
-		}
-		if (LakeSettingsPanel)
-		{
-			LakeSettingsPanel->SetVisibility(ESlateVisibility::Collapsed);
-		}
-		return;
-	}
-	if (LakeMainMenuPageSwitcher && LakeExitLoadingPanel)
-	{
-		LakeMainMenuPageSwitcher->SetActiveWidget(LakeExitLoadingPanel);
-	}
-	if (LakeCommandPanel)
-	{
-		LakeCommandPanel->SetVisibility(ESlateVisibility::Collapsed);
-	}
-	if (LakeSettingsPanel)
-	{
-		LakeSettingsPanel->SetVisibility(ESlateVisibility::Collapsed);
-	}
-	if (LakeExitLoadingPanel)
-	{
-		LakeExitLoadingPanel->SetVisibility(ESlateVisibility::Visible);
 	}
 }
 
@@ -173,17 +122,6 @@ bool UCatLakeMainMenuWidget::IsShowingSettingsPanel() const
 	}
 	return LakeSettingsPanel && LakeSettingsPanel->GetVisibility() != ESlateVisibility::Collapsed
 		&& LakeSettingsPanel->GetVisibility() != ESlateVisibility::Hidden;
-}
-
-// 退出等待页查询流程：优先读取 Switcher 的激活页；旧资产没有 Switcher 时退回等待根可见性，只用于锁住 ESC 关闭入口。
-bool UCatLakeMainMenuWidget::IsShowingReturnToMainMenuLoadingPanel() const
-{
-	if (LakeMainMenuPageSwitcher && LakeExitLoadingPanel)
-	{
-		return LakeMainMenuPageSwitcher->GetActiveWidget() == LakeExitLoadingPanel;
-	}
-	return LakeExitLoadingPanel && LakeExitLoadingPanel->GetVisibility() != ESlateVisibility::Collapsed
-		&& LakeExitLoadingPanel->GetVisibility() != ESlateVisibility::Hidden;
 }
 
 // 状态读取流程：返回最后一次 Controller 渲染输入；调用方不能据此提交保存或退出游戏，只能用于表现绑定。
@@ -288,12 +226,12 @@ void UCatLakeMainMenuWidget::NativeDestruct()
 	Super::NativeDestruct();
 }
 
-// 预览键流程：子按钮处理前只识别普通 Escape；等待页只消费不关闭，设置页中先取消回暂停菜单，命令页中才关闭菜单，Shift+Escape 继续透传。
+// 预览键流程：子按钮处理前只识别普通 Escape；回主菜单等待中只消费不关闭，设置页中先取消回暂停菜单，命令页中才关闭菜单，Shift+Escape 继续透传。
 FReply UCatLakeMainMenuWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
 	if (ShouldCloseMenuFromKey(InKeyEvent))
 	{
-		if (IsShowingReturnToMainMenuLoadingPanel())
+		if (LastMenuViewState.bReturnToMainMenuPending)
 		{
 			return FReply::Handled();
 		}
@@ -303,12 +241,12 @@ FReply UCatLakeMainMenuWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometr
 	return Super::NativeOnPreviewKeyDown(InGeometry, InKeyEvent);
 }
 
-// 键盘流程：当菜单根直接持有焦点时复用普通 Escape 分支；等待页锁住关闭入口，Shift+Escape 和其它按键继续走父类默认处理。
+// 键盘流程：当菜单根直接持有焦点时复用普通 Escape 分支；回主菜单等待中锁住关闭入口，Shift+Escape 和其它按键继续走父类默认处理。
 FReply UCatLakeMainMenuWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
 	if (ShouldCloseMenuFromKey(InKeyEvent))
 	{
-		if (IsShowingReturnToMainMenuLoadingPanel())
+		if (LastMenuViewState.bReturnToMainMenuPending)
 		{
 			return FReply::Handled();
 		}

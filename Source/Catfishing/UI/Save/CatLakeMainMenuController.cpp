@@ -188,10 +188,6 @@ void UCatLakeMainMenuController::ToggleMenu()
 	{
 		SetMenuOpen(true);
 		UpdateView();
-		if (UCatLakeMainMenuWidget* View = BoundView.Get())
-		{
-			View->ShowReturnToMainMenuLoadingPanel();
-		}
 		return;
 	}
 	SetMenuOpen(!bMenuOpen);
@@ -215,10 +211,6 @@ void UCatLakeMainMenuController::RequestCloseFromWidget()
 	if (bReturnToMainMenuPending)
 	{
 		UpdateView();
-		if (UCatLakeMainMenuWidget* View = BoundView.Get())
-		{
-			View->ShowReturnToMainMenuLoadingPanel();
-		}
 		return;
 	}
 	SetMenuOpen(false);
@@ -230,7 +222,6 @@ void UCatLakeMainMenuController::RequestSettingsFromWidget()
 	if (bReturnToMainMenuPending)
 	{
 		UpdateView();
-		if (UCatLakeMainMenuWidget* View = BoundView.Get()) { View->ShowReturnToMainMenuLoadingPanel(); }
 		return;
 	}
 	UCatLakeMainMenuWidget* View = BoundView.Get();
@@ -255,7 +246,6 @@ void UCatLakeMainMenuController::RequestSaveFromWidget()
 	if (bReturnToMainMenuPending)
 	{
 		UpdateView();
-		if (UCatLakeMainMenuWidget* View = BoundView.Get()) { View->ShowReturnToMainMenuLoadingPanel(); }
 		return;
 	}
 	UCatSaveSubsystem* Save = GetSaveSubsystem();
@@ -299,16 +289,15 @@ void UCatLakeMainMenuController::RequestSaveFromWidget()
 }
 
 // 退出到主菜单流程：
-// 1. 先拒绝本菜单自己的重复点击，并保持已存在的等待画面。
+// 1. 先拒绝本菜单自己的重复点击，并保持按钮锁定，真实等待表现由全局遮罩显示。
 // 2. 再把意图交给 Online Leave；同步拒绝只显示稳定错误，不自行清 Session 或旅行。
-// 3. 受理后记录 RequestId、打开等待页并从 Online 快照派生阶段文本，后续成功或失败只由快照回调收口。
+// 3. 受理后记录 RequestId、打开命令页底层状态并从 Online 快照派生阶段文本，后续成功或失败只由快照回调收口。
 void UCatLakeMainMenuController::RequestReturnToMainMenuFromWidget()
 {
 	if (bReturnToMainMenuPending)
 	{
 		LastStatusText = FText::FromString(TEXT("正在返回主菜单。"));
 		UpdateView();
-		if (UCatLakeMainMenuWidget* View = BoundView.Get()) { View->ShowReturnToMainMenuLoadingPanel(); }
 		return;
 	}
 	UCatOnlineSubsystem* Online = GetOnlineSubsystem();
@@ -336,10 +325,6 @@ void UCatLakeMainMenuController::RequestReturnToMainMenuFromWidget()
 	LastStatusText = CatLakeMainMenuText::MakeReturnToMainMenuStatusText(Online->GetSnapshot());
 	SetMenuOpen(true);
 	UpdateView();
-	if (UCatLakeMainMenuWidget* View = BoundView.Get())
-	{
-		View->ShowReturnToMainMenuLoadingPanel();
-	}
 	UE_LOG(LogCatUI, Log, TEXT("Event=ui_lake_menu_return_frontend_requested RequestId=%s"),
 		*Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 	HandleOnlineChanged();
@@ -472,14 +457,7 @@ void UCatLakeMainMenuController::SetMenuOpen(const bool bOpen)
 			View->AddToViewport(30);
 		}
 		bMenuOpen = true;
-		if (bReturnToMainMenuPending)
-		{
-			View->ShowReturnToMainMenuLoadingPanel();
-		}
-		else
-		{
-			View->ShowCommandMenu();
-		}
+		View->ShowCommandMenu();
 		UpdateView();
 		ApplyMenuInputMode(true);
 		UE_LOG(LogCatUI, Log, TEXT("Event=ui_lake_menu_opened Controller=%s View=%s"),
@@ -580,7 +558,6 @@ void UCatLakeMainMenuController::HandleMenuActionRequested(const ECatLakeMainMen
 	if (bReturnToMainMenuPending && Action != ECatLakeMainMenuAction::ExitGame)
 	{
 		UpdateView();
-		if (UCatLakeMainMenuWidget* View = BoundView.Get()) { View->ShowReturnToMainMenuLoadingPanel(); }
 		return;
 	}
 	switch (Action)
@@ -656,7 +633,7 @@ void UCatLakeMainMenuController::HandleSaveCompleted(const FGuid RequestId, cons
 
 // Online 快照处理流程：
 // 1. 非回主菜单等待时只刷新按钮可用性，让会话状态变化能启用或禁用回主菜单按钮。
-// 2. 等待中只消费同一 Leave RequestId 的事实；Pending 继续显示等待页，失败恢复命令页并保留错误文本。
+// 2. 等待中只消费同一 Leave RequestId 的事实；Pending 继续锁住命令页，失败恢复命令页并保留错误文本。
 // 3. 成功到达 Frontend 且 Session 已释放后清本地等待标记，旧玩法菜单随后会被 LocalPlayer UI 生命周期移除。
 void UCatLakeMainMenuController::HandleOnlineChanged()
 {
@@ -685,7 +662,6 @@ void UCatLakeMainMenuController::HandleOnlineChanged()
 	if (!bMatchesPendingLeave && Snapshot.ActiveOperation != ECatOnlineOperation::None)
 	{
 		UpdateView();
-		if (UCatLakeMainMenuWidget* View = BoundView.Get()) { View->ShowReturnToMainMenuLoadingPanel(); }
 		return;
 	}
 
@@ -693,7 +669,6 @@ void UCatLakeMainMenuController::HandleOnlineChanged()
 	{
 		LastStatusText = CatLakeMainMenuText::MakeReturnToMainMenuStatusText(Snapshot);
 		UpdateView();
-		if (UCatLakeMainMenuWidget* View = BoundView.Get()) { View->ShowReturnToMainMenuLoadingPanel(); }
 		return;
 	}
 
