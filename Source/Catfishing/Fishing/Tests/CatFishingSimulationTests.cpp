@@ -255,6 +255,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingRodTorqueRecoveryTest,
 bool FCatFishingRodTorqueRecoveryTest::RunTest(const FString& Parameters)
 {
 	FCatFishingRodRotationInput Input;
+	Input.bCatDriveActive = true;
 	Input.CatTorqueCapacity = 50.0;
 	Input.MaximumFishTorque = 100.0;
 	Input.RequestedAim = FRotator(0.0, 120.0, 0.0);
@@ -309,6 +310,7 @@ bool FCatFishingRodTorqueFrameRateTest::RunTest(const FString& Parameters)
 	for (const int32 Rate : {120, 60, 30, 15})
 	{
 		FCatFishingRodRotationInput Input;
+		Input.bCatDriveActive = true;
 		Input.CatTorqueCapacity = 50.0;
 		Input.MaximumFishTorque = 100.0;
 		Input.RequestedAim = FRotator(45.0, 100.0, 0.0);
@@ -338,6 +340,7 @@ bool FCatFishingRodAngularInertiaTransitionsTest::RunTest(const FString& Paramet
 	for (const int32 Rate : {120, 60, 20})
 	{
 		FCatFishingRodRotationInput Input;
+		Input.bCatDriveActive = true;
 		Input.RequestedAim.Yaw = 120.0;
 		Input.DeltaSeconds = 1.0 / Rate;
 		const auto NoSupport = AdvanceRodRotation(Input);
@@ -406,6 +409,7 @@ bool FCatFishingRodPitchInertiaContactTest::RunTest(const FString& Parameters)
 	for (const double Sign : {-1.0, 1.0})
 	{
 		FCatFishingRodRotationInput Input;
+		Input.bCatDriveActive = true;
 		Input.MinimumPitchDegrees = -35.0;
 		Input.MaximumPitchDegrees = 35.0;
 		Input.CurrentAim.Pitch = Sign * 34.0;
@@ -447,6 +451,7 @@ bool FCatFishingRodLoadJitterTest::RunTest(const FString& Parameters)
 	for (const bool bAlternateSlack : {true, false})
 	{
 		FCatFishingRodRotationInput Smoothed;
+		Smoothed.bCatDriveActive = true;
 		Smoothed.CurrentAim.Yaw = 30.0;
 		Smoothed.RequestedAim.Yaw = 120.0;
 		Smoothed.CatTorqueCapacity = 50.0;
@@ -549,6 +554,7 @@ bool FCatFishingRodLoadSmoothingTimeTest::RunTest(const FString& Parameters)
 	for (const int32 Rate : {240, 120, 60, 30, 15})
 	{
 		FCatFishingRodRotationInput Input;
+		Input.bCatDriveActive = true;
 		Input.CatTorqueCapacity = 50.0;
 		Input.RequestedAim = FRotator(25.0, 120.0, 0.0);
 		Input.DeltaSeconds = 1.0 / Rate;
@@ -606,8 +612,9 @@ bool FCatFishingRodLoadedDampingTest::RunTest(const FString& Parameters)
 		for (int32 Path = 0; Path < 2; ++Path)
 		{
 			auto& Input = Inputs[Path];
+			Input.bCatDriveActive = true;
 			Input.CurrentAim.Yaw = 30.0;
-			Input.RequestedAim.Yaw = 120.0; // 整段不动鼠标。
+			Input.RequestedAim.Yaw = 120.0; // 纯积分夹具持续施加固定目标，不模拟鼠标启停。
 			Input.CatTorqueCapacity = 50.0;
 			Input.DeltaSeconds = 1.0 / Rate;
 			// 同一惯性基线仅关闭追加负载阻尼；零值仍保留防止空载过冲的基础临界阻尼。
@@ -654,6 +661,7 @@ bool FCatFishingRodLoadedDampingTest::RunTest(const FString& Parameters)
 		}
 	}
 	FCatFishingRodRotationInput Free;
+	Free.bCatDriveActive = true;
 	Free.CatTorqueCapacity = 50.0;
 	Free.RequestedAim = FRotator(20.0, 120.0, 0.0);
 	Free.DeltaSeconds = 1.0 / 60.0;
@@ -663,6 +671,7 @@ bool FCatFishingRodLoadedDampingTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("additional load damping leaves the unloaded inertia response unchanged"), DampedFree.ActualAim.Equals(BaseFree.ActualAim, 1e-9));
 	TestEqual(TEXT("additional load damping leaves unloaded active work unchanged"), DampedFree.CatPositiveWorkRadians, BaseFree.CatPositiveWorkRadians, 1e-9);
 	FCatFishingRodRotationInput Assisted;
+	Assisted.bCatDriveActive = true;
 	Assisted.CurrentAim.Yaw = 45.0;
 	Assisted.RequestedAim.Yaw = -120.0;
 	Assisted.CatTorqueCapacity = 50.0;

@@ -56,6 +56,7 @@ bool FCatFishingTimedSupportTorqueTest::RunTest(const FString& Parameters)
 	for (const double MaximumSpeed : {180.0, 360.0, 720.0})
 	{
 		FCatFishingRodRotationInput Rotation;
+		Rotation.bCatDriveActive = true;
 		Rotation.CurrentAim.Yaw = 30.0;
 		Rotation.RequestedAim.Yaw = 150.0;
 		Rotation.CatTorqueCapacity = 50.0;

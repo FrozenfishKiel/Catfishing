@@ -658,9 +658,9 @@ void ACatFishingRodActor::RebaseHeldAimFromAuthority(APlayerState* Player,
 	if (!CanRebaseHeldAimFromAuthority(Player, Sample)) return;
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
 	const FRotator PreviousRequested = HeldAimInput.IsRebased() ? HeldAimInput.GetRequestedAim()
-		: GetHolderPawnFromAuthority()->GetControlRotation();
+		: AuthoritativeHeldAimRotation;
 	if (!HeldAimInput.Rebase(Sample, AuthoritativeHeldAimRotation,
-		Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees)) return;
+		Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees, GetWorld()->GetTimeSeconds())) return;
 	bAwaitingNewHolderAim = false;
 	UE_LOG(LogCatFishing, Display,
 		TEXT("Event=fishing_rod_aim_rebased RequestId=%s InputSequence=%lld RodActorId=%s AimInputEpoch=%u "
@@ -683,8 +683,8 @@ bool ACatFishingRodActor::AcceptHeldAimSampleFromAuthority(APlayerState* Player,
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
 	if (bAwaitingNewHolderAim)
 	{
-		if (!HeldAimInput.Rebase(Sample, AuthoritativeHeldAimRotation,
-			Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees)) return false;
+		if (!HeldAimInput.AcceptSample(Sample, AuthoritativeHeldAimRotation,
+			Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees, GetWorld()->GetTimeSeconds())) return false;
 		bAwaitingNewHolderAim = false;
 		AuthoritativeAimHolder = GetHolderPawnFromAuthority();
 		UE_LOG(LogCatFishing, Log,
@@ -693,7 +693,8 @@ bool ACatFishingRodActor::AcceptHeldAimSampleFromAuthority(APlayerState* Player,
 			PresentationState.ControlEpoch, *AuthoritativeHeldAimRotation.ToCompactString(), *GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()));
 		return true;
 	}
-	return HeldAimInput.AcceptSample(Sample, Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
+	return HeldAimInput.AcceptSample(Sample, AuthoritativeHeldAimRotation,
+		Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees, GetWorld()->GetTimeSeconds());
 }
 
 bool ACatFishingRodActor::GetRotationPredictionFromAuthority(const double DeltaSeconds, FCatFishingRodRotationPrediction& OutPrediction) const
@@ -723,14 +724,16 @@ bool ACatFishingRodActor::GetRotationPredictionFromAuthority(const double DeltaS
 
 	FRotator RequestedAimRotation = HolderPawn->GetController()
 		? HolderPawn->GetController()->GetControlRotation() : HolderPawn->GetActorRotation();
+	const bool bMouseDriveActive = CarrierConstraintState.bFightActive && !bAwaitingNewHolderAim
+		&& AuthoritativeAimHolder.Get() == HolderPawn && HeldAimInput.IsMouseActive(GetWorld()->GetTimeSeconds());
 	if (bAwaitingNewHolderAim && bHeldAimInitialized)
 	{
 		RequestedAimRotation = AuthoritativeHeldAimRotation;
 	}
-	else if (CarrierConstraintState.bFightActive && HeldAimInput.IsRebased()
-		&& AuthoritativeAimHolder.Get() == HolderPawn)
+	else if (CarrierConstraintState.bFightActive && bHeldAimInitialized)
 	{
-		RequestedAimRotation = HeldAimInput.GetRequestedAim();
+		// 搏斗中的 ControlRotation 仅服务视角；停手/超时后不得恢复其积压目标。
+		RequestedAimRotation = bMouseDriveActive ? HeldAimInput.GetRequestedAim() : AuthoritativeHeldAimRotation;
 	}
 	RequestedAimRotation.Pitch = FMath::ClampAngle(RequestedAimRotation.Pitch,
 		Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
@@ -738,6 +741,7 @@ bool ACatFishingRodActor::GetRotationPredictionFromAuthority(const double DeltaS
 	FCatFishingRodRotationInput& RotationInput = OutPrediction.Input;
 	RotationInput.CurrentAim = AuthoritativeHeldAimRotation;
 	RotationInput.RequestedAim = RequestedAimRotation;
+	RotationInput.bCatDriveActive = bMouseDriveActive;
 	RotationInput.PullAxis = CarrierConstraintState.RodPullAxis;
 	RotationInput.PreviousSmoothedFishPullStrengthMeters = SmoothedRodFishPullStrengthMeters;
 	RotationInput.PreviousAngularVelocityRadiansPerSecond = AuthoritativeRodAngularVelocityRadiansPerSecond;
@@ -763,6 +767,14 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 {
 	// 显式刷新与 Tick 共用入口，服务/测试直接请求刷新时也必须读取碰撞后的成员位置。
 	RefreshGroupAnchorFromAuthority();
+	if (HasAuthority() && HeldAimInput.ExpireInput(GetWorld()->GetTimeSeconds(), AuthoritativeHeldAimRotation))
+	{
+		UE_LOG(LogCatFishing, Display,
+			TEXT("Event=fishing_rod_mouse_drive_timeout RodActorId=%s AimInputEpoch=%u AimSequence=%lld TimeoutSeconds=%.3f PlayerId=%d World=%s NetMode=%d Authority=true LocalRole=%d Result=ActiveTorqueStopped"),
+			*PresentationState.RodActorId.ToString(), CarrierConstraintState.AimInputEpoch, HeldAimInput.GetLastSequence(),
+			FCatFishingRodAimState::InputTimeoutSeconds, PresentationState.HolderPlayerState ? PresentationState.HolderPlayerState->GetPlayerId() : INDEX_NONE,
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()));
+	}
 	FCatFishingRodRotationPrediction Prediction;
 	if (!GetRotationPredictionFromAuthority(DeltaSeconds, Prediction)) return false;
 	APawn* HolderPawn = GetHolderPawnFromAuthority();
@@ -818,7 +830,7 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 	AuthoritativeHolderVelocity = GetGroupVelocity();
 	// 仅诊断观察，不参与下一帧是否允许转动的裁决。
 	const bool bTorqueBalanced = RotationStep.bSucceeded
-		&& RotationStep.AngularSpeedDegreesPerSecond < 0.1
+		&& Prediction.Input.bCatDriveActive && RotationStep.AngularSpeedDegreesPerSecond < 0.1
 		&& !AuthoritativeHeldAimRotation.Equals(RequestedAimRotation, 1.0);
 	UWorld* World = GetWorld();
 	const double WorldSeconds = World ? World->GetTimeSeconds() : 0.0;
@@ -830,7 +842,7 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 			TEXT("Event=fishing_rod_rotation_resistance_sample RodActorId=%s RequestedYaw=%.2f ActualYaw=%.2f "
 				"RequestedPitch=%.2f ActualPitch=%.2f AngularSpeed=%.3f NetTorque=%s "
 				"MaximumFishTorque=%.3f CatTorqueCapacity=%.3f TorqueBalanced=%s "
-				"AimRebased=%s AimInputEpoch=%u AimSequence=%lld "
+				"AimRebased=%s AimInputEpoch=%u AimSequence=%lld MouseDriveActive=%s "
 				"PullAxis=%s AppliedFishPull=%s FishPullSmoothingSeconds=%.3f LoadedAngularDampingRatio=%.3f AppliedAngularDampingMultiplier=%.3f "
 				"AngularVelocityRadS=%s AngularAccelerationRadS2=%s AngularInertiaSeconds=%.3f PitchLimited=%s "
 				"RotationEffortEpoch=%llu RotationExertionSquaredSeconds=%.3f RotationPositiveWorkRadians=%.3f RotationIntegratedSeconds=%.3f "
@@ -844,6 +856,7 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 			CarrierConstraintState.CatTorqueCapacityStrengthMeters,
 			bTorqueBalanced ? TEXT("true") : TEXT("false"),
 			HeldAimInput.IsRebased() ? TEXT("true") : TEXT("false"), CarrierConstraintState.AimInputEpoch, HeldAimInput.GetLastSequence(),
+			Prediction.Input.bCatDriveActive ? TEXT("true") : TEXT("false"),
 			*FVector(CarrierConstraintState.RodPullAxis).ToCompactString(),
 			*SmoothedRodFishPullStrengthMeters.ToCompactString(), Settings->HeldRodFishPullSmoothingSeconds,
 			Settings->HeldRodLoadedAngularDampingRatio, RotationStep.AppliedAngularDampingMultiplier,

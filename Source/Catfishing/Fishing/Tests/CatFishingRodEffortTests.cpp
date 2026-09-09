@@ -17,6 +17,8 @@ bool FCatFishingRodEffortSeparatesActiveAndPassiveTest::RunTest(const FString& P
 {
 	(void)Parameters;
 	FCatFishingRodRotationInput Input;
+	Input.bCatDriveActive = false;
+	Input.CatTorqueCapacity = 50.0;
 	Input.CurrentAim.Yaw = 60.0;
 	Input.RequestedAim.Yaw = 120.0;
 	Input.MaximumFishTorque = 100.0;
@@ -29,6 +31,7 @@ bool FCatFishingRodEffortSeparatesActiveAndPassiveTest::RunTest(const FString& P
 	TestEqual(TEXT("passive dragging has no cat work"), Passive.CatPositiveWorkRadians, 0.0);
 
 	Input.CatTorqueCapacity = 50.0;
+	Input.bCatDriveActive = true;
 	const auto Opposed = FCatFishingRodResistanceModel::StepRotation(Input);
 	TestTrue(TEXT("fish overcomes active cat torque in the opposite direction"),
 		Opposed.bSucceeded && Opposed.ActualAim.Yaw < Input.CurrentAim.Yaw);
@@ -64,16 +67,22 @@ bool FCatFishingRodEffortSeparatesActiveAndPassiveTest::RunTest(const FString& P
 	TestTrue(TEXT("zero-time pose refresh preserves angular momentum"),
 		Paused.AngularVelocityRadiansPerSecond.Equals(Input.PreviousAngularVelocityRadiansPerSecond, 1e-9));
 
-	Input.CatTorqueCapacity = 0.0;
-	Input.RequestedAim = Input.CurrentAim;
+	Input.bCatDriveActive = false;
+	// 停手仍有完整力量容量和未完成目标，唯独主动转矩为零；不能靠容量清零蒙混过关。
+	Input.CatTorqueCapacity = 50.0;
 	Input.DeltaSeconds = 1.0 / 60.0;
 	Input.PreviousAngularVelocityRadiansPerSecond = FVector(0.0, 0.0, 1.0);
 	const auto Coasting = FCatFishingRodResistanceModel::StepRotation(Input);
-	TestTrue(TEXT("unloaded rod retains and damps existing motion without cat strength"),
+	TestTrue(TEXT("stopped mouse preserves and damps existing motion despite retained capacity and old target"),
 		Coasting.bSucceeded && Coasting.ActualAim.Yaw > Input.CurrentAim.Yaw
 		&& Coasting.AngularVelocityRadiansPerSecond.Z > 0.0 && Coasting.AngularVelocityRadiansPerSecond.Z < 1.0);
 	TestEqual(TEXT("inertial motion without cat torque has no support fee"), Coasting.CatExertionSquaredSeconds, 0.0);
 	TestEqual(TEXT("inertial motion without cat torque has no active motion fee"), Coasting.CatPositiveWorkRadians, 0.0);
+	Input.PreviousAngularVelocityRadiansPerSecond = FVector::ZeroVector;
+	const auto Stopped = FCatFishingRodResistanceModel::StepRotation(Input);
+	TestTrue(TEXT("unfinished target cannot restart a stationary rod when mouse drive is off"),
+		Stopped.bSucceeded && Stopped.ActualAim.Equals(Input.CurrentAim, 1e-9)
+		&& Stopped.NetTorque.IsNearlyZero() && Stopped.AngularVelocityRadiansPerSecond.IsNearlyZero());
 	return !HasAnyErrors();
 }
 
@@ -89,6 +98,7 @@ bool FCatFishingRodEffortFrameRateTest::RunTest(const FString& Parameters)
 	for (const int32 Rate : {120, 60, 20})
 	{
 		FCatFishingRodRotationInput Input;
+		Input.bCatDriveActive = true;
 		Input.CatTorqueCapacity = 50.0;
 		Input.RequestedAim = FRotator(25.0, 120.0, 0.0);
 		Input.DeltaSeconds = 1.0 / Rate;
@@ -155,6 +165,14 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 	TestTrue(TEXT("start fight rotation"), Rod->SetCarrierConstraintFromAuthority(
 		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, true, 100.0, 50.0));
 	Controller->SetControlRotation(FRotator(0.0, 120.0, 0.0));
+	FCatFishingRodAimSample Mouse;
+	Mouse.RodActorId = Rod->GetPresentationState().RodActorId;
+	Mouse.InputEpoch = Rod->GetCarrierConstraintState().AimInputEpoch;
+	Mouse.Sequence = 1;
+	Mouse.bMouseActive = true;
+	Mouse.MouseStrokeSequence = 1;
+	Mouse.CumulativeLookDegrees.X = 120.0;
+	TestTrue(TEXT("explicit active mouse supplies the rotation intent"), Rod->AcceptHeldAimSampleFromAuthority(PlayerState, Mouse));
 	FCatFishingRodRotationPrediction InitialPrediction;
 	if (!TestTrue(TEXT("production rod supplies the initial inertia snapshot"),
 		Rod->GetRotationPredictionFromAuthority(1.0 / 60.0, InitialPrediction))) return false;
@@ -228,6 +246,10 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 		&& AfterCleanup.Input.PreviousAngularVelocityRadiansPerSecond.IsNearlyZero());
 	TestTrue(TEXT("restart fight rotation"), Rod->SetCarrierConstraintFromAuthority(
 		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, true, 100.0, 50.0));
+	Mouse.InputEpoch = Rod->GetCarrierConstraintState().AimInputEpoch;
+	++Mouse.Sequence;
+	++Mouse.MouseStrokeSequence;
+	TestTrue(TEXT("new fight requires fresh mouse input in its own epoch"), Rod->AcceptHeldAimSampleFromAuthority(PlayerState, Mouse));
 	TestTrue(TEXT("new fight collects fresh effort"), Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0));
 	const auto Restarted = Rod->GetAuthoritativeRotationEffortSnapshot();
 	TestTrue(TEXT("restart gets a new epoch and effort"),

@@ -146,9 +146,9 @@ FCatFishingRodRotationResult FCatFishingRodResistanceModel::StepRotation(
 			FMath::Max(Input.CatTorqueCapacity, AppliedFishPull.Size()));
 		const double AimError = FMath::Acos(FMath::Clamp(FVector::DotProduct(Direction, RequestedDirection), -1.0, 1.0));
 		const FVector CatAxis = FQuat::FindBetweenNormals(Direction, RequestedDirection).GetRotationAxis();
-		// 猫朝瞄准意图施力，接近目标时连续减小。鱼线转矩有方向：外转受阻，回转得到助力。
-		const FVector CatTorque = CatAxis * Input.CatTorqueCapacity
-			* FMath::Clamp(AimError / (MaximumSpeed * Response), 0.0, 1.0);
+		// 鼠标停下的本步立即撤掉主动转矩。容量仍用于归一化，惯性和鱼力继续积分。
+		const FVector CatTorque = Input.bCatDriveActive ? CatAxis * Input.CatTorqueCapacity
+			* FMath::Clamp(AimError / (MaximumSpeed * Response), 0.0, 1.0) : FVector::ZeroVector;
 		const FVector FishTorque = FVector::CrossProduct(Direction, AppliedFishPull);
 		Result.NetTorque = CatTorque + FishTorque;
 		// 归一化转矩沿用原力量尺度，静态平衡不变；它现在驱动角加速度，不再直接覆盖转速。

@@ -1,6 +1,6 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
-本文件持续维护鱼、线、杆、猫的运动设计与实际代码。最近更新：2026-09-09，搏斗中的鱼竿旋转已在源码接入持续保存的角速度与等效惯性，猫转矩容量和鱼负载的变化先改变角加速度；Editor/Game Development构建与191项回归已完成（190通过、1项既有耐久失败），真人甩杆手感尚未验收。第二轮输入限幅未实现。1–4人从加入鱼竿时共同移动的既有基线见 [钓鱼架构 2.0.4](FishingArchitecture_zh-CN.md#204-入竿即保持队形的影响与验证2026-09-08)。鱼仍使用沿主动意图未完成距离的耗体公式，满线右键不恢复。下文旧日期段落的公式与测试数字只属于相应历史版本，不代替本轮验证；真人手感和新打包双端验收仍待完成。
+本文件持续维护鱼、线、杆、猫的运动设计与实际代码。最近更新：2026-09-09，已接入用户确认的“鼠标移动才主动转杆，停止立即撤力并清掉未完成目标”。上一轮持续角速度与等效惯性保留；本轮Editor/Game Development构建成功，191项回归中190通过、1项既有耐久失败，包含真实客户端启停及丢包恢复验证。1–4人从加入鱼竿时共同移动的既有基线见 [钓鱼架构 2.0.4](FishingArchitecture_zh-CN.md#204-入竿即保持队形的影响与验证2026-09-08)。鱼仍使用沿主动意图未完成距离的耗体公式，满线右键不恢复。下文旧日期段落的公式与测试数字只属于相应历史版本，不代替本轮验证；真人手感和新打包双端验收仍待完成。
 
 当前猫端通过 `CatFishingGroupModel` 使用一个 N 人计算入口：个人正体力提供完整力量，主位系数 1、辅助默认 0.5；移动与站定支撑共用个人向量预算。同向加强、反向抵消、侧向改变组运动。只有主位驱动线杯和竿向，主位体力为零仍可使用队友的有效支撑操竿。Runner 每步冻结真实成员、已接受的 CMC 移动和各自 ASC，共同收线/转杆/去重持竿账单均分，个人移动及受阻用力由本人支付；体力总量只读求和，不转移余额。有效放线逐人恢复、满线不恢复、鱼力竭免正向费用保持。
 
@@ -19,7 +19,38 @@
 - 折返、近岸反扑、水下三维运动、完整效用评分选路和真人双端丝滑验收均未完成；仍没有专门的鱼 Actor 网络运动插值器。
 - 后续讨论继续更新本文件。业务进度与持续验收缺口只维护在 [需求对齐差距清单](Development/需求对齐差距清单.md)，本文不另建模块进度账本。
 
-## 鱼竿连续角速度修复（2026-09-09，第一轮）
+## 鼠标停止即撤掉主动转杆（2026-09-09）
+
+鼠标活动只控制猫的主动转杆转矩。每帧 `UpdateRotation` 传入已缩放的 Yaw/Pitch 增量（度），组件在俯仰越界裁剪前判断是否有移动：零输入立即发停止，丢弃本段未完成目标；重新移动从实际握把朝向建立新段，再加上本段增量。持续移动时仍按目标角差连续计算力度，接近目标时减小，饱和尺度仍为最大角速度乘响应时间；本轮没有另加最大目标超前角或改变力度单位。忽略视角输入、退出控制和输入失联也撤掉主动转杆。
+
+`FCatFishingRodRotationInput::bCatDriveActive` 默认 false，只控制猫端实际施加的转矩。`CatTorqueCapacity` 继续表示现有主辅力量分配产生的容量，参与同一鱼力归一化，不能因为停手就清零容量。实际积分和 Simulator 候选张力预测复制同一开关；停手时主动转杆的新增用力积分与正功为零，已发生但尚未结算的努力仍由 Runner 原入口消费一次。身体移动、站定支撑、左键收线及既有收放线费用独立，因此“主动转杆为零”不等于角色总体力绝对不变。角速度、鱼负载滤波、鱼转矩、阻尼和真实姿态均不因停手清空，鱼仍能拉动杆，原有惯性也可以继续衰减。
+
+输入快照保留单调的 `Sequence`、`CumulativeLookDegrees` 和 `RodActorId/InputEpoch`，新增 `bMouseActive=false`、`MouseStrokeSequence=0` 与 `MouseStrokeStartLookDegrees`（本连续移动段第一帧增量之前的累计角度）。活动段编号单调，换杆/换 Aim 域也建立新段；所有快照携带段基准，首包丢失可补本段增量，漏掉上一段停止也不会沿用旧目标。停止快照只确认停止并锚实际，不能用其中累计量补回旧移动。
+
+房主本地每帧直接提交；远端启停使用 `ServerSubmitRodAimTransition` Reliable 完整快照，绕过持续采样的 30 Hz 节流，持续输入与闲置心跳仍走原 Unreliable 入口。两种 RPC 共享序号和唯一权威接收函数，迟到停止不能覆盖更新的活动段。`FCatFishingRodAimState::InputTimeoutSeconds=0.15 s` 是网络失联兜底，并非发力缓降时间：超过 150 ms 没有有效新样本便关闭主动转矩；同段恢复的第一包只重新锚当前实际角并丢弃过期积压，下一包新增量继续有效。服务端 const 预测也检查时效，不等待实际 Tick 才撤力；仅实际入口更新目标清理和输出超时日志。
+
+右键首次按下仍经 Session 授权重设目标，保留角速度和费用历史。同帧后续鼠标只增加一次；迟到右键不能重新激活已经停止的段，也不能覆盖更新段。整个搏斗阶段已移除“首次右键前使用 ControlRotation 主动施力”的分支。非搏斗持竿继续使用原视角跟随。换主仍先守住实际杆向，收到新主位当前输入域的首份样本后解除等待；已有初始化、换主、退出、放地、破竿和销毁清理继续生效。
+
+本轮修改前 HEAD 为 `47369a2`。UI、Online、Collection、Frontend、Controller、默认配置和文档等已有其他任务的已暂存改动，另有 `Cat_Skeleton.uasset` 未暂存修改；完整快照在 `Saved/Automation/RodMouseDrive-20260909/Baseline/WorkspaceBefore.txt`，本轮保留。修改前 Development 基线为188项（183 clean、4 warning、1既有 StarterRod 耐久150/500失败），没有未运行项；模块指纹、进程及旧报告比对保存在同目录。未停止或重启其他编辑器进程。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 输入与启停 | `Framework/Game/CatfishingPlayerController::UpdateRotation` → `Fishing/Integration/CatFishingCommandComponent::UpdateLocalRodAimInput` | 持续保留旧目标 → 本帧鼠标活动决定主动转杆；增量仍是度，原Pitch范围和左键收线独立 | 原入口添加状态与移动段；启停可靠发送，持续快照30 Hz | 先Sample/State接收，再发送；Controller→CMC→Rod已有Tick依赖不变 | 同帧右键、低于30Hz时立即停止、限位反向；Command实际路由测试 | 已接入；FinalReport对应输入、换主、模型与费用用例通过，见下方分层证据 |
+| 权威与输入生命周期 | `CatFishingRodAimState` → `CatFishingRodActor::AcceptHeldAimSampleFromAuthority/RebaseHeldAimFromAuthority`；原清理入口Reset | 首右键前追控制角、停止补丢包 → 全程统一活动段，idle/150ms超时清目标，新段锚实际 | 替换目标来源；保留RodId/Epoch/序号和首位权限，Rebase不重启过期段 | Receiver就绪后Actor使用，换主首包锚实际且只接本段新增 | 乱序、失联恢复、漏停、新段、换主；State与真实Actor/网络测试 | 已接入；FinalReport对应输入、换主、模型与费用用例通过，见下方分层证据 |
+| 积分、预测与费用 | `CatFishingRodResistanceModel::StepRotation`；Actor实际积分/Runner采样；Simulator复制Prediction | 旧目标持续产转矩 → `bCatDriveActive=false`立即主动转矩0，容量/角速度/鱼力保留 | 同一模型增加开关；两份努力积分只来自实际提交；不改费用单价或支付入口 | Actor先填输入，候选复制自然保留；原唯一提交与分摊顺序不变 | 停手被动运动0主动费用、预测无写回、僵持及帧率契约 | 已接入；FinalReport对应输入、换主、模型与费用用例通过，见下方分层证据 |
+| 复制与表现消费者 | Rod实际姿态复制 → `CatFishingCameraComponent`、Controller朝向、正式BP握点/弯曲 | 不修改角度/速度以伪造停止；镜头与身体仍读实际杆 | 保留惯性、鱼力、握点和镜头平滑及复制字段 | 单一实际积分完成后提交姿态 | 房主持续惯性、远端复制握点与相机；正式真人手感另验收 | FinalReport相机及真实网络握点复制通过；正式真人手感未验证 |
+| 配置/资产/脚本/Cook | `CatFishingSettings`、`DefaultGame.ini`原配置；`/Game/Blueprint/Actors/BP_CatFishingRodActor`与正式Balance；既有生成/Cook入口 | 不改力量、惯性或限位单位/默认；无新资源、存档、资产迁移 | 保留原配置及反射接口；本轮仅原生Sample新增字段，资产图完整消费者仍未确认，不删接口 | 正式资产加载和hash核对，Editor/Game Development构建 | 默认BP使用原生路径，资产未意外保存；新包双端未运行 | Editor/Game Development构建通过；AssetVerification核对历史hash一致；完整BP图与Cook未验证 |
+| 日志、测试与文档 | `LogCatFishing`启停/超时/旋转事件；SlackAim/网络及相关模型测试；本指南、`FishingArchitecture_zh-CN.md`与唯一差距清单 | 旧停止心跳恢复目标及“首右键前追ControlRotation”口径不适用 | 替换旧测试行为契约和当前文档；历史段明确标记 | 最终diff与三层证据逐项核对，保留并行改动 | 默认日志与输入序号可关联；不能以编译绿灯替代真人/打包验收 | 旧运行分支、旧停止补债断言及当前错误文档已替换；FinalVerification记录报告/模块/默认事件核查 |
+
+`contract`：`Saved/Automation/RodMouseDrive-20260909/BuildEditorFinal.log` 与 `BuildGameFinal.log` 均为 Win64 Development 成功。`FinalReport/index.json` 共191项，184 clean、6 warning、1既有 StarterRod 耐久预期150/实际500失败，没有未运行项；相比修改前188项仅额外选取三项Editor网络测试，原排序测试改名为 `MouseStrokesStopAndExpireWithoutRevivingOldTargets`，无新增失败。首轮构建的日志宏分支语法错误已修复；Report1的相机旧控制角输入、接力夹具漏发布新约束、将握把呈现浮点误差带入精确输入断言三处失败已按新职责链修正，不放宽原角度门槛。早期失败报告保留，不作为最终通过证据。
+
+`runtime_behavior`：实际Actor/Command/Session/Runner、Camera、GroupHandoff、努力采样及共同端点预测通过；覆盖停手立即零主动力/清目标、保留速度/鱼力、停止期间零新增主动费用、首帧新段/接力增量、150ms失联、俯仰反向及既有收放线独立性。三项真实Listen/Client测试通过；`SlackAimListenClient` 经真实Controller逐帧输入和Command RPC验证持续活动、停止被鱼拉动、100%丢包超时、迟到可靠停止/静止心跳不补旧债、下一段从实际杆向起步，保留客户端握点误差0.05°和相机收敛0.2°门槛。默认Development日志为 `FinalTests.log`：按 `LogCatFishing` 的 `fishing_rod_aim_transition_sent/received`、`fishing_rod_mouse_drive_timeout`、`fishing_rod_rotation_resistance_sample`（`MouseDriveActive`）及 `slack_aim_network_recovered` 检索，以 RodActorId/AimInputEpoch/AimSequence 关联客户端发送与服务器裁决。模块/源码指纹、报告比对和事件配对见 `FinalVerification.json`。
+
+资产证据 `AssetVerification.json` 确认正式杆BP及Balance磁盘SHA256与历史审计一致，相关生成器没有新输入字段或旋转参数覆盖；未写资产。其他任务已在本轮进行中将其暂存改动提交为 `c47c97e`，本轮沿该HEAD继续，不改写历史，也不提交用户的 `Cat_Skeleton.uasset` 并行修改。
+
+`presentation_delivery` 尚未进行本轮正式地图真人操作、Cook/打包和房主/客户端无 `-log` 双端落盘验收；当前新DLL可供下一次启动编辑器试玩。自动化的同进程双World日志不能替代两个打包实例的日志。完整Blueprint自定义图消费者仍未确认，保留反射接口；远端停止以服务器接收为准，不承诺跨网络零延迟。本轮不关闭Fishing或Delivery模块。
+
+## 鱼竿连续角速度修复（2026-09-09，第一轮历史）
 
 ### 用户窗口与修复边界
 
@@ -406,7 +437,7 @@ Development 权威日志 `Event=fishing_simulation_trace` 默认按约 1 秒和�
 
 ### 右键放线时重设转向意图
 
-本节记录2026-09-07的输入域改动及当时验证。输入契约继续保留，旋转求解现已改为2026-09-09的带惯性模型；旧报告不替代本轮回归，旧表中的速度响应只属于当时版本。普通右键rebase现在也须保留真实角速度；第二轮输入限幅尚未实现。
+本节记录2026-09-07的输入域改动及当时验证，以下段落和表格均是历史证据。2026-09-09已用本文开头“鼠标停止即撤掉主动转杆”替换持久追目标的输入规则，删除首右键前ControlRotation施力、停止心跳补旧目标的运行分支；右键授权、同帧增量顺序和原输入域仍保留。普通右键rebase保留真实角速度，旧网络报告的静止补齐行为不再作为当前契约。
 
 2026-09-07 的反馈是：先向右拉住鱼竿，再按右键放线，杆会突然追向右侧。原实现把 `ControlRotation` 保留为目标，镜头却只显示受力后的实际握把；负载和受载阻尼下降后，未完成的目标角仍在驱动猫端转矩。右键现在明确表示撤掉这份旧转向意图：第一次按下通过 Session 校验后，把目标基准设为当前权威握把；之后只接新的鼠标转动，松开右键不会恢复旧目标。是否已经按住由 Runner 已接受状态裁决，拒绝过的请求不阻止合法重试重设。真实鱼力仍可带动杆，不瞬移或锁死实际姿态。
 

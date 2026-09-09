@@ -259,7 +259,9 @@ void UCatFishingCommandComponent::ResetTransientCommandState()
 		return;
 	}
 
-	// 一次性清空所有命令结果缓存与序号计数器，通常在会话/关卡切换等边界调用，避免旧 RequestId 残留造成误判重复
+	// 仍持有旧输入域时先尽力发送停止；鼠标样本/段序号和累计量贯穿Controller生命周期，不回绕。
+	StopLocalRodAimInput();
+	// 清空离散命令与结果缓存，避免关卡切换后留下旧RequestId；转杆累计流由独立单调序号保护。
 	ResultsByRequestId.Reset();
 	ResultOrder.Reset();
 	PlaceChumResultsByRequestId.Reset();
@@ -271,6 +273,8 @@ void UCatFishingCommandComponent::ResetTransientCommandState()
 	bServerPrimaryHeld = false;
 	bServerSlackHeld = false;
 	bLocalSlackHeld = false;
+	LocalMouseAimRodActorId.Invalidate();
+	LocalMouseAimEpoch = 0;
 	LocalPitchAimRod.Reset();
 	LocalPitchAimEpoch = 0;
 	bLocalPitchAimInitialized = false;
@@ -301,6 +305,7 @@ bool UCatFishingCommandComponent::TryGetHeldFightInputStateFromAuthority(bool& O
 void UCatFishingCommandComponent::ClearHeldFightInputForControlTransferFromAuthority()
 {
 	if (!GetOwner() || !GetOwner()->HasAuthority()) return;
+	StopLocalRodAimInput();
 	bServerPrimaryHeld = false;
 	bServerSlackHeld = false;
 	ServerAimingCorrelationId.Invalidate();
@@ -408,9 +413,11 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitSlackPressed()
 	Edge.RodAimSample = MakeRodAimSample(Rod);
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_slack_aim_requested RequestId=%s InputSequence=%lld RodActorId=%s AimInputEpoch=%u "
-			"AimSequence=%lld CumulativeLookDegrees=%s %s"),
+			"AimSequence=%lld CumulativeLookDegrees=%s MouseActive=%s MouseStrokeSequence=%lld MouseStrokeStartLookDegrees=%s %s"),
 		*Edge.RequestId.ToString(), Edge.InputSequence, *Edge.RodAimSample.RodActorId.ToString(),
 		Edge.RodAimSample.InputEpoch, Edge.RodAimSample.Sequence, *Edge.RodAimSample.CumulativeLookDegrees.ToString(),
+		Edge.RodAimSample.bMouseActive ? TEXT("true") : TEXT("false"), Edge.RodAimSample.MouseStrokeSequence,
+		*Edge.RodAimSample.MouseStrokeStartLookDegrees.ToString(),
 		*BuildRodAimControllerFields(Controller));
 	DispatchAbilityCommand(ECatFishingCommandType::SlackPressed, Edge);
 	return Edge;
@@ -421,10 +428,15 @@ FCatFishingRodAimSample UCatFishingCommandComponent::MakeRodAimSample(const ACat
 	FCatFishingRodAimSample Sample;
 	Sample.Sequence = ++NextRodAimSequence;
 	Sample.CumulativeLookDegrees = CumulativeRodLookDegrees;
+	Sample.MouseStrokeSequence = MouseStrokeSequence;
+	Sample.MouseStrokeStartLookDegrees = MouseStrokeStartLookDegrees;
 	if (Rod)
 	{
 		Sample.RodActorId = Rod->GetPresentationState().RodActorId;
 		Sample.InputEpoch = Rod->GetCarrierConstraintState().AimInputEpoch;
+		// 右键只携带已有鼠标事实；构造样本本身不能开启活动或把上一根竿的活动带过来。
+		Sample.bMouseActive = bLocalMouseActive && Sample.RodActorId == LocalMouseAimRodActorId
+			&& Sample.InputEpoch == LocalMouseAimEpoch;
 	}
 	return Sample;
 }
@@ -432,21 +444,55 @@ FCatFishingRodAimSample UCatFishingCommandComponent::MakeRodAimSample(const ACat
 void UCatFishingCommandComponent::UpdateLocalRodAimInput(const double DeltaSeconds, const FRotator& LookDeltaDegrees)
 {
 	APlayerController* Controller = Cast<APlayerController>(GetOwner());
-	if (!Controller || !Controller->IsLocalController() || !GetWorld() || LookDeltaDegrees.ContainsNaN()) return;
+	if (!Controller || !Controller->IsLocalController() || !GetWorld() || LookDeltaDegrees.ContainsNaN()
+		|| !FMath::IsFinite(DeltaSeconds) || DeltaSeconds < 0.0)
+	{
+		StopLocalRodAimInput();
+		return;
+	}
 	// RotationInput 已经经过 AddYaw/PitchInput 的灵敏度与 IgnoreLookInput 处理。
 	// 不用 ControlRotation 差量：旧隐藏目标顶到镜头 Pitch 限位后，仍必须能从实际竿角重新抬竿。
 	const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindFightRodHeldBy(Controller);
-	double AppliedPitchDelta = LookDeltaDegrees.Pitch;
-	// 首帧未见约束的合法按下也先逐帧夹限；域抵达时只绑定，不重设累计量或丢掉新增输入。
-	if (bLocalPitchAimInitialized && LocalPitchAimEpoch == 0 && Rod)
+	const FGuid RodActorId = Rod ? Rod->GetPresentationState().RodActorId : FGuid{};
+	const uint32 AimEpoch = Rod ? Rod->GetCarrierConstraintState().AimInputEpoch : 0;
+	const bool bHasAimDomain = RodActorId.IsValid() && AimEpoch != 0;
+	const bool bDomainChanged = LocalMouseAimRodActorId != RodActorId || LocalMouseAimEpoch != AimEpoch;
+	if (bDomainChanged)
 	{
-		LocalPitchAimRod = Rod;
-		LocalPitchAimEpoch = Rod->GetCarrierConstraintState().AimInputEpoch;
+		// 先给旧域送停止，再绑定新域；已经离竿时服务器仍会复查归属，不会影响其他操作者。
+		StopLocalRodAimInput();
+		LocalMouseAimRodActorId = RodActorId;
+		LocalMouseAimEpoch = AimEpoch;
 	}
-	if (bLocalPitchAimInitialized && (LocalPitchAimEpoch == 0
-		|| (Rod && LocalPitchAimRod.Get() == Rod && LocalPitchAimEpoch == Rod->GetCarrierConstraintState().AimInputEpoch)))
+	const FRotator EffectiveLookDelta = Controller->IsLookInputIgnored() ? FRotator::ZeroRotator : LookDeltaDegrees;
+	// 活动看夹限前的原始有效鼠标量。顶在Pitch边界仍在推鼠标，是用力而不是停手。
+	const bool bMouseActive = bHasAimDomain
+		&& (EffectiveLookDelta.Yaw != 0.0 || EffectiveLookDelta.Pitch != 0.0);
+	const bool bNewStroke = bHasAimDomain && (bDomainChanged || (bMouseActive && !bLocalMouseActive));
+	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	if (!FMath::IsFinite(Settings->HeldRodMinimumPitchDegrees)
+		|| !FMath::IsFinite(Settings->HeldRodMaximumPitchDegrees)
+		|| Settings->HeldRodMinimumPitchDegrees > Settings->HeldRodMaximumPitchDegrees)
 	{
-		const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+		StopLocalRodAimInput();
+		return;
+	}
+	if (bNewStroke)
+	{
+		++MouseStrokeSequence;
+		// 起点一定先于本帧增量；首个可靠包迟到时，后续完整快照也能恢复本段的首帧输入。
+		MouseStrokeStartLookDegrees = CumulativeRodLookDegrees;
+		LocalPitchAimRod = Rod;
+		LocalPitchAimEpoch = AimEpoch;
+		LocalRequestedRodPitch = FMath::Clamp(FRotator::NormalizeAxis(Rod->GetGripWorldTransform().Rotator().Pitch),
+			Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
+		bLocalPitchAimInitialized = true;
+	}
+	double AppliedPitchDelta = EffectiveLookDelta.Pitch;
+	// 尚未看到约束的右键仍可建立本地Pitch过滤；真正的新Rod/Epoch抵达时从可见姿态开新段。
+	if (bLocalPitchAimInitialized && (LocalPitchAimEpoch == 0
+		|| (Rod && LocalPitchAimRod.Get() == Rod && LocalPitchAimEpoch == AimEpoch)))
+	{
 		const double NextPitch = FMath::Clamp(LocalRequestedRodPitch + AppliedPitchDelta,
 			Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
 		AppliedPitchDelta = NextPitch - LocalRequestedRodPitch;
@@ -458,44 +504,113 @@ void UCatFishingCommandComponent::UpdateLocalRodAimInput(const double DeltaSecon
 		LocalPitchAimEpoch = 0;
 		bLocalPitchAimInitialized = false;
 	}
-	CumulativeRodLookDegrees += FVector2D(LookDeltaDegrees.Yaw, AppliedPitchDelta);
-	if (!Rod || Rod->GetCarrierConstraintState().AimInputEpoch == 0)
+	const FVector2D NextCumulativeLook = CumulativeRodLookDegrees + FVector2D(EffectiveLookDelta.Yaw, AppliedPitchDelta);
+	if (NextCumulativeLook.ContainsNaN() || FMath::Abs(NextCumulativeLook.X) >= 1.e12
+		|| FMath::Abs(NextCumulativeLook.Y) >= 1.e12)
+	{
+		StopLocalRodAimInput();
+		return;
+	}
+	CumulativeRodLookDegrees = NextCumulativeLook;
+	const bool bTransition = bNewStroke || bLocalMouseActive != bMouseActive;
+	bLocalMouseActive = bMouseActive;
+	if (!bHasAimDomain)
 	{
 		RodAimSendElapsedSeconds = 0.0;
 		return;
 	}
-	RodAimSendElapsedSeconds += FMath::IsFinite(DeltaSeconds) ? FMath::Max(0.0, DeltaSeconds) : 0.0;
-	if (!Controller->HasAuthority() && RodAimSendElapsedSeconds < 1.0 / 30.0) return;
+	RodAimSendElapsedSeconds += DeltaSeconds;
+	if (!Controller->HasAuthority() && !bTransition && RodAimSendElapsedSeconds < 1.0 / 30.0) return;
 	RodAimSendElapsedSeconds = 0.0;
 	const FCatFishingRodAimSample Sample = MakeRodAimSample(Rod);
-	if (Controller->HasAuthority()) ServerSubmitRodAimSample_Implementation(Sample);
+	SendLocalRodAimSample(Sample, bTransition);
+}
+
+void UCatFishingCommandComponent::StopLocalRodAimInput()
+{
+	const bool bWasActive = bLocalMouseActive;
+	bLocalMouseActive = false;
+	RodAimSendElapsedSeconds = 0.0;
+	const APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!bWasActive || !Controller || !Controller->IsLocalController() || !GetWorld()
+		|| !LocalMouseAimRodActorId.IsValid() || LocalMouseAimEpoch == 0) return;
+	FCatFishingRodAimSample Sample = MakeRodAimSample(nullptr);
+	Sample.RodActorId = LocalMouseAimRodActorId;
+	Sample.InputEpoch = LocalMouseAimEpoch;
+	SendLocalRodAimSample(Sample, true);
+}
+
+void UCatFishingCommandComponent::SendLocalRodAimSample(const FCatFishingRodAimSample& Sample, const bool bTransition)
+{
+	const APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->IsLocalController() || !GetWorld()) return;
+	if (Controller->HasAuthority()) HandleRodAimSampleFromAuthority(Sample, bTransition);
+	else if (bTransition) ServerSubmitRodAimTransition(Sample);
 	else ServerSubmitRodAimSample(Sample);
-	// 静止时也持续发送全量累计快照，最后一次鼠标输入丢包后可由下一包补齐。
-	if (GetWorld()->GetTimeSeconds() >= NextLocalRodAimDiagnosticSeconds)
+	// 启停当帧可靠发送，持续活动和静止心跳仍发30Hz全量快照；重发的idle不会恢复旧主动目标。
+	if (bTransition || GetWorld()->GetTimeSeconds() >= NextLocalRodAimDiagnosticSeconds)
 	{
-		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_rod_aim_sent RodActorId=%s AimInputEpoch=%u AimSequence=%lld CumulativeLookDegrees=%s %s"),
+		const FString Message = FString::Printf(
+			TEXT("Event=%s RodActorId=%s AimInputEpoch=%u AimSequence=%lld CumulativeLookDegrees=%s "
+				"MouseActive=%s MouseStrokeSequence=%lld MouseStrokeStartLookDegrees=%s Transition=%s Transport=%s %s"),
+			bTransition ? TEXT("fishing_rod_aim_transition_sent") : TEXT("fishing_rod_aim_sent"),
 			*Sample.RodActorId.ToString(), Sample.InputEpoch, Sample.Sequence, *Sample.CumulativeLookDegrees.ToString(),
+			Sample.bMouseActive ? TEXT("true") : TEXT("false"), Sample.MouseStrokeSequence,
+			*Sample.MouseStrokeStartLookDegrees.ToString(),
+			bTransition ? (Sample.bMouseActive ? TEXT("Start") : TEXT("Stop")) : TEXT("Sample"),
+			Controller->HasAuthority() ? TEXT("AuthorityDirect") : bTransition ? TEXT("Reliable") : TEXT("Unreliable"),
 			*BuildRodAimControllerFields(Controller));
+		if (bTransition) { UE_LOG(LogCatFishing, Display, TEXT("%s"), *Message); }
+		else { UE_LOG(LogCatFishing, Log, TEXT("%s"), *Message); }
 		NextLocalRodAimDiagnosticSeconds = GetWorld()->GetTimeSeconds() + 1.0;
 	}
 }
 
 void UCatFishingCommandComponent::ServerSubmitRodAimSample_Implementation(const FCatFishingRodAimSample Sample)
 {
+	HandleRodAimSampleFromAuthority(Sample, false);
+}
+
+void UCatFishingCommandComponent::ServerSubmitRodAimTransition_Implementation(const FCatFishingRodAimSample Sample)
+{
+	HandleRodAimSampleFromAuthority(Sample, true);
+}
+
+void UCatFishingCommandComponent::HandleRodAimSampleFromAuthority(const FCatFishingRodAimSample& Sample, const bool bTransition)
+{
 	APlayerController* Controller = Cast<APlayerController>(GetOwner());
-	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
-	if (!Controller || !Controller->HasAuthority() || !Fishing) return;
-	ACatFishingRodActor* Rod = Fishing->FindRodOperatedBy(Controller->PlayerState);
-	const bool bAccepted = Rod && Rod->AcceptHeldAimSampleFromAuthority(Controller->PlayerState, Sample);
-	if (GetWorld()->GetTimeSeconds() >= NextServerRodAimDiagnosticSeconds)
+	UWorld* World = GetWorld();
+	if (!Controller || !Controller->HasAuthority() || !World) return;
+	UCatFishingService* Fishing = World->GetSubsystem<UCatFishingService>();
+	ACatFishingRodActor* Rod = Fishing && Controller->PlayerState
+		? Fishing->FindRodOperatedBy(Controller->PlayerState) : nullptr;
+	const TCHAR* Result = TEXT("IgnoredStaleOrInactiveInput");
+	if (!Sample.IsValid()) Result = TEXT("InvalidSample");
+	else if (!Rod) Result = TEXT("NoOperatedRod");
+	else if (!Sample.RodActorId.IsValid() || Sample.InputEpoch == 0
+		|| Sample.RodActorId != Rod->GetPresentationState().RodActorId
+		|| Sample.InputEpoch != Rod->GetCarrierConstraintState().AimInputEpoch) Result = TEXT("InputDomainMismatch");
+	else if (Rod->AcceptHeldAimSampleFromAuthority(Controller->PlayerState, Sample)) Result = TEXT("Accepted");
+	// 两个RPC与房主直连只在此收口；Actor/AimState独占权限、生命周期与Sequence的接受裁决。
+	if (bTransition || World->GetTimeSeconds() >= NextServerRodAimDiagnosticSeconds)
 	{
-		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_rod_aim_received RodActorId=%s AimInputEpoch=%u AimSequence=%lld "
-				"CumulativeLookDegrees=%s Result=%s %s"),
+		const FString Message = FString::Printf(
+			TEXT("Event=%s RodActorId=%s AimInputEpoch=%u AimSequence=%lld "
+				"CumulativeLookDegrees=%s MouseActive=%s MouseStrokeSequence=%lld MouseStrokeStartLookDegrees=%s "
+				"Transition=%s Result=%s %s"),
+			bTransition ? TEXT("fishing_rod_aim_transition_received") : TEXT("fishing_rod_aim_received"),
 			*Sample.RodActorId.ToString(), Sample.InputEpoch, Sample.Sequence, *Sample.CumulativeLookDegrees.ToString(),
-			bAccepted ? TEXT("Accepted") : TEXT("IgnoredStaleOrInactiveInput"), *BuildRodAimControllerFields(Controller));
-		NextServerRodAimDiagnosticSeconds = GetWorld()->GetTimeSeconds() + 1.0;
+			Sample.bMouseActive ? TEXT("true") : TEXT("false"), Sample.MouseStrokeSequence,
+			*Sample.MouseStrokeStartLookDegrees.ToString(),
+			bTransition ? (Sample.bMouseActive ? TEXT("Start") : TEXT("Stop")) : TEXT("Sample"),
+			Result, *BuildRodAimControllerFields(Controller));
+		if (FCString::Strcmp(Result, TEXT("InvalidSample")) == 0)
+		{
+			UE_LOG(LogCatFishing, Warning, TEXT("%s"), *Message);
+		}
+		else if (bTransition) { UE_LOG(LogCatFishing, Display, TEXT("%s"), *Message); }
+		else { UE_LOG(LogCatFishing, Log, TEXT("%s"), *Message); }
+		NextServerRodAimDiagnosticSeconds = World->GetTimeSeconds() + 1.0;
 	}
 }
 

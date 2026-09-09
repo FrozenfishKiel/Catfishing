@@ -504,7 +504,10 @@ bool FCatFishingGroupHandoffAimTest::RunTest(const FString& Parameters)
 	Sample.RodActorId = Rod->GetPresentationState().RodActorId;
 	Sample.InputEpoch = PreviousAimEpoch;
 	Sample.Sequence = 1;
+	Sample.bMouseActive = true;
+	Sample.MouseStrokeSequence = 1;
 	Sample.CumulativeLookDegrees = FVector2D(500.0, 0.0);
+	Sample.MouseStrokeStartLookDegrees = Sample.CumulativeLookDegrees;
 	TestFalse(TEXT("上一主位输入域不能接管"), Rod->AcceptHeldAimSampleFromAuthority(Second, Sample));
 	Sample.InputEpoch = 0;
 	TestFalse(TEXT("换主时未确认域的重设不能解锁竿向"), Rod->CanRebaseHeldAimFromAuthority(Second, Sample));
@@ -519,6 +522,21 @@ bool FCatFishingGroupHandoffAimTest::RunTest(const FString& Parameters)
 	Rod->RefreshHeldTransformFromAuthority(0.02);
 	const double ActualChange = FMath::FindDeltaAngleDegrees(PreviousAim.Yaw, Rod->AuthoritativeHeldAimRotation.Yaw);
 	TestTrue(TEXT("后续转向按受力模型连续响应"), ActualChange > 0.0 && ActualChange < 10.0);
+	const FRotator BeforeReturn = Rod->AuthoritativeHeldAimRotation;
+	TestTrue(TEXT("再次接力建立全新输入域"), Rod->SetOperatorFromAuthority(First, Rod->GetPresentationState().RodActorRevision));
+	TestTrue(TEXT("权威为新主位重新发布搏斗约束"), Rod->SetCarrierConstraintFromAuthority(
+		FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true, 0.0, 100.0));
+	Sample.InputEpoch = Rod->GetCarrierConstraintState().AimInputEpoch;
+	++Sample.Sequence;
+	++Sample.MouseStrokeSequence;
+	Sample.MouseStrokeStartLookDegrees = Sample.CumulativeLookDegrees;
+	Sample.CumulativeLookDegrees.X += 5.0;
+	TestTrue(TEXT("接力首包同时移动鼠标也被接收"), Rod->AcceptHeldAimSampleFromAuthority(First, Sample));
+	Rod->GetRotationPredictionFromAuthority(0.02, Prediction);
+	TestTrue(TEXT("首包从实际杆向保留本段5度增量且不瞬移姿态"), Prediction.Input.bCatDriveActive
+		&& Prediction.Input.CurrentAim.Equals(BeforeReturn, 0.001));
+	TestEqual(TEXT("接力初始化不吞掉首帧鼠标"),
+		FMath::FindDeltaAngleDegrees(BeforeReturn.Yaw, Prediction.Input.RequestedAim.Yaw), 5.0, 1e-7);
 	return !HasAnyErrors();
 }
 

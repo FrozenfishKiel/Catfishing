@@ -466,6 +466,7 @@ bool FCatFishingExhaustedPrimaryEffortOwnershipTest::RunTest(const FString& Para
 
 	// 这里验证 Runner 所需的纯模型连接契约；真实多人 ASC 分摊仍由运行验收覆盖。
 	FCatFishingRodRotationInput RotationInput;
+	RotationInput.bCatDriveActive = true;
 	RotationInput.CatTorqueCapacity = Config.GetCombinedCatStrength();
 	RotationInput.MaximumFishTorque = 10.0;
 	RotationInput.CurrentAim = FRotator(0.0, 30.0, 0.0);
@@ -738,6 +739,7 @@ bool FCatFishingPassiveDragCannotExhaustFishTest::RunTest(const FString& Paramet
 	State.CatStamina = 0.0;
 	State.FishStamina = 0.1;
 	FCatFishingRodRotationInput RotationInput;
+	RotationInput.bCatDriveActive = true;
 	RotationInput.CurrentAim.Yaw = 30.0;
 	RotationInput.RequestedAim.Yaw = 90.0;
 	RotationInput.CatTorqueCapacity = 0.0;

@@ -91,6 +91,8 @@ public:
 	FCatFishingInputEdge SubmitSlackReleased();
 	/** 由本地 Controller::UpdateRotation 每帧提交一次已缩放的鼠标增量；组件自身不 Tick。 */
 	void UpdateLocalRodAimInput(double DeltaSeconds, const FRotator& LookDeltaDegrees);
+	/** 输入失焦或生命周期退出时撤掉主动转杆；不回绕累计量、样本序号或鼠标段序号。 */
+	void StopLocalRodAimInput();
 	FCatFishingInputEdge SubmitChumPressed();
 	FCatFishingInputEdge SubmitChumReleased();
 	FCatFishingInputEdge SubmitCancel();
@@ -127,6 +129,9 @@ private:
 	void ServerSubmitFishingAbilityCommand(ECatFishingCommandType CommandType, FCatFishingInputEdge Edge);
 	UFUNCTION(Server, Unreliable)
 	void ServerSubmitRodAimSample(FCatFishingRodAimSample Sample);
+	/** 鼠标启停绕过30Hz节流；仍与普通快照共用同一服务器序号裁决。 */
+	UFUNCTION(Server, Reliable)
+	void ServerSubmitRodAimTransition(FCatFishingRodAimSample Sample);
 
 	static constexpr int32 MaxStoredResults = 32;
 
@@ -137,6 +142,8 @@ private:
 	void ReceiveResultLocally(const FCatFishingCommandResult& Result);
 	FCatFishingInputEdge MakeDiscreteEdge();
 	FCatFishingRodAimSample MakeRodAimSample(const class ACatFishingRodActor* Rod);
+	void SendLocalRodAimSample(const FCatFishingRodAimSample& Sample, bool bTransition);
+	void HandleRodAimSampleFromAuthority(const FCatFishingRodAimSample& Sample, bool bTransition);
 	void DispatchAbilityCommand(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge);
 	/** 权威侧统一处理 Ability 输入命令；抄网会搜索已上钩目标并交给 Session 完成嘴叼世界鱼交接。 */
 	void HandleAbilityCommandFromAuthority(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge);
@@ -176,6 +183,11 @@ private:
 	// 否则同一根竿尚未退出时新的采样会被误判为旧包。
 	int64 NextRodAimSequence = 0;
 	FVector2D CumulativeRodLookDegrees = FVector2D::ZeroVector;
+	int64 MouseStrokeSequence = 0;
+	FVector2D MouseStrokeStartLookDegrees = FVector2D::ZeroVector;
+	FGuid LocalMouseAimRodActorId;
+	uint32 LocalMouseAimEpoch = 0;
+	bool bLocalMouseActive = false;
 	TWeakObjectPtr<const class ACatFishingRodActor> LocalPitchAimRod;
 	uint32 LocalPitchAimEpoch = 0;
 	double LocalRequestedRodPitch = 0.0;

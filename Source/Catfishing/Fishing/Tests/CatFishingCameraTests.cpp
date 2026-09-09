@@ -74,6 +74,14 @@ bool FCatFishingFirstPersonCameraTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("进入角力"), Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector,
 		0, 0, 1, 0, true, 100, 50));
 	Controller->SetControlRotation(FRotator(0, 120, 0));
+	FCatFishingRodAimSample Mouse;
+	Mouse.RodActorId = Rod->GetPresentationState().RodActorId;
+	Mouse.InputEpoch = Rod->GetCarrierConstraintState().AimInputEpoch;
+	Mouse.Sequence = 1;
+	Mouse.bMouseActive = true;
+	Mouse.MouseStrokeSequence = 1;
+	Mouse.CumulativeLookDegrees.X = 120.0;
+	TestTrue(TEXT("显式鼠标输入驱动受载杆"), Rod->AcceptHeldAimSampleFromAuthority(Player, Mouse));
 	// 先等受载阻尼进入平衡，再验证镜头/身体消费者；平衡角与精度保持原契约。
 	for (int32 I = 0; I < 360; ++I) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
 	Character->CalcCamera(0.016f, View);
@@ -86,6 +94,9 @@ bool FCatFishingFirstPersonCameraTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("只有本人看不到头部遮挡"), Character->GetMesh()->bOwnerNoSee);
 	const FRotator LockedView = View.Rotation;
 	Controller->SetControlRotation(FRotator(0, 150, 0));
+	++Mouse.Sequence;
+	Mouse.CumulativeLookDegrees.X = 150.0;
+	TestTrue(TEXT("继续鼠标输入进入同一连续移动段"), Rod->AcceptHeldAimSampleFromAuthority(Player, Mouse));
 	for (int32 I = 0; I < 60; ++I) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
 	Controller->UpdateRotation(0.016f);
 	Character->CalcCamera(0.016f, View);
@@ -98,6 +109,11 @@ bool FCatFishingFirstPersonCameraTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("鼠标意图仍可继续驱动角力"), Controller->GetControlRotation().Yaw, 150.0);
 
 	Controller->SetControlRotation(FRotator::ZeroRotator);
+	++Mouse.Sequence;
+	++Mouse.MouseStrokeSequence;
+	Mouse.MouseStrokeStartLookDegrees = Mouse.CumulativeLookDegrees;
+	Mouse.CumulativeLookDegrees.X -= Rod->GetGripWorldTransform().Rotator().Yaw;
+	TestTrue(TEXT("反向鼠标从实际杆向建立回正目标"), Rod->AcceptHeldAimSampleFromAuthority(Player, Mouse));
 	Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
 	Character->CalcCamera(0.016f, View);
 	TestTrue(TEXT("回转首帧镜头开始平滑跟随杆"), View.Rotation.Yaw < LockedView.Yaw && View.Rotation.Yaw > 0.0);

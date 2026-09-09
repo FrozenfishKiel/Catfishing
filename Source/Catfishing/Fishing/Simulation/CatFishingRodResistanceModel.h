@@ -25,6 +25,8 @@ struct CATFISHING_API FCatFishingRodRotationInput
 {
 	FRotator CurrentAim = FRotator::ZeroRotator;
 	FRotator RequestedAim = FRotator::ZeroRotator;
+	/** 鼠标正在移动且输入未超时才允许主动转杆；不改变猫的容量、鱼力或已有角速度。 */
+	bool bCatDriveActive = false;
 	FVector PullAxis = FVector::ForwardVector;
 	/** 上一帧已应用的有向鱼线负载，跨固定步保持；不是额外的鱼端驱动力。 */
 	FVector PreviousSmoothedFishPullStrengthMeters = FVector::ZeroVector;

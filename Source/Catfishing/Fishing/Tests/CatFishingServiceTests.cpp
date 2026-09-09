@@ -250,12 +250,25 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 	Controller->StartJump();
 	TestFalse(TEXT("持竿期间的跳跃输入不会留下起跳意图"), Character->bPressedJump);
 
-	// 真实 Rod 使用同一有向转矩求解；控制器保留施力意图，第一人称镜头另读实际杆姿态。
+	// 真实 Rod 使用同一有向转矩求解；显式活动样本提供意图，镜头另读实际杆姿态。
+	int64 MouseSequence = 0;
+	const auto SubmitActiveTarget = [&](const double TargetYaw)
+	{
+		FCatFishingRodAimSample Mouse;
+		Mouse.RodActorId = Rod->GetPresentationState().RodActorId;
+		Mouse.InputEpoch = Rod->GetCarrierConstraintState().AimInputEpoch;
+		Mouse.Sequence = ++MouseSequence;
+		Mouse.bMouseActive = true;
+		Mouse.MouseStrokeSequence = MouseSequence;
+		Mouse.CumulativeLookDegrees.X = FMath::FindDeltaAngleDegrees(Rod->GetGripWorldTransform().Rotator().Yaw, TargetYaw);
+		return Rod->AcceptHeldAimSampleFromAuthority(PlayerState, Mouse);
+	};
 	Controller->SetControlRotation(FRotator::ZeroRotator);
 	TestTrue(TEXT("初始化实际鱼竿朝向"), Rod->RefreshHeldTransformFromAuthority());
 	TestTrue(TEXT("发布有负载旋转约束"), Rod->SetCarrierConstraintFromAuthority(
 		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, true, 100.0, 50.0));
 	Controller->SetControlRotation(FRotator(0.0, 120.0, 0.0));
+	TestTrue(TEXT("鼠标活动样本提供向外转杆目标"), SubmitActiveTarget(120.0));
 	// 先等待新增受载阻尼进入平衡，再比较松线首帧与恢复行为；不放宽角度精度。
 	for (int32 Index = 0; Index < 360; ++Index) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
 	TestEqual(TEXT("实际鱼竿自然停在受力平衡附近"), Rod->GetGripWorldTransform().Rotator().Yaw, 30.0, 0.1);
@@ -276,6 +289,7 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, true, 100.0, 50.0));
 	for (int32 Index = 0; Index < 180; ++Index) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
 	Controller->SetControlRotation(FRotator::ZeroRotator);
+	TestTrue(TEXT("反向鼠标操作从实际杆向接入"), SubmitActiveTarget(0.0));
 	Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
 	TestTrue(TEXT("第一帧开始回转但不瞬移"),
 		Rod->GetGripWorldTransform().Rotator().Yaw < 30.0 && Rod->GetGripWorldTransform().Rotator().Yaw > 0.0);
@@ -286,6 +300,7 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 	Controller->SetControlRotation(FRotator(0.0, 60.0, 0.0));
 	TestTrue(TEXT("清理后建立新的无负载约束"), Rod->SetCarrierConstraintFromAuthority(
 		FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true, 0.0, 50.0));
+	TestTrue(TEXT("新会话的新鼠标输入建立新目标"), SubmitActiveTarget(60.0));
 	FCatFishingRodRotationPrediction FreshPrediction;
 	if (!TestTrue(TEXT("新会话提供真实旋转快照"),
 		Rod->GetRotationPredictionFromAuthority(1.0 / 60.0, FreshPrediction))) return false;

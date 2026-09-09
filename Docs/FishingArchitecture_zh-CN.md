@@ -233,10 +233,10 @@ StateTree（`ST_FishingSession`）保持薄编排。其中 `FishExhausted` 是 `
 
 镜头偏移与 FOV 在 `Catfishing Fishing Presentation` 的 `Camera` 分类配置；默认镜头位于握把后方 35cm、左侧 16cm、上方 16cm，让杆位于画面右下。握把标定随 Rod 初始复制发送，客户端组合该标定与服务器复制的实际 Actor 姿态，不用未初始化的本地握把。`LogCatFishing` 的 `fishing_fight_camera` 记录进入、每秒一次的实际/请求朝向和恢复，`fishing_rod_grip_received` 记录客户端收到的标定；用 `RodActorId` 与角力日志交叉检索。
 
-搏斗中的实际杆姿态独立于控制器施力意图，由 `FCatFishingRodResistanceModel::StepRotation` 按有阻尼的净转矩积分。猫朝请求方向施加不超过当前力量的转矩，接近目标时连续减小；鱼端最大转矩由 `最终共同线张力 N / ForcePerStrengthNewtons × 玩法杆长 m` 换算为既有 StrengthMeters 单位，再沿最终牵引方向滤波，与杆方向叉乘形成有向回复转矩。净转矩抵消时自然停转；回看、改变鱼力、猫力或线方向后每帧重新求解，不存在硬角度锁或解锁状态，也不使用原来的全方向零速倍率。保持原有身体俯仰范围与最大角速度；响应时间、受载阻尼及 1/120 秒亚步共同决定动态响应。服务器复制实际 Actor 姿态，Development 日志 `fishing_rod_rotation_resistance_sample` 记录请求/实际朝向、本帧转角、净转矩、负载历史和仅用于观察的 `TorqueBalanced`；`fishing_constraint_sample` 记录共同张力、阶段、游向与固定步时序。详细采样开关及字段见 [实现导读](FishFightImplementationGuide_zh-CN.md) 的“平静/反抗运动日志衔接核对”。
+搏斗中的实际杆姿态独立于控制器施力意图，由 `FCatFishingRodResistanceModel::StepRotation` 按有阻尼的净转矩积分。鼠标活动时，猫朝请求方向施加不超过当前力量的转矩，接近目标时连续减小；鱼端最大转矩由 `最终共同线张力 N / ForcePerStrengthNewtons × 玩法杆长 m` 换算为既有 StrengthMeters 单位，再沿最终牵引方向滤波，与杆方向叉乘形成有向回复转矩。净转矩改变角加速度，既有角速度经阻尼衰减；鼠标启停、改变鱼力、猫力或线方向后每帧重新求解，不存在硬角度锁或解锁状态，也不使用原来的全方向零速倍率。保持原有身体俯仰范围与最大角速度；响应时间、等效惯性、受载阻尼及不超过 1/240 秒的亚步共同决定动态响应。服务器复制实际 Actor 姿态，Development 日志 `fishing_rod_rotation_resistance_sample` 记录请求/实际朝向、本帧转角、净转矩、负载历史和仅用于观察的 `TorqueBalanced`；`fishing_constraint_sample` 记录共同张力、阶段、游向与固定步时序。详细采样开关及字段见 [实现导读](FishFightImplementationGuide_zh-CN.md) 的“平静/反抗运动日志衔接核对”。
 `FCatFishSteeringModel` 用独立服务器随机流产生平滑目标游向；相同种子与固定步长得到相同方向序列，客户端不自行随机。
 
-右键放线首次按下时，`CommandComponent → Session` 在验证完整输入后，以当前权威握把朝向重设转杆目标。此后目标只消费 `UpdateRotation` 采集的新鼠标增量，`ControlRotation` 的旧目标和迟到的 CMC 控制角不再驱动杆；尚未重设的搏斗保持原控制器目标契约。松开右键、重复按下通知和命令回执都不再重设方向，仍按住的左键照常恢复收线。实际姿态、负载滤波、努力累计和镜头平滑均连续保留。输入顺序、限位及验证边界见 [实现导读](FishFightImplementationGuide_zh-CN.md) 的“右键放线时重设转向意图”。
+搏斗中 `UpdateRotation → CommandComponent` 按当前鼠标增量决定是否主动转杆。鼠标停止即关闭主动转矩并丢弃本段未完成目标；新移动段从实际握把重新开始，不再存在首次右键前追赶ControlRotation的分支。启停可靠发送并与30 Hz持续快照共用有序输入域；150 ms无有效新输入时权威撤力，停止心跳不能补回旧鼠标目标。右键首次按下仍由 `CommandComponent → Session` 完整验证后重设目标，迟到按键不得激活旧活动段；释放、重复通知和回执不恢复旧目标。角速度、鱼负载、已发生努力、实际姿态和镜头平滑保留，身体支撑与左键收线独立。输入顺序、限位及验证边界见 [实现导读](FishFightImplementationGuide_zh-CN.md) 的“鼠标停止即撤掉主动转杆”。
 
 鱼高层行为由 Encounter 上的 `ST_FishFight` 控制：当前生成器含 `OutwardRush/LateralArc/EaseOff` 三叶，按固定步更新的持续受阻、体力和时长条件转移。Task 只提交行为，Runner 唯一推进反馈/时钟并手动Tick树，然后连续执行方向和实际出力u；不增加 AIController，也不让树写 Transform、ASC、鱼线或装备。旧 `MotionIntent` 仅投影正式三动画，物理、鱼费用和基础磨损不读它。四性格/正式树已迁移并独立重载，Editor/Game构建和受控行为/复制回归已完成；真人及新打包验收仍未完成，分层证据见实现导读。
 
