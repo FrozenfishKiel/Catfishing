@@ -206,8 +206,38 @@ void ACatPhysicsPrototypePawn::UpdatePhysicalMovement(const float DeltaSeconds)
 	const FVector Velocity = Body->GetPhysicsLinearVelocity();
 	const double Mass = Body->GetMass();
 	const double Gravity = FMath::Abs(GetWorld()->GetGravityZ());
-	const bool bCanSupport = GetWorld()->GetTimeSeconds() >= SupportDisabledUntilSeconds
-		&& Body->GetUpVector().Z > 0.35;
+	const FVector BodyUp = Body->GetUpVector();
+	const bool bSupportEnabled = GetWorld()->GetTimeSeconds() >= SupportDisabledUntilSeconds;
+	const bool bCanSupport = bSupportEnabled && BodyUp.Z > 0.35;
+	// A side/back contact is not a foot plant. Observe only an upward-facing surface within the
+	// actual rotated box's vertical extent; a nearby wall or a hand holding a wall is insufficient.
+	bool bNewGroundContactRecovery = false;
+	double RecoveryContactDistanceCm = -1.0;
+	if (bSupportEnabled && BodyUp.Z <= 0.35)
+	{
+		const FVector Extent = Body->GetScaledBoxExtent();
+		const double VerticalExtentCm = FMath::Abs(Body->GetForwardVector().Z) * Extent.X
+			+ FMath::Abs(Body->GetRightVector().Z) * Extent.Y + FMath::Abs(BodyUp.Z) * Extent.Z;
+		const FVector Origin = Body->GetComponentLocation();
+		FHitResult Hit;
+		FCollisionQueryParams Params(SCENE_QUERY_STAT(CatPhysicsGroundRecovery), false, this);
+		if (GetWorld()->LineTraceSingleByChannel(Hit, Origin,
+			Origin - FVector(0.0, 0.0, VerticalExtentCm + 1.0), ECC_Visibility, Params)
+			&& Hit.ImpactNormal.Z >= 0.55)
+		{
+			bNewGroundContactRecovery = true;
+			RecoveryContactDistanceCm = Hit.Distance;
+		}
+	}
+	if (bNewGroundContactRecovery != bGroundContactRecoveryActive)
+	{
+		bGroundContactRecoveryActive = bNewGroundContactRecovery;
+		UE_LOG(LogCatPhysicsGrab, Log,
+			TEXT("Event=physics_body_ground_recovery_changed World=%s NetMode=%d Authority=1 LocalRole=%d BodyId=%s Active=%d UpZ=%.4f ContactDistanceCm=%.3f LeftGrip=%s RightGrip=%s Result=PhysicalTorqueOnly"),
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()),
+			*PrototypeId.ToString(), bGroundContactRecoveryActive, BodyUp.Z, RecoveryContactDistanceCm,
+			*Grab->GetGripState(true).GripId.ToString(), *Grab->GetGripState(false).GripId.ToString());
+	}
 	bool bNewGrounded = false;
 	if (bCanSupport)
 	{
@@ -248,12 +278,24 @@ void ACatPhysicsPrototypePawn::UpdatePhysicalMovement(const float DeltaSeconds)
 		Body->AddForce(Acceleration * Mass);
 	}
 	// Bounded upright motor, deliberately weaker in the air so a held body still swings under gravity.
-	const FVector UpError = FVector::CrossProduct(Body->GetUpVector(), FVector::UpVector);
+	const FVector UpError = FVector::CrossProduct(BodyUp, FVector::UpVector);
 	const double YawError = FVector::CrossProduct(Body->GetForwardVector().GetSafeNormal2D(), Forward).Z;
 	const FVector AngularVelocity = Body->GetPhysicsAngularVelocityInRadians();
-	const FVector AngularAcceleration = (UpError * (bGrounded ? 55.0 : 6.0)
+	FVector AngularAcceleration = (UpError * (bGrounded ? 55.0 : 6.0)
 		+ FVector(0.0, 0.0, YawError * (bGrounded ? 24.0 : 2.0)) - AngularVelocity * (bGrounded ? 9.0 : 0.7))
 		.GetClampedToMaxSize(100.0);
+	if (bGroundContactRecoveryActive)
+	{
+		// cross(up, world-up) vanishes at exactly 180 degrees. Select a deterministic roll axis
+		// at that singularity, then drive the real body through contact instead of assigning a pose.
+		const FVector RecoveryAxis = UpError.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER,
+			Body->GetForwardVector().GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector));
+		const double TiltAngleRadians = FMath::Acos(FMath::Clamp(BodyUp.Z, -1.0, 1.0));
+		// A side-lying 4 kg box must roll over its lower edge against gravity. The ordinary
+		// 100 rad/s^2 walking/air bound cannot supply that torque; this bound applies only at ground contact.
+		AngularAcceleration = (RecoveryAxis * TiltAngleRadians * 300.0 - AngularVelocity * 50.0)
+			.GetClampedToMaxSize(650.0);
+	}
 	Body->AddTorqueInRadians(AngularAcceleration, NAME_None, true);
 	bSupportSampleReady = true;
 }
@@ -367,6 +409,7 @@ void ACatPhysicsPrototypePawn::ReleaseConnections(const FName Reason)
 void ACatPhysicsPrototypePawn::ResetFromAuthority()
 {
 	bSupportSampleReady = false;
+	bGroundContactRecoveryActive = false;
 	ReleaseConnections(TEXT("Reset"));
 	LeftArm->BreakConstraint();
 	RightArm->BreakConstraint();

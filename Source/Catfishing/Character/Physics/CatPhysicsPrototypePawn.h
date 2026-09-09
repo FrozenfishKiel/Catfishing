@@ -97,5 +97,6 @@ private:
 	bool bShowDiagnostics = true;
 	bool bGrounded = false;
 	bool bSupportSampleReady = false;
+	bool bGroundContactRecoveryActive = false;
 	bool bReceivedSnapshot = false;
 };

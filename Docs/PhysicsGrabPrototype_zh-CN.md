@@ -43,7 +43,7 @@ pwsh -File Scripts/launch_physics_grab_prototype.ps1 -Mode Client
 
 ## 运行边界
 
-- 身体是一个受控刚体，两只前爪各是球刚体。肩驱动和接触约束传递双方反作用力；脚点支撑与有限姿态驱动辅助站稳。它还不是完整多关节主动布娃娃，也没有正式的摔倒起身或爬回平台动作。
+- 身体是一个受控刚体，两只前爪各是球刚体。肩驱动和接触约束传递双方反作用力；脚点支撑与有限姿态驱动辅助站稳，近地侧躺/倒扣可通过物理转矩恢复站立。它还不是完整多关节主动布娃娃，没有正式多阶段起身动画或爬回平台动作。
 - 当前模型和动画只作为表现源，起跳、空中与落地使用已有 JumpX 片段，程序 CCD 在身体动画和过渡混合之后让前爪追随物理手，保留骨段长度。原模型、ABP 和原 Physics Asset 不需要保存修改。
 - 服务器唯一模拟身体、手爪、道具与抓握。客户端提交输入并插值权威快照，没有实现完整物理预测和回滚。延迟手感需要单独评估。
 - 抓握快照包含独立 GripId、版本、目标 Actor / Component、骨骼和目标局部接触点。松手、失焦、切换控制、目标销毁、断线和复位都走明确的解除入口。
@@ -60,6 +60,8 @@ pwsh -File Build/Automation/verify_physics_grab_prototype.ps1 -Mode BuildGame
 报告在 `Saved/Automation/PhysicsGrabPrototype-20260909`，隔离工程的默认游戏日志在 `Saved/Validation/PhysicsGrabPrototype-20260909/Saved/Logs`。启动脚本不需要 `-log` 窗口。
 
 主要过滤词：`LogCatPhysicsGrab`、`physics_grip_created`、`physics_grip_observed`、`physics_grip_released`、`physics_body_motion`、`physics_prototype_visual_ready`、`physics_prototype_animation_changed`。用 `GripId` 关联同一抓握，用 `BodyId` 关联身体；分别核对房主与客户端的 World / NetMode 和状态。
+
+倒地恢复另查 `physics_body_ground_recovery_changed`，其中 `Active` 表示近地翻身电机是否启用，不表示已有脚下支撑或允许跳跃。
 
 测试分层：类型与骨长约束属于 `contract`；真实 World/Chaos 与 Listen 客户端 RPC 测试属于 `runtime_behavior`；渲染截图与实际操作属于原型的可视验证，不等于正式模型、正式动画或打包联机的 `presentation_delivery` 完成。实际结果与持续缺口归入 `Docs/Development/需求对齐差距清单.md`。
 
@@ -107,3 +109,15 @@ pwsh -File Build/Automation/verify_physics_grab_prototype.ps1 -Mode BuildGame
 最终集成验证：`Saved/Automation/PhysicsGrabPrototype-20260909/BuildEditor-20260909-121928-221.log` 与 `BuildGame-20260909-122003-953.log` 成功；`Report-20260909-121959-622/index.json` 为 13/13 clean（含同期倒地修复回归）。跳跃专项为 `PhysicalJumpPlaysAuthoredPhasesAndKeepsPawIK`、`JumpLandingCanBeInterruptedAndResetDoesNotFakeLanding`、`ListenClientJumpAnimationAndReset`。运行测试证明真实身体离地、两端三段动画资产、落地后重跳、空中重置、根骨对齐与 CCD；不把仅 `IsPlaying` 当作跳跃通过证据。
 
 `presentation_delivery` 的原型渲染复核为 `Report-20260909-122034-046/index.json`，网络用例通过，仅保留引擎 `r.MotionVectorSimulation` 警告。三图在隔离工程 `Saved/Automation/PhysicsGrabPrototype/Images/20260909-042053-jump-{takeoff,airborne,landing}.png`，已目视猫留在原镜头内、空中姿态可见。完整变换日志显示源 RigRoot 额外 Z 约 51/49 cm，而可见根与参考根均为零位置、零旋转、单位缩放。截图保留默认运动模糊，落地图是阶段首帧；不能用单张图证明完整落地动作或正式美术验收。
+
+## 试玩反馈修复：倒地恢复
+
+触发：猫侧躺或完全倒扣后不能自行站起。原因是原扶正叉积在 180° 时为零；同时 `Body.Up.Z <= 0.35` 禁止脚点支撑，电机落入弱空中分支，100 rad/s² 的旧上限不足以克服侧躺身体接地边缘的重力转矩。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 翻身判定与转矩 | Pawn `UpdatePhysicalMovement` 的脚支撑门和扶正误差 | 翻倒无法进入站立支撑；空中弱电机不够翻身 | 以旋转 Box 的垂直厚度加 1 cm 向下查找法线 Z≥0.55 的近地接触，独立选择恢复电机；180° 时采用身体纵轴确定翻滚方向 | 接触成立才用角度 PD（300/s²、50/s、角加速度上限 650 rad/s²）；朝向恢复后回到原脚点支撑与电机 | 正负侧躺、倒扣、连续物理解算、稳定性；禁止直接 SetRotation/Teleport 修正 | 60/120 Hz × 90°/-90°/180° 六组均通过，最终 UpZ≈1、站立高度≈19.964 cm，ResetEpoch 未变化 |
+| 操作、悬挂与网络 | 原 `bGrounded` 跳跃门、墙面抓握、服务器物理和快照复制 | 新近地接触仅可用于翻身，不能让抓墙悬空角色获得跳跃资格 | 保留脚支撑/跳力/普通站姿/空中驱动、抓握约束与复制入口；近地恢复不写 `bGrounded` | 物理翻身 → 正常支撑 → 原移动/跳跃请求 | 恢复后真移动/真跳跃；悬挂后请求跳跃再实际 Tick，不能只即时读延迟生效前的速度 | 恢复后实际行走约 92 cm、跳起约 20 cm；无地面墙面悬挂拒绝空跳，松手仍下落 |
+| 清理、日志与交付 | `ResetFromAuthority`、恢复电机选择状态、`Tests/CatPhysicsPrototypeRecoveryTests.cpp` | 复位不能残留恢复选择；不引入另一套角色运动路径 | 复位清除电机选择，状态变化默认落盘；原脚支撑保留为恢复后的消费者 | 更新说明/唯一进度入口，增量构建与局部集成回归 | 无配置/资产/持久化写入；官方 CMC/ABP 不涉及，Cook/打包未运行 | `InvertedAndSideLyingBodiesRecoverThroughGroundContact` 与 `WallSuspensionDoesNotBecomeGroundedRecoveryOrJump` 均通过；不存在需要删除的第二套旧入口 |
+
+此修复的 `contract/runtime_behavior` 证据同上最终 Editor/Game 构建及 `Report-20260909-121959-622/index.json` 13/13 clean。地面六种姿态、恢复后控制与悬挂边界由真实 Chaos World 证明；没有以跳跃截图替代完整倒地恢复的真人/联网美术验收，模块仍保持原未完成边界。
