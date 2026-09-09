@@ -16,7 +16,7 @@ table:
   sheet_id: R7rRBp
   mirror: Knowledge/Feishu/GDD 系统分册/鱼/鱼表格/第一版.csv
   identity_column: fish_id            # 2026-09-09 加，值＝工程 FishDefinitionId
-  declared_at_revision: 821           # 写本文件时的表 revision；表改列序不影响本文件（按列名对）
+  declared_at_revision: 822           # 写本文件时的表 revision；表改列序不影响本文件（按列名对）
   header_row: 1
   data_rows: 2-17                     # 16 条鱼；空行不算
 
@@ -36,7 +36,7 @@ field_groups:
     resolution: fish_id 是唯一身份；名字只是展示，改名不改对应
   - id: balance
     owner: 数值属主（参数页挂号表：鱼表格属主张佳；数值由李前臻拍）
-    columns: [重量/KG, 力量系数K, 体力系数, 经验系数, 稀有度, 需求窝料属性, 偏好饵, 出现地点]
+    columns: [重量/KG, 力量系数K, 体力系数, 经验系数, 稀有度, 需求窝料属性, 偏好饵, 出现地点, 可捞圈半径]
     reads: [{source: feishu-sheet, locator: 第一版!各列, version: sheet-revision}]
     resolution: 只从接受的表快照读；UE 资产里这些字段是生成投影，不得反向手改
   - id: behavior-snapshot
@@ -52,7 +52,7 @@ field_groups:
   - id: bindings
     owner: 工程（技术维护者）
     columns: []                       # 表里没有这些列，全在资产里
-    fields: [Thumbnail, PresentationDefinition, BitePersonalityId, FightPersonalityId, ScoopTargetRadiusCentimeters, RegionIds, TimeOfDay, Weather, CaptureImprintEventId, bEnableRuntimeDefinition, bTankDisplayEligible]
+    fields: [Thumbnail, PresentationDefinition, BitePersonalityId, FightPersonalityId, RegionIds, TimeOfDay, Weather, CaptureImprintEventId, bEnableRuntimeDefinition, bTankDisplayEligible]
     reads: [{source: ue-assets, locator: Content/Catfishing/Data/Fish/*.uasset, version: git-commit}]
     resolution: 从接受的 UE 资产快照读；飞书同名栏位只能作提案
 
@@ -102,6 +102,12 @@ columns:
     publish: FishFightStamina
     transform: "初始体力 = 体力系数 × 实际重量（钓鱼规则 v1.5 §4.1）；当前代码字段是每鱼种定额，需改成系数"
     note: 2026-09-08 改口径，16 行为占位（原定额÷重量中点），正式值走模拟
+  - name: 可捞圈半径
+    classification: declarative
+    type: number
+    unit: cm
+    publish: ScoopTargetRadiusCentimeters
+    note: 2026-09-09 李前臻裁「可抄几何按代码、逐鱼配圆」后加列；16 行占位按体重档 小 60／中 90／大 120，湖心巨影 0＝不可抄，正式值待调；资产现值未与本列对过（需开引擎）
   - name: 图鉴描述
     classification: declarative
     type: text
@@ -199,7 +205,6 @@ code_only_fields:
   SpawnWeight: 设计的抽鱼权重在 钓鱼规则 §2.3（分布+窝料+饵），表里无此列；程序侧口径需与鱼册对齐
   TimeOfDay: 设计只说「时段做机会向修正」，无逐鱼数据；旁路开关（D-31）
   Weather: 同上
-  ScoopTargetRadiusCentimeters: 工程参数
   MinimumFightParticipants: 设计「单人局不出需要多人的鱼」，巨影=多人；可由 BodyClass 推出
   BitePersonalityId: 四套 Bite_* 模板，与表的 P/Q/R 列关系未定
   FightPersonalityId: 四套 Fight_* 模板，同上

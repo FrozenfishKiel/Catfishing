@@ -1,6 +1,6 @@
 {
  "space_id": "7670823117626870757",
- "exported_at": "2026-09-09T12:29:48",
+ "exported_at": "2026-09-09T16:40:58",
  "tree": [
   {
    "title": "北极星愿景",
@@ -637,8 +637,8 @@
    ],
    "has_child": false,
    "file": "GDD 系统分册/钓鱼系统/钓鱼规则.md",
-   "revision_id": 297,
-   "lines": 390
+   "revision_id": 327,
+   "lines": 394
   },
   {
    "title": "多人钓鱼附篇",
@@ -653,7 +653,7 @@
    ],
    "has_child": false,
    "file": "GDD 系统分册/钓鱼系统/多人钓鱼附篇.md",
-   "revision_id": 77,
+   "revision_id": 82,
    "lines": 139
   },
   {
@@ -668,8 +668,8 @@
    ],
    "has_child": true,
    "file": "GDD 系统分册/道具/道具.md",
-   "revision_id": 827,
-   "lines": 304
+   "revision_id": 829,
+   "lines": 305
   },
   {
    "title": "鱼",
@@ -746,8 +746,8 @@
    ],
    "has_child": false,
    "file": "GDD 系统分册/商店.md",
-   "revision_id": 347,
-   "lines": 164
+   "revision_id": 351,
+   "lines": 165
   },
   {
    "title": "猫咪与状态",
@@ -944,8 +944,8 @@
    ],
    "has_child": false,
    "file": "裁决同步/裁决同步 · 钓鱼系统（钱成澔）.md",
-   "revision_id": 120,
-   "lines": 38
+   "revision_id": 122,
+   "lines": 50
   },
   {
    "title": "裁决同步 · 道具与商店（王甜甜）",
@@ -959,8 +959,8 @@
    ],
    "has_child": false,
    "file": "裁决同步/裁决同步 · 道具与商店（王甜甜）.md",
-   "revision_id": 86,
-   "lines": 21
+   "revision_id": 88,
+   "lines": 37
   },
   {
    "title": "裁决同步 · 鱼／营地／UI 与交互（张佳）",
@@ -974,8 +974,8 @@
    ],
    "has_child": false,
    "file": "裁决同步/裁决同步 · 鱼／营地／UI 与交互（张佳）.md",
-   "revision_id": 91,
-   "lines": 139
+   "revision_id": 98,
+   "lines": 153
   },
   {
    "title": "设计修改记录",
@@ -989,8 +989,8 @@
    ],
    "has_child": false,
    "file": "裁决同步/设计修改记录.md",
-   "revision_id": 83,
-   "lines": 619
+   "revision_id": 85,
+   "lines": 625
   },
   {
    "title": "临时美术资源表格",
@@ -1017,8 +1017,8 @@
    ],
    "has_child": false,
    "file": "数值模拟与参数记录.md",
-   "revision_id": 139,
-   "lines": 96
+   "revision_id": 150,
+   "lines": 97
   }
  ],
  "sheets": [
@@ -1034,7 +1034,7 @@
    "sheet_id": "5e822d",
    "sheet_name": "道具",
    "region": "A1:H14",
-   "revision": 229,
+   "revision": 231,
    "file": "GDD 系统分册/道具/道具总表/道具.csv",
    "rows": 14,
    "cols": 8
@@ -1068,7 +1068,7 @@
    "sheet_id": "ac5ee4",
    "sheet_name": "Sheet1",
    "region": "A1:F7",
-   "revision": 9,
+   "revision": 10,
    "file": "GDD 系统分册/道具/鱼漂/Sheet1.csv",
    "rows": 7,
    "cols": 6
@@ -1135,11 +1135,11 @@
    "obj_token": "CQlMsQon6hlo8ctpZRWcAPzOnRi",
    "sheet_id": "R7rRBp",
    "sheet_name": "第一版",
-   "region": "A1:W23",
-   "revision": 821,
+   "region": "A1:X23",
+   "revision": 822,
    "file": "GDD 系统分册/鱼/鱼表格/第一版.csv",
    "rows": 17,
-   "cols": 23
+   "cols": 24
   },
   {
    "node": "鱼表格",
@@ -1153,7 +1153,7 @@
    "sheet_id": "bc9794",
    "sheet_name": "旧版-已废弃-勿引（饥饿口径）",
    "region": "A1:L48",
-   "revision": 821,
+   "revision": 822,
    "file": "GDD 系统分册/鱼/鱼表格/旧版-已废弃-勿引（饥饿口径）.csv",
    "rows": 48,
    "cols": 12
