@@ -32,6 +32,11 @@ CSV 统一 UTF-8 BOM、首行表头、**行号 = 表格行号**；`[row=N]` 前�
 `Knowledge/GDD/` 是 2026-08 的旧快照，三册已改名（装备与道具→道具、鱼类图鉴→鱼、印记图鉴→印记）；
 以本目录为准。
 
+## 列级发布映射不在本目录
+
+表格的列分类与发布映射（哪列发到 UE 哪个字段、哪列只是文案）是人维护的 sidecar，放在
+`Knowledge/Schema/<表名>.<子表>.yaml`，不随导出替换；校验脚本 `Scripts/check_fish_table_vs_definition.py`。
+
 ## 重新导出
 
 ```bash

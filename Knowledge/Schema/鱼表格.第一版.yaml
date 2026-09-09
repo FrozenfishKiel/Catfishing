@@ -1,0 +1,212 @@
+# 鱼表格「第一版」列级发布映射（人维护；不在 Knowledge/Feishu/ 镜像里，导出脚本不碰它）
+#
+# 读者：程序（接鱼表时按 publish 取列）、数值属主（改列先改这里的声明）、game-toolkit 的内容层检查。
+# 口径来自插件 split-doc-layers/examples/content-model/README.md「来源与发布声明」：
+#   每列先分 declarative（机械可校验）/ interpretive（要人读、要语义校验、必须写 owner），
+#   再写它发布到 UCatFishDefinition 的哪个字段；发不出去的写 excluded 并说明原因。
+# 校验脚本：Scripts/check_fish_table_vs_definition.py（文本级，不开引擎）。
+
+schema_version: table-sidecar/1
+
+table:
+  title: 鱼表格
+  sheet_name: 第一版
+  wiki_node_token: DKhnweGaEiPTJZkO8OScQOJenqg
+  spreadsheet_token: CQlMsQon6hlo8ctpZRWcAPzOnRi
+  sheet_id: R7rRBp
+  mirror: Knowledge/Feishu/GDD 系统分册/鱼/鱼表格/第一版.csv
+  identity_column: fish_id            # 2026-09-09 加，值＝工程 FishDefinitionId
+  declared_at_revision: 821           # 写本文件时的表 revision；表改列序不影响本文件（按列名对）
+  header_row: 1
+  data_rows: 2-17                     # 16 条鱼；空行不算
+
+publish_target:
+  class: UCatFishDefinition
+  header: Source/Catfishing/Data/CatFishDefinition.h
+  asset_dir: Content/Catfishing/Data/Fish
+  asset_name_rule: "<fish_id>.uasset"
+  input_package: .harness/formal-fish-asset-input-package.json   # 记录资产按哪个表 revision 生成
+
+# 权属按字段组，不用单值 content_truth（README 的 Catfishing 示例落到实处）
+field_groups:
+  - id: identity
+    owner: 工程（技术维护者）与鱼册属主共管：ID 由工程定，名字由鱼册定
+    columns: [fish_id, 名字]
+    reads: [{source: feishu-sheet, locator: 第一版!fish_id/名字, version: sheet-revision}]
+    resolution: fish_id 是唯一身份；名字只是展示，改名不改对应
+  - id: balance
+    owner: 数值属主（参数页挂号表：鱼表格属主张佳；数值由李前臻拍）
+    columns: [重量/KG, 力量系数K, 体力系数, 经验系数, 稀有度, 需求窝料属性, 偏好饵, 出现地点]
+    reads: [{source: feishu-sheet, locator: 第一版!各列, version: sheet-revision}]
+    resolution: 只从接受的表快照读；UE 资产里这些字段是生成投影，不得反向手改
+  - id: behavior-snapshot
+    owner: 钓鱼系统属主（钱成澔）；数值待模拟
+    columns: [食性, 发力段长, 休息段长, 游速系数]
+    reads: [{source: feishu-sheet, locator: 第一版!各列, version: sheet-revision}]
+    resolution: 当前代码读的是四套性格模板资产（Bite_*/Fight_*），这些列没有消费者；先定「挂模板」还是「逐鱼配」再谈发布
+  - id: presentation-text
+    owner: Interface（张佳）
+    columns: [特点, 图鉴描述, 吃鱼效果, 限时Buff, 持续时间, 鱼刚咬饵时鱼漂的变化, 鱼刚咬饵时水面的变化, 与猫搏斗时鱼的动作变化, 与猫搏斗时水面的变化]
+    reads: [{source: feishu-sheet, locator: 第一版!各列, version: sheet-revision}]
+    resolution: 自由文本，程序不解析；其中 吃鱼效果/限时Buff/持续时间 三列当前是「人翻译成 FoodSafety 与 buff 资产」，这是缺口，见 columns 里的 gap
+  - id: bindings
+    owner: 工程（技术维护者）
+    columns: []                       # 表里没有这些列，全在资产里
+    fields: [Thumbnail, PresentationDefinition, BitePersonalityId, FightPersonalityId, ScoopTargetRadiusCentimeters, RegionIds, TimeOfDay, Weather, CaptureImprintEventId, bEnableRuntimeDefinition, bTankDisplayEligible]
+    reads: [{source: ue-assets, locator: Content/Catfishing/Data/Fish/*.uasset, version: git-commit}]
+    resolution: 从接受的 UE 资产快照读；飞书同名栏位只能作提案
+
+# 逐列声明。name 按表头前缀匹配（表头后面常带括注）。
+columns:
+  - name: fish_id
+    classification: declarative
+    type: id
+    publish: FishDefinitionId
+    note: 2026-09-09 加；值必须与 Content/Catfishing/Data/Fish 资产名一致
+  - name: 名字
+    classification: declarative
+    type: string
+    publish: DisplayName
+  - name: 特点
+    classification: interpretive
+    owner: Interface
+    type: text
+    publish: excluded
+    note: 作者备注，不进资产
+  - name: 吃鱼效果
+    classification: interpretive
+    owner: Framework
+    type: text
+    publish: excluded
+    gap: 代码用 FoodSafety（Safe/Toxic/Unset）+ PoisonIncrease + EatingExperience 表达，全靠人从这列翻译；不可食用（咸鱼、巨影）在代码里没有档，见 09-09 对表「鱼」报告
+  - name: 出现地点
+    classification: declarative
+    type: enum
+    values: {河流: River, 森林湖: ForestLake}
+    publish: RegionIds
+    gap: 工程正式地图目前只有 River 一个水域，ForestLake 未建（对表「环境与氛围」高）
+  - name: 重量/KG
+    classification: declarative
+    type: range
+    unit: kg
+    format: "min~max"
+    publish: [MinimumWeightKilograms, MaximumWeightKilograms]
+  - name: 力量系数K
+    classification: declarative
+    type: number
+    publish: excluded
+    gap: 代码按全局 StrengthPerKilogram=10（D-20，09-03 用户裁）；参数页 v0.30 仍写「K 取鱼表 G 列现值」——两边未合一，已入 需求对齐差距清单 §4「巨影门槛」
+  - name: 体力系数
+    classification: declarative
+    type: number
+    publish: FishFightStamina
+    transform: "初始体力 = 体力系数 × 实际重量（钓鱼规则 v1.5 §4.1）；当前代码字段是每鱼种定额，需改成系数"
+    note: 2026-09-08 改口径，16 行为占位（原定额÷重量中点），正式值走模拟
+  - name: 图鉴描述
+    classification: declarative
+    type: text
+    publish: Description
+    note: 文案即值（玩家看到的原文），所以是声明性；改文案走鱼册属主
+  - name: 需求窝料属性
+    classification: declarative
+    type: enum
+    values: {腥: Fishy, 香: Fragrant, 酵: Fermented}
+    publish: ChumPreference
+    transform: "单值枚举 → FCatChumVector 三分量（命中项 1.0，其余 0）；混合配比表里没有"
+  - name: 限时Buff
+    classification: interpretive
+    owner: Framework
+    type: text
+    publish: excluded
+    gap: buff 定义在吃鱼效果页与代码 buff 资产，本列只是快照文案；缺一列 buff_id
+  - name: 持续时间
+    classification: declarative
+    type: number
+    unit: 秒
+    format: "N秒"
+    optional: true                    # 一次性 buff 与无 buff 的鱼留空；写「无」算填错，统一留空
+    publish: excluded
+    gap: 与 限时Buff 同一缺口，随 buff_id 一起发布
+  - name: 经验系数
+    classification: declarative
+    type: number
+    publish: EatingExperience
+    transform: "经验 = 经验系数 × 实际重量（2026-09-07 拍）；当前代码字段是定额，需改成系数"
+  - name: 偏好饵
+    classification: declarative
+    type: enum
+    values: {虫虫饵: BugBait, 肉块饵: MeatBait, 果实饵: FruitBait, 花蜜饵: NectarBait, 月光饵: MoonlightBait}
+    publish: BaitWeightMultipliers
+    transform: "单个偏好饵 → 该饵倍率>1、其余 1；倍率数值不在表里（钓鱼规则 §2.3 每鱼×每饵权重矩阵未建）"
+  - name: 稀有度
+    classification: declarative
+    type: enum
+    values: {普通: 待核, 少见: 待核, 稀有: 待核, 珍稀: 待核, 事件: 待核}
+    publish: RarityTierId
+    note: 代码 RarityTierId 的取值集合在资产里，Config 未列，待核后填映射
+  - name: 食性
+    classification: declarative
+    type: enum
+    values: {食肉: carnivore, 杂食: omnivore, 素食: herbivore}
+    publish: excluded
+    gap: 代码无对应字段；鱼的行为页用它算 P_base，但该页已标「实现不读本页」
+  - name: 发力段长
+    classification: declarative
+    type: range
+    unit: 秒
+    publish: excluded
+    gap: 代码读 Fight_* 性格模板，无逐鱼字段
+  - name: 休息段长
+    classification: declarative
+    type: range
+    unit: 秒
+    publish: excluded
+    gap: 同上
+  - name: 游速系数
+    classification: declarative
+    type: number
+    publish: excluded
+    gap: 同上；且设计口径「按体重档」与表里按鱼种写死未合一（一致性检查矛盾 10）
+  - name: 鱼刚咬饵时，鱼漂的变化
+    classification: interpretive
+    owner: Interface
+    type: text
+    publish: excluded
+    note: 演出文案，进 PresentationDefinition 由人配
+  - name: 鱼刚咬饵时，水面的变化
+    classification: interpretive
+    owner: Interface
+    type: text
+    publish: excluded
+  - name: 与猫搏斗时，鱼的动作变化
+    classification: interpretive
+    owner: Interface
+    type: text
+    publish: excluded
+  - name: 与猫搏斗时，水面的变化
+    classification: interpretive
+    owner: Interface
+    type: text
+    publish: excluded
+
+# 代码有、表里没有的字段：谁定值、要不要在表里加列
+code_only_fields:
+  FishStrength: 已 Deprecated；输入包仍列为必填字段，说明输入包晚于 D-20/D-21 的改动，重生成时要去掉
+  FoodSafety: Safe/Toxic/Unset 三档，由 吃鱼效果 文案人工翻译；不可食用（咸鱼、巨影）没有档，对表「鱼」报告已列
+  BodyClass: 由 名字 是否为湖心巨影推出（Standard/Giant）；可不加列
+  SacrificeContribution: 设计按实际体重档取（参数页供奉值行），不该是定额字段；对表已列为待办
+  CaptureImprintEventId: 印记触发清单归印记册，不进鱼表
+  SpawnWeight: 设计的抽鱼权重在 钓鱼规则 §2.3（分布+窝料+饵），表里无此列；程序侧口径需与鱼册对齐
+  TimeOfDay: 设计只说「时段做机会向修正」，无逐鱼数据；旁路开关（D-31）
+  Weather: 同上
+  ScoopTargetRadiusCentimeters: 工程参数
+  MinimumFightParticipants: 设计「单人局不出需要多人的鱼」，巨影=多人；可由 BodyClass 推出
+  BitePersonalityId: 四套 Bite_* 模板，与表的 P/Q/R 列关系未定
+  FightPersonalityId: 四套 Fight_* 模板，同上
+  PoisonIncrease: 从 吃鱼效果 文案人工翻译；缺结构化列
+  bTankDisplayEligible: 工程开关
+  bEnableRuntimeDefinition: 工程开关
+  Thumbnail: 资产绑定
+  PresentationDefinition: 资产绑定
+
+editor_backflow: 未接。资产字段被人在编辑器里改了不会回到表；改数一律先改表再重生成（README 的三方合并链条尚不存在）
