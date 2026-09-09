@@ -1,6 +1,6 @@
 {
  "space_id": "7670823117626870757",
- "exported_at": "2026-09-09T10:48:50",
+ "exported_at": "2026-09-09T12:29:48",
  "tree": [
   {
    "title": "北极星愿景",
@@ -974,8 +974,8 @@
    ],
    "has_child": false,
    "file": "裁决同步/裁决同步 · 鱼／营地／UI 与交互（张佳）.md",
-   "revision_id": 90,
-   "lines": 137
+   "revision_id": 91,
+   "lines": 139
   },
   {
    "title": "设计修改记录",
@@ -989,8 +989,8 @@
    ],
    "has_child": false,
    "file": "裁决同步/设计修改记录.md",
-   "revision_id": 82,
-   "lines": 617
+   "revision_id": 83,
+   "lines": 619
   },
   {
    "title": "临时美术资源表格",
@@ -1017,7 +1017,7 @@
    ],
    "has_child": false,
    "file": "数值模拟与参数记录.md",
-   "revision_id": 138,
+   "revision_id": 139,
    "lines": 96
   }
  ],
@@ -1135,11 +1135,11 @@
    "obj_token": "CQlMsQon6hlo8ctpZRWcAPzOnRi",
    "sheet_id": "R7rRBp",
    "sheet_name": "第一版",
-   "region": "A1:V23",
-   "revision": 820,
+   "region": "A1:W23",
+   "revision": 821,
    "file": "GDD 系统分册/鱼/鱼表格/第一版.csv",
    "rows": 17,
-   "cols": 22
+   "cols": 23
   },
   {
    "node": "鱼表格",
@@ -1153,7 +1153,7 @@
    "sheet_id": "bc9794",
    "sheet_name": "旧版-已废弃-勿引（饥饿口径）",
    "region": "A1:L48",
-   "revision": 820,
+   "revision": 821,
    "file": "GDD 系统分册/鱼/鱼表格/旧版-已废弃-勿引（饥饿口径）.csv",
    "rows": 48,
    "cols": 12

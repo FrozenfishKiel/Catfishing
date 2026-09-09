@@ -2,8 +2,8 @@
 source: https://qcniqd0mjfwg.feishu.cn/wiki/VuC1wdXIsiXJp1kPDiVcmFOlnNh
 node_token: VuC1wdXIsiXJp1kPDiVcmFOlnNh
 obj_token: PKxHdEJwQoDnKUxRhnccia6Gnwb
-revision_id: 90
-fetched_at: 2026-09-09T10:48:07
+revision_id: 91
+fetched_at: 2026-09-09T12:29:22
 wiki_path: 裁决同步 / 裁决同步 · 鱼／营地／UI 与交互（张佳）
 generated: true  # 由飞书导出，勿手改；改内容去飞书
 ---
@@ -145,3 +145,5 @@ generated: true  # 由飞书导出，勿手改；改内容去飞书
 2. 交互页：献祭加夜晚限制、翻天改全队确认、页首补三行头
 3. ui 表第 13 行「商城」改「商店」
 4. （2026-09-08）〈钓鱼规则〉页重构为主文＋〈多人钓鱼〉附篇；抄鱼键 09-07 裁定为 F，原「对表方向待用户定」一条随之销
+
+已代做（2026-09-09）：鱼表格「第一版」表末加 fish_id 列，16 行填工程的 FishDefinitionId（如黑鱼＝Fish_Blackfish），程序以后按这一列对鱼、不按名字；改名不影响对应。
