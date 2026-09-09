@@ -41,7 +41,7 @@ namespace CatLocalPlayerUILoadingScreen
 	/** Start 请求已被 Online 接受这一真实 gate 在总进度中的权重；它只在请求事实存在时计入。 */
 	constexpr float GameplayStartAcceptedWeight = 3.0f;
 
-	/** 地图包异步加载在总进度中的权重；这一段按引擎 LoadPackageAsync 的真实百分比连续推进。 */
+	/** 地图包异步加载在总进度中的权重；这一段按引擎 LoadPackageAsync 的真实进度事件推进。 */
 	constexpr float GameplayPackageWeight = 65.0f;
 
 	/** ServerTravel 或 ClientTravel 已提交这一真实 gate 在总进度中的权重。 */
@@ -71,7 +71,7 @@ namespace CatLocalPlayerUILoadingScreen
 	/** 局内 UI 控制器已装配这一真实 gate 在总进度中的权重；到这里再加前面 gate 会自然得到 100。 */
 	constexpr float GameplayLocalUIReadyWeight = 2.0f;
 
-	// 地图包进度贡献流程：把引擎 LoadPackageAsync 的真实百分比换成本项目总进度中的贡献值，显示层后续按合成结果直接写入。
+	// 地图包进度贡献流程：把 Online 从 LoadPackageAsync 事件得到的包内阶段百分比换成本项目总进度中的贡献值，显示层后续按合成结果直接写入。
 	static float GetPackageProgressContribution(const float PackagePercent)
 	{
 		return GameplayPackageWeight * (PackagePercent / 100.0f);
@@ -393,8 +393,9 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 			const int32 PackageDisplayPercent = FMath::RoundToInt(Snapshot.MapLoadProgressPercent);
 			OutPresentation.StatusText = FText::FromString(TEXT("正在读取游戏世界"));
 			OutPresentation.DetailText = Snapshot.bHasMapLoadProgress
-				? FText::FromString(FString::Printf(TEXT("地图包加载 %d%%"), PackageDisplayPercent))
-				: FText::FromString(TEXT("等待引擎提供地图包进度。"));
+				? FText::FromString(FString::Printf(TEXT("%s %d%%"),
+					*Snapshot.MapLoadProgressStatus, PackageDisplayPercent))
+				: FText::FromString(TEXT("等待引擎返回地图包加载阶段。"));
 			OutPresentation.ReasonText = FText::FromString(TEXT("等待 LoadPackageAsync 完成。"));
 			return true;
 		}
@@ -465,7 +466,9 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 		if (Snapshot.bIsMapPreloadPending && Snapshot.WorldState == ECatOnlineWorldState::TravelingToFrontend)
 		{
 			OutPresentation.StatusText = FText::FromString(TEXT("正在读取主菜单世界。"));
-			OutPresentation.DetailText = FText::FromString(TEXT("等待 Frontend 地图包预载完成。"));
+			OutPresentation.DetailText = Snapshot.bHasMapLoadProgress && !Snapshot.MapLoadProgressStatus.IsEmpty()
+				? FText::FromString(Snapshot.MapLoadProgressStatus)
+				: FText::FromString(TEXT("等待 Frontend 地图包预载完成。"));
 			OutPresentation.ReasonText = FText::FromString(TEXT("等待 LoadPackageAsync 完成。"));
 			return true;
 		}

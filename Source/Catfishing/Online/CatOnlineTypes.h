@@ -418,6 +418,10 @@ struct FCatOnlineSnapshot
 	/** 当前地图包加载百分比，单位是 0 到 100；只有 bHasMapLoadProgress 为 true 时才是有效 Model 数据，View 才允许写入进度条。 */
 	UPROPERTY(BlueprintReadOnly)
 	float MapLoadProgressPercent = 0.0f;
+
+	/** 当前地图包加载阶段的可读事实；由 LoadPackageAsync 进度事件写入，UI 用它说明此刻真实等在读取、序列化还是完全加载阶段。 */
+	UPROPERTY(BlueprintReadOnly)
+	FString MapLoadProgressStatus;
 };
 
 /** Online 请求的同步提交结果；Accepted 表示子系统接管了请求，OSS 完成回调可能在本方法返回前就已同步结案，最终事实仍从 Snapshot 读取。 */

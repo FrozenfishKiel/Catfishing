@@ -46,12 +46,68 @@ namespace CatOnlineNames
 	static const ANSICHAR* LobbyReadyKey = "CAT_GAME_READY";
 	/** Host ready 失败后等待下一次发布尝试的秒数；PostLoadMap 与 Lobby 轮询用它写入单调时间，轮询只在 Steam Lobby 可写时消费以避免 NULL 后端刷屏。 */
 	static constexpr double HostLobbyReadyRetrySeconds = 2.0;
-	/** 地图包进度采样间隔，单位秒；它只控制 UI 快照刷新频率，不参与加载完成判断。 */
-	static constexpr float MapLoadProgressSampleSeconds = 0.1f;
-	/** 地图包百分比变化达到该阈值才广播快照，避免异步加载线程的细碎小数刷新刷屏。 */
-	static constexpr float MapLoadProgressBroadcastDeltaPercent = 0.5f;
 	/** 平台已确认邀请等待前台和本地身份的最长秒数；接受时冻结期限，持续未就绪也不能重新开始计时。 */
 	static constexpr double AcceptedInviteWaitSeconds = 30.0;
+}
+
+namespace CatOnlineMapPreloadProgress
+{
+	// 地图包阶段换算流程：UE5.8 的 LoadPackageAsync 只给离散阶段事件，不给连续百分比；这里把真实阶段映射成包内进度，供总进度合成使用。
+	static float GetPercent(const EAsyncLoadingProgress ProgressType)
+	{
+		switch (ProgressType)
+		{
+		case EAsyncLoadingProgress::Started:
+			return 0.0f;
+		case EAsyncLoadingProgress::Read:
+			return 35.0f;
+		case EAsyncLoadingProgress::Serialized:
+			return 75.0f;
+		case EAsyncLoadingProgress::FullyLoaded:
+			return 100.0f;
+		case EAsyncLoadingProgress::Failed:
+		default:
+			return 0.0f;
+		}
+	}
+
+	// 地图包阶段文案流程：把引擎进度事件翻译成玩家能看懂的等待点，避免 UI 只显示一个没有来处的百分比。
+	static const TCHAR* GetStatus(const EAsyncLoadingProgress ProgressType)
+	{
+		switch (ProgressType)
+		{
+		case EAsyncLoadingProgress::Started:
+			return TEXT("地图包请求已进入异步加载队列。");
+		case EAsyncLoadingProgress::Read:
+			return TEXT("地图包磁盘数据已读取完成。");
+		case EAsyncLoadingProgress::Serialized:
+			return TEXT("地图对象序列化已完成。");
+		case EAsyncLoadingProgress::FullyLoaded:
+			return TEXT("地图包已完全加载，正在提交旅行。");
+		case EAsyncLoadingProgress::Failed:
+		default:
+			return TEXT("地图包加载失败。");
+		}
+	}
+
+	// 地图包阶段日志流程：用稳定英文枚举名写入 Development 日志，便于和引擎加载事件一起检索。
+	static const TCHAR* GetName(const EAsyncLoadingProgress ProgressType)
+	{
+		switch (ProgressType)
+		{
+		case EAsyncLoadingProgress::Started:
+			return TEXT("Started");
+		case EAsyncLoadingProgress::Read:
+			return TEXT("Read");
+		case EAsyncLoadingProgress::Serialized:
+			return TEXT("Serialized");
+		case EAsyncLoadingProgress::FullyLoaded:
+			return TEXT("FullyLoaded");
+		case EAsyncLoadingProgress::Failed:
+		default:
+			return TEXT("Failed");
+		}
+	}
 }
 
 namespace CatOnlineRoomFacts
@@ -485,74 +541,109 @@ bool UCatOnlineSubsystem::IsAnyMapPreloadPending() const
 }
 
 // 地图包进度读取流程：
-// 1. 只有预载请求仍在队列里时，才用当前包名向引擎查询真实异步加载百分比，负值代表该阶段没有可读进度。
-// 2. 预载回调成功后立刻停止报告包百分比；后续 ServerTravel、ClientTravel、LoadMap 和 UI 就绪会由 UI 按真实 gate 合成进入游戏总进度。
+// 1. 只有预载请求仍在队列里且已经收到 LoadPackageAsync 进度事件时，才把当前阶段百分比交给 UI。
+// 2. 预载回调成功后立刻停止报告包阶段；后续 ServerTravel、ClientTravel、LoadMap 和 UI 就绪会由 UI 按真实 gate 合成进入游戏总进度。
 // 3. 保存、销毁 Session 或网络补偿这类非地图包阶段返回 false，让 UI 使用对应真实状态，而不是用本地时间造假进度。
 bool UCatOnlineSubsystem::TryGetMapPreloadProgressPercent(float& OutProgressPercent) const
 {
 	OutProgressPercent = 0.0f;
-	if (IsAnyMapPreloadPending() && !ActiveMapLoadPackage.IsEmpty())
+	if (IsAnyMapPreloadPending() && !ActiveMapLoadPackage.IsEmpty() && bMapLoadProgressAvailable)
 	{
-		const float EnginePercent = GetAsyncLoadPercentage(FName(*ActiveMapLoadPackage));
-		if (EnginePercent >= 0.0f)
-		{
-			OutProgressPercent = EnginePercent;
-			return true;
-		}
-		return false;
+		OutProgressPercent = CurrentMapLoadProgressPercent;
+		return true;
 	}
 	return false;
 }
 
-// 地图包进度跟踪流程：记录当前包名并注册一个只读采样器；采样器只把引擎百分比变更广播到 Online 快照，完成和失败仍完全由异步加载回调收口。
-void UCatOnlineSubsystem::BeginMapPreloadProgressTracking(const FString& PackageName)
+// 地图包进度跟踪流程：记录当前包名并创建 LoadPackageAsync 进度委托；事件可能来自异步加载线程，因此只把包名、阶段和 epoch 投递回 GameThread 后再写状态。
+void UCatOnlineSubsystem::BeginMapPreloadProgressTracking(const FString& PackageName, const uint64 CallbackEpoch)
 {
 	ActiveMapLoadPackage = PackageName;
-	bLastMapLoadProgressAvailable = false;
-	LastMapLoadProgressPercent = 0.0f;
-	if (!MapLoadProgressTickHandle.IsValid())
-	{
-		MapLoadProgressTickHandle = FTSTicker::GetCoreTicker().AddTicker(
-			FTickerDelegate::CreateUObject(this, &ThisClass::TickMapPreloadProgress),
-			CatOnlineNames::MapLoadProgressSampleSeconds);
-	}
+	bMapLoadProgressAvailable = false;
+	CurrentMapLoadProgressPercent = 0.0f;
+	CurrentMapLoadProgressStatus.Reset();
+	const TWeakObjectPtr<UCatOnlineSubsystem> WeakThis(this);
+	MapLoadProgressDelegate = MakeShared<FLoadPackageAsyncProgressDelegate>(
+		FLoadPackageAsyncProgressDelegate::DelegateType::CreateLambda(
+			[WeakThis, CallbackEpoch](FLoadPackageAsyncProgressParams& Params)
+			{
+				const FName ReportedPackageName = Params.PackageName;
+				const EAsyncLoadingProgress ReportedProgressType = Params.ProgressType;
+				// FullyLoaded 可能在 GameThread 上紧贴完成回调触发；原地消费能先记录 100% 事实，再进入完成回调的清理和旅行提交。
+				if (IsInGameThread())
+				{
+					if (UCatOnlineSubsystem* StrongThis = WeakThis.Get())
+					{
+						StrongThis->HandleMapPreloadProgressOnGameThread(
+							ReportedPackageName, ReportedProgressType, CallbackEpoch);
+					}
+					return;
+				}
+				AsyncTask(ENamedThreads::GameThread,
+					[WeakThis, ReportedPackageName, ReportedProgressType, CallbackEpoch]()
+					{
+						if (UCatOnlineSubsystem* StrongThis = WeakThis.Get())
+						{
+							StrongThis->HandleMapPreloadProgressOnGameThread(
+								ReportedPackageName, ReportedProgressType, CallbackEpoch);
+						}
+					});
+			}),
+		FLoadPackageAsyncProgressDelegate::BuildMask(
+			EAsyncLoadingProgress::Started,
+			EAsyncLoadingProgress::Read,
+			EAsyncLoadingProgress::Serialized,
+			EAsyncLoadingProgress::FullyLoaded,
+			EAsyncLoadingProgress::Failed));
 }
 
-// 地图包进度跟踪停止流程：先移除 CoreTicker 句柄，再清掉包名和上次观测值；是否继续保留已加载 UPackage 由对应旅行流程决定。
+// 地图包进度跟踪停止流程：释放进度委托并清掉包名、阶段和百分比；是否继续保留已加载 UPackage 由对应旅行流程决定。
 void UCatOnlineSubsystem::StopMapPreloadProgressTracking()
 {
-	FTSTicker::RemoveTicker(MapLoadProgressTickHandle);
-	MapLoadProgressTickHandle.Reset();
+	MapLoadProgressDelegate.Reset();
 	ActiveMapLoadPackage.Reset();
-	bLastMapLoadProgressAvailable = false;
-	LastMapLoadProgressPercent = 0.0f;
+	bMapLoadProgressAvailable = false;
+	CurrentMapLoadProgressPercent = 0.0f;
+	CurrentMapLoadProgressStatus.Reset();
 }
 
-// 地图包进度采样流程：只在真实预载请求还挂起时读取引擎百分比；百分比可用性或数值发生有意义变化才广播快照，预载结束则注销自身。
-bool UCatOnlineSubsystem::TickMapPreloadProgress(const float DeltaSeconds)
+// 地图包进度事件收口流程：GameThread 只消费当前 epoch 和当前包名的事件；成功阶段写入可读状态和百分比，失败阶段只广播真实失败观察，最终失败仍由完成回调统一结案。
+void UCatOnlineSubsystem::HandleMapPreloadProgressOnGameThread(const FName PackageName,
+	const EAsyncLoadingProgress ProgressType, const uint64 CallbackEpoch)
 {
-	(void)DeltaSeconds;
-	if (!IsAnyMapPreloadPending())
+	if (CallbackEpoch != OperationEpoch || !IsAnyMapPreloadPending() || ActiveMapLoadPackage.IsEmpty()
+		|| PackageName.ToString() != ActiveMapLoadPackage)
 	{
-		MapLoadProgressTickHandle.Reset();
-		ActiveMapLoadPackage.Reset();
-		bLastMapLoadProgressAvailable = false;
-		LastMapLoadProgressPercent = 0.0f;
-		return false;
+		UE_LOG(LogCatOnline, Warning,
+			TEXT("Event=online_map_preload_progress_ignored Package=%s Progress=%s Epoch=%llu CurrentEpoch=%llu ActivePackage=%s"),
+			*PackageName.ToString(),
+			CatOnlineMapPreloadProgress::GetName(ProgressType),
+			CallbackEpoch,
+			OperationEpoch,
+			*ActiveMapLoadPackage);
+		return;
 	}
-
-	float ProgressPercent = 0.0f;
-	const bool bProgressAvailable = TryGetMapPreloadProgressPercent(ProgressPercent);
-	const bool bShouldBroadcast = bProgressAvailable != bLastMapLoadProgressAvailable
-		|| (bProgressAvailable && FMath::Abs(ProgressPercent - LastMapLoadProgressPercent)
-			>= CatOnlineNames::MapLoadProgressBroadcastDeltaPercent);
-	if (bShouldBroadcast)
+	if (ProgressType == EAsyncLoadingProgress::Failed)
 	{
-		bLastMapLoadProgressAvailable = bProgressAvailable;
-		LastMapLoadProgressPercent = ProgressPercent;
-		BroadcastSnapshot(TEXT("online_map_preload_progress"));
+		bMapLoadProgressAvailable = false;
+		CurrentMapLoadProgressPercent = 0.0f;
+		CurrentMapLoadProgressStatus = CatOnlineMapPreloadProgress::GetStatus(ProgressType);
+		UE_LOG(LogCatOnline, Warning,
+			TEXT("Event=online_map_preload_progress Package=%s Progress=%s Percent=0.0"),
+			*PackageName.ToString(),
+			CatOnlineMapPreloadProgress::GetName(ProgressType));
+		BroadcastSnapshot(TEXT("online_map_preload_progress_failed"));
+		return;
 	}
-	return true;
+	bMapLoadProgressAvailable = true;
+	CurrentMapLoadProgressPercent = CatOnlineMapPreloadProgress::GetPercent(ProgressType);
+	CurrentMapLoadProgressStatus = CatOnlineMapPreloadProgress::GetStatus(ProgressType);
+	UE_LOG(LogCatOnline, Log,
+		TEXT("Event=online_map_preload_progress Package=%s Progress=%s Percent=%.1f"),
+		*PackageName.ToString(),
+		CatOnlineMapPreloadProgress::GetName(ProgressType),
+		CurrentMapLoadProgressPercent);
+	BroadcastSnapshot(TEXT("online_map_preload_progress"));
 }
 
 // Client 预载启动流程：确认前台 Client、真实 Lobby ready 且本 Lobby 尚未提交过 Start 后受理并计次；随后提交真实异步预载，失败直接进入错误分支，成功回调复核 ready 后才发起 ClientTravel。
@@ -573,9 +664,12 @@ void UCatOnlineSubsystem::BeginClientGameplayPreload()
 	++ClientGameplayStartAttempts;
 	const uint64 SubmittedEpoch = OperationEpoch;
 	GameplayPreloadRequestId = INDEX_NONE - 1;
-	BeginMapPreloadProgressTracking(GameplayMapPackage);
-	const int32 SubmittedRequestId = LoadPackageAsync(GameplayMapPackage,
+	BeginMapPreloadProgressTracking(GameplayMapPackage, SubmittedEpoch);
+	FLoadPackageAsyncOptionalParams LoadParams;
+	LoadParams.CompletionDelegate = MakeUnique<FLoadPackageAsyncDelegate>(
 		FLoadPackageAsyncDelegate::CreateUObject(this, &ThisClass::HandleGameplayPackagePreloadComplete, SubmittedEpoch));
+	LoadParams.ProgressDelegate = MapLoadProgressDelegate;
+	const int32 SubmittedRequestId = LoadPackageAsync(GameplayMapPackage, MoveTemp(LoadParams));
 	if (ActiveOperation == ECatOnlineOperation::Start && OperationEpoch == SubmittedEpoch
 		&& GameplayPreloadRequestId == INDEX_NONE - 1)
 	{
@@ -752,9 +846,12 @@ FCatOnlineResult UCatOnlineSubsystem::RequestStartHostedGame()
 	const uint64 SubmittedEpoch = OperationEpoch;
 	// -2 表示 LoadPackageAsync 尚未返回请求 ID；引擎若同步回调会先清成 INDEX_NONE，返回后不得把旧 ID 重新写回。
 	GameplayPreloadRequestId = INDEX_NONE - 1;
-	BeginMapPreloadProgressTracking(GameplayMapPackage);
-	const int32 SubmittedRequestId = LoadPackageAsync(GameplayMapPackage,
+	BeginMapPreloadProgressTracking(GameplayMapPackage, SubmittedEpoch);
+	FLoadPackageAsyncOptionalParams LoadParams;
+	LoadParams.CompletionDelegate = MakeUnique<FLoadPackageAsyncDelegate>(
 		FLoadPackageAsyncDelegate::CreateUObject(this, &ThisClass::HandleGameplayPackagePreloadComplete, SubmittedEpoch));
+	LoadParams.ProgressDelegate = MapLoadProgressDelegate;
+	const int32 SubmittedRequestId = LoadPackageAsync(GameplayMapPackage, MoveTemp(LoadParams));
 	if (ActiveOperation == ECatOnlineOperation::Start && OperationEpoch == SubmittedEpoch
 		&& GameplayPreloadRequestId == INDEX_NONE - 1)
 	{
@@ -1440,6 +1537,7 @@ FCatOnlineSnapshot UCatOnlineSubsystem::GetSnapshot() const
 	Snapshot.bIsEngineLoadMapPending = bIsEngineLoadMapPending;
 	Snapshot.EngineLoadMapName = EngineLoadMapName;
 	Snapshot.bHasMapLoadProgress = TryGetMapPreloadProgressPercent(Snapshot.MapLoadProgressPercent);
+	Snapshot.MapLoadProgressStatus = Snapshot.bHasMapLoadProgress ? CurrentMapLoadProgressStatus : FString();
 	return Snapshot;
 }
 
@@ -1627,9 +1725,12 @@ bool UCatOnlineSubsystem::BeginTravelToFrontend()
 
 	const uint64 SubmittedEpoch = OperationEpoch;
 	FrontendPreloadRequestId = INDEX_NONE - 1;
-	BeginMapPreloadProgressTracking(CatOnlineNames::Frontend);
-	const int32 SubmittedRequestId = LoadPackageAsync(CatOnlineNames::Frontend,
+	BeginMapPreloadProgressTracking(CatOnlineNames::Frontend, SubmittedEpoch);
+	FLoadPackageAsyncOptionalParams LoadParams;
+	LoadParams.CompletionDelegate = MakeUnique<FLoadPackageAsyncDelegate>(
 		FLoadPackageAsyncDelegate::CreateUObject(this, &ThisClass::HandleFrontendPackagePreloadComplete, SubmittedEpoch));
+	LoadParams.ProgressDelegate = MapLoadProgressDelegate;
+	const int32 SubmittedRequestId = LoadPackageAsync(CatOnlineNames::Frontend, MoveTemp(LoadParams));
 	if (ActiveOperation != ECatOnlineOperation::None && OperationEpoch == SubmittedEpoch
 		&& FrontendPreloadRequestId == INDEX_NONE - 1)
 	{

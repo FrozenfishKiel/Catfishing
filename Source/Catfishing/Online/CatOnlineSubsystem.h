@@ -136,17 +136,17 @@ private:
 	/** 当前是否存在任意地图包预载请求；Start 和 Leave 共用该事实给 UI 判断全局遮罩是否有 Online 模型层来源。 */
 	bool IsAnyMapPreloadPending() const;
 
-	/** 读取当前预载地图包的引擎百分比并输出 0 到 100；返回 false 表示引擎没有可量化数据，调用者不得用时间或本地估算补值。 */
+	/** 读取当前预载地图包最近一次真实进度事件对应的百分比；返回 false 表示引擎尚未发出可量化阶段，调用者不得用时间或本地估算补值。 */
 	bool TryGetMapPreloadProgressPercent(float& OutProgressPercent) const;
 
-	/** 开始跟踪一个真实 LoadPackageAsync 包名；它只注册进度采样来刷新快照，不承担完成判断，也不会推动旅行。 */
-	void BeginMapPreloadProgressTracking(const FString& PackageName);
+	/** 开始跟踪一个真实 LoadPackageAsync 包名；它只注册引擎进度事件来刷新快照，不承担完成判断，也不会推动旅行。 */
+	void BeginMapPreloadProgressTracking(const FString& PackageName, uint64 CallbackEpoch);
 
 	/** 停止当前地图包进度跟踪并清空观测值；预载失败、终态清理和反初始化都必须成对调用。 */
 	void StopMapPreloadProgressTracking();
 
-	/** 低频采样引擎当前包加载百分比并广播快照；百分比来源是引擎，不随时间自行增长，也不决定加载完成。 */
-	bool TickMapPreloadProgress(float DeltaSeconds);
+	/** 将 LoadPackageAsync 可能来自异步加载线程的进度事件收口到 GameThread；只有当前 epoch 和包名匹配时才更新 Online 快照。 */
+	void HandleMapPreloadProgressOnGameThread(FName PackageName, EAsyncLoadingProgress ProgressType, uint64 CallbackEpoch);
 
 	/** 在当前操作 epoch 下绑定 Destroy 回调并提交平台清理；FailureAfterDestroy 非 None 表示旅行/解析失败后的补偿。 */
 	bool BeginDestroySession(ECatOnlineError FailureAfterDestroy);
@@ -336,14 +336,17 @@ private:
 	/** 当前正在给 UI 暴露进度的地图长包名；Start 写 Gameplay 包，Leave 写 Frontend 包，空值代表 Online 没有可查询的地图包进度。 */
 	FString ActiveMapLoadPackage;
 
-	/** 上一次是否成功读到引擎百分比；只用于压缩重复快照广播，不作为加载状态权威。 */
-	bool bLastMapLoadProgressAvailable = false;
+	/** 当前地图包是否已经收到 LoadPackageAsync 的真实进度事件；UI 只在该值为真时展示可量化地图包进度。 */
+	bool bMapLoadProgressAvailable = false;
 
-	/** 上一次广播给 UI 的地图包百分比，单位 0 到 100；只和 bLastMapLoadProgressAvailable 一起用于变化过滤。 */
-	float LastMapLoadProgressPercent = 0.0f;
+	/** 当前地图包最近一次引擎进度事件对应的百分比，单位 0 到 100；该值只随真实进度事件变化，不按时间自增。 */
+	float CurrentMapLoadProgressPercent = 0.0f;
 
-	/** 地图包进度采样在 CoreTicker 中的句柄；它只读 GetAsyncLoadPercentage，不把时间当作进度或完成依据。 */
-	FTSTicker::FDelegateHandle MapLoadProgressTickHandle;
+	/** 当前地图包最近一次引擎进度事件的可读阶段；UI 和日志读取它来说明玩家正在等哪一步。 */
+	FString CurrentMapLoadProgressStatus;
+
+	/** 当前地图包提交给 LoadPackageAsync 的进度委托；持有它只为接收引擎事件，完成、失败或终态清理时释放。 */
+	TSharedPtr<FLoadPackageAsyncProgressDelegate> MapLoadProgressDelegate;
 
 	/** 当前 GameInstance 是否处于引擎 LoadMap 阻塞段；PreLoadMap 写入、PostLoadMap 清空，UI 只把它当真实等待原因。 */
 	bool bIsEngineLoadMapPending = false;

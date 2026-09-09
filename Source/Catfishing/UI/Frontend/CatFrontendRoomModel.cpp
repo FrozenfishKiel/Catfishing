@@ -67,8 +67,8 @@ namespace CatFrontendRoomModelText
 			{
 				if (Snapshot.bHasMapLoadProgress)
 				{
-					return FText::FromString(FString::Printf(TEXT("正在加载游戏世界 %d%%。"),
-						FMath::RoundToInt(Snapshot.MapLoadProgressPercent)));
+					return FText::FromString(FString::Printf(TEXT("%s %d%%。"),
+						*Snapshot.MapLoadProgressStatus, FMath::RoundToInt(Snapshot.MapLoadProgressPercent)));
 				}
 				return FText::FromString(TEXT("正在加载游戏世界。"));
 			}
