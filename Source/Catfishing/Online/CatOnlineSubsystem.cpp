@@ -490,8 +490,8 @@ bool UCatOnlineSubsystem::IsAnyMapPreloadPending() const
 
 // 地图包进度读取流程：
 // 1. 只有预载请求仍在队列里时，才用当前包名向引擎查询真实异步加载百分比，负值代表该阶段没有可读进度。
-// 2. 预载回调成功后立刻停止报告包百分比，因为后续 ServerTravel、ClientTravel、LoadMap 和 UI 就绪不是同一个可量化进度。
-// 3. 保存、销毁 Session 或网络补偿这类非地图包阶段返回 false，让 UI 显示真实等待文案而不是用本地时间造假进度。
+// 2. 预载回调成功后立刻停止报告包百分比；后续 ServerTravel、ClientTravel、LoadMap 和 UI 就绪会由 UI 按真实 gate 合成进入游戏总进度。
+// 3. 保存、销毁 Session 或网络补偿这类非地图包阶段返回 false，让 UI 使用对应真实状态，而不是用本地时间造假进度。
 bool UCatOnlineSubsystem::TryGetMapPreloadProgressPercent(float& OutProgressPercent) const
 {
 	OutProgressPercent = 0.0f;
@@ -500,7 +500,7 @@ bool UCatOnlineSubsystem::TryGetMapPreloadProgressPercent(float& OutProgressPerc
 		const float EnginePercent = GetAsyncLoadPercentage(FName(*ActiveMapLoadPackage));
 		if (EnginePercent >= 0.0f)
 		{
-			OutProgressPercent = FMath::Clamp(EnginePercent, 0.0f, 100.0f);
+			OutProgressPercent = EnginePercent;
 			return true;
 		}
 		return false;

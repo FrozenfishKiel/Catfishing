@@ -97,7 +97,7 @@ private:
 		/** 进度值是否允许对外显示成百分号；进入游戏使用真实 gate 合成值，退出主菜单不显示百分号。 */
 		bool bHasProgressPercent = false;
 
-		/** 遮罩条形控件的 0 到 100 总进度；只由 Start、包加载、Travel、World、BeginPlay、Transport 和本地 UI 事实推进，永远不由时间推进。 */
+		/** 遮罩条形控件使用的百分制总进度；只由 Start、包加载、Travel、World、BeginPlay、Transport 和本地 UI 的真实完成事实累加。 */
 		float ProgressPercent = 0.0f;
 	};
 
@@ -125,16 +125,16 @@ private:
 	/** 将当前表现快照写入全局 Loading WBP；进入游戏显示合成总进度，返回主菜单折叠进度条。 */
 	void RefreshGlobalLoadingScreenPresentation(const FCatGlobalLoadingPresentation& Presentation);
 
-	/** 合成进入玩法的总进度；Start、地图包、Travel、World、BeginPlay、Connected 和本地 UI 都必须来自真实 gate，等待态永远不会显示 100%。 */
+	/** 合成进入玩法的总进度；Start、地图包、Travel、World、BeginPlay、Connected 和本地 UI 都必须来自真实 gate，不在显示层改写。 */
 	float GetGameplayLoadingProgressPercent(const FCatOnlineSnapshot& Snapshot) const;
 
 	/** 根据最新 Online 快照更新 Start/Leave 过渡记忆；这份记忆只延续真实请求到 UI 就绪事件，不承担完成判断。 */
 	void TrackGlobalLoadingTransition(const FCatOnlineSnapshot& Snapshot);
 
-	/** 判断进入玩法的等待是否可以收口；必须同时看到 Online 到达 Lake、旅行空闲和本地 HUD/菜单/交互 UI 装配完成。 */
+	/** 判断进入玩法的等待是否可以收口；必须同时看到 Lake/Connected、引擎 World 运行和本地 HUD/菜单/交互 UI 装配完成。 */
 	bool IsGameplayLoadingReadyToDismiss(const FCatOnlineSnapshot& Snapshot) const;
 
-	/** 判断回主菜单的等待是否可以收口；必须同时看到 Online 回到 Frontend、旅行空闲和正式 Frontend Root 入视口。 */
+	/** 判断回主菜单的等待是否可以收口；必须同时看到 Frontend/Idle、引擎 World 运行和正式 Frontend Root 入视口。 */
 	bool IsFrontendLoadingReadyToDismiss(const FCatOnlineSnapshot& Snapshot) const;
 
 	/** 读取 Lyra/CommonLoadingScreen 同类的引擎等待原因；返回 true 时说明 WorldContext、LoadMap、连接或 BeginPlay 仍未完成。 */

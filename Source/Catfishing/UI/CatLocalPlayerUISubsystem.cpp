@@ -38,56 +38,43 @@ namespace CatLocalPlayerUILoadingScreen
 	/** 正式 Loading WBP 的固定类路径；它原本属于 Frontend 资产组，现在直接由 LocalPlayer UI 挂成全局遮罩。 */
 	constexpr const TCHAR* WidgetClassPath = TEXT("/Game/UI/Frontend/WBP_CatFrontendLoading.WBP_CatFrontendLoading_C");
 
-	/** Start 请求已被 Online 接受但地图包还没暴露百分比时的总进度；它只表达请求事实，不随时间增长。 */
-	constexpr float GameplayStartAcceptedProgress = 3.0f;
+	/** Start 请求已被 Online 接受这一真实 gate 在总进度中的权重；它只在请求事实存在时计入。 */
+	constexpr float GameplayStartAcceptedWeight = 3.0f;
 
-	/** 地图包真实百分比映射到总进度的起点；包加载仍由引擎异步加载进度驱动。 */
-	constexpr float GameplayPackageProgressStart = 8.0f;
+	/** 地图包异步加载在总进度中的权重；这一段按引擎 LoadPackageAsync 的真实百分比连续推进。 */
+	constexpr float GameplayPackageWeight = 65.0f;
 
-	/** 地图包真实百分比映射到总进度的终点；后续切图和 UI 就绪各自用真实 gate 推进。 */
-	constexpr float GameplayPackageProgressEnd = 68.0f;
+	/** ServerTravel 或 ClientTravel 已提交这一真实 gate 在总进度中的权重。 */
+	constexpr float GameplayTravelSubmittedWeight = 6.0f;
 
-	/** 旅行请求已提交给 ServerTravel 或 ClientTravel 时的总进度；只有 Online 运输事实进入排队才可到达。 */
-	constexpr float GameplayTravelQueuedProgress = 74.0f;
+	/** 引擎切图阻塞已结束这一真实 gate 在总进度中的权重；它不靠等待时长推断。 */
+	constexpr float GameplayEngineTravelCompleteWeight = 8.0f;
 
-	/** 引擎 WorldContext 仍在 TravelURL、PendingNetGame 或 PreLoadMap 阶段时的总进度。 */
-	constexpr float GameplayEngineTravelProgress = 82.0f;
+	/** Online 已确认玩法 World 到达这一真实 gate 在总进度中的权重。 */
+	constexpr float GameplayWorldReachedWeight = 6.0f;
 
-	/** PostLoadMap 已确认玩法 World 到达时的总进度；它不代表 Pawn 和 HUD 已经可用。 */
-	constexpr float GameplayWorldReachedProgress = 88.0f;
+	/** 玩法 World 已经 GameState 可用且 BeginPlay 这一真实 gate 在总进度中的权重。 */
+	constexpr float GameplayWorldRunningWeight = 4.0f;
 
-	/** 玩法 World 已经具备 GameState 并 BeginPlay 时的总进度；之后仍要等待本地玩家 UI。 */
-	constexpr float GameplayWorldRunningProgress = 92.0f;
+	/** Online 运输事实已收口为 Connected 这一真实 gate 在总进度中的权重。 */
+	constexpr float GameplayTransportConnectedWeight = 3.0f;
 
-	/** Online 运输事实已收口为 Connected 时的总进度；本地玩家表现层仍可能尚未装配。 */
-	constexpr float GameplayTransportConnectedProgress = 95.0f;
+	/** 本地玩家 Controller 已绑定这一真实 gate 在总进度中的权重。 */
+	constexpr float GameplayLocalControllerWeight = 1.0f;
 
-	/** 本地玩家 Controller 已绑定时的总进度；后续还要等 Pawn、HUD 和页面控制器。 */
-	constexpr float GameplayLocalControllerProgress = 96.0f;
+	/** 本地猫 Pawn 已出现这一真实 gate 在总进度中的权重。 */
+	constexpr float GameplayLocalPawnWeight = 1.0f;
 
-	/** 本地猫 Pawn 已经出现时的总进度；HUD 和局内 UI 未就绪时仍不能放掉遮罩。 */
-	constexpr float GameplayLocalPawnProgress = 97.0f;
+	/** HUD 已加入视口这一真实 gate 在总进度中的权重。 */
+	constexpr float GameplayHudVisibleWeight = 1.0f;
 
-	/** HUD 已经加入视口时的总进度；背包、局内菜单和交互控制器还要继续确认。 */
-	constexpr float GameplayHudVisibleProgress = 98.0f;
+	/** 局内 UI 控制器已装配这一真实 gate 在总进度中的权重；到这里再加前面 gate 会自然得到 100。 */
+	constexpr float GameplayLocalUIReadyWeight = 2.0f;
 
-	/** 局内 UI 控制器基本装配完成时的等待上限；真正 ready 后直接隐藏，不在 100% 停留。 */
-	constexpr float GameplayLocalUIReadyProgress = 99.0f;
-
-	/** 加载遮罩仍可见时允许显示的最大总进度；100 只属于 ready 后的瞬时完成，不在等待态展示。 */
-	constexpr float GameplayVisibleWaitingProgressCap = 99.0f;
-
-	// 地图包进度映射流程：把引擎 LoadPackageAsync 的真实百分比映射到进入游戏总进度的包加载区间，不把时间或阶段动画混入连续进度。
-	static float MapPackageProgressToGameplayProgress(const float PackagePercent)
+	// 地图包进度贡献流程：把引擎 LoadPackageAsync 的真实百分比换成本项目总进度中的贡献值，显示层后续按合成结果直接写入。
+	static float GetPackageProgressContribution(const float PackagePercent)
 	{
-		const float ClampedPackagePercent = FMath::Clamp(PackagePercent, 0.0f, 100.0f);
-		return FMath::Lerp(GameplayPackageProgressStart, GameplayPackageProgressEnd, ClampedPackagePercent / 100.0f);
-	}
-
-	// 地图包百分比展示流程：只要 LoadPackageAsync 还没触发完成回调，哪怕引擎采样已经接近 100，也不把等待态写成完成态。
-	static float ClampVisiblePackageProgressWhilePending(const float PackagePercent)
-	{
-		return FMath::Min(FMath::Clamp(PackagePercent, 0.0f, 100.0f), 99.0f);
+		return GameplayPackageWeight * (PackagePercent / 100.0f);
 	}
 
 	// Start 等待识别流程：只认 Online 明确的 Start、玩法包预载、玩法旅行排队或正在前往 Lake 的状态。
@@ -403,9 +390,7 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 		OutPresentation.ProgressPercent = GetGameplayLoadingProgressPercent(Snapshot);
 		if (Snapshot.bIsGameplayLoadPending)
 		{
-			const float VisiblePackagePercent = CatLocalPlayerUILoadingScreen::ClampVisiblePackageProgressWhilePending(
-				Snapshot.MapLoadProgressPercent);
-			const int32 PackageDisplayPercent = FMath::RoundToInt(VisiblePackagePercent);
+			const int32 PackageDisplayPercent = FMath::RoundToInt(Snapshot.MapLoadProgressPercent);
 			OutPresentation.StatusText = FText::FromString(TEXT("正在读取游戏世界"));
 			OutPresentation.DetailText = Snapshot.bHasMapLoadProgress
 				? FText::FromString(FString::Printf(TEXT("地图包加载 %d%%"), PackageDisplayPercent))
@@ -561,7 +546,7 @@ void UCatLocalPlayerUISubsystem::HideGlobalLoadingScreen()
 
 // 全局遮罩表现刷新流程：
 // 1. 先写高层目标和当前真实步骤，让玩家能看到正在等保存、销毁房间、切图还是 UI 装配。
-// 2. 进入游戏时显示由真实 gate 合成的总进度并追加百分号；总进度来自状态事实，不来自倒计时或动画时长。
+// 2. 进入游戏时把模型合成出的总进度和百分号直接写到 WBP；总进度来自状态事实，不来自倒计时或动画时长。
 // 3. 返回主菜单会折叠进度条，只更新文字状态；后续可由资产侧替换成旋转动画，代码不做定时器兜底。
 void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreenPresentation(const FCatGlobalLoadingPresentation& Presentation)
 {
@@ -570,8 +555,8 @@ void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreenPresentation(const FC
 		return;
 	}
 	LastGlobalLoadingStatusText = Presentation.StatusText;
-	const float ClampedPercent = FMath::Clamp(Presentation.ProgressPercent, 0.0f, 100.0f);
-	const int32 DisplayPercent = FMath::RoundToInt(ClampedPercent);
+	const float DisplayedProgressPercent = Presentation.ProgressPercent;
+	const int32 DisplayPercent = FMath::RoundToInt(DisplayedProgressPercent);
 	const FText EffectiveStatusText = Presentation.StatusText.IsEmpty()
 		? FText::FromString(TEXT("正在加载。")) : Presentation.StatusText;
 	if (UTextBlock* StatusTextBlock = Cast<UTextBlock>(
@@ -604,75 +589,89 @@ void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreenPresentation(const FC
 	{
 		ProgressBar->SetVisibility(Presentation.bShowProgressBar ? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 		ProgressBar->SetIsMarquee(false);
-		ProgressBar->SetPercent(Presentation.bShowProgressBar ? ClampedPercent / 100.0f : 0.0f);
+		ProgressBar->SetPercent(Presentation.bShowProgressBar ? DisplayedProgressPercent / 100.0f : 0.0f);
 	}
 }
 
 // 进入游戏总进度合成流程：
-// 1. 先用 Online 的 Start/预载/旅行事实确认请求至少已经受理。
-// 2. 地图包阶段只消费引擎给出的真实 LoadPackageAsync 百分比，并映射到总进度的包加载区间。
-// 3. 后续 Travel、LoadMap、World 到达、BeginPlay、Transport Connected、Controller/Pawn/HUD 和页面控制器只在对应真实 gate 成立时离散推进。
-// 4. 只要遮罩还没被 ready 条件收起，显示值就封顶在 99，避免玩家看到 100% 仍在等待。
+// 1. 先用 Online 的 Start/预载/旅行事实确认请求至少已经受理，再把这个事实计入总进度。
+// 2. 地图包阶段只消费引擎给出的真实 LoadPackageAsync 百分比，包完成后才计入完整包加载权重。
+// 3. 后续 Travel、LoadMap、World 到达、BeginPlay、Transport Connected、Controller/Pawn/HUD 和页面控制器只在对应真实 gate 成立时继续累加。
+// 4. 返回值保持由真实事实累加得出的结果；如果展示异常，应修正事实来源和权重对应关系，不在显示层改写数值。
 float UCatLocalPlayerUISubsystem::GetGameplayLoadingProgressPercent(const FCatOnlineSnapshot& Snapshot) const
 {
 	using namespace CatLocalPlayerUILoadingScreen;
-	float ProgressPercent = GameplayStartAcceptedProgress;
+	float ProgressPercent = 0.0f;
+	const bool bStartAccepted = IsGameplayStartLoadingSnapshot(Snapshot)
+		|| GlobalLoadingOperation == ECatOnlineOperation::Start;
+	if (bStartAccepted)
+	{
+		ProgressPercent += GameplayStartAcceptedWeight;
+	}
 	if (Snapshot.bIsGameplayLoadPending)
 	{
-		ProgressPercent = Snapshot.bHasMapLoadProgress
-			? MapPackageProgressToGameplayProgress(Snapshot.MapLoadProgressPercent)
-			: GameplayPackageProgressStart;
-		return FMath::Min(ProgressPercent, GameplayVisibleWaitingProgressCap);
+		if (Snapshot.bHasMapLoadProgress)
+		{
+			ProgressPercent += GetPackageProgressContribution(Snapshot.MapLoadProgressPercent);
+		}
+		return ProgressPercent;
 	}
 	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	const UGameInstance* GameInstance = LocalPlayer ? LocalPlayer->GetGameInstance() : nullptr;
 	const FWorldContext* WorldContext = GameInstance ? GameInstance->GetWorldContext() : nullptr;
 	const UWorld* World = WorldContext ? WorldContext->World() : nullptr;
-	if (Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake
+	const bool bGameplayTravelSubmitted = Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake
 		|| Snapshot.WorldState == ECatOnlineWorldState::Lake
 		|| Snapshot.TransportState == ECatOnlineTransportState::TravelQueued
-		|| Snapshot.TransportState == ECatOnlineTransportState::Connected)
+		|| Snapshot.TransportState == ECatOnlineTransportState::Connected;
+	if (bGameplayTravelSubmitted)
 	{
-		ProgressPercent = FMath::Max(ProgressPercent, GameplayTravelQueuedProgress);
+		ProgressPercent += GameplayPackageWeight;
+		ProgressPercent += GameplayTravelSubmittedWeight;
 	}
-	if (Snapshot.bIsEngineLoadMapPending
-		|| (WorldContext && !WorldContext->TravelURL.IsEmpty())
-		|| (WorldContext && WorldContext->PendingNetGame != nullptr))
+	const bool bEngineTravelComplete = bGameplayTravelSubmitted
+		&& Snapshot.WorldState == ECatOnlineWorldState::Lake
+		&& !Snapshot.bIsEngineLoadMapPending
+		&& WorldContext
+		&& World
+		&& WorldContext->TravelURL.IsEmpty()
+		&& WorldContext->PendingNetGame == nullptr;
+	if (bEngineTravelComplete)
 	{
-		ProgressPercent = FMath::Max(ProgressPercent, GameplayEngineTravelProgress);
+		ProgressPercent += GameplayEngineTravelCompleteWeight;
 	}
 	if (Snapshot.WorldState == ECatOnlineWorldState::Lake)
 	{
-		ProgressPercent = FMath::Max(ProgressPercent, GameplayWorldReachedProgress);
+		ProgressPercent += GameplayWorldReachedWeight;
 		if (World && World->GetGameState<AGameStateBase>() && World->HasBegunPlay() && !World->IsInSeamlessTravel())
 		{
-			ProgressPercent = FMath::Max(ProgressPercent, GameplayWorldRunningProgress);
+			ProgressPercent += GameplayWorldRunningWeight;
 		}
 	}
 	if (Snapshot.TransportState == ECatOnlineTransportState::Connected)
 	{
-		ProgressPercent = FMath::Max(ProgressPercent, GameplayTransportConnectedProgress);
+		ProgressPercent += GameplayTransportConnectedWeight;
 	}
 	APlayerController* Controller = BoundPlayerController.Get();
 	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
 	if (Controller && Controller->IsLocalController())
 	{
-		ProgressPercent = FMath::Max(ProgressPercent, GameplayLocalControllerProgress);
+		ProgressPercent += GameplayLocalControllerWeight;
 	}
 	if (Character)
 	{
-		ProgressPercent = FMath::Max(ProgressPercent, GameplayLocalPawnProgress);
+		ProgressPercent += GameplayLocalPawnWeight;
 	}
 	if (HUDWidget && HUDWidget->IsInViewport())
 	{
-		ProgressPercent = FMath::Max(ProgressPercent, GameplayHudVisibleProgress);
+		ProgressPercent += GameplayHudVisibleWeight;
 	}
 	if (InventoryPageController && LakeMainMenuController && InteractionPageController
 		&& AttachedPlayerLakeCharacter.Get() == Character)
 	{
-		ProgressPercent = FMath::Max(ProgressPercent, GameplayLocalUIReadyProgress);
+		ProgressPercent += GameplayLocalUIReadyWeight;
 	}
-	return FMath::Min(ProgressPercent, GameplayVisibleWaitingProgressCap);
+	return ProgressPercent;
 }
 
 // 过渡记忆流程：Start/Leave 的真实快照出现时记录当前请求；错误或真实就绪时清空，避免 Online 结案早于 UI 就绪导致遮罩提前消失。
@@ -706,7 +705,7 @@ void UCatLocalPlayerUISubsystem::TrackGlobalLoadingTransition(const FCatOnlineSn
 	}
 }
 
-// 进入玩法收口流程：只有 Online 同时确认目标世界是 Lake、Transport 已 Connected，且本地 Controller 的猫 Pawn、HUD、局内菜单和交互控制器都装配好，遮罩才允许消失。
+// 进入玩法收口流程：只有 Online 确认 Lake/Connected、引擎 World 已 BeginPlay，且本地 Controller 的猫 Pawn、HUD、局内菜单和交互控制器都装配好，遮罩才允许消失。
 bool UCatLocalPlayerUISubsystem::IsGameplayLoadingReadyToDismiss(const FCatOnlineSnapshot& Snapshot) const
 {
 	if (Snapshot.WorldState != ECatOnlineWorldState::Lake
@@ -714,6 +713,15 @@ bool UCatLocalPlayerUISubsystem::IsGameplayLoadingReadyToDismiss(const FCatOnlin
 		|| Snapshot.bIsGameplayLoadPending
 		|| Snapshot.bIsMapPreloadPending
 		|| Snapshot.bIsEngineLoadMapPending)
+	{
+		return false;
+	}
+	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	const UGameInstance* GameInstance = LocalPlayer ? LocalPlayer->GetGameInstance() : nullptr;
+	const FWorldContext* WorldContext = GameInstance ? GameInstance->GetWorldContext() : nullptr;
+	UWorld* World = WorldContext ? WorldContext->World() : nullptr;
+	if (!WorldContext || !World || !WorldContext->TravelURL.IsEmpty() || WorldContext->PendingNetGame != nullptr
+		|| !World->GetGameState<AGameStateBase>() || !World->HasBegunPlay() || World->IsInSeamlessTravel())
 	{
 		return false;
 	}
@@ -728,15 +736,26 @@ bool UCatLocalPlayerUISubsystem::IsGameplayLoadingReadyToDismiss(const FCatOnlin
 		&& InteractionPageController;
 }
 
-// 回主菜单收口流程：只有 Online 同时确认目标世界是 Frontend、Transport 已 Idle，地图包与 LoadMap 都不再 pending，并且正式 Frontend Root 已入视口，遮罩才允许消失。
+// 回主菜单收口流程：只有 Online 确认 Frontend/Idle、引擎 World 已 BeginPlay，并且正式 Frontend Root 已入视口，遮罩才允许消失。
 bool UCatLocalPlayerUISubsystem::IsFrontendLoadingReadyToDismiss(const FCatOnlineSnapshot& Snapshot) const
 {
-	return Snapshot.WorldState == ECatOnlineWorldState::Frontend
-		&& Snapshot.TransportState == ECatOnlineTransportState::Idle
-		&& !Snapshot.bIsMapPreloadPending
-		&& !Snapshot.bIsEngineLoadMapPending
-		&& FrontendRootWidget
-		&& FrontendRootWidget->IsInViewport();
+	if (Snapshot.WorldState != ECatOnlineWorldState::Frontend
+		|| Snapshot.TransportState != ECatOnlineTransportState::Idle
+		|| Snapshot.bIsMapPreloadPending
+		|| Snapshot.bIsEngineLoadMapPending)
+	{
+		return false;
+	}
+	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	const UGameInstance* GameInstance = LocalPlayer ? LocalPlayer->GetGameInstance() : nullptr;
+	const FWorldContext* WorldContext = GameInstance ? GameInstance->GetWorldContext() : nullptr;
+	UWorld* World = WorldContext ? WorldContext->World() : nullptr;
+	if (!WorldContext || !World || !WorldContext->TravelURL.IsEmpty() || WorldContext->PendingNetGame != nullptr
+		|| !World->GetGameState<AGameStateBase>() || !World->HasBegunPlay() || World->IsInSeamlessTravel())
+	{
+		return false;
+	}
+	return FrontendRootWidget && FrontendRootWidget->IsInViewport();
 }
 
 // Lyra 式引擎 gate 读取流程：按 WorldContext、LoadMap、TravelURL、PendingNetGame、GameState、BeginPlay、SeamlessTravel 的真实顺序检查；命中后返回玩家文案和工程锚点。
