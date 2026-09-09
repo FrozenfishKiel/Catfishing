@@ -101,16 +101,19 @@ public:
 	double HeldRodMinimumPitchDegrees = -35.0;
 	UPROPERTY(Config, EditAnywhere, Category="Rod|HeldPose", meta=(ClampMin="-89", ClampMax="89", Units="deg"))
 	double HeldRodMaximumPitchDegrees = 70.0;
-	/** 实际鱼竿的角速度上限；猫与鱼线的净转矩连续决定本步角速度。 */
+	/** 实际鱼竿的全局角速度上限；净转矩先改变角速度，受载时允许连续减速。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="1", Units="deg/s"))
 	double HeldRodMaximumAngularSpeedDegreesPerSecond = 360.0;
-	/** 猫端瞄准施力的阻尼响应时间；净转矩抵消时自然停转，不设角度锁。 */
+	/** 猫端瞄准转矩的响应尺度；与最大转速的乘积为达到满力所需的目标偏差。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.01", Units="s"))
 	double HeldRodAngularResistanceResponseSeconds = 0.08;
+	/** 杆和握杆动作的等效转动惯性时间；保存角速度，卸载或恢复力量时连续加减速。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.01", Units="s"))
+	double HeldRodAngularInertiaSeconds = 0.08;
 	/** 鱼游向/松绷线改变时，有向负载的指数插值时间常数；越大越柔和，不改变稳态平衡角。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.01", Units="s"))
 	double HeldRodFishPullSmoothingSeconds = 0.15;
-	/** 鱼负载下追加的粘性阻尼倍率；3 表示满负载时以四倍阻尼减缓摆动，空载与平衡角不变。 */
+	/** 鱼负载下追加的粘性阻尼倍率；3 对应满载倍率4，实际阻尼还受空载临界阻尼下限约束。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0"))
 	double HeldRodLoadedAngularDampingRatio = 3.0;
 

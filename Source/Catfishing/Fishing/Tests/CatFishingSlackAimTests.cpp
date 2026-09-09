@@ -178,8 +178,14 @@ bool FCatFishingSlackAimRodContinuityTest::RunTest(const FString& Parameters)
 	FHeldRodFixture Fixture;
 	if (!Fixture.Create(*this) || !Fixture.LoadAgainstOldIntent(*this)) return false;
 	ACatFishingRodActor* Rod = Fixture.Rod;
+	// Press while the real rod is moving, so clearing angular velocity cannot hide behind equilibrium.
+	Fixture.Controller->SetControlRotation(FRotator(0.0, 0.0, 0.0));
+	if (!TestTrue(TEXT("loaded rod starts turning back before the right-button edge"),
+		Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0))) return false;
 	FCatFishingRodRotationPrediction Before;
 	if (!TestTrue(TEXT("read production loaded rotation input"), Rod->GetRotationPredictionFromAuthority(0.0, Before))) return false;
+	TestTrue(TEXT("rebase fixture has actual angular velocity to preserve"),
+		!Before.Input.PreviousAngularVelocityRadiansPerSecond.IsNearlyZero());
 	const FTransform PoseBefore = Rod->GetActorTransform();
 	const auto EffortBefore = Rod->GetAuthoritativeRotationEffortSnapshot();
 	const auto Press = Sample(10, 120.0, 0.0, Rod);
@@ -193,6 +199,8 @@ bool FCatFishingSlackAimRodContinuityTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("press cannot teleport rod or grip"), Rod->GetActorTransform().Equals(PoseBefore, 1e-8));
 	TestTrue(TEXT("press retains the smoothed fish load"),
 		Rebased.Input.PreviousSmoothedFishPullStrengthMeters.Equals(Before.Input.PreviousSmoothedFishPullStrengthMeters, 1e-8));
+	TestTrue(TEXT("right-button rebase preserves ongoing angular velocity"),
+		Rebased.Input.PreviousAngularVelocityRadiansPerSecond.Equals(Before.Input.PreviousAngularVelocityRadiansPerSecond, 1e-8));
 	TestEqual(TEXT("press does not lower authoritative fish torque"), Rebased.Input.MaximumFishTorque, Before.Input.MaximumFishTorque);
 	TestEqual(TEXT("press retains effort epoch"), Rod->GetAuthoritativeRotationEffortSnapshot().Epoch, EffortBefore.Epoch);
 	TestEqual(TEXT("press cannot erase already accumulated effort"),
@@ -215,6 +223,8 @@ bool FCatFishingSlackAimRodContinuityTest::RunTest(const FString& Parameters)
 	Rod->GetRotationPredictionFromAuthority(0.0, Unloaded);
 	TestTrue(TEXT("unload publication does not erase smoothed residual force"),
 		Unloaded.Input.PreviousSmoothedFishPullStrengthMeters.Equals(Before.Input.PreviousSmoothedFishPullStrengthMeters, 1e-8));
+	TestTrue(TEXT("load publication preserves angular velocity until real integration"),
+		Unloaded.Input.PreviousAngularVelocityRadiansPerSecond.Equals(Before.Input.PreviousAngularVelocityRadiansPerSecond, 1e-8));
 	for (int32 Frame = 0; Frame < 240; ++Frame)
 	{
 		if (!Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0)) return false;

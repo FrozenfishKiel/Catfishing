@@ -28,13 +28,20 @@ struct CATFISHING_API FCatFishingRodRotationInput
 	FVector PullAxis = FVector::ForwardVector;
 	/** 上一帧已应用的有向鱼线负载，跨固定步保持；不是额外的鱼端驱动力。 */
 	FVector PreviousSmoothedFishPullStrengthMeters = FVector::ZeroVector;
+	/** 上一实际步的世界空间角速度；预测只读副本，单位 rad/s。 */
+	FVector PreviousAngularVelocityRadiansPerSecond = FVector::ZeroVector;
 	double CatTorqueCapacity = 0.0;
 	double MaximumFishTorque = 0.0;
 	double MaximumAngularSpeedDegreesPerSecond = 360.0;
 	double ResponseSeconds = 0.08;
+	/** 归一化转矩作用下的等效转动惯性时间，单位秒，不是物理 kg*m^2。 */
+	double AngularInertiaSeconds = 0.08;
 	double FishPullSmoothingSeconds = 0.15;
-	/** 鱼负载下追加的粘性阻尼倍率，无量纲；零负载时不改变瞄准响应，零值可禁用追加阻尼。 */
+	/** 鱼负载下追加的粘性阻尼倍率；实际阻尼至少满足空载瞄准的临界阻尼。 */
 	double LoadedAngularDampingRatio = 3.0;
+	/** 身体俯仰限位；实际运动与鱼线候选预测共用，不属于瞄准输入限幅。 */
+	double MinimumPitchDegrees = -89.0;
+	double MaximumPitchDegrees = 89.0;
 	double DeltaSeconds = 0.0;
 };
 
@@ -44,6 +51,10 @@ struct CATFISHING_API FCatFishingRodRotationResult
 	FRotator ActualAim = FRotator::ZeroRotator;
 	FVector NetTorque = FVector::ZeroVector;
 	FVector SmoothedFishPullStrengthMeters = FVector::ZeroVector;
+	FVector AngularVelocityRadiansPerSecond = FVector::ZeroVector;
+	/** 最后亚步的实际速度变化率，含身体限位的制动。 */
+	FVector AngularAccelerationRadiansPerSecondSquared = FVector::ZeroVector;
+	bool bHitPitchLimit = false;
 	double AngularSpeedDegreesPerSecond = 0.0;
 	/** 本步最后一个亚步实际使用的阻尼倍率，供开发包诊断。 */
 	double AppliedAngularDampingMultiplier = 1.0;
@@ -60,8 +71,6 @@ struct CATFISHING_API FCatFishingRodRotationPrediction
 	FCatFishingRodRotationInput Input;
 	FVector HolderWorldPosition = FVector::ZeroVector;
 	FVector TipOffsetInAimSpace = FVector::ZeroVector;
-	double MinimumPitchDegrees = -89.0;
-	double MaximumPitchDegrees = 89.0;
 	/** 接力等待新主位瞄准时保持实际姿态，载体平移仍继续预测。 */
 	bool bHoldActualAim = false;
 	bool bValid = false;
@@ -91,7 +100,7 @@ private:
 	FCatFishingRodRotationEffortSnapshot PendingEffort;
 };
 
-/** 鱼线负载先连续插值，再做有阻尼的转矩对抗；不保存锁定状态，也不裁剪允许角度。 */
+/** 鱼线负载先连续插值，再积分带惯性和阻尼的转矩对抗；共用身体限位，不新增受力角度锁。 */
 class CATFISHING_API FCatFishingRodResistanceModel
 {
 public:

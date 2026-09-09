@@ -251,6 +251,7 @@ bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresen
 		|| (PresentationState.bBroken && !Previous.bBroken))
 	{
 		ResetAuthoritativeRotationEffort();
+		AuthoritativeRodAngularVelocityRadiansPerSecond = FVector::ZeroVector;
 		HeldAimInput.Reset();
 		ClearCarrierMovementBinding();
 		CarrierConstraintState = FCatFishingCarrierConstraintState{};
@@ -453,11 +454,13 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 		GroupMotionState = FCatFishingGroupMotionState{};
 		ClearCarrierMovementBinding();
 		SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
+		AuthoritativeRodAngularVelocityRadiansPerSecond = FVector::ZeroVector;
 		HeldAimInput.Reset();
 	}
 	if (Next.bFightActive != CarrierConstraintState.bFightActive)
 	{
 		ResetAuthoritativeRotationEffort();
+		AuthoritativeRodAngularVelocityRadiansPerSecond = FVector::ZeroVector;
 	}
 	if (Next.AimInputEpoch != CarrierConstraintState.AimInputEpoch) HeldAimInput.Reset();
 	CarrierConstraintState = Next;
@@ -478,6 +481,7 @@ void ACatFishingRodActor::ClearCarrierConstraintFromAuthority()
 	const uint32 StoppedAimInputEpoch = FMath::Max(CarrierConstraintState.AimInputEpoch, GroupMotionState.AimInputEpoch);
 	GroupMotionState = FCatFishingGroupMotionState{};
 	SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
+	AuthoritativeRodAngularVelocityRadiansPerSecond = FVector::ZeroVector;
 	HeldAimInput.Reset();
 	bAwaitingNewHolderAim = false;
 	ResetAuthoritativeRotationEffort();
@@ -706,6 +710,8 @@ bool ACatFishingRodActor::GetRotationPredictionFromAuthority(const double DeltaS
 		|| Settings->HeldRodMaximumAngularSpeedDegreesPerSecond <= 0.0
 		|| !FMath::IsFinite(Settings->HeldRodAngularResistanceResponseSeconds)
 		|| Settings->HeldRodAngularResistanceResponseSeconds <= 0.0
+		|| !FMath::IsFinite(Settings->HeldRodAngularInertiaSeconds)
+		|| Settings->HeldRodAngularInertiaSeconds <= 0.0
 		|| !FMath::IsFinite(Settings->HeldRodFishPullSmoothingSeconds)
 		|| Settings->HeldRodFishPullSmoothingSeconds <= 0.0
 		|| !FMath::IsFinite(Settings->HeldRodLoadedAngularDampingRatio)
@@ -734,18 +740,20 @@ bool ACatFishingRodActor::GetRotationPredictionFromAuthority(const double DeltaS
 	RotationInput.RequestedAim = RequestedAimRotation;
 	RotationInput.PullAxis = CarrierConstraintState.RodPullAxis;
 	RotationInput.PreviousSmoothedFishPullStrengthMeters = SmoothedRodFishPullStrengthMeters;
+	RotationInput.PreviousAngularVelocityRadiansPerSecond = AuthoritativeRodAngularVelocityRadiansPerSecond;
 	RotationInput.CatTorqueCapacity = CarrierConstraintState.CatTorqueCapacityStrengthMeters;
 	RotationInput.MaximumFishTorque = CarrierConstraintState.MaximumFishTorqueStrengthMeters;
 	RotationInput.MaximumAngularSpeedDegreesPerSecond = Settings->HeldRodMaximumAngularSpeedDegreesPerSecond;
 	RotationInput.ResponseSeconds = Settings->HeldRodAngularResistanceResponseSeconds;
+	RotationInput.AngularInertiaSeconds = Settings->HeldRodAngularInertiaSeconds;
 	RotationInput.FishPullSmoothingSeconds = Settings->HeldRodFishPullSmoothingSeconds;
 	RotationInput.LoadedAngularDampingRatio = Settings->HeldRodLoadedAngularDampingRatio;
+	RotationInput.MinimumPitchDegrees = Settings->HeldRodMinimumPitchDegrees;
+	RotationInput.MaximumPitchDegrees = Settings->HeldRodMaximumPitchDegrees;
 	RotationInput.DeltaSeconds = DeltaSeconds;
 	OutPrediction.HolderWorldPosition = GetGroupAnchorWorld();
 	OutPrediction.TipOffsetInAimSpace = Settings->HeldRodGripOffsetCentimeters
 		+ GripCanonicalLocalTransform.InverseTransformPosition(RodTipCanonicalLocalTransform.GetLocation());
-	OutPrediction.MinimumPitchDegrees = Settings->HeldRodMinimumPitchDegrees;
-	OutPrediction.MaximumPitchDegrees = Settings->HeldRodMaximumPitchDegrees;
 	OutPrediction.bHoldActualAim = bAwaitingNewHolderAim;
 	OutPrediction.bValid = true;
 	return true;
@@ -770,6 +778,7 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 		if (bNewHolder) ResetAuthoritativeRotationEffort();
 		AuthoritativeAimHolder = HolderPawn;
 		SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
+		AuthoritativeRodAngularVelocityRadiansPerSecond = FVector::ZeroVector;
 	}
 	else if (!bHeldAimInitialized || bNewHolder || !CarrierConstraintState.bFightActive)
 	{
@@ -780,6 +789,7 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 		HeldAimInput.Reset();
 		if (!bNewHolder || !bHeldAimInitialized) AuthoritativeHeldAimRotation = RequestedAimRotation;
 		SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
+		AuthoritativeRodAngularVelocityRadiansPerSecond = FVector::ZeroVector;
 		bHeldAimInitialized = true;
 		AuthoritativeAimHolder = HolderPawn;
 	}
@@ -793,9 +803,8 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 		AuthoritativeRotationEffort.IntegratedSeconds += RotationStep.IntegratedSeconds;
 		AuthoritativeHeldAimRotation = RotationStep.ActualAim;
 		SmoothedRodFishPullStrengthMeters = RotationStep.SmoothedFishPullStrengthMeters;
-		// 保留握持姿态原有的身体俯仰范围；阻力本身没有角度裁剪。
-		AuthoritativeHeldAimRotation.Pitch = FMath::ClampAngle(AuthoritativeHeldAimRotation.Pitch,
-			Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
+		// 俯仰触界后的方向和角速度由同一纯模型共同裁决，预测也消费这套结果。
+		AuthoritativeRodAngularVelocityRadiansPerSecond = RotationStep.AngularVelocityRadiansPerSecond;
 	}
 	const FRotator AimRotation = AuthoritativeHeldAimRotation;
 	const FVector GripLocation = GetGroupAnchorWorld()
@@ -823,6 +832,7 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 				"MaximumFishTorque=%.3f CatTorqueCapacity=%.3f TorqueBalanced=%s "
 				"AimRebased=%s AimInputEpoch=%u AimSequence=%lld "
 				"PullAxis=%s AppliedFishPull=%s FishPullSmoothingSeconds=%.3f LoadedAngularDampingRatio=%.3f AppliedAngularDampingMultiplier=%.3f "
+				"AngularVelocityRadS=%s AngularAccelerationRadS2=%s AngularInertiaSeconds=%.3f PitchLimited=%s "
 				"RotationEffortEpoch=%llu RotationExertionSquaredSeconds=%.3f RotationPositiveWorkRadians=%.3f RotationIntegratedSeconds=%.3f "
 				"HolderPlayerId=%d Holder=%s World=%s NetMode=%d Authority=true LocalRole=%d "
 				"Frame=%llu WorldTime=%.6f DeltaSeconds=%.6f DeltaYaw=%.5f DeltaPitch=%.5f "
@@ -837,6 +847,9 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 			*FVector(CarrierConstraintState.RodPullAxis).ToCompactString(),
 			*SmoothedRodFishPullStrengthMeters.ToCompactString(), Settings->HeldRodFishPullSmoothingSeconds,
 			Settings->HeldRodLoadedAngularDampingRatio, RotationStep.AppliedAngularDampingMultiplier,
+			*AuthoritativeRodAngularVelocityRadiansPerSecond.ToCompactString(),
+			*RotationStep.AngularAccelerationRadiansPerSecondSquared.ToCompactString(), Settings->HeldRodAngularInertiaSeconds,
+			RotationStep.bHitPitchLimit ? TEXT("true") : TEXT("false"),
 			AuthoritativeRotationEffort.Epoch, AuthoritativeRotationEffort.ExertionSquaredSeconds,
 			AuthoritativeRotationEffort.PositiveWorkRadians, AuthoritativeRotationEffort.IntegratedSeconds,
 			PresentationState.HolderPlayerState->GetPlayerId(),
@@ -866,6 +879,7 @@ bool ACatFishingRodActor::PlaceOnGroundFromAuthority(const FTransform& GroundTra
 	AuthoritativeRodTipVelocity = FVector::ZeroVector;
 	AuthoritativeHolderVelocity = FVector::ZeroVector;
 	SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
+	AuthoritativeRodAngularVelocityRadiansPerSecond = FVector::ZeroVector;
 	bHeldAimInitialized = false;
 	HeldAimInput.Reset();
 	AuthoritativeAimHolder.Reset();
@@ -1082,6 +1096,7 @@ void ACatFishingRodActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	ResetAuthoritativeRotationEffort();
 	ClearCarrierMovementBinding();
 	SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
+	AuthoritativeRodAngularVelocityRadiansPerSecond = FVector::ZeroVector;
 	// 只有权威端且已绑定 Owner 时才需要清理服务里的“已部署鱼竿”登记，避免野指针残留。
 	if (HasAuthority() && PresentationState.OwnerPlayerState)
 	{

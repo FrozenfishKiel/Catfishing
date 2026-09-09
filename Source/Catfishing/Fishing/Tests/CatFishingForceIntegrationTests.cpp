@@ -481,10 +481,11 @@ bool FCatFishingShortLineTractionTest::RunTest(const FString& Parameters)
 					FCatFishingRodRotationPrediction After;
 					TestTrue(TEXT("held rod supplies the shared rotation prediction"), Step.Trace.bRodRotationPredicted
 						&& Rod->GetRotationPredictionFromAuthority(C.FixedStepSeconds, After));
-					TestTrue(TEXT("candidate tensions do not mutate the live pose or smoothing history"),
+					TestTrue(TEXT("candidate tensions do not mutate live pose, smoothing or angular velocity history"),
 						Rod->GetActorTransform().Equals(PoseBeforePrediction)
 						&& After.Input.CurrentAim.Equals(Input.RodRotationPrediction.Input.CurrentAim)
-						&& After.Input.PreviousSmoothedFishPullStrengthMeters.Equals(Input.RodRotationPrediction.Input.PreviousSmoothedFishPullStrengthMeters));
+						&& After.Input.PreviousSmoothedFishPullStrengthMeters.Equals(Input.RodRotationPrediction.Input.PreviousSmoothedFishPullStrengthMeters)
+						&& After.Input.PreviousAngularVelocityRadiansPerSecond.Equals(Input.RodRotationPrediction.Input.PreviousAngularVelocityRadiansPerSecond));
 					const auto& EffortAfter = Rod->GetAuthoritativeRotationEffortSnapshot();
 					TestTrue(TEXT("prediction cannot accumulate or consume player effort"), EffortAfter.Epoch == EffortBeforePrediction.Epoch
 						&& EffortAfter.ExertionSquaredSeconds == EffortBeforePrediction.ExertionSquaredSeconds

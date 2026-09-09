@@ -134,9 +134,12 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		|| (RodConstraint.RodRotationPrediction.bValid && (
 			!IsFiniteVector(RodConstraint.RodRotationPrediction.HolderWorldPosition)
 			|| !IsFiniteVector(RodConstraint.RodRotationPrediction.TipOffsetInAimSpace)
-			|| !FMath::IsFinite(RodConstraint.RodRotationPrediction.MinimumPitchDegrees)
-			|| !FMath::IsFinite(RodConstraint.RodRotationPrediction.MaximumPitchDegrees)
-			|| RodConstraint.RodRotationPrediction.MinimumPitchDegrees > RodConstraint.RodRotationPrediction.MaximumPitchDegrees))
+			|| !IsFiniteVector(RodConstraint.RodRotationPrediction.Input.PreviousAngularVelocityRadiansPerSecond)
+			|| !FMath::IsFinite(RodConstraint.RodRotationPrediction.Input.AngularInertiaSeconds)
+			|| RodConstraint.RodRotationPrediction.Input.AngularInertiaSeconds <= 0.0
+			|| !FMath::IsFinite(RodConstraint.RodRotationPrediction.Input.MinimumPitchDegrees)
+			|| !FMath::IsFinite(RodConstraint.RodRotationPrediction.Input.MaximumPitchDegrees)
+			|| RodConstraint.RodRotationPrediction.Input.MinimumPitchDegrees > RodConstraint.RodRotationPrediction.Input.MaximumPitchDegrees))
 		|| !IsFiniteNonNegative(RodConstraint.CatRodExertionSquaredSeconds)
 		|| RodConstraint.CatRodExertionSquaredSeconds > Config.FixedStepSeconds + UE_DOUBLE_KINDA_SMALL_NUMBER
 		|| !IsFiniteNonNegative(RodConstraint.CatRodPositiveWorkRadians)
@@ -374,6 +377,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 				FRotator Aim = Prediction.Input.CurrentAim;
 				if (!Prediction.bHoldActualAim)
 				{
+					// 每个候选张力从同一真实角度/角速度/载荷快照试算；候选之间不能推进历史。
 					FCatFishingRodRotationInput RotationInput = Prediction.Input;
 					RotationInput.DeltaSeconds = Dt;
 					// Rotation already solves its own lever arm; do not apply the line leverage twice.
@@ -383,7 +387,6 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 					const auto Rotation = FCatFishingRodResistanceModel::StepRotation(RotationInput);
 					bRotationPredictionSucceeded &= Rotation.bSucceeded;
 					Aim = Rotation.ActualAim;
-					Aim.Pitch = FMath::ClampAngle(Aim.Pitch, Prediction.MinimumPitchDegrees, Prediction.MaximumPitchDegrees);
 				}
 				else
 				{

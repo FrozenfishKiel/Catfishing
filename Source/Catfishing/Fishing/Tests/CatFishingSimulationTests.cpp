@@ -50,6 +50,7 @@ namespace CatFishingCoupledSimulationTest
 		const auto Step = FCatFishingRodResistanceModel::StepRotation(Input);
 		Input.CurrentAim = Step.ActualAim;
 		Input.PreviousSmoothedFishPullStrengthMeters = Step.SmoothedFishPullStrengthMeters;
+		Input.PreviousAngularVelocityRadiansPerSecond = Step.AngularVelocityRadiansPerSecond;
 		return Step;
 	}
 }
@@ -270,7 +271,8 @@ bool FCatFishingRodTorqueRecoveryTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("camera intent is never clipped"), Input.RequestedAim.Yaw, 120.0);
 	Input.RequestedAim = FRotator::ZeroRotator;
 	Step = AdvanceRodRotation(Input);
-	TestTrue(TEXT("returning aim immediately moves out of equilibrium"), Step.ActualAim.Yaw < 29.0);
+	TestTrue(TEXT("returning aim starts accelerating out of equilibrium without an angle snap"),
+		Step.ActualAim.Yaw < 30.0 && Step.ActualAim.Yaw > 29.0);
 	for (int32 Index = 0; Index < 180; ++Index)
 	{
 		Step = AdvanceRodRotation(Input);
@@ -324,6 +326,117 @@ bool FCatFishingRodTorqueFrameRateTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingRodAngularInertiaTransitionsTest,
+	"Catfishing.Unit.Fishing.Simulation.RodInertiaKeepsStrengthRecoveryUnloadAndFishReversalContinuous",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingRodAngularInertiaTransitionsTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	TArray<FRotator> ReferenceAims;
+	TArray<FVector> ReferenceVelocities;
+	for (const int32 Rate : {120, 60, 20})
+	{
+		FCatFishingRodRotationInput Input;
+		Input.RequestedAim.Yaw = 120.0;
+		Input.DeltaSeconds = 1.0 / Rate;
+		const auto NoSupport = AdvanceRodRotation(Input);
+		TestTrue(TEXT("zero support preserves a stationary rod despite a large requested angle"),
+			NoSupport.bSucceeded && NoSupport.ActualAim.IsNearlyZero()
+			&& NoSupport.AngularVelocityRadiansPerSecond.IsNearlyZero());
+		Input.CatTorqueCapacity = 50.0;
+		for (int32 Phase = 0; Phase < 30; ++Phase)
+		{
+			// Restore support, introduce a side pull, reverse the fish, then release load.
+			// The player's 120-degree aim remains unchanged throughout all four transitions.
+			Input.MaximumFishTorque = Phase >= 5 && Phase < 15 ? 100.0 : 0.0;
+			Input.PullAxis = FRotator(0.0, Phase < 10 ? -50.0 : 50.0, 0.0).Vector();
+			for (int32 Frame = 0; Frame < Rate / 10; ++Frame)
+			{
+				const FVector PreviousVelocity = Input.PreviousAngularVelocityRadiansPerSecond;
+				const double PreviousYaw = Input.CurrentAim.Yaw;
+				const auto Step = AdvanceRodRotation(Input);
+				if (!TestTrue(TEXT("abrupt force transition integrates successfully"), Step.bSucceeded)) return false;
+				TestTrue(TEXT("persistent angular velocity remains finite and within the global speed limit"),
+					!Step.AngularVelocityRadiansPerSecond.ContainsNaN()
+					&& Step.AngularVelocityRadiansPerSecond.Size() <= FMath::DegreesToRadians(Input.MaximumAngularSpeedDegreesPerSecond) + 1e-6);
+				TestTrue(TEXT("force transition reports finite angular acceleration"),
+					!Step.AngularAccelerationRadiansPerSecondSquared.ContainsNaN());
+				if (Phase == 0 && Frame == 0)
+				{
+					AddInfo(FString::Printf(TEXT("FPS=%d SupportRestoreFirstFrameAngleDeg=%.6f AngularSpeedDegS=%.6f InertiaSeconds=%.3f"),
+						Rate, FMath::FindDeltaAngleDegrees(PreviousYaw, Step.ActualAim.Yaw),
+						Step.AngularSpeedDegreesPerSecond, Input.AngularInertiaSeconds));
+					// Starting from rest, even the slowest tested frame cannot instantly reach cruising speed.
+					TestTrue(TEXT("support restoration accelerates from rest instead of instantly chasing the old target"),
+						Step.AngularVelocityRadiansPerSecond.Z > PreviousVelocity.Z
+						&& Step.AngularVelocityRadiansPerSecond.Size() < FMath::DegreesToRadians(150.0));
+					TestTrue(TEXT("support restoration does not jump a large angle in the first frame"),
+						FMath::Abs(FMath::FindDeltaAngleDegrees(PreviousYaw, Step.ActualAim.Yaw)) < 5.0);
+				}
+				if (Phase >= 27)
+				{
+					TestTrue(TEXT("released rod settles without sustained oscillation around the requested aim"),
+						FMath::Abs(FMath::FindDeltaAngleDegrees(Step.ActualAim.Yaw, Input.RequestedAim.Yaw)) < 0.1
+						&& Step.AngularSpeedDegreesPerSecond < 1.0);
+				}
+			}
+			if (Rate == 120)
+			{
+				ReferenceAims.Add(Input.CurrentAim);
+				ReferenceVelocities.Add(Input.PreviousAngularVelocityRadiansPerSecond);
+			}
+			TestTrue(TEXT("20, 60 and 120 FPS preserve the same transition trajectory"),
+				Input.CurrentAim.Equals(ReferenceAims[Phase], 0.25));
+			TestTrue(TEXT("20, 60 and 120 FPS preserve the same angular velocity history"),
+				Input.PreviousAngularVelocityRadiansPerSecond.Equals(ReferenceVelocities[Phase], 0.03));
+		}
+		TestEqual(TEXT("ordinary force transitions never rewrite the player's target"), Input.RequestedAim.Yaw, 120.0);
+	}
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingRodPitchInertiaContactTest,
+	"Catfishing.Unit.Fishing.Simulation.RodPitchContactStopsOutwardVelocityAndChargesOnlyAllowedMotion",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingRodPitchInertiaContactTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	for (const double Sign : {-1.0, 1.0})
+	{
+		FCatFishingRodRotationInput Input;
+		Input.MinimumPitchDegrees = -35.0;
+		Input.MaximumPitchDegrees = 35.0;
+		Input.CurrentAim.Pitch = Sign * 34.0;
+		Input.RequestedAim.Pitch = Sign * 70.0;
+		Input.PreviousAngularVelocityRadiansPerSecond = FVector(0.0, -Sign * 4.0, 0.0);
+		Input.CatTorqueCapacity = 50.0;
+		Input.DeltaSeconds = 0.05;
+		const auto Contact = AdvanceRodRotation(Input);
+		if (!TestTrue(TEXT("moving rod reaches the shared pitch contact"), Contact.bSucceeded)) return false;
+		TestEqual(TEXT("only the remaining one degree of permitted motion reaches the pitch limit"),
+			Contact.ActualAim.Pitch, Sign * 35.0, 1e-7);
+		TestTrue(TEXT("pitch contact removes the outward angular velocity"),
+			Contact.AngularVelocityRadiansPerSecond.IsNearlyZero(1e-7));
+		TestTrue(TEXT("crossing contact charges no motion beyond the allowed one degree"),
+			Contact.CatPositiveWorkRadians > 0.0 && Contact.CatPositiveWorkRadians <= FMath::DegreesToRadians(1.0) + 1e-7);
+		for (int32 Frame = 0; Frame < 20; ++Frame)
+		{
+			const auto Blocked = AdvanceRodRotation(Input);
+			TestEqual(TEXT("continued outward input cannot move beyond the pitch limit"), Blocked.ActualAim.Pitch, Sign * 35.0, 1e-7);
+			TestTrue(TEXT("continued input cannot store hidden outward angular velocity"), Blocked.AngularVelocityRadiansPerSecond.IsNearlyZero(1e-7));
+			TestEqual(TEXT("blocked pitch motion cannot charge fictitious positive work"), Blocked.CatPositiveWorkRadians, 0.0, 1e-9);
+		}
+		Input.RequestedAim.Pitch = 0.0;
+		const auto Reverse = AdvanceRodRotation(Input);
+		TestTrue(TEXT("reverse input leaves either pitch limit without paying off stored outward motion"),
+			Reverse.ActualAim.Pitch * Sign < 35.0 && Reverse.AngularVelocityRadiansPerSecond.Y * Sign > 0.0);
+		TestTrue(TEXT("permitted reverse motion records actual positive work"), Reverse.CatPositiveWorkRadians > 0.0);
+	}
+	return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingRodLoadJitterTest,
 	"Catfishing.Unit.Fishing.Simulation.RodLoadSmoothingSuppressesTwentyHertzSlackAndDirectionJitter",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -345,8 +458,18 @@ bool FCatFishingRodLoadJitterTest::RunTest(const FString& Parameters)
 		double MaxYaw[2] = {-180.0, -180.0};
 		double PreviousVelocity[2] = {0.0, 0.0};
 		double MaximumVelocityJump[2] = {0.0, 0.0};
-		// 等平均负载约等于猫容量的缓慢过渡结束，再测周期摆动，避免把趋近平衡当作抖动。
-		for (int32 Frame = 0; Frame < 2400; ++Frame)
+		FRotator PreviousCycleAims[2] = {Smoothed.CurrentAim, Unfiltered.CurrentAim};
+		FVector PreviousCycleVelocities[2] = {FVector::ZeroVector, FVector::ZeroVector};
+		FVector PreviousCycleLoads[2] = {Smoothed.PreviousSmoothedFishPullStrengthMeters, Unfiltered.PreviousSmoothedFishPullStrengthMeters};
+		constexpr int32 FramesPerCycle = 12;
+		constexpr int32 MaximumWarmupFrames = 120 * 60;
+		constexpr int32 MeasurementFrames = 120 * 2;
+		int32 StableCycles = 0;
+		int32 MeasurementStartFrame = INDEX_NONE;
+		bool bMeasurementComplete = false;
+		// 平均负载接近猫容量时，90 度附近的净转矩斜率很小，可能慢慢趋近平衡。
+		// 每 0.1 秒比较同相位状态，连续 20 周期稳定后才测两秒摆动；60 秒仍漂移应报错。
+		for (int32 Frame = 0; Frame < MaximumWarmupFrames + MeasurementFrames; ++Frame)
 		{
 			// 复现日志中的每 0.05 秒松/绷线翻转，再单独复现鱼左右换向。
 			const bool bEvenStep = (Frame / 6) % 2 == 0;
@@ -365,7 +488,7 @@ bool FCatFishingRodLoadJitterTest::RunTest(const FString& Parameters)
 				const auto Step = AdvanceRodRotation(Input);
 				if (!TestTrue(TEXT("alternating load solves"), Step.bSucceeded)) return false;
 				const double Velocity = FMath::FindDeltaAngleDegrees(PreviousYaw, Step.ActualAim.Yaw) / Input.DeltaSeconds;
-				if (Frame >= 2160)
+				if (MeasurementStartFrame != INDEX_NONE && Frame >= MeasurementStartFrame)
 				{
 					MinYaw[Path] = FMath::Min(MinYaw[Path], Step.ActualAim.Yaw);
 					MaxYaw[Path] = FMath::Max(MaxYaw[Path], Step.ActualAim.Yaw);
@@ -373,16 +496,43 @@ bool FCatFishingRodLoadJitterTest::RunTest(const FString& Parameters)
 				}
 				PreviousVelocity[Path] = Velocity;
 			}
+			if (MeasurementStartFrame == INDEX_NONE && (Frame + 1) % FramesPerCycle == 0)
+			{
+				bool bCycleStable = true;
+				for (int32 Path = 0; Path < 2; ++Path)
+				{
+					const auto& Input = Path == 0 ? Smoothed : Unfiltered;
+					bCycleStable &= Input.CurrentAim.Equals(PreviousCycleAims[Path], 1e-6)
+						&& Input.PreviousAngularVelocityRadiansPerSecond.Equals(PreviousCycleVelocities[Path], 1e-6)
+						&& Input.PreviousSmoothedFishPullStrengthMeters.Equals(PreviousCycleLoads[Path], 1e-6);
+					PreviousCycleAims[Path] = Input.CurrentAim;
+					PreviousCycleVelocities[Path] = Input.PreviousAngularVelocityRadiansPerSecond;
+					PreviousCycleLoads[Path] = Input.PreviousSmoothedFishPullStrengthMeters;
+				}
+				StableCycles = bCycleStable ? StableCycles + 1 : 0;
+				if (StableCycles >= 20) MeasurementStartFrame = Frame + 1;
+			}
+			if (MeasurementStartFrame != INDEX_NONE && Frame + 1 >= MeasurementStartFrame + MeasurementFrames)
+			{
+				bMeasurementComplete = true;
+				break;
+			}
+			if (MeasurementStartFrame == INDEX_NONE && Frame + 1 >= MaximumWarmupFrames) break;
 		}
+		if (!TestTrue(TEXT("both load paths reach a repeatable periodic state within sixty seconds"),
+			MeasurementStartFrame != INDEX_NONE)) return false;
+		if (!TestTrue(TEXT("settled jitter measurement covers two complete seconds"), bMeasurementComplete)) return false;
 		const double SmoothedSwing = MaxYaw[0] - MinYaw[0];
 		const double UnfilteredSwing = MaxYaw[1] - MinYaw[1];
-		AddInfo(FString::Printf(TEXT("LoadMode=%s SmoothedSwing=%.3f UnfilteredSwing=%.3f SmoothedVelocityJump=%.3f UnfilteredVelocityJump=%.3f"),
-			bAlternateSlack ? TEXT("SlackTaut") : TEXT("Direction"), SmoothedSwing, UnfilteredSwing,
+		AddInfo(FString::Printf(TEXT("LoadMode=%s WarmupSeconds=%.3f StableCycles=%d SmoothedSwing=%.3f UnfilteredSwing=%.3f SmoothedVelocityJump=%.3f UnfilteredVelocityJump=%.3f"),
+			bAlternateSlack ? TEXT("SlackTaut") : TEXT("Direction"), MeasurementStartFrame / 120.0, StableCycles, SmoothedSwing, UnfilteredSwing,
 			MaximumVelocityJump[0], MaximumVelocityJump[1]));
 		TestTrue(TEXT("continuous load reduces settled side-to-side swing by at least 45 percent"),
 			SmoothedSwing < UnfilteredSwing * 0.55);
 		TestTrue(TEXT("frame-to-frame angular velocity jumps fall by at least 85 percent"),
 			MaximumVelocityJump[0] < MaximumVelocityJump[1] * 0.15);
+		TestTrue(TEXT("settled filtered rod swing remains within a quarter degree"), SmoothedSwing <= 0.25);
+		TestTrue(TEXT("settled filtered frame-to-frame velocity jump remains below four degrees per second"), MaximumVelocityJump[0] <= 4.0);
 	}
 	return !HasAnyErrors();
 }
@@ -460,9 +610,10 @@ bool FCatFishingRodLoadedDampingTest::RunTest(const FString& Parameters)
 			Input.RequestedAim.Yaw = 120.0; // 整段不动鼠标。
 			Input.CatTorqueCapacity = 50.0;
 			Input.DeltaSeconds = 1.0 / Rate;
-			if (Path == 0) Input.LoadedAngularDampingRatio = 0.0; // 同一模型关闭追加阻尼，重现修改前。
+			// 同一惯性基线仅关闭追加负载阻尼；零值仍保留防止空载过冲的基础临界阻尼。
+			if (Path == 0) Input.LoadedAngularDampingRatio = 0.0;
 		}
-		// 前八秒供受载响应稳定，随后三秒比较同一周期负载下的摆幅，不修改幅度门槛。
+		// 前八秒供受载响应稳定，随后三秒比较同一周期负载下追加阻尼的增量作用。
 		for (int32 Frame = 0; Frame < Rate * 11; ++Frame)
 		{
 			const bool bTaut = (Frame / (Rate / 20)) % 2 == 0;
@@ -483,12 +634,14 @@ bool FCatFishingRodLoadedDampingTest::RunTest(const FString& Parameters)
 				}
 			}
 		}
-		const double OldSwing = MaxYaw[0] - MinYaw[0], NewSwing = MaxYaw[1] - MinYaw[1];
-		const double OldRms = FMath::Sqrt(SpeedSquared[0] / (Rate * 3)), NewRms = FMath::Sqrt(SpeedSquared[1] / (Rate * 3));
-		AddInfo(FString::Printf(TEXT("FPS=%d PreviousSwingDeg=%.4f DampedSwingDeg=%.4f PreviousRmsDegS=%.4f DampedRmsDegS=%.4f"),
-			Rate, OldSwing, NewSwing, OldRms, NewRms));
-		TestTrue(TEXT("same-filter comparison reduces stationary-input swing by at least half"), NewSwing < OldSwing * 0.5);
-		TestTrue(TEXT("same-filter comparison reduces angular motion by at least half"), NewRms < OldRms * 0.5);
+		const double BaseSwing = MaxYaw[0] - MinYaw[0], DampedSwing = MaxYaw[1] - MinYaw[1];
+		const double BaseRms = FMath::Sqrt(SpeedSquared[0] / (Rate * 3)), DampedRms = FMath::Sqrt(SpeedSquared[1] / (Rate * 3));
+		AddInfo(FString::Printf(TEXT("FPS=%d BaseInertiaSwingDeg=%.4f DampedSwingDeg=%.4f BaseInertiaRmsDegS=%.4f DampedRmsDegS=%.4f"),
+			Rate, BaseSwing, DampedSwing, BaseRms, DampedRms));
+		TestTrue(TEXT("additional load damping further reduces swing on the same inertia baseline"), DampedSwing < BaseSwing);
+		TestTrue(TEXT("additional load damping further reduces angular motion on the same inertia baseline"), DampedRms < BaseRms);
+		TestTrue(TEXT("fixed-aim loaded swing remains below 0.12 degrees"), DampedSwing <= 0.12);
+		TestTrue(TEXT("fixed-aim loaded RMS angular motion remains below two degrees per second"), DampedRms <= 2.0);
 		for (auto& Input : Inputs)
 		{
 			Input.MaximumFishTorque = 100.0;
@@ -506,9 +659,9 @@ bool FCatFishingRodLoadedDampingTest::RunTest(const FString& Parameters)
 	Free.DeltaSeconds = 1.0 / 60.0;
 	const auto DampedFree = FCatFishingRodResistanceModel::StepRotation(Free);
 	Free.LoadedAngularDampingRatio = 0.0;
-	const auto PreviousFree = FCatFishingRodResistanceModel::StepRotation(Free);
-	TestTrue(TEXT("unloaded player input keeps its exact original response"), DampedFree.ActualAim.Equals(PreviousFree.ActualAim, 1e-9));
-	TestEqual(TEXT("unloaded active work is unchanged"), DampedFree.CatPositiveWorkRadians, PreviousFree.CatPositiveWorkRadians, 1e-9);
+	const auto BaseFree = FCatFishingRodResistanceModel::StepRotation(Free);
+	TestTrue(TEXT("additional load damping leaves the unloaded inertia response unchanged"), DampedFree.ActualAim.Equals(BaseFree.ActualAim, 1e-9));
+	TestEqual(TEXT("additional load damping leaves unloaded active work unchanged"), DampedFree.CatPositiveWorkRadians, BaseFree.CatPositiveWorkRadians, 1e-9);
 	FCatFishingRodRotationInput Assisted;
 	Assisted.CurrentAim.Yaw = 45.0;
 	Assisted.RequestedAim.Yaw = -120.0;

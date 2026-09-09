@@ -262,6 +262,8 @@ private:
 	uint32 NextAimInputEpoch = 0;
 	/** 权威旋转的连续负载状态；不得随猫端牵引 bActive 或一次松线目标清零。 */
 	FVector SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
+	/** 世界空间角速度，单位 rad/s；普通负载变化、放线重设目标和辅助成员变化均保留。 */
+	FVector AuthoritativeRodAngularVelocityRadiansPerSecond = FVector::ZeroVector;
 	TWeakObjectPtr<APawn> AuthoritativeAimHolder;
 	FCatFishingRodRotationEffortSnapshot AuthoritativeRotationEffort;
 	double NextRodRotationResistanceDiagnosticWorldSeconds = 0.0;

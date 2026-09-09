@@ -7,6 +7,7 @@
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSession.h"
+#include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Framework/Game/CatfishingPlayerState.h"
 #include "GameFramework/CharacterMovementComponent.h"
@@ -285,8 +286,17 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 	Controller->SetControlRotation(FRotator(0.0, 60.0, 0.0));
 	TestTrue(TEXT("清理后建立新的无负载约束"), Rod->SetCarrierConstraintFromAuthority(
 		FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true, 0.0, 50.0));
+	FCatFishingRodRotationPrediction FreshPrediction;
+	if (!TestTrue(TEXT("新会话提供真实旋转快照"),
+		Rod->GetRotationPredictionFromAuthority(1.0 / 60.0, FreshPrediction))) return false;
+	TestTrue(TEXT("清理不保留上一条鱼的平滑负载或角速度"),
+		FreshPrediction.Input.PreviousSmoothedFishPullStrengthMeters.IsNearlyZero()
+		&& FreshPrediction.Input.PreviousAngularVelocityRadiansPerSecond.IsNearlyZero());
 	Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
-	TestEqual(TEXT("清理不保留上一条鱼的平滑负载"), Rod->GetGripWorldTransform().Rotator().Yaw, 6.0, 0.01);
+	TestTrue(TEXT("新会话从静止加速起步，不瞬间转到满速位移"),
+		Rod->GetGripWorldTransform().Rotator().Yaw > 0.0 && Rod->GetGripWorldTransform().Rotator().Yaw < 1.0);
+	for (int32 Index = 0; Index < 180; ++Index) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
+	TestEqual(TEXT("新会话无旧阻力残留，最终到达瞄准目标"), Rod->GetGripWorldTransform().Rotator().Yaw, 60.0, 0.01);
 	Rod->ClearCarrierConstraintFromAuthority();
 
 	APlayerState* IgnoredPromotion = nullptr;

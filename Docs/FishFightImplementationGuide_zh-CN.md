@@ -1,6 +1,6 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
-本文件持续维护鱼、线、杆、猫的运动设计与实际代码。最近更新：2026-09-08，1–4人移动合力现从加入鱼竿时生效，覆盖无Session、钩子飞行、Waiting、Probe与TrueBiteWindow；本轮影响对照、通过证据与剩余表现验收项见 [钓鱼架构 2.0.4](FishingArchitecture_zh-CN.md#204-入竿即保持队形的影响与验证2026-09-08)。鱼仍使用沿主动意图未完成距离的耗体公式，满线右键不恢复。下文日期段落中的构建和测试数字属于相应历史版本，不作为当前修复的通过证据；真人手感和新打包双端验收仍待完成。
+本文件持续维护鱼、线、杆、猫的运动设计与实际代码。最近更新：2026-09-09，搏斗中的鱼竿旋转已在源码接入持续保存的角速度与等效惯性，猫转矩容量和鱼负载的变化先改变角加速度；Editor/Game Development构建与191项回归已完成（190通过、1项既有耐久失败），真人甩杆手感尚未验收。第二轮输入限幅未实现。1–4人从加入鱼竿时共同移动的既有基线见 [钓鱼架构 2.0.4](FishingArchitecture_zh-CN.md#204-入竿即保持队形的影响与验证2026-09-08)。鱼仍使用沿主动意图未完成距离的耗体公式，满线右键不恢复。下文旧日期段落的公式与测试数字只属于相应历史版本，不代替本轮验证；真人手感和新打包双端验收仍待完成。
 
 当前猫端通过 `CatFishingGroupModel` 使用一个 N 人计算入口：个人正体力提供完整力量，主位系数 1、辅助默认 0.5；移动与站定支撑共用个人向量预算。同向加强、反向抵消、侧向改变组运动。只有主位驱动线杯和竿向，主位体力为零仍可使用队友的有效支撑操竿。Runner 每步冻结真实成员、已接受的 CMC 移动和各自 ASC，共同收线/转杆/去重持竿账单均分，个人移动及受阻用力由本人支付；体力总量只读求和，不转移余额。有效放线逐人恢复、满线不恢复、鱼力竭免正向费用保持。
 
@@ -18,6 +18,68 @@
 - 后面的日期衔接核对保留历史改动和当时的证据；其中旧两档游速、阶段耗体、旧入口只描述相应历史版本，不作为当前公式或新验收证据。
 - 折返、近岸反扑、水下三维运动、完整效用评分选路和真人双端丝滑验收均未完成；仍没有专门的鱼 Actor 网络运动插值器。
 - 后续讨论继续更新本文件。业务进度与持续验收缺口只维护在 [需求对齐差距清单](Development/需求对齐差距清单.md)，本文不另建模块进度账本。
+
+## 鱼竿连续角速度修复（2026-09-09，第一轮）
+
+### 用户窗口与修复边界
+
+修改前房主试玩日志已保留为 `Saved/Automation/RodAngularInertia-20260909/UserBefore.log`，SHA256为 `7E89AC3BC035E82385910F763BA2B60A3A836B14A0E79F50F158C844B886FFBA`。会话 `6A2247F2-4C32-62DD-8B1A-0C87B005E77A` 的日志UTC时间02:13:55.935、55.953、55.987，杆角速度为68.075、307.674、315.968°/s。目标角一直为Yaw132.80°、Pitch18.73°，起始已积累94.01°水平最短角差和53.73°俯仰角差；移动输入归零时，猫端转矩容量从0变为50，旧阻尼倍率从4降到约1.1。鱼仍为LateralArc，距最近行为切换约1.391 s；Action=None，猫体力约16.88，未换人，也没有新按下右键。
+
+同一50.462 ms窗口中，持竿角色只移动7.44 cm，杆尖移动72.30 cm，杆向变化14.47°水平和3.73°俯仰。现有样本支持快速转杆造成明显杆尖扫动，没有同量级角色位置跳跃；组根没有完整逐帧日志，不能据此排除其他窗口的位置传送。用户确认看到的是房主自己的窗口，本轮不把该现象归因于客户端复制。
+
+原 `StepRotation` 每步由净转矩直接计算速度，即使鱼出力与鱼负载连续，猫的移动/转杆力量分配变化仍可使转速突变。本轮保持力量分配和目标输入规则，改为带角速度历史的动力响应。鱼行为、实际出力升降速率和体力公式继续沿用既有实现。第二轮转杆输入限幅尚未实现，旧目标与实际杆向之间仍可能存在较大角差；原有Pitch合法范围不等同于这项输入限幅。
+
+### 当前旋转模型与生命周期
+
+`FCatFishingRodRotationInput` 新增 `PreviousAngularVelocityRadiansPerSecond`、`AngularInertiaSeconds`、`MinimumPitchDegrees/MaximumPitchDegrees`；结果返回实际姿态、世界空间角速度、最后亚步的角加速度和 `bHitPitchLimit`。角速度为rad/s，角加速度为rad/s²；`AngularInertiaSeconds` 是归一化转矩模型的等效时间参数，单位秒，不是kg·m²。猫、鱼转矩继续使用原StrengthMeters尺度，静态净转矩平衡不变。
+
+```text
+J = max(AngularInertiaSeconds, 1/240 s)
+R = max(ResponseSeconds, 1/240 s)
+S = max(猫转矩容量, 平滑鱼负载大小, 数值下限)
+load = 平滑鱼负载大小 / S
+Drive = clamp_length(净转矩 × 最大角速度rad/s / S, 最大角速度rad/s)
+D = max(1 + LoadedAngularDampingRatio × load, 2 × sqrt(J/R))
+J × dw/dt = Drive − D × w
+```
+
+默认J=0.08 s、R=0.08 s、负载阻尼比3，因此零鱼负载时D至少2，满鱼负载时D为4。360°/s仍为角速度硬上限；在搏斗仍有效、猫持续满转矩且目标误差足够大时，零鱼负载的理论稳定转速为180°/s，满鱼负载且净驱动饱和时为90°/s。它们是渐近速度，不是立即赋值，也不是新的硬上限。阻尼比设0只去掉鱼负载追加项，仍保留临界阻尼下限。退出搏斗后的无载持竿沿用原目标跟随分支并清角速度，不应把上述“搏斗内零鱼负载”混同于无Session移动阶段。
+
+模型在不超过1/240 s、且不超过J和R各四分之一的亚步中，冻结本亚步驱动力与阻尼，解析积分速度和转角；一帧最多推进0.25 s。鱼负载仍采用0.15 s指数平滑。Pitch在同一模型中裁剪实际杆向，并去掉继续朝越界方向运动的角速度；预测也使用同一限位。主动正功只读取裁剪后实际允许的转角，不用末端速度乘dt替代加速过程位移，也不把撞限后的虚拟转角收费。
+
+`ACatFishingRodActor::RefreshHeldTransformFromAuthority` 保存已提交的 `AuthoritativeRodAngularVelocityRadiansPerSecond`。普通鱼行为切换、同一主位下助手增减、右键目标rebase和鱼力竭均保留该速度；初始化、搏斗退出、换主、放地和销毁清零。`GetRotationPredictionFromAuthority` 只复制实际姿态、角速度、鱼负载历史与配置，Simulator用副本求候选杆尖，不能把预测速度、姿态或费用写回Actor。真实Tick继续是姿态与努力累计的提交入口；Actor外层旧Pitch裁剪已由模型共同限位替换。
+
+### 影响盘点与衔接状态
+
+首次修改前，工作区已有PhysicsGrab原型的 `Cat_Skeleton.uasset`、`Catfishing.Build.cs`、脚本及Character/Physics、Framework/Game/PhysicsPrototype、Interaction/Grab和Editor相关目录改动；这些属于并行工作，本轮不覆盖或纳入鱼竿修复。以下各行按最终diff、配置、实际调用和回归证据填写；本轮未关闭Fishing模块或正式表现验收。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 输入保持 | `Framework/Game/CatfishingPlayerController.cpp::UpdateRotation` → CommandComponent → `CatFishingRodActor::GetRotationPredictionFromAuthority`；`Fishing/Integration/CatFishingRodAimState` 保存累计目标 | 保留鼠标累计、主位权限、Aim域、右键rebase和已接受目标；本轮只让实际杆转速连续 | 原输入入口保留，第二轮输入限幅不在本轮实现；不通过清旧目标掩盖动力响应 | 先冻结同一目标，再由唯一StepRotation积分 | 旧目标追赶、Yaw跨界、右键释放/重设与丢包回归 | 保留原输入链；FinalReport中的SlackAim四项与SlackAimListenClient通过，覆盖非零角速度下右键重设；第二轮限幅未实现 |
+| 纯旋转模型 | `Source/Catfishing/Fishing/Simulation/CatFishingRodResistanceModel.h/.cpp::StepRotation` 被Actor和Simulator调用 | 原净转矩直接给速度 → 旧速度经J与D积分；保留转矩尺度、静态平衡和360°/s硬上限，明确零鱼负载渐近180°/s的变化 | 同一输入增加旧w/J/Pitch范围，结果增加w/a/限位结果；删除原瞬时速度赋值分支 | 先补接收字段及数值校验，再切唯一求解入口 | 容量0→50、负载卸去/反向、初始速度、帧率、平衡与速度上限 | 旧瞬时速度分支已替换；FinalReport的RodInertia、RodTorque、RodLoadSmoothing、LoadedRodDamping回归通过，20/60/120 FPS轨迹一致 |
+| Actor状态与退出 | `Source/Catfishing/Fishing/Actors/CatFishingRodActor.h/.cpp::RefreshHeldTransformFromAuthority/SetCarrierConstraintFromAuthority/ClearCarrierConstraintFromAuthority/EndPlay` | 原只存姿态和鱼负载历史 → 另存真实世界空间角速度；普通输入/行为变化不重置 | `AuthoritativeRodAngularVelocityRadiansPerSecond` 随真实提交更新，初始/退出/换主/放地/销毁清理 | 实际模型成功后提交w；预测不得提前消耗或覆盖 | 同主助手变化、右键rebase、力竭、换主、重复退出、同竿新场 | RodEffortSnapshot生命周期、SlackAim非零速度与组移动回归通过；同主保留、换主/退出清理，真实Actor写回与零时间刷新已验证 |
+| 候选预测与Pitch | `GetRotationPredictionFromAuthority` → `CatFishingFightSimulator.cpp` 的联合端点预测 → `StepRotation` | 原末端只裁Pitch角度；加入惯性后需同时处理越界角速度 → 两者读取同一旧w并在模型内统一限位 | 预测输入补旧w/J/限位，Simulator校验新字段；移除Actor重复裁剪 | 配置进入快照后，预测只读副本；真实帧独立提交 | 上下限撞击、离开限位、只读查询、副作用/费用重复、短线负载稳定性 | 两处外层Pitch裁剪及Prediction冗余范围字段已删除；PitchContact正负边界、短线真实CMC/Actor预测只读及费用回归通过 |
+| 配置与默认值 | `Source/Catfishing/Fishing/CatFishingSettings.h`、`Config/DefaultGame.ini` 的 `[/Script/Catfishing.CatFishingSettings]` → Rod输入 | 新增秒单位惯性参数；原Response秒、负载平滑秒、阻尼比和最大deg/s含义不改 | 新 `HeldRodAngularInertiaSeconds=0.08`，显式配置同默认；无效值拒绝 | 先配置/校验，再真实与预测共同读取 | 非有限/非正值、默认与显式配置分歧、旧值误套新单位 | 独立秒单位J已接入；FinalTests.log实际Actor记录AngularInertiaSeconds=0.080，Editor/Game构建成功，原Settings/正式Balance测试通过 |
+| 费用与表现消费者 | Rod努力累计 → `FCatFishingRodEffortSampler` → Runner个人ASC；Camera、RodBend、鱼线从实际握把/杆尖读取 | 单价与唯一结算入口保持；加速、减速和身体限位改变真实正功及支撑时长 | 正功改读允许转角，支撑仍按主动用力平方时间；实际姿态继续驱动原表现 | 先真实运动，再累计观察量，再固定步单次结算 | 加速费用虚增、撞限虚假正功、被动拖转收费、相机/鱼线脱节 | 实际转角计费、零猫力惯性滑动免主动费、触界免虚假正功、帧率/采样与Camera/RodBend回归通过；真人手感未验收 |
+| 资产、复制与Cook | `/Game/Blueprint/Actors/BP_CatFishingRodActor`、T1/T2的UseActorClass；INI软引用 `/Game/Catfishing/Data/Fishing/DA_FishingFightBalance_Default`；原Actor姿态复制、配置Cook入口 | 无新增资产字段、复制w或存档状态；保持正式包及表现契约 | 本轮不迁移/保存资产，保留反射兼容入口；原姿态复制继续消费实际结果 | 新原生二进制读取原资产，随后受控加载与网络验证 | BP隐藏姿态setter、旧原生类加载、远端观感、默认日志在包中缺失 | BP和Balance最终hash未变；正式资产契约及3项Listen/Client回归通过；完整BP图未确认，保留原反射入口；未新Cook/打包 |
+| 日志、测试与文档 | `LogCatFishing/Event=fishing_rod_rotation_resistance_sample`；`Source/Catfishing/Fishing/Tests/`下的 `CatFishingRodEffortTests.cpp`、`CatFishingForceIntegrationTests.cpp`、`CatFishingSimulationTests.cpp`、`CatFishingSlackAimTests.cpp`；本文件与唯一差距清单 | 旧日志有目标/实际角、负载、容量/阻尼；增加w/a/J便于区分动力响应与目标变化 | 默认Display采样追加 `AngularVelocityRadS/AngularAccelerationRadS2/AngularInertiaSeconds/PitchLimited`，沿用RodActorId/Aim域和限频；更新旧瞬时模型口径 | 先保留用户窗口与旧模块基线，再完整构建和分层回归 | 无模块加载证据、误把旧绿灯当新实现通过、只验证公式未接Actor | UserBefore/Baseline保留；BuildEditorFinal、BuildGameFinal成功；FinalReport为184 clean+6 warning+1既有失败；FinalVerification的17项核查通过，模块不关闭 |
+| 会话清理后重启 | `Source/Catfishing/Fishing/Tests/CatFishingServiceTests.cpp::HeldRodFacingFollowsControlRotationAndRestoresMovementFacing` → 真实Service/Rod | 原用首帧6度间接证明旧负载清空；新模型需从静止加速 | 改为直接查旧w/负载清空，验证首帧渐进及最终60度目标；保留离竿朝向恢复 | 清约束→同帧新场→真实逐帧转动→离竿 | 旧负载/角速度跨场泄漏、失去目标跟随 | FinalReport该用例通过；原6度瞬时公式断言已替换，实际清理契约保留 |
+
+### 验证证据与尚未完成的验收
+
+修改前 `contract/runtime_behavior` 基线为 `Saved/Automation/RodAngularInertia-20260909/Baseline/Report/index.json`：186项，181 clean、4 warning、1 failed、0 notRun/0 inProcess。唯一失败为既有 `StarterRodPreservesMaximumDurabilityBaseline` 期望150、实际500；退出255，没有Fatal/Assertion/Unhandled Exception。`Baseline/Automation.log` 明确Development并加载主工作区两份09:54构建的模块，`ModulesBefore.json/ModuleHashesBefore.json/Summary.json`记录测试前后SHA256相同，未构建正在修改的源码。
+
+较早173项鱼耗体报告之后，组移动基线已扩至 `Saved/Automation/PreFightFormation-20260908/FinalReport/index.json` 的222项（215 clean、6 warning、同一既有失败）。该组合还包含UI、Equipment和三个Editor网络测试，不能直接与本次Unit.Fishing的186项按总数比较。它们都只作为修改前证据。本轮最终证据如下。
+
+`contract`：`Saved/Automation/RodAngularInertia-20260909/BuildEditorFinal.log`与`BuildGameFinal.log`均为Win64 Development完整成功。`FinalReport/index.json`共191项，184 clean、6带警告成功、1 failed、0 notRun/0 inProcess；唯一失败仍为正式StarterRod耐久期望150、实际500，与修改前一致。范围为188项Unit.Fishing和3项Editor网络用例，未把UI/Equipment总数混入。本轮未更改该资产。`FinalTests.log`确认Development配置及主工作区新DLL加载，`FinalVerification.json`保存17项全通过的构建、回归、日志、正式包hash与源文件指纹核查。
+
+`runtime_behavior`：真实Actor保持非零角速度跨右键rebase、同主助手变更和零时间刷新，换主/退出清理；候选张力预测不改实际角速度、姿态或努力累计。实际CMC短线联合求解、Actor/Camera/RodBend与费用消费者回归通过。`GroupListenThreeClients`、`SlackAimListenClient`、`FishBehaviorListenClientSnapshots`均Success；这些是同进程多World的受控联机证据。默认Display事件`fishing_rod_rotation_resistance_sample`在`FinalTests.log`中记录w/a/J及PitchLimited，按RodActorId、World/NetMode、AimInputEpoch关联，Game Development也已编入该事件；不替代新包双端日志。
+
+受控恢复测试保持120度目标，从零支撑切到50：120/60/20 FPS首帧分别转0.145942/0.546533/3.862835度，末速度33.851458/61.336687/128.429137度/s；连续轨迹、鱼拉向反转及卸载后收敛通过。周期松绷测试在同相位角度/角速度/负载连续20周期收敛后测2秒，最多等待60秒；实际26秒稳定，摆幅0.227度，逐帧速度变化峰值3.783度/s，原45%/85%降幅门槛保留，另满足0.25度/4度每秒绝对上限。初次报告的1.138度混入18–20秒窗口约0.93度的慢漂移，未据此改生产物理或放宽降幅门槛。追加阻尼测试的新共同惯性基线已降低摆幅，原“再降低一半”旧公式指标改为进一步减摆及0.12度/2度每秒绝对上限，保留静态平衡和卸载回位；最终120/60/20 FPS摆幅0.0795/0.0780/0.0594度。上述数字属于固定夹具，不是原试玩窗口重放或真人手感评分。
+
+纯模型以有限亚步近似方向相关转矩；单亚步内先反向再正向时，按净转角计算正功可能少计极小片段，不声称任意轨迹严格精确积分。旧瞬时旋转分支、重复Pitch字段和裁剪、绑定旧瞬时公式的测试已同轮清理；旧日期节只保留历史证据。
+
+`presentation_delivery`尚未取得本轮正式地图真人手感、低帧率/大目标差操作、打包房主与客户端默认落盘日志，也未完成全BP姿态写入图审计。本轮保留完整单一运动与结算链，未新增客户端杆运动插值器，不能将源码角速度连续等同于画面必然丝滑。第二轮输入限幅和剩余验收继续挂在唯一差距清单的Fishing模块，不关闭任何原子模块。
 
 ## 连续出力与三个反馈行为：阻力反馈修正（2026-09-08，第二轮）
 
@@ -334,15 +396,17 @@ Development 权威日志 `Event=fishing_simulation_trace` 默认按约 1 秒和�
 
 `CatFishingRodResistanceModel::Evaluate` 读取同一 `LineTensionNewtons`，不再乘一次鱼力量、游向负载和表现张力。为保持现有旋转参数及复制字段的单位，它将牛顿数除以 `ForcePerStrengthNewtons`，再乘配置杆长（m）得到 `StrengthMeters` 转矩；字段含义没有改为牛顿米。
 
-有向负载仍使用 0.15 s 指数平滑。2026-09-07 的实机反馈和 `Saved/Logs/Catfishing.log` 显示：不动鼠标也有摆动，权威张力在约 0.05～0.15 s 内多次松绷切换，计算转速一度约 339.8°/s。已有滤波后仍会出现大幅快速转动；竿尖又参与下一固定步的线约束，因此本次在同一积分器增加受载粘性阻尼，限制这条反馈链的转动响应，不再叠加独立滤波组件。
+当前实现以本文件开头“鱼竿连续角速度修复（2026-09-09）”为准。2026-09-07曾针对松绷线快速切换，在原瞬时转速模型中增加负载0.15 s指数平滑及受载粘性阻尼；那个历史版本没有角速度记忆，也没有本轮的惯性参数。它的受控测试只证明当时的抖动改善，不能证明本轮用户反馈已解决。
 
-`HeldRodLoadedAngularDampingRatio` 来自 `DefaultGame.ini` 的 `[/Script/Catfishing.CatFishingSettings]`，原生默认和正式配置均为 3，无量纲。设平滑后的鱼负载大小为 P，原转矩尺度为 `S = max(猫转矩容量, P, 数值下限)`，本亚步阻尼倍率为 `1 + 3 × P/S`；原净转矩对应的角速度除以此倍率后，继续使用原角速度上限。鱼负载达到或超过猫容量时倍率为 4，计算转速上限由 360°/s 降到 90°/s；负载很小则连续接近原响应，完全空载严格保持原响应。配置为 0 时禁用追加阻尼，仍走同一个公式和原负载滤波，无第二套运行实现。
+现在 `HeldRodAngularInertiaSeconds=0.08` 和 `HeldRodLoadedAngularDampingRatio=3` 从 `DefaultGame.ini` 的 `[/Script/Catfishing.CatFishingSettings]` 进入同一模型。设平滑后的鱼负载大小为P、转矩尺度为 `S=max(猫转矩容量,P,数值下限)`，实际阻尼为 `max(1+3×P/S,2×sqrt(J/Response))`。默认搏斗内零鱼负载为2倍阻尼，满鱼负载为4倍；净转矩驱动角加速度，实际速度从上一步连续积分。360°/s保持硬上限；持续饱和驱动下的180°/s与90°/s是相应渐近值，不能当作瞬时转速或新的硬上限。将负载阻尼比设0仍保留临界阻尼下限。
 
-猫、鱼净转矩统一减缓，不改变静态力量平衡、方向或单位。受载时玩家主动调杆也会减缓，趋近平衡所需时间更长，这是本次明确的手感变化；实际做功依旧由最终积分转角观察，单价及支付入口不变，支撑持续时间可能随运动过程变化。默认倍率仍需用户复测手感后调节。没有新增角速度历史、复制字段、资产迁移或退出清理状态。
+猫、鱼净转矩的静态平衡、方向和单位保持；加速和减速过程改变，因此实际正功和支撑持续时间也可能变化，单价及支付入口不变。Actor保存真实角速度，纯模型返回身体Pitch限位后的实际姿态和允许速度，正功只观察实际允许转角；预测读取副本，不提交角速度、姿态或努力累计。本轮新增状态有明确生命周期清理，不增加角速度复制字段、资产迁移或存档字段。默认手感仍需用户复测。
 
-杆负载使用地形后的线方向；松线、上岸力竭、终局均不发布旧鱼转矩，现有负载历史继续渐退。实际竿尖、Actor Transform、握把/镜头和努力采样继续消费同一积分结果。该层仍没有独立鱼竿转动惯量，不是完整刚体角动力学，也不声称已经解决所有猫端牵引及网络纠正抖动。
+杆负载使用地形后的线方向；松线和上岸力竭停止目标鱼转矩，搏斗仍有效时保留真实角速度并让负载历史渐退；终局退出按生命周期清理。实际竿尖、Actor Transform、握把/镜头和努力采样继续消费同一积分结果。J是归一化模型的等效惯性时间，不是按杆质量和形状建立的完整刚体惯量；当前也不声称已经解决所有身体纠正、网络及输入滞后造成的手感问题。
 
 ### 右键放线时重设转向意图
+
+本节记录2026-09-07的输入域改动及当时验证。输入契约继续保留，旋转求解现已改为2026-09-09的带惯性模型；旧报告不替代本轮回归，旧表中的速度响应只属于当时版本。普通右键rebase现在也须保留真实角速度；第二轮输入限幅尚未实现。
 
 2026-09-07 的反馈是：先向右拉住鱼竿，再按右键放线，杆会突然追向右侧。原实现把 `ControlRotation` 保留为目标，镜头却只显示受力后的实际握把；负载和受载阻尼下降后，未完成的目标角仍在驱动猫端转矩。右键现在明确表示撤掉这份旧转向意图：第一次按下通过 Session 校验后，把目标基准设为当前权威握把；之后只接新的鼠标转动，松开右键不会恢复旧目标。是否已经按住由 Runner 已接受状态裁决，拒绝过的请求不阻止合法重试重设。真实鱼力仍可带动杆，不瞬移或锁死实际姿态。
 
@@ -461,6 +525,8 @@ runtime_behavior：旧实现隔离高度夹具 `TractionContinuityBaselineReport
 presentation_delivery：编辑器退出后已完成常用 Development DLL 的正式构建和新进程加载回归，可重新打开项目复测。期间请求过 Live Coding，但编辑器在编译期间正常退出，热更新结果不作为交付证据。未重新打包、未采集本轮房主/客户端双端日志，正式场景“不动鼠标且被鱼拖动”的回正抖动仍待实机确认；连续上下文扩大了禁止合并 SavedMove 的时间范围，子步增加了移动碰撞开销，尚需打包联机测量。Fishing 模块仍未整体验收。
 
 ## 手持杆抖动衔接核对（2026-09-07，前一阶段）
+
+本节为历史检查点。其“未新增角速度历史”和空载响应口径仅描述当时实现；当前公式、状态生命周期与验收状态以2026-09-09连续角速度修复节为准。
 
 修改前为 `a4f968a`，工作区干净。上一轮 128 项基线为 124 clean、3 警告、1 既有耐久失败。用户明确反馈中鱼后即使不动鼠标也抖；日志确认权威负载跳变，尚未将该现象唯一归因于某个网络或物理环节。
 
