@@ -78,7 +78,7 @@
 8. `Source/Catfishing/UI/Frontend/CatFrontendSettingsModel.h/.cpp`
 9. `Source/Catfishing/UI/CatLocalPlayerUISubsystem.h/.cpp`
 
-世界槽继续读 `Source/Catfishing/Save/CatSaveSubsystem.h/.cpp`；资产生成继续读 `Source/CatfishingEditor/UI/CatFrontendWidgetAuthoringLibrary.h/.cpp` 与 `Scripts/create_frontend_assets.py`。源码和生成入口均已落地，正式 Root `/Game/UI/Frontend/WBP_CatFrontendRoot` 及配套 `.uasset` 尚未生成，完整构建与 runtime 未通过验证。
+世界槽继续读 `Source/Catfishing/Save/CatSaveSubsystem.h/.cpp`；资产生成继续读 `Source/CatfishingEditor/UI/CatFrontendWidgetAuthoringLibrary.h/.cpp` 与 `Scripts/create_frontend_assets.py`。源码、生成入口、正式 Root 与两张全局 Loading `.uasset` 均已落地，最新 Editor 构建和资产脚本已通过；runtime、打包和 Steam 双端仍未通过验证。
 
 审查联机、旅行或回前台：
 
@@ -130,7 +130,7 @@
 
 ## 核心链路
 
-Frontend 正式结构是 Root + PageController + 3 Model。`UCatLocalPlayerUISubsystem` 负责 LocalPlayer 生命周期并创建目标 Root `/Game/UI/Frontend/WBP_CatFrontendRoot`；`UCatFrontendPageController` 管“首页 -> 存档 -> 房间 -> 加载”，`UCatFrontendSaveModel`、`UCatFrontendRoomModel`、`UCatFrontendSettingsModel` 分别投影 Save、Online 和设置事实。Root 下装五个业务子 WBP（Menu、SaveList、Room、Settings、Loading）与三个动态行资产（SaveSlotRow、RoomFriendRow、RoomPlayerSlot），连同 Root 共九个资产。
+Frontend 正式结构是 Root + PageController + 3 Model。`UCatLocalPlayerUISubsystem` 负责 LocalPlayer 生命周期并创建目标 Root `/Game/UI/Frontend/WBP_CatFrontendRoot`，同时按 Online 操作选择两张全局遮罩资产：进入游戏用 `/Game/UI/Frontend/WBP_CatGameplayLoading`，回主菜单用 `/Game/UI/Frontend/WBP_CatReturnToMainMenuLoading`；`UCatFrontendPageController` 管“首页 -> 存档 -> 房间 -> 加载”，`UCatFrontendSaveModel`、`UCatFrontendRoomModel`、`UCatFrontendSettingsModel` 分别投影 Save、Online 和设置事实。Root 下只装四个业务子 WBP（Menu、SaveList、Room、Settings）与三个动态行资产（SaveSlotRow、RoomFriendRow、RoomPlayerSlot），两张 Loading WBP 都不嵌入 Root，连同 Root 共十个资产。
 
 世界 Save 与 Profile 是两套不同持久化边界。`UCatSaveSubsystem` / `UCatRunSaveGame` 承担世界槽、库存内容和角色位置；`UCatProfileSubsystem` / `UCatProfileSaveGame` 承担 Grant Journal、图鉴、解锁和装备选择。Frontend 存档列表只能读 SaveModel，不得从 Profile 拼装世界槽摘要。
 
@@ -154,7 +154,7 @@ Frontend 到玩法地图的 Session 与旅行事实仍由 `UCatOnlineSubsystem` 
 
 ## 配置与资产入口
 
-`CatUISettings` 已把 `FrontendRootWidgetClass` 指向 `/Game/UI/Frontend/WBP_CatFrontendRoot.WBP_CatFrontendRoot_C`，`Config/DefaultGame.ini` 已精确加入 `/Game/UI/Frontend` 和 `/Game/Audio/Settings` 的 Cook 目录。`Source/CatfishingEditor/UI/CatFrontendWidgetAuthoringLibrary.h/.cpp` 与 `Scripts/create_frontend_assets.py` 已提供 9 个 WBP、6 个音频资产（1 个 SoundMix + 5 个 SoundClass）的生成入口；对应 `.uasset` 尚未生成，完整构建未通过，runtime 未验证。
+`CatUISettings` 已把 `FrontendRootWidgetClass` 指向 `/Game/UI/Frontend/WBP_CatFrontendRoot.WBP_CatFrontendRoot_C`，并分别提供 `GameplayLoadingWidgetClass` 与 `ReturnToMainMenuLoadingWidgetClass` 的默认软类；`Config/DefaultGame.ini` 已精确加入 `/Game/UI/Frontend` 和 `/Game/Audio/Settings` 的 Cook 目录。`Source/CatfishingEditor/UI/CatFrontendWidgetAuthoringLibrary.h/.cpp` 与 `Scripts/create_frontend_assets.py` 已提供 10 个 WBP、6 个音频资产（1 个 SoundMix + 5 个 SoundClass）的生成入口；对应 `.uasset` 已通过脚本生成和合同校验，完整 Editor 构建已通过，runtime 未验证。
 
 当前默认地图在 `Config/DefaultEngine.ini` 指向 `/Game/Catfishing/Maps/Frontend`；新 Online 源码将创建房间与开始旅行分开，显式 Host 开始后才异步预载并进入 `CatOnlineSettings.GameplayMap`，当前测试值为 `/Game/NaturePackage/Maps/Showcase2`。Online 的 `Lake`/`TravelingToLake` 枚举名暂作兼容标签保留，其运行含义是“联机玩法地图”。Frontend、Lake 与 Showcase2 都在打包地图白名单中，因此切回正式 Lake 只需修改一行 `GameplayMap` 配置，无需改 C++ 或重新维护 Cook 列表。
 Showcase2 当前包含一个 `BP_CampHUB_C` 实例 `Showcase_CampHub`，位置为 `(4760, 22310, 417)`，它承担唯一营地出生点语义。地图里可以暂留普通 `PlayerStart`，但 `ACatfishingGameModeBase` 运行时只接受唯一的 `ACatCampHubActor`，不会把普通 `PlayerStart` 当作玩家出生点。

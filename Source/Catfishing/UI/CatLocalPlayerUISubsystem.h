@@ -79,6 +79,9 @@ private:
 	/** 全局 Loading WBP 的一次渲染快照；它把“正在等什么”和“是否显示进度”分开，避免 View 自行编造加载状态。 */
 	struct FCatGlobalLoadingPresentation
 	{
+		/** 这次遮罩对应的真实 Online 操作；`ShouldShowGlobalLoadingScreen()` 和完成态展示写入，`ShowGlobalLoadingScreen()` 读取它选择 Start/Leave 专用资产并拒绝非法身份，避免 View 资产身份混用。 */
+		ECatOnlineOperation LoadingOperation = ECatOnlineOperation::None;
+
 		/** 遮罩正在承载的高层目标，例如进入游戏或返回主菜单；由 LocalPlayer UI 根据当前 Start/Leave 过渡写入。 */
 		FText HeadingText;
 
@@ -116,7 +119,7 @@ private:
 	/** 从 Online、Lyra 式引擎 gate 与本地 UI 就绪事实生成遮罩表现；进入游戏会同步给出真实 gate 合成总进度。 */
 	bool ShouldShowGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot, FCatGlobalLoadingPresentation& OutPresentation) const;
 
-	/** 创建或复用全局加载遮罩并写入本轮表现快照；遮罩复用正式 Loading WBP 资产，但不再属于 Frontend Root 子页。 */
+	/** 创建或复用全局加载遮罩并写入本轮表现快照；Start 与 Leave 使用各自正式 WBP，但都挂在最高层视口。 */
 	void ShowGlobalLoadingScreen(const FCatGlobalLoadingPresentation& Presentation);
 
 	/** 移除全局加载遮罩并清空最后阶段文本与本地过渡记忆；它不改变 Online 操作，只释放本地 UMG 表现。 */
@@ -187,6 +190,9 @@ private:
 	/** 当前 LocalPlayer 的全局加载遮罩实例；Start/Leave 等待期加到最高层，空闲或错误时立即从视口移除。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UUserWidget> GlobalLoadingScreenWidget;
+
+	/** 当前全局遮罩实例所属的业务操作；创建成功时写入，切换、隐藏或空实例清理时清空，`ShowGlobalLoadingScreen()` 读取它决定复用当前 WBP 还是销毁后创建另一张专用资产。 */
+	ECatOnlineOperation GlobalLoadingScreenWidgetOperation = ECatOnlineOperation::None;
 
 	/** 最近一次写入全局加载遮罩的阶段文本；只用于重复刷新去抖和日志，不作为 Online 状态来源。 */
 	FText LastGlobalLoadingStatusText;

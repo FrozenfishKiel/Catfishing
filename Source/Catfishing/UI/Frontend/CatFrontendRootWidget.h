@@ -125,7 +125,7 @@ private:
 };
 
 /**
- * Frontend 根视图；只维护九个 WBP 资产的装配与可见页，不拥有存档、房间或设置的业务事实。
+ * Frontend 根视图；只维护 Root 内业务页和动态行的装配与可见页，不拥有两张全局 Loading 资产，也不保存存档、房间或设置的业务事实。
  * LocalPlayer UI 子系统创建它，页面按钮经由这里转成 Controller 意图，Model 只供 WBP 只读渲染。
  */
 UCLASS(Abstract, BlueprintType)
