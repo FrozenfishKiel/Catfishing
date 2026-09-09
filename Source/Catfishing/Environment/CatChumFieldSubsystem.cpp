@@ -5,6 +5,7 @@
 #include "Environment/CatChumFieldReplicationComponent.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Environment/CatWaterQuerySubsystem.h"
+#include "Logging/CatLog.h"
 #include "TimerManager.h"
 
 namespace CatChumFieldSubsystemPrivate
@@ -25,14 +26,16 @@ namespace CatChumFieldSubsystemPrivate
 	}
 }
 
+// 子系统创建阶段先做一次幂等清理定时器准备；World 可能还没 BeginPlay，后续 OnWorldBeginPlay 会再校准授权端状态。
 void UCatChumFieldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
-	EnsureCleanupTimer(); // World 还未必 BeginPlay，这里先尝试起一次；真正世界开始时 OnWorldBeginPlay 会再确认一次
+	// World 还未必 BeginPlay，这里只尝试一次；真正世界开始时 OnWorldBeginPlay 会按可靠 NetMode 再确认。
+	EnsureCleanupTimer();
 }
 
+// World BeginPlay 后再次确认过期清理定时器，补齐初始化阶段 NetMode 可能不可靠的生命周期窗口。
 void UCatChumFieldSubsystem::OnWorldBeginPlay(UWorld& InWorld)
-
 {
 	Super::OnWorldBeginPlay(InWorld);
 	EnsureCleanupTimer(); // 世界正式开始后，此时 GetNetMode 等信息才可靠，重新确认定时器状态
@@ -98,7 +101,8 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 		// 打窝权威逻辑只能在服务器/单机端跑，客户端调用直接拒绝
 		return MakePrepareError(ECatChumFieldError::DependencyUnavailable);
 	}
-	if (!GetDefault<UCatChumFieldSettings>()->IsRuntimeReady())
+	const UCatChumFieldSettings* Settings = GetDefault<UCatChumFieldSettings>();
+	if (!Settings || !Settings->IsRuntimeReady())
 	{
 		// 功能总开关关闭或配置非法
 		return MakePrepareError(ECatChumFieldError::FeatureDisabled);
@@ -157,6 +161,18 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 		// 窝料定义配置本身非法，或本次数量超出该定义允许的单次投放上限
 		return MakePrepareError(ECatChumFieldError::InvalidPayload);
 	}
+	const double DefinitionRadiusCentimeters = RuntimeInfluence.RadiusCentimeters;
+	double InfluenceRadiusScale = 0.0;
+	if (!Settings->TryGetInfluenceRadiusScale(InfluenceRadiusScale))
+	{
+		return MakePrepareError(ECatChumFieldError::FeatureDisabled);
+	}
+	RuntimeInfluence.RadiusCentimeters *= InfluenceRadiusScale;
+	if (!FMath::IsFinite(RuntimeInfluence.RadiusCentimeters)
+		|| RuntimeInfluence.RadiusCentimeters <= 0.0)
+	{
+		return MakePrepareError(ECatChumFieldError::InvalidPayload);
+	}
 	// 三种诱鱼因子（腥/香/发酵）之和作为这份窝料对"预算"的原始占用量，用来限制单水域窝料浓度上限
 	const double RawContribution = RuntimeInfluence.BaseContribution.Fishy
 		+ RuntimeInfluence.BaseContribution.Fragrant + RuntimeInfluence.BaseContribution.Fermented;
@@ -165,7 +181,6 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 		return MakePrepareError(ECatChumFieldError::InvalidPayload);
 	}
 
-	const UCatChumFieldSettings* Settings = GetDefault<UCatChumFieldSettings>();
 	// 按水域 RegionId 各自维护独立的配额账本，找不到则新建一个全零的
 	FCatChumBudgetState& Budget = BudgetByRegion.FindOrAdd(Water.WaterRegion.RegionId);
 	if (Budget.ActiveCount + Budget.PendingCount >= Settings->MaxActiveFieldsPerRegion
@@ -200,16 +215,24 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 	Result.bPrepared = true; Result.Error = ECatChumFieldError::None; Result.CommitToken.Value = TokenId;
 	Result.FieldId = FieldId; Result.WaterRegion = Water.WaterRegion; Result.CorrectedCenter = Water.WaterSurfaceWorldPoint;
 	Result.StartServerTime = Request.ServerTime; Result.ExpireServerTime = Pending.State.ExpireServerTime;
+	UE_LOG(LogCatEnvironment, Log,
+		TEXT("Event=chum_field_prepared RequestId=%s FieldId=%s Region=%s Definition=%s Quantity=%d BaseRadiusCm=%.2f EffectiveRadiusCm=%.2f AreaMultiplier=%.3f StartServerTime=%.3f ExpireServerTime=%.3f"),
+		*Request.Command.RequestId.ToString(EGuidFormats::DigitsWithHyphensLower),
+		*FieldId.ToString(EGuidFormats::DigitsWithHyphensLower), *Water.WaterRegion.RegionId.ToString(),
+		*Request.Command.ChumDefinitionId.ToString(), Request.Command.Quantity,
+		DefinitionRadiusCentimeters, Pending.State.Influence.RadiusCentimeters,
+		Settings->InfluenceAreaMultiplier, Pending.State.StartServerTime, Pending.State.ExpireServerTime);
 	return Result;
 }
 
 // 两阶段提交第二阶段：把 Prepare 阶段暂存的窝料场真正落子为"活跃"状态（此时尚未广播给客户端，见 PublishActivatedField）。
-// 分离 Activate 和 Publish 是为了让上层能先在同一事务里扣完装备/背包消耗，再统一对外可见。
+// 分离 Activate 和 Publish 是为了让上层能先在同一事务里扣完随身物品消耗，再统一对外可见。
+// 参数版本流程：正式库存路径传入扣量后的 InventoryRevision；结果里仍同步旧 EquipmentRevision 字段，避免迁移期 UI 失去回执。
 FCatPlaceChumResult UCatChumFieldSubsystem::ActivatePreparedFieldDeferred(
-	const FCatChumFieldCommitToken Token, const int64 EquipmentRevision)
+	const FCatChumFieldCommitToken Token, const int64 InventoryRevision)
 {
 	FCatPlaceChumResult Result;
-	Result.EquipmentRevision = EquipmentRevision;
+	Result.SetInventoryRevision(InventoryRevision);
 	if (!GetWorld() || GetWorld()->GetNetMode() == NM_Client || !Token.IsValid())
 	{
 		Result.Error = ECatChumFieldError::DependencyUnavailable;
@@ -237,7 +260,7 @@ FCatPlaceChumResult UCatChumFieldSubsystem::ActivatePreparedFieldDeferred(
 	Result.bCommitted = true; Result.Error = ECatChumFieldError::None; Result.FieldId = Frozen.State.FieldId;
 	Result.WaterRegion = Frozen.State.WaterRegion; Result.ServerCorrectedCenter = Frozen.State.CenterWorldPoint;
 	Result.StartServerTime = Frozen.State.StartServerTime; Result.ExpireServerTime = Frozen.State.ExpireServerTime;
-	Result.EquipmentRevision = EquipmentRevision; Result.ChumFieldSetRevision = Revision;
+	Result.SetInventoryRevision(InventoryRevision); Result.ChumFieldSetRevision = Revision;
 	return Result;
 }
 

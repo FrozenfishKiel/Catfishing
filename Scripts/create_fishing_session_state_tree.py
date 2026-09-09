@@ -1,4 +1,8 @@
-"""Rebuild the authoritative fishing-session StateTree from the checked-in C++ topology."""
+"""Rebuild the canonical fishing-session StateTree through the editor authoring utility.
+
+Run from Unreal Editor Python console or UnrealEditor-Cmd:
+    py "D:/develop/Catfishing/Scripts/create_fishing_session_state_tree.py"
+"""
 
 import unreal
 

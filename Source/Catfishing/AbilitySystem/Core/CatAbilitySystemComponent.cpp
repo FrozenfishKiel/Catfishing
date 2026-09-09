@@ -5,8 +5,9 @@
 #include "AbilitySystem/Effects/CatFishingStaminaEffect.h"
 #include "AbilitySystem/Effects/CatPoisonEffect.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
-#include "Character/CatCharacter.h"
+#include "AbilitySystemBlueprintLibrary.h"
 #include "Abilities/GameplayAbility.h"
+#include "Logging/CatLog.h"
 
 namespace
 {
@@ -22,6 +23,14 @@ namespace
 		}
 		return ECatAbilityActivationPolicy::OnInputTriggered;
 	}
+}
+
+UCatAbilitySystemComponent* UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(AActor* Actor)
+{
+	// ASC 解析流程：只通过 GAS 标准 AbilitySystemInterface/BlueprintLibrary 查询，再收窄成项目 ASC；
+	// 非猫身体、未装配 ASC 或错误 ASC 类型都会返回空，让调用方保持 fail-closed。
+	return Actor ? Cast<UCatAbilitySystemComponent>(UAbilitySystemBlueprintLibrary::GetAbilitySystemComponent(Actor))
+		: nullptr;
 }
 
 void UCatAbilitySystemComponent::RegisterAbilityInput(const FGameplayAbilitySpecHandle Handle,
@@ -175,7 +184,7 @@ bool UCatAbilitySystemComponent::CancelBodyActionAbilitiesFromAuthority()
 		return false;
 	}
 	FGameplayTagContainer BodyActionTags;
-	BodyActionTags.AddTag(CatFishingAbilityTags::Ability_Body_Command);
+	BodyActionTags.AddTag(CatFishingAbilityTags::Ability_Body_Action);
 	bool bHasActiveBodyAction = false;
 	for (const FGameplayAbilitySpec& Spec : GetActivatableAbilities())
 	{
@@ -195,7 +204,9 @@ bool UCatAbilitySystemComponent::CancelBodyActionAbilitiesFromAuthority()
 
 bool UCatAbilitySystemComponent::ApplyFishingStaminaDelta(const float Delta)
 {
-	if (!FMath::IsFinite(Delta) || FMath::IsNearlyZero(Delta) || !GetOwnerActor() || !GetAvatarActor()
+	// 体力提交流程：先拒绝非法 delta、缺 ActorInfo 和非 authority 调用；再创建正式 GE 并写入 SetByCaller。
+	// 返回值必须来自 GAS 实际应用结果，因为会话初始化用它判断是否真的完成回满或消耗。
+	if (!FMath::IsFinite(Delta) || Delta == 0.0f || !GetOwnerActor() || !GetAvatarActor()
 		|| !IsOwnerActorAuthoritative())
 	{
 		return false;
@@ -206,21 +217,115 @@ bool UCatAbilitySystemComponent::ApplyFishingStaminaDelta(const float Delta)
 		return false;
 	}
 	Spec.Data->SetSetByCallerMagnitude(CatFishingAbilityTags::Data_Fishing_FightStaminaDelta, Delta);
-	ApplyGameplayEffectSpecToSelf(*Spec.Data.Get());
+	return ApplyGameplayEffectSpecToSelf(*Spec.Data.Get()).WasSuccessfullyApplied();
+}
+
+// Character ASC ActorInfo 建立流程：
+// 1. 先读取项目能力设置，只有显式启用的 Full 复制策略才建立 Owner/Avatar，未启用时主动清理引擎可能留下的临时 ActorInfo。
+// 2. 再把同一个 Character Actor 同时作为 Owner 和 Avatar 写入 GAS，这是当前项目选择的 Character-owned ASC 边界。
+// 3. 返回值只表示 ActorInfo 是否可继续用于授予 Ability 或播种属性；具体属性、AbilitySet 和输入资产的完整性由各自后续入口再裁决。
+bool UCatAbilitySystemComponent::InitializeCharacterOwnerAvatar(AActor* CharacterOwnerAvatar)
+{
+	const UCatAbilitySettings* Settings = GetDefault<UCatAbilitySettings>();
+	if (!CharacterOwnerAvatar || !Settings || !Settings->IsRuntimeEnabled())
+	{
+		ClearActorInfo();
+		return false;
+	}
+	SetReplicationMode(EGameplayEffectReplicationMode::Full);
+	InitAbilityActorInfo(CharacterOwnerAvatar, CharacterOwnerAvatar);
+	return true;
+}
+
+// 默认 AbilitySet 授予流程：
+// 1. 先要求本 ASC 已处在 authority Owner 上、尚未授予，并且项目设置声明 Fishing GAS 资产完整。
+// 2. 再同步加载配置的 AbilitySet，通过 AbilitySet 自己的 GiveToAbilitySystem 写入 Ability、输入标签和初始效果。
+// 3. 只有整组授予成功才记录句柄和已授予状态；失败保持无临时代用品，后续重占有仍可重试。
+bool UCatAbilitySystemComponent::GrantConfiguredDefaultAbilitySetFromAuthority()
+{
+	const UCatAbilitySettings* Settings = GetDefault<UCatAbilitySettings>();
+	if (!GetOwnerActor() || !IsOwnerActorAuthoritative() || bConfiguredDefaultAbilitySetGranted
+		|| !Settings || !Settings->IsFishingRuntimeReady())
+	{
+		return false;
+	}
+	const UCatAbilitySet* AbilitySet = Settings->DefaultAbilitySet.LoadSynchronous();
+	bConfiguredDefaultAbilitySetGranted = AbilitySet
+		&& AbilitySet->GiveToAbilitySystem(this, ConfiguredDefaultAbilitySetHandles);
+	return bConfiguredDefaultAbilitySetGranted;
+}
+
+// 默认 AbilitySet 撤销流程：
+// 1. 只读取本 ASC 记录的授予句柄，不重新读取设置或猜测当前资产路径，避免销毁尾声同步加载无关资源。
+// 2. TakeFromAbilitySystem 会撤销 AbilitySpec、初始 GameplayEffect 和输入索引；重复调用只清空空句柄集合。
+// 3. 最后清掉已授予标记，让同一个组件在极端生命周期重入时仍保持幂等。
+void UCatAbilitySystemComponent::RevokeConfiguredDefaultAbilitySet()
+{
+	ConfiguredDefaultAbilitySetHandles.TakeFromAbilitySystem(this);
+	bConfiguredDefaultAbilitySetGranted = false;
+}
+
+// Character 初始属性播种流程：
+// 1. 先要求已建立 Owner/Avatar 的 authority ASC，且本组件尚未成功播种；ActorInfo 未就绪、客户端调用或重占有都不触碰属性基值。
+// 2. 再按 Character 传入的 CatDefinitionId 读取完整配置；配置缺失、未就绪或数值非法时只记录原有诊断并返回 false，不把半套数值写入 ASC。
+// 3. 配置完整后一次写入 Poison、FishingStrength 与 MaxFightStamina 的基值，确保这些身体数值只通过 GAS 边界进入 AttributeSet。
+// 4. 最后沿用现有会话体力初始化入口按新上限回满 FightStamina；全部成功才清掉可能排队的重置请求并记录一次性状态，失败会保留后续 ActorInfo 刷新时的重试机会。
+bool UCatAbilitySystemComponent::InitializeCharacterAttributesFromDefinition(const FName CatDefinitionId)
+{
+	if (!GetOwnerActor() || !GetAvatarActor() || !IsOwnerActorAuthoritative()
+		|| bInitialCharacterAttributesApplied)
+	{
+		return bInitialCharacterAttributesApplied;
+	}
+
+	const UCatAbilitySettings* Settings = GetDefault<UCatAbilitySettings>();
+	float Poison = 0.0f;
+	float FishingStrength = 0.0f;
+	float MaxFightStamina = 0.0f;
+	if (!Settings || !Settings->TryGetInitialAttributesForCharacter(CatDefinitionId, Poison, FishingStrength,
+		MaxFightStamina))
+	{
+		if (!CatDefinitionId.IsNone())
+		{
+			UE_LOG(LogCatCharacter, Warning,
+				TEXT("Event=initial_attributes_unresolved CatDefinitionId=%s Reason=DefinitionMissingOrNotReady"),
+				*CatDefinitionId.ToString());
+		}
+		return false;
+	}
+
+	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), Poison);
+	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), FishingStrength);
+	SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), MaxFightStamina);
+	if (!InitializeFishingStaminaForSession())
+	{
+		return false;
+	}
+	bPendingFishingStaminaReset = false;
+	bInitialCharacterAttributesApplied = true;
 	return true;
 }
 
 bool UCatAbilitySystemComponent::InitializeFishingStaminaForSession()
 {
-	// 基线按 Avatar 的猫种类解析，与搏斗装配的 CatStaminaMaximum 保持同源；非 CatCharacter Avatar 走全局值。
-	const ACatCharacter* Character = Cast<ACatCharacter>(GetAvatarActor());
-	const FName CatDefinitionId = Character ? Character->GetCatDefinitionId() : NAME_None;
-	float Baseline = 0.0f;
-	if (!GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(CatDefinitionId, Baseline))
+	// 体力重置流程：
+	// 1. 先拒绝缺 Owner/Avatar 或非 authority 的调用，保证短周期体力只由服务器恢复。
+	// 2. 再从 ASC 当前 MaxFightStamina 读取本身体的上限；上限未播种或非法时返回 false，让会话入口 fail-closed。
+	// 3. 最后只提交到上限的 delta，沿用正式 GameplayEffect 写口，保持属性委托、复制和日志观察同源。
+	if (!GetOwnerActor() || !GetAvatarActor() || !IsOwnerActorAuthoritative())
+	{
+		return false;
+	}
+	const float Baseline = GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+	if (!FMath::IsFinite(Baseline) || Baseline <= 0.0f)
 	{
 		return false;
 	}
 	const float Current = GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+	if (!FMath::IsFinite(Current))
+	{
+		return false;
+	}
 	return FMath::IsNearlyEqual(Current, Baseline) || ApplyFishingStaminaDelta(Baseline - Current);
 }
 
@@ -240,6 +345,7 @@ bool UCatAbilitySystemComponent::RequestFishingStaminaReset()
 
 bool UCatAbilitySystemComponent::EnsureFishingStaminaReadyForNewSession()
 {
+	// 会话准入流程：先补做延迟回满，再同时检查当前体力和上限；上限缺失时不能让 FishingSession 用配置再开第二套事实源。
 	if (bPendingFishingStaminaReset)
 	{
 		RequestFishingStaminaReset();
@@ -248,8 +354,11 @@ bool UCatAbilitySystemComponent::EnsureFishingStaminaReadyForNewSession()
 			return false;
 		}
 	}
+	const float Maximum = GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+	const float Current = GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
 	return GetOwnerActor() && GetAvatarActor()
-		&& GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) > 0.0f;
+		&& FMath::IsFinite(Maximum) && Maximum > 0.0f
+		&& FMath::IsFinite(Current) && Current > 0.0f;
 }
 
 bool UCatAbilitySystemComponent::ApplyPoisonDelta(const float Delta)

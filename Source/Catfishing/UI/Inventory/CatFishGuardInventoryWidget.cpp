@@ -6,3 +6,10 @@ const TArray<FCatInventorySlotView>& UCatFishGuardInventoryWidget::GetInventoryS
 {
 	return ViewState.ExternalContainerSlots;
 }
+
+// 鱼护 Slots 回写流程：鱼护 WBP 的本地高亮只写回 ExternalContainerSlots，避免鱼护选择影响背包或营地仓库页面。
+void UCatFishGuardInventoryWidget::StoreDisplayedSlotsInViewState(FCatInventoryViewState& ViewState,
+	const TArray<FCatInventorySlotView>& Slots) const
+{
+	ViewState.ExternalContainerSlots = Slots;
+}

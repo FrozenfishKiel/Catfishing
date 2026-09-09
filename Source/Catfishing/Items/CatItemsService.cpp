@@ -4,7 +4,12 @@
 #include "Data/CatFishDefinition.h"
 #include "Logging/CatLog.h"
 #include "Engine/World.h"
+#include "Engine/Level.h"
+#include "GameFramework/Actor.h"
 #include "Items/CatContainerReplicationComponent.h"
+#include "Items/CatFishGuardActor.h"
+#include "Items/CatFishTankActor.h"
+#include "Items/CatItemsSettings.h"
 
 namespace
 {
@@ -27,6 +32,14 @@ namespace
 		{
 			return Fish.FishInstanceId == FishInstanceId;
 		});
+	}
+
+	// 直接吃鱼载荷签名流程：把首次读到的容器版本和鱼实例绑定到 RequestId，阻止同一请求换鱼或换版本前提。
+	FString MakeFishConsumePayloadSignature(const FCatFishConsumeCommand& Command)
+	{
+		return FString::Printf(TEXT("ExpectedRevision=%lld|FishInstance=%s"),
+			Command.Context.ExpectedRevision,
+			*Command.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
 	}
 
 	// 空格查找流程：在容器容量内寻找第一个没有真实鱼的槽位；容量未裁时返回 INDEX_NONE，防止写入无界数组。
@@ -101,6 +114,57 @@ namespace
 		}
 		return ECatDomainCommandError::PolicyUndecided;
 	}
+
+	// 关卡键构造流程：按去掉 PIE 前缀的关卡包、Actor 名和组件名定位预放置宿主；动态对象由 Items 单独分配可持久化实体键。
+	bool TryMakePersistentContainerKey(const UCatContainerReplicationComponent* Component,
+		const ECatContainerKind Kind, FString& OutKey)
+	{
+		OutKey.Reset();
+		const AActor* Owner = Component ? Component->GetOwner() : nullptr;
+		if (!Owner || !Owner->IsNetStartupActor()
+			|| (Kind != ECatContainerKind::FishGuard && Kind != ECatContainerKind::SharedFishTank))
+		{
+			return false;
+		}
+		OutKey = FString::Printf(TEXT("level:%s|%s|%s|%d"),
+			*UWorld::RemovePIEPrefix(Owner->GetLevel()->GetOutermost()->GetName()),
+			*Owner->GetFName().ToString(), *Component->GetFName().ToString(), static_cast<int32>(Kind));
+		return true;
+	}
+
+	// 宿主类型预检流程：持久化只支持领域内已实现注册生命周期的鱼护和鱼缸，拒绝抽象类、错误种类和不复制的宿主。
+	bool IsPersistentContainerClassValid(UClass* HostClass, const ECatContainerKind Kind)
+	{
+		const bool bKnownClass = HostClass && !HostClass->HasAnyClassFlags(CLASS_Abstract | CLASS_Deprecated | CLASS_NewerVersionExists)
+			&& ((Kind == ECatContainerKind::FishGuard && HostClass->IsChildOf(ACatFishGuardActor::StaticClass()))
+				|| (Kind == ECatContainerKind::SharedFishTank && HostClass->IsChildOf(ACatFishTankActor::StaticClass())));
+		return bKnownClass && HostClass->GetDefaultObject<AActor>()->GetIsReplicated();
+	}
+
+	// 动态键读取流程：只接受 Items 自己生成的正序号格式，恢复后据此继续编号，不接受网络 ContainerId 或随机 GUID。
+	bool ParsePersistentContainerNumber(const FString& Key, int64& OutNumber)
+	{
+		OutNumber = 0;
+		return Key.StartsWith(TEXT("runtime:")) && LexTryParseString(OutNumber, *Key.Mid(8))
+			&& OutNumber > 0 && OutNumber < MAX_int64 && Key == FString::Printf(TEXT("runtime:%lld"), OutNumber);
+	}
+
+	// 持久化鱼校验流程：逐条确认实例、定义、所有权、重量和跨容器唯一性；坏鱼不能因恢复路径绕过正常捕获时的领域前提。
+	bool ValidatePersistentFish(const FCatFishInstance& Fish, TSet<FGuid>& SeenFishInstanceIds,
+		FText& OutFailure)
+	{
+		const UCatFishDefinition* Definition = GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(
+			Fish.FishDefinitionId);
+		if (!Fish.FishInstanceId.IsValid() || Fish.FishDefinitionId.IsNone() || Fish.OwnerStableNetId.IsEmpty()
+			|| !FMath::IsFinite(Fish.WeightKilograms) || Fish.WeightKilograms <= 0.0
+			|| Fish.SacrificeContribution < 0 || !Definition || SeenFishInstanceIds.Contains(Fish.FishInstanceId))
+		{
+			OutFailure = FText::FromString(TEXT("世界鱼容器含有无效、缺定义或重复的鱼实例。"));
+			return false;
+		}
+		SeenFishInstanceIds.Add(Fish.FishInstanceId);
+		return true;
+	}
 }
 
 // 创建条件流程：只允许 Game/PIE 的 authority World 持有可写 Items；客户端 World 不创建第二份容器聚合。
@@ -122,22 +186,37 @@ void UCatItemsService::Deinitialize()
 	CaptureByFishingSession.Reset();
 	TransferTerminalCache.Reset();
 	ConsumeTerminalCache.Reset();
+	ConsumeTerminalPayloadByKey.Reset();
 	TheftTerminalCache.Reset();
 	Super::Deinitialize();
 }
 
-// 容器注册流程：接收 authority 宿主提交的组件、ID 和世界容器类型；随后把初始 Revision、容量和复制组件写入服务端记录并发布初始快照。
+// 容器注册流程：先验证 authority 和恢复宿主配对，再建立网络记录与独立持久键并发布初始快照；恢复中意外宿主或序号耗尽会关闭命令，阻止外层提交。
 bool UCatItemsService::RegisterContainer(UCatContainerReplicationComponent* ReplicationComponent, const FGuid ContainerId,
 	const ECatContainerKind Kind, const int32 Capacity)
 {
-	if (!bCommandsOpen || !ReplicationComponent || !ContainerId.IsValid()
-		|| Kind == ECatContainerKind::Unknown)
+	AActor* Host = ReplicationComponent ? ReplicationComponent->GetOwner() : nullptr;
+	if (bRestoringPersistentContainers && Host != ExpectedRestoreHost.Get())
+	{
+		bCommandsOpen = false;
+		UE_LOG(LogCatItems, Error, TEXT("Event=persistence_unexpected_container_registration Host=%s World=%s"),
+			*GetNameSafe(Host), *GetNameSafe(GetWorld()));
+		return false;
+	}
+	if (!bCommandsOpen || !Host || !Host->HasAuthority()
+		|| Host->GetWorld() != GetWorld() || !ContainerId.IsValid() || Kind == ECatContainerKind::Unknown)
 	{
 		return false;
 	}
 	if (FContainerRecord* Existing = Containers.Find(ContainerId))
 	{
 		return Existing->ReplicationComponent.Get() == ReplicationComponent;
+	}
+	if (!Host->IsNetStartupActor() && (NextPersistentContainerNumber <= 0 || NextPersistentContainerNumber == MAX_int64))
+	{
+		bCommandsOpen = false;
+		UE_LOG(LogCatItems, Error, TEXT("Event=persistence_container_key_exhausted World=%s"), *GetNameSafe(GetWorld()));
+		return false;
 	}
 	FContainerRecord& Record = Containers.Add(ContainerId);
 	Record.Snapshot.ContainerId = ContainerId;
@@ -146,20 +225,35 @@ bool UCatItemsService::RegisterContainer(UCatContainerReplicationComponent* Repl
 	Record.Snapshot.Capacity = FMath::Max(0, Capacity);
 	Record.Capacity = FMath::Max(0, Capacity);
 	Record.ReplicationComponent = ReplicationComponent;
+	Record.bRuntimeCreated = !Host->IsNetStartupActor();
+	if (Record.bRuntimeCreated)
+	{
+		Record.PersistentKey = FString::Printf(TEXT("runtime:%lld"), NextPersistentContainerNumber++);
+	}
+	else
+	{
+		TryMakePersistentContainerKey(ReplicationComponent, Kind, Record.PersistentKey);
+	}
 	PublishContainer(Record);
 	return true;
 }
 
-// 容器注销流程：只移除弱引用精确匹配的宿主记录；迟到的旧 Actor 不能删除同 ID 的新注册容器。
+// 容器注销流程：先核对恢复时预期的销毁宿主，意外注销会关闭命令；再允许 pending-kill 弱引用仅作同一性比较，移除精确记录或保留 escrow 返还槽，旧 Actor 不能删新登记。
 void UCatItemsService::UnregisterContainer(UCatContainerReplicationComponent* ReplicationComponent)
 {
 	if (!ReplicationComponent)
 	{
 		return;
 	}
+	if (bRestoringPersistentContainers && ReplicationComponent->GetOwner() != ExpectedRestoreHost.Get(true))
+	{
+		bCommandsOpen = false;
+		UE_LOG(LogCatItems, Error, TEXT("Event=persistence_unexpected_container_unregistration Host=%s World=%s"),
+			*GetNameSafe(ReplicationComponent->GetOwner()), *GetNameSafe(GetWorld()));
+	}
 	for (auto It = Containers.CreateIterator(); It; ++It)
 	{
-		if (It.Value().ReplicationComponent.Get() == ReplicationComponent)
+		if (It.Value().ReplicationComponent.Get(true) == ReplicationComponent)
 		{
 			if (CountReservedReturnSlots(It.Key()) > 0)
 			{
@@ -188,8 +282,74 @@ bool UCatItemsService::TryGetContainerSnapshot(const FGuid ContainerId, FCatCont
 	return true;
 }
 
+// 售鱼事实准备流程：
+// 1. 先拒绝无效请求、关闭写口和恢复窗口，避免 Shop 在 Items 不会提交的状态下提前报价。
+// 2. 再由 Items 自己检查容器版本、正式鱼槽、预留锁和当前允许离开容器的规则，Shop 不接触容器来源枚举。
+// 3. 地面鱼护只允许捕获者本人出售；共享鱼缸按团队公开容器处理，后续 Social escrow 仍必须由 Social 自己提供正式接口。
+bool UCatItemsService::TryPrepareFishForSaleFromContainer(const FGuid FishInstanceId, const FGuid ContainerId,
+	const int64 ExpectedContainerRevision, const FString& SellerStableNetId, FCatFishInstance& OutFish,
+	int64& OutContainerRevision, ECatDomainCommandError& OutError) const
+{
+	OutFish = FCatFishInstance();
+	OutContainerRevision = 0;
+	OutError = ECatDomainCommandError::InvalidPayload;
+	if (!FishInstanceId.IsValid() || !ContainerId.IsValid() || SellerStableNetId.IsEmpty())
+	{
+		return false;
+	}
+	if (!bCommandsOpen || bRestoringPersistentContainers)
+	{
+		OutError = ECatDomainCommandError::CommandsClosed;
+		return false;
+	}
+	const FContainerRecord* Container = Containers.Find(ContainerId);
+	if (!Container)
+	{
+		OutError = ECatDomainCommandError::NotFound;
+		return false;
+	}
+	OutContainerRevision = Container->Snapshot.Revision;
+	if (Container->Snapshot.Revision != ExpectedContainerRevision)
+	{
+		OutError = ECatDomainCommandError::RevisionConflict;
+		return false;
+	}
+	const bool bContainerCanSellFish = Container->Snapshot.Kind == ECatContainerKind::FishGuard
+		|| Container->Snapshot.Kind == ECatContainerKind::SharedFishTank;
+	if (!bContainerCanSellFish)
+	{
+		OutError = ECatDomainCommandError::PolicyUndecided;
+		return false;
+	}
+	if (ReservationByFish.Contains(FishInstanceId))
+	{
+		OutError = ECatDomainCommandError::InvalidPhase;
+		return false;
+	}
+	const int32 FishIndex = FindFishSlotById(Container->Snapshot, FishInstanceId);
+	if (FishIndex == INDEX_NONE)
+	{
+		OutError = ECatDomainCommandError::NotFound;
+		return false;
+	}
+	const FCatFishInstance& Fish = Container->Snapshot.Fish[FishIndex];
+	if (!CanFishLeaveContainer(Fish, Container->Snapshot.Kind, SellerStableNetId))
+	{
+		OutError = ECatDomainCommandError::PermissionDenied;
+		return false;
+	}
+	if (Container->Snapshot.Kind == ECatContainerKind::FishGuard && Fish.OwnerStableNetId != SellerStableNetId)
+	{
+		OutError = ECatDomainCommandError::PermissionDenied;
+		return false;
+	}
+	OutFish = Fish;
+	OutError = ECatDomainCommandError::None;
+	return true;
+}
+
 // 捕获提交流程：先读取终态缓存，再验证命令、预分配鱼 ID、地面鱼护、Revision、容量和冻结定义值；
-// 全部满足时把嘴叼鱼写入命中地面鱼护箱子的第一个空槽，并发布同 Revision 的不可变 Committed DTO。
+// 恢复窗口拒绝新提交；全部满足时写入第一个空槽，并发布同 Revision 的不可变 Committed DTO。
 FCatCaptureCommitResult UCatItemsService::CommitCapture(const FCatCaptureCommitCommand& Command)
 {
 	FCatCaptureCommitResult Result;
@@ -207,8 +367,7 @@ FCatCaptureCommitResult UCatItemsService::CommitCapture(const FCatCaptureCommitC
 	if (const FCatCaptureCommitResult* Cached = CaptureTerminalCache.Find(CacheKey))
 	{
 		Result = *Cached;
-		Result.Command.bCommitted = false;
-		Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result.Command);
 		return Result;
 	}
 	// FishingSession 是捕获竞争的聚合作用域；服务级映射在任何容器写入前复核，防止旁路或不同 RequestId 为同一会话生成第二个 FishInstance。
@@ -221,7 +380,7 @@ FCatCaptureCommitResult UCatItemsService::CommitCapture(const FCatCaptureCommitC
 		return Result;
 	}
 	FContainerRecord* Target = Containers.Find(Command.TargetContainerId);
-	if (!bCommandsOpen)
+	if (!bCommandsOpen || bRestoringPersistentContainers)
 	{
 		Result.Command.Error = ECatDomainCommandError::CommandsClosed;
 	}
@@ -324,7 +483,7 @@ FCatDomainCommandResult UCatItemsService::TransferContainedObject(const FCatCont
 	}
 }
 
-// 原子转移流程：先重放终态，再同时校验两容器、鱼实例归属、双 Revision、源/目标槽位、锁和容量；提交时只交换或移动数组槽位，最后发布一次权威快照。
+// 原子转移流程：先重放终态，再拒绝恢复窗口并校验两容器、鱼归属、双 Revision、槽位、锁和容量；提交时只交换或移动数组槽位，最后发布权威快照。
 FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransferCommand& Command)
 {
 	FCatDomainCommandResult Result;
@@ -341,14 +500,13 @@ FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransf
 	if (const FCatDomainCommandResult* Cached = TransferTerminalCache.Find(CacheKey))
 	{
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
 	FContainerRecord* Source = Containers.Find(Command.SourceContainerId);
 	const bool bSameContainer = Command.SourceContainerId == Command.TargetContainerId;
 	FContainerRecord* Target = bSameContainer ? Source : Containers.Find(Command.TargetContainerId);
-	if (!bCommandsOpen)
+	if (!bCommandsOpen || bRestoringPersistentContainers)
 	{
 		Result.Error = ECatDomainCommandError::CommandsClosed;
 	}
@@ -465,7 +623,7 @@ FCatDomainCommandResult UCatItemsService::TransferOwnedFish(const FCatFishTransf
 	return Result;
 }
 
-// 直接进食流程：先重放终态，再校验身份、容器 Revision、未预留与目标鱼；地面鱼护箱子作为公共容器，不再用容器归属拦截。
+// 直接进食流程：先重放终态，再拒绝恢复窗口并校验身份、容器 Revision、未预留与目标鱼；地面鱼护作为公共容器，成功后才发布移除结果。
 FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand& Command)
 {
 	FCatFishConsumeResult Result;
@@ -478,16 +636,22 @@ FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand
 	}
 	const FString CacheKey = MakeTerminalKey(Command.Context.StableNetId, TEXT("ConsumeFish"),
 		Command.SourceContainerId, Command.Context.RequestId);
+	const FString PayloadSignature = MakeFishConsumePayloadSignature(Command);
 	if (const FCatFishConsumeResult* Cached = ConsumeTerminalCache.Find(CacheKey))
 	{
+		const FString* CachedPayload = ConsumeTerminalPayloadByKey.Find(CacheKey);
+		if (!CachedPayload || *CachedPayload != PayloadSignature)
+		{
+			Result.Command.Error = ECatDomainCommandError::InvalidPayload;
+			return Result;
+		}
 		Result = *Cached;
-		Result.Command.bCommitted = false;
-		Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result.Command);
 		return Result;
 	}
 	FContainerRecord* Source = Containers.Find(Command.SourceContainerId);
 	int32 FishIndex = INDEX_NONE;
-	if (!bCommandsOpen)
+	if (!bCommandsOpen || bRestoringPersistentContainers)
 	{
 		Result.Command.Error = ECatDomainCommandError::CommandsClosed;
 	}
@@ -523,13 +687,47 @@ FCatFishConsumeResult UCatItemsService::ConsumeFish(const FCatFishConsumeCommand
 	}
 	Result.Command.Revision = Source ? Source->Snapshot.Revision : 0;
 	ConsumeTerminalCache.Add(CacheKey, Result);
+	ConsumeTerminalPayloadByKey.Add(CacheKey, PayloadSignature);
 	UE_LOG(LogCatItems, Log, TEXT("Event=items_consume_terminal RequestId=%s Committed=%s Error=%s Revision=%lld"),
 		*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens), Result.Command.bCommitted ? TEXT("true") : TEXT("false"),
 		*UEnum::GetValueAsString(Result.Command.Error), Result.Command.Revision);
 	return Result;
 }
 
-// 献祭预留流程：按 RequestId 幂等读取既有记录，再校验身份、容器 Revision、容器策略权限与未锁定；成功只增加容器 Revision 和锁，不提前删除复制数组。
+bool UCatItemsService::TryReplayFishConsumeTerminal(const FCatFishConsumeCommand& Command,
+	FCatFishConsumeResult& OutResult) const
+{
+	// 直接吃鱼重放查询流程：
+	// 1. 用 ConsumeFish 的身份、容器和 RequestId 终态键查询缓存，再核对 ExpectedRevision 与 FishInstanceId 签名。
+	// 2. 未命中返回 false，让协调器继续首次提交 preflight；签名漂移返回 true+InvalidPayload，命中则返回可诊断 Items 终态。
+	// 3. 这个入口不写容器、不移动预留，也不替代 ConsumeFish 的首次提交校验。
+	OutResult = FCatFishConsumeResult();
+	OutResult.Command.RequestId = Command.Context.RequestId;
+	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
+		|| !Command.FishInstanceId.IsValid() || !Command.SourceContainerId.IsValid())
+	{
+		return false;
+	}
+	const FString CacheKey = MakeTerminalKey(Command.Context.StableNetId, TEXT("ConsumeFish"),
+		Command.SourceContainerId, Command.Context.RequestId);
+	const FCatFishConsumeResult* Cached = ConsumeTerminalCache.Find(CacheKey);
+	if (!Cached)
+	{
+		return false;
+	}
+	const FString PayloadSignature = MakeFishConsumePayloadSignature(Command);
+	const FString* CachedPayload = ConsumeTerminalPayloadByKey.Find(CacheKey);
+	if (!CachedPayload || *CachedPayload != PayloadSignature)
+	{
+		OutResult.Command.Error = ECatDomainCommandError::InvalidPayload;
+		return true;
+	}
+	OutResult = *Cached;
+	MarkCommandReplayed(OutResult.Command);
+	return true;
+}
+
+// 献祭预留流程：先幂等读取既有记录，再拒绝恢复窗口并校验身份、Revision、权限和锁；成功只增加 Revision 和锁，不提前删除复制数组。
 FCatFishReservationResult UCatItemsService::ReserveFish(const FCatSacrificeCommand& Command)
 {
 	FCatFishReservationResult Result;
@@ -546,7 +744,7 @@ FCatFishReservationResult UCatItemsService::ReserveFish(const FCatSacrificeComma
 		return Result;
 	}
 	FContainerRecord* Container = Containers.Find(Command.ContainerId);
-	if (!bCommandsOpen)
+	if (!bCommandsOpen || bRestoringPersistentContainers)
 	{
 		Result.Error = ECatDomainCommandError::CommandsClosed;
 		return Result;
@@ -673,7 +871,7 @@ FCatFishReservationCommitResult UCatItemsService::CommitFishReservation(const FS
 	return Result;
 }
 
-// 偷鱼开始流程：先重放终态，再校验命令、源容器、Revision、目标鱼、捕获者身份差异和未预留；成功把唯一鱼移入 escrow、源槽位清空并发布一次 Revision，同时记录返还槽位。
+// 偷鱼开始流程：先重放终态，再拒绝恢复窗口并校验命令、源容器、Revision、目标鱼、捕获者差异和锁；成功把鱼移入 escrow，清源槽并发布 Revision 和返还槽位。
 FCatFishTheftResult UCatItemsService::BeginFishTheft(const FCatFishTheftCommand& Command)
 {
 	FCatFishTheftResult Result;
@@ -690,13 +888,12 @@ FCatFishTheftResult UCatItemsService::BeginFishTheft(const FCatFishTheftCommand&
 	if (const FCatFishTheftResult* Cached = TheftTerminalCache.Find(CacheKey))
 	{
 		Result = *Cached;
-		Result.Command.bCommitted = false;
-		Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result.Command);
 		return Result;
 	}
 	FContainerRecord* Source = Containers.Find(Command.SourceContainerId);
 	int32 FishIndex = INDEX_NONE;
-	if (!bCommandsOpen)
+	if (!bCommandsOpen || bRestoringPersistentContainers)
 	{
 		Result.Command.Error = ECatDomainCommandError::CommandsClosed;
 	}
@@ -855,6 +1052,347 @@ bool UCatItemsService::TryGetContainerHost(const FGuid ContainerId, ECatContaine
 	}
 	OutKind = Record->Snapshot.Kind;
 	OutAuthorityActor = AuthorityActor;
+	return true;
+}
+
+// 世界鱼容器导出流程：
+// 1. 先拒绝尚未收口的预留或 escrow，避免把“暂时离开数组”的鱼误当已提交库存落盘。
+// 2. 导出所有地图和动态容器，空箱同样记录；动态宿主保留正式类、位置和可延续实体键。
+// 3. 复用完整载荷预检检查定义、容量、空格与实例唯一性；任一容器无法恢复就整体失败。
+bool UCatItemsService::ExportPersistedWorldFishContainers(TArray<FCatPersistentContainerSnapshot>& OutContainers,
+	FText& OutFailure) const
+{
+	OutContainers.Reset();
+	OutFailure = FText::GetEmpty();
+	if (!bCommandsOpen || !GetWorld() || GetWorld()->GetNetMode() == NM_Client || bRestoringPersistentContainers
+		|| !ReservationByFish.IsEmpty() || !TheftEscrows.IsEmpty())
+	{
+		OutFailure = FText::FromString(TEXT("世界鱼容器存在客户端上下文或未收口的可逆事务。"));
+		return false;
+	}
+	for (const TPair<FGuid, FContainerRecord>& Pair : Containers)
+	{
+		const FContainerRecord& Record = Pair.Value;
+		UCatContainerReplicationComponent* Component = Record.ReplicationComponent.Get();
+		AActor* Host = Component ? Component->GetOwner() : nullptr;
+		if (!IsValid(Host) || !Host->HasAuthority() || Record.PersistentKey.IsEmpty())
+		{
+			OutFailure = FText::FromString(TEXT("世界容器的真实宿主或持久实体键已经失效。"));
+			OutContainers.Reset();
+			return false;
+		}
+		FCatPersistentContainerSnapshot& Saved = OutContainers.AddDefaulted_GetRef();
+		Saved.PersistentKey = Record.PersistentKey;
+		Saved.bRuntimeCreated = Record.bRuntimeCreated;
+		Saved.HostClass = Host->GetClass();
+		Saved.HostTransform = Host->GetActorTransform();
+		Saved.ComponentName = Component->GetFName();
+		Saved.Kind = Record.Snapshot.Kind;
+		Saved.Fish = Record.Snapshot.Fish;
+	}
+	if (!CanRestorePersistedWorldFishContainers(OutContainers, OutFailure))
+	{
+		OutContainers.Reset();
+		return false;
+	}
+	return true;
+}
+
+// 世界鱼容器恢复预检流程：
+// 1. 先确认新 World 没有旧事务，再建立当前地图稳定键到 Items 容器记录的只读映射。
+// 2. 地图对象必须全部原位匹配；动态对象只接受真实领域宿主类、组件名和合法 Transform，提前读取现行容量。
+// 3. 校验全部鱼定义、鱼缸资格、空格残留和跨容器重复 ID；不创建 Actor、不改数组或发布复制。
+bool UCatItemsService::CanRestorePersistedWorldFishContainers(
+	const TArray<FCatPersistentContainerSnapshot>& SavedContainers, FText& OutFailure) const
+{
+	OutFailure = FText::GetEmpty();
+	if (!bCommandsOpen || !GetWorld() || GetWorld()->GetNetMode() == NM_Client || bRestoringPersistentContainers
+		|| !ReservationByFish.IsEmpty() || !TheftEscrows.IsEmpty())
+	{
+		OutFailure = FText::FromString(TEXT("世界鱼容器恢复上下文不可用或仍有旧事务。"));
+		return false;
+	}
+	TMap<FString, FGuid> CurrentByPersistentKey;
+	for (const TPair<FGuid, FContainerRecord>& Pair : Containers)
+	{
+		const FContainerRecord& Record = Pair.Value;
+		const UCatContainerReplicationComponent* Component = Record.ReplicationComponent.Get();
+		const AActor* Host = Component ? Component->GetOwner() : nullptr;
+		if (!IsValid(Host) || !Host->HasAuthority() || Host->IsActorBeingDestroyed() || Host->IsActorBeginningPlay())
+		{
+			OutFailure = FText::FromString(TEXT("当前容器宿主正在生成、销毁或已失去权威，不能恢复。"));
+			return false;
+		}
+		if (Record.bRuntimeCreated)
+		{
+			continue;
+		}
+		if (Record.PersistentKey.IsEmpty() || CurrentByPersistentKey.Contains(Record.PersistentKey)
+			|| !Record.ReplicationComponent.IsValid())
+		{
+			OutFailure = FText::FromString(TEXT("当前地图存在重复的世界鱼容器稳定键。"));
+			return false;
+		}
+		CurrentByPersistentKey.Add(Record.PersistentKey, Pair.Key);
+	}
+	TSet<FString> SeenSavedKeys;
+	TSet<FGuid> SeenFishInstanceIds;
+	for (const FCatPersistentContainerSnapshot& Saved : SavedContainers)
+	{
+		UClass* HostClass = Saved.HostClass.LoadSynchronous();
+		int32 Capacity = GetDefault<UCatItemsSettings>()->GetContainerCapacity(static_cast<uint8>(Saved.Kind));
+		int64 PersistentNumber = 0;
+		if (Saved.PersistentKey.IsEmpty() || SeenSavedKeys.Contains(Saved.PersistentKey)
+			|| !IsPersistentContainerClassValid(HostClass, Saved.Kind) || Saved.ComponentName.IsNone()
+			|| !Saved.HostTransform.IsValid() || Saved.HostTransform.GetScale3D().GetMin() <= 0.0
+			|| (Saved.bRuntimeCreated && !ParsePersistentContainerNumber(Saved.PersistentKey, PersistentNumber)))
+		{
+			OutFailure = FText::FromString(TEXT("世界容器的实体键、宿主类、组件或位置无效。"));
+			return false;
+		}
+		if (!Saved.bRuntimeCreated)
+		{
+			const FGuid* CurrentId = CurrentByPersistentKey.Find(Saved.PersistentKey);
+			const FContainerRecord* Current = CurrentId ? Containers.Find(*CurrentId) : nullptr;
+			const UCatContainerReplicationComponent* Component = Current ? Current->ReplicationComponent.Get() : nullptr;
+			if (!Component || Component->GetFName() != Saved.ComponentName || Component->GetOwner()->GetClass() != HostClass
+				|| Current->Snapshot.Kind != Saved.Kind)
+			{
+				OutFailure = FText::FromString(TEXT("存档的关卡容器宿主缺失或已变更。"));
+				return false;
+			}
+			Capacity = Current->Capacity;
+		}
+		if (Capacity <= 0 || Saved.Fish.Num() > Capacity)
+		{
+			OutFailure = FText::FromString(TEXT("保存的鱼容器超过当前领域容量或容量未配置。"));
+			return false;
+		}
+		for (const FCatFishInstance& Fish : Saved.Fish)
+		{
+			if (!IsValidFishSlot(Fish))
+			{
+				if (!Fish.FishDefinitionId.IsNone() || !Fish.OwnerStableNetId.IsEmpty() || Fish.SourceFishingSessionId.IsValid()
+					|| Fish.WeightKilograms != 0.0 || Fish.SacrificeContribution != 0)
+				{
+					OutFailure = FText::FromString(TEXT("鱼容器空格包含残留实例字段。"));
+					return false;
+				}
+				continue;
+			}
+			if (!ValidatePersistentFish(Fish, SeenFishInstanceIds, OutFailure))
+			{
+				return false;
+			}
+			if (Saved.Kind == ECatContainerKind::SharedFishTank && !CanFishBeDisplayedInTank(Fish))
+			{
+				OutFailure = FText::FromString(TEXT("存档含有当前鱼缸不允许展示的鱼定义。"));
+				return false;
+			}
+		}
+		SeenSavedKeys.Add(Saved.PersistentKey);
+	}
+	for (const TPair<FString, FGuid>& Pair : CurrentByPersistentKey)
+	{
+		if (!SeenSavedKeys.Contains(Pair.Key))
+		{
+			OutFailure = FText::FromString(TEXT("当前地图包含存档未记录的关卡鱼容器，不能部分恢复。"));
+			return false;
+		}
+	}
+	return true;
+}
+
+// 世界鱼容器恢复提交流程：
+// 1. 只允许一层恢复；完整预检后冻结普通命令，并在生成前登记预期宿主，逐个核对真实 BeginPlay 注册和容量。
+// 2. 再复核旧记录未被回调改写，确认旧动态宿主全部销毁且注销后，才提交整批鱼数组；跨回调仅保存 ID/弱引用，不保留 TMap 元素指针。
+// 3. 发布后再次检查重入和宿主登记。任何异常都关闭本 World 写口并尝试清理本次新宿主；旧宿主销毁不可回滚，调用方必须阻止进局且不得声称世界未改变。
+bool UCatItemsService::RestorePersistedWorldFishContainers(
+	const TArray<FCatPersistentContainerSnapshot>& SavedContainers)
+{
+	if (bRestoringPersistentContainers)
+	{
+		bCommandsOpen = false;
+		UE_LOG(LogCatItems, Error, TEXT("Event=persistence_container_restore_reentered World=%s"), *GetNameSafe(GetWorld()));
+		return false;
+	}
+	FText Failure;
+	if (!CanRestorePersistedWorldFishContainers(SavedContainers, Failure))
+	{
+		bCommandsOpen = false;
+		UE_LOG(LogCatItems, Warning, TEXT("Event=persistence_world_fish_restore_rejected Reason=%s"), *Failure.ToString());
+		return false;
+	}
+	TGuardValue<bool> RestoreGuard(bRestoringPersistentContainers, true);
+	TGuardValue<TWeakObjectPtr<AActor>> HostGuard(ExpectedRestoreHost, nullptr);
+	const TMap<FGuid, FContainerRecord> OriginalRecords = Containers;
+	TMap<FString, FGuid> CurrentByPersistentKey;
+	TArray<TWeakObjectPtr<AActor>> PreviousDynamicHosts;
+	for (const TPair<FGuid, FContainerRecord>& Pair : Containers)
+	{
+		if (Pair.Value.bRuntimeCreated)
+		{
+			UCatContainerReplicationComponent* Component = Pair.Value.ReplicationComponent.Get();
+			if (Component && Component->GetOwner())
+			{
+				PreviousDynamicHosts.AddUnique(Component->GetOwner());
+			}
+		}
+		else
+		{
+			CurrentByPersistentKey.Add(Pair.Value.PersistentKey, Pair.Key);
+		}
+	}
+	TArray<TWeakObjectPtr<AActor>> CreatedHosts;
+	// 失败收口不伪造回滚：关闭写口，逐个检查新宿主销毁回执；清理失败保留诊断，整个 World 只能退出，不能再采样覆盖磁盘。
+	const auto AbortRestore = [this, &CreatedHosts](const TCHAR* Reason)
+	{
+		bCommandsOpen = false;
+		bool bCleaned = true;
+		for (const TWeakObjectPtr<AActor>& WeakHost : CreatedHosts)
+		{
+			if (AActor* Host = WeakHost.Get())
+			{
+				ExpectedRestoreHost = Host;
+				bCleaned &= Host->Destroy();
+			}
+		}
+		ExpectedRestoreHost.Reset();
+		UE_LOG(LogCatItems, Error, TEXT("Event=persistence_container_restore_aborted World=%s NetMode=%d Reason=%s CreatedHostsCleaned=%d CommandsOpen=0"),
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE, Reason, bCleaned);
+		return false;
+	};
+	for (const FCatPersistentContainerSnapshot& Saved : SavedContainers)
+	{
+		if (!Saved.bRuntimeCreated)
+		{
+			continue;
+		}
+		FActorSpawnParameters SpawnParameters;
+		SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		// 引擎在组件初始化和 BeginPlay 前调用此处，精确配对本次宿主，拒绝构造/发布回调顺手注册其他容器。
+		SpawnParameters.CustomPreSpawnInitialization = [this, &CreatedHosts](AActor* Host)
+		{
+			ExpectedRestoreHost = Host;
+			CreatedHosts.Add(Host);
+		};
+		AActor* Host = GetWorld()->SpawnActor<AActor>(Saved.HostClass.Get(), Saved.HostTransform, SpawnParameters);
+		ExpectedRestoreHost.Reset();
+		if (!bCommandsOpen || !IsValid(Host) || Host->IsActorBeingDestroyed())
+		{
+			return AbortRestore(TEXT("SpawnFailedOrInterrupted"));
+		}
+		FGuid RegisteredId;
+		int32 HostContainerCount = 0;
+		for (TPair<FGuid, FContainerRecord>& Pair : Containers)
+		{
+			UCatContainerReplicationComponent* Component = Pair.Value.ReplicationComponent.Get();
+			if (Component && Component->GetOwner() == Host)
+			{
+				++HostContainerCount;
+				if (Component->GetFName() == Saved.ComponentName && Pair.Value.Snapshot.Kind == Saved.Kind
+					&& Pair.Value.Capacity >= Saved.Fish.Num())
+				{
+					RegisteredId = Pair.Key;
+				}
+			}
+		}
+		if (!RegisteredId.IsValid() || HostContainerCount != 1)
+		{
+			return AbortRestore(TEXT("RegistrationMismatch"));
+		}
+		CurrentByPersistentKey.Add(Saved.PersistentKey, RegisteredId);
+	}
+	for (const TPair<FGuid, FContainerRecord>& Original : OriginalRecords)
+	{
+		const FContainerRecord* Current = Containers.Find(Original.Key);
+		const UCatContainerReplicationComponent* Component = Current ? Current->ReplicationComponent.Get() : nullptr;
+		const AActor* Host = Component ? Component->GetOwner() : nullptr;
+		if (!bCommandsOpen || !Current || !IsValid(Host) || Host->IsActorBeingDestroyed()
+			|| Current->ReplicationComponent != Original.Value.ReplicationComponent
+			|| Current->Snapshot.Revision != Original.Value.Snapshot.Revision || Current->Capacity != Original.Value.Capacity
+			|| Current->PersistentKey != Original.Value.PersistentKey)
+		{
+			return AbortRestore(TEXT("OriginalContainerChangedDuringSpawn"));
+		}
+	}
+	TArray<TPair<FGuid, FCatContainerSnapshot>> PreparedSnapshots;
+	PreparedSnapshots.Reserve(SavedContainers.Num());
+	for (const FCatPersistentContainerSnapshot& Saved : SavedContainers)
+	{
+		const FGuid* Current = CurrentByPersistentKey.Find(Saved.PersistentKey);
+		FContainerRecord* Record = Current ? Containers.Find(*Current) : nullptr;
+		if (!Record || !Record->ReplicationComponent.IsValid())
+		{
+			return AbortRestore(TEXT("PreparedContainerMissing"));
+		}
+		FCatContainerSnapshot Restored = Record->Snapshot;
+		Restored.Fish = Saved.Fish;
+		Restored.Revision = FMath::Max<int64>(1, Restored.Revision + 1);
+		CatItems::RebuildContainedObjectsFromFish(Restored);
+		PreparedSnapshots.Emplace(*Current, MoveTemp(Restored));
+	}
+	for (const TWeakObjectPtr<AActor>& PreviousHost : PreviousDynamicHosts)
+	{
+		AActor* Host = PreviousHost.Get();
+		ExpectedRestoreHost = Host;
+		const bool bDestroyed = Host && Host->Destroy();
+		ExpectedRestoreHost.Reset();
+		if (!bDestroyed || !bCommandsOpen)
+		{
+			return AbortRestore(TEXT("PreviousHostDestroyRejectedOrInterrupted"));
+		}
+	}
+	if (Containers.Num() != PreparedSnapshots.Num())
+	{
+		return AbortRestore(TEXT("UnexpectedOrUnregisteredContainerCount"));
+	}
+	for (const TPair<FGuid, FCatContainerSnapshot>& Prepared : PreparedSnapshots)
+	{
+		const FContainerRecord* Record = Containers.Find(Prepared.Key);
+		const UCatContainerReplicationComponent* Component = Record ? Record->ReplicationComponent.Get() : nullptr;
+		const AActor* Host = Component ? Component->GetOwner() : nullptr;
+		if (!IsValid(Host) || Host->IsActorBeingDestroyed())
+		{
+			return AbortRestore(TEXT("PreparedHostLostDuringDestruction"));
+		}
+	}
+	for (const FCatPersistentContainerSnapshot& Saved : SavedContainers)
+	{
+		FContainerRecord& Record = Containers.FindChecked(CurrentByPersistentKey.FindChecked(Saved.PersistentKey));
+		Record.PersistentKey = Saved.PersistentKey;
+		int64 SavedNumber = 0;
+		if (Saved.bRuntimeCreated && ParsePersistentContainerNumber(Saved.PersistentKey, SavedNumber))
+		{
+			NextPersistentContainerNumber = FMath::Max(NextPersistentContainerNumber, SavedNumber + 1);
+		}
+	}
+	for (TPair<FGuid, FCatContainerSnapshot>& Prepared : PreparedSnapshots)
+	{
+		Containers.FindChecked(Prepared.Key).Snapshot = MoveTemp(Prepared.Value);
+	}
+	Reservations.Reset();
+	CaptureTerminalCache.Reset();
+	CaptureByFishingSession.Reset();
+	TransferTerminalCache.Reset();
+	ConsumeTerminalCache.Reset();
+	ConsumeTerminalPayloadByKey.Reset();
+	TheftTerminalCache.Reset();
+	for (const TPair<FGuid, FCatContainerSnapshot>& Prepared : PreparedSnapshots)
+	{
+		FContainerRecord* Record = Containers.Find(Prepared.Key);
+		if (!bCommandsOpen || !Record || !Record->ReplicationComponent.IsValid())
+		{
+			return AbortRestore(TEXT("PublishInterrupted"));
+		}
+		PublishContainer(*Record);
+	}
+	if (!bCommandsOpen || Containers.Num() != PreparedSnapshots.Num())
+	{
+		return AbortRestore(TEXT("PublishReentered"));
+	}
+	UE_LOG(LogCatItems, Log, TEXT("Event=persistence_world_fish_restored World=%s NetMode=%d Containers=%d DynamicHosts=%d"),
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetWorld()->GetNetMode()), PreparedSnapshots.Num(), CreatedHosts.Num());
 	return true;
 }
 

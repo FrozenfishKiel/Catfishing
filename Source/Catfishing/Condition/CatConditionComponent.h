@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Condition/CatConditionTypes.h"
+#include "Environment/CatWaterTypes.h"
 #include "Components/ActorComponent.h"
 #include "CatConditionComponent.generated.h"
 
@@ -12,7 +13,7 @@ class UCatFishDefinition;
 /** Condition 完整快照发生提交或复制变化的本机通知；订阅者必须重新读取 GetSnapshot，不使用增量载荷拼状态。 */
 DECLARE_MULTICAST_DELEGATE(FCatConditionSnapshotChanged);
 
-/** Character 局内离散身体状态组件；ASC 拥有数值，本组件只裁决 Wet/Downed/恢复生命周期且绝不产生死亡。 */
+/** Character 局内离散身体状态组件；ASC 拥有数值，本组件只裁决 Wet/Downed/恢复生命周期，Wet 不代表玩家技能或 BodyAction 入口。 */
 UCLASS(ClassGroup = (Catfishing), meta = (BlueprintSpawnableComponent))
 class CATFISHING_API UCatConditionComponent : public UActorComponent
 {
@@ -28,13 +29,17 @@ public:
 	/** 提供身体条件的服务器最终值或客户端复制值；外部只据此判断交互资格，不能借返回值改写 Wet/Downed。 */
 	const FCatConditionSnapshot& GetSnapshot() const;
 
-	/** Environment/水体在 authority 设置纯表现 Wet；重复相同值不增加 Revision，也不修改任何 Attribute。 */
+	/** 落水、天气等非技能反馈在 authority 设置纯表现 Wet；重复相同值不增加 Revision，也不修改任何 Attribute。 */
 	void SetWetFromAuthority(bool bNewWet);
+
+	/** 由钓鱼固定步提交采样时长；组件自行查询脚点水深并维护滞回/确认。 */
+	ECatWaterExposureUpdate UpdateWaterExposureFromAuthority(const FCatWaterRegionHandle& WaterRegion,
+		double DeltaSeconds, double& OutImmersionDepthCentimeters);
 
 	/** 在实物鱼被不可逆移除前只读校验食用定义、ASC 与倒地阈值；返回 None 才允许上层提交 Items 事务。 */
 	ECatDomainCommandError ValidateFishConsumption(const UCatFishDefinition* FishDefinition) const;
 
-	/** 在草药库存被不可逆扣除前只读校验施药者距离、ASC、倒地阈值与正式恢复数值；返回 None 才允许上层提交 Equipment 事务。 */
+	/** 在草药库存被不可逆扣除前只读校验施药者距离、ASC、倒地阈值与正式恢复数值；返回 None 才允许上层提交库存事务。 */
 	ECatDomainCommandError ValidateHerbRecovery(AController* HelpingController) const;
 
 	/** 实物鱼消费提交后读取 FishDefinition 食用字段，增加可选 Poison、推进成长经验，并重新裁决倒地。 */
@@ -63,7 +68,7 @@ private:
 	/** 校验 Recovery 配置并对 Poison 应用非负减量；随后按阈值更新 Downed/RecoveryMode。 */
 	FCatDomainCommandResult ApplyRecovery(FGuid RequestId, ECatRecoveryMode Mode, double PoisonRelief);
 
-	/** 通过项目 ASC 读取 Poison 阈值结果并更新 Downed；首次倒地会终止该 Character 的 FishingSession。 */
+	/** 通过项目 ASC 读取 Poison 阈值并更新 Downed；首次倒地移除该身体的钓鱼占位，由剩余成员接力。 */
 	void EvaluateDownedFromAttributes(ECatRecoveryMode RecoveryMode);
 
 	/** 定位 Owner Character 的项目 ASC 供阈值读取与 GE 提交；Owner 类型不匹配时返回空，避免创建平行身体属性源。 */
@@ -75,10 +80,11 @@ private:
 	/** authority 提交后请求复制并广播，客户端 RepNotify 只广播；集中保证 UI 不漏掉任何完整快照变化。 */
 	void PublishSnapshot();
 
-	/** Wet/Downed/Recovery 的唯一复制事实。 */
+	/** Wet/Downed/Recovery 的唯一复制事实；Condition 写入、UI 和表现层读取，Wet 本身不由任何 Ability 清除或触发。 */
 	UPROPERTY(ReplicatedUsing = OnRep_Snapshot)
 	FCatConditionSnapshot Snapshot;
 
 	/** 身体命令的首次完整终态；防止重复吃鱼或重复恢复。 */
 	TMap<FString, FCatDomainCommandResult> TerminalCache;
+	double DangerousWaterBuildUpSeconds = 0.0;
 };

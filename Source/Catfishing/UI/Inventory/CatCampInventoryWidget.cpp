@@ -6,3 +6,10 @@ const TArray<FCatInventorySlotView>& UCatCampInventoryWidget::GetInventorySlotsF
 {
 	return ViewState.CampInventorySlots;
 }
+
+// 营地 Slots 回写流程：营地 WBP 的本地高亮只写回 CampInventorySlots，避免把公共仓库选择混进随身背包数组。
+void UCatCampInventoryWidget::StoreDisplayedSlotsInViewState(FCatInventoryViewState& ViewState,
+	const TArray<FCatInventorySlotView>& Slots) const
+{
+	ViewState.CampInventorySlots = Slots;
+}

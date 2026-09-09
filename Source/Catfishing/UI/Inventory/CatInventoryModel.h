@@ -10,7 +10,9 @@ class ACatCampInventoryActor;
 class ACatCharacter;
 class UCatContainerReplicationComponent;
 class UCatEquipmentComponent;
+class UCatInventoryComponent;
 class ULocalPlayer;
+struct FCatInventoryEntry;
 
 /** 库存 Model 完整投影变化通知；每个库存 WBP 自己监听后重读 ViewState，并只刷新自己对应的数据源格子。 */
 DECLARE_MULTICAST_DELEGATE(FCatInventoryModelChanged);
@@ -22,13 +24,13 @@ class CATFISHING_API UCatInventoryModel : public UObject
 	GENERATED_BODY()
 
 public:
-	/** 绑定当前 LocalPlayer、Controller 和随身库存读源；成功后立即发布完整库存投影。 */
+	/** 绑定当前 LocalPlayer、Controller、正式随身库存和钓鱼选择读源；成功后立即发布完整库存投影。 */
 	bool Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController, ACatCharacter* InCharacter);
 
-	/** 成对解除外部容器、随身库存和 PlayerController 结果订阅，并清空当前选择、pending 和 ViewState。 */
+	/** 成对解除外部容器、随身库存和 PlayerController 结果订阅，并清空 pending、结果和 ViewState。 */
 	void Unbind();
 
-	/** 返回 Model 是否仍绑定有效玩家库存读源；PageController 用它拒绝已失效 Widget 意图。 */
+	/** 返回 Model 是否仍绑定有效玩家上下文；PageController 用它拒绝已失效 Widget 意图。 */
 	bool IsBound() const;
 
 	/** 写入库存打开状态并刷新投影；打开状态由 PageController 持有，Model 只把它合入 ViewState。 */
@@ -40,21 +42,21 @@ public:
 	/** 清除当前库存的外部容器上下文；普通库存打开和离开交互对象时调用，避免上一容器留在新页面。 */
 	void ClearExternalContainerContexts();
 
-	/** 设置当前库存的营地公共仓库上下文；交互打开公共仓库时调用，Model 只订阅它的只读快照变化。 */
+	/** 设置当前库存的营地公共仓库上下文；交互打开公共仓库时调用，Model 订阅它的公开快照和正式库存只读变化。 */
 	void SetCampInventoryContext(ACatCampInventoryActor* InCampInventory);
 
 	/** 清除当前库存的营地公共仓库上下文；默认库存页或其他箱子打开前调用，避免上一公共仓库格留在新页面。 */
 	void ClearCampInventoryContext();
 
-	/** 按格子来源身份选择当前库存条目；Model 会在各自独立 Slots 中复核宿主内槽位，并派生鱼动作或运行期库存物品说明。 */
-	bool SelectSlot(const FCatInventorySlotView& Slot);
-
-	/** 标记 PageController 已提交服务器命令；View 会进入 pending 并禁用重复点击。 */
+	/** 标记 PageController 已提交服务器命令；只记录等待回包和结果匹配，不把提交中状态广播成库存刷新。 */
 	void MarkActionSubmitted(ECatInventoryAction Action, FGuid RequestId);
 
-	/** 标记 PageController 在本地适配阶段拒绝命令；用于找不到营地或载荷无效这类前置失败。 */
+	/** 标记 PageController 在本地适配阶段拒绝命令；本地失败不代表库存数据变化，因此不会触发 ViewState 广播。 */
 	void MarkActionRejected(ECatInventoryAction Action, FGuid RequestId, ECatDomainCommandError Error,
 		int64 Revision);
+
+	/** 当前是否存在等待服务器终态的库存命令；PageController 用它防重复，不把 pending 当成库存数据广播给所有 WBP。 */
+	bool IsActionPending() const;
 
 	/** 主动从当前库存读源重读完整快照并广播；外部只读事实变化都收敛到这里。 */
 	void Refresh();
@@ -62,41 +64,55 @@ public:
 	/** 库存只读投影的查询入口；调用方拿到最近缓存副本，避免 View 或 PageController 接触后端写口。 */
 	const FCatInventoryViewState& GetViewState() const;
 
-	/** 库存 ViewState 已变化通知；只有 Bind、Refresh、选择、pending 和结果变化会触发。 */
+	/** 库存 ViewState 已变化通知；真实读源变化或上下文切换会触发，格子选择和服务器回包确认不主动重画所有 WBP。 */
 	FCatInventoryModelChanged OnViewStateChanged;
 
 private:
-	/** 随身库存快照变化入口；当前选择、物品数量或耐久变化都会让库存重读完整投影。 */
+	/** 正式随身库存变化入口；物品数量、实例或槽位变化会关闭本地等待并让库存重读完整投影。 */
+	void HandleInventoryObservedChanged();
+
+	/** 钓鱼选择变化入口；Equipment 只提供当前钓具选择摘要，随身背包内容不再从它回退。 */
 	void HandleEquipmentSnapshotChanged();
 
-	/** 外部容器复制变化入口；任意已绑定外部容器内容变化后库存会重读完整投影。 */
+	/** 外部容器复制变化入口；任意已绑定外部容器内容变化后会关闭本地等待并重读完整投影。 */
 	void HandleExternalContainerSnapshotChanged();
 
-	/** 营地公共仓库快照变化入口；商店发货或玩家取用后库存会重读公共仓库格和玩家随身库存。 */
+	/** 营地公共仓库变化入口；营地公开快照或正式库存条目变化后会关闭本地等待并重读公共仓库格和玩家随身库存。 */
 	void HandleCampInventorySnapshotChanged();
 
-	/** owning Controller 收到公共领域结果时匹配当前 pending 的容器移动、运行期库存整理、营地取用或钓具选择，并刷新库存反馈。 */
+	/** owning Controller 收到公共领域结果时只消费非成功终态；成功终态等真实库存读源变化来关闭 pending。 */
 	void HandleCampCommandResult(const FCatDomainCommandResult& Result);
 
-	/** owning Controller 收到献祭结果时匹配当前 pending 并刷新库存反馈。 */
+	/** owning Controller 收到献祭结果时只消费 Items 未提交前的非成功终态；鱼已提交后等容器快照关闭 pending。 */
 	void HandleSacrificeResult(const FCatSacrificeResult& Result);
 
-	/** owning Controller 收到吃鱼结果时匹配当前 pending 并刷新库存反馈。 */
+	/** owning Controller 收到吃鱼结果时只消费非成功终态；成功移除鱼后等容器快照关闭 pending。 */
 	void HandleFishConsumeResult(const FCatFishConsumeResult& Result);
 
 	/** 判断服务器回包是否属于当前等待的库存动作；动作类型和 RequestId 必须同时匹配。 */
 	bool IsPendingResult(ECatInventoryAction Action, FGuid RequestId) const;
 
+	/** 真实库存读源已经变化时清掉本地等待标记；数据源广播本身会刷新 UI，不需要服务器结果再补一次。 */
+	void ClearPendingAfterObservedSourceChange();
+
+	/** 服务器返回无快照终态时清掉本地等待；AlreadyResolved 和拒绝只解锁 PageController，不广播 ViewState。 */
+	void ClearPendingAfterTerminalResultWithoutRefresh(ECatInventoryAction Action, FGuid RequestId,
+		ECatDomainCommandError Error);
+
 	/** 按某个容器快照生成一个外部容器格的只读投影；空格显示稳定占位文本，源目标身份来自容器公开事实。 */
 	FCatInventorySlotView MakeSlotView(const FCatContainerSnapshot& Snapshot, int32 ContainerSlotIndex,
 		int32 ExternalSlotIndex, const TCHAR* ContainerDisplayName) const;
 
-	/** 按当前随身库存数组生成一个只读物品格；它只暴露本随身库存内的格子下标、定义和数量，不提供 Items 容器移动授权。 */
-	FCatInventorySlotView MakeInventorySlotView(const FCatRunInventorySlot& InventorySlot,
+	/** 按正式库存条目生成只读 SlotView；Refresh 在随身背包或营地正式组件可用时调用，结果按 SlotSource 保留服务器命令需要的槽位身份和公开版本。 */
+	FCatInventorySlotView MakeFormalInventorySlotView(const FCatInventoryEntry& InventoryEntry,
+		int32 SlotIndex, ECatInventorySlotSource SlotSource, int64 CampRevision, const TCHAR* SourceDisplayName) const;
+
+	/** 按正式随身库存条目生成一个只读物品格；它只暴露本背包内的格子下标、定义、实例和数量，不提供 Items 容器移动授权。 */
+	FCatInventorySlotView MakeInventorySlotView(const FCatInventoryEntry& InventoryEntry,
 		int32 InventorySlotIndex) const;
 
-	/** 按营地公共仓库数组生成一个只读物品格；它只暴露本公共仓库内的槽位和版本，取用仍走 PlayerController 服务器入口。 */
-	FCatInventorySlotView MakeCampInventorySlotView(const FCatRunInventorySlot& InventorySlot,
+	/** 按营地正式库存条目生成一个只读物品格；它保留公共仓库槽位和公开版本，让取用与拖放仍走营地服务器入口。 */
+	FCatInventorySlotView MakeCampInventorySlotView(const FCatInventoryEntry& InventoryEntry,
 		int32 CampSlotIndex, int64 CampRevision) const;
 
 	/** 按容器种类和顺序生成玩家可读名称；具体容器以后可在上下文层覆盖，Model 默认只做稳定 fallback。 */
@@ -105,7 +121,7 @@ private:
 	/** 解除所有外部容器复制订阅并清空绑定数组；切换上下文和 Unbind 都走同一流程，避免遗漏句柄。 */
 	void ClearExternalContainerBindings();
 
-	/** 解除营地公共仓库快照订阅并清空弱引用；切换到默认库存页或其他箱子时必须成对执行。 */
+	/** 解除营地公共仓库快照和正式库存订阅并清空弱引用；切换到默认库存页或其他箱子时必须成对执行。 */
 	void ClearCampInventoryBinding();
 
 	/** 一份外部容器读源绑定；每个交互对象可以贡献多份容器，Model 统一订阅它们的复制变化。 */
@@ -126,7 +142,11 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<APlayerController> BoundPlayerController;
 
-	/** 当前 Character 的 Equipment 复制出口；库存从这里读取随身物品和钓鱼选择，不把它们写入鱼护容器。 */
+	/** 当前 Character 的正式随身库存读源；背包格展示优先从这里读取实例、定义和数量。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UCatInventoryComponent> BoundInventory;
+
+	/** 当前 Character 的 Equipment 复制出口；Model 只从这里读取钓鱼选择，不再把 Equipment 快照当背包内容。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatEquipmentComponent> BoundEquipment;
 
@@ -137,11 +157,17 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<ACatCampInventoryActor> BoundCampInventory;
 
-	/** 随身库存快照订阅句柄；Unbind 必须从同一组件移除。 */
+	/** 正式随身库存变化订阅句柄；Unbind 必须从同一组件移除，避免换 Pawn 后旧库存继续驱动 UI。 */
+	FDelegateHandle InventoryChangedHandle;
+
+	/** 钓鱼选择订阅句柄；Unbind 必须从同一组件移除，避免上一角色的选择变化继续驱动当前 UI。 */
 	FDelegateHandle EquipmentChangedHandle;
 
 	/** 营地公共仓库快照订阅句柄；公共仓库上下文切换时必须从同一 Actor 移除。 */
 	FDelegateHandle CampInventoryChangedHandle;
+
+	/** 当前营地正式库存组件的变化订阅句柄；SetCampInventoryContext 写入，ClearCampInventoryBinding 移除，防止公共仓库 UI 停在旧组件。 */
+	FDelegateHandle CampFormalInventoryChangedHandle;
 
 	/** PlayerController 公共领域结果订阅句柄；库存用它接收跨容器移动终态。 */
 	FDelegateHandle CampCommandResultHandle;
@@ -155,12 +181,6 @@ private:
 	/** 当前库存窗口是否打开的 PageController 投影；Model 不从 Widget 可见性反推。 */
 	bool bOpen = false;
 
-	/** 当前选中格子的来源身份；Refresh 会在随身、外部容器和营地仓库各自 Slots 中重新定位它。 */
-	FCatInventorySlotView SelectedSlotIdentity;
-
-	/** 当前是否保存了可复核的选中格身份；上下文切换或源格消失时会被 Refresh 清掉。 */
-	bool bHasSelectedSlotIdentity = false;
-
 	/** 当前 pending 的动作类型；没有待处理服务器请求时为 None。 */
 	ECatInventoryAction PendingAction = ECatInventoryAction::None;
 
@@ -170,7 +190,7 @@ private:
 	/** 当前是否已有库存动作提交到服务器但尚未收到终态。 */
 	bool bActionPending = false;
 
-	/** 最近一次完成或本地拒绝的动作类型；用于反馈文本和调试。 */
+	/** 最近一次服务器返回终态的动作类型；用于结果反馈文本和调试。 */
 	ECatInventoryAction LastAction = ECatInventoryAction::None;
 
 	/** 最近一次库存动作的公共结果头；不作为 Items 终态缓存。 */

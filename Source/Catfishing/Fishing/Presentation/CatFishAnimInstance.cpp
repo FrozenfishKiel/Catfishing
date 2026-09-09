@@ -20,6 +20,8 @@ void UCatFishAnimInstance::RefreshFromFishOwner(const float DeltaSeconds, const 
 	if (!Fish)
 	{
 		MotionIntent = ECatFishMotionIntent::None;
+		Behavior = ECatFishBehavior::None;
+		FishEffortRatio = 0.0f;
 		IntendedSwimSpeedCentimetersPerSecond = 0.0f;
 		SwimPlayRate = 1.0f;
 		FishLineAlignment = 0.0f;
@@ -30,6 +32,8 @@ void UCatFishAnimInstance::RefreshFromFishOwner(const float DeltaSeconds, const 
 
 	const FCatFishEncounterPresentationState& State = Fish->GetPresentationState();
 	MotionIntent = State.MotionIntent;
+	Behavior = State.Behavior;
+	FishEffortRatio = FMath::Clamp(State.FishEffortRatio, 0.0f, 1.0f);
 	IntendedSwimSpeedCentimetersPerSecond = FMath::Max(0.0f,
 		State.IntendedSwimSpeedCentimetersPerSecond);
 	FishLineAlignment = FMath::Clamp(State.FishLineAlignment, -1.0f, 1.0f);
@@ -42,7 +46,7 @@ void UCatFishAnimInstance::RefreshFromFishOwner(const float DeltaSeconds, const 
 	const float SafeReferenceSpeed = FMath::Max(1.0f, ReferenceSwimSpeedCentimetersPerSecond);
 	const float SafeMinimumPlayRate = FMath::Max(0.0f, MinimumSwimPlayRate);
 	const float SafeMaximumPlayRate = FMath::Max(SafeMinimumPlayRate, MaximumSwimPlayRate);
-	const float TargetPlayRate = bHasLiveSwimIntent && IntendedSwimSpeedCentimetersPerSecond > 0.0f
+	const float TargetPlayRate = bHasLiveSwimIntent
 		? FMath::Clamp(IntendedSwimSpeedCentimetersPerSecond / SafeReferenceSpeed,
 			SafeMinimumPlayRate, SafeMaximumPlayRate)
 		: 1.0f;

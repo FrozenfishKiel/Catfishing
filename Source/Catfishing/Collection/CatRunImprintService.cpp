@@ -414,7 +414,7 @@ void UCatRunImprintService::DeliverPendingForController(AController* Controller)
 	}
 }
 
-// teardown 流程：永久关闭新命令，把仍未成像的计划标为失败，并最终重投全部未 ACK Grant；存在未 ACK 时返回 false 让 GameMode 进入统一有界等待。
+// teardown 流程：永久关闭新命令，把仍未成像的计划标为失败，并最终重投全部未 ACK Grant；存在未 ACK 时返回 false 让 GameMode 等真实 ACK。
 bool UCatRunImprintService::PrepareForRunTeardown()
 {
 	bCommandsOpen = false;
@@ -436,13 +436,13 @@ bool UCatRunImprintService::PrepareForRunTeardown()
 	return AreAllGrantAcksComplete();
 }
 
-// Grant ACK 完成读取流程：只扫描独立投递记录的真实 Acknowledged 阶段；teardown 超时、投递次数或连接消失都不能把它变成 true。
+// Grant ACK 完成读取流程：只扫描独立投递记录的真实 Acknowledged 阶段；投递次数或连接消失都不能把它变成 true。
 bool UCatRunImprintService::AreAllGrantAcksComplete() const
 {
 	return GetPendingGrantAckCount() == 0;
 }
 
-// Grant ACK 计数流程：统计每条尚未由 owning client durable Profile 回 ACK 的记录；只供有界收口判断和诊断，不推进投递状态。
+// Grant ACK 计数流程：统计每条尚未由 owning client durable Profile 回 ACK 的记录；只供退出等待判断和诊断，不推进投递状态。
 int32 UCatRunImprintService::GetPendingGrantAckCount() const
 {
 	int32 PendingCount = 0;

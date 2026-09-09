@@ -2,9 +2,19 @@
 
 #include "CoreMinimal.h"
 #include "Fishing/CatFishingTypes.h"
+#include "Fishing/Simulation/CatFishingCastTrajectory.h"
+#include "Fishing/Behavior/CatFishBehaviorTypes.h"
 #include "CatFishingActorTypes.generated.h"
 
 class APlayerState;
+
+/** 鱼竿的稳定空间姿态；会话阶段与姿态正交，放到地上不会终止鱼、钩或鱼线。 */
+UENUM(BlueprintType)
+enum class ECatFishingRodPoseMode : uint8
+{
+	Grounded,
+	Held
+};
 
 UENUM(BlueprintType)
 enum class ECatFishingHookPresentationPhase : uint8
@@ -28,12 +38,24 @@ enum class ECatFishingBobberPresentationMode : uint8
 	Sunk
 };
 
+/** 稳定玩家身份对应的一次握持；下标改变不改变加入轮次或身体相对位置。 */
+USTRUCT(BlueprintType)
+struct FCatFishingOperatorMembership
+{
+	GENERATED_BODY()
+	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> PlayerState = nullptr;
+	UPROPERTY() uint32 Epoch = 0;
+	UPROPERTY(BlueprintReadOnly) FVector FormationOffsetWorld = FVector::ZeroVector;
+};
+
 USTRUCT(BlueprintType)
 struct FCatFishingRodPresentationState
 {
 	GENERATED_BODY()
 	UPROPERTY(BlueprintReadOnly) FGuid RodActorId;
 	UPROPERTY(BlueprintReadOnly) int64 RodActorRevision = 0;
+	/** 这根场景鱼竿对应的运行期物品实例 ID；收杆按它 UnUse，避免同定义鱼竿在背包和场上重复存在。 */
+	UPROPERTY(BlueprintReadOnly) FGuid ItemInstanceId;
 	UPROPERTY(BlueprintReadOnly) FName RodDefinitionId = NAME_None;
 	UPROPERTY(BlueprintReadOnly) FName RodSkinDefinitionId = NAME_None;
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> OwnerPlayerState = nullptr;
@@ -41,6 +63,15 @@ struct FCatFishingRodPresentationState
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> OperatorPlayerState = nullptr;
 	/** 有序占位容器：加入时追加，离开时压紧；0=主位，之后按编号公式左右交替向外扩展，始终无空洞。 */
 	UPROPERTY(BlueprintReadOnly) TArray<TObjectPtr<APlayerState>> OperatorPlayerStates;
+	/** 由唯一成员变更写口生成的元数据，按玩家身份匹配，不另作可写名单。 */
+	UPROPERTY(BlueprintReadOnly) TArray<FCatFishingOperatorMembership> OperatorMemberships;
+	/** 每次实际成员集合或顺序变化推进，独立于皮肤、耐久与主位控制权。 */
+	UPROPERTY() uint32 RosterVersion = 0;
+	UPROPERTY() uint32 ControlEpoch = 0;
+	/** 当前真正握住鱼竿的玩家；始终镜像 OperatorPlayerStates[0]，地面姿态为空。 */
+	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> HolderPlayerState = nullptr;
+	/** 只描述同一根 Rod Actor 在手里还是地上，不参与 FishingSession 阶段推进。 */
+	UPROPERTY(BlueprintReadOnly) ECatFishingRodPoseMode PoseMode = ECatFishingRodPoseMode::Grounded;
 	UPROPERTY(BlueprintReadOnly) bool bDeployed = false;
 	UPROPERTY(BlueprintReadOnly) bool bBroken = false;
 };
@@ -52,17 +83,20 @@ struct FCatFishingHookPresentationState
 	UPROPERTY(BlueprintReadOnly) FGuid FishingSessionId;
 	UPROPERTY(BlueprintReadOnly) FGuid CastAttemptId;
 	UPROPERTY(BlueprintReadOnly) ECatFishingHookPresentationPhase Phase = ECatFishingHookPresentationPhase::Unconfigured;
+	UPROPERTY(BlueprintReadOnly) FCatFishingCastTrajectory CastTrajectory;
 	UPROPERTY(BlueprintReadOnly) ECatFishingBobberPresentationMode BobberMode = ECatFishingBobberPresentationMode::None;
 	/** 当前浮漂模式在服务器开始的世界时间；客户端据此保持多人相位一致，不逐帧复制 Transform。 */
 	UPROPERTY(BlueprintReadOnly) double BobberModeStartedServerTime = 0.0;
-	/** 权威模拟的已放出线长 L_paid；Cable 只把它当作本地表现长度。 */
+	/** 权威模拟的已放出线长 L_paid；曲线只把它当作本地表现弧长。 */
 	UPROPERTY(BlueprintReadOnly) double PaidOutLineLengthCentimeters = 0.0;
 	/** 竿尖到 Hook/Fish 的实际直线距离 D。 */
 	UPROPERTY(BlueprintReadOnly) double StraightLineDistanceCentimeters = 0.0;
-	/** max(L_paid-D,0)；客户端据此增加 Cable 垂坠。 */
+	/** max(L_paid-D,0)；表现曲线通过已放线长和端点距离体现余线下垂。 */
 	UPROPERTY(BlueprintReadOnly) double SlackLineLengthCentimeters = 0.0;
 	UPROPERTY(BlueprintReadOnly) float NormalizedTension = 0.0f;
 	UPROPERTY(BlueprintReadOnly) bool bLineTaut = false;
+	/** Final authoritative line load in newtons, before display normalization; cosmetic rod bending only. */
+	UPROPERTY(BlueprintReadOnly) double LineTensionNewtons = 0.0;
 };
 
 USTRUCT(BlueprintType)
@@ -75,6 +109,12 @@ struct FCatFishEncounterPresentationState
 	/** 服务器由本鱼冻结重量计算的一次性统一 Mesh 缩放；客户端只消费，不自行随机。 */
 	UPROPERTY(BlueprintReadOnly) double VisualScale = 1.0;
 	UPROPERTY(BlueprintReadOnly) ECatFishMotionIntent MotionIntent = ECatFishMotionIntent::None;
+	/** 独立策略事实；旧 MotionIntent 仅适配正式动画的三种表现角色。 */
+	UPROPERTY(BlueprintReadOnly) ECatFishBehavior Behavior = ECatFishBehavior::None;
+	/** 当前实际出力比例，[0,1]；不是剩余体力。 */
+	UPROPERTY(BlueprintReadOnly) float FishEffortRatio = 0.0f;
+	/** 主动游向与受约束后的平移分开，允许鱼朝外挣扎却被侧向拖动。 */
+	UPROPERTY(BlueprintReadOnly) FVector SwimHeading = FVector::ZeroVector;
 	/** 行为意图选择的自由游速（cm/s），不受鱼线、岸线或最终位移限制；用于驱动 AnimBP 播放倍率。 */
 	UPROPERTY(BlueprintReadOnly) float IntendedSwimSpeedCentimetersPerSecond = 0.0f;
 	UPROPERTY(BlueprintReadOnly) double CurrentLineLength = 0.0;
@@ -84,4 +124,7 @@ struct FCatFishEncounterPresentationState
 	UPROPERTY(BlueprintReadOnly) float NormalizedLineLoad = 0.0f;
 	/** 服务器已确认进入强对抗角度区间；动画/UI 不需要在客户端重新计算。 */
 	UPROPERTY(BlueprintReadOnly) bool bStrongConfrontation = false;
+	/** Runner 已确认的干地接触；仅供鱼体按坡面托起，离开干地立即清除。 */
+	UPROPERTY(BlueprintReadOnly) bool bGrounded = false;
+	UPROPERTY(BlueprintReadOnly) FVector GroundNormal = FVector::UpVector;
 };

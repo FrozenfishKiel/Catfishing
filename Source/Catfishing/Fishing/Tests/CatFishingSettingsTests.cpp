@@ -2,9 +2,39 @@
 
 #include "Misc/AutomationTest.h"
 
+#include "Animation/AnimSequenceBase.h"
+#include "Engine/SkeletalMesh.h"
+#include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/CatFishingSettings.h"
-#include "Fishing/Presentation/CatFishingPresentationSettings.h"
+#include "Fishing/Config/CatFishingFightBalanceDefinition.h"
+#include "Fishing/Presentation/CatFishAnimInstance.h"
+#include "Fishing/Presentation/CatFishPresentationDefinition.h"
 #include "StateTree.h"
+#include "UObject/UnrealType.h"
+
+#include <limits>
+
+namespace
+{
+	void PopulateValidFightBalance(UCatFishingFightBalanceDefinition& Balance)
+	{
+		Balance.BalanceDefinitionId = TEXT("TestFishingFightBalance");
+		Balance.bEnableRuntimeDefinition = true;
+		Balance.StrengthPerKilogram = 10.0;
+		Balance.ForcePerStrengthNewtons = 1.0;
+		Balance.ReelSpeedCentimetersPerSecond = 80.0;
+		Balance.CatStaminaCostPerStrengthCentimeter = 0.002;
+		Balance.FishStaminaPerUnfulfilledMeter = 5.0 / 3.0;
+		Balance.SlackStaminaRegenPerSecond = 3.0;
+		Balance.FishExhaustionThreshold = 0.5;
+		Balance.DisplayTensionNewtons = 50.0;
+		Balance.EscapeSlackCentimeters = 100.0;
+		Balance.StalemateRodWearPerFishStrength = 0.1;
+		Balance.HeldRodMinimumLeverageMultiplier = 0.4;
+		Balance.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 160.0;
+	}
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingSettingsRuntimeReadinessTest,
@@ -20,6 +50,168 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatRodOperatorLayoutSettingsTest,
 	"Catfishing.Unit.Fishing.Settings.RodOperatorLayoutIsBounded",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingFightBalanceDefinitionTest,
+	"Catfishing.Unit.Fishing.Settings.FightBalanceIsValidatedAndDesignerReadable",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFormalFishingFightBalanceAssetTest,
+	"Catfishing.Unit.Fishing.Assets.FormalFightBalanceAllowsIndependentStaminaTuning",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatStarterRodDurabilityBaselineTest,
+	"Catfishing.Unit.Fishing.Assets.StarterRodPreservesMaximumDurabilityBaseline",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFormalFishingFightBalanceAssetTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	const UCatFishingFightBalanceDefinition* Balance = Settings
+		? Settings->LoadFightBalanceDefinition() : nullptr;
+	if (!TestNotNull(TEXT("默认配置可加载正式搏斗平衡资产"), Balance)) return false;
+
+	TestEqual(TEXT("正式平衡资产 ID 稳定"), Balance->BalanceDefinitionId,
+		FName(TEXT("DefaultFishingFightBalance")));
+	TestEqual(TEXT("保留每公斤十点力量基线"), Balance->StrengthPerKilogram, 10.0);
+	TestEqual(TEXT("每点力量显式换算为一牛顿，不沿用旧加速度值"),
+		Balance->ForcePerStrengthNewtons, 1.0);
+	TestTrue(TEXT("正式资产的独立体力调参通过统一运行校验"), Balance->IsRuntimeDefinitionReady());
+	return !HasAnyErrors();
+}
+
+bool FCatStarterRodDurabilityBaselineTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
+	const UCatEquipmentDefinition* StarterRod = EquipmentSettings
+		? EquipmentSettings->FindRuntimeDefinition(TEXT("StarterRodT1")) : nullptr;
+	if (!TestNotNull(TEXT("正式装备目录可加载初级鱼竿"), StarterRod)) return false;
+	TestEqual(TEXT("初级鱼竿定义 ID 稳定"), StarterRod->EquipmentDefinitionId,
+		FName(TEXT("StarterRodT1")));
+	TestEqual(TEXT("初级鱼竿最大耐久为 150，开场读取实例剩余值"), StarterRod->MaximumRodDurability, 150.0);
+	return !HasAnyErrors();
+}
+
+bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	UCatFishingFightBalanceDefinition* Balance = NewObject<UCatFishingFightBalanceDefinition>(GetTransientPackage());
+	if (!TestNotNull(TEXT("可创建瞬态搏斗平衡资产"), Balance)) return false;
+
+	TestFalse(TEXT("未配置资产默认不可进入运行态"), Balance->IsRuntimeDefinitionReady());
+	TestEqual(TEXT("鱼未完成意图使用独立每米价格"), Balance->FishStaminaPerUnfulfilledMeter, 5.0 / 3.0);
+	TestEqual(TEXT("180厘米每秒满出力全受阻时独立标定为每秒三点"),
+		Balance->FishStaminaPerUnfulfilledMeter * 180.0 / 100.0, 3.0, 1e-9);
+	PopulateValidFightBalance(*Balance);
+	TestTrue(TEXT("完整合法数值可进入运行态"), Balance->IsRuntimeDefinitionReady());
+	TestEqual(TEXT("既有资产获得猫力竭外冲默认倍率"), Balance->ExhaustedCatEscapeSpeedMultiplier, 2.0);
+	TestEqual(TEXT("既有资产获得独立的辅助力量折扣，不修改个人体力余额"), Balance->HelperStrengthMultiplier, 0.5);
+	for (const double ValidHelperStrength : {0.0, 0.25, 1.0})
+	{
+		Balance->HelperStrengthMultiplier = ValidHelperStrength;
+		TestTrue(TEXT("辅助力量贡献可在零到完整力量之间调整"), Balance->IsRuntimeDefinitionReady());
+	}
+	for (const double InvalidHelperStrength : {-0.1, 1.01, std::numeric_limits<double>::quiet_NaN(),
+		std::numeric_limits<double>::infinity()})
+	{
+		Balance->HelperStrengthMultiplier = InvalidHelperStrength;
+		TestFalse(TEXT("辅助力量倍率非法时拒绝运行"), Balance->IsRuntimeDefinitionReady());
+	}
+	Balance->HelperStrengthMultiplier = 0.5;
+	Balance->ExhaustedCatEscapeSpeedMultiplier = 3.0;
+	TestTrue(TEXT("猫力竭外冲速度可独立调整"), Balance->IsRuntimeDefinitionReady());
+	for (const double InvalidEscapeSpeed : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),
+		std::numeric_limits<double>::infinity()})
+	{
+		Balance->ExhaustedCatEscapeSpeedMultiplier = InvalidEscapeSpeed;
+		TestFalse(TEXT("非法外冲倍率拒绝正式运行"), Balance->IsRuntimeDefinitionReady());
+	}
+	Balance->ExhaustedCatEscapeSpeedMultiplier = 2.0;
+	TestNotNull(TEXT("资产生成脚本可调用统一运行校验"),
+		UCatFishingFightBalanceDefinition::StaticClass()->FindFunctionByName(
+			GET_FUNCTION_NAME_CHECKED(UCatFishingFightBalanceDefinition, IsRuntimeDefinitionReady)));
+
+	Balance->CatStaminaCostPerStrengthCentimeter = 0.003;
+	Balance->FishStaminaPerUnfulfilledMeter = 1.5;
+	TestTrue(TEXT("猫鱼可以独立配置不同体力价格"), Balance->IsRuntimeDefinitionReady());
+	Balance->FishEffortStaminaPerSecond = std::numeric_limits<double>::quiet_NaN();
+	TestTrue(TEXT("旧每秒鱼价格不参与运行校验"), Balance->IsRuntimeDefinitionReady());
+	TestEqual(TEXT("旧每秒价不覆盖已调的新每米价"), Balance->FishStaminaPerUnfulfilledMeter, 1.5);
+	const FProperty* LegacyFishPrice = FindFProperty<FProperty>(
+		UCatFishingFightBalanceDefinition::StaticClass(),
+		GET_MEMBER_NAME_CHECKED(UCatFishingFightBalanceDefinition, FishEffortStaminaPerSecond));
+	TestNotNull(TEXT("旧每秒价保留既有反射身份"), LegacyFishPrice);
+#if WITH_EDITOR
+	if (LegacyFishPrice)
+	{
+		TestTrue(TEXT("旧每秒价具有蓝图DeprecatedProperty标记"), LegacyFishPrice->HasMetaData(TEXT("DeprecatedProperty")));
+	}
+#endif
+	TestEqual(TEXT("旧资产通过新字段默认值获得弧度计价"), Balance->CatRodStaminaCostPerStrengthRadian, 0.03);
+	TestEqual(TEXT("旧资产通过新字段默认值获得时间支撑"), Balance->CatSupportStaminaPerSecond, 2.0);
+	TestEqual(TEXT("旧资产默认轻调杆费率"), Balance->CatUnloadedWorkMultiplier, 0.15);
+	for (double* Field : {&Balance->FishStaminaPerUnfulfilledMeter, &Balance->CatRodStaminaCostPerStrengthRadian, &Balance->CatSupportStaminaPerSecond, &Balance->CatUnloadedWorkMultiplier})
+	{
+		const double Original = *Field;
+		for (const double Invalid : {-1.0, std::numeric_limits<double>::quiet_NaN(), std::numeric_limits<double>::infinity()})
+		{
+			*Field = Invalid;
+			TestFalse(TEXT("非法做功、每米或每秒费率参数拒绝运行"), Balance->IsRuntimeDefinitionReady());
+		}
+		*Field = 0.0;
+		TestTrue(TEXT("各项新费用可以独立关闭"), Balance->IsRuntimeDefinitionReady());
+		*Field = Original;
+	}
+
+	struct FStaminaMultiplierCase
+	{
+		const TCHAR* Name;
+		double UCatFishingFightBalanceDefinition::* Field;
+	};
+	const FStaminaMultiplierCase MultiplierCases[] = {
+		{ TEXT("猫移动"), &UCatFishingFightBalanceDefinition::CatMovementStaminaMultiplier },
+		{ TEXT("猫收线"), &UCatFishingFightBalanceDefinition::CatReelStaminaMultiplier },
+		{ TEXT("猫转杆"), &UCatFishingFightBalanceDefinition::CatRodStaminaMultiplier },
+		{ TEXT("猫持竿"), &UCatFishingFightBalanceDefinition::CatHoldStaminaMultiplier },
+		{ TEXT("猫负载"), &UCatFishingFightBalanceDefinition::CatLoadStaminaMultiplier },
+	};
+	for (const FStaminaMultiplierCase& Case : MultiplierCases)
+	{
+		double& Multiplier = Balance->*Case.Field;
+		TestEqual(FString::Printf(TEXT("%s体力倍率为旧资产提供默认值"), Case.Name), Multiplier, 1.0);
+		Multiplier = 0.0;
+		TestTrue(FString::Printf(TEXT("%s体力倍率允许关闭该项"), Case.Name), Balance->IsRuntimeDefinitionReady());
+		Multiplier = 2.5;
+		TestTrue(FString::Printf(TEXT("%s体力倍率允许独立调高"), Case.Name), Balance->IsRuntimeDefinitionReady());
+		Multiplier = -0.1;
+		TestFalse(FString::Printf(TEXT("%s负倍率阻止运行"), Case.Name), Balance->IsRuntimeDefinitionReady());
+		Multiplier = std::numeric_limits<double>::quiet_NaN();
+		TestFalse(FString::Printf(TEXT("%s非数值倍率阻止运行"), Case.Name), Balance->IsRuntimeDefinitionReady());
+		Multiplier = std::numeric_limits<double>::infinity();
+		TestFalse(FString::Printf(TEXT("%s无穷倍率阻止运行"), Case.Name), Balance->IsRuntimeDefinitionReady());
+		Multiplier = 1.0;
+	}
+
+	const FProperty* StrengthProperty = FindFProperty<FProperty>(
+		UCatFishingFightBalanceDefinition::StaticClass(),
+		GET_MEMBER_NAME_CHECKED(UCatFishingFightBalanceDefinition, StrengthPerKilogram));
+	TestNotNull(TEXT("每公斤力量字段可反射"), StrengthProperty);
+#if WITH_EDITOR
+	if (StrengthProperty)
+	{
+		TestEqual(TEXT("策划界面使用中文字段名"),
+			StrengthProperty->GetDisplayNameText().ToString(), FString(TEXT("每公斤力量")));
+	}
+#endif
+
+	Balance->ForcePerStrengthNewtons = 0.0;
+	TestFalse(TEXT("非法加速度系数阻止运行"), Balance->IsRuntimeDefinitionReady());
+	return !HasAnyErrors();
+}
 
 bool FCatRodOperatorLayoutSettingsTest::RunTest(const FString& Parameters)
 {
@@ -46,19 +238,26 @@ bool FCatRodOperatorLayoutSettingsTest::RunTest(const FString& Parameters)
 bool FCatFishWeightVisualScaleTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	UCatFishingPresentationSettings* Settings = NewObject<UCatFishingPresentationSettings>(GetTransientPackage());
+	UCatFishPresentationDefinition* Settings = NewObject<UCatFishPresentationDefinition>(GetTransientPackage());
 	if (!TestNotNull(TEXT("creates transient presentation settings"), Settings))
 	{
 		return false;
 	}
-	Settings->FishMeshReferenceWeightKilograms = 1.0;
-	Settings->FishMeshMinimumUniformScale = 0.5;
-	Settings->FishMeshMaximumUniformScale = 2.0;
-	TestEqual(TEXT("reference weight keeps unit scale"), Settings->ComputeFishUniformVisualScale(1.0), 1.0);
-	TestEqual(TEXT("eight times weight doubles linear size"), Settings->ComputeFishUniformVisualScale(8.0), 2.0);
-	TestEqual(TEXT("one eighth weight halves linear size"), Settings->ComputeFishUniformVisualScale(0.125), 0.5);
-	TestEqual(TEXT("large values clamp to configured maximum"), Settings->ComputeFishUniformVisualScale(64.0), 2.0);
-	TestEqual(TEXT("invalid weight safely falls back to unit scale"), Settings->ComputeFishUniformVisualScale(0.0), 1.0);
+	Settings->SkeletalMesh = TSoftObjectPtr<USkeletalMesh>(FSoftObjectPath(TEXT("/Game/Test/FishMesh.FishMesh")));
+	Settings->AnimInstanceClass = TSoftClassPtr<UCatFishAnimInstance>(FSoftObjectPath(TEXT("/Script/Catfishing.CatFishAnimInstance")));
+	Settings->CalmAnimation = TSoftObjectPtr<UAnimSequenceBase>(FSoftObjectPath(TEXT("/Game/Test/Calm.Calm")));
+	Settings->StruggleAnimation = TSoftObjectPtr<UAnimSequenceBase>(FSoftObjectPath(TEXT("/Game/Test/Struggle.Struggle")));
+	Settings->ExhaustedAnimation = TSoftObjectPtr<UAnimSequenceBase>(FSoftObjectPath(TEXT("/Game/Test/Exhausted.Exhausted")));
+	Settings->LandedAnimation = Settings->ExhaustedAnimation;
+	Settings->MeshReferenceWeightKilograms = 1.0;
+	Settings->MinimumUniformScale = 0.5;
+	Settings->MaximumUniformScale = 2.0;
+	TestTrue(TEXT("complete fish presentation is runtime-ready"), Settings->IsRuntimeDefinitionReady());
+	TestEqual(TEXT("reference weight keeps unit scale"), Settings->ComputeUniformVisualScale(1.0), 1.0);
+	TestEqual(TEXT("eight times weight doubles linear size"), Settings->ComputeUniformVisualScale(8.0), 2.0);
+	TestEqual(TEXT("one eighth weight halves linear size"), Settings->ComputeUniformVisualScale(0.125), 0.5);
+	TestEqual(TEXT("large values clamp to configured maximum"), Settings->ComputeUniformVisualScale(64.0), 2.0);
+	TestEqual(TEXT("invalid weight safely falls back to unit scale"), Settings->ComputeUniformVisualScale(0.0), 1.0);
 	return !HasAnyErrors();
 }
 
@@ -79,6 +278,7 @@ bool FCatFishingSettingsRuntimeReadinessTest::RunTest(const FString& Parameters)
 	Settings->bEnableFishingRuntime = false;
 	Settings->FishingSessionStateTree.Reset();
 	Settings->FishBehaviorStateTree.Reset();
+	Settings->FightBalanceDefinition.Reset();
 	Settings->TrueBiteWindowSeconds = 0.0;
 	Settings->bEnableNearShoreValidation = false;
 	Settings->ScoopReachCentimeters = 0.0;
@@ -103,6 +303,7 @@ bool FCatFishingSettingsRuntimeReadinessTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("非正真咬预警配置被拒绝"), Settings->TryGetBiteWarning(BiteWarning));
 	TestEqual(TEXT("预警读取失败时输出清零"), BiteWarning, 0.0);
 	Settings->BiteWarningSeconds = 3.0;
+	Settings->MinimumBiteDelaySeconds = 5.0; // 本例单独验证五秒慢浮，不能依赖项目当前默认值。
 	Settings->MaximumBiteDelaySeconds = 7.0;
 	TestFalse(TEXT("总时间上限不足以容纳慢浮下限和完整预警时拒绝"),
 		Settings->TryGetBiteWarning(BiteWarning));
@@ -121,6 +322,10 @@ bool FCatFishingSettingsRuntimeReadinessTest::RunTest(const FString& Parameters)
 	Settings->ScoopReachCentimeters = 250.0;
 	TestFalse(TEXT("缺少终态复制窗口时仍不可运行"), Settings->IsRuntimeReady());
 	Settings->TerminalReplicationWindowSeconds = 5.0;
+	TestFalse(TEXT("缺少搏斗平衡资产时仍不可运行"), Settings->IsRuntimeReady());
+	UCatFishingFightBalanceDefinition* FightBalance = NewObject<UCatFishingFightBalanceDefinition>(Settings);
+	PopulateValidFightBalance(*FightBalance);
+	Settings->FightBalanceDefinition = FightBalance;
 	TestTrue(TEXT("完整 Fishing 配置可运行"), Settings->IsRuntimeReady());
 	TestTrue(TEXT("完整配置可读取抢抄距离"), Settings->TryGetScoopReach(ScoopReach));
 	TestEqual(TEXT("抢抄距离保持配置值"), ScoopReach, 250.0);

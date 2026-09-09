@@ -4,7 +4,7 @@
 #include "AbilitySystem/Fishing/CatFishingGameplayAbility.h"
 #include "CatFishingSlackAbility.generated.h"
 
-/** 右键放线 Ability；按住期间向服务器发送放线边沿，仅 HookedFight 阶段会被服务器解释成有效放线。 */
+/** 右键放线 Ability；向服务器发送输入边沿，由 HookedFight / ExhaustedReel 的 Runner 裁决放线与回体。 */
 UCLASS()
 class CATFISHING_API UCatGA_FishingSlack : public UCatFishingGameplayAbility
 {

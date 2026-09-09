@@ -1,0 +1,40 @@
+{
+  "blender": "5.2.1 LTS",
+  "units": "meters",
+  "fps": 30,
+  "bones": 30,
+  "meshes": 40,
+  "vertices": 153446,
+  "triangles": 306356,
+  "actions": {
+    "Idle": {
+      "name": "AN_CreamCat_Idle",
+      "frames": 121,
+      "duration_seconds": 4.0
+    },
+    "Walk": {
+      "name": "AN_CreamCat_Walk",
+      "frames": 33,
+      "duration_seconds": 1.0666666666666667
+    },
+    "FishingWait": {
+      "name": "AN_CreamCat_FishingWait",
+      "frames": 151,
+      "duration_seconds": 5.0
+    }
+  },
+  "loop_matrix_max_delta": {
+    "Idle": 0.0,
+    "Walk": 0.0,
+    "FishingWait": 0.0
+  },
+  "quarter_cycle_matrix_delta": {
+    "Idle": 0.2839486785233021,
+    "Walk": 0.4773424565792084,
+    "FishingWait": 0.2809797562658787
+  },
+  "failures": [],
+  "gameplay_assets_modified": false,
+  "ue_imported": false,
+  "reference_rod_asset": "/Game/Catfishing/Fishing/Presentation/SM_Rod_BendSource"
+}

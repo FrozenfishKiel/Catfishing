@@ -141,10 +141,10 @@ def main() -> None:
     _require("WBP_CatInteractionPrompt" in configured_interaction, f"Interaction 默认 WBP 配置异常: {configured_interaction}")
     _require("WBP_CatShop" in configured_shop, f"Shop 默认 WBP 配置异常: {configured_shop}")
     _require("WBP_CatCollection" in configured_collection, f"Collection 默认 WBP 配置异常: {configured_collection}")
-    _require("IA_LakeMenu" in inventory_action_path, f"背包 Action 配置异常: {inventory_action_path}")
+    _require("IA_Inventory" in inventory_action_path, f"背包 Action 配置异常: {inventory_action_path}")
     _require("IA_Interact" in interact_action_path, f"交互 Action 配置异常: {interact_action_path}")
     _require("IMC_InputContext" in gameplay_context_path, f"Gameplay IMC 配置异常: {gameplay_context_path}")
-    _require(unreal.load_asset("/Game/Input/InputAction/IA_LakeMenu") is not None, "无法加载 IA_LakeMenu 输入资产")
+    _require(unreal.load_asset("/Game/Input/InputAction/IA_Inventory") is not None, "无法加载 IA_Inventory 输入资产")
     _require(unreal.load_asset("/Game/Input/InputAction/IA_Interact") is not None, "无法加载 IA_Interact 输入资产")
     _require(unreal.load_asset("/Game/Input/InputContext/IMC_InputContext") is not None, "无法加载 IMC_InputContext 输入资产")
 
@@ -156,6 +156,13 @@ def main() -> None:
     shop_base_class = _load_class("/Script/Catfishing.CatShopWidget")
     collection_base_class = _load_class("/Script/Catfishing.CatCollectionWidget")
     hud_wbp_class = _load_class("/Game/UI/HUD/WBP_CatHUD.WBP_CatHUD_C")
+    unreal.load_asset("/Game/UI/HUD/WBP_CatHUD")
+    for widget_name, widget_type in (
+        ("CatStaminaTextBlock", unreal.TextBlock),
+        ("CatStaminaProgressBar", unreal.ProgressBar),
+    ):
+        widget = unreal.find_object(None, "/Game/UI/HUD/WBP_CatHUD.WBP_CatHUD_C:WidgetTree." + widget_name)
+        _require(isinstance(widget, widget_type), "正式 HUD 编译模板缺失总体力控件: " + widget_name)
     inventory_wbp_class = _load_class("/Game/UI/Inventory/WBP_CatInventory.WBP_CatInventory_C")
     slot_wbp_class = _load_class("/Game/UI/InventorySlot/WBP_CatInventorySlot.WBP_CatInventorySlot_C")
     interaction_wbp_class = _load_class("/Game/UI/Interaction/WBP_CatInteractionPrompt.WBP_CatInteractionPrompt_C")

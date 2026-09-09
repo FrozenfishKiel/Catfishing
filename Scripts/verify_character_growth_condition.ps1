@@ -74,10 +74,11 @@ function Invoke-CharacterGrowthConditionStatic {
     Assert-TextContains $SurvivalSet "Poison" "Survival AttributeSet must expose Poison"
     Assert-TextContains $SurvivalSet "FishingStrength" "Survival AttributeSet must expose FishingStrength"
     Assert-TextContains $SurvivalSet "FightStamina" "Survival AttributeSet must expose FightStamina"
+    Assert-TextContains $SurvivalSet "MaxFightStamina" "Survival AttributeSet must expose the authoritative stamina maximum"
     Assert-TextNotContains $SurvivalSet "GetHungerAttribute|GetFatigueAttribute|InitialHunger|InitialFatigue" "Survival AttributeSet still exposes removed Hunger/Fatigue runtime symbols"
 
     $AbilitySettings = Read-ProjectFileText "Source\Catfishing\AbilitySystem\Config\CatAbilitySettings.h"
-    Assert-TextContains $AbilitySettings "TryGetInitialAttributes\(float& OutPoison, float& OutFishingStrength, float& OutFightStamina\)" "Ability settings must initialize the three current survival attributes"
+    Assert-TextContains $AbilitySettings "TryGetInitialAttributes\(float& OutPoison, float& OutFishingStrength, float& OutMaxFightStamina\)" "Ability settings must provide the initial maximum; current stamina belongs to ASC"
     Assert-TextNotContains $AbilitySettings "InitialHunger|InitialFatigue|DiagnosticHunger|DiagnosticFatigue|TryGetDiagnosticPoisonDelta|bEnableDiagnosticAbility|DiagnosticPoisonDelta|DiagnosticInputAction|DiagnosticMappingContext" "Ability settings still contains removed Hunger/Fatigue or diagnostic configuration"
 
     $AbilitySystemComponent = Read-ProjectFileText "Source\Catfishing\AbilitySystem\Core\CatAbilitySystemComponent.h"
@@ -85,37 +86,43 @@ function Invoke-CharacterGrowthConditionStatic {
     Assert-TextContains $AbilitySystemComponent "IsPoisonAtLeast" "Project ASC must expose a formal Poison threshold reader for Condition"
     $PoisonEffect = Read-ProjectFileText "Source\Catfishing\AbilitySystem\Effects\CatPoisonEffect.h"
     Assert-TextContains $PoisonEffect "UCatGE_PoisonDelta" "Poison changes must have a dedicated GameplayEffect"
-    $BodyActionAbility = Read-ProjectFileText "Source\Catfishing\AbilitySystem\BodyAction\CatBodyActionAbility.h"
-    Assert-TextContains $BodyActionAbility "UCatGA_BodyActionCommand" "Non-Fishing body actions must have a formal GameplayAbility gateway"
-    Assert-TextContains $BodyActionAbility "UCatBodyActionPayload" "Body action RPC routing must carry typed payloads instead of untyped tags"
-    Assert-TextContains $BodyActionAbility "BodyActionCommitWindowSeconds" "BodyAction ability must expose a cancellable commit window instead of immediately forwarding to domains"
-    Assert-TextContains $BodyActionAbility "ActivePresentationEventTag" "BodyAction ability must freeze a presentation tag so cancel clears the same long-action presentation it started"
-    Assert-TextContains $BodyActionAbility "GetBodyActionLeadInSecondsForAutomation" "BodyAction ability tests must prove action-level presentation lead-in is the active wait source"
-    Assert-TextContains $BodyActionAbility "ClearBodyActionCommitWindowOverrideForAutomation" "BodyAction automation override must have an explicit clear path so tests return to settings-driven lead-in"
-    Assert-TextContains $BodyActionAbility "CommitBodyActionAfterWindow" "BodyAction ability must submit domains after the GAS lifecycle window"
+    $CampBodyAbilities = Read-ProjectFileText "Source\Catfishing\AbilitySystem\BodyAction\Camp\CatCampBodyActionAbilities.h"
+    $SocialBodyAbilities = Read-ProjectFileText "Source\Catfishing\AbilitySystem\BodyAction\Social\CatSocialBodyActionAbilities.h"
+    foreach ($BodyActionAbility in @($CampBodyAbilities, $SocialBodyAbilities)) {
+        Assert-TextContains $BodyActionAbility "public UGameplayAbility" "Retained body actions must use dedicated GameplayAbility lifecycles"
+        Assert-TextContains $BodyActionAbility "ActiveRequest" "Body actions must retain their typed request through the commit window"
+        Assert-TextContains $BodyActionAbility "ActivePresentationEventTag" "Cancellation must stop the presentation started by the same action"
+        Assert-TextContains $BodyActionAbility "AfterWindow" "Body action domain commits must have an explicit lead-in completion entry"
+    }
     $BodyActionPresentationSettings = Read-ProjectFileText "Source\Catfishing\AbilitySystem\BodyAction\CatBodyActionPresentationSettings.h"
     Assert-TextContains $BodyActionPresentationSettings "UCatBodyActionPresentationSettings" "BodyAction long-action presentation must have one formal settings surface"
     Assert-TextContains $BodyActionPresentationSettings "ActionPresentationConfigs" "BodyAction presentation settings must keep action-level lead-in and optional Montage config together"
     Assert-TextContains $BodyActionPresentationSettings "TSoftObjectPtr<UAnimMontage>" "BodyAction presentation settings must expose optional Montage assets without hard-coding them in domains"
-    $BodyActionPresentationAssetTest = Read-ProjectFileText "Source\Catfishing\AbilitySystem\Tests\CatBodyActionPresentationAssetTests.cpp"
-    Assert-TextContains $BodyActionPresentationAssetTest "Catfishing\.Editor\.AbilitySystem\.CreateBodyActionMontageAssets" "BodyAction formal Montage assets must have an editor automation creation/verification entry"
-    Assert-TextContains $BodyActionPresentationAssetTest "UAnimMontageFactory" "BodyAction formal Montage asset automation must create Montage assets from existing animation sequences"
-    Assert-TextContains $BodyActionPresentationAssetTest "CREATE_BODY_ACTION_MONTAGE_ASSETS_PASS" "BodyAction formal Montage asset automation must emit a stable pass marker"
     $BodyActionPresentationAssetScript = Read-ProjectFileText "Scripts\create_body_action_montages.py"
     Assert-TextContains $BodyActionPresentationAssetScript "unreal\.AnimMontageFactory" "BodyAction formal Montage fallback script must use Unreal's Montage factory"
     Assert-TextContains $BodyActionPresentationAssetScript "CREATE_BODY_ACTION_MONTAGE_ASSETS_PASS" "BodyAction formal Montage fallback script must emit the same stable pass marker"
-    $BodyActionAbilityCpp = Read-ProjectFileText "Source\Catfishing\AbilitySystem\BodyAction\CatBodyActionAbility.cpp"
-    Assert-TextContains $BodyActionAbilityCpp "UAbilityTask_WaitDelay" "BodyAction ability must use an AbilityTask wait window before domain submission"
-    Assert-TextContains $BodyActionAbilityCpp "ActivePayload" "BodyAction ability must hold its payload through the cancellable Ability lifecycle"
-    Assert-TextContains $BodyActionAbilityCpp "Multicast_PlayBodyActionPresentation" "BodyAction ability must start long-action presentation through Character, not through domain services"
-    Assert-TextContains $BodyActionAbilityCpp "Multicast_StopBodyActionPresentation" "BodyAction cancel must stop the presentation it started"
-    Assert-TextContains $BodyActionAbilityCpp "GBodyActionCommitWindowOverrideSeconds = -1.0f" "BodyAction automation override clear must restore the unset sentinel instead of pinning the default window"
-    Assert-TextContains $AbilitySystemComponent "CancelBodyActionAbilitiesFromAuthority" "Project ASC must expose a narrow BodyAction cancel entry for the unified cancel input"
+    foreach ($AbilitySource in @(
+        "Source\Catfishing\AbilitySystem\BodyAction\Camp\CatCampBodyActionAbilities.cpp",
+        "Source\Catfishing\AbilitySystem\BodyAction\Social\CatSocialBodyActionAbilities.cpp"
+    )) {
+        $BodyActionAbilityCpp = Read-ProjectFileText $AbilitySource
+        Assert-TextContains $BodyActionAbilityCpp "UAbilityTask_WaitDelay" "Body actions must wait inside their GAS lifecycle before committing"
+        Assert-TextContains $BodyActionAbilityCpp "GetLeadInSeconds" "Body actions must read the configured per-action lead-in"
+        Assert-TextContains $BodyActionAbilityCpp "ActiveRequest" "Body actions must own the request until commit or cancellation"
+        Assert-TextContains $BodyActionAbilityCpp "Multicast_PlayBodyActionPresentation" "Body actions must start presentation through Character"
+        Assert-TextContains $BodyActionAbilityCpp "Multicast_StopBodyActionPresentation" "Cancellation must stop the same body action presentation"
+    }
+    Assert-TextContains $AbilitySystemComponent "CancelBodyActionAbilitiesFromAuthority" "ASC must expose the narrow unified BodyAction cancellation entry"
     $FishingCommandComponent = Read-ProjectFileText "Source\Catfishing\Fishing\Integration\CatFishingCommandComponent.cpp"
-    Assert-TextContains $FishingCommandComponent "CancelBodyActionAbilitiesFromAuthority" "Fishing Cancel authority path must cancel pending BodyAction abilities before continuing Fishing cancel semantics"
+    Assert-TextContains $FishingCommandComponent "CancelBodyActionAbilitiesFromAuthority" "Fishing Cancel must cancel pending BodyAction abilities"
     $AbilitySet = Read-ProjectFileText "Source\Catfishing\AbilitySystem\Config\CatAbilitySet.cpp"
-    Assert-TextContains $AbilitySet "UCatGA_BodyActionCommand::StaticClass" "Default AbilitySet readiness must require the BodyAction gateway ability"
-    Assert-TextContains $AbilitySet "GrantedAbilities\.Num\(\) < 7" "Default AbilitySet must require Fishing six inputs plus BodyAction gateway"
+    foreach ($AbilityClass in @(
+        "UCatGA_BodyActionCampRest", "UCatGA_BodyActionCampfirePlayback", "UCatGA_BodyActionRescueCharacterToCamp",
+        "UCatGA_BodyActionRequestManualHelp", "UCatGA_BodyActionRequestMischief", "UCatGA_BodyActionPlaceProtectionSign"
+    )) {
+        Assert-TextContains $AbilitySet "$AbilityClass\:\:StaticClass" "Default AbilitySet must require the retained action: $AbilityClass"
+    }
+    Assert-TextContains $AbilitySet "SeenInputTags.Contains\(CatFishingAbilityTags::Input_Fishing_" "Default AbilitySet must validate fishing inputs separately from body actions"
 
     $CharacterHeader = Read-ProjectFileText "Source\Catfishing\Character\CatCharacter.h"
     $CharacterCpp = Read-ProjectFileText "Source\Catfishing\Character\CatCharacter.cpp"
@@ -154,30 +161,25 @@ function Invoke-CharacterGrowthConditionStatic {
     Assert-TextNotContains $ConditionComponent "SetNumericAttributeBase[\s\S]{0,160}GetPoisonAttribute|ApplyModToAttribute[\s\S]{0,160}GetPoisonAttribute" "Condition component must not directly write the Poison Attribute"
     Assert-TextNotContains $ConditionComponent "GetHungerAttribute|GetFatigueAttribute|HungerRelief|FatigueRelief" "Condition component still mutates removed Hunger/Fatigue state"
 
-    $GameplayTypes = Read-ProjectFileText "Source\Catfishing\Framework\Game\CatGameplayTypes.cpp"
-    Assert-TextContains $GameplayTypes "CanAcceptFishingCommand" "GameMode must expose the Fishing/Chum command gate"
-    Assert-TextContains $GameplayTypes "GetConditionComponent" "Fishing/Chum gate must read the current Character Condition component"
-    Assert-TextContains $GameplayTypes "!Conditions->GetSnapshot\(\)\.bDowned" "Fishing/Chum gate must close when the current Character is Downed"
-    Assert-TextContains $GameplayTypes "SubmitBodyActionThroughAbility" "PlayerController non-Fishing action RPCs must route through BodyAction GameplayAbility"
-    Assert-TextContains $GameplayTypes "ExecuteBodyActionAbilityPayload" "BodyAction GameplayAbility must have one explicit Controller callback seam"
-    foreach ($BodyActionRpc in @(
-        "ServerRequestSacrifice_Implementation",
-        "ServerRequestCampRest_Implementation",
-        "ServerRequestCampfirePlayback_Implementation",
-        "ServerTransferObjectBetweenContainers_Implementation",
-        "ServerRescueCharacterToCamp_Implementation",
-        "ServerRepairRodAtCamp_Implementation",
-        "ServerUseHerbOnCharacter_Implementation",
-        "ServerConsumeFish_Implementation",
-        "ServerBeginTheft_Implementation",
-        "ServerCatchTheft_Implementation",
-        "ServerRequestManualHelp_Implementation",
-        "ServerRequestMischief_Implementation",
-        "ServerPlaceProtectionSign_Implementation",
-        "ServerCompleteShakeDry_Implementation"
-    )) {
-        Assert-TextContains $GameplayTypes "$BodyActionRpc[\s\S]{0,1800}SubmitBodyActionThroughAbility" "$BodyActionRpc must hand off to BodyAction GameplayAbility before domain execution"
+    $GameMode = Read-ProjectFileText "Source\Catfishing\Framework\Game\CatfishingGameModeBase.cpp"
+    $PlayerController = Read-ProjectFileText "Source\Catfishing\Framework\Game\CatfishingPlayerController.cpp"
+    Assert-TextContains $GameMode "CanAcceptFishingCommand" "GameMode must expose the Fishing/Chum command gate"
+    Assert-TextContains $GameMode "GetConditionComponent" "Fishing/Chum gate must read current Character Condition"
+    Assert-TextContains $GameMode "!Conditions->GetSnapshot\(\)\.bDowned" "Fishing/Chum gate must reject Downed characters"
+    Assert-TextContains $GameMode "ReleaseFishingOperatorForCharacter" "Character departure must release one member without ending the shared fishing session"
+    Assert-TextContains $GameMode "PreserveFishingResourcesForEquipmentShutdown" "Character departure must preserve active fishing resources before inventory capture"
+    foreach ($Lifecycle in @("UnPossessed", "EndPlay")) {
+        Assert-TextContains $CharacterCpp "(?s)void ACatCharacter::$Lifecycle\([^}]+HandleCharacterUnavailable\(this\)" "Character $Lifecycle must enter the shared cleanup before clearing body identity"
     }
+    foreach ($BodyActionSubmit in @(
+        "SubmitCampRest", "SubmitCampfirePlayback", "SubmitRescueCharacterToCamp",
+        "SubmitManualHelp", "SubmitMischief", "SubmitPlaceProtectionSign"
+    )) {
+        Assert-TextContains $PlayerController $BodyActionSubmit "Retained Camp/Social action must route to its dedicated command component: $BodyActionSubmit"
+    }
+    Assert-TextContains $PlayerController "UCatHerbRecoveryCoordinator" "Herb inventory/Poison transaction must route to its formal coordinator"
+    Assert-TextContains $PlayerController "UCatFishConsumptionCoordinator" "Fish consumption must keep its formal item/body transaction coordinator"
+    Assert-TextNotContains $PlayerController "SubmitBodyActionThroughAbility|ExecuteBodyActionAbilityPayload|ServerCompleteShakeDry" "Removed generic BodyAction or Wet command routing must not be revived"
 
     $FishingService = Read-ProjectFileText "Source\Catfishing\Fishing\CatFishingService.cpp"
     Assert-TextContains $FishingService "CanControllerStartFishingAction" "Fishing service must keep a service-level Downed guard for direct write calls"
@@ -230,20 +232,12 @@ function Invoke-CharacterGrowthConditionStatic {
     Assert-TextContains $DefaultGame "\[/Script/Catfishing\.CatGrowthSettings\]" "DefaultGame must configure Growth runtime"
     Assert-TextContains $DefaultGame "\[/Script/Catfishing\.CatBodyActionPresentationSettings\]" "DefaultGame must configure BodyAction formal Montage presentation settings"
     foreach ($BodyActionMontageAsset in @(
-        "AM_BodyAction_RequestSacrifice",
         "AM_BodyAction_CampRest",
         "AM_BodyAction_CampfirePlayback",
-        "AM_BodyAction_TransferFishToTank",
         "AM_BodyAction_RescueCharacterToCamp",
-        "AM_BodyAction_RepairRodAtCamp",
-        "AM_BodyAction_UseHerbOnCharacter",
-        "AM_BodyAction_ConsumeFish",
-        "AM_BodyAction_BeginTheft",
-        "AM_BodyAction_CatchTheft",
         "AM_BodyAction_RequestManualHelp",
         "AM_BodyAction_RequestMischief",
-        "AM_BodyAction_PlaceProtectionSign",
-        "AM_BodyAction_CompleteShakeDry"
+        "AM_BodyAction_PlaceProtectionSign"
     )) {
         Assert-TextContains $DefaultGame $BodyActionMontageAsset "DefaultGame must reference every BodyAction formal Montage asset: $BodyActionMontageAsset"
     }
@@ -265,17 +259,11 @@ function Invoke-AutomationFilter {
         [Parameter(Mandatory = $true)]
         [string]$EvidenceName
     )
-    <# 自动化流程：每个过滤器写入本模块专属证据目录，运行前只清理该过滤器目录；报告必须存在、无失败、无警告且无错误。 #>
-    $RunRoot = Join-Path $EvidenceRoot $EvidenceName
+    <# 自动化流程：每个过滤器使用独立时间戳证据目录，保留旧报告；本次报告必须非空、无失败、无警告且无错误。 #>
+    $RunRoot = Join-Path $EvidenceRoot (Join-Path $EvidenceName (Get-Date -Format "yyyyMMdd-HHmmss-fff"))
     $ReportRoot = Join-Path $RunRoot "Report"
     $LogFile = Join-Path $RunRoot "Automation.log"
     New-Item -ItemType Directory -Path $RunRoot -Force | Out-Null
-    if (Test-Path -LiteralPath $ReportRoot) {
-        Remove-Item -LiteralPath $ReportRoot -Recurse -Force
-    }
-    if (Test-Path -LiteralPath $LogFile) {
-        Remove-Item -LiteralPath $LogFile -Force
-    }
     & $Editor $ProjectFile -unattended -nop4 -nosplash -nullrhi -DDC-ForceMemoryCache `
         "-ExecCmds=Automation RunTests $Filter;Quit" `
         "-TestExit=Automation Test Queue Empty" `
@@ -289,7 +277,7 @@ function Invoke-AutomationFilter {
         throw "Automation filter did not produce index.json: $Filter"
     }
     $Report = Get-Content -LiteralPath $IndexFile -Raw -Encoding UTF8 | ConvertFrom-Json
-    if ([int]$Report.failed -ne 0 -or [int]$Report.succeededWithWarnings -ne 0 -or [int]$Report.notRun -ne 0 -or [int]$Report.inProcess -ne 0) {
+    if ([int]$Report.succeeded -le 0 -or [int]$Report.failed -ne 0 -or [int]$Report.succeededWithWarnings -ne 0 -or [int]$Report.notRun -ne 0 -or [int]$Report.inProcess -ne 0) {
         throw "Automation filter is not clean: $Filter succeeded=$($Report.succeeded) warnings=$($Report.succeededWithWarnings) failed=$($Report.failed) notRun=$($Report.notRun) inProcess=$($Report.inProcess)"
     }
     foreach ($Test in @($Report.tests)) {
@@ -300,17 +288,13 @@ function Invoke-AutomationFilter {
 }
 
 function Invoke-CharacterGrowthConditionAutomation {
-    <# 模块自动化流程：按一个闭环顺序覆盖属性、角色、状态、成长、鱼数据、入口 UI、Fishing 契约和 PlayerEntry；任一过滤器失败即整个模块验证失败。 #>
-    Invoke-AutomationFilter "Catfishing.Editor.AbilitySystem.CreateBodyActionMontageAssets" "BodyActionMontageAssets"
+    <# 模块自动化流程：只运行当前仓库仍存在的 ASC、Condition、Data、HUD 与 Fishing 测试；非空报告才算证据，本入口不关闭模块级正式资产、成长恢复和打包联机验收。 #>
     Invoke-AutomationFilter "Catfishing.Unit.AbilitySystem" "AbilitySystem"
-    Invoke-AutomationFilter "Catfishing.Unit.Character" "Character"
     Invoke-AutomationFilter "Catfishing.Unit.Condition" "Condition"
-    Invoke-AutomationFilter "Catfishing.Unit.Framework.GameMode.CommandIntentPhaseGatesKeepSocialReadyAndSettlementOpen" "FrameworkCommandGate"
-    Invoke-AutomationFilter "Catfishing.Unit.Growth" "Growth"
     Invoke-AutomationFilter "Catfishing.Unit.Data" "Data"
-    Invoke-AutomationFilter "Catfishing.Unit.UI.Settings" "UISettings"
-    Invoke-AutomationFilter "Catfishing.Unit.UI.LocalPlayerUISubsystem" "UILocalPlayer"
+    Invoke-AutomationFilter "Catfishing.Unit.UI.HUD" "HUD"
     Invoke-AutomationFilter "Catfishing.Unit.Fishing" "Fishing"
+    Write-Host "Evidence=contract/runtime_behavior only. Formal BodyAction assets, Growth, recovery/UI delivery and multiplayer packaged acceptance remain unverified by this suite."
 }
 
 function Invoke-CharacterGrowthConditionRuntime {

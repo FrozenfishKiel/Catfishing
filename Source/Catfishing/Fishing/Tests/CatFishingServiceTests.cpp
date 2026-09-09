@@ -7,7 +7,8 @@
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSession.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "Framework/Game/CatfishingPlayerState.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerState.h"
 #include "OnlineSubsystemTypes.h"
@@ -23,8 +24,13 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatFishingServiceWindowClosureReleasesOperatorMovementTest,
-	"Catfishing.Unit.Fishing.Service.WindowClosureReleasesOperatorMovement",
+	FCatFishingServiceRodOperationsPreserveMovementTest,
+	"Catfishing.Unit.Fishing.Service.RodOperationsPreserveCharacterMovement",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(
+	FCatFishingHeldFacingFollowsControlRotationTest,
+	"Catfishing.Unit.Fishing.Service.HeldRodFacingFollowsControlRotationAndRestoresMovementFacing",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
@@ -118,9 +124,8 @@ bool FCatFishingServiceUnknownQueriesTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-// 钓鱼资格关闭契约：角色已在竿位且移动为 MOVE_None 时，Run 钓鱼窗口关闭必须先清操作槽并恢复 Walking；
-// 同一角色随后再次上竿，倒地/失去资格的 Character 中断路径也必须完成相同补偿。
-bool FCatFishingServiceWindowClosureReleasesOperatorMovementTest::RunTest(const FString& Parameters)
+// 手持鱼竿不再写 MOVE_None：窗口关闭、角色中断、重新拾取和 Actor 销毁都只能改鱼竿操作身份，不能改 CharacterMovement。
+bool FCatFishingServiceRodOperationsPreserveMovementTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 
@@ -143,7 +148,7 @@ bool FCatFishingServiceWindowClosureReleasesOperatorMovementTest::RunTest(const 
 
 	Character->SetPlayerState(PlayerState);
 	TestTrue(TEXT("鱼竿以当前角色占据主位初始化"), Rod->InitializeAuthoritativeIdentity(
-		FGuid::NewGuid(), TEXT("Rod"), TEXT("Skin"), PlayerState, PlayerState, true, false));
+		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Rod"), TEXT("Skin"), PlayerState, PlayerState, true, false));
 	TestTrue(TEXT("部署鱼竿登记成功"), Fishing->RegisterDeployedRod(PlayerState, Rod));
 	UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
 	TestNotNull(TEXT("角色移动组件存在"), Movement);
@@ -152,33 +157,146 @@ bool FCatFishingServiceWindowClosureReleasesOperatorMovementTest::RunTest(const 
 		return false;
 	}
 
-	Movement->DisableMovement();
-	TestEqual(TEXT("夹具进入竿位移动锁"), Movement->MovementMode.GetValue(), MOVE_None);
+	Movement->SetMovementMode(MOVE_Walking);
+	TestEqual(TEXT("夹具从可移动状态开始"), Movement->MovementMode.GetValue(), MOVE_Walking);
 	Fishing->SuspendFishingAndReleaseOperators();
 	TestEqual(TEXT("窗口关闭清空全部操作槽"), Rod->GetOperatorCount(), 0);
-	TestEqual(TEXT("窗口关闭恢复 Walking"), Movement->MovementMode.GetValue(), MOVE_Walking);
+	TestEqual(TEXT("窗口关闭不改角色移动模式"), Movement->MovementMode.GetValue(), MOVE_Walking);
+	TestEqual(TEXT("窗口关闭让鱼竿落地"), Rod->GetPresentationState().PoseMode,
+		ECatFishingRodPoseMode::Grounded);
 	TestTrue(TEXT("窗口关闭不收走已部署鱼竿"), Rod->GetPresentationState().bDeployed);
 
 	int32 RejoinedSlot = INDEX_NONE;
 	TestTrue(TEXT("下一钓鱼窗口可重新占据原鱼竿"), Rod->AddOperatorFromAuthority(
 		PlayerState, Rod->GetPresentationState().RodActorRevision, RejoinedSlot));
 	TestEqual(TEXT("重新进入主位"), RejoinedSlot, 0);
-	Movement->DisableMovement();
-	Fishing->TerminateSessionsForCharacter(Character);
+	TestEqual(TEXT("重新拾取切回手持姿态"), Rod->GetPresentationState().PoseMode,
+		ECatFishingRodPoseMode::Held);
+	Fishing->ReleaseFishingOperatorForCharacter(Character);
 	TestEqual(TEXT("Character 中断清空自身操作槽"), Rod->GetOperatorCount(), 0);
-	TestEqual(TEXT("Character 中断恢复 Walking"), Movement->MovementMode.GetValue(), MOVE_Walking);
+	TestEqual(TEXT("Character 中断不改角色移动模式"), Movement->MovementMode.GetValue(), MOVE_Walking);
 
 	TestTrue(TEXT("异常销毁前可再次占据原鱼竿"), Rod->AddOperatorFromAuthority(
 		PlayerState, Rod->GetPresentationState().RodActorRevision, RejoinedSlot));
-	Movement->DisableMovement();
 	TestTrue(TEXT("销毁鱼竿触发 EndPlay 清理"), Rod->Destroy());
 	World->Tick(ELevelTick::LEVELTICK_All, 0.01f);
-	TestEqual(TEXT("鱼竿异常销毁恢复 Walking"), Movement->MovementMode.GetValue(), MOVE_Walking);
+	TestEqual(TEXT("鱼竿异常销毁不改角色移动模式"), Movement->MovementMode.GetValue(), MOVE_Walking);
 	TestNull(TEXT("鱼竿异常销毁移除部署登记"), Fishing->FindDeployedRod(PlayerState));
 
-	Movement->DisableMovement();
-	Fishing->TerminateSessionsForCharacter(Character);
-	TestEqual(TEXT("鱼竿登记已失效时仍恢复 Walking"), Movement->MovementMode.GetValue(), MOVE_Walking);
+	Fishing->ReleaseFishingOperatorForCharacter(Character);
+	TestEqual(TEXT("鱼竿登记失效后的中断仍不改移动模式"), Movement->MovementMode.GetValue(), MOVE_Walking);
+	return !HasAnyErrors();
+}
+
+// 持竿朝向契约：镜头 Yaw 必须同帧驱动猫身，向后移动不得再触发面向移动的掉头；
+// 最后一名操作者离开后要精确恢复进入持竿前的 CharacterMovement 配置。
+bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+
+	FTestWorldWrapper WorldWrapper;
+	TestTrue(TEXT("创建持竿朝向测试 World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	WorldWrapper.ForwardErrorMessages(this);
+	WorldWrapper.BeginPlayInTestWorld();
+	UWorld* World = WorldWrapper.GetTestWorld();
+	UCatFishingService* Fishing = World ? World->GetSubsystem<UCatFishingService>() : nullptr;
+	ACatfishingPlayerController* Controller = World
+		? World->SpawnActor<ACatfishingPlayerController>() : nullptr;
+	ACatfishingPlayerState* PlayerState = World
+		? World->SpawnActor<ACatfishingPlayerState>() : nullptr;
+	ACatCharacter* Character = World ? World->SpawnActor<ACatCharacter>() : nullptr;
+	ACatFishingRodActor* Rod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
+	if (!TestNotNull(TEXT("FishingService 存在"), Fishing)
+		|| !TestNotNull(TEXT("控制器存在"), Controller)
+		|| !TestNotNull(TEXT("PlayerState 存在"), PlayerState)
+		|| !TestNotNull(TEXT("角色存在"), Character)
+		|| !TestNotNull(TEXT("鱼竿存在"), Rod))
+	{
+		return false;
+	}
+
+	Controller->PlayerState = PlayerState;
+	Character->SetPlayerState(PlayerState);
+	Controller->Possess(Character);
+	UCharacterMovementComponent* Movement = Character->GetCharacterMovement();
+	if (!TestNotNull(TEXT("角色移动组件存在"), Movement))
+	{
+		return false;
+	}
+
+	// 用一组非持竿默认值证明离开时是恢复旧配置，而不是硬编码另一组默认值。
+	Character->bUseControllerRotationYaw = false;
+	Movement->bOrientRotationToMovement = true;
+	Movement->bUseControllerDesiredRotation = true;
+	Character->SetActorRotation(FRotator(0.0, 10.0, 0.0));
+	Controller->SetControlRotation(FRotator(0.0, 95.0, 0.0));
+	TestTrue(TEXT("鱼竿以当前玩家作为主持有者初始化"), Rod->InitializeAuthoritativeIdentity(
+		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("FacingRod"), TEXT("Skin"),
+		PlayerState, PlayerState, true, false));
+	TestTrue(TEXT("持有鱼竿登记到权威查询入口"), Fishing->RegisterDeployedRod(PlayerState, Rod));
+
+	Character->Jump();
+	TestTrue(TEXT("夹具先模拟已按下跳跃"), Character->bPressedJump);
+	Controller->UpdateRotation(1.0f / 60.0f);
+	TestFalse(TEXT("进入持竿模式时会取消旧的按键持有状态"), Character->bPressedJump);
+	TestTrue(TEXT("持竿时启用 Controller Yaw 跟随"), Character->bUseControllerRotationYaw);
+	TestFalse(TEXT("持竿时禁止向后输入用移动方向覆盖朝向"),
+		Movement->bOrientRotationToMovement);
+	TestFalse(TEXT("持竿时不另走 CharacterMovement ControllerDesiredRotation 通道"),
+		Movement->bUseControllerDesiredRotation);
+	TestTrue(TEXT("猫身 Yaw 与本帧 Controller Yaw 一致"),
+		FMath::IsNearlyEqual(Character->GetActorRotation().Yaw, Controller->GetControlRotation().Yaw, 0.01f));
+	Controller->StartJump();
+	TestFalse(TEXT("持竿期间的跳跃输入不会留下起跳意图"), Character->bPressedJump);
+
+	// 真实 Rod 使用同一有向转矩求解；控制器保留施力意图，第一人称镜头另读实际杆姿态。
+	Controller->SetControlRotation(FRotator::ZeroRotator);
+	TestTrue(TEXT("初始化实际鱼竿朝向"), Rod->RefreshHeldTransformFromAuthority());
+	TestTrue(TEXT("发布有负载旋转约束"), Rod->SetCarrierConstraintFromAuthority(
+		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, true, 100.0, 50.0));
+	Controller->SetControlRotation(FRotator(0.0, 120.0, 0.0));
+	// 先等待新增受载阻尼进入平衡，再比较松线首帧与恢复行为；不放宽角度精度。
+	for (int32 Index = 0; Index < 360; ++Index) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
+	TestEqual(TEXT("实际鱼竿自然停在受力平衡附近"), Rod->GetGripWorldTransform().Rotator().Yaw, 30.0, 0.1);
+	TestEqual(TEXT("施力意图可以越过鱼竿平衡角"), Controller->GetControlRotation().Yaw, 120.0);
+	// 猫端没有牵引速度时 bActive=false，但鱼竿的阻力历史必须跨固定步保持。
+	TestFalse(TEXT("转矩与猫端移动 Active 独立"), Rod->GetCarrierConstraintState().bActive);
+	TestTrue(TEXT("鱼线松弛只发布零目标，不清空鱼竿插值历史"), Rod->SetCarrierConstraintFromAuthority(
+		FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true, 0.0, 50.0));
+	Rod->RefreshHeldTransformFromAuthority();
+	TestEqual(TEXT("零时间刷新不推进平滑"), Rod->GetGripWorldTransform().Rotator().Yaw, 30.0, 0.1);
+	const FVector PreviousTip = Rod->GetRodTipWorldTransform().GetLocation();
+	Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
+	TestTrue(TEXT("松线第一帧逐渐卸力，不直接以满速甩竿"),
+		Rod->GetGripWorldTransform().Rotator().Yaw > 30.0 && Rod->GetGripWorldTransform().Rotator().Yaw < 30.5);
+	TestTrue(TEXT("玩法竿尖速度与同一平滑姿态一致"), Rod->GetAuthoritativeRodTipVelocity().Equals(
+		(Rod->GetRodTipWorldTransform().GetLocation() - PreviousTip) * 60.0, 1e-6));
+	TestTrue(TEXT("恢复原负载"), Rod->SetCarrierConstraintFromAuthority(
+		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, true, 100.0, 50.0));
+	for (int32 Index = 0; Index < 180; ++Index) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
+	Controller->SetControlRotation(FRotator::ZeroRotator);
+	Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
+	TestTrue(TEXT("第一帧开始回转但不瞬移"),
+		Rod->GetGripWorldTransform().Rotator().Yaw < 30.0 && Rod->GetGripWorldTransform().Rotator().Yaw > 0.0);
+	for (int32 Index = 0; Index < 180; ++Index) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
+	TestEqual(TEXT("同样负载下回正完成"), Rod->GetGripWorldTransform().Rotator().Yaw, 0.0, 0.01);
+	Rod->ClearCarrierConstraintFromAuthority();
+	// 死亡/会话结束清约束后，即使同帧开始新的无负载约束也不能带入旧鱼阻力。
+	Controller->SetControlRotation(FRotator(0.0, 60.0, 0.0));
+	TestTrue(TEXT("清理后建立新的无负载约束"), Rod->SetCarrierConstraintFromAuthority(
+		FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true, 0.0, 50.0));
+	Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
+	TestEqual(TEXT("清理不保留上一条鱼的平滑负载"), Rod->GetGripWorldTransform().Rotator().Yaw, 6.0, 0.01);
+	Rod->ClearCarrierConstraintFromAuthority();
+
+	APlayerState* IgnoredPromotion = nullptr;
+	TestTrue(TEXT("主持有者可离开鱼竿"), Rod->RemoveOperatorFromAuthority(
+		PlayerState, Rod->GetPresentationState().RodActorRevision, IgnoredPromotion));
+	Controller->UpdateRotation(1.0f / 60.0f);
+	TestFalse(TEXT("离竿后恢复原 Controller Yaw 设置"), Character->bUseControllerRotationYaw);
+	TestTrue(TEXT("离竿后恢复原面向移动设置"), Movement->bOrientRotationToMovement);
+	TestTrue(TEXT("离竿后恢复原 ControllerDesiredRotation 设置"),
+		Movement->bUseControllerDesiredRotation);
 	return !HasAnyErrors();
 }
 
@@ -220,12 +338,25 @@ bool FCatFishingServiceRodBoundSessionRoutingTest::RunTest(const FString& Parame
 	Controller->Possess(Character);
 	const FGuid FirstRodId = FGuid::NewGuid();
 	const FGuid SecondRodId = FGuid::NewGuid();
+	const FGuid FirstRodItemInstanceId = FGuid::NewGuid();
+	const FGuid SecondRodItemInstanceId = FGuid::NewGuid();
 	TestTrue(TEXT("第一根竿以玩家占据主位初始化"), FirstRod->InitializeAuthoritativeIdentity(
-		FirstRodId, TEXT("RodA"), TEXT("SkinA"), PlayerState, PlayerState, true, false));
+		FirstRodId, FirstRodItemInstanceId, TEXT("RodA"), TEXT("SkinA"), PlayerState, PlayerState, true, false));
 	TestTrue(TEXT("第二根竿以空主位初始化"), SecondRod->InitializeAuthoritativeIdentity(
-		SecondRodId, TEXT("RodB"), TEXT("SkinB"), SecondRodOwner, nullptr, true, false));
+		SecondRodId, SecondRodItemInstanceId, TEXT("RodB"), TEXT("SkinB"), SecondRodOwner, nullptr, true, false));
 	TestTrue(TEXT("登记第一根竿"), Fishing->RegisterDeployedRod(PlayerState, FirstRod));
 	TestTrue(TEXT("登记第二根竿"), Fishing->RegisterDeployedRod(SecondRodOwner, SecondRod));
+	TestTrue(TEXT("服务器可把手持鱼竿刷新到当前角色规范握把"),
+		FirstRod->RefreshHeldTransformFromAuthority());
+	const FVector TipBeforeCarrierMove = FirstRod->GetRodTipWorldTransform().GetLocation();
+	Character->SetActorLocation(Character->GetActorLocation() + FVector(120.0, 0.0, 0.0));
+	TestTrue(TEXT("角色移动后服务器刷新同一鱼竿"), FirstRod->RefreshHeldTransformFromAuthority(0.05));
+	TestTrue(TEXT("角色移动参与竿尖世界运动"),
+		FVector::Dist(TipBeforeCarrierMove, FirstRod->GetRodTipWorldTransform().GetLocation()) > 100.0);
+	TestTrue(TEXT("鱼竿记录非零权威竿尖速度供固定步求解"),
+		!FirstRod->GetAuthoritativeRodTipVelocity().IsNearlyZero());
+	TestTrue(TEXT("手持鱼竿不会禁用 CharacterMovement"),
+		Character->GetCharacterMovement()->MovementMode.GetValue() != MOVE_None);
 
 	const FGuid FirstSessionId = FGuid::NewGuid();
 	FirstSession->Snapshot.FishingSessionId = FirstSessionId;
@@ -251,10 +382,14 @@ bool FCatFishingServiceRodBoundSessionRoutingTest::RunTest(const FString& Parame
 	TestTrue(TEXT("搏斗离竿进入无人值守松线"), FirstSession->Snapshot.bSlacking);
 	TestNull(TEXT("无人值守会话不再把旧玩家登记为当前钓手"), FirstSession->Snapshot.FisherPlayerState.Get());
 	TestEqual(TEXT("主操作手离开后鱼竿占位数组为空"), FirstRod->GetOperatorCount(), 0);
+	TestEqual(TEXT("主操作手离开后同一鱼竿切到地面姿态"),
+		FirstRod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Grounded);
 	int32 ReplacementSlot = INDEX_NONE;
 	TestTrue(TEXT("下一位玩家可进入原鱼竿"), FirstRod->AddOperatorFromAuthority(
 		ReplacementFisher, FirstRod->GetPresentationState().RodActorRevision, ReplacementSlot));
 	TestEqual(TEXT("下一位玩家进入的是主位而不是预留副位"), ReplacementSlot, 0);
+	TestEqual(TEXT("下一位玩家拾起后同一鱼竿切回手持姿态"),
+		FirstRod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Held);
 	APlayerState* IgnoredPromotion = nullptr;
 	TestTrue(TEXT("接力占位夹具可清理"), FirstRod->RemoveOperatorFromAuthority(
 		ReplacementFisher, FirstRod->GetPresentationState().RodActorRevision, IgnoredPromotion));

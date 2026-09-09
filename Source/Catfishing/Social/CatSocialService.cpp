@@ -9,6 +9,7 @@
 #include "Data/CatFishDefinition.h"
 #include "EngineUtils.h"
 #include "Engine/World.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
@@ -62,6 +63,7 @@ FCatTheftResult UCatSocialService::BeginTheft(AController* ThiefController, cons
 {
 	FCatTheftResult Result;
 	Result.Command.RequestId = Command.Context.RequestId;
+	Result.Body.RequestId = Command.Context.RequestId;
 	const UCatSocialSettings* Settings = GetDefault<UCatSocialSettings>();
 	const FString ThiefStableNetId = ResolveStableNetId(ThiefController);
 	ACatCharacter* ThiefCharacter = ThiefController ? Cast<ACatCharacter>(ThiefController->GetPawn()) : nullptr;
@@ -78,8 +80,7 @@ FCatTheftResult UCatSocialService::BeginTheft(AController* ThiefController, cons
 	if (const FCatTheftResult* Cached = TheftTerminalCache.Find(TerminalKey))
 	{
 		Result = *Cached;
-		Result.Command.bCommitted = false;
-		Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result.Command);
 		return Result;
 	}
 	const auto Finish = [this, &TerminalKey](const FCatTheftResult& TerminalResult)
@@ -182,8 +183,7 @@ FCatTheftResult UCatSocialService::CatchTheft(AController* CatchingController, c
 	if (const FCatTheftResult* Cached = TheftTerminalCache.Find(TerminalKey))
 	{
 		Result = *Cached;
-		Result.Command.bCommitted = false;
-		Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result.Command);
 		return Result;
 	}
 	const auto Finish = [this, &TerminalKey](const FCatTheftResult& TerminalResult)
@@ -254,8 +254,7 @@ FCatDomainCommandResult UCatSocialService::RequestMischief(AController* Instigat
 	if (const FCatDomainCommandResult* Cached = CommandTerminalCache.Find(TerminalKey))
 	{
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
 	const auto Finish = [this, &TerminalKey](const FCatDomainCommandResult& TerminalResult)
@@ -316,8 +315,7 @@ FCatDomainCommandResult UCatSocialService::PlaceProtectionSign(AController* Requ
 	if (const FCatDomainCommandResult* Cached = CommandTerminalCache.Find(TerminalKey))
 	{
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
 	const auto Finish = [this, &TerminalKey](const FCatDomainCommandResult& TerminalResult)
@@ -381,8 +379,7 @@ FCatDomainCommandResult UCatSocialService::RequestManualHelp(AController* Reques
 	if (const FCatDomainCommandResult* Cached = CommandTerminalCache.Find(TerminalKey))
 	{
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
 	const auto Finish = [this, &TerminalKey](const FCatDomainCommandResult& TerminalResult)
@@ -498,14 +495,31 @@ void UCatSocialService::HandleTheftWindowExpired(const FGuid TheftProtocolId)
 		ReturnActiveTheft(TheftProtocolId);
 		return;
 	}
-	Conditions->ConsumeCommittedFish(Theft->ClientRequestId, Definition);
+	Theft->Result.Body = Conditions->ConsumeCommittedFish(Theft->ClientRequestId, Definition);
+	if (!CatIsAcceptedDomainCommandResult(Theft->Result.Body))
+	{
+		UE_LOG(LogCatSocial, Error,
+			TEXT("Event=social_theft_body_commit_failed ProtocolId=%s RequestId=%s FishInstanceId=%s BodyError=%s BodyReplay=%s BodyReplayError=%s BodyRevision=%lld"),
+			*TheftProtocolId.ToString(EGuidFormats::DigitsWithHyphens),
+			*Theft->ClientRequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			*ItemsResult.Fish.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+			*UEnum::GetValueAsString(Theft->Result.Body.Error),
+			Theft->Result.Body.bTerminalReplay ? TEXT("true") : TEXT("false"),
+			*UEnum::GetValueAsString(Theft->Result.Body.ReplayedTerminalError), Theft->Result.Body.Revision);
+	}
 	Theft->Result.Command = ItemsResult.Command;
 	Theft->Result.bRecoveryWindowOpen = false;
 	Theft->Result.bConsumed = true;
+	ACatfishingPlayerController* ThiefPlayerController = Cast<ACatfishingPlayerController>(Character->GetController());
+	const FCatTheftResult ConsumedResult = Theft->Result;
 	// 协议即将从活跃表移除，先把 Begin 请求的重放值推进到 consumed 终态；后续网络重试不会退回 NotFound 或再次消费。
-	TheftTerminalCache.Add(MakeTerminalKey(Theft->ThiefStableNetId, TEXT("BeginTheft"), Theft->ClientRequestId), Theft->Result);
+	TheftTerminalCache.Add(MakeTerminalKey(Theft->ThiefStableNetId, TEXT("BeginTheft"), Theft->ClientRequestId), ConsumedResult);
 	ActiveTheftByThief.Remove(Theft->ThiefStableNetId);
 	ActiveThefts.Remove(TheftProtocolId);
+	if (ThiefPlayerController)
+	{
+		ThiefPlayerController->ClientReceiveTheftResult(ConsumedResult);
+	}
 	UE_LOG(LogCatSocial, Log, TEXT("Event=social_theft_consumed ProtocolId=%s FishInstanceId=%s"),
 		*TheftProtocolId.ToString(EGuidFormats::DigitsWithHyphens), *ItemsResult.Fish.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
 }

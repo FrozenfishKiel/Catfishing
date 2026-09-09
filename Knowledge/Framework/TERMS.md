@@ -1,6 +1,6 @@
 # Catfishing 当前框架术语
 
-更新时间：2026-08-12
+更新时间：2026-09-01
 文档状态：当前有效术语表。
 范围：稳定后续沟通和 AI 检索用词；只收录本项目容易混淆的概念。
 
@@ -34,13 +34,16 @@ _Avoid_: MatchState、地图生命周期。
 **Run Public State**：GameState 复制的公开局快照，客户端只读。
 _Avoid_: 客户端 Run 真相。
 
+**Environment State**：`Run Public State` 里的环境事实，表达本局此刻的天气、白天鱼情时段和公共自然事件，由服务器根据 Run 快照求值后复制。
+_Avoid_: 本地光照参数、角色 Wet 状态、客户端天气真相、独立环境管理器。
+
 **Cat Character**：局内猫身体 Actor，同时是 ASC Owner/Avatar，持有身体组件和装备入口，不持有个人鱼护。
 _Avoid_: 玩家档案、PlayerState 身体。
 
 **Condition**：Wet、Downed、Recovery 等离散身体状态，由 `UCatConditionComponent` 持有。
 _Avoid_: ASC 属性、社交状态。
 
-**Survival Attribute**：Hunger、Fatigue、Poison、FishingStrength、FightStamina 等 GAS 属性，由 `UCatSurvivalAttributeSet` 持有。
+**Survival Attribute**：Poison、FishingStrength、FightStamina 三项 GAS 属性，由 `UCatSurvivalAttributeSet` 持有；Hunger 和 Fatigue 是已废弃的运行时数值，不属于当前 AttributeSet。
 _Avoid_: Character 普通字段、PlayerState 属性。
 
 ## 物件、鱼与容器
@@ -113,8 +116,8 @@ _Avoid_: 救援身体状态、印记裁决。
 **Protection Sign**：玩家放置的防普通恶作剧范围 Actor。
 _Avoid_: 全局免疫、偷鱼保护。
 
-**Camp**：Lake 中固定营地，提供休息、救援落点、鱼缸转移和篝火回看。
-_Avoid_: 建造系统、跨局基地。
+**Camp**：玩法世界中的固定营地，同时是玩家进入世界时的唯一出生点语义，提供休息、救援落点、鱼缸转移和篝火回看。
+_Avoid_: 建造系统、跨局基地、普通 PlayerStart。
 
 **Fish Tank**：共享鱼缸的世界设施或容器适配者。它承载局内共享容器，不是永久仓库。
 _Avoid_: Profile 仓库、装备背包。

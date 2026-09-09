@@ -1,6 +1,6 @@
 # Catfishing 当前框架规则
 
-更新时间：2026-08-12
+更新时间：2026-09-01
 文档状态：当前有效规则。
 范围：给后续开发和 AI 审查使用，列出当前框架允许、禁止和必须保持的边界。本文不记录历史讨论。
 
@@ -50,6 +50,7 @@ Frontend、Lake 和 Online 的生命周期都必须经过 `UCatOnlineSubsystem`�
 - Leave/Host exit 先经 Run teardown 或 DestroySession，再统一回 Frontend。
 - PostLoadMap、TravelFailure、NetworkFailure 是收口事实；ServerTravel/ClientTravel 发出不等于成功。
 - 不新增 Lobby Map、Seamless Travel、Host Migration 或 Widget 旁路旅行。
+- 玩家进入玩法世界时，出生点语义只由 `ACatCampHubActor` 承载。`ACatfishingGameModeBase` 只选择当前 World 唯一营地，普通 `APlayerStart` 即使残留在地图里也不参与运行时出生裁决。当前营地自动出生布局支持 4 名玩家；生成位置由营地附近的合法碰撞点即时解析，不保存重连槽位记忆。
 
 SteamSockets、NetDriverDefinitions、`bInitServerOnClient` 和双账号 Steam 回调顺序仍是专项验证项。当前代码不能把候选配置写成已定案。
 
@@ -58,6 +59,8 @@ SteamSockets、NetDriverDefinitions、`bInitServerOnClient` 和双账号 Steam �
 `ACatCharacter` 同时作为 ASC Owner 和 Avatar。服务端负责授予 Ability、初始化属性和装备入口；拥有客户端只刷新 ActorInfo、输入映射和 UI 订阅。个人鱼护必须通过独立鱼护对象接入 Items 容器事务，不由 Character 生命周期注册。
 
 `UCatSurvivalAttributeSet` 属于 `AbilitySystem/`，因为它表达 GAS 属性，不属于 `Character/`。`UCatConditionComponent` 属于 `Condition/`，因为它表达 Wet、Downed、Recovery 等离散状态。`UCatEquipmentComponent` 属于 `Equipment/`，因为它表达功能装配和一局耗材。
+
+Environment 后端只发布 `RunPublicState.Environment`，不扫描或写 Character、Condition、Wet 或表现状态。下雨导致猫湿、雨停自然变干、水体弄湿角色等效果，后续必须作为表现或角色反馈消费层统一设计，不能重新包装成玩家技能。
 
 `UnPossessed`、`EndPlay` 和 Controller 变化必须先收口 Fishing/Social、移除自有 MappingContext、取消 Ability，再清 ActorInfo。`ClearActorInfo` 只清 ASC 缓存，不替代领域清理。
 
@@ -99,6 +102,8 @@ Run 的阶段、额度和翻天由 `ACatfishingGameModeBase` 拥有。StateTree 
 Social 只裁决求助、恶作剧、保护牌和偷鱼协议权限，不拥有身体救援状态，也不裁决印记候选。倒地、搬运、恢复属于 Character/Condition/Camp 链。
 
 Camp 是固定营地，不是建造系统。营地提供休息、救援落点、鱼缸转移和篝火回看。篝火回看只建立表现和可选 CapturePlan，不写普通夜 ready。
+
+营地同时承担玩家出生点语义，但这不改变 Camp 的领域归属。出生裁决属于 GameMode，合法落点解析属于营地自身，休息、救援、共享鱼缸和篝火回看继续沿用原有 Camp/Condition/Items/Collection 链路。
 
 ## 配置 Gate
 

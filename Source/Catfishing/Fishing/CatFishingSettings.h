@@ -6,7 +6,9 @@
 
 class UStateTree;
 class UCatBitePersonalityDefinition;
+class UCatFishingFightBalanceDefinition;
 class UCatFightPersonalityDefinition;
+struct FCatFishingBiteTimingParameters;
 
 /** Fishing 长流程与未裁数值的 fail-closed 配置；默认不启动会话且不制造响应窗口或公式。 */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "Catfishing Fishing"))
@@ -24,11 +26,15 @@ public:
 	bool TryGetScoopCooldown(double& OutCooldownSeconds) const;
 	/** 读取真咬前有限正预警时长；调度器保证预警完整播放后才允许进入真咬。 */
 	bool TryGetBiteWarning(double& OutWarningSeconds) const;
+	/** 读取中性鱼饵的窝料/平均等待锚点；均值包含慢浮和预警，非法或不可达配置拒绝。 */
+	bool TryGetBiteTimingParameters(FCatFishingBiteTimingParameters& OutParameters) const;
 	/** 读取有界操作位数量与左右间距；槽位 0 从右侧开始，后续左右交替向外扩展。 */
 	bool TryGetRodOperatorLayout(int32& OutMaximumSlots, double& OutSlotSpacingCentimeters) const;
 
 	/** 读取终态快照的有界复制留存秒数；未裁或 runtime gate 关闭时清零并返回 false。 */
 	bool TryGetTerminalReplicationWindow(double& OutWindowSeconds) const;
+	/** 同步加载唯一正式搏斗平衡资产；缺失、关闭或字段非法时返回空，不回退到 C++/ini 第二套数值。 */
+	const UCatFishingFightBalanceDefinition* LoadFightBalanceDefinition() const;
 	const UCatBitePersonalityDefinition* FindBitePersonality(FName PersonalityId) const;
 	const UCatFightPersonalityDefinition* FindFightPersonality(FName PersonalityId) const;
 
@@ -47,39 +53,66 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
 	TSoftObjectPtr<UStateTree> FishBehaviorStateTree;
 
+	/** 全局力量、运动、体力和鱼线裁决的唯一策划调参入口。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Runtime", meta = (DisplayName = "搏斗平衡数据资产"))
+	TSoftObjectPtr<UCatFishingFightBalanceDefinition> FightBalanceDefinition;
+
 	/** 真咬响应窗口秒数；0 表示 Unset，资产 Task 不应启动计时。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))
 	double TrueBiteWindowSeconds = 0.0;
-	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0")) double BaseBiteRatePerSecond = 0.0;
+	/** 无窝时落水到真咬的目标平均秒数；替代旧的每秒频率调参，计入等待上限。 */
+	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
+	double NoChumMeanBiteDelaySeconds = 0.0;
+	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
+	double SingleChumMeanBiteDelaySeconds = 0.0;
+	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
+	double FullChumMeanBiteDelaySeconds = 0.0;
+	/** 单份锚点的有效三轴总贡献；当前正式单份新窝中心为 1+0.5+0.2=1.7，无距离/时间衰减。 */
+	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0"))
+	double SingleChumContribution = 0.0;
+	/** 满窝锚点的有效三轴总贡献，达到后提速饱和；并非投放数量或库存硬上限。 */
+	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0"))
+	double FullChumContribution = 0.0;
 	/** 抛竿落水后、开始快速抖动前，浮漂至少保持慢浮的秒数。 */
 	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0", Units="s"))
 	double MinimumBiteDelaySeconds = 0.0;
 	/** 从落水到真咬下沉的总时间上限，必须容纳慢浮下限与完整预警。 */
 	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0", Units="s"))
 	double MaximumBiteDelaySeconds = 0.0;
-	/** 真咬前浮漂快速点动的服务器权威预警时长；当前产品口径为 3 秒。 */
+	/** 真咬前浮漂快速点动的服务器权威预警时长；当前产品口径为 1.5 秒。 */
 	UPROPERTY(Config, EditAnywhere, Category="Bite", meta=(ClampMin="0", Units="s"))
 	double BiteWarningSeconds = 1.5;
 
-	/** Authority fight runner tuning. Defaults are usable without introducing persistent Config changes. */
+	/** 服务器权威固定模拟步长，属于运行时技术配置，不进入策划平衡资产。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.001")) double FixedFightStepSeconds = 0.05;
-	/** 旧对称消耗模型的基础速率；规格判定表启用后不再参与计算，保留以兼容既有配置。 */
-	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.001")) double BaseFightDrainPerSecond = 1.0;
-	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.001")) double ReelSpeedCentimetersPerSecond = 80.0;
-	/** 本步超线多少厘米视为满表现张力；只用于归一化/UI/Cable，不改变权威约束。 */
-	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.1"))
-	double TensionResponseRangeCentimeters = 10.0;
-	/** 剩余鱼体力小于等于此值时统一吸附为 0 并进入侧翻收近；避免 UI 已显示 0、玩法仍残留小数体力。 */
-	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0", ClampMax="1"))
-	double FishExhaustionThreshold = 0.5;
-	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0")) double EscapeSlackCentimeters = 100.0;
 
 	/** 一根部署鱼竿最多可占用的操作位；当前产品使用左右两位，数组/站位算法预留到更多协作者。 */
 	UPROPERTY(Config, EditAnywhere, Category="Rod|Operators", meta=(ClampMin="1", ClampMax="8"))
-	int32 MaximumRodOperatorSlots = 2;
+	int32 MaximumRodOperatorSlots = 4;
 	/** 左右第一对站位中心之间的距离；0 表示所有槽位暂时共用原 Stand 锚点。 */
 	UPROPERTY(Config, EditAnywhere, Category="Rod|Operators", meta=(ClampMin="0", Units="cm"))
 	double RodOperatorSlotSpacingCentimeters = 140.0;
+
+	/** 手持鱼竿的服务器规范握把偏移：X=角色前方、Y=角色右侧、Z=角色中心向上。 */
+	UPROPERTY(Config, EditAnywhere, Category="Rod|HeldPose", meta=(Units="cm"))
+	FVector HeldRodGripOffsetCentimeters = FVector(35.0, 24.0, 24.0);
+	/** 服务器只接受该范围内的控制器 Pitch 来驱动鱼竿，避免异常视角翻转权威竿尖。 */
+	UPROPERTY(Config, EditAnywhere, Category="Rod|HeldPose", meta=(ClampMin="-89", ClampMax="89", Units="deg"))
+	double HeldRodMinimumPitchDegrees = -35.0;
+	UPROPERTY(Config, EditAnywhere, Category="Rod|HeldPose", meta=(ClampMin="-89", ClampMax="89", Units="deg"))
+	double HeldRodMaximumPitchDegrees = 70.0;
+	/** 实际鱼竿的角速度上限；猫与鱼线的净转矩连续决定本步角速度。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="1", Units="deg/s"))
+	double HeldRodMaximumAngularSpeedDegreesPerSecond = 360.0;
+	/** 猫端瞄准施力的阻尼响应时间；净转矩抵消时自然停转，不设角度锁。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.01", Units="s"))
+	double HeldRodAngularResistanceResponseSeconds = 0.08;
+	/** 鱼游向/松绷线改变时，有向负载的指数插值时间常数；越大越柔和，不改变稳态平衡角。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.01", Units="s"))
+	double HeldRodFishPullSmoothingSeconds = 0.15;
+	/** 鱼负载下追加的粘性阻尼倍率；3 表示满负载时以四倍阻尼减缓摆动，空载与平衡角不变。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0"))
+	double HeldRodLoadedAngularDampingRatio = 3.0;
 
 	/**
 	 * 打窝蓄力（规格 3.1 打窝：蓄力抛掷、抛物线预览）。服务器按按住时长算 ChargeAlpha，客户端预览用同一组参数（UCatFishingAimLibrary）。
@@ -93,19 +126,6 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Chum|Throw") FVector ChumThrowOriginOffset = FVector(40.0, 0.0, 60.0);
 	/** 服务器每次按 Q 松开投放的份数。 */
 	UPROPERTY(Config, EditAnywhere, Category="Chum|Throw", meta=(ClampMin="1")) int32 ChumThrowQuantity = 1;
-
-	/** 规格 4.3/4.4 遛鱼判定系数；默认值即规格快照，数值拍定以「参数与校准记录」为准。 */
-	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double InwardPullCatDrainPerFishStrength = 0.15;
-	/** 向内游+拖时鱼的体力消耗系数（× 猫力/秒）；拖永远双方消耗，顺从/挣扎只是档位不同。 */
-	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double InwardPullFishDrainPerCatStrength = 0.08;
-	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double StalemateRodWearPerFishStrength = 0.1;
-	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double StalemateFishDrainPerCatStrength = 0.08;
-	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double StalemateCatDrainPerFishStrength = 0.12;
-	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0")) double SlackStaminaRegenPerSecond = 1.5;
-	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="1")) double OverpowerStrengthRatio = 2.0;
-	/** 鱼体力低于该比例后休息期乘以下面的倍率（规格 4.6 临时口径）。 */
-	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="0", ClampMax="1")) double LowStaminaRestThreshold = 0.5;
-	UPROPERTY(Config, EditAnywhere, Category="Fight|Spec", meta=(ClampMin="1")) double LowStaminaRestMultiplier = 1.5;
 
 	/** NearShore 合法几何策略 gate；默认 false，未接真实岸线验证时不允许测试命令伪造捕获。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")

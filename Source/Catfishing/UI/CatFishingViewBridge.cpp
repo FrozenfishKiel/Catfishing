@@ -13,14 +13,14 @@ UCatFishingViewBridge* UCatFishingViewBridge::CreateFishingViewBridge(UObject* O
 	return NewObject<UCatFishingViewBridge>(Outer ? Outer : GetTransientPackage());
 }
 
-// 客户端只能看到复制事实；先找玩家当前占据的主操作鱼竿，再按 RodActor 匹配会话，避免同一玩家多竿抛线后随机绑定旧会话。
+// 客户端只读复制事实；按当前成员身份找鱼竿，再匹配会话，辅助与接力后的主位都观察同一场钓鱼。
 ACatFishingSession* UCatFishingViewBridge::FindFishingSessionForPlayerState(UObject* WorldContextObject,
 	APlayerState* PlayerState)
 {
 	UWorld* World = WorldContextObject ? WorldContextObject->GetWorld() : nullptr;
 	if (!World || !PlayerState) return nullptr;
 	ACatFishingRodActor* OperatedRod = FindRodOperatedByPlayerState(WorldContextObject, PlayerState);
-	if (!OperatedRod || !OperatedRod->IsPrimaryOperator(PlayerState)) return nullptr;
+	if (!OperatedRod) return nullptr;
 	for (TActorIterator<ACatFishingSession> It(World); It; ++It)
 	{
 		ACatFishingSession* Session = *It;
@@ -33,7 +33,7 @@ ACatFishingSession* UCatFishingViewBridge::FindFishingSessionForPlayerState(UObj
 }
 
 // 同样只读复制过来的公开事实：Rod 的 OperatorPlayerStates 是完整占位数组，OperatorPlayerState 只代表主位；
-// 客户端与服务器看到的是同一份值，不需要（也拿不到）服务器侧的 DeployedRodByPlayerState 索引。
+// 客户端与服务器看到的是同一份值；拥有多根竿时仍按当前占位查找，不依赖服务器的部署 Registry。
 ACatFishingRodActor* UCatFishingViewBridge::FindRodOperatedByPlayerState(UObject* WorldContextObject,
 	APlayerState* PlayerState)
 {

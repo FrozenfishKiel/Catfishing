@@ -89,21 +89,28 @@ Root
 │            [Cat Run Wait For Event]
 │     Transitions:
 │       On Event  Cat.Run.QuotaReached  →  NormalNight
-│       On Event  Cat.Run.QuotaFailed   →  FailureNight
+│       On Event  Cat.Run.QuotaFailed   →  FailureSettlementNight
 │
 ├── NormalNight
 │     Tasks Completion: All        ← ⚠️
 │     Tasks: [Cat Run Enter Phase (Phase=NormalNight, Reason=QuotaReached)]
 │            [Cat Run Wait For Event]
 │     Transitions:
+│       On Event  Cat.Run.AllEligibleReady  →  SuccessSettlementNight（需 Cat Run Success Settlement Eligible）
 │       On Event  Cat.Run.AllEligibleReady  →  DayActive
 │
-└── FailureNight
+└── FailureSettlementNight
       Tasks Completion: All        ← ⚠️
       Tasks: [Cat Run Enter Phase (Phase=FailureSettlementNight, Reason=QuotaFailed)]
              [Cat Run Wait For Event]
       Transitions:
-        On Event  Cat.Run.SettlementComplete  →  DayActive
+        On Event  Cat.Run.SettlementComplete  →  Ending
+└── SuccessSettlementNight
+      Tasks Completion: All
+      Tasks: [Cat Run Enter Phase (Phase=SuccessSettlementNight, Reason=AllEligibleReady)]
+             [Cat Run Wait For Event]
+      Transitions:
+        On Event  Cat.Run.SettlementComplete  →  Ending
 ```
 
 **说明与注意事项**
@@ -111,9 +118,8 @@ Root
 - ⚠️ **每个多 Task 的 State 都必须把 `Tasks Completion` 从默认的 `Any` 改成 `All`。** 引擎默认 `Any` 的含义是「任何一个 Task 完成，State 就完成」—— `Cat Run Enter Phase` 一返回 Succeeded，State 立刻退出，`Wait For Event` 白搭。改成 `All` 后要所有 Task 都完成才算完成，而 `Wait For Event` 永远 Running，State 就被钉住了。详见 [StateTree 教程第 4 节](StateTreeTutorial_zh-CN.md#4-️-state-什么时候算完成最大的坑)。
 - Task 顺序有意义：`Enter Phase` 必须排在 `Wait For Event` 之前。
 - **起始状态由排列顺序决定**：树启动时选中 Root 的第一个子状态，所以 `DayActive` 必须排第一。
-- **不要接 `SuccessSettlementNight`**：`EnterRunPhaseFromStateTree` 里有硬校验，`SuccessSettlementPolicy != Enabled` 时进这个阶段会直接返回 `PolicyUndecided`（我在 ini 里没启用这条策略）。
-- MVP 只要 `DayActive` 一个状态能进去就够钓鱼了，`NormalNight`/`FailureNight` 是为了让白天到期后不卡死。嫌麻烦可以先只做 `DayActive`。
-- 进入 `DayActive` 会启动一个 `DayLengthSeconds`（ini 里配的 600 秒）的倒计时，到期额度不够就发 `QuotaFailed`。测试期间如果嫌 10 分钟太短，改 ini 里的 `DayLengthSeconds` 再重启。
+- `NormalNight` 收到 `Cat.Run.AllEligibleReady` 时要有两条边：第一条挂 `Cat Run Success Settlement Eligible` 去 `SuccessSettlementNight`，第二条无条件回 `DayActive` 翻下一天。
+- `DayActive` 会启动 `DayLengthSeconds` 倒计时，到期额度不够就发 `QuotaFailed` 进入失败结算夜。测试期间可以改 ini 里的值后重启，也可以在开发期用 `cat.RunEnvironmentSocial.DayLength <秒数>` 临时改当前白天。
 
 ---
 
@@ -240,17 +246,17 @@ FishingSessionStateTree=/Game/Data/StateTrees/ST_FishingSession.ST_FishingSessio
 
 | 键 | InputAction | 用途 | 走哪条路 |
 |---|---|---|---|
-| **R** | `IA_PutDownFishingRod` | **鱼竿一键三态**：已在操作容器→离开 / 公共交互锚点附近且容器有容量→追加加入 / 否则→放自己的竿 | ✅ C++ 已实现，服务器按事实自动分派 |
+| **R** | `IA_PutDownFishingRod` | **鱼竿交互**：已在操作容器→离开 / 公共交互锚点附近且容器有容量→追加加入 / 否则→取出自己的竿并直接持握 | ✅ C++ 已实现，服务器按事实自动分派 |
 | **E** | `IA_Interact` | 准星交互/拾取；本地只选择 Current Target，真正拾取由服务器复核距离、视线和物品状态 | ✅ C++ 已实现，走 Native InputTag 而不是 Gameplay Ability |
 | **左键** | `IA_LMB` | 无会话→**长按预览抛物线（不蓄力）松手抛竿**；真咬窗→**提竿**（1 秒内=完美）；遛鱼→**按住拖** | 提竿/拖 ✅ C++；**抛竿预览+提交走蓝图**（5.2） |
 | **右键** | `IA_RMB` | 遛鱼时**按住松开线杯**（鱼在 L_max 内自由带线，发力期喘气回体力 +1.5/s） | ✅ C++（`UCatGA_FishingSlack`） |
-| **Q** | `IA_BaitSpot` | **长按蓄力打窝**：抛物线越蓄越远，松手投出 | 蓄力预览+提交走蓝图（5.3）；同键上的占位符 Chum Ability 会同时发一条无害的空命令 |
+| **Q** | `IA_BaitSpot` | **长按蓄力打窝**：抛物线越蓄越远，松手投出 | ✅ C++ 已接管提交；蓝图只保留可选预览 |
 | **F** | `IA_CatchFish` | 抢抄 | ✅ C++ |
 | **X** | `IA_CancelFishing` | 取消当前会话 | ✅ C++ |
 
-`DA_CatAbilityInputConfig.AbilityInputActions` 是 **6 条**（5 个核心 + `Cat.Input.Fishing.Slack` → `IA_RMB`）；`DA_CatAbilitySet_Default` 相应 6 个 Ability。另有 `NativeInputActions`：`Cat.Input.Interact` → `IA_Interact`，它不授予第 7 个 Ability。
+`DA_CatAbilityInputConfig.AbilityInputActions` 是 **6 条 Fishing InputTag**（含 `Cat.Input.Fishing.Slack` → `IA_RMB`）；`DA_CatAbilitySet_Default` 包含 6 个 Fishing Ability + 6 个无输入 BodyAction 专用 Ability。另有 `NativeInputActions`：`Cat.Input.Interact` → `IA_Interact`，它不授予额外 Ability。
 
-> 左键与 Q 上，GAS Ability 和你的蓝图绑定会**同时触发**（同一个 IA 两条独立绑定）。无会话时按左键，GAS 的 `RequestHook` 会拿到一条 `DependencyUnavailable` 回执，无害；按 Q 时占位符 Chum Ability 同理。UI 若监听 `OnResultReceived` 弹失败提示，请按 `CommandType` 过滤这两种。
+> 左键若仍保留蓝图抛竿提交，要注意它会和 GAS 的提竿/收线 Ability 同时监听同一个 InputAction；UI 监听 `OnResultReceived` 弹失败提示时仍要按 `CommandType` 过滤。Q 打窝当前由 `UCatGA_FishingChum` 提交按下/松开边沿，不再有占位空命令。
 
 ---
 
@@ -281,7 +287,7 @@ Get Fishing Command Component      ← BlueprintPure，Controller 自己身上�
 
 ### 5.1 放竿 / 操作 / 离开 —— 已由 R 键 C++ 三态接管，**不用做蓝图**
 
-按 R 服务器自动分派 PlaceRod / OperateRod / LeaveRod。第一次 R 只部署空杆并播放放杆表现，第二次 R 才进入右侧主位，第三次 R 离开；不能把部署和使用合并。架杆不再要求靠近岸线，只要角色前方有坡度合法的实体地面即可；抛竿阶段仍受有效水域和射程限制。你只需要**接结果并缓存**：
+按 R 服务器自动分派 PlaceRod / OperateRod / LeaveRod。第一次 R 取出鱼竿后直接拿在手上，本人已占据主位；第二次 R 放下，第三次 R 拿起，后续循环。首次成功复制即为 `Held`，无需蓝图补发 OperateRod 或播放落地空竿过渡。取竿仍要求角色前方有坡度合法的实体地面，不要求靠近岸线；抛竿阶段仍受有效水域和射程限制。你只需要**接结果并缓存**：
 
 ```
 Get Fishing Command Component → Bind Event to On Result Received
@@ -296,9 +302,9 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 
 **常见失败原因**（放竿）：`InvalidPayload`=前方太斜/没实体地面；`DependencyUnavailable`=还没装配（5.4）。`InvalidWaterTarget/CastOutOfRange` 现在只属于抛竿阶段。
 
-多人占位口径：所有玩家都从同一个公共交互锚点按 R 加入，服务器把 PlayerState 追加到紧凑容器 `OperatorPlayerStates`，编号从 `0` 依次递增；任意成员离开后更高编号依次递减，并按新编号重排全部剩余站位。`[0]` 是当前主位，现有抛竿、提竿、收线和松线由它驱动；新的 `[0]` 会在原主位退出时接管当前会话。配置容量当前为 2，但第三、第四人只需提高 `MaximumRodOperatorSlots`，无需新增专用交互点或分支。多人同时合力、体力分摊和多输入配合仍属于 `TODO(CooperativeFishing)`。
+多人占位口径：所有玩家从公共交互锚点按 R 加入，默认最多4人。`OperatorPlayerStates[0]` 是当前主位，负责抛竿、提竿、收放线与转向；辅助只提交移动。搏斗使用同一个N人方向合力模型：主位系数1、辅助默认0.5，正体力完整出力、零体力不出力，移动与站定支撑共用预算。反向输入抵消，侧向输入带动整组，每个身体通过CMC碰撞移动。共同收线/转杆/持竿费用生成一次后按余额均分，个人移动费用本人支付；HUD显示各人当前/上限体力之和。质量仍来自各人基础力量与统一换算系数，鱼使用实际重量。公式和配置入口统一见实现导读。
 
-会话跟随鱼竿而不是角色：按 R 离开任何阶段都不会直接结束鱼竿上的会话。多人各自部署鱼竿后，同一玩家可以在第一根竿抛线、离开，再进入第二根空竿抛线；左键与 HUD 始终只路由当前主操作鱼竿。等待/试探/真咬阶段允许迁移当前钓手；`HookedFight` 离竿后自动保持松线，鱼在 `L_max` 内自由带线，放尽后开始按负载磨损本场鱼线，期间不结算离开玩家的力量或体力。下一位玩家进入空主位时会用自己的 ASC、力量、满额搏斗体力和输入状态接管 Runner，原操作手的短周期体力立即恢复。
+会话跟随鱼竿：主位按 R 离开、倒地、危险落水或断线时，最早仍可操作的成员接任；仅最后一人离开才进入无人值守 FreeSpool。接力保留同一个Runner、鱼、线、身体位置、速度与原竿耐久，清除旧主控按键，新主位重新输入。加入带入本人当前体力、退出带走本人余额，不补满或转移。零体力仍可持有主控权，力量由有余额的队员提供。
 
 ---
 
@@ -322,10 +328,10 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 规格 3.1 打窝：蓄力抛掷、抛物线预览。现在的实现：
 
 - **Q 按下**：服务器记时刻
-- **Q 松开**：服务器按按住时长算 `ChargeAlpha = clamp(held / ChumChargeMaxSeconds)`，初速 `Lerp(Min, Max, Alpha)`，用引擎 `PredictProjectilePath` 得到落点，选一份可用窝料（优先 `StarterChumDefinitionId`），走 `PlaceChum` 全部校验（射程/夹角/视线/库存/水域）
+- **Q 松开**：服务器按按住时长算 `ChargeAlpha = clamp(held / ChumChargeMaxSeconds)`，初速 `Lerp(Min, Max, Alpha)`，用引擎 `PredictProjectilePath` 得到落点，选一份足量窝料实例（优先 `StarterChumDefinitionId` 对应实例），把 `ChumItemInstanceId` 交给 `PlaceChum` 做全部校验（射程/夹角/视线/库存/水域）
 - 参数在 `Project Settings → Catfishing Fishing → Chum|Throw`：`ChumChargeMaxSeconds=1.5`、`Min/MaxSpeed=600/1400`、`Elevation=35°`、`ThrowQuantity=1`
 
-结果日志：`Event=chum_throw Held=.. Alpha=.. Landing=..` + `Event=place_chum_result Committed=...`
+结果日志：`Event=chum_throw Held=.. Alpha=.. Landing=.. ChumItem=..` + `Event=place_chum_result Committed=...`
 
 **可选的客户端蓄力预览蓝图**：Q 按下记 `PressTime`，按住期间每帧：
 ```
@@ -359,12 +365,12 @@ Event BeginPlay
          RodDefinitionId      = "Rod_Basic"
          BaitDefinitionId     = "Bait_Basic"
          FloatDefinitionId    = "Float_Basic"
-         ScoopNetDefinitionId = "StarterScoopNet"     ← 第 4 个参数；当前开发配置会另行默认发放并选中
+         ScoopNetDefinitionId = "StarterScoopNet"     ← 第 4 个参数；当前默认配置不会另行发放，必须已有库存实例才会成功
 ```
 
 **怎么知道成功了**：这是个 `Server, Reliable` RPC，没有回执结构体。判断方式是**轮询 `Get Snapshot` 的 `Revision` 是否从 0 变成 1**，或者监听装备组件的复制变化。建议在 UI 上显示当前 `RodDefinitionId`，非 `None` 就说明装配好了。
 
-> `RequestScoop` 仍要求服务器装备快照里存在有效 `ScoopNet`。当前 `bAutoGrantStarterScoopNet=True` 会在服务器首次占有时给每名玩家发放并选中 `StarterScoopNet`，所以手工装配留空也能继续测试抄网；正式获取方式接入后关闭该临时开关，届时必须通过商店/奖励获得并选择抄网。
+> `RequestScoop` 仍要求服务器装备快照里存在有效 `ScoopNet`。临时默认抄网发放配置和启动分支已删除，当前手工装配留空不会再沿用服务器默认抄网；在商店/奖励获取接入前，抄网链路只能通过人工准备好库存实例后再选择验证。
 
 ---
 
@@ -376,8 +382,8 @@ Event BeginPlay
 |---|---|---|
 | 1 | PIE 启动 | `Event=run_started` 且 `Event=run_phase_entered ... Phase=DayActive` |
 | 2 | （自动）装配 | Equipment `Revision` 从 0 → 1，`RodDefinitionId = Rod_Basic` |
-| 3 | 在任意合法地面第一次按 R | 世界里出现无人操作的 Rod Actor并播放放杆表现；角色不吸附、不锁移动 |
-| 3.1 | 放置者再次按 R | 放置者进入右侧主位并开始操作，`OperatorPlayerStates.Num=1` |
+| 3 | 在任意合法地面第一次按 R | 鱼竿直接拿在手上，`Pose=Held`、`OperatorPlayerStates.Num=1`；角色不吸附、不锁移动 |
+| 3.1 | 本人再按 R，然后再次按 R | 先放下为 `Grounded`，再拿起为 `Held`；仍是同一个 Actor 和装备实例 |
 | 4 | 主位仍有人时，第二个玩家走近同一个公共交互锚点按 R | 第二人追加为编号 1；两端都看到 `OperatorPlayerStates.Num=2` |
 | 4.1 | 编号 0 的玩家按 R 离开 | 原编号 1 自动变为 0、按新编号重新站位并接管当前会话；若容器为空，搏斗才进入无人值守松线 |
 | 5 | 瞄水面按住再松开左键 | `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去 |
@@ -390,9 +396,9 @@ Event BeginPlay
 | 12 | 或者等鱼翻肚 | `Phase=ExhaustedReel`；仍可按 F 抄，也可继续按住左键把鱼拖上岸 |
 | 13 | 鱼落到岸上后准星对准并按 E | 服务器只允许一个玩家成功叼起；随后再对具体地面鱼护按 E 才入箱 |
 
-鱼生成时的大小由服务器随机重量决定：`1kg` 对应当前 Mesh 的 `Scale=1`，重量按体积关系取立方根换算并裁在
-`0.75~1.75`。水中鱼和岸上拾取鱼共用同一个复制缩放值；若要调观感，到项目设置
-`Catfishing Fishing Presentation > FishScale` 修改参考重量与上下限，不要在蓝图里再次随机 Scale。
+鱼生成时的大小由服务器随机重量决定：每个 `FishPresentation_*` 用自己的 `MeshReferenceWeightKilograms` 定义
+`Scale=1` 的参考重量，再按体积关系取立方根并裁在本鱼的 `Minimum/MaximumUniformScale`。水中鱼和岸上拾取鱼
+共用同一个复制缩放值；只在鱼种库直接引用的表现资产中调参数，不要在蓝图里再次随机 Scale。
 
 **抄网范围**（详见 `FishingArchitecture_zh-CN.md` §2.5）：猫沿 `Character Actor Forward` 面朝正前方发一条水平线段，不读取 `Controller/Camera` 朝向；自由转动镜头不会改变挥网方向。线段与挂在鱼身上的圆相交即够得着，**纯俯视投影不看俯仰角**；高度差另由 `MaximumScoopVerticalDeltaCentimeters`（默认 250）卡上限。线段长 = `min(ini 的 ScoopReachCentimeters, 抄网 DA 的同名字段)`，圆半径 = 鱼 DA 的 `ScoopTargetRadiusCentimeters`（**为 0 则永远抄不到**）。
 
@@ -406,7 +412,7 @@ Event BeginPlay
 
 ### ~~1. 抢抄需要 ScoopNet，但装配接口传不进去~~ ✅ 已修
 
-`ServerConfigureEquipment` 已加第 4 个参数 `ScoopNetDefinitionId` 并往下传给 `ConfigureLoadoutFromAuthority`。当前正式目录定义填 `"StarterScoopNet"`；开发期默认发放开启时可留空沿用服务器已选中的抄网。
+`ServerConfigureEquipment` 现在提交 Rod/Bait/Float/ScoopNet 四个 DefinitionId，并可同时提交对应的四个 ItemInstanceId。库存 UI 应从当前格子带上实例 ID；旧调用没带实例 ID 时，服务器仍会按 DefinitionId 兼容解析一份可用实例。当前正式目录仍有 `"StarterScoopNet"` 定义，但默认配置不发放它；没有已有库存实例时，抄网选择必须保持失败而不是凭空补发。
 
 ### ~~2. 打窝需要窝料库存，但没有发放入口~~ ✅ 已修
 
@@ -414,11 +420,11 @@ Event BeginPlay
 
 > 没有直接给组件方法加 `BlueprintCallable`，而是走 Controller RPC 转发 —— 和 `ServerConfigureEquipment` / `ServerRepairRodAtCamp` 保持一致的权限边界，避免任何蓝图都能直接摸到域写入口。
 
-### 3. `IA_BaitSpot`(Q) 那个 Chum Ability 是占位符
+### 3. `IA_BaitSpot`(Q) 那个 Chum Ability 是输入壳
 
-`UCatGA_FishingChum` 发的是一个**不带载荷**的命令（没有目标点、没有窝料 ID、没有数量），服务器 `HandleAbilityCommandFromAuthority` 里没有 `PlaceChum` 分支，必然落到 `DependencyUnavailable`。
+`UCatGA_FishingChum` 不直接写库存，也不自己创建窝点；它只在按下/松开时提交 `ChumPressed` / `ChumReleased`，服务器根据按住时长预测落点，再从正式库存选一份可用窝料交给 `PlaceChum`。
 
-它存在的唯一原因是 `UCatAbilitySet::IsRuntimeReady()` 强制要求 5 个 InputTag 齐全。**不要试图修它** —— 打窝本质上需要客户端提供瞄准点和窝料选择，走步骤 5.3 的独立蓝图路径才是对的。Q 键留着当占位就行。
+也就是说，Ability 只负责输入生命周期；窝料数量仍由库存组件扣，窝点仍由环境服务提交。自定义 UI 如果要指定目标点、窝料或数量，才需要走 `SubmitPlaceChum` 的 payload 版本。
 
 ---
 
@@ -439,8 +445,8 @@ Event BeginPlay
 | 文件 | 改动 |
 |---|---|
 | `CatFishingCommandComponent.cpp` | `HandleAbilityCommandFromAuthority` 新增 OperateRod / 搏斗收线 / Scoop 三条分支 |
-| `CatGameplayTypes.h` | `ServerConfigureEquipment` 加 `BlueprintCallable` |
-| `CatEquipmentComponent.h` | `GetSnapshot()` 加 `BlueprintPure` |
+| `CatfishingPlayerController.h` | `ServerConfigureEquipment` 加 `BlueprintCallable`，并支持随 DefinitionId 提交 ItemInstanceId |
+| `CatEquipmentComponent.h` | `GetSnapshot()` 加 `BlueprintPure`，快照包含当前选择的实例 ID |
 | `CatCharacter.h` | `GetEquipmentComponent()` / `GetConditionComponent()` 加 `BlueprintPure` |
 | `CatWaterRegion.h` | `GetWaterRegionHandle()` / `HasValidBakedGeometry()` 加 `BlueprintPure` |
 | `CatFishingHookActor.h/.cpp` | 浮漂落水确认（有界轮询计时器，非 Tick），`Phase` 能走到 `Landed` |
@@ -468,7 +474,7 @@ BP_CatCharacter        → ACatCharacter
 BP_CatFishingController→ ACatfishingPlayerController
 BP_CatFishingRodActor  → ACatFishingRodActor
 BP_CatFishingHookActor → ACatFishingHookActor
-BP_CatFishEncounterActor → ACatFishEncounterActor
+CatFishEncounterActor（原生运行类；鱼种库直连 Mesh/ABP）
 BP_CatWaterRegion      → ACatWaterRegion
 CatWaterBoundarySplineActor → ACatWaterBoundarySplineActor
 ```
@@ -493,7 +499,7 @@ Event=run_phase_entered Day=1 Phase=ECatRunPhase::DayActive Deadline=600.000
 - `ST_RunFlow` 启动并进入 `DayActive` → `bRunCommandsOpen=true`，钓鱼命令门已打开
 - 两个 StateTree 软引用都能正确解析
 - `BP_CatCharacter` / `BP_CatFishingController` 正常生成
-- **五项初始属性从 ini 注入成功**：`Hunger=100 Fatigue=0 Poison=0 FishingStrength=10 FightStamina=100`
+- **三项初始属性从 ini 注入成功**：`Poison=0 FishingStrength=10 FightStamina=100`
   → 这证明 `IsFishingRuntimeReady()` 为 true，即 AbilitySet 和 InputConfig 两个资产都通过了严格校验，Ability 已授予、输入已绑定
 - Equipment Loadout 仍为空（`Revision=0`）—— 符合预期，等 ConfigureEquipment 蓝图
 
@@ -506,14 +512,13 @@ Event=run_phase_entered Day=1 Phase=ECatRunPhase::DayActive Deadline=600.000
 
 ### ⬜ 待办（你）
 
-1. 表现蓝图：`BP_CatFishEncounterActor` / `BP_CatFishingRodActor` / `BP_CatFishingHookActor` 挂 Mesh 并实现 `BP_On*PresentationChanged`；新建 `BP_CatChumFieldPresentation`（父类 `CatChumFieldPresentationActor`）并把类路径写进 ini
+1. 表现：Rod/Hook 蓝图继续实现 `BP_On*PresentationChanged`；鱼 Mesh/骨骼/AnimBP/动画只在 `Fish_* → FishPresentation_*` 直连资产中维护；新建 `BP_CatChumFieldPresentation`（父类 `CatChumFieldPresentationActor`）并把类路径写进 ini
 2. `BP_CatFishingController`：5.4 ConfigureEquipment（4 参数）→ `Server Grant Run Consumable` 发窝料 → 5.1 接 E 键结果缓存 → 5.2 左键长按预览+抛竿 → 5.3 Q 蓄力+打窝
 3. （可选）HUD：用 ViewBridge 订阅会话状态
-4. （可选）`ST_RunFlow` 补夜晚循环
 
 ### ⬜ 待办（我）
 
-- ~~C++ 调试可视化~~ ✅ 已完成：`cat.Fishing.Debug 0/1/2`（默认 0；0=世界标记全关，1=全量，2=只留抄网射线+鱼圈+鱼线+阶段提示）；右上角当前鱼种 ID 与鱼/竿/猫体力、耐久和力量面板由独立的 `cat.Fishing.Stats 0/1` 控制（默认 1）
+- ~~C++ 调试可视化~~ ✅ 已完成：`cat.Fishing.Debug 0/1/2`（默认 0；0=世界标记全关，1=全量，2=只留抄网射线+鱼圈+鱼线+阶段提示）；右上角当前鱼种 ID 与鱼/竿/猫体力、耐久和力量面板由独立的 `cat.Fishing.Stats 0/1` 控制（默认 0，排查时手动打开）
 - 浮漂弹道修正（现在飞行轨迹落不到目标点会"瞬移"）
 - 规格后续：抄网道具化/概率/硬直/无网拾取/翻肚 30s；窝料接入水域面积/鱼量账本、平均分布、共享重叠收敛曲线与面积容量上限；浮漂级计时器读取所在面积单元聚鱼总量；浮漂精准偏移；入夜停咬
 

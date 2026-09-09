@@ -3,6 +3,7 @@
 #include "AssetRegistry/AssetRegistryModule.h"
 #include "Fishing/Behavior/CatFishBehaviorStateTree.h"
 #include "Fishing/CatFishingGameplayTags.h"
+#include "Fishing/CatFishingStateTreeEvents.h"
 #include "Fishing/CatFishingStateTreeNodes.h"
 #include "Fishing/StateTree/CatFishingSessionStateTreeSchema.h"
 #include "Misc/PackageName.h"
@@ -14,6 +15,7 @@
 #include "StateTreeEditingSubsystem.h"
 #include "StateTreeState.h"
 #include "UObject/SavePackage.h"
+#include <initializer_list>
 
 bool UCatFishStateTreeAuthoringLibrary::CreateOrUpdateDefaultFishBehaviorStateTree()
 {
@@ -53,19 +55,35 @@ bool UCatFishStateTreeAuthoringLibrary::CreateOrUpdateDefaultFishBehaviorStateTr
 		EditorModule.GetEditorSchemaClass(SchemaClass), NAME_None, RF_Transactional);
 
 	UStateTreeState& Root = EditorData->AddSubTree(TEXT("Hooked Fish Behavior"));
-	Root.Description = TEXT("高层行为拓扑；位置、鱼线、力量和体力只由服务器固定步模拟结算。");
-	UStateTreeState& Struggling = Root.AddChildState(TEXT("Struggling Outward"));
-	UStateTreeState& Calm = Root.AddChildState(TEXT("Calm Direction Selection"));
+	Root.Description = TEXT("三个真实行为叶子由固定步反馈条件选边；位置、鱼线、力量和费用仍只有原模拟写口。");
+	UStateTreeState& Outward = Root.AddChildState(TEXT("Outward Rush"));
+	UStateTreeState& Lateral = Root.AddChildState(TEXT("Lateral Arc"));
+	UStateTreeState& EaseOff = Root.AddChildState(TEXT("Ease Off"));
+	Outward.AddTask<FCatFishBehaviorStateTask>().GetInstanceData().Behavior = ECatFishBehavior::OutwardRush;
+	Lateral.AddTask<FCatFishBehaviorStateTask>().GetInstanceData().Behavior = ECatFishBehavior::LateralArc;
+	EaseOff.AddTask<FCatFishBehaviorStateTask>().GetInstanceData().Behavior = ECatFishBehavior::EaseOff;
 
-	auto& StruggleTask = Struggling.AddTask<FCatFishBehaviorStateTask>();
-	StruggleTask.GetInstanceData().MotionIntent = ECatFishMotionIntent::StrugglingOutward;
-	Struggling.AddTransition(EStateTreeTransitionTrigger::OnStateCompleted,
-		EStateTreeTransitionType::GotoState, &Calm);
-
-	auto& CalmTask = Calm.AddTask<FCatFishBehaviorStateTask>();
-	CalmTask.GetInstanceData().MotionIntent = ECatFishMotionIntent::CalmOrInward;
-	Calm.AddTransition(EStateTreeTransitionTrigger::OnStateCompleted,
-		EStateTreeTransitionType::GotoState, &Struggling);
+	const auto AddFeedbackTransition = [](UStateTreeState& Source, UStateTreeState& Target,
+		std::initializer_list<ECatFishBehaviorCondition> Conditions)
+	{
+		FStateTreeTransition& Transition = Source.AddTransition(EStateTreeTransitionTrigger::OnTick,
+			EStateTreeTransitionType::GotoState, &Target);
+		for (const ECatFishBehaviorCondition Condition : Conditions)
+		{
+			Transition.AddConditionWithOuter<FCatFishBehaviorFeedbackCondition>(&Source)
+				.GetInstanceData().Condition = Condition;
+		}
+	};
+	using ECondition = ECatFishBehaviorCondition;
+	// 总对抗时限优先于局部承诺，保证反复改道也能给玩家恢复窗口。
+	AddFeedbackTransition(Outward, EaseOff, { ECondition::NeedsRecovery });
+	AddFeedbackTransition(Outward, Lateral, { ECondition::MinimumDurationElapsed, ECondition::SustainedBlocked });
+	AddFeedbackTransition(Outward, EaseOff, { ECondition::DurationExpired });
+	AddFeedbackTransition(Lateral, EaseOff, { ECondition::NeedsRecovery });
+	AddFeedbackTransition(Lateral, Outward, { ECondition::MinimumDurationElapsed, ECondition::SustainedBlocked });
+	AddFeedbackTransition(Lateral, Outward, { ECondition::DurationExpired });
+	AddFeedbackTransition(EaseOff, Lateral, { ECondition::DurationExpired, ECondition::SustainedBlocked });
+	AddFeedbackTransition(EaseOff, Outward, { ECondition::DurationExpired });
 
 	FStateTreeCompilerLog CompilerLog;
 	if (!UStateTreeEditingSubsystem::CompileStateTree(StateTree, CompilerLog))
@@ -149,10 +167,13 @@ bool UCatFishStateTreeAuthoringLibrary::CreateOrUpdateDefaultFishingSessionState
 	HookedFight.TasksCompletion = EStateTreeTaskCompletionType::All;
 	HookedFight.AddTask<FCatFishingStartFightRunnerTask>();
 	HookedFight.AddTask<FCatFishingWaitForFightRunnerTask>();
-	HookedFight.AddTransition(EStateTreeTransitionTrigger::OnStateSucceeded,
+	HookedFight.AddTransition(EStateTreeTransitionTrigger::OnEvent, CatFishingStateTreeEvents::FishExhausted,
 		EStateTreeTransitionType::GotoState, &ExhaustedReelHold);
 
-	// 搏斗 Runner 在 C++ 内进入 ExhaustedReel；该叶子只让树继续 Running，等待岸上拾取或主动取消。
+	// 鱼力竭只切生命周期叶子；同一个 Runner 继续以 AutoHauling 意图运行双端约束。
+	ExhaustedReelHold.TasksCompletion = EStateTreeTaskCompletionType::All;
+	auto& EnterExhaustedReelTask = ExhaustedReelHold.AddTask<FCatFishingEnterPhaseTask>();
+	EnterExhaustedReelTask.GetInstanceData().Phase = ECatFishingPhase::ExhaustedReel;
 	ExhaustedReelHold.AddTask<FCatFishingWaitTask>();
 
 	FStateTreeCompilerLog CompilerLog;

@@ -13,7 +13,9 @@ ECatEnvironmentTimeOfDay UCatEnvironmentSettings::ResolveTimeOfDay(const FCatRun
 	const double ServerNowSeconds) const
 {
 	if (!IsRuntimeReady() || RunSnapshot.Phase != ECatRunPhase::DayActive || !RunSnapshot.bHasDeadline
-		|| !FMath::IsFinite(ServerNowSeconds) || RunSnapshot.DeadlineServerTimeSeconds <= RunSnapshot.ServerTimeAnchorSeconds)
+		|| !FMath::IsFinite(ServerNowSeconds) || !FMath::IsFinite(RunSnapshot.ServerTimeAnchorSeconds)
+		|| !FMath::IsFinite(RunSnapshot.DeadlineServerTimeSeconds)
+		|| RunSnapshot.DeadlineServerTimeSeconds <= RunSnapshot.ServerTimeAnchorSeconds)
 	{
 		return ECatEnvironmentTimeOfDay::Unknown;
 	}
@@ -24,6 +26,46 @@ ECatEnvironmentTimeOfDay UCatEnvironmentSettings::ResolveTimeOfDay(const FCatRun
 		return ECatEnvironmentTimeOfDay::Morning;
 	}
 	return Progress < DuskStartFraction ? ECatEnvironmentTimeOfDay::Day : ECatEnvironmentTimeOfDay::Dusk;
+}
+
+// 白天刷新点计算流程：复用 Run 公开的服务器锚点和截止点，把 Morning/Day/Dusk 分界换算成绝对服务器秒；调用方只拿它安排一次性刷新，不生成新的阶段状态。
+bool UCatEnvironmentSettings::TryResolveTimeOfDayRefreshTimes(const FCatRunPhaseSnapshot& RunSnapshot,
+	double& OutMorningEndServerTimeSeconds, double& OutDuskStartServerTimeSeconds) const
+{
+	OutMorningEndServerTimeSeconds = 0.0;
+	OutDuskStartServerTimeSeconds = 0.0;
+	if (!IsRuntimeReady() || RunSnapshot.Phase != ECatRunPhase::DayActive || !RunSnapshot.bHasDeadline
+		|| !FMath::IsFinite(RunSnapshot.ServerTimeAnchorSeconds)
+		|| !FMath::IsFinite(RunSnapshot.DeadlineServerTimeSeconds)
+		|| RunSnapshot.DeadlineServerTimeSeconds <= RunSnapshot.ServerTimeAnchorSeconds)
+	{
+		return false;
+	}
+	const double DayDurationSeconds = RunSnapshot.DeadlineServerTimeSeconds - RunSnapshot.ServerTimeAnchorSeconds;
+	OutMorningEndServerTimeSeconds = RunSnapshot.ServerTimeAnchorSeconds + DayDurationSeconds * MorningEndFraction;
+	OutDuskStartServerTimeSeconds = RunSnapshot.ServerTimeAnchorSeconds + DayDurationSeconds * DuskStartFraction;
+	return OutMorningEndServerTimeSeconds > RunSnapshot.ServerTimeAnchorSeconds
+		&& OutDuskStartServerTimeSeconds > OutMorningEndServerTimeSeconds
+		&& OutDuskStartServerTimeSeconds < RunSnapshot.DeadlineServerTimeSeconds;
+}
+
+// 事件裁决流程：现阶段只允许配置事件在可钓白天、已知时段和满足天气约束时生效；夜晚事件以后接正式事件表，而不是让单个配置字段越权代表所有自然事件。
+bool UCatEnvironmentSettings::TryResolveActiveEvent(const FCatRunPhaseSnapshot& RunSnapshot,
+	const ECatEnvironmentTimeOfDay TimeOfDay, const ECatEnvironmentWeather Weather, FName& OutEventId) const
+{
+	OutEventId = NAME_None;
+	if (!IsRuntimeReady() || !RunSnapshot.RunId.IsValid() || ActiveEventId.IsNone()
+		|| Weather == ECatEnvironmentWeather::Unknown
+		|| RunSnapshot.Phase != ECatRunPhase::DayActive || TimeOfDay == ECatEnvironmentTimeOfDay::Unknown)
+	{
+		return false;
+	}
+	if (ActiveEventRequiredWeather != ECatEnvironmentWeather::Unknown && ActiveEventRequiredWeather != Weather)
+	{
+		return false;
+	}
+	OutEventId = ActiveEventId;
+	return true;
 }
 
 // 自然聚鱼读取流程：先清输出，再要求 Environment 总配置、公共事件、目标区域和合法三轴同时存在；成功只复制数据，不寻找 Actor 或写 WaterRegion。

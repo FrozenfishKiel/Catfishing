@@ -3,12 +3,17 @@
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
+#include "Components/CapsuleComponent.h"
+#include "Environment/CatWaterQuerySubsystem.h"
 #include "Logging/CatLog.h"
+#include "Logging/CatLogContext.h"
 #include "Condition/CatConditionSettings.h"
 #include "Data/CatFishDefinition.h"
 #include "Fishing/CatFishingService.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerState.h"
 #include "Growth/CatGrowthComponent.h"
 #include "Net/UnrealNetwork.h"
 
@@ -32,7 +37,7 @@ const FCatConditionSnapshot& UCatConditionComponent::GetSnapshot() const
 	return Snapshot;
 }
 
-// Wet 写入流程：只接受 authority 和真实变化；提交后增加 Revision/强制更新，明确不触碰 Poison、成长、搏斗体力或移动能力。
+// Wet 写入流程：只接受落水、天气等 authority 反馈和真实变化；提交后增加 Revision/强制更新，明确不触碰 Poison、成长、搏斗体力、移动能力或 BodyAction。
 void UCatConditionComponent::SetWetFromAuthority(const bool bNewWet)
 {
 	AActor* Owner = GetOwner();
@@ -45,6 +50,90 @@ void UCatConditionComponent::SetWetFromAuthority(const bool bNewWet)
 	PublishSnapshot();
 	UE_LOG(LogCatCharacter, Log, TEXT("Event=character_wet_changed Character=%s Wet=%s Revision=%lld"),
 		*Owner->GetName(), Snapshot.bWet ? TEXT("true") : TEXT("false"), Snapshot.Revision);
+}
+
+ECatWaterExposureUpdate UCatConditionComponent::UpdateWaterExposureFromAuthority(
+	const FCatWaterRegionHandle& WaterRegion, const double DeltaSeconds,
+	double& OutImmersionDepthCentimeters)
+{
+	// 水域暴露更新流程：
+	// 1. 先确认 Character、authority、阈值配置、水域子系统和固定步时长齐全，缺任一项都不猜湿身结果。
+	// 2. 再用脚点查询指定 WaterRegion 的浸没深度，并按湿润阈值、危险进入阈值和退出滞回维护离散状态。
+	// 3. 状态没有变化时只返回 Unchanged；危险首次进入用 Warning 记录并交给 Fishing 终局入口处理。
+	OutImmersionDepthCentimeters = 0.0;
+	ACatCharacter* Character = Cast<ACatCharacter>(GetOwner());
+	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
+	UCatWaterQuerySubsystem* Water = GetWorld() ? GetWorld()->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
+	if (!Character || !Character->HasAuthority() || !Settings || !Settings->HasWaterExposureThresholds()
+		|| !Water || !WaterRegion.IsValid() || !FMath::IsFinite(DeltaSeconds) || DeltaSeconds <= 0.0)
+	{
+		return ECatWaterExposureUpdate::Unavailable;
+	}
+	const UCapsuleComponent* Capsule = Character->GetCapsuleComponent();
+	if (!Capsule)
+	{
+		return ECatWaterExposureUpdate::Unavailable;
+	}
+	const FVector FootPoint = Character->GetActorLocation()
+		- FVector::UpVector * Capsule->GetScaledCapsuleHalfHeight();
+	const FCatWaterImmersionResult Immersion = Water->QueryImmersionAtWorldPoint(FootPoint, WaterRegion);
+	if (!Immersion.bSucceeded)
+	{
+		return ECatWaterExposureUpdate::Unavailable;
+	}
+	OutImmersionDepthCentimeters = Immersion.ImmersionDepthCentimeters;
+	const bool bWet = Immersion.Containment != ECatWaterContainment::Outside
+		&& OutImmersionDepthCentimeters >= Settings->WetWaterDepthCentimeters;
+	ECatWaterExposureState NewExposure = bWet ? ECatWaterExposureState::Shallow : ECatWaterExposureState::Dry;
+	if (Snapshot.WaterExposure == ECatWaterExposureState::Dangerous
+		&& bWet && OutImmersionDepthCentimeters > Settings->DangerousWaterExitDepthCentimeters)
+	{
+		NewExposure = ECatWaterExposureState::Dangerous;
+	}
+	else if (bWet && OutImmersionDepthCentimeters >= Settings->DangerousWaterDepthCentimeters)
+	{
+		DangerousWaterBuildUpSeconds += DeltaSeconds;
+		// 危险水域按 World 秒累计；极小容差只吸收浮点边界，避免正好到确认阈值的那帧被漏判。
+		if (DangerousWaterBuildUpSeconds + UE_DOUBLE_KINDA_SMALL_NUMBER
+			>= Settings->DangerousWaterConfirmationSeconds)
+		{
+			NewExposure = ECatWaterExposureState::Dangerous;
+		}
+	}
+	else
+	{
+		DangerousWaterBuildUpSeconds = 0.0;
+	}
+
+	const bool bDangerousEntered = Snapshot.WaterExposure != ECatWaterExposureState::Dangerous
+		&& NewExposure == ECatWaterExposureState::Dangerous;
+	if (Snapshot.bWet == bWet && Snapshot.WaterExposure == NewExposure)
+	{
+		return ECatWaterExposureUpdate::Unchanged;
+	}
+	Snapshot.bWet = bWet;
+	Snapshot.WaterExposure = NewExposure;
+	++Snapshot.Revision;
+	PublishSnapshot();
+	const FString ControllerFields = CatLogContext::BuildControllerFields(Character->GetController());
+	if (bDangerousEntered)
+	{
+		UE_LOG(LogCatCharacter, Warning,
+			TEXT("Event=character_water_exposure_changed Character=%s Region=%s Exposure=%s DepthCm=%.2f Revision=%lld Authority=true %s"),
+			*Character->GetName(), *WaterRegion.RegionId.ToString(),
+			*UEnum::GetValueAsString(NewExposure), OutImmersionDepthCentimeters, Snapshot.Revision,
+			*ControllerFields);
+	}
+	else
+	{
+		UE_LOG(LogCatCharacter, Log,
+			TEXT("Event=character_water_exposure_changed Character=%s Region=%s Exposure=%s DepthCm=%.2f Revision=%lld Authority=true %s"),
+			*Character->GetName(), *WaterRegion.RegionId.ToString(),
+			*UEnum::GetValueAsString(NewExposure), OutImmersionDepthCentimeters, Snapshot.Revision,
+			*ControllerFields);
+	}
+	return bDangerousEntered ? ECatWaterExposureUpdate::DangerousEntered
+		: ECatWaterExposureUpdate::Changed;
 }
 
 // 食用预检流程：只读核对 authority、正式身体 runtime、鱼定义、ASC、倒地阈值与 Growth 入口；不修改实物鱼、Attribute、Snapshot 或终态缓存。
@@ -77,7 +166,7 @@ ECatDomainCommandError UCatConditionComponent::ValidateHerbRecovery(AController*
 }
 
 // 进食流程：先按 RequestId 重放，再验证 authority/定义/项目 ASC/Growth；Toxic 鱼只通过 ApplyPoisonDelta/GE 增加 Poison。
-// Poison 提交失败时不推进 Growth 或 Downed，避免实物鱼已消费后写出半套身体事实；成功后才推进经验槽、裁决倒地并缓存终态。
+// Poison 或 Growth 任一提交失败都不裁决 Downed；全部身体后置事实成立后才推进 Snapshot 并缓存完整终态。
 FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid RequestId,
 	const UCatFishDefinition* FishDefinition)
 {
@@ -87,8 +176,7 @@ FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
 	UCatAbilitySystemComponent* ASC = ResolveAbilitySystem();
@@ -107,11 +195,19 @@ FCatDomainCommandResult UCatConditionComponent::ConsumeCommittedFish(const FGuid
 		}
 		else
 		{
-			Growth->ApplyCommittedFish(RequestId, FishDefinition);
-			EvaluateDownedFromAttributes(ECatRecoveryMode::None);
-			Result.bCommitted = true;
-			Result.Error = ECatDomainCommandError::None;
-			Result.Revision = Snapshot.Revision;
+			const FCatDomainCommandResult GrowthResult = Growth->ApplyCommittedFish(RequestId, FishDefinition);
+			if (!CatIsAcceptedDomainCommandResult(GrowthResult))
+			{
+				Result.Error = GrowthResult.bTerminalReplay ? GrowthResult.ReplayedTerminalError : GrowthResult.Error;
+				Result.Revision = Snapshot.Revision;
+			}
+			else
+			{
+				EvaluateDownedFromAttributes(ECatRecoveryMode::None);
+				Result.bCommitted = true;
+				Result.Error = ECatDomainCommandError::None;
+				Result.Revision = Snapshot.Revision;
+			}
 		}
 	}
 	TerminalCache.Add(Key, Result);
@@ -162,8 +258,7 @@ FCatDomainCommandResult UCatConditionComponent::ApplyCommittedHerbRecovery(ACont
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
 	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
@@ -186,8 +281,7 @@ FCatDomainCommandResult UCatConditionComponent::CompleteCarryToCamp(AController*
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !HelpingController || !RequestId.IsValid() || !bAtCampRescuePoint)
@@ -229,8 +323,7 @@ FCatDomainCommandResult UCatConditionComponent::ApplyRecovery(const FGuid Reques
 	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
 	{
 		Result = *Cached;
-		Result.bCommitted = false;
-		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		MarkCommandReplayed(Result);
 		return Result;
 	}
 	UCatAbilitySystemComponent* ASC = ResolveAbilitySystem();
@@ -259,7 +352,7 @@ FCatDomainCommandResult UCatConditionComponent::ApplyRecovery(const FGuid Reques
 	return Result;
 }
 
-// 倒地裁决流程：读取 ASC Poison 与显式阈值，更新唯一 Downed/RecoveryMode；首次进入倒地时终止相关 FishingSession，始终没有死亡分支。
+// 倒地裁决流程：读取 ASC Poison 与显式阈值，更新唯一 Downed/RecoveryMode；首次进入倒地时释放个人钓鱼操作位，始终没有死亡分支。
 void UCatConditionComponent::EvaluateDownedFromAttributes(const ECatRecoveryMode RecoveryMode)
 {
 	UCatAbilitySystemComponent* ASC = ResolveAbilitySystem();
@@ -279,7 +372,7 @@ void UCatConditionComponent::EvaluateDownedFromAttributes(const ECatRecoveryMode
 			*GetOwner()->GetName(), Snapshot.Revision, *UEnum::GetValueAsString(Snapshot.RecoveryMode));
 		if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
 		{
-			Fishing->TerminateSessionsForCharacter(Cast<ACatCharacter>(GetOwner()));
+			Fishing->ReleaseFishingOperatorForCharacter(Cast<ACatCharacter>(GetOwner()));
 		}
 	}
 }

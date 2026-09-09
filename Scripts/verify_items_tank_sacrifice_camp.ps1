@@ -49,9 +49,9 @@ function Invoke-ModuleStaticCheck {
     $Checks = @(
         @{ Pattern = 'UFUNCTION\(NetMulticast, Reliable\)'; Path = 'Source/Catfishing/Camp/CatCampHubActor.h' },
         @{ Pattern = 'MulticastCampfirePlaybackRequested'; Path = 'Source/Catfishing/Camp/CatCampHubActor.h' },
-        @{ Pattern = 'ClientReceiveSacrificeResult'; Path = 'Source/Catfishing/Framework/Game/CatGameplayTypes.h' },
-        @{ Pattern = 'ClientReceiveCampCommandResult'; Path = 'Source/Catfishing/Framework/Game/CatGameplayTypes.h' },
-        @{ Pattern = 'UFUNCTION\(Client, Reliable\)'; Path = 'Source/Catfishing/Framework/Game/CatGameplayTypes.h' }
+        @{ Pattern = 'ClientReceiveSacrificeResult'; Path = 'Source/Catfishing/Framework/Game/CatfishingPlayerController.h' },
+        @{ Pattern = 'ClientReceiveCampCommandResult'; Path = 'Source/Catfishing/Framework/Game/CatfishingPlayerController.h' },
+        @{ Pattern = 'UFUNCTION\(Client, Reliable\)'; Path = 'Source/Catfishing/Framework/Game/CatfishingPlayerController.h' }
     )
     foreach ($Check in $Checks) {
         & $Ripgrep.Source -n $Check.Pattern (Join-Path $ProjectRoot $Check.Path)

@@ -11,7 +11,11 @@ class CATFISHING_API UCatFishGuardInventoryWidget : public UCatInventoryWidget
 	GENERATED_BODY()
 
 protected:
-	/** 返回当前外部容器数据源的 Slots；鱼护页构建和刷新时只用这份数组创建格子。 */
+	/** 鱼护页的格子数据源固定代表当前外部容器；同屏背包或营地页存在时不能共享它们的 Slots。 */
 	virtual const TArray<FCatInventorySlotView>& GetInventorySlotsForWidget(
 		const FCatInventoryViewState& ViewState) const override;
+
+	/** 把鱼护页渲染后的 Slots 写回 ExternalContainerSlots，让蓝图扩展读取到本页自己的高亮结果。 */
+	virtual void StoreDisplayedSlotsInViewState(FCatInventoryViewState& ViewState,
+		const TArray<FCatInventorySlotView>& Slots) const override;
 };

@@ -14,7 +14,10 @@
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSession.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Fishing/Presentation/CatFishingCameraComponent.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
 #include "GameFramework/PlayerState.h"
@@ -39,6 +42,15 @@ bool FCatFishingCooldownGate::TryConsume(const double NowSeconds, const double D
 
 namespace
 {
+	FString BuildRodAimControllerFields(const AController* Controller)
+	{
+		return FString::Printf(TEXT("World=%s Authority=%s LocalRole=%d %s"),
+			*GetNameSafe(Controller ? Controller->GetWorld() : nullptr),
+			Controller && Controller->HasAuthority() ? TEXT("true") : TEXT("false"),
+			Controller ? static_cast<int32>(Controller->GetLocalRole()) : INDEX_NONE,
+			*CatLogContext::BuildControllerFields(Controller));
+	}
+
 	/** 构造阶段 gate 拒绝时的统一竿命令回执；旧直连 RPC 用它保留 RequestId，让 UI/Ability 能结束等待态。 */
 	FCatFishingCommandResult MakeRodCommandsClosedResult(const ECatFishingCommandType CommandType, const FGuid RequestId)
 	{
@@ -98,18 +110,20 @@ void UCatFishingCommandComponent::DeliverPlaceChumResultFromAuthority(const FCat
 	APlayerController* Controller = Cast<APlayerController>(GetOwner());
 	if (!Controller || !Controller->HasAuthority() || !Result.RequestId.IsValid()) return;
 	const FString ControllerFields = CatLogContext::BuildControllerFields(Controller);
+	const int64 InventoryRevision = Result.GetInventoryRevision();
+	// 回执里的 EquipmentRevision 仍保留为旧监听者的兼容镜像；正式事实看 InventoryRevision，日志同时打出两者方便确认打窝没有再走装备裁决。
 	if (Result.bCommitted)
 	{
-		UE_LOG(LogCatFishing, Log, TEXT("Event=place_chum_result Committed=true Request=%s Field=%s Center=%s %s"),
+		UE_LOG(LogCatFishing, Log, TEXT("Event=place_chum_result Committed=true Request=%s Field=%s Center=%s InventoryRevision=%lld EquipmentRevision=%lld %s"),
 			*Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Result.FieldId.ToString(EGuidFormats::DigitsWithHyphens), *Result.ServerCorrectedCenter.ToString(),
-			*ControllerFields);
+			InventoryRevision, Result.EquipmentRevision, *ControllerFields);
 	}
 	else
 	{
-		UE_LOG(LogCatFishing, Warning, TEXT("Event=place_chum_result Committed=false Error=%s Request=%s %s"),
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=place_chum_result Committed=false Error=%s Request=%s InventoryRevision=%lld EquipmentRevision=%lld %s"),
 			*UEnum::GetValueAsString(Result.Error), *Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-			*ControllerFields);
+			InventoryRevision, Result.EquipmentRevision, *ControllerFields);
 	}
 	if (Controller->IsLocalController()) ReceivePlaceChumResultLocally(Result);
 	else ClientReceivePlaceChumResult(Result);
@@ -256,6 +270,10 @@ void UCatFishingCommandComponent::ResetTransientCommandState()
 	ServerAimingCorrelationId.Invalidate();
 	bServerPrimaryHeld = false;
 	bServerSlackHeld = false;
+	bLocalSlackHeld = false;
+	LocalPitchAimRod.Reset();
+	LocalPitchAimEpoch = 0;
+	bLocalPitchAimInitialized = false;
 	LastServerHeldInputSequence = 0;
 	LocalChumChargeStartTime = -1.0; // 关卡/会话切换时收起残留的蓄力预览线。
 	ChumChargeStartServerTime = -1.0;
@@ -278,6 +296,14 @@ bool UCatFishingCommandComponent::TryGetHeldFightInputStateFromAuthority(bool& O
 	OutSlackHeld = bServerSlackHeld;
 	OutInputSequence = LastServerHeldInputSequence;
 	return true;
+}
+
+void UCatFishingCommandComponent::ClearHeldFightInputForControlTransferFromAuthority()
+{
+	if (!GetOwner() || !GetOwner()->HasAuthority()) return;
+	bServerPrimaryHeld = false;
+	bServerSlackHeld = false;
+	ServerAimingCorrelationId.Invalidate();
 }
 
 void UCatFishingCommandComponent::TrackHeldFightInputFromAuthority(
@@ -316,13 +342,23 @@ FCatFishingInputEdge UCatFishingCommandComponent::MakeDiscreteEdge()
 	FCatFishingInputEdge Edge;
 	Edge.RequestId = FGuid::NewGuid();
 	Edge.InputSequence = ++NextInputSequence;
+	if (const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindHeldRodOperatedBy(
+		Cast<APlayerController>(GetOwner())))
+	{
+		Edge.ControlRodActorId = Rod->GetPresentationState().RodActorId;
+		Edge.ControlEpoch = Rod->GetControlEpoch();
+	}
 	return Edge;
 }
 
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitRodInteract()
 {
-	// R 对应的鱼竿 Ability：具体是插竿/操作/离开由服务器根据当前竿状态三态判定，见 HandleAbilityCommandFromAuthority。
+	// R 对应的鱼竿 Ability：首次取竿即持握，后续拿起/放下由服务器按当前占位分派。
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_rod_interact_requested RequestId=%s InputSequence=%lld %s"),
+		*Edge.RequestId.ToString(), Edge.InputSequence,
+		*BuildRodAimControllerFields(Cast<APlayerController>(GetOwner())));
 	DispatchAbilityCommand(ECatFishingCommandType::OperateRod, Edge);
 	return Edge;
 }
@@ -342,6 +378,8 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitPrimaryReleased()
 {
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
 	Edge.ActivationCorrelationId = PrimaryActivationCorrelationId; // 带上按下时记录的关联 ID
+	Edge.bHasCastViewRay = UCatFishingAimLibrary::TryGetLocalCastViewRay(Cast<APlayerController>(GetOwner()),
+		Edge.CastViewOrigin, Edge.CastViewDirection);
 	DispatchAbilityCommand(ECatFishingCommandType::PrimaryReleased, Edge);
 	PrimaryActivationCorrelationId.Invalidate(); // 松开后立即失效，避免误配对到下一次按下
 	return Edge;
@@ -352,13 +390,119 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitPrimaryReleased()
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitSlackPressed()
 {
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
+	const APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindFightRodHeldBy(Controller);
+	if (!bLocalSlackHeld)
+	{
+		const ACatFishingRodActor* VisibleRod = Rod ? Rod : UCatFishingCameraComponent::FindHeldRodOperatedBy(Controller);
+		const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+		LocalPitchAimRod = Rod;
+		LocalPitchAimEpoch = Rod ? Rod->GetCarrierConstraintState().AimInputEpoch : 0;
+		const double VisiblePitch = VisibleRod ? VisibleRod->GetGripWorldTransform().Rotator().Pitch
+			: Controller ? Controller->GetControlRotation().Pitch : 0.0;
+		LocalRequestedRodPitch = FMath::Clamp(FRotator::NormalizeAxis(VisiblePitch),
+			Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
+		bLocalPitchAimInitialized = true;
+	}
+	bLocalSlackHeld = true;
+	Edge.RodAimSample = MakeRodAimSample(Rod);
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_slack_aim_requested RequestId=%s InputSequence=%lld RodActorId=%s AimInputEpoch=%u "
+			"AimSequence=%lld CumulativeLookDegrees=%s %s"),
+		*Edge.RequestId.ToString(), Edge.InputSequence, *Edge.RodAimSample.RodActorId.ToString(),
+		Edge.RodAimSample.InputEpoch, Edge.RodAimSample.Sequence, *Edge.RodAimSample.CumulativeLookDegrees.ToString(),
+		*BuildRodAimControllerFields(Controller));
 	DispatchAbilityCommand(ECatFishingCommandType::SlackPressed, Edge);
 	return Edge;
+}
+
+FCatFishingRodAimSample UCatFishingCommandComponent::MakeRodAimSample(const ACatFishingRodActor* Rod)
+{
+	FCatFishingRodAimSample Sample;
+	Sample.Sequence = ++NextRodAimSequence;
+	Sample.CumulativeLookDegrees = CumulativeRodLookDegrees;
+	if (Rod)
+	{
+		Sample.RodActorId = Rod->GetPresentationState().RodActorId;
+		Sample.InputEpoch = Rod->GetCarrierConstraintState().AimInputEpoch;
+	}
+	return Sample;
+}
+
+void UCatFishingCommandComponent::UpdateLocalRodAimInput(const double DeltaSeconds, const FRotator& LookDeltaDegrees)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->IsLocalController() || !GetWorld() || LookDeltaDegrees.ContainsNaN()) return;
+	// RotationInput 已经经过 AddYaw/PitchInput 的灵敏度与 IgnoreLookInput 处理。
+	// 不用 ControlRotation 差量：旧隐藏目标顶到镜头 Pitch 限位后，仍必须能从实际竿角重新抬竿。
+	const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindFightRodHeldBy(Controller);
+	double AppliedPitchDelta = LookDeltaDegrees.Pitch;
+	// 首帧未见约束的合法按下也先逐帧夹限；域抵达时只绑定，不重设累计量或丢掉新增输入。
+	if (bLocalPitchAimInitialized && LocalPitchAimEpoch == 0 && Rod)
+	{
+		LocalPitchAimRod = Rod;
+		LocalPitchAimEpoch = Rod->GetCarrierConstraintState().AimInputEpoch;
+	}
+	if (bLocalPitchAimInitialized && (LocalPitchAimEpoch == 0
+		|| (Rod && LocalPitchAimRod.Get() == Rod && LocalPitchAimEpoch == Rod->GetCarrierConstraintState().AimInputEpoch)))
+	{
+		const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+		const double NextPitch = FMath::Clamp(LocalRequestedRodPitch + AppliedPitchDelta,
+			Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
+		AppliedPitchDelta = NextPitch - LocalRequestedRodPitch;
+		LocalRequestedRodPitch = NextPitch;
+	}
+	else
+	{
+		LocalPitchAimRod.Reset();
+		LocalPitchAimEpoch = 0;
+		bLocalPitchAimInitialized = false;
+	}
+	CumulativeRodLookDegrees += FVector2D(LookDeltaDegrees.Yaw, AppliedPitchDelta);
+	if (!Rod || Rod->GetCarrierConstraintState().AimInputEpoch == 0)
+	{
+		RodAimSendElapsedSeconds = 0.0;
+		return;
+	}
+	RodAimSendElapsedSeconds += FMath::IsFinite(DeltaSeconds) ? FMath::Max(0.0, DeltaSeconds) : 0.0;
+	if (!Controller->HasAuthority() && RodAimSendElapsedSeconds < 1.0 / 30.0) return;
+	RodAimSendElapsedSeconds = 0.0;
+	const FCatFishingRodAimSample Sample = MakeRodAimSample(Rod);
+	if (Controller->HasAuthority()) ServerSubmitRodAimSample_Implementation(Sample);
+	else ServerSubmitRodAimSample(Sample);
+	// 静止时也持续发送全量累计快照，最后一次鼠标输入丢包后可由下一包补齐。
+	if (GetWorld()->GetTimeSeconds() >= NextLocalRodAimDiagnosticSeconds)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_rod_aim_sent RodActorId=%s AimInputEpoch=%u AimSequence=%lld CumulativeLookDegrees=%s %s"),
+			*Sample.RodActorId.ToString(), Sample.InputEpoch, Sample.Sequence, *Sample.CumulativeLookDegrees.ToString(),
+			*BuildRodAimControllerFields(Controller));
+		NextLocalRodAimDiagnosticSeconds = GetWorld()->GetTimeSeconds() + 1.0;
+	}
+}
+
+void UCatFishingCommandComponent::ServerSubmitRodAimSample_Implementation(const FCatFishingRodAimSample Sample)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
+	if (!Controller || !Controller->HasAuthority() || !Fishing) return;
+	ACatFishingRodActor* Rod = Fishing->FindRodOperatedBy(Controller->PlayerState);
+	const bool bAccepted = Rod && Rod->AcceptHeldAimSampleFromAuthority(Controller->PlayerState, Sample);
+	if (GetWorld()->GetTimeSeconds() >= NextServerRodAimDiagnosticSeconds)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_rod_aim_received RodActorId=%s AimInputEpoch=%u AimSequence=%lld "
+				"CumulativeLookDegrees=%s Result=%s %s"),
+			*Sample.RodActorId.ToString(), Sample.InputEpoch, Sample.Sequence, *Sample.CumulativeLookDegrees.ToString(),
+			bAccepted ? TEXT("Accepted") : TEXT("IgnoredStaleOrInactiveInput"), *BuildRodAimControllerFields(Controller));
+		NextServerRodAimDiagnosticSeconds = GetWorld()->GetTimeSeconds() + 1.0;
+	}
 }
 
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitSlackReleased()
 {
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
+	bLocalSlackHeld = false;
 	DispatchAbilityCommand(ECatFishingCommandType::SlackReleased, Edge);
 	return Edge;
 }
@@ -384,6 +528,13 @@ FCatFishingInputEdge UCatFishingCommandComponent::SubmitCancel()
 {
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
 	DispatchAbilityCommand(ECatFishingCommandType::CancelFishing, Edge);
+	return Edge;
+}
+
+FCatFishingInputEdge UCatFishingCommandComponent::SubmitCutLine()
+{
+	FCatFishingInputEdge Edge = MakeDiscreteEdge();
+	DispatchAbilityCommand(ECatFishingCommandType::CutLine, Edge);
 	return Edge;
 }
 
@@ -456,21 +607,52 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	{
 		return;
 	}
-	// 按键事实先于 Session 路由更新：断线后暂时没有活跃会话时，Release 仍必须清掉持续按住状态。
-	TrackHeldFightInputFromAuthority(CommandType, Edge);
 	FCatFishingCommandResult Result;
 	Result.CommandType = CommandType;
 	Result.RequestId = Edge.RequestId;
 	Result.bCommitted = false;
+	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
+	const bool bRodControlEdge = CommandType == ECatFishingCommandType::RequestHook
+		|| CommandType == ECatFishingCommandType::PrimaryReleased
+		|| CommandType == ECatFishingCommandType::SlackPressed
+		|| CommandType == ECatFishingCommandType::SlackReleased;
+	if (bRodControlEdge && Fishing)
+	{
+		if (ACatFishingRodActor* Rod = Fishing->FindRodOperatedBy(Controller->PlayerState))
+		{
+			const bool bPrimary = Rod->IsPrimaryOperator(Controller->PlayerState);
+			const bool bCurrentControl = Edge.ControlRodActorId == Rod->GetPresentationState().RodActorId
+				&& Edge.ControlEpoch != 0 && Edge.ControlEpoch == Rod->GetControlEpoch();
+			if (!bPrimary || !bCurrentControl)
+			{
+				Result.Error = bPrimary ? ECatFishingCommandError::InputSequenceStale : ECatFishingCommandError::NotFisher;
+				Result.RodActorId = Rod->GetPresentationState().RodActorId;
+				Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
+				if (const ACatFishingSession* BoundSession = Fishing->FindActiveSessionByRod(Rod))
+				{
+					Result.FishingSessionId = BoundSession->GetSnapshot().FishingSessionId;
+					Result.Revision = BoundSession->GetSnapshot().Revision;
+				}
+				UE_LOG(LogCatFishing, Warning,
+					TEXT("Event=fishing_control_input_rejected RequestId=%s RodActorId=%s SessionId=%s InputControlEpoch=%u CurrentControlEpoch=%u Reason=%s World=%s Authority=%d LocalRole=%d %s"),
+					*Edge.RequestId.ToString(), *Result.RodActorId.ToString(), *Result.FishingSessionId.ToString(),
+					Edge.ControlEpoch, Rod->GetControlEpoch(), bPrimary ? TEXT("StaleControl") : TEXT("AuxiliaryMovementOnly"),
+					*GetNameSafe(GetWorld()), Controller->HasAuthority(), int32(Controller->GetLocalRole()),
+					*CatLogContext::BuildControllerFields(Controller));
+				DeliverResultFromAuthority(Result);
+				return;
+			}
+		}
+	}
+	// 只有当前操竿权下的边沿才能改持续按键；无竿时仍接受 Release 清除物理持有状态。
+	TrackHeldFightInputFromAuthority(CommandType, Edge);
 	if (CommandType == ECatFishingCommandType::CancelFishing)
 	{
 		// X 先作为通用身体动作取消键处理：只取消还停在 GAS 提交窗口里的 BodyAction，不会吞掉后续 Fishing 收竿/会话取消语义。
-		if (const ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(Controller))
+		if (UCatAbilitySystemComponent* AbilitySystem =
+			UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(Controller->GetPawn()))
 		{
-			if (UCatAbilitySystemComponent* AbilitySystem = CatController->GetCurrentCatAbilitySystemComponent())
-			{
-				AbilitySystem->CancelBodyActionAbilitiesFromAuthority();
-			}
+			AbilitySystem->CancelBodyActionAbilitiesFromAuthority();
 		}
 	}
 	if (const ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(Controller);
@@ -482,7 +664,6 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		return;
 	}
 
-	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
 	if (CommandType == ECatFishingCommandType::RequestScoop)
 	{
 		double CooldownSeconds = 0.0;
@@ -554,7 +735,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		// R 的鱼竿三态（服务器按当前事实分派，客户端不需要知道自己处于哪一态；多人：竿不限竿主）：
 		//   正在操作某根竿（自己的或别人的） → LeaveRod（离开竿位，自由活动）
 		//   公共交互锚点附近且容器仍有容量      → OperateRod（追加编号，共享同一根竿的会话）
-		//   附近没有可加入的竿               → PlaceRod（在脚下放自己的竿；已有部署竿会被服务器拒绝）
+		//   附近没有可加入的竿               → PlaceRod（取出本人库存实体竿并持握；场上合计上限两根）
 		// R 在会话期间同样可用（多人接力钓别人竿）：
 		//   任意阶段离开 → 只释放竿位和持续输入，会话、竿、钩与鱼都保持；
 		//   玩家可去另一根空竿抛线，之后再回到原竿继续；等口与搏斗阶段都允许其他玩家接力。
@@ -585,9 +766,11 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				DeliverResultFromAuthority(Fishing->OperateRod(Controller, OperateCommand));
 				return;
 			}
-			// 分支三：近旁没有可接管的竿 → 在脚下放一根自己的竿；装备 Revision 由服务器当前事实读取，不信任客户端
+			// 分支三：取出自己的竿并直接持握；分别冻结正式库存内容版本和装备选择版本。
+			const UCatInventoryComponent* OwnerInventory = Character ? Character->GetInventoryComponent() : nullptr;
 			FCatPlaceRodCommand PlaceCommand;
 			PlaceCommand.RequestId = Edge.RequestId;
+			PlaceCommand.ExpectedInventoryRevision = OwnerInventory ? OwnerInventory->GetInventoryRevision() : 0;
 			PlaceCommand.ExpectedEquipmentRevision = Character && Character->GetEquipmentComponent()
 				? Character->GetEquipmentComponent()->GetSnapshot().Revision : 0;
 			DeliverResultFromAuthority(Fishing->PlaceRod(Controller, PlaceCommand));
@@ -614,9 +797,79 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		}
 		FGuid SessionId;
 		FCatFishingSessionSnapshot Snapshot;
+		// 辅助位已在统一权限门禁拒绝；搏斗与力竭回收只接受当前主位的线杯输入。
+		if (ACatFishingRodActor* OperatedRod = Fishing->FindRodOperatedBy(Controller->PlayerState))
+		{
+			if (ACatFishingSession* OperatedSession = Fishing->FindActiveSessionByRod(OperatedRod))
+			{
+				const FCatFishingSessionSnapshot& OperatedSnapshot = OperatedSession->GetSnapshot();
+				if ((OperatedSnapshot.Phase == ECatFishingPhase::HookedFight
+					|| OperatedSnapshot.Phase == ECatFishingPhase::ExhaustedReel)
+					&& (CommandType == ECatFishingCommandType::RequestHook
+						|| CommandType == ECatFishingCommandType::PrimaryReleased
+						|| CommandType == ECatFishingCommandType::SlackPressed
+						|| CommandType == ECatFishingCommandType::SlackReleased))
+				{
+					Result.FishingSessionId = OperatedSnapshot.FishingSessionId;
+					if (CommandType == ECatFishingCommandType::RequestHook
+						|| CommandType == ECatFishingCommandType::PrimaryReleased)
+					{
+						Result.bCommitted = OperatedSession->SetReelingFromAuthority(
+							Controller->PlayerState, Edge.InputSequence,
+							CommandType == ECatFishingCommandType::RequestHook);
+					}
+					else
+					{
+						Result.bCommitted = OperatedSession->SetSlackingFromAuthority(
+							Controller->PlayerState, Edge.InputSequence,
+							CommandType == ECatFishingCommandType::SlackPressed,
+							CommandType == ECatFishingCommandType::SlackPressed ? &Edge.RodAimSample : nullptr, Edge.RequestId);
+					}
+					Result.Error = Result.bCommitted
+						? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;
+					DeliverResultFromAuthority(Result);
+					return;
+				}
+			}
+		}
 		// 按当前主操作位对应的鱼竿判断是否有会话；玩家留在其他鱼竿上的会话不会截获这里的输入。
 		if (!Fishing->TryGetActiveSessionForController(Controller, SessionId, Snapshot))
 		{
+			// 地面无人值守的上钩会话仍可就近切线：会话会再次校验竿主/最后持竿者和 250cm 距离。
+			// 普通 Cancel 只在可切线阶段优先走止损；等待期仍保留后面的收竿/拒绝语义。
+			if (CommandType == ECatFishingCommandType::CancelFishing
+				|| CommandType == ECatFishingCommandType::CutLine)
+			{
+				const ACatCharacter* Character = Cast<ACatCharacter>(Controller->GetPawn());
+				ACatFishingRodActor* UnattendedRod = Character
+					? Fishing->FindNearestUnattendedSessionRod(Character->GetActorLocation(), 250.0) : nullptr;
+				ACatFishingSession* UnattendedSession = UnattendedRod
+					? Fishing->FindActiveSessionByRod(UnattendedRod) : nullptr;
+				if (UnattendedSession)
+				{
+					const FCatFishingSessionSnapshot& Unattended = UnattendedSession->GetSnapshot();
+					const bool bCuttable = Unattended.Phase == ECatFishingPhase::HookedFight
+						|| Unattended.Phase == ECatFishingPhase::NearShore
+						|| Unattended.Phase == ECatFishingPhase::ExhaustedReel
+						|| Unattended.Phase == ECatFishingPhase::AutoHauling;
+					if (bCuttable)
+					{
+						FCatFishingSessionCommandContext Context;
+						Context.RequestId = Edge.RequestId;
+						Context.FishingSessionId = Unattended.FishingSessionId;
+						Context.ExpectedRevision = Unattended.Revision;
+						Context.CastAttemptId = Unattended.CastAttemptId;
+						DeliverResultFromAuthority(UnattendedSession->CutLineFromAuthority(Controller, Context));
+						return;
+					}
+				}
+				if (CommandType == ECatFishingCommandType::CutLine)
+				{
+					Result.Error = ECatFishingCommandError::SessionNotFound;
+					DeliverResultFromAuthority(Result);
+					return;
+				}
+			}
 			// 没有会话时：左键按下 = 开始瞄准（记录本次按住的关联 ID），左键松开 = 抛竿。
 			// 只有"按下时就无会话"的那次按住的松开才抛竿——提竿把会话打终止后的松开不能误触发重抛。
 			if (CommandType == ECatFishingCommandType::RequestHook)
@@ -636,17 +889,18 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				ServerAimingCorrelationId.Invalidate(); // 无论是否命中，本次松开后瞄准态都结束
 				if (bAimingRelease)
 				{
-					BeginCastFromViewOnAuthority(Controller, Edge.RequestId);
+					BeginCastFromViewOnAuthority(Controller, Edge);
 				}
 				return;
 			}
 			// X 无会话 = 收竿回包（规格：咬钩前收竿零损失）。正在操作则先离开竿位再收。
 			if (CommandType == ECatFishingCommandType::CancelFishing)
 			{
+				ACatFishingRodActor* Rod = Fishing->FindRodOperatedBy(Controller->PlayerState);
 				// 多人：正在操作别人的竿 → X 只是离开竿位（不能收走别人的竿）。
-				if (ACatFishingRodActor* OperatedRod = Fishing->FindRodOperatedBy(Controller->PlayerState))
+				if (Rod)
 				{
-					const FCatFishingRodPresentationState& OperatedState = OperatedRod->GetPresentationState();
+					const FCatFishingRodPresentationState& OperatedState = Rod->GetPresentationState();
 					if (OperatedState.OwnerPlayerState != Controller->PlayerState)
 					{
 						FCatLeaveRodCommand Leave;
@@ -657,7 +911,12 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 						return;
 					}
 				}
-				ACatFishingRodActor* Rod = Fishing->FindDeployedRod(Controller->PlayerState);
+				if (!Rod)
+				{
+					const ACatCharacter* Character = Cast<ACatCharacter>(Controller->GetPawn());
+					Rod = Character ? Fishing->FindNearestPackableRod(Controller->PlayerState,
+						Character->GetActorLocation(), 250.0) : nullptr;
+				}
 				if (!Rod)
 				{
 					// 压根没竿可收，直接返回 NoRod 错误
@@ -666,14 +925,22 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 					DeliverResultFromAuthority(Result);
 					return;
 				}
-				if (Rod->GetPresentationState().OperatorPlayerState == Controller->PlayerState)
+				if (Rod->GetOperatorSlotIndex(Controller->PlayerState) != INDEX_NONE)
 				{
 					// 收竿前必须先释放操作权，否则竿处于“被占用”状态无法直接打包
 					FCatLeaveRodCommand Leave;
 					Leave.Context.RequestId = FGuid::NewGuid();
 					Leave.Context.RodActorId = Rod->GetPresentationState().RodActorId;
 					Leave.Context.ExpectedRodActorRevision = Rod->GetPresentationState().RodActorRevision;
-					Fishing->LeaveRod(Controller, Leave);
+					const FCatFishingCommandResult Left = Fishing->LeaveRod(Controller, Leave);
+					if (!Left.bCommitted)
+					{
+						FCatFishingCommandResult Rejected = Left;
+						Rejected.RequestId = Edge.RequestId;
+						Rejected.CommandType = ECatFishingCommandType::PackRod;
+						DeliverResultFromAuthority(Rejected);
+						return;
+					}
 				}
 				// LeaveRod 可能已经推进了 Revision，这里重新读一次最新状态再打包，避免用过期 Revision 触发冲突
 				const FCatFishingRodPresentationState& Fresh = Rod->GetPresentationState();
@@ -699,7 +966,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 						|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel)
 					{
 						// 搏斗阶段：左键按下语义变成“开始收线”，InputSequence 用于时序仲裁
-						Result.bCommitted = Session->SetReelingFromAuthority(Edge.InputSequence, true);
+						Result.bCommitted = Session->SetReelingFromAuthority(
+							Controller->PlayerState, Edge.InputSequence, true);
 						Result.Error = Result.bCommitted
 							? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;
 						DeliverResultFromAuthority(Result);
@@ -719,7 +987,8 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 						|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel)
 					{
 						// 搏斗阶段松开左键 = 停止收线
-						Result.bCommitted = Session->SetReelingFromAuthority(Edge.InputSequence, false);
+						Result.bCommitted = Session->SetReelingFromAuthority(
+							Controller->PlayerState, Edge.InputSequence, false);
 						Result.Error = Result.bCommitted
 							? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;
 					}
@@ -735,12 +1004,15 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				if (CommandType == ECatFishingCommandType::SlackPressed
 					|| CommandType == ECatFishingCommandType::SlackReleased)
 				{
-					// 右键松开线杯只在搏斗阶段有意义；其他阶段视为无害 no-op，避免 UI 误报。
-					if (Snapshot.Phase == ECatFishingPhase::HookedFight)
+					// 回收沿用搏斗的线杯状态；跨越鱼力竭阶段的右键松开仍必须清除放线意图。
+					if (Snapshot.Phase == ECatFishingPhase::HookedFight
+						|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel)
 					{
 						// 按下/松开都转成同一个权威写口，用命令类型本身当作“是否按下”的布尔值
-						Result.bCommitted = Session->SetSlackingFromAuthority(Edge.InputSequence,
-							CommandType == ECatFishingCommandType::SlackPressed);
+						Result.bCommitted = Session->SetSlackingFromAuthority(Controller->PlayerState,
+							Edge.InputSequence,
+							CommandType == ECatFishingCommandType::SlackPressed,
+							CommandType == ECatFishingCommandType::SlackPressed ? &Edge.RodAimSample : nullptr, Edge.RequestId);
 						Result.Error = Result.bCommitted
 							? ECatFishingCommandError::None : ECatFishingCommandError::InvalidPhase;
 					}
@@ -752,10 +1024,27 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 					DeliverResultFromAuthority(Result);
 					return;
 				}
-				if (CommandType == ECatFishingCommandType::CancelFishing)
+				if (CommandType == ECatFishingCommandType::CancelFishing
+					|| CommandType == ECatFishingCommandType::CutLine)
 				{
-					// 会话内取消（提竿失败/主动放弃等）交给会话自身的取消状态机
-					DeliverResultFromAuthority(Session->CancelFromAuthority(Edge.RequestId));
+					const bool bCuttablePhase = Snapshot.Phase == ECatFishingPhase::HookedFight
+						|| Snapshot.Phase == ECatFishingPhase::NearShore
+						|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel
+						|| Snapshot.Phase == ECatFishingPhase::AutoHauling;
+					if (CommandType == ECatFishingCommandType::CutLine || bCuttablePhase)
+					{
+						FCatFishingSessionCommandContext Context;
+						Context.RequestId = Edge.RequestId;
+						Context.FishingSessionId = SessionId;
+						Context.ExpectedRevision = Snapshot.Revision;
+						Context.CastAttemptId = Snapshot.CastAttemptId;
+						DeliverResultFromAuthority(Session->CutLineFromAuthority(Controller, Context));
+					}
+					else
+					{
+						// 上钩前仍保留普通取消：收回未形成鱼战的会话，不伪装成切线或丢鱼。
+						DeliverResultFromAuthority(Session->CancelFromAuthority(Edge.RequestId));
+					}
 					return;
 				}
 			}
@@ -769,8 +1058,9 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 
 // 服务器抛竿流程：要求本人处于某根竿的主操作位（鱼竿可以属于别人）；视线射线∩水面得到候选落点；
 // RodActorId/Revision、Equipment Revision、WaterRegion Handle 全部由服务器事实填充，客户端不传任何载荷。
-void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController* Controller, const FGuid& RequestId)
+void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController* Controller, const FCatFishingInputEdge& Edge)
 {
+	const FGuid RequestId = Edge.RequestId;
 	FCatBeginCastResult Result;
 	Result.Command.CommandType = ECatFishingCommandType::BeginCast;
 	Result.Command.RequestId = RequestId;
@@ -795,9 +1085,18 @@ void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController
 	}
 	FCatWaterRegionHandle Region;
 	FVector Landing;
-	// 服务器用自己权威的视点位置/朝向重新解一次瞄准射线与水面的交点，完全不采信客户端上报的落点
-	if (!UCatFishingAimLibrary::ResolveCastAimPoint(this, Character->GetPawnViewLocation(),
-		Controller->GetControlRotation(), Region, Landing))
+	UE_LOG(LogCatFishing, Log, TEXT("Event=cast_aim_request World=%s Request=%s HasViewRay=%d Origin=%s Direction=%s %s"),
+		*GetNameSafe(GetWorld()), *RequestId.ToString(EGuidFormats::DigitsWithHyphens), Edge.bHasCastViewRay,
+		*Edge.CastViewOrigin.ToString(), *Edge.CastViewDirection.ToString(), *CatLogContext::BuildControllerFields(Controller));
+	if (!Edge.bHasCastViewRay || !UCatFishingAimLibrary::IsCastViewRayValid(Edge.CastViewOrigin,
+		Edge.CastViewDirection, Character->GetPawnViewLocation(), Controller->GetControlRotation().Vector()))
+	{
+		Result.Command.Error = ECatFishingCommandError::InvalidPayload;
+		DeliverBeginCastResultFromAuthority(Result);
+		return;
+	}
+	if (!UCatFishingAimLibrary::ResolveCastAimPoint(this, Edge.CastViewOrigin,
+		Edge.CastViewDirection.Rotation(), Region, Landing))
 	{
 		Result.Command.Error = ECatFishingCommandError::InvalidWaterTarget;
 		DeliverBeginCastResultFromAuthority(Result);
@@ -815,46 +1114,64 @@ void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController
 	DeliverBeginCastResultFromAuthority(Fishing->BeginCast(Controller, Command));
 }
 
-// 服务器打窝流程：按按住时长算蓄力 → 与客户端预览同一套弹道预测得到落点 → 选一份可用窝料 → 交给 PlaceChum 做射程/夹角/视线/库存/水域校验。
+// 服务器打窝流程：按按住时长算蓄力 → 与客户端预览同一套弹道预测得到落点 → 优先从正式库存选一份可用窝料 → 交给 PlaceChum 做射程、夹角、视线、水域和正式库存提交。
 void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerController* Controller, const FGuid& RequestId,
 	const double HeldSeconds)
 {
 	FCatPlaceChumResult Result;
 	Result.RequestId = RequestId;
 	ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
-	UCatEquipmentComponent* Equipment = Character ? Character->GetEquipmentComponent() : nullptr;
+	const UCatInventoryComponent* OwnerInventory = Character ? Character->GetInventoryComponent() : nullptr;
 	UCatChumPlacementService* Service = GetWorld() ? GetWorld()->GetSubsystem<UCatChumPlacementService>() : nullptr;
-	if (!Character || !Equipment || !Service)
+	if (!Character || !OwnerInventory || !Service)
 	{
 		Result.Error = ECatChumFieldError::DependencyUnavailable;
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
 	}
-	// 选窝料：优先项目 starter 配置的种类，否则库存格里第一份数量>0 的 Chum 类物品。
-	const FCatEquipmentLoadoutSnapshot& Loadout = Equipment->GetSnapshot();
-	FName ChumId = GetDefault<UCatEquipmentSettings>()->StarterChumDefinitionId;
-	// 小工具 lambda：判断某个物品 ID 在当前库存格数组里是否还有存量。
-	auto HasStock = [&Loadout](const FName Id)
+	// 选窝料实例流程：只在正式库存条目里先找 starter 指定类型，再找任意足量 Chum；命令层只携带 PlaceChum 复核所需的定义、实例和库存版本。
+	const int32 ChumQuantity = FMath::Max(1, GetDefault<UCatFishingSettings>()->ChumThrowQuantity);
+	const FName PreferredChumDefinitionId = GetDefault<UCatEquipmentSettings>()->StarterChumDefinitionId;
+	FName SelectedChumDefinitionId = NAME_None;
+	FGuid SelectedChumItemInstanceId;
+	bool bHasChumSlot = false;
+	const auto TrySelectFormalChumSlot = [&](const UCatInventoryComponent& OwnerInventory,
+		const FName RequiredDefinitionId)
 	{
-		for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
+		// 正式库存自动选料：按槽位顺序读取实例和数量，避免 Equipment 旧投影决定本次要扣哪一堆窝料。
+		for (int32 SlotIndex = 0; SlotIndex < OwnerInventory.GetInventorySlotCount(); ++SlotIndex)
 		{
-			if (Slot.DefinitionId == Id && Slot.Quantity > 0) return true;
+			const FCatInventoryEntry* Entry = OwnerInventory.GetInventoryEntryAtSlot(SlotIndex);
+			const UCatInventoryItemInstance* Instance = Entry != nullptr ? Entry->Instance : nullptr;
+			UCatEquipmentDefinition* Definition =
+				Instance != nullptr ? Cast<UCatEquipmentDefinition>(Instance->GetItemDefinition()) : nullptr;
+			if (Instance != nullptr
+				&& Entry->StackCount >= ChumQuantity
+				&& (RequiredDefinitionId.IsNone() || Instance->GetItemDefinitionId() == RequiredDefinitionId)
+				&& Definition != nullptr
+				&& Definition->IsRuntimeDefinitionReady()
+				&& Definition->Kind == ECatEquipmentKind::Chum
+				&& Definition->ConsumesInventoryQuantityOnUse())
+			{
+				SelectedChumDefinitionId = Instance->GetItemDefinitionId();
+				SelectedChumItemInstanceId = Instance->GetItemInstanceId();
+				bHasChumSlot = true;
+				return true;
+			}
 		}
 		return false;
 	};
-	if (ChumId.IsNone() || !HasStock(ChumId))
+	if (!PreferredChumDefinitionId.IsNone())
 	{
-		// 默认窝料未配置，或已配置但库存里已经用光了：退化成遍历库存格找第一份 Kind==Chum 的数量型物品。
-		ChumId = NAME_None;
-		for (const FCatRunInventorySlot& Slot : Loadout.InventorySlots)
-		{
-			const UCatEquipmentDefinition* Def = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(Slot.DefinitionId);
-			if (Def && Def->Kind == ECatEquipmentKind::Chum && Def->bRunConsumable && Slot.Quantity > 0) { ChumId = Slot.DefinitionId; break; }
-		}
+		TrySelectFormalChumSlot(*OwnerInventory, PreferredChumDefinitionId);
 	}
-	if (ChumId.IsNone())
+	if (!bHasChumSlot)
 	{
-		// 库存里一份可用窝料都没有，直接拒绝，不进入弹道计算。
+		TrySelectFormalChumSlot(*OwnerInventory, NAME_None);
+	}
+	if (!bHasChumSlot)
+	{
+		// 库存里没有一份能完整支付本次投放数量的窝料实例，直接拒绝，不进入弹道计算。
 		Result.Error = ECatChumFieldError::EquipmentUnavailable;
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
@@ -873,16 +1190,19 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
 	}
-	// 组装真正的打窝命令，交给 ChumPlacementService 做射程/夹角/视线/库存/水域等完整校验并落地
+	// 组装真正的打窝命令：ExpectedInventoryRevision 是正式并发依据；旧 ExpectedEquipmentRevision 只镜像同一个值，避免迁移期旧字段被误读成另一套装备事实。
 	FCatPlaceChumCommand Command;
 	Command.RequestId = RequestId;
 	Command.ExpectedWaterRegionHandle = Region;
-	Command.ExpectedEquipmentRevision = Loadout.Revision;
-	Command.ChumDefinitionId = ChumId;
-	Command.Quantity = FMath::Max(1, GetDefault<UCatFishingSettings>()->ChumThrowQuantity);
+	Command.ExpectedInventoryRevision = OwnerInventory->GetInventoryRevision();
+	Command.ExpectedEquipmentRevision = Command.ExpectedInventoryRevision;
+	Command.ChumItemInstanceId = SelectedChumItemInstanceId;
+	Command.ChumDefinitionId = SelectedChumDefinitionId;
+	Command.Quantity = ChumQuantity;
 	Command.ClientCandidateWorldPoint = Landing;
-	UE_LOG(LogCatFishing, Log, TEXT("Event=chum_throw Held=%.2f Alpha=%.2f Landing=%s Chum=%s"),
-		HeldSeconds, Alpha, *Landing.ToString(), *ChumId.ToString());
+	UE_LOG(LogCatFishing, Log, TEXT("Event=chum_throw Held=%.2f Alpha=%.2f Landing=%s Chum=%s ChumItem=%s"),
+		HeldSeconds, Alpha, *Landing.ToString(), *SelectedChumDefinitionId.ToString(),
+		*SelectedChumItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
 	DeliverPlaceChumResultFromAuthority(Service->PlaceChum(Controller, Command));
 }
 
@@ -1087,6 +1407,25 @@ void UCatFishingCommandComponent::ReceiveResultLocally(const FCatFishingCommandR
 		ResultsByRequestId.Remove(EvictedRequestId);
 	}
 
+	if (Result.CommandType == ECatFishingCommandType::SlackPressed || Result.CommandType == ECatFishingCommandType::SlackReleased)
+	{
+		// 只确认按键结果；迟到回执不能再重设转向，更不能抹掉按下后的鼠标输入。
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_slack_aim_result_received RequestId=%s SessionId=%s Command=%s Committed=%s Error=%s %s"),
+			*Result.RequestId.ToString(), *Result.FishingSessionId.ToString(), *UEnum::GetValueAsString(Result.CommandType),
+			Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
+			*BuildRodAimControllerFields(Cast<APlayerController>(GetOwner())));
+	}
+	if (Result.CommandType == ECatFishingCommandType::PlaceRod
+		|| Result.CommandType == ECatFishingCommandType::OperateRod
+		|| Result.CommandType == ECatFishingCommandType::LeaveRod)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_rod_result_received RequestId=%s RodActorId=%s RodActorRevision=%lld Command=%s Committed=%s Error=%s %s"),
+			*Result.RequestId.ToString(), *Result.RodActorId.ToString(), Result.RodActorRevision,
+			*UEnum::GetValueAsString(Result.CommandType), Result.bCommitted ? TEXT("true") : TEXT("false"),
+			*UEnum::GetValueAsString(Result.Error), *BuildRodAimControllerFields(Cast<APlayerController>(GetOwner())));
+	}
 	// 通知所有订阅者（通常是 GA/UI）这条命令有了终态结果
 	OnResultReceived.Broadcast(Result);
 }
@@ -1104,12 +1443,13 @@ void UCatFishingCommandComponent::ReceivePlaceChumResultLocally(const FCatPlaceC
 		PlaceChumResultOrder.RemoveAt(0);
 		PlaceChumResultsByRequestId.Remove(Evicted);
 	}
-	// 同时投影出一份“通用命令结果”，让只关心 bCommitted/Error 的通用监听者（不需要打窝专属字段）也能收到
+	// 同时投影出一份“通用命令结果”；新字段写正式 InventoryRevision，旧 EquipmentRevision 继续镜像给迁移期监听者。
 	FCatFishingCommandResult Common;
 	Common.CommandType = ECatFishingCommandType::PlaceChum;
 	Common.bCommitted = Result.bCommitted;
 	Common.RequestId = Result.RequestId;
-	Common.EquipmentRevision = Result.EquipmentRevision;
+	Common.InventoryRevision = Result.GetInventoryRevision();
+	Common.EquipmentRevision = Common.InventoryRevision;
 	Common.Revision = Result.ChumFieldSetRevision;
 	// 打窝子系统用自己的一套错误码，这里逐一映射到通用命令错误码，语义不对齐的兜底为 DependencyUnavailable
 	switch (Result.Error)
@@ -1122,6 +1462,7 @@ void UCatFishingCommandComponent::ReceivePlaceChumResultLocally(const FCatPlaceC
 	case ECatChumFieldError::InvalidWaterTarget: Common.Error = ECatFishingCommandError::InvalidWaterTarget; break;
 	case ECatChumFieldError::StaleGeometry: Common.Error = ECatFishingCommandError::RevisionConflict; break;
 	case ECatChumFieldError::PlacementOutOfRange: Common.Error = ECatFishingCommandError::CastOutOfRange; break;
+	case ECatChumFieldError::InventoryRevisionConflict: Common.Error = ECatFishingCommandError::RevisionConflict; break;
 	case ECatChumFieldError::EquipmentRevisionConflict: Common.Error = ECatFishingCommandError::EquipmentRevisionConflict; break;
 	case ECatChumFieldError::AlreadyResolved: Common.Error = ECatFishingCommandError::AlreadyResolved; break;
 	default: Common.Error = ECatFishingCommandError::DependencyUnavailable; break;
@@ -1131,6 +1472,10 @@ void UCatFishingCommandComponent::ReceivePlaceChumResultLocally(const FCatPlaceC
 
 void UCatFishingCommandComponent::ReceiveBeginCastResultLocally(const FCatBeginCastResult& Result)
 {
+	UE_LOG(LogCatFishing, Log, TEXT("Event=begin_cast_received World=%s Request=%s Session=%s CastAttempt=%s Committed=%d Error=%s Landing=%s %s"),
+		*GetNameSafe(GetWorld()), *Result.Command.RequestId.ToString(EGuidFormats::DigitsWithHyphens), *Result.Command.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Result.Command.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), Result.Command.bCommitted, *UEnum::GetValueAsString(Result.Command.Error),
+		*Result.ServerCorrectedLandingWorldPoint.ToString(), *CatLogContext::BuildControllerFields(Cast<AController>(GetOwner())));
 	const FGuid RequestId = Result.Command.RequestId;
 	if (!IsSupportedOwner() || !RequestId.IsValid() || BeginCastResultsByRequestId.Contains(RequestId)) return;
 	// 专用的抛竿结果缓存（携带服务器修正后的落点等抛竿专属字段），同样按上限淘汰最老记录

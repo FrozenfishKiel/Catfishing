@@ -13,6 +13,7 @@ $DotNet = Join-Path $EngineRoot "Engine\Binaries\ThirdParty\DotNet\10.0\win-x64\
 $UnrealBuildTool = Join-Path $EngineRoot "Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.dll"
 $EvidenceRoot = Join-Path $ProjectRoot "Saved\Automation\UIReach"
 $RuntimeProbe = Join-Path $ProjectRoot "Scripts\verify_ui_reach_runtime.py"
+$CooperativeHUDMigration = Join-Path $ProjectRoot "Scripts\migrate_cooperative_fishing_hud.py"
 
 function Assert-ToolFile {
     <#
@@ -116,18 +117,19 @@ function Invoke-UIReachStaticCheck {
     Assert-TextPattern "NativeOnDragDetected" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "slot drag override"
     Assert-TextPattern "NativeOnDrop" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "slot drop override"
     Assert-TextPattern "UCatInventoryDragDropOperation" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "slot drag payload is stable DTO"
-    Assert-TextPattern "OnSlotDropRequested" "Source/Catfishing/UI/Inventory/CatInventoryWidget.h" "Inventory forwards slot drop intent"
+    Assert-TextPattern "OnSlotDropRequested.AddUObject" "Source/Catfishing/UI/Inventory/CatInventoryWidget.cpp" "Inventory subscribes to slot drop intent"
+    Assert-TextPattern "RequestInventorySlotDropFromWidget" "Source/Catfishing/UI/Inventory/CatInventoryWidget.cpp" "Inventory forwards slot drop intent to its PageController"
     Assert-TextPattern "MoveObjectBetweenContainers" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory has real slot-based object move action"
     Assert-TextPattern "MoveInventoryItem" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory has real slot-based personal inventory move action"
     Assert-TextPattern "InventoryObject" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory projects personal inventory slots as first-class slots"
-    Assert-TextPattern "InventorySlots" "Source/Catfishing/UI/Inventory/CatInventoryModel.cpp" "Inventory builds visible slots from the unified inventory array"
-    Assert-TextPattern "MakeInventorySlotView" "Source/Catfishing/UI/Inventory/CatInventoryModel.cpp" "Inventory builds visible personal inventory slot views from Equipment"
-    Assert-TextPattern "ServerMoveInventorySlot" "Source/Catfishing/Framework/Game/CatGameplayTypes.h" "personal inventory slot move reaches PlayerController RPC"
+    Assert-TextPattern "GetInventoryEntries" "Source/Catfishing/UI/Inventory/CatInventoryModel.cpp" "Inventory reads authoritative InventoryComponent entries"
+    Assert-TextPattern "MakeFormalInventorySlotView" "Source/Catfishing/UI/Inventory/CatInventoryModel.cpp" "Inventory builds personal and camp views from formal inventory entries"
+    Assert-TextPattern "ServerMoveInventorySlot" "Source/Catfishing/Framework/Game/CatfishingPlayerController.h" "personal inventory slot move reaches PlayerController RPC"
     Assert-TextPattern "InventoryObject" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.cpp" "Inventory drag/drop supports personal inventory slots separately from container slots"
     Assert-TextPattern "Containers" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory projects a list of containers instead of a single fish guard"
     Assert-TextPattern "SetExternalContainerContexts" "Source/Catfishing/UI/Inventory/CatInventoryModel.h" "Inventory accepts extensible external container context"
-    Assert-TextPattern "SourceContainerSlotIndex" "Source/Catfishing/Framework/Game/CatGameplayTypes.h" "slot move RPC carries source container slot"
-    Assert-TextPattern "ServerTransferObjectBetweenContainers" "Source/Catfishing/Framework/Game/CatGameplayTypes.h" "slot move reaches PlayerController RPC"
+    Assert-TextPattern "SourceContainerSlotIndex" "Source/Catfishing/Framework/Game/CatfishingPlayerController.h" "slot move RPC carries source container slot"
+    Assert-TextPattern "ServerTransferObjectBetweenContainers" "Source/Catfishing/Framework/Game/CatfishingPlayerController.h" "slot move reaches PlayerController RPC"
     Assert-TextPattern "TransferContainedObject" "Source/Catfishing/Items/CatItemsService.cpp" "slot move uses Items object transfer seam"
     Assert-NoToolFile (Join-Path $ProjectRoot "Source\Catfishing\UI\CatLakeReachWidget.h") "removed LakeReach widget header"
     Assert-NoToolFile (Join-Path $ProjectRoot "Source\Catfishing\UI\CatLakeReachWidget.cpp") "removed LakeReach widget source"
@@ -140,9 +142,10 @@ function Invoke-UIReachStaticCheck {
     Assert-NoTextPattern "CatLakeReach|WBP_CatLakeReach|LakeReachWidgetClass|bEnableLakeReachView|LoadLakeReach|ToggleLakeMenu|IsLakeMenuOpen|AttachLakePawn|DetachLakePawn" "Source/Catfishing" "source must not keep the removed one-page LakeReach UI entry"
     Assert-NoTextPattern "TransferSelectedFishToTank" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory must not expose old one-off fish tank action"
     Assert-NoTextPattern "TransferFishToTankButton" "Source/Catfishing/UI/Inventory/CatInventoryWidget.h" "Inventory must not keep old one-off fish tank button"
-    Assert-NoTextPattern "TransferFishToTankButton" "Source/Catfishing/UI/Tests/CatUIModuleWidgetAssetTests.cpp" "split Inventory WBP create must not regenerate old one-off fish tank button"
-    Assert-NoTextPattern "ServerTransferFishToTank" "Source/Catfishing/Framework/Game/CatGameplayTypes.h" "PlayerController must not expose old one-off fish tank RPC"
-    Assert-NoTextPattern "ServerTransferFishBetweenContainers" "Source/Catfishing/Framework/Game/CatGameplayTypes.h" "PlayerController cross-container RPC must be object-based, not fish-only"
+    Assert-NoToolFile (Join-Path $ProjectRoot "Source\Catfishing\UI\Tests\CatUIModuleWidgetAssetTests.cpp") "removed monolithic WBP generator"
+    Assert-NoTextPattern "TransferFishToTankButton" "Scripts/migrate_cooperative_fishing_hud.py" "formal HUD migration must not regenerate the removed fish tank button"
+    Assert-NoTextPattern "ServerTransferFishToTank" "Source/Catfishing/Framework/Game/CatfishingPlayerController.h" "PlayerController must not expose old one-off fish tank RPC"
+    Assert-NoTextPattern "ServerTransferFishBetweenContainers" "Source/Catfishing/Framework/Game/CatfishingPlayerController.h" "PlayerController cross-container RPC must be object-based, not fish-only"
     Assert-NoTextPattern "UButton" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "Inventory slot must not be a Button"
     Assert-TextPattern "UCatShopWidget" "Source/Catfishing/UI/Shop/CatShopWidget.h" "Shop Widget class"
     Assert-TextPattern "UCatShopModel" "Source/Catfishing/UI/Shop/CatShopModel.h" "Shop Model class"
@@ -151,8 +154,10 @@ function Invoke-UIReachStaticCheck {
     Assert-TextPattern "ACatShopKioskActor" "Source/Catfishing/ShopEconomy/CatShopKioskActor.h" "placeable shop interaction actor"
     Assert-TextPattern "CreateWidget<UCatShopWidget>" "Source/Catfishing/UI/Shop/CatShopInteractionComponent.cpp" "Shop Widget created by interaction object"
     Assert-NoTextPattern "CreateWidget<UCatShopWidget>" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "LocalPlayer must not precreate Shop"
-    Assert-TextPattern "ServerSubmitShopPurchase" "Source/Catfishing/UI/Shop/CatShopPageController.cpp" "shop purchase reaches PlayerController RPC"
-    Assert-TextPattern "ServerClaimFreeShopEntry" "Source/Catfishing/UI/Shop/CatShopPageController.cpp" "shop free claim reaches PlayerController RPC"
+    Assert-TextPattern "ServerSubmitShopCartAtKiosk" "Source/Catfishing/UI/Shop/CatShopPageController.cpp" "paid and zero-price cart intents reach the same PlayerController RPC"
+    Assert-TextPattern "SubmitCartFromKiosk" "Source/Catfishing/Framework/Game/CatfishingPlayerController.cpp" "shop RPC forwards to the authoritative cart trade controller"
+    Assert-TextPattern "PurchaseCatalogCart" "Source/Catfishing/ShopEconomy/Trading/CatShopTradeController.cpp" "cart trade reaches the authoritative economy settlement"
+    Assert-TextPattern "ResolvedCart.TotalPrice > 0" "Source/Catfishing/ShopEconomy/CatShopEconomyService.cpp" "zero-price cart settlement does not fabricate a wallet charge"
     Assert-TextPattern "UCatInteractionPromptWidget" "Source/Catfishing/UI/Interaction/CatInteractionPromptWidget.h" "Interaction prompt Widget class"
     Assert-TextPattern "UCatInteractable" "Source/Catfishing/Interaction/CatInteractable.h" "generic actor interaction interface"
     Assert-TextPattern "public ICatInteractable" "Source/Catfishing/ShopEconomy/CatShopKioskActor.h" "shop actor implements generic interaction interface"
@@ -172,14 +177,16 @@ function Invoke-UIReachStaticCheck {
     Assert-TextPattern "ResolveInteractionConfirmKeyName" "Source/Catfishing/UI/CatUISettings.cpp" "interaction key resolved from existing IMC"
     Assert-TextPattern "InteractWithFocusedTarget" "Source/Catfishing/UI/Interaction/CatInteractionPageController.cpp" "confirm key reaches focused target"
     Assert-NoTextPattern "BindAction" "Source/Catfishing/UI/Interaction/CatInteractionPageController.cpp" "interaction prompt controller must not bind E a second time"
-    Assert-TextPattern "Execute_GetInteractionRadius" "Source/Catfishing/Framework/Game/CatGameplayTypes.cpp" "server reach gate reuses actor interaction radius when available"
+    Assert-TextPattern "TransferReachableObject" "Source/Catfishing/Framework/Game/CatfishingPlayerController.cpp" "container RPC enters the authoritative container coordinator"
+    Assert-TextPattern "CatContainerAccessRules::" "Source/Catfishing/Items/CatContainerCommandCoordinator.cpp" "container coordinator applies the shared server reach rules"
+    Assert-TextPattern "Execute_GetInteractionRadius" "Source/Catfishing/Items/CatContainerAccessRules.cpp" "server reach gate reuses actor interaction radius when available"
     Assert-TextPattern "UCatCollectionWidget" "Source/Catfishing/UI/Collection/CatCollectionWidget.h" "Collection Widget class"
     Assert-TextPattern "UCatCollectionModel" "Source/Catfishing/UI/Collection/CatCollectionModel.h" "Collection Model class"
     Assert-TextPattern "LoadInventoryToggleAction" "Source/Catfishing/UI/CatUISettings.cpp" "Inventory input action loader"
     Assert-TextPattern "LoadGameplayInputMappingContext" "Source/Catfishing/UI/CatUISettings.cpp" "existing InputContext loader"
     Assert-TextPattern "ResolveInventoryToggleKeyName" "Source/Catfishing/UI/CatUISettings.cpp" "inventory key resolved from existing IMC"
     Assert-NoTextPattern "IMC_LakeMenu" "Source/Catfishing/UI/CatUISettings.cpp" "UI Settings must use existing InputContext instead of a duplicate menu IMC"
-    Assert-NoTextPattern "IMC_LakeMenu" "Source/Catfishing/UI/Tests/CatUIModuleWidgetAssetTests.cpp" "WBP create must not generate a duplicate menu IMC"
+    Assert-NoTextPattern "IMC_LakeMenu" "Scripts/migrate_cooperative_fishing_hud.py" "formal HUD migration must not generate a duplicate menu IMC"
     Assert-NoTextPattern "NewObject<UInputAction>" "Source/Catfishing/UI/Inventory/CatInventoryPageController.cpp" "Inventory PageController must not create runtime InputAction"
     Assert-NoTextPattern "MapKey\(" "Source/Catfishing/UI/Inventory/CatInventoryPageController.cpp" "Inventory PageController must not hard-code key mappings"
     Assert-TextPattern "CreateWidget<UCatHUDWidget>" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "LocalPlayer creates HUD only"
@@ -188,9 +195,9 @@ function Invoke-UIReachStaticCheck {
     Assert-TextPattern "ShopPrecreated=false" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "LocalPlayer explicitly does not precreate shop"
     Assert-TextPattern "FCatContainerSnapshot" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory view comes from container snapshot"
     Assert-TextPattern "Capacity" "Source/Catfishing/Items/CatItemTypes.h" "container snapshot exposes backend capacity"
-    Assert-TextPattern "Catfishing.Editor.UIModules.CreateFormalWBPAssets" "Source/Catfishing/UI/Tests/CatUIModuleWidgetAssetTests.cpp" "split WBP asset generation automation"
-    Assert-TextPattern "CREATE_UI_MODULE_WBPS_PASS" "Source/Catfishing/UI/Tests/CatUIModuleWidgetAssetTests.cpp" "split WBP asset pass marker"
-    Assert-TextPattern "IA_Interact" "Source/Catfishing/UI/Tests/CatUIModuleWidgetAssetTests.cpp" "interaction input action generated into existing IMC"
+    Assert-TextPattern "COOPERATIVE_HUD_MIGRATION_PASS" "Scripts/migrate_cooperative_fishing_hud.py" "formal HUD migration entry"
+    Assert-TextPattern "FormalWidgetRendersCooperativeStamina" "Source/Catfishing/UI/Tests/CatHUDCooperativeFishingTests.cpp" "formal HUD runtime consumer test"
+    Assert-TextPattern "/Game/Input/InputAction/IA_Interact.IA_Interact" "Source/Catfishing/UI/CatUISettings.cpp" "interaction input resolves the existing formal InputAction"
 }
 
 function Invoke-UIReachBuild {
@@ -217,35 +224,27 @@ function Invoke-UIReachBuild {
 
 function Invoke-UIReachWBPCreate {
     <#
-    创建或刷新拆分后的正式 UI WBP 资产。
-    该模式只运行 UI 模块的 Editor 资产自动化，并要求报告证明 HUD、背包、鱼护库存、格子、商店、交互提示和图鉴七个 WBP 保存成功。
+    在既有正式 HUD 内幂等补齐同竿总体力控件。
+    原来的整套 WBP 生成 Automation 已删除；此入口保留现有正式资产布局，不再调用不存在的生成器。
     #>
     Assert-ToolFile $ProjectFile "Catfishing project"
     Assert-ToolFile $Editor "Unreal Editor commandlet"
+    Assert-ToolFile $CooperativeHUDMigration "cooperative formal HUD migration"
     $RunRoot = Join-Path $EvidenceRoot ("CreateWBP-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
-    $ReportRoot = Join-Path $RunRoot "Report"
     $LogFile = Join-Path $RunRoot "CreateWBP.log"
     New-Item -ItemType Directory -Path $RunRoot -Force | Out-Null
     & $Editor $ProjectFile -unattended -nop4 -nosplash -nullrhi -DDC-ForceMemoryCache `
-        "-ExecCmds=Automation RunTests Catfishing.Editor.UIModules.CreateFormalWBPAssets;Quit" `
-        "-TestExit=Automation Test Queue Empty" `
-        "-ReportExportPath=$ReportRoot" `
+        "-ExecutePythonScript=$CooperativeHUDMigration" `
         "-abslog=$LogFile"
     if ($LASTEXITCODE -ne 0) {
-        throw ("UIReach WBP create automation failed with exit code {0}" -f $LASTEXITCODE)
+        throw ("UIReach HUD migration failed with exit code {0}" -f $LASTEXITCODE)
     }
-    $IndexFile = Join-Path $ReportRoot "index.json"
-    if (-not (Test-Path -LiteralPath $IndexFile) -or -not (Test-Path -LiteralPath $LogFile)) {
-        throw "UIReach WBP create did not produce a fresh report and log"
+    if (-not (Test-Path -LiteralPath $LogFile)) {
+        throw "UIReach HUD migration did not produce a fresh log"
     }
-    Assert-AutomationReport -IndexFile $IndexFile -LogFile $LogFile -ExpectedTests @(
-        "Catfishing.Editor.UIModules.CreateFormalWBPAssets"
-    )
-    # 拆分模块和关键控件名是生成脚本与正式 WBP 之间的最小握手信号。
-    # 这里不检查美术细节，只防止仍生成旧总入口或漏掉背包格子、鱼护箱子页、商店和提示模块。
     $LogText = Get-Content -LiteralPath $LogFile -Raw
-    if ($LogText -notmatch "CREATE_UI_MODULE_WBPS_PASS" -or $LogText -notmatch "InventorySlotRoot=UserWidgetNotButton" -or $LogText -notmatch "SlotContainer=InventorySlotWrapBox" -or $LogText -notmatch "FishGuardInventory=/Game/UI/Inventory/WBP_CatFishGuardInventory" -or $LogText -notmatch "FishGuardPlayerSlotContainer=InventoryObjectSlotWrapBox" -or $LogText -notmatch "FishGuardContainerSlotContainer=ExternalContainerSlotWrapBox" -or $LogText -notmatch "InventoryEquipmentText=EquipmentTextBlock" -or $LogText -notmatch "InventoryItemsText=InventoryItemsTextBlock" -or $LogText -notmatch "ShopOwner=InteractionObject" -or $LogText -notmatch "ShopKiosk=/Game/ShopEconomy/BP_CatShopKiosk" -or $LogText -notmatch "InteractAction=/Game/Input/InputAction/IA_Interact" -or $LogText -notmatch "InteractContext=/Game/Input/InputContext/IMC_InputContext" -or $LogText -notmatch "InteractKey=E" -or $LogText -match "EnsureFailed|LogPython: Error") {
-        throw ("UIReach WBP create log is not green: {0}" -f $LogFile)
+    if ($LogText -notmatch "COOPERATIVE_HUD_MIGRATION_PASS" -or $LogText -notmatch "TotalStaminaText=CatStaminaTextBlock" -or $LogText -notmatch "TotalStaminaBar=CatStaminaProgressBar" -or $LogText -match "EnsureFailed|LogPython: Error") {
+        throw ("UIReach formal HUD migration log is not green: {0}" -f $LogFile)
     }
 }
 

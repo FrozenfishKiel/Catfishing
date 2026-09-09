@@ -2,28 +2,25 @@
 
 #include "CoreMinimal.h"
 #include "Components/StateTreeComponentSchema.h"
-#include "Fishing/CatFishingTypes.h"
+#include "Fishing/Behavior/CatFishBehaviorTypes.h"
+#include "StateTreeConditionBase.h"
 #include "StateTreeTaskBase.h"
 #include "CatFishBehaviorStateTree.generated.h"
 
-/** 每个鱼行为状态自己的运行数据；Duration 由服务器性格随机流在 EnterState 时冻结。 */
+/** 叶子只配置要执行的策略。执行时间和连续出力由 Runner 固定步唯一持有。 */
 USTRUCT()
 struct FCatFishBehaviorStateTaskInstanceData
 {
 	GENERATED_BODY()
 
-	/** 资产状态要发布给固定步 Runner 的高层意图。 */
+	/** StateTree 资产叶子提交的策略，不能由动画意图反推。 */
 	UPROPERTY(EditAnywhere, Category="Parameter")
-	ECatFishMotionIntent MotionIntent = ECatFishMotionIntent::None;
-
-	/** 本次状态剩余秒数；不在资产中配置、不复制。 */
-	UPROPERTY(Transient)
-	double RemainingSeconds = 0.0;
+	ECatFishBehavior Behavior = ECatFishBehavior::None;
 };
 
 /**
- * ST_FishFight 的薄 Task：进入时让 Runner 从性格 DA 抽一次持续时间，Tick 只等待该时长结束。
- * 它不计算位置、鱼线、力量或体力，状态完成后由资产转移到下一状态。
+ * ST_FishFight 的薄 Task：进入时提交一次策略，之后保持 Running。
+ * 无 Task Tick 或第二份计时。资产 OnTick 条件读取 Runner 固定步事实选择真实转移边。
  */
 USTRUCT(meta=(DisplayName="Cat Fish Run Behavior State", Category="Catfishing|Fishing|Fish Behavior"))
 struct CATFISHING_API FCatFishBehaviorStateTask : public FStateTreeTaskCommonBase
@@ -35,7 +32,26 @@ struct CATFISHING_API FCatFishBehaviorStateTask : public FStateTreeTaskCommonBas
 	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
 	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context,
 		const FStateTreeTransitionResult& Transition) const override;
-	virtual EStateTreeRunStatus Tick(FStateTreeExecutionContext& Context, float DeltaTime) const override;
+};
+
+USTRUCT()
+struct FCatFishBehaviorConditionInstanceData
+{
+	GENERATED_BODY()
+	UPROPERTY(EditAnywhere, Category="Parameter")
+	ECatFishBehaviorCondition Condition = ECatFishBehaviorCondition::None;
+	UPROPERTY(EditAnywhere, Category="Parameter")
+	bool bInvert = false;
+};
+
+/** 只读反馈谓词；组合、优先级和目标状态均属于正式 StateTree 资产。 */
+USTRUCT(meta=(DisplayName="Cat Fish Behavior Feedback", Category="Catfishing|Fishing|Fish Behavior"))
+struct CATFISHING_API FCatFishBehaviorFeedbackCondition : public FStateTreeConditionCommonBase
+{
+	GENERATED_BODY()
+	using FInstanceDataType = FCatFishBehaviorConditionInstanceData;
+	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
+	virtual bool TestCondition(FStateTreeExecutionContext& Context) const override;
 };
 
 /** 鱼 Actor 专用 Component Schema；让 StateTree 编辑器上下文明确显示 ACatFishEncounterActor。 */

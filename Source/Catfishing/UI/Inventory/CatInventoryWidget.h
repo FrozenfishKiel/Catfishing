@@ -39,13 +39,17 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
 	void RequestSelectSlot(int32 SlotIndex);
 
-	/** 请求吃掉当前选中鱼；真正的鱼实例由 PageController 从 Model 当前快照读取。 */
+	/** 请求吃掉本页当前本地选中鱼；PageController 会对照最新 Model 快照复核鱼仍在原容器格。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
 	void RequestConsumeSelectedFish();
 
-	/** 请求献祭当前选中鱼；献祭命令由 PageController 从 Model 构造。 */
+	/** 请求献祭本页当前本地选中鱼；献祭命令不依赖其他库存 WBP 的选择状态。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
 	void RequestSacrificeSelectedFish();
+
+	/** 请求把本页当前本地选中鱼放入营地共享鱼缸；Widget 只交出鱼护格身份，目标鱼缸由服务器按固定营地解析。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
+	void RequestStoreSelectedFishInSharedTank();
 
 	/** 本页最近一次渲染后的只读状态；蓝图只能读取当前 WBP 自己的选择和表现，不能借它回写 Model 或玩法状态。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")
@@ -68,9 +72,13 @@ protected:
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|Inventory")
 	void BP_RenderInventory(const FCatInventoryViewState& ViewState);
 
-	/** 返回本库存 WBP 对应的数据源 Slots；普通背包页默认读取随身库存，营地或鱼护页用派生类改成自己的数据源。 */
+	/** 返回本库存 WBP 对应的数据源 Slots；普通背包页在鱼缸这类外部容器上下文下读容器格，否则读随身库存，专用页仍可覆盖自己的数据源。 */
 	virtual const TArray<FCatInventorySlotView>& GetInventorySlotsForWidget(
 		const FCatInventoryViewState& ViewState) const;
+
+	/** 把本页渲染后的 Slots 写回本页 ViewState 副本；默认页按当前上下文写回外部容器或随身库存，派生页可覆盖到自己的数组。 */
+	virtual void StoreDisplayedSlotsInViewState(FCatInventoryViewState& ViewState,
+		const TArray<FCatInventorySlotView>& Slots) const;
 
 private:
 	/** 按当前 Slots 数组刷新单一 WrapBox 子格；能原位更新时不重建，结构变化时才清空并重建。 */
@@ -91,16 +99,16 @@ private:
 	/** 解除当前 WrapBox 子格的原生委托；刷新或销毁前调用，避免已移除格子继续广播。 */
 	void UnbindSlotWidgets();
 
-	/** 提交一个已经属于本页 DisplayedSlots 的格子身份；点击、蓝图下标和 Drop 选择都收口到这里。 */
+	/** 记录一个已经属于本页 DisplayedSlots 的本地选择；它只刷新当前 WBP，不进入共享 Model 广播。 */
 	void RequestSelectSlotView(const FCatInventorySlotView& SlotView);
 
 	/** 判断一次按键是否应该关闭当前库存页；世界交互打开的库存额外接受交互键，普通背包保留背包键和 Escape。 */
 	bool ShouldCloseInventoryFromKey(const FKeyEvent& InKeyEvent) const;
 
-	/** Slot Widget 左键点击入口；本页把格子身份交给 PageController/Model，不解释成全局下标。 */
+	/** Slot Widget 左键点击入口；本页只更新自己的本地选择，不解释成全局下标。 */
 	void HandleSlotSelected(const FCatInventorySlotView& SlotView);
 
-	/** Slot Widget 右键上下文入口；本页把格子身份交给 PageController，由它同步选择并决定动作。 */
+	/** Slot Widget 右键上下文入口；本页把格子身份交给 PageController，由它直接按数据源决定动作。 */
 	void HandleSlotContextRequested(const FCatInventorySlotView& SlotView);
 
 	/** Slot Widget Drop 入口；只转交源和目标投影，避免本页从 Widget 指针反查后端事实。 */
@@ -117,6 +125,10 @@ private:
 	/** 献祭按钮点击入口；收口到 RequestSacrificeSelectedFish。 */
 	UFUNCTION()
 	void HandleSacrificeClicked();
+
+	/** 存鱼缸按钮点击入口；收口到 RequestStoreSelectedFishInSharedTank。 */
+	UFUNCTION()
+	void HandleStoreFishInTankClicked();
 
 	/** 库存格子 WBP 类；本页用它为 WrapBox 每个后端格子创建独立 Widget。 */
 	UPROPERTY(EditDefaultsOnly, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
@@ -138,6 +150,10 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> SacrificeFishButton;
 
+	/** WBP Designer 中的存入鱼缸按钮；只在鱼护页需要绑定，点击后服务器会重新寻找固定共享鱼缸。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> StoreFishInTankButton;
+
 	/** 本页最近一次渲染后的 ViewState 副本；它只保留属于当前 WBP 的选中和动作表现，蓝图读取它不会拿到其他库存页的选择。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	FCatInventoryViewState LastInventoryViewState;
@@ -145,6 +161,14 @@ private:
 	/** 本页当前实际显示的格子副本；它只来自当前 WBP 对应的一份独立数据源，不会混入其他库存。 */
 	UPROPERTY(Transient)
 	TArray<FCatInventorySlotView> DisplayedSlots;
+
+	/** 本页当前高亮格子的来源身份；它是纯 UI 本地状态，不写入 Model，也不会让同屏其他库存页刷新。 */
+	UPROPERTY(Transient)
+	FCatInventorySlotView LocalSelectedSlotIdentity;
+
+	/** 本页是否保存了本地选择；Model 刷新后如果对应格子已经不存在，本页会自动清掉它。 */
+	UPROPERTY(Transient)
+	bool bHasLocalSelectedSlotIdentity = false;
 
 	/** 当前 WrapBox 中由本对象创建并绑定的格子 Widget；刷新前需要逐个解绑。 */
 	UPROPERTY(Transient)
@@ -173,7 +197,7 @@ private:
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintSelectedFishText;
 
-	/** 最近一次库存动作结果文本副本；RenderInventory 写入，蓝图用它展示 pending、成功或拒绝反馈。 */
+	/** 最近一次库存动作结果文本副本；RenderInventory 写入，蓝图用它展示服务器等待或终态反馈，本地无效操作只进日志。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	FText BlueprintResultText;
 

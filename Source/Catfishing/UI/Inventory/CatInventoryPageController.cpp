@@ -4,6 +4,8 @@
 #include "Character/CatCharacter.h"
 #include "EnhancedInputComponent.h"
 #include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "Engine/World.h"
 #include "GameFramework/PlayerController.h"
 #include "InputAction.h"
 #include "InputMappingContext.h"
@@ -59,14 +61,14 @@ namespace
 		});
 	}
 
-	// 运行期库存来源判断流程：随身背包和营地公共仓库都使用 FCatRunInventorySlot，只是宿主不同；UI 复核应先按这一类库存处理。
+	// 正式库存来源判断流程：随身背包和营地公共仓库都已经投影成 InventoryComponent SlotView，UI 这里只区分槽位身份和命令路由。
 	bool IsRunInventorySlotSource(const ECatInventorySlotSource SlotSource)
 	{
 		return SlotSource == ECatInventorySlotSource::InventoryObject
 			|| SlotSource == ECatInventorySlotSource::CampInventoryObject;
 	}
 
-	// 运行期库存槽位读取流程：把不同宿主的槽位字段统一成可比较的数组下标；非运行期库存来源返回无效下标。
+	// 正式库存槽位读取流程：把不同宿主的槽位字段统一成可比较的数组下标；非正式库存来源返回无效下标。
 	int32 GetRunInventorySlotIndex(const FCatInventorySlotView& Slot)
 	{
 		if (Slot.SlotSource == ECatInventorySlotSource::InventoryObject)
@@ -80,14 +82,14 @@ namespace
 		return INDEX_NONE;
 	}
 
-	// 运行期库存版本读取流程：提交失败或服务器移动前需要把对应宿主的 Revision 带出去，避免用随身背包版本拒绝营地仓库动作。
+	// 正式库存版本读取流程：随身背包使用正式库存 Revision，营地仓库暂用公共仓库协议 Revision，避免两个宿主互相污染并发前提。
 	int64 GetRunInventoryRevision(const FCatInventoryViewState& State, const ECatInventorySlotSource SlotSource)
 	{
 		if (SlotSource == ECatInventorySlotSource::CampInventoryObject)
 		{
 			return State.CampInventoryRevision;
 		}
-		return State.Equipment.Revision;
+		return State.InventoryRevision;
 	}
 
 	// 同源库存整理判断流程：拖拽整理只改同一份数据源内部顺序；不同库存之间的存取由明确服务器命令修改各自数据源，再靠广播刷新两边 UI。
@@ -351,15 +353,6 @@ bool UCatInventoryPageController::IsInventoryOpen() const
 	return bInventoryOpen;
 }
 
-// 外部刷新流程：只要求 Model 重读本人随身库存、当前选择和已绑定容器快照；PageController 不缓存任何后端事实。
-void UCatInventoryPageController::RefreshModel()
-{
-	if (UCatInventoryModel* Model = BoundModel.Get())
-	{
-		Model->Refresh();
-	}
-}
-
 // 输入刷新流程：Controller 通知输入链重新就绪时重跑同一套安装逻辑；安装函数会先移除已有绑定，因此重复调用不会叠加快捷键。
 void UCatInventoryPageController::RefreshInputBinding()
 {
@@ -375,24 +368,14 @@ void UCatInventoryPageController::RequestCloseInventoryFromWidget()
 	}
 }
 
-// 格子选择流程：PageController 不保存选择状态，只把 SlotView 的来源身份交给 Model 基于对应数据源复核。
-void UCatInventoryPageController::RequestSelectInventorySlotFromWidget(const FCatInventorySlotView& Slot)
-{
-	if (UCatInventoryModel* Model = BoundModel.Get())
-	{
-		Model->SelectSlot(Slot);
-	}
-}
-
 // 格子上下文流程：
-// 1. 右键入口先同步 Model 选择，让 View 的选中框和说明文本跟随最新格子。
-// 2. 如果目标是营地公共仓库格，先按最新 ViewState 复核公共槽位，再提交“取到随身库存”服务器请求；这里不直接改公共仓库格。
-// 3. 如果目标是随身库存格，当前没有 pending 且物品有效时，才继续构造钓具选择命令。
-// 4. 根据随身格装备类别只替换当前组合中的一项；鱼竿、鱼饵、鱼漂三项不完整时本地拒绝，避免提交半套钓鱼选择。
-// 5. 写 pending 之后再调用 PlayerController RPC；服务器会重读目录、解锁、当前快照和库存持有量，UI 只发命令，不直接改选择或公共仓库。
+// 1. 右键入口直接按传入格子来源处理动作，不再先同步共享选择或刷新所有库存 WBP。
+// 2. 如果目标是营地公共仓库格，先按最新 ViewState 复核公共槽位，再提交“取到正式随身库存”服务器请求；这里不直接改公共仓库格，也不要求旧 Equipment 投影可用。
+// 3. 如果目标是随身库存格，当前没有 pending 且物品有效时，只提交正式库存槽位和库存 Revision。
+// 4. UI 不再判断鱼竿、鱼饵、浮漂或抄网类别；“能不能用、用成什么效果”统一交给服务器从正式库存事实继续分发。
+// 5. 记录 pending 后再调用 PlayerController RPC；服务器会从 InventoryComponent 重读槽位，再决定是否更新 Equipment 或拒绝本次 Use。
 void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FCatInventorySlotView& Slot)
 {
-	RequestSelectInventorySlotFromWidget(Slot);
 	UCatInventoryModel* Model = BoundModel.Get();
 	ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
 	if (!Model || !CatController)
@@ -400,7 +383,7 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 		return;
 	}
 	const FCatInventoryViewState& State = Model->GetViewState();
-	if (State.bActionPending)
+	if (Model->IsActionPending())
 	{
 		return;
 	}
@@ -411,7 +394,7 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 		const FCatInventorySlotView* CurrentSlot = FindCurrentRunInventorySlot(State, Slot);
 		if (!CampInventory || !CurrentSlot || !CurrentSlot->bOccupied
 			|| CurrentSlot->CampInventorySlotIndex == INDEX_NONE || CurrentSlot->Quantity <= 0
-			|| !State.bEquipmentAvailable)
+			|| !State.bInventoryAvailable)
 		{
 			Model->MarkActionRejected(ECatInventoryAction::WithdrawCampInventoryItem, RequestId,
 				ECatDomainCommandError::DependencyUnavailable, State.CampInventoryRevision);
@@ -420,17 +403,17 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 		const int64 SubmittedCampRevision = CurrentSlot->CampInventoryRevision;
 		const int32 SubmittedCampSlotIndex = CurrentSlot->CampInventorySlotIndex;
 		const int32 SubmittedQuantity = CurrentSlot->Quantity;
-		const int64 SubmittedEquipmentRevision = State.Equipment.Revision;
+		const int64 SubmittedInventoryRevision = State.InventoryRevision;
 		Model->MarkActionSubmitted(ECatInventoryAction::WithdrawCampInventoryItem, RequestId);
 		if (CatController->HasAuthority())
 		{
 			CatController->ServerWithdrawCampInventoryItemAtActor_Implementation(CampInventory, RequestId,
-				SubmittedCampRevision, SubmittedCampSlotIndex, SubmittedQuantity, SubmittedEquipmentRevision);
+				SubmittedCampRevision, SubmittedCampSlotIndex, SubmittedQuantity, SubmittedInventoryRevision);
 		}
 		else
 		{
 			CatController->ServerWithdrawCampInventoryItemAtActor(CampInventory, RequestId,
-				SubmittedCampRevision, SubmittedCampSlotIndex, SubmittedQuantity, SubmittedEquipmentRevision);
+				SubmittedCampRevision, SubmittedCampSlotIndex, SubmittedQuantity, SubmittedInventoryRevision);
 		}
 		return;
 	}
@@ -438,59 +421,39 @@ void UCatInventoryPageController::RequestInventorySlotContextFromWidget(const FC
 	{
 		return;
 	}
+	// 使用提交前重读当前格：同定义物品也可能是不同实例，必须同时比对槽位、实例 ID 和数量，避免 UI 旧快照用到已经移动或部署的那件物品。
 	const FCatInventorySlotView* CurrentSlot = FindCurrentRunInventorySlot(State, Slot);
-	if (!CurrentSlot || !CurrentSlot->bOccupied || CurrentSlot->EquipmentDefinitionId.IsNone())
+	if (!CurrentSlot || !CurrentSlot->bOccupied || CurrentSlot->DefinitionId.IsNone()
+		|| CurrentSlot->InventorySlotIndex == INDEX_NONE
+		|| CurrentSlot->DefinitionId != Slot.DefinitionId
+		|| CurrentSlot->InventoryItemInstanceId != Slot.InventoryItemInstanceId
+		|| CurrentSlot->Quantity != Slot.Quantity)
 	{
-		return;
-	}
-	FName RodDefinitionId = State.Equipment.RodDefinitionId;
-	FName BaitDefinitionId = State.Equipment.BaitDefinitionId;
-	FName FloatDefinitionId = State.Equipment.FloatDefinitionId;
-	FName ScoopNetDefinitionId = State.Equipment.ScoopNetDefinitionId;
-	const int64 ExpectedEquipmentRevision = State.Equipment.Revision;
-	switch (CurrentSlot->EquipmentKind)
-	{
-	case ECatEquipmentKind::Rod:
-		RodDefinitionId = CurrentSlot->EquipmentDefinitionId;
-		break;
-	case ECatEquipmentKind::Bait:
-		BaitDefinitionId = CurrentSlot->EquipmentDefinitionId;
-		break;
-	case ECatEquipmentKind::Float:
-		FloatDefinitionId = CurrentSlot->EquipmentDefinitionId;
-		break;
-	case ECatEquipmentKind::ScoopNet:
-		ScoopNetDefinitionId = CurrentSlot->EquipmentDefinitionId;
-		break;
-	default:
 		return;
 	}
 	const FGuid RequestId = FGuid::NewGuid();
-	if (RodDefinitionId.IsNone() || BaitDefinitionId.IsNone() || FloatDefinitionId.IsNone())
-	{
-		Model->MarkActionRejected(ECatInventoryAction::SelectInventoryFishingItem, RequestId,
-			ECatDomainCommandError::InvalidPayload, State.Equipment.Revision);
-		return;
-	}
-	Model->MarkActionSubmitted(ECatInventoryAction::SelectInventoryFishingItem, RequestId);
+	const int64 SubmittedInventoryRevision = State.InventoryRevision;
+	const int32 SubmittedInventorySlotIndex = CurrentSlot->InventorySlotIndex;
+	Model->MarkActionSubmitted(ECatInventoryAction::UseInventoryItem, RequestId);
 	if (CatController->HasAuthority())
 	{
-		CatController->ServerConfigureEquipment_Implementation(RequestId, ExpectedEquipmentRevision,
-			RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId);
+		CatController->ServerUseInventoryItem_Implementation(RequestId, SubmittedInventoryRevision,
+			SubmittedInventorySlotIndex);
 	}
 	else
 	{
-		CatController->ServerConfigureEquipment(RequestId, ExpectedEquipmentRevision,
-			RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId);
+		CatController->ServerUseInventoryItem(RequestId, SubmittedInventoryRevision,
+			SubmittedInventorySlotIndex);
 	}
 }
 
 // Drop 提交流程：
 // 1. 从最新 ViewState 复核源物体和目标格；已有请求等待回包时只忽略新的 Drop，避免覆盖上一次 pending。
-// 2. 运行期库存格同源时整理本数据源，跨背包和营地时提交一条同时改双方数据源的服务器事务。
+// 2. 运行期库存格同源时整理本数据源，跨随身正式库存和营地时提交一条同时改双方 InventoryComponent 的服务器事务。
 // 3. 鱼容器格之间走 Items 容器移动；运行期库存和 Items 容器混拖直接拒绝，避免把两套领域写口塞进一次 Drop。
 // 4. 同格 Drop 视为无操作直接返回；同容器不同格继续提交服务器整理，不能再当 InvalidPayload 拒绝。
-// 5. 在写 pending 前复制完整 RPC 载荷；随身库存、营地仓库、跨源转移和容器移动分别提交各自的并发前提。
+// 5. 在写 pending 前复制完整 RPC 载荷；随身背包整理和背包/营地跨源转移都提交正式 InventoryRevision，营地侧提交 CampInventoryRevision。
+// 6. 运行期库存的拒绝和提交都会写出来源、槽位、路线和版本，方便区分营地内部整理是否被 UI 误投成背包整理。
 void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatInventorySlotView& SourceSlot,
 	const FCatInventorySlotView& TargetSlot)
 {
@@ -502,8 +465,13 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 	}
 	const FCatInventoryViewState& State = Model->GetViewState();
 	const FGuid RequestId = FGuid::NewGuid();
-	if (State.bActionPending)
+	if (Model->IsActionPending())
 	{
+		UE_LOG(LogCatUI, Log,
+			TEXT("Event=ui_inventory_slot_drop_ignored Reason=ActionPending Request=%s SourceSource=%s SourceIndex=%d TargetSource=%s TargetIndex=%d"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			*UEnum::GetValueAsString(SourceSlot.SlotSource), GetRunInventorySlotIndex(SourceSlot),
+			*UEnum::GetValueAsString(TargetSlot.SlotSource), GetRunInventorySlotIndex(TargetSlot));
 		return;
 	}
 	if (IsRunInventorySlotSource(SourceSlot.SlotSource) || IsRunInventorySlotSource(TargetSlot.SlotSource))
@@ -515,6 +483,12 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 		const int64 RejectRevision = GetRunInventoryRevision(State, RejectSource);
 		if (!bSourceIsRunInventory || !bTargetIsRunInventory)
 		{
+			UE_LOG(LogCatUI, Warning,
+				TEXT("Event=ui_inventory_slot_drop_rejected Reason=MixedSlotSources Request=%s SourceSource=%s SourceIndex=%d TargetSource=%s TargetIndex=%d RejectRevision=%lld"),
+				*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+				*UEnum::GetValueAsString(SourceSlot.SlotSource), GetRunInventorySlotIndex(SourceSlot),
+				*UEnum::GetValueAsString(TargetSlot.SlotSource), GetRunInventorySlotIndex(TargetSlot),
+				RejectRevision);
 			Model->MarkActionRejected(ECatInventoryAction::MoveInventoryItem, RequestId,
 				ECatDomainCommandError::InvalidPayload, RejectRevision);
 			return;
@@ -525,8 +499,20 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 			|| GetRunInventorySlotIndex(*CurrentSource) == INDEX_NONE
 			|| GetRunInventorySlotIndex(*CurrentTarget) == INDEX_NONE
 			|| CurrentSource->EquipmentDefinitionId != SourceSlot.EquipmentDefinitionId
+			|| CurrentSource->InventoryItemInstanceId != SourceSlot.InventoryItemInstanceId
 			|| CurrentSource->Quantity != SourceSlot.Quantity)
 		{
+			UE_LOG(LogCatUI, Warning,
+				TEXT("Event=ui_inventory_slot_drop_rejected Reason=StaleOrInvalidRunSlots Request=%s SourceSource=%s SourceIndex=%d SourceOccupied=%s SourceDefinition=%s SourceQuantity=%d TargetSource=%s TargetIndex=%d CurrentSource=%s CurrentTarget=%s CurrentSourceOccupied=%s RejectRevision=%lld"),
+				*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+				*UEnum::GetValueAsString(SourceSlot.SlotSource), GetRunInventorySlotIndex(SourceSlot),
+				SourceSlot.bOccupied ? TEXT("true") : TEXT("false"),
+				*SourceSlot.EquipmentDefinitionId.ToString(), SourceSlot.Quantity,
+				*UEnum::GetValueAsString(TargetSlot.SlotSource), GetRunInventorySlotIndex(TargetSlot),
+				CurrentSource ? TEXT("true") : TEXT("false"),
+				CurrentTarget ? TEXT("true") : TEXT("false"),
+				(CurrentSource && CurrentSource->bOccupied) ? TEXT("true") : TEXT("false"),
+				RejectRevision);
 			Model->MarkActionRejected(ECatInventoryAction::MoveInventoryItem, RequestId,
 				ECatDomainCommandError::InvalidPayload, RejectRevision);
 			return;
@@ -536,28 +522,61 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 		const bool bSameRunInventory = IsSameRunInventory(*CurrentSource, *CurrentTarget);
 		if (bSameRunInventory && SubmittedSourceSlotIndex == SubmittedTargetSlotIndex)
 		{
+			UE_LOG(LogCatUI, Log,
+				TEXT("Event=ui_inventory_slot_drop_ignored Reason=SameSlot Request=%s SourceSource=%s Slot=%d"),
+				*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+				*UEnum::GetValueAsString(CurrentSource->SlotSource), SubmittedSourceSlotIndex);
 			return;
 		}
-		const bool bCrossEquipmentToCamp =
+		const bool bCrossInventoryToCamp =
 			CurrentSource->SlotSource == ECatInventorySlotSource::InventoryObject
 			&& CurrentTarget->SlotSource == ECatInventorySlotSource::CampInventoryObject;
-		const bool bCrossCampToEquipment =
+		const bool bCrossCampToInventory =
 			CurrentSource->SlotSource == ECatInventorySlotSource::CampInventoryObject
 			&& CurrentTarget->SlotSource == ECatInventorySlotSource::InventoryObject;
 		ACatCampInventoryActor* CampInventory = BoundCampInventory.Get();
 		if (bSameRunInventory && CurrentSource->SlotSource == ECatInventorySlotSource::CampInventoryObject
 			&& !CampInventory)
 		{
+			UE_LOG(LogCatUI, Warning,
+				TEXT("Event=ui_inventory_slot_drop_rejected Reason=CampInventoryUnavailable Request=%s SourceIndex=%d TargetIndex=%d RejectRevision=%lld"),
+				*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+				SubmittedSourceSlotIndex, SubmittedTargetSlotIndex, RejectRevision);
 			Model->MarkActionRejected(ECatInventoryAction::MoveInventoryItem, RequestId,
 				ECatDomainCommandError::DependencyUnavailable, RejectRevision);
 			return;
 		}
-		if (!bSameRunInventory && (!CampInventory || (!bCrossEquipmentToCamp && !bCrossCampToEquipment)))
+		if (!bSameRunInventory && (!CampInventory || (!bCrossInventoryToCamp && !bCrossCampToInventory)))
 		{
+			UE_LOG(LogCatUI, Warning,
+				TEXT("Event=ui_inventory_slot_drop_rejected Reason=InvalidCampRoute Request=%s SourceSource=%s SourceIndex=%d TargetSource=%s TargetIndex=%d Camp=%s RejectRevision=%lld"),
+				*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+				*UEnum::GetValueAsString(CurrentSource->SlotSource), SubmittedSourceSlotIndex,
+				*UEnum::GetValueAsString(CurrentTarget->SlotSource), SubmittedTargetSlotIndex,
+				*GetNameSafe(CampInventory), RejectRevision);
 			Model->MarkActionRejected(ECatInventoryAction::MoveInventoryItem, RequestId,
 				ECatDomainCommandError::DependencyUnavailable, RejectRevision);
 			return;
 		}
+		const TCHAR* DropRoute = TEXT("CampToInventory");
+		if (bSameRunInventory && CurrentSource->SlotSource == ECatInventorySlotSource::CampInventoryObject)
+		{
+			DropRoute = TEXT("CampInternal");
+		}
+		else if (bSameRunInventory)
+		{
+			DropRoute = TEXT("InventoryInternal");
+		}
+		else if (bCrossInventoryToCamp)
+		{
+			DropRoute = TEXT("InventoryToCamp");
+		}
+		UE_LOG(LogCatUI, Log,
+			TEXT("Event=ui_inventory_slot_drop_submitted Request=%s Route=%s SourceSource=%s SourceIndex=%d TargetSource=%s TargetIndex=%d InventoryRevision=%lld CampRevision=%lld Camp=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), DropRoute,
+			*UEnum::GetValueAsString(CurrentSource->SlotSource), SubmittedSourceSlotIndex,
+			*UEnum::GetValueAsString(CurrentTarget->SlotSource), SubmittedTargetSlotIndex,
+			State.InventoryRevision, State.CampInventoryRevision, *GetNameSafe(CampInventory));
 		Model->MarkActionSubmitted(ECatInventoryAction::MoveInventoryItem, RequestId);
 		if (bSameRunInventory && CurrentSource->SlotSource == ECatInventorySlotSource::CampInventoryObject)
 		{
@@ -575,50 +594,50 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 		}
 		else if (bSameRunInventory)
 		{
-			const int64 SubmittedEquipmentRevision = State.Equipment.Revision;
+			const int64 SubmittedInventoryRevision = State.InventoryRevision;
 			if (CatController->HasAuthority())
 			{
-				CatController->ServerMoveInventorySlot_Implementation(RequestId, SubmittedEquipmentRevision,
+				CatController->ServerMoveInventorySlot_Implementation(RequestId, SubmittedInventoryRevision,
 					SubmittedSourceSlotIndex, SubmittedTargetSlotIndex);
 			}
 			else
 			{
-				CatController->ServerMoveInventorySlot(RequestId, SubmittedEquipmentRevision,
+				CatController->ServerMoveInventorySlot(RequestId, SubmittedInventoryRevision,
 					SubmittedSourceSlotIndex, SubmittedTargetSlotIndex);
 			}
 		}
-		else if (bCrossEquipmentToCamp)
+		else if (bCrossInventoryToCamp)
 		{
 			const int64 SubmittedCampRevision = CurrentTarget->CampInventoryRevision;
-			const int64 SubmittedEquipmentRevision = State.Equipment.Revision;
+			const int64 SubmittedInventoryRevision = State.InventoryRevision;
 			if (CatController->HasAuthority())
 			{
 				CatController->ServerDepositInventoryItemToCampAtActor_Implementation(CampInventory, RequestId,
 					SubmittedCampRevision, SubmittedTargetSlotIndex,
-					SubmittedEquipmentRevision, SubmittedSourceSlotIndex);
+					SubmittedInventoryRevision, SubmittedSourceSlotIndex);
 			}
 			else
 			{
 				CatController->ServerDepositInventoryItemToCampAtActor(CampInventory, RequestId,
 					SubmittedCampRevision, SubmittedTargetSlotIndex,
-					SubmittedEquipmentRevision, SubmittedSourceSlotIndex);
+					SubmittedInventoryRevision, SubmittedSourceSlotIndex);
 			}
 		}
 		else
 		{
 			const int64 SubmittedCampRevision = CurrentSource->CampInventoryRevision;
-			const int64 SubmittedEquipmentRevision = State.Equipment.Revision;
+			const int64 SubmittedInventoryRevision = State.InventoryRevision;
 			if (CatController->HasAuthority())
 			{
 				CatController->ServerWithdrawCampInventoryItemToSlotAtActor_Implementation(CampInventory, RequestId,
 					SubmittedCampRevision, SubmittedSourceSlotIndex,
-					SubmittedEquipmentRevision, SubmittedTargetSlotIndex);
+					SubmittedInventoryRevision, SubmittedTargetSlotIndex);
 			}
 			else
 			{
 				CatController->ServerWithdrawCampInventoryItemToSlotAtActor(CampInventory, RequestId,
 					SubmittedCampRevision, SubmittedSourceSlotIndex,
-					SubmittedEquipmentRevision, SubmittedTargetSlotIndex);
+					SubmittedInventoryRevision, SubmittedTargetSlotIndex);
 			}
 		}
 		return;
@@ -684,12 +703,14 @@ void UCatInventoryPageController::RequestInventorySlotDropFromWidget(const FCatI
 }
 
 // 鱼动作按钮流程：
-// 1. 本入口只处理吃鱼和献祭这类按钮动作；库存整理走 Drop，钓具选择走格子右键上下文。
-// 2. 从 Model 当前 ViewState 读取选中鱼、容器 ID 和 Revision，拒绝空选择或无效鱼护上下文。
-// 3. 生成 RequestId 并先写 pending，使同步 authority 回包也能匹配。
-// 4. 按动作类型调用 PlayerController 正式服务器入口，绝不让 Widget 直接访问 Items 或 Run。
-// 5. Model 或 Controller 已失效时直接丢弃迟到意图；需要 Character 的吃鱼分支无法解析 Pawn 时发布结构化拒绝。
-void UCatInventoryPageController::RequestInventoryActionFromWidget(const ECatInventoryAction Action)
+// 1. 本入口只处理吃鱼、献祭和存入营地鱼缸这类选中鱼动作；库存整理走 Drop，随身库存物品使用走格子右键上下文。
+// 2. 用 Widget 传入的本页选择在最新 ViewState 里复核鱼、容器 ID 和 Revision；吃鱼/献祭允许鱼护或共享鱼缸，存缸只允许鱼护。
+// 3. 献祭在提交前读取 GameState 的公开 Run Revision；GameState 缺失时发布结构化拒绝，绝不以 0 猜测并发版本。
+// 4. 生成 RequestId 并记录 pending，使同步 authority 回包也能匹配，但不提前广播刷新库存格。
+// 5. 按动作类型调用 PlayerController 正式服务器入口，绝不让 Widget 直接访问 Items 或 Run。
+// 6. Model 或 Controller 已失效时直接丢弃迟到意图；需要 Character 的吃鱼分支无法解析 Pawn 时发布结构化拒绝。
+void UCatInventoryPageController::RequestInventoryActionFromWidget(const ECatInventoryAction Action,
+	const FCatInventorySlotView& SelectedSlot)
 {
 	UCatInventoryModel* Model = BoundModel.Get();
 	ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
@@ -699,15 +720,28 @@ void UCatInventoryPageController::RequestInventoryActionFromWidget(const ECatInv
 	}
 	const FCatInventoryViewState& State = Model->GetViewState();
 	const FGuid RequestId = FGuid::NewGuid();
-	const FCatInventorySlotView* SelectedSlot = State.bHasSelectedSlot ? &State.SelectedSlot : nullptr;
-	const bool bHasSelectedFish = State.bSelectedFishInFishGuard
-		&& State.SelectedFish.FishInstanceId.IsValid() && SelectedSlot
-		&& SelectedSlot->ContainerKind == ECatContainerKind::FishGuard
-		&& SelectedSlot->ContainerId.IsValid();
-	if (!bHasSelectedFish)
+	if (Model->IsActionPending())
+	{
+		return;
+	}
+	const FCatInventorySlotView* CurrentSlot = FindCurrentSourceSlot(State, SelectedSlot);
+	const bool bHasSelectedFish = CurrentSlot
+		&& CurrentSlot->ContainerId.IsValid()
+		&& CurrentSlot->bOccupied
+		&& CurrentSlot->ObjectKind == ECatContainedObjectKind::Fish
+		&& CurrentSlot->Fish.FishInstanceId.IsValid();
+	const bool bIsFishUseAction = Action == ECatInventoryAction::ConsumeSelectedFish
+		|| Action == ECatInventoryAction::SacrificeSelectedFish;
+	const bool bCanUseSelectedFish = CurrentSlot && bIsFishUseAction
+		&& (CurrentSlot->ContainerKind == ECatContainerKind::FishGuard
+			|| CurrentSlot->ContainerKind == ECatContainerKind::SharedFishTank);
+	const bool bCanStoreSelectedFishInSharedTank =
+		CurrentSlot && Action == ECatInventoryAction::StoreSelectedFishInSharedTank
+		&& CurrentSlot->ContainerKind == ECatContainerKind::FishGuard;
+	if (!bHasSelectedFish || (!bCanUseSelectedFish && !bCanStoreSelectedFishInSharedTank))
 	{
 		Model->MarkActionRejected(Action, RequestId, ECatDomainCommandError::InvalidPayload,
-			SelectedSlot ? SelectedSlot->ContainerRevision : 0);
+			CurrentSlot ? CurrentSlot->ContainerRevision : SelectedSlot.ContainerRevision);
 		return;
 	}
 
@@ -719,14 +753,14 @@ void UCatInventoryPageController::RequestInventoryActionFromWidget(const ECatInv
 			if (!Character)
 			{
 				Model->MarkActionRejected(Action, RequestId, ECatDomainCommandError::DependencyUnavailable,
-					SelectedSlot->ContainerRevision);
+					CurrentSlot->ContainerRevision);
 				return;
 			}
 			FCatFishConsumeCommand Command;
 			Command.Context.RequestId = RequestId;
-			Command.Context.ExpectedRevision = SelectedSlot->ContainerRevision;
-			Command.FishInstanceId = State.SelectedFish.FishInstanceId;
-			Command.SourceContainerId = SelectedSlot->ContainerId;
+			Command.Context.ExpectedRevision = CurrentSlot->ContainerRevision;
+			Command.FishInstanceId = CurrentSlot->Fish.FishInstanceId;
+			Command.SourceContainerId = CurrentSlot->ContainerId;
 			Model->MarkActionSubmitted(Action, RequestId);
 			if (CatController->HasAuthority())
 			{
@@ -740,11 +774,26 @@ void UCatInventoryPageController::RequestInventoryActionFromWidget(const ECatInv
 		}
 	case ECatInventoryAction::SacrificeSelectedFish:
 		{
+			const UWorld* World = CatController->GetWorld();
+			const ACatfishingGameState* GameState = World ? World->GetGameState<ACatfishingGameState>() : nullptr;
+			if (!GameState)
+			{
+				UE_LOG(LogCatUI, Warning,
+					TEXT("Event=ui_inventory_sacrifice_rejected Reason=GameStateUnavailable RequestId=%s ContainerId=%s FishInstanceId=%s ContainerRevision=%lld"),
+					*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+					*CurrentSlot->ContainerId.ToString(EGuidFormats::DigitsWithHyphens),
+					*CurrentSlot->Fish.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+					CurrentSlot->ContainerRevision);
+				Model->MarkActionRejected(Action, RequestId, ECatDomainCommandError::DependencyUnavailable,
+					CurrentSlot->ContainerRevision);
+				return;
+			}
 			FCatSacrificeCommand Command;
 			Command.Context.RequestId = RequestId;
-			Command.Context.ExpectedRevision = SelectedSlot->ContainerRevision;
-			Command.FishInstanceId = State.SelectedFish.FishInstanceId;
-			Command.ContainerId = SelectedSlot->ContainerId;
+			Command.Context.ExpectedRevision = CurrentSlot->ContainerRevision;
+			Command.FishInstanceId = CurrentSlot->Fish.FishInstanceId;
+			Command.ContainerId = CurrentSlot->ContainerId;
+			Command.ExpectedRunRevision = GameState->GetRunPublicState().Revision;
 			Model->MarkActionSubmitted(Action, RequestId);
 			if (CatController->HasAuthority())
 			{
@@ -753,6 +802,27 @@ void UCatInventoryPageController::RequestInventoryActionFromWidget(const ECatInv
 			else
 			{
 				CatController->ServerRequestSacrifice(Command);
+			}
+			return;
+		}
+	case ECatInventoryAction::StoreSelectedFishInSharedTank:
+		{
+			Model->MarkActionSubmitted(Action, RequestId);
+			if (CatController->HasAuthority())
+			{
+				CatController->ServerStoreFishInSharedTank_Implementation(RequestId,
+					CurrentSlot->Fish.FishInstanceId,
+					CurrentSlot->ContainerId,
+					CurrentSlot->ContainerSlotIndex,
+					CurrentSlot->ContainerRevision);
+			}
+			else
+			{
+				CatController->ServerStoreFishInSharedTank(RequestId,
+					CurrentSlot->Fish.FishInstanceId,
+					CurrentSlot->ContainerId,
+					CurrentSlot->ContainerSlotIndex,
+					CurrentSlot->ContainerRevision);
 			}
 			return;
 		}
@@ -795,7 +865,8 @@ void UCatInventoryPageController::SetInventoryOpen(const bool bOpen)
 // 输入安装流程：
 // 1. 要求 Controller 当前 InputComponent 是 EnhancedInputComponent。
 // 2. 从 UI Settings 加载已有 InputContext 中的库存 Action，并把 IMC 加载作为资产接线校验。
-// 3. 只 BindAction，不 AddMappingContext、不 MapKey，避免运行时代码写死按键或生成第二套 IMC。
+// 3. 如果库存 Action 与主菜单 Action 相同，本页主动不绑定，避免 Escape 同时打开背包和局内菜单。
+// 4. 只 BindAction，不 AddMappingContext、不 MapKey，避免运行时代码写死按键或生成第二套 IMC。
 void UCatInventoryPageController::InstallInventoryInput()
 {
 	RemoveInventoryInput();
@@ -803,6 +874,7 @@ void UCatInventoryPageController::InstallInventoryInput()
 	UEnhancedInputComponent* Input = Controller ? Cast<UEnhancedInputComponent>(Controller->InputComponent) : nullptr;
 	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
 	UInputAction* ToggleAction = Settings ? Settings->LoadInventoryToggleAction() : nullptr;
+	UInputAction* MainMenuAction = Settings ? Settings->LoadMainMenuToggleAction() : nullptr;
 	const UInputMappingContext* MappingContext = Settings ? Settings->LoadGameplayInputMappingContext() : nullptr;
 	if (!Input || !Settings || !ToggleAction || !MappingContext)
 	{
@@ -810,6 +882,13 @@ void UCatInventoryPageController::InstallInventoryInput()
 			*GetNameSafe(Controller),
 			Settings ? *Settings->InventoryToggleAction.ToSoftObjectPath().ToString() : TEXT("None"),
 			Settings ? *Settings->GameplayInputMappingContext.ToSoftObjectPath().ToString() : TEXT("None"));
+		return;
+	}
+	if (MainMenuAction && ToggleAction == MainMenuAction)
+	{
+		UE_LOG(LogCatUI, Log,
+			TEXT("Event=ui_inventory_input_reserved_for_lake_menu Controller=%s Action=%s"),
+			*GetNameSafe(Controller), *GetNameSafe(ToggleAction));
 		return;
 	}
 	AppliedInventoryToggleAction = ToggleAction;

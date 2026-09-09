@@ -2,7 +2,6 @@
 
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
-#include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "Character/CatCharacter.h"
 #include "Condition/CatConditionComponent.h"
 #include "Engine/World.h"
@@ -13,9 +12,18 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "Growth/CatGrowthComponent.h"
+#include "Logging/CatLog.h"
+#include "TimerManager.h"
 #include "UI/CatFishingViewBridge.h"
 
-// 绑定流程：校验本地玩家、Controller、Character 和 ASC，随后订阅三项属性、Condition、Growth 和 Fishing 命令结果，最后发布首份 HUD 投影。
+namespace
+{
+	/** HUD 等待客户端 GameState 的重试间隔；只影响 UI 订阅恢复速度，不改变 Run 复制频率或服务器时钟。 */
+	constexpr float CatHUDRunGameStateBindingRetrySeconds = 0.20f;
+	constexpr float CatHUDFishingSessionBindingReconcileSeconds = 0.20f;
+}
+
+// 绑定流程：校验本地玩家、Controller、Character 和 ASC，随后订阅身体属性、Condition、Growth 和 Fishing 命令结果；Run 快照按“先读一次当前 GameState，再订阅后续变化”的观察者口径接线，最后保证至少发布首份 HUD 投影。
 bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InController, ACatCharacter* InCharacter)
 {
 	Unbind();
@@ -36,7 +44,6 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 
 	BoundLocalPlayer = InLocalPlayer;
 	BoundPlayerController = InController;
-	BoundCharacter = InCharacter;
 	BoundAbilitySystem = AbilitySystem;
 	BoundCondition = InCharacter->GetConditionComponent();
 	BoundGrowth = InCharacter->GetGrowthComponent();
@@ -50,6 +57,8 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 		UCatSurvivalAttributeSet::GetFishingStrengthAttribute()).AddUObject(this, &ThisClass::HandleAttributeChanged);
 	FightStaminaChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(
 		UCatSurvivalAttributeSet::GetFightStaminaAttribute()).AddUObject(this, &ThisClass::HandleAttributeChanged);
+	MaxFightStaminaChangedHandle = AbilitySystem->GetGameplayAttributeValueChangeDelegate(
+		UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()).AddUObject(this, &ThisClass::HandleAttributeChanged);
 	if (UCatConditionComponent* Condition = BoundCondition.Get())
 	{
 		ConditionChangedHandle = Condition->OnSnapshotChanged.AddUObject(this, &ThisClass::HandleConditionChanged);
@@ -65,18 +74,25 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 	FishingViewChangedHandle = FishingViewBridge->OnViewStateChanged.AddUObject(
 		this, &ThisClass::HandleFishingViewStateChanged);
 	RefreshFishingSessionBinding();
-	Refresh();
+	ScheduleFishingSessionBindingReconcile();
+	if (!RefreshRunGameStateBinding())
+	{
+		Refresh();
+	}
 	return true;
 }
 
-// 解绑流程：从原 ASC、Condition、Growth、Fishing 命令和 Bridge 移除订阅，再清弱引用、最近结果和投影，防止跨 Pawn 显示旧状态。
+// 解绑流程：从原 Run、ASC、Condition、Growth、Fishing 命令和 Bridge 移除订阅，再清弱引用、最近结果和投影，防止跨 Pawn 显示旧状态。
 void UCatHUDModel::Unbind()
 {
+	ClearFishingSessionBindingReconcile();
+	ClearRunGameStateBinding();
 	if (UAbilitySystemComponent* AbilitySystem = BoundAbilitySystem.Get())
 	{
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetPoisonAttribute()).Remove(PoisonChangedHandle);
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFishingStrengthAttribute()).Remove(FishingStrengthChangedHandle);
 		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetFightStaminaAttribute()).Remove(FightStaminaChangedHandle);
+		AbilitySystem->GetGameplayAttributeValueChangeDelegate(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()).Remove(MaxFightStaminaChangedHandle);
 	}
 	if (UCatConditionComponent* Condition = BoundCondition.Get())
 	{
@@ -98,12 +114,12 @@ void UCatHUDModel::Unbind()
 	PoisonChangedHandle.Reset();
 	FishingStrengthChangedHandle.Reset();
 	FightStaminaChangedHandle.Reset();
+	MaxFightStaminaChangedHandle.Reset();
 	ConditionChangedHandle.Reset();
 	GrowthChangedHandle.Reset();
 	FishingViewChangedHandle.Reset();
 	BoundLocalPlayer.Reset();
 	BoundPlayerController.Reset();
-	BoundCharacter.Reset();
 	BoundAbilitySystem.Reset();
 	BoundCondition.Reset();
 	BoundGrowth.Reset();
@@ -114,7 +130,7 @@ void UCatHUDModel::Unbind()
 	ViewState = FCatHUDViewState();
 }
 
-// 刷新流程：读取 Run 天数、ASC 三项数值、Condition、Growth 和 FishingBridge 当前投影，再生成 HUD 文本与进度条比例并广播完整状态。
+// 刷新流程：从已经绑定的 GameState 读取 Run 天数，再读取 ASC 身体数值、Condition、Growth 和 FishingBridge 当前投影，生成 HUD 文本与进度条比例并广播完整状态；它不负责寻找或订阅 GameState。
 void UCatHUDModel::Refresh()
 {
 	FCatHUDViewState NewState;
@@ -123,7 +139,7 @@ void UCatHUDModel::Refresh()
 	const AGameStateBase* GameStateBase = World ? World->GetGameState() : nullptr;
 	const double ServerNowSeconds = GameStateBase ? GameStateBase->GetServerWorldTimeSeconds()
 		: (World ? World->GetTimeSeconds() : 0.0);
-	if (const ACatfishingGameState* RunGameState = World ? World->GetGameState<ACatfishingGameState>() : nullptr)
+	if (const ACatfishingGameState* RunGameState = BoundRunGameState.Get())
 	{
 		NewState.DayIndex = FMath::Max(1, RunGameState->GetRunPublicState().Phase.DayIndex);
 	}
@@ -133,16 +149,12 @@ void UCatHUDModel::Refresh()
 		NewState.Poison = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute());
 		NewState.FishingStrength = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
 		NewState.FightStamina = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
-	}
-	if (const ACatCharacter* Character = BoundCharacter.Get())
-	{
-		float FightStaminaBaseline = 0.0f;
-		if (GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
-			Character->GetCatDefinitionId(), FightStaminaBaseline))
+		NewState.FightStaminaMaximum = AbilitySystem->GetNumericAttribute(
+			UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+		if (NewState.FightStaminaMaximum > 0.0f)
 		{
-			NewState.FightStaminaMaximum = FightStaminaBaseline;
 			NewState.NormalizedFightStamina = FMath::Clamp(
-				NewState.FightStamina / FightStaminaBaseline, 0.0f, 1.0f);
+				NewState.FightStamina / NewState.FightStaminaMaximum, 0.0f, 1.0f);
 		}
 	}
 	if (const UCatConditionComponent* Condition = BoundCondition.Get())
@@ -157,6 +169,11 @@ void UCatHUDModel::Refresh()
 	{
 		NewState.Fishing = FishingViewBridge->GetViewState();
 		NewState.bHasFishingSession = true;
+		NewState.TotalFightStamina = NewState.Fishing.CombinedFightStamina;
+		NewState.TotalFightStaminaMaximum = NewState.Fishing.CombinedFightStaminaMaximum;
+		NewState.NormalizedTotalFightStamina = NewState.TotalFightStaminaMaximum > 0.0
+			? static_cast<float>(FMath::Clamp(NewState.TotalFightStamina / NewState.TotalFightStaminaMaximum, 0.0, 1.0))
+			: 0.0f;
 		NewState.bShowFishingState = true;
 		NewState.NormalizedFishStamina = FMath::Clamp(
 			static_cast<float>(NewState.Fishing.NormalizedFishStamina), 0.0f, 1.0f);
@@ -186,10 +203,13 @@ void UCatHUDModel::Refresh()
 		&& NewState.LastFishingCommandResult.Error == ECatFishingCommandError::None;
 	NewState.BitePromptText = FText::FromString(TEXT("鱼儿咬钩啦！提竿"));
 	NewState.HookSuccessFeedbackText = FText::FromString(TEXT("提竿成功！"));
-	NewState.CatStaminaText = NewState.FightStaminaMaximum > 0.0f
-		? FText::FromString(FString::Printf(TEXT("玩家体力 %.0f / %.0f"),
-			NewState.FightStamina, NewState.FightStaminaMaximum))
-		: FText::FromString(FString::Printf(TEXT("玩家体力 %.0f"), NewState.FightStamina));
+	NewState.CatStaminaText = NewState.bHasFishingSession
+		? FText::FromString(FString::Printf(TEXT("总体力 %.0f / %.0f（%d 人）"),
+			NewState.TotalFightStamina, NewState.TotalFightStaminaMaximum, NewState.Fishing.FightParticipantCount))
+		: (NewState.FightStaminaMaximum > 0.0f
+			? FText::FromString(FString::Printf(TEXT("玩家体力 %.0f / %.0f"),
+				NewState.FightStamina, NewState.FightStaminaMaximum))
+			: FText::FromString(FString::Printf(TEXT("玩家体力 %.0f"), NewState.FightStamina)));
 	NewState.FishStaminaText = FText::FromString(FString::Printf(
 		TEXT("鱼体力 %.0f%%"), NewState.NormalizedFishStamina * 100.0f));
 	if (NewState.HookCountdownText.IsEmpty())
@@ -278,9 +298,11 @@ void UCatHUDModel::Refresh()
 		: FText::FromString(TEXT("钓鱼反馈：当前没有进行中的钓鱼会话"));
 	if (NewState.bHasFishingCommandResult)
 	{
-		NewState.FishingFeedbackText = FText::FromString(FString::Printf(TEXT("钓鱼反馈：最近命令 %s，版本 %lld"),
-			*UEnum::GetValueAsString(NewState.LastFishingCommandResult.Error),
-			NewState.LastFishingCommandResult.Revision));
+		NewState.FishingFeedbackText = NewState.LastFishingCommandResult.Error == ECatFishingCommandError::RodDeploymentLimitReached
+			? FText::FromString(TEXT("场上鱼竿已达上限，请先收起一根。"))
+			: FText::FromString(FString::Printf(TEXT("钓鱼反馈：最近命令 %s，版本 %lld"),
+				*UEnum::GetValueAsString(NewState.LastFishingCommandResult.Error),
+				NewState.LastFishingCommandResult.Revision));
 	}
 	ViewState = MoveTemp(NewState);
 	OnViewStateChanged.Broadcast();
@@ -290,6 +312,13 @@ void UCatHUDModel::Refresh()
 const FCatHUDViewState& UCatHUDModel::GetViewState() const
 {
 	return ViewState;
+}
+
+// 销毁兜底流程：先复用 Unbind 路径清理委托、FishingBridge 和等待 Timer，再交给 UObject 释放自身引用；这不发布新的 HUD 投影。
+void UCatHUDModel::BeginDestroy()
+{
+	Unbind();
+	Super::BeginDestroy();
 }
 
 // 属性变化流程：事件只表达事实变更，Model 统一重读三项 HUD 数值。
@@ -307,6 +336,107 @@ void UCatHUDModel::HandleConditionChanged()
 
 // Growth 变化流程：重读完整 HUD 事实，让经验槽、待选次数和身体状态保持同帧投影。
 void UCatHUDModel::HandleGrowthChanged()
+{
+	Refresh();
+}
+
+// Run GameState 绑定调和流程：先从当前 Controller 的 World 读取最新 GameState；找不到时启动短重试，找到后按观察者模式先刷新一次 HUD 投影，再订阅后续 OnRep/服务器本机写入通知。
+bool UCatHUDModel::RefreshRunGameStateBinding()
+{
+	APlayerController* Controller = BoundPlayerController.Get();
+	UWorld* World = Controller ? Controller->GetWorld() : nullptr;
+	ACatfishingGameState* CurrentGameState = World ? World->GetGameState<ACatfishingGameState>() : nullptr;
+	if (BoundRunGameState.Get() == CurrentGameState && CurrentGameState && RunPublicStateChangedHandle.IsValid())
+	{
+		ClearRunGameStateBindingRetry();
+		return true;
+	}
+
+	if (ACatfishingGameState* PreviousGameState = BoundRunGameState.Get())
+	{
+		PreviousGameState->OnRunPublicStateChanged.Remove(RunPublicStateChangedHandle);
+	}
+	RunPublicStateChangedHandle.Reset();
+	BoundRunGameState = CurrentGameState;
+
+	if (!CurrentGameState)
+	{
+		ScheduleRunGameStateBindingRetry();
+		return false;
+	}
+
+	ClearRunGameStateBindingRetry();
+	Refresh();
+	RunPublicStateChangedHandle = CurrentGameState->OnRunPublicStateChanged.AddUObject(
+		this, &ThisClass::HandleRunPublicStateChanged);
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_hud_run_gamestate_bound World=%s NetMode=%d Revision=%lld Day=%d Phase=%s"),
+		World ? *World->GetName() : TEXT("None"),
+		World ? static_cast<int32>(World->GetNetMode()) : INDEX_NONE,
+		CurrentGameState->GetRunPublicState().Revision,
+		CurrentGameState->GetRunPublicState().Phase.DayIndex,
+		*UEnum::GetValueAsString(CurrentGameState->GetRunPublicState().Phase.Phase));
+	return true;
+}
+
+// Run GameState 解绑流程：先停止等待 Timer，再从仍有效的 GameState 移除委托，最后清空弱引用和句柄；旧 World 已销毁时弱引用为空也保持幂等。
+void UCatHUDModel::ClearRunGameStateBinding()
+{
+	ClearRunGameStateBindingRetry();
+	if (ACatfishingGameState* RunGameState = BoundRunGameState.Get())
+	{
+		RunGameState->OnRunPublicStateChanged.Remove(RunPublicStateChangedHandle);
+	}
+	RunPublicStateChangedHandle.Reset();
+	BoundRunGameState.Reset();
+}
+
+// Run GameState 等待安排流程：只在还有 Controller/World 且当前没有活跃重试 Timer 时注册本地轮询；轮询目的是等复制宿主出现，不读取或修改 Run 内容。
+void UCatHUDModel::ScheduleRunGameStateBindingRetry()
+{
+	APlayerController* Controller = BoundPlayerController.Get();
+	UWorld* World = Controller ? Controller->GetWorld() : nullptr;
+	if (!World)
+	{
+		return;
+	}
+	if (RunGameStateBindingRetryTimerHandle.IsValid()
+		&& RunGameStateBindingRetryWorld.Get() == World
+		&& World->GetTimerManager().IsTimerActive(RunGameStateBindingRetryTimerHandle))
+	{
+		return;
+	}
+	ClearRunGameStateBindingRetry();
+	RunGameStateBindingRetryWorld = World;
+	World->GetTimerManager().SetTimer(RunGameStateBindingRetryTimerHandle,
+		FTimerDelegate::CreateUObject(this, &ThisClass::HandleRunGameStateBindingRetry),
+		CatHUDRunGameStateBindingRetrySeconds, true);
+}
+
+// Run GameState 等待清理流程：优先回到创建 Timer 的 World 清理，缺失时才用当前 Controller World 兜底；无论清理是否命中都让句柄和所属 World 失效。
+void UCatHUDModel::ClearRunGameStateBindingRetry()
+{
+	UWorld* TimerWorld = RunGameStateBindingRetryWorld.Get();
+	if (!TimerWorld)
+	{
+		APlayerController* Controller = BoundPlayerController.Get();
+		TimerWorld = Controller ? Controller->GetWorld() : nullptr;
+	}
+	if (TimerWorld)
+	{
+		TimerWorld->GetTimerManager().ClearTimer(RunGameStateBindingRetryTimerHandle);
+	}
+	RunGameStateBindingRetryTimerHandle.Invalidate();
+	RunGameStateBindingRetryWorld.Reset();
+}
+
+// Run GameState 重试流程：每次只尝试补齐委托绑定；绑定函数会先重读 HUD 投影再订阅，让客户端晚到的第一份 Run 快照也能立刻显示在左上角。
+void UCatHUDModel::HandleRunGameStateBindingRetry()
+{
+	RefreshRunGameStateBinding();
+}
+
+// Run 快照变化流程：客户端 OnRep 或服务器本机写入到达后统一刷新 HUD；Model 不缓存第二份天数，只重新读取 GameState。
+void UCatHUDModel::HandleRunPublicStateChanged()
 {
 	Refresh();
 }
@@ -342,6 +472,7 @@ void UCatHUDModel::RefreshFishingSessionBinding()
 	{
 		return;
 	}
+	const FGuid PreviousSessionId = FishingViewBridge->GetViewState().FishingSessionId;
 	if (Session)
 	{
 		FishingViewBridge->BindSession(Session);
@@ -349,5 +480,36 @@ void UCatHUDModel::RefreshFishingSessionBinding()
 	else
 	{
 		FishingViewBridge->UnbindSession();
+		Refresh();
 	}
+	UE_LOG(LogCatUI, Log,
+		TEXT("Event=ui_hud_fishing_session_binding World=%s NetMode=%d Authority=%d LocalRole=%d PlayerId=%d PreviousSessionId=%s SessionId=%s Result=%s"),
+		*GetNameSafe(Controller ? Controller->GetWorld() : nullptr),
+		Controller && Controller->GetWorld() ? static_cast<int32>(Controller->GetWorld()->GetNetMode()) : INDEX_NONE,
+		Controller && Controller->HasAuthority(), Controller ? static_cast<int32>(Controller->GetLocalRole()) : INDEX_NONE,
+		PlayerState ? PlayerState->GetPlayerId() : INDEX_NONE, *PreviousSessionId.ToString(),
+		*FishingViewBridge->GetViewState().FishingSessionId.ToString(), Session ? TEXT("Bound") : TEXT("Unbound"));
+}
+
+void UCatHUDModel::ScheduleFishingSessionBindingReconcile()
+{
+	APlayerController* Controller = BoundPlayerController.Get();
+	UWorld* World = Controller ? Controller->GetWorld() : nullptr;
+	if (!World || (FishingSessionBindingReconcileWorld.Get() == World
+		&& World->GetTimerManager().IsTimerActive(FishingSessionBindingReconcileTimerHandle))) return;
+	ClearFishingSessionBindingReconcile();
+	FishingSessionBindingReconcileWorld = World;
+	World->GetTimerManager().SetTimer(FishingSessionBindingReconcileTimerHandle,
+		FTimerDelegate::CreateUObject(this, &ThisClass::RefreshFishingSessionBinding),
+		CatHUDFishingSessionBindingReconcileSeconds, true);
+}
+
+void UCatHUDModel::ClearFishingSessionBindingReconcile()
+{
+	if (UWorld* World = FishingSessionBindingReconcileWorld.Get())
+	{
+		World->GetTimerManager().ClearTimer(FishingSessionBindingReconcileTimerHandle);
+	}
+	FishingSessionBindingReconcileTimerHandle.Invalidate();
+	FishingSessionBindingReconcileWorld.Reset();
 }

@@ -17,6 +17,9 @@ class CATFISHING_API UCatWaterQuerySubsystem : public UWorldSubsystem
 public:
 	FCatWaterSpatialResult QueryWaterPoint(const FVector& WorldPoint, const FCatWaterRegionHandle& ExpectedHandle) const;
 	FCatWaterSpatialResult QueryShoreRelation(const FVector& WorldPoint, const FCatWaterRegionHandle& ExpectedHandle) const;
+	/** 查询指定水域内脚点的浸没深度；不使用岸高容差，也不裁决“危险”。 */
+	FCatWaterImmersionResult QueryImmersionAtWorldPoint(const FVector& WorldPoint,
+		const FCatWaterRegionHandle& ExpectedHandle) const;
 	FCatWaterSpatialResult QueryNearestShoreForPreview(const FVector& WorldPoint, FName OptionalRegionId = NAME_None) const;
 	FCatWaterSpatialResult ResolveRayToWater(const FVector& RayOrigin, const FVector& RayDirection,
 		const FCatWaterRegionHandle& ExpectedHandle) const;

@@ -7,6 +7,7 @@
 #include "CatFishDefinition.generated.h"
 
 class UTexture2D;
+class UCatFishPresentationDefinition;
 
 /** 鱼体型只表达协作档位，不携带任何力量、体力或几何公式。 */
 UENUM(BlueprintType)
@@ -42,6 +43,8 @@ public:
 	/** 检查该资产是否足以进入阶段 E 事务；任一必需字段 Unset 都返回 false。 */
 	bool IsRuntimeDefinitionReady() const;
 	double FindBaitMultiplierOrNeutral(FName BaitDefinitionId) const;
+	/** 解析本鱼直接引用且合同完整的表现定义；不会扫描目录或按 ID 查询第二张表。 */
+	UCatFishPresentationDefinition* LoadRuntimePresentationDefinition() const;
 
 	/** 鱼种稳定 ID；FishInstance、图鉴候选和日志只引用该值，不把资产对象当永久身份。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
@@ -58,6 +61,13 @@ public:
 	/** 鱼护/库存格使用的鱼缩略图；捕获实例只保存鱼定义 ID，表现资源由定义资产提供。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
 	TSoftObjectPtr<UTexture2D> Thumbnail;
+
+	/**
+	 * 本鱼唯一的 Mesh / Skeleton / AnimBP / 动画资源入口。
+	 * 运行时表现不得绕过该引用按 FishDefinitionId 维护平行映射。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
+	TSoftObjectPtr<UCatFishPresentationDefinition> PresentationDefinition;
 
 	/** 体型协作档位；只有 Giant 可在 Fishing 阶段接受搏斗协作者。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing")
@@ -112,8 +122,13 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "1", ClampMax = "8"))
 	int32 MinimumFightParticipants = 0;
 
-	/** 搏斗中的鱼力量基值；与 Character FishingStrength 比较，0 表示公式输入未裁。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "0.0"))
+	/**
+	 * 旧资产序列化字段；运行时力量已统一由“本条实际重量 × UCatFishingFightBalanceDefinition::StrengthPerKilogram”生成。
+	 * 暂留字段只为安全读取尚未重存的二进制 DataAsset，不再参与选鱼、搏斗或 UI。
+	 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing",
+		meta = (ClampMin = "0.0", DeprecatedProperty,
+			DeprecationMessage = "FishStrength is derived from sampled weight at runtime"))
 	double FishStrength = 0.0;
 
 	/** 搏斗中的鱼短周期体力；与日常属性/稀有度独立，0 表示未裁。 */

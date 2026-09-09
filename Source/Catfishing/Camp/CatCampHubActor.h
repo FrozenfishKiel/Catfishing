@@ -1,27 +1,31 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "GameFramework/Actor.h"
+#include "GameFramework/PlayerStart.h"
 #include "Items/CatItemTypes.h"
 #include "CatCampHubActor.generated.h"
 
 class ACatCharacter;
 class ACatFishTankActor;
 class ACatCampInventoryActor;
+class APawn;
 class USceneComponent;
 
 /** 篝火公共回看请求；它只启动可跳过表现，不参与普通夜晚 ready 或 StateTree 转移。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatCampfirePlaybackRequested, FGuid);
 
-/** Lake 中唯一固定营地宿主；提供休息、救援落点、共享鱼缸引用和可选回看，不支持建造/装饰/搬迁。 */
+/** 玩法世界唯一固定营地宿主；同时承载玩家出生点语义、休息、救援落点、共享鱼缸引用和可选回看，不支持建造/装饰/搬迁。 */
 UCLASS()
-class CATFISHING_API ACatCampHubActor : public AActor
+class CATFISHING_API ACatCampHubActor : public APlayerStart
 {
 	GENERATED_BODY()
 
 public:
-	/** 建立关卡摆放营地所需的固定根节点、救援落点和复制属性；布局仍由关卡资产负责，运行时不会生成第二套营地真相。 */
-	ACatCampHubActor();
+	/** 建立关卡摆放营地所需的出生点父类、固定根节点、救援落点和复制属性；布局仍由关卡资产负责，运行时不会生成第二套营地真相。 */
+	ACatCampHubActor(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+
+	/** 按当前营地附近地面为 0 到 MaxCampSpawnPlayers-1 的玩家序号解析合法出生位置；超过容量会拒绝而不是循环复用，成功时返回的是 Pawn 根胶囊中心 Transform，失败时调用方必须保持无 Pawn。 */
+	bool TryResolvePlayerEntryTransform(int32 PreferredEntryIndex, const APawn* PawnToFit, FTransform& OutTransform) const;
 
 	/** 本人位于营地范围时请求快速休息；Character ConditionComponent 拥有最终身体写入。 */
 	FCatDomainCommandResult RequestRest(AController* RequestingController, FGuid RequestId);
@@ -55,7 +59,7 @@ private:
 	/** 验证 Controller 当前 Character 是否处于固定营地交互范围；不接受客户端位置参数。 */
 	ACatCharacter* ResolveCharacterInCamp(AController* Controller) const;
 
-	/** 固定营地 Actor 根；关卡摆放后不会被玩家移动。 */
+	/** 固定营地布局和交互子组件的项目根；它挂在 PlayerStart 胶囊根下，关卡摆放后不会被玩家移动。 */
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<USceneComponent> CampRoot;
 

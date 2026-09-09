@@ -8,10 +8,12 @@
 #include "GameFramework/PlayerController.h"
 #include "Logging/CatLog.h"
 #include "Online/CatOnlineSubsystem.h"
-#include "UI/CatTravelWidget.h"
 #include "UI/CatUISettings.h"
-#include "UI/Collection/CatCollectionModel.h"
-#include "UI/Collection/CatCollectionWidget.h"
+#include "UI/Frontend/CatFrontendPageController.h"
+#include "UI/Frontend/CatFrontendRootWidget.h"
+#include "UI/Frontend/CatFrontendRoomModel.h"
+#include "UI/Frontend/CatFrontendSaveModel.h"
+#include "UI/Frontend/CatFrontendSettingsModel.h"
 #include "UI/HUD/CatHUDModel.h"
 #include "UI/HUD/CatHUDWidget.h"
 #include "UI/Interaction/CatInteractionPageController.h"
@@ -21,6 +23,8 @@
 #include "UI/Inventory/CatInventoryPageController.h"
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
+#include "UI/Save/CatLakeMainMenuController.h"
+#include "UI/Save/CatLakeMainMenuWidget.h"
 
 // 初始化流程：先订阅唯一 Online 快照，再弱绑定当前 Controller；本地玩家 UI 模块是否装配由 AttachPlayerLakeUI 统一验证 WBP 配置。
 void UCatLocalPlayerUISubsystem::Initialize(FSubsystemCollectionBase& Collection)
@@ -37,15 +41,15 @@ void UCatLocalPlayerUISubsystem::Initialize(FSubsystemCollectionBase& Collection
 		}
 		BindController(LocalPlayer->GetPlayerController(GetWorld()));
 	}
-	RefreshOnlineWidgetForCurrentController();
+	RefreshFrontendForCurrentController();
 }
 
-// 销毁流程：先释放 HUD、背包和唯一交互提示模块；再解绑 Controller、移除 Frontend View 与 Online 快照订阅。
+// 销毁流程：先释放 HUD、背包和唯一交互提示模块；再解绑 Controller、移除 Frontend Root 与 Online 快照订阅。
 void UCatLocalPlayerUISubsystem::Deinitialize()
 {
 	DetachPlayerLakeUI();
 	UnbindController();
-	RemoveOnlineWidget();
+	RemoveFrontendRoot();
 	if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
 	{
 		if (UGameInstance* GameInstance = LocalPlayer->GetGameInstance())
@@ -60,15 +64,45 @@ void UCatLocalPlayerUISubsystem::Deinitialize()
 	Super::Deinitialize();
 }
 
-// Controller 替换流程：旧 Controller 仍可访问时先拆掉本地玩家 UI 和 Frontend UI；父类切换后再只针对 NewController 装配当前 Pawn。
+// Controller 替换流程：
+// 1. 先按当前 Online 快照判断已有 Frontend Root 是否属于 Start 加载、旅行等待或失败恢复保护窗。
+// 2. 局内 HUD、背包和交互提示始终拆掉，因为它们绑定旧 Pawn 和输入；受保护的 Frontend Root 不在这里移除。
+// 3. 父类完成 LocalPlayer 的 Controller 切换后重新绑定新 Controller，并在保留 Root 时显式恢复拥有者、鼠标和键盘焦点。
+// 4. 最后重新调和 Frontend，非受保护状态会按常规 World/配置规则移除或重建。
 void UCatLocalPlayerUISubsystem::PlayerControllerChanged(APlayerController* NewController)
 {
+	bool bShouldKeepFrontendRoot = false;
+	if (FrontendRootWidget)
+	{
+		if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
+		{
+			if (UGameInstance* GameInstance = LocalPlayer->GetGameInstance())
+			{
+				if (UCatOnlineSubsystem* Online = GameInstance->GetSubsystem<UCatOnlineSubsystem>())
+				{
+					bShouldKeepFrontendRoot = ShouldKeepExistingFrontendRoot(Online->GetSnapshot());
+				}
+			}
+		}
+	}
 	DetachPlayerLakeUI();
 	UnbindController();
-	RemoveOnlineWidget();
+	if (!bShouldKeepFrontendRoot)
+	{
+		RemoveFrontendRoot();
+	}
 	Super::PlayerControllerChanged(NewController);
 	BindController(NewController);
-	RefreshOnlineWidgetForCurrentController();
+	if (bShouldKeepFrontendRoot && FrontendRootWidget && NewController && NewController->IsLocalController())
+	{
+		if (FrontendRootWidget->GetOwningPlayer() != NewController)
+		{
+			FrontendRootWidget->SetOwningPlayer(NewController);
+		}
+		NewController->SetShowMouseCursor(true);
+		FrontendRootWidget->SetKeyboardFocus();
+	}
+	RefreshFrontendForCurrentController();
 }
 
 // 背包切换流程：把输入、焦点和 ViewState 更新全部交给 Inventory PageController；Subsystem 不持有背包布尔值或渲染细节。
@@ -147,128 +181,130 @@ UCatInventoryPageController* UCatLocalPlayerUISubsystem::GetInventoryPageControl
 	return InventoryPageController;
 }
 
-// 快照消费流程：Online 变更时先调和 Frontend TravelWidget，再刷新 HUD/背包只读模型；不把 Online 事件参数拼进 View。
+// 快照消费流程：Online 变更时按当前 World 调和正式 Frontend Root，并刷新局内 HUD；库存只听自己的数据源，不把会话状态当库存变化。
 void UCatLocalPlayerUISubsystem::HandleOnlineSnapshotChanged()
 {
-	RefreshOnlineWidgetForCurrentController();
+	RefreshFrontendForCurrentController();
 	if (HUDModel)
 	{
 		HUDModel->Refresh();
 	}
-	if (InventoryPageController)
-	{
-		InventoryPageController->RefreshModel();
-	}
 }
 
-// 动作转交流程：Frontend TravelWidget 的每个意图只调用 Online 的一个公开入口；局内拆分 UI 不在这里预建或转发对象页面。
-void UCatLocalPlayerUISubsystem::HandleActionRequested(const ECatOnlineUIAction Action, const FGuid OpaqueHandle)
-{
-	ULocalPlayer* LocalPlayer = GetLocalPlayer();
-	UGameInstance* GameInstance = LocalPlayer ? LocalPlayer->GetGameInstance() : nullptr;
-	UCatOnlineSubsystem* Online = GameInstance ? GameInstance->GetSubsystem<UCatOnlineSubsystem>() : nullptr;
-	if (!Online)
-	{
-		return;
-	}
-
-	FCatOnlineResult Result;
-	switch (Action)
-	{
-	case ECatOnlineUIAction::Host:
-		Result = Online->RequestCreateSession();
-		break;
-	case ECatOnlineUIAction::Find:
-		Result = Online->RequestFindSessions();
-		break;
-	case ECatOnlineUIAction::Join:
-	{
-		FCatSessionSearchHandle Handle;
-		Handle.Value = OpaqueHandle;
-		Result = Online->RequestJoinSession(Handle);
-		break;
-	}
-	case ECatOnlineUIAction::AcceptInvite:
-	{
-		FCatSessionInviteHandle Handle;
-		Handle.Value = OpaqueHandle;
-		Result = Online->RequestAcceptInvite(Handle);
-		break;
-	}
-	case ECatOnlineUIAction::Leave:
-		Result = Online->RequestLeave();
-		break;
-	default:
-		return;
-	}
-
-	const UWorld* World = GetWorld();
-	UE_LOG(LogCatUI, Log, TEXT("Event=ui_online_action Action=%s RequestId=%s World=%s NetMode=%d Result=%s Error=%s"),
-		*UEnum::GetValueAsString(Action),
-		*Result.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-		World ? *World->GetName() : TEXT("None"),
-		World ? static_cast<int32>(World->GetNetMode()) : -1,
-		Result.bAccepted ? TEXT("accepted") : TEXT("rejected"),
-		*UEnum::GetValueAsString(Result.Error));
-	if (OnlineWidget)
-	{
-		OnlineWidget->Configure(Online->GetSnapshot());
-	}
-}
-
-// Frontend View 调和流程：读取当前完整 Online 快照；只有 Frontend 或前往 Lake 的等待态保留 TravelWidget，Lake 内正式入口交给局内拆分 UI。
-void UCatLocalPlayerUISubsystem::RefreshOnlineWidgetForCurrentController()
+// Frontend 调和流程：
+// 1. 先读取当前 LocalPlayer、Controller 和 Online 快照；缺 LocalPlayer 或 Online 时拆掉 Root，避免旧前端脱离事实源继续显示。
+// 2. 没有本地 Controller 时只允许已有 Root 在 Start 加载、旅行等待或失败恢复保护窗内短暂保留；其它情况立即拆除。
+// 3. 非 Frontend World 只保留受保护的已有 Root，不在玩法图或异常 World 补建新主界面，避免旧前端变成第二入口。
+// 4. 已有 Root 直接复用；需要新建时必须仍处于 Frontend World，并且配置能加载正式 Root WBP，否则记录失败并保持无原生替身。
+// 5. 创建成功后装配 Root、PageController 和三个只读 Model，最后入视口、打开鼠标并设置键盘焦点。
+void UCatLocalPlayerUISubsystem::RefreshFrontendForCurrentController()
 {
 	ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	APlayerController* Controller = LocalPlayer ? LocalPlayer->GetPlayerController(GetWorld()) : nullptr;
-	const UGameInstance* GameInstance = LocalPlayer ? LocalPlayer->GetGameInstance() : nullptr;
-	const UCatOnlineSubsystem* Online = GameInstance ? GameInstance->GetSubsystem<UCatOnlineSubsystem>() : nullptr;
-	if (!Controller || !Online)
+	UGameInstance* GameInstance = LocalPlayer ? LocalPlayer->GetGameInstance() : nullptr;
+	UCatOnlineSubsystem* Online = GameInstance ? GameInstance->GetSubsystem<UCatOnlineSubsystem>() : nullptr;
+	if (!LocalPlayer || !Online)
 	{
-		RemoveOnlineWidget();
+		RemoveFrontendRoot();
 		return;
 	}
-
 	const FCatOnlineSnapshot Snapshot = Online->GetSnapshot();
-	if (!ShouldShowOnlineTravelWidget(Snapshot))
+	const bool bIsFrontendWorld = Snapshot.WorldState == ECatOnlineWorldState::Frontend;
+	const bool bShouldKeepExistingRoot = ShouldKeepExistingFrontendRoot(Snapshot);
+	if (!Controller || !Controller->IsLocalController())
 	{
-		RemoveOnlineWidget();
+		if (bShouldKeepExistingRoot) { return; }
+		RemoveFrontendRoot();
 		return;
 	}
-
-	if (!OnlineWidget)
+	if (!bIsFrontendWorld && !bShouldKeepExistingRoot)
 	{
-		OnlineWidget = CreateWidget<UCatTravelWidget>(Controller, UCatTravelWidget::StaticClass());
-		if (!OnlineWidget)
-		{
-			return;
-		}
-		ActionHandle = OnlineWidget->OnActionRequested.AddUObject(this, &ThisClass::HandleActionRequested);
-		OnlineWidget->AddToViewport();
-		UE_LOG(LogCatUI, Log, TEXT("Event=ui_online_widget_created World=%s"), GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
+		RemoveFrontendRoot();
+		return;
 	}
-	OnlineWidget->Configure(Snapshot);
-}
-
-// Frontend 面板判断流程：只承认前台和从前台出发去 Lake 的旅行等待；到达 Lake 后玩家入口由 HUD、背包和交互提示接管。
-bool UCatLocalPlayerUISubsystem::ShouldShowOnlineTravelWidget(const FCatOnlineSnapshot& Snapshot)
-{
-	return Snapshot.WorldState == ECatOnlineWorldState::Frontend
-		|| Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake;
-}
-
-// Frontend View 移除流程：先解绑动作广播再移出视口；空实例保持幂等，避免 Controller 切换时重复 removed 日志干扰验收。
-void UCatLocalPlayerUISubsystem::RemoveOnlineWidget()
-{
-	if (!OnlineWidget)
+	if (FrontendRootWidget)
 	{
 		return;
 	}
-	OnlineWidget->OnActionRequested.Remove(ActionHandle);
-	ActionHandle.Reset();
-	OnlineWidget->RemoveFromParent();
-	OnlineWidget = nullptr;
-	UE_LOG(LogCatUI, Log, TEXT("Event=ui_online_widget_removed World=%s"), GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
+	if (!bIsFrontendWorld)
+	{
+		return;
+	}
+	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
+	const TSubclassOf<UCatFrontendRootWidget> RootClass = Settings ? Settings->LoadFrontendRootWidgetClass() : nullptr;
+	if (!RootClass)
+	{
+		UE_LOG(LogCatUI, Error, TEXT("Event=frontend_root_unavailable World=%s Reason=invalid_config"), *GetWorld()->GetName());
+		return;
+	}
+	FrontendRootWidget = CreateWidget<UCatFrontendRootWidget>(Controller, RootClass);
+	FrontendSaveModel = NewObject<UCatFrontendSaveModel>(this);
+	FrontendRoomModel = NewObject<UCatFrontendRoomModel>(this);
+	FrontendSettingsModel = NewObject<UCatFrontendSettingsModel>(this);
+	FrontendPageController = NewObject<UCatFrontendPageController>(this);
+	if (!FrontendRootWidget || !FrontendSaveModel || !FrontendRoomModel || !FrontendSettingsModel || !FrontendPageController)
+	{
+		UE_LOG(LogCatUI, Error, TEXT("Event=frontend_create_failed World=%s"), *GetWorld()->GetName());
+		RemoveFrontendRoot();
+		return;
+	}
+	FrontendSaveModel->Initialize(LocalPlayer);
+	FrontendRoomModel->Initialize(LocalPlayer);
+	FrontendSettingsModel->Initialize(LocalPlayer);
+	FrontendRootWidget->InitializeFrontend(FrontendPageController, FrontendSaveModel, FrontendRoomModel, FrontendSettingsModel);
+	FrontendPageController->Initialize(LocalPlayer, FrontendRootWidget, FrontendSaveModel, FrontendRoomModel, FrontendSettingsModel);
+	FrontendRootWidget->AddToViewport(20);
+	Controller->SetShowMouseCursor(true);
+	FrontendRootWidget->SetKeyboardFocus();
+	UE_LOG(LogCatUI, Log, TEXT("Event=frontend_root_created World=%s NetMode=%d Controller=%s RootClass=%s"), *GetWorld()->GetName(),
+		static_cast<int32>(GetWorld()->GetNetMode()), *GetNameSafe(Controller), *GetNameSafe(RootClass.Get()));
+}
+
+// 已有 Root 保留判断流程：
+// 1. 没有 Root 时直接返回 false；该策略只保护已经可见的加载页，不负责补建任何非 Frontend World UI。
+// 2. Start 请求带有效 RequestId 且处在预载、旅行排队或前往 Lake World 时保留，覆盖 Controller 暂空和 World 切换窗口。
+// 3. Start 失败恢复只在已有 Root 上成立，让错误文本能回到 Frontend/Room；其它 Lake 或无关 World 继续走拆除路径。
+bool UCatLocalPlayerUISubsystem::ShouldKeepExistingFrontendRoot(const FCatOnlineSnapshot& Snapshot) const
+{
+	if (!FrontendRootWidget)
+	{
+		return false;
+	}
+	const bool bGameplayStartLoadingOrTraveling = Snapshot.ActiveOperation == ECatOnlineOperation::Start
+		&& Snapshot.LastError == ECatOnlineError::None && Snapshot.RequestId.IsValid()
+		&& (Snapshot.bIsGameplayLoadPending || Snapshot.TransportState == ECatOnlineTransportState::TravelQueued
+			|| Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake);
+	const bool bGameplayStartFailureRecovering = Snapshot.ActiveOperation == ECatOnlineOperation::None
+		&& (Snapshot.LastError == ECatOnlineError::GameplayPreloadFailed || Snapshot.LastError == ECatOnlineError::TravelRejected
+			|| Snapshot.LastError == ECatOnlineError::TravelFailed || Snapshot.LastError == ECatOnlineError::ConnectStringUnavailable
+			|| Snapshot.LastError == ECatOnlineError::NetworkFailure || Snapshot.LastError == ECatOnlineError::ClientStartRetryExhausted)
+		&& (Snapshot.WorldState == ECatOnlineWorldState::Frontend || Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake
+			|| Snapshot.TransportState == ECatOnlineTransportState::Failed);
+	return bGameplayStartLoadingOrTraveling || bGameplayStartFailureRecovering;
+}
+
+// Frontend 拆除流程：先关闭流程控制器的 Model 订阅和 Root 绑定，再拆 Root，最后关闭三个 Model；若调用时仍有绑定 Controller，才恢复非鼠标前端状态，此路径不碰既有 Lake HUD、背包和交互提示。
+void UCatLocalPlayerUISubsystem::RemoveFrontendRoot()
+{
+	const bool bHadFrontendRoot = FrontendRootWidget != nullptr;
+	if (FrontendPageController) { FrontendPageController->Shutdown(); }
+	if (FrontendRootWidget)
+	{
+		FrontendRootWidget->ResetFrontend();
+		FrontendRootWidget->RemoveFromParent();
+	}
+	if (FrontendSaveModel) { FrontendSaveModel->Shutdown(); }
+	if (FrontendRoomModel) { FrontendRoomModel->Shutdown(); }
+	if (FrontendSettingsModel) { FrontendSettingsModel->Shutdown(); }
+	FrontendPageController = nullptr;
+	FrontendRootWidget = nullptr;
+	FrontendSaveModel = nullptr;
+	FrontendRoomModel = nullptr;
+	FrontendSettingsModel = nullptr;
+	if (bHadFrontendRoot)
+	{
+		if (APlayerController* Controller = BoundPlayerController.Get()) { Controller->SetShowMouseCursor(false); }
+	}
 }
 
 // Controller 刷新流程：
@@ -313,17 +349,17 @@ void UCatLocalPlayerUISubsystem::UnbindController()
 }
 
 // Pawn 变化流程：
-// 1. 先把 NewPawn 裁成项目猫身体；同一个已装配身体的重复通知会重读库存快照并刷新输入绑定，不拆掉正在打开的 UI。
+// 1. 先把 NewPawn 裁成项目猫身体；同一个已装配身体的重复通知只刷新输入绑定，库存和菜单数据继续等自己的读源广播。
 // 2. 新身体或空身体会先完整拆掉上一套本地玩家 UI，避免跨 Pawn 复用 Model、View 或输入锁。
 // 3. 只有新的 ACatCharacter 通过配置校验时才重新装配 HUD、背包、交互提示和拾取提示层。
 void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 {
 	ACatCharacter* Character = Cast<ACatCharacter>(NewPawn);
 	if (Character && AttachedPlayerLakeCharacter.Get() == Character
-		&& HUDWidget && InventoryPageController && InteractionPageController)
+		&& HUDWidget && InventoryPageController && LakeMainMenuController && InteractionPageController)
 	{
-		InventoryPageController->RefreshModel();
 		InventoryPageController->RefreshInputBinding();
+		LakeMainMenuController->RefreshInputBinding();
 		return;
 	}
 	DetachPlayerLakeUI();
@@ -332,17 +368,18 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 		return;
 	}
 	AttachPlayerLakeUI(Character);
-	if (HUDWidget && InventoryPageController && InteractionPageController)
+	if (HUDWidget && InventoryPageController && LakeMainMenuController && InteractionPageController)
 	{
 		AttachedPlayerLakeCharacter = Character;
 	}
 }
 
 // 本地玩家 UI 装配流程：
-// 1. 验证本地设置、当前 Controller/Pawn 和 World；核心 WBP 类缺失或无效时直接 fail-closed，不创建原生白盒替身。
-// 2. 创建 HUD Model/View 并入视口；HUD 展示猫状态、钓鱼反馈、入口按钮和固定屏幕中心准星。
+// 1. 验证本地设置、当前 Controller/Pawn 和 World；任一正式 WBP 类缺失或无效时直接 fail-closed，不创建脱离项目资产的原生替身。
+// 2. 创建 HUD Model/View 并入视口；默认常驻天数、背包入口、设置入口和中心准星，背包内容由库存页打开后再显示。
 // 3. 创建 Inventory Model/PageController/普通背包 View，但背包 View 不预先入视口，只通过既有 InputContext 的 Action 打开。
-// 4. 创建 Interaction 提示 View 和控制器；控制器订阅 PlayerController 的唯一准星交互目标，商店、鱼护和未来箱子仍由世界交互对象提供页面上下文。
+// 4. 创建局内主菜单 View/Controller；菜单不常驻视口，只在主菜单 Action 或 HUD 按钮触发时打开。
+// 5. 创建 Interaction 提示 View 和控制器；控制器订阅 PlayerController 的唯一准星交互目标，商店、鱼护和未来箱子仍由世界交互对象提供页面上下文。
 void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 {
 	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
@@ -361,14 +398,17 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	const TSubclassOf<UCatInventorySlotWidget> InventorySlotViewClass = Settings->LoadInventorySlotWidgetClass();
 	const TSubclassOf<UCatInteractionPromptWidget> InteractionPromptViewClass =
 		Settings->LoadInteractionPromptWidgetClass();
-	if (!HUDViewClass || !InventoryViewClass || !InventorySlotViewClass || !InteractionPromptViewClass)
+	const TSubclassOf<UCatLakeMainMenuWidget> LakeMainMenuViewClass = Settings->LoadLakeMainMenuWidgetClass();
+	if (!HUDViewClass || !InventoryViewClass || !InventorySlotViewClass || !InteractionPromptViewClass
+		|| !LakeMainMenuViewClass)
 	{
 		UE_LOG(LogCatUI, Warning,
-			TEXT("Event=ui_player_module_class_missing HUD=%s Inventory=%s Slot=%s Interaction=%s"),
+			TEXT("Event=ui_player_module_class_missing HUD=%s Inventory=%s Slot=%s Interaction=%s LakeMenu=%s"),
 			*Settings->HUDWidgetClass.ToSoftObjectPath().ToString(),
 			*Settings->InventoryWidgetClass.ToSoftObjectPath().ToString(),
 			*Settings->InventorySlotWidgetClass.ToSoftObjectPath().ToString(),
-			*Settings->InteractionPromptWidgetClass.ToSoftObjectPath().ToString());
+			*Settings->InteractionPromptWidgetClass.ToSoftObjectPath().ToString(),
+			*Settings->LakeMainMenuWidgetClass.ToSoftObjectPath().ToString());
 		return;
 	}
 
@@ -377,10 +417,12 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	InventoryModel = NewObject<UCatInventoryModel>(this);
 	InventoryPageController = NewObject<UCatInventoryPageController>(this);
 	InventoryWidget = CreateWidget<UCatInventoryWidget>(Controller, InventoryViewClass);
+	LakeMainMenuController = NewObject<UCatLakeMainMenuController>(this);
+	LakeMainMenuWidget = CreateWidget<UCatLakeMainMenuWidget>(Controller, LakeMainMenuViewClass);
 	InteractionPageController = NewObject<UCatInteractionPageController>(this);
 	InteractionPromptWidget = CreateWidget<UCatInteractionPromptWidget>(Controller, InteractionPromptViewClass);
 	if (!HUDModel || !HUDWidget || !InventoryModel || !InventoryPageController || !InventoryWidget
-		|| !InteractionPageController || !InteractionPromptWidget)
+		|| !LakeMainMenuController || !LakeMainMenuWidget || !InteractionPageController || !InteractionPromptWidget)
 	{
 		DetachPlayerLakeUI();
 		return;
@@ -397,7 +439,8 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	HUDWidget->AddToViewport(1);
 	HandleHUDModelViewStateChanged();
 	if (!InventoryModel->Bind(GetLocalPlayer(), Controller, Character)
-		|| !InventoryPageController->Bind(GetLocalPlayer(), Controller, InventoryModel, InventoryWidget))
+		|| !InventoryPageController->Bind(GetLocalPlayer(), Controller, InventoryModel, InventoryWidget)
+		|| !LakeMainMenuController->Bind(GetLocalPlayer(), Controller, LakeMainMenuWidget))
 	{
 		DetachPlayerLakeUI();
 		return;
@@ -414,7 +457,7 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	const UWorld* World = GetWorld();
 	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	UE_LOG(LogCatUI, Log,
-		TEXT("Event=ui_player_modules_attached World=%s NetMode=%d LocalPlayerIndex=%d Controller=%s LocalController=%s HUD=%s Crosshair=gray_center Inventory=%s Slot=%s Interaction=%s ShopPrecreated=false"),
+		TEXT("Event=ui_player_modules_attached World=%s NetMode=%d LocalPlayerIndex=%d Controller=%s LocalController=%s HUD=%s HUDMode=minimal_main Inventory=%s Slot=%s LakeMenu=%s Interaction=%s ShopPrecreated=false"),
 		World ? *World->GetName() : TEXT("None"),
 		World ? static_cast<int32>(World->GetNetMode()) : -1,
 		LocalPlayer ? LocalPlayer->GetLocalPlayerIndex() : INDEX_NONE,
@@ -423,13 +466,23 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 		*GetNameSafe(HUDWidget->GetClass()),
 		*GetNameSafe(InventoryWidget->GetClass()),
 		*GetNameSafe(InventorySlotViewClass.Get()),
+		*GetNameSafe(LakeMainMenuWidget ? LakeMainMenuWidget->GetClass() : nullptr),
 		*GetNameSafe(InteractionPromptWidget ? InteractionPromptWidget->GetClass() : nullptr));
 }
 
-// 本地玩家 UI 解绑流程：PageController 先恢复输入并移出当前库存页，Model 再解除玩法订阅，最后移除各自 WBP 并清引用。
+// 本地玩家 UI 解绑流程：PageController 先恢复输入并移出当前模态页，Model 再解除玩法订阅，最后移除各自 WBP 并清引用。
 void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 {
-	CloseCollection();
+	if (LakeMainMenuController)
+	{
+		LakeMainMenuController->Unbind();
+		LakeMainMenuController = nullptr;
+	}
+	if (LakeMainMenuWidget)
+	{
+		LakeMainMenuWidget->RemoveFromParent();
+		LakeMainMenuWidget = nullptr;
+	}
 	if (InventoryPageController)
 	{
 		InventoryPageController->Unbind();
@@ -481,66 +534,7 @@ void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 		LocalPlayer ? LocalPlayer->GetLocalPlayerIndex() : INDEX_NONE);
 }
 
-// 图鉴切换流程：存在可见图鉴时关闭；否则按 UI Settings 懒创建 View/Model 并渲染当前 Profile 只读快照。
-void UCatLocalPlayerUISubsystem::ToggleCollection()
-{
-	if (CollectionWidget)
-	{
-		const bool bWasVisible = CollectionWidget->IsInViewport();
-		CloseCollection();
-		if (bWasVisible)
-		{
-			return;
-		}
-	}
-
-	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
-	const TSubclassOf<UCatCollectionWidget> CollectionViewClass = Settings
-		? Settings->LoadCollectionWidgetClass() : nullptr;
-	APlayerController* Controller = BoundPlayerController.Get();
-	if (!Controller || !CollectionViewClass)
-	{
-		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_collection_unavailable Controller=%s ViewClass=%s"),
-			*GetNameSafe(Controller),
-			*GetNameSafe(CollectionViewClass.Get()));
-		return;
-	}
-
-	CollectionModel = NewObject<UCatCollectionModel>(this);
-	CollectionWidget = CreateWidget<UCatCollectionWidget>(Controller, CollectionViewClass);
-	if (!CollectionModel || !CollectionWidget || !CollectionModel->Bind(GetLocalPlayer()))
-	{
-		CloseCollection();
-		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_collection_bind_failed Controller=%s ViewClass=%s"),
-			*GetNameSafe(Controller),
-			*GetNameSafe(CollectionViewClass.Get()));
-		return;
-	}
-
-	CollectionModelViewChangedHandle = CollectionModel->OnViewStateChanged.AddUObject(
-		this, &ThisClass::HandleCollectionModelViewStateChanged);
-	CollectionWidget->AddToViewport(9);
-	HandleCollectionModelViewStateChanged();
-}
-
-// 图鉴关闭流程：先移除 Model 订阅并清空只读投影，再移出 View；重复关闭不会影响 HUD、背包或交互提示。
-void UCatLocalPlayerUISubsystem::CloseCollection()
-{
-	if (CollectionModel)
-	{
-		CollectionModel->OnViewStateChanged.Remove(CollectionModelViewChangedHandle);
-		CollectionModel->Unbind();
-		CollectionModel = nullptr;
-	}
-	CollectionModelViewChangedHandle.Reset();
-	if (CollectionWidget)
-	{
-		CollectionWidget->RemoveFromParent();
-		CollectionWidget = nullptr;
-	}
-}
-
-// HUD 渲染转交流程：Model 已聚合状态和钓鱼反馈；Subsystem 只把它交给 HUD WBP。
+// HUD 渲染转交流程：Model 已聚合天数、入口显隐和可选调试反馈；Subsystem 只把它交给 HUD WBP。
 void UCatLocalPlayerUISubsystem::HandleHUDModelViewStateChanged()
 {
 	if (HUDModel && HUDWidget)
@@ -549,16 +543,21 @@ void UCatLocalPlayerUISubsystem::HandleHUDModelViewStateChanged()
 	}
 }
 
-// 图鉴渲染转交流程：Model 已聚合 Profile 图鉴记录；Subsystem 只把它交给 Collection WBP。
-void UCatLocalPlayerUISubsystem::HandleCollectionModelViewStateChanged()
+// 局内菜单切换流程：打开菜单前先关闭当前背包页面，保证同一 Controller 上只有一个模态输入恢复记录处于打开状态。
+void UCatLocalPlayerUISubsystem::ToggleLakeMainMenu()
 {
-	if (CollectionModel && CollectionWidget)
+	if (!LakeMainMenuController)
 	{
-		CollectionWidget->RenderCollection(CollectionModel->GetViewState());
+		return;
 	}
+	if (!LakeMainMenuController->IsMenuOpen() && InventoryPageController && InventoryPageController->IsInventoryOpen())
+	{
+		InventoryPageController->RequestCloseInventoryFromWidget();
+	}
+	LakeMainMenuController->ToggleMenu();
 }
 
-// HUD 入口动作流程：背包和图鉴分别转交现有控制器/模型；菜单仍保留给蓝图或后续页面控制器。
+// HUD 入口动作流程：背包和主菜单都转交已有控制器；HUD 不兜底拼页面，也不持有保存或离局业务。
 void UCatLocalPlayerUISubsystem::HandleHUDActionRequested(const ECatHUDAction Action)
 {
 	switch (Action)
@@ -566,12 +565,8 @@ void UCatLocalPlayerUISubsystem::HandleHUDActionRequested(const ECatHUDAction Ac
 	case ECatHUDAction::OpenInventory:
 		ToggleInventory();
 		break;
-	case ECatHUDAction::OpenCollection:
-		ToggleCollection();
-		break;
 	case ECatHUDAction::OpenMainMenu:
-		UE_LOG(LogCatUI, Log, TEXT("Event=ui_hud_action_forwarded_without_native_page Action=%s"),
-			*UEnum::GetValueAsString(Action));
+		ToggleLakeMainMenu();
 		break;
 	default:
 		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_hud_action_unknown Action=%d"), static_cast<int32>(Action));

@@ -7,6 +7,7 @@
 
 class ACatCharacter;
 class AController;
+class APlayerController;
 class UCatEquipmentComponent;
 
 /** 抛竿/打窝瞄准的公共数学；服务器裁决和客户端预览调用同一组函数，保证预览线与真实落点一致。 */
@@ -16,6 +17,10 @@ class CATFISHING_API UCatFishingAimLibrary : public UBlueprintFunctionLibrary
 	GENERATED_BODY()
 
 public:
+	/** 显示鼠标时取鼠标射线，否则取当前镜头准星射线；仅在本地采集输入。 */
+	static bool TryGetLocalCastViewRay(APlayerController* Controller, FVector& OutOrigin, FVector& OutDirection);
+	/** 服务器限定输入射线的来源和朝向；落点仍须经过水域、竿尖射程及角色视线裁决。 */
+	static bool IsCastViewRayValid(FVector Origin, FVector Direction, FVector PawnViewLocation, FVector ControlDirection);
 	/** 找到离世界点最近的已烘焙水域 Handle；找不到返回无效 Handle。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Fishing|Aim", meta = (WorldContext = "WorldContextObject"))
 	static FCatWaterRegionHandle FindNearestWaterRegion(UObject* WorldContextObject, FVector WorldPoint);

@@ -61,13 +61,13 @@ public:
 	/** 玩家登录或生成新 Grant 后重投其所有未 ACK Grant 和未终态 CapturePlan；每次重投复用原稳定 ID。 */
 	void DeliverPendingForController(AController* Controller);
 
-	/** Run teardown 前关闭新候选、把未成像计划标记失败并最终重投 Grant；返回 false 表示需有界等 ACK，不是立即失败。 */
+	/** Run teardown 前关闭新候选、把未成像计划标记失败并最终重投 Grant；返回 false 表示需等待真实 ACK，不是立即失败。 */
 	bool PrepareForRunTeardown();
 
-	/** 只读判断最终重投后的所有永久 Grant 是否已有真实 durable ACK；超时不会改写这些记录。 */
+	/** 只读判断最终重投后的所有永久 Grant 是否已有真实 durable ACK；退出等待不会改写这些记录。 */
 	bool AreAllGrantAcksComplete() const;
 
-	/** 返回仍未收到 durable ACK 的 Grant 数量；Host 超时日志用它暴露丢失风险，不把超时冒充确认。 */
+	/** 返回仍未收到 durable ACK 的 Grant 数量；Host 退出等待日志用它暴露仍在处理的持久化回执。 */
 	int32 GetPendingGrantAckCount() const;
 
 #if WITH_DEV_AUTOMATION_TESTS

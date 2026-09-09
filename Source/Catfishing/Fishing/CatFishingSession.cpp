@@ -1,11 +1,13 @@
 #include "Fishing/CatFishingSession.h"
+#include "Fishing/Simulation/CatFishingBiteTimingModel.h"
 
 #include "Character/CatCharacter.h"
-#include "Framework/Game/CatGameplayTypes.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
+#include "Framework/Game/CatfishingGameState.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
 #include "AbilitySystemComponent.h"
-#include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
@@ -18,7 +20,10 @@
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingGameplayTags.h"
+#include "Fishing/CatFishingStateTreeEvents.h"
+#include "Fishing/Config/CatFishingFightBalanceDefinition.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
+#include "Fishing/Presentation/CatFishPresentationDefinition.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/Integration/CatFishingAimLibrary.h"
@@ -125,6 +130,12 @@ FCatFishingPhaseResult ACatFishingSession::EnterPhaseFromStateTree(const ECatFis
 		bFightStaminaInitialized = true;
 		StaminaParticipantsTouched.Add(FisherCharacter); // 记入"需要在会话结束时恢复体力"的名单。
 	}
+	if (NewPhase == ECatFishingPhase::ExhaustedReel
+		&& (!FightRunner || !FightRunner->SetFishExhaustedFromAuthority()))
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		return Result;
+	}
 	Snapshot.Phase = NewPhase;
 	Snapshot.PhaseStartedServerTime = GetWorld() ? GetWorld()->GetTimeSeconds() : 0.0;
 	if (Snapshot.HookActor)
@@ -171,73 +182,54 @@ FCatFishingPhaseResult ACatFishingSession::EnterPhaseFromStateTree(const ECatFis
 	return Result;
 }
 
-// 搏斗协作流程：先按服务器 Controller 身份和 RequestId 重放，再要求 Giant、HookedFight 与匹配 Revision；随后复用服务的统一参战能力谓词，非 Active、无当前 Character、倒地或 FishingStrength/FightStamina 非正都在修改集合前拒绝。合法新参与者才刷新协作摘要、递增 Revision 并复制；重复参与者保持集合不变，但同一请求仍冻结为成功终态。
-FCatDomainCommandResult ACatFishingSession::SubmitFightAssist(AController* AssistingController, const FGuid RequestId,
-	const int64 ExpectedRevision)
+// 旧蓝图协作入口保留协议外形，加入行为统一经过 Service::OperateRod，不能绕过距离、容量与占竿检查。
+FCatDomainCommandResult ACatFishingSession::SubmitFightAssist(AController* AssistingController,
+	const FGuid RequestId, const int64 ExpectedRevision)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	// 从 Controller 重新解析服务器私有身份，绝不信任客户端携带的身份字段。
 	const FString StableNetId = ResolveStableNetId(AssistingController);
-	// 终态缓存键=身份+RequestId：同一玩家对同一个协作请求重复提交（比如 RPC 重发）必须幂等重放，不重复修改参与集合。
-	const FString CacheKey = FString::Printf(TEXT("%s|%s"), *StableNetId, *RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+	const FString CacheKey = FString::Printf(TEXT("%s|%s"), *StableNetId, *RequestId.ToString());
 	if (const FCatDomainCommandResult* Cached = AssistTerminalCache.Find(CacheKey))
 	{
-		// 命中缓存：直接回放第一次的终态，但把 bCommitted 强制置 false、Error 置 AlreadyResolved，
-		// 表明"这不是一次新的提交"，调用方不应把它当作再次成功处理。
 		Result = *Cached;
 		Result.bCommitted = false;
 		Result.Error = ECatDomainCommandError::AlreadyResolved;
 		return Result;
 	}
-	if (!RequestId.IsValid() || StableNetId.IsEmpty())
+	UCatFishingService* Service = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
+	if (!HasAuthority() || !RequestId.IsValid() || StableNetId.IsEmpty())
 	{
-		// RequestId 非法或身份解析失败（Controller/PlayerState 无效）都不可信，直接拒绝。
 		Result.Error = ECatDomainCommandError::InvalidIdentity;
 	}
-	else if (!Snapshot.bGiant || Snapshot.Phase != ECatFishingPhase::HookedFight || bCaptureResolved)
+	else if (IsTerminal() || !Snapshot.RodActor || !Service)
 	{
-		// 协作只对巨鱼在 HookedFight 阶段开放；普通鱼、非搏斗阶段或已提交捕获一律拒绝。
 		Result.Error = ECatDomainCommandError::InvalidPhase;
 	}
 	else if (ExpectedRevision != Snapshot.Revision)
 	{
-		// 客户端提交时携带的 ExpectedRevision 必须与当前 Session Revision 一致，
-		// 防止基于过期快照发起的协作请求被误判为针对当前状态生效。
 		Result.Error = ECatDomainCommandError::RevisionConflict;
+	}
+	else if (Snapshot.RodActor->GetOperatorSlotIndex(AssistingController->PlayerState) != INDEX_NONE)
+	{
+		Result.bCommitted = true;
+		Result.Error = ECatDomainCommandError::None;
 	}
 	else
 	{
-		FString ValidatedStableNetId;
-		ACatCharacter* Character = nullptr;
-		double FishingStrength = 0.0;
-		double FightStamina = 0.0;
-		// 复用 FishingService 的统一参战能力谓词：必须 Active、未倒地、且力量/体力均为正才具备协作资格；
-		// 并且谓词内部重新解析出的身份要和外部传入的 StableNetId 完全一致，防止身份/Character 被偷换。
-		if (!UCatFishingService::TryGetFightCapability(AssistingController, ValidatedStableNetId, Character,
-			FishingStrength, FightStamina) || ValidatedStableNetId != StableNetId)
-		{
-			Result.Error = ECatDomainCommandError::InvalidPhase;
-		}
-		else
-		{
-			// 判断是否是本会话第一次见到这个身份（避免同一玩家重复加入时反复刷新/复制）。
-			const bool bNewParticipant = !FightParticipantIds.Contains(StableNetId);
-			FightParticipantIds.Add(StableNetId);
-			FightParticipantCharacters.Add(StableNetId, Character);
-			if (bNewParticipant)
-			{
-				// 只有真正新增参与者时才重新聚合力量/体力并推一次离散复制；
-				// 重复请求（已在集合中）保持集合不变，不产生多余的网络更新。
-				RefreshFightSummary();
-				PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
-			}
-			Result.bCommitted = true;
-			Result.Error = ECatDomainCommandError::None;
-		}
+		FCatOperateRodCommand Join;
+		Join.Context.RequestId = RequestId;
+		Join.Context.RodActorId = Snapshot.RodActor->GetPresentationState().RodActorId;
+		Join.Context.ExpectedRodActorRevision = Snapshot.RodActor->GetPresentationState().RodActorRevision;
+		const FCatFishingCommandResult Joined = Service->OperateRod(AssistingController, Join);
+		Result.bCommitted = Joined.bCommitted;
+		Result.Error = Joined.bCommitted ? ECatDomainCommandError::None
+			: Joined.Error == ECatFishingCommandError::RodActorRevisionConflict ? ECatDomainCommandError::RevisionConflict
+			: Joined.Error == ECatFishingCommandError::CommandsClosed ? ECatDomainCommandError::CommandsClosed
+			: ECatDomainCommandError::InvalidPhase;
 	}
 	Result.Revision = Snapshot.Revision;
-	AssistTerminalCache.Add(CacheKey, Result); // 无论成功失败都写入终态缓存，保证后续重放幂等。
+	AssistTerminalCache.Add(CacheKey, Result);
 	return Result;
 }
 
@@ -248,7 +240,7 @@ FCatDomainCommandResult ACatFishingSession::ResolveFightExchangeFromStateTree(co
 	FCatDomainCommandResult Result;
 	if (FightRunner && FightRunner->IsRunning())
 	{
-		// 常规搏斗（非巨鱼协作战）已经由 FightRunner 的固定步长模拟接管体力消耗，
+		// 正式搏斗已由 FightRunner 的固定步长模拟接管体力消耗；旧节点的资产引用尚待审计。
 		// StateTree 的这条交换节点在 Runner 运行期间不应该再重复扣体力，直接拒绝。
 		Result.Error = ECatDomainCommandError::InvalidPhase;
 		return Result;
@@ -266,7 +258,7 @@ FCatDomainCommandResult ACatFishingSession::ResolveFightExchangeFromStateTree(co
 	// 交换前先重新聚合一次参战集合的力量/体力（集合可能因掉线/倒地而发生变化）。
 	const bool bSummaryChanged = RefreshFightSummary();
 	if (Snapshot.FightParticipantCount < FishDefinition->MinimumFightParticipants
-		|| Snapshot.CombinedFishingStrength < FishDefinition->FishStrength
+		|| Snapshot.CombinedFishingStrength < Snapshot.FishStrength
 		|| Snapshot.CombinedFightStamina < ParticipantStaminaCost * Snapshot.FightParticipantCount)
 	{
 		// 人数不足、合计力量压不过鱼、或合计体力不够支付这一轮全员消耗，都视为条件不满足，拒绝本次交换。
@@ -327,7 +319,7 @@ FCatDomainCommandResult ACatFishingSession::ResolveFightExchangeFromStateTree(co
 	return Result;
 }
 
-// 失败预算流程：先重放本会话唯一终态，再验证 StateTree/钓手 Equipment；首次把随机 RequestId 和当前 Equipment Revision 交给互斥惩罚事务，成功即关闭第二刀。
+// 历史失败预算任务的兼容入口；正式树生成器不接入此任务，Equipment 仍拒绝活动会话旁路伤竿。
 FCatFishingFailureResult ACatFishingSession::CommitFailureBudgetFromStateTree(const ECatFishingFailurePenalty Penalty)
 {
 	if (bFailureBudgetCommitted)
@@ -340,13 +332,13 @@ FCatFishingFailureResult ACatFishingSession::CommitFailureBudgetFromStateTree(co
 	}
 	FCatFishingFailureResult Result;
 	Result.Command.RequestId = FGuid::NewGuid();
-	UCatEquipmentComponent* Equipment = CastEquipment.Get(); // 失败惩罚（丢饵/伤竿）结算到抛竿者装备。
+	UCatEquipmentComponent* Equipment = CastEquipment.Get();
 	if (!HasAuthority() || !StateTreeComponent || !StateTreeComponent->IsRunning() || !Equipment)
 	{
 		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;
 	}
-	// 真正的惩罚事务委托给装备组件，按其当前 Revision 提交（丢特殊饵或伤竿由 Penalty 参数决定）。
+	// 保留既有 gate；不能为借竿改调竿主的“当前选择”预算，实际竿磨损只走绑定实例事务。
 	Result = Equipment->CommitFishingFailure(Result.Command.RequestId, Equipment->GetSnapshot().Revision, Penalty);
 	if (Result.Command.bCommitted)
 	{
@@ -393,16 +385,24 @@ FCatDomainCommandResult ACatFishingSession::ResolveRetryExhaustedEscapeFromState
 bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherController)
 {
 	const FString NewStableNetId = ResolveStableNetId(NewFisherController);
-	FString ValidatedId;
-	ACatCharacter* NewCharacter = nullptr;
-	double NewStrength = 0.0;
-	double NewStamina = 0.0;
-	const bool bCapable = UCatFishingService::TryGetFightCapability(NewFisherController, ValidatedId, NewCharacter,
-		NewStrength, NewStamina) && ValidatedId == NewStableNetId;
-	const bool bFightTakeover = Snapshot.Phase == ECatFishingPhase::HookedFight;
-	const bool bTransferablePhase = Snapshot.Phase == ECatFishingPhase::Waiting
-		|| Snapshot.Phase == ECatFishingPhase::Probe || Snapshot.Phase == ECatFishingPhase::TrueBiteWindow
-		|| bFightTakeover;
+	ACatCharacter* NewCharacter = NewFisherController ? Cast<ACatCharacter>(NewFisherController->GetPawn()) : nullptr;
+	UCatAbilitySystemComponent* NewASC = NewCharacter ? NewCharacter->GetCatAbilitySystemComponent() : nullptr;
+	const ACatfishingGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
+	double NewStrength = NewASC ? NewASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute()) : 0.0;
+	double NewStamina = NewASC ? NewASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) : 0.0;
+	// 操竿资格和个人出力分离：零体力可接管线杯，但不会获得队友的体力余额。
+	const bool bCapable = NewASC && GameMode && GameMode->CanAcceptGameplayCommand(NewFisherController)
+		&& UCatFishingService::CanControllerStartFishingAction(NewFisherController)
+		&& FMath::IsFinite(NewStrength) && NewStrength >= 0.0
+		&& FMath::IsFinite(NewStamina) && NewStamina >= 0.0;
+	const bool bFightTakeover = Snapshot.Phase == ECatFishingPhase::HookedFight
+		|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel;
+	// 姿态与会话阶段正交：只要尚未终局，地上的同一根竿都允许新主操作手接管。
+	const bool bTransferablePhase = Snapshot.Phase == ECatFishingPhase::CastFlight
+		|| Snapshot.Phase == ECatFishingPhase::Waiting || Snapshot.Phase == ECatFishingPhase::Probe
+		|| Snapshot.Phase == ECatFishingPhase::TrueBiteWindow || bFightTakeover
+		|| Snapshot.Phase == ECatFishingPhase::NearShore || Snapshot.Phase == ECatFishingPhase::AutoHauling
+		|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel;
 	if (!HasAuthority() || IsTerminal() || !bTransferablePhase || NewStableNetId.IsEmpty() || !bCapable
 		|| !NewCharacter || !NewFisherController->PlayerState)
 	{
@@ -425,39 +425,39 @@ bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherContr
 	if (bFightTakeover)
 	{
 		UCatAbilitySystemComponent* NewAbilitySystem = NewCharacter->GetCatAbilitySystemComponent();
-		float NewStaminaMaximum = 0.0f;
-		const bool bStaminaConfigReady = GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
-			NewCharacter->GetCatDefinitionId(), NewStaminaMaximum)
-			&& FMath::IsFinite(NewStaminaMaximum) && NewStaminaMaximum > 0.0f;
-		if (!FightRunner || !FightRunner->IsRunning() || !NewAbilitySystem || !bStaminaConfigReady
-			|| !NewAbilitySystem->InitializeFishingStaminaForSession())
+		// 接力只读取新主位当前属性，不回满任何成员的体力，也不重建本场 Runner。
+		const double NewStaminaMaximum = NewAbilitySystem
+			? NewAbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()) : 0.0;
+		const bool bStaminaAttributeReady = FMath::IsFinite(NewStaminaMaximum) && NewStaminaMaximum > 0.0;
+		if (!FightRunner || !FightRunner->IsRunning() || !NewAbilitySystem || !bStaminaAttributeReady)
 		{
 			UE_LOG(LogCatFishing, Warning,
-				TEXT("Event=fishing_fight_takeover_rejected SessionId=%s Reason=StaminaOrRunnerUnavailable Runner=%s StaminaConfig=%s %s"),
+				TEXT("Event=fishing_fight_takeover_rejected SessionId=%s Reason=StaminaOrRunnerUnavailable Runner=%s StaminaAttribute=%s %s"),
 				*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 				FightRunner && FightRunner->IsRunning() ? TEXT("Running") : TEXT("Unavailable"),
-				bStaminaConfigReady ? TEXT("Ready") : TEXT("Invalid"),
+				bStaminaAttributeReady ? TEXT("Ready") : TEXT("Invalid"),
 				*CatLogContext::BuildControllerFields(NewFisherController));
 			return false;
 		}
 
-		bool bInitialPullHeld = false;
-		bool bInitialSlackHeld = false;
 		int64 InitialInputSequence = 0;
 		if (const ACatfishingPlayerController* NewPlayerController = Cast<ACatfishingPlayerController>(NewFisherController))
 		{
-			if (const UCatFishingCommandComponent* Commands = NewPlayerController->GetFishingCommandComponent())
+			if (UCatFishingCommandComponent* Commands = NewPlayerController->GetFishingCommandComponent())
 			{
+				bool bIgnoredPull = false;
+				bool bIgnoredSlack = false;
+				Commands->ClearHeldFightInputForControlTransferFromAuthority();
 				Commands->TryGetHeldFightInputStateFromAuthority(
-					bInitialPullHeld, bInitialSlackHeld, InitialInputSequence);
+					bIgnoredPull, bIgnoredSlack, InitialInputSequence);
 			}
 		}
 		NewStamina = NewAbilitySystem->GetNumericAttribute(
 			UCatSurvivalAttributeSet::GetFightStaminaAttribute());
-		if (!FightRunner->TransferOperatorFromAuthority(NewAbilitySystem, NewStrength,
-			NewStaminaMaximum, NewStamina, InitialInputSequence, bInitialPullHeld, bInitialSlackHeld))
+		if (!FightRunner->TransferOperatorFromAuthority(NewFisherController->PlayerState,
+			NewAbilitySystem, NewStrength,
+			NewStaminaMaximum, NewStamina, InitialInputSequence, false, false))
 		{
-			NewAbilitySystem->RequestFishingStaminaReset();
 			UE_LOG(LogCatFishing, Warning,
 				TEXT("Event=fishing_fight_takeover_rejected SessionId=%s Reason=RunnerRebindFailed Strength=%.3f Stamina=%.3f StaminaMaximum=%.3f InputSequence=%lld %s"),
 				*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), NewStrength,
@@ -466,14 +466,10 @@ bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherContr
 			return false;
 		}
 
-		// 旧操作手从这场会话退出后立即恢复自己的短周期体力，并从终态恢复名单移除；
-		// 否则他去另一根竿开新会话时，旧会话结束会把新会话正在使用的体力意外补满。
+		// 旧操作手离开后保留当下体力，不再瞬间补满；同时从本会话终态恢复名单移除，
+		// 防止他去另一根竿后被旧会话的收尾错误覆盖。
 		if (OldFisherCharacter && OldFisherCharacter != NewCharacter)
 		{
-			if (UCatAbilitySystemComponent* OldAbilitySystem = OldFisherCharacter->GetCatAbilitySystemComponent())
-			{
-				OldAbilitySystem->RequestFishingStaminaReset();
-			}
 			StaminaParticipantsTouched.Remove(OldFisherCharacter);
 		}
 		StaminaParticipantsTouched.Add(NewCharacter);
@@ -485,6 +481,7 @@ bool ACatFishingSession::TransferFisherFromAuthority(AController* NewFisherContr
 	FisherStableNetId = NewStableNetId;
 	FisherCharacter = NewCharacter;
 	Snapshot.FisherPlayerState = NewFisherController->PlayerState;
+	LastSuspendedFisherPlayerState = nullptr;
 	FightParticipantIds.Add(NewStableNetId);
 	FightParticipantCharacters.Add(NewStableNetId, NewCharacter);
 	RefreshFightSummary();
@@ -521,7 +518,7 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
 	UCatEquipmentComponent* ScooperEquipment = ScoopingCharacter ? ScoopingCharacter->GetEquipmentComponent() : nullptr;
 	double ScoopReachCentimeters = 0.0;
-	// 全局设置和服务器当前装备的抄网 DA 共同给出有效距离；当前开发配置会为每名玩家默认发放并选中一份。
+	// 全局设置和服务器当前装备快照中的已选抄网 DA 共同给出有效距离；临时测试发放只负责入库和选择，此处仍要求真实已装备抄网。
 	const bool bScoopReachReady = UCatFishingAimLibrary::TryResolveScoopReach(
 		ScooperEquipment, ScoopReachCentimeters);
 	// 这里不再要求"鱼处于近岸带内"：射线∩圆本身就是唯一的范围判定，再叠一层离岸距离等于两套口径，
@@ -665,7 +662,7 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 	}
 	else
 	{
-		// 饵料只在鱼即将离开水中会话时结算；失败必须终止，避免世界鱼与装备占用事实分叉。
+		// 饵料只在鱼即将离开水中会话时确认消耗；失败必须终止，避免世界鱼与装备预留事实分叉。
 		if (!CommitCatchEquipmentFromAuthority())
 		{
 			Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
@@ -717,6 +714,7 @@ void ACatFishingSession::TerminateSession(const ECatFishingOutcome Outcome, cons
 	case ECatFishingOutcome::Escaped:
 	case ECatFishingOutcome::RodBroken:
 	case ECatFishingOutcome::LineBroken:
+	case ECatFishingOutcome::LineCut:
 	case ECatFishingOutcome::CatInWater:
 	case ECatFishingOutcome::Cancelled:
 	case ECatFishingOutcome::Invalidated:
@@ -752,7 +750,14 @@ bool ACatFishingSession::PrepareSessionFromAuthority(const FCatFishingAttemptSna
 	AttemptSnapshot = Attempt;
 	// Fish identity remains deliberately empty until a valid left-click commits the hook inside TrueBiteWindow.
 	FisherCharacter = InFisherCharacter;
-	CastEquipment = InFisherCharacter->GetEquipmentComponent(); // 冻结原始抛竿者装备：饵料/磨损结算口径不随接力改变。
+	CastEquipment = InFisherCharacter->GetEquipmentComponent(); // 冻结饵料/会话协调器；它已记录真实竿宿主，接力不重新绑定。
+	bool bRodBroken = false;
+	if (!CastEquipment.IsValid() || !CastEquipment->GetFishingRodDurability(
+		Attempt.FishingSessionId, Snapshot.RodDurabilityRemaining, bRodBroken) || bRodBroken)
+	{
+		return false;
+	}
+	RodWearSequence = 0;
 	FisherStableNetId = StableNetId;
 	FightParticipantIds.Add(StableNetId);
 	FightParticipantCharacters.Add(StableNetId, InFisherCharacter);
@@ -765,21 +770,26 @@ bool ACatFishingSession::PrepareSessionFromAuthority(const FCatFishingAttemptSna
 bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 {
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
-	double BiteWarningSeconds = 0.0;
-	if (!HasAuthority() || !bPrepared || IsTerminal() || !Settings
-		|| !FMath::IsFinite(Settings->BaseBiteRatePerSecond) || Settings->BaseBiteRatePerSecond <= 0.0
-		|| !FMath::IsFinite(Settings->MinimumBiteDelaySeconds) || Settings->MinimumBiteDelaySeconds < 0.0
-		|| !FMath::IsFinite(Settings->MaximumBiteDelaySeconds)
-		|| Settings->MaximumBiteDelaySeconds < Settings->MinimumBiteDelaySeconds
-		|| !Settings->TryGetBiteWarning(BiteWarningSeconds))
+	const auto RejectSchedule = [this](const TCHAR* Reason)
 	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_bite_schedule_rejected SessionId=%s CastAttemptId=%s Opportunity=%u Reason=%s World=%s WorldNetMode=%d Authority=%d LocalRole=%d Actor=%s Hook=%s"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *Snapshot.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), BiteOpportunitySequence, Reason,
+			*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), static_cast<int32>(GetLocalRole()),
+			*GetName(), *GetNameSafe(Snapshot.HookActor));
 		return false;
+	};
+	FCatFishingBiteTimingParameters TimingParameters;
+	if (!HasAuthority() || !bPrepared || IsTerminal() || !Settings
+		|| !Snapshot.HookActor || !Settings->TryGetBiteTimingParameters(TimingParameters))
+	{
+		return RejectSchedule(TEXT("SessionOrTimingConfigurationUnavailable"));
 	}
 	// Waiting 可以由“首次抛竿”或“上一轮真咬窗口漏按”进入。漏按不会释放鱼竿/鱼线/饵料预约，
 	// 这里只清理尚未确认的咬钩机会；若已有鱼 Actor，说明错误地试图把已确认搏斗倒回 Waiting，拒绝重入。
 	if (Snapshot.FishEncounterActor || FishDefinition || SelectionResolution == ECatFishSelectionResolution::Selected)
 	{
-		return false;
+		return RejectSchedule(TEXT("FishAlreadySelected"));
 	}
 	GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
 	bTrueBiteWindowAcceptingHook = false;
@@ -790,6 +800,8 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 	FishVisualScale = 1.0;
 	Snapshot.WindowEndsServerTime = 0.0;
 	Snapshot.FishDefinitionId = NAME_None;
+	Snapshot.FishWeightKilograms = 0.0;
+	Snapshot.FishStrength = 0.0;
 	Snapshot.bGiant = false;
 	Snapshot.FishFightStaminaRemaining = 0.0;
 	Snapshot.NormalizedFishStamina = 0.0;
@@ -811,39 +823,49 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 	if (Snapshot.Phase != ECatFishingPhase::Waiting)
 	{
 		// 只在尚未进入 Waiting 时才写一次阶段；重复调度（如 StateTree 重入）不重复写阶段事件。
-		if (!EnterPhaseFromStateTree(ECatFishingPhase::Waiting).bApplied) return false;
+		if (!EnterPhaseFromStateTree(ECatFishingPhase::Waiting).bApplied)
+			return RejectSchedule(TEXT("WaitingPhaseRejected"));
 	}
-	double BiteRate = Settings->BaseBiteRatePerSecond;
-	double MinimumDelay = Settings->MinimumBiteDelaySeconds;
+	double BaitRateMultiplier = 1.0;
+	double BaitMinimumDelayMultiplier = 1.0;
 	// 鱼饵按其配置的倍率修正基础上钩率与最小延迟。
 	if (const UCatEquipmentDefinition* Bait = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(AttemptSnapshot.BaitDefinitionId))
 	{
-		BiteRate *= Bait->BiteRateMultiplier;
-		MinimumDelay *= Bait->MinimumBiteDelayMultiplier;
+		BaitRateMultiplier = Bait->BiteRateMultiplier;
+		BaitMinimumDelayMultiplier = Bait->MinimumBiteDelayMultiplier;
 	}
-	// 打窝效果在此处生效：采样钩子当前位置的窝料浓度（鱼腥/香/发酵三个维度求和），
-	// 浓度越高上钩率提升越多，但用 1-e^-x 做饱和曲线，避免无限堆窝料导致上钩率失控。
+	// 初次调度时钩子还在飞行；窝料必须采样服务器冻结的水面落点。
+	FCatChumSample ChumSample;
 	if (UCatChumFieldSubsystem* Chum = GetWorld()->GetSubsystem<UCatChumFieldSubsystem>())
 	{
-		const FCatChumSample Sample = Chum->SampleChumAtPoint(Snapshot.HookActor->GetActorLocation(),
+		ChumSample = Chum->SampleChumAtPoint(AttemptSnapshot.ServerCorrectedLandingWorldPoint,
 			AttemptSnapshot.WaterRegion, GetWorld()->GetTimeSeconds());
-		const double TotalChum = Sample.EffectiveChumVector.Fishy + Sample.EffectiveChumVector.Fragrant
-			+ Sample.EffectiveChumVector.Fermented;
-		if (Sample.bSucceeded && FMath::IsFinite(TotalChum) && TotalChum > 0.0)
-		{
-			BiteRate *= 1.0 + (1.0 - FMath::Exp(-TotalChum));
-		}
 	}
-	if (!FMath::IsFinite(BiteRate) || BiteRate <= 0.0 || MinimumDelay > Settings->MaximumBiteDelaySeconds) return false;
-	// 用服务器种子生成确定性随机数，再按泊松过程的逆变换采样法算出额外的安静等待时间。
-	// MinimumDelay 是浮漂必须慢浮的下限，MaximumBiteDelaySeconds 仍是从落水到真咬的总时间上限。
+	if (!ChumSample.bSucceeded)
+	{
+		// 保留采样失败时按无窝调度的既有契约，但不再把失败静默伪装成有效零浓度。
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_bite_chum_sample_failed SessionId=%s CastAttemptId=%s Opportunity=%u Error=%s Result=UnchummedFallback World=%s WorldNetMode=%d Authority=%d LocalRole=%d Actor=%s"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *Snapshot.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), BiteOpportunitySequence,
+			*UEnum::GetValueAsString(ChumSample.Error), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(),
+			static_cast<int32>(GetLocalRole()), *GetName());
+	}
+	const double TotalChum = ChumSample.bSucceeded ? ChumSample.EffectiveChumVector.Fishy
+		+ ChumSample.EffectiveChumVector.Fragrant + ChumSample.EffectiveChumVector.Fermented : 0.0;
+	FCatFishingBiteTimingDistribution Distribution;
+	if (!FCatFishingBiteTimingModel::BuildDistribution(TimingParameters, TotalChum,
+		BaitRateMultiplier, BaitMinimumDelayMultiplier, Distribution))
+		return RejectSchedule(TEXT("InvalidContributionOrBaitTiming"));
+	// 每轮仍只消费原随机流的第一个随机数，保留鱼种抽样与机会种子的既有关系。
 	FRandomStream Random(static_cast<int32>(CurrentBiteRandomSeed));
-	const double Unit = FMath::Clamp(static_cast<double>(Random.FRand()), UE_DOUBLE_SMALL_NUMBER, 1.0 - UE_DOUBLE_SMALL_NUMBER);
-	const double SampledAdditionalCalmDelay = -FMath::Loge(1.0 - Unit) / BiteRate;
-	const double MaximumAdditionalCalmDelay = Settings->MaximumBiteDelaySeconds - BiteWarningSeconds - MinimumDelay;
-	if (!FMath::IsFinite(MaximumAdditionalCalmDelay) || MaximumAdditionalCalmDelay < 0.0) return false;
-	const double WarningDelay = MinimumDelay + FMath::Min(SampledAdditionalCalmDelay, MaximumAdditionalCalmDelay);
-	const double Delay = WarningDelay + BiteWarningSeconds;
+	double WaitSeconds = 0.0;
+	if (!Distribution.TrySample(static_cast<double>(Random.FRand()), WaitSeconds))
+		return RejectSchedule(TEXT("InvalidWaitSample"));
+	const FCatFishingCastTrajectory& Flight = Snapshot.HookActor->GetPresentationState().CastTrajectory;
+	const double RemainingFlightSeconds = FMath::Max(0.0,
+		Flight.StartedServerTime + Flight.DurationSeconds - GetWorld()->GetTimeSeconds());
+	const double WarningDelay = RemainingFlightSeconds + WaitSeconds - Distribution.WarningSeconds;
+	const double Delay = RemainingFlightSeconds + WaitSeconds;
 	GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
 	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
 	if (WarningDelay <= UE_DOUBLE_SMALL_NUMBER)
@@ -856,6 +878,20 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 			&ThisClass::HandleBiteWarningTimer, WarningDelay, false);
 	}
 	GetWorldTimerManager().SetTimer(ProbeTimerHandle, this, &ThisClass::HandleProbeTimer, Delay, false);
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_bite_scheduled Model=ChumMeanAnchors SessionId=%s CastAttemptId=%s Opportunity=%u Seed=%llu World=%s WorldNetMode=%d Authority=%d LocalRole=%d Actor=%s Hook=%s Region=%s Landing=%s SampleServerTime=%.3f ChumFields=%d ChumFishy=%.6f ChumFragrant=%.6f ChumFermented=%.6f TotalChum=%.6f NeutralMeanSeconds=%.6f ExpectedMeanSeconds=%.6f RatePerSecond=%.9f Bait=%s BaitRateMultiplier=%.3f BaitMinimumMultiplier=%.3f MinimumCalmSeconds=%.3f WarningSeconds=%.3f MaximumWaitSeconds=%.3f WaitSeconds=%.6f RemainingFlightSeconds=%.6f WarningAtServerTime=%.6f BiteAtServerTime=%.6f %s"),
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *Snapshot.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), BiteOpportunitySequence,
+		CurrentBiteRandomSeed, *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), static_cast<int32>(GetLocalRole()),
+		*GetName(), *GetNameSafe(Snapshot.HookActor), *AttemptSnapshot.WaterRegion.RegionId.ToString(),
+		*AttemptSnapshot.ServerCorrectedLandingWorldPoint.ToString(), ChumSample.SampleServerTime,
+		ChumSample.ContributingFieldCount, ChumSample.EffectiveChumVector.Fishy,
+		ChumSample.EffectiveChumVector.Fragrant, ChumSample.EffectiveChumVector.Fermented, TotalChum,
+		Distribution.NeutralMeanSeconds, Distribution.ExpectedMeanSeconds, Distribution.RatePerSecond,
+		*AttemptSnapshot.BaitDefinitionId.ToString(), BaitRateMultiplier, BaitMinimumDelayMultiplier,
+		Distribution.MinimumCalmSeconds, Distribution.WarningSeconds, Distribution.MaximumWaitSeconds,
+		WaitSeconds, RemainingFlightSeconds, GetWorld()->GetTimeSeconds() + WarningDelay,
+		GetWorld()->GetTimeSeconds() + Delay,
+		*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
 	return true;
 }
 
@@ -935,7 +971,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	UCatChumFieldSubsystem* Chum = World ? World->GetSubsystem<UCatChumFieldSubsystem>() : nullptr;
 	const ACatfishingGameState* GameState = World ? World->GetGameState<ACatfishingGameState>() : nullptr;
 	UCatFishingService* Service = World ? World->GetSubsystem<UCatFishingService>() : nullptr;
-	UCatEquipmentComponent* Equipment = CastEquipment.Get(); // 饵料预留在抛竿者装备上，选鱼/扣饵必须用同一组件。
+	UCatEquipmentComponent* Equipment = CastEquipment.Get(); // 饵料预留在抛竿者装备上，选鱼/消耗确认必须用同一组件。
 	if (!Chum || !GameState || !Service || !Equipment)
 	{
 		SelectionResolution = ECatFishSelectionResolution::Failed;
@@ -960,13 +996,32 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	FrozenSelectionContext.ActivePlayerCount = PlayerCount;
 	FrozenSelectionContext.CombinedFishingStrength = FishingStrength;
 	FrozenSelectionContext.CombinedFightStamina = FightStamina;
+	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	const UCatFishingFightBalanceDefinition* FightBalance = Settings
+		? Settings->LoadFightBalanceDefinition() : nullptr;
+	FrozenSelectionContext.StrengthPerKilogram = FightBalance
+		? FightBalance->StrengthPerKilogram : 0.0;
 	FrozenSelectionContext.RandomSeed = static_cast<int32>(CurrentBiteRandomSeed);
 	const UCatFishCatalogSettings* Catalog = GetDefault<UCatFishCatalogSettings>();
 	// 按冻结上下文从鱼类图鉴中选出本次的鱼种（含权重/稀有度/条件判定，具体算法在 Catalog 内部）。
 	FrozenSelectionResult = Catalog->SelectRuntimeDefinition(FrozenSelectionContext);
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_fish_selection_resolved SessionId=%s Selected=%s FishId=%s FightBalanceId=%s WeightKg=%.3f BaseFishStrength=%.3f StrengthPerKg=%.3f EligibleCandidates=%d SelectedBandCandidates=%d NormalizedProbability=%.6f TimeFilter=%s WeatherFilter=%s TimeOfDay=%s Weather=%s ActivePlayers=%d ChumFields=%d"),
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphensLower),
+		FrozenSelectionResult.bSelected ? TEXT("true") : TEXT("false"),
+		*FrozenSelectionResult.FishDefinitionId.ToString(),
+		FightBalance ? *FightBalance->BalanceDefinitionId.ToString() : TEXT("None"),
+		FrozenSelectionResult.WeightKilograms, FrozenSelectionResult.BaseFishStrength,
+		FrozenSelectionContext.StrengthPerKilogram, FrozenSelectionResult.EligibleCandidateCount,
+		FrozenSelectionResult.SelectedBandCandidateCount,
+		FrozenSelectionResult.SelectedNormalizedProbability,
+		Catalog->bEnableTimeOfDayEligibilityFilter ? TEXT("Enabled") : TEXT("Bypassed"),
+		Catalog->bEnableWeatherEligibilityFilter ? TEXT("Enabled") : TEXT("Bypassed"),
+		*UEnum::GetValueAsString(FrozenSelectionContext.TimeOfDay),
+		*UEnum::GetValueAsString(FrozenSelectionContext.Weather), FrozenSelectionContext.ActivePlayerCount,
+		FrozenSelectionContext.ChumSample.ContributingFieldCount);
 	UCatFishDefinition* SelectedDefinition = FrozenSelectionResult.bSelected
 		? Catalog->FindRuntimeDefinition(FrozenSelectionResult.FishDefinitionId) : nullptr;
-	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
 	const UCatBitePersonalityDefinition* Bite = SelectedDefinition && Settings
 		? Settings->FindBitePersonality(SelectedDefinition->BitePersonalityId) : nullptr;
 	const UCatFightPersonalityDefinition* Fight = SelectedDefinition && Settings
@@ -982,8 +1037,10 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 		return Result;
 	}
 	const UCatFishingPresentationSettings* Presentation = GetDefault<UCatFishingPresentationSettings>();
-	const double SelectedVisualScale = Presentation
-		? Presentation->ComputeFishUniformVisualScale(FrozenSelectionResult.WeightKilograms) : 1.0;
+	const UCatFishPresentationDefinition* FishPresentation =
+		SelectedDefinition->LoadRuntimePresentationDefinition();
+	const double SelectedVisualScale = FishPresentation
+		? FishPresentation->ComputeUniformVisualScale(FrozenSelectionResult.WeightKilograms) : 1.0;
 	UClass* FishClass = Presentation ? Presentation->FishEncounterActorClass.LoadSynchronous() : nullptr;
 	const FVector FishLocation = Snapshot.HookActor->GetActorLocation(); // 鱼在钩子所在位置咬钩。
 	// 用 SpawnActorDeferred 而非直接 SpawnActor：需要先设置好初始 Transform/Owner，
@@ -1028,7 +1085,7 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 		Result.Resolution = SelectionResolution;
 		return Result;
 	}
-	// 到这里才真正扣除（延迟结算的）饵料消耗；扣除失败就销毁鱼并终止，不留下"鱼已生成但饵未扣"的不一致状态。
+	// 到这里才确认消耗 Begin 已经暂存的饵料；失败就销毁鱼并终止，不留下"鱼已生成但饵未结算"的不一致状态。
 	const FCatFishingUseOperationResult BaitCommit = Equipment->CommitFishingBaitDeferred(Snapshot.FishingSessionId);
 	if (!BaitCommit.bApplied)
 	{
@@ -1042,12 +1099,13 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	FishWeightKilograms = FrozenSelectionResult.WeightKilograms;
 	FishVisualScale = SelectedVisualScale;
 	Snapshot.FishDefinitionId = SelectedDefinition->FishDefinitionId;
+	Snapshot.FishWeightKilograms = FrozenSelectionResult.WeightKilograms;
+	Snapshot.FishStrength = FrozenSelectionResult.BaseFishStrength;
 	Snapshot.bGiant = SelectedDefinition->BodyClass == ECatFishBodyClass::Giant;
 	Snapshot.FishFightStaminaRemaining = SelectedDefinition->FishFightStamina;
 	Snapshot.NormalizedFishStamina = 1.0;
 	Snapshot.FishEncounterActor = Encounter;
 	SelectionResolution = ECatFishSelectionResolution::Selected;
-	Equipment->PublishDeferredFishingBait(Snapshot.FishingSessionId); // 饵料扣除结果对外发布。
 	Result.Resolution = SelectionResolution;
 	Result.FishDefinitionId = SelectedDefinition->FishDefinitionId;
 	Result.Error = ECatDomainCommandError::None;
@@ -1073,6 +1131,8 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	// Runner 已在跑：幂等返回"当前是否确实处于 HookedFight"，不重复初始化搏斗。
 	if (FightRunner && FightRunner->IsRunning()) return Snapshot.Phase == ECatFishingPhase::HookedFight;
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	const UCatFishingFightBalanceDefinition* FightBalance = Settings
+		? Settings->LoadFightBalanceDefinition() : nullptr;
 	const UCatFightPersonalityDefinition* Personality = FishDefinition && Settings
 		? Settings->FindFightPersonality(FishDefinition->FightPersonalityId) : nullptr;
 	UStateTree* FishBehaviorStateTree = Settings ? Settings->FishBehaviorStateTree.LoadSynchronous() : nullptr;
@@ -1087,11 +1147,13 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	// 一次性 fail-closed 校验所有搏斗启动前置依赖：阶段必须是 TrueBiteWindow、鱼种已选定、
 	// 性格/鱼竿定义齐全且就绪、钓鱼用途处于激活态、ASC/鱼/竿/水域子系统全部有效。
 	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::TrueBiteWindow
-		|| SelectionResolution != ECatFishSelectionResolution::Selected || !Settings || !Personality
+		|| SelectionResolution != ECatFishSelectionResolution::Selected || !Settings || !FightBalance || !Personality
 		|| !FishBehaviorStateTree
 		|| !Personality->IsRuntimeDefinitionReady() || !RodDefinition || !RodDefinition->IsRuntimeDefinitionReady()
 		|| !Equipment || !Equipment->IsFishingUseActive(Snapshot.FishingSessionId) || !AbilitySystem
-		|| !Encounter || !Rod || !Water || !AttemptSnapshot.WaterRegion.IsValid())
+		|| !Encounter || !Rod || !Water || !AttemptSnapshot.WaterRegion.IsValid()
+		|| !FMath::IsNearlyEqual(FrozenSelectionContext.StrengthPerKilogram,
+			FightBalance->StrengthPerKilogram))
 	{
 		return false;
 	}
@@ -1102,48 +1164,88 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	const double FishStrengthScale = bPerfect ? Bite->PerfectFishStrengthMultiplier : 1.0;
 	const double FishStaminaScale = bPerfect ? Bite->PerfectFishStaminaMultiplier : 1.0;
 	const double LineLengthScale = bPerfect ? Bite->PerfectInitialLineLengthMultiplier : 1.0;
-	if (!AbilitySystem->InitializeFishingStaminaForSession()) return false; // 初始化搏斗体力属性（非幂等重复调用是安全的）。
-	float CatStaminaBaseline = 0.0f;
-	// 猫的体力上限按其角色定义查表，而不是写死常量。
-	GetDefault<UCatAbilitySettings>()->TryGetFightStaminaBaselineForCharacter(
-		FisherCharacter->GetCatDefinitionId(), CatStaminaBaseline);
+	// 身体上限由 ASC 播种并复制；Fishing 只消费该运行时属性，不再从角色配置建立另一份上限。
+	const double CatStaminaMaximumFromAttributes = AbilitySystem->GetNumericAttribute(
+		UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+	if (!FMath::IsFinite(CatStaminaMaximumFromAttributes) || CatStaminaMaximumFromAttributes <= 0.0)
+	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_fight_start_rejected SessionId=%s Reason=StaminaMaximumAttributeInvalid MaxFightStamina=%.3f %s"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), CatStaminaMaximumFromAttributes,
+			*CatLogContext::BuildControllerFields(FisherCharacter->GetController()));
+		return false;
+	}
+	if (!AbilitySystem->InitializeFishingStaminaForSession())
+	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_fight_start_rejected SessionId=%s Reason=StaminaInitializationRejected MaxFightStamina=%.3f %s"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), CatStaminaMaximumFromAttributes,
+			*CatLogContext::BuildControllerFields(FisherCharacter->GetController()));
+		return false;
+	}
 
-	// 三方力量：猫总体力量 = 主操作猫 + 第二只猫的 FishingStrength；鱼力量 = 鱼种 FishStrength（含完美折减）；
-	// 钓组承载 = 鱼竿定义 FishingStrength（静态）。当前只有主操作位能提交搏斗输入，因此本轮只填第一项。
+	// 双方力量、实际鱼重与猫的等效系统质量在此冻结；Runner 每步只刷新参与者输入、力量和接入约束的猫数。
+	// 鱼力量包含完美中鱼折减；这里先保存主位基础力量供初始化校验，
+	// Runner 启动后会从 OperatorPlayerStates 逐步建立每位参与者的实时贡献。
 	// 下面把服务器设置、鱼竿/鱼定义、性格模板的各项参数一次性打包进模拟配置结构体，交给 FightRunner/Simulator 使用。
 	FCatFightSimulationConfig Config;
 	Config.FixedStepSeconds = Settings->FixedFightStepSeconds; // 固定步长模拟，保证服务器权威结果确定可复现。
 	Config.PrimaryOperatorCatStrength = AbilitySystem->GetNumericAttribute(
 		UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
-	// TODO(CooperativeFishing): 第二只猫如何加入本场搏斗、何时贡献力量以及双方输入如何仲裁尚未确定；
-	// 方案确定后只需从服务器权威参与事实填充本字段，Simulator 已统一按两只猫力量之和结算。
+	// 辅助位合力不能在会话启动瞬间静态冻结；Runner 每个固定步从鱼竿操作位重建并覆盖此合计。
 	Config.SecondCatStrength = 0.0;
-	Config.FishStrength = FishDefinition->FishStrength * FishStrengthScale; // 完美中鱼可能折减鱼的力量。
-	Config.RodStrength = RodDefinition->FishingStrength;
-	Config.CatStaminaMaximum = CatStaminaBaseline;
-	Config.InwardPullCatDrainPerFishStrength = Settings->InwardPullCatDrainPerFishStrength;
-	Config.InwardPullFishDrainPerCatStrength = Settings->InwardPullFishDrainPerCatStrength;
-	Config.BaseDrainMultiplier = Personality->BaseDrainMultiplier;
-	Config.StruggleDrainMultiplier = Personality->StruggleDrainMultiplier;
-	Config.StalemateRodWearPerFishStrength = Settings->StalemateRodWearPerFishStrength;
-	Config.StalemateFishDrainPerCatStrength = Settings->StalemateFishDrainPerCatStrength;
-	Config.StalemateCatDrainPerFishStrength = Settings->StalemateCatDrainPerFishStrength;
-	Config.SlackStaminaRegenPerSecond = Settings->SlackStaminaRegenPerSecond;
-	Config.OverpowerStrengthRatio = Settings->OverpowerStrengthRatio;
-	Config.ReelSpeedCentimetersPerSecond = Settings->ReelSpeedCentimetersPerSecond;
-	Config.FishCalmSpeedCentimetersPerSecond = Personality->CalmMovementSpeedCentimetersPerSecond;
-	Config.FishStruggleSpeedCentimetersPerSecond = Personality->StruggleMovementSpeedCentimetersPerSecond;
-	Config.FishExhaustionThreshold = Settings->FishExhaustionThreshold;
+	// 猫系统质量独立于力量成长；CharacterMovement 的推挤 Mass 不作为搏斗质量来源。
+	Config.PrimaryOperatorMassKilograms = FightBalance->CatBodyMassKilograms;
+	Config.HelperMassKilograms = 0.0;
+	Config.FishMassKilograms = FishWeightKilograms;
+	Config.FishStrength = FrozenSelectionResult.BaseFishStrength * FishStrengthScale;
+	Config.StrengthPerKilogram = FightBalance->StrengthPerKilogram;
+	Config.ForcePerStrengthNewtons = FightBalance->ForcePerStrengthNewtons;
+	Config.CatBodyMassKilograms = FightBalance->CatBodyMassKilograms;
+	Config.HelperStrengthMultiplier = FightBalance->HelperStrengthMultiplier;
+	Config.ExhaustedReelForceNewtons = FightBalance->ExhaustedReelForceNewtons;
+	Config.ExhaustedCatTowAccelerationCentimetersPerSecondSquared = FightBalance->ExhaustedCatTowAccelerationCentimetersPerSecondSquared;
+	Snapshot.FishStrength = Config.FishStrength;
+	Config.RodPhysicsLengthCentimeters = RodDefinition->RodPhysicsLengthCentimeters;
+	Config.CatStaminaMaximum = CatStaminaMaximumFromAttributes;
+	Config.CatStaminaCostPerStrengthCentimeter = FightBalance->CatStaminaCostPerStrengthCentimeter;
+	Config.CatRodStaminaCostPerStrengthRadian = FightBalance->CatRodStaminaCostPerStrengthRadian;
+	Config.CatUnloadedWorkMultiplier = FightBalance->CatUnloadedWorkMultiplier;
+	Config.CatSupportStaminaPerSecond = FightBalance->CatSupportStaminaPerSecond;
+	Config.FishStaminaPerUnfulfilledMeter = FightBalance->FishStaminaPerUnfulfilledMeter;
+	Config.CatMovementStaminaMultiplier = FightBalance->CatMovementStaminaMultiplier;
+	Config.CatReelStaminaMultiplier = FightBalance->CatReelStaminaMultiplier;
+	Config.CatRodStaminaMultiplier = FightBalance->CatRodStaminaMultiplier;
+	Config.CatHoldStaminaMultiplier = FightBalance->CatHoldStaminaMultiplier;
+	Config.CatLoadStaminaMultiplier = FightBalance->CatLoadStaminaMultiplier;
+	Config.StalemateRodWearPerFishStrength = FightBalance->StalemateRodWearPerFishStrength;
+	Config.SlackStaminaRegenPerSecond = FightBalance->SlackStaminaRegenPerSecond;
+	Config.ReelSpeedCentimetersPerSecond = FightBalance->ReelSpeedCentimetersPerSecond;
+	Config.FishFullEffortSpeedCentimetersPerSecond = Personality->FullEffortMovementSpeedCentimetersPerSecond;
+	Config.ExhaustedCatEscapeSpeedMultiplier = FightBalance->ExhaustedCatEscapeSpeedMultiplier;
+	Config.FishExhaustionThreshold = FightBalance->FishExhaustionThreshold;
 	Config.StrongConfrontationAlignmentThreshold = Personality->StrongConfrontationAlignmentThreshold;
 	Config.StrongConfrontationConfirmationSeconds = Personality->StrongConfrontationConfirmationSeconds;
 	Config.AngleStrengthExponent = Personality->AngleStrengthExponent;
-	Config.TensionResponseRangeCentimeters = Settings->TensionResponseRangeCentimeters;
+	Config.DisplayTensionNewtons = FightBalance->DisplayTensionNewtons;
+	Config.MinimumRodLeverageMultiplier = FightBalance->HeldRodMinimumLeverageMultiplier;
+	Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond =
+		FightBalance->MaximumFishConstraintCorrectionSpeedCentimetersPerSecond;
 	Config.MaximumLineLengthCentimeters = RodDefinition->MaximumLineLengthCentimeters;
-	// 当前资产字段仍叫 MaximumRodDurability，但玩法语义是“本场鱼线耐久”：每次新会话重置，不损坏装备鱼竿。
-	Config.RodDurability = RodDefinition->MaximumRodDurability;
-	Config.StruggleHoldRodWearPerSecond = RodDefinition->BaseDurabilityWearPerSecond;
+	// 只读取本场绑定的同一根鱼竿实例；定义上限仅用于新购和维修，开场不能补耐久。
+	bool bRodBroken = false;
+	if (!Equipment->GetFishingRodDurability(Snapshot.FishingSessionId, Config.RodDurability, bRodBroken)
+		|| bRodBroken || Config.RodDurability <= 0.0)
+	{
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_rod_durability_rejected SessionId=%s RodItemInstanceId=%s Reason=UnavailableOrBroken %s"),
+			*Snapshot.FishingSessionId.ToString(), *AttemptSnapshot.RodItemInstanceId.ToString(),
+			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
+		return false;
+	}
+	Config.FishFullEffortRodWearPerSecond = RodDefinition->BaseDurabilityWearPerSecond;
 	Config.TautRodWearMultiplier = FMath::Max(1.0, RodDefinition->HighTensionWearMultiplier);
-	Config.EscapeSlackCentimeters = Settings->EscapeSlackCentimeters;
+	Config.EscapeSlackCentimeters = FightBalance->EscapeSlackCentimeters;
 	if (!Config.IsValid()) return false; // 配置自检（如任何数值非有限/非法组合）未通过则拒绝启动搏斗。
 
 	// 组装搏斗模拟的初始状态：猫当前体力从 ASC 读，鱼体力/初始线长按完美中鱼折减系数缩放。
@@ -1169,7 +1271,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	InitialState.CatAction = ECatFightCatAction::None;
 	Snapshot.FishFightStaminaRemaining = InitialState.FishStamina; // 把折减后的体力写回公开快照。
 	Snapshot.RodDurabilityRemaining = Config.RodDurability;
-	// 冻结一个以落点为中心、半径=最大线长的世界包围盒，作为本场搏斗全程鱼的运动边界（防止鱼被算出界外）。
+	// 只为初始上钩点建立投影范围；搏斗拖行不再受初始落点包围盒限制，运行时由线长与真实表面负责。
 	const FVector Landing = AttemptSnapshot.ServerCorrectedLandingWorldPoint;
 	const FVector HalfExtent(Config.MaximumLineLengthCentimeters, Config.MaximumLineLengthCentimeters,
 		FMath::Max(500.0, Config.MaximumLineLengthCentimeters * 0.25));
@@ -1182,7 +1284,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	// 关键约束：这里必须使用本次（可能被完美提竿缩短的）初始线长，而不是整根鱼线的最大长度。
 	// 否则 Actor 仍留在原钩点，Runner 第一固定步会发现“鱼在线长球外”并按坏状态终止会话。
 	ProjectionInput.MaximumLineLengthCentimeters = InitialState.LineLengthCentimeters;
-	const FCatFishMotionSolveResult Projected = FCatFishFightMotionSolver::Solve(ProjectionInput);
+	const FCatFishMotionSolveResult Projected = FCatFishFightMotionSolver::ProjectInitialFishToWater(ProjectionInput);
 	// 再用水域子系统把投影点精确吸附到水面上，得到最终的权威落点。
 	const FCatWaterSpatialResult Exact = Projected.bSucceeded
 		? Water->ResolveCandidatePointToWater(Projected.FishWorldPosition, AttemptSnapshot.WaterRegion)
@@ -1197,7 +1299,9 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		|| !Encounter->ApplyFightStepFromAuthority(ECatFishMotionIntent::StrugglingOutward,
 			ReconciledInitialLineLength,
 			Exact.WaterSurfaceWorldPoint, 0.0f, 0.0f, 0.0f,
-			static_cast<float>(Config.FishStruggleSpeedCentimetersPerSecond), false))
+			static_cast<float>(Config.FishFullEffortSpeedCentimetersPerSecond), false, false, FVector::UpVector,
+			(Exact.WaterSurfaceWorldPoint - RodTipWorldPosition).GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector),
+			ECatFishBehavior::OutwardRush, static_cast<float>(InitialState.FishEffortRatio)))
 	{
 		// 求解/吸附/表现应用任一环节失败：回滚已初始化的体力属性，不进入搏斗。
 		AbilitySystem->RequestFishingStaminaReset();
@@ -1209,18 +1313,18 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 	InitialState.FishWorldPosition = Encounter->GetActorLocation(); // 用刚落位的实际权威位置覆盖，作为 Runner 的真正起点。
 
 	// 组装 FightRunner 的初始化参数：把 Session/Actor 引用、模拟配置/初始状态、性格模板节奏参数、
-	// 低体力歇息倍率、以及本场搏斗用的随机种子一并交给它，随后驱动固定步长的搏斗推进。
+	// 连续出力/反馈参数与本场随机种子一并交给它，随后驱动固定步长的搏斗推进。
 	FCatFishingFightRunnerInit Init;
 	Init.Session = this;
 	Init.FishActor = Encounter;
 	Init.RodActor = Rod;
 	Init.AbilitySystem = AbilitySystem;
+	Init.PrimaryPlayerState = Snapshot.FisherPlayerState;
 	Init.WaterRegion = AttemptSnapshot.WaterRegion;
-	Init.FrozenWaterBounds = FrozenBounds;
 	Init.Config = Config;
 	Init.InitialState = InitialState;
 	// 按键按住状态挂在玩家 CommandComponent 上，不随上一场断线终止而丢失。
-	// 这里在 Runner 启动前原子快照；两键同时按住时仍由 Runner 保持“收线优先”。
+	// 这里在 Runner 启动前原子快照；两键同时按住时由 Runner 统一裁决为右键优先。
 	if (const ACatfishingPlayerController* FisherController = FisherCharacter.IsValid()
 		? Cast<ACatfishingPlayerController>(FisherCharacter->GetController()) : nullptr)
 	{
@@ -1230,20 +1334,7 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 				Init.bInitialSlackHeld, Init.InitialInputSequence);
 		}
 	}
-	Init.CalmDurationRangeSeconds = Personality->CalmDurationRangeSeconds;
-	Init.StruggleDurationRangeSeconds = Personality->StruggleDurationRangeSeconds;
-	Init.LowStaminaRestThreshold = Settings->LowStaminaRestThreshold;
-	Init.LowStaminaRestMultiplier = Settings->LowStaminaRestMultiplier;
-	Init.SteeringConfig.RetargetDurationRangeSeconds = Personality->DirectionRetargetDurationRangeSeconds;
-	Init.SteeringConfig.MaximumTurnRateDegreesPerSecond = Personality->MaximumTurnRateDegreesPerSecond;
-	Init.SteeringConfig.StruggleOutwardBias = Personality->StruggleOutwardDirectionBias;
-	Init.SteeringConfig.CalmInwardBias = Personality->CalmInwardDirectionBias;
-	Init.SteeringConfig.LateralMovementBias = Personality->LateralMovementBias;
-	Init.SteeringConfig.FeintProbability = Personality->FeintProbability;
-	Init.SteeringConfig.FullStaminaInwardProbability = Personality->FullStaminaInwardProbability;
-	Init.SteeringConfig.ExhaustedInwardProbability = Personality->ExhaustedInwardProbability;
-	Init.SteeringConfig.InwardProbabilityExponent = Personality->InwardProbabilityExponent;
-	Init.SteeringConfig.InwardConeHalfAngleDegrees = Personality->InwardConeHalfAngleDegrees;
+	Init.SteeringConfig = Personality->AdaptiveSteeringConfig;
 	Init.BehaviorStateTree = FishBehaviorStateTree;
 	// 使用玩家实际点击确认的那一轮咬钩机会种子；漏按后下一轮鱼种与搏斗节奏都能变化，同时服务器仍可复现。
 	Init.RandomSeed = CurrentBiteRandomSeed != 0
@@ -1275,61 +1366,112 @@ bool ACatFishingSession::TryEnterHookedFightFromAuthority()
 		return false;
 	}
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_fight_started SessionId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryCatStrength=%.2f SecondCatStrength=%.2f CombinedCatStrength=%.2f FishStrengthBase=%.2f FishStrengthEffective=%.2f CatStamina=%.2f FishStamina=%.2f LineStrength=%.2f LineDurability=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f"),
+		TEXT("Event=fishing_fight_started SessionId=%s FightBalanceId=%s FishDefinition=%s RodDefinition=%s PerfectHook=%s PrimaryStrength=%.2f InitialHelperStrength=%.2f InitialCombinedStrength=%.2f CatSystemMassKg=%.2f FishMassKg=%.2f MassMode=IndependentCatBodyMass FishStrengthBase=%.2f FishStrengthEffective=%.2f StrengthPerKg=%.2f ForcePerStrengthN=%.2f ExhaustedReelForceN=%.2f CatStamina=%.2f FishStamina=%.2f RodDurability=%.2f RodPhysicsLengthCm=%.2f InitialLineLengthCm=%.2f MaximumLineLengthCm=%.2f RodPose=%s CatLinearWorkCost=%.5f FishStaminaPerUnfulfilledMeter=%.5f FishFullEffortSpeedCmPerSec=%.2f FixedStepSeconds=%.3f MinimumLeverage=%.3f MaximumEndpointCorrectionSpeed=%.2f StrengthResolution=CommonLineForce StrongConfrontationRole=PresentationOnly RodFailure=DurabilityDepleted World=%s NetMode=%d Authority=%s LocalRole=%d RodActor=%s"),
 		*Snapshot.FishingSessionId.ToString(),
+		*FightBalance->BalanceDefinitionId.ToString(),
 		*FishDefinition->FishDefinitionId.ToString(),
 		*RodDefinition->EquipmentDefinitionId.ToString(),
 		bPerfect ? TEXT("true") : TEXT("false"),
 		Config.PrimaryOperatorCatStrength,
 		Config.SecondCatStrength,
 		Config.GetCombinedCatStrength(),
-		FishDefinition->FishStrength,
+		Config.PrimaryOperatorMassKilograms,
+		Config.FishMassKilograms,
+		FrozenSelectionResult.BaseFishStrength,
 		Config.FishStrength,
+		Config.StrengthPerKilogram,
+		Config.ForcePerStrengthNewtons,
+		Config.ExhaustedReelForceNewtons,
 		InitialState.CatStamina,
 		InitialState.FishStamina,
-		Config.RodStrength,
 		Config.RodDurability,
+		Config.RodPhysicsLengthCentimeters,
 		InitialState.LineLengthCentimeters,
-		Config.MaximumLineLengthCentimeters);
+		Config.MaximumLineLengthCentimeters,
+		Snapshot.RodActor && Snapshot.RodActor->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Held
+			? TEXT("Held") : TEXT("Grounded"),
+		Config.CatStaminaCostPerStrengthCentimeter,
+		Config.FishStaminaPerUnfulfilledMeter,
+		Config.FishFullEffortSpeedCentimetersPerSecond,
+		Config.FixedStepSeconds,
+		Config.MinimumRodLeverageMultiplier,
+		Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond,
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
+		static_cast<int32>(GetLocalRole()), *GetNameSafe(Snapshot.RodActor));
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_effort_configured SessionId=%s FightBalanceId=%s Model=CatActualWorkAndTimedSupport CatPhaseMultiplier=1 "
+			"FishDrainMode=UnfulfilledIntentDistance FishIntentSpeed=ActualEffortTimesFullEffortSpeed "
+			"SlackRecoveryMode=RightButtonWithLineCapacityExceptExhaustedDrag SlackStaminaCost=WaivedOnlyWithLineCapacity LineLimitMode=NormalLockedContest SlackRegenPerSecond=%.3f "
+			"MovementMultiplier=%.3f ReelMultiplier=%.3f RodMultiplier=%.3f HoldMultiplier=%.3f "
+			"CatLoadMultiplier=%.3f "
+			"CatLinearWorkCost=%.6f FishStaminaPerUnfulfilledMeter=%.6f CatRodWorkCostPerRadian=%.6f CatUnloadedWorkMultiplier=%.3f CatSupportPerSecond=%.3f "
+			"ExhaustedCatEscapeSpeedMultiplier=%.3f %s"),
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *FightBalance->BalanceDefinitionId.ToString(),
+		Config.SlackStaminaRegenPerSecond,
+		Config.CatMovementStaminaMultiplier, Config.CatReelStaminaMultiplier,
+		Config.CatRodStaminaMultiplier, Config.CatHoldStaminaMultiplier,
+		Config.CatLoadStaminaMultiplier,
+		Config.CatStaminaCostPerStrengthCentimeter, Config.FishStaminaPerUnfulfilledMeter,
+		Config.CatRodStaminaCostPerStrengthRadian, Config.CatUnloadedWorkMultiplier, Config.CatSupportStaminaPerSecond,
+		Config.ExhaustedCatEscapeSpeedMultiplier,
+		*CatLogContext::BuildControllerFields(FisherCharacter->GetController()));
 	return true;
 }
 
-bool ACatFishingSession::SetReelingFromAuthority(const int64 InputSequence, const bool bReeling)
+bool ACatFishingSession::SetReelingFromAuthority(APlayerState* InputPlayerState,
+	const int64 InputSequence, const bool bReeling)
 {
-	if (HasAuthority() && Snapshot.Phase == ECatFishingPhase::ExhaustedReel)
-	{
-		if (InputSequence <= LastExhaustedReelInputSequence)
-		{
-			return false;
-		}
-		LastExhaustedReelInputSequence = InputSequence;
-		Snapshot.bReeling = bReeling;
-		Snapshot.bSlacking = false;
-		// AutoHauling 同时也是“鱼已力竭/侧翻”的复制表现状态；松开收线只停止位移，不能让鱼重新立起来。
-		Snapshot.FishMotionIntent = ECatFishMotionIntent::AutoHauling;
-		PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
-		return true;
-	}
-	// 收线只在运行中的 HookedFight 生效；InputSequence 由 FightRunner 内部做单调性/去抖校验。
-	if (!HasAuthority() || Snapshot.Phase != ECatFishingPhase::HookedFight || !FightRunner
-		|| !FightRunner->SetReeling(InputSequence, bReeling))
+	// HookedFight 与鱼力竭回收共用同一个 Runner 和输入序号域。
+	if (!HasAuthority() || (Snapshot.Phase != ECatFishingPhase::HookedFight
+		&& Snapshot.Phase != ECatFishingPhase::ExhaustedReel) || !FightRunner
+		|| !Snapshot.RodActor || !Snapshot.RodActor->IsPrimaryOperator(InputPlayerState)
+		|| !FightRunner->SetReeling(InputPlayerState, InputSequence, bReeling))
 	{
 		return false;
 	}
-	Snapshot.bReeling = bReeling; // 同步到公开快照供表现层读取（如收线动画/UI 提示）。
+	Snapshot.bReeling = FightRunner->GetCatAction() == ECatFightCatAction::Pull;
+	Snapshot.bSlacking = FightRunner->GetCatAction() == ECatFightCatAction::Slack;
 	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency); // 高频输入不推进离散 Revision，只更新 SnapshotSequence。
 	return true;
 }
 
-bool ACatFishingSession::SetSlackingFromAuthority(const int64 InputSequence, const bool bSlacking)
+bool ACatFishingSession::SetSlackingFromAuthority(APlayerState* InputPlayerState,
+	const int64 InputSequence, const bool bSlacking, const FCatFishingRodAimSample* AimRebaseSample, const FGuid RequestId)
 {
-	// 松开线杯只在运行中的 HookedFight 生效；收线优先的仲裁逻辑在 FightRunner::SetSlacking 内部处理。
-	if (!HasAuthority() || Snapshot.Phase != ECatFishingPhase::HookedFight || !FightRunner
-		|| !FightRunner->SetSlacking(InputSequence, bSlacking))
+	if (!HasAuthority() || (Snapshot.Phase != ECatFishingPhase::HookedFight
+		&& Snapshot.Phase != ECatFishingPhase::ExhaustedReel) || !FightRunner
+		|| InputPlayerState != Snapshot.FisherPlayerState)
 	{
 		return false;
 	}
-	Snapshot.bSlacking = bSlacking;
+	const bool bRebaseAim = AimRebaseSample && !FightRunner->IsSlackInputHeldForAuthority(InputPlayerState);
+	if (bRebaseAim && (!bSlacking || !Snapshot.RodActor
+		|| !Snapshot.RodActor->CanRebaseHeldAimFromAuthority(InputPlayerState, *AimRebaseSample)))
+	{
+		const TCHAR* Reason = !bSlacking ? TEXT("NotPress") : !Snapshot.RodActor ? TEXT("NoRod")
+			: !AimRebaseSample->IsValid() ? TEXT("InvalidAimSample")
+			: AimRebaseSample->RodActorId.IsValid() && AimRebaseSample->RodActorId != Snapshot.RodActor->GetPresentationState().RodActorId
+				? TEXT("RodMismatch")
+			: AimRebaseSample->InputEpoch != 0 && AimRebaseSample->InputEpoch != Snapshot.RodActor->GetCarrierConstraintState().AimInputEpoch
+				? TEXT("AimEpochMismatch") : TEXT("StaleAimOrHeldPoseNotReady");
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_rod_aim_rebase_rejected RequestId=%s InputSequence=%lld SessionId=%s RodActorId=%s "
+				"AimInputEpoch=%u CurrentAimInputEpoch=%u AimSequence=%lld Reason=%s PlayerId=%d "
+				"World=%s NetMode=%d Authority=true LocalRole=%d"),
+			*RequestId.ToString(), InputSequence, *Snapshot.FishingSessionId.ToString(), *AimRebaseSample->RodActorId.ToString(),
+			AimRebaseSample->InputEpoch, Snapshot.RodActor ? Snapshot.RodActor->GetCarrierConstraintState().AimInputEpoch : 0,
+			AimRebaseSample->Sequence, Reason, InputPlayerState ? InputPlayerState->GetPlayerId() : INDEX_NONE,
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()));
+		return false;
+	}
+	if (!FightRunner->SetSlacking(InputPlayerState, InputSequence, bSlacking)) return false;
+	// 先验证完整转换，再改 Runner 和输入基准，最后才发布可能触发消费者的快照。
+	if (bRebaseAim)
+	{
+		Snapshot.RodActor->RebaseHeldAimFromAuthority(InputPlayerState, *AimRebaseSample, RequestId, InputSequence);
+	}
+	Snapshot.bReeling = FightRunner->GetCatAction() == ECatFightCatAction::Pull;
+	Snapshot.bSlacking = FightRunner->GetCatAction() == ECatFightCatAction::Slack;
 	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
 	return true;
 }
@@ -1341,19 +1483,71 @@ bool ACatFishingSession::IsFightRunnerRunning() const
 
 // FightRunner 每完成一步固定步长模拟就回调一次本函数：把模拟结果写回公开快照，并根据步结果决定是否收尾搏斗。
 void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepResult& Step,
-	const double FishStaminaRemaining, const ECatFishMotionIntent MotionIntent, const double RodDurabilityRemaining)
+	const double FishStaminaRemaining, const ECatFishMotionIntent MotionIntent)
 {
-	// 只在仍处于运行中的 HookedFight 阶段才处理回调；阶段已经变化说明这是一次过期的 Runner 回调，直接忽略。
-	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::HookedFight || !FightRunner) return;
+	if (!HasAuthority() || IsTerminal() || (Snapshot.Phase != ECatFishingPhase::HookedFight
+		&& Snapshot.Phase != ECatFishingPhase::ExhaustedReel) || !FightRunner) return;
 	Snapshot.FishFightStaminaRemaining = FMath::Max(0.0, FishStaminaRemaining); // 钳制非负，防止浮点误差产生负值。
-	Snapshot.RodDurabilityRemaining = FMath::Max(0.0, RodDurabilityRemaining);
+	// 磨损先写回绑定实例，公开快照只镜像写回结果；取消、切线和换人均不能退还已消耗耐久。
+	bool bRodBroken = false;
+	UCatEquipmentComponent* Equipment = CastEquipment.Get();
+	if (Step.RodWearDelta > 0.0)
+	{
+		const FCatFishingUseOperationResult Wear = Equipment
+			? Equipment->ApplyFishingRodWear(Snapshot.FishingSessionId, RodWearSequence + 1, Step.AbsoluteRodWear)
+			: FCatFishingUseOperationResult{};
+		if (!Wear.bApplied)
+		{
+			UE_LOG(LogCatFishing, Error,
+				TEXT("Event=fishing_rod_wear_commit_failed SessionId=%s RodItemInstanceId=%s WearSequence=%lld Error=%s %s"),
+				*Snapshot.FishingSessionId.ToString(), *AttemptSnapshot.RodItemInstanceId.ToString(), RodWearSequence + 1,
+				*UEnum::GetValueAsString(Wear.Error),
+				*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
+			FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Rod wear commit failed"));
+			return;
+		}
+		RodWearSequence = Wear.WearSequence;
+		Snapshot.RodDurabilityRemaining = Wear.RemainingRodDurability;
+		bRodBroken = Wear.bRodBroken;
+	}
+	else if (!Equipment || !Equipment->GetFishingRodDurability(
+		Snapshot.FishingSessionId, Snapshot.RodDurabilityRemaining, bRodBroken))
+	{
+		UE_LOG(LogCatFishing, Error,
+			TEXT("Event=fishing_rod_durability_rejected SessionId=%s RodItemInstanceId=%s Reason=BoundInstanceUnavailable %s"),
+			*Snapshot.FishingSessionId.ToString(), *AttemptSnapshot.RodItemInstanceId.ToString(),
+			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated, TEXT("Bound rod unavailable"));
+		return;
+	}
+	if (bRodBroken)
+	{
+		ACatFishingRodActor* Rod = Snapshot.RodActor;
+		if (Rod && !Rod->SetBrokenFromAuthority(true, Rod->GetPresentationState().RodActorRevision))
+		{
+			UE_LOG(LogCatFishing, Error, TEXT("Event=fishing_rod_broken_projection_failed SessionId=%s RodItemInstanceId=%s"),
+				*Snapshot.FishingSessionId.ToString(), *AttemptSnapshot.RodItemInstanceId.ToString());
+		}
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_rod_broken SessionId=%s RodItemInstanceId=%s Cause=DurabilityDepleted RodDurability=%.3f AbsoluteRodWear=%.3f %s"),
+			*Snapshot.FishingSessionId.ToString(), *AttemptSnapshot.RodItemInstanceId.ToString(),
+			Snapshot.RodDurabilityRemaining, Step.AbsoluteRodWear,
+			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::RodBroken, TEXT("Rod durability depleted"));
+		if (UCatFishingService* Service = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
+		{
+			Service->ReleaseRodOperators(Rod);
+		}
+		return;
+	}
 	// 钩在鱼嘴里：搏斗期间钩 Actor 跟随鱼的权威位置（含近岸/贴岸吸附后的落点），复制到所有端。
 	if (Snapshot.HookActor && Snapshot.FishEncounterActor)
 	{
 		Snapshot.HookActor->SetActorLocation(Snapshot.FishEncounterActor->GetActorLocation());
 		if (!Snapshot.HookActor->SetFishingLinePresentationFromAuthority(
 			Step.LineLengthCentimeters, Step.StraightLineDistanceCentimeters,
-			Step.SlackLineLengthCentimeters, static_cast<float>(Step.NormalizedTension), Step.bLineTaut))
+			Step.SlackLineLengthCentimeters, static_cast<float>(Step.NormalizedTension), Step.bLineTaut,
+			Step.LineTensionNewtons))
 		{
 			HandleFightRunnerFailureFromAuthority(TEXT("HookLinePresentation"));
 			return;
@@ -1365,266 +1559,100 @@ void ACatFishingSession::HandleFightRunnerStepFromAuthority(const FCatFightStepR
 	Snapshot.FishLineAlignment = static_cast<float>(Step.FishLineAlignment);
 	Snapshot.NormalizedLineLoad = static_cast<float>(Step.NormalizedLineLoad);
 	Snapshot.bStrongConfrontation = Step.bStrongConfrontation;
+	Snapshot.RodLeverageMultiplier = static_cast<float>(Step.RodLeverageMultiplier);
+	Snapshot.CarrierMovementAlpha = 0.0f;
+	// 兼容现有 HUD 资产：字段不再表示蓄力，只表示主位当前是否提交收线意图。
+	Snapshot.PrimaryPowerAlpha = FightRunner->GetCatAction() == ECatFightCatAction::Pull ? 1.0f : 0.0f;
+	Snapshot.ActiveCombinedFishingStrength = FMath::Max(0.0, Step.CombinedCatStrength);
+	Snapshot.ActiveHelperCount = FMath::Max(0, Step.ActiveHelperCount);
+	Snapshot.bReeling = FightRunner->GetCatAction() == ECatFightCatAction::Pull;
+	Snapshot.bSlacking = FightRunner->GetCatAction() == ECatFightCatAction::Slack;
+	Snapshot.CarrierPullAccelerationCentimetersPerSecondSquared =
+		static_cast<float>(Step.CarrierPullAccelerationCentimetersPerSecondSquared);
+	Snapshot.CarrierAwaySpeedMultiplier = 1.0f; // 旧序列化观察字段；新移动只应用有限加速度。
+	Snapshot.ConstraintErrorCentimeters = static_cast<float>(Step.ConstraintErrorCentimeters);
+	Snapshot.FishConstraintCorrectionCentimeters =
+		static_cast<float>(Step.FishConstraintCorrectionCentimeters);
 	RefreshFightSummary(); // 每步都重新校验参与者是否仍然合法在场（掉线/倒地会即时反映）。
 	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency); // 搏斗数值每步都要尽快同步给客户端表现层。
-	if (Step.Outcome == ECatFightStepOutcome::LineBroken)
+	if (Step.Outcome == ECatFightStepOutcome::Escaped)
 	{
-		const TCHAR* LineBreakCause = TEXT("None");
-		switch (Step.LineBreakCause)
-		{
-		case ECatFightLineBreakCause::StrengthOverload:
-			LineBreakCause = TEXT("StrengthOverload");
-			break;
-		case ECatFightLineBreakCause::DurabilityDepleted:
-			LineBreakCause = TEXT("DurabilityDepleted");
-			break;
-		default:
-			break;
-		}
-		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_line_broken SessionId=%s FishDefinition=%s Cause=%s RemainingLineDurability=%.2f "
-				"AccumulatedLineWear=%.2f LineLoad=%.3f Alignment=%.3f StrongConfrontation=%s "
-				"FishLocation=%s Rod=%s RodTip=%s Hook=%s %s"),
-			*Snapshot.FishingSessionId.ToString(),
-			FishDefinition ? *FishDefinition->FishDefinitionId.ToString() : TEXT("None"),
-			LineBreakCause,
-			Snapshot.RodDurabilityRemaining,
-			Step.AbsoluteRodWear,
-			Step.NormalizedLineLoad,
-			Step.FishLineAlignment,
-			Step.bStrongConfrontation ? TEXT("true") : TEXT("false"),
-			Snapshot.FishEncounterActor ? *Snapshot.FishEncounterActor->GetActorLocation().ToCompactString() : TEXT("None"),
-			*GetNameSafe(Snapshot.RodActor),
-			Snapshot.RodActor ? *Snapshot.RodActor->GetRodTipWorldTransform().GetLocation().ToCompactString() : TEXT("None"),
-			*GetNameSafe(Snapshot.HookActor),
-			*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
-		// 断线只终止当前会话。FinalizeSession 会释放 FishingUse；部署中的鱼竿及其操作槽保持原样，可立即重新抛竿。
-		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::LineBroken, TEXT("Fishing line broken"));
-	}
-	else if (Step.Outcome == ECatFightStepOutcome::CatStaminaExhausted
-		|| Step.Outcome == ECatFightStepOutcome::DraggedIntoWater)
-	{
-		// 规格 4.3②/4.4：力量不足或体力归零都是「被拖下水，鱼逃」；救援（W3）尚未实现。
-		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::CatInWater,
-			Step.Outcome == ECatFightStepOutcome::DraggedIntoWater ? TEXT("Fish overpowered cat") : TEXT("Cat fight stamina exhausted"));
-	}
-	else if (Step.Outcome == ECatFightStepOutcome::Escaped)
-	{
-		// 线放尽/张力超限等判定为鱼直接逃脱，无需先进入 NearShore。
+		// 鱼距超过最大线长与逃脱余量后直接逃脱，无需先进入 NearShore。
 		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Escaped, TEXT("Fish escaped"));
 	}
 	else if (Step.Outcome == ECatFightStepOutcome::FishExhausted
-		|| Step.Outcome == ECatFightStepOutcome::Overpowered)
+		&& Snapshot.Phase == ECatFishingPhase::HookedFight)
 	{
-		// [FishLogic 5/5：耗尽后收至竿尖水面投影]
-		// 翻肚/碾压立即停止鱼的挣扎并进入侧翻表现；玩家继续收线时只会把鱼拉到竿尖对应的水面点。
-		FightRunner->Stop();
-		if (!BeginExhaustedReelFromAuthority())
+		if (!StateTreeComponent || !FightRunner->SetFishExhaustedFromAuthority())
 		{
 			FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
-				TEXT("Exhausted reel phase could not start"));
+				TEXT("Fish exhausted transition unavailable"));
+			return;
 		}
-	}
-}
-
-bool ACatFishingSession::BeginExhaustedReelFromAuthority()
-{
-	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
-	if (!HasAuthority() || !Settings || !FMath::IsFinite(Settings->FixedFightStepSeconds)
-		|| Settings->FixedFightStepSeconds <= 0.0 || !Snapshot.FishEncounterActor || !Snapshot.RodActor)
-	{
-		return false;
-	}
-	// 如果鱼是在玩家持续按住收线时耗尽体力，必须把这个物理按键状态跨阶段保留下来。
-	// 否则客户端不会再发送一次 Pressed 边沿，玩家只能先松开再按，表现上就像收近流程失效。
-	const bool bContinueReeling = Snapshot.bReeling;
-	FVector ResolvedTarget;
-	if (!TryResolveExhaustedReelTarget(ResolvedTarget))
-	{
-		return false;
-	}
-	ExhaustedReelTarget = ResolvedTarget;
-	bHasExhaustedReelTarget = true;
-	Snapshot.FishFightStaminaRemaining = 0.0;
-	Snapshot.NormalizedFishStamina = 0.0;
-	Snapshot.bReeling = bContinueReeling;
-	Snapshot.bSlacking = false;
-	// AutoHauling 在该阶段表示“鱼已力竭并侧翻”，与当前是否按住收线分开表达。
-	Snapshot.FishMotionIntent = ECatFishMotionIntent::AutoHauling;
-	Snapshot.FishLineAlignment = 0.0f;
-	Snapshot.NormalizedLineLoad = 0.0f;
-	Snapshot.bStrongConfrontation = false;
-	if (!EnterPhaseFromStateTree(ECatFishingPhase::ExhaustedReel).bApplied)
-	{
-		return false;
-	}
-	// 进入阶段的同一权威帧就把 AutoHauling 写进 Encounter 表现状态；不要求玩家先按住或重新按一次左键。
-	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
-	const FVector ExhaustedLocation = Encounter->GetActorLocation();
-	const double CurrentLineLength = FVector::Dist(
-		ExhaustedLocation, Snapshot.RodActor->GetRodTipWorldTransform().GetLocation());
-	if (!Encounter->ApplyFightStepFromAuthority(ECatFishMotionIntent::AutoHauling,
-		CurrentLineLength, ExhaustedLocation, static_cast<float>(Settings->FixedFightStepSeconds)))
-	{
-		return false;
-	}
-	// FightRunner 的末帧可能仍带有松弛 L_paid；进入力竭回收后鱼线按“鱼嘴到杆尖”的绷紧距离统一结算。
-	// 同一权威帧同步 Hook 位置和复制表现，不能只改 Encounter，否则客户端会继续显示搏斗末帧的长线。
-	if (!PublishExhaustedReelLineFromAuthority(ExhaustedLocation))
-	{
-		return false;
-	}
-	LastExhaustedReelInputSequence = 0;
-	GetWorldTimerManager().SetTimer(ExhaustedReelTimerHandle, this, &ThisClass::HandleExhaustedReelStep,
-		static_cast<float>(Settings->FixedFightStepSeconds), true);
-	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=exhausted_reel_started SessionId=%s Reeling=%s DistanceToRodTipProjectionCm=%.1f"),
-		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-		bContinueReeling ? TEXT("true") : TEXT("false"),
-		FVector::Dist(ExhaustedLocation, ExhaustedReelTarget));
-	return true;
-}
-
-bool ACatFishingSession::TryResolveExhaustedReelTarget(FVector& OutTarget) const
-{
-	OutTarget = FVector::ZeroVector;
-	UWorld* World = GetWorld();
-	const UCatWorldItemSettings* ItemSettings = GetDefault<UCatWorldItemSettings>();
-	const ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
-	const ACatFishingRodActor* Rod = Snapshot.RodActor;
-	if (!World || !ItemSettings || !Encounter || !Rod)
-	{
-		return false;
-	}
-
-	// Encounter 的权威 Z 是本次鱼所在水面的高度。竿尖 XY 若仍在水上，就以该水面为终点；若落在岸上，
-	// 地表命中通常更高，取二者最大值可防止鱼按水面高度钻进岸坡。这里仍然不要求 XY 位于 WaterRegion 内。
-	const FVector RodTip = Rod->GetRodTipWorldTransform().GetLocation();
-	const double WaterSurfaceZ = Encounter->GetActorLocation().Z;
-	double TargetSurfaceZ = WaterSurfaceZ;
-	if (FMath::IsFinite(ItemSettings->LandingGroundTraceUpCentimeters)
-		&& FMath::IsFinite(ItemSettings->LandingGroundTraceDownCentimeters)
-		&& ItemSettings->LandingGroundTraceUpCentimeters >= 0.0
-		&& ItemSettings->LandingGroundTraceDownCentimeters > 0.0)
-	{
-		FCollisionQueryParams GroundParams(SCENE_QUERY_STAT(CatExhaustedFishTargetSurface), true);
-		GroundParams.AddIgnoredActor(Encounter);
-		GroundParams.AddIgnoredActor(Rod);
-		GroundParams.AddIgnoredActor(Snapshot.HookActor);
-		if (const ACatCharacter* Character = FisherCharacter.Get())
-		{
-			GroundParams.AddIgnoredActor(Character);
-		}
-		const double TraceTopZ = FMath::Max(RodTip.Z, WaterSurfaceZ)
-			+ ItemSettings->LandingGroundTraceUpCentimeters;
-		const double TraceBottomZ = FMath::Min(RodTip.Z, WaterSurfaceZ)
-			- ItemSettings->LandingGroundTraceDownCentimeters;
-		FHitResult GroundHit;
-		if (World->LineTraceSingleByChannel(GroundHit,
-			FVector(RodTip.X, RodTip.Y, TraceTopZ), FVector(RodTip.X, RodTip.Y, TraceBottomZ),
-			ItemSettings->LandingGroundTraceChannel, GroundParams))
-		{
-			TargetSurfaceZ = FMath::Max(WaterSurfaceZ, static_cast<double>(GroundHit.ImpactPoint.Z));
-		}
-	}
-	OutTarget = FVector(RodTip.X, RodTip.Y, TargetSurfaceZ);
-	return !OutTarget.ContainsNaN();
-}
-
-void ACatFishingSession::HandleExhaustedReelStep()
-{
-	// [FishLogic 5/5：耗尽后收至竿尖表面投影]
-	// 这个阶段不再运行随机游向/力量对抗：服务器每个固定步只把侧翻鱼朝冻结的水面/地面投影移动，
-	// 到点后原地生成所有玩家都可拾取的 ACatFishPickupActor。
-	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::ExhaustedReel)
-	{
-		GetWorldTimerManager().ClearTimer(ExhaustedReelTimerHandle);
-		return;
-	}
-	if (!Snapshot.bReeling)
-	{
-		return;
-	}
-	const UCatFishingSettings* FishingSettings = GetDefault<UCatFishingSettings>();
-	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
-	ACatFishingRodActor* Rod = Snapshot.RodActor;
-	if (!FishingSettings || !Encounter || !Rod
-		|| !FMath::IsFinite(FishingSettings->ReelSpeedCentimetersPerSecond)
-		|| FishingSettings->ReelSpeedCentimetersPerSecond <= 0.0)
-	{
-		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
-			TEXT("Exhausted reel dependency unavailable"));
-		return;
-	}
-
-	const FVector Current = Encounter->GetActorLocation();
-	const FVector RodTip = Rod->GetRodTipWorldTransform().GetLocation();
-	if (!bHasExhaustedReelTarget || ExhaustedReelTarget.ContainsNaN())
-	{
-		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
-			TEXT("Rod-tip water projection unavailable"));
-		return;
-	}
-	const FVector Target = ExhaustedReelTarget;
-	const FVector ToTarget = Target - Current;
-	const double RemainingDistance = ToTarget.Size();
-	const double StepDistance = FishingSettings->ReelSpeedCentimetersPerSecond
-		* FishingSettings->FixedFightStepSeconds;
-	const FVector NewLocation = RemainingDistance <= StepDistance
-		? Target : Current + ToTarget.GetSafeNormal() * StepDistance;
-	const double NewLineLength = FVector::Dist(NewLocation, RodTip);
-	if (!Encounter->ApplyFightStepFromAuthority(ECatFishMotionIntent::AutoHauling,
-		NewLineLength, NewLocation, static_cast<float>(FishingSettings->FixedFightStepSeconds)))
-	{
-		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
-			TEXT("Exhausted fish movement failed"));
-		return;
-	}
-	if (!PublishExhaustedReelLineFromAuthority(NewLocation))
-	{
-		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
-			TEXT("Exhausted fishing line presentation failed"));
-		return;
-	}
-	if (RemainingDistance <= StepDistance)
-	{
 		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=exhausted_fish_reached_rod_tip_projection SessionId=%s Location=%s RemainingCm=%.1f"),
-			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *NewLocation.ToCompactString(),
-			RemainingDistance);
-		GetWorldTimerManager().ClearTimer(ExhaustedReelTimerHandle);
-		if (!SpawnExhaustedFishPickupFromAuthority(NewLocation))
-		{
-			FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::Invalidated,
-				TEXT("Exhausted fish pickup spawn failed"));
-		}
-		return;
+			TEXT("Event=fishing_fish_exhausted SessionId=%s Cause=%s FishStaminaRemaining=%.3f "
+				"Beached=%s Result=StateTreeEventSent RunnerContinues=true"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			Step.bFishBeached ? TEXT("ShoreLanding") : TEXT("StaminaDepleted"),
+			FishStaminaRemaining, Step.bFishBeached ? TEXT("true") : TEXT("false"));
+		Snapshot.FishMotionIntent = ECatFishMotionIntent::AutoHauling;
+		Snapshot.bStrongConfrontation = false;
+		PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
+		StateTreeComponent->SendStateTreeEvent(CatFishingStateTreeEvents::FishExhausted,
+			FConstStructView(), TEXT("CatFishing"));
 	}
-	Snapshot.FishMotionIntent = ECatFishMotionIntent::AutoHauling;
-	PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
+	else if (Snapshot.Phase == ECatFishingPhase::ExhaustedReel)
+	{
+		const ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
+		const ACatFishingRodActor* Rod = Snapshot.RodActor;
+		const UCatWorldItemSettings* ItemSettings = GetDefault<UCatWorldItemSettings>();
+		if (!Encounter || !Rod || !FightRunner)
+		{
+			HandleFightRunnerFailureFromAuthority(TEXT("ExhaustedReelDependency"));
+			return;
+		}
+		// Pickup 只允许从已经落在真实干地上的 Encounter 交接。鱼仍在水里时继续收线，
+		// 不隐藏旧鱼，也不在竿尖可能悬于水面的 XY 生成不可拾取对象。
+		if (!FightRunner->IsFishBeachedForAuthority())
+		{
+			return;
+		}
+		const double ConfiguredReachTolerance = ItemSettings
+			? ItemSettings->LandingCompletionDistanceToRodCentimeters : 0.0;
+		const double ReachTolerance = FMath::IsFinite(ConfiguredReachTolerance)
+			&& ConfiguredReachTolerance > 0.0
+			? FMath::Max(5.0, ConfiguredReachTolerance) : 5.0;
+		// 收线约束端点是竿尖，不是相隔一段杆长的握把。已到达干地的鱼也不应因刚松开左键而卡住交接。
+		const FVector PickupTarget = Rod->GetRodTipWorldTransform().GetLocation();
+		if (FVector::Dist2D(Encounter->GetActorLocation(), PickupTarget) <= ReachTolerance
+			&& !SpawnExhaustedFishPickupFromAuthority(Encounter->GetActorLocation()))
+		{
+			HandleFightRunnerFailureFromAuthority(TEXT("ExhaustedFishPickupSpawn"));
+		}
+	}
 }
 
-bool ACatFishingSession::PublishExhaustedReelLineFromAuthority(const FVector& FishWorldLocation)
+void ACatFishingSession::HandleCatEnteredDangerousWaterFromAuthority(
+	const double ImmersionDepthCentimeters, ACatCharacter* AffectedCharacter)
 {
-	if (!HasAuthority() || FishWorldLocation.ContainsNaN() || !Snapshot.RodActor)
+	if (!HasAuthority() || IsTerminal() || (Snapshot.Phase != ECatFishingPhase::HookedFight
+		&& Snapshot.Phase != ECatFishingPhase::ExhaustedReel))
 	{
-		return false;
+		return;
 	}
-	ACatFishingHookActor* Hook = Snapshot.HookActor;
-	if (!Hook)
-	{
-		// Session 单元测试和无表现的服务器夹具允许不生成 Hook；正式运行链有 Hook 时必须走下方统一写口。
-		return true;
-	}
-	const double StraightLineDistance = FVector::Distance(
-		Snapshot.RodActor->GetRodTipWorldTransform().GetLocation(), FishWorldLocation);
-	if (!FMath::IsFinite(StraightLineDistance))
-	{
-		return false;
-	}
-	Hook->SetActorLocation(FishWorldLocation, false, nullptr, ETeleportType::TeleportPhysics);
-	return Hook->SetFishingLinePresentationFromAuthority(
-		StraightLineDistance, StraightLineDistance, 0.0, 0.0f, true);
+	ACatCharacter* Character = AffectedCharacter ? AffectedCharacter : FisherCharacter.Get();
+	if (!Character || !Snapshot.RodActor
+		|| Snapshot.RodActor->GetOperatorSlotIndex(Character->GetPlayerState()) == INDEX_NONE) return;
+	UE_LOG(LogCatFishing, Warning,
+		TEXT("Event=fishing_cat_entered_dangerous_water SessionId=%s DepthCm=%.2f Phase=%s Result=RemovalRequested World=%s Authority=%d LocalRole=%d %s"),
+		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), ImmersionDepthCentimeters,
+		*UEnum::GetValueAsString(Snapshot.Phase),
+		*GetNameSafe(GetWorld()), HasAuthority(), int32(GetLocalRole()),
+		*CatLogContext::BuildControllerFields(Character->GetController()));
+	const FGameplayTag Presentation = ResolveTerminalFisherPresentationTag(ECatFishingOutcome::CatInWater);
+	if (Presentation.IsValid()) Character->Multicast_PlayCosmeticEvent(Presentation);
+	if (UCatFishingService* Service = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
+		Service->ReleaseFishingOperatorForCharacter(Character);
 }
 
 bool ACatFishingSession::CommitCatchEquipmentFromAuthority()
@@ -1635,7 +1663,7 @@ bool ACatFishingSession::CommitCatchEquipmentFromAuthority()
 		return false;
 	}
 	const FCatFishingUseOperationResult Bait = Equipment->CommitFishingBaitDeferred(Snapshot.FishingSessionId);
-	// Runner 中的负载耐久代表本场鱼线，新一轮钓鱼会重置；这里不提交鱼竿永久磨损。
+	// 每步磨损已经写回同一鱼竿实例；捕获仅收口饵料，不能再重复扣耐久。
 	return Bait.bApplied || Bait.Error == ECatDomainCommandError::AlreadyResolved;
 }
 
@@ -1643,14 +1671,18 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 {
 	UWorld* World = GetWorld();
 	const UCatWorldItemSettings* Settings = GetDefault<UCatWorldItemSettings>();
-	if (!HasAuthority() || !World || !Settings || !FishDefinition || !AttemptSnapshot.WaterRegion.IsValid())
+	if (!HasAuthority() || !World || !Settings || !FishDefinition || !AttemptSnapshot.WaterRegion.IsValid()
+		|| !FightRunner || !FightRunner->IsFishBeachedForAuthority() || !Snapshot.FishEncounterActor)
 	{
 		UE_LOG(LogCatFishing, Error,
-			TEXT("Event=exhausted_fish_pickup_rejected SessionId=%s Authority=%s World=%s Settings=%s FishDefinition=%s WaterRegion=%s Reason=Dependency"),
+			TEXT("Event=exhausted_fish_pickup_rejected SessionId=%s Authority=%s World=%s Settings=%s "
+				"FishDefinition=%s WaterRegion=%s Beached=%s Encounter=%s Reason=Dependency"),
 			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			HasAuthority() ? TEXT("true") : TEXT("false"), World ? TEXT("valid") : TEXT("null"),
 			Settings ? TEXT("valid") : TEXT("null"), FishDefinition ? TEXT("valid") : TEXT("null"),
-			AttemptSnapshot.WaterRegion.IsValid() ? TEXT("valid") : TEXT("invalid"));
+			AttemptSnapshot.WaterRegion.IsValid() ? TEXT("valid") : TEXT("invalid"),
+			FightRunner && FightRunner->IsFishBeachedForAuthority() ? TEXT("true") : TEXT("false"),
+			*GetNameSafe(Snapshot.FishEncounterActor));
 		return false;
 	}
 	if (!CommitCatchEquipmentFromAuthority())
@@ -1660,7 +1692,7 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens));
 		return false;
 	}
-	// Session 已在力竭瞬间冻结了“水面与地面中较高者”的表面点；这里直接使用，避免生成时二次追踪导致跳位。
+	// 使用可见 Encounter 的当前干地位置完成表现交接，避免在竿尖/水面处重新投影后跳位或消失。
 	const FVector SpawnLocation = SurfaceLocation;
 
 	FActorSpawnParameters SpawnParams;
@@ -1671,7 +1703,9 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 	FRotator LandedRotation = Snapshot.FishEncounterActor
 		? Snapshot.FishEncounterActor->GetActorRotation() : FRotator::ZeroRotator;
 	LandedRotation.Pitch = 0.0;
-	LandedRotation.Roll = Settings->LandedFishRollDegrees;
+	const UCatFishPresentationDefinition* FishPresentation =
+		FishDefinition->LoadRuntimePresentationDefinition();
+	LandedRotation.Roll = FishPresentation ? FishPresentation->LandedActorRollDegrees : 90.0;
 	ACatFishPickupActor* Pickup = World->SpawnActor<ACatFishPickupActor>(
 		ACatFishPickupActor::StaticClass(), SpawnLocation, LandedRotation, SpawnParams);
 	TArray<FString> Participants;
@@ -1684,7 +1718,8 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 		Participants.Add(FisherStableNetId);
 	}
 	if (!Pickup || !Pickup->InitializeFromAuthority(Snapshot.FishingSessionId, FGuid::NewGuid(),
-		FishDefinition, FishWeightKilograms, FishVisualScale, AttemptSnapshot.WaterRegion.RegionId, Participants))
+		FishDefinition, FishWeightKilograms, FishVisualScale, AttemptSnapshot.WaterRegion.RegionId, Participants,
+		Snapshot.FishEncounterActor->GetPresentationState().GroundNormal))
 	{
 		UE_LOG(LogCatFishing, Error,
 			TEXT("Event=exhausted_fish_pickup_rejected SessionId=%s Reason=%s Location=%s"),
@@ -1705,11 +1740,14 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 		Encounter->ForceNetUpdate();
 	}
 	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=exhausted_fish_pickup_spawned SessionId=%s Pickup=%s Location=%s Rotation=%s"),
+		TEXT("Event=exhausted_fish_pickup_spawned SessionId=%s Pickup=%s Location=%s Rotation=%s "
+			"LandingTarget=RodTip PickupState=Available WorldNetMode=%d Authority=true %s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(Pickup),
-		*Pickup->GetActorLocation().ToCompactString(), *Pickup->GetActorRotation().ToCompactString());
+		*Pickup->GetActorLocation().ToCompactString(), *Pickup->GetActorRotation().ToCompactString(),
+		static_cast<int32>(World->GetNetMode()),
+		*CatLogContext::BuildControllerFields(FisherCharacter.IsValid() ? FisherCharacter->GetController() : nullptr));
 	FinalizeSession(ECatFishingPhase::Resolved, ECatFishingOutcome::Landed,
-		TEXT("Exhausted fish reached rod-tip water projection as world pickup"));
+		TEXT("Grounded exhausted fish reached the rod tip as world pickup"));
 	return true;
 }
 
@@ -1717,9 +1755,8 @@ void ACatFishingSession::SuspendOperatorFromAuthority()
 {
 	if (!HasAuthority() || IsTerminal()) return;
 	const ECatFishingPhase Phase = Snapshot.Phase;
-	const bool bFightUnattended = Phase == ECatFishingPhase::HookedFight;
-	const bool bClearFisherIdentity = bFightUnattended || Phase == ECatFishingPhase::Waiting
-		|| Phase == ECatFishingPhase::Probe || Phase == ECatFishingPhase::TrueBiteWindow;
+	const bool bFightUnattended = Phase == ECatFishingPhase::HookedFight
+		|| Phase == ECatFishingPhase::ExhaustedReel;
 	APlayerState* OldFisherPlayerState = Snapshot.FisherPlayerState;
 	ACatCharacter* OldFisherCharacter = FisherCharacter.Get();
 	AController* OldController = OldFisherCharacter ? OldFisherCharacter->GetController() : nullptr;
@@ -1738,37 +1775,28 @@ void ACatFishingSession::SuspendOperatorFromAuthority()
 				*UEnum::GetValueAsString(Phase), *OldFisherLogValue,
 				*CatLogContext::BuildControllerFields(OldController));
 		}
-		if (OldFisherCharacter)
-		{
-			if (UCatAbilitySystemComponent* OldAbilitySystem = OldFisherCharacter->GetCatAbilitySystemComponent())
-			{
-				if (!OldAbilitySystem->RequestFishingStaminaReset())
-				{
-					UE_LOG(LogCatFishing, Warning,
-						TEXT("Event=fishing_operator_stamina_release_failed SessionId=%s OldFisher=%s %s"),
-						*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-						*OldFisherLogValue, *CatLogContext::BuildControllerFields(OldController));
-				}
-			}
-			StaminaParticipantsTouched.Remove(OldFisherCharacter);
-		}
+		// 放下鱼竿只解除本会话对该体力池的所有权；角色保留离开瞬间的剩余体力，不做瞬间补满。
+		StaminaParticipantsTouched.Remove(OldFisherCharacter);
 	}
 	Snapshot.bReeling = false;
 	Snapshot.bSlacking = bFightUnattended;
-	if (bClearFisherIdentity)
-	{
-		FightParticipantIds.Remove(FisherStableNetId);
-		FightParticipantCharacters.Remove(FisherStableNetId);
-		FisherStableNetId.Reset();
-		FisherCharacter.Reset();
-		Snapshot.FisherPlayerState = nullptr;
-		RefreshFightSummary();
-		PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
-	}
-	else
-	{
-		PublishSnapshot(ECatFishingSnapshotMutation::HighFrequency);
-	}
+	Snapshot.RodLeverageMultiplier = 1.0f;
+	Snapshot.CarrierMovementAlpha = 0.0f;
+	Snapshot.CarrierPullAccelerationCentimetersPerSecondSquared = 0.0f;
+	Snapshot.CarrierAwaySpeedMultiplier = 1.0f;
+	Snapshot.ConstraintErrorCentimeters = 0.0f;
+	Snapshot.FishConstraintCorrectionCentimeters = 0.0f;
+	Snapshot.PrimaryPowerAlpha = 0.0f;
+	Snapshot.ActiveCombinedFishingStrength = 0.0;
+	Snapshot.ActiveHelperCount = 0;
+	LastSuspendedFisherPlayerState = OldFisherPlayerState;
+	FightParticipantIds.Remove(FisherStableNetId);
+	FightParticipantCharacters.Remove(FisherStableNetId);
+	FisherStableNetId.Reset();
+	FisherCharacter.Reset();
+	Snapshot.FisherPlayerState = nullptr;
+	RefreshFightSummary();
+	PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_operator_suspended SessionId=%s Phase=%s Mode=%s RunnerTransition=%s OldFisher=%s Rod=%s Reeling=%s Slacking=%s %s"),
 		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
@@ -1942,6 +1970,99 @@ FCatFishingCommandResult ACatFishingSession::CancelFromAuthority(const FGuid Req
 	return Result;
 }
 
+FCatFishingCommandResult ACatFishingSession::CutLineFromAuthority(AController* RequestingController,
+	const FCatFishingSessionCommandContext& Context)
+{
+	if (const FCatFishingCommandResult* Cached = CutLineTerminalByRequest.Find(Context.RequestId))
+	{
+		return *Cached;
+	}
+
+	FCatFishingCommandResult Result;
+	Result.CommandType = ECatFishingCommandType::CutLine;
+	Result.RequestId = Context.RequestId;
+	Result.FishingSessionId = Snapshot.FishingSessionId;
+	Result.CastAttemptId = Snapshot.CastAttemptId;
+	const ECatFishingPhase PhaseBefore = Snapshot.Phase;
+	const bool bCuttablePhase = PhaseBefore == ECatFishingPhase::HookedFight
+		|| PhaseBefore == ECatFishingPhase::NearShore
+		|| PhaseBefore == ECatFishingPhase::ExhaustedReel
+		|| PhaseBefore == ECatFishingPhase::AutoHauling;
+	if (!Context.RequestId.IsValid() || !HasAuthority())
+	{
+		Result.Error = ECatFishingCommandError::InvalidPayload;
+	}
+	else if (IsTerminal())
+	{
+		Result.Error = ECatFishingCommandError::AlreadyResolved;
+	}
+	else if (!Context.FishingSessionId.IsValid() || Context.FishingSessionId != Snapshot.FishingSessionId
+		|| (Context.CastAttemptId.IsValid() && Context.CastAttemptId != Snapshot.CastAttemptId))
+	{
+		Result.Error = ECatFishingCommandError::SessionNotFound;
+	}
+	else if (!RequestingController || !RequestingController->PlayerState)
+	{
+		Result.Error = ECatFishingCommandError::NotFisher;
+	}
+	else if ([&]()
+	{
+		if (Snapshot.FisherPlayerState == RequestingController->PlayerState)
+		{
+			return false;
+		}
+		const ACatFishingRodActor* Rod = Snapshot.RodActor;
+		const APawn* RequestingPawn = RequestingController->GetPawn();
+		const bool bUnattendedGroundRod = Rod && !Snapshot.FisherPlayerState
+			&& Rod->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Grounded
+			&& Rod->GetOperatorCount() == 0;
+		const bool bKnownOperator = Rod && (Rod->GetPresentationState().OwnerPlayerState
+			== RequestingController->PlayerState
+			|| LastSuspendedFisherPlayerState == RequestingController->PlayerState);
+		const bool bNearRod = RequestingPawn && Rod && FVector::DistSquared(
+			RequestingPawn->GetActorLocation(), Rod->GetActorLocation()) <= FMath::Square(250.0);
+		return !(bUnattendedGroundRod && bKnownOperator && bNearRod);
+	}())
+	{
+		Result.Error = ECatFishingCommandError::NotFisher;
+	}
+	else if (Context.ExpectedRevision != Snapshot.Revision)
+	{
+		Result.Error = ECatFishingCommandError::RevisionConflict;
+	}
+	else if (!bCuttablePhase)
+	{
+		Result.Error = ECatFishingCommandError::InvalidPhase;
+	}
+	else
+	{
+		const double RodDurabilityBefore = Snapshot.RodDurabilityRemaining;
+		const double NormalizedLoadBefore = Snapshot.NormalizedLineLoad;
+		// 切线直接抢占终态写口；Finalize 会先写入 LineCut，再停止 Runner/StateTree，避免 Interrupted
+		// 同步回调在同一帧抢先写成另一种终态，保证“第一个终态提交者获胜”的结果可重放。
+		FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::LineCut,
+			TEXT("Fishing line cut by operator"));
+		Result.bCommitted = true;
+		Result.Error = ECatFishingCommandError::None;
+		UE_LOG(LogCatFishing, Display,
+			TEXT("Event=fishing_line_cut_committed SessionId=%s RequestId=%s RodActorId=%s PhaseBefore=%s "
+				"Revision=%lld RodDurabilityBefore=%.3f RodDurabilityAfter=%.3f NormalizedLoadBefore=%.3f %s"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			Snapshot.RodActor
+				? *Snapshot.RodActor->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens)
+				: TEXT("None"),
+			*UEnum::GetValueAsString(PhaseBefore), Snapshot.Revision,
+			RodDurabilityBefore, Snapshot.RodDurabilityRemaining, NormalizedLoadBefore,
+			*CatLogContext::BuildControllerFields(RequestingController));
+	}
+	Result.Revision = Snapshot.Revision;
+	Result.SnapshotSequence = Snapshot.SnapshotSequence;
+	Result.PhaseEpoch = Snapshot.PhaseEpoch;
+	CutLineTerminalByRequest.Add(Context.RequestId, Result);
+	return Result;
+}
+
 bool ACatFishingSession::StartPreparedSessionLogicFromAuthority()
 {
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
@@ -2008,9 +2129,17 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	Snapshot.FishLineAlignment = 0.0f;
 	Snapshot.NormalizedLineLoad = 0.0f;
 	Snapshot.bStrongConfrontation = false;
+	Snapshot.RodLeverageMultiplier = 1.0f;
+	Snapshot.CarrierMovementAlpha = 0.0f;
+	Snapshot.CarrierPullAccelerationCentimetersPerSecondSquared = 0.0f;
+	Snapshot.CarrierAwaySpeedMultiplier = 1.0f;
+	Snapshot.ConstraintErrorCentimeters = 0.0f;
+	Snapshot.FishConstraintCorrectionCentimeters = 0.0f;
+	Snapshot.PrimaryPowerAlpha = 0.0f;
+	Snapshot.ActiveCombinedFishingStrength = 0.0;
+	Snapshot.ActiveHelperCount = 0;
 	Snapshot.bReeling = false;
 	Snapshot.bSlacking = false;
-	bHasExhaustedReelTarget = false;
 	if (Snapshot.HookActor)
 	{
 		Snapshot.HookActor->SetBobberPresentationModeFromAuthority(ECatFishingBobberPresentationMode::None);
@@ -2029,7 +2158,6 @@ void ACatFishingSession::FinalizeSession(const ECatFishingPhase FinalPhase, cons
 	GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
 	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
 	GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
-	GetWorldTimerManager().ClearTimer(ExhaustedReelTimerHandle);
 	// 释放原始抛竿者装备上属于本 Session 的钓具预留；其他鱼竿的并行预留保持不变。
 	if (UCatEquipmentComponent* Equipment = CastEquipment.Get())
 	{
@@ -2086,32 +2214,13 @@ FGameplayTag ACatFishingSession::ResolveTerminalFisherPresentationTag(const ECat
 	{
 	case ECatFishingOutcome::LineBroken:
 		return CatFishingAbilityTags::Cosmetic_Fishing_LineBroken;
+	case ECatFishingOutcome::LineCut:
+		return CatFishingAbilityTags::Cosmetic_Fishing_LineCut;
 	case ECatFishingOutcome::CatInWater:
 		return CatFishingAbilityTags::Cosmetic_Fishing_CatInWater;
 	default:
 		return FGameplayTag();
 	}
-}
-
-// Character 关联查询流程：比较初始钓手和协作者弱引用；不以名字或网络地址猜测。
-bool ACatFishingSession::InvolvesCharacter(const ACatCharacter* Character) const
-{
-	if (!Character)
-	{
-		return false;
-	}
-	if (FisherCharacter.Get() == Character)
-	{
-		return true;
-	}
-	for (const TPair<FString, TWeakObjectPtr<ACatCharacter>>& Pair : FightParticipantCharacters)
-	{
-		if (Pair.Value.Get() == Character)
-		{
-			return true;
-		}
-	}
-	return false;
 }
 
 // Snapshot 读取流程：返回本机当前只读事实，不暴露身份或服务引用。
@@ -2133,13 +2242,17 @@ void ACatFishingSession::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
 	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
 	GetWorldTimerManager().ClearTimer(TrueBiteTimerHandle);
-	GetWorldTimerManager().ClearTimer(ExhaustedReelTimerHandle);
 	if (StateTreeComponent && StateTreeComponent->IsRunning())
 	{
 		StateTreeComponent->StopLogic(TEXT("FishingSession EndPlay"));
 	}
 	if (HasAuthority())
 	{
+		if (UCatEquipmentComponent* Equipment = CastEquipment.Get(); Equipment
+			&& Equipment->IsFishingUseActive(Snapshot.FishingSessionId))
+		{
+			Equipment->ReleaseFishingUse(Snapshot.FishingSessionId);
+		}
 		for (const TWeakObjectPtr<ACatCharacter>& WeakParticipant : StaminaParticipantsTouched)
 		{
 			if (ACatCharacter* Participant = WeakParticipant.Get())
@@ -2169,6 +2282,34 @@ FString ACatFishingSession::ResolveStableNetId(const AController* Controller)
 void ACatFishingSession::OnRep_Snapshot()
 {
 	NotifySnapshotChanged();
+	const UWorld* World = GetWorld();
+	const int32 RodDurabilityBand = FMath::FloorToInt(Snapshot.RodDurabilityRemaining / 5.0);
+	if (World && Snapshot.RodActor && (RodDurabilityBand != LastReceivedRodDurabilityBand
+		|| (IsTerminal() && !bReceivedRodTerminal)))
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_rod_durability_received SessionId=%s RodItemInstanceId=%s RodDurability=%.3f Phase=%s Outcome=%s World=%s NetMode=%d Authority=%s LocalRole=%d Result=Replicated"),
+			*Snapshot.FishingSessionId.ToString(), *Snapshot.RodActor->GetPresentationState().ItemInstanceId.ToString(),
+			Snapshot.RodDurabilityRemaining, *UEnum::GetValueAsString(Snapshot.Phase), *UEnum::GetValueAsString(Snapshot.Outcome),
+			*GetNameSafe(World), static_cast<int32>(World->GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
+			static_cast<int32>(GetLocalRole()));
+		LastReceivedRodDurabilityBand = RodDurabilityBand;
+		bReceivedRodTerminal = IsTerminal();
+	}
+	const bool bFightPhase = Snapshot.Phase == ECatFishingPhase::HookedFight
+		|| Snapshot.Phase == ECatFishingPhase::ExhaustedReel;
+	if (World && bFightPhase && World->GetTimeSeconds() >= NextStaminaReceivedDiagnosticSeconds)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_fish_stamina_received SessionId=%s FishStamina=%.4f Phase=%s Slacking=%s Reeling=%s "
+				"RodActor=%s World=%s NetMode=%d Authority=%s LocalRole=%d Result=Replicated"),
+			*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), Snapshot.FishFightStaminaRemaining,
+			*UEnum::GetValueAsString(Snapshot.Phase), Snapshot.bSlacking ? TEXT("true") : TEXT("false"),
+			Snapshot.bReeling ? TEXT("true") : TEXT("false"), *GetNameSafe(Snapshot.RodActor), *GetNameSafe(World),
+			static_cast<int32>(World->GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
+			static_cast<int32>(GetLocalRole()));
+		NextStaminaReceivedDiagnosticSeconds = World->GetTimeSeconds() + 1.0;
+	}
 }
 
 void ACatFishingSession::NotifySnapshotChanged()
@@ -2186,40 +2327,116 @@ void ACatFishingSession::PublishSnapshot(const ECatFishingSnapshotMutation Mutat
 	}
 }
 
-// 搏斗摘要流程：清零三项聚合后，对每个弱 Character 重用 FishingService 的 Active/未倒地/正能力谓词；只累加身份与弱引用仍一致的当前参与者。
+void ACatFishingSession::RefreshOperatorMembershipFromAuthority()
+{
+	if (!HasAuthority() || IsTerminal()) return;
+	RefreshFightSummary();
+	PublishSnapshot(ECatFishingSnapshotMutation::Discrete);
+}
+
+void ACatFishingSession::EndFixedStepMutationBoundary()
+{
+	bFixedStepMutationBoundary = false;
+	if (UCatFishingService* Service = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
+		Service->FlushDeferredOperatorRemovalsFromAuthority();
+}
+
+void ACatFishingSession::PublishGroupSummaryFromAuthority(const double TotalStrength,
+	const double TotalStamina, const double TotalStaminaMaximum, const int32 ParticipantCount)
+{
+	if (!HasAuthority() || IsTerminal() || !FMath::IsFinite(TotalStrength) || TotalStrength < 0.0
+		|| !FMath::IsFinite(TotalStamina) || TotalStamina < 0.0
+		|| !FMath::IsFinite(TotalStaminaMaximum) || TotalStaminaMaximum < TotalStamina || ParticipantCount < 0) return;
+	Snapshot.FightParticipantCount = ParticipantCount;
+	Snapshot.CombinedFishingStrength = TotalStrength;
+	Snapshot.CombinedFightStamina = TotalStamina;
+	Snapshot.CombinedFightStaminaMaximum = TotalStaminaMaximum;
+	// 跟随本固定步 HandleFightRunnerStep 的一次快照发布，避免同一步发布中间态。
+}
+
+// 非搏斗阶段从鱼竿唯一成员列表聚合；正式搏斗合力与体力只接收 Runner 的逐人计算投影。
 bool ACatFishingSession::RefreshFightSummary()
 {
-	// 先记住刷新前的三项聚合值，函数末尾用来判断本次刷新是否真的产生了变化。
-	const int32 PreviousParticipantCount = Snapshot.FightParticipantCount;
-	const double PreviousCombinedFishingStrength = Snapshot.CombinedFishingStrength;
-	const double PreviousCombinedFightStamina = Snapshot.CombinedFightStamina;
-	// 每次都从零重新聚合，而不是增量修改，避免掉线/倒地参与者的旧贡献残留在总量里。
-	Snapshot.FightParticipantCount = 0;
-	Snapshot.CombinedFishingStrength = 0.0;
-	Snapshot.CombinedFightStamina = 0.0;
-	for (const TPair<FString, TWeakObjectPtr<ACatCharacter>>& Pair : FightParticipantCharacters)
+	if (IsFightRunnerRunning()) return false;
+	const UCatFishingFightBalanceDefinition* Balance = GetDefault<UCatFishingSettings>()->LoadFightBalanceDefinition();
+	const auto RejectSummary = [this](const TCHAR* Reason, const APlayerState* Player)
 	{
-		ACatCharacter* Character = Pair.Value.Get();
-		FString StableNetId;
-		ACatCharacter* ValidatedCharacter = nullptr;
-		double Strength = 0.0;
-		double FightStamina = 0.0;
-		// 复用统一参战能力谓词重新验证每个参与者：弱引用必须仍然有效，谓词内部解析出的身份/Character
-		// 必须和登记时的身份/Character 完全一致，防止掉线重连后身份被冒用或角色被替换。
-		if (Character && UCatFishingService::TryGetFightCapability(Character->GetController(), StableNetId,
-			ValidatedCharacter, Strength, FightStamina) && StableNetId == Pair.Key
-			&& ValidatedCharacter == Character)
+		UE_LOG(LogCatFishing, Warning,
+			TEXT("Event=fishing_group_summary_rejected SessionId=%s PlayerId=%d Reason=%s World=%s NetMode=%d Authority=%d LocalRole=%d Result=KeepLastValidSummary"),
+			*Snapshot.FishingSessionId.ToString(), Player ? Player->GetPlayerId() : INDEX_NONE, Reason,
+			*GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()));
+		return false;
+	};
+	if (!Balance) return RejectSummary(TEXT("FightBalanceUnavailable"), nullptr);
+	int32 ParticipantCount = 0;
+	double CombinedStrength = 0.0, CombinedStamina = 0.0, CombinedMaximum = 0.0;
+	TSet<FString> ParticipantIds;
+	TMap<FString, TWeakObjectPtr<ACatCharacter>> ParticipantCharacters;
+	if (Snapshot.RodActor)
+	{
+		for (APlayerState* Player : Snapshot.RodActor->GetPresentationState().OperatorPlayerStates)
 		{
-			++Snapshot.FightParticipantCount;
-			Snapshot.CombinedFishingStrength += Strength;
-			Snapshot.CombinedFightStamina += FightStamina;
+			ACatCharacter* Character = Player ? Cast<ACatCharacter>(Player->GetPawn()) : nullptr;
+			UCatAbilitySystemComponent* ASC = Character ? Character->GetCatAbilitySystemComponent() : nullptr;
+			const FString StableId = ResolveStableNetId(Character ? Character->GetController() : nullptr);
+			if (!ASC || StableId.IsEmpty() || !UCatFishingService::CanControllerStartFishingAction(Character->GetController())) continue;
+			const double Stamina = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+			const double Strength = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFishingStrengthAttribute());
+			const double Maximum = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute());
+			if (!FMath::IsFinite(Maximum) || Maximum <= 0.0)
+				return RejectSummary(TEXT("StaminaMaximumAttributeUnavailable"), Player);
+			if (!FMath::IsFinite(Stamina) || Stamina < 0.0 || Stamina > Maximum
+				|| !FMath::IsFinite(Strength) || Strength < 0.0)
+				return RejectSummary(TEXT("MemberAttributesOutsideBounds"), Player);
+			++ParticipantCount;
+			CombinedStrength += Stamina > 0.0
+				? Strength * (Snapshot.RodActor->IsPrimaryOperator(Player) ? 1.0 : Balance->HelperStrengthMultiplier) : 0.0;
+			CombinedStamina += Stamina;
+			CombinedMaximum += Maximum;
+			ParticipantIds.Add(StableId);
+			ParticipantCharacters.Add(StableId, Character);
 		}
-		// 校验不通过的参与者（掉线/倒地/身份不符）直接跳过，不计入本次聚合，相当于隐式退出搏斗。
 	}
-	// 只要三项聚合中有任意一项和刷新前不同，就返回 true，供调用方决定是否需要额外推送一次复制更新。
-	return Snapshot.FightParticipantCount != PreviousParticipantCount
-		|| Snapshot.CombinedFishingStrength != PreviousCombinedFishingStrength
-		|| Snapshot.CombinedFightStamina != PreviousCombinedFightStamina;
+	const bool bChanged = Snapshot.FightParticipantCount != ParticipantCount || Snapshot.CombinedFishingStrength != CombinedStrength
+		|| Snapshot.CombinedFightStamina != CombinedStamina || Snapshot.CombinedFightStaminaMaximum != CombinedMaximum;
+	Snapshot.FightParticipantCount = ParticipantCount;
+	Snapshot.CombinedFishingStrength = CombinedStrength;
+	Snapshot.CombinedFightStamina = CombinedStamina;
+	Snapshot.CombinedFightStaminaMaximum = CombinedMaximum;
+	FightParticipantIds = MoveTemp(ParticipantIds);
+	FightParticipantCharacters = MoveTemp(ParticipantCharacters);
+	return bChanged;
+}
+
+void ACatFishingSession::RegisterFightStaminaParticipantFromAuthority(ACatCharacter* Character)
+{
+	if (HasAuthority() && Character && !IsTerminal())
+	{
+		StaminaParticipantsTouched.Add(Character);
+		const FString StableNetId = ResolveStableNetId(Character->GetController());
+		if (!StableNetId.IsEmpty())
+		{
+			FightParticipantIds.Add(StableNetId);
+			FightParticipantCharacters.Add(StableNetId, Character);
+		}
+	}
+}
+
+void ACatFishingSession::UnregisterFightStaminaParticipantFromAuthority(ACatCharacter* Character)
+{
+	if (HasAuthority() && Character)
+	{
+		StaminaParticipantsTouched.Remove(Character);
+		// UnPossessed/EndPlay 可能已失去 Controller；按登记的身体反查，不依赖仍能解析网络身份。
+		for (auto It = FightParticipantCharacters.CreateIterator(); It; ++It)
+		{
+			if (It.Value().Get(true) == Character)
+			{
+				FightParticipantIds.Remove(It.Key());
+				It.RemoveCurrent();
+			}
+		}
+	}
 }
 
 void ACatFishingSession::PublishRefreshedFightSummaryIfChanged(const bool bSummaryChanged)

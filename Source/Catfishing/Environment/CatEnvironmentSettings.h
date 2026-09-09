@@ -19,6 +19,14 @@ public:
 	/** 根据 Run 的白天开始/截止和当前服务器世界时间计算时段；夜晚或参数无效返回 Unknown。 */
 	ECatEnvironmentTimeOfDay ResolveTimeOfDay(const FCatRunPhaseSnapshot& RunSnapshot, double ServerNowSeconds) const;
 
+	/** 计算白天内需要重新发布环境语义的服务器时间点；无有效白天截止时返回 false，调用方不安排影子计时。 */
+	bool TryResolveTimeOfDayRefreshTimes(const FCatRunPhaseSnapshot& RunSnapshot,
+		double& OutMorningEndServerTimeSeconds, double& OutDuskStartServerTimeSeconds) const;
+
+	/** 根据当前 Run 阶段、白天时段和天气裁决公共事件是否成立；未满足条件时输出 None，避免配置名直接变成事件事实。 */
+	bool TryResolveActiveEvent(const FCatRunPhaseSnapshot& RunSnapshot, ECatEnvironmentTimeOfDay TimeOfDay,
+		ECatEnvironmentWeather Weather, FName& OutEventId) const;
+
 	/** 读取当前公共自然事件对共享 WaterRegion 的显式聚鱼输入；任一事件、区域或三轴 Unset 都返回 false。 */
 	bool TryGetNaturalChumField(FName& OutChumDefinitionId, FName& OutAnchorId) const;
 
@@ -41,6 +49,10 @@ public:
 	/** 当前显式公共自然事件 ID；None 表示无事件，不会创建占位事件。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Event")
 	FName ActiveEventId = NAME_None;
+
+	/** 当前显式公共事件要求的天气；Unknown 表示暂不按天气过滤，设置具体天气后不匹配就不发布事件。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Event")
+	ECatEnvironmentWeather ActiveEventRequiredWeather = ECatEnvironmentWeather::Unknown;
 
 	/** 自然事件使用的唯一 ready ChumDefinition；None 表示不创建空间窝点。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Event")

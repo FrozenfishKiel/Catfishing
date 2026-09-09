@@ -1,6 +1,7 @@
 #include "Run/CatRunStateTreeNodes.h"
 
 #include "Framework/Game/CatGameplayTypes.h"
+#include "Run/CatRunSettings.h"
 #include "StateTreeExecutionContext.h"
 
 // EnterPhase Task 构造流程：禁用 Tick 与无意义的 Tick/Exit 属性复制，使每次 State 进入只执行一次 GameMode 提交。
@@ -51,4 +52,21 @@ bool FCatRunResultReasonCondition::TestCondition(FStateTreeExecutionContext& Con
 	}
 	const FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
 	return GameMode->DoesLastRunFlowResultMatch(InstanceData.ExpectedReason);
+}
+
+// 成功结算资格读取流程：只允许普通夜晚在全员 ready 事件后被这条 Transition 选择；判断所需天数来自同一份 RunPublicState，策略与最终天来自 RunSettings，缺宿主或缺策略都 fail-closed。
+bool FCatRunSuccessSettlementEligibleCondition::TestCondition(FStateTreeExecutionContext& Context) const
+{
+	const ACatfishingGameModeBase* GameMode = Cast<ACatfishingGameModeBase>(Context.GetOwner());
+	if (!GameMode)
+	{
+		return false;
+	}
+	const FCatRunPublicState& RunState = GameMode->GetRunPublicState();
+	if (RunState.Phase.Phase != ECatRunPhase::NormalNight)
+	{
+		return false;
+	}
+	const UCatRunSettings* Settings = GetDefault<UCatRunSettings>();
+	return Settings && Settings->CanEnterSuccessSettlementNight(RunState.Phase.DayIndex);
 }

@@ -54,7 +54,7 @@ namespace
 	}
 }
 
-FCatFishMotionSolveResult FCatFishFightMotionSolver::Solve(const FCatFishMotionSolveInput& Input)
+FCatFishMotionSolveResult FCatFishFightMotionSolver::ProjectInitialFishToWater(const FCatFishMotionSolveInput& Input)
 {
 	// 默认 bSucceeded=false；输入的水域边界、坐标、最大线长任一非法都直接返回这个空结果。
 	FCatFishMotionSolveResult Result;
@@ -91,6 +91,53 @@ FCatFishMotionSolveResult FCatFishFightMotionSolver::Solve(const FCatFishMotionS
 	return Result;
 }
 
+bool FCatFishFightMotionSolver::IsIntentionalLandwardHaul(
+	const FCatFishBeachingIntentInput& Input)
+{
+	if (!Input.bLineTaut
+		|| !IsFiniteMotionVector(Input.CurrentFishWorldPosition)
+		|| !IsFiniteMotionVector(Input.CandidateFishWorldPosition)
+		|| !IsFiniteMotionVector(Input.WaterwardDirection)
+		|| Input.WaterwardDirection.IsNearlyZero()
+		|| !IsFiniteMotionVector(Input.CarrierActualWorldDisplacement)
+		|| !IsFiniteMotionVector(Input.NonCarrierRodTipWorldDisplacement)
+		|| !FMath::IsFinite(Input.ActualReelDistanceCentimeters)
+		|| Input.ActualReelDistanceCentimeters < 0.0
+		|| !FMath::IsFinite(Input.ReelConstraintDistanceCentimeters)
+		|| Input.ReelConstraintDistanceCentimeters < 0.0
+		|| !FMath::IsFinite(Input.MinimumProgressCentimeters)
+		|| Input.MinimumProgressCentimeters < 0.0)
+	{
+		return false;
+	}
+
+	FVector LandwardDirection = -Input.WaterwardDirection;
+	LandwardDirection.Z = 0.0;
+	LandwardDirection = LandwardDirection.GetSafeNormal();
+	if (LandwardDirection.IsNearlyZero())
+	{
+		return false;
+	}
+	FVector FishDisplacement = Input.CandidateFishWorldPosition - Input.CurrentFishWorldPosition;
+	FishDisplacement.Z = 0.0;
+	FVector CarrierDisplacement = Input.CarrierActualWorldDisplacement;
+	CarrierDisplacement.Z = 0.0;
+	FVector NonCarrierRodTipDisplacement = Input.NonCarrierRodTipWorldDisplacement;
+	NonCarrierRodTipDisplacement.Z = 0.0;
+	const double FishLandwardProgress = FVector::DotProduct(FishDisplacement, LandwardDirection);
+	const double CarrierLandwardProgress = FVector::DotProduct(CarrierDisplacement, LandwardDirection);
+	const double ExplicitCatHaulDistance = FMath::Max(Input.ActualReelDistanceCentimeters,
+		Input.ReelConstraintDistanceCentimeters)
+		+ FMath::Max(0.0, CarrierLandwardProgress);
+	// 只扣除向岸的竿尖扫动，横向/竖向调整不能把真实拖拽一并否掉。
+	const double NonCarrierLandwardProgress = FMath::Max(0.0,
+		FVector::DotProduct(NonCarrierRodTipDisplacement, LandwardDirection));
+	const bool bExplicitCatHaul = ExplicitCatHaulDistance > Input.MinimumProgressCentimeters
+		&& ExplicitCatHaulDistance + Input.MinimumProgressCentimeters
+			>= NonCarrierLandwardProgress;
+	return bExplicitCatHaul && FishLandwardProgress > Input.MinimumProgressCentimeters;
+}
+
 FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContact(
 	const FCatFishShoreContactInput& Input)
 {
@@ -105,35 +152,47 @@ FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContac
 		|| Input.PreviousLineLengthCentimeters < 0.0
 		|| !FMath::IsFinite(Input.ProposedLineLengthCentimeters)
 		|| Input.ProposedLineLengthCentimeters < 0.0
-		|| Input.ProposedLineLengthCentimeters > Input.PreviousLineLengthCentimeters + 0.01 && Input.bReeling
-		|| Input.ProposedLineLengthCentimeters + 0.01 < Input.PreviousLineLengthCentimeters && Input.bSlacking
-		|| Input.bReeling && Input.bSlacking
-		|| !FMath::IsFinite(Input.CorrectionToleranceCentimeters)
-		|| Input.CorrectionToleranceCentimeters < 0.0)
+		|| !FMath::IsFinite(Input.MaximumConstraintDistanceCentimeters)
+		|| Input.MaximumConstraintDistanceCentimeters < 0.0
+		|| Input.bReeling && Input.bSlacking)
 	{
 		return Result;
 	}
+	double ProposedLineLength = Input.ProposedLineLengthCentimeters;
+	// 岸线层只做可恢复的空间校正。收线时最多保持旧长度，放线时至少保持旧长度，
+	// 不因竿尖旋转造成的亚帧几何偏差终止整场会话。
+	if (Input.bReeling)
+	{
+		ProposedLineLength = FMath::Min(ProposedLineLength, Input.PreviousLineLengthCentimeters);
+	}
+	else if (Input.bSlacking)
+	{
+		ProposedLineLength = FMath::Max(ProposedLineLength, Input.PreviousLineLengthCentimeters);
+	}
+	const double MaximumConstraintDistance = Input.MaximumConstraintDistanceCentimeters > 0.0
+		? FMath::Max(ProposedLineLength,
+			Input.MaximumConstraintDistanceCentimeters)
+		: ProposedLineLength;
 
+	// Boundary 容差带内也可能只返回最近岸点；不能用厘米级死区把慢速回水候选重新吸到岸线上。
 	Result.bShoreContact = FVector::DistSquared2D(Input.CandidateFishWorldPosition,
-		Input.ResolvedWaterWorldPosition) > FMath::Square(Input.CorrectionToleranceCentimeters);
+		Input.ResolvedWaterWorldPosition) > FMath::Square(UE_DOUBLE_SMALL_NUMBER);
 	FVector DesiredPosition;
 	if (Result.bShoreContact)
 	{
-		// 当前点是上一固定步已经通过真实水域校验的位置。把安全修正位移拆成“入水法向 + 沿岸切向”，
-		// 丢掉可能很大的法向 MinimumWaterInset 回弹，只保留不超过本步原始位移的沿岸滑动。
+		// 连续拖行可能把活鱼留在烘焙轮廓外、真实岸面前。只删除候选向陆地的分量，
+		// 保留鱼本步真实的入水进度；不能把它和最近岸点投影带来的大幅法向回弹一起删除。
 		const FVector Waterward = FVector(Input.WaterwardDirection.X, Input.WaterwardDirection.Y, 0.0)
 			.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector);
 		const FVector ResolvedDelta = Input.ResolvedWaterWorldPosition - Input.CurrentFishWorldPosition;
 		const FVector HorizontalResolvedDelta(ResolvedDelta.X, ResolvedDelta.Y, 0.0);
 		FVector TangentialDelta = HorizontalResolvedDelta
 			- Waterward * FVector::DotProduct(HorizontalResolvedDelta, Waterward);
-		const double ProposedStepDistance = FVector::Dist2D(Input.CurrentFishWorldPosition,
-			Input.CandidateFishWorldPosition);
-		if (TangentialDelta.Size2D() > ProposedStepDistance && ProposedStepDistance > 0.0)
-		{
-			TangentialDelta = TangentialDelta.GetSafeNormal2D() * ProposedStepDistance;
-		}
-		DesiredPosition = Input.CurrentFishWorldPosition + TangentialDelta;
+		const FVector ProposedDelta = Input.CandidateFishWorldPosition - Input.CurrentFishWorldPosition;
+		const double WaterwardProgress = FMath::Max(0.0, FVector::DotProduct(ProposedDelta, Waterward));
+		const FVector RecoveryDelta = (TangentialDelta + Waterward * WaterwardProgress)
+			.GetClampedToMaxSize2D(ProposedDelta.Size2D());
+		DesiredPosition = Input.CurrentFishWorldPosition + RecoveryDelta;
 		DesiredPosition.Z = Input.ResolvedWaterWorldPosition.Z;
 	}
 	else
@@ -142,15 +201,16 @@ FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContac
 	}
 
 	if (ClampSegmentEndToSphere(Input.CurrentFishWorldPosition, DesiredPosition,
-		Input.RodTipWorldPosition, Input.ProposedLineLengthCentimeters, Result.FishWorldPosition))
+		Input.RodTipWorldPosition, MaximumConstraintDistance, Result.FishWorldPosition))
 	{
-		Result.LineLengthCentimeters = Input.ProposedLineLengthCentimeters;
+		Result.LineLengthCentimeters = ProposedLineLength;
 	}
 	else if (Input.bReeling && ClampSegmentEndToSphere(Input.CurrentFishWorldPosition, DesiredPosition,
-		Input.RodTipWorldPosition, Input.PreviousLineLengthCentimeters, Result.FishWorldPosition))
+		Input.RodTipWorldPosition, FMath::Max(Input.PreviousLineLengthCentimeters,
+			MaximumConstraintDistance), Result.FishWorldPosition))
 	{
 		// 岸线阻止鱼继续靠近时，本次收线只能收到实际直线距离；这是“收线未完全成功”，不是主动吐线。
-		Result.LineLengthCentimeters = FMath::Max(Input.ProposedLineLengthCentimeters,
+		Result.LineLengthCentimeters = FMath::Max(ProposedLineLength,
 			FVector::Distance(Input.RodTipWorldPosition, Result.FishWorldPosition));
 	}
 	else
@@ -167,6 +227,6 @@ FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContac
 	Result.bSucceeded = IsFiniteMotionVector(Result.FishWorldPosition)
 		&& FMath::IsFinite(Result.LineLengthCentimeters)
 		&& FVector::Distance(Input.RodTipWorldPosition, Result.FishWorldPosition)
-			<= Result.LineLengthCentimeters + 0.01;
+			<= FMath::Max(Result.LineLengthCentimeters, MaximumConstraintDistance) + 0.01;
 	return Result;
 }

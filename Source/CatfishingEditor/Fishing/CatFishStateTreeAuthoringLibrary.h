@@ -14,7 +14,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Fishing")
 	static bool CreateOrUpdateDefaultFishBehaviorStateTree();
 
-	/** 重建并编译默认钓鱼会话树；包含 WindowExpired -> Waiting 的可重复咬钩循环。 */
+	/** 重建并编译默认钓鱼会话树；包含重复咬钩循环与 FishExhausted 生命周期事件边。 */
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Fishing")
 	static bool CreateOrUpdateDefaultFishingSessionStateTree();
 };

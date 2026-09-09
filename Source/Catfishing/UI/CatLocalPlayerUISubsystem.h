@@ -1,7 +1,6 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Online/CatOnlineTypes.h"
 #include "Subsystems/LocalPlayerSubsystem.h"
 #include "CatLocalPlayerUISubsystem.generated.h"
 
@@ -9,10 +8,13 @@ class APlayerController;
 class APawn;
 class ACatCampInventoryActor;
 class ACatCharacter;
-class UCatCollectionModel;
-class UCatCollectionWidget;
 class UCatHUDModel;
 class UCatHUDWidget;
+class UCatFrontendPageController;
+class UCatFrontendRootWidget;
+class UCatFrontendRoomModel;
+class UCatFrontendSaveModel;
+class UCatFrontendSettingsModel;
 class UCatContainerReplicationComponent;
 class UCatCampInventoryWidget;
 class UCatInteractionPageController;
@@ -20,8 +22,10 @@ class UCatInteractionPromptWidget;
 class UCatInventoryModel;
 class UCatInventoryPageController;
 class UCatInventoryWidget;
-class UCatTravelWidget;
+class UCatLakeMainMenuController;
+class UCatLakeMainMenuWidget;
 enum class ECatHUDAction : uint8;
+struct FCatOnlineSnapshot;
 
 /** 每个 LocalPlayer 的 UI 生命周期协调器；只装配本地玩家拥有的 HUD、背包和交互提示，不预建商店或聚合业务页面。 */
 UCLASS()
@@ -31,17 +35,16 @@ class CATFISHING_API UCatLocalPlayerUISubsystem : public ULocalPlayerSubsystem
 
 #if WITH_DEV_AUTOMATION_TESTS
 	friend class FCatLocalPlayerUISubsystemSplitPlayerModulesAttachTest;
-	friend class FCatLocalPlayerUISubsystemOnlineWidgetPolicyTest;
 #endif
 
 public:
 	/** 订阅 GameInstance Online 快照，绑定当前本地 Controller，并按当前 Pawn 尝试装配本地玩家 UI 模块。 */
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 
-	/** 先移除本地玩家 UI 模块与 Controller 绑定，再移除 Online View 和快照订阅，保证 LocalPlayer 销毁后没有迟到 UI 更新。 */
+	/** 先移除本地玩家 UI 模块与 Controller 绑定，再移除 Frontend Root 和快照订阅，保证 LocalPlayer 销毁后没有迟到 UI 更新。 */
 	virtual void Deinitialize() override;
 
-	/** Controller 替换时先从旧 Controller 恢复并清理 UI，再弱绑定新 Controller 并装配其当前 Pawn。 */
+	/** Controller 替换时先判断 Frontend Root 是否需要跨空窗保留；完成后旧局内 UI 已清理，新 Controller 已重新绑定并恢复必要焦点。 */
 	virtual void PlayerControllerChanged(APlayerController* NewController) override;
 
 	/** 切换当前 LocalPlayer 的背包页面；实际输入模式、焦点和鼠标由 Inventory PageController 管理。 */
@@ -72,20 +75,17 @@ public:
 	void RefreshPlayerLakeUIForController(APlayerController* Controller);
 
 private:
-	/** 响应 Online 事实变更；实现重新读取完整 Snapshot，并同步 Frontend 面板与本地玩家 UI Model。 */
+	/** 响应 Online 事实变更；实现按当前 World 调和 Frontend Root，并刷新局内 HUD 的只读投影。 */
 	void HandleOnlineSnapshotChanged();
 
-	/** 把 Frontend Travel View 的 Host/Find/Join/Invite/Leave 意图翻译为 Online 公共接口调用。 */
-	void HandleActionRequested(ECatOnlineUIAction Action, FGuid OpaqueHandle);
+	/** 根据当前本地 Controller、World 和 Online 快照调和 Frontend Root；完成后要么存在唯一有效 Root，要么已拆除失效前端。 */
+	void RefreshFrontendForCurrentController();
 
-	/** 根据当前 Controller 与完整 Online 快照调和唯一 TravelWidget；只有 Frontend 或进入 Lake 前的旅行态会创建或刷新。 */
-	void RefreshOnlineWidgetForCurrentController();
+	/** 判断已有 Frontend Root 是否处于 Start 加载、旅行等待或失败恢复保护窗；返回值只授权保留旧 Root，不授权在非 Frontend World 新建 Root。 */
+	bool ShouldKeepExistingFrontendRoot(const FCatOnlineSnapshot& Snapshot) const;
 
-	/** 判断 Frontend 旅行面板是否仍属于当前屏幕；Lake、回 Frontend 途中和异常 World 都不显示 Host/Find/Join 白盒。 */
-	static bool ShouldShowOnlineTravelWidget(const FCatOnlineSnapshot& Snapshot);
-
-	/** 成对解除 Frontend View 动作广播并移出视口；空实例和重复调用保持幂等。 */
-	void RemoveOnlineWidget();
+	/** 先成对 Shutdown Frontend Controller 和三个 Model，再从视口移除 Root；调用时若仍有绑定 Controller，才恢复前端鼠标状态。 */
+	void RemoveFrontendRoot();
 
 	/** 弱绑定当前 LocalPlayer Controller，并立即尝试装配其当前 Pawn；后续 Pawn 就绪通知由项目 PlayerController 主动转交。 */
 	void BindController(APlayerController* Controller);
@@ -96,36 +96,46 @@ private:
 	/** 当前 Controller Pawn 变化入口；同 Pawn 刷新库存读模型和输入绑定，换 Pawn 或空 Pawn 才拆装本地玩家 UI 模块。 */
 	void HandleControllerPawnChanged(APawn* NewPawn);
 
-	/** 当配置 WBP、当前 Controller 与 Character 有效时创建 HUD、Inventory 和 Interaction 三个本地玩家模块。 */
+	/** 当配置 WBP、当前 Controller 与 Character 有效时创建 HUD、Inventory、Interaction 和局内菜单模块。 */
 	void AttachPlayerLakeUI(ACatCharacter* Character);
 
 	/** 先解绑各模块 PageController/Model，再移除 View，最后清理所有本地玩家 UI 引用。 */
 	void DetachPlayerLakeUI();
 
-	/** 切换当前 LocalPlayer 的图鉴页面；页面只读 Profile 图鉴快照，不接实物鱼容器。 */
-	void ToggleCollection();
-
-	/** 成对解绑并移除图鉴页面；空页面和重复调用保持幂等。 */
-	void CloseCollection();
-
 	/** HUD Model 投影变化入口；只把最新状态交给 HUD WBP，不访问背包或商店。 */
 	void HandleHUDModelViewStateChanged();
 
-	/** Collection Model 投影变化入口；只把最新图鉴快照交给图鉴 WBP。 */
-	void HandleCollectionModelViewStateChanged();
+	/** 切换局内主菜单；打开菜单前会关闭已打开的背包，避免两个模态输入层同时争抢焦点。 */
+	void ToggleLakeMainMenu();
 
-	/** HUD 入口动作入口；背包交给既有库存控制器，菜单和图鉴只保留给蓝图或未来页面控制器。 */
+	/** HUD 入口动作入口；背包和局内菜单都转交各自控制器，HUD 不创建或持有业务页面。 */
 	void HandleHUDActionRequested(ECatHUDAction Action);
 
-	/** 当前 LocalPlayer 唯一 Frontend/旅行白盒界面；子系统拥有，Controller 变化或销毁时释放。 */
+	/** 当前 LocalPlayer 的正式 Frontend 根 WBP，代表进入玩法前的顶层主界面；只在 Frontend World 创建，Start 加载保护窗命中时可短暂跨旅行阶段保留。 */
 	UPROPERTY(Transient)
-	TObjectPtr<UCatTravelWidget> OnlineWidget;
+	TObjectPtr<UCatFrontendRootWidget> FrontendRootWidget;
 
-	/** 当前 LocalPlayer 的状态 HUD WBP；只显示猫状态和钓鱼反馈。 */
+	/** 当前 LocalPlayer 的 Frontend 流程协调器；它只持有流程、确认槽位和命令等待事实，Root 按明确意图调用它。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatFrontendPageController> FrontendPageController;
+
+	/** 当前 LocalPlayer 的存档列表 Model；它只读正式 Save 子系统，槽位、busy 和错误不在 UI 子系统复制。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatFrontendSaveModel> FrontendSaveModel;
+
+	/** 当前 LocalPlayer 的房间 Model；它只读 Online 快照并转交产品意图，UI 子系统不持有好友或邀请码。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatFrontendRoomModel> FrontendRoomModel;
+
+	/** 当前 LocalPlayer 的设置 Model；它维护前端草稿并在 Apply 时接正式设置来源，UI 子系统不复制字段。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatFrontendSettingsModel> FrontendSettingsModel;
+
+	/** 当前 LocalPlayer 的主 HUD WBP；常驻天数、背包和设置入口，调试文字只有显式开启时才露出。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatHUDWidget> HUDWidget;
 
-	/** 当前 LocalPlayer 的状态 HUD Model；它只读 Character 状态和 Fishing 反馈。 */
+	/** 当前 LocalPlayer 的主 HUD Model；它聚合天数、入口显隐和可选调试事实，不保存玩法真相。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatHUDModel> HUDModel;
 
@@ -137,17 +147,17 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryModel> InventoryModel;
 
-	/** 当前 LocalPlayer 的图鉴 WBP；按 HUD 猫爪入口懒创建，只展示 Profile 图鉴记录。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UCatCollectionWidget> CollectionWidget;
-
-	/** 当前 LocalPlayer 的图鉴 Model；它只读 durable Profile 图鉴快照。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UCatCollectionModel> CollectionModel;
-
 	/** 当前 LocalPlayer 的背包 PageController；它管理背包输入、外部容器打开和玩家库存操作转交。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryPageController> InventoryPageController;
+
+	/** 当前 LocalPlayer 的局内主菜单 WBP；它只展示设置、保存和退出入口，不持有 Save 或 Online 系统。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatLakeMainMenuWidget> LakeMainMenuWidget;
+
+	/** 当前 LocalPlayer 的局内主菜单 Controller；它管理 ESC 输入、模态焦点和保存/退出意图转交。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatLakeMainMenuController> LakeMainMenuController;
 
 	/** 当前 LocalPlayer 的交互提示 WBP；只显示靠近对象提示，不打开具体对象 UI。 */
 	UPROPERTY(Transient)
@@ -165,19 +175,13 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<ACatCharacter> AttachedPlayerLakeCharacter;
 
-	/** Online 快照广播的配对解绑句柄；Initialize 写入，Deinitialize 消费。 */
+	/** Online 快照广播的配对解绑句柄；Initialize 写入，Deinitialize 消费，用于 Frontend 生命周期调和与 HUD 刷新。 */
 	FDelegateHandle OnlineSnapshotHandle;
-
-	/** Frontend TravelWidget 动作广播的配对解绑句柄；创建时写入，移除时消费。 */
-	FDelegateHandle ActionHandle;
 
 	/** HUD Model 变化广播的配对解绑句柄；AttachPlayerLakeUI 写入，DetachPlayerLakeUI 消费。 */
 	FDelegateHandle HUDModelViewChangedHandle;
 
 	/** HUD 入口动作广播的配对解绑句柄；AttachPlayerLakeUI 写入，DetachPlayerLakeUI 消费。 */
 	FDelegateHandle HUDActionHandle;
-
-	/** Collection Model 变化广播的配对解绑句柄；ToggleCollection 写入，CloseCollection 消费。 */
-	FDelegateHandle CollectionModelViewChangedHandle;
 
 };

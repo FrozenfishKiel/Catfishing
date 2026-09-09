@@ -1,6 +1,6 @@
 # Catfishing 当前框架决策
 
-更新时间：2026-08-12
+更新时间：2026-09-01
 文档状态：当前有效决策。
 范围：记录后续程序员和 AI 审查最容易“修错”的架构取舍。本文只写已经在当前框架中体现的决策。
 
@@ -25,6 +25,8 @@
 ASC 放在 `ACatCharacter`，Character 同时作为 Owner 和 Avatar。PlayerState 不持有身体属性、Ability、Condition 或 Equipment。这样重连会生成新的身体，局内状态随身体和局释放，跨局档案仍由 Profile 保存。
 
 这不是“谁方便复制谁就持有”的选择；它是为区分连接身份、猫身体和跨局档案而做的边界。
+
+Ability 输入路由属于 `AbilitySystem/`。`ACatfishingPlayerController` 可以在 UE 输入生命周期里安装物理按键和转交当前 Pawn，但不能长期持有 ASC 缓存、Ability 输入边沿或 AbilitySpec 激活状态；这些由 `UCatAbilityInputBindingComponent` 和 `UCatAbilitySystemComponent` 收口。
 
 ## Items 表示鱼实例与容器事务
 
@@ -65,6 +67,12 @@ Social 管求助、恶作剧、保护牌和偷鱼协议权限，不持有 Downed
 ## 两张地图边界
 
 当前地图只有 `Frontend` 和 `Lake`。Session 是联机会话，不是 Lobby Map。昼夜、营地、钓鱼、失败结算夜和篝火回看都发生在 Lake World 内，不通过地图旅行切换。
+
+## 营地承载玩家出生点语义
+
+玩家进入玩法世界时不再依赖地图上的普通 `APlayerStart`。固定营地 `ACatCampHubActor` 继承 `APlayerStart`，由 `ACatfishingGameModeBase` 作为当前 World 唯一合法出生点选择；普通 `APlayerStart` 即使残留在地图中，也只作为待清理资产，不参与运行时裁决。
+
+这样做把“出生点”和“开局聚集地”合成同一个领域事实，避免多人同时进图时引擎找不到可用 PlayerStart 后退回世界原点。营地只负责按当前玩家队列在附近解析最多 4 个合法生成位置；GameMode 保留引擎的 Pawn 设置和重启收尾链路，Online 会话容量也读取同一 4 人上限。
 
 ## Fail-closed 配置优先
 

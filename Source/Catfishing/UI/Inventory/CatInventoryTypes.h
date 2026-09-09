@@ -10,24 +10,28 @@
 
 class UTexture2D;
 
-/** 库存相关的玩家动作意图；它只描述 UI 想对选中物体或鱼领域动作做什么，权限、并发前提和结果仍由服务器裁决。 */
+/** 库存相关的玩家动作意图；它只描述 UI 想对选中物体或鱼领域动作做什么，显式数值是蓝图兼容合同，旧值不能重排或复用，新动作只能追加。 */
 UENUM(BlueprintType)
 enum class ECatInventoryAction : uint8
 {
 	/** 当前没有可提交动作；View 和 Model 用它表示空选择或清空 pending。 */
-	None,
-	/** 请求吃掉当前选中的地面鱼护实物鱼；身体和成长效果只能在服务器 Items 提交成功后发生。 */
-	ConsumeSelectedFish,
+	None = 0,
+	/** 请求吃掉当前选中的鱼类容器实物鱼；身体和成长效果只能在服务器 Items 提交成功后发生。 */
+	ConsumeSelectedFish = 1,
 	/** 请求把拖拽源物体移动到另一个格子；UI 只提交物体身份、源/目标容器槽位和容器并发前提。 */
-	MoveObjectBetweenContainers,
+	MoveObjectBetweenContainers = 2,
 	/** 请求整理运行期库存格；同源只改本数据源，背包和营地之间的拖放会由服务器同时改双方数据源。 */
-	MoveInventoryItem,
-	/** 请求把当前选中的随身库存物品设为钓鱼选择；服务器仍会重读整套鱼竿、鱼饵和鱼漂持有量。 */
-	SelectInventoryFishingItem,
+	MoveInventoryItem = 3,
+	/** 旧版钓具选择动作；现只为蓝图和历史回包兼容保留，新右键入口应使用 UseInventoryItem。 */
+	SelectInventoryFishingItem = 4,
 	/** 请求把当前选中的鱼交给献祭协议；Items 与 Run 的不可逆点继续由 SacrificeCoordinator 处理。 */
-	SacrificeSelectedFish,
+	SacrificeSelectedFish = 5,
 	/** 请求把当前选中的营地公共仓库格取到本人随身库存；服务器仍按公共仓库版本和个人库存版本共同复核。 */
-	WithdrawCampInventoryItem
+	WithdrawCampInventoryItem = 6,
+	/** 请求把当前选中的鱼护实物鱼转入营地共享鱼缸；服务器负责寻找固定营地鱼缸和可用目标格。 */
+	StoreSelectedFishInSharedTank = 7,
+	/** 请求使用当前正式随身库存格中的物品；UI 只提交槽位，当前钓具选择和后续其他物品效果都应由服务器重读库存后分发。 */
+	UseInventoryItem = 8
 };
 
 /** 库存格子投影的后端事实来源；UI 用它区分运行期库存格和 Items 容器格，避免把不同宿主的写口混用。 */
@@ -36,7 +40,7 @@ enum class ECatInventorySlotSource : uint8
 {
 	/** 还没有可靠来源；这类格子只能展示占位，不能提交任何后端命令。 */
 	Unknown,
-	/** 当前角色随身库存数组中的一个格子；它不作为 Items 容器移动源，但可整理、转入营地仓库或把钓具设为当前选择。 */
+	/** 当前角色正式随身库存中的一个格子；它不作为 Items 容器移动源，但可整理、转入营地仓库或提交通用库存物品使用。 */
 	InventoryObject,
 	/** Items 容器中的槽位；只有这种来源可以作为鱼或容器物体拖拽的源和目标。 */
 	ContainerObject,
@@ -74,7 +78,7 @@ struct FCatInventorySlotView
 	UPROPERTY(BlueprintReadOnly)
 	int32 ContainerSlotIndex = INDEX_NONE;
 
-	/** 该格在随身库存数组中的槽位下标；只有 InventoryObject 有效，拖拽整理、背包/营地转移和右键选择都会让服务器按它复核。 */
+	/** 该格在正式随身库存中的槽位下标；只有 InventoryObject 有效，服务器按同一下标回到 InventoryComponent 复核。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 InventorySlotIndex = INDEX_NONE;
 
@@ -86,6 +90,10 @@ struct FCatInventorySlotView
 	UPROPERTY(BlueprintReadOnly)
 	int32 CampInventorySlotIndex = INDEX_NONE;
 
+	/** 运行期库存物品的实例 ID；正式随身库存和营地仓库会填写它，UI 只读展示，服务器仍按槽位和版本重读真相。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid InventoryItemInstanceId;
+
 	/** 该格是否有后端可展示内容；容器空格和空库存占位只展示占位，不允许构造移动或鱼领域命令载荷。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bOccupied = false;
@@ -94,7 +102,7 @@ struct FCatInventorySlotView
 	UPROPERTY(BlueprintReadOnly)
 	bool bCanDrag = false;
 
-	/** 该格是否是当前 Model 高亮选择；蓝图只用它表现边框或颜色。 */
+	/** 该格是否是当前库存 WBP 的本地高亮选择；Model 原始投影不写它，具体页面渲染时再标记自己的选择。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bSelected = false;
 
@@ -114,11 +122,11 @@ struct FCatInventorySlotView
 	UPROPERTY(BlueprintReadOnly)
 	FCatFishInstance Fish;
 
-	/** 该格对应的装备类别；运行期库存条目用它展示鱼竿、鱼饵、鱼漂和抄网类别，只有随身库存格右键会用它路由钓具选择命令。 */
+	/** 该格对应的装备类别；运行期库存条目用它展示鱼竿、鱼饵、鱼漂和抄网类别，不再作为 UI 选择服务器命令的依据。 */
 	UPROPERTY(BlueprintReadOnly)
 	ECatEquipmentKind EquipmentKind = ECatEquipmentKind::Unknown;
 
-	/** 该格对应的装备定义 ID；随身库存和营地公共仓库都从各自 FCatRunInventorySlot 投影它，服务器仍按对应宿主重读权威数组。 */
+	/** 该格对应的兼容定义 ID；随身库存从正式物品定义投影它，营地公共仓库从旧槽位投影它，服务器仍重读对应宿主真相。 */
 	UPROPERTY(BlueprintReadOnly)
 	FName EquipmentDefinitionId = NAME_None;
 
@@ -185,7 +193,7 @@ struct FCatInventoryContainerView
 	UPROPERTY(BlueprintReadOnly)
 	int32 SlotCount = 0;
 
-	/** 该容器是否来自本次世界 Actor 交互；普通背包打开时没有鱼容器。 */
+	/** 该容器是否是本次交互打开的鱼类世界容器；鱼护和共享鱼缸都会影响鱼动作按钮与蓝图分组。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bInteractionFishContainer = false;
 };
@@ -216,15 +224,23 @@ struct FCatInventoryViewState
 	UPROPERTY(BlueprintReadOnly)
 	int64 CampInventoryRevision = 0;
 
-	/** 当前 Character 的随身库存和钓鱼选择快照；EquipmentComponent 写入，库存只读展示格子数组和当前钓鱼选择。 */
+	/** 当前 Character 的钓鱼选择快照；背包格只读正式 InventoryComponent，Equipment 不再承担库存内容来源。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatEquipmentLoadoutSnapshot Equipment;
 
-	/** 当前是否已经绑定到本角色 EquipmentComponent；false 表示随身库存事实还不能可靠展示。 */
+	/** 当前是否已经绑定到本角色 EquipmentComponent；false 表示钓鱼选择摘要还不能可靠展示。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bEquipmentAvailable = false;
 
-	/** 随身背包自己的格子数量；只来自 EquipmentComponent 的 InventorySlots 和配置容量。 */
+	/** 当前是否已经拿到可用于展示的随身库存读源；只有正式 InventoryComponent 会让它成立。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bInventoryAvailable = false;
+
+	/** 当前随身背包内容版本；它来自正式 InventoryComponent，用作库存命令的并发前提。 */
+	UPROPERTY(BlueprintReadOnly)
+	int64 InventoryRevision = 0;
+
+	/** 随身背包自己的格子数量；来自正式 InventoryComponent，复制未到位时保持 0 并显示等待同步。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 InventorySlotCount = 0;
 
@@ -240,11 +256,11 @@ struct FCatInventoryViewState
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatInventorySlotView> CampInventorySlots;
 
-	/** 当前 Model 选中的格子身份；它记录来源和宿主内槽位，避免用某个 UI 的局部下标去找另一份库存。 */
+	/** 当前库存 WBP 本地选中的格子身份；Model 原始投影保持为空，页面渲染时写入自己的只读副本。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatInventorySlotView SelectedSlot;
 
-	/** 当前是否有一份可复核的选中格子身份；UI 用它判断 SelectedSlot 是否代表真实选择。 */
+	/** 当前页面是否有一份可复核的本地选中格子身份；不同库存 WBP 之间不会共享这个选择。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasSelectedSlot = false;
 
@@ -268,17 +284,25 @@ struct FCatInventoryViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasSelectedFish = false;
 
-	/** 当前选中鱼是否来自本次射线打开的地面鱼护；吃鱼和献祭从该明确容器提交。 */
+	/** 当前选中鱼是否来自本次射线打开的地面鱼护；存入共享鱼缸只能从这个源容器提交。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bSelectedFishInFishGuard = false;
+
+	/** 当前选中鱼是否来自本次交互打开的营地共享鱼缸；吃鱼和献祭允许读取它，存缸动作必须排除它。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bSelectedFishInSharedTank = false;
 
 	/** 库存窗口当前是否打开；Model 只投影 PageController 的状态，不反查 Widget 可见性。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bOpen = false;
 
-	/** 当前是否可提交吃鱼或献祭意图；只有打开地面鱼护并选中其中一条鱼时为 true。 */
+	/** 当前是否可提交吃鱼或献祭意图；打开鱼护或共享鱼缸、选中其中一条实物鱼且没有等待回包时才为 true。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bCanSubmitAction = false;
+
+	/** 当前是否可提交存入共享鱼缸意图；只有选中地面鱼护中的实物鱼且没有等待回包时才为 true。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bCanStoreSelectedFishInSharedTank = false;
 
 	/** 当前是否已经发出库存动作但还没收到服务器终态；View 用它禁用重复提交。 */
 	UPROPERTY(BlueprintReadOnly)

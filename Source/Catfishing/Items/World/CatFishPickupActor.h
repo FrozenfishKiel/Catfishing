@@ -10,6 +10,7 @@ class APlayerState;
 class ACatCharacter;
 class ACatFishingSession;
 class UCatFishDefinition;
+class UCatFishPresentationDefinition;
 class USkeletalMeshComponent;
 class USphereComponent;
 
@@ -33,6 +34,8 @@ struct FCatFishPickupPresentationState
 	UPROPERTY(BlueprintReadOnly) double WeightKilograms = 0.0;
 	/** 与水中 Encounter 完全相同的服务器冻结统一 Mesh 缩放。 */
 	UPROPERTY(BlueprintReadOnly) double VisualScale = 1.0;
+	/** 权威地面接触法线；根是接触点，鱼体按自身大小在其上方托起。 */
+	UPROPERTY(BlueprintReadOnly) FVector GroundNormal = FVector::UpVector;
 	UPROPERTY(BlueprintReadOnly) ECatFishPickupState State = ECatFishPickupState::Available;
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> CarriedByPlayerState = nullptr;
 };
@@ -51,7 +54,7 @@ public:
 
 	bool InitializeFromAuthority(FGuid InFishingSessionId, FGuid InFishInstanceId,
 		UCatFishDefinition* InFishDefinition, double InWeightKilograms, double InVisualScale, FName InRegionId,
-		const TArray<FString>& InFishingParticipantStableNetIds);
+		const TArray<FString>& InFishingParticipantStableNetIds, FVector GroundNormal = FVector::UpVector);
 
 	const FCatFishPickupPresentationState& GetPresentationState() const { return PresentationState; }
 
@@ -80,6 +83,7 @@ public:
 protected:
 	virtual void BeginPlay() override;
 	virtual void OnRep_AttachmentReplication() override;
+	virtual void OnRep_ReplicatedMovement() override;
 
 private:
 	friend class ACatFishingSession;
@@ -97,6 +101,8 @@ private:
 	void RetryAttachmentReconcile();
 	void ReleaseMouthCarryFromAuthority(const FVector& DropLocation);
 	void ApplyLocalFocus(bool bFocused);
+	/** 沿 FishDefinition 的直接引用解析 Mesh/落地动画；客户端不会维护独立鱼种映射。 */
+	void RefreshFishPresentation();
 	/** Available 状态恢复落地专用 Mesh 位置和旋转，同时保留冻结重量缩放。 */
 	void ApplyLandedVisualTransform();
 	/** Carried 状态清除落地专用 Mesh 位置和旋转，使鱼原点直接对齐嘴部骨骼，同时保留冻结重量缩放。 */
@@ -114,6 +120,10 @@ private:
 
 	/** 只在 authority 保存定义以构造捕获/图鉴事实，不下发 DataAsset。 */
 	UPROPERTY(Transient) TObjectPtr<UCatFishDefinition> FishDefinition;
+	UPROPERTY(Transient) TObjectPtr<UCatFishPresentationDefinition> FishPresentationDefinition;
+	FTransform LandedMeshBaseTransform = FTransform::Identity;
+	FTransform CarriedMeshBaseTransform = FTransform::Identity;
+	FName AppliedPresentationFishDefinitionId = NAME_None;
 	FName RegionId = NAME_None;
 	TArray<FString> FishingParticipantStableNetIds;
 	TWeakObjectPtr<ACatCharacter> AuthorityCarrier;

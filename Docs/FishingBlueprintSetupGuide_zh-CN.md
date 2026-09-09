@@ -8,9 +8,9 @@
 
 ---
 
-## 0. 先看清楚：五个原生 Ability 的真实状态
+## 0. 先看清楚：六个钓鱼输入 Ability 的真实状态
 
-项目在 `AbilitySystem/CatFishingAbilities.h` 里已经写好五个 `UGameplayAbility` 原生子类，`UCatAbilitySet::IsRuntimeReady()` 强制要求它们对应的五个 InputTag 必须齐全。它们各自的完成度不同，**这是本文最重要的一张表**，决定了你还要不要为对应功能另写蓝图：
+项目在 `AbilitySystem/Fishing/InputAbilities/` 和 `AbilitySystem/Fishing/CatFishingGameplayAbility.h` 中定义了六个钓鱼输入 `UGameplayAbility` 原生子类，`UCatAbilitySet::IsRuntimeReady()` 强制要求对应的六个 Fishing InputTag 必须齐全。它们各自的完成度不同，**这是本文最重要的一张表**，决定了你还要不要为对应功能另写蓝图：
 
 | InputTag | Ability 类 | 服务器命令 | 状态 |
 |---|---|---|---|
@@ -19,16 +19,17 @@
 | `Cat.Input.Fishing.Primary`（松开） | 同上 `InputReleased` | PrimaryReleased / 停止收线 | ✅ 本轮已补，**开箱可用** |
 | `Cat.Input.Fishing.Cancel` | `UCatGA_FishingCancel` | CancelFishing | ✅ 一直可用 |
 | `Cat.Input.Fishing.Scoop` | `UCatGA_FishingScoop` | RequestScoop | ✅ 本轮已补，**开箱可用** |
-| `Cat.Input.Fishing.Chum` | `UCatGA_FishingChum` | PlaceChum（**无payload**） | ⚠️ **占位符，永远会被服务器拒绝** |
+| `Cat.Input.Fishing.Chum` | `UCatGA_FishingChum` | ChumPressed / ChumReleased → PlaceChum | ✅ Q 蓄力打窝已由 C++ 接管 |
+| `Cat.Input.Fishing.Slack` | `UCatGA_FishingSlack` | 松开线杯 | ✅ 遛鱼时可用 |
 
-**关键结论**：抓竿互动、提竿/收线、取消、抢抄这四个动作，装好 GAS 资产、绑好输入键位之后**不需要再写任何蓝图逻辑**，直接能跑。真正需要你写蓝图节点图的，是下面这几件事：
+**关键结论**：抓竿互动、提竿/收线、取消、抢抄、Q 蓄力打窝这些输入动作，装好 GAS 资产、绑好输入键位之后**不需要再写任何蓝图逻辑**，直接能跑。真正需要你写蓝图节点图的，是下面这几件事：
 
-- **PlaceRod（放竿）**：完全没有原生 Ability，五个 Ability 里没有它
+- **PlaceRod（放竿）**：完全没有原生 Ability，六个钓鱼输入 Ability 里没有它
 - **BeginCast（抛竿）**：同上
-- **PlaceChum（打窝）**：`Cat.Input.Fishing.Chum` 这个键位必须绑（否则 AbilitySet 校验不过），但它背后的 `UCatGA_FishingChum` 只会发一个空命令，永远失败——**真正的打窝要另开一条路**，不走这个键位对应的 Ability
+- **PlaceChum（打窝）**：普通 Q 蓄力已经由 `UCatGA_FishingChum` 提交按下/松开边沿；只有自定义 UI 要指定目标点、窝料或数量时，才需要直接调 payload 版本的 `SubmitPlaceChum`
 - **ConfigureEquipment（首次装配鱼竿/饵/浮漂）**：没有 Ability，且这是钓鱼链路最上游的前置条件
 
-这四个是本文第 3 部分的重点。
+这些是本文第 3 部分的重点。
 
 ---
 
@@ -37,15 +38,15 @@
 | 文件 | 改动 |
 |---|---|
 | `Fishing/Integration/CatFishingCommandComponent.cpp` | `HandleAbilityCommandFromAuthority` 新增 OperateRod（服务器自动找“我部署的竿”）、搏斗中 Primary 按下=收线/松开=停止收线、Scoop（服务器找范围内已上钩鱼并直接嘴叼）三条分支 |
-| `Framework/Game/CatGameplayTypes.h` | `ServerConfigureEquipment` 加 `BlueprintCallable`，蓝图现在能直接调用它提交装备 |
-| `Equipment/CatEquipmentComponent.h` | `GetSnapshot()` 加 `BlueprintPure`，蓝图能读当前 `Revision`/`RodDefinitionId`/`BaitDefinitionId`/`FloatDefinitionId` |
+| `Framework/Game/CatfishingPlayerController.h` | `ServerConfigureEquipment` 加 `BlueprintCallable`，蓝图现在能直接调用它提交装备定义和实例 ID |
+| `Equipment/CatEquipmentComponent.h` | `GetSnapshot()` 加 `BlueprintPure`，蓝图能读当前 `Revision`、装备 DefinitionId 和对应 ItemInstanceId |
 | `Character/CatCharacter.h` | `GetEquipmentComponent()` / `GetConditionComponent()` 加 `BlueprintPure` |
 | `Environment/CatWaterRegion.h` | `GetWaterRegionHandle()` / `HasValidBakedGeometry()` 加 `BlueprintPure`，蓝图能从关卡里放置的湖 Actor 直接拿到抛竿/打窝要用的 `FCatWaterRegionHandle` |
-| `Fishing/Actors/CatFishingHookActor.h/.cpp` | 浮漂现在会在权威落点用有界轮询计时器（不是 Tick）确认落水，`Phase` 会真正走到 `Landed`，蓝图的 `BP_OnHookPresentationChanged` 能收到正确通知 |
+| `Fishing/Actors/CatFishingHookActor.h/.cpp` | 服务器冻结抛物线并复制给客户端；双方按服务器时间更新，到达精确落点后一次性进入 `Landed`，不再使用高度轮询或 ProjectileMovement |
 
 如果你在自己机器上拉了最新代码却发现这些函数没有 `BlueprintCallable`/`BlueprintPure`，说明改动没同步，先确认代码状态再继续。
 
-**一个已知的小瑕疵，不影响功能，先告诉你**：`ScheduleWaitingProbeFromStateTree`（等口阶段）里第一次采样窝料浓度时，用的是钩子刚生成时的位置（鱼竿竿尖），而不是最终落水点，因为这一步比 `BeginAuthoritativeFlight` 先跑。这只影响**第一口的咬钩延迟计算精度**，不影响后续选鱼（选鱼发生在 Probe 事件触发时，那时钩子已经落水）。如果你们后续要精确调打窝手感，这是一个可以优化的点，但不阻塞 MVP。
+`ScheduleWaitingProbeFromStateTree` 首次采样使用服务器冻结的水面落点，等待时间包含剩余飞行时间，因此慢浮等待与咬钩预警从落水后计算。
 
 ---
 
@@ -58,8 +59,8 @@
 | 资产 | 路径 | 关键内容 |
 |---|---|---|
 | `DA_CatAbilityInputConfig` | `/Game/Data/Abilities/` | `AbilityInputActions` 保存钓鱼 GAS 映射；`NativeInputActions` 额外保存 `IA_Interact` → `Cat.Input.Interact` |
-| `DA_CatAbilitySet_Default` | `/Game/Data/Abilities/` | 5 个原生 Ability 类；Primary=`WhileInputActive`，其余 `OnInputTriggered` |
-| `Equip_ScoopNet_Starter` | `/Game/Catfishing/Data/Equipment/` | 正式目录抄网定义 `StarterScoopNet`；当前由开发期开关默认发放，正式获取接入后关闭该开关 |
+| `DA_CatAbilitySet_Default` | `/Game/Data/Abilities/` | 6 个 Fishing Ability + 6 个无输入 BodyAction 专用 Ability；Primary=`WhileInputActive`，其余按各自触发策略配置 |
+| `Equip_ScoopNet_Starter` | `/Game/Catfishing/Data/Equipment/` | 正式目录抄网定义 `StarterScoopNet`；当前不默认发放，商店/奖励来源接入前暂时没有获取渠道 |
 | `Fish_*` | `/Game/Catfishing/Data/Fish/` | 16 条正式鱼定义；Showcase2 已使用 `RegionId=River`，按生态条件与连续挑战度从该目录选择 |
 | `Bite_*` / `Fight_*` | `/Game/Catfishing/Data/Fish/` | 正式咬钩与搏斗性格；由选中的 `Fish_*` 稳定 ID 解析 |
 | `Curve_ChumDistanceFalloff` / `Curve_ChumTimeFalloff` | `/Game/Data/Curves/` | 1→0 线性衰减 |
@@ -71,11 +72,11 @@
 
 ### 2.2 `Config/DefaultGame.ini`
 
-**已经写好并落盘了**，8 个 section 全部指向 2.1 节创建好的资产。只剩两处 StateTree 软引用需要你建完资产后补上：
+**已经写好并落盘了**，8 个 section 基本都指向正式资产；RunFlow 已经使用项目内固定资产路径：
 
 ```ini
 [/Script/Catfishing.CatRunSettings]
-RunFlowStateTree=/Game/.../ST_RunFlow.ST_RunFlow                        ; ← 待补
+RunFlowStateTree=/Game/Data/StateTrees/ST_RunFlow.ST_RunFlow
 
 [/Script/Catfishing.CatFishingSettings]
 FishingSessionStateTree=/Game/.../ST_FishingSession.ST_FishingSession   ; ← 待补
@@ -97,14 +98,14 @@ FishingSessionStateTree=/Game/.../ST_FishingSession.ST_FishingSession   ; ← �
 
 ### 2.4 StateTree 拓扑（简要重述，细节见前文对话）
 
-- **ST_RunFlow**（Context = `ACatfishingGameModeBase`）：`DayActive → NormalNight/FailureNight → Ending → Ended`，事件只有 `Cat.Run.QuotaReached/QuotaFailed/AllEligibleReady/SettlementComplete`
-- **ST_FishingSession**（Context = `ACatFishingSession`）：`Waiting → Probe → HookedFight → ExhaustedReelHold`；鱼体力耗尽/力量碾压时由 C++ 先进入 `ExhaustedReel`，叶子状态只用 `Cat Fishing Wait` 保持树运行。事件只有 `Cat.Fishing.Event.ProbeTriggered/WindowExpired/EarlyHook/HookAccepted/Interrupted`。**树永远不能自然结束**，`Resolved`/`Terminated` 只能由 C++ 写，资产里的 `Enter Phase` Task 选这两个值会直接被拒绝
+- **ST_RunFlow**（Context = `ACatfishingGameModeBase`）：`DayActive → NormalNight/FailureSettlementNight/SuccessSettlementNight → Ending → Ended`，事件只有 `Cat.Run.QuotaReached/QuotaFailed/AllEligibleReady/SettlementComplete`；`NormalNight` 的成功结算分支必须挂 `Cat Run Success Settlement Eligible`
+- **ST_FishingSession**（Context = `ACatFishingSession`）：`Waiting → Probe → HookedFight → ExhaustedReelHold`；鱼体力耗尽时发送 `Cat.Fishing.FishExhausted`，叶子的 `Enter Phase(ExhaustedReel)` 只切生命周期，同一个 Runner 继续运行。**树永远不能自然结束**，`Resolved`/`Terminated` 只能由 C++ 写。
 
 ---
 
 ## 3. 必须手写的蓝图节点图
 
-这四件事全部走 `UCatFishingCommandComponent` 上现成的 `BlueprintCallable` 函数，**不需要新建 GameplayAbility**，挂在 Character 或 PlayerController 蓝图的一个普通 Enhanced Input 绑定上就行（和上面五个 GAS Ability 走的是两条不同的输入通道，互不干扰）。
+这四件事全部走 `UCatFishingCommandComponent` 上现成的 `BlueprintCallable` 函数，**不需要新建 GameplayAbility**，挂在 Character 或 PlayerController 蓝图的一个普通 Enhanced Input 绑定上就行（和上面六个钓鱼 GAS Ability 走的是两条不同的输入通道，互不干扰）。
 
 拿命令组件的通用第一步：
 
@@ -113,9 +114,9 @@ Get Controller (Cast to ACatfishingPlayerController)
   → Get Fishing Command Component   ← 已是 BlueprintPure
 ```
 
-### 3.1 PlaceRod（放竿）
+### 3.1 PlaceRod（取出并持握鱼竿）
 
-触发时机：玩家手上没有已部署的竿，按下"放竿"键。
+触发时机：玩家没有占用鱼竿、公共交互锚点 250cm 内没有可加入的竿、本人场上不足两根竿且背包还有未使用的鱼竿实例，按 R。成功后直接进入主位持握，无需再次调用 OperateRod。地上和手持合计最多两根，同时最多操作一根；第二根必须是背包中原有的另一物品实例。
 
 ```
 Get Player Character → Get Equipment Component → Get Snapshot   ← Revision
@@ -127,15 +128,19 @@ Make FCatPlaceRodCommand
 
 - 结果通过 `OnResultReceived`（`BlueprintAssignable` 委托）回调，或用 `TryGetResult(RequestId, OutResult)` 轮询
 - 成功后 `FCatFishingCommandResult` 里的 `RodActorId` / `RodActorRevision` / `EquipmentRevision` **要缓存下来**，BeginCast 要用
-- 失败常见原因：站的地面坡度不够平（服务器要求法线 Z ≥ 0.7）、站在水里（会判 `InvalidWaterTarget`）、已经有一根部署中的竿（`ActiveSessionExists`）
+- 失败常见原因：角色前方没有实体地面或地面太斜（`InvalidPayload`，法线 Z 必须 ≥ 0.7）、本人场上已有两根竿（`RodDeploymentLimitReached`）、已占用另一根竿、没有可用库存实例或持握依赖无效。水域合法性在抛竿时检查。
 
 ### 3.2 OperateRod（走近操作）
 
-**不需要写蓝图**——`UCatGA_FishingRodInteract` 已经原生实现，只要 `Cat.Input.Fishing.RodInteract` 绑好键位、Character 站在 `StandAnchor` 250cm 范围内按键即可，服务器会自动找到"我部署的那根竿"并把角色吸附过去。
+**不需要写蓝图**——`UCatGA_FishingRodInteract` 已经原生实现。首次 R 成功后已在持握；后续放下的鱼竿可在公共交互锚点 250cm 范围内按 R 拿起，也可加入仍有空位的其他玩家鱼竿。鱼竿跟随当前持有人，角色不会吸附到 StandAnchor，移动保持自由。
+
+要部署第二根，先按 R 放下第一根，走到附近没有可加入鱼竿的位置后再按 R；仍在第一根竿附近时，R 优先拿起原竿。每人最多操作一根，主位和协作位共用这一限制。加入他人空竿并取得主操作位后，可以使用自己的鱼饵、鱼漂抛钩；无需再拥有同款竿，耐久仍扣原竿主的实际实例。接力已有会话不换原饵和竿的资源宿主；收进背包仍只允许原竿主。
+
+X 优先处理当前操作竿；空手时只选择 250cm 内本人无人占位的竿。有活动会话先按原阶段走取消或切线裁决，无活动会话再离位并收纳。收纳请求按具体 `RodActorId` 定位，服务器另验归属；目前不能把别人的地面竿收进自己背包。以后开放时，需要先完成原使用记录到接收方库存的原子迁移和失败回滚，不能只删除归属检查。
 
 ### 3.3 BeginCast（抛竿）
 
-触发时机：玩家已经是竿的 Operator（`OperateRod` 成功之后），瞄准水面按下"抛竿确认"键。
+触发时机：玩家已经是竿的主 Operator（首次 `PlaceRod` 成功，或 `OperateRod` 加入空主位之后），瞄准水面按下"抛竿确认"键。
 
 ```
 Line Trace（从摄像机沿准星方向），命中点作为 CandidateWorldPoint
@@ -165,20 +170,21 @@ Make FCatBeginCastCommand
 - `Cat.Input.Fishing.Cancel`：随时取消当前会话
 - `Cat.Input.Fishing.Scoop`：鱼上钩后即可使用，不读取鱼的剩余体力；服务器范围校验成功后直接进入与岸上死鱼按 E 相同的嘴叼状态，不在钓鱼会话里指定鱼护
 
-### 3.5 PlaceChum（打窝）—— 单独走一条路，不挂在 `Cat.Input.Fishing.Chum` 键位对应的 Ability 上
+### 3.5 PlaceChum（打窝）—— 普通 Q 已由 Ability 接管，自定义目标点才走 payload
 
-`UCatGA_FishingChum` 只是为了让 `UCatAbilitySet::IsRuntimeReady()` 校验通过而存在的占位符（它发的是一个不带载荷的命令，服务器永远会拒绝）。**真正的打窝逻辑要单独绑一个输入**（比如做一个"打窝"UI 按钮，或者另一个准星确认键），直接调 payload 版本的函数：
+`UCatGA_FishingChum` 现在只是输入壳：按下提交 `ChumPressed` 开始计时，松开提交 `ChumReleased`，服务器按蓄力时长计算落点、从正式库存选择窝料并交给 `PlaceChum` 扣量。下面这个 payload 版本只给自定义 UI 使用，例如玩家要点选目标水面、指定某格窝料或指定数量：
 
 ```
 Line Trace 拿目标水面点
 Get 关卡 ACatWaterRegion → Get Water Region Handle
-Get Player Character → Get Equipment Component → Get Snapshot   ← Revision
+Get Player Character → Get Inventory Component → Get Inventory Revision   ← 正式库存版本
 
 Make FCatPlaceChumCommand
     RequestId = New Guid
     ExpectedWaterRegionHandle = Region.GetWaterRegionHandle()
-    ExpectedEquipmentRevision = Snapshot.Revision
-    ChumDefinitionId = （玩家当前选择的窝料 ID，需要你自己的库存/选择 UI 提供）
+    ExpectedEquipmentRevision = InventoryRevision（字段名保留旧协议；正式角色必须传库存版本）
+    ChumItemInstanceId = （玩家当前选择的窝料库存格 ItemInstanceId）
+    ChumDefinitionId = （可选；服务器会按 ChumItemInstanceId 复核并覆盖为真实定义）
     Quantity = 1（或 UI 里选的数量）
     ClientCandidateWorldPoint = Trace 命中点
 → FishingCommandComponent.Submit Place Chum (Command)
@@ -205,7 +211,7 @@ Controller.Server Configure Equipment(
 
 - 这是个 `Server, Reliable` RPC，没有直接的成功/失败回调结构体传回客户端——**成功与否要靠 `UCatEquipmentComponent` 的 `OnSnapshotChanged`（复制驱动）或直接监听 `Get Snapshot` 的 `Revision` 是否变化来判断**
 - 建议做法：进图 BeginPlay 时（或一个"装备"菜单确认按钮）调用一次，然后在 Character/PlayerState 的 Tick 或 Snapshot 变化事件里检查 `RodDefinitionId != NAME_None` 作为"已装配完成"的信号，再解锁"放竿"按钮
-- 只在库存为空（`Snapshot.RodDefinitionId.IsNone()`）时允许调用；重复调用会因为"同一套新 Request 只读取既有耐久"规则被拒绝换装
+- 配置只选择本人真实持有的装备实例，不能通过重复配置重置耐久或生成另一根竿。部署备用竿继续走 R 的原生 `PlaceRod` 链路，背包必须已有第二根未使用的实例；不要在蓝图里另外复制 Actor 或重建装备快照。
 
 ---
 
@@ -215,13 +221,15 @@ Controller.Server Configure Equipment(
 
 1. PIE 启动，确认 `Event=run_phase_entered ... Phase=DayActive`
 2. 调 `ConfigureEquipment`，确认 Equipment `Revision` 从 0 变 1
-3. 按放竿键，确认 `PlaceRod` 结果 `bCommitted=true`，世界里出现 Rod Actor
-4. 走近竿，按互动键（`RodInteract`），确认角色被吸附到 `StandAnchor`
+3. 第一次按 R，确认 `PlaceRod` 结果 `bCommitted=true`，鱼竿直接拿在手上，本人已为主 Operator
+4. 再按 R 放下，再按 R 拿起；确认同一根竿在 `Grounded/Held` 之间切换，角色不吸附、不锁移动
 5. 瞄水面按抛竿确认键，确认 `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去后 `Phase` 最终变成 `Landed`（Hook 的 `BP_OnHookPresentationChanged` 应该收到一次带 `Landed` 的回调）
-6. 确认浮漂先慢浮至少 `MinimumBiteDelaySeconds`（当前 5 秒），再快速抖动 `BiteWarningSeconds`（当前 3 秒），然后下沉并进入 `Phase=TrueBiteWindow`
+6. 确认默认鱼饵下浮漂先慢浮至少 `MinimumBiteDelaySeconds`（当前 3 秒），再快速抖动 `BiteWarningSeconds`（当前 1.5 秒），然后下沉并进入 `Phase=TrueBiteWindow`；无窝/单份新窝中心/五份重叠新窝中心的平均总等待为20/14/6秒。
 7. 窗口内按住 Primary，确认提竿成功进 `HookedFight`
 8. 鱼仍有体力时先收到抄网射线范围内按 `F`，确认鱼直接挂到猫嘴上；也可继续把鱼力竭后回收，确认岸上生成可交互的死鱼 Actor
 9. F 抄中的鱼应已处于嘴叼状态；力竭落地鱼则先按 `E` 叼起。两条路线都确认随身背包没有新增鱼，再对目标地面鱼护按 `E`，确认只写入该鱼护
 10. 单独测打窝：调用 `SubmitPlaceChum`，确认 `TryGetPlaceChumResult` 返回 `bCommitted=true`，且第 6 步的等待时间因为窝料明显缩短
+
+双竿专项回归：背包准备两根独立鱼竿实例；取出第一根后放下并离开交互范围，再取出第二根。确认场上合计两根、同时只有一根被本人操作、第三根部署被拒绝；切换两根竿后分别开会话，检查 HUD 跟随当前主位、实例耐久独立写回。X 收起其中一根不得改变另一根的 Actor、会话或使用记录；库存满时收纳失败应恢复原竿。正式地图的房主与客户端都需核对这一整条流程，以及地面/手持姿态和落盘回执。
 
 任何一步卡住，先看对应阶段在本文第 0/1 节里是"开箱可用"还是"需要你自己接线"，再去查 Config/DataAsset 校验链（第 2 节）。

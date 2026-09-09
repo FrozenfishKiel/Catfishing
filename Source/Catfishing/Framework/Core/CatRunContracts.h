@@ -97,14 +97,16 @@ enum class ECatRunCommandError : uint8
 	/** 当前玩家不属于本次普通夜晚的合资格集合。 */
 	NotEligible,
 	/** Run teardown 依赖报告失败，Online 必须保留 Session 并停止退出链。 */
-	TeardownFailed
+	TeardownFailed,
+	/** Run 必需的 ASC、GE、属性投影或运行时配置不可用；命令不写入，调用方只能等待依赖恢复或重试。 */
+	DependencyUnavailable
 };
 
 /** Environment 拥有的正式天气轴；具体出现概率与转移仍由数据配置，不由 Run 推导。 */
 UENUM(BlueprintType)
 enum class ECatEnvironmentWeather : uint8
 {
-	/** 天气未配置；依赖分布的 Fishing 必须 fail-closed。 */
+	/** 天气未配置；启用鱼种天气过滤后必须 fail-closed，测试期旁路过滤时可作为只读占位。 */
 	Unknown,
 	/** 晴朗天气。 */
 	Clear,
@@ -118,7 +120,7 @@ enum class ECatEnvironmentWeather : uint8
 UENUM(BlueprintType)
 enum class ECatEnvironmentTimeOfDay : uint8
 {
-	/** 时段未配置或当前不是可钓白天。 */
+	/** 时段未配置或当前不是可钓白天；启用鱼种时段过滤后必须 fail-closed。 */
 	Unknown,
 	/** 白天开始段。 */
 	Morning,
@@ -200,11 +202,11 @@ struct FCatEnvironmentResult
 {
 	GENERATED_BODY()
 
-	/** Environment 是否成功消费输入快照；false 时 Run 保留上一份环境事实并记录错误。 */
+	/** Environment 是否成功消费输入快照；false 时 Run 会发布同 Revision 的空环境，避免旧环境事实跨阶段残留。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bSucceeded = false;
 
-	/** 成功求值后的环境快照；其 SourceRunRevision 必须对应输入 Run Revision。 */
+	/** 环境求值后的快照；成功时携带真实语义，失败时至少携带输入 Run Revision 供调用方 fail-closed 发布。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatEnvironmentSnapshot Snapshot;
 
@@ -325,6 +327,10 @@ struct FCatRunCommandResult
 	/** 首次提交是否产生 StateTree 转移原因；None 表示只更新数值或个人 ready。 */
 	UPROPERTY(BlueprintReadOnly)
 	ECatRunTransitionReason TransitionReason = ECatRunTransitionReason::None;
+
+	/** 本次 Run GE 实际写入进度的整数贡献；献祭协调器读取它回传结果，不能按效率自行重算。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 AppliedContribution = 0;
 };
 
 /** StateTree Task、Condition 与事件载荷共享的结构化结果；只有 GameMode 能创建并保存最新值。 */

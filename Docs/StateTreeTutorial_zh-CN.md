@@ -257,7 +257,10 @@ State 的另一个属性，决定"这个 State 被考虑时，是自己上还是
 │   Root               │   选中 State 时显示：              │
 │    ├── DayActive     │     - Type                       │
 │    ├── NormalNight   │     - Selection Behavior         │
-│    └── FailureNight  │     - Tasks Completion  ←重要     │
+│    ├── FailureSettlementNight │ - Tasks Completion  ←重要  │
+│    ├── SuccessSettlementNight │ - Tasks / Transitions        │
+│    ├── Ending        │                                  │
+│    └── Ended         │                                  │
 │                      │     - Enter Conditions           │
 │                      │     - Tasks         ←在这加任务    │
 │                      │     - Transitions   ←在这加过渡    │
@@ -297,15 +300,18 @@ State 的另一个属性，决定"这个 State 被考虑时，是自己上还是
 
 打开资产 → 选中 Root → Details 面板找到 **Context Actor Class** → 设为 **`CatfishingGameModeBase`**
 
-## 3.3 建三个状态
+## 3.3 建六个状态
 
-在 Root 下建三个子状态（右键 Root → Add Child State），依次命名：
+在 Root 下建六个子状态（右键 Root → Add Child State），依次命名：
 
 ```
 Root
  ├── DayActive        ← 第一个 = 起始状态
  ├── NormalNight
- └── FailureNight
+ ├── FailureSettlementNight
+ ├── SuccessSettlementNight
+ ├── Ending
+ └── Ended
 ```
 
 **顺序很重要**：`DayActive` 必须是第一个，因为树启动时会选中 Root 的第一个子状态。
@@ -329,7 +335,7 @@ Root
 | # | Trigger | Event Tag | Target |
 |---|---|---|---|
 | 1 | `On Event` | `Cat.Run.QuotaReached` | `NormalNight` |
-| 2 | `On Event` | `Cat.Run.QuotaFailed` | `FailureNight` |
+| 2 | `On Event` | `Cat.Run.QuotaFailed` | `FailureSettlementNight` |
 
 ## 3.5 配置 NormalNight
 
@@ -338,24 +344,39 @@ Root
   1. `Cat Run Enter Phase`，`Phase` = `NormalNight`，`Reason` = `QuotaReached`
   2. `Cat Run Wait For Event`
 - Transitions：
-  1. `On Event`，Tag = `Cat.Run.AllEligibleReady`，Target = `DayActive`
+  1. `On Event`，Tag = `Cat.Run.AllEligibleReady`，Condition = `Cat Run Success Settlement Eligible`，Target = `SuccessSettlementNight`
+  2. `On Event`，Tag = `Cat.Run.AllEligibleReady`，Target = `DayActive`
 
-## 3.6 配置 FailureNight
+## 3.6 配置 FailureSettlementNight
 
 - `Tasks Completion` → **`All`**
 - Tasks：
   1. `Cat Run Enter Phase`，`Phase` = `FailureSettlementNight`，`Reason` = `QuotaFailed`
   2. `Cat Run Wait For Event`
 - Transitions：
-  1. `On Event`，Tag = `Cat.Run.SettlementComplete`，Target = `DayActive`
+  1. `On Event`，Tag = `Cat.Run.SettlementComplete`，Target = `Ending`
 
-## 3.7 编译保存
+## 3.7 配置 SuccessSettlementNight
+
+- `Tasks Completion` → **`All`**
+- Tasks：
+  1. `Cat Run Enter Phase`，`Phase` = `SuccessSettlementNight`，`Reason` = `AllEligibleReady`
+  2. `Cat Run Wait For Event`
+- Transitions：
+  1. `On Event`，Tag = `Cat.Run.SettlementComplete`，Target = `Ending`
+
+## 3.8 配置 Ending / Ended
+
+- `Ending`：`Cat Run Enter Phase`，`Phase` = `Ending`，`Reason` = `SettlementComplete`；Transition 用 `On State Succeeded` 指向 `Ended`
+- `Ended`：`Cat Run Enter Phase`，`Phase` = `Ended`，`Reason` = `NaturalEnd`
+
+## 3.9 编译保存
 
 点工具栏 **Compile**，看 Compiler Results 没报错，然后 Save。
 
-> **不要接 `SuccessSettlementNight`**：`EnterRunPhaseFromStateTree` 里有硬校验，`SuccessSettlementPolicy != Enabled` 时进这个阶段直接返回 `PolicyUndecided`（当前 ini 没启用这条策略）。
+> **成功结算夜必须接条件**：`NormalNight` 的 `AllEligibleReady` 第一条边要挂 `Cat Run Success Settlement Eligible`，达到 `FinalDayIndex` 才进入 `SuccessSettlementNight`；否则第二条无条件边回 `DayActive` 翻下一天。
 
-> **嫌白天太短**：`DayActive` 会启动一个 `DayLengthSeconds`（ini 里配的 600 秒）倒计时，到期额度不够就发 `QuotaFailed` 跳夜晚。测试期间可以把 ini 里的值调大，改完重启编辑器。
+> **嫌白天太短或太长**：`DayActive` 会启动 `DayLengthSeconds` 倒计时，到期额度不够就发 `QuotaFailed` 跳失败结算夜。测试期间可改 ini 里的值后重启，也可在开发期用 `cat.RunEnvironmentSocial.DayLength <秒数>` 临时改当前白天。
 
 ---
 
@@ -371,7 +392,7 @@ Root
 | Probe | 树的 `Cat Fishing Enter Phase` Task |
 | TrueBiteWindow | `Open True Bite Window` 打开通用窗口；只播放浮漂下沉，不创建鱼 |
 | HookedFight | 真咬窗内收到左键后，`RequestHook` 才选鱼、生成 Actor、扣饵并 EnterPhase |
-| ExhaustedReel | 鱼体力耗尽或力量碾压后，Session 保留鱼当前位置、停止搏斗 Runner 并在 **C++ 内部** EnterPhase |
+| ExhaustedReel | `FishExhausted` 事件进入叶子后执行 `EnterPhase`；保留鱼位置且不停止 Runner |
 | Resolved / Terminated | `FinalizeSession()`，**树禁止进入** |
 
 所以这棵树只有 4 个状态，逻辑非常薄。
@@ -429,7 +450,7 @@ Root
 
 **注意这条转移和前面的不一样** —— 不是 On Event，是 **On State Succeeded**。
 
-**原理**：Task 2 每帧检查搏斗 Runner 还在不在跑。鱼体力耗尽或力量碾压时，C++ 保留死亡帧位置、`Runner->Stop()` 并把阶段写成 `ExhaustedReel`。Task 2 下一帧发现 Runner 停了，返回 Succeeded。此时 Task 1 早就 Succeeded 了，两个都完成 → State 完成（Succeeded）→ 触发到只负责保持树运行的叶子状态。玩家之后持续左键，鱼才会按有限速度收近。
+**原理**：Runner 判定鱼体力耗尽后先把鱼意图改为 `AutoHauling`，再发送 `Cat.Fishing.FishExhausted`。事件边进入 `ExhaustedReelHold`，叶子执行 `EnterPhase(ExhaustedReel)`；Runner 始终继续运行，玩家持续左键时仍由同一双端约束收近。
 
 > 这里正好体现 `Tasks Completion = All` 的必要性：如果是默认的 `Any`，Task 1 一 Succeeded 就立刻跳走了，搏斗根本没机会跑。
 
@@ -470,25 +491,48 @@ Root
 
 # 第五部分：单条鱼行为树 ST_FishFight
 
-这棵树挂在 `ACatFishEncounterActor` 的 `FishBehaviorStateTree` 组件上，并且**只在服务器启动**。默认拓扑很小：
+树挂在 `ACatFishEncounterActor::FishBehaviorStateTree`，仅服务器运行，不需要 AIController。2026-09-08 阻力修正继续使用以下三个真实行为叶子，增加跨外冲/横切的主动行为总时限，并调整受阻后的选边；当前资产与运行验证证据见 [鱼运动实现导读](FishFightImplementationGuide_zh-CN.md)。
 
 ```text
 Hooked Fish Behavior
- ├─ Struggling Outward       [Cat Fish Behavior State: StrugglingOutward]
- │        └─ On State Completed → Calm Direction Selection
- └─ Calm Direction Selection [Cat Fish Behavior State: CalmOrInward]
-          └─ On State Completed → Struggling Outward
+ ├─ Outward Rush [Behavior=OutwardRush]
+ ├─ Lateral Arc  [Behavior=LateralArc]
+ └─ Ease Off     [Behavior=EaseOff]
 ```
 
-每个 Task 进入时只做两件事：把 `MotionIntent` 交给 FightRunner，并从鱼性格 DA 的时长区间抽出本状态持续时间；倒计时结束后 Task 成功，让树切到另一个状态。位置、转向、鱼线、力量、体力和鱼竿磨损全部仍由服务器固定步模拟器处理。
+三个叶子使用 `Cat Fish Run Behavior State` Task，只在 Enter 时提交 `Behavior`，不自建倒计时或 Tick。Runner 在每个固定步先更新上一完整物理结果形成的反馈，再手动 Tick 树的条件，最后连续执行游向/出力和物理求解。组件自动 Tick 关闭，时长、受阻与体力观察都归 Runner 同一份行为记忆。
 
-使用自定义 `CatFishBehaviorStateTreeSchema` 的好处是编辑器会把 Context Actor 限定为鱼 Encounter，鱼专用 Task 不会误挂到 Session 或 GameState。编译好 Editor 模块后，可用命令行编辑器稳定生成/重建默认资产：
+全部转移为 `On Tick`，按下表顺序检查，条件由 `FCatFishBehaviorFeedbackCondition` 只读测试；不是 `On State Completed` 的两状态循环：
+
+| 来源 | 条件与目标（从先到后） |
+|---|---|
+| Outward Rush | 需要恢复→Ease Off；最短承诺+持续受阻→Lateral Arc；最长时长到期→Ease Off |
+| Lateral Arc | 需要恢复→Ease Off；最短承诺+持续受阻→Outward Rush；最长时长到期→Outward Rush |
+| Ease Off | 到期+持续受阻→Lateral Arc；到期→Outward Rush |
+
+`NeedsRecovery` 表示主动行为总时限耗尽，优先于受阻换招，且不受最短承诺时间门控。低体力在开始一轮主动行为时缩短该总时限，不再作为当前正式树独立的立即退让条件。外冲与横切之间切换会保留这份总计时；这样横切受阻时可以重新外冲，又不会靠反复换招无限延长强动作。每个叶子的自身最长时长仍保留：外冲自然到期进入缓游，横切自然到期重新外冲。
+
+`CatFishBehaviorStateTreeSchema` 将 Context Actor 限定为鱼 Encounter。Task/条件不写位置、线长、ASC、耐久和终局。它们也不使用旧 `MotionIntent` 决定行为，旧枚举只保留正式三动画兼容投影。新的出力比例、转向、时长和受阻阈值由人格 `AdaptiveSteeringConfig` 配置；鱼费用由独立实际出力与物理对抗计算。
+
+完整编译 Editor 模块后，用新进程运行受控脚本。新增 `USTRUCT` 字段需要新进程重新加载原生类型和 Python 包装；不能以旧编辑器中的热重载对象作为资产保存依据。脚本默认只读；三个显式模式互斥：
+
+| 参数 | 作用与写入范围 |
+|---|---|
+| `-ApplyFishAdaptiveMotion` | 旧模型迁移入口。保存四个性格与 Balance，仅在已知旧树指纹匹配时重建鱼树；已有版本 1 调参和自定义新树保持原值。 |
+| `-AuditFishResistanceTuning` | 只读检查当前值、预期调参、五包基线指纹和八条目标边；也用于阻力调参保存后的独立重载验证。 |
+| `-ApplyFishResistanceTuning` | 仅接受已盘点的五个正式包指纹，检查无目标包未保存改动和新原生字段，再备份四性格与鱼树。只写七个约定的方向/出力/时长配置，经同一个原生生成器更新鱼树；拒绝未知改动或已经部分保存的包。 |
+
+阻力模式保留性格 ID、`AdaptiveMotionVersion=1`、满出力参考速度，以及其余转向、外冲时长等配置。保护包共 51 个：16 Fish、16 Presentation、17 AnimBP、`ST_FishingSession` 和 Balance；Balance 不保存，体力单价不变。四性格的主动行为总时限分别为 6～8 / 7～10 / 8～12 / 10～14 秒；缓游分别为 1.25～1.5 / 1.25～1.75 / 1.25～2 / 1.25～2 秒，最短承诺均为 1.25 秒。
 
 ```text
-D:/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe D:/develop/Catfishing/Catfishing.uproject -ExecutePythonScript=D:/develop/Catfishing/Scripts/create_fish_behavior_state_tree.py -unattended -nop4 -NullRHI
+D:/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe D:/develop/Catfishing/Catfishing.uproject -ExecutePythonScript=D:/develop/Catfishing/Scripts/migrate_fish_adaptive_behavior.py -AuditFishResistanceTuning -FishAdaptiveEvidenceDir=D:/develop/Catfishing/Saved/Automation/FishResistance-20260908/ReadOnlyExample -unattended -nop4 -NullRHI -DDC=NoZenLocalFallback -DDC-ForceMemoryCache
 ```
 
-未来添加“低体力蓄力冲刺”时，推荐新增一个 StateTree 状态和一个新的 `MotionIntent`，条件只负责决定何时进入；冲刺速度、体力门槛与网络结果仍写在纯 C++ 模拟层并加单元测试。这样 StateTree 是可视化编排，不会变成无法验证的第二套战斗逻辑。
+每次使用新的证据目录。保存后在另一进程执行只读模式，核对目标值、八条边、全部保护包指纹和正式鱼引用；`saved_requires_fresh_process_verification` 只表示保存成功，需要该重载证据才能确认资产持久化。`Scripts/create_fish_behavior_state_tree.py` 仍是整份重建默认树的作者入口，会替换 EditorData；已有手工编辑的资产应先做引用/拓扑盘点。日常资产迁移使用上述带指纹与备份的脚本。
+
+本轮已完成上述五包保存和独立进程重载，证据在 `Saved/Automation/FishResistance-20260908/Migration/Migration.json`、`FreshReload/Audit.json` 与 `Verification.json`。11 项资产核对通过：四性格目标值和实际八边符合预期，51 个保护包指纹、16 鱼引用与运行配置不变；四性格仍为版本 1，满出力速度仍为 110/140/180/240 cm/s。该证据确认资产持久化，不代替真实场景的阻力手感或打包联机验收。
+
+折返、近岸反扑与效用评分选路尚未实现。扩展时在新 `ECatFishBehavior` 与树条件中表达策略，继续由同一 Steering/Simulator 执行，不能另开一套位置或扣体逻辑。
 
 ---
 
@@ -540,7 +584,7 @@ UE 自带可视化调试器：菜单 **Tools → Debug → StateTree Debugger**�
 |---|---|
 | 树完全不启动，没有任何 `fishing_phase_entered` | ini 里 `FishingSessionStateTree` 没填，或路径写错 |
 | 只有 `Phase=Waiting` 就再也不动了 | `ProbeTriggered` 转移没配，或 Event Tag 拼错 |
-| `Phase=Waiting` 都没有 | Context Actor Class 设错，或 `Schedule Waiting Probe` 返回了 Failed（检查 ini 里 `BaseBiteRatePerSecond` 等三个咬钩参数是否都 > 0） |
+| `Phase=Waiting` 都没有 | Context Actor Class 设错，或 `Schedule Waiting Probe` 返回了 Failed；检查 `fishing_bite_schedule_rejected`，以及 ini 的三个 MeanBiteDelaySeconds 锚点、Single/FullChumContribution、慢浮/预警/总上限是否通过 `TryGetBiteTimingParameters`；默认20/14/6秒均值、1.7/8.5贡献、3秒慢浮、1.5秒预警、40秒上限 |
 | 提竿后 EmptyHook / No eligible fish | 鱼表没匹配上 —— 检查关卡 RegionId 与正式鱼的 `RegionIds`、时间天气、协作人数和 `MaximumChallengeRatio` |
 | 阶段跳得飞快，几帧就跑完 | **`Tasks Completion` 忘了改成 `All`** |
 | 提竿后没进 HookedFight | 提竿时机不在 TrueBiteWindow 窗口内（默认 3 秒） |
@@ -569,6 +613,7 @@ UE 自带可视化调试器：菜单 **Tools → Debug → StateTree Debugger**�
 | `Cat Run Enter Phase` | Task | `Phase`, `Reason` | Succeeded / Failed |
 | `Cat Run Wait For Event` | Task | — | 永远 Running |
 | `Cat Run Result Reason` | Condition | `ExpectedReason` | bool |
+| `Cat Run Success Settlement Eligible` | Condition | — | bool |
 
 **枚举取值**
 
@@ -579,7 +624,7 @@ ECatFishingPhase:
 
 ECatRunPhase:
   NotStarted, DayActive, NormalNight, FailureSettlementNight,
-  SuccessSettlementNight(禁), Ending, Ended
+  SuccessSettlementNight, Ending, Ended
 
 ECatRunTransitionReason:
   None, QuotaReached, QuotaFailed, AllEligibleReady,
