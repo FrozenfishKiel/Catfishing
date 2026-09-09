@@ -76,7 +76,7 @@ public:
 	void RefreshPlayerLakeUIForController(APlayerController* Controller);
 
 private:
-	/** 全局 Loading WBP 的一次渲染快照；它把“正在等什么”和“是否有真实可量化进度”分开，避免 View 把不可量化阶段显示成假百分比。 */
+	/** 全局 Loading WBP 的一次渲染快照；它把“正在等什么”和“是否显示进度”分开，避免 View 自行编造加载状态。 */
 	struct FCatGlobalLoadingPresentation
 	{
 		/** 遮罩正在承载的高层目标，例如进入游戏或返回主菜单；由 LocalPlayer UI 根据当前 Start/Leave 过渡写入。 */
@@ -91,13 +91,13 @@ private:
 		/** 当前等待原因的工程侧锚点；它让开发包里能看到卡住的是 PreLoadMap、PostLoadMap、DestroySession 还是 UI 装配。 */
 		FText ReasonText;
 
-		/** 是否显示 Loading WBP 里的条形控件；返回主菜单等不可量化流程固定为 false，避免表现层制造假进度。 */
+		/** 是否显示 Loading WBP 里的条形控件；进入游戏展示真实 gate 合成总进度，返回主菜单固定为 false。 */
 		bool bShowProgressBar = false;
 
-		/** 进度值是否来自可对外展示的真实百分比；false 时状态文案不会追加百分号，进度条也不应显示。 */
+		/** 进度值是否允许对外显示成百分号；进入游戏使用真实 gate 合成值，退出主菜单不显示百分号。 */
 		bool bHasProgressPercent = false;
 
-		/** 遮罩条形控件的 0 到 100 位置；只在真实地图包百分比可用时写入，永远不由时间或阶段估算推进。 */
+		/** 遮罩条形控件的 0 到 100 总进度；只由 Start、包加载、Travel、World、BeginPlay、Transport 和本地 UI 事实推进，永远不由时间推进。 */
 		float ProgressPercent = 0.0f;
 	};
 
@@ -113,7 +113,7 @@ private:
 	/** 从当前 Online 子系统重新读取快照并刷新遮罩；Pawn/UI 真实就绪事件会调用它来收起等待态，不走定时器兜底。 */
 	void RefreshGlobalLoadingScreenFromCurrentSnapshot();
 
-	/** 从 Online、Lyra 式引擎 gate 与本地 UI 就绪事实生成遮罩表现；返回 false 表示没有真实等待原因。 */
+	/** 从 Online、Lyra 式引擎 gate 与本地 UI 就绪事实生成遮罩表现；进入游戏会同步给出真实 gate 合成总进度。 */
 	bool ShouldShowGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot, FCatGlobalLoadingPresentation& OutPresentation) const;
 
 	/** 创建或复用全局加载遮罩并写入本轮表现快照；遮罩复用正式 Loading WBP 资产，但不再属于 Frontend Root 子页。 */
@@ -122,8 +122,11 @@ private:
 	/** 移除全局加载遮罩并清空最后阶段文本与本地过渡记忆；它不改变 Online 操作，只释放本地 UMG 表现。 */
 	void HideGlobalLoadingScreen();
 
-	/** 将当前表现快照写入全局 Loading WBP；进度条显隐和百分号展示都由 Presentation 的真实来源标记决定。 */
+	/** 将当前表现快照写入全局 Loading WBP；进入游戏显示合成总进度，返回主菜单折叠进度条。 */
 	void RefreshGlobalLoadingScreenPresentation(const FCatGlobalLoadingPresentation& Presentation);
+
+	/** 合成进入玩法的总进度；Start、地图包、Travel、World、BeginPlay、Connected 和本地 UI 都必须来自真实 gate，等待态永远不会显示 100%。 */
+	float GetGameplayLoadingProgressPercent(const FCatOnlineSnapshot& Snapshot) const;
 
 	/** 根据最新 Online 快照更新 Start/Leave 过渡记忆；这份记忆只延续真实请求到 UI 就绪事件，不承担完成判断。 */
 	void TrackGlobalLoadingTransition(const FCatOnlineSnapshot& Snapshot);
