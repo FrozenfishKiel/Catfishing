@@ -1,6 +1,6 @@
 {
  "space_id": "7670823117626870757",
- "exported_at": "2026-09-08T22:50:52",
+ "exported_at": "2026-09-09T10:48:50",
  "tree": [
   {
    "title": "北极星愿景",
@@ -1034,7 +1034,7 @@
    "sheet_id": "5e822d",
    "sheet_name": "道具",
    "region": "A1:H14",
-   "revision": 228,
+   "revision": 229,
    "file": "GDD 系统分册/道具/道具总表/道具.csv",
    "rows": 14,
    "cols": 8
