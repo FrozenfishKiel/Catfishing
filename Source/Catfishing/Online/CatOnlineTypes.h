@@ -171,8 +171,6 @@ enum class ECatOnlineError : uint8
 	LobbyReadyPublishFailed,
 	/** Host 离开前的世界保存被拒绝、Run 或 Index 写盘失败；退出停止且 Session 保持可用。 */
 	HostSaveFailed,
-	/** 同一 Lobby 的 Client 玩法启动尝试已耗尽；停止自动重试并保留房间，玩家可通过现有 Leave 退出后重新加入。 */
-	ClientStartRetryExhausted,
 	/** 平台已接受邀请，但另一个 Online 操作或邀请仍在处理；不抢占当前操作，用户需在空闲后重新接受邀请。 */
 	InviteAcceptanceBusy,
 	/** 当前已拥有 Session，不能自动替用户退出或切换房间；先离房再重新接受邀请。 */
@@ -397,13 +395,49 @@ struct FCatOnlineSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bIsHost = false;
 
-	/** 当前 Host 是否已把玩法地图异步预载请求提交给引擎；完成回调前绝不代表旅行已开始。 */
+	/** 当前 Start 流程是否仍在真实加载阶段；玩法启动资源预热或地图包预载未完成时为 true，不代表旅行已经开始。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bIsGameplayLoadPending = false;
 
-	/** 引擎返回的玩法包异步加载百分比，范围为 0..100；未知或不适用严格为 -1。 */
+	/** 当前 Start 流程是否正在等待玩法启动资源集合；这组资源来自现有设置软引用，由 StreamableHandle 报告真实进度。 */
 	UPROPERTY(BlueprintReadOnly)
-	float GameplayLoadProgress = -1.0f;
+	bool bIsGameplayStartupAssetLoadPending = false;
+
+	/** 当前玩法启动资源集合是否有可读进度；false 表示还没有真实 handle 进度，UI 不能自行估算。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHasGameplayStartupAssetLoadProgress = false;
+
+	/** 当前玩法启动资源集合的加载百分比，单位是 0 到 100；只随 StreamableHandle 的真实更新或完成事件变化。 */
+	UPROPERTY(BlueprintReadOnly)
+	float GameplayStartupAssetLoadProgressPercent = 0.0f;
+
+	/** 当前玩法启动资源集合的可读阶段；它说明正在等多少个真实软引用完成，而不是 UI 自己编写的提示。 */
+	UPROPERTY(BlueprintReadOnly)
+	FString GameplayStartupAssetLoadProgressStatus;
+
+	/** 当前 Start 或回主菜单流程是否有地图包预载请求仍在引擎异步队列中；它只说明包还没回调，不代表世界已经切换完成。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bIsMapPreloadPending = false;
+
+	/** 当前 GameInstance 是否已经进入引擎 LoadMap 阻塞段；由 PreLoadMap/PostLoadMap 成对写入，UI 用它保持真实切图遮罩而不靠时间兜底。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bIsEngineLoadMapPending = false;
+
+	/** 最近一次进入引擎 LoadMap 的目标地图名；只用于展示和诊断当前正在等待哪个引擎切图阶段，PostLoadMap 后清空。 */
+	UPROPERTY(BlueprintReadOnly)
+	FString EngineLoadMapName;
+
+	/** 当前地图包是否提供可读取的引擎加载百分比；false 表示 Online 此刻没有可量化进度，UI 不能用时间或动画自行编百分比。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHasMapLoadProgress = false;
+
+	/** 当前地图包加载百分比，单位是 0 到 100；只有 bHasMapLoadProgress 为 true 时才是有效 Model 数据，View 才允许写入进度条。 */
+	UPROPERTY(BlueprintReadOnly)
+	float MapLoadProgressPercent = 0.0f;
+
+	/** 当前地图包加载阶段的可读事实；由 LoadPackageAsync 进度事件写入，UI 用它说明此刻真实等在读取、序列化还是完全加载阶段。 */
+	UPROPERTY(BlueprintReadOnly)
+	FString MapLoadProgressStatus;
 };
 
 /** Online 请求的同步提交结果；Accepted 表示子系统接管了请求，OSS 完成回调可能在本方法返回前就已同步结案，最终事实仍从 Snapshot 读取。 */

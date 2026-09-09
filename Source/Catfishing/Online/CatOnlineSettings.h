@@ -31,8 +31,6 @@ public:
 	/** 判断重连准入配置是否完整；只接受当前实现的 ConnectionLost 位和正 TTL，出现任何未识别位都 fail-closed。 */
 	bool IsReconnectAdmissionReady() const;
 
-	/** 读取 Host exit 等待远端 Destroy ACK 与最终 Grant ACK 的统一正超时秒数；未裁或非有限时返回 false。 */
-	bool TryGetHostExitAckTimeout(double& OutSeconds) const;
 	/** Session 的搜索与准入策略；Create/Find 在 Undecided 时返回 PolicyUndecided。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Session")
 	ECatSessionAccessPolicy SessionAccess = ECatSessionAccessPolicy::Undecided;
@@ -60,8 +58,4 @@ public:
 	/** 原始 StableNetId 是否允许出现在公开快照或完整日志；Undecided 时只记录 Valid/Redacted。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Privacy")
 	ECatPolicyDecision StableNetIdExposure = ECatPolicyDecision::Undecided;
-
-	/** Host exit 等待远端 DestroySession ACK 与最终 Profile Grant ACK 的统一秒数；0 表示未裁，不能直接跳过有界收口。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Leave", meta = (ClampMin = "0.0"))
-	double HostExitAckTimeoutSeconds = 0.0;
 };

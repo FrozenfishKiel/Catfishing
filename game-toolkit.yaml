@@ -1,0 +1,32 @@
+# Game Toolkit 项目环境声明
+#
+# 由人填写，不由工具探测 —— 探测认得出 .uproject，认不出「这个仓库里哪个才是
+# 本次要动的工程」「哪个大版本」「Blueprint 能不能按文本扫」。
+#
+# 三种「没有」必须分开写，不要混成一句「不支持」：
+#   未知   —— 还没查，可能有
+#   不适用 —— 这个项目结构上就没这一项
+#   查不了 —— 有，但当前手段验证不了（如 Blueprint 图逻辑），**不得当作「未实现」**
+#
+# 字段含义见 game-toolkit 的 layer-contracts skill。
+
+# 引擎：godot / unreal / unity / 自研 / 无（纯文档项目）。人工填，不探测
+engine: unreal
+
+# 引擎版本：写成字符串（5.10 不加引号会被 YAML 读成 5.1）。不知道就写「待核实」
+engine_version: '5.8'
+
+# 工程根：相对本文件的路径。仓库根 != 工程根时尤其要写
+project_root: .
+
+# 技术栈：语言与框架
+tech_stack: C++ / Blueprint（模块：Catfishing、CatfishingEditor）
+
+# 源码范围：目录与排除项；写目录和排除规则，别写会过期的文件计数
+source_scope: Source/ 下 .cpp/.h 为源码；Config/ 与 Scripts/ 可文本检查；Content/ 为资产不计入文本扫描；设计文档镜像在 Knowledge/Feishu/（飞书导出，只读）
+
+# 可检查程度：按「检查动作」分档，不要只按扩展名一刀切
+inspectability: 按检查动作分档：① 文件存在、路径与命名 —— 可直接检查；② C++、Config、Scripts/ 下的项目脚本 —— 可做静态文本检查；③ 资产的属性、类与引用 —— 需走引擎入口（见 verify_entry），按任务决定要不要做；④ Blueprint 图逻辑与运行时行为 —— 文本搜索证明不了，不得据此判定「未实现」，需专项证据。注意 .uasset/.umap 属于 ③④，能 Glob 到不等于读得懂
+
+# 验证入口：构建/测试/导出检查怎么跑。同一引擎不同项目可以完全不同
+verify_entry: 项目 Scripts/ 下有一批 verify_*.py / verify_*.ps1（如 verify_ui_reach_runtime.py 读引擎属性、verify_delivery_harness_assets.ps1 做文件级检查），按任务挑对应的那个。**尚未确认它们的调用方式与通过判据**，用前先读脚本和项目构建说明。注意仓库里的 Catfishing.sln / Automation_Catfishing.sln 是 UE 自动生成的，不能用 dotnet build

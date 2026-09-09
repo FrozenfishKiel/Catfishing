@@ -36,8 +36,8 @@ void UCatLakeMainMenuWidget::ResetLakeMenuSettings()
 
 // 渲染流程：
 // 1. 保存 Controller 给出的唯一菜单投影，避免 Widget 从按钮状态反推 Save、Settings 或退出事实。
-// 2. 写入可选 WBP 控件；返回、设置、保存和退出都只反映 Controller 投影，不读取业务系统。
-// 3. 最后通知蓝图扩展点，让动画或自定义控件读取同一份 LastMenuViewState。
+// 2. 写入可选 WBP 控件；返回、设置、保存、回主菜单和退出都只反映 Controller 投影，不读取业务系统。
+// 3. 回主菜单等待中只禁用命令按钮并保留状态文本；全局遮罩负责真正的等待表现，最后通知蓝图扩展点读取 LastMenuViewState。
 void UCatLakeMainMenuWidget::RenderMenu(const FCatLakeMainMenuViewState& ViewState)
 {
 	LastMenuViewState = ViewState;
@@ -59,6 +59,10 @@ void UCatLakeMainMenuWidget::RenderMenu(const FCatLakeMainMenuViewState& ViewSta
 	{
 		SaveButton->SetIsEnabled(LastMenuViewState.bSaveEnabled);
 	}
+	if (ReturnToMainMenuButton)
+	{
+		ReturnToMainMenuButton->SetIsEnabled(LastMenuViewState.bReturnToMainMenuEnabled);
+	}
 	if (ExitGameButton)
 	{
 		ExitGameButton->SetIsEnabled(LastMenuViewState.bExitEnabled);
@@ -66,7 +70,7 @@ void UCatLakeMainMenuWidget::RenderMenu(const FCatLakeMainMenuViewState& ViewSta
 	BP_RenderMenu(LastMenuViewState);
 }
 
-// 命令页显示流程：显式切回暂停菜单的纵向按钮列表；没有 Switcher 的旧资产用根容器显隐兜底，但不创建新控件。
+// 命令页显示流程：显式切回暂停菜单的纵向按钮列表并隐藏设置页；没有 Switcher 的资产用根容器显隐兜底，但不创建新控件。
 void UCatLakeMainMenuWidget::ShowCommandMenu()
 {
 	if (LakeMainMenuPageSwitcher && LakeCommandPanel)
@@ -144,6 +148,12 @@ void UCatLakeMainMenuWidget::RequestSave()
 	SubmitMenuAction(ECatLakeMainMenuAction::Save);
 }
 
+// 退出到主菜单请求流程：只广播 ReturnToMainMenu 意图；保存、拆局、Session 销毁和旅行仍由 Controller/Online 链路决定。
+void UCatLakeMainMenuWidget::RequestReturnToMainMenu()
+{
+	SubmitMenuAction(ECatLakeMainMenuAction::ReturnToMainMenu);
+}
+
 // 退出请求流程：只广播直接退出游戏意图；是否保存由玩家显式点击保存按钮决定。
 void UCatLakeMainMenuWidget::RequestExitGame()
 {
@@ -216,22 +226,30 @@ void UCatLakeMainMenuWidget::NativeDestruct()
 	Super::NativeDestruct();
 }
 
-// 预览键流程：子按钮处理前只识别普通 Escape；设置页中先取消回暂停菜单，命令页中才关闭菜单，Shift+Escape 继续透传。
+// 预览键流程：子按钮处理前只识别普通 Escape；回主菜单等待中只消费不关闭，设置页中先取消回暂停菜单，命令页中才关闭菜单，Shift+Escape 继续透传。
 FReply UCatLakeMainMenuWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
 	if (ShouldCloseMenuFromKey(InKeyEvent))
 	{
+		if (LastMenuViewState.bReturnToMainMenuPending)
+		{
+			return FReply::Handled();
+		}
 		IsShowingSettingsPanel() ? RequestCancelSettings() : RequestCloseMenu();
 		return FReply::Handled();
 	}
 	return Super::NativeOnPreviewKeyDown(InGeometry, InKeyEvent);
 }
 
-// 键盘流程：当菜单根直接持有焦点时复用普通 Escape 分支；Shift+Escape 和其它按键继续走父类默认处理。
+// 键盘流程：当菜单根直接持有焦点时复用普通 Escape 分支；回主菜单等待中锁住关闭入口，Shift+Escape 和其它按键继续走父类默认处理。
 FReply UCatLakeMainMenuWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
 	if (ShouldCloseMenuFromKey(InKeyEvent))
 	{
+		if (LastMenuViewState.bReturnToMainMenuPending)
+		{
+			return FReply::Handled();
+		}
 		IsShowingSettingsPanel() ? RequestCancelSettings() : RequestCloseMenu();
 		return FReply::Handled();
 	}
@@ -250,6 +268,11 @@ void UCatLakeMainMenuWidget::BindDesignerButtons()
 	{
 		SaveButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestSave);
 		SaveButton->OnClicked.AddDynamic(this, &ThisClass::RequestSave);
+	}
+	if (ReturnToMainMenuButton)
+	{
+		ReturnToMainMenuButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestReturnToMainMenu);
+		ReturnToMainMenuButton->OnClicked.AddDynamic(this, &ThisClass::RequestReturnToMainMenu);
 	}
 	if (ExitGameButton)
 	{
@@ -273,6 +296,10 @@ void UCatLakeMainMenuWidget::UnbindDesignerButtons()
 	if (SaveButton)
 	{
 		SaveButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestSave);
+	}
+	if (ReturnToMainMenuButton)
+	{
+		ReturnToMainMenuButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestReturnToMainMenu);
 	}
 	if (ExitGameButton)
 	{

@@ -1,6 +1,6 @@
 ﻿# Catfishing 项目本地约定
 
-本文件补充全局 `AGENTS.md`，适用于 `D:\develop\Catfishing`。
+本文件补充全局 `AGENTS.md`，适用于本仓库（Catfishing UE 工程）。
 
 ## Git 提交信息
 

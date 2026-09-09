@@ -8,13 +8,14 @@
 class APlayerController;
 class UCatLakeMainMenuWidget;
 class UCatFrontendSettingsModel;
+class UCatOnlineSubsystem;
 class UCatSaveSubsystem;
 class UEnhancedInputComponent;
 class UInputAction;
 class ULocalPlayer;
 enum class ECatLakeMainMenuAction : uint8;
 
-/** 局内 ESC 菜单控制器；它拥有菜单打开态、输入绑定和对 Save、Settings 与本地 Quit 入口的转交，不负责绘制控件。 */
+/** 局内 ESC 菜单控制器；它拥有菜单打开态、输入绑定，并把保存、设置、回主菜单和本地 Quit 分别转交给权威系统。 */
 UCLASS()
 class CATFISHING_API UCatLakeMainMenuController : public UObject
 {
@@ -44,6 +45,9 @@ public:
 
 	/** Widget 请求保存当前活动世界；Controller 只转交 Save 子系统并显示同步或异步结果文本。 */
 	void RequestSaveFromWidget();
+
+	/** Widget 请求退出到主菜单；Controller 转交 Online Leave 并保持等待画面直到保存、拆局、销毁会话与回前台旅行真实结案。 */
+	void RequestReturnToMainMenuFromWidget();
 
 	/** Widget 请求直接退出本地游戏进程；PIE 中交给引擎退出入口停止当前编辑器运行。 */
 	void RequestExitGameFromWidget();
@@ -88,7 +92,7 @@ private:
 	/** 按 Controller 当前事实重绘菜单状态；按钮可用性只读取 Save busy 和服务是否存在。 */
 	void UpdateView();
 
-	/** 响应 Widget 的统一菜单 Action；这里把按钮语义分发到关闭、设置、保存和退出四个明确入口。 */
+	/** 响应 Widget 的统一菜单 Action；这里把按钮语义分发到关闭、设置、保存、回主菜单和退出进程入口。 */
 	void HandleMenuActionRequested(ECatLakeMainMenuAction Action);
 
 	/** Save 子系统目录或忙闲状态变化入口；这里只刷新按钮可用性，手动保存文案由匹配请求 ID 的完成回调写入。 */
@@ -97,8 +101,14 @@ private:
 	/** Save 子系统完成回调；只消费本菜单发起的手动保存请求，避免目录读取等文本覆盖保存反馈。 */
 	void HandleSaveCompleted(FGuid RequestId, bool bSuccess);
 
+	/** Online 快照变化入口；只在退出到主菜单等待中刷新阶段文字或恢复失败后的命令页。 */
+	void HandleOnlineChanged();
+
 	/** 通过绑定的 LocalPlayer 定位当前 GameInstance 级 Save 子系统；任一生命周期层失效时返回空。 */
 	UCatSaveSubsystem* GetSaveSubsystem() const;
+
+	/** 通过绑定的 LocalPlayer 定位当前 GameInstance 级 Online 子系统；任一生命周期层失效时返回空。 */
+	UCatOnlineSubsystem* GetOnlineSubsystem() const;
 
 	/** 返回局内菜单持有的 SettingsModel；它与主界面模型同类同规则，但生命周期随当前玩法 UI。 */
 	UCatFrontendSettingsModel* GetSettingsModel() const;
@@ -136,14 +146,23 @@ private:
 	/** Save 子系统 OnSaveCompleted 的配对解绑句柄；只用于手动保存结果的明确完成文案。 */
 	FDelegateHandle SaveCompletedHandle;
 
+	/** Online 快照广播的配对解绑句柄；只用于退出到主菜单等待状态读取真实异步阶段和失败结果。 */
+	FDelegateHandle OnlineChangedHandle;
+
 	/** 菜单当前是否打开的唯一状态；Toggle 写入，输入模式和 ViewState 只读取。 */
 	bool bMenuOpen = false;
 
 	/** 当前等待回执的手动保存请求 ID；无效值表示没有由本菜单发起且尚未结案的保存。 */
 	FGuid PendingManualSaveRequestId;
 
+	/** 当前等待回主菜单的 Online Leave 请求 ID；无效值表示没有本菜单发起的离局链路在途。 */
+	FGuid PendingReturnToMainMenuRequestId;
+
 	/** 菜单打开期间的模态输入恢复记录；它只记录本菜单申请的一层移动/视角锁和鼠标状态。 */
 	FCatUIModalInputModeState ModalInputModeState;
+
+	/** 当前是否正在等待退出到主菜单链路结案；为 true 时关闭、保存和设置入口都会被锁住。 */
+	bool bReturnToMainMenuPending = false;
 
 	/** 最近一次局内菜单命令得到的可展示反馈；按钮入口和匹配的保存完成回调写入它，普通 Save 目录刷新不能覆盖。 */
 	FText LastStatusText;
