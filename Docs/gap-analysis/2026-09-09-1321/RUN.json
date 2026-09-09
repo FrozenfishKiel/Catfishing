@@ -1,0 +1,4998 @@
+{
+  "schema_version": 1,
+  "output_dir": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09-1321",
+  "exported_at": "2026-09-09T12:29:48",
+  "project_head": "87ba975f3a4a0683de0866d5f168e2f2930036fd",
+  "baseline": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+  "systems": {
+    "ui与交互": {
+      "rows": [
+        {
+          "#": "1",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#5f3a0871",
+          "status": "✅ Implemented",
+          "requirement": "前端主菜单四项入口：开始游戏／加入队伍／设置／退出游戏（主界面.md:33）",
+          "match_text": "前端主菜单四项入口开始游戏加入队伍设置退出游戏"
+        },
+        {
+          "#": "2",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#410a4cd8",
+          "status": "⚠️ Partial",
+          "requirement": "退出游戏二次确认弹窗，Esc 取消／Enter 确认退出（主界面.md:17；Sheet2.csv 第25行 当前作用、第30行 当前作用）",
+          "match_text": "退出游戏二次确认弹窗Esc取消Enter确认退出"
+        },
+        {
+          "#": "3",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#6f8f9c6d",
+          "status": "⚠️ Partial",
+          "requirement": "「加入游戏」页：好友房间列表＋输入邀请码两种入口（主界面.md:21）",
+          "match_text": "加入游戏页好友房间列表输入邀请码两种入口"
+        },
+        {
+          "#": "4",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#c6ea619d",
+          "status": "✅ Implemented",
+          "requirement": "房间页：房间名、房间 ID（邀请码）、成员列表、空位、离开房间、开始游戏（主界面.md:25,45）",
+          "match_text": "房间页房间名房间ID邀请码成员列表空位离开房间开始游戏"
+        },
+        {
+          "#": "5",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#685f0cf4",
+          "status": "✅ Implemented",
+          "requirement": "房间人数上限 4（主界面.md:25「已有4名玩家（总上限4人）」；09-08 裁决「单局上限锁死 4 人」）",
+          "match_text": "房间人数上限"
+        },
+        {
+          "#": "6",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#c09de38f",
+          "status": "❌ Missing",
+          "requirement": "房间内玩家「已准备」状态，全员准备后才能开始游戏（主界面.md:25,45）",
+          "match_text": "房间内玩家已准备状态全员准备后才能开始游戏"
+        },
+        {
+          "#": "7",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#eb8823f4",
+          "status": "✅ Implemented",
+          "requirement": "邀请好友：Steam 好友列表＋在线／游戏中／离线三态＋邀请按钮（主界面.md:47）",
+          "match_text": "邀请好友Steam好友列表在线游戏中离线三态邀请按钮"
+        },
+        {
+          "#": "8",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#265f2bdd",
+          "status": "✅ Implemented",
+          "requirement": "复制房间 ID／邀请码（主界面.md:45,49）",
+          "match_text": "复制房间ID邀请码"
+        },
+        {
+          "#": "9",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#e94e354d",
+          "status": "❌ Missing",
+          "requirement": "房间设置：编辑房间名称、设置房间密码、改人数上限、开启语音聊天、保存设置（主界面.md:49）",
+          "match_text": "房间设置编辑房间名称设置房间密码改人数上限开启语音聊天保存设置"
+        },
+        {
+          "#": "10",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#b785caad",
+          "status": "⚠️ Partial",
+          "requirement": "房间底部「语音聊天」入口（主界面.md:25,45）",
+          "match_text": "房间底部语音聊天入口"
+        },
+        {
+          "#": "11",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#54dda21a",
+          "status": "❌ Missing",
+          "requirement": "房间底部「查看玩家信息」入口（主界面.md:25）",
+          "match_text": "房间底部查看玩家信息入口"
+        },
+        {
+          "#": "12",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#7c5c439a",
+          "status": "❌ Missing",
+          "requirement": "选择存档页用左右键切换存档（主界面.md:37）",
+          "match_text": "选择存档页用左右键切换存档"
+        },
+        {
+          "#": "13",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#d187d278",
+          "status": "⚠️ Partial",
+          "requirement": "存档条目显示第 N 天、地点、游戏时长（主界面.md:41）",
+          "match_text": "存档条目显示第N天地点游戏时长"
+        },
+        {
+          "#": "14",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r24#0f149607",
+          "status": "⚠️ Partial",
+          "requirement": "存档页快捷键：Enter 载入、N 新建、Esc 返回主菜单（Sheet2.csv 第24行、第29行、第34行 当前作用）",
+          "match_text": "存档页快捷键Enter载入N新建Esc返回主菜单"
+        },
+        {
+          "#": "15",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#d7ab72e1",
+          "status": "✅ Implemented",
+          "requirement": "设置页四个选项卡：游戏／画面／声音／控制（主界面.md:61,63,65,89）",
+          "match_text": "设置页四个选项卡游戏画面声音控制"
+        },
+        {
+          "#": "16",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#6d2788d4",
+          "status": "⚠️ Partial",
+          "requirement": "「辅助功能」选项卡及六项：界面缩放、文字大小、高对比度界面、色觉模式、减少镜头晃动、减少闪光效果（主界面.md:91）",
+          "match_text": "辅助功能选项卡及六项界面缩放文字大小高对比度界面色觉模式减少镜头晃动减少闪光效果"
+        },
+        {
+          "#": "17",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#972d19f1",
+          "status": "✅ Implemented",
+          "requirement": "游戏设置项：游戏语言、语音聊天、语音输入模式、麦克风校准、震动（主界面.md:61）",
+          "match_text": "游戏设置项游戏语言语音聊天语音输入模式麦克风校准震动"
+        },
+        {
+          "#": "18",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#7fc7993b",
+          "status": "✅ Implemented",
+          "requirement": "画面设置项：显示模式、分辨率、画质预设、垂直同步、亮度（主界面.md:63,85）",
+          "match_text": "画面设置项显示模式分辨率画质预设垂直同步亮度"
+        },
+        {
+          "#": "19",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#b51e81a6",
+          "status": "❌ Missing",
+          "requirement": "画面设置项：帧率上限、抗锯齿、动态模糊（主界面.md:63,85）",
+          "match_text": "画面设置项帧率上限抗锯齿动态模糊"
+        },
+        {
+          "#": "20",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#21833784",
+          "status": "✅ Implemented",
+          "requirement": "声音设置项：总音量、音乐、音效、环境声、语音音量、输出设备、后台静音（主界面.md:65,87）",
+          "match_text": "声音设置项总音量音乐音效环境声语音音量输出设备后台静音"
+        },
+        {
+          "#": "21",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#3a17d66f",
+          "status": "❌ Missing",
+          "requirement": "控制设置项：鼠标灵敏度、镜头灵敏度、反转 Y 轴、按键设置（主界面.md:89）",
+          "match_text": "控制设置项鼠标灵敏度镜头灵敏度反转Y轴按键设置"
+        },
+        {
+          "#": "22",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#ec994152",
+          "status": "⚠️ Partial",
+          "requirement": "设置页底部快捷键：R 恢复默认、Enter 应用、Esc 返回（主界面.md:85,91；Sheet2.csv 第26行、第31行、第35行 当前作用）",
+          "match_text": "设置页底部快捷键R恢复默认Enter应用Esc返回"
+        },
+        {
+          "#": "23",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#8cb063e6",
+          "status": "✅ Implemented",
+          "requirement": "游戏加载界面：进度条＋阶段提示文字（主界面.md:69）",
+          "match_text": "游戏加载界面进度条阶段提示文字"
+        },
+        {
+          "#": "24",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#bfdac119",
+          "status": "⚠️ Partial",
+          "requirement": "加载界面显示「第 n 天」与本局进度轴（09-08 已把「献祭进度」作废，改「世界进度」，另给当日任务点数与缸内可献点数）（主界面.md:69,71）",
+          "match_text": "加载界面显示第n天与本局进度轴已把献祭进度作废改世界进度另给当日任务点数与缸内可献点数"
+        },
+        {
+          "#": "25",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r2#9f770bc9",
+          "status": "✅ Implemented",
+          "requirement": "左上角常驻显示「第 N 天」（Sheet1.csv 第2行 UI内容；主界面.md:75）",
+          "match_text": "左上角常驻显示第N天"
+        },
+        {
+          "#": "26",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r2#e4557344",
+          "status": "⚠️ Partial",
+          "requirement": "点击左上角天数进入主页菜单（Sheet1.csv 第2行 交互方式）",
+          "match_text": "点击左上角天数进入主页菜单"
+        },
+        {
+          "#": "27",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r3#58147926",
+          "status": "✅ Implemented",
+          "requirement": "ESC 菜单，含设置、音频、操作等基础功能（Sheet1.csv 第3行；Sheet2.csv 第28行 当前作用）",
+          "match_text": "ESC菜单含设置音频操作等基础功能"
+        },
+        {
+          "#": "28",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r4#8d6698fa",
+          "status": "❌ Missing",
+          "requirement": "左上角猫爪印图标常驻，点击打开鱼图鉴（Sheet1.csv 第4行）",
+          "match_text": "左上角猫爪印图标常驻点击打开鱼图鉴"
+        },
+        {
+          "#": "29",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r16#99022c1d",
+          "status": "⚠️ Partial",
+          "requirement": "图鉴页面：按 M 打开，鱼种解锁、追踪剪影鱼种（Sheet1.csv 第16行）",
+          "match_text": "图鉴页面按M打开鱼种解锁追踪剪影鱼种"
+        },
+        {
+          "#": "30",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r5#b2d1775d",
+          "status": "✅ Implemented",
+          "requirement": "左下角背包图标常驻，点击打开背包（Sheet1.csv 第5行）",
+          "match_text": "左下角背包图标常驻点击打开背包"
+        },
+        {
+          "#": "31",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r6#5b9702d9",
+          "status": "🔄 Divergent",
+          "requirement": "按 B 弹出背包、再按 B 关闭（Sheet1.csv 第6行 交互方式；主界面.md:95；Sheet2.csv 第8行 按键）",
+          "match_text": "按B弹出背包再按B关闭"
+        },
+        {
+          "#": "32",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r7#1fe8fd63",
+          "status": "⚠️ Partial",
+          "requirement": "屏幕右下角提竿提示「鱼儿咬钩啦！」F 提竿，鱼漂明显下沉时出现（Sheet1.csv 第7行）",
+          "match_text": "屏幕右下角提竿提示鱼儿咬钩啦F提竿鱼漂明显下沉时出现"
+        },
+        {
+          "#": "33",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r8#c86dbab1",
+          "status": "✅ Implemented",
+          "requirement": "提竿倒计时，环形进度／缩短提示（Sheet1.csv 第8行）",
+          "match_text": "提竿倒计时环形进度缩短提示"
+        },
+        {
+          "#": "34",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r9#ee26145d",
+          "status": "✅ Implemented",
+          "requirement": "提竿成功反馈，右下角短暂出现（Sheet1.csv 第9行）",
+          "match_text": "提竿成功反馈右下角短暂出现"
+        },
+        {
+          "#": "35",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r10#6af43562",
+          "status": "✅ Implemented",
+          "requirement": "钓鱼状态下的鱼漂反馈，自动显示（Sheet1.csv 第10行）",
+          "match_text": "钓鱼状态下的鱼漂反馈自动显示"
+        },
+        {
+          "#": "36",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r11#d6df4628",
+          "status": "✅ Implemented",
+          "requirement": "遛鱼状态显示玩家体力，仅钓鱼过程中存在（Sheet1.csv 第11行）",
+          "match_text": "遛鱼状态显示玩家体力仅钓鱼过程中存在"
+        },
+        {
+          "#": "37",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r12#f83e7b06",
+          "status": "✅ Implemented",
+          "requirement": "遛鱼状态显示鱼状态（挣扎、疲劳等）（Sheet1.csv 第12行）",
+          "match_text": "遛鱼状态显示鱼状态挣扎疲劳等"
+        },
+        {
+          "#": "38",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r13#80736107",
+          "status": "✅ Implemented",
+          "requirement": "商店：靠近商人交互打开商品页（Sheet1.csv 第13行）",
+          "match_text": "商店靠近商人交互打开商品页"
+        },
+        {
+          "#": "39",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r14#0ca88a6c",
+          "status": "❌ Missing",
+          "requirement": "首次解锁新鱼种时在钓点附近自动展示鱼种特写（名称、品种介绍、重量，Space 继续）（Sheet1.csv 第14行；主界面.md:121-125；Sheet2",
+          "match_text": "首次解锁新鱼种时在钓点附近自动展示鱼种特写名称品种介绍重量Space继续"
+        },
+        {
+          "#": "40",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#f4ffdc9b",
+          "status": "❌ Missing",
+          "requirement": "他人解锁新鱼种时给同房其他玩家提示，且提示期间仍可移动、交互、继续钓鱼（主界面.md:129）",
+          "match_text": "他人解锁新鱼种时给同房其他玩家提示且提示期间仍可移动交互继续钓鱼"
+        },
+        {
+          "#": "41",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r15#c017a00b",
+          "status": "✅ Implemented",
+          "requirement": "营地装备与仓库：回营地打开，出行装备与仓库浏览（Sheet1.csv 第15行）",
+          "match_text": "营地装备与仓库回营地打开出行装备与仓库浏览"
+        },
+        {
+          "#": "42",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#512ce1d3",
+          "status": "⚠️ Partial",
+          "requirement": "背包装备栏四格：鱼竿、鱼饵、冰壶（窝料）、鱼篓（鱼护）（主界面.md:97）",
+          "match_text": "背包装备栏四格鱼竿鱼饵冰壶窝料鱼篓鱼护"
+        },
+        {
+          "#": "43",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r2#0cff5eaa",
+          "status": "❓ Unverifiable",
+          "requirement": "湖边／抛竿界面，鼠标左键抛竿（Sheet2.csv 第2行 按键；主界面.md:105；钓鱼规则.md:119）",
+          "match_text": "湖边抛竿界面鼠标左键抛竿"
+        },
+        {
+          "#": "44",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#a3bdc915",
+          "status": "❓ Unverifiable",
+          "requirement": "抛竿后可放置鱼竿，按 E 确认位置、放置后进入等待钓获（主界面.md:107,109；Sheet2.csv 第9行）",
+          "match_text": "抛竿后可放置鱼竿按E确认位置放置后进入等待钓获"
+        },
+        {
+          "#": "45",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r4#34577fd5",
+          "status": "❓ Unverifiable",
+          "requirement": "遛鱼状态：按住鼠标左键收线、按住鼠标右键放线（Sheet2.csv 第4行、第7行）",
+          "match_text": "遛鱼状态按住鼠标左键收线按住鼠标右键放线"
+        },
+        {
+          "#": "46",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r20#44e412e2",
+          "status": "❓ Unverifiable",
+          "requirement": "抄鱼键（Sheet2.csv 第20行写 Space；以钓鱼规则.md:246、353 为准＝F）",
+          "match_text": "抄鱼键"
+        },
+        {
+          "#": "47",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r15#9f1e47fd",
+          "status": "🔄 Divergent",
+          "requirement": "鱼落地后按 F 拾取（Sheet2.csv 第15行；钓鱼规则.md:256）",
+          "match_text": "鱼落地后按F拾取"
+        },
+        {
+          "#": "48",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r11#cc8dc2bf",
+          "status": "❌ Missing",
+          "requirement": "嘴里叼着鱼时：F 放下鱼、长按 E 吃掉鱼（Sheet2.csv 第11行、第16行）",
+          "match_text": "嘴里叼着鱼时F放下鱼长按E吃掉鱼"
+        },
+        {
+          "#": "49",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r17#23741596",
+          "status": "❌ Missing",
+          "requirement": "F 叼起鱼护、携带鱼护时 F 放下鱼护（Sheet2.csv 第17行、第18行；主界面.md:155,157）",
+          "match_text": "F叼起鱼护携带鱼护时F放下鱼护"
+        },
+        {
+          "#": "50",
+          "key": "PjD4w3XrJi4UT4k3fthcTCOrnhf#玩家靠近湖面#c82c3404",
+          "status": "❌ Missing",
+          "requirement": "玩家靠近湖面时：附近有窝则屏幕右下角显示当前区域窝点信息，附近无窝则不显示任何提示（交互.md:68-76）",
+          "match_text": "玩家靠近湖面时附近有窝则屏幕右下角显示当前区域窝点信息附近无窝则不显示任何提示"
+        },
+        {
+          "#": "51",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#64051329",
+          "status": "❌ Missing",
+          "requirement": "按 T 查看鱼窝范围／查询当前鱼窝（主界面.md:99；Sheet2.csv 第22行）",
+          "match_text": "按T查看鱼窝范围查询当前鱼窝"
+        },
+        {
+          "#": "52",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r23#b2c3532d",
+          "status": "❌ Missing",
+          "requirement": "按 T 在鱼图鉴里追踪鱼类（Sheet2.csv 第23行）",
+          "match_text": "按T在鱼图鉴里追踪鱼类"
+        },
+        {
+          "#": "53",
+          "key": "PjD4w3XrJi4UT4k3fthcTCOrnhf#交互鱼缸鱼护取鱼#3392da6f",
+          "status": "❌ Missing",
+          "requirement": "小猫靠近鱼缸／鱼护进入交互范围时，镜头轻微转向目标（交互.md:17）",
+          "match_text": "小猫靠近鱼缸鱼护进入交互范围时镜头轻微转向目标"
+        },
+        {
+          "#": "54",
+          "key": "PjD4w3XrJi4UT4k3fthcTCOrnhf#交互鱼缸鱼护取鱼#27952e02",
+          "status": "⚠️ Partial",
+          "requirement": "可交互物体出现淡淡描边高亮效果（交互.md:18）",
+          "match_text": "可交互物体出现淡淡描边高亮效果"
+        },
+        {
+          "#": "55",
+          "key": "PjD4w3XrJi4UT4k3fthcTCOrnhf#交互鱼缸鱼护取鱼#fc9cf3b5",
+          "status": "⚠️ Partial",
+          "requirement": "靠近鱼缸／鱼护显示提示「【F】取出鱼」（交互.md:20-21）",
+          "match_text": "靠近鱼缸鱼护显示提示F取出鱼"
+        },
+        {
+          "#": "56",
+          "key": "PjD4w3XrJi4UT4k3fthcTCOrnhf#交互鱼缸鱼护取鱼#a33f7366",
+          "status": "❌ Missing",
+          "requirement": "按下取鱼键后播放取鱼动作、镜头推进到鱼的特写（交互.md:23）",
+          "match_text": "按下取鱼键后播放取鱼动作镜头推进到鱼的特写"
+        },
+        {
+          "#": "57",
+          "key": "PjD4w3XrJi4UT4k3fthcTCOrnhf#交互鱼缸鱼护取鱼#436348b6",
+          "status": "🔄 Divergent",
+          "requirement": "取鱼后左上角显示鱼的信息（名称、品种、重量）（交互.md:24）",
+          "match_text": "取鱼后左上角显示鱼的信息名称品种重量"
+        },
+        {
+          "#": "58",
+          "key": "PjD4w3XrJi4UT4k3fthcTCOrnhf#交互神像献祭#fa54339f",
+          "status": "❌ Missing",
+          "requirement": "与石像互动显示提示「【F】献给圣猫」（交互.md:36-37）",
+          "match_text": "与石像互动显示提示F献给圣猫"
+        },
+        {
+          "#": "59",
+          "key": "PjD4w3XrJi4UT4k3fthcTCOrnhf#交互神像献祭#429a2084",
+          "status": "❌ Missing",
+          "requirement": "献祭呈现要区分三个量：当日任务点数、缸内可献点数、世界进度（交互.md:41）",
+          "match_text": "献祭呈现要区分三个量当日任务点数缸内可献点数世界进度"
+        },
+        {
+          "#": "60",
+          "key": "PjD4w3XrJi4UT4k3fthcTCOrnhf#交互神像献祭#5e78aa23",
+          "status": "❌ Missing",
+          "requirement": "世界进度平时隐藏，靠近神像或打开界面时查看（交互.md:41）",
+          "match_text": "世界进度平时隐藏靠近神像或打开界面时查看"
+        },
+        {
+          "#": "61",
+          "key": "PjD4w3XrJi4UT4k3fthcTCOrnhf#交互篝火#301d0651",
+          "status": "❌ Missing",
+          "requirement": "篝火：夜晚靠近出现柔和光效提示，显示【F】坐下，坐下进入松弛状态、别的猫凑过来叠成一堆（交互.md:49-55）",
+          "match_text": "篝火夜晚靠近出现柔和光效提示显示F坐下坐下进入松弛状态别的猫凑过来叠成一堆"
+        },
+        {
+          "#": "62",
+          "key": "PjD4w3XrJi4UT4k3fthcTCOrnhf#玩家靠近湖面#e76c2935",
+          "status": "🔄 Divergent",
+          "requirement": "玩家靠近湖面时按 F 钓鱼（交互.md:66）",
+          "match_text": "玩家靠近湖面时按F钓鱼"
+        },
+        {
+          "#": "63",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r10#e38eca4a",
+          "status": "✅ Implemented",
+          "requirement": "E 键：靠近鱼护查看鱼护、靠近营地鱼缸放入鱼、鱼缸交互完成后放回鱼护、商人对话确认选择（Sheet2.csv 第10行、第12行、第13行、第14行）",
+          "match_text": "E键靠近鱼护查看鱼护靠近营地鱼缸放入鱼鱼缸交互完成后放回鱼护商人对话确认选择"
+        },
+        {
+          "#": "64",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r28#332cf411",
+          "status": "✅ Implemented",
+          "requirement": "Esc 在游戏中打开或关闭派对菜单（Sheet2.csv 第28行）",
+          "match_text": "Esc在游戏中打开或关闭派对菜单"
+        },
+        {
+          "#": "65",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r31#60de1c40",
+          "status": "✅ Implemented",
+          "requirement": "Esc 在商店对话、背包、设置页返回上一层（Sheet2.csv 第31行、第33行；背包页同理）",
+          "match_text": "Esc在商店对话背包设置页返回上一层"
+        },
+        {
+          "#": "66",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r27#c5e9f4ef",
+          "status": "❌ Missing",
+          "requirement": "鱼缸放鱼界面：Tab 进入「选择放入」、Enter 全部放入／确认当前选择（Sheet2.csv 第27行、第36行）",
+          "match_text": "鱼缸放鱼界面Tab进入选择放入Enter全部放入确认当前选择"
+        },
+        {
+          "#": "67",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#9e908b03",
+          "status": "❌ Missing",
+          "requirement": "派对菜单项：派对设置（主界面.md:79）",
+          "match_text": "派对菜单项派对设置"
+        },
+        {
+          "#": "68",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#29ebfba0",
+          "status": "⚠️ Partial",
+          "requirement": "派对菜单项：组队管理（队伍 x/4、等待队列、Steam 好友邀请、仅好友／仅邀请、复制房间密码）（主界面.md:79,81）",
+          "match_text": "派对菜单项组队管理队伍x等待队列Steam好友邀请仅好友仅邀请复制房间密码"
+        },
+        {
+          "#": "69",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#c24742b8",
+          "status": "❌ Missing",
+          "requirement": "派对菜单项：申请暂停，中途暂停需经房主同意（主界面.md:77,79）",
+          "match_text": "派对菜单项申请暂停中途暂停需经房主同意"
+        },
+        {
+          "#": "70",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#41a6e5c4",
+          "status": "❌ Missing",
+          "requirement": "派对菜单项：钓鱼图鉴入口（主界面.md:79）",
+          "match_text": "派对菜单项钓鱼图鉴入口"
+        },
+        {
+          "#": "71",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#a1be7a56",
+          "status": "⚠️ Partial",
+          "requirement": "鱼护界面操作：收、放、丢弃、取鱼（主界面.md:149）",
+          "match_text": "鱼护界面操作收放丢弃取鱼"
+        },
+        {
+          "#": "72",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#6ada1e51",
+          "status": "⚠️ Partial",
+          "requirement": "鱼缸界面操作：放生、取鱼、放入鱼护（主界面.md:163）",
+          "match_text": "鱼缸界面操作放生取鱼放入鱼护"
+        },
+        {
+          "#": "73",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#af8081b6",
+          "status": "⚠️ Partial",
+          "requirement": "鱼缸展示鱼的重量与数量 x/容量（主界面.md:161）",
+          "match_text": "鱼缸展示鱼的重量与数量x容量"
+        },
+        {
+          "#": "74",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#2f129034",
+          "status": "❌ Missing",
+          "requirement": "左上角同时显示当前时段（清晨／白天／夜晚）（主界面.md:75）",
+          "match_text": "左上角同时显示当前时段清晨白天夜晚"
+        },
+        {
+          "#": "75",
+          "key": "OEqkw02J2iHso9keQ1Yc7Wsdnpe#主界面#b7c669a4",
+          "status": "⚠️ Partial",
+          "requirement": "钓鱼界面左下角常驻显示鱼竿耐久（主界面.md:119「左下角标注鱼竿耐久780」，与左上角体力同屏）",
+          "match_text": "钓鱼界面左下角常驻显示鱼竿耐久"
+        },
+        {
+          "#": "76",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r15#bf6e5353",
+          "status": "❌ Missing",
+          "requirement": "营地装备与仓库界面附带「追踪鱼轻提示」（Sheet1.csv 第15行 备注）",
+          "match_text": "营地装备与仓库界面附带追踪鱼轻提示"
+        },
+        {
+          "#": "77",
+          "key": "UZ3ywmA0WiN8MKkSyOrcvuvknDb#r7#72ab7e28",
+          "status": "🔄 Divergent",
+          "requirement": "提竿按键（Sheet1.csv 第7行写「F提竿」；Sheet2.csv 第3行写「鼠标左键，鱼儿咬钩，提竿」；钓鱼规则.md:350 只给了「抛竿＝左键点水面",
+          "match_text": "提竿按键"
+        }
+      ],
+      "code_only": [],
+      "code_only_present": false,
+      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "docs": [
+        {
+          "file": "GDD 系统分册/ui/Sheet1.csv",
+          "revision": 369
+        },
+        {
+          "file": "GDD 系统分册/ui/Sheet2.csv",
+          "revision": 369
+        },
+        {
+          "file": "GDD 系统分册/ui/主界面.md",
+          "revision_id": 351
+        },
+        {
+          "file": "GDD 系统分册/交互.md",
+          "revision_id": 76
+        }
+      ],
+      "code": [
+        "Source/Catfishing/UI/**",
+        "Source/Catfishing/Interaction/",
+        "Source/Catfishing/Input/",
+        "Config/DefaultInput.ini",
+        "Content/UI/",
+        "Content/Blueprint/"
+      ],
+      "scope": "全篇。Interface 层：WBP 蓝图控件查不了，但 C++ Widget/Subsystem/View DTO 与 Config/DefaultInput.ini 可查。两页均自标草稿，键位以钓鱼规则为准（抄鱼 F、抛竿左键）。工程 Docs/Development/UI_WBP拼装接口清单.md 只作参考。",
+      "refs": [],
+      "total": 77,
+      "implemented": 23,
+      "partial": 19,
+      "missing": 26,
+      "divergent": 5,
+      "unverifiable": 4
+    },
+    "印记与图鉴": {
+      "rows": [
+        {
+          "#": "1",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#1#87a3873f",
+          "status": "✅ Implemented",
+          "requirement": "各册抛出的「印记事件」有统一投递口，本册只接收、成像、入册，不定义玩法（印记.md:69、印记.md:169）",
+          "match_text": "各册抛出的印记事件有统一投递口本册只接收成像入册不定义玩法"
+        },
+        {
+          "#": "2",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#1#445b3488",
+          "status": "🔄 Divergent",
+          "requirement": "触发形态＝清单式起步：只有清单内的事件可产出印记，本册有权砍（印记.md:88、印记.md:90）",
+          "match_text": "触发形态清单式起步只有清单内的事件可产出印记本册有权砍"
+        },
+        {
+          "#": "3",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#1#1a6a6a6b",
+          "status": "✅ Implemented",
+          "requirement": "已拍定必进：偷鱼被抓，双方入册（印记.md:74、印记.md:85）",
+          "match_text": "已拍定必进偷鱼被抓双方入册"
+        },
+        {
+          "#": "4",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#1#46c8bc97",
+          "status": "✅ Implemented",
+          "requirement": "失败瞬间（落水扑空／断竿／晕倒／被整空竿）挂起、先不拍（印记.md:85、印记.md:241）",
+          "match_text": "失败瞬间落水扑空断竿晕倒被整空竿挂起先不拍"
+        },
+        {
+          "#": "5",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#3.2#82f18d44",
+          "status": "❌ Missing",
+          "requirement": "单局印记条数上限，宁缺毋滥（印记.md:160、印记.md:191）",
+          "match_text": "单局印记条数上限宁缺毋滥"
+        },
+        {
+          "#": "6",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#8#d47b900b",
+          "status": "🔄 Divergent",
+          "requirement": "首钓新鱼种抛印记（举鱼定格＋图鉴新页角标）（图鉴.md:149、印记.md:75）",
+          "match_text": "首钓新鱼种抛印记举鱼定格图鉴新页角标"
+        },
+        {
+          "#": "7",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#1#54f68d19",
+          "status": "✅ Implemented",
+          "requirement": "合捕／巨型鱼合影＝共同印记，自动分发给所有参与者（印记.md:73、印记.md:136）",
+          "match_text": "合捕巨型鱼合影共同印记自动分发给所有参与者"
+        },
+        {
+          "#": "8",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#5#4653dd94",
+          "status": "⚠️ Partial",
+          "requirement": "在场判定以「入镜」为准，围观入镜者也分共同印记，宁严勿宽（印记.md:136、印记.md:138）",
+          "match_text": "在场判定以入镜为准围观入镜者也分共同印记宁严勿宽"
+        },
+        {
+          "#": "9",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#5#95767686",
+          "status": "⚠️ Partial",
+          "requirement": "本人可一键隐藏任意一张，只藏自己那份、可撤销、不动别人（印记.md:136）",
+          "match_text": "本人可一键隐藏任意一张只藏自己那份可撤销不动别人"
+        },
+        {
+          "#": "10",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#3.2#9424cc78",
+          "status": "⚠️ Partial",
+          "requirement": "共同印记必须是同一张照片、同一帧；分发在事件结算时点，掉线重连后补发（印记.md:161）",
+          "match_text": "共同印记必须是同一张照片同一帧分发在事件结算时点掉线重连后补发"
+        },
+        {
+          "#": "11",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#3#d7273b28",
+          "status": "❌ Missing",
+          "requirement": "局内相册按时间线排本局印记，等待期随手可翻（印记.md:112、印记.md:56）",
+          "match_text": "局内相册按时间线排本局印记等待期随手可翻"
+        },
+        {
+          "#": "12",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#3#8d3e2ad4",
+          "status": "✅ Implemented",
+          "requirement": "相册是个人的，公共回看只走篝火轮播一个口子，不开互翻（印记.md:112）",
+          "match_text": "相册是个人的公共回看只走篝火轮播一个口子不开互翻"
+        },
+        {
+          "#": "13",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#4#3c8e88b5",
+          "status": "⚠️ Partial",
+          "requirement": "篝火每晚轮播：营地持仪式流程，本册持轮播内容（印记.md:122、印记.md:124）",
+          "match_text": "篝火每晚轮播营地持仪式流程本册持轮播内容"
+        },
+        {
+          "#": "14",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#4#2c43c22d",
+          "status": "❌ Missing",
+          "requirement": "轮播节选规则：每人至少入镜一张、高光与翻车穿插、最后收在全员合影（印记.md:124）",
+          "match_text": "轮播节选规则每人至少入镜一张高光与翻车穿插最后收在全员合影"
+        },
+        {
+          "#": "15",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#4#7737de7f",
+          "status": "❓ Unverifiable",
+          "requirement": "轮播可跳过，跳过的人不觉得错过关键（印记.md:124）",
+          "match_text": "轮播可跳过跳过的人不觉得错过关键"
+        },
+        {
+          "#": "16",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#4#0875da36",
+          "status": "⚠️ Partial",
+          "requirement": "轮播结束自动拍「今日全员合影」，每局固定最后一张，同时是跨局相册该局封面（印记.md:130）",
+          "match_text": "轮播结束自动拍今日全员合影每局固定最后一张同时是跨局相册该局封面"
+        },
+        {
+          "#": "17",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#4#ccb85ceb",
+          "status": "✅ Implemented",
+          "requirement": "单人局照样成立：一只猫守着篝火翻自己的相纸（印记.md:124）",
+          "match_text": "单人局照样成立一只猫守着篝火翻自己的相纸"
+        },
+        {
+          "#": "18",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#6#b3a1c5fe",
+          "status": "⚠️ Partial",
+          "requirement": "跨局个人相册持久保存，按局分组、一局一页，封面是该局全员合影（印记.md:148）",
+          "match_text": "跨局个人相册持久保存按局分组一局一页封面是该局全员合影"
+        },
+        {
+          "#": "19",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#6#05bfd0aa",
+          "status": "🔄 Divergent",
+          "requirement": "印记在当天入夜才存进个人相册（印记.md:148）",
+          "match_text": "印记在当天入夜才存进个人相册"
+        },
+        {
+          "#": "20",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#6#10fd8561",
+          "status": "❓ Unverifiable",
+          "requirement": "照片忠实记录拍摄当时的猫外观与装备（印记.md:148）",
+          "match_text": "照片忠实记录拍摄当时的猫外观与装备"
+        },
+        {
+          "#": "21",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#1#64752577",
+          "status": "❓ Unverifiable",
+          "requirement": "抓拍只用轻快门声＋相纸飘入，不弹窗、不暂停、不抢镜头（印记.md:47、印记.md:199）",
+          "match_text": "抓拍只用轻快门声相纸飘入不弹窗不暂停不抢镜头"
+        },
+        {
+          "#": "22",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#1#72db8199",
+          "status": "✅ Implemented",
+          "requirement": "不给印记数值价值：不能卖、不换资源、不加成（印记.md:50、印记.md:167）",
+          "match_text": "不给印记数值价值不能卖不换资源不加成"
+        },
+        {
+          "#": "23",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#1#9b05a89e",
+          "status": "✅ Implemented",
+          "requirement": "不做成就系统、不做拍照评分与排名（印记.md:45-46）",
+          "match_text": "不做成就系统不做拍照评分与排名"
+        },
+        {
+          "#": "24",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#1#934fbb60",
+          "status": "✅ Implemented",
+          "requirement": "不做外部分享与导出图片（印记.md:49、印记.md:168）",
+          "match_text": "不做外部分享与导出图片"
+        },
+        {
+          "#": "25",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#1#064c8323",
+          "status": "⚠️ Partial",
+          "requirement": "个人图鉴跨局跟人走，是仅有的两个跨局持久载体之一（图鉴.md:21、图鉴.md:166）",
+          "match_text": "个人图鉴跨局跟人走是仅有的两个跨局持久载体之一"
+        },
+        {
+          "#": "26",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#2#e9e221e7",
+          "status": "❌ Missing",
+          "requirement": "局内图鉴＝营地里的公共板子：全队钓到自动上页、盖登记归属爪印、只增不减、不外流、局末随营地清空（图鉴.md:68-80）",
+          "match_text": "局内图鉴营地里的公共板子全队钓到自动上页盖登记归属爪印只增不减不外流局末随营地清空"
+        },
+        {
+          "#": "27",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#3#f7d907b3",
+          "status": "🔄 Divergent",
+          "requirement": "鱼的三层解锁：线索层／收集层／知识层（图鉴.md:86-92）",
+          "match_text": "鱼的三层解锁线索层收集层知识层"
+        },
+        {
+          "#": "28",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#3#cb11407e",
+          "status": "⚠️ Partial",
+          "requirement": "线索层触发：上钩成立就揭剪影，之后跑掉／断竿／放弃都不回滚（图鉴.md:98；设计修改记录.md:523、:571）",
+          "match_text": "线索层触发上钩成立就揭剪影之后跑掉断竿放弃都不回滚"
+        },
+        {
+          "#": "29",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#3#8e3ebc46",
+          "status": "❌ Missing",
+          "requirement": "线索层触发：空钓（用了饵没钓上来）揭开当时咬钩失败的那条（图鉴.md:99）",
+          "match_text": "线索层触发空钓用了饵没钓上来揭开当时咬钩失败的那条"
+        },
+        {
+          "#": "30",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#3#1a0b8db3",
+          "status": "❌ Missing",
+          "requirement": "线索层触发：错饵被拒（鱼影绕一圈摆尾走）揭剪影（图鉴.md:100）",
+          "match_text": "线索层触发错饵被拒鱼影绕一圈摆尾走揭剪影"
+        },
+        {
+          "#": "31",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#3#84d110d7",
+          "status": "⚠️ Partial",
+          "requirement": "剪影跟人走：已揭开的线索层跨局保存，新人开局满图是影（图鉴.md:103）",
+          "match_text": "剪影跟人走已揭开的线索层跨局保存新人开局满图是影"
+        },
+        {
+          "#": "32",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#3#2b048f25",
+          "status": "✅ Implemented",
+          "requirement": "分层只单向推进，不因后续失败回滚（图鉴.md:98、图鉴.md:126）",
+          "match_text": "分层只单向推进不因后续失败回滚"
+        },
+        {
+          "#": "33",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#3#be95b1cd",
+          "status": "⚠️ Partial",
+          "requirement": "收集层首次钓到解锁，给名字／彩色立绘／出没区域／个人最佳重量（图鉴.md:91、图鉴.md:132）",
+          "match_text": "收集层首次钓到解锁给名字彩色立绘出没区域个人最佳重量"
+        },
+        {
+          "#": "34",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#3#3f39d43c",
+          "status": "✅ Implemented",
+          "requirement": "个人最佳重量此后每钓一条刷新一次（图鉴.md:91）",
+          "match_text": "个人最佳重量此后每钓一条刷新一次"
+        },
+        {
+          "#": "35",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#5#de1ce3e2",
+          "status": "⚠️ Partial",
+          "requirement": "首次遇上的条件回显（首次记录时冻结，后续破纪录不覆盖）（图鉴.md:132）",
+          "match_text": "首次遇上的条件回显首次记录时冻结后续破纪录不覆盖"
+        },
+        {
+          "#": "36",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#3#6247a77a",
+          "status": "❌ Missing",
+          "requirement": "知识层：自己吃过才解锁，给吃鱼效果（限时 buff 与经验值）（图鉴.md:92）",
+          "match_text": "知识层自己吃过才解锁给吃鱼效果限时buff与经验值"
+        },
+        {
+          "#": "37",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#4#280b918c",
+          "status": "❌ Missing",
+          "requirement": "知识层不共享：谁吃谁记，被偷走吃掉记进小偷的图鉴（图鉴.md:124）",
+          "match_text": "知识层不共享谁吃谁记被偷走吃掉记进小偷的图鉴"
+        },
+        {
+          "#": "38",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#4#8602681e",
+          "status": "❌ Missing",
+          "requirement": "各层字段按鱼配置：没有的信息不存在、不留「待解锁」空位；不可食用的咸鱼与湖心巨影没有知识层（图鉴.md:122，09-08 李前臻拍）",
+          "match_text": "各层字段按鱼配置没有的信息不存在不留待解锁空位不可食用的咸鱼与湖心巨影没有知识层"
+        },
+        {
+          "#": "39",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#4#09ffffd0",
+          "status": "🔄 Divergent",
+          "requirement": "收集层归上钩者一人（成功收鱼时写入上钩者的图鉴）（图鉴.md:111；设计修改记录.md:571、:609）",
+          "match_text": "收集层归上钩者一人成功收鱼时写入上钩者的图鉴"
+        },
+        {
+          "#": "40",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#4#31084d4b",
+          "status": "✅ Implemented",
+          "requirement": "合力拉竿的猫与抄网命中者只进演出贡献名单（合影／头衔），不登记、不刷新个人最佳重量（图鉴.md:116-117）",
+          "match_text": "合力拉竿的猫与抄网命中者只进演出贡献名单合影头衔不登记不刷新个人最佳重量"
+        },
+        {
+          "#": "41",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#4#c5561e69",
+          "status": "✅ Implemented",
+          "requirement": "打窝的猫、围观起哄的猫、拽尾巴救援的猫都不算（图鉴.md:118-120）",
+          "match_text": "打窝的猫围观起哄的猫拽尾巴救援的猫都不算"
+        },
+        {
+          "#": "42",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#4#560e52fa",
+          "status": "✅ Implemented",
+          "requirement": "重量一律按真实值记录，无组队加成（图鉴.md:126）",
+          "match_text": "重量一律按真实值记录无组队加成"
+        },
+        {
+          "#": "43",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#4#b173006a",
+          "status": "✅ Implemented",
+          "requirement": "记完之后被献祭／被吃掉／被偷走／局末清空都不影响已记内容（图鉴.md:126、图鉴.md:72）",
+          "match_text": "记完之后被献祭被吃掉被偷走局末清空都不影响已记内容"
+        },
+        {
+          "#": "44",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#2#ed210f80",
+          "status": "⚠️ Partial",
+          "requirement": "局内可直接翻别人的个人图鉴比收藏，默认开放、不做排名（图鉴.md:78、图鉴.md:32）",
+          "match_text": "局内可直接翻别人的个人图鉴比收藏默认开放不做排名"
+        },
+        {
+          "#": "45",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#3#89dcd492",
+          "status": "❌ Missing",
+          "requirement": "未解锁＝纯黑影，开局满图是影，玩家知道湖里有多少种（图鉴.md:94、图鉴.md:130）",
+          "match_text": "未解锁纯黑影开局满图是影玩家知道湖里有多少种"
+        },
+        {
+          "#": "46",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#3#dcadea86",
+          "status": "❌ Missing",
+          "requirement": "已开页里没到条件的字段一律写「待解锁」，不显示灰掉的假数值（图鉴.md:84、图鉴.md:41、图鉴.md:171）",
+          "match_text": "已开页里没到条件的字段一律写待解锁不显示灰掉的假数值"
+        },
+        {
+          "#": "47",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#3#95939dee",
+          "status": "❌ Missing",
+          "requirement": "分布线索呈现：剪影一揭开就摊开窝料与鱼饵偏好、出现条件、水域与时段（图鉴.md:90、图鉴.md:137）",
+          "match_text": "分布线索呈现剪影一揭开就摊开窝料与鱼饵偏好出现条件水域与时段"
+        },
+        {
+          "#": "48",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#3#cd7dd606",
+          "status": "✅ Implemented",
+          "requirement": "剪影只给信息、不当闸门：鱼在不在水里与剪影揭没揭开无关（图鉴.md:105）",
+          "match_text": "剪影只给信息不当闸门鱼在不在水里与剪影揭没揭开无关"
+        },
+        {
+          "#": "49",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#1#0a63134a",
+          "status": "✅ Implemented",
+          "requirement": "图鉴只记录不发奖励、不排名、不做任务列表（图鉴.md:38-42）",
+          "match_text": "图鉴只记录不发奖励不排名不做任务列表"
+        },
+        {
+          "#": "50",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#1#e1b52217",
+          "status": "❌ Missing",
+          "requirement": "道具也进图鉴（竿／漂／抄网／鱼护／饵／窝料等），不设线索层、无「吃」这一层（图鉴.md:63）",
+          "match_text": "道具也进图鉴竿漂抄网鱼护饵窝料等不设线索层无吃这一层"
+        },
+        {
+          "#": "51",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#7#7d8b73cf",
+          "status": "❓ Unverifiable",
+          "requirement": "猫味演出：翻页拨爪、入册尾巴抖、破纪录拍掉旧数字、多猫同看、板上新页（图鉴.md:141-145）",
+          "match_text": "猫味演出翻页拨爪入册尾巴抖破纪录拍掉旧数字多猫同看板上新页"
+        },
+        {
+          "#": "52",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#7#0b0add95",
+          "status": "⚠️ Partial",
+          "requirement": "入册反馈两层：当下的轻提示（不打断庆祝）＋回图鉴时的开页演出（图鉴.md:194）",
+          "match_text": "入册反馈两层当下的轻提示不打断庆祝回图鉴时的开页演出"
+        },
+        {
+          "#": "53",
+          "key": "Kiz5wpRKRiIFF6kfjhOcOmwrncQ#3#57d3bf7d",
+          "status": "🔄 Divergent",
+          "requirement": "「当时看不清」是线索层成立的前提：水里的鱼影只给存在感不给答案，看不出是哪一种（图鉴.md:107）",
+          "match_text": "当时看不清是线索层成立的前提水里的鱼影只给存在感不给答案看不出是哪一种"
+        },
+        {
+          "#": "54",
+          "key": "EPi4wjG5IigRTwkH8stcGWoUnUh#2#eaa19002",
+          "status": "❓ Unverifiable",
+          "requirement": "构图与拍摄：自动构图追动作高潮帧、出洋相构图、全员合影自动站位（印记.md:100、印记.md:106）",
+          "match_text": "构图与拍摄自动构图追动作高潮帧出洋相构图全员合影自动站位"
+        }
+      ],
+      "code_only": [],
+      "code_only_present": false,
+      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "docs": [
+        {
+          "file": "GDD 系统分册/印记.md",
+          "revision_id": 84
+        },
+        {
+          "file": "GDD 系统分册/图鉴.md",
+          "revision_id": 132
+        }
+      ],
+      "code": [
+        "Source/Catfishing/Collection/",
+        "Source/Catfishing/Profile/",
+        "Source/Catfishing/UI/Collection/",
+        "Config/DefaultGame.ini",
+        "Scripts/verify_data_world_profile_album.ps1"
+      ],
+      "scope": "全篇。09-08 裁：图鉴收集层归上钩者一人，合力与抄网只进演出贡献名单。",
+      "refs": [],
+      "total": 54,
+      "implemented": 17,
+      "partial": 13,
+      "missing": 13,
+      "divergent": 6,
+      "unverifiable": 5
+    },
+    "商店": {
+      "rows": [
+        {
+          "#": "1",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#1.4#9f29b401",
+          "status": "✅ Implemented",
+          "requirement": "设计禁区：不做真钱入口（金币只在单局内流转）、不做消费审批流程、不设生人局限花钱开关（商店.md:43-46）",
+          "match_text": "设计禁区不做真钱入口金币只在单局内流转不做消费审批流程不设生人局限花钱开关"
+        },
+        {
+          "#": "2",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#1.1#9be8c090",
+          "status": "✅ Implemented",
+          "requirement": "金币为全队共用的单一钱包，无个人分账，收入与支出对全队可见（商店.md:25、81）",
+          "match_text": "金币为全队共用的单一钱包无个人分账收入与支出对全队可见"
+        },
+        {
+          "#": "3",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#1.1#4e364534",
+          "status": "✅ Implemented",
+          "requirement": "钓到的鱼有卖／吃／献三条互相竞争的处置出口（商店.md:23、50）",
+          "match_text": "钓到的鱼有卖吃献三条互相竞争的处置出口"
+        },
+        {
+          "#": "4",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#2#a8397ca3",
+          "status": "⚠️ Partial",
+          "requirement": "任何玩家出售任何来源的鱼——自己的鱼、缸里的鱼和偷来的鱼——所得统一进入公款（商店.md:52、67）",
+          "match_text": "任何玩家出售任何来源的鱼自己的鱼缸里的鱼和偷来的鱼所得统一进入公款"
+        },
+        {
+          "#": "5",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.1#0f14f028",
+          "status": "🔄 Divergent",
+          "requirement": "白天不可献祭，夜晚由全队统一开启献祭（商店.md:67）",
+          "match_text": "白天不可献祭夜晚由全队统一开启献祭"
+        },
+        {
+          "#": "6",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#2#b58da162",
+          "status": "⚠️ Partial",
+          "requirement": "用公款购买新竿、鱼饵、鱼漂、道具（商店.md:52、71）",
+          "match_text": "用公款购买新竿鱼饵鱼漂道具"
+        },
+        {
+          "#": "7",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.2#9b03260c",
+          "status": "❌ Missing",
+          "requirement": "鱼缸容量升级＝唯一设施类商品：不进团队装备库、直接作用在营地那口缸上、按档位买、随局清空；初始 10 条，两档 20／30，价 300／700 金币（商店.md",
+          "match_text": "鱼缸容量升级唯一设施类商品不进团队装备库直接作用在营地那口缸上按档位买随局清空初始条两档价金币"
+        },
+        {
+          "#": "8",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.2#a7ef0198",
+          "status": "✅ Implemented",
+          "requirement": "使用公款支付，商品明码标价且不可讲价（商店.md:71）",
+          "match_text": "使用公款支付商品明码标价且不可讲价"
+        },
+        {
+          "#": "9",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#2#3a10cc7d",
+          "status": "⚠️ Partial",
+          "requirement": "每笔购买向全队广播，并记录购买者、商品、价格和购买时刻，供 Playtest 回看（商店.md:52、97）",
+          "match_text": "每笔购买向全队广播并记录购买者商品价格和购买时刻供Playtest回看"
+        },
+        {
+          "#": "10",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#2#96511e74",
+          "status": "⚠️ Partial",
+          "requirement": "购买物进入团队装备库：竿和漂放入公共架，其他备装自取，消耗品从公库领取（商店.md:53、71）",
+          "match_text": "购买物进入团队装备库竿和漂放入公共架其他备装自取消耗品从公库领取"
+        },
+        {
+          "#": "11",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.2#6c496649",
+          "status": "🔄 Divergent",
+          "requirement": "消耗品单次携带上限以「钓鱼系统」2.7 为准（商店.md:71）",
+          "match_text": "消耗品单次携带上限以钓鱼系统为准"
+        },
+        {
+          "#": "12",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.2#7da8c0a5",
+          "status": "⚠️ Partial",
+          "requirement": "特殊饵与特殊道具每日限量进货（商店.md:73）",
+          "match_text": "特殊饵与特殊道具每日限量进货"
+        },
+        {
+          "#": "13",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.2#6c5d7eda",
+          "status": "⚠️ Partial",
+          "requirement": "装备每日刷新（货架每天换一轮）（商店.md:73、127）",
+          "match_text": "装备每日刷新货架每天换一轮"
+        },
+        {
+          "#": "14",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.2#41f78aef",
+          "status": "⚠️ Partial",
+          "requirement": "基础竿和基础补给永不缺货；1 级竿可免费自取，普通饵提供免费保底（商店.md:73）",
+          "match_text": "基础竿和基础补给永不缺货级竿可免费自取普通饵提供免费保底"
+        },
+        {
+          "#": "15",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.2#851e14f4",
+          "status": "⚠️ Partial",
+          "requirement": "鱼竿断裂后该鱼竿直接消失，系统不自动返还、不自动替换、不回退为 1 级竿（商店.md:75；DeiSFL.csv 第7行 首轮通过条件）",
+          "match_text": "鱼竿断裂后该鱼竿直接消失系统不自动返还不自动替换不回退为级竿"
+        },
+        {
+          "#": "16",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.2#dafba75a",
+          "status": "❌ Missing",
+          "requirement": "赠送与丢弃统一为「扔下」行为（商店.md:77）",
+          "match_text": "赠送与丢弃统一为扔下行为"
+        },
+        {
+          "#": "17",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.2#7e4582e3",
+          "status": "❓ Unverifiable",
+          "requirement": "水面设空气墙，物品不能丢入湖中（商店.md:77）",
+          "match_text": "水面设空气墙物品不能丢入湖中"
+        },
+        {
+          "#": "18",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.2#626929e9",
+          "status": "❌ Missing",
+          "requirement": "落地后至次日清晨仍无人拾取的物品，自动回收到营地（商店.md:77）",
+          "match_text": "落地后至次日清晨仍无人拾取的物品自动回收到营地"
+        },
+        {
+          "#": "19",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.1#0eb0885d",
+          "status": "✅ Implemented",
+          "requirement": "除结算夜收摊后，商人猫全天营业持续收鱼（含夜晚）（商店.md:63、87）",
+          "match_text": "除结算夜收摊后商人猫全天营业持续收鱼含夜晚"
+        },
+        {
+          "#": "20",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.1#f79169d5",
+          "status": "⚠️ Partial",
+          "requirement": "收购价以鱼体重为主要锚点（商店.md:63、128）",
+          "match_text": "收购价以鱼体重为主要锚点"
+        },
+        {
+          "#": "21",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.1#a439bdd3",
+          "status": "❌ Missing",
+          "requirement": "窝料轴可作为收购价修正系数（商店.md:63）",
+          "match_text": "窝料轴可作为收购价修正系数"
+        },
+        {
+          "#": "22",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.1#ee3bf79e",
+          "status": "⚠️ Partial",
+          "requirement": "合力捞起的巨物形成全队可感知的大额进账（商店.md:63）",
+          "match_text": "合力捞起的巨物形成全队可感知的大额进账"
+        },
+        {
+          "#": "23",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.1#4d8ab60b",
+          "status": "❌ Missing",
+          "requirement": "收购价、吃鱼成长收益与献祭分量使用一套可对照的等价换算表（商店.md:65、125）",
+          "match_text": "收购价吃鱼成长收益与献祭分量使用一套可对照的等价换算表"
+        },
+        {
+          "#": "24",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.3#4b0d44a5",
+          "status": "⚠️ Partial",
+          "requirement": "每局设启动金，具体金额在数值阶段确定（商店.md:83、129）",
+          "match_text": "每局设启动金具体金额在数值阶段确定"
+        },
+        {
+          "#": "25",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.3#60de6fd6",
+          "status": "⚠️ Partial",
+          "requirement": "金币跟局走，局末通过结算流程归零（商店.md:81）",
+          "match_text": "金币跟局走局末通过结算流程归零"
+        },
+        {
+          "#": "26",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.4#dae889b6",
+          "status": "❓ Unverifiable",
+          "requirement": "商人猫是世界里第一个 NPC，猫猫在他这里进行买卖（商店.md:87）",
+          "match_text": "商人猫是世界里第一个NPC猫猫在他这里进行买卖"
+        },
+        {
+          "#": "27",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#2#4c96d98e",
+          "status": "✅ Implemented",
+          "requirement": "商人猫收摊＝买卖冻结：购物车支付、售鱼入账、交付确认与每日进货全部停止受理新命令（商店.md:54、87）",
+          "match_text": "商人猫收摊买卖冻结购物车支付售鱼入账交付确认与每日进货全部停止受理新命令"
+        },
+        {
+          "#": "28",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#2#8cde8f62",
+          "status": "✅ Implemented",
+          "requirement": "成功局＝把世界进度顶到 100% 的那次上供当场转成结算夜（不翻天），商人猫在此收摊（商店.md:54）",
+          "match_text": "成功局把世界进度顶到的那次上供当场转成结算夜不翻天商人猫在此收摊"
+        },
+        {
+          "#": "29",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#2#03234dba",
+          "status": "❌ Missing",
+          "requirement": "收摊后把剩余公款／装备换成小鱼干，给猫猫们在篝火旁娱乐（商店.md:54、87）",
+          "match_text": "收摊后把剩余公款装备换成小鱼干给猫猫们在篝火旁娱乐"
+        },
+        {
+          "#": "30",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#2#587d2d7b",
+          "status": "🔄 Divergent",
+          "requirement": "失败局不进入结算夜，直接执行失败结算（商店.md:55）",
+          "match_text": "失败局不进入结算夜直接执行失败结算"
+        },
+        {
+          "#": "31",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#2#583193a8",
+          "status": "⚠️ Partial",
+          "requirement": "失败局无论剩余多少，本局金币与装备全部清零；已解锁的图鉴保持不变（商店.md:55）",
+          "match_text": "失败局无论剩余多少本局金币与装备全部清零已解锁的图鉴保持不变"
+        },
+        {
+          "#": "32",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.5#e2614fd2",
+          "status": "✅ Implemented",
+          "requirement": "金币只买功能性补给（竿、饵、漂、道具），表达类内容（外观、庆祝动作、图鉴皮肤）走解锁不进商店（商店.md:91）",
+          "match_text": "金币只买功能性补给竿饵漂道具表达类内容外观庆祝动作图鉴皮肤走解锁不进商店"
+        },
+        {
+          "#": "33",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.5#902e00ba",
+          "status": "⚠️ Partial",
+          "requirement": "解锁＝商店上新货：解锁的品类进入货架，具体件仍需使用公款购买（商店.md:91）",
+          "match_text": "解锁商店上新货解锁的品类进入货架具体件仍需使用公款购买"
+        },
+        {
+          "#": "34",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.5#b7f42ffb",
+          "status": "⚠️ Partial",
+          "requirement": "解锁清单跟玩家走，使下一局初始货架包含已解锁品类；具体装备和公款只跟当前局走（商店.md:93）",
+          "match_text": "解锁清单跟玩家走使下一局初始货架包含已解锁品类具体装备和公款只跟当前局走"
+        },
+        {
+          "#": "35",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#4.1#200e7935",
+          "status": "✅ Implemented",
+          "requirement": "钓到瞬间即计入图鉴，记录不受后续出售、吃掉或献祭影响（商店.md:107-108）",
+          "match_text": "钓到瞬间即计入图鉴记录不受后续出售吃掉或献祭影响"
+        },
+        {
+          "#": "36",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.1.1#1c7fa6a2",
+          "status": "✅ Implemented",
+          "requirement": "偷卖后的追逐、追回与抓捕规则归联机社交，商店只负责收购端（商店.md:67、109）",
+          "match_text": "偷卖后的追逐追回与抓捕规则归联机社交商店只负责收购端"
+        },
+        {
+          "#": "37",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.2#fc057c13",
+          "status": "❓ Unverifiable",
+          "requirement": "确定商店位置，并可验证钓点—鱼缸—商店之间的追逐距离（商店.md:99；GaHeFr.csv 第5行 待对齐内容列）",
+          "match_text": "确定商店位置并可验证钓点鱼缸商店之间的追逐距离"
+        },
+        {
+          "#": "38",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.2#b0e2ceb8",
+          "status": "⚠️ Partial",
+          "requirement": "公款余额对全队常时可见（商店.md:100、133；GaHeFr.csv 第9行 待对齐内容列）",
+          "match_text": "公款余额对全队常时可见"
+        },
+        {
+          "#": "39",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#3.2#c8b58836",
+          "status": "⚠️ Partial",
+          "requirement": "缺货、每日刷新、免费保底与入库位置均需明确反馈（商店.md:100、135）",
+          "match_text": "缺货每日刷新免费保底与入库位置均需明确反馈"
+        },
+        {
+          "#": "40",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#7#a8e5722f",
+          "status": "❓ Unverifiable",
+          "requirement": "商人猫收摊需同时通过动作、音效与商店不可交互状态传达（商店.md:136）",
+          "match_text": "商人猫收摊需同时通过动作音效与商店不可交互状态传达"
+        },
+        {
+          "#": "41",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#7#f9003750",
+          "status": "❌ Missing",
+          "requirement": "购买广播作为全场事件，至少显示购买者、商品和支出（商店.md:134）",
+          "match_text": "购买广播作为全场事件至少显示购买者商品和支出"
+        },
+        {
+          "#": "42",
+          "key": "DeiSFL#r3#aa4ff17a",
+          "status": "⚠️ Partial",
+          "requirement": "Playtest 可采集的经济指标：每局购买广播次数、每日余额、局末金币与装备剩余率、偷卖次数（DeiSFL.csv 第3行、第5行、第6行 记录指标列）",
+          "match_text": "Playtest可采集的经济指标每局购买广播次数每日余额局末金币与装备剩余率偷卖次数"
+        },
+        {
+          "#": "43",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#4.2#dfcd6e4d",
+          "status": "❓ Unverifiable",
+          "requirement": "交易过程需要具备明确的猫味演出（商店.md:113）",
+          "match_text": "交易过程需要具备明确的猫味演出"
+        },
+        {
+          "#": "44",
+          "key": "U0JtwqFJ8ijKxakb1egcRXhvnKg#1.4#4941f761",
+          "status": "❓ Unverifiable",
+          "requirement": "设计禁区：不让货币放大数值军备——购买提供选择与花样，不形成不可追赶的碾压（商店.md:44）",
+          "match_text": "设计禁区不让货币放大数值军备购买提供选择与花样不形成不可追赶的碾压"
+        },
+        {
+          "#": "45",
+          "key": "DeiSFL#r2#f77e0692",
+          "status": "❌ Missing",
+          "requirement": "其余三项 Playtest 记录指标：卖／吃／献的鱼数与价值占比、高级竿连续占用时长与重复争抢次数、断竿后重新出发时间与免费 1 级竿使用率（DeiSFL.cs",
+          "match_text": "其余三项Playtest记录指标卖吃献的鱼数与价值占比高级竿连续占用时长与重复争抢次数断竿后重新出发时间与免费级竿使用率"
+        }
+      ],
+      "code_only": [
+        "购物车整车结算：多行选购、服务器重算总价、整车原子提交，任一行库存不足或总价溢出即整车拒绝",
+        "商店商品分类页：`DisplayCategoryId` ＋分类按钮，UI 本地按分类过滤",
+        "服务端下单距离证明：提交购物车时服务器复核玩家 Pawn 仍在摊位 300cm 内，否则整单拒",
+        "两段式交付：购买账本先记 `bDeliveryPending`，营地公共仓库回执后才 `ConfirmTransactionDelivery` 置 `bDeliveryConfirmed`",
+        "售鱼最小金额门槛 `MinimumFishSaleValue=1`：估值低于该值的售鱼命令按「估价证据不足」拒绝",
+        "公款乐观并发：提交购物车或售鱼必须带 `ExpectedWalletRevision`，与服务器当前公款版本不符即整单拒 `RevisionConflict`（复核补录）"
+      ],
+      "code_only_present": true,
+      "carried_from": null,
+      "docs": [
+        {
+          "file": "GDD 系统分册/商店.embedded/DeiSFL.csv",
+          "revision": 39
+        },
+        {
+          "file": "GDD 系统分册/商店.embedded/GaHeFr.csv",
+          "revision": 39
+        },
+        {
+          "file": "GDD 系统分册/商店.md",
+          "revision_id": 347
+        }
+      ],
+      "code": [
+        "Source/Catfishing/ShopEconomy/",
+        "Source/Catfishing/UI/Shop/",
+        "Source/Catfishing/Camp/",
+        "Scripts/verify_equipment_shop.ps1",
+        "Scripts/verify_equipment_shop_runtime.py"
+      ],
+      "scope": "全篇。",
+      "refs": [
+        "裁决同步/裁决同步 · 道具与商店（王甜甜）.md"
+      ],
+      "total": 45,
+      "implemented": 10,
+      "partial": 18,
+      "missing": 8,
+      "divergent": 3,
+      "unverifiable": 6
+    },
+    "猫咪与状态": {
+      "rows": [
+        {
+          "#": "1",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#L0#869e7a1f",
+          "status": "⚠️ Partial",
+          "requirement": "品种决定初始力量，普通 50／橘 70／狸花 90／缅因 130（猫咪与状态.md:15）",
+          "match_text": "品种决定初始力量普通橘狸花缅因"
+        },
+        {
+          "#": "2",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#L0#ed62f1b5",
+          "status": "❌ Missing",
+          "requirement": "选猫界面用非数值示意力气（鱼骨 icon ×1～×4 ＋性格文案），不显示数字（猫咪与状态.md:15）",
+          "match_text": "选猫界面用非数值示意力气鱼骨icon性格文案不显示数字"
+        },
+        {
+          "#": "3",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#2#59eb9ac1",
+          "status": "✅ Implemented",
+          "requirement": "吃鱼给经验并压入经验槽（猫咪与状态.md:80）",
+          "match_text": "吃鱼给经验并压入经验槽"
+        },
+        {
+          "#": "4",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#1#ab0f6e59",
+          "status": "✅ Implemented",
+          "requirement": "偷来的鱼吃掉同样获得成长（猫咪与状态.md:41；数值成长.md:19）",
+          "match_text": "偷来的鱼吃掉同样获得成长"
+        },
+        {
+          "#": "5",
+          "key": "Na20wnqTXiwM7TkKf4kcnaQ0npf#2#e3cb459e",
+          "status": "✅ Implemented",
+          "requirement": "经验只由吃鱼产生，钓鱼行为本身不给经验（数值成长.md:38）",
+          "match_text": "经验只由吃鱼产生钓鱼行为本身不给经验"
+        },
+        {
+          "#": "6",
+          "key": "Na20wnqTXiwM7TkKf4kcnaQ0npf#2#035e369d",
+          "status": "🔄 Divergent",
+          "requirement": "经验 ＝ 鱼种经验系数 × 实际重量（数值成长.md:35）",
+          "match_text": "经验鱼种经验系数实际重量"
+        },
+        {
+          "#": "7",
+          "key": "Na20wnqTXiwM7TkKf4kcnaQ0npf#2#f99b50bd",
+          "status": "🔄 Divergent",
+          "requirement": "经验槽 250 点（数值成长.md:35；升级效果.md:13）",
+          "match_text": "经验槽点"
+        },
+        {
+          "#": "8",
+          "key": "Na20wnqTXiwM7TkKf4kcnaQ0npf#2#cf458a49",
+          "status": "⚠️ Partial",
+          "requirement": "溢出经验滚入下一槽、连满时逐个弹出（数值成长.md:36）",
+          "match_text": "溢出经验滚入下一槽连满时逐个弹出"
+        },
+        {
+          "#": "9",
+          "key": "Na20wnqTXiwM7TkKf4kcnaQ0npf#2#148720f2",
+          "status": "❌ Missing",
+          "requirement": "槽满触发三选一：随机抽三项、同次互异、当场生效、本局永久、同项可跨次叠加、按出现次序解锁（数值成长.md:36；升级效果.md:19）",
+          "match_text": "槽满触发三选一随机抽三项同次互异当场生效本局永久同项可跨次叠加按出现次序解锁"
+        },
+        {
+          "#": "10",
+          "key": "Na20wnqTXiwM7TkKf4kcnaQ0npf#2#e5c92c36",
+          "status": "❌ Missing",
+          "requirement": "三选一面板不冻结世界、个人选择不阻挡他人、可挂起、无超时（数值成长.md:36）",
+          "match_text": "三选一面板不冻结世界个人选择不阻挡他人可挂起无超时"
+        },
+        {
+          "#": "11",
+          "key": "Sisrw4FzWiL2AekXetFc7Vxunqg#2#bf64540c",
+          "status": "❌ Missing",
+          "requirement": "选项池 11 项的效果定义、每次数值、叠加上限、出现次序（升级效果.md:26–37）",
+          "match_text": "选项池项的效果定义每次数值叠加上限出现次序"
+        },
+        {
+          "#": "12",
+          "key": "Na20wnqTXiwM7TkKf4kcnaQ0npf#3#02c1e244",
+          "status": "❌ Missing",
+          "requirement": "「buff 持续时长」升级项不作用于猫神的祝福（数值成长.md:46；升级效果.md:30）",
+          "match_text": "buff持续时长升级项不作用于猫神的祝福"
+        },
+        {
+          "#": "13",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#2#32700fc2",
+          "status": "❌ Missing",
+          "requirement": "吃鱼给限时 buff，按鱼种配置、时长 60～600 秒（猫咪与状态.md:80；数值成长.md:26、44）",
+          "match_text": "吃鱼给限时buff按鱼种配置时长秒"
+        },
+        {
+          "#": "14",
+          "key": "Na20wnqTXiwM7TkKf4kcnaQ0npf#3#d3d4a7c2",
+          "status": "❌ Missing",
+          "requirement": "buff 叠加规则「类＝鱼种」：同种刷新时长、异种并存（数值成长.md:45）",
+          "match_text": "buff叠加规则类鱼种同种刷新时长异种并存"
+        },
+        {
+          "#": "15",
+          "key": "O753wiu7yiuBtMkburWcicZnnre#2#0e72a87c",
+          "status": "❌ Missing",
+          "requirement": "增益效果族：移速 +15%／+25%、省力 -25%／-50%、打窝增效 +50%（吃鱼效果.md:23–28）",
+          "match_text": "增益效果族移速省力打窝增效"
+        },
+        {
+          "#": "16",
+          "key": "O753wiu7yiuBtMkburWcicZnnre#3#24c4d280",
+          "status": "❌ Missing",
+          "requirement": "社交演出族 buff 四项：变声器、满嘴泥巴、头上长小花、请勿靠近（吃鱼效果.md:39–42）",
+          "match_text": "社交演出族buff四项变声器满嘴泥巴头上长小花请勿靠近"
+        },
+        {
+          "#": "17",
+          "key": "O753wiu7yiuBtMkburWcicZnnre#3#2642d9e6",
+          "status": "❌ Missing",
+          "requirement": "「请勿靠近」屏蔽帮助与恶作剧（搬运被屏蔽、偷鱼被抓的扑倒反制不被屏蔽）（吃鱼效果.md:44）",
+          "match_text": "请勿靠近屏蔽帮助与恶作剧搬运被屏蔽偷鱼被抓的扑倒反制不被屏蔽"
+        },
+        {
+          "#": "18",
+          "key": "O753wiu7yiuBtMkburWcicZnnre#2#1fc5fb6a",
+          "status": "❌ Missing",
+          "requirement": "猫神的祝福：献祭湖心巨影后全队 600 秒（省力 -50% ＋黄色体力 +50 ＋金光挡水花），不可被覆盖（吃鱼效果.md:29、58；数值成长.md:46）",
+          "match_text": "猫神的祝福献祭湖心巨影后全队秒省力黄色体力金光挡水花不可被覆盖"
+        },
+        {
+          "#": "19",
+          "key": "Na20wnqTXiwM7TkKf4kcnaQ0npf#4#bfa89c93",
+          "status": "❌ Missing",
+          "requirement": "黄色体力：体力条末端一次性护盾段，绿先扣、不自然回复、可叠加无上限、过夜清空，来源＝特定鱼种与祝福（数值成长.md:50–52）",
+          "match_text": "黄色体力体力条末端一次性护盾段绿先扣不自然回复可叠加无上限过夜清空来源特定鱼种与祝福"
+        },
+        {
+          "#": "20",
+          "key": "Na20wnqTXiwM7TkKf4kcnaQ0npf#5#a7d25ad2",
+          "status": "❌ Missing",
+          "requirement": "搏斗外体力自然回复 5 点/秒、无场景乘数（数值成长.md:56）",
+          "match_text": "搏斗外体力自然回复点秒无场景乘数"
+        },
+        {
+          "#": "21",
+          "key": "Na20wnqTXiwM7TkKf4kcnaQ0npf#5#7a402925",
+          "status": "🔄 Divergent",
+          "requirement": "搏斗内放线本身不回体，回体速率基础为 0、只靠三选一「放线回体速度」加（数值成长.md:56；升级效果.md:29）",
+          "match_text": "搏斗内放线本身不回体回体速率基础为只靠三选一放线回体速度加"
+        },
+        {
+          "#": "22",
+          "key": "O753wiu7yiuBtMkburWcicZnnre#5#f64d2ee7",
+          "status": "❌ Missing",
+          "requirement": "咸鱼不可食用、湖心巨影无法食用（吃鱼效果.md:58、62）",
+          "match_text": "咸鱼不可食用湖心巨影无法食用"
+        },
+        {
+          "#": "23",
+          "key": "Sisrw4FzWiL2AekXetFc7Vxunqg#3#67668c40",
+          "status": "❌ Missing",
+          "requirement": "第 10 天结算生成「毕业照」印记（本局 build 快照 ＋猫味外号）（升级效果.md:44）",
+          "match_text": "第天结算生成毕业照印记本局build快照猫味外号"
+        },
+        {
+          "#": "24",
+          "key": "O753wiu7yiuBtMkburWcicZnnre#4#7543f6a8",
+          "status": "⚠️ Partial",
+          "requirement": "负面效果族三项：重毒＝吃下即倒地且苏醒后力量 -50%、麻痹＝体力不再自然回复、中毒＝体力上限 -40%（吃鱼效果.md:52–54）",
+          "match_text": "负面效果族三项重毒吃下即倒地且苏醒后力量麻痹体力不再自然回复中毒体力上限"
+        },
+        {
+          "#": "25",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#4#9f9e8dc4",
+          "status": "🔄 Divergent",
+          "requirement": "中毒按鱼各配、无渐进升级，最重一档＝吃下即倒地（猫咪与状态.md:104）",
+          "match_text": "中毒按鱼各配无渐进升级最重一档吃下即倒地"
+        },
+        {
+          "#": "26",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#5#80c576da",
+          "status": "✅ Implemented",
+          "requirement": "倒地来源全游戏唯一＝吃到重毒鱼（猫咪与状态.md:116；吃鱼效果.md:48）",
+          "match_text": "倒地来源全游戏唯一吃到重毒鱼"
+        },
+        {
+          "#": "27",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#4#5db5f710",
+          "status": "❌ Missing",
+          "requirement": "认识一种鱼分两层：钓到＝记外观与名字，首次吃过＝图鉴补食用效果（猫咪与状态.md:104；速查表 :224）",
+          "match_text": "认识一种鱼分两层钓到记外观与名字首次吃过图鉴补食用效果"
+        },
+        {
+          "#": "28",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#2#f1506812",
+          "status": "✅ Implemented",
+          "requirement": "吃掉的鱼不影响图鉴，钓到瞬间已记录（猫咪与状态.md:80；数值成长.md:19）",
+          "match_text": "吃掉的鱼不影响图鉴钓到瞬间已记录"
+        },
+        {
+          "#": "29",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#5#277c1586",
+          "status": "❌ Missing",
+          "requirement": "倒地者可缓慢爬行（猫咪与状态.md:116）",
+          "match_text": "倒地者可缓慢爬行"
+        },
+        {
+          "#": "30",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#5#3ab6ecad",
+          "status": "❌ Missing",
+          "requirement": "倒地满一段时间（占位 60 秒）后自己站起来（猫咪与状态.md:116）",
+          "match_text": "倒地满一段时间占位秒后自己站起来"
+        },
+        {
+          "#": "31",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#5#29ac914c",
+          "status": "⚠️ Partial",
+          "requirement": "伙伴搬运回营地即解除倒地（猫咪与状态.md:116）",
+          "match_text": "伙伴搬运回营地即解除倒地"
+        },
+        {
+          "#": "32",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#5#4c18d43a",
+          "status": "❌ Missing",
+          "requirement": "翻天时仍在倒地的自动救起，清晨在营地醒来（猫咪与状态.md:116）",
+          "match_text": "翻天时仍在倒地的自动救起清晨在营地醒来"
+        },
+        {
+          "#": "33",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#5#d6b1b9d0",
+          "status": "❌ Missing",
+          "requirement": "倒地者不计入「全员到齐」的翻天判定（猫咪与状态.md:116）",
+          "match_text": "倒地者不计入全员到齐的翻天判定"
+        },
+        {
+          "#": "34",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#5#010efcf4",
+          "status": "❌ Missing",
+          "requirement": "倒地时不能自己献祭，队友可代献他鱼护里的鱼（猫咪与状态.md:116）",
+          "match_text": "倒地时不能自己献祭队友可代献他鱼护里的鱼"
+        },
+        {
+          "#": "35",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#5#6e6ac713",
+          "status": "❌ Missing",
+          "requirement": "倒地者视角不黑屏，镜头贴地看得见围过来的猫脸（猫咪与状态.md:116）",
+          "match_text": "倒地者视角不黑屏镜头贴地看得见围过来的猫脸"
+        },
+        {
+          "#": "36",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#5#a1518cc0",
+          "status": "✅ Implemented",
+          "requirement": "钓鱼中倒地＝中断钓鱼、交回剩余成员（猫咪与状态.md:118）",
+          "match_text": "钓鱼中倒地中断钓鱼交回剩余成员"
+        },
+        {
+          "#": "37",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#5#f0d54b1f",
+          "status": "❌ Missing",
+          "requirement": "旁观者互动：凑近嗅嗅、爪子戳肚皮、舔脸、旁边躺平陪倒（猫咪与状态.md:120）",
+          "match_text": "旁观者互动凑近嗅嗅爪子戳肚皮舔脸旁边躺平陪倒"
+        },
+        {
+          "#": "38",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#5#21c42eaf",
+          "status": "⚠️ Partial",
+          "requirement": "搬运演出：叼后颈拖着走、拖到一半掉了滚一圈、两猫协作抬运（猫咪与状态.md:122）",
+          "match_text": "搬运演出叼后颈拖着走拖到一半掉了滚一圈两猫协作抬运"
+        },
+        {
+          "#": "39",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#3.2#54030d13",
+          "status": "⚠️ Partial",
+          "requirement": "单人可通过休息与爬行自救、全程不卡死（猫咪与状态.md:146；:210）",
+          "match_text": "单人可通过休息与爬行自救全程不卡死"
+        },
+        {
+          "#": "40",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#4#232eb71b",
+          "status": "✅ Implemented",
+          "requirement": "营地是恢复落点，回营休息可恢复（猫咪与状态.md:164；:191）",
+          "match_text": "营地是恢复落点回营休息可恢复"
+        },
+        {
+          "#": "41",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#版本历史#68be4e0c",
+          "status": "🔄 Divergent",
+          "requirement": "草药机制已删除，倒地解除只剩救援与休息（猫咪与状态.md:249 v1.3）",
+          "match_text": "草药机制已删除倒地解除只剩救援与休息"
+        },
+        {
+          "#": "42",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#4#3521bfb8",
+          "status": "❓ Unverifiable",
+          "requirement": "中毒失态演出：走路画龙、瞳孔漩涡、打嗝冒泡、幻觉、翻肚皮晕倒、头顶转圈小鱼（猫咪与状态.md:104、106、190）",
+          "match_text": "中毒失态演出走路画龙瞳孔漩涡打嗝冒泡幻觉翻肚皮晕倒头顶转圈小鱼"
+        },
+        {
+          "#": "43",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#6#0e4cc2f7",
+          "status": "⚠️ Partial",
+          "requirement": "淋湿：雨天渐湿、落水全湿（猫咪与状态.md:134）",
+          "match_text": "淋湿雨天渐湿落水全湿"
+        },
+        {
+          "#": "44",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#6#b71e5290",
+          "status": "❓ Unverifiable",
+          "requirement": "湿毛贴身瘦一圈、上岸波浪式抖水、半干毛蓬（猫咪与状态.md:134、136）",
+          "match_text": "湿毛贴身瘦一圈上岸波浪式抖水半干毛蓬"
+        },
+        {
+          "#": "45",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#6#d70586ee",
+          "status": "❌ Missing",
+          "requirement": "雨天猫下意识往树下、叶子下钻（猫咪与状态.md:134）",
+          "match_text": "雨天猫下意识往树下叶子下钻"
+        },
+        {
+          "#": "46",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#L0#8d43814e",
+          "status": "✅ Implemented",
+          "requirement": "饥饿与疲惫退出数值状态，猫身上不再有这两条属性（猫咪与状态.md:15、45、90、144）",
+          "match_text": "饥饿与疲惫退出数值状态猫身上不再有这两条属性"
+        },
+        {
+          "#": "47",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#3#f0de8d2d",
+          "status": "❌ Missing",
+          "requirement": "疲惫三档纯演出：轻→打哈欠、中→走路拖沓、重→坐下瞌睡点头，无数值条无惩罚（猫咪与状态.md:92）",
+          "match_text": "疲惫三档纯演出轻打哈欠中走路拖沓重坐下瞌睡点头无数值条无惩罚"
+        },
+        {
+          "#": "48",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#1#1e5dc607",
+          "status": "⚠️ Partial",
+          "requirement": "猫行为库素材：舔毛、甩尾、打哈欠、打滚、伸懒腰、休息、睡觉（猫咪与状态.md:68、188）",
+          "match_text": "猫行为库素材舔毛甩尾打哈欠打滚伸懒腰休息睡觉"
+        },
+        {
+          "#": "49",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#1#e6299c03",
+          "status": "❌ Missing",
+          "requirement": "行为与状态联动：累了瞌睡点头、看见别人的鱼护舔嘴、无聊时追尾巴拍水面（猫咪与状态.md:68）",
+          "match_text": "行为与状态联动累了瞌睡点头看见别人的鱼护舔嘴无聊时追尾巴拍水面"
+        },
+        {
+          "#": "50",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#1#33a08426",
+          "status": "❌ Missing",
+          "requirement": "群体行为：打哈欠传染、营地睡觉叠罗汉（猫咪与状态.md:70）",
+          "match_text": "群体行为打哈欠传染营地睡觉叠罗汉"
+        },
+        {
+          "#": "51",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#3.2#02b5eb7c",
+          "status": "❓ Unverifiable",
+          "requirement": "通用动画规范：爪抓握自动贴合、双脚随坡度、尾巴耳朵程序化摆动、紧张炸毛、入水毛塌（猫咪与状态.md:149）",
+          "match_text": "通用动画规范爪抓握自动贴合双脚随坡度尾巴耳朵程序化摆动紧张炸毛入水毛塌"
+        },
+        {
+          "#": "52",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#3.2#9c2ae48a",
+          "status": "⚠️ Partial",
+          "requirement": "多猫交互动作通用层：扑倒滚成一团、碰鼻子、舔脸、叼后颈搬运（猫咪与状态.md:149）",
+          "match_text": "多猫交互动作通用层扑倒滚成一团碰鼻子舔脸叼后颈搬运"
+        },
+        {
+          "#": "53",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#7#f064d8da",
+          "status": "🔄 Divergent",
+          "requirement": "无常驻状态条，成长信息只在需要的时刻显示（猫咪与状态.md:193；数值成长.md:61）",
+          "match_text": "无常驻状态条成长信息只在需要的时刻显示"
+        },
+        {
+          "#": "54",
+          "key": "Na20wnqTXiwM7TkKf4kcnaQ0npf#6#a9d9ca50",
+          "status": "❌ Missing",
+          "requirement": "吃鱼瞬时浮层：体力快照（含黄段与本次增量）、经验槽小环与 +N、已认识的鱼显示效果一行、没吃过显示「？？？」（数值成长.md:63）",
+          "match_text": "吃鱼瞬时浮层体力快照含黄段与本次增量经验槽小环与N已认识的鱼显示效果一行没吃过显示"
+        },
+        {
+          "#": "55",
+          "key": "Na20wnqTXiwM7TkKf4kcnaQ0npf#6#6b39c5cf",
+          "status": "❌ Missing",
+          "requirement": "三选一卡面显示每项已叠次数（数值成长.md:64）",
+          "match_text": "三选一卡面显示每项已叠次数"
+        },
+        {
+          "#": "56",
+          "key": "Na20wnqTXiwM7TkKf4kcnaQ0npf#6#12a257b6",
+          "status": "❌ Missing",
+          "requirement": "主动查看面板：黄色体力存量、已叠 build 构成、各 buff 剩余时间（数值成长.md:65）",
+          "match_text": "主动查看面板黄色体力存量已叠build构成各buff剩余时间"
+        },
+        {
+          "#": "57",
+          "key": "Na20wnqTXiwM7TkKf4kcnaQ0npf#6#2e17d7df",
+          "status": "❌ Missing",
+          "requirement": "渔获信息三值同屏：翻鱼护/鱼缸时显示每条鱼的经验、供奉、售价原始值（数值成长.md:66）",
+          "match_text": "渔获信息三值同屏翻鱼护鱼缸时显示每条鱼的经验供奉售价原始值"
+        },
+        {
+          "#": "58",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#4#cb877d7a",
+          "status": "✅ Implemented",
+          "requirement": "状态与成长跟局走，跨局持久载体只有图鉴、印记、外观解锁（猫咪与状态.md:157；数值成长.md:19）",
+          "match_text": "状态与成长跟局走跨局持久载体只有图鉴印记外观解锁"
+        },
+        {
+          "#": "59",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#1#a101bc99",
+          "status": "✅ Implemented",
+          "requirement": "不做生命值系统、无任何状态死亡，失败可恢复（猫咪与状态.md:47、155）",
+          "match_text": "不做生命值系统无任何状态死亡失败可恢复"
+        },
+        {
+          "#": "60",
+          "key": "BIeHwP14vigUEBkI3UxciEionxf#2#9129542b",
+          "status": "❌ Missing",
+          "requirement": "吃鱼演出：叼住甩头吞下、吃完舔爪抹脸满足眯眼；经验满时伸大懒腰抖毛（猫咪与状态.md:82）",
+          "match_text": "吃鱼演出叼住甩头吞下吃完舔爪抹脸满足眯眼经验满时伸大懒腰抖毛"
+        },
+        {
+          "#": "61",
+          "key": "O753wiu7yiuBtMkburWcicZnnre#6#09816fc8",
+          "status": "❌ Missing",
+          "requirement": "咸鱼可卖但**不可献**，献祭时被猫神拨开（吃鱼效果.md:62）",
+          "match_text": "咸鱼可卖但不可献献祭时被猫神拨开"
+        }
+      ],
+      "code_only": [],
+      "code_only_present": false,
+      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "docs": [
+        {
+          "file": "GDD 系统分册/猫咪与状态/升级效果.md",
+          "revision_id": 66
+        },
+        {
+          "file": "GDD 系统分册/猫咪与状态/吃鱼效果.md",
+          "revision_id": 58
+        },
+        {
+          "file": "GDD 系统分册/猫咪与状态/数值成长.md",
+          "revision_id": 67
+        },
+        {
+          "file": "GDD 系统分册/猫咪与状态/猫咪与状态.md",
+          "revision_id": 208
+        }
+      ],
+      "code": [
+        "Source/Catfishing/Character/",
+        "Source/Catfishing/Condition/",
+        "Source/Catfishing/Growth/",
+        "Source/Catfishing/AbilitySystem/**",
+        "Scripts/verify_character_growth_condition.ps1",
+        "Config/DefaultGame.ini"
+      ],
+      "scope": "全篇。",
+      "refs": [
+        "数值模拟与参数记录.md"
+      ],
+      "total": 61,
+      "implemented": 10,
+      "partial": 9,
+      "missing": 33,
+      "divergent": 6,
+      "unverifiable": 3
+    },
+    "环境与氛围": {
+      "rows": [
+        {
+          "#": "1",
+          "key": "Bg2jwBdkViHRgRkOtx2crCgAnHh#1#c1fb523b",
+          "status": "✅ Implemented",
+          "requirement": "时钟源＝局内时间流：开局启动、随局推进、局末即弃，任何机制不读现实时钟（环境与氛围.md:65、:153、:46）",
+          "match_text": "时钟源局内时间流开局启动随局推进局末即弃任何机制不读现实时钟"
+        },
+        {
+          "#": "2",
+          "key": "unknown#L0#b0d786eb",
+          "status": "✅ Implemented",
+          "requirement": "白天时段轴＝清晨/白天/黄昏三段，夜晚不入时段轴（:65、:156 轴定义权归本册）",
+          "match_text": "白天时段轴清晨白天黄昏三段夜晚不入时段轴"
+        },
+        {
+          "#": "3",
+          "key": "unknown#L0#e9bc641a",
+          "status": "✅ Implemented",
+          "requirement": "一局＝多天，白天限时推进、夜晚无时限停摆、全员同意后开始新的一天（:65，天结构归局与进程册）",
+          "match_text": "一局多天白天限时推进夜晚无时限停摆全员同意后开始新的一天"
+        },
+        {
+          "#": "4",
+          "key": "unknown#L0#8dad3acb",
+          "status": "✅ Implemented",
+          "requirement": "昼夜推进要真的改变语义：时段分界到点重新发布环境（事件出场时段的前提，:71）",
+          "match_text": "昼夜推进要真的改变语义时段分界到点重新发布环境"
+        },
+        {
+          "#": "5",
+          "key": "unknown#L0#614e3031",
+          "status": "✅ Implemented",
+          "requirement": "昼夜改光照（画面随一天走完一条弧线，:65、:185）",
+          "match_text": "昼夜改光照"
+        },
+        {
+          "#": "6",
+          "key": "unknown#L0#952bf4d3",
+          "status": "❓ Unverifiable",
+          "requirement": "昼夜改环境音；夜晚虫鸣是「入夜」的听觉信号（:65、:186）",
+          "match_text": "昼夜改环境音夜晚虫鸣是入夜的听觉信号"
+        },
+        {
+          "#": "7",
+          "key": "unknown#L0#1440495e",
+          "status": "🔄 Divergent",
+          "requirement": "天气按局内时钟在晴/雨/雾之间切换，每一局有不同的脸色（:77）",
+          "match_text": "天气按局内时钟在晴雨雾之间切换每一局有不同的脸色"
+        },
+        {
+          "#": "8",
+          "key": "unknown#L0#5411df5a",
+          "status": "✅ Implemented",
+          "requirement": "天气轴枚举＝晴/雨/雾（轴定义权归本册，:77、:156）",
+          "match_text": "天气轴枚举晴雨雾"
+        },
+        {
+          "#": "9",
+          "key": "unknown#L0#07246011",
+          "status": "⚠️ Partial",
+          "requirement": "区域轴枚举由本册定义（有哪些区域），鱼落在轴上哪一格归鱼册（:156）",
+          "match_text": "区域轴枚举由本册定义有哪些区域鱼落在轴上哪一格归鱼册"
+        },
+        {
+          "#": "10",
+          "key": "unknown#L0#36f35137",
+          "status": "❌ Missing",
+          "requirement": "双区域探索结构：河流（日常水域）＋森林湖（要走一段路、鱼种与事件偏稀有）（:89）",
+          "match_text": "双区域探索结构河流日常水域森林湖要走一段路鱼种与事件偏稀有"
+        },
+        {
+          "#": "11",
+          "key": "unknown#L0#d80c6db3",
+          "status": "✅ Implemented",
+          "requirement": "钓点＝玩家概念而非机制点位，任意水边可钓，打窝即自发成为钓点（:89）",
+          "match_text": "钓点玩家概念而非机制点位任意水边可钓打窝即自发成为钓点"
+        },
+        {
+          "#": "12",
+          "key": "unknown#L0#c7356a9d",
+          "status": "⚠️ Partial",
+          "requirement": "时段与天气对鱼情做机会向修正（修正入口归本册，鱼表归鱼册；:65、:77、:213）",
+          "match_text": "时段与天气对鱼情做机会向修正"
+        },
+        {
+          "#": "13",
+          "key": "unknown#L0#5cbbc316",
+          "status": "✅ Implemented",
+          "requirement": "设计禁区：环境只给机会不做惩罚——无天气惩罚、无生存压力、无复杂生态模拟（:42-45、:154、:170）",
+          "match_text": "设计禁区环境只给机会不做惩罚无天气惩罚无生存压力无复杂生态模拟"
+        },
+        {
+          "#": "14",
+          "key": "unknown#L0#ad8d2370",
+          "status": "❌ Missing",
+          "requirement": "雨天淋湿由本册触发（表现规范归猫册，本册只触发；:77）",
+          "match_text": "雨天淋湿由本册触发"
+        },
+        {
+          "#": "15",
+          "key": "unknown#L0#2206a296",
+          "status": "✅ Implemented",
+          "requirement": "自然事件按局内时钟与天气条件出场，条件不成立就没有事件（不造占位事件；:101）",
+          "match_text": "自然事件按局内时钟与天气条件出场条件不成立就没有事件"
+        },
+        {
+          "#": "16",
+          "key": "unknown#L0#510e7f85",
+          "status": "🔄 Divergent",
+          "requirement": "六类自然事件及各自出场条件成表：彩虹（雨后放晴）/萤火虫（夜·草木边）/晚霞（黄昏）/月光湖面（夜·晴）/鸟群蝴蝶（白天）/森林湖鱼群（:103-110）",
+          "match_text": "六类自然事件及各自出场条件成表彩虹雨后放晴萤火虫夜草木边晚霞黄昏月光湖面夜晴鸟群蝴蝶白天森林湖鱼群"
+        },
+        {
+          "#": "17",
+          "key": "unknown#L0#76de7605",
+          "status": "❌ Missing",
+          "requirement": "每个自然事件显式标注是否抛印记，环境印记供给印记相册「风景页」（:99、:103-110、:169）",
+          "match_text": "每个自然事件显式标注是否抛印记环境印记供给印记相册风景页"
+        },
+        {
+          "#": "18",
+          "key": "unknown#L0#60923793",
+          "status": "⚠️ Partial",
+          "requirement": "事件必须隔着距离也能察觉（声音＋光＋猫身体语言），否则聚不起人（:101、:187）",
+          "match_text": "事件必须隔着距离也能察觉声音光猫身体语言否则聚不起人"
+        },
+        {
+          "#": "19",
+          "key": "unknown#L0#e90650f0",
+          "status": "❌ Missing",
+          "requirement": "系统按局内时钟排程周期事件，随机只做小抖动（:145）",
+          "match_text": "系统按局内时钟排程周期事件随机只做小抖动"
+        },
+        {
+          "#": "20",
+          "key": "unknown#L0#d3263c52",
+          "status": "🔄 Divergent",
+          "requirement": "聚鱼时刻的「自然触发」源：森林湖按局内时钟/天气自发涌现鱼群（本册 §5，:114-123）",
+          "match_text": "聚鱼时刻的自然触发源森林湖按局内时钟天气自发涌现鱼群"
+        },
+        {
+          "#": "21",
+          "key": "unknown#L0#dfea7033",
+          "status": "✅ Implemented",
+          "requirement": "两种触发进入同一套演出与钓鱼收益，不写两套逻辑（:123、:129）",
+          "match_text": "两种触发进入同一套演出与钓鱼收益不写两套逻辑"
+        },
+        {
+          "#": "22",
+          "key": "unknown#L0#d247b2eb",
+          "status": "✅ Implemented",
+          "requirement": "所有环境状态属于这一局，局末即弃、无跨局存档（:55、:147、:155）",
+          "match_text": "所有环境状态属于这一局局末即弃无跨局存档"
+        },
+        {
+          "#": "23",
+          "key": "unknown#L0#3d6274b2",
+          "status": "✅ Implemented",
+          "requirement": "多人同步按局内广播，事件对同局全员同时可见、不存在离线错过（:147、:168）",
+          "match_text": "多人同步按局内广播事件对同局全员同时可见不存在离线错过"
+        },
+        {
+          "#": "24",
+          "key": "unknown#L0#45c079e7",
+          "status": "❌ Missing",
+          "requirement": "种花：固定花坛点位、当局开花、局末随局清空、不存档不成长（:135）",
+          "match_text": "种花固定花坛点位当局开花局末随局清空不存档不成长"
+        },
+        {
+          "#": "25",
+          "key": "unknown#L0#e8107ddc",
+          "status": "❓ Unverifiable",
+          "requirement": "森林湖沿途与湖区的特殊看点、风景点、隐藏观察点分布（:89、:181）",
+          "match_text": "森林湖沿途与湖区的特殊看点风景点隐藏观察点分布"
+        },
+        {
+          "#": "26",
+          "key": "unknown#L0#9598275f",
+          "status": "❓ Unverifiable",
+          "requirement": "猫味演出：入夜瞳孔放大、清晨伸懒腰、正午找树荫、雨天炸毛甩水、雨停集体抖毛、看鸟咔咔、扑萤等（:67、:79、:91、:106-110、:125）",
+          "match_text": "猫味演出入夜瞳孔放大清晨伸懒腰正午找树荫雨天炸毛甩水雨停集体抖毛看鸟咔咔扑萤等"
+        },
+        {
+          "#": "27",
+          "key": "unknown#L0#596426b6",
+          "status": "❓ Unverifiable",
+          "requirement": "§7 视觉反馈通道：湖面波纹、鱼跃、鸟群聚集、植物随时段的细节变化（:185）",
+          "match_text": "视觉反馈通道湖面波纹鱼跃鸟群聚集植物随时段的细节变化"
+        },
+        {
+          "#": "28",
+          "key": "unknown#L0#af0f8f16",
+          "status": "❌ Missing",
+          "requirement": "天气与区域各自的抛印记事件④：全员挤在一处躲雨的团子同框（:81）、首次抵达森林湖穿出树林的瞬间（:93）",
+          "match_text": "天气与区域各自的抛印记事件全员挤在一处躲雨的团子同框首次抵达森林湖穿出树林的瞬间"
+        },
+        {
+          "#": "29",
+          "key": "unknown#L0#45f5dce2",
+          "status": "⚠️ Partial",
+          "requirement": "两种触发共用一个稀缺预算，按一个机制记一本账（:123）",
+          "match_text": "两种触发共用一个稀缺预算按一个机制记一本账"
+        }
+      ],
+      "code_only": [],
+      "code_only_present": false,
+      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "docs": [
+        {
+          "file": "GDD 系统分册/环境与氛围.md",
+          "revision_id": 106
+        }
+      ],
+      "code": [
+        "Source/Catfishing/Environment/**",
+        "Source/Catfishing/Run/",
+        "Scripts/verify_run_environment_social.ps1",
+        "Scripts/verify_run_environment_social_runtime.py",
+        "Config/DefaultGame.ini"
+      ],
+      "scope": "全篇。该册 §5 仍写聚鱼两源，09-07 已裁单源（环境自然触发归完整版），按裁决评，不按该册字面评。",
+      "refs": [],
+      "total": 29,
+      "implemented": 12,
+      "partial": 4,
+      "missing": 6,
+      "divergent": 3,
+      "unverifiable": 4
+    },
+    "联机社交": {
+      "rows": [
+        {
+          "#": "1",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#L0#55be82e9",
+          "status": "✅ Implemented",
+          "requirement": "一局最多 4 人，单局人数上限是硬上限（联机社交.md:13、:169）",
+          "match_text": "一局最多人单局人数上限是硬上限"
+        },
+        {
+          "#": "2",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#1#2b0783ff",
+          "status": "✅ Implemented",
+          "requirement": "局制红线：局末世界清空（营地、渔获、祭坛进度归零），物资跟局走（联机社交.md:84、:178）",
+          "match_text": "局制红线局末世界清空营地渔获祭坛进度归零物资跟局走"
+        },
+        {
+          "#": "3",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#L0#a1fb4e2b",
+          "status": "🔄 Divergent",
+          "requirement": "跨局跟人走＝图鉴、印记相册、外观解锁；装备不跟人走（联机社交.md:13、:84）",
+          "match_text": "跨局跟人走图鉴印记相册外观解锁装备不跟人走"
+        },
+        {
+          "#": "4",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#1#a8ea52ee",
+          "status": "✅ Implemented",
+          "requirement": "创建局／邀请好友／中途加入与退出对当事人不设惩罚（联机社交.md:84）",
+          "match_text": "创建局邀请好友中途加入与退出对当事人不设惩罚"
+        },
+        {
+          "#": "5",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#1#67867764",
+          "status": "🔄 Divergent",
+          "requirement": "组局基准＝熟人邀请制，不为生人局做额外设计（联机社交.md:84、:186）",
+          "match_text": "组局基准熟人邀请制不为生人局做额外设计"
+        },
+        {
+          "#": "6",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#1#3be6d1e5",
+          "status": "❌ Missing",
+          "requirement": "房主可踢人——一切社交僵局的兜底，被踢者跟人走资产无损（联机社交.md:84、:118、:186）",
+          "match_text": "房主可踢人一切社交僵局的兜底被踢者跟人走资产无损"
+        },
+        {
+          "#": "7",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#1#48884dfe",
+          "status": "🔄 Divergent",
+          "requirement": "房主离开时自动移交给最早加入者（联机社交.md:84）",
+          "match_text": "房主离开时自动移交给最早加入者"
+        },
+        {
+          "#": "8",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#1#0dce2af3",
+          "status": "✅ Implemented",
+          "requirement": "当日任务清晨定死、不按人数重算；有人中途退出留下的人扛完（联机社交.md:84）",
+          "match_text": "当日任务清晨定死不按人数重算有人中途退出留下的人扛完"
+        },
+        {
+          "#": "9",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#1#fdffeb84",
+          "status": "⚠️ Partial",
+          "requirement": "掉线重连兜底（联机社交.md:84）",
+          "match_text": "掉线重连兜底"
+        },
+        {
+          "#": "10",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#2#e9f477e0",
+          "status": "✅ Implemented",
+          "requirement": "不强制社交：所有单人玩法在多人局原样能用，单人可完整走完核心循环（联机社交.md:94、:179）",
+          "match_text": "不强制社交所有单人玩法在多人局原样能用单人可完整走完核心循环"
+        },
+        {
+          "#": "11",
+          "key": "A6，联机社交#L0#80ee4f90",
+          "status": "✅ Implemented",
+          "requirement": "单人局不刷需要多人的鱼；面向多人的门槛内容不算单人义务（A6，联机社交.md:179）",
+          "match_text": "单人局不刷需要多人的鱼面向多人的门槛内容不算单人义务"
+        },
+        {
+          "#": "12",
+          "key": "B6，联机社交#L0#c68fd147",
+          "status": "✅ Implemented",
+          "requirement": "求助全手动：玩家自己喊，普通求助只在附近可感知、不自动分配任务（B6，联机社交.md:106、:219）",
+          "match_text": "求助全手动玩家自己喊普通求助只在附近可感知不自动分配任务"
+        },
+        {
+          "#": "13",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#3#ee4d1b72",
+          "status": "⚠️ Partial",
+          "requirement": "仅巨物保留系统全体提示（联机社交.md:106、:219）",
+          "match_text": "仅巨物保留系统全体提示"
+        },
+        {
+          "#": "14",
+          "key": "B7 已消题，联机社交#L0#a67cf0ff",
+          "status": "✅ Implemented",
+          "requirement": "旁观位不做——围观是自由行为，不设专属机制（B7 已消题，联机社交.md:106）",
+          "match_text": "旁观位不做围观是自由行为不设专属机制"
+        },
+        {
+          "#": "15",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#3#c195bdd8",
+          "status": "❌ Missing",
+          "requirement": "围观互动（舔脸／戳肚皮等）的权限口径归本册（联机社交.md:106）",
+          "match_text": "围观互动舔脸戳肚皮等的权限口径归本册"
+        },
+        {
+          "#": "16",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#3#21336cb5",
+          "status": "✅ Implemented",
+          "requirement": "倒地救援：搬运回营（联机社交.md:106、:264）",
+          "match_text": "倒地救援搬运回营"
+        },
+        {
+          "#": "17",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#3#48a51401",
+          "status": "✅ Implemented",
+          "requirement": "巨型鱼多人合力（联机社交.md:106、:265）",
+          "match_text": "巨型鱼多人合力"
+        },
+        {
+          "#": "18",
+          "key": "钓手被拖拽时的介入动作，联机社交#L0#05bdbeca",
+          "status": "❌ Missing",
+          "requirement": "拽尾巴救援（钓手被拖拽时的介入动作，联机社交.md:106、:265 标为「已接通」）",
+          "match_text": "拽尾巴救援"
+        },
+        {
+          "#": "19",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#4#1f61df89",
+          "status": "✅ Implemented",
+          "requirement": "恶作剧社交规则＝权限开关（谁能整谁、什么时候能整），熟人局不做生人局额外权限（联机社交.md:118、:186）",
+          "match_text": "恶作剧社交规则权限开关谁能整谁什么时候能整熟人局不做生人局额外权限"
+        },
+        {
+          "#": "20",
+          "key": "unknown#L0#753ae4f8",
+          "status": "🔄 Divergent",
+          "requirement": "不设系统级频率上限与时机限制（熟人自治；B4 关账，联机社交.md:118、:209）",
+          "match_text": "不设系统级频率上限与时机限制"
+        },
+        {
+          "#": "21",
+          "key": "B4，联机社交#L0#66e108f0",
+          "status": "✅ Implemented",
+          "requirement": "防骚扰牌子：玩家在钓点立牌后，保护范围内不能被整蛊（B4，联机社交.md:118）",
+          "match_text": "防骚扰牌子玩家在钓点立牌后保护范围内不能被整蛊"
+        },
+        {
+          "#": "22",
+          "key": "2026-08-16 拍定，联机社交#L0#0874fb23",
+          "status": "🔄 Divergent",
+          "requirement": "立牌＝完整免打扰，同时豁免偷窃（2026-08-16 拍定，联机社交.md:118、:130）",
+          "match_text": "立牌完整免打扰同时豁免偷窃"
+        },
+        {
+          "#": "23",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#4#0a2c5cbe",
+          "status": "⚠️ Partial",
+          "requirement": "拒绝做成演出：想整蛊/偷立牌者会强制进入小动画「有『玩家名』钓鱼真好，我就不添乱了」（联机社交.md:118）",
+          "match_text": "拒绝做成演出想整蛊偷立牌者会强制进入小动画有玩家名钓鱼真好我就不添乱了"
+        },
+        {
+          "#": "24",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#4#64329d28",
+          "status": "❌ Missing",
+          "requirement": "臭臭鱼「请勿靠近」：吃下后 90 秒周身臭气，无法被恶作剧选中、无法获得帮助和交互；搬运算「帮助」会被屏蔽；偷鱼被抓的扑倒反制不算「恶作剧」（联机社交.md:1",
+          "match_text": "臭臭鱼请勿靠近吃下后秒周身臭气无法被恶作剧选中无法获得帮助和交互搬运算帮助会被屏蔽偷鱼被抓的扑倒反制不算恶作剧"
+        },
+        {
+          "#": "25",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#4#2bc54223",
+          "status": "❌ Missing",
+          "requirement": "被整反制／被抓现场＝抓住肇事猫可扑倒滚成一团（联机社交.md:118、:130）",
+          "match_text": "被整反制被抓现场抓住肇事猫可扑倒滚成一团"
+        },
+        {
+          "#": "26",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#5#074b9a64",
+          "status": "✅ Implemented",
+          "requirement": "偷的对象＝他人鱼护与营地共用大鱼缸两类容器（联机社交.md:130）",
+          "match_text": "偷的对象他人鱼护与营地共用大鱼缸两类容器"
+        },
+        {
+          "#": "27",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#1#ab9af8ba",
+          "status": "✅ Implemented",
+          "requirement": "负面互动上限＝单条鱼被偷：不可偷装备、不可破坏他人图鉴与相册（联机社交.md:63、:130、:181）",
+          "match_text": "负面互动上限单条鱼被偷不可偷装备不可破坏他人图鉴与相册"
+        },
+        {
+          "#": "28",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#5#3e535ff3",
+          "status": "✅ Implemented",
+          "requirement": "偷了就吃：进食时间即追回窗口，吃完不可逆；偷吃获得成长（buff＋经验）（联机社交.md:130、:210）",
+          "match_text": "偷了就吃进食时间即追回窗口吃完不可逆偷吃获得成长buff经验"
+        },
+        {
+          "#": "29",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#5#d7e98bd4",
+          "status": "❌ Missing",
+          "requirement": "偷了就卖：一路奔向商店卖掉、钱进公款，奔店路程同样计入追回窗口（联机社交.md:130、:210）",
+          "match_text": "偷了就卖一路奔向商店卖掉钱进公款奔店路程同样计入追回窗口"
+        },
+        {
+          "#": "30",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#5#f43b3805",
+          "status": "✅ Implemented",
+          "requirement": "被抓现场：物归原主（联机社交.md:130）",
+          "match_text": "被抓现场物归原主"
+        },
+        {
+          "#": "31",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#5#86577d5e",
+          "status": "✅ Implemented",
+          "requirement": "被抓现场双方进印记（「偷鱼未遂」名场面）（联机社交.md:130、:134）",
+          "match_text": "被抓现场双方进印记偷鱼未遂名场面"
+        },
+        {
+          "#": "32",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#5#26c14977",
+          "status": "✅ Implemented",
+          "requirement": "不设保护机制：不上锁、不守缸（联机社交.md:130）",
+          "match_text": "不设保护机制不上锁不守缸"
+        },
+        {
+          "#": "33",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#5#709cb992",
+          "status": "✅ Implemented",
+          "requirement": "图鉴在钓到瞬间已记录，被偷不丢收集（联机社交.md:130、:251）",
+          "match_text": "图鉴在钓到瞬间已记录被偷不丢收集"
+        },
+        {
+          "#": "34",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#6#56aa0398",
+          "status": "✅ Implemented",
+          "requirement": "祭坛当日进度全员可见（联机社交.md:140）",
+          "match_text": "祭坛当日进度全员可见"
+        },
+        {
+          "#": "35",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#2#e0ee9226",
+          "status": "🔄 Divergent",
+          "requirement": "白天攒缸、白天不可献；夜里全队到石像前一次性上供，上供当场结算（联机社交.md:73、:140）",
+          "match_text": "白天攒缸白天不可献夜里全队到石像前一次性上供上供当场结算"
+        },
+        {
+          "#": "36",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#2#4c4bbd7e",
+          "status": "✅ Implemented",
+          "requirement": "翻天＝全队同意的开关，个人不能单独翻天（联机社交.md:73，2026-09-04 连带三）",
+          "match_text": "翻天全队同意的开关个人不能单独翻天"
+        },
+        {
+          "#": "37",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#6#06da3d7f",
+          "status": "🔄 Divergent",
+          "requirement": "交齐＝世界进度上涨、未交齐＝下跌，进度归零才是这一局失败（联机社交.md:140，v3.2 改制）",
+          "match_text": "交齐世界进度上涨未交齐下跌进度归零才是这一局失败"
+        },
+        {
+          "#": "38",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#7#879ff3a2",
+          "status": "✅ Implemented",
+          "requirement": "共同印记分发：多人入镜的印记照片进每个入镜者的相册（联机社交.md:152、:110、:144）",
+          "match_text": "共同印记分发多人入镜的印记照片进每个入镜者的相册"
+        },
+        {
+          "#": "39",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#2#5ee86427",
+          "status": "⚠️ Partial",
+          "requirement": "扔物传递（赠送＝把身上的东西扔下给别人拾取，无交易界面）（联机社交.md:71）",
+          "match_text": "扔物传递赠送把身上的东西扔下给别人拾取无交易界面"
+        },
+        {
+          "#": "40",
+          "key": "已拍定，联机社交#L0#dd649389",
+          "status": "❌ Missing",
+          "requirement": "归属可见：鱼带主人色环（已拍定，联机社交.md:218）",
+          "match_text": "归属可见鱼带主人色环"
+        },
+        {
+          "#": "41",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#10#6ffc7d29",
+          "status": "✅ Implemented",
+          "requirement": "局内图鉴互看默认开放、不做排名（联机社交.md:251）",
+          "match_text": "局内图鉴互看默认开放不做排名"
+        },
+        {
+          "#": "42",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#1#c047cfd3",
+          "status": "✅ Implemented",
+          "requirement": "不做 MMO 结构：无公会、无全服排行、无社交等级（联机社交.md:61、:180）",
+          "match_text": "不做MMO结构无公会无全服排行无社交等级"
+        },
+        {
+          "#": "43",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#1#55893ea1",
+          "status": "✅ Implemented",
+          "requirement": "局外零压力：无每日社交任务、无在线要求、无好友缺席惩罚（联机社交.md:65、:182）",
+          "match_text": "局外零压力无每日社交任务无在线要求无好友缺席惩罚"
+        },
+        {
+          "#": "44",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#3.2#8277f2bf",
+          "status": "✅ Implemented",
+          "requirement": "社交行为的同步判定（偷鱼归属、恶作剧命中、追回结算）服务器权威（联机社交.md:169）",
+          "match_text": "社交行为的同步判定偷鱼归属恶作剧命中追回结算服务器权威"
+        },
+        {
+          "#": "45",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#7#2c78ffc0",
+          "status": "❌ Missing",
+          "requirement": "作案可见性：叼鱼逃跑的猫必须全场显眼（嘴里叼着一条明晃晃的鱼），追回窗口才成立（联机社交.md:220）",
+          "match_text": "作案可见性叼鱼逃跑的猫必须全场显眼嘴里叼着一条明晃晃的鱼追回窗口才成立"
+        },
+        {
+          "#": "46",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#7#d5a7c546",
+          "status": "⚠️ Partial",
+          "requirement": "责任可读：恶作剧要能看出「谁干的」，追逐与反制才有对象（联机社交.md:221）",
+          "match_text": "责任可读恶作剧要能看出谁干的追逐与反制才有对象"
+        },
+        {
+          "#": "47",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#1#833aeb71",
+          "status": "❓ Unverifiable",
+          "requirement": "事故演出一律滑稽、不写成失败：断竿是猫仰面摔坐、落水是湿毛炸成球，不出红字、不出失败音效（联机社交.md:64）",
+          "match_text": "事故演出一律滑稽不写成失败断竿是猫仰面摔坐落水是湿毛炸成球不出红字不出失败音效"
+        },
+        {
+          "#": "48",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#1#bfb10b7e",
+          "status": "❓ Unverifiable",
+          "requirement": "猫味演出①：新猫小跑入画碰鼻子、掉线猫原地坐下舔毛、潜行压低身子尾巴尖抖、叼鱼狂奔鱼尾拍脸、进食吧唧嘴四下张望、排队上供后退两步坐好（联机社交.md:86、:9",
+          "match_text": "猫味演出新猫小跑入画碰鼻子掉线猫原地坐下舔毛潜行压低身子尾巴尖抖叼鱼狂奔鱼尾拍脸进食吧唧嘴四下张望排队上供后退两步坐好"
+        },
+        {
+          "#": "49",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#4#f7670e5e",
+          "status": "✅ Implemented",
+          "requirement": "关键搏斗时刻不额外豁免——被整正是戏（联机社交.md:118）",
+          "match_text": "关键搏斗时刻不额外豁免被整正是戏"
+        },
+        {
+          "#": "50",
+          "key": "EH0LwpHihiFR8Ukh6s6cXTqUnXc#1#bb7255e8",
+          "status": "✅ Implemented",
+          "requirement": "多人口子「抢抄」归本册：抄网挥空只剩「没够着」与「被抢先」两种（联机社交.md:25、:266）",
+          "match_text": "多人口子抢抄归本册抄网挥空只剩没够着与被抢先两种"
+        }
+      ],
+      "code_only": [],
+      "code_only_present": false,
+      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "docs": [
+        {
+          "file": "GDD 系统分册/联机社交.md",
+          "revision_id": 241
+        }
+      ],
+      "code": [
+        "Source/Catfishing/Online/",
+        "Source/Catfishing/Social/",
+        "Source/Catfishing/Framework/**",
+        "Config/DefaultEngine.ini"
+      ],
+      "scope": "全篇。联机边界另见工程 Docs/Architecture/项目技术方案.md。",
+      "refs": [],
+      "total": 50,
+      "implemented": 28,
+      "partial": 5,
+      "missing": 8,
+      "divergent": 7,
+      "unverifiable": 2
+    },
+    "营地与局进程": {
+      "rows": [
+        {
+          "#": "1",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#4#9df5ed1d",
+          "status": "✅ Implemented",
+          "requirement": "营地是固定据点：无建造 / 无装饰收集 / 无搬迁 / 无烹饪，设施为固定配置（营地.md:102-103）",
+          "match_text": "营地是固定据点无建造无装饰收集无搬迁无烹饪设施为固定配置"
+        },
+        {
+          "#": "2",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#2#33939190",
+          "status": "✅ Implemented",
+          "requirement": "共用大鱼缸是营地固定设施，全队共用同一个容器（营地.md:61,103）",
+          "match_text": "共用大鱼缸是营地固定设施全队共用同一个容器"
+        },
+        {
+          "#": "3",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#1#78140d73",
+          "status": "✅ Implemented",
+          "requirement": "营地公共仓库（团队装备库实体，商店发货落点）（营地.md:54,103,149）",
+          "match_text": "营地公共仓库团队装备库实体商店发货落点"
+        },
+        {
+          "#": "4",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#4#eebaf41d",
+          "status": "❓ Unverifiable",
+          "requirement": "岸边猫神石像／祭坛作为营地第五件固定设施摆在场景里（营地.md:103,156）",
+          "match_text": "岸边猫神石像祭坛作为营地第五件固定设施摆在场景里"
+        },
+        {
+          "#": "5",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#3#d8332a9b",
+          "status": "❌ Missing",
+          "requirement": "局内图鉴是营地第二件公共陈列：全队钓到新鱼自动上页、盖登记归属爪印、跟局走局末清空（营地.md:69,103）",
+          "match_text": "局内图鉴是营地第二件公共陈列全队钓到新鱼自动上页盖登记归属爪印跟局走局末清空"
+        },
+        {
+          "#": "6",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#2#3b277e79",
+          "status": "✅ Implemented",
+          "requirement": "鱼缸有容量上限，装满就钓不进去（营地.md:61）",
+          "match_text": "鱼缸有容量上限装满就钓不进去"
+        },
+        {
+          "#": "7",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#2#a8ae4f3e",
+          "status": "❌ Missing",
+          "requirement": "鱼缸容量首版：初始 10 条、两档升级 20／30 条、价 300／700 金币、用公款在商人猫处升级、升级随局清空（营地.md:61；局与进程.md:111）",
+          "match_text": "鱼缸容量首版初始条两档升级条价金币用公款在商人猫处升级升级随局清空"
+        },
+        {
+          "#": "8",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#2#504a5139",
+          "status": "✅ Implemented",
+          "requirement": "鱼缸跟局走、跨天留存、局末随局清空（营地.md:61,103；局与进程.md:103）",
+          "match_text": "鱼缸跟局走跨天留存局末随局清空"
+        },
+        {
+          "#": "9",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#2#31ffaf8d",
+          "status": "❓ Unverifiable",
+          "requirement": "缸内鱼按实际鱼种实体游动、猫趴缸贴玻璃跟鱼等设施演出（营地.md:61,63,107）",
+          "match_text": "缸内鱼按实际鱼种实体游动猫趴缸贴玻璃跟鱼等设施演出"
+        },
+        {
+          "#": "10",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#2#4220a56a",
+          "status": "❌ Missing",
+          "requirement": "缸内鱼带主人色环（营地.md:61）",
+          "match_text": "缸内鱼带主人色环"
+        },
+        {
+          "#": "11",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#2#d5795574",
+          "status": "✅ Implemented",
+          "requirement": "鱼缸与鱼护里的鱼可被偷（营地.md:61,115）",
+          "match_text": "鱼缸与鱼护里的鱼可被偷"
+        },
+        {
+          "#": "12",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#4#8a96259e",
+          "status": "✅ Implemented",
+          "requirement": "吃鱼：从缸里或鱼护取了直接吃，获得限时 buff 与经验（营地.md:77）",
+          "match_text": "吃鱼从缸里或鱼护取了直接吃获得限时buff与经验"
+        },
+        {
+          "#": "13",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#4#27604775",
+          "status": "✅ Implemented",
+          "requirement": "休息点：营地范围内请求休息（营地.md:77）",
+          "match_text": "休息点营地范围内请求休息"
+        },
+        {
+          "#": "14",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#4#7203b5a5",
+          "status": "✅ Implemented",
+          "requirement": "倒地的猫由队友送回营地固定落点（营地.md:77,114）",
+          "match_text": "倒地的猫由队友送回营地固定落点"
+        },
+        {
+          "#": "15",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#4#48ed48f7",
+          "status": "❌ Missing",
+          "requirement": "翻天后全员在营地醒来，未获救的倒地者自动救起（营地.md:77；局与进程.md:95）",
+          "match_text": "翻天后全员在营地醒来未获救的倒地者自动救起"
+        },
+        {
+          "#": "16",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#1#ecdfaf16",
+          "status": "❌ Missing",
+          "requirement": "地上未被拾取的物品次日清晨出现在营地（营地.md:54）",
+          "match_text": "地上未被拾取的物品次日清晨出现在营地"
+        },
+        {
+          "#": "17",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#5#42db7fd0",
+          "status": "🔄 Divergent",
+          "requirement": "篝火：入夜即自动点亮、整夜都在、想去就去不阻塞流程，坐下松弛并可叠罗汉（营地.md:85,89）",
+          "match_text": "篝火入夜即自动点亮整夜都在想去就去不阻塞流程坐下松弛并可叠罗汉"
+        },
+        {
+          "#": "18",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#a2a8f7fa",
+          "status": "🔄 Divergent",
+          "requirement": "天循环五步：清晨定任务 → 白天限时 → 到点入夜 → 夜晚无限 → 石像互动结算翻天（局与进程.md:40-44）",
+          "match_text": "天循环五步清晨定任务白天限时到点入夜夜晚无限石像互动结算翻天"
+        },
+        {
+          "#": "19",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#cf3df847",
+          "status": "✅ Implemented",
+          "requirement": "白天限时（局与进程.md:41,54,137）",
+          "match_text": "白天限时"
+        },
+        {
+          "#": "20",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#5d4e77a6",
+          "status": "✅ Implemented",
+          "requirement": "夜晚无时限、夜晚不出现任何计时或催促（局与进程.md:43,54,117）",
+          "match_text": "夜晚无时限夜晚不出现任何计时或催促"
+        },
+        {
+          "#": "21",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#1#f8bd186f",
+          "status": "🔄 Divergent",
+          "requirement": "到点即入夜、入夜不判定任务（局与进程.md:54）",
+          "match_text": "到点即入夜入夜不判定任务"
+        },
+        {
+          "#": "22",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#2#ba028b2a",
+          "status": "✅ Implemented",
+          "requirement": "入夜后不再有鱼咬钩（营地.md:41；局与进程.md:42)",
+          "match_text": "入夜后不再有鱼咬钩"
+        },
+        {
+          "#": "23",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#c269c180",
+          "status": "🔄 Divergent",
+          "requirement": "进行中的搏斗允许打完，压哨鱼进夜后照常可献（局与进程.md:42,54；营地.md:41,148）",
+          "match_text": "进行中的搏斗允许打完压哨鱼进夜后照常可献"
+        },
+        {
+          "#": "24",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#1#98251230",
+          "status": "✅ Implemented",
+          "requirement": "入夜时还没咬钩的浮漂，剩余计时一律清掉，不冻结也不跨天续用（局与进程.md:54）",
+          "match_text": "入夜时还没咬钩的浮漂剩余计时一律清掉不冻结也不跨天续用"
+        },
+        {
+          "#": "25",
+          "key": "EE9vwzWE2iHVXGkduzGcEx4bnjh#2#c43fc32e",
+          "status": "🔄 Divergent",
+          "requirement": "白天只攒不献，献祭窗口只在夜晚（营地.md:39,61；局与进程.md:23,41,60）",
+          "match_text": "白天只攒不献献祭窗口只在夜晚"
+        },
+        {
+          "#": "26",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#d2e81024",
+          "status": "❌ Missing",
+          "requirement": "祭坛是石像前的一块地不是容器：鱼一趟趟叼过去扔上就算摆好，互动前随时可叼回（局与进程.md:60,205；营地.md:42,61）",
+          "match_text": "祭坛是石像前的一块地不是容器鱼一趟趟叼过去扔上就算摆好互动前随时可叼回"
+        },
+        {
+          "#": "27",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#31483528",
+          "status": "🔄 Divergent",
+          "requirement": "当前仍在局里的玩家到齐后与石像互动一次，祭坛上的鱼一起消失、当场结算、天亮（局与进程.md:44,60,95；营地.md:42,61）",
+          "match_text": "当前仍在局里的玩家到齐后与石像互动一次祭坛上的鱼一起消失当场结算天亮"
+        },
+        {
+          "#": "28",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#e460002e",
+          "status": "❌ Missing",
+          "requirement": "祭坛两个圈：摆鱼范围 2 米、判定到场范围 8 米（局与进程.md:60）",
+          "match_text": "祭坛两个圈摆鱼范围米判定到场范围米"
+        },
+        {
+          "#": "29",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#85ab020c",
+          "status": "❌ Missing",
+          "requirement": "祭坛空着也能互动，结算为没交齐（局与进程.md:60,205；营地.md:42）",
+          "match_text": "祭坛空着也能互动结算为没交齐"
+        },
+        {
+          "#": "30",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#79932bec",
+          "status": "🔄 Divergent",
+          "requirement": "翻天没有单独的确认按钮，献祭本身就是翻天开关（局与进程.md:44,95,203）",
+          "match_text": "翻天没有单独的确认按钮献祭本身就是翻天开关"
+        },
+        {
+          "#": "31",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#5#0075823a",
+          "status": "✅ Implemented",
+          "requirement": "「全员」＝当前还在局里的玩家，离开的不阻塞（局与进程.md:95；营地.md:42,151）",
+          "match_text": "全员当前还在局里的玩家离开的不阻塞"
+        },
+        {
+          "#": "32",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#5#4cebd0f8",
+          "status": "❌ Missing",
+          "requirement": "倒地的猫豁免、不计入到场判定，队友仍可代献其鱼护里的鱼（局与进程.md:95；营地.md:42,77,150）",
+          "match_text": "倒地的猫豁免不计入到场判定队友仍可代献其鱼护里的鱼"
+        },
+        {
+          "#": "33",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#5#e7e7a98c",
+          "status": "⚠️ Partial",
+          "requirement": "石像互动时强制打断一切进行中互动（局与进程.md:95）",
+          "match_text": "石像互动时强制打断一切进行中互动"
+        },
+        {
+          "#": "34",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#f7131bf0",
+          "status": "❌ Missing",
+          "requirement": "每日任务按清晨在场人数确定，当天中途有人加入或退出都不重算（局与进程.md:40,58,107）",
+          "match_text": "每日任务按清晨在场人数确定当天中途有人加入或退出都不重算"
+        },
+        {
+          "#": "35",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#b873ed43",
+          "status": "⚠️ Partial",
+          "requirement": "任务逐日变大（局与进程.md:58,81,139）",
+          "match_text": "任务逐日变大"
+        },
+        {
+          "#": "36",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#43a37fc9",
+          "status": "✅ Implemented",
+          "requirement": "任务只数供奉点、不点名鱼种（局与进程.md:58,207）",
+          "match_text": "任务只数供奉点不点名鱼种"
+        },
+        {
+          "#": "37",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#9f410a40",
+          "status": "🔄 Divergent",
+          "requirement": "供奉点数按实际体重档取：小 1／中 2／大 4／巨影档 10（局与进程.md:66-71）",
+          "match_text": "供奉点数按实际体重档取小中大巨影档"
+        },
+        {
+          "#": "38",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#1599e061",
+          "status": "🔄 Divergent",
+          "requirement": "多交超出当日任务没有额外收益、也不滚存到明天（局与进程.md:73）",
+          "match_text": "多交超出当日任务没有额外收益也不滚存到明天"
+        },
+        {
+          "#": "39",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#ba24188f",
+          "status": "❌ Missing",
+          "requirement": "世界进度：0~100% 一根条、开局 10%、跟局走（局与进程.md:46,79,103,138）",
+          "match_text": "世界进度一根条开局跟局走"
+        },
+        {
+          "#": "40",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#3#53132395",
+          "status": "❌ Missing",
+          "requirement": "翻天结算时交齐则进度涨、没交齐则跌；涨幅跟任务大小走，降幅走独立曲线且开局压低（局与进程.md:79,81,83,140）",
+          "match_text": "翻天结算时交齐则进度涨没交齐则跌涨幅跟任务大小走降幅走独立曲线且开局压低"
+        },
+        {
+          "#": "41",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#3#5877248b",
+          "status": "❌ Missing",
+          "requirement": "臭臭鱼计入当日任务点数但削弱当日涨幅，每条 −25%、线性叠加、削后不低于原地踏步（局与进程.md:85,141）",
+          "match_text": "臭臭鱼计入当日任务点数但削弱当日涨幅每条线性叠加削后不低于原地踏步"
+        },
+        {
+          "#": "42",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#6#ad5207e5",
+          "status": "🔄 Divergent",
+          "requirement": "唯一的胜利条件是世界进度到 100%，天数没有上限（局与进程.md:99）",
+          "match_text": "唯一的胜利条件是世界进度到天数没有上限"
+        },
+        {
+          "#": "43",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#4#64530c75",
+          "status": "⚠️ Partial",
+          "requirement": "毕业：把进度顶到 100% 的那一次上供不翻天，当场转成结算夜，玩家自己决定何时离开（局与进程.md:91）",
+          "match_text": "毕业把进度顶到的那一次上供不翻天当场转成结算夜玩家自己决定何时离开"
+        },
+        {
+          "#": "44",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#4#82b805f0",
+          "status": "🔄 Divergent",
+          "requirement": "失败＝世界进度归零，这一局立刻结束，不进结算夜（局与进程.md:91,120）",
+          "match_text": "失败世界进度归零这一局立刻结束不进结算夜"
+        },
+        {
+          "#": "45",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#4#7ad8fe33",
+          "status": "⚠️ Partial",
+          "requirement": "失败时买卖直接冻结、本局金币与装备清零、不再生火（局与进程.md:91；营地.md:153）",
+          "match_text": "失败时买卖直接冻结本局金币与装备清零不再生火"
+        },
+        {
+          "#": "46",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#7#d619bbff",
+          "status": "✅ Implemented",
+          "requirement": "跟人走清单＝图鉴、印记相册、外观解锁，且永不因失败回滚（局与进程.md:103,118）",
+          "match_text": "跟人走清单图鉴印记相册外观解锁且永不因失败回滚"
+        },
+        {
+          "#": "47",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#7#edda2328",
+          "status": "⚠️ Partial",
+          "requirement": "跟局走清单＝营地、鱼缸与局内图鉴、消耗品数量、公款与团队装备库、猫状态、祭坛与世界进度（局与进程.md:103）",
+          "match_text": "跟局走清单营地鱼缸与局内图鉴消耗品数量公款与团队装备库猫状态祭坛与世界进度"
+        },
+        {
+          "#": "48",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#1#aff6564c",
+          "status": "✅ Implemented",
+          "requirement": "无局外元进度：局与局之间只有收集与解锁，没有义务（局与进程.md:34,119）",
+          "match_text": "无局外元进度局与局之间只有收集与解锁没有义务"
+        },
+        {
+          "#": "49",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#8#4a3300f5",
+          "status": "⚠️ Partial",
+          "requirement": "单人＝自己走到祭坛与石像互动即可结算，空祭坛也不卡流程（局与进程.md:107；营地.md:142）",
+          "match_text": "单人自己走到祭坛与石像互动即可结算空祭坛也不卡流程"
+        },
+        {
+          "#": "50",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#3#80a14132",
+          "status": "✅ Implemented",
+          "requirement": "不做个人供奉排名（局与进程.md:87）",
+          "match_text": "不做个人供奉排名"
+        },
+        {
+          "#": "51",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#3#8ea2b678",
+          "status": "❌ Missing",
+          "requirement": "局末结算用非排序趣味头衔加全员合影（局与进程.md:87）",
+          "match_text": "局末结算用非排序趣味头衔加全员合影"
+        },
+        {
+          "#": "52",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#2#64cf5375",
+          "status": "✅ Implemented",
+          "requirement": "商人猫夜里照常营业，\"吃它、卖它还是献它\"整夜都活着（局与进程.md:62）",
+          "match_text": "商人猫夜里照常营业吃它卖它还是献它整夜都活着"
+        },
+        {
+          "#": "53",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#7#60aa27f2",
+          "status": "❌ Missing",
+          "requirement": "白天全队可见「缸内可献点数 vs 今日任务」（局与进程.md:146）",
+          "match_text": "白天全队可见缸内可献点数vs今日任务"
+        },
+        {
+          "#": "54",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#4#a9c1c3b8",
+          "status": "❌ Missing",
+          "requirement": "进度涨跌看得见：夜晚祭坛即进度条、森林随进度复苏或枯萎（局与进程.md:125,146）",
+          "match_text": "进度涨跌看得见夜晚祭坛即进度条森林随进度复苏或枯萎"
+        },
+        {
+          "#": "55",
+          "key": "Ca49ww71ai2IAlklmsZcqF7Tnzb#7#3f0f4c6c",
+          "status": "❌ Missing",
+          "requirement": "跨局解锁的触发源＝天数／世界进度里程碑（局与进程.md:103）",
+          "match_text": "跨局解锁的触发源天数世界进度里程碑"
+        }
+      ],
+      "code_only": [],
+      "code_only_present": false,
+      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "docs": [
+        {
+          "file": "GDD 系统分册/局与进程.md",
+          "revision_id": 164
+        },
+        {
+          "file": "GDD 系统分册/营地.md",
+          "revision_id": 308
+        }
+      ],
+      "code": [
+        "Source/Catfishing/Camp/",
+        "Source/Catfishing/Run/",
+        "Source/Catfishing/Items/**",
+        "Source/Catfishing/Framework/Game/",
+        "Scripts/verify_items_tank_sacrifice_camp.ps1",
+        "Scripts/verify_items_tank_sacrifice_camp_map.py",
+        "Config/DefaultGame.ini"
+      ],
+      "scope": "全篇。",
+      "refs": [
+        "裁决同步/裁决同步 · 鱼／营地／UI 与交互（张佳）.md"
+      ],
+      "total": 55,
+      "implemented": 19,
+      "partial": 6,
+      "missing": 17,
+      "divergent": 11,
+      "unverifiable": 2
+    },
+    "道具": {
+      "rows": [
+        {
+          "#": "1",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#1#97cb166d",
+          "status": "⚠️ Partial",
+          "requirement": "从团队装备库携带鱼竿／鱼饵／鱼漂进钓鱼点，抄网、窝料、鱼护、道具一并揣上（道具.md:62）",
+          "match_text": "从团队装备库携带鱼竿鱼饵鱼漂进钓鱼点抄网窝料鱼护道具一并揣上"
+        },
+        {
+          "#": "2",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#1#c2221a84",
+          "status": "✅ Implemented",
+          "requirement": "携带是格数制：背包格数有限，竿/漂/抄网各占一格，饵与窝料按份计（道具.md:62）",
+          "match_text": "携带是格数制背包格数有限竿漂抄网各占一格饵与窝料按份计"
+        },
+        {
+          "#": "3",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#1#4722b851",
+          "status": "✅ Implemented",
+          "requirement": "出门后湖畔可换装备，但换的前提是背了（道具.md:62）",
+          "match_text": "出门后湖畔可换装备但换的前提是背了"
+        },
+        {
+          "#": "4",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#1#4b648332",
+          "status": "❌ Missing",
+          "requirement": "队友装备靠世界表现看，凑近闻是同一件事的猫式演出；备装动作全是猫的（扒拉竿、拍饵袋、叼竿甩背）（道具.md:62,73）",
+          "match_text": "队友装备靠世界表现看凑近闻是同一件事的猫式演出备装动作全是猫的扒拉竿拍饵袋叼竿甩背"
+        },
+        {
+          "#": "5",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#1#e79bd30b",
+          "status": "❓ Unverifiable",
+          "requirement": "玩家自己打开装备栏时，鱼竿鱼饵等装备分开摆，不杂糅（道具.md:62）",
+          "match_text": "玩家自己打开装备栏时鱼竿鱼饵等装备分开摆不杂糅"
+        },
+        {
+          "#": "6",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#1#03a83531",
+          "status": "🔄 Divergent",
+          "requirement": "鱼护＝随身渔获容器、占一格、非必带（道具.md:64；道具.csv 第7行 作用列）",
+          "match_text": "鱼护随身渔获容器占一格非必带"
+        },
+        {
+          "#": "7",
+          "key": "RBHPwKudEiwItbko3HvcFPCenom#r7#47a85570",
+          "status": "🔄 Divergent",
+          "requirement": "鱼护最多可以装 6 条鱼（道具.csv 第7行 裁决备注列）",
+          "match_text": "鱼护最多可以装条鱼"
+        },
+        {
+          "#": "8",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#1#f355afbf",
+          "status": "✅ Implemented",
+          "requirement": "叼鱼态：嘴里只能叼一条（道具.md:64）",
+          "match_text": "叼鱼态嘴里只能叼一条"
+        },
+        {
+          "#": "9",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#1#1c0f130d",
+          "status": "❌ Missing",
+          "requirement": "叼着鱼不能抛竿（道具.md:64）",
+          "match_text": "叼着鱼不能抛竿"
+        },
+        {
+          "#": "10",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#1#78103cc0",
+          "status": "✅ Implemented",
+          "requirement": "叼着鱼不能再抄或拾第二条（道具.md:64）",
+          "match_text": "叼着鱼不能再抄或拾第二条"
+        },
+        {
+          "#": "11",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#1#5ba3ae72",
+          "status": "✅ Implemented",
+          "requirement": "落水时嘴里的鱼保留（道具.md:64）",
+          "match_text": "落水时嘴里的鱼保留"
+        },
+        {
+          "#": "12",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#1#31d5a405",
+          "status": "✅ Implemented",
+          "requirement": "抄网单一款式、无属性数值（道具.md:68）",
+          "match_text": "抄网单一款式无属性数值"
+        },
+        {
+          "#": "13",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#1#53293849",
+          "status": "🔄 Divergent",
+          "requirement": "可抄条件：钩上或翻肚的鱼、离岸 < 1 米 → 抄取必中（道具.md:68）",
+          "match_text": "可抄条件钩上或翻肚的鱼离岸米抄取必中"
+        },
+        {
+          "#": "14",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#1#c46f2380",
+          "status": "✅ Implemented",
+          "requirement": "自由游动的鱼不可捞（道具.md:68）",
+          "match_text": "自由游动的鱼不可捞"
+        },
+        {
+          "#": "15",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#1#457ca10d",
+          "status": "❓ Unverifiable",
+          "requirement": "湖心巨影：任何抄网都抄不动，只走合力消耗战（道具.md:69）",
+          "match_text": "湖心巨影任何抄网都抄不动只走合力消耗战"
+        },
+        {
+          "#": "16",
+          "key": "RBHPwKudEiwItbko3HvcFPCenom#r6#5a43ef10",
+          "status": "⚠️ Partial",
+          "requirement": "抄网商店购买、20 金币（道具.csv 第6行 价格列／如何获得列）",
+          "match_text": "抄网商店购买金币"
+        },
+        {
+          "#": "17",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#2#08bcf1d7",
+          "status": "✅ Implemented",
+          "requirement": "鱼饵随抛竿挂出；进入咬钩后无论结局都消耗 1 份，咬钩前主动收竿零损失（道具.md:83）",
+          "match_text": "鱼饵随抛竿挂出进入咬钩后无论结局都消耗份咬钩前主动收竿零损失"
+        },
+        {
+          "#": "18",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#2#326a767d",
+          "status": "✅ Implemented",
+          "requirement": "窝料决定上钩的是哪一类鱼，鱼饵决定是哪一条（属性命中后按偏好权重再选一次）（道具.md:83）",
+          "match_text": "窝料决定上钩的是哪一类鱼鱼饵决定是哪一条属性命中后按偏好权重再选一次"
+        },
+        {
+          "#": "19",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#2#7d73efc6",
+          "status": "⚠️ Partial",
+          "requirement": "普通饵营地免费自取（保底三件之一）（道具.md:85）",
+          "match_text": "普通饵营地免费自取保底三件之一"
+        },
+        {
+          "#": "20",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#2#eb543d4f",
+          "status": "🔄 Divergent",
+          "requirement": "普通饵携带上限 8 份（2026-08-19 由 5 改）（道具.md:85）",
+          "match_text": "普通饵携带上限份由改"
+        },
+        {
+          "#": "21",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#2#f8e5b5aa",
+          "status": "⚠️ Partial",
+          "requirement": "特殊饵商店购买、每日进货限量（道具.md:85）",
+          "match_text": "特殊饵商店购买每日进货限量"
+        },
+        {
+          "#": "22",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#2#fcf7fb67",
+          "status": "❌ Missing",
+          "requirement": "草地也有概率捡到鱼饵（道具.md:85）",
+          "match_text": "草地也有概率捡到鱼饵"
+        },
+        {
+          "#": "23",
+          "key": "unknown#L0#b3e9b0ad",
+          "status": "⚠️ Partial",
+          "requirement": "鱼饵表 5 行（虫虫／肉块／果实／花蜜／月光）× 6 列落进资产与运行目录（鱼饵/Sheet1.csv 第2-6行）",
+          "match_text": "鱼饵表行虫虫肉块果实花蜜月光列落进资产与运行目录"
+        },
+        {
+          "#": "24",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#3#f7fb9a93",
+          "status": "✅ Implemented",
+          "requirement": "鱼漂 3 种起步、种类制非等级制、保留扩充口（道具.md:97；鱼漂/Sheet1.csv 第2-4行）",
+          "match_text": "鱼漂种起步种类制非等级制保留扩充口"
+        },
+        {
+          "#": "25",
+          "key": "unknown#L0#f2620c0a",
+          "status": "🔄 Divergent",
+          "requirement": "射程分 3／5／7 米档（鱼漂/Sheet1.csv 第2-4行 射程列）",
+          "match_text": "射程分米档"
+        },
+        {
+          "#": "26",
+          "key": "unknown#L0#36110aae",
+          "status": "⚠️ Partial",
+          "requirement": "精准度高／中／低＝落点精准（鱼漂/Sheet1.csv 第2-4行 精准度列）",
+          "match_text": "精准度高中低落点精准"
+        },
+        {
+          "#": "27",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#3#dc30d698",
+          "status": "❌ Missing",
+          "requirement": "铃铛漂咬钩铃响、全场可闻（道具.md:97,101；鱼漂/Sheet1.csv 第4行 特效列）",
+          "match_text": "铃铛漂咬钩铃响全场可闻"
+        },
+        {
+          "#": "28",
+          "key": "unknown#L0#225a03f4",
+          "status": "⚠️ Partial",
+          "requirement": "羽毛漂 0 营地免费自取、毛线球 10／铃铛 15 公款购买（鱼漂/Sheet1.csv 第2-4行 价格列／获取方式列）",
+          "match_text": "羽毛漂营地免费自取毛线球铃铛公款购买"
+        },
+        {
+          "#": "29",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#7#945eccd8",
+          "status": "✅ Implemented",
+          "requirement": "每种窝料一组配方 `{腥, 香, 酵}`，三个非负整数，允许某一类为零（道具.md:147）",
+          "match_text": "每种窝料一组配方腥香酵三个非负整数允许某一类为零"
+        },
+        {
+          "#": "30",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#7#a78466b1",
+          "status": "🔄 Divergent",
+          "requirement": "配方单位是鱼的条数：投放一份就按配方往窝点加这么多条对应偏好的鱼（道具.md:147）",
+          "match_text": "配方单位是鱼的条数投放一份就按配方往窝点加这么多条对应偏好的鱼"
+        },
+        {
+          "#": "31",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#7#9a15326d",
+          "status": "✅ Implemented",
+          "requirement": "窝料携带上限 5 份（道具.md:147）",
+          "match_text": "窝料携带上限份"
+        },
+        {
+          "#": "32",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#7#c3fb4ca6",
+          "status": "⚠️ Partial",
+          "requirement": "投出去的窝料可以叼起再抛，叠加进窝点、不重置衰减计时（道具.md:147）",
+          "match_text": "投出去的窝料可以叼起再抛叠加进窝点不重置衰减计时"
+        },
+        {
+          "#": "33",
+          "key": "unknown#L0#5ad975bb",
+          "status": "⚠️ Partial",
+          "requirement": "窝料表 4 行（虫虫窝／花果香窝／发酵谷物窝／巨鱼窝）× 9 列落进资产与运行目录（窝料/Sheet1.csv 第2-5行；第1行 表头）",
+          "match_text": "窝料表行虫虫窝花果香窝发酵谷物窝巨鱼窝列落进资产与运行目录"
+        },
+        {
+          "#": "34",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#7#bb95d569",
+          "status": "❌ Missing",
+          "requirement": "窝料表「目标鱼种加权」列：填鱼种与倍率，抽鱼第二步对该鱼种权重乘这个倍率（道具.md:151；窝料/Sheet1.csv 第5行 目标鱼种加权列）",
+          "match_text": "窝料表目标鱼种加权列填鱼种与倍率抽鱼第二步对该鱼种权重乘这个倍率"
+        },
+        {
+          "#": "35",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#7#ab740459",
+          "status": "✅ Implemented",
+          "requirement": "聚鱼触发概率不按窝料品质或窝点总存量加成，窝料表不建品质字段（道具.md:151）",
+          "match_text": "聚鱼触发概率不按窝料品质或窝点总存量加成窝料表不建品质字段"
+        },
+        {
+          "#": "36",
+          "key": "unknown#L0#8f059308",
+          "status": "⚠️ Partial",
+          "requirement": "三档竿：树枝竿／玩具竿／逗猫棒竿（鱼竿/Sheet1.csv 第2-4行 鱼竿列／档位别名列）",
+          "match_text": "三档竿树枝竿玩具竿逗猫棒竿"
+        },
+        {
+          "#": "37",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#3.2#be9ba0b1",
+          "status": "🔄 Divergent",
+          "requirement": "竿另有「强度」参数参与搏斗判定（25／60／210）（道具.md:161；鱼竿/Sheet1.csv 第2-4行 强度列，第7行）",
+          "match_text": "竿另有强度参数参与搏斗判定"
+        },
+        {
+          "#": "38",
+          "key": "unknown#L0#ededd94f",
+          "status": "🔄 Divergent",
+          "requirement": "三档竿耐久 40／70／120（鱼竿/Sheet1.csv 第2-4行 耐久列）",
+          "match_text": "三档竿耐久"
+        },
+        {
+          "#": "39",
+          "key": "unknown#L0#34234101",
+          "status": "⚠️ Partial",
+          "requirement": "L_max 放线上限 60／80／100 米（鱼竿/Sheet1.csv 第2-4行 L_max 列）",
+          "match_text": "Lmax放线上限米"
+        },
+        {
+          "#": "40",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#3.2#5db9a26f",
+          "status": "❌ Missing",
+          "requirement": "耐久损耗分层案之一：每钓一条固定 -1 基础磨损（搏斗以渔获结束即扣，渔网产出不扣）（道具.md:161；鱼竿/Sheet1.csv 第6行）",
+          "match_text": "耐久损耗分层案之一每钓一条固定基础磨损搏斗以渔获结束即扣渔网产出不扣"
+        },
+        {
+          "#": "41",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#3.2#26cc6c51",
+          "status": "🔄 Divergent",
+          "requirement": "耐久损耗分层案之二：线绷紧的每一秒 -= 鱼力×0.05（道具.md:161；鱼竿/Sheet1.csv 第6行）",
+          "match_text": "耐久损耗分层案之二线绷紧的每一秒鱼力"
+        },
+        {
+          "#": "42",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#3.2#2c384c47",
+          "status": "🔄 Divergent",
+          "requirement": "耐久不可修复；竿耐久对道具「回补封闭」（道具.md:161；道具.md:188 资源边界表）",
+          "match_text": "耐久不可修复竿耐久对道具回补封闭"
+        },
+        {
+          "#": "43",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#3.2#753ba21e",
+          "status": "⚠️ Partial",
+          "requirement": "断竿后商店购新；1 级竿在营地免费自取、不限量（道具.md:161）",
+          "match_text": "断竿后商店购新级竿在营地免费自取不限量"
+        },
+        {
+          "#": "44",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#4#897f8f8d",
+          "status": "🔄 Divergent",
+          "requirement": "不引入世界观外元素：装备命名与形态一律猫世界化，无人类文化符号（道具.md:206）",
+          "match_text": "不引入世界观外元素装备命名与形态一律猫世界化无人类文化符号"
+        },
+        {
+          "#": "45",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#3.3#70f9c02c",
+          "status": "⚠️ Partial",
+          "requirement": "四类归类：功能装备／循环消耗／增效消耗／社交演出（道具.md:172-177；道具.csv 第1行 类别（四类）列）",
+          "match_text": "四类归类功能装备循环消耗增效消耗社交演出"
+        },
+        {
+          "#": "46",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#3.3#01a97c0f",
+          "status": "⚠️ Partial",
+          "requirement": "总闸门：搏斗内没有任何主动道具操作；抄网与预穿戴被动是两点例外（道具.md:168）",
+          "match_text": "总闸门搏斗内没有任何主动道具操作抄网与预穿戴被动是两点例外"
+        },
+        {
+          "#": "47",
+          "key": "RBHPwKudEiwItbko3HvcFPCenom#r8#3ae05abc",
+          "status": "❌ Missing",
+          "requirement": "小鱼干：搏斗外使用、瞬间回满猫体力（道具.csv 第8行 作用列；道具.md:191）",
+          "match_text": "小鱼干搏斗外使用瞬间回满猫体力"
+        },
+        {
+          "#": "48",
+          "key": "RBHPwKudEiwItbko3HvcFPCenom#r9#dafb7365",
+          "status": "❌ Missing",
+          "requirement": "爪爪套：备装时穿戴、下一场搏斗按比例减少猫体力消耗、一场耗尽、同类不叠（道具.csv 第9行 作用列）",
+          "match_text": "爪爪套备装时穿戴下一场搏斗按比例减少猫体力消耗一场耗尽同类不叠"
+        },
+        {
+          "#": "49",
+          "key": "RBHPwKudEiwItbko3HvcFPCenom#r10#04405c22",
+          "status": "❌ Missing",
+          "requirement": "幸运四叶草：下一竿有概率出稀有鱼，只改权重、无保底必出（道具.csv 第10行 作用列）",
+          "match_text": "幸运四叶草下一竿有概率出稀有鱼只改权重无保底必出"
+        },
+        {
+          "#": "50",
+          "key": "unknown#L0#4ea3e2a9",
+          "status": "❌ Missing",
+          "requirement": "社交演出三件：湿毛器／恶作剧假鱼／响响筒，零数值副作用（道具.csv 第11-13行）",
+          "match_text": "社交演出三件湿毛器恶作剧假鱼响响筒零数值副作用"
+        },
+        {
+          "#": "51",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#3.3#3fbba680",
+          "status": "❌ Missing",
+          "requirement": "渔网特例：500 金币、按落点窝点概率 roll 5~8 条、稀有不加权、湖心巨影不入网、随身限 1、每队每局限购、用后 30 秒死水（道具.md:193；道具",
+          "match_text": "渔网特例金币按落点窝点概率roll条稀有不加权湖心巨影不入网随身限每队每局限购用后秒死水"
+        },
+        {
+          "#": "52",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#3.3#5aef05eb",
+          "status": "⚠️ Partial",
+          "requirement": "资源边界五条：道具不碰鱼体力、搏斗内不回猫体力、竿耐久回补封闭、出鱼概率开放、纯演出全开（道具.md:185-189）",
+          "match_text": "资源边界五条道具不碰鱼体力搏斗内不回猫体力竿耐久回补封闭出鱼概率开放纯演出全开"
+        },
+        {
+          "#": "53",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#3.3#57d1bd87",
+          "status": "❌ Missing",
+          "requirement": "验证红线：数值模拟固定保留「零道具通关」用例，逐版本验证（道具.md:195）",
+          "match_text": "验证红线数值模拟固定保留零道具通关用例逐版本验证"
+        },
+        {
+          "#": "54",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#5#45b50da2",
+          "status": "✅ Implemented",
+          "requirement": "解锁＝商店上新货；解锁清单跟人走，件与公款跟局走（道具.md:123）",
+          "match_text": "解锁商店上新货解锁清单跟人走件与公款跟局走"
+        },
+        {
+          "#": "55",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#5#99a90d03",
+          "status": "⚠️ Partial",
+          "requirement": "图鉴收集里程碑可附带装备解锁（道具.md:123）",
+          "match_text": "图鉴收集里程碑可附带装备解锁"
+        },
+        {
+          "#": "56",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#4#4e39deb6",
+          "status": "✅ Implemented",
+          "requirement": "装备不可被偷：好友只可以偷鱼（道具.md:204）",
+          "match_text": "装备不可被偷好友只可以偷鱼"
+        },
+        {
+          "#": "57",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#4#012423f0",
+          "status": "❌ Missing",
+          "requirement": "主动分享道具＝把身上的东西扔下让人拾取，无交易界面（道具.md:204-205）",
+          "match_text": "主动分享道具把身上的东西扔下让人拾取无交易界面"
+        },
+        {
+          "#": "58",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#4#bda10976",
+          "status": "❌ Missing",
+          "requirement": "物品当天不灭失、跨天不保留（翻天时一并消失）；水面有空气墙，物品丢不进湖里（道具.md:205，2026-09-05 改口径）",
+          "match_text": "物品当天不灭失跨天不保留翻天时一并消失水面有空气墙物品丢不进湖里"
+        },
+        {
+          "#": "59",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#6#bee8d3d1",
+          "status": "✅ Implemented",
+          "requirement": "装备与鱼偏好关联：不同鱼有不同偏好，装备影响遇见目标鱼的机会（道具.md:133）",
+          "match_text": "装备与鱼偏好关联不同鱼有不同偏好装备影响遇见目标鱼的机会"
+        },
+        {
+          "#": "60",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#7#b41c4a79",
+          "status": "⚠️ Partial",
+          "requirement": "装备外观即信息：竿／饵／漂外观差异一眼可辨（道具.md:236-237）",
+          "match_text": "装备外观即信息竿饵漂外观差异一眼可辨"
+        },
+        {
+          "#": "61",
+          "key": "RBHPwKudEiwItbko3HvcFPCenom#r1#e9523396",
+          "status": "🔄 Divergent",
+          "requirement": "道具总表以 `item_id` 为程序主键（gear_rod／cons_bait／buff_gloves…），改显示名不动它（道具.csv 第1行 item_i",
+          "match_text": "道具总表以itemid为程序主键gearrodconsbaitbuffgloves改显示名不动它"
+        },
+        {
+          "#": "62",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#7#2c2e8a8c",
+          "status": "❌ Missing",
+          "requirement": "三选一成长项「窝料携带 +2」「鱼饵携带 +2」「背包格数 +1」作用于本册携带字段（道具.md:147,265）",
+          "match_text": "三选一成长项窝料携带鱼饵携带背包格数作用于本册携带字段"
+        },
+        {
+          "#": "63",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#1#c4578e95",
+          "status": "✅ Implemented",
+          "requirement": "装备不做等级／品质／随机词条／强化升级（道具.md:41-42 禁区②③；道具.md:97「等级制不采用」）",
+          "match_text": "装备不做等级品质随机词条强化升级"
+        },
+        {
+          "#": "64",
+          "key": "VVHrw3FAui78wZkjuKZcLHBdnEc#4#c44cad39",
+          "status": "⚠️ Partial",
+          "requirement": "渔获流：图鉴即时记录 → 叼嘴／鱼护 → 大鱼缸 → 献祭 / 吃 / 卖商店 / 观赏，局末随局清空（道具.md:203）",
+          "match_text": "渔获流图鉴即时记录叼嘴鱼护大鱼缸献祭吃卖商店观赏局末随局清空"
+        }
+      ],
+      "code_only": [],
+      "code_only_present": false,
+      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "docs": [
+        {
+          "file": "GDD 系统分册/道具/窝料/Sheet1.csv",
+          "revision": 51
+        },
+        {
+          "file": "GDD 系统分册/道具/道具.md",
+          "revision_id": 827
+        },
+        {
+          "file": "GDD 系统分册/道具/道具总表/道具.csv",
+          "revision": 229
+        },
+        {
+          "file": "GDD 系统分册/道具/鱼漂/Sheet1.csv",
+          "revision": 9
+        },
+        {
+          "file": "GDD 系统分册/道具/鱼竿/Sheet1.csv",
+          "revision": 4
+        },
+        {
+          "file": "GDD 系统分册/道具/鱼饵/Sheet1.csv",
+          "revision": 33
+        }
+      ],
+      "code": [
+        "Source/Catfishing/Equipment/",
+        "Source/Catfishing/Items/**",
+        "Content/Catfishing/Data/Equipment/",
+        "Scripts/configure_starter_rod_line_tuning.py",
+        "Scripts/configure_formal_rod_anchor_baseline.py",
+        "Config/DefaultGame.ini"
+      ],
+      "scope": "全篇；假饵（点子库·Demo 不做）.csv 排除。表格每行道具、每列参数算一条设计要求，可按表合并成粗粒度行，但说清落在哪、哪些列查不了。",
+      "refs": [
+        "数值模拟与参数记录.md"
+      ],
+      "total": 64,
+      "implemented": 17,
+      "partial": 18,
+      "missing": 15,
+      "divergent": 12,
+      "unverifiable": 2
+    },
+    "钓鱼系统-打窝聚鱼与多人": {
+      "rows": [
+        {
+          "#": "1",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.1#82d7541e",
+          "status": "🔄 Divergent",
+          "requirement": "窝点维护 `{X腥, P香, J酵}` 三个存量，每格是窝点里对应偏好鱼的条数；打窝＝逐分量加算，存量恒为整条鱼（钓鱼规则.md:35）",
+          "match_text": "窝点维护X腥P香J酵三个存量每格是窝点里对应偏好鱼的条数打窝逐分量加算存量恒为整条鱼"
+        },
+        {
+          "#": "2",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.1#fd1c7278",
+          "status": "🔄 Divergent",
+          "requirement": "窝点是以首次窝料落点为圆心、半径 5 米的圆，初始存量＝首次投料三属性增量（钓鱼规则.md:37）",
+          "match_text": "窝点是以首次窝料落点为圆心半径米的圆初始存量首次投料三属性增量"
+        },
+        {
+          "#": "3",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.1#b2fc662f",
+          "status": "⚠️ Partial",
+          "requirement": "服务器维护共享存量，同一窝点的所有浮漂读同一份数据（钓鱼规则.md:37）",
+          "match_text": "服务器维护共享存量同一窝点的所有浮漂读同一份数据"
+        },
+        {
+          "#": "4",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.1#d56dcbce",
+          "status": "❌ Missing",
+          "requirement": "新投料落在已有窝点圆内→向该窝点加算存量并沿用原圆心半径；否则新建窝点（钓鱼规则.md:39）",
+          "match_text": "新投料落在已有窝点圆内向该窝点加算存量并沿用原圆心半径否则新建窝点"
+        },
+        {
+          "#": "5",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.1#bdcd6733",
+          "status": "❌ Missing",
+          "requirement": "几何归属唯一规则：近者优先（比圆心距离）、等距早者优先（创建序号小者）、边界算内（距离 ≤ 半径）（钓鱼规则.md:39）",
+          "match_text": "几何归属唯一规则近者优先比圆心距离等距早者优先创建序号小者边界算内距离半径"
+        },
+        {
+          "#": "6",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.1#da0ff236",
+          "status": "✅ Implemented",
+          "requirement": "叠加没有设计上限，代码只留正常游玩碰不到的工程安全夹（钓鱼规则.md:41）",
+          "match_text": "叠加没有设计上限代码只留正常游玩碰不到的工程安全夹"
+        },
+        {
+          "#": "7",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.1#7afb48df",
+          "status": "🔄 Divergent",
+          "requirement": "投窝料和抛竿是同一套操作：点击定点、无蓄力、无散布，点哪落哪（钓鱼规则.md:43）",
+          "match_text": "投窝料和抛竿是同一套操作点击定点无蓄力无散布点哪落哪"
+        },
+        {
+          "#": "8",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.1#a27eed51",
+          "status": "⚠️ Partial",
+          "requirement": "射程限制，超程提示够不到（钓鱼规则.md:43）",
+          "match_text": "射程限制超程提示够不到"
+        },
+        {
+          "#": "9",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.1#a790d9aa",
+          "status": "❌ Missing",
+          "requirement": "投到岸上的窝料变成掉落物，可以捡回（钓鱼规则.md:43）",
+          "match_text": "投到岸上的窝料变成掉落物可以捡回"
+        },
+        {
+          "#": "10",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.1#17f4d063",
+          "status": "❓ Unverifiable",
+          "requirement": "投料落水泛涟漪、出现鱼影（钓鱼规则.md:43）",
+          "match_text": "投料落水泛涟漪出现鱼影"
+        },
+        {
+          "#": "11",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.1#8647e9c0",
+          "status": "❌ Missing",
+          "requirement": "叼起窝料再次抛入同一个窝执行叠加，不重置衰减计时（钓鱼规则.md:45）",
+          "match_text": "叼起窝料再次抛入同一个窝执行叠加不重置衰减计时"
+        },
+        {
+          "#": "12",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.1#2db496b2",
+          "status": "🔄 Divergent",
+          "requirement": "补窝受道具总闸门约束：正在搏斗的猫不能掏窝料；其他处于可用道具状态的玩家可以为同一个窝补料（钓鱼规则.md:45；多人钓鱼附篇.md:75）",
+          "match_text": "补窝受道具总闸门约束正在搏斗的猫不能掏窝料其他处于可用道具状态的玩家可以为同一个窝补料"
+        },
+        {
+          "#": "13",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.2#20ffa386",
+          "status": "🔄 Divergent",
+          "requirement": "`Total = X+P+J`（条数）；Total>0 → T_base 15 秒，Total=0（含落点不在任何窝点内）→ T_base 120 秒（钓鱼规则",
+          "match_text": "TotalXPJ条数TotalTbase秒Total含落点不在任何窝点内Tbase秒"
+        },
+        {
+          "#": "14",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.2#f1c75618",
+          "status": "❌ Missing",
+          "requirement": "`T_actual = T_base / (1 + Total/K)`，`K = 100`（钓鱼规则.md:58）",
+          "match_text": "TactualTbaseTotalKK"
+        },
+        {
+          "#": "15",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.2#3921a1ae",
+          "status": "✅ Implemented",
+          "requirement": "计时器挂在浮漂上，每漂独立（钓鱼规则.md:60）",
+          "match_text": "计时器挂在浮漂上每漂独立"
+        },
+        {
+          "#": "16",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.2#ff4d676b",
+          "status": "❌ Missing",
+          "requirement": "存量因补窝、衰减或钓走改变后，剩余时间按 `新剩余 = 旧剩余 × 新间隔 / 旧间隔` 折算，不重开完整计时（钓鱼规则.md:60）",
+          "match_text": "存量因补窝衰减或钓走改变后剩余时间按新剩余旧剩余新间隔旧间隔折算不重开完整计时"
+        },
+        {
+          "#": "17",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.2#cd2bedd7",
+          "status": "🔄 Divergent",
+          "requirement": "窝空时间隔从约 15 秒跳到 120 秒，不加平滑、最低间隔或保底（钓鱼规则.md:62）",
+          "match_text": "窝空时间隔从约秒跳到秒不加平滑最低间隔或保底"
+        },
+        {
+          "#": "18",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.3#f54e6453",
+          "status": "🔄 Divergent",
+          "requirement": "某个浮漂计时到点，服务器执行一次原子事务：读该漂主人当前的饵 → 选类别 → 选鱼种 → 当场扣 1 条库存（钓鱼规则.md:68）",
+          "match_text": "某个浮漂计时到点服务器执行一次原子事务读该漂主人当前的饵选类别选鱼种当场扣条库存"
+        },
+        {
+          "#": "19",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.3#b1539b85",
+          "status": "🔄 Divergent",
+          "requirement": "两步选鱼：先按 `X/Total、P/Total、J/Total` 选偏好类别，再在该类候选里按漂主当前饵的偏好权重选鱼种（钓鱼规则.md:70）",
+          "match_text": "两步选鱼先按XTotalPTotalJTotal选偏好类别再在该类候选里按漂主当前饵的偏好权重选鱼种"
+        },
+        {
+          "#": "20",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.3#95a865cc",
+          "status": "❌ Missing",
+          "requirement": "窝料表「目标鱼种加权」的窝料，在第二步对该鱼种权重再乘表里倍率（钓鱼规则.md:70）",
+          "match_text": "窝料表目标鱼种加权的窝料在第二步对该鱼种权重再乘表里倍率"
+        },
+        {
+          "#": "21",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.3#3ce1fed3",
+          "status": "⚠️ Partial",
+          "requirement": "Total=0 从基础池选、按当前饵权重、但不扣存量；候选为空或总权重为零时也落基础池（钓鱼规则.md:70）",
+          "match_text": "Total从基础池选按当前饵权重但不扣存量候选为空或总权重为零时也落基础池"
+        },
+        {
+          "#": "22",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.3#dc0bac51",
+          "status": "❌ Missing",
+          "requirement": "库存在抽中那一刻就扣，抽扣同一原子事务，抽中即受惊离窝，之后任何结局都不回滚（钓鱼规则.md:74）",
+          "match_text": "库存在抽中那一刻就扣抽扣同一原子事务抽中即受惊离窝之后任何结局都不回滚"
+        },
+        {
+          "#": "23",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.3#d8d93db3",
+          "status": "✅ Implemented",
+          "requirement": "饵的数量在真咬成立时扣当时挂着的那 1 份，试探期提竿不损饵（钓鱼规则.md:74）",
+          "match_text": "饵的数量在真咬成立时扣当时挂着的那份试探期提竿不损饵"
+        },
+        {
+          "#": "24",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.3#0f2e20e5",
+          "status": "❌ Missing",
+          "requirement": "同窝多漂同刻到点按服务器时间戳判序，时间戳并列按席位序；A 漂抽走最后一条后 B 漂自然落基础池（钓鱼规则.md:76）",
+          "match_text": "同窝多漂同刻到点按服务器时间戳判序时间戳并列按席位序A漂抽走最后一条后B漂自然落基础池"
+        },
+        {
+          "#": "25",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.4#fbf77802",
+          "status": "🔄 Divergent",
+          "requirement": "每 30 秒统一执行 `新存量 = floor(旧存量 × 0.9)`，逐分量向下取整，不为负（钓鱼规则.md:82）",
+          "match_text": "每秒统一执行新存量floor旧存量逐分量向下取整不为负"
+        },
+        {
+          "#": "26",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.5#6323ee99",
+          "status": "❌ Missing",
+          "requirement": "三类存量都达到门槛后，每次投料独立判定一次触发；触发后咬钩加速、鱼群密度演出增强；期间再投料不重复触发；没有冷却（钓鱼规则.md:92）",
+          "match_text": "三类存量都达到门槛后每次投料独立判定一次触发触发后咬钩加速鱼群密度演出增强期间再投料不重复触发没有冷却"
+        },
+        {
+          "#": "27",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.5#dd4063dc",
+          "status": "❌ Missing",
+          "requirement": "聚鱼建议快照：每类门槛 30 条、每次合格投料触发概率 8%、持续 45 秒、咬钩速度 2.5 倍（钓鱼规则.md:96-99）",
+          "match_text": "聚鱼建议快照每类门槛条每次合格投料触发概率持续秒咬钩速度倍"
+        },
+        {
+          "#": "28",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.5#2d26748e",
+          "status": "🔄 Divergent",
+          "requirement": "聚鱼只有投料一条触发路径，范围＝触发它的那个窝点；环境事件触发归完整版、不在本版（钓鱼规则.md:103）",
+          "match_text": "聚鱼只有投料一条触发路径范围触发它的那个窝点环境事件触发归完整版不在本版"
+        },
+        {
+          "#": "29",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.6#c3435dd1",
+          "status": "❌ Missing",
+          "requirement": "渔网是一次性道具：按落点窝点当前概率抽 5～8 条、稀有不加权、湖心巨影永不入网，产出落地先到先得（钓鱼规则.md:109）",
+          "match_text": "渔网是一次性道具按落点窝点当前概率抽条稀有不加权湖心巨影永不入网产出落地先到先得"
+        },
+        {
+          "#": "30",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.6#84624a66",
+          "status": "❌ Missing",
+          "requirement": "渔网使用后该窝点进入 30 秒死水，所有浮漂咬钩计时挂起，结束后按折算规则恢复；死水期内再撒网正常结算、死水重置 30 秒不叠加（钓鱼规则.md:109,111",
+          "match_text": "渔网使用后该窝点进入秒死水所有浮漂咬钩计时挂起结束后按折算规则恢复死水期内再撒网正常结算死水重置秒不叠加"
+        },
+        {
+          "#": "31",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.6#7d57b39e",
+          "status": "❌ Missing",
+          "requirement": "渔网逐条按抽中鱼的偏好类别扣存量，实际条数 `min(5～8 随机数, Total)`；无窝点或空池按基础池给 1～2 条低保、不扣存量；渔网产出不扣竿的基础磨",
+          "match_text": "渔网逐条按抽中鱼的偏好类别扣存量实际条数min随机数Total无窝点或空池按基础池给条低保不扣存量渔网产出不扣竿的基础磨损"
+        },
+        {
+          "#": "32",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#1#40f59a41",
+          "status": "✅ Implemented",
+          "requirement": "单局上限 4 人（多人钓鱼附篇.md:27）",
+          "match_text": "单局上限人"
+        },
+        {
+          "#": "33",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#1#d9cfa5f5",
+          "status": "✅ Implemented",
+          "requirement": "游戏机制层没有房主：钓鱼、移动、献祭都没有身份特权（多人钓鱼附篇.md:27）",
+          "match_text": "游戏机制层没有房主钓鱼移动献祭都没有身份特权"
+        },
+        {
+          "#": "34",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.1#0f944dfc",
+          "status": "⚠️ Partial",
+          "requirement": "参与角色有主钓手、辅助手和岸上替补；合力发生在搏斗拉竿阶段（多人钓鱼附篇.md:35-41）",
+          "match_text": "参与角色有主钓手辅助手和岸上替补合力发生在搏斗拉竿阶段"
+        },
+        {
+          "#": "35",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.1#63c4d3b2",
+          "status": "🔄 Divergent",
+          "requirement": "力量计入：钓鱼位 100%、辅助位 75%（多人钓鱼附篇.md:39-40,53）",
+          "match_text": "力量计入钓鱼位辅助位"
+        },
+        {
+          "#": "36",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.1#32f406eb",
+          "status": "❌ Missing",
+          "requirement": "消耗倍率 K_pos：钓鱼位 1.0、辅助位 1.5（多人钓鱼附篇.md:39-40,53）",
+          "match_text": "消耗倍率Kpos钓鱼位辅助位"
+        },
+        {
+          "#": "37",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.1#31bc0d47",
+          "status": "🔄 Divergent",
+          "requirement": "岸上替补搏斗外恢复 5 点/秒（多人钓鱼附篇.md:41）",
+          "match_text": "岸上替补搏斗外恢复点秒"
+        },
+        {
+          "#": "38",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.1#f1cdf6a9",
+          "status": "🔄 Divergent",
+          "requirement": "入位：靠近搏斗中的主钓手 1.5 米内按 F；退出：再按 F 或走出半径，自由来去无惩罚（多人钓鱼附篇.md:45）",
+          "match_text": "入位靠近搏斗中的主钓手米内按F退出再按F或走出半径自由来去无惩罚"
+        },
+        {
+          "#": "39",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.1#2675f56c",
+          "status": "❌ Missing",
+          "requirement": "辅助手体力归零就弹出辅助位、2 秒喘气演出、不落水，恢复到 20% 以上才能重入（多人钓鱼附篇.md:45）",
+          "match_text": "辅助手体力归零就弹出辅助位秒喘气演出不落水恢复到以上才能重入"
+        },
+        {
+          "#": "40",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.1#3666bdd7",
+          "status": "✅ Implemented",
+          "requirement": "辅助人数不另设上限，受 4 人上限自然约束，主 1 加辅最多 3（多人钓鱼附篇.md:45）",
+          "match_text": "辅助人数不另设上限受人上限自然约束主加辅最多"
+        },
+        {
+          "#": "41",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.1#2e58fd2c",
+          "status": "❌ Missing",
+          "requirement": "F 目标选择：看着鱼按 F 是抓鱼、看着主钓手按 F 是入位，两者难分时先算抓鱼；准星态提示当前 F 目标（多人钓鱼附篇.md:47）",
+          "match_text": "F目标选择看着鱼按F是抓鱼看着主钓手按F是入位两者难分时先算抓鱼准星态提示当前F目标"
+        },
+        {
+          "#": "42",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.2#502619b6",
+          "status": "⚠️ Partial",
+          "requirement": "`总力量 = 主钓手当前力量 × 100% + Σ 辅助手当前力量 × 75%`，辅助力量不设上限；合力变化触发强度检查，提交 F_total 与各参与者 K_",
+          "match_text": "总力量主钓手当前力量Σ辅助手当前力量辅助力量不设上限合力变化触发强度检查提交Ftotal与各参与者Kpos"
+        },
+        {
+          "#": "43",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.3#a1757341",
+          "status": "🔄 Divergent",
+          "requirement": "位置落水只判持竿者；辅助手归零弹出辅助位、不落水（多人钓鱼附篇.md:57）",
+          "match_text": "位置落水只判持竿者辅助手归零弹出辅助位不落水"
+        },
+        {
+          "#": "44",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.3#75a06e16",
+          "status": "✅ Implemented",
+          "requirement": "主钓手放线时全员零消耗，辅助手不必退出（多人钓鱼附篇.md:57）",
+          "match_text": "主钓手放线时全员零消耗辅助手不必退出"
+        },
+        {
+          "#": "45",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.3#44d6b2ab",
+          "status": "✅ Implemented",
+          "requirement": "辅助手没有放线权；只有主钓手能触发主动放弃（多人钓鱼附篇.md:57）",
+          "match_text": "辅助手没有放线权只有主钓手能触发主动放弃"
+        },
+        {
+          "#": "46",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.4#822e7cef",
+          "status": "❌ Missing",
+          "requirement": "主钓手任意时刻可按 E 发起换人请求、再按 E 取消；请求无时限挂起、本竿结束自然失效、没有超时出口（多人钓鱼附篇.md:63）",
+          "match_text": "主钓手任意时刻可按E发起换人请求再按E取消请求无时限挂起本竿结束自然失效没有超时出口"
+        },
+        {
+          "#": "47",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.4#4829c16d",
+          "status": "❌ Missing",
+          "requirement": "体力不高于 5% 时 UI 给濒死强提示（多人钓鱼附篇.md:63）",
+          "match_text": "体力不高于时UI给濒死强提示"
+        },
+        {
+          "#": "48",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.4#82735e57",
+          "status": "🔄 Divergent",
+          "requirement": "岸上替补自愿按 E 接手，先按先得、同刻并列按席位序；体力恢复到 50% 以上的替补才能接手（多人钓鱼附篇.md:65）",
+          "match_text": "岸上替补自愿按E接手先按先得同刻并列按席位序体力恢复到以上的替补才能接手"
+        },
+        {
+          "#": "49",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.4#4e8a5b8e",
+          "status": "✅ Implemented",
+          "requirement": "接手瞬间完成：鱼与竿的状态完全继承，猫体力各是各的，接手者用自己的（多人钓鱼附篇.md:65）",
+          "match_text": "接手瞬间完成鱼与竿的状态完全继承猫体力各是各的接手者用自己的"
+        },
+        {
+          "#": "50",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#2.4#76bf72d2",
+          "status": "🔄 Divergent",
+          "requirement": "图鉴归属不变，原始上钩者保留（多人钓鱼附篇.md:65；09-08 晚裁：收集层归上钩者）",
+          "match_text": "图鉴归属不变原始上钩者保留"
+        },
+        {
+          "#": "51",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#3.1#34a10299",
+          "status": "✅ Implemented",
+          "requirement": "多人搏斗到收鱼仍是两条路：可抄鱼贴岸抢抄，或翻肚落岸后抢拾；资格与并列判序见主文（多人钓鱼附篇.md:73）",
+          "match_text": "多人搏斗到收鱼仍是两条路可抄鱼贴岸抢抄或翻肚落岸后抢拾资格与并列判序见主文"
+        },
+        {
+          "#": "52",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#3.2#b175837c",
+          "status": "🔄 Divergent",
+          "requirement": "操作贡献者＝上钩钓手＋合力中按过左键至少一次的猫＋抄中或拾取的猫；打窝与围观不算（多人钓鱼附篇.md:81）",
+          "match_text": "操作贡献者上钩钓手合力中按过左键至少一次的猫抄中或拾取的猫打窝与围观不算"
+        },
+        {
+          "#": "53",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#3.2#bcdf51ba",
+          "status": "⚠️ Partial",
+          "requirement": "贡献只用于演出（合影名单、头衔类），不进图鉴、不刷新个人最佳重量（多人钓鱼附篇.md:81）",
+          "match_text": "贡献只用于演出合影名单头衔类不进图鉴不刷新个人最佳重量"
+        },
+        {
+          "#": "54",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#3.2#b860d9bf",
+          "status": "❓ Unverifiable",
+          "requirement": "举鱼展示、围观互动、巨物合力成功的慢镜头合影（多人钓鱼附篇.md:83）",
+          "match_text": "举鱼展示围观互动巨物合力成功的慢镜头合影"
+        },
+        {
+          "#": "55",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#3.3#3a5adb32",
+          "status": "✅ Implemented",
+          "requirement": "求助由玩家手动发出：急促猫叫加头顶图标（多人钓鱼附篇.md:87）",
+          "match_text": "求助由玩家手动发出急促猫叫加头顶图标"
+        },
+        {
+          "#": "56",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#3.3#f62abce2",
+          "status": "✅ Implemented",
+          "requirement": "只有巨物保留全体提示（多人钓鱼附篇.md:87）",
+          "match_text": "只有巨物保留全体提示"
+        },
+        {
+          "#": "57",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#3.3#7de22a8c",
+          "status": "⚠️ Partial",
+          "requirement": "主辅位的反馈与角色区分不做力量百分比条（多人钓鱼附篇.md:87）",
+          "match_text": "主辅位的反馈与角色区分不做力量百分比条"
+        },
+        {
+          "#": "58",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#4#91f786aa",
+          "status": "🔄 Divergent",
+          "requirement": "WASD 控制移动；`F_net = Σ(猫力量 × 方向单位向量)`、`S = Σ猫力量`（按键者）、`ρ = |F_net| / S`；任意方向输入直接进合",
+          "match_text": "WASD控制移动FnetΣ猫力量方向单位向量SΣ猫力量按键者ρFnetS任意方向输入直接进合力求和"
+        },
+        {
+          "#": "59",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#4#1d2f2fc9",
+          "status": "✅ Implemented",
+          "requirement": "无人按键（S = 0）不进 ρ 计算，直接按静止处理，不存在除零（多人钓鱼附篇.md:93）",
+          "match_text": "无人按键S不进ρ计算直接按静止处理不存在除零"
+        },
+        {
+          "#": "60",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#4#3e579e9c",
+          "status": "❌ Missing",
+          "requirement": "ρ 三档：齐步走 ρ≥高阈（0.8）正常移动、拖行居中走龟速、僵局 ρ≤低阈（0.2）（多人钓鱼附篇.md:95-99）",
+          "match_text": "ρ三档齐步走ρ高阈正常移动拖行居中走龟速僵局ρ低阈"
+        },
+        {
+          "#": "61",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#4#3674dae4",
+          "status": "❌ Missing",
+          "requirement": "僵局细分：两组共线反向就对顶——恰 2 人顶牛、4 人 2v2 拔河，其余组合自然推拉、无特定演出；方向散乱就打转（多人钓鱼附篇.md:99）",
+          "match_text": "僵局细分两组共线反向就对顶恰人顶牛人v拔河其余组合自然推拉无特定演出方向散乱就打转"
+        },
+        {
+          "#": "62",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#4#1de9c69b",
+          "status": "❌ Missing",
+          "requirement": "打转持续超过 5 秒：恰 3 人随机甩飞一只，4 人连环摔倒，两者互斥（多人钓鱼附篇.md:101；09-08 裁：连环摔倒恰 4 人、不产生搏斗结局）",
+          "match_text": "打转持续超过秒恰人随机甩飞一只人连环摔倒两者互斥"
+        },
+        {
+          "#": "63",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#4#8886b2d4",
+          "status": "🔄 Divergent",
+          "requirement": "移动合力是全额力量相加，钓鱼合力才有辅助位 75% 折扣，两处口径独立（多人钓鱼附篇.md:101）",
+          "match_text": "移动合力是全额力量相加钓鱼合力才有辅助位折扣两处口径独立"
+        },
+        {
+          "#": "64",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#4.1#276dd256",
+          "status": "🔄 Divergent",
+          "requirement": "移动消耗表：正常移动 1、龟速被拖者 8／顺行者 2、原地打转 5、顶牛拔河 6（点/秒/人）（多人钓鱼附篇.md:110-114）",
+          "match_text": "移动消耗表正常移动龟速被拖者顺行者原地打转顶牛拔河点秒人"
+        },
+        {
+          "#": "65",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#4.1#f61a406d",
+          "status": "❌ Missing",
+          "requirement": "无人移动（静止）恢复 5 点/秒/人（多人钓鱼附篇.md:115）",
+          "match_text": "无人移动静止恢复点秒人"
+        },
+        {
+          "#": "66",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#4.1#9f7f0107",
+          "status": "⚠️ Partial",
+          "requirement": "移动中体力归零的猫走不动：不能主动移动、没有拖/背交互、原地恢复并随队被拖行、不阻塞编组（多人钓鱼附篇.md:107,123）",
+          "match_text": "移动中体力归零的猫走不动不能主动移动没有拖背交互原地恢复并随队被拖行不阻塞编组"
+        },
+        {
+          "#": "67",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#4.2#7315a0fc",
+          "status": "🔄 Divergent",
+          "requirement": "恢复速率由主文基础自然恢复提供：搏斗外一律 5 点/秒，静止、岸上替补、摸鱼与归零随队被拖都是这一个数、没有场景乘数（多人钓鱼附篇.md:123）",
+          "match_text": "恢复速率由主文基础自然恢复提供搏斗外一律点秒静止岸上替补摸鱼与归零随队被拖都是这一个数没有场景乘数"
+        },
+        {
+          "#": "68",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#4.2#565b3759",
+          "status": "✅ Implemented",
+          "requirement": "不按键者不进计票：不贡献力量向量、不拖慢队伍，随队被拖、自己照常恢复（多人钓鱼附篇.md:125）",
+          "match_text": "不按键者不进计票不贡献力量向量不拖慢队伍随队被拖自己照常恢复"
+        },
+        {
+          "#": "69",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#4.2#f81f05cf",
+          "status": "🔄 Divergent",
+          "requirement": "编组就是同房间全员一队、没有子编组，加入退出即入局离局（多人钓鱼附篇.md:125）",
+          "match_text": "编组就是同房间全员一队没有子编组加入退出即入局离局"
+        },
+        {
+          "#": "70",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#4.3#b0344d1c",
+          "status": "❌ Missing",
+          "requirement": "UI：屏幕上方按 W/A/S/D 图标显示每个队友当前方向；移动状态文字「齐步走／被拖行／原地打转／顶牛中」；每个角色头顶体力条、力竭变灰（多人钓鱼附篇.md:",
+          "match_text": "UI屏幕上方按WASD图标显示每个队友当前方向移动状态文字齐步走被拖行原地打转顶牛中每个角色头顶体力条力竭变灰"
+        },
+        {
+          "#": "71",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#4.3#5ccbbd71",
+          "status": "❌ Missing",
+          "requirement": "六个群体动作演出：顶牛、被拖着走、原地打转、连环摔倒、被甩飞、拔河拉长（多人钓鱼附篇.md:132-138）",
+          "match_text": "六个群体动作演出顶牛被拖着走原地打转连环摔倒被甩飞拔河拉长"
+        },
+        {
+          "#": "72",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#1#5f5361b5",
+          "status": "✅ Implemented",
+          "requirement": "多人不绕过当前可用协作能力的鱼候选过滤；加入、退出、换人与在局人数变化是能力变化的来源（多人钓鱼附篇.md:27,49）",
+          "match_text": "多人不绕过当前可用协作能力的鱼候选过滤加入退出换人与在局人数变化是能力变化的来源"
+        },
+        {
+          "#": "73",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#2.3#a28cdfb7",
+          "status": "✅ Implemented",
+          "requirement": "稀有度本身不进抽鱼概率，鱼种分布与出现条件由鱼册提供（钓鱼规则.md:70）",
+          "match_text": "稀有度本身不进抽鱼概率鱼种分布与出现条件由鱼册提供"
+        },
+        {
+          "#": "74",
+          "key": "ABIKwtQeliv3aLkuGjrcFAi3nzk#3.2#d8e020d8",
+          "status": "✅ Implemented",
+          "requirement": "连携激励只做演出（慢镜头、合影、头衔类），没有任何数值加成（多人钓鱼附篇.md:83）",
+          "match_text": "连携激励只做演出慢镜头合影头衔类没有任何数值加成"
+        }
+      ],
+      "code_only": [],
+      "code_only_present": false,
+      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "docs": [
+        {
+          "file": "GDD 系统分册/钓鱼系统/多人钓鱼附篇.md",
+          "revision_id": 77
+        },
+        {
+          "file": "GDD 系统分册/钓鱼系统/钓鱼规则.md",
+          "revision_id": 297
+        }
+      ],
+      "code": [
+        "Source/Catfishing/Environment/**",
+        "Source/Catfishing/Fishing/**",
+        "Source/Catfishing/Social/",
+        "Source/Catfishing/Items/**",
+        "Config/DefaultGame.ini"
+      ],
+      "scope": "钓鱼规则.md 只评 §2（2.1 窝点投放补窝、2.2 每漂独立计时、2.3 抽鱼与扣减事务、2.4 游走衰减、2.5 聚鱼时刻、2.6 渔网与死水）+ 多人钓鱼附篇.md 全篇（合力钓鱼、抢收/贡献/求助、合力移动 ρ 三档）。",
+      "refs": [
+        "数值模拟与参数记录.md"
+      ],
+      "total": 74,
+      "implemented": 17,
+      "partial": 8,
+      "missing": 25,
+      "divergent": 22,
+      "unverifiable": 2
+    },
+    "钓鱼系统-核心": {
+      "rows": [
+        {
+          "#": "1",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#1#00abdedf",
+          "status": "✅ Implemented",
+          "requirement": "一竿流程七阶段：备装→可选打窝→抛竿→等待/试探→真咬/提竿→搏斗→收鱼/失败（钓鱼规则.md:23）",
+          "match_text": "一竿流程七阶段备装可选打窝抛竿等待试探真咬提竿搏斗收鱼失败"
+        },
+        {
+          "#": "2",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#1#1b243633",
+          "status": "🔄 Divergent",
+          "requirement": "装备即状态：手持鱼竿就是钓鱼待机，不设模式键（钓鱼规则.md:25）",
+          "match_text": "装备即状态手持鱼竿就是钓鱼待机不设模式键"
+        },
+        {
+          "#": "3",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#1#f3702981",
+          "status": "🔄 Divergent",
+          "requirement": "准备态可走动/切饵；搏斗中不能直接退，只能走主动放弃（钓鱼规则.md:25）",
+          "match_text": "准备态可走动切饵搏斗中不能直接退只能走主动放弃"
+        },
+        {
+          "#": "4",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#1#ce59babf",
+          "status": "✅ Implemented",
+          "requirement": "抄网与鱼护都不是必带，准备由各玩家独立进行（钓鱼规则.md:25）",
+          "match_text": "抄网与鱼护都不是必带准备由各玩家独立进行"
+        },
+        {
+          "#": "5",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.1#9895265b",
+          "status": "✅ Implemented",
+          "requirement": "左键点水面抛竿，无力度条、无蓄力，任意合法水边可抛（钓鱼规则.md:119）",
+          "match_text": "左键点水面抛竿无力度条无蓄力任意合法水边可抛"
+        },
+        {
+          "#": "6",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.1#6d4745cf",
+          "status": "⚠️ Partial",
+          "requirement": "超射程拒绝并提示「够不到那边」（钓鱼规则.md:121）",
+          "match_text": "超射程拒绝并提示够不到那边"
+        },
+        {
+          "#": "7",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.1#a0ffbdb8",
+          "status": "🔄 Divergent",
+          "requirement": "射程由漂提供（点到猫的距离 D_click 不超过浮漂射程）（钓鱼规则.md:121）",
+          "match_text": "射程由漂提供点到猫的距离Dclick不超过浮漂射程"
+        },
+        {
+          "#": "8",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.1#f9c14001",
+          "status": "❌ Missing",
+          "requirement": "实际落点按漂精准度在点击点周围均匀圆盘随机偏移（高/中/低 = 0.5/1/1.5 米）（钓鱼规则.md:121）",
+          "match_text": "实际落点按漂精准度在点击点周围均匀圆盘随机偏移高中低米"
+        },
+        {
+          "#": "9",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.1#52896ef9",
+          "status": "❌ Missing",
+          "requirement": "偏出水面（落岸）判空竿收回、不损饵、可重抛；超射程后偏移越界收敛到射程圆边界（钓鱼规则.md:121）",
+          "match_text": "偏出水面落岸判空竿收回不损饵可重抛超射程后偏移越界收敛到射程圆边界"
+        },
+        {
+          "#": "10",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.2#570db4bd",
+          "status": "✅ Implemented",
+          "requirement": "以实际浮漂落点按窝点归属选窝点，不在窝内按空池间隔（钓鱼规则.md:125）",
+          "match_text": "以实际浮漂落点按窝点归属选窝点不在窝内按空池间隔"
+        },
+        {
+          "#": "11",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.2#29dc75be",
+          "status": "✅ Implemented",
+          "requirement": "不设离开判定、不自动收竿（钓鱼规则.md:127）",
+          "match_text": "不设离开判定不自动收竿"
+        },
+        {
+          "#": "12",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.2#9edf6c2d",
+          "status": "🔄 Divergent",
+          "requirement": "计时期间可切饵、不重置计时；真咬扣的是当时挂着的那 1 份（钓鱼规则.md:127）",
+          "match_text": "计时期间可切饵不重置计时真咬扣的是当时挂着的那份"
+        },
+        {
+          "#": "13",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.2#ff8715e8",
+          "status": "✅ Implemented",
+          "requirement": "浮漂归属在落水瞬间定死、不随漂移重算（钓鱼规则.md:127）",
+          "match_text": "浮漂归属在落水瞬间定死不随漂移重算"
+        },
+        {
+          "#": "14",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.3#b5705951",
+          "status": "✅ Implemented",
+          "requirement": "无饵不能抛竿，鱼饵随抛竿挂出（钓鱼规则.md:133）",
+          "match_text": "无饵不能抛竿鱼饵随抛竿挂出"
+        },
+        {
+          "#": "15",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.3#af5e458e",
+          "status": "🔄 Divergent",
+          "requirement": "咬钩前主动收竿零损失；进入咬钩后无论上鱼/超时/放弃/断竿/落水都消耗 1 份饵（钓鱼规则.md:133）",
+          "match_text": "咬钩前主动收竿零损失进入咬钩后无论上鱼超时放弃断竿落水都消耗份饵"
+        },
+        {
+          "#": "16",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.3#aacfc4f9",
+          "status": "🔄 Divergent",
+          "requirement": "携带 8 份饵＝8 次咬钩机会（钓鱼规则.md:133，快照值）",
+          "match_text": "携带份饵次咬钩机会"
+        },
+        {
+          "#": "17",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.3#9b167bca",
+          "status": "⚠️ Partial",
+          "requirement": "试探期提竿必空竿、不损饵，且空竿揭图鉴剪影（钓鱼规则.md:133,141）",
+          "match_text": "试探期提竿必空竿不损饵且空竿揭图鉴剪影"
+        },
+        {
+          "#": "18",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.3#757a05b2",
+          "status": "❌ Missing",
+          "requirement": "从咬钩成立到本竿结局落定禁止主动掏用道具，抄网除外（钓鱼规则.md:135）",
+          "match_text": "从咬钩成立到本竿结局落定禁止主动掏用道具抄网除外"
+        },
+        {
+          "#": "19",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.3#c649ff05",
+          "status": "🔄 Divergent",
+          "requirement": "竿耐久不能回补、竿不可维修（钓鱼规则.md:135,204）",
+          "match_text": "竿耐久不能回补竿不可维修"
+        },
+        {
+          "#": "20",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.4#216f13a5",
+          "status": "🔄 Divergent",
+          "requirement": "演出时序：抽中瞬间鱼影出现（按真鱼体型）→浮漂轻点进入试探期→漂猛沉即真咬（钓鱼规则.md:141）",
+          "match_text": "演出时序抽中瞬间鱼影出现按真鱼体型浮漂轻点进入试探期漂猛沉即真咬"
+        },
+        {
+          "#": "21",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.4#3c39c2ad",
+          "status": "⚠️ Partial",
+          "requirement": "试探期时长 2～4 秒随机（钓鱼规则.md:141，占位快照）",
+          "match_text": "试探期时长秒随机"
+        },
+        {
+          "#": "22",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.4#29e012a9",
+          "status": "🔄 Divergent",
+          "requirement": "真咬后的响应时长按鱼种为 8～15 秒（钓鱼规则.md:141）",
+          "match_text": "真咬后的响应时长按鱼种为秒"
+        },
+        {
+          "#": "23",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.4#42c85f9c",
+          "status": "✅ Implemented",
+          "requirement": "前 1 秒为完美窗，用服务器时间戳判定，恰好 1 秒算完美（闭区间）（钓鱼规则.md:141,149）",
+          "match_text": "前秒为完美窗用服务器时间戳判定恰好秒算完美闭区间"
+        },
+        {
+          "#": "24",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.4#c4e4c250",
+          "status": "🔄 Divergent",
+          "requirement": "完美削减系数：普通鱼力量×0.8 体力×0.85，稀有鱼×0.85/×0.9，按鱼册稀有度最高档取稀有系数（钓鱼规则.md:145,149,293）",
+          "match_text": "完美削减系数普通鱼力量体力稀有鱼按鱼册稀有度最高档取稀有系数"
+        },
+        {
+          "#": "25",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.4#22cee983",
+          "status": "🔄 Divergent",
+          "requirement": "超时：响应窗结束仍未提竿则鱼吐钩逃跑、饵已消耗（钓鱼规则.md:147）",
+          "match_text": "超时响应窗结束仍未提竿则鱼吐钩逃跑饵已消耗"
+        },
+        {
+          "#": "26",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.4#80544fd0",
+          "status": "✅ Implemented",
+          "requirement": "完美削减在入场时直接乘到本场实际值，此后全部计算用削后值（钓鱼规则.md:149）",
+          "match_text": "完美削减在入场时直接乘到本场实际值此后全部计算用削后值"
+        },
+        {
+          "#": "27",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.1#06d962c6",
+          "status": "✅ Implemented",
+          "requirement": "猫体力基础上限 100 点（钓鱼规则.md:157）",
+          "match_text": "猫体力基础上限点"
+        },
+        {
+          "#": "28",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.1#d0bed3c4",
+          "status": "⚠️ Partial",
+          "requirement": "猫力品种基准：普通/橘/狸花/缅因＝50/70/90/130（钓鱼规则.md:158）",
+          "match_text": "猫力品种基准普通橘狸花缅因"
+        },
+        {
+          "#": "29",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.1#5e96d470",
+          "status": "✅ Implemented",
+          "requirement": "鱼力量 F_fish 由鱼表按实际重量给出（实例力量＝重量×K）（钓鱼规则.md:159,293）",
+          "match_text": "鱼力量Ffish由鱼表按实际重量给出实例力量重量K"
+        },
+        {
+          "#": "30",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.1#79be0da0",
+          "status": "🔄 Divergent",
+          "requirement": "鱼体力初始值＝鱼表「体力系数」× 实际重量（钓鱼规则.md:160；09-08 v1.5 裁决）",
+          "match_text": "鱼体力初始值鱼表体力系数实际重量"
+        },
+        {
+          "#": "31",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.1#0881102c",
+          "status": "🔄 Divergent",
+          "requirement": "鱼体力由鱼行为模型按鱼自己的规则维护，钓鱼只读，≤0 即翻肚（钓鱼规则.md:160,314）",
+          "match_text": "鱼体力由鱼行为模型按鱼自己的规则维护钓鱼只读即翻肚"
+        },
+        {
+          "#": "32",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.1#7058ae09",
+          "status": "⚠️ Partial",
+          "requirement": "竿耐久是动态资源，三档上限 40/70/120，归零断竿（钓鱼规则.md:161）",
+          "match_text": "竿耐久是动态资源三档上限归零断竿"
+        },
+        {
+          "#": "33",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.1#42eab424",
+          "status": "🔄 Divergent",
+          "requirement": "竿强度是静态配置，三档 25/60/210；强度不超过总力量与鱼力较小者即当场瞬断，是巨影装备门槛（钓鱼规则.md:162,176）",
+          "match_text": "竿强度是静态配置三档强度不超过总力量与鱼力较小者即当场瞬断是巨影装备门槛"
+        },
+        {
+          "#": "34",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.1#342a028d",
+          "status": "🔄 Divergent",
+          "requirement": "D 初始值＝浮漂实际落点到猫的距离，L₀＝D₀（钓鱼规则.md:163,210）",
+          "match_text": "D初始值浮漂实际落点到猫的距离LD"
+        },
+        {
+          "#": "35",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.1#48b281be",
+          "status": "⚠️ Partial",
+          "requirement": "L_max 三档 60/80/100 米（钓鱼规则.md:166,210）",
+          "match_text": "Lmax三档米"
+        },
+        {
+          "#": "36",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.1#891faf45",
+          "status": "✅ Implemented",
+          "requirement": "F_total 单人即持竿猫当前力量，K_pos 单人恒为 1.0（钓鱼规则.md:168,197）",
+          "match_text": "Ftotal单人即持竿猫当前力量Kpos单人恒为"
+        },
+        {
+          "#": "37",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.1#fc4befb2",
+          "status": "✅ Implemented",
+          "requirement": "当前力量不随体力衰减，体力低不降力量（钓鱼规则.md:170,303）",
+          "match_text": "当前力量不随体力衰减体力低不降力量"
+        },
+        {
+          "#": "38",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.2#cfd694eb",
+          "status": "❌ Missing",
+          "requirement": "猫力达到鱼力 2 倍即碾压，直接把鱼甩上岸并进待拾取；瞬时判定，检查序 ①竿强瞬断→②碾压→③常规搏斗（钓鱼规则.md:178）",
+          "match_text": "猫力达到鱼力倍即碾压直接把鱼甩上岸并进待拾取瞬时判定检查序竿强瞬断碾压常规搏斗"
+        },
+        {
+          "#": "39",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.3#2dc25b64",
+          "status": "⚠️ Partial",
+          "requirement": "鱼行为骨架：上钩先向外游，外冲与向岸低强度游动按鱼种时长交替；鱼体力低于 50% 后休息期变长（钓鱼规则.md:184）",
+          "match_text": "鱼行为骨架上钩先向外游外冲与向岸低强度游动按鱼种时长交替鱼体力低于后休息期变长"
+        },
+        {
+          "#": "40",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.3#d8c4630b",
+          "status": "❌ Missing",
+          "requirement": "最近冲岸距离按鱼种/食性配置（食肉中鱼不进离岸 1.5 米等）（钓鱼规则.md:186）",
+          "match_text": "最近冲岸距离按鱼种食性配置食肉中鱼不进离岸米等"
+        },
+        {
+          "#": "41",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.4#d2e94ac4",
+          "status": "🔄 Divergent",
+          "requirement": "搏斗消耗公式 `C_battle = ΔD_blocked × (1+V_fish/V_base) × (F_fish/F_base) × K_dir × K_",
+          "match_text": "搏斗消耗公式CbattleΔDblockedVfishVbaseFfishFbaseKdirKoverKposRbase含KdircosθKoverminmaxFfishFtotalRbase点米"
+        },
+        {
+          "#": "42",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.4#bc23905d",
+          "status": "⚠️ Partial",
+          "requirement": "消耗随运动求解精度走，求解抖动会抖体力条，需要一层平滑（钓鱼规则.md:200）",
+          "match_text": "消耗随运动求解精度走求解抖动会抖体力条需要一层平滑"
+        },
+        {
+          "#": "43",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.4#4ed4c7a4",
+          "status": "🔄 Divergent",
+          "requirement": "移动附加按秒计费的常数：W 前移 1.5 点/秒、S 后退 3 点/秒；W/S 在钓鱼中不翻转（钓鱼规则.md:202）",
+          "match_text": "移动附加按秒计费的常数W前移点秒S后退点秒WS在钓鱼中不翻转"
+        },
+        {
+          "#": "44",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.4#6fa4deef",
+          "status": "🔄 Divergent",
+          "requirement": "线绷紧的每一秒竿耐久另扣「鱼力 × 0.05」（钓鱼规则.md:204）",
+          "match_text": "线绷紧的每一秒竿耐久另扣鱼力"
+        },
+        {
+          "#": "45",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.4#b6f023f3",
+          "status": "❌ Missing",
+          "requirement": "搏斗以渔获结束时，竿另扣基础磨损 1 点（钓鱼规则.md:204）",
+          "match_text": "搏斗以渔获结束时竿另扣基础磨损点"
+        },
+        {
+          "#": "46",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.5#4aaf22c4",
+          "status": "⚠️ Partial",
+          "requirement": "真咬成立当刻已超 L_max 直接判脱钩鱼逃，饵已扣、不丢漂（钓鱼规则.md:210）",
+          "match_text": "真咬成立当刻已超Lmax直接判脱钩鱼逃饵已扣不丢漂"
+        },
+        {
+          "#": "47",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.5#71c25720",
+          "status": "✅ Implemented",
+          "requirement": "放线是解除线轮锁定而非主动出线，无张力零消耗、没有「放线速率」参数；线出尽后解锁失效被迫全额对抗（钓鱼规则.md:212）",
+          "match_text": "放线是解除线轮锁定而非主动出线无张力零消耗没有放线速率参数线出尽后解锁失效被迫全额对抗"
+        },
+        {
+          "#": "48",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.5#d955dc56",
+          "status": "🔄 Divergent",
+          "requirement": "放线本身不恢复体力，搏斗中一律不恢复；放线回体基础为 0，只作猫册三选一成长项（钓鱼规则.md:214；v1.3 裁决）",
+          "match_text": "放线本身不恢复体力搏斗中一律不恢复放线回体基础为只作猫册三选一成长项"
+        },
+        {
+          "#": "49",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.5#d7e3021a",
+          "status": "⚠️ Partial",
+          "requirement": "放线期间不判位置落水（钓鱼规则.md:214）",
+          "match_text": "放线期间不判位置落水"
+        },
+        {
+          "#": "50",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.6#d1050930",
+          "status": "🔄 Divergent",
+          "requirement": "三个资源归零出口：鱼体力≤0 翻肚、猫体力≤0 被拖下水鱼逃、竿耐久≤0 断竿鱼逃（钓鱼规则.md:220-224）",
+          "match_text": "三个资源归零出口鱼体力翻肚猫体力被拖下水鱼逃竿耐久断竿鱼逃"
+        },
+        {
+          "#": "51",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.6#90826a2b",
+          "status": "🔄 Divergent",
+          "requirement": "位置落水三条件同时满足（猫岸距归零＋鱼向外游＋总力量小于鱼力），只判持竿者，体力落水优先（钓鱼规则.md:226）",
+          "match_text": "位置落水三条件同时满足猫岸距归零鱼向外游总力量小于鱼力只判持竿者体力落水优先"
+        },
+        {
+          "#": "52",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.6#c10addf8",
+          "status": "🔄 Divergent",
+          "requirement": "落水后果：鱼逃、饵已扣、嘴里原有的鱼保留，无其他损失（钓鱼规则.md:228）",
+          "match_text": "落水后果鱼逃饵已扣嘴里原有的鱼保留无其他损失"
+        },
+        {
+          "#": "53",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.7#6312972a",
+          "status": "⚠️ Partial",
+          "requirement": "主动放弃＝搏斗中长按收竿键 1.5 秒，带进度条 UI，松手即取消（钓鱼规则.md:232）",
+          "match_text": "主动放弃搏斗中长按收竿键秒带进度条UI松手即取消"
+        },
+        {
+          "#": "54",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#4.7#923b1c6a",
+          "status": "⚠️ Partial",
+          "requirement": "放弃按鱼逃同口径：已揭剪影保留、收集层不写（钓鱼规则.md:232）",
+          "match_text": "放弃按鱼逃同口径已揭剪影保留收集层不写"
+        },
+        {
+          "#": "55",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.1#a2ab3241",
+          "status": "🔄 Divergent",
+          "requirement": "可抄资格：同时满足「对象是钩上的鱼或翻肚鱼」＋「鱼到岸边距离 < 1 米」即必中，自由游动的鱼不可捞（钓鱼规则.md:242）",
+          "match_text": "可抄资格同时满足对象是钩上的鱼或翻肚鱼鱼到岸边距离米即必中自由游动的鱼不可捞"
+        },
+        {
+          "#": "56",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.1#4bc4aadf",
+          "status": "✅ Implemented",
+          "requirement": "抄网非必带、单一款式，没有长度/体型上限/成功率属性，不按竿长、猫鱼距离、鱼重量或抄网等级判断（钓鱼规则.md:242）",
+          "match_text": "抄网非必带单一款式没有长度体型上限成功率属性不按竿长猫鱼距离鱼重量或抄网等级判断"
+        },
+        {
+          "#": "57",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.1#e5921c37",
+          "status": "❌ Missing",
+          "requirement": "湖心巨影不可抄，只能翻肚拖岸或碾压落岸后拾取（钓鱼规则.md:242）",
+          "match_text": "湖心巨影不可抄只能翻肚拖岸或碾压落岸后拾取"
+        },
+        {
+          "#": "58",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.2#fb5daa33",
+          "status": "✅ Implemented",
+          "requirement": "按 F 挥网，命中由服务器在判定瞬间验证；命中后鱼由挥网的猫叼在嘴里，实物归抄网者（钓鱼规则.md:246）",
+          "match_text": "按F挥网命中由服务器在判定瞬间验证命中后鱼由挥网的猫叼在嘴里实物归抄网者"
+        },
+        {
+          "#": "59",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.2#739791e7",
+          "status": "⚠️ Partial",
+          "requirement": "挥空的猫进入 3 秒硬直、无法操作（钓鱼规则.md:248,264）",
+          "match_text": "挥空的猫进入秒硬直无法操作"
+        },
+        {
+          "#": "60",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.2#02d2a4b6",
+          "status": "⚠️ Partial",
+          "requirement": "嘴里只能叼一条鱼；叼着鱼不能抛竿、不能再抄或拾第二条（钓鱼规则.md:250）",
+          "match_text": "嘴里只能叼一条鱼叼着鱼不能抛竿不能再抄或拾第二条"
+        },
+        {
+          "#": "61",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.2#5ba3ae72",
+          "status": "✅ Implemented",
+          "requirement": "落水时嘴里的鱼保留（钓鱼规则.md:250,228）",
+          "match_text": "落水时嘴里的鱼保留"
+        },
+        {
+          "#": "62",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.3#9d83a1ef",
+          "status": "🔄 Divergent",
+          "requirement": "翻肚后鱼沿鱼→猫方向以固定速率（建议 2 米/秒）被拖动，触岸即在碰岸处落地（钓鱼规则.md:256）",
+          "match_text": "翻肚后鱼沿鱼猫方向以固定速率建议米秒被拖动触岸即在碰岸处落地"
+        },
+        {
+          "#": "63",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.3#5cd45cb7",
+          "status": "🔄 Divergent",
+          "requirement": "落岸不等于入袋，仍要按 F 拾取，拾取必中；岸上的鱼谁都能拾、先到先得（钓鱼规则.md:256）",
+          "match_text": "落岸不等于入袋仍要按F拾取拾取必中岸上的鱼谁都能拾先到先得"
+        },
+        {
+          "#": "64",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.3#2b03e2b2",
+          "status": "❌ Missing",
+          "requirement": "水里翻肚的鱼超过苏醒时限（默认 30 秒）未上岸就苏醒逃跑（钓鱼规则.md:258）",
+          "match_text": "水里翻肚的鱼超过苏醒时限默认秒未上岸就苏醒逃跑"
+        },
+        {
+          "#": "65",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.3#4ab39048",
+          "status": "❌ Missing",
+          "requirement": "地上未拾取的鱼翻天消失，不能靠「离水安全」跨天囤鱼（钓鱼规则.md:258）",
+          "match_text": "地上未拾取的鱼翻天消失不能靠离水安全跨天囤鱼"
+        },
+        {
+          "#": "66",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.4#77b70dae",
+          "status": "✅ Implemented",
+          "requirement": "所有猫都能抢同一条可抄鱼/岸上鱼，以服务器收到指令的时间戳判先到先得，不能用客户端帧数（钓鱼规则.md:264）",
+          "match_text": "所有猫都能抢同一条可抄鱼岸上鱼以服务器收到指令的时间戳判先到先得不能用客户端帧数"
+        },
+        {
+          "#": "67",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.4#746a2c9e",
+          "status": "⚠️ Partial",
+          "requirement": "时间戳完全并列时按席位序（加入房间先后）打破（钓鱼规则.md:266）",
+          "match_text": "时间戳完全并列时按席位序加入房间先后打破"
+        },
+        {
+          "#": "68",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.4#8453a27b",
+          "status": "❌ Missing",
+          "requirement": "同一 tick 的事件结算序固定为：收鱼 → 苏醒 → 落水（钓鱼规则.md:266）",
+          "match_text": "同一tick的事件结算序固定为收鱼苏醒落水"
+        },
+        {
+          "#": "69",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.5#a823259e",
+          "status": "🔄 Divergent",
+          "requirement": "挥网者到鱼 ≤1.5 米才算够着，1.5 米同时是落岸鱼的可拾距离，全游戏统一交互半径一处管全部（钓鱼规则.md:270）",
+          "match_text": "挥网者到鱼米才算够着米同时是落岸鱼的可拾距离全游戏统一交互半径一处管全部"
+        },
+        {
+          "#": "70",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.5#6d8e7f76",
+          "status": "🔄 Divergent",
+          "requirement": "不加朝向或扇形判定，距离圈够用（钓鱼规则.md:270）",
+          "match_text": "不加朝向或扇形判定距离圈够用"
+        },
+        {
+          "#": "71",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.5#ad8302a8",
+          "status": "✅ Implemented",
+          "requirement": "以服务器物理碰撞箱中心定鱼的位置（钓鱼规则.md:270）",
+          "match_text": "以服务器物理碰撞箱中心定鱼的位置"
+        },
+        {
+          "#": "72",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#F目标选择#f2132d16",
+          "status": "⚠️ Partial",
+          "requirement": "多个合法 F 目标同时在圈内时作用于视角中心所指的那个，UI 以准星态提示当前 F 目标（钓鱼规则.md:276）",
+          "match_text": "多个合法F目标同时在圈内时作用于视角中心所指的那个UI以准星态提示当前F目标"
+        },
+        {
+          "#": "73",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.6#c18706a6",
+          "status": "🔄 Divergent",
+          "requirement": "剪影层在上钩成立时揭开、永不撤销，试探期空竿同揭（钓鱼规则.md:282）",
+          "match_text": "剪影层在上钩成立时揭开永不撤销试探期空竿同揭"
+        },
+        {
+          "#": "74",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.6#dbcd5913",
+          "status": "🔄 Divergent",
+          "requirement": "收集层在成功收鱼时写入，归上钩者；实物被队友抢走不取消登记（钓鱼规则.md:282；09-08 裁决「收集层归上钩者」）",
+          "match_text": "收集层在成功收鱼时写入归上钩者实物被队友抢走不取消登记"
+        },
+        {
+          "#": "75",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#5.6#444dcac0",
+          "status": "✅ Implemented",
+          "requirement": "重量没有组队加成（钓鱼规则.md:282）",
+          "match_text": "重量没有组队加成"
+        },
+        {
+          "#": "76",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#6.1#6bda7a0f",
+          "status": "✅ Implemented",
+          "requirement": "鱼册输入：每鱼×每饵权重、出现条件（区域/时段/天气）、在场协作能力条件（钓鱼规则.md:292）",
+          "match_text": "鱼册输入每鱼每饵权重出现条件区域时段天气在场协作能力条件"
+        },
+        {
+          "#": "77",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#6.1#c0fefd39",
+          "status": "⚠️ Partial",
+          "requirement": "巨影档（重量档名）与湖心巨影（鱼种名）不能互代（钓鱼规则.md:296）",
+          "match_text": "巨影档重量档名与湖心巨影鱼种名不能互代"
+        },
+        {
+          "#": "78",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#6.2#75614360",
+          "status": "⚠️ Partial",
+          "requirement": "道具册输入：漂射程与精准度、竿强度与耐久、最大线长、抄网与鱼护装备状态（钓鱼规则.md:302）",
+          "match_text": "道具册输入漂射程与精准度竿强度与耐久最大线长抄网与鱼护装备状态"
+        },
+        {
+          "#": "79",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#6.2#65147955",
+          "status": "✅ Implemented",
+          "requirement": "猫册输入：当前力量、当前/上限体力、倒地/可行动状态（钓鱼规则.md:303）",
+          "match_text": "猫册输入当前力量当前上限体力倒地可行动状态"
+        },
+        {
+          "#": "80",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#基础自然恢复#7860df4f",
+          "status": "🔄 Divergent",
+          "requirement": "搏斗外自然恢复 5 点/秒，站立/岸上替补/摸鱼一律同速率，无场景乘数；搏斗中不恢复（钓鱼规则.md:308；v1.3 裁决）",
+          "match_text": "搏斗外自然恢复点秒站立岸上替补摸鱼一律同速率无场景乘数搏斗中不恢复"
+        },
+        {
+          "#": "81",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#6.3#183352c7",
+          "status": "✅ Implemented",
+          "requirement": "鱼行为→钓鱼运动接口：每 tick 交付意图方向、意图速度、相对水位移，翻肚前意图非零（钓鱼规则.md:314）",
+          "match_text": "鱼行为钓鱼运动接口每tick交付意图方向意图速度相对水位移翻肚前意图非零"
+        },
+        {
+          "#": "82",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#6.3#e94a6e5c",
+          "status": "⚠️ Partial",
+          "requirement": "钓鱼→鱼行为接口：提竿结果对应的入场削减系数在提竿判定落定时交付一次；线的绷紧/松弛状态每 tick 可读（钓鱼规则.md:315）",
+          "match_text": "钓鱼鱼行为接口提竿结果对应的入场削减系数在提竿判定落定时交付一次线的绷紧松弛状态每tick可读"
+        },
+        {
+          "#": "83",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#6.4#04aa45ca",
+          "status": "✅ Implemented",
+          "requirement": "渔获交接链：抄取或拾取→嘴里→可选鱼护暂存→带回营地共用大鱼缸（钓鱼规则.md:322）",
+          "match_text": "渔获交接链抄取或拾取嘴里可选鱼护暂存带回营地共用大鱼缸"
+        },
+        {
+          "#": "84",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#6.4#ba564637",
+          "status": "❌ Missing",
+          "requirement": "当天扔下等于赠送路径（谁都能捡），物品不能扔进湖里（钓鱼规则.md:322）",
+          "match_text": "当天扔下等于赠送路径谁都能捡物品不能扔进湖里"
+        },
+        {
+          "#": "85",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#6.4#6b9bf9a7",
+          "status": "✅ Implemented",
+          "requirement": "转存接口区分成功与拒收，满容器不得当作转存成功（钓鱼规则.md:326）",
+          "match_text": "转存接口区分成功与拒收满容器不得当作转存成功"
+        },
+        {
+          "#": "86",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#6.4#614c5b81",
+          "status": "⚠️ Partial",
+          "requirement": "钓鱼对同一条鱼输出鱼种、实际重量、上钩归属与实物持有人；上钩事件与成功收鱼事件分别对应两个捕获时点（钓鱼规则.md:324）",
+          "match_text": "钓鱼对同一条鱼输出鱼种实际重量上钩归属与实物持有人上钩事件与成功收鱼事件分别对应两个捕获时点"
+        },
+        {
+          "#": "87",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#6.5#3d5dae71",
+          "status": "🔄 Divergent",
+          "requirement": "入夜：不再产生新咬钩，还没咬钩的浮漂剩余计时清掉，进行中的搏斗允许打完（钓鱼规则.md:334）",
+          "match_text": "入夜不再产生新咬钩还没咬钩的浮漂剩余计时清掉进行中的搏斗允许打完"
+        },
+        {
+          "#": "88",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#6.5#621cc29d",
+          "status": "❌ Missing",
+          "requirement": "入夜瞬间处于试探期的竿按空竿收回、不损饵；真咬待响应的算进行中，允许提竿并打完（钓鱼规则.md:334）",
+          "match_text": "入夜瞬间处于试探期的竿按空竿收回不损饵真咬待响应的算进行中允许提竿并打完"
+        },
+        {
+          "#": "89",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#6.5#7df303b8",
+          "status": "⚠️ Partial",
+          "requirement": "强制中断（献祭互动等）打断进行中的互动并按抽扣时点结账（钓鱼规则.md:335）",
+          "match_text": "强制中断献祭互动等打断进行中的互动并按抽扣时点结账"
+        },
+        {
+          "#": "90",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#6.5#8c5544a3",
+          "status": "✅ Implemented",
+          "requirement": "局结束停止钓鱼，释放窝、漂、搏斗等本系统瞬态；已输出的捕获事实不因失败撤销（钓鱼规则.md:338）",
+          "match_text": "局结束停止钓鱼释放窝漂搏斗等本系统瞬态已输出的捕获事实不因失败撤销"
+        },
+        {
+          "#": "91",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#7.1#d7537bda",
+          "status": "⚠️ Partial",
+          "requirement": "必须可感知的操作反馈 12 项（抛竿/鱼休息/鱼发力/鱼可抄/体力偏低/落水危险/完美/断竿/鱼逃/挥空/主动放弃/碾压）（钓鱼规则.md:348-361）",
+          "match_text": "必须可感知的操作反馈项抛竿鱼休息鱼发力鱼可抄体力偏低落水危险完美断竿鱼逃挥空主动放弃碾压"
+        },
+        {
+          "#": "92",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#7.1#85a0e2f4",
+          "status": "❓ Unverifiable",
+          "requirement": "基础咬钩信号要让漂主远距离感知，含声音、身体语言与震动通道；铃铛漂增强为全场可闻（钓鱼规则.md:363）",
+          "match_text": "基础咬钩信号要让漂主远距离感知含声音身体语言与震动通道铃铛漂增强为全场可闻"
+        },
+        {
+          "#": "93",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#7.2#8852fb3d",
+          "status": "🔄 Divergent",
+          "requirement": "鱼影按已抽定那条真鱼的体型演出，附近玩家都能看见（钓鱼规则.md:367）",
+          "match_text": "鱼影按已抽定那条真鱼的体型演出附近玩家都能看见"
+        },
+        {
+          "#": "94",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#7.2#87216a93",
+          "status": "✅ Implemented",
+          "requirement": "线的松紧、竿身弯曲表达张力（钓鱼规则.md:369,373）",
+          "match_text": "线的松紧竿身弯曲表达张力"
+        },
+        {
+          "#": "95",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#7.3#6454427f",
+          "status": "❓ Unverifiable",
+          "requirement": "猫体力低于 30% 给偏低提示（钓鱼规则.md:373，快照值）",
+          "match_text": "猫体力低于给偏低提示"
+        },
+        {
+          "#": "96",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#7.3#1179d577",
+          "status": "⚠️ Partial",
+          "requirement": "线长余量给世界内表现，力量差不给数字（钓鱼规则.md:373）",
+          "match_text": "线长余量给世界内表现力量差不给数字"
+        },
+        {
+          "#": "97",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#3.3#fa284b89",
+          "status": "❌ Missing",
+          "requirement": "增效道具按「进入咬钩」计一场、咬钩前收竿不计场；备装预穿戴的被动效果正常结算；鱼体力不接受道具直接改动，猫体力道具只在搏斗外使用（钓鱼规则.md:135）",
+          "match_text": "增效道具按进入咬钩计一场咬钩前收竿不计场备装预穿戴的被动效果正常结算鱼体力不接受道具直接改动猫体力道具只在搏斗外使用"
+        },
+        {
+          "#": "98",
+          "key": "BzUbwq0qRil89ykyFPNcNou5nYo#6.5#a55b7951",
+          "status": "✅ Implemented",
+          "requirement": "下一轮钓鱼开放：从新的准备与打窝流程开始，不恢复昨天的咬钩倒计时（钓鱼规则.md:335 生命周期表）",
+          "match_text": "下一轮钓鱼开放从新的准备与打窝流程开始不恢复昨天的咬钩倒计时"
+        }
+      ],
+      "code_only": [],
+      "code_only_present": false,
+      "carried_from": "D:\\LocalGameProject\\Unreal\\Catfishing\\Docs\\gap-analysis\\2026-09-09",
+      "docs": [
+        {
+          "file": "GDD 系统分册/钓鱼系统/钓鱼系统.md",
+          "revision_id": 388
+        },
+        {
+          "file": "GDD 系统分册/钓鱼系统/钓鱼规则.md",
+          "revision_id": 297
+        }
+      ],
+      "code": [
+        "Source/Catfishing/Fishing/**",
+        "Source/Catfishing/AbilitySystem/Fishing/",
+        "Source/Catfishing/Equipment/",
+        "Source/Catfishing/Items/**",
+        "Config/DefaultGame.ini"
+      ],
+      "scope": "钓鱼规则.md 的 §1 一竿流程、§3 抛竿与提竿、§4 搏斗与退出、§5 收鱼与归属、§6 外部接口与生命周期、§7 信息与反馈（§2 打窝/等待/抽鱼由另一份报告负责，不要重复评）；钓鱼系统.md 只作总览补充。",
+      "refs": [
+        "数值模拟与参数记录.md"
+      ],
+      "total": 98,
+      "implemented": 28,
+      "partial": 23,
+      "missing": 13,
+      "divergent": 32,
+      "unverifiable": 2
+    },
+    "鱼": {
+      "rows": [
+        {
+          "#": "1",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#L0#3f129a54",
+          "status": "⚠️ Partial",
+          "requirement": "鱼种目录：RC 实装 20 种，鱼表格现有 16 种，W2 先接 13 种跑通管线（鱼.md:13）",
+          "match_text": "鱼种目录RC实装种鱼表格现有种W先接种跑通管线"
+        },
+        {
+          "#": "2",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#1#3daf8731",
+          "status": "✅ Implemented",
+          "requirement": "鱼种数据是唯一归属，由显式清单枚举、不按文件名或目录猜内容（鱼.md:57、97）",
+          "match_text": "鱼种数据是唯一归属由显式清单枚举不按文件名或目录猜内容"
+        },
+        {
+          "#": "3",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#1#86d30c61",
+          "status": "✅ Implemented",
+          "requirement": "鱼种档案·基本信息字段：名字／外观／图鉴描述（鱼.md:61；第一版.csv 第1行 名字列、图鉴描述列）",
+          "match_text": "鱼种档案基本信息字段名字外观图鉴描述"
+        },
+        {
+          "#": "4",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#1#7a062ee6",
+          "status": "❌ Missing",
+          "requirement": "缸内游动表现：共用大鱼缸按实际鱼种游动，是「活的鱼册」（鱼.md:61、122、140）",
+          "match_text": "缸内游动表现共用大鱼缸按实际鱼种游动是活的鱼册"
+        },
+        {
+          "#": "5",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#1#3b5982e3",
+          "status": "✅ Implemented",
+          "requirement": "分布·区域字段：出现在哪片水域（河流／森林湖）并按水域过滤候选（鱼.md:62、71；第一版.csv 第1行 出现地点列）",
+          "match_text": "分布区域字段出现在哪片水域河流森林湖并按水域过滤候选"
+        },
+        {
+          "#": "6",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#1#e5999d4d",
+          "status": "⚠️ Partial",
+          "requirement": "分布含「无窝料基础池」保底档：Total=0 时也有小鱼杂鱼可钓（鱼.md:62、71）",
+          "match_text": "分布含无窝料基础池保底档Total时也有小鱼杂鱼可钓"
+        },
+        {
+          "#": "7",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#1#1dc1d935",
+          "status": "✅ Implemented",
+          "requirement": "窝料轴：按鱼的环境偏好配腥／香／酵三属性（鱼.md:63；第一版.csv 第1行 需求窝料属性列）",
+          "match_text": "窝料轴按鱼的环境偏好配腥香酵三属性"
+        },
+        {
+          "#": "8",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#1#36f30f48",
+          "status": "✅ Implemented",
+          "requirement": "偏好·鱼饵倾向按鱼种配（鱼.md:66；第一版.csv 第1行 偏好饵列）",
+          "match_text": "偏好鱼饵倾向按鱼种配"
+        },
+        {
+          "#": "9",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#4#727a4d98",
+          "status": "✅ Implemented",
+          "requirement": "窝料决定「哪一类」、鱼饵决定「哪一条」：属性命中后候选鱼按当前鱼饵偏好权重取（鱼.md:82）",
+          "match_text": "窝料决定哪一类鱼饵决定哪一条属性命中后候选鱼按当前鱼饵偏好权重取"
+        },
+        {
+          "#": "10",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#1#0062c2a6",
+          "status": "⚠️ Partial",
+          "requirement": "体重轴分档＝搏斗协作门槛：单人可起／需队友帮拉／多人合力拉竿（鱼.md:29、64、78）",
+          "match_text": "体重轴分档搏斗协作门槛单人可起需队友帮拉多人合力拉竿"
+        },
+        {
+          "#": "11",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#1#8575dcbe",
+          "status": "⚠️ Partial",
+          "requirement": "体重档四档阈值（小 w<1／中 1≤w<5／大 5≤w<15／巨影 w≥15，2026-09-06 重拍，端点半开区间）为供奉值、收购价、游速三条链共用（经验 ",
+          "match_text": "体重档四档阈值小w中w大w巨影w重拍端点半开区间为供奉值收购价游速三条链共用经验已退出该链"
+        },
+        {
+          "#": "12",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#1#63d8f436",
+          "status": "✅ Implemented",
+          "requirement": "稀有度字段：五档价值判断，值在鱼表格「稀有度」列（鱼.md:65；第一版.csv 第1行 稀有度列）",
+          "match_text": "稀有度字段五档价值判断值在鱼表格稀有度列"
+        },
+        {
+          "#": "13",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#2#12f1d175",
+          "status": "✅ Implemented",
+          "requirement": "稀有度不参与抽鱼：出不出看分布、窝料轴与鱼饵偏好（鱼.md:73）",
+          "match_text": "稀有度不参与抽鱼出不出看分布窝料轴与鱼饵偏好"
+        },
+        {
+          "#": "14",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#2#f76a6c94",
+          "status": "✅ Implemented",
+          "requirement": "刷新上限按在场协作能力：单人局不刷出需要多人的鱼（鱼.md:44、72）",
+          "match_text": "刷新上限按在场协作能力单人局不刷出需要多人的鱼"
+        },
+        {
+          "#": "15",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#2#51de8d37",
+          "status": "✅ Implemented",
+          "requirement": "剪影揭没揭开不影响刷新，刷新只看分布与条件（鱼.md:74）",
+          "match_text": "剪影揭没揭开不影响刷新刷新只看分布与条件"
+        },
+        {
+          "#": "16",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#3#560e52fa",
+          "status": "✅ Implemented",
+          "requirement": "重量一律按真实值记录、无组队加成（鱼.md:78；第一版.csv 第1行 重量/KG 列）",
+          "match_text": "重量一律按真实值记录无组队加成"
+        },
+        {
+          "#": "17",
+          "key": "DKhnweGaEiPTJZkO8OScQOJenqg#r1#ab1f6fa4",
+          "status": "🔄 Divergent",
+          "requirement": "力量系数 K 按鱼种配，鱼力量＝重量×K（第一版.csv 第1行 力量系数K列）",
+          "match_text": "力量系数K按鱼种配鱼力量重量K"
+        },
+        {
+          "#": "18",
+          "key": "DKhnweGaEiPTJZkO8OScQOJenqg#r1#79be0da0",
+          "status": "🔄 Divergent",
+          "requirement": "鱼体力初始值＝鱼表「体力系数」× 实际重量（第一版.csv 第1行 体力系数列；设计修改记录.md 09-08「钱成澔名下三件代拍」①）",
+          "match_text": "鱼体力初始值鱼表体力系数实际重量"
+        },
+        {
+          "#": "19",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#1#29862b08",
+          "status": "🔄 Divergent",
+          "requirement": "吃鱼效果·经验值：局内成长制，经验＝鱼种经验系数 × 实际重量（鱼.md:67、86；第一版.csv 第1行 经验系数（KG×系数=经验）列）",
+          "match_text": "吃鱼效果经验值局内成长制经验鱼种经验系数实际重量"
+        },
+        {
+          "#": "20",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#1#906ac91e",
+          "status": "❌ Missing",
+          "requirement": "吃鱼效果·限时 buff 按鱼种配置（含持续时间；负面与演出族同样按鱼种配）（鱼.md:67、86；第一版.csv 第1行 限时Buff 列、持续时间列）",
+          "match_text": "吃鱼效果限时buff按鱼种配置含持续时间负面与演出族同样按鱼种配"
+        },
+        {
+          "#": "21",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#1#eff24969",
+          "status": "✅ Implemented",
+          "requirement": "吃鱼效果·负面（中毒等）按鱼种配（鱼.md:67、86；第一版.csv 第1行 吃鱼效果列）",
+          "match_text": "吃鱼效果负面中毒等按鱼种配"
+        },
+        {
+          "#": "22",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#5#e57bec4a",
+          "status": "❌ Missing",
+          "requirement": "毒鱼经验按同体重档 1.5~2× 上浮（拼死吃河豚），保住倒地救援的内容供给（鱼.md:86）",
+          "match_text": "毒鱼经验按同体重档上浮拼死吃河豚保住倒地救援的内容供给"
+        },
+        {
+          "#": "23",
+          "key": "DKhnweGaEiPTJZkO8OScQOJenqg#r10#a8fa640c",
+          "status": "🔄 Divergent",
+          "requirement": "存在「不可食用」的鱼：咸鱼、湖心巨影（第一版.csv 第10行、第7行 吃鱼效果列；设计修改记录.md 09-08 晚⑨）",
+          "match_text": "存在不可食用的鱼咸鱼湖心巨影"
+        },
+        {
+          "#": "24",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#9#1c7330d6",
+          "status": "🔄 Divergent",
+          "requirement": "供奉点数按体重档取（小 1／中 2／大 4／巨影 10）（鱼.md:142；数值模拟与参数记录.md 第50行 供奉值行）",
+          "match_text": "供奉点数按体重档取小中大巨影"
+        },
+        {
+          "#": "25",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#2#3c8b8d7a",
+          "status": "✅ Implemented",
+          "requirement": "鱼的去向·献祭（鱼.md:48）",
+          "match_text": "鱼的去向献祭"
+        },
+        {
+          "#": "26",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#2#6e45c376",
+          "status": "✅ Implemented",
+          "requirement": "鱼的去向·吃（触发吃鱼效果）（鱼.md:48）",
+          "match_text": "鱼的去向吃触发吃鱼效果"
+        },
+        {
+          "#": "27",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#2#5f1f067d",
+          "status": "⚠️ Partial",
+          "requirement": "鱼的去向·卖给商店，收鱼定价按同尺换算（鱼.md:48、141）",
+          "match_text": "鱼的去向卖给商店收鱼定价按同尺换算"
+        },
+        {
+          "#": "28",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#2#aad6f434",
+          "status": "✅ Implemented",
+          "requirement": "鱼的去向·留缸观赏（标本资格按鱼种配）（鱼.md:48、140）",
+          "match_text": "鱼的去向留缸观赏标本资格按鱼种配"
+        },
+        {
+          "#": "29",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#2#7d898dda",
+          "status": "✅ Implemented",
+          "requirement": "上岸后进鱼护与共用大鱼缸（鱼.md:47）",
+          "match_text": "上岸后进鱼护与共用大鱼缸"
+        },
+        {
+          "#": "30",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#2#9a5b9e24",
+          "status": "✅ Implemented",
+          "requirement": "局末随局清空（鱼.md:49）",
+          "match_text": "局末随局清空"
+        },
+        {
+          "#": "31",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#9#2f376e3c",
+          "status": "⚠️ Partial",
+          "requirement": "记录时点分层：上钩成立揭剪影／上岸登记收集层／吃掉开知识层（鱼.md:136）",
+          "match_text": "记录时点分层上钩成立揭剪影上岸登记收集层吃掉开知识层"
+        },
+        {
+          "#": "32",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#9#5c1d790c",
+          "status": "⚠️ Partial",
+          "requirement": "区域／时段／天气三轴的映射表在本册，字段随鱼种配（鱼.md:138）",
+          "match_text": "区域时段天气三轴的映射表在本册字段随鱼种配"
+        },
+        {
+          "#": "33",
+          "key": "DKhnweGaEiPTJZkO8OScQOJenqg#r1#2461e93c",
+          "status": "🔄 Divergent",
+          "requirement": "食性（食肉／杂食／素食）按鱼种配，决定往外冲的基础倾向（第一版.csv 第1行 食性列）",
+          "match_text": "食性食肉杂食素食按鱼种配决定往外冲的基础倾向"
+        },
+        {
+          "#": "34",
+          "key": "DKhnweGaEiPTJZkO8OScQOJenqg#r1#1da1802d",
+          "status": "⚠️ Partial",
+          "requirement": "发力段长／休息段长按鱼种配（快照 3~6 秒／2~5 秒）（第一版.csv 第1行 发力段长列、休息段长列）",
+          "match_text": "发力段长休息段长按鱼种配快照秒秒"
+        },
+        {
+          "#": "35",
+          "key": "DKhnweGaEiPTJZkO8OScQOJenqg#r1#e2e0b061",
+          "status": "🔄 Divergent",
+          "requirement": "游速系数按体重档（小 0.8／中 1.0／大 1.2／巨影 1.5）（第一版.csv 第1行 游速系数列）",
+          "match_text": "游速系数按体重档小中大巨影"
+        },
+        {
+          "#": "36",
+          "key": "DKhnweGaEiPTJZkO8OScQOJenqg#r1#89a1cdcb",
+          "status": "⚠️ Partial",
+          "requirement": "与猫搏斗时鱼的动作按鱼种变化（横切／下潜／绕圈／贴底等）（第一版.csv 第1行 与猫搏斗时鱼的动作变化列）",
+          "match_text": "与猫搏斗时鱼的动作按鱼种变化横切下潜绕圈贴底等"
+        },
+        {
+          "#": "37",
+          "key": "DKhnweGaEiPTJZkO8OScQOJenqg#r1#02196f1e",
+          "status": "⚠️ Partial",
+          "requirement": "咬饵与搏斗时的鱼漂变化、水面变化按鱼种表现（第一版.csv 第1行 鱼刚咬饵时鱼漂的变化列、水面的变化列、与猫搏斗时水面的变化列）",
+          "match_text": "咬饵与搏斗时的鱼漂变化水面变化按鱼种表现"
+        },
+        {
+          "#": "38",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#1#a79e2a20",
+          "status": "✅ Implemented",
+          "requirement": "设计禁区：没有现实时钟限定鱼，任何鱼的出现条件都能在一局之内等到或创造（鱼.md:39）",
+          "match_text": "设计禁区没有现实时钟限定鱼任何鱼的出现条件都能在一局之内等到或创造"
+        },
+        {
+          "#": "39",
+          "key": "SlFcwt3BdidWCRkz2S4cIplJnnV#7#c370c510",
+          "status": "✅ Implemented",
+          "requirement": "视觉反馈通道：体重档在上钩手感上读得出来，不靠数字告知（鱼.md:123）",
+          "match_text": "视觉反馈通道体重档在上钩手感上读得出来不靠数字告知"
+        },
+        {
+          "#": "40",
+          "key": "DKhnweGaEiPTJZkO8OScQOJenqg#r1#bc855632",
+          "status": "✅ Implemented",
+          "requirement": "鱼表格加 fish_id 列＝工程 FishDefinitionId，程序按此列对鱼、不按名字；改名不影响对应（第一版.csv 第1行 fish_id 列；设计",
+          "match_text": "鱼表格加fishid列工程FishDefinitionId程序按此列对鱼不按名字改名不影响对应"
+        },
+        {
+          "#": "41",
+          "key": "DKhnweGaEiPTJZkO8OScQOJenqg#r10#3c9acbd3",
+          "status": "❌ Missing",
+          "requirement": "特殊鱼的投掷效果按鱼种配：咸鱼投掷击退炸毛、臭臭鱼投掷驱散并短时屏蔽靠近（第一版.csv 第10行、第11行 吃鱼效果列；鱼.md:65 稀有度行）",
+          "match_text": "特殊鱼的投掷效果按鱼种配咸鱼投掷击退炸毛臭臭鱼投掷驱散并短时屏蔽靠近"
+        }
+      ],
+      "code_only": [
+        "挑战度分带选鱼：候选鱼先按 `max(S, 2ST/(S+T))` 算力量/体力挑战比，超 1.35 直接淘汰，再按轻松≤0.65／势均力敌≤1.05／高风险≤1.35 分三带、按 25%／60%／15% 抽带，带内才做窝料×鱼饵权重归一化",
+        "逐鱼「可捞圈半径」`ScoopTargetRadiusCentimeters`：圆心随鱼权威位置移动，注释写明语义是「小鱼给小圈、巨鱼给大圈以降低多人抢抄难度」，0 即拒绝抢抄",
+        "逐鱼咬钩性格模板 `BitePersonalityId`（四套 Bite_* 资产，携带完美中鱼的力量／体力／初始线长倍率与真咬窗）",
+        "逐鱼成像事件 `CaptureImprintEventId`：鱼定义上挂捕获后可选印记事件的语义 ID"
+      ],
+      "code_only_present": true,
+      "carried_from": null,
+      "docs": [
+        {
+          "file": "GDD 系统分册/鱼/鱼.md",
+          "revision_id": 534
+        },
+        {
+          "file": "GDD 系统分册/鱼/鱼表格/入侵物种.embedded/7m0bEm.csv",
+          "revision": 29
+        },
+        {
+          "file": "GDD 系统分册/鱼/鱼表格/入侵物种.embedded/9DchAt.csv",
+          "revision": 29
+        },
+        {
+          "file": "GDD 系统分册/鱼/鱼表格/入侵物种.embedded/FVD81C.csv",
+          "revision": 29
+        },
+        {
+          "file": "GDD 系统分册/鱼/鱼表格/入侵物种.embedded/RQKQE8.csv",
+          "revision": 29
+        },
+        {
+          "file": "GDD 系统分册/鱼/鱼表格/入侵物种.embedded/RlxioW.csv",
+          "revision": 29
+        },
+        {
+          "file": "GDD 系统分册/鱼/鱼表格/入侵物种.embedded/fElgjQ.csv",
+          "revision": 29
+        },
+        {
+          "file": "GDD 系统分册/鱼/鱼表格/入侵物种.embedded/sZ7JVt.csv",
+          "revision": 29
+        },
+        {
+          "file": "GDD 系统分册/鱼/鱼表格/入侵物种.embedded/wKfiGk.csv",
+          "revision": 29
+        },
+        {
+          "file": "GDD 系统分册/鱼/鱼表格/入侵物种.embedded/yWmytW.csv",
+          "revision": 29
+        },
+        {
+          "file": "GDD 系统分册/鱼/鱼表格/入侵物种.md",
+          "revision_id": 18
+        },
+        {
+          "file": "GDD 系统分册/鱼/鱼表格/第一版.csv",
+          "revision": 821
+        }
+      ],
+      "code": [
+        "Source/Catfishing/Data/",
+        "Source/Catfishing/Fishing/Behavior/",
+        "Source/Catfishing/Fishing/Simulation/",
+        "Source/Catfishing/Fishing/StateTree/",
+        "Content/Catfishing/Data/Fish/",
+        "Scripts/verify_showcase_formal_fish_region.py",
+        "Scripts/create_fish_behavior_state_tree.py"
+      ],
+      "scope": "全篇；旧版-已废弃-勿引（饥饿口径）.csv 排除；鱼的行为.md 页头声明「实现不读本页」只作参考。入侵物种页无三行头、未挂号，按候选稿对待：列一行说明不评。",
+      "refs": [
+        "裁决同步/裁决同步 · 鱼／营地／UI 与交互（张佳）.md",
+        "GDD 系统分册/鱼/鱼的行为.md"
+      ],
+      "total": 41,
+      "implemented": 20,
+      "partial": 10,
+      "missing": 4,
+      "divergent": 7,
+      "unverifiable": 0
+    }
+  }
+}
