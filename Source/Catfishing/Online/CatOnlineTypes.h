@@ -171,8 +171,6 @@ enum class ECatOnlineError : uint8
 	LobbyReadyPublishFailed,
 	/** Host 离开前的世界保存被拒绝、Run 或 Index 写盘失败；退出停止且 Session 保持可用。 */
 	HostSaveFailed,
-	/** 同一 Lobby 的 Client 玩法启动尝试已耗尽；停止自动重试并保留房间，玩家可通过现有 Leave 退出后重新加入。 */
-	ClientStartRetryExhausted,
 	/** 平台已接受邀请，但另一个 Online 操作或邀请仍在处理；不抢占当前操作，用户需在空闲后重新接受邀请。 */
 	InviteAcceptanceBusy,
 	/** 当前已拥有 Session，不能自动替用户退出或切换房间；先离房再重新接受邀请。 */

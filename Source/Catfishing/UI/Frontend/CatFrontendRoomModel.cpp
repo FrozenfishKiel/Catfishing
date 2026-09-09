@@ -42,8 +42,6 @@ namespace CatFrontendRoomModelText
 			return FText::FromString(TEXT("世界存档未能完成，已保留当前房间，请重试。"));
 		case ECatOnlineError::ActiveRunReleaseFailed:
 			return FText::FromString(TEXT("已离开房间，但本局存档状态未能释放，暂时无法切换存档。"));
-		case ECatOnlineError::ClientStartRetryExhausted:
-			return FText::FromString(TEXT("进入游戏多次失败，请退出房间后重新加入。"));
 		case ECatOnlineError::ConnectStringUnavailable:
 			return FText::FromString(TEXT("无法取得房主连接地址。"));
 		case ECatOnlineError::NetworkFailure:

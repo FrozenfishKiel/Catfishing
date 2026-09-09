@@ -859,7 +859,7 @@ bool UCatLocalPlayerUISubsystem::ShouldKeepExistingFrontendRoot(const FCatOnline
 	const bool bGameplayStartFailureRecovering = Snapshot.ActiveOperation == ECatOnlineOperation::None
 		&& (Snapshot.LastError == ECatOnlineError::GameplayPreloadFailed || Snapshot.LastError == ECatOnlineError::TravelRejected
 			|| Snapshot.LastError == ECatOnlineError::TravelFailed || Snapshot.LastError == ECatOnlineError::ConnectStringUnavailable
-			|| Snapshot.LastError == ECatOnlineError::NetworkFailure || Snapshot.LastError == ECatOnlineError::ClientStartRetryExhausted)
+			|| Snapshot.LastError == ECatOnlineError::NetworkFailure)
 		&& (Snapshot.WorldState == ECatOnlineWorldState::Frontend || Snapshot.WorldState == ECatOnlineWorldState::TravelingToLake
 			|| Snapshot.TransportState == ECatOnlineTransportState::Failed);
 	return bGameplayStartFailureRecovering;

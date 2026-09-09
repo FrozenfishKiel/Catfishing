@@ -118,7 +118,7 @@ private:
 	/** 停止当前 Lobby 轮询；离开、反初始化与会话销毁时成对清理，不让旧 Lobby 驱动新 World。 */
 	void StopLobbyFactPolling();
 
-	/** 低频读取当前 Lobby 的成员、元数据和 ready 标记；Host 到达玩法图后按单调秒截止点重试 ready 发布且不回前台，Client 在预算与退避允许时开始自己的包预载。 */
+	/** 低频读取当前 Lobby 的成员、元数据和 ready 标记；Host 到达玩法图后按单调秒截止点重试 ready 发布且不回前台，Client 只在同一 Lobby 首次真实 ready 到达且尚未提交 Start 时开始包预载。 */
 	bool TickLobbyFacts(float DeltaSeconds);
 
 	/** 返回当前已加入 Steam Lobby 是否已由 Host 写入 ready；非 Steam、非成员或数据缺失一律返回 false。 */
@@ -130,7 +130,7 @@ private:
 	/** Host 玩法 World 已可接纳客户端后尝试写入 Steam Lobby ready；平台元数据不可写只阻止 Client 自动进图，Host 的 Lake 与 Session 保持成功态。 */
 	bool PublishLobbyReady();
 
-	/** Client 在真实 Lobby ready 且重试预算允许时提交自身玩法包预载并计次；包成功后复核 ready 与 OSS 地址再 ClientTravel，失败统一进入有界退避。 */
+	/** Client 在真实 Lobby ready 且本 Lobby 尚未提交过 Start 时提交自身玩法包预载并计次；包成功后复核 ready 与 OSS 地址再 ClientTravel，失败只保留真实错误，不由本地时间再次发起 Start。 */
 	void BeginClientGameplayPreload();
 
 	/** 当前是否存在任意地图包预载请求；Start 和 Leave 共用该事实给 UI 判断全局遮罩是否有 Online 模型层来源。 */
@@ -214,7 +214,7 @@ private:
 	/** TravelFailure 回调：只消费本 GameInstance 的待确认旅行；Create、Join 与 Start 先 Destroy 补偿，Leave 保留已完成的 Session 清理。 */
 	void HandleTravelFailure(UWorld* FailureWorld, ETravelFailure::Type FailureType, const FString& Reason);
 
-	/** NetworkFailure 回调：只消费本 GameInstance 的正式或待连接驱动；Client 预载连接失败有界重试，空闲 Host 断线仍先保存再清会话，返回后才释放载荷。 */
+	/** NetworkFailure 回调：只消费本 GameInstance 的正式或待连接驱动；前台 Client Start 连接失败只结束本次进入并保留真实错误，空闲 Host 断线仍先保存再清会话，返回后才释放载荷。 */
 	void HandleNetworkFailure(UWorld* FailureWorld, UNetDriver* NetDriver, ENetworkFailure::Type FailureType, const FString& Reason);
 
 	/** 地图包名归类流程；只写 WorldState，不借包名猜测 NamedSession 或 NetDriver 终态。 */
@@ -223,7 +223,7 @@ private:
 	/** 完成当前操作并清空错误；获准释放的 Leave 先等 Frontend 载荷清理，随后解绑回调、废止 epoch 并广播稳定快照。 */
 	void FinishOperationSuccess();
 
-	/** 以结构化错误结束操作；已安全退出的 Leave 先释放载荷并保留原错，其他失败不释放。前台 Client Start 保留 Lobby 有界重试，耗尽后提示退出重加入。 */
+	/** 以结构化错误结束操作；已安全退出的 Leave 先释放载荷并保留原错，其他失败不释放。前台 Client Start 失败保留 Lobby、真实错误和已提交标记，用户显式离开后才会释放下一次进入机会。 */
 	void FinishOperationFailure(ECatOnlineError Error);
 
 	/** 成对解除当前操作可能绑定的 Create/Find/Join/Destroy 回调，并释放绑定它们的精确 Session 接口。 */
@@ -366,11 +366,8 @@ private:
 	/** Host 下一次允许重试发布 ready 元数据的单调时间，单位秒；PostLoadMap 和 TickLobbyFacts 在失败时写入、成功或离开 Lobby 时归零，只有 Host 侧轮询读取它。 */
 	double NextHostLobbyReadyPublishAttemptTime = 0.0;
 
-	/** 当前 Lobby 中 Client 已提交的玩法启动次数；每次受理 Start 时递增，离开 Lobby 才清零，ready 抖动不会重置失败预算。 */
+	/** 当前 Lobby 中 Client 是否已经提交过玩法启动；每次受理 Start 时递增，离开 Lobby 才清零，避免同一 ready 事实反复自动进图。 */
 	int32 ClientGameplayStartAttempts = 0;
-
-	/** Client 下一次允许重试的单调时间，单位秒；失败结案按次数写入退避截止点，轮询只在到期后提交，离开 Lobby 时归零。 */
-	double NextClientGameplayStartTime = 0.0;
 
 	/** 当前 Find 代际的 opaque 句柄到平台结果映射；新 Find 会整代替换，成功 Join、补偿、Leave 或销毁会使其失效。 */
 	TMap<FGuid, FOnlineSessionSearchResult> SearchResultsByHandle;

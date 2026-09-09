@@ -44,8 +44,6 @@ namespace CatOnlineNames
 	static const ANSICHAR* RoomNameLobbyKey = "CAT_ROOM_NAME";
 	/** Steam Lobby 的 Host ready 元数据；只有 Lake 的 GameNetDriver 已创建后才由 Host 写入，Client 用它决定何时预载并连接。 */
 	static const ANSICHAR* LobbyReadyKey = "CAT_GAME_READY";
-	/** 单个 Lobby 内 Client 自动启动的最大次数；轮询和失败收口共用，耗尽后必须由用户退出再加入以开启新预算。 */
-	static constexpr int32 MaxClientGameplayStartAttempts = 3;
 	/** Host ready 失败后等待下一次发布尝试的秒数；PostLoadMap 与 Lobby 轮询用它写入单调时间，轮询只在 Steam Lobby 可写时消费以避免 NULL 后端刷屏。 */
 	static constexpr double HostLobbyReadyRetrySeconds = 2.0;
 	/** 地图包进度采样间隔，单位秒；它只控制 UI 快照刷新频率，不参与加载完成判断。 */
@@ -293,7 +291,7 @@ void UCatOnlineSubsystem::StartLobbyFactPolling()
 		FTickerDelegate::CreateUObject(this, &ThisClass::TickLobbyFacts), 0.5f);
 }
 
-// Lobby 轮询停止流程：仅移除本子系统自己注册的 ticker，再清空 ready 观察值、Host 发布截止点、Client 尝试次数和退避时间；只有离开旧 Lobby 才为下一次加入释放完整重试预算。
+// Lobby 轮询停止流程：仅移除本子系统自己注册的 ticker，再清空 ready 观察值、Host 发布截止点和 Client 已提交标记；只有离开旧 Lobby 才允许下一次真实 ready 重新触发进入。
 void UCatOnlineSubsystem::StopLobbyFactPolling()
 {
 	if (LobbyFactPollHandle.IsValid())
@@ -304,12 +302,11 @@ void UCatOnlineSubsystem::StopLobbyFactPolling()
 	bLobbyReadyObserved = false;
 	NextHostLobbyReadyPublishAttemptTime = 0.0;
 	ClientGameplayStartAttempts = 0;
-	NextClientGameplayStartTime = 0.0;
 }
 
 // Lobby 轮询流程：先保存公开事实，再从 Steam SDK 重建成员与 ready。
 // Host 已在玩法图、当前空闲且 ready 未写入时，只有 Steam Lobby 可写并到达 NextHostLobbyReadyPublishAttemptTime 才重试发布；失败只推迟下一次尝试，不触发 DestroySession 或 Frontend travel。
-// Client 只在 ready 成立、预算未耗尽且退避到期时开始预载；其余轮询只有事实变化才广播，避免 NULL 后端每 0.5 秒刷 ready 失败日志。
+// Client 只在同一个 Lobby 的第一次 ready 事实到达时开始预载；失败后保留真实错误，不由本地时间自动伪造下一次进入。
 bool UCatOnlineSubsystem::TickLobbyFacts(const float DeltaSeconds)
 {
 	(void)DeltaSeconds;
@@ -363,8 +360,7 @@ bool UCatOnlineSubsystem::TickLobbyFacts(const float DeltaSeconds)
 		|| bMembersChanged || bWasReady != bLobbyReadyObserved;
 	if (SessionRole == ECatOnlineSessionRole::Client && WorldState == ECatOnlineWorldState::Frontend
 		&& ActiveOperation == ECatOnlineOperation::None && bLobbyReadyObserved
-		&& ClientGameplayStartAttempts < CatOnlineNames::MaxClientGameplayStartAttempts
-		&& FPlatformTime::Seconds() >= NextClientGameplayStartTime)
+		&& ClientGameplayStartAttempts == 0)
 	{
 		BeginClientGameplayPreload();
 		return true;
@@ -559,13 +555,12 @@ bool UCatOnlineSubsystem::TickMapPreloadProgress(const float DeltaSeconds)
 	return true;
 }
 
-// Client 预载启动流程：确认前台 Client、真实 Lobby ready、次数预算和退避截止点后受理 Start 并计次；随后提交真实异步预载，失败统一进入退避，成功回调复核 ready 后才发起 ClientTravel。
+// Client 预载启动流程：确认前台 Client、真实 Lobby ready 且本 Lobby 尚未提交过 Start 后受理并计次；随后提交真实异步预载，失败直接进入错误分支，成功回调复核 ready 后才发起 ClientTravel。
 void UCatOnlineSubsystem::BeginClientGameplayPreload()
 {
 	if (ActiveOperation != ECatOnlineOperation::None || WorldState != ECatOnlineWorldState::Frontend
 		|| SessionRole != ECatOnlineSessionRole::Client || GameplayMapPackage.IsEmpty() || !IsCurrentLobbyReady()
-		|| ClientGameplayStartAttempts >= CatOnlineNames::MaxClientGameplayStartAttempts
-		|| FPlatformTime::Seconds() < NextClientGameplayStartTime)
+		|| ClientGameplayStartAttempts > 0)
 	{
 		return;
 	}
@@ -2110,7 +2105,7 @@ void UCatOnlineSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 	BroadcastSnapshot(TEXT("online_world_observed"));
 }
 
-// 旅行失败流程：先按 GameInstance 过滤并记录来源 World；Client Start 仍在 Frontend 时保留 Lobby 进入有界重试，重复失败通知不再消耗预算；其他已建会话走 Destroy 补偿，Leave 不触发第二次旅行。
+// 旅行失败流程：先按 GameInstance 过滤并记录来源 World；Client Start 仍在 Frontend 时只结束本次进入并保留 Lobby 与真实错误，重复失败通知不再改变已提交标记；其他已建会话走 Destroy 补偿，Leave 不触发第二次旅行。
 void UCatOnlineSubsystem::HandleTravelFailure(UWorld* FailureWorld, const ETravelFailure::Type FailureType, const FString& Reason)
 {
 	if (!FailureWorld || FailureWorld->GetGameInstance() != GetGameInstance())
@@ -2164,7 +2159,7 @@ void UCatOnlineSubsystem::HandleTravelFailure(UWorld* FailureWorld, const ETrave
 
 // 网络失败流程：UE 的全局事件会广播任意 NetDriver，先把来源收窄到本 GameInstance 的当前 GameNetDriver 或 PendingNetDriver，再与 TravelFailure 独立记录和补偿。
 // 已建立连接的 Client 与 Listen Host 都落在 GameNetDriver；Join 握手失败则由 PendingNetDriver 广播且 FailureWorld 可能为空，所以两条路径必须分别用注册表和 WorldContext 验证，Beacon 等驱动一律忽略。
-// 前台 Client 的 PendingNetDriver 连接失败只结束本次 Start 并退避；引擎负责释放失败驱动，本地 Lobby 保留供下一次尝试，耗尽预算后由用户显式离开。
+// 前台 Client 的 PendingNetDriver 连接失败只结束本次 Start；引擎负责释放失败驱动，本地 Lobby 保留错误事实且不按秒提交下一次 Start，重新进入必须由用户显式离开后再加入。
 // 空闲时的断线复用 Leave：Lake Host 仍须先通过持久化回执，失败不自行 Destroy；前台房间和 Client 可清理，完成返回后再释放本机载荷。
 void UCatOnlineSubsystem::HandleNetworkFailure(UWorld* FailureWorld, UNetDriver* NetDriver, const ENetworkFailure::Type FailureType, const FString& Reason)
 {
@@ -2189,7 +2184,7 @@ void UCatOnlineSubsystem::HandleNetworkFailure(UWorld* FailureWorld, UNetDriver*
 		return;
 	}
 
-	// NetworkFailure 已经替代 PostLoadMap 成为本次引擎等待的终点；清掉 LoadMap 观测，避免失败后的补偿或重试仍被显示成正在切图。
+	// NetworkFailure 已经替代 PostLoadMap 成为本次引擎等待的终点；清掉 LoadMap 观测，避免失败后的补偿继续被显示成正在切图。
 	bIsEngineLoadMapPending = false;
 	EngineLoadMapName.Reset();
 	TransportState = ECatOnlineTransportState::Failed;
@@ -2327,7 +2322,7 @@ void UCatOnlineSubsystem::FinishOperationSuccess()
 }
 
 // 失败结案流程：若 Leave 已安全清会话并回 Frontend 且获释放许可，保留原错误并等待载荷释放；保存失败没有许可，Destroy/返回失败未达到终态，均不清载荷。
-// 其他情况撤销释放许可并解绑所有等待，清操作和预载、废止 epoch；前台 Client Start 前两次按 2 秒、4 秒退避，第三次明确停止，其余失败保持原错误。
+// 其他情况撤销释放许可并解绑所有等待，清操作和预载、废止 epoch；Client Start 失败保留真实错误，不再按本地时间安排兜底重试。
 void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 {
 	if (ActiveOperation == ECatOnlineOperation::Leave && bReleaseActiveRunOnFrontend
@@ -2339,8 +2334,6 @@ void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 		return;
 	}
 	const bool bFinishingGameplayStart = ActiveOperation == ECatOnlineOperation::Start;
-	const bool bRetryableClientStart = bFinishingGameplayStart && OperationRole == ECatOnlineSessionRole::Client
-		&& SessionState == ECatOnlineSessionState::Client && WorldState == ECatOnlineWorldState::Frontend;
 	bReleaseActiveRunOnFrontend = false;
 	ClearRunReleaseDelegate();
 	ClearHostLeaveSaveDelegate();
@@ -2362,22 +2355,6 @@ void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 	FrontendPreloadRequestId = INDEX_NONE;
 	PreloadedFrontendPackage = nullptr;
 	LastError = Error;
-	if (bRetryableClientStart)
-	{
-		if (ClientGameplayStartAttempts >= CatOnlineNames::MaxClientGameplayStartAttempts)
-		{
-			LastError = ECatOnlineError::ClientStartRetryExhausted;
-			UE_LOG(LogCatOnline, Warning, TEXT("Event=online_client_start_retry_exhausted RequestId=%s Epoch=%llu Attempts=%d Cause=%s Recovery=LeaveAndRejoin"),
-				*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, ClientGameplayStartAttempts, *UEnum::GetValueAsString(Error));
-		}
-		else
-		{
-			const double RetryDelaySeconds = 2.0 * ClientGameplayStartAttempts;
-			NextClientGameplayStartTime = FPlatformTime::Seconds() + RetryDelaySeconds;
-			UE_LOG(LogCatOnline, Warning, TEXT("Event=online_client_start_retry_scheduled RequestId=%s Epoch=%llu Attempts=%d DelaySeconds=%.1f Cause=%s"),
-				*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, ClientGameplayStartAttempts, RetryDelaySeconds, *UEnum::GetValueAsString(Error));
-		}
-	}
 	++OperationEpoch;
 	BroadcastSnapshot(TEXT("online_operation_failed"));
 }

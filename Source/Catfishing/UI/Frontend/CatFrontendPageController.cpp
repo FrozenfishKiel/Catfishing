@@ -520,8 +520,7 @@ void UCatFrontendPageController::HandleRoomModelChanged()
 		|| Snapshot.LastError == ECatOnlineError::TravelRejected
 		|| Snapshot.LastError == ECatOnlineError::TravelFailed
 		|| Snapshot.LastError == ECatOnlineError::ConnectStringUnavailable
-		|| Snapshot.LastError == ECatOnlineError::NetworkFailure
-		|| Snapshot.LastError == ECatOnlineError::ClientStartRetryExhausted;
+		|| Snapshot.LastError == ECatOnlineError::NetworkFailure;
 	const bool bGameplayStartFailureRecovering = Snapshot.ActiveOperation == ECatOnlineOperation::None && bGameplayStartFailed;
 	const bool bCanShowGameplayLoading = bHasFrontendRoom || bPresentedFrontendRoom || Root->IsShowingRoom();
 	if (!bHasFrontendRoom && !bGameplayStartInProgress && !bGameplayStartFailureRecovering) { bPresentedFrontendRoom = false; }
