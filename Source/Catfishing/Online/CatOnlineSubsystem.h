@@ -17,6 +17,7 @@ class UCatSaveSubsystem;
 class IOnlineSubsystem;
 class UNetDriver;
 class UPackage;
+struct FStreamableHandle;
 struct FCatRunTeardownResult;
 
 /** Online 快照变更通知；订阅者收到通知后重新读取只读 Snapshot，不持有平台对象。 */
@@ -67,13 +68,10 @@ public:
 	/** 使用好友缓存中的 opaque 句柄向当前 Host Lobby 发送 Steam 邀请；调用者不能直接接触平台身份。 */
 	FCatOnlineResult RequestInviteFriend(FCatOnlineFriendHandle FriendHandle);
 
-	/** 查询引擎为当前玩法包返回的真实异步加载比例；没有有效预载请求或引擎未知时返回 -1。 */
-	float GetGameplayLoadProgress() const;
-
 	/** 接受服务器 Host exit 通知；并发先于关联键/角色校验拒绝且不覆盖活动关联键，Client 绕过主动离局策略复用 Destroy/Frontend 管线，返回后释放本机载荷。 */
 	FCatOnlineResult RequestRemoteHostExit(FGuid HostExitRequestId);
 
-	/** 组装当前四类事实、RequestId/epoch 与 opaque 摘要；实现只复制数据，不推进异步状态。 */
+	/** 组装当前四类事实、RequestId/epoch、opaque 摘要和真实加载进度；实现只复制 Online 已观察到的资源/包/旅行事实，不推进异步状态。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Online")
 	FCatOnlineSnapshot GetSnapshot() const;
 
@@ -112,13 +110,16 @@ private:
 	/** 玩法包异步加载回调只消费仍归属 Host 或 Client Start 的 epoch；失败不旅行，Host 成功后提交唯一 Listen 旅行，Client 成功后复核 Lobby ready 并连接，二者都保持包可达直至地图切换。 */
 	void HandleGameplayPackagePreloadComplete(const FName& PackageName, UPackage* LoadedPackage, EAsyncLoadingResult::Type Result, uint64 CallbackEpoch);
 
+	/** 前台包异步加载回调只消费当前回前台 epoch；成功后才提交回主菜单旅行，失败则按旅行拒绝终态收口。 */
+	void HandleFrontendPackagePreloadComplete(const FName& PackageName, UPackage* LoadedPackage, EAsyncLoadingResult::Type Result, uint64 CallbackEpoch);
+
 	/** 启动当前有效 Steam Lobby 的低频事实轮询；Steam 后端不转发公开 OSS 设置通知，因此成员与 ready 只从 SDK 实际数据读取。 */
 	void StartLobbyFactPolling();
 
 	/** 停止当前 Lobby 轮询；离开、反初始化与会话销毁时成对清理，不让旧 Lobby 驱动新 World。 */
 	void StopLobbyFactPolling();
 
-	/** 低频读取当前 Lobby 的成员、元数据和 ready 标记；Host 到达玩法图后按单调秒截止点重试 ready 发布且不回前台，Client 在预算与退避允许时开始自己的包预载。 */
+	/** 低频读取当前 Lobby 的成员、元数据和 ready 标记；Host 到达玩法图后按单调秒截止点重试 ready 发布且不回前台，Client 只在同一 Lobby 首次真实 ready 到达且尚未提交 Start 时开始包预载。 */
 	bool TickLobbyFacts(float DeltaSeconds);
 
 	/** 返回当前已加入 Steam Lobby 是否已由 Host 写入 ready；非 Steam、非成员或数据缺失一律返回 false。 */
@@ -130,8 +131,47 @@ private:
 	/** Host 玩法 World 已可接纳客户端后尝试写入 Steam Lobby ready；平台元数据不可写只阻止 Client 自动进图，Host 的 Lake 与 Session 保持成功态。 */
 	bool PublishLobbyReady();
 
-	/** Client 在真实 Lobby ready 且重试预算允许时提交自身玩法包预载并计次；包成功后复核 ready 与 OSS 地址再 ClientTravel，失败统一进入有界退避。 */
+	/** Client 在真实 Lobby ready 且本 Lobby 尚未提交过 Start 时提交自身玩法启动加载管线并计次；完成后复核 ready 与 OSS 地址再 ClientTravel，失败只保留真实错误。 */
 	void BeginClientGameplayPreload();
+
+	/** 启动进入游戏的 Lyra 式真实加载管线；先等配置软引用资源集合，再提交地图包预载，任一同步拒绝都会用当前 Start epoch 收口。 */
+	bool BeginGameplayStartPreloadPipeline(uint64 CallbackEpoch);
+
+	/** 提交进入玩法前必须预热的软资源集合；返回 true 表示真实 StreamableHandle 已接管等待，false 表示没有可等资源、已同步完成或已同步失败。 */
+	bool BeginGameplayStartupAssetsPreload(uint64 CallbackEpoch);
+
+	/** 提交玩法地图包的真实 LoadPackageAsync 预载；Host 和 Client 共用同一完成回调，成功后才进入各自旅行分支。 */
+	bool BeginGameplayMapPackagePreload(uint64 CallbackEpoch);
+
+	/** 从现有设置对象收集进入玩法前会被同步使用的软引用；只读取配置声明的资产，不扫描 Content 或按命名猜资源。 */
+	void CollectGameplayStartupAssetPaths(TArray<FSoftObjectPath>& OutAssetPaths) const;
+
+	/** 接收 StreamableHandle 的加载更新；只在当前 Start epoch 内写入资源集合进度并广播快照。 */
+	void HandleGameplayStartupAssetsPreloadUpdated(TSharedRef<FStreamableHandle> Handle, uint64 CallbackEpoch);
+
+	/** 接收玩法启动资源集合完成事件；成功后保留 handle 防止预热资源被 GC，并继续提交地图包预载。 */
+	void HandleGameplayStartupAssetsPreloadComplete(uint64 CallbackEpoch);
+
+	/** 接收玩法启动资源集合取消事件；只有当前 Start epoch 的真实取消会结束 Start，清理路径中的迟到取消会被 epoch 拒绝。 */
+	void HandleGameplayStartupAssetsPreloadCancelled(uint64 CallbackEpoch);
+
+	/** 释放玩法启动资源集合的 handle；Start 失败或返回前台后清空进度，Start 成功时保留已加载资源直到离开本局。 */
+	void ClearGameplayStartupAssetsPreload(bool bClearProgress);
+
+	/** 当前是否存在任意地图包预载请求；Start 和 Leave 共用该事实给 UI 判断全局遮罩是否有 Online 模型层来源。 */
+	bool IsAnyMapPreloadPending() const;
+
+	/** 读取当前预载地图包最近一次真实进度事件对应的百分比；返回 false 表示引擎尚未发出可量化阶段，调用者不得用时间或本地估算补值。 */
+	bool TryGetMapPreloadProgressPercent(float& OutProgressPercent) const;
+
+	/** 开始跟踪一个真实 LoadPackageAsync 包名；它只注册引擎进度事件来刷新快照，不承担完成判断，也不会推动旅行。 */
+	void BeginMapPreloadProgressTracking(const FString& PackageName, uint64 CallbackEpoch);
+
+	/** 停止当前地图包进度跟踪并清空观测值；预载失败、终态清理和反初始化都必须成对调用。 */
+	void StopMapPreloadProgressTracking();
+
+	/** 将 LoadPackageAsync 可能来自异步加载线程的进度事件收口到 GameThread；只有当前 epoch 和包名匹配时才更新 Online 快照。 */
+	void HandleMapPreloadProgressOnGameThread(FName PackageName, EAsyncLoadingProgress ProgressType, uint64 CallbackEpoch);
 
 	/** 在当前操作 epoch 下绑定 Destroy 回调并提交平台清理；FailureAfterDestroy 非 None 表示旅行/解析失败后的补偿。 */
 	bool BeginDestroySession(ECatOnlineError FailureAfterDestroy);
@@ -160,8 +200,11 @@ private:
 	/** JoinSession 成功且地址解析完成后的唯一玩法地图 ClientTravel 入口；调用方仍等待 PostLoadMap 终态。 */
 	bool BeginClientTravelToGameplayMap(const FString& ConnectString);
 
-	/** DestroySession 成功后的统一回前台入口；根据 OperationRole 选择 ServerTravel 或 ClientTravel。 */
+	/** DestroySession 或补偿清理后的统一回前台入口；先预载 Frontend 包，再根据 OperationRole 选择 ServerTravel 或 ClientTravel。 */
 	bool BeginTravelToFrontend();
+
+	/** 前台包预载完成后的实际旅行提交点；它复用原 Host/Client 分支并只等待 PostLoadMap 收口。 */
+	bool CommitFrontendTravelAfterPreload();
 
 	/** CreateSession 回调：epoch 与操作匹配才消费；成功后恢复 Settings 的本地语音偏好、建立 Host 房间快照并留在 Frontend，失败发布结构化终态。 */
 	void HandleCreateSessionComplete(FName SessionName, bool bWasSuccessful, uint64 CallbackEpoch);
@@ -187,22 +230,25 @@ private:
 	/** 废止待提交邀请及其 opaque 映射、身份与期限；提交、失败和反初始化共用，已进入 Join 的操作仍由原 epoch 管线收口。 */
 	void ClearPendingAcceptedInvite();
 
+	/** PreLoadMap 回调：只记录本 GameInstance 正在进入引擎 LoadMap 阻塞段，让全局遮罩按真实切图生命周期保留而不是靠定时器兜底。 */
+	void HandlePreLoadMap(const FWorldContext& WorldContext, const FString& MapName);
+
 	/** PostLoadMap 回调：按 GameInstance/ExpectedPackage 隔离后确认 World 与 Transport；Host 到达玩法图后不因 ready 缺失回前台，只安排低频重试，真实 TravelFailure、NetworkFailure 和 Leave 仍走各自回前台管线。 */
 	void HandlePostLoadMap(UWorld* LoadedWorld);
 
 	/** TravelFailure 回调：只消费本 GameInstance 的待确认旅行；Create、Join 与 Start 先 Destroy 补偿，Leave 保留已完成的 Session 清理。 */
 	void HandleTravelFailure(UWorld* FailureWorld, ETravelFailure::Type FailureType, const FString& Reason);
 
-	/** NetworkFailure 回调：只消费本 GameInstance 的正式或待连接驱动；Client 预载连接失败有界重试，空闲 Host 断线仍先保存再清会话，返回后才释放载荷。 */
+	/** NetworkFailure 回调：只消费本 GameInstance 的正式或待连接驱动；前台 Client Start 连接失败只结束本次进入并保留真实错误，空闲 Host 断线仍先保存再清会话，返回后才释放载荷。 */
 	void HandleNetworkFailure(UWorld* FailureWorld, UNetDriver* NetDriver, ENetworkFailure::Type FailureType, const FString& Reason);
 
 	/** 地图包名归类流程；只写 WorldState，不借包名猜测 NamedSession 或 NetDriver 终态。 */
 	bool SetWorldStateForPackage(const FString& PackageName);
 
-	/** 完成当前操作并清空错误；获准释放的 Leave 先等 Frontend 载荷清理，随后解绑回调、废止 epoch 并广播稳定快照。 */
+	/** 完成当前操作并清空错误；获准释放的 Leave 先等 Frontend 载荷清理，Start 成功保留玩法预热资源，其他终态解绑回调、废止 epoch 并广播稳定快照。 */
 	void FinishOperationSuccess();
 
-	/** 以结构化错误结束操作；已安全退出的 Leave 先释放载荷并保留原错，其他失败不释放。前台 Client Start 保留 Lobby 有界重试，耗尽后提示退出重加入。 */
+	/** 以结构化错误结束操作；已安全退出的 Leave 先释放载荷并保留原错，其他失败不释放。前台 Client Start 失败保留 Lobby、真实错误和已提交标记，用户显式离开后才会释放下一次进入机会。 */
 	void FinishOperationFailure(ECatOnlineError Error);
 
 	/** 成对解除当前操作可能绑定的 Create/Find/Join/Destroy 回调，并释放绑定它们的精确 Session 接口。 */
@@ -298,12 +344,55 @@ private:
 	/** 当前 NamedSession 的真实占用连接数；从 SessionSettings/NumOpenPublicConnections 读取，不能读成员时也不扩展为伪成员。 */
 	int32 RoomCurrentPlayers = 0;
 
-	/** 当前 Host 或 Client Start 对应的 LoadPackageAsync 请求 ID；非 INDEX_NONE 表示等待引擎回调，取消、失败或旅行终态都会清空。 */
+	/** 当前 Host 或 Client Start 对应的 LoadPackageAsync 请求 ID；非 INDEX_NONE 表示地图包预载仍在等待引擎回调。 */
 	int32 GameplayPreloadRequestId = INDEX_NONE;
 
-	/** 预载成功后暂存的地图包；在正式 ServerTravel 前保持强引用，防止 GC 在两阶段切换间卸载刚完成的包。 */
+	/** 当前 Start 预热的玩法启动资源 handle；它代表 UI、输入、鱼表、装备、钓鱼和 Run 等配置软引用的真实异步加载集合。 */
+	TSharedPtr<FStreamableHandle> GameplayStartupAssetsHandle;
+
+	/** 当前 Start 是否仍在等待玩法启动资源集合完成；StreamableHandle 完成前为 true，地图包预载开始后为 false。 */
+	bool bGameplayStartupAssetLoadPending = false;
+
+	/** 当前玩法启动资源集合是否已有可展示进度；只由 StreamableHandle 更新或完成事件写入。 */
+	bool bGameplayStartupAssetLoadProgressAvailable = false;
+
+	/** 当前玩法启动资源集合加载百分比，单位 0 到 100；来自 StreamableHandle::GetProgress，不按时间自增。 */
+	float CurrentGameplayStartupAssetLoadProgressPercent = 0.0f;
+
+	/** 当前玩法启动资源集合的可读阶段；UI 用它说明资源数量进展，日志用它定位卡住的加载阶段。 */
+	FString CurrentGameplayStartupAssetLoadProgressStatus;
+
+	/** 玩法地图预载成功后暂存的包对象；在 Host/Client 旅行提交和 PostLoadMap 收口之间保持强引用，防止 GC 卸载刚完成的包。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UPackage> PreloadedGameplayPackage;
+
+	/** 当前回主菜单流程对应的前台地图 LoadPackageAsync 请求 ID；非 INDEX_NONE 表示返回主菜单仍在真实包预载阶段。 */
+	int32 FrontendPreloadRequestId = INDEX_NONE;
+
+	/** 前台地图预载成功后暂存的包对象；回主菜单旅行提交后继续保留到 PostLoadMap 或终态清理，避免旅行前被 GC 卸载。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UPackage> PreloadedFrontendPackage;
+
+	/** 当前正在给 UI 暴露进度的地图长包名；Start 写 Gameplay 包，Leave 写 Frontend 包，空值代表 Online 没有可查询的地图包进度。 */
+	FString ActiveMapLoadPackage;
+
+	/** 当前地图包是否已经收到 LoadPackageAsync 的真实进度事件；UI 只在该值为真时展示可量化地图包进度。 */
+	bool bMapLoadProgressAvailable = false;
+
+	/** 当前地图包最近一次引擎进度事件对应的百分比，单位 0 到 100；该值只随真实进度事件变化，不按时间自增。 */
+	float CurrentMapLoadProgressPercent = 0.0f;
+
+	/** 当前地图包最近一次引擎进度事件的可读阶段；UI 和日志读取它来说明玩家正在等哪一步。 */
+	FString CurrentMapLoadProgressStatus;
+
+	/** 当前地图包提交给 LoadPackageAsync 的进度委托；持有它只为接收引擎事件，完成、失败或终态清理时释放。 */
+	TSharedPtr<FLoadPackageAsyncProgressDelegate> MapLoadProgressDelegate;
+
+	/** 当前 GameInstance 是否处于引擎 LoadMap 阻塞段；PreLoadMap 写入、PostLoadMap 清空，UI 只把它当真实等待原因。 */
+	bool bIsEngineLoadMapPending = false;
+
+	/** 当前引擎 LoadMap 目标名；它来自 PreLoadMap 回调，只用于状态展示和日志，不参与地图到达判定。 */
+	FString EngineLoadMapName;
 
 	/** 当前好友刷新代际；每次 Friends 请求递增，完成回调用它拒绝旧 World 或旧请求的结果。 */
 	uint64 FriendsRefreshEpoch = 0;
@@ -320,11 +409,8 @@ private:
 	/** Host 下一次允许重试发布 ready 元数据的单调时间，单位秒；PostLoadMap 和 TickLobbyFacts 在失败时写入、成功或离开 Lobby 时归零，只有 Host 侧轮询读取它。 */
 	double NextHostLobbyReadyPublishAttemptTime = 0.0;
 
-	/** 当前 Lobby 中 Client 已提交的玩法启动次数；每次受理 Start 时递增，离开 Lobby 才清零，ready 抖动不会重置失败预算。 */
+	/** 当前 Lobby 中 Client 是否已经提交过玩法启动；每次受理 Start 时递增，离开 Lobby 才清零，避免同一 ready 事实反复自动进图。 */
 	int32 ClientGameplayStartAttempts = 0;
-
-	/** Client 下一次允许重试的单调时间，单位秒；失败结案按次数写入退避截止点，轮询只在到期后提交，离开 Lobby 时归零。 */
-	double NextClientGameplayStartTime = 0.0;
 
 	/** 当前 Find 代际的 opaque 句柄到平台结果映射；新 Find 会整代替换，成功 Join、补偿、Leave 或销毁会使其失效。 */
 	TMap<FGuid, FOnlineSessionSearchResult> SearchResultsByHandle;
@@ -397,6 +483,9 @@ private:
 
 	/** SessionUserInviteAccepted 全局委托的配对解绑句柄。 */
 	FDelegateHandle InviteAcceptedHandle;
+
+	/** PreLoadMapWithContext 全局委托的配对解绑句柄。 */
+	FDelegateHandle PreLoadMapHandle;
 
 	/** PostLoadMapWithWorld 全局委托的配对解绑句柄。 */
 	FDelegateHandle PostLoadMapHandle;

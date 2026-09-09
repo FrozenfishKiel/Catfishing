@@ -131,6 +131,13 @@ UInputMappingContext* UCatUISettings::LoadGameplayInputMappingContext() const
 	return GameplayInputMappingContext.LoadSynchronous();
 }
 
+// 完成态停留读取流程：读取项目 UI 设置中的秒数，非法浮点或负值按 0 处理；调用方只在加载真实完成后使用这个值决定遮罩何时撤下。
+float UCatUISettings::GetGlobalLoadingCompletionHoldSeconds() const
+{
+	return FMath::IsFinite(GlobalLoadingCompletionHoldSeconds)
+		? FMath::Max(0.0f, GlobalLoadingCompletionHoldSeconds) : 0.0f;
+}
+
 // 背包键名解析流程：
 // 1. 先加载配置的 Action 和 Mapping Context，缺任一资产都返回 None。
 // 2. 如果该 Action 已被局内主菜单占用，背包快捷键提示返回 None，避免把 Escape 继续显示成背包键。
