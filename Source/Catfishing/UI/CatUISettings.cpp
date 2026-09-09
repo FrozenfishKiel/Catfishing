@@ -1,6 +1,7 @@
 #include "UI/CatUISettings.h"
 
 #include "EnhancedActionKeyMapping.h"
+#include "Blueprint/UserWidget.h"
 #include "InputAction.h"
 #include "InputMappingContext.h"
 #include "UI/HUD/CatHUDWidget.h"
@@ -10,13 +11,17 @@
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
 
-// 构造流程：为正式拆分的 HUD、背包、交互提示、局内菜单 WBP 和输入资产写入稳定软路径；输入 Action 放在项目既有 InputContext 下维护，运行时代码只加载资产和绑定 Action。
+// 构造流程：为正式拆分的 HUD、Frontend Root、进入游戏 Loading、回主菜单 Loading、背包、交互提示、局内菜单 WBP 和输入资产写入稳定软路径；项目配置可以覆盖这些默认值，LocalPlayer UI 读取两个 Loading 软类来决定 Start/Leave 使用哪张全局遮罩，类加载失败时对应流程只记录错误并保持 fail-closed。
 UCatUISettings::UCatUISettings()
 {
 	HUDWidgetClass = TSoftClassPtr<UCatHUDWidget>(
 		FSoftClassPath(TEXT("/Game/UI/HUD/WBP_CatHUD.WBP_CatHUD_C")));
 	FrontendRootWidgetClass = TSoftClassPtr<UCatFrontendRootWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Frontend/WBP_CatFrontendRoot.WBP_CatFrontendRoot_C")));
+	GameplayLoadingWidgetClass = TSoftClassPtr<UUserWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Frontend/WBP_CatGameplayLoading.WBP_CatGameplayLoading_C")));
+	ReturnToMainMenuLoadingWidgetClass = TSoftClassPtr<UUserWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Frontend/WBP_CatReturnToMainMenuLoading.WBP_CatReturnToMainMenuLoading_C")));
 	InventoryWidgetClass = TSoftClassPtr<UCatInventoryWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatInventory.WBP_CatInventory_C")));
 	InventorySlotWidgetClass = TSoftClassPtr<UCatInventorySlotWidget>(
@@ -68,6 +73,28 @@ TSubclassOf<UCatFrontendRootWidget> UCatUISettings::LoadFrontendRootWidgetClass(
 {
 	UClass* LoadedClass = FrontendRootWidgetClass.LoadSynchronous();
 	if (!LoadedClass || !LoadedClass->IsChildOf(UCatFrontendRootWidget::StaticClass()))
+	{
+		return nullptr;
+	}
+	return LoadedClass;
+}
+
+// 进入游戏 Loading 类加载流程：同步解析 Start 专用软类并验证它仍是 UUserWidget；失败返回空，让调用方记录缺配置而不是借用 Leave 资产。
+TSubclassOf<UUserWidget> UCatUISettings::LoadGameplayLoadingWidgetClass() const
+{
+	UClass* LoadedClass = GameplayLoadingWidgetClass.LoadSynchronous();
+	if (!LoadedClass || !LoadedClass->IsChildOf(UUserWidget::StaticClass()))
+	{
+		return nullptr;
+	}
+	return LoadedClass;
+}
+
+// 回主菜单 Loading 类加载流程：同步解析 Leave 专用软类并验证它仍是 UUserWidget；失败返回空，让调用方记录缺配置而不是借用 Start 资产。
+TSubclassOf<UUserWidget> UCatUISettings::LoadReturnToMainMenuLoadingWidgetClass() const
+{
+	UClass* LoadedClass = ReturnToMainMenuLoadingWidgetClass.LoadSynchronous();
+	if (!LoadedClass || !LoadedClass->IsChildOf(UUserWidget::StaticClass()))
 	{
 		return nullptr;
 	}

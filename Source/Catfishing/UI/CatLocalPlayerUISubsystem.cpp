@@ -36,9 +36,6 @@ namespace CatLocalPlayerUILoadingScreen
 	/** 全局加载遮罩必须盖过 Frontend Root、HUD、背包和局内 ESC 菜单，避免等待表现落在某个业务页面下面。 */
 	constexpr int32 ViewportZOrder = 10000;
 
-	/** 正式 Loading WBP 的固定类路径；它原本属于 Frontend 资产组，现在直接由 LocalPlayer UI 挂成全局遮罩。 */
-	constexpr const TCHAR* WidgetClassPath = TEXT("/Game/UI/Frontend/WBP_CatFrontendLoading.WBP_CatFrontendLoading_C");
-
 	/** Start 请求已被 Online 接受这一真实 gate 在总进度中的权重；它只在请求事实存在时计入。 */
 	constexpr float GameplayStartAcceptedWeight = 3.0f;
 
@@ -435,6 +432,7 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 		|| GlobalLoadingOperation == ECatOnlineOperation::Leave;
 	if (bGameplayStartPending && !IsGameplayLoadingReadyToDismiss(Snapshot))
 	{
+		OutPresentation.LoadingOperation = ECatOnlineOperation::Start;
 		OutPresentation.HeadingText = FText::FromString(TEXT("正在进入游戏"));
 		OutPresentation.bShowProgressBar = true;
 		OutPresentation.bHasProgressPercent = true;
@@ -513,6 +511,7 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 	}
 	if (bReturnToMenuPending && !IsFrontendLoadingReadyToDismiss(Snapshot))
 	{
+		OutPresentation.LoadingOperation = ECatOnlineOperation::Leave;
 		OutPresentation.HeadingText = FText::FromString(TEXT("正在返回主菜单"));
 		OutPresentation.bShowProgressBar = false;
 		if (Snapshot.SessionState == ECatOnlineSessionState::Destroying)
@@ -568,17 +567,45 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 	return false;
 }
 
-// 全局遮罩显示流程：优先复用当前实例；首次显示时用 GameInstance 创建正式 Loading WBP 并加到最高层，随后写入已经合成好的表现快照。
+// 全局遮罩显示流程：先拒绝没有真实 Start/Leave 身份的快照；已有实例若属于另一种业务就移除并清空资产身份缓存；首次显示时从 UI 设置加载对应专用 WBP，缺类或缺 GameInstance 只记录错误并返回；创建成功后写入当前业务身份，最后把同一套真实状态文本写入当前 View。
 void UCatLocalPlayerUISubsystem::ShowGlobalLoadingScreen(const FCatGlobalLoadingPresentation& Presentation)
 {
+	if (Presentation.LoadingOperation != ECatOnlineOperation::Start
+		&& Presentation.LoadingOperation != ECatOnlineOperation::Leave)
+	{
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_global_loading_screen_rejected Reason=invalid_operation Operation=%d"),
+			static_cast<int32>(Presentation.LoadingOperation));
+		return;
+	}
+	if (GlobalLoadingScreenWidget && GlobalLoadingScreenWidgetOperation != Presentation.LoadingOperation)
+	{
+		UE_LOG(LogCatUI, Log, TEXT("Event=ui_global_loading_screen_swapped From=%d To=%d LastStatus=\"%s\""),
+			static_cast<int32>(GlobalLoadingScreenWidgetOperation),
+			static_cast<int32>(Presentation.LoadingOperation),
+			*LastGlobalLoadingStatusText.ToString());
+		GlobalLoadingScreenWidget->RemoveFromParent();
+		GlobalLoadingScreenWidget = nullptr;
+		GlobalLoadingScreenWidgetOperation = ECatOnlineOperation::None;
+		LastGlobalLoadingStatusText = FText::GetEmpty();
+	}
 	if (!GlobalLoadingScreenWidget)
 	{
-		const TSubclassOf<UUserWidget> LoadingClass = LoadClass<UUserWidget>(nullptr, CatLocalPlayerUILoadingScreen::WidgetClassPath);
+		const UCatUISettings* Settings = GetDefault<UCatUISettings>();
+		TSubclassOf<UUserWidget> LoadingClass;
+		if (Settings && Presentation.LoadingOperation == ECatOnlineOperation::Start)
+		{
+			LoadingClass = Settings->LoadGameplayLoadingWidgetClass();
+		}
+		else if (Settings)
+		{
+			LoadingClass = Settings->LoadReturnToMainMenuLoadingWidgetClass();
+		}
 		UGameInstance* GameInstance = GetLocalPlayer() ? GetLocalPlayer()->GetGameInstance() : nullptr;
 		if (!LoadingClass || !GameInstance)
 		{
-			UE_LOG(LogCatUI, Error, TEXT("Event=ui_global_loading_screen_unavailable Class=%s GameInstance=%s"),
-				CatLocalPlayerUILoadingScreen::WidgetClassPath,
+			UE_LOG(LogCatUI, Error, TEXT("Event=ui_global_loading_screen_unavailable Operation=%d Class=%s GameInstance=%s"),
+				static_cast<int32>(Presentation.LoadingOperation),
+				*GetNameSafe(LoadingClass.Get()),
 				*GetNameSafe(GameInstance));
 			return;
 		}
@@ -590,7 +617,9 @@ void UCatLocalPlayerUISubsystem::ShowGlobalLoadingScreen(const FCatGlobalLoading
 			return;
 		}
 		GlobalLoadingScreenWidget->AddToViewport(CatLocalPlayerUILoadingScreen::ViewportZOrder);
-		UE_LOG(LogCatUI, Log, TEXT("Event=ui_global_loading_screen_shown Class=%s Status=\"%s\""),
+		GlobalLoadingScreenWidgetOperation = Presentation.LoadingOperation;
+		UE_LOG(LogCatUI, Log, TEXT("Event=ui_global_loading_screen_shown Operation=%d Class=%s Status=\"%s\""),
+			static_cast<int32>(Presentation.LoadingOperation),
 			*GetNameSafe(LoadingClass.Get()), *Presentation.StatusText.ToString());
 	}
 	else if (!GlobalLoadingScreenWidget->IsInViewport())
@@ -608,6 +637,7 @@ void UCatLocalPlayerUISubsystem::HideGlobalLoadingScreen()
 	GlobalLoadingRequestId.Invalidate();
 	if (!GlobalLoadingScreenWidget)
 	{
+		GlobalLoadingScreenWidgetOperation = ECatOnlineOperation::None;
 		LastGlobalLoadingStatusText = FText::GetEmpty();
 		return;
 	}
@@ -615,6 +645,7 @@ void UCatLocalPlayerUISubsystem::HideGlobalLoadingScreen()
 		*LastGlobalLoadingStatusText.ToString());
 	GlobalLoadingScreenWidget->RemoveFromParent();
 	GlobalLoadingScreenWidget = nullptr;
+	GlobalLoadingScreenWidgetOperation = ECatOnlineOperation::None;
 	LastGlobalLoadingStatusText = FText::GetEmpty();
 }
 
@@ -636,6 +667,7 @@ void UCatLocalPlayerUISubsystem::RequestGlobalLoadingDismissalAfterPresentation(
 	FCatGlobalLoadingPresentation Presentation;
 	if (CompletedOperation == ECatOnlineOperation::Start)
 	{
+		Presentation.LoadingOperation = ECatOnlineOperation::Start;
 		Presentation.HeadingText = FText::FromString(TEXT("正在进入游戏"));
 		Presentation.StatusText = FText::FromString(TEXT("游戏世界准备完成。"));
 		Presentation.DetailText = FText::FromString(TEXT("本地玩家界面已就绪。"));
@@ -646,6 +678,7 @@ void UCatLocalPlayerUISubsystem::RequestGlobalLoadingDismissalAfterPresentation(
 	}
 	else
 	{
+		Presentation.LoadingOperation = ECatOnlineOperation::Leave;
 		Presentation.HeadingText = FText::FromString(TEXT("正在返回主菜单"));
 		Presentation.StatusText = FText::FromString(TEXT("主菜单准备完成。"));
 		Presentation.DetailText = FText::FromString(TEXT("主菜单界面已就绪。"));
