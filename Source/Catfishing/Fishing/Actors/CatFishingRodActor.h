@@ -19,12 +19,16 @@ struct FCatFishingGroupMotionState
 	GENERATED_BODY()
 	UPROPERTY() FVector AnchorWorld = FVector::ZeroVector;
 	UPROPERTY() FVector DesiredVelocity = FVector::ZeroVector;
+	/** 无载模式的共同水平速度，cm/s；DesiredVelocity 始终为力量加权目标。 */
+	UPROPERTY() FVector UnloadedVelocity = FVector::ZeroVector;
 	UPROPERTY() FVector LateralAcceleration = FVector::ZeroVector;
 	UPROPERTY() uint32 RosterVersion = 0;
 	UPROPERTY() uint32 ControlEpoch = 0;
 	UPROPERTY() uint32 AimInputEpoch = 0;
 	UPROPERTY() bool bActive = false;
 	UPROPERTY() bool bAwaitingSolve = false;
+	/** 成员队形早于搏斗存在，不得以 bFightActive 冒充无载组移动。 */
+	UPROPERTY() bool bUnloadedMovement = false;
 };
 
 /** 高频复制的手持鱼线约束目标；不推进鱼竿业务 Revision，也不保存第二份搏斗终态。 */
@@ -46,7 +50,7 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 	/** 当前支撑超过张力的减速度，单位 cm/s²；与正牵引由同一最终负载裁决。 */
 	UPROPERTY(BlueprintReadOnly)
 	float PullBrakingDecelerationCentimetersPerSecondSquared = 0.0f;
-	/** 活鱼搏斗中的连续移动上下文；零张力仍按支撑力减速，终局后恢复普通移动。 */
+	/** 搏斗中的连续牵引上下文；零张力仍按支撑力减速，终局后仍占竿者回到无载组移动。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bUseContinuousTraction = false;
 	/** 向鱼速度上限；实际速度按发布的有限加速度积分，不瞬间补齐。 */
@@ -86,6 +90,8 @@ class CATFISHING_API ACatFishingRodActor : public AActor
 	friend class FCatFishingGroupMembershipContinuityTest;
 	friend class FCatFishingGroupWaitingTest;
 	friend class FCatFishingGroupHandoffAimTest;
+	friend class FCatFishingGroupUnloadedMovementTest;
+	friend class FCatFishingGroupUnloadedCollisionTest;
 
 public:
 	/** 创建鱼竿表现 Actor 的组件和默认复制姿态；身份和锚点仍要等服务器初始化后才可信。 */
@@ -206,6 +212,8 @@ private:
 	void PublishCarrierConstraintToMovement();
 	void ClearCarrierMovementBinding();
 	void RefreshGroupAnchorFromAuthority();
+	/** 占竿生命周期的无载运动发布者；搏斗时完全让位于 Runner。 */
+	void UpdateUnloadedGroupMotionFromAuthority(double DeltaSeconds);
 	/** 初始化与变更共用一次成员元数据提交；保留组根并以实际身体位置重定基。 */
 	void PrepareOperatorMemberships(FCatFishingRodPresentationState& Next);
 	void ResetAuthoritativeRotationEffort();
@@ -238,6 +246,7 @@ private:
 	FVector GroupAnchorWorld = FVector::ZeroVector;
 	FVector GroupVelocity = FVector::ZeroVector;
 	bool bGroupAnchorInitialized = false;
+	bool bLastUnloadedSolveRejected = false;
 	uint32 NextMembershipEpoch = 0;
 	/** 竿尖权威本地 Transform；配置后不再读蓝图组件作为数据源，避免表现改动反向污染玩法坐标。 */
 	FTransform RodTipCanonicalLocalTransform = FTransform::Identity;
@@ -255,7 +264,6 @@ private:
 	FVector SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
 	TWeakObjectPtr<APawn> AuthoritativeAimHolder;
 	FCatFishingRodRotationEffortSnapshot AuthoritativeRotationEffort;
-	TWeakObjectPtr<class UCatCharacterMovementComponent> CarrierMovement;
 	double NextRodRotationResistanceDiagnosticWorldSeconds = 0.0;
 	double LastConstraintUpdateWorldSeconds = -1.0;
 	double NextCarrierReceiptDiagnosticWorldSeconds = 0.0;

@@ -7,7 +7,7 @@
 1. 使用已通过编译的 `CatfishingEditor` 打开工程。
 2. 在 Content Browser 进入当前运行配置使用的 `/Game/Blueprint/Actors`。
 3. 通过 **Blueprint Class → All Classes** 选择下文指定的原生父类；不要从 Demo 的 Character、Controller、GameMode、FishingComponent 或 Session 派生。
-4. 三个原生父类均禁止蓝图 Actor Tick；原生 Rod Tick 负责权威握持姿态，原生 RodBend 组件负责本地变形。蓝图不得用 Tick 模拟 Session 阶段、鱼体力、鱼竿耐久或权威位移。
+4. 三个原生父类均禁止蓝图 Actor Tick；原生 Rod Tick 负责权威握持姿态与无载共同速度发布，原生 RodBend 组件负责本地变形。蓝图不得用 Tick 模拟 Session 阶段、成员队形、鱼体力、鱼竿耐久或权威位移；身体移动仍由CMC执行。
 5. 三个 Actor 都复制 Actor movement，并以空间相关方式复制；蓝图表现事件标记为 Cosmetic，只在收到本地原生调用时执行，不会自动向其他网络端广播。
 
 当前运行配置使用以下入口：
@@ -51,8 +51,8 @@
 Rod 的 canonical 中心锚与当前左右站位参考组件都位于 `SceneRoot` 直属层级：
 
 - `RodTipAnchor`：权威抛竿原点与鱼线起点。
-- `StandAnchor`：左右操作位的 canonical 中心。
-- `RightStandAnchor` / `LeftStandAnchor`：兼容站位的编辑器参考组件；四人运行时通过共同运动根与个人偏移保持位置，不按编号传送角色。
+- `StandAnchor`：公共操作交互点与兼容站位查询的 canonical 中心。
+- `RightStandAnchor` / `LeftStandAnchor`：兼容站位的编辑器参考组件；1–4人从入竿起通过共同运动根与个人偏移保持位置，不按编号传送角色。
 - `GripAnchor`：权威握持/IK 目标。
 
 蓝图只能调用以下 Blueprint Pure 值 getter：
@@ -65,7 +65,11 @@ Rod 的 canonical 中心锚与当前左右站位参考组件都位于 `SceneRoot
 
 getter 返回的是原生 private canonical local transform 与 Actor Transform 的组合值，不读取蓝图可见组件的临时相对变换。服务器通过 `ConfigureCanonicalAnchorsFromAuthority` 设置装备定义提供的三个锚点；当前握把由 `GripCanonicalLocalTransform` 初始复制，竿尖/站位在客户端的重建缺口仍以多人审计记录为准。弯曲与鱼线显示使用独立的 `RodTipMarker`，不依赖该缺口，也不能据此宣称已修复权威锚点复制。皮肤、Mesh Socket、AnimBP、Montage 和 Construction Script 永远不能反向修改 canonical anchors。
 
-如果皮肤 Mesh 的 Socket 与 canonical 值存在视觉偏差，应调整 `VisualRoot` 子树、皮肤专用相对变换或 Attachment Socket 映射；不得移动 canonical anchor 来“对齐外观”。
+加入时记录的是成员当下的相对位置；无Session、钩子飞行、Waiting、Probe、TrueBiteWindow都已使用组移动。无载时Rod只读个人ASC与同一GroupModel，发布经过全员最小胶囊sweep距离约束的共同水平速度，CMC保留重力和真实碰撞；不能由BP把成员Attach到竿上、按槽位SetActorLocation或再加一份个人移动。退出者恢复自由移动，仍占竿者在一轮终局后继续无载组移动。鱼力竭仍保留搏斗域，仅清鱼驱动力；不要凭零张力或鱼力竭自行解除队形、切相机或重置Aim域。
+
+同竿成员的移动碰撞忽略由原生CMC按名单登记和恢复，BP不要全局关闭胶囊碰撞或覆盖其他系统的忽略项。无载探测允许地面角色经CMC跨过可StepUp的低台阶，真正墙体仍限制整组；坡面高度差和接触容差是正常身体结果，不应通过BP逐帧改Transform把全员锁在相同高度。
+
+如果皮肤 Mesh 的 Socket 与 canonical 值存在视觉偏差，应调整 `VisualRoot` 子树、皮肤专用相对变换或 Attachment Socket 映射；不得移动 canonical anchor 来“对齐外观”。本轮不改这些资产、反射钩子或Cook入口，历史图审计不代替本轮正式表现验证；验证状态统一见 [钓鱼架构2.0.4](FishingArchitecture_zh-CN.md#204-入竿即保持队形的影响与验证2026-09-08)。
 
 ### 3.3 现有静态鱼竿的受力弯曲
 

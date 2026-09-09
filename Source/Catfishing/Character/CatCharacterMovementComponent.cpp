@@ -21,6 +21,7 @@ namespace
 void UCatCharacterMovementComponent::SetExternalTraction(const UObject* Source, const FCatExternalTractionInput& Input)
 {
 	if (!Source || Input.Direction.ContainsNaN() || Input.GroupDesiredVelocity.ContainsNaN()
+		|| Input.GroupUnloadedVelocity.ContainsNaN()
 		|| Input.GroupLateralAcceleration.ContainsNaN() || Input.FormationCorrectionVelocity.ContainsNaN()
 		|| (Input.bGroupDriven && (!Input.SourceId.IsValid() || Input.RosterVersion == 0
 			|| Input.ControlEpoch == 0 || Input.MembershipEpoch == 0))
@@ -62,11 +63,33 @@ FVector UCatCharacterMovementComponent::GetAcceptedFishingMoveIntent() const
 
 void UCatCharacterMovementComponent::ClearExternalTraction(const UObject* Source)
 {
-	if (TractionSource.Get() != Source) return;
+	if (!Source || !TractionSource.HasSameIndexAndSerialNumber(TWeakObjectPtr<const UObject>(Source))) return;
+	SetFishingGroupCollisionPeers(Source, {});
 	TractionSource.Reset();
 	LiveTraction = FCatExternalTractionInput{};
 	MovementTraction = FCatExternalTractionInput{};
 	bUseSavedTraction = false;
+}
+
+void UCatCharacterMovementComponent::SetFishingGroupCollisionPeers(const UObject* Source, const TArray<AActor*>& Peers)
+{
+	if (!Source || !UpdatedPrimitive
+		|| !TractionSource.HasSameIndexAndSerialNumber(TWeakObjectPtr<const UObject>(Source))) return;
+	for (int32 Index = FishingAddedCollisionIgnores.Num() - 1; Index >= 0; --Index)
+	{
+		AActor* Previous = FishingAddedCollisionIgnores[Index].Get();
+		if (!Previous || !Peers.Contains(Previous))
+		{
+			if (Previous) UpdatedPrimitive->IgnoreActorWhenMoving(Previous, false);
+			FishingAddedCollisionIgnores.RemoveAtSwap(Index);
+		}
+	}
+	for (AActor* Peer : Peers)
+	{
+		if (!Peer || Peer == CharacterOwner || UpdatedPrimitive->GetMoveIgnoreActors().Contains(Peer)) continue;
+		UpdatedPrimitive->IgnoreActorWhenMoving(Peer, true);
+		FishingAddedCollisionIgnores.Add(Peer);
+	}
 }
 
 void UCatCharacterMovementComponent::RestoreTractionForSavedMove(const FCatExternalTractionInput& Input)
@@ -75,7 +98,8 @@ void UCatCharacterMovementComponent::RestoreTractionForSavedMove(const FCatExter
 	bUseSavedTraction = true;
 }
 
-double UCatCharacterMovementComponent::GetExternalTractionTravelLimit(const FVector& Direction, const double MaximumDistance) const
+double UCatCharacterMovementComponent::GetExternalTractionTravelLimit(const FVector& Direction, const double MaximumDistance,
+	const bool bAllowStepUp) const
 {
 	if (!HasValidData() || !UpdatedPrimitive || !GetWorld() || MovementMode == MOVE_None || UpdatedPrimitive->IsSimulatingPhysics()
 		|| HasAnimRootMotion() || CurrentRootMotion.HasOverrideVelocity()
@@ -85,6 +109,7 @@ double UCatCharacterMovementComponent::GetExternalTractionTravelLimit(const FVec
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(FishingTraction), false, CharacterOwner);
 	FCollisionResponseParams Response;
 	InitCollisionParams(Params, Response);
+	Params.AddIgnoredActors(UpdatedPrimitive->GetMoveIgnoreActors());
 	FHitResult Hit;
 	const FVector Start = UpdatedComponent->GetComponentLocation();
 	const bool bBlocked = GetWorld()->SweepSingleByChannel(Hit, Start, Start + Axis * MaximumDistance,
@@ -92,7 +117,20 @@ double UCatCharacterMovementComponent::GetExternalTractionTravelLimit(const FVec
 		UpdatedPrimitive->GetCollisionShape(), Params, Response);
 	// 可行走地面仍由 CMC 的坡面/台阶逻辑处理；探测绝不移动角色或触发重叠事件。
 	if (bBlocked && !IsWalkable(Hit) && FVector::DotProduct(Hit.Normal, Axis) < -0.001)
+	{
+		// 无载携竿保留正常行走的 StepUp。抬高胶囊后仍有遮挡才是不可跨越的墙；
+		// 这里只做只读可行性探测，真正抬脚、落地及失败回滚仍由 CMC StepUp 裁决。
+		if (bAllowStepUp && IsMovingOnGround() && MaxStepHeight > 0.0f && CanStepUp(Hit))
+		{
+			const FVector RaisedStart = Start - GetGravityDirection() * MaxStepHeight;
+			FHitResult RaisedHit;
+			const bool bRaisedBlocked = GetWorld()->SweepSingleByChannel(RaisedHit, RaisedStart,
+				RaisedStart + Axis * MaximumDistance, UpdatedComponent->GetComponentQuat(),
+				UpdatedPrimitive->GetCollisionObjectType(), UpdatedPrimitive->GetCollisionShape(), Params, Response);
+			if (!bRaisedBlocked) return MaximumDistance;
+		}
 		return FMath::Max(0.0, MaximumDistance * Hit.Time - 0.1);
+	}
 	return MaximumDistance;
 }
 
@@ -113,6 +151,7 @@ void UCatCharacterMovementComponent::PerformMovement(const float DeltaSeconds)
 		|| MovementTraction.SourceId != LiveTraction.SourceId
 		|| MovementTraction.bGroupDriven != LiveTraction.bGroupDriven
 		|| MovementTraction.bWaitingForGroupSolve != LiveTraction.bWaitingForGroupSolve
+		|| MovementTraction.bUnloadedMovement != LiveTraction.bUnloadedMovement
 		|| MovementTraction.RosterVersion != LiveTraction.RosterVersion
 		|| MovementTraction.ControlEpoch != LiveTraction.ControlEpoch
 		|| MovementTraction.AimInputEpoch != LiveTraction.AimInputEpoch
@@ -135,6 +174,16 @@ void UCatCharacterMovementComponent::PerformMovement(const float DeltaSeconds)
 	}
 	const FVector Before = UpdatedComponent ? UpdatedComponent->GetComponentLocation() : FVector::ZeroVector;
 	const FVector VelocityBefore = Velocity;
+	if (MovementTraction.bGroupDriven && MovementTraction.bUnloadedMovement && !MovementTraction.bWaitingForGroupSolve
+		&& DeltaSeconds > 0.0f && HasValidData() && MovementMode != MOVE_None
+		&& !HasAnimRootMotion() && !CurrentRootMotion.HasOverrideVelocity())
+	{
+		// Falling 用子步前后速度的均值算位移；在进入引擎前统一 XY，避免新成员的旧惯性
+		// 即使只残留半个子步也把固定站位拉开。垂直速度、重力与落地流程仍由引擎持有。
+		const double Vertical = Velocity.Z;
+		Velocity = ConstrainDirectionToPlane(MovementTraction.GroupUnloadedVelocity);
+		Velocity.Z = Vertical;
+	}
 	{
 		// 牵引与固定步张力互相反馈；低帧率不能把整段外力一次积分成大位移。
 		// 实时移动和 SavedMove 共用相同的 CMC 子步规则，碰撞/滑动仍由引擎执行。
@@ -232,6 +281,15 @@ void UCatCharacterMovementComponent::CalcVelocity(const float DeltaTime, const f
 			bForceMaxAccel = bPreviousForceMaxAccel;
 		}
 		const FVector Target = MovementTraction.GroupDesiredVelocity;
+		if (MovementTraction.bUnloadedMovement)
+		{
+			// 每个成员消费同一份已积分速度，不把加入前各自的惯性带进队形。
+			// Z 仍由 CMC 的 Walking/Falling 流程处理，不冻结移动模式或身体高度。
+			const double Vertical = Velocity.Z;
+			Velocity = ConstrainDirectionToPlane(MovementTraction.GroupUnloadedVelocity);
+			Velocity.Z = Vertical;
+			return;
+		}
 		const double DesiredAlong = FVector::DotProduct(Target, Axis);
 		const double PreviousAlong = FVector::DotProduct(PreviousVelocity, Axis);
 		const double NetAcceleration = MovementTraction.AccelerationCentimetersPerSecondSquared

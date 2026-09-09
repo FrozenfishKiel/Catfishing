@@ -229,6 +229,81 @@ namespace CatFishingGroupNetwork
 					return false;
 				}
 				for (ACatFishingRodActor* ClientRod : ClientRods) if (ClientRod->GetOperatorCount() != 4) return false;
+				// 先在没有 Session 的阶段执行真实网络移动，不能等 HookedFight 才证明队形绑定。
+				TArray<ACatCharacter*> AuthorityCats = {PrimaryCat};
+				for (auto* Remote : RemoteControllers) AuthorityCats.Add(CastChecked<ACatCharacter>(Remote->GetPawn()));
+				if (PreCastMotionStage == 0)
+				{
+					for (ACatCharacter* Cat : AuthorityCats)
+					{
+						PreCastPositions.Add(Cat->GetActorLocation());
+						PreCastStamina.Add(Cat->GetCatAbilitySystemComponent()->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()));
+					}
+					PreCastMotionStarted = Now;
+					PreCastMotionStage = 1;
+				}
+				if (PreCastMotionStage == 1)
+				{
+					for (auto* Local : LocalClients) Local->GetPawn()->AddMovementInput(-FVector::ForwardVector);
+					PrimaryCat->AddMovementInput(-FVector::ForwardVector);
+					if (Now - PreCastMotionStarted < 0.6) return false;
+					bool bAllMoveAccepted = true;
+					for (auto* Remote : RemoteControllers)
+						bAllMoveAccepted &= CastChecked<UCatCharacterMovementComponent>(
+							CastChecked<ACatCharacter>(Remote->GetPawn())->GetCharacterMovement())->GetAcceptedFishingMoveIntent().SizeSquared() > 0.01;
+					if (!bAllMoveAccepted)
+					{
+						if (Now - PreCastMotionStarted < 5.0) return false;
+						Test->AddError(TEXT("Pre-cast movement input failed to reach every authority CMC within 5 seconds"));
+						return true;
+					}
+					for (int32 Index = 0; Index < AuthorityCats.Num(); ++Index)
+					{
+						const auto* Movement = CastChecked<UCatCharacterMovementComponent>(AuthorityCats[Index]->GetCharacterMovement());
+						const FCatExternalTractionInput Input = Movement->GetExternalTraction();
+						if (!Test->TestTrue(FString::Printf(TEXT("joined member moves through authority CMC before any Session PlayerId=%d Initial=%s Current=%s"),
+							AuthorityCats[Index]->GetPlayerState()->GetPlayerId(), *PreCastPositions[Index].ToCompactString(), *AuthorityCats[Index]->GetActorLocation().ToCompactString()),
+							Input.bGroupDriven && Input.bUnloadedMovement && !Input.bActive
+							&& FVector::DistSquared(PreCastPositions[Index], AuthorityCats[Index]->GetActorLocation()) > 1.0)) return true;
+					}
+					PreCastMotionStage = 2;
+					PreCastMotionStarted = Now;
+					return false;
+				}
+				if (PreCastMotionStage == 2)
+				{
+					FString Pending;
+					for (int32 Index = 0; Index < LocalClients.Num(); ++Index)
+					{
+						const auto* LocalCat = CastChecked<ACatCharacter>(LocalClients[Index]->GetPawn());
+						const auto* AuthorityCat = AuthorityCats[Index + 1];
+						const auto* LocalMovement = CastChecked<UCatCharacterMovementComponent>(LocalCat->GetCharacterMovement());
+						const double PositionError = FVector::Distance(LocalCat->GetActorLocation(), AuthorityCat->GetActorLocation());
+						if (PositionError > 5.0 || !LocalMovement->GetExternalTraction().bUnloadedMovement
+							|| LocalMovement->Velocity.Size2D() > 1.0 || AuthorityCat->GetVelocity().Size2D() > 1.0)
+							Pending += FString::Printf(TEXT(" PlayerId=%d Authority=%s Client=%s ErrorCm=%.3f Unloaded=%d;"),
+								AuthorityCat->GetPlayerState()->GetPlayerId(), *AuthorityCat->GetActorLocation().ToCompactString(),
+								*LocalCat->GetActorLocation().ToCompactString(), PositionError, LocalMovement->GetExternalTraction().bUnloadedMovement);
+					}
+					if (!Pending.IsEmpty() || Now - PreCastMotionStarted < 0.2)
+					{
+						if (Now - PreCastMotionStarted < 5.0) return false;
+						Test->AddError(TEXT("Pre-cast shared movement failed to settle across all owners:") + Pending);
+						return true;
+					}
+					for (int32 Index = 0; Index < AuthorityCats.Num(); ++Index)
+					{
+						const double OffsetError = FVector::Distance(AuthorityCats[Index]->GetActorLocation() - PrimaryCat->GetActorLocation(),
+							PreCastPositions[Index] - PreCastPositions[0]);
+						if (!Test->TestTrue(FString::Printf(TEXT("pre-cast shared movement preserves relative position PlayerId=%d ErrorCm=%.3f"),
+							AuthorityCats[Index]->GetPlayerState()->GetPlayerId(), OffsetError), OffsetError <= 5.0)) return true;
+						if (!Test->TestEqual(TEXT("pre-cast shared movement spends no fishing stamina"),
+							AuthorityCats[Index]->GetCatAbilitySystemComponent()->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), PreCastStamina[Index])) return true;
+					}
+					if (!Test->TestFalse(TEXT("pre-cast movement does not create fish load"), Rod->GetCarrierConstraintState().bFightActive)) return true;
+					PreCastMotionStage = 3;
+					Test->AddInfo(FString::Printf(TEXT("Event=fishing_group_network_precast_verified RodActorId=%s Members=4 SessionPresent=0 MaximumOffsetErrorCm=5 StaminaUnchanged=1"), *RodId.ToString()));
+				}
 				auto* Region = Server->SpawnActorDeferred<ACatWaterRegion>(ACatWaterRegion::StaticClass(), FTransform::Identity);
 				auto* Boundary = Server->SpawnActor<ACatWaterBoundarySplineActor>();
 				USplineComponent* Spline = Boundary ? Boundary->FindComponentByClass<USplineComponent>() : nullptr;
@@ -270,6 +345,12 @@ namespace CatFishingGroupNetwork
 				Cast.ClientCandidateWorldPoint = FVector(650, 0, 0);
 				const auto Begun = Fishing->BeginCast(Primary, Cast);
 				if (!Test->TestTrue(TEXT("real Service creates the formal cast session"), Begun.Command.bCommitted)) return true;
+				for (ACatCharacter* Cat : AuthorityCats)
+				{
+					const FCatExternalTractionInput Input = CastChecked<UCatCharacterMovementComponent>(Cat->GetCharacterMovement())->GetExternalTraction();
+					if (!Test->TestTrue(TEXT("BeginCast returns with every joined member still bound to unloaded movement"),
+						Input.bGroupDriven && Input.bUnloadedMovement && !Input.bActive)) return true;
+				}
 				SessionId = Begun.Command.FishingSessionId;
 				Session = Fishing->FindSession(SessionId);
 				Stage = 2;
@@ -277,7 +358,27 @@ namespace CatFishingGroupNetwork
 			if (!Session.IsValid() || Session->IsTerminal()) { Test->AddError(TEXT("group network session ended before verdict")); return true; }
 			if (Stage == 2)
 			{
+				const ECatFishingPhase Phase = Session->GetSnapshot().Phase;
+				UnloadedPhases.Add(Phase);
+				TArray<ACatCharacter*> AuthorityCats = {PrimaryCat};
+				for (auto* Remote : RemoteControllers) AuthorityCats.Add(CastChecked<ACatCharacter>(Remote->GetPawn()));
+				for (int32 Index = 0; Index < AuthorityCats.Num(); ++Index)
+				{
+					const FCatExternalTractionInput Input = CastChecked<UCatCharacterMovementComponent>(AuthorityCats[Index]->GetCharacterMovement())->GetExternalTraction();
+					if (!Test->TestTrue(FString::Printf(TEXT("session pre-fight phase keeps unloaded group binding Phase=%s PlayerId=%d"),
+						*UEnum::GetValueAsString(Phase), AuthorityCats[Index]->GetPlayerState()->GetPlayerId()),
+						Input.bGroupDriven && Input.bUnloadedMovement && !Input.bActive)) return true;
+					if (!Test->TestEqual(TEXT("cast and bite waiting do not charge movement fishing stamina"),
+						AuthorityCats[Index]->GetCatAbilitySystemComponent()->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), PreCastStamina[Index])) return true;
+					const double OffsetError = FVector::Distance(AuthorityCats[Index]->GetActorLocation() - PrimaryCat->GetActorLocation(),
+						PreCastPositions[Index] - PreCastPositions[0]);
+					if (!Test->TestTrue(FString::Printf(TEXT("cast and bite waiting preserve joined relative position Phase=%s PlayerId=%d ErrorCm=%.3f"),
+						*UEnum::GetValueAsString(Phase), AuthorityCats[Index]->GetPlayerState()->GetPlayerId(), OffsetError), OffsetError <= 5.0)) return true;
+				}
 				if (Session->GetSnapshot().Phase != ECatFishingPhase::TrueBiteWindow) return false;
+				if (!Test->TestTrue(TEXT("real waiting and bite window both retained the joined group after BeginCast"),
+					UnloadedPhases.Contains(ECatFishingPhase::Waiting)
+					&& UnloadedPhases.Contains(ECatFishingPhase::TrueBiteWindow))) return true;
 				if (!Test->TestTrue(TEXT("formal bite starts the actual fight runner"), Session->RequestHookFromAuthority(FGuid::NewGuid()).bCommitted)) return true;
 				if (!Test->TestTrue(TEXT("hook receipt includes an actual selected fish in HookedFight"),
 					Session->GetSnapshot().Phase == ECatFishingPhase::HookedFight
@@ -377,6 +478,11 @@ namespace CatFishingGroupNetwork
 		double Started, StageStarted = 0;
 		int32 Stage = 0, JoinIndex = 0;
 		bool bFormationReady = false;
+		int32 PreCastMotionStage = 0;
+		double PreCastMotionStarted = 0.0;
+		TArray<FVector> PreCastPositions;
+		TArray<float> PreCastStamina;
+		TSet<ECatFishingPhase> UnloadedPhases;
 		int32 FightSamples = 0;
 		double MaximumSampledLineLoad = 0.0, SampledRodTravel = 0.0, SampledFishTravel = 0.0;
 		FVector InitialRodPosition = FVector::ZeroVector, InitialFishPosition = FVector::ZeroVector;

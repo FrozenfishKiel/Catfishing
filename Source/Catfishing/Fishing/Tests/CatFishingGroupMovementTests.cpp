@@ -2,6 +2,8 @@
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
 #include "Character/CatCharacterMovementComponent.h"
 #include "Engine/World.h"
@@ -89,7 +91,7 @@ bool FCatFishingGroupMovementEpochTest::RunTest(const FString& Parameters)
 	auto* Prediction = static_cast<FNetworkPredictionData_Client_Character*>(Movement->GetPredictionData_Client());
 	FCatSavedMove Saved;
 	Saved.SetMoveFor(Cat, 0.1f, FVector::ZeroVector, *Prediction);
-	for (int32 Domain = 0; Domain < 4; ++Domain)
+	for (int32 Domain = 0; Domain < 5; ++Domain)
 	{
 		FCatExternalTractionInput Current = Original;
 		Current.FormationCorrectionVelocity = FVector(0.0, 30.0, 0.0);
@@ -97,6 +99,11 @@ bool FCatFishingGroupMovementEpochTest::RunTest(const FString& Parameters)
 		if (Domain == 1) ++Current.ControlEpoch;
 		if (Domain == 2) ++Current.MembershipEpoch;
 		if (Domain == 3) ++Current.AimInputEpoch;
+		if (Domain == 4)
+		{
+			Current.bActive = false;
+			Current.bUnloadedMovement = true;
+		}
 		Cat->SetActorLocation(FVector::ZeroVector);
 		Movement->Velocity = FVector::ZeroVector;
 		Movement->SetExternalTraction(Cat, Current);
@@ -111,8 +118,8 @@ bool FCatFishingGroupMovementEpochTest::RunTest(const FString& Parameters)
 	Saved.PrepMoveFor(Cat);
 	Movement->PerformMovement(0.1f);
 	TestTrue(TEXT("退出并清理后旧 SavedMove 不能再次牵引"), Cat->GetActorLocation().IsNearlyZero());
-	AddExpectedError(TEXT("Event=fishing_group_traction_rejected"), EAutomationExpectedErrorFlags::Contains, 3);
-	for (int32 VectorField = 0; VectorField < 3; ++VectorField)
+	AddExpectedError(TEXT("Event=fishing_group_traction_rejected"), EAutomationExpectedErrorFlags::Contains, 4);
+	for (int32 VectorField = 0; VectorField < 4; ++VectorField)
 	{
 		Movement->SetExternalTraction(Cat, Original);
 		FCatExternalTractionInput Invalid = Original;
@@ -120,9 +127,31 @@ bool FCatFishingGroupMovementEpochTest::RunTest(const FString& Parameters)
 		if (VectorField == 0) Invalid.GroupDesiredVelocity = NonFinite;
 		if (VectorField == 1) Invalid.GroupLateralAcceleration = NonFinite;
 		if (VectorField == 2) Invalid.FormationCorrectionVelocity = NonFinite;
+		if (VectorField == 3) Invalid.GroupUnloadedVelocity = NonFinite;
 		Movement->SetExternalTraction(Cat, Invalid);
 		TestFalse(TEXT("拒绝非有限向量并清理旧输入"), Movement->GetExternalTraction().bGroupDriven);
 	}
+	// 名单和控制权不变时，结束鱼载荷本身也必须使旧 SavedMove 失效。
+	FCatExternalTractionInput Loaded = Original;
+	Loaded.AccelerationCentimetersPerSecondSquared = 500.0;
+	Loaded.GroupDesiredVelocity = FVector(100.0, 0.0, 0.0);
+	Loaded.FormationCorrectionVelocity = FVector::ZeroVector;
+	Movement->SetExternalTraction(Cat, Loaded);
+	FCatSavedMove SavedLoaded;
+	SavedLoaded.SetMoveFor(Cat, 0.1f, FVector::ZeroVector, *Prediction);
+	FCatExternalTractionInput Unloaded = Loaded;
+	Unloaded.bActive = false;
+	Unloaded.bUnloadedMovement = true;
+	Unloaded.AccelerationCentimetersPerSecondSquared = 0.0;
+	Unloaded.GroupDesiredVelocity = FVector::ZeroVector;
+	Unloaded.GroupUnloadedVelocity = FVector(0.0, 20.0, 0.0);
+	Movement->SetExternalTraction(Cat, Unloaded);
+	Cat->SetActorLocation(FVector::ZeroVector);
+	Movement->Velocity = FVector::ZeroVector;
+	SavedLoaded.PrepMoveFor(Cat);
+	Movement->PerformMovement(0.1f);
+	TestEqual(TEXT("无鱼力模式拒绝同成员域旧SavedMove的X鱼力"), Cat->GetActorLocation().X, 0.0, 0.001);
+	TestTrue(TEXT("重放使用当前无鱼力共同速度"), Cat->GetActorLocation().Y > 1.0 && Movement->MovementTraction.bUnloadedMovement);
 	return !HasAnyErrors();
 }
 
@@ -189,10 +218,18 @@ bool FCatFishingGroupMembershipContinuityTest::RunTest(const FString& Parameters
 	const FCatFishingGroupMotionState CurrentMotion = Rod->GroupMotionState;
 	TestTrue(TEXT("新版运动恢复到唯一幸存者"), SecondMovement->GetExternalTraction().bGroupDriven);
 	Rod->ClearCarrierConstraintFromAuthority();
-	TestFalse(TEXT("停止约束同步清空组移动"), Rod->GroupMotionState.bActive);
+	TestFalse(TEXT("停止约束同步清空鱼载荷"), Rod->GetCarrierConstraintState().bFightActive);
+	TestTrue(TEXT("仍握竿的成员切回无鱼力共同移动"), SecondMovement->GetExternalTraction().bUnloadedMovement);
+	const FCatFishingGroupMotionState StoppedMotion = Rod->GroupMotionState;
 	Rod->GroupMotionState = CurrentMotion;
 	Rod->OnRep_CarrierConstraintState();
-	TestFalse(TEXT("停止后的旧组快照不会复活运动"), SecondMovement->GetExternalTraction().bGroupDriven);
+	TestTrue(TEXT("停止后旧搏斗快照只保留成员等待正确无鱼力快照"),
+		SecondMovement->GetExternalTraction().bGroupDriven && SecondMovement->GetExternalTraction().bWaitingForGroupSolve);
+	TestFalse(TEXT("停止后的旧组快照不能复活鱼力"), SecondMovement->GetExternalTraction().bActive);
+	Rod->GroupMotionState = StoppedMotion;
+	Rod->OnRep_CarrierConstraintState();
+	TestTrue(TEXT("当前停止快照到齐后恢复无鱼力共同移动"), SecondMovement->GetExternalTraction().bUnloadedMovement
+		&& !SecondMovement->GetExternalTraction().bWaitingForGroupSolve);
 	TestFalse(TEXT("未开始新搏斗时禁止单独复活组运动"), Rod->SetGroupMotionFromAuthority(FVector::ZeroVector, FVector::ZeroVector));
 	return !HasAnyErrors();
 }
@@ -262,9 +299,17 @@ bool FCatFishingGroupWaitingTest::RunTest(const FString& Parameters)
 	Rod->RemoveOperatorFromAuthority(Second, Rod->GetPresentationState().RodActorRevision, Promoted);
 	TestFalse(TEXT("实际离队才释放移动归属"), SecondMovement->GetExternalTraction().bGroupDriven);
 	Rod->ClearCarrierConstraintFromAuthority();
+	TestTrue(TEXT("明确停止记录保留成员的无鱼力共同移动"), FirstMovement->GetExternalTraction().bUnloadedMovement);
+	const FCatFishingGroupMotionState StoppedMotion = Rod->GroupMotionState;
 	Rod->GroupMotionState = OriginalMotion;
 	Rod->OnRep_CarrierConstraintState();
-	TestFalse(TEXT("明确停止记录拒绝旧组解复活"), FirstMovement->GetExternalTraction().bGroupDriven);
+	TestTrue(TEXT("停止记录和旧组快照不匹配时保持成员等待"), FirstMovement->GetExternalTraction().bGroupDriven
+		&& FirstMovement->GetExternalTraction().bWaitingForGroupSolve);
+	TestFalse(TEXT("明确停止记录拒绝旧鱼力复活"), FirstMovement->GetExternalTraction().bActive);
+	Rod->GroupMotionState = StoppedMotion;
+	Rod->OnRep_CarrierConstraintState();
+	TestTrue(TEXT("正确停止快照抵达后无鱼力共同移动恢复"), FirstMovement->GetExternalTraction().bUnloadedMovement
+		&& !FirstMovement->GetExternalTraction().bWaitingForGroupSolve);
 	Rod->GroupMotionState = OriginalMotion;
 	Rod->GroupMotionState.RosterVersion = Rod->GetRosterVersion();
 	Rod->GroupMotionState.ControlEpoch = Rod->GetControlEpoch();
@@ -272,6 +317,146 @@ bool FCatFishingGroupWaitingTest::RunTest(const FString& Parameters)
 	Rod->OnRep_CarrierConstraintState();
 	TestTrue(TEXT("下一场组解先到而载荷仍是停止记录时只等待"), FirstMovement->GetExternalTraction().bWaitingForGroupSolve);
 	Rod->ClearCarrierConstraintFromAuthority();
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingGroupUnloadedMovementTest,
+	"Catfishing.Unit.Fishing.Runtime.JoinedGroupMovesTogetherBeforeSessionWithoutFishCosts",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingGroupUnloadedMovementTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	FTestWorldWrapper Wrapper;
+	if (!Wrapper.CreateTestWorld(EWorldType::Game)) return false;
+	UWorld* World = Wrapper.GetTestWorld();
+	ACatFishingRodActor* Rod = World->SpawnActor<ACatFishingRodActor>();
+	if (!Rod) return false;
+	TArray<APlayerState*> Players;
+	TArray<ACatCharacter*> Cats;
+	TArray<UCatCharacterMovementComponent*> Movements;
+	TArray<float> StaminaBefore;
+	FActorSpawnParameters Spawn;
+	Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	for (int32 Index = 0; Index < 4; ++Index)
+	{
+		APlayerState* Player = World->SpawnActor<APlayerState>();
+		ACatCharacter* Cat = World->SpawnActor<ACatCharacter>(FVector(0.0, 200.0 * Index, 1000.0), FRotator::ZeroRotator, Spawn);
+		if (!Player || !Cat) return false;
+		Cat->SetPlayerState(Player);
+		UCatCharacterMovementComponent* Movement = PrepareMovement(Cat);
+		UCatAbilitySystemComponent* ASC = Cat->GetCatAbilitySystemComponent();
+		if (!Movement || !ASC) return false;
+		ASC->InitAbilityActorInfo(Cat, Cat);
+		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50.0f);
+		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), 60.0f);
+		if (!TestTrue(TEXT("真实成员具有有效个人体力基线"), ASC->InitializeFishingStaminaForSession())) return false;
+		Players.Add(Player);
+		Cats.Add(Cat);
+		Movements.Add(Movement);
+		StaminaBefore.Add(ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()));
+		// 加入时各人带着不同惯性，不能等自然制动后才形成共同移动。
+		Movement->Velocity = FVector(Index % 2 == 0 ? -90.0 : 70.0, 0.0, 0.0);
+		if (Index == 0)
+		{
+			if (!TestTrue(TEXT("无会话时直接初始化主位"), Rod->InitializeAuthoritativeIdentity(
+				FGuid::NewGuid(), FGuid::NewGuid(), TEXT("UnloadedGroupRod"), NAME_None, Player, Player, true, false))) return false;
+		}
+		else
+		{
+			int32 Slot = INDEX_NONE;
+			if (!TestTrue(TEXT("无会话时辅助直接加入"), Rod->AddOperatorFromAuthority(Player, Rod->GetPresentationState().RodActorRevision, Slot))) return false;
+		}
+		const FCatExternalTractionInput Bound = Movement->GetExternalTraction();
+		TestTrue(TEXT("加入返回前已经绑定无鱼力共同移动"), Bound.bGroupDriven && Bound.bUnloadedMovement && !Bound.bWaitingForGroupSolve);
+		TestFalse(TEXT("加入不会伪造搏斗阶段"), Rod->GetCarrierConstraintState().bFightActive);
+		TestFalse(TEXT("无鱼力模式没有鱼端牵引"), Bound.bActive);
+	}
+	// Falling 使用新旧速度均值积分；入步前仍必须抹平各人的水平惯性，同时保留重力。
+	TArray<FVector> BeforeFalling;
+	for (int32 Index = 0; Index < Cats.Num(); ++Index)
+	{
+		BeforeFalling.Add(Cats[Index]->GetActorLocation());
+		Movements[Index]->SetMovementMode(MOVE_Falling);
+		Movements[Index]->Velocity = FVector(Index % 2 == 0 ? -90.0 : 70.0, 0.0, 0.0);
+	}
+	for (UCatCharacterMovementComponent* Movement : Movements) Movement->PerformMovement(0.05f);
+	Rod->RefreshHeldTransformFromAuthority(0.05);
+	for (int32 Index = 0; Index < Cats.Num(); ++Index)
+	{
+		TestTrue(TEXT("Falling 首子步不同水平初速不改变相对站位"),
+			(Cats[Index]->GetActorLocation() - Cats[0]->GetActorLocation()).Equals(BeforeFalling[Index] - BeforeFalling[0], 0.1));
+		TestTrue(TEXT("无鱼力共同移动保留重力下落"), Cats[Index]->GetActorLocation().Z < BeforeFalling[Index].Z
+			&& Movements[Index]->MovementMode == MOVE_Falling);
+		Movements[Index]->SetMovementMode(MOVE_Flying);
+		Movements[Index]->Velocity = FVector(Index % 2 == 0 ? -90.0 : 70.0, 0.0, 0.0);
+	}
+	Rod->RefreshHeldTransformFromAuthority();
+	const FVector InitialRodLocation = Rod->GetActorLocation();
+	TArray<FVector> InitialPositions;
+	for (ACatCharacter* Cat : Cats) InitialPositions.Add(Cat->GetActorLocation());
+	for (int32 Frame = 0; Frame < 30; ++Frame)
+	{
+		for (int32 Index = 0; Index < Movements.Num(); ++Index)
+			Movements[Index]->Acceleration = (Index == 3 ? FVector::ForwardVector : -FVector::ForwardVector) * Movements[Index]->GetMaxAcceleration();
+		Rod->Tick(1.0f / 20.0f);
+		for (UCatCharacterMovementComponent* Movement : Movements) Movement->PerformMovement(1.0f / 20.0f);
+		Rod->RefreshHeldTransformFromAuthority(1.0 / 20.0);
+		for (int32 Index = 1; Index < Cats.Num(); ++Index)
+		{
+			const FVector RelativePosition = Cats[Index]->GetActorLocation() - Cats[0]->GetActorLocation();
+			TestTrue(TEXT("不同初速和相反个人输入不会使同组成员散开"),
+				RelativePosition.Equals(InitialPositions[Index] - InitialPositions[0], 0.1));
+		}
+	}
+	for (int32 Index = 0; Index < Cats.Num(); ++Index)
+	{
+		TestTrue(TEXT("无Session的每名成员都由真实CMC共同移动"), Cats[Index]->GetActorLocation().X < InitialPositions[Index].X - 1.0);
+		TestEqual(TEXT("战前共同移动不结算搏斗体力"),
+			Cats[Index]->GetCatAbilitySystemComponent()->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), StaminaBefore[Index]);
+		TestEqual(TEXT("共同移动保留CMC移动模式"), Movements[Index]->MovementMode.GetValue(), MOVE_Flying);
+	}
+	TestTrue(TEXT("鱼竿跟随共同位移而非单个辅助漂移"),
+		(Rod->GetActorLocation() - InitialRodLocation).Equals(Cats[0]->GetActorLocation() - InitialPositions[0], 0.1));
+
+	const FCatFishingGroupMotionState PreviousUnloaded = Rod->GroupMotionState;
+	const FVector AnchorBeforeLeave = Rod->GetGroupAnchorWorld();
+	const FVector SecondBeforeLeave = Cats[1]->GetActorLocation();
+	APlayerState* Promoted = nullptr;
+	if (!TestTrue(TEXT("战前主位离开并接力"), Rod->RemoveOperatorFromAuthority(Players[0], Rod->GetPresentationState().RodActorRevision, Promoted))) return false;
+	TestEqual(TEXT("战前晋升最早辅助"), Promoted, Players[1]);
+	TestFalse(TEXT("离队立即释放本竿共同运动"), Movements[0]->GetExternalTraction().bGroupDriven);
+	TestFalse(TEXT("战前补位不等待不存在的搏斗Aim域"), Rod->bAwaitingNewHolderAim);
+	TestTrue(TEXT("战前补位保留组根和幸存者身体位置"),
+		Rod->GetGroupAnchorWorld().Equals(AnchorBeforeLeave, 0.001) && Cats[1]->GetActorLocation().Equals(SecondBeforeLeave, 0.001));
+	Cats[1]->SetActorRotation(FRotator(0.0, 70.0, 0.0));
+	Rod->RefreshHeldTransformFromAuthority();
+	Rod->RefreshHeldTransformFromAuthority();
+	FCatFishingRodRotationPrediction Prediction;
+	TestTrue(TEXT("新主位战前正常瞄准，无需搏斗输入解锁"), Rod->GetRotationPredictionFromAuthority(0.05, Prediction)
+		&& !Prediction.bHoldActualAim && Prediction.Input.RequestedAim.Equals(FRotator(0.0, 70.0, 0.0), 0.001));
+	const FCatFishingGroupMotionState CurrentUnloaded = Rod->GroupMotionState;
+	Rod->GroupMotionState = PreviousUnloaded;
+	Rod->OnRep_CarrierConstraintState();
+	const FCatExternalTractionInput Reconciled = Movements[1]->GetExternalTraction();
+	TestTrue(TEXT("迟到战前快照不能恢复旧名单，当前成员等待完整新快照"), Reconciled.bGroupDriven && Reconciled.bWaitingForGroupSolve
+		&& Reconciled.RosterVersion == Rod->GetRosterVersion() && Reconciled.ControlEpoch == Rod->GetControlEpoch());
+	TestFalse(TEXT("迟到战前快照不能触发鱼力"), Reconciled.bActive);
+	TestTrue(TEXT("等待不能继续使用旧共同速度"), Reconciled.GroupUnloadedVelocity.IsNearlyZero());
+	Rod->GroupMotionState = CurrentUnloaded;
+	Rod->OnRep_CarrierConstraintState();
+	TestTrue(TEXT("当前战前快照抵达后恢复无鱼力共同移动"), Movements[1]->GetExternalTraction().bUnloadedMovement
+		&& !Movements[1]->GetExternalTraction().bWaitingForGroupSolve);
+
+	for (int32 Index = 1; Index < Players.Num(); ++Index)
+		if (!Rod->RemoveOperatorFromAuthority(Players[Index], Rod->GetPresentationState().RodActorRevision, Promoted)) return false;
+	for (UCatCharacterMovementComponent* Movement : Movements)
+		TestFalse(TEXT("最后一人离开后清理所有共同移动来源"), Movement->GetExternalTraction().bGroupDriven);
+	const FVector AfterLeave = Cats[1]->GetActorLocation();
+	Movements[1]->Velocity = FVector::ZeroVector;
+	// 正常个人移动还需要输入入口计算 AnalogInputModifier，不能只直写 Acceleration。
+	Movements[1]->MoveAutonomous(0.05f, 0.05f, 0, FVector::ForwardVector * Movements[1]->GetMaxAcceleration());
+	TestTrue(TEXT("离队后真实CMC恢复个人移动"), Cats[1]->GetActorLocation().X > AfterLeave.X);
 	return !HasAnyErrors();
 }
 

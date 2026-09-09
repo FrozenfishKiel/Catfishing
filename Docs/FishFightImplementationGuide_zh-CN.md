@@ -1,10 +1,16 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
-本文件持续维护鱼、线、杆、猫的运动设计与实际代码。最近更新：2026-09-08，当前已接入 1–4 人移动合力，完整接口、影响对照与本轮证据见 [钓鱼架构 2.0](FishingArchitecture_zh-CN.md)。鱼仍使用沿主动意图未完成距离的耗体公式，满线右键不恢复。下文日期段落中的构建和测试数字属于相应历史版本，不作为当前多人版本的交付证据；真人手感和新打包双端验收仍待完成。
+本文件持续维护鱼、线、杆、猫的运动设计与实际代码。最近更新：2026-09-08，1–4人移动合力现从加入鱼竿时生效，覆盖无Session、钩子飞行、Waiting、Probe与TrueBiteWindow；本轮影响对照、通过证据与剩余表现验收项见 [钓鱼架构 2.0.4](FishingArchitecture_zh-CN.md#204-入竿即保持队形的影响与验证2026-09-08)。鱼仍使用沿主动意图未完成距离的耗体公式，满线右键不恢复。下文日期段落中的构建和测试数字属于相应历史版本，不作为当前修复的通过证据；真人手感和新打包双端验收仍待完成。
 
 当前猫端通过 `CatFishingGroupModel` 使用一个 N 人计算入口：个人正体力提供完整力量，主位系数 1、辅助默认 0.5；移动与站定支撑共用个人向量预算。同向加强、反向抵消、侧向改变组运动。只有主位驱动线杯和竿向，主位体力为零仍可使用队友的有效支撑操竿。Runner 每步冻结真实成员、已接受的 CMC 移动和各自 ASC，共同收线/转杆/去重持竿账单均分，个人移动及受阻用力由本人支付；体力总量只读求和，不转移余额。有效放线逐人恢复、满线不恢复、鱼力竭免正向费用保持。
 
-生产中的单人也使用组运动：Rod 维护连续共同根与成员偏移，CMC 抑制第二份个人加速并独占身体碰撞；Simulator 与 CMC 共用切向积分，预测分别受正向、后退、侧向碰撞距离约束。组版本、主控版本和个人加入世代隔离旧运动/按键。危险入水逐人退出操作组，剩余人继续，全部离开才转无人值守。`FCatFightSimulationState::CatStamina` 仍为当前主位余额镜像，不能当作团队账本；总体力和上限来自明确的 GroupResult/Session 总量字段。Simulator 的猫移动/体力 Trace 是求解估算，实际各人账单查 `fishing_group_stamina_settled`，步末总变动以 Runner 结算为准。
+生产中的单人也从入竿起使用组运动。Rod 记录成员当下位置相对共同根的偏移，入退和接力保留连续组根，不按名单下标传送角色；CMC 抑制第二份个人加速并独占身体碰撞。尚未搏斗或一轮终局后仍持竿的无载阶段，`UpdateUnloadedGroupMotionFromAuthority` 只读 ASC 的 `FishingStrength/FightStamina/MaxFightStamina`、CMC已接受移动及速度上限，使用同一个GroupModel和同一主辅系数计算主动移动目标。Rod 用成员中最小加速/制动能力把目标积分成共同速度（cm/s），再以全员胶囊sweep可行距离的最小值限制本步，复制 `UnloadedVelocity`。CMC只消费共同XY速度，保留Z、重力、Walking/Falling和碰撞/滑动；无载阶段不运行鱼模拟，不支付任何搏斗账单。已删除原生holder-only fallback及私有 `CarrierMovement`，不存在另一条单人前战移动入口。
+
+搏斗仍由Runner接管共同运动和鱼线求解；Simulator与CMC共用切向积分，预测分别受正向、后退、侧向碰撞距离约束。`bUnloadedMovement` 与组版本、主控版本、个人加入世代和Aim域一起隔离旧运动/按键及SavedMove；它不改变 `bFightActive` 的搏斗含义。危险入水逐人退出操作组，剩余人继续，全部离开才转无人值守。`FCatFightSimulationState::CatStamina` 仍为当前主位余额镜像，不能当作团队账本；总体力和上限来自明确的GroupResult/Session总量字段。Simulator的猫移动/体力Trace是求解估算，实际各人账单查 `fishing_group_stamina_settled`，步末总变动以Runner结算为准。
+
+`SetFishingGroupCollisionPeers` 让同竿成员彼此忽略移动碰撞；CMC只追踪自己新增的 `IgnoreActorWhenMoving`，离队或解绑时恢复这些项，保留其他系统已有的忽略。`GetExternalTractionTravelLimit(..., bAllowStepUp=false)` 的默认搏斗算法不变；无载查询开启台阶分支，grounded角色遇到可StepUp低台阶时按 `MaxStepHeight` 抬高胶囊做探测，允许CMC实际跨越。探测尊重组内忽略名单，真墙仍使用全员最小可行距离。共同速度不取消接触容差、斜坡高度差、重力和碰撞落位差，也不通过瞬移维持绝对刚性队形。
+
+一轮取消、收获或其他终局停止鱼载荷，仍占用健康鱼竿的成员转回无载共同移动；只有本人离竿才恢复个人自由移动，破竿、收起、无人或Rod销毁则完全解绑。`SetFishExhaustedFromAuthority` 保留fight上下文、同Aim域及当前组目标，只立即清零鱼牵引与鱼转矩，下一固定步继续力竭收线，不能中间切为无载模式。`Runner::Stop` 在清理回调前置为已停止并保持幂等，避免旧终态Session稍后EndPlay清掉同竿新一场载荷。
 
 个人移动费用的位移样本以厘米和秒保存，按成员世代归属，固定步逐段消费；低帧率同一帧追赶多步时保留剩余位移与时间，避免首步耗尽样本、后续误算原地受阻。每段仍使用原主动正功/受阻费用公式，无输入被动移动不收费，CMC 标记的瞬移不作为主动进展。同成员接力保留尚未结算的移动样本，离队再加入建立新采样域。
 
@@ -298,7 +304,7 @@ T_N = smallest nonnegative tension that satisfies the end-of-step line constrain
 
 地形未改变鱼候选落点时，Runner 保留同一步末约束求出的张力，避免又用“鱼新位置 + 猫尚未执行完的旧位置”清零。地形确实改变候选并产生松线时，仍撤销负载。`ConstraintRodEnd` 是受碰撞上限约束的预测观察值，不是已经执行的角色位置；角色主动移动、滑墙、台阶或移动障碍可能使实际落位与预测不同，不能将该模型当作 Chaos 内同一物理步的完整刚体接触求解。
 
-Rod 只转交输入；`Character/CatCharacterMovementComponent::CalcVelocity` 在原移动积分中衔接沿线加速/减速，无输入时替换沿线的普通急刹，有输入时仍保留引擎完成的主动加速并提供牵引速度下限，其余轴和碰撞/滑动由 CMC 处理。`bUseContinuousTraction` 明确表示活鱼、持竿、有主位且未终局的上下文，暂时零牵引仍保持连续减速；它与原 `CarrierConstraintState.bActive` 的正牵引含义分开。非反射的移动输入 `FCatExternalTractionInput.bActive` 表示该来源参与本移动步，因而也包括减速阶段。鱼力竭、终局、离竿、换人和清约束后退出；减速度默认 0、上下文默认 false，启动首帧的原转矩初始化仍使用默认值，首个固定步才发布实际受力。
+Rod在搏斗中转交Runner发布的组目标、沿线加速/减速和鱼转矩；`Character/CatCharacterMovementComponent::CalcVelocity` 通过唯一组入口执行，抑制第二份个人行走加速，碰撞/滑动和垂直运动继续由CMC负责。`bUseContinuousTraction` 表示本步连续牵引/减速上下文，暂时零正牵引仍可制动；它与 `CarrierConstraintState.bActive` 的正牵引及 `bFightActive` 的搏斗阶段含义分开。鱼力竭不退出组或搏斗域；终局清鱼载荷后，仍占竿者由Rod发布无载共同速度。成员离开才解除本人绑定，换主和名单变化先拒绝旧域，再接当前组解；破竿、无人、收起和Rod销毁完整清理。减速度默认0、连续牵引默认false，不影响入竿即建立的无载组绑定。
 
 行走期间 `PerformMovement` 临时将 CMC 最大子步压到不超过 1/120 s，并为本帧（预算至 0.25 s）保留足够迭代数；实时移动和 SavedMove 重放使用同一设置，返回后恢复原设置。该方式复用引擎支持子步的移动模式，不在外层重复执行资源或运动回调。极小正加速度也必须发布非零速度上限，避免近似平衡时被零上限瞬间刹停。旧 Rod Tick 补速度、质量份额分配位移、背离方向速度硬截断均已退出生产链。
 
@@ -491,7 +497,7 @@ presentation_delivery：尚未在正式场景重试或重新打包联机验收�
 
 最终证据位于 `Saved/Automation/FishingPhysics/`：`BuildForceEditor.log`、`BuildForceGame.log`、`ForceDeliveryReport/index.json`、`ForceDeliveryTests.log`、`ForceAssetMigration.log`、`ForceAssetRevalidation.log`。新增诊断/测试不构成第二套运行实现。未新增持久化事务、正式 WBP/动画资产、资源生成目录或 Cook 入口。完整三维接触物理和正式联机交付仍是明确未完成边界。
 
-## 短线拖动期间的联合端点预测（2026-09-07，当前实现）
+## 短线拖动期间的联合端点预测（2026-09-07，历史检查点）
 
 实机 `Saved/Logs/Catfishing.log` 的会话 `7C5598E1-40E5-C0DC-B336-F09C732B66AC` 显示，5.535 kg 鱼、约 188 cm 线长且鼠标不动时，共同张力在约 369 N 和 0 N 间跳变，弯曲消费者按收到的零力回直。问题在上游：鱼端先相对旧竿尖求约束，角色和转杆稍后移动端点；历史位置纠偏又混入鱼的下一步速度。只预测身体仍会在 15 kg 鱼上复发，最终需让同一个候选张力驱动鱼、身体和既有转杆模型。
 

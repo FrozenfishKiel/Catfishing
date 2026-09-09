@@ -123,6 +123,9 @@ bool UCatFishingFightRunner::Start()
 
 void UCatFishingFightRunner::Stop()
 {
+	// FinalizeSession 和稍后的 EndPlay 都会到这里；旧会话不能再次撤销同竿新一场发布的载荷。
+	if (!bRunning) return;
+	bRunning = false; // 外部清理回调之前关闭运行态，重入 Stop 也只能执行一次。
 	if (ACatFishEncounterActor* Encounter = FishActor.Get())
 	{
 		Encounter->StopFishBehaviorFromAuthority();
@@ -136,7 +139,14 @@ void UCatFishingFightRunner::Stop()
 	{
 		Rod->ClearCarrierConstraintFromAuthority();
 	}
-	bRunning = false;
+	const ACatFishingSession* SessionActor = Session.Get();
+	const ACatFishingRodActor* Rod = RodActor.Get();
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_fight_runner_stopped SessionId=%s RodActorId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Result=Stopped"),
+		SessionActor ? *SessionActor->GetSnapshot().FishingSessionId.ToString() : TEXT("None"),
+		Rod ? *Rod->GetPresentationState().RodActorId.ToString() : TEXT("None"),
+		*GetNameSafe(SessionActor ? SessionActor->GetWorld() : nullptr), SessionActor ? int32(SessionActor->GetNetMode()) : INDEX_NONE,
+		SessionActor && SessionActor->HasAuthority(), SessionActor ? int32(SessionActor->GetLocalRole()) : INDEX_NONE);
 }
 
 FCatFightParticipantRuntime* UCatFishingFightRunner::FindParticipant(APlayerState* PlayerState)
@@ -577,17 +587,35 @@ bool UCatFishingFightRunner::SetFishExhaustedFromAuthority()
 	{
 		return false;
 	}
+	// 力竭仍属于同一场搏斗：立即撤销鱼的驱动力，但保留组运动目标和瞄准域，不能转成前战移动。
+	if (ACatFishingRodActor* Rod = RodActor.Get())
+	{
+		if (Rod->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Held)
+		{
+			const FCatFishingCarrierConstraintState Current = Rod->GetCarrierConstraintState();
+			if (!Rod->SetCarrierConstraintFromAuthority(Current.PullDirection, 0.0, 0.0, 0.0, 0.0,
+				true, 0.0, Current.CatTorqueCapacityStrengthMeters, Current.RodPullAxis, 0.0, false))
+			{
+				const ACatFishingSession* SessionActor = Session.Get();
+				UE_LOG(LogCatFishing, Warning,
+					TEXT("Event=fishing_exhausted_constraint_rejected SessionId=%s RodActorId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Result=StateUnchanged"),
+					SessionActor ? *SessionActor->GetSnapshot().FishingSessionId.ToString() : TEXT("None"),
+					*Rod->GetPresentationState().RodActorId.ToString(), *GetNameSafe(Rod->GetWorld()), int32(Rod->GetNetMode()),
+					Rod->HasAuthority(), int32(Rod->GetLocalRole()));
+				return false;
+			}
+		}
+		else
+		{
+			Rod->ClearCarrierConstraintFromAuthority();
+		}
+	}
 	State.bFishExhausted = true;
 	State.FishEffortRatio = 0.0;
 	State.FishStamina = 0.0;
 	State.FishVelocityCentimetersPerSecond = FVector::ZeroVector;
 	State.MotionIntent = ECatFishMotionIntent::AutoHauling;
 	State.StrongConfrontationBuildUpSeconds = 0.0;
-	// 终止鱼端驱动力的同一权威写口立即清掉上一固定步的猫端目标，不能再多拖一个模拟帧。
-	if (ACatFishingRodActor* Rod = RodActor.Get())
-	{
-		Rod->ClearCarrierConstraintFromAuthority();
-	}
 	if (ACatFishEncounterActor* Encounter = FishActor.Get())
 	{
 		Encounter->StopFishBehaviorFromAuthority();

@@ -5,6 +5,7 @@
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
+#include "Character/CatCharacterMovementComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "Condition/CatConditionComponent.h"
@@ -55,7 +56,7 @@ bool FCatFishingBorrowedRodCastTest::RunTest(const FString& Parameters)
 	if (!TestFalse(TEXT("formal fish catalog supplies a real water region"), CatalogWaterRegion.IsNone())) return false;
 	// 独立 World 覆盖取消、两资源宿主真实离场、预留通知重入，以及搏斗中个人身体失效与支付通知毁人。
 	// 仅注入入场身份/测试岸线；装备、正式 Actor/StateTree 和会话事务均走生产入口。
-	for (int32 ExitScenario = 0; ExitScenario < 11; ++ExitScenario)
+	for (int32 ExitScenario = 0; ExitScenario < 12; ++ExitScenario)
 	{
 		UCatEquipmentSettings* EquipmentSettings = GetMutableDefault<UCatEquipmentSettings>();
 		TGuardValue<bool> NoStarterNet(EquipmentSettings->bAutoGrantStarterScoopNet, false);
@@ -377,6 +378,96 @@ bool FCatFishingBorrowedRodCastTest::RunTest(const FString& Parameters)
 					Session->GetSnapshot().CombinedFishingStrength, StrengthBeforeFight);
 				ACatFishEncounterActor* FishActor = Session->GetSnapshot().FishEncounterActor.Get();
 				if (!TestNotNull(TEXT("body regression retains a real fish encounter"), FishActor)) return false;
+				if (ExitScenario == 11)
+				{
+					ACatFishingSession* PreviousSession = Session;
+					const uint32 PreviousAimEpoch = Rod->GetCarrierConstraintState().AimInputEpoch;
+					AddExpectedErrorPlain(TEXT("Outcome=ECatFishingOutcome::Cancelled"), EAutomationExpectedErrorFlags::Contains, 1);
+					if (!TestTrue(TEXT("first actual fight finalizes before the rod is reused"),
+						PreviousSession->CancelFromAuthority(FGuid::NewGuid()).bCommitted)) return false;
+					TestFalse(TEXT("finalization stops the first fight runner immediately"), PreviousSession->IsFightRunnerRunning());
+					// 保留真实终态 Actor，模拟它的复制保留窗与下一场重叠；仍通过 Destroy 触发真正 EndPlay。
+					PreviousSession->SetLifeSpan(0.0f);
+					const auto NextCast = Fishing->BeginCast(Caster.Controller, CastCommand());
+					if (!TestTrue(TEXT("same held rod begins a second cast while the terminal session still exists"), NextCast.Command.bCommitted)) return false;
+					Session = Fishing->FindSession(NextCast.Command.FishingSessionId);
+					if (!TestNotNull(TEXT("second production session exists"), Session)) return false;
+					TestNotEqual(TEXT("second cast has its own session actor"), Session, PreviousSession);
+					for (int32 Frame = 0; Frame < 4500 && !Session->IsTerminal()
+						&& Session->GetSnapshot().Phase != ECatFishingPhase::TrueBiteWindow; ++Frame)
+						Wrapper.TickTestWorld(0.01f);
+					if (!TestEqual(TEXT("second cast reaches a real true bite"), Session->GetSnapshot().Phase, ECatFishingPhase::TrueBiteWindow)) return false;
+					if (!TestTrue(TEXT("second hook selects a real fish"), Session->RequestHookFromAuthority(FGuid::NewGuid()).bCommitted)
+						|| !TestEqual(TEXT("second session enters actual HookedFight"), Session->GetSnapshot().Phase, ECatFishingPhase::HookedFight)) return false;
+					const auto IsNewGroupSolveReady = [&]()
+					{
+						for (const FPlayer& Player : {Caster, Relay, Anchor, Owner})
+						{
+							const auto* Movement = Cast<UCatCharacterMovementComponent>(Player.Character->GetCharacterMovement());
+							const FCatExternalTractionInput Input = Movement ? Movement->GetExternalTraction() : FCatExternalTractionInput{};
+							if (!Input.bGroupDriven || Input.bWaitingForGroupSolve || Input.bUnloadedMovement
+								|| Input.AimInputEpoch != Rod->GetCarrierConstraintState().AimInputEpoch) return false;
+						}
+						return true;
+					};
+					// Timer 启动先发布搏斗域，完整组速度要等实际固定步；不能以渲染帧数假定已经完成。
+					for (int32 Frame = 0; Frame < 50 && !Session->IsTerminal() && !IsNewGroupSolveReady(); ++Frame)
+						Wrapper.TickTestWorld(0.01f);
+					if (!TestTrue(TEXT("new fight has a complete current group solve before old EndPlay"), IsNewGroupSolveReady())) return false;
+					if (!TestTrue(TEXT("second runner is running before old EndPlay"), Session->IsFightRunnerRunning())
+						|| !TestTrue(TEXT("second runner publishes its own fight constraint"), Rod->GetCarrierConstraintState().bFightActive)) return false;
+					const uint32 CurrentAimEpoch = Rod->GetCarrierConstraintState().AimInputEpoch;
+					TestTrue(TEXT("new fight has a newer aim input epoch"), CurrentAimEpoch > PreviousAimEpoch);
+					const FVector CurrentGroupAnchor = Rod->GetGroupAnchorWorld();
+					ACatFishEncounterActor* CurrentFish = Session->GetSnapshot().FishEncounterActor.Get();
+					if (!TestTrue(TEXT("terminal old session is still alive until explicit destruction"), IsValid(PreviousSession))
+						|| !TestTrue(TEXT("destroying the old session executes its real EndPlay"), PreviousSession->Destroy())) return false;
+					TestTrue(TEXT("old EndPlay cannot clear the new fight constraint"), Rod->GetCarrierConstraintState().bFightActive);
+					TestEqual(TEXT("old EndPlay preserves the new fight aim epoch"), Rod->GetCarrierConstraintState().AimInputEpoch, CurrentAimEpoch);
+					TestTrue(TEXT("old EndPlay preserves the group anchor"), Rod->GetGroupAnchorWorld().Equals(CurrentGroupAnchor, 0.001));
+					for (const FPlayer& Player : {Caster, Relay, Anchor, Owner})
+					{
+						const auto* Movement = Cast<UCatCharacterMovementComponent>(Player.Character->GetCharacterMovement());
+						const FCatExternalTractionInput Input = Movement ? Movement->GetExternalTraction() : FCatExternalTractionInput{};
+						TestTrue(TEXT("old EndPlay preserves every current member's solved CMC binding"), Input.bGroupDriven && !Input.bWaitingForGroupSolve);
+						TestEqual(TEXT("surviving CMC binding keeps its source rod"), Input.SourceId, Rod->GetPresentationState().RodActorId);
+					}
+					for (int32 Frame = 0; Frame < 10 && !Session->IsTerminal(); ++Frame) Wrapper.TickTestWorld(0.01f);
+					TestTrue(TEXT("second fight continues after old session destruction"), Session->IsFightRunnerRunning() && !Session->IsTerminal());
+					TestEqual(TEXT("second fight keeps its fish after old EndPlay"), Session->GetSnapshot().FishEncounterActor.Get(), CurrentFish);
+					TestEqual(TEXT("old EndPlay cannot restart the new fight's aim epoch"), Rod->GetCarrierConstraintState().AimInputEpoch, CurrentAimEpoch);
+					FCatInventoryEndpointSnapshot NewLock;
+					TestEqual(TEXT("old EndPlay cannot release the second cast's original rod lock"), Owner.Equipment->ReadInventoryTransferEndpoint(
+						TEXT("ActiveUse"), OwnerRodId, NewLock), ECatDomainCommandError::InvalidPhase);
+					const auto* PrimaryMovement = Cast<UCatCharacterMovementComponent>(Caster.Character->GetCharacterMovement());
+					const FVector DesiredVelocityBeforeExhaustion = PrimaryMovement->GetExternalTraction().GroupDesiredVelocity;
+					if (!TestTrue(TEXT("real phase entry transitions the running fight to exhausted reeling"),
+						Session->EnterPhaseFromStateTree(ECatFishingPhase::ExhaustedReel).bApplied)) return false;
+					TestTrue(TEXT("exhaustion keeps the fight constraint active before the next fixed step"), Rod->GetCarrierConstraintState().bFightActive);
+					TestEqual(TEXT("exhaustion preserves the existing aim domain immediately"), Rod->GetCarrierConstraintState().AimInputEpoch, CurrentAimEpoch);
+					TestEqual(TEXT("exhaustion immediately removes previous fish pull acceleration"),
+						Rod->GetCarrierConstraintState().PullAccelerationCentimetersPerSecondSquared, 0.0f);
+					TestEqual(TEXT("exhaustion immediately removes previous fish torque"),
+						Rod->GetCarrierConstraintState().MaximumFishTorqueStrengthMeters, 0.0f);
+					TestTrue(TEXT("exhaustion retains the already solved group velocity until the next step"),
+						PrimaryMovement->GetExternalTraction().GroupDesiredVelocity.Equals(DesiredVelocityBeforeExhaustion, 0.001));
+					for (const FPlayer& Player : {Caster, Relay, Anchor, Owner})
+					{
+						const auto* Movement = Cast<UCatCharacterMovementComponent>(Player.Character->GetCharacterMovement());
+						TestTrue(TEXT("exhaustion does not interrupt any current CMC group solve"),
+							Movement->GetExternalTraction().bGroupDriven && !Movement->GetExternalTraction().bWaitingForGroupSolve
+							&& !Movement->GetExternalTraction().bUnloadedMovement);
+					}
+					for (int32 Frame = 0; Frame < 6 && !Session->IsTerminal(); ++Frame) Wrapper.TickTestWorld(0.01f);
+					TestTrue(TEXT("exhausted reeling continues through the next fixed step"), Session->IsFightRunnerRunning()
+						&& Session->GetSnapshot().Phase == ECatFishingPhase::ExhaustedReel && Rod->GetCarrierConstraintState().bFightActive);
+					TestEqual(TEXT("exhausted fixed step does not replace the aim domain"), Rod->GetCarrierConstraintState().AimInputEpoch, CurrentAimEpoch);
+					TestFalse(TEXT("exhausted fixed step does not select unloaded group movement"), PrimaryMovement->GetExternalTraction().bUnloadedMovement);
+					if (!HasAnyErrors()) AddInfo(TEXT("Event=fishing_old_session_endplay_preserved_new_fight_verified Members=4 Evidence=runtime_behavior"));
+					AddExpectedErrorPlain(TEXT("Outcome=ECatFishingOutcome::Cancelled"), EAutomationExpectedErrorFlags::Contains, 1);
+					Session->CancelFromAuthority(FGuid::NewGuid());
+					continue;
+				}
 				const uint32 PreviousControlEpoch = Rod->GetControlEpoch();
 				const UCatConditionSettings* Conditions = GetDefault<UCatConditionSettings>();
 				if (ExitScenario == 7 || ExitScenario == 8)

@@ -86,7 +86,7 @@ public:
 	/** 服务器权威固定模拟步长，属于运行时技术配置，不进入策划平衡资产。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.001")) double FixedFightStepSeconds = 0.05;
 
-	/** 一根部署鱼竿最多可占用的操作位；当前产品使用左右两位，数组/站位算法预留到更多协作者。 */
+	/** 一根部署鱼竿最多可占用的操作位；默认四人，加入时记录实际站位并共同移动。 */
 	UPROPERTY(Config, EditAnywhere, Category="Rod|Operators", meta=(ClampMin="1", ClampMax="8"))
 	int32 MaximumRodOperatorSlots = 4;
 	/** 左右第一对站位中心之间的距离；0 表示所有槽位暂时共用原 Stand 锚点。 */
