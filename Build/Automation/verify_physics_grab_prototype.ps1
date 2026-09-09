@@ -33,7 +33,35 @@ function Sync-ValidationSource {
     foreach ($Directory in @('Source', 'Config')) {
         $Destination = Join-Path $ValidationRoot $Directory
         New-Item -ItemType Directory -Path $Destination -Force | Out-Null
-        Copy-Item -Path (Join-Path $ProjectRoot "$Directory\*") -Destination $Destination -Recurse -Force
+        # 删除仅属于隔离源码副本的过期文件，避免旧类随增量构建重新进入运行链。
+        # 不枚举或删除共享 Content junction 中的内容。
+        $SourceDirectory = Join-Path $ProjectRoot $Directory
+        $DestinationRoot = [IO.Path]::GetFullPath($Destination) + [IO.Path]::DirectorySeparatorChar
+        foreach ($CopiedFile in Get-ChildItem -LiteralPath $Destination -File -Recurse) {
+            $ResolvedFile = [IO.Path]::GetFullPath($CopiedFile.FullName)
+            if (-not $ResolvedFile.StartsWith($DestinationRoot, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Stale source file escapes isolated source directory: $ResolvedFile"
+            }
+            $RelativeFile = [IO.Path]::GetRelativePath($Destination, $ResolvedFile)
+            if (-not (Test-Path -LiteralPath (Join-Path $SourceDirectory $RelativeFile) -PathType Leaf)) {
+                Remove-Item -LiteralPath $ResolvedFile -Force
+            }
+        }
+        foreach ($SourceFile in Get-ChildItem -LiteralPath $SourceDirectory -File -Recurse) {
+            $RelativeFile = [IO.Path]::GetRelativePath($SourceDirectory, $SourceFile.FullName)
+            $CopiedPath = Join-Path $Destination $RelativeFile
+            $HasChanged = -not (Test-Path -LiteralPath $CopiedPath -PathType Leaf)
+            if (-not $HasChanged) {
+                $HasChanged = (Get-FileHash -LiteralPath $SourceFile.FullName -Algorithm SHA256).Hash -ne
+                    (Get-FileHash -LiteralPath $CopiedPath -Algorithm SHA256).Hash
+            }
+            if ($HasChanged) {
+                New-Item -ItemType Directory -Path (Split-Path -Parent $CopiedPath) -Force | Out-Null
+                Copy-Item -LiteralPath $SourceFile.FullName -Destination $CopiedPath -Force
+                # 冻结副本编译期间主工作区可继续编辑；源时间可能早于旧 obj，内容变化必须使依赖失效。
+                (Get-Item -LiteralPath $CopiedPath).LastWriteTimeUtc = [DateTime]::UtcNow
+            }
+        }
     }
     Copy-Item -LiteralPath (Join-Path $ProjectRoot 'Catfishing.uproject') -Destination $ProjectFile -Force
     $Content = Join-Path $ValidationRoot 'Content'
@@ -73,7 +101,7 @@ if ($Mode -eq 'BuildEditor' -or $Mode -eq 'BuildGame') {
     $Target = if ($Mode -eq 'BuildEditor') { 'CatfishingEditor' } else { 'Catfishing' }
     $Log = Get-FreshEvidencePath $Mode 'log'
     # Source may be copied while another task completes a header edit; regenerate UHT line macros for this snapshot.
-    & $BuildTool $Target Win64 Development $ProjectFile -WaitMutex -NoHotReload -NoUBA -ForceHeaderGeneration "-Log=$Log"
+    & $BuildTool $Target Win64 Development $ProjectFile -WaitMutex -NoHotReload -NoHotReloadFromIDE -NoUBA -ForceHeaderGeneration "-Log=$Log"
     if ($LASTEXITCODE -ne 0) { throw "$Target failed: exit=$LASTEXITCODE log=$Log" }
     Write-Host "PHYSICS_GRAB_BUILD_PASS Target=$Target Log=$Log"
     exit 0
