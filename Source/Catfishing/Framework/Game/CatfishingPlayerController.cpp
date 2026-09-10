@@ -1,4 +1,6 @@
 #include "Framework/Game/CatfishingPlayerController.h"
+#include "Framework/Game/CatfishingGameState.h"
+#include "Components/InputComponent.h"
 
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Framework/Game/CatfishingPlayerState.h"
@@ -15,6 +17,7 @@
 #include "Collection/CatRunImprintService.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
+#include "Engine/World.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
@@ -58,6 +61,153 @@ UCatFishingCommandComponent* ACatfishingPlayerController::GetFishingCommandCompo
 	return FishingCommandComponent;
 }
 
+// 帧流程：先消费新快照并刷新遮罩，使本帧输入看到最新锁；父类仍负责正常 Controller、相机和网络生命周期。
+void ACatfishingPlayerController::Tick(const float DeltaSeconds)
+{
+	ReconcileDayTransition();
+	Super::Tick(DeltaSeconds);
+}
+
+// 锁查询流程：旅行清理后不再接受旧 World 的快照；其他时候直接读取当前 GameState，不用动画超时推断权威解锁。
+bool ACatfishingPlayerController::IsDayTransitionInputBlocked() const
+{
+	const UWorld* World = GetWorld();
+	if (!World || DayTransitionTravelWorld.Get() == World) return false;
+	const ACatfishingGameState* State = World->GetGameState<ACatfishingGameState>();
+	return State && State->GetRunPublicState().DayTransition.bActive
+		&& !State->GetRunPublicState().DayTransition.bFailed;
+}
+
+// 调和流程：
+// 1. 旧旅行 World 不再处理；GameState 替换时清理旧绑定，再订阅新的公开快照，晚到依赖由下一帧接入。
+// 2. 输入与服务器移动只跟随 active/failed；重复通知不叠锁，换 Pawn 时归还旧组件并接管新组件。
+// 3. 仅 owning client 把服务器秒数和快照交给独立 UI；这里不提交供品、不推进 Run、不开始新天倒计时。
+void ACatfishingPlayerController::ReconcileDayTransition()
+{
+	UWorld* World = GetWorld();
+	if (!World || DayTransitionTravelWorld.Get() == World) return;
+	ACatfishingGameState* State = World->GetGameState<ACatfishingGameState>();
+	if (!State)
+	{
+		ClearDayTransition();
+		return;
+	}
+	if (DayTransitionGameState.Get() != State)
+	{
+		ClearDayTransition();
+		DayTransitionGameState = State;
+		DayTransitionStateHandle = State->OnRunPublicStateChanged.AddUObject(this, &ThisClass::ReconcileDayTransition);
+	}
+	SetDayTransitionLocked(State->GetRunPublicState().DayTransition.bActive
+		&& !State->GetRunPublicState().DayTransition.bFailed);
+	if (IsLocalController())
+	{
+		ULocalPlayer* LocalPlayer = GetLocalPlayer();
+		UCatLocalPlayerUISubsystem* UI = LocalPlayer ? LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
+		if (UI)
+		{
+			UI->RefreshDayTransition(this, State->GetRunPublicState().DayTransition, State->GetServerWorldTimeSeconds());
+		}
+	}
+}
+
+// 锁配对流程：
+// 1. 服务器先归还已换走或已结束的移动组件；只有组件仍处于本功能写入的 None 模式才恢复原模式和自定义编号。
+// 2. 新组件保存原模式后停止并禁用移动；客户端只用输入锁，绝不写 CharacterMovement 模式。
+// 3. 首次加锁申请一层移动/视角忽略计数，清跳跃和疾跑，并为本地输入压入专属阻断组件。
+// 4. 解锁只归还本层计数和本组件；状态未变时不重复申请，日志只记录边沿。
+void ACatfishingPlayerController::SetDayTransitionLocked(const bool bLocked)
+{
+	ACharacter* ControlledCharacter = Cast<ACharacter>(GetPawn());
+	UCharacterMovementComponent* Movement = HasAuthority() && bLocked && ControlledCharacter ? ControlledCharacter->GetCharacterMovement() : nullptr;
+	if (DayTransitionMovement.Get() != Movement)
+	{
+		if (UCharacterMovementComponent* Previous = DayTransitionMovement.Get())
+		{
+			if (Previous->MovementMode == MOVE_None)
+			{
+				Previous->SetMovementMode(static_cast<EMovementMode>(DayTransitionSavedMovementMode), DayTransitionSavedCustomMode);
+			}
+		}
+		DayTransitionMovement = Movement;
+		if (Movement)
+		{
+			DayTransitionSavedMovementMode = Movement->MovementMode;
+			DayTransitionSavedCustomMode = Movement->CustomMovementMode;
+			Movement->StopMovementImmediately();
+			Movement->DisableMovement();
+		}
+	}
+	if (bDayTransitionLocked == bLocked) return;
+	bDayTransitionLocked = bLocked;
+	SetIgnoreMoveInput(bLocked);
+	SetIgnoreLookInput(bLocked);
+	if (bLocked)
+	{
+		if (ControlledCharacter)
+		{
+			ControlledCharacter->StopJumping();
+			ControlledCharacter->ConsumeMovementInputVector();
+			// 本地先清惯性，移动模式仍只由服务器写入，避免复制到达前继续滑行。
+			if (UCharacterMovementComponent* CharacterMovement = ControlledCharacter->GetCharacterMovement())
+			{
+				CharacterMovement->StopMovementImmediately();
+			}
+		}
+		SetSprintRequested(false, false);
+		RotationInput = FRotator::ZeroRotator;
+		if (IsLocalController())
+		{
+			DayTransitionInputBlocker = NewObject<UEnhancedInputComponent>(this);
+			DayTransitionInputBlocker->Priority = MAX_int32;
+			DayTransitionInputBlocker->bBlockInput = true;
+			DayTransitionInputBlocker->RegisterComponent();
+			PushInputComponent(DayTransitionInputBlocker);
+		}
+	}
+	else if (DayTransitionInputBlocker)
+	{
+		PopInputComponent(DayTransitionInputBlocker);
+		DayTransitionInputBlocker->DestroyComponent();
+		DayTransitionInputBlocker = nullptr;
+	}
+	const ACatfishingGameState* State = DayTransitionGameState.Get();
+	const FCatRunDayTransition* Transition = State ? &State->GetRunPublicState().DayTransition : nullptr;
+	UE_LOG(LogCatRun, Log,
+		TEXT("Event=day_transition_operation_lock RequestId=%s Locked=%d Committed=%d Failed=%d TargetDay=%d World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s Pawn=%s"),
+		Transition ? *Transition->RequestId.ToString() : TEXT("None"), bLocked,
+		Transition && Transition->bCommitted, Transition && Transition->bFailed, Transition ? Transition->TargetDayIndex : INDEX_NONE,
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()),
+		*GetNameSafe(this), *GetNameSafe(GetPawn()));
+}
+
+// 清理流程：先从原 GameState 移除确切订阅，再归还本功能锁和本地表现；远端服务器 Controller 不接触 LocalPlayer UI。
+void ACatfishingPlayerController::ClearDayTransition()
+{
+	if (ACatfishingGameState* State = DayTransitionGameState.Get())
+	{
+		State->OnRunPublicStateChanged.Remove(DayTransitionStateHandle);
+	}
+	DayTransitionStateHandle.Reset();
+	SetDayTransitionLocked(false);
+	DayTransitionGameState.Reset();
+	if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
+	{
+		if (UCatLocalPlayerUISubsystem* UI = LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>())
+		{
+			UI->ClearDayTransition();
+		}
+	}
+}
+
+// 旅行流程：先记住将离开的 World，清理翻天订阅和锁，再交给父类广播旅行；后续旧世界帧不能重新创建遮罩。
+void ACatfishingPlayerController::PreClientTravel(const FString& PendingURL, const ETravelType TravelType, const bool bIsSeamlessTravel)
+{
+	DayTransitionTravelWorld = GetWorld();
+	ClearDayTransition();
+	Super::PreClientTravel(PendingURL, TravelType, bIsSeamlessTravel);
+}
+
 void ACatfishingPlayerController::OnPossess(APawn* InPawn)
 {
 	// 接管流程：父类先完成 Pawn 所有权切换，并经 SetPawn 统一刷新 Ability 输入路由；随后只清 Controller 自己的本地钓鱼命令和疾跑状态。
@@ -84,24 +234,27 @@ void ACatfishingPlayerController::OnRep_Pawn()
 	ApplySprintSpeed(GetPawn(), false);
 }
 
-// Pawn 写入流程：先保留 PlayerController 引擎内部的 SetPawn 行为，再按最终 Pawn 刷新 Ability 输入路由，最后让 owning client 的 LocalPlayer UI 消费当前身体。
+// Pawn 写入流程：换身体前归还旧身体的翻天锁；父类写入后刷新 Ability 路由和本地 UI，再按当前服务器快照锁定新身体。
 void ACatfishingPlayerController::SetPawn(APawn* InPawn)
 {
+	if (GetPawn() != InPawn) SetDayTransitionLocked(false);
 	Super::SetPawn(InPawn);
 	if (AbilityInputBindingComponent)
 	{
 		AbilityInputBindingComponent->RefreshForPawn(InPawn);
 	}
 	NotifyLocalPlayerUISubsystemPawnChanged();
+	ReconcileDayTransition();
 }
 
 // 本地启动流程：父类完成 Actor 生命周期后，幂等安装本 Controller 的玩法输入层；
-// 如果本机 durable Profile 已可读，再把装备解锁摘要投影给服务器 PlayerState，缺失时保持服务器 fail-closed。
+// 如果本机 durable Profile 已可读，再把装备解锁摘要投影给服务器；最后消费翻天快照，缺失时由 Tick 补齐。
 void ACatfishingPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 	ApplyInputMappingContext();
 	PublishProfileEquipmentUnlocksIfAvailable();
+	ReconcileDayTransition();
 }
 
 // 输入绑定流程：只接受项目配置的 EnhancedInputComponent；物理移动、视角、跳跃和疾跑绑定随当前 InputComponent 生命周期销毁，不由 Controller 手动解绑。
@@ -207,9 +360,12 @@ void ACatfishingPlayerController::OnUnPossess()
 	Super::OnUnPossess();
 }
 
-// 输入清理流程：先恢复持竿转向和本 Controller 持有的输入/钓鱼临时状态，再成对撤销 Mapping Context；最后交还父类销毁，不清理其他本地输入层。
+// 输入清理流程：先解绑翻天并归还专属锁，再恢复持竿转向和输入/钓鱼状态，撤销自己的 Mapping Context，最后交还父类销毁。
 void ACatfishingPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	// 父类结束流程可能再次写 Pawn；禁止该回调重新订阅即将销毁的 World。
+	DayTransitionTravelWorld = GetWorld();
+	ClearDayTransition();
 	RestoreHeldRodFacingMode();
 	if (AbilityInputBindingComponent)
 	{
@@ -294,9 +450,10 @@ void ACatfishingPlayerController::UpdateRotation(const float DeltaTime)
 	ApplyHeldRodFacingMode(*ControlledCat, *Movement, UCatFishingCameraComponent::ResolveFacingRotation(this));
 }
 
-// 移动输入流程：以当前可见水平朝向为基准，Y 驱动前后、X 驱动左右；Pawn 缺失时不制造旁路移动状态。
+// 移动输入流程：先拒绝翻天操作；其余以可见水平朝向转换前后左右输入，Pawn 缺失时不制造旁路状态。
 void ACatfishingPlayerController::Move(const FInputActionValue& Value)
 {
+	if (IsDayTransitionInputBlocked()) return;
 	APawn* ControlledPawn = GetPawn();
 	if (!ControlledPawn)
 	{
@@ -312,17 +469,19 @@ void ACatfishingPlayerController::Move(const FInputActionValue& Value)
 	ControlledPawn->AddMovementInput(RightDirection, Movement.X);
 }
 
-// 视角输入流程：输入资产只提供二维意图，轴反转、缩放和死区由 Mapping Context 的 Modifier 决定。
+// 视角输入流程：先拒绝翻天操作，再将经过 Mapping Context 反转、缩放和死区处理的二维意图写入视角。
 void ACatfishingPlayerController::Look(const FInputActionValue& Value)
 {
+	if (IsDayTransitionInputBlocked()) return;
 	const FVector2D LookAxis = Value.Get<FVector2D>();
 	AddYawInput(LookAxis.X);
 	AddPitchInput(LookAxis.Y);
 }
 
-// 跳跃按下流程：只对当前已占有的 Character 生效；持竿操作时清掉跳跃保持态并拒绝起跳，普通 Pawn 不伪造跳跃实现。
+// 跳跃按下流程：先拒绝翻天操作；只对当前 Character 生效，持竿时清保持态并拒绝起跳，普通 Pawn 不伪造实现。
 void ACatfishingPlayerController::StartJump()
 {
+	if (IsDayTransitionInputBlocked()) return;
 	if (ACharacter* ControlledCharacter = Cast<ACharacter>(GetPawn()))
 	{
 		if (UCatFishingCameraComponent::FindHeldRodOperatedBy(this))
@@ -343,9 +502,10 @@ void ACatfishingPlayerController::StopJump()
 	}
 }
 
-// 疾跑按下流程：本地立即应用以保持操控响应，同时仅向 authority 发送布尔意图，客户端不能提交任意速度。
+// 疾跑按下流程：先拒绝翻天操作，再本地应用并向 authority 发送布尔意图，客户端不能提交任意速度。
 void ACatfishingPlayerController::StartSprint()
 {
+	if (IsDayTransitionInputBlocked()) return;
 	SetSprintRequested(true, true);
 }
 
@@ -448,9 +608,10 @@ void ACatfishingPlayerController::RestoreHeldRodFacingMode()
 	HeldRodFacingMovement.Reset();
 }
 
-// authority 疾跑流程：客户端只能选择开关，服务器使用自身类默认速度重新应用并参与权威移动校验。
+// authority 疾跑流程：翻天期间拒绝迟到的开启意图但接受释放；最终速度继续读取服务器类默认值。
 void ACatfishingPlayerController::ServerSetSprinting_Implementation(const bool bNewSprinting)
 {
+	if (bNewSprinting && IsDayTransitionInputBlocked()) return;
 	SetSprintRequested(bNewSprinting, false);
 }
 
@@ -811,13 +972,21 @@ void ACatfishingPlayerController::ServerUseInventoryItemFromHost_Implementation(
 // 交互 RPC 流程：先过玩法 gate、RequestId、World 和接口校验，再让目标 Actor 按自己的 Interact 实现处理；失败分支保持无副作用返回。
 void ACatfishingPlayerController::ServerRequestInteraction_Implementation(AActor* Target, const FGuid RequestId)
 {
-	if (!CanForwardGameplayCommand() || !RequestId.IsValid() || !IsValid(Target)
-		|| Target->GetWorld() != GetWorld()
-		|| !Target->GetClass()->ImplementsInterface(UCatInteractable::StaticClass())
-		|| !ICatInteractable::Execute_CanInteract(Target, this))
+	// 服务器先记录命令门与目标校验，再执行同一接口；拒绝也落盘，避免客户端只看到按键没有结果。
+	const bool bGameplayOpen = CanForwardGameplayCommand();
+	const bool bValidTarget = IsValid(Target) && Target->GetWorld() == GetWorld()
+		&& Target->GetClass()->ImplementsInterface(UCatInteractable::StaticClass());
+	const bool bAccepted = bGameplayOpen && RequestId.IsValid() && bValidTarget
+		&& ICatInteractable::Execute_CanInteract(Target, this);
+	if (!bAccepted)
 	{
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=interaction_request_rejected World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Target=%s RequestId=%s GameplayOpen=%d ValidTarget=%d ValidRequest=%d"),
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()), *GetName(),
+			*GetNameSafe(Target), *RequestId.ToString(), bGameplayOpen, bValidTarget, RequestId.IsValid());
 		return;
 	}
+	UE_LOG(LogCatfishing, Log, TEXT("Event=interaction_request_accepted World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Target=%s RequestId=%s"),
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()), *GetName(), *GetNameSafe(Target), *RequestId.ToString());
 	ICatInteractable::Execute_Interact(Target, this, RequestId);
 }
 
@@ -975,11 +1144,12 @@ void ACatfishingPlayerController::ServerPlaceProtectionSign_Implementation(const
 }
 
 // Native 输入分流流程：
-// 1. 只处理项目约定的交互标签，其他 Native 标签保持无副作用返回。
+// 1. 先拒绝翻天操作，再筛选项目交互标签，避免本地接口先打开库存或发起 Ability；其他标签无副作用返回。
 // 2. IA_Interact 只进入 PlayerController 持有的唯一 TargetingComponent；提示 UI 只展示当前目标。
 // 3. TargetingComponent 对当前 Actor 调用 ICatInteractable，商店、营地公共仓库、鱼护、鱼缸和死鱼各自在 Actor 实现中处理。
 void ACatfishingPlayerController::NativeInputTagPressed(const FGameplayTag InputTag)
 {
+	if (IsDayTransitionInputBlocked()) return;
 	if (!InputTag.MatchesTagExact(CatInteractionTags::Input_Interact))
 	{
 		return;

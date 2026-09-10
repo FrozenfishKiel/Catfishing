@@ -11,7 +11,7 @@ class CATFISHINGEDITOR_API UCatRunStateTreeAuthoringLibrary : public UBlueprintF
 	GENERATED_BODY()
 
 public:
-	/** 重建并编译默认一局流程树；由编辑器命令或蓝图工具调用，成功返回 true 并把白天、普通夜、失败结算夜和局末收口写回同一棵 StateTree，创建、编译或保存失败时返回 false。 */
+	/** 重建并编译默认一局流程树；成功后保存白天、普通夜、毕业夜和归零直接结束的拓扑，创建、编译或保存失败时返回 false。 */
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Run")
 	static bool CreateOrUpdateDefaultRunFlowStateTree();
 };

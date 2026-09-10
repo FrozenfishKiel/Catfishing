@@ -14,7 +14,7 @@ enum class ECatRunPhase : uint8
 	DayActive,
 	/** 白天结束后的普通夜晚；无计时，等待祭坛供品锁定与结算后再进入下一天或终局。 */
 	NormalNight,
-	/** 夜晚结算后世界进度归零的失败结算夜；无计时，必须等待 SettlementComplete。 */
+	/** 历史失败结算夜的序列化枚举值；保留旧资产数值与诊断入口，正式 RunFlow 归零直接进入 Ending。 */
 	FailureSettlementNight,
 	/** 夜晚结算后世界进度达到 100 的成功结算夜；默认策略未裁时不可进入。 */
 	SuccessSettlementNight,
@@ -30,7 +30,7 @@ enum class ECatRunEndReason : uint8
 {
 	/** 当前尚无终局原因。 */
 	None,
-	/** 夜晚供品结算后世界进度归零，并已由 StateTree 进入失败结算夜。 */
+	/** 夜晚供品结算后世界进度归零；正式 StateTree 据此直接进入局末收口。 */
 	WorldProgressDepleted,
 	/** 成功终局策略已明确并完成相应结算。 */
 	Success,
@@ -128,6 +128,53 @@ enum class ECatEnvironmentTimeOfDay : uint8
 	Dusk
 };
 
+/** 翻天遮罩的服务器时间轴；GameMode 发布开始、结算与结束，客户端只渲染并配对控制操作锁。 */
+USTRUCT(BlueprintType)
+struct FCatRunDayTransition
+{
+	GENERATED_BODY()
+
+	/** 本次全员确认产生的唯一请求；消费、GAS、UI 和诊断共同使用，重复复制不会重播另一轮过场。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid RequestId;
+
+	/** 过渡是否仍由服务器持有；为 false 时本地必须移除遮罩并释放本轮操作锁。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bActive = false;
+
+	/** 黑屏内的供品和 GAS 提交是否成功；客户端只在该事实到达后显示目标天数或终局结果。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bCommitted = false;
+
+	/** 本次过渡是否被拒绝或中止；失败提示可以保留，但不能继续锁住玩家。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bFailed = false;
+
+	/** 全员开始淡出的服务器世界时间，单位秒；客户端与 GameState 的服务器时钟比较得到动画进度。 */
+	UPROPERTY(BlueprintReadOnly)
+	double StartServerTimeSeconds = 0.0;
+
+	/** 场景变黑所需秒数；祭坛配置由服务器冻结后发布，客户端不自行读取关卡默认值。 */
+	UPROPERTY(BlueprintReadOnly)
+	float FadeOutSeconds = 0.4f;
+
+	/** 黑屏标题停留秒数；成功和失败终局都沿用同一有界过场，不等待客户端动画回执。 */
+	UPROPERTY(BlueprintReadOnly)
+	float HoldSeconds = 1.2f;
+
+	/** 黑屏恢复场景所需秒数；结束时服务器释放玩法锁，客户端也须配对释放自己的输入锁。 */
+	UPROPERTY(BlueprintReadOnly)
+	float FadeInSeconds = 0.4f;
+
+	/** 本次结果实际进入的天数；只有普通翻天递增，毕业或失败保持原天数。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 TargetDayIndex = 0;
+
+	/** 服务器提交结果的可读说明；用于普通天数标题、毕业、失败或依赖错误，不由客户端推导结算。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText Message;
+};
+
 /** Run 唯一写入的阶段与时钟快照；Environment、Fishing 和 UI 只能消费，不得反向修改。 */
 USTRUCT(BlueprintType)
 struct FCatRunPhaseSnapshot
@@ -223,6 +270,10 @@ struct FCatRunPublicState
 	UPROPERTY(BlueprintReadOnly)
 	FCatRunPhaseSnapshot Phase;
 
+	/** 当前或最近一次翻天过渡事实；GameMode 唯一写入，UI 与 Controller 只消费复制值控制遮罩和操作锁。 */
+	UPROPERTY(BlueprintReadOnly)
+	FCatRunDayTransition DayTransition;
+
 	/** 与当前 Run Revision 对齐的环境结果；不重复保存 Phase。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatEnvironmentSnapshot Environment;
@@ -235,7 +286,7 @@ struct FCatRunPublicState
 	UPROPERTY(BlueprintReadOnly)
 	int32 DailyOfferingTarget = 0;
 
-	/** 当前世界进度，范围 0 到 100；0 进入失败结算夜，100 在结算后进入成功结算夜。 */
+	/** 当前世界进度，范围 0 到 100；0 直接结束本局，100 在结算后进入成功结算夜。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 WorldProgress = 10;
 

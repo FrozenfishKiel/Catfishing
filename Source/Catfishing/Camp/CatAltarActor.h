@@ -1,0 +1,83 @@
+#pragma once
+
+#include "CoreMinimal.h"
+#include "GameFramework/Actor.h"
+#include "Interaction/CatInteractable.h"
+#include "Framework/Core/CatRunContracts.h"
+#include "CatAltarActor.generated.h"
+
+class ACatFishPickupActor;
+class UStaticMeshComponent;
+
+/** 营地献祭交互点；只拥有本夜确认和冻结供品，GAS 与阶段仍由 GameMode 裁决。 */
+UCLASS()
+class CATFISHING_API ACatAltarActor : public AActor, public ICatInteractable
+{
+	GENERATED_BODY()
+public:
+	/** 建立可在关卡配置外观的交互实体，以及服务器低频到场检查。 */
+	ACatAltarActor();
+	/** 复制确认人数和拒绝原因，客户端不保存另一套参与者名单。 */
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+	/** 夜间检查确认者是否仍在场；离开、倒地或换天会移除对应确认。 */
+	virtual void Tick(float DeltaSeconds) override;
+	/** 祭坛销毁时统一收口其过渡；提交前放弃供品，提交后保留结算并解除锁定，清除 GameMode 的失效引用。 */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	/** 仅允许普通夜晚、非倒地且处于交互距离内的玩家确认。 */
+	virtual bool CanInteract_Implementation(AController* RequestingController) const override;
+	/** 祭坛的玩家可见提示；现有 E 键 UI 读取固定动作名、确认计数和拒绝原因，不自行维护人数。 */
+	virtual FText GetInteractionPrompt_Implementation() const override;
+	/** 沿用项目通用交互距离，不把八米到场范围当作远程按键权限。 */
+	virtual double GetInteractionRadius_Implementation() const override;
+	/** 客户端只转发意图；服务器去重玩家确认，全员到场后请求唯一 Run 过渡。 */
+	virtual bool Interact_Implementation(AController* RequestingController, FGuid RequestId) override;
+
+	/** 供品集合固定在过渡开始时；仅服务器调用，输出来自落地鱼事实而非客户端数量。 */
+	bool FreezeOffering(AController* Controller, FGuid RequestId, FCatOfferingSettlementCommand& OutCommand, FText& OutError);
+	/** 黑屏提交前复核同一批鱼；不消费、不修改 GAS，失败时返回可展示原因。 */
+	bool ValidateFrozenOffering(AController* Controller, FGuid RequestId, FText& OutError);
+	/** GAS 接受后消费已复核的同一批供品；只由 GameMode 的同步提交段调用。 */
+	bool ConsumeFrozenOffering(AController* Controller, FGuid RequestId);
+	/** 清除本轮确认及供品引用；失败说明保留给交互提示，不建立重试状态机。 */
+	void ResetOffering(const FText& Error = FText::GetEmpty());
+
+	/** 摆鱼范围，单位厘米；设计者按祭坛实例配置，服务器只收范围内地面鱼。 */
+	UPROPERTY(EditAnywhere, Category="Altar", meta=(ClampMin="1", Units="cm"))
+	float OfferingRadiusCentimeters = 200.0f;
+	/** 参与者必须到场的距离，单位厘米；走出此范围会撤销此前确认。 */
+	UPROPERTY(EditAnywhere, Category="Altar", meta=(ClampMin="1", Units="cm"))
+	float AttendanceRadiusCentimeters = 800.0f;
+	/** 淡出持续秒数；GameMode 在开始时冻结配置，完全遮黑后结算。 */
+	UPROPERTY(EditAnywhere, Category="Altar|Transition", meta=(ClampMin="0.01", Units="s"))
+	float FadeOutSeconds = 0.4f;
+	/** 结算标题停留秒数；不计入新一天的可玩时间。 */
+	UPROPERTY(EditAnywhere, Category="Altar|Transition", meta=(ClampMin="0.01", Units="s"))
+	float HoldSeconds = 1.2f;
+	/** 恢复场景持续秒数；结束后才释放操作门并启动白天计时。 */
+	UPROPERTY(EditAnywhere, Category="Altar|Transition", meta=(ClampMin="0.01", Units="s"))
+	float FadeInSeconds = 0.4f;
+
+private:
+	/** 重新收集本房间非倒地 Active 玩家并剔除失效确认；返回全员已确认且非空。 */
+	bool RefreshConfirmations();
+	/** 可由关卡设置雕像网格的根组件；负责通用交互射线命中，不生成替代美术。 */
+	UPROPERTY(VisibleAnywhere, Category="Altar")
+	TObjectPtr<UStaticMeshComponent> StatueMesh;
+	/** 已确认且尚未离场的控制器；只有服务器写入，换天或提交后清空。 */
+	TSet<TWeakObjectPtr<AController>> ConfirmedPlayers;
+	/** 当前确认属于哪一夜；服务器用天数清除上一轮记录，客户端不读取。 */
+	int32 ConfirmationDay = 0;
+	/** 客户端展示的已确认人数；来自服务器有效确认集合，不能驱动阶段。 */
+	UPROPERTY(Replicated)
+	int32 ConfirmedCount = 0;
+	/** 当前房间应参与人数；倒地和已退出玩家被服务器排除，未到场者仍须等待。 */
+	UPROPERTY(Replicated)
+	int32 EligibleCount = 0;
+	/** 最近一次被拒绝的原因；由服务器写入并复制，新的有效确认会清除。 */
+	UPROPERTY(Replicated)
+	FText LastError;
+	/** 同一批供品的关联标识；由冻结入口写入，消费与清理必须匹配它。 */
+	FGuid OfferingRequestId;
+	/** 过渡开始时范围内落地鱼的弱引用；不拥有鱼生命周期，也不复制或建立新库存。 */
+	TArray<TWeakObjectPtr<ACatFishPickupActor>> FrozenFish;
+};

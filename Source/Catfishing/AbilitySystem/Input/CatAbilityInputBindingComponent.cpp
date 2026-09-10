@@ -3,6 +3,7 @@
 #include "AbilitySystem/Config/CatAbilityInputConfig.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "EnhancedInputComponent.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/Pawn.h"
 
 UCatAbilityInputBindingComponent::UCatAbilityInputBindingComponent()
@@ -60,9 +61,15 @@ void UCatAbilityInputBindingComponent::RefreshForPawn(APawn* Pawn)
 
 void UCatAbilityInputBindingComponent::ProcessAbilityInput(const float DeltaTime, const bool bGamePaused)
 {
-	// 帧处理流程：只把当前帧时长和暂停状态交给已路由 ASC；没有 Pawn/ASC 时不缓存输入，等待下一次 RefreshForPawn 建立目标。
+	// 帧处理流程：翻天期间清掉已路由 ASC 的按住和边沿状态并跳过激活；其余把时长和暂停交给 ASC，目标缺失时等待 Pawn 路由。
 	if (UCatAbilitySystemComponent* AbilitySystem = RoutedAbilitySystem.Get())
 	{
+		const ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
+		if (Controller && Controller->IsDayTransitionInputBlocked())
+		{
+			AbilitySystem->ResetAbilityInput();
+			return;
+		}
 		AbilitySystem->ProcessAbilityInput(DeltaTime, bGamePaused);
 	}
 }

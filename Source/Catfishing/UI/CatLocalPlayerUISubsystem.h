@@ -23,6 +23,8 @@ class UCatInventoryWidget;
 class UCatLakeMainMenuController;
 class UCatLakeMainMenuWidget;
 class UUserWidget;
+class UCatDayTransitionWidget;
+struct FCatRunDayTransition;
 enum class ECatHUDAction : uint8;
 
 /** 每个 LocalPlayer 的 UI 生命周期协调器；只装配本地玩家拥有的 HUD、背包和交互提示，不预建商店或聚合业务页面。 */
@@ -60,7 +62,23 @@ public:
 	/** owning client 的 PlayerController 在 Pawn 或输入链就绪后调用；子系统据此重新对齐本地 HUD、背包和交互提示。 */
 	void RefreshPlayerLakeUIForController(APlayerController* Controller);
 
+	/** Controller 传入公开快照与同步服务器秒数；关闭操作页面并管理独立翻天 UI，不改变 Online loading 或 Run。 */
+	void RefreshDayTransition(APlayerController* Controller, const FCatRunDayTransition& Transition, double ServerTimeSeconds);
+
+	/** Controller 退出、旅行或 LocalPlayer 换绑时移除翻天 UI 和失败停留记忆；不释放其他功能的锁。 */
+	void ClearDayTransition();
+
 private:
+	/** 本玩家的原生翻天遮罩；RefreshDayTransition 创建和渲染，ClearDayTransition 或正常结束移除。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatDayTransitionWidget> DayTransitionWidget;
+
+	/** 已展示过失败反馈的请求键；刷新时写入，避免同一失败快照每帧重开两秒提示，旅行清空。 */
+	FGuid LastDayTransitionFailureId;
+
+	/** 失败提示消失的本机单调时间，单位秒；首次收到失败时写入，刷新读取，不参与服务器锁或日计时。 */
+	double DayTransitionFailureUntilSeconds = 0.0;
+
 	/** 全局 Loading WBP 的一次渲染快照；它把“正在等什么”和“是否显示进度”分开，避免 View 自行编造加载状态。 */
 	struct FCatGlobalLoadingPresentation
 	{

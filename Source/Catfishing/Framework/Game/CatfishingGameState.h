@@ -40,7 +40,8 @@ public:
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	/** 仅允许 authority GameMode 写入组合公开事实；每次写入都会触发网络更新。 */
 	void SetRunPublicStateFromAuthority(const FCatRunPublicState& NewState);
-	/** 提供服务器最终值或客户端最近复制值，调用方据此渲染一局状态；返回 const 引用保证外部不能绕过 GameMode 写口推进 Run。 */
+	/** 提供服务器最终值或客户端最近复制值，供 C++、蓝图表现和编辑器检查读取；原生调用返回 const 引用，反射调用只取得值，不开放 Run 写口。 */
+	UFUNCTION(BlueprintPure, Category="Catfishing|Run")
 	const FCatRunPublicState& GetRunPublicState() const;
 	/** 仅允许 authority Social 服务发布最近一次求助；它不启动任务或自动加入 Fishing。 */
 	void SetHelpSignalFromAuthority(const FCatHelpSignalSnapshot& NewSignal);

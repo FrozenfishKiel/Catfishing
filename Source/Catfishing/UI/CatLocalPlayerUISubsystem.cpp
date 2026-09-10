@@ -1,4 +1,6 @@
 #include "UI/CatLocalPlayerUISubsystem.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "UI/Run/CatDayTransitionWidget.h"
 
 #include "Character/CatCharacter.h"
 #include "Blueprint/UserWidget.h"
@@ -122,7 +124,7 @@ void UCatLocalPlayerUISubsystem::Initialize(FSubsystemCollectionBase& Collection
 	RefreshFrontendForCurrentController();
 }
 
-// 销毁流程：先释放 HUD、背包和唯一交互提示模块；再解绑 Controller、移除 Frontend Root 与 Online 快照订阅。
+// 销毁流程：先释放 HUD、背包和交互提示模块；Controller 解绑时移除翻天表现，最后清理 Frontend Root 与 Online 快照。
 void UCatLocalPlayerUISubsystem::Deinitialize()
 {
 	DetachPlayerLakeUI();
@@ -184,19 +186,23 @@ void UCatLocalPlayerUISubsystem::PlayerControllerChanged(APlayerController* NewC
 	RefreshFrontendForCurrentController();
 }
 
-// 背包切换流程：窗口控制器管理视口与输入；库存数据更新由组件自己的 Model 通知对应 WBP。
+// 背包切换流程：先拒绝翻天期间的 HUD 调用，再由窗口控制器管理视口与输入；库存仍由自己的 Model 通知。
 void UCatLocalPlayerUISubsystem::ToggleInventory()
 {
+	const ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
+	if (Controller && Controller->IsDayTransitionInputBlocked()) return;
 	if (InventoryPageController)
 	{
 		InventoryPageController->ToggleInventory();
 	}
 }
 
-// 交互对象只提供一份库存和指定 WBP；本地窗口控制器负责创建页面，Model 归库存组件自身所有。
+// 打开流程：先拒绝翻天中的交互请求，再验证页面控制器；有效时用对象提供的库存和 WBP 打开页面，不转移 Model 所有权。
 bool UCatLocalPlayerUISubsystem::OpenInventory(UCatInventoryComponent* Inventory,
     const TSubclassOf<UCatInventoryWidget> InventoryViewClass)
 {
+	const ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
+	if (Controller && Controller->IsDayTransitionInputBlocked()) return false;
     if (!InventoryPageController)
     {
         UE_LOG(LogCatUI, Warning, TEXT("Event=ui_inventory_open_rejected Reason=PageControllerUnavailable ViewClass=%s"),
@@ -210,6 +216,116 @@ bool UCatLocalPlayerUISubsystem::OpenInventory(UCatInventoryComponent* Inventory
 bool UCatLocalPlayerUISubsystem::IsInventoryOpen() const
 {
 	return InventoryPageController ? InventoryPageController->IsInventoryOpen() : false;
+}
+
+// 翻天表现流程：
+// 1. 只接收本 LocalPlayer 的当前 Controller；锁定期关闭库存和菜单，切断格子直接 use 与模态按键入口。
+// 2. 用服务器时间计算淡出、停留、淡入；迟到或超时快照的黑色透明度为零，操作阻断仍服从服务器 active。
+// 3. 提交后才展示服务器 Message 或目标天数；失败只按 RequestId 开启一次两秒提示，且不占用操作锁。
+// 4. 仅在有锁或提示时创建原生 UI；普通结束移除视图但保留失败去重键，旅行则由 ClearDayTransition 完整清理。
+void UCatLocalPlayerUISubsystem::RefreshDayTransition(APlayerController* Controller,
+	const FCatRunDayTransition& Transition, const double ServerTimeSeconds)
+{
+	ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	if (!Controller || !LocalPlayer || Controller != LocalPlayer->GetPlayerController(GetWorld())) return;
+	const bool bBlocked = Transition.bActive && !Transition.bFailed;
+	if (bBlocked)
+	{
+		if (InventoryPageController && InventoryPageController->IsInventoryOpen())
+		{
+			InventoryPageController->RequestCloseInventoryFromWidget();
+		}
+		if (LakeMainMenuController && LakeMainMenuController->IsMenuOpen())
+		{
+			LakeMainMenuController->RequestCloseFromWidget();
+		}
+	}
+	const double Now = FPlatformTime::Seconds();
+	if (Transition.bFailed && Transition.RequestId.IsValid() && Transition.RequestId != LastDayTransitionFailureId)
+	{
+		LastDayTransitionFailureId = Transition.RequestId;
+		DayTransitionFailureUntilSeconds = Now + 2.0;
+		UE_LOG(LogCatUI, Warning,
+			TEXT("Event=day_transition_failure_feedback RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s Message=%s"),
+			*Transition.RequestId.ToString(), *GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()),
+			Controller->HasAuthority(), static_cast<int32>(Controller->GetLocalRole()), *GetNameSafe(Controller), *Transition.Message.ToString());
+	}
+	const bool bShowFailure = Transition.bFailed && Now < DayTransitionFailureUntilSeconds;
+	if (!bBlocked && !bShowFailure)
+	{
+		if (DayTransitionWidget)
+		{
+			DayTransitionWidget->RenderTransition(0.0f, FText::GetEmpty(), false);
+			DayTransitionWidget->RemoveFromParent();
+			DayTransitionWidget = nullptr;
+		}
+		return;
+	}
+	float BlackOpacity = 0.0f;
+	FText Title;
+	if (bShowFailure)
+	{
+		Title = Transition.Message;
+	}
+	else
+	{
+		const double FadeOut = FMath::Max(0.0, static_cast<double>(Transition.FadeOutSeconds));
+		const double Hold = FMath::Max(0.0, static_cast<double>(Transition.HoldSeconds));
+		const double FadeIn = FMath::Max(0.0, static_cast<double>(Transition.FadeInSeconds));
+		const double Elapsed = FMath::Max(0.0, ServerTimeSeconds - Transition.StartServerTimeSeconds);
+		if (Elapsed < FadeOut)
+		{
+			BlackOpacity = static_cast<float>(Elapsed / FadeOut);
+		}
+		else if (Elapsed < FadeOut + Hold)
+		{
+			BlackOpacity = 1.0f;
+		}
+		else if (Elapsed < FadeOut + Hold + FadeIn)
+		{
+			BlackOpacity = static_cast<float>(1.0 - (Elapsed - FadeOut - Hold) / FadeIn);
+		}
+		if (Transition.bCommitted && Elapsed >= FadeOut && Elapsed < FadeOut + Hold + FadeIn)
+		{
+			Title = Transition.Message.IsEmpty()
+				? FText::Format(NSLOCTEXT("CatDayTransition", "DayTitle", "第 {0} 天"), FText::AsNumber(Transition.TargetDayIndex))
+				: Transition.Message;
+		}
+	}
+	const bool bCreatedThisFrame = !DayTransitionWidget;
+	if (bCreatedThisFrame)
+	{
+		DayTransitionWidget = CreateWidget<UCatDayTransitionWidget>(Controller, UCatDayTransitionWidget::StaticClass());
+	}
+	if (!DayTransitionWidget) return;
+	// 与现有 HUD 使用同一全视口层：9000 遮住 HUD，仍低于 Online 的 10000；玩家子层无法覆盖全视口 HUD。
+	if (!DayTransitionWidget->IsInViewport()) DayTransitionWidget->AddToViewport(9000);
+	// 视口晚到时保留实例，下一帧再挂接；只在首次失败时记录，避免依赖未就绪期间刷屏。
+	if (!DayTransitionWidget->IsInViewport())
+	{
+		if (bCreatedThisFrame)
+		{
+			UE_LOG(LogCatUI, Warning,
+				TEXT("Event=day_transition_view_unavailable RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s"),
+				*Transition.RequestId.ToString(), *GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()),
+				Controller->HasAuthority(), static_cast<int32>(Controller->GetLocalRole()), *GetNameSafe(Controller));
+		}
+		return;
+	}
+	DayTransitionWidget->RenderTransition(BlackOpacity, Title, bBlocked);
+}
+
+// 清理流程：移出本功能视图并清空失败去重与停留时间；不修改输入模式、Online loading 或任何 Run 快照。
+void UCatLocalPlayerUISubsystem::ClearDayTransition()
+{
+	if (DayTransitionWidget)
+	{
+		DayTransitionWidget->RenderTransition(0.0f, FText::GetEmpty(), false);
+		DayTransitionWidget->RemoveFromParent();
+		DayTransitionWidget = nullptr;
+	}
+	LastDayTransitionFailureId.Invalidate();
+	DayTransitionFailureUntilSeconds = 0.0;
 }
 
 // 页面只为关闭和输入读取这个控制器；每个库存 WBP 自己绑定所属库存的 Model。
@@ -1062,9 +1178,10 @@ void UCatLocalPlayerUISubsystem::BindController(APlayerController* Controller)
 	HandleControllerPawnChanged(Controller->GetPawn());
 }
 
-// Controller 解绑流程：只清理本地弱引用；Pawn 刷新由 PlayerController 生命周期主动推送，因此这里同步清空失效 notifier 句柄。
+// Controller 解绑流程：先移除仅属于旧 Controller 的翻天表现，再清理弱引用；Pawn 刷新继续由 Controller 生命周期推送。
 void UCatLocalPlayerUISubsystem::UnbindController()
 {
+	ClearDayTransition();
 	BoundPlayerController.Reset();
 }
 
@@ -1259,9 +1376,11 @@ void UCatLocalPlayerUISubsystem::HandleHUDModelViewStateChanged()
 	}
 }
 
-// 局内菜单切换流程：打开菜单前先关闭当前背包页面，保证同一 Controller 上只有一个模态输入恢复记录处于打开状态。
+// 局内菜单切换流程：翻天期间拒绝打开；其他时候先关闭背包，保证同一 Controller 只有一个菜单模态恢复记录。
 void UCatLocalPlayerUISubsystem::ToggleLakeMainMenu()
 {
+	const ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
+	if (Controller && Controller->IsDayTransitionInputBlocked()) return;
 	if (!LakeMainMenuController)
 	{
 		return;

@@ -10,6 +10,7 @@ class ACatCharacter;
 
 class UStateTreeComponent;
 class ACatCampHubActor;
+class ACatAltarActor;
 struct FUniqueNetIdRepl;
 #if WITH_DEV_AUTOMATION_TESTS
 class FCatGameModeCommandIntentGateTest;
@@ -98,6 +99,10 @@ public:
 	bool DoesLastRunFlowResultMatch(ECatRunTransitionReason ExpectedReason) const;
 	/** 消费服务器已确认的夜晚供品结算；StableNetId 由 Controller 适配并以 RequestId/Revision 保证幂等。 */
 	FCatRunCommandResult SubmitOfferingSettlement(AController* RequestingController, const FCatOfferingSettlementCommand& Command);
+	/** 全员确认的祭坛请求翻天；冻结供品并联合预检后发布过渡，黑屏提交仍复用现有 GAS 写口。 */
+	bool BeginAltarDayTransition(ACatAltarActor* Altar, AController* Controller, FGuid RequestId);
+	/** 祭坛销毁或退出时释放本祭坛的过渡；不撤销已提交 GAS，也不影响另一祭坛。 */
+	void CancelAltarDayTransition(ACatAltarActor* Altar, const FText& Error);
 	/** 供 owning client 在成像归档已收口后提交结算完成终态；本方法只发送 StateTree 事件，不在 C++ 选择目标 Phase。 */
 	FCatRunCommandResult CompleteSettlementFromServerRequest(FGuid RequestId, int64 ExpectedRevision);
 	/** Host 离局前关闭新命令、计时器和 StateTree；结果原样携带 Online RequestId/epoch。 */
@@ -132,6 +137,20 @@ public:
 	bool IsControllerActive(const AController* Controller) const;
 
 private:
+	/** 遮黑计时到达后复核玩家与冻结鱼，调用唯一供品结算并消费实物；拒绝立即解除本轮锁。 */
+	void CommitAltarDayTransition();
+	/** 淡入结束后发布解锁，并从此刻开始新一天的可玩计时；终局不建立白天计时。 */
+	void FinishAltarDayTransition();
+	/** 本次过渡的祭坛弱引用；GameMode 不拥有关卡 Actor 生命周期，销毁会触发取消。 */
+	TWeakObjectPtr<ACatAltarActor> TransitionAltar;
+	/** 本次已验证身份的确认者；黑屏提交前断线则拒绝，不把空身份送入鱼消费入口。 */
+	TWeakObjectPtr<AController> TransitionController;
+	/** 过渡开始时从地面鱼生成的服务器供品输入；仅更新提交 Revision，不重新扫描或接受客户端数量。 */
+	FCatOfferingSettlementCommand TransitionOffering;
+	/** 完全遮黑的单次计时；只负责调用提交，取消和 World 退出时清除。 */
+	FTimerHandle AltarCommitTimer;
+	/** 整段过场结束的单次计时；负责释放操作门并启动可玩白天，退出时清除。 */
+	FTimerHandle AltarFinishTimer;
 #if WITH_DEV_AUTOMATION_TESTS
 	/** 自动化夹具直接种入 Active 身份与 Phase，用来验证 Fishing gate 不会误封 Social/Settlement 宽命令。 */
 	friend class FCatGameModeCommandIntentGateTest;

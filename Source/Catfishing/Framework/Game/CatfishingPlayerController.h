@@ -24,6 +24,7 @@ class UInputMappingContext;
 class ACatCampHubActor;
 class ACatCampInventoryActor;
 class ACatCharacter;
+class ACatfishingGameState;
 class ACatShopKioskActor;
 struct FInputActionValue;
 
@@ -36,11 +37,17 @@ class CATFISHING_API ACatfishingPlayerController : public APlayerController
 {
 	GENERATED_BODY()
 public:
+	/** 每帧先对齐公开翻天快照与锁，再交给引擎处理输入；同时覆盖 GameState 晚到与复制延迟。 */
+	virtual void Tick(float DeltaSeconds) override;
+	/** 查询当前公开翻天锁，供本地 UI 和 Ability 输入拒绝操作；客户端超时不能改变服务器的 active 事实。 */
+	bool IsDayTransitionInputBlocked() const;
+	/** 旅行开始前解除本功能绑定、表现和锁；同一旧 World 后续 Tick 不得重新加锁。 */
+	virtual void PreClientTravel(const FString& PendingURL, ETravelType TravelType, bool bIsSeamlessTravel) override;
 	/** 控制器接管 Pawn 后只做宿主级收口：重置本地钓鱼输入和疾跑状态；Ability ASC 路由统一由 SetPawn 写入点刷新。 */
 	virtual void OnPossess(APawn* InPawn) override;
 	/** owning client 收到 Pawn 复制变化后重置本地输入与疾跑状态；复制链中的 SetPawn 负责切换 Ability ASC 路由。 */
 	virtual void OnRep_Pawn() override;
-	/** 捕获服务器、客户端复制和 ClientRestart 的统一 Pawn 写入点；同步刷新 Ability ASC 路由，再通知 LocalPlayer UI 重新装配。 */
+	/** 捕获统一 Pawn 写入点；归还旧身体翻天锁，刷新 Ability 路由与本地 UI，再按公开快照接管新身体。 */
 	virtual void SetPawn(APawn* InPawn) override;
 	/** 每帧旋转收尾时同步持竿姿态；普通状态完全沿用 PlayerController，持竿状态由本 Controller 接管身体朝向、移动朝向和跳跃输入。 */
 	virtual void UpdateRotation(float DeltaTime) override;
@@ -79,9 +86,9 @@ public:
 	UFUNCTION(BlueprintPure, Category="Catfishing|Interaction")
 	UCatInteractionTargetingComponent* GetInteractionTargetingComponent() const { return InteractionTargetingComponent; }
 
-	/** 按当前可见面对方向把二维输入转成当前 Pawn 的前后/左右移动；持竿搏斗时读取鱼竿相机方向，普通状态仍读 Controller yaw。 */
+	/** 翻天期间拒绝移动；其他时候按可见朝向把二维输入转成 Pawn 移动，持竿时读取鱼竿相机方向。 */
 	void Move(const FInputActionValue& Value);
-	/** 对当前已占有的 Character 开始跳跃；持竿操作时会吞掉跳跃，避免搏斗和收杆姿态被起跳输入打断。 */
+	/** 请求当前 Character 跳跃；翻天或持竿操作时拒绝，避免过渡和搏斗姿态被起跳打断。 */
 	void StartJump();
 
 	/** 权威交互转发；服务器检查玩法 gate 和通用接口后，在目标 Actor 上重新调用同一 Interact 虚函数。 */
@@ -211,7 +218,7 @@ protected:
 	virtual void PostProcessInput(const float DeltaTime, const bool bGamePaused) override;
 	/** Pawn 断开前先清理当前 ASC 的 Ability 输入状态、钓鱼本地命令和疾跑意图，再交还父类结束占有，避免状态泄漏到下一次占有。 */
 	virtual void OnUnPossess() override;
-	/** EndPlay 时清空 Ability 路由状态、Native 输入弱绑定记录并只撤销本 Controller 安装的 Mapping Context；不清空 LocalPlayer 的其他输入层。 */
+	/** EndPlay 清理翻天锁及订阅、Ability 路由和 Native 输入记录，只撤销本 Controller 安装的输入层。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	/** 玩法输入映射；在 PlayerController 蓝图默认值中接入 IMC。 */
@@ -251,17 +258,42 @@ protected:
 private:
 	friend class UCatFishingCommandComponent;
 
+	/** 消费当前 GameState 快照；绑定变化通知，调和本地输入与服务器移动锁，再刷新 LocalPlayer 的时间轴表现。 */
+	void ReconcileDayTransition();
+	/** 成对申请或释放翻天专属锁；重复状态不叠加计数，服务器只恢复本功能接管的原移动模式。 */
+	void SetDayTransitionLocked(bool bLocked);
+	/** 结束或旅行时解绑快照并清理本功能持有的输入、移动和 UI；不触碰 Run 权威状态。 */
+	void ClearDayTransition();
+
+	/** 当前快照通知来源；调和时写入，清理时配对解绑，不强持有旧 World 的 GameState。 */
+	TWeakObjectPtr<ACatfishingGameState> DayTransitionGameState;
+	/** 快照订阅的配对句柄；调和创建，换 GameState 或清理时移除。 */
+	FDelegateHandle DayTransitionStateHandle;
+	/** 正在离开的旧 World；PreClientTravel 写入，调和读取并拒绝旧世界重新加锁，新世界自然失效。 */
+	TWeakObjectPtr<UWorld> DayTransitionTravelWorld;
+	/** 本功能是否已经申请一层移动和视角忽略计数；锁方法独占写入，清理只按此记录归还一层。 */
+	bool bDayTransitionLocked = false;
+	/** 翻天专属高优先级输入组件；加锁创建并压栈，解锁只弹出和销毁此组件，保留其他输入层。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UInputComponent> DayTransitionInputBlocker;
+	/** 服务器本轮禁用过的移动组件；调和记录所属 Pawn，解锁或换 Pawn 时恢复并清空弱引用。 */
+	TWeakObjectPtr<UCharacterMovementComponent> DayTransitionMovement;
+	/** 服务器禁用前的移动模式；首次接管写入，释放时读取，不由客户端根据动画时间恢复。 */
+	uint8 DayTransitionSavedMovementMode = 0;
+	/** 服务器禁用前自定义移动模式的子编号；与普通模式一起保存和恢复，避免丢失自定义移动状态。 */
+	uint8 DayTransitionSavedCustomMode = 0;
+
 	/** 幂等安装当前配置的玩法 Mapping Context；BeginPlay/输入初始化均可安全调用。 */
 	void ApplyInputMappingContext();
 	/** owning client 读取本地 durable Profile 的 UnlockIds 并提交服务器投影；本方法不生成或修改任何永久 Grant。 */
 	void PublishProfileEquipmentUnlocksIfAvailable();
 	/** 移除本 Controller 安装的玩法 Mapping Context，并清空弱绑定记录。 */
 	void RemoveInputMappingContext();
-	/** 把二维输入写入 Controller 的 Yaw/Pitch。 */
+	/** 翻天期间拒绝视角操作；其他时候把二维输入写入 Controller 的 Yaw/Pitch。 */
 	void Look(const FInputActionValue& Value);
 	/** 对当前已占有的 Character 停止跳跃。 */
 	void StopJump();
-	/** 本地 Started 输入开启疾跑，并把布尔意图可靠同步给 authority。 */
+	/** 本地 Started 输入在非翻天状态开启疾跑，并把布尔意图可靠同步给 authority。 */
 	void StartSprint();
 	/** 本地 Completed/Canceled 输入关闭疾跑，并把布尔意图可靠同步给 authority。 */
 	void StopSprint();
@@ -269,7 +301,7 @@ private:
 	void SetSprintRequested(bool bNewSprintRequested, bool bNotifyServer);
 	/** 把服务器配置的普通/疾跑速度应用到指定 Character；非 Character Pawn 安全跳过。 */
 	void ApplySprintSpeed(APawn* TargetPawn, bool bSprinting) const;
-	/** 项目原生输入标签入口；处理交互这类非 Ability 动作，未知标签必须保持无副作用。 */
+	/** 项目原生输入标签入口；翻天期间拒绝交互，其他时候处理非 Ability 动作，未知标签无副作用。 */
 	void NativeInputTagPressed(FGameplayTag InputTag);
 	/** 当 Pawn 或输入组件在 owning client 就绪时通知 LocalPlayer UI；服务器远端 Controller 和非 Cat UI World 安全跳过。 */
 	void NotifyLocalPlayerUISubsystemPawnChanged();
@@ -282,7 +314,7 @@ private:
 	/** 把公共领域命令终态投给 owning client；本地 authority 没有网络回环时直接写本机读模型，远端玩家继续走可靠 RPC。 */
 	void DeliverCampCommandResultToOwningClient(const FCatDomainCommandResult& Result);
 
-	/** owning client 只提交疾跑开关；最终速度始终取服务器 PlayerController 类默认配置。 */
+	/** 接收 owning client 的疾跑开关；翻天期间只接受关闭，最终速度取服务器 Controller 类默认配置。 */
 	UFUNCTION(Server, Reliable)
 	void ServerSetSprinting(bool bNewSprinting);
 

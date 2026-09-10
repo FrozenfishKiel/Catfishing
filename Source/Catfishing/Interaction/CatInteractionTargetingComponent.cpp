@@ -90,11 +90,13 @@ void UCatInteractionTargetingComponent::RefreshTargetFromCrosshair()
 	ApplyTarget(TraceInteractableFromCrosshair());
 }
 
+// 目标应用：相同有效目标只刷新提示；对象变化或销毁才保存上一目标、结束旧高亮并开启新高亮，最后发布本机通知。
 void UCatInteractionTargetingComponent::ApplyTarget(AActor* NewTarget)
 {
 	const bool bPreviousTargetWasDestroyed = CurrentTarget.IsStale();
 	if (!bPreviousTargetWasDestroyed && CurrentTarget.Get() == NewTarget)
 	{
+		if (NewTarget) OnTargetRefreshed.Broadcast(NewTarget, NewTarget);
 		return;
 	}
 	AActor* PreviousTarget = CurrentTarget.Get();
@@ -108,7 +110,7 @@ void UCatInteractionTargetingComponent::ApplyTarget(AActor* NewTarget)
 	{
 		ICatInteractable::Execute_BeginLocalFocus(NewTarget);
 	}
-	OnTargetChanged.Broadcast(PreviousTarget, NewTarget);
+	OnTargetRefreshed.Broadcast(PreviousTarget, NewTarget);
 }
 
 void UCatInteractionTargetingComponent::ClearTarget()
