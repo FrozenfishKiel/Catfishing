@@ -4,6 +4,8 @@
 #include "Kismet/BlueprintFunctionLibrary.h"
 #include "CatFrontendWidgetAuthoringLibrary.generated.h"
 
+class UWidgetBlueprint;
+
 /**
  * 正式 Frontend WBP 的编辑器构造入口；只在编辑器中创建或修正目标资产并保存，不向运行时模块泄漏 UMGEditor API。
  * 主线程或资产脚本调用它建立首份可编辑控件树；普通子页面保留人工布局，Root 与 Loading 会在合同变化时重建来移除旧加载子页。
@@ -14,6 +16,10 @@ class CATFISHINGEDITOR_API UCatFrontendWidgetAuthoringLibrary : public UBlueprin
 	GENERATED_BODY()
 
 public:
+	/** 仅编译并保存正式 HUD 包；先登记新控件 GUID，供 HUD 定向迁移脚本使用。 */
+	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|HUD")
+	static bool CompileAndSaveHUDWidgetBlueprint(UWidgetBlueprint* WidgetBlueprint);
+
 	/**
 	 * 创建当前缺失的 Frontend 子页面，并重建 Root 与全局 Loading WBP 来落实最新 C++ / BindWidget 合同。
 	 * 该入口由编辑器内的资产构造脚本调用；成功时相关包已经编译、登记并保存，普通业务子页面不会被重复执行覆盖。

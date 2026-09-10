@@ -2,6 +2,7 @@
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
+#include "Components/BoxComponent.h"
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/PlayerState.h"
@@ -80,6 +81,8 @@ bool FCatRodBendFormalRuntimeTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("formal hook spawns"), Hook)) return false;
 	Hook->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid());
 	Wrapper.BeginPlayInTestWorld();
+	// 仅观察弯曲表现，不向无地板夹具施加重力；真实掉落/受力另由 PhysicalRod 测试覆盖。
+	Rod->GetPhysicalRodBody()->SetEnableGravity(false);
 	UCatRodBendComponent* Bend = Rod->FindComponentByClass<UCatRodBendComponent>();
 	if (!TestNotNull(TEXT("formal rod has deformation component"), Bend) || !TestTrue(TEXT("formal source mesh is copied"), Bend->IsVisualReady())) return false;
 	UStaticMeshComponent* Source = nullptr;
@@ -103,7 +106,7 @@ bool FCatRodBendFormalRuntimeTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("final line load publishes in newtons"), Hook->SetFishingLinePresentationFromAuthority(700, 700, 0, 1, true, 100));
 	TestEqual(TEXT("raw load is distinct from normalized display"), Hook->GetPresentationState().LineTensionNewtons, 100.0);
 	for (int32 I = 0; I < 120; ++I) Wrapper.TickTestWorld(1.0f / 60.0f);
-	TestTrue(TEXT("grounded rod bends without a holder"), Marker->GetComponentLocation().Y > RestTip.Y + 10);
+	TestTrue(TEXT("unheld rod bends under the observed line load"), Marker->GetComponentLocation().Y > RestTip.Y + 10);
 	TestTrue(TEXT("visual bend leaves canonical physics tip unchanged"), Rod->GetRodTipWorldTransform().Equals(CanonicalBefore));
 	const UCatFishingLineCurveComponent* Line = Hook->FindComponentByClass<UCatFishingLineCurveComponent>();
 	if (TestNotNull(TEXT("formal hook has line mesh"), Line) && !Line->GetCurveWorldPoints().IsEmpty())

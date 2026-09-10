@@ -1,4 +1,4 @@
-#if WITH_DEV_AUTOMATION_TESTS
+﻿#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
@@ -6,6 +6,9 @@
 #include "UObject/UnrealType.h"
 
 #include "Fishing/CatFishingTypes.h"
+#include "Fishing/CatFishingService.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
+#include "GameFramework/PlayerState.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/Actor.h"
@@ -539,7 +542,7 @@ bool FCatFishingCommandComponentHeldFightInputTest::RunTest(const FString& Param
 	Controller->SetPlayer(LocalPlayer.Get());
 	TestTrue(TEXT("held input test controller satisfies local input gate"), Controller->IsLocalController());
 	// 测试世界没有 Active Run，命令会被玩法 gate 拒绝；持续按键事实必须在该 gate 之前照常更新。
-	AddExpectedErrorPlain(TEXT("Event=fishing_command_result"), EAutomationExpectedErrorFlags::Contains, 4);
+	AddExpectedErrorPlain(TEXT("Event=fishing_command_result"), EAutomationExpectedErrorFlags::Contains, 13);
 
 	bool bPrimaryHeld = false;
 	bool bSlackHeld = false;
@@ -576,7 +579,64 @@ bool FCatFishingCommandComponentHeldFightInputTest::RunTest(const FString& Param
 	Component->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld, bSlackHeld, InputSequence);
 	TestFalse(TEXT("input lifecycle reset clears primary"), bPrimaryHeld);
 	TestFalse(TEXT("input lifecycle reset clears slack"), bSlackHeld);
-	TestEqual(TEXT("input lifecycle reset clears sequence"), InputSequence, int64{0});
+	TestEqual(TEXT("input lifecycle reset retains the accepted sequence fence"), InputSequence, PrimaryRelease.InputSequence);
+	FCatFishingInputEdge LatePress=SlackPress;
+	LatePress.RequestId=FGuid::NewGuid(); // A new transaction id must not bypass the old input sequence fence.
+	Component->HandleAbilityCommandFromAuthority(ECatFishingCommandType::SlackPressed,LatePress);
+	Component->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld,bSlackHeld,InputSequence);
+	TestFalse(TEXT("late pre-reset press cannot resurrect slack"),bSlackHeld);
+	TestEqual(TEXT("late press cannot rewind accepted sequence"),InputSequence,PrimaryRelease.InputSequence);
+	const auto FreshPress=Component->SubmitSlackPressed();
+	Component->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld,bSlackHeld,InputSequence);
+	TestTrue(TEXT("fresh post-reset press advances sequence and holds slack"),bSlackHeld && FreshPress.InputSequence>PrimaryRelease.InputSequence);
+	FCatFishingInputEdge LateRelease=SlackRelease;
+	LateRelease.RequestId=FGuid::NewGuid();
+	Component->HandleAbilityCommandFromAuthority(ECatFishingCommandType::SlackReleased,LateRelease);
+	Component->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld,bSlackHeld,InputSequence);
+	TestTrue(TEXT("late pre-reset release cannot clear a newer press"),bSlackHeld);
+	TestEqual(TEXT("late release cannot change the new sequence fence"),InputSequence,FreshPress.InputSequence);
+	const auto FreshRelease=Component->SubmitSlackReleased();
+	Component->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld,bSlackHeld,InputSequence);
+	TestFalse(TEXT("fresh release still clears the held state"),bSlackHeld);
+	TestEqual(TEXT("fresh release retains the monotonically newer fence"),InputSequence,FreshRelease.InputSequence);
+
+	UWorld* World = WorldWrapper.GetTestWorld();
+	APlayerState* PhysicalHelper = World->SpawnActor<APlayerState>();
+	APlayerState* RodOwner = World->SpawnActor<APlayerState>();
+	ACatFishingRodActor* ForeignRod = World->SpawnActor<ACatFishingRodActor>();
+	UCatFishingService* Fishing = World->GetSubsystem<UCatFishingService>();
+	if (!PhysicalHelper || !RodOwner || !ForeignRod || !Fishing) return false;
+	Controller->PlayerState = PhysicalHelper;
+	const FGuid ForeignRodId = FGuid::NewGuid();
+	if (!ForeignRod->InitializeAuthoritativeIdentity(ForeignRodId,FGuid::NewGuid(),TEXT("ForeignRod"),NAME_None,RodOwner,nullptr,true,false)
+		|| !Fishing->RegisterDeployedRod(RodOwner,ForeignRod)) return false;
+	TestNull(TEXT("physical helper has no fishing operator slot"),Fishing->FindRodOperatedBy(PhysicalHelper));
+	AddExpectedErrorPlain(TEXT("Event=fishing_control_input_rejected"),EAutomationExpectedErrorFlags::Contains,3);
+	FCatFishingInputEdge Forged;
+	Forged.RequestId=FGuid::NewGuid(); Forged.InputSequence=FreshRelease.InputSequence+100;
+	Forged.ControlRodActorId=ForeignRodId; Forged.ControlEpoch=ForeignRod->GetControlEpoch();
+	Component->HandleAbilityCommandFromAuthority(ECatFishingCommandType::RequestHook,Forged);
+	FCatFishingCommandResult Rejection;
+	TestTrue(TEXT("explicit foreign rod press returns correlated NotFisher"),Component->TryGetResult(Forged.RequestId,Rejection)
+		&& !Rejection.bCommitted && Rejection.Error==ECatFishingCommandError::NotFisher && Rejection.RodActorId==ForeignRodId);
+	Component->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld,bSlackHeld,InputSequence);
+	TestTrue(TEXT("rejected helper press cannot poison held state or consume its large sequence"),!bPrimaryHeld&&!bSlackHeld&&InputSequence==FreshRelease.InputSequence);
+	const auto GapSlackPress=Component->SubmitSlackPressed();
+	Component->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld,bSlackHeld,InputSequence);
+	TestTrue(TEXT("a fresh legitimate gap edge still works after the forged high sequence"),bSlackHeld&&InputSequence==GapSlackPress.InputSequence);
+	Forged.RequestId=FGuid::NewGuid(); ++Forged.InputSequence;
+	Component->HandleAbilityCommandFromAuthority(ECatFishingCommandType::SlackReleased,Forged);
+	TestTrue(TEXT("explicit foreign rod release also returns NotFisher"),Component->TryGetResult(Forged.RequestId,Rejection)
+		&& !Rejection.bCommitted && Rejection.Error==ECatFishingCommandError::NotFisher);
+	Component->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld,bSlackHeld,InputSequence);
+	TestTrue(TEXT("rejected foreign release cannot clear a valid held edge"),bSlackHeld&&InputSequence==GapSlackPress.InputSequence);
+	Forged.RequestId=FGuid::NewGuid(); ++Forged.InputSequence; Forged.ControlRodActorId=FGuid::NewGuid();
+	Component->HandleAbilityCommandFromAuthority(ECatFishingCommandType::RequestHook,Forged);
+	TestTrue(TEXT("unknown explicit target fails closed with NoRod"),Component->TryGetResult(Forged.RequestId,Rejection)
+		&& !Rejection.bCommitted && Rejection.Error==ECatFishingCommandError::NoRod);
+	Component->TryGetHeldFightInputStateFromAuthority(bPrimaryHeld,bSlackHeld,InputSequence);
+	TestTrue(TEXT("unknown target cannot mutate current held input or sequence"),bSlackHeld&&InputSequence==GapSlackPress.InputSequence);
+	Component->SubmitSlackReleased();
 	return !HasAnyErrors();
 }
 

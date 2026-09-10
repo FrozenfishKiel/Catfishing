@@ -11,7 +11,7 @@ class USceneComponent;
 class USkeletalMesh;
 class USkeletalMeshComponent;
 
-/** 独立物理原型的只读身体表现：复制现有步态，再让前爪追随真实手部刚体；不写物理或抓握状态。 */
+/** 共享物理身体的只读表现：正式角色复制现有 ABP/Montage，原型使用基础步态；前爪追随真实刚体。 */
 UCLASS(ClassGroup = (Catfishing), meta = (BlueprintSpawnableComponent))
 class CATFISHING_API UCatPhysicsPrototypeVisualComponent : public UActorComponent
 {
@@ -21,9 +21,9 @@ class CATFISHING_API UCatPhysicsPrototypeVisualComponent : public UActorComponen
 public:
 	UCatPhysicsPrototypeVisualComponent();
 
-	/** 为同一 Pawn 创建隐藏动画源与可见程序姿势；重复初始化相同组件时保持幂等。 */
+	/** 使用正式角色提供的动画源，或为原型创建基础动画源；可见姿势在动画后叠加物理爪 IK。 */
 	bool InitializeVisual(USceneComponent* InBodyRoot, UPrimitiveComponent* InLeftHand,
-		UPrimitiveComponent* InRightHand);
+		UPrimitiveComponent* InRightHand, USkeletalMeshComponent* ExistingAnimationSource = nullptr);
 
 	/** 只控制两只爪的表现混合；调用者仍负责真实抓握和手部目标。 */
 	void SetHandReachState(bool bInLeftActive, bool bInRightActive);
@@ -42,12 +42,13 @@ private:
 	void UpdateBaseAnimation(float DeltaTime);
 	void PlayBaseAnimation(EAnimationState NewState);
 	void RefreshVisualPose(float DeltaTime);
+	bool IsFormalJumpPoseActive() const;
 	void SolveHandReach(bool bLeftHand, const FVector& TargetWorld, float Alpha);
 	void RebuildComponentPose();
 	void DestroyVisualComponents();
 	void LogReachLimitChange(bool bLeftHand, bool bClamped, double Distance, double ChainLength);
 
-	/** 原型硬引用只随原型类 Cook，不替换正式 Character/ABP 资产。 */
+	/** 原型的基础素材；正式初始化使用 Character 原有 Mesh/AnimClass，不替换正式 ABP。 */
 	UPROPERTY(EditDefaultsOnly, Category = "Catfishing|PhysicsPrototype|Visual")
 	TObjectPtr<USkeletalMesh> CharacterMesh;
 
@@ -98,4 +99,6 @@ private:
 	bool bLeftReachClamped = false;
 	bool bRightReachClamped = false;
 	bool bReportedInvalidPose = false;
+	bool bOwnsAnimationSource = true;
+	bool bFormalJumpRootCompensationActive = false;
 };

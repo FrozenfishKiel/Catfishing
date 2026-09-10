@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationEditorCommon.h"
 #include "Animation/AnimSingleNodeInstance.h"
+#include "Animation/AnimationAsset.h"
 #include "Character/Physics/CatPhysicsPrototypePawn.h"
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
 #include "Camera/CameraActor.h"
@@ -278,8 +279,9 @@ public:
 			{
 				ACameraActor* Camera = Client->SpawnActor<ACameraActor>();
 				if (!Test->TestNotNull(TEXT("jump presentation has an independent observer camera"), Camera)) return true;
-				const FVector Position(-40, -245, 55);
-				Camera->SetActorLocationAndRotation(Position, (FVector(0, -150, 33) - Position).Rotation());
+				// Include the floor and the complete 420 cm/s jump arc in the observer's frame.
+				const FVector Position(-90, -350, 110);
+				Camera->SetActorLocationAndRotation(Position, (FVector(0, -150, 65) - Position).Rotation());
 				Camera->GetCameraComponent()->SetFieldOfView(60.0f);
 				Local->SetViewTarget(Camera);
 			}
@@ -294,6 +296,7 @@ public:
 			InitialServerZ = MaximumServerZ = AuthorityPawn->GetActorLocation().Z;
 			InitialClientZ = MaximumClientZ = ClientPawn->GetActorLocation().Z;
 			ClientPawn->RequestJump(); // Owning-client reliable RPC is the only source of the jump.
+			JumpStartedWorldSeconds = Server->GetTimeSeconds();
 			Stage = 2;
 			StageStarted = Now;
 		}
@@ -303,6 +306,8 @@ public:
 			const uint8 ClientPhase = AnimationPhase(ClientPawn);
 			ServerPhases |= ServerPhase;
 			ClientPhases |= ClientPhase;
+			ObserveLanding(AuthorityPawn, ServerPhase, ServerLandingStarted, ServerLandingLength, ServerLandingPlayed);
+			ObserveLanding(ClientPawn, ClientPhase, ClientLandingStarted, ClientLandingLength, ClientLandingPlayed);
 			MaximumServerZ = FMath::Max(MaximumServerZ, AuthorityPawn->GetActorLocation().Z);
 			MaximumClientZ = FMath::Max(MaximumClientZ, ClientPawn->GetActorLocation().Z);
 			bServerAirborne |= !AuthorityPawn->IsPrototypeGrounded();
@@ -323,12 +328,24 @@ public:
 				Evidence.CaptureViewport(Client, ClientPhase == 1 ? TEXT("jump-takeoff") : ClientPhase == 2 ? TEXT("jump-airborne") : TEXT("jump-landing"));
 				CapturedPhases |= ClientPhase;
 			}
-			if (Now - StageStarted < 1.5) return false;
+			const bool bComplete = ServerPhases == 7 && ClientPhases == 7 && ServerPhase == 0 && ClientPhase == 0
+				&& AuthorityPawn->IsPrototypeGrounded() && ClientPawn->IsPrototypeGrounded();
+			const UCatPhysicalBodyComponent* Physical = AuthorityPawn->FindComponentByClass<UCatPhysicalBodyComponent>();
+			const double FlightBudget = 2.0 * Physical->JumpSpeedCmS
+				/ FMath::Max(1.0, FMath::Abs(Server->GetGravityZ()) * Physical->GravityScale);
+			const double CompletionBudget = FlightBudget + FMath::Max(ServerLandingLength, ClientLandingLength) + 1.0;
+			// The complete authored landing now plays at 1x. Wait for its actual end instead of the
+			// old fixed 1.5-second shortcut, which assumed a compressed 0.18-second landing.
+			if (!bComplete && Server->GetTimeSeconds() - JumpStartedWorldSeconds < CompletionBudget) return false;
 			if (!Test->TestTrue(TEXT("server and client consume all three real jump animation assets"), ServerPhases == 7 && ClientPhases == 7)) return true;
 			Test->TestTrue(TEXT("client jump RPC causes actual server flight and visible client interpolation"), bServerAirborne && bClientAirborne
 				&& MaximumServerZ > InitialServerZ + 8.0 && MaximumClientZ > InitialClientZ + 6.0);
-			Test->TestTrue(TEXT("both endpoints finish the authored landing and return to the ground gait"), ServerPhase == 0 && ClientPhase == 0
-				&& AuthorityPawn->IsPrototypeGrounded() && ClientPawn->IsPrototypeGrounded());
+			if (!Test->TestTrue(TEXT("both endpoints finish the authored landing and return to the ground gait"), bComplete)) return true;
+			Test->TestTrue(TEXT("server and client landing clips keep their authored duration"),
+				ServerLandingLength > 0 && ClientLandingLength > 0
+				&& ServerLandingPlayed >= ServerLandingLength - 0.05 && ClientLandingPlayed >= ClientLandingLength - 0.05);
+			Test->AddInfo(FString::Printf(TEXT("Event=physics_prototype_network_landing_duration_verified ServerPlayedSeconds=%.3f ClientPlayedSeconds=%.3f AuthoredSeconds=%.3f"),
+				ServerLandingPlayed, ClientLandingPlayed, ServerLandingLength));
 			if (FApp::CanEverRender()) Test->TestEqual(TEXT("all three delivered jump phases have viewport evidence"), CapturedPhases, static_cast<uint8>(7));
 			BeforeResetEpoch = ClientPawn->GetPrototypeResetEpoch();
 			ClientPawn->RequestJump();
@@ -357,6 +374,17 @@ public:
 		return false;
 	}
 private:
+	static void ObserveLanding(ACatPhysicsPrototypePawn* Pawn, uint8 Phase, double& StartedAt, double& ClipLength, double& Played)
+	{
+		if (Phase == 4 && StartedAt < 0.0)
+		{
+			auto* Visual = Pawn->FindComponentByClass<UCatPhysicsPrototypeVisualComponent>();
+			auto* Instance = Visual->GetAnimationSource()->GetSingleNodeInstance();
+			StartedAt = Pawn->GetWorld()->GetTimeSeconds();
+			ClipLength = Instance->GetCurrentAsset()->GetPlayLength();
+		}
+		if (Phase == 0 && StartedAt >= 0.0 && Played < 0.0) Played = Pawn->GetWorld()->GetTimeSeconds() - StartedAt;
+	}
 	static uint8 AnimationPhase(ACatPhysicsPrototypePawn* Pawn)
 	{
 		auto* Visual = Pawn ? Pawn->FindComponentByClass<UCatPhysicsPrototypeVisualComponent>() : nullptr;
@@ -379,6 +407,10 @@ private:
 	uint32 BeforeResetEpoch = 0;
 	bool bServerAirborne = false, bClientAirborne = false;
 	double InitialServerZ = 0.0, InitialClientZ = 0.0, MaximumServerZ = 0.0, MaximumClientZ = 0.0;
+	double JumpStartedWorldSeconds = 0.0;
+	double ServerLandingStarted = -1.0, ClientLandingStarted = -1.0;
+	double ServerLandingLength = 0.0, ClientLandingLength = 0.0;
+	double ServerLandingPlayed = -1.0, ClientLandingPlayed = -1.0;
 };
 
 bool QueueNetworkTest(FAutomationTestBase* Test, const TSharedPtr<IAutomationLatentCommand>& Verify)

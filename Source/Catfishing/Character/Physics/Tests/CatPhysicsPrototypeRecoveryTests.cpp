@@ -170,6 +170,7 @@ bool FCatPhysicsPrototypeHangingRecoveryBoundaryTest::RunTest(const FString& Par
 		BaselineHighestUpSpeed = FMath::Max(BaselineHighestUpSpeed, Cat->GetVelocity().Z);
 	}
 	const uint32 ResetEpoch = Cat->GetPrototypeResetEpoch();
+	AddExpectedMessage(TEXT("Event=physics_body_jump_rejected"), ELogVerbosity::Warning);
 	Cat->RequestJump();
 	double HighestAfterJumpZ = Cat->GetActorLocation().Z;
 	double HighestAfterJumpUpSpeed = FMath::Max(0.0, Cat->GetVelocity().Z);

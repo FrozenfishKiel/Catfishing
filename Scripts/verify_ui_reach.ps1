@@ -13,7 +13,7 @@ $DotNet = Join-Path $EngineRoot "Engine\Binaries\ThirdParty\DotNet\10.0\win-x64\
 $UnrealBuildTool = Join-Path $EngineRoot "Engine\Binaries\DotNET\UnrealBuildTool\UnrealBuildTool.dll"
 $EvidenceRoot = Join-Path $ProjectRoot "Saved\Automation\UIReach"
 $RuntimeProbe = Join-Path $ProjectRoot "Scripts\verify_ui_reach_runtime.py"
-$CooperativeHUDMigration = Join-Path $ProjectRoot "Scripts\migrate_cooperative_fishing_hud.py"
+$PhysicalHUDMigration = Join-Path $ProjectRoot "Scripts\migrate_physical_grab_hud.py"
 
 function Assert-ToolFile {
     <#
@@ -143,7 +143,7 @@ function Invoke-UIReachStaticCheck {
     Assert-NoTextPattern "TransferSelectedFishToTank" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory must not expose old one-off fish tank action"
     Assert-NoTextPattern "TransferFishToTankButton" "Source/Catfishing/UI/Inventory/CatInventoryWidget.h" "Inventory must not keep old one-off fish tank button"
     Assert-NoToolFile (Join-Path $ProjectRoot "Source\Catfishing\UI\Tests\CatUIModuleWidgetAssetTests.cpp") "removed monolithic WBP generator"
-    Assert-NoTextPattern "TransferFishToTankButton" "Scripts/migrate_cooperative_fishing_hud.py" "formal HUD migration must not regenerate the removed fish tank button"
+    Assert-NoTextPattern "TransferFishToTankButton" "Scripts/migrate_physical_grab_hud.py" "formal HUD migration must not regenerate the removed fish tank button"
     Assert-NoTextPattern "ServerTransferFishToTank" "Source/Catfishing/Framework/Game/CatfishingPlayerController.h" "PlayerController must not expose old one-off fish tank RPC"
     Assert-NoTextPattern "ServerTransferFishBetweenContainers" "Source/Catfishing/Framework/Game/CatfishingPlayerController.h" "PlayerController cross-container RPC must be object-based, not fish-only"
     Assert-NoTextPattern "UButton" "Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h" "Inventory slot must not be a Button"
@@ -186,7 +186,7 @@ function Invoke-UIReachStaticCheck {
     Assert-TextPattern "LoadGameplayInputMappingContext" "Source/Catfishing/UI/CatUISettings.cpp" "existing InputContext loader"
     Assert-TextPattern "ResolveInventoryToggleKeyName" "Source/Catfishing/UI/CatUISettings.cpp" "inventory key resolved from existing IMC"
     Assert-NoTextPattern "IMC_LakeMenu" "Source/Catfishing/UI/CatUISettings.cpp" "UI Settings must use existing InputContext instead of a duplicate menu IMC"
-    Assert-NoTextPattern "IMC_LakeMenu" "Scripts/migrate_cooperative_fishing_hud.py" "formal HUD migration must not generate a duplicate menu IMC"
+    Assert-NoTextPattern "IMC_LakeMenu" "Scripts/migrate_physical_grab_hud.py" "formal HUD migration must not generate a duplicate menu IMC"
     Assert-NoTextPattern "NewObject<UInputAction>" "Source/Catfishing/UI/Inventory/CatInventoryPageController.cpp" "Inventory PageController must not create runtime InputAction"
     Assert-NoTextPattern "MapKey\(" "Source/Catfishing/UI/Inventory/CatInventoryPageController.cpp" "Inventory PageController must not hard-code key mappings"
     Assert-TextPattern "CreateWidget<UCatHUDWidget>" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "LocalPlayer creates HUD only"
@@ -195,8 +195,8 @@ function Invoke-UIReachStaticCheck {
     Assert-TextPattern "ShopPrecreated=false" "Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp" "LocalPlayer explicitly does not precreate shop"
     Assert-TextPattern "FCatContainerSnapshot" "Source/Catfishing/UI/Inventory/CatInventoryTypes.h" "Inventory view comes from container snapshot"
     Assert-TextPattern "Capacity" "Source/Catfishing/Items/CatItemTypes.h" "container snapshot exposes backend capacity"
-    Assert-TextPattern "COOPERATIVE_HUD_MIGRATION_PASS" "Scripts/migrate_cooperative_fishing_hud.py" "formal HUD migration entry"
-    Assert-TextPattern "FormalWidgetRendersCooperativeStamina" "Source/Catfishing/UI/Tests/CatHUDCooperativeFishingTests.cpp" "formal HUD runtime consumer test"
+    Assert-TextPattern "PHYSICAL_GRAB_HUD_MIGRATION_PASS" "Scripts/migrate_physical_grab_hud.py" "formal HUD migration entry"
+    Assert-TextPattern "FormalWidgetRendersPersonalStamina" "Source/Catfishing/UI/Tests/CatHUDPhysicalGrabTests.cpp" "formal HUD runtime consumer test"
     Assert-TextPattern "/Game/Input/InputAction/IA_Interact.IA_Interact" "Source/Catfishing/UI/CatUISettings.cpp" "interaction input resolves the existing formal InputAction"
 }
 
@@ -229,12 +229,12 @@ function Invoke-UIReachWBPCreate {
     #>
     Assert-ToolFile $ProjectFile "Catfishing project"
     Assert-ToolFile $Editor "Unreal Editor commandlet"
-    Assert-ToolFile $CooperativeHUDMigration "cooperative formal HUD migration"
+    Assert-ToolFile $PhysicalHUDMigration "physical formal HUD migration"
     $RunRoot = Join-Path $EvidenceRoot ("CreateWBP-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
     $LogFile = Join-Path $RunRoot "CreateWBP.log"
     New-Item -ItemType Directory -Path $RunRoot -Force | Out-Null
     & $Editor $ProjectFile -unattended -nop4 -nosplash -nullrhi -DDC-ForceMemoryCache `
-        "-ExecutePythonScript=$CooperativeHUDMigration" `
+        "-ExecutePythonScript=$PhysicalHUDMigration" `
         "-abslog=$LogFile"
     if ($LASTEXITCODE -ne 0) {
         throw ("UIReach HUD migration failed with exit code {0}" -f $LASTEXITCODE)
@@ -243,7 +243,7 @@ function Invoke-UIReachWBPCreate {
         throw "UIReach HUD migration did not produce a fresh log"
     }
     $LogText = Get-Content -LiteralPath $LogFile -Raw
-    if ($LogText -notmatch "COOPERATIVE_HUD_MIGRATION_PASS" -or $LogText -notmatch "TotalStaminaText=CatStaminaTextBlock" -or $LogText -notmatch "TotalStaminaBar=CatStaminaProgressBar" -or $LogText -match "EnsureFailed|LogPython: Error") {
+    if ($LogText -notmatch "PHYSICAL_GRAB_HUD_MIGRATION_PASS" -or $LogText -notmatch "PersonalStaminaText=CatStaminaTextBlock" -or $LogText -notmatch "PersonalStaminaBar=CatStaminaProgressBar" -or $LogText -match "EnsureFailed|LogPython: Error") {
         throw ("UIReach formal HUD migration log is not green: {0}" -f $LogFile)
     }
 }

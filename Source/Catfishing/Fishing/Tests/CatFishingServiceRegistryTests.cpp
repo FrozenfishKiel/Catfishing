@@ -18,59 +18,44 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatFishingServiceSharedRodSlotsTest,
-	"Catfishing.Unit.Fishing.Service.SharedRodSlotsAreDiscoverableAndBounded",
+	FCatFishingServiceOwnerControlLookupTest,
+	"Catfishing.Unit.Fishing.Service.RodControlLookupOnlyExposesImmutableOwner",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-bool FCatFishingServiceSharedRodSlotsTest::RunTest(const FString& Parameters)
+bool FCatFishingServiceOwnerControlLookupTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	FTestWorldWrapper WorldWrapper;
-	TestTrue(TEXT("creates shared rod slot world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	TestTrue(TEXT("creates owner control registry world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
 	UWorld* World = WorldWrapper.GetTestWorld();
 	UCatFishingService* Fishing = World ? World->GetSubsystem<UCatFishingService>() : nullptr;
 	APlayerState* Owner = World ? World->SpawnActor<APlayerState>() : nullptr;
-	APlayerState* Helper = World ? World->SpawnActor<APlayerState>() : nullptr;
+	APlayerState* Observer = World ? World->SpawnActor<APlayerState>() : nullptr;
 	ACatFishingRodActor* Rod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
 	if (!TestNotNull(TEXT("fishing service exists"), Fishing)
-		|| !TestNotNull(TEXT("owner exists"), Owner) || !TestNotNull(TEXT("helper exists"), Helper)
-		|| !TestNotNull(TEXT("rod exists"), Rod))
-	{
-		return false;
-	}
-	TestTrue(TEXT("rod initializes with owner in primary slot"), Rod->InitializeAuthoritativeIdentity(
-		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Rod"), TEXT("Skin"), Owner, Owner, true, false));
-	TestTrue(TEXT("shared rod registers under immutable owner"), Fishing->RegisterDeployedRod(Owner, Rod));
-	TestEqual(TEXT("owner lookup finds shared rod"), Fishing->FindRodOperatedBy(Owner), Rod);
-	const FVector SharedInteractionLocation = Rod->GetOperatorInteractionWorldTransform().GetLocation();
-	TestEqual(TEXT("occupied rod exposes its next container position from the shared interaction point"),
-		Fishing->FindNearestOperableRod(SharedInteractionLocation, 1.0), Rod);
-	int32 JoinedSlot = INDEX_NONE;
-	TestTrue(TEXT("helper joins auxiliary slot"), Rod->AddOperatorFromAuthority(Helper, 1, JoinedSlot));
-	TestEqual(TEXT("helper occupies slot one"), JoinedSlot, 1);
-	TestEqual(TEXT("helper lookup finds someone else's rod"), Fishing->FindRodOperatedBy(Helper), Rod);
-	TestEqual(TEXT("two occupied slots still leave room on a four-person rod"),
-		Fishing->FindNearestOperableRod(SharedInteractionLocation, 1.0), Rod);
-	for (int32 Slot = 2; Slot < 4; ++Slot)
-	{
-		APlayerState* AdditionalHelper = World->SpawnActor<APlayerState>();
-		if (!TestNotNull(TEXT("additional helper exists"), AdditionalHelper)) return false;
-		TestTrue(TEXT("additional helper joins the next available slot"), Rod->AddOperatorFromAuthority(
-			AdditionalHelper, Rod->GetPresentationState().RodActorRevision, JoinedSlot));
-		TestEqual(TEXT("join order determines slot order"), JoinedSlot, Slot);
-	}
-	TestEqual(TEXT("same rod contains the complete four-person group"), Rod->GetOperatorCount(), 4);
-	TestNull(TEXT("full four-person rod is not offered as operable"),
-		Fishing->FindNearestOperableRod(Rod->GetActorLocation(), 1000.0));
-	APlayerState* Promoted = nullptr;
-	TestTrue(TEXT("helper leaves auxiliary slot"), Rod->RemoveOperatorFromAuthority(
-		Helper, Rod->GetPresentationState().RodActorRevision, Promoted));
-	TestNull(TEXT("auxiliary departure does not promote anyone"), Promoted);
-	TestEqual(TEXT("rod with free container position is offered again from the same interaction point"),
-		Fishing->FindNearestOperableRod(SharedInteractionLocation, 1.0), Rod);
+		|| !TestNotNull(TEXT("owner exists"), Owner) || !TestNotNull(TEXT("observer exists"), Observer)
+		|| !TestNotNull(TEXT("rod exists"), Rod)) return false;
+	TestTrue(TEXT("rod initializes with immutable owner and no active control"), Rod->InitializeAuthoritativeIdentity(
+		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Rod"), TEXT("Skin"), Owner, nullptr, true, false));
+	TestTrue(TEXT("rod registers under immutable owner"), Fishing->RegisterDeployedRod(Owner, Rod));
+	TestNull(TEXT("deployment alone does not create active control"), Fishing->FindRodOperatedBy(Owner));
+	// Registry projection contract; real R hold and helper constraints are covered by runtime tests.
+	TestTrue(TEXT("owner control projection commits"), Rod->SetPrimaryOperatorFromAuthority(
+		Owner, Rod->GetPresentationState().RodActorRevision));
+	TestEqual(TEXT("owner lookup finds controlled rod"), Fishing->FindRodOperatedBy(Owner), Rod);
+	TestEqual(TEXT("active control contains exactly its owner"), Rod->GetOperatorCount(), 1);
+	TestFalse(TEXT("another player cannot replace immutable owner control"), Rod->SetPrimaryOperatorFromAuthority(
+		Observer, Rod->GetPresentationState().RodActorRevision));
+	TestNull(TEXT("observer never receives owner session lookup"), Fishing->FindRodOperatedBy(Observer));
+	TestEqual(TEXT("rejected replacement preserves owner control"), Fishing->FindRodOperatedBy(Owner), Rod);
+	TestTrue(TEXT("explicit owner release clears control"), Rod->SetPrimaryOperatorFromAuthority(
+		nullptr, Rod->GetPresentationState().RodActorRevision));
+	TestNull(TEXT("released owner no longer has active control"), Fishing->FindRodOperatedBy(Owner));
+	TestNull(TEXT("release does not promote another player"), Fishing->FindRodOperatedBy(Observer));
+	TestEqual(TEXT("release preserves deployed ownership registry"), Fishing->FindDeployedRod(Owner), Rod);
+	TestEqual(TEXT("immutable owner remains unchanged"), Rod->GetPresentationState().OwnerPlayerState.Get(), Owner);
 	return !HasAnyErrors();
 }
-
 // Registry 契约：每人最多两根；相同 Actor 重放不重复计数，玩家之间的部署名额互相独立。
 bool FCatFishingServiceTwoRodsPerPlayerStateTest::RunTest(const FString& Parameters)
 {

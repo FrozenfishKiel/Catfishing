@@ -6,6 +6,7 @@
 
 #include "Character/CatCharacter.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "Components/BoxComponent.h"
 #include "Components/SceneComponent.h"
@@ -23,7 +24,6 @@
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Framework/Game/CatfishingPlayerState.h"
-#include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerState.h"
 #include "Items/CatWorldItemSettings.h"
@@ -720,8 +720,8 @@ bool FCatFishingSessionScoopMouthCarryTest::RunTest(const FString& Parameters)
 	Session->FishDefinition = Definition;
 	Session->FishWeightKilograms = 2.5;
 	Session->FishVisualScale = 1.0;
-	Session->FisherStableNetId = TEXT("OriginalFisher");
-	Session->FightParticipantIds.Add(Session->FisherStableNetId);
+	Session->CatchFisherStableNetId = TEXT("OriginalFisher");
+	Session->FisherStableNetId.Reset(); // 已放下的原钓手仍保留捕获归属，抄手不接管Session。
 	Session->AttemptSnapshot.WaterRegion.RegionId = TEXT("LakeA");
 	Session->AttemptSnapshot.WaterRegion.GeometryRevision = 1;
 
@@ -730,6 +730,9 @@ bool FCatFishingSessionScoopMouthCarryTest::RunTest(const FString& Parameters)
 	ACatFishPickupActor* CarriedFish = ACatFishPickupActor::FindCarriedFish(Character);
 	if (TestNotNull(TEXT("抄网成功后角色嘴上存在世界鱼"), CarriedFish))
 	{
+		TestEqual(TEXT("无人值守捕获只登记原钓手与实际抄手"), CarriedFish->FishingParticipantStableNetIds.Num(), 2);
+		TestTrue(TEXT("清空当前控制身份仍保留原钓手归属"), CarriedFish->FishingParticipantStableNetIds.Contains(TEXT("OriginalFisher")));
+		TestTrue(TEXT("实际抄手获得自己的捕获参与记录"), CarriedFish->FishingParticipantStableNetIds.Contains(StableNetId));
 		TestEqual(TEXT("抄网鱼进入与 E 拾鱼相同的 Carried 状态"),
 			CarriedFish->GetPresentationState().State, ECatFishPickupState::Carried);
 		TestEqual(TEXT("嘴叼鱼保留来源会话"), CarriedFish->GetPresentationState().FishingSessionId,
@@ -749,7 +752,7 @@ bool FCatFishingSessionScoopMouthCarryTest::RunTest(const FString& Parameters)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingSessionRejectedFightSummaryPublicationTest,
-	"Catfishing.Unit.Fishing.Session.RejectedFightRefreshPublishesOnlyChangedSummary",
+	"Catfishing.Unit.Fishing.Session.LegacyExchangeCannotBillAndRefreshKeepsControlIdentity",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingSessionRejectedFightSummaryPublicationTest::RunTest(const FString& Parameters)
@@ -769,6 +772,22 @@ bool FCatFishingSessionRejectedFightSummaryPublicationTest::RunTest(const FStrin
 	Session->Snapshot.FightParticipantCount = 2;
 	Session->Snapshot.CombinedFishingStrength = 8.0;
 	Session->Snapshot.CombinedFightStamina = 6.0;
+	Session->Snapshot.Phase = ECatFishingPhase::HookedFight;
+	Session->Snapshot.FishFightStaminaRemaining = 40.0;
+	Session->Snapshot.RodDurabilityRemaining = 50.0;
+	WorldWrapper.ForwardErrorMessages(this);
+	AddExpectedErrorPlain(TEXT("Event=fishing_legacy_exchange_rejected"), EAutomationExpectedErrorFlags::Contains, 2);
+	for (const double OldCost : {1.0, 20.0})
+	{
+		const auto Rejected = Session->ResolveFightExchangeFromStateTree(OldCost, OldCost);
+		TestFalse(TEXT("legacy Blueprint exchange never commits a second bill"), Rejected.bCommitted);
+		TestEqual(TEXT("legacy exchange reports inactive billing entry"), Rejected.Error, ECatDomainCommandError::InvalidPhase);
+	}
+	TestEqual(TEXT("legacy exchange preserves fish stamina"), Session->Snapshot.FishFightStaminaRemaining, 40.0);
+	TestEqual(TEXT("legacy exchange preserves rod durability"), Session->Snapshot.RodDurabilityRemaining, 50.0);
+	TestEqual(TEXT("legacy exchange cannot deduct even a stale compatibility summary"), Session->Snapshot.CombinedFightStamina, 6.0);
+	TestEqual(TEXT("legacy rejection never changes command revision"), Session->Snapshot.Revision, int64{10});
+	TestEqual(TEXT("legacy rejection never publishes a gameplay mutation"), Session->Snapshot.SnapshotSequence, int64{20});
 	const bool bSummaryChanged = Session->RefreshFightSummary();
 	Session->PublishRefreshedFightSummaryIfChanged(bSummaryChanged);
 	TestTrue(TEXT("Invalid participants refresh the stale public summary"), bSummaryChanged);
@@ -778,6 +797,24 @@ bool FCatFishingSessionRejectedFightSummaryPublicationTest::RunTest(const FStrin
 	TestFalse(TEXT("Unchanged summary does not publish an empty update"), Session->RefreshFightSummary());
 	Session->PublishRefreshedFightSummaryIfChanged(false);
 	TestEqual(TEXT("Empty refresh does not advance sequence"), Session->Snapshot.SnapshotSequence, int64{21});
+	ACatCharacter* FormerOwner = World->SpawnActor<ACatCharacter>();
+	if (!TestNotNull(TEXT("creates former operator for recovery-domain regression"), FormerOwner)) return false;
+	FormerOwner->DispatchBeginPlay();
+	UCatAbilitySystemComponent* FormerASC = FormerOwner->GetCatAbilitySystemComponent();
+	if (!TestNotNull(TEXT("former operator owns its ASC"), FormerASC)) return false;
+	FormerASC->InitAbilityActorInfo(FormerOwner, FormerOwner);
+	FormerASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), 60.0f);
+	FormerASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 20.0f);
+	Session->FisherCharacter = FormerOwner;
+	Session->StaminaOwner = FormerOwner;
+	Session->bFightStaminaInitialized = true;
+	Session->Snapshot.Phase = ECatFishingPhase::NearShore;
+	Session->SuspendOperatorFromAuthority();
+	AddExpectedErrorPlain(TEXT("Event=fishing_session_terminated"), EAutomationExpectedErrorFlags::Contains, 1);
+	Session->TerminateSession(ECatFishingOutcome::Invalidated, TEXT("FormerOperatorRecoveryContract"));
+	TestEqual(TEXT("old session ending after NearShore release cannot refill former operator"),
+		FormerASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 20.0f);
+	TestFalse(TEXT("old session cannot queue a deferred reset into another fishing attempt"), FormerASC->HasPendingFishingStaminaReset());
 	return !HasAnyErrors();
 }
 

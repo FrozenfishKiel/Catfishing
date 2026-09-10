@@ -1,7 +1,9 @@
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
-#include "Character/Physics/CatPhysicsPrototypePawn.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
 
 #include "Animation/AnimSequence.h"
+#include "Animation/AnimInstance.h"
+#include "Animation/AnimStateMachineTypes.h"
 #include "Components/PoseableMeshComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SkeletalMeshComponent.h"
@@ -19,8 +21,6 @@ namespace CatPhysicsPrototypeVisual
 	constexpr float ReachBlendSpeed = 8.0f;
 	constexpr int32 SolverIterations = 12;
 	constexpr double ReachToleranceCentimeters = 0.15;
-	constexpr float TakeoffSeconds = 0.12f;
-	constexpr float LandingSeconds = 0.18f;
 	constexpr float PoseBlendSeconds = 0.08f;
 }
 
@@ -50,16 +50,17 @@ UCatPhysicsPrototypeVisualComponent::UCatPhysicsPrototypeVisualComponent()
 }
 
 bool UCatPhysicsPrototypeVisualComponent::InitializeVisual(USceneComponent* InBodyRoot,
-	UPrimitiveComponent* InLeftHand, UPrimitiveComponent* InRightHand)
+	UPrimitiveComponent* InLeftHand, UPrimitiveComponent* InRightHand, USkeletalMeshComponent* ExistingAnimationSource)
 {
 	AActor* Owner = GetOwner();
+	if (ExistingAnimationSource) CharacterMesh = ExistingAnimationSource->GetSkeletalMeshAsset();
 	if (VisualMesh)
 	{
 		return BodyRoot == InBodyRoot && LeftHand == InLeftHand && RightHand == InRightHand;
 	}
 	if (!Owner || !InBodyRoot || !InLeftHand || !InRightHand || InBodyRoot->GetOwner() != Owner
 		|| InLeftHand->GetOwner() != Owner || InRightHand->GetOwner() != Owner
-		|| !CharacterMesh || !IdleAnimation || !WalkAnimation || !JumpStartAnimation || !JumpLoopAnimation || !JumpEndAnimation)
+		|| !CharacterMesh || (!ExistingAnimationSource && (!IdleAnimation || !WalkAnimation || !JumpStartAnimation || !JumpLoopAnimation || !JumpEndAnimation)))
 	{
 		UE_LOG(LogCatCharacter, Warning,
 			TEXT("Event=physics_prototype_visual_init_failed Actor=%s World=%s NetMode=%d Authority=%d LocalRole=%d Reason=MissingOrMismatchedDependency"),
@@ -88,24 +89,41 @@ bool UCatPhysicsPrototypeVisualComponent::InitializeVisual(USceneComponent* InBo
 	BodyRoot = InBodyRoot;
 	LeftHand = InLeftHand;
 	RightHand = InRightHand;
-	const FTransform MeshRelativeTransform(FRotator(0.0, -90.0, 0.0), FVector(0.0, 0.0, -20.0));
-	AnimationSource = NewObject<USkeletalMeshComponent>(Owner, TEXT("PhysicsPrototypeAnimationSource"));
-	Owner->AddInstanceComponent(AnimationSource);
-	AnimationSource->SetupAttachment(InBodyRoot);
-	AnimationSource->SetRelativeTransform(MeshRelativeTransform);
-	AnimationSource->SetSkinnedAssetAndUpdate(CharacterMesh);
-	AnimationSource->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	AnimationSource->SetGenerateOverlapEvents(false);
-	AnimationSource->SetCastShadow(false);
-	AnimationSource->SetHiddenInGame(true);
-	AnimationSource->SetVisibility(false);
-	AnimationSource->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
-	AnimationSource->bEnableUpdateRateOptimizations = false;
-	AnimationSource->RegisterComponent();
-	AnimationSource->SetAnimationMode(EAnimationMode::AnimationSingleNode);
-	AnimationSource->PlayAnimation(IdleAnimation, true);
-	// 本组件在物理步结束后唯一推进动画；隐藏源不再独立 Tick，避免一帧推进两次。
-	AnimationSource->SetComponentTickEnabled(false);
+	const FTransform MeshRelativeTransform = ExistingAnimationSource
+		? ExistingAnimationSource->GetComponentTransform().GetRelativeTransform(InBodyRoot->GetComponentTransform())
+		: FTransform(FRotator(0.0, -90.0, 0.0), FVector(0.0, 0.0, -20.0));
+	bOwnsAnimationSource = ExistingAnimationSource == nullptr;
+	if (bOwnsAnimationSource)
+	{
+		AnimationSource = NewObject<USkeletalMeshComponent>(Owner, TEXT("PhysicsPrototypeAnimationSource"));
+		Owner->AddInstanceComponent(AnimationSource);
+		AnimationSource->SetupAttachment(InBodyRoot);
+		AnimationSource->SetRelativeTransform(MeshRelativeTransform);
+		AnimationSource->SetSkinnedAssetAndUpdate(CharacterMesh);
+		AnimationSource->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		AnimationSource->SetGenerateOverlapEvents(false);
+		AnimationSource->SetCastShadow(false);
+		AnimationSource->SetHiddenInGame(true);
+		AnimationSource->SetVisibility(false);
+		AnimationSource->VisibilityBasedAnimTickOption = EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+		AnimationSource->bEnableUpdateRateOptimizations = false;
+		AnimationSource->RegisterComponent();
+		AnimationSource->SetAnimationMode(EAnimationMode::AnimationSingleNode);
+		AnimationSource->PlayAnimation(IdleAnimation, true);
+		// 本组件在物理步结束后唯一推进动画；隐藏源不再独立 Tick，避免一帧推进两次。
+		AnimationSource->SetComponentTickEnabled(false);
+	}
+	else
+	{
+		AnimationSource=ExistingAnimationSource;
+		AnimationSource->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		AnimationSource->SetHiddenInGame(true,false);
+		AnimationSource->SetVisibility(false,false);
+		AnimationSource->VisibilityBasedAnimTickOption=EVisibilityBasedAnimTickOption::AlwaysTickPoseAndRefreshBones;
+		AnimationSource->bOnlyAllowAutonomousTickPose=false;
+		AnimationSource->SetComponentTickEnabled(true);
+		PrimaryComponentTick.AddPrerequisite(AnimationSource,AnimationSource->PrimaryComponentTick);
+	}
 
 	VisualMesh = NewObject<UPoseableMeshComponent>(Owner, TEXT("PhysicsPrototypeVisualMesh"));
 	Owner->AddInstanceComponent(VisualMesh);
@@ -115,6 +133,9 @@ bool UCatPhysicsPrototypeVisualComponent::InitializeVisual(USceneComponent* InBo
 	VisualMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	VisualMesh->SetGenerateOverlapEvents(false);
 	VisualMesh->SetCastShadow(true);
+	for (int32 MaterialIndex=0;MaterialIndex<AnimationSource->GetNumMaterials();++MaterialIndex)
+		VisualMesh->SetMaterial(MaterialIndex,AnimationSource->GetMaterial(MaterialIndex));
+	VisualMesh->SetOwnerNoSee(AnimationSource->bOwnerNoSee);
 	VisualMesh->RegisterComponent();
 	VisualMesh->SetComponentTickEnabled(false);
 	ComponentPose.SetNum(Skeleton.GetNum());
@@ -154,12 +175,15 @@ void UCatPhysicsPrototypeVisualComponent::RefreshVisualPose(const float DeltaTim
 		return;
 	}
 	const float SafeDelta = FMath::IsFinite(DeltaTime) ? FMath::Clamp(DeltaTime, 0.0f, 0.1f) : 0.0f;
-	UpdateBaseAnimation(SafeDelta);
-	AnimationSource->TickAnimation(SafeDelta, false);
-	AnimationSource->RefreshBoneTransforms();
+	if (bOwnsAnimationSource)
+	{
+		UpdateBaseAnimation(SafeDelta);
+		AnimationSource->TickAnimation(SafeDelta,false);
+		AnimationSource->RefreshBoneTransforms();
+	}
 	VisualMesh->CopyPoseFromSkeletalComponent(AnimationSource);
-	if (AnimationState == EAnimationState::Takeoff || AnimationState == EAnimationState::Airborne
-		|| AnimationState == EAnimationState::Landing)
+	if (bOwnsAnimationSource && (AnimationState == EAnimationState::Takeoff || AnimationState == EAnimationState::Airborne
+		|| AnimationState == EAnimationState::Landing))
 	{
 		// JumpX's InPlace clips still translate RigRoot vertically. Match UE's RefPose root lock
 		// in this private pose: the physical body owns the global transform, while the authored limbs keep animating.
@@ -176,6 +200,27 @@ void UCatPhysicsPrototypeVisualComponent::RefreshVisualPose(const float DeltaTim
 			const FTransform Destination = VisualMesh->BoneSpaceTransforms[Index];
 			VisualMesh->BoneSpaceTransforms[Index].Blend(TransitionFromPose[Index], Destination, Alpha);
 		}
+	}
+	// Jump clips contain vertical RigRoot travel while Chaos already moves the body.
+	// Correct only the visible vertical root, including Land blend-out; retain the
+	// authored animation source, horizontal root, rotations and limb poses.
+	const bool bCompensateJumpRoot = !bOwnsAnimationSource && IsFormalJumpPoseActive()
+		&& !VisualMesh->BoneSpaceTransforms.IsEmpty();
+	if (bCompensateJumpRoot)
+	{
+		FVector RootTranslation = VisualMesh->BoneSpaceTransforms[0].GetTranslation();
+		RootTranslation.Z = CharacterMesh->GetRefSkeleton().GetRefBonePose()[0].GetTranslation().Z;
+		VisualMesh->BoneSpaceTransforms[0].SetTranslation(RootTranslation);
+	}
+	if (bCompensateJumpRoot != bFormalJumpRootCompensationActive)
+	{
+		bFormalJumpRootCompensationActive = bCompensateJumpRoot;
+		const auto* PhysicalBody = GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();
+		UE_LOG(LogCatCharacter, Log,
+			TEXT("Event=physics_visual_jump_root_compensation Actor=%s BodyId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Active=%d Result=VisibleVerticalRootOnly"),
+			*GetNameSafe(GetOwner()), PhysicalBody ? *PhysicalBody->GetBodyId().ToString() : TEXT("None"),
+			*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), GetOwner()->HasAuthority(),
+			int32(GetOwner()->GetLocalRole()), bCompensateJumpRoot);
 	}
 	if (VisualMesh->BoneSpaceTransforms.Num() != ComponentPose.Num())
 	{
@@ -202,13 +247,30 @@ void UCatPhysicsPrototypeVisualComponent::RefreshVisualPose(const float DeltaTim
 	VisualMesh->RefreshBoneTransforms();
 }
 
+bool UCatPhysicsPrototypeVisualComponent::IsFormalJumpPoseActive() const
+{
+	UAnimInstance* Animation = AnimationSource ? AnimationSource->GetAnimInstance() : nullptr;
+	if (!Animation || Animation->IsAnyMontagePlaying()) return false;
+	int32 MachineIndex = INDEX_NONE;
+	const FBakedAnimationStateMachine* Description = nullptr;
+	Animation->GetStateMachineIndexAndDescription(TEXT("Main States"), MachineIndex, &Description);
+	if (MachineIndex == INDEX_NONE || !Description) return false;
+	for (const FName StateName : {FName(TEXT("Jump")), FName(TEXT("Fall Loop")), FName(TEXT("Land"))})
+	{
+		const int32 StateIndex = Description->FindStateIndex(StateName);
+		if (StateIndex != INDEX_NONE && Animation->GetInstanceStateWeight(MachineIndex, StateIndex) > UE_SMALL_NUMBER)
+			return true;
+	}
+	return false;
+}
+
 void UCatPhysicsPrototypeVisualComponent::UpdateBaseAnimation(const float DeltaTime)
 {
-	const auto* Pawn = Cast<ACatPhysicsPrototypePawn>(GetOwner());
+	const auto* Pawn = GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();
 	if (!Pawn) return;
-	if (ObservedResetEpoch != Pawn->GetPrototypeResetEpoch() || !Pawn->HasPrototypeMovementSample())
+	if (ObservedResetEpoch != Pawn->GetResetEpoch() || !Pawn->HasMovementSample())
 	{
-		ObservedResetEpoch = Pawn->GetPrototypeResetEpoch();
+		ObservedResetEpoch = Pawn->GetResetEpoch();
 		bHasMovementSample = false;
 		TakeoffConfirmationSeconds = 0.0f;
 		if (AnimationState != EAnimationState::Idle) PlayBaseAnimation(EAnimationState::Idle);
@@ -216,15 +278,15 @@ void UCatPhysicsPrototypeVisualComponent::UpdateBaseAnimation(const float DeltaT
 		TransitionFromPose.Reset();
 		return;
 	}
-	const bool bGrounded = Pawn->IsPrototypeGrounded();
+	const bool bGrounded = Pawn->IsGrounded();
 	const FVector Velocity = Pawn->GetVelocity(); // Server body or authoritative client snapshot, in cm/s.
 	const float Speed = Velocity.Size2D();
 	AnimationStateSeconds += DeltaTime;
 	EAnimationState DesiredState = AnimationState;
 	if (!bGrounded)
 	{
-		// PrePhysics can replicate lost support before Chaos has consumed the jump impulse.
-		// Retain that edge briefly so the following velocity sample can confirm takeoff.
+		// Keep a short confirmation window around a support edge so network sampling can
+		// confirm takeoff without replaying it on subsequent airborne snapshots.
 		if (bHasMovementSample && bWasGrounded) TakeoffConfirmationSeconds = 0.12f;
 		if (TakeoffConfirmationSeconds > 0.0f && Velocity.Z > 20.0)
 		{
@@ -235,7 +297,7 @@ void UCatPhysicsPrototypeVisualComponent::UpdateBaseAnimation(const float DeltaT
 		{
 			TakeoffConfirmationSeconds = Velocity.Z < -5.0 ? 0.0f : FMath::Max(0.0f, TakeoffConfirmationSeconds - DeltaTime);
 			if (AnimationState != EAnimationState::Takeoff
-				|| AnimationStateSeconds >= CatPhysicsPrototypeVisual::TakeoffSeconds || Velocity.Z <= 0.0)
+				|| AnimationStateSeconds >= JumpStartAnimation->GetPlayLength() || Velocity.Z <= 0.0)
 				DesiredState = EAnimationState::Airborne;
 		}
 	}
@@ -243,7 +305,7 @@ void UCatPhysicsPrototypeVisualComponent::UpdateBaseAnimation(const float DeltaT
 	{
 		DesiredState = EAnimationState::Landing;
 	}
-	else if (AnimationState != EAnimationState::Landing || AnimationStateSeconds >= CatPhysicsPrototypeVisual::LandingSeconds)
+	else if (AnimationState != EAnimationState::Landing || AnimationStateSeconds >= JumpEndAnimation->GetPlayLength())
 	{
 		const bool bShouldWalk = FMath::IsFinite(Speed) && Speed > (AnimationState == EAnimationState::Walk ? 3.0f : 6.0f);
 		DesiredState = bShouldWalk ? EAnimationState::Walk : EAnimationState::Idle;
@@ -252,10 +314,8 @@ void UCatPhysicsPrototypeVisualComponent::UpdateBaseAnimation(const float DeltaT
 	if (bGrounded) TakeoffConfirmationSeconds = 0.0f;
 	bWasGrounded = bGrounded;
 	bHasMovementSample = true;
-	const float PlayRate = AnimationState == EAnimationState::Takeoff
-		? JumpStartAnimation->GetPlayLength() / CatPhysicsPrototypeVisual::TakeoffSeconds
-		: AnimationState == EAnimationState::Landing ? JumpEndAnimation->GetPlayLength() / CatPhysicsPrototypeVisual::LandingSeconds
-		: AnimationState == EAnimationState::Walk ? FMath::Clamp(Speed / CatPhysicsPrototypeVisual::WalkReferenceSpeed, 0.3f, 2.0f) : 1.0f;
+	const float PlayRate = AnimationState == EAnimationState::Walk
+		? FMath::Clamp(Speed / CatPhysicsPrototypeVisual::WalkReferenceSpeed, 0.3f, 2.0f) : 1.0f;
 	AnimationSource->SetPlayRate(PlayRate);
 }
 
@@ -278,14 +338,14 @@ void UCatPhysicsPrototypeVisualComponent::PlayBaseAnimation(const EAnimationStat
 	}
 	AnimationSource->PlayAnimation(Animation, NewState != EAnimationState::Takeoff && NewState != EAnimationState::Landing);
 	static const TCHAR* Names[] = {TEXT("Idle"), TEXT("Walk"), TEXT("Takeoff"), TEXT("Airborne"), TEXT("Landing")};
-	const auto* Pawn = Cast<ACatPhysicsPrototypePawn>(GetOwner());
+	const auto* Pawn = GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();
 	UE_LOG(LogCatCharacter, Log,
 		TEXT("Event=physics_prototype_animation_changed Actor=%s World=%s NetMode=%d Authority=%d LocalRole=%d BodyId=%s From=%s To=%s Animation=%s Grounded=%d VelocityZCmS=%.2f ResetEpoch=%u"),
 		*GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), static_cast<int32>(GetWorld()->GetNetMode()),
 		GetOwner()->HasAuthority(), static_cast<int32>(GetOwner()->GetLocalRole()),
-		Pawn ? *Pawn->GetPrototypeId().ToString() : TEXT("None"), Names[static_cast<uint8>(PreviousState)], Names[static_cast<uint8>(NewState)],
-		*GetNameSafe(Animation), Pawn && Pawn->IsPrototypeGrounded(), GetOwner()->GetVelocity().Z,
-		Pawn ? Pawn->GetPrototypeResetEpoch() : 0);
+		Pawn ? *Pawn->GetBodyId().ToString() : TEXT("None"), Names[static_cast<uint8>(PreviousState)], Names[static_cast<uint8>(NewState)],
+		*GetNameSafe(Animation), Pawn && Pawn->IsGrounded(), GetOwner()->GetVelocity().Z,
+		Pawn ? Pawn->GetResetEpoch() : 0);
 }
 
 void UCatPhysicsPrototypeVisualComponent::RebuildComponentPose()
@@ -370,7 +430,7 @@ void UCatPhysicsPrototypeVisualComponent::DestroyVisualComponents()
 	for (UActorComponent* Component : { static_cast<UActorComponent*>(VisualMesh.Get()),
 		static_cast<UActorComponent*>(AnimationSource.Get()) })
 	{
-		if (!IsValid(Component)) continue;
+		if (!IsValid(Component) || (!bOwnsAnimationSource && Component == AnimationSource)) continue;
 		if (AActor* Owner = GetOwner()) Owner->RemoveInstanceComponent(Component);
 		Component->DestroyComponent();
 	}
@@ -382,6 +442,7 @@ void UCatPhysicsPrototypeVisualComponent::DestroyVisualComponents()
 	ComponentPose.Reset();
 	TransitionFromPose.Reset();
 	LastBasePose.Reset();
+	bFormalJumpRootCompensationActive = false;
 }
 
 void UCatPhysicsPrototypeVisualComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)

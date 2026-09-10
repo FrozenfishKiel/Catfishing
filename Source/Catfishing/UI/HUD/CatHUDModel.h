@@ -49,8 +49,9 @@ protected:
 	virtual void BeginDestroy() override;
 
 private:
-	friend class FCatHUDCooperativeStaminaTest;
-	friend class FCatHUDFishingMembershipBindingTest;
+	friend class FCatHUDPersonalStaminaTest;
+	friend class FCatHUDFishingOwnerBindingTest;
+	friend class FCatHUDPhysicalGrabProjectionTest;
 	/** ASC 属性变化入口；忽略单项载荷后重读完整 HUD 事实。 */
 	void HandleAttributeChanged(const FOnAttributeChangeData& ChangeData);
 
@@ -87,7 +88,7 @@ private:
 
 	/** 按当前 PlayerState 定位 FishingSession 并调和 FishingViewBridge；找不到时显示无活动会话。 */
 	void RefreshFishingSessionBinding();
-	/** 有界频率调和成员与 Session 复制到达顺序，不把命令回执当作成员复制完成通知。 */
+	/** 有界频率调和唯一主控与 Session 复制到达顺序，不把命令回执当作复制完成通知。 */
 	void ScheduleFishingSessionBindingReconcile();
 	void ClearFishingSessionBindingReconcile();
 

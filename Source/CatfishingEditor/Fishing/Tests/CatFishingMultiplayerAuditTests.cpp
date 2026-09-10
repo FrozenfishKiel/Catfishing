@@ -180,7 +180,6 @@ namespace CatFishingMultiplayerAudit
 					const ACatFishingRodActor* AuthorityRod = ServerRod.Get();
 					if (!It->GetActorTransform().Equals(AuthorityRod->GetActorTransform(), 0.01)) continue;
 					const double TipError = FVector::Distance(It->GetRodTipWorldTransform().GetLocation(), AuthorityRod->GetRodTipWorldTransform().GetLocation());
-					const double StandError = FVector::Distance(It->GetOperatorInteractionWorldTransform().GetLocation(), AuthorityRod->GetOperatorInteractionWorldTransform().GetLocation());
 					const double GripError = FVector::Distance(It->GetGripWorldTransform().GetLocation(), AuthorityRod->GetGripWorldTransform().GetLocation());
 					const auto FindVisualLineAnchor = [](const ACatFishingRodActor* Rod) -> const USceneComponent*
 					{
@@ -194,12 +193,11 @@ namespace CatFishingMultiplayerAudit
 					const USceneComponent* ServerVisual = FindVisualLineAnchor(AuthorityRod);
 					const USceneComponent* ClientVisual = FindVisualLineAnchor(*It);
 					const double VisualError = FVector::Distance(ServerVisual->GetComponentLocation(), ClientVisual->GetComponentLocation());
-					Test->AddInfo(FString::Printf(TEXT("Event=multiplayer_anchor_probe Variant=%s ServerNetMode=%d ClientNetMode=%d RodActorId=%s TipErrorCm=%.3f StandErrorCm=%.3f GripErrorCm=%.3f VisualErrorCm=%.3f VisualAnchor=%s"),
+					Test->AddInfo(FString::Printf(TEXT("Event=multiplayer_anchor_probe Variant=%s ServerNetMode=%d ClientNetMode=%d RodActorId=%s TipErrorCm=%.3f GripErrorCm=%.3f VisualErrorCm=%.3f VisualAnchor=%s"),
 						bFormal ? TEXT("FormalBlueprint") : TEXT("Native"), Server->GetNetMode(), Client->GetNetMode(),
-						*RodId.ToString(), TipError, StandError, GripError, VisualError, *GetNameSafe(ClientVisual)));
+						*RodId.ToString(), TipError, GripError, VisualError, *GetNameSafe(ClientVisual)));
 					Test->TestTrue(TEXT("control: replicated grip agrees"), GripError < 0.1);
 					Test->TestTrue(TEXT("client rod tip agrees with server"), TipError < 0.1);
-					Test->TestTrue(TEXT("client interaction anchor agrees with server"), StandError < 0.1);
 					return true;
 				}
 			}

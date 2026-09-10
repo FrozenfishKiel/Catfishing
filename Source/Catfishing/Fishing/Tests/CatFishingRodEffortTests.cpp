@@ -3,137 +3,21 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 #include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Components/BoxComponent.h"
+#include "Components/SphereComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMeshActor.h"
+#include "Engine/StaticMesh.h"
+#include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
+#include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "OnlineSubsystemTypes.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Framework/Game/CatfishingPlayerState.h"
 #include "GameFramework/PlayerState.h"
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingRodEffortSeparatesActiveAndPassiveTest,
-	"Catfishing.Unit.Fishing.Simulation.RodEffortSeparatesActiveAndPassiveRotation",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
-
-bool FCatFishingRodEffortSeparatesActiveAndPassiveTest::RunTest(const FString& Parameters)
-{
-	(void)Parameters;
-	FCatFishingRodRotationInput Input;
-	Input.bCatDriveActive = false;
-	Input.CatTorqueCapacity = 50.0;
-	Input.CurrentAim.Yaw = 60.0;
-	Input.RequestedAim.Yaw = 120.0;
-	Input.MaximumFishTorque = 100.0;
-	Input.PreviousSmoothedFishPullStrengthMeters = FVector(100.0, 0.0, 0.0);
-	Input.DeltaSeconds = 1.0 / 60.0;
-	const auto Passive = FCatFishingRodResistanceModel::StepRotation(Input);
-	TestTrue(TEXT("fish can rotate the rod with no cat torque"),
-		Passive.bSucceeded && Passive.ActualAim.Yaw < Input.CurrentAim.Yaw);
-	TestEqual(TEXT("passive dragging has no cat intent effort"), Passive.CatExertionSquaredSeconds, 0.0);
-	TestEqual(TEXT("passive dragging has no cat work"), Passive.CatPositiveWorkRadians, 0.0);
-
-	Input.CatTorqueCapacity = 50.0;
-	Input.bCatDriveActive = true;
-	const auto Opposed = FCatFishingRodResistanceModel::StepRotation(Input);
-	TestTrue(TEXT("fish overcomes active cat torque in the opposite direction"),
-		Opposed.bSucceeded && Opposed.ActualAim.Yaw < Input.CurrentAim.Yaw);
-	TestTrue(TEXT("trying to turn against an overpowering fish still records effort"),
-		Opposed.CatExertionSquaredSeconds > 0.0);
-	TestEqual(TEXT("opposite rotation does not count as successful active work"),
-		Opposed.CatPositiveWorkRadians, 0.0, 1e-9);
-
-	Input.CurrentAim.Yaw = 30.0;
-	const auto Holding = FCatFishingRodResistanceModel::StepRotation(Input);
-	TestTrue(TEXT("holding torque equilibrium still records effort"), Holding.CatExertionSquaredSeconds > 0.0);
-	TestEqual(TEXT("equilibrium produces no realized work"), Holding.CatPositiveWorkRadians, 0.0, 1e-7);
-
-	Input.MaximumFishTorque = 0.0;
-	Input.PreviousSmoothedFishPullStrengthMeters = FVector::ZeroVector;
-	const auto Free = FCatFishingRodResistanceModel::StepRotation(Input);
-	TestTrue(TEXT("active unloaded rotation completes positive work"), Free.CatPositiveWorkRadians > 0.0);
-	TestEqual(TEXT("unloaded positive work follows actual angular motion and normalized torque"),
-		Free.CatPositiveWorkRadians, FMath::DegreesToRadians(
-			FMath::FindDeltaAngleDegrees(Input.CurrentAim.Yaw, Free.ActualAim.Yaw)), 1e-7);
-	TestTrue(TEXT("starting rotation cannot charge unperformed full-speed motion"),
-		Free.CatPositiveWorkRadians < FMath::DegreesToRadians(Input.MaximumAngularSpeedDegreesPerSecond) * Free.CatExertionSquaredSeconds);
-
-	Input.DeltaSeconds = 1.0;
-	const auto Hitch = FCatFishingRodResistanceModel::StepRotation(Input);
-	TestEqual(TEXT("effort covers only the quarter second actually integrated during a hitch"),
-		Hitch.IntegratedSeconds, 0.25, 1e-9);
-	Input.DeltaSeconds = 0.0;
-	Input.PreviousAngularVelocityRadiansPerSecond = Free.AngularVelocityRadiansPerSecond;
-	const auto Paused = FCatFishingRodResistanceModel::StepRotation(Input);
-	TestEqual(TEXT("zero-time pose refresh cannot duplicate intent effort"), Paused.CatExertionSquaredSeconds, 0.0);
-	TestEqual(TEXT("zero-time pose refresh cannot duplicate actual effort"), Paused.CatPositiveWorkRadians, 0.0);
-	TestTrue(TEXT("zero-time pose refresh preserves angular momentum"),
-		Paused.AngularVelocityRadiansPerSecond.Equals(Input.PreviousAngularVelocityRadiansPerSecond, 1e-9));
-
-	Input.bCatDriveActive = false;
-	// 停手仍有完整力量容量和未完成目标，唯独主动转矩为零；不能靠容量清零蒙混过关。
-	Input.CatTorqueCapacity = 50.0;
-	Input.DeltaSeconds = 1.0 / 60.0;
-	Input.PreviousAngularVelocityRadiansPerSecond = FVector(0.0, 0.0, 1.0);
-	const auto Coasting = FCatFishingRodResistanceModel::StepRotation(Input);
-	TestTrue(TEXT("stopped mouse preserves and damps existing motion despite retained capacity and old target"),
-		Coasting.bSucceeded && Coasting.ActualAim.Yaw > Input.CurrentAim.Yaw
-		&& Coasting.AngularVelocityRadiansPerSecond.Z > 0.0 && Coasting.AngularVelocityRadiansPerSecond.Z < 1.0);
-	TestEqual(TEXT("inertial motion without cat torque has no support fee"), Coasting.CatExertionSquaredSeconds, 0.0);
-	TestEqual(TEXT("inertial motion without cat torque has no active motion fee"), Coasting.CatPositiveWorkRadians, 0.0);
-	Input.PreviousAngularVelocityRadiansPerSecond = FVector::ZeroVector;
-	const auto Stopped = FCatFishingRodResistanceModel::StepRotation(Input);
-	TestTrue(TEXT("unfinished target cannot restart a stationary rod when mouse drive is off"),
-		Stopped.bSucceeded && Stopped.ActualAim.Equals(Input.CurrentAim, 1e-9)
-		&& Stopped.NetTorque.IsNearlyZero() && Stopped.AngularVelocityRadiansPerSecond.IsNearlyZero());
-	return !HasAnyErrors();
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingRodEffortFrameRateTest,
-	"Catfishing.Unit.Fishing.Simulation.RodEffortIsStableAcrossFrameRates",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
-
-bool FCatFishingRodEffortFrameRateTest::RunTest(const FString& Parameters)
-{
-	(void)Parameters;
-	double ReferenceIntent = 0.0;
-	double ReferenceActual = 0.0;
-	for (const int32 Rate : {120, 60, 20})
-	{
-		FCatFishingRodRotationInput Input;
-		Input.bCatDriveActive = true;
-		Input.CatTorqueCapacity = 50.0;
-		Input.RequestedAim = FRotator(25.0, 120.0, 0.0);
-		Input.DeltaSeconds = 1.0 / Rate;
-		double TotalIntent = 0.0;
-		double TotalActual = 0.0;
-		double TotalSeconds = 0.0;
-		for (int32 Phase = 0; Phase < 6; ++Phase)
-		{
-			Input.MaximumFishTorque = Phase < 4 ? 100.0 : 0.0;
-			Input.PullAxis = Phase < 2 ? FVector::ForwardVector : -FVector::ForwardVector;
-			for (int32 Frame = 0; Frame < Rate / 2; ++Frame)
-			{
-				const auto Step = FCatFishingRodResistanceModel::StepRotation(Input);
-				if (!TestTrue(TEXT("rotation effort integrates successfully"), Step.bSucceeded)) return false;
-				Input.CurrentAim = Step.ActualAim;
-				Input.PreviousSmoothedFishPullStrengthMeters = Step.SmoothedFishPullStrengthMeters;
-				Input.PreviousAngularVelocityRadiansPerSecond = Step.AngularVelocityRadiansPerSecond;
-				TotalIntent += Step.CatExertionSquaredSeconds;
-				TotalActual += Step.CatPositiveWorkRadians;
-				TotalSeconds += Step.IntegratedSeconds;
-			}
-		}
-		if (Rate == 120)
-		{
-			ReferenceIntent = TotalIntent;
-			ReferenceActual = TotalActual;
-		}
-		TestTrue(TEXT("changing line loads produces bounded support time and positive work"),
-			TotalIntent > 0.0 && TotalIntent <= TotalSeconds && TotalActual > 0.0);
-		TestEqual(TEXT("intent totals agree across 20, 60 and 120 FPS"), TotalIntent, ReferenceIntent, 0.05);
-		TestEqual(TEXT("realized totals agree across 20, 60 and 120 FPS"), TotalActual, ReferenceActual, 0.05);
-		TestEqual(TEXT("all frame rates account for the same three seconds"), TotalSeconds, 3.0, 1e-8);
-	}
-	return !HasAnyErrors();
-}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingRodEffortSnapshotLifecycleTest,
 	"Catfishing.Unit.Fishing.Actors.RodEffortSnapshotSurvivesSamplingAndResetsWithOwnerAndFight",
@@ -141,138 +25,100 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingRodEffortSnapshotLifecycleTest,
 
 bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameters)
 {
-	(void)Parameters;
-	FTestWorldWrapper WorldWrapper;
-	if (!TestTrue(TEXT("create rod effort world"), WorldWrapper.CreateTestWorld(EWorldType::Game))) return false;
-	WorldWrapper.ForwardErrorMessages(this);
-	WorldWrapper.BeginPlayInTestWorld();
-	UWorld* World = WorldWrapper.GetTestWorld();
-	ACatfishingPlayerController* Controller = World->SpawnActor<ACatfishingPlayerController>();
-	ACatfishingPlayerState* PlayerState = World->SpawnActor<ACatfishingPlayerState>();
-	ACatCharacter* Character = World->SpawnActor<ACatCharacter>();
-	ACatFishingRodActor* Rod = World->SpawnActor<ACatFishingRodActor>();
-	APlayerState* NextHolder = World->SpawnActor<APlayerState>();
-	if (!TestNotNull(TEXT("controller"), Controller) || !TestNotNull(TEXT("player state"), PlayerState)
-		|| !TestNotNull(TEXT("character"), Character) || !TestNotNull(TEXT("rod"), Rod)
-		|| !TestNotNull(TEXT("next holder"), NextHolder)) return false;
-	Controller->PlayerState = PlayerState;
-	Character->SetPlayerState(PlayerState);
-	Controller->Possess(Character);
-	Controller->SetControlRotation(FRotator::ZeroRotator);
-	TestTrue(TEXT("initialize held rod"), Rod->InitializeAuthoritativeIdentity(
-		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("EffortRod"), TEXT("Skin"), PlayerState, PlayerState, true, false));
-	TestTrue(TEXT("initialize held aim"), Rod->RefreshHeldTransformFromAuthority());
-	TestTrue(TEXT("start fight rotation"), Rod->SetCarrierConstraintFromAuthority(
-		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, true, 100.0, 50.0));
-	Controller->SetControlRotation(FRotator(0.0, 120.0, 0.0));
-	FCatFishingRodAimSample Mouse;
-	Mouse.RodActorId = Rod->GetPresentationState().RodActorId;
-	Mouse.InputEpoch = Rod->GetCarrierConstraintState().AimInputEpoch;
-	Mouse.Sequence = 1;
-	Mouse.bMouseActive = true;
-	Mouse.MouseStrokeSequence = 1;
-	Mouse.CumulativeLookDegrees.X = 120.0;
-	TestTrue(TEXT("explicit active mouse supplies the rotation intent"), Rod->AcceptHeldAimSampleFromAuthority(PlayerState, Mouse));
-	FCatFishingRodRotationPrediction InitialPrediction;
-	if (!TestTrue(TEXT("production rod supplies the initial inertia snapshot"),
-		Rod->GetRotationPredictionFromAuthority(1.0 / 60.0, InitialPrediction))) return false;
-	TestTrue(TEXT("new fight begins without prior angular velocity"), InitialPrediction.Input.PreviousAngularVelocityRadiansPerSecond.IsNearlyZero());
-	const auto ExpectedRotation = FCatFishingRodResistanceModel::StepRotation(InitialPrediction.Input);
-	TestTrue(TEXT("integrate active rotation"), Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0));
-	FCatFishingRodRotationPrediction AfterActualRotation;
-	if (!TestTrue(TEXT("read the integrated inertia snapshot"), Rod->GetRotationPredictionFromAuthority(0.0, AfterActualRotation))) return false;
-	TestTrue(TEXT("actual actor integration writes back the shared model's angular velocity"),
-		!AfterActualRotation.Input.PreviousAngularVelocityRadiansPerSecond.IsNearlyZero()
-		&& AfterActualRotation.Input.PreviousAngularVelocityRadiansPerSecond.Equals(ExpectedRotation.AngularVelocityRadiansPerSecond, 1e-8));
-	TestTrue(TEXT("actual actor uses the same constrained angle as prediction"),
-		AfterActualRotation.Input.CurrentAim.Equals(ExpectedRotation.ActualAim, 1e-8));
-	const auto First = Rod->GetAuthoritativeRotationEffortSnapshot();
-	TestTrue(TEXT("authoritative integration accumulates effort"), First.ExertionSquaredSeconds > 0.0);
-	const auto Repeated = Rod->GetAuthoritativeRotationEffortSnapshot();
-	TestEqual(TEXT("multiple fixed-step readers see the same cumulative intent"),
-		Repeated.ExertionSquaredSeconds, First.ExertionSquaredSeconds);
-	TestEqual(TEXT("multiple readers do not consume or duplicate actual effort"),
-		Repeated.PositiveWorkRadians, First.PositiveWorkRadians);
-	TestTrue(TEXT("zero-time refresh succeeds"), Rod->RefreshHeldTransformFromAuthority());
-	TestEqual(TEXT("zero-time refresh retains the same effort snapshot"),
-		Rod->GetAuthoritativeRotationEffortSnapshot().ExertionSquaredSeconds, First.ExertionSquaredSeconds);
-	FCatFishingRodRotationPrediction AfterZeroTimeRefresh;
-	Rod->GetRotationPredictionFromAuthority(0.0, AfterZeroTimeRefresh);
-	TestTrue(TEXT("zero-time production refresh preserves nonzero angular velocity"),
-		AfterZeroTimeRefresh.Input.PreviousAngularVelocityRadiansPerSecond.Equals(
-			AfterActualRotation.Input.PreviousAngularVelocityRadiansPerSecond, 1e-8));
-	int32 HelperSlot = INDEX_NONE;
-	TestTrue(TEXT("add helper without changing the primary holder"),
-		Rod->AddOperatorFromAuthority(NextHolder, Rod->GetPresentationState().RodActorRevision, HelperSlot));
-	FCatFishingRodRotationPrediction AfterHelperJoined;
-	TestTrue(TEXT("same-holder roster change preserves real angular velocity"),
-		Rod->GetRotationPredictionFromAuthority(0.0, AfterHelperJoined)
-		&& AfterHelperJoined.Input.PreviousAngularVelocityRadiansPerSecond.Equals(
-			AfterActualRotation.Input.PreviousAngularVelocityRadiansPerSecond, 1e-8));
-	APlayerState* PromotedPrimary = nullptr;
-	TestTrue(TEXT("remove helper while retaining the primary holder"),
-		Rod->RemoveOperatorFromAuthority(NextHolder, Rod->GetPresentationState().RodActorRevision, PromotedPrimary));
-	// 通过生产 Actor 接入配置和实际 Transform；固定控制器意图，不能只让纯模型测试使用新参数。
-	for (int32 Frame = 0; Frame < 360; ++Frame)
+	FTestWorldWrapper Wrapper;
+	if (!Wrapper.CreateTestWorld(EWorldType::Game)) return false;
+	Wrapper.ForwardErrorMessages(this);
+	UWorld* World=Wrapper.GetTestWorld();
+	FURL URL; URL.AddOption(TEXT("game=/Script/Catfishing.CatfishingGameModeBase"));
+	if (!World->SetGameMode(URL) || !Wrapper.BeginPlayInTestWorld()) return false;
+	auto* GameMode=World->GetAuthGameMode<ACatfishingGameModeBase>();
+	GameMode->bRunCommandsOpen=true; GameMode->RunPublicState.Phase.Phase=ECatRunPhase::DayActive; GameMode->RunPublicState.Phase.bFishingAllowed=true;
+	auto* Floor=World->SpawnActor<AStaticMeshActor>();
+	Floor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Movable);
+	Floor->GetStaticMeshComponent()->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,TEXT("/Engine/BasicShapes/Cube.Cube")));
+	Floor->GetStaticMeshComponent()->SetCollisionProfileName(TEXT("BlockAll"));
+	Floor->SetActorTransform(FTransform(FRotator::ZeroRotator,FVector(0,0,-10),FVector(20,20,.2)));
+	Floor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Static);
+	TArray<ACatCharacter*> Cats; TArray<ACatfishingPlayerState*> Players;
+	FActorSpawnParameters Spawn; Spawn.SpawnCollisionHandlingOverride=ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+	for (int32 Index=0;Index<2;++Index)
 	{
-		const double PreviousYaw = Rod->GetActorRotation().Yaw;
-		if (!TestTrue(TEXT("held actor integrates loaded pose"), Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0))) return false;
-		if (Frame >= 60)
-		{
-			TestTrue(TEXT("production held transform respects the damped loaded speed"),
-				FMath::Abs(FMath::FindDeltaAngleDegrees(PreviousYaw, Rod->GetActorRotation().Yaw)) <= 1.5 + 1e-6);
-		}
+		auto* Controller=World->SpawnActor<ACatfishingPlayerController>();
+		auto* Player=World->SpawnActor<ACatfishingPlayerState>();
+		auto* Cat=World->SpawnActor<ACatCharacter>(FVector(0,Index*70,20),FRotator::ZeroRotator,Spawn);
+		if (!Controller || !Player || !Cat) return false;
+		Controller->PlayerState=Player; Cat->SetPlayerState(Player); Controller->Possess(Cat); Controller->SetActorTickEnabled(false);
+		const FUniqueNetIdRef StableId=FUniqueNetIdString::Create(FString::Printf(TEXT("Effort%d"),Index),FName(TEXT("CAT_TEST")));
+		Player->SetUniqueId(FUniqueNetIdRepl(StableId));
+		ACatfishingGameModeBase::FAdmissionRecord Admission; Admission.Phase=ACatfishingGameModeBase::EAdmissionPhase::Active; Admission.Controller=Controller;
+		GameMode->AdmissionRecords.Add(ACatfishingGameModeBase::MakeStableNetIdKey(Player->GetUniqueId()),Admission);
+		Cats.Add(Cat); Players.Add(Player);
 	}
-	TestEqual(TEXT("production actor keeps the same torque equilibrium under unchanged controller intent"),
-		Rod->GetActorRotation().Yaw, 30.0, 0.02);
-	TestEqual(TEXT("loaded integration preserves the original holder effort epoch"),
-		Rod->GetAuthoritativeRotationEffortSnapshot().Epoch, First.Epoch);
-	TestTrue(TEXT("slack update retains the same fight"), Rod->SetCarrierConstraintFromAuthority(
-		FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true, 0.0, 50.0));
-	TestEqual(TEXT("load changes cannot erase unconsumed effort"),
-		Rod->GetAuthoritativeRotationEffortSnapshot().Epoch, First.Epoch);
-	TestTrue(TEXT("unloaded old target starts actual motion before fight cleanup"), Rod->RefreshHeldTransformFromAuthority(0.05));
-	FCatFishingRodRotationPrediction BeforeCleanup;
-	TestTrue(TEXT("cleanup fixture has nonzero angular velocity"),
-		Rod->GetRotationPredictionFromAuthority(0.0, BeforeCleanup)
-		&& !BeforeCleanup.Input.PreviousAngularVelocityRadiansPerSecond.IsNearlyZero());
-	Rod->ClearCarrierConstraintFromAuthority();
-	const auto Cleared = Rod->GetAuthoritativeRotationEffortSnapshot();
-	TestTrue(TEXT("fight cleanup starts a new epoch"), Cleared.Epoch > First.Epoch);
-	TestEqual(TEXT("fight cleanup drops previous fight effort"), Cleared.ExertionSquaredSeconds, 0.0);
-	FCatFishingRodRotationPrediction AfterCleanup;
-	TestTrue(TEXT("fight cleanup discards previous fight angular velocity"),
-		Rod->GetRotationPredictionFromAuthority(0.0, AfterCleanup)
-		&& AfterCleanup.Input.PreviousAngularVelocityRadiansPerSecond.IsNearlyZero());
-	TestTrue(TEXT("restart fight rotation"), Rod->SetCarrierConstraintFromAuthority(
-		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, true, 100.0, 50.0));
-	Mouse.InputEpoch = Rod->GetCarrierConstraintState().AimInputEpoch;
-	++Mouse.Sequence;
-	++Mouse.MouseStrokeSequence;
-	TestTrue(TEXT("new fight requires fresh mouse input in its own epoch"), Rod->AcceptHeldAimSampleFromAuthority(PlayerState, Mouse));
-	TestTrue(TEXT("new fight collects fresh effort"), Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0));
-	const auto Restarted = Rod->GetAuthoritativeRotationEffortSnapshot();
-	TestTrue(TEXT("restart gets a new epoch and effort"),
-		Restarted.Epoch > Cleared.Epoch && Restarted.ExertionSquaredSeconds > 0.0);
-	auto* NextController = World->SpawnActor<APlayerController>();
-	auto* NextCharacter = World->SpawnActor<ACatCharacter>();
-	if (!TestNotNull(TEXT("next holder controller"), NextController)
-		|| !TestNotNull(TEXT("next holder character"), NextCharacter)) return false;
-	NextController->PlayerState = NextHolder;
-	NextCharacter->SetPlayerState(NextHolder);
-	NextController->Possess(NextCharacter);
-	const FRotator AimBeforeTransfer = Rod->GetGripWorldTransform().Rotator();
-	TestTrue(TEXT("transfer holder"), Rod->SetOperatorFromAuthority(
-		NextHolder, Rod->GetPresentationState().RodActorRevision));
-	const auto Transferred = Rod->GetAuthoritativeRotationEffortSnapshot();
-	TestTrue(TEXT("holder transfer changes epoch"), Transferred.Epoch > Restarted.Epoch);
-	TestEqual(TEXT("new holder cannot inherit former holder effort"), Transferred.ExertionSquaredSeconds, 0.0);
-	FCatFishingRodRotationPrediction AfterTransfer;
-	TestTrue(TEXT("new holder waits at the actual angle with previous holder angular velocity cleared"),
-		Rod->GetRotationPredictionFromAuthority(0.0, AfterTransfer)
-		&& AfterTransfer.bHoldActualAim
-		&& AfterTransfer.Input.CurrentAim.Equals(AimBeforeTransfer, 1e-8)
-		&& AfterTransfer.Input.PreviousAngularVelocityRadiansPerSecond.IsNearlyZero());
+	auto* Rod=World->SpawnActor<ACatFishingRodActor>();
+	if (!Rod || !Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(),FGuid::NewGuid(),TEXT("EffortRod"),NAME_None,Players[0],nullptr,true,false)
+		|| !Rod->BeginPhysicalHoldFromAuthority(Players[0],true)
+		|| !Rod->SetPrimaryOperatorFromAuthority(Players[0],Rod->GetPresentationState().RodActorRevision)) return false;
+	if (!TestTrue(TEXT("real primary rod constraint exists"),Cats[0]->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true))) return false;
+	Rod->SetFightConstraintObservationFromAuthority(FVector::ForwardVector, 1, 0, true, 100, 50);
+	FCatFishingRodAimSample Mouse; Mouse.RodActorId=Rod->GetPresentationState().RodActorId; Mouse.InputEpoch=Rod->GetCarrierConstraintState().AimInputEpoch;
+	Mouse.Sequence=1; Mouse.bMouseActive=true; Mouse.MouseStrokeSequence=1; Mouse.CumulativeLookDegrees.X=45;
+	const auto Tick=[&]() { for (auto* Cat:Cats) Cat->GetPhysicalBodyComponent()->SetMoveIntent(FVector::ZeroVector); Wrapper.TickTestWorld(1.0f/60.0f); Rod->RefreshHeldTransformFromAuthority(); };
+	for (int32 Frame=0;Frame<12;++Frame)
+	{ ++Mouse.Sequence; Mouse.CumulativeLookDegrees.X+=.1; if (!Rod->AcceptHeldAimSampleFromAuthority(Players[0],Mouse)) return false; Tick(); }
+	FCatFishingRodControlObservation Actual;
+	if (!TestTrue(TEXT("reads authoritative rigid-body observation"),Rod->GetControlObservationFromAuthority(Actual))) return false;
+	TestTrue(TEXT("observed angular velocity comes from actual Chaos body"),Actual.AngularVelocityRadiansPerSecond.Equals(Rod->GetPhysicalRodBody()->GetPhysicsAngularVelocityInRadians(),1.e-8));
+	const auto First=Rod->GetAuthoritativeRotationEffortSnapshot();
+	TestTrue(TEXT("real active motor accumulates support effort"),First.ExertionSquaredSeconds>0);
+	TestTrue(TEXT("real rotation accumulates positive work"),First.PositiveWorkRadians>0);
+	const auto Repeated=Rod->GetAuthoritativeRotationEffortSnapshot();
+	TestEqual(TEXT("reading cumulative intent cannot charge twice"),Repeated.ExertionSquaredSeconds,First.ExertionSquaredSeconds);
+	TestEqual(TEXT("reading cumulative work cannot consume it"),Repeated.PositiveWorkRadians,First.PositiveWorkRadians);
+	const FTransform BeforeRead=Rod->GetPhysicalRodBody()->GetComponentTransform();
+	Rod->RefreshHeldTransformFromAuthority(1.0);
+	TestTrue(TEXT("observation refresh cannot integrate a second physical pose"),Rod->GetPhysicalRodBody()->GetComponentTransform().Equals(BeforeRead,1.e-8));
+	TestEqual(TEXT("observation refresh cannot integrate a second effort step"),Rod->GetAuthoritativeRotationEffortSnapshot().ExertionSquaredSeconds,First.ExertionSquaredSeconds);
+	Mouse.bMouseActive=false; ++Mouse.Sequence; Rod->AcceptHeldAimSampleFromAuthority(Players[0],Mouse);
+	const auto Passive=Rod->GetAuthoritativeRotationEffortSnapshot();
+	for (int32 Frame=0;Frame<12;++Frame) Tick();
+	TestEqual(TEXT("passive inertia does not charge support"),Rod->GetAuthoritativeRotationEffortSnapshot().ExertionSquaredSeconds,Passive.ExertionSquaredSeconds);
+	TestEqual(TEXT("passive inertia does not charge positive work"),Rod->GetAuthoritativeRotationEffortSnapshot().PositiveWorkRadians,Passive.PositiveWorkRadians);
+	const FVector Momentum=Rod->GetPhysicalRodBody()->GetPhysicsAngularVelocityInRadians();
+	Rod->ClearFightConstraintAndLoadFromAuthority();
+	const auto Cleared=Rod->GetAuthoritativeRotationEffortSnapshot();
+	TestTrue(TEXT("fight cleanup changes effort epoch"),Cleared.Epoch>First.Epoch);
+	TestEqual(TEXT("fight cleanup drops prior effort"),Cleared.ExertionSquaredSeconds,0.0);
+	TestTrue(TEXT("fight cleanup preserves actual angular momentum"),Rod->GetPhysicalRodBody()->GetPhysicsAngularVelocityInRadians().Equals(Momentum,1.e-8));
+	Rod->SetFightConstraintObservationFromAuthority(FVector::ForwardVector, 1, 0, true, 100, 50);
+	Mouse.InputEpoch=Rod->GetCarrierConstraintState().AimInputEpoch; Mouse.bMouseActive=true; ++Mouse.MouseStrokeSequence; Mouse.MouseStrokeStartLookDegrees=Mouse.CumulativeLookDegrees;
+	for (int32 Frame=0;Frame<6;++Frame) { ++Mouse.Sequence; Mouse.CumulativeLookDegrees.X+=2; if (!Rod->AcceptHeldAimSampleFromAuthority(Players[0],Mouse)) return false; Tick(); }
+	const auto Restarted=Rod->GetAuthoritativeRotationEffortSnapshot();
+	TestTrue(TEXT("new fight collects only fresh motor effort"),Restarted.Epoch>Cleared.Epoch && Restarted.ExertionSquaredSeconds>0);
+	// Position a free helper at the actual rod contact; the normal grip validation still checks geometry and eligibility.
+	auto* NextBody=Cats[1]->GetPhysicalBodyComponent();
+	const FVector Contact=Rod->GetGripWorldTransform().GetLocation();
+	const FQuat HelperRotation=Cats[1]->GetActorQuat();
+	NextBody->TeleportBodyFromAuthority(FTransform(HelperRotation,Contact-HelperRotation.RotateVector(UCatPhysicsGrabComponent::RestHandLocal(true))),TEXT("EffortHelperContact"));
+	if (!TestTrue(TEXT("helper establishes a real direct rod grip"),NextBody->GetGrab()->GripFromAuthority(true,Rod->GetPhysicalRodBody(),Contact))) return false;
+	Rod->GetPhysicalRodComponent()->RefreshPrimaryControl();
+	TestEqual(TEXT("helper contact does not reset owner effort epoch"),Rod->GetAuthoritativeRotationEffortSnapshot().Epoch,Restarted.Epoch);
+	TestEqual(TEXT("helper contact does not create another fishing operator"),Rod->GetOperatorCount(),1);
+	TestTrue(TEXT("explicit owner remains the only operator"),Rod->IsPrimaryOperator(Players[0])&&!Rod->IsPrimaryOperator(Players[1]));
+	TestFalse(TEXT("physically connected helper cannot turn through the owner's input protocol"),Rod->AcceptHeldAimSampleFromAuthority(Players[1],Mouse));
+	const FTransform BeforeRelease=Rod->GetPhysicalRodBody()->GetComponentTransform();
+	const FVector BeforeReleaseMomentum=Rod->GetPhysicalRodBody()->GetPhysicsAngularVelocityInRadians();
+	Cats[0]->GetPhysicalBodyComponent()->GetGrab()->ReleaseAllFromAuthority(TEXT("EffortOwnerRelease"));
+	Rod->GetPhysicalRodComponent()->RefreshPrimaryControl();
+	TestEqual(TEXT("owner release leaves no fishing operator"),Rod->GetOperatorCount(),0);
+	TestTrue(TEXT("helper's real grip survives owner release"),NextBody->GetGrab()->IsGripping(true)&&NextBody->GetGrab()->GetGripTarget(true)==Rod);
+	TestFalse(TEXT("remaining physical helper never automatically takes control"),Rod->IsPrimaryOperator(Players[1]));
+	const auto Released=Rod->GetAuthoritativeRotationEffortSnapshot();
+	TestTrue(TEXT("owner release ends the former effort epoch"),Released.Epoch>Restarted.Epoch);
+	TestEqual(TEXT("uncontrolled rod cannot retain a former owner bill"),Released.ExertionSquaredSeconds,0.0);
+	FCatFishingRodControlObservation Observation; Rod->GetControlObservationFromAuthority(Observation);
+	TestFalse(TEXT("no operator leaves no active mouse motor"),Observation.bMouseDriveActive);
+	TestTrue(TEXT("owner release cannot teleport the physically held rod"),Rod->GetPhysicalRodBody()->GetComponentTransform().Equals(BeforeRelease,1.e-8));
+	TestTrue(TEXT("owner release preserves real angular velocity"),Observation.AngularVelocityRadiansPerSecond.Equals(BeforeReleaseMomentum,1.e-8));
 	return !HasAnyErrors();
 }
 

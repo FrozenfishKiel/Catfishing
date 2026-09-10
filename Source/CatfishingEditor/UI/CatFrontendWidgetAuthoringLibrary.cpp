@@ -1718,6 +1718,16 @@ bool UCatFrontendWidgetAuthoringLibrary::ValidateFrontendWidgetBlueprintFonts()
 	return CatFrontendWidgetAuthoring::ValidateFrontendWidgetFonts();
 }
 
+bool UCatFrontendWidgetAuthoringLibrary::CompileAndSaveHUDWidgetBlueprint(UWidgetBlueprint* WidgetBlueprint)
+{
+	if (!WidgetBlueprint || WidgetBlueprint->GetOutermost()->GetName() != TEXT("/Game/UI/HUD/WBP_CatHUD"))
+	{
+		UE_LOG(LogTemp, Error, TEXT("Event=hud_authoring_save_rejected Result=UnexpectedPackage"));
+		return false;
+	}
+	return CatFrontendWidgetAuthoring::CompileRegisterAndSaveWidget(WidgetBlueprint, false);
+}
+
 bool UCatFrontendWidgetAuthoringLibrary::CreateMissingFrontendAudioSettingsAssets()
 {
 	// 音频设置资产创建流程：先拒绝部分残留集，再新建 Master、四个子分类和 SoundMix，连接子分类后逐包保存；运行时音量覆写仍由 Settings Model 负责。

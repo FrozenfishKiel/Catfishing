@@ -3,6 +3,7 @@
 #include "Async/Async.h"
 #include "Camp/CatCampInventoryActor.h"
 #include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Engine/GameInstance.h"
 #include "Engine/World.h"
 #include "EngineUtils.h"
@@ -756,9 +757,11 @@ bool UCatSaveSubsystem::RestorePlayerAfterSpawn(AController& Controller, ACatCha
 		return true;
 	}
 	UCatEquipmentComponent* Equipment = Character.GetEquipmentComponent();
+	UCatPhysicalBodyComponent* PhysicalBody = Character.GetPhysicalBodyComponent();
 	const FCatEquipmentLoadoutSnapshot SavedEquipmentSnapshot = ToRuntimeEquipment(SavedPlayer->EquipmentSnapshot);
 	FText Failure;
-	if (!Equipment || !Equipment->CanRestoreSnapshotFromAuthority(SavedEquipmentSnapshot, Failure)
+	if (!PhysicalBody || !PhysicalBody->GetBody()
+		|| !Equipment || !Equipment->CanRestoreSnapshotFromAuthority(SavedEquipmentSnapshot, Failure)
 		|| SavedPlayer->CharacterTransform.ContainsNaN())
 	{
 		RejectPendingRestore(Failure.IsEmpty() ? FText::FromString(TEXT("玩家库存或位置快照无效。")) : Failure);
@@ -769,7 +772,12 @@ bool UCatSaveSubsystem::RestorePlayerAfterSpawn(AController& Controller, ACatCha
 		RejectPendingRestore(FText::FromString(TEXT("玩家库存恢复提交被拒绝。")));
 		return false;
 	}
-	Character.SetActorTransform(SavedPlayer->CharacterTransform, false, nullptr, ETeleportType::TeleportPhysics);
+	// 存档仍只存角色 Transform；恢复时由身体唯一入口同步三具刚体并撤销临时抓握。
+	if (!PhysicalBody->TeleportBodyFromAuthority(SavedPlayer->CharacterTransform, TEXT("SavedRunRestore")))
+	{
+		RejectPendingRestore(FText::FromString(TEXT("玩家物理身体位置恢复被拒绝。")));
+		return false;
+	}
 	RestoredPlayerStableNetIds.Add(StableNetId);
 	UE_LOG(LogCatRun, Log, TEXT("Event=persistence_player_restore_committed Slot=%s StableNetId=Valid(Redacted) Character=%s"),
 		*ActiveSlotId.ToString(), *GetNameSafe(&Character));

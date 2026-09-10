@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/Pawn.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "CatPhysicsPrototypePawn.generated.h"
 
 class UBoxComponent;
@@ -10,23 +11,7 @@ class UPhysicsConstraintComponent;
 class UCatPhysicsGrabComponent;
 class UCatPhysicsPrototypeVisualComponent;
 
-/** Authority samples the real bodies. Clients interpolate these observations; no claim of rollback prediction. */
-USTRUCT()
-struct FCatPhysicsPrototypeSnapshot
-{
-	GENERATED_BODY()
-	UPROPERTY() FVector BodyLocation = FVector::ZeroVector;
-	UPROPERTY() FRotator BodyRotation = FRotator::ZeroRotator;
-	UPROPERTY() FVector Velocity = FVector::ZeroVector;
-	UPROPERTY() FVector LeftHandLocation = FVector::ZeroVector;
-	UPROPERTY() FVector RightHandLocation = FVector::ZeroVector;
-	UPROPERTY() uint32 Revision = 0;
-	UPROPERTY() uint32 ResetEpoch = 0;
-	UPROPERTY() bool bGrounded = false;
-	UPROPERTY() bool bSupportSampleReady = false;
-};
-
-/** Isolated physical-body experiment. The production ACatCharacter/CMC is not a second motion writer. */
+/** Isolated arena host for the same physical body used by production characters. */
 UCLASS()
 class CATFISHING_API ACatPhysicsPrototypePawn : public APawn
 {
@@ -48,30 +33,21 @@ public:
 	USphereComponent* GetLeftHand() const { return LeftHand; }
 	USphereComponent* GetRightHand() const { return RightHand; }
 	UCatPhysicsGrabComponent* GetGrabComponent() const { return Grab; }
-	FRotator GetPrototypeView() const { return ViewInput; }
-	bool IsPrototypeGrounded() const { return HasAuthority() ? bGrounded : Snapshot.bGrounded; }
-	bool HasPrototypeMovementSample() const { return HasAuthority() ? bSupportSampleReady : bReceivedSnapshot && Snapshot.bSupportSampleReady; }
-	uint32 GetPrototypeResetEpoch() const { return Snapshot.ResetEpoch; }
-	FGuid GetPrototypeId() const { return PrototypeId; }
+	FRotator GetPrototypeView() const { return PhysicalBody->GetViewIntent(); }
+	bool IsPrototypeGrounded() const { return PhysicalBody->IsGrounded(); }
+	bool HasPrototypeMovementSample() const { return PhysicalBody->HasMovementSample(); }
+	uint32 GetPrototypeResetEpoch() const { return PhysicalBody->GetResetEpoch(); }
+	FGuid GetPrototypeId() const { return PhysicalBody->GetBodyId(); }
 	virtual FVector GetVelocity() const override;
 	virtual void Tick(float DeltaSeconds) override;
 	virtual void CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult) override;
-	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	virtual void PossessedBy(AController* NewController) override;
 	virtual void UnPossessed() override;
 protected:
 	virtual void BeginPlay() override;
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 private:
-	UFUNCTION(Server, Unreliable) void ServerSetPrototypeInput(FVector2D Move, FRotator View, uint32 Epoch, uint32 Sequence);
-	UFUNCTION(Server, Reliable) void ServerRequestJump(uint32 Epoch);
 	UFUNCTION(Server, Reliable) void ServerRequestReset(uint32 Epoch);
-	UFUNCTION() void OnRep_PhysicsSnapshot();
-	void ConfigureArm(bool bLeft);
-	void UpdatePhysicalMovement(float DeltaSeconds);
-	void ResetFromAuthority();
-	void ReleaseConnections(FName Reason);
-	void CaptureSnapshot();
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UBoxComponent> Body;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USphereComponent> LeftHand;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USphereComponent> RightHand;
@@ -79,24 +55,7 @@ private:
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UPhysicsConstraintComponent> RightArm;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatPhysicsGrabComponent> Grab;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatPhysicsPrototypeVisualComponent> Visual;
-	UPROPERTY(ReplicatedUsing=OnRep_PhysicsSnapshot) FCatPhysicsPrototypeSnapshot Snapshot;
-	UPROPERTY(Replicated) FGuid PrototypeId;
-	UPROPERTY(Replicated) uint32 ControlEpoch = 1;
-	FVector2D MoveInput = FVector2D::ZeroVector;
-	FRotator ViewInput = FRotator::ZeroRotator;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatPhysicalBodyComponent> PhysicalBody;
 	FTransform SpawnTransform;
-	uint32 LocalInputSequence = 0;
-	uint32 AcceptedInputSequence = 0;
-	uint32 ClientResetEpoch = 0;
-	double LastInputSeconds = 0.0;
-	double LastSendSeconds = -1.0;
-	double LastSnapshotSeconds = -1.0;
-	double SupportDisabledUntilSeconds = 0.0;
-	double NextMotionLogSeconds = 0.0;
-	double NextInputRejectLogSeconds = 0.0;
-	bool bShowDiagnostics = true;
-	bool bGrounded = false;
-	bool bSupportSampleReady = false;
-	bool bGroundContactRecoveryActive = false;
-	bool bReceivedSnapshot = false;
+	bool bShowDiagnostics=true;
 };

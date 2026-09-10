@@ -1,8 +1,12 @@
-#include "UI/HUD/CatHUDModel.h"
+﻿#include "UI/HUD/CatHUDModel.h"
 
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/Presentation/CatFishingCameraComponent.h"
+#include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "Condition/CatConditionComponent.h"
 #include "Engine/World.h"
 #include "Fishing/CatFishingSession.h"
@@ -135,6 +139,30 @@ void UCatHUDModel::Refresh()
 {
 	FCatHUDViewState NewState;
 	APlayerController* Controller = BoundPlayerController.Get();
+	const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
+	const UCatPhysicalBodyComponent* Body = Character ? Character->GetPhysicalBodyComponent() : nullptr;
+	if (const UCatPhysicsGrabComponent* Grab = Body ? Body->GetGrab() : nullptr)
+	{
+		NewState.bShowPhysicalControls = true;
+		NewState.bLeftHandReaching = Grab->IsReaching(true);
+		NewState.bRightHandReaching = Grab->IsReaching(false);
+		NewState.bLeftHandGripped = Grab->IsGripping(true);
+		NewState.bRightHandGripped = Grab->IsGripping(false);
+		const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindHeldRodOperatedBy(Controller);
+		NewState.bPrimaryRodOperator = Rod && Rod->IsPrimaryOperator(Controller->PlayerState);
+		NewState.PhysicalControlText = FText::FromString(NewState.bPrimaryRodOperator
+			? TEXT("主控 · 左键抛竿 / 收线 · 右键放线 · R 放竿")
+			: TEXT("按住左 / 右键抓人或抓竿 · WASD 拉动 · 松键释放"));
+		const auto HandLabel = [&](const bool bLeft, const bool bReaching, const bool bGripped)
+		{
+			if (bGripped && Grab->GetGripState(bLeft).bExplicitHold && NewState.bPrimaryRodOperator && Grab->GetGripTarget(bLeft) == Rod)
+				return TEXT("持竿（R 放竿）");
+			return bGripped ? TEXT("抓住（松键释放）") : (bReaching ? TEXT("伸手中") : TEXT("收回"));
+		};
+		NewState.PhysicalHandStateText = FText::FromString(FString::Printf(TEXT("左爪：%s    右爪：%s"),
+			HandLabel(true, NewState.bLeftHandReaching, NewState.bLeftHandGripped),
+			HandLabel(false, NewState.bRightHandReaching, NewState.bRightHandGripped)));
+	}
 	UWorld* World = Controller ? Controller->GetWorld() : nullptr;
 	const AGameStateBase* GameStateBase = World ? World->GetGameState() : nullptr;
 	const double ServerNowSeconds = GameStateBase ? GameStateBase->GetServerWorldTimeSeconds()
@@ -169,11 +197,6 @@ void UCatHUDModel::Refresh()
 	{
 		NewState.Fishing = FishingViewBridge->GetViewState();
 		NewState.bHasFishingSession = true;
-		NewState.TotalFightStamina = NewState.Fishing.CombinedFightStamina;
-		NewState.TotalFightStaminaMaximum = NewState.Fishing.CombinedFightStaminaMaximum;
-		NewState.NormalizedTotalFightStamina = NewState.TotalFightStaminaMaximum > 0.0
-			? static_cast<float>(FMath::Clamp(NewState.TotalFightStamina / NewState.TotalFightStaminaMaximum, 0.0, 1.0))
-			: 0.0f;
 		NewState.bShowFishingState = true;
 		NewState.NormalizedFishStamina = FMath::Clamp(
 			static_cast<float>(NewState.Fishing.NormalizedFishStamina), 0.0f, 1.0f);
@@ -203,13 +226,10 @@ void UCatHUDModel::Refresh()
 		&& NewState.LastFishingCommandResult.Error == ECatFishingCommandError::None;
 	NewState.BitePromptText = FText::FromString(TEXT("鱼儿咬钩啦！提竿"));
 	NewState.HookSuccessFeedbackText = FText::FromString(TEXT("提竿成功！"));
-	NewState.CatStaminaText = NewState.bHasFishingSession
-		? FText::FromString(FString::Printf(TEXT("总体力 %.0f / %.0f（%d 人）"),
-			NewState.TotalFightStamina, NewState.TotalFightStaminaMaximum, NewState.Fishing.FightParticipantCount))
-		: (NewState.FightStaminaMaximum > 0.0f
+	NewState.CatStaminaText = NewState.FightStaminaMaximum > 0.0f
 			? FText::FromString(FString::Printf(TEXT("玩家体力 %.0f / %.0f"),
 				NewState.FightStamina, NewState.FightStaminaMaximum))
-			: FText::FromString(FString::Printf(TEXT("玩家体力 %.0f"), NewState.FightStamina)));
+			: FText::FromString(FString::Printf(TEXT("玩家体力 %.0f"), NewState.FightStamina));
 	NewState.FishStaminaText = FText::FromString(FString::Printf(
 		TEXT("鱼体力 %.0f%%"), NewState.NormalizedFishStamina * 100.0f));
 	if (NewState.HookCountdownText.IsEmpty())
@@ -470,6 +490,8 @@ void UCatHUDModel::RefreshFishingSessionBinding()
 		Controller, PlayerState);
 	if (FishingViewBridge->GetBoundSession() == Session)
 	{
+		// 普通抓握也刷新手部复制；不依赖钓鱼会话或命令回执。
+		Refresh();
 		return;
 	}
 	const FGuid PreviousSessionId = FishingViewBridge->GetViewState().FishingSessionId;

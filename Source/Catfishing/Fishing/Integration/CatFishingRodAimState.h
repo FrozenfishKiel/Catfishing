@@ -40,6 +40,8 @@ struct CATFISHING_API FCatFishingRodAimState
 		double MinimumPitch, double MaximumPitch, double NowSeconds);
 	bool IsMouseActive(double NowSeconds) const;
 	bool ExpireInput(double NowSeconds, const FRotator& ActualAim);
+	/** Discard the active stroke while retaining its sequence fence. */
+	bool StopInput(const FRotator& ActualAim);
 	bool IsRebased() const { return bRebased; }
 	FRotator GetRequestedAim() const { return RequestedAim; }
 	int64 GetLastSequence() const { return LatestSample.Sequence; }

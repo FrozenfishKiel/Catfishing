@@ -208,8 +208,13 @@ FCatDomainCommandResult ACatCampHubActor::RescueToCamp(AController* HelpingContr
 		Result.Error = ECatDomainCommandError::InvalidPhase;
 		return Result;
 	}
-	if (!TargetCharacter->TeleportTo(RescuePoint->GetComponentLocation(), RescuePoint->GetComponentRotation(), false, true))
+	if (!TargetCharacter->TeleportTo(RescuePoint->GetComponentLocation(), RescuePoint->GetComponentRotation(), false, false))
 	{
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=camp_rescue_teleport_rejected RequestId=%s Camp=%s Helper=%s Target=%s Destination=%s Reason=PhysicalPlacementRejected World=%s NetMode=%d Authority=true LocalRole=%d"),
+			*RequestId.ToString(), *GetNameSafe(this), *GetNameSafe(HelpingCharacter), *GetNameSafe(TargetCharacter),
+			*RescuePoint->GetComponentLocation().ToCompactString(), *GetNameSafe(GetWorld()),
+			static_cast<int32>(GetWorld()->GetNetMode()), static_cast<int32>(GetLocalRole()));
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;
 	}

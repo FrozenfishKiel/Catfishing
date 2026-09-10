@@ -45,7 +45,8 @@ struct FCatFishingOperatorMembership
 	GENERATED_BODY()
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> PlayerState = nullptr;
 	UPROPERTY() uint32 Epoch = 0;
-	UPROPERTY(BlueprintReadOnly) FVector FormationOffsetWorld = FVector::ZeroVector;
+	/** 旧资产序列化槽位偏移，恒零；正式身体位置完全由物理约束决定。 */
+	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Physical bodies have independent positions; this legacy offset is always zero")) FVector FormationOffsetWorld = FVector::ZeroVector;
 };
 
 USTRUCT(BlueprintType)

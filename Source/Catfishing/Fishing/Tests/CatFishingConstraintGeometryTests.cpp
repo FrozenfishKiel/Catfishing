@@ -45,7 +45,7 @@ bool FCatFishingPlanarLineGeometryTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("可行时满足三维线长，不可行时仅保留真实高差"), Distance, FMath::Max(100.0, Height), 1e-6);
 		TestEqual(TEXT("几何修正不能凭空放线"), Step.LineLengthCentimeters, State.LineLengthCentimeters);
 		TestEqual(TEXT("水平求解保持水面高度"), Step.ProposedFishWorldPosition.Z, 0.0);
-		TestEqual(TEXT("力竭收尾不会生成猫端主动牵引"), Step.CarrierTargetPullSpeedCentimetersPerSecond, 0.0);
+		TestTrue(TEXT("力竭收尾保留实际竿尖观察"), Step.Trace.ConstraintRodEndWorldPosition.Equals(Rod.RodTipWorldPosition, 1e-6));
 	}
 	return !HasAnyErrors();
 }
@@ -73,7 +73,6 @@ bool FCatFishingPlanarCorrectionBoundTest::RunTest(const FString& Parameters)
 		const auto Step = FCatFishingFightSimulator::Step(Config, State, Rod, FVector::ForwardVector);
 		if (!TestTrue(TEXT("高差僵持步骤成功"), Step.bSucceeded)) return false;
 		TestTrue(TEXT("相同对抗力在高差下也能抵消外游"), Step.ProposedFishWorldPosition.Equals(State.FishWorldPosition, 1e-6));
-		TestEqual(TEXT("无需猫端承担额外位移"), Step.CarrierPullAccelerationCentimetersPerSecondSquared, 0.0);
 	}
 	Config.FixedStepSeconds = 0.05;
 	Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 160.0;

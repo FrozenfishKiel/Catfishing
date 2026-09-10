@@ -112,23 +112,6 @@ bool UCatFishingSettings::TryGetBiteTimingParameters(FCatFishingBiteTimingParame
 	return true;
 }
 
-bool UCatFishingSettings::TryGetRodOperatorLayout(int32& OutMaximumSlots,
-	double& OutSlotSpacingCentimeters) const
-{
-	OutMaximumSlots = 0;
-	OutSlotSpacingCentimeters = 0.0;
-	// 槽位数组会进入复制状态，因此必须有明确上限，避免错误配置制造无界公开状态。
-	if (MaximumRodOperatorSlots < 1 || MaximumRodOperatorSlots > 8
-		|| !FMath::IsFinite(RodOperatorSlotSpacingCentimeters)
-		|| RodOperatorSlotSpacingCentimeters < 0.0)
-	{
-		return false;
-	}
-	OutMaximumSlots = MaximumRodOperatorSlots;
-	OutSlotSpacingCentimeters = RodOperatorSlotSpacingCentimeters;
-	return true;
-}
-
 // 终态留存读取流程：先清输出，再复用完整 runtime gate；只返回有限正秒数，调用方可用同一值设置 Actor lifespan。
 bool UCatFishingSettings::TryGetTerminalReplicationWindow(double& OutWindowSeconds) const
 {

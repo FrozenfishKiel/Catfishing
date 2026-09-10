@@ -359,7 +359,7 @@ bool FCatRodSessionDurabilityTest::RunTest(const FString& Parameters)
 	Step.bStrongConfrontation = true;
 	Step.NormalizedLineLoad = 1.0;
 	Step.NormalizedTension = 1.0;
-	Step.CombinedCatStrength = 50.0;
+	Step.OperatorCatStrength = 50.0;
 	First->HandleFightRunnerStepFromAuthority(Step, 80.0, ECatFishMotionIntent::StrugglingOutward);
 	TestEqual(TEXT("strong confrontation keeps the authority session fighting"), First->GetSnapshot().Phase, ECatFishingPhase::HookedFight);
 	TestEqual(TEXT("strong confrontation does not publish a terminal outcome"), First->GetSnapshot().Outcome, ECatFishingOutcome::None);

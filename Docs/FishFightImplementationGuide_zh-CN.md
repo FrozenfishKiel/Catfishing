@@ -1,25 +1,27 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
-本文件持续维护鱼、线、杆、猫的运动设计与实际代码。最近更新：2026-09-09，已接入用户确认的“鼠标移动才主动转杆，停止立即撤力并清掉未完成目标”。上一轮持续角速度与等效惯性保留；本轮Editor/Game Development构建成功，191项回归中190通过、1项既有耐久失败，包含真实客户端启停及丢包恢复验证。1–4人从加入鱼竿时共同移动的既有基线见 [钓鱼架构 2.0.4](FishingArchitecture_zh-CN.md#204-入竿即保持队形的影响与验证2026-09-08)。鱼仍使用沿主动意图未完成距离的耗体公式，满线右键不恢复。下文旧日期段落的公式与测试数字只属于相应历史版本，不代替本轮验证；真人手感和新打包双端验收仍待完成。
+本文件持续维护鱼、线、杆、猫的运动设计与实际代码。2026-09-09 正在把真实身体和持续抓握接入正式项目，替换 R 加入及 CMC 共同队形移动。当前变更范围与验证结果见 [正式物理抓握接入审查](FishingArchitecture_zh-CN.md)。此前“鼠标移动才主动转杆，停止立即撤力并清掉未完成目标”的输入契约保留。历史191项回归中190通过、1项既有耐久失败属于接入前基线，不能作为新身体系统通过的证据。下文带日期的旧公式与报告只对应当时版本。
 
-当前猫端通过 `CatFishingGroupModel` 使用一个 N 人计算入口：个人正体力提供完整力量，主位系数 1、辅助默认 0.5；移动与站定支撑共用个人向量预算。同向加强、反向抵消、侧向改变组运动。只有主位驱动线杯和竿向，主位体力为零仍可使用队友的有效支撑操竿。Runner 每步冻结真实成员、已接受的 CMC 移动和各自 ASC，共同收线/转杆/去重持竿账单均分，个人移动及受阻用力由本人支付；体力总量只读求和，不转移余额。有效放线逐人恢复、满线不恢复、鱼力竭免正向费用保持。
+当前猫端由 `UCatPhysicalBodyComponent` 在服务器驱动身体与两只手；正式 `ACatCharacter` 保留 ASC、Condition、Inventory 和动画宿主身份。普通运动配置继续读角色 BP 的 CMC 默认值，CMC 自身停止积分，仅向 ABP 暴露实际速度、移动意图和离地状态。正式起跳420 cm/s、重力倍率1；同一跳跃速度施加到三个刚体。
 
-生产中的单人也从入竿起使用组运动。Rod 记录成员当下位置相对共同根的偏移，入退和接力保留连续组根，不按名单下标传送角色；CMC 抑制第二份个人加速并独占身体碰撞。尚未搏斗或一轮终局后仍持竿的无载阶段，`UpdateUnloadedGroupMotionFromAuthority` 只读 ASC 的 `FishingStrength/FightStamina/MaxFightStamina`、CMC已接受移动及速度上限，使用同一个GroupModel和同一主辅系数计算主动移动目标。Rod 用成员中最小加速/制动能力把目标积分成共同速度（cm/s），再以全员胶囊sweep可行距离的最小值限制本步，复制 `UnloadedVelocity`。CMC只消费共同XY速度，保留Z、重力、Walking/Falling和碰撞/滑动；无载阶段不运行鱼模拟，不支付任何搏斗账单。已删除原生holder-only fallback及私有 `CarrierMovement`，不存在另一条单人前战移动入口。
+非主控玩家按住左右键伸出对应爪，实际抓住竿或猫后只通过约束传力，不进入钓鱼Session。主控由明确取竿操作产生，使用原收放线和转杆输入；主控退出不会把旁人自动提升为操作者。跨竿抓握不串会话、不改变物品归属。
 
-搏斗仍由Runner接管共同运动和鱼线求解；Simulator与CMC共用切向积分，预测分别受正向、后退、侧向碰撞距离约束。`bUnloadedMovement` 与组版本、主控版本、个人加入世代和Aim域一起隔离旧运动/按键及SavedMove；它不改变 `bFightActive` 的搏斗含义。危险入水逐人退出操作组，剩余人继续，全部离开才转无人值守。`FCatFightSimulationState::CatStamina` 仍为当前主位余额镜像，不能当作团队账本；总体力和上限来自明确的GroupResult/Session总量字段。Simulator的猫移动/体力Trace是求解估算，实际各人账单查 `fishing_group_stamina_settled`，步末总变动以Runner结算为准。
+`UCatFishingPhysicalRodComponent` 在 PrePhysics 通知 Runner 累加本帧时间并执行到期的鱼固定步，然后接收求解器的同一 `RodLineForceNewtons` 向量及对应模拟秒数，乘100转换为kg·cm/s²，只在真实竿尖施力。有限时间的载荷队列由当前物理帧消费，PostPhysics确认已施加冲量；Runner读取真实端点与速度，不写CMC位移或旧杆姿态积分。鱼继续使用固定步水面运动与行为树，尚非完整三维Chaos浮力。当前耦合与子步修正仍在联合回归，结果以接入审查表为准。
 
-`SetFishingGroupCollisionPeers` 让同竿成员彼此忽略移动碰撞；CMC只追踪自己新增的 `IgnoreActorWhenMoving`，离队或解绑时恢复这些项，保留其他系统已有的忽略。`GetExternalTractionTravelLimit(..., bAllowStepUp=false)` 的默认搏斗算法不变；无载查询开启台阶分支，grounded角色遇到可StepUp低台阶时按 `MaxStepHeight` 抬高胶囊做探测，允许CMC实际跨越。探测尊重组内忽略名单，真墙仍使用全员最小可行距离。共同速度不取消接触容差、斜坡高度差、重力和碰撞落位差，也不通过瞬移维持绝对刚性队形。
+主控移动、支撑及鼠标转杆预算只读本人ASC；旁人使用普通身体运动规则，不存在辅助系数、会话分账或共享体力。Runner只结算主控的费用，保留有效放线恢复、满线不恢复、鱼力竭免正向费用。物理帮助的效果通过实际端点运动进入鱼线求解。
 
-一轮取消、收获或其他终局停止鱼载荷，仍占用健康鱼竿的成员转回无载共同移动；只有本人离竿才恢复个人自由移动，破竿、收起、无人或Rod销毁则完全解绑。`SetFishExhaustedFromAuthority` 保留fight上下文、同Aim域及当前组目标，只立即清零鱼牵引与鱼转矩，下一固定步继续力竭收线，不能中间切为无载模式。`Runner::Stop` 在清理回调前置为已停止并保持幂等，避免旧终态Session稍后EndPlay清掉同竿新一场载荷。
+一轮结束只清本场载荷，保留玩家持续抓握。主控离竿进入原无人值守处理，其他猫不会自动接任。倒地停自主驱动但仍能被拖救，传送清理双向连接。载荷以SessionId和单调Step校验、失联过期，旧Session不得撤销新载荷；磨损与终局仍走原Equipment/Session单一入口。
 
-个人移动费用的位移样本以厘米和秒保存，按成员世代归属，固定步逐段消费；低帧率同一帧追赶多步时保留剩余位移与时间，避免首步耗尽样本、后续误算原地受阻。每段仍使用原主动正功/受阻费用公式，无输入被动移动不收费，CMC 标记的瞬移不作为主动进展。同成员接力保留尚未结算的移动样本，离队再加入建立新采样域。
+主控的实际移动样本以厘米和秒记录，固定步逐段消费，低帧率保留剩余样本；身体重置或主控控制世代变更开始新采样域，不把被动位移和瞬移算作主动进展。
 
 - 本文开头的行为部分描述第二轮阻力修正，费用部分描述本轮意图缺失模型；正式行为资产沿用第二轮已迁移结果。`/Game/Data/StateTrees/ST_FishFight` 在第一轮已从两个计时叶子迁成三行为树；第二轮的新反馈边已保存并经独立进程和当前编辑器重载确认。
 - 后面的日期衔接核对保留历史改动和当时的证据；其中旧两档游速、阶段耗体、旧入口只描述相应历史版本，不作为当前公式或新验收证据。
 - 折返、近岸反扑、水下三维运动、完整效用评分选路和真人双端丝滑验收均未完成；仍没有专门的鱼 Actor 网络运动插值器。
 - 后续讨论继续更新本文件。业务进度与持续验收缺口只维护在 [需求对齐差距清单](Development/需求对齐差距清单.md)，本文不另建模块进度账本。
 
-## 鼠标停止即撤掉主动转杆（2026-09-09）
+## 鼠标停止即撤掉主动转杆（2026-09-09，物理接入前检查点）
+
+以下保留该次修复的输入契约与证据；旧 `StepRotation`、CMC 和候选杆预测的实施说明仅代表该检查点。当前真实物理实现见本文开头及“鱼竿旋转”“网络与控制生命周期”。
 
 鼠标活动只控制猫的主动转杆转矩。每帧 `UpdateRotation` 传入已缩放的 Yaw/Pitch 增量（度），组件在俯仰越界裁剪前判断是否有移动：零输入立即发停止，丢弃本段未完成目标；重新移动从实际握把朝向建立新段，再加上本段增量。持续移动时仍按目标角差连续计算力度，接近目标时减小，饱和尺度仍为最大角速度乘响应时间；本轮没有另加最大目标超前角或改变力度单位。忽略视角输入、退出控制和输入失联也撤掉主动转杆。
 
@@ -274,7 +276,7 @@ FishDrain_points = Missing_cm / 100 × FishStaminaPerUnfulfilledMeter
 
 ## 当前实现概况
 
-当前源码使用连续主动推力、固定正常水阻、共同鱼线张力、有限出力收线和持久鱼速度。猫端由 CharacterMovement 执行真实移动与碰撞，鱼端使用服务器固定步；这是交错推进的约束模型，尚不是完整的三维刚体/接触摩擦求解器。鱼仍在水面平面上求解，再由现有地形入口解析岸线和坡面。不可满足的竿尖高差保留几何误差，不凭空抬鱼或放线。
+身体、双爪和鱼竿由服务器刚体模拟，抓握约束传递双向作用力。鱼继续使用固定步、水面运动、连续出力和单向线约束；当前并未实现鱼的完整三维浮力。正式配置、动画源、费用与库存身份保留，最新接入审查及验证结果见本文开头链接。
 
 ### 线放尽后的输入与费用（2026-09-08）
 
@@ -324,20 +326,20 @@ presentation_delivery：未运行本轮 Cook/打包、正式地图真人操作�
 ## 一条完整调用链
 
 ```text
-玩家左/右键 → Ability/CommandComponent → Session 验证和权威状态机
-  → FightRunner 固定步（当前 0.05 s）
-      上一步物理反馈 → Steering行为记忆 → 手动Tick StateTree选边
-      Steering连续推进游向与实际出力u，旧MotionIntent只投影动画角色
-      Simulator::Step 积分鱼速度、求线张力、按出力确定实际收线
-      ResolveFishSurfaceFromAuthority 解析水面/岸线/地面
-      Simulator::FinalizeResolvedStep 从最终落点和线长重算费用、终局与猫端反力
-      RodResistanceModel 从共同张力和最终线方向计算杆转矩
-      Rod 发布约束输入 → CatCharacterMovementComponent 速度积分、碰撞、SavedMove 重放
-      Runner 单次支付 ASC → Encounter 应用位置并复制 → Session 写同一装备实例磨损
-  → 力竭/上岸后仍由同一 Runner 拖到真实干地，进入原 Pickup/捕获入口
+空手/辅助鼠标键 → 实际爪接触 → 服务器持续约束 → 身体/竿直接传力（不进入Session）
+主位鼠标键 → Ability/Command → Session验证与阶段转换
+  → Runner固定步（0.05秒）冻结唯一主控、身体意图、位置和ASC
+      Steering/StateTree选择鱼行为 → Simulator求鱼运动、线张力与实际收线
+      ResolveFishSurfaceFromAuthority解析水面、岸线和地面
+      FinalizeResolvedStep重算最终几何、费用及终局；保持同一已求张力向量
+      PhysicalRod.SetLineLoad(SessionId,Step,力向量N,模拟秒数,有效期)
+      PrePhysics按真实dt消费力段并在竿尖AddForceAtLocation(平均力×100)
+      Chaos子步约束传力 → PostPhysics确认实际冲量
+      Runner单次支付ASC → Encounter应用鱼位置并复制 → 原装备实例磨损
+  → 力竭/上岸沿原Runner与Pickup入口收尾
 ```
 
-移动重放只恢复该移动步保存的牵引方向、加速度、支撑减速度、速度上限、有效上下文和来源 ID。它不调用 Runner、ASC、装备、随机数或捕获事务。服务器仍只接受自己的受力裁决；客户端没有上传自报力量或张力的权利。连续牵引上下文有效期间不合并 SavedMove，包括暂时零牵引的减速阶段，避免改掉原碰撞积分步长；这会增加该阶段的移动记录/网络开销，需要打包联机测量。
+身体与鱼竿各有唯一姿态写入方，CMC不再执行位移或SavedMove。客户端提交视向、移动和抓握意图，接收服务器身体/双爪快照和鱼竿姿态；主控版本继续隔离旧钓鱼输入，旁人抓握不更改该版本。
 
 ## FishLogic 1：外冲、横切与缓游
 
@@ -345,11 +347,11 @@ presentation_delivery：未运行本轮 Cook/打包、正式地图真人操作�
 
 行为进入时冻结目标出力与最长时长，固定步连续推进实际出力、游向和受阻记忆。缓游不回血，正常最大力量不随鱼体力百分比缩小。StateTree 不写 Transform、鱼线、ASC、耐久或捕获结果。
 
-主猫仍持竿、体力恰好为零且没有助手实际贡献合力时，`ShouldEscapeExhaustedCat` 接管本步为持续外冲。Runner 暂停普通行为反馈计时与树评估，覆盖实际出力为 1、表现意图为 `StrugglingOutward`；Steering 平滑朝远离猫身体的方向转动，保留真实岸线短期避让，不抽普通行为随机。助手出力、接力者恢复正体力、离竿或鱼力竭后交回原树及按键状态，不能因为普通树曾进入缓游就提前停止拖拽。
+主控仍持竿且体力恰好为零时，`ShouldEscapeExhaustedCat` 接管本步为持续外冲。Runner 暂停普通行为反馈计时与树评估，覆盖实际出力为 1、表现意图为 `StrugglingOutward`；Steering 平滑朝远离猫身体的方向转动，保留真实岸线短期避让，不抽普通行为随机。主控恢复正体力、离竿或鱼力竭后交回原树及按键状态，不能因为普通树曾进入缓游就提前停止拖拽。
 
-强拖游速为 `FishFullEffortSpeedCentimetersPerSecond × ExhaustedCatEscapeSpeedMultiplier`，正式平衡新字段默认倍率 2。此时锁线，不允许右键放线回体。鱼推力额外获得 `猫系统质量 × ExhaustedCatTowAccelerationCentimetersPerSecondSquared / 100` 牛顿的玩法辅助力；该力仍通过同一鱼线张力传到猫，猫速度逐渐增加，上限为外冲游速。默认辅助加速度 300 cm/s²。角色由 CMC 碰撞落位，障碍阻挡后不预支猫位移；这是显式的拖落水玩法政策。
+强拖游速为 `FishFullEffortSpeedCentimetersPerSecond × ExhaustedCatEscapeSpeedMultiplier`，正式平衡新字段默认倍率 2。此时锁线，不允许右键放线回体。鱼推力额外获得 `主控身体质量 × ExhaustedCatTowAccelerationCentimetersPerSecondSquared / 100` 牛顿的玩法辅助力；该力仍通过同一鱼线张力传到猫。外冲游速用于标定鱼的水阻，并非直接给猫设置速度；实际身体阻尼、地面摩擦及他人的抓握会改变拖速。默认辅助加速度 300 cm/s²。角色由真实刚体碰撞落位，旁人可通过约束抵抗拖拽，求解器不预支猫位移；这是显式的拖落水玩法政策。
 
-拖拽期间鱼无对抗耗体，不新增竿磨损，也不以最大鱼距提前逃脱；已有坏竿仍按原终局处理。猫脚点达到 35 cm 危险水深并持续 0.2 s 后，由 Condition 确认危险落水，当前多人版本保留该角色入水表现并退出操作组，余下成员继续同一场，全部退出才无人值守；退出危险水深阈值仍为 25 cm。
+拖拽期间鱼无对抗耗体，不新增竿磨损，也不以最大鱼距提前逃脱；已有坏竿仍按原终局处理。猫脚点达到 35 cm 危险水深并持续 0.2 s 后，由 Condition 确认危险落水，保留该角色入水表现；主控退出后转无人值守，旁人不自动接任；退出危险水深阈值仍为 25 cm。
 
 ## FishLogic 2：连续游向与岸线反馈
 
@@ -361,51 +363,38 @@ presentation_delivery：未运行本轮 Cook/打包、正式地图真人操作�
 
 猫端沿绷紧鱼线把鱼拖向岸上时，活鱼与鱼干共用 `ResolveFishSurfaceFromAuthority`：保留线约束求出的候选位移，水域只提供水面与岸向，不再用抛竿内缩点或初始落点包围盒挡住拖行。活鱼要有真实收线、按住收线时的剩余约束拖拽或猫端向岸平移；横向调杆不取消拖拽，主导向岸位移的纯甩杆仍不能让活鱼瞬间力竭。力竭鱼没有自主游动，直接随同一鱼线的端点约束拖行，不再套用活鱼的防误力竭门槛。烘焙轮廓与真实岸面有间隙时继续贴水面前进；即使岸面位于轮廓内，只要实际接触高于水面的干地也可上岸。首次地面高度不能被后续水面结果覆盖，高低坡面逐步重查；重新入水会撤销干地拾取资格并继续拖动，不把地面暂缺判为会话失效。活鱼首次接触干地仍按当前玩法进入 `ExhaustedReel/AutoHauling` 并清空体力，鱼干仍不扣猫体力，这些并非完整共同物理求解。干地鱼进入竿尖水平完成距离后原地生成 Pickup，松开左键仍能交接并按 E 拾取。诊断过滤 `fishing_surface_tow`、`fishing_fish_beached`、`fishing_surface_resolve_rejected`。
 
-## FishLogic 3：共同张力、惯性与有限收线
+## FishLogic 3：共同张力、真实竿与有限收线
 
-代码入口为 `Fishing/Simulation/CatFishingFightSimulator.{h,cpp}`。世界坐标、速度与加速度使用 cm、cm/s、cm/s²；质量使用 kg，力使用 N。`ForcePerStrengthNewtons` 默认 1 N/力量，不能把已废弃的“每点力量 5 cm/s²”数值搬过来。
+`Fishing/Simulation/CatFishingFightSimulator` 中坐标、速度、加速度分别使用cm、cm/s、cm/s²，质量kg，力N；`ForcePerStrengthNewtons` 默认1 N/力量。实际施加到Chaos时才乘100。身体质量读取实际刚体，不能用力量成长或CMC的旧Mass代替。
 
-鱼基础力量仍由冻结重量乘 `StrengthPerKilogram` 生成，再应用既有中鱼倍率。猫质量改为独立的 `CatBodyMassKilograms`（默认每猫 5 kg），助手按住出力键时加入系统质量。猫有正体力时保持完整力量、恰好零体力停止出力的规则不变；鱼则由独立实际出力 u 缩放主动推进。力量成长不再同时让猫变重；CMC 的引擎推挤 Mass 不参与该参数。
-
-鱼保留 `FishVelocityCentimetersPerSecond`。正常主动推力向量为 `F_active = u × F_max × SwimDirection`，质量为 m；水阻固定使用 `d = F_max × 100 / max(1, FullEffortSpeed_cm_per_s)`，参考速度有正值校验，计算时另设 1 cm/s 数值下限，不随实际出力 u 变化。以该推力与固定水阻作隐式积分：
+鱼基础力量由冻结重量和既有倍率产生。鱼保留上一帧速度，正常主动推力为 `u × F_max × SwimDirection`，正常水阻 `d = F_max × 100 / max(1, FullEffortSpeed_cm_per_s)`，不随出力u缩放：
 
 ```text
 m_effective = m + dt × d
 v_free_cm/s = (m × v_previous_cm/s + 100 × dt × F_active_N) / m_effective
-x_free_cm   = x_actual_cm + dt × v_free_cm/s
+x_free_cm = x_actual_cm + dt × v_free_cm/s
 ```
 
-力与阻力共同决定加减速过程，正常自由游速渐近 `u × 满出力参考游速`；换向不会瞬间反转已有惯性。Runner 保存求解输出 `ResolvedFishVelocityCentimetersPerSecond`，并反馈地形及 Encounter 实际落位与候选的差异。历史位置纠偏不再写入下一步惯性，也不计入鱼主动做功或主动上岸牵引。鱼力竭时清除游动速度，继续沿用既定的无自主漂游收尾规则。
+线约束只提供非负拉力。真实竿端点通过 `bPhysicalRodEndpoint` 显式选择：鱼的自由候选位置与真实竿尖的速度、外力加速度、约束后点逆质量共同进入隐式线长求解。求得的 `RodLineForceNewtons` 同时用于鱼端反作用和物理竿；地形确实卸载时清零，不在Finalize阶段另造一个方向不同的“同大小”力。非物理固定锚点夹具仍保留原高度/水平半径及历史纠偏；真实竿模式不通过位置投影吞掉约束误差，也不运行旧CMC共同队形预测或 `StepRotation`。
 
-线约束采用单向拉力。竿尖到鱼水面的高差为 h，已放线长为 L，可行水平半径为 `sqrt(max(L²-h², 0))`。先从旧状态分离历史位置误差，再寻找使双方同一步末端点满足线长的非负张力。鱼端包含隐式水阻和惯性；猫端包含实际沿线速度、质量、有限支撑、牵引限速与胶囊探测允许的移动距离；手持杆的预测旋转也由同一个候选张力驱动。猫端预测采用不超过 1/120 s 的积分，与现有 CMC 的非反向支撑和速度上限规则一致：
+竿尖响应由实际刚体质量与世界惯量、真实关节的Locked线性约束计算。用广义质量矩阵 `M`、锁定点速度约束 `J` 和竿尖点速度映射 `B` 表示：
 
 ```text
-mobility_cm/N = 100 × dt² / m_effective
-fish_end(T) = corrected_start + dt × v_free - T × mobility × horizontal_line_fraction × horizontal_axis
-rod_aim(T) = existing_StepRotation(readonly_current_state, torque_from_T, dt)
-rod_end(T) = actual_holder + rotate(rod_aim(T), calibrated_tip_offset) + predicted_carrier_displacement(T)
-T_N = smallest nonnegative tension that satisfies the end-of-step line constraint
+A = M^-1 - M^-1 J^T (J M^-1 J^T)^-1 J M^-1
+K_tip = B A B^T                  # 竿尖点逆质量，单位1/kg
 ```
 
-固定端是该约束的特例，使用解析解；可移动端使用有界求根。接近纯竖直时力臂有数值下限。历史位置误差按 `MaximumFishConstraintCorrectionSpeedCentimetersPerSecond` 回收，不再全部折算成新拉力；不可满足的高差仍保留。该配置仍以 cm/s 为单位，保留猫端牵引速度上限用途。该层不求鱼的垂直浮力，也不求猫与地面的法向力或静/动摩擦系数；地面阻挡由 CMC 执行，沿线支撑能力仍由猫力量及既有杆杠杆规则给出。
+实现仅消去独立有效约束行，不能直接把全部连通对象焊成一个刚体：球铰的自由转动保留，肩部Limited范围和软驱动也不当成Locked行。其真实驱动力和碰撞效果通过后续实际加速度反馈。直接固定的抓点与经软肩连到地面的抓点具有不同的短时响应；机械图不含玩家身份、会话人数或ASC账单。
 
-`ACatFishingRodActor::GetRotationPredictionFromAuthority` 为实际刷新和预测提供同一份输入构造：真实姿态、请求朝向、已有滤波历史、现有阻尼参数、持有人位置及正式握把/竿尖标定。模拟器调用既有 `FCatFishingRodResistanceModel::StepRotation` 试算本步末竿尖，不写实际姿态、滤波历史或努力累计量。没有旋转快照的纯数值夹具仍可提供竿尖相对身体速度；正式持竿 Runner 提供旋转快照。仅外推上一份负载产生的竿尖速度不足以解决重鱼反复卸力，因此不能把这条夹具输入当作正式手持杆方案。
+鱼固定步默认 `h=0.05s`。观察器用PostPhysics已确认的累计冲量差除以实际物理经过秒数，得到上一采样区间平均鱼线力，再从实测竿尖加速度扣除这部分响应；刚发布但尚未施加的载荷不能被当成历史力扣除。待施队列只提供未来端点运动的只读预测，不写回身体。隐式步的位置响应系数 `β=0.5+0.5×clamp(物理子步秒数/h,0,1)` 区分物理子步与鱼固定步。
 
-左键产生 `ReelSpeedCentimetersPerSecond × dt` 的请求。模拟器用同一个约束函数寻找不超过猫可用支撑/卷线力的缩短量：负载超过出力时停转，有余力才实际缩短。`RequestedReelDistanceCentimeters` 与 `ActualReelDistanceCentimeters` 明确分开。力竭鱼使用独立的 `ExhaustedReelForceNewtons`（默认 200 N），保持猫零体力也能免耗体回收，仍不超过配置收线速度。
+`DefaultEngine.ini`正式启用 `bSubstepping=True`、`MaxSubstepDeltaTime=1/120秒`、`MaxSubsteps=16`，完整覆盖不超过约0.133秒的物理长帧。Runner只由Receiver的PrePhysics帧委托推进，原PostPhysics Timer已移除；同一帧先按0.05秒补足鱼步，再按实际物理dt依次消费有限力段，将本帧冲量除以物理dt后施力。Rod既有PostPhysics Tick调用 `FinishPhysicsFrame` 确认已施冲量。补步生产期间临时容量包含本帧即将消费的物理秒数，未来积压仍受原有效期限制，不能丢正常卡顿的中间步或重复扣体。载荷写入和清理按Session隔离；诊断计数记录该竿接收组件生命期的累计冲量，满足 `已提交冲量=已施加+待施加+已丢弃`，单位N·s，不能将换场后的累计值误读为本场数值；正常运行不应丢弃。超出有效期的积压丢弃最旧段并记录Warning，终局解绑唯一调度并清队列；竿接收方结束时通过原Runner失败入口收尾Session，避免无Tick的会话滞留。
 
-猫端不使用玩家期望速度冒充已完成位移。Runner 从真实端点、实际速度和 CMC 胶囊查询构造预测输入；`CarrierTravelLimitCentimeters` 为负一表示固定端、零表示无法向鱼移动、正值表示本步向鱼移动的保守上限，默认负一。预测不移动 Actor、不触发重叠、不计费；真实移动仍由 CMC 完成，下一步重新读取实际端点。最终沿线净力为 `T × 最终线方向水平比例 - 猫可用支撑力`，正负值分别输出互斥的加速度和支撑减速度（cm/s²），减速度不会把静止猫推离鱼。
+左键请求 `ReelSpeedCentimetersPerSecond × dt` 的缩短量，模拟器在同一约束中按有效卷线力量求可完成的实际缩短；负载过高时停转，不预支请求量。力竭鱼保留 `ExhaustedReelForceNewtons` 的免体力回收规则。实际作用力发布到物理竿，由竿和手的约束传给猫；地面接触、墙面阻挡、互推和侧拉都交给刚体模拟。
 
-地形未改变鱼候选落点时，Runner 保留同一步末约束求出的张力，避免又用“鱼新位置 + 猫尚未执行完的旧位置”清零。地形确实改变候选并产生松线时，仍撤销负载。`ConstraintRodEnd` 是受碰撞上限约束的预测观察值，不是已经执行的角色位置；角色主动移动、滑墙、台阶或移动障碍可能使实际落位与预测不同，不能将该模型当作 Chaos 内同一物理步的完整刚体接触求解。
+`CatFishingOperatorWorkModel` 仅计算主控实际移动对应的本人费用，Runner只冻结主控的力量、体力和输入。主控移动与站定支撑共用自身上限：ASC力量×N换算×100，零体力为零。旁人使用普通身体移动，不进入钓鱼费用系统，也没有辅助力量系数；其作用只通过真实约束和竿尖运动反馈。旧GroupModel、共同队形、组内碰撞忽略、胶囊共同最小位移和CMC重放已移除。
 
-Rod在搏斗中转交Runner发布的组目标、沿线加速/减速和鱼转矩；`Character/CatCharacterMovementComponent::CalcVelocity` 通过唯一组入口执行，抑制第二份个人行走加速，碰撞/滑动和垂直运动继续由CMC负责。`bUseContinuousTraction` 表示本步连续牵引/减速上下文，暂时零正牵引仍可制动；它与 `CarrierConstraintState.bActive` 的正牵引及 `bFightActive` 的搏斗阶段含义分开。鱼力竭不退出组或搏斗域；终局清鱼载荷后，仍占竿者由Rod发布无载共同速度。成员离开才解除本人绑定，换主和名单变化先拒绝旧域，再接当前组解；破竿、无人、收起和Rod销毁完整清理。减速度默认0、连续牵引默认false，不影响入竿即建立的无载组绑定。
-
-行走期间 `PerformMovement` 临时将 CMC 最大子步压到不超过 1/120 s，并为本帧（预算至 0.25 s）保留足够迭代数；实时移动和 SavedMove 重放使用同一设置，返回后恢复原设置。该方式复用引擎支持子步的移动模式，不在外层重复执行资源或运动回调。极小正加速度也必须发布非零速度上限，避免近似平衡时被零上限瞬间刹停。旧 Rod Tick 补速度、质量份额分配位移、背离方向速度硬截断均已退出生产链。
-
-`NormalizedLineLoad = pow(max(dot(鱼努力方向, 水平向外方向), 0), AngleStrengthExponent)` 继续供鱼表现和既有方向性磨损规则使用，不能冒充真实张力。`LineTensionNewtons` 是力；`NormalizedTension = clamp(T / DisplayTensionNewtons, 0, 1)` 仅是表现刻度。`TensionCentimeters/ConstraintErrorCentimeters` 仍表示几何误差。强对抗、僵持标记只观察结果，不锁位置、不裁决断线。
-
-为使每个固定步都能从落盘数据复核，`FCatFightStepResult::Trace` 保存本次纯求解的中间量，但不作为下一步输入，也不写 ASC、装备或 Actor。保留方向、力与质量换算、收线力上限、实际张力和最终带符号加速度。旧 `FullCorrectionCm` 替换为含义明确的 `ExistingPositionErrorCm`；约束采样新增 `PositionCorrectionCm`、`CarrierTravelLimitCm`、`ConstraintRodEnd` 和 `RodRotationPredicted`，区分历史误差修正、碰撞上限和本步受力预测，并确认正式杆旋转已参与约束。`ResolvedFishVelocityCmS` 现在记录受力积分并经地形反馈后的速度，已排除历史位置纠偏。
-
-Development 权威日志 `Event=fishing_simulation_trace` 默认按约 1 秒和终局额外输出一次，包含上述中间量、猫移动/收线/转杆做功单位、共享支撑负载、鱼的实际出力、意图距离、沿意图有符号进展、缺失距离、每米费率、固定水阻及原始/封顶鱼体力费用、猫体力前后值、方向性磨损、`InputAccepted/FinalizeAccepted` 与终局名。它不会在 `FCatFishingFightSimulator` 内直接写日志，保证测试仍是无副作用纯函数；非法输入会在 `fishing_fight_step_rejected` 中写出 `RejectReason`（配置、状态、竿约束、鱼方向或最终结果）。要复盘单步时，以 `SessionId + RodActorId` 关联 `fishing_simulation_trace`、`fishing_constraint_sample`、`fishing_surface_tow` 和资源写回事件。
+鱼线受力以当前SessionId和单调Step发布，有过期时间；旧会话不能写入或清除新会话载荷。终局仅清本场鱼力，已有抓握继续存在。传送会清三刚体旧输入域及双向连接；倒地停止自主驱动，保留可被队友拖动的身体。
 
 ### 最终费用和耐久
 
@@ -417,7 +406,7 @@ Development 权威日志 `Event=fishing_simulation_trace` 默认按约 1 秒和�
 
 - 移动和收线按 `StrengthPerKilogram × 完成的主动厘米数` 计价，移动意图只用于识别主动做功，不能凭受阻输入收费；收线按实际完成量收费。
 - 转杆按独立的正功弧度单价计费，转矩积分的 Epoch 与累计时长继续防止换人或补步重复消费。
-- 共享支撑按 `CatSupportStaminaPerSecond × dt × 自身相对负载²`，转杆只补超过共享支撑的部分。停转没有收线正功，仍可能有持竿支撑费用。
+- 主控持竿支撑按 `CatSupportStaminaPerSecond × dt × 自身相对负载²`，转杆只补超过这笔支撑费用的部分。停转没有收线正功，仍可能有本人持竿支撑费用；这些费用不在玩家之间分摊。
 - 鱼按沿主动意图缺失的米数乘 `FishStaminaPerUnfulfilledMeter` 付费；历史纠偏剔除，真实反向进展保留，零意图免耗，不按鱼线夹角/张力再门控。
 - 线杯尚有余量时，正常右键恢复猫体力并免除双方费用；达到已放线长度上限后停止回体与该项免耗，复用无右键的原对抗结算，不另加一笔满线费用。零体力强制拖拽优先，鱼已力竭后回收仍免猫耗体。
 
@@ -425,17 +414,15 @@ Development 权威日志 `Event=fishing_simulation_trace` 默认按约 1 秒和�
 
 ### 鱼竿旋转
 
-`CatFishingRodResistanceModel::Evaluate` 读取同一 `LineTensionNewtons`，不再乘一次鱼力量、游向负载和表现张力。为保持现有旋转参数及复制字段的单位，它将牛顿数除以 `ForcePerStrengthNewtons`，再乘配置杆长（m）得到 `StrengthMeters` 转矩；字段含义没有改为牛顿米。
+实际竿向与角速度由物理竿保存。鼠标活动产生目标角速度，按响应时间与最大角速度限制，再由 `(目标角速度−实际角速度)/响应时间` 得到期望角加速度，用实际杆惯量张量换算转矩（kg·cm²/s²）。主控本人的力量限制转矩预算；施加给杆的转矩必须有身体上的等量反作用，不能以世界为无形支点。
 
-当前实现以本文件开头“鱼竿连续角速度修复（2026-09-09）”为准。2026-09-07曾针对松绷线快速切换，在原瞬时转速模型中增加负载0.15 s指数平滑及受载粘性阻尼；那个历史版本没有角速度记忆，也没有本轮的惯性参数。它的受控测试只证明当时的抖动改善，不能证明本轮用户反馈已解决。
+鼠标停止、输入超时或等待新主位首个有效样本时撤掉主动转矩，保留惯性、重力、鱼线拉力与物理阻尼。主控启停仍可靠发送，并和持续采样共用输入世代及序号。转杆费用按本段实际主动用力和正向转角累计，Runner只消费一次。
 
-现在 `HeldRodAngularInertiaSeconds=0.08` 和 `HeldRodLoadedAngularDampingRatio=3` 从 `DefaultGame.ini` 的 `[/Script/Catfishing.CatFishingSettings]` 进入同一模型。设平滑后的鱼负载大小为P、转矩尺度为 `S=max(猫转矩容量,P,数值下限)`，实际阻尼为 `max(1+3×P/S,2×sqrt(J/Response))`。默认搏斗内零鱼负载为2倍阻尼，满鱼负载为4倍；净转矩驱动角加速度，实际速度从上一步连续积分。360°/s保持硬上限；持续饱和驱动下的180°/s与90°/s是相应渐近值，不能当作瞬时转速或新的硬上限。将负载阻尼比设0仍保留临界阻尼下限。
+相机读取真实握把的俯仰和朝向，保留原指数跟随响应；物理竿绕自身轴滚转时，最终镜头地平线保持水平。第一人称隐藏最终可见的身体Poseable，而正式GetMesh仍是动画/Montage来源。
 
-猫、鱼净转矩的静态平衡、方向和单位保持；加速和减速过程改变，因此实际正功和支撑持续时间也可能变化，单价及支付入口不变。Actor保存真实角速度，纯模型返回身体Pitch限位后的实际姿态和允许速度，正功只观察实际允许转角；预测读取副本，不提交角速度、姿态或努力累计。本轮新增状态有明确生命周期清理，不增加角速度复制字段、资产迁移或存档字段。默认手感仍需用户复测。
+### 右键放线时重设转向意图（2026-09-07历史检查点）
 
-杆负载使用地形后的线方向；松线和上岸力竭停止目标鱼转矩，搏斗仍有效时保留真实角速度并让负载历史渐退；终局退出按生命周期清理。实际竿尖、Actor Transform、握把/镜头和努力采样继续消费同一积分结果。J是归一化模型的等效惯性时间，不是按杆质量和形状建立的完整刚体惯量；当前也不声称已经解决所有身体纠正、网络及输入滞后造成的手感问题。
-
-### 右键放线时重设转向意图
+以下保留当时的修复与报告。静止累计补发、旧CMC及旧杆积分模型已由本文开头的鼠标启停和物理抓握接入替换，不作为当前运行入口。
 
 本节记录2026-09-07的输入域改动及当时验证，以下段落和表格均是历史证据。2026-09-09已用本文开头“鼠标停止即撤掉主动转杆”替换持久追目标的输入规则，删除首右键前ControlRotation施力、停止心跳补旧目标的运行分支；右键授权、同帧增量顺序和原输入域仍保留。普通右键rebase保留真实角速度，旧网络报告的静止补齐行为不再作为当前契约。
 
@@ -467,39 +454,37 @@ runtime_behavior：真实 Command→Session→Runner 验证首次/重复/释放�
 
 presentation_delivery：未验证正式地图真人鼠标操作、Steam 双机、高延迟和新 Development 包无 `-log` 双端落盘。用户在验证期间重新打开 Editor；`BuildEditorDelivery.log` 记录最终普通 Editor 重编译被 Live Coding 锁阻止，当前常用模块已包含主体修复，最后新增日志上下文和修正后的网络测试尚待保存关闭编辑器后重编译。独立 DebugGame 已验证最终源码，但不等同于更新用户当前进程。Fishing 模块保持未整体验收。`verify_fishing_player_entry.ps1` 硬要求 Lake、当前 GameplayMap=Showcase2 的既有差异不在本轮修改范围，不能用该地图检查替代输入验收。
 
-## FishLogic 4：网络与移动重放
+## FishLogic 4：网络与控制生命周期
 
-服务器决定鱼状态、固定随机流、线长、费用和最终 Transform。拥有客户端接收 Rod 约束用于本地移动；模拟代理使用引擎角色移动复制。`FCatSavedMove::SetMoveFor` 保存每次移动使用的约束，`PrepMoveFor` 为纠正重放恢复它，重放结束恢复读取最新复制输入，旧鱼负载不会覆盖实时输入。换持有人、离竿、清约束和来源销毁会卸载实时牵引。
+服务器独占身体、手、抓握及竿的物理裁决。客户端只提交移动/视向/伸手意图，按服务器快照插值显示；当前没有身体物理预测回滚。原CMC网络移动已停用，视向改由身体输入RPC同步到服务器Controller，供实际抛钩、交互和抄鱼查询使用。
 
-Rod 的约束快照同时保存 `ConstraintHolderPlayerState`，复制乱序时只能作用于快照对应的持有人；服务器在换主位、离竿、坏竿和收起时立即卸载旧牵引，不能等下一次表现 Tick 才清理。服务器发布和拥有客户端 OnRep 收到暂时零牵引时，保留对应 CMC Tick 前置关系；只有实际解绑或来源不匹配时移除，使竿尖在拉动与减速阶段都采样当帧碰撞后的角色位置。
+清理输入使用可靠消息和序号边界，迟到的不可靠移动包不得在打开菜单、传送或换Pawn后复活。传送推进身体和抓握输入世代，清掉旧约束并同步三刚体位置。鼠标主辅角色变化后，正常松键仍发送给按下时的原接收方；菜单/失焦取消未提交瞄准，不发射鱼钩。
 
-这保证受力输入参与客户端历史移动重放，不代表已经实现整场物理回滚、服务器按客户端时间戳回溯鱼状态或零延迟网络一致性。仍须在延迟/丢包条件下检查服务器纠正频率、主辅换人、坡面与正式双端手感。自动化碰撞/回放测试属于受控 runtime_behavior，不能替代真人联机验收。
+控制世代隔离主控重新取竿后的旧输入，旁人的抓握变化不重置它。所有关键边沿与拒绝默认落盘，按BodyId、GripId、RodActorId、SessionId和输入世代关联。受控多World测试不替代恶劣网络、真人手感或新包双端验收。
 
 ## FishLogic 5：上岸、力竭与收近
 
 原 `ResolveFishSurfaceFromAuthority` 继续解析真实水面、岸线间隙及阻挡坡面。活鱼只有实际收线或身体向岸位移形成有效拖拽时才能上岸力竭，纯甩杆仍不能借少量卷线误触发。鱼干继续使用同一路径；只有真实干地和拾取距离条件同时成立才进入 Pickup。地面暂缺或重新入水会撤回干地资格，不创建第二条捕获路径。
 
-拾取、WBP 和持久化入口保持现状；鱼身体改读主动朝向，原动画新增只读行为/出力并继续三动画映射。本轮没有新增正式表现资产、地图或 Cook 入口。
+拾取和持久化资源入口保持现状，鱼动画继续消费实际行为与出力。正式HUD增加左右爪提示，非主控不显示钓鱼会话或共享体力；新身体沿用正式猫模型和ABP，地图及Cook入口未切换。
 
 ## 参数、兼容载荷与诊断
 
-正式数值仍从 `/Game/Catfishing/Data/Fishing/DA_FishingFightBalance_Default` 唯一读取，`DefaultGame.ini` 保留原软引用。`Scripts/create_fishing_fight_balance_asset.py` 验证并保存当前结构，已有调参不重置；鱼新每米价由独立默认或已编辑的新值进入，不从旧每秒价或每厘米价换算。新默认值为沿主动意图未完成距离每米耗体 5/3 点、每点力量 1 N、单猫质量 5 kg、力竭回收辅助力 200 N、零体力拖行辅助加速度 300 cm/s²、满表现张力 50 N。
+正式数值仍从 `/Game/Catfishing/Data/Fishing/DA_FishingFightBalance_Default` 唯一读取，`DefaultGame.ini` 保留原软引用。`Scripts/create_fishing_fight_balance_asset.py` 验证并保存当前结构，已有调参不重置；鱼新每米价由独立默认或已编辑的新值进入，不从旧每秒价或每厘米价换算。新默认值为沿主动意图未完成距离每米耗体 5/3 点、每点力量 1 N、旧纯模拟夹具默认单猫质量5 kg（生产读取实际刚体质量）、力竭回收辅助力 200 N、零体力拖行辅助加速度 300 cm/s²、满表现张力 50 N。
 
 以下旧字段没有新模型运行读取，但保留序列化/只读蓝图身份：平衡资产的 `AccelerationPerStrength`、`DriveResponseSeconds`、`TensionResponseRangeCentimeters`、`MinimumCarrierAwaySpeedMultiplier`，以及 Rod/Snapshot 的两个旧背离速度倍率字段（当前恒为 1）。项目蓝图图表引用有 `CatFishingForceMigrationTests.cpp` 审计入口；历史记录曾报告旧 `/Game/UI/WBP_CatLakeReach` 的父类问题，本轮未独立复核它的当前状态，不能将历史问题列为本轮新增失败，也不能宣称全部Content类和外部Blueprint字段消费者已确认。删除条件是完成当前全Content类型、旧包及外部字段引用审计，对实际仍有消费者的包先迁移，再移除兼容载荷。没有保留第二套旧模拟器或速度写口。
 
 本轮额外暂留的兼容载荷包括人格旧时长/两档游速/方向字段，以及 Balance 的 `FishStaminaCostPerStrengthCentimeter/FishLoadStaminaMultiplier/IsometricEffortMultiplier/LowStaminaRestThreshold/LowStaminaRestMultiplier`。四个正式性格本轮已保存为版本1，旧字段不再是这四包的现行运行配置；仍保留旧包重载的版本0 `PostLoad` 迁移能力，并未完成全Content类型和外部Blueprint字段引用审计。旧费用不再参与readiness或运行计算，不能仅凭这16鱼和17AnimBP的局部审计删除所有反射身份；完成全部旧包及外部消费者核对/迁移后才可移除。`MotionIntent` 有实际正式动画消费者：本轮17包/26图审计找到4个引用节点，应先迁移动画转换及全部消费者再删除；本轮未改这些动画包。
 
-开发包默认落盘日志分类 `LogCatFishing`：
+开发包默认落盘：身体/抓握使用 `LogCatPhysicsGrab` 的 `physics_body_*`、`physics_grip_*`，物理杆使用 `LogCatFishing` 的 `fishing_physical_rod_ready`、`fishing_physical_line_load*`、`fishing_physical_mouse_motor`；旧CMC移动与旧杆积分事件已不代表生产路径。其余 `LogCatFishing` 入口如下：
 
 - `fishing_fight_started`：`StrengthResolution=CommonLineForce`、`ForcePerStrengthN`、`MassMode=IndependentCatBodyMass`。
 - `fishing_behavior_phase_entered`：新 `PreviousBehavior/Behavior`、最长持续秒数、`TargetEffort/ActualEffort/BlockedSeconds/LineLoad`、双方体力及会话/鱼竿 ID；不额外调用随机数。旧日期日志中的平静/反抗事件字段只描述当时版本。
-- `fishing_constraint_sample`：共同 `LineTensionN`、几何误差、最终转矩、`CarrierAcceleration`、`CarrierBrakingDeceleration`（均 cm/s²）和 `ContinuousCarrierTraction`；详细模式每固定步附加 `StepId/Frame/WorldTime/WorldGapSeconds`、实际/请求阶段、期望/目标游向、边界避让时间、鱼的前位置/速度与地形解析后速度、竿尖及角色速度/输入。
+- `fishing_constraint_sample`：共同 `LineTensionN`、几何误差、最终转矩、真实竿端点与主控身体运动观察（不再发布虚拟载组加速度）；详细模式每固定步附加 `StepId/Frame/WorldTime/WorldGapSeconds`、实际/请求阶段、期望/目标游向、边界避让时间、鱼的前位置/速度与地形解析后速度、竿尖及角色速度/输入。
 - `fishing_simulation_trace`：固定步的几何、方向负载、力/质量换算、隐式移动质量、收线二分的力上限、所需/实际张力、鱼/猫费用、磨损和终局；按约 1 秒及终局输出，避免无条件刷屏。
 - `fishing_behavior_applied/received`：分别记录权威应用与真实客户端 OnRep 的行为/动画角色变化、实际出力、主动朝向及身份；本轮已在FinalTests.log取得瞬态PIE的双端对应事件，尚不能替代打包真人联机验收。
 - `fishing_fish_stamina_sample`、`fishing_fish_stamina_terminal_step`、`fishing_fish_stamina_spike`：分别记录周期采样、终局步及单步消耗超阈值的鱼体力结算；客户端体力复制观察使用 `fishing_fish_stamina_received`。`LogFishStaminaBreakdown` 只是内部函数名，不是日志事件名。
 - `fishing_coupled_work_sample`：请求/实际收线及各项费用；最终结算失败看 `fishing_final_work_rejected`。
-- `fishing_carrier_movement_sample`：RodActorId、角色、前后速度、实际碰撞位移、输入加速度、牵引方向/上限、`Frame/WorldTime/DeltaSeconds/Replay`、NetMode/LocalRole、`AccelerationCmS2/BrakingDecelerationCmS2`；`Active` 包含减速阶段，退出帧仍保留最后来源 ID。实时与重放分别限频，重放日志不改变实时采样计时器。替代旧 `fishing_carrier_smoothing_sample`。
-- `fishing_rod_rotation_resistance_sample`：原始/平滑负载、阻尼倍率、转速、控制器意图、实际姿态和努力 Epoch；附加本帧 `DeltaYaw/DeltaPitch`、身体位置/速度、竿尖位置/速度、`ConstraintAgeSeconds` 与 `Integrated`，区分正常积分和初始化姿态。
 - `fishing_carrier_constraint_received`：约束快照持有人、当前持有人、是否成功绑定移动组件、拉力/减速/转矩、接收时观察的鱼竿姿态、握把及本机帧/世界时间；这是复制回调的观察事实，不把未绑定快照记为成功应用。
 - 原 `fishing_surface_tow`、`fishing_fish_beached`、`fishing_drag_water_entered`、装备磨损及捕获日志继续沿用。
 

@@ -164,7 +164,7 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		Runner->State.FishStamina = 50.0;
 		Runner->State.FishWorldPosition = FVector(158.0, 0.0, 0.0);
 		Step.ProposedFishWorldPosition = FVector(150.0, 0.0, 0.0);
-		Step.CombinedCatStrength = 50.0;
+		Step.OperatorCatStrength = 50.0;
 		Step.FishConstraintCorrectionCentimeters = 8.0;
 		Step.bLineTaut = true;
 		Step.NormalizedTension = 1.0;
@@ -184,7 +184,7 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		Step.bSucceeded = true;
 		Step.bLineTaut = true;
 		Step.LineLengthCentimeters = 500.0;
-		Step.CombinedCatStrength = 50.0;
+		Step.OperatorCatStrength = 50.0;
 		Step.ActualReelDistanceCentimeters = 2.0;
 		Step.FishConstraintCorrectionCentimeters = 8.0;
 		Step.ProposedFishWorldPosition = FVector(-120.0, 0.0, 0.0);
@@ -232,12 +232,11 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		Rod.bRodHeld = true;
 		Rod.RodTipWorldPosition = FVector(0, 500, 150);
 		Rod.CarrierVelocityCentimetersPerSecond = Rod.RodTipVelocityCentimetersPerSecond = FVector(-100, 0, 0);
-		Rod.CarrierTravelLimitCentimeters = 20.0;
 		Runner->State.LineLengthCentimeters = FVector::Distance(Rod.RodTipWorldPosition, Runner->State.FishWorldPosition);
 		if (!TestTrue(TEXT("moving endpoint surface fixture is configured"), Runner->Config.IsValid())) return false;
 		auto Step = FCatFishingFightSimulator::Step(Runner->Config, Runner->State, Rod, FVector::ForwardVector);
-		if (!TestTrue(TEXT("moving endpoint produces load despite old-tip geometric slack"), Step.bSucceeded
-			&& Step.LineTensionNewtons > 0.0 && Step.SlackLineLengthCentimeters > 0.1)) return false;
+		if (!TestTrue(TEXT("observed endpoint produces the authoritative line load"), Step.bSucceeded
+			&& Step.LineTensionNewtons > 0.0)) return false;
 		const auto Predicted = Step;
 		FCatWaterSpatialResult Water;
 		bool bJustBeached = false;
@@ -280,7 +279,6 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		FCatFightRodConstraintInput Rod;
 		Rod.bRodHeld = true;
 		Rod.RodTipWorldPosition = FVector(499.9, 500, 150);
-		Rod.CarrierTravelLimitCentimeters = 20.0;
 		Runner->State.LineLengthCentimeters = FVector::Distance(Rod.RodTipWorldPosition, Runner->State.FishWorldPosition);
 		Runner->Config.MaximumLineLengthCentimeters = Runner->State.LineLengthCentimeters + (bAlreadyAtLimit ? 0.0 : 0.05);
 		Runner->SteeringRandom.Initialize(1459);

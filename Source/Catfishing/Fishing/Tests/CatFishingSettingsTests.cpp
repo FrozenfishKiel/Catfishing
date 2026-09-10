@@ -47,11 +47,6 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatRodOperatorLayoutSettingsTest,
-	"Catfishing.Unit.Fishing.Settings.RodOperatorLayoutIsBounded",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingFightBalanceDefinitionTest,
 	"Catfishing.Unit.Fishing.Settings.FightBalanceIsValidatedAndDesignerReadable",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -109,19 +104,6 @@ bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
 	PopulateValidFightBalance(*Balance);
 	TestTrue(TEXT("完整合法数值可进入运行态"), Balance->IsRuntimeDefinitionReady());
 	TestEqual(TEXT("既有资产获得猫力竭外冲默认倍率"), Balance->ExhaustedCatEscapeSpeedMultiplier, 2.0);
-	TestEqual(TEXT("既有资产获得独立的辅助力量折扣，不修改个人体力余额"), Balance->HelperStrengthMultiplier, 0.5);
-	for (const double ValidHelperStrength : {0.0, 0.25, 1.0})
-	{
-		Balance->HelperStrengthMultiplier = ValidHelperStrength;
-		TestTrue(TEXT("辅助力量贡献可在零到完整力量之间调整"), Balance->IsRuntimeDefinitionReady());
-	}
-	for (const double InvalidHelperStrength : {-0.1, 1.01, std::numeric_limits<double>::quiet_NaN(),
-		std::numeric_limits<double>::infinity()})
-	{
-		Balance->HelperStrengthMultiplier = InvalidHelperStrength;
-		TestFalse(TEXT("辅助力量倍率非法时拒绝运行"), Balance->IsRuntimeDefinitionReady());
-	}
-	Balance->HelperStrengthMultiplier = 0.5;
 	Balance->ExhaustedCatEscapeSpeedMultiplier = 3.0;
 	TestTrue(TEXT("猫力竭外冲速度可独立调整"), Balance->IsRuntimeDefinitionReady());
 	for (const double InvalidEscapeSpeed : {0.0, -1.0, std::numeric_limits<double>::quiet_NaN(),
@@ -210,28 +192,6 @@ bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
 
 	Balance->ForcePerStrengthNewtons = 0.0;
 	TestFalse(TEXT("非法加速度系数阻止运行"), Balance->IsRuntimeDefinitionReady());
-	return !HasAnyErrors();
-}
-
-bool FCatRodOperatorLayoutSettingsTest::RunTest(const FString& Parameters)
-{
-	(void)Parameters;
-	UCatFishingSettings* Settings = NewObject<UCatFishingSettings>(GetTransientPackage());
-	if (!TestNotNull(TEXT("creates transient fishing settings"), Settings)) return false;
-	Settings->MaximumRodOperatorSlots = 2;
-	Settings->RodOperatorSlotSpacingCentimeters = 140.0;
-	int32 Slots = 99;
-	double Spacing = 99.0;
-	TestTrue(TEXT("two-slot layout is accepted"), Settings->TryGetRodOperatorLayout(Slots, Spacing));
-	TestEqual(TEXT("layout returns two slots"), Slots, 2);
-	TestEqual(TEXT("layout returns configured spacing"), Spacing, 140.0);
-	Settings->MaximumRodOperatorSlots = 9;
-	TestFalse(TEXT("unbounded replicated slot count is rejected"), Settings->TryGetRodOperatorLayout(Slots, Spacing));
-	TestEqual(TEXT("rejected layout clears slot count"), Slots, 0);
-	TestEqual(TEXT("rejected layout clears spacing"), Spacing, 0.0);
-	Settings->MaximumRodOperatorSlots = 2;
-	Settings->RodOperatorSlotSpacingCentimeters = -1.0;
-	TestFalse(TEXT("negative spacing is rejected"), Settings->TryGetRodOperatorLayout(Slots, Spacing));
 	return !HasAnyErrors();
 }
 

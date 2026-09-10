@@ -7,7 +7,7 @@
 1. 使用已通过编译的 `CatfishingEditor` 打开工程。
 2. 在 Content Browser 进入当前运行配置使用的 `/Game/Blueprint/Actors`。
 3. 通过 **Blueprint Class → All Classes** 选择下文指定的原生父类；不要从 Demo 的 Character、Controller、GameMode、FishingComponent 或 Session 派生。
-4. 三个原生父类均禁止蓝图 Actor Tick；原生 Rod Tick 负责权威握持姿态与无载共同速度发布，原生 RodBend 组件负责本地变形。蓝图不得用 Tick 模拟 Session 阶段、成员队形、鱼体力、鱼竿耐久或权威位移；身体移动仍由CMC执行。
+4. 三个原生父类均禁止蓝图 Actor Tick；原生 Rod Tick 读取真实竿刚体并更新表现代理，原生 RodBend 组件负责本地变形。蓝图不得用 Tick 模拟 Session 阶段、鱼体力、鱼竿耐久或权威位移；身体移动由 `UCatPhysicalBodyComponent` 驱动真实刚体与抓握约束，CMC只保留正式运动配置和动画观察接口。
 5. 三个 Actor 都复制 Actor movement，并以空间相关方式复制；蓝图表现事件标记为 Cosmetic，只在收到本地原生调用时执行，不会自动向其他网络端广播。
 
 当前运行配置使用以下入口：
@@ -51,25 +51,23 @@
 Rod 的 canonical 中心锚与当前左右站位参考组件都位于 `SceneRoot` 直属层级：
 
 - `RodTipAnchor`：权威抛竿原点与鱼线起点。
-- `StandAnchor`：公共操作交互点与兼容站位查询的 canonical 中心。
-- `RightStandAnchor` / `LeftStandAnchor`：兼容站位的编辑器参考组件；1–4人从入竿起通过共同运动根与个人偏移保持位置，不按编号传送角色。
+- `StandAnchor`：历史站位标定中心，保留装备定义中的规范数据；不作为多人加入或传送入口。
+- `RightStandAnchor` / `LeftStandAnchor`：历史编辑器参考组件。当前每个身体独立运动，辅助玩家接触抓握，不产生操作槽或队形。
 - `GripAnchor`：权威握持/IK 目标。
 
 蓝图只能调用以下 Blueprint Pure 值 getter：
 
 - `GetRodTipWorldTransform()`
-- `GetStandWorldTransform()`
-- `GetOperatorStandWorldTransform(SlotIndex)`
 - `GetOperatorCount()` / `GetOperatorSlotIndex(PlayerState)` / `IsPrimaryOperator(PlayerState)`
 - `GetGripWorldTransform()`
 
-getter 返回的是原生 private canonical local transform 与 Actor Transform 的组合值，不读取蓝图可见组件的临时相对变换。服务器通过 `ConfigureCanonicalAnchorsFromAuthority` 设置装备定义提供的三个锚点；当前握把由 `GripCanonicalLocalTransform` 初始复制，竿尖/站位在客户端的重建缺口仍以多人审计记录为准。弯曲与鱼线显示使用独立的 `RodTipMarker`，不依赖该缺口，也不能据此宣称已修复权威锚点复制。皮肤、Mesh Socket、AnimBP、Montage 和 Construction Script 永远不能反向修改 canonical anchors。
+竿尖和握把 getter 在服务器组合 private canonical local transform 与真实竿刚体姿态；客户端组合已复制的规范局部值与表现代理，不读取蓝图可见组件的临时相对变换。服务器通过 `ConfigureCanonicalAnchorsFromAuthority` 设置装备定义提供的三个锚点，竿尖、站位和握把规范值都注册复制。已停用的站位getter和人数/间距配置已删除；历史左右参考组件仍保持中心两侧各70cm的原摆放，供已序列化资产加载。弯曲与鱼线显示使用独立的 `RodTipMarker`。皮肤、Mesh Socket、AnimBP、Montage 和 Construction Script 永远不能反向修改 canonical anchors。
 
-加入时记录的是成员当下的相对位置；无Session、钩子飞行、Waiting、Probe、TrueBiteWindow都已使用组移动。无载时Rod只读个人ASC与同一GroupModel，发布经过全员最小胶囊sweep距离约束的共同水平速度，CMC保留重力和真实碰撞；不能由BP把成员Attach到竿上、按槽位SetActorLocation或再加一份个人移动。退出者恢复自由移动，仍占竿者在一轮终局后继续无载组移动。鱼力竭仍保留搏斗域，仅清鱼驱动力；不要凭零张力或鱼力竭自行解除队形、切相机或重置Aim域。
+只有原竿主人通过 R 显式取得主控，主控用鼠标抛竿、提竿与收放线；地面原竿需先用鼠标抓回，再按 R 恢复控制。其他玩家按住左右鼠标抓竿、猫或场景，再用普通移动施力。`OperatorPlayerState` 是唯一主控；暂留的 `OperatorPlayerStates` 只投影0或1项，不能通过其数组自行建立辅助成员、费用或接任逻辑。无Session、飞行、等待、咬钩和搏斗都保留相同真实抓握链。
 
-同竿成员的移动碰撞忽略由原生CMC按名单登记和恢复，BP不要全局关闭胶囊碰撞或覆盖其他系统的忽略项。无载探测允许地面角色经CMC跨过可StepUp的低台阶，真正墙体仍限制整组；坡面高度差和接触容差是正常身体结果，不应通过BP逐帧改Transform把全员锁在相同高度。
+角色互推、拖拽和碰撞由真实刚体处理，BP不要全局关闭身体碰撞、把身体Attach到竿上或逐帧改Transform。R 放竿只释放主控自己的连接，其他玩家持续按住的抓握保持；旁人不会自动接任。正常一轮结束清本场鱼线力，健康竿的握持仍可保留；破竿、收纳、销毁或身体生命周期清理会解除对应约束。不要凭零张力或鱼力竭自行切相机、重置Aim域或删抓握。
 
-如果皮肤 Mesh 的 Socket 与 canonical 值存在视觉偏差，应调整 `VisualRoot` 子树、皮肤专用相对变换或 Attachment Socket 映射；不得移动 canonical anchor 来“对齐外观”。本轮不改这些资产、反射钩子或Cook入口，历史图审计不代替本轮正式表现验证；验证状态统一见 [钓鱼架构2.0.4](FishingArchitecture_zh-CN.md#204-入竿即保持队形的影响与验证2026-09-08)。
+如果皮肤 Mesh 的 Socket 与 canonical 值存在视觉偏差，应调整 `VisualRoot` 子树、皮肤专用相对变换或 Attachment Socket 映射；不得移动 canonical anchor 来“对齐外观”。正式Rod资产中两个Break状态节点仍序列化 `OperatorPlayerStates` 未连线pin，删除该反射字段前须在编辑器重建节点并保存、独立重载核对。本轮不因这些历史pin重建多人玩法；当前接入与验证状态统一见 [钓鱼架构页首审查表](FishingArchitecture_zh-CN.md)。
 
 ### 3.3 现有静态鱼竿的受力弯曲
 
@@ -119,7 +117,7 @@ getter 返回的是原生 private canonical local transform 与 Actor Transform 
 - `RodSkinDefinitionId`
 - `OwnerPlayerState`
 - `OperatorPlayerState`
-- `OperatorPlayerStates`（紧凑有序数组；0=主位，其余为只控制移动的辅助；默认最多4人，单/多人状态只看当前数组长度，身份不能用下标表示）
+- `OperatorPlayerStates`（历史序列化投影，只允许0或1项，与唯一 `OperatorPlayerState` 一致；不能从这里获得辅助玩家名单）
 - `bDeployed`
 - `bBroken`
 
@@ -137,7 +135,7 @@ Rod Actor 的权威 Transform 由 replicated movement 单独复制。耐久不�
 
 - 触发时机：与上项相同，并固定在 `BP_ApplyRodSkin` 之后调用。
 - 用途：比较只读 Previous/Current，更新部署、操作人、破损和皮肤的本地表现。
-- 阶段 A 只保证初始化通知；后续权威变化必须继续由原生状态入口和 RepNotify 驱wo
+- 后续权威变化继续由原生状态入口和 RepNotify 驱动。
 `BP_PlayRodPresentationEvent(EventTag)`
 
 - 触发时机：仅当后续原生表现桥显式调用时触发；阶段 A 没有自动网络调用点。
@@ -149,7 +147,7 @@ Rod Actor 的权威 Transform 由 replicated movement 单独复制。耐久不�
 - 允许的七类表现工作已覆盖：Rod Static/Skeletal Mesh、材质、稳定 ID 驱动的皮肤、AnimBP、局部 Montage、VFX、SFX。
 - 所有可见 Mesh 都在 `VisualRoot` 子树。
 - 切换皮肤只改变 Mesh、材质、AnimBP/Animation Set、VFX/SFX 和允许的局部表现变换。
-- 三个 canonical getter 在切换皮肤或移动 `VisualRoot` 后保持相同权威结果。
+- 竿尖和握把 canonical getter 在切换皮肤或移动 `VisualRoot` 后保持相同权威结果。
 - 蓝图图表中没有 Session、Equipment、Items 写入，也没有 Set Actor Transform/Location/Rotation。
 
 ## 4. Hook/Bobber：`BP_CatFishingHookActor`

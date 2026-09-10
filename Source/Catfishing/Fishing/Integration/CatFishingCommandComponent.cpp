@@ -1,9 +1,12 @@
-#include "Fishing/Integration/CatFishingCommandComponent.h"
+﻿#include "Fishing/Integration/CatFishingCommandComponent.h"
 
 #include "GameFramework/PlayerController.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
 #include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Environment/CatChumPlacementService.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
@@ -278,11 +281,10 @@ void UCatFishingCommandComponent::ResetTransientCommandState()
 	LocalPitchAimRod.Reset();
 	LocalPitchAimEpoch = 0;
 	bLocalPitchAimInitialized = false;
-	LastServerHeldInputSequence = 0;
 	LocalChumChargeStartTime = -1.0; // 关卡/会话切换时收起残留的蓄力预览线。
 	ChumChargeStartServerTime = -1.0;
 	ScoopCooldownGate.Reset(); // 世界时间会在旅行时重建，旧世界的绝对时间戳不能带入新地图。
-	NextInputSequence = 0;
+	// This component lives on the Controller across pawn changes. Preserve monotonic sequence fences.
 }
 
 bool UCatFishingCommandComponent::TryGetHeldFightInputStateFromAuthority(bool& OutPrimaryHeld,
@@ -309,6 +311,68 @@ void UCatFishingCommandComponent::ClearHeldFightInputForControlTransferFromAutho
 	bServerPrimaryHeld = false;
 	bServerSlackHeld = false;
 	ServerAimingCorrelationId.Invalidate();
+}
+
+void UCatFishingCommandComponent::ClearHeldInputForLifecycle(const FName Reason)
+{
+	const APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || (!Controller->HasAuthority() && !Controller->IsLocalController())) return;
+	StopLocalRodAimInput();
+	PrimaryActivationCorrelationId.Invalidate();
+	bLocalSlackHeld = false;
+	LocalChumChargeStartTime = -1.0;
+	NextInputSequence = FMath::Max(NextInputSequence, LastServerHeldInputSequence);
+	FCatFishingInputEdge Edge = MakeDiscreteEdge();
+	Edge.InputSequence = ++NextInputSequence; // Two distinct runner edges clear primary and slack atomically in this RPC.
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_input_lifecycle_clear_requested Reason=%s RequestId=%s RodActorId=%s ControlEpoch=%u InputSequence=%lld %s"),
+		*Reason.ToString(), *Edge.RequestId.ToString(), *Edge.ControlRodActorId.ToString(), Edge.ControlEpoch,
+		Edge.InputSequence, *CatLogContext::BuildControllerFields(Controller));
+	if (Controller->HasAuthority()) ServerClearHeldInputForLifecycle_Implementation(Reason, Edge);
+	else ServerClearHeldInputForLifecycle(Reason, Edge);
+}
+
+void UCatFishingCommandComponent::ServerClearHeldInputForLifecycle_Implementation(const FName Reason, const FCatFishingInputEdge Edge)
+{
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (!Controller || !Controller->HasAuthority()) return;
+	if (!Edge.RequestId.IsValid() || Edge.InputSequence <= LastServerHeldInputSequence || Edge.InputSequence < 2)
+	{
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_input_lifecycle_clear_rejected Reason=StaleSequence RequestId=%s RodActorId=%s InputSequence=%lld AcceptedSequence=%lld %s"),
+			*Edge.RequestId.ToString(), *Edge.ControlRodActorId.ToString(), Edge.InputSequence,
+			LastServerHeldInputSequence, *CatLogContext::BuildControllerFields(Controller));
+		ClientReceiveHeldInputCleared(Reason, Edge.InputSequence, false);
+		return;
+	}
+	const bool bCancelledAim = ServerAimingCorrelationId.IsValid();
+	ServerAimingCorrelationId.Invalidate();
+	ChumChargeStartServerTime = -1.0;
+	bServerPrimaryHeld = false;
+	bServerSlackHeld = false;
+	LastServerHeldInputSequence = Edge.InputSequence;
+	FGuid SessionId;
+	if (UCatFishingService* Fishing = GetWorld()->GetSubsystem<UCatFishingService>())
+		if (ACatFishingRodActor* Rod = Fishing->FindRodOperatedBy(Controller->PlayerState);
+			Rod && Rod->GetPresentationState().RodActorId == Edge.ControlRodActorId && Rod->GetControlEpoch() == Edge.ControlEpoch)
+		{
+			Rod->StopHeldAimInputFromAuthority(Controller->PlayerState);
+			if (ACatFishingSession* Session = Fishing->FindActiveSessionByRod(Rod))
+			{
+				SessionId = Session->GetSnapshot().FishingSessionId;
+				Session->SetReelingFromAuthority(Controller->PlayerState, Edge.InputSequence - 1, false);
+				Session->SetSlackingFromAuthority(Controller->PlayerState, Edge.InputSequence, false);
+			}
+		}
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_input_lifecycle_cleared Reason=%s RequestId=%s SessionId=%s RodActorId=%s ControlEpoch=%u InputSequence=%lld CancelledAim=%d Result=SessionPreserved %s"),
+		*Reason.ToString(), *Edge.RequestId.ToString(), *SessionId.ToString(), *Edge.ControlRodActorId.ToString(),
+		Edge.ControlEpoch, Edge.InputSequence, bCancelledAim, *CatLogContext::BuildControllerFields(Controller));
+	ClientReceiveHeldInputCleared(Reason, Edge.InputSequence, true);
+}
+
+void UCatFishingCommandComponent::ClientReceiveHeldInputCleared_Implementation(const FName Reason, const int64 InputSequence, const bool bAccepted)
+{
+	if (bAccepted) NextInputSequence = FMath::Max(NextInputSequence, InputSequence);
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_input_lifecycle_clear_received Reason=%s InputSequence=%lld Accepted=%d %s"),
+		*Reason.ToString(), InputSequence, bAccepted, *CatLogContext::BuildControllerFields(Cast<APlayerController>(GetOwner())));
 }
 
 void UCatFishingCommandComponent::TrackHeldFightInputFromAuthority(
@@ -358,7 +422,7 @@ FCatFishingInputEdge UCatFishingCommandComponent::MakeDiscreteEdge()
 
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitRodInteract()
 {
-	// R 对应的鱼竿 Ability：首次取竿即持握，后续拿起/放下由服务器按当前占位分派。
+	// R explicitly takes or releases owner control; physical assistance has no command role.
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_rod_interact_requested RequestId=%s InputSequence=%lld %s"),
@@ -731,34 +795,52 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		|| CommandType == ECatFishingCommandType::PrimaryReleased
 		|| CommandType == ECatFishingCommandType::SlackPressed
 		|| CommandType == ECatFishingCommandType::SlackReleased;
-	if (bRodControlEdge && Fishing)
+	if (bRodControlEdge)
 	{
-		if (ACatFishingRodActor* Rod = Fishing->FindRodOperatedBy(Controller->PlayerState))
+		ACatFishingRodActor* CurrentRod = Fishing ? Fishing->FindRodOperatedBy(Controller->PlayerState) : nullptr;
+		// Resolve an explicit target before reading this player's control slot. Physical helpers have no slot.
+		ACatFishingRodActor* TargetRod = Fishing && Edge.ControlRodActorId.IsValid()
+			? Fishing->FindDeployedRodById(Edge.ControlRodActorId) : CurrentRod;
+		const TCHAR* RejectReason = nullptr;
+		if (Edge.ControlRodActorId.IsValid() && !TargetRod)
 		{
-			const bool bPrimary = Rod->IsPrimaryOperator(Controller->PlayerState);
-			const bool bCurrentControl = Edge.ControlRodActorId == Rod->GetPresentationState().RodActorId
-				&& Edge.ControlEpoch != 0 && Edge.ControlEpoch == Rod->GetControlEpoch();
+			Result.Error = Fishing ? ECatFishingCommandError::NoRod : ECatFishingCommandError::DependencyUnavailable;
+			RejectReason = Fishing ? TEXT("UnknownTargetRod") : TEXT("FishingServiceUnavailable");
+		}
+		else if (TargetRod)
+		{
+			const bool bOwner = Controller->PlayerState
+				&& TargetRod->GetPresentationState().OwnerPlayerState == Controller->PlayerState;
+			const bool bPrimary = bOwner && TargetRod->IsPrimaryOperator(Controller->PlayerState);
+			const bool bCurrentControl = CurrentRod == TargetRod
+				&& Edge.ControlRodActorId == TargetRod->GetPresentationState().RodActorId
+				&& Edge.ControlEpoch != 0 && Edge.ControlEpoch == TargetRod->GetControlEpoch();
 			if (!bPrimary || !bCurrentControl)
 			{
 				Result.Error = bPrimary ? ECatFishingCommandError::InputSequenceStale : ECatFishingCommandError::NotFisher;
-				Result.RodActorId = Rod->GetPresentationState().RodActorId;
-				Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
-				if (const ACatFishingSession* BoundSession = Fishing->FindActiveSessionByRod(Rod))
-				{
-					Result.FishingSessionId = BoundSession->GetSnapshot().FishingSessionId;
-					Result.Revision = BoundSession->GetSnapshot().Revision;
-				}
-				UE_LOG(LogCatFishing, Warning,
-					TEXT("Event=fishing_control_input_rejected RequestId=%s RodActorId=%s SessionId=%s InputControlEpoch=%u CurrentControlEpoch=%u Reason=%s World=%s Authority=%d LocalRole=%d %s"),
-					*Edge.RequestId.ToString(), *Result.RodActorId.ToString(), *Result.FishingSessionId.ToString(),
-					Edge.ControlEpoch, Rod->GetControlEpoch(), bPrimary ? TEXT("StaleControl") : TEXT("AuxiliaryMovementOnly"),
-					*GetNameSafe(GetWorld()), Controller->HasAuthority(), int32(Controller->GetLocalRole()),
-					*CatLogContext::BuildControllerFields(Controller));
-				DeliverResultFromAuthority(Result);
-				return;
+				RejectReason = !bOwner ? TEXT("NotRodOwner") : !bPrimary ? TEXT("NotCurrentOperator") : TEXT("StaleControl");
 			}
 		}
+		if (RejectReason)
+		{
+			Result.RodActorId = TargetRod ? TargetRod->GetPresentationState().RodActorId : Edge.ControlRodActorId;
+			Result.RodActorRevision = TargetRod ? TargetRod->GetPresentationState().RodActorRevision : 0;
+			if (const ACatFishingSession* BoundSession = Fishing && TargetRod ? Fishing->FindActiveSessionByRod(TargetRod) : nullptr)
+			{
+				Result.FishingSessionId = BoundSession->GetSnapshot().FishingSessionId;
+				Result.Revision = BoundSession->GetSnapshot().Revision;
+			}
+			UE_LOG(LogCatFishing, Warning,
+				TEXT("Event=fishing_control_input_rejected RequestId=%s RodActorId=%s SessionId=%s InputSequence=%lld InputControlEpoch=%u CurrentControlEpoch=%u Reason=%s World=%s Authority=%d LocalRole=%d %s"),
+				*Edge.RequestId.ToString(), *Result.RodActorId.ToString(), *Result.FishingSessionId.ToString(), Edge.InputSequence,
+				Edge.ControlEpoch, TargetRod ? TargetRod->GetControlEpoch() : 0, RejectReason,
+				*GetNameSafe(GetWorld()), Controller->HasAuthority(), int32(Controller->GetLocalRole()),
+				*CatLogContext::BuildControllerFields(Controller));
+			DeliverResultFromAuthority(Result);
+			return;
+		}
 	}
+
 	// 只有当前操竿权下的边沿才能改持续按键；无竿时仍接受 Release 清除物理持有状态。
 	TrackHeldFightInputFromAuthority(CommandType, Edge);
 	if (CommandType == ECatFishingCommandType::CancelFishing)
@@ -847,13 +929,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	}
 	if (Fishing)
 	{
-		// R 的鱼竿三态（服务器按当前事实分派，客户端不需要知道自己处于哪一态；多人：竿不限竿主）：
-		//   正在操作某根竿（自己的或别人的） → LeaveRod（离开竿位，自由活动）
-		//   公共交互锚点附近且容器仍有容量      → OperateRod（追加编号，共享同一根竿的会话）
-		//   附近没有可加入的竿               → PlaceRod（取出本人库存实体竿并持握；场上合计上限两根）
-		// R 在会话期间同样可用（多人接力钓别人竿）：
-		//   任意阶段离开 → 只释放竿位和持续输入，会话、竿、钩与鱼都保持；
-		//   玩家可去另一根空竿抛线，之后再回到原竿继续；等口与搏斗阶段都允许其他玩家接力。
+		// R 放下当前主控；已真实抓住自己的竿时明确取回主控，否则部署本人库存实体竿。
 		if (CommandType == ECatFishingCommandType::OperateRod)
 		{
 			const ACatCharacter* Character = Cast<ACatCharacter>(Controller->GetPawn());
@@ -868,20 +944,21 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				DeliverResultFromAuthority(Fishing->LeaveRod(Controller, LeaveCommand));
 				return;
 			}
-			// 分支二：公共交互锚点附近且容器仍有容量 → 追加到紧凑数组末尾并按编号站位。
-			// 任意成员退出都会压紧编号；0 号退出时新的 0 号接管会话，不为后续人数新增交互分支。
-			if (ACatFishingRodActor* NearbyRod = Character
-				? Fishing->FindNearestOperableRod(Character->GetActorLocation(), 250.0) : nullptr)
+			if (const UCatPhysicalBodyComponent* Body = Character ? Character->GetPhysicalBodyComponent() : nullptr)
 			{
-				const FCatFishingRodPresentationState& NearbyState = NearbyRod->GetPresentationState();
-				FCatOperateRodCommand OperateCommand;
-				OperateCommand.Context.RequestId = Edge.RequestId;
-				OperateCommand.Context.RodActorId = NearbyState.RodActorId;
-				OperateCommand.Context.ExpectedRodActorRevision = NearbyState.RodActorRevision;
-				DeliverResultFromAuthority(Fishing->OperateRod(Controller, OperateCommand));
-				return;
+				for (const bool bLeft : {true, false})
+				{
+					UPrimitiveComponent* Target = Body->GetGrab()->GetGripTargetComponent(bLeft);
+					auto* HeldOwnRod = Target ? Cast<ACatFishingRodActor>(Target->GetOwner()) : nullptr;
+					if (!HeldOwnRod || HeldOwnRod->GetPresentationState().OwnerPlayerState != Controller->PlayerState) continue;
+					FCatOperateRodCommand OperateCommand;
+					OperateCommand.Context.RequestId = Edge.RequestId;
+					OperateCommand.Context.RodActorId = HeldOwnRod->GetPresentationState().RodActorId;
+					OperateCommand.Context.ExpectedRodActorRevision = HeldOwnRod->GetPresentationState().RodActorRevision;
+					DeliverResultFromAuthority(Fishing->OperateRod(Controller, OperateCommand));
+					return;
+				}
 			}
-			// 分支三：取出自己的竿并直接持握；分别冻结正式库存内容版本和装备选择版本。
 			const UCatInventoryComponent* OwnerInventory = Character ? Character->GetInventoryComponent() : nullptr;
 			FCatPlaceRodCommand PlaceCommand;
 			PlaceCommand.RequestId = Edge.RequestId;

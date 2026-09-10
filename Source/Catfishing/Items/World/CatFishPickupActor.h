@@ -88,6 +88,7 @@ protected:
 private:
 	friend class ACatFishingSession;
 	friend class FCatFishPickupMouthCarryAndGuardStoreTest;
+	friend class FCatFishingSessionScoopMouthCarryTest;
 
 	UFUNCTION() void OnRep_PresentationState(const FCatFishPickupPresentationState& Previous);
 	UFUNCTION() void HandleAuthorityCarrierDestroyed(AActor* DestroyedActor);

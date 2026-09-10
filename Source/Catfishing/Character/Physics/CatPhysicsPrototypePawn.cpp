@@ -1,16 +1,12 @@
 #include "Character/Physics/CatPhysicsPrototypePawn.h"
-
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "Camera/CameraTypes.h"
 #include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
 #include "Engine/World.h"
-#include "EngineUtils.h"
 #include "DrawDebugHelpers.h"
-#include "Net/UnrealNetwork.h"
 #include "PhysicsEngine/PhysicsConstraintComponent.h"
-
 ACatPhysicsPrototypePawn::ACatPhysicsPrototypePawn()
 {
 	PrimaryActorTick.bCanEverTick = true;
@@ -21,372 +17,77 @@ ACatPhysicsPrototypePawn::ACatPhysicsPrototypePawn()
 	SetNetUpdateFrequency(30.0f);
 	Body = CreateDefaultSubobject<UBoxComponent>(TEXT("PhysicsBody"));
 	SetRootComponent(Body);
-	Body->InitBoxExtent(FVector(13.0, 5.0, 7.0));
-	Body->SetCollisionProfileName(TEXT("PhysicsActor"));
-	Body->SetCollisionResponseToAllChannels(ECR_Block);
-	Body->SetMassOverrideInKg(NAME_None, 4.0f, true);
-	Body->SetLinearDamping(0.15f);
-	Body->SetAngularDamping(0.8f);
-	Body->BodyInstance.bUseCCD = true;
-	LeftHand = CreateDefaultSubobject<USphereComponent>(TEXT("LeftPhysicsHand"));
-	RightHand = CreateDefaultSubobject<USphereComponent>(TEXT("RightPhysicsHand"));
-	for (USphereComponent* Hand : {LeftHand.Get(), RightHand.Get()})
-	{
-		Hand->SetupAttachment(Body);
-		Hand->InitSphereRadius(UCatPhysicsGrabComponent::HandRadiusCm);
-		Hand->SetCollisionProfileName(TEXT("PhysicsActor"));
-		Hand->SetCollisionResponseToAllChannels(ECR_Block);
-		Hand->SetMassOverrideInKg(NAME_None, 0.12f, true);
-		Hand->SetLinearDamping(0.3f);
-		Hand->SetAngularDamping(1.0f);
-		Hand->BodyInstance.bUseCCD = true;
-	}
-	LeftHand->SetRelativeLocation(UCatPhysicsGrabComponent::RestHandLocal(true));
-	RightHand->SetRelativeLocation(UCatPhysicsGrabComponent::RestHandLocal(false));
+	LeftHand=CreateDefaultSubobject<USphereComponent>(TEXT("LeftPhysicsHand"));
+	RightHand=CreateDefaultSubobject<USphereComponent>(TEXT("RightPhysicsHand"));
+	LeftHand->SetupAttachment(Body); RightHand->SetupAttachment(Body);
+	UCatPhysicalBodyComponent::ConfigureGeometry(Body,LeftHand,RightHand);
 	LeftArm = CreateDefaultSubobject<UPhysicsConstraintComponent>(TEXT("LeftShoulder"));
 	RightArm = CreateDefaultSubobject<UPhysicsConstraintComponent>(TEXT("RightShoulder"));
 	LeftArm->SetupAttachment(Body);
 	RightArm->SetupAttachment(Body);
 	Grab = CreateDefaultSubobject<UCatPhysicsGrabComponent>(TEXT("PhysicsGrab"));
+	PhysicalBody=CreateDefaultSubobject<UCatPhysicalBodyComponent>(TEXT("PhysicalBody"));
 	Visual = CreateDefaultSubobject<UCatPhysicsPrototypeVisualComponent>(TEXT("PrototypeVisual"));
 }
 
+
 void ACatPhysicsPrototypePawn::BeginPlay()
 {
-	Super::BeginPlay();
-	SpawnTransform = GetActorTransform();
-	ViewInput = FRotator(-15.0, GetActorRotation().Yaw, 0.0);
-	if (HasAuthority())
-	{
-		PrototypeId = FGuid::NewGuid();
-		Body->SetSimulatePhysics(true);
-		LeftHand->SetSimulatePhysics(true);
-		RightHand->SetSimulatePhysics(true);
-		ConfigureArm(true);
-		ConfigureArm(false);
-	}
-	else
-	{
-		// Match the independent server bodies: moving the root must not move a hand a second time before interpolation.
-		LeftHand->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
-		RightHand->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
-		Body->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-		LeftHand->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-		RightHand->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
-	}
-	Grab->InitializeHands(Body, LeftHand, RightHand, LeftArm, RightArm);
-	Grab->PrimaryComponentTick.AddPrerequisite(this, PrimaryActorTick);
-	Visual->InitializeVisual(Body, LeftHand, RightHand);
-	if (HasAuthority()) CaptureSnapshot();
-	UE_LOG(LogCatPhysicsGrab, Log,
-		TEXT("Event=physics_body_started World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s BodyId=%s MassKg=%.3f Model=BodyAndTwoHands Replication=ServerSnapshots"),
-		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()),
-		*GetName(), *PrototypeId.ToString(), HasAuthority() ? Body->GetMass() : 4.0f);
+	Super::BeginPlay(); SpawnTransform=GetActorTransform();
+	PhysicalBody->Initialize(Body,LeftHand,RightHand,LeftArm,RightArm,Grab);
+	PhysicalBody->PrimaryComponentTick.AddPrerequisite(this,PrimaryActorTick);
+	Visual->InitializeVisual(Body,LeftHand,RightHand);
 }
-
-void ACatPhysicsPrototypePawn::ConfigureArm(const bool bLeft)
+void ACatPhysicsPrototypePawn::SetPrototypeInput(FVector2D Move,FRotator View)
 {
-	UPhysicsConstraintComponent* Arm = bLeft ? LeftArm.Get() : RightArm.Get();
-	USphereComponent* Hand = bLeft ? LeftHand.Get() : RightHand.Get();
-	Arm->BreakConstraint();
-	Arm->SetWorldLocation(Body->GetComponentTransform().TransformPosition(UCatPhysicsGrabComponent::ShoulderLocal(bLeft)));
-	Arm->SetWorldRotation(GetActorRotation());
-	Arm->SetLinearXLimit(LCM_Limited, 19.3f);
-	Arm->SetLinearYLimit(LCM_Limited, 19.3f);
-	Arm->SetLinearZLimit(LCM_Limited, 19.3f);
-	Arm->SetAngularSwing1Limit(ACM_Free, 0.0f);
-	Arm->SetAngularSwing2Limit(ACM_Free, 0.0f);
-	Arm->SetAngularTwistLimit(ACM_Free, 0.0f);
-	Arm->SetDisableCollision(true);
-	Arm->SetLinearPositionDrive(true, true, true);
-	Arm->SetLinearDriveAccelerationMode(false);
-	Arm->SetLinearVelocityDrive(true, true, true);
-	Arm->SetLinearVelocityTarget(FVector::ZeroVector);
-	Arm->SetLinearDriveParams(140.0f, 10.0f, 1200.0f);
-	// Chaos treats the SECOND component as the drive parent. Targets are expressed in the body/shoulder frame,
-	// not in the freely rotating hand frame (which would reverse and rotate the intended reach).
-	Arm->SetConstrainedComponents(Hand, NAME_None, Body, NAME_None);
-	Arm->SetConstraintReferenceFrame(EConstraintFrame::Frame1, FTransform::Identity);
-	Arm->SetConstraintReferenceFrame(EConstraintFrame::Frame2,
-		FTransform(FQuat::Identity, UCatPhysicsGrabComponent::ShoulderLocal(bLeft)));
-	Arm->SetLinearPositionTarget(UCatPhysicsGrabComponent::RestHandLocal(bLeft)
-		- UCatPhysicsGrabComponent::ShoulderLocal(bLeft));
+	PhysicalBody->SetViewIntent(View);
+	const FRotator Yaw(0,View.Yaw,0);
+	PhysicalBody->SetMoveIntent(Yaw.Vector()*Move.X+FRotationMatrix(Yaw).GetUnitAxis(EAxis::Y)*Move.Y);
 }
-
-void ACatPhysicsPrototypePawn::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
-{
-	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	DOREPLIFETIME(ACatPhysicsPrototypePawn, Snapshot);
-	DOREPLIFETIME(ACatPhysicsPrototypePawn, PrototypeId);
-	DOREPLIFETIME(ACatPhysicsPrototypePawn, ControlEpoch);
-}
-
-FVector ACatPhysicsPrototypePawn::GetVelocity() const
-{
-	return HasAuthority() && Body ? Body->GetPhysicsLinearVelocity() : Snapshot.Velocity;
-}
-
-void ACatPhysicsPrototypePawn::SetPrototypeInput(FVector2D Move, FRotator View)
-{
-	if (Move.ContainsNaN() || View.ContainsNaN()) return;
-	Move = Move.GetClampedToMaxSize(1.0);
-	View.Pitch = FMath::ClampAngle(View.Pitch, -85.0, 75.0);
-	View.Yaw = FRotator::NormalizeAxis(View.Yaw);
-	View.Roll = 0.0;
-	MoveInput = Move;
-	ViewInput = View;
-	LastInputSeconds = GetWorld()->GetTimeSeconds();
-	if (!HasAuthority() && IsLocallyControlled() && LastInputSeconds - LastSendSeconds >= 1.0 / 30.0)
-	{
-		LastSendSeconds = LastInputSeconds;
-		ServerSetPrototypeInput(Move, View, ControlEpoch, ++LocalInputSequence);
-	}
-}
-
-void ACatPhysicsPrototypePawn::ServerSetPrototypeInput_Implementation(FVector2D Move, FRotator View,
-	const uint32 Epoch, const uint32 Sequence)
-{
-	if (!GetController() || Epoch != ControlEpoch || Sequence == 0 || Move.ContainsNaN() || View.ContainsNaN()
-		|| static_cast<int32>(Sequence - AcceptedInputSequence) <= 0)
-	{
-		if (GetWorld()->GetTimeSeconds() >= NextInputRejectLogSeconds)
-		{
-			NextInputRejectLogSeconds = GetWorld()->GetTimeSeconds() + 1.0;
-			UE_LOG(LogCatPhysicsGrab, Warning,
-				TEXT("Event=physics_body_input_rejected World=%s NetMode=%d Authority=1 LocalRole=%d BodyId=%s Epoch=%u CurrentEpoch=%u Sequence=%u AcceptedSequence=%u Result=InvalidOrStale"),
-				*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()),
-				*PrototypeId.ToString(), Epoch, ControlEpoch, Sequence, AcceptedInputSequence);
-		}
-		return;
-	}
-	AcceptedInputSequence = Sequence;
-	SetPrototypeInput(Move, View);
-}
-
-void ACatPhysicsPrototypePawn::SetGrabInput(const bool bLeft, const bool bHeld)
-{
-	Grab->SetGrabInput(bLeft, bHeld);
-}
-
-void ACatPhysicsPrototypePawn::RequestJump()
-{
-	if (!HasAuthority()) { if (IsLocallyControlled()) ServerRequestJump(ControlEpoch); return; }
-	if (!bGrounded || GetWorld()->GetTimeSeconds() < SupportDisabledUntilSeconds)
-	{
-		UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=physics_body_jump_rejected World=%s NetMode=%d Authority=1 LocalRole=%d BodyId=%s Result=NoGroundSupport"),
-			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *PrototypeId.ToString());
-		return;
-	}
-	SupportDisabledUntilSeconds = GetWorld()->GetTimeSeconds() + 0.25;
-	Body->AddImpulse(FVector(0.0, 0.0, 220.0 * Body->GetMass()));
-	bGrounded = false;
-	UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=physics_body_jump World=%s NetMode=%d Authority=1 LocalRole=%d BodyId=%s Result=Applied"),
-		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *PrototypeId.ToString());
-}
-
-void ACatPhysicsPrototypePawn::ServerRequestJump_Implementation(const uint32 Epoch)
-{
-	if (GetController() && Epoch == ControlEpoch) RequestJump();
-}
-
+void ACatPhysicsPrototypePawn::SetGrabInput(bool bLeft,bool bHeld) { Grab->SetGrabInput(bLeft,bHeld); }
+void ACatPhysicsPrototypePawn::RequestJump() { PhysicalBody->RequestJump(); }
 void ACatPhysicsPrototypePawn::RequestReset()
 {
-	if (HasAuthority()) ResetFromAuthority();
-	else if (IsLocallyControlled()) ServerRequestReset(ControlEpoch);
+	if (HasAuthority()) PhysicalBody->TeleportBodyFromAuthority(SpawnTransform,TEXT("PrototypeReset"));
+	else if (IsLocallyControlled()) ServerRequestReset(PhysicalBody->GetControlEpoch());
 }
-
-void ACatPhysicsPrototypePawn::ServerRequestReset_Implementation(const uint32 Epoch)
-{
-	if (GetController() && Epoch == ControlEpoch) ResetFromAuthority();
-}
-
-void ACatPhysicsPrototypePawn::UpdatePhysicalMovement(const float DeltaSeconds)
-{
-	if (DeltaSeconds <= 0.0f) return;
-	const FVector Velocity = Body->GetPhysicsLinearVelocity();
-	const double Mass = Body->GetMass();
-	const double Gravity = FMath::Abs(GetWorld()->GetGravityZ());
-	const FVector BodyUp = Body->GetUpVector();
-	const bool bSupportEnabled = GetWorld()->GetTimeSeconds() >= SupportDisabledUntilSeconds;
-	const bool bCanSupport = bSupportEnabled && BodyUp.Z > 0.35;
-	// A side/back contact is not a foot plant. Observe only an upward-facing surface within the
-	// actual rotated box's vertical extent; a nearby wall or a hand holding a wall is insufficient.
-	bool bNewGroundContactRecovery = false;
-	double RecoveryContactDistanceCm = -1.0;
-	if (bSupportEnabled && BodyUp.Z <= 0.35)
-	{
-		const FVector Extent = Body->GetScaledBoxExtent();
-		const double VerticalExtentCm = FMath::Abs(Body->GetForwardVector().Z) * Extent.X
-			+ FMath::Abs(Body->GetRightVector().Z) * Extent.Y + FMath::Abs(BodyUp.Z) * Extent.Z;
-		const FVector Origin = Body->GetComponentLocation();
-		FHitResult Hit;
-		FCollisionQueryParams Params(SCENE_QUERY_STAT(CatPhysicsGroundRecovery), false, this);
-		if (GetWorld()->LineTraceSingleByChannel(Hit, Origin,
-			Origin - FVector(0.0, 0.0, VerticalExtentCm + 1.0), ECC_Visibility, Params)
-			&& Hit.ImpactNormal.Z >= 0.55)
-		{
-			bNewGroundContactRecovery = true;
-			RecoveryContactDistanceCm = Hit.Distance;
-		}
-	}
-	if (bNewGroundContactRecovery != bGroundContactRecoveryActive)
-	{
-		bGroundContactRecoveryActive = bNewGroundContactRecovery;
-		UE_LOG(LogCatPhysicsGrab, Log,
-			TEXT("Event=physics_body_ground_recovery_changed World=%s NetMode=%d Authority=1 LocalRole=%d BodyId=%s Active=%d UpZ=%.4f ContactDistanceCm=%.3f LeftGrip=%s RightGrip=%s Result=PhysicalTorqueOnly"),
-			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()),
-			*PrototypeId.ToString(), bGroundContactRecoveryActive, BodyUp.Z, RecoveryContactDistanceCm,
-			*Grab->GetGripState(true).GripId.ToString(), *Grab->GetGripState(false).GripId.ToString());
-	}
-	bool bNewGrounded = false;
-	if (bCanSupport)
-	{
-		for (const FVector FootLocal : {FVector(8.0, -3.0, 0.0), FVector(8.0, 3.0, 0.0),
-			FVector(-8.0, -3.0, 0.0), FVector(-8.0, 3.0, 0.0)})
-		{
-			const FVector Origin = Body->GetComponentTransform().TransformPosition(FootLocal);
-			FHitResult Hit;
-			FCollisionQueryParams Params(SCENE_QUERY_STAT(CatPhysicsFootSupport), false, this);
-			if (!GetWorld()->LineTraceSingleByChannel(Hit, Origin, Origin - FVector(0.0, 0.0, 26.0), ECC_Visibility, Params)
-				|| Hit.ImpactNormal.Z < 0.55) continue;
-			bNewGrounded = true;
-			UPrimitiveComponent* Support = Hit.GetComponent();
-			const double BaseVelocity = Support && Support->IsSimulatingPhysics(Hit.BoneName)
-				? Support->GetPhysicsLinearVelocityAtPoint(Hit.ImpactPoint, Hit.BoneName).Z : 0.0;
-			const double VerticalVelocity = Body->GetPhysicsLinearVelocityAtPoint(Origin).Z - BaseVelocity;
-			const double ForceZ = Mass * FMath::Clamp(Gravity + (20.0 - Hit.Distance) * 140.0 - VerticalVelocity * 18.0,
-				0.0, Gravity * 2.5) * 0.25;
-			Body->AddForceAtLocation(FVector(0.0, 0.0, ForceZ), Origin);
-			if (Support && Support->IsSimulatingPhysics(Hit.BoneName))
-				Support->AddForceAtLocation(FVector(0.0, 0.0, -ForceZ), Hit.ImpactPoint, Hit.BoneName);
-		}
-	}
-	if (bNewGrounded != bGrounded)
-	{
-		bGrounded = bNewGrounded;
-		UE_LOG(LogCatPhysicsGrab, Log,
-			TEXT("Event=physics_body_support_changed World=%s NetMode=%d Authority=1 LocalRole=%d BodyId=%s Grounded=%d"),
-			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *PrototypeId.ToString(), bGrounded);
-	}
-	const FRotator Yaw(0.0, ViewInput.Yaw, 0.0);
-	const FVector Forward = Yaw.Vector();
-	const FVector Right = FRotationMatrix(Yaw).GetUnitAxis(EAxis::Y);
-	const FVector DesiredVelocity = (Forward * MoveInput.X + Right * MoveInput.Y) * 100.0;
-	if (bGrounded)
-	{
-		const FVector Acceleration = ((DesiredVelocity - FVector(Velocity.X, Velocity.Y, 0.0)) / 0.22).GetClampedToMaxSize(450.0);
-		Body->AddForce(Acceleration * Mass);
-	}
-	// Bounded upright motor, deliberately weaker in the air so a held body still swings under gravity.
-	const FVector UpError = FVector::CrossProduct(BodyUp, FVector::UpVector);
-	const double YawError = FVector::CrossProduct(Body->GetForwardVector().GetSafeNormal2D(), Forward).Z;
-	const FVector AngularVelocity = Body->GetPhysicsAngularVelocityInRadians();
-	FVector AngularAcceleration = (UpError * (bGrounded ? 55.0 : 6.0)
-		+ FVector(0.0, 0.0, YawError * (bGrounded ? 24.0 : 2.0)) - AngularVelocity * (bGrounded ? 9.0 : 0.7))
-		.GetClampedToMaxSize(100.0);
-	if (bGroundContactRecoveryActive)
-	{
-		// cross(up, world-up) vanishes at exactly 180 degrees. Select a deterministic roll axis
-		// at that singularity, then drive the real body through contact instead of assigning a pose.
-		const FVector RecoveryAxis = UpError.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER,
-			Body->GetForwardVector().GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector));
-		const double TiltAngleRadians = FMath::Acos(FMath::Clamp(BodyUp.Z, -1.0, 1.0));
-		// A side-lying 4 kg box must roll over its lower edge against gravity. The ordinary
-		// 100 rad/s^2 walking/air bound cannot supply that torque; this bound applies only at ground contact.
-		AngularAcceleration = (RecoveryAxis * TiltAngleRadians * 300.0 - AngularVelocity * 50.0)
-			.GetClampedToMaxSize(650.0);
-	}
-	Body->AddTorqueInRadians(AngularAcceleration, NAME_None, true);
-	bSupportSampleReady = true;
-}
-
-void ACatPhysicsPrototypePawn::CaptureSnapshot()
-{
-	Snapshot.BodyLocation = Body->GetComponentLocation();
-	Snapshot.BodyRotation = Body->GetComponentRotation();
-	Snapshot.Velocity = Body->GetPhysicsLinearVelocity();
-	Snapshot.LeftHandLocation = LeftHand->GetComponentLocation();
-	Snapshot.RightHandLocation = RightHand->GetComponentLocation();
-	Snapshot.bGrounded = bGrounded;
-	Snapshot.bSupportSampleReady = bSupportSampleReady;
-	++Snapshot.Revision;
-}
-
-void ACatPhysicsPrototypePawn::OnRep_PhysicsSnapshot()
-{
-	if (!bReceivedSnapshot || ClientResetEpoch != Snapshot.ResetEpoch)
-	{
-		SetActorLocationAndRotation(Snapshot.BodyLocation, Snapshot.BodyRotation);
-		LeftHand->SetWorldLocation(Snapshot.LeftHandLocation);
-		RightHand->SetWorldLocation(Snapshot.RightHandLocation);
-		ClientResetEpoch = Snapshot.ResetEpoch;
-	}
-	bReceivedSnapshot = true;
-}
-
-void ACatPhysicsPrototypePawn::Tick(const float DeltaSeconds)
+void ACatPhysicsPrototypePawn::ServerRequestReset_Implementation(uint32 Epoch) { if (GetController() && Epoch==PhysicalBody->GetControlEpoch()) RequestReset(); }
+FVector ACatPhysicsPrototypePawn::GetVelocity() const { return PhysicalBody ? PhysicalBody->GetVelocity() : FVector::ZeroVector; }
+void ACatPhysicsPrototypePawn::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	if (HasAuthority())
+	if (HasAuthority() && GetActorLocation().Z < -250) RequestReset();
+	Visual->SetHandReachState(Grab->IsReaching(true),Grab->IsReaching(false));
+	if (bShowDiagnostics && GetNetMode()!=NM_DedicatedServer)
 	{
-		if (GetController() && !IsLocallyControlled() && GetWorld()->GetTimeSeconds() - LastInputSeconds > 0.5)
-			MoveInput = FVector2D::ZeroVector;
-		UpdatePhysicalMovement(DeltaSeconds);
-		if (GetActorLocation().ContainsNaN() || GetActorLocation().Z < -250.0) ResetFromAuthority();
-		if (GetWorld()->GetTimeSeconds() - LastSnapshotSeconds >= 1.0 / 30.0)
+		for (int32 Index=0;Index<2;++Index)
 		{
-			LastSnapshotSeconds = GetWorld()->GetTimeSeconds();
-			CaptureSnapshot();
-		}
-		if (GetWorld()->GetTimeSeconds() >= NextMotionLogSeconds && (!MoveInput.IsNearlyZero() || Grab->IsGripping(true) || Grab->IsGripping(false)))
-		{
-			NextMotionLogSeconds = GetWorld()->GetTimeSeconds() + 1.0;
-			UE_LOG(LogCatPhysicsGrab, Log,
-				TEXT("Event=physics_body_motion World=%s NetMode=%d Authority=1 LocalRole=%d BodyId=%s Location=%s Velocity=%s Grounded=%d LeftGrip=%s RightGrip=%s"),
-				*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *PrototypeId.ToString(),
-				*GetActorLocation().ToCompactString(), *GetVelocity().ToCompactString(), bGrounded,
-				*Grab->GetGripState(true).GripId.ToString(), *Grab->GetGripState(false).GripId.ToString());
-		}
-	}
-	else if (bReceivedSnapshot)
-	{
-		const double Alpha = 1.0 - FMath::Exp(-20.0 * FMath::Max(0.0f, DeltaSeconds));
-		SetActorLocationAndRotation(FMath::Lerp(GetActorLocation(), Snapshot.BodyLocation, Alpha),
-			FQuat::Slerp(GetActorQuat(), Snapshot.BodyRotation.Quaternion(), Alpha));
-		LeftHand->SetWorldLocation(FMath::Lerp(LeftHand->GetComponentLocation(), Snapshot.LeftHandLocation, Alpha));
-		RightHand->SetWorldLocation(FMath::Lerp(RightHand->GetComponentLocation(), Snapshot.RightHandLocation, Alpha));
-		if (GetWorld()->GetTimeSeconds() >= NextMotionLogSeconds && (Snapshot.Velocity.SizeSquared() > 9.0
-			|| Grab->IsGripping(true) || Grab->IsGripping(false)))
-		{
-			NextMotionLogSeconds = GetWorld()->GetTimeSeconds() + 1.0;
-			UE_LOG(LogCatPhysicsGrab, Log,
-				TEXT("Event=physics_body_snapshot_observed World=%s NetMode=%d Authority=0 LocalRole=%d BodyId=%s Revision=%u ResetEpoch=%u Location=%s Velocity=%s LeftGrip=%s RightGrip=%s"),
-				*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *PrototypeId.ToString(),
-				Snapshot.Revision, Snapshot.ResetEpoch, *Snapshot.BodyLocation.ToCompactString(), *Snapshot.Velocity.ToCompactString(),
-				*Grab->GetGripState(true).GripId.ToString(), *Grab->GetGripState(false).GripId.ToString());
-		}
-	}
-	Visual->SetHandReachState(Grab->IsReaching(true), Grab->IsReaching(false));
-	if (bShowDiagnostics && GetNetMode() != NM_DedicatedServer)
-	{
-		for (int32 Index = 0; Index < 2; ++Index)
-		{
-			const bool bLeft = Index == 0;
+			const bool bLeft=Index==0;
 			if (!Grab->IsReaching(bLeft)) continue;
-			const FVector HandPosition = (bLeft ? LeftHand : RightHand)->GetComponentLocation();
-			const FColor Color = Grab->IsGripping(bLeft) ? FColor::Green : FColor::Cyan;
-			DrawDebugSphere(GetWorld(), HandPosition, UCatPhysicsGrabComponent::HandRadiusCm, 10, Color, false, -1.0f, 0, 0.25f);
-			DrawDebugLine(GetWorld(), Body->GetComponentTransform().TransformPosition(UCatPhysicsGrabComponent::ShoulderLocal(bLeft)),
-				HandPosition, Color, false, -1.0f, 0, 0.25f);
-			if (Grab->IsGripping(bLeft)) DrawDebugPoint(GetWorld(), Grab->GetGripWorldLocation(bLeft), 6.0f, FColor::Yellow);
+			const FVector HandPosition=(bLeft ? LeftHand : RightHand)->GetComponentLocation();
+			const FColor Color=Grab->IsGripping(bLeft)?FColor::Green:FColor::Cyan;
+			DrawDebugSphere(GetWorld(),HandPosition,(bLeft ? LeftHand : RightHand)->GetScaledSphereRadius(),10,Color,false,-1,0,0.25f);
+			DrawDebugLine(GetWorld(),Grab->GetShoulderWorldLocation(bLeft),HandPosition,Color,false,-1,0,0.25f);
+			if (Grab->IsGripping(bLeft)) DrawDebugPoint(GetWorld(),Grab->GetGripWorldLocation(bLeft),6,FColor::Yellow);
 		}
 	}
 }
-
+void ACatPhysicsPrototypePawn::PossessedBy(AController* NewController)
+{
+	Super::PossessedBy(NewController); PhysicalBody->BeginControlEpochFromAuthority();
+}
+void ACatPhysicsPrototypePawn::UnPossessed()
+{
+	PhysicalBody->ReleaseConnectionsFromAuthority(TEXT("Unpossessed")); PhysicalBody->BeginControlEpochFromAuthority(); Super::UnPossessed();
+}
+void ACatPhysicsPrototypePawn::EndPlay(EEndPlayReason::Type EndPlayReason)
+{
+	PhysicalBody->ReleaseConnectionsFromAuthority(TEXT("EndPlay")); Super::EndPlay(EndPlayReason);
+}
 void ACatPhysicsPrototypePawn::CalcCamera(const float DeltaTime, FMinimalViewInfo& OutResult)
 {
 	(void)DeltaTime;
-	const FRotator CameraRotation = IsLocallyControlled() ? ViewInput : FRotator(-15.0, GetActorRotation().Yaw, 0.0);
+	const FRotator CameraRotation = IsLocallyControlled() ? GetPrototypeView() : FRotator(-15.0, GetActorRotation().Yaw, 0.0);
 	const FVector Pivot = GetActorLocation() + FVector(0.0, 0.0, 12.0);
 	FVector Desired = Pivot - CameraRotation.Vector() * 120.0;
 	FHitResult Hit;
@@ -396,68 +97,4 @@ void ACatPhysicsPrototypePawn::CalcCamera(const float DeltaTime, FMinimalViewInf
 	OutResult.Location = Desired;
 	OutResult.Rotation = CameraRotation;
 	OutResult.FOV = 75.0f;
-}
-
-void ACatPhysicsPrototypePawn::ReleaseConnections(const FName Reason)
-{
-	if (!HasAuthority()) return;
-	Grab->ReleaseAllFromAuthority(Reason);
-	for (TActorIterator<ACatPhysicsPrototypePawn> It(GetWorld()); It; ++It)
-		if (*It != this && It->GetGrabComponent()) It->GetGrabComponent()->ReleaseTargetFromAuthority(this, Reason);
-}
-
-void ACatPhysicsPrototypePawn::ResetFromAuthority()
-{
-	bSupportSampleReady = false;
-	bGroundContactRecoveryActive = false;
-	ReleaseConnections(TEXT("Reset"));
-	LeftArm->BreakConstraint();
-	RightArm->BreakConstraint();
-	Body->SetWorldTransform(SpawnTransform, false, nullptr, ETeleportType::ResetPhysics);
-	Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
-	Body->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);
-	for (int32 Index = 0; Index < 2; ++Index)
-	{
-		USphereComponent* Hand = Index == 0 ? LeftHand.Get() : RightHand.Get();
-		Hand->SetWorldLocationAndRotation(SpawnTransform.TransformPosition(UCatPhysicsGrabComponent::RestHandLocal(Index == 0)),
-			SpawnTransform.GetRotation(), false, nullptr, ETeleportType::ResetPhysics);
-		Hand->SetPhysicsLinearVelocity(FVector::ZeroVector);
-		Hand->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);
-		ConfigureArm(Index == 0);
-	}
-	MoveInput = FVector2D::ZeroVector;
-	ViewInput = FRotator(-15.0, SpawnTransform.Rotator().Yaw, 0.0);
-	SupportDisabledUntilSeconds = 0.0;
-	++Snapshot.ResetEpoch;
-	CaptureSnapshot();
-	ForceNetUpdate();
-	UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=physics_body_reset World=%s NetMode=%d Authority=1 LocalRole=%d BodyId=%s ResetEpoch=%u Result=ReleasedAndReset"),
-		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *PrototypeId.ToString(), Snapshot.ResetEpoch);
-}
-
-void ACatPhysicsPrototypePawn::PossessedBy(AController* NewController)
-{
-	Super::PossessedBy(NewController);
-	++ControlEpoch;
-	if (ControlEpoch == 0) ControlEpoch = 1;
-	AcceptedInputSequence = 0;
-	MoveInput = FVector2D::ZeroVector;
-	LastInputSeconds = GetWorld()->GetTimeSeconds();
-	Grab->BeginInputEpochFromAuthority();
-}
-
-void ACatPhysicsPrototypePawn::UnPossessed()
-{
-	ReleaseConnections(TEXT("Unpossessed"));
-	MoveInput = FVector2D::ZeroVector;
-	Grab->BeginInputEpochFromAuthority();
-	Super::UnPossessed();
-}
-
-void ACatPhysicsPrototypePawn::EndPlay(const EEndPlayReason::Type EndPlayReason)
-{
-	ReleaseConnections(TEXT("EndPlay"));
-	LeftArm->BreakConstraint();
-	RightArm->BreakConstraint();
-	Super::EndPlay(EndPlayReason);
 }

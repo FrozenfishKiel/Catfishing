@@ -1,6 +1,8 @@
 #include "Fishing/CatFishingService.h"
 
 #include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Framework/Game/CatfishingPlayerController.h"
@@ -62,31 +64,7 @@ namespace
 		return nullptr;
 	}
 
-	bool PlaceRodOnGroundNearCharacter(ACatFishingRodActor& Rod, const ACatCharacter& Character)
-	{
-		UWorld* World = Character.GetWorld();
-		if (!World)
-		{
-			return false;
-		}
-		const FVector Candidate = Character.GetActorLocation() + Character.GetActorForwardVector() * 80.0;
-		FHitResult GroundHit;
-		FCollisionQueryParams Params(SCENE_QUERY_STAT(CatDropHeldRodGround), false, &Character);
-		Params.AddIgnoredActor(&Rod);
-		FVector GroundLocation = Candidate;
-		if (World->LineTraceSingleByChannel(GroundHit, Candidate + FVector(0.0, 0.0, 120.0),
-			Candidate - FVector(0.0, 0.0, 300.0), ECC_Visibility, Params)
-			&& GroundHit.ImpactNormal.Z >= 0.7)
-		{
-			GroundLocation = GroundHit.ImpactPoint;
-		}
-		else if (const UCapsuleComponent* Capsule = Character.GetCapsuleComponent())
-		{
-			GroundLocation.Z -= Capsule->GetScaledCapsuleHalfHeight();
-		}
-		return Rod.PlaceOnGroundFromAuthority(FTransform(
-			FRotator(0.0, Character.GetActorRotation().Yaw, 0.0), GroundLocation));
-	}
+
 }
 
 // 创建条件流程：仅 authority Game World 持有会话索引；客户端不能创建平行 StateTree。
@@ -588,6 +566,7 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		}
 	};
 	const FTransform SpawnTransform(Character->GetActorRotation(), GroundHit.ImpactPoint);
+	const UCatFishingSettings* PhysicalSettings = GetDefault<UCatFishingSettings>();
 	ACatFishingRodActor* Rod = World->SpawnActorDeferred<ACatFishingRodActor>(RodClass, SpawnTransform,
 		Controller, Character, ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 	const FGuid RodActorId = FGuid::NewGuid();
@@ -596,7 +575,10 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		|| !Rod->InitializeAuthoritativeIdentity(RodActorId, UseResult.Item.ItemInstanceId,
 			UseResult.Item.DefinitionId, Loadout.RodSkinDefinitionId, PlayerState, PlayerState, true,
 			UseResult.Item.bRodBroken)
-		|| !Rod->RefreshHeldTransformFromAuthority())
+		|| !FMath::IsFinite(PhysicalSettings->HeldRodMaximumAngularSpeedDegreesPerSecond)
+		|| PhysicalSettings->HeldRodMaximumAngularSpeedDegreesPerSecond <= 0.0
+		|| !FMath::IsFinite(PhysicalSettings->HeldRodAngularResistanceResponseSeconds)
+		|| PhysicalSettings->HeldRodAngularResistanceResponseSeconds <= 0.0)
 	{
 		if (Rod) Rod->Destroy();
 		RollbackUsedRod();
@@ -608,9 +590,7 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 			static_cast<int32>(Controller->GetLocalRole()), *CatLogContext::BuildControllerFields(Controller));
 		return Result;
 	}
-	// 首次取竿直接占主位，并在 Construction/BeginPlay 发布表现前对齐握把，避免先显示地面空竿。
-	// 不额外提交 OperateRod：库存只 Use 一次，初始复制即携带同一份 Held 身份与姿态。
-	// 传回原始 SpawnTransform，让 FinishSpawning 保留已更新的根变换，不再叠加一次相对初始落点的位移。
+	// Initialize the receiver, then align this new rod to an actual free paw and create the same physical grip.
 	Rod->FinishSpawning(SpawnTransform);
 	if (!RegisterDeployedRod(PlayerState, Rod))
 	{
@@ -620,7 +600,19 @@ FCatFishingCommandResult UCatFishingService::PlaceRod(AController* Controller, c
 		RefreshResultRevisions();
 		return Result;
 	}
-	// 后续 R 沿既有 LeaveRod / OperateRod 切换放下与拿起，不重复生成或占用库存。
+	if (!Rod->IsUsingPhysicalRod() || !Rod->BeginPhysicalHoldFromAuthority(PlayerState, true)
+		|| !Rod->SetPrimaryOperatorFromAuthority(PlayerState, Rod->GetPresentationState().RodActorRevision)
+		|| !Rod->GetPhysicalRodComponent()->CommitPrimaryHold(PlayerState))
+	{
+		Rod->Destroy();
+		RollbackUsedRod();
+		Result.Error = ECatFishingCommandError::DependencyUnavailable;
+		RefreshResultRevisions();
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_place_rejected RequestId=%s RodActorId=%s Stage=PhysicalGrip Result=RolledBack"),
+			*Command.RequestId.ToString(), *RodActorId.ToString());
+		return Result;
+	}
+	// R explicitly commits the owner hold only after the inventory and control transaction succeeds.
 	Result.bCommitted = true;
 	Result.Error = ECatFishingCommandError::None;
 	Result.RodActorId = RodActorId;
@@ -655,125 +647,83 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 		Result.Error = ECatFishingCommandError::CommandsClosed;
 		return Result;
 	}
-	// 按公开 RodActorId 在全部部署竿中解析：不限制竿主，只要还有空槽就能加入。
+	// R 只允许原物品主人显式取得自己的竿；其它抓握只产生物理约束。
 	ACatFishingRodActor* Rod = FindDeployedRodById(Command.Context.RodActorId);
 	if (!Rod || !Character)
 	{
 		Result.Error = ECatFishingCommandError::NoRod;
 		return Result;
 	}
-	// RPC 入口必须自己守住“一名玩家最多占一根竿”的不变量，不能只依赖正常 R 分派先走 Leave。
-	// 否则改造客户端可绕过输入层，直接在多根鱼竿数组里同时占位，后续输入查询将变成不确定结果。
-	if (ACatFishingRodActor* ExistingRod = FindRodOperatedBy(PlayerState))
+	if (Rod->IsUsingPhysicalRod())
 	{
-		Result.Error = ExistingRod == Rod
-			? ECatFishingCommandError::RodOccupied : ECatFishingCommandError::ActiveSessionExists;
-		return Result;
-	}
-	const FCatFishingRodPresentationState State = Rod->GetPresentationState();
-	const int32 RequestedSlotIndex = Rod->GetFirstFreeOperatorSlotIndex();
-	if (RequestedSlotIndex == INDEX_NONE)
-	{
-		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_rod_operate_rejected Reason=NoFreeOperatorSlot Rod=%s RodId=%s OperatorCount=%d RequestedSlot=%d %s"),
-			*GetNameSafe(Rod), *State.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
-			State.OperatorPlayerStates.Num(), RequestedSlotIndex,
-			*CatLogContext::BuildControllerFields(Controller));
-		Result.Error = ECatFishingCommandError::RodOccupied;
-		return Result;
-	}
-	if (!PlayerState || !Command.Context.RequestId.IsValid() || ResolveStableNetId(Controller).IsEmpty()
-		|| State.bBroken || !State.bDeployed
-		|| FVector::DistSquared(Character->GetActorLocation(),
-			Rod->GetOperatorInteractionWorldTransform().GetLocation()) > FMath::Square(250.0))
-	{
-		Result.Error = State.bBroken ? ECatFishingCommandError::RodBroken : ECatFishingCommandError::RodOccupied;
-		return Result;
-	}
-	// OperatorPlayerStates 是实时合力与接力的唯一权威容器：0 号主位控制线杯并贡献 0~100% 力量，
-	// 其余操作位只贡献移动意图；主位退出时数组压紧，下一位从自身当前体力接管。
-	// Runner 每个固定步从该容器重建参与集合并分别结算体力，不能在 Service 缓存另一份单/多人模式。
-	// HookedFight 接力会同步迁移 Runner 的 ASC/力量/体力/输入域，不能只改公开 FisherPlayerState。
-	ACatFishingSession* BoundSession = FindActiveSessionByRod(Rod);
-	if (BoundSession && BoundSession->IsFixedStepMutationBoundaryActive())
-	{
-		Result.Error = ECatFishingCommandError::DependencyUnavailable;
-		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_membership_busy RequestId=%s SessionId=%s RodActorId=%s Action=Join Retryable=true World=%s Authority=true LocalRole=%d %s"),
-			*Command.Context.RequestId.ToString(), *BoundSession->GetSnapshot().FishingSessionId.ToString(),
-			*Rod->GetPresentationState().RodActorId.ToString(), *GetNameSafe(GetWorld()), int32(Rod->GetLocalRole()),
-			*CatLogContext::BuildControllerFields(Controller));
-		return Result;
-	}
-	const bool bNeedsSessionTakeover = RequestedSlotIndex == 0 && BoundSession
-		&& BoundSession->GetSnapshot().FisherPlayerState != PlayerState;
-	if (bNeedsSessionTakeover)
-	{
-		const ECatFishingPhase BoundPhase = BoundSession->GetSnapshot().Phase;
-		const bool bTakeoverPhase = BoundPhase == ECatFishingPhase::CastFlight
-			|| BoundPhase == ECatFishingPhase::Waiting || BoundPhase == ECatFishingPhase::Probe
-			|| BoundPhase == ECatFishingPhase::TrueBiteWindow || BoundPhase == ECatFishingPhase::HookedFight
-			|| BoundPhase == ECatFishingPhase::NearShore || BoundPhase == ECatFishingPhase::AutoHauling
-			|| BoundPhase == ECatFishingPhase::ExhaustedReel;
-		if (!bTakeoverPhase)
+		if (Command.Context.ExpectedRodActorRevision != Rod->GetPresentationState().RodActorRevision)
 		{
-			Result.Error = ECatFishingCommandError::RodOccupied;
+			Result.Error = ECatFishingCommandError::RevisionConflict;
+			Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
+			UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_operate_rejected RequestId=%s RodActorId=%s ExpectedRevision=%lld CurrentRevision=%lld Reason=RevisionConflict %s"),
+				*Command.Context.RequestId.ToString(), *Command.Context.RodActorId.ToString(), Command.Context.ExpectedRodActorRevision,
+				Result.RodActorRevision, *CatLogContext::BuildControllerFields(Controller));
 			return Result;
 		}
-	}
-	int32 CommittedSlotIndex = INDEX_NONE;
-	if (!Rod->AddOperatorFromAuthority(PlayerState, Command.Context.ExpectedRodActorRevision, CommittedSlotIndex)
-		|| CommittedSlotIndex != RequestedSlotIndex)
-	{
-		Result.Error = ECatFishingCommandError::RodActorRevisionConflict;
-		return Result;
-	}
-	if (bNeedsSessionTakeover && !TransferSessionFisher(BoundSession, Controller))
-	{
-		// 先占主位再迁移会话，避免 Runner 已切给新玩家但鱼竿占位因 Revision 冲突失败。
-		// 迁移拒绝时用刚提交后的精确 Revision 回滚本次新占位；同一服务器调用栈内不会夹入第二次写入。
-		APlayerState* IgnoredPromotion = nullptr;
-		if (!Rod->RemoveOperatorFromAuthority(PlayerState,
-			Rod->GetPresentationState().RodActorRevision, IgnoredPromotion))
+		if (ACatFishingRodActor* AlreadyOperated = FindRodOperatedBy(PlayerState); AlreadyOperated && AlreadyOperated != Rod)
 		{
-			UE_LOG(LogCatFishing, Error,
-				TEXT("Event=fishing_takeover_slot_rollback_failed SessionId=%s Rod=%s PlayerState=%s RodRevision=%lld"),
-				*BoundSession->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-				*GetNameSafe(Rod), *GetNameSafe(PlayerState), Rod->GetPresentationState().RodActorRevision);
+			Result.Error = ECatFishingCommandError::RodOccupied;
+			UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_operate_rejected RequestId=%s RodActorId=%s Reason=AlreadyOperatingRod %s"),
+				*Command.Context.RequestId.ToString(), *Command.Context.RodActorId.ToString(), *CatLogContext::BuildControllerFields(Controller));
+			return Result;
 		}
-		Result.Error = ECatFishingCommandError::RodOccupied;
+		if (!Command.Context.RequestId.IsValid() || PlayerState != Rod->GetPresentationState().OwnerPlayerState
+			|| !Rod->BeginPhysicalHoldFromAuthority(PlayerState, false))
+		{
+			Result.Error = ECatFishingCommandError::RodOccupied;
+			UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_operate_rejected RequestId=%s RodActorId=%s Reason=OwnerPhysicalHoldRequired %s"),
+				*Command.Context.RequestId.ToString(), *Command.Context.RodActorId.ToString(), *CatLogContext::BuildControllerFields(Controller));
+			return Result;
+		}
+		const bool bAlreadyPrimary = Rod->IsPrimaryOperator(PlayerState);
+		Result.bCommitted = Rod->SetPrimaryOperatorFromAuthority(PlayerState, Rod->GetPresentationState().RodActorRevision);
+		if (Result.bCommitted)
+		{
+			if (ACatFishingSession* Existing = FindActiveSessionByRod(Rod))
+			{
+				Result.bCommitted = ResumeOwnedSessionControl(Existing, Controller);
+				if (!Result.bCommitted)
+				{
+					if (!bAlreadyPrimary) Rod->SetPrimaryOperatorFromAuthority(nullptr, Rod->GetPresentationState().RodActorRevision);
+					UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_operate_rolled_back RequestId=%s SessionId=%s RodActorId=%s Reason=SessionResumeRejected GripRetained=true %s"),
+						*Command.Context.RequestId.ToString(), *Existing->GetSnapshot().FishingSessionId.ToString(),
+						*Command.Context.RodActorId.ToString(), *CatLogContext::BuildControllerFields(Controller));
+				}
+			}
+		}
+		if (Result.bCommitted && !Rod->GetPhysicalRodComponent()->CommitPrimaryHold(PlayerState))
+		{
+			Result.bCommitted = false;
+			if (!bAlreadyPrimary)
+			{
+				Rod->SetPrimaryOperatorFromAuthority(nullptr, Rod->GetPresentationState().RodActorRevision);
+				if (ACatFishingSession* Existing = FindActiveSessionByRod(Rod)) Existing->RefreshPrimaryControlFromAuthority();
+			}
+			UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_operate_rolled_back RequestId=%s RodActorId=%s Reason=ExplicitHoldCommitRejected GripRetained=true %s"),
+				*Command.Context.RequestId.ToString(), *Command.Context.RodActorId.ToString(), *CatLogContext::BuildControllerFields(Controller));
+		}
+		Result.Error = Result.bCommitted ? ECatFishingCommandError::None : ECatFishingCommandError::DependencyUnavailable;
+		Result.RodActorId = Command.Context.RodActorId;
+		Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
 		return Result;
 	}
-	if (CommittedSlotIndex == 0 && !Rod->RefreshHeldTransformFromAuthority())
-	{
-		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_rod_held_pose_refresh_failed Rod=%s RodId=%s Slot=0 %s"),
-			*GetNameSafe(Rod), *State.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
-			*CatLogContext::BuildControllerFields(Controller));
-	}
-	if (BoundSession) BoundSession->RefreshOperatorMembershipFromAuthority();
-	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_rod_operator_joined Rod=%s RodId=%s Slot=%d OperatorCount=%d Pose=%s Holder=%s Takeover=%s SessionId=%s %s"),
-		*GetNameSafe(Rod), *State.RodActorId.ToString(EGuidFormats::DigitsWithHyphens), CommittedSlotIndex,
-		Rod->GetOperatorCount(), *UEnum::GetValueAsString(Rod->GetPresentationState().PoseMode),
-		*GetNameSafe(Rod->GetPresentationState().HolderPlayerState),
-		bNeedsSessionTakeover ? TEXT("true") : TEXT("false"),
-		BoundSession ? *BoundSession->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens)
-			: TEXT("Invalid"),
-		*CatLogContext::BuildControllerFields(Controller));
-	Result.bCommitted = true;
-	Result.Error = ECatFishingCommandError::None;
-	Result.RodActorId = State.RodActorId;
-	Result.RodActorRevision = Rod->GetPresentationState().RodActorRevision;
+	Result.Error = ECatFishingCommandError::DependencyUnavailable;
+	UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_operate_rejected RequestId=%s RodActorId=%s Reason=PhysicalReceiverUnavailable %s"),
+		*Command.Context.RequestId.ToString(), *Command.Context.RodActorId.ToString(), *CatLogContext::BuildControllerFields(Controller));
 	return Result;
 }
-
 FCatFishingCommandResult UCatFishingService::LeaveRod(AController* Controller, const FCatLeaveRodCommand& Command)
 {
 	FCatFishingCommandResult Result;
 	Result.CommandType = ECatFishingCommandType::LeaveRod;
 	Result.RequestId = Command.Context.RequestId;
 	APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
-	// 离开按“占用了哪个竿位”解析（可能是别人的竿，也可能是辅助位）。
+	// 仅显式主控可以放下自己的竿；其它物理抓握不属于操作位。
 	ACatFishingRodActor* Rod = FindRodOperatedBy(PlayerState);
 	if (!Rod || Rod->GetPresentationState().RodActorId != Command.Context.RodActorId)
 	{
@@ -923,7 +873,7 @@ FCatFishingCommandResult UCatFishingService::PackRod(AController* Controller, co
 	return Result;
 }
 
-// 旧协作命令转发：定位同一 Session 后由兼容入口检查版本并转交 OperateRod；所有鱼种共用当前竿名单与加入资格。
+// 旧协作命令只保留可加载的兼容入口；Session 明确拒绝注册助手，真实帮助由抓握约束传力。
 FCatDomainCommandResult UCatFishingService::SubmitFightAssist(const FGuid FishingSessionId,
 	AController* AssistingController, const FGuid RequestId, const int64 ExpectedRevision)
 {
@@ -959,6 +909,8 @@ FCatScoopResult UCatFishingService::RequestScoop(const FGuid FishingSessionId, A
 void UCatFishingService::ReleaseFishingOperatorForCharacter(const ACatCharacter* Character)
 {
 	if (!Character) return;
+	if (UCatPhysicalBodyComponent* Physical = Character->GetPhysicalBodyComponent())
+		Physical->ReleaseConnectionsFromAuthority(TEXT("FishingCharacterUnavailable"));
 	APlayerState* PlayerState = Character->GetPlayerState();
 	if (ACatFishingRodActor* Rod = FindRodOperatedBy(PlayerState))
 	{
@@ -998,6 +950,9 @@ void UCatFishingService::FlushDeferredOperatorRemovalsFromAuthority()
 		RemoveOperatorAndReconcileSession(Rod, Player, Rod->GetPresentationState().RodActorRevision,
 			Removal.Character.Get(true), TEXT("DeferredCharacterUnavailable"));
 	}
+	const auto PendingRosters = MoveTemp(DeferredPrimaryControlChecks);
+	DeferredPrimaryControlChecks.Reset();
+	for (const auto& Rod : PendingRosters) if (Rod.IsValid()) Rod->RefreshPrimaryControlFromAuthority();
 }
 
 bool UCatFishingService::PreserveFishingResourcesForEquipmentShutdown(UCatEquipmentComponent* Equipment)
@@ -1091,9 +1046,12 @@ void UCatFishingService::CloseCommandsAndTerminateAll()
 
 void UCatFishingService::TerminateAllSessionsAndReleaseOperators(const TCHAR* DiagnosticReason)
 {
-	for (const TPair<FGuid, TWeakObjectPtr<ACatFishingSession>>& Pair : Sessions)
+	// Terminal publication invokes gameplay/UI callbacks. A callback may compact the registry through a query.
+	TArray<TWeakObjectPtr<ACatFishingSession>> PendingSessions;
+	Sessions.GenerateValueArray(PendingSessions);
+	for (const TWeakObjectPtr<ACatFishingSession>& Pending : PendingSessions)
 	{
-		if (ACatFishingSession* Session = Pair.Value.Get())
+		if (ACatFishingSession* Session = Pending.Get())
 		{
 			Session->TerminateSession(ECatFishingOutcome::Invalidated, DiagnosticReason);
 		}
@@ -1106,68 +1064,19 @@ bool UCatFishingService::RemoveOperatorAndReconcileSession(ACatFishingRodActor* 
 	APlayerState* PlayerState, const int64 ExpectedRevision, const ACatCharacter* LeavingCharacter,
 	const TCHAR* Reason)
 {
-	if (!Rod || !PlayerState) return false;
-	const int32 LeavingSlot = Rod->GetOperatorSlotIndex(PlayerState);
-	if (LeavingSlot == INDEX_NONE) return false;
-	ACatFishingSession* Session = FindActiveSessionByRod(Rod);
-	APlayerState* Promoted = nullptr;
-	if (!Rod->RemoveOperatorFromAuthority(PlayerState, ExpectedRevision, Promoted)) return false;
-	if (const ACatfishingPlayerController* LeavingController = Cast<ACatfishingPlayerController>(
-		FindControllerForPlayerState(GetWorld(), PlayerState)))
-	{
-		if (UCatFishingCommandComponent* Commands = LeavingController->GetFishingCommandComponent())
-			Commands->ClearHeldFightInputForControlTransferFromAuthority();
-	}
-	if (Session && LeavingCharacter)
-	{
-		Session->UnregisterFightStaminaParticipantFromAuthority(const_cast<ACatCharacter*>(LeavingCharacter));
-	}
-
-	// 队列顺序就是加入顺序。资格失效的候选退出，零体力只影响出力而不影响操竿资格。
-	bool bTransferred = LeavingSlot != 0;
-	while (LeavingSlot == 0 && Promoted)
-	{
-		APlayerController* Candidate = FindControllerForPlayerState(GetWorld(), Promoted);
-		const bool bQualified = Candidate && !ResolveStableNetId(Candidate).IsEmpty()
-			&& CanControllerStartFishingAction(Candidate);
-		if (bQualified && (!Session || TransferSessionFisher(Session, Candidate)))
-		{
-			bTransferred = true;
-			break;
-		}
-		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_promotion_skipped Reason=%s RodActorId=%s SessionId=%s CandidatePlayerId=%d World=%s NetMode=%d Authority=true LocalRole=%d"),
-			bQualified ? TEXT("TransferDependencyUnavailable") : TEXT("OperatorUnavailable"),
-			*Rod->GetPresentationState().RodActorId.ToString(),
-			Session ? *Session->GetSnapshot().FishingSessionId.ToString() : TEXT("None"),
-			Promoted->GetPlayerId(), *GetNameSafe(GetWorld()), static_cast<int32>(GetWorld()->GetNetMode()),
-			static_cast<int32>(Rod->GetLocalRole()));
-		if (Session)
-		{
-			Session->UnregisterFightStaminaParticipantFromAuthority(Cast<ACatCharacter>(Promoted->GetPawn()));
-		}
-		APlayerState* Next = nullptr;
-		if (!Rod->RemoveOperatorFromAuthority(Promoted, Rod->GetPresentationState().RodActorRevision, Next))
-		{
-			UE_LOG(LogCatFishing, Error, TEXT("Event=fishing_promotion_reconcile_failed RodActorId=%s Revision=%lld"),
-				*Rod->GetPresentationState().RodActorId.ToString(), Rod->GetPresentationState().RodActorRevision);
-			break;
-		}
-		Promoted = Next;
-	}
-	if (Session && LeavingSlot == 0 && !bTransferred) Session->SuspendOperatorFromAuthority();
-	if (Rod->GetOperatorCount() == 0 && LeavingCharacter) PlaceRodOnGroundNearCharacter(*Rod, *LeavingCharacter);
-	if (Session) Session->RefreshOperatorMembershipFromAuthority();
-	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_rod_operator_left Reason=%s RodActorId=%s SessionId=%s LeavingSlot=%d RemainingOperators=%d PlayerId=%d PromotedPlayerId=%d ControlEpoch=%u World=%s NetMode=%d Authority=true LocalRole=%d"),
-		Reason, *Rod->GetPresentationState().RodActorId.ToString(),
-		Session ? *Session->GetSnapshot().FishingSessionId.ToString() : TEXT("None"), LeavingSlot,
-		Rod->GetOperatorCount(), PlayerState->GetPlayerId(), Promoted ? Promoted->GetPlayerId() : INDEX_NONE,
-		Rod->GetControlEpoch(), *GetNameSafe(GetWorld()), static_cast<int32>(GetWorld()->GetNetMode()),
-		static_cast<int32>(Rod->GetLocalRole()));
+	if (!Rod || !PlayerState || !Rod->IsPrimaryOperator(PlayerState)
+		|| ExpectedRevision != Rod->GetPresentationState().RodActorRevision) return false;
+	if (!Rod->SetPrimaryOperatorFromAuthority(nullptr, ExpectedRevision)) return false;
+	// Explicit release removes this operator's hands from this shaft only. Other cats keep their grips.
+	Rod->ReleasePhysicalPrimaryHoldFromAuthority(PlayerState, FName(Reason));
+	if (ACatFishingSession* Session = FindActiveSessionByRod(Rod)) Session->SuspendOperatorFromAuthority();
+	if (auto* PC = Cast<ACatfishingPlayerController>(FindControllerForPlayerState(GetWorld(), PlayerState)))
+		if (auto* Commands = PC->GetFishingCommandComponent()) Commands->ClearHeldFightInputForControlTransferFromAuthority();
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_primary_released RodActorId=%s PlayerId=%d Reason=%s World=%s NetMode=%d Authority=1 LocalRole=%d Result=Unattended"),
+		*Rod->GetPresentationState().RodActorId.ToString(), PlayerState->GetPlayerId(), Reason, *GetNameSafe(GetWorld()),
+		int32(GetWorld()->GetNetMode()), int32(Rod->GetLocalRole()));
 	return true;
 }
-
 void UCatFishingService::ReleaseAllRodOperators()
 {
 	CompactDeployedRods();
@@ -1186,45 +1095,30 @@ void UCatFishingService::ReleaseAllRodOperators()
 
 void UCatFishingService::ReleaseRodOperators(ACatFishingRodActor* Rod)
 {
-	if (!Rod)
-	{
-		return;
-	}
-
-	// RemoveOperator 会压紧数组，因此必须先复制原操作人列表，再按当前 Revision 逐个移除。
-	const TArray<TObjectPtr<APlayerState>> Operators = Rod->GetPresentationState().OperatorPlayerStates;
-	ACatCharacter* LastHolderCharacter = Operators.IsValidIndex(0) && Operators[0]
-		? Cast<ACatCharacter>(Operators[0]->GetPawn()) : nullptr;
-	for (APlayerState* Operator : Operators)
-	{
-		if (!Operator)
-		{
-			continue;
-		}
-		APlayerState* IgnoredPromotion = nullptr;
-		const int64 ExpectedRevision = Rod->GetPresentationState().RodActorRevision;
-		if (!Rod->RemoveOperatorFromAuthority(Operator, ExpectedRevision, IgnoredPromotion))
-		{
-			UE_LOG(LogCatFishing, Error,
-				TEXT("Event=fishing_operator_window_release_failed PlayerState=%s RodActorId=%s Revision=%lld"),
-				*GetNameSafe(Operator),
-				*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens), ExpectedRevision);
-		}
-
-	}
-	if (Rod->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Grounded)
-	{
-		if (LastHolderCharacter)
-		{
-			PlaceRodOnGroundNearCharacter(*Rod, *LastHolderCharacter);
-		}
-		else
-		{
-			Rod->PlaceOnGroundFromAuthority(Rod->GetActorTransform());
-		}
-	}
+	if (!Rod) return;
+	if (APlayerState* Primary = Rod->GetPresentationState().OperatorPlayerState)
+		RemoveOperatorAndReconcileSession(Rod, Primary, Rod->GetPresentationState().RodActorRevision,
+			Cast<ACatCharacter>(Primary->GetPawn()), TEXT("FishingWindowClosed"));
 }
 
+bool UCatFishingService::ReconcilePrimaryControlFromPhysicalGrip(ACatFishingRodActor* Rod)
+{
+	if (!Rod || !Rod->HasAuthority() || !Rod->IsUsingPhysicalRod()) return false;
+	APlayerState* Primary = Rod->GetPresentationState().OperatorPlayerState;
+	if (!Primary) return true; // A grip can revoke existing control, never grant it.
+	if (ACatFishingSession* Session = FindActiveSessionByRod(Rod); Session && Session->IsFixedStepMutationBoundaryActive())
+	{
+		DeferredPrimaryControlChecks.Add(Rod);
+		return false;
+	}
+	const ACatCharacter* Character = Cast<ACatCharacter>(Primary->GetPawn());
+	const auto* Physical = Character ? Character->GetPhysicalBodyComponent() : nullptr;
+	if (bCommandsOpen && Rod->GetPresentationState().bDeployed && !Rod->GetPresentationState().bBroken
+		&& Physical && Physical->IsLocomotionEnabled() && CanControllerStartFishingAction(Character->GetController())
+		&& Rod->GetPhysicalRodComponent()->IsHeldBy(Primary)) return true;
+	return RemoveOperatorAndReconcileSession(Rod, Primary, Rod->GetPresentationState().RodActorRevision,
+		Character, TEXT("PrimaryPhysicalHoldLost"));
+}
 // Session 查询流程：先压缩终态/失效弱引用，再做只读查找；失败查询不建立任何缓存或索引项。
 ACatFishingSession* UCatFishingService::FindSession(const FGuid FishingSessionId)
 {
@@ -1342,29 +1236,6 @@ ACatFishingRodActor* UCatFishingService::FindRodOperatedBy(const APlayerState* P
 	return nullptr;
 }
 
-ACatFishingRodActor* UCatFishingService::FindNearestOperableRod(const FVector& WorldLocation,
-	const double MaxDistanceCentimeters)
-{
-	CompactDeployedRods();
-	ACatFishingRodActor* Best = nullptr;
-	double BestDistanceSquared = FMath::Square(FMath::Max(0.0, MaxDistanceCentimeters));
-	for (const TPair<TWeakObjectPtr<APlayerState>, TWeakObjectPtr<ACatFishingRodActor>>& Pair : DeployedRodsByPlayerState)
-	{
-		ACatFishingRodActor* Rod = Pair.Value.Get();
-		if (!Rod || !Rod->GetPresentationState().bDeployed || Rod->GetPresentationState().bBroken) continue;
-		const int32 FreeSlotIndex = Rod->GetFirstFreeOperatorSlotIndex();
-		if (FreeSlotIndex == INDEX_NONE) continue;
-		const double DistanceSquared = FVector::DistSquared(WorldLocation,
-			Rod->GetOperatorInteractionWorldTransform().GetLocation());
-		if (DistanceSquared <= BestDistanceSquared)
-		{
-			BestDistanceSquared = DistanceSquared;
-			Best = Rod;
-		}
-	}
-	return Best;
-}
-
 ACatFishingRodActor* UCatFishingService::FindNearestUnattendedSessionRod(const FVector& WorldLocation,
 	const double MaxDistanceCentimeters)
 {
@@ -1392,9 +1263,9 @@ ACatFishingRodActor* UCatFishingService::FindNearestUnattendedSessionRod(const F
 	return Best;
 }
 
-ACatFishingSession* UCatFishingService::FindActiveSessionByRod(const ACatFishingRodActor* RodActor)
+ACatFishingSession* UCatFishingService::FindActiveSessionByRod(const ACatFishingRodActor* RodActor) const
 {
-	CompactSessions();
+	// A domain read may run inside batch termination; it must not mutate the registry being traversed.
 	if (!RodActor) return nullptr;
 	for (const TPair<FGuid, TWeakObjectPtr<ACatFishingSession>>& Pair : Sessions)
 	{
@@ -1433,14 +1304,14 @@ ACatFishingSession* UCatFishingService::FindNearestScoopableSession(const FVecto
 	return Best;
 }
 
-// 接力转移编排：会话唯一性由鱼竿保证；等口只迁移身份，HookedFight 由 Session 连同 Runner 资源一起迁移。
-bool UCatFishingService::TransferSessionFisher(ACatFishingSession* Session, AController* NewFisherController)
+// 原主人取回编排：等口恢复本人身份，HookedFight 同时恢复本人的 Runner 绑定。
+bool UCatFishingService::ResumeOwnedSessionControl(ACatFishingSession* Session, AController* NewFisherController)
 {
 	CompactSessions();
 	const FString NewFisherId = ResolveStableNetId(NewFisherController);
 	if (!Session || Session->IsTerminal() || NewFisherId.IsEmpty()) return false;
 	if (Session->GetFisherStableNetIdForAuthority() == NewFisherId) return true;
-	if (!Session->TransferFisherFromAuthority(NewFisherController)) return false;
+	if (!Session->ResumeOwnerControlFromAuthority(NewFisherController)) return false;
 	// 成功事件由 Session 的唯一状态写口记录完整且脱敏的 Controller 上下文，服务层不再重复输出原始 StableNetId。
 	return true;
 }

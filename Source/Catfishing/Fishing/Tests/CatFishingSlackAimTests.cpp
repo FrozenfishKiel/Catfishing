@@ -7,6 +7,12 @@
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 
 #include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Components/BoxComponent.h"
+#include "Components/SphereComponent.h"
+#include "Components/StaticMeshComponent.h"
+#include "Engine/StaticMeshActor.h"
+#include "Engine/StaticMesh.h"
 #include "Engine/LocalPlayer.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingService.h"
@@ -14,12 +20,14 @@
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
 #include "Fishing/Integration/CatFishingRodAimState.h"
+#include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Framework/Game/CatfishingPlayerState.h"
 #include "GameFramework/PlayerState.h"
 #include "OnlineSubsystemTypes.h"
+#include "Interaction/Grab/CatPhysicsGrabComponent.h"
 
 namespace CatFishingSlackAimTest
 {
@@ -62,11 +70,19 @@ namespace CatFishingSlackAimTest
 			if (!Test.TestTrue(TEXT("create slack aim game world"), WorldWrapper.CreateTestWorld(EWorldType::Game))) return false;
 			WorldWrapper.ForwardErrorMessages(&Test);
 			World = WorldWrapper.GetTestWorld();
+			FURL URL; URL.AddOption(TEXT("game=/Script/Catfishing.CatfishingGameModeBase"));
+			if (!World->SetGameMode(URL) || !WorldWrapper.BeginPlayInTestWorld()) return false;
+			auto* Floor=World->SpawnActor<AStaticMeshActor>();
+			Floor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Movable);
+			Floor->GetStaticMeshComponent()->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,TEXT("/Engine/BasicShapes/Cube.Cube")));
+			Floor->GetStaticMeshComponent()->SetCollisionProfileName(TEXT("BlockAll"));
+			Floor->SetActorTransform(FTransform(FRotator::ZeroRotator,FVector(0,0,-10),FVector(20,20,.2)));
+			Floor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Static);
 			FActorSpawnParameters Spawn;
 			Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 			Controller = World->SpawnActor<ACatfishingPlayerController>();
 			Player = World->SpawnActor<ACatfishingPlayerState>();
-			Character = World->SpawnActor<ACatCharacter>(FVector::ZeroVector, FRotator::ZeroRotator, Spawn);
+			Character = World->SpawnActor<ACatCharacter>(FVector(0,0,20), FRotator::ZeroRotator, Spawn);
 			Rod = World->SpawnActor<ACatFishingRodActor>();
 			Fishing = World->GetSubsystem<UCatFishingService>();
 			if (!Test.TestTrue(TEXT("spawn real controller, character, rod and service"),
@@ -75,28 +91,40 @@ namespace CatFishingSlackAimTest
 			Character->SetPlayerState(Player);
 			Controller->Possess(Character);
 			Controller->SetControlRotation(FRotator::ZeroRotator);
+			Controller->SetActorTickEnabled(false); // Only explicit input samples drive these command-order fixtures.
 			return Test.TestTrue(TEXT("initialize held rod identity"), Rod->InitializeAuthoritativeIdentity(
-				FGuid::NewGuid(), FGuid::NewGuid(), TEXT("SlackAimRod"), TEXT("Skin"), Player, Player, true, false))
-				&& Test.TestTrue(TEXT("register held rod through production lookup"), Fishing->RegisterDeployedRod(Player, Rod))
+				FGuid::NewGuid(), FGuid::NewGuid(), TEXT("SlackAimRod"), TEXT("Skin"), Player, nullptr, true, false))
+				&& Test.TestTrue(TEXT("register held rod through production lookup"), Fishing->RegisterDeployedRod(Player, Rod));
+		}
+		bool BeginFight(FAutomationTestBase& Test)
+		{
+			if (!Test.TestTrue(TEXT("actual owner constraint grips the rod"),Rod->BeginPhysicalHoldFromAuthority(Player,true))) return false;
+			FCatOperateRodCommand Operate;
+			Operate.Context.RequestId=FGuid::NewGuid();
+			Operate.Context.RodActorId=Rod->GetPresentationState().RodActorId;
+			Operate.Context.ExpectedRodActorRevision=Rod->GetPresentationState().RodActorRevision;
+			return Test.TestTrue(TEXT("explicit owner command authorizes the sole operator"),Fishing->OperateRod(Controller,Operate).bCommitted)
 				&& Test.TestTrue(TEXT("initialize actual held pose"), Rod->RefreshHeldTransformFromAuthority())
-				&& Test.TestTrue(TEXT("start loaded fight"), Rod->SetCarrierConstraintFromAuthority(
-					FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, true, 100.0, 50.0));
+				&& Test.TestTrue(TEXT("start physical fight"), Rod->SetFightConstraintObservationFromAuthority(FVector::ForwardVector, 1.0, 0.0, true, 100.0, 50.0));
 		}
 
-		bool LoadAgainstOldIntent(FAutomationTestBase& Test)
+		void Tick(const float Seconds=1.0f/60.0f)
 		{
-			for (int32 Frame = 0; Frame < 360; ++Frame)
+			Character->GetPhysicalBodyComponent()->SetMoveIntent(FVector::ZeroVector);
+			WorldWrapper.TickTestWorld(Seconds);
+			Rod->RefreshHeldTransformFromAuthority();
+		}
+
+		bool AccumulateActualMotorEffort(FAutomationTestBase& Test)
+		{
+			for (int32 Frame = 0; Frame < 12; ++Frame)
 			{
 				if (!Rod->AcceptHeldAimSampleFromAuthority(Player,
 					MotionSample(Frame + 1, 1, true, 120.0 + Frame * 0.01, 0.0, Rod))) return false;
-				if (!Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0))
-				{
-					Test.AddError(TEXT("loaded production rod pose must integrate"));
-					return false;
-				}
+				Tick();
 			}
-			return Test.TestTrue(TEXT("fish holds actual rod far short of the continuously moving mouse target"),
-				FMath::Abs(FMath::FindDeltaAngleDegrees(Rod->GetGripWorldTransform().Rotator().Yaw, 120.0)) > 60.0);
+			return Test.TestTrue(TEXT("real physical mouse motor accumulated measurable effort"),
+				Rod->GetAuthoritativeRotationEffortSnapshot().ExertionSquaredSeconds>0.0);
 		}
 	};
 }
@@ -268,120 +296,74 @@ bool FCatFishingSlackAimAngularBoundaryTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingSlackAimRodContinuityTest,
-	"Catfishing.Unit.Fishing.SlackAim.LoadedRodRebasesWithoutPoseLoadOrEffortReset",
+	"Catfishing.Unit.Fishing.SlackAim.PhysicalRodRebasesWithoutPoseMomentumOrEffortReset",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingSlackAimRodContinuityTest::RunTest(const FString& Parameters)
 {
-	(void)Parameters;
 	using namespace CatFishingSlackAimTest;
 	FHeldRodFixture Fixture;
-	if (!Fixture.Create(*this) || !Fixture.LoadAgainstOldIntent(*this)) return false;
-	ACatFishingRodActor* Rod = Fixture.Rod;
-	// Press while the real rod is moving, so clearing angular velocity cannot hide behind equilibrium.
-	TestTrue(TEXT("ongoing stroke reverses its actual mouse input"),
-		Rod->AcceptHeldAimSampleFromAuthority(Fixture.Player, MotionSample(1000, 1, true, 0.0, 0.0, Rod)));
-	if (!TestTrue(TEXT("loaded rod starts turning back before the right-button edge"),
-		Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0))) return false;
-	FCatFishingRodRotationPrediction Before;
-	if (!TestTrue(TEXT("read production loaded rotation input"), Rod->GetRotationPredictionFromAuthority(0.0, Before))) return false;
-	TestTrue(TEXT("rebase fixture has actual angular velocity to preserve"),
-		!Before.Input.PreviousAngularVelocityRadiansPerSecond.IsNearlyZero());
-	const FTransform PoseBefore = Rod->GetActorTransform();
-	const auto EffortBefore = Rod->GetAuthoritativeRotationEffortSnapshot();
-	const auto Press = MotionSample(1001, 1, false, 0.0, 0.0, Rod);
-	TestTrue(TEXT("loaded effort and fish smoothing are actually present"),
-		EffortBefore.ExertionSquaredSeconds > 0.0 && !Before.Input.PreviousSmoothedFishPullStrengthMeters.IsNearlyZero());
-	TestTrue(TEXT("holder can rebase current fight"), Rod->CanRebaseHeldAimFromAuthority(Fixture.Player, Press));
-	Rod->RebaseHeldAimFromAuthority(Fixture.Player, Press, FGuid::NewGuid(), 1);
-	FCatFishingRodRotationPrediction Rebased;
-	TestTrue(TEXT("rebased prediction is available"), Rod->GetRotationPredictionFromAuthority(0.0, Rebased));
-	TestTrue(TEXT("rebase target equals the actual authoritative grip aim"), Rebased.Input.RequestedAim.Equals(Before.Input.CurrentAim, 1e-8));
-	TestTrue(TEXT("press cannot teleport rod or grip"), Rod->GetActorTransform().Equals(PoseBefore, 1e-8));
-	TestTrue(TEXT("press retains the smoothed fish load"),
-		Rebased.Input.PreviousSmoothedFishPullStrengthMeters.Equals(Before.Input.PreviousSmoothedFishPullStrengthMeters, 1e-8));
-	TestTrue(TEXT("right-button rebase preserves ongoing angular velocity"),
-		Rebased.Input.PreviousAngularVelocityRadiansPerSecond.Equals(Before.Input.PreviousAngularVelocityRadiansPerSecond, 1e-8));
-	TestEqual(TEXT("press does not lower authoritative fish torque"), Rebased.Input.MaximumFishTorque, Before.Input.MaximumFishTorque);
-	TestEqual(TEXT("press retains effort epoch"), Rod->GetAuthoritativeRotationEffortSnapshot().Epoch, EffortBefore.Epoch);
-	TestFalse(TEXT("right click without ongoing mouse movement does not apply cat turning torque"), Rebased.Input.bCatDriveActive);
-	TestEqual(TEXT("press cannot erase already accumulated effort"),
-		Rod->GetAuthoritativeRotationEffortSnapshot().ExertionSquaredSeconds, EffortBefore.ExertionSquaredSeconds);
-	// CMC/control packets may keep writing the old hidden target after the reliable right-click RPC.
-	Fixture.Controller->SetControlRotation(FRotator(45.0, 150.0, 0.0));
-	FCatFishingRodRotationPrediction AfterOldControl;
-	Rod->GetRotationPredictionFromAuthority(0.0, AfterOldControl);
-	TestTrue(TEXT("late old ControlRotation cannot reinstate hidden pitch or yaw"),
-		AfterOldControl.Input.RequestedAim.Equals(Rebased.Input.RequestedAim, 1e-8));
-	TestTrue(TEXT("genuinely new mouse stroke is accepted"),
-		Rod->AcceptHeldAimSampleFromAuthority(Fixture.Player, MotionSample(1002, 2, true, 5.0, 0.0, Rod)));
-	FCatFishingRodRotationPrediction NewInput;
-	Rod->GetRotationPredictionFromAuthority(0.0, NewInput);
-	TestEqual(TEXT("new five-degree mouse input changes production target by five degrees"),
-		FMath::FindDeltaAngleDegrees(Rebased.Input.RequestedAim.Yaw, NewInput.Input.RequestedAim.Yaw), 5.0, 1e-7);
-	TestTrue(TEXT("new stroke explicitly activates cat drive"), NewInput.Input.bCatDriveActive);
-	TestFalse(TEXT("delayed pre-press packet is discarded"),
-		Rod->AcceptHeldAimSampleFromAuthority(Fixture.Player, MotionSample(999, 1, true, 90.0, 0.0, Rod)));
-	TestTrue(TEXT("mouse stop is accepted independently of right-button state"),
-		Rod->AcceptHeldAimSampleFromAuthority(Fixture.Player, MotionSample(1003, 2, false, 5.0, 0.0, Rod)));
-	FCatFishingRodRotationPrediction Stopped;
-	Rod->GetRotationPredictionFromAuthority(0.0, Stopped);
-	TestFalse(TEXT("mouse stop immediately removes active turning torque"), Stopped.Input.bCatDriveActive);
-	TestTrue(TEXT("mouse stop immediately discards unfulfilled turn target"), Stopped.Input.RequestedAim.Equals(Stopped.Input.CurrentAim, 1e-8));
-	TestTrue(TEXT("mouse stop preserves existing angular velocity"),
-		Stopped.Input.PreviousAngularVelocityRadiansPerSecond.Equals(NewInput.Input.PreviousAngularVelocityRadiansPerSecond, 1e-8));
-	TestTrue(TEXT("unloading retains the same fight"), Rod->SetCarrierConstraintFromAuthority(
-		FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true, 0.0, 50.0));
-	FCatFishingRodRotationPrediction Unloaded;
-	Rod->GetRotationPredictionFromAuthority(0.0, Unloaded);
-	TestTrue(TEXT("unload publication does not erase smoothed residual force"),
-		Unloaded.Input.PreviousSmoothedFishPullStrengthMeters.Equals(Before.Input.PreviousSmoothedFishPullStrengthMeters, 1e-8));
-	TestTrue(TEXT("load publication preserves angular velocity until real integration"),
-		Unloaded.Input.PreviousAngularVelocityRadiansPerSecond.Equals(Before.Input.PreviousAngularVelocityRadiansPerSecond, 1e-8));
-	const auto BeforePassive = Rod->GetAuthoritativeRotationEffortSnapshot();
-	for (int32 Frame = 0; Frame < 240; ++Frame)
-	{
-		if (!Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0)) return false;
-	}
-	TestEqual(TEXT("inertia and residual fish motion after stopping cannot charge cat support effort"),
-		Rod->GetAuthoritativeRotationEffortSnapshot().ExertionSquaredSeconds, BeforePassive.ExertionSquaredSeconds);
-	TestEqual(TEXT("inertia and residual fish motion after stopping cannot charge cat positive work"),
-		Rod->GetAuthoritativeRotationEffortSnapshot().PositiveWorkRadians, BeforePassive.PositiveWorkRadians);
-	FCatFishingRodRotationPrediction BeforeNextStrokePrediction;
-	Rod->GetRotationPredictionFromAuthority(0.0, BeforeNextStrokePrediction);
-	const FRotator BeforeNextStroke = BeforeNextStrokePrediction.Input.CurrentAim;
-	TestTrue(TEXT("next mouse stroke begins after passive motion has changed actual pose"),
-		Rod->AcceptHeldAimSampleFromAuthority(Fixture.Player, MotionSample(1004, 3, true, 8.0, 5.0, Rod)));
-	FCatFishingRodRotationPrediction NextStroke;
-	Rod->GetRotationPredictionFromAuthority(0.0, NextStroke);
-	TestEqual(TEXT("next stroke applies only its three degrees from current actual pose"),
-		FMath::FindDeltaAngleDegrees(BeforeNextStroke.Yaw, NextStroke.Input.RequestedAim.Yaw), 3.0, 1e-7);
-	TestTrue(TEXT("next stroke collects new actual rotation work"), Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0));
-	TestTrue(TEXT("new active work is billed after the inactive interval"),
-		Rod->GetAuthoritativeRotationEffortSnapshot().PositiveWorkRadians > BeforePassive.PositiveWorkRadians);
-	// Advance only the authority clock: no Controller tick is allowed to send a normal stop for this timeout case.
-	Fixture.World->TimeSeconds += 0.16;
-	FCatFishingRodRotationPrediction TimedOut;
-	Rod->GetRotationPredictionFromAuthority(0.0, TimedOut);
-	TestFalse(TEXT("missing samples for more than 0.15 seconds remove cat drive"), TimedOut.Input.bCatDriveActive);
-	TestTrue(TEXT("authority timeout exposes current pose instead of the old target"), TimedOut.Input.RequestedAim.Equals(TimedOut.Input.CurrentAim, 1e-8));
-	const auto OldFightSample = MotionSample(5000, 4, true, 200.0, 8.0, Rod);
-	Fixture.Controller->SetControlRotation(FRotator(0.0, 70.0, 0.0));
-	Rod->ClearCarrierConstraintFromAuthority();
-	TestTrue(TEXT("exit restores ordinary controller-based aim"), Rod->RefreshHeldTransformFromAuthority());
-	TestEqual(TEXT("non-fight grip follows current control yaw"), Rod->GetGripWorldTransform().Rotator().Yaw, 70.0, 1e-7);
-	TestTrue(TEXT("next fight starts"), Rod->SetCarrierConstraintFromAuthority(
-		FVector::ForwardVector, 0.0, 0.0, 1.0, 0.0, true, 100.0, 50.0));
-	TestTrue(TEXT("new fight gets a new aim input epoch"), Rod->GetCarrierConstraintState().AimInputEpoch != Press.InputEpoch);
-	TestFalse(TEXT("previous fight's late movement cannot target the new fight"), Rod->AcceptHeldAimSampleFromAuthority(Fixture.Player, OldFightSample));
-	TestFalse(TEXT("previous fight's late press cannot rebase the new fight"), Rod->CanRebaseHeldAimFromAuthority(Fixture.Player, OldFightSample));
-	TestTrue(TEXT("new fight accepts samples in its own epoch"), Rod->AcceptHeldAimSampleFromAuthority(Fixture.Player, MotionSample(5001, 5, true, 201.0, 200.0, Rod)));
-	APlayerState* NextPlayer = Fixture.World->SpawnActor<APlayerState>();
-	if (!TestNotNull(TEXT("next holder identity"), NextPlayer)) return false;
-	TestTrue(TEXT("holder transfer clears old aim ownership"), Rod->SetOperatorFromAuthority(NextPlayer, Rod->GetPresentationState().RodActorRevision));
-	TestFalse(TEXT("previous holder cannot submit aim after transfer"),
-		Rod->AcceptHeldAimSampleFromAuthority(Fixture.Player, MotionSample(6000, 6, true, 300.0, 201.0, Rod)));
-	TestEqual(TEXT("transfer does not carry previous holder effort"), Rod->GetAuthoritativeRotationEffortSnapshot().ExertionSquaredSeconds, 0.0);
+	if (!Fixture.Create(*this)) return false;
+	auto* GameMode=Fixture.World->GetAuthGameMode<ACatfishingGameModeBase>();
+	const FUniqueNetIdRef ContinuityId=FUniqueNetIdString::Create(TEXT("SlackContinuity"),FName(TEXT("CAT_TEST")));
+	Fixture.Player->SetUniqueId(FUniqueNetIdRepl(ContinuityId));
+	ACatfishingGameModeBase::FAdmissionRecord Admission;
+	Admission.Phase=ACatfishingGameModeBase::EAdmissionPhase::Active; Admission.Controller=Fixture.Controller;
+	GameMode->AdmissionRecords.Add(ACatfishingGameModeBase::MakeStableNetIdKey(Fixture.Player->GetUniqueId()),Admission);
+	GameMode->bRunCommandsOpen=true; GameMode->RunPublicState.Phase.Phase=ECatRunPhase::DayActive; GameMode->RunPublicState.Phase.bFishingAllowed=true;
+	if (!Fixture.BeginFight(*this) || !Fixture.AccumulateActualMotorEffort(*this)) return false;
+	auto* Rod=Fixture.Rod;
+	FCatFishingRodControlObservation Before;
+	if (!TestTrue(TEXT("read actual physical rotation"),Rod->GetControlObservationFromAuthority(Before))) return false;
+	TestTrue(TEXT("fixture has nonzero actual angular velocity"),!Before.AngularVelocityRadiansPerSecond.IsNearlyZero());
+	const FTransform PoseBefore=Rod->GetPhysicalRodBody()->GetComponentTransform();
+	const auto EffortBefore=Rod->GetAuthoritativeRotationEffortSnapshot();
+	const auto Press=MotionSample(1001,1,false,0,0,Rod);
+	TestTrue(TEXT("holder can rebase current fight"),Rod->CanRebaseHeldAimFromAuthority(Fixture.Player,Press));
+	Rod->RebaseHeldAimFromAuthority(Fixture.Player,Press,FGuid::NewGuid(),1);
+	FCatFishingRodControlObservation Rebased; Rod->GetControlObservationFromAuthority(Rebased);
+	TestTrue(TEXT("right press rebases to actual authoritative angle"),Rebased.RequestedAim.Equals(Before.ActualAim,1.e-8));
+	TestTrue(TEXT("right press never teleports physical body"),Rod->GetPhysicalRodBody()->GetComponentTransform().Equals(PoseBefore,1.e-8));
+	TestTrue(TEXT("right press preserves actual angular momentum"),Rebased.AngularVelocityRadiansPerSecond.Equals(Before.AngularVelocityRadiansPerSecond,1.e-8));
+	TestFalse(TEXT("right press without mouse movement does not apply drive"),Rebased.bMouseDriveActive);
+	TestEqual(TEXT("right press keeps effort epoch"),Rod->GetAuthoritativeRotationEffortSnapshot().Epoch,EffortBefore.Epoch);
+	TestEqual(TEXT("right press never erases accumulated effort"),Rod->GetAuthoritativeRotationEffortSnapshot().ExertionSquaredSeconds,EffortBefore.ExertionSquaredSeconds);
+	Fixture.Controller->SetControlRotation(FRotator(45,150,0));
+	FCatFishingRodControlObservation OldControl; Rod->GetControlObservationFromAuthority(OldControl);
+	TestTrue(TEXT("late old ControlRotation cannot restore hidden mouse debt"),OldControl.RequestedAim.Equals(Rebased.RequestedAim,1.e-8));
+	TestTrue(TEXT("new mouse stroke accepted"),Rod->AcceptHeldAimSampleFromAuthority(Fixture.Player,MotionSample(1002,2,true,5,0,Rod)));
+	FCatFishingRodControlObservation NewInput; Rod->GetControlObservationFromAuthority(NewInput);
+	TestEqual(TEXT("five new degrees reach the sole production target"),FMath::FindDeltaAngleDegrees(Rebased.RequestedAim.Yaw,NewInput.RequestedAim.Yaw),5.0,1.e-7);
+	TestTrue(TEXT("new mouse stroke activates drive"),NewInput.bMouseDriveActive);
+	TestFalse(TEXT("old packet rejected"),Rod->AcceptHeldAimSampleFromAuthority(Fixture.Player,MotionSample(999,1,true,90,0,Rod)));
+	TestTrue(TEXT("mouse stop accepted independently of right button"),Rod->AcceptHeldAimSampleFromAuthority(Fixture.Player,MotionSample(1003,2,false,5,0,Rod)));
+	FCatFishingRodControlObservation Stopped; Rod->GetControlObservationFromAuthority(Stopped);
+	TestFalse(TEXT("stop removes drive immediately"),Stopped.bMouseDriveActive);
+	TestTrue(TEXT("stop discards unfinished target"),Stopped.RequestedAim.Equals(Stopped.ActualAim,1.e-8));
+	TestTrue(TEXT("stop preserves physical angular velocity"),Stopped.AngularVelocityRadiansPerSecond.Equals(NewInput.AngularVelocityRadiansPerSecond,1.e-8));
+	const auto Passive=Rod->GetAuthoritativeRotationEffortSnapshot();
+	for (int32 Frame=0;Frame<12;++Frame) Fixture.Tick();
+	TestEqual(TEXT("passive physical inertia cannot bill support effort"),Rod->GetAuthoritativeRotationEffortSnapshot().ExertionSquaredSeconds,Passive.ExertionSquaredSeconds);
+	TestEqual(TEXT("passive physical inertia cannot bill positive work"),Rod->GetAuthoritativeRotationEffortSnapshot().PositiveWorkRadians,Passive.PositiveWorkRadians);
+	FCatFishingRodControlObservation BeforeNext; Rod->GetControlObservationFromAuthority(BeforeNext);
+	TestTrue(TEXT("next stroke is accepted after passive motion"),Rod->AcceptHeldAimSampleFromAuthority(Fixture.Player,MotionSample(1004,3,true,8,5,Rod)));
+	FCatFishingRodControlObservation Next; Rod->GetControlObservationFromAuthority(Next);
+	TestEqual(TEXT("next stroke uses current physical aim plus three new degrees"),FMath::FindDeltaAngleDegrees(BeforeNext.ActualAim.Yaw,Next.RequestedAim.Yaw),3.0,1.e-7);
+	Fixture.Tick();
+	TestTrue(TEXT("fresh mouse motion bills fresh effort"),Rod->GetAuthoritativeRotationEffortSnapshot().ExertionSquaredSeconds>Passive.ExertionSquaredSeconds);
+	Fixture.World->TimeSeconds+=.16;
+	FCatFishingRodControlObservation TimedOut; Rod->GetControlObservationFromAuthority(TimedOut);
+	TestFalse(TEXT("expired samples cannot keep the physical mouse motor active"),TimedOut.bMouseDriveActive);
+	TestTrue(TEXT("timeout exposes actual pose instead of obsolete target"),TimedOut.RequestedAim.Equals(TimedOut.ActualAim,1.e-8));
+	const auto OldFightSample=MotionSample(5000,4,true,200,8,Rod);
+	const FVector VelocityBeforeCleanup=Rod->GetPhysicalRodBody()->GetPhysicsAngularVelocityInRadians();
+	Rod->ClearFightConstraintAndLoadFromAuthority();
+	TestTrue(TEXT("fight cleanup preserves real physical momentum"),Rod->GetPhysicalRodBody()->GetPhysicsAngularVelocityInRadians().Equals(VelocityBeforeCleanup,1.e-8));
+	TestTrue(TEXT("next fight starts"),Rod->SetFightConstraintObservationFromAuthority(FVector::ForwardVector, 1, 0, true, 100, 50));
+	TestTrue(TEXT("new fight changes aim epoch"),Rod->GetCarrierConstraintState().AimInputEpoch!=Press.InputEpoch);
+	TestFalse(TEXT("previous fight late movement rejected"),Rod->AcceptHeldAimSampleFromAuthority(Fixture.Player,OldFightSample));
+	TestFalse(TEXT("previous fight late rebase rejected"),Rod->CanRebaseHeldAimFromAuthority(Fixture.Player,OldFightSample));
+	TestTrue(TEXT("new fight accepts its own domain"),Rod->AcceptHeldAimSampleFromAuthority(Fixture.Player,MotionSample(5001,5,true,201,200,Rod)));
 	return !HasAnyErrors();
 }
 
@@ -395,9 +377,6 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 	using namespace CatFishingSlackAimTest;
 	FHeldRodFixture Fixture;
 	if (!Fixture.Create(*this)) return false;
-	FURL URL;
-	URL.AddOption(TEXT("game=/Script/Catfishing.CatfishingGameModeBase"));
-	if (!TestTrue(TEXT("create real authority game mode"), Fixture.World->SetGameMode(URL))) return false;
 	ACatfishingGameModeBase* GameMode = Fixture.World->GetAuthGameMode<ACatfishingGameModeBase>();
 	if (!TestNotNull(TEXT("project game mode"), GameMode)) return false;
 	const FUniqueNetIdRef UniqueId = FUniqueNetIdString::Create(TEXT("SlackAimFisher"), FName(TEXT("CAT_TEST")));
@@ -409,6 +388,7 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 	GameMode->bRunCommandsOpen = true;
 	GameMode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
 	GameMode->RunPublicState.Phase.bFishingAllowed = true;
+	if (!Fixture.BeginFight(*this)) return false;
 	TStrongObjectPtr<ULocalPlayer> LocalPlayer(NewObject<ULocalPlayer>(GEngine));
 	Fixture.Controller->SetPlayer(LocalPlayer.Get());
 	if (!TestTrue(TEXT("fixture passes real local and fishing gates"),
@@ -432,16 +412,12 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 	Runner->State.LineLengthCentimeters = 500.0;
 	Runner->Session = Session;
 	Runner->RodActor = Fixture.Rod;
-	FCatFightParticipantRuntime Participant;
-	Participant.PlayerState = Fixture.Player;
-	Participant.Character = Fixture.Character;
-	Participant.AbilitySystem = Fixture.Character->GetCatAbilitySystemComponent();
-	Participant.bPrimary = true;
-	Runner->Participants.Add(TWeakObjectPtr<APlayerState>(Fixture.Player), Participant);
+	if (!TestTrue(TEXT("bind only the real owner to the running input fixture"),
+		Runner->BindPrimaryOperatorFromAuthority(Fixture.Player,false,false,0))) return false;
 	UCatFishingCommandComponent* Commands = Fixture.Controller->GetFishingCommandComponent();
-	// Build the resisted pose through this controller's own input domain and sequence numbers.
+	// Establish real command/sample history without advancing physics, isolating exact edge ordering below.
 	Commands->UpdateLocalRodAimInput(1.0 / 60.0, FRotator(0.0, 120.0, 0.0));
-	for (int32 Frame = 0; Frame < 360; ++Frame)
+	for (int32 Frame = 0; Frame < 2; ++Frame)
 	{
 		Commands->UpdateLocalRodAimInput(1.0 / 60.0, FRotator(0.0, 0.01, 0.0));
 		if (!Fixture.Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0)) return false;
@@ -450,8 +426,8 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 	const auto PrimaryPress = Commands->SubmitPrimaryPressed();
 	TestTrue(TEXT("left press routes to actual active session"), Commands->TryGetResult(PrimaryPress.RequestId, Result) && Result.bCommitted);
 	TestEqual(TEXT("runner begins reeling"), Runner->GetCatAction(), ECatFightCatAction::Pull);
-	FCatFishingRodRotationPrediction BeforePress;
-	Fixture.Rod->GetRotationPredictionFromAuthority(0.0, BeforePress);
+	FCatFishingRodControlObservation BeforePress;
+	Fixture.Rod->GetControlObservationFromAuthority(BeforePress);
 	const auto SlackPress = Commands->SubmitSlackPressed();
 	TestTrue(TEXT("right press commits through real route"), Commands->TryGetResult(SlackPress.RequestId, Result) && Result.bCommitted);
 	TestTrue(TEXT("press packet identifies the current rod and fight input epoch"),
@@ -459,44 +435,44 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 		&& SlackPress.RodAimSample.InputEpoch == Fixture.Rod->GetCarrierConstraintState().AimInputEpoch);
 	TestEqual(TEXT("right press takes priority over held left button"), Runner->GetCatAction(), ECatFightCatAction::Slack);
 	TestTrue(TEXT("session publishes slack and pauses reel"), Session->GetSnapshot().bSlacking && !Session->GetSnapshot().bReeling);
-	FCatFishingRodRotationPrediction Rebased;
-	Fixture.Rod->GetRotationPredictionFromAuthority(0.0, Rebased);
-	TestTrue(TEXT("production right press rebases to actual angle"), Rebased.Input.RequestedAim.Equals(BeforePress.Input.CurrentAim, 1e-8));
+	FCatFishingRodControlObservation Rebased;
+	Fixture.Rod->GetControlObservationFromAuthority(Rebased);
+	TestTrue(TEXT("production right press rebases to actual angle"), Rebased.RequestedAim.Equals(BeforePress.ActualAim, 1e-8));
 
 	// Model the engine order: right-button edge in PostProcessInput, then this frame's RotationInput.
 	Fixture.Controller->RotationInput = FRotator(0.0, 5.0, 0.0);
 	Fixture.Controller->UpdateRotation(1.0f / 60.0f);
 	Fixture.Controller->RotationInput = FRotator::ZeroRotator;
-	FCatFishingRodRotationPrediction SameFrame;
-	Fixture.Rod->GetRotationPredictionFromAuthority(0.0, SameFrame);
+	FCatFishingRodControlObservation SameFrame;
+	Fixture.Rod->GetControlObservationFromAuthority(SameFrame);
 	TestEqual(TEXT("right press plus UpdateRotation count the same frame's mouse movement once"),
-		FMath::FindDeltaAngleDegrees(Rebased.Input.RequestedAim.Yaw, SameFrame.Input.RequestedAim.Yaw), 5.0, 1e-7);
+		FMath::FindDeltaAngleDegrees(Rebased.RequestedAim.Yaw, SameFrame.RequestedAim.Yaw), 5.0, 1e-7);
 	Fixture.Controller->UpdateRotation(1.0f / 60.0f);
-	FCatFishingRodRotationPrediction Stationary;
-	Fixture.Rod->GetRotationPredictionFromAuthority(0.0, Stationary);
-	TestFalse(TEXT("the first stationary input frame removes active turning torque"), Stationary.Input.bCatDriveActive);
+	FCatFishingRodControlObservation Stationary;
+	Fixture.Rod->GetControlObservationFromAuthority(Stationary);
+	TestFalse(TEXT("the first stationary input frame removes active turning torque"), Stationary.bMouseDriveActive);
 	TestTrue(TEXT("stationary production sample clears the unfulfilled mouse target"),
-		Stationary.Input.RequestedAim.Equals(Stationary.Input.CurrentAim, 1e-8));
+		Stationary.RequestedAim.Equals(Stationary.ActualAim, 1e-8));
 	TestEqual(TEXT("mouse stop does not release physically held reel or slack buttons"), Runner->GetCatAction(), ECatFightCatAction::Slack);
 
 	const auto RepeatedPress = Commands->SubmitSlackPressed();
 	TestTrue(TEXT("higher-sequence repeated right press is a held-state update"),
 		Commands->TryGetResult(RepeatedPress.RequestId, Result) && Result.bCommitted
 		&& RepeatedPress.InputSequence > SlackPress.InputSequence);
-	FCatFishingRodRotationPrediction AfterRepeat;
-	Fixture.Rod->GetRotationPredictionFromAuthority(0.0, AfterRepeat);
+	FCatFishingRodControlObservation AfterRepeat;
+	Fixture.Rod->GetControlObservationFromAuthority(AfterRepeat);
 	TestTrue(TEXT("a repeated pressed notification cannot restore stopped mouse aim"),
-		!AfterRepeat.Input.bCatDriveActive && AfterRepeat.Input.RequestedAim.Equals(Stationary.Input.RequestedAim, 1e-8));
+		!AfterRepeat.bMouseDriveActive && AfterRepeat.RequestedAim.Equals(Stationary.RequestedAim, 1e-8));
 	const auto Release = Commands->SubmitSlackReleased();
 	TestTrue(TEXT("right release commits"), Commands->TryGetResult(Release.RequestId, Result) && Result.bCommitted);
 	TestEqual(TEXT("right release resumes physically held left button"), Runner->GetCatAction(), ECatFightCatAction::Pull);
 	TestTrue(TEXT("session publishes resumed reel"), Session->GetSnapshot().bReeling && !Session->GetSnapshot().bSlacking);
-	FCatFishingRodRotationPrediction AfterRelease;
-	Fixture.Rod->GetRotationPredictionFromAuthority(0.0, AfterRelease);
+	FCatFishingRodControlObservation AfterRelease;
+	Fixture.Rod->GetControlObservationFromAuthority(AfterRelease);
 	TestTrue(TEXT("right release resumes reeling without restoring stopped mouse aim"),
-		!AfterRelease.Input.bCatDriveActive && AfterRelease.Input.RequestedAim.Equals(Stationary.Input.RequestedAim, 1e-8));
+		!AfterRelease.bMouseDriveActive && AfterRelease.RequestedAim.Equals(Stationary.RequestedAim, 1e-8));
 
-	const int64 ParticipantSequence = Runner->FindParticipant(Fixture.Player)->LastInputSequence;
+	const int64 ParticipantSequence = Runner->OperatorState.LastInputSequence;
 	const int64 SnapshotSequence = Session->GetSnapshot().SnapshotSequence;
 	FCatFishingInputEdge StaleControl = Commands->MakeDiscreteEdge();
 	++StaleControl.ControlEpoch;
@@ -507,7 +483,7 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 		Commands->TryGetResult(StaleControl.RequestId, Result) && !Result.bCommitted
 		&& Result.Error == ECatFishingCommandError::InputSequenceStale);
 	TestEqual(TEXT("stale control cannot consume current runner input sequence"),
-		Runner->FindParticipant(Fixture.Player)->LastInputSequence, ParticipantSequence);
+		Runner->OperatorState.LastInputSequence, ParticipantSequence);
 	TestEqual(TEXT("stale control preserves active reeling"), Runner->GetCatAction(), ECatFightCatAction::Pull);
 	auto WrongEpoch = Sample(1000, 900.0, 0.0, Fixture.Rod);
 	++WrongEpoch.InputEpoch;
@@ -516,39 +492,36 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 		*RejectedSessionRequest.ToString()), EAutomationExpectedErrorFlags::Contains, 1);
 	TestFalse(TEXT("invalid rebase rejects the entire Session transition"),
 		Session->SetSlackingFromAuthority(Fixture.Player, ParticipantSequence + 1, true, &WrongEpoch, RejectedSessionRequest));
-	TestEqual(TEXT("rejection cannot consume runner input sequence"), Runner->FindParticipant(Fixture.Player)->LastInputSequence, ParticipantSequence);
+	TestEqual(TEXT("rejection cannot consume runner input sequence"), Runner->OperatorState.LastInputSequence, ParticipantSequence);
 	TestEqual(TEXT("rejection cannot publish a new session snapshot"), Session->GetSnapshot().SnapshotSequence, SnapshotSequence);
 	TestEqual(TEXT("rejection cannot pause active reel"), Runner->GetCatAction(), ECatFightCatAction::Pull);
-	FCatFishingRodRotationPrediction Rejected;
-	Fixture.Rod->GetRotationPredictionFromAuthority(0.0, Rejected);
-	TestTrue(TEXT("rejection cannot modify rod aim"), Rejected.Input.RequestedAim.Equals(Stationary.Input.RequestedAim, 1e-8));
+	FCatFishingRodControlObservation Rejected;
+	Fixture.Rod->GetControlObservationFromAuthority(Rejected);
+	TestTrue(TEXT("rejection cannot modify rod aim"), Rejected.RequestedAim.Equals(Stationary.RequestedAim, 1e-8));
 	APlayerState* Helper = Fixture.World->SpawnActor<APlayerState>();
-	int32 HelperSlot = INDEX_NONE;
-	if (!TestNotNull(TEXT("helper identity"), Helper)
-		|| !TestTrue(TEXT("helper joins the same rod"), Fixture.Rod->AddOperatorFromAuthority(
-			Helper, Fixture.Rod->GetPresentationState().RodActorRevision, HelperSlot))) return false;
+	if (!TestNotNull(TEXT("physical helper identity outside the Session"), Helper)) return false;
 	const auto HelperPress = Sample(1001, 900.0, 0.0, Fixture.Rod);
 	TestFalse(TEXT("helper cannot submit primary-only reeling"), Session->SetReelingFromAuthority(Helper, 1, true));
 	TestFalse(TEXT("helper cannot use primary-only Session slack rebase"),
 		Session->SetSlackingFromAuthority(Helper, 1, true, &HelperPress, FGuid::NewGuid()));
-	TestEqual(TEXT("helper rejection preserves the primary's runner sequence"), Runner->FindParticipant(Fixture.Player)->LastInputSequence, ParticipantSequence);
+	TestEqual(TEXT("helper rejection preserves the primary's runner sequence"), Runner->OperatorState.LastInputSequence, ParticipantSequence);
 	TestEqual(TEXT("helper rejection does not publish a changed snapshot"), Session->GetSnapshot().SnapshotSequence, SnapshotSequence);
-	Fixture.Rod->GetRotationPredictionFromAuthority(0.0, Rejected);
-	TestTrue(TEXT("helper rejection cannot alter primary aim"), Rejected.Input.RequestedAim.Equals(Stationary.Input.RequestedAim, 1e-8));
+	Fixture.Rod->GetControlObservationFromAuthority(Rejected);
+	TestTrue(TEXT("helper rejection cannot alter primary aim"), Rejected.RequestedAim.Equals(Stationary.RequestedAim, 1e-8));
 	const auto NewPhysicalPress = Commands->SubmitSlackPressed();
 	TestTrue(TEXT("new physical press after release commits"), Commands->TryGetResult(NewPhysicalPress.RequestId, Result) && Result.bCommitted);
-	FCatFishingRodRotationPrediction NewPress;
-	Fixture.Rod->GetRotationPredictionFromAuthority(0.0, NewPress);
-	TestTrue(TEXT("new physical press deliberately discards current unfulfilled input"), NewPress.Input.RequestedAim.Equals(NewPress.Input.CurrentAim, 1e-8));
+	FCatFishingRodControlObservation NewPress;
+	Fixture.Rod->GetControlObservationFromAuthority(NewPress);
+	TestTrue(TEXT("new physical press deliberately discards current unfulfilled input"), NewPress.RequestedAim.Equals(NewPress.ActualAim, 1e-8));
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
 	const auto ApplyRawPitch = [&](const double Pitch)
 	{
 		Fixture.Controller->RotationInput = FRotator(Pitch, 0.0, 0.0);
 		Fixture.Controller->UpdateRotation(1.0f / 60.0f);
 		Fixture.Controller->RotationInput = FRotator::ZeroRotator;
-		FCatFishingRodRotationPrediction Prediction;
-		Fixture.Rod->GetRotationPredictionFromAuthority(0.0, Prediction);
-		return Prediction.Input.RequestedAim.Pitch;
+		FCatFishingRodControlObservation Observation;
+		Fixture.Rod->GetControlObservationFromAuthority(Observation);
+		return Observation.RequestedAim.Pitch;
 	};
 	TestEqual(TEXT("production input clamps raw pitch at the configured upper rod limit"),
 		ApplyRawPitch(200.0), Settings->HeldRodMaximumPitchDegrees, 1e-7);
@@ -561,10 +534,10 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 	const auto BeforeRetryRelease = Commands->SubmitSlackReleased();
 	TestTrue(TEXT("release before retry scenario commits"),
 		Commands->TryGetResult(BeforeRetryRelease.RequestId, Result) && Result.bCommitted);
-	FCatFishingRodRotationPrediction BeforeRejectedPress;
-	Fixture.Rod->GetRotationPredictionFromAuthority(0.0, BeforeRejectedPress);
+	FCatFishingRodControlObservation BeforeRejectedPress;
+	Fixture.Rod->GetControlObservationFromAuthority(BeforeRejectedPress);
 	TestFalse(TEXT("retry scenario has real unfulfilled aim to discard"),
-		BeforeRejectedPress.Input.RequestedAim.Equals(BeforeRejectedPress.Input.CurrentAim, 1e-4));
+		BeforeRejectedPress.RequestedAim.Equals(BeforeRejectedPress.ActualAim, 1e-4));
 	FCatFishingInputEdge RejectedPress = Commands->MakeDiscreteEdge();
 	RejectedPress.RodAimSample = Commands->MakeRodAimSample(Fixture.Rod);
 	++RejectedPress.RodAimSample.InputEpoch;
@@ -578,20 +551,20 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 		Commands->TryGetResult(RejectedPress.RequestId, Result) && !Result.bCommitted
 		&& Result.Error == ECatFishingCommandError::InvalidPhase);
 	TestEqual(TEXT("rejected routed press keeps the runner reeling"), Runner->GetCatAction(), ECatFightCatAction::Pull);
-	FCatFishingRodRotationPrediction AfterRejectedPress;
-	Fixture.Rod->GetRotationPredictionFromAuthority(0.0, AfterRejectedPress);
+	FCatFishingRodControlObservation AfterRejectedPress;
+	Fixture.Rod->GetControlObservationFromAuthority(AfterRejectedPress);
 	TestTrue(TEXT("rejected routed press cannot alter the previous aim"),
-		AfterRejectedPress.Input.RequestedAim.Equals(BeforeRejectedPress.Input.RequestedAim, 1e-8));
+		AfterRejectedPress.RequestedAim.Equals(BeforeRejectedPress.RequestedAim, 1e-8));
 	// No intervening release: receipt of a rejected physical press must not impersonate accepted Runner state.
 	const auto ValidRetryPress = Commands->SubmitSlackPressed();
 	TestTrue(TEXT("valid higher-sequence press succeeds without releasing after rejection"),
 		ValidRetryPress.InputSequence > RejectedPress.InputSequence
 		&& Commands->TryGetResult(ValidRetryPress.RequestId, Result) && Result.bCommitted);
 	TestEqual(TEXT("accepted retry transitions the real runner to slack"), Runner->GetCatAction(), ECatFightCatAction::Slack);
-	FCatFishingRodRotationPrediction AfterValidRetry;
-	Fixture.Rod->GetRotationPredictionFromAuthority(0.0, AfterValidRetry);
+	FCatFishingRodControlObservation AfterValidRetry;
+	Fixture.Rod->GetControlObservationFromAuthority(AfterValidRetry);
 	TestTrue(TEXT("accepted retry rebases to current actual posture despite previous rejected press"),
-		AfterValidRetry.Input.RequestedAim.Equals(AfterValidRetry.Input.CurrentAim, 1e-8));
+		AfterValidRetry.RequestedAim.Equals(AfterValidRetry.ActualAim, 1e-8));
 	const auto BeforeReset = Commands->MakeRodAimSample(Fixture.Rod);
 	Commands->ResetTransientCommandState();
 	const auto AfterReset = Commands->MakeRodAimSample(Fixture.Rod);
@@ -603,9 +576,7 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 	// Synthetic pending-domain fixture: locally hide the fight constraint, then restore it.
 	// This exercises sender input filtering; it does not exercise network replication transport.
 	const FCatFishingCarrierConstraintState SavedConstraint = Fixture.Rod->GetCarrierConstraintState();
-	Fixture.Rod->ClearCarrierConstraintFromAuthority();
-	// The previous check reset command-edge sequencing; retain this fixture's still-running Runner domain.
-	Commands->NextInputSequence = Runner->FindParticipant(Fixture.Player)->LastInputSequence;
+	Fixture.Rod->ClearFightConstraintAndLoadFromAuthority();
 	const auto PendingDomainPress = Commands->SubmitSlackPressed();
 	TestTrue(TEXT("already-held Runner accepts pending-domain press without another rebase"),
 		Commands->TryGetResult(PendingDomainPress.RequestId, Result) && Result.bCommitted);
@@ -630,13 +601,7 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 		Commands->CumulativeRodLookDegrees.Y - PendingCumulativeBaseline.Y,
 		Settings->HeldRodMaximumPitchDegrees - PendingPitchBaseline - 1.0, 1e-7);
 	const FVector2D BeforeDomainBinding = Commands->CumulativeRodLookDegrees;
-	TestTrue(TEXT("restore visible fight constraint for pending-domain fixture"), Fixture.Rod->SetCarrierConstraintFromAuthority(
-		SavedConstraint.PullDirection, SavedConstraint.PullAccelerationCentimetersPerSecondSquared,
-		SavedConstraint.TargetPullSpeedCentimetersPerSecond, SavedConstraint.NormalizedTension,
-		SavedConstraint.ConstraintErrorCentimeters, SavedConstraint.bFightActive,
-		SavedConstraint.MaximumFishTorqueStrengthMeters, SavedConstraint.CatTorqueCapacityStrengthMeters,
-		SavedConstraint.RodPullAxis, SavedConstraint.PullBrakingDecelerationCentimetersPerSecondSquared,
-		SavedConstraint.bUseContinuousTraction));
+	TestTrue(TEXT("restore visible fight constraint for pending-domain fixture"), Fixture.Rod->SetFightConstraintObservationFromAuthority(SavedConstraint.PullDirection, SavedConstraint.NormalizedTension, SavedConstraint.ConstraintErrorCentimeters, SavedConstraint.bFightActive, SavedConstraint.MaximumFishTorqueStrengthMeters, SavedConstraint.CatTorqueCapacityStrengthMeters, SavedConstraint.RodPullAxis));
 	Commands->UpdateLocalRodAimInput(1.0 / 60.0, FRotator::ZeroRotator);
 	TestTrue(TEXT("pending filter binds the observed nonzero fight epoch"), Commands->LocalPitchAimEpoch != 0
 		&& Commands->LocalPitchAimEpoch == Fixture.Rod->GetCarrierConstraintState().AimInputEpoch
@@ -647,9 +612,9 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 		Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
 	TestEqual(TEXT("new fight domain starts from visible actual pitch without carrying pending input debt"),
 		Commands->LocalRequestedRodPitch, BoundPitchBaseline, 1e-7);
-	FCatFishingRodRotationPrediction BoundIdle;
-	Fixture.Rod->GetRotationPredictionFromAuthority(0.0, BoundIdle);
-	TestFalse(TEXT("binding a stationary domain cannot activate mouse drive"), BoundIdle.Input.bCatDriveActive);
+	FCatFishingRodControlObservation BoundIdle;
+	Fixture.Rod->GetControlObservationFromAuthority(BoundIdle);
+	TestFalse(TEXT("binding a stationary domain cannot activate mouse drive"), BoundIdle.bMouseDriveActive);
 	Commands->UpdateLocalRodAimInput(1.0 / 60.0, FRotator(-1.0, 0.0, 0.0));
 	TestEqual(TEXT("first reverse after binding still moves immediately by one degree"),
 		Commands->LocalRequestedRodPitch, FMath::Clamp(BoundPitchBaseline - 1.0,

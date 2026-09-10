@@ -103,6 +103,12 @@ bool FCatFishingRodAimState::ExpireInput(const double NowSeconds, const FRotator
 {
 	if (!bMouseActive || !IsInputTimeValid(NowSeconds) || ActualAim.ContainsNaN()
 		|| NowSeconds < LastSampleTimeSeconds || IsMouseActive(NowSeconds)) return false;
+	return StopInput(ActualAim);
+}
+
+bool FCatFishingRodAimState::StopInput(const FRotator& ActualAim)
+{
+	if (!bMouseActive || ActualAim.ContainsNaN()) return false;
 	bMouseActive = false;
 	DiscardedThroughSequence = LatestSample.Sequence;
 	AnchorAtActual(ActualAim, LatestSample.CumulativeLookDegrees);

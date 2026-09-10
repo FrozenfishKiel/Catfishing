@@ -19,6 +19,7 @@ UCLASS()
 class CATFISHING_API UCatSaveSubsystem : public UGameInstanceSubsystem
 {
 	GENERATED_BODY()
+	friend class FCatPhysicalCharacterSaveRestoreConsumerTest;
 public:
 	/** 初始化内存索引与恢复状态；磁盘索引仍由 RefreshSlotSummaries 异步读取，避免启动时阻塞前端。 */
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;

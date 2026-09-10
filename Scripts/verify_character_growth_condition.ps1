@@ -166,7 +166,7 @@ function Invoke-CharacterGrowthConditionStatic {
     Assert-TextContains $GameMode "CanAcceptFishingCommand" "GameMode must expose the Fishing/Chum command gate"
     Assert-TextContains $GameMode "GetConditionComponent" "Fishing/Chum gate must read current Character Condition"
     Assert-TextContains $GameMode "!Conditions->GetSnapshot\(\)\.bDowned" "Fishing/Chum gate must reject Downed characters"
-    Assert-TextContains $GameMode "ReleaseFishingOperatorForCharacter" "Character departure must release one member without ending the shared fishing session"
+    Assert-TextContains $GameMode "ReleaseFishingOperatorForCharacter" "Character departure must release the primary operator while preserving the unattended fishing session"
     Assert-TextContains $GameMode "PreserveFishingResourcesForEquipmentShutdown" "Character departure must preserve active fishing resources before inventory capture"
     foreach ($Lifecycle in @("UnPossessed", "EndPlay")) {
         Assert-TextContains $CharacterCpp "(?s)void ACatCharacter::$Lifecycle\([^}]+HandleCharacterUnavailable\(this\)" "Character $Lifecycle must enter the shared cleanup before clearing body identity"

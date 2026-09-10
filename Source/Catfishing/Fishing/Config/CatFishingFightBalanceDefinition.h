@@ -30,23 +30,18 @@ public:
 		meta = (DisplayName = "启用正式运行"))
 	bool bEnableRuntimeDefinition = false;
 
-	/** 鱼使用实际重量生成力量；猫质量独立配置，不随力量成长而增加。 */
+	/** 鱼使用实际重量生成力量；猫端质量读取真实刚体。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "力量与运动",
 		meta = (DisplayName = "每公斤力量", ClampMin = "0.001"))
 	double StrengthPerKilogram = 0.0;
 
-	/** 旧资产序列化载荷。无运行读取；外部蓝图引用未完成审计前保留原字段身份。 */
+	/** DA_FishingFightBalance_Default 仍序列化的旧载荷，无运行读取；迁移并重存该资产后才能删除。 */
 	UPROPERTY(BlueprintReadOnly, Category="已废弃（仅资产载荷）", meta=(DeprecationMessage="Use ForcePerStrengthNewtons"))
 	double AccelerationPerStrength = 0.0;
 	UPROPERTY(BlueprintReadOnly, Category="已废弃（仅资产载荷）", meta=(DeprecationMessage="Force integration replaces drive response"))
 	double DriveResponseSeconds = 0.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="每点力量推力（牛顿）", ClampMin="0.001"))
 	double ForcePerStrengthNewtons = 1.0;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="单猫系统质量", Units="kg", ClampMin="0.001"))
-	double CatBodyMassKilograms = 5.0;
-	/** 辅助的个人力量折扣；移动与静止支撑共用折扣后的同一份力量，体力余额不打折。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="多人协作", meta=(DisplayName="辅助力量贡献倍率", ClampMin="0.0", ClampMax="1.0"))
-	double HelperStrengthMultiplier = 0.5;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="力竭鱼回收辅助力（牛顿）", ClampMin="0.001"))
 	double ExhaustedReelForceNewtons = 200.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="猫力竭拖行辅助加速度", ClampMin="0.0"))
@@ -62,7 +57,7 @@ public:
 		meta = (DisplayName = "收线速度", ClampMin = "0.001", Units = "cm/s"))
 	double ReelSpeedCentimetersPerSecond = 0.0;
 
-	/** 主猫力竭且无助手出力时，按鱼较快的配置游速持续外冲；拖拽保持锁线直到落水或获救。 */
+	/** 持竿主控力竭时，按鱼较快的配置游速持续外冲；拖拽保持锁线直到落水或获救。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "力量与运动",
 		meta = (DisplayName = "猫力竭后鱼外冲速度倍率", ClampMin = "1.0"))
 	double ExhaustedCatEscapeSpeedMultiplier = 2.0;
@@ -107,7 +102,7 @@ public:
 		meta = (DisplayName = "猫移动体力倍率", ClampMin = "0.0"))
 	double CatMovementStaminaMultiplier = 1.0;
 
-	/** 猫主动收线实际做功的体力倍率；受阻费用由共享持竿支撑承担。 */
+	/** 猫主动收线实际做功的体力倍率；受阻费用由同一主控的持竿支撑承担。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "猫收线体力倍率", ClampMin = "0.0"))
 	double CatReelStaminaMultiplier = 1.0;
@@ -176,12 +171,12 @@ public:
 		meta = (DisplayName = "持竿最低杠杆倍率", ClampMin = "0.05", ClampMax = "1.0"))
 	double HeldRodMinimumLeverageMultiplier = 0.0;
 
-	/** 鱼端每秒允许承担的最大约束修正速度，同时限制猫端目标牵引速度。 */
+	/** 鱼端每秒允许承担的最大约束修正速度，只限制静态锚点模型的鱼端历史误差修正，物理身体不读该上限。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "鱼线与张力",
 		meta = (DisplayName = "最大约束修正速度", ClampMin = "1.0", Units = "cm/s"))
 	double MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 0.0;
 
-	/** 废弃速度硬截断参数；旧 WBP 引用未完整加载，保留载荷但没有运行读取。 */
+	/** DA_FishingFightBalance_Default 仍序列化的旧速度截断载荷；没有运行读取，删除前须迁移该资产。 */
 	UPROPERTY(BlueprintReadOnly, Category="已废弃（仅资产载荷）")
 	double MinimumCarrierAwaySpeedMultiplier = -1.0;
 };

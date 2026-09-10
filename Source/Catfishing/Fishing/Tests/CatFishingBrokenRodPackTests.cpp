@@ -116,11 +116,8 @@ bool FCatBrokenRodPackCapacityTest::RunTest(const FString& Parameters)
 	FFixture Fixture;
 	if (!Fixture.Initialize(*this)) return false;
 	TestEqual(TEXT("owner lookup used by X input retains broken rod"), Fixture.Fishing->FindDeployedRod(Fixture.PlayerState), Fixture.Rod);
-	TestNull(TEXT("broken rod is absent from new operator candidates"),
-		Fixture.Fishing->FindNearestOperableRod(Fixture.Character->GetActorLocation(), 250.0));
-	int32 SlotIndex = INDEX_NONE;
-	TestFalse(TEXT("broken deployed rod cannot accept another cast operator"), Fixture.Rod->AddOperatorFromAuthority(
-		Fixture.PlayerState, Fixture.Rod->GetPresentationState().RodActorRevision, SlotIndex));
+	TestFalse(TEXT("broken deployed rod cannot restore owner control"), Fixture.Rod->SetPrimaryOperatorFromAuthority(
+		Fixture.PlayerState, Fixture.Rod->GetPresentationState().RodActorRevision));
 	if (!TestTrue(TEXT("fills the slot freed by deployment"), Fixture.Equipment->GrantEquipmentFromAuthority(
 		FGuid::NewGuid(), Fixture.Equipment->GetSnapshot().Revision, TEXT("FeatherFloat")).bCommitted)) return false;
 	const int64 EquipmentRevision = Fixture.Equipment->GetSnapshot().Revision;

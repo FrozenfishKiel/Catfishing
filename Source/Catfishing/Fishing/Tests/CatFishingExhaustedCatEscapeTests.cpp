@@ -3,7 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
 #include "Character/CatCharacter.h"
-#include "Components/CapsuleComponent.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Condition/CatConditionComponent.h"
 #include "Condition/CatConditionSettings.h"
 #include "Environment/CatWaterQuerySubsystem.h"
@@ -49,7 +49,7 @@ namespace CatExhaustedEscapeTest
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingExhaustedCatRushTest,
-	"Catfishing.Unit.Fishing.Simulation.ExhaustedCatLocksLineAndIsDraggedContinuously",
+	"Catfishing.Unit.Fishing.Simulation.ExhaustedCatLocksLineAndKeepsTowPolicy",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingExhaustedCatRushTest::RunTest(const FString& Parameters)
@@ -58,27 +58,23 @@ bool FCatFishingExhaustedCatRushTest::RunTest(const FString& Parameters)
 	const auto Settings = Config();
 	auto Current = State();
 	auto Constraint = Rod();
-	double FastestPull = 0.0;
-	// 足够长的持续外冲：鱼超过旧最大线长世界距离后，也不能凭自耗/坏竿/逃脱提前收尾。
+	// 纯求解只验证锁线与拖水政策，实际三刚体被小鱼拖动由 PhysicalRod 的持续受力回归验证。
 	for (int32 Index = 0; Index < 200; ++Index)
 	{
 		const auto Step = FCatFishingFightSimulator::Step(Settings, Current, Constraint, FVector::ForwardVector);
-		if (!TestTrue(TEXT("零体力、无助手的外冲步骤持续有效"), Step.bSucceeded && Step.bExhaustedCatEscape)) return false;
+		if (!TestTrue(TEXT("主控零体力的外冲步骤持续有效"), Step.bSucceeded && Step.bExhaustedCatEscape)) return false;
 		TestEqual(TEXT("残留放线按键不能放长鱼线"), Step.LineLengthCentimeters, 500.0);
 		TestEqual(TEXT("拖拽中不通过放线恢复猫体力"), Step.CatStaminaDrain, 0.0);
 		TestEqual(TEXT("鱼不会在拖猫时自行耗尽"), Step.FishStaminaDrain, 0.0);
 		TestEqual(TEXT("拖落水不被残余耐久磨尽抢先结束"), Step.RodWearDelta, 0.0);
 		TestEqual(TEXT("持续外冲不由普通失败终局提前停止"), Step.Outcome, ECatFightStepOutcome::None);
 		TestEqual(TEXT("持续使用快速游速而非平静休息速度"), Step.IntendedSwimSpeedCentimetersPerSecond, 360.0);
-		FastestPull = FMath::Max(FastestPull, Step.CarrierTargetPullSpeedCentimetersPerSecond);
-		Constraint.CarrierVelocityCentimetersPerSecond.X = FMath::Min(360.0,
-			Constraint.CarrierVelocityCentimetersPerSecond.X + Step.CarrierPullAccelerationCentimetersPerSecondSquared * Settings.FixedStepSeconds);
-		Constraint.RodTipWorldPosition += Constraint.CarrierVelocityCentimetersPerSecond * Settings.FixedStepSeconds;
+		TestTrue(TEXT("小鱼拖水仍有配置的辅助推力而非仅自身微小力量"),
+			Step.Trace.FishThrustNewtons >= Settings.PrimaryOperatorMassKilograms
+				* Settings.ExhaustedCatTowAccelerationCentimetersPerSecondSquared / 100.0);
 		Current.FishVelocityCentimetersPerSecond = Step.ResolvedFishVelocityCentimetersPerSecond;
 		Current.FishWorldPosition = Step.ProposedFishWorldPosition;
 	}
-	TestTrue(TEXT("即使小鱼也能快速拖动无力的猫"), FastestPull >= 350.0);
-	TestTrue(TEXT("猫持续被拉向远处而非原地僵持"), Constraint.RodTipWorldPosition.X > 2500.0);
 	TestTrue(TEXT("鱼仍在同一锁定线长范围内"),
 		FVector::Distance(Current.FishWorldPosition, Constraint.RodTipWorldPosition) <= Current.LineLengthCentimeters + 0.01);
 
@@ -90,7 +86,7 @@ bool FCatFishingExhaustedCatRushTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingExhaustedCatRescueTest,
-	"Catfishing.Unit.Fishing.Simulation.ExhaustedCatRushEndsForRescueOrExhaustedFish",
+	"Catfishing.Unit.Fishing.Simulation.ExhaustedCatRushEndsForRecoveryOrExhaustedFish",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingExhaustedCatRescueTest::RunTest(const FString& Parameters)
@@ -99,12 +95,9 @@ bool FCatFishingExhaustedCatRescueTest::RunTest(const FString& Parameters)
 	auto Settings = Config();
 	auto Current = State();
 	TestTrue(TEXT("主位力竭触发持续外冲"), FCatFishingFightSimulator::ShouldEscapeExhaustedCat(Settings, Current, true));
-	Settings.SecondCatStrength = 30.0;
-	TestFalse(TEXT("助手实际出力时交回正常对抗"), FCatFishingFightSimulator::ShouldEscapeExhaustedCat(Settings, Current, true));
-	Settings.SecondCatStrength = 0.0;
 	Current.CatStamina = 0.001;
 	Settings.PrimaryOperatorCatStrength = 50.0;
-	TestFalse(TEXT("有力气的接力者不会被强制拖拽"), FCatFishingFightSimulator::ShouldEscapeExhaustedCat(Settings, Current, true));
+	TestFalse(TEXT("主控恢复正体力后停止强制拖拽"), FCatFishingFightSimulator::ShouldEscapeExhaustedCat(Settings, Current, true));
 	Current = State();
 	Settings = Config();
 	Current.bOperatorPresent = false;
@@ -117,7 +110,7 @@ bool FCatFishingExhaustedCatRescueTest::RunTest(const FString& Parameters)
 	const auto DeadFish = FCatFishingFightSimulator::Step(Settings, Current, Rod(), FVector::ZeroVector);
 	TestTrue(TEXT("鱼已力竭时保留零体力收线"), DeadFish.bSucceeded && !DeadFish.bExhaustedCatEscape
 		&& DeadFish.RequestedReelDistanceCentimeters > 0.0);
-	TestEqual(TEXT("力竭鱼不会反过来拖猫"), DeadFish.CarrierTargetPullSpeedCentimetersPerSecond, 0.0);
+	TestEqual(TEXT("力竭鱼不再主动推进拖水"), DeadFish.FishDriveAccelerationCentimetersPerSecondSquared, 0.0);
 	return !HasAnyErrors();
 }
 
@@ -152,7 +145,7 @@ bool FCatFishingExhaustedCatSteeringTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingExhaustedCatWaterTest,
-	"Catfishing.Unit.Fishing.Runtime.ExhaustedDragReachesRealDangerousWaterThreshold",
+	"Catfishing.Unit.Fishing.Contract.ExhaustedTravelSamplesUsePhysicalFootWaterThreshold",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingExhaustedCatWaterTest::RunTest(const FString& Parameters)
@@ -182,25 +175,23 @@ bool FCatFishingExhaustedCatWaterTest::RunTest(const FString& Parameters)
 	WorldWrapper.BeginPlayInTestWorld();
 	const UCatConditionSettings* WaterSettings = GetDefault<UCatConditionSettings>();
 	const double FootDepth = WaterSettings->DangerousWaterDepthCentimeters;
-	Character->SetActorLocation(FVector(0.0, 0.0, Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight() - FootDepth));
-	auto Settings = Config();
-	auto Current = State();
-	auto Constraint = Rod();
+	UCatPhysicalBodyComponent* Physical = Character->GetPhysicalBodyComponent();
+	if (!TestNotNull(TEXT("physical foot source"), Physical)) return false;
+	Physical->TeleportBodyFromAuthority(FTransform(FVector(0.0, 0.0, Physical->GetStandRootHeightCm() - FootDepth)), TEXT("WaterContractStart"));
+	const double SampleSeconds = .05;
 	bool bEntered = false;
 	double WetDuration = 0.0;
-	// 本测试把纯模型的牵引位移送入真实角色/水域/Condition；不替代 CharacterMovement 或动画画面验收。
+	// Contract fixture feeds sampled positions into the actual body/Condition query; real force/drag is covered separately.
 	for (int32 Index = 0; Index < 200 && !bEntered; ++Index)
 	{
-		const auto Step = FCatFishingFightSimulator::Step(Settings, Current, Constraint, FVector::ForwardVector);
-		if (!TestTrue(TEXT("进入水域前持续有有效拖拽步骤"), Step.bSucceeded)) return false;
-		Character->AddActorWorldOffset(FVector(Step.CarrierTargetPullSpeedCentimetersPerSecond * Settings.FixedStepSeconds, 0.0, 0.0));
-		Constraint.RodTipWorldPosition.X = Character->GetActorLocation().X;
-		Current.FishWorldPosition = Step.ProposedFishWorldPosition;
+		// 已采样的位置轨迹仅验证水深消费者，不重建被移除的 CMC 牵引积分。
+		Physical->TeleportBodyFromAuthority(FTransform(Character->GetActorLocation()
+			+ FVector(10.0, 0.0, 0.0)), TEXT("WaterContractSample"));
 		double Depth = 0.0;
 		const auto Exposure = Character->GetConditionComponent()->UpdateWaterExposureFromAuthority(
-			Region->GetWaterRegionHandle(), Settings.FixedStepSeconds, Depth);
+			Region->GetWaterRegionHandle(), SampleSeconds, Depth);
 		if (!TestTrue(TEXT("拖拽路径可查询真实水深"), Exposure != ECatWaterExposureUpdate::Unavailable)) return false;
-		if (Character->GetConditionComponent()->GetSnapshot().bWet) WetDuration += Settings.FixedStepSeconds;
+		if (Character->GetConditionComponent()->GetSnapshot().bWet) WetDuration += SampleSeconds;
 		bEntered = Exposure == ECatWaterExposureUpdate::DangerousEntered;
 		if (bEntered)
 		{
@@ -208,7 +199,7 @@ bool FCatFishingExhaustedCatWaterTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("满足连续确认时长后才落水"), WetDuration + 1e-6 >= WaterSettings->DangerousWaterConfirmationSeconds);
 		}
 	}
-	TestTrue(TEXT("持续外冲把猫从岸外拖进危险水域"), bEntered);
+	TestTrue(TEXT("采样轨迹跨过真实边界后进入危险水域"), bEntered);
 	return !HasAnyErrors();
 }
 

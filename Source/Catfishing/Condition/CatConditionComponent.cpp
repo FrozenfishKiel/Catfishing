@@ -3,7 +3,6 @@
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
-#include "Components/CapsuleComponent.h"
 #include "Environment/CatWaterQuerySubsystem.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
@@ -69,13 +68,8 @@ ECatWaterExposureUpdate UCatConditionComponent::UpdateWaterExposureFromAuthority
 	{
 		return ECatWaterExposureUpdate::Unavailable;
 	}
-	const UCapsuleComponent* Capsule = Character->GetCapsuleComponent();
-	if (!Capsule)
-	{
-		return ECatWaterExposureUpdate::Unavailable;
-	}
-	const FVector FootPoint = Character->GetActorLocation()
-		- FVector::UpVector * Capsule->GetScaledCapsuleHalfHeight();
+	// 身体组件提供真实支撑脚点；停用的 Character 胶囊不再代表物理猫的身高。
+	const FVector FootPoint = Character->GetBodyFootPointWorld();
 	const FCatWaterImmersionResult Immersion = Water->QueryImmersionAtWorldPoint(FootPoint, WaterRegion);
 	if (!Immersion.bSucceeded)
 	{

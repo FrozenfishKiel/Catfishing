@@ -4,6 +4,14 @@
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Components/BoxComponent.h"
+#include "Fishing/CatFishingService.h"
+#include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
+#include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "OnlineSubsystemTypes.h"
 #include "Components/StateTreeComponent.h"
 #include "Data/CatFishDefinition.h"
 #include "Environment/CatWaterQuerySubsystem.h"
@@ -247,6 +255,9 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("创建独立生产付款世界"), PaymentWorld.CreateTestWorld(EWorldType::Game))) return false;
 		PaymentWorld.ForwardErrorMessages(this);
 		UWorld* Payment = PaymentWorld.GetTestWorld();
+		FURL PaymentURL;
+		PaymentURL.AddOption(TEXT("game=/Script/Catfishing.CatfishingGameModeBase"));
+		if (!TestTrue(TEXT("生产固定步使用正式准入GameMode"), Payment->SetGameMode(PaymentURL))) return false;
 		ACatCharacter* Character = Payment->SpawnActor<ACatCharacter>(FVector(-200.0, 0.0, 200.0), FRotator::ZeroRotator);
 		ACatfishingPlayerState* Player = Payment->SpawnActor<ACatfishingPlayerState>();
 		ACatWaterRegion* Region = Payment->SpawnActor<ACatWaterRegion>();
@@ -269,7 +280,29 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		const auto Baked = FCatWaterGeometry::Build(Geometry);
 		if (!TestTrue(TEXT("烘焙付款夹具真实水域"), Baked.bSucceeded)) return false;
 		FCatWaterRegionTestAccess::InjectBakedGeometry(*Region, Baked.Cache);
-		PaymentWorld.BeginPlayInTestWorld();
+		// 与正式 SpawnActorDeferred 配置顺序一致，BeginPlay 创建刚体前冻结规范锚点。
+		if (!TestTrue(TEXT("物理竿初始化前配置规范竿尖和握点"), Rod->ConfigureCanonicalAnchorsFromAuthority(
+			FTransform::Identity, FTransform::Identity, FTransform(FVector(-200.0, 0.0, 0.0))))) return false;
+		if (!TestTrue(TEXT("启动真实角色身体与水域生命周期"), PaymentWorld.BeginPlayInTestWorld())) return false;
+		auto* Mode = Payment->GetAuthGameMode<ACatfishingGameModeBase>();
+		Mode->bRunCommandsOpen = true;
+		Mode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
+		Mode->RunPublicState.Phase.bFishingAllowed = true;
+		auto* Controller = Payment->SpawnActor<ACatfishingPlayerController>();
+		if (!Controller) return false;
+		Controller->PlayerState = Player;
+		Character->SetPlayerState(Player);
+		Controller->Possess(Character);
+		Controller->SetActorTickEnabled(false);
+		Player->SetPlayerId(1);
+		const FUniqueNetIdRef PlayerNetId = FUniqueNetIdString::Create(TEXT("BehaviorRuntimePayment"), FName(TEXT("CAT_TEST")));
+		Player->SetUniqueId(FUniqueNetIdRepl(PlayerNetId));
+		ACatfishingGameModeBase::FAdmissionRecord Admission;
+		Admission.Phase = ACatfishingGameModeBase::EAdmissionPhase::Active;
+		Admission.Controller = Controller;
+		Mode->AdmissionRecords.Add(ACatfishingGameModeBase::MakeStableNetIdKey(Player->GetUniqueId()), Admission);
+		if (!TestTrue(TEXT("付款参与者持有正式准入和已初始化刚体"), Mode->CanAcceptFishingCommand(Controller)
+			&& Character->GetPhysicalBodyComponent()->GetBody())) return false;
 		if (!TestTrue(TEXT("生产付款水域已注册"), Payment->GetSubsystem<UCatWaterQuerySubsystem>()
 			->QueryShoreRelation(FVector(500.0, 0.0, 0.0), Region->GetWaterRegionHandle()).bSucceeded)) return false;
 		UCatAbilitySystemComponent* ASC = Character->GetCatAbilitySystemComponent();
@@ -296,10 +329,14 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 			RodItemId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
 			Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bReserved)
 			|| !TestTrue(TEXT("会话完成中鱼扣饵"), Equipment->CommitFishingBaitDeferred(SessionId).bApplied)) return false;
-		if (!TestTrue(TEXT("配置固定规范竿尖"), Rod->ConfigureCanonicalAnchorsFromAuthority(
-			FTransform::Identity, FTransform::Identity, FTransform(FVector(-200.0, 0.0, 0.0))))
-			|| !TestTrue(TEXT("鱼竿绑定真实操作者及库存实例"), Rod->InitializeAuthoritativeIdentity(
-				FGuid::NewGuid(), RodItemId, Loadout.RodDefinitionId, NAME_None, Player, Player, true, false))) return false;
+		if (!TestTrue(TEXT("鱼竿绑定真实操作者及库存实例"), Rod->InitializeAuthoritativeIdentity(
+			FGuid::NewGuid(), RodItemId, Loadout.RodDefinitionId, NAME_None, Player, nullptr, true, false))) return false;
+		UCatFishingService* Service = Payment->GetSubsystem<UCatFishingService>();
+		if (!TestTrue(TEXT("已部署的真实杆进入生产查找索引"), Service && Service->RegisterDeployedRod(Player, Rod))
+			|| !TestTrue(TEXT("规范握点放在实际手爪后经生产校验建约束"), Rod->BeginPhysicalHoldFromAuthority(Player, true))
+			|| !TestTrue(TEXT("实际握持后按部署事务显式授予拥有者主控"),
+				Rod->SetPrimaryOperatorFromAuthority(Player, Rod->GetPresentationState().RodActorRevision))) return false;
+		if (!TestEqual(TEXT("真实握边保留固定步主位"), Rod->GetOperatorCount(), 1)) return false;
 		const FVector InitialFishPosition(500.0, 0.0, 0.0);
 		Fish->SetActorLocation(InitialFishPosition);
 		Fish->bIdentityInitialized = true;
@@ -314,6 +351,7 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		Session->AttemptSnapshot.RodItemInstanceId = RodItemId;
 		Session->CastEquipment = Equipment;
 		Session->FisherCharacter = Character;
+		Service->Sessions.Add(SessionId, Session); // The rod receiver validates the same live session domain.
 		UCatFishingFightRunner* Runner = NewObject<UCatFishingFightRunner>(Session);
 		Session->FightRunner = Runner;
 		FCatFishingFightRunnerInit Init;
@@ -328,7 +366,7 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		Init.bInitialPullHeld = true;
 		Init.Config.FixedStepSeconds = FixedStepSeconds;
 		Init.Config.PrimaryOperatorCatStrength = 50.0;
-		Init.Config.PrimaryOperatorMassKilograms = 5.0;
+		Init.Config.PrimaryOperatorMassKilograms = Character->GetPhysicalBodyComponent()->GetBody()->GetMass();
 		Init.Config.FishMassKilograms = 3.0;
 		Init.Config.FishStrength = 30.0;
 		Init.Config.CatStaminaMaximum = CatStaminaMaximum;
@@ -392,6 +430,7 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		AddInfo(FString::Printf(TEXT("Event=fish_intent_runtime_paid Price=%.6f IntentCm=%.6f ActualCm=%.6f MissingCm=%.6f FishDrain=%.6f CatDrain=%.6f ASCWrites=%d SessionPublications=%d"),
 			Price, IntendedDistance, ActualProgress, MissingDistance, FishDrain, CatDrain, CatStaminaWrites, SessionPublications));
 		Runner->Stop();
+		Service->Sessions.Remove(SessionId);
 	}
 	return !HasAnyErrors();
 }

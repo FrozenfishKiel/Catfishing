@@ -14,6 +14,13 @@ class UCatEquipmentComponent;
 class UCatInventoryComponent;
 class UCatGrowthComponent;
 class UCatFishingCameraComponent;
+class UCatPhysicalBodyComponent;
+class UCatPhysicsGrabComponent;
+class UCatPhysicsPrototypeVisualComponent;
+class UBoxComponent;
+class USphereComponent;
+class UPhysicsConstraintComponent;
+class UMeshComponent;
 
 /**
  * Lake 的唯一玩法身体；同时宿主 Character-owned ASC、Condition、Growth、Inventory 与 Equipment。
@@ -28,6 +35,18 @@ class CATFISHING_API ACatCharacter : public ACharacter, public IAbilitySystemInt
 public:
 	/** 构造 ASC/属性集、Condition、Growth、Inventory 与 Equipment，开启组件复制但不在 CDO 写任何运行数值。 */
 	ACatCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+	UFUNCTION(BlueprintPure, Category="Catfishing|Physics")
+	UCatPhysicalBodyComponent* GetPhysicalBodyComponent() const { return PhysicalBodyComponent; }
+	UFUNCTION(BlueprintPure, Category="Catfishing|Physics")
+	FVector GetBodyFootPointWorld() const;
+	UFUNCTION(BlueprintPure, Category="Catfishing|Physics")
+	double GetBodyStandRootHeightCm() const;
+	UMeshComponent* GetBodyVisualMesh() const;
+	virtual FVector GetVelocity() const override;
+	virtual float GetDefaultHalfHeight() const override;
+	virtual void Tick(float DeltaSeconds) override;
+	virtual bool TeleportTo(const FVector& DestLocation, const FRotator& DestRotation, bool bIsATest=false, bool bNoCheck=false) override;
+	virtual void FaceRotation(FRotator NewControlRotation, float DeltaTime=0.0f) override;
 	/** 上鱼时由 Fishing 表现提供持杆第一人称；其余时间保留角色蓝图的相机。 */
 	virtual void CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult) override;
 
@@ -156,6 +175,16 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	void RefreshPhysicalCondition();
+	void StopCharacterMovementSimulation();
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatPhysicalBodyComponent> PhysicalBodyComponent;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UBoxComponent> PhysicalBody;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<USphereComponent> LeftPhysicsHand;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<USphereComponent> RightPhysicsHand;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UPhysicsConstraintComponent> LeftPhysicsArm;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UPhysicsConstraintComponent> RightPhysicsArm;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatPhysicsGrabComponent> PhysicsGrab;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatPhysicsPrototypeVisualComponent> PhysicalVisual;
 	/** 钓鱼专用第一人称相机组件；只在上鱼表现可提供有效视角时接管 CalcCamera，平时让角色蓝图相机继续生效。 */
 	UPROPERTY(VisibleAnywhere, Category = "Catfishing|Fishing")
 	TObjectPtr<UCatFishingCameraComponent> FishingCameraComponent;

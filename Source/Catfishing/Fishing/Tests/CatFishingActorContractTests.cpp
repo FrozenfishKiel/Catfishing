@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "Components/BoxComponent.h"
 #include "Tests/AutomationCommon.h"
 #include "UObject/UnrealType.h"
 
@@ -239,9 +240,6 @@ bool FCatFishingRodCanonicalAnchorsContractTest::RunTest(const FString& Paramete
 
 	Rod->SetActorTransform(FTransform(FRotator(0.0, 35.0, 0.0), FVector(100.0, 200.0, 300.0)));
 	const FTransform ExpectedTip = Rod->GetRodTipWorldTransform();
-	const FTransform ExpectedStand = Rod->GetStandWorldTransform();
-	const FTransform ExpectedInteraction = Rod->GetOperatorInteractionWorldTransform();
-	const FTransform ExpectedLeftStand = Rod->GetOperatorStandWorldTransform(1);
 	const FTransform ExpectedGrip = Rod->GetGripWorldTransform();
 	VisualRoot->SetRelativeLocation(FVector(900.0, 0.0, 0.0));
 	RodTip->SetRelativeLocation(FVector(-500.0, 0.0, 0.0));
@@ -250,24 +248,9 @@ bool FCatFishingRodCanonicalAnchorsContractTest::RunTest(const FString& Paramete
 	LeftStand->SetRelativeLocation(FVector(-475.0, 0.0, 0.0));
 	Grip->SetRelativeLocation(FVector(-300.0, 0.0, 0.0));
 	TestTrue(TEXT("tip getter ignores component movement"), Rod->GetRodTipWorldTransform().Equals(ExpectedTip));
-	TestTrue(TEXT("stand getter ignores component movement"), Rod->GetStandWorldTransform().Equals(ExpectedStand));
-	TestTrue(TEXT("shared interaction getter ignores component movement"),
-		Rod->GetOperatorInteractionWorldTransform().Equals(ExpectedInteraction));
-	TestTrue(TEXT("left stand getter ignores component movement"),
-		Rod->GetOperatorStandWorldTransform(1).Equals(ExpectedLeftStand));
 	TestTrue(TEXT("grip getter ignores component movement"), Rod->GetGripWorldTransform().Equals(ExpectedGrip));
 	Rod->SetActorLocation(FVector(700.0, 800.0, 900.0));
 	TestTrue(TEXT("tip getter follows actor transform"), Rod->GetRodTipWorldTransform().Equals(Rod->GetActorTransform()));
-	const FVector RightLocation = Rod->GetOperatorStandWorldTransform(0).GetLocation();
-	const FVector LeftLocation = Rod->GetOperatorStandWorldTransform(1).GetLocation();
-	TestTrue(TEXT("right and left stand remain centered on canonical stand"),
-		((RightLocation + LeftLocation) * 0.5).Equals(Rod->GetActorLocation(), UE_KINDA_SMALL_NUMBER));
-	TestTrue(TEXT("legacy stand getter aliases right primary slot"),
-		Rod->GetStandWorldTransform().Equals(Rod->GetOperatorStandWorldTransform(0)));
-	TestTrue(TEXT("all operators share the canonical interaction anchor"),
-		Rod->GetOperatorInteractionWorldTransform().Equals(Rod->GetActorTransform()));
-	TestTrue(TEXT("invalid slot falls back to canonical stand center"),
-		Rod->GetOperatorStandWorldTransform(-1).Equals(Rod->GetActorTransform()));
 	TestTrue(TEXT("grip getter follows actor transform"), Rod->GetGripWorldTransform().Equals(Rod->GetActorTransform()));
 	return !HasAnyErrors();
 }
@@ -277,18 +260,16 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 	(void)Parameters;
 	FTestWorldWrapper WorldWrapper;
 	TestTrue(TEXT("create identity game world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	WorldWrapper.ForwardErrorMessages(this);
 	UWorld* World = WorldWrapper.GetTestWorld();
 	ACatFishingRodActor* Rod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
 	ACatFishingHookActor* Hook = World ? World->SpawnActor<ACatFishingHookActor>() : nullptr;
 	ACatFishEncounterActor* Fish = World ? World->SpawnActor<ACatFishEncounterActor>() : nullptr;
 	APlayerState* Owner = World ? World->SpawnActor<APlayerState>() : nullptr;
 	APlayerState* Helper = World ? World->SpawnActor<APlayerState>() : nullptr;
-	APlayerState* Third = World ? World->SpawnActor<APlayerState>() : nullptr;
-	APlayerState* Fourth = World ? World->SpawnActor<APlayerState>() : nullptr;
-	APlayerState* Fifth = World ? World->SpawnActor<APlayerState>() : nullptr;
 	TestNotNull(TEXT("identity actors spawn"), Rod);
 	TestNotNull(TEXT("identity owner spawns"), Owner);
-	if (!Rod || !Hook || !Fish || !Owner || !Helper || !Third || !Fourth || !Fifth)
+	if (!Rod || !Hook || !Fish || !Owner || !Helper)
 	{
 		return false;
 	}
@@ -298,6 +279,9 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 	const FGuid AttemptId = FGuid::NewGuid();
 	TestFalse(TEXT("rod rejects invalid identity"), Rod->InitializeAuthoritativeIdentity(
 		FGuid(), RodItemInstanceId, TEXT("Rod"), NAME_None, Owner, nullptr, false, false));
+	AddExpectedErrorPlain(TEXT("Event=fishing_rod_identity_rejected"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestFalse(TEXT("initial identity cannot bypass owner-only control"), Rod->InitializeAuthoritativeIdentity(
+		RodId, RodItemInstanceId, TEXT("Rod"), NAME_None, Owner, Helper, true, false));
 	TestTrue(TEXT("rod accepts first identity"), Rod->InitializeAuthoritativeIdentity(
 		RodId, RodItemInstanceId, TEXT("Rod"), TEXT("SkinA"), Owner, nullptr, true, false));
 	const FCatFishingRodPresentationState RodFirst = Rod->GetPresentationState();
@@ -313,60 +297,31 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("rod replay preserves state"), Rod->GetPresentationState().RodSkinDefinitionId, RodFirst.RodSkinDefinitionId);
 	TestFalse(TEXT("rod rejects changed immutable identity"), Rod->InitializeAuthoritativeIdentity(
 		FGuid::NewGuid(), RodItemInstanceId, TEXT("Rod"), NAME_None, Owner, nullptr, false, false));
-	int32 JoinedSlot = INDEX_NONE;
-	TestTrue(TEXT("first operator joins right primary slot"), Rod->AddOperatorFromAuthority(Owner, 1, JoinedSlot));
-	TestEqual(TEXT("first operator slot index is zero"), JoinedSlot, 0);
-	TestEqual(TEXT("primary compatibility field follows slot zero"),
-		Rod->GetPresentationState().OperatorPlayerState.Get(), Owner);
-	TestEqual(TEXT("first operator becomes authoritative holder"),
-		Rod->GetPresentationState().HolderPlayerState.Get(), Owner);
-	TestEqual(TEXT("first operator atomically switches rod to held"),
-		Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Held);
-	TestTrue(TEXT("held rod accepts the authoritative coupled carrier constraint"),
-		Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector,
-			600.0, 30.0, 0.75, 8.0));
-	TestTrue(TEXT("coupled carrier constraint becomes active"),
-		Rod->GetCarrierConstraintState().bActive);
-	TestEqual(TEXT("coupled carrier constraint keeps the server acceleration"),
-		Rod->GetCarrierConstraintState().PullAccelerationCentimetersPerSecondSquared, 600.0f);
-	TestEqual(TEXT("coupled carrier constraint carries a target pull speed"),
-		Rod->GetCarrierConstraintState().TargetPullSpeedCentimetersPerSecond, 30.0f);
-	Rod->ClearCarrierConstraintFromAuthority();
-	TestFalse(TEXT("clearing the fight constraint removes stale carrier drag"),
-		Rod->GetCarrierConstraintState().bActive);
-	TestEqual(TEXT("clearing the fight constraint restores unrestricted movement"),
-		Rod->GetCarrierConstraintState().PullAccelerationCentimetersPerSecondSquared, 0.0f);
-	TestTrue(TEXT("second operator joins left auxiliary slot"), Rod->AddOperatorFromAuthority(Helper, 2, JoinedSlot));
-	TestEqual(TEXT("second operator slot index is one"), JoinedSlot, 1);
-	TestEqual(TEXT("two-player occupancy is derived from compact array"), Rod->GetOperatorCount(), 2);
-	TestTrue(TEXT("third operator joins the same roster"),
-		Rod->AddOperatorFromAuthority(Third, 3, JoinedSlot));
-	TestTrue(TEXT("fourth operator joins the same roster"),
-		Rod->AddOperatorFromAuthority(Fourth, 4, JoinedSlot));
-	TestFalse(TEXT("fifth operator exceeds the default four-person capacity"),
-		Rod->AddOperatorFromAuthority(Fifth, 5, JoinedSlot));
-	APlayerState* PromotedPrimary = nullptr;
-	TestTrue(TEXT("primary can leave four-player occupancy"),
-		Rod->RemoveOperatorFromAuthority(Owner, 5, PromotedPrimary));
-	TestEqual(TEXT("left operator is explicitly reported as promoted"), PromotedPrimary, Helper);
-	TestEqual(TEXT("promoted operator becomes slot zero"), Rod->GetOperatorSlotIndex(Helper), 0);
-	TestEqual(TEXT("four-to-three transition publishes remaining membership immediately"), Rod->GetOperatorCount(), 3);
-	TestEqual(TEXT("primary mirror follows promoted operator"),
-		Rod->GetPresentationState().OperatorPlayerState.Get(), Helper);
-	TestEqual(TEXT("promotion atomically transfers holder"),
-		Rod->GetPresentationState().HolderPlayerState.Get(), Helper);
-	TestEqual(TEXT("promotion keeps rod held"), Rod->GetPresentationState().PoseMode,
-		ECatFishingRodPoseMode::Held);
-	TestTrue(TEXT("next primary can leave"), Rod->RemoveOperatorFromAuthority(Helper, 6, PromotedPrimary));
-	TestEqual(TEXT("next surviving member is promoted in order"), PromotedPrimary, Third);
-	TestTrue(TEXT("third primary can leave"), Rod->RemoveOperatorFromAuthority(Third, 7, PromotedPrimary));
-	TestEqual(TEXT("last surviving member is promoted"), PromotedPrimary, Fourth);
-	TestTrue(TEXT("last operator can leave"), Rod->RemoveOperatorFromAuthority(Fourth, 8, PromotedPrimary));
+	// Contract: exercise the Service's sole-operator write boundary; ordinary physical grips never call it.
+	TestTrue(TEXT("owner explicitly acquires primary control"), Rod->SetPrimaryOperatorFromAuthority(Owner, 1));
+	TestEqual(TEXT("primary mirror matches holder"), Rod->GetPresentationState().HolderPlayerState.Get(), Owner);
+	TestEqual(TEXT("projected member occupies slot zero"), Rod->GetOperatorSlotIndex(Owner), 0);
+	TestEqual(TEXT("nonempty projected roster is held"), Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Held);
+	const uint32 OwnerEpoch = Rod->GetOperatorMembershipEpoch(Owner);
+	const uint32 FirstControlEpoch = Rod->GetControlEpoch();
+	TestTrue(TEXT("fight observation accepts normalized tension"), Rod->SetFightConstraintObservationFromAuthority(FVector::ForwardVector, 0.75, 8, true));
+	TestEqual(TEXT("observation retains normalized tension"), Rod->GetCarrierConstraintState().NormalizedTension, 0.75f);
+	TestEqual(TEXT("physical receiver does not publish a second cat acceleration"), Rod->GetCarrierConstraintState().PullAccelerationCentimetersPerSecondSquared, 0.0f);
+	Rod->ClearFightConstraintAndLoadFromAuthority();
+	TestFalse(TEXT("clear leaves the fight domain inactive"), Rod->GetCarrierConstraintState().bFightActive);
+	TestFalse(TEXT("another player cannot acquire control or ownership"), Rod->SetPrimaryOperatorFromAuthority(Helper, 2));
+	TestEqual(TEXT("rejected takeover leaves sole operator count"), Rod->GetOperatorCount(), 1);
+	TestEqual(TEXT("rejected takeover keeps operator epoch"), Rod->GetOperatorMembershipEpoch(Owner), OwnerEpoch);
+	TestEqual(TEXT("rejected takeover keeps control epoch"), Rod->GetControlEpoch(), FirstControlEpoch);
+	TestTrue(TEXT("same owner request is idempotent"), Rod->SetPrimaryOperatorFromAuthority(Owner, 2));
+	TestFalse(TEXT("stale release cannot clear newer control"), Rod->SetPrimaryOperatorFromAuthority(nullptr, 1));
+	TestTrue(TEXT("owner release clears sole control"), Rod->SetPrimaryOperatorFromAuthority(nullptr, 2));
+	TestTrue(TEXT("release advances control epoch"), Rod->GetControlEpoch() != FirstControlEpoch);
+	TestEqual(TEXT("release preserves immutable owner"), Rod->GetPresentationState().OwnerPlayerState.Get(), Owner);
 	TestEqual(TEXT("empty occupancy has zero count"), Rod->GetOperatorCount(), 0);
-	TestNull(TEXT("empty occupancy clears primary mirror"), Rod->GetPresentationState().OperatorPlayerState);
+	TestNull(TEXT("empty occupancy clears primary"), Rod->GetPresentationState().OperatorPlayerState);
 	TestNull(TEXT("empty occupancy clears holder"), Rod->GetPresentationState().HolderPlayerState);
-	TestEqual(TEXT("last operator leaving atomically grounds the rod"),
-		Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Grounded);
+	TestEqual(TEXT("unheld projection is grounded"), Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Grounded);
 	TestTrue(TEXT("hook accepts first identity"), Hook->InitializeAuthoritativeIdentity(SessionId, AttemptId));
 	TestTrue(TEXT("authority hook accepts calm bobber mode"),
 		Hook->SetBobberPresentationModeFromAuthority(ECatFishingBobberPresentationMode::Calm));
@@ -560,6 +515,8 @@ bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameter
 			FormalHookClass, FTransform::Identity, SpawnParameters);
 		TestNotNull(TEXT("spawn runtime hook for curve binding"), RuntimeHook);
 		WorldWrapper.BeginPlayInTestWorld();
+		// 此用例只验证鱼线表现；静止无重力夹具避免把刚体自由下落当作线长插值错误。
+		Rod->GetPhysicalRodBody()->SetEnableGravity(false);
 		if (RuntimeHook)
 		{
 			TestTrue(TEXT("authority identity publishes the line presentation state"),
@@ -595,7 +552,7 @@ bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameter
 					TestTrue(TEXT("actual slack creates downward curvature"), Points[Points.Num() / 2].Z < -1.0);
 				}
 				const auto BeforeVisualMotion = RuntimeHook->GetPresentationState();
-				Rod->SetActorLocation(FVector(1000.0, 100.0, 200.0));
+				Rod->GetPhysicalRodBody()->SetWorldLocation(FVector(1000.0, 100.0, 200.0), false, nullptr, ETeleportType::TeleportPhysics);
 				WorldWrapper.TickTestWorld(1.0f / 30.0f);
 				TestEqual(TEXT("visual endpoint motion cannot change authoritative paid line"),
 					RuntimeHook->GetPresentationState().PaidOutLineLengthCentimeters, BeforeVisualMotion.PaidOutLineLengthCentimeters);

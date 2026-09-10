@@ -162,7 +162,7 @@ Root
 | `Cat Fishing Commit Failure Budget` | Task | ❌ 不用 |
 | `Cat Fishing Resolve Retry Exhausted Escape` | Task | ❌ 不用 |
 
-> `Cat Fishing Fight Exchange` 在当前 Runner 驱动的搏斗模型下不能用 —— 它的实现开头就检查 `FightRunner->IsRunning()`，运行中会直接拒绝。搏斗数值全在 `UCatFishingFightRunner` 里跑。
+> `Cat Fishing Fight Exchange` 在当前 Runner 驱动的搏斗模型下不能用 —— 保留反射身份仅供旧资产加载，执行始终返回 `FixedStepOwnsBilling`，不能形成第二套扣费入口。搏斗数值全在 `UCatFishingFightRunner` 里跑。
 
 C++ 实际只发这 5 个事件（头文件里声明了 16 个，其余 11 个**没有任何发送点**，别在资产里等它们）：
 
@@ -246,10 +246,10 @@ FishingSessionStateTree=/Game/Data/StateTrees/ST_FishingSession.ST_FishingSessio
 
 | 键 | InputAction | 用途 | 走哪条路 |
 |---|---|---|---|
-| **R** | `IA_PutDownFishingRod` | **鱼竿交互**：已在操作容器→离开 / 公共交互锚点附近且容器有容量→追加加入 / 否则→取出自己的竿并直接持握 | ✅ C++ 已实现，服务器按事实自动分派 |
+| **R** | `IA_PutDownFishingRod` | 取出自己的竿并成为主控；主控再次按下放竿。抓回本人竿后按R恢复主控 | C++ 按服务器事实分派 |
 | **E** | `IA_Interact` | 准星交互/拾取；本地只选择 Current Target，真正拾取由服务器复核距离、视线和物品状态 | ✅ C++ 已实现，走 Native InputTag 而不是 Gameplay Ability |
-| **左键** | `IA_LMB` | 无会话→**长按预览抛物线（不蓄力）松手抛竿**；真咬窗→**提竿**（1 秒内=完美）；遛鱼→**按住拖** | 提竿/拖 ✅ C++；**抛竿预览+提交走蓝图**（5.2） |
-| **右键** | `IA_RMB` | 遛鱼时**按住松开线杯**（鱼在 L_max 内自由带线，发力期喘气回体力 +1.5/s） | ✅ C++（`UCatGA_FishingSlack`） |
+| **左键** | `IA_LMB` | 空手/辅助：按住伸左爪抓握；主位：按住瞄准、松手抛竿，真咬窗提竿，遛鱼时按住收线 | 输入层按按下时身份固定接收方，正常松开回到原接收方 |
+| **右键** | `IA_RMB` | 空手/辅助：按住伸右爪抓握；主位：遛鱼时按住松开线杯 | 抓握或原 `UCatGA_FishingSlack` 路由 |
 | **Q** | `IA_BaitSpot` | **长按蓄力打窝**：抛物线越蓄越远，松手投出 | ✅ C++ 已接管提交；蓝图只保留可选预览 |
 | **F** | `IA_CatchFish` | 抢抄 | ✅ C++ |
 | **X** | `IA_CancelFishing` | 取消当前会话 | ✅ C++ |
@@ -287,7 +287,7 @@ Get Fishing Command Component      ← BlueprintPure，Controller 自己身上�
 
 ### 5.1 放竿 / 操作 / 离开 —— 已由 R 键 C++ 三态接管，**不用做蓝图**
 
-按 R 服务器自动分派 PlaceRod / OperateRod / LeaveRod。第一次 R 取出鱼竿后直接拿在手上，本人已占据主位；第二次 R 放下，第三次 R 拿起，后续循环。首次成功复制即为 `Held`，无需蓝图补发 OperateRod 或播放落地空竿过渡。取竿仍要求角色前方有坡度合法的实体地面，不要求靠近岸线；抛竿阶段仍受有效水域和射程限制。你只需要**接结果并缓存**：
+R负责取出本人鱼竿或放下当前主控竿，不加入别人会话。第一次R取竿后直接建立持握并成为唯一主控；再次R放下，不把旁人自动提升为主控。首次成功复制即为 `Held`，无需蓝图补发 OperateRod 或播放落地空竿过渡。取竿仍要求角色前方有坡度合法的实体地面，不要求靠近岸线；抛竿阶段仍受有效水域和射程限制。你只需要**接结果并缓存**：
 
 ```
 Get Fishing Command Component → Bind Event to On Result Received
@@ -302,11 +302,12 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 
 **常见失败原因**（放竿）：`InvalidPayload`=前方太斜/没实体地面；`DependencyUnavailable`=还没装配（5.4）。`InvalidWaterTarget/CastOutOfRange` 现在只属于抛竿阶段。
 
-多人占位口径：所有玩家从公共交互锚点按 R 加入，默认最多4人。`OperatorPlayerStates[0]` 是当前主位，负责抛竿、提竿、收放线与转向；辅助只提交移动。从入竿起就保留各人当下的相对站位并共同移动，不必等鱼上钩；一个人同样走组入口。没有Session、浮漂飞行、等待和咬钩窗口内，同向输入推动队伍，反向输入抵消，队员顶到障碍会限制整组水平移动；各人仍有正常重力和碰撞，不会被传送到固定编号的站位。
+多人协作：只有主控拥有收放线、转向和钓鱼会话。旁人按住左右键伸爪抓竿、猫或场景，再用WASD沿任意方向发力；没有按键加入、人数成员名单、辅助系数或自动接任。真实碰撞与抓握约束传递作用力，旁人抓两根竿也不串会话或转移物品归属。
 
-前战和搏斗复用同一个N人方向合力模型及主1/辅助默认0.5的系数，只读各人力量、当前体力和 `MaxFightStamina`；正体力完整出力、零体力不出力。前战只算移动，不扣搏斗体力。搏斗中移动与站定支撑共用预算，共同收线/转杆/持竿费用生成一次后按余额均分，个人移动费用本人支付；HUD显示各人当前/上限体力之和。质量仍来自各人基础力量与统一换算系数，鱼使用实际重量。公式、单位与本轮待验证状态统一见实现导读及 [架构2.0.4](FishingArchitecture_zh-CN.md#204-入竿即保持队形的影响与验证2026-09-08)。
+主控的钓鱼运动预算与费用由本人ASC承担；旁人保持普通身体运动，Session不汇总或扣他们的体力。HUD显示本人属性和手部状态；非主控不绑定鱼的会话UI。公式、单位及验证边界见 [正式接入审查](FishingArchitecture_zh-CN.md)。
 
-会话跟随鱼竿：主位按 R 离开、倒地、危险落水或断线时，最早仍可操作的成员接任；仅最后一人离开才进入无人值守 FreeSpool。接力保留同一个Runner、鱼、线、连续队形与原竿耐久，清除旧主控按键，新主位重新输入，不按压紧后的编号重新摆放角色。退出者恢复自由移动，加入带入本人当前体力、退出带走本人余额，不补满或转移。零体力仍可持有主控权，力量由有余额的队员提供。取消或完成一轮后，仍占着健康鱼竿的人继续保持队形共同移动；按R离竿才释放本人。鱼力竭仍继续同一场搏斗与队形，只停止鱼主动发力。
+主控放下进入现有无人值守处理，其他人的真实抓握继续保留。完成/取消一轮只清本场鱼载荷；破竿、收纳与销毁清相应约束。菜单/失焦清持续输入并取消未提交瞄准，不误抛竿。
+
 
 ---
 
@@ -384,22 +385,22 @@ Event BeginPlay
 |---|---|---|
 | 1 | PIE 启动 | `Event=run_started` 且 `Event=run_phase_entered ... Phase=DayActive` |
 | 2 | （自动）装配 | Equipment `Revision` 从 0 → 1，`RodDefinitionId = Rod_Basic` |
-| 3 | 在任意合法地面第一次按 R | 鱼竿直接拿在手上，`Pose=Held`、`OperatorPlayerStates.Num=1`；不吸附或传送角色，已进入单人组移动 |
-| 3.1 | 本人再按 R，然后再次按 R | 先放下为 `Grounded`，再拿起为 `Held`；仍是同一个 Actor 和装备实例 |
-| 4 | 主位仍有人时，第二个玩家走近同一个公共交互锚点按 R | 第二人追加为编号1；两端看到人数2，从加入当下位置保持相对站位；第三、第四人同规则 |
-| 4.1 | 编号0的玩家按R离开 | 原编号1接任主位，剩余角色不按新编号传送；离开者自由移动。已有会话继续，全部离开才无人值守 |
-| 4.2 | 抛投前让队员同向、反向移动，再让一人顶墙 | 尚无Session也整组移动；反向抵消，真墙限制共同位移，同组成员不会互相卡住；个人体力不产生搏斗扣费 |
-| 4.3 | 靠近队员入组，经过低台阶，再离组 | 同组不因胶囊接触自阻挡；可跨台阶由CMC正常迈上，坡面允许高度差；离组恢复本系统添加的碰撞关系，不传送修齐全员高度 |
-| 5 | 主位瞄水面按住再松开左键，队员继续移动 | `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去；飞行和等待期间保持组移动，不开启搏斗扣费 |
+| 3 | 在合法地面第一次按 R | 真实手部约束持竿，只有本人为主控；不传送角色 |
+| 3.1 | R放下后，走近按住鼠标键抓回本人原竿，再按R | 抓握先建立物理连接；原拥有者按R才恢复唯一主控，不转让物品归属 |
+| 4 | 第二个玩家走近，按住鼠标键抓竿或第一人 | 两端看到真实抓握；Session仍只有主控，旁人无收放线权限或钓鱼账单 |
+| 4.1 | 主控放下，旁人继续抓住竿 | 会话无人值守，旁人的抓握保留；不自动接任，不转让物品归属 |
+| 4.2 | 抛投前向同向、反向和侧向拉动，再让一人顶墙 | 力通过实际约束传递；碰撞与拉扯可改变站位，未连接的猫不会被整组锁住；不产生搏斗费用 |
+| 4.3 | 抓队友后松一只手、松双手；断开链条中间连接 | 剩余连接继续传力；断开的身体不再经此连接传力，不修改会话人数或权限 |
+| 5 | 主位瞄水面按住再松开左键，队员继续移动 | `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去；飞行和等待期间保持实际抓握，不开启搏斗扣费 |
 | 6 | 等浮漂落水 | Hook 的 `BP_OnHookPresentationChanged` 收到 `Phase=Landed` |
-| 7 | 等咬钩，窗口内尝试移动 | `Phase=Probe` → `Phase=TrueBiteWindow`；队形继续，尚不因进入咬钩窗口生成鱼或扣搏斗体力 |
-| 8 | 主位在3秒内按住左键 | 服务器选鱼并生成鱼Actor，进入 `Phase=HookedFight`；连续队形由现有搏斗计算接管 |
+| 7 | 等咬钩，窗口内尝试移动 | `Phase=Probe` → `Phase=TrueBiteWindow`；实际抓握继续，尚不因进入咬钩窗口生成鱼或扣搏斗体力 |
+| 8 | 主位在3秒内按住左键 | 服务器选鱼并生成鱼Actor，进入 `Phase=HookedFight`；鱼线从实际竿尖施力，经手部约束传到身体 |
 | 9 | 持续按住左键收线 | Snapshot 里 `NormalizedFishStamina` 下降 |
 | 10 | 鱼被收到面前（**搏斗中就可以**） | debug 里鱼身上的圈从红变绿 = 现在按 F 抄得到 |
 | 11 | 对着鱼按 F | 不论鱼剩余体力，范围合法即直接变成嘴叼世界鱼；失败按同一 `RequestId` 查看 `scoop_target_* → scoop_rejected → fishing_scoop_terminal → fishing_command_result` |
-| 12 | 或者等鱼翻肚 | `Phase=ExhaustedReel`；仍是同一场搏斗和队形，鱼停止主动发力；可按F抄或继续收线上岸，不出现短暂恢复前战移动的空档 |
+| 12 | 或者等鱼翻肚 | `Phase=ExhaustedReel`；仍是同一场搏斗与物理连接，鱼停止主动发力；可按F抄或继续收线上岸，身体不会被重新摆放 |
 | 13 | 鱼落到岸上后准星对准并按 E | 服务器只允许一个玩家成功叼起；随后再对具体地面鱼护按 E 才入箱 |
-| 14 | 完成或取消一轮后，仍占竿的队员继续移动，再按R离开 | 健康鱼竿上的剩余队员继续无载组移动且不扣搏斗体力；离开者立即恢复自由移动。再抛一轮时，旧Session销毁不应打断新场 |
+| 14 | 完成或取消一轮后，保持抓握继续移动，再松手离开；主位也可按R放下 | 原抓握继续传力且不扣搏斗体力；全部连接断开者恢复自由移动。再抛一轮时，旧Session销毁不应打断新场 |
 
 鱼生成时的大小由服务器随机重量决定：每个 `FishPresentation_*` 用自己的 `MeshReferenceWeightKilograms` 定义
 `Scale=1` 的参考重量，再按体积关系取立方根并裁在本鱼的 `Minimum/MaximumUniformScale`。水中鱼和岸上拾取鱼
@@ -409,7 +410,7 @@ Event BeginPlay
 
 **咬钩要等多久**：`BaseBiteRatePerSecond=0.2` + 泊松分布，clamp 在 `[2, 15]` 秒。嫌慢就把 ini 里 `BaseBiteRatePerSecond` 调大（比如 2.0）再重启。
 
-**日志过滤关键字**：`LogCatRun`、`LogCatFishing`、`LogCatEquipment`。多人差异先比较 `IsLocalController`、`NetMode`、`PawnLocation`；入组及前战移动看 `fishing_group_movement_binding` 的 `Unloaded`、`RosterVersion/ControlEpoch/MembershipEpoch`，异常看 `fishing_group_unloaded_solve_rejected`，旧场清理看 `fishing_fight_runner_stopped`。抄网站位再比较 `CenterWater*`、`FootWater*`、`GroundWater*` 的 `Error`、`Containment`、`VerticalDeltaCm` 与 `SignedShoreDistanceCm`。`FootWater`/`GroundWater` 是诊断对照，不代表当前服务器改成用脚底判定。
+**日志过滤关键字**：`LogCatPhysicsGrab`、`LogCatRun`、`LogCatFishing`、`LogCatEquipment`。多人差异先比较 `Authority/LocalRole`、`NetMode`、`PawnLocation`；连接看 `physics_grip_*` 的 `BodyId/GripId/Target`，主控看 `fishing_primary_released` 和命令回执的 `RodActorId/ControlEpoch`，实际鱼力看 `fishing_physical_line_load` 的 `SessionId/Step/ForceN`，旧场清理看 `fishing_fight_runner_stopped`。抄网站位再比较 `CenterWater*`、`FootWater*`、`GroundWater*` 的 `Error`、`Containment`、`VerticalDeltaCm` 与 `SignedShoreDistanceCm`；抄网仍保留原角色中心判定，Condition水深单独读取物理脚点。
 
 ---
 

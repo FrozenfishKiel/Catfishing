@@ -429,6 +429,7 @@ bool FCatPhysicsPrototypeJumpAnimationTest::RunTest(const FString& Parameters)
 			if (!bRejectedRepeat && Frame > 3)
 			{
 				const FVector Before = Pawn->GetVelocity();
+				AddExpectedMessage(TEXT("Event=physics_body_jump_rejected"), ELogVerbosity::Warning);
 				Pawn->RequestJump();
 				// Chaos consumes AddImpulse on the next physics step, so an immediate velocity read cannot prove rejection.
 				Scene.Step(1, Pawn);

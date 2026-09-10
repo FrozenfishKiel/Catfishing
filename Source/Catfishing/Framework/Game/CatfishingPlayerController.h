@@ -45,6 +45,7 @@ class CATFISHING_API ACatfishingPlayerController : public APlayerController
 {
 	GENERATED_BODY()
 	friend class FCatFishingSlackAimCommandRoutingTest;
+	friend class FCatPhysicalInputRouteTest;
 public:
 	/** 控制器接管 Pawn 后只做宿主级收口：重置临时钓鱼输入和疾跑状态；Ability ASC 路由统一由 SetPawn 写入点刷新。 */
 	virtual void OnPossess(APawn* InPawn) override;
@@ -54,6 +55,10 @@ public:
 	virtual void SetPawn(APawn* InPawn) override;
 	/** 消费本帧转杆鼠标增量，并让持竿身体跟随可见杆朝向；保留 PlayerController 的公开旋转入口。 */
 	virtual void UpdateRotation(float DeltaTime) override;
+	/** 菜单、失焦和 Pawn 切换只停止自主输入，外部拉力与已有物理速度继续生效。 */
+	void ClearPhysicalControlInput(FName Reason);
+	virtual void FlushPressedKeys() override;
+	virtual bool ShouldFlushKeysWhenViewportFocusChanges() const override { return true; }
 	/** 把客户端额度意图转发给 authority GameMode；身份由服务器 PlayerState 派生。 */
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitQuotaContribution(FGuid RequestId, int64 ExpectedRevision, int32 Contribution);
@@ -329,12 +334,7 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|Input")
 	TObjectPtr<UInputAction> SprintAction;
 
-	/** 未按疾跑键时 CharacterMovement 的最大地面移动速度。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|Input|Movement",
-		meta = (ClampMin = "0.0", UIMin = "0.0", Units = "cm/s"))
-	float WalkMaxSpeed = 100.0f;
-
-	/** 按住疾跑键时 CharacterMovement 的最大地面移动速度。 */
+	/** 按住疾跑键时物理电机的目标地面速度上限。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|Input|Movement",
 		meta = (ClampMin = "0.0", UIMin = "0.0", Units = "cm/s"))
 	float SprintMaxSpeed = 350.0f;
@@ -354,6 +354,7 @@ private:
 	void RemoveInputMappingContext();
 	/** 把二维输入写入 Controller 的 Yaw/Pitch。 */
 	void Look(const FInputActionValue& Value);
+	void StopMove();
 	/** 对当前已占有的 Character 停止跳跃。 */
 	void StopJump();
 	/** 本地 Started 输入开启疾跑，并把布尔意图可靠同步给 authority。 */
@@ -364,10 +365,8 @@ private:
 	void SetSprintRequested(bool bNewSprintRequested, bool bNotifyServer);
 	/** 把服务器配置的普通/疾跑速度应用到指定 Character；非 Character Pawn 安全跳过。 */
 	void ApplySprintSpeed(APawn* TargetPawn, bool bSprinting) const;
-	/** 从鱼竿权威或复制状态刷新身体朝向，不另存持竿业务状态。 */
-	void RefreshFishingFacingMode(float DeltaTime);
-	/** 离竿、换 Pawn 或控制器销毁时恢复原有身体转向配置。 */
-	void RestoreFishingFacingMode();
+	/** 将实际杆朝向或自由视角提交为物理电机意图，不直接写入身体旋转。 */
+	void RefreshPhysicalViewIntent();
 	/** 项目原生输入标签入口；处理交互这类非 Ability 动作，未知标签必须保持无副作用。 */
 	void NativeInputTagPressed(FGameplayTag InputTag);
 	/** 当 Pawn 或输入组件在 owning client 就绪时通知 LocalPlayer UI；服务器远端 Controller 和非 Cat UI World 安全跳过。 */
@@ -395,13 +394,6 @@ private:
 	/** 当前 Controller 的疾跑按键意图；客户端和 authority 分别维护，不作为远端动画事实复制。 */
 	UPROPERTY(Transient)
 	bool bSprintRequested = false;
-
-	/** 持竿期间暂时改变了转向配置的身体；持竿事实仍由鱼竿提供。 */
-	UPROPERTY(Transient)
-	TWeakObjectPtr<ACharacter> FishingFacingCharacter;
-	bool bSavedUseControllerRotationYaw = false;
-	bool bSavedOrientRotationToMovement = false;
-	bool bSavedUseControllerDesiredRotation = false;
 
 	/** 当前 Controller 的 Ability 输入绑定子对象；它拥有 ASC 输入路由状态，Controller 只把 Pawn/输入生命周期转交给它。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Input", meta = (AllowPrivateAccess = "true"))

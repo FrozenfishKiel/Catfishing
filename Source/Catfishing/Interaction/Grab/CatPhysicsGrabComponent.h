@@ -7,6 +7,7 @@
 class UPrimitiveComponent;
 class USphereComponent;
 class UPhysicsConstraintComponent;
+class UCatPhysicsGrabComponent;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogCatPhysicsGrab, Log, All);
 
@@ -17,15 +18,21 @@ struct FCatPhysicsGripState
 	GENERATED_BODY()
 	UPROPERTY(BlueprintReadOnly) bool bReaching = false;
 	UPROPERTY(BlueprintReadOnly) bool bGripped = false;
+	/** Authority has adopted this exact grip; a later mouse release cannot cancel that ownership. */
+	UPROPERTY(BlueprintReadOnly) bool bExplicitHold = false;
 	UPROPERTY(BlueprintReadOnly) FGuid GripId;
 	UPROPERTY() uint32 Revision = 0;
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<AActor> TargetActor = nullptr;
 	UPROPERTY(BlueprintReadOnly) FName TargetComponentName;
 	UPROPERTY(BlueprintReadOnly) FName TargetBone;
 	UPROPERTY(BlueprintReadOnly) FVector TargetLocalPoint = FVector::ZeroVector;
+	/** Shoulder-to-hand distance captured at contact, in world cm; zero outside this grip. */
+	UPROPERTY(BlueprintReadOnly) double HeldReachDistanceCm = 0.0;
 };
 
-/** Prototype two-hand physical contacts. Only authority creates joints or changes bodies. */
+DECLARE_MULTICAST_DELEGATE_FourParams(FCatPhysicalGripChanged, UCatPhysicsGrabComponent*, bool, const FCatPhysicsGripState&, const FCatPhysicsGripState&);
+
+/** Shared two-hand physical contacts. Only authority creates joints or changes bodies. */
 UCLASS(ClassGroup=(Catfishing), meta=(BlueprintSpawnableComponent))
 class CATFISHING_API UCatPhysicsGrabComponent : public UActorComponent
 {
@@ -33,8 +40,16 @@ class CATFISHING_API UCatPhysicsGrabComponent : public UActorComponent
 public:
 	UCatPhysicsGrabComponent();
 	void InitializeHands(UPrimitiveComponent* InBody, USphereComponent* InLeft, USphereComponent* InRight,
-		UPhysicsConstraintComponent* InLeftArm, UPhysicsConstraintComponent* InRightArm);
+		UPhysicsConstraintComponent* InLeftArm, UPhysicsConstraintComponent* InRightArm, double InGeometryScale = 1.0);
 	void SetGrabInput(bool bLeft, bool bHeld);
+	/** Authority calls the same validation and constraint path for an explicitly positioned held prop. */
+	bool GripFromAuthority(bool bLeft, UPrimitiveComponent* Target, const FVector& WorldPoint);
+	/** Transfers an existing contact to an explicit authority hold without rebuilding its joint. */
+	bool RetainGripFromAuthority(bool bLeft, UPrimitiveComponent* ExpectedTarget);
+	void ReleaseHandFromAuthority(bool bLeft, FName Reason);
+	UPrimitiveComponent* GetGripTargetComponent(bool bLeft) const;
+	/** Authority only; observers must not assume the previous target survives destruction. */
+	FCatPhysicalGripChanged OnGripChanged;
 	void ReleaseAllFromAuthority(FName Reason);
 	void ReleaseTargetFromAuthority(AActor* Target, FName Reason);
 	void BeginInputEpochFromAuthority();
@@ -44,6 +59,8 @@ public:
 	uint32 GetGripRevision(bool bLeft) const { return GetGripState(bLeft).Revision; }
 	FVector GetGripWorldLocation(bool bLeft) const;
 	const FCatPhysicsGripState& GetGripState(bool bLeft) const { return bLeft ? LeftGrip : RightGrip; }
+	FVector GetShoulderWorldLocation(bool bLeft) const;
+	double GetReachLengthCm() const;
 	static FVector ShoulderLocal(bool bLeft) { return FVector(10.2, bLeft ? -3.4 : 3.4, -0.8); }
 	static FVector RestHandLocal(bool bLeft) { return FVector(5.2, bLeft ? -2.3 : 2.3, -18.3); }
 	static constexpr double ReachLengthCm = 18.0;
@@ -71,5 +88,6 @@ private:
 	uint32 LocalSequence[2] = {0, 0};
 	uint32 AcceptedSequence[2] = {0, 0};
 	uint32 ObservedRevision[2] = {0, 0};
+	double GeometryScale = 1.0;
 	bool bLatchedUntilRelease[2] = {false, false};
 };

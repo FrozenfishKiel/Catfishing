@@ -45,24 +45,23 @@
 
 | 编辑器字段 | C++ 字段 | 当前值 | 含义 |
 |---|---|---:|---|
-| 每公斤力量 | StrengthPerKilogram | 10 | 冻结实际鱼重→鱼力量；猫系统质量独立配置，不随力量成长 |
+| 每公斤力量 | StrengthPerKilogram | 10 | 冻结实际鱼重→鱼力量；猫端质量读取真实身体刚体，不随力量成长 |
 | 每点力量推力 | ForcePerStrengthNewtons | 默认 1 N/力量 | 正常满力推力基准；鱼实际主动推力再乘连续出力 u，质量另参与积分 |
-| 单猫系统质量 | CatBodyMassKilograms | 默认 5 kg | 按实际参与的猫组合系统质量，与鱼力量和成长独立 |
 | 旧每点力量加速度 | AccelerationPerStrength | 仅旧载荷 | 已停用，不能拿旧 5 cm/s² 数值套用新牛顿换算 |
-| 旧猫端驱动力响应时间 | DriveResponseSeconds | 仅旧载荷 | 当前使用共同张力和质量积分，不参与运行 |
+| 旧猫端驱动力响应时间 | DriveResponseSeconds | 仅旧载荷 | 正式DA仍序列化该字段；真实竿端响应由约束及刚体观测提供，此字段不参与运行 |
 | 收线速度 | ReelSpeedCentimetersPerSecond | 80 cm/s | 左键收线意图速度上限 |
-| 猫力竭后鱼外冲速度倍率 | ExhaustedCatEscapeSpeedMultiplier | 2 | 主位体力为零且没有助手实际出力时，按人格满出力参考游速乘此倍率持续外冲；有限值且至少为 1 |
+| 猫力竭后鱼外冲速度倍率 | ExhaustedCatEscapeSpeedMultiplier | 2 | 主控仍持竿且体力为零、鱼未力竭时，按人格满出力参考游速乘此倍率持续外冲；辅助玩家通过真实约束抵抗，不以会话身份开关外冲；有限值且至少为 1 |
 | 猫做功体力消耗系数 | CatStaminaCostPerStrengthCentimeter | 默认 0.002 | 猫移动/收线每标准力量·cm 已完成正功的单价 |
 | 猫转杆每标准转矩弧度体力系数 | CatRodStaminaCostPerStrengthRadian | 默认 0.03 | 真实转角按主位主动转矩比例加权后计价，不使用最大转速虚拟弧长 |
 | 猫无负载动作成本倍率 | CatUnloadedWorkMultiplier | 默认 0.15 | 猫实际做功的基础价格，与负载价格相加 |
-| 猫满用力每秒支撑耗体 | CatSupportStaminaPerSecond | 默认 2/s | 支撑按用力/负载比例平方和持续时间结算；共享支撑与转杆支撑取较高者 |
+| 猫满用力每秒支撑耗体 | CatSupportStaminaPerSecond | 默认 2/s | 主控本人支撑按用力/负载比例平方和持续时间结算；本人沿线支撑与转杆支撑取较高者，不向辅助玩家分摊 |
 | 鱼每米未完成意图耗体 | FishStaminaPerUnfulfilledMeter | 新原生默认 5/3 点/m（约 1.666667） | 沿本步鱼主动朝向，将期望位移减去最终实际位移的投影，负值取 0；厘米转米后乘本价格，不再乘 u²、鱼线夹角或张力比例 |
 | 旧鱼每秒对抗耗体 | FishEffortStaminaPerSecond | 仅旧载荷，旧默认 3 点/s | 已标 Deprecated，不参与费用或运行校验，不换算为新每米价格；全 Content/外部 Blueprint 字段消费者未完成审计前保留反射身份 |
 | 旧鱼每厘米体力价格 | FishStaminaCostPerStrengthCentimeter | 仅旧载荷 | 不再运行，旧力量乘厘米单价不得直接作为新意图缺失位移单价 |
 | 猫移动体力倍率 | CatMovementStaminaMultiplier | 默认 1 | 绷线时主动远离鱼的身体移动费用；被动位移不计 |
 | 猫收线体力倍率 | CatReelStaminaMultiplier | 默认 1 | 原求解器本步卷线量的正功费用 |
 | 猫转杆体力倍率 | CatRodStaminaMultiplier | 默认 1 | 主位实际转杆正功及其时间支撑的倍率 |
-| 猫持竿体力倍率 | CatHoldStaminaMultiplier | 默认 1 | 共享沿线支撑费用倍率；实际做功费用不再抵扣支撑 |
+| 猫持竿体力倍率 | CatHoldStaminaMultiplier | 默认 1 | 主控本人沿线支撑费用倍率；实际做功费用不再抵扣支撑 |
 | 猫负载体力倍率 | CatLoadStaminaMultiplier | 默认 1 | 猫实际做功乘 `(无负载动作倍率 + 自身归一化负载 × 本倍率)` |
 | 旧鱼负载体力倍率 | FishLoadStaminaMultiplier | 仅旧载荷 | 不再叠加鱼费用；关闭鱼耗体改设 FishStaminaPerUnfulfilledMeter=0 |
 | 旧鱼受阻努力折算倍率 | IsometricEffortMultiplier | 仅旧载荷 | 不参与当前意图缺失位移计算，不把旧等效努力倍率叠加到新每米价格 |
@@ -75,7 +74,7 @@
 | 僵持鱼竿磨损系数 | StalemateRodWearPerFishStrength | 0.1 | 按鱼沿线向外负载连续缩放的鱼竿磨损，写回同一装备实例；几何张力不能替代方向负载 |
 | 持竿最低杠杆倍率 | HeldRodMinimumLeverageMultiplier | 0.4 | 竿身偏线时保留的最低有效力量 |
 | 最大约束修正速度 | MaximumFishConstraintCorrectionSpeedCentimetersPerSecond | 160 cm/s | 鱼端修正及猫端牵引目标的安全上限 |
-| 旧背离鱼方向最低速度倍率 | MinimumCarrierAwaySpeedMultiplier | 仅旧载荷 | CMC 现按共同张力/支撑积分，不再硬乘后退速度 |
+| 旧背离鱼方向最低速度倍率 | MinimumCarrierAwaySpeedMultiplier | 仅旧载荷 | 正式DA仍序列化该字段；身体由真实物理与约束推进，此值不参与速度计算，迁移DA前保留加载身份 |
 
 `DefaultGame.ini` 只保存 `FightBalanceDefinition` 资产引用，不再保存上述数值；C++ 也不提供可偷偷生效的第二套回退。资产缺失、未勾“启用正式运行”或任一现行字段非法时，Fishing runtime 保持 fail-closed。
 
