@@ -5,7 +5,21 @@
 #include "Editor.h"
 #include "Engine/Engine.h"
 #include "Engine/LocalPlayer.h"
+#include "Engine/GameViewportClient.h"
 #include "EngineUtils.h"
+#include "Blueprint/WidgetBlueprintLibrary.h"
+#include "Components/Button.h"
+#include "Components/TextBlock.h"
+#include "Components/WrapBox.h"
+#include "Framework/Application/SlateApplication.h"
+#include "GameFramework/CharacterMovementComponent.h"
+#include "HAL/FileManager.h"
+#include "ImageUtils.h"
+#include "Input/Events.h"
+#include "Misc/FileHelper.h"
+#include "Misc/Paths.h"
+#include "Widgets/SViewport.h"
+#include "Widgets/SWindow.h"
 #include "Settings/LevelEditorPlaySettings.h"
 #include "AbilitySystem/Attributes/CatEconomyAttributeSet.h"
 #include "Camp/CatCampSettings.h"
@@ -21,6 +35,10 @@
 #include "Inventory/CatFishOnlyInventoryComponent.h"
 #include "Inventory/CatInventoryAccessRules.h"
 #include "ShopEconomy/CatFishBuyerActor.h"
+#include "UI/CatLocalPlayerUISubsystem.h"
+#include "UI/Inventory/CatFishGuardInventoryWidget.h"
+#include "UI/Inventory/CatInventoryModel.h"
+#include "UI/InventorySlot/CatInventorySlotWidget.h"
 
 namespace CatFishSaleNetwork
 {
@@ -28,7 +46,7 @@ namespace CatFishSaleNetwork
 	class FRestoreSettings final : public IAutomationLatentCommand
 	{
 	public:
-		/** 在任何改写之前读取网络模式、端数、进程选择和驱动定义，作为结束阶段的恢复来源。 */
+		/** 在任何改写之前读取网络模式、端数、进程选择、驱动定义和光标位置，作为结束阶段的恢复来源。 */
 		FRestoreSettings()
 		{
 			const ULevelEditorPlaySettings* Settings = GetDefault<ULevelEditorPlaySettings>();
@@ -36,9 +54,10 @@ namespace CatFishSaleNetwork
 			Settings->GetPlayNumberOfClients(ClientCount);
 			Settings->GetRunUnderOneProcess(bOneProcess);
 			NetDrivers = GEngine->NetDriverDefinitions;
+			CursorPosition = FSlateApplication::Get().GetCursorPos();
 		}
 
-		/** 先等所有 PIE 世界消失，再写回共享默认设置和驱动表，避免结束流程覆盖恢复结果。 */
+		/** 先等所有 PIE 世界消失，再写回共享默认设置、驱动表和点击前光标位置，避免结束流程覆盖恢复结果。 */
 		bool Update() override
 		{
 			for (const FWorldContext& Context : GEngine->GetWorldContexts())
@@ -50,6 +69,7 @@ namespace CatFishSaleNetwork
 			Settings->SetPlayNumberOfClients(ClientCount);
 			Settings->SetRunUnderOneProcess(bOneProcess);
 			GEngine->NetDriverDefinitions = NetDrivers;
+			FSlateApplication::Get().SetCursorPos(CursorPosition);
 			return true;
 		}
 
@@ -62,6 +82,8 @@ namespace CatFishSaleNetwork
 		bool bOneProcess = true;
 		/** 原网络驱动表；测试结束整体写回，保留用户原有在线驱动及 fallback。 */
 		TArray<FNetDriverDefinition> NetDrivers;
+		/** 测试前桌面光标位置；实际按钮点击会移动它，PIE 结束后恢复。 */
+		FVector2D CursorPosition = FVector2D::ZeroVector;
 	};
 
 	/** 正式 TestMap 的售鱼 RPC 回归；在真实准入和 GAS 下观察双端结果，不替代交易、角色或 GameMode。 */
@@ -71,16 +93,19 @@ namespace CatFishSaleNetwork
 		/** 保存框架拥有的断言接收者；PIE 尚未启动，不在构造时占用网络等待预算。 */
 		explicit FVerifyFishSale(FAutomationTestBase* InTest) : Test(InTest) {}
 
-		/** 成功、失败和超时均销毁本用例创建的两件服务器 Actor；其余世界状态由随后排队的 EndPIE 清理。 */
+		/** 成功、失败和超时均先经正式入口关闭双方页面以恢复输入，再销毁夹具 Actor；其余世界状态交给 EndPIE 清理。 */
 		~FVerifyFishSale() override
 		{
+			if (HostView.IsValid()) HostView->RequestCloseInventory();
+			if (ClientView.IsValid()) ClientView->RequestCloseInventory();
 			if (ServerGuard.IsValid()) ServerGuard->Destroy();
 			if (ServerBuyer.IsValid()) ServerBuyer->Destroy();
 		}
 
 		/** 按真实异步链逐步推进：
 		 * 1. 等待正式身份和玩法门，创建近距蓝图并在原鱼护装入两条冻结重量鱼。
-		 * 2. 等客户端读到完整实例后提交 GUID 列表，收到成功回执并确认双端库存清空、余额增加 96。
+		 * 2. 等客户端读到完整实例后打开双方正式 WBP，选首鱼、核对 48/96 报价并截图；客户端实际点击全部出售，
+		 *    从新回执捕获 WBP 生成的请求 ID，再确认双端库存清空、余额增加 96。
 		 * 3. 重发同一请求，必须收到终态重放回执且双端金额不再增加，然后在同一鱼护装入第二对鱼。
 		 * 4. 冻结客户端第二份列表，服务器移走第二条后提交旧列表，检查 NotFound 且第一条原格原实例仍在。
 		 * 任一前提失败立即报告；复制未收敛继续等待，超时报告所在阶段，不把静止余额当作请求完成。 */
@@ -99,6 +124,7 @@ namespace CatFishSaleNetwork
 				Test->AddError(TEXT("Formal fish sale lost a required PIE world, player or spawned actor."));
 				return true;
 			}
+			if (Stage >= 6 && Stage <= 8) return VerifyFormalWidgets();
 
 			if (Stage == 1 || Stage == 4)
 			{
@@ -116,6 +142,11 @@ namespace CatFishSaleNetwork
 				if (!Test->TestTrue(TEXT("real gameplay gate, standing character and server reachability remain valid"), CanSubmit())
 					|| !Test->TestTrue(TEXT("replicated buyer can serve this local client and ground guard"),
 						ClientBuyer->CanServeSource(ClientController.Get(), ClientGuard.Get()))) return true;
+				if (Stage == 1)
+				{
+					Stage = 6;
+					return false;
+				}
 
 				// 载荷取自客户端实际复制条目；第二轮保持第一条有效、第二条缺失，才能发现边遍历边扣鱼的部分提交。
 				SubmittedIds.Reset();
@@ -137,7 +168,7 @@ namespace CatFishSaleNetwork
 						|| !Test->TestTrue(TEXT("removed fish is exactly the second frozen GUID"),
 							Removed.Instance && Removed.Instance->GetItemInstanceId() == SubmittedIds[1])) return true;
 				}
-				ClientController->ServerSellFishBatch(Stage == 1 ? SaleRequestId : StaleRequestId,
+				ClientController->ServerSellFishBatch(StaleRequestId,
 					ClientBuyer.Get(), ClientGuard.Get(), SubmittedIds);
 				++Stage;
 				return false;
@@ -147,11 +178,18 @@ namespace CatFishSaleNetwork
 			if (Stage == 2)
 			{
 				WaitingFor = TEXT("first successful RPC receipt, empty original guard and +96 GAS balance on both peers");
+				// 本阶段唯一新命令来自刚才的实际按钮点击；忽略点击前的旧回执，不读取或改写 WBP 的受保护 pending 字段。
+				if (!SaleRequestId.IsValid())
+				{
+					if (!Result.RequestId.IsValid() || Result.RequestId == ReceiptBeforeClick) return false;
+					SaleRequestId = Result.RequestId;
+				}
 				if (Result.RequestId != SaleRequestId) return false;
 				if (!Test->TestTrue(TEXT("first sale commits successfully through owning-client receipt"),
 					Result.bCommitted && !Result.bTerminalReplay && Result.Error == ECatDomainCommandError::None)) return true;
 				if (!BothSidesMatch({}, InitialBalance + 96.0f)) return false;
-				ClientController->ServerSellFishBatch(SaleRequestId, ClientBuyer.Get(), ClientGuard.Get(), SubmittedIds);
+				if (!Test->TestTrue(TEXT("button-selected buyer still exists for identical replay payload"), SaleBuyer.IsValid())) return true;
+				ClientController->ServerSellFishBatch(SaleRequestId, SaleBuyer.Get(), ClientGuard.Get(), SubmittedIds);
 				Stage = 3;
 				return false;
 			}
@@ -179,7 +217,7 @@ namespace CatFishSaleNetwork
 				const FCatInventoryEntry* Remaining = ServerGuard->GetFishInventoryComponent()->GetInventoryEntryAtSlot(SurvivorSlot);
 				if (!Test->TestTrue(TEXT("rejected batch preserves the other fish's original slot, instance and quantity"),
 					Survivor.IsValid() && Remaining && Remaining->Instance == Survivor.Get() && Remaining->StackCount == 1)) return true;
-				Test->AddInfo(TEXT("Event=formal_fish_sale_network Result=Batch96Replicated_ReplayUnchanged_StaleBatchRejected UI=NotCovered"));
+				Test->AddInfo(TEXT("Event=formal_fish_sale_network Result=Batch96Replicated_ReplayUnchanged_StaleBatchRejected UI=TwoFormalViews_Quotes48And96_SlateSellAllClick RangeRoundTrip=NotCovered"));
 				return true;
 			}
 			Test->AddError(TEXT("Formal fish sale reached an unknown stage."));
@@ -187,6 +225,139 @@ namespace CatFishSaleNetwork
 		}
 
 	private:
+		/** 在指定玩家已入视口的正式鱼护 WBP 中按库存上下文查找页面；不创建替代控件，也不选择嵌套背包。 */
+		static UCatFishGuardInventoryWidget* FindFormalView(APlayerController* Player, UCatInventoryComponent* Inventory)
+		{
+			TArray<UUserWidget*> Widgets;
+			UWidgetBlueprintLibrary::GetAllWidgetsOfClass(Player, Widgets, UCatFishGuardInventoryWidget::StaticClass(), true);
+			for (UUserWidget* Widget : Widgets)
+			{
+				UCatFishGuardInventoryWidget* View = Cast<UCatFishGuardInventoryWidget>(Widget);
+				if (View && View->GetOwningPlayer() == Player && View->IsInViewport()
+					&& View->GetInventoryContext() == Inventory
+					&& View->GetClass()->GetPathName() == TEXT("/Game/UI/Inventory/WBP_CatFishGuardInventory.WBP_CatFishGuardInventory_C")) return View;
+			}
+			return nullptr;
+		}
+
+		/** 首售前的正式 UI 流程：
+		 * 1. 在服务器把房主本地角色移到同一鱼护附近，再由双方各自 LocalPlayer 打开正式 WBP，保持远端角色与玩法门不变。
+		 * 2. 等两个页面及首鱼格完成实际布局，经格子 Slate 松键入口选择首鱼；下一帧读取绑定报价、显隐和启用状态。
+		 * 3. 保存双方真实玩家视口，按客户端 Model 原序冻结整批 GUID 和当前可用买家，再经 Slate 路由真实鼠标点击。
+		 * 4. 点击后进入原回执阶段，绝不从这里直接调用售鱼 RPC；依赖未到继续等待，断言失败交给统一析构清理。 */
+		bool VerifyFormalWidgets()
+		{
+			if (Stage == 6)
+			{
+				WaitingFor = TEXT("both LocalPlayer UI subsystems and formal guard inventory WBP");
+				HostController = Cast<ACatfishingPlayerController>(ServerWorld->GetFirstPlayerController());
+				ACatCharacter* HostCharacter = HostController.IsValid() ? Cast<ACatCharacter>(HostController->GetPawn()) : nullptr;
+				ACatCharacter* RemoteCharacter = Cast<ACatCharacter>(ServerController->GetPawn());
+				if (!HostCharacter || !RemoteCharacter || !HostController->GetLocalPlayer() || !ClientController->GetLocalPlayer()) return false;
+				UCatLocalPlayerUISubsystem* HostUI = HostController->GetLocalPlayer()->GetSubsystem<UCatLocalPlayerUISubsystem>();
+				UCatLocalPlayerUISubsystem* ClientUI = ClientController->GetLocalPlayer()->GetSubsystem<UCatLocalPlayerUISubsystem>();
+				if (!HostUI || !ClientUI) return false;
+				UClass* ViewClass = LoadClass<UCatFishGuardInventoryWidget>(nullptr,
+					TEXT("/Game/UI/Inventory/WBP_CatFishGuardInventory.WBP_CatFishGuardInventory_C"));
+				if (!Test->TestNotNull(TEXT("formal fish guard WBP class loads"), ViewClass)) return true;
+				// 房主 Pawn 在 authority 本地控制，不涉及远端 CMC 纠正；只调整空间夹具，仍由正式买家规则判定其报价资格。
+				HostCharacter->GetCharacterMovement()->StopMovementImmediately();
+				HostCharacter->SetActorLocation(RemoteCharacter->GetActorLocation() - RemoteCharacter->GetActorRightVector() * 100.0,
+					false, nullptr, ETeleportType::TeleportPhysics);
+				HostCharacter->ForceNetUpdate();
+				if (!Test->TestTrue(TEXT("host can reach the formal buyer and original guard"), ServerBuyer->CanServeSource(HostController.Get(), ServerGuard.Get()))) return true;
+				const bool bHostOpened = HostUI->OpenInventory(ServerGuard->GetFishInventoryComponent(), ViewClass);
+				HostView = FindFormalView(HostController.Get(), ServerGuard->GetFishInventoryComponent());
+				const bool bClientOpened = ClientUI->OpenInventory(ClientGuard->GetFishInventoryComponent(), ViewClass);
+				ClientView = FindFormalView(ClientController.Get(), ClientGuard->GetFishInventoryComponent());
+				if (!Test->TestTrue(TEXT("both local players open their own formal guard WBP"), bHostOpened && bClientOpened)) return true;
+				Stage = 7;
+				return false;
+			}
+
+			WaitingFor = Stage == 7 ? TEXT("both formal guard views and first fish slots laid out")
+				: TEXT("both formal WBP quotes 48/96 and visible enabled sale controls");
+			HostView = FindFormalView(HostController.Get(), ServerGuard->GetFishInventoryComponent());
+			ClientView = FindFormalView(ClientController.Get(), ClientGuard->GetFishInventoryComponent());
+			if (!HostView.IsValid() || !ClientView.IsValid()) return false;
+			for (UCatFishGuardInventoryWidget* View : { HostView.Get(), ClientView.Get() })
+			{
+				if (View->GetCachedGeometry().GetLocalSize().GetMin() <= 0.0) return false;
+				if (Stage == 7)
+				{
+					UWrapBox* Slots = Cast<UWrapBox>(View->GetWidgetFromName(TEXT("InventorySlotWrapBox")));
+					const int32 SlotIndex = View->GetInventoryContext()->FindInventorySlotIndexFromInstanceId(PairIds[0]);
+					UCatInventorySlotWidget* Slot = Slots && SlotIndex != INDEX_NONE ? Cast<UCatInventorySlotWidget>(Slots->GetChildAt(SlotIndex)) : nullptr;
+					if (!Slot || Slot->GetCachedGeometry().GetLocalSize().GetMin() <= 0.0
+						|| !Slot->GetInventoryEntry().Instance || Slot->GetInventoryEntry().Instance->GetItemInstanceId() != PairIds[0]) return false;
+					const FPointerEvent Released(0, FVector2D::ZeroVector, FVector2D::ZeroVector, TSet<FKey>(), EKeys::LeftMouseButton, 0.0f, FModifierKeysState());
+					Slot->TakeWidget()->OnMouseButtonUp(Slot->GetCachedGeometry(), Released);
+					continue;
+				}
+				UTextBlock* SelectedPrice = Cast<UTextBlock>(View->GetWidgetFromName(TEXT("SellFishPriceText")));
+				UTextBlock* AllPrice = Cast<UTextBlock>(View->GetWidgetFromName(TEXT("SellAllFishPriceText")));
+				UButton* SelectedButton = Cast<UButton>(View->GetWidgetFromName(TEXT("SellFishButton")));
+				UButton* AllButton = Cast<UButton>(View->GetWidgetFromName(TEXT("SellAllFishButton")));
+				UWidget* Panel = View->GetWidgetFromName(TEXT("SellActionsPanel"));
+				if (!Test->TestTrue(TEXT("formal WBP binds both sale buttons, price labels and action panel"),
+					SelectedPrice && AllPrice && SelectedButton && AllButton && Panel)) return true;
+				if (!SelectedPrice->GetText().EqualTo(FText::AsNumber(48)) || !AllPrice->GetText().EqualTo(FText::AsNumber(96))
+					|| Panel->GetVisibility() != ESlateVisibility::Visible
+					|| SelectedPrice->GetVisibility() != ESlateVisibility::Visible || AllPrice->GetVisibility() != ESlateVisibility::Visible
+					|| SelectedButton->GetVisibility() != ESlateVisibility::Visible || AllButton->GetVisibility() != ESlateVisibility::Visible
+					|| !SelectedButton->GetIsEnabled() || !AllButton->GetIsEnabled()
+					|| SelectedButton->GetCachedGeometry().GetLocalSize().GetMin() <= 0.0
+					|| AllButton->GetCachedGeometry().GetLocalSize().GetMin() <= 0.0) return false;
+			}
+			if (Stage == 7) { Stage = 8; return false; }
+
+			const FString Directory = FPaths::ProjectSavedDir() / TEXT("Automation/FishSaleWorldActions");
+			if (!Test->TestTrue(TEXT("fish sale screenshot directory is available"), IFileManager::Get().MakeDirectory(*Directory, true))) return true;
+			for (ACatfishingPlayerController* Player : { HostController.Get(), ClientController.Get() })
+			{
+				UGameViewportClient* Viewport = Player->GetLocalPlayer()->ViewportClient;
+				TSharedPtr<SViewport> SlateViewport = Viewport ? Viewport->GetGameViewportWidget() : nullptr;
+				TArray<FColor> Pixels;
+				FIntVector Size = FIntVector::ZeroValue;
+				if (!Test->TestTrue(TEXT("real fish sale player viewport screenshot can be read"), SlateViewport.IsValid()
+					&& FSlateApplication::Get().TakeScreenshot(SlateViewport.ToSharedRef(), Pixels, Size)
+					&& Size.X > 0 && Size.Y > 0 && Pixels.Num() == Size.X * Size.Y)) return true;
+				TArray64<uint8> PNG;
+				FImageUtils::PNGCompressImageArray(Size.X, Size.Y, Pixels, PNG);
+				const FString Path = Directory / (Player == HostController.Get() ? TEXT("HostFishSale.png") : TEXT("ClientFishSale.png"));
+				if (!Test->TestTrue(TEXT("formal fish sale player viewport screenshot is saved"), FFileHelper::SaveArrayToFile(PNG, *Path))) return true;
+			}
+
+			// 全部出售按 Model 原序收集 ID；重放必须连买家选择与顺序都一致，不能用服务器播种顺序代替控件实际载荷。
+			SubmittedIds.Reset();
+			for (const FCatInventoryEntry& Entry : ClientGuard->GetFishInventoryComponent()->GetInventoryModel()->GetInventoryList())
+			{
+				if (Entry.Instance && Entry.StackCount == 1) SubmittedIds.AddUnique(Entry.Instance->GetItemInstanceId());
+			}
+			SaleBuyer = ACatFishBuyerActor::FindAvailableBuyer(ClientController.Get(), ClientGuard.Get());
+			if (!Test->TestTrue(TEXT("button payload still contains exactly both original fish and a reachable buyer"),
+				SubmittedIds.Num() == 2 && SubmittedIds.Contains(PairIds[0]) && SubmittedIds.Contains(PairIds[1])
+				&& SaleBuyer.IsValid() && CanSubmit())) return true;
+			UButton* Button = Cast<UButton>(ClientView->GetWidgetFromName(TEXT("SellAllFishButton")));
+			const TSharedPtr<SWindow> Window = FSlateApplication::Get().FindWidgetWindow(Button->TakeWidget());
+			if (!Test->TestTrue(TEXT("formal client sell-all button belongs to a native viewport window"), Window.IsValid())) return true;
+			ReceiptBeforeClick = ClientController->GetLastCampCommandResult().RequestId;
+			Window->BringToFront(true);
+			const FVector2D Center = Button->GetCachedGeometry().LocalToAbsolute(Button->GetCachedGeometry().GetLocalSize() * 0.5f);
+			const FVector2D Previous = FSlateApplication::Get().GetCursorPos();
+			FSlateApplication::Get().SetCursorPos(Center);
+			const FPointerEvent Move(0, Center, Previous, TSet<FKey>(), EKeys::Invalid, 0.0f, FModifierKeysState());
+			FSlateApplication::Get().ProcessMouseMoveEvent(Move);
+			const FPointerEvent Down(0, Center, Center, TSet<FKey>{ EKeys::LeftMouseButton }, EKeys::LeftMouseButton, 0.0f, FModifierKeysState());
+			const FPointerEvent Up(0, Center, Center, TSet<FKey>(), EKeys::LeftMouseButton, 0.0f, FModifierKeysState());
+			// 让 Slate 完整处理命中、捕获与释放；直接广播 OnClicked 无法证明用户能点到正式按钮。
+			const bool bDownHandled = FSlateApplication::Get().ProcessMouseButtonDownEvent(Window->GetNativeWindow(), Down);
+			const bool bUpHandled = FSlateApplication::Get().ProcessMouseButtonUpEvent(Up);
+			if (!Test->TestTrue(TEXT("actual Slate sell-all mouse click is handled"), bDownHandled && bUpHandled)) return true;
+			Stage = 2;
+			return false;
+		}
+
 		/** 查找真实 listen server 和唯一客户端，按继承 UniqueId 匹配权威 PC；
 		 * 等正式 GameMode 开门后读取初始 GAS 余额，在角色近处生成正式鱼护和买家，再为原鱼护播种。
 		 * 未完成登录或启动时继续等，资产、生成或空间前提失败则报告并结束，不写身份或 Run 状态。 */
@@ -282,7 +453,7 @@ namespace CatFishSaleNetwork
 			return true;
 		}
 
-		/** 从指定鱼护的实际组件读取所有格子，核对唯一 GUID、正式库存定义 Fish_RiverPattern、数量和冻结重量；
+		/** 从指定鱼护的实际组件读取所有格子，核对唯一 GUID、正式库存定义 RiverPatternFish、数量和冻结重量；
 		 * 库存 ID 来自鱼定义的 GetInventoryDefinitionId/FishDefinitionId，不使用表现字段 FishId。
 		 * 空目标要求没有任何剩余实物，实例尚未复制完整时返回 false，让调用方继续等待。 */
 		static bool InventoryMatches(const ACatFishGuardActor* Guard, const TArray<FGuid>& ExpectedIds)
@@ -331,6 +502,14 @@ namespace CatFishSaleNetwork
 		TWeakObjectPtr<ACatfishingPlayerController> ServerController;
 		/** 远端拥有的本地 PC；它实际发送 RPC 并保存服务器返回的领域回执。 */
 		TWeakObjectPtr<ACatfishingPlayerController> ClientController;
+		/** 房主本地 PC；只为它自己的正式库存页面和视口观察提供上下文，不代替远端发单。 */
+		TWeakObjectPtr<ACatfishingPlayerController> HostController;
+		/** 房主已打开的正式鱼护页面；布局、报价和清理均通过这一实际视图。 */
+		TWeakObjectPtr<UCatFishGuardInventoryWidget> HostView;
+		/** 远端已打开的正式鱼护页面；首次出售从它的真实按钮触发，析构时关闭。 */
+		TWeakObjectPtr<UCatFishGuardInventoryWidget> ClientView;
+		/** 点击时正式买家查询选中的客户端 Actor；重放读取它，保持与 WBP 发出的 payload 完全一致。 */
+		TWeakObjectPtr<ACatFishBuyerActor> SaleBuyer;
 		/** 测试生成的唯一原鱼护；两轮都复用其库存，命令析构时销毁。 */
 		TWeakObjectPtr<ACatFishGuardActor> ServerGuard;
 		/** 原鱼护的客户端复制副本；按服务器对象名定位，用于提交真实 Actor 引用和读实例。 */
@@ -339,8 +518,10 @@ namespace CatFishSaleNetwork
 		TWeakObjectPtr<ACatFishBuyerActor> ServerBuyer;
 		/** 买家的客户端复制副本；RPC 必须提交客户端自身世界中的引用。 */
 		TWeakObjectPtr<ACatFishBuyerActor> ClientBuyer;
-		/** 首笔出售的稳定请求标识；首次与重放共用，确保命中同一终态记录。 */
-		FGuid SaleRequestId = FGuid::NewGuid();
+		/** 首笔按钮出售的请求标识；初始为空，从点击后新回执读取，随后重放复用，测试不替 WBP 生成 ID。 */
+		FGuid SaleRequestId;
+		/** 点击前 PC 最近回执的标识；首次等待时排除它，避免把旧命令结果误认为按钮已提交。 */
+		FGuid ReceiptBeforeClick;
 		/** 第二笔失效列表的独立请求标识；避免把首笔缓存误判为整单拒绝。 */
 		FGuid StaleRequestId = FGuid::NewGuid();
 		/** 当前一对服务器鱼的身份；每次播种替换，用于精确匹配客户端复制。 */
