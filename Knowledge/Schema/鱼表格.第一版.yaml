@@ -1,4 +1,4 @@
-# 鱼表格「第一版」列级发布映射（人维护；不在 Knowledge/Feishu/ 镜像里，导出脚本不碰它）
+# 鱼表格「第一版」列级发布映射（人维护；不在飞书镜像里，导出脚本不碰它）
 #
 # 读者：程序（接鱼表时按 publish 取列）、数值属主（改列先改这里的声明）、game-toolkit 的内容层检查。
 # 口径来自插件 split-doc-layers/examples/content-model/README.md「来源与发布声明」：
@@ -14,7 +14,8 @@ table:
   wiki_node_token: DKhnweGaEiPTJZkO8OScQOJenqg
   spreadsheet_token: CQlMsQon6hlo8ctpZRWcAPzOnRi
   sheet_id: R7rRBp
-  mirror: Knowledge/Feishu/GDD 系统分册/鱼/鱼表格/第一版.csv
+  mirror: C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu/GDD 系统分册/鱼/鱼表格/第一版.csv   # 镜像 2026-09-10 移出仓库，本机绝对路径
+  manifest: C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu/_manifest.json
   identity_column: fish_id            # 2026-09-09 加，值＝工程 FishDefinitionId
   declared_at_revision: 872           # 写本文件时的表 revision；表改列序不影响本文件（按列名对；09-09 晚 fish_id 已移到首列、「金钱系数」列在力量系数 K 旁；09-10 加「最近冲岸距离」列与两张子表）
   header_row: 1

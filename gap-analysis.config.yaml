@@ -2,8 +2,9 @@
 # docs 相对 docs_root，code 相对工程根；refs 只作参考不评分；scope 是给分析者的评审范围一句话。
 # 增量模式靠它：文档 revision（_manifest.json）或 code 路径的 git diff 变了才重跑该系统。
 $schema_version: 1
-docs_root: Knowledge/Feishu
-manifest: Knowledge/Feishu/_manifest.json
+# 镜像 2026-09-10 移出本仓库，改放设计项目；下面两行是本机绝对路径，换机器改这里
+docs_root: C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu
+manifest: C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu/_manifest.json
 systems:
   - name: 钓鱼系统-核心
     docs: ["GDD 系统分册/钓鱼系统/钓鱼系统.md", "GDD 系统分册/钓鱼系统/钓鱼规则.md"]

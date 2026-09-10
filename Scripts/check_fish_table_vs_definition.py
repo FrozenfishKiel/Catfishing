@@ -7,7 +7,7 @@
   1. Knowledge/Schema/鱼表格.第一版.yaml   —— 人维护的列级发布映射（sidecar）
   2. 镜像 CSV（sidecar.table.mirror）        —— 飞书导出，表头 + 16 行
   3. Source/Catfishing/Data/CatFishDefinition.h —— UPROPERTY 字段名（正则抓声明行）
-  4. .harness/formal-fish-asset-input-package.json 与 Knowledge/Feishu/_manifest.json —— 资产按哪个表 revision 生成、镜像是哪个 revision
+  4. .harness/formal-fish-asset-input-package.json 与飞书镜像 _manifest.json —— 资产按哪个表 revision 生成、镜像是哪个 revision
 
 输出三类差异 + 行级检查：
   ① 表有列、sidecar 声明了 publish 目标，但目标在头文件里不存在（或已 Deprecated）
@@ -36,7 +36,6 @@ ROOT = Path(__file__).resolve().parents[1]
 SIDECAR = ROOT / "Knowledge/Schema/鱼表格.第一版.yaml"
 HEADER = ROOT / "Source/Catfishing/Data/CatFishDefinition.h"
 PACKAGE = ROOT / ".harness/formal-fish-asset-input-package.json"
-MANIFEST = ROOT / "Knowledge/Feishu/_manifest.json"
 
 DECL_RE = re.compile(
     r"^\s*(?:[A-Za-z0-9_:<>]+\s+)+?(?P<name>b?[A-Z][A-Za-z0-9_]*)\s*(?:=|;)", re.M)
@@ -121,7 +120,7 @@ def main(argv=None) -> int:
     head, data = parse_csv(mirror)
     fields, deprecated = header_fields(read_text(HEADER))
     pkg = json.loads(read_text(PACKAGE))
-    man = json.loads(read_text(MANIFEST))
+    man = json.loads(read_text(ROOT / sc["table"]["manifest"]))
     sheet = next((s for s in man.get("sheets", []) if s.get("sheet_name") == sc["table"]["sheet_name"]
                   and s.get("node_token") == sc["table"]["wiki_node_token"]), {})
 
