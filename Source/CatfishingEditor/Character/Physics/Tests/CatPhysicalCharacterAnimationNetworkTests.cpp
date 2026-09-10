@@ -3,6 +3,10 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationEditorCommon.h"
 #include "Animation/AnimInstance.h"
+#include "Condition/CatConditionComponent.h"
+#include "Condition/CatConditionPresentationComponent.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
@@ -94,7 +98,7 @@ namespace CatPhysicalCharacterAnimationNetwork
 		explicit FVerify(FAutomationTestBase* InTest) : Test(InTest), Started(FPlatformTime::Seconds()) {}
 		bool Update() override
 		{
-			if (FPlatformTime::Seconds() - Started > 45.0)
+			if (FPlatformTime::Seconds() - Started > 65.0)
 			{
 				Test->AddError(FString::Printf(TEXT("Formal animation network timed out Stage=%d ServerPhases=%u ClientPhases=%u ServerState=%s ClientState=%s"),
 					Stage, ServerPhases, ClientPhases, *LastServerState.ToString(), *LastClientState.ToString()));
@@ -144,9 +148,12 @@ namespace CatPhysicalCharacterAnimationNetwork
 				}
 				if (Test->HasAnyErrors()) return true;
 				Local->SetActorTickEnabled(false);
+                for (TActorIterator<ACatCharacter> It(Server); It; ++It)
+                    if (*It != ServerCat) It->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(
+                        FTransform(FVector(-600,600,It->GetBodyStandRootHeightCm())), TEXT("AnimationObserverClearance"));
 				for (auto It = Server->GetPlayerControllerIterator(); It; ++It)
 					if (It->Get()) It->Get()->SetActorTickEnabled(false);
-				if (!Test->TestTrue(TEXT("initial placement resets the three actual authority bodies"),
+				if (!Test->TestTrue(TEXT("initial placement resets the authority capsule and grip poses"),
 					ServerBody->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator, FVector(0, -150, ServerBody->GetStandRootHeightCm())), TEXT("FormalAnimationSetup")))) return true;
 				if (FApp::CanEverRender())
 				{
@@ -168,7 +175,8 @@ namespace CatPhysicalCharacterAnimationNetwork
 				if (WorldNow - StageStarted < 0.8 || !ServerBody->HasMovementSample() || !ClientBody->HasMovementSample()
 					|| !ServerBody->IsGrounded() || !ClientBody->IsGrounded()
 					|| FVector::Dist(ClientCat->GetActorLocation(), ServerCat->GetActorLocation()) > 2.0) return false;
-				Test->TestTrue(TEXT("authority is the sole rigid body simulator"), ServerBody->GetBody()->IsSimulatingPhysics());
+				Test->TestTrue(TEXT("authority uses the upright CMC receiver"), ServerBody->UsesCharacterMovement());
+				Test->TestFalse(TEXT("authority capsule does not freely tumble"), ServerBody->GetBody()->IsSimulatingPhysics());
 				Test->TestFalse(TEXT("owning client consumes physical snapshots"), ClientBody->GetBody()->IsSimulatingPhysics());
 				for (ACatCharacter* Cat : {ServerCat, ClientCat})
 				{
@@ -224,11 +232,50 @@ namespace CatPhysicalCharacterAnimationNetwork
 				Test->AddInfo(FString::Printf(TEXT("Event=physical_formal_animation_network_verified ServerRiseCm=%.3f ClientRiseCm=%.3f ServerPhases=%u ClientPhases=%u SourceRootMaxZ=%.3f VisibleRootMaxZ=%.3f MaximumVisibleRootOffsetCm=%.3f LandedVisibleRootZ=%.3f Evidence=runtime_behavior Presentation=NeedsScreenshotReview"),
 					MaximumServerZ - InitialServerZ, MaximumClientZ - InitialClientZ, ServerPhases, ClientPhases,
 					MaximumSourceRootZ, MaximumVisibleRootZ, MaximumVisibleRootOffsetCm, ClientVisual->GetVisualMesh()->BoneSpaceTransforms[0].GetTranslation().Z));
-				return true;
-			}
-			return false;
-		}
-	private:
+                StandingHeadZ = ClientVisual->GetVisualMesh()->GetBoneLocationByName(TEXT("RigHead"), EBoneSpaces::WorldSpace).Z;
+                SupportedHeightZ = ServerCat->GetActorLocation().Z;
+                ServerCat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetPoisonAttribute(), 115);
+                Test->AddExpectedMessage(TEXT("Event=character_downed"), ELogVerbosity::Warning);
+                if (!Test->TestTrue(TEXT("authority evaluates the real downed threshold"), CatIsAcceptedDomainCommandResult(
+                    ServerCat->GetConditionComponent()->RequestFieldSelfRecovery(ServerCat->GetController(), FGuid::NewGuid())))) return true;
+                Stage = 3;
+                StageStarted = WorldNow;
+            }
+            if (Stage == 3)
+            {
+                auto* ServerPose = ServerCat->FindComponentByClass<UCatConditionPresentationComponent>();
+                auto* ClientPose = ClientCat->FindComponentByClass<UCatConditionPresentationComponent>();
+                if (WorldNow - StageStarted < 8.0 || !ClientCat->GetConditionComponent()->GetSnapshot().bDowned
+                    || ServerPose->GetObservedPosePhase() != TEXT("DownedPose") || ClientPose->GetObservedPosePhase() != TEXT("DownedPose")) return false;
+                const double HeadZ = ClientVisual->GetVisualMesh()->GetBoneLocationByName(TEXT("RigHead"), EBoneSpaces::WorldSpace).Z;
+                Test->TestTrue(TEXT("client sees the authored lying pose after downed replication"), HeadZ < StandingHeadZ - 3.0);
+                Test->TestTrue(TEXT("both downed capsules stay upright and supported"), ServerCat->GetActorUpVector().Z > .99999
+                    && ClientCat->GetActorUpVector().Z > .99999 && FMath::Abs(ServerCat->GetActorLocation().Z - SupportedHeightZ) < .5);
+                if (FApp::CanEverRender()) Capture(Client, TEXT("formal-cmc-downed-animation"));
+                Test->AddInfo(FString::Printf(TEXT("Event=cmc_condition_network_downed HeadStandingZ=%.3f HeadLyingZ=%.3f ServerZ=%.3f ClientZ=%.3f"),
+                    StandingHeadZ, HeadZ, ServerCat->GetActorLocation().Z, ClientCat->GetActorLocation().Z));
+                if (!Test->TestTrue(TEXT("authority recovery clears the actual downed state"), CatIsAcceptedDomainCommandResult(
+                    ServerCat->GetConditionComponent()->RequestFieldSelfRecovery(ServerCat->GetController(), FGuid::NewGuid())))) return true;
+                Stage = 4;
+                StageStarted = WorldNow;
+            }
+            if (Stage == 4)
+            {
+                if (WorldNow - StageStarted < 8.0 || ClientCat->GetConditionComponent()->GetSnapshot().bDowned
+                    || ServerCat->FindComponentByClass<UCatConditionPresentationComponent>()->GetObservedPosePhase() != TEXT("Locomotion")
+                    || ClientCat->FindComponentByClass<UCatConditionPresentationComponent>()->GetObservedPosePhase() != TEXT("Locomotion")) return false;
+                Test->TestTrue(TEXT("client and authority restore locomotion after the get-up animation"),
+                    ServerBody->IsLocomotionEnabled() && ClientBody->IsLocomotionEnabled());
+                const double HeadZ = ClientVisual->GetVisualMesh()->GetBoneLocationByName(TEXT("RigHead"), EBoneSpaces::WorldSpace).Z;
+                Test->TestTrue(TEXT("visible client returns to standing height"), FMath::Abs(HeadZ - StandingHeadZ) < 3.0);
+                if (FApp::CanEverRender()) Capture(Client, TEXT("formal-cmc-recovered-animation"));
+                Test->AddInfo(FString::Printf(TEXT("Event=cmc_condition_network_recovered HeadZ=%.3f ServerZ=%.3f ClientZ=%.3f"),
+                    HeadZ, ServerCat->GetActorLocation().Z, ClientCat->GetActorLocation().Z));
+                return true;
+            }
+            return false;
+        }
+    private:
 		static uint8 PhaseForState(FName State)
 		{
 			return State == TEXT("Jump") ? 1 : State == TEXT("Fall Loop") ? 2 : State == TEXT("Land") ? 4 : 0;
@@ -244,7 +291,7 @@ namespace CatPhysicalCharacterAnimationNetwork
 			if (!Test->TestTrue(TEXT("formal source and final visible pose both contain a finite root"), !SourcePose.IsEmpty() && !VisiblePose.IsEmpty()
 				&& !SourcePose[0].ContainsNaN() && !VisiblePose[0].ContainsNaN())) return false;
 			// Observe both poses throughout the jump, including the full landing-to-locomotion blend.
-			// Authored root translation stays in the ABP source while visible vertical motion belongs to Chaos.
+			// Authored root translation stays in the ABP source while visible vertical motion belongs to the authority movement receiver.
 			MaximumSourceRootZ = FMath::Max(MaximumSourceRootZ, SourcePose[0].GetTranslation().Z);
 			MaximumVisibleRootZ = FMath::Max(MaximumVisibleRootZ, VisiblePose[0].GetTranslation().Z);
 			const double ReferenceRootZ = Cat->GetMesh()->GetSkeletalMeshAsset()->GetRefSkeleton().GetRefBonePose()[0].GetTranslation().Z;
@@ -286,6 +333,7 @@ namespace CatPhysicalCharacterAnimationNetwork
 		FName LastServerState, LastClientState;
 		double InitialServerZ = 0.0, InitialClientZ = 0.0, MaximumServerZ = 0.0, MaximumClientZ = 0.0;
 		double MaximumSourceRootZ = 0.0, MaximumVisibleRootZ = 0.0;
+		double StandingHeadZ = 0.0, SupportedHeightZ = 0.0;
 		double MaximumVisibleRootOffsetCm = 0.0, GroundedLocomotionSinceSeconds = 0.0;
 	};
 }

@@ -10,6 +10,7 @@
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Config/CatFishingFightBalanceDefinition.h"
 #include "Character/CatCharacter.h"
+#include "Character/CatCharacterMovementComponent.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "Interaction/Grab/CatLightPropComponent.h"
@@ -68,8 +69,11 @@ FTransform UCatFishingPhysicalRodComponent::GetObservedActorTransform() const
 FVector UCatFishingPhysicalRodComponent::GetPointVelocity(const FVector& WorldPoint) const
 {
 	if (ControlledBody.IsValid())
-		return ControlledBody->GetPhysicsLinearVelocity() + FVector::CrossProduct(ControlledAngularVelocity,
-			WorldPoint - ControlledBody->GetComponentLocation());
+	{
+		const auto* Carrier = ControlledBody->GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();
+		return (Carrier ? Carrier->GetVelocity() : ControlledBody->GetPhysicsLinearVelocity())
+			+ FVector::CrossProduct(ControlledAngularVelocity, WorldPoint - ControlledBody->GetComponentLocation());
+	}
 	return Body && Body->IsSimulatingPhysics() ? Body->GetPhysicsLinearVelocityAtPoint(WorldPoint) : FVector::ZeroVector;
 }
 
@@ -84,6 +88,9 @@ void UCatFishingPhysicalRodComponent::PopulateEndpointResponse(FCatFightRodConst
 	const auto* Rod = CastChecked<ACatFishingRodActor>(GetOwner());
 	const FVector Tip = Rod->GetRodTipWorldTransform().GetLocation();
 	const FVector Velocity = GetPointVelocity(Tip);
+	const auto* Carrier = ControlledBody.IsValid() ? ControlledBody->GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>() : nullptr;
+	const bool bCMC = Carrier && Carrier->UsesCharacterMovement();
+	if (bCMC) { PopulateCMCEndpointPrediction(OutInput); return; }
 	struct FLockedEdge
 	{
 		UPhysicsConstraintComponent* Constraint;
@@ -110,7 +117,7 @@ void UCatFishingPhysicalRodComponent::PopulateEndpointResponse(FCatFightRodConst
 		}
 	}
 	FBodyInstance* RootInstance = ControlledBody.IsValid() ? ControlledBody->GetBodyInstance() : Body->GetBodyInstance();
-	if (!RootInstance || !RootInstance->IsInstanceSimulatingPhysics()) return;
+	if (!RootInstance || (!RootInstance->IsInstanceSimulatingPhysics() && !bCMC)) return;
 	TSet<FBodyInstance*> Connected; Connected.Add(RootInstance);
 	bool bChanged = true;
 	while (bChanged)
@@ -581,7 +588,13 @@ void UCatFishingPhysicalRodComponent::RefreshControlledCarrier()
 	if (Next == ControlledBody.Get() && Body->IsSimulatingPhysics() == (Next == nullptr)) return;
 	const FVector ReleaseVelocity = GetPointVelocity(Body->GetComponentLocation());
 	const FVector ReleaseAngularVelocity = GetAngularVelocityRadiansPerSecond();
+    if (ControlledBody.IsValid())
+        if (auto* Previous = ControlledBody->GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>(); Previous && Previous->UsesCharacterMovement())
+            GetOwner()->PrimaryActorTick.RemovePrerequisite(Previous, Previous->GetPostMovementTick());
 	ControlledBody = Next;
+    if (Next)
+        if (auto* Current = Next->GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>(); Current && Current->UsesCharacterMovement())
+            GetOwner()->PrimaryActorTick.AddPrerequisite(Current, Current->GetPostMovementTick());
 	ControlledAngularVelocity = FVector::ZeroVector;
 	SmoothedFishPull = FVector::ZeroVector;
 	Body->SetSimulatePhysics(Next == nullptr);
@@ -620,6 +633,37 @@ void UCatFishingPhysicalRodComponent::PositionControlledRod()
 	if (auto* Light = UCatLightPropComponent::FindFor(Body)) Light->RefreshGripConstraintsFromAuthority();
 }
 
+bool UCatFishingPhysicalRodComponent::BuildControlledRotationInput(FCatFishingRodRotationInput& Input) const
+{
+    if (!ControlledBody.IsValid()) return false;
+    const auto* Rod = CastChecked<ACatFishingRodActor>(GetOwner());
+    const auto* Physical = ControlledBody->GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();
+    const auto* Settings = GetDefault<UCatFishingSettings>();
+    if (!Physical || !Rod->CarrierConstraintState.bFightActive || Rod->bAwaitingNewHolderAim) return false;
+    const bool bMouseActive = Rod->HeldAimInput.IsMouseActive(GetWorld()->GetTimeSeconds());
+		Input.CurrentAim = Rod->AuthoritativeHeldAimRotation;
+		Input.RequestedAim = bMouseActive ? Rod->HeldAimInput.GetRequestedAim() : Input.CurrentAim;
+		Input.bCatDriveActive = bMouseActive;
+		Input.PullAxis = Rod->CarrierConstraintState.RodPullAxis.IsNearlyZero() ? FVector::ForwardVector : Rod->CarrierConstraintState.RodPullAxis;
+		Input.PreviousSmoothedFishPullStrengthMeters = SmoothedFishPull;
+		Input.PreviousAngularVelocityRadiansPerSecond = ControlledAngularVelocity;
+		Input.CatTorqueCapacity = Rod->CarrierConstraintState.CatTorqueCapacityStrengthMeters;
+		const auto* Cat = Cast<ACatCharacter>(ControlledBody->GetOwner());
+		const auto* ASC = Cat ? Cat->GetCatAbilitySystemComponent() : nullptr;
+		if (!ASC || !Physical->IsLocomotionEnabled()
+			|| ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) <= 0)
+			Input.CatTorqueCapacity = 0;
+		Input.MaximumFishTorque = Rod->CarrierConstraintState.MaximumFishTorqueStrengthMeters;
+		Input.MaximumAngularSpeedDegreesPerSecond = Settings->HeldRodMaximumAngularSpeedDegreesPerSecond;
+		Input.ResponseSeconds = Settings->HeldRodAngularResistanceResponseSeconds;
+		Input.AngularInertiaSeconds = Settings->HeldRodAngularInertiaSeconds;
+		Input.FishPullSmoothingSeconds = Settings->HeldRodFishPullSmoothingSeconds;
+		Input.LoadedAngularDampingRatio = Settings->HeldRodLoadedAngularDampingRatio;
+		Input.MinimumPitchDegrees = Settings->HeldRodMinimumPitchDegrees;
+		Input.MaximumPitchDegrees = Settings->HeldRodMaximumPitchDegrees;
+    return true;
+}
+
 void UCatFishingPhysicalRodComponent::AdvanceControlledAim(const float DeltaTime)
 {
 	if (!ControlledBody.IsValid()) return;
@@ -653,26 +697,7 @@ void UCatFishingPhysicalRodComponent::AdvanceControlledAim(const float DeltaTime
 	else if (!Rod->bAwaitingNewHolderAim)
 	{
 		FCatFishingRodRotationInput Input;
-		Input.CurrentAim = Rod->AuthoritativeHeldAimRotation;
-		Input.RequestedAim = bActive ? Rod->HeldAimInput.GetRequestedAim() : Input.CurrentAim;
-		Input.bCatDriveActive = bActive;
-		Input.PullAxis = Rod->CarrierConstraintState.RodPullAxis.IsNearlyZero() ? FVector::ForwardVector : Rod->CarrierConstraintState.RodPullAxis;
-		Input.PreviousSmoothedFishPullStrengthMeters = SmoothedFishPull;
-		Input.PreviousAngularVelocityRadiansPerSecond = ControlledAngularVelocity;
-		Input.CatTorqueCapacity = Rod->CarrierConstraintState.CatTorqueCapacityStrengthMeters;
-		const auto* Cat = Cast<ACatCharacter>(ControlledBody->GetOwner());
-		const auto* ASC = Cat ? Cat->GetCatAbilitySystemComponent() : nullptr;
-		if (!ASC || !Physical->IsLocomotionEnabled()
-			|| ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) <= 0)
-			Input.CatTorqueCapacity = 0;
-		Input.MaximumFishTorque = Rod->CarrierConstraintState.MaximumFishTorqueStrengthMeters;
-		Input.MaximumAngularSpeedDegreesPerSecond = Settings->HeldRodMaximumAngularSpeedDegreesPerSecond;
-		Input.ResponseSeconds = Settings->HeldRodAngularResistanceResponseSeconds;
-		Input.AngularInertiaSeconds = Settings->HeldRodAngularInertiaSeconds;
-		Input.FishPullSmoothingSeconds = Settings->HeldRodFishPullSmoothingSeconds;
-		Input.LoadedAngularDampingRatio = Settings->HeldRodLoadedAngularDampingRatio;
-		Input.MinimumPitchDegrees = Settings->HeldRodMinimumPitchDegrees;
-		Input.MaximumPitchDegrees = Settings->HeldRodMaximumPitchDegrees;
+		if (!BuildControlledRotationInput(Input)) return;
 		Input.DeltaSeconds = DeltaTime;
 		const auto Step = FCatFishingRodResistanceModel::StepRotation(Input);
 		if (Step.bSucceeded)
@@ -736,7 +761,12 @@ void UCatFishingPhysicalRodComponent::TickComponent(const float DeltaTime, const
 	if (PhysicsSeconds > UE_DOUBLE_SMALL_NUMBER && !FrameImpulse.IsZero())
 		{
 		const FVector Force = FrameImpulse * (100.0 / PhysicsSeconds);
-		if (ControlledBody.IsValid()) ControlledBody->AddForce(Force);
+		if (ControlledBody.IsValid())
+		{
+			if (auto* Carrier = ControlledBody->GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>())
+				Carrier->AddExternalImpulseFromAuthority(FrameImpulse * 100.0);
+			else ControlledBody->AddForce(Force);
+		}
 		else Body->AddForceAtLocation(Force, Rod->GetRodTipWorldTransform().GetLocation());
 	}
 
@@ -755,4 +785,61 @@ void UCatFishingPhysicalRodComponent::EndPlay(const EEndPlayReason::Type EndPlay
 	ObservedGrabs.Reset();
 	ReleaseAllConnections(TEXT("RodEndPlay"));
 	Super::EndPlay(EndPlayReason);
+}
+
+void UCatFishingPhysicalRodComponent::PopulateCMCEndpointPrediction(FCatFightRodConstraintInput& OutInput)
+{
+    const auto* Cat = CastChecked<ACatCharacter>(ControlledBody->GetOwner());
+    auto* Movement = CastChecked<UCatCharacterMovementComponent>(Cat->GetCharacterMovement());
+    const auto* Rod = CastChecked<ACatFishingRodActor>(GetOwner());
+    const FCatCMCMotionPrediction Motion = Movement->CaptureMotionPrediction();
+    const TArray<FLineForceSegment> Pending = LineSegments;
+    FCatFishingRodRotationInput Rotation;
+    const bool bPredictRotation = BuildControlledRotationInput(Rotation);
+    const FRotator InitialAim = Rod->AuthoritativeHeldAimRotation;
+    const FVector Tip = Rod->GetRodTipWorldTransform().GetLocation();
+    const FVector TipOffset = InitialAim.UnrotateVector(Tip - Motion.Position);
+    OutInput.bPhysicalRodEndpoint = true;
+    OutInput.RodTipWorldPosition = Tip;
+    OutInput.RodTipVelocityCentimetersPerSecond = GetPointVelocity(Tip);
+    OutInput.PhysicsStepSeconds = 1.0 / 120.0;
+    const TWeakObjectPtr<UCatCharacterMovementComponent> WeakMovement(Movement);
+    OutInput.GetCMCTravelLimit = [WeakMovement](const FVector& Axis, double Distance)
+    { return WeakMovement.IsValid() ? WeakMovement->GetExternalTractionTravelLimit(Axis, Distance) : 0.0; };
+    OutInput.PredictCMCEndpoint = [Motion, Pending, Rotation, bPredictRotation, InitialAim, TipOffset](const FCatFightCMCPredictionQuery& Query)
+    {
+        FCatFightCMCPredictionResult Result;
+        auto PredictedMotion = Motion;
+        auto PredictedRotation = Rotation;
+        FRotator Aim = InitialAim;
+        const auto Advance = [&](const FVector& Force, double Seconds)
+        {
+            UCatCharacterMovementComponent::AdvanceMotionPrediction(PredictedMotion, Force, Seconds);
+            if (!bPredictRotation) return true;
+            PredictedRotation.DeltaSeconds = Seconds;
+            PredictedRotation.MaximumFishTorque = Force.Size() * Query.TorqueStrengthMetersPerNewton;
+            PredictedRotation.PullAxis = Force.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, PredictedRotation.PullAxis);
+            const auto Step = FCatFishingRodResistanceModel::StepRotation(PredictedRotation);
+            if (!Step.bSucceeded) return false;
+            Aim = PredictedRotation.CurrentAim = Step.ActualAim;
+            PredictedRotation.PreviousAngularVelocityRadiansPerSecond = Step.AngularVelocityRadiansPerSecond;
+            PredictedRotation.PreviousSmoothedFishPullStrengthMeters = Step.SmoothedFishPullStrengthMeters;
+            return true;
+        };
+        for (const auto& Segment : Pending) if (!Advance(Segment.ForceNewtons, Segment.RemainingSeconds)) return Result;
+        if (!Advance(Query.ForceNewtons, Query.Seconds)) return Result;
+        FVector Travel = PredictedMotion.Position - Motion.Position;
+        const double Along = FVector::DotProduct(Travel, Query.TravelAxis);
+        if (Along > Query.TravelLimitCentimeters) Travel -= Query.TravelAxis * (Along - Query.TravelLimitCentimeters);
+        Result.RodTipWorldPosition = Motion.Position + Travel + Aim.RotateVector(TipOffset);
+        Result.bSucceeded = !Result.RodTipWorldPosition.ContainsNaN();
+        return Result;
+    };
+    if (GetWorld()->GetTimeSeconds() >= NextEndpointLogSeconds)
+    {
+        NextEndpointLogSeconds = GetWorld()->GetTimeSeconds() + 1;
+        UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_cmc_endpoint_snapshot SessionId=%s RodActorId=%s BodyId=%s World=%s NetMode=%d Authority=1 LocalRole=%d MassKg=%.3f PendingSeconds=%.6f RotationPredicted=%d Result=FrozenCandidateInputs"),
+            *LoadSessionId.ToString(), *Rod->GetPresentationState().RodActorId.ToString(), *Cat->GetPhysicalBodyComponent()->GetBodyId().ToString(),
+            *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(GetOwner()->GetLocalRole()), Motion.MassKg, GetQueuedLineSecondsForDiagnostics(), bPredictRotation);
+    }
 }

@@ -1,4 +1,7 @@
 #include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Character/CatCharacterMovementComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "GameFramework/Character.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "Interaction/Grab/CatLightPropSubsystem.h"
 #include "Components/BoxComponent.h"
@@ -16,7 +19,7 @@ void FCatPhysicalBodyPostPhysicsTick::ExecuteTick(float DeltaTime, ELevelTick Ti
 	ENamedThreads::Type CurrentThread, const FGraphEventRef& CompletionEvent)
 {
 	FActorComponentTickFunction::ExecuteTickHelper(Target, false, DeltaTime, TickType,
-		[this](float) { Target->PublishPostPhysicsSnapshot(); });
+		[this](float Delta) { Target->PublishPostPhysicsSnapshot(Delta); });
 }
 FString FCatPhysicalBodyPostPhysicsTick::DiagnosticMessage()
 {
@@ -35,9 +38,20 @@ void UCatPhysicalBodyComponent::RegisterComponentTickFunctions(bool bRegister)
 	}
 	else if (PostPhysicsTick.IsTickFunctionRegistered()) PostPhysicsTick.UnRegisterTickFunction();
 }
-void UCatPhysicalBodyComponent::PublishPostPhysicsSnapshot()
+void UCatPhysicalBodyComponent::PublishPostPhysicsSnapshot(float DeltaSeconds)
 {
 	if (!HasAuthority() || !Body || !Grab) return;
+	if (CharacterMovement)
+	{
+		const auto* Settings = UPhysicsSettings::Get();
+		const double Scale = GetWorld()->GetPhysicsScene() ? GetWorld()->GetPhysicsScene()->GetNetworkDeltaTimeScale() : 1.0;
+		const double Limit = Settings->bSubstepping ? Settings->MaxSubsteps * double(Settings->MaxSubstepDeltaTime) : double(Settings->MaxPhysicsDeltaTime);
+		CharacterMovement->AdvanceFromAuthority(Limit > 0 ? FMath::Min(DeltaSeconds * Scale, Limit) : DeltaSeconds * Scale);
+		bGrounded = CharacterMovement->IsMovingOnGround();
+		bSupportSampleReady = true;
+		Body->ComponentVelocity = CharacterMovement->Velocity;
+		Grab->RefreshKinematicHands();
+	}
 	const double Now = GetWorld()->GetTimeSeconds();
 	if (bPublishJumpAfterPhysics || bPublishMovementAfterPhysics || Now - LastSnapshotSeconds >= 1.0 / 30.0)
 	{
@@ -114,8 +128,24 @@ void UCatPhysicalBodyComponent::Initialize(UBoxComponent* InBody, USphereCompone
 	if (HasAuthority())
 	{
 		if (!BodyId.IsValid()) BodyId=FGuid::NewGuid();
-		Body->SetSimulatePhysics(true); LeftHand->SetSimulatePhysics(true); RightHand->SetSimulatePhysics(true);
-		ConfigureArm(true); ConfigureArm(false);
+		if (!CharacterMovement)
+		{
+			Body->SetSimulatePhysics(true); LeftHand->SetSimulatePhysics(true); RightHand->SetSimulatePhysics(true);
+			ConfigureArm(true); ConfigureArm(false);
+		}
+		else
+		{
+			Body->SetSimulatePhysics(false);
+			Body->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+			Body->CanCharacterStepUpOn = ECB_No;
+			for (auto* Hand : {LeftHand.Get(), RightHand.Get()})
+			{
+				Hand->SetSimulatePhysics(false);
+				Hand->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+				Hand->SetCollisionResponseToChannel(ECC_Pawn, ECR_Ignore);
+				Hand->CanCharacterStepUpOn = ECB_No;
+			}
+		}
 	}
 	else
 	{
@@ -129,6 +159,7 @@ void UCatPhysicalBodyComponent::Initialize(UBoxComponent* InBody, USphereCompone
 	if (auto* Policy = GetWorld()->GetSubsystem<UCatLightPropSubsystem>())
 	{
 		Policy->RegisterCatPart(Body);
+		if (CharacterMovement) Policy->RegisterCatPart(CastChecked<ACharacter>(GetOwner())->GetCapsuleComponent());
 		Policy->RegisterCatPart(LeftHand);
 		Policy->RegisterCatPart(RightHand);
 	}
@@ -136,7 +167,7 @@ void UCatPhysicalBodyComponent::Initialize(UBoxComponent* InBody, USphereCompone
 	LastInputSeconds=GetWorld()->GetTimeSeconds();
 	if (HasAuthority()) CaptureSnapshot();
 	else if (bReceivedSnapshot) { bReceivedSnapshot=false; OnRep_PhysicsSnapshot(); }
-	LogState(TEXT("physics_body_started"),TEXT("ServerSnapshots"));
+	LogState(TEXT("physics_body_started"), CharacterMovement ? TEXT("UprightCMCServerSnapshots") : TEXT("PrototypeChaosServerSnapshots"));
 	UE_LOG(LogCatPhysicsGrab, Log,
 		TEXT("Event=physics_body_support_query World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s BodyId=%s TraceChannel=%d Result=BodyCollisionResponses"),
 		*GetNameSafe(GetWorld()), int32(GetOwner()->GetNetMode()), HasAuthority(), int32(GetOwner()->GetLocalRole()),
@@ -146,7 +177,7 @@ void UCatPhysicalBodyComponent::Initialize(UBoxComponent* InBody, USphereCompone
 		*GetNameSafe(GetWorld()), int32(GetOwner()->GetNetMode()), HasAuthority(), *GetNameSafe(GetOwner()), *BodyId.ToString(), GeometryScale,
 		*Body->GetScaledBoxExtent().ToCompactString(), GetStandRootHeightCm(), *GetShoulderLocalPoint(true).ToCompactString(),
 		*GetRestHandLocalPoint(true).ToCompactString(), LeftHand->GetScaledSphereRadius(),
-		HasAuthority() ? Body->GetMass() : Body->BodyInstance.GetMassOverride(), PhysicsSettings->bSubstepping,
+		HasAuthority() && !CharacterMovement ? Body->GetMass() : Body->BodyInstance.GetMassOverride(), PhysicsSettings->bSubstepping,
 		PhysicsSettings->MaxSubstepDeltaTime, PhysicsSettings->MaxSubsteps);
 
 }
@@ -182,7 +213,7 @@ void UCatPhysicalBodyComponent::CaptureSnapshot()
 {
 	Snapshot.BodyLocation = Body->GetComponentLocation();
 	Snapshot.BodyRotation = Body->GetComponentRotation();
-	Snapshot.Velocity = Body->GetPhysicsLinearVelocity();
+	Snapshot.Velocity = CharacterMovement ? CharacterMovement->Velocity : Body->GetPhysicsLinearVelocity();
 	Snapshot.MoveIntent = MoveInput;
 	Snapshot.LeftHandLocation = LeftHand->GetComponentLocation();
 	Snapshot.RightHandLocation = RightHand->GetComponentLocation();
@@ -278,55 +309,11 @@ void UCatPhysicalBodyComponent::UpdatePhysicalMovement(const float DeltaSeconds)
 	const bool bFacingAim = bFishingMotor || Grab->IsReaching(true) || Grab->IsReaching(false);
 	if (bFacingAim) FacingYawDegrees = ViewInput.Yaw;
 	else if (!MoveInput.IsNearlyZero()) FacingYawDegrees = MoveInput.Rotation().Yaw;
-	const double SpeedLimit = bFishingMotor ? FishingMotorMaxSpeed : MaxMovementSpeedCmS;
-	const FVector DesiredVelocity = MoveInput * SpeedLimit;
-	if (bGrounded && bLocomotionEnabled)
-	{
-		const FVector VelocityError=DesiredVelocity-FVector(Velocity.X,Velocity.Y,0);
-		FVector MotorForce;
-		if (bFishingMotor && MoveInput.IsNearlyZero())
-		{
-			if (!bFishingHoldActive) { FishingHoldLocation=Body->GetComponentLocation(); bFishingHoldActive=true; }
-			FVector PositionError=FishingHoldLocation-Body->GetComponentLocation(); PositionError.Z=0;
-			// A planted stance only recovers its local elastic give. Once overpowered, the feet
-			// yield with the body instead of storing a spring back to a distant world position.
-			constexpr double HoldElasticRangeCm = 10.0;
-			const double YieldDistanceCm = FMath::Max(0.0, PositionError.Size() - HoldElasticRangeCm);
-			PositionError = PositionError.GetClampedToMaxSize(HoldElasticRangeCm);
-			FishingHoldLocation = Body->GetComponentLocation() + PositionError;
-			if (YieldDistanceCm > UE_DOUBLE_SMALL_NUMBER && GetWorld()->GetTimeSeconds() >= NextHoldYieldLogSeconds)
-			{
-				NextHoldYieldLogSeconds = GetWorld()->GetTimeSeconds() + 1.0;
-				UE_LOG(LogCatPhysicsGrab, Log,
-					TEXT("Event=physics_body_hold_anchor_yielded World=%s NetMode=%d Authority=1 LocalRole=%d Actor=%s BodyId=%s MotorSource=%s YieldDistanceCm=%.3f Anchor=%s ForceBudgetUE=%.3f Result=SupportPointYielded"),
-					*GetNameSafe(GetWorld()), int32(GetOwner()->GetNetMode()), int32(GetOwner()->GetLocalRole()),
-					*GetNameSafe(GetOwner()), *BodyId.ToString(), *GetNameSafe(FishingMotorSource.Get()),
-					YieldDistanceCm, *FishingHoldLocation.ToCompactString(), FishingMotorMaxForce);
-			}
-			const double Stiffness=FishingMotorMaxForce/HoldElasticRangeCm;
-			const double Damping=2.0*FMath::Sqrt(Stiffness*Mass);
-			MotorForce=(PositionError*Stiffness-FVector(Velocity.X,Velocity.Y,0)*Damping).GetClampedToMaxSize(FishingMotorMaxForce);
-		}
-		else
-		{
-			bFishingHoldActive=false;
-			const auto* Physics = UPhysicsSettings::Get();
-			const double NetworkScale = GetWorld()->GetPhysicsScene() ? GetWorld()->GetPhysicsScene()->GetNetworkDeltaTimeScale() : 1.0;
-			const double RequestedSeconds = FMath::Max(0.0, double(DeltaSeconds) * NetworkScale);
-			const double PhysicsLimit = Physics->bSubstepping ? Physics->MaxSubsteps * double(Physics->MaxSubstepDeltaTime) : double(Physics->MaxPhysicsDeltaTime);
-			const double PhysicsSeconds = FMath::Max(UE_DOUBLE_SMALL_NUMBER, PhysicsLimit > 0 ? FMath::Min(RequestedSeconds, PhysicsLimit) : RequestedSeconds);
-			// Drive the next physical step, without an extra easing tail. Chaos still resolves
-			// collisions, hands and external forces; a finite motor never overwrites their velocity.
-			constexpr double WalkingAccelerationCmS2 = 6000.0;
-			const double ForceLimit = bFishingMotor ? FishingMotorMaxForce : WalkingAccelerationCmS2 * Mass;
-			// Fast free walking must not silently multiply the established cooperative pulling force.
-			MotorForce = !bFishingMotor && HasPhysicalGrabConnection()
-				? (VelocityError / .22).GetClampedToMaxSize(450.0) * Mass
-				: (VelocityError * (Mass / PhysicsSeconds)).GetClampedToMaxSize(ForceLimit);
-		}
-		Body->AddForce(MotorForce);
-	}
-	if (!bGrounded || !bLocomotionEnabled || !bFishingMotor) bFishingHoldActive=false;
+	const auto* Settings = UPhysicsSettings::Get();
+	const double Scale = GetWorld()->GetPhysicsScene() ? GetWorld()->GetPhysicsScene()->GetNetworkDeltaTimeScale() : 1.0;
+	const double Limit = Settings->bSubstepping ? Settings->MaxSubsteps * double(Settings->MaxSubstepDeltaTime) : double(Settings->MaxPhysicsDeltaTime);
+	if (bGrounded) Body->AddForce(ComputeHorizontalDriveForce(Velocity, Mass, Limit > 0 ? FMath::Min(DeltaSeconds * Scale, Limit) : DeltaSeconds * Scale));
+	else bFishingHoldActive = false;
 	// Bounded upright motor, deliberately weaker in the air so a held body still swings under gravity.
 	const FVector UpError = FVector::CrossProduct(BodyUp, FVector::UpVector);
 	// A signed angle also turns an exactly backward input; cross(forward, target) is zero at 180 degrees.
@@ -352,6 +339,84 @@ void UCatPhysicalBodyComponent::UpdatePhysicalMovement(const float DeltaSeconds)
 	bSupportSampleReady = true;
 }
 
+FCatBodyDriveSample UCatPhysicalBodyComponent::CaptureDriveSample()
+{
+    FCatBodyDriveSample Sample;
+    Sample.MoveIntent = MoveInput;
+    Sample.HoldLocation = FishingHoldLocation;
+    Sample.bHoldActive = bFishingHoldActive;
+    Sample.bFishing = FishingMotorSource.IsValid();
+    Sample.bLocomotion = bLocomotionEnabled;
+    Sample.bConnected = HasPhysicalGrabConnection() || !GetExternalForceFromAuthority().IsNearlyZero();
+    Sample.MaxSpeed = Sample.bFishing ? FishingMotorMaxSpeed : MaxMovementSpeedCmS;
+    Sample.MaxForce = FishingMotorMaxForce;
+    return Sample;
+}
+
+FVector UCatPhysicalBodyComponent::ComputeDriveForce(FCatBodyDriveSample& Sample, const FVector& Position,
+    const FVector& Velocity, double Mass, double StepSeconds)
+{
+    if (!Sample.bLocomotion) { Sample.bHoldActive = false; return FVector::ZeroVector; }
+    const FVector HorizontalVelocity(Velocity.X, Velocity.Y, 0);
+    if (Sample.bFishing && Sample.MoveIntent.IsNearlyZero())
+    {
+        if (!Sample.bHoldActive) { Sample.HoldLocation = Position; Sample.bHoldActive = true; }
+        FVector Error = Sample.HoldLocation - Position; Error.Z = 0;
+        // A finite local stance yields once overpowered; it never springs toward a remote old position.
+        constexpr double ElasticRangeCm = 10.0;
+        Error = Error.GetClampedToMaxSize(ElasticRangeCm);
+        Sample.HoldLocation = Position + Error;
+        const double Stiffness = Sample.MaxForce / ElasticRangeCm;
+        const double Damping = 2.0 * FMath::Sqrt(Stiffness * Mass);
+        return (Error * Stiffness - HorizontalVelocity * Damping).GetClampedToMaxSize(Sample.MaxForce);
+    }
+    Sample.bHoldActive = false;
+    const FVector Error = Sample.MoveIntent * Sample.MaxSpeed - HorizontalVelocity;
+    if (!Sample.bFishing && Sample.bConnected) return (Error / .22).GetClampedToMaxSize(450.0) * Mass;
+    const double Limit = Sample.bFishing ? Sample.MaxForce : 6000.0 * Mass;
+    return (Error * (Mass / FMath::Max(UE_DOUBLE_SMALL_NUMBER, StepSeconds))).GetClampedToMaxSize(Limit);
+}
+
+FVector UCatPhysicalBodyComponent::ComputeHorizontalDriveForce(const FVector& Velocity, double Mass, double StepSeconds)
+{
+    FCatBodyDriveSample Sample = CaptureDriveSample();
+    const FVector Force = ComputeDriveForce(Sample, Body->GetComponentLocation(), Velocity, Mass, StepSeconds);
+    const double YieldDistance = Sample.bHoldActive && bFishingHoldActive ? FVector::Dist2D(Sample.HoldLocation, FishingHoldLocation) : 0;
+    FishingHoldLocation = Sample.HoldLocation; bFishingHoldActive = Sample.bHoldActive;
+    if (YieldDistance > UE_DOUBLE_SMALL_NUMBER && GetWorld()->GetTimeSeconds() >= NextHoldYieldLogSeconds)
+    {
+        NextHoldYieldLogSeconds = GetWorld()->GetTimeSeconds() + 1.0;
+        UE_LOG(LogCatPhysicsGrab, Log,
+            TEXT("Event=physics_body_hold_anchor_yielded World=%s NetMode=%d Authority=1 LocalRole=%d Actor=%s BodyId=%s MotorSource=%s YieldDistanceCm=%.3f Anchor=%s ForceBudgetUE=%.3f Result=SupportPointYielded"),
+            *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(GetOwner()->GetLocalRole()),
+            *GetNameSafe(GetOwner()), *BodyId.ToString(), *GetNameSafe(FishingMotorSource.Get()), YieldDistance,
+            *FishingHoldLocation.ToCompactString(), FishingMotorMaxForce);
+    }
+    return Force;
+}
+
+FVector UCatPhysicalBodyComponent::GetExternalForceFromAuthority()
+{
+	FVector Sum = FVector::ZeroVector;
+	for (auto It = ExternalForces.CreateIterator(); It; ++It)
+	{
+		if (!It.Key().IsValid()) { It.RemoveCurrent(); continue; }
+		Sum += It.Value();
+	}
+	return Sum;
+}
+
+void UCatPhysicalBodyComponent::AddExternalImpulseFromAuthority(FVector ImpulseKgCmS)
+{
+	if (!HasAuthority() || ImpulseKgCmS.ContainsNaN()) return;
+	if (CharacterMovement)
+	{
+		if (CharacterMovement->IsMovingOnGround()) ImpulseKgCmS.Z = 0;
+		CharacterMovement->QueueExternalImpulse(ImpulseKgCmS);
+	}
+	else if (Body) Body->AddImpulse(ImpulseKgCmS);
+}
+
 bool UCatPhysicalBodyComponent::HasPhysicalGrabConnection() const
 {
 	for (const bool bLeft : {true, false})
@@ -373,7 +438,7 @@ void UCatPhysicalBodyComponent::GetLifetimeReplicatedProps(TArray<FLifetimePrope
 	DOREPLIFETIME(UCatPhysicalBodyComponent, ControlEpoch);
 	DOREPLIFETIME(UCatPhysicalBodyComponent, bLocomotionEnabled);
 }
-FVector UCatPhysicalBodyComponent::GetVelocity() const { return HasAuthority() && Body ? Body->GetPhysicsLinearVelocity() : Snapshot.Velocity; }
+FVector UCatPhysicalBodyComponent::GetVelocity() const { return HasAuthority() && Body ? (CharacterMovement ? CharacterMovement->Velocity : Body->GetPhysicsLinearVelocity()) : Snapshot.Velocity; }
 FVector UCatPhysicalBodyComponent::GetMoveIntent() const { return HasAuthority() ? MoveInput : Snapshot.MoveIntent; }
 bool UCatPhysicalBodyComponent::IsGrounded() const { return HasAuthority() ? bGrounded : Snapshot.bGrounded; }
 bool UCatPhysicalBodyComponent::HasMovementSample() const { return HasAuthority() ? bSupportSampleReady : bReceivedSnapshot && Snapshot.bSupportSampleReady; }
@@ -391,6 +456,7 @@ FVector UCatPhysicalBodyComponent::GetRestHandLocalPoint(bool bLeft) const
 }
 FVector UCatPhysicalBodyComponent::GetSupportFootPointWorld() const
 {
+	if (CharacterMovement) return GetOwner()->GetActorLocation() - FVector(0,0,CastChecked<ACharacter>(GetOwner())->GetCapsuleComponent()->GetScaledCapsuleHalfHeight());
 	if (!Body) return GetOwner()->GetActorLocation() - FVector(0,0,GetStandRootHeightCm());
 	const FVector Extent=Body->GetScaledBoxExtent();
 	const double BoxDepth=FMath::Abs(Body->GetForwardVector().Z)*Extent.X+FMath::Abs(Body->GetRightVector().Z)*Extent.Y+FMath::Abs(Body->GetUpVector().Z)*Extent.Z;
@@ -465,6 +531,17 @@ void UCatPhysicalBodyComponent::RequestJump()
 	if (!Body || !bLocomotionEnabled || !bGrounded || bJumpSeparating || GetWorld()->GetTimeSeconds() < SupportDisabledUntilSeconds)
 	{
 		LogState(TEXT("physics_body_jump_rejected"), TEXT("NoGroundSupport"));
+		return;
+	}
+	if (CharacterMovement)
+	{
+		CharacterMovement->JumpZVelocity = JumpSpeedCmS;
+		if (CharacterMovement->DoJump(false, 0.0f))
+		{
+			bGrounded = false;
+			bPublishJumpAfterPhysics = true;
+			LogState(TEXT("physics_body_jump"), TEXT("CMCJump"));
+		}
 		return;
 	}
 	const double DeltaSpeed = FMath::Max(0.0, JumpSpeedCmS - Body->GetPhysicsLinearVelocity().Z);
@@ -586,16 +663,31 @@ bool UCatPhysicalBodyComponent::TeleportBodyFromAuthority(const FTransform& Tran
 	LeftArm->BreakConstraint();
 	RightArm->BreakConstraint();
 	GetOwner()->SetActorTransform(Transform, false, nullptr, ETeleportType::ResetPhysics);
-	Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
-	Body->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);
+	if (CharacterMovement)
+	{
+		GetOwner()->SetActorRotation(FRotator(0,Transform.Rotator().Yaw,0));
+		CharacterMovement->Velocity = FVector::ZeroVector;
+		CharacterMovement->ClearAccumulatedForces();
+		CharacterMovement->ClearQueuedExternalImpulse();
+		CharacterMovement->SetMovementMode(MOVE_Falling);
+		CharacterMovement->bForceNextFloorCheck = true;
+	}
+	else
+	{
+		Body->SetPhysicsLinearVelocity(FVector::ZeroVector);
+		Body->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);
+	}
 	for (int32 Index = 0; Index < 2; ++Index)
 	{
 		USphereComponent* Hand = GetHand(Index == 0);
 		Hand->SetWorldLocationAndRotation(Transform.TransformPosition(GetRestHandLocalPoint(Index == 0)),
 			Transform.GetRotation(), false, nullptr, ETeleportType::ResetPhysics);
-		Hand->SetPhysicsLinearVelocity(FVector::ZeroVector);
-		Hand->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);
-		ConfigureArm(Index == 0);
+		if (!CharacterMovement)
+		{
+			Hand->SetPhysicsLinearVelocity(FVector::ZeroVector);
+			Hand->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);
+			ConfigureArm(Index == 0);
+		}
 	}
 	MoveInput = FVector::ZeroVector;
 	SupportDisabledUntilSeconds = 0;
@@ -637,10 +729,18 @@ void UCatPhysicalBodyComponent::TickComponent(float DeltaSeconds, ELevelTick Tic
 				LogState(TEXT("physics_body_input_timeout"), TEXT("Released"));
 			}
 		}
-		UpdatePhysicalMovement(DeltaSeconds);
+		if (CharacterMovement)
+		{
+			const bool bFacingAim = FishingMotorSource.IsValid() || Grab->IsReaching(true) || Grab->IsReaching(false);
+			if (bFacingAim) FacingYawDegrees = ViewInput.Yaw;
+			else if (!MoveInput.IsNearlyZero()) FacingYawDegrees = MoveInput.Rotation().Yaw;
+			CharacterMovement->UpdatePeerPushContacts();
+		}
+		else UpdatePhysicalMovement(DeltaSeconds);
 	}
 	else if (bReceivedSnapshot)
 	{
+		if (CharacterMovement) CharacterMovement->ObserveSnapshot(Snapshot.Velocity, Snapshot.MoveIntent);
 		const double Alpha = 1.0 - FMath::Exp(-60.0 * FMath::Max(0.0f, DeltaSeconds));
 		GetOwner()->SetActorLocationAndRotation(FMath::Lerp(GetOwner()->GetActorLocation(), Snapshot.BodyLocation, Alpha),
 			FQuat::Slerp(GetOwner()->GetActorQuat(), Snapshot.BodyRotation.Quaternion(), Alpha), false, nullptr, ETeleportType::TeleportPhysics);
@@ -679,6 +779,7 @@ void UCatPhysicalBodyComponent::EndPlay(EEndPlayReason::Type EndPlayReason)
 	if (auto* Policy = GetWorld()->GetSubsystem<UCatLightPropSubsystem>())
 	{
 		Policy->UnregisterBody(Body);
+		if (CharacterMovement) Policy->UnregisterBody(CastChecked<ACharacter>(GetOwner())->GetCapsuleComponent());
 		Policy->UnregisterBody(LeftHand);
 		Policy->UnregisterBody(RightHand);
 	}

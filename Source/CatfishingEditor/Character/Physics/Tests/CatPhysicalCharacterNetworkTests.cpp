@@ -1,4 +1,4 @@
-﻿#if WITH_DEV_AUTOMATION_TESTS
+#if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationEditorCommon.h"
@@ -202,7 +202,8 @@ public:
 		{
 			if (Now-StageStarted<1.0 || FVector::Distance(ClientCat->GetActorLocation(),ServerCat->GetActorLocation())>4.0)
 				return Wait(TEXT("initial replicated placement"));
-			Test->TestTrue(TEXT("server body owns Chaos simulation"),ServerBody->GetBody()->IsSimulatingPhysics());
+			Test->TestTrue(TEXT("server body uses upright CMC"),ServerBody->UsesCharacterMovement());
+			Test->TestFalse(TEXT("server body cannot freely tumble"),ServerBody->GetBody()->IsSimulatingPhysics());
 			Test->TestFalse(TEXT("client observes server body snapshots"),ClientBody->GetBody()->IsSimulatingPhysics());
 			// Only the owning client changes view. Server yaw must arrive through the physical input RPC, not a test write.
 			Local->SetControlRotation(FRotator(0,90,0));

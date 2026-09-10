@@ -2,19 +2,47 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "CatCharacterMovementComponent.generated.h"
 
-/** Keeps the existing BP/ABP component identity and movement configuration. Chaos owns motion. */
+struct CATFISHING_API FCatCMCMotionPrediction
+{
+    FCatBodyDriveSample Drive;
+    FVector Position = FVector::ZeroVector;
+    FVector Velocity = FVector::ZeroVector;
+    FVector ExternalForce = FVector::ZeroVector;
+    double MassKg = 4;
+    double GroundResistanceNewtons = .8;
+    double GravityZ = -980;
+    bool bGrounded = true;
+};
+
+/** Upright capsule locomotion. The existing authority input/snapshot channel schedules one CMC step. */
 UCLASS()
 class CATFISHING_API UCatCharacterMovementComponent : public UCharacterMovementComponent
 {
 	GENERATED_BODY()
 public:
-	/** Read-only animation bridge; does not perform a CMC step or predict another body. */
-	void RefreshPhysicalObservation();
+	UCatCharacterMovementComponent();
+	/** Passive ground contact resistance, independent of voluntary fishing strength. */
+	UPROPERTY(EditAnywhere, Category="Catfishing|Movement", meta=(ClampMin="0"))
+	float GroundResistanceNewtons = 0.8f;
+	void AdvanceFromAuthority(float DeltaSeconds);
+	void QueueExternalImpulse(FVector Impulse) { QueuedExternalImpulse += Impulse; }
+	void ClearQueuedExternalImpulse() { QueuedExternalImpulse = MovementExternalForce = FVector::ZeroVector; }
+	FCatCMCMotionPrediction CaptureMotionPrediction();
+	static void AdvanceMotionPrediction(FCatCMCMotionPrediction& Sample, const FVector& LineForceNewtons, double Seconds);
+	double GetExternalTractionTravelLimit(const FVector& Direction, double MaximumDistance) const;
+	void ObserveSnapshot(const FVector& ObservedVelocity, const FVector& ObservedIntent);
 	virtual bool IsFalling() const override;
 	virtual bool IsMovingOnGround() const override;
+	void UpdatePeerPushContacts();
 	virtual void StopMovementImmediately() override;
-	virtual void PerformMovement(float DeltaSeconds) override;
 	virtual void CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration) override;
+	virtual void PhysicsRotation(float DeltaTime) override;
+	virtual bool IsWalkable(const FHitResult& Hit) const override;
+	virtual void InitCollisionParams(FCollisionQueryParams& OutParams, FCollisionResponseParams& OutResponseParam) const override;
+private:
+	FVector QueuedExternalImpulse = FVector::ZeroVector;
+	FVector MovementExternalForce = FVector::ZeroVector;
 };

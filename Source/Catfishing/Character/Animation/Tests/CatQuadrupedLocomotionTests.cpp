@@ -172,7 +172,7 @@ bool FCatLocomotionFormalConsumerTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("formal ABP is active"), Original->GetClass()->GetPathName().Contains(TEXT("ABP_Cat")));
 	for (const double Speed : {100.0, 200.0, 300.0}) CatLocomotionTest::MeasureWalking(this, Scene, Cat, Speed);
 	TestEqual(TEXT("stride correction keeps the existing animation instance"), Cat->GetMesh()->GetAnimInstance(), Original);
-	TestTrue(TEXT("body retains authority simulation"), Body->GetBody()->IsSimulatingPhysics());
+	TestTrue(TEXT("body retains authority CMC movement"), Body->UsesCharacterMovement() && !Body->GetBody()->IsSimulatingPhysics());
 	return !HasAnyErrors();
 }
 

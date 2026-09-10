@@ -115,6 +115,7 @@ public:
 private:
 	friend class FCatFishingPhysicalGripGraphTest;
 	friend class FCatFishingPhysicalCouplingTest;
+	friend class FCatFishingCMCStabilityTest;
 	friend class FCatFishingFormalPhysicalRunnerTest;
 	friend class FCatFishBehaviorStateTreeRuntimeTest;
 	friend class FCatFishingSlackAimCommandRoutingTest;

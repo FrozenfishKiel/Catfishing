@@ -90,7 +90,7 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double StrongConfrontationConfirmationSeconds = 0.2;
 	double AngleStrengthExponent = 1.0;
 	double MinimumRodLeverageMultiplier = 0.4;
-	/** 静态锚点模型的历史鱼位置误差修正速度上限；物理端点使用实际响应求解。 */
+	/** 静态锚点/CMC候选的历史几何误差回收上限；独立于鱼动力速度和做功。 */
 	double MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 160.0;
 	double MaximumLineLengthCentimeters = 0.0;
 	double RodDurability = TNumericLimits<double>::Max();
@@ -99,9 +99,29 @@ struct CATFISHING_API FCatFightSimulationConfig
 	bool IsValid() const;
 };
 
+/** Read-only candidate query. The response never commits pose, filter history or effort. */
+struct CATFISHING_API FCatFightCMCPredictionQuery
+{
+    FVector ForceNewtons = FVector::ZeroVector;
+    FVector TravelAxis = FVector::ForwardVector;
+    double Seconds = 0;
+    double TorqueStrengthMetersPerNewton = 0;
+    double TravelLimitCentimeters = 0;
+};
+struct CATFISHING_API FCatFightCMCPredictionResult
+{
+    FVector RodTipWorldPosition = FVector::ZeroVector;
+    bool bSucceeded = false;
+};
+
 /** 权威端点观察与本步操竿努力。Chaos 决定端点位置，卷线器只改变线长。 */
 struct CATFISHING_API FCatFightRodConstraintInput
 {
+    /** Bound only for a controlled CMC carrier. Captures immutable movement/aim values for this solve. */
+    TFunction<FCatFightCMCPredictionResult(const FCatFightCMCPredictionQuery&)> PredictCMCEndpoint;
+    /** One read-only capsule sweep per simulation step, outside candidate/reel iterations. */
+    TFunction<double(const FVector&, double)> GetCMCTravelLimit;
+
 	FVector RodTipWorldPosition = FVector::ZeroVector;
 	FVector RodForwardWorld = FVector::ForwardVector;
 	FVector RodTipVelocityCentimetersPerSecond = FVector::ZeroVector;
@@ -120,7 +140,7 @@ struct CATFISHING_API FCatFightRodConstraintInput
 	FVector PendingLinePositionMomentNewtonSecondsSquared = FVector::ZeroVector;
 	/** Owner movement alignment with line resistance, within [-1, 1]. */
 	double CatSupportAlignment = 1.0;
-	/** False means a genuinely static anchor. True predicts force response only; Chaos owns all endpoint poses. */
+	/** False means a static anchor. True uses the dynamic endpoint response or the supplied CMC candidate; movement owns actual poses. */
 	bool bPhysicalRodEndpoint = false;
 	/** 从权威转矩积分采集本步用力平方时间和真实正功转角；不含身体平移。 */
 	double CatRodExertionSquaredSeconds = 0.0;
@@ -208,6 +228,7 @@ struct CATFISHING_API FCatFightSimulationTrace
 	double CatRodSupportBeforeHoldDeduction = 0.0;
 	double WearLoad = 0.0;
 	double RodWearDelta = 0.0;
+	bool bCMCEndpointPredicted = false;
 	bool bInputAccepted = false;
 	bool bFreeSpool = false;
 	bool bLineRestraining = false;

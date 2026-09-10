@@ -261,7 +261,7 @@ bool UCatFishingFightRunner::UpdateOperatorIntentAndProperties()
 	OperatorState.ActiveFishingStrength = Physical->IsLocomotionEnabled() && FrozenOperatorStamina > 0.0 ? Strength : 0.0;
 	OperatorState.StaminaMaximum = FrozenOperatorStaminaMaximum;
 	Config.PrimaryOperatorCatStrength = OperatorState.ActiveFishingStrength;
-	Config.PrimaryOperatorMassKilograms = Physical->GetBody()->GetMass();
+	Config.PrimaryOperatorMassKilograms = Physical->GetBody()->GetBodyInstance()->GetBodyMass();
 	Config.CatStaminaMaximum = FrozenOperatorStaminaMaximum;
 	State.CatStamina = FrozenOperatorStamina;
 	FrozenOperatorAbilitySystem = ASC;
@@ -1202,7 +1202,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 				"StepId=%llu Frame=%llu WorldTime=%.6f WorldGapSeconds=%.6f FixedStepSeconds=%.6f World=%s LocalRole=%d "
 				"Phase=%s Behavior=%s ForcedEscape=%s Outcome=%s FishBefore=%s FishVelocityBeforeCmS=%s ResolvedFishVelocityCmS=%s "
 				"DesiredFishDirection=%s SteeringTarget=%s RetargetRemainingSeconds=%.4f BoundaryAvoidanceSeconds=%.4f "
-				"PositionCorrectionCm=%.4f ConstraintRodEnd=%s "
+				"PositionCorrectionCm=%.4f CMCEndpointPredicted=%d ConstraintRodEnd=%s "
 				"RodForward=%s RodTipVelocityCmS=%s HolderVelocityCmS=%s FishStamina=%.4f CatStamina=%.4f"),
 			*SessionActor->GetSnapshot().FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
@@ -1234,7 +1234,7 @@ void UCatFishingFightRunner::HandleFixedStep()
 			*Step.ResolvedFishVelocityCentimetersPerSecond.ToCompactString(),
 			*DesiredFishDirection.ToCompactString(), *SteeringState.TargetDirection.ToCompactString(),
 			SteeringState.RetargetSecondsRemaining, SteeringState.BoundaryAvoidanceSecondsRemaining,
-			Step.Trace.FishPositionCorrectionCentimeters,
+			Step.Trace.FishPositionCorrectionCentimeters, Step.Trace.bCMCEndpointPredicted,
 			*Step.Trace.ConstraintRodEndWorldPosition.ToCompactString(),
 			*RodConstraint.RodForwardWorld.ToCompactString(), *RodConstraint.RodTipVelocityCentimetersPerSecond.ToCompactString(),
 			*RodConstraint.CarrierVelocityCentimetersPerSecond.ToCompactString(),

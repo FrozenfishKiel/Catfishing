@@ -286,7 +286,8 @@ bool FCatFishingServiceRodBoundSessionRoutingTest::RunTest(const FString& Parame
 	Character->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(FVector(120,0,20)),TEXT("RoutingOnlyFixture"));
 	TestTrue(TEXT("read-only rod refresh succeeds"),FirstRod->RefreshHeldTransformFromAuthority(.05));
 	TestTrue(TEXT("metadata-only routing fixture cannot attach or teleport physical rod"),FirstRod->GetPhysicalRodBody()->GetComponentTransform().Equals(ObservedRodPose,1.e-8));
-	TestTrue(TEXT("formal character uses its physical receiver"),Character->GetPhysicalBodyComponent()->GetBody()->IsSimulatingPhysics());
+	TestTrue(TEXT("formal character routes forces to upright CMC"),Character->GetPhysicalBodyComponent()->UsesCharacterMovement());
+	TestFalse(TEXT("formal body cannot freely tumble"),Character->GetPhysicalBodyComponent()->GetBody()->IsSimulatingPhysics());
 
 	const FGuid FirstSessionId = FGuid::NewGuid();
 	FirstSession->Snapshot.FishingSessionId = FirstSessionId;

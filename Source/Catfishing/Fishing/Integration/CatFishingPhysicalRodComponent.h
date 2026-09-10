@@ -15,6 +15,7 @@ class UCatPhysicsGrabComponent;
 class UCatFishingFightRunner;
 struct FCatPhysicsGripState;
 struct FCatFightRodConstraintInput;
+struct FCatFishingRodRotationInput;
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatFishingBeforePhysicsForces, float);
 
 /** Physical receiver and mechanical observations. Owner control and resource transactions remain in Service/Session. */
@@ -61,6 +62,8 @@ private:
 	void UpdatePrimaryMotorBudget();
 	void RefreshInputTickPrerequisites();
 	void AdvanceControlledAim(float DeltaTime);
+	bool BuildControlledRotationInput(FCatFishingRodRotationInput& Input) const;
+	void PopulateCMCEndpointPrediction(FCatFightRodConstraintInput& OutInput);
 	void RefreshControlledCarrier();
 	void PositionControlledRod();
 	TWeakObjectPtr<UPrimitiveComponent> ControlledBody;

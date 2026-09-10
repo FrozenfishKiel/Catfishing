@@ -159,7 +159,7 @@ namespace CatLocomotionNetwork
 					|| ServerVisual->GetLocomotionObservation().Alpha < 0.98 || ClientVisual->GetLocomotionObservation().Alpha < 0.98) return false;
 				for (auto* Visual : {ServerVisual, ClientVisual})
 					Test->TestTrue(TEXT("formal ABP contributes standing foot placement on each endpoint"), Visual->GetLocomotionObservation().GroundMask == 15);
-				Test->TestTrue(TEXT("server retains sole physical simulation authority"), ServerBody->GetBody()->IsSimulatingPhysics());
+				Test->TestTrue(TEXT("server retains sole CMC movement authority"), ServerBody->UsesCharacterMovement() && !ServerBody->GetBody()->IsSimulatingPhysics());
 				Test->TestFalse(TEXT("client foot IK consumes snapshots without enabling local body simulation"), ClientBody->GetBody()->IsSimulatingPhysics());
 				if (Test->HasAnyErrors()) return true;
 				if (FApp::CanEverRender()) Capture(Client, TEXT("FormalStandingIK"));

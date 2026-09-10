@@ -18,6 +18,7 @@
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Animation/AnimMontage.h"
 #include "Condition/CatConditionComponent.h"
+#include "Condition/CatConditionPresentationComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentSettings.h"
 #include "Growth/CatGrowthComponent.h"
@@ -54,6 +55,7 @@ ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
 	// ASC 不会仅凭同 Actor 上存在 AttributeSet 就稳定纳入查询列表；构造期显式登记，保证占有时播种属性不会找不到 AttributeSet。
 	AbilitySystemComponent->AddAttributeSetSubobject(SurvivalAttributes.Get());
 	ConditionComponent = CreateDefaultSubobject<UCatConditionComponent>(TEXT("ConditionComponent"));
+	ConditionPresentation = CreateDefaultSubobject<UCatConditionPresentationComponent>(TEXT("ConditionPresentation"));
 	GrowthComponent = CreateDefaultSubobject<UCatGrowthComponent>(TEXT("GrowthComponent"));
 	InventoryComponent = CreateDefaultSubobject<UCatInventoryComponent>(TEXT("InventoryComponent"));
 	EquipmentComponent = CreateDefaultSubobject<UCatEquipmentComponent>(TEXT("EquipmentComponent"));
@@ -241,25 +243,26 @@ UCatInventoryComponent* ACatCharacter::GetInventoryComponent() const
 void ACatCharacter::BeginPlay()
 {
 	Super::BeginPlay();
-	// Keep the BP identity and ASC, but make the real box the only transform writer.
-	if (GetRootComponent()!=PhysicalBody)
-	{
-		USceneComponent* PreviousRoot = GetRootComponent();
-		const FTransform PreviousTransform=GetActorTransform();
-		PhysicalBody->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
-		SetRootComponent(PhysicalBody);
-		PhysicalBody->SetWorldTransform(PreviousTransform);
-		if (PreviousRoot) PreviousRoot->AttachToComponent(PhysicalBody, FAttachmentTransformRules::KeepWorldTransform);
-		GetCapsuleComponent()->AttachToComponent(PhysicalBody,FAttachmentTransformRules::KeepWorldTransform);
-	}
-	StopCharacterMovementSimulation();
-	PhysicalBodyComponent->ConfigureMovementDefaults(GetCharacterMovement()->JumpZVelocity,
-		GetCharacterMovement()->GravityScale, GetCharacterMovement()->MaxWalkSpeed);
-	// The formal BP keeps its authored mesh size (including the legacy capsule's scale).
-	// Scale physical geometry rather than shrinking that mesh or retaining a second 1x body.
+	// Preserve the authored mesh/camera world transforms while restoring the capsule root.
+	const FTransform ActorPose = GetActorTransform();
 	const double MeshGeometryScale = GetMesh()->GetSkeletalMeshAsset()
 		? GetMesh()->GetComponentTransform().GetRelativeTransform(PhysicalBody->GetComponentTransform()).GetScale3D().GetAbsMax() : 1.0;
+	TArray<USceneComponent*> AuthoredChildren;
+	GetCapsuleComponent()->GetChildrenComponents(true, AuthoredChildren);
+	TArray<FTransform> ChildTransforms;
+	for (const auto* Child : AuthoredChildren) ChildTransforms.Add(Child->GetComponentTransform());
+	GetCapsuleComponent()->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+	SetRootComponent(GetCapsuleComponent());
+	GetCapsuleComponent()->SetWorldTransform(ActorPose);
+	PhysicalBody->AttachToComponent(GetCapsuleComponent(), FAttachmentTransformRules::KeepWorldTransform);
+	for (int32 Index=0; Index<AuthoredChildren.Num(); ++Index) AuthoredChildren[Index]->SetWorldTransform(ChildTransforms[Index]);
+	GetCapsuleComponent()->SetCapsuleSize(13.0 * MeshGeometryScale, 20.0 * MeshGeometryScale);
+	ConfigureCharacterMovementAuthority();
+	PhysicalBodyComponent->UseCharacterMovement(CastChecked<UCatCharacterMovementComponent>(GetCharacterMovement()));
+	PhysicalBodyComponent->ConfigureMovementDefaults(GetCharacterMovement()->JumpZVelocity,
+		GetCharacterMovement()->GravityScale, GetCharacterMovement()->MaxWalkSpeed);
 	PhysicalBodyComponent->Initialize(PhysicalBody,LeftPhysicsHand,RightPhysicsHand,LeftPhysicsArm,RightPhysicsArm,PhysicsGrab,MeshGeometryScale);
+	PrimaryActorTick.AddPrerequisite(PhysicalBodyComponent, PhysicalBodyComponent->GetPostMovementTick());
 	if (GetNetMode()!=NM_DedicatedServer && GetMesh()->GetSkeletalMeshAsset())
 	{
 		GetMesh()->PrimaryComponentTick.TickGroup=TG_PostPhysics;
@@ -277,7 +280,7 @@ void ACatCharacter::BeginPlay()
 void ACatCharacter::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
-	StopCharacterMovementSimulation();
+	ConfigureCharacterMovementAuthority();
 	PhysicalBodyComponent->BeginControlEpochFromAuthority();
 	InitializeAbilityActorInfo();
 	if (HasAuthority())
@@ -319,7 +322,7 @@ void ACatCharacter::OnRep_Controller()
 void ACatCharacter::PawnClientRestart()
 {
 	Super::PawnClientRestart();
-	StopCharacterMovementSimulation();
+	ConfigureCharacterMovementAuthority();
 	InitializeAbilityActorInfo();
 }
 
@@ -368,12 +371,19 @@ void ACatCharacter::InitializeAbilityActorInfo()
 	}
 }
 
-void ACatCharacter::StopCharacterMovementSimulation()
+void ACatCharacter::ConfigureCharacterMovementAuthority()
 {
 	SetReplicateMovement(false);
 	bUseControllerRotationYaw=false;
-	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
-	GetCharacterMovement()->Deactivate();
+	GetCapsuleComponent()->SetCollisionProfileName(TEXT("Pawn"));
+	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
+	GetCapsuleComponent()->CanCharacterStepUpOn=ECB_No;
+	GetCharacterMovement()->SetUpdatedComponent(GetCapsuleComponent());
+	GetCharacterMovement()->bRunPhysicsWithNoController=true;
+	GetCharacterMovement()->bEnablePhysicsInteraction=false;
+	GetCharacterMovement()->Mass=4.0f;
+	GetCharacterMovement()->SetMovementMode(MOVE_Falling);
 	GetCharacterMovement()->SetComponentTickEnabled(false);
 	GetMesh()->bOnlyAllowAutonomousTickPose=false;
 	GetMesh()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
@@ -386,7 +396,6 @@ void ACatCharacter::RefreshPhysicalCondition()
 void ACatCharacter::Tick(float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
-	if (UCatCharacterMovementComponent* Movement=Cast<UCatCharacterMovementComponent>(GetCharacterMovement())) Movement->RefreshPhysicalObservation();
 	PhysicalVisual->SetHandReachState(PhysicsGrab->IsReaching(true),PhysicsGrab->IsReaching(false));
 }
 FVector ACatCharacter::GetVelocity() const { return PhysicalBodyComponent ? PhysicalBodyComponent->GetVelocity() : Super::GetVelocity(); }
@@ -412,11 +421,9 @@ bool ACatCharacter::TeleportTo(const FVector& DestLocation,const FRotator& DestR
 	if (!HasAuthority() || DestLocation.ContainsNaN() || DestRotation.ContainsNaN()) return false;
 	FCollisionQueryParams Params(SCENE_QUERY_STAT(CatPhysicalTeleport),false,this);
 	const FTransform Destination(DestRotation,DestLocation,GetActorScale3D());
-	// Check actual box and reset hand locations; allow 0.2 cm contact skin for the resting paws.
-	if (!bNoCheck && GetWorld()->OverlapBlockingTestByChannel(DestLocation,DestRotation.Quaternion(),ECC_PhysicsBody,
-		FCollisionShape::MakeBox(PhysicalBody->GetScaledBoxExtent()*0.99),Params)) return false;
-	for (bool bLeft : {true,false})
-		if (!bNoCheck && GetWorld()->OverlapBlockingTestByChannel(Destination.TransformPosition(PhysicalBodyComponent->GetRestHandLocalPoint(bLeft)),FQuat::Identity,ECC_PhysicsBody,
-			FCollisionShape::MakeSphere(FMath::Max(0.1,PhysicalBodyComponent->GetHand(bLeft)->GetScaledSphereRadius()-0.2)),Params)) return false;
+	PhysicalBodyComponent->AppendSupportQueryIgnores(Params);
+	if (!bNoCheck && GetWorld()->OverlapBlockingTestByChannel(DestLocation, FQuat::Identity, ECC_Pawn,
+		FCollisionShape::MakeCapsule(GetCapsuleComponent()->GetScaledCapsuleRadius() * .99,
+			GetCapsuleComponent()->GetScaledCapsuleHalfHeight() * .99), Params)) return false;
 	return bIsATest || PhysicalBodyComponent->TeleportBodyFromAuthority(Destination,TEXT("CharacterTeleport"));
 }

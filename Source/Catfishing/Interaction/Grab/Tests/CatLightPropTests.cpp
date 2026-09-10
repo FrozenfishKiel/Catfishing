@@ -1,6 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Character/Physics/Tests/CatPhysicalTestWorld.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
 #include "Interaction/Grab/CatLightPropComponent.h"
@@ -52,19 +53,39 @@ bool FCatLightPropCollisionTest::RunTest(const FString& Parameters)
 		const FQuat Rotation = Physical->GetBody()->GetComponentQuat();
 		const FVector HandBefore = Physical->GetHand(true)->GetComponentLocation();
 		Prop->GetPhysicsMesh()->SetPhysicsLinearVelocity(-Direction * 400);
-		Scene.Step(40, 120);
+		double MinimumHandClearance = 10000;
+		for (int32 I=0; I<40; ++I)
+		{
+			Scene.Step(1, 120);
+			FVector Surface;
+			const double Distance = Prop->GetPhysicsMesh()->GetClosestPointOnCollision(Physical->GetHand(true)->GetComponentLocation(), Surface);
+			MinimumHandClearance = FMath::Min(MinimumHandClearance, Distance - Physical->GetHand(true)->GetScaledSphereRadius());
+		}
 		const auto* Policy = Scene.World.GetTestWorld()->GetSubsystem<UCatLightPropSubsystem>();
 		const double Drift = FVector::Distance(Before, Physical->GetBody()->GetComponentLocation());
 		const double Turn = FMath::RadiansToDegrees(Rotation.AngularDistance(Physical->GetBody()->GetComponentQuat()));
-		AddInfo(FString::Printf(TEXT("Event=light_prop_collision_verified Hand=%d Horizontal=%d Contacts=%llu CatDriftCm=%.6f CatTurnDeg=%.6f PropSpeedCmS=%.3f"),
-			HitHand, Horizontal, Policy->GetModifiedContactCount(), Drift, Turn, Prop->GetPhysicsMesh()->GetPhysicsLinearVelocity().Size()));
+		AddInfo(FString::Printf(TEXT("Event=light_prop_collision_verified Hand=%d Horizontal=%d Contacts=%llu CatDriftCm=%.6f CatTurnDeg=%.6f PropSpeedCmS=%.3f PropOffset=%s PropVelocity=%s MinHandClearanceCm=%.3f"),
+			HitHand, Horizontal, Policy->GetModifiedContactCount(), Drift, Turn, Prop->GetPhysicsMesh()->GetPhysicsLinearVelocity().Size(), *(Prop->GetActorLocation()-Target->GetComponentLocation()).ToCompactString(), *Prop->GetPhysicsMesh()->GetPhysicsLinearVelocity().ToCompactString(), MinimumHandClearance));
 		TestTrue(TEXT("actual Chaos contacts executed the one-way policy"), Policy->GetModifiedContactCount() > 0);
 		TestTrue(TEXT("ten-kilogram prop cannot displace the freely floating cat"), Drift < .1);
 		TestTrue(TEXT("prop cannot rotate the cat"), Turn < .1);
 		TestTrue(TEXT("prop collision cannot knock its hand away"), FVector::Distance(HandBefore, Physical->GetHand(true)->GetComponentLocation()) < .1);
-		TestTrue(TEXT("solid prop remains on the impact side instead of passing through the cat"),
-			FVector::DotProduct(Prop->GetActorLocation() - Target->GetComponentLocation(), Direction) > 4);
-		TestTrue(TEXT("contact stops or rebounds the incoming prop"), FVector::DotProduct(Prop->GetPhysicsMesh()->GetPhysicsLinearVelocity(), Direction) >= -.1);
+        if (HitHand)
+        {
+            // The upright capsule can deflect the prop around an offset paw before it reaches it.
+            // Test solid separation throughout the path, not reflection about an obsolete box plane.
+            const FVector Offset = Prop->GetActorLocation() - Target->GetComponentLocation();
+            const double Deflection = (Offset - Direction * FVector::DotProduct(Offset, Direction)).Size();
+            TestTrue(TEXT("prop never penetrates the hand surface"), MinimumHandClearance >= -.1);
+            TestTrue(TEXT("solid contact rebounds or diverts the prop around the paw"),
+                FVector::DotProduct(Prop->GetPhysicsMesh()->GetPhysicsLinearVelocity(), Direction) >= -.1 || Deflection > 8);
+        }
+        else
+        {
+            TestTrue(TEXT("solid prop remains on the impact side instead of passing through the cat"),
+                FVector::DotProduct(Prop->GetActorLocation() - Target->GetComponentLocation(), Direction) > 4);
+            TestTrue(TEXT("contact stops or rebounds the incoming prop"), FVector::DotProduct(Prop->GetPhysicsMesh()->GetPhysicsLinearVelocity(), Direction) >= -.1);
+        }
 	}
 	return !HasAnyErrors();
 }
@@ -135,7 +156,8 @@ bool FCatLightPropSupportTest::RunTest(const FString& Parameters)
 	Physical->AppendSupportQueryIgnores(Ordinary);
 	TestTrue(TEXT("support query sees the actual floor beneath the prop"), Scene.World.GetTestWorld()->LineTraceSingleByChannel(Hit, Origin, End, ECC_PhysicsBody, Ordinary) && Hit.GetActor() == Scene.Floor);
 	Scene.Step(120);
-	TestTrue(TEXT("solid prop under cat does not become a suspension spring"), FMath::Abs(Physical->GetBody()->GetComponentLocation().Z - Physical->GetStandRootHeightCm()) < 2);
+	TestTrue(TEXT("solid prop under cat does not become a suspension spring"), Cat->GetCharacterMovement()->CurrentFloor.HitResult.GetActor() == Scene.Floor
+		&& FMath::Abs(Physical->GetBody()->GetComponentLocation().Z - Physical->GetStandRootHeightCm()) <= UCharacterMovementComponent::MAX_FLOOR_DIST + .1);
 	TestTrue(TEXT("world floor remains valid support"), Physical->IsGrounded());
 	Prop->ConfigureFromAuthority(FVector(100, 100, 4), false, .35f, FLinearColor::Green);
 	Prop->SetActorLocation(FVector(0, 0, 8));

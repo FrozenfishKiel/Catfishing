@@ -138,6 +138,7 @@ namespace CatLightPropNetwork
 				if (FApp::CanEverRender())
 				{
 					auto* Camera = Client->SpawnActor<ACameraActor>();
+					ObservationCamera = Camera;
 					const FVector Position(-80, -450, 175), LookAt(80, 0, 60);
 					Camera->SetActorLocationAndRotation(Position, (LookAt - Position).Rotation());
 					Camera->GetCameraComponent()->SetFieldOfView(65);
@@ -150,7 +151,7 @@ namespace CatLightPropNetwork
 			ClientBody->SetViewIntent(FRotator(0, Stage == 2 ? 40 : 0, 0));
 			HelperBody->SetMoveIntent(Stage == 5 ? FVector::ForwardVector : FVector::ZeroVector);
 			HelperBody->SetViewIntent(Stage >= 5 && Rod ?
-				(Rod->GetGripWorldTransform().GetLocation() - HelperBody->GetGrab()->GetShoulderWorldLocation(true)).Rotation()
+				(Rod->GetGripWorldTransform().GetLocation() + Rod->GetPhysicalRodBody()->GetForwardVector() * 12.0 - HelperBody->GetGrab()->GetShoulderWorldLocation(true)).Rotation()
 				: FRotator(0, 180, 0));
 			if (Stage == 1)
 			{
@@ -231,7 +232,8 @@ namespace CatLightPropNetwork
 					&& FCatLightPropNetworkTestAccess::RetakeControl(Rod, Cat->GetPlayerState())
 					&& Rod->GetPhysicalRodComponent()->CommitPrimaryHold(Cat->GetPlayerState()))) return true;
 				// The helper stands on the floor and reaches up to the handle through normal grab input.
-				const FVector Point = Rod->GetGripWorldTransform().GetLocation();
+				// Aim at exposed shaft, beyond the primary kinematic hand covering the handle.
+				const FVector Point = Rod->GetGripWorldTransform().GetLocation() + Rod->GetPhysicalRodBody()->GetForwardVector() * 12.0;
 				HelperBody->TeleportBodyFromAuthority(FTransform(FRotator(0, 180, 0), FVector(Point.X + 40, Point.Y - 6.8, HelperBody->GetStandRootHeightCm())), TEXT("LightPropHelperReachSetup"));
 				HelperBody->GetGrab()->SetGrabInput(true, true);
 				Next(8, Now);
@@ -241,38 +243,34 @@ namespace CatLightPropNetwork
 				if (Now - StageStarted > 4) { Test->AddError(TEXT("grounded helper could not reach the controlled rod")); return true; }
 				if (HelperBody->GetGrab()->GetGripTarget(true) != Rod) return false;
 				HelperGrip = HelperBody->GetGrab()->GetGripState(true).GripId;
+				HelperLocalContact = HelperBody->GetGrab()->GetGripState(true).TargetLocalPoint;
 				PullStartPrimary = Body->GetBody()->GetComponentLocation();
 				PullStartHelper = HelperBody->GetBody()->GetComponentLocation();
 				Next(5, Now);
 			}
 			else if (Stage == 5)
 			{
-				TInlineComponentArray<UPhysicsConstraintComponent*> Constraints(Helper);
-				for (auto* Constraint : Constraints)
-				{
-					UPrimitiveComponent *A = nullptr, *B = nullptr; FName BoneA, BoneB;
-					Constraint->GetConstrainedComponents(A, BoneA, B, BoneB);
-					if (Constraint->GetFName() != FName(TEXT("LeftGrabContact")) || Constraint->IsBroken() || !A || !B) continue;
-					Test->TestEqual(TEXT("helper rod grip physically pulls the primary carrier"), B, static_cast<UPrimitiveComponent*>(Body->GetBody()));
-					FVector Force, Torque; Constraint->GetConstraintForce(Force, Torque);
-					MaximumGripForce = FMath::Max(MaximumGripForce, Force.Size());
-					FTransform PoseA = A->GetBodyInstance()->GetUnrealWorldTransform(), PoseB = B->GetBodyInstance()->GetUnrealWorldTransform();
-					PoseA.RemoveScaling(); PoseB.RemoveScaling();
-					const auto& Joint = Constraint->ConstraintInstance;
-					const FVector AnchorA = PoseA.TransformPosition(Joint.GetRefFrame(EConstraintFrame::Frame1).GetLocation() * Joint.GetLastKnownScale());
-					const FVector AnchorB = PoseB.TransformPosition(Joint.GetRefFrame(EConstraintFrame::Frame2).GetLocation() * Joint.GetLastKnownScale());
-					MaximumJointGap = FMath::Max(MaximumJointGap, FVector::Distance(AnchorA, AnchorB));
-					MaximumAnchorError = FMath::Max(MaximumAnchorError, FVector::Distance(AnchorB, HelperBody->GetGrab()->GetGripWorldLocation(true)));
-				}
+				auto* HelperGrab = HelperBody->GetGrab();
+				Test->TestEqual(TEXT("helper rod grip applies traction to the primary carrier"), HelperGrab->GetTractionReceiverForDiagnostics(true), Body);
+				MaximumGripForce = FMath::Max(MaximumGripForce, HelperGrab->GetLastTractionForceForDiagnostics(true).Size());
+				MaximumTractionError = FMath::Max(MaximumTractionError, HelperGrab->GetTractionErrorForDiagnostics(true).Size());
+				MaximumHandGap = FMath::Max(MaximumHandGap, FVector::Distance(HelperBody->GetHand(true)->GetComponentLocation(), HelperGrab->GetGripWorldLocation(true)));
+				MaximumAnchorError = FMath::Max(MaximumAnchorError, FVector::Distance(HelperLocalContact, HelperGrab->GetGripState(true).TargetLocalPoint));
 				if (ClientLight->GetState().GripCount == 2) bTwoGripsReplicated = true;
+                if (ObservationCamera.IsValid())
+                {
+                    const FVector Centre = (Cat->GetActorLocation() + Helper->GetActorLocation()) * .5;
+                    const FVector At = Centre + FVector(-80,-330,130);
+                    ObservationCamera->SetActorLocationAndRotation(At, (Centre + FVector(0,0,20) - At).Rotation());
+                }
 				if (Now - StageStarted < 2.5) return false;
-				Test->AddInfo(FString::Printf(TEXT("Event=light_prop_shared_joint_measured JointGapCm=%.3f StateAnchorErrorCm=%.3f ForceKgCmS2=%.3f"), MaximumJointGap, MaximumAnchorError, MaximumGripForce));
+				Test->AddInfo(FString::Printf(TEXT("Event=light_prop_shared_traction_measured TractionErrorCm=%.3f StateAnchorErrorCm=%.3f ForceKgCmS2=%.3f HandGapCm=%.3f"), MaximumTractionError, MaximumAnchorError, MaximumGripForce, MaximumHandGap));
 				Test->TestTrue(TEXT("both real grips remain during opposing movement"), Light->GetState().GripCount == 2 && bTwoGripsReplicated);
 				const FVector PrimaryTravel = Body->GetBody()->GetComponentLocation() - PullStartPrimary;
 				const FVector HelperTravel = HelperBody->GetBody()->GetComponentLocation() - PullStartHelper;
 				Test->AddInfo(FString::Printf(TEXT("Event=light_prop_opposing_pull PrimaryTravel=%s HelperTravel=%s PrimaryIntent=%s HelperIntent=%s"), *PrimaryTravel.ToCompactString(), *HelperTravel.ToCompactString(), *Body->GetMoveIntent().ToCompactString(), *HelperBody->GetMoveIntent().ToCompactString()));
-				Test->TestTrue(TEXT("actual joint pulls the helper against its move input without separating the chosen grip"),
-					MaximumGripForce > 0 && MaximumJointGap < 5 && MaximumAnchorError < .1 && PrimaryTravel.X < -10 && HelperTravel.X < -10);
+				Test->TestTrue(TEXT("actual traction pulls the helper against its move input without separating the chosen grip"),
+					MaximumGripForce > 0 && MaximumHandGap < 5 && MaximumAnchorError < .1 && PrimaryTravel.X < -10 && HelperTravel.X < -10);
 				Test->TestFalse(TEXT("pull test has no fish load"), Light->GetState().bExternalLoad);
 				Test->TestEqual(TEXT("helper never becomes a fishing operator"), Rod->GetOperatorCount(), 1);
 				Capture(Client, TEXT("formal-two-cats-pull-no-fish"));
@@ -319,11 +317,14 @@ namespace CatLightPropNetwork
 		}
 		FAutomationTestBase* Test;
 		double Started, StageStarted = 0, MinimumBodyZ = 10000, MinimumUp = 1, MaximumBodyZ = 0, MaximumGripForce = 0;
-		double MaximumJointGap = 0, MaximumAnchorError = 0;
+		double MaximumTractionError = 0, MaximumAnchorError = 0;
 		double BareMinimumZ = 10000, BareMaximumZ = 0, SupportedMinimumZ = 10000;
 		int32 Stage = 0;
 		ACatFishingRodActor* Rod = nullptr;
+		TWeakObjectPtr<ACameraActor> ObservationCamera;
 		FGuid HelperGrip;
+		FVector HelperLocalContact = FVector::ZeroVector;
+		double MaximumHandGap = 0.0;
 		FVector PullStartPrimary, PullStartHelper;
 		bool bJumpCaptured = false, bDropCaptured = false, bTwoGripsReplicated = false;
 	};

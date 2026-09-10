@@ -10,6 +10,7 @@ class UAbilitySystemComponent;
 class UCatAbilitySystemComponent;
 class UCatSurvivalAttributeSet;
 class UCatConditionComponent;
+class UCatConditionPresentationComponent;
 class UCatEquipmentComponent;
 class UCatInventoryComponent;
 class UCatGrowthComponent;
@@ -175,8 +176,9 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatConditionPresentationComponent> ConditionPresentation;
 	void RefreshPhysicalCondition();
-	void StopCharacterMovementSimulation();
+	void ConfigureCharacterMovementAuthority();
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatPhysicalBodyComponent> PhysicalBodyComponent;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UBoxComponent> PhysicalBody;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USphereComponent> LeftPhysicsHand;

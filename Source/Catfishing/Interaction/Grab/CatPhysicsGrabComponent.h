@@ -4,6 +4,7 @@
 #include "Components/ActorComponent.h"
 #include "CatPhysicsGrabComponent.generated.h"
 
+class UCatPhysicalBodyComponent;
 class UPrimitiveComponent;
 class USphereComponent;
 class UPhysicsConstraintComponent;
@@ -30,6 +31,8 @@ struct FCatPhysicsGripState
 	UPROPERTY(BlueprintReadOnly) FVector TargetLocalPoint = FVector::ZeroVector;
 	/** Shoulder-to-hand distance captured at contact, in world cm; zero outside this grip. */
 	UPROPERTY(BlueprintReadOnly) double HeldReachDistanceCm = 0.0;
+	/** CMC grip offset in the view frame at capture, in world cm. Keeps the first frame force-free. */
+	UPROPERTY() FVector HeldAimLocalOffset = FVector::ZeroVector;
 };
 
 DECLARE_MULTICAST_DELEGATE_FourParams(FCatPhysicalGripChanged, UCatPhysicsGrabComponent*, bool, const FCatPhysicsGripState&, const FCatPhysicsGripState&);
@@ -44,6 +47,10 @@ public:
 	void InitializeHands(UPrimitiveComponent* InBody, USphereComponent* InLeft, USphereComponent* InRight,
 		UPhysicsConstraintComponent* InLeftArm, UPhysicsConstraintComponent* InRightArm, double InGeometryScale = 1.0);
 	void SetGrabInput(bool bLeft, bool bHeld);
+	void RefreshKinematicHands();
+	FVector GetLastTractionForceForDiagnostics(bool bLeft) const { return LastTractionForce[bLeft ? 0 : 1]; }
+	UCatPhysicalBodyComponent* GetTractionReceiverForDiagnostics(bool bLeft) const { return TractionReceiver[bLeft ? 0 : 1].Get(); }
+	FVector GetTractionErrorForDiagnostics(bool bLeft) const;
 	/** Authority calls the same validation and constraint path for an explicitly positioned held prop. */
 	bool GripFromAuthority(bool bLeft, UPrimitiveComponent* Target, const FVector& WorldPoint);
 	/** Transfers an existing contact to an explicit authority hold without rebuilding its joint. */
@@ -78,6 +85,9 @@ private:
 	UFUNCTION() void OnRep_GripState();
 	void ApplyGrabInput(bool bLeft, bool bHeld);
 	void UpdateHand(bool bLeft, const FVector& Aim);
+	bool UsesCharacterMovement() const;
+	void ClearTraction(bool bLeft);
+	void ApplyTraction(bool bLeft);
 	void RefreshContact(bool bLeft, bool bForceRebind = false);
 	UPrimitiveComponent* ResolveConstraintTarget(const FCatPhysicsGripState& State) const;
 	void TryLatch(bool bLeft, const FHitResult& Hit);
@@ -94,6 +104,9 @@ private:
 	uint32 LocalSequence[2] = {0, 0};
 	uint32 AcceptedSequence[2] = {0, 0};
 	uint32 ObservedRevision[2] = {0, 0};
+	TWeakObjectPtr<UCatPhysicalBodyComponent> TractionReceiver[2];
+	FVector LastTractionForce[2] = {FVector::ZeroVector, FVector::ZeroVector};
+	double NextTractionLogSeconds[2] = {0,0};
 	double GeometryScale = 1.0;
 	bool bLatchedUntilRelease[2] = {false, false};
 };

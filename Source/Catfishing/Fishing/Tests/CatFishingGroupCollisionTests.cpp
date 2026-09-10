@@ -37,7 +37,7 @@ bool FCatFishingPhysicalPeerCollisionTest::RunTest(const FString& Parameters)
 			Body->SetMoveIntent(FVector::ForwardVector);
 			FreeCat->GetPhysicalBodyComponent()->SetMoveIntent(FVector::ForwardVector);
 			Scene.Step(120);
-			TestTrue(TEXT("true box collision stops the blocked body before the wall"), First->GetActorLocation().X > 40 && First->GetActorLocation().X < 87);
+			TestTrue(TEXT("upright capsule collision stops the character before the wall"), First->GetActorLocation().X > 40 && First->GetActorLocation().X < 87);
 			TestTrue(TEXT("a wall cannot freeze an unrelated unconnected cat in the free lane"), FreeCat->GetActorLocation().X > 120);
 		}
 		else
@@ -52,7 +52,7 @@ bool FCatFishingPhysicalPeerCollisionTest::RunTest(const FString& Parameters)
 				if (First->GetActorLocation().X > 60 && First->GetActorLocation().X < 140)
 					HighestOnStep = FMath::Max(HighestOnStep, First->GetActorLocation().Z);
 			}
-			TestTrue(TEXT("foot support crosses a low real step without CMC step-up or teleport"), First->GetActorLocation().X > 120 && HighestOnStep > 22.5);
+			TestTrue(TEXT("CMC crosses a low real step without teleport"), First->GetActorLocation().X > 120 && HighestOnStep > 22.5);
 			TestEqual(TEXT("low-step travel does not reset the body"), Body->GetResetEpoch(), uint32(0));
 		}
 		AddInfo(FString::Printf(TEXT("Event=fishing_physical_collision_verified Scenario=%d Position=%s"), Scenario, *First->GetActorLocation().ToCompactString()));

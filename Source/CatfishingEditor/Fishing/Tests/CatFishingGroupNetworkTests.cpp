@@ -207,6 +207,15 @@ namespace CatFishingGroupNetwork
 				Rod = Fishing->FindDeployedRodById(RodId);
 				if (!Rod.IsValid() || !Rod->GetPhysicalRodComponent()->IsReady()) return true;
 				RodItemId = Rod->GetPresentationState().ItemInstanceId;
+                // Upright hands do not move an ungripped capsule toward an out-of-reach shaft.
+                // Place the ground-level fixture within actual reach of exposed rod geometry.
+                const FVector ShaftPoint = Rod->GetGripWorldTransform().GetLocation() + Rod->GetPhysicalRodBody()->GetForwardVector() * 12.0;
+                for (int32 I = 0; I < RemoteControllers.Num(); ++I)
+                {
+                    auto* HelperBody = CastChecked<ACatCharacter>(RemoteControllers[I]->GetPawn())->GetPhysicalBodyComponent();
+                    const FVector At(ShaftPoint.X + 40, ShaftPoint.Y - 6.8 + I * 64.4, HelperBody->GetStandRootHeightCm());
+                    HelperBody->TeleportBodyFromAuthority(FTransform(FRotator(0, I == 0 ? 180 : -90, 0), At), TEXT("UprightGroundGripFixture"));
+                }
 				// Leave the real rod at its authored hold pose. One helper holds the shaft;
 				// the other two grip the preceding cat, so the graph follows physical contact.
 				Stage = 1;
@@ -236,8 +245,7 @@ namespace CatFishingGroupNetwork
 				FVector AimPoint;
 				if (Index == 0)
 				{
-					AimPoint = FMath::ClosestPointOnSegment(Shoulder, ClientRods[Index]->GetGripWorldTransform().GetLocation(),
-						ClientRods[Index]->GetRodTipWorldTransform().GetLocation());
+					AimPoint = ClientRods[Index]->GetGripWorldTransform().GetLocation() + ClientRods[Index]->GetPhysicalRodBody()->GetForwardVector() * 12.0;
 				}
 				else
 				{

@@ -75,6 +75,7 @@ class CATFISHING_API ACatfishingGameModeBase : public AGameModeBase
 	friend class FCatFishingSlackAimRodContinuityTest;
 	friend class FCatFishingRodEffortSnapshotLifecycleTest;
 	friend class FCatFishingPhysicalCouplingTest;
+	friend class FCatFishingCMCStabilityTest;
 	friend class FCatFishingFormalPhysicalRunnerTest;
 	friend class FCatPhysicalInputRouteTest;
 	friend class FCatFishingOperatorRunnerIntegrationTest;

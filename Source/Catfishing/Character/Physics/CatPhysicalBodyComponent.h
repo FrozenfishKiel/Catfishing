@@ -4,6 +4,7 @@
 #include "Components/ActorComponent.h"
 #include "CatPhysicalBodyComponent.generated.h"
 
+class UCatCharacterMovementComponent;
 class UBoxComponent;
 class USphereComponent;
 class UPhysicsConstraintComponent;
@@ -12,7 +13,20 @@ struct FCollisionQueryParams;
 
 class UCatPhysicalBodyComponent;
 
-/** Samples Chaos after impulses and constraints have been consumed for this frame. */
+/** Frozen motor input for side-effect-free candidate prediction; world cm and kg*cm/s^2. */
+struct CATFISHING_API FCatBodyDriveSample
+{
+    FVector MoveIntent = FVector::ZeroVector;
+    FVector HoldLocation = FVector::ZeroVector;
+    double MaxSpeed = 0;
+    double MaxForce = 0;
+    bool bFishing = false;
+    bool bLocomotion = false;
+    bool bConnected = false;
+    bool bHoldActive = false;
+};
+
+/** Advances formal CMC after submitted loads, then publishes the completed authority pose. */
 USTRUCT()
 struct FCatPhysicalBodyPostPhysicsTick : public FTickFunction
 {
@@ -27,7 +41,7 @@ template<> struct TStructOpsTypeTraits<FCatPhysicalBodyPostPhysicsTick> : TStruc
 	enum { WithCopy = false };
 };
 
-/** Server observations of the three independent rigid bodies, in cm and cm/s. */
+/** Server observations of body and hand poses, in cm and cm/s. */
 USTRUCT()
 struct FCatPhysicalBodySnapshot
 {
@@ -44,7 +58,7 @@ struct FCatPhysicalBodySnapshot
 	UPROPERTY() bool bSupportSampleReady = false;
 };
 
-/** One physical motion writer shared by production characters and the test arena. */
+/** Authority input and pose channel: formal characters use CMC, diagnostic Pawns use Chaos. */
 UCLASS(ClassGroup=(Catfishing), meta=(BlueprintSpawnableComponent))
 class CATFISHING_API UCatPhysicalBodyComponent : public UActorComponent
 {
@@ -56,6 +70,16 @@ public:
 		UPhysicsConstraintComponent* InLeftArm, UPhysicsConstraintComponent* InRightArm, UCatPhysicsGrabComponent* InGrab,
 		double InGeometryScale = 1.0);
 	UBoxComponent* GetBody() const { return Body; }
+	void UseCharacterMovement(UCatCharacterMovementComponent* Movement) { CharacterMovement = Movement; }
+	bool UsesCharacterMovement() const { return CharacterMovement != nullptr; }
+	double GetFacingYawDegrees() const { return FacingYawDegrees; }
+	FTickFunction& GetPostMovementTick() { return PostPhysicsTick; }
+	FVector GetExternalForceFromAuthority();
+	FVector ComputeHorizontalDriveForce(const FVector& Velocity, double Mass, double StepSeconds);
+	FCatBodyDriveSample CaptureDriveSample();
+	static FVector ComputeDriveForce(FCatBodyDriveSample& Sample, const FVector& Position, const FVector& Velocity, double Mass, double StepSeconds);
+	bool HasFishingMotor() const { return FishingMotorSource.IsValid(); }
+	void AddExternalImpulseFromAuthority(FVector ImpulseKgCmS);
 	USphereComponent* GetHand(bool bLeft) const { return bLeft ? LeftHand : RightHand; }
 	UCatPhysicsGrabComponent* GetGrab() const { return Grab; }
 	FVector GetVelocity() const;
@@ -101,7 +125,7 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 private:
 	friend struct FCatPhysicalBodyPostPhysicsTick;
-	void PublishPostPhysicsSnapshot();
+	void PublishPostPhysicsSnapshot(float DeltaSeconds);
 	FCatPhysicalBodyPostPhysicsTick PostPhysicsTick;
 	double GeometryScale = 1.0;
 	bool bPublishJumpAfterPhysics = false;
@@ -117,6 +141,7 @@ private:
 	bool HasAuthority() const;
 	bool IsLocallyControlled() const;
 	void LogState(FName Event, FName Reason) const;
+	UPROPERTY(Transient) TObjectPtr<UCatCharacterMovementComponent> CharacterMovement;
 	UPROPERTY(Transient) TObjectPtr<UBoxComponent> Body;
 	UPROPERTY(Transient) TObjectPtr<USphereComponent> LeftHand;
 	UPROPERTY(Transient) TObjectPtr<USphereComponent> RightHand;

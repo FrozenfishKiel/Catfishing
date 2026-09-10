@@ -1,6 +1,7 @@
 #include "Interaction/Grab/CatLightPropSubsystem.h"
 
 #include "Chaos/ContactModification.h"
+#include "Components/CapsuleComponent.h"
 #include "Chaos/ParticleHandle.h"
 #include "Chaos/SimCallbackObject.h"
 #include "CollisionQueryParams.h"
@@ -80,6 +81,18 @@ void UCatLightPropSubsystem::RegisterLightProp(UPrimitiveComponent* Component) {
 void UCatLightPropSubsystem::RegisterBody(UPrimitiveComponent* Component, const bool bLightProp)
 {
 	if (!IsValid(Component) || Component->GetWorld() != GetWorld() || bShuttingDown) return;
+	for (const auto& Entry : RegisteredBodies)
+	{
+		if (!Entry.Key.IsValid()) continue;
+		if (bLightProp && !Entry.Value)
+		{
+			if (auto* Capsule = Cast<UCapsuleComponent>(Entry.Key.Get())) Capsule->IgnoreComponentWhenMoving(Component, true);
+		}
+		else if (!bLightProp && Entry.Value)
+		{
+			if (auto* Capsule = Cast<UCapsuleComponent>(Component)) Capsule->IgnoreComponentWhenMoving(Entry.Key.Get(), true);
+		}
+	}
 	RegisteredBodies.Add(Component, bLightProp);
 	UnavailableBodies.Remove(Component);
 	Component->OnComponentPhysicsStateChanged.AddUniqueDynamic(this, &ThisClass::HandlePhysicsStateChanged);
@@ -90,6 +103,9 @@ void UCatLightPropSubsystem::UnregisterBody(UPrimitiveComponent* Component)
 {
 	if (!Component) return;
 	Component->OnComponentPhysicsStateChanged.RemoveDynamic(this, &ThisClass::HandlePhysicsStateChanged);
+	if (const bool* bLight = RegisteredBodies.Find(Component); bLight && *bLight)
+		for (const auto& Entry : RegisteredBodies)
+			if (auto* Capsule = Cast<UCapsuleComponent>(Entry.Key.Get())) Capsule->IgnoreComponentWhenMoving(Component, false);
 	RegisteredBodies.Remove(Component);
 	UnavailableBodies.Remove(Component);
 	PublishParticleRoles();

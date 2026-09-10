@@ -244,10 +244,11 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	// 历史几何误差单独回收，不能把位置纠偏伪装成新冲量，再写回鱼的惯性。
 	const double ExistingHorizontalError = !bFreeSpool
 		? FMath::Max(0.0, FromRod.Size2D() - RadiusAtHeight(PaidOutLine0, VerticalDistance)) : 0.0;
-	const double PositionCorrection = RodConstraint.bPhysicalRodEndpoint ? 0.0 : FMath::Min(ExistingHorizontalError,
+	const bool bCMC = bool(RodConstraint.PredictCMCEndpoint);
+	const double PositionCorrection = RodConstraint.bPhysicalRodEndpoint && !bCMC ? 0.0 : FMath::Min(ExistingHorizontalError,
 		Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond * Dt);
-	const FVector ForceStart = RodConstraint.bPhysicalRodEndpoint ? State.FishWorldPosition : State.FishWorldPosition - HorizontalOutward * ExistingHorizontalError;
-	const FVector ResidualPositionError = RodConstraint.bPhysicalRodEndpoint ? FVector::ZeroVector : HorizontalOutward * (ExistingHorizontalError - PositionCorrection);
+	const FVector ForceStart = RodConstraint.bPhysicalRodEndpoint && !bCMC ? State.FishWorldPosition : State.FishWorldPosition - HorizontalOutward * ExistingHorizontalError;
+	const FVector ResidualPositionError = RodConstraint.bPhysicalRodEndpoint && !bCMC ? FVector::ZeroVector : HorizontalOutward * (ExistingHorizontalError - PositionCorrection);
 	const FVector FreeFishPosition = ForceStart + FreeVelocity * Dt;
 	const double FreeDistance = FVector::Distance(RodTip, FreeFishPosition + ResidualPositionError);
 	const double RequestedReelDistance = bReeling && (State.bFishExhausted || CatForce > UE_DOUBLE_SMALL_NUMBER)
@@ -282,10 +283,51 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		+ ApplyPointResponse(RodConstraint.PendingLineImpulseNewtonSeconds) * 100.0;
 	const FVector FreePhysicalEndpoint = QueuedEndpoint + QueuedVelocity * Dt
 		+ ExternalEndpointAcceleration * (EndpointPositionFactor * Dt * Dt);
+    bool bCandidateSucceeded = true;
+    const double CMCTravelLimit = bCMC && RodConstraint.GetCMCTravelLimit ? RodConstraint.GetCMCTravelLimit(HorizontalOutward,100000.0) : 0.0;
+    Result.Trace.bCMCEndpointPredicted = bCMC;
 	const auto SolveForLength = [&](const double Length)
 	{
-		FLineSolve Solved;
-		if (RodConstraint.bPhysicalRodEndpoint)
+        FLineSolve Solved;
+        if (bCMC)
+        {
+            // 7e606dd: one candidate tension drives fish, collision-bounded CMC motion and the same aim model.
+            const FVector Offset = FreeFishPosition - RodTip;
+            const FVector Axis = Offset.GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, HorizontalOutward);
+            const double Radius = RadiusAtHeight(Length, FMath::Abs(Offset.Z));
+            const double MidRadius = .5 * (Offset.Size2D() + FMath::Min(Offset.Size2D(),Radius));
+            const double HorizontalFraction = FMath::Max(.001, MidRadius / FMath::Max(UE_DOUBLE_SMALL_NUMBER,
+                FMath::Sqrt(MidRadius*MidRadius + Offset.Z*Offset.Z)));
+            const FVector ForceAxis = Axis * HorizontalFraction + FVector(0,0,FMath::Sign(Offset.Z)*FMath::Sqrt(1-HorizontalFraction*HorizontalFraction));
+            const auto Evaluate = [&](double Tension)
+            {
+                Solved.Tension = Tension; Solved.Force = ForceAxis * Tension;
+                Solved.Velocity = FreeVelocity - Axis * (100*Tension*HorizontalFraction*Dt/EffectiveFishMass);
+                Solved.Position = ForceStart + Solved.Velocity * Dt;
+                FCatFightCMCPredictionQuery Query;
+                Query.ForceNewtons = Solved.Force; Query.Seconds = Dt;
+                Query.TorqueStrengthMetersPerNewton = Config.RodPhysicsLengthCentimeters / (100*Config.ForcePerStrengthNewtons);
+                Query.TravelAxis = HorizontalOutward; Query.TravelLimitCentimeters = CMCTravelLimit;
+                const auto Predicted = RodConstraint.PredictCMCEndpoint(Query);
+                bCandidateSucceeded &= Predicted.bSucceeded;
+                Solved.RodEnd = Predicted.bSucceeded ? Predicted.RodTipWorldPosition : RodTip;
+                const FVector Separation = Solved.Position - Solved.RodEnd;
+                const double EndRadius = RadiusAtHeight(Length,FMath::Abs(Separation.Z));
+                const double Along = FVector::DotProduct(Separation,Axis);
+                const double AcrossSquared = FMath::Max(0.0,Separation.SizeSquared2D()-Along*Along);
+                return Along-FMath::Sqrt(FMath::Max(0.0,EndRadius*EndRadius-AcrossSquared));
+            };
+            if (Evaluate(0)>UE_DOUBLE_SMALL_NUMBER)
+            {
+                double Low=0, High=(Offset.Size2D()+FMath::Max(0.0,-FVector::DotProduct(RodConstraint.CarrierVelocityCentimetersPerSecond,Axis)*Dt))
+                    / (MobilityCmPerNewton*HorizontalFraction);
+                for(int32 I=0;I<40;++I) { const double Mid=(Low+High)*.5; if(Evaluate(Mid)>0) Low=Mid; else High=Mid; }
+                Evaluate(High);
+            }
+            Solved.Position += ResidualPositionError;
+            return Solved;
+        }
+        if (RodConstraint.bPhysicalRodEndpoint)
 		{
 			const FVector FreeOffset = FreeFishPosition - FreePhysicalEndpoint;
 			const FVector Axis = FreeOffset.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, LineDirection);
@@ -318,7 +360,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		Solved.Force = (FreeFishPosition - RodTip).GetSafeNormal() * Solved.Tension;
 		Solved.Velocity = FreeVelocity - Axis * (100.0 * Solved.Tension * HorizontalFraction * Dt / EffectiveFishMass);
 		Solved.Position = ForceStart + Solved.Velocity * Dt + ResidualPositionError;
-		// The endpoint remains the sampled real rod. Chaos owns all cat, hand and shaft motion.
+		// Static-anchor callers retain the sampled endpoint. No hypothetical pose is committed.
 		Solved.RodEnd = RodTip;
 		return Solved;
 	};
@@ -341,6 +383,11 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const double IntendedDistance = FreeDistance;
 	const double ConstraintError = FMath::Max(0.0, FreeDistance - LineLength);
 	FLineSolve Solved = SolveForLength(LineLength);
+    if (!bCandidateSucceeded)
+    {
+        Result.RejectReason = Result.Trace.RejectReason = ECatFightSimulationRejectReason::InvalidRodConstraint;
+        return Result;
+    }
 	if (bFreeSpoolReleased)
 	{
 		Solved.Tension = 0.0;

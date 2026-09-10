@@ -1,12 +1,28 @@
 # 鱼运动与遛鱼逻辑：设计与实现
 
+## 2026-09-10：恢复 CMC 双主体稳定措施
+
+用户在直立CMC迁移期间追加要求：按物理接入前的commit恢复防抖和防突变措施。对照最终旧CMC入口`6b04247^`与关键提交`4c5e8cd`、`7e606dd`、`2885b2f`、`0cd7866`、`86d2c38`、`c491786`，不恢复已被`a4f968a`替换的`e6635f7`目标速度平滑，也不恢复R入队、队形修正和助手费用。当前工作区CMC迁移尚在验收；用户Skeleton与并行Fish资产、CuteCat导入均保留。修改前新恢复部分构建/回归未运行；现有定向证据见下表，最终交付证据随后补充。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 连续受力与子步 | 历史4c5e8cd的CMC::PerformMovement/CalcVelocity；当前CharacterMovement::AdvanceFromAuthority、Body::ComputeHorizontalDriveForce；Rod Tick排队冲量 | 持竿来源已连续保留，但CMC缺旧120Hz小步，线冲量在帧首先加入速度 | 正式CMC恢复支撑减速不越零，不再使用诊断原型的10cm站定位置弹簧；恢复受力期间1/120s CMC子步、足够迭代和退出后参数还原；帧冲量按持续力分配到同一CalcVelocity，不叠加第二积分入口；保留有限力和零体力预算 | 接收端→预测同公式→唯一Rod提交 | 20/60/120Hz、120ms卡顿、零力段不急刹/不反向弹跳、退出清理 | 已恢复；153816报告10/10通过。1/120、1/60、0.05、0.12秒真实CMC与预测位置差最大0.004cm；无重复冲量，暂时零力仍保留持竿上下文，支撑停零不反向，临时子步参数正确恢复 |
+| 双主体候选预测 | 历史7e606dd的Simulator::SolveForLength、Rod::GetRotationPredictionFromAuthority；当前PhysicalRod::PopulateEndpointResponse用观测加速度与逆质量 | 物理分支不再预测候选张力下的原转杆模型与CMC主动/支撑响应 | CMC持竿输入提供只读运动/旋转快照，候选力复用当前电机及StepRotation；有限握点外力纳入已知载荷；真正姿态与资源仍由原权威步更新 | 冻结接收参数→Simulator共同张力→原Runner提交 | 历史短线5.535/15kg、三帧率，无周期卸力；反复预测不改姿态/努力/握点/ASC | 已恢复；正式竿锚点+真实CMC与Rod Tick，5.535/15kg×20/60/120Hz共6组，2–6s均0卸力步；最大张力波动0.160N、速度波动0.974cm/s。原0.15s/阻尼3/角惯性继续共用 |
+| 碰撞与几何纠偏 | 历史7e606dd的GetExternalTractionTravelLimit和FishPositionCorrectionWorldDisplacement；当前物理分支将历史纠偏设0 | CMC不能预支穿墙位移；历史距离误差不能当作新鱼冲量 | 恢复只读胶囊可行位移查询（cm，0阻挡）；CMC候选单独回收受限几何误差，动力速度及费用剔除纠偏，真实移动仍由CMC扫掠 | 查询→候选→真实地形最终解析 | 顶墙/坡面、查询无副作用、过长线、鱼速度不突变、真实松线仍卸力 | 已恢复；真实墙面胶囊查询不移动身体、退墙不受限；CMC候选20cm历史误差回收不改变鱼动力速度，真正自由出线仍归零。实际低台阶沿原CMC路径；预测采取保守水平阻挡界限，不替代StepUp |
+| 持竿跟随时序 | 历史4c5e8cd保留零牵引Tick绑定；当前RodActor PostPhysics与CMC PostPhysics同组未约束顺序 | 已有稳定持竿偏移，需保证当帧身体先完成、竿尖后采样 | 主控绑定时为Rod表现Tick增加CMC完成前置，零载荷维持；离手/目标销毁才撤销。旋转实际输入构造供只读预测共用 | CMC→Rod→现有快照/弯曲/相机 | 运动中握把跟随、零力段绑定不丢、换持有者/释放旧力不复活 | 已接入CMC PostPhysics前置与释放解绑；零载荷不解绑。已有持竿/主控/客户端回归通过，最终四端组合回归待新冻结版本完成 |
+| 原防抖/生命周期 | StepRotation仍含0.15s负载平滑、LoadedAngularDampingRatio=3、连续角速度和鼠标停动撤力；Body有Epoch/Sequence | 保留目前仍生效的2885b2f/0cd7866/86d2c38/c491786；原SavedMove在当前服务器快照架构无运行消费者 | 共用原输入/积分器，预测只复制角速度和滤波值、不累计努力；网络维持单一快照与Epoch门，不接回队形成员或无消费者SavedMove | 身份/时钟→预测副本→一次实际积分/费用 | 鼠标停/卸力/换人、乱序输入/退出、助手不进会话 | 原参数及Epoch/Sequence保留；预测副本不累计转杆努力、不改体力或抓握Id。最终物理接入前的SavedMove消费者属于已删除组模型，当前不接回；当前客户端仍沿服务器快照 |
+| 历史回归夹具 | `Fishing/Tests/CatFishingPhysicalRodTests.cpp` 实际世界/会话夹具及历史 `7e606dd` ShortLine 测试；Service/Session/GameMode/RodActor 的现有测试 friend | 恢复正式竿锚点短线负载及无副作用预测验证 | 新增 `Fishing/Tests/CatFishingCMCStabilityTests.cpp`，仅增加对应测试 friend；20/60/120 Hz 实际世界驱动 | 正式锚点→合法主控及会话→求解/唯一载荷→世界 Tick | 5.535/15 kg、2–6 s 稳态、反复预测、顶墙及120 ms卡顿 | 已新增真实会话测试friend与短线/几何/卡顿断言；历史10/10通过（153816）。测试标识与私有主控访问的初版编译错误已修正，后续构建成功 |
+| 资源、资产、日志与验证 | Runner::SnapshotPrimaryOperator/HandleFixedStep→ASC/Session；现有Fishing Tests/本指南/唯一差距清单 | 不涉及存档格式、UI/WBP、动画资产、Cook/生成脚本修改；原默认参数保留 | 检查主控质量改读有限CMC质量；追加候选诊断，不逐Tick刷屏；恢复行为回归并维持主控单次费用 | 接收/求解→端到端→Editor/Game→交付 | contract/runtime_behavior/presentation_delivery分别记录，正式场景手感及新包仍需真实证据 | 质量改读有限BodyInstance值；增加fishing_cmc_endpoint_snapshot、CMCEndpointPredicted及默认日志。独立提交源码冻结构建/正式渲染组合回归进行中；新Cook和真人双端手感仍未验收 |
+
+
+
 本文件持续维护鱼、线、杆、猫的运动设计与实际代码。2026-09-09 正在把真实身体和持续抓握接入正式项目，替换 R 加入及 CMC 共同队形移动。当前变更范围与验证结果见 [正式物理抓握接入审查](FishingArchitecture_zh-CN.md)。此前“鼠标移动才主动转杆，停止立即撤力并清掉未完成目标”的输入契约保留。历史191项回归中190通过、1项既有耐久失败属于接入前基线，不能作为新身体系统通过的证据。下文带日期的旧公式与报告只对应当时版本。
 
-当前猫端由 `UCatPhysicalBodyComponent` 在服务器驱动身体与两只手；正式 `ACatCharacter` 保留 ASC、Condition、Inventory 和动画宿主身份。普通运动配置继续读角色 BP 的 CMC 默认值，CMC 自身停止积分，仅向 ABP 暴露实际速度、移动意图和离地状态。正式起跳420 cm/s、重力倍率1；同一跳跃速度施加到三个刚体。
+当前正式猫由 `UCatPhysicalBodyComponent` 在服务器 PostPhysics 调度一次 CMC 移动，胶囊保持直立；CMC 原生 Tick/ServerMove 不参与第二次积分。角色保留 ASC、Condition、Inventory 和动画宿主身份；正式起跳420 cm/s、重力倍率1。客户端沿现有服务器快照跟随。诊断 APawn 原型继续使用 Chaos 三刚体，和正式角色按宿主明确分支。
 
 非主控玩家按住左右键伸出对应爪，实际抓住竿或猫后只通过约束传力，不进入钓鱼Session。主控由明确取竿操作产生，使用原收放线和转杆输入；主控退出不会把旁人自动提升为操作者。跨竿抓握不串会话、不改变物品归属。
 
-`UCatFishingPhysicalRodComponent` 在 PrePhysics 通知 Runner 累加本帧时间并执行到期的鱼固定步，然后接收求解器的同一 `RodLineForceNewtons` 向量及对应模拟秒数，乘100转换为kg·cm/s²，只在真实竿尖施力。有限时间的载荷队列由当前物理帧消费，PostPhysics确认已施加冲量；Runner读取真实端点与速度，不写CMC位移或旧杆姿态积分。鱼继续使用固定步水面运动与行为树，尚非完整三维Chaos浮力。当前耦合与子步修正仍在联合回归，结果以接入审查表为准。
+`UCatFishingPhysicalRodComponent` 在 PrePhysics 通知 Runner 执行到期鱼固定步，再消费唯一 `RodLineForceNewtons` 载荷队列。正式持竿把 N·s 乘100转换为kg·cm/s冲量，由 CMC 在小步中按持续力积分一次；脱手的动态杆继续在实际竿尖施力。CMC 持竿的候选张力预测共用有限移动电机及原 StepRotation，只读预测不提交身体或杆姿态；实际角速度、载荷平滑和资源仍由原入口更新。鱼保留固定步水面运动与行为树。最新恢复验证见本页顶部对照表；历史三刚体结论不作为当前正式角色的证明。
 
 主控移动、支撑及鼠标转杆预算只读本人ASC；旁人使用普通身体运动规则，不存在辅助系数、会话分账或共享体力。Runner只结算主控的费用，保留有效放线恢复、满线不恢复、鱼力竭免正向费用。物理帮助的效果通过实际端点运动进入鱼线求解。
 

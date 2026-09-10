@@ -125,6 +125,7 @@ protected:
 private:
 	friend class FCatFishingPhysicalGripGraphTest;
 	friend class FCatFishingPhysicalCouplingTest;
+	friend class FCatFishingCMCStabilityTest;
 	friend class FCatFishingFormalPhysicalRunnerTest;
 	friend class UCatFishingService;
 	bool bFixedStepMutationBoundary = false;
