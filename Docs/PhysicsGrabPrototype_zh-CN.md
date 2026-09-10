@@ -1,5 +1,20 @@
 # 物理抓握原型使用说明
 
+## 2026-09-10：脚部锁定释放保持连续
+
+CuteCat 移动抽动已复现为锁脚修正被一帧清零：`FCatQuadrupedLocomotion::Apply` 在偏移超过 `MaxPlantDriftCm` 或抬脚阶段退出锁定后，立即从落点返回动画/步幅目标。现每脚保存 `PlantOffsetWorld`，锁定期仍按原支撑物局部落点计算，释放期只衰减残留锁定修正；原动画继续正常推进，不平滑整个脚的世界轨迹。新落点继承未完成的过渡修正，`ClearPlants/Reset`、无地面、跳跃/失效及伸手优先分支清理状态。原8/3/5模型厘米上限、0.12秒混合时间及一次可见缩放不变；不改变关节长度、骨骼缩放、CMC/物理权威、RPC或资产。默认 `LogCatLocomotion::locomotion_pose_sample` 增加世界厘米 `ReleaseOffsetCm`，沿用原限频采样。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 动画消费者与计算 | `Source/Catfishing/Character/Physics/CatPhysicsPrototypeVisualComponent::RefreshVisualPose`→`Character/Animation/CatQuadrupedLocomotion::Apply`；两种正式BP共用 | 原锁脚释放瞬跳；原动画→脚部→伸手时序保持 | 在原求解器替换瞬时清除，保留PlantOffsetWorld渐退；未增加第二套IK | 先复现→替换原释放→实际ABP与CMC运行 | CuteCat 100/200/300cm/s、旧原型三速度；静止移动根模拟连续失锁 | 最终真实CuteCat三速度通过；100cm/s释放修正4.8571→0.5265模型cm；原三速度减滑回归通过 |
+| 生命周期/支撑 | `FFoot/ClearPlants/Reset/Apply`；Body只读接地、ResetEpoch；前脚ReachAlpha排除 | 支撑物局部锁点、脚距/骨盆上限与退出契约保持 | 新过渡状态随既有清理；只衰减失锁修正，不平滑稳定落点 | 跳跃/传送/禁用/伸手→退出；有效落地再获取新支撑 | 移动平台、台阶、坡面法线、骨长与缩放、左右手 | 174202报告的TerrainPose/GrabJumpReset/骨长与实际抓握均通过；30/60/120Hz两骨架释放步长均<2模型cm |
+| 物理/网络/UI/持久化 | Body/CMC唯一移动权威；Visual只写最终骨骼，Hand CCD最后运行 | 无新增力、碰撞、复制、存档、扣费或会话状态 | 保留原入口；不涉及配置、WBP、资产生成迁移或Cook入口修改 | 动画后读取物理结果，再输出可见姿势 | 正式Listen/Client脚点与现有抓人抓杆 | CuteCat客户端305个连续支撑样本，原动画累计滑脚196.773cm、求解后5.833cm；旧猫双端335.913→91.008cm。握点、跳跃、Condition均通过 |
+| 资产/日志/测试/旧入口 | `/Game/Character/BP_CuteCatCharacter`与`BP_CatCharacter`、公共模板；`CatFootContinuityTests.cpp`、`CatLocomotionNetworkTests.cpp`；本页与唯一差距清单 | 二进制资产与Rig配置不改；旧直接清除公式由连续性回归替代 | 实际载入两骨架；新增ReleaseOffsetCm诊断；旧代码路径已替换 | 独立源码摘要→Editor/Game→运行→截图→本表 | 不把编译或图片当作全地形/全速动作验收 | 基线/修复/最终报告及OwnedSourceManifest.json保留；原模块状态不关闭，无已确认无消费者的旧IK另行残留 |
+
+分层证据：`Saved/Automation/FootReachStability-20260910/BuildEditor-Fix1.log`、`BuildEditor-FinalTests.log`及`BuildGame-Fix1.log`成功（contract）；`Report-20260910-174202-562/index.json`中33项通过，1个新增测试越出地板的夹具失败已修正，随后`Report-20260910-175446-412/index.json`最终4/4通过（runtime_behavior）。只有既有动画启动警告，无新增生产失败；两份报告合并覆盖36个不同测试的最终通过状态。CuteCat 60Hz固定姿势释放时单帧脚位移从5.0901降到0.7916模型cm，30Hz为1.4609、120Hz为0.4052；未放宽原骨长或脚点范围。
+
+presentation_delivery：已查看真实客户端`Images/20260910-095526-CuteWalkingIK.png`及同轮两张伸手截图，画面中脚部正常接触且手接实体。截图不是动态连续性证明，动态结论来自逐帧测量。300cm/s下原有目标可达误差仍约6.89模型cm，本轮未以伸长腿骨掩盖它，不能据此宣称高速/大高差的全身补偿完成；原地转身换步、复杂地形站姿、正式地图真人手感与新打包双端落盘仍未验收。并行ModelContact/架竿接缝保留，由对应任务组合验证。
+
 ## 2026-09-10：伸手穿过交互范围、接触实体表面
 
 基线 `62db64a`：`CatPhysicsGrabComponent::UpdateHand` 与 CMC 的 `RefreshKinematicHands` 都使用 Visibility 单次扫掠，商人/容器的 QueryOnly 交互范围先截短手部目标；随后 `TryLatch` 即使拒绝该范围，也无法找回后面的实体。现两处统一调用 `TraceReachSurface`：对象扫掠后由 `IsReachSurface` 选择最近的有效实体，跳过 UI 范围，并允许接触不阻挡 Visibility 的物理表面。最终抓握使用同一校验，QueryOnly 例外只限真实身体/手代理和 CMC 胶囊，不扩展到同 Actor 的交互组件。手球半径、伸手长度、世界厘米/GeometryScale、服务器 GripId 和原释放/回执不变。

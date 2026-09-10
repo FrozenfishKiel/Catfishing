@@ -35,6 +35,7 @@ void FCatQuadrupedLocomotion::ClearPlants()
 		Foot.bReleasedUntilSwing = false;
 		Foot.Support.Reset();
 		Foot.SupportBone = NAME_None;
+		Foot.PlantOffsetWorld = FVector::ZeroVector;
 	}
 }
 
@@ -430,7 +431,8 @@ void FCatQuadrupedLocomotion::Apply(USkeletalMeshComponent* Source, UPoseableMes
 			const FTransform SupportWorld = CatQuadruped::SupportTransform(Hit.GetComponent(), Hit.BoneName);
 			if (!Foot.bPlanted && bPlantPhase && !Foot.bReleasedUntilSwing)
 			{
-				Foot.PlantLocal = SupportWorld.InverseTransformPosition(Targets[FootIndex]);
+				// Keep any unfinished release correction when acquiring the next anchor.
+				Foot.PlantLocal = SupportWorld.InverseTransformPosition(Targets[FootIndex] + Foot.PlantOffsetWorld);
 				Foot.bPlanted = true;
 			}
 			if (Foot.bPlanted)
@@ -438,8 +440,20 @@ void FCatQuadrupedLocomotion::Apply(USkeletalMeshComponent* Source, UPoseableMes
 				const FVector Plant = SupportWorld.TransformPosition(Foot.PlantLocal);
 				const bool bDrift = FVector::DistSquared(Plant, Targets[FootIndex]) > FMath::Square(Settings.MaxPlantDriftCm * Scale);
 				if (bDrift) { Foot.bPlanted = false; Foot.bReleasedUntilSwing = true; Observation.ReleasedPlantMask |= 1 << FootIndex; }
-				else { Targets[FootIndex] = FMath::Lerp(Targets[FootIndex], Plant, Animation.Contact[FootIndex]); Observation.PlantMask |= 1 << FootIndex; }
+				else
+				{
+					Foot.PlantOffsetWorld = (Plant - Targets[FootIndex]) * Animation.Contact[FootIndex];
+					Observation.PlantMask |= 1 << FootIndex;
+				}
 			}
+			if (!Foot.bPlanted)
+			{
+				// The animation keeps advancing normally. Only the previous lock's correction
+				// decays: clearing it in one frame popped the paw at drift limit and toe-off.
+				Foot.PlantOffsetWorld *= FMath::Exp(-Delta / Settings.BlendSeconds);
+				Observation.PlantReleaseOffsetCm[FootIndex] = Foot.PlantOffsetWorld.Size();
+			}
+			Targets[FootIndex] += Foot.PlantOffsetWorld;
 			const FVector UpComponent = Base.GetRotation().RotateVector(Foot.SoleNormalLocal).GetSafeNormal();
 			const FVector NormalComponent = MeshWorld.InverseTransformVectorNoScale(Hit.ImpactNormal).GetSafeNormal();
 			const FQuat Tilt = FQuat::FindBetweenNormals(UpComponent, NormalComponent);
@@ -450,6 +464,7 @@ void FCatQuadrupedLocomotion::Apply(USkeletalMeshComponent* Source, UPoseableMes
 			Foot.bPlanted = false;
 			Foot.bReleasedUntilSwing = false;
 			Foot.Support.Reset();
+			Foot.PlantOffsetWorld = FVector::ZeroVector;
 			Targets[FootIndex] = BaseWorld[FootIndex];
 		}
 		// Never smooth the planted world point: doing so would reintroduce sliding as the body moves.
@@ -481,10 +496,11 @@ void FCatQuadrupedLocomotion::LogObservation(const UCatPhysicalBodyComponent* Bo
 	if (!bForce && (Now < NextLogSeconds || Observation.Alpha < 0.001)) return;
 	NextLogSeconds = Now + 1.0;
 	UE_LOG(LogCatLocomotion, Log,
-		TEXT("Event=locomotion_pose_sample Actor=%s BodyId=%s World=%s NetMode=%d Authority=%d LocalRole=%d ResetEpoch=%u Mode=%s BodySpeedCmS=%.3f RelativeSpeedCmS=%.3f SupportSpeedCmS=%.3f AnimationSpeedCmS=%.3f StrideScale=%.3f Alpha=%.3f PelvisCm=%.3f GroundMask=%u PlantMask=%u ReleasedMask=%u ExcludedMask=%u ErrorCm=%.3f,%.3f,%.3f,%.3f"),
+		TEXT("Event=locomotion_pose_sample Actor=%s BodyId=%s World=%s NetMode=%d Authority=%d LocalRole=%d ResetEpoch=%u Mode=%s BodySpeedCmS=%.3f RelativeSpeedCmS=%.3f SupportSpeedCmS=%.3f AnimationSpeedCmS=%.3f StrideScale=%.3f Alpha=%.3f PelvisCm=%.3f GroundMask=%u PlantMask=%u ReleasedMask=%u ExcludedMask=%u ErrorCm=%.3f,%.3f,%.3f,%.3f ReleaseOffsetCm=%.3f,%.3f,%.3f,%.3f"),
 		*GetNameSafe(Body->GetOwner()), *Body->GetBodyId().ToString(), *GetNameSafe(Body->GetWorld()),
 		int32(Body->GetOwner()->GetNetMode()), Body->GetOwner()->HasAuthority(), int32(Body->GetOwner()->GetLocalRole()), Body->GetResetEpoch(),
 		*Observation.Mode.ToString(), Observation.BodySpeedCmS, Observation.RelativeSpeedCmS, Observation.SupportSpeedCmS, Observation.AnimationSpeedCmS, Observation.StrideScale, Observation.Alpha,
 		Observation.PelvisOffsetCm, Observation.GroundMask, Observation.PlantMask, Observation.ReleasedPlantMask, Observation.ExcludedFootMask,
-		Observation.FootErrorCm[0], Observation.FootErrorCm[1], Observation.FootErrorCm[2], Observation.FootErrorCm[3]);
+		Observation.FootErrorCm[0], Observation.FootErrorCm[1], Observation.FootErrorCm[2], Observation.FootErrorCm[3],
+		Observation.PlantReleaseOffsetCm[0], Observation.PlantReleaseOffsetCm[1], Observation.PlantReleaseOffsetCm[2], Observation.PlantReleaseOffsetCm[3]);
 }

@@ -42,6 +42,8 @@ struct FCatQuadrupedLocomotionObservation
 	uint8 ExcludedFootMask = 0;
 	FVector TargetsWorld[4] = {};
 	double FootErrorCm[4] = {};
+	/** Remaining lock correction after release, in world cm; sampled with the normal pose log. */
+	double PlantReleaseOffsetCm[4] = {};
 };
 
 /** One post-animation, pre-grip pose pass. It does not move components, integrate physics or advance animation. */
@@ -78,6 +80,7 @@ private:
 		TWeakObjectPtr<UPrimitiveComponent> Support;
 		FName SupportBone;
 		FVector OffsetWorld = FVector::ZeroVector;
+		FVector PlantOffsetWorld = FVector::ZeroVector;
 		bool bPlanted = false;
 		bool bReleasedUntilSwing = false;
 	};
