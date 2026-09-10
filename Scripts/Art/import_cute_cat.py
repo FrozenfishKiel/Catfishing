@@ -4,6 +4,7 @@ Run in UE with -run=pythonscript -script=<this file> -unattended -nop4.
 Set CUTE_CAT_SOURCE to the extracted directory containing cutecat_fbx.fbx.
 Set CUTE_CAT_FBX to the copy produced by prepare_cute_cat.py.
 Set CUTE_CAT_VERIFY_ONLY=1 in a fresh process to verify saved assets.
+Set CUTE_CAT_REPAIR_FUR=1 to repair only existing fur color UVs, preserving other settings.
 """
 
 import json
@@ -73,6 +74,46 @@ def make_fbx_options():
     return options
 
 
+def configure_fur_color(material, texture, mask):
+    """UV0 addresses strand silhouettes; UV1 addresses the fur roots on the skin atlas."""
+    editing = unreal.MaterialEditingLibrary
+    color = editing.get_material_property_input_node(material, unreal.MaterialProperty.MP_BASE_COLOR)
+    require(mask and mask.get_editor_property("texture") == texture
+            and mask.get_editor_property("const_coordinate") == 0
+            and not any(editing.get_inputs_for_material_expression(material, mask)),
+            "Unexpected fur mask graph; preserve for review")
+    require(color and color.get_editor_property("texture") == texture, "Unexpected fur color graph")
+    if color != mask:
+        require(color.get_editor_property("const_coordinate") == 1
+                and not any(editing.get_inputs_for_material_expression(material, color)),
+                "Unexpected existing fur color UVs; preserve for review")
+        return False
+    color = editing.create_material_expression(material, unreal.MaterialExpressionTextureSample, -400, -240)
+    color.texture = texture
+    color.set_editor_property("const_coordinate", 1)
+    require(editing.connect_material_property(color, "RGB", unreal.MaterialProperty.MP_BASE_COLOR),
+            "Cannot connect fur color")
+    return True
+
+
+def repair_fur_materials():
+    # Preserve roughness, shading and user parameters; reject unexpected graphs.
+    rows = []
+    for variant in VARIANTS:
+        material = LIB.load_asset(ROOT + "/Materials/M_CuteCat_" + variant + "_Fur")
+        texture = LIB.load_asset(ROOT + "/Textures/T_CuteCat_" + variant)
+        require(material and texture, "Missing fur material/texture " + variant)
+        mask = unreal.MaterialEditingLibrary.get_material_property_input_node(material, unreal.MaterialProperty.MP_OPACITY_MASK)
+        require(mask and mask.get_editor_property("texture") == texture, "Unexpected mask " + variant)
+        rows.append((variant, material, texture, mask))
+    for variant, material, texture, mask in rows:
+        changed = configure_fur_color(material, texture, mask)
+        if changed:
+            unreal.MaterialEditingLibrary.recompile_material(material)
+            require(LIB.save_loaded_asset(material), "Cannot save fur material " + variant)
+        emit("fur_color_uv_repaired", variant=variant, color_uv=1, mask_uv=0, changed=changed)
+
+
 def import_assets():
     fbx = Path(os.environ.get("CUTE_CAT_FBX", str(SOURCE / "cutecat_fbx.fbx")))
     require(fbx.is_file(), "Set CUTE_CAT_SOURCE to the extracted FBX directory")
@@ -104,6 +145,7 @@ def import_assets():
                 material.set_editor_property("blend_mode", unreal.BlendMode.BLEND_MASKED)
                 material.set_editor_property("two_sided", True)
                 unreal.MaterialEditingLibrary.connect_material_property(sample, "A", unreal.MaterialProperty.MP_OPACITY_MASK)
+                configure_fur_color(material, texture, sample)
             roughness = unreal.MaterialEditingLibrary.create_material_expression(
                 material, unreal.MaterialExpressionConstant, -400, 200)
             roughness.set_editor_property("r", 0.8)
@@ -134,6 +176,7 @@ def verify():
     summary = []
     mesh_count = 0
     animation_count = 0
+    imported_animation_count = 0
     for path in paths:
         asset = LIB.load_asset(path)
         require(asset, "Cannot load " + path)
@@ -151,6 +194,7 @@ def verify():
             require(asset.get_editor_property("physics_asset"), "Missing physics asset")
         if isinstance(asset, unreal.AnimSequence):
             animation_count += 1
+            imported_animation_count += asset.get_path_name().startswith(ROOT + "/Meshes/")
             row["length_seconds"] = asset.get_editor_property("sequence_length")
             require(row["length_seconds"] > 0, "Empty animation " + path)
             anim_skeleton = asset.get_editor_property("skeleton")
@@ -160,7 +204,7 @@ def verify():
             row.update(width=asset.blueprint_get_size_x(), height=asset.blueprint_get_size_y())
         summary.append(row)
     require(mesh_count > 0, "Missing skeletal mesh")
-    require(animation_count == 21, "Expected 21 animations; the source static pose has no valid keys")
+    require(imported_animation_count == 21, "Expected 21 imported animations; the source static pose has no valid keys")
     for variant in VARIANTS:
         require(LIB.does_asset_exist(ROOT + "/Materials/M_CuteCat_" + variant), "Missing material " + variant)
         fur = LIB.load_asset(ROOT + "/Materials/M_CuteCat_" + variant + "_Fur")
@@ -172,15 +216,20 @@ def verify():
             # Inspect the saved graph directly; NullRHI has no compiled shader resource.
             color_node = unreal.MaterialEditingLibrary.get_material_property_input_node(material, unreal.MaterialProperty.MP_BASE_COLOR)
             require(color_node and color_node.get_editor_property("texture") == texture, "Material texture mismatch")
+            require(color_node.get_editor_property("const_coordinate") == (1 if suffix else 0),
+                    "Color must use skin UV0 or fur-root UV1")
         alpha_node = unreal.MaterialEditingLibrary.get_material_property_input_node(fur, unreal.MaterialProperty.MP_OPACITY_MASK)
         require(alpha_node and alpha_node.get_editor_property("texture") == texture
                 and unreal.MaterialEditingLibrary.get_material_property_input_node_output_name(fur, unreal.MaterialProperty.MP_OPACITY_MASK) == "A",
                 "Fur opacity mask must use texture alpha")
+        require(alpha_node.get_editor_property("const_coordinate") == 0, "Fur mask must retain strand UV0")
         require(LIB.does_asset_exist(ROOT + "/Textures/T_CuteCat_" + variant), "Missing texture " + variant)
     emit("verification_pass", meshes=mesh_count, animations=animation_count, assets=summary)
 
 
 if __name__ == "__main__":
-    if os.environ.get("CUTE_CAT_VERIFY_ONLY") != "1":
+    if os.environ.get("CUTE_CAT_REPAIR_FUR") == "1":
+        repair_fur_materials()
+    elif os.environ.get("CUTE_CAT_VERIFY_ONLY") != "1":
         import_assets()
     verify()

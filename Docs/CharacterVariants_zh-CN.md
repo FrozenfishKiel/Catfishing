@@ -32,9 +32,13 @@
 
 CuteCat 的默认花色为 Calico。在 Mesh 的材质槽中成对替换 `M_CuteCat_<花色>` 与 `M_CuteCat_<花色>_Fur`，可选 Calico、ClassicTabby、SolidGrey、Tuxedo。第二槽保留毛发透明遮罩材质。
 
+毛片的两套 UV 分工不同：UV0 对应贴图顶部的白色毛丝，供 Alpha → Opacity Mask；UV1 对应毛根在身体贴图上的位置，供 RGB → Base Color。四套 `_Fur` 材质都使用两个独立 Texture Sample，不能让颜色和遮罩共用 UV0，否则全身毛丝会发白。普通皮肤材质仍使用 UV0。
+
 ## 生产与回归工具
 
 `Scripts/Art/prepare_cute_cat.py` 在副本中处理源 FBX 的顶层骨架名称；`import_cute_cat.py` 导入模型、21 段源动画及四套花色。`create_cute_cat_retarget.py` 生成缺失的跳跃、倒地及玩法动作；原生 idle / walk / run 用作 CuteCat 步态。
+
+既有白毛材质可设置环境变量 `CUTE_CAT_REPAIR_FUR=1` 后运行 `import_cute_cat.py`：只为旧图添加 UV1 颜色采样，保留原遮罩、粗糙度与其他材质参数；正确图重复执行不保存。导入验证分别检查颜色和遮罩通道，并只将 `Meshes` 下的原生片段计入 21 段数量，避免后续重定向动作造成误报。
 
 `create_character_family.py` 调用 Editor-only 的 `UCatCharacterVariantAuthoringLibrary::CreateCharacterFamily` 做一次性迁移，并在验证工程的 `Saved/CharacterFamilyBackup` 中备份原资产。工具拒绝覆盖已有角色族；不要把该脚本作为每次启动或反复重导的入口。迁移既有资产应在其未被其他编辑器占用时执行。
 
@@ -84,3 +88,16 @@ Development 落盘诊断可检索 `LogCatCharacter` 的 `physics_prototype_visua
 `presentation_delivery`：已查看本次 Idle、Speed100、Speed300、Turn300、Jump 渲染图，缩小与骨骼聚拢消失。截图在隔离工程 `Saved/CharacterVariantScreenshots`；本轮没有修改毛发材质。正式地图真人手感、完整动作美术润色、嘴叼鱼对齐及新 Cook/Development 包双端验收仍未完成。本次未修改 Game 模块源码，不重复使用旧 Game 编译记录声称新打包已验收。
 
 主工程接回：用户保存并关闭编辑器后，只替换 `ProportionsDeliveryManifest.json` 中的 19 个动画包，替换前校验均与 HEAD 一致，备份位于 `Saved/CharacterVariants/BeforeProportionsFix`。`BuildProportionsMain.log` 编译成功；`ProportionsMainReport/index.json` 重载用户当前蓝图配置后 11/11 通过（9 clean、2 warning、0 failed、0 notRun），运行比例与隔离工程一致。相关文件均位于 `Saved/CharacterVariants`；未修改、提交用户的并行资产。
+
+## 2026-09-10 毛发取色修复
+
+修改前：四个毛发材质用 UV0 同时采样 RGB 和 Alpha，因而显示贴图顶部的白色毛丝。FBX 的毛片 UV0 范围集中在该区域，UV1 则覆盖身体花色。Calico 毛发及皮肤材质已有未提交修改，本轮保留其参数；动画、角色、鱼数据等并行改动不纳入提交。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 颜色与遮罩 | 四个 `/Game/Characters/CuteCat/Materials/M_CuteCat_*_Fur` → `SK_CuteCat` 第二材质槽 → 角色可见模型 | RGB 与 Alpha 共用 UV0；颜色应取毛根对应花色 | 新增 UV1 RGB 采样，保留 UV0 Alpha 及其他参数 | 备份当前参数后修复同包材质 | 四套连接及实际渲染 | 四套均已修复；Calico 跑动图可见黑、棕、白毛随身体花色分布 |
+| 生成与检查 | `import_cute_cat.py::{import_assets,configure_fur_color,repair_fur_materials,verify}` | 重导会重现错误；旧动画计数会包含后来重定向片段 | 新旧资产共用取色规则，原生 21 段按目录计数 | 先修生成规则，再修已有包 | 保存重载、幂等执行、异常图拒绝 | `RepairFurVerify.log` 四套 Changed=false，验证通过；旧误报计数已清理 |
+| 保存与交付 | 上述四个包的原硬引用；本文档 | 保留花色选择和皮肤材质 | 主工程直接修改现有毛发图；Calico 提交版本单独基于 HEAD 生成，避免纳入先前参数改动 | 隔离渲染后主工程保存重载 | 材质图检查与备份 | 主工程日志 `RepairFurMain.log`、`RepairFurMainReload.log`；修改前副本在 `Saved/CharacterVariants/BeforeFurFixFinal` |
+| 动画、IK、网络、UI、生命周期与 Cook | 原角色/可见模型继续引用同包材质 | 不涉及玩法状态、复制、存档、UI或退出清理变化 | 不新增运行代码或状态；原资产硬引用继续进入 Cook | 无额外依赖迁移 | 验证限定本轮材质表现 | 不涉及功能修改；本轮未运行新 Cook/打包双端验收 |
+
+证据均位于 `Saved/CharacterVariants`。`contract`：四套颜色 UV1 / 遮罩 UV0 与保存重载检查通过；`runtime_behavior`：隔离 `FurRenderReport/index.json` 角色走跑、转弯、跳跃和动作用例 1/1 通过；`presentation_delivery`：已查看 Calico 跑动截图，四套花色均有材质连接检查，另外三套未逐套截图。本轮未修改 C++，不重跑无关构建与整模块验收。
