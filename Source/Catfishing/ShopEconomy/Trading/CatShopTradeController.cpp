@@ -148,7 +148,7 @@ FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* Re
 
 // 售鱼协调流程：先重放请求，再核对买家、来源与整批鱼身份；估价和余额预检全部通过后才进入实物与GAS提交。
 // 地面鱼护一次移除所有选中格且暂不广播，入账失败恢复原格；嘴叼鱼在消费保护内执行入账回调，失败继续叼着。
-// 成功结果先进入终态缓存，再通知库存观察者；既不卖附近其他鱼护，也不信任客户端重量或价格。
+// 成功结果先进入终态缓存，再通知库存观察者；拒绝按同一请求落盘，既不卖附近其他鱼护，也不信任客户端重量或价格。
 FCatShopOrderResult UCatShopTradeController::SubmitFishSaleFromPlayer(AController* RequestingController,
 	ACatFishBuyerActor* Buyer, ACatFishGuardActor* Guard, const TArray<FGuid>& FishInstanceIds, const FGuid RequestId)
 {
@@ -172,9 +172,13 @@ FCatShopOrderResult UCatShopTradeController::SubmitFishSaleFromPlayer(AControlle
 			FishSaleTerminalCache.Add(Key, Result);
 			FishSaleTerminalPayloadByKey.Add(Key, Payload);
 		}
-		UE_LOG(LogCatfishing, Log, TEXT("Event=fish_sale_order Request=%s Buyer=%s Guard=%s FishCount=%d Result=%s Balance=%d World=%s NetMode=%d Authority=1"),
+		const FString Event = FString::Printf(TEXT("Event=fish_sale_order RequestId=%s Buyer=%s Guard=%s FishCount=%d Result=%s Balance=%d World=%s NetMode=%d Authority=1 LocalRole=%d Player=%s"),
 			*RequestId.ToString(), *GetNameSafe(Buyer), *GetNameSafe(Guard), Guard ? FishInstanceIds.Num() : 1,
-			*UEnum::GetValueAsString(Error), Result.Transaction.Wallet.Balance, *GetNameSafe(GetWorld()), GetWorld()->GetNetMode());
+			*UEnum::GetValueAsString(Error), Result.Transaction.Wallet.Balance, *GetNameSafe(GetWorld()), GetWorld()->GetNetMode(),
+			RequestingController ? static_cast<int32>(RequestingController->GetLocalRole()) : -1, *GetNameSafe(RequestingController));
+		if (Error == ECatDomainCommandError::None || Error == ECatDomainCommandError::AlreadyResolved)
+		{ UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
+		else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
 		return Result;
 	};
 	if (const FCatShopOrderResult* Cached = FishSaleTerminalCache.Find(Key))

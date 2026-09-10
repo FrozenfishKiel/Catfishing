@@ -782,10 +782,16 @@ void ACatfishingPlayerController::ServerRescueCharacterToCamp_Implementation(ACa
 	}
 }
 
-// 公共领域结果客户端流程：可靠接收 Camp、容器移动和库存物品使用等结果并整体替换本机读模型；随后广播本机通知供 UI Model 刷新，不解释错误，也不触发新的领域命令。
+// 公共领域结果客户端流程：可靠接收结果后按请求落盘并整体替换本机读模型，再广播给 UI；未开界面也保留接收证据，不触发新的领域命令。
 void ACatfishingPlayerController::ClientReceiveCampCommandResult_Implementation(
 	const FCatDomainCommandResult& Result)
 {
+	const FString Event = FString::Printf(
+		TEXT("Event=inventory_command_received RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Committed=%d Replay=%d Error=%s"),
+		*Result.RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
+		Result.bCommitted, Result.bTerminalReplay, *UEnum::GetValueAsString(Result.Error));
+	if (CatIsAcceptedDomainCommandResult(Result)) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
+	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
 	LastCampCommandResult = Result;
 	OnCampCommandResultReceived.Broadcast(Result);
 }
@@ -1016,10 +1022,14 @@ void ACatfishingPlayerController::ServerSubmitShopCartAtKiosk_Implementation(ACa
 	DeliverCampCommandResultToOwningClient(DeliveryResult);
 }
 
-// 售鱼路由流程：只转交买家和冻结的鱼身份；服务端协调器重读来源与距离，所有失败和重放统一回送领域结果。
+// 售鱼路由流程：记录买家与鱼身份请求后转交协调器重读来源和距离，再按原请求记录并回送结果；失败和重放不丢失跨端关联。
 void ACatfishingPlayerController::ServerSellFishBatch_Implementation(const FGuid RequestId,
 	ACatFishBuyerActor* Buyer, ACatFishGuardActor* Guard, const TArray<FGuid>& FishInstanceIds)
 {
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=fish_sale_requested RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Buyer=%s Source=%s FishCount=%d"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
+		*GetNameSafe(Buyer), *GetNameSafe(Guard), FishInstanceIds.Num());
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	if (UCatShopTradeController* Trading = GetWorld() ? GetWorld()->GetSubsystem<UCatShopTradeController>() : nullptr)
@@ -1027,14 +1037,24 @@ void ACatfishingPlayerController::ServerSellFishBatch_Implementation(const FGuid
 		Result = Trading->SubmitFishSaleFromPlayer(this, Buyer, Guard, FishInstanceIds, RequestId).Delivery;
 	}
 	else Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	const FString Event = FString::Printf(
+		TEXT("Event=fish_sale_result RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Buyer=%s Source=%s Committed=%d Replay=%d Error=%s"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
+		*GetNameSafe(Buyer), *GetNameSafe(Guard), Result.bCommitted, Result.bTerminalReplay, *UEnum::GetValueAsString(Result.Error));
+	if (CatIsAcceptedDomainCommandResult(Result)) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
+	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 落地路由流程：先拒绝关闭阶段和错误意图，再交库存统一校验与提交；无论成功失败均回送原请求，客户端不决定落点。
+// 落地路由流程：先记录来源和意图，拒绝关闭阶段与错误载荷，其余交库存校验提交；结果按原请求落盘并回送，客户端不决定落点。
 void ACatfishingPlayerController::ServerReleaseInventoryItemToWorld_Implementation(const FGuid RequestId,
 	AActor* SourceHost, const int32 Slot, const FGuid ItemInstanceId, const int32 Quantity,
 	const ECatInventoryWorldAction Action)
 {
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=inventory_world_requested RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Source=%s Slot=%d ItemInstanceId=%s Quantity=%d Action=%d"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
+		*GetNameSafe(SourceHost), Slot, *ItemInstanceId.ToString(), Quantity, static_cast<int32>(Action));
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	if (!CanForwardGameplayCommand()) Result.Error = ECatDomainCommandError::CommandsClosed;
@@ -1045,15 +1065,21 @@ void ACatfishingPlayerController::ServerReleaseInventoryItemToWorld_Implementati
 		Result = UCatInventoryStatics::ReleaseItemToWorldFromAuthority(ControlledCharacter, RequestId,
 			SourceHost, Slot, ItemInstanceId, Quantity, Action);
 	else Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	UE_LOG(LogCatfishing, Log, TEXT("Event=inventory_world_result World=%s NetMode=%d Player=%s Request=%s Host=%s Action=%d Error=%d"),
-		*GetNameSafe(GetWorld()), int32(GetNetMode()), *GetName(), *RequestId.ToString(),
-		*GetNameSafe(SourceHost), int32(Action), int32(Result.Error));
+	const FString Event = FString::Printf(
+		TEXT("Event=inventory_world_result RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Source=%s Action=%d Committed=%d Replay=%d Error=%s"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
+		*GetNameSafe(SourceHost), static_cast<int32>(Action), Result.bCommitted, Result.bTerminalReplay, *UEnum::GetValueAsString(Result.Error));
+	if (CatIsAcceptedDomainCommandResult(Result)) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
+	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 鱼护拾取路由：服务器确认命令窗口和同世界对象，实际所有权与容量由鱼护裁决；回执不创建第二份携带状态。
+// 鱼护拾取路由：记录请求后确认命令窗口与同世界对象，再让鱼护裁决所有权和容量；按原请求记录及回送结果，不创建第二份携带状态。
 void ACatfishingPlayerController::ServerPickUpFishGuard_Implementation(ACatFishGuardActor* Guard, const FGuid RequestId)
 {
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=fish_guard_pickup_requested RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Guard=%s"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(), *GetNameSafe(Guard));
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	if (!CanForwardGameplayCommand()) Result.Error = ECatDomainCommandError::CommandsClosed;
@@ -1062,6 +1088,12 @@ void ACatfishingPlayerController::ServerPickUpFishGuard_Implementation(ACatFishG
 	else Result.Error = Guard->PickUpFromAuthority(this, RequestId)
 		? ECatDomainCommandError::None : ECatDomainCommandError::InvalidPayload;
 	Result.bCommitted = Result.Error == ECatDomainCommandError::None;
+	const FString Event = FString::Printf(
+		TEXT("Event=fish_guard_pickup_result RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Guard=%s Committed=%d Error=%s"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
+		*GetNameSafe(Guard), Result.bCommitted, *UEnum::GetValueAsString(Result.Error));
+	if (Result.bCommitted) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
+	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
 	DeliverCampCommandResultToOwningClient(Result);
 }
 

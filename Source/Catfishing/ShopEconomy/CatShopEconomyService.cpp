@@ -306,7 +306,7 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 	{
 		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
 		Result.Command.Revision = WalletRevision;
-		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected Request=%s World=%s Result=Reentry Operation=Purchase"),
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected RequestId=%s World=%s Result=Reentry Operation=Purchase"),
 			*Command.Context.RequestId.ToString(), *GetNameSafe(GetWorld()));
 		return Result;
 	}
@@ -488,7 +488,7 @@ FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFi
 	{
 		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
 		Result.Command.Revision = WalletRevision;
-		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected Request=%s World=%s Result=Reentry Operation=FishSale"),
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected RequestId=%s World=%s Result=Reentry Operation=FishSale"),
 			*Command.Context.RequestId.ToString(), *GetNameSafe(GetWorld()));
 		return Result;
 	}
@@ -820,14 +820,14 @@ bool UCatShopEconomyService::TryGetTeamWalletBalance(int32& OutBalance) const
 }
 
 // 余额写入流程：先读取已就绪的钱包，再创建一个 source 冻结购买金额或售鱼行和收购表；强引用覆盖同步 GE 及全部回调，防止弱 source 被 GC 回收。
-// GE 在内部完成估价和余额边界裁决；服务同时核对应用结果、执行标记与最终余额，零收入也必须真实执行，成功后才回传实际金额供账本使用。
+// GE 在内部完成估价和余额边界裁决；服务核对应用、执行标记与最终余额并按请求落盘，零收入也必须真实执行，成功后才回传实际金额供账本使用。
 bool UCatShopEconomyService::TryApplyTeamWalletTransaction(int32& InOutDelta, const FGuid& RequestId,
 	const FCatShopFishSaleCommand* FishSale)
 {
 	int32 CurrentBalance = 0;
 	if (!TryGetTeamWalletBalance(CurrentBalance))
 	{
-		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected Request=%s World=%s Result=WalletUnavailable"),
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected RequestId=%s World=%s Result=WalletUnavailable"),
 			*RequestId.ToString(), *GetNameSafe(GetWorld()));
 		return false;
 	}
@@ -836,7 +836,7 @@ bool UCatShopEconomyService::TryApplyTeamWalletTransaction(int32& InOutDelta, co
 	UAbilitySystemComponent* ASC = GameState ? GameState->GetRunAbilitySystemComponentFromAuthority() : nullptr;
 	if (!ASC || !GameState->GetEconomyAttributeSetFromAuthority())
 	{
-		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected Request=%s World=%s Result=ASCMissing"),
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected RequestId=%s World=%s Result=ASCMissing"),
 			*RequestId.ToString(), *GetNameSafe(World));
 		return false;
 	}
@@ -853,7 +853,7 @@ bool UCatShopEconomyService::TryApplyTeamWalletTransaction(int32& InOutDelta, co
 	const FGameplayEffectSpecHandle Spec = ASC->MakeOutgoingSpec(UCatGE_ShopEconomyTransaction::StaticClass(), 1.0f, Context);
 	if (!Spec.IsValid())
 	{
-		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected Request=%s World=%s Result=SpecUnavailable"),
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected RequestId=%s World=%s Result=SpecUnavailable"),
 			*RequestId.ToString(), *GetNameSafe(World));
 		return false;
 	}
@@ -865,13 +865,13 @@ bool UCatShopEconomyService::TryApplyTeamWalletTransaction(int32& InOutDelta, co
 		&& AppliedBalance == NextBalance;
 	if (!bSucceeded)
 	{
-		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected Request=%s World=%s NetMode=%d Authority=1 Actor=%s Role=%d Result=ExecutionOrBalanceMismatch Applied=%d Executed=%d BalanceApplied=%d BalanceReadable=%d Before=%d Delta=%d After=%d"),
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected RequestId=%s World=%s NetMode=%d Authority=1 Actor=%s LocalRole=%d Result=ExecutionOrBalanceMismatch Applied=%d Executed=%d BalanceApplied=%d BalanceReadable=%d Before=%d Delta=%d After=%d"),
 			*RequestId.ToString(), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()), *GameState->GetName(),
 			static_cast<int32>(GameState->GetLocalRole()), bApplied, Source->bExecuted, Source->bBalanceApplied, bBalanceReadable,
 			CurrentBalance, Source->WalletDelta, AppliedBalance);
 		return false;
 	}
-	UE_LOG(LogCatfishing, Log, TEXT("Event=WalletTransactionApplied Request=%s World=%s NetMode=%d Authority=1 Actor=%s Role=%d Result=Success Before=%d Delta=%d After=%d"),
+	UE_LOG(LogCatfishing, Log, TEXT("Event=WalletTransactionApplied RequestId=%s World=%s NetMode=%d Authority=1 Actor=%s LocalRole=%d Result=Success Before=%d Delta=%d After=%d"),
 		*RequestId.ToString(), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()), *GameState->GetName(),
 		static_cast<int32>(GameState->GetLocalRole()),
 		CurrentBalance, Source->WalletDelta, AppliedBalance);

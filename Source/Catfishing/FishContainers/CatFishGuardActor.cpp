@@ -90,23 +90,38 @@ ACatFishGuardActor* ACatFishGuardActor::FindCarriedGuard(const ACatCharacter* Ch
 	return nullptr;
 }
 
-// 拾取流程：先验证地面、触达、身体和单嘴占用，再让正式背包整件收货；满包不变，收货后的宿主同步负责附着原鱼护。
+// 拾取流程：依次验证地面、触达、身体、单嘴占用和配置，再让正式背包整件收货；各拒绝原因落盘，满包不变，成功由宿主同步附着原鱼护。
 bool ACatFishGuardActor::PickUpFromAuthority(AController* RequestingController, const FGuid RequestId)
 {
 	ACatCharacter* Character = RequestingController ? Cast<ACatCharacter>(RequestingController->GetPawn()) : nullptr;
 	const UCatFishPickupSettings* Settings = GetDefault<UCatFishPickupSettings>();
-	if (!HasAuthority() || !RequestId.IsValid() || !IsGrounded() || !bInteractionEnabled
-		|| !Character || !Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned
-		|| !IsAuthorityRequestSpatiallyValid(RequestingController) || ACatFishPickupActor::FindCarriedFish(Character)
-		|| FindCarriedGuard(Character) || !Character->GetMesh() || !Settings
-		|| !Character->GetMesh()->DoesSocketExist(Settings->MouthCarrySocketName)) return false;
+	const auto Finish = [&](const bool bAccepted, const TCHAR* Reason)
+	{
+		const FString Event = FString::Printf(
+			TEXT("Event=fish_guard_pickup RequestId=%s Guard=%s Player=%s ItemInstanceId=%s Result=%s World=%s NetMode=%d Authority=%d LocalRole=%d"),
+			*RequestId.ToString(), *GetName(), *GetNameSafe(Character),
+			GuardItem ? *GuardItem->GetItemInstanceId().ToString() : TEXT("None"), Reason,
+			*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole());
+		if (bAccepted) { UE_LOG(LogCatFishContainers, Log, TEXT("%s"), *Event); }
+		else { UE_LOG(LogCatFishContainers, Warning, TEXT("%s"), *Event); }
+		return bAccepted;
+	};
+	if (!HasAuthority() || !RequestId.IsValid()) return Finish(false, TEXT("InvalidRequest"));
+	if (!IsGrounded() || !bInteractionEnabled) return Finish(false, TEXT("UnavailableGuard"));
+	if (!Character || !Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned)
+		return Finish(false, TEXT("UnavailableCharacter"));
+	if (!IsAuthorityRequestSpatiallyValid(RequestingController)) return Finish(false, TEXT("UnreachableGuard"));
+	if (ACatFishPickupActor::FindCarriedFish(Character) || FindCarriedGuard(Character)) return Finish(false, TEXT("MouthOccupied"));
+	if (!Character->GetMesh() || !Settings || !Character->GetMesh()->DoesSocketExist(Settings->MouthCarrySocketName))
+		return Finish(false, TEXT("MouthSocketUnavailable"));
 	if (!GuardItem)
 	{
 		UCatInventoryItemDefinition* Definition = GuardDefinition.LoadSynchronous();
 		if (!Definition || !Definition->IsInventoryRuntimeDefinitionReady()
 			|| Definition->GetMaxStackCount() != 1
 			|| !Definition->GetPreferredInstanceType()
-			|| !Definition->GetPreferredInstanceType()->IsChildOf(UCatFishGuardInventoryItemInstance::StaticClass())) return false;
+			|| !Definition->GetPreferredInstanceType()->IsChildOf(UCatFishGuardInventoryItemInstance::StaticClass()))
+			return Finish(false, TEXT("GuardDefinitionUnavailable"));
 		GuardItem = NewObject<UCatFishGuardInventoryItemInstance>(this, Definition->GetPreferredInstanceType());
 		GuardItem->SetItemDefinition(Definition);
 		GuardItem->SetGuardFromAuthority(this);
@@ -117,11 +132,7 @@ bool ACatFishGuardActor::PickUpFromAuthority(AController* RequestingController, 
 	Entry.ItemInstance = GuardItem;
 	Entry.Count = 1;
 	const bool bPickedUp = Character->GetInventoryComponent() && Character->GetInventoryComponent()->TryAddInventoryBatch(Batch);
-	UE_LOG(LogCatFishContainers, Log,
-		TEXT("Event=fish_guard_pickup Request=%s Guard=%s Player=%s Item=%s Result=%s World=%s NetMode=%d Authority=%d LocalRole=%d"),
-		*RequestId.ToString(), *GetName(), *GetNameSafe(Character), *GuardItem->GetItemInstanceId().ToString(),
-		bPickedUp ? TEXT("Success") : TEXT("InventoryRejected"), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole());
-	return bPickedUp;
+	return Finish(bPickedUp, bPickedUp ? TEXT("Success") : TEXT("InventoryRejected"));
 }
 
 // 宿主转换流程：解除旧宿主销毁回调，写入新归属并绑定新宿主，再更新表现和网络；原有鱼库存从未换所有者。

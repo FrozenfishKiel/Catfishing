@@ -2238,7 +2238,7 @@ bool UCatInventoryComponent::ConsumeItemAtSlot(const int32 SlotIndex, const int3
 // 1. 先重放同请求终态，再复核当前实例、数量、身体和配置，防止数量面板打开后误操作已换入的物品。
 // 2. 有既有载体的鱼护复用原 Actor；普通物品延迟生成配置 Actor 并复制实例状态，失败销毁新载体但不扣来源。
 // 3. 落点通过后才提交库存扣量；扣量的同步广播前记录重入拒绝，完成后用最终结果覆盖该请求缓存。
-// 4. 最后同步实例归属、解除附着并设置物理模式，丢弃只施加一次初速度，放置不调用任何装备使用逻辑。
+// 4. 最后同步实例归属、解除附着并设置物理模式，丢弃只施加一次初速度，放置不调用任何装备使用逻辑；失败清理新载体后按请求记录拒绝原因。
 FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(ACatCharacter* Character,
 	const FGuid RequestId, const int32 SlotIndex, const FGuid ItemInstanceId, const int32 Quantity, const ECatInventoryWorldAction Action)
 {
@@ -2261,10 +2261,12 @@ FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(
 		if (!Result.bCommitted && bNewActor && IsValid(WorldActor)) WorldActor->Destroy();
 		TerminalPayloadByKey.Add(Key, Payload);
 		TerminalCache.Add(Key, Result);
-		UE_LOG(LogCatInventory, Log, TEXT("Event=inventory_world_release Request=%s Item=%s Quantity=%d Action=%d Actor=%s Error=%s World=%s NetMode=%d Authority=%d LocalRole=%d"),
+		const FString Event = FString::Printf(TEXT("Event=inventory_world_release RequestId=%s ItemInstanceId=%s Quantity=%d Action=%d Actor=%s Error=%s World=%s NetMode=%d Authority=%d LocalRole=%d"),
 			*RequestId.ToString(), *ItemInstanceId.ToString(), Quantity, static_cast<int32>(Action), *GetNameSafe(WorldActor),
 			*UEnum::GetValueAsString(Error), *GetNameSafe(GetWorld()), GetOwner() ? GetOwner()->GetNetMode() : -1,
 			GetOwner() && GetOwner()->HasAuthority(), GetOwner() ? static_cast<int32>(GetOwner()->GetLocalRole()) : -1);
+		if (Result.bCommitted) { UE_LOG(LogCatInventory, Log, TEXT("%s"), *Event); }
+		else { UE_LOG(LogCatInventory, Warning, TEXT("%s"), *Event); }
 		return Result;
 	};
 	const FCatInventoryEntry* Entry = GetInventoryEntryAtSlot(SlotIndex);
