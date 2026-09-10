@@ -36,12 +36,12 @@ public:
 	FVector GetDiscardedLineImpulseNewtonSecondsForDiagnostics() const { return DiscardedLineImpulse; }
 	FVector GetQueuedLineImpulseNewtonSecondsForDiagnostics() const;
 	double GetQueuedLineSecondsForDiagnostics() const;
-	/** The owning rod calls this from its PostPhysics tick, after Chaos consumes this frame's force. */
+	/** The owning rod calls this from its PostPhysics tick, after the carrier or fixed support consumes this frame's load. */
 	void FinishPhysicsFrame();
 	FTransform GetObservedActorTransform() const;
 	FVector GetPointVelocity(const FVector& WorldPoint) const;
 	FVector GetAngularVelocityRadiansPerSecond() const;
-	bool BeginPrimaryHold(APlayerState* Player, bool bPositionNewRod);
+	bool BeginPrimaryHold(APlayerState* Player, bool bPositionAtHand);
 	bool CommitPrimaryHold(APlayerState* Player);
 	bool IsHeldBy(const APlayerState* Player) const;
 	void ReleasePrimaryHold(APlayerState* Player, FName Reason);
@@ -87,11 +87,6 @@ private:
 	FVector DiscardedLineImpulse = FVector::ZeroVector;
 	FVector PendingPhysicsImpulse = FVector::ZeroVector;
 	double PendingPhysicsSeconds = 0;
-	double AppliedPhysicsSeconds = 0;
-	double LastSampleAppliedPhysicsSeconds = 0;
-	FVector LastSampleAppliedImpulse = FVector::ZeroVector;
-	FVector ObservedAppliedAverageForce = FVector::ZeroVector;
-	double LastPhysicsSubstepSeconds = 0;
 	TWeakObjectPtr<UCatPhysicalBodyComponent> BudgetBody;
 	TWeakObjectPtr<AController> InputTickController;
 	TWeakObjectPtr<UCatPhysicsGrabComponent> InputTickGrab;
@@ -99,13 +94,9 @@ private:
 	bool bEndingPlay = false;
 	bool bReady = false;
 	bool bRefreshingPrimaryControl = false;
+	bool bPreparingPrimaryHold = false;
 	bool bLastMouseMotorActive = false;
 	bool bProducingCurrentPhysicsFrame = false;
 	double NextLoadLogSeconds = 0.0;
-	double LastEndpointSampleSeconds = -1.0;
-	FVector LastEndpointVelocity = FVector::ZeroVector;
-	FVector LastEndpointPosition = FVector::ZeroVector;
-	FVector ObservedEndpointAcceleration = FVector::ZeroVector;
-	uint32 LastMechanicalTopologyHash = 0;
 	double NextEndpointLogSeconds = 0.0;
 };

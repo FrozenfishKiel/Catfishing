@@ -8,7 +8,7 @@
 
 class APlayerState;
 
-/** 鱼竿的稳定空间姿态；会话阶段与姿态正交，放到地上不会终止鱼、钩或鱼线。 */
+/** 鱼竿的稳定空间姿态；会话阶段与姿态正交，架住不终止鱼、钩或鱼线；Grounded 保留序列化值，表示离手固定架竿。 */
 UENUM(BlueprintType)
 enum class ECatFishingRodPoseMode : uint8
 {

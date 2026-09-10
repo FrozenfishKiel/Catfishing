@@ -116,7 +116,7 @@ public:
 	UBoxComponent* GetPhysicalRodBody() const { return PhysicsBody; }
 	UCatFishingPhysicalRodComponent* GetPhysicalRodComponent() const { return PhysicalRod; }
 	bool IsUsingPhysicalRod() const;
-	bool BeginPhysicalHoldFromAuthority(APlayerState* Player, bool bPositionNewRod = false);
+	bool BeginPhysicalHoldFromAuthority(APlayerState* Player, bool bPositionAtHand = false);
 	void ReleasePhysicalPrimaryHoldFromAuthority(APlayerState* Player, FName Reason);
 	void RefreshPrimaryControlFromAuthority();
 	virtual void Tick(float DeltaSeconds) override;

@@ -8,6 +8,7 @@
 #include "Components/BoxComponent.h"
 #include "Fishing/Presentation/CatFishingCameraComponent.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
@@ -224,11 +225,11 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 	FCatFishingRodControlObservation Observation;
 	TestTrue(TEXT("physical rod supplies read-only control observation"),Rod->GetControlObservationFromAuthority(Observation));
 	const FTransform RodBefore=Rod->GetPhysicalRodBody()->GetComponentTransform();
-	Rod->GetPhysicalRodBody()->SetPhysicsAngularVelocityInRadians(FVector(0,0,.75));
 	Rod->RefreshHeldTransformFromAuthority(1.0);
 	TestTrue(TEXT("held refresh does not perform a second physics integration"),Rod->GetPhysicalRodBody()->GetComponentTransform().Equals(RodBefore,1.e-8));
 	Rod->ClearFightConstraintAndLoadFromAuthority();
-	TestTrue(TEXT("fight cleanup preserves rod angular momentum"),Rod->GetPhysicalRodBody()->GetPhysicsAngularVelocityInRadians().Equals(FVector(0,0,.75),1.e-8));
+	TestTrue(TEXT("fight cleanup leaves the unattended rod fixed"),Rod->GetPhysicalRodBody()->GetComponentTransform().Equals(RodBefore,1.e-8)
+		&& Rod->GetPhysicalRodComponent()->GetAngularVelocityRadiansPerSecond().IsZero());
 	TestTrue(TEXT("consumer fixture publishes empty membership"),Rod->SetPrimaryOperatorFromAuthority(nullptr,Rod->GetPresentationState().RodActorRevision));
 	Controller->SetControlRotation(FRotator(0,-40,0)); Controller->UpdateRotation(1.0f/60.0f);
 	TestEqual(TEXT("leave resumes current free physical view intent"),Body->GetViewIntent().Yaw,-40.0,1.e-6);

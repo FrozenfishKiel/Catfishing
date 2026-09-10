@@ -172,6 +172,7 @@ bool UCatPhysicsGrabComponent::IsReachSurface(const UPrimitiveComponent* Target,
 	if (!IsValid(Target) || !IsValid(Target->GetOwner()) || Target->GetOwner() == GetOwner()
 		|| !Hands.IsValidIndex(Index) || !Hands[Index] || !Target->GetBodyInstance(Bone)
 		|| Target->GetCollisionResponseToChannel(Hands[Index]->GetCollisionObjectType()) != ECR_Block) return false;
+	if (const auto* Light = UCatLightPropComponent::FindFor(Target); Light && Light->GetState().Mode == ECatLightPropMode::Parked) return false;
 	const auto Collision = Target->GetCollisionEnabled();
 	if (Collision == ECollisionEnabled::QueryAndPhysics || Collision == ECollisionEnabled::PhysicsOnly) return true;
 	if (Collision != ECollisionEnabled::QueryOnly) return false;

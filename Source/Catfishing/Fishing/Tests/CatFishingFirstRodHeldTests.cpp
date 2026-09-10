@@ -5,6 +5,7 @@
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Interaction/Grab/CatLightPropComponent.h"
 #include "Components/SphereComponent.h"
 #include "Components/BoxComponent.h"
 #include "Engine/LocalPlayer.h"
@@ -79,6 +80,7 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		UCatFishingService* Fishing = World->GetSubsystem<UCatFishingService>();
 		UCatFishingCommandComponent* Commands = Controller->GetFishingCommandComponent();
 		UCatFishingSettings* Settings = GetMutableDefault<UCatFishingSettings>();
+		for (int32 Frame = 0; Frame < 120; ++Frame) WorldWrapper.TickTestWorld(1.f / 120.f);
 		const FVector OriginalLocation = Character->GetActorLocation();
 		const EMovementMode OriginalMovement = Character->GetCharacterMovement()->MovementMode;
 
@@ -138,11 +140,16 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("subsequent R commits"), Result.bCommitted);
 			TestEqual(TEXT("R puts down the occupied physical rod"), Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Grounded);
 			TestFalse(TEXT("R releases the actual holding constraint"), Character->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true));
-			TestTrue(TEXT("fixture positions the released rod for actual regrip without moving the cat"), Rod->BeginPhysicalHoldFromAuthority(Player, true));
+			const FTransform ParkedPose = Rod->GetPhysicalRodBody()->GetComponentTransform();
+			TestFalse(TEXT("parked formal rod has no independent simulation"), Rod->GetPhysicalRodBody()->IsSimulatingPhysics());
+			TestFalse(TEXT("parked formal rod has no gravity"), Rod->GetPhysicalRodBody()->IsGravityEnabled());
+			TestEqual(TEXT("parked mode is the authoritative hand-grab gate"), Rod->FindComponentByClass<UCatLightPropComponent>()->GetState().Mode, ECatLightPropMode::Parked);
+			for (int32 Frame = 0; Frame < 60; ++Frame) WorldWrapper.TickTestWorld(1.f / 120.f);
+			TestTrue(TEXT("released rod keeps both position and rotation"), Rod->GetPhysicalRodBody()->GetComponentTransform().Equals(ParkedPose, 1.e-5));
 			TestEqual(TEXT("physical grip alone does not grant primary control"), Rod->GetOperatorCount(), 0);
 			const FCatFishingInputEdge RetakeEdge = Commands->SubmitRodInteract();
 			FCatFishingCommandResult Retake;
-			TestTrue(TEXT("R explicitly retakes the physically held owned rod"), Commands->TryGetResult(RetakeEdge.RequestId, Retake) && Retake.bCommitted);
+			TestTrue(TEXT("R directly picks up the nearby parked owned rod without a hand grab"), Commands->TryGetResult(RetakeEdge.RequestId, Retake) && Retake.bCommitted);
 			TestEqual(TEXT("explicit R restores the primary role"), Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Held);
 			TestEqual(TEXT("R keeps the same actor"), Fishing->FindDeployedRod(Player), Rod);
 			TestEqual(TEXT("toggle never uses inventory again"), Equipment->GetSnapshot().Revision, UsedEquipmentRevision);
@@ -217,6 +224,12 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("putting down second rod has a result"), Commands->TryGetResult(PutDownSecondEdge.RequestId, PutDownSecond))
 			|| !TestTrue(TEXT("second rod can be put down"), PutDownSecond.bCommitted)) return false;
 		TestNull(TEXT("both grounded rods leave the player empty handed"), Fishing->FindRodOperatedBy(Player));
+		OperateFirst.Context.RequestId = FGuid::NewGuid();
+		OperateFirst.Context.ExpectedRodActorRevision = Rod->GetPresentationState().RodActorRevision;
+		const FTransform FarPose = Rod->GetActorTransform();
+		AddExpectedErrorPlain(TEXT("Reason=UnavailableOrOutOfPickupRange"), EAutomationExpectedErrorFlags::Contains, 1);
+		TestFalse(TEXT("direct R request cannot pick up a distant owned rod"), Fishing->OperateRod(Controller, OperateFirst).bCommitted);
+		TestTrue(TEXT("rejected remote pickup leaves the parked pose untouched"), Rod->GetActorTransform().Equals(FarPose));
 		if (!TestTrue(TEXT("grants a third physical rod to distinguish the deployment limit from missing inventory"),
 			Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), Equipment->GetSnapshot().Revision, DefinitionId).bCommitted)) return false;
 		Character->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(Character->GetActorRotation(), OriginalLocation - FVector(600.0, 0.0, 0.0)), TEXT("TestPosition"));

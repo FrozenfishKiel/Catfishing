@@ -7,7 +7,7 @@
 class UPrimitiveComponent;
 
 UENUM()
-enum class ECatLightPropMode : uint8 { Inactive, Falling, Held, Loaded };
+enum class ECatLightPropMode : uint8 { Inactive, Falling, Held, Loaded, Parked };
 
 USTRUCT()
 struct FCatLightPropState
@@ -31,7 +31,9 @@ public:
 	void RestoreOrdinaryPhysics();
 	void RefreshGripsFromAuthority(FName Reason);
 	void SetExternalLoadFromAuthority(bool bActive);
-	/** A controlled prop routes physical grips to its real carrier; null restores the dynamic prop. */
+	/** Fixed rod support: no fall or hand grabs; only authoritative R pickup can reopen it. */
+	void SetParkedFromAuthority(bool bParked);
+	/** A controlled prop routes physical grips to its real carrier; null removes the carrier. */
 	void SetGripCarrierFromAuthority(UPrimitiveComponent* Carrier);
 	UPrimitiveComponent* GetGripCarrier() const { return GripCarrier.Get(); }
 	void RefreshGripConstraintsFromAuthority();
@@ -55,5 +57,6 @@ private:
 	float OriginalLinearDamping = 0;
 	float OriginalAngularDamping = 0;
 	bool bEndingPlay = false;
+	bool bParked = false;
 	TWeakObjectPtr<UPrimitiveComponent> GripCarrier;
 };

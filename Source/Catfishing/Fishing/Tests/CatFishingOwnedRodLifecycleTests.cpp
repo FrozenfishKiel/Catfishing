@@ -323,7 +323,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("owner departure clears control without promoting a helper"), Rod->GetOperatorCount(), 0);
 			TestNull(TEXT("unattended session has no active fisher"), Session->GetSnapshot().FisherPlayerState.Get());
 			TestTrue(TEXT("owner departure advances the input epoch"), Rod->GetControlEpoch() != ControlEpoch);
-			TestTrue(TEXT("helper keeps its physical rod constraint after owner departure"), Helper.Character->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true));
+			TestFalse(TEXT("owner departure parks the rod and clears helper rod grips"), Helper.Character->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true));
 			TestEqual(TEXT("unattended session keeps its exact hook"), Session->GetSnapshot().HookActor.Get(), Hook);
 			TestEqual(TEXT("unattended session keeps its identity"), Session->GetSnapshot().FishingSessionId, CastResult.Command.FishingSessionId);
 			ACatFishingResourceCustodian* Custodian = nullptr;
@@ -384,7 +384,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 			TestFalse(TEXT("resource host destruction preserves the session"), Session->IsTerminal());
 			TestEqual(TEXT("resource host destruction grants nobody control"), Rod->GetOperatorCount(), 0);
 			TestNull(TEXT("helper is not promoted after the owner is destroyed"), Session->GetSnapshot().FisherPlayerState.Get());
-			TestTrue(TEXT("owner destruction preserves helper's independent rod constraint"), Helper.Character->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true));
+			TestFalse(TEXT("owner destruction parks the retained rod and clears helper rod grips"), Helper.Character->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true));
 			TestEqual(TEXT("existing rod remains registered"), Fishing->FindDeployedRodById(Placed.RodActorId), Rod);
 			TestTrue(TEXT("rebased coordinator owns the original bait reservation"), ReservationEquipment->IsFishingUseActive(CastResult.Command.FishingSessionId));
 			TestTrue(TEXT("bait settles through the exact moved lock"), ReservationEquipment->CommitFishingBaitDeferred(CastResult.Command.FishingSessionId).bApplied);

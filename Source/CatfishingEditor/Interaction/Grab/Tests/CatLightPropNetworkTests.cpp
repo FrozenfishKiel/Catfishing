@@ -209,24 +209,44 @@ namespace CatLightPropNetwork
 				Test->TestTrue(TEXT("holding prop preserves the configured physical jump"), MaximumBodyZ - Body->GetStandRootHeightCm() > 65);
 				Rod->ReleasePhysicalPrimaryHoldFromAuthority(Cat->GetPlayerState(), TEXT("LightPropReleaseAbove"));
 				Rod->RefreshPrimaryControlFromAuthority();
-				// Fixture places the now-free formal shaft directly above the cat; only Chaos moves it afterward.
-				Rod->GetPhysicalRodBody()->SetWorldLocation(Body->GetBody()->GetComponentLocation() + FVector(0, 0, 45), false, nullptr, ETeleportType::TeleportPhysics);
-				Rod->GetPhysicalRodBody()->SetPhysicsLinearVelocity(FVector(0, 0, -80));
-				Rod->GetPhysicalRodBody()->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);
+				ParkedPose = Rod->GetPhysicalRodBody()->GetComponentTransform();
 				Next(4, Now);
 			}
 			else if (Stage == 4)
 			{
 				if (Now - StageStarted < .4) return false;
-				if (!bDropCaptured) { Capture(Client, TEXT("formal-released-over-cat")); bDropCaptured = true; }
+				if (ClientLight->GetState().Mode != ECatLightPropMode::Parked) return false;
+				if (!bDropCaptured) { ClientParkedPose = ClientRod->GetPhysicalRodBody()->GetComponentTransform(); Capture(Client, TEXT("formal-parked-rod")); bDropCaptured = true; }
 				if (Now - StageStarted < 3 || ClientLight->GetState().GripCount != 0) return false;
-				Test->AddInfo(FString::Printf(TEXT("Event=light_prop_formal_drop_measured MinZ=%.4f MinUp=%.6f CurrentZ=%.4f CurrentUp=%.6f MaximumZ=%.4f"),
+				Test->AddInfo(FString::Printf(TEXT("Event=fishing_parked_rod_measured MinZ=%.4f MinUp=%.6f CurrentZ=%.4f CurrentUp=%.6f MaximumZ=%.4f"),
 					MinimumBodyZ, MinimumUp, Body->GetBody()->GetComponentLocation().Z, Body->GetBody()->GetUpVector().Z, MaximumBodyZ));
 				Test->TestTrue(TEXT("holding, turning, jumping and dropping do not sink or overturn the cat"), MinimumUp > .9 && SupportedMinimumZ > Body->GetStandRootHeightCm() - 5
 					&& MinimumBodyZ >= BareMinimumZ - 5 && FMath::Abs(MaximumBodyZ - BareMaximumZ) < 5);
 				Test->AddInfo(FString::Printf(TEXT("Event=light_prop_jump_baseline BareMinZ=%.4f BareMaxZ=%.4f HeldMinZ=%.4f HeldMaxZ=%.4f SupportedMinZ=%.4f"), BareMinimumZ, BareMaximumZ, MinimumBodyZ, MaximumBodyZ, SupportedMinimumZ));
-				Capture(Client, TEXT("formal-after-drop-standing"));
+				Capture(Client, TEXT("formal-parked-cat-standing"));
 				Test->TestEqual(TEXT("no owner is automatically promoted on release"), Rod->GetOperatorCount(), 0);
+				Test->TestTrue(TEXT("parked rod world position and angle stay fixed on authority"), Rod->GetPhysicalRodBody()->GetComponentTransform().Equals(ParkedPose, 1.e-5));
+				Test->TestTrue(TEXT("client parked pose does not drift after its state arrives"), ClientRod->GetPhysicalRodBody()->GetComponentTransform().Equals(ClientParkedPose, 1.e-5));
+				// FRepMovement rounds the Actor root, not the distant shaft centre. Keep its existing transport contract.
+				const auto& Replication = Rod->GetReplicatedMovement();
+				const double LocationUnit = Replication.LocationQuantizationLevel == EVectorQuantization::RoundTwoDecimals ? .01
+					: Replication.LocationQuantizationLevel == EVectorQuantization::RoundOneDecimal ? .1 : 1.0;
+				const double RotationUnit = Replication.RotationQuantizationLevel == ERotatorQuantization::ShortComponents ? 360.0 / 65536.0 : 360.0 / 256.0;
+				const FVector RootError = ClientRod->GetActorLocation() - Rod->GetActorLocation();
+				const FRotator AngleError = (ClientRod->GetActorRotation() - Rod->GetActorRotation()).GetNormalized();
+				Test->TestTrue(TEXT("client receives the authority root within the configured location quantization"), RootError.GetAbsMax() <= LocationUnit * .5 + 1.e-4);
+				Test->TestTrue(TEXT("client receives the authority angles within the configured rotation quantization"), AngleError.IsNearlyZero(RotationUnit * .5 + 1.e-4));
+				Test->AddInfo(FString::Printf(TEXT("Event=fishing_parked_replication_measured RootErrorCm=%s AngleErrorDegrees=%s LocationUnitCm=%.6f RotationUnitDegrees=%.6f ShaftCentreErrorCm=%.6f ClientDriftCm=%.9f"),
+					*RootError.ToCompactString(), *AngleError.ToCompactString(), LocationUnit, RotationUnit,
+					FVector::Distance(ClientRod->GetPhysicalRodBody()->GetComponentLocation(), ParkedPose.GetLocation()),
+					FVector::Distance(ClientRod->GetPhysicalRodBody()->GetComponentLocation(), ClientParkedPose.GetLocation())));
+				Test->TestEqual(TEXT("client observes parked support"), ClientLight->GetState().Mode, ECatLightPropMode::Parked);
+				const FVector BlockedContact = Rod->GetPhysicalRodBody()->GetComponentTransform().TransformPosition(
+					FVector(0, 0, Rod->GetPhysicalRodBody()->GetUnscaledBoxExtent().Z));
+				HelperBody->TeleportBodyFromAuthority(FTransform(Helper->GetActorRotation(), Helper->GetActorLocation()
+					+ BlockedContact - HelperBody->GetHand(true)->GetComponentLocation()), TEXT("ParkedHandContactFixture"));
+				Test->TestTrue(TEXT("blocked hand is actually touching formal rod geometry"), HelperBody->GetHand(true)->GetComponentLocation().Equals(BlockedContact, .01));
+				Test->TestFalse(TEXT("parked formal rod rejects a touching helper hand"), HelperBody->GetGrab()->GripFromAuthority(true, Rod->GetPhysicalRodBody(), BlockedContact));
 				if (!Test->TestTrue(TEXT("retake uses the same physical hold receiver"), Rod->BeginPhysicalHoldFromAuthority(Cat->GetPlayerState(), true)
 					&& FCatLightPropNetworkTestAccess::RetakeControl(Rod, Cat->GetPlayerState())
 					&& Rod->GetPhysicalRodComponent()->CommitPrimaryHold(Cat->GetPlayerState()))) return true;
@@ -277,18 +297,16 @@ namespace CatLightPropNetwork
 			}
 			else if (Stage == 6)
 			{
-				if (Now - StageStarted > 3 && Light->GetState().GripCount != 1) { Test->AddError(TEXT("remaining helper grip was lost after owner release")); return true; }
-				if (Now - StageStarted < 1 || ClientLight->GetState().GripCount != 1) return false;
-				Test->TestEqual(TEXT("owner release keeps the exact helper grip"), HelperBody->GetGrab()->GetGripState(true).GripId, HelperGrip);
-				Test->TestEqual(TEXT("remaining helper keeps prop weight-free"), Light->GetState().Mode, ECatLightPropMode::Held);
-				Test->TestEqual(TEXT("remaining helper is not promoted"), Rod->GetOperatorCount(), 0);
-				HelperBody->GetGrab()->ReleaseAllFromAuthority(TEXT("LightPropFinalRelease"));
+				if (Now - StageStarted < 1 || ClientLight->GetState().GripCount != 0) return false;
+				Test->TestFalse(TEXT("parking clears helper's rod grip through the authority cleanup"), HelperBody->GetGrab()->IsGripping(true));
+				Test->TestEqual(TEXT("released rod becomes ungrabbable parked support"), Light->GetState().Mode, ECatLightPropMode::Parked);
+				Test->TestEqual(TEXT("released helper is not promoted"), Rod->GetOperatorCount(), 0);
 				Next(7, Now);
 			}
 			else if (Stage == 7)
 			{
 				if (Now - StageStarted < 1 || ClientLight->GetState().GripCount != 0 || ClientLight->GetState().Revision != Light->GetState().Revision) return false;
-				Test->TestEqual(TEXT("last-release gentle fall replicates"), ClientLight->GetState().Mode, ECatLightPropMode::Falling);
+				Test->TestEqual(TEXT("parked no-grab state replicates"), ClientLight->GetState().Mode, ECatLightPropMode::Parked);
 				Test->AddInfo(FString::Printf(TEXT("Event=light_prop_formal_network_verified PropId=%s MinBodyZ=%.3f MinUpZ=%.6f MaxBodyZ=%.3f MaxGripForceKgCmS2=%.3f ServerRevision=%u ClientRevision=%u Result=ObservedBothEndpoints"),
 					*Light->GetState().PropId.ToString(), MinimumBodyZ, MinimumUp, MaximumBodyZ, MaximumGripForce, Light->GetState().Revision, ClientLight->GetState().Revision));
                 Body->TeleportBodyFromAuthority(FTransform(FVector(0,0,Body->GetStandRootHeightCm())),TEXT("GrabJumpDirectSetup"));
@@ -398,6 +416,8 @@ namespace CatLightPropNetwork
 		double MaximumTractionError = 0, MaximumAnchorError = 0;
 		double BareMinimumZ = 10000, BareMaximumZ = 0, SupportedMinimumZ = 10000;
 		int32 Stage = 0;
+		FTransform ParkedPose = FTransform::Identity;
+		FTransform ClientParkedPose = FTransform::Identity;
 		ACatFishingRodActor* Rod = nullptr;
 		TWeakObjectPtr<ACameraActor> ObservationCamera;
 		FGuid HelperGrip;

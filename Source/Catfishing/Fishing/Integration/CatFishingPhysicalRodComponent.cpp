@@ -3,8 +3,6 @@
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
-#include "PhysicsEngine/PhysicsConstraintComponent.h"
-#include "PhysicsEngine/BodyInstance.h"
 #include "PhysicsEngine/PhysicsSettings.h"
 #include "Physics/Experimental/PhysScene_Chaos.h"
 #include "Fishing/CatFishingSettings.h"
@@ -49,10 +47,14 @@ void UCatFishingPhysicalRodComponent::Initialize(UBoxComponent* InBody, const FT
 	Body->SetAngularDamping(0.8);
 	Body->SetMassOverrideInKg(NAME_None, 0.35, true);
 	Body->BodyInstance.bUseCCD = true;
-	if (GetOwner()->HasAuthority()) Body->SetSimulatePhysics(true);
+	Body->SetSimulatePhysics(false);
+	Body->SetEnableGravity(false);
+	// The authoritative body owns the world pose; the replicated Actor observes it without parent feedback.
+	if (GetOwner()->HasAuthority()) Body->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
 	if (auto* LightProp = GetOwner()->FindComponentByClass<UCatLightPropComponent>())
 	{
 		LightProp->Initialize(Body);
+		LightProp->SetParkedFromAuthority(true);
 		LightProp->PrimaryComponentTick.AddPrerequisite(this, PrimaryComponentTick);
 	}
 	bReady = true;
@@ -79,247 +81,27 @@ FVector UCatFishingPhysicalRodComponent::GetPointVelocity(const FVector& WorldPo
 
 FVector UCatFishingPhysicalRodComponent::GetAngularVelocityRadiansPerSecond() const
 {
-	return ControlledBody.IsValid() ? ControlledAngularVelocity : Body ? Body->GetPhysicsAngularVelocityInRadians() : FVector::ZeroVector;
+	return ControlledBody.IsValid() ? ControlledAngularVelocity : FVector::ZeroVector;
 }
 
 void UCatFishingPhysicalRodComponent::PopulateEndpointResponse(FCatFightRodConstraintInput& OutInput)
 {
 	if (!bReady || !GetOwner()->HasAuthority() || !Body) return;
-	const auto* Rod = CastChecked<ACatFishingRodActor>(GetOwner());
-	const FVector Tip = Rod->GetRodTipWorldTransform().GetLocation();
-	const FVector Velocity = GetPointVelocity(Tip);
-	const auto* Carrier = ControlledBody.IsValid() ? ControlledBody->GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>() : nullptr;
-	const bool bCMC = Carrier && Carrier->UsesCharacterMovement();
-	if (bCMC) { PopulateCMCEndpointPrediction(OutInput); return; }
-	struct FLockedEdge
-	{
-		UPhysicsConstraintComponent* Constraint;
-		UPrimitiveComponent* ComponentA;
-		UPrimitiveComponent* ComponentB;
-		FBodyInstance* A;
-		FBodyInstance* B;
-	};
-	TArray<FLockedEdge> Edges;
-	for (TActorIterator<AActor> It(GetWorld()); It; ++It)
-	{
-		TInlineComponentArray<UPhysicsConstraintComponent*> Constraints(*It);
-		for (auto* Constraint : Constraints)
-		{
-			if (!Constraint || Constraint->IsBroken()) continue;
-			const FConstraintInstance& Joint = Constraint->ConstraintInstance;
-			if (Joint.GetLinearXMotion() != LCM_Locked && Joint.GetLinearYMotion() != LCM_Locked
-				&& Joint.GetLinearZMotion() != LCM_Locked) continue;
-			UPrimitiveComponent* A = nullptr; UPrimitiveComponent* B = nullptr; FName BoneA, BoneB;
-			Constraint->GetConstrainedComponents(A, BoneA, B, BoneB);
-			FBodyInstance* InstanceA = A ? A->GetBodyInstance(BoneA) : nullptr;
-			FBodyInstance* InstanceB = B ? B->GetBodyInstance(BoneB) : nullptr;
-			if (InstanceA || InstanceB) Edges.Add({Constraint, A, B, InstanceA, InstanceB});
-		}
-	}
-	FBodyInstance* RootInstance = ControlledBody.IsValid() ? ControlledBody->GetBodyInstance() : Body->GetBodyInstance();
-	if (!RootInstance || (!RootInstance->IsInstanceSimulatingPhysics() && !bCMC)) return;
-	TSet<FBodyInstance*> Connected; Connected.Add(RootInstance);
-	bool bChanged = true;
-	while (bChanged)
-	{
-		bChanged = false;
-		for (const auto& Edge : Edges)
-		{
-			if (Edge.A && Connected.Contains(Edge.A) && Edge.A->IsInstanceSimulatingPhysics() && Edge.B && !Connected.Contains(Edge.B))
-			{ Connected.Add(Edge.B); bChanged = true; }
-			if (Edge.B && Connected.Contains(Edge.B) && Edge.B->IsInstanceSimulatingPhysics() && Edge.A && !Connected.Contains(Edge.A))
-			{ Connected.Add(Edge.A); bChanged = true; }
-		}
-	}
-	struct FResponseBody
-	{
-		FBodyInstance* Instance;
-		double InverseMass;
-		FVector Center;
-		FQuat MassRotation;
-		FVector InverseInertia;
-		FVector ApplyInverseInertia(const FVector& Torque) const
-		{ return MassRotation.RotateVector(MassRotation.UnrotateVector(Torque) * InverseInertia); }
-	};
-	TArray<FResponseBody> Bodies;
-	TMap<FBodyInstance*, int32> BodyIndices;
-	double TotalMass = 0;
-	bool bStaticConstraint = false;
-	uint32 TopologyHash = 0;
-	const auto AddBody = [&](FBodyInstance* Instance)
-	{
-		if (!Instance || BodyIndices.Contains(Instance)) return;
-		TopologyHash ^= PointerHash(Instance);
-		if (!Instance->IsInstanceSimulatingPhysics()) { bStaticConstraint = true; return; }
-		const double Mass = Instance->GetBodyMass();
-		const FVector Inertia = Instance->GetBodyInertiaTensor();
-		BodyIndices.Add(Instance, Bodies.Num());
-		Bodies.Add({Instance, 1.0 / FMath::Max(Mass, UE_DOUBLE_SMALL_NUMBER), Instance->GetCOMPosition(),
-			Instance->GetMassSpaceToWorldSpace().GetRotation(),
-			FVector(1.0 / FMath::Max(Inertia.X, UE_DOUBLE_SMALL_NUMBER), 1.0 / FMath::Max(Inertia.Y, UE_DOUBLE_SMALL_NUMBER),
-				1.0 / FMath::Max(Inertia.Z, UE_DOUBLE_SMALL_NUMBER))});
-		TotalMass += Mass;
-	};
-	AddBody(RootInstance);
-	for (FBodyInstance* Instance : Connected) AddBody(Instance);
-	struct FJacobianRow
-	{
-		int32 BodyA = INDEX_NONE, BodyB = INDEX_NONE;
-		FVector LinearA = FVector::ZeroVector, AngularA = FVector::ZeroVector;
-		FVector LinearB = FVector::ZeroVector, AngularB = FVector::ZeroVector;
-	};
-	TArray<FJacobianRow> Rows;
-	for (const auto& Edge : Edges)
-	{
-		if ((!Edge.A || !Connected.Contains(Edge.A)) && (!Edge.B || !Connected.Contains(Edge.B))) continue;
-		const int32* IndexA = BodyIndices.Find(Edge.A);
-		const int32* IndexB = BodyIndices.Find(Edge.B);
-		if (!IndexA && !IndexB) continue;
-		bStaticConstraint |= !Edge.A || !Edge.B;
-		const FConstraintInstance& Joint = Edge.Constraint->ConstraintInstance;
-		TopologyHash ^= GetTypeHash(Edge.Constraint->GetUniqueID());
-		const auto Anchor = [&](FBodyInstance* Instance, EConstraintFrame::Type Frame)
-		{
-			FTransform Local = Joint.GetRefFrame(Frame);
-			if (!Instance) return Local;
-			Local.ScaleTranslation(FVector(Joint.GetLastKnownScale()));
-			FTransform Pose = Instance->GetUnrealWorldTransform(); Pose.RemoveScaling();
-			return Local * Pose;
-		};
-		const FTransform AnchorA = Anchor(Edge.A, EConstraintFrame::Frame1);
-		const FTransform AnchorB = Anchor(Edge.B, EConstraintFrame::Frame2);
-		const ELinearConstraintMotion Motions[] = {Joint.GetLinearXMotion(), Joint.GetLinearYMotion(), Joint.GetLinearZMotion()};
-		for (int32 AxisIndex = 0; AxisIndex < 3; ++AxisIndex)
-		{
-			if (Motions[AxisIndex] != LCM_Locked) continue;
-			FVector LocalAxis = FVector::ZeroVector; LocalAxis[AxisIndex] = 1;
-			const FVector Axis = AnchorA.GetRotation().RotateVector(LocalAxis);
-			FJacobianRow Row;
-			if (IndexA)
-			{
-				Row.BodyA = *IndexA; Row.LinearA = Axis;
-				Row.AngularA = FVector::CrossProduct(AnchorA.GetLocation() - Bodies[*IndexA].Center, Axis);
-			}
-			if (IndexB)
-			{
-				Row.BodyB = *IndexB; Row.LinearB = -Axis;
-				Row.AngularB = FVector::CrossProduct(AnchorB.GetLocation() - Bodies[*IndexB].Center, -Axis);
-			}
-			Rows.Add(Row);
-		}
-		for (const auto* Component : {Edge.ComponentA, Edge.ComponentB})
-			if (const auto* Cat = Component ? Cast<ACatCharacter>(Component->GetOwner()) : nullptr)
-			{
-				const auto* Physical = Cat->GetPhysicalBodyComponent(); const auto* Grab = Physical->GetGrab();
-				uint32 Revision = GetTypeHash(Physical->GetResetEpoch());
-				if (Grab) Revision = HashCombine(Revision, HashCombine(GetTypeHash(Grab->GetGripState(true).GripId), GetTypeHash(Grab->GetGripState(false).GripId)));
-				TopologyHash = HashCombine(TopologyHash, HashCombine(GetTypeHash(Component->GetUniqueID()), Revision));
-			}
-	}
-	const int32 RowCount = Rows.Num();
-	TArray<double> Cholesky; Cholesky.SetNumZeroed(RowCount * RowCount);
-	const auto PairResponse = [&](const FJacobianRow& A, const FJacobianRow& B)
-	{
-		double Value = 0;
-		const int32 IndicesA[] = {A.BodyA, A.BodyB}, IndicesB[] = {B.BodyA, B.BodyB};
-		const FVector LinearA[] = {A.LinearA, A.LinearB}, LinearB[] = {B.LinearA, B.LinearB};
-		const FVector AngularA[] = {A.AngularA, A.AngularB}, AngularB[] = {B.AngularA, B.AngularB};
-		for (int32 I = 0; I < 2; ++I) for (int32 J = 0; J < 2; ++J)
-			if (IndicesA[I] != INDEX_NONE && IndicesA[I] == IndicesB[J])
-			{
-				const auto& Rigid = Bodies[IndicesA[I]];
-				Value += FVector::DotProduct(LinearA[I], LinearB[J]) * Rigid.InverseMass
-					+ FVector::DotProduct(AngularA[I], Rigid.ApplyInverseInertia(AngularB[J]));
-			}
-		return Value;
-	};
-	double MaximumDiagonal = 0;
-	for (const auto& Row : Rows) MaximumDiagonal = FMath::Max(MaximumDiagonal, PairResponse(Row, Row));
-	// Redundant grip cycles are allowed. This numerical regularization preserves a conservative point response.
-	const double Regularization = FMath::Max(1.e-12, MaximumDiagonal * 1.e-9);
-	for (int32 I = 0; I < RowCount; ++I) for (int32 J = 0; J <= I; ++J)
-	{
-		double Value = PairResponse(Rows[I], Rows[J]) + (I == J ? Regularization : 0);
-		for (int32 K = 0; K < J; ++K) Value -= Cholesky[I * RowCount + K] * Cholesky[J * RowCount + K];
-		Cholesky[I * RowCount + J] = I == J ? FMath::Sqrt(FMath::Max(Value, Regularization))
-			: Value / Cholesky[J * RowCount + J];
-	}
-	const FResponseBody& Root = Bodies[0];
-	// Held translation is driven once at the carrier COM. The original aim solver owns rod rotation.
-	const FVector Lever = ControlledBody.IsValid() ? FVector::ZeroVector : Tip - Root.Center;
-	const auto PointResponse = [&](const FVector& UnitForce)
-	{
-		FVector Linear = UnitForce * Root.InverseMass;
-		FVector Angular = Root.ApplyInverseInertia(FVector::CrossProduct(Lever, UnitForce));
-		TArray<double> Lambda; Lambda.SetNumZeroed(RowCount);
-		for (int32 I = 0; I < RowCount; ++I)
-		{
-			const auto& Row = Rows[I];
-			double Value = Row.BodyA == 0 ? FVector::DotProduct(Row.LinearA, Linear) + FVector::DotProduct(Row.AngularA, Angular) : 0;
-			if (Row.BodyB == 0) Value += FVector::DotProduct(Row.LinearB, Linear) + FVector::DotProduct(Row.AngularB, Angular);
-			for (int32 K = 0; K < I; ++K) Value -= Cholesky[I * RowCount + K] * Lambda[K];
-			Lambda[I] = Value / Cholesky[I * RowCount + I];
-		}
-		for (int32 I = RowCount - 1; I >= 0; --I)
-		{
-			for (int32 K = I + 1; K < RowCount; ++K) Lambda[I] -= Cholesky[K * RowCount + I] * Lambda[K];
-			Lambda[I] /= Cholesky[I * RowCount + I];
-		}
-		for (int32 I = 0; I < RowCount; ++I)
-		{
-			if (Rows[I].BodyA == 0) { Linear -= Rows[I].LinearA * (Lambda[I] * Root.InverseMass); Angular -= Root.ApplyInverseInertia(Rows[I].AngularA) * Lambda[I]; }
-			if (Rows[I].BodyB == 0) { Linear -= Rows[I].LinearB * (Lambda[I] * Root.InverseMass); Angular -= Root.ApplyInverseInertia(Rows[I].AngularB) * Lambda[I]; }
-		}
-		return Linear + FVector::CrossProduct(Angular, Lever);
-	};
-	OutInput.RodPointInverseMassX = PointResponse(FVector::ForwardVector);
-	OutInput.RodPointInverseMassY = PointResponse(FVector::RightVector);
-	OutInput.RodPointInverseMassZ = PointResponse(FVector::UpVector);
-	const double Now = GetWorld()->GetTimeSeconds();
-	const double Elapsed = Now - LastEndpointSampleSeconds;
-	const double PhysicsElapsed = AppliedPhysicsSeconds - LastSampleAppliedPhysicsSeconds;
-	const bool bReset = LastEndpointSampleSeconds < 0 || TopologyHash != LastMechanicalTopologyHash
-		|| Elapsed > 0.25 || (Tip - LastEndpointPosition - LastEndpointVelocity * FMath::Max(0.0, Elapsed)).Size() > 100.0;
-	if (bReset)
-	{
-		ObservedEndpointAcceleration = FVector::ZeroVector;
-		ObservedAppliedAverageForce = FVector::ZeroVector;
-	}
-	else if (Elapsed > UE_DOUBLE_SMALL_NUMBER && PhysicsElapsed > UE_DOUBLE_SMALL_NUMBER)
-	{
-		ObservedEndpointAcceleration = (Velocity - LastEndpointVelocity) / PhysicsElapsed;
-		ObservedAppliedAverageForce = (AppliedLineImpulse - LastSampleAppliedImpulse) / PhysicsElapsed;
-	}
-	if (Elapsed > UE_DOUBLE_SMALL_NUMBER || bReset)
-	{
-		LastEndpointSampleSeconds = Now; LastEndpointPosition = Tip; LastEndpointVelocity = Velocity;
-		LastSampleAppliedImpulse = AppliedLineImpulse; LastSampleAppliedPhysicsSeconds = AppliedPhysicsSeconds;
-		LastMechanicalTopologyHash = TopologyHash;
-	}
-	OutInput.RodTipWorldPosition = Tip;
-	OutInput.RodTipVelocityCentimetersPerSecond = Velocity;
-	OutInput.RodTipAccelerationCentimetersPerSecondSquared = ObservedEndpointAcceleration;
-	OutInput.PreviousLineForceNewtons = ObservedAppliedAverageForce;
-	OutInput.PhysicsStepSeconds = LastPhysicsSubstepSeconds;
-	OutInput.PendingLineResponseSeconds = GetQueuedLineSecondsForDiagnostics();
-	OutInput.PendingLineImpulseNewtonSeconds = GetQueuedLineImpulseNewtonSecondsForDiagnostics();
-	OutInput.PendingLinePositionMomentNewtonSecondsSquared = FVector::ZeroVector;
-	double QueueStart = 0;
-	for (const auto& Segment : LineSegments)
-	{
-		OutInput.PendingLinePositionMomentNewtonSecondsSquared += Segment.ForceNewtons * Segment.RemainingSeconds
-			* (OutInput.PendingLineResponseSeconds - QueueStart - Segment.RemainingSeconds * 0.5);
-		QueueStart += Segment.RemainingSeconds;
-	}
-	if (bReset || Now >= NextEndpointLogSeconds)
-	{
-		NextEndpointLogSeconds = Now + 1;
-		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_physical_endpoint_response SessionId=%s RodActorId=%s LockedBodies=%d LockedMassKg=%.4f StaticLockedEndpoint=%d ObserverReset=%d TipVelocityCmS=%s TipAccelerationCmS2=%s InverseMassX=%s World=%s NetMode=%d Authority=1 LocalRole=%d"),
-			*LoadSessionId.ToString(), *Rod->GetPresentationState().RodActorId.ToString(), Bodies.Num(), TotalMass, bStaticConstraint, bReset,
-			*Velocity.ToCompactString(), *ObservedEndpointAcceleration.ToCompactString(), *OutInput.RodPointInverseMassX.ToCompactString(),
-			*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(GetOwner()->GetLocalRole()));
-	}
+	if (ControlledBody.IsValid()) { PopulateCMCEndpointPrediction(OutInput); return; }
+	// An unattended rod is a fixed support. Use the original fixed-tip fishing solve.
+	OutInput.bPhysicalRodEndpoint = false;
+	OutInput.PredictCMCEndpoint = {};
+	OutInput.GetCMCTravelLimit = {};
+	OutInput.RodTipWorldPosition = CastChecked<ACatFishingRodActor>(GetOwner())->GetRodTipWorldTransform().GetLocation();
+	OutInput.RodTipVelocityCentimetersPerSecond = FVector::ZeroVector;
+	OutInput.CarrierVelocityCentimetersPerSecond = FVector::ZeroVector;
+	OutInput.RodTipAccelerationCentimetersPerSecondSquared = FVector::ZeroVector;
+	OutInput.PreviousLineForceNewtons = FVector::ZeroVector;
+	OutInput.RodPointInverseMassX = OutInput.RodPointInverseMassY = OutInput.RodPointInverseMassZ = FVector::ZeroVector;
+	OutInput.PhysicsStepSeconds = OutInput.PendingLineResponseSeconds = 0;
+	OutInput.PendingLineImpulseNewtonSeconds = OutInput.PendingLinePositionMomentNewtonSecondsSquared = FVector::ZeroVector;
 }
+
 bool UCatFishingPhysicalRodComponent::IsHeldBy(const APlayerState* Player) const
 {
 	const ACatCharacter* Cat = Player ? Cast<ACatCharacter>(Player->GetPawn()) : nullptr;
@@ -344,28 +126,36 @@ void UCatFishingPhysicalRodComponent::HandleGripChanged(UCatPhysicsGrabComponent
 
 
 
-bool UCatFishingPhysicalRodComponent::BeginPrimaryHold(APlayerState* Player, const bool bPositionNewRod)
+bool UCatFishingPhysicalRodComponent::BeginPrimaryHold(APlayerState* Player, const bool bPositionAtHand)
 {
 	ACatCharacter* Cat = Player ? Cast<ACatCharacter>(Player->GetPawn()) : nullptr;
 	UCatPhysicalBodyComponent* Physical = Cat ? Cat->GetPhysicalBodyComponent() : nullptr;
 	UCatPhysicsGrabComponent* Grab = Physical ? Physical->GetGrab() : nullptr;
 	if (!bReady || !GetOwner()->HasAuthority() || !Grab) return false;
+	if (Player != CastChecked<ACatFishingRodActor>(GetOwner())->GetPresentationState().OwnerPlayerState) return false;
 	ObserveGrab(Grab);
 	if (IsHeldBy(Player)) return true;
 	const bool bLeft = !Grab->IsGripping(true);
 	if (Grab->IsGripping(bLeft)) return false;
+	const FTransform PreviousPose = Body->GetComponentTransform();
+	TGuardValue<bool> Preparing(bPreparingPrimaryHold, true);
 	const FVector HandPoint = Physical->GetHand(bLeft)->GetComponentLocation();
-	if (bPositionNewRod)
+	if (bPositionAtHand)
 	{
 		const FTransform DesiredGrip(Cat->GetActorQuat(), HandPoint);
 		const FTransform ActorPose = GripLocalTransform.Inverse() * DesiredGrip;
 		Body->SetWorldTransform(BodyLocal * ActorPose, false, nullptr, ETeleportType::ResetPhysics);
-		Body->SetPhysicsLinearVelocity(Physical->GetVelocity());
 		RefreshObservedPose();
 	}
 
 	const FVector GripPoint = CastChecked<ACatFishingRodActor>(GetOwner())->GetGripWorldTransform().GetLocation();
-	return Grab->GripFromAuthority(bLeft, Body, GripPoint);
+	auto* Light = UCatLightPropComponent::FindFor(Body);
+	if (Light) Light->SetParkedFromAuthority(false);
+	if (Grab->GripFromAuthority(bLeft, Body, GripPoint)) return true;
+	if (Light) Light->SetParkedFromAuthority(true);
+	Body->SetWorldTransform(PreviousPose, false, nullptr, ETeleportType::TeleportPhysics);
+	RefreshObservedPose();
+	return false;
 }
 
 bool UCatFishingPhysicalRodComponent::CommitPrimaryHold(APlayerState* Player)
@@ -375,6 +165,8 @@ bool UCatFishingPhysicalRodComponent::CommitPrimaryHold(APlayerState* Player)
 	auto* Grab = Cat && Cat->GetPhysicalBodyComponent() ? Cat->GetPhysicalBodyComponent()->GetGrab() : nullptr;
 	if (!Rod || !Rod->HasAuthority() || !Rod->IsPrimaryOperator(Player)
 		|| Rod->GetPresentationState().OwnerPlayerState != Player || !Grab) return false;
+	// Retain and control publish grip callbacks; defer reconciliation until both flags are committed.
+	TGuardValue<bool> Preparing(bPreparingPrimaryHold, true);
 	// Commit only one existing contact. The other hand remains an ordinary continuous grip.
 	RefreshInputTickPrerequisites();
 	for (const bool bLeft : {true, false})
@@ -415,7 +207,7 @@ void UCatFishingPhysicalRodComponent::RefreshObservedPose()
 	if (!bReady || !GetOwner()->HasAuthority()) return;
 	ACatFishingRodActor* Rod = CastChecked<ACatFishingRodActor>(GetOwner());
 	if (ControlledBody.IsValid()) PositionControlledRod();
-	// The detached dynamic body is observed; the controlled body follows its real primary carrier.
+	// The detached fixed body is observed; the controlled body follows its real primary carrier.
 	Rod->SetActorTransform(GetObservedActorTransform(), false, nullptr, ETeleportType::TeleportPhysics);
 	Rod->AuthoritativeHeldAimRotation = Rod->GetGripWorldTransform().Rotator();
 	Rod->AuthoritativeRodTipVelocity = GetPointVelocity(Rod->GetRodTipWorldTransform().GetLocation());
@@ -431,7 +223,7 @@ void UCatFishingPhysicalRodComponent::RefreshObservedPose()
 
 void UCatFishingPhysicalRodComponent::RefreshPrimaryControl()
 {
-	if (!bReady || !GetOwner()->HasAuthority() || bRefreshingPrimaryControl) return;
+	if (!bReady || !GetOwner()->HasAuthority() || bRefreshingPrimaryControl || bPreparingPrimaryHold) return;
 	TGuardValue<bool> Guard(bRefreshingPrimaryControl, true);
 	if (auto* Service = GetWorld()->GetSubsystem<UCatFishingService>())
 		Service->ReconcilePrimaryControlFromPhysicalGrip(CastChecked<ACatFishingRodActor>(GetOwner()));
@@ -456,7 +248,6 @@ void UCatFishingPhysicalRodComponent::FinishPhysicsFrame()
 {
 	if (!GetOwner()->HasAuthority()) return;
 	AppliedLineImpulse += PendingPhysicsImpulse;
-	AppliedPhysicsSeconds += PendingPhysicsSeconds;
 	PendingPhysicsImpulse = FVector::ZeroVector;
 	PendingPhysicsSeconds = 0;
 }
@@ -482,7 +273,6 @@ void UCatFishingPhysicalRodComponent::SetLineLoad(const FGuid SessionId, const u
 	if (LoadSessionId != SessionId)
 	{
 		ClearLineLoad();
-		LastEndpointSampleSeconds = -1;
 	}
 	LoadSessionId = SessionId; LoadStep = Step; LineForceNewtons = ForceNewtons;
 	LineSegments.Add({ForceNewtons, SimulatedSeconds});
@@ -504,7 +294,6 @@ void UCatFishingPhysicalRodComponent::SetLineLoad(const FGuid SessionId, const u
 			if (Segment.RemainingSeconds <= UE_DOUBLE_SMALL_NUMBER) LineSegments.RemoveAt(0);
 		}
 		DiscardedLineImpulse += Removed;
-		LastEndpointSampleSeconds = -1;
 		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_physical_line_backlog_expired SessionId=%s RodActorId=%s Step=%llu DiscardedSeconds=%.6f DiscardedImpulseNs=%s World=%s NetMode=%d Authority=1 LocalRole=%d Result=OldestLoadRemoved"),
 			*SessionId.ToString(), *Rod->GetPresentationState().RodActorId.ToString(), Step, ExcessSeconds, *Removed.ToCompactString(),
 			*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(GetOwner()->GetLocalRole()));
@@ -585,9 +374,9 @@ void UCatFishingPhysicalRodComponent::RefreshControlledCarrier()
 	if (Grab && Physical->IsLocomotionEnabled())
 		for (const bool bLeft : {true, false})
 			if (Grab->GetGripTargetComponent(bLeft) == Body && Grab->GetGripState(bLeft).bControlledHold) Next = Physical->GetBody();
-	if (Next == ControlledBody.Get() && Body->IsSimulatingPhysics() == (Next == nullptr)) return;
-	const FVector ReleaseVelocity = GetPointVelocity(Body->GetComponentLocation());
-	const FVector ReleaseAngularVelocity = GetAngularVelocityRadiansPerSecond();
+	auto* Light = UCatLightPropComponent::FindFor(Body);
+	if (Next == ControlledBody.Get() && !Body->IsSimulatingPhysics()
+		&& (!Light || (Light->GetState().Mode == ECatLightPropMode::Parked) == (Next == nullptr))) return;
     if (ControlledBody.IsValid())
         if (auto* Previous = ControlledBody->GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>(); Previous && Previous->UsesCharacterMovement())
             GetOwner()->PrimaryActorTick.RemovePrerequisite(Previous, Previous->GetPostMovementTick());
@@ -597,7 +386,8 @@ void UCatFishingPhysicalRodComponent::RefreshControlledCarrier()
             GetOwner()->PrimaryActorTick.AddPrerequisite(Current, Current->GetPostMovementTick());
 	ControlledAngularVelocity = FVector::ZeroVector;
 	SmoothedFishPull = FVector::ZeroVector;
-	Body->SetSimulatePhysics(Next == nullptr);
+	Body->SetSimulatePhysics(false);
+	Body->SetEnableGravity(false);
 	if (Next)
 	{
 		FRotator Aim = Physical->GetViewIntent();
@@ -609,16 +399,23 @@ void UCatFishingPhysicalRodComponent::RefreshControlledCarrier()
 		Rod->AuthoritativeAimHolder = Cat;
 		PositionControlledRod();
 	}
-	else
+	if (Light)
 	{
-		Body->SetPhysicsLinearVelocity(ReleaseVelocity);
-		Body->SetPhysicsAngularVelocityInRadians(ReleaseAngularVelocity);
+		Light->SetParkedFromAuthority(Next == nullptr);
+		Light->SetGripCarrierFromAuthority(Next);
 	}
-	if (auto* Light = UCatLightPropComponent::FindFor(Body)) Light->SetGripCarrierFromAuthority(Next);
-	LastEndpointSampleSeconds = -1;
-	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_rod_controlled_carrier RodActorId=%s PlayerId=%d Carrier=%s Controlled=%d World=%s NetMode=%d Authority=1 LocalRole=%d Result=PrimaryPoseAndPhysicalAssist"),
+	if (!Next)
+	{
+		// A parked rod cannot be a hand anchor. Release through the existing grip authority/replication path.
+		for (TActorIterator<AActor> It(GetWorld()); It; ++It)
+			if (auto* OtherGrab = It->FindComponentByClass<UCatPhysicsGrabComponent>())
+				OtherGrab->ReleaseTargetFromAuthority(Rod, TEXT("RodParked"));
+	}
+	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_rod_controlled_carrier RodActorId=%s PlayerId=%d Carrier=%s Controlled=%d Parked=%d PositionCm=%s RotationDegrees=%s SessionId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Result=%s"),
 		*Rod->PresentationState.RodActorId.ToString(), Cat && Cat->GetPlayerState() ? Cat->GetPlayerState()->GetPlayerId() : INDEX_NONE,
-		*GetNameSafe(Next), Next != nullptr, *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(GetOwner()->GetLocalRole()));
+		*GetNameSafe(Next), Next != nullptr, Next == nullptr, *Body->GetComponentLocation().ToCompactString(),
+		*Body->GetComponentRotation().ToCompactString(), *LoadSessionId.ToString(), *GetNameSafe(GetWorld()),
+		int32(GetWorld()->GetNetMode()), int32(GetOwner()->GetLocalRole()), Next ? TEXT("PrimaryPoseAndPhysicalAssist") : TEXT("FixedSupportNoHandGrips"));
 }
 
 void UCatFishingPhysicalRodComponent::PositionControlledRod()
@@ -728,9 +525,6 @@ void UCatFishingPhysicalRodComponent::TickComponent(const float DeltaTime, const
 	const double RequestedPhysicsSeconds = FMath::Max(0.0, double(DeltaTime) * NetworkScale);
 	const double PhysicsLimit = Physics->bSubstepping ? Physics->MaxSubsteps * double(Physics->MaxSubstepDeltaTime) : double(Physics->MaxPhysicsDeltaTime);
 	const double PhysicsSeconds = PhysicsLimit > 0 ? FMath::Min(RequestedPhysicsSeconds, PhysicsLimit) : RequestedPhysicsSeconds;
-	const int32 Substeps = Physics->bSubstepping && Physics->MaxSubstepDeltaTime > 0
-		? FMath::Clamp(FMath::CeilToInt(PhysicsSeconds / Physics->MaxSubstepDeltaTime), 1, Physics->MaxSubsteps) : 1;
-	LastPhysicsSubstepSeconds = PhysicsSeconds / Substeps;
 	PendingPhysicsSeconds = PhysicsSeconds;
 	AdvanceControlledAim(DeltaTime);
 	{
@@ -767,7 +561,7 @@ void UCatFishingPhysicalRodComponent::TickComponent(const float DeltaTime, const
 				Carrier->AddExternalImpulseFromAuthority(FrameImpulse * 100.0);
 			else ControlledBody->AddForce(Force);
 		}
-		else Body->AddForceAtLocation(Force, Rod->GetRodTipWorldTransform().GetLocation());
+		// Without a primary, the fixed support absorbs this once-consumed load without moving the rod.
 	}
 
 }

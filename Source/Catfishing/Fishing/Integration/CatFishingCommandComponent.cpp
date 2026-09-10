@@ -1,4 +1,4 @@
-﻿#include "Fishing/Integration/CatFishingCommandComponent.h"
+#include "Fishing/Integration/CatFishingCommandComponent.h"
 
 #include "GameFramework/PlayerController.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
@@ -929,7 +929,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	}
 	if (Fishing)
 	{
-		// R 放下当前主控；已真实抓住自己的竿时明确取回主控，否则部署本人库存实体竿。
+		// R 架住当前主控竿；空手优先拾回附近本人架竿，否则部署本人库存实体竿。
 		if (CommandType == ECatFishingCommandType::OperateRod)
 		{
 			const ACatCharacter* Character = Cast<ACatCharacter>(Controller->GetPawn());
@@ -958,6 +958,16 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 					DeliverResultFromAuthority(Fishing->OperateRod(Controller, OperateCommand));
 					return;
 				}
+			}
+			if (ACatFishingRodActor* ParkedRod = Character
+				? Fishing->FindNearestOperableOwnedRod(Controller->PlayerState, Character->GetActorLocation(), 250.0) : nullptr)
+			{
+				FCatOperateRodCommand OperateCommand;
+				OperateCommand.Context.RequestId = Edge.RequestId;
+				OperateCommand.Context.RodActorId = ParkedRod->GetPresentationState().RodActorId;
+				OperateCommand.Context.ExpectedRodActorRevision = ParkedRod->GetPresentationState().RodActorRevision;
+				DeliverResultFromAuthority(Fishing->OperateRod(Controller, OperateCommand));
+				return;
 			}
 			const UCatInventoryComponent* OwnerInventory = Character ? Character->GetInventoryComponent() : nullptr;
 			FCatPlaceRodCommand PlaceCommand;

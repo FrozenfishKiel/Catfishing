@@ -70,16 +70,20 @@ public:
 
 	/** 只读查询该玩家任意一根存活登记竿；不表示当前操作或收纳目标，业务命令须按 RodActorId 解析。 */
 	ACatFishingRodActor* FindDeployedRod(const APlayerState* PlayerState);
-	/** 统计本人场上实体竿；拥有与操作分离，替别人持竿不改变双方名额。 */
+	/** 统计本人场上实体竿；无人值守竿仍占本人名额，助手抓握不改变名额。 */
 	int32 GetDeployedRodCount(const APlayerState* PlayerState) const;
 	/** 本人范围内最近的无人操作、无活动会话部署竿；损坏竿也能收回。跨玩家收纳尚未开放。 */
 	ACatFishingRodActor* FindNearestPackableRod(const APlayerState* PlayerState,
 		const FVector& WorldLocation, double MaxDistanceCentimeters);
 
-	/** 按公开 RodActorId 在全部部署鱼竿中查找（多人：允许操作别人的竿）；未知返回空。 */
+	/** 本人范围内最近的无人操作、未损坏部署竿；允许原活动会话继续。 */
+	ACatFishingRodActor* FindNearestOperableOwnedRod(const APlayerState* PlayerState,
+		const FVector& WorldLocation, double MaxDistanceCentimeters);
+
+	/** 按公开 RodActorId 查询；取得主控仍只允许竿主显式 R。 */
 	ACatFishingRodActor* FindDeployedRodById(FGuid RodActorId);
 
-	/** 查询 PlayerState 当前占用任意操作槽的竿（不限竿主、主辅位）；没有则空。 */
+	/** 查询 PlayerState 当前显式主控的本人竿；没有则空。 */
 	ACatFishingRodActor* FindRodOperatedBy(const APlayerState* PlayerState);
 
 	/** 最近的无人值守活动会话鱼竿；供原持竿者/竿主在不先拾起时主动切线止损。 */

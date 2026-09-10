@@ -1,11 +1,38 @@
 # 钓鱼核心架构（技术文档）
 
+## 2026-09-10：恢复 R 取放与悬空架竿
+
+用户要求恢复历史R拿出→R架住→R拾回。对照`be94173`的`PlaceOnGroundFromAuthority`与物理接入前`6b04247^`的取放/会话继承；保留当前单主控与CMC抓推，不恢复历史R入队。基线`62db64a`，源码开始时干净；已有Skeleton、16个Fish、CuteCat动画/材质及GameMode资产修改全部保留。本轮基线Editor已成功；`Report-20260910-173310-034`的Unit.Fishing 164项163通过，唯一失败仍为StarterRod测试150/资产500。并行FootReach任务正在改Grab查询/脚锁，已协调仅共享Parked门禁一行，独立提交。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| R入口与目标查询 | `Fishing/Integration/CatFishingCommandComponent::Process...OperateRod`→`Service::OperateRod/LeaveRod/PlaceRod`；原历史OperateRod验证250cm | 当前R仅拾回已被爪抓住的本人竿，否则尝试新部署 | 新`Service::FindNearestOperableOwnedRod`按既有部署登记选250cm内无人操作且未损坏的本人竿；已抓本人竿优先，其次附近本人竿，再原部署；服务端再次距离/身份/Revision校验 | 只读查询→接收方支持拾取→输入切换 | 连续3R不额外部署/扣库存，远距直接命令拒绝，2根竿及他人竿不误选 | 已接入附近本人架竿查询与权威250cm复核；177组合中FirstRod两正式竿连续R循环、两实体竿/远距拒绝均通过。 |
+| 拿到手的接收方 | `PhysicalRod::BeginPrimaryHold/CommitPrimaryHold`；现调用false要求手球已贴握点 | 原R需先鼠标实际抓握才能成功，旧测试手动摆竿规避 | 合法近距离R将同一杆的规范Grip对到空闲手球，再走原真实抓点/显式主控提交；主控位置和瞄准仍原`PositionControlledRod` | 距离/身份检查→握点→会话Resume→Commit；失败保持可重试 | 双手占用、活动会话Resume拒绝、相同Actor/Item/Session/Hook连续性，角色不瞬移 | 同一Actor握点对齐空闲手；Begin与Retain/Control两次回调过渡受保护，失败恢复旧架竿姿态。FirstRod原无效配置回滚与无瞬移、OwnedRod资源生命周期通过。 |
+| 架竿物理与坐标 | `PhysicalRod::Initialize/RefreshControlledCarrier/RefreshObservedPose`；Actor::BeginPlay绑定 | 当前脱手开启SimulatePhysics并继承线/角速度 | 正式杆保持有限0.35kg标定但杆体不自由模拟；服务器杆体独立于表现Root，脱手保留当下世界Transform，拾起仅原跟随更新 | 接收方固定→主控切换→Actor姿态复制 | 空中/移动时放下、墙边、鱼线拉力下Transform不漂移，无父子反馈或压猫 | 脱手零线/角速度、服务器Transform不再自由积分；20N载荷0.1秒固定不动且2Ns唯一消费。RodEffort转动放竿后仍原位，正式网络无下沉或翻倒；墙边真人未单独验收。 |
+| 轻道具状态与抓点 | `Interaction/Grab/CatLightPropComponent::RefreshMode/Tick/State`→Grab::ResolveConstraintTarget | 正式杆脱手沿Falling的25%重力，日志和网络也显示下落 | 追加Parked枚举及仅服务器设置入口，原枚举数值保留；杆无主控时Parked优先于握点数，轻道具组件不再给架竿重力。按最新补充，架竿禁止手抓；`Grab::IsReachSurface`统一阻止自动接触及显式Grip。R合法拾取事务暂开抓点，失败回架竿；放竿通过原ReleaseTarget入口解除所有竿上握点。持竿时仍重绑主控，其他道具Held/Falling/Loaded保持 | 杆决定支架状态→轻道具观测复制→抓点重绑 | 持竿时松一只助手手不影响其他手；架竿后所有竿握点清理、禁止重新抓；抓人不受影响，无自动接任、不能作猫落脚点，通用箱体轻落仍通过 | Parked=4追加复制；架竿自动/显式手抓同门禁，放竿清全部竿握点。正式手球贴到实体仍拒绝，主控持竿时双猫反向牵拉及跳跃通过；普通轻道具3项通过。 |
+| 鱼线求解与旧路径清理 | `PhysicalRod::PopulateEndpointResponse`旧脱手杆关节网络/惯性观察→`FightRunner::HandleFixedStep`→Simulator | 脱手杆有另一套动态端点求解；目标固定端点承受载荷不移动 | 正式仅保留CMC主控候选与无主控固定端点；删除仅脱手动态杆消费的关节网络和观察字段。Runner按接收方存在发布一次载荷，固定端点与可移动端点分开；纯模拟器既有输入契约/数值回归先保持，不更改主控费用公式 | 端点模式→单一发布/消费→删除无消费者的接收方实现 | 等口/咬钩/搏斗/力竭无人值守与拾回，旧Session载荷清理，120ms队列无重复冲量、主控防抖 | 仅保留受控CMC预测与无人固定端点；接收方旧关节图/惯性采样及10个专属字段已删。原正式鱼60/120Hz及120ms、CMC短线防抖和冲量账通过；纯模拟器输入仍有原生数值用例消费者，未删。 |
+| 会话、费用、退出 | `Service::RemoveOperatorAndReconcileSession`→`Session::SuspendOperatorFromAuthority`；ResumeOwnedSessionControl；Pack/EndPlay | 会话与杆解耦已存在；原无人值守搏斗放线，等待阶段继续 | 原入口和账本保持，架竿不新建Session/Hook或资源交易；销毁、收纳、离线仍走原清理 | 主控撤销→手退出→Suspend；拾回→同场Resume | 同场Id/鱼状态/库存版本连续、无助手费用、无重扣饵/竿，主控退出不接任 | 原Suspend/Resume、Runner、ASC与资源单一入口保持。四端真实R架竿/拾回同Session、RodId通过；装备版本改在R同步事务前后严格比较，182106四端复验13→13不变；异步复制后同一库存实例保持，期间正常磨损仍允许推进版本；助手不入会话/无收费/无接任，取消/离线/销毁原资源回归通过。 |
+| 网络、表现、资产与配置 | `Actors/CatFishingActorTypes.h::ECatFishingRodPoseMode`→Actor::PresentationState及Movement复制、LightProp State；正式`/Game/Blueprint/Actors/BP_CatFishingRodActor`、`/Game/Character/BP_CatCharacter`经配置UseActorClass加载 | Grounded历史枚举实际表示离手，无需改成落地动画或新字段语义 | 保留Held/Grounded序列化契约，注明Grounded为架竿；客户端Actor姿态及Parked复制：保持原FRepMovement量化，分别验服务器/客户端静止不漂移与root/角度误差在原量化半单位内，不把杆体中心当作无损复制点；默认日志含RodActorId/SessionId/World/角色/结果。无BP/WBP/存档/输入映射/Cook资产迁移，隐藏图消费者不据文本未命中删除 | 权威更新→同一复制→正式客户端视口 | 正式蓝图实际加载；帧/角色/主控切换日志与截图；不改并行Rig/IK或资产 | 正式BP实际Listen/Client通过；架竿收到后客户端漂移0，Root Z量化差-0.15cm、角差0，属于原1cm/1.40625度网络量化。未改复制精度、资产或输入；新包双端默认日志未运行。 |
+| 回归与文档 | `Fishing/Tests/CatFishingFirstRodHeldTests`、`CatFishingPhysicalRodTests`、`CatFishingServiceTests`、`CatFishingOwnedRodLifecycleTests`（取消/离线/销毁仍保留资源，架竿后清掉助手握点）、`CatFishingRodEffortTests`（旧松手角速度继承断言改为架稳，原主控努力/费用世代保留）、`Editor/Fishing/Tests/CatFishingGroupNetworkTests`、`Editor/Interaction/Grab/Tests/CatLightPropNetworkTests`；本页、PhysicsGrab/FishFight指南及唯一差距清单 | 旧动态自由杆断言及下落截图绑定旧目标；R测试含绕过步骤 | 用真实R与固定杆行为替换过时夹具，保留身份/队列/搏鱼/费用断言；现有隔离Build脚本构建Editor/Game，再运行正式双端。唯一业务进度仍用差距清单 | 基线→局部→相关组合→分层交付/独立中文提交 | contract、runtime_behavior、presentation_delivery分别记录；新包/真人地图未运行不得代替 | Editor/Game隔离与主工程Game构建成功。177项最终状态176通过、1既有StarterRod150/500；180120网络专项补齐量化/静止断言，182106四端复验通过并修正拾回事务取样时序。七列/历史口径已衔接，截图已归档；主工程Editor源码编译完成，但用户PIE窗口占用DLL，最终链接尚未完成；需正常结束试玩并关闭编辑器后重链。 |
+
+证据目录为 `Saved/Automation/RodPark-20260910`：
+
+- **contract**：`BuildEditor-Isolated.log`、`BuildEditor-Delivery.log`、`BuildEditor-ReplicationCheck.log`、`BuildEditor-RetakeTransaction.log`与`BuildGame-Delivery.log`成功；最新组合`BuildGame-Main.log`也成功，源码摘要为`MainGameSourceManifest.json`。`BuildEditor-Main.log`编译单元完成但最终链接被用户正在试玩的编辑器锁住（LNK1104），仍需用户正常关闭窗口后补链，未强行关闭PIE或保存用户资产。为保留并行工作，隔离副本排除了尚在修改的ModelContact接缝，已保留实际源码摘要；主工作区不撤回模型/IK源码或资产。
+- **runtime_behavior**：并行模型组合`ModelContacts-20260910/Automation-20260910-180943-016.log`额外发现四端R拾回测试将放竿前装备Revision与客户端复制返回后的Revision跨帧比较，17→18误判失败；`ApplyFishingRodWear`每次真实磨损均递增该版本，日志同一Session磨损序列由1持续至12。测试改在同步R请求及回执前后严格比较版本，异步阶段继续检查同一Session、Actor和库存实例。`Report-20260910-182106-697/index.json`四端复验通过，`fishing_rod_retake_inventory_verified`记录BeforeRevision=13、AfterRevision=13；没有改变磨损公式或阻止合法费用。
+
+- **runtime_behavior（此前隔离证据）**：`Report-20260910-175531-136/index.json`共177项；其中量化比较断言已在`Report-20260910-180120-975/index.json`正式渲染专项重新验证通过，合并最终状态176通过、1既有StarterRod耐久测试150/资产500。服务器架竿保持Transform，客户端连续静止漂移为0；跨端根位置差为Z=-0.15cm，角差0。旧0.1cm竿体中心比较忽略原FRepMovement整厘米复制精度，现分别检查静止不漂移与原量化半单位内的根位置/角度误差；未放宽任何物理漂移门槛或修改生产网络精度。
+- **presentation_delivery**：已查看`Images/20260910-100145-formal-parked-rod.png`和`20260910-100148-formal-parked-cat-standing.png`，同轮保留持竿/跳跃/双猫反拉与抓人带起截图。这是正式猫/竿蓝图在现有有光照试验场的客户端画面；未新Cook/打包，未做正式Lake地图墙边/地面真人手感及高延迟多人验收，不关闭Fishing/Character/Delivery模块。
+
+运行日志为`Automation-20260910-175531-136.log`、`Automation-20260910-180120-975.log`和`Automation-20260910-182106-697.log`，按World/NetMode区分房主与客户端。检索`LogCatFishing`的`fishing_rod_controlled_carrier`（Parked/PositionCm/RotationDegrees）、`fishing_rod_operate_rejected`、`fishing_owner_resume_*`及`LogCatPhysicsGrab`的`physics_light_prop_*`、`physics_grip_released`，以RodActorId/SessionId/PropId/GripId关联。默认Development日志等级保留；本次尚无新包无-log双端落盘证据。
+
+历史Grounded枚举/具名Actor、BP/锚点与纯模拟器数值输入仍有实际消费者，保留其兼容入口并注明含义；已无消费者的自由竿接收方图求解、观测缓存与旧下落断言本轮清除。用户Skeleton的SHA256保持`3AF77F901B4FD35EAF79A7133230BB8964A1F2E886064010F680A40C3DE18008`；其余并行鱼种/CuteCat/GameMode资产均未修改或暂存。
+
 阅读对象：需要理解/修改钓鱼玩法逻辑的人。运动链说明于 2026-09-04 按源码核对，当前细节统一见 [鱼运动与遛鱼逻辑实现导读](FishFightImplementationGuide_zh-CN.md)；本页负责系统关系与入口导航。
 配套文档：蓝图配置见 [FishingBlueprintSetupGuide_zh-CN.md](FishingBlueprintSetupGuide_zh-CN.md)；规格口径见 [FishingCoreFlow_zh-CN.md](FishingCoreFlow_zh-CN.md)。
 
 当前正式角色使用直立 CMC 胶囊和手部抓点牵拉，取消自由翻倒及悬挂/串联吊挂；倒地和起身只由原Condition状态触发动画。普通行走朝移动方向转身，镜头独立，主控仍沿原持竿偏移与鼠标瞄准。每手牵拉力由服务器分别施加给两端，主控竿的助手力传给持竿者；原搏鱼、主控力量预算和本人费用不变，助手不加入会话或自动接任。正式握点不再创建身体关节；旧APawn诊断试验场仍实际使用Chaos关节。实现及分层验证见[直立CMC与抓推迁移](PhysicsGrabPrototype_zh-CN.md)。
 
-以下轻道具章节记录上一轮交付基线，其中“真实关节”是当时身体实现；正式角色当前接收端以上述CMC牵拉为准，轻道具的重力与碰撞契约继续有效。
+以下轻道具章节为历史交付证据。“真实关节”已由正式CMC牵拉替换；正式鱼竿的脱手下落、速度继承与助手保留已被本页顶部架竿规则替换。25%轻落仅用于其他原型动态道具，碰猫避让与支撑过滤仍保留。
 
 ## 2026-09-10：轻道具与主控持竿
 

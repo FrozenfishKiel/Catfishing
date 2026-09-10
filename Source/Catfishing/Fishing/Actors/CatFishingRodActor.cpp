@@ -94,9 +94,9 @@ void ACatFishingRodActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& 
 
 bool ACatFishingRodActor::IsUsingPhysicalRod() const { return PhysicalRod && PhysicalRod->IsReady(); }
 
-bool ACatFishingRodActor::BeginPhysicalHoldFromAuthority(APlayerState* Player, const bool bPositionNewRod)
+bool ACatFishingRodActor::BeginPhysicalHoldFromAuthority(APlayerState* Player, const bool bPositionAtHand)
 {
-	return IsUsingPhysicalRod() && PhysicalRod->BeginPrimaryHold(Player, bPositionNewRod);
+	return IsUsingPhysicalRod() && PhysicalRod->BeginPrimaryHold(Player, bPositionAtHand);
 }
 
 void ACatFishingRodActor::ReleasePhysicalPrimaryHoldFromAuthority(APlayerState* Player, const FName Reason)

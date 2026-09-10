@@ -533,17 +533,19 @@ namespace CatFishingGroupNetwork
 					&& LeaveResult.bCommitted && LeaveResult.CommandType == ECatFishingCommandType::LeaveRod)) return true;
 				if (!Test->TestFalse(TEXT("R releases the primary contact and its explicit source"),
 					PrimaryGrab->IsGripping(true) || PrimaryGrab->GetGripState(true).bExplicitHold)) return true;
+				ParkedPose = Rod->GetActorTransform();
+				StageStarted = Now;
 				Stage = 6;
 			}
 			if (Stage == 6)
 			{
-				if (Rod->GetOperatorCount() != 0 || Session->GetSnapshot().FisherPlayerState != nullptr) return false;
+				if (Now - StageStarted < 1 || Rod->GetOperatorCount() != 0 || Session->GetSnapshot().FisherPlayerState != nullptr) return false;
 				for (int32 Index = 0; Index < ClientRods.Num(); ++Index)
 					if (ClientRods[Index]->GetOperatorCount() != 0 || ClientRods[Index]->GetControlEpoch() == OldEpoch
 						|| ClientSessions[Index]->GetSnapshot().FisherPlayerState != nullptr) return false;
 				UCatPhysicsGrabComponent* RemainingGrab = CastChecked<ACatCharacter>(RemoteControllers[0]->GetPawn())->GetPhysicalBodyComponent()->GetGrab();
-				if (!Test->TestTrue(TEXT("the helper keeps its physical rod joint after the primary releases"),
-					RemainingGrab->IsGripping(true) && RemainingGrab->GetGripTarget(true) == Rod.Get())
+				if (!Test->TestFalse(TEXT("parking clears the helper rod grip on both endpoints"),
+					RemainingGrab->IsGripping(true) || CastChecked<ACatCharacter>(LocalClients[0]->GetPawn())->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true))
 					|| !Test->TestNull(TEXT("a remaining physical helper is never promoted automatically"), Rod->GetPresentationState().OperatorPlayerState.Get())
 					|| !Test->TestEqual(TEXT("unattended fishing preserves the deployment owner"), Rod->GetPresentationState().OwnerPlayerState.Get(), Primary->PlayerState.Get())
 					|| !Test->TestFalse(TEXT("the same line and fishing session continue unattended"), Session->IsTerminal())) return true;
@@ -553,6 +555,29 @@ namespace CatFishingGroupNetwork
 				Test->AddInfo(FString::Printf(TEXT("Event=fishing_physical_helpers_network_verified SessionId=%s RodActorId=%s PreviousFishingOperators=1 CurrentFishingOperators=0 PhysicalHelpers=3 HelperASCUnchanged=1 AutoPromotion=0 ControlEpoch=%u OldControlEpoch=%u LineLoad=%.3f Samples=%d MaximumLineLoad=%.3f RodTravelCm=%.3f FishTravelCm=%.3f Server=Listen Clients=3 Evidence=runtime_behavior"),
 					*SessionId.ToString(), *RodId.ToString(), Rod->GetControlEpoch(), OldEpoch, Session->GetSnapshot().NormalizedLineLoad,
 					FightSamples, MaximumSampledLineLoad, SampledRodTravel, SampledFishTravel));
+				Test->TestTrue(TEXT("same session's rod stays fixed while unattended"), Rod->GetActorTransform().Equals(ParkedPose, .01));
+				// Compare the synchronous command transaction: live fish wear may advance the
+				// equipment revision while waiting for the client acknowledgements below.
+				const int64 BeforePickupRevision = Equipment->GetSnapshot().Revision;
+				const auto Pickup = Primary->GetFishingCommandComponent()->SubmitRodInteract();
+				FCatFishingCommandResult PickupResult;
+				if (!Test->TestTrue(TEXT("real R directly picks up the parked rod during the same fight"),
+					Primary->GetFishingCommandComponent()->TryGetResult(Pickup.RequestId, PickupResult)
+					&& PickupResult.bCommitted && PickupResult.CommandType == ECatFishingCommandType::OperateRod)) return true;
+				if (!Test->TestEqual(TEXT("R retake never uses inventory again"), Equipment->GetSnapshot().Revision, BeforePickupRevision)) return true;
+				Test->AddInfo(FString::Printf(TEXT("Event=fishing_rod_retake_inventory_verified SessionId=%s RodActorId=%s RodItemInstanceId=%s BeforeRevision=%lld AfterRevision=%lld Authority=true NetMode=ListenServer Result=Unchanged"),
+					*SessionId.ToString(), *RodId.ToString(), *RodItemId.ToString(), BeforePickupRevision, Equipment->GetSnapshot().Revision));
+				Stage = 7;
+				return false;
+			}
+			if (Stage == 7)
+			{
+				for (int32 Index = 0; Index < ClientRods.Num(); ++Index)
+					if (ClientRods[Index]->GetOperatorCount() != 1 || !ClientSessions[Index]->GetSnapshot().FisherPlayerState) return false;
+				Test->TestEqual(TEXT("R retake preserves Session ID"), Session->GetSnapshot().FishingSessionId, SessionId);
+				Test->TestEqual(TEXT("R retake preserves rod identity"), Rod->GetPresentationState().RodActorId, RodId);
+				Test->TestEqual(TEXT("R retake preserves the same rod inventory instance"), Rod->GetPresentationState().ItemInstanceId, RodItemId);
+				Test->TestEqual(TEXT("R retake restores only the owner as fisher"), Session->GetSnapshot().FisherPlayerState.Get(), Primary->PlayerState.Get());
 				Test->AddExpectedErrorPlain(TEXT("Outcome=ECatFishingOutcome::Cancelled"), EAutomationExpectedErrorFlags::Contains, 1);
 				Session->CancelFromAuthority(FGuid::NewGuid());
 				return true;
@@ -565,6 +590,7 @@ namespace CatFishingGroupNetwork
 		FSend SendStale;
 		double Started, StageStarted = 0;
 		int32 Stage = 0, JoinIndex = 0;
+		FTransform ParkedPose = FTransform::Identity;
 		bool bBodiesReady = false;
 		bool bBodiesPlaced = false;
 		double SetupStarted = 0.0;

@@ -3,6 +3,7 @@
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
+#include "Components/BoxComponent.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Framework/Game/CatfishingPlayerController.h"
@@ -672,8 +673,17 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 				*Command.Context.RequestId.ToString(), *Command.Context.RodActorId.ToString(), *CatLogContext::BuildControllerFields(Controller));
 			return Result;
 		}
+		if (!Rod->GetPresentationState().bDeployed || Rod->GetPresentationState().bBroken
+			|| FVector::DistSquared(Character->GetActorLocation(), Rod->GetGripWorldTransform().GetLocation()) > FMath::Square(250.0))
+		{
+			Result.Error = ECatFishingCommandError::RodOccupied;
+			UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_operate_rejected RequestId=%s RodActorId=%s Reason=UnavailableOrOutOfPickupRange %s"),
+				*Command.Context.RequestId.ToString(), *Command.Context.RodActorId.ToString(), *CatLogContext::BuildControllerFields(Controller));
+			return Result;
+		}
+		const FTransform PreviousParkedPose = Rod->GetPhysicalRodComponent()->GetBody()->GetComponentTransform();
 		if (!Command.Context.RequestId.IsValid() || PlayerState != Rod->GetPresentationState().OwnerPlayerState
-			|| !Rod->BeginPhysicalHoldFromAuthority(PlayerState, false))
+			|| !Rod->BeginPhysicalHoldFromAuthority(PlayerState, true))
 		{
 			Result.Error = ECatFishingCommandError::RodOccupied;
 			UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_operate_rejected RequestId=%s RodActorId=%s Reason=OwnerPhysicalHoldRequired %s"),
@@ -690,7 +700,7 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 				if (!Result.bCommitted)
 				{
 					if (!bAlreadyPrimary) Rod->SetPrimaryOperatorFromAuthority(nullptr, Rod->GetPresentationState().RodActorRevision);
-					UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_operate_rolled_back RequestId=%s SessionId=%s RodActorId=%s Reason=SessionResumeRejected GripRetained=true %s"),
+					UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_operate_rolled_back RequestId=%s SessionId=%s RodActorId=%s Reason=SessionResumeRejected %s"),
 						*Command.Context.RequestId.ToString(), *Existing->GetSnapshot().FishingSessionId.ToString(),
 						*Command.Context.RodActorId.ToString(), *CatLogContext::BuildControllerFields(Controller));
 				}
@@ -704,8 +714,14 @@ FCatFishingCommandResult UCatFishingService::OperateRod(AController* Controller,
 				Rod->SetPrimaryOperatorFromAuthority(nullptr, Rod->GetPresentationState().RodActorRevision);
 				if (ACatFishingSession* Existing = FindActiveSessionByRod(Rod)) Existing->RefreshPrimaryControlFromAuthority();
 			}
-			UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_operate_rolled_back RequestId=%s RodActorId=%s Reason=ExplicitHoldCommitRejected GripRetained=true %s"),
+			UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_operate_rolled_back RequestId=%s RodActorId=%s Reason=ExplicitHoldCommitRejected %s"),
 				*Command.Context.RequestId.ToString(), *Command.Context.RodActorId.ToString(), *CatLogContext::BuildControllerFields(Controller));
+		}
+		if (!Result.bCommitted && !bAlreadyPrimary)
+		{
+			Rod->ReleasePhysicalPrimaryHoldFromAuthority(PlayerState, TEXT("PickupRolledBack"));
+			Rod->GetPhysicalRodComponent()->GetBody()->SetWorldTransform(PreviousParkedPose, false, nullptr, ETeleportType::TeleportPhysics);
+			Rod->GetPhysicalRodComponent()->RefreshObservedPose();
 		}
 		Result.Error = Result.bCommitted ? ECatFishingCommandError::None : ECatFishingCommandError::DependencyUnavailable;
 		Result.RodActorId = Command.Context.RodActorId;
@@ -1202,6 +1218,30 @@ ACatFishingRodActor* UCatFishingService::FindNearestPackableRod(const APlayerSta
 			|| Rod->GetPresentationState().OwnerPlayerState != PlayerState
 			|| Rod->GetOperatorCount() != 0 || FindActiveSessionByRod(Rod)) continue;
 		const double DistanceSquared = FVector::DistSquared(WorldLocation, Rod->GetActorLocation());
+		if (DistanceSquared <= BestDistanceSquared)
+		{
+			BestDistanceSquared = DistanceSquared;
+			Best = Rod;
+		}
+	}
+	return Best;
+}
+
+ACatFishingRodActor* UCatFishingService::FindNearestOperableOwnedRod(const APlayerState* PlayerState,
+	const FVector& WorldLocation, const double MaxDistanceCentimeters)
+{
+	CompactDeployedRods();
+	if (!IsValid(PlayerState) || WorldLocation.ContainsNaN()
+		|| !FMath::IsFinite(MaxDistanceCentimeters) || MaxDistanceCentimeters < 0.0) return nullptr;
+	ACatFishingRodActor* Best = nullptr;
+	double BestDistanceSquared = FMath::Square(MaxDistanceCentimeters);
+	for (const auto& Pair : DeployedRodsByPlayerState)
+	{
+		ACatFishingRodActor* Rod = Pair.Value.Get();
+		if (Pair.Key.Get() != PlayerState || !Rod || !Rod->GetPresentationState().bDeployed
+			|| Rod->GetPresentationState().OwnerPlayerState != PlayerState
+			|| Rod->GetOperatorCount() != 0 || Rod->GetPresentationState().bBroken) continue;
+		const double DistanceSquared = FVector::DistSquared(WorldLocation, Rod->GetGripWorldTransform().GetLocation());
 		if (DistanceSquared <= BestDistanceSquared)
 		{
 			BestDistanceSquared = DistanceSquared;

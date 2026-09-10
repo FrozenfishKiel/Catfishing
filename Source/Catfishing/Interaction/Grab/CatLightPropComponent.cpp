@@ -47,6 +47,7 @@ void UCatLightPropComponent::RestoreOrdinaryPhysics()
 		Body->SetAngularDamping(OriginalAngularDamping);
 		State.GripCount = 0;
 		State.bExternalLoad = false;
+		bParked = false;
 		State.Mode = ECatLightPropMode::Inactive;
 		++State.Revision;
 		GetOwner()->ForceNetUpdate();
@@ -84,6 +85,13 @@ void UCatLightPropComponent::SetExternalLoadFromAuthority(const bool bActive)
 	RefreshMode(TEXT("ExternalLoadChanged"));
 }
 
+void UCatLightPropComponent::SetParkedFromAuthority(const bool bNewParked)
+{
+	if (!GetOwner()->HasAuthority() || bEndingPlay || bParked == bNewParked) return;
+	bParked = bNewParked;
+	RefreshMode(TEXT("ParkedSupportChanged"));
+}
+
 void UCatLightPropComponent::SetGripCarrierFromAuthority(UPrimitiveComponent* Carrier)
 {
 	if (!GetOwner()->HasAuthority() || GripCarrier.Get() == Carrier) return;
@@ -104,7 +112,7 @@ void UCatLightPropComponent::RefreshGripConstraintsFromAuthority()
 
 void UCatLightPropComponent::RefreshMode(const FName Reason)
 {
-	State.Mode = State.GripCount > 0 ? ECatLightPropMode::Held
+	State.Mode = bParked ? ECatLightPropMode::Parked : State.GripCount > 0 ? ECatLightPropMode::Held
 		: State.bExternalLoad ? ECatLightPropMode::Loaded : ECatLightPropMode::Falling;
 	++State.Revision;
 	ApplyPhysicsPolicy();
@@ -127,7 +135,7 @@ void UCatLightPropComponent::TickComponent(float DeltaTime, ELevelTick TickType,
 {
 	Super::TickComponent(DeltaTime, TickType, TickFunction);
 	if (!Body || !GetOwner()->HasAuthority() || bEndingPlay || !Body->IsSimulatingPhysics()) return;
-	if (State.Mode != ECatLightPropMode::Held)
+	if (State.Mode == ECatLightPropMode::Falling || State.Mode == ECatLightPropMode::Loaded)
 		Body->AddForce(FVector(0, 0, GetWorld()->GetGravityZ() * ReleasedGravityScale * Body->GetMass()));
 }
 
@@ -145,7 +153,7 @@ void UCatLightPropComponent::LogState(const FName Event, const FName Reason) con
 		*Event.ToString(), *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : INDEX_NONE,
 		GetOwner()->HasAuthority(), int32(GetOwner()->GetLocalRole()), *GetNameSafe(GetOwner()), *GetNameSafe(Body),
 		*State.PropId.ToString(), State.Revision, State.GripCount, int32(State.Mode), State.bExternalLoad,
-		State.Mode == ECatLightPropMode::Inactive ? 1.0f : State.Mode == ECatLightPropMode::Held ? 0.0f : ReleasedGravityScale, *Reason.ToString());
+		State.Mode == ECatLightPropMode::Inactive ? 1.0f : (State.Mode == ECatLightPropMode::Held || State.Mode == ECatLightPropMode::Parked) ? 0.0f : ReleasedGravityScale, *Reason.ToString());
 }
 
 void UCatLightPropComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)

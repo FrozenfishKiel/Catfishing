@@ -1021,8 +1021,8 @@ void UCatFishingFightRunner::HandleFixedStep()
 
 	// 未被猫端牵引越岸时，靠近岸线仍只是空间事实，鱼会沿岸反射；一旦越岸则复用力竭叶子并切到地面吸附。
 
-	// 鱼线完整力只提交给物理竿接收方；身体、爪和竿的约束由 Chaos 推进。
-	if (RodConstraint.bPhysicalRodEndpoint)
+	// 鱼线载荷只提交一次；持竿交给主控 CMC，架竿由固定支撑承受。
+	if (Rod->IsUsingPhysicalRod())
 	{
 		const FVector LineDirection = (Motion.FishWorldPosition - RodTip).GetSafeNormal();
 		// Publish tension exactly once. No already-netted carrier acceleration or second fish torque reaches physics.

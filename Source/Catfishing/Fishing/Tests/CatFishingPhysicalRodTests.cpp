@@ -20,7 +20,6 @@
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Framework/Game/CatfishingPlayerState.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
-#include "PhysicsEngine/PhysicsConstraintComponent.h"
 #include "OnlineSubsystemTypes.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingPhysicalEndpointTest,
@@ -115,6 +114,8 @@ bool FCatFishingPhysicalGripGraphTest::RunTest(const FString& Parameters)
 		|| !OtherRod->BeginPhysicalHoldFromAuthority(Players[5], true)) return false;
 	if (!TestTrue(TEXT("owner explicitly controls first rod"), Rod->SetPrimaryOperatorFromAuthority(Players[0], Rod->GetPresentationState().RodActorRevision))
 		|| !TestTrue(TEXT("other owner explicitly controls second rod"), OtherRod->SetPrimaryOperatorFromAuthority(Players[5], OtherRod->GetPresentationState().RodActorRevision))) return false;
+	Rod->GetPhysicalRodComponent()->CommitPrimaryHold(Players[0]);
+	OtherRod->GetPhysicalRodComponent()->CommitPrimaryHold(Players[5]);
 	Rod->RefreshPrimaryControlFromAuthority();
 	const auto Grip = [&Cats](const int32 Index, const bool bLeft, UPrimitiveComponent* Target)
 	{
@@ -152,11 +153,12 @@ bool FCatFishingPhysicalGripGraphTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("an unattended physical rod accepts passive line observations without opening a control domain"),
 		Rod->SetFightConstraintObservationFromAuthority(FVector::ForwardVector, 0.5, 2, false)
 		&& !Rod->GetCarrierConstraintState().bFightActive && Rod->GetOperatorCount() == 0);
-	TestTrue(TEXT("owner release preserves an assistant's real constraint"), Cats[1]->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true));
+	TestFalse(TEXT("parking releases the assistant rod grip"), Cats[1]->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true));
 	TestTrue(TEXT("physical assistance never changes the other rod's owner control"), OtherRod->IsPrimaryOperator(Players[5]));
 	FCatFightRodConstraintInput DynamicResponse;
 	Rod->GetPhysicalRodComponent()->PopulateEndpointResponse(DynamicResponse);
-	TestTrue(TEXT("the actual connected dynamic assembly has finite positive point mobility"), DynamicResponse.RodPointInverseMassX.X > 0 && !DynamicResponse.RodPointInverseMassX.ContainsNaN());
+	TestTrue(TEXT("parked rod uses fixed endpoint response"), !DynamicResponse.bPhysicalRodEndpoint && DynamicResponse.RodPointInverseMassX.IsZero());
+	TestFalse(TEXT("a parked rod rejects an otherwise valid touching hand"), Grip(1, true, Rod->GetPhysicalRodBody()));
 	auto* Anchor = World->SpawnActor<AActor>();
 	auto* AnchorBox = NewObject<UBoxComponent>(Anchor);
 	Anchor->SetRootComponent(AnchorBox); Anchor->AddInstanceComponent(AnchorBox);
@@ -173,32 +175,12 @@ bool FCatFishingPhysicalGripGraphTest::RunTest(const FString& Parameters)
 		&& Rod->GetOperatorCount() == 0);
 	Cats[1]->GetPhysicalBodyComponent()->GetGrab()->ReleaseHandFromAuthority(false, TEXT("TestStaticRelease"));
 	Rod->GetPhysicalRodComponent()->PopulateEndpointResponse(DynamicResponse);
-	TestTrue(TEXT("static release restores dynamic response and resets acceleration history"), DynamicResponse.RodPointInverseMassX.X > 0
+	TestTrue(TEXT("static release does not mobilize a parked rod"), DynamicResponse.RodPointInverseMassX.IsZero()
 		&& DynamicResponse.RodTipAccelerationCentimetersPerSecondSquared.IsZero());
 	Anchor->Destroy();
 	Rod->GetPhysicalRodComponent()->ReleaseAllConnections(TEXT("TestReceiverIsolation"));
 	for (ACatCharacter* Cat : Cats) Cat->Destroy();
 	OtherRod->Destroy();
-	// A true static ball joint at the handle removes axial translation, while its free angles still let the tip swing.
-	auto* StaticJoint = NewObject<UPhysicsConstraintComponent>(Rod);
-	Rod->AddInstanceComponent(StaticJoint); StaticJoint->RegisterComponent();
-	StaticJoint->SetWorldTransform(Rod->GetGripWorldTransform());
-	StaticJoint->SetLinearXLimit(LCM_Locked, 0); StaticJoint->SetLinearYLimit(LCM_Locked, 0); StaticJoint->SetLinearZLimit(LCM_Locked, 0);
-	StaticJoint->SetAngularSwing1Limit(ACM_Free, 0); StaticJoint->SetAngularSwing2Limit(ACM_Free, 0); StaticJoint->SetAngularTwistLimit(ACM_Free, 0);
-	StaticJoint->SetConstrainedComponents(Rod->GetPhysicalRodBody(), NAME_None, nullptr, NAME_None);
-	FCatFightRodConstraintInput PivotResponse;
-	Rod->GetPhysicalRodComponent()->PopulateEndpointResponse(PivotResponse);
-	const FVector ShaftAxis = (Rod->GetRodTipWorldTransform().GetLocation() - Rod->GetGripWorldTransform().GetLocation()).GetSafeNormal();
-	const FVector Tangent = FVector::CrossProduct(ShaftAxis, FVector::UpVector).GetSafeNormal();
-	const auto ResponseAlong = [&PivotResponse](const FVector& Direction)
-	{
-		return FVector::DotProduct(Direction, PivotResponse.RodPointInverseMassX * Direction.X
-			+ PivotResponse.RodPointInverseMassY * Direction.Y + PivotResponse.RodPointInverseMassZ * Direction.Z);
-	};
-	TestTrue(TEXT("a static handle ball joint constrains axial response but preserves physical tip swing"),
-		FMath::Abs(ResponseAlong(ShaftAxis)) < 1.e-5 && ResponseAlong(Tangent) > 0.1);
-	StaticJoint->DestroyComponent();
-
 	// The receiver accepts only the rod's current Session and monotonic fixed-step publication.
 	auto* Service = World->GetSubsystem<UCatFishingService>();
 	auto* Session = World->SpawnActor<ACatFishingSession>();
@@ -228,8 +210,6 @@ bool FCatFishingPhysicalGripGraphTest::RunTest(const FString& Parameters)
 	RodBody->SetWorldLocation(FVector(1000, 1000, 1000), false, nullptr, ETeleportType::ResetPhysics);
 	const FTransform SceneProxyBeforeRead = Rod->GetActorTransform();
 	RodBody->SetWorldRotation(FRotator(15, 25, 5), false, nullptr, ETeleportType::ResetPhysics);
-	RodBody->SetPhysicsLinearVelocity(FVector(12, -7, 3));
-	RodBody->SetPhysicsAngularVelocityInRadians(FVector(0, 0, 1));
 	const FTransform PhysicalPoseBeforeRead = RodBody->GetComponentTransform();
 	const FTransform ObservedActorPose = Receiver->GetObservedActorTransform();
 	const FVector ActualTip = (FTransform(FVector(50, 0, 0)) * ObservedActorPose).GetLocation();
@@ -237,23 +217,20 @@ bool FCatFishingPhysicalGripGraphTest::RunTest(const FString& Parameters)
 		Rod->GetRodTipWorldTransform().GetLocation().Equals(ActualTip, 1.e-5)
 		&& Rod->GetGripWorldTransform().Equals(ObservedActorPose, 1.e-5));
 	TestTrue(TEXT("the tip velocity is sampled at that same current physical point"),
-		Rod->GetAuthoritativeRodTipVelocity().Equals(RodBody->GetPhysicsLinearVelocityAtPoint(ActualTip), 1.e-5));
+		Rod->GetAuthoritativeRodTipVelocity().IsZero());
 	TestTrue(TEXT("anchor observation changes neither the rigid body nor its scene proxy"),
 		RodBody->GetComponentTransform().Equals(PhysicalPoseBeforeRead, 1.e-5)
 		&& Rod->GetActorTransform().Equals(SceneProxyBeforeRead, 1.e-5));
 	RodBody->SetWorldRotation(FRotator::ZeroRotator, false, nullptr, ETeleportType::ResetPhysics);
-	RodBody->SetPhysicsAngularVelocityInRadians(FVector::ZeroVector);
-	RodBody->SetEnableGravity(false);
-	RodBody->SetLinearDamping(0);
-	RodBody->SetPhysicsLinearVelocity(FVector::ZeroVector);
+	const FTransform SupportedPose = RodBody->GetComponentTransform();
 	Receiver->SetLineLoad(SecondSessionId, 2, FVector(20, 0, 0), .1, 1.0);
 	for (int32 Frame = 0; Frame < 12; ++Frame) Wrapper.TickTestWorld(1.0f / 120);
-	const double ExpectedVelocity = 20.0 * 100.0 * 0.1 / RodBody->GetMass();
-	const double ActualVelocity = RodBody->GetPhysicsLinearVelocity().X;
-	TestTrue(TEXT("the real receiver integrates N to kg cm/s2 once, without an extra net carrier force"),
-		ActualVelocity > ExpectedVelocity * 0.8 && ActualVelocity < ExpectedVelocity * 1.2);
-	AddInfo(FString::Printf(TEXT("Event=fishing_physical_receiver_force_observed ForceN=20 MassKg=%.4f Seconds=0.1 ExpectedVelocityCmS=%.3f ActualVelocityCmS=%.3f"),
-		RodBody->GetMass(), ExpectedVelocity, ActualVelocity));
+	TestTrue(TEXT("fixed support absorbs fish load without rod motion"), RodBody->GetComponentTransform().Equals(SupportedPose, 1.e-5));
+	TestTrue(TEXT("parked receiver accounts for every accepted impulse exactly once"),
+		Receiver->GetSubmittedLineImpulseNewtonSecondsForDiagnostics().Equals(
+			Receiver->GetAppliedLineImpulseNewtonSecondsForDiagnostics() + Receiver->GetDiscardedLineImpulseNewtonSecondsForDiagnostics()
+			+ Receiver->GetQueuedLineImpulseNewtonSecondsForDiagnostics(), 1.e-6));
+	TestTrue(TEXT("parked receiver consumes the current force segment"), Receiver->GetAppliedLineImpulseNewtonSecondsForDiagnostics().Equals(FVector(2, 0, 0), 1.e-6));
 	Receiver->ClearLineLoad(SecondSessionId);
 	Service->Sessions.Reset();
 	Session->Snapshot.Phase = ECatFishingPhase::Terminated;

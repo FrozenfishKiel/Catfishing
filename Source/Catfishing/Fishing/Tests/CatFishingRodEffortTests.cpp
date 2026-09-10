@@ -107,12 +107,11 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 	TestFalse(TEXT("physically connected helper cannot turn through the owner's input protocol"),Rod->AcceptHeldAimSampleFromAuthority(Players[1],Mouse));
 	const FTransform BeforeRelease=Rod->GetPhysicalRodBody()->GetComponentTransform();
 	const FVector BeforeReleaseMomentum=Rod->GetPhysicalRodComponent()->GetAngularVelocityRadiansPerSecond();
-	const FVector BeforeReleaseVelocity=Rod->GetPhysicalRodComponent()->GetPointVelocity(BeforeRelease.GetLocation());
 	TestTrue(TEXT("release fixture has actual nonzero rod rotation"),BeforeReleaseMomentum.Size()>.01);
 	Cats[0]->GetPhysicalBodyComponent()->GetGrab()->ReleaseAllFromAuthority(TEXT("EffortOwnerRelease"));
 	Rod->GetPhysicalRodComponent()->RefreshPrimaryControl();
 	TestEqual(TEXT("owner release leaves no fishing operator"),Rod->GetOperatorCount(),0);
-	TestTrue(TEXT("helper's real grip survives owner release"),NextBody->GetGrab()->IsGripping(true)&&NextBody->GetGrab()->GetGripTarget(true)==Rod);
+	TestFalse(TEXT("parking ends helper grips on the rod"),NextBody->GetGrab()->IsGripping(true));
 	TestFalse(TEXT("remaining physical helper never automatically takes control"),Rod->IsPrimaryOperator(Players[1]));
 	const auto Released=Rod->GetAuthoritativeRotationEffortSnapshot();
 	TestTrue(TEXT("owner release ends the former effort epoch"),Released.Epoch>Restarted.Epoch);
@@ -120,13 +119,10 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 	FCatFishingRodControlObservation Observation; Rod->GetControlObservationFromAuthority(Observation);
 	TestFalse(TEXT("no operator leaves no active mouse motor"),Observation.bMouseDriveActive);
 	TestTrue(TEXT("owner release cannot teleport the physically held rod"),Rod->GetPhysicalRodBody()->GetComponentTransform().Equals(BeforeRelease,1.e-8));
-	AddInfo(FString::Printf(TEXT("Release angular velocity before=(%.12f,%.12f,%.12f) after=(%.12f,%.12f,%.12f) error=%.12g rad/s"),
-		BeforeReleaseMomentum.X, BeforeReleaseMomentum.Y, BeforeReleaseMomentum.Z,
-		Observation.AngularVelocityRadiansPerSecond.X, Observation.AngularVelocityRadiansPerSecond.Y, Observation.AngularVelocityRadiansPerSecond.Z,
-		(Observation.AngularVelocityRadiansPerSecond - BeforeReleaseMomentum).Size()));
-	// Chaos stores particle velocities as floats; compare the exact stored representation.
-	TestTrue(TEXT("owner release preserves real angular velocity"),Observation.AngularVelocityRadiansPerSecond.Equals(FVector(FVector3f(BeforeReleaseMomentum)),1.e-8));
-	TestTrue(TEXT("owner release preserves rod-center linear velocity"),Rod->GetPhysicalRodBody()->GetPhysicsLinearVelocity().Equals(FVector(FVector3f(BeforeReleaseVelocity)),1.e-8));
+	TestTrue(TEXT("parking absorbs the previous angular velocity"),Observation.AngularVelocityRadiansPerSecond.IsZero());
+	TestTrue(TEXT("parked rod has no residual linear motion"),Rod->GetPhysicalRodComponent()->GetPointVelocity(BeforeRelease.GetLocation()).IsZero());
+	for (int32 Frame=0;Frame<60;++Frame) Tick();
+	TestTrue(TEXT("rod stays at release position and rotation after turning"),Rod->GetPhysicalRodBody()->GetComponentTransform().Equals(BeforeRelease,1.e-5));
 	return !HasAnyErrors();
 }
 
