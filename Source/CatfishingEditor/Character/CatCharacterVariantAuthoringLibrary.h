@@ -17,7 +17,7 @@ public:
 	/** One-time migration; refuses pre-existing outputs and only saves after every Blueprint compiles. */
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Character")
 	static FString CreateCharacterFamily();
-	/** Restore the imported skeleton's scale convention after IK Retargeter exports unit-scale poses. */
+	/** Restore imported bone units, migrate collapsed legacy exports, and make lean poses rotation-only. */
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Character")
 	static FString NormalizeCuteCatRetargetedAnimations();
 	/** Migrate the audited rod presentation consumer to the shared native character playback API. */

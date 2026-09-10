@@ -38,7 +38,7 @@ CuteCat 的默认花色为 Calico。在 Mesh 的材质槽中成对替换 `M_Cute
 
 `create_character_family.py` 调用 Editor-only 的 `UCatCharacterVariantAuthoringLibrary::CreateCharacterFamily` 做一次性迁移，并在验证工程的 `Saved/CharacterFamilyBackup` 中备份原资产。工具拒绝覆盖已有角色族；不要把该脚本作为每次启动或反复重导的入口。迁移既有资产应在其未被其他编辑器占用时执行。
 
-之后运行 `finalize_character_family.py`：它把重定向动画的单位缩放转换回 CuteCat 原始根骨的 100 倍表示，同时保持模型空间的动作轨迹，并把鱼竿蓝图的原猫专用 Cast / 直接 Mesh Montage 播放迁移为 `ACatCharacter::PlayAnimMontage`。这一步不可跳过，否则与原生步态混合时身体会异常偏移。原 FBX、原猫骨架和原动画数据不因此改写。
+之后运行 `finalize_character_family.py`：它恢复 CuteCat 根骨 100 倍缩放，单独转换重定向骨盆的位置单位，保留其余骨骼的原始局部间距；同时把三个转向附加姿势处理为仅旋转、零位移增量，其中 Neutral 为附加单位姿势。工具也能修复早期仅恢复根缩放却压缩子骨骼间距的资产，重复运行不再改写正确数据。鱼竿蓝图的原猫专用 Cast / 直接 Mesh Montage 播放会迁移为 `ACatCharacter::PlayAnimMontage`。原 FBX、原生 idle/walk/run、原猫骨架和原动画数据不因此改写。
 
 定向 Automation 入口为 `Catfishing.CharacterVariants`，并应回归 `Catfishing.Locomotion` 及原有抓握/跳跃测试。运行真实渲染验证时增加 `-CatVariantScreenshots`，输出位于该工程 `Saved/CharacterVariantScreenshots`。Automation 通过不替代正式地图、联网画面或打包体验验收。
 
@@ -63,3 +63,24 @@ Development 落盘诊断可检索 `LogCatCharacter` 的 `physics_prototype_visua
 `runtime_behavior`：主工程 `Saved/CharacterVariants/MainFinalReport/index.json` 的 10 项定向回归全部通过，9 clean、1 warning、0 failed、0 notRun。警告来自原猫跳跃网络用例在重置控制 Epoch 后拒绝一条迟到输入，不是动画失败。日志 `Saved/CharacterVariants/MainFinalTests.log` 同时包含服务器和客户端事件。早期隔离组合回归的旧图检查曾使用复制前编译缓存；强制更新该测试目标后，单项和主工程组合回归均通过。
 
 `presentation_delivery`：固定视角截图在隔离工程 `Saved/Validation/CharacterVariants/Saved/CharacterVariantScreenshots`。图像可证明已绑定模型和实际动作，不能替代正式地图真人观感、嘴叼鱼精确对齐、全部花色或 Cook 后的双端验证。
+
+## 2026-09-10 走跑缩小修复
+
+用户反馈推翻了上文初版“无运行姿势错误”的结论：初版测试只证明 IK 保留动画输入，未检查输入本身的骨骼比例。原生待机、走路、跑步不需要重定向，也未修改；问题来自叠加在步态上的旧猫转向层，以及同源的跳跃/动作片段。
+
+本地 UE 5.8 `IKRetargetProcessor.cpp::FResolvedRetargetPoseSet::AddOrUpdateRetargetPose` 去除局部和全局缩放后，只重新计算了骨盆局部位移。早期归一化将其余仍处于原始骨骼单位的位置又除以 100，导致附加层把身体间距压缩；其权重在 20–200 cm/s 从 0 增至 1，因此越跑越严重。修复前实际脸部间距在 100 cm/s 为参考值的 0.561834，300 cm/s 最低 0.009991。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 生成及既有资产 | `NormalizeCuteCatRetargetedAnimations` ← `Scripts/Art/finalize_character_family.py` | 根缩放正确但子骨骼间距缩为 1/100；恢复参考骨架比例 | 同入口修复原始导出与旧归一化结果，异常单位拒绝写入 | 先修工具，再迁移 19 段序列 | 全部 432 骨骼、所有关键帧、重复运行 | `RepairProportionsFinal.log` 重复执行 Changed=0；新比例契约通过 |
+| 步态和转向 | `ABPT_CatCharacterBase` Walk / Run → `Comp_Add_Lean` 三段 Add 序列 | 速度提高会加重压缩；维持原生步态 | 三段附加动画恢复参考位移/缩放，Neutral 恢复参考旋转 | 修好素材再使用原模板消费者 | 100/200/300 cm/s，直行、转弯、启停 | 原失败用例通过；源 Mesh 和最终 IK Mesh 比例范围 0.999956–1.000048 |
+| 跳跃、动作、倒地 | 子 ABP、`AnimationOverrides`、`PoseClips` → `Retargeted` | 同源片段缩小；保留播停、状态切换和原动作身份 | 修复同批 19 序列，其 Montage、BlendSpace 和引用不变 | 归一化后验证原调用链 | 两角色跳跃/动作/鱼竿回调及 CuteCat 双端倒地恢复 | 运行及网络回归通过；跳跃截图中身体比例恢复 |
+| IK 与移动权威 | `CatQuadrupedLocomotion`、`CatPhysicsPrototypeVisualComponent` → 可见模型 | 旧测试仅比较输入输出；增加独立参考比例 | 保留求解器与 CMC；扩展角色测试 | 正确动画输入继续走原 IK | 四足接地、骨长、旧猫、抓爪与跳跃 | 11 项组合回归全部通过，9 clean、2 warning |
+| 持久化、配置、Cook、日志与清理 | 19 个 `Retargeted/*.uasset`；原角色硬引用；本工具和文档 | 修正生成入口及正式资产；无新玩法状态 | 精确替换同包资源；保留用户 ABP、GameMode、材质、骨架与鱼数据改动 | 隔离验证后主工程重载 | 文件哈希、重载、主工程运行检查 | 19 个包接回后哈希与隔离验证一致，主工程重载回归 11/11 通过；Cook/打包未运行 |
+| UI、权威、生命周期 | 原 GameMode、CMC、Condition/GAS、原 Montage API | 不涉及 UI、存档、权限或复制字段变化 | 保留全部既有入口，无新增退出清理对象 | 无额外状态衔接 | 双端表现消费者回归 | 通过；模块级正式交付缺口仍保留 |
+
+`contract`：隔离 Editor 构建 `BuildProportionsFinal.log` 成功；新增 `RetargetProportionsAndNeutralLean` 在原资产上失败，修复后通过。`runtime_behavior`：`Saved/CharacterVariants/ProportionsAfterReport/index.json` 的 11 项全部通过；两个警告分别是引擎 `r.MotionVectorSimulation` 渲染线程访问提示及原网络重置后拒绝迟到输入。已有 Development 诊断事件继续生效，修复工具新增 `character_retarget_proportions_repaired`，无每帧刷屏或第二份玩法状态。
+
+`presentation_delivery`：已查看本次 Idle、Speed100、Speed300、Turn300、Jump 渲染图，缩小与骨骼聚拢消失。截图在隔离工程 `Saved/CharacterVariantScreenshots`；本轮没有修改毛发材质。正式地图真人手感、完整动作美术润色、嘴叼鱼对齐及新 Cook/Development 包双端验收仍未完成。本次未修改 Game 模块源码，不重复使用旧 Game 编译记录声称新打包已验收。
+
+主工程接回：用户保存并关闭编辑器后，只替换 `ProportionsDeliveryManifest.json` 中的 19 个动画包，替换前校验均与 HEAD 一致，备份位于 `Saved/CharacterVariants/BeforeProportionsFix`。`BuildProportionsMain.log` 编译成功；`ProportionsMainReport/index.json` 重载用户当前蓝图配置后 11/11 通过（9 clean、2 warning、0 failed、0 notRun），运行比例与隔离工程一致。相关文件均位于 `Saved/CharacterVariants`；未修改、提交用户的并行资产。

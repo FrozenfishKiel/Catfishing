@@ -5,6 +5,8 @@
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimMontage.h"
 #include "Animation/AnimSequence.h"
+#include "Animation/AnimData/IAnimationDataModel.h"
+#include "AssetRegistry/AssetRegistryModule.h"
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
@@ -204,6 +206,44 @@ bool FCatCharacterVariantRuntime::RunTest(const FString& Parameters)
 			TestTrue(TEXT("IK preserves authored scale including imported root"), MaxScaleError < 0.001);
 		};
 		CheckPose();
+		// Exercise the actual speed-weighted additive consumer, including full running
+		// weight. Comparing IK output only with its input cannot detect a collapsed input.
+		if (Visual->RigSettings.RigId == TEXT("CuteCat"))
+		{
+			const int32 Head = Cat->GetMesh()->GetBoneIndex(TEXT("Head_001"));
+			const int32 Nose = Cat->GetMesh()->GetBoneIndex(TEXT("Nose_001"));
+			const FReferenceSkeleton& Ref = Cat->GetMesh()->GetSkeletalMeshAsset()->GetRefSkeleton();
+			TArray<FTransform> RefGlobal;
+			for (int32 Bone=0; Bone<Ref.GetNum(); ++Bone)
+				RefGlobal.Add(Ref.GetParentIndex(Bone) == INDEX_NONE ? Ref.GetRefBonePose()[Bone] : Ref.GetRefBonePose()[Bone] * RefGlobal[Ref.GetParentIndex(Bone)]);
+			const double ReferenceFaceLength = FVector::Distance(RefGlobal[Head].GetTranslation(), RefGlobal[Nose].GetTranslation());
+			for (double Speed : {100.0, 200.0, 300.0})
+			{
+				Body->SetMovementSpeed(Speed);
+				double MinRatio=DBL_MAX, MaxRatio=0;
+				for (int32 Frame=0; Frame<150; ++Frame)
+				{
+					// Turning at running speed also samples both sides of the lean blend space.
+					const FVector Move = Frame < 60 ? FVector::ForwardVector : FRotator(0, (Frame-60)*2.0, 0).Vector();
+					Body->SetMoveIntent(Move);
+					Body->SetViewIntent(Move.Rotation());
+					World.TickTestWorld(1.0f/60.0f);
+					for (USkinnedMeshComponent* Mesh : {static_cast<USkinnedMeshComponent*>(Cat->GetMesh()), static_cast<USkinnedMeshComponent*>(Visual->GetVisualMesh())})
+					{
+						const double Ratio = FVector::Distance(Mesh->GetBoneTransform(Head).GetLocation(), Mesh->GetBoneTransform(Nose).GetLocation()) /
+							(ReferenceFaceLength * Mesh->GetComponentScale().GetAbsMax());
+						MinRatio = FMath::Min(MinRatio, Ratio); MaxRatio = FMath::Max(MaxRatio, Ratio);
+					}
+					if (Frame == 45) Capture(*FString::Printf(TEXT("Speed%.0f"), Speed));
+					if (Frame == 100) Capture(*FString::Printf(TEXT("Turn%.0f"), Speed));
+				}
+				TestTrue(TEXT("walking/running/turning preserves facial proportions on animation source and visible IK mesh"), MinRatio > 0.95 && MaxRatio < 1.05);
+				AddInfo(FString::Printf(TEXT("Event=variant_proportions_verified SpeedCmS=%.0f MinFaceRatio=%.6f MaxFaceRatio=%.6f"), Speed, MinRatio, MaxRatio));
+				CheckPose();
+				Step(30);
+			}
+			Body->SetMovementSpeed(100.0);
+		}
 		Step(60);
 		// Exercise the real shared reaching solver on each limb layout with a reachable physical-hand target.
 		const FVector PawBefore = Visual->GetVisualHandWorldLocation(true);
@@ -253,6 +293,45 @@ bool FCatCharacterVariantRuntime::RunTest(const FString& Parameters)
 		Rod->Destroy();
 		AddInfo(FString::Printf(TEXT("Event=character_variant_runtime_verified Class=%s WalkingFrames=%d FourFootFrames=%d AirFrames=%d ApexCm=%.2f"), Path, WalkingFrames, GroundFrames, AirFrames, Apex-GroundZ));
 	}
+	return !HasAnyErrors();
+}
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatRetargetProportions,
+	"Catfishing.CharacterVariants.Contract.RetargetProportionsAndNeutralLean",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatRetargetProportions::RunTest(const FString& Parameters)
+{
+	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/CuteCat/Meshes/SK_CuteCat"));
+	if (!TestNotNull(TEXT("target mesh"), Mesh)) return false;
+	const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
+	const int32 Pelvis = Ref.FindBoneIndex(TEXT("Center_001"));
+	TArray<FAssetData> Assets;
+	FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get().GetAssetsByPath(TEXT("/Game/Characters/CuteCat/Animation/Retargeted"), Assets, true);
+	int32 Clips=0;
+	for (const FAssetData& Asset : Assets)
+	{
+		UAnimSequence* Sequence = Cast<UAnimSequence>(Asset.GetAsset());
+		if (!Sequence) continue;
+		++Clips;
+		const IAnimationDataModel* Model = Sequence->GetDataModel();
+		const bool bAdditive = Sequence->IsValidAdditive();
+		const bool bNeutral = Sequence->GetName() == TEXT("Add_Neutral");
+		double MaxOffsetError=0, MaxScaleError=0, MaxNeutralRotation=0;
+		for (int32 Frame=0; Frame<Model->GetNumberOfKeys(); ++Frame)
+			for (int32 Bone=0; Bone<Ref.GetNum(); ++Bone)
+			{
+				const FTransform Pose = Model->GetBoneTrackTransform(Ref.GetBoneName(Bone), FFrameNumber(Frame));
+				const FTransform& Reference = Ref.GetRefBonePose()[Bone];
+				if (bAdditive || (Bone != 0 && Bone != Pelvis))
+					MaxOffsetError = FMath::Max(MaxOffsetError, FVector::Distance(Pose.GetTranslation(), Reference.GetTranslation()));
+				MaxScaleError = FMath::Max(MaxScaleError, FVector::Distance(Pose.GetScale3D(), Reference.GetScale3D()));
+				if (bNeutral) MaxNeutralRotation = FMath::Max(MaxNeutralRotation, Pose.GetRotation().AngularDistance(Reference.GetRotation()));
+			}
+		TestTrue(Sequence->GetName() + TEXT(" preserves target bone offsets across all keys"), MaxOffsetError < 0.0003);
+		TestTrue(Sequence->GetName() + TEXT(" preserves imported scale"), MaxScaleError < 0.001);
+		if (bNeutral) TestTrue(TEXT("neutral lean has no additive rotation"), MaxNeutralRotation < 0.001);
+		AddInfo(FString::Printf(TEXT("Event=retarget_proportions_contract Animation=%s Keys=%d MaxLocalOffsetError=%.8f MaxScaleError=%.8f"), *Sequence->GetName(), Model->GetNumberOfKeys(), MaxOffsetError, MaxScaleError));
+	}
+	TestTrue(TEXT("action/jump/condition and lean clips were all checked"), Clips >= 19);
 	return !HasAnyErrors();
 }
 #endif

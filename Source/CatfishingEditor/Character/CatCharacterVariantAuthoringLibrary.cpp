@@ -85,12 +85,10 @@ FString UCatCharacterVariantAuthoringLibrary::NormalizeCuteCatRetargetedAnimatio
 	USkeletalMesh* Mesh = LoadObject<USkeletalMesh>(nullptr, TEXT("/Game/Characters/CuteCat/Meshes/SK_CuteCat"));
 	if (!Mesh) return TEXT("ERROR: Missing target mesh");
 	const FReferenceSkeleton& Ref = Mesh->GetRefSkeleton();
-	TArray<FTransform> RefGlobal;
-	for (int32 Bone=0; Bone<Ref.GetNum(); ++Bone)
-	{
-		const int32 Parent = Ref.GetParentIndex(Bone);
-		RefGlobal.Add(Parent == INDEX_NONE ? Ref.GetRefBonePose()[Bone] : Ref.GetRefBonePose()[Bone] * RefGlobal[Parent]);
-	}
+	const int32 Pelvis = Ref.FindBoneIndex(TEXT("Center_001"));
+	const int32 Head = Ref.FindBoneIndex(TEXT("Head_001"));
+	if (Pelvis == INDEX_NONE || Head == INDEX_NONE || !Ref.GetRefBonePose()[0].GetScale3D().Equals(FVector(100), 0.001))
+		return TEXT("ERROR: CuteCat reference skeleton changed");
 	TArray<FAssetData> Assets;
 	FModuleManager::LoadModuleChecked<FAssetRegistryModule>(TEXT("AssetRegistry")).Get().GetAssetsByPath(
 		TEXT("/Game/Characters/CuteCat/Animation/Retargeted"), Assets, true);
@@ -104,37 +102,55 @@ FString UCatCharacterVariantAuthoringLibrary::NormalizeCuteCatRetargetedAnimatio
 		const FTransform Root = Model->GetBoneTrackTransform(Ref.GetBoneName(0), FFrameNumber(0));
 		Report += FString::Printf(TEXT("Animation=%s ExportedRoot=%s TargetRoot=%s\n"), *Sequence->GetName(),
 			*Root.ToString(), *Ref.GetRefBonePose()[0].ToString());
-		if (Root.GetScale3D().Equals(RefGlobal[0].GetScale3D(), 0.001)) continue;
-		if (!Root.GetScale3D().Equals(FVector::OneVector, 0.001) || !RefGlobal[0].GetScale3D().Equals(FVector(100), 0.001))
-			return TEXT("ERROR: Unexpected retarget root scale; manual review required\n") + Report;
+		const bool bRawExport = Root.GetScale3D().Equals(FVector::OneVector, 0.001);
+		const bool bNormalizedRoot = Root.GetScale3D().Equals(FVector(100), 0.001);
+		const FVector HeadPosition = Model->GetBoneTrackTransform(Ref.GetBoneName(Head), FFrameNumber(0)).GetTranslation();
+		const FVector RefHeadPosition = Ref.GetRefBonePose()[Head].GetTranslation();
+		const bool bLegacyCollapsed = bNormalizedRoot && HeadPosition.Equals(RefHeadPosition * 0.01, 0.00001);
+		if ((!bRawExport && !bNormalizedRoot) || (!bLegacyCollapsed && !HeadPosition.Equals(RefHeadPosition, 0.0001)))
+			return TEXT("ERROR: Unrecognized retarget translation convention; preserve asset for review\n") + Report;
+		const bool bLean = Sequence->GetName() == TEXT("Add_Neutral") || Sequence->GetName() == TEXT("Add_Loco_Left") || Sequence->GetName() == TEXT("Add_Loco_Right");
+		const bool bNeutral = Sequence->GetName() == TEXT("Add_Neutral");
+		bool bChanged = false;
 		TArray<TArray<FVector>> Positions, Scales;
 		TArray<TArray<FQuat>> Rotations;
 		Positions.SetNum(Ref.GetNum()); Scales.SetNum(Ref.GetNum()); Rotations.SetNum(Ref.GetNum());
 		for (int32 Frame=0; Frame<Model->GetNumberOfKeys(); ++Frame)
 		{
-			TArray<FTransform> ExportedGlobal, RebasedGlobal;
 			for (int32 Bone=0; Bone<Ref.GetNum(); ++Bone)
 			{
-				const int32 Parent = Ref.GetParentIndex(Bone);
 				const FTransform Local = Model->GetBoneTrackTransform(Ref.GetBoneName(Bone), FFrameNumber(Frame));
-				const FTransform Global = Parent == INDEX_NONE ? Local : Local * ExportedGlobal[Parent];
-				ExportedGlobal.Add(Global);
-				FTransform Rebased = Global;
-				Rebased.SetScale3D(RefGlobal[Bone].GetScale3D());
-				RebasedGlobal.Add(Rebased);
-				const FTransform RebasedLocal = Parent == INDEX_NONE ? Rebased : Rebased.GetRelativeTransform(RebasedGlobal[Parent]);
+				const FTransform& Reference = Ref.GetRefBonePose()[Bone];
+				FTransform RebasedLocal = Local;
+				// UE 5.8 strips scale from both retarget reference poses, but only rebakes the
+				// pelvis local translation. Other local offsets remain in imported bone units.
+				// Converting the whole exported global pose therefore collapses them by 100x.
+				if (bRawExport && Bone == Pelvis) RebasedLocal.ScaleTranslation(0.01);
+				if (bLegacyCollapsed && Bone != 0 && Bone != Pelvis) RebasedLocal.ScaleTranslation(100.0);
+				RebasedLocal.SetScale3D(Reference.GetScale3D());
+				if (Bone != 0 && Bone != Pelvis && !RebasedLocal.GetTranslation().Equals(Reference.GetTranslation(), 0.0002))
+					return FString::Printf(TEXT("ERROR: Unexpected animated FK translation Animation=%s Bone=%s Frame=%d"), *Sequence->GetName(), *Ref.GetBoneName(Bone).ToString(), Frame);
+				// A lean is a rotation offset, not a second body pose. Its zero sample must
+				// evaluate to additive identity, including the retargeted pelvis offset.
+				if (bLean) RebasedLocal.SetTranslation(Reference.GetTranslation());
+				if (bNeutral) RebasedLocal.SetRotation(Reference.GetRotation().GetNormalized());
 				if (RebasedLocal.ContainsNaN()) return TEXT("ERROR: Invalid normalized retarget transform");
+				// Float rotation-channel round trips introduce ~1e-6 error on eyelid bones.
+				bChanged |= !RebasedLocal.Equals(Local, 0.00001);
 				Positions[Bone].Add(RebasedLocal.GetTranslation());
 				Rotations[Bone].Add(RebasedLocal.GetRotation().GetNormalized());
 				Scales[Bone].Add(RebasedLocal.GetScale3D());
 			}
 		}
+		if (!bChanged) continue;
 		IAnimationDataController& Controller = Sequence->GetController();
-		Controller.OpenBracket(FText::FromString(TEXT("Preserve CuteCat authored root scale and component-space retarget trajectory")), false);
+		Controller.OpenBracket(FText::FromString(TEXT("Restore CuteCat local proportions and neutral additive pose")), false);
 		for (int32 Bone=0; Bone<Ref.GetNum(); ++Bone)
 			Controller.SetBoneTrackKeys(Ref.GetBoneName(Bone), Positions[Bone], Rotations[Bone], Scales[Bone], false);
 		Controller.CloseBracket(false);
 		Sequence->MarkPackageDirty();
+		UE_LOG(LogTemp, Display, TEXT("Event=character_retarget_proportions_repaired Animation=%s RawExport=%d LegacyCollapsed=%d RotationOnlyLean=%d Result=ReferenceBoneUnits"),
+			*Sequence->GetPathName(), bRawExport, bLegacyCollapsed, bLean);
 		++Changed;
 	}
 	Report += FString::Printf(TEXT("Event=character_retarget_scale_normalized Changed=%d"), Changed);

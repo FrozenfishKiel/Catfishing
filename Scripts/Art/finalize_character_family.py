@@ -1,7 +1,8 @@
-"""Finalize retarget scale and migrate the audited rod animation consumer.
+"""Restore retarget bone proportions and migrate the audited rod animation consumer.
 
 Run after create_cute_cat_retarget.py and create_character_family.py, with editor assets unlocked.
-Both native operations are idempotent and preserve already normalized clips.
+Both native operations are idempotent. The animation operation also repairs the earlier
+root-only normalization and removes translation from the three additive lean poses.
 """
 from pathlib import Path
 import shutil
