@@ -18,6 +18,7 @@ class UCatFishingCameraComponent;
 class UCatPhysicalBodyComponent;
 class UCatPhysicsGrabComponent;
 class UCatPhysicsPrototypeVisualComponent;
+class UCatModelContactComponent;
 class UBoxComponent;
 class USphereComponent;
 class UPhysicsConstraintComponent;
@@ -190,6 +191,7 @@ private:
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UPhysicsConstraintComponent> RightPhysicsArm;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatPhysicsGrabComponent> PhysicsGrab;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatPhysicsPrototypeVisualComponent> PhysicalVisual;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatModelContactComponent> ModelContacts;
 	/** 钓鱼专用第一人称相机组件；只在上鱼表现可提供有效视角时接管 CalcCamera，平时让角色蓝图相机继续生效。 */
 	UPROPERTY(VisibleAnywhere, Category = "Catfishing|Fishing")
 	TObjectPtr<UCatFishingCameraComponent> FishingCameraComponent;

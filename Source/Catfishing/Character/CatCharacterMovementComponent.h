@@ -45,6 +45,7 @@ public:
 	virtual bool IsWalkable(const FHitResult& Hit) const override;
 	virtual void InitCollisionParams(FCollisionQueryParams& OutParams, FCollisionResponseParams& OutResponseParam) const override;
 private:
+	double NextModelContactLogSeconds = 0;
 	FVector QueuedExternalImpulse = FVector::ZeroVector;
 	FVector MovementExternalForce = FVector::ZeroVector;
 };

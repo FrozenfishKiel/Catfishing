@@ -3,6 +3,8 @@
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Interaction/Grab/CatLightPropComponent.h"
+#include "Interaction/CatModelContactComponent.h"
+#include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "EngineUtils.h"
 
@@ -107,6 +109,9 @@ void UCatCharacterMovementComponent::InitCollisionParams(FCollisionQueryParams& 
 {
 	Super::InitCollisionParams(OutParams, OutResponseParam);
 	if (const auto* Cat = Cast<ACatCharacter>(CharacterOwner)) Cat->GetPhysicalBodyComponent()->AppendSupportQueryIgnores(OutParams);
+	if (UCatModelContactComponent::UsesModelContacts(CharacterOwner))
+		for (TActorIterator<ACatCharacter> It(GetWorld()); It; ++It)
+			if (*It != CharacterOwner && UCatModelContactComponent::UsesModelContacts(*It)) OutParams.AddIgnoredActor(*It);
 }
 
 void UCatCharacterMovementComponent::StopMovementImmediately()
@@ -131,19 +136,39 @@ void UCatCharacterMovementComponent::UpdatePeerPushContacts()
 		Body->ClearExternalForce(OtherMovement);
 		OtherBody->ClearExternalForce(this);
 		if (!OtherBody->GetBody()) continue;
-		const FVector Difference = Other->GetActorLocation() - Cat->GetActorLocation();
-		const double Radius = Capsule->GetScaledCapsuleRadius() + Other->GetCapsuleComponent()->GetScaledCapsuleRadius();
-		if (Difference.Size2D() > Radius + 3.0 || FMath::Abs(Difference.Z) >
-			Capsule->GetScaledCapsuleHalfHeight() + Other->GetCapsuleComponent()->GetScaledCapsuleHalfHeight() - Radius) continue;
-		const FVector Normal = Difference.GetSafeNormal2D();
+		FVector Normal;
+		double Penetration = 0;
+		const auto* Model = Cat->FindComponentByClass<UCatModelContactComponent>();
+		const auto* OtherModel = Other->FindComponentByClass<UCatModelContactComponent>();
+		if (Model && OtherModel && Model->HasModelContacts() && OtherModel->HasModelContacts())
+		{
+			if (!Model->FindPeerContact(OtherModel, Normal, Penetration)) continue;
+		}
+		else
+		{
+			// Native test characters without a mesh retain the existing capsule contact contract.
+			const FVector Difference = Other->GetActorLocation() - Cat->GetActorLocation();
+			const double Radius = Capsule->GetScaledCapsuleRadius() + Other->GetCapsuleComponent()->GetScaledCapsuleRadius();
+			if (Difference.Size2D() > Radius + 3.0 || FMath::Abs(Difference.Z) >
+				Capsule->GetScaledCapsuleHalfHeight() + Other->GetCapsuleComponent()->GetScaledCapsuleHalfHeight() - Radius) continue;
+			Normal = Difference.GetSafeNormal2D();
+			Penetration = FMath::Max(0.0, Radius - Difference.Size2D());
+		}
 		const FVector RelativeIntent = Body->GetMoveIntent() * Body->MaxMovementSpeedCmS
 			- OtherBody->GetMoveIntent() * OtherBody->MaxMovementSpeedCmS;
 		const double ClosingSpeed = FVector::DotProduct(RelativeIntent, Normal);
-		const double Penetration = FMath::Max(0.0, Radius - Difference.Size2D());
 		const FVector Force = Normal * FMath::Clamp(ClosingSpeed * 12.0 + Penetration * 650.0, 0.0, 3000.0);
 		if (Force.IsNearlyZero()) continue;
 		Body->SetExternalForceFromAuthority(OtherMovement, -Force);
 		OtherBody->SetExternalForceFromAuthority(this, Force);
+		if (Model && OtherModel && Model->HasModelContacts() && OtherModel->HasModelContacts()
+			&& GetWorld()->GetTimeSeconds() >= NextModelContactLogSeconds)
+		{
+			NextModelContactLogSeconds = GetWorld()->GetTimeSeconds() + 1;
+			UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=model_contact_push World=%s NetMode=%d Authority=1 LocalRole=%d Actor=%s BodyId=%s Peer=%s PeerBodyId=%s DepthCm=%.3f ForceOnPeerN=%s Result=ReciprocalHorizontalForce"),
+				*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(Cat->GetLocalRole()), *GetNameSafe(Cat), *Body->GetBodyId().ToString(),
+				*GetNameSafe(Other), *OtherBody->GetBodyId().ToString(), Penetration, *(Force/100).ToCompactString());
+		}
 	}
 }
 

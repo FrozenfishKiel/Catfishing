@@ -9,6 +9,7 @@
 #include "Components/SphereComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/CapsuleComponent.h"
+#include "Interaction/CatModelContactComponent.h"
 #include "Engine/World.h"
 #include "Net/UnrealNetwork.h"
 #include "PhysicsEngine/PhysicsConstraintComponent.h"
@@ -172,6 +173,8 @@ bool UCatPhysicsGrabComponent::IsReachSurface(const UPrimitiveComponent* Target,
 	if (!IsValid(Target) || !IsValid(Target->GetOwner()) || Target->GetOwner() == GetOwner()
 		|| !Hands.IsValidIndex(Index) || !Hands[Index] || !Target->GetBodyInstance(Bone)
 		|| Target->GetCollisionResponseToChannel(Hands[Index]->GetCollisionObjectType()) != ECR_Block) return false;
+	if (UCatModelContactComponent::IsLegacyContactProxy(Target)) return false;
+	if (Target->IsA<UCatModelContactBody>()) return Target->IsQueryCollisionEnabled();
 	if (const auto* Light = UCatLightPropComponent::FindFor(Target); Light && Light->GetState().Mode == ECatLightPropMode::Parked) return false;
 	const auto Collision = Target->GetCollisionEnabled();
 	if (Collision == ECollisionEnabled::QueryAndPhysics || Collision == ECollisionEnabled::PhysicsOnly) return true;

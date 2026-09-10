@@ -15,7 +15,8 @@ public class CatfishingEditor : ModuleRules
 		{
 			"UnrealEd", "AssetRegistry", "BlueprintGraph", "StateTreeModule", "StateTreeEditorModule",
 			"GameplayStateTreeModule", "PropertyBindingUtils", "PropertyBindingUtilsEditor", "GameplayAbilities", "GameplayTags",
-			"UMG", "UMGEditor", "Slate", "SlateCore", "InputCore", "AssetTools", "EnhancedInput", "AnimGraph"
+			"UMG", "UMGEditor", "Slate", "SlateCore", "InputCore", "AssetTools", "EnhancedInput", "AnimGraph",
+			"MeshUtilitiesEngine", "MeshUtilitiesCommon"
 		});
 	}
 }

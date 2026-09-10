@@ -2,6 +2,7 @@
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Interaction/CatModelContactComponent.h"
 #include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -83,6 +84,7 @@ ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
 	PhysicsGrab=CreateDefaultSubobject<UCatPhysicsGrabComponent>(TEXT("PhysicsGrab"));
 	PhysicalBodyComponent=CreateDefaultSubobject<UCatPhysicalBodyComponent>(TEXT("PhysicalBody"));
 	PhysicalVisual=CreateDefaultSubobject<UCatPhysicsPrototypeVisualComponent>(TEXT("PhysicalVisual"));
+	ModelContacts=CreateDefaultSubobject<UCatModelContactComponent>(TEXT("ModelContacts"));
 
 }
 
@@ -276,11 +278,12 @@ void ACatCharacter::BeginPlay()
 		GetCharacterMovement()->GravityScale, GetCharacterMovement()->MaxWalkSpeed);
 	PhysicalBodyComponent->Initialize(PhysicalBody,LeftPhysicsHand,RightPhysicsHand,LeftPhysicsArm,RightPhysicsArm,PhysicsGrab,MeshGeometryScale);
 	PrimaryActorTick.AddPrerequisite(PhysicalBodyComponent, PhysicalBodyComponent->GetPostMovementTick());
-	if (GetNetMode()!=NM_DedicatedServer && GetMesh()->GetSkeletalMeshAsset())
+	if (GetMesh()->GetSkeletalMeshAsset())
 	{
 		GetMesh()->PrimaryComponentTick.TickGroup=TG_PostPhysics;
 		GetMesh()->PrimaryComponentTick.AddPrerequisite(this,PrimaryActorTick);
 		PhysicalVisual->InitializeVisual(PhysicalBody,LeftPhysicsHand,RightPhysicsHand,GetMesh());
+		ModelContacts->Initialize(PhysicalVisual->GetVisualMesh());
 	}
 	ConditionComponent->OnSnapshotChanged.AddUObject(this,&ACatCharacter::RefreshPhysicalCondition);
 	RefreshPhysicalCondition();

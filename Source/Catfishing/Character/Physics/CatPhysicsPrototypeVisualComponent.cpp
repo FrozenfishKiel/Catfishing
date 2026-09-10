@@ -147,7 +147,8 @@ bool UCatPhysicsPrototypeVisualComponent::InitializeVisual(USceneComponent* InBo
 	VisualMesh->SetComponentTickEnabled(false);
 	ComponentPose.SetNum(Skeleton.GetNum());
 	RefreshVisualPose(0.0f);
-	SetComponentTickEnabled(GetWorld()->GetNetMode() != NM_DedicatedServer);
+	// The final pose also drives authoritative model contacts on a headless server.
+	SetComponentTickEnabled(true);
 	UE_LOG(LogCatCharacter, Log,
 		TEXT("Event=physics_prototype_visual_ready Actor=%s World=%s NetMode=%d Authority=%d LocalRole=%d Mesh=%s BoneCount=%d RigId=%s LeftJoints=%d RightJoints=%d HandSolver=CCD"),
 		*Owner->GetName(), *GetNameSafe(GetWorld()), static_cast<int32>(GetWorld()->GetNetMode()),

@@ -3,6 +3,7 @@
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationEditorCommon.h"
 #include "Character/CatCharacter.h"
+#include "Interaction/CatModelContactComponent.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
@@ -193,9 +194,9 @@ public:
 		if (Stage==15)
 		{
 			if (Now-StageStarted<.3) return false;
-			const double Spacing=3.0*FMath::Max(ServerBody->GetBody()->GetScaledBoxExtent().X,HostCat->GetPhysicalBodyComponent()->GetBody()->GetScaledBoxExtent().X);
 			ServerCat->TeleportTo(FVector(0,0,ServerCat->GetBodyStandRootHeightCm()),FRotator::ZeroRotator,false,false);
-			HostCat->TeleportTo(FVector(0,Spacing,HostCat->GetBodyStandRootHeightCm()),FRotator(0,90,0),false,false);
+			// Expose the friend's side to the approaching hand, rather than the retired body box.
+			HostCat->TeleportTo(FVector(0,52,HostCat->GetBodyStandRootHeightCm()),FRotator::ZeroRotator,false,false);
 			Stage=1; StageStarted=Now;
 		}
 		if (Stage==1)
@@ -219,6 +220,21 @@ public:
 			Test->AddInfo(FString::Printf(TEXT("Event=physical_formal_network_view_verified ServerWorld=%s ClientWorld=%s PlayerId=%d ServerControlYaw=%.3f ClientControlYaw=%.3f ServerBodyYaw=%.3f Source=PhysicalInputRpc"),
 				*Server->GetName(),*Client->GetName(),Local->PlayerState->GetPlayerId(),Remote->GetControlRotation().Yaw,Local->GetControlRotation().Yaw,ServerCat->GetActorRotation().Yaw));
 			// Real key event -> formal IMC/AbilityInputConfig -> route latch -> owning-client grab RPC.
+			ACatCharacter* ClientFriend = nullptr;
+			for (TActorIterator<ACatCharacter> It(Client); It; ++It)
+				if (It->GetPlayerState() && It->GetPlayerState()->GetPlayerId()==HostCat->GetPlayerState()->GetPlayerId()) ClientFriend=*It;
+			const auto* Model = ClientFriend ? ClientFriend->FindComponentByClass<UCatModelContactComponent>() : nullptr;
+			if (!Model || !Model->HasModelContacts()) return Wait(TEXT("friend's model contact surfaces"));
+			FTransform Facing = ClientCat->GetActorTransform(); Facing.SetRotation(FRotator(0,90,0).Quaternion());
+			const FVector Shoulder = Facing.TransformPosition(ClientCat->GetActorTransform().InverseTransformPosition(ClientGrab->GetShoulderWorldLocation(true)));
+			FVector AimPoint; float Nearest = TNumericLimits<float>::Max();
+			for (UCatModelContactBody* Contact : Model->GetBodies())
+			{
+				FVector Point; const float Distance=Contact->GetClosestPointOnCollision(Shoulder,Point);
+				if (Distance>=0 && Distance<Nearest) { Nearest=Distance; AimPoint=Point; }
+			}
+			if (!Test->TestTrue(TEXT("actual model surface is within the unchanged arm reach"),Nearest<ClientGrab->GetReachLengthCm())) return true;
+			Local->SetControlRotation((AimPoint-Shoulder).Rotation());
 			Local->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::LeftMouseButton,IE_Pressed,1.0f));
 			Stage=3; StageStarted=Now;
 		}
@@ -231,6 +247,8 @@ public:
 				|| ClientTarget->GetPlayerState()->GetPlayerId()!=HostCat->GetPlayerState()->GetPlayerId()
 				|| ClientGrab->GetGripRevision(true)!=ServerGrab->GetGripRevision(true)) return Wait(TEXT("matching target identity/revision on client"));
 			if (!Test->TestEqual(TEXT("new view grabs target at +Y rather than old +X"),ServerGrab->GetGripTarget(true),static_cast<AActor*>(HostCat))) return true;
+			if (!Test->TestTrue(TEXT("authority and owner both resolve the actual model contact"),ServerGrab->GetGripTargetComponent(true)->IsA<UCatModelContactBody>()
+				&& ClientGrab->GetGripTargetComponent(true)->IsA<UCatModelContactBody>())) return true;
 			// Observe the HUD assembled by the real local-player subsystem; do not create a second test-only Model/View.
 			int32 ActiveHUDCount=0;
 			for (TObjectIterator<UCatHUDWidget> It;It;++It)

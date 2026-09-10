@@ -18,6 +18,7 @@
 #include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Interaction/CatModelContactComponent.h"
 #include "Components/PoseableMeshComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -310,7 +311,9 @@ namespace CatLightPropNetwork
 				Test->AddInfo(FString::Printf(TEXT("Event=light_prop_formal_network_verified PropId=%s MinBodyZ=%.3f MinUpZ=%.6f MaxBodyZ=%.3f MaxGripForceKgCmS2=%.3f ServerRevision=%u ClientRevision=%u Result=ObservedBothEndpoints"),
 					*Light->GetState().PropId.ToString(), MinimumBodyZ, MinimumUp, MaximumBodyZ, MaximumGripForce, Light->GetState().Revision, ClientLight->GetState().Revision));
                 Body->TeleportBodyFromAuthority(FTransform(FVector(0,0,Body->GetStandRootHeightCm())),TEXT("GrabJumpDirectSetup"));
-                HelperBody->TeleportBodyFromAuthority(FTransform(FVector(32*Body->GetGeometryScale(),0,HelperBody->GetStandRootHeightCm())),TEXT("GrabJumpFriendSetup"));
+                // The audited authored bodies are separated at 42 cm, leaving arm travel for
+                // the jump animation while still testing a real surface grip (no body overlap).
+                HelperBody->TeleportBodyFromAuthority(FTransform(FVector(0,42,HelperBody->GetStandRootHeightCm())),TEXT("GrabJumpFriendSetup"));
                 Next(11,Now);
 			}
             else if (Stage==9)
@@ -323,6 +326,22 @@ namespace CatLightPropNetwork
             else if (Stage==11)
             {
                 if (Now-StageStarted<1 || !Body->IsGrounded() || !HelperBody->IsGrounded()) return false;
+                ACatCharacter* ClientFriend=nullptr;
+                for (TActorIterator<ACatCharacter> It(Client);It;++It)
+                    if (It->GetPhysicalBodyComponent()->GetBodyId()==HelperBody->GetBodyId()) ClientFriend=*It;
+                const auto* Model=ClientFriend?ClientFriend->FindComponentByClass<UCatModelContactComponent>():nullptr;
+                if (!Model || !Model->HasModelContacts()) return false;
+                auto* Grab=ClientBody->GetGrab();
+                FTransform Facing=ClientCat->GetActorTransform(); Facing.SetRotation(FRotator(0,90,0).Quaternion());
+                const FVector Shoulder=Facing.TransformPosition(ClientCat->GetActorTransform().InverseTransformPosition(Grab->GetShoulderWorldLocation(true)));
+                FVector AimPoint; float Nearest=TNumericLimits<float>::Max();
+                for (UCatModelContactBody* Contact:Model->GetBodies())
+                {
+                    FVector Point; const float Distance=Contact->GetClosestPointOnCollision(Shoulder,Point);
+                    if (Distance>=0 && Distance<Nearest) {Nearest=Distance;AimPoint=Point;}
+                }
+                if (!Test->TestTrue(TEXT("real friend surface remains within the unchanged arm reach"),Nearest<Grab->GetReachLengthCm())) return true;
+                ClientBody->SetViewIntent((AimPoint-Shoulder).Rotation());
                 ClientBody->GetGrab()->SetGrabInput(true,true);
                 Next(12,Now);
             }

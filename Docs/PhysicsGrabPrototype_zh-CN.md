@@ -1,5 +1,31 @@
 # 物理抓握原型使用说明
 
+## 2026-09-10：按最终模型姿态抓握、互推及 CuteCat 空气墙修复
+
+正式猫保留 CMC 胶囊处理地面、墙、台阶和直立移动。`UCatModelContactComponent` 在最终可见骨骼姿态之后更新 PhysicsAsset 查询形状；抓人使用这些形状上的局部接触点，普通猫使用原有 8 个身体，CuteCat 使用修正后的 4 个凸包。猫对猫胶囊扫掠互相忽略，服务器按真实形状重叠计算一次水平接触力，继续使用原 30 N 上限，不按骨骼数量叠加力量。客户端按相同组件名和骨骼重建接触面，GripId、世界厘米单位、伸手长度、抓握 RPC、退出清理不变。无模型的原生测试角色仍走原胶囊/方盒路径；这些是已确认消费者，因此保留该回退，不将其用于正常载入的两种正式猫。
+
+本轮接入曾引入 CuteCat 空气墙：其原物理资产自动生成的四个胶囊半径、长度均为 0.505 骨骼局部厘米，骨骼世界缩放为 200，导致半径达到 101 世界厘米。首次测试仅验证 CuteCat 建体、跟骨骼与跳跃，遗漏实际接触距离；用户截图和隔离尺寸审计确认了这个错误。绿色框来自 UE `HUD.cpp` 的 `GetActorBounds(true)` 再扩张 10%，虽然框是调试显示，过大的形状确实参与了本轮新增互推，不能以关闭显示作为修复。
+
+修复保留骨骼缩放与动画，按 LOD0 主权重顶点及最近已有物理祖先生成四个凸包，替换 `/Game/Characters/CuteCat/Meshes/SK_CuteCat_PhysicsAsset` 中过大的胶囊；骨名、资产路径、约束不变。编辑器入口 `UCatModelContactAuthoringLibrary::RefitCuteCatContacts(false)` 在临时对象预览，`true` 验证后保存，遇到已有脏资产拒绝覆盖。没有加入运行时拟合、模型硬编码缩放补偿或另一套接触力入口。引擎基础形状拟合的 0.5 局部厘米下限不适用于此导入单位；直接凸包 cooking 使用原蒙皮顶点，避免这一限制。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 入口与生命周期 | `Character/CatCharacter::BeginPlay` 初始化 `PhysicalVisual` | 模型原本无抓握表面 | 增加 `Interaction/CatModelContactComponent`；最终姿态后跟骨，退出释放抓握、移除忽略关系 | 可见姿态→模型形状→查询消费者 | 建体、骨骼单独移动、目标销毁 | 两正式 Blueprint 均运行验证；保留模型原有 NoCollision，使用专门查询形状 |
+| 地形及接触力 | `CatCharacterMovementComponent::InitCollisionParams/UpdatePeerPushContacts` | 原胶囊间距驱动互推 | 正式模型形状重叠驱动一次成对水平力；胶囊继续负责地形 | 双方形状就绪后忽略对方胶囊 | 分离不推、碰触才推、站立与跳跃 | 原猫 30 cm 开始接触；CuteCat 62 cm，与渲染网格宽 62.637 cm 相符；CuteCat 72.637 cm 间距不位移 |
+| 抓点、复制及清理 | `CatPhysicsGrabComponent::IsReachSurface`、既有 `TryLatch/GetGripWorldLocation/ReleaseTargetFromAuthority` | 原方盒和手球截取抓点 | 正式猫排除旧代理，接入稳定命名的模型组件；保留原 RPC/GripId | 单一抓握权威先验证再发布；目标退出立即释放 | 真正伸手、保留骨骼局部点、双方回执、焦点退出 | 双模型运行测试通过；正式客户端抓人链已验证，不修改权限或伸手距离 |
+| CuteCat 资产与生成 | `SK_CuteCat` 默认 PhysicsAsset；`CatModelContactAuthoringLibrary::RefitCuteCatContacts` | 原 4 个最小胶囊经 200 倍缩放过大 | 原路径替换为蒙皮凸包，保留 4 个骨骼身份 | 临时拟合→尺寸核对→保存→重新载入验证 | 形状 cooking、实际世界范围 | `SaveContacts.log` 记录 Saved；前后资产与审计位于本轮证据目录 |
+| 姿态与表现 | `CatPhysicsPrototypeVisualComponent::InitializeVisual`、现有 AnimationSource | DedicatedServer 原跳过可见姿态计算 | 权威无渲染端也计算接触所需最终骨骼；IK/动画规则不变 | 姿态先于接触 Tick | 行走、跳跃、抓握骨点 | 原猫/CuteCat 动画联机消费者通过；DedicatedServer 单独运行尚未验证 |
+| 联机测试消费者 | `CatPhysicalCharacterNetworkTests`、`CatLightPropNetworkTests` | 原夹具瞄准旧方盒中心 | 改为侧面站位和实际模型表面，保留真实输入与原结果断言 | 形状就绪后发客户端输入 | 抓握、牵拉、HUD、失焦释放、抓人带起 | 最终报告结果见下；没有放宽物理力或臂长 |
+| 配置、持久化、Cook、其他资产 | 模型默认 PhysicsAsset 引用；库存/Session/UI 均沿原调用链 | 不需要改库存、费用、存档、WBP、地图或 Cook 配置 | 只保存 CuteCat PhysicsAsset；编辑器拟合依赖只在 Editor 模块 | 现有模型资产引用带入打包 | 配置引用、编译、Cook/包内双端日志 | 无新增业务配置/资源扣费；本轮未运行 Cook 和新包验证，二进制外部消费者未穷举，原路径与骨骼接口均保留 |
+
+基线保留用户 Skeleton、鱼配置、CuteCat ABP/材质、GameMode 修改；鱼竿与脚步的并行检查点未合入本次暂存内容。旧胶囊抓推仅在无模型的已确认测试/原型消费者保留；正式猫的旧方盒仍作为身体组件宿主供其他系统读取，但已从模型抓握入口排除，没有删除未确认的 Blueprint 引用。UI/动画/库存和多人钓鱼规则不因碰撞修复改变。
+
+证据根目录：`Saved/Automation/ModelContacts-20260910`。`contract`：主工程 `BuildEditor-Main-Final.log` 成功；本轮 8 个生产源码 SHA256 与 `Saved/Automation/RodPark-20260910/MainGameSourceManifest.json` 的已成功 Game Development 构建一致。资产保存见 `SaveContacts.log`；修复前 `Automation-20260910-181803-126.log` 尺寸审计记录各接触体约 100–147 cm 半尺寸，修复后审计和真实重叠测试记录新范围。`runtime_behavior`：模型抓取与独立骨骼移动、销毁释放、地形跳跃、真实互推均按两种猫验证；最终报告另见下。`presentation_delivery`：已查看最终渲染轮次的 CuteCat 实体抓握截图 `Saved/Validation/ModelContacts-20260910/Saved/Automation/Locomotion/Images/20260910-103239-CuteReachSolidContact.png`；静态截图不能证明正式地图动态手感。重新打开编辑器即可载入保存的资产；新 Cook、Development 包无 `-log` 双端落盘、正式地图真人联机验收未完成，模块不关闭。
+
+Development 默认日志分类为 `LogCatPhysicsGrab`，过滤 `model_contact_ready`、`model_contact_body_rejected`、`model_contact_unavailable`、`model_contact_push`、`physics_reach_surface`、`physics_grip_observed`。前者记录 World/NetMode/Authority/LocalRole、Actor、Mesh/PhysicsAsset/身体数量；接触力日志携带双方 BodyId、穿透厘米和力 N，最多每秒采样一次。新包最终应分别核查 `<打包根目录>/Catfishing/Saved/Logs` 房主/客户端日志，本轮编辑器证据不能替代它。
+
+最终组合证据 `Saved/Automation/ModelContacts-20260910/Report-20260910-184539-830/index.json`（2026-09-10 18:46）：三项 `Catfishing.ModelContacts.Runtime` 全部通过，覆盖两种猫；`FormalClientViewGripForceAndFocusRelease` 通过。`LightProps.FormalRodReleaseAndSharedPull` 未通过：实际双方牵拉和房主/客户端短暂离地成立，但手球与移动抓点前轮最大偏差约 7 cm，最终轮次达到 12.799 cm，超过既有 5 cm 断言；抓胸部跳跃过程中实际臂距 64.699 cm 超过既有 64 cm 释放上限，发生 `ReachLimit`，因此落地后的持续持有断言失败。没有放宽阈值、延长手臂或禁用释放来消除这些失败。这两项是剩余未完成行为，不能把本次已验证的碰撞体积修复视为整个模型交互闭环完成。原固定方盒夹具已切到真实表面，剩余失败必须继续从手部更新时序与骨骼接触点运动分析；正式地图用户验证和新包验收同样保留。
+
 ## 2026-09-10：脚部锁定释放保持连续
 
 CuteCat 移动抽动已复现为锁脚修正被一帧清零：`FCatQuadrupedLocomotion::Apply` 在偏移超过 `MaxPlantDriftCm` 或抬脚阶段退出锁定后，立即从落点返回动画/步幅目标。现每脚保存 `PlantOffsetWorld`，锁定期仍按原支撑物局部落点计算，释放期只衰减残留锁定修正；原动画继续正常推进，不平滑整个脚的世界轨迹。新落点继承未完成的过渡修正，`ClearPlants/Reset`、无地面、跳跃/失效及伸手优先分支清理状态。原8/3/5模型厘米上限、0.12秒混合时间及一次可见缩放不变；不改变关节长度、骨骼缩放、CMC/物理权威、RPC或资产。默认 `LogCatLocomotion::locomotion_pose_sample` 增加世界厘米 `ReleaseOffsetCm`，沿用原限频采样。
