@@ -11,7 +11,6 @@
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystem/Tags/CatFishingAbilityTags.h"
-#include "Collection/CatRunImprintService.h"
 #include "Data/CatFishDefinition.h"
 #include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishPersonalityDefinition.h"
@@ -202,67 +201,6 @@ FCatDomainCommandResult ACatFishingSession::ResolveFightExchangeFromStateTree(co
         TEXT("Event=fishing_legacy_exchange_rejected SessionId=%s Reason=FixedStepOwnsBilling World=%s NetMode=%d Authority=%d LocalRole=%d"),
         *Snapshot.FishingSessionId.ToString(), *GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()));
     return Result;
-}
-
-// 历史失败预算任务的兼容入口；正式树生成器不接入此任务，Equipment 仍拒绝活动会话旁路伤竿。
-FCatFishingFailureResult ACatFishingSession::CommitFailureBudgetFromStateTree(const ECatFishingFailurePenalty Penalty)
-{
-	if (bFailureBudgetCommitted)
-	{
-		// 本会话失败惩罚只能提交一次（丢饵/伤竿互斥）：重放缓存的终态，并显式标记本次不是新提交。
-		FCatFishingFailureResult Replay = FailureBudgetResult;
-		Replay.Command.bCommitted = false;
-		Replay.Command.Error = ECatDomainCommandError::AlreadyResolved;
-		return Replay;
-	}
-	FCatFishingFailureResult Result;
-	Result.Command.RequestId = FGuid::NewGuid();
-	UCatEquipmentComponent* Equipment = CastEquipment.Get();
-	if (!HasAuthority() || !StateTreeComponent || !StateTreeComponent->IsRunning() || !Equipment)
-	{
-		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
-		return Result;
-	}
-	// 保留既有 gate；不能为借竿改调竿主的“当前选择”预算，实际竿磨损只走绑定实例事务。
-	Result = Equipment->CommitFishingFailure(Result.Command.RequestId, Equipment->GetSnapshot().Revision, Penalty);
-	if (Result.Command.bCommitted)
-	{
-		// 只在真正提交成功时才关闭"第二刀"，失败允许调用方在其他条件满足后重试。
-		bFailureBudgetCommitted = true;
-		FailureBudgetResult = Result;
-	}
-	return Result;
-}
-
-// 重试耗尽流程：只接受 authority、运行中且未捕获的会话；把明确合格终态交给 Collection 生成唯一剪影 Grant，成功后终止 StateTree/会话而不创建 FishInstance。
-FCatDomainCommandResult ACatFishingSession::ResolveRetryExhaustedEscapeFromStateTree()
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = Snapshot.FishingSessionId; // 该终局唯一对应本会话，直接用 SessionId 作为事务标识。
-	UCatRunImprintService* ImprintService = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr;
-	if (!HasAuthority() || bCaptureResolved || Snapshot.Phase == ECatFishingPhase::Terminated
-		|| !StateTreeComponent || !StateTreeComponent->IsRunning() || !ImprintService || !FishDefinition)
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		return Result;
-	}
-	// 不生成实物鱼，只登记一条"剪影"图鉴记录，让玩家知道曾经遇到过这条鱼但重试耗尽未能捕获。
-	const FGuid GrantId = ImprintService->RecordRetryExhaustedSilhouette(
-		Snapshot.FishingSessionId, FishDefinition->FishDefinitionId, CatchFisherStableNetId);
-	if (!GrantId.IsValid())
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-		return Result;
-	}
-	// 剪影记录成功后才终止会话，避免归档失败却已经结束会话导致这条鱼彻底遗失。
-	TerminateSession(ECatFishingOutcome::Escaped, TEXT("Retry budget exhausted"));
-	Result.bCommitted = true;
-	Result.Error = ECatDomainCommandError::None;
-	Result.Revision = Snapshot.Revision;
-	UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_silhouette_committed SessionId=%s GrantId=%s Revision=%lld"),
-		*Snapshot.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
-		*GrantId.ToString(EGuidFormats::DigitsWithHyphens), Snapshot.Revision);
-	return Result;
 }
 
 // 仅允许原竿拥有者明确取回控制；物理抓握本身不会调用此入口或转让会话。

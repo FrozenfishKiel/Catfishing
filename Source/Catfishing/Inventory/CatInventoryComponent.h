@@ -265,7 +265,7 @@ public:
 	/** authority 把当前活动区里的 held entry 追加到输出快照；存档导出用它读取库存正在保管的部署型实例。 */
 	void AppendHeldInventoryEntriesFromAuthority(TArray<FCatInventoryEntry>& OutEntries) const;
 
-	/** authority 查询库存活动区是否仍有部署型实例；恢复、维修和失败预算用它判断库存是否处于可写空闲态。 */
+	/** authority 查询库存活动区是否仍有部署型实例；恢复和维修用它判断库存是否处于可写空闲态。 */
 	bool HasActiveHeldInventoryEntriesFromAuthority() const;
 
 	/** 从指定格扣除数量；数量归零时清空格子并在安全时解除实例复制登记。 */

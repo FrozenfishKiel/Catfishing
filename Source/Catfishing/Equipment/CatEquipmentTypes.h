@@ -14,7 +14,7 @@ enum class ECatEquipmentKind : uint8
 	Unknown,
 	/** 有耐久的鱼竿。 */
 	Rod,
-	/** 鱼饵装配类别；普通饵和特殊饵都作为数量型库存物品进入统一库存，特殊标记只影响偏好、表现或额外失败惩罚语义。 */
+	/** 鱼饵装配类别；普通饵和特殊饵都作为数量型库存物品进入统一库存，特殊标记保留鱼饵身份，不产生额外失败惩罚。 */
 	Bait,
 	/** 四种正式玩法路线之一的鱼漂。 */
 	Float,
@@ -42,18 +42,6 @@ enum class ECatEquipmentUseInventoryEffect : uint8
 	HoldInstanceUntilUnUse,
 	/** Use 成功后从同一 ItemInstanceId 的数量栈扣指定份数；调用方必须先完成目标、距离和效果前置裁决。 */
 	ConsumeQuantity
-};
-
-/** 一次钓鱼失败预算允许的唯一惩罚；None 与两个正式结果之外没有第二刀。 */
-UENUM(BlueprintType)
-enum class ECatFishingFailurePenalty : uint8
-{
-	/** 失败发生但本次不提交物资惩罚。 */
-	None,
-	/** 只追加损失一份已选特殊鱼饵；普通饵的基础使用扣减由 Fishing 提交链处理，不进入额外失败惩罚。 */
-	LoseSpecialBait,
-	/** 只降低当前鱼竿耐久；降至零即断竿，不再同时丢饵。 */
-	DamageRod
 };
 
 /** Character 当前钓鱼选择和迁移期库存投影的复制读模型；正式物品实例由 InventoryComponent 承载，旧消费者暂时继续读取这里。 */
@@ -113,25 +101,6 @@ struct FCatEquipmentLoadoutSnapshot
 	/** 一局随身库存的迁移期格子投影；正式物品事实已经同步到 InventoryComponent，旧 UI、存档和钓鱼链路暂时读取这份数组。 */
 	UPROPERTY(BlueprintReadOnly)
 	TArray<FCatRunInventorySlot> InventorySlots;
-};
-
-/** 一次失败预算提交结果；明确记录唯一选择的惩罚。 */
-USTRUCT(BlueprintType)
-struct FCatFishingFailureResult
-{
-	GENERATED_BODY()
-
-	/** 公共幂等终态；Revision 对应 Equipment 聚合。 */
-	UPROPERTY(BlueprintReadOnly)
-	FCatDomainCommandResult Command;
-
-	/** 首次提交的唯一惩罚类别。 */
-	UPROPERTY(BlueprintReadOnly)
-	ECatFishingFailurePenalty Penalty = ECatFishingFailurePenalty::None;
-
-	/** 惩罚后的鱼竿耐久；丢饵时保持原值。 */
-	UPROPERTY(BlueprintReadOnly)
-	double RemainingRodDurability = 0.0;
 };
 
 /** Fishing use reservation 的 Begin 结果；bReserved 表示本次 Fishing 已从随身库存暂存一份鱼饵，直到 Commit 消耗或 Release 归还。 */

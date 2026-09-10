@@ -31,8 +31,6 @@ bool FCatFishingStateTreeNodesDefaultsTest::RunTest(const FString& Parameters)
 	const FCatFishingFightExchangeTaskInstanceData FightData;
 	TestEqual(TEXT("fish stamina cost defaults to zero"), FightData.FishStaminaCost, 0.0);
 	TestEqual(TEXT("participant stamina cost defaults to zero"), FightData.ParticipantStaminaCost, 0.0);
-	const FCatFishingFailureBudgetTaskInstanceData FailureData;
-	TestEqual(TEXT("failure penalty defaults to None"), FailureData.Penalty, ECatFishingFailurePenalty::None);
 	const FCatFishingScheduleWaitingProbeTask ScheduleProbeTask;
 	const FCatFishingOpenTrueBiteWindowTask OpenBiteWindowTask;
 	const FCatFishingResolveTrueBiteSelectionTask LegacyOpenBiteWindowTask;

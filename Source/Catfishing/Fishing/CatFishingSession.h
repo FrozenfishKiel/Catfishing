@@ -89,12 +89,6 @@ public:
 	/** 旧反射StateTree节点兼容拒绝口；费用只由Runner固定步提交。 */
 	FCatDomainCommandResult ResolveFightExchangeFromStateTree(double FishStaminaCost, double ParticipantStaminaCost);
 
-	/** StateTree 失败节点提交本会话唯一物资惩罚；丢特殊饵与伤竿互斥且同会话只允许一次。 */
-	FCatFishingFailureResult CommitFailureBudgetFromStateTree(ECatFishingFailurePenalty Penalty);
-
-	/** StateTree 在唯一已裁的“重试耗尽”逃鱼终态调用；Collection 生成剪影 Grant 后终止会话且不创建实物鱼。 */
-	FCatDomainCommandResult ResolveRetryExhaustedEscapeFromStateTree();
-
 	/** 鱼上钩后可无视鱼的剩余体力抄取；服务器范围校验成功即生成世界鱼并直接进入抄手嘴叼状态。 */
 	FCatScoopResult RequestScoop(AController* ScoopingController, const FCatScoopCommand& Command);
 
@@ -250,9 +244,6 @@ private:
 	/** 鱼是否已从水中 Encounter 交接为世界鱼；true 后所有新抢抄返回 AlreadyResolved。 */
 	bool bCaptureResolved = false;
 
-	/** 本会话失败预算是否已经提交；true 后任何第二种惩罚都返回 AlreadyResolved。 */
-	bool bFailureBudgetCommitted = false;
-
 	/** HookedFight 首次进入时的幂等 stamina 初始化事实；重复阶段事件不能补满已消耗体力。 */
 	bool bFightStaminaInitialized = false;
 
@@ -261,8 +252,6 @@ private:
 	/** 最后一次主动放下鱼竿的钓手；只用于允许其在地面姿态就近切线，不复制、不接管当前输入。 */
 	TWeakObjectPtr<APlayerState> LastSuspendedFisherPlayerState;
 
-	/** 本会话唯一失败预算终态；重放不再次扣特殊饵或鱼竿耐久。 */
-	FCatFishingFailureResult FailureBudgetResult;
 	FCatFishingAttemptSnapshot AttemptSnapshot;
 	FCatFishSelectionContext FrozenSelectionContext;
 	FCatFishSelectionResult FrozenSelectionResult;

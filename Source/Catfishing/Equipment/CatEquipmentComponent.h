@@ -100,10 +100,6 @@ public:
 	/** 正式库存提交后刷新旧随身库存投影；钓鱼选择、存档和旧消费者靠它追上 InventoryComponent 的格位事实，返回 false 表示投影未能完整重建。 */
 	bool RefreshInventoryProjectionFromInventoryComponentFromAuthority();
 
-	/** 提交一次钓鱼失败预算；特殊饵和伤竿优先写正式库存事实，一个 RequestId 只能选择一种惩罚且绝不双罚。 */
-	FCatFishingFailureResult CommitFishingFailure(FGuid RequestId, int64 ExpectedRevision,
-		ECatFishingFailurePenalty Penalty);
-
 	/** 本组件按 SessionId 从正式库存预留自己的饵并冻结漂；RodEquipment 提供部署竿及其版本，借竿时保持两宿主独立。 */
 	FCatFishingUseReservationResult BeginFishingUse(FGuid FishingSessionId, FGuid RodItemInstanceId,
 		FGuid BaitItemInstanceId, FGuid FloatItemInstanceId, FName RodDefinitionId,
@@ -118,7 +114,7 @@ public:
 	bool GetFishingRodDurability(FGuid FishingSessionId, double& OutDurability, bool& OutBroken) const;
 	/** 结束 Fishing 使用记录；未消耗的暂存饵会回到随身库存，已消耗的记录只关闭自身。 */
 	FCatFishingUseOperationResult ReleaseFishingUse(FGuid FishingSessionId);
-	/** 当前是否有仍未结束的 Fishing 使用记录；维修和失败预算用它避开进行中的钓鱼结算。 */
+	/** 当前是否有仍未结束的 Fishing 使用记录；维修用它避开进行中的钓鱼结算。 */
 	bool HasActiveFishingUse() const;
 	/** 指定 Fishing 会话是否仍处于活动状态；Commit/Release 用它防止旧会话重复改写。 */
 	bool IsFishingUseActive(FGuid FishingSessionId) const;
@@ -197,7 +193,7 @@ private:
 	/** Begin 冻结鱼竿的正式实例解析；正式库存存在时，耐久读写必须落到可见格或 held entry 里的同一 UObject。 */
 	UCatEquipmentInventoryItemInstance* ResolveFishingRodFormalInstanceFromInventory(
 		const FCatFishingUseRecord& Record, FCatRunInventorySlot& OutProjectedSlot) const;
-	/** 是否存在正式库存活动区尚未收口的物品 Use；维修和失败预算用它避免改写正在由场景持有的物品状态。 */
+	/** 是否存在正式库存活动区尚未收口的物品 Use；维修用它避免改写正在由场景持有的物品状态。 */
 	bool HasActiveInventoryItemUse() const;
 	/** 新入库或收回物品后修正钓鱼选择；已收回的坏竿可跨型号替换为库存里的可用竿，部署中与健康选择保持不变。 */
 	void AutoSelectGrantedInventoryItem(const UCatEquipmentDefinition& Definition, FName DefinitionId);
@@ -283,8 +279,6 @@ private:
 	/** 库存命令载荷签名；普通入库和 Use/UnUse 共用它防止同一 RequestId 被换定义、数量或实例后再次利用。 */
 	TMap<FString, FString> TerminalPayloadByKey;
 
-	/** 失败预算命令首次完整终态缓存；重放不会再次扣饵或耐久。 */
-	TMap<FGuid, FCatFishingFailureResult> FailureTerminalCache;
 
 	/** 当前 Character 生命周期内按 SessionId 隔离的 fishing reservation/tombstone；不复制也不持久化。 */
 	TMap<FGuid, FCatFishingUseRecord> FishingUseRecords;

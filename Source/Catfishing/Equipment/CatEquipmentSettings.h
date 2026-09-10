@@ -7,7 +7,7 @@
 
 class UCatEquipmentDefinition;
 
-/** 装备目录与失败预算调参；默认空目录/零损耗使装备命令 fail-closed。 */
+/** 装备目录、库存兼容配置与维修设置；默认空目录使装备命令 fail-closed。 */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "Catfishing Equipment"))
 class CATFISHING_API UCatEquipmentSettings : public UDeveloperSettings
 {
@@ -32,10 +32,6 @@ public:
 	/** 迁移期数量型物品堆叠兼容覆盖；正式默认值在 UCatInventorySettings，0 仍表示同类数量物尽量堆进一个格。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Inventory", meta = (ClampMin = "0"))
 	int32 InventoryQuantityStackCapacity = 5;
-
-	/** 一次 DamageRod 失败预算扣除的耐久；0 表示公式/数值未裁。 */
-	UPROPERTY(Config, EditAnywhere, Category = "FailureBudget", meta = (ClampMin = "0.0"))
-	double RodFailureDurabilityLoss = 0.0;
 
 	/** 修竿点消费的浮木定义 ID；None 表示维修链未配置。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Repair")

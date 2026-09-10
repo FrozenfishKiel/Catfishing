@@ -66,47 +66,6 @@ EStateTreeRunStatus FCatFishingFightExchangeTask::EnterState(FStateTreeExecution
 		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
 }
 
-// 失败预算 Task 构造流程：关闭 Tick 与属性复制；同一状态不会轮询或重复执行惩罚。
-FCatFishingFailureBudgetTask::FCatFishingFailureBudgetTask()
-{
-	bShouldCallTick = false;
-	bShouldCopyBoundPropertiesOnTick = false;
-	bShouldCopyBoundPropertiesOnExitState = false;
-}
-
-// 失败预算 Task 进入流程：定位 Session 并提交资产选择的唯一惩罚；Equipment/策略拒绝时返回 Failed，资产可转向无惩罚终止而非 C++ 备用边。
-EStateTreeRunStatus FCatFishingFailureBudgetTask::EnterState(FStateTreeExecutionContext& Context,
-	const FStateTreeTransitionResult& Transition) const
-{
-	(void)Transition;
-	ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
-	if (!Session)
-	{
-		return EStateTreeRunStatus::Failed;
-	}
-	const FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
-	return Session->CommitFailureBudgetFromStateTree(InstanceData.Penalty).Command.bCommitted
-		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
-}
-
-// 重试耗尽 Task 构造流程：关闭 Tick 与属性复制；该终态不等待输入，也不保存第二份重试计数。
-FCatFishingResolveRetryExhaustedTask::FCatFishingResolveRetryExhaustedTask()
-{
-	bShouldCallTick = false;
-	bShouldCopyBoundPropertiesOnTick = false;
-	bShouldCopyBoundPropertiesOnExitState = false;
-}
-
-// 重试耗尽 Task 进入流程：从 Context Owner 取得 Session 并提交唯一已裁逃鱼资格；成功表示剪影 Grant 已建立且会话已终止。
-EStateTreeRunStatus FCatFishingResolveRetryExhaustedTask::EnterState(FStateTreeExecutionContext& Context,
-	const FStateTreeTransitionResult& Transition) const
-{
-	(void)Transition;
-	ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
-	return Session && Session->ResolveRetryExhaustedEscapeFromStateTree().bCommitted
-		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
-}
-
 FCatFishingScheduleWaitingProbeTask::FCatFishingScheduleWaitingProbeTask()
 {
 	bShouldCallTick = false;
