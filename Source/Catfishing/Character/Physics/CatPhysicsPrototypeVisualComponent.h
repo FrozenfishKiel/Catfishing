@@ -2,6 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Character/Animation/CatQuadrupedLocomotion.h"
 #include "CatPhysicsPrototypeVisualComponent.generated.h"
 
 class UAnimSequence;
@@ -31,6 +32,10 @@ public:
 	UPoseableMeshComponent* GetVisualMesh() const { return VisualMesh; }
 	USkeletalMeshComponent* GetAnimationSource() const { return AnimationSource; }
 	FVector GetVisualHandWorldLocation(bool bLeftHand) const;
+	const FCatQuadrupedLocomotionObservation& GetLocomotionObservation() const { return Locomotion.GetObservation(); }
+
+	UPROPERTY(EditAnywhere, Category="Catfishing|Locomotion")
+	FCatQuadrupedLocomotionSettings LocomotionSettings;
 
 protected:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType,
@@ -81,6 +86,7 @@ private:
 	TWeakObjectPtr<UPrimitiveComponent> RightHand;
 
 	TArray<FTransform> ComponentPose;
+	FCatQuadrupedLocomotion Locomotion;
 	TArray<FTransform> TransitionFromPose;
 	TArray<FTransform> LastBasePose;
 	EAnimationState AnimationState = EAnimationState::Idle;

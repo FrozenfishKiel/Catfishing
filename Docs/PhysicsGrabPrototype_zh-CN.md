@@ -1,5 +1,36 @@
 # 物理抓握原型使用说明
 
+## 2026-09-10：四足落脚 IK 与步幅匹配
+
+正式 `BP_CatCharacter` 和原型 Pawn 共用 `UCatPhysicsPrototypeVisualComponent` 的最终姿势通道：原动画 → 四足步幅/地面求解 → 抓握前爪 CCD。`FCatQuadrupedLocomotion` 只读物理身体、动画及场景碰撞，修改可见 PoseableMesh 的腿部旋转和有限骨盆偏移。身体、手球、碰撞、受力、费用与网络裁决仍由原有物理/抓握系统负责。
+
+当前 Cat 骨架的 LF/RF/LB/RB 四条腿各有三段骨骼，使用从原姿势开始的 FABRIK 保持骨长。运行时读取压缩动画中支撑脚后移的轨迹，标定 Stand/Walk/Run 三个现有原地素材；按实际混合权重、素材时间推进量和可见模型缩放计算参考速度。步幅比例为相对支撑面的身体速度除以参考速度，默认限制在 0.6–1.6。原型的私有 Walk 播放器也使用该标定速度，移除原先固定 100 cm/s 的参考值；正式 ABP、Montage、动画通知和跳跃根骨补偿保持原通道。
+
+每只脚独立探测地面并调整脚底朝向；支撑阶段保存支撑组件/骨骼的局部落脚点，抬脚、支撑变化或超距时解除。地面姿势不会把脚强行锁在无法到达的位置。前爪伸出时让出该脚控制，随后由现有抓握求解器处理；离地、身体不可行走、翻倒、非步行动作和明显滑动时淡出。复位或大幅位置变化清理历史足点。水平移动平台的速度另行采样，不把平台位移算进自主步幅。
+
+组件的 `Catfishing|Locomotion / LocomotionSettings` 可配置开关、步幅范围及偏移界限。`MaxFootOffsetCm=8`、`MaxPelvisOffsetCm=3`、`MaxPlantDriftCm=5` 均为**未缩放的模型厘米**，运行时乘可见模型缩放一次；`BlendSeconds=0.12` 为秒。关闭 `bEnabled` 淡出落脚及步幅姿势修正，原型的素材速度标定仍保留。超出腿长、步幅范围或地形修正范围时允许残余误差，不拉长骨骼或移动真实身体。当前只支持已审计的 Cat 骨链和上述三个原地素材；其他动作保留原动画。
+
+本次接入基线为物理检查点 `6b04247` 和独立旧预算清理检查点 `6358679`。此前在 `Saved/Validation/LocomotionIK-20260910` 已完成不含 IK 的 Editor 构建；用户 `Cat_Skeleton.uasset` 修改保留，不保存任何动画/Blueprint/骨架资产。下表是本轮执行与审查材料，后续模块状态仍归需求对齐差距清单。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 最终动画消费者 | `Source/Catfishing/Character/Physics/CatPhysicsPrototypeVisualComponent::RefreshVisualPose`；正式 `ACatCharacter::BeginPlay` 与原型 `BeginPlay` 调用 `InitializeVisual` | 原动画复制后只做抓握 CCD；新增四足地面及步幅修正，保留原源姿势/根骨补偿 | 新 `Character/Animation/CatQuadrupedLocomotion::Apply` 接于 ReachAlpha 更新后、手 CCD 前；原 ABP 不变 | 动画和 PostPhysics 已完成后求解，抓握最后处理 | 正式 BP 实例、原型实例、骨长/根骨/动画源不变及双端消费者测试 | `FormalBlueprintKeepsAnimationAndPhysicsAuthority`、原型滑动测试及正式双端测试通过；见下方最终报告 |
+| 速度与步幅 | Visual `UpdateBaseAnimation` 原 `WalkReferenceSpeed=100`；正式 ABP 引用 `/Game/Animalia/Cat/WalkToRun` 的 Stand_00-IP、Loco_Walk-IP、Loco_Run-IP | 旧值未按素材标定；新值区分模型 cm/s、世界 cm/s、播放倍率，三者只换算一次 | `GetReferenceSpeedMeshCmS` 标定原型播放率；`ReadAnimation` 读取正式真实混合/播放速度；`Apply` 调整步幅 | 先校准素材，再匹配剩余速度差，不改变正式 Montage 或动画推进 | 多速度实测原动画与修正后支撑脚位移；实际 ABP 图检查 | 固定参考常量已删除；Walk 标定 32.655 模型 cm/s。原型三档支撑脚滑动减少约 69%–79%，正式三档约 64%–98%；这些是连续落脚样本的比较，不是全动画零滑动承诺 |
+| 地面、脚底和骨盆 | 新 `Apply/SolveFoot`，消费身体 `GetCollisionObjectType/GetCollisionResponseToChannels` 对应命中及 Cat LF/RF/LB/RB 骨链；与并行交互碰撞修复的物理支撑查询一致 | 原脚掌可能穿地/悬空；新增限距落脚、坡面脚底朝向、有限骨盆偏移；Visibility-only 交互盒不能成为脚下支撑 | 可见骨骼旋转及 RigPelvis 局部平移；RigRoot/Actor 不写 | 支撑局部点随支撑移动，超距或抬脚解除，再保长求解；不以交互射线代替身体碰撞约定 | 台阶、坡面、移动支撑、交互盒穿过；物理位姿/速度与动画源不变 | `TerrainPosePreservesPhysicsAndBoneLengths` 通过：3 cm 台阶抬脚 3.016 cm，支撑上移 1 cm 时脚随动 1.002 cm；12°坡面脚底朝向、交互射线仍可命中但不抬脚、骨长及物理状态不变均通过 |
+| 权威、复制与退出 | 只读 `UCatPhysicalBodyComponent` 的速度、输入、支撑、可行走状态、ResetEpoch；手 ReachAlpha 来自已有 Grab | 不添加第二份运动状态或 RPC；身体控制失效时必须让出姿势控制 | `Apply` 淡出/清理，Visual `DestroyVisualComponents` 调用 `Reset` | 先消费物理快照；抓握后解；销毁清理弱引用及足点 | 实际跳跃/复位/抓握、身体禁用、Listen/Client 与原物理回归 | `GrabJumpResetAndDisableReleaseFootControl` 与原有抓握/跳跃/翻身/静态支撑回归通过；服务器继续模拟、客户端只读快照；未增加 RPC 或物理写入口 |
+| 配置、资产及持久化 | Visual 原生 `LocomotionSettings`；正式 `/Game/Character/BP_CatCharacter` → `/Game/Animalia/Cat/ABP_Cat` → WalkToRun | 新参数默认开启，单位见上文；无新资产保存、Cook 入口或复制字段 | 保留现有骨架/动画/Blueprint 与加载引用；审计图节点确认地面 IK 唯一负责方 | 不删除二进制资产或兼容入口；资产审计先于最终验收 | 骨架 hash、ABP 实际图、正式运行类、Game 构建 | 实际 ABP 节点及三个 BlendSpace 素材审计通过，没有另一套地面/步幅求解节点；Editor/Game 构建通过，用户骨架 hash 不变。UI/WBP、存档、资源扣费不涉及；无旧兼容入口需要删除 |
+| 诊断及验证入口 | 新 `LogCatLocomotion`；既有 `Build/Automation/verify_physics_grab_prototype.ps1`；新 Runtime/Editor `Character/Animation/Tests` | 需要 Development 默认日志解释何时修正/退出、真实步幅及足端误差 | `locomotion_clip_calibrated`、`locomotion_pose_sample`、设置/骨架拒绝事件；正常采样至多每秒，状态切换即时 | 日志按 BodyId、World、NetMode、Authority、LocalRole 对照两端，不建立玩法状态 | `Catfishing.Locomotion` 专项，定向旧手/跳跃/物理回归；真实客户端截图 | 26 项组合回归全部通过（23 clean、3 带原 ABP 启动 warning）；另两项正式网络渲染通过，已检查站立/行走画面。完整层级边界见下文 |
+
+验证入口：`Build/Automation/verify_physics_grab_prototype.ps1 -Mode BuildEditor -RunName LocomotionIK-20260910`，随后 `-Mode Automation -RunName LocomotionIK-20260910 -Filter Catfishing.Locomotion`。加 `-Render -Filter Catfishing.Locomotion.Network` 获取正式客户端画面。试玩当前已编译原型可执行 `Scripts/launch_physics_grab_prototype.ps1 -RunName LocomotionIK-20260910`；正式工程已写入源码，但当前打开的旧编辑器需要重新编译并重启后加载。
+
+最终 `contract`：`Saved/Automation/LocomotionIK-20260910/BuildEditorFreshPose.log`、`BuildGameFinal.log` 均成功；七个交付源码与冻结副本的 SHA256 记录在 `IKSourceManifest.json`。增量验证期间一次手工复制保留了早于旧 obj 的时间戳，导致执行旧地面筛选，已明确刷新副本时间并重编求解器；以之后报告为准，不能使用早期失败报告宣称该过滤已生效。标准验证脚本已有内容变化刷新时间戳保护，本轮未改该脚本。
+
+最终 `runtime_behavior`：同目录 `Report-20260910-111703-781/index.json` 为 26/26 通过、0 failed、0 notRun；六项 `Catfishing.Locomotion` 专项全部通过。正式 100/200/300 cm/s 请求档实际速度约 93.77/187.57/281.93 cm/s，原型 25/60/100 档约 22.73/54.58/91.24 cm/s，未为了凑目标速度修改物理驱动。连续落脚样本中，正式客户端滑动总距离由 224.583 cm 降至 71.661 cm；累计值来自多脚/多帧比较。真实日志 `Automation-20260910-111703-781.log` 按 `LogCatLocomotion` 和 `BodyId` 对照房主/客户端。3 项 warning 来自原有 `ABP_Cat` 启动除零，前置物理验证日志 `Saved/Automation/PhysicalGrabIntegration-20260909/Automation-MainFormalJumpRender-20260909-174257.log` 也有此项；未在本轮修改该二进制动画蓝图。
+
+`presentation_delivery`：`Report-20260910-112126-962/index.json` 的正式步幅与原正式跳跃两项真实网络渲染均通过（均带上述原 ABP warning），日志为 `Automation-20260910-112126-962.log`。已检查 `Saved/Validation/LocomotionIK-20260910/Saved/Automation/Locomotion/Images/20260910-032146-FormalStandingIK.png` 与 `20260910-032148-FormalWalkingIK.png`。尚未完成正式地图真人多人手感、长时间低帧率/高延迟观察、新 Cook/打包及打包双端不加 `-log` 的默认落盘验收；这次局部交付不关闭 Character/Growth/Condition 或 Delivery 模块。并行轻道具玩法不在本轮冻结副本内，其新增支撑忽略策略由该物理任务后续同时接入身体与 IK 两处查询。
+
+## 物理原型说明
+
 这是独立的身体与抓握试验场，使用当前猫模型、动画和程序前爪姿势验证刚体接触、双向传力、固定支点承重与释放。2026-09-09 起，身体驱动已抽到 `UCatPhysicalBodyComponent`，由原型 Pawn 和正式 `ACatCharacter` 共享；正式抓握合作接入范围与当前验证结果见 [钓鱼架构](FishingArchitecture_zh-CN.md)。下文早期检查点中的“正式路径不变”只描述当时的原型隔离范围。
 
 ## 入口
@@ -65,7 +96,7 @@ pwsh -File Build/Automation/verify_physics_grab_prototype.ps1 -Mode BuildGame
 
 测试分层：类型与骨长约束属于 `contract`；真实 World/Chaos 与 Listen 客户端 RPC 测试属于 `runtime_behavior`；渲染截图与实际操作属于原型的可视验证，不等于正式模型、正式动画或打包联机的 `presentation_delivery` 完成。实际结果与持续缺口归入 `Docs/Development/需求对齐差距清单.md`。
 
-## 本轮影响与交接
+## 原型创建时的影响与交接（历史检查点）
 
 修改前已在对话完成职责盘点。正式编辑器的既有 PIE 使用原 DLL，本轮构建使用隔离输出。实施期间观察到 `Cat_Skeleton.uasset`、`Config/DefaultGame.ini` 和 Fishing 源码/测试的并行修改，本轮没有纳入这些变更；交付时钓鱼变更已由其他任务提交，骨架修改仍保留。首次专项测试尚未运行；实现后的首轮夹具失败保留在报告中，不能当成既有游戏缺陷。
 

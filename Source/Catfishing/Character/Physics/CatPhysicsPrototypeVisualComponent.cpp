@@ -17,7 +17,6 @@ namespace CatPhysicsPrototypeVisual
 {
 	const FName LeftBones[] = { TEXT("RigLFLeg1"), TEXT("RigLFLeg2"), TEXT("RigLFLeg3"), TEXT("RigLFLegAnkle") };
 	const FName RightBones[] = { TEXT("RigRFLeg1"), TEXT("RigRFLeg2"), TEXT("RigRFLeg3"), TEXT("RigRFLegAnkle") };
-	constexpr float WalkReferenceSpeed = 100.0f;
 	constexpr float ReachBlendSpeed = 8.0f;
 	constexpr int32 SolverIterations = 12;
 	constexpr double ReachToleranceCentimeters = 0.15;
@@ -241,6 +240,8 @@ void UCatPhysicsPrototypeVisualComponent::RefreshVisualPose(const float DeltaTim
 		SafeDelta, CatPhysicsPrototypeVisual::ReachBlendSpeed);
 	RightReachAlpha = FMath::FInterpConstantTo(RightReachAlpha, bRightActive ? 1.0f : 0.0f,
 		SafeDelta, CatPhysicsPrototypeVisual::ReachBlendSpeed);
+	Locomotion.Apply(AnimationSource, VisualMesh, GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>(),
+		LeftReachAlpha, RightReachAlpha, DeltaTime, LocomotionSettings);
 	RebuildComponentPose();
 	SolveHandReach(true, LeftHand->GetComponentLocation(), LeftReachAlpha);
 	SolveHandReach(false, RightHand->GetComponentLocation(), RightReachAlpha);
@@ -314,8 +315,10 @@ void UCatPhysicsPrototypeVisualComponent::UpdateBaseAnimation(const float DeltaT
 	if (bGrounded) TakeoffConfirmationSeconds = 0.0f;
 	bWasGrounded = bGrounded;
 	bHasMovementSample = true;
-	const float PlayRate = AnimationState == EAnimationState::Walk
-		? FMath::Clamp(Speed / CatPhysicsPrototypeVisual::WalkReferenceSpeed, 0.3f, 2.0f) : 1.0f;
+	const double ReferenceSpeedCmS = Locomotion.GetReferenceSpeedMeshCmS(WalkAnimation, CharacterMesh)
+		* AnimationSource->GetComponentScale().GetAbsMax();
+	const float PlayRate = AnimationState == EAnimationState::Walk && ReferenceSpeedCmS > 1.0
+		? FMath::Clamp(Speed / ReferenceSpeedCmS, 0.3, 3.5) : 1.0f;
 	AnimationSource->SetPlayRate(PlayRate);
 }
 
@@ -426,6 +429,7 @@ void UCatPhysicsPrototypeVisualComponent::LogReachLimitChange(const bool bLeftHa
 
 void UCatPhysicsPrototypeVisualComponent::DestroyVisualComponents()
 {
+	Locomotion.Reset();
 	SetComponentTickEnabled(false);
 	for (UActorComponent* Component : { static_cast<UActorComponent*>(VisualMesh.Get()),
 		static_cast<UActorComponent*>(AnimationSource.Get()) })
