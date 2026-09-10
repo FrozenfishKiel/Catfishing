@@ -85,6 +85,8 @@ private:
 	UFUNCTION() void OnRep_GripState();
 	void ApplyGrabInput(bool bLeft, bool bHeld);
 	void UpdateHand(bool bLeft, const FVector& Aim);
+	bool IsReachSurface(const UPrimitiveComponent* Target, FName Bone, bool bLeft) const;
+	bool TraceReachSurface(bool bLeft, const FVector& Start, const FVector& End, FHitResult& Hit);
 	bool UsesCharacterMovement() const;
 	void ClearTraction(bool bLeft);
 	void ApplyTraction(bool bLeft);
@@ -107,6 +109,9 @@ private:
 	TWeakObjectPtr<UCatPhysicalBodyComponent> TractionReceiver[2];
 	FVector LastTractionForce[2] = {FVector::ZeroVector, FVector::ZeroVector};
 	double NextTractionLogSeconds[2] = {0,0};
+	TWeakObjectPtr<UPrimitiveComponent> ObservedReachSurface[2];
+	int32 ObservedIgnoredReachVolumes[2] = {-1,-1};
+	double NextReachLogSeconds[2] = {0,0};
 	double GeometryScale = 1.0;
 	bool bLatchedUntilRelease[2] = {false, false};
 };

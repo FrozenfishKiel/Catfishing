@@ -8,6 +8,7 @@
 #include "Components/PrimitiveComponent.h"
 #include "Components/SphereComponent.h"
 #include "Components/BoxComponent.h"
+#include "Components/CapsuleComponent.h"
 #include "Engine/World.h"
 #include "Net/UnrealNetwork.h"
 #include "PhysicsEngine/PhysicsConstraintComponent.h"
@@ -165,6 +166,59 @@ double UCatPhysicsGrabComponent::GetReachLengthCm() const
 	return ReachLengthCm * GeometryScale * (Body ? Body->GetComponentScale().GetAbsMax() : 1.0);
 }
 
+bool UCatPhysicsGrabComponent::IsReachSurface(const UPrimitiveComponent* Target, const FName Bone, const bool bLeft) const
+{
+	const int32 Index = bLeft ? 0 : 1;
+	if (!IsValid(Target) || !IsValid(Target->GetOwner()) || Target->GetOwner() == GetOwner()
+		|| !Hands.IsValidIndex(Index) || !Hands[Index] || !Target->GetBodyInstance(Bone)
+		|| Target->GetCollisionResponseToChannel(Hands[Index]->GetCollisionObjectType()) != ECR_Block) return false;
+	const auto Collision = Target->GetCollisionEnabled();
+	if (Collision == ECollisionEnabled::QueryAndPhysics || Collision == ECollisionEnabled::PhysicsOnly) return true;
+	if (Collision != ECollisionEnabled::QueryOnly) return false;
+	// Remote body proxies and a CMC capsule are real contact surfaces despite being query-only.
+	// Do not grant the exception to unrelated interaction components on the same character.
+	const auto* Physical = Target->GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();
+	if (!Physical) return false;
+	const auto* Character = Cast<ACharacter>(Target->GetOwner());
+	return Target == Physical->GetBody() || Target == Physical->GetHand(true) || Target == Physical->GetHand(false)
+		|| (Physical->UsesCharacterMovement() && Character && Target == Character->GetCapsuleComponent());
+}
+
+bool UCatPhysicsGrabComponent::TraceReachSurface(const bool bLeft, const FVector& Start, const FVector& End, FHitResult& Hit)
+{
+	const int32 Index = bLeft ? 0 : 1;
+	if (!Hands.IsValidIndex(Index) || !Hands[Index] || !GetWorld()) return false;
+	TArray<FHitResult> Hits;
+	const FCollisionQueryParams Params(SCENE_QUERY_STAT(CatPhysicsGrabReach), false, GetOwner());
+	// Object sweeps return surfaces behind a blocking query volume, too. Filtering only a
+	// Visibility single-hit result would still let that volume hide the real contact.
+	GetWorld()->SweepMultiByObjectType(Hits, Start, End, FQuat::Identity, FCollisionObjectQueryParams::AllObjects,
+		FCollisionShape::MakeSphere(Hands[Index]->GetScaledSphereRadius()), Params);
+	bool bFound = false;
+	int32 IgnoredVolumes = 0;
+	for (const FHitResult& Candidate : Hits)
+	{
+		if (!IsReachSurface(Candidate.GetComponent(), Candidate.BoneName, bLeft)) { ++IgnoredVolumes; continue; }
+		if (!bFound || Candidate.Time < Hit.Time) { Hit = Candidate; bFound = true; }
+	}
+	UPrimitiveComponent* Surface = bFound ? Hit.GetComponent() : nullptr;
+	const double Now = GetWorld()->GetTimeSeconds();
+	if (Now >= NextReachLogSeconds[Index] && (ObservedIgnoredReachVolumes[Index] != IgnoredVolumes || ObservedReachSurface[Index].Get() != Surface))
+	{
+		NextReachLogSeconds[Index] = Now + 0.25;
+		ObservedIgnoredReachVolumes[Index] = IgnoredVolumes;
+		ObservedReachSurface[Index] = Surface;
+		const auto* Physical = GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();
+		UE_LOG(LogCatPhysicsGrab, Log,
+			TEXT("Event=physics_reach_surface World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s BodyId=%s Hand=%s GripId=%s SurfaceActor=%s Component=%s IgnoredVolumes=%d HandChannel=%d Result=%s"),
+			*GetNameSafe(GetWorld()), int32(GetOwner()->GetNetMode()), GetOwner()->HasAuthority(), int32(GetOwner()->GetLocalRole()),
+			*GetNameSafe(GetOwner()), Physical ? *Physical->GetBodyId().ToString() : TEXT("None"), bLeft ? TEXT("Left") : TEXT("Right"),
+			*GetGripState(bLeft).GripId.ToString(), *GetNameSafe(Surface ? Surface->GetOwner() : nullptr), *GetNameSafe(Surface),
+			IgnoredVolumes, int32(Hands[Index]->GetCollisionObjectType()), bFound ? TEXT("SolidSurface") : TEXT("Clear"));
+	}
+	return bFound;
+}
+
 void UCatPhysicsGrabComponent::UpdateHand(const bool bLeft, const FVector& Aim)
 {
 	const int32 Index = bLeft ? 0 : 1;
@@ -205,9 +259,7 @@ void UCatPhysicsGrabComponent::UpdateHand(const bool bLeft, const FVector& Aim)
 		Desired = Shoulder + Aim.GetSafeNormal() * DriveDistanceCm;
 		if (!State.bGripped && !bLatchedUntilRelease[Index])
 		{
-			FCollisionQueryParams Params(SCENE_QUERY_STAT(CatPhysicsGrabReach), false, GetOwner());
-			bHit = GetWorld()->SweepSingleByChannel(Candidate, Shoulder, Desired, FQuat::Identity,
-				ECC_Visibility, FCollisionShape::MakeSphere(Hand->GetScaledSphereRadius()), Params);
+			bHit = TraceReachSurface(bLeft, Shoulder, Desired, Candidate);
 			if (bHit) Desired = Candidate.Location;
 		}
 	}
@@ -248,12 +300,7 @@ void UCatPhysicsGrabComponent::UpdateHand(const bool bLeft, const FVector& Aim)
 void UCatPhysicsGrabComponent::TryLatch(const bool bLeft, const FHitResult& Hit)
 {
 	UPrimitiveComponent* Target = Hit.GetComponent();
-	if (!IsValid(Target) || !IsValid(Hit.GetActor()) || Hit.GetActor() == GetOwner()
-		|| !Target->GetBodyInstance(Hit.BoneName)) return;
-	const ECollisionEnabled::Type Collision = Target->GetCollisionEnabled();
-	const auto* TargetBody = Target->GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();
-	if (Collision != ECollisionEnabled::QueryAndPhysics && Collision != ECollisionEnabled::PhysicsOnly
-		&& !(TargetBody && TargetBody->UsesCharacterMovement() && Collision == ECollisionEnabled::QueryOnly)) return;
+	if (!IsReachSurface(Target, Hit.BoneName, bLeft)) return;
 	const UCatPhysicalBodyComponent* PhysicalBody = GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();
 	if (PhysicalBody && !PhysicalBody->IsLocomotionEnabled()) return;
 	const int32 Index = bLeft ? 0 : 1;
@@ -592,9 +639,7 @@ void UCatPhysicsGrabComponent::RefreshKinematicHands()
 			const FVector Shoulder = GetShoulderWorldLocation(bLeft);
 			Point = Shoulder + Physical->GetViewIntent().Vector() * GetReachLengthCm();
 			FHitResult Hit;
-			FCollisionQueryParams Params(SCENE_QUERY_STAT(CatCMCHandPose), false, GetOwner());
-			if (GetWorld()->SweepSingleByChannel(Hit, Shoulder, Point, FQuat::Identity, ECC_Visibility,
-				FCollisionShape::MakeSphere(Hands[bLeft?0:1]->GetScaledSphereRadius()), Params)) Point = Hit.Location;
+			if (TraceReachSurface(bLeft, Shoulder, Point, Hit)) Point = Hit.Location;
 		}
 		Hands[bLeft?0:1]->SetWorldLocation(Point, false, nullptr, ETeleportType::TeleportPhysics);
 	}

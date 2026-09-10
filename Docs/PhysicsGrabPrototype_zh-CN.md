@@ -1,5 +1,15 @@
 # 物理抓握原型使用说明
 
+## 2026-09-10：伸手穿过交互范围、接触实体表面
+
+基线 `62db64a`：`CatPhysicsGrabComponent::UpdateHand` 与 CMC 的 `RefreshKinematicHands` 都使用 Visibility 单次扫掠，商人/容器的 QueryOnly 交互范围先截短手部目标；随后 `TryLatch` 即使拒绝该范围，也无法找回后面的实体。现两处统一调用 `TraceReachSurface`：对象扫掠后由 `IsReachSurface` 选择最近的有效实体，跳过 UI 范围，并允许接触不阻挡 Visibility 的物理表面。最终抓握使用同一校验，QueryOnly 例外只限真实身体/手代理和 CMC 胶囊，不扩展到同 Actor 的交互组件。手球半径、伸手长度、世界厘米/GeometryScale、服务器 GripId 和原释放/回执不变。
+
+`CatShopKioskActor`、`CatFishGuardActor`、`CatFishTankActor::InteractionCollision` 与 `CatInteractionSettings::TargetingTraceChannel` 保留；UI/WBP、库存、费用、Session、存档及 Cook 配置不涉及修改。两处旧 Visibility 抓取入口已移除，未增加第二条手驱动或抓握权威。`LogCatPhysicsGrab` 默认记录 `Event=physics_reach_surface`、World/NetMode/Authority/LocalRole、BodyId/Hand/GripId、实体和忽略数，仅在变化时且每手最多每 0.25 秒记录。精确七列影响盘点与处理结果保留在本任务对话中。
+
+验证根目录 `Saved/Automation/FootReachStability-20260910`：修复前 `Report-20260910-173915-217/index.json` 9项中3项预期失败，包含实际 Kiosk + 容器查询盒挡手。修复后 `Report-20260910-174202-562/index.json` 34项中33通过，实体在交互范围后仍可双手抓住，Visibility 仍可命中原 UI 范围；唯一失败为新增300cm/s跑步夹具超出地板，已修正其持续时间，未修改生产运动参数。`BuildEditor-Fix1.log` 与 `BuildGame-Fix1.log` 均成功。最终 `Report-20260910-175446-412/index.json` 4/4通过（2 clean、2既有动画启动警告）：新 CuteCat 双端范围穿透/实体抓取/GripId回执/双手释放、原猫双端滑脚、修正后的CuteCat三速度、正式抓人/抓竿牵拉。该报告对应 `Automation-20260910-175446-412.log`；两端 `physics_reach_surface` 与 `physics_grip_observed` 已按World/NetMode核对。已查看真实客户端 `20260910-095531-CuteReachThroughInteraction.png`、`20260910-095532-CuteReachSolidContact.png`，手部与蓝色实体接触清楚；截图相机以脚和手为观察区，头顶部分出画，不能作为全身模型比例验收。
+
+已保留用户 Skeleton、CuteCat ABP/材质、鱼配置和 GameMode 资产修改；本任务没有保存二进制资产。并行架竿 Parked 与 ModelContact 接缝由对应任务实现、验证并提交，独立隔离证据尚未包含它们。已列构建属于 contract，实际抓取属于 runtime_behavior；正式地图真人手感、新Cook/Development包以及不带-log的打包双端独立日志尚未验收，不据局部测试关闭模块。
+
 ## 2026-09-10：抓握传递短时跳跃牵拉
 
 用户追加确认：抓着朋友跳跃时，可以把对方短暂带离地面。基线`7d98c8c`；原CMC/搏鱼恢复的独立Editor、Game及主工程Editor构建成功，组合渲染212项中211通过、1项已确认的既有StarterRod耐久500/150失败。并行骨架/模型修改全部保留。新跳跃抓握已通过下述构建与运行回归；并行模型、骨架和动画源码不计入本次提交。

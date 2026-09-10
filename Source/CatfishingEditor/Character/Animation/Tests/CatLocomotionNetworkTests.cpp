@@ -11,6 +11,8 @@
 #include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Interaction/Grab/CatPhysicsGrabProp.h"
+#include "ShopEconomy/CatShopKioskActor.h"
 #include "Components/PoseableMeshComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/StaticMeshComponent.h"
@@ -40,7 +42,7 @@ namespace CatLocomotionNetwork
 	class FRestore final : public IAutomationLatentCommand
 	{
 	public:
-		FRestore()
+		explicit FRestore(FString ClassPath)
 		{
 			const auto* Settings = GetDefault<ULevelEditorPlaySettings>();
 			Settings->GetPlayNetMode(Mode);
@@ -51,12 +53,11 @@ namespace CatLocomotionNetwork
 			{
 				if (World && World->WorldType == EWorldType::PIE) World->bIsNameStableForNetworking = true;
 			});
-			ModeHandle = FGameModeEvents::OnGameModeInitializedEvent().AddLambda([](AGameModeBase* GameMode)
+			ModeHandle = FGameModeEvents::OnGameModeInitializedEvent().AddLambda([ClassPath](AGameModeBase* GameMode)
 			{
 				if (!GameMode || !GameMode->GetWorld() || GameMode->GetWorld()->WorldType != EWorldType::PIE
 					|| GameMode->GetClass() != AGameModeBase::StaticClass()) return;
-				GameMode->DefaultPawnClass = LoadClass<ACatCharacter>(nullptr,
-					TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C"));
+				GameMode->DefaultPawnClass = LoadClass<ACatCharacter>(nullptr, *ClassPath);
 				GameMode->PlayerControllerClass = APlayerController::StaticClass();
 				GameMode->PlayerStateClass = APlayerState::StaticClass();
 			});
@@ -91,7 +92,7 @@ namespace CatLocomotionNetwork
 	class FVerify final : public IAutomationLatentCommand
 	{
 	public:
-		explicit FVerify(FAutomationTestBase* InTest) : Test(InTest), Started(FPlatformTime::Seconds()) {}
+		explicit FVerify(FAutomationTestBase* InTest, bool bInCute) : Test(InTest), Started(FPlatformTime::Seconds()), bCute(bInCute) {}
 		bool Update() override
 		{
 			if (FPlatformTime::Seconds() - Started > 60.0)
@@ -162,7 +163,7 @@ namespace CatLocomotionNetwork
 				Test->TestTrue(TEXT("server retains sole CMC movement authority"), ServerBody->UsesCharacterMovement() && !ServerBody->GetBody()->IsSimulatingPhysics());
 				Test->TestFalse(TEXT("client foot IK consumes snapshots without enabling local body simulation"), ClientBody->GetBody()->IsSimulatingPhysics());
 				if (Test->HasAnyErrors()) return true;
-				if (FApp::CanEverRender()) Capture(Client, TEXT("FormalStandingIK"));
+				if (FApp::CanEverRender()) Capture(Client, bCute ? TEXT("CuteStandingIK") : TEXT("FormalStandingIK"));
 				Stage = 2;
 				StageStarted = Now;
 			}
@@ -172,11 +173,11 @@ namespace CatLocomotionNetwork
 				const auto& Remote = ClientVisual->GetLocomotionObservation();
 				ServerFrames += Host.Mode == TEXT("Walking") && Host.Alpha > 0.95 && Host.AnimationSpeedCmS > 1.0;
 				ClientFrames += Remote.Mode == TEXT("Walking") && Remote.Alpha > 0.95 && Remote.AnimationSpeedCmS > 1.0;
-				const FName Ankles[] = {TEXT("RigLFLegAnkle"),TEXT("RigRFLegAnkle"),TEXT("RigLBLegAnkle"),TEXT("RigRBLegAnkle")};
 				for (int32 Foot = 0; Foot < 4; ++Foot)
 				{
-					const FVector Solved = ClientVisual->GetVisualMesh()->GetBoneLocationByName(Ankles[Foot],EBoneSpaces::WorldSpace);
-					const FVector Base = ClientVisual->GetAnimationSource()->GetBoneLocation(Ankles[Foot]);
+					const FName Ankle = ClientVisual->RigSettings.Feet[Foot].Bones.Last();
+					const FVector Solved = ClientVisual->GetVisualMesh()->GetBoneLocationByName(Ankle,EBoneSpaces::WorldSpace);
+					const FVector Base = ClientVisual->GetAnimationSource()->GetBoneLocation(Ankle);
 					if ((PreviousPlanted & Remote.PlantMask & (1 << Foot)) && Now - StageStarted > 1.0 && Remote.Alpha > 0.99)
 					{
 						AuthoredSlide += FVector::Dist2D(Base,PreviousBase[Foot]);
@@ -189,7 +190,7 @@ namespace CatLocomotionNetwork
 				PreviousPlanted = Remote.PlantMask;
 				if (FApp::CanEverRender() && Now-StageStarted > 2.0 && !bCapturedWalking)
 				{
-					Capture(Client,TEXT("FormalWalkingIK"));
+					Capture(Client,bCute ? TEXT("CuteWalkingIK") : TEXT("FormalWalkingIK"));
 					bCapturedWalking = true;
 				}
 				if (Now - StageStarted < 5.0) return false;
@@ -206,6 +207,49 @@ namespace CatLocomotionNetwork
 			{
 				Test->TestTrue(TEXT("both endpoints return to standing correction after stop"), ServerVisual->GetLocomotionObservation().Mode == TEXT("Standing")
 					&& ClientVisual->GetLocomotionObservation().Mode == TEXT("Standing"));
+				if (!bCute) return true;
+				for (auto* Body : {ServerBody, ClientBody})
+					Body->GetWorld()->SpawnActor<ACatShopKioskActor>(Body->GetGrab()->GetShoulderWorldLocation(true) + FVector(20,0,0), FRotator::ZeroRotator);
+				ClientBody->GetGrab()->SetGrabInput(true,true);
+				ClientBody->GetGrab()->SetGrabInput(false,true);
+				Stage=4; StageStarted=Now;
+			}
+			else if (Stage==4 && Now-StageStarted>0.6)
+			{
+				for (auto* Body : {ServerBody, ClientBody}) for (bool bLeft : {true,false})
+				{
+					auto* Grab=Body->GetGrab();
+					const FVector Expected=Grab->GetShoulderWorldLocation(bLeft) + Body->GetViewIntent().Vector()*Grab->GetReachLengthCm();
+					Test->TestTrue(TEXT("both endpoints reach through the kiosk interaction range"),Grab->IsReaching(bLeft)
+						&& !Grab->IsGripping(bLeft) && Body->GetHand(bLeft)->GetComponentLocation().Equals(Expected,0.5));
+				}
+				if (FApp::CanEverRender()) Capture(Client,TEXT("CuteReachThroughInteraction"));
+				const FVector Middle=(ServerBody->GetGrab()->GetShoulderWorldLocation(true)+ServerBody->GetGrab()->GetShoulderWorldLocation(false))*0.5;
+				Target=Server->SpawnActor<ACatPhysicsGrabProp>(Middle+FVector(ServerBody->GetGrab()->GetReachLengthCm()*0.75,0,0),FRotator::ZeroRotator);
+				if (!Test->TestNotNull(TEXT("replicated contact target exists"),Target.Get())) return true;
+				Target->ConfigureFromAuthority(FVector(2,40,25),false,30,FLinearColor::Blue);
+				Stage=5; StageStarted=Now;
+			}
+			else if (Stage==5 && Now-StageStarted>1)
+			{
+				for (bool bLeft : {true,false})
+				{
+					const auto& Host=ServerBody->GetGrab()->GetGripState(bLeft);
+					const auto& Remote=ClientBody->GetGrab()->GetGripState(bLeft);
+					Test->TestTrue(TEXT("solid behind UI range is gripped and replicated"),Host.bGripped && Remote.bGripped
+						&& Host.GripId==Remote.GripId && Host.TargetActor==Target.Get() && Remote.TargetActor && Remote.TargetComponentName==Host.TargetComponentName);
+				}
+				if (FApp::CanEverRender()) Capture(Client,TEXT("CuteReachSolidContact"));
+				ClientBody->GetGrab()->SetGrabInput(true,false);
+				ClientBody->GetGrab()->SetGrabInput(false,false);
+				Stage=6; StageStarted=Now;
+			}
+			else if (Stage==6 && Now-StageStarted>0.6)
+			{
+				for (auto* Body : {ServerBody,ClientBody})
+					Test->TestTrue(TEXT("both releases return through the existing replication path"),!Body->GetGrab()->IsReaching(true)
+						&& !Body->GetGrab()->IsReaching(false) && !Body->GetGrab()->IsGripping(true) && !Body->GetGrab()->IsGripping(false));
+				Test->AddInfo(TEXT("Event=cute_reach_network_verified Scope=ClientInput,UIRangeBypass,SolidGrip,GripIdReceipt,BothHandRelease"));
 				return true;
 			}
 			return false;
@@ -236,23 +280,21 @@ namespace CatLocomotionNetwork
 		uint8 PreviousPlanted = 0;
 		bool bCapturedWalking = false;
 		TWeakObjectPtr<ACameraActor> Camera;
+		TWeakObjectPtr<ACatPhysicsGrabProp> Target;
+		bool bCute = false;
 	};
 
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatLocomotionNetworkTest,
-	"Catfishing.Locomotion.Network.FormalBlueprintStrideOnServerAndClient",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
-
-bool FCatLocomotionNetworkTest::RunTest(const FString& Parameters)
+static bool RunLocomotionNetwork(FAutomationTestBase* Test, bool bCute)
 {
-	(void)Parameters;
-	if (!TestTrue(TEXT("requires an idle validation editor"), GEditor && GEngine && !GEditor->PlayWorld)) return false;
-	const auto Restore = MakeShared<CatLocomotionNetwork::FRestore>();
+	const FString ClassPath = bCute ? TEXT("/Game/Character/BP_CuteCatCharacter.BP_CuteCatCharacter_C") : TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C");
+	if (!Test->TestTrue(TEXT("requires an idle validation editor"), GEditor && GEngine && !GEditor->PlayWorld)) return false;
+	const auto Restore = MakeShared<CatLocomotionNetwork::FRestore>(ClassPath);
 	UWorld* Map = nullptr;
 	if (FApp::CanEverRender())
 	{
-		if (!TestTrue(TEXT("load the existing lit observation arena without saving changes"),
+		if (!Test->TestTrue(TEXT("load the existing lit observation arena without saving changes"),
 			FEditorFileUtils::LoadMap(FPaths::ProjectContentDir() / TEXT("Catfishing/Prototypes/PhysicsGrabPrototype.umap"), false, false))) return false;
 		Map = GEditor->GetEditorWorldContext().World();
 	}
@@ -271,8 +313,8 @@ bool FCatLocomotionNetworkTest::RunTest(const FString& Parameters)
 	Ground->SetActorTransform(FTransform(FRotator::ZeroRotator, FVector(0, 0, -10), FVector(20, 20, 0.2)));
 	Map->bIsNameStableForNetworking = true;
 	Map->GetWorldSettings()->DefaultGameMode = AGameModeBase::StaticClass();
-	UClass* FormalCatClass = LoadClass<ACatCharacter>(nullptr, TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C"));
-	if (!TestNotNull(TEXT("formal cat supplies its pre-initialization standing height"), FormalCatClass)) return false;
+	UClass* FormalCatClass = LoadClass<ACatCharacter>(nullptr, *ClassPath);
+	if (!Test->TestNotNull(TEXT("formal cat supplies its pre-initialization standing height"), FormalCatClass)) return false;
 	const double SpawnHeight = FormalCatClass->GetDefaultObject<ACatCharacter>()->GetDefaultHalfHeight();
 	Map->SpawnActor<APlayerStart>(FVector(-150, 100, SpawnHeight), FRotator::ZeroRotator);
 	Map->SpawnActor<APlayerStart>(FVector(0, -150, SpawnHeight), FRotator::ZeroRotator);
@@ -284,9 +326,19 @@ bool FCatLocomotionNetworkTest::RunTest(const FString& Parameters)
 		if (Driver.DefName == TEXT("GameNetDriver"))
 			Driver.DriverClassName = Driver.DriverClassNameFallback = TEXT("/Script/OnlineSubsystemUtils.IpNetDriver");
 	ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
-	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatLocomotionNetwork::FVerify>(this));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatLocomotionNetwork::FVerify>(Test,bCute));
 	ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
 	FAutomationTestFramework::Get().EnqueueLatentCommand(Restore);
 	return true;
 }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatLocomotionNetworkTest,
+	"Catfishing.Locomotion.Network.FormalBlueprintStrideOnServerAndClient",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatLocomotionNetworkTest::RunTest(const FString& Parameters) { return RunLocomotionNetwork(this,false); }
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatCuteLocomotionNetworkTest,
+	"Catfishing.Locomotion.Network.CuteCatStrideAndReachOnServerAndClient",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatCuteLocomotionNetworkTest::RunTest(const FString& Parameters) { return RunLocomotionNetwork(this,true); }
 #endif
