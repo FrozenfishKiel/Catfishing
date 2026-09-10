@@ -17,7 +17,6 @@ DEFINE_LOG_CATEGORY_STATIC(LogCatLocomotion, Log, All);
 
 namespace CatQuadruped
 {
-	const TCHAR* Prefixes[] = {TEXT("RigLFLeg"), TEXT("RigRFLeg"), TEXT("RigLBLeg"), TEXT("RigRBLeg")};
 	double Smooth(double Current, double Target, double Seconds, double Delta)
 	{
 		return FMath::Lerp(Current, Target, 1.0 - FMath::Exp(-FMath::Max(0.0, Delta) / FMath::Max(0.01, Seconds)));
@@ -52,6 +51,16 @@ void FCatQuadrupedLocomotion::Reset()
 	Observation = FCatQuadrupedLocomotionObservation();
 }
 
+void FCatQuadrupedLocomotion::ConfigureRig(const FCatCharacterRigSettings& Settings)
+{
+	Reset();
+	RigSettings = Settings;
+	Mesh.Reset();
+	Profiles.Reset();
+	bInitialized = false;
+	bSkeletonChecked = false;
+}
+
 bool FCatQuadrupedLocomotion::Initialize(USkeletalMesh* InMesh)
 {
 	Reset();
@@ -59,26 +68,29 @@ bool FCatQuadrupedLocomotion::Initialize(USkeletalMesh* InMesh)
 	Profiles.Reset();
 	bSkeletonChecked = true;
 	bInitialized = false;
-	if (!InMesh) return false;
+	if (!InMesh || RigSettings.Feet.Num() != FootCount || RigSettings.ForwardAxis.ContainsNaN()
+		|| RigSettings.ForwardAxis.GetSafeNormal2D().IsNearlyZero()) return false;
 	const FReferenceSkeleton& Skeleton = InMesh->GetRefSkeleton();
-	PelvisIndex = Skeleton.FindBoneIndex(TEXT("RigPelvis"));
+	PelvisIndex = Skeleton.FindBoneIndex(RigSettings.PelvisBone);
+	if (PelvisIndex == INDEX_NONE) return false;
 	for (int32 Foot = 0; Foot < FootCount; ++Foot)
 	{
-		for (int32 Joint = 0; Joint < 4; ++Joint)
+		const auto& Names = RigSettings.Feet[Foot].Bones;
+		if (Names.Num() < 3 || Names.Num() > 16) return false;
+		Feet[Foot].Chain.Reset();
+		for (int32 Joint = 0; Joint < Names.Num(); ++Joint)
 		{
-			const FName Name(Joint == 3 ? FString(CatQuadruped::Prefixes[Foot]) + TEXT("Ankle")
-				: FString::Printf(TEXT("%s%d"), CatQuadruped::Prefixes[Foot], Joint + 1));
-			Feet[Foot].Chain[Joint] = Skeleton.FindBoneIndex(Name);
-			if (Feet[Foot].Chain[Joint] == INDEX_NONE || (Joint > 0 &&
-				Skeleton.GetParentIndex(Feet[Foot].Chain[Joint]) != Feet[Foot].Chain[Joint - 1])) return false;
+			const int32 Bone = Skeleton.FindBoneIndex(Names[Joint]);
+			if (Bone == INDEX_NONE || (Joint > 0 && Skeleton.GetParentIndex(Bone) != Feet[Foot].Chain.Last())) return false;
+			Feet[Foot].Chain.Add(Bone);
 		}
 	}
 	ComponentPose.SetNum(Skeleton.GetNum());
 	RebuildPose(Skeleton.GetRefBonePose());
 	for (FFoot& Foot : Feet)
-		Foot.SoleNormalLocal = ComponentPose[Foot.Chain[3]].GetRotation().Inverse().RotateVector(FVector::UpVector);
-	bInitialized = PelvisIndex != INDEX_NONE;
-	return bInitialized;
+		Foot.SoleNormalLocal = ComponentPose[Foot.Chain.Last()].GetRotation().Inverse().RotateVector(FVector::UpVector);
+	bInitialized = true;
+	return true;
 }
 
 void FCatQuadrupedLocomotion::RebuildPose(const TArray<FTransform>& LocalPose)
@@ -105,9 +117,10 @@ const FCatQuadrupedLocomotion::FProfile& FCatQuadrupedLocomotion::GetProfile(UAn
 	if (const FProfile* Found = Profiles.Find(Sequence)) return *Found;
 	FProfile& Profile = Profiles.Add(Sequence);
 	if (!Sequence || !Mesh.IsValid() || Sequence->GetSkeleton() != Mesh->GetSkeleton()) return Profile;
-	Profile.bLocomotion = Sequence->GetName() == TEXT("Loco_Walk-IP") || Sequence->GetName() == TEXT("Loco_Run-IP");
-	// Only the audited standing/locomotion clips participate. Sitting, actions and jump poses remain authored.
-	if (!Profile.bLocomotion && Sequence->GetName() != TEXT("Stand_00-IP")) return Profile;
+	const auto Matches = [Sequence](const TSoftObjectPtr<UAnimSequence>& Clip) { return Clip.ToSoftObjectPath() == FSoftObjectPath(Sequence); };
+	Profile.bLocomotion = RigSettings.LocomotionAnimations.ContainsByPredicate(Matches);
+	// Only this rig's explicitly configured clips participate; actions retain their authored poses.
+	if (!Profile.bLocomotion && !RigSettings.StandingAnimations.ContainsByPredicate(Matches)) return Profile;
 	Profile.Duration = Sequence->GetPlayLength();
 	if (Profile.Duration <= UE_SMALL_NUMBER) return Profile;
 	const FReferenceSkeleton& Skeleton = Mesh->GetRefSkeleton();
@@ -115,7 +128,7 @@ const FCatQuadrupedLocomotion::FProfile& FCatQuadrupedLocomotion::GetProfile(UAn
 	TArray<int32> RequiredBones;
 	TArray<int32> AnimationBoneIndices;
 	for (const FFoot& Foot : Feet)
-		for (int32 Bone = Foot.Chain[3]; Bone != INDEX_NONE; Bone = Skeleton.GetParentIndex(Bone)) RequiredBones.AddUnique(Bone);
+		for (int32 Bone = Foot.Chain.Last(); Bone != INDEX_NONE; Bone = Skeleton.GetParentIndex(Bone)) RequiredBones.AddUnique(Bone);
 	RequiredBones.Sort();
 	for (const int32 Bone : RequiredBones)
 	{
@@ -141,7 +154,7 @@ const FCatQuadrupedLocomotion::FProfile& FCatQuadrupedLocomotion::GetProfile(UAn
 		}
 		for (int32 Foot = 0; Foot < FootCount; ++Foot)
 		{
-			const FVector Position = Pose[Feet[Foot].Chain[3]].GetLocation();
+			const FVector Position = Pose[Feet[Foot].Chain.Last()].GetLocation();
 			if (Position.ContainsNaN()) return Profile;
 			Positions[Foot].Add(Position);
 			Profile.FloorZ[Foot] = FMath::Min(Profile.FloorZ[Foot], Position.Z);
@@ -155,10 +168,11 @@ const FCatQuadrupedLocomotion::FProfile& FCatQuadrupedLocomotion::GetProfile(UAn
 		{
 			const double Height = Positions[Foot][Sample].Z - Profile.FloorZ[Foot];
 			const FVector Velocity = (Positions[Foot][Sample + 1] - Positions[Foot][Sample]) / SampleDelta;
-			// The audited Cat skeleton faces +Y. Calibrate in-place travel from the planted paw's backward sweep.
+			// Calibrate backward planted-paw travel in this rig's authored forward direction.
 			const double Contact = Profile.bLocomotion ? 1.0 - FMath::SmoothStep(0.25, 1.1, Height) : 1.0;
 			Profile.Contacts[Foot].Add(Contact);
-			if (Profile.bLocomotion && Contact > 0.65 && Velocity.Y < -1.0) StanceSpeeds.Add(-Velocity.Y);
+			const double ForwardSpeed = FVector::DotProduct(Velocity, RigSettings.ForwardAxis.GetSafeNormal2D());
+			if (Profile.bLocomotion && Contact > 0.65 && ForwardSpeed < -1.0) StanceSpeeds.Add(-ForwardSpeed);
 		}
 	}
 	if (Profile.bLocomotion && StanceSpeeds.IsEmpty()) return Profile;
@@ -233,27 +247,30 @@ FCatQuadrupedLocomotion::FAnimationFrame FCatQuadrupedLocomotion::ReadAnimation(
 void FCatQuadrupedLocomotion::SolveFoot(TArray<FTransform>& LocalPose, int32 FootIndex,
 	const FVector& TargetComponent, const FQuat& RotationComponent)
 {
-	const int32* Chain = Feet[FootIndex].Chain;
-	FVector Points[4];
-	double Lengths[3];
+	const TArray<int32>& Chain = Feet[FootIndex].Chain;
+	const int32 Last = Chain.Num() - 1;
+	TArray<FVector, TInlineAllocator<16>> Points;
+	TArray<double, TInlineAllocator<16>> Lengths;
+	Points.SetNum(Chain.Num());
+	Lengths.SetNum(Last);
 	double TotalLength = 0.0;
-	for (int32 Joint = 0; Joint < 4; ++Joint) Points[Joint] = ComponentPose[Chain[Joint]].GetLocation();
-	for (int32 Joint = 0; Joint < 3; ++Joint) { Lengths[Joint] = FVector::Distance(Points[Joint], Points[Joint + 1]); TotalLength += Lengths[Joint]; }
+	for (int32 Joint = 0; Joint <= Last; ++Joint) Points[Joint] = ComponentPose[Chain[Joint]].GetLocation();
+	for (int32 Joint = 0; Joint < Last; ++Joint) { Lengths[Joint] = FVector::Distance(Points[Joint], Points[Joint + 1]); TotalLength += Lengths[Joint]; }
 	const FVector Root = Points[0];
 	const FVector Target = Root + (TargetComponent - Root).GetClampedToMaxSize(TotalLength * 0.9999);
-	// FABRIK starts from the authored three-segment leg, retaining its bend instead of inventing a biped knee.
+	// Preserve the authored bend and every segment length for either skeleton.
 	for (int32 Iteration = 0; Iteration < 16; ++Iteration)
 	{
-		Points[3] = Target;
-		for (int32 Joint = 2; Joint >= 0; --Joint)
+		Points[Last] = Target;
+		for (int32 Joint = Last - 1; Joint >= 0; --Joint)
 			Points[Joint] = Points[Joint + 1] + (Points[Joint] - Points[Joint + 1]).GetSafeNormal() * Lengths[Joint];
 		Points[0] = Root;
-		for (int32 Joint = 1; Joint < 4; ++Joint)
+		for (int32 Joint = 1; Joint <= Last; ++Joint)
 			Points[Joint] = Points[Joint - 1] + (Points[Joint] - Points[Joint - 1]).GetSafeNormal() * Lengths[Joint - 1];
-		if (FVector::DistSquared(Points[3], Target) < FMath::Square(0.02)) break;
+		if (FVector::DistSquared(Points[Last], Target) < FMath::Square(0.02)) break;
 	}
 	const FReferenceSkeleton& Skeleton = Mesh->GetRefSkeleton();
-	for (int32 Joint = 0; Joint < 3; ++Joint)
+	for (int32 Joint = 0; Joint < Last; ++Joint)
 	{
 		const int32 Bone = Chain[Joint];
 		const FVector CurrentDirection = (ComponentPose[Chain[Joint + 1]].GetLocation() - ComponentPose[Bone].GetLocation()).GetSafeNormal();
@@ -263,8 +280,8 @@ void FCatQuadrupedLocomotion::SolveFoot(TArray<FTransform>& LocalPose, int32 Foo
 		LocalPose[Bone].SetRotation(Parent == INDEX_NONE ? Rotation : (ComponentPose[Parent].GetRotation().Inverse() * Rotation).GetNormalized());
 		RebuildPose(LocalPose);
 	}
-	const int32 Parent = Skeleton.GetParentIndex(Chain[3]);
-	LocalPose[Chain[3]].SetRotation((ComponentPose[Parent].GetRotation().Inverse() * RotationComponent).GetNormalized());
+	const int32 Parent = Skeleton.GetParentIndex(Chain[Last]);
+	LocalPose[Chain[Last]].SetRotation((ComponentPose[Parent].GetRotation().Inverse() * RotationComponent).GetNormalized());
 	RebuildPose(LocalPose);
 }
 
@@ -380,7 +397,7 @@ void FCatQuadrupedLocomotion::Apply(USkeletalMeshComponent* Source, UPoseableMes
 		const double Reach = FootIndex == 0 ? LeftReachAlpha : FootIndex == 1 ? RightReachAlpha : 0.0;
 		Weights[FootIndex] = Alpha * (1.0 - FMath::Clamp(Reach, 0.0, 1.0));
 		if (Reach > 0.001) Observation.ExcludedFootMask |= 1 << FootIndex;
-		const FTransform Base = ComponentPose[Foot.Chain[3]];
+		const FTransform Base = ComponentPose[Foot.Chain.Last()];
 		BaseWorld[FootIndex] = MeshWorld.TransformPosition(Base.GetLocation());
 		const FVector HipWorld = MeshWorld.TransformPosition(ComponentPose[Foot.Chain[0]].GetLocation());
 		const FVector StrideOffset = Direction * FVector::DotProduct(BaseWorld[FootIndex] - HipWorld, Direction) * (StrideScale - 1.0);
@@ -447,14 +464,14 @@ void FCatQuadrupedLocomotion::Apply(USkeletalMeshComponent* Source, UPoseableMes
 	Observation.PelvisOffsetCm = PelvisOffset * Alpha;
 	const FVector OffsetComponent = MeshWorld.InverseTransformVector(FVector::UpVector * Observation.PelvisOffsetCm);
 	const int32 PelvisParent = Mesh->GetRefSkeleton().GetParentIndex(PelvisIndex);
-	Visual->BoneSpaceTransforms[PelvisIndex].AddToTranslation(ComponentPose[PelvisParent].InverseTransformVector(OffsetComponent));
+	Visual->BoneSpaceTransforms[PelvisIndex].AddToTranslation((PelvisParent == INDEX_NONE ? OffsetComponent : ComponentPose[PelvisParent].InverseTransformVector(OffsetComponent)));
 	RebuildPose(Visual->BoneSpaceTransforms);
 	for (int32 FootIndex = 0; FootIndex < FootCount; ++FootIndex)
 	{
 		Observation.TargetsWorld[FootIndex] = Targets[FootIndex];
 		if (Weights[FootIndex] > 0.001)
 			SolveFoot(Visual->BoneSpaceTransforms, FootIndex, MeshWorld.InverseTransformPosition(Targets[FootIndex]), Rotations[FootIndex]);
-		Observation.FootErrorCm[FootIndex] = FVector::Distance(Targets[FootIndex], MeshWorld.TransformPosition(ComponentPose[Feet[FootIndex].Chain[3]].GetLocation()));
+		Observation.FootErrorCm[FootIndex] = FVector::Distance(Targets[FootIndex], MeshWorld.TransformPosition(ComponentPose[Feet[FootIndex].Chain.Last()].GetLocation()));
 	}
 	LogObservation(Body, Now, PreviousMode != Observation.Mode);
 }

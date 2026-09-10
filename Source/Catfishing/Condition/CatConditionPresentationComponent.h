@@ -25,7 +25,8 @@ private:
 	void PlayPhase(int32 NewPhase);
 	UPROPERTY() TObjectPtr<UCatConditionComponent> Condition;
 	UPROPERTY() TObjectPtr<UAnimMontage> ActiveMontage;
-	UPROPERTY() TArray<TObjectPtr<UAnimSequence>> PoseClips;
+	/** Stand-to-sit, sit-to-lie, lying loop, lie-to-sit, sit-to-stand; override per character skeleton. */
+	UPROPERTY(EditDefaultsOnly, Category="Catfishing|Animation") TArray<TObjectPtr<UAnimSequence>> PoseClips;
 	int32 Phase = INDEX_NONE;
 	double PhaseEndsAt = 0;
 	bool bObservedDowned = false;

@@ -14,8 +14,8 @@ public class CatfishingEditor : ModuleRules
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
 			"UnrealEd", "AssetRegistry", "BlueprintGraph", "StateTreeModule", "StateTreeEditorModule",
-			"GameplayStateTreeModule", "PropertyBindingUtils", "PropertyBindingUtilsEditor", "GameplayAbilities",
-			"UMG", "UMGEditor", "Slate", "SlateCore", "InputCore", "AssetTools", "EnhancedInput"
+			"GameplayStateTreeModule", "PropertyBindingUtils", "PropertyBindingUtilsEditor", "GameplayAbilities", "GameplayTags",
+			"UMG", "UMGEditor", "Slate", "SlateCore", "InputCore", "AssetTools", "EnhancedInput", "AnimGraph"
 		});
 	}
 }

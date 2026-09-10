@@ -3,6 +3,7 @@
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
 
 #include "Animation/AnimSequence.h"
+#include "Animation/AnimationAsset.h"
 #include "Animation/AnimInstance.h"
 #include "Animation/AnimStateMachineTypes.h"
 #include "Components/PoseableMeshComponent.h"
@@ -16,8 +17,6 @@
 
 namespace CatPhysicsPrototypeVisual
 {
-	const FName LeftBones[] = { TEXT("RigLFLeg1"), TEXT("RigLFLeg2"), TEXT("RigLFLeg3"), TEXT("RigLFLegAnkle") };
-	const FName RightBones[] = { TEXT("RigRFLeg1"), TEXT("RigRFLeg2"), TEXT("RigRFLeg3"), TEXT("RigRFLegAnkle") };
 	constexpr float ReachBlendSpeed = 8.0f;
 	constexpr int32 SolverIterations = 12;
 	constexpr double ReachToleranceCentimeters = 0.15;
@@ -70,21 +69,29 @@ bool UCatPhysicsPrototypeVisualComponent::InitializeVisual(USceneComponent* InBo
 	}
 
 	const FReferenceSkeleton& Skeleton = CharacterMesh->GetRefSkeleton();
-	for (int32 Index = 0; Index < 4; ++Index)
+	const auto ResolveChain = [&Skeleton](const FCatCharacterLimbChain& Definition, TArray<int32>& Chain)
 	{
-		LeftChain[Index] = Skeleton.FindBoneIndex(CatPhysicsPrototypeVisual::LeftBones[Index]);
-		RightChain[Index] = Skeleton.FindBoneIndex(CatPhysicsPrototypeVisual::RightBones[Index]);
-		if (LeftChain[Index] == INDEX_NONE || RightChain[Index] == INDEX_NONE
-			|| (Index > 0 && (Skeleton.GetParentIndex(LeftChain[Index]) != LeftChain[Index - 1]
-				|| Skeleton.GetParentIndex(RightChain[Index]) != RightChain[Index - 1])))
+		Chain.Reset();
+		if (Definition.Bones.Num() < 3 || Definition.Bones.Num() > 16) return false;
+		for (const FName Name : Definition.Bones)
 		{
-			UE_LOG(LogCatCharacter, Warning,
-				TEXT("Event=physics_prototype_visual_init_failed Actor=%s World=%s NetMode=%d Authority=%d LocalRole=%d Reason=MissingHandBoneChain BoneIndex=%d"),
-				*Owner->GetName(), *GetNameSafe(GetWorld()), static_cast<int32>(GetWorld()->GetNetMode()),
-				Owner->HasAuthority(), static_cast<int32>(Owner->GetLocalRole()), Index);
-			return false;
+			const int32 Bone = Skeleton.FindBoneIndex(Name);
+			if (Bone == INDEX_NONE || (!Chain.IsEmpty() && Skeleton.GetParentIndex(Bone) != Chain.Last())) return false;
+			Chain.Add(Bone);
 		}
+		return true;
+	};
+	if (RigSettings.Feet.Num() != 4 || !ResolveChain(RigSettings.Feet[0], LeftChain)
+		|| !ResolveChain(RigSettings.Feet[1], RightChain))
+	{
+		UE_LOG(LogCatCharacter, Warning,
+			TEXT("Event=physics_prototype_visual_init_failed Actor=%s World=%s NetMode=%d Authority=%d LocalRole=%d RigId=%s Mesh=%s Reason=InvalidConfiguredHandChain"),
+			*Owner->GetName(), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), Owner->HasAuthority(),
+			int32(Owner->GetLocalRole()), *RigSettings.RigId.ToString(), *CharacterMesh->GetPathName());
+		return false;
 	}
+	JumpRootIndex = Skeleton.FindBoneIndex(RigSettings.JumpRootBone);
+	Locomotion.ConfigureRig(RigSettings);
 
 	BodyRoot = InBodyRoot;
 	LeftHand = InLeftHand;
@@ -142,9 +149,9 @@ bool UCatPhysicsPrototypeVisualComponent::InitializeVisual(USceneComponent* InBo
 	RefreshVisualPose(0.0f);
 	SetComponentTickEnabled(GetWorld()->GetNetMode() != NM_DedicatedServer);
 	UE_LOG(LogCatCharacter, Log,
-		TEXT("Event=physics_prototype_visual_ready Actor=%s World=%s NetMode=%d Authority=%d LocalRole=%d Mesh=%s BoneCount=%d HandSolver=CCD"),
+		TEXT("Event=physics_prototype_visual_ready Actor=%s World=%s NetMode=%d Authority=%d LocalRole=%d Mesh=%s BoneCount=%d RigId=%s LeftJoints=%d RightJoints=%d HandSolver=CCD"),
 		*Owner->GetName(), *GetNameSafe(GetWorld()), static_cast<int32>(GetWorld()->GetNetMode()),
-		Owner->HasAuthority(), static_cast<int32>(Owner->GetLocalRole()), *GetNameSafe(CharacterMesh), Skeleton.GetNum());
+		Owner->HasAuthority(), static_cast<int32>(Owner->GetLocalRole()), *GetNameSafe(CharacterMesh), Skeleton.GetNum(), *RigSettings.RigId.ToString(), LeftChain.Num(), RightChain.Num());
 	return true;
 }
 
@@ -154,11 +161,36 @@ void UCatPhysicsPrototypeVisualComponent::SetHandReachState(const bool bInLeftAc
 	bRightActive = bInRightActive;
 }
 
+UAnimationAsset* UCatPhysicsPrototypeVisualComponent::ResolveAnimationAsset(UAnimationAsset* Source) const
+{
+	if (!Source) return nullptr;
+	UAnimationAsset* Resolved = Source;
+	if (const TObjectPtr<UAnimationAsset>* Override = AnimationOverrides.Find(FSoftObjectPath(Source))) Resolved = Override->Get();
+	if (Resolved && CharacterMesh && Resolved->GetSkeleton() != CharacterMesh->GetSkeleton())
+	{
+		UE_LOG(LogCatCharacter, Warning,
+			TEXT("Event=character_animation_rejected Actor=%s World=%s NetMode=%d Authority=%d LocalRole=%d RigId=%s Source=%s Resolved=%s Reason=SkeletonMismatch"),
+			*GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : INDEX_NONE,
+			GetOwner() && GetOwner()->HasAuthority(), GetOwner() ? int32(GetOwner()->GetLocalRole()) : INDEX_NONE,
+			*RigSettings.RigId.ToString(), *GetPathNameSafe(Source), *GetPathNameSafe(Resolved));
+		return nullptr;
+	}
+	if (Resolved != Source)
+	{
+		UE_LOG(LogCatCharacter, Log,
+			TEXT("Event=character_animation_resolved Actor=%s World=%s NetMode=%d Authority=%d LocalRole=%d RigId=%s Source=%s Resolved=%s"),
+			*GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), GetWorld() ? int32(GetWorld()->GetNetMode()) : INDEX_NONE,
+			GetOwner() && GetOwner()->HasAuthority(), GetOwner() ? int32(GetOwner()->GetLocalRole()) : INDEX_NONE,
+			*RigSettings.RigId.ToString(), *GetPathNameSafe(Source), *GetPathNameSafe(Resolved));
+	}
+	return Resolved;
+}
+
 FVector UCatPhysicsPrototypeVisualComponent::GetVisualHandWorldLocation(const bool bLeftHand) const
 {
-	return VisualMesh ? VisualMesh->GetBoneLocationByName(bLeftHand
-		? CatPhysicsPrototypeVisual::LeftBones[3] : CatPhysicsPrototypeVisual::RightBones[3], EBoneSpaces::WorldSpace)
-		: FVector::ZeroVector;
+	const TArray<int32>& Chain = bLeftHand ? LeftChain : RightChain;
+	return VisualMesh && !Chain.IsEmpty() ? VisualMesh->GetBoneLocationByName(
+		CharacterMesh->GetRefSkeleton().GetBoneName(Chain.Last()), EBoneSpaces::WorldSpace) : FVector::ZeroVector;
 }
 
 void UCatPhysicsPrototypeVisualComponent::TickComponent(const float DeltaTime, const ELevelTick TickType,
@@ -185,10 +217,10 @@ void UCatPhysicsPrototypeVisualComponent::RefreshVisualPose(const float DeltaTim
 	if (bOwnsAnimationSource && (AnimationState == EAnimationState::Takeoff || AnimationState == EAnimationState::Airborne
 		|| AnimationState == EAnimationState::Landing))
 	{
-		// JumpX's InPlace clips still translate RigRoot vertically. Match UE's RefPose root lock
+		// Authored jump clips can translate the configured root vertically. Match UE's RefPose root lock
 		// in this private pose: the physical body owns the global transform, while the authored limbs keep animating.
-		if (!VisualMesh->BoneSpaceTransforms.IsEmpty())
-			VisualMesh->BoneSpaceTransforms[0] = CharacterMesh->GetRefSkeleton().GetRefBonePose()[0];
+		if (VisualMesh->BoneSpaceTransforms.IsValidIndex(JumpRootIndex))
+			VisualMesh->BoneSpaceTransforms[JumpRootIndex] = CharacterMesh->GetRefSkeleton().GetRefBonePose()[JumpRootIndex];
 	}
 	TransitionSeconds += SafeDelta;
 	if (TransitionSeconds < CatPhysicsPrototypeVisual::PoseBlendSeconds
@@ -201,16 +233,16 @@ void UCatPhysicsPrototypeVisualComponent::RefreshVisualPose(const float DeltaTim
 			VisualMesh->BoneSpaceTransforms[Index].Blend(TransitionFromPose[Index], Destination, Alpha);
 		}
 	}
-	// Jump clips contain vertical RigRoot travel while Chaos already moves the body.
+	// Compensate configured root travel while authoritative movement already moves the body.
 	// Correct only the visible vertical root, including Land blend-out; retain the
 	// authored animation source, horizontal root, rotations and limb poses.
 	const bool bCompensateJumpRoot = !bOwnsAnimationSource && IsFormalJumpPoseActive()
-		&& !VisualMesh->BoneSpaceTransforms.IsEmpty();
+		&& VisualMesh->BoneSpaceTransforms.IsValidIndex(JumpRootIndex);
 	if (bCompensateJumpRoot)
 	{
-		FVector RootTranslation = VisualMesh->BoneSpaceTransforms[0].GetTranslation();
-		RootTranslation.Z = CharacterMesh->GetRefSkeleton().GetRefBonePose()[0].GetTranslation().Z;
-		VisualMesh->BoneSpaceTransforms[0].SetTranslation(RootTranslation);
+		FVector RootTranslation = VisualMesh->BoneSpaceTransforms[JumpRootIndex].GetTranslation();
+		RootTranslation.Z = CharacterMesh->GetRefSkeleton().GetRefBonePose()[JumpRootIndex].GetTranslation().Z;
+		VisualMesh->BoneSpaceTransforms[JumpRootIndex].SetTranslation(RootTranslation);
 	}
 	if (bCompensateJumpRoot != bFormalJumpRootCompensationActive)
 	{
@@ -261,9 +293,9 @@ bool UCatPhysicsPrototypeVisualComponent::IsFormalJumpPoseActive() const
 	if (!Animation || Animation->IsAnyMontagePlaying()) return false;
 	int32 MachineIndex = INDEX_NONE;
 	const FBakedAnimationStateMachine* Description = nullptr;
-	Animation->GetStateMachineIndexAndDescription(TEXT("Main States"), MachineIndex, &Description);
+	Animation->GetStateMachineIndexAndDescription(RigSettings.JumpStateMachine, MachineIndex, &Description);
 	if (MachineIndex == INDEX_NONE || !Description) return false;
-	for (const FName StateName : {FName(TEXT("Jump")), FName(TEXT("Fall Loop")), FName(TEXT("Land"))})
+	for (const FName StateName : RigSettings.JumpStates)
 	{
 		const int32 StateIndex = Description->FindStateIndex(StateName);
 		if (StateIndex != INDEX_NONE && Animation->GetInstanceStateWeight(MachineIndex, StateIndex) > UE_SMALL_NUMBER)
@@ -378,13 +410,14 @@ void UCatPhysicsPrototypeVisualComponent::SolveHandReach(const bool bLeftHand, c
 		LogReachLimitChange(bLeftHand, false, 0.0, 0.0);
 		return;
 	}
-	const int32* Chain = bLeftHand ? LeftChain : RightChain;
+	const TArray<int32>& Chain = bLeftHand ? LeftChain : RightChain;
+	const int32 Last = Chain.Num() - 1;
 	const FVector Shoulder = ComponentPose[Chain[0]].GetLocation();
-	const FVector AnimatedHand = ComponentPose[Chain[3]].GetLocation();
+	const FVector AnimatedHand = ComponentPose[Chain[Last]].GetLocation();
 	const FVector Target = FMath::Lerp(AnimatedHand,
 		VisualMesh->GetComponentTransform().InverseTransformPosition(TargetWorld), static_cast<double>(Alpha));
 	double ChainLength = 0.0;
-	for (int32 Link = 1; Link < 4; ++Link)
+	for (int32 Link = 1; Link <= Last; ++Link)
 	{
 		ChainLength += FVector::Distance(ComponentPose[Chain[Link - 1]].GetLocation(), ComponentPose[Chain[Link]].GetLocation());
 	}
@@ -398,16 +431,16 @@ void UCatPhysicsPrototypeVisualComponent::SolveHandReach(const bool bLeftHand, c
 	const FReferenceSkeleton& Skeleton = CharacterMesh->GetRefSkeleton();
 	for (int32 Iteration = 0; Iteration < CatPhysicsPrototypeVisual::SolverIterations; ++Iteration)
 	{
-		if (FVector::DistSquared(ComponentPose[Chain[3]].GetLocation(), ReachTarget)
+		if (FVector::DistSquared(ComponentPose[Chain[Last]].GetLocation(), ReachTarget)
 			<= FMath::Square(CatPhysicsPrototypeVisual::ReachToleranceCentimeters))
 		{
 			break;
 		}
-		for (int32 Link = 2; Link >= 0; --Link)
+		for (int32 Link = Last - 1; Link >= 0; --Link)
 		{
 			const int32 Joint = Chain[Link];
 			const FVector JointPosition = ComponentPose[Joint].GetLocation();
-			const FVector ToEnd = ComponentPose[Chain[3]].GetLocation() - JointPosition;
+			const FVector ToEnd = ComponentPose[Chain[Last]].GetLocation() - JointPosition;
 			const FVector ToTarget = ReachTarget - JointPosition;
 			if (ToEnd.IsNearlyZero() || ToTarget.IsNearlyZero()) continue;
 			const FQuat RotationDelta = FQuat::FindBetweenNormals(ToEnd.GetSafeNormal(), ToTarget.GetSafeNormal());

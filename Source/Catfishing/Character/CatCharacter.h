@@ -50,6 +50,9 @@ public:
 	virtual void FaceRotation(FRotator NewControlRotation, float DeltaTime=0.0f) override;
 	/** 上鱼时由 Fishing 表现提供持杆第一人称；其余时间保留角色蓝图的相机。 */
 	virtual void CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult) override;
+	/** Route gameplay/Blueprint montages through the selected skin's compatible animation map. */
+	virtual float PlayAnimMontage(UAnimMontage* AnimMontage, float InPlayRate=1.0f, FName StartSectionName=NAME_None) override;
+	virtual void StopAnimMontage(UAnimMontage* AnimMontage=nullptr) override;
 
 	/** 返回 Character 持有的唯一 ASC；runtime gate 关闭也返回组件，让外部只读接缝不需要第二条查找路径。 */
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;

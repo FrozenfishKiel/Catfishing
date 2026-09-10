@@ -95,6 +95,19 @@ void ACatCharacter::CalcCamera(const float DeltaTime, FMinimalViewInfo& OutResul
 	}
 }
 
+// Gameplay keeps its original montage identity; each skin resolves playback to its own skeleton.
+float ACatCharacter::PlayAnimMontage(UAnimMontage* AnimMontage, float InPlayRate, FName StartSectionName)
+{
+	UAnimMontage* Resolved = PhysicalVisual ? Cast<UAnimMontage>(PhysicalVisual->ResolveAnimationAsset(AnimMontage)) : AnimMontage;
+	return Resolved ? Super::PlayAnimMontage(Resolved, InPlayRate, StartSectionName) : 0.0f;
+}
+
+void ACatCharacter::StopAnimMontage(UAnimMontage* AnimMontage)
+{
+	UAnimMontage* Resolved = PhysicalVisual ? Cast<UAnimMontage>(PhysicalVisual->ResolveAnimationAsset(AnimMontage)) : AnimMontage;
+	if (!AnimMontage || Resolved) Super::StopAnimMontage(Resolved);
+}
+
 // ASC 查询流程：直接返回构造期唯一组件；不通过 Controller、PlayerState 或全局管理器寻找第二份身体能力真相。
 UAbilitySystemComponent* ACatCharacter::GetAbilitySystemComponent() const
 {

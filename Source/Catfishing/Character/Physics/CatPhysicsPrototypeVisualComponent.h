@@ -6,6 +6,7 @@
 #include "CatPhysicsPrototypeVisualComponent.generated.h"
 
 class UAnimSequence;
+class UAnimationAsset;
 class UPoseableMeshComponent;
 class UPrimitiveComponent;
 class USceneComponent;
@@ -36,6 +37,13 @@ public:
 
 	UPROPERTY(EditAnywhere, Category="Catfishing|Locomotion")
 	FCatQuadrupedLocomotionSettings LocomotionSettings;
+	/** Override on a character child Blueprint when selecting a different skeleton or animation set. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Catfishing|Rig")
+	FCatCharacterRigSettings RigSettings;
+	/** Maps configured gameplay animations to this character's skeleton. Empty for the original skin. */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Catfishing|Rig")
+	TMap<FSoftObjectPath, TObjectPtr<UAnimationAsset>> AnimationOverrides;
+	UAnimationAsset* ResolveAnimationAsset(UAnimationAsset* Source) const;
 
 protected:
 	virtual void TickComponent(float DeltaTime, ELevelTick TickType,
@@ -96,8 +104,9 @@ private:
 	uint32 ObservedResetEpoch = 0;
 	bool bHasMovementSample = false;
 	bool bWasGrounded = false;
-	int32 LeftChain[4] = { INDEX_NONE, INDEX_NONE, INDEX_NONE, INDEX_NONE };
-	int32 RightChain[4] = { INDEX_NONE, INDEX_NONE, INDEX_NONE, INDEX_NONE };
+	TArray<int32> LeftChain;
+	TArray<int32> RightChain;
+	int32 JumpRootIndex = INDEX_NONE;
 	float LeftReachAlpha = 0.0f;
 	float RightReachAlpha = 0.0f;
 	bool bLeftActive = false;

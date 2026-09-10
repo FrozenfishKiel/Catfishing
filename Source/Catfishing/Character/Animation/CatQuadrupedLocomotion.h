@@ -1,6 +1,7 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Character/Animation/CatCharacterRigSettings.h"
 #include "CatQuadrupedLocomotion.generated.h"
 
 class UAnimSequence;
@@ -47,6 +48,8 @@ struct FCatQuadrupedLocomotionObservation
 class CATFISHING_API FCatQuadrupedLocomotion
 {
 public:
+	/** Select the authored rig before initialization; invalidates calibration and planted contacts. */
+	void ConfigureRig(const FCatCharacterRigSettings& Settings);
 	/** Calibration shared with the prototype's owned animation player; zero means unsupported asset/skeleton. */
 	double GetReferenceSpeedMeshCmS(UAnimSequence* Sequence, USkeletalMesh* InMesh);
 	void Apply(USkeletalMeshComponent* AnimationSource, UPoseableMeshComponent* Visual,
@@ -69,7 +72,7 @@ private:
 	};
 	struct FFoot
 	{
-		int32 Chain[4] = {INDEX_NONE, INDEX_NONE, INDEX_NONE, INDEX_NONE};
+		TArray<int32> Chain;
 		FVector SoleNormalLocal = FVector::UpVector;
 		FVector PlantLocal = FVector::ZeroVector;
 		TWeakObjectPtr<UPrimitiveComponent> Support;
@@ -95,6 +98,7 @@ private:
 	void LogObservation(const UCatPhysicalBodyComponent* Body, double Now, bool bForce);
 
 	TWeakObjectPtr<USkeletalMesh> Mesh;
+	FCatCharacterRigSettings RigSettings;
 	TMap<TWeakObjectPtr<UAnimSequence>, FProfile> Profiles;
 	FFoot Feet[FootCount];
 	TArray<FTransform> ComponentPose;

@@ -18,7 +18,10 @@ bool FCatLocomotionAssetContractTest::RunTest(const FString& Parameters)
 	UBlendSpace* BlendSpace = LoadObject<UBlendSpace>(nullptr, TEXT("/Game/Animalia/Cat/WalkToRun.WalkToRun"));
 	if (!TestNotNull(TEXT("formal ABP is loadable"), Blueprint) || !TestNotNull(TEXT("formal locomotion blendspace is loadable"), BlendSpace)) return false;
 	TArray<UEdGraph*> Graphs;
-	Blueprint->GetAllGraphs(Graphs);
+	// Template children own asset overrides; the shared parent owns executable graph nodes.
+	for (UBlueprint* GraphOwner = Blueprint; GraphOwner; GraphOwner = GraphOwner->ParentClass
+		? Cast<UBlueprint>(GraphOwner->ParentClass->ClassGeneratedBy) : nullptr)
+		GraphOwner->GetAllGraphs(Graphs);
 	int32 ActiveNodes = 0;
 	for (UEdGraph* Graph : Graphs)
 		for (UEdGraphNode* Node : Graph->Nodes)
