@@ -197,7 +197,7 @@ void UCatPhysicalBodyComponent::UpdatePhysicalMovement(const float DeltaSeconds)
 		if (!It.Key().IsValid()) { It.RemoveCurrent(); continue; }
 		Body->AddForce(It.Value());
 	}
-	if (bJumpSeparating && GetWorld()->GetTimeSeconds() >= SupportDisabledUntilSeconds && Velocity.Z <= 0) bJumpSeparating=false;
+	if (bJumpSeparating && !bPublishJumpAfterPhysics && GetWorld()->GetTimeSeconds() >= SupportDisabledUntilSeconds && Velocity.Z <= 0) bJumpSeparating=false;
 	const FVector BodyUp = Body->GetUpVector();
 	const bool bSupportEnabled = bLocomotionEnabled && !bJumpSeparating && GetWorld()->GetTimeSeconds() >= SupportDisabledUntilSeconds;
 	const bool bCanSupport = bSupportEnabled && BodyUp.Z > 0.35;

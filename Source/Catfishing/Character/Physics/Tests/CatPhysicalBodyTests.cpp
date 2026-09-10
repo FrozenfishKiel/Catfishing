@@ -51,6 +51,33 @@ struct FScene
 }
 
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPhysicalQueuedJumpHitchTest,
+	"Catfishing.PhysicalBody.Runtime.QueuedJumpKeepsSupportOffUntilItsFirstPhysicsStep",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatPhysicalQueuedJumpHitchTest::RunTest(const FString& Parameters)
+{
+	CatPhysicalBodyTest::FScene Scene;
+	if (!Scene.Initialize(this)) return false;
+	auto* Cat=Scene.Spawn(FVector(0,0,20));
+	auto* Body=Cat?Cat->FindComponentByClass<UCatPhysicalBodyComponent>():nullptr;
+	if (!TestNotNull(TEXT("real physical body"),Body)) return false;
+	for (int32 I=0;I<120;++I) Scene.World.TickTestWorld(1.0f/120);
+	const double StartZ=Cat->GetActorLocation().Z;
+	Body->RequestJump();
+	Scene.World.TickTestWorld(.12f);
+	TestFalse(TEXT("queued jump cannot reactivate ground support before Chaos applies its impulse"),Body->IsGrounded());
+	double MaximumZ=Cat->GetActorLocation().Z;
+	for (int32 I=0;I<120;++I)
+	{
+		Scene.World.TickTestWorld(1.0f/120);
+		MaximumZ=FMath::Max(MaximumZ,Cat->GetActorLocation().Z);
+	}
+	TestTrue(TEXT("a slow first frame does not add a second support launch"),MaximumZ-StartZ>75 && MaximumZ-StartZ<100);
+	TestTrue(TEXT("normal ground support returns after landing"),Body->IsGrounded());
+	AddInfo(FString::Printf(TEXT("Event=physical_queued_jump_hitch_verified FirstFrameSeconds=0.12 RiseCm=%.3f GroundedAfterLanding=%d"),MaximumZ-StartZ,Body->IsGrounded()));
+	return !HasAnyErrors();
+}
+
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPhysicalMotorBudgetTest,
 	"Catfishing.PhysicalBody.Runtime.StationarySupportInputAndZeroBudgetShareOneForceLimit",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
