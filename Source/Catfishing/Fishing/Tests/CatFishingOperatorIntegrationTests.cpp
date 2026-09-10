@@ -9,6 +9,7 @@
 #include "Components/BoxComponent.h"
 #include "Engine/World.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/CatFishingService.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
@@ -65,7 +66,7 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 	const auto HoldAndAuthorize = [&]()
 	{
 		return Rod->BeginPhysicalHoldFromAuthority(Player, true)
-			&& Rod->SetPrimaryOperatorFromAuthority(Player, Rod->GetPresentationState().RodActorRevision);
+			&& Rod->SetPrimaryOperatorFromAuthority(Player, Rod->GetPresentationState().RodActorRevision) && Rod->GetPhysicalRodComponent()->CommitPrimaryHold(Player);
 	};
 	if (!TestTrue(TEXT("a real hand constraint precedes explicit owner control"), HoldAndAuthorize())) return false;
 	UCatFishingFightRunner* Runner = NewObject<UCatFishingFightRunner>(Session);

@@ -1,5 +1,6 @@
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Interaction/Grab/CatPhysicsGrabComponent.h"
 
 #include "Animation/AnimSequence.h"
 #include "Animation/AnimInstance.h"
@@ -243,8 +244,14 @@ void UCatPhysicsPrototypeVisualComponent::RefreshVisualPose(const float DeltaTim
 	Locomotion.Apply(AnimationSource, VisualMesh, GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>(),
 		LeftReachAlpha, RightReachAlpha, DeltaTime, LocomotionSettings);
 	RebuildComponentPose();
-	SolveHandReach(true, LeftHand->GetComponentLocation(), LeftReachAlpha);
-	SolveHandReach(false, RightHand->GetComponentLocation(), RightReachAlpha);
+	const auto* Grab = GetOwner()->FindComponentByClass<UCatPhysicsGrabComponent>();
+	const auto HandTarget = [&](const bool bLeft, const UPrimitiveComponent* Hand)
+	{
+		return Grab && Grab->IsGripping(bLeft) && Grab->GetGripState(bLeft).bControlledHold
+			? Grab->GetGripWorldLocation(bLeft) : Hand->GetComponentLocation();
+	};
+	SolveHandReach(true, HandTarget(true, LeftHand.Get()), LeftReachAlpha);
+	SolveHandReach(false, HandTarget(false, RightHand.Get()), RightReachAlpha);
 	VisualMesh->RefreshBoneTransforms();
 }
 

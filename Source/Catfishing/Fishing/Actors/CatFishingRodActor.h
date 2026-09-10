@@ -15,6 +15,7 @@ class UBoxComponent;
 class UPrimitiveComponent;
 class ACatCharacter;
 class UCatFishingPhysicalRodComponent;
+class UCatLightPropComponent;
 
 /** Read-only control observation; no predicted pose or second physics integration. */
 struct CATFISHING_API FCatFishingRodControlObservation
@@ -92,6 +93,7 @@ class CATFISHING_API ACatFishingRodActor : public AActor
 	friend class FCatFishingPhysicalGripGraphTest;
 	friend class FCatFishingPhysicalCouplingTest;
 	friend class FCatFishingFormalPhysicalRunnerTest;
+	friend struct FCatLightPropNetworkTestAccess;
 	friend class FCatFishingRodEffortSnapshotLifecycleTest;
 	friend class FCatFishingOwnedRodLifecycleTest;
 	friend class FCatHUDFishingOwnerBindingTest;
@@ -215,6 +217,7 @@ private:
 	/** Detached on authority when simulating; SceneRoot observes it and never drives it. */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UBoxComponent> PhysicsBody;
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatFishingPhysicalRodComponent> PhysicalRod;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatLightPropComponent> LightProp;
 	/** 美术表现根节点；皮肤和特效挂在这里，不参与权威锚点计算。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> VisualRoot;
 	/** Local deformation of the existing art; never changes canonical anchors or the fight simulation. */

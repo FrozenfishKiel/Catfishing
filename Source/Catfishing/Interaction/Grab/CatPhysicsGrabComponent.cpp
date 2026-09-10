@@ -1,6 +1,7 @@
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
 
 #include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Interaction/Grab/CatLightPropComponent.h"
 #include "GameFramework/Pawn.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SphereComponent.h"
@@ -169,12 +170,14 @@ void UCatPhysicsGrabComponent::UpdateHand(const bool bLeft, const FVector& Aim)
 	const FVector Shoulder = GetShoulderWorldLocation(bLeft);
 	if (State.bGripped)
 	{
+		RefreshContact(bLeft);
 		UPrimitiveComponent* Target = ResolveTarget(State);
+		const bool bOwnCarrier = State.bControlledHold || ResolveConstraintTarget(State) == Body;
 		if (!Target || !Target->IsRegistered() || !Target->IsCollisionEnabled())
 			ReleaseHand(bLeft, TEXT("TargetUnavailable"), false);
-		else if (Contacts[Index]->IsBroken())
+		else if (!bOwnCarrier && Contacts[Index]->IsBroken())
 			ReleaseHand(bLeft, TEXT("ForceLimit"), false);
-		else if (FVector::DistSquared(Shoulder, GetGripWorldLocation(bLeft)) > FMath::Square(GetReachLengthCm() + 14.0 * GeometryScale))
+		else if (!bOwnCarrier && FVector::DistSquared(Shoulder, GetGripWorldLocation(bLeft)) > FMath::Square(GetReachLengthCm() + 14.0 * GeometryScale))
 		{
 			FVector ConstraintForce, ConstraintTorque;
 			Contacts[Index]->GetConstraintForce(ConstraintForce, ConstraintTorque);
@@ -205,15 +208,28 @@ void UCatPhysicsGrabComponent::UpdateHand(const bool bLeft, const FVector& Aim)
 			if (bHit) Desired = Candidate.Location;
 		}
 	}
+	if (State.bGripped && (State.bControlledHold || ResolveConstraintTarget(State) == Body))
+	{
+		// Controlled holding poses the hand without creating a self-constraining physical loop.
+		Desired = GetGripWorldLocation(bLeft);
+	}
 	// The shoulder drive acts on BOTH connected rigid bodies. It is never a kinematic teleport of the hand.
 	const FVector LocalTarget = Body->GetComponentTransform().InverseTransformPosition(Desired) - ShoulderLocal(bLeft) * GeometryScale;
 	Arms[Index]->SetLinearPositionTarget(LocalTarget.GetClampedToMaxSize(ReachLengthCm * GeometryScale));
 	Arms[Index]->SetLinearDriveParams(State.bReaching ? 650.0f : 140.0f, State.bReaching ? 24.0f : 10.0f,
 		State.bReaching ? 10000.0f : 1200.0f);
-	if (bHit && !State.bGripped && !bLatchedUntilRelease[Index]
-		&& FVector::DistSquared(Hand->GetComponentLocation(), Candidate.Location) <= FMath::Square(1.0))
+	if (bHit && !State.bGripped && !bLatchedUntilRelease[Index] && Candidate.GetComponent())
 	{
-		TryLatch(bLeft, Candidate);
+		FVector ContactPoint;
+		const float SurfaceDistance = Candidate.GetComponent()->GetClosestPointOnCollision(
+			Hand->GetComponentLocation(), ContactPoint, Candidate.BoneName);
+		// Same actual-contact tolerance as explicit grips. A yielding prop need not reach the
+		// predicted sweep centre before it can be gripped by the already touching hand sphere.
+		if (SurfaceDistance >= 0 && SurfaceDistance <= Hand->GetScaledSphereRadius() + 1.0)
+		{
+			Candidate.ImpactPoint = ContactPoint;
+			TryLatch(bLeft, Candidate);
+		}
 	}
 }
 
@@ -229,11 +245,6 @@ void UCatPhysicsGrabComponent::TryLatch(const bool bLeft, const FHitResult& Hit)
 	const int32 Index = bLeft ? 0 : 1;
 	if (!Contacts.IsValidIndex(Index)) return;
 	const FCatPhysicsGripState Previous=GetGripState(bLeft);
-	UPhysicsConstraintComponent* Contact = Contacts[Index];
-	Contact->BreakConstraint();
-	Contact->SetWorldLocation(Hit.ImpactPoint);
-	Contact->SetWorldRotation(FRotator::ZeroRotator);
-	Contact->SetConstrainedComponents(Hands[Index], NAME_None, Target, Hit.BoneName);
 	FCatPhysicsGripState& State = bLeft ? LeftGrip : RightGrip;
 	State.bGripped = true;
 	State.GripId = FGuid::NewGuid();
@@ -245,9 +256,11 @@ void UCatPhysicsGrabComponent::TryLatch(const bool bLeft, const FHitResult& Hit)
 	State.TargetLocalPoint = Frame.InverseTransformPosition(Hit.ImpactPoint);
 	State.HeldReachDistanceCm = FMath::Clamp(FVector::Distance(GetShoulderWorldLocation(bLeft), Hit.Location),
 		0.0, GetReachLengthCm());
+	RefreshContact(bLeft, true);
 	++State.Revision;
 	bLatchedUntilRelease[Index] = true;
 	LogGrip(bLeft, TEXT("physics_grip_created"), TEXT("Constrained"));
+	if (auto* LightProp = UCatLightPropComponent::FindFor(Target)) LightProp->RefreshGripsFromAuthority(TEXT("GripCreated"));
 	OnGripChanged.Broadcast(this,bLeft,Previous,State);
 	GetOwner()->ForceNetUpdate();
 }
@@ -258,9 +271,11 @@ void UCatPhysicsGrabComponent::ReleaseHand(const bool bLeft, const FName Reason,
 	const int32 Index = bLeft ? 0 : 1;
 	const FCatPhysicsGripState Previous=State;
 	const bool bChanged = State.bGripped || (bStopReaching && State.bReaching);
+	TWeakObjectPtr<UCatLightPropComponent> PreviousLightProp = UCatLightPropComponent::FindFor(ResolveTarget(State));
 	if (Contacts.IsValidIndex(Index) && Contacts[Index]) Contacts[Index]->BreakConstraint();
 	State.bGripped = false;
 	State.bExplicitHold = false;
+	State.bControlledHold = false;
 	State.HeldReachDistanceCm = 0.0;
 	// An explicit hold replaced the button-held source. Breaking it has no remaining
 	// held-button request to keep reaching or to recreate a new contact.
@@ -274,6 +289,7 @@ void UCatPhysicsGrabComponent::ReleaseHand(const bool bLeft, const FName Reason,
 	State.TargetComponentName = NAME_None;
 	State.TargetBone = NAME_None;
 	State.TargetLocalPoint = FVector::ZeroVector;
+	if (PreviousLightProp.IsValid()) PreviousLightProp->RefreshGripsFromAuthority(Reason);
 	OnGripChanged.Broadcast(this,bLeft,Previous,State);
 	GetOwner()->ForceNetUpdate();
 }
@@ -308,12 +324,12 @@ void UCatPhysicsGrabComponent::LogGrip(const bool bLeft, const FName Event, cons
 	const FCatPhysicsGripState& State = GetGripState(bLeft);
 	const auto* PhysicalBody = GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>();
 	const FString Record = FString::Printf(
-		TEXT("Event=%s World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s BodyId=%s Hand=%s GripId=%s Revision=%u Target=%s Component=%s Reaching=%d Gripped=%d ExplicitHold=%d HeldReachCm=%.3f Result=%s"),
+		TEXT("Event=%s World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s BodyId=%s Hand=%s GripId=%s Revision=%u Target=%s Component=%s Reaching=%d Gripped=%d ExplicitHold=%d ControlledHold=%d HeldReachCm=%.3f Result=%s"),
 		*Event.ToString(), *GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1,
 		GetOwner()->HasAuthority(), static_cast<int32>(GetOwner()->GetLocalRole()), *GetNameSafe(GetOwner()),
 		PhysicalBody ? *PhysicalBody->GetBodyId().ToString() : TEXT("None"), bLeft ? TEXT("Left") : TEXT("Right"),
 		*State.GripId.ToString(), State.Revision, *GetNameSafe(State.TargetActor), *State.TargetComponentName.ToString(),
-		State.bReaching, State.bGripped, State.bExplicitHold, State.HeldReachDistanceCm, *Result.ToString());
+		State.bReaching, State.bGripped, State.bExplicitHold, State.bControlledHold, State.HeldReachDistanceCm, *Result.ToString());
 	if (Event.ToString().EndsWith(TEXT("_rejected")))
 	{
 		UE_LOG(LogCatPhysicsGrab, Warning, TEXT("%s"), *Record);
@@ -348,6 +364,80 @@ UPrimitiveComponent* UCatPhysicsGrabComponent::GetGripTargetComponent(bool bLeft
 {
 	return IsGripping(bLeft) ? ResolveTarget(GetGripState(bLeft)) : nullptr;
 }
+
+UPrimitiveComponent* UCatPhysicsGrabComponent::ResolveConstraintTarget(const FCatPhysicsGripState& State) const
+{
+	auto* Target = ResolveTarget(State);
+	if (auto* Light = UCatLightPropComponent::FindFor(Target))
+		if (auto* Carrier = Light->GetGripCarrier()) return Carrier;
+	return Target;
+}
+
+void UCatPhysicsGrabComponent::RefreshContact(const bool bLeft, const bool bForceRebind)
+{
+	const int32 Index = bLeft ? 0 : 1;
+	const auto& State = GetGripState(bLeft);
+	if (!State.bGripped || !Contacts.IsValidIndex(Index)) return;
+	auto* Target = ResolveConstraintTarget(State);
+	if (!IsValid(Target)) return;
+	UPhysicsConstraintComponent* Contact = Contacts[Index];
+	if (State.bControlledHold || Target == Body)
+	{
+		if (!Contact->IsBroken()) Contact->BreakConstraint();
+		return;
+	}
+	UPrimitiveComponent *A = nullptr, *B = nullptr; FName BoneA, BoneB;
+	Contact->GetConstrainedComponents(A, BoneA, B, BoneB);
+	const FName TargetBone = Target == ResolveTarget(State) ? State.TargetBone : NAME_None;
+	const bool bRebind = bForceRebind || B != Target || BoneB != TargetBone;
+	const FVector Point = GetGripWorldLocation(bLeft);
+	if (bRebind)
+	{
+		// Preserve the hand-local contact when changing carrier, even if the joint has small solver error.
+		const FTransform HandFrame = Contact->ConstraintInstance.GetRefFrame(EConstraintFrame::Frame1);
+		const float PreviousScale = Contact->ConstraintInstance.GetLastKnownScale();
+		Contact->BreakConstraint();
+		Contact->SetWorldLocationAndRotation(Point, FRotator::ZeroRotator);
+		Contact->SetLinearBreakable(true, 60000.0f);
+		Contact->SetConstrainedComponents(Hands[Index], NAME_None, Target, TargetBone);
+		if (!bForceRebind && A == Hands[Index])
+			Contact->SetConstraintReferencePosition(EConstraintFrame::Frame1,
+				HandFrame.GetLocation() * (PreviousScale / FMath::Max(.01f, Contact->ConstraintInstance.GetLastKnownScale())));
+		UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=physics_grip_receiver_bound World=%s NetMode=%d Authority=1 LocalRole=%d Actor=%s Hand=%s GripId=%s Target=%s ReceiverActor=%s ReceiverComponent=%s Result=Bidirectional"),
+			*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(GetOwner()->GetLocalRole()), *GetNameSafe(GetOwner()),
+			bLeft ? TEXT("Left") : TEXT("Right"), *State.GripId.ToString(), *GetNameSafe(State.TargetActor), *GetNameSafe(Target->GetOwner()), *GetNameSafe(Target));
+	}
+	// A controlled shaft can rotate about its holder. Keep the same chosen point on that shaft.
+	if (Target != ResolveTarget(State) && !Contact->IsBroken())
+	{
+		FTransform Pose = Target->GetComponentTransform(); Pose.RemoveScaling();
+		Contact->SetConstraintReferencePosition(EConstraintFrame::Frame2,
+			Pose.InverseTransformPosition(Point) / FMath::Max(.01f, Contact->ConstraintInstance.GetLastKnownScale()));
+	}
+}
+
+void UCatPhysicsGrabComponent::RefreshTargetConstraintsFromAuthority(UPrimitiveComponent* Target)
+{
+	if (!GetOwner()->HasAuthority()) return;
+	for (const bool bLeft : {true, false})
+		if (GetGripTargetComponent(bLeft) == Target) RefreshContact(bLeft);
+}
+
+bool UCatPhysicsGrabComponent::ControlRetainedGripFromAuthority(const bool bLeft, UPrimitiveComponent* ExpectedTarget)
+{
+	auto& State = bLeft ? LeftGrip : RightGrip;
+	if (!GetOwner()->HasAuthority() || !State.bGripped || !State.bExplicitHold
+		|| !IsValid(ExpectedTarget) || ResolveTarget(State) != ExpectedTarget) return false;
+	if (State.bControlledHold) return true;
+	const auto Previous = State;
+	State.bControlledHold = true;
+	RefreshContact(bLeft);
+	++State.Revision;
+	LogGrip(bLeft, TEXT("physics_grip_controlled_hold"), TEXT("PrimaryPoseOwned"));
+	OnGripChanged.Broadcast(this, bLeft, Previous, State);
+	GetOwner()->ForceNetUpdate();
+	return true;
+}
 bool UCatPhysicsGrabComponent::RetainGripFromAuthority(const bool bLeft, UPrimitiveComponent* ExpectedTarget)
 {
 	const int32 Index = bLeft ? 0 : 1;
@@ -356,7 +446,7 @@ bool UCatPhysicsGrabComponent::RetainGripFromAuthority(const bool bLeft, UPrimit
 	FCatPhysicsGripState& State = bLeft ? LeftGrip : RightGrip;
 	if (!IsValid(ExpectedTarget) || !ExpectedTarget->IsRegistered() || !ExpectedTarget->IsCollisionEnabled()
 		|| !State.bGripped || ResolveTarget(State) != ExpectedTarget || !Contacts.IsValidIndex(Index)
-		|| !Contacts[Index] || Contacts[Index]->IsBroken() || !PhysicalBody || !PhysicalBody->IsLocomotionEnabled())
+		|| !Contacts[Index] || (!State.bControlledHold && Contacts[Index]->IsBroken()) || !PhysicalBody || !PhysicalBody->IsLocomotionEnabled())
 	{
 		LogGrip(bLeft, TEXT("physics_grip_rejected"), TEXT("ExplicitHoldTargetUnavailable"));
 		return false;

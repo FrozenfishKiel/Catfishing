@@ -335,7 +335,7 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("已部署的真实杆进入生产查找索引"), Service && Service->RegisterDeployedRod(Player, Rod))
 			|| !TestTrue(TEXT("规范握点放在实际手爪后经生产校验建约束"), Rod->BeginPhysicalHoldFromAuthority(Player, true))
 			|| !TestTrue(TEXT("实际握持后按部署事务显式授予拥有者主控"),
-				Rod->SetPrimaryOperatorFromAuthority(Player, Rod->GetPresentationState().RodActorRevision))) return false;
+				Rod->SetPrimaryOperatorFromAuthority(Player, Rod->GetPresentationState().RodActorRevision) && Rod->GetPhysicalRodComponent()->CommitPrimaryHold(Player))) return false;
 		if (!TestEqual(TEXT("真实握边保留固定步主位"), Rod->GetOperatorCount(), 1)) return false;
 		const FVector InitialFishPosition(500.0, 0.0, 0.0);
 		Fish->SetActorLocation(InitialFishPosition);

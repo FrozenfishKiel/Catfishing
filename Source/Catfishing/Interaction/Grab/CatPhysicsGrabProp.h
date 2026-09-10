@@ -8,6 +8,7 @@ class UStaticMesh;
 class UStaticMeshComponent;
 class UMaterialInterface;
 class UMaterialInstanceDynamic;
+class UCatLightPropComponent;
 
 /** The prototype's only prop configuration. Dimensions are full local sizes in centimeters. */
 USTRUCT()
@@ -44,6 +45,7 @@ private:
 	UFUNCTION() void OnRep_Configuration();
 	UFUNCTION() void OnRep_BodyTransform();
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UStaticMeshComponent> PhysicsMesh;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatLightPropComponent> LightProp;
 	UPROPERTY() TObjectPtr<UStaticMesh> BlockMesh;
 	UPROPERTY() TObjectPtr<UStaticMesh> RodMesh;
 	UPROPERTY() TObjectPtr<UMaterialInterface> BaseMaterial;

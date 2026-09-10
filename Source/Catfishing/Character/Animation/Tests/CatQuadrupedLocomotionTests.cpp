@@ -1,4 +1,5 @@
 #if WITH_DEV_AUTOMATION_TESTS
+#include "Interaction/Grab/CatPhysicsGrabProp.h"
 
 #include "Misc/AutomationTest.h"
 #include "Tests/AutomationCommon.h"
@@ -214,6 +215,16 @@ bool FCatLocomotionTerrainTest::RunTest(const FString& Parameters)
 	Scene.World.GetTestWorld()->LineTraceSingleByChannel(InteractionHit,FVector(0,0,10),FVector(0,0,-10),ECC_Visibility,InteractionQuery);
 	TestEqual(TEXT("the volume remains hittable by the real interaction trace"),InteractionHit.GetActor(),static_cast<AActor*>(InteractionOnly));
 	TestTrue(TEXT("visibility-only interaction volume cannot become a foot support"), Flat[0].Z > 0.5 && Flat[0].Z < 2.5);
+	const FTransform PropPose(FVector(0, 0, 4));
+	auto* LightProp = Scene.World.GetTestWorld()->SpawnActorDeferred<ACatPhysicsGrabProp>(ACatPhysicsGrabProp::StaticClass(), PropPose);
+	if (!LightProp || !LightProp->ConfigureFromAuthority(FVector(80, 80, 4), true, .35f, FLinearColor::Green)) return false;
+	LightProp->FinishSpawning(PropPose);
+	LightProp->GetPhysicsMesh()->SetPhysicsLinearVelocity(FVector(100, 0, 0));
+	for (int32 Frame = 0; Frame < 90; ++Frame) ApplyPose();
+	TestTrue(TEXT("lightweight solid prop does not lift a visible foot"),
+		FMath::Abs(Visual->GetBoneLocationByName(CatLocomotionTest::Ankles[0], EBoneSpaces::WorldSpace).Z - Flat[0].Z) < .1);
+	TestEqual(TEXT("lightweight prop velocity is not inherited as platform movement"), Solver.GetObservation().SupportSpeedCmS, 0.0, .01);
+	LightProp->Destroy();
 	auto* Step = Scene.AddBox(FVector(Flat[0].X,Flat[0].Y,1.5), FVector(2.0,2.0,1.5));
 	if (!Step) return false;
 	for (int32 Frame = 0; Frame < 90; ++Frame) ApplyPose();

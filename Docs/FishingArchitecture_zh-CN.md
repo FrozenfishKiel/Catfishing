@@ -3,6 +3,41 @@
 阅读对象：需要理解/修改钓鱼玩法逻辑的人。运动链说明于 2026-09-04 按源码核对，当前细节统一见 [鱼运动与遛鱼逻辑实现导读](FishFightImplementationGuide_zh-CN.md)；本页负责系统关系与入口导航。
 配套文档：蓝图配置见 [FishingBlueprintSetupGuide_zh-CN.md](FishingBlueprintSetupGuide_zh-CN.md)；规格口径见 [FishingCoreFlow_zh-CN.md](FishingCoreFlow_zh-CN.md)。
 
+## 2026-09-10：轻道具与主控持竿
+
+本轮按用户确认保留原持竿偏移、鼠标瞄准和完整搏鱼流程。只有主控进入会话；朋友抓人或抓竿后由真实关节拉动，不按R加入、合并体力、额外收费或自动接任。道具取消持握自重和撞翻猫的碰撞响应，仍保留实体与有限求解质量；固定地形不改。
+
+修改前基线为6358679，相关原型检查183项182通过，StarterRod150/500为既有资产期望差异。实施期间交互支撑修复697ef96、四足IK3a6dcba分别由原任务提交；本轮在其上只接入轻道具支撑过滤和受控手表现。用户Cat_Skeleton.uasset修改保留，SHA256为3AF77F901B4FD35EAF79A7133230BB8964A1F2E886064010F680A40C3DE18008。隔离验证目录为`Saved/Validation/LightProps-20260910`，全部报告位于`Saved/Automation/LightProps-20260910`。以下为原影响表的最终实现对照，证据分层列于表后。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 动态道具入口/默认值 | `Source/Catfishing/Fishing/Integration/CatFishingPhysicalRodComponent::Initialize`配置0.35kg竿；`Interaction/Grab/CatPhysicsGrabProp::ApplyConfiguration`由原型GameMode调用 | 原动态道具全重力、可砸猫；保留形状和原质量，握持重力0、最后松手重力0.25，空闲线/角阻尼2与4，无速度截断 | 两宿主创建共享`CatLightPropComponent`；Held优先于Loaded/Falling；有鱼载荷恢复各宿主原阻尼；静态Configure先RestoreOrdinaryPhysics | 组件/注册接收方→两个宿主初始化→实际握点与鱼力通知 | 普通箱体/竿、任意一手剩余、最后释放、固定地形；质量kg/力N到kg·cm/s²换算不改 | LightProps原生三项通过；0.35kg保持，0.2s轻落4.433cm，Loaded保留1000cm/s输入，不做速度裁剪 |
+| 道具碰猫单向响应 | `CatLightPropSubsystem`注册Body/两手/道具；UE5.8 Chaos ContactModification提供接触对逆质量/惯量缩放 | 原碰撞给猫施加冲量和翻转转矩；只在轻道具-猫对中猫缩放为0，猫猫/地形照旧 | 每World一个SimCallback，物理线程只读粒子ID/角色映射，不读UObject；粒子重建/注销更新；cat接触冲量0但抓握关节双向 | 注册及PhysicsStateChanged→PreSimulate发布→ContactModification→EndPlay/Deinitialize注销 | 上方/侧向撞身体与手、粒子重建、猫猫推抓、场景隔离；默认Log记录映射与限频接触数 | `CollisionsYieldWithoutCatImpulse`真实物理测试猫位移/转角/手位移0，道具碰后回弹；原猫猫及多人网络回归通过 |
+| 多手状态/清理/复制 | `Grab::TryLatch/ReleaseHand/RetainGripFromAuthority`拥有GripId，LightProp读取实际全部握点 | 原无自重状态；不能因一手松开结束其他握点，客户端不能重复模拟 | 成功建/拆关节后刷新实际握点数；复制PropId/Revision/GripCount/Mode/ExternalLoad；重力仅服务器执行，旧输入epoch与强清理保留 | 原握点成功→轻道具状态；销毁、退出、失焦、传送仍原Release入口 | 2→1保持原GripId、角色销毁→0、目标销毁、主控释放助手仍握、双端最终版本一致 | 原生多手退出通过；正式IP双端主控释放后助手同GripId保留，最终服务器/客户端Revision=7，助手未接任 |
+| 主控受控持竿 | `PhysicalRod::CommitPrimaryHold→Grab::ControlRetainedGripFromAuthority`；`AdvanceControlledAim/PositionControlledRod`；原Settings持竿偏移与角参数 | 自由鱼竿/臂约束的惯性会带倒主控；用户明确要求“刚性连接，保留原持竿与瞄准” | 主控同一握点标记bControlledHold，无自我闭环关节；竿使用运动学姿态随实际猫身体位置；恢复c491786纯StepRotation和原参数单位、惯性、限位、鱼阻力/努力积分；无主控恢复有限质量动态竿 | 通用握点接收→成功R Commit→PrePhysics唯一旋转积分→PostPhysics位置/表现；清理回原动态道具 | 原鼠标停/重新动、主控跳转、同手接管、助手力、ASC0体力；不改变猫力量/跳跃420cm/s/重力 | `Report-Continuity`4/4通过；身体附加约束尝试已撤除，无BodyConnections/物理鼠标转矩旁路；持竿/空手跳跃顶点约124.93/125.20cm，放竿支撑最低约39cm（正常40cm） |
+| 助手抓受控竿 | LightProp可选GripCarrier→`Grab::ResolveConstraintTarget/RefreshContact`；逻辑TargetActor/Component/TargetLocalPoint仍指竿 | 运动学竿不能把助手钉在世界；松主控不能丢掉助手 | 助手实际关节B为主控身体在所选竿点对应的位置；主控转竿时刷新局部锚点；主控释放改接自由竿，保持同GripId及元数据；朋友抓猫与普通道具仍原关节 | 先目标映射→建约束→姿态更新→释放重接；无Session注册/收费入口 | 助手正向输入被拉退、锚点差/关节间隙、主控释放连续；不靠虚拟合力叠加位置 | 正式双端无鱼对拉，助手输入+X却随主控向-X移动约92–96cm；关节间隙<3cm、逻辑点误差0；重接日志`physics_grip_receiver_bound`关联同GripId |
+| 单次鱼力/端点响应/账单 | PhysicalRod PrePhysics→Runner固定步→原SetLineLoad队列→唯一AddForce→PostPhysics；`PopulateEndpointResponse`读取真实Locked关节 | 受控竿无独立积分质量，鱼力必须落到真实猫且不能重复施加；无人主控仍原竿端加载 | 受控时同一队列施力到主控质心，角向阻力由原StepRotation承担；端点平移响应从实际接收身体和真实约束构建；自由竿仍AddForceAtLocation；本人ASC/Session/库存/装备/存档不变 | 接收体切换→响应Jacobian→力队列消费；原世代/Step fence与费用采样不变 | 正式鱼8s×60/120Hz×正常/0.12s卡顿、冲量账、辅助零费、静态握点；无新资源写口 | 正式Runner四组通过；OwnerMouse重鱼/小鱼/抓地、Operator/Participant资源回归通过；具体最终报告见表后 |
+| 脚点/起身/IK支撑 | `CatPhysicalBodyComponent::AppendSupportQueryIgnores`接到脚点/恢复；`CatQuadrupedLocomotion`脚底和平台速度两查询调用同入口 | 动态轻道具不能作脚底/起身支撑；交互体积既有过滤仍保留 | 通过共享注册表忽略轻道具组件；静态地形与静态配置的原型物照旧；不改四足IK算法 | 交互支撑检查点→Body过滤→两处IK过滤 | 实体射线仍命中道具、身体/IK不站其上、重配置静态恢复支撑；跳跃/恢复原回归 | 原生支撑及IK Terrain通过，相关身体/原型/Locomotion组合通过；不含并行IK本体提交 |
+| 接触抓取前置 | `Grab::UpdateHand`原判手心与预测Sweep球心<1cm；显式Grip原允许手球半径+1cm | 单向避让可在到达预测球心前推开道具；仍须实际接近命中的实体才能抓 | 仅对已Sweep命中目标使用实际最近接触点，沿既有手球半径+1cm容差进入原TryLatch；HeldReach继续捕获原驱动目标距离，避免近接触变全伸展 | Sweep筛选→实际近接触→原约束/复制路径 | 无远程抓；近握点不推人、地面/人/竿抓取、正式鼠标抓回再R、菜单/退出 | 原型动态竿、NearGrip与真实GAS/R接管流程通过；旧松键保留显式握点，资源费用原入口 |
+| 主控手表现/联网瞄准 | `PhysicsPrototypeVisual::RefreshVisualPose→SolveHandReach`原仅跟手球；SlackAimNetwork旧夹具给自由竿冲量且旋转容量0 | 受控主手需看已复制握点；普通抓握仍看物理手；旧夹具不再能验证新的受控主竿 | 仅bControlledHold主手CCD读取逻辑握点，保留骨长/ABP/IK顺序；协议夹具给50力量·米容量和原鱼阻力观察，仍测真实RPC、丢包、停鼠标零费、恢复与相机同步 | 复制Grip→原最终手CCD；协议前置→唯一Aim积分；无新增动画资产或物理写口 | 最终正式渲染及爪目标误差；旧蒙太奇/Jump/普通手消费者；协议夹具不是完整Session | 主工程Report-MainPoseRendered两项通过，正式客户端受控爪对握点差5.387cm；Report-Delivery最终差5.345cm。保留骨长，当前模型约5cm视觉偏差尚未消除 |
+| 受控速度回归观察 | `CatFishingFormalPhysicalRunnerTests`与`CatFishingPhysicalRodTests`原读RodBody原始动态速度；RodEffort原读刚体角动量 | 受控时原始刚体速度为0，不能用该0值通过速度上限检查 | 测试改用Receiver.GetPointVelocity在相同竿体中心的速度和唯一角速度观察；保留原1000cm/s等门槛、鱼力/位移/费用断言；自由竿专项继续读真实Chaos速度 | 相同观察点/单位→既有速度门槛→重跑正式4组与native重鱼/小鱼/努力生命周期 | 防止运动学模式掩盖不稳定；无生产公式、资产、输入或费用改动 | Report-Delivery正式4组与native专项通过；实际竿中心峰速度82.952–121.339cm/s，不使用运动学刚体的零速度蒙混通过 |
+| 松手运动连续性 | `PhysicalRod::RefreshControlledCarrier`初版只继承主控平移速度并清空转竿速度；RodEffort原始刚体读取一直为0，改读真实转竿观察后暴露交接缺口 | 转动中松手应保持竿体该点速度与角速度，再由已有落地阻尼轻落 | 切回动态前捕获竿体中心GetPointVelocity和ControlledAngularVelocity，切换后一次赋给原有限质量竿；没有第二鱼力或额外冲量 | 先读取受控运动→恢复动态→交接速度→助手同GripId重接；R/销毁清理入口不变 | 转动松手角速度连续、无鱼落地/助手释放、力账不重复；按Chaos浮点存储精度比较，物理稳定性门槛保持 | Report-Delivery RodEffort生命周期通过；非零转动释放，线/角速度均精确继承至Chaos可表示值；辅助同GripId和费用世代清理通过 |
+| 资产/脚本/Cook/日志/文档 | 正式`/Game/Character/BP_CatCharacter`和`/Game/Blueprint/Actors/BP_CatFishingRodActor`继承原生组件；原型GameMode运行时生成；模块Build.cs | 新Chaos私有依赖/组件原生接入，既有具名资产/输入/WBP/生成器/Cook入口不变 | 保留原Blueprint/IMC/WBP/骨架资产；新增LogCatPhysicsGrab/LogCatFishing事件及默认落盘日志，更新本页/原型使用说明/唯一差距入口；撤除试验身体约束和旧自由竿鼠标转矩 | C++接线→正式BP实际加载→Editor/Game→双端与截图→独立提交 | 资产hash与最终diff；资产加载不等同Steam/Cook/真人手感；不扩至背包物品 | 正式BP运行、主工程Editor/Game构建已成功；最终日志/截图见表后；本轮未Cook或运行新包双端默认日志验收 |
+
+松手连续性专项补充：`Report-ReleaseDiagnostic`实际交接前角速度为(0.086664678882,-0.179566539836,0.260114534808)rad/s，交接后为对应单精度值，差1.60245e-8rad/s。测试已按Chaos速度存储精度比较同一向量，同时断言交接前确有非零运动、检查线速度；UE5.8 `Chaos/ParticleDirtyFlags.h::FParticleVelocities` 的V/W确为FVec3f存储；不放宽速度稳定性门槛，也不修改生产求解。
+
+落地证据按阶段解读：空手跳跃自身也会短暂下蹲（约17.62cm），持竿约14.64cm；两者跳跃顶点差约0.27cm，持竿全程UpZ>0.99，持竿站立及放竿阶段最低约39cm、随后恢复正常站立。该短暂落地压缩未改猫重力/力量/跳跃，不应被写成持续道具压身。早期失败报告保留在同一证据目录中，不能当作最终验收；最终以本节以下报告为准。
+
+本轮最终证据（路径均相对项目根目录）：
+
+- **contract**：主工程 `Saved/Automation/LightProps-20260910/MainEditorBuild-Delivery.log` 与 `MainGameBuild-Delivery.log` 为Win64 Development成功，最终源码对应实际主工程DLL/EXE；未仅依赖隔离副本。原生组件由正式BP加载，无配置、持久化schema、输入/WBP或资产生成入口迁移；Skeleton hash保持上述值。
+- **runtime_behavior**：`Saved/Automation/LightProps-20260910/Report-Delivery/index.json` 共196项，186 clean、9项带既有警告、1项既有失败，未运行和执行中均0。唯一失败 `StarterRodPreservesMaximumDurabilityBaseline` 仍为测试150/正式资产500；未更改资产或放宽该断言。最终 `Tests-Delivery.log` 覆盖轻道具碰身体/手、重建/多手/退出/复制、猫猫抓推、正式R/GAS取放与无鱼对拉、支撑/IK、完整原搏鱼/主控费用/终局、联网瞄准停止/丢包恢复与松竿速度交接。正式60/120Hz及各7次0.12s卡顿共4组均8s、160固定步/160次ASC写入，冲量账误差0，无重复施力；线误差峰值3.395cm、真实竿中心速度峰值121.339cm/s。
+- **presentation_delivery**：主工程 `Saved/Automation/LightProps-20260910/Report-MainPoseRendered/index.json` 两项正式BP网络渲染通过（带既有ABP启动警告），对应 `Tests-MainPoseRendered.log`。已查看 `Saved/Automation/LightProps/Images/20260910-043252-formal-held-turn.png`、`20260910-043253-formal-held-jump.png`、`20260910-043255-formal-released-over-cat.png`、`20260910-043258-formal-after-drop-standing.png` 和 `20260910-043301-formal-two-cats-pull-no-fish.png`。这些是正式猫/竿资产在现有有光照试验场的实际客户端图，放竿后猫正常站立；渲染发生在最终松手速度交接修复前，该修复后的行为由Report-Delivery再次覆盖。当前模型受控爪仍有约5cm对位偏差，未改骨长或动画资产；正式Lake地图贴墙/贴地真人手感、完整主动布娃娃/客户端预测回滚、高延迟多人搏鱼与本轮Cook/新包双端默认日志未验收，不能据此关闭角色、Fishing或Delivery模块。
+
+双端日志在以上单个UE测试进程日志中按World/NetMode区分服务器与客户端，检索 `LogCatPhysicsGrab` 的 `physics_light_prop_*`、`physics_grip_receiver_bound`、`physics_grip_controlled_hold`，以及 `LogCatFishing` 的 `fishing_rod_controlled_carrier`、`fishing_controlled_aim_input`。BodyId/PropId/GripId/RodActorId与Revision关联同一链；最后松手服务器与客户端轻道具Revision均为7。新事件保留Game Development默认落盘等级，但本轮没有运行新包，不能将PIE双端日志当作打包根目录无-log验收。
+
+本轮未保留额外身体锚点或自由主竿鼠标转矩两套路径；受控主手是唯一明确例外，普通手和助手继续真实关节。原具名BP组件、旧反射兼容消费者及其删除条件沿本页此前审计边界保留；本轮未删除二进制资产。所有新增/修改的轻道具环节已按表核对；未验收表现范围同步唯一进度入口，不另立业务账本。
+
 ## 2026-09-10：删除旧钓鱼失败预算
 
 用户明确要求安全删除旧重试/失败预算方案。删除前扫描 1,887 个项目及插件资产包，旧类型/字段的 ASCII 与 UTF-16 序列化名称均零引用；UE 加载并读取 3 个 StateTree 的任务、条件、转换、全局任务及参数，其中 `/Game/Data/StateTrees/ST_FishingSession` 未接旧任务。资产保持原文件，不生成替代树。检查脚本为 `Scripts/audit_fishing_failure_removal.py`，证据位于 `Saved/Automation/FishingFailureRemoval/Before/Audit.json`。

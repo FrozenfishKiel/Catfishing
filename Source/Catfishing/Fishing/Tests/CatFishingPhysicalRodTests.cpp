@@ -317,7 +317,8 @@ bool FCatFishingPhysicalCouplingTest::RunTest(const FString& Parameters)
 			if (!Result || !Result->ConfigureCanonicalAnchorsFromAuthority(FTransform(FVector(60, 0, 0)), FTransform::Identity, FTransform::Identity)
 				|| !Result->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("CoupledRod"), NAME_None, Players[0], nullptr, true, false)) return nullptr;
 			Result->FinishSpawning(FTransform::Identity);
-			return Result->BeginPhysicalHoldFromAuthority(Players[0], true) && Result->SetPrimaryOperatorFromAuthority(Players[0], Result->GetPresentationState().RodActorRevision) ? Result : nullptr;
+			return Result->BeginPhysicalHoldFromAuthority(Players[0], true) && Result->SetPrimaryOperatorFromAuthority(Players[0], Result->GetPresentationState().RodActorRevision)
+				&& Result->GetPhysicalRodComponent()->CommitPrimaryHold(Players[0]) ? Result : nullptr;
 		};
 		// These authority controllers have no LocalPlayer. Keep their accepted input alive exactly as
 		// a connected client does; otherwise the production 0.5 s disconnect watchdog must release them.
@@ -331,13 +332,16 @@ bool FCatFishingPhysicalCouplingTest::RunTest(const FString& Parameters)
 		auto* Rod = SpawnHeldRod();
 		if (!TestNotNull(TEXT("primary hand holds an actual rigid rod"), Rod)) return false;
 		auto* HelperBody = Cats[1]->GetPhysicalBodyComponent();
-		const FVector HelperContact = Rod->GetGripWorldTransform().GetLocation() + FVector(40, 0, 0);
+		const FVector HelperContact = Rod->GetPhysicalRodBody()->GetComponentTransform().TransformPosition(FVector(10, 0, .8));
 		HelperBody->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator, HelperBody->GetBody()->GetComponentLocation()
 			+ HelperContact - HelperBody->GetHand(true)->GetComponentLocation()), TEXT("TorqueContactFixture"));
+		FVector ClosestContact;
+		const double ClosestDistance = Rod->GetPhysicalRodBody()->GetClosestPointOnCollision(HelperContact, ClosestContact);
+		AddInfo(FString::Printf(TEXT("Event=controlled_rod_helper_contact Point=%s Closest=%s Distance=%.4f RodPose=%s"), *HelperContact.ToCompactString(), *ClosestContact.ToCompactString(), ClosestDistance, *Rod->GetPhysicalRodBody()->GetComponentTransform().ToHumanReadableString()));
 		if (!TestTrue(TEXT("helper actually holds the same rod"), HelperBody->GetGrab()->GripFromAuthority(true, Rod->GetPhysicalRodBody(), HelperContact))) return false;
 		Rod->RefreshPrimaryControlFromAuthority();
 		if (!TestEqual(TEXT("two real grips retain only the explicit owner"), Rod->GetOperatorCount(), 1)) return false;
-		Rod->SetFightConstraintObservationFromAuthority(FVector::ForwardVector, 0, 0, true);
+		Rod->SetFightConstraintObservationFromAuthority(FVector::ForwardVector, 0, 0, true, 0, 50);
 
 		const FRotator InitialAim = Rod->GetGripWorldTransform().Rotator();
 		const auto SendMouse = [&](int64 Sequence, bool bActive, double Yaw)
@@ -425,7 +429,7 @@ bool FCatFishingPhysicalCouplingTest::RunTest(const FString& Parameters)
 						*Endpoint.RodTipVelocityCentimetersPerSecond.ToCompactString(), *Endpoint.RodTipAccelerationCentimetersPerSecondSquared.ToCompactString(),
 						*Endpoint.PreviousLineForceNewtons.ToCompactString(), *Endpoint.RodPointInverseMassX.ToCompactString(),
 						FVector::Distance(Shoulder, Hand), CatBody->GetGrab()->GetGripState(true).HeldReachDistanceCm,
-						CatBody->GetVelocity().Size(), Rod->GetPhysicalRodBody()->GetPhysicsAngularVelocityInRadians().Size()));
+						CatBody->GetVelocity().Size(), Rod->GetPhysicalRodComponent()->GetAngularVelocityRadiansPerSecond().Size()));
 				}
 				State.FishWorldPosition = Result.ProposedFishWorldPosition;
 				State.FishVelocityCentimetersPerSecond = Result.ResolvedFishVelocityCentimetersPerSecond;
@@ -440,7 +444,7 @@ bool FCatFishingPhysicalCouplingTest::RunTest(const FString& Parameters)
 			TickConnectedWorld(1.0f / Rate);
 			const double Stretch = FMath::Max(0.0, FVector::Distance(State.FishWorldPosition, Rod->GetRodTipWorldTransform().GetLocation()) - State.LineLengthCentimeters);
 			if (Stretch > MaximumLineError) { MaximumLineError = Stretch; PeakStretchSeconds = double(Frame + 1) / Rate; }
-			const double Speed = Rod->GetPhysicalRodBody()->GetPhysicsLinearVelocity().Size();
+			const double Speed = Rod->GetPhysicalRodComponent()->GetPointVelocity(Rod->GetPhysicalRodBody()->GetComponentLocation()).Size();
 			if (Speed > MaximumSpeed)
 			{
 				MaximumSpeed = Speed; PeakSpeedSeconds = double(Frame + 1) / Rate;

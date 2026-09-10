@@ -4,6 +4,7 @@
 #include "Engine/StaticMesh.h"
 #include "EngineUtils.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Interaction/Grab/CatLightPropComponent.h"
 #include "Materials/MaterialInstanceDynamic.h"
 #include "Materials/MaterialInterface.h"
 #include "Net/UnrealNetwork.h"
@@ -20,6 +21,7 @@ ACatPhysicsGrabProp::ACatPhysicsGrabProp()
 	PrimaryActorTick.TickGroup = TG_PostPhysics;
 	SetNetUpdateFrequency(30.0f);
 	PhysicsMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("PhysicsMesh"));
+	LightProp = CreateDefaultSubobject<UCatLightPropComponent>(TEXT("LightProp"));
 	SetRootComponent(PhysicsMesh);
 	PhysicsMesh->SetMobility(EComponentMobility::Movable);
 	PhysicsMesh->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
@@ -65,6 +67,7 @@ bool ACatPhysicsGrabProp::ConfigureFromAuthority(const FVector& DimensionsCentim
 void ACatPhysicsGrabProp::ApplyConfiguration()
 {
 	// A prop has one body. Mesh/scale changes occur only during setup, never during a grip solve.
+	LightProp->RestoreOrdinaryPhysics();
 	PhysicsMesh->SetSimulatePhysics(false);
 	PhysicsMesh->SetStaticMesh(Configuration.bRod ? RodMesh : BlockMesh);
 	SetActorScale3D(Configuration.DimensionsCentimeters / 100.0);
@@ -86,6 +89,7 @@ void ACatPhysicsGrabProp::ApplyConfiguration()
 			*GetName(), *GetNameSafe(GetWorld()), int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()));
 	}
 	PhysicsMesh->SetSimulatePhysics(Configuration.bDynamic && HasAuthority());
+	if (Configuration.bDynamic) LightProp->Initialize(PhysicsMesh);
 }
 
 void ACatPhysicsGrabProp::BeginPlay()

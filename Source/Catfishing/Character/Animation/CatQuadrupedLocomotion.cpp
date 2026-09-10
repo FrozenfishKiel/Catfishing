@@ -322,6 +322,7 @@ void FCatQuadrupedLocomotion::Apply(USkeletalMeshComponent* Source, UPoseableMes
 	FHitResult MotionHit;
 	const FVector SupportPoint = Body->GetSupportFootPointWorld();
 	FCollisionQueryParams MotionParams(SCENE_QUERY_STAT(CatLocomotionSupport), false, Visual->GetOwner());
+	Body->AppendSupportQueryIgnores(MotionParams);
 	// Sample platform motion independently of planting, so a moving platform cannot trap IK in Sliding mode.
 	if (Body->IsGrounded() && Visual->GetWorld()->LineTraceSingleByChannel(MotionHit,
 		SupportPoint + FVector::UpVector * 20.0 * Scale, SupportPoint - FVector::UpVector * 30.0 * Scale, SupportChannel, MotionParams, SupportResponses)
@@ -387,6 +388,7 @@ void FCatQuadrupedLocomotion::Apply(USkeletalMeshComponent* Source, UPoseableMes
 		Rotations[FootIndex] = Base.GetRotation();
 		FHitResult Hit;
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(CatLocomotionFoot), false, Visual->GetOwner());
+		Body->AppendSupportQueryIgnores(Params);
 		const FVector Start = Targets[FootIndex] + FVector::UpVector * Settings.MaxFootOffsetCm * Scale;
 		const FVector End = Targets[FootIndex] - FVector::UpVector * (Settings.MaxFootOffsetCm + 12.0) * Scale;
 		const bool bGround = bEnabled && Reach < 0.001 && Visual->GetWorld()->LineTraceSingleByChannel(Hit, Start, End, SupportChannel, Params, SupportResponses)

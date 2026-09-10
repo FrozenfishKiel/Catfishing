@@ -273,12 +273,12 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 				FVector::Distance(ActualTip, Rod->GetRodTipWorldTransform().GetLocation()));
 			MaximumLineError = FMath::Max(MaximumLineError,
 				FMath::Max(0.0, FVector::Distance(Fish->GetActorLocation(), ActualTip) - Runner->State.LineLengthCentimeters));
-			const double RodSpeed = Rod->GetPhysicalRodBody()->GetPhysicsLinearVelocity().Size();
+			const double RodSpeed = Rod->GetPhysicalRodComponent()->GetPointVelocity(Rod->GetPhysicalRodBody()->GetComponentLocation()).Size();
 			if (RodSpeed > MaximumSpeed)
 			{
 				MaximumSpeed = RodSpeed;
 				PeakSpeedSeconds = SimulatedSeconds;
-				PeakAngularSpeed = Rod->GetPhysicalRodBody()->GetPhysicsAngularVelocityInRadians().Size();
+				PeakAngularSpeed = Rod->GetPhysicalRodComponent()->GetAngularVelocityRadiansPerSecond().Size();
 				PeakBodySpeed = Body->GetVelocity().Size();
 			}
 			if (Receiver->GetLineLoadStepForDiagnostics() != LastLoadStep)

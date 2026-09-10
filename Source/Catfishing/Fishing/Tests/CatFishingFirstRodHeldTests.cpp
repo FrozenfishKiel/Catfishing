@@ -125,8 +125,9 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("initial state contains exactly one operator"), Rod->GetOperatorCount(), 1);
 		TestEqual(TEXT("first R uses original instance"), Rod->GetPresentationState().ItemInstanceId, ItemId);
 		TestEqual(TEXT("first command acknowledges the committed primary revision"), First.RodActorRevision, Rod->GetPresentationState().RodActorRevision);
-		const FVector ExpectedGrip = Character->GetPhysicalBodyComponent()->GetHand(true)->GetComponentLocation();
-		TestTrue(TEXT("formal BP is in the hand before any tick"), Rod->GetGripWorldTransform().GetLocation().Equals(ExpectedGrip, 0.01));
+		const FVector ExpectedGrip = Character->GetPhysicalBodyComponent()->GetBody()->GetComponentLocation()
+			+ Rod->GetGripWorldTransform().GetRotation().RotateVector(GetDefault<UCatFishingSettings>()->HeldRodGripOffsetCentimeters);
+		TestTrue(TEXT("formal BP uses the original controlled held offset before any tick"), Rod->GetGripWorldTransform().GetLocation().Equals(ExpectedGrip, 0.01));
 		TestTrue(TEXT("held rod updates with movement"), Rod->IsActorTickEnabled());
 		const int64 UsedEquipmentRevision = Equipment->GetSnapshot().Revision;
 		for (int32 Cycle = 0; Cycle < 2; ++Cycle)
@@ -137,7 +138,7 @@ bool FCatFishingFirstRodHeldTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("subsequent R commits"), Result.bCommitted);
 			TestEqual(TEXT("R puts down the occupied physical rod"), Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Grounded);
 			TestFalse(TEXT("R releases the actual holding constraint"), Character->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true));
-			TestTrue(TEXT("an in-reach deployed rod is picked up through an actual hand constraint"), Rod->BeginPhysicalHoldFromAuthority(Player));
+			TestTrue(TEXT("fixture positions the released rod for actual regrip without moving the cat"), Rod->BeginPhysicalHoldFromAuthority(Player, true));
 			TestEqual(TEXT("physical grip alone does not grant primary control"), Rod->GetOperatorCount(), 0);
 			const FCatFishingInputEdge RetakeEdge = Commands->SubmitRodInteract();
 			FCatFishingCommandResult Retake;

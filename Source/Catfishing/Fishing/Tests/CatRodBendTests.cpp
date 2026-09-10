@@ -6,6 +6,7 @@
 #include "Components/StaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "GameFramework/PlayerState.h"
+#include "GameFramework/WorldSettings.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Presentation/CatRodBendCurve.h"
@@ -82,7 +83,9 @@ bool FCatRodBendFormalRuntimeTest::RunTest(const FString& Parameters)
 	Hook->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid());
 	Wrapper.BeginPlayInTestWorld();
 	// 仅观察弯曲表现，不向无地板夹具施加重力；真实掉落/受力另由 PhysicalRod 测试覆盖。
-	Rod->GetPhysicalRodBody()->SetEnableGravity(false);
+	// Visual-only fixture: no physical falling, including the shared gentle-release gravity.
+	World->GetWorldSettings()->bGlobalGravitySet = true;
+	World->GetWorldSettings()->GlobalGravityZ = 0;
 	UCatRodBendComponent* Bend = Rod->FindComponentByClass<UCatRodBendComponent>();
 	if (!TestNotNull(TEXT("formal rod has deformation component"), Bend) || !TestTrue(TEXT("formal source mesh is copied"), Bend->IsVisualReady())) return false;
 	UStaticMeshComponent* Source = nullptr;

@@ -18,6 +18,7 @@
 #include "OnlineSubsystemTypes.h"
 #include "Engine/World.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "GameFramework/PlayerState.h"
@@ -93,7 +94,7 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 		&& World->GetSubsystem<UCatFishingService>()->RegisterDeployedRod(PrimaryPlayer, Rod))
 		|| !TestTrue(TEXT("主位以真实手爪握住新竿"), Rod->BeginPhysicalHoldFromAuthority(PrimaryPlayer, true))
 		|| !TestTrue(TEXT("如同R部署事务，握持成功后显式授予部署者主控"),
-			Rod->SetPrimaryOperatorFromAuthority(PrimaryPlayer, Rod->GetPresentationState().RodActorRevision))) return false;
+			Rod->SetPrimaryOperatorFromAuthority(PrimaryPlayer, Rod->GetPresentationState().RodActorRevision) && Rod->GetPhysicalRodComponent()->CommitPrimaryHold(PrimaryPlayer))) return false;
 	UCatPhysicalBodyComponent* HelperBody = HelperCharacter->GetPhysicalBodyComponent();
 	UBoxComponent* PrimaryBody = PrimaryCharacter->GetPhysicalBodyComponent()->GetBody();
 	const FVector Contact = PrimaryBody->GetComponentTransform().TransformPosition(FVector(0, 0, PrimaryBody->GetUnscaledBoxExtent().Z));

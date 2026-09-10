@@ -1,5 +1,6 @@
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Interaction/Grab/CatLightPropSubsystem.h"
 #include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
 #include "Engine/World.h"
@@ -117,6 +118,12 @@ void UCatPhysicalBodyComponent::Initialize(UBoxComponent* InBody, USphereCompone
 		RightHand->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	}
 	Grab->InitializeHands(Body,LeftHand,RightHand,LeftArm,RightArm,GeometryScale);
+	if (auto* Policy = GetWorld()->GetSubsystem<UCatLightPropSubsystem>())
+	{
+		Policy->RegisterCatPart(Body);
+		Policy->RegisterCatPart(LeftHand);
+		Policy->RegisterCatPart(RightHand);
+	}
 	Grab->PrimaryComponentTick.AddPrerequisite(this,PrimaryComponentTick);
 	LastInputSeconds=GetWorld()->GetTimeSeconds();
 	if (HasAuthority()) CaptureSnapshot();
@@ -210,6 +217,7 @@ void UCatPhysicalBodyComponent::UpdatePhysicalMovement(const float DeltaSeconds)
 		const FVector Origin = Body->GetComponentLocation();
 		FHitResult Hit;
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(CatPhysicsGroundRecovery), false, GetOwner());
+		AppendSupportQueryIgnores(Params);
 		if (GetWorld()->LineTraceSingleByChannel(Hit, Origin,
 			Origin - FVector(0.0, 0.0, VerticalExtentCm + 1.0), SupportChannel, Params, SupportResponses)
 			&& Hit.ImpactNormal.Z >= 0.55)
@@ -236,6 +244,7 @@ void UCatPhysicalBodyComponent::UpdatePhysicalMovement(const float DeltaSeconds)
 			const FVector Origin = Body->GetComponentTransform().TransformPosition(FootLocal * GeometryScale);
 			FHitResult Hit;
 			FCollisionQueryParams Params(SCENE_QUERY_STAT(CatPhysicsFootSupport), false, GetOwner());
+			AppendSupportQueryIgnores(Params);
 			if (!GetWorld()->LineTraceSingleByChannel(Hit, Origin, Origin - FVector(0.0, 0.0, GetStandRootHeightCm() * 1.3), SupportChannel, Params, SupportResponses)
 				|| Hit.ImpactNormal.Z < 0.55) continue;
 			bNewGrounded = true;
@@ -614,9 +623,20 @@ void UCatPhysicalBodyComponent::LogState(FName Event, FName Reason) const
 void UCatPhysicalBodyComponent::EndPlay(EEndPlayReason::Type EndPlayReason)
 {
 	ReleaseConnectionsFromAuthority(TEXT("EndPlay"));
+	if (auto* Policy = GetWorld()->GetSubsystem<UCatLightPropSubsystem>())
+	{
+		Policy->UnregisterBody(Body);
+		Policy->UnregisterBody(LeftHand);
+		Policy->UnregisterBody(RightHand);
+	}
 	ExternalForces.Reset();
 	FishingMotorSource.Reset(); bFishingHoldActive=false;
 	if (LeftArm) LeftArm->BreakConstraint();
 	if (RightArm) RightArm->BreakConstraint();
 	Super::EndPlay(EndPlayReason);
+}
+
+void UCatPhysicalBodyComponent::AppendSupportQueryIgnores(FCollisionQueryParams& Params) const
+{
+	if (auto* Policy = GetWorld()->GetSubsystem<UCatLightPropSubsystem>()) Policy->AppendSupportQueryIgnores(Params);
 }

@@ -8,6 +8,7 @@ class UBoxComponent;
 class USphereComponent;
 class UPhysicsConstraintComponent;
 class UCatPhysicsGrabComponent;
+struct FCollisionQueryParams;
 
 class UCatPhysicalBodyComponent;
 
@@ -67,6 +68,8 @@ public:
 	uint32 GetResetEpoch() const { return Snapshot.ResetEpoch; }
 	uint32 GetControlEpoch() const { return ControlEpoch; }
 	FVector GetSupportFootPointWorld() const;
+	/** Shared by physical support and visual foot queries; preserves the body's collision response filtering. */
+	void AppendSupportQueryIgnores(FCollisionQueryParams& Params) const;
 	double GetStandRootHeightCm() const;
 	double GetGeometryScale() const { return GeometryScale; }
 	FVector GetShoulderLocalPoint(bool bLeft) const;

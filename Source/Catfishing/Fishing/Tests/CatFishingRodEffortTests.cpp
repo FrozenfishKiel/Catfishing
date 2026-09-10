@@ -57,7 +57,7 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 	auto* Rod=World->SpawnActor<ACatFishingRodActor>();
 	if (!Rod || !Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(),FGuid::NewGuid(),TEXT("EffortRod"),NAME_None,Players[0],nullptr,true,false)
 		|| !Rod->BeginPhysicalHoldFromAuthority(Players[0],true)
-		|| !Rod->SetPrimaryOperatorFromAuthority(Players[0],Rod->GetPresentationState().RodActorRevision)) return false;
+		|| !Rod->SetPrimaryOperatorFromAuthority(Players[0],Rod->GetPresentationState().RodActorRevision) || !Rod->GetPhysicalRodComponent()->CommitPrimaryHold(Players[0])) return false;
 	if (!TestTrue(TEXT("real primary rod constraint exists"),Cats[0]->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true))) return false;
 	Rod->SetFightConstraintObservationFromAuthority(FVector::ForwardVector, 1, 0, true, 100, 50);
 	FCatFishingRodAimSample Mouse; Mouse.RodActorId=Rod->GetPresentationState().RodActorId; Mouse.InputEpoch=Rod->GetCarrierConstraintState().AimInputEpoch;
@@ -67,7 +67,7 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 	{ ++Mouse.Sequence; Mouse.CumulativeLookDegrees.X+=.1; if (!Rod->AcceptHeldAimSampleFromAuthority(Players[0],Mouse)) return false; Tick(); }
 	FCatFishingRodControlObservation Actual;
 	if (!TestTrue(TEXT("reads authoritative rigid-body observation"),Rod->GetControlObservationFromAuthority(Actual))) return false;
-	TestTrue(TEXT("observed angular velocity comes from actual Chaos body"),Actual.AngularVelocityRadiansPerSecond.Equals(Rod->GetPhysicalRodBody()->GetPhysicsAngularVelocityInRadians(),1.e-8));
+	TestTrue(TEXT("observation reads the unique held-aim integrator"),Actual.AngularVelocityRadiansPerSecond.Equals(Rod->GetPhysicalRodComponent()->GetAngularVelocityRadiansPerSecond(),1.e-8));
 	const auto First=Rod->GetAuthoritativeRotationEffortSnapshot();
 	TestTrue(TEXT("real active motor accumulates support effort"),First.ExertionSquaredSeconds>0);
 	TestTrue(TEXT("real rotation accumulates positive work"),First.PositiveWorkRadians>0);
@@ -83,12 +83,12 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 	for (int32 Frame=0;Frame<12;++Frame) Tick();
 	TestEqual(TEXT("passive inertia does not charge support"),Rod->GetAuthoritativeRotationEffortSnapshot().ExertionSquaredSeconds,Passive.ExertionSquaredSeconds);
 	TestEqual(TEXT("passive inertia does not charge positive work"),Rod->GetAuthoritativeRotationEffortSnapshot().PositiveWorkRadians,Passive.PositiveWorkRadians);
-	const FVector Momentum=Rod->GetPhysicalRodBody()->GetPhysicsAngularVelocityInRadians();
+	const FVector Momentum=Rod->GetPhysicalRodComponent()->GetAngularVelocityRadiansPerSecond();
 	Rod->ClearFightConstraintAndLoadFromAuthority();
 	const auto Cleared=Rod->GetAuthoritativeRotationEffortSnapshot();
 	TestTrue(TEXT("fight cleanup changes effort epoch"),Cleared.Epoch>First.Epoch);
 	TestEqual(TEXT("fight cleanup drops prior effort"),Cleared.ExertionSquaredSeconds,0.0);
-	TestTrue(TEXT("fight cleanup preserves actual angular momentum"),Rod->GetPhysicalRodBody()->GetPhysicsAngularVelocityInRadians().Equals(Momentum,1.e-8));
+	TestTrue(TEXT("clearing effort does not itself advance the held rotation state"),Rod->GetPhysicalRodComponent()->GetAngularVelocityRadiansPerSecond().Equals(Momentum,1.e-8));
 	Rod->SetFightConstraintObservationFromAuthority(FVector::ForwardVector, 1, 0, true, 100, 50);
 	Mouse.InputEpoch=Rod->GetCarrierConstraintState().AimInputEpoch; Mouse.bMouseActive=true; ++Mouse.MouseStrokeSequence; Mouse.MouseStrokeStartLookDegrees=Mouse.CumulativeLookDegrees;
 	for (int32 Frame=0;Frame<6;++Frame) { ++Mouse.Sequence; Mouse.CumulativeLookDegrees.X+=2; if (!Rod->AcceptHeldAimSampleFromAuthority(Players[0],Mouse)) return false; Tick(); }
@@ -106,7 +106,9 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 	TestTrue(TEXT("explicit owner remains the only operator"),Rod->IsPrimaryOperator(Players[0])&&!Rod->IsPrimaryOperator(Players[1]));
 	TestFalse(TEXT("physically connected helper cannot turn through the owner's input protocol"),Rod->AcceptHeldAimSampleFromAuthority(Players[1],Mouse));
 	const FTransform BeforeRelease=Rod->GetPhysicalRodBody()->GetComponentTransform();
-	const FVector BeforeReleaseMomentum=Rod->GetPhysicalRodBody()->GetPhysicsAngularVelocityInRadians();
+	const FVector BeforeReleaseMomentum=Rod->GetPhysicalRodComponent()->GetAngularVelocityRadiansPerSecond();
+	const FVector BeforeReleaseVelocity=Rod->GetPhysicalRodComponent()->GetPointVelocity(BeforeRelease.GetLocation());
+	TestTrue(TEXT("release fixture has actual nonzero rod rotation"),BeforeReleaseMomentum.Size()>.01);
 	Cats[0]->GetPhysicalBodyComponent()->GetGrab()->ReleaseAllFromAuthority(TEXT("EffortOwnerRelease"));
 	Rod->GetPhysicalRodComponent()->RefreshPrimaryControl();
 	TestEqual(TEXT("owner release leaves no fishing operator"),Rod->GetOperatorCount(),0);
@@ -118,7 +120,13 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 	FCatFishingRodControlObservation Observation; Rod->GetControlObservationFromAuthority(Observation);
 	TestFalse(TEXT("no operator leaves no active mouse motor"),Observation.bMouseDriveActive);
 	TestTrue(TEXT("owner release cannot teleport the physically held rod"),Rod->GetPhysicalRodBody()->GetComponentTransform().Equals(BeforeRelease,1.e-8));
-	TestTrue(TEXT("owner release preserves real angular velocity"),Observation.AngularVelocityRadiansPerSecond.Equals(BeforeReleaseMomentum,1.e-8));
+	AddInfo(FString::Printf(TEXT("Release angular velocity before=(%.12f,%.12f,%.12f) after=(%.12f,%.12f,%.12f) error=%.12g rad/s"),
+		BeforeReleaseMomentum.X, BeforeReleaseMomentum.Y, BeforeReleaseMomentum.Z,
+		Observation.AngularVelocityRadiansPerSecond.X, Observation.AngularVelocityRadiansPerSecond.Y, Observation.AngularVelocityRadiansPerSecond.Z,
+		(Observation.AngularVelocityRadiansPerSecond - BeforeReleaseMomentum).Size()));
+	// Chaos stores particle velocities as floats; compare the exact stored representation.
+	TestTrue(TEXT("owner release preserves real angular velocity"),Observation.AngularVelocityRadiansPerSecond.Equals(FVector(FVector3f(BeforeReleaseMomentum)),1.e-8));
+	TestTrue(TEXT("owner release preserves rod-center linear velocity"),Rod->GetPhysicalRodBody()->GetPhysicsLinearVelocity().Equals(FVector(FVector3f(BeforeReleaseVelocity)),1.e-8));
 	return !HasAnyErrors();
 }
 

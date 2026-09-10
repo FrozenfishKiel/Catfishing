@@ -265,7 +265,8 @@ bool FCatPhysicsPrototypeDynamicRodTest::RunTest(const FString& Parameters)
 	CatPhysicsGrabTest::FScene Scene;
 	if (!Scene.Initialize(this)) return false;
 	ACatPhysicsPrototypePawn* Pawn = Scene.Spawn(FVector(0, 0, 20));
-	ACatPhysicsGrabProp* Rod = Scene.World.GetTestWorld()->SpawnActor<ACatPhysicsGrabProp>(FVector(30, -3.4, 3), FRotator(90, 0, 0));
+	// Keep the initial shaft clear of the resting paw; contact now correctly yields the prop.
+	ACatPhysicsGrabProp* Rod = Scene.World.GetTestWorld()->SpawnActor<ACatPhysicsGrabProp>(FVector(55, -3.4, 3), FRotator(90, 0, 0));
 	if (!Pawn || !Rod || !Rod->ConfigureFromAuthority(FVector(2, 2, 90), true, 0.45f, FLinearColor::Yellow, true)) return false;
 	Scene.Step(30);
 	TestTrue(TEXT("prototype rod is an actual simulated rigid body"), Rod->GetPhysicsMesh()->IsSimulatingPhysics());

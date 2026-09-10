@@ -7,6 +7,7 @@
 #include "Components/SceneComponent.h"
 #include "Components/BoxComponent.h"
 #include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
+#include "Interaction/Grab/CatLightPropComponent.h"
 #include "Fishing/CatFishingService.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/CatFishingSettings.h"
@@ -39,6 +40,7 @@ ACatFishingRodActor::ACatFishingRodActor()
 	PhysicsBody->SetupAttachment(SceneRoot);
 	PhysicsBody->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	PhysicalRod = CreateDefaultSubobject<UCatFishingPhysicalRodComponent>(TEXT("PhysicalRod"));
+	LightProp = CreateDefaultSubobject<UCatLightPropComponent>(TEXT("LightProp"));
 	// VisualRoot 承载美术表现（皮肤/特效），与权威判定用的锚点分层，便于蓝图独立驱动视觉
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
 	VisualRoot->SetupAttachment(SceneRoot);
@@ -559,7 +561,7 @@ bool ACatFishingRodActor::GetControlObservationFromAuthority(FCatFishingRodContr
 	OutObservation = {};
 	if (!HasAuthority() || !IsUsingPhysicalRod()) return false;
 	OutObservation.ActualAim = GetGripWorldTransform().Rotator();
-	OutObservation.AngularVelocityRadiansPerSecond = PhysicsBody->GetPhysicsAngularVelocityInRadians();
+	OutObservation.AngularVelocityRadiansPerSecond = PhysicalRod->GetAngularVelocityRadiansPerSecond();
 	OutObservation.bWaitingForNewHolder = bAwaitingNewHolderAim;
 	OutObservation.bMouseDriveActive = !bAwaitingNewHolderAim && CarrierConstraintState.bFightActive
 		&& HeldAimInput.IsMouseActive(GetWorld()->GetTimeSeconds());

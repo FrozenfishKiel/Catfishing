@@ -20,6 +20,8 @@ struct FCatPhysicsGripState
 	UPROPERTY(BlueprintReadOnly) bool bGripped = false;
 	/** Authority has adopted this exact grip; a later mouse release cannot cancel that ownership. */
 	UPROPERTY(BlueprintReadOnly) bool bExplicitHold = false;
+	/** Primary input owns a controlled prop pose, without a self-constraining hand joint. */
+	UPROPERTY(BlueprintReadOnly) bool bControlledHold = false;
 	UPROPERTY(BlueprintReadOnly) FGuid GripId;
 	UPROPERTY() uint32 Revision = 0;
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<AActor> TargetActor = nullptr;
@@ -46,6 +48,8 @@ public:
 	bool GripFromAuthority(bool bLeft, UPrimitiveComponent* Target, const FVector& WorldPoint);
 	/** Transfers an existing contact to an explicit authority hold without rebuilding its joint. */
 	bool RetainGripFromAuthority(bool bLeft, UPrimitiveComponent* ExpectedTarget);
+	bool ControlRetainedGripFromAuthority(bool bLeft, UPrimitiveComponent* ExpectedTarget);
+	void RefreshTargetConstraintsFromAuthority(UPrimitiveComponent* Target);
 	void ReleaseHandFromAuthority(bool bLeft, FName Reason);
 	UPrimitiveComponent* GetGripTargetComponent(bool bLeft) const;
 	/** Authority only; observers must not assume the previous target survives destruction. */
@@ -74,6 +78,8 @@ private:
 	UFUNCTION() void OnRep_GripState();
 	void ApplyGrabInput(bool bLeft, bool bHeld);
 	void UpdateHand(bool bLeft, const FVector& Aim);
+	void RefreshContact(bool bLeft, bool bForceRebind = false);
+	UPrimitiveComponent* ResolveConstraintTarget(const FCatPhysicsGripState& State) const;
 	void TryLatch(bool bLeft, const FHitResult& Hit);
 	void ReleaseHand(bool bLeft, FName Reason, bool bStopReaching);
 	UPrimitiveComponent* ResolveTarget(const FCatPhysicsGripState& State) const;

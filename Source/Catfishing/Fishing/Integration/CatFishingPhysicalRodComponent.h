@@ -39,6 +39,7 @@ public:
 	void FinishPhysicsFrame();
 	FTransform GetObservedActorTransform() const;
 	FVector GetPointVelocity(const FVector& WorldPoint) const;
+	FVector GetAngularVelocityRadiansPerSecond() const;
 	bool BeginPrimaryHold(APlayerState* Player, bool bPositionNewRod);
 	bool CommitPrimaryHold(APlayerState* Player);
 	bool IsHeldBy(const APlayerState* Player) const;
@@ -59,7 +60,13 @@ private:
 	FSimpleMulticastDelegate PhysicsReceiverUnavailable;
 	void UpdatePrimaryMotorBudget();
 	void RefreshInputTickPrerequisites();
-	void ApplyMouseMotor(float DeltaTime);
+	void AdvanceControlledAim(float DeltaTime);
+	void RefreshControlledCarrier();
+	void PositionControlledRod();
+	TWeakObjectPtr<UPrimitiveComponent> ControlledBody;
+	FVector ControlledAngularVelocity = FVector::ZeroVector;
+	FVector SmoothedFishPull = FVector::ZeroVector;
+	uint64 ControlledEffortEpoch = 0;
 	void ObserveGrab(UCatPhysicsGrabComponent* Grab);
 	void HandleGripChanged(UCatPhysicsGrabComponent* Grab, bool bLeft,
 		const FCatPhysicsGripState& Previous, const FCatPhysicsGripState& Current);

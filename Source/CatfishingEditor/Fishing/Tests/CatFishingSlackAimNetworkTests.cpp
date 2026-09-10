@@ -229,7 +229,7 @@ namespace CatFishingSlackAimNetwork
 						ServerRod->GetPhysicalRodComponent()->CommitPrimaryHold(RemoteController->PlayerState))
 					|| !Test->TestTrue(TEXT("initialize actual held direction"), ServerRod->RefreshHeldTransformFromAuthority())
 					|| !Test->TestTrue(TEXT("start only the mouse-input fight domain without a virtual force"),
-						ServerRod->SetFightConstraintObservationFromAuthority(FVector::ForwardVector, 0, 0, true, 0, 0))) return true;
+						ServerRod->SetFightConstraintObservationFromAuthority(FVector::ForwardVector, 0, 0, true, 0, 50))) return true;
 				ServerRod->ForceNetUpdate();
 				Stage = 1;
 				StageStarted = PhysicsNow;
@@ -295,16 +295,16 @@ namespace CatFishingSlackAimNetwork
 					StoppedEffort = ServerRod->GetAuthoritativeRotationEffortSnapshot();
 					Test->TestTrue(TEXT("remote reliable stop immediately discards the authority target"),
 						Observation.RequestedAim.Equals(Observation.ActualAim, 1e-8));
-					// A real external impulse at the rod tip verifies passive movement after stop. It
-					// does not inject a second synthetic fish torque or change the body transform.
-					ServerRod->GetPhysicalRodBody()->AddImpulseAtLocation(
-						ServerGrip.GetRightVector() * 3.0, ServerRod->GetRodTipWorldTransform().GetLocation());
+					// This protocol fixture supplies the same normalized rotational load observation as
+					// the Runner. Real Session force/impulse delivery is covered by the formal Runner test.
+					ServerRod->SetFightConstraintObservationFromAuthority(FVector::ForwardVector, .5, 0, true,
+						30, 50, ServerGrip.GetRightVector());
 				}
 				if (PhysicsNow - StoppedAt < 0.6) return false;
 				const auto Effort = ServerRod->GetAuthoritativeRotationEffortSnapshot();
 				Test->TestEqual(TEXT("passive motion after mouse stop has no cat intent fee"), Effort.ExertionSquaredSeconds, StoppedEffort.ExertionSquaredSeconds);
 				Test->TestEqual(TEXT("passive motion after mouse stop has no cat motion fee"), Effort.PositiveWorkRadians, StoppedEffort.PositiveWorkRadians);
-				Test->TestTrue(TEXT("a stopped player's constrained rod still responds to a physical load"),
+				Test->TestTrue(TEXT("a stopped player's controlled rod still responds to the original fish resistance"),
 					FMath::RadiansToDegrees(StoppedAim.Quaternion().AngularDistance(ServerGrip)) > 1.0);
 				Stage = 4;
 				StageStarted = PhysicsNow;
