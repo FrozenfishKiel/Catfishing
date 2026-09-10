@@ -10,6 +10,7 @@
 
 class UAbilitySystemComponent;
 class UCatChumFieldReplicationComponent;
+class UCatEconomyAttributeSet;
 class UCatRunAttributeSet;
 class UCatRunModifierAttributeSet;
 
@@ -36,6 +37,10 @@ public:
 	UAbilitySystemComponent* GetRunAbilitySystemComponent() const;
 	/** 返回 authority 上可写的 Run ASC；客户端返回空，防止 UI 或复制回调绕过 GameMode 命令协议。 */
 	UAbilitySystemComponent* GetRunAbilitySystemComponentFromAuthority() const;
+	/** 返回团队经济属性集；它与 Run 属性集挂在同一 GameState ASC，余额服务只能读取或经 GE 修改这一份属性。 */
+	const UCatEconomyAttributeSet* GetEconomyAttributeSet() const;
+	/** authority 获取可写经济属性集；经济服务用它创建交易 GE，客户端和 UI 不获得写入口。 */
+	UCatEconomyAttributeSet* GetEconomyAttributeSetFromAuthority() const;
 	/** 注册 Run/Help/Shop 三类公开快照复制；客户端分别经 RepNotify 消费，不在本地推进领域状态。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	/** 仅允许 authority GameMode 写入组合公开事实；每次写入都会触发网络更新。 */
@@ -88,6 +93,10 @@ private:
 	/** Run ASC 持有的来源倍率属性集，保存压力、世界进度奖惩倍率和目标倍率；ExecCalc 捕获它，业务模块不得各自重算来源修正。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Run", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatRunModifierAttributeSet> RunModifiers;
+
+	/** GameState ASC 上唯一团队余额属性集；构造时注册，PostInitializeComponents 在服务器用 Settings 播种本局起始金币。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Economy", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCatEconomyAttributeSet> EconomyAttributes;
 
 	/** 自然事件与玩家打窝的公开复制组件；服务器 ChumFieldSubsystem 写入，客户端只用它驱动窝点表现。 */
 	UPROPERTY(VisibleAnywhere)

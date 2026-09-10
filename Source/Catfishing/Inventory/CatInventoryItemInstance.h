@@ -74,7 +74,10 @@ public:
 	void SetItemInstanceIdFromAuthority(FGuid InItemInstanceId);
 
 	/** 运行宿主记录当前拥有者；跨库存移动会刷新它，避免实例行为继续认为自己属于原 Actor。 */
-	void SetRuntimeOwnerActor(AActor* InRuntimeOwnerActor);
+	virtual void SetRuntimeOwnerActor(AActor* InRuntimeOwnerActor);
+
+	/** 返回由这件库存物品保管的既有世界 Actor；普通物品返回空，鱼护用它复用仍承载内部库存的原 Actor。 */
+	virtual AActor* GetWorldActor() const;
 
 	/** 读取当前运行宿主；没有显式宿主时回退到 Outer Actor，方便刚创建的实例立即可用。 */
 	AActor* GetRuntimeOwnerActor() const;

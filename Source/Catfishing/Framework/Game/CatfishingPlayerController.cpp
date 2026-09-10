@@ -5,6 +5,8 @@
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Framework/Game/CatfishingPlayerState.h"
 #include "Camp/CatCampHubActor.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "ShopEconomy/CatFishBuyerActor.h"
 #include "Character/CatCharacter.h"
 #include "AbilitySystem/Config/CatAbilityInputConfig.h"
 #include "AbilitySystem/Config/CatAbilitySettings.h"
@@ -304,6 +306,10 @@ void ACatfishingPlayerController::SetupInputComponent()
 		{
 			EnhancedInput->BindAction(Entry.InputAction, ETriggerEvent::Started,
 				this, &ThisClass::NativeInputTagPressed, Entry.InputTag);
+			EnhancedInput->BindAction(Entry.InputAction, ETriggerEvent::Completed,
+				this, &ThisClass::NativeInputTagReleased, Entry.InputTag);
+			EnhancedInput->BindAction(Entry.InputAction, ETriggerEvent::Canceled,
+				this, &ThisClass::NativeInputTagCanceled, Entry.InputTag);
 		}
 		NativeInputBoundComponent = EnhancedInput;
 	}
@@ -1010,20 +1016,53 @@ void ACatfishingPlayerController::ServerSubmitShopCartAtKiosk_Implementation(ACa
 	DeliverCampCommandResultToOwningClient(DeliveryResult);
 }
 
-void ACatfishingPlayerController::ServerSellFish_Implementation(const FGuid FishItemInstanceId,
-	AActor* SourceInventoryHost, const int32 SourceInventorySlotIndex, const FGuid RequestId,
-	const int64 ExpectedWalletRevision)
+// 售鱼路由流程：只转交买家和冻结的鱼身份；服务端协调器重读来源与距离，所有失败和重放统一回送领域结果。
+void ACatfishingPlayerController::ServerSellFishBatch_Implementation(const FGuid RequestId,
+	ACatFishBuyerActor* Buyer, ACatFishGuardActor* Guard, const TArray<FGuid>& FishInstanceIds)
 {
-	// 售鱼 RPC 流程：Controller 只取当前 World 的商店交易控制器并转交库存宿主和槽位。
-	// 依赖缺失时这里静默返回，保持 RPC 缺依赖不改状态；真正的鱼移除、估价、入公款和账本幂等都在 ShopTradeController 中完成。
-	UCatShopTradeController* Controller =
-		GetWorld() ? GetWorld()->GetSubsystem<UCatShopTradeController>() : nullptr;
-	if (!Controller)
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	if (UCatShopTradeController* Trading = GetWorld() ? GetWorld()->GetSubsystem<UCatShopTradeController>() : nullptr)
 	{
-		return;
+		Result = Trading->SubmitFishSaleFromPlayer(this, Buyer, Guard, FishInstanceIds, RequestId).Delivery;
 	}
-	Controller->SubmitFishSaleFromPlayer(this, FishItemInstanceId, SourceInventoryHost,
-		SourceInventorySlotIndex, RequestId, ExpectedWalletRevision);
+	else Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	DeliverCampCommandResultToOwningClient(Result);
+}
+
+// 落地路由流程：先拒绝关闭阶段和错误意图，再交库存统一校验与提交；无论成功失败均回送原请求，客户端不决定落点。
+void ACatfishingPlayerController::ServerReleaseInventoryItemToWorld_Implementation(const FGuid RequestId,
+	AActor* SourceHost, const int32 Slot, const FGuid ItemInstanceId, const int32 Quantity,
+	const ECatInventoryWorldAction Action)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	if (!CanForwardGameplayCommand()) Result.Error = ECatDomainCommandError::CommandsClosed;
+	else if (!RequestId.IsValid() || !ItemInstanceId.IsValid() || Quantity <= 0
+		|| (Action != ECatInventoryWorldAction::Drop && Action != ECatInventoryWorldAction::Place))
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	else if (ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn()))
+		Result = UCatInventoryStatics::ReleaseItemToWorldFromAuthority(ControlledCharacter, RequestId,
+			SourceHost, Slot, ItemInstanceId, Quantity, Action);
+	else Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	UE_LOG(LogCatfishing, Log, TEXT("Event=inventory_world_result World=%s NetMode=%d Player=%s Request=%s Host=%s Action=%d Error=%d"),
+		*GetNameSafe(GetWorld()), int32(GetNetMode()), *GetName(), *RequestId.ToString(),
+		*GetNameSafe(SourceHost), int32(Action), int32(Result.Error));
+	DeliverCampCommandResultToOwningClient(Result);
+}
+
+// 鱼护拾取路由：服务器确认命令窗口和同世界对象，实际所有权与容量由鱼护裁决；回执不创建第二份携带状态。
+void ACatfishingPlayerController::ServerPickUpFishGuard_Implementation(ACatFishGuardActor* Guard, const FGuid RequestId)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	if (!CanForwardGameplayCommand()) Result.Error = ECatDomainCommandError::CommandsClosed;
+	else if (!RequestId.IsValid() || !IsValid(Guard) || Guard->GetWorld() != GetWorld())
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	else Result.Error = Guard->PickUpFromAuthority(this, RequestId)
+		? ECatDomainCommandError::None : ECatDomainCommandError::InvalidPayload;
+	Result.bCommitted = Result.Error == ECatDomainCommandError::None;
+	DeliverCampCommandResultToOwningClient(Result);
 }
 
 // 草药 RPC 路由流程：Controller 只定位目标 Character 的 ConditionComponent 并转交请求；正式扣草药、刷新装备读模型和恢复身体都由 ConditionComponent 按服务器事实提交。
@@ -1156,8 +1195,22 @@ void ACatfishingPlayerController::NativeInputTagPressed(const FGameplayTag Input
 	}
 	if (InteractionTargetingComponent)
 	{
-		InteractionTargetingComponent->TryInteract();
+		InteractionTargetingComponent->BeginInteractionInput();
 	}
+}
+
+// 松开流程：只处理交互标签；翻天锁已接管时取消候选，其他时候由目标组件决定是否属于短按。
+void ACatfishingPlayerController::NativeInputTagReleased(const FGameplayTag InputTag)
+{
+	if (InputTag.MatchesTagExact(CatInteractionTags::Input_Interact) && InteractionTargetingComponent)
+		InteractionTargetingComponent->EndInteractionInput(IsDayTransitionInputBlocked());
+}
+
+// 取消流程：输入层失效只释放计时器与候选，绝不提交短按或拾取命令。
+void ACatfishingPlayerController::NativeInputTagCanceled(const FGameplayTag InputTag)
+{
+	if (InputTag.MatchesTagExact(CatInteractionTags::Input_Interact) && InteractionTargetingComponent)
+		InteractionTargetingComponent->EndInteractionInput(true);
 }
 
 // 主动离局 RPC 流程：只把当前 Controller 交给 authority GameMode；标记不销毁 Session、不旅行，并由随后 Logout 精确消费。

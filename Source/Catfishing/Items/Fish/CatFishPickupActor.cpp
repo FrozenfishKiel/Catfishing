@@ -6,6 +6,7 @@
 #include "Character/CatCharacter.h"
 #include "Collection/CatRunImprintService.h"
 #include "Components/SkeletalMeshComponent.h"
+#include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
 #include "Condition/CatConditionComponent.h"
 #include "Data/CatFishDefinition.h"
@@ -17,6 +18,7 @@
 #include "GameFramework/PlayerState.h"
 #include "Interaction/CatInteractionSettings.h"
 #include "FishContainers/CatFishPickupSettings.h"
+#include "FishContainers/CatFishGuardActor.h"
 #include "Fishing/Presentation/CatFishPresentationDefinition.h"
 #include "Fishing/Presentation/CatFishGrounding.h"
 #include "FishContainers/World/CatWorldSurfaceResolver.h"
@@ -28,6 +30,7 @@
 #include "Net/UnrealNetwork.h"
 #include "TimerManager.h"
 
+// 构造流程：创建支持场景碰撞的复制根并忽略Pawn，鱼体仅负责冻结姿态与缩放；不在CDO阶段读取定义或创建捕获事实。
 ACatFishPickupActor::ACatFishPickupActor()
 {
 	bReplicates = true;
@@ -35,21 +38,28 @@ ACatFishPickupActor::ACatFishPickupActor()
 	bAlwaysRelevant = false;
 	PrimaryActorTick.bCanEverTick = false;
 
+	WorldCollision = CreateDefaultSubobject<UBoxComponent>(TEXT("WorldCollision"));
+	SetRootComponent(WorldCollision);
+	WorldCollision->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	WorldCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
+	WorldCollision->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
+	WorldCollision->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block);
 	InteractionSphere = CreateDefaultSubobject<USphereComponent>(TEXT("InteractionSphere"));
-	SetRootComponent(InteractionSphere);
+	InteractionSphere->SetupAttachment(WorldCollision);
 	InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	InteractionSphere->SetCollisionResponseToAllChannels(ECR_Ignore);
 	InteractionSphere->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	InteractionSphere->SetGenerateOverlapEvents(false);
 
 	FishMesh = CreateDefaultSubobject<USkeletalMeshComponent>(TEXT("FishMesh"));
-	FishMesh->SetupAttachment(InteractionSphere);
+	FishMesh->SetupAttachment(WorldCollision);
 	// 鱼体使用冻结的世界比例；猫身体/嘴 Socket 的缩放不能把同一条鱼缩小或放大。
 	FishMesh->SetAbsolute(false, false, true);
 	FishMesh->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	FishMesh->SetRenderCustomDepth(false);
 }
 
+// 生成流程：设置查询球半径后加载冻结姿态；网格和盒形根按同一身份定尺寸，不在每次位置复制时重建刚体。
 void ACatFishPickupActor::BeginPlay()
 {
 	Super::BeginPlay();
@@ -81,18 +91,13 @@ void ACatFishPickupActor::OnRep_AttachmentReplication()
 	ReconcileAttachmentFromPresentation(TEXT("AttachmentReplication"));
 }
 
-void ACatFishPickupActor::OnRep_ReplicatedMovement()
-{
-	Super::OnRep_ReplicatedMovement();
-	if (PresentationState.State == ECatFishPickupState::Available) ApplyLandedVisualTransform();
-}
-
 void ACatFishPickupActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
 	DOREPLIFETIME(ThisClass, PresentationState);
 }
 
+// 世界鱼初始化流程：先校验冻结身份、重量和表现尺度，再写入复制状态与捕获上下文，最后刷新网格；已归档库存鱼没有新捕获地域，不伪造 RegionId。
 bool ACatFishPickupActor::InitializeFromAuthority(const FGuid InFishingSessionId, const FGuid InFishInstanceId,
 	UCatFishDefinition* InFishDefinition, const double InWeightKilograms, const double InVisualScale, const FName InRegionId,
 	const TArray<FString>& InFishingParticipantStableNetIds, const FVector GroundNormal)
@@ -100,7 +105,8 @@ bool ACatFishPickupActor::InitializeFromAuthority(const FGuid InFishingSessionId
 	if (!HasAuthority() || bIdentityInitialized || !InFishingSessionId.IsValid() || !InFishInstanceId.IsValid()
 		|| InFishingSessionId == InFishInstanceId || !InFishDefinition || !InFishDefinition->IsRuntimeDefinitionReady()
 		|| !FMath::IsFinite(InWeightKilograms) || InWeightKilograms <= 0.0
-		|| !FMath::IsFinite(InVisualScale) || InVisualScale <= 0.0 || InRegionId.IsNone() || GroundNormal.ContainsNaN())
+		|| !FMath::IsFinite(InVisualScale) || InVisualScale <= 0.0
+		|| (!bCaptureRecorded && InRegionId.IsNone()) || GroundNormal.ContainsNaN())
 	{
 		return false;
 	}
@@ -120,11 +126,17 @@ bool ACatFishPickupActor::InitializeFromAuthority(const FGuid InFishingSessionId
 	FishingParticipantStableNetIds.SetNum(Algo::Unique(FishingParticipantStableNetIds));
 	bIdentityInitialized = true;
 	RefreshFishPresentation();
+	// 旧生成入口传入的是地面接触点和侧躺Actor旋转；侧躺现在归网格，根保持水平并换算为真实物理中心。
+	const FVector ContactPoint = GetActorLocation();
+	SetActorRotation(FRotator(0.0, GetActorRotation().Yaw, 0.0));
 	ApplyLandedVisualTransform();
+	const double Lift = CatFishGrounding::ComputeVerticalLift(WorldCollision->CalcBounds(FTransform::Identity).GetBox(),
+		GetActorTransform(), ContactPoint, PresentationState.GroundNormal);
+	AddActorWorldOffset(FVector(0.0, 0.0, Lift), false, nullptr, ETeleportType::TeleportPhysics);
 	ForceNetUpdate();
 	UE_LOG(LogCatFishContainers, Log, TEXT("Event=fish_pickup_grounded SessionId=%s FishInstanceId=%s Pickup=%s Contact=%s Normal=%s MeshLocation=%s MeshScale=%s VisualScale=%.3f World=%s NetMode=%d Authority=%d Role=%s"),
 		*InFishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *InFishInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetName(),
-		*GetActorLocation().ToCompactString(), *PresentationState.GroundNormal.ToCompactString(),
+		*ContactPoint.ToCompactString(), *PresentationState.GroundNormal.ToCompactString(),
 		*FishMesh->GetComponentLocation().ToCompactString(), *FishMesh->GetComponentScale().ToCompactString(), InVisualScale,
 		*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()));
 	return true;
@@ -206,7 +218,8 @@ void ACatFishPickupActor::RefreshFishPresentation()
 		*GetNameSafe(LandedAnimation), PresentationState.VisualScale, *UEnum::GetValueAsString(PresentationState.State));
 }
 
-// 落地视觉流程：从鱼种表现定义恢复地面鱼专用局部变换；统一视觉缩放随后单独应用。
+// 落地视觉流程：恢复定义局部姿态与侧躺角，再应用冻结缩放；用鱼体包围盒设置物理半尺寸并将网格平移到根中心。
+// 平移只改变表现相对根的位置，不再把根当作地面接触点，所以物理运动和位置复制无需反复补贴地偏移。
 void ACatFishPickupActor::ApplyLandedVisualTransform()
 {
 	if (!FishMesh)
@@ -214,14 +227,20 @@ void ACatFishPickupActor::ApplyLandedVisualTransform()
 		return;
 	}
 	FishMesh->SetRelativeTransform(LandedMeshBaseTransform);
+	const double Roll = FishPresentationDefinition ? FishPresentationDefinition->LandedActorRollDegrees : 90.0;
+	FishMesh->SetRelativeRotation(FQuat(FVector::ForwardVector, FMath::DegreesToRadians(Roll)) * LandedMeshBaseTransform.GetRotation());
 	ApplyVisualScale();
 	if (FishMesh->GetSkeletalMeshAsset())
 	{
-		const FBox Bounds = FishMesh->GetSkeletalMeshAsset()->GetBounds().GetBox()
+		const FBox MeshBounds = FishMesh->GetSkeletalMeshAsset()->GetBounds().GetBox()
 			+ FishMesh->CalcBounds(FTransform::Identity).GetBox();
-		const double Lift = CatFishGrounding::ComputeVerticalLift(Bounds, FishMesh->GetComponentTransform(),
-			GetActorLocation(), PresentationState.GroundNormal);
-		FishMesh->AddWorldOffset(FVector(0.0, 0.0, Lift));
+		const FTransform MeshToActor = FishMesh->GetComponentTransform().GetRelativeTransform(GetActorTransform());
+		const FBox BodyBounds = MeshBounds.TransformBy(MeshToActor.ToMatrixWithScale());
+		if (BodyBounds.IsValid && !BodyBounds.GetExtent().ContainsNaN())
+		{
+			WorldCollision->SetBoxExtent(BodyBounds.GetExtent().ComponentMax(FVector(1.0)), false);
+			FishMesh->SetRelativeLocation(FishMesh->GetRelativeLocation() - BodyBounds.GetCenter());
+		}
 	}
 }
 
@@ -270,10 +289,11 @@ ACatFishPickupActor* ACatFishPickupActor::FindCarriedFish(const ACatCharacter* C
 	return nullptr;
 }
 
+// 叼起流程：先复核authority与单嘴资格，再绑定宿主退出通知并停止物理、写携带状态；附着失败撤回通知和状态，成功才强制网络更新。
 bool ACatFishPickupActor::BeginMouthCarryFromAuthority(ACatCharacter* Character, APlayerState* PlayerState)
 {
 	if (!HasAuthority() || !Character || !PlayerState || PresentationState.State != ECatFishPickupState::Available
-		|| FindCarriedFish(Character) || !Character->GetMesh())
+		|| FindCarriedFish(Character) || ACatFishGuardActor::FindCarriedGuard(Character) || !Character->GetMesh())
 	{
 		return false;
 	}
@@ -283,6 +303,9 @@ bool ACatFishPickupActor::BeginMouthCarryFromAuthority(ACatCharacter* Character,
 	SetInstigator(Character);
 	PresentationState.State = ECatFishPickupState::Carried;
 	PresentationState.CarriedByPlayerState = PlayerState;
+	// 从物理丢弃态拾回时先停止刚体；否则 Chaos 会在附着后继续把根组件移出嘴部。
+	WorldCollision->SetSimulatePhysics(false);
+	WorldCollision->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	InteractionSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	ApplyLocalFocus(false);
 	if (!AttachCarriedRootToMouth(Character, TEXT("AuthorityCommit"), false))
@@ -295,6 +318,7 @@ bool ACatFishPickupActor::BeginMouthCarryFromAuthority(ACatCharacter* Character,
 		PresentationState.State = ECatFishPickupState::Available;
 		PresentationState.CarriedByPlayerState = nullptr;
 		InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+		WorldCollision->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 		return false;
 	}
 	ForceNetUpdate();
@@ -462,6 +486,7 @@ void ACatFishPickupActor::RetryAttachmentReconcile()
 	ReconcileAttachmentFromPresentation(TEXT("DeferredRetry"));
 }
 
+// 退出携带流程：解绑旧角色并清空嘴部状态，查询地面；失败时以DropLocation和向上法线替代。根保持水平、网格恢复侧躺，按法线抬升物理中心后发布固定地面状态。
 void ACatFishPickupActor::ReleaseMouthCarryFromAuthority(const FVector& DropLocation)
 {
 	if (!HasAuthority() || PresentationState.State != ECatFishPickupState::Carried)
@@ -484,14 +509,17 @@ void ACatFishPickupActor::ReleaseMouthCarryFromAuthority(const FVector& DropLoca
 		TEXT("Event=fish_pickup_ground_query_failed SessionId=%s FishInstanceId=%s Pickup=%s Result=KeepDropLocation Contact=%s World=%s NetMode=%d Authority=%d Role=%s"),
 		*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
 		*GetName(), *DropLocation.ToCompactString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), *UEnum::GetValueAsString(GetLocalRole()));
-	FRotator Rotation(0.0, GetActorRotation().Yaw,
-		FishPresentationDefinition ? FishPresentationDefinition->LandedActorRollDegrees : 90.0);
+	FRotator Rotation(0.0, GetActorRotation().Yaw, 0.0);
 	SetActorTransform(FTransform(Rotation, Surface.bSucceeded ? Surface.WorldPosition : DropLocation),
 		false, nullptr, ETeleportType::TeleportPhysics);
 	PresentationState.GroundNormal = Surface.bSucceeded ? Surface.SurfaceNormal : FVector::UpVector;
 	PresentationState.State = ECatFishPickupState::Available;
 	PresentationState.CarriedByPlayerState = nullptr;
 	ApplyLandedVisualTransform();
+	const double Lift = CatFishGrounding::ComputeVerticalLift(WorldCollision->CalcBounds(FTransform::Identity).GetBox(),
+		GetActorTransform(), Surface.bSucceeded ? Surface.WorldPosition : DropLocation, PresentationState.GroundNormal);
+	AddActorWorldOffset(FVector(0.0, 0.0, Lift), false, nullptr, ETeleportType::TeleportPhysics);
+	WorldCollision->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	if (InteractionSphere)
 	{
 		InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
@@ -509,6 +537,7 @@ void ACatFishPickupActor::HandleAuthorityCarrierDestroyed(AActor* DestroyedActor
 	ReleaseMouthCarryFromAuthority(DropLocation);
 }
 
+// 入护流程：校验操作者、原嘴叼鱼与目标库存，恢复或创建同身份鱼实例后整件收货；成功才归档新捕获并销毁世界载体，满护继续叼着。
 FCatCaptureCommitResult ACatFishPickupActor::StoreInFishGuardFromAuthority(AController* RequestingController,
 	const FGuid RequestId, AActor* TargetInventoryHost)
 {
@@ -520,27 +549,30 @@ FCatCaptureCommitResult ACatFishPickupActor::StoreInFishGuardFromAuthority(ACont
 	const FString StableNetId = PlayerState && PlayerState->GetUniqueId().IsValid()
 		? PlayerState->GetUniqueId()->ToString() : FString();
 	UCatRunImprintService* Imprint = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr;
-	if (!HasAuthority() || !RequestId.IsValid() || TargetInventoryHost == nullptr
+	if (!HasAuthority() || bConsumptionCommitted || !RequestId.IsValid() || TargetInventoryHost == nullptr
 		|| TargetInventoryHost->GetWorld() != GetWorld() || StableNetId.IsEmpty()
 		|| !Character || PresentationState.State != ECatFishPickupState::Carried
 		|| GetAttachParentActor() != Character || FindCarriedFish(Character) != this)
 	{
 		return Result;
 	}
-	if (!Imprint || !FishDefinition || !Imprint->CanRecordCommittedCapture())
+	if (!FishDefinition || (!bCaptureRecorded && (!Imprint || !Imprint->CanRecordCommittedCapture())))
 	{
 		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;
 	}
 
-	UCatFishInventoryItemInstance* FishItemInstance = NewObject<UCatFishInventoryItemInstance>(TargetInventoryHost);
-	if (FishItemInstance != nullptr)
+	UCatFishInventoryItemInstance* FishItemInstance = InventoryItem
+		? DuplicateObject<UCatFishInventoryItemInstance>(InventoryItem, TargetInventoryHost)
+		: NewObject<UCatFishInventoryItemInstance>(TargetInventoryHost);
+	if (FishItemInstance != nullptr && !InventoryItem)
 	{
 		FishItemInstance->SetItemDefinition(FishDefinition);
 		FishItemInstance->SetRuntimeOwnerActor(TargetInventoryHost);
 		FishItemInstance->InitializeFishFromAuthority(PresentationState.FishingSessionId,
 			PresentationState.FishInstanceId, StableNetId, PresentationState.WeightKilograms);
 	}
+	if (FishItemInstance) FishItemInstance->SetRuntimeOwnerActor(TargetInventoryHost);
 
 	FCatInventoryReceiveBatch ReceiveBatch;
 	FCatInventoryInstanceEntry& FishEntry = ReceiveBatch.InstanceEntries.AddDefaulted_GetRef();
@@ -562,8 +594,11 @@ FCatCaptureCommitResult ACatFishPickupActor::StoreInFishGuardFromAuthority(ACont
 		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;
 	}
+	// 收货会同步广播库存变化，先占用实物鱼防止回调再出售或入护；拒绝收货时释放占用。
+	bConsumptionCommitted = true;
 	if (!TargetInventory->TryAddInventoryBatch(ReceiveBatch))
 	{
+		bConsumptionCommitted = false;
 		Result.Command.Error = ECatDomainCommandError::CapacityExceeded;
 		return Result;
 	}
@@ -593,6 +628,97 @@ FCatCaptureCommitResult ACatFishPickupActor::StoreInFishGuardFromAuthority(ACont
 	return Result;
 }
 
+// 库存落地流程：读取实物鱼实例与表现定义，标记为已捕获后复用世界鱼初始化；失败不保留实例，来源库存尚未扣除。
+bool ACatFishPickupActor::InitializeFromInventoryFromAuthority(UCatInventoryItemInstance* Item, const int32 Quantity)
+{
+	UCatFishInventoryItemInstance* FishItem = Cast<UCatFishInventoryItemInstance>(Item);
+	UCatFishDefinition* Definition = FishItem ? FishItem->GetFishDefinition() : nullptr;
+	UCatFishPresentationDefinition* Presentation = Definition ? Definition->LoadRuntimePresentationDefinition() : nullptr;
+	if (!HasAuthority() || Quantity != 1 || !FishItem || !Presentation) return false;
+	bCaptureRecorded = true;
+	if (!InitializeFromAuthority(FishItem->GetSourceFishingSessionId(), FishItem->GetItemInstanceId(), Definition,
+		FishItem->GetFishWeightKilograms(), Presentation->ComputeUniformVisualScale(FishItem->GetFishWeightKilograms()),
+		NAME_None, {}))
+	{
+		bCaptureRecorded = false;
+		return false;
+	}
+	InventoryItem = FishItem;
+	InventoryItem->SetRuntimeOwnerActor(this);
+	return true;
+}
+
+// 鱼定义读取流程：直接返回初始化时确认的唯一资产；不按 UI 名称或客户端报价反推定义。
+UCatFishDefinition* ACatFishPickupActor::GetFishDefinition() const
+{
+	return FishDefinition;
+}
+
+// 消费预检流程：确认服务器、有效实物和操作者，再检查嘴叼归属；尚未归档的鱼还要求捕获命令门开放。
+// 此处不检查游戏命令门或距离，上层交易需要在自己规定的时刻检查；函数不写鱼、奖励或经济状态。
+bool ACatFishPickupActor::CanConsumeFromAuthority(AController* RequestingController) const
+{
+	const APlayerState* PlayerState = RequestingController ? RequestingController->PlayerState : nullptr;
+	const UCatRunImprintService* Imprint = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr;
+	return HasAuthority() && !IsActorBeingDestroyed() && !bConsumptionCommitted && bIdentityInitialized
+		&& FishDefinition && PresentationState.FishInstanceId.IsValid() && !PresentationState.FishDefinitionId.IsNone()
+		&& FMath::IsFinite(PresentationState.WeightKilograms) && PresentationState.WeightKilograms > 0.0
+		&& RequestingController && RequestingController->GetWorld() == GetWorld()
+		&& PlayerState && PlayerState->GetUniqueId().IsValid()
+		&& (PresentationState.State == ECatFishPickupState::Available
+			|| (PresentationState.State == ECatFishPickupState::Carried
+				&& RequestingController->GetPawn() == AuthorityCarrier.Get()))
+		&& (bCaptureRecorded || (Imprint && Imprint->CanRecordCommittedCapture()));
+}
+
+// 单鱼消费流程：复核同一预检条件后先关闭重入，再按鱼身份补捕获记录，最后解除宿主回调、附着和交互并销毁。
+// 捕获记录以鱼 GUID 为幂等键，批量出售共享交易 RequestId 也不会把多条鱼误认为同一次捕获。
+bool ACatFishPickupActor::ConsumeFromAuthority(AController* RequestingController, const FGuid RequestId,
+	TFunction<bool()> CommitBeforeConsumption)
+{
+	if (!RequestId.IsValid() || !CanConsumeFromAuthority(RequestingController)) return false;
+	bConsumptionCommitted = true;
+	// 售鱼入账在实物占用期间提交：失败即释放占用，尚未归档或销毁鱼；普通消费不提供回调即可沿原流程进行。
+	if (CommitBeforeConsumption && !CommitBeforeConsumption())
+	{
+		bConsumptionCommitted = false;
+		return false;
+	}
+	const FString StableNetId = RequestingController->PlayerState->GetUniqueId()->ToString();
+	if (!bCaptureRecorded)
+	{
+		FCatCaptureCommittedResult Capture;
+		Capture.CaptureRequestId = PresentationState.FishInstanceId;
+		Capture.FishingSessionId = PresentationState.FishingSessionId;
+		Capture.FishInstance.FishInstanceId = PresentationState.FishInstanceId;
+		Capture.FishInstance.FishDefinitionId = PresentationState.FishDefinitionId;
+		Capture.FishInstance.SourceFishingSessionId = PresentationState.FishingSessionId;
+		Capture.FishInstance.OwnerStableNetId = StableNetId;
+		Capture.FishInstance.WeightKilograms = PresentationState.WeightKilograms;
+		ArchiveCommittedCapture(Capture, StableNetId);
+	}
+	if (ACatCharacter* Carrier = AuthorityCarrier.Get())
+	{
+		Carrier->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleAuthorityCarrierDestroyed);
+	}
+	AuthorityCarrier.Reset();
+	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	SetOwner(nullptr);
+	SetInstigator(nullptr);
+	SetActorEnableCollision(false);
+	SetActorHiddenInGame(true);
+	UE_LOG(LogCatFishContainers, Log,
+		TEXT("Event=world_fish_consumed Request=%s FishInstanceId=%s Definition=%s WeightKg=%.6f Recorded=%d World=%s NetMode=%d Authority=%d LocalRole=%d"),
+		*RequestId.ToString(), *PresentationState.FishInstanceId.ToString(), *PresentationState.FishDefinitionId.ToString(),
+		PresentationState.WeightKilograms, bCaptureRecorded, *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole());
+	if (!Destroy())
+	{
+		UE_LOG(LogCatFishContainers, Error, TEXT("Event=world_fish_destroy_failed Request=%s FishInstanceId=%s Actor=%s"),
+			*RequestId.ToString(), *PresentationState.FishInstanceId.ToString(), *GetName());
+	}
+	return true;
+}
+
 void ACatFishPickupActor::ApplyLocalFocus(const bool bFocused)
 {
 	bLocallyFocused = bFocused && PresentationState.State == ECatFishPickupState::Available;
@@ -604,9 +730,10 @@ void ACatFishPickupActor::ApplyLocalFocus(const bool bFocused)
 	}
 }
 
+// 可交互查询流程：排除提交期间或已消费实物，再检查请求者存在、地面状态与冻结身份；空间和身体校验留给交互提交，不在此占用嘴或发奖励。
 bool ACatFishPickupActor::CanInteract_Implementation(AController* RequestingController) const
 {
-	return RequestingController
+	return !bConsumptionCommitted && RequestingController
 		&& PresentationState.State == ECatFishPickupState::Available
 		&& PresentationState.FishingSessionId.IsValid()
 		&& PresentationState.FishInstanceId.IsValid();
@@ -706,7 +833,7 @@ bool ACatFishPickupActor::Interact_Implementation(AController* RequestingControl
 	{
 		Terminal.Error = ECatDomainCommandError::DependencyUnavailable;
 	}
-	else if (FindCarriedFish(Character))
+	else if (FindCarriedFish(Character) || ACatFishGuardActor::FindCarriedGuard(Character))
 	{
 		Terminal.Error = ECatDomainCommandError::InvalidPhase;
 	}
@@ -720,17 +847,19 @@ bool ACatFishPickupActor::Interact_Implementation(AController* RequestingControl
 	return Terminal.bCommitted;
 }
 
+// 捕获归档流程：已入库的鱼直接跳过；新捕获先写 FishRecorded，再按现有配置提交可选印记候选与成像计划。
 void ACatFishPickupActor::ArchiveCommittedCapture(const FCatCaptureCommittedResult& Committed,
 	const FString& PickerStableNetId)
 {
 	UCatRunImprintService* Imprint = GetWorld() ? GetWorld()->GetSubsystem<UCatRunImprintService>() : nullptr;
-	if (!Imprint || !FishDefinition)
+	if (bCaptureRecorded || !Imprint || !FishDefinition)
 	{
 		return;
 	}
 	FCatCaptureConditionSnapshot Condition;
 	Condition.RegionId = RegionId;
 	const FGuid FishRecordedGrantId = Imprint->RecordCommittedCapture(Committed, PickerStableNetId, Condition);
+	bCaptureRecorded = FishRecordedGrantId.IsValid();
 	if (FishDefinition->CaptureImprintEventId.IsNone())
 	{
 		return;
@@ -757,6 +886,7 @@ void ACatFishPickupActor::ArchiveCommittedCapture(const FCatCaptureCommittedResu
 	}
 }
 
+// 表现复制流程：先解析正式鱼种网格；携带态停刚体并收敛嘴部附着，地面态恢复碰撞，最后通知蓝图并仅对身份或状态变化落盘诊断。
 void ACatFishPickupActor::OnRep_PresentationState(const FCatFishPickupPresentationState& Previous)
 {
 	RefreshFishPresentation();
@@ -764,6 +894,8 @@ void ACatFishPickupActor::OnRep_PresentationState(const FCatFishPickupPresentati
 	{
 		if (InteractionSphere)
 		{
+			WorldCollision->SetSimulatePhysics(false);
+			WorldCollision->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 			InteractionSphere->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 		}
 		ApplyLocalFocus(false);
@@ -775,6 +907,7 @@ void ACatFishPickupActor::OnRep_PresentationState(const FCatFishPickupPresentati
 		if (InteractionSphere)
 		{
 			InteractionSphere->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+			WorldCollision->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 		}
 	}
 	BP_OnPickupPresentationChanged(Previous, PresentationState);

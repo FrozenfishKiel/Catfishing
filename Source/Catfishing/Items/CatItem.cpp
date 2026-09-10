@@ -7,8 +7,9 @@
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/Controller.h"
 #include "Logging/CatLog.h"
+#include "Inventory/CatInventoryItemInstance.h"
 
-// 构造流程：创建统一目标扫描碰撞和可选静态/骨骼表现；碰撞只响应可见性查询，不让掉落物改变角色物理。
+// 构造流程：创建目标扫描与落地物理根，阻挡场景但忽略 Pawn；网格只负责表现，避免两份刚体争夺运动。
 ACatItem::ACatItem()
 {
 	bReplicates = true;
@@ -16,8 +17,10 @@ ACatItem::ACatItem()
 	PrimaryActorTick.bCanEverTick = false;
 	PickupCollision = CreateDefaultSubobject<UBoxComponent>(TEXT("PickupCollision"));
 	SetRootComponent(PickupCollision);
-	PickupCollision->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	PickupCollision->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
 	PickupCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
+	PickupCollision->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
+	PickupCollision->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block);
 	PickupCollision->SetCollisionResponseToChannel(ECC_Visibility, ECR_Block);
 	StaticMesh = CreateDefaultSubobject<UStaticMeshComponent>(TEXT("StaticMesh"));
 	StaticMesh->SetupAttachment(PickupCollision);
@@ -29,6 +32,22 @@ ACatItem::ACatItem()
 
 // 批次读取流程：返回蓝图配置的静态载荷副本；调用方随后仍由统一库存入口做 authority、定义和容量校验。
 FCatInventoryReceiveBatch ACatItem::GetPickupInventory() const { return StaticPickupInventory; }
+
+// 落地接收流程：检查实例与数量，保存同一批次并标记为动态载荷；此时 Actor 尚未公开，来源库存仍未扣除。
+bool ACatItem::InitializeFromInventoryFromAuthority(UCatInventoryItemInstance* Item, const int32 Quantity)
+{
+	if (!HasAuthority() || !Item || !Item->GetItemDefinition() || Quantity <= 0)
+	{
+		return false;
+	}
+	StaticPickupInventory = FCatInventoryReceiveBatch();
+	FCatInventoryInstanceEntry& Entry = StaticPickupInventory.InstanceEntries.AddDefaulted_GetRef();
+	Entry.ItemInstance = Item;
+	Entry.Count = Quantity;
+	Item->SetRuntimeOwnerActor(this);
+	bHasInventoryPayload = true;
+	return true;
+}
 
 // 生成配置流程：基础世界物只提供稳定组件与批次契约；没有额外配置时不写碰撞或库存状态。
 void ACatItem::InitializeActorSpawnConfig() {}
@@ -76,7 +95,16 @@ bool ACatItem::Interact_Implementation(AController* RequestingController, const 
 		PlayerController->ServerRequestInteraction(this, RequestId);
 		return true;
 	}
-	const FCatInventoryReceiveBatch PickupBatch = GetPickupInventory();
+	FCatInventoryReceiveBatch PickupBatch = bHasInventoryPayload ? StaticPickupInventory : GetPickupInventory();
+	// 世界 Actor 随拾取销毁；将动态子对象复制到接收 Pawn 下，保留实例 GUID 和运行状态，避免客户端依赖已销毁的 Outer。
+	for (FCatInventoryInstanceEntry& Entry : PickupBatch.InstanceEntries)
+	{
+		if (Entry.ItemInstance)
+		{
+			Entry.ItemInstance = DuplicateObject<UCatInventoryItemInstance>(Entry.ItemInstance, PlayerController->GetPawn());
+			Entry.ItemInstance->SetRuntimeOwnerActor(PlayerController->GetPawn());
+		}
+	}
 	bPickupClaimed = true;
 	const bool bCommitted = !PickupBatch.IsEmpty()
 		&& UCatInventoryStatics::TryAddInventoryBatchToActor(PlayerController->GetPawn(), PickupBatch);

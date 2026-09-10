@@ -7,6 +7,7 @@
 #include "Framework/Core/CatRunContracts.h"
 #include "GameFramework/PlayerController.h"
 #include "GameplayTagContainer.h"
+#include "Inventory/CatInventoryStatics.h"
 #include "ShopEconomy/Trading/CatShopTradingTypes.h"
 #include "Social/CatSocialTypes.h"
 #include "CatfishingPlayerController.generated.h"
@@ -26,6 +27,8 @@ class ACatCampInventoryActor;
 class ACatCharacter;
 class ACatfishingGameState;
 class ACatShopKioskActor;
+class ACatFishBuyerActor;
+class ACatFishGuardActor;
 struct FInputActionValue;
 
 /** owning client 收到公共领域命令结果后的本机通知；UI Model 只用它关联 RequestId，不重新执行领域动作。 */
@@ -150,11 +153,19 @@ public:
 	void ServerSubmitShopCartAtKiosk(ACatShopKioskActor* ShopKiosk,
 		const TArray<FCatShopCartLineCommand>& Lines, FGuid RequestId, int64 ExpectedWalletRevision);
 
-	/** 售出指定正式库存格里的鱼；服务器从鱼物品实例读取重量，并在库存真实扣除后把收入记入团队公款。 */
+	/** 向明确买家出售当前打开鱼护中的鱼实例；不接收客户端价格，整单结果可靠回送给 owning client。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
-	void ServerSellFish(FGuid FishItemInstanceId, AActor* SourceInventoryHost,
-		int32 SourceInventorySlotIndex,
-		FGuid RequestId, int64 ExpectedWalletRevision);
+	void ServerSellFishBatch(FGuid RequestId, ACatFishBuyerActor* Buyer, ACatFishGuardActor* Guard,
+		const TArray<FGuid>& FishInstanceIds);
+
+	/** 将指定库存实例的部分或全部数量丢弃或放置；服务器重新确定位置，失败保留库存。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Inventory")
+	void ServerReleaseInventoryItemToWorld(FGuid RequestId, AActor* SourceHost, int32 Slot,
+		FGuid ItemInstanceId, int32 Quantity, ECatInventoryWorldAction Action);
+
+	/** 长按交互提交拾起鱼护意图；鱼护自己复核距离、身体、嘴部空闲与库存容量。 */
+	UFUNCTION(Server, Reliable)
+	void ServerPickUpFishGuard(ACatFishGuardActor* Guard, FGuid RequestId);
 
 	/** 消费本人指定草药实例的一份数量后恢复目标 Character；Condition 恢复链按当前宿主事实校验请求，库存提交成功前不会修改身体。 */
 	UFUNCTION(Server, Reliable)
@@ -303,6 +314,10 @@ private:
 	void ApplySprintSpeed(APawn* TargetPawn, bool bSprinting) const;
 	/** 项目原生输入标签入口；翻天期间拒绝交互，其他时候处理非 Ability 动作，未知标签无副作用。 */
 	void NativeInputTagPressed(FGameplayTag InputTag);
+	/** 交互键正常松开时完成鱼护短按；其他原生输入不消费该边沿。 */
+	void NativeInputTagReleased(FGameplayTag InputTag);
+	/** 输入被取消时清理长按候选，不把失焦或输入层移除当作短按。 */
+	void NativeInputTagCanceled(FGameplayTag InputTag);
 	/** 当 Pawn 或输入组件在 owning client 就绪时通知 LocalPlayer UI；服务器远端 Controller 和非 Cat UI World 安全跳过。 */
 	void NotifyLocalPlayerUISubsystemPawnChanged();
 	/** 进入或维持持竿面对模式；首次进入时保存普通移动配置，然后让身体跟随当前可见钓鱼方向。 */

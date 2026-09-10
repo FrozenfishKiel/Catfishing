@@ -10,6 +10,14 @@ class ACatCharacter;
 class UCatInventoryComponent;
 class UCatInventoryItemInstance;
 
+/** 物品离开库存的两种玩家动作；丢弃开启物理轻抛，放置在检测通过的位置固定，不触发物品 Use。 */
+UENUM(BlueprintType)
+enum class ECatInventoryWorldAction : uint8
+{
+	Drop,
+	Place
+};
+
 /** 按定义发货的一项库存载荷；拾取、商店、奖励等来源只需要描述物品类型和数量。 */
 USTRUCT(BlueprintType)
 struct FCatInventoryDefinitionEntry
@@ -86,6 +94,11 @@ public:
 	/** 使用某个可触达 Actor 正式库存中的一格物品；鱼、草药和装备类效果都由物品实例自己裁决。 */
 	static FCatDomainCommandResult UseItemFromInventoryHostFromAuthority(ACatCharacter* ControlledCharacter,
 		FGuid RequestId, AActor* SourceInventoryHost, int32 SourceSlotIndex);
+
+	/** 从可触达库存丢弃或放置指定实例数量；先复核宿主，具体生成、扣量和重放仍由来源库存统一裁决。 */
+	static FCatDomainCommandResult ReleaseItemToWorldFromAuthority(ACatCharacter* ControlledCharacter,
+		FGuid RequestId, AActor* SourceInventoryHost, int32 SourceSlotIndex, FGuid ItemInstanceId,
+		int32 Quantity, ECatInventoryWorldAction Action);
 
 	/** 收集目标 Actor 上的库存组件并按统一收货优先级排序；Actor 级入口用它显式选择目标库存。 */
 	static void AppendInventoryComponentsFromActor(const AActor* TargetActor,

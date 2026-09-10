@@ -1,9 +1,39 @@
 #include "ShopEconomy/CatShopEconomyService.h"
 
+#include "AbilitySystem/Attributes/CatEconomyAttributeSet.h"
+#include "AbilitySystem/Effects/CatShopEconomyTransactionEffect.h"
+#include "AbilitySystem/Executions/CatShopEconomyTransactionExecutionCalculation.h"
+#include "AbilitySystemComponent.h"
+#include "Engine/DataTable.h"
+#include "Framework/Game/CatfishingGameState.h"
 #include "Logging/CatLog.h"
 #include "ShopEconomy/CatShopCartCommandUtils.h"
 #include "ShopEconomy/CatShopInventoryComponent.h"
 #include "ShopEconomy/CatShopEconomySettings.h"
+#include "UObject/StrongObjectPtr.h"
+
+namespace
+{
+	// 售鱼命令形状校验流程：库存提交前必须确认每条鱼都有正式实例、种类和重量，且同一实例不允许在一笔收入里出现两次。
+	bool IsFishSaleCommandShapeValid(const FCatShopFishSaleCommand& Command)
+	{
+		if (Command.Fish.IsEmpty())
+		{
+			return false;
+		}
+		TSet<FGuid> SeenFish;
+		for (const FCatShopFishSaleLine& Line : Command.Fish)
+		{
+			if (!Line.FishInstanceId.IsValid() || Line.FishDefinitionId.IsNone() || !FMath::IsFinite(Line.WeightKilograms)
+				|| Line.WeightKilograms <= 0.0 || SeenFish.Contains(Line.FishInstanceId))
+			{
+				return false;
+			}
+			SeenFish.Add(Line.FishInstanceId);
+		}
+		return true;
+	}
+}
 
 // 创建条件流程：只允许服务器 Game World 拥有可写经济事实；客户端不能生成第二份公款或库存。
 bool UCatShopEconomyService::ShouldCreateSubsystem(UObject* Outer) const
@@ -12,7 +42,7 @@ bool UCatShopEconomyService::ShouldCreateSubsystem(UObject* Outer) const
 	return World && World->IsGameWorld() && World->GetNetMode() != NM_Client;
 }
 
-// 初始化流程：先交父类，再从 Settings 冻结本局公款、命令 gate 和售鱼最小金额；摊位货架目录由各自库存组件进入 World 时注册。
+// 初始化流程：先交父类，再从 Settings 读取命令 gate、事务版本和收购表引用；余额稍后由 GameState ASC 初始化，服务不保存余额副本。
 void UCatShopEconomyService::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -100,7 +130,10 @@ void UCatShopEconomyService::UnregisterShopInventory(UCatShopInventoryComponent*
 // 公款读取流程：返回当前唯一团队公款快照副本；调用方不能借引用改余额。
 FCatShopWalletSnapshot UCatShopEconomyService::GetWalletSnapshot() const
 {
-	return Wallet;
+	FCatShopWalletSnapshot Snapshot;
+	Snapshot.Revision = WalletRevision;
+	TryGetTeamWalletBalance(Snapshot.Balance);
+	return Snapshot;
 }
 
 // 库存读取流程：先清输出，再从指定摊位库存读取 EntryId；服务不维护全局货架 Map。
@@ -153,7 +186,7 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 {
 	OutResolved = FCatShopResolvedCart();
 	OutError = ECatDomainCommandError::None;
-	OutResolved.Wallet = Wallet;
+	OutResolved.Wallet = GetWalletSnapshot();
 	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
 		|| !Command.ShopInventoryId.IsValid())
 	{
@@ -181,7 +214,13 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 		OutError = ECatDomainCommandError::CommandsClosed;
 		return false;
 	}
-	if (Command.Context.ExpectedRevision != Wallet.Revision)
+	int32 CurrentWalletBalance = 0;
+	if (!TryGetTeamWalletBalance(CurrentWalletBalance))
+	{
+		OutError = ECatDomainCommandError::DependencyUnavailable;
+		return false;
+	}
+	if (Command.Context.ExpectedRevision != WalletRevision)
 	{
 		OutError = ECatDomainCommandError::RevisionConflict;
 		return false;
@@ -197,7 +236,7 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 		{
 			OutError = ECatDomainCommandError::NotFound;
 			OutResolved = FCatShopResolvedCart();
-			OutResolved.Wallet = Wallet;
+			OutResolved.Wallet = GetWalletSnapshot();
 			return false;
 		}
 		FCatShopStockSnapshot Stock;
@@ -205,21 +244,21 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 		{
 			OutError = ECatDomainCommandError::NotFound;
 			OutResolved = FCatShopResolvedCart();
-			OutResolved.Wallet = Wallet;
+			OutResolved.Wallet = GetWalletSnapshot();
 			return false;
 		}
 		if (!Entry.IsRuntimeReady())
 		{
 			OutError = ECatDomainCommandError::PolicyUndecided;
 			OutResolved = FCatShopResolvedCart();
-			OutResolved.Wallet = Wallet;
+			OutResolved.Wallet = GetWalletSnapshot();
 			return false;
 		}
 		if (!Stock.bUnlimitedStock && Stock.RemainingStock < Line.CartCount)
 		{
 			OutError = ECatDomainCommandError::CapacityExceeded;
 			OutResolved = FCatShopResolvedCart();
-			OutResolved.Wallet = Wallet;
+			OutResolved.Wallet = GetWalletSnapshot();
 			return false;
 		}
 		const int64 DeliveryQuantity = static_cast<int64>(Entry.PurchaseQuantity) * Line.CartCount;
@@ -230,7 +269,7 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 		{
 			OutError = ECatDomainCommandError::InvalidPayload;
 			OutResolved = FCatShopResolvedCart();
-			OutResolved.Wallet = Wallet;
+			OutResolved.Wallet = GetWalletSnapshot();
 			return false;
 		}
 		FCatShopResolvedCartLine& ResolvedLine = OutResolved.Lines.AddDefaulted_GetRef();
@@ -240,11 +279,11 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 		ResolvedLine.LineTotalPrice = static_cast<int32>(LineTotalPrice);
 		TotalPrice += LineTotalPrice;
 	}
-	if (Wallet.Balance < TotalPrice)
+	if (CurrentWalletBalance < TotalPrice)
 	{
 		OutError = ECatDomainCommandError::CapacityExceeded;
 		OutResolved = FCatShopResolvedCart();
-		OutResolved.Wallet = Wallet;
+		OutResolved.Wallet = GetWalletSnapshot();
 		return false;
 	}
 	OutResolved.TotalPrice = static_cast<int32>(TotalPrice);
@@ -256,17 +295,27 @@ bool UCatShopEconomyService::ResolveCatalogCartForAuthority(const FCatShopCartCo
 //    若首次终态是拒绝，重放必须返回首次错误，不能把一次失败请求伪装成已经结算。
 // 2. 首次命令复用整车报价判据，然后让摊位库存整批扣减；扣库存失败时公款和账本保持不变。
 // 3. 库存扣完后一次扣总价，并为每个 EntryId 写一条待交付账本，免费商品也以 0 元购买行进入同一交付链。
+// 提交守卫覆盖库存、GAS、账本及广播，期间嵌套购买或售鱼直接拒绝且不缓存，避免回调抢先复用尚未完成的请求。
 FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const FCatShopCartCommand& Command,
 	UCatShopInventoryComponent* ShopInventory)
 {
 	FCatShopCartTransactionResult Result;
 	Result.Command.RequestId = Command.Context.RequestId;
-	Result.Wallet = Wallet;
+	Result.Wallet = GetWalletSnapshot();
+	if (bTransactionInProgress)
+	{
+		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
+		Result.Command.Revision = WalletRevision;
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected Request=%s World=%s Result=Reentry Operation=Purchase"),
+			*Command.Context.RequestId.ToString(), *GetNameSafe(GetWorld()));
+		return Result;
+	}
+	TGuardValue<bool> TransactionGuard(bTransactionInProgress, true);
 	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
 		|| !Command.ShopInventoryId.IsValid() || Command.Lines.IsEmpty())
 	{
 		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
-		Result.Command.Revision = Wallet.Revision;
+		Result.Command.Revision = WalletRevision;
 		return Result;
 	}
 	const FString CacheKey = MakeTerminalKey(Command.Context.StableNetId, TEXT("CartPurchase"),
@@ -277,7 +326,7 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 		if (!DoesTerminalPayloadMatch(CacheKey, PayloadSignature))
 		{
 			Result.Command.Error = ECatDomainCommandError::InvalidPayload;
-			Result.Command.Revision = Wallet.Revision;
+			Result.Command.Revision = WalletRevision;
 			return Result;
 		}
 		Result = *Cached;
@@ -295,24 +344,27 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 	if (!ResolveCatalogCartForAuthority(Command, ShopInventory, ResolvedCart, Rejection))
 	{
 		Result.Command.Error = Rejection;
-		Result.Command.Revision = Wallet.Revision;
-		Result.Wallet = Wallet;
+		Result.Command.Revision = WalletRevision;
+		Result.Wallet = GetWalletSnapshot();
 		CacheCartTerminalResult(CacheKey, PayloadSignature, Result);
 		return Result;
 	}
-	if (!ShopInventory->ConsumeCatalogEntriesFromAuthority(ResolvedCart.Command.Lines, Result.Stocks))
+	int32 WalletDelta = -ResolvedCart.TotalPrice;
+	// 货架持有原状态直到GE确认；拒绝扣款不会消耗限量商品，公开通知仍留到双方与账本全部提交之后。
+	if (!ShopInventory->ConsumeCatalogEntriesFromAuthority(ResolvedCart.Command.Lines, Result.Stocks, [&]()
+		{
+			return TryApplyTeamWalletTransaction(WalletDelta, Command.Context.RequestId);
+		}))
 	{
-		Result.Command.Error = ECatDomainCommandError::CapacityExceeded;
-		Result.Command.Revision = Wallet.Revision;
-		Result.Wallet = Wallet;
+		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
+		Result.Command.Revision = WalletRevision;
+		Result.Wallet = GetWalletSnapshot();
 		CacheCartTerminalResult(CacheKey, PayloadSignature, Result);
 		return Result;
 	}
-
-	Wallet.Balance -= ResolvedCart.TotalPrice;
 	if (ResolvedCart.TotalPrice > 0)
 	{
-		++Wallet.Revision;
+		++WalletRevision;
 	}
 	Result.Transactions.Reserve(ResolvedCart.Lines.Num());
 	for (const FCatShopResolvedCartLine& Line : ResolvedCart.Lines)
@@ -328,7 +380,7 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 		Record.DefinitionId = Line.Entry.DefinitionId;
 		Record.PurchaseQuantity = Line.DeliveryQuantity;
 		Record.WalletDelta = -Line.LineTotalPrice;
-		Record.WalletRevision = Wallet.Revision;
+		Record.WalletRevision = WalletRevision;
 		if (const FCatShopStockSnapshot* Stock = Result.Stocks.FindByPredicate(
 			[&Line](const FCatShopStockSnapshot& Candidate)
 			{
@@ -341,8 +393,8 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 	}
 	Result.Command.bCommitted = true;
 	Result.Command.Error = ECatDomainCommandError::None;
-	Result.Command.Revision = Wallet.Revision;
-	Result.Wallet = Wallet;
+	Result.Command.Revision = WalletRevision;
+	Result.Wallet = GetWalletSnapshot();
 	CacheCartTerminalResult(CacheKey, PayloadSignature, Result);
 	for (const FCatShopTransactionRecord& Record : Result.Transactions)
 	{
@@ -351,36 +403,48 @@ FCatShopCartTransactionResult UCatShopEconomyService::PurchaseCatalogCart(const 
 	return Result;
 }
 
-// 估价流程：runtime 未就绪或收鱼价没被裁定时直接失败，否则用开局冻结的档位表求值。
-// 这里不编造估价参数：产品没有显式裁定收鱼价时，整笔拒绝比写入一个推测价更容易排查。
-bool UCatShopEconomyService::TryAppraiseFishSale(const double WeightKilograms, int32& OutSaleValue) const
+// 估价流程：先要求经济运行与本地收购表可用，再把一条服务器确认的鱼交给交易 ExecCalc 的纯算式逐条计算。
+bool UCatShopEconomyService::TryAppraiseFishSale(const FName FishDefinitionId, const double WeightKilograms,
+	int32& OutSaleValue) const
 {
 	OutSaleValue = 0;
-	if (!bRuntimeReady || !bFishPurchasePriceDecided)
+	if (!bRuntimeReady)
 	{
 		return false;
 	}
-	return UCatShopEconomySettings::TryEvaluateFishPurchasePrice(FishPurchasePriceAnchors, WeightKilograms, OutSaleValue);
+	FCatShopFishSaleLine Line;
+	Line.FishDefinitionId = FishDefinitionId;
+	Line.WeightKilograms = WeightKilograms;
+	TArray<FCatShopFishSaleLine> Fish;
+	Fish.Add(Line);
+	return UCatShopEconomyTransactionExecutionCalculation::TryCalculateFishSale(GetFishSalePriceTable(), Fish, OutSaleValue);
 }
 
-// 售鱼预检流程：在库存不可逆删除鱼前只读验证同一售鱼载荷是否能进入公款；这里不写账本，避免预检本身变成第二个提交点。
+// 售鱼预检流程：先阻止提交回调重入，再核对身份、库存提交关联和重放载荷；失败缓存保留原错误，成功缓存才返回 AlreadyResolved。
+// 首次请求用共用纯函数检查整批价格及当前余额边界，不写任何状态；ExpectedRevision 不参与售鱼并发裁决。
 bool UCatShopEconomyService::ValidateFishSale(const FCatShopFishSaleCommand& Command, ECatDomainCommandError& OutError,
 	int64& OutCurrentWalletRevision) const
 {
 	OutError = ECatDomainCommandError::None;
-	OutCurrentWalletRevision = Wallet.Revision;
+	OutCurrentWalletRevision = WalletRevision;
+	if (bTransactionInProgress)
+	{
+		OutError = ECatDomainCommandError::DependencyUnavailable;
+		return false;
+	}
 	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
-		|| !Command.FishInstanceId.IsValid() || !Command.InventoryCommitId.IsValid())
+		|| !Command.InventoryCommitId.IsValid() || !IsFishSaleCommandShapeValid(Command))
 	{
 		OutError = ECatDomainCommandError::InvalidPayload;
 		return false;
 	}
 	const FString CacheKey = MakeTerminalKey(Command.Context.StableNetId, TEXT("FishSale"), Command.Context.RequestId);
 	const FString PayloadSignature = MakeFishSalePayloadSignature(Command);
-	if (TerminalCache.Contains(CacheKey))
+	if (const FCatShopTransactionResult* Cached = TerminalCache.Find(CacheKey))
 	{
-		OutError = DoesTerminalPayloadMatch(CacheKey, PayloadSignature)
-			? ECatDomainCommandError::AlreadyResolved : ECatDomainCommandError::InvalidPayload;
+		OutError = !DoesTerminalPayloadMatch(CacheKey, PayloadSignature) ? ECatDomainCommandError::InvalidPayload
+			: Cached->Command.bCommitted && Cached->Command.Error == ECatDomainCommandError::None
+			? ECatDomainCommandError::AlreadyResolved : Cached->Command.Error;
 		return false;
 	}
 	if (!bRuntimeReady)
@@ -393,37 +457,47 @@ bool UCatShopEconomyService::ValidateFishSale(const FCatShopFishSaleCommand& Com
 		OutError = ECatDomainCommandError::CommandsClosed;
 		return false;
 	}
-	if (Command.Context.ExpectedRevision != Wallet.Revision)
-	{
-		OutError = ECatDomainCommandError::RevisionConflict;
-		return false;
-	}
 	int32 AppraisedValue = 0;
-	if (!TryAppraiseFishSale(Command.WeightKilograms, AppraisedValue))
+	if (!UCatShopEconomyTransactionExecutionCalculation::TryCalculateFishSale(GetFishSalePriceTable(), Command.Fish, AppraisedValue))
 	{
 		OutError = ECatDomainCommandError::PolicyUndecided;
 		return false;
 	}
-	if (Command.SaleValue != AppraisedValue || Command.SaleValue < MinimumFishSaleValue)
+	int32 CurrentBalance = 0;
+	if (!TryGetTeamWalletBalance(CurrentBalance))
 	{
-		OutError = ECatDomainCommandError::InvalidPayload;
+		OutError = ECatDomainCommandError::DependencyUnavailable;
+		return false;
+	}
+	if (static_cast<int64>(CurrentBalance) + AppraisedValue > 16777216)
+	{
+		OutError = ECatDomainCommandError::CapacityExceeded;
 		return false;
 	}
 	return true;
 }
 
-// 售鱼入账流程：先要求身份、鱼实例和库存提交证据都在，再按公款版本并发，最后用重量自己估一次价并和调用方报价核对。
-// 鱼的删除仍然必须先由库存完成，这里不碰鱼；价格则相反，只认服务器估出来的那个数。
+// 售鱼入账流程：守卫阻止提交回调重入，先校验身份并保留缓存的首次成功或失败结果，再冻结鱼行交给 GE 实际计算并入账。
+// 只有 GE 已执行且余额与执行回执一致，才追加首鱼摘要账本、缓存成功并广播；所有拒绝均不写成功账本，服务始终不删除鱼。
 FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFishSaleCommand& Command)
 {
 	FCatShopTransactionResult Result;
 	Result.Command.RequestId = Command.Context.RequestId;
-	Result.Wallet = Wallet;
+	Result.Wallet = GetWalletSnapshot();
+	if (bTransactionInProgress)
+	{
+		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
+		Result.Command.Revision = WalletRevision;
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected Request=%s World=%s Result=Reentry Operation=FishSale"),
+			*Command.Context.RequestId.ToString(), *GetNameSafe(GetWorld()));
+		return Result;
+	}
+	TGuardValue<bool> TransactionGuard(bTransactionInProgress, true);
 	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
-		|| !Command.FishInstanceId.IsValid() || !Command.InventoryCommitId.IsValid())
+		|| !Command.InventoryCommitId.IsValid() || !IsFishSaleCommandShapeValid(Command))
 	{
 		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
-		Result.Command.Revision = Wallet.Revision;
+		Result.Command.Revision = WalletRevision;
 		return Result;
 	}
 	const FString CacheKey = MakeTerminalKey(Command.Context.StableNetId, TEXT("FishSale"), Command.Context.RequestId);
@@ -433,7 +507,7 @@ FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFi
 		if (!DoesTerminalPayloadMatch(CacheKey, PayloadSignature))
 		{
 			Result.Command.Error = ECatDomainCommandError::InvalidPayload;
-			Result.Command.Revision = Wallet.Revision;
+			Result.Command.Revision = WalletRevision;
 			return Result;
 		}
 		Result = *Cached;
@@ -449,62 +523,49 @@ FCatShopTransactionResult UCatShopEconomyService::ApplyFishSale(const FCatShopFi
 			}
 		}
 		Result.Command.bCommitted = false;
-		Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
+		if (Cached->Command.bCommitted && Cached->Command.Error == ECatDomainCommandError::None)
+		{
+			Result.Command.Error = ECatDomainCommandError::AlreadyResolved;
+		}
+		Result.Wallet = GetWalletSnapshot();
 		return Result;
 	}
 	if (!bRuntimeReady)
 	{
 		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
-		Result.Command.Revision = Wallet.Revision;
+		Result.Command.Revision = WalletRevision;
 		CacheTerminalResult(CacheKey, PayloadSignature, Result);
 		return Result;
 	}
 	if (!bCommandsOpen)
 	{
 		Result.Command.Error = ECatDomainCommandError::CommandsClosed;
-		Result.Command.Revision = Wallet.Revision;
-		CacheTerminalResult(CacheKey, PayloadSignature, Result);
-		return Result;
-	}
-	if (Command.Context.ExpectedRevision != Wallet.Revision)
-	{
-		Result.Command.Error = ECatDomainCommandError::RevisionConflict;
-		Result.Command.Revision = Wallet.Revision;
+		Result.Command.Revision = WalletRevision;
 		CacheTerminalResult(CacheKey, PayloadSignature, Result);
 		return Result;
 	}
 	int32 AppraisedValue = 0;
-	if (!TryAppraiseFishSale(Command.WeightKilograms, AppraisedValue))
+	if (!TryApplyTeamWalletTransaction(AppraisedValue, Command.Context.RequestId, &Command))
 	{
-		// 收鱼价没被裁定时整笔拒绝，而不是按调用方报价入账：调用方报价只是它从同一个估价接口取回来的回声，
-		// 一旦这里放行，公款余额就会变成客户端能提出的任意数字。
-		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
-		Result.Command.Revision = Wallet.Revision;
-		CacheTerminalResult(CacheKey, PayloadSignature, Result);
-		return Result;
-	}
-	if (Command.SaleValue != AppraisedValue || Command.SaleValue < MinimumFishSaleValue)
-	{
-		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
-		Result.Command.Revision = Wallet.Revision;
+		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
+		Result.Command.Revision = WalletRevision;
 		CacheTerminalResult(CacheKey, PayloadSignature, Result);
 		return Result;
 	}
 
-	Wallet.Balance += Command.SaleValue;
-	++Wallet.Revision;
+	++WalletRevision;
 	FCatShopTransactionRecord& Record = TransactionLedger.AddDefaulted_GetRef();
 	Record.TransactionId = FGuid::NewGuid();
 	Record.RequestId = Command.Context.RequestId;
 	Record.StableNetId = Command.Context.StableNetId;
 	Record.bFishSale = true;
-	Record.FishInstanceId = Command.FishInstanceId;
-	Record.WalletDelta = Command.SaleValue;
-	Record.WalletRevision = Wallet.Revision;
+	Record.FishInstanceId = Command.Fish[0].FishInstanceId;
+	Record.WalletDelta = AppraisedValue;
+	Record.WalletRevision = WalletRevision;
 	Result.Command.bCommitted = true;
 	Result.Command.Error = ECatDomainCommandError::None;
-	Result.Command.Revision = Wallet.Revision;
-	Result.Wallet = Wallet;
+	Result.Command.Revision = WalletRevision;
+	Result.Wallet = GetWalletSnapshot();
 	Result.Transaction = Record;
 	CacheTerminalResult(CacheKey, PayloadSignature, Result);
 	OnPublicTransactionCommitted.Broadcast(MakePublicTransaction(Record));
@@ -518,12 +579,12 @@ FCatShopTransactionResult UCatShopEconomyService::ConfirmTransactionDelivery(
 {
 	FCatShopTransactionResult Result;
 	Result.Command.RequestId = Command.Context.RequestId;
-	Result.Wallet = Wallet;
+	Result.Wallet = GetWalletSnapshot();
 	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
 		|| !Command.TransactionId.IsValid() || !Command.DeliveryReceiptId.IsValid())
 	{
 		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
-		Result.Command.Revision = Wallet.Revision;
+		Result.Command.Revision = WalletRevision;
 		return Result;
 	}
 	const FString CacheKey = MakeTerminalKey(Command.Context.StableNetId, TEXT("Delivery"), Command.Context.RequestId);
@@ -533,7 +594,7 @@ FCatShopTransactionResult UCatShopEconomyService::ConfirmTransactionDelivery(
 		if (!DoesTerminalPayloadMatch(CacheKey, PayloadSignature))
 		{
 			Result.Command.Error = ECatDomainCommandError::InvalidPayload;
-			Result.Command.Revision = Wallet.Revision;
+			Result.Command.Revision = WalletRevision;
 			return Result;
 		}
 		Result = *Cached;
@@ -591,8 +652,8 @@ FCatShopTransactionResult UCatShopEconomyService::ConfirmTransactionDelivery(
 			Result.Transaction = *Record;
 		}
 	}
-	Result.Command.Revision = Wallet.Revision;
-	Result.Wallet = Wallet;
+	Result.Command.Revision = WalletRevision;
+	Result.Wallet = GetWalletSnapshot();
 	CacheTerminalResult(CacheKey, PayloadSignature, Result);
 	if (Result.Command.bCommitted)
 	{
@@ -657,8 +718,9 @@ FCatShopPublicEconomySnapshot UCatShopEconomyService::BuildPublicSnapshot(
 	const TFunction<APlayerState*(const FString&)>& ResolveActorPlayerState) const
 {
 	FCatShopPublicEconomySnapshot Snapshot;
-	Snapshot.WalletRevision = Wallet.Revision;
-	Snapshot.Balance = Wallet.Balance;
+	const FCatShopWalletSnapshot WalletSnapshot = GetWalletSnapshot();
+	Snapshot.WalletRevision = WalletSnapshot.Revision;
+	Snapshot.Balance = WalletSnapshot.Balance;
 	Snapshot.ShopDayIndex = CurrentShopDayIndex;
 	for (const TWeakObjectPtr<UCatShopInventoryComponent>& InventoryPtr : RegisteredShopInventories)
 	{
@@ -703,10 +765,11 @@ bool UCatShopEconomyService::ReopenCommandsForDebugForceNextDay()
 }
 #endif
 
-// 设置加载流程：清空失效交易事实后读取默认对象；公款和售鱼价仍是局级配置，商店货架库存由每个摊位库存组件自己生成。
+// 设置加载流程：清空本局事务投影后读取默认对象；先在 int32 域拒绝超过 16777216 的起始金额，防止转 float 后静默舍入成合法余额。
+// 合法起始余额仍由 GameState ASC 播种，这里只保留版本、运行 gate 和收购表引用。
 void UCatShopEconomyService::LoadRuntimeEconomyFromSettings()
 {
-	Wallet = FCatShopWalletSnapshot();
+	WalletRevision = 0;
 	TransactionLedger.Reset();
 	TerminalCache.Reset();
 	CartTerminalCache.Reset();
@@ -714,20 +777,112 @@ void UCatShopEconomyService::LoadRuntimeEconomyFromSettings()
 	bCommandsOpen = true;
 	CurrentShopDayIndex = 0;
 	const UCatShopEconomySettings* Settings = GetDefault<UCatShopEconomySettings>();
-	bRuntimeReady = Settings && Settings->IsRuntimeEnabled();
+	bRuntimeReady = Settings && Settings->IsRuntimeEnabled() && Settings->StartingTeamWalletBalance <= 16777216;
+	if (Settings && Settings->StartingTeamWalletBalance > 16777216)
+	{
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletInitializationRejected World=%s Result=InitialBalanceOutOfRange Amount=%d"),
+			*GetNameSafe(GetWorld()), Settings->StartingTeamWalletBalance);
+	}
 	if (!Settings)
 	{
 		return;
 	}
-	// 起始资金未裁定时 StartingTeamWalletBalance 是哨兵 -1，此时 bRuntimeReady 已经是 false，四个写口全部 fail-closed；
-	// 这里仍夹到 0 只是为了不让快照对外暴露一个负余额，不代表哨兵被当成"裁定 0 元"接受了。
-	Wallet.Balance = FMath::Max(0, Settings->StartingTeamWalletBalance);
-	Wallet.Revision = 1;
-	MinimumFishSaleValue = FMath::Max(1, Settings->MinimumFishSaleValue);
-	// 收鱼价单独一个 gate：买东西不依赖鱼价，所以这里只冻结售鱼这一路的裁定状态和档位表，
-	// 不把它并进 bRuntimeReady，否则没填鱼价会连购物车支付一起关掉。
-	bFishPurchasePriceDecided = Settings->FishPurchasePricePolicy == ECatDomainPolicy::Enabled;
-	FishPurchasePriceAnchors = Settings->FishPurchasePriceAnchors;
+	WalletRevision = 1;
+	FishSalePriceTable = Settings->DefaultFishSalePriceTable;
+}
+
+// 余额读取流程：先确认 GameState ASC 的 Owner/Avatar 已初始化且持有经济属性，再比较基础值和当前值并检查 double 整数边界。
+// 尚未就绪、存在临时余额修饰或金额非法都返回 false 和零输出；合法时直接投影唯一 GAS 余额，不重算也不缓存起始资金。
+bool UCatShopEconomyService::TryGetTeamWalletBalance(int32& OutBalance) const
+{
+	OutBalance = 0;
+	if (!bRuntimeReady)
+	{
+		return false;
+	}
+	const UWorld* World = GetWorld();
+	const ACatfishingGameState* GameState = World ? World->GetGameState<ACatfishingGameState>() : nullptr;
+	const UCatEconomyAttributeSet* EconomyAttributes = GameState ? GameState->GetEconomyAttributeSet() : nullptr;
+	const UAbilitySystemComponent* ASC = GameState ? GameState->GetRunAbilitySystemComponentFromAuthority() : nullptr;
+	if (!EconomyAttributes || !ASC || ASC->GetOwnerActor() != GameState || ASC->GetAvatarActor() != GameState
+		|| !ASC->HasAttributeSetForAttribute(UCatEconomyAttributeSet::GetTeamWalletBalanceAttribute()))
+	{
+		return false;
+	}
+	const double Balance = EconomyAttributes->GetTeamWalletBalance();
+	if (!FMath::IsFinite(Balance) || Balance < 0.0 || Balance > 16777216.0 || Balance != FMath::RoundToDouble(Balance)
+		|| ASC->GetNumericAttributeBase(UCatEconomyAttributeSet::GetTeamWalletBalanceAttribute()) != Balance)
+	{
+		return false;
+	}
+	OutBalance = static_cast<int32>(Balance);
+	return true;
+}
+
+// 余额写入流程：先读取已就绪的钱包，再创建一个 source 冻结购买金额或售鱼行和收购表；强引用覆盖同步 GE 及全部回调，防止弱 source 被 GC 回收。
+// GE 在内部完成估价和余额边界裁决；服务同时核对应用结果、执行标记与最终余额，零收入也必须真实执行，成功后才回传实际金额供账本使用。
+bool UCatShopEconomyService::TryApplyTeamWalletTransaction(int32& InOutDelta, const FGuid& RequestId,
+	const FCatShopFishSaleCommand* FishSale)
+{
+	int32 CurrentBalance = 0;
+	if (!TryGetTeamWalletBalance(CurrentBalance))
+	{
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected Request=%s World=%s Result=WalletUnavailable"),
+			*RequestId.ToString(), *GetNameSafe(GetWorld()));
+		return false;
+	}
+	UWorld* World = GetWorld();
+	ACatfishingGameState* GameState = World ? World->GetGameState<ACatfishingGameState>() : nullptr;
+	UAbilitySystemComponent* ASC = GameState ? GameState->GetRunAbilitySystemComponentFromAuthority() : nullptr;
+	if (!ASC || !GameState->GetEconomyAttributeSetFromAuthority())
+	{
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected Request=%s World=%s Result=ASCMissing"),
+			*RequestId.ToString(), *GetNameSafe(World));
+		return false;
+	}
+	TStrongObjectPtr<UCatShopEconomyTransactionSource> Source(NewObject<UCatShopEconomyTransactionSource>(GetTransientPackage()));
+	Source->RequestId = RequestId;
+	Source->WalletDelta = InOutDelta;
+	if (FishSale)
+	{
+		Source->Fish = FishSale->Fish;
+		Source->PriceTable = GetFishSalePriceTable();
+	}
+	FGameplayEffectContextHandle Context = ASC->MakeEffectContext();
+	Context.AddSourceObject(Source.Get());
+	const FGameplayEffectSpecHandle Spec = ASC->MakeOutgoingSpec(UCatGE_ShopEconomyTransaction::StaticClass(), 1.0f, Context);
+	if (!Spec.IsValid())
+	{
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected Request=%s World=%s Result=SpecUnavailable"),
+			*RequestId.ToString(), *GetNameSafe(World));
+		return false;
+	}
+	const bool bApplied = ASC->ApplyGameplayEffectSpecToSelf(*Spec.Data.Get()).WasSuccessfullyApplied();
+	int32 AppliedBalance = 0;
+	const int64 NextBalance = static_cast<int64>(CurrentBalance) + Source->WalletDelta;
+	const bool bBalanceReadable = TryGetTeamWalletBalance(AppliedBalance);
+	const bool bSucceeded = bApplied && Source->bExecuted && Source->bBalanceApplied && bBalanceReadable
+		&& AppliedBalance == NextBalance;
+	if (!bSucceeded)
+	{
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=WalletTransactionRejected Request=%s World=%s NetMode=%d Authority=1 Actor=%s Role=%d Result=ExecutionOrBalanceMismatch Applied=%d Executed=%d BalanceApplied=%d BalanceReadable=%d Before=%d Delta=%d After=%d"),
+			*RequestId.ToString(), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()), *GameState->GetName(),
+			static_cast<int32>(GameState->GetLocalRole()), bApplied, Source->bExecuted, Source->bBalanceApplied, bBalanceReadable,
+			CurrentBalance, Source->WalletDelta, AppliedBalance);
+		return false;
+	}
+	UE_LOG(LogCatfishing, Log, TEXT("Event=WalletTransactionApplied Request=%s World=%s NetMode=%d Authority=1 Actor=%s Role=%d Result=Success Before=%d Delta=%d After=%d"),
+		*RequestId.ToString(), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()), *GameState->GetName(),
+		static_cast<int32>(GameState->GetLocalRole()),
+		CurrentBalance, Source->WalletDelta, AppliedBalance);
+	InOutDelta = Source->WalletDelta;
+	return true;
+}
+
+// 收购表读取流程：软引用只在需要估价时解析，资产不存在或尚未可用时返回空并让售鱼整单拒绝，不生成任何默认价格。
+UDataTable* UCatShopEconomyService::GetFishSalePriceTable() const
+{
+	return FishSalePriceTable.IsNull() ? nullptr : FishSalePriceTable.LoadSynchronous();
 }
 
 // 购物车重放刷新流程：
@@ -760,8 +915,8 @@ void UCatShopEconomyService::RefreshCartReplayResultFromLedger(FCatShopCartTrans
 			}
 		}
 	}
-	Result.Wallet = Wallet;
-	Result.Command.Revision = Wallet.Revision;
+	Result.Wallet = GetWalletSnapshot();
+	Result.Command.Revision = WalletRevision;
 }
 
 // 公开交易记录构造流程：复制账本里可以公开的字段。
@@ -849,15 +1004,18 @@ FString UCatShopEconomyService::MakeCartPayloadSignature(const FCatShopCartComma
 		*FString::Join(LineParts, TEXT(",")));
 }
 
-// 售鱼载荷签名流程：冻结公款前提、鱼实例、库存提交证据、重量和估值；同 RequestId 改任一项都不是合法重放。
-// 重量必须进签名：它是收购价的唯一输入，同一个 RequestId 换一条更重的鱼重放就等于换了一笔生意。
+// 售鱼载荷签名流程：冻结库存提交证据及每条鱼的身份、种类和 double 重量；17 位有效数字保留可往返精度，防止舍入阈值两侧的不同重量被当成重放。
 FString UCatShopEconomyService::MakeFishSalePayloadSignature(const FCatShopFishSaleCommand& Command)
 {
-	return FString::Printf(TEXT("Expected=%lld|Fish=%s|InventoryCommit=%s|Weight=%.6f|Value=%d"),
-		Command.Context.ExpectedRevision,
-		*Command.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-		*Command.InventoryCommitId.ToString(EGuidFormats::DigitsWithHyphens),
-		Command.WeightKilograms, Command.SaleValue);
+	TArray<FString> Lines;
+	Lines.Reserve(Command.Fish.Num());
+	for (const FCatShopFishSaleLine& Line : Command.Fish)
+	{
+		Lines.Add(FString::Printf(TEXT("%s:%s:%.17g"), *Line.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+			*Line.FishDefinitionId.ToString(), Line.WeightKilograms));
+	}
+	return FString::Printf(TEXT("InventoryCommit=%s|Fish=%s"),
+		*Command.InventoryCommitId.ToString(EGuidFormats::DigitsWithHyphens), *FString::Join(Lines, TEXT(",")));
 }
 
 // 交付载荷签名流程：冻结原交易、下游回执和公款前提；回执漂移必须拒绝而不是重放。

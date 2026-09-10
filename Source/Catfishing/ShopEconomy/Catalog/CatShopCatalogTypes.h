@@ -199,24 +199,17 @@ struct FCatShopCatalogRefreshRule
 	int32 RandomEntryCount = 0;
 };
 
-/**
- * 收鱼价体重轴上的一档：重量达到 MinimumWeightKilograms 的鱼按 Price 收购。
- * 用离散档位而不是一条直线，是因为当前设计只裁定了“鱼越重越贵”的方向，未裁定斜率和截距。
- */
+/** 收购价格表的一行；DataTable RowName 就是鱼种 ID，行内只保留每千克金币系数。 */
 USTRUCT(BlueprintType)
-struct FCatShopFishWeightPrice
+struct FCatShopFishSalePriceRow : public FTableRowBase
 {
 	GENERATED_BODY()
 
-	/** 进入这一档需要达到的鱼体重下限，单位千克，取到等号；比最轻一档还轻的鱼没有档位，估价直接失败。 */
-	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Appraisal", meta = (ClampMin = "0.0"))
-	double MinimumWeightKilograms = 0.0;
+	/** 每千克对应的金币系数；只允许有限正数，缺失或非法行会让关联售鱼整单拒绝。 */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "FishSale", meta = (ClampMin = "0.0"))
+	double MoneyCoefficient = 0.0;
 
-	/** 落在这一档的鱼的收购价；必须为正，否则等于让商人猫白收鱼。 */
-	UPROPERTY(Config, EditAnywhere, BlueprintReadOnly, Category = "Appraisal", meta = (ClampMin = "0"))
-	int32 Price = 0;
-
-	/** 校验这一档自身是否可用；重量必须是有限非负数，价格必须为正。 */
+	/** 校验该行是否能作为服务器收购定价依据；鱼种主键由 DataTable RowName 提供，不提供保底价格或缺行回退。 */
 	bool IsRuntimeReady() const;
 };
 

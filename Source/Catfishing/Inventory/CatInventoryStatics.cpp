@@ -260,6 +260,25 @@ FCatDomainCommandResult UCatInventoryStatics::UseItemFromInventoryHostFromAuthor
 	return Result;
 }
 
+// 物品落地路由：复核来源宿主可触达后进入该库存的唯一落地命令，成功时刷新既有装备选择读模型，不调用装备使用。
+FCatDomainCommandResult UCatInventoryStatics::ReleaseItemToWorldFromAuthority(ACatCharacter* ControlledCharacter,
+	const FGuid RequestId, AActor* SourceInventoryHost, const int32 SourceSlotIndex, const FGuid ItemInstanceId,
+	const int32 Quantity, const ECatInventoryWorldAction Action)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	FCatInventoryHostEndpoint Endpoint;
+	if (!ControlledCharacter || !ControlledCharacter->HasAuthority()
+		|| !ResolveInventoryHostEndpoint(ControlledCharacter->GetWorld(), ControlledCharacter, SourceInventoryHost, SourceSlotIndex, Endpoint))
+	{
+		Result.Error = ECatDomainCommandError::PermissionDenied;
+		return Result;
+	}
+	Result = Endpoint.Inventory->ReleaseItemToWorldFromAuthority(ControlledCharacter, RequestId, SourceSlotIndex, ItemInstanceId, Quantity, Action);
+	if (Result.bCommitted && Endpoint.Equipment) Endpoint.Equipment->RefreshLoadoutFromInventoryComponentFromAuthority();
+	return Result;
+}
+
 // Actor 收货流程：先按同一规则找到完整可接收者，再只让这个组件执行正式写入，避免多组件分摊一批货。
 bool UCatInventoryStatics::TryAddInventoryBatchToActor(AActor* TargetActor,
 	const FCatInventoryReceiveBatch& ReceiveBatch)

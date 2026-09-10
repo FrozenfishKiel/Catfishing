@@ -6,6 +6,7 @@
 #include "CatShopEconomyService.generated.h"
 
 class UCatShopInventoryComponent;
+class UDataTable;
 
 /**
  * 一笔公开经济交易提交完成的服务器本机通知；复制挂载点订阅它来做"每笔购买全队广播"和公款余额刷新。
@@ -29,7 +30,7 @@ public:
 	/** 仅在 authority Game World 创建；客户端 UI 以后只能读复制/查询结果，不持有第二份公款。 */
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
 
-	/** WorldSubsystem 初始化时从显式 Settings 建立本局公款和售鱼估价策略；商店出售表不在这里加载。 */
+	/** WorldSubsystem 初始化时从显式 Settings 建立本局交易版本、命令 gate 与收购表引用；余额由 GameState ASC 在就绪后初始化。 */
 	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
 
 	/** World 退出时关闭新交易并清空本局注册摊位、账本和幂等缓存。 */
@@ -82,24 +83,14 @@ public:
 	FCatShopCartTransactionResult PurchaseCatalogCart(const FCatShopCartCommand& Command,
 		UCatShopInventoryComponent* ShopInventory);
 
-	/**
-	 * 声明：按体重轴给出一条鱼的收购价；返回 false 表示这条鱼现在卖不掉，调用方必须整笔拒绝而不是自己补一个价。
-	 * 实现：先要求本局经济 runtime 可用且收鱼价已被显式裁定，再把开局冻结的档位表和重量交给 Settings 的纯函数求值。
-	 * 用途：售鱼写口自己会再查一次同一个价来核对调用方报价；这个公开入口是给界面报价和库存提交前预检用的。
-	 */
-	bool TryAppraiseFishSale(double WeightKilograms, int32& OutSaleValue) const;
+	/** 按鱼种收购表和实际千克重量估一条鱼的收入；UI 与服务器预检复用同一纯算式，缺表或缺行返回 false。 */
+	bool TryAppraiseFishSale(FName FishDefinitionId, double WeightKilograms, int32& OutSaleValue) const;
 
-	/**
-	 * 在库存不可逆删除鱼之前预检这笔售鱼能不能入账；它只读公款、命令 gate、幂等缓存和收鱼价，不写账本。
-	 * 预检和入账用完全相同的判据，包括那次估价核对，所以预检说能卖，入账就不会再因为价格被拒。
-	 */
+	/** 在售鱼协调器占用实物前预检整单；只读余额、命令门、重放缓存与价格表，不使用 ExpectedRevision 裁决库存并发。 */
 	bool ValidateFishSale(const FCatShopFishSaleCommand& Command, ECatDomainCommandError& OutError,
 		int64& OutCurrentWalletRevision) const;
 
-	/**
-	 * 库存已经不可逆移除这条鱼之后，把卖鱼的钱记进团队公款。本服务不删除鱼，只认调用方带来的库存提交证据。
-	 * 价格由服务器按体重轴自己算，调用方带来的报价只是用来核对；两者不一致就整笔拒绝，不会按其中任何一个入账。
-	 */
+	/** 在售鱼协调器保护实物期间，通过一次 GAS GE 逐鱼算钱并入账；服务不删除鱼，失败由协调器释放世界鱼或恢复鱼护原格。 */
 	FCatShopTransactionResult ApplyFishSale(const FCatShopFishSaleCommand& Command);
 	/** 用下游领域的成功回执确认订单已交付；它不重新扣公款、库存或生成第二条账本。 */
 	FCatShopTransactionResult ConfirmTransactionDelivery(const FCatShopDeliveryConfirmationCommand& Command);
@@ -165,8 +156,18 @@ private:
 		FDelegateHandle Handle;
 	};
 
-	/** 从 Settings 重建本局公款、售鱼价格和交易 gate；商店货架库存由摊位库存组件自己生成。 */
+	/** 从 Settings 重建事务版本、收购表引用和交易 gate；余额本身由 GameState ASC 在就绪后初始化。 */
 	void LoadRuntimeEconomyFromSettings();
+
+	/** 从已绑定 GameState 的 ASC 读取整数团队余额；基础值与当前值不一致或依赖未就绪时返回 false 和零输出，不创建缓存余额。 */
+	bool TryGetTeamWalletBalance(int32& OutBalance) const;
+
+	/** 通过一次 GE 提交购买扣款或冻结售鱼行；成功才回传执行器实际金额，缺依赖、未执行或余额不符时返回 false。 */
+	bool TryApplyTeamWalletTransaction(int32& InOutDelta, const FGuid& RequestId,
+		const FCatShopFishSaleCommand* FishSale = nullptr);
+
+	/** 解析当前默认收购表；软引用尚未加载或资产不存在时返回空，让售鱼按策略缺失拒绝。 */
+	UDataTable* GetFishSalePriceTable() const;
 
 	/** 回放购物车终态时重读当前账本和库存，让客户端拿到最新交付状态而不是首次缓存里的失效 Pending。 */
 	void RefreshCartReplayResultFromLedger(FCatShopCartTransactionResult& Result) const;
@@ -186,7 +187,7 @@ private:
 	/** 购物车支付的业务载荷签名；缓存重放前必须完全匹配，不能靠换商品、数量或来源摊位生成第二笔订单。 */
 	static FString MakeCartPayloadSignature(const FCatShopCartCommand& Command);
 
-	/** 售鱼入账的业务载荷签名；鱼实例、库存提交证据、估值和公款前提都必须保持稳定。 */
+	/** 售鱼入账的业务载荷签名；库存提交证据与每条鱼的身份、种类和重量必须保持稳定。 */
 	static FString MakeFishSalePayloadSignature(const FCatShopFishSaleCommand& Command);
 
 	/** 交付确认的业务载荷签名；同 RequestId 不能替换 Transaction 或 Receipt。 */
@@ -203,8 +204,8 @@ private:
 	void CacheCartTerminalResult(const FString& CacheKey, const FString& PayloadSignature,
 		const FCatShopCartTransactionResult& Result);
 
-	/** 当前团队公款事实；所有经济命令只改这一份余额。 */
-	FCatShopWalletSnapshot Wallet;
+	/** 团队余额变更后的只读事务版本；余额由 GameState ASC 持有，版本只用于购买兼容和账本排序。 */
+	int64 WalletRevision = 0;
 
 	/** 本局交易账本；价格/公款/库存事实不可重算，交付状态只允许 Pending 到 Delivered。 */
 	TArray<FCatShopTransactionRecord> TransactionLedger;
@@ -218,14 +219,8 @@ private:
 	/** 终态缓存对应的业务载荷签名；同 key 载荷漂移会被拒绝，避免失效 RequestId 被挪作另一笔交易。 */
 	TMap<FString, FString> TerminalPayloadByKey;
 
-	/** 开局冻结的收鱼价体重轴档位表；中途改配置不影响本局已经在跑的报价。 */
-	TArray<FCatShopFishWeightPrice> FishPurchasePriceAnchors;
-
-	/** 收鱼价是否已被产品显式裁定；false 时售鱼整体 fail-closed，不退回任何工程默认价。 */
-	bool bFishPurchasePriceDecided = false;
-
-	/** 售鱼入账最小金额；服务初始化时从 Settings 冻结。 */
-	int32 MinimumFishSaleValue = 1;
+	/** 本局使用的本地收购表引用；行按鱼种 ID 定义每千克金币系数，服务端与 UI 估价都读取它。 */
+	TSoftObjectPtr<UDataTable> FishSalePriceTable;
 
 	/** 当前商店经济快照展示的局级天序号；实际补货由每个摊位库存组件按这个值各自推进。 */
 	int32 CurrentShopDayIndex = 0;
@@ -235,6 +230,9 @@ private:
 
 	/** Ending 或 World teardown 后关闭新交易；缓存重放仍允许读首次终态。 */
 	bool bCommandsOpen = true;
+
+	/** 当前是否处于经济提交的同步调用栈；购买与售鱼用作用域守卫写入，预检和嵌套写口读取，防止回调在终态缓存落定前重复交易。 */
+	bool bTransactionInProgress = false;
 
 	/** 当前 World 中已注册的商店摊位库存；购买必须显式带来源组件，公开快照会聚合这里的库存。 */
 	TArray<TWeakObjectPtr<UCatShopInventoryComponent>> RegisteredShopInventories;

@@ -1,5 +1,11 @@
 #include "ShopEconomy/Catalog/CatShopCatalogTypes.h"
 
+// 收购表行校验流程：行名已由 DataTable 作为鱼种主键，系数必须是有限正数；服务发现缺项时拒绝整笔售鱼而不猜测价格。
+bool FCatShopFishSalePriceRow::IsRuntimeReady() const
+{
+	return FMath::IsFinite(MoneyCoefficient) && MoneyCoefficient > 0.0;
+}
+
 // 目录项校验流程：只确认本服务真实需要的订单字段；下游 Definition 是否存在留给 Equipment/Data，避免经济目录偷建第二份内容真相。
 // UnitPrice 判 >= 0 就是在拦“没填价格”：默认值是 -1，只有配置里显式写过价格的条目才可能通过，0 元条目仍然合法通过。
 // 每日进货那一段是同一种拦法：标了 bDailyRestock 却没给正的进货量，说明产品还没拍这一项每天进几个，
@@ -77,10 +83,4 @@ bool FCatShopCatalogTableRow::TryResolveRefreshedStock(FRandomStream& RandomStre
 	}
 	OutStock = RandomStream.RandRange(MinRefreshedStockOverride, MaxRefreshedStockOverride);
 	return OutStock > 0;
-}
-
-// 档位校验流程：重量下限必须是有限非负数，价格必须为正；两者都显式给过，这一档才可能参与估价。
-bool FCatShopFishWeightPrice::IsRuntimeReady() const
-{
-	return FMath::IsFinite(MinimumWeightKilograms) && MinimumWeightKilograms >= 0.0 && Price > 0;
 }

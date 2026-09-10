@@ -106,11 +106,11 @@ struct FCatShopTransactionRecord
 	UPROPERTY(BlueprintReadOnly)
 	int32 PurchaseQuantity = 0;
 
-	/** 售鱼时从正式库存不可逆移除的鱼实例；购买可保持无效。 */
+	/** 售鱼批次中首条鱼的身份摘要；服务写入供流水定位，不证明实物已移除，购买时保持无效。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid FishInstanceId;
 
-	/** 对团队公款的真实增量；购物车购买为负或 0，售鱼为正。 */
+	/** 对团队公款的真实增量；购物车购买为负或 0，售鱼为非负整数，逐鱼舍入可产生零收入。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 WalletDelta = 0;
 
@@ -175,11 +175,11 @@ struct FCatShopPublicTransaction
 	UPROPERTY(BlueprintReadOnly)
 	int32 PurchaseQuantity = 0;
 
-	/** 售鱼流水对应的实物鱼实例；购买保持无效，客户端不能用它补删库存。 */
+	/** 售鱼批次首条鱼的公开身份摘要；购买保持无效，客户端不能用它补删库存或当作整批鱼清单。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid FishInstanceId;
 
-	/** 公款余额的真实增量；购物车购买为负或 0，售鱼为正。 */
+	/** 公款余额的真实增量；购物车购买为负或 0，售鱼可为正或零，客户端只展示已提交的结果。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 WalletDelta = 0;
 };
@@ -289,35 +289,42 @@ struct FCatShopResolvedCart
 	FCatShopWalletSnapshot Wallet;
 };
 
-/** 库存系统已完成不可逆售鱼扣除后提交给经济系统的入账命令。 */
+/** 一条待收购的服务器确认鱼事实；价格只由 FishDefinitionId 和实际千克重量计算，不接受客户端金额。 */
+USTRUCT(BlueprintType)
+struct FCatShopFishSaleLine
+{
+	GENERATED_BODY()
+
+	/** 正式鱼实例 ID；交易账本可保留首条摘要，库存提交和重放以整组实例事实为准。 */
+	UPROPERTY(BlueprintReadWrite)
+	FGuid FishInstanceId;
+
+	/** 正式鱼种 ID；服务以它查本地收购 DataTable 的金币系数。 */
+	UPROPERTY(BlueprintReadWrite)
+	FName FishDefinitionId = NAME_None;
+
+	/** 服务器冻结的实际重量，单位千克；逐条乘系数并四舍五入后才汇总整单收入。 */
+	UPROPERTY(BlueprintReadWrite)
+	double WeightKilograms = 0.0;
+};
+
+/** 售鱼协调器保护实物后提交的整批入账命令；经济成功才完成实物消费，失败仍可恢复原来源。 */
 USTRUCT(BlueprintType)
 struct FCatShopFishSaleCommand
 {
 	GENERATED_BODY()
 
-	/** RequestId、ExpectedRevision 与服务器身份；ExpectedRevision 仍指向团队公款版本。 */
+	/** RequestId 与服务器身份；ExpectedRevision 不参与售鱼库存或乐观并发校验。 */
 	UPROPERTY(BlueprintReadWrite)
 	FCatDomainCommandContext Context;
 
-	/** 已经进入交易结算流程的鱼实例 ID；ShopEconomy 只记录交易对象，鱼删除由库存写口提交。 */
-	UPROPERTY(BlueprintReadWrite)
-	FGuid FishInstanceId;
-
-	/** 库存扣除的提交记录 ID；没有该证据时不能给公款入账。 */
+	/** 实物与经济提交的关联号；协调器在占用前写入并纳入重放签名，不代表库存已经不可逆扣除。 */
 	UPROPERTY(BlueprintReadWrite)
 	FGuid InventoryCommitId;
 
-	/** 这条鱼被捕获时服务器冻结下来的重量，单位千克；它是收购价的唯一输入，必须由鱼物品实例提供，不接受客户端填写。 */
+	/** 本次协调器冻结的实物鱼行；服务完整重算一笔收入，任一行非法即整单拒绝，不自行访问鱼护或世界鱼。 */
 	UPROPERTY(BlueprintReadWrite)
-	double WeightKilograms = 0.0;
-
-	/**
-	 * 调用方带进来的成交价。服务器会用 WeightKilograms 自己查一次体重轴，两个值不完全相等就拒绝这笔售鱼。
-	 * 保留一个由调用方填的价格，是为了让玩家在界面上看到的报价和最终入账的钱必须是同一个数；
-	 * 它不是定价权：客户端伪造一个大数只会让整笔交易被拒，不会让公款多出一分钱。
-	 */
-	UPROPERTY(BlueprintReadWrite)
-	int32 SaleValue = 0;
+	TArray<FCatShopFishSaleLine> Fish;
 };
 
 /** 下游领域完成购买交付后的确认命令；它只推进账本状态，不重新扣公款或库存。 */

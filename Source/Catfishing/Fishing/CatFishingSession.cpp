@@ -38,6 +38,7 @@
 #include "Equipment/CatEquipmentDefinition.h"
 #include "FishContainers/CatFishPickupSettings.h"
 #include "Items/Fish/CatFishPickupActor.h"
+#include "FishContainers/CatFishGuardActor.h"
 #include "FishContainers/World/CatWorldSurfaceResolver.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Net/UnrealNetwork.h"
@@ -488,7 +489,9 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 		: FCatWaterSpatialResult{};
 	const double FishRadius = FishDefinition ? FishDefinition->ScoopTargetRadiusCentimeters : 0.0;
 	const FVector FishLocation = Encounter ? Encounter->GetActorLocation() : FVector::ZeroVector;
-	const bool bMouthFree = ScoopingCharacter && !ACatFishPickupActor::FindCarriedFish(ScoopingCharacter);
+	// 抄鱼与拾取共用单嘴约束；鱼护虽在背包中，其可见嘴部载体仍占用这一位置。
+	const bool bMouthFree = ScoopingCharacter && !ACatFishPickupActor::FindCarriedFish(ScoopingCharacter)
+		&& !ACatFishGuardActor::FindCarriedGuard(ScoopingCharacter);
 	const bool bRayReachesFish = bScoopReachReady && ScoopingCharacter && Settings && Encounter && FishRadius > 0.0
 		&& UCatFishingAimLibrary::DoesScoopRayReachFish(ScooperLocation, ScooperFacing,
 			static_cast<float>(ScoopReachCentimeters), FishLocation, static_cast<float>(FishRadius),
@@ -1737,10 +1740,8 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 	FRotator LandedRotation = Snapshot.FishEncounterActor
 		? Snapshot.FishEncounterActor->GetActorRotation() : FRotator::ZeroRotator;
 	LandedRotation.Pitch = 0.0;
-	const UCatFishPresentationDefinition* FishPresentation =
-		FishDefinition->LoadRuntimePresentationDefinition();
-	// 默认 90 度表达没有表现资产时的侧躺姿态；资产给出 Roll 时以资产口径为准。
-	LandedRotation.Roll = FishPresentation ? FishPresentation->LandedActorRollDegrees : 90.0;
+	// 世界鱼自己恢复侧躺网格和盒形碰撞；生成入口只提供水平朝向与地面位置。
+	LandedRotation.Roll = 0.0;
 	ACatFishPickupActor* Pickup = World->SpawnActor<ACatFishPickupActor>(
 		ACatFishPickupActor::StaticClass(), SpawnLocation, LandedRotation, SpawnParams);
 	TArray<FString> Participants;
@@ -1854,7 +1855,7 @@ bool ACatFishingSession::SpawnScoopedFishPickupFromAuthority(ACatCharacter* Scoo
 	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
 	if (!HasAuthority() || !World || !ScoopingCharacter || !ScoopingPlayerState || ScooperStableNetId.IsEmpty()
 		|| !Encounter || !FishDefinition || !AttemptSnapshot.WaterRegion.IsValid()
-		|| ACatFishPickupActor::FindCarriedFish(ScoopingCharacter))
+		|| ACatFishPickupActor::FindCarriedFish(ScoopingCharacter) || ACatFishGuardActor::FindCarriedGuard(ScoopingCharacter))
 	{
 		return false;
 	}

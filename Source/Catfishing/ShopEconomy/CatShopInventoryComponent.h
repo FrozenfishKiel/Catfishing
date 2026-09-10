@@ -55,9 +55,9 @@ public:
 	/** 查询本摊位当前某个 EntryId 对应的目录原文；商店交易入口用它在扣款前先问公共仓库能否接收。 */
 	bool TryGetCatalogEntry(FName EntryId, FCatShopCatalogEntry& OutEntry) const;
 
-	/** authority 整车订单提交时一次性扣减多条货架库存；任一有限库存不足时整批保持原状。 */
+	/** authority 整车扣货并同步完成付款；库存不足或付款拒绝时恢复原货架且不广播，只有整单成立才返回新快照。 */
 	bool ConsumeCatalogEntriesFromAuthority(const TArray<FCatShopCartLineCommand>& Lines,
-		TArray<FCatShopStockSnapshot>& OutSnapshots);
+		TArray<FCatShopStockSnapshot>& OutSnapshots, TFunctionRef<bool()> CommitPayment);
 
 	/** 收集本摊位所有可展示商品候选；UI 用公开货架快照过滤出本轮随机抽中的条目。 */
 	void CollectDisplayCatalogEntries(TArray<FCatShopCatalogEntry>& OutEntries) const;

@@ -67,4 +67,24 @@ public:
 	/** 数量型物品未在定义资产上声明 MaxStackSize 时采用的单格容量；0 表示同类数量物尽量堆进一个格。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Capacity", meta = (ClampMin = "0"))
 	int32 DefaultQuantityStackCapacity = ProjectDefaultQuantityStackCapacity;
+
+	/** 自动放置可搜索的最远水平距离，单位厘米；服务器与本地操作提示读取，不能借客户端落点越过该范围。 */
+	UPROPERTY(Config, EditAnywhere, Category = "World", meta = (ClampMin = "1.0", Units = "cm"))
+	double PlacementRangeCentimeters = 150.0;
+
+	/** 候选地面相对猫脚底允许的最大高低差，单位厘米；放置检测用它拒绝远高台阶和悬崖下方。 */
+	UPROPERTY(Config, EditAnywhere, Category = "World", meta = (ClampMin = "0.0", Units = "cm"))
+	double PlacementHeightDifferenceCentimeters = 30.0;
+
+	/** 可以稳定放置物品的地面最大坡度，单位度；服务器检查接触面，过陡时继续寻找其他候选位置。 */
+	UPROPERTY(Config, EditAnywhere, Category = "World", meta = (ClampMin = "0.0", ClampMax = "89.0", Units = "deg"))
+	double PlacementSlopeDegrees = 30.0;
+
+	/** 丢弃时沿角色水平朝向的初速度，单位厘米每秒；只施加一次，不在 Tick 中修正弹道。 */
+	UPROPERTY(Config, EditAnywhere, Category = "World", meta = (ClampMin = "0.0"))
+	double DropForwardSpeed = 250.0;
+
+	/** 丢弃时竖直向上的初速度，单位厘米每秒；与重力共同形成轻抛，不影响固定放置。 */
+	UPROPERTY(Config, EditAnywhere, Category = "World", meta = (ClampMin = "0.0"))
+	double DropUpwardSpeed = 200.0;
 };

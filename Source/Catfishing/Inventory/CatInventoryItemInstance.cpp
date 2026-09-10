@@ -145,6 +145,12 @@ void UCatInventoryItemInstance::SetRuntimeOwnerActor(AActor* InRuntimeOwnerActor
 	RuntimeOwnerActor = InRuntimeOwnerActor;
 }
 
+// 世界载体读取流程：普通物品没有驻留 Actor，落地时由物品定义生成；拥有容器载体的实例子类覆盖此入口。
+AActor* UCatInventoryItemInstance::GetWorldActor() const
+{
+	return nullptr;
+}
+
 // 宿主读取流程：优先使用显式运行宿主；新建实例尚未同步时回退到 Outer Actor。
 AActor* UCatInventoryItemInstance::GetRuntimeOwnerActor() const
 {

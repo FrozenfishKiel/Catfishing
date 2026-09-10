@@ -1,17 +1,97 @@
 #include "Inventory/CatInventoryComponent.h"
 
 #include "GameFramework/Pawn.h"
+#include "Character/CatCharacter.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/PrimitiveComponent.h"
+#include "Condition/CatConditionComponent.h"
+#include "Engine/World.h"
+#include "Inventory/CatInventoryWorldItem.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
+#include "PhysicsEngine/BodySetup.h"
 #include "UI/Inventory/CatInventoryModel.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogCatInventory, Log, All);
 
 namespace
 {
+	// 落点求解流程：只用物理根的局部包围盒检查占用，不把准星交互球算作实体；放置依次搜索正前方与左右各30度内的地面。
+	// 放置同时检查坡度、相对脚底高差、视线、物体占用和四角支撑，全部通过才返回最终 Actor 变换；全过程不移动 Actor。
+	bool FindInventoryWorldTransform(ACatCharacter* Character, AActor* ItemActor, const ECatInventoryWorldAction Action,
+		const UCatInventorySettings& Settings, FTransform& OutTransform)
+	{
+		UWorld* World = Character->GetWorld();
+		const UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(ItemActor->GetRootComponent());
+		if (!Body) return false;
+		const FBox Bounds = Body->CalcBounds(FTransform::Identity).GetBox();
+		if (!Bounds.IsValid) return false;
+		const FVector Scale = ItemActor->GetActorScale3D();
+		const FVector Extent = Bounds.GetExtent() * Scale.GetAbs();
+		const FVector CenterOffset = Bounds.GetCenter() * Scale;
+		const FVector Forward = Character->GetActorForwardVector().GetSafeNormal2D();
+		const FVector Eye = Character->GetPawnViewLocation();
+		if (!World || Extent.ContainsNaN() || Extent.GetMin() <= 0.0 || Forward.IsNearlyZero()) return false;
+		FCollisionQueryParams Query(SCENE_QUERY_STAT(CatInventoryWorldRelease), false, Character);
+		Query.AddIgnoredActor(ItemActor);
+		const FCollisionShape Shape = FCollisionShape::MakeBox(Extent);
+		const double FeetZ = Character->GetActorLocation().Z - Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+		if (Action == ECatInventoryWorldAction::Drop)
+		{
+			const FQuat Rotation = Forward.Rotation().Quaternion();
+			const FVector Center = Eye + Forward * (Character->GetCapsuleComponent()->GetScaledCapsuleRadius() + Extent.GetMax() + 10.0);
+			FHitResult Hit;
+			if (World->SweepSingleByChannel(Hit, Eye, Center, Rotation, ECC_WorldDynamic, Shape, Query)
+				|| World->OverlapBlockingTestByChannel(Center, Rotation, ECC_WorldDynamic, Shape, Query)) return false;
+			OutTransform = FTransform(Rotation, Center - Rotation.RotateVector(CenterOffset), Scale);
+			return true;
+		}
+		const double Height = Settings.PlacementHeightDifferenceCentimeters;
+		const double MinimumNormalZ = FMath::Cos(FMath::DegreesToRadians(Settings.PlacementSlopeDegrees));
+		for (const double Angle : {0.0, -15.0, 15.0, -30.0, 30.0})
+		{
+			const FVector Direction = Forward.RotateAngleAxis(Angle, FVector::UpVector);
+			for (const double Fraction : {2.0 / 3.0, 0.5, 5.0 / 6.0, 1.0, 1.0 / 3.0})
+			{
+				FVector Candidate = Eye + Direction * Settings.PlacementRangeCentimeters * Fraction;
+				Candidate.Z = FeetZ;
+				FHitResult Ground;
+				if (!World->LineTraceSingleByChannel(Ground, Candidate + FVector(0, 0, Height + 2.0),
+					Candidate - FVector(0, 0, Height + 2.0), ECC_WorldDynamic, Query)
+					|| FMath::Abs(Ground.ImpactPoint.Z - FeetZ) > Height || Ground.ImpactNormal.Z < MinimumNormalZ) continue;
+				FHitResult Sight;
+				if (World->LineTraceSingleByChannel(Sight, Eye, Ground.ImpactPoint, ECC_Visibility, Query)
+					&& FVector::DistSquared(Sight.ImpactPoint, Ground.ImpactPoint) > FMath::Square(3.0)) continue;
+				const FQuat Rotation = FRotationMatrix::MakeFromZX(Ground.ImpactNormal, Forward).ToQuat();
+				const FVector Center = Ground.ImpactPoint + Ground.ImpactNormal * (Extent.Z + 1.0);
+				if (World->OverlapBlockingTestByChannel(Center, Rotation, ECC_WorldDynamic, Shape, Query)) continue;
+				bool bSupported = true;
+				for (const FVector2D Corner : {FVector2D(-1, -1), FVector2D(-1, 1), FVector2D(1, -1), FVector2D(1, 1)})
+				{
+					const FVector Support = Ground.ImpactPoint + Rotation.RotateVector(FVector(Corner.X * Extent.X * 0.9, Corner.Y * Extent.Y * 0.9, 0));
+					FHitResult Foot;
+					if (!World->LineTraceSingleByChannel(Foot, Support + FVector(0, 0, Height + 2.0),
+						Support - FVector(0, 0, Height + 2.0), ECC_WorldDynamic, Query)
+						|| Foot.ImpactNormal.Z < MinimumNormalZ
+						|| FMath::Abs(FVector::DotProduct(Foot.ImpactPoint - Ground.ImpactPoint, Ground.ImpactNormal)) > 2.0)
+					{
+						bSupported = false;
+						break;
+					}
+				}
+				if (bSupported)
+				{
+					OutTransform = FTransform(Rotation, Center - Rotation.RotateVector(CenterOffset), Scale);
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
 	// 商店批量发货需要稳定载荷签名；这里拒绝混入实例项，避免批量购买把运行实例来源混进商店语义。
 	// 1. 只接受定义发货项，实例发货仍走底层 ReceiveBatch。
 	// 2. 按稳定定义 ID 合并重复行，并确认每行定义、数量、运行配置和实例类都能被正式库存创建。
@@ -1333,7 +1413,7 @@ void UCatInventoryComponent::SetInventorySlotCountFromAuthority(const int32 NewS
 // 3. 内容变化时移除原实例复制登记，按目标数量调整数组并在原格上写入内容；保留已有格子的复制身份，避免恢复/回滚让客户端格序漂移。
 // 4. 每格（包括空格）标记内容变化，有效实例补齐运行宿主和复制登记，最后广播完整变化。
 bool UCatInventoryComponent::ReplaceInventoryEntriesFromAuthority(
-	const TArray<FCatInventoryEntry>& NewEntries, const int32 MinimumSlotCount)
+	const TArray<FCatInventoryEntry>& NewEntries, const int32 MinimumSlotCount, const bool bBroadcastChange)
 {
 	AActor* OwningActor = GetOwner();
 	if (OwningActor != nullptr && !OwningActor->HasAuthority())
@@ -1392,7 +1472,8 @@ bool UCatInventoryComponent::ReplaceInventoryEntriesFromAuthority(
 
 	InventoryList.MarkArrayDirty();
 
-	BroadcastInventoryChange();
+	// 跨库存与经济的一次提交先完成两端事实，再由调用方通知观察者；其他调用仍保持原有立即广播。
+	if (bBroadcastChange) BroadcastInventoryChange();
 	return true;
 }
 
@@ -2151,6 +2232,111 @@ bool UCatInventoryComponent::ConsumeItemAtSlot(const int32 SlotIndex, const int3
 
 	BroadcastInventoryChange(SlotIndex);
 	return true;
+}
+
+// 物品落地流程：
+// 1. 先重放同请求终态，再复核当前实例、数量、身体和配置，防止数量面板打开后误操作已换入的物品。
+// 2. 有既有载体的鱼护复用原 Actor；普通物品延迟生成配置 Actor 并复制实例状态，失败销毁新载体但不扣来源。
+// 3. 落点通过后才提交库存扣量；扣量的同步广播前记录重入拒绝，完成后用最终结果覆盖该请求缓存。
+// 4. 最后同步实例归属、解除附着并设置物理模式，丢弃只施加一次初速度，放置不调用任何装备使用逻辑。
+FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(ACatCharacter* Character,
+	const FGuid RequestId, const int32 SlotIndex, const FGuid ItemInstanceId, const int32 Quantity, const ECatInventoryWorldAction Action)
+{
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	const FString Key = MakeTerminalKey(TEXT("WorldRelease"), RequestId);
+	const FString Payload = FString::Printf(TEXT("%s|%d|%s|%d|%d"), *GetPathNameSafe(Character), SlotIndex, *ItemInstanceId.ToString(), Quantity, static_cast<int32>(Action));
+	if (const FCatDomainCommandResult* Cached = TerminalCache.Find(Key))
+	{
+		if (TerminalPayloadByKey.FindRef(Key) == Payload) return *Cached;
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+	AActor* WorldActor = nullptr;
+	bool bNewActor = false;
+	const auto Finish = [&](const ECatDomainCommandError Error)
+	{
+		Result.Error = Error;
+		Result.bCommitted = Error == ECatDomainCommandError::None;
+		if (!Result.bCommitted && bNewActor && IsValid(WorldActor)) WorldActor->Destroy();
+		TerminalPayloadByKey.Add(Key, Payload);
+		TerminalCache.Add(Key, Result);
+		UE_LOG(LogCatInventory, Log, TEXT("Event=inventory_world_release Request=%s Item=%s Quantity=%d Action=%d Actor=%s Error=%s World=%s NetMode=%d Authority=%d LocalRole=%d"),
+			*RequestId.ToString(), *ItemInstanceId.ToString(), Quantity, static_cast<int32>(Action), *GetNameSafe(WorldActor),
+			*UEnum::GetValueAsString(Error), *GetNameSafe(GetWorld()), GetOwner() ? GetOwner()->GetNetMode() : -1,
+			GetOwner() && GetOwner()->HasAuthority(), GetOwner() ? static_cast<int32>(GetOwner()->GetLocalRole()) : -1);
+		return Result;
+	};
+	const FCatInventoryEntry* Entry = GetInventoryEntryAtSlot(SlotIndex);
+	const UCatInventorySettings* Settings = GetDefault<UCatInventorySettings>();
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !Character || Character->GetWorld() != GetWorld()
+		|| !RequestId.IsValid() || !ItemInstanceId.IsValid() || Quantity <= 0
+		|| (Action != ECatInventoryWorldAction::Drop && Action != ECatInventoryWorldAction::Place)
+		|| !Entry || !Entry->Instance || Entry->Instance->GetItemInstanceId() != ItemInstanceId || Entry->StackCount < Quantity)
+		return Finish(ECatDomainCommandError::InvalidPayload);
+	if (!Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned)
+		return Finish(ECatDomainCommandError::PermissionDenied);
+	if (!Settings || !FMath::IsFinite(Settings->PlacementRangeCentimeters) || Settings->PlacementRangeCentimeters <= 0
+		|| !FMath::IsFinite(Settings->PlacementHeightDifferenceCentimeters) || Settings->PlacementHeightDifferenceCentimeters < 0
+		|| !FMath::IsFinite(Settings->PlacementSlopeDegrees) || Settings->PlacementSlopeDegrees < 0 || Settings->PlacementSlopeDegrees >= 90
+		|| !FMath::IsFinite(Settings->DropForwardSpeed) || Settings->DropForwardSpeed < 0
+		|| !FMath::IsFinite(Settings->DropUpwardSpeed) || Settings->DropUpwardSpeed < 0)
+		return Finish(ECatDomainCommandError::InvalidPayload);
+	UCatInventoryItemInstance* SourceItem = Entry->Instance;
+	UCatInventoryItemDefinition* Definition = SourceItem->GetItemDefinition();
+	if (!Definition || !Definition->IsInventoryRuntimeDefinitionReady()) return Finish(ECatDomainCommandError::InvalidPayload);
+	WorldActor = SourceItem->GetWorldActor();
+	UCatInventoryItemInstance* ReleasedItem = SourceItem;
+	if (!WorldActor)
+	{
+		UClass* ActorClass = Definition->WorldActorClass.LoadSynchronous();
+		if (!ActorClass || !ActorClass->ImplementsInterface(UCatInventoryWorldItem::StaticClass())) return Finish(ECatDomainCommandError::DependencyUnavailable);
+		WorldActor = GetWorld()->SpawnActorDeferred<AActor>(ActorClass, Character->GetActorTransform(), nullptr, Character,
+			ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+		bNewActor = true;
+		if (!WorldActor) return Finish(ECatDomainCommandError::DependencyUnavailable);
+		WorldActor->SetActorHiddenInGame(true);
+		WorldActor->SetActorEnableCollision(false);
+		ReleasedItem = DuplicateObject<UCatInventoryItemInstance>(SourceItem, WorldActor);
+		if (Quantity < Entry->StackCount) ReleasedItem->SetItemInstanceIdFromAuthority(FGuid::NewGuid());
+		ICatInventoryWorldItem* Receiver = Cast<ICatInventoryWorldItem>(WorldActor);
+		if (!Receiver || !Receiver->InitializeFromInventoryFromAuthority(ReleasedItem, Quantity)) return Finish(ECatDomainCommandError::InvalidPayload);
+		WorldActor->FinishSpawning(Character->GetActorTransform());
+	}
+	else if (WorldActor->GetWorld() != GetWorld() || Quantity != Entry->StackCount)
+	{
+		return Finish(ECatDomainCommandError::InvalidPayload);
+	}
+	UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(WorldActor->GetRootComponent());
+	FTransform Transform;
+	// 先检查真实刚体形状和可移动性；不能以设置了SimulatePhysics布尔值就假定物体确实能够运动。
+	if (!Body || Body->Mobility != EComponentMobility::Movable || !Body->GetBodySetup()
+		|| Body->GetBodySetup()->AggGeom.GetElementCount() == 0
+		|| Body->GetBodySetup()->CollisionTraceFlag == CTF_UseComplexAsSimple
+		|| !FindInventoryWorldTransform(Character, WorldActor, Action, *Settings, Transform))
+		return Finish(ECatDomainCommandError::PermissionDenied);
+	Result.Error = ECatDomainCommandError::AlreadyResolved;
+	TerminalPayloadByKey.Add(Key, Payload);
+	TerminalCache.Add(Key, Result);
+	if (!ConsumeItemAtSlot(SlotIndex, Quantity)) return Finish(ECatDomainCommandError::InvalidPayload);
+	ReleasedItem->SetRuntimeOwnerActor(WorldActor);
+	Body->SetSimulatePhysics(false);
+	WorldActor->DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	WorldActor->SetActorTransform(Transform, false, nullptr, ETeleportType::TeleportPhysics);
+	WorldActor->SetOwner(nullptr);
+	WorldActor->SetInstigator(nullptr);
+	WorldActor->SetActorHiddenInGame(false);
+	WorldActor->SetActorEnableCollision(true);
+	Body->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	Body->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
+	Body->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block);
+	if (Action == ECatInventoryWorldAction::Drop)
+	{
+		Body->SetSimulatePhysics(true);
+		Body->SetPhysicsLinearVelocity(Character->GetActorForwardVector().GetSafeNormal2D() * Settings->DropForwardSpeed + FVector(0, 0, Settings->DropUpwardSpeed));
+	}
+	WorldActor->ForceNetUpdate();
+	return Finish(ECatDomainCommandError::None);
 }
 
 // 槽位合法性判断流程：只检查数组边界，不要求槽位非空。
