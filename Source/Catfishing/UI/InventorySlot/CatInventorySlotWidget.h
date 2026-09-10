@@ -8,6 +8,7 @@
 
 class UImage;
 class UTextBlock;
+class UCatItemTooltipController;
 
 /** 格子点击通知；父库存页只用本库存内的下标记录选择，物品使用与拖放直接提交 owning Controller。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatInventorySlotSelected, int32);
@@ -47,9 +48,21 @@ public:
 	/** 普通左键点击时通知父页本库存内的下标；拖拽不会提前触发选择。 */
 	FCatInventorySlotSelected OnSlotSelected;
 
+	/** 父页重建格子前撤销本格的提示来源；不会关闭已经由另一格接管的信息框。 */
+	void CancelTooltip();
+
 protected:
 	/** 首次初始化时允许本格接收输入；布局和悬停颜色继续使用正式 WBP。 */
 	virtual void NativeOnInitialized() override;
+
+	/** 鼠标进入时把本格和中心坐标交给本地 Tooltip Controller。 */
+	virtual void NativeOnMouseEnter(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
+
+	/** 鼠标离开时仅撤销本格自己的悬停提示。 */
+	virtual void NativeOnMouseLeave(const FPointerEvent& InMouseEvent) override;
+
+	/** 控件销毁时兜底撤销悬停，覆盖格子重建或页面被移除但未收到 Leave 的情形。 */
+	virtual void NativeDestruct() override;
 
 	/** 左键开始检测拖拽，右键提交使用；其他输入交回父类。 */
 	virtual FReply NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
@@ -70,6 +83,9 @@ protected:
 		UDragDropOperation* InOperation) override;
 
 private:
+	/** 从 owning LocalPlayer 读取已装配的唯一 Tooltip Controller；不创建额外显示入口。 */
+	UCatItemTooltipController* ResolveTooltipController() const;
+
 	/** 本格所属库存；父页绑定时写入，鼠标操作用它确定服务器请求的宿主。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatInventoryComponent> SourceInventory;

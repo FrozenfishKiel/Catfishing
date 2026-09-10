@@ -10,6 +10,8 @@ class APawn;
 class ACatCharacter;
 class UCatHUDModel;
 class UCatHUDWidget;
+class UCatItemTooltipController;
+class UCatItemTooltipWidget;
 class UCatFrontendPageController;
 class UCatFrontendRootWidget;
 class UCatFrontendRoomModel;
@@ -27,7 +29,7 @@ class UCatDayTransitionWidget;
 struct FCatRunDayTransition;
 enum class ECatHUDAction : uint8;
 
-/** 每个 LocalPlayer 的 UI 生命周期协调器；只装配本地玩家拥有的 HUD、背包和交互提示，不预建商店或聚合业务页面。 */
+/** 每个 LocalPlayer 的 UI 生命周期协调器；只装配本地玩家拥有的 HUD、背包、物品提示和交互提示，不预建商店或聚合业务页面。 */
 UCLASS()
 class CATFISHING_API UCatLocalPlayerUISubsystem : public ULocalPlayerSubsystem
 {
@@ -58,6 +60,9 @@ public:
 
 	/** 返回当前 LocalPlayer 的库存窗口控制器；WBP 只用它关闭窗口，库存 Model 由各库存组件提供。 */
 	UCatInventoryPageController* GetInventoryPageController() const;
+
+	/** 返回此玩家已经装配的唯一悬停控制器；库存格只提交显示意图，不创建各自的 Tooltip。 */
+	UCatItemTooltipController* GetItemTooltipController() const;
 
 	/** owning client 的 PlayerController 在 Pawn 或输入链就绪后调用；子系统据此重新对齐本地 HUD、背包和交互提示。 */
 	void RefreshPlayerLakeUIForController(APlayerController* Controller);
@@ -168,10 +173,10 @@ private:
 	/** 当前 Controller Pawn 变化入口；同 Pawn 刷新库存读模型和输入绑定，换 Pawn 或空 Pawn 才拆装本地玩家 UI 模块。 */
 	void HandleControllerPawnChanged(APawn* NewPawn);
 
-	/** 当配置 WBP、当前 Controller 与 Character 有效时创建 HUD、Inventory、Interaction 和局内菜单模块。 */
+	/** 当配置 WBP、当前 Controller 与 Character 有效时创建 HUD、Inventory、物品提示、Interaction 和局内菜单模块。 */
 	void AttachPlayerLakeUI(ACatCharacter* Character);
 
-	/** 先解绑各模块 PageController/Model，再移除 View，最后清理所有本地玩家 UI 引用。 */
+	/** 先解绑各模块 PageController、Model 和悬停来源，再移除 View，最后清理所有本地玩家 UI 引用。 */
 	void DetachPlayerLakeUI();
 
 	/** HUD Model 投影变化入口；只把最新状态交给 HUD WBP，不访问背包或商店。 */
@@ -246,6 +251,14 @@ private:
 	/** 当前 LocalPlayer 的库存窗口控制器；它管理背包与外部库存的页面、输入和焦点，不中转物品操作。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryPageController> InventoryPageController;
+
+	/** 本玩家唯一的物品悬停控制器；局内 UI 装配时创建，卸载时先解除来源再销毁。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatItemTooltipController> ItemTooltipController;
+
+	/** 本玩家唯一的正式物品提示 View；显示在库存上层且不参与命中，卸载时移出视口。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatItemTooltipWidget> ItemTooltipWidget;
 
 	/** 当前 LocalPlayer 的局内主菜单 WBP；它只展示设置、保存和退出入口，不持有 Save 或 Online 系统。 */
 	UPROPERTY(Transient)

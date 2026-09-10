@@ -5,6 +5,7 @@
 #include "CatUISettings.generated.h"
 
 class UCatHUDWidget;
+class UCatItemTooltipWidget;
 class UCatFrontendRootWidget;
 class UCatInteractionPromptWidget;
 class UCatInventorySlotWidget;
@@ -37,6 +38,9 @@ public:
 
 	/** 读取正式背包格子 WBP 类；缺失时背包只能显示主界面文本，不创建原生格子替身。 */
 	TSubclassOf<UCatInventorySlotWidget> LoadInventorySlotWidgetClass() const;
+
+	/** 读取迁移后的正式物品提示 WBP；资源或父类不符时返回空，不生成替代布局。 */
+	TSubclassOf<UCatItemTooltipWidget> LoadItemTooltipWidgetClass() const;
 
 	/** 读取正式交互提示 WBP 类；缺失时只关闭提示表现，不影响交互目标自己的服务器裁决。 */
 	TSubclassOf<UCatInteractionPromptWidget> LoadInteractionPromptWidgetClass() const;
@@ -87,6 +91,10 @@ public:
 	/** 正式背包格子 WBP 类；每个格子是独立 UserWidget，不是 Button。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")
 	TSoftClassPtr<UCatInventorySlotWidget> InventorySlotWidgetClass;
+
+	/** 玩家唯一物品悬停框的正式 WBP；LocalPlayer 装配时读取，资产位于已有库存 Cook 目录。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")
+	TSoftClassPtr<UCatItemTooltipWidget> ItemTooltipWidgetClass;
 
 	/** 正式交互提示 WBP 类；只显示靠近对象和确认键提示。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Interaction")

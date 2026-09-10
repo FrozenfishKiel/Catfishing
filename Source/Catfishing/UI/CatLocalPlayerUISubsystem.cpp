@@ -26,6 +26,8 @@
 #include "UI/Interaction/CatInteractionPromptWidget.h"
 #include "UI/Inventory/CatInventoryPageController.h"
 #include "UI/Inventory/CatInventoryWidget.h"
+#include "UI/ItemTooltip/CatItemTooltipController.h"
+#include "UI/ItemTooltip/CatItemTooltipWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
 #include "UI/Save/CatLakeMainMenuController.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
@@ -124,7 +126,7 @@ void UCatLocalPlayerUISubsystem::Initialize(FSubsystemCollectionBase& Collection
 	RefreshFrontendForCurrentController();
 }
 
-// 销毁流程：先释放 HUD、背包和交互提示模块；Controller 解绑时移除翻天表现，最后清理 Frontend Root 与 Online 快照。
+// 销毁流程：先释放 HUD、背包、物品提示和交互提示模块；Controller 解绑时移除翻天表现，最后清理 Frontend Root 与 Online 快照。
 void UCatLocalPlayerUISubsystem::Deinitialize()
 {
 	DetachPlayerLakeUI();
@@ -1185,10 +1187,16 @@ void UCatLocalPlayerUISubsystem::UnbindController()
 	BoundPlayerController.Reset();
 }
 
+// Tooltip 控制器读取流程：只返回 AttachPlayerLakeUI 写入的本地玩家唯一控制器；局内 UI 未装配或资产创建失败时返回空，调用者据此跳过显示请求而不创建第二条提示链路。
+UCatItemTooltipController* UCatLocalPlayerUISubsystem::GetItemTooltipController() const
+{
+	return ItemTooltipController;
+}
+
 // Pawn 变化流程：
 // 1. 先把 NewPawn 裁成项目猫身体；同一个已装配身体的重复通知只刷新输入绑定，库存和菜单数据继续等自己的读源广播。
 // 2. 新身体或空身体会先完整拆掉上一套本地玩家 UI，避免跨 Pawn 复用 Model、View 或输入锁。
-// 3. 只有新的 ACatCharacter 通过配置校验时才重新装配 HUD、背包、交互提示和拾取提示层。
+// 3. 只有新的 ACatCharacter 通过配置校验时才重新装配 HUD、背包、物品提示、交互提示和局内菜单。
 void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 {
 	ACatCharacter* Character = Cast<ACatCharacter>(NewPawn);
@@ -1215,11 +1223,12 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 }
 
 // 本地玩家 UI 装配流程：
-// 1. 验证本地设置、当前 Controller/Pawn 和 World；任一正式 WBP 类缺失或无效时直接 fail-closed，不创建脱离项目资产的原生替身。
+// 1. 验证本地设置、当前 Controller/Pawn 和 World；核心页面 WBP 缺失时停止装配，物品提示缺失则只关闭该提示并记录原因，均不创建原生替身。
 // 2. 创建 HUD Model/View 并入视口；默认常驻天数、背包入口、设置入口和中心准星，背包内容由库存页打开后再显示。
 // 3. 创建库存窗口控制器和默认背包 WBP；面板绑定角色库存自己的 Model，不预先入视口，仍通过既有 Action 打开。
 // 4. 创建局内主菜单 View/Controller；菜单不常驻视口，只在主菜单 Action 或 HUD 按钮触发时打开。
-// 5. 创建 Interaction 提示 View 和控制器；控制器订阅 PlayerController 的唯一准星交互目标，商店、鱼护和未来箱子仍由世界交互对象提供页面上下文。
+// 5. 创建物品悬停 View；成功加入全视口层后才绑定控制器，失败释放引用；库存格只提交来源，提示层独立于库存页面。
+// 6. 创建 Interaction 提示 View 和控制器；控制器订阅 PlayerController 的唯一准星交互目标，商店、鱼护和未来箱子仍由世界交互对象提供页面上下文。
 void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 {
 	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
@@ -1276,6 +1285,27 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	HUDModelViewChangedHandle = HUDModel->OnViewStateChanged.AddUObject(
 		this, &ThisClass::HandleHUDModelViewStateChanged);
 	HUDWidget->AddToViewport(1);
+	// 库存提示独立于页面但隶属于本玩家；类缺失只关闭提示并落盘，不影响既有库存操作。
+	if (const TSubclassOf<UCatItemTooltipWidget> TooltipClass = Settings->LoadItemTooltipWidgetClass())
+	{
+		ItemTooltipWidget = CreateWidget<UCatItemTooltipWidget>(Controller, TooltipClass);
+		// 库存页和 Aegis 提示都在视口层；玩家层的 ZOrder 无法跨层覆盖库存，必须沿用同一层级排序。
+		if (ItemTooltipWidget) ItemTooltipWidget->AddToViewport(1100);
+		if (ItemTooltipWidget && ItemTooltipWidget->IsInViewport())
+		{
+			ItemTooltipController = NewObject<UCatItemTooltipController>(this);
+			ItemTooltipController->Bind(ItemTooltipWidget);
+		}
+		else
+		{
+			ItemTooltipWidget = nullptr;
+		}
+	}
+	if (!ItemTooltipController)
+	{
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_item_tooltip_unavailable World=%s Class=%s"),
+			*GetPathNameSafe(GetWorld()), *Settings->ItemTooltipWidgetClass.ToSoftObjectPath().ToString());
+	}
 	HandleHUDModelViewStateChanged();
 	if (!InventoryPageController->Bind(Controller, InventoryWidget)
 		|| !LakeMainMenuController->Bind(GetLocalPlayer(), Controller, LakeMainMenuWidget))
@@ -1311,6 +1341,17 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 // 本地玩家 UI 解绑流程：PageController 先恢复输入并移出当前模态页，Model 再解除玩法订阅，最后移除各自 WBP 并清引用。
 void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 {
+	// 先清理全局悬停来源，再移除 View；后续格子的 Destruct 不会再触发过期提示。
+	if (ItemTooltipController)
+	{
+		ItemTooltipController->Unbind();
+		ItemTooltipController = nullptr;
+	}
+	if (ItemTooltipWidget)
+	{
+		ItemTooltipWidget->RemoveFromParent();
+		ItemTooltipWidget = nullptr;
+	}
 	if (LakeMainMenuController)
 	{
 		LakeMainMenuController->Unbind();

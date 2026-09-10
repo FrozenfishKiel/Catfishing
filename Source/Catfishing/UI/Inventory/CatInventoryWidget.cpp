@@ -128,13 +128,14 @@ void UCatInventoryWidget::UnbindInventoryModel()
 	}
 }
 
-// 逐个移除本页选择监听，再释放本地控件引用；控件是否还在 WrapBox 由外层刷新/UMG 生命周期处理。
+// 逐个撤销本页格子的悬停来源和选择监听，再释放引用；先撤销提示才能保证重建期间不显示旧实例。
 void UCatInventoryWidget::UnbindSlotWidgets()
 {
 	for (UCatInventorySlotWidget* SlotWidget : SlotWidgets)
 	{
 		if (SlotWidget)
 		{
+			SlotWidget->CancelTooltip();
 			SlotWidget->OnSlotSelected.RemoveAll(this);
 		}
 	}

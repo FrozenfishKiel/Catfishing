@@ -9,6 +9,9 @@
 #include "UI/CatUISettings.h"
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
+#include "Engine/LocalPlayer.h"
+#include "UI/CatLocalPlayerUISubsystem.h"
+#include "UI/ItemTooltip/CatItemTooltipController.h"
 
 // 先解除旧页面与输入，再验证当前本地角色；默认背包只绑定该角色库存，随后安装现有库存 Action。
 bool UCatInventoryPageController::Bind(APlayerController* InController, UCatInventoryWidget* InView)
@@ -92,7 +95,7 @@ void UCatInventoryPageController::RequestCloseInventoryFromWidget()
 	SetInventoryOpen(false);
 }
 
-// 打开先加入视口再申请输入锁；关闭先恢复输入再移出页面，交互页关闭后释放，默认背包留给下一次打开。
+// 打开先加入视口再申请输入锁；关闭先撤销全局提示、恢复输入再移出页面，交互页关闭后释放，默认背包留给下一次打开。
 void UCatInventoryPageController::SetInventoryOpen(const bool bOpen)
 {
 	if (bInventoryOpen == bOpen)
@@ -110,6 +113,13 @@ void UCatInventoryPageController::SetInventoryOpen(const bool bOpen)
 		bInventoryOpen = true;
 		CatUIModalInputMode::Open(Controller, BoundView, ModalInputModeState);
 		return;
+	}
+	if (ULocalPlayer* LocalPlayer = Controller ? Controller->GetLocalPlayer() : nullptr)
+	{
+		if (UCatLocalPlayerUISubsystem* UI = LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>())
+		{
+			if (UCatItemTooltipController* Tooltip = UI->GetItemTooltipController()) Tooltip->ForceHideTooltip();
+		}
 	}
 	CatUIModalInputMode::Close(Controller, ModalInputModeState);
 	bInventoryOpen = false;
