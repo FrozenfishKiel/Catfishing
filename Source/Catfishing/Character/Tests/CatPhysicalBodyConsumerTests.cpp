@@ -17,6 +17,8 @@
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/WorldSettings.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Interaction/CatInteractionSettings.h"
+#include "Items/World/CatFishPickupActor.h"
 
 namespace CatPhysicalConsumerTest
 {
@@ -127,6 +129,69 @@ bool FCatPhysicalCharacterWaterFootConsumerTest::RunTest(const FString& Paramete
 		Region->GetWaterRegionHandle(), Settings->DangerousWaterConfirmationSeconds + .01, Depth);
 	TestEqual(TEXT("Condition读到物理脚点水深而非旧胶囊半高"), Depth, DepthTarget, .01);
 	TestEqual(TEXT("满足确认时长后进入危险水域"), Exposure, ECatWaterExposureUpdate::DangerousEntered);
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPhysicalInteractionVolumeSupportTest,
+	"Catfishing.PhysicalBody.Runtime.InteractionVolumesRemainTargetableWithoutSupportingCharacter",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatPhysicalInteractionVolumeSupportTest::RunTest(const FString& Parameters)
+{
+	TArray<UClass*> Classes;
+	for (const TCHAR* Path : {
+		TEXT("/Game/UI/Shop/BP_CatShopKiosk.BP_CatShopKiosk_C"),
+		TEXT("/Game/Blueprint/Actors/BP_CatFishGraud.BP_CatFishGraud_C"),
+		TEXT("/Game/Blueprint/Actors/BP_CatGuard.BP_CatGuard_C"),
+		TEXT("/Game/Blueprint/Actors/BP_CampInventory.BP_CampInventory_C")})
+	{
+		UClass* Class = LoadClass<AActor>(nullptr, Path);
+		if (!TestNotNull(Path, Class)) return false;
+		Classes.Add(Class);
+	}
+	Classes.Add(ACatFishPickupActor::StaticClass());
+	for (UClass* Class : Classes)
+	{
+		CatPhysicalConsumerTest::FScene Scene;
+		if (!Scene.Initialize(this)) return false;
+		ACatCharacter* Cat = Scene.Spawn(FVector(0, 0, 20));
+		if (!TestNotNull(TEXT("formal physical character"), Cat)) return false;
+		Scene.Step(120);
+		auto* Body = Cat->GetPhysicalBodyComponent();
+		const double GroundHeight = Cat->GetActorLocation().Z;
+		AActor* Target = Scene.World.GetTestWorld()->SpawnActor<AActor>(Class, FVector(0, 0, -500), FRotator::ZeroRotator);
+		if (!TestNotNull(*Class->GetName(), Target)) return false;
+		USphereComponent* Sphere = Target->FindComponentByClass<USphereComponent>();
+		if (!TestNotNull(TEXT("authored interaction sphere"), Sphere)) return false;
+		// Put the top of the real interaction volume just above the floor, inside foot reach.
+		// Meshes retain their authored collision; this isolates the invisible sphere's surface.
+		Target->AddActorWorldOffset(FVector(Cat->GetActorLocation().X, Cat->GetActorLocation().Y,
+			8.0 - Sphere->GetScaledSphereRadius()) - Sphere->GetComponentLocation());
+		FHitResult InteractionHit;
+		FCollisionQueryParams Query(SCENE_QUERY_STAT(CatInteractionSupportRegression), false, Cat);
+		const FVector Start = Body->GetBody()->GetComponentLocation();
+		const FVector End = Start - FVector(0, 0, 100);
+		TestTrue(TEXT("interaction ray still hits the authored target"),
+			Scene.World.GetTestWorld()->LineTraceSingleByChannel(InteractionHit, Start, End,
+				GetDefault<UCatInteractionSettings>()->TargetingTraceChannel, Query)
+			&& InteractionHit.GetActor() == Target);
+		FHitResult SupportHit;
+		TestTrue(TEXT("body support ray passes through the sphere to the actual floor"),
+			Scene.World.GetTestWorld()->LineTraceSingleByChannel(SupportHit, Start, End,
+				Body->GetBody()->GetCollisionObjectType(), Query,
+				FCollisionResponseParams(Body->GetBody()->GetCollisionResponseToChannels()))
+			&& SupportHit.GetActor() != Target && FMath::Abs(SupportHit.ImpactPoint.Z) < 0.1);
+		double MaximumRise = 0;
+		for (int32 Frame = 0; Frame < 180; ++Frame)
+		{
+			Scene.Step(1);
+			MaximumRise = FMath::Max(MaximumRise, Cat->GetActorLocation().Z - GroundHeight);
+		}
+		TestTrue(TEXT("interaction volume never lifts the real physical character"), MaximumRise < 2.0);
+		TestTrue(TEXT("real floor still supports the character"), Body->IsGrounded());
+		AddInfo(FString::Printf(TEXT("Event=interaction_volume_support_verified Class=%s MaximumRiseCm=%.3f Grounded=%d"),
+			*Class->GetPathName(), MaximumRise, Body->IsGrounded()));
+	}
 	return !HasAnyErrors();
 }
 

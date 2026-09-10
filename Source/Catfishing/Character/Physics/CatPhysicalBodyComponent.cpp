@@ -122,6 +122,10 @@ void UCatPhysicalBodyComponent::Initialize(UBoxComponent* InBody, USphereCompone
 	if (HasAuthority()) CaptureSnapshot();
 	else if (bReceivedSnapshot) { bReceivedSnapshot=false; OnRep_PhysicsSnapshot(); }
 	LogState(TEXT("physics_body_started"),TEXT("ServerSnapshots"));
+	UE_LOG(LogCatPhysicsGrab, Log,
+		TEXT("Event=physics_body_support_query World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s BodyId=%s TraceChannel=%d Result=BodyCollisionResponses"),
+		*GetNameSafe(GetWorld()), int32(GetOwner()->GetNetMode()), HasAuthority(), int32(GetOwner()->GetLocalRole()),
+		*GetNameSafe(GetOwner()), *BodyId.ToString(), int32(Body->GetCollisionObjectType()));
 	const UPhysicsSettings* PhysicsSettings = UPhysicsSettings::Get();
 	UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=physics_body_geometry World=%s NetMode=%d Authority=%d Actor=%s BodyId=%s GeometryScale=%.3f BoxExtentCm=%s StandHeightCm=%.3f LeftShoulderLocal=%s LeftHandLocal=%s HandRadiusCm=%.3f MassKg=%.3f Substepping=%d MaxSubstepDeltaTimeSeconds=%.6f MaxSubsteps=%d"),
 		*GetNameSafe(GetWorld()), int32(GetOwner()->GetNetMode()), HasAuthority(), *GetNameSafe(GetOwner()), *BodyId.ToString(), GeometryScale,
@@ -190,6 +194,10 @@ void UCatPhysicalBodyComponent::UpdatePhysicalMovement(const float DeltaSeconds)
 	const FVector BodyUp = Body->GetUpVector();
 	const bool bSupportEnabled = bLocomotionEnabled && !bJumpSeparating && GetWorld()->GetTimeSeconds() >= SupportDisabledUntilSeconds;
 	const bool bCanSupport = bSupportEnabled && BodyUp.Z > 0.35;
+	// Ground support follows the body's collision contract. Visibility also hits query-only
+	// interaction volumes (shops, containers and pickups), which must never lift the cat.
+	const ECollisionChannel SupportChannel = Body->GetCollisionObjectType();
+	const FCollisionResponseParams SupportResponses(Body->GetCollisionResponseToChannels());
 	// A side/back contact is not a foot plant. Observe only an upward-facing surface within the
 	// actual rotated box's vertical extent; a nearby wall or a hand holding a wall is insufficient.
 	bool bNewGroundContactRecovery = false;
@@ -203,7 +211,7 @@ void UCatPhysicalBodyComponent::UpdatePhysicalMovement(const float DeltaSeconds)
 		FHitResult Hit;
 		FCollisionQueryParams Params(SCENE_QUERY_STAT(CatPhysicsGroundRecovery), false, GetOwner());
 		if (GetWorld()->LineTraceSingleByChannel(Hit, Origin,
-			Origin - FVector(0.0, 0.0, VerticalExtentCm + 1.0), ECC_Visibility, Params)
+			Origin - FVector(0.0, 0.0, VerticalExtentCm + 1.0), SupportChannel, Params, SupportResponses)
 			&& Hit.ImpactNormal.Z >= 0.55)
 		{
 			bNewGroundContactRecovery = true;
@@ -228,7 +236,7 @@ void UCatPhysicalBodyComponent::UpdatePhysicalMovement(const float DeltaSeconds)
 			const FVector Origin = Body->GetComponentTransform().TransformPosition(FootLocal * GeometryScale);
 			FHitResult Hit;
 			FCollisionQueryParams Params(SCENE_QUERY_STAT(CatPhysicsFootSupport), false, GetOwner());
-			if (!GetWorld()->LineTraceSingleByChannel(Hit, Origin, Origin - FVector(0.0, 0.0, GetStandRootHeightCm() * 1.3), ECC_Visibility, Params)
+			if (!GetWorld()->LineTraceSingleByChannel(Hit, Origin, Origin - FVector(0.0, 0.0, GetStandRootHeightCm() * 1.3), SupportChannel, Params, SupportResponses)
 				|| Hit.ImpactNormal.Z < 0.55) continue;
 			bNewGrounded = true;
 			UPrimitiveComponent* Support = Hit.GetComponent();
