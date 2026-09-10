@@ -2,6 +2,7 @@
 
 #include "Misc/AutomationTest.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Character/CatCharacter.h"
 #include "Tests/AutomationCommon.h"
 #include "Character/Physics/CatPhysicsPrototypePawn.h"
 #include "Components/BoxComponent.h"
@@ -50,6 +51,83 @@ struct FScene
 };
 }
 
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPhysicalStartStopAndFacingTest,
+	"Catfishing.PhysicalBody.Runtime.StartStopIsPromptAndWalkingFacesMovementIndependentlyOfView",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+bool FCatPhysicalStartStopAndFacingTest::RunTest(const FString& Parameters)
+{
+	for (const bool bFormal : {false, true})
+	for (const int32 Rate : {60, 120})
+	{
+		CatPhysicalBodyTest::FScene Scene;
+		if (!Scene.Initialize(this)) return false;
+		FActorSpawnParameters Spawn;
+		Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
+		APawn* Cat = bFormal ? static_cast<APawn*>(Scene.World.GetTestWorld()->SpawnActor<ACatCharacter>(
+			LoadClass<ACatCharacter>(nullptr, TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C")), FVector(0,0,40), FRotator::ZeroRotator, Spawn))
+			: Scene.Spawn(FVector(0,0,20));
+		auto* Body = Cat ? Cat->FindComponentByClass<UCatPhysicalBodyComponent>() : nullptr;
+		if (!TestNotNull(TEXT("actual formal or prototype physical body"), Body)) return false;
+		const auto Step = [&](int32 Frames)
+		{
+			for (int32 I=0; I<Frames; ++I) Scene.World.TickTestWorld(1.0f/Rate);
+		};
+		Step(Rate);
+		for (const double Speed : {100.0, 300.0})
+		for (const bool bHitch : {false, true})
+		{
+			Body->SetMovementSpeed(Speed);
+			Body->SetViewIntent(FRotator::ZeroRotator);
+			Body->SetMoveIntent(FVector::ForwardVector);
+			if (bHitch) Scene.World.TickTestWorld(.12f);
+			Step(FMath::CeilToInt(.1*Rate));
+			TestTrue(TEXT("walking and sprinting reach commanded speed within 100 ms"), Body->GetVelocity().X > Speed*.95);
+			Step(Rate/2);
+			const FVector StopAt = Cat->GetActorLocation();
+			Body->SetMoveIntent(FVector::ZeroVector);
+			if (bHitch) Scene.World.TickTestWorld(.12f);
+			Step(FMath::CeilToInt(.1*Rate));
+			const double StopSpeed = Body->GetVelocity().Size2D();
+			const double StopDistance = FVector::Dist2D(StopAt, Cat->GetActorLocation());
+			TestTrue(TEXT("release settles promptly after the requested physics step"), StopSpeed < 3);
+			const double DistanceLimit = bHitch ? Speed*.08 : (Speed==100 ? 2.0 : 10.0);
+			TestTrue(TEXT("release has only the short finite braking distance including a slow frame"), StopDistance < DistanceLimit);
+			const FVector SettledAt = Cat->GetActorLocation();
+			Step(Rate/2);
+			TestTrue(TEXT("rest has no easing tail or spring back"), FVector::Dist2D(SettledAt, Cat->GetActorLocation()) < .5);
+			AddInfo(FString::Printf(TEXT("Event=physical_start_stop_verified Formal=%d Hz=%d Hitch120ms=%d SpeedCmS=%.1f StopSpeedCmS=%.4f StopDistanceCm=%.4f"),
+				bFormal, Rate, bHitch, Speed, StopSpeed, StopDistance));
+		}
+		Body->SetMovementSpeed(100);
+		Body->SetMoveIntent(FVector::RightVector);
+		Step(Rate);
+		TestTrue(TEXT("side input turns the actual cat into its movement direction"), Cat->GetActorForwardVector().Y > .98);
+		TestEqual(TEXT("turning body does not rewrite camera intent"), Body->GetViewIntent().Yaw, 0.0);
+		Body->SetMoveIntent(FVector::ZeroVector);
+		Step(Rate/2);
+		Body->SetViewIntent(FRotator(0,-90,0));
+		Step(Rate);
+		TestTrue(TEXT("an idle camera turn leaves body heading unchanged"), Cat->GetActorForwardVector().Y > .98);
+		Body->SetMoveIntent(-FVector::RightVector);
+		Step(Rate);
+		TestTrue(TEXT("an exactly opposite movement turns around instead of remaining at a zero cross product"), Cat->GetActorForwardVector().Y < -.98);
+		Body->SetMoveIntent(FVector::ZeroVector);
+		Body->SetViewIntent(FRotator::ZeroRotator);
+		Body->GetGrab()->SetGrabInput(true, true);
+		Step(Rate*2);
+		TestTrue(TEXT("active reach still turns toward the independently aimed grip direction"), Cat->GetActorForwardVector().X > .98);
+		Body->GetGrab()->SetGrabInput(true, false);
+		const FVector BeforePull = Cat->GetActorLocation();
+		Body->SetExternalForceFromAuthority(Scene.Floor, FVector(40000,0,0));
+		Step(Rate/5);
+		Body->ClearExternalForce(Scene.Floor);
+		TestTrue(TEXT("external physics can overpower the finite walking brake"), Cat->GetActorLocation().X > BeforePull.X+10);
+		AddInfo(FString::Printf(TEXT("Event=physical_heading_verified Formal=%d Hz=%d ReachYaw=%.3f ExternalPullTravelCm=%.3f"),
+			bFormal, Rate, Cat->GetActorRotation().Yaw, Cat->GetActorLocation().X-BeforePull.X));
+	}
+	return !HasAnyErrors();
+}
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPhysicalQueuedJumpHitchTest,
 	"Catfishing.PhysicalBody.Runtime.QueuedJumpKeepsSupportOffUntilItsFirstPhysicsStep",

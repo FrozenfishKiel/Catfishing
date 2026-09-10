@@ -1,5 +1,31 @@
 # 物理抓握原型使用说明
 
+## 2026-09-10：起停响应与镜头独立朝向
+
+用户要求起步/停步不漂移，普通侧移时猫转向移动方向，Controller继续独立控制镜头。基线19aa1d9，工作区仅用户Cat_Skeleton.uasset修改（SHA256=3AF77F901B4FD35EAF79A7133230BB8964A1F2E886064010F680A40C3DE18008）；上轮196项195通过，既有StarterRod耐久150/500差异保留。本轮主工程构建/运行与正式资产渲染已完成，具体结果及未验收范围见表后。证据根目录`Saved/Automation/MovementResponse-20260910`。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 自主移动计算 | `Source/Catfishing/Character/Physics/CatPhysicalBodyComponent.cpp::UpdatePhysicalMovement`由PrePhysics Tick调用；原普通电机VelocityError/0.22、上限450cm/s² | 起停慢、指数拖尾；目标普通无载移动快速达到目标/停住，同时保留真实碰撞及外力 | 原地替换为按实际物理步消除速度误差的有限驱动力（沿Chaos子步总时长上限与NetworkDeltaTimeScale，非子步才用MaxPhysicsDeltaTime），普通加/减速上限6000cm/s²；钓鱼仍沿原FishingMotorMaxForce上限、站定弹性/零预算契约，不直接清除刚体速度 | 先服务器公式→运行轨迹→联机观察 | 60/120Hz、0.12秒卡顿、100/300cm/s起停距离、真实推拉、零预算、鱼力与费用；力单位kg·cm/s²不改 | 正式/原型×60/120Hz×100/300cm/s×有无120ms首帧卡顿共16组通过；正式正常100cm/s松键距离0.50–0.57cm、300cm/s为6.56–6.62cm，100ms后水平速度<0.9cm/s；有限力仍可被外力拖动 |
+| 已连接身体的自主力 | `Body::UpdatePhysicalMovement`与`Grab::GetGripState/GetGripTarget`；Report-Initial无鱼对拉中助手新电机把主控反拖193cm | 快速空载电机不能同时抬高朋友持续抓拉能力；目标普通自由行走快起停，已经抓住或被抓住继续原物理拉力 | 新增Body只读连接查询，含自身实际握点和他人指向本Actor的握点；非钓鱼真实连接恢复原0.22s/450cm/s²电机，主控原FishingMotorMaxForce仍单独权威；无新握点、成员或费用状态 | 实际Grip关系→每步选择唯一电机→原关节解算；松握自然恢复快速自由移动 | 原无鱼对拉方向/关节间隙、直接抓猫和被抓、最后释放恢复响应；不修改失败测试门槛 | Report-Final原无鱼对拉与抓猫用例通过；助手+X输入仍被主控向-X拉动约170cm；原关节/目标/GripId/力量上限保持。连接状态实际消费两种响应，不是无消费者旧分支 |
+| 朝向目标/状态 | 同函数原Forward恒等于ViewInput水平朝向；`SetViewIntent`由Character::FaceRotation和Controller调用 | 原地镜头拖着猫转，侧移仍看镜头；目标普通走路面向MoveInput，停止维持最后朝向 | 维护唯一物理朝向目标；无瞄准普通移动读世界MoveInput，伸手/握竿仍按ViewInput瞄准；180度采用有符号角差避免叉积为0；转矩仍是唯一身体朝向写口 | 目标选择→有限朝向转矩；初始化/传送重置目标，离地/倒地原规则保留 | A/D/S/斜向移动、原地镜头90度、回头180度、伸手抓猫、主控鼠标/跳跃；不新增Controller旋转写口 | 原生侧移90度、后退180度、停步转镜头、主动伸手朝向均通过；正式实际D键服务器BodyYaw=89.932、ControlYaw=0，客户端身体与实际默认相机分离断言通过 |
+| 输入/网络/退出 | `Framework/Game/CatfishingPlayerController.cpp::Move/StopMove`→Body::SetMoveIntent→ServerSetInput；PostPhysics Snapshot→客户端插值 | 原30Hz轮询增加起停延迟；输入和结果仍须单一服务器裁决 | 起停/换向边沿立即复用现有RPC，30Hz重发保留；边沿后物理快照及时发布，保留ControlEpoch/Sequence/超时与ClearControlIntent入口；收紧客户端跟随响应，不实施预测/回滚 | 请求→原裁决→物理结果→快照；失焦不增加第二清理路径 | 正式IP双端真实IMC按键/松键/失焦；默认Log记录输入边沿与快照，不在Tick刷屏 | 起停即时复用RPC并在下一物理结果快照ForceNetUpdate；微小模拟输入起停也发送。输入Sequence/ControlEpoch沿原门，客户端插值响应由20/s收紧到60/s；正式按键/松键/Flush与原抓握/镜头回归通过，未新增预测 |
+| 表现与相关测试 | `CatCharacterMovementComponent::RefreshPhysicalObservation`→ABP/`PhysicsPrototypeVisual::RefreshVisualPose`→四足IK/手CCD；正式网络测试原要求原地转镜头身体也转 | 现有消费者继续读真实速度/身体姿态；旧测试绑定的镜头跟身假设需替换 | 不改动画/IK/镜头生产逻辑；原测试先验证镜头独立，再主动伸手转向原目标并继续真实抓拉；新增原生起停与普通朝向专项，正式双端验证 | 物理接收→已有消费者→更新过时断言 | 正式BP姿态、控制器视角、抓握HUD、轻道具和搏鱼组合回归；不只靠编译验收 | 正式渲染Report-RenderedFinal 5/5通过；默认相机方向断言通过后，用独立观察镜头截图完整猫的停步/侧移姿态，测量区间无截图阻塞。未改ABP、IK、骨架或镜头生产源码 |
+| 配置/资产/存档/资源/Cook | 正式`/Game/Character/BP_CatCharacter`继承原生Body；`CatCharacter::BeginPlay`读取原CMC速度/跳跃/重力；原型Pawn直接Initialize；正式IMC/WBP与Cook入口不改 | 移动响应在唯一Body调整；旧CMC只作原配置/动画观察消费者，不重新启用 | 保留移动速度/跳跃/重力配置入口，无资产或存档迁移；库存/费用/Session写口不涉及修改；不删除未确认二进制引用 | 原生接线→正式BP加载→哈希核对 | Blueprint实际运行确认新路径；Skeleton保持hash；钓鱼原力量/账单与零体力测试 | 正式BP与原生共享Body已实际运行，速度/跳跃/重力仍读原配置；用户Skeleton hash不变。原搏鱼/费用/零预算回归通过，无BP/WBP/IMC/存档/资源/Cook入口修改；未运行新Cook/包 |
+| 跳跃首帧/截图测时 | `Body::UpdatePhysicalMovement`在排队Jump AddImpulse后、首个Chaos步前以旧Velocity.Z≤0判断结束分离；Rendered日志空手首帧Grounded=1且顶点154.74cm，持竿124.56cm；正式网络截图调用阻塞导致计时段增加一慢帧 | 跳跃冲量尚未消费不能判为下落；截图不能人为污染起停比较 | 首次PostPhysics跳跃发布前禁止清除bJumpSeparating；新增真实120ms首帧专项；普通走停计时先完成，再用观察镜头独立截图，不放宽原起停距离门槛 | 请求排队→唯一物理步→首次快照→原正常下坠/支撑；定量计时→渲染观察 | 保持420cm/s/重力/支撑系数，首帧非Grounded、原75–100cm跳高；原跳跃和轻道具渲染再验证 | 独立检查点88a1ce7；120ms首帧跳高84.453cm且不接地，正常落地恢复；最终渲染空手/持竿顶点124.709/124.539cm。截图已移出起停计时，未放宽原距离或跳高断言 |
+| 文档/日志/交付 | 本页与`Docs/Development/需求对齐差距清单.md`；Body默认Log及现有自动化构建入口 | 此次局部修复不代表整个角色/联机模块完成 | 按contract/runtime_behavior/presentation_delivery记录最终结果、删除本范围旧错误说明，独立中文检查点；无新业务账本 | 实施→验证→最终diff→提交 | Editor/Game Development、正式运行日志/截图；未Cook/新包/高延迟完整预测明确列缺口 | 主工程BuildEditor-HitchGuard与BuildGame-HitchGuard均成功；197项组合196通过，末轮5项专项/渲染全通过。结果同步唯一差距入口；正式地图真人手感/高延迟预测/新包默认日志仍未验收 |
+
+
+本轮证据分层（均相对项目根目录）：
+
+- **contract**：`Saved/Automation/MovementResponse-20260910/BuildEditor-HitchGuard.log`、`BuildGame-HitchGuard.log`均为实际主工程Win64 Development成功；最终源码与模块摘要见同目录`MainSourceManifest-Delivery.json`、`MainBinaryHashes-Delivery.json`。
+- **runtime_behavior**：`Report-Final/index.json` 197项中196通过（186 clean、10带既有警告），唯一失败仍为StarterRod耐久150/500。完整相关抓推、轻道具、身体、IK、正式搏鱼60/120Hz/卡顿、主控费用与网络协议通过。最后小幅输入边沿发送衔接和跳跃首帧保护后，`Report-RenderedFinal/index.json`再验新增跳跃、原三刚体跳跃、起停朝向、正式输入抓拉和轻道具网络五项，5/5通过（2 clean、3带既有ABP启动警告）。早期Report-Initial的助手拉力变化、Report-Rendered的截图测时污染/跳跃额外抬升均已保留为失败证据，不能替代最终报告。
+- **presentation_delivery**：已查看`Saved/Automation/MovementResponse-20260910/Images/20260910-060155-formal-stopped.png`、`20260910-060156-formal-side-walk.png`；实际正式BP猫、Controller、默认镜头方向与真实按键链均经服务器/客户端核对。截图采用计时完成后的观察镜头，未修改正式相机资产。最终实际按键松开后服务器移动2.444cm、客户端追齐6.235cm，0.25秒观察时服务器水平速度0.560cm/s、两端位置差<1cm；该距离含输入/网络/插值延迟，不应描述为网络端零延迟。正式Lake地图真人手感、高延迟/丢包下整套运动预测、新Cook/Development包无-log双端落盘尚未验收，本轮不关闭角色/Fishing/Delivery模块。
+
+操作结果：普通自由移动快速起停，猫面向世界移动方向，停止保持最后身体朝向；只转镜头不会改变该朝向。主动伸手和主控持竿仍面向独立瞄准方向；已建立抓握或被抓住时沿用原有限物理拉扯响应，受到朋友/鱼拉动不会被强制清速。正常100cm/s松键后约0.5cm，300cm/s约6.6cm；120ms卡顿帧下分别约6.1/17.4cm，无持续缓动或倒冲。加速度/阻尼限值改变的是自由移动响应，不改变FishingStrength、主控力量预算、跳速或重力配置。
+
+默认Development日志分类`LogCatPhysicsGrab`，新增`physics_body_movement_requested/accepted/snapshot`，保留`physics_body_input_rejected/timeout`、`physics_body_control_changed`和跳跃事件；`Tests-Final.log`与`Tests-RenderedFinal.log`按World/NetMode、BodyId、ControlEpoch、InputSequence关联请求、服务器接受和物理后快照，BodyYaw/ViewYaw展示视角分离。新包默认落盘尚未实测。无源码/资产删除；旧普通全时镜头朝向和自由行走0.22s路径已替换，0.22s仅作为真实抓握连接的现役拉扯响应保留，其消费者由原抓拉测试确认。
+
 ## 2026-09-10：四足落脚 IK 与步幅匹配
 
 正式 `BP_CatCharacter` 和原型 Pawn 共用 `UCatPhysicsPrototypeVisualComponent` 的最终姿势通道：原动画 → 四足步幅/地面求解 → 抓握前爪 CCD。`FCatQuadrupedLocomotion` 只读物理身体、动画及场景碰撞，修改可见 PoseableMesh 的腿部旋转和有限骨盆偏移。身体、手球、碰撞、受力、费用与网络裁决仍由原有物理/抓握系统负责。

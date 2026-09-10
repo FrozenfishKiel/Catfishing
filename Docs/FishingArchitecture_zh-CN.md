@@ -3,6 +3,8 @@
 阅读对象：需要理解/修改钓鱼玩法逻辑的人。运动链说明于 2026-09-04 按源码核对，当前细节统一见 [鱼运动与遛鱼逻辑实现导读](FishFightImplementationGuide_zh-CN.md)；本页负责系统关系与入口导航。
 配套文档：蓝图配置见 [FishingBlueprintSetupGuide_zh-CN.md](FishingBlueprintSetupGuide_zh-CN.md)；规格口径见 [FishingCoreFlow_zh-CN.md](FishingCoreFlow_zh-CN.md)。
 
+最新身体起停与普通行走朝向修复见[物理抓握原型使用说明](PhysicsGrabPrototype_zh-CN.md)的“起停响应与镜头独立朝向”：普通行走身体面向移动方向、镜头独立；主动伸手和主控持竿仍保留瞄准方向。真实抓握连接维持原拉扯响应，主控力量预算与本页搏鱼/费用契约保持。
+
 ## 2026-09-10：轻道具与主控持竿
 
 本轮按用户确认保留原持竿偏移、鼠标瞄准和完整搏鱼流程。只有主控进入会话；朋友抓人或抓竿后由真实关节拉动，不按R加入、合并体力、额外收费或自动接任。道具取消持握自重和撞翻猫的碰撞响应，仍保留实体与有限求解质量；固定地形不改。

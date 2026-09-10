@@ -121,13 +121,81 @@ public:
 		{
 			Test->TestEqual(TEXT("listen uses actual formal pawn asset"),ServerCat->GetClass()->GetPathName(),FString(TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C")));
 			Test->TestEqual(TEXT("client uses actual formal controller asset"),Local->GetClass()->GetPathName(),FString(TEXT("/Game/Player/BP_CatFishingController.BP_CatFishingController_C")));
-			const double Spacing = 3.0 * FMath::Max(ServerBody->GetBody()->GetScaledBoxExtent().X,
-				HostCat->GetPhysicalBodyComponent()->GetBody()->GetScaledBoxExtent().X);
 			ServerCat->TeleportTo(FVector(0,0,ServerCat->GetBodyStandRootHeightCm()),FRotator::ZeroRotator,false,false);
-			HostCat->TeleportTo(FVector(0,Spacing,HostCat->GetBodyStandRootHeightCm()),FRotator(0,90,0),false,false);
+			HostCat->TeleportTo(FVector(500,500,HostCat->GetBodyStandRootHeightCm()),FRotator(0,90,0),false,false);
 			if (AController* HostController=HostCat->GetController()) HostController->SetControlRotation(FRotator(0,90,0));
 			Remote->SetControlRotation(FRotator::ZeroRotator);
 			Local->SetControlRotation(FRotator::ZeroRotator);
+			Stage=10; StageStarted=Now;
+		}
+		if (Stage==10)
+		{
+			if (Now-StageStarted<1.0 || FVector::Distance(ClientCat->GetActorLocation(),ServerCat->GetActorLocation())>4.0)
+				return Wait(TEXT("initial replicated placement for normal walking"));
+			WalkStart=ServerCat->GetActorLocation();
+			FVector CameraLocation; FRotator CameraRotation;
+			Local->GetPlayerViewPoint(CameraLocation,CameraRotation); WalkCameraYaw=CameraRotation.Yaw;
+			Local->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::D,IE_Pressed,1.0f));
+			Stage=11; StageStarted=Now;
+		}
+		if (Stage==11)
+		{
+			if (Now-StageStarted<1.0) return false;
+			Test->TestTrue(TEXT("formal client D moves sideways relative to its independent camera"),ServerCat->GetActorLocation().Y>WalkStart.Y+20);
+			Test->TestTrue(TEXT("server physical cat turns into the side movement"),ServerCat->GetActorForwardVector().Y>.95);
+			Test->TestTrue(TEXT("client receives actual movement-facing body rotation"),ClientCat->GetActorForwardVector().Y>.95);
+			Test->TestTrue(TEXT("side walking does not turn either controller camera"),FMath::Abs(Local->GetControlRotation().Yaw)<1 && FMath::Abs(Remote->GetControlRotation().Yaw)<1);
+			FVector CameraLocation; FRotator CameraRotation;
+			Local->GetPlayerViewPoint(CameraLocation,CameraRotation);
+			Test->TestTrue(TEXT("formal rendered camera keeps its independent yaw while the cat turns"),FMath::Abs(FMath::FindDeltaAngleDegrees(WalkCameraYaw,CameraRotation.Yaw))<2);
+			StopServer=ServerCat->GetActorLocation(); StopClient=ClientCat->GetActorLocation();
+			Local->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::D,IE_Released,0.0f));
+			Stage=12; StageStarted=Now;
+		}
+		if (Stage==12)
+		{
+			if (Now-StageStarted<.25) return false;
+			Test->TestTrue(TEXT("real key-up stops server voluntary movement promptly"),ServerBody->GetMoveIntent().IsNearlyZero() && ServerBody->GetVelocity().Size2D()<3);
+			Test->TestTrue(TEXT("real key-up has no long server slide"),FVector::Dist2D(StopServer,ServerCat->GetActorLocation())<8);
+			Test->TestTrue(TEXT("client follow has no long easing tail after key-up"),FVector::Dist2D(StopClient,ClientCat->GetActorLocation())<12
+				&& FVector::Dist2D(ServerCat->GetActorLocation(),ClientCat->GetActorLocation())<1);
+			Test->AddInfo(FString::Printf(TEXT("Event=physical_formal_start_stop_verified ServerWorld=%s ClientWorld=%s ServerStopCm=%.3f ClientStopCm=%.3f ServerSpeedCmS=%.3f BodyYaw=%.3f ControlYaw=%.3f"),
+				*Server->GetName(),*Client->GetName(),FVector::Dist2D(StopServer,ServerCat->GetActorLocation()),FVector::Dist2D(StopClient,ClientCat->GetActorLocation()),ServerBody->GetVelocity().Size2D(),ServerCat->GetActorRotation().Yaw,Local->GetControlRotation().Yaw));
+			if (FApp::CanEverRender())
+			{
+				// Screenshot readback stalls the game thread. Keep it outside the measured key-up interval.
+				auto* Camera=Client->SpawnActor<ACameraActor>();
+				const FVector Center=ClientCat->GetActorLocation(), Position=Center+FVector(-180,-260,100);
+				Camera->SetActorLocationAndRotation(Position,(Center-Position).Rotation());
+				Camera->GetCameraComponent()->SetFieldOfView(65);
+				Local->SetViewTarget(Camera); EvidenceCamera=Camera;
+				Stage=13; StageStarted=Now;
+				return false;
+			}
+			Stage=15; StageStarted=Now;
+		}
+		if (Stage==13)
+		{
+			if (Now-StageStarted<.2) return false;
+			CaptureMovement(Client,TEXT("stopped"));
+			Local->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::D,IE_Pressed,1.0f));
+			Stage=14; StageStarted=Now;
+		}
+		if (Stage==14)
+		{
+			if (Now-StageStarted<.8) return false;
+			CaptureMovement(Client,TEXT("side-walk"));
+			Local->InputKey(FInputKeyEventArgs::CreateSimulated(EKeys::D,IE_Released,0.0f));
+			Local->SetViewTarget(ClientCat);
+			if (EvidenceCamera.IsValid()) { EvidenceCamera->Destroy(); EvidenceCamera.Reset(); }
+			Stage=15; StageStarted=Now;
+		}
+		if (Stage==15)
+		{
+			if (Now-StageStarted<.3) return false;
+			const double Spacing=3.0*FMath::Max(ServerBody->GetBody()->GetScaledBoxExtent().X,HostCat->GetPhysicalBodyComponent()->GetBody()->GetScaledBoxExtent().X);
+			ServerCat->TeleportTo(FVector(0,0,ServerCat->GetBodyStandRootHeightCm()),FRotator::ZeroRotator,false,false);
+			HostCat->TeleportTo(FVector(0,Spacing,HostCat->GetBodyStandRootHeightCm()),FRotator(0,90,0),false,false);
 			Stage=1; StageStarted=Now;
 		}
 		if (Stage==1)
@@ -143,10 +211,10 @@ public:
 		if (Stage==2)
 		{
 			const double YawError=FMath::Abs(FMath::FindDeltaAngleDegrees(Remote->GetControlRotation().Yaw,90.0));
-			const double BodyYawError=FMath::Abs(FMath::FindDeltaAngleDegrees(ServerCat->GetActorRotation().Yaw,90.0));
-			if (Now-StageStarted<1.0 || YawError>2.0 || BodyYawError>5.0)
+			if (Now-StageStarted<1.0 || YawError>2.0)
 				return Wait(FString::Printf(TEXT("server view/motor yaw %.2f/%.2f"),Remote->GetControlRotation().Yaw,ServerCat->GetActorRotation().Yaw));
 			Test->TestTrue(TEXT("server trace/cast controller view rotated 90 degrees without CMC movement"),Remote->GetControlRotation().Vector().Y>.99);
+			Test->TestTrue(TEXT("idle camera rotation does not steer the physical cat"),FMath::Abs(ServerCat->GetActorRotation().Yaw)<5);
 			Test->AddInfo(FString::Printf(TEXT("Event=physical_formal_network_view_verified ServerWorld=%s ClientWorld=%s PlayerId=%d ServerControlYaw=%.3f ClientControlYaw=%.3f ServerBodyYaw=%.3f Source=PhysicalInputRpc"),
 				*Server->GetName(),*Client->GetName(),Local->PlayerState->GetPlayerId(),Remote->GetControlRotation().Yaw,Local->GetControlRotation().Yaw,ServerCat->GetActorRotation().Yaw));
 			// Real key event -> formal IMC/AbilityInputConfig -> route latch -> owning-client grab RPC.
@@ -227,6 +295,21 @@ public:
 	}
 private:
 	bool Wait(const FString& Reason) { LastWait=Reason; return false; }
+	void CaptureMovement(UWorld* World,const TCHAR* Label)
+	{
+		auto* ViewportClient=World->GetGameViewport();
+		auto* Viewport=ViewportClient?ViewportClient->Viewport:nullptr;
+		TArray<FColor> Pixels;
+		if (!Test->TestTrue(TEXT("capture actual normal walking viewport"),Viewport && GetViewportScreenShot(Viewport,Pixels))) return;
+		const FIntPoint Size=Viewport->GetSizeXY();
+		TArray64<uint8> Png;
+		FImageUtils::PNGCompressImageArray(Size.X,Size.Y,TArrayView64<const FColor>(Pixels.GetData(),Pixels.Num()),Png);
+		const FString Directory=FPaths::ConvertRelativePathToFull(FPaths::ProjectSavedDir()/TEXT("Automation/MovementResponse-20260910/Images"));
+		IFileManager::Get().MakeDirectory(*Directory,true);
+		const FString File=Directory/FString::Printf(TEXT("%s-formal-%s.png"),*FDateTime::UtcNow().ToString(TEXT("%Y%m%d-%H%M%S")),Label);
+		if (Test->TestTrue(TEXT("save actual movement evidence"),FFileHelper::SaveArrayToFile(Png,*File)))
+			Test->AddInfo(FString::Printf(TEXT("Event=physical_movement_viewport_captured File=%s"),*File));
+	}
 	void Capture(UWorld* World)
 	{
 		UGameViewportClient* Client=World->GetGameViewport();
@@ -245,10 +328,11 @@ private:
 			Test->AddInfo(FString::Printf(TEXT("Event=physical_formal_viewport_captured File=%s Width=%d Height=%d Pawn=/Game/Character/BP_CatCharacter HUD=/Game/UI/HUD/WBP_CatHUD Map=IsolatedFixture"),*File,Size.X,Size.Y));
 	}
 	FAutomationTestBase* Test;
-	double Started=0,StageStarted=0;
+	double Started=0,StageStarted=0,WalkCameraYaw=0;
 	int32 Stage=0;
 	uint32 GripRevision=0;
 	FVector TargetStart=FVector::ZeroVector;
+	FVector WalkStart=FVector::ZeroVector, StopServer=FVector::ZeroVector, StopClient=FVector::ZeroVector;
 	FString LastWait;
 	TWeakObjectPtr<UCatHUDWidget> Widget;
 	TWeakObjectPtr<ACameraActor> EvidenceCamera;

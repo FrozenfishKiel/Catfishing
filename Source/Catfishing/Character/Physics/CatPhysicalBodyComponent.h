@@ -111,7 +111,9 @@ private:
 	UFUNCTION() void OnRep_PhysicsSnapshot();
 	void ConfigureArm(bool bLeft);
 	void UpdatePhysicalMovement(float DeltaSeconds);
+	bool HasPhysicalGrabConnection() const;
 	void CaptureSnapshot();
+	void SendLocalInput();
 	bool HasAuthority() const;
 	bool IsLocallyControlled() const;
 	void LogState(FName Event, FName Reason) const;
@@ -133,6 +135,9 @@ private:
 	bool bFishingHoldActive = false;
 	FVector MoveInput = FVector::ZeroVector;
 	FRotator ViewInput = FRotator::ZeroRotator;
+	/** Last commanded body heading; camera yaw remains independent outside an active reach/hold. */
+	double FacingYawDegrees = 0.0;
+	bool bPublishMovementAfterPhysics = false;
 	uint32 LocalInputSequence = 0;
 	uint32 AcceptedInputSequence = 0;
 	uint32 ClientResetEpoch = 0;
