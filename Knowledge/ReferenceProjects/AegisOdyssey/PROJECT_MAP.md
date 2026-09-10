@@ -1,6 +1,6 @@
 # AegisOdyssey 参考项目地图
 
-更新时间：2026-09-07
+更新时间：2026-09-10
 
 文档状态：当前项目的 `reference_context` 地图。本文只说明 `D:\UnreaProjects\AegisOdyssey` 作为外部参考项目时的入口、主链、可参考边界和误读风险，不把 AegisOdyssey 的架构规则提升为 Catfishing 当前规则。
 
@@ -34,7 +34,7 @@
 - `D:\UnreaProjects\AegisOdyssey\Plugins\CommonUser\Source\CommonUser\Public\CommonSessionSubsystem.h`
 - `D:\UnreaProjects\AegisOdyssey\Plugins\CommonUser\Source\CommonUser\Public\CommonUserSubsystem.h`
 - `D:\UnreaProjects\AegisOdyssey\Docs\Knowledge\*\PROJECT_MAP.md`
-- Catfishing 当前仓库内 `AegisOdyssey` / `Aegis` 文本引用搜索结果：未命中已有引用。
+- Catfishing 当前仓库内已保留本参考地图；源码层没有直接 include、配置或运行时依赖 AegisOdyssey。
 
 ## 地图定位
 
@@ -46,7 +46,7 @@ D:\UnreaProjects\AegisOdyssey
 
 它是 UE 5.6 项目，主模块为 `AegisOdyssey`。从项目 README、`AegisOdyssey.uproject` 和源码目录看，它是基于 `CommonGame/CommonUI + GAS + StateTree + GameFeatures + MVVM` 的第三人称动作 RPG 项目，重点系统包括角色、战斗、库存、装备、交互、采集、制造、技能和 AI。
 
-当前 Catfishing 仓库没有源码或文档直接引用 AegisOdyssey。使用它时应把它当成 `reference_context`：可借鉴模块拆分、运行时真相层、投影层、输入和 UI 观察链，但不能把 AegisOdyssey 的路径、类名、配置或内容资产当成 Catfishing 当前事实。
+当前 Catfishing 源码没有直接依赖 AegisOdyssey。使用它时应把它当成 `reference_context`：可借鉴模块拆分、运行时真相层、投影层、输入和 UI 观察链，但不能把 AegisOdyssey 的路径、类名、配置或内容资产当成 Catfishing 当前事实。
 
 AegisOdyssey 自己已经有 `Docs/Knowledge`，其中多个系统存在 `PROJECT_MAP.md`、`DECISIONS.md` 和 `KNOWN_ISSUES.md`。本文件不复制那套知识库，只提供 Catfishing 侧检索入口和跨项目参考边界。
 

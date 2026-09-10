@@ -25,23 +25,14 @@ bool FCatFishingStateTreeNodesDefaultsTest::RunTest(const FString& Parameters)
 	const FCatFishingWaitTask WaitTask;
 	TestTrue(TEXT("wait task exposes empty data"),
 		WaitTask.GetInstanceDataType() == FCatFishingWaitTaskInstanceData::StaticStruct());
-	const FCatFishingFightExchangeTask FightExchangeTask;
-	TestTrue(TEXT("historical exchange task preserves its data type pending asset reference audit"),
-		FightExchangeTask.GetInstanceDataType() == FCatFishingFightExchangeTaskInstanceData::StaticStruct());
-	const FCatFishingFightExchangeTaskInstanceData FightData;
-	TestEqual(TEXT("fish stamina cost defaults to zero"), FightData.FishStaminaCost, 0.0);
-	TestEqual(TEXT("participant stamina cost defaults to zero"), FightData.ParticipantStaminaCost, 0.0);
 	const FCatFishingFailureBudgetTaskInstanceData FailureData;
 	TestEqual(TEXT("failure penalty defaults to None"), FailureData.Penalty, ECatFishingFailurePenalty::None);
 	const FCatFishingScheduleWaitingProbeTask ScheduleProbeTask;
 	const FCatFishingOpenTrueBiteWindowTask OpenBiteWindowTask;
-	const FCatFishingResolveTrueBiteSelectionTask LegacyOpenBiteWindowTask;
 	TestTrue(TEXT("waiting scheduler exposes no overrides"),
 		ScheduleProbeTask.GetInstanceDataType() == FCatFishingWaitTaskInstanceData::StaticStruct());
 	TestTrue(TEXT("open bite window task exposes no overrides"),
 		OpenBiteWindowTask.GetInstanceDataType() == FCatFishingWaitTaskInstanceData::StaticStruct());
-	TestTrue(TEXT("legacy serialized selection node remains load-compatible"),
-		LegacyOpenBiteWindowTask.GetInstanceDataType() == FCatFishingWaitTaskInstanceData::StaticStruct());
 	const FCatFishBehaviorStateTask FishBehaviorTask;
 	TestTrue(TEXT("fish behavior task exposes only intent and per-entry remaining time"),
 		FishBehaviorTask.GetInstanceDataType() == FCatFishBehaviorStateTaskInstanceData::StaticStruct());

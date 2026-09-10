@@ -9,7 +9,7 @@
 bool UCatAbilitySet::IsRuntimeReady() const
 {
 	// 默认 AbilitySet 门禁流程：六个 Fishing 输入 Ability 与六个保留 BodyAction Ability 必须完整出现；
-	// BodyAction 只承担 Camp/Social 表现和可取消前摇，库存、献祭、偷鱼事务和 Wet 反馈不能通过 Ability 授予进入运行时。
+	// BodyAction 只承担 Camp/Social 表现和可取消前摇，库存、供品结算、偷鱼事务和 Wet 反馈不能通过 Ability 授予进入运行时。
 	if (GrantedAbilities.Num() != 12)
 	{
 		return false;
@@ -134,7 +134,7 @@ bool UCatAbilitySet::GiveToAbilitySystem(UCatAbilitySystemComponent* AbilitySyst
 
 void FCatGrantedAbilitySetHandles::TakeFromAbilitySystem(UCatAbilitySystemComponent* AbilitySystem)
 {
-	// 撤销流程：只在服务器 ASC 上按记录句柄反注册输入、清除 Ability 和初始效果；完成后清空本集合，重复调用不会再触碰旧句柄。
+	// 撤销流程：只在服务器 ASC 上按记录句柄反注册输入、清除 Ability 和初始效果；完成后清空本集合，重复调用不会再触碰失效句柄。
 	if (!AbilitySystem || !AbilitySystem->IsOwnerActorAuthoritative())
 	{
 		return;

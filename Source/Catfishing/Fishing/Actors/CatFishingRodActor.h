@@ -17,7 +17,7 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 {
 	GENERATED_BODY()
 
-	/** 将受力快照绑定到当时的持有人，拒绝与换人复制乱序的旧快照。 */
+	/** 将受力快照绑定到当时的持有人，拒绝与换人复制乱序的失效快照。 */
 	UPROPERTY()
 	TObjectPtr<APlayerState> ConstraintHolderPlayerState;
 
@@ -34,7 +34,7 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 	/** 向鱼速度上限；实际速度按发布的有限加速度积分，不瞬间补齐。 */
 	UPROPERTY(BlueprintReadOnly)
 	float TargetPullSpeedCentimetersPerSecond = 0.0f;
-	/** 旧蓝图载荷兼容，恒为 1；新移动不读取这个硬限速字段。 */
+	/** 蓝图载荷匹配字段当前恒为 1；移动求解实际读取目标速度和有限加速度。 */
 	UPROPERTY(BlueprintReadOnly)
 	float MaximumAwaySpeedMultiplier = 1.0f;
 	UPROPERTY(BlueprintReadOnly)
@@ -75,7 +75,7 @@ public:
 		bool bInDeployed, bool bInBroken);
 	/** 写入这根竿的权威本地锚点；必须在身份初始化前完成，之后蓝图和钓鱼逻辑都从这些锚点取世界坐标。 */
 	bool ConfigureCanonicalAnchorsFromAuthority(const FTransform& InRodTip, const FTransform& InStand, const FTransform& InGrip);
-	/** 兼容旧单操作手写口：传入玩家时重置为仅该玩家，传空时清空全部槽位。 */
+	/** 重置操作位集合：传入玩家时只保留该玩家为主操作位，传空时清空全部槽位。 */
 	bool SetOperatorFromAuthority(APlayerState* InOperatorPlayerState, int64 ExpectedRevision);
 	/** 把玩家追加到第一个空槽；OutSlotIndex 只有成功时有效。 */
 	bool AddOperatorFromAuthority(APlayerState* InOperatorPlayerState, int64 ExpectedRevision, int32& OutSlotIndex);
@@ -92,7 +92,7 @@ public:
 	const FCatFishingRodPresentationState& GetPresentationState() const;
 	/** 读取竿尖世界坐标；鱼线、浮漂和蓝图表现都以这个锚点作为挂接点。 */
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetRodTipWorldTransform() const;
-	/** 读取主操作位世界坐标；旧调用方把 Stand 视为第一个玩家站位。 */
+	/** 读取主操作位世界坐标；Stand 是 0 号玩家站位的基准。 */
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetStandWorldTransform() const;
 	/** 所有玩家共用的 R 交互锚点；只决定能否加入，不随当前人数或下一个槽位变化。 */
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetOperatorInteractionWorldTransform() const;
@@ -102,7 +102,7 @@ public:
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") int32 GetOperatorCount() const;
 	/** 查询某个玩家当前占用的操作位编号；未加入或空玩家返回 INDEX_NONE。 */
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") int32 GetOperatorSlotIndex(APlayerState* PlayerState) const;
-	/** 判断玩家是否是当前主操作位；兼容旧单人逻辑读取 OperatorPlayerState 的场景。 */
+	/** 判断玩家是否占用 0 号操作位；钓鱼服务、会话和视图桥用它决定谁能驱动主控钓竿输入。 */
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") bool IsPrimaryOperator(APlayerState* PlayerState) const;
 	/** 读取下一个可用操作位编号；满员或布局配置无效时返回 INDEX_NONE。 */
 	int32 GetFirstFreeOperatorSlotIndex() const;
@@ -163,8 +163,9 @@ private:
 	void OnRep_PresentationState(const FCatFishingRodPresentationState& Previous);
 	UFUNCTION()
 	void OnRep_CarrierConstraintState();
+	/** 初始复制到达后刷新三个场景锚点及多人站位；客户端 Getter 与视觉组件使用同一份服务器标定。 */
 	UFUNCTION()
-	void OnRep_GripCanonicalLocalTransform();
+	void OnRep_CanonicalAnchors();
 	/** 分发表现变化或延迟到 BeginPlay 后再分发；保证蓝图事件只在组件可用时触发。 */
 	void QueueOrDispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	/** 立即应用皮肤、隐藏状态和蓝图通知；服务器与客户端各自在本地执行这一层表现副作用。 */
@@ -182,7 +183,7 @@ private:
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatRodBendComponent> RodBend;
 	/** 竿尖的本地锚点组件；鱼线和浮漂表现从它换算世界坐标。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> RodTipAnchor;
-	/** 默认操作站位的本地锚点组件；旧单人逻辑和交互基准都从这里派生。 */
+	/** 默认操作站位的本地锚点组件；0 号站位和交互基准都从这里派生。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> StandAnchor;
 	/** 当前产品左右两位的编辑器可见参考锚；第三位及以后也统一由编号公式计算，不增加专用锚点。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> RightStandAnchor;
@@ -195,12 +196,14 @@ private:
 	FCatFishingRodPresentationState PresentationState;
 	UPROPERTY(ReplicatedUsing=OnRep_CarrierConstraintState, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
 	FCatFishingCarrierConstraintState CarrierConstraintState;
-	/** 竿尖权威本地 Transform；配置后不再读蓝图组件作为数据源，避免表现改动反向污染玩法坐标。 */
+	/** 竿尖的规范本地变换；服务器从装备片段写入并初始复制，双端鱼线与玩法坐标都读取它。 */
+	UPROPERTY(ReplicatedUsing=OnRep_CanonicalAnchors)
 	FTransform RodTipCanonicalLocalTransform = FTransform::Identity;
-	/** 操作基准位权威本地 Transform；多人站位和交互锚点都从它计算。 */
+	/** 操作基准位的规范本地变换；服务器配置后初始复制，客户端交互提示与服务器多人站位按同一基准计算。 */
+	UPROPERTY(ReplicatedUsing=OnRep_CanonicalAnchors)
 	FTransform StandCanonicalLocalTransform = FTransform::Identity;
-	/** 不变握把标定随初始复制发送；客户端相机必须组合它与实际 Actor 姿态。 */
-	UPROPERTY(ReplicatedUsing=OnRep_GripCanonicalLocalTransform)
+	/** 握把的规范本地变换；服务器配置后初始复制，双端相机和持竿对齐组合它与实际 Actor 姿态。 */
+	UPROPERTY(ReplicatedUsing=OnRep_CanonicalAnchors)
 	FTransform GripCanonicalLocalTransform = FTransform::Identity;
 	FVector AuthoritativeRodTipVelocity = FVector::ZeroVector;
 	FVector AuthoritativeHolderVelocity = FVector::ZeroVector;

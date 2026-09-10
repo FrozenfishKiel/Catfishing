@@ -13,6 +13,8 @@
 #include "Data/CatFishDefinition.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "EngineUtils.h"
+#include "FishContainers/CatFishPickupSettings.h"
+#include "Items/Fish/CatFishPickupActor.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
@@ -25,8 +27,6 @@
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/Actor.h"
 #include "GameFramework/PlayerState.h"
-#include "Items/CatWorldItemSettings.h"
-#include "Items/World/CatFishPickupActor.h"
 #include "OnlineSubsystemTypes.h"
 #include "StateTree.h"
 
@@ -71,11 +71,6 @@ bool FCatFishingSessionPublicSnapshotDefaultsTest::RunTest(const FString& Parame
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(
-	FCatFishingSessionLegacyLineBreakCompatibilityTest,
-	"Catfishing.Unit.Fishing.Session.LegacyLineBreakSnapshotKeepsRodOperable",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	FCatFishingSessionOutcomePresentationTagTest,
 	"Catfishing.Unit.Fishing.Session.TerminalLineOutcomesResolveDistinctCatPresentationTags",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
@@ -93,9 +88,6 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 bool FCatFishingSessionOutcomePresentationTagTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	TestTrue(TEXT("line break resolves the line-broken cat presentation"),
-		ACatFishingSession::ResolveTerminalFisherPresentationTag(ECatFishingOutcome::LineBroken)
-			== CatFishingAbilityTags::Cosmetic_Fishing_LineBroken);
 	TestTrue(TEXT("voluntary line cut has its own server-confirmed presentation event"),
 		ACatFishingSession::ResolveTerminalFisherPresentationTag(ECatFishingOutcome::LineCut)
 			== CatFishingAbilityTags::Cosmetic_Fishing_LineCut);
@@ -157,7 +149,7 @@ bool FCatFishingSessionCutLineCommandTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("Cut line persists its distinct outcome"), Session->Snapshot.Outcome, ECatFishingOutcome::LineCut);
 	TestEqual(TEXT("Cut line preserves rod durability without extra wear"),
 		Session->Snapshot.RodDurabilityRemaining, 42.5);
-	TestFalse(TEXT("Cut line clears stale reel input"), Session->Snapshot.bReeling);
+	TestFalse(TEXT("Cut line clears active reel input"), Session->Snapshot.bReeling);
 	TestFalse(TEXT("Cut line does not break the reusable rod"), Rod->GetPresentationState().bBroken);
 
 	const FCatFishingCommandResult Replay = Session->CutLineFromAuthority(Controller, Context);
@@ -210,49 +202,6 @@ bool FCatFishingSessionGroundedCutLineCommandTest::RunTest(const FString& Parame
 		Session->Snapshot.Outcome, ECatFishingOutcome::LineCut);
 	TestEqual(TEXT("Cutting does not pick the rod up"), Rod->GetPresentationState().PoseMode,
 		ECatFishingRodPoseMode::Grounded);
-	return !HasAnyErrors();
-}
-
-bool FCatFishingSessionLegacyLineBreakCompatibilityTest::RunTest(const FString& Parameters)
-{
-	(void)Parameters;
-	FTestWorldWrapper WorldWrapper;
-	TestTrue(TEXT("Creates line-break test world"), WorldWrapper.CreateTestWorld(EWorldType::Game));
-	UWorld* World = WorldWrapper.GetTestWorld();
-	ACatFishingSession* Session = World ? World->SpawnActor<ACatFishingSession>() : nullptr;
-	ACatFishingRodActor* Rod = World ? World->SpawnActor<ACatFishingRodActor>() : nullptr;
-	APlayerState* Owner = World ? World->SpawnActor<APlayerState>() : nullptr;
-	if (!TestNotNull(TEXT("Spawns line-break session"), Session)
-		|| !TestNotNull(TEXT("Spawns reusable rod"), Rod)
-		|| !TestNotNull(TEXT("Spawns rod owner"), Owner))
-	{
-		return false;
-	}
-	TestTrue(TEXT("Initializes deployed operable rod"), Rod->InitializeAuthoritativeIdentity(
-		FGuid::NewGuid(), FGuid::NewGuid(), TEXT("Rod_Test"), TEXT("Skin_Test"), Owner, Owner, true, false));
-	const int64 RodRevisionBefore = Rod->GetPresentationState().RodActorRevision;
-	Session->Snapshot.FishingSessionId = FGuid::NewGuid();
-	Session->Snapshot.Phase = ECatFishingPhase::HookedFight;
-	Session->Snapshot.RodActor = Rod;
-	Session->Snapshot.bReeling = true;
-	Session->Snapshot.bSlacking = true;
-	Session->FightRunner = NewObject<UCatFishingFightRunner>(Session);
-
-	AddExpectedErrorPlain(TEXT("Event=fishing_session_terminated"), EAutomationExpectedErrorFlags::Contains, 1);
-	Session->FinalizeSession(ECatFishingPhase::Terminated, ECatFishingOutcome::LineBroken, TEXT("legacy line-break snapshot compatibility"));
-
-	TestEqual(TEXT("Line break terminates only the current session"),
-		Session->Snapshot.Phase, ECatFishingPhase::Terminated);
-	TestEqual(TEXT("Public outcome explicitly reports line break"),
-		Session->Snapshot.Outcome, ECatFishingOutcome::LineBroken);
-	TestTrue(TEXT("Rod remains deployed after line break"), Rod->GetPresentationState().bDeployed);
-	TestFalse(TEXT("Line break never marks rod broken"), Rod->GetPresentationState().bBroken);
-	TestEqual(TEXT("Line break does not mutate rod presentation revision"),
-		Rod->GetPresentationState().RodActorRevision, RodRevisionBefore);
-	TestEqual(TEXT("Current operator remains on the reusable rod"),
-		Rod->GetPresentationState().OperatorPlayerState.Get(), Owner);
-	TestFalse(TEXT("terminal line break clears stale reeling presentation"), Session->Snapshot.bReeling);
-	TestFalse(TEXT("terminal line break clears stale slack presentation"), Session->Snapshot.bSlacking);
 	return !HasAnyErrors();
 }
 
@@ -330,10 +279,10 @@ bool FCatFishingExhaustedPickupHandoffTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("deploys the real rod instance before reserving fishing use"), Equipment->Use(
 		FGuid::NewGuid(), Loadout.Revision, Loadout.RodItemInstanceId).bCommitted)) return false;
 	const FGuid SessionId = FGuid::NewGuid();
-	if (!TestTrue(TEXT("reserves real fishing bait"), Equipment->BeginFishingUse(SessionId,
+	if (!TestTrue(TEXT("freezes real fishing bait"), Equipment->BeginFishingUse(SessionId,
 		Loadout.RodItemInstanceId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
 		Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId,
-		Equipment->GetSnapshot().Revision).bReserved)) return false;
+		Equipment->GetSnapshot().Revision).bBaitFrozen)) return false;
 	TestTrue(TEXT("tip and grip are separated by a real rod length"), Rod->ConfigureCanonicalAnchorsFromAuthority(
 		FTransform(FVector(250.0, 0.0, 100.0)), FTransform::Identity, FTransform::Identity));
 	Session->Snapshot.FishingSessionId = SessionId;
@@ -357,7 +306,7 @@ bool FCatFishingExhaustedPickupHandoffTest::RunTest(const FString& Parameters)
 	Session->HandleFightRunnerStepFromAuthority(Step, 0.0, ECatFishMotionIntent::AutoHauling);
 	TestFalse(TEXT("water fish cannot become pickup before dry ground is confirmed"), Session->IsTerminal());
 	Session->FightRunner->bFishBeached = true;
-	const double Reach = GetDefault<UCatWorldItemSettings>()->LandingCompletionDistanceToRodCentimeters;
+	const double Reach = GetDefault<UCatFishPickupSettings>()->LandingCompletionDistanceToRodCentimeters;
 	Encounter->SetActorLocation(LandingPosition + FVector(Reach + 10.0, 0.0, 0.0));
 	Session->HandleFightRunnerStepFromAuthority(Step, 0.0, ECatFishMotionIntent::AutoHauling);
 	TestFalse(TEXT("grounded fish outside tip reach keeps being hauled"), Session->IsTerminal());
@@ -367,8 +316,8 @@ bool FCatFishingExhaustedPickupHandoffTest::RunTest(const FString& Parameters)
 	Session->HandleFightRunnerStepFromAuthority(Step, 0.0, ECatFishMotionIntent::AutoHauling);
 	TestEqual(TEXT("grounded fish at tip resolves as Landed even after releasing reel"),
 		Session->GetSnapshot().Outcome, ECatFishingOutcome::Landed);
-	TestTrue(TEXT("handoff hides old encounter"), Encounter->IsHidden());
-	TestFalse(TEXT("handoff removes old encounter collision"), Encounter->GetActorEnableCollision());
+	TestTrue(TEXT("handoff hides transferred encounter"), Encounter->IsHidden());
+	TestFalse(TEXT("handoff removes transferred encounter collision"), Encounter->GetActorEnableCollision());
 	ACatFishPickupActor* Pickup = nullptr;
 	int32 PickupCount = 0;
 	for (TActorIterator<ACatFishPickupActor> It(World); It; ++It)
@@ -675,7 +624,6 @@ bool FCatFishingSessionScoopMouthCarryTest::RunTest(const FString& Parameters)
 	Definition->bEnableRuntimeDefinition = true;
 	Definition->FishDefinitionId = TEXT("FullStaminaScoopFish");
 	Definition->BodyClass = ECatFishBodyClass::Standard;
-	Definition->SacrificeContribution = 1;
 	Definition->RarityTierId = TEXT("Common");
 	Definition->RegionIds = {TEXT("LakeA")};
 	Definition->TimeOfDay = {ECatEnvironmentTimeOfDay::Morning};
@@ -684,7 +632,6 @@ bool FCatFishingSessionScoopMouthCarryTest::RunTest(const FString& Parameters)
 	Definition->MinimumWeightKilograms = 0.5;
 	Definition->MaximumWeightKilograms = 8.0;
 	Definition->MinimumFightParticipants = 1;
-	Definition->FishStrength = 1.0;
 	Definition->FishFightStamina = 100.0;
 	Definition->BitePersonalityId = TEXT("Nibble");
 	Definition->FightPersonalityId = TEXT("Steady");
@@ -742,7 +689,7 @@ bool FCatFishingSessionScoopMouthCarryTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("抄网交接关闭本会话"), Session->bCaptureResolved);
 	TestEqual(TEXT("抄网交接进入 Resolved"), Session->Snapshot.Phase, ECatFishingPhase::Resolved);
 	TestEqual(TEXT("抄网交接结果为 Caught"), Session->Snapshot.Outcome, ECatFishingOutcome::Caught);
-	TestTrue(TEXT("水中的旧 Encounter 在嘴叼交接后立即销毁"), Encounter->IsActorBeingDestroyed());
+	TestTrue(TEXT("水中的 Encounter 在嘴叼交接后立即销毁"), Encounter->IsActorBeingDestroyed());
 	return !HasAnyErrors();
 }
 
@@ -770,7 +717,7 @@ bool FCatFishingSessionRejectedFightSummaryPublicationTest::RunTest(const FStrin
 	Session->Snapshot.CombinedFightStamina = 6.0;
 	const bool bSummaryChanged = Session->RefreshFightSummary();
 	Session->PublishRefreshedFightSummaryIfChanged(bSummaryChanged);
-	TestTrue(TEXT("Invalid participants refresh the stale public summary"), bSummaryChanged);
+	TestTrue(TEXT("Invalid participants publish the changed public summary"), bSummaryChanged);
 	TestEqual(TEXT("Changed rejected summary keeps revision"), Session->Snapshot.Revision, int64{10});
 	TestEqual(TEXT("Changed rejected summary advances high-frequency sequence"), Session->Snapshot.SnapshotSequence, int64{21});
 	TestEqual(TEXT("Changed rejected summary keeps phase epoch"), Session->Snapshot.PhaseEpoch, int64{30});

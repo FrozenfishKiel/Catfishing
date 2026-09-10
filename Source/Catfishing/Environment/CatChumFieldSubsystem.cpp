@@ -34,20 +34,20 @@ void UCatChumFieldSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	EnsureCleanupTimer();
 }
 
-// World BeginPlay 后再次确认过期清理定时器，补齐初始化阶段 NetMode 可能不可靠的生命周期窗口。
+// World BeginPlay 后再次确认到期清理定时器，补齐初始化阶段 NetMode 可能不可靠的生命周期窗口。
 void UCatChumFieldSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 {
 	Super::OnWorldBeginPlay(InWorld);
 	EnsureCleanupTimer(); // 世界正式开始后，此时 GetNetMode 等信息才可靠，重新确认定时器状态
 }
 
-// 幂等地确保过期清理定时器在授权端跑起来；客户端或功能未启用时不会创建定时器
+// 幂等地确保到期清理定时器在授权端跑起来；客户端或功能未启用时不会创建定时器
 void UCatChumFieldSubsystem::EnsureCleanupTimer()
 {
 	if (IsAuthorityRuntimeReady() && !GetWorld()->GetTimerManager().IsTimerActive(CleanupTimerHandle))
 	{
 		const double Interval = GetDefault<UCatChumFieldSettings>()->ExpiredCleanupIntervalSeconds;
-		// 按策划配置的间隔循环触发过期清理；bLoop=true
+		// 按策划配置的间隔循环触发到期清理；bLoop=true
 		GetWorld()->GetTimerManager().SetTimer(CleanupTimerHandle, this,
 			&UCatChumFieldSubsystem::HandleCleanupTimer, static_cast<float>(Interval), true);
 	}
@@ -120,7 +120,7 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 		// 载荷本身（请求ID/水域句柄/窝料定义/数量/服务器时间/落点坐标）任一非法都直接拒绝
 		return MakePrepareError(ECatChumFieldError::InvalidPayload);
 	}
-	CleanupExpiredFields(Request.ServerTime); // 先顺手清理过期窝料场，释放容量配额，避免陈旧数据挡住新请求
+	CleanupExpiredFields(Request.ServerTime); // 先清理已经失效的窝料场，释放容量配额，避免无效数据挡住新请求
 	const FCatChumRequestKey RequestKey{Request.StableNetId, Request.Command.RequestId};
 	if (TerminalByIdentityAndRequest.Contains(RequestKey))
 	{
@@ -227,12 +227,10 @@ FCatPrepareChumFieldResult UCatChumFieldSubsystem::PrepareField(const FCatPrepar
 
 // 两阶段提交第二阶段：把 Prepare 阶段暂存的窝料场真正落子为"活跃"状态（此时尚未广播给客户端，见 PublishActivatedField）。
 // 分离 Activate 和 Publish 是为了让上层能先在同一事务里扣完随身物品消耗，再统一对外可见。
-// 参数版本流程：正式库存路径传入扣量后的 InventoryRevision；结果里仍同步旧 EquipmentRevision 字段，避免迁移期 UI 失去回执。
 FCatPlaceChumResult UCatChumFieldSubsystem::ActivatePreparedFieldDeferred(
-	const FCatChumFieldCommitToken Token, const int64 InventoryRevision)
+	const FCatChumFieldCommitToken Token)
 {
 	FCatPlaceChumResult Result;
-	Result.SetInventoryRevision(InventoryRevision);
 	if (!GetWorld() || GetWorld()->GetNetMode() == NM_Client || !Token.IsValid())
 	{
 		Result.Error = ECatChumFieldError::DependencyUnavailable;
@@ -260,7 +258,7 @@ FCatPlaceChumResult UCatChumFieldSubsystem::ActivatePreparedFieldDeferred(
 	Result.bCommitted = true; Result.Error = ECatChumFieldError::None; Result.FieldId = Frozen.State.FieldId;
 	Result.WaterRegion = Frozen.State.WaterRegion; Result.ServerCorrectedCenter = Frozen.State.CenterWorldPoint;
 	Result.StartServerTime = Frozen.State.StartServerTime; Result.ExpireServerTime = Frozen.State.ExpireServerTime;
-	Result.SetInventoryRevision(InventoryRevision); Result.ChumFieldSetRevision = Revision;
+	Result.ChumFieldSetRevision = Revision;
 	return Result;
 }
 
@@ -300,7 +298,7 @@ void UCatChumFieldSubsystem::AbortPreparedField(const FCatChumFieldCommitToken T
 	const FCatPendingChumField* Pending = PendingByToken.Find(Token.Value);
 	if (!Pending) return; // 找不到说明已经被处理过（Activate 或重复 Abort），幂等忽略
 	FCatChumBudgetState& Budget = BudgetByRegion.FindOrAdd(Pending->State.WaterRegion.RegionId);
-	// 用 Max(0, ...) 兜底，防止并发/重复调用把计数减成负数
+	// 用 Max(0, ...) 做防护，防止并发/重复调用把计数减成负数
 	Budget.PendingCount = FMath::Max(0, Budget.PendingCount - 1);
 	Budget.ReservedRawContribution = FMath::Max(0.0, Budget.ReservedRawContribution - Pending->RawContribution);
 	PendingTokenByRequest.Remove(Pending->RequestKey);
@@ -354,7 +352,7 @@ FCatChumSample UCatChumFieldSubsystem::SampleChumAtPoint(const FVector& WorldPoi
 	if (const TArray<FGuid>* RegionFields = FieldIdsByRegion.Find(Water.WaterRegion.RegionId))
 	{
 		Result.ContributingFieldIds = *RegionFields; // 先取该水域全部窝料场 ID 作为候选
-		// 过滤掉：已找不到状态的、还没生效或已过期的、以及采样点超出其影响半径的窝料场
+		// 过滤掉：已找不到状态的、还没生效或已到期的、以及采样点超出其影响半径的窝料场
 		Result.ContributingFieldIds.RemoveAll([this, &WorldPoint, ServerTime](const FGuid& Id)
 		{
 			const FCatChumFieldState* Field = FieldsById.Find(Id);
@@ -370,7 +368,7 @@ FCatChumSample UCatChumFieldSubsystem::SampleChumAtPoint(const FVector& WorldPoi
 			// 归一化距离：0=窝料中心，1=影响半径边界，用于喂给距离衰减曲线
 			const double Distance = FVector2D::Distance(FVector2D(Field.CenterWorldPoint), FVector2D(WorldPoint))
 				/ Field.Influence.RadiusCentimeters;
-			// 归一化时间：0=刚投放，1=即将过期，用于喂给时间衰减曲线（模拟窝料随时间变淡）
+			// 归一化时间：0=刚投放，1=即将到期，用于喂给时间衰减曲线（模拟窝料随时间变淡）
 			const double Time = (ServerTime - Field.StartServerTime) / (Field.ExpireServerTime - Field.StartServerTime);
 			// 两条衰减曲线相乘得到综合权重：离得越远、放得越久，权重越低
 			const double Weight = Field.Influence.DistanceFalloff.Evaluate(Distance)
@@ -383,8 +381,8 @@ FCatChumSample UCatChumFieldSubsystem::SampleChumAtPoint(const FVector& WorldPoi
 	return Result;
 }
 
-// 扫描全部活跃窝料场，把已过期的整体下线：释放配额、更新版本号、驱动复制移除、广播事件。
-// 既被 PrepareField 在处理新请求前主动调用（惰性清理），也被定时器周期性调用（兜底清理无人触发的过期）。
+// 扫描全部活跃窝料场，把已到期的整体下线：释放配额、更新版本号、驱动复制移除、广播事件。
+// 既被 PrepareField 在处理新请求前主动调用（惰性清理），也被定时器周期性调用，清理长时间没有新请求触发的失效窝点。
 int32 UCatChumFieldSubsystem::CleanupExpiredFields(const double ServerTime)
 {
 	if (!GetWorld() || GetWorld()->GetNetMode() == NM_Client || !FMath::IsFinite(ServerTime)) return 0;
@@ -433,7 +431,7 @@ int32 UCatChumFieldSubsystem::CleanupExpiredFields(const double ServerTime)
 	return Expired.Num();
 }
 
-// 定时器回调：用世界当前时间驱动一次过期清理，兜底那些长时间没有新打窝请求触发惰性清理的场景
+// 定时器回调：用世界当前时间驱动一次到期清理，覆盖长时间没有新打窝请求触发惰性清理的场景
 void UCatChumFieldSubsystem::HandleCleanupTimer()
 {
 	if (const UWorld* World = GetWorld()) CleanupExpiredFields(World->GetTimeSeconds());

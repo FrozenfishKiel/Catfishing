@@ -279,7 +279,7 @@ State 的另一个属性，决定"这个 State 被考虑时，是自己上还是
 | 加 Transition | 选中状态 → Details 面板 `Transitions` 分类 → 点 `+` |
 | 改 Tasks Completion | 选中状态 → Details 面板 `State` 分类里找 |
 | 调整状态顺序 | 主视图里拖拽 |
-| **编译** | 工具栏 `Compile`（**改完必须编译，否则运行时用的还是旧的**） |
+| **编译** | 工具栏 `Compile`（**改完必须编译，否则运行时用的还是修改前版本**） |
 
 > Schema 设置在哪：主视图里**选中 Root**（或者点空白处），Details 面板顶部就有 `Schema` 相关设置，包括 **Context Actor Class**。不同小版本位置略有差异，找不到就在 Details 面板搜索框里输 `Context`。
 
@@ -483,7 +483,6 @@ Root
 
 | 节点 | 为什么不用 |
 |---|---|
-| `Cat Fishing Fight Exchange` | 实现开头就检查 `FightRunner->IsRunning()`，Runner 在跑时直接拒绝。搏斗数值全在 Runner 里 |
 | `Cat Fishing Commit Failure Budget` | 失败惩罚（丢饵/伤竿）当前由 C++ 路径处理 |
 | `Cat Fishing Resolve Retry Exhausted Escape` | 剪影图鉴终态，MVP 范围外 |
 

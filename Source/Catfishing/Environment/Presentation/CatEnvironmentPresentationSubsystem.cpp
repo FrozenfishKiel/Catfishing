@@ -5,7 +5,7 @@
 #include "Environment/Presentation/CatEnvironmentPresentationActor.h"
 #include "Logging/CatLog.h"
 
-// World 类型筛选流程：只接受运行时游戏世界和 PIE 世界，避免编辑器纯浏览关卡时留下临时表现 Actor。
+// World 类型筛选流程：只接受运行时游戏世界和 PIE 世界，避免编辑器纯浏览关卡时生成运行时表现 Actor。
 bool UCatEnvironmentPresentationSubsystem::DoesSupportWorldType(const EWorldType::Type WorldType) const
 {
 	return WorldType == EWorldType::Game || WorldType == EWorldType::PIE;
@@ -21,7 +21,7 @@ void UCatEnvironmentPresentationSubsystem::OnWorldBeginPlay(UWorld& InWorld)
 // 保底生成流程：
 // 1. 专用服务器直接跳过并清空本子系统的生成引用，避免服务器创建纯画面 Actor。
 // 2. 本子系统已生成实例或关卡里已有任意表现 Actor 时复用现状，只写一次可检索日志。
-// 3. 找不到消费者时生成一个非复制、临时的默认实例；生成失败只写 warning，不伪造 Run 或 Environment 状态。
+// 3. 找不到消费者时生成一个非复制的运行时默认实例；生成失败只写 warning，不伪造 Run 或 Environment 状态。
 void UCatEnvironmentPresentationSubsystem::EnsurePresentationActor(UWorld& World)
 {
 	if (World.GetNetMode() == NM_DedicatedServer)

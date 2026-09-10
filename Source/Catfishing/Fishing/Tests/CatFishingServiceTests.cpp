@@ -123,7 +123,7 @@ bool FCatFishingServiceUnknownQueriesTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-// 手持鱼竿不再写 MOVE_None：窗口关闭、角色中断、重新拾取和 Actor 销毁都只能改鱼竿操作身份，不能改 CharacterMovement。
+// 手持鱼竿生命周期只改鱼竿操作身份：窗口关闭、角色中断、重新拾取和 Actor 销毁都不能改 CharacterMovement。
 bool FCatFishingServiceRodOperationsPreserveMovementTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -223,7 +223,7 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 		return false;
 	}
 
-	// 用一组非持竿默认值证明离开时是恢复旧配置，而不是硬编码另一组默认值。
+	// 用一组非持竿默认值证明离开时恢复进入前配置，而不是硬编码另一组默认值。
 	Character->bUseControllerRotationYaw = false;
 	Movement->bOrientRotationToMovement = true;
 	Movement->bUseControllerDesiredRotation = true;
@@ -237,7 +237,7 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 	Character->Jump();
 	TestTrue(TEXT("夹具先模拟已按下跳跃"), Character->bPressedJump);
 	Controller->UpdateRotation(1.0f / 60.0f);
-	TestFalse(TEXT("进入持竿模式时会取消旧的按键持有状态"), Character->bPressedJump);
+	TestFalse(TEXT("进入持竿模式时会取消进入前的按键持有状态"), Character->bPressedJump);
 	TestTrue(TEXT("持竿时启用 Controller Yaw 跟随"), Character->bUseControllerRotationYaw);
 	TestFalse(TEXT("持竿时禁止向后输入用移动方向覆盖朝向"),
 		Movement->bOrientRotationToMovement);
@@ -258,9 +258,9 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 	for (int32 Index = 0; Index < 360; ++Index) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
 	TestEqual(TEXT("实际鱼竿自然停在受力平衡附近"), Rod->GetGripWorldTransform().Rotator().Yaw, 30.0, 0.1);
 	TestEqual(TEXT("施力意图可以越过鱼竿平衡角"), Controller->GetControlRotation().Yaw, 120.0);
-	// 猫端没有牵引速度时 bActive=false，但鱼竿的阻力历史必须跨固定步保持。
+	// 猫端没有牵引速度时 bActive=false，但鱼竿的阻力状态必须跨固定步保持。
 	TestFalse(TEXT("转矩与猫端移动 Active 独立"), Rod->GetCarrierConstraintState().bActive);
-	TestTrue(TEXT("鱼线松弛只发布零目标，不清空鱼竿插值历史"), Rod->SetCarrierConstraintFromAuthority(
+	TestTrue(TEXT("鱼线松弛只发布零目标，不清空鱼竿插值状态"), Rod->SetCarrierConstraintFromAuthority(
 		FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true, 0.0, 50.0));
 	Rod->RefreshHeldTransformFromAuthority();
 	TestEqual(TEXT("零时间刷新不推进平滑"), Rod->GetGripWorldTransform().Rotator().Yaw, 30.0, 0.1);
@@ -280,7 +280,7 @@ bool FCatFishingHeldFacingFollowsControlRotationTest::RunTest(const FString& Par
 	for (int32 Index = 0; Index < 180; ++Index) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
 	TestEqual(TEXT("同样负载下回正完成"), Rod->GetGripWorldTransform().Rotator().Yaw, 0.0, 0.01);
 	Rod->ClearCarrierConstraintFromAuthority();
-	// 死亡/会话结束清约束后，即使同帧开始新的无负载约束也不能带入旧鱼阻力。
+	// 死亡/会话结束清约束后，即使同帧开始新的无负载约束也不能带入先前鱼阻力。
 	Controller->SetControlRotation(FRotator(0.0, 60.0, 0.0));
 	TestTrue(TEXT("清理后建立新的无负载约束"), Rod->SetCarrierConstraintFromAuthority(
 		FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true, 0.0, 50.0));
@@ -377,22 +377,22 @@ bool FCatFishingServiceRodBoundSessionRoutingTest::RunTest(const FString& Parame
 	const FCatFishingCommandResult LeaveResult = Fishing->LeaveRod(Controller, Leave);
 	TestTrue(TEXT("离开第一根竿成功"), LeaveResult.bCommitted);
 	TestEqual(TEXT("离开竿位不终止搏斗会话"), FirstSession->Snapshot.Phase, ECatFishingPhase::HookedFight);
-	TestFalse(TEXT("离开竿位清除旧会话收线输入"), FirstSession->Snapshot.bReeling);
+	TestFalse(TEXT("离开竿位清除先前会话收线输入"), FirstSession->Snapshot.bReeling);
 	TestTrue(TEXT("搏斗离竿进入无人值守松线"), FirstSession->Snapshot.bSlacking);
-	TestNull(TEXT("无人值守会话不再把旧玩家登记为当前钓手"), FirstSession->Snapshot.FisherPlayerState.Get());
+	TestNull(TEXT("无人值守会话不会把先前玩家登记为当前钓手"), FirstSession->Snapshot.FisherPlayerState.Get());
 	TestEqual(TEXT("主操作手离开后鱼竿占位数组为空"), FirstRod->GetOperatorCount(), 0);
 	TestEqual(TEXT("主操作手离开后同一鱼竿切到地面姿态"),
 		FirstRod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Grounded);
 	int32 ReplacementSlot = INDEX_NONE;
 	TestTrue(TEXT("下一位玩家可进入原鱼竿"), FirstRod->AddOperatorFromAuthority(
 		ReplacementFisher, FirstRod->GetPresentationState().RodActorRevision, ReplacementSlot));
-	TestEqual(TEXT("下一位玩家进入的是主位而不是预留副位"), ReplacementSlot, 0);
+	TestEqual(TEXT("下一位玩家进入的是主位而不是空置副位"), ReplacementSlot, 0);
 	TestEqual(TEXT("下一位玩家拾起后同一鱼竿切回手持姿态"),
 		FirstRod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Held);
 	APlayerState* IgnoredPromotion = nullptr;
 	TestTrue(TEXT("接力占位夹具可清理"), FirstRod->RemoveOperatorFromAuthority(
 		ReplacementFisher, FirstRod->GetPresentationState().RodActorRevision, IgnoredPromotion));
-	TestFalse(TEXT("离开后旧会话不再截获玩家输入"),
+	TestFalse(TEXT("离开后先前会话不会截获玩家输入"),
 		Fishing->TryGetActiveSessionForController(Controller, RoutedSessionId, RoutedSnapshot));
 
 	int32 JoinedSlot = INDEX_NONE;

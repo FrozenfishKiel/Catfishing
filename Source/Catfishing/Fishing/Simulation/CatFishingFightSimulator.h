@@ -52,9 +52,9 @@ struct CATFISHING_API FCatFightSimulationConfig
 	}
 
 	double FishStrength = 0.0;
-	/** 鱼实际重量生成基础力量的换算；同时保留原玩法做功价格的标准强度。 */
+	/** 鱼实际重量生成基础力量的换算；该强度同时作为猫鱼做功价格的统一标尺。 */
 	double StrengthPerKilogram = 10.0;
-	/** 力量属性到推力/支撑力的显式换算，不能复用旧的加速度系数。 */
+	/** 力量属性到推力/支撑力的显式换算；物理加速度只能由力和质量求出。 */
 	double ForcePerStrengthNewtons = 1.0;
 	double CatBodyMassKilograms = 5.0;
 	/** 力竭鱼免耗体回收的有限辅助力，不依赖猫的剩余体力。 */
@@ -100,7 +100,7 @@ struct CATFISHING_API FCatFightSimulationConfig
 	double StrongConfrontationConfirmationSeconds = 0.2;
 	double AngleStrengthExponent = 1.0;
 	double MinimumRodLeverageMultiplier = 0.4;
-	/** 历史鱼位置误差的修正速度上限；猫端牵引速度仍沿用此配置上限。 */
+	/** 当前鱼位置误差的修正速度上限；猫端牵引速度仍沿用此配置上限。 */
 	double MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 160.0;
 	double MaximumLineLengthCentimeters = 0.0;
 	double RodDurability = TNumericLimits<double>::Max();
@@ -263,7 +263,7 @@ struct CATFISHING_API FCatFightStepResult
 	FVector ProposedFishWorldPosition = FVector::ZeroVector;
 	/** 受力积分的鱼速度；几何纠偏不注入惯性，地形碰撞再修正该速度。 */
 	FVector ResolvedFishVelocityCentimetersPerSecond = FVector::ZeroVector;
-	/** 本步历史位置误差修正；不计入惯性或鱼主动做功。 */
+	/** 本步已有位置误差修正；不计入惯性或鱼主动做功。 */
 	FVector FishPositionCorrectionWorldDisplacement = FVector::ZeroVector;
 	/** 本步实际提交的游动努力方向；地形反馈更新下步转向时不能改写本步费用。 */
 	FVector FishEffortDirection = FVector::ZeroVector;
@@ -276,7 +276,7 @@ struct CATFISHING_API FCatFightStepResult
 	double CatDriveAccelerationCentimetersPerSecondSquared = 0.0;
 	double FishDriveAccelerationCentimetersPerSecondSquared = 0.0;
 	double NetFishPullAccelerationCentimetersPerSecondSquared = 0.0;
-	/** 双端运动约束求出的共同张力，不含历史位置纠偏；供猫、杆及负载观察共用。 */
+	/** 双端运动约束求出的共同张力，不含已有位置纠偏；供猫、杆及负载观察共用。 */
 	double LineTensionNewtons = 0.0;
 	int32 ActiveHelperCount = 0;
 	/** 猫端向鱼速度上限；实际速度按共同张力产生的加速度逐步接近。 */

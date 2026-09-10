@@ -99,7 +99,7 @@ void UCatCharacterMovementComponent::PerformMovement(const float DeltaSeconds)
 		|| (bReplaying && CatFishingMotionDiagnostics::IsDetailedEnabled() && MovementTraction.bActive
 			&& World->GetTimeSeconds() >= NextReplayDiagnosticSeconds)))
 	{
-		// 来源已清除的退出帧仍关联最后一根竿，仅用于日志，不恢复任何旧牵引。
+		// 来源已清除的退出帧仍关联最后一根竿，仅用于日志，不恢复任何失效牵引。
 		const FGuid DiagnosticSourceId = MovementTraction.SourceId.IsValid()
 			? MovementTraction.SourceId : LastTractionDiagnosticSourceId;
 		UE_LOG(LogCatFishing, Log,

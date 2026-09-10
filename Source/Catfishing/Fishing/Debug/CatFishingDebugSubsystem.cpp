@@ -1,4 +1,6 @@
-#include "Fishing/Debug/CatFishingDebugSubsystem.h"
+﻿#include "Fishing/Debug/CatFishingDebugSubsystem.h"
+
+#include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 
 #include "AbilitySystemComponent.h"
 #include "AbilitySystemInterface.h"
@@ -21,7 +23,6 @@
 #include "Data/CatFishDefinition.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
@@ -33,16 +34,17 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "HAL/IConsoleManager.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Inventory/CatInventoryComponent.h"
-#include "Items/CatWorldItemSettings.h"
-#include "Items/World/CatFishPickupActor.h"
+#include "FishContainers/CatFishPickupSettings.h"
+#include "Items/Fish/CatFishPickupActor.h"
 #include "Logging/CatLog.h"
 #include "UI/CatFishingViewBridge.h"
 
 #if !UE_BUILD_SHIPPING
 namespace CatFishingDebugCommands
 {
-	// 鱼定义选择流程：显式参数先按稳定 FishDefinitionId 查找，再同步加载配置里的候选资产名做兼容。
+	// 鱼定义选择流程：显式参数先按稳定 FishDefinitionId 查找，再同步加载配置里的候选资产名做匹配。
 	// 没有参数时优先返回可进鱼缸展示的正式鱼，若都不可展示则退到第一条可运行定义。
 	// 同步加载只发生在非 Shipping 调试命令里，避免正式链路为验收便利付成本。
 	static UCatFishDefinition* ResolveFishDefinition(const TArray<FString>& Args)
@@ -268,7 +270,7 @@ FString UCatFishingDebugSubsystem::FormatFishTypeLine(const FName FishDefinition
 
 // 右上角数值面板：
 // 1. 鱼和战斗中的鱼竿耐久读取 Session 复制快照；猫的力量、当前体力和上限读取本地 Character ASC。
-// 2. 非战斗阶段的鱼竿耐久优先读取正式库存实例；旧宿主没有 InventoryComponent 时才退回 Equipment 兼容快照，避免调试面板出现第二套库存口径。
+// 2. 非战斗阶段的鱼竿耐久优先读取正式库存实例；无库存宿主没有 InventoryComponent 时才退回 Equipment 匹配快照，避免调试面板出现第二套库存口径。
 void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerController* Controller)
 {
 #if ENABLE_DRAW_DEBUG
@@ -293,7 +295,6 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 			SessionSnapshot->FishDefinitionId);
 		if (FishDefinition)
 		{
-			double StrengthScale = 1.0;
 			double StaminaScale = 1.0;
 			if (SessionSnapshot->bPerfectHook)
 			{
@@ -302,7 +303,6 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 					? FishingSettings->FindBitePersonality(FishDefinition->BitePersonalityId) : nullptr;
 				if (Bite)
 				{
-					StrengthScale = Bite->PerfectFishStrengthMultiplier;
 					StaminaScale = Bite->PerfectFishStaminaMultiplier;
 				}
 			}
@@ -311,7 +311,7 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 				? FMath::Clamp(SessionSnapshot->FishFightStaminaRemaining / MaximumStamina * 100.0, 0.0, 100.0) : 0.0;
 			FishLine = FString::Printf(TEXT("FISH  Stamina %.1f / %.1f (%.1f%%)  Strength %.1f"),
 				SessionSnapshot->FishFightStaminaRemaining, MaximumStamina, StaminaPercent,
-				FishDefinition->FishStrength * StrengthScale);
+				SessionSnapshot->FishStrength);
 		}
 	}
 
@@ -324,8 +324,8 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 		RodDefinitionId = SessionSnapshot->RodActor->GetPresentationState().RodDefinitionId;
 	}
 	FString RodLine = TEXT("ROD   Durability --  Strength --");
-	if (const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
-		RodDefinitionId))
+	if (const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(
+		RodDefinitionId); RodDefinition && RodDefinition->CanServeFishingRod())
 	{
 		double CurrentDurability = 0.0;
 		bool bHasCurrentDurability = false;
@@ -357,10 +357,10 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 			bHasCurrentDurability = true;
 		}
 		RodLine = bHasCurrentDurability
-			? FString::Printf(TEXT("ROD   Durability %.1f / %.1f  Strength %.1f"),
-				CurrentDurability, RodDefinition->MaximumRodDurability, RodDefinition->FishingStrength)
-			: FString::Printf(TEXT("ROD   Durability -- / %.1f  Strength %.1f"),
-				RodDefinition->MaximumRodDurability, RodDefinition->FishingStrength);
+			? FString::Printf(TEXT("ROD   Durability %.1f / %.1f"),
+				CurrentDurability, RodDefinition->FindFragment<UCatEquipmentFragment_Rod>()->MaximumRodDurability)
+			: FString::Printf(TEXT("ROD   Durability -- / %.1f"),
+				RodDefinition->FindFragment<UCatEquipmentFragment_Rod>()->MaximumRodDurability);
 	}
 
 	FString CatLine = TEXT("CAT   Stamina --  Strength --");
@@ -589,7 +589,7 @@ void UCatFishingDebugSubsystem::DrawChumChargePreview(APlayerController* Control
 }
 
 // 会话状态：钩/鱼位置球、竿尖到鱼的连线、近岸圈与规格 7.1 的状态提示文字。
-// 精简模式关闭完整细节时，保留鱼线、阶段文字和抄网提示；窝料数量只读正式库存组件，避免调试层继续把旧投影当库存事实。
+// 精简模式关闭完整细节时，保留鱼线、阶段文字和抄网提示；窝料数量只读正式库存组件，避免调试层继续把装备投影当库存事实。
 void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const bool bFullDetail) const
 {
 #if ENABLE_DRAW_DEBUG
@@ -608,7 +608,7 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 			{
 				const UCatEquipmentDefinition* Definition = Entry.Instance
 					? Cast<UCatEquipmentDefinition>(Entry.Instance->GetItemDefinition()) : nullptr;
-				if (Definition && Definition->Kind == ECatEquipmentKind::Chum && Entry.StackCount > 0)
+				if (Definition && Definition->CanServeChumPlacement() && Entry.StackCount > 0)
 				{
 					ChumCount += Entry.StackCount;
 				}
@@ -630,7 +630,7 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 	const FVector RodTip = Rod ? ResolveRodTipDrawLocation(*Rod) : FVector::ZeroVector;
 	if (Hook)
 	{
-		// Debug 只为正式浮漂表现着色/画锚点，不再写 VisualRoot，避免关闭 Debug 后玩法反馈一起消失。
+		// Debug 只为正式浮漂表现着色/画锚点；VisualRoot 保持由正式表现链写入，避免关闭 Debug 后玩法反馈一起消失。
 		FColor HookColor = FColor::Blue;
 		switch (Hook->GetPresentationState().BobberMode)
 		{
@@ -643,7 +643,7 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 		default:
 			break;
 		}
-		// 搏斗/近岸阶段钩 Actor 已跟随鱼移动：不再单独画钩球（避免与鱼球重叠），线也直接画到鱼。
+		// 搏斗/近岸阶段钩 Actor 已跟随鱼移动：省略钩球避免与鱼球重叠，线也直接画到鱼。
 		if (!Fish)
 		{
 			const FVector HookDrawLocation = Hook->GetPresentationVisualWorldLocation();

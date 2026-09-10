@@ -22,7 +22,7 @@ FCatFishingRodRotationEffortSnapshot FCatFishingRodEffortSampler::Consume(
 	if (Snapshot.ExertionSquaredSeconds > Snapshot.IntegratedSeconds + UE_DOUBLE_KINDA_SMALL_NUMBER) return Result;
 	if (Snapshot.Epoch != PreviousSnapshot.Epoch)
 	{
-		// 新 Epoch 的累计值全部属于新持有人/新搏斗，从零接入；旧 Epoch 的积压不能跟随交接。
+		// 新 Epoch 的累计值全部属于新持有人/新搏斗，从零接入；失效 Epoch 的积压不能跟随交接。
 		FCatFishingRodRotationEffortSnapshot NewBaseline;
 		NewBaseline.Epoch = Snapshot.Epoch;
 		Reset(NewBaseline);
@@ -31,7 +31,7 @@ FCatFishingRodRotationEffortSnapshot FCatFishingRodEffortSampler::Consume(
 		|| Snapshot.PositiveWorkRadians < PreviousSnapshot.PositiveWorkRadians
 		|| Snapshot.IntegratedSeconds < PreviousSnapshot.IntegratedSeconds)
 	{
-		// 同一 Epoch 的计数必须单调；意外回退只重新建基线，不能生成负努力或重放历史。
+		// 同一 Epoch 的计数必须单调；意外回退只重新建基线，不能生成负努力或重放已消费样本。
 		Reset(Snapshot);
 		return Result;
 	}

@@ -55,7 +55,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(
 	"Catfishing.Unit.Fishing.CommandLedger.StaleRevisionAndAttemptAreRejected",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// Catches accepting a command for a stale cast attempt or revision, including malformed discrete identities.
+// Catches accepting a command for an expired cast attempt or revision, including malformed discrete identities.
 bool FCatFishingCommandLedgerDiscreteValidationTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -140,7 +140,7 @@ bool FCatFishingCommandLedgerReelingSequenceTest::RunTest(const FString& Paramet
 	WrongCurrentAttempt.ActivationCorrelationId = FGuid::NewGuid();
 	TestEqual(TEXT("Wrong current attempt is rejected without committing"), Ledger.TryCommitReelingSequence(AuthorityIdentity, WrongCurrentAttempt, SessionId, FGuid::NewGuid()), ECatFishingCommandError::CastAttemptConflict);
 	TestEqual(TEXT("Corrected current attempt commits the same key"), Ledger.TryCommitReelingSequence(AuthorityIdentity, WrongCurrentAttempt, SessionId, WrongCurrentAttempt.CastAttemptId), ECatFishingCommandError::None);
-	TestEqual(TEXT("A committed identical reeling key is stale before reset"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::InputSequenceStale);
+	TestEqual(TEXT("A committed identical reeling key is expired before reset"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::InputSequenceStale);
 	Ledger.Reset();
 	TestEqual(TEXT("Reset clears the same committed reeling key"), Ledger.TryCommitReelingSequence(AuthorityIdentity, Command, SessionId, AttemptId), ECatFishingCommandError::None);
 	return !HasAnyErrors();

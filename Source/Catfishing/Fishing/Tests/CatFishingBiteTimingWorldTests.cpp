@@ -6,12 +6,13 @@
 #include "Environment/CatChumFieldSubsystem.h"
 #include "Environment/Tests/CatWaterTestFixtures.h"
 #include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentSettings.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/Simulation/CatFishingBiteTimingModel.h"
+#include "Inventory/CatInventorySettings.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingBiteTimingWorldTest,
 	"Catfishing.Unit.Fishing.BiteTiming.WorldFieldsDriveFormalStateTreeAndBobber",
@@ -19,8 +20,10 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingBiteTimingWorldTest,
 
 bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 {
-	const UCatEquipmentDefinition* ChumDefinition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(TEXT("BugChum"));
+	const UCatEquipmentDefinition* ChumDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(TEXT("BugChum"));
 	if (!TestNotNull(TEXT("正式窝料资产可加载"), ChumDefinition)) return false;
+	const UCatEquipmentFragment_Chum* ChumFragment = ChumDefinition->FindFragment<UCatEquipmentFragment_Chum>();
+	if (!TestNotNull(TEXT("正式窝料资产含水域影响片段"), ChumFragment)) return false;
 	FCatFishingBiteTimingParameters Timing;
 	if (!TestTrue(TEXT("正式等待配置可读取"), GetDefault<UCatFishingSettings>()->TryGetBiteTimingParameters(Timing))) return false;
 	// 只准备抛竿事务的已冻结输入；后续采样、计时器、正式 StateTree 和正式 Hook BP 都走生产代码。
@@ -58,12 +61,12 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 			Request.Command.ExpectedWaterRegionHandle = Built.Cache.Handle;
 			Request.Command.ChumDefinitionId = ChumDefinition->EquipmentDefinitionId;
 			Request.Command.Quantity = 1;
-			Request.Influence = ChumDefinition->ChumInfluence;
+			Request.Influence = ChumFragment->ChumInfluence;
 			Request.ServerTime = StartTime;
 			const auto Prepared = Chum->PrepareField(Request);
 			if (!TestTrue(TEXT("正式窝料准备成功"), Prepared.bPrepared)) return false;
 			TestEqual(TEXT("正式资产保留三分钟持续时间"), Prepared.ExpireServerTime - Prepared.StartServerTime, 180.0);
-			const auto Activated = Chum->ActivatePreparedFieldDeferred(Prepared.CommitToken, 1);
+			const auto Activated = Chum->ActivatePreparedFieldDeferred(Prepared.CommitToken);
 			if (!TestTrue(TEXT("真实窝料场激活成功"), Activated.bCommitted)) return false;
 			Chum->PublishActivatedField(Activated.FieldId);
 		}

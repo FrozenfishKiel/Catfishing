@@ -132,7 +132,7 @@ public:
 	virtual void SetToDefaults() override;
 
 	/**
-	 * 在设置宿主销毁时解除世界、控制器和异步回调关联；只清理本对象注册的委托，避免旅行或进程退出后旧 World 回调访问已销毁的设置实例。
+	 * 在设置宿主销毁时解除世界、控制器和异步回调关联；只清理本对象注册的委托，避免旅行或进程退出后失效 World 回调访问已销毁的设置实例。
 	 */
 	virtual void BeginDestroy() override;
 
@@ -145,7 +145,7 @@ public:
 	bool HasAudioRoutingAssets() const;
 
 	/**
-	 * 将五个音量草稿交给当前 World 的唯一 Base SoundMix；Master 递归乘全部子类，四个同级分类各自递归乘分类值，提交后才同步持久化值，World 或资产缺失时保留旧配置。
+	 * 将五个音量草稿交给当前 World 的唯一 Base SoundMix；Master 递归乘全部子类，四个同级分类各自递归乘分类值，提交后才同步持久化值，World 或资产缺失时保留既有配置。
 	 */
 	bool ApplyAudioVolumes(UWorld* World, float NewMasterVolume, float NewMusicVolume, float NewSFXVolume,
 		float NewAmbienceVolume, float NewVoiceVolume);
@@ -208,7 +208,7 @@ private:
 	void HandleTrackedWorldBeginPlay();
 
 	/**
-	 * 在 World 清理前移除对应 BeginPlay 句柄与已恢复标记；旅行后的旧 World 不会保留到下一张地图，也不会让弱引用集合无限增长。
+	 * 在 World 清理前移除对应 BeginPlay 句柄与已恢复标记；旅行后的失效 World 不会保留到下一张地图，也不会让弱引用集合无限增长。
 	 */
 	void HandleWorldCleanup(UWorld* World, bool bSessionEnded, bool bCleanupResources);
 
@@ -276,15 +276,15 @@ private:
 	UPROPERTY(Config)
 	float MasterVolume = 1.0f;
 
-	/** 已实际写入 AudioDevice 的音乐音量比例；ApplyAudioVolumes 成功写入，缺少分类资产时保持旧值。 */
+	/** 已实际写入 AudioDevice 的音乐音量比例；ApplyAudioVolumes 成功写入，缺少分类资产时保持变更前值。 */
 	UPROPERTY(Config)
 	float MusicVolume = 1.0f;
 
-	/** 已实际写入 AudioDevice 的音效音量比例；ApplyAudioVolumes 成功写入，缺少分类资产时保持旧值。 */
+	/** 已实际写入 AudioDevice 的音效音量比例；ApplyAudioVolumes 成功写入，缺少分类资产时保持变更前值。 */
 	UPROPERTY(Config)
 	float SFXVolume = 1.0f;
 
-	/** 已实际写入 AudioDevice 的环境音音量比例；ApplyAudioVolumes 成功写入，缺少分类资产时保持旧值。 */
+	/** 已实际写入 AudioDevice 的环境音音量比例；ApplyAudioVolumes 成功写入，缺少分类资产时保持变更前值。 */
 	UPROPERTY(Config)
 	float AmbienceVolume = 1.0f;
 

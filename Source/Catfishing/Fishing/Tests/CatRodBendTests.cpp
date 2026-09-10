@@ -123,7 +123,7 @@ bool FCatRodBendFormalRuntimeTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("load deforms actual mesh vertices"), ChangedVertices > 100);
 	TestFalse(TEXT("invalid load rejected"), Hook->SetFishingLinePresentationFromAuthority(700, 700, 0, 1, true, -1));
 	Hook->SetFishingLinePresentationFromAuthority(800, 700, 100, 0, false, 100);
-	TestEqual(TEXT("slack cannot carry stale force"), Hook->GetPresentationState().LineTensionNewtons, 0.0);
+	TestEqual(TEXT("slack cannot carry active force"), Hook->GetPresentationState().LineTensionNewtons, 0.0);
 	for (int32 I = 0; I < 180; ++I) Wrapper.TickTestWorld(1.0f / 60.0f);
 	TestTrue(TEXT("slack returns to original tip"), Marker->GetComponentLocation().Equals(RestTip, 0.05));
 	const auto& RelaxedVertices = Bend->GetProcMeshSection(0)->ProcVertexBuffer;

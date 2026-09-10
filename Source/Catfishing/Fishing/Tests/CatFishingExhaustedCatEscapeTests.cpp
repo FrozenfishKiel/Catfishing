@@ -60,7 +60,7 @@ bool FCatFishingExhaustedCatRushTest::RunTest(const FString& Parameters)
 	auto Current = State();
 	auto Constraint = Rod();
 	double FastestPull = 0.0;
-	// 足够长的持续外冲：鱼超过旧最大线长世界距离后，也不能凭自耗/坏竿/逃脱提前收尾。
+	// 足够长的持续外冲：鱼超过最大线长世界距离后，也不能凭自耗/坏竿/逃脱提前收尾。
 	for (int32 Index = 0; Index < 200; ++Index)
 	{
 		const auto Step = FCatFishingFightSimulator::Step(Settings, Current, Constraint, FVector::ForwardVector);
@@ -109,7 +109,7 @@ bool FCatFishingExhaustedCatRescueTest::RunTest(const FString& Parameters)
 	Current = State();
 	Settings = Config();
 	Current.bOperatorPresent = false;
-	TestFalse(TEXT("离竿后不继续强制拖旧猫"), FCatFishingFightSimulator::ShouldEscapeExhaustedCat(Settings, Current, true));
+	TestFalse(TEXT("离竿后不继续强制拖先前操作者"), FCatFishingFightSimulator::ShouldEscapeExhaustedCat(Settings, Current, true));
 	Current.bOperatorPresent = true;
 	TestFalse(TEXT("未持竿时不强制拖猫"), FCatFishingFightSimulator::ShouldEscapeExhaustedCat(Settings, Current, false));
 	Current.bFishExhausted = true;

@@ -66,18 +66,26 @@ void ACatFishingRodActor::Tick(const float DeltaSeconds)
 void ACatFishingRodActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	// 离散身份/姿态、连续约束和不变握把标定各自复制，不从客户端视觉组件推导玩法锚点。
+	// 离散身份/姿态、连续约束和三个不变锚点分别复制；锚点在生成前配置，客户端不能从皮肤或零偏移推导玩法位置。
 	DOREPLIFETIME(ThisClass, PresentationState);
 	DOREPLIFETIME(ThisClass, CarrierConstraintState);
+	DOREPLIFETIME_CONDITION(ThisClass, RodTipCanonicalLocalTransform, COND_InitialOnly);
+	DOREPLIFETIME_CONDITION(ThisClass, StandCanonicalLocalTransform, COND_InitialOnly);
 	DOREPLIFETIME_CONDITION(ThisClass, GripCanonicalLocalTransform, COND_InitialOnly);
 }
 
-void ACatFishingRodActor::OnRep_GripCanonicalLocalTransform()
+// 初始锚点接收流程：用服务器已配置的三个本地变换刷新场景锚点与左右站位；Getter 读取同一份复制值，皮肤标记不参与裁决。
+void ACatFishingRodActor::OnRep_CanonicalAnchors()
 {
+	RodTipAnchor->SetRelativeTransform(RodTipCanonicalLocalTransform);
+	StandAnchor->SetRelativeTransform(StandCanonicalLocalTransform);
+	RightStandAnchor->SetRelativeTransform(ResolveOperatorStandLocalTransform(0));
+	LeftStandAnchor->SetRelativeTransform(ResolveOperatorStandLocalTransform(1));
 	GripAnchor->SetRelativeTransform(GripCanonicalLocalTransform);
 	UE_LOG(LogCatFishing, Display,
-		TEXT("Event=fishing_rod_grip_received Rod=%s RodActorId=%s GripLocation=%s GripRotation=%s World=%s NetMode=%d Authority=false LocalRole=%d"),
+		TEXT("Event=fishing_rod_anchors_received Rod=%s RodActorId=%s TipLocation=%s StandLocation=%s GripLocation=%s GripRotation=%s World=%s NetMode=%d Authority=false LocalRole=%d"),
 		*GetName(), *PresentationState.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
+		*RodTipCanonicalLocalTransform.GetLocation().ToCompactString(), *StandCanonicalLocalTransform.GetLocation().ToCompactString(),
 		*GripCanonicalLocalTransform.GetLocation().ToCompactString(), *GripCanonicalLocalTransform.Rotator().ToCompactString(),
 		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()));
 }
@@ -99,7 +107,7 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	if (bIdentityInitialized)
 	{
 		// 幂等保护：身份已初始化过后只比较不可变身份；皮肤、操作位和部署状态由后续权威写口单独提交。
-		// 这样既能防止同一个 Actor 承载第二根竿，也不会让旧测试夹具的表现字段重放破坏正式身份。
+		// 这样既能防止同一个 Actor 承载第二根竿，也不会让测试夹具重放的可变表现字段破坏正式身份。
 		return PresentationState.RodActorId == InRodActorId
 			&& PresentationState.ItemInstanceId == InItemInstanceId
 			&& PresentationState.RodDefinitionId == InRodDefinitionId
@@ -115,7 +123,6 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	Next.RodDefinitionId = InRodDefinitionId;
 	Next.RodSkinDefinitionId = InRodSkinDefinitionId;
 	Next.OwnerPlayerState = InOwnerPlayerState;
-	Next.OperatorPlayerState = InOperatorPlayerState;
 	if (InOperatorPlayerState)
 	{
 		Next.OperatorPlayerStates.Add(InOperatorPlayerState);
@@ -157,7 +164,7 @@ bool ACatFishingRodActor::ConfigureCanonicalAnchorsFromAuthority(const FTransfor
 bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresentationState& Next,
 	const int64 ExpectedRevision)
 {
-	// 乐观并发控制：调用方必须带上它读到的旧 Revision，若与当前不一致说明状态已被其他写者改过，拒绝本次提交
+	// 乐观并发控制：调用方必须带上它读到的当前 Revision，若与提交时状态不一致说明状态已被其他写者改过，拒绝本次提交
 	if (!HasAuthority() || !bIdentityInitialized || ExpectedRevision != PresentationState.RodActorRevision)
 	{
 		return false;
@@ -169,9 +176,8 @@ bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresen
 	Committed.RodDefinitionId = PresentationState.RodDefinitionId;
 	Committed.OwnerPlayerState = PresentationState.OwnerPlayerState;
 	// 主位、持有者和空间姿态都从同一个紧凑数组推导，不能分别保存成互相矛盾的事实。
-	Committed.OperatorPlayerState = Committed.OperatorPlayerStates.IsEmpty()
+	Committed.HolderPlayerState = Committed.OperatorPlayerStates.IsEmpty()
 		? nullptr : Committed.OperatorPlayerStates[0];
-	Committed.HolderPlayerState = Committed.OperatorPlayerState;
 	Committed.PoseMode = Committed.HolderPlayerState
 		? ECatFishingRodPoseMode::Held : ECatFishingRodPoseMode::Grounded;
 	Committed.RodActorRevision = PresentationState.RodActorRevision + 1; // 每次成功提交 Revision 自增一
@@ -200,7 +206,7 @@ bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresen
 
 bool ACatFishingRodActor::SetOperatorFromAuthority(APlayerState* InOperatorPlayerState, const int64 ExpectedRevision)
 {
-	// 旧接口语义保持为“整组替换”，避免老调用方只清快捷字段却留下数组里的幽灵占位。
+	// SetOperator 入口语义保持为“整组替换”，避免调用方只清快捷字段却留下数组里的幽灵占位。
 	FCatFishingRodPresentationState Next = PresentationState;
 	Next.OperatorPlayerStates.Reset();
 	if (InOperatorPlayerState)
@@ -547,7 +553,7 @@ bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSe
 		AuthoritativeRotationEffort.IntegratedSeconds += RotationStep.IntegratedSeconds;
 		AuthoritativeHeldAimRotation = RotationStep.ActualAim;
 		SmoothedRodFishPullStrengthMeters = RotationStep.SmoothedFishPullStrengthMeters;
-		// 保留握持姿态原有的身体俯仰范围；阻力本身没有角度裁剪。
+		// 握持姿态受角色身体可表现的俯仰范围约束；阻力本身没有角度裁剪。
 		AuthoritativeHeldAimRotation.Pitch = FMath::ClampAngle(AuthoritativeHeldAimRotation.Pitch,
 			Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
 	}
@@ -661,7 +667,8 @@ int32 ACatFishingRodActor::GetOperatorSlotIndex(APlayerState* PlayerState) const
 
 bool ACatFishingRodActor::IsPrimaryOperator(APlayerState* PlayerState) const
 {
-	return PlayerState && PresentationState.OperatorPlayerState == PlayerState;
+	return PlayerState && PresentationState.OperatorPlayerStates.IsValidIndex(0)
+		&& PresentationState.OperatorPlayerStates[0] == PlayerState;
 }
 
 int32 ACatFishingRodActor::GetFirstFreeOperatorSlotIndex() const
@@ -687,7 +694,7 @@ void ACatFishingRodActor::BeginPlay()
 	}
 }
 
-// EndPlay 流程：权威端先从 FishingService 注销这根已部署鱼竿，再交还给父类清理；客户端或无 Owner 的临时 Actor 不写服务登记。
+// EndPlay 流程：权威端先从 FishingService 注销这根已部署鱼竿，再交还给父类清理；客户端或无 Owner 的未登记 Actor 不写服务登记。
 void ACatFishingRodActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	ResetAuthoritativeRotationEffort();
@@ -711,7 +718,7 @@ void ACatFishingRodActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 // 复制回调流程：客户端收到 PresentationState 后只把前后状态交给表现分发层；它不修改权威身份、库存实例或操作位数组。
 void ACatFishingRodActor::OnRep_PresentationState(const FCatFishingRodPresentationState& Previous)
 {
-	// Previous 由引擎在应用新值前自动传入旧值，蓝图可以据此区分皮肤、部署或操作位变化。
+	// Previous 由引擎在应用新值前自动传入变更前值，蓝图可以据此区分皮肤、部署或操作位变化。
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 }
 

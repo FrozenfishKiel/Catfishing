@@ -35,11 +35,6 @@ public:
 		meta = (DisplayName = "每公斤力量", ClampMin = "0.001"))
 	double StrengthPerKilogram = 0.0;
 
-	/** 旧资产序列化载荷。无运行读取；外部蓝图引用未完成审计前保留原字段身份。 */
-	UPROPERTY(BlueprintReadOnly, Category="已废弃（仅资产载荷）", meta=(DeprecationMessage="Use ForcePerStrengthNewtons"))
-	double AccelerationPerStrength = 0.0;
-	UPROPERTY(BlueprintReadOnly, Category="已废弃（仅资产载荷）", meta=(DeprecationMessage="Force integration replaces drive response"))
-	double DriveResponseSeconds = 0.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="每点力量推力（牛顿）", ClampMin="0.001"))
 	double ForcePerStrengthNewtons = 1.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="单猫系统质量", Units="kg", ClampMin="0.001"))
@@ -50,7 +45,7 @@ public:
 	double ExhaustedCatTowAccelerationCentimetersPerSecondSquared = 300.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="鱼线与张力", meta=(DisplayName="满表现张力（牛顿）", ClampMin="0.001"))
 	double DisplayTensionNewtons = 50.0;
-	/** 显式资产迁移版本；不会据此重置已经编辑的新参数。 */
+	/** 当前力量模型参数版本；只用于编辑器和审计识别资产使用的参数口径，不重置已经编辑的数值。 */
 	UPROPERTY(EditDefaultsOnly, Category="身份", AdvancedDisplay)
 	int32 ForceModelVersion = 0;
 
@@ -144,10 +139,6 @@ public:
 		meta = (DisplayName = "低体力休息时长倍率", ClampMin = "1.0"))
 	double LowStaminaRestMultiplier = 0.0;
 
-	/** 废弃几何表现阈值，仅保留旧资产载荷，不参与新张力计算。 */
-	UPROPERTY(BlueprintReadOnly, Category="已废弃（仅资产载荷）", meta=(DeprecationMessage="Use DisplayTensionNewtons"))
-	double TensionResponseRangeCentimeters = 0.0;
-
 	/** 无人持竿且鱼超出最大线长后的逃脱余量。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "鱼线与张力",
 		meta = (DisplayName = "逃脱松线余量", ClampMin = "0.0", Units = "cm"))
@@ -168,7 +159,4 @@ public:
 		meta = (DisplayName = "最大约束修正速度", ClampMin = "1.0", Units = "cm/s"))
 	double MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 0.0;
 
-	/** 废弃速度硬截断参数；旧 WBP 引用未完整加载，保留载荷但没有运行读取。 */
-	UPROPERTY(BlueprintReadOnly, Category="已废弃（仅资产载荷）")
-	double MinimumCarrierAwaySpeedMultiplier = -1.0;
 };

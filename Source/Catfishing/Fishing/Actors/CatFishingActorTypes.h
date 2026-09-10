@@ -48,11 +48,9 @@ struct FCatFishingRodPresentationState
 	UPROPERTY(BlueprintReadOnly) FName RodDefinitionId = NAME_None;
 	UPROPERTY(BlueprintReadOnly) FName RodSkinDefinitionId = NAME_None;
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> OwnerPlayerState = nullptr;
-	/** 当前主操作手（OperatorPlayerStates[0]）的兼容快捷字段；只有主位驱动现有单人钓鱼会话。 */
-	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> OperatorPlayerState = nullptr;
-	/** 有序占位容器：加入时追加，离开时压紧；0=主位，之后按编号公式左右交替向外扩展，始终无空洞。 */
+	/** 有序占位容器：加入时追加，离开时压紧；第 0 项是主操作手，之后按编号公式左右交替向外扩展。 */
 	UPROPERTY(BlueprintReadOnly) TArray<TObjectPtr<APlayerState>> OperatorPlayerStates;
-	/** 当前真正握住鱼竿的玩家；始终镜像 OperatorPlayerStates[0]，地面姿态为空。 */
+	/** 当前真正握住鱼竿的玩家；服务器提交占位变化时由第 0 项推导，地面姿态为空。 */
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> HolderPlayerState = nullptr;
 	/** 只描述同一根 Rod Actor 在手里还是地上，不参与 FishingSession 阶段推进。 */
 	UPROPERTY(BlueprintReadOnly) ECatFishingRodPoseMode PoseMode = ECatFishingRodPoseMode::Grounded;
@@ -79,7 +77,7 @@ struct FCatFishingHookPresentationState
 	UPROPERTY(BlueprintReadOnly) double SlackLineLengthCentimeters = 0.0;
 	UPROPERTY(BlueprintReadOnly) float NormalizedTension = 0.0f;
 	UPROPERTY(BlueprintReadOnly) bool bLineTaut = false;
-	/** Final authoritative line load in newtons, before display normalization; cosmetic rod bending only. */
+	/** 最终权威鱼线载荷，单位牛顿；客户端只用它做显示归一化和竿体弯曲表现。 */
 	UPROPERTY(BlueprintReadOnly) double LineTensionNewtons = 0.0;
 };
 

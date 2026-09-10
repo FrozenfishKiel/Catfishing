@@ -37,9 +37,9 @@ enum class ECatOnlineWorldState : uint8
 	Unknown,
 	/** 当前 World 是 Frontend。 */
 	Frontend,
-	/** 已提交去联机玩法地图的旅行，仍等待目标 World 到达；枚举名 Lake 为兼容既有蓝图而保留。 */
+	/** 已提交去联机玩法地图的旅行，仍等待目标 World 到达；枚举名 Lake 为沿用既有蓝图而保留。 */
 	TravelingToLake,
-	/** 当前 World 是联机玩法地图（目前为 Showcase2）；枚举名 Lake 为兼容既有蓝图而保留。 */
+	/** 当前 World 是联机玩法地图（目前为 Showcase2）；枚举名 Lake 为沿用既有蓝图而保留。 */
 	Lake,
 	/** 已提交回 Frontend 的旅行，仍等待目标 World 到达。 */
 	TravelingToFrontend,
@@ -141,9 +141,9 @@ enum class ECatOnlineError : uint8
 	JoinFailed,
 	/** DestroySession 回调失败，本地 NamedSession 事实仍不安全。 */
 	DestroyFailed,
-	/** Create/Join 的 Presence 与 Lobby 兼容字段不满足同值合同。 */
+	/** Create/Join 的 Presence 与 Lobby 匹配字段不满足同值合同。 */
 	SessionCompatibilityMismatch,
-	/** UI 提交的搜索或邀请句柄不属于当前代际；新搜索、成功 Join、补偿、Leave 或销毁都会让旧句柄失效。 */
+	/** UI 提交的搜索或邀请句柄不属于当前代际；新搜索、成功 Join、补偿、Leave 或销毁都会让失效句柄失效。 */
 	InvalidHandle,
 	/** Client 预载完成后无法从 NamedSession 解析连接地址。 */
 	ConnectStringUnavailable,
@@ -177,7 +177,7 @@ enum class ECatOnlineError : uint8
 	InviteSessionConflict,
 	/** 平台邀请无有效结果、接受账号不匹配或当前地图不允许加入；不以另一账号或替代房间继续。 */
 	InviteAcceptanceUnavailable,
-	/** 已接受邀请等待前台和本地 Steam 身份就绪超过期限；意图失效，停止自动提交。 */
+	/** 已接受邀请等待前台和本地 Steam 身份就绪超失效限；意图失效，停止自动提交。 */
 	InviteAcceptanceExpired,
 	/** 会话已离开但本局载荷释放服务缺失或拒绝；不伪造释放成功，后续选槽仍受 Save 的真实状态约束。 */
 	ActiveRunReleaseFailed
@@ -263,7 +263,7 @@ struct FCatOnlineFriendHandle
 	UPROPERTY(BlueprintReadOnly)
 	FGuid Value;
 
-	/** 只检查随机键是否非空，供调用者排除未选择的好友；非空不代表仍属于当前缓存，过期句柄仍由 Online 私有映射拒绝。 */
+	/** 只检查随机键是否非空，供调用者排除未选择的好友；非空不代表仍属于当前缓存，失效句柄仍由 Online 私有映射拒绝。 */
 	bool IsValid() const { return Value.IsValid(); }
 };
 
@@ -419,7 +419,7 @@ struct FCatOnlineSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bIsMapPreloadPending = false;
 
-	/** 当前 GameInstance 是否已经进入引擎 LoadMap 阻塞段；由 PreLoadMap/PostLoadMap 成对写入，UI 用它保持真实切图遮罩而不靠时间兜底。 */
+	/** 当前 GameInstance 是否已经进入引擎 LoadMap 阻塞段；由 PreLoadMap/PostLoadMap 成对写入，UI 用它保持真实切图遮罩而不按展示时间推断完成。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bIsEngineLoadMapPending = false;
 

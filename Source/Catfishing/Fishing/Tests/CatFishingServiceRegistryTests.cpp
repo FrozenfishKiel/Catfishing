@@ -89,7 +89,7 @@ bool FCatFishingServiceOneRodPerPlayerStateTest::RunTest(const FString& Paramete
 	return !HasAnyErrors();
 }
 
-// 精确注销契约：旧鱼竿迟到的 EndPlay 注销不能删除同一玩家后来登记的替代鱼竿。
+// 精确注销契约：先前鱼竿迟到的 EndPlay 注销不能删除同一玩家后来登记的替代鱼竿。
 bool FCatFishingServiceStaleRodUnregisterTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;

@@ -55,7 +55,7 @@ bool UCatShopModel::Bind(APlayerController* InController, UCatShopInventoryCompo
 	return true;
 }
 
-// 解绑流程：从 GameState 和摊位库存移除订阅，清空 pending、购物车、弱引用和展示状态，避免跨 World 显示旧公款或旧选购队列。
+// 解绑流程：从 GameState 和摊位库存移除订阅，清空 pending、购物车、弱引用和展示状态，避免跨 World 显示失效公款或失效选购队列。
 void UCatShopModel::Unbind()
 {
 	if (ACatfishingGameState* GameState = BoundGameState.Get())
@@ -107,7 +107,7 @@ void UCatShopModel::MarkFeedbackRejected(const FText Reason)
 	Refresh();
 }
 
-// 支付成功流程：清空本地购物车和 pending 状态；服务器事实会继续通过公开经济快照与公共仓库快照各自同步。
+// 支付成功流程：清空本地购物车和 pending 状态；服务器事实会继续通过公开经济快照与公共仓库正式库存各自同步。
 void UCatShopModel::MarkCartPaymentSucceeded()
 {
 	FeedbackText = FText::FromString(TEXT("支付成功，请在营地公共仓库查看新物品"));
@@ -277,7 +277,7 @@ const FCatShopViewState& UCatShopModel::GetViewState() const
 	return ViewState;
 }
 
-// 条目查询流程：只在当前完整商品投影中查找商品行，避免点击过期蓝图行时绕过最新目录。
+// 条目查询流程：只在当前完整商品投影中查找商品行，避免点击失效蓝图行时绕过最新目录。
 bool UCatShopModel::TryFindEntryView(const FName EntryId, FCatShopEntryView& OutEntry) const
 {
 	const FCatShopEntryView* FoundEntry = FindEntryView(ViewState.Entries, EntryId);
@@ -305,7 +305,7 @@ void UCatShopModel::HandleShopInventoryIdentityChanged()
 // 商品投影流程：
 // 1. 把 Catalog 展示字段和库存定义展示字段合成中文展示行；商店专属图优先，未配置时回退到定义的通用缩略图。
 // 2. 使用公开货架库存读取有限库存剩余数，并用当前团队公款推导单品是否买得起；加购不受单品余额影响。
-// 3. 这些结果只影响 UI 展示和明显无效点击；真正扣款、数量和公共仓库发货仍在服务器 ShopEconomy/OrderCoordinator。
+// 3. 这些结果只影响 UI 展示和明显无效点击；真正扣款、数量和公共仓库发货仍在服务器 ShopEconomy 与交易入口。
 FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry,
 	const FCatShopPublicEconomySnapshot& Economy, const bool bEconomyAvailable)
 {
@@ -380,7 +380,7 @@ FCatShopEntryView UCatShopModel::MakeEntryView(const FCatShopCatalogEntry& Entry
 }
 
 // 分类投影流程：
-// 1. “全部”永远由 Model 兜底生成，代表当前完整 Entries，而不是某个商品表分类。
+// 1. “全部”永远由 Model 生成，代表当前完整 Entries，而不是某个商品表分类。
 // 2. 其他分类按 Entries 的当前顺序首次出现即加入，后续同类商品只增加数量，保证顶部按钮跟真实货架同步。
 // 3. bSelected 不在这里写入；每个客户端的分类选择只属于本地 Widget，不能污染其他玩家或真实货架数据。
 void UCatShopModel::BuildCategoryViewState(FCatShopViewState& InOutState) const

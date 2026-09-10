@@ -11,7 +11,7 @@ namespace
 }
 
 // SaveModel 绑定流程把前端存档页接到正式 SaveSubsystem，避免 UI 在本地拼出一套影子槽目录：
-// 1. 先解除可能来自旧 LocalPlayer 的订阅，保证复用对象不会把旧 GameInstance 的异步结果投给新页面。
+// 1. 先解除可能来自失效 LocalPlayer 的订阅，保证复用对象不会把失效 GameInstance 的异步结果投给新页面。
 // 2. 再从指定 LocalPlayer 的 GameInstance 取得唯一 Save 子系统并订阅其变化。
 // 3. 最后请求真实槽目录刷新；目录 I/O 期间 View 只读取正式 busy/结果，不构造 Profile 或内存替身。
 void UCatFrontendSaveModel::Initialize(ULocalPlayer* InLocalPlayer)
@@ -49,7 +49,7 @@ void UCatFrontendSaveModel::Shutdown()
 	LocalPlayer.Reset();
 }
 
-// 目录刷新流程：只把请求交给正式 Save 子系统；来源不存在时广播一次空状态，让 View 显示真实不可用而不是沿用旧列表。
+// 目录刷新流程：只把请求交给正式 Save 子系统；来源不存在时广播一次空状态，让 View 显示真实不可用而不是沿用失效列表。
 void UCatFrontendSaveModel::RefreshSlotSummaries()
 {
 	if (UCatSaveSubsystem* Save = GetSaveSubsystem())
@@ -97,7 +97,7 @@ bool UCatFrontendSaveModel::ReleaseActiveRun()
 	return Save && Save->ReleaseActiveRun();
 }
 
-// 摘要读取流程：返回 Save 持有的 const 列表；来源失效时返回稳定空数组，View 不会保留跨 LocalPlayer 的陈旧槽位。
+// 摘要读取流程：返回 Save 持有的 const 列表；来源失效时返回稳定空数组，View 不会保留跨 LocalPlayer 的无效槽位。
 const TArray<FCatSaveSlotSummary>& UCatFrontendSaveModel::GetSlotSummaries() const
 {
 	if (UCatSaveSubsystem* Save = GetSaveSubsystem())
@@ -107,7 +107,7 @@ const TArray<FCatSaveSlotSummary>& UCatFrontendSaveModel::GetSlotSummaries() con
 	return EmptySlotSummaries;
 }
 
-// 旅行许可读取流程：只转发 Save 成功读入后的正式事实；来源失效时 fail-closed，Controller 不能据旧选择创建房间。
+// 旅行许可读取流程：只转发 Save 成功读入后的正式事实；来源失效时 fail-closed，Controller 不能据失效选择创建房间。
 bool UCatFrontendSaveModel::HasLoadedRunForTravel() const
 {
 	return GetSaveSubsystem() && GetSaveSubsystem()->HasLoadedRunForTravel();

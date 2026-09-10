@@ -10,7 +10,6 @@
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Simulation/CatFishFightMotionSolver.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
-#include "Items/CatWorldItemSettings.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingSurfaceTraversalTest,
 	"Catfishing.Unit.Fishing.Runtime.LiveAndExhaustedFishTraverseRealShoreGapAndSlope",
@@ -104,7 +103,7 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 			TestTrue(TEXT("resolved surface also provides a valid rod load"), RotationResistance.bSucceeded);
 			if (!Step.bLineTaut || Step.Outcome == ECatFightStepOutcome::FishExhausted || Runner->State.bFishExhausted)
 			{
-				TestEqual(TEXT("released or exhausted fish has no stale rod torque"), RotationResistance.MaximumFishTorqueStrengthMeters, 0.0);
+				TestEqual(TEXT("released or exhausted fish has no active rod torque"), RotationResistance.MaximumFishTorqueStrengthMeters, 0.0);
 			}
 			TestTrue(TEXT("haul never bounces toward the water inset"), Motion.FishWorldPosition.X <= Runner->State.FishWorldPosition.X + 0.01);
 			if (Motion.FishWorldPosition.X < -30.0 && Motion.FishWorldPosition.X > -90.0)
@@ -197,7 +196,7 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("dominant rod swing does not instantly exhaust the live fish"), bJustBeached);
 		TestEqual(TEXT("rod swing does not force stamina drain"), Step.FishStaminaDrain, 0.0);
 		TestFalse(TEXT("real shoreline correction leaves the line slack"), Step.bLineTaut);
-		TestEqual(TEXT("slack shoreline result cannot publish the old loaded torque"), RotationResistance.MaximumFishTorqueStrengthMeters, 0.0);
+		TestEqual(TEXT("slack shoreline result cannot publish a loaded torque"), RotationResistance.MaximumFishTorqueStrengthMeters, 0.0);
 		Runner->State.bFishExhausted = true;
 		Runner->State.FishStamina = 0.0;
 		Runner->State.CatAction = ECatFightCatAction::None;
@@ -207,7 +206,7 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		TestTrue(TEXT("already exhausted fish follows physical line endpoint movement onto shore"), DeadTow.bSucceeded && bJustBeached);
 	}
 
-	// 猫端本步正背离鱼移动：鱼的新位置和旧竿尖会呈现松线，但联合端点仍在承载。
+	// 猫端本步正背离鱼移动：鱼的新位置和帧起点竿尖会呈现松线，但联合端点仍在承载。
 	{
 		auto* Runner = NewObject<UCatFishingFightRunner>(Session);
 		Runner->Session = Session;
@@ -233,7 +232,7 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 		Runner->State.LineLengthCentimeters = FVector::Distance(Rod.RodTipWorldPosition, Runner->State.FishWorldPosition);
 		if (!TestTrue(TEXT("moving endpoint surface fixture is configured"), Runner->Config.IsValid())) return false;
 		auto Step = FCatFishingFightSimulator::Step(Runner->Config, Runner->State, Rod, FVector::ForwardVector);
-		if (!TestTrue(TEXT("moving endpoint produces load despite old-tip geometric slack"), Step.bSucceeded
+		if (!TestTrue(TEXT("moving endpoint produces load despite start-tip geometric slack"), Step.bSucceeded
 			&& Step.LineTensionNewtons > 0.0 && Step.SlackLineLengthCentimeters > 0.1)) return false;
 		const auto Predicted = Step;
 		FCatWaterSpatialResult Water;
@@ -343,7 +342,7 @@ bool FCatFishingSurfaceTraversalTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("the real water query confirms the recovered fish is inside the lake"),
 		RecoveredWater.bSucceeded && RecoveredWater.Containment == ECatWaterContainment::Inside);
 
-	// 岸线容差带会连续返回最近岸点。低速鱼必须累积小于旧 1 cm 阈值的游动，才能走出 2 cm 容差带。
+	// 岸线容差带会连续返回最近岸点。低速鱼必须累积低于 1 cm 的连续游动，才能走出 2 cm 容差带。
 	RecoveryRunner->State.FishWorldPosition = FVector::ZeroVector;
 	RecoveryRunner->State.LineLengthCentimeters = 600.0;
 	RecoveryRunner->Config.FishCalmSpeedCentimetersPerSecond = 10.0;

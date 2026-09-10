@@ -30,7 +30,7 @@ class CATFISHING_API UCatInputConfig : public UPrimaryDataAsset
 	GENERATED_BODY()
 
 public:
-	/** 空数组保持向后兼容；一旦配置，每个 Action 与 Tag 都必须有效且唯一。 */
+	/** 空数组保持向后匹配；一旦配置，每个 Action 与 Tag 都必须有效且唯一。 */
 	bool IsNativeInputConfigurationValid() const;
 
 	const UInputAction* FindNativeInputActionForTag(FGameplayTag InputTag) const;

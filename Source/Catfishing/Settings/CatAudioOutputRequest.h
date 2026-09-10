@@ -20,7 +20,7 @@ public:
 	/** 请求最终结果通知；空错误表示枚举完成或目标设备已活动，原生委托允许调用方附带自身生命周期代次。 */
 	using FOnCompleted = TDelegate<void(UCatAudioOutputRequest*, FName)>;
 
-	/** 仅允许新对象启动一次操作；空设备 ID 枚举，非空 ID 切换，完成委托报告最终结果，禁止复用已结束对象以隔离旧回调。 */
+	/** 仅允许新对象启动一次操作；空设备 ID 枚举，非空 ID 切换，完成委托报告最终结果，禁止复用已结束对象以隔离失效回调。 */
 	void Start(UWorld* World, const FString& DeviceId, FOnCompleted InCompleted);
 
 	/** 放弃结果接收并撤销轮询、释放设备句柄；不能撤回平台已受理的硬件切换，但晚到结果不会再通知调用方。 */
@@ -69,13 +69,13 @@ private:
 	/** 本次枚举结果；HandleDevicesObtained 写入，实际活动查询校正标志后才对外发布。 */
 	TArray<FAudioOutputDeviceInfo> Devices;
 
-	/** 唯一完成通知；Start 接管，Finish 取走执行，Cancel 清空，避免旧回调修改重新初始化的调用方。 */
+	/** 唯一完成通知；Start 接管，Finish 取走执行，Cancel 清空，避免失效回调修改重新初始化的调用方。 */
 	FOnCompleted Completed;
 
 	/** 真实时间轮询句柄；Start 登记，Cancel、Finish 或 Tick 返回 false 时撤销，暂停游戏不会暂停超时。 */
 	FTSTicker::FDelegateHandle TickerHandle;
 
-	/** 本次请求截止的单调时钟秒数；零表示尚未启动，Start 写入后不重置，既限定八秒等待也禁止复用旧请求身份。 */
+	/** 本次请求截止的单调时钟秒数；零表示尚未启动，Start 写入后不重置，既限定八秒等待也禁止复用既有请求身份。 */
 	double DeadlineSeconds = 0.0;
 
 	/** 首次枚举或实际切换命令是否已提交；TickRequest 与活动查询共同维护，防止轮询反复发起平台切换。 */

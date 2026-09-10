@@ -1,11 +1,11 @@
 #include "Social/CatSocialService.h"
 
+#include "Camp/CatCampSettings.h"
 #include "Character/CatCharacter.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Logging/CatLog.h"
 #include "Condition/CatConditionComponent.h"
 #include "Collection/CatRunImprintService.h"
-#include "Data/CatFishCatalogSettings.h"
 #include "Data/CatFishDefinition.h"
 #include "EngineUtils.h"
 #include "Engine/World.h"
@@ -13,12 +13,15 @@
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
-#include "Items/CatItemsService.h"
+#include "Inventory/CatFishInventoryItemInstance.h"
+#include "Inventory/CatInventoryAccessRules.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryStatics.h"
 #include "Social/CatProtectionSignActor.h"
 #include "Social/CatSocialSettings.h"
 #include "TimerManager.h"
 
-// 创建条件流程：只允许 authority Game World 持有权限、Timer 和 Items escrow 协调；客户端没有平行 Social 写状态。
+// 创建条件流程：只允许 authority Game World 持有权限、Timer 和偷鱼协议；客户端没有平行 Social 写状态。
 bool UCatSocialService::ShouldCreateSubsystem(UObject* Outer) const
 {
 	const UWorld* World = Cast<UWorld>(Outer);
@@ -39,7 +42,7 @@ void UCatSocialService::Deinitialize()
 	Super::Deinitialize();
 }
 
-// Teardown 关门流程：先永久拒绝新 Social 命令，再复制活跃 ProtocolId、逐条清唯一 Timer 并让 Items 原位返还；失败协议保留并返回 false，调用方不得先关闭 Items。
+// Teardown 关门流程：先永久拒绝新 Social 命令，再复制活跃 ProtocolId、逐条清唯一 Timer 并把鱼实例放回来源库存；失败协议保留并返回 false，调用方不得假装全部收口。
 bool UCatSocialService::CloseCommandsAndResolveAll()
 {
 	bCommandsOpen = false;
@@ -58,7 +61,7 @@ bool UCatSocialService::CloseCommandsAndResolveAll()
 	return bAllResolved && ActiveThefts.IsEmpty();
 }
 
-// 偷鱼开始流程：先按身份/操作/客户端 RequestId 重放，再用 Items 记录验证真实容器宿主、偷取者与鱼实例原捕获者状态和距离；随后分配服务器 ProtocolId 建 escrow 和唯一 Timer。
+// 偷鱼开始流程：先按身份/操作/客户端 RequestId 重放，再验证来源库存宿主、偷取者、鱼实例原捕获者和距离；随后从库存槽真实移除鱼实例并开启唯一 Timer。
 FCatTheftResult UCatSocialService::BeginTheft(AController* ThiefController, const FCatTheftCommand& Command)
 {
 	FCatTheftResult Result;
@@ -67,10 +70,6 @@ FCatTheftResult UCatSocialService::BeginTheft(AController* ThiefController, cons
 	const UCatSocialSettings* Settings = GetDefault<UCatSocialSettings>();
 	const FString ThiefStableNetId = ResolveStableNetId(ThiefController);
 	ACatCharacter* ThiefCharacter = ThiefController ? Cast<ACatCharacter>(ThiefController->GetPawn()) : nullptr;
-	UCatItemsService* Items = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
-	FCatContainerSnapshot SourceSnapshot;
-	ECatContainerKind SourceKind = ECatContainerKind::Unknown;
-	AActor* SourceAuthorityActor = nullptr;
 	if (ThiefStableNetId.IsEmpty() || !Command.Context.RequestId.IsValid())
 	{
 		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
@@ -93,17 +92,11 @@ FCatTheftResult UCatSocialService::BeginTheft(AController* ThiefController, cons
 		Result.Command.Error = ECatDomainCommandError::CommandsClosed;
 		return Finish(Result);
 	}
-	if (!Settings->IsTheftReady() || !IsCharacterSociallyActive(ThiefCharacter) || !Items
-		|| !Items->TryGetContainerSnapshot(Command.SourceContainerId, SourceSnapshot)
-		|| !Items->TryGetContainerHost(Command.SourceContainerId, SourceKind, SourceAuthorityActor)
-		|| !SourceAuthorityActor || SourceAuthorityActor->GetWorld() != GetWorld()
-		|| FVector::DistSquared(ThiefCharacter->GetActorLocation(), SourceAuthorityActor->GetActorLocation())
-			> FMath::Square(Settings->TheftInteractionRangeCentimeters))
-	{
-		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
-		return Finish(Result);
-	}
-	if (SourceKind != ECatContainerKind::FishGuard && SourceKind != ECatContainerKind::SharedFishTank)
+	AActor* SourceInventoryHost = Command.SourceInventoryHost.Get();
+	const UCatCampSettings* CampSettings = GetDefault<UCatCampSettings>();
+	if (!Settings->IsTheftReady() || !IsCharacterSociallyActive(ThiefCharacter)
+		|| !SourceInventoryHost || SourceInventoryHost->GetWorld() != GetWorld()
+		|| !CatInventoryAccessRules::IsHostReachable(SourceInventoryHost, ThiefCharacter, CampSettings))
 	{
 		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
 		return Finish(Result);
@@ -113,46 +106,62 @@ FCatTheftResult UCatSocialService::BeginTheft(AController* ThiefController, cons
 		Result.Command.Error = ECatDomainCommandError::InvalidPhase;
 		return Finish(Result);
 	}
-	const FCatFishInstance* SourceFish = SourceSnapshot.Fish.FindByPredicate([&Command](const FCatFishInstance& Fish)
+	TArray<UCatInventoryComponent*> SourceInventories;
+	UCatInventoryStatics::AppendInventoryComponentsFromActor(SourceInventoryHost, SourceInventories);
+	UCatInventoryComponent* SourceInventory = nullptr;
+	const FCatInventoryEntry* SourceEntry = nullptr;
+	UCatFishInventoryItemInstance* SourceFish = nullptr;
+	for (UCatInventoryComponent* CandidateInventory : SourceInventories)
 	{
-		return Fish.FishInstanceId == Command.FishInstanceId;
-	});
-	AController* FishOwnerController = SourceFish ? FindControllerByStableNetId(SourceFish->OwnerStableNetId) : nullptr;
+		const FCatInventoryEntry* CandidateEntry = CandidateInventory
+			? CandidateInventory->GetInventoryEntryAtSlot(Command.SourceInventorySlotIndex) : nullptr;
+		UCatFishInventoryItemInstance* CandidateFish = CandidateEntry
+			? Cast<UCatFishInventoryItemInstance>(CandidateEntry->Instance.Get()) : nullptr;
+		if (CandidateFish && CandidateFish->GetItemInstanceId() == Command.FishItemInstanceId
+			&& CandidateEntry->StackCount == 1)
+		{
+			SourceInventory = CandidateInventory;
+			SourceEntry = CandidateEntry;
+			SourceFish = CandidateFish;
+			break;
+		}
+	}
+	if (!SourceInventory || !SourceEntry || !SourceFish)
+	{
+		Result.Command.Error = ECatDomainCommandError::NotFound;
+		return Finish(Result);
+	}
+	AController* FishOwnerController = FindControllerByStableNetId(SourceFish->GetFishOwnerStableNetId());
 	const ACatCharacter* FishOwnerCharacter = FishOwnerController ? Cast<ACatCharacter>(FishOwnerController->GetPawn()) : nullptr;
-	if (!SourceFish || SourceFish->OwnerStableNetId.IsEmpty() || !IsCharacterSociallyActive(FishOwnerCharacter))
+	if (SourceFish->GetFishOwnerStableNetId().IsEmpty() || !IsCharacterSociallyActive(FishOwnerCharacter))
 	{
 		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Finish(Result);
 	}
-	if (SourceKind == ECatContainerKind::SharedFishTank
-		&& Settings->SharedTankRecoveryPolicy == ECatSharedTankRecoveryPolicy::Undecided)
+	Result.TheftProtocolId = FGuid::NewGuid();
+	Result.FishInstanceId = SourceFish->GetItemInstanceId();
+	FCatInventoryEntry RemovedEntry;
+	if (!SourceInventory->RemoveInventoryEntryAtSlotFromAuthority(Command.SourceInventorySlotIndex, RemovedEntry)
+		|| RemovedEntry.Instance.Get() != SourceFish)
 	{
-		Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
+		Result.Command.Error = ECatDomainCommandError::NotFound;
 		return Finish(Result);
 	}
-	FCatFishTheftCommand ItemsCommand;
-	ItemsCommand.Context = Command.Context;
-	ItemsCommand.Context.StableNetId = ThiefStableNetId;
-	ItemsCommand.TheftProtocolId = FGuid::NewGuid();
-	ItemsCommand.FishInstanceId = Command.FishInstanceId;
-	ItemsCommand.SourceContainerId = Command.SourceContainerId;
-	const FCatFishTheftResult ItemsResult = Items->BeginFishTheft(ItemsCommand);
-	Result.Command = ItemsResult.Command;
-	Result.TheftProtocolId = ItemsResult.TheftProtocolId;
-	Result.FishInstanceId = ItemsResult.Fish.FishInstanceId;
-	if (!ItemsResult.Command.bCommitted)
-	{
-		return Finish(Result);
-	}
-	// Items 已接受同一个服务器 ProtocolId 后，Social 才建立活跃索引；客户端 RequestId 继续只用于 Begin 终态缓存。
-	FActiveTheft& Theft = ActiveThefts.Add(ItemsResult.TheftProtocolId);
-	Theft.TheftProtocolId = ItemsResult.TheftProtocolId;
+	Result.Command.bCommitted = true;
+	Result.Command.Error = ECatDomainCommandError::None;
+	// 库存已经移除同一个鱼实例后，Social 才建立活跃索引；客户端 RequestId 继续只用于 Begin 终态缓存。
+	FActiveTheft& Theft = ActiveThefts.Add(Result.TheftProtocolId);
+	Theft.TheftProtocolId = Result.TheftProtocolId;
 	Theft.ClientRequestId = Command.Context.RequestId;
 	Theft.ThiefStableNetId = ThiefStableNetId;
-	Theft.VictimStableNetId = ItemsResult.Fish.OwnerStableNetId;
+	Theft.VictimStableNetId = SourceFish->GetFishOwnerStableNetId();
 	Theft.ThiefCharacter = ThiefCharacter;
-	Theft.SourceKind = SourceKind;
-	Theft.Fish = ItemsResult.Fish;
+	Theft.SourceInventory = SourceInventory;
+	Theft.SourceInventorySlotIndex = Command.SourceInventorySlotIndex;
+	Theft.FishItem = SourceFish;
+	Theft.FishItemInstanceId = SourceFish->GetItemInstanceId();
+	Theft.FishDefinitionId = SourceFish->GetFishDefinition()
+		? SourceFish->GetFishDefinition()->GetInventoryDefinitionId() : NAME_None;
 	Theft.Result = Result;
 	Theft.Result.bRecoveryWindowOpen = true;
 	Theft.Result.TheftProtocolId = Theft.TheftProtocolId;
@@ -160,9 +169,12 @@ FCatTheftResult UCatSocialService::BeginTheft(AController* ThiefController, cons
 	FTimerDelegate TimerDelegate = FTimerDelegate::CreateUObject(this, &ThisClass::HandleTheftWindowExpired, Theft.TheftProtocolId);
 	GetWorld()->GetTimerManager().SetTimer(Theft.EatingWindowTimer, TimerDelegate,
 		static_cast<float>(Settings->TheftEatingWindowSeconds), false);
-	UE_LOG(LogCatSocial, Log, TEXT("Event=social_theft_started ProtocolId=%s FishInstanceId=%s SourceKind=%s WindowSeconds=%.3f"),
-		*Theft.TheftProtocolId.ToString(EGuidFormats::DigitsWithHyphens), *Theft.Fish.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-		*UEnum::GetValueAsString(Theft.SourceKind), Settings->TheftEatingWindowSeconds);
+	UE_LOG(LogCatSocial, Log, TEXT("Event=social_theft_started ProtocolId=%s FishItem=%s SourceInventory=%s SourceSlot=%d WindowSeconds=%.3f"),
+		*Theft.TheftProtocolId.ToString(EGuidFormats::DigitsWithHyphens),
+		*Theft.FishItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*GetNameSafe(SourceInventory),
+		Theft.SourceInventorySlotIndex,
+		Settings->TheftEatingWindowSeconds);
 	TheftTerminalCache.Add(TerminalKey, Theft.Result);
 	return Theft.Result;
 }
@@ -188,7 +200,7 @@ FCatTheftResult UCatSocialService::CatchTheft(AController* CatchingController, c
 	}
 	const auto Finish = [this, &TerminalKey](const FCatTheftResult& TerminalResult)
 	{
-		// 空间或状态拒绝不是追回协议终态；只缓存 Items 已原位返还的成功结果，使同一捕手重试不复制鱼，同时允许仍在窗口内重新接近。
+		// 空间或状态拒绝不是追回协议终态；只缓存库存返还成功的结果，使同一捕手重试不复制鱼，同时允许仍在窗口内重新接近。
 		if (TerminalResult.bReturned || TerminalResult.bConsumed || TerminalResult.Command.bCommitted)
 		{
 			TheftTerminalCache.Add(TerminalKey, TerminalResult);
@@ -210,9 +222,7 @@ FCatTheftResult UCatSocialService::CatchTheft(AController* CatchingController, c
 	ACatCharacter* ThiefCharacter = Theft->ThiefCharacter.Get();
 	AController* VictimController = FindControllerByStableNetId(Theft->VictimStableNetId);
 	const bool bVictimAuthorityMatches = VictimController && VictimController == CatchingController;
-	const bool bAllowed = bVictimAuthorityMatches
-		|| (Theft->SourceKind == ECatContainerKind::SharedFishTank
-			&& Settings->SharedTankRecoveryPolicy == ECatSharedTankRecoveryPolicy::AnyActivePlayer);
+	const bool bAllowed = bVictimAuthorityMatches;
 	if (!bAllowed || !Settings->IsTheftReady() || !IsCharacterSociallyActive(CatcherCharacter)
 		|| !IsCharacterSociallyActive(ThiefCharacter)
 		|| FVector::DistSquared(CatcherCharacter->GetActorLocation(), ThiefCharacter->GetActorLocation())
@@ -228,7 +238,7 @@ FCatTheftResult UCatSocialService::CatchTheft(AController* CatchingController, c
 	{
 		SubmitCaughtImprint(Frozen, CatcherStableNetId);
 		UE_LOG(LogCatSocial, Log, TEXT("Event=social_theft_caught ProtocolId=%s FishInstanceId=%s Returned=true"),
-			*TheftProtocolId.ToString(EGuidFormats::DigitsWithHyphens), *Frozen.Fish.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
+			*TheftProtocolId.ToString(EGuidFormats::DigitsWithHyphens), *Frozen.FishItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
 	}
 	return Finish(Result);
 }
@@ -468,7 +478,7 @@ void UCatSocialService::CancelTheftsForCharacter(const ACatCharacter* Character)
 	}
 }
 
-// 进食到期流程：按服务器 ProtocolId 验证协议、Character、鱼定义并完成身体 preflight；任一依赖失效就返还，全部有效才让 Items 不可逆消费并用原客户端 RequestId 关联效果。
+// 进食到期流程：按服务器 ProtocolId 验证协议、Character、鱼实例定义并完成身体 preflight；任一依赖失效就返还，全部有效才用原客户端 RequestId 关联身体效果。
 void UCatSocialService::HandleTheftWindowExpired(const FGuid TheftProtocolId)
 {
 	FActiveTheft* Theft = ActiveThefts.Find(TheftProtocolId);
@@ -478,19 +488,12 @@ void UCatSocialService::HandleTheftWindowExpired(const FGuid TheftProtocolId)
 		ReturnActiveTheft(TheftProtocolId);
 		return;
 	}
-	UCatItemsService* Items = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
 	ACatCharacter* Character = Theft ? Theft->ThiefCharacter.Get() : nullptr;
 	UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
-	UCatFishDefinition* Definition = Theft
-		? GetDefault<UCatFishCatalogSettings>()->FindRuntimeDefinition(Theft->Fish.FishDefinitionId) : nullptr;
-	if (!Theft || !Items || !Conditions || !Definition
+	UCatFishInventoryItemInstance* FishItem = Theft ? Theft->FishItem.Get() : nullptr;
+	UCatFishDefinition* Definition = FishItem ? FishItem->GetFishDefinition() : nullptr;
+	if (!Theft || !FishItem || !Conditions || !Definition
 		|| Conditions->ValidateFishConsumption(Definition) != ECatDomainCommandError::None)
-	{
-		ReturnActiveTheft(TheftProtocolId);
-		return;
-	}
-	const FCatFishTheftResult ItemsResult = Items->CommitStolenFishConsumption(TheftProtocolId);
-	if (!ItemsResult.Command.bCommitted)
 	{
 		ReturnActiveTheft(TheftProtocolId);
 		return;
@@ -502,12 +505,14 @@ void UCatSocialService::HandleTheftWindowExpired(const FGuid TheftProtocolId)
 			TEXT("Event=social_theft_body_commit_failed ProtocolId=%s RequestId=%s FishInstanceId=%s BodyError=%s BodyReplay=%s BodyReplayError=%s BodyRevision=%lld"),
 			*TheftProtocolId.ToString(EGuidFormats::DigitsWithHyphens),
 			*Theft->ClientRequestId.ToString(EGuidFormats::DigitsWithHyphens),
-			*ItemsResult.Fish.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+			*Theft->FishItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
 			*UEnum::GetValueAsString(Theft->Result.Body.Error),
 			Theft->Result.Body.bTerminalReplay ? TEXT("true") : TEXT("false"),
 			*UEnum::GetValueAsString(Theft->Result.Body.ReplayedTerminalError), Theft->Result.Body.Revision);
 	}
-	Theft->Result.Command = ItemsResult.Command;
+	Theft->Result.Command.RequestId = Theft->ClientRequestId;
+	Theft->Result.Command.bCommitted = true;
+	Theft->Result.Command.Error = ECatDomainCommandError::None;
 	Theft->Result.bRecoveryWindowOpen = false;
 	Theft->Result.bConsumed = true;
 	ACatfishingPlayerController* ThiefPlayerController = Cast<ACatfishingPlayerController>(Character->GetController());
@@ -521,33 +526,43 @@ void UCatSocialService::HandleTheftWindowExpired(const FGuid TheftProtocolId)
 		ThiefPlayerController->ClientReceiveTheftResult(ConsumedResult);
 	}
 	UE_LOG(LogCatSocial, Log, TEXT("Event=social_theft_consumed ProtocolId=%s FishInstanceId=%s"),
-		*TheftProtocolId.ToString(EGuidFormats::DigitsWithHyphens), *ItemsResult.Fish.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
+		*TheftProtocolId.ToString(EGuidFormats::DigitsWithHyphens), *ConsumedResult.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
 }
 
-// 返还辅助流程：按服务器 ProtocolId 调用 Items 原位返还；成功后用原客户端 RequestId 更新 Begin 终态，再移除 thief 索引/协议。
+// 返还辅助流程：按服务器 ProtocolId 把同一个鱼实例放回来源库存；成功后用原客户端 RequestId 更新 Begin 终态，再移除 thief 索引/协议。
 FCatTheftResult UCatSocialService::ReturnActiveTheft(const FGuid TheftProtocolId)
 {
 	FCatTheftResult Result;
 	Result.TheftProtocolId = TheftProtocolId;
 	FActiveTheft* Theft = ActiveThefts.Find(TheftProtocolId);
 	Result.Command.RequestId = Theft ? Theft->ClientRequestId : FGuid();
-	UCatItemsService* Items = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
-	if (!Theft || !Items)
+	UCatInventoryComponent* SourceInventory = Theft ? Theft->SourceInventory.Get() : nullptr;
+	UCatFishInventoryItemInstance* FishItem = Theft ? Theft->FishItem.Get() : nullptr;
+	if (!Theft || !SourceInventory || !FishItem)
 	{
 		Result.Command.Error = ECatDomainCommandError::NotFound;
 		return Result;
 	}
-	const FCatFishTheftResult ItemsResult = Items->ReturnStolenFish(TheftProtocolId);
 	Result = Theft->Result;
-	Result.Command = ItemsResult.Command;
-	if (ItemsResult.Command.bCommitted)
+	Result.Command.RequestId = Theft->ClientRequestId;
+	FCatInventoryReceiveBatch ReturnBatch;
+	FCatInventoryInstanceEntry& ReturnEntry = ReturnBatch.InstanceEntries.AddDefaulted_GetRef();
+	ReturnEntry.ItemInstance = FishItem;
+	ReturnEntry.Count = 1;
+	if (SourceInventory->TryAddInventoryBatch(ReturnBatch))
 	{
+		Result.Command.bCommitted = true;
+		Result.Command.Error = ECatDomainCommandError::None;
 		Result.bRecoveryWindowOpen = false;
 		Result.bReturned = true;
 		// 返还成功是该 Begin 请求的最终事实；必须在移除私有协议前冻结身份键与完整 returned 结果。
 		TheftTerminalCache.Add(MakeTerminalKey(Theft->ThiefStableNetId, TEXT("BeginTheft"), Theft->ClientRequestId), Result);
 		ActiveTheftByThief.Remove(Theft->ThiefStableNetId);
 		ActiveThefts.Remove(TheftProtocolId);
+	}
+	else
+	{
+		Result.Command.Error = ECatDomainCommandError::CapacityExceeded;
 	}
 	return Result;
 }
@@ -568,8 +583,8 @@ void UCatSocialService::SubmitCaughtImprint(const FActiveTheft& Theft, const FSt
 	Candidate.CandidateId = FGuid::NewGuid();
 	Candidate.RunId = GameState->GetRunPublicState().Phase.RunId;
 	Candidate.EventType = Settings->TheftCaughtImprintEventId;
-	Candidate.SubjectId = Theft.Fish.FishInstanceId;
-	Candidate.FishDefinitionId = Theft.Fish.FishDefinitionId;
+	Candidate.SubjectId = Theft.FishItemInstanceId;
+	Candidate.FishDefinitionId = Theft.FishDefinitionId;
 	Candidate.ParticipantStableNetIds = {Theft.ThiefStableNetId, CatcherStableNetId};
 	Candidate.ParticipantCount = Candidate.ParticipantStableNetIds.Num();
 	if (Imprint->SubmitImprintCandidate(Candidate))

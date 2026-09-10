@@ -48,10 +48,10 @@ bool UCatFrontendSettingsModel::Initialize(ULocalPlayer* InLocalPlayer)
 }
 
 // 关闭流程：
-// 1. 丢弃未提交的草稿，防止同一 Model 被后续 LocalPlayer 复用时串入旧玩家设置。
-// 2. 递增异步请求代次、Cancel 活动请求的轮询和结果接收并释放它，使旧结果不能覆盖后续初始化；已受理的硬件切换无法撤回。
+// 1. 丢弃未提交的草稿，防止同一 Model 被后续 LocalPlayer 复用时串入前一个玩家设置。
+// 2. 递增异步请求代次、Cancel 活动请求的轮询和结果接收并释放它，使失效结果不能覆盖后续初始化；已受理的硬件切换无法撤回。
 // 3. 清除用户设置强引用和 LocalPlayer 弱引用，不调用 Apply 或 SaveSettings。
-// 4. 发布最终刷新，使仍存活的 View 读取安全默认值而不是悬挂的旧状态。
+// 4. 发布最终刷新，使仍存活的 View 读取安全默认值而不是悬挂的失效状态。
 void UCatFrontendSettingsModel::Shutdown()
 {
 	BoundLocalPlayer.Reset();
@@ -353,7 +353,7 @@ void UCatFrontendSettingsModel::SetDraftUIScale(const float NewUIScale)
 	PublishChanged(LOCTEXT("UIScaleDraftChanged", "界面缩放等待应用。"));
 }
 
-// 亮度可用性读取流程：GEngine 存在时 DisplayGamma 会被 FRenderTarget 真实读取；专用服务器或引擎启动早期没有渲染引擎时禁用。
+// 亮度可用性读取流程：GEngine 存在时 DisplayGamma 会被 FRenderTarget 真实读取；专用服务器或 UI 初始化阶段没有渲染引擎时禁用。
 bool UCatFrontendSettingsModel::IsBrightnessSettingAvailable() const
 {
 	return GEngine != nullptr;
@@ -506,7 +506,7 @@ bool UCatFrontendSettingsModel::IsOutputDeviceSettingAvailable() const
 // 设备枚举流程：
 // 1. 先拒绝重复请求和切图期间缺失的 LocalPlayer World，防止两个当前请求交叉覆盖同一组设备事实。
 // 2. 强持有单次请求并把页面代次绑定到原生完成委托；请求在所属音频设备上枚举，并核对活动设备标志。
-// 3. 请求存在即 pending；八秒超时或完成后解除等待，Shutdown 取消请求，旧结果不能覆盖重初始化后的列表。
+// 3. 请求存在即 pending；八秒超时或完成后解除等待，Shutdown 取消请求，失效结果不能覆盖重初始化后的列表。
 bool UCatFrontendSettingsModel::RefreshAudioOutputDevices()
 {
 	UWorld* World = GetLocalPlayerWorld();
@@ -573,10 +573,10 @@ bool UCatFrontendSettingsModel::IsAudioOutputDeviceOperationPending() const
 }
 
 // 应用流程：
-// 1. 先缓存恢复默认标志、旧输出设备偏好和需要真实重放的运行时差异，随后才允许 SetToDefaults 改写设置对象。
+// 1. 先缓存恢复默认标志、失效输出设备偏好和需要真实重放的运行时差异，随后才允许 SetToDefaults 改写设置对象。
 // 2. 若草稿来自恢复默认，让正式设置宿主回到干净默认状态，再把窗口、分辨率、画质与垂直同步草稿交给 UGameUserSettings。
 // 3. 独立尝试语言、Slate 缩放、Gamma、震动、OSS 语音、失焦音量和当前 World 的分类混音；失败项只影响返回值，不撤销其它已成功设置。
-// 4. 输出设备变化发起有界的活动确认请求；恢复系统默认时热切换使用枚举 ID，确认前临时保留旧偏好，确认后才保存为空。
+// 4. 输出设备变化发起有界的活动确认请求；恢复系统默认时热切换使用枚举 ID，确认前临时保留已有偏好，确认后才保存为空。
 // 5. 保存可立即确认的设置并重读草稿；如果存在输出设备 pending，View 会继续显示请求目标，等待回调给出最终文本。
 bool UCatFrontendSettingsModel::Apply()
 {
@@ -646,7 +646,7 @@ bool UCatFrontendSettingsModel::Apply()
 	if (bPendingAudioOutputDefaultRestore && ActiveAudioOutputRequest
 		&& ActiveAudioOutputRequest->GetRequestedDeviceId() == RequestedAudioOutputDeviceId)
 	{
-		// 恢复系统默认要等活动设备确认；这里保留旧覆盖，避免切换失败后无法兑现“未保存新选择”的回退承诺。
+		// 恢复系统默认要等活动设备确认；这里保留已有覆盖，避免切换失败后无法兑现“未保存新选择”的回退承诺。
 		UserSettings->SetAudioOutputDeviceId(SavedAudioOutputDeviceIdBeforeApply);
 	}
 	UserSettings->SaveSettings();
@@ -804,7 +804,7 @@ APlayerController* UCatFrontendSettingsModel::GetLocalPlayerController() const
 }
 
 // 设备请求完成流程：
-// 1. 同时核对页面代次和单次请求身份；Shutdown、重初始化或新请求之后的旧通知不修改列表、草稿或配置。
+// 1. 同时核对页面代次和单次请求身份；Shutdown、重初始化或新请求之后的失效通知不修改列表、草稿或配置。
 // 2. 解除当前等待并消费恢复系统默认标志；切换失败保留目标草稿供重试，成功后按普通设备 ID 或空默认偏好保存。
 // 3. 枚举成功时整代替换名称/ID 和系统默认值，只接收有名称与 ID 的设备，再建立可用草稿并通知 View。
 void UCatFrontendSettingsModel::HandleAudioOutputRequestCompleted(UCatAudioOutputRequest* Request,
@@ -812,7 +812,7 @@ void UCatFrontendSettingsModel::HandleAudioOutputRequestCompleted(UCatAudioOutpu
 {
 	if (RequestGeneration != AudioOutputDeviceRequestGeneration || !Request || ActiveAudioOutputRequest != Request)
 	{
-		UE_LOG(LogCatUI, Log, TEXT("Event=frontend_audio_output_stale_callback_ignored Request=%s Generation=%llu CurrentGeneration=%llu"),
+		UE_LOG(LogCatUI, Log, TEXT("Event=frontend_audio_output_superseded_callback_ignored Request=%s Generation=%llu CurrentGeneration=%llu"),
 			*GetNameSafe(Request), RequestGeneration, AudioOutputDeviceRequestGeneration);
 		return;
 	}

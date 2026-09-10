@@ -54,7 +54,7 @@ struct CATFISHING_API FCatFishingRodRotationResult
 	double IntegratedSeconds = 0.0;
 };
 
-/** 权威旋转求解的只读输入快照；预测不得写回姿态、滤波历史或努力累计量。 */
+/** 权威旋转求解的只读输入快照；预测不得写回姿态、滤波状态或努力累计量。 */
 struct CATFISHING_API FCatFishingRodRotationPrediction
 {
 	FCatFishingRodRotationInput Input;
@@ -78,9 +78,9 @@ struct CATFISHING_API FCatFishingRodRotationEffortSnapshot
 class CATFISHING_API FCatFishingRodEffortSampler
 {
 public:
-	/** 接入既有累计快照时建立基线，清除之前尚未消费的努力。 */
+	/** 接入累计快照时建立基线，清除尚未消费的努力。 */
 	void Reset(const FCatFishingRodRotationEffortSnapshot& Snapshot);
-	/** 返回本固定步分配量；同一快照只消费剩余积压，Epoch 变化先丢弃旧持有人的积压。 */
+	/** 返回本固定步分配量；同一快照只消费剩余积压，Epoch 变化先丢弃失效持有人的积压。 */
 	FCatFishingRodRotationEffortSnapshot Consume(
 		const FCatFishingRodRotationEffortSnapshot& Snapshot, double StepSeconds);
 

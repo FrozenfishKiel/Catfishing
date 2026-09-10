@@ -38,7 +38,7 @@ bool UCatFishStateTreeAuthoringLibrary::CreateOrUpdateDefaultFishBehaviorStateTr
 		return false;
 	}
 
-	// 整份 EditorData 由本工具拥有；重复执行会稳定重建默认拓扑，不在旧节点上做脆弱的增量修补。
+	// 整份 EditorData 由本工具拥有；重复执行会稳定重建默认拓扑，不做脆弱的增量修补。
 	FStateTreeEditorModule& EditorModule = FStateTreeEditorModule::GetModule();
 	const TSubclassOf<UStateTreeSchema> SchemaClass = UCatFishBehaviorStateTreeSchema::StaticClass();
 	UStateTreeEditorData* EditorData = NewObject<UStateTreeEditorData>(StateTree,
@@ -109,7 +109,7 @@ bool UCatFishStateTreeAuthoringLibrary::CreateOrUpdateDefaultFishingSessionState
 		return false;
 	}
 
-	// 与鱼行为树相同：整份 EditorData 稳定重建，避免依赖旧资产中的节点 Guid 做脆弱的二进制增量修补。
+	// 与鱼行为树相同：整份 EditorData 稳定重建，避免依赖当前资产中的节点 Guid 做脆弱的二进制增量修补。
 	FStateTreeEditorModule& EditorModule = FStateTreeEditorModule::GetModule();
 	const TSubclassOf<UStateTreeSchema> SchemaClass = UCatFishingSessionStateTreeSchema::StaticClass();
 	UStateTreeEditorData* EditorData = NewObject<UStateTreeEditorData>(StateTree,

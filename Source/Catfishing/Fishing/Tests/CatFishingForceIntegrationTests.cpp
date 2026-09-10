@@ -12,6 +12,7 @@
 #include "GameFramework/PlayerState.h"
 #include "GameFramework/PlayerController.h"
 #include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
@@ -239,7 +240,7 @@ bool FCatFishingMovementReplayTest::RunTest(const FString& Parameters)
 	const double ForwardTravel = Movement->GetExternalTractionTravelLimit(FVector::ForwardVector, 20.0);
 	TestTrue(TEXT("wall contact removes predicted carrier travel"), ForwardTravel < 0.2);
 	TestEqual(TEXT("collision query does not move the body"), Cat->GetActorLocation(), BlockedPosition);
-	TestEqual(TEXT("leaving the wall is not blocked by the old contact"), Movement->GetExternalTractionTravelLimit(-FVector::ForwardVector, 20.0), 20.0);
+	TestEqual(TEXT("leaving the wall is not blocked by the previous contact"), Movement->GetExternalTractionTravelLimit(-FVector::ForwardVector, 20.0), 20.0);
 	return !HasAnyErrors();
 }
 
@@ -267,7 +268,7 @@ bool FCatFishingCarrierHandoffTest::RunTest(const FString& Parameters)
 	const FTickPrerequisite FirstMovementTick(FirstMovement, FirstMovement->PrimaryComponentTick);
 	TestTrue(TEXT("loaded rod samples its endpoint after actual movement"), Rod->PrimaryActorTick.GetPrerequisites().Contains(FirstMovementTick));
 	Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true);
-	TestTrue(TEXT("temporary zero pull must retain endpoint sampling order"), Rod->PrimaryActorTick.GetPrerequisites().Contains(FirstMovementTick));
+	TestTrue(TEXT("zero pull must retain endpoint sampling order"), Rod->PrimaryActorTick.GetPrerequisites().Contains(FirstMovementTick));
 	Rod->OnRep_CarrierConstraintState();
 	TestTrue(TEXT("receiving a zero-pull snapshot must retain the same order"), Rod->PrimaryActorTick.GetPrerequisites().Contains(FirstMovementTick));
 	Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 0.0, 0.0, 0.0, 0.0, true, 0.0, 50.0,
@@ -278,11 +279,11 @@ bool FCatFishingCarrierHandoffTest::RunTest(const FString& Parameters)
 	Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 100.0, 100.0, 1.0, 1.0);
 	const auto OldConstraint = Rod->CarrierConstraintState;
 	TestTrue(TEXT("handoff succeeds"), Rod->SetOperatorFromAuthority(Second, Rod->GetPresentationState().RodActorRevision));
-	TestFalse(TEXT("old holder releases immediately even before presentation BeginPlay"), FirstMovement->GetExternalTraction().bActive);
-	TestFalse(TEXT("handoff releases the former movement prerequisite"), Rod->PrimaryActorTick.GetPrerequisites().Contains(FirstMovementTick));
+	TestFalse(TEXT("previous holder releases immediately even before presentation BeginPlay"), FirstMovement->GetExternalTraction().bActive);
+	TestFalse(TEXT("handoff releases the previous movement prerequisite"), Rod->PrimaryActorTick.GetPrerequisites().Contains(FirstMovementTick));
 	Rod->CarrierConstraintState = OldConstraint;
 	Rod->OnRep_CarrierConstraintState();
-	TestFalse(TEXT("out-of-order old force cannot attach to the new holder"), SecondMovement->GetExternalTraction().bActive);
+	TestFalse(TEXT("out-of-order previous force cannot attach to the new holder"), SecondMovement->GetExternalTraction().bActive);
 	TestTrue(TEXT("new holder can receive a new authority solve"), Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 200.0, 100.0, 1.0, 1.0));
 	TestEqual(TEXT("new character receives new force"), SecondMovement->GetExternalTraction().AccelerationCentimetersPerSecondSquared, 200.0);
 	TestTrue(TEXT("last holder leaves"), Rod->SetOperatorFromAuthority(nullptr, Rod->GetPresentationState().RodActorRevision));
@@ -409,7 +410,9 @@ bool FCatFishingShortLineTractionTest::RunTest(const FString& Parameters)
 {
 	const auto* Definition = LoadObject<UCatEquipmentDefinition>(nullptr, TEXT("/Game/Catfishing/Data/Equipment/Equip_Rod_StarterT1.Equip_Rod_StarterT1"));
 	if (!TestNotNull(TEXT("formal rod anchor calibration is available"), Definition)) return false;
-	AddInfo(FString::Printf(TEXT("FormalTip=%s FormalGrip=%s"), *Definition->RodTipLocalTransform.ToString(), *Definition->GripLocalTransform.ToString()));
+	const UCatEquipmentFragment_Rod* RodFragment = Definition->FindFragment<UCatEquipmentFragment_Rod>();
+	if (!TestNotNull(TEXT("formal rod owns anchor calibration fragment"), RodFragment)) return false;
+	AddInfo(FString::Printf(TEXT("FormalTip=%s FormalGrip=%s"), *RodFragment->RodTipLocalTransform.ToString(), *RodFragment->GripLocalTransform.ToString()));
 	for (const double FishMass : {5.535, 15.0})
 	for (const int32 Rate : {20, 60, 120})
 	{
@@ -432,7 +435,7 @@ bool FCatFishingShortLineTractionTest::RunTest(const FString& Parameters)
 		Floor->SetActorTransform(FTransform(FRotator::ZeroRotator, FVector(0, 0, -140), FVector(100, 100, 1)));
 		Movement->SetMovementMode(MOVE_Walking);
 		auto* Rod = World->SpawnActor<ACatFishingRodActor>();
-		Rod->ConfigureCanonicalAnchorsFromAuthority(Definition->RodTipLocalTransform, Definition->StandLocalTransform, Definition->GripLocalTransform);
+		Rod->ConfigureCanonicalAnchorsFromAuthority(RodFragment->RodTipLocalTransform, RodFragment->StandLocalTransform, RodFragment->GripLocalTransform);
 		Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("ShortLineRod"), TEXT("Skin"), Player, Player, true, false);
 		Rod->RefreshHeldTransformFromAuthority();
 		auto C = ForceConfig();
@@ -533,7 +536,7 @@ bool FCatFishingJointMotionContractTest::RunTest(const FString& Parameters)
 	const auto Repaired = FCatFishingFightSimulator::Step(C, S, Rod, FVector::ForwardVector);
 	TestTrue(TEXT("past position error is repaired toward the line"), Repaired.ProposedFishWorldPosition.X < S.FishWorldPosition.X);
 	TestTrue(TEXT("position repair cannot reverse outward momentum"), Repaired.ResolvedFishVelocityCentimetersPerSecond.X > 0.0);
-	TestEqual(TEXT("old position error cannot become a new force spike"), Repaired.LineTensionNewtons, Moving.LineTensionNewtons, 1e-6);
+	TestEqual(TEXT("previous position error cannot become a new force spike"), Repaired.LineTensionNewtons, Moving.LineTensionNewtons, 1e-6);
 	S = ForceState(); S.CatAction = ECatFightCatAction::None;
 	S.LineLengthCentimeters += 100.0;
 	const auto Slack = FCatFishingFightSimulator::Step(C, S, Rod, FVector::ForwardVector);

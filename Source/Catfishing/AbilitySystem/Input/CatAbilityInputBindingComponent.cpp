@@ -43,7 +43,7 @@ void UCatAbilityInputBindingComponent::RefreshForPawn(APawn* Pawn)
 {
 	// 路由刷新流程：
 	// 1. 从 Pawn 的 AbilitySystemInterface 解析项目 ASC，不依赖具体 Character 类型。
-	// 2. 旧 ASC 若不同于新 ASC，先清掉仍按住的输入，防止旧身体继续消费边沿。
+	// 2. 上一个 ASC 若不同于新 ASC，先清掉仍按住的输入，防止失效身体继续消费边沿。
 	// 3. 新 ASC 也清一次输入，保证重生、复制 Pawn 和旅行后不会继承上一具身体的输入状态。
 	UCatAbilitySystemComponent* NewAbilitySystem = UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(Pawn);
 	if (UCatAbilitySystemComponent* PreviousAbilitySystem = RoutedAbilitySystem.Get();

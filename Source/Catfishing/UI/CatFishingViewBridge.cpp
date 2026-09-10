@@ -13,7 +13,7 @@ UCatFishingViewBridge* UCatFishingViewBridge::CreateFishingViewBridge(UObject* O
 	return NewObject<UCatFishingViewBridge>(Outer ? Outer : GetTransientPackage());
 }
 
-// 客户端只能看到复制事实；先找玩家当前占据的主操作鱼竿，再按 RodActor 匹配会话，避免同一玩家多竿抛线后随机绑定旧会话。
+// 客户端只能看到复制事实；先找玩家当前占据的主操作鱼竿，再按 RodActor 匹配会话，避免同一玩家多竿抛线后随机绑定错误会话。
 ACatFishingSession* UCatFishingViewBridge::FindFishingSessionForPlayerState(UObject* WorldContextObject,
 	APlayerState* PlayerState)
 {
@@ -32,7 +32,7 @@ ACatFishingSession* UCatFishingViewBridge::FindFishingSessionForPlayerState(UObj
 	return nullptr;
 }
 
-// 同样只读复制过来的公开事实：Rod 的 OperatorPlayerStates 是完整占位数组，OperatorPlayerState 只代表主位；
+// 同样只读复制过来的公开事实：Rod 的 OperatorPlayerStates 是完整占位数组，第 0 项代表主位；
 // 客户端与服务器看到的是同一份值，不需要（也拿不到）服务器侧的 DeployedRodByPlayerState 索引。
 ACatFishingRodActor* UCatFishingViewBridge::FindRodOperatedByPlayerState(UObject* WorldContextObject,
 	APlayerState* PlayerState)
@@ -54,7 +54,7 @@ ACatFishingRodActor* UCatFishingViewBridge::FindRodOperatedByPlayerState(UObject
 
 bool UCatFishingViewBridge::BindSession(ACatFishingSession* Session)
 {
-	// 绑定流程：先消费旧会话委托，再保存新会话弱引用并订阅 Snapshot 变化；首次绑定立即刷新，保证 UI 不等下一次复制事件。
+	// 绑定流程：先解绑上一份会话委托，再保存新会话弱引用并订阅 Snapshot 变化；首次绑定立即刷新，保证 UI 不等下一次复制事件。
 	UnbindSession();
 	if (!Session) return false;
 	BoundSession = Session;
@@ -67,7 +67,7 @@ bool UCatFishingViewBridge::BindSession(ACatFishingSession* Session)
 
 void UCatFishingViewBridge::UnbindSession()
 {
-	// 解绑流程：只有旧会话仍有效时才用保存的句柄移除委托；Actor 已销毁时清本地状态即可，弱引用不会延长生命周期。
+	// 解绑流程：当前绑定会话仍有效时用保存的句柄移除委托；Actor 已销毁时清本地状态即可，弱引用不会延长生命周期。
 	if (ACatFishingSession* Session = BoundSession.Get())
 	{
 		Session->OnSnapshotChanged.Remove(SnapshotChangedHandle);
@@ -98,7 +98,7 @@ void UCatFishingViewBridge::RefreshFromSession()
 
 void UCatFishingViewBridge::HandleBoundSessionDestroyed(AActor* DestroyedActor)
 {
-	// 销毁回调只表示当前绑定会话不再可展示；清空后广播默认 DTO，具体重新查找由 HUD Model 下一次调和负责。
+	// 销毁回调只表示当前绑定会话已不可展示；清空后广播默认 DTO，具体重新查找由 HUD Model 下一次调和负责。
 	(void)DestroyedActor;
 	UnbindSession();
 	OnViewStateChanged.Broadcast(ViewState);

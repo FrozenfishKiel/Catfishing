@@ -19,7 +19,7 @@ public:
 	/** Mesh-local flexible axis of the existing formal rod. The source mesh is authored along +Z. */
 	UPROPERTY(Config, EditAnywhere, Category="RodBend")
 	FVector RodBendAxisLocal = FVector::UpVector;
-	/** Fraction of the source mesh span reserved for the rigid grip/reel. */
+	/** Fraction of the source mesh span kept rigid for the grip/reel. */
 	UPROPERTY(Config, EditAnywhere, Category="RodBend", meta=(ClampMin="0", ClampMax="0.9"))
 	double RodBendRigidFraction = 0.25;
 	/** Transverse line force at half the maximum cosmetic bend. No gameplay stiffness or strength limit. */
@@ -51,10 +51,6 @@ public:
 	 */
 	UPROPERTY(Config, EditAnywhere, Category="Animation")
 	TSoftObjectPtr<UAnimMontage> CastMontage;
-
-	/** 服务器确认断线终局后，在当前钓手身上播放的一次性受力/拉空表现。 */
-	UPROPERTY(Config, EditAnywhere, Category="Animation")
-	TSoftObjectPtr<UAnimMontage> LineBrokenMontage;
 
 	/** Condition 确认猫脚点进入危险水深后，在当前钓手身上播放的一次性落水表现。 */
 	UPROPERTY(Config, EditAnywhere, Category="Animation")

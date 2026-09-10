@@ -91,11 +91,11 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bCanOpenInventory = true;
 
-	/** 猫状态调试摘要是否显示在主界面上；默认关闭以避免正式 HUD 出现研发态属性文本，只由临时排查显式开启。 */
+	/** 猫状态调试摘要是否显示在主界面上；默认关闭以避免正式 HUD 出现研发态属性文本，只由诊断排查显式开启。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bShowCatStatusDebugText = false;
 
-	/** 钓鱼调试反馈是否显示在主界面上；默认关闭以避免空闲状态出现流程诊断文案，只由临时排查显式开启。 */
+	/** 钓鱼调试反馈是否显示在主界面上；默认关闭以避免空闲状态出现流程诊断文案，只由诊断排查显式开启。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bShowFishingFeedbackDebugText = false;
 

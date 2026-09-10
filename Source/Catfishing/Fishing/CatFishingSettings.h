@@ -33,7 +33,7 @@ public:
 
 	/** 读取终态快照的有界复制留存秒数；未裁或 runtime gate 关闭时清零并返回 false。 */
 	bool TryGetTerminalReplicationWindow(double& OutWindowSeconds) const;
-	/** 同步加载唯一正式搏斗平衡资产；缺失、关闭或字段非法时返回空，不回退到 C++/ini 第二套数值。 */
+	/** 同步加载正式搏斗平衡资产；缺失、关闭或字段非法时返回空，由调用方停止对应流程。 */
 	const UCatFishingFightBalanceDefinition* LoadFightBalanceDefinition() const;
 	const UCatBitePersonalityDefinition* FindBitePersonality(FName PersonalityId) const;
 	const UCatFightPersonalityDefinition* FindFightPersonality(FName PersonalityId) const;
@@ -42,7 +42,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
 	bool bEnableFishingRuntime = false;
 
-	/** 唯一 ST_FishingSession 软引用；空时不回退 C++ FSM。 */
+	/** ST_FishingSession 软引用；空引用表示钓鱼会话的正式运行配置不完整。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Runtime")
 	TSoftObjectPtr<UStateTree> FishingSessionStateTree;
 
@@ -60,7 +60,7 @@ public:
 	/** 真咬响应窗口秒数；0 表示 Unset，资产 Task 不应启动计时。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Tuning", meta = (ClampMin = "0"))
 	double TrueBiteWindowSeconds = 0.0;
-	/** 无窝时落水到真咬的目标平均秒数；替代旧的每秒频率调参，计入等待上限。 */
+	/** 无窝时落水到真咬的目标平均秒数；等待预算会同时计入慢浮下限与预警时长。 */
 	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
 	double NoChumMeanBiteDelaySeconds = 0.0;
 	UPROPERTY(Config, EditAnywhere, Category="Bite|Chum", meta=(ClampMin="0", Units="s"))
@@ -86,10 +86,10 @@ public:
 	/** 服务器权威固定模拟步长，属于运行时技术配置，不进入策划平衡资产。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.001")) double FixedFightStepSeconds = 0.05;
 
-	/** 一根部署鱼竿最多可占用的操作位；当前产品使用左右两位，数组/站位算法预留到更多协作者。 */
+	/** 一根部署鱼竿最多可占用的操作位；当前产品使用左右两位，数组和站位算法可扩展到更多协作者。 */
 	UPROPERTY(Config, EditAnywhere, Category="Rod|Operators", meta=(ClampMin="1", ClampMax="8"))
 	int32 MaximumRodOperatorSlots = 2;
-	/** 左右第一对站位中心之间的距离；0 表示所有槽位暂时共用原 Stand 锚点。 */
+	/** 左右第一对站位中心之间的距离；0 表示所有槽位共用当前 Stand 锚点。 */
 	UPROPERTY(Config, EditAnywhere, Category="Rod|Operators", meta=(ClampMin="0", Units="cm"))
 	double RodOperatorSlotSpacingCentimeters = 140.0;
 

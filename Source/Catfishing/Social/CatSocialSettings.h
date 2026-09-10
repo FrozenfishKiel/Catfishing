@@ -34,17 +34,13 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Theft", meta = (ClampMin = "0.0"))
 	double TheftEatingWindowSeconds = 0.0;
 
-	/** 发起偷鱼时角色到真实容器宿主的最大距离，单位厘米；0 表示权威交互边界未裁。 */
+	/** 发起偷鱼时角色到来源库存宿主的最大距离，单位厘米；0 表示权威交互边界未裁。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Theft", meta = (ClampMin = "0.0"))
 	double TheftInteractionRangeCentimeters = 0.0;
 
 	/** 追回时合法捕手到当前小偷角色的最大距离，单位厘米；0 表示追逐命中边界未裁。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Theft", meta = (ClampMin = "0.0"))
 	double TheftCatchRangeCentimeters = 0.0;
-
-	/** 共享鱼缸的追回权限；Undecided 时共享缸偷鱼拒绝，地面鱼护里的鱼仍按捕获者身份裁决。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Theft")
-	ECatSharedTankRecoveryPolicy SharedTankRecoveryPolicy = ECatSharedTankRecoveryPolicy::Undecided;
 
 	/** 偷鱼被抓的正式印记事件 ID；None 时不生成占位候选。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Theft")

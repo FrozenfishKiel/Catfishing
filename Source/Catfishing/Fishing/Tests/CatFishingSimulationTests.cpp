@@ -108,12 +108,12 @@ bool FCatFishingShoreWaterwardRecoveryTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("gap recovery does not jump across the gap to the water inset"),
 		GapRecovery.FishWorldPosition.X < 0.0);
 
-	// 0.25 cm 自游小步覆盖旧 1 cm 修正阈值，不能被归为无需处理而吸回最近岸点。
+	// 0.25 cm 自游小步覆盖低于 1 cm 的连续修正，不能被归为无需处理而吸回最近岸点。
 	Input.CurrentFishWorldPosition = FVector(0.1, 0.0, 0.0);
 	Input.CandidateFishWorldPosition = FVector(0.35, 0.0, 0.0);
 	Input.ResolvedWaterWorldPosition = FVector::ZeroVector;
 	const auto BoundaryRecovery = FCatFishFightMotionSolver::ResolveLiveFishShoreContact(Input);
-	TestTrue(TEXT("shore correction smaller than the former one-centimeter threshold remains valid"), BoundaryRecovery.bSucceeded);
+	TestTrue(TEXT("sub-centimeter shore correction remains valid"), BoundaryRecovery.bSucceeded);
 	TestTrue(TEXT("boundary tolerance cannot erase a small swim into the lake"),
 		BoundaryRecovery.FishWorldPosition.Equals(Input.CandidateFishWorldPosition, 1e-6));
 
@@ -261,7 +261,7 @@ bool FCatFishingRodTorqueRecoveryTest::RunTest(const FString& Parameters)
 	Input.RequestedAim = FRotator(0.0, 120.0, 0.0);
 	Input.DeltaSeconds = 1.0 / 60.0;
 	FCatFishingRodRotationResult Step;
-	// 追加受载阻尼只延长趋近平衡的过程；保留原有平衡角与停转精度。
+	// 追加受载阻尼只延长趋近平衡的过程；平衡角与停转精度保持当前契约。
 	for (int32 Index = 0; Index < 480; ++Index)
 	{
 		Step = AdvanceRodRotation(Input);
@@ -289,7 +289,7 @@ bool FCatFishingRodTorqueRecoveryTest::RunTest(const FString& Parameters)
 	{
 		Step = AdvanceRodRotation(Input);
 	}
-	TestTrue(TEXT("more cat strength crosses the former balance angle without unlocking"), Step.ActualAim.Yaw > 90.0);
+	TestTrue(TEXT("more cat strength crosses the balance angle without unlocking"), Step.ActualAim.Yaw > 90.0);
 	Input.MaximumFishTorque = 0.0;
 	for (int32 Index = 0; Index < 180; ++Index)
 	{
@@ -360,7 +360,7 @@ bool FCatFishingRodLoadJitterTest::RunTest(const FString& Parameters)
 					: FRotator(0.0, bEvenStep ? -25.0 : 25.0, 0.0).Vector();
 				if (Path == 1)
 				{
-					// 对照只在测试中把历史值直接设成目标，重现旧的阶跃转矩；生产无旁路。
+					// 对照只在测试中把上一帧值直接设成目标，重现阶跃转矩；生产无旁路。
 					Input.PreviousSmoothedFishPullStrengthMeters = Input.PullAxis * Input.MaximumFishTorque;
 				}
 				const double PreviousYaw = Input.CurrentAim.Yaw;
@@ -471,7 +471,7 @@ bool FCatFishingRodLoadedDampingTest::RunTest(const FString& Parameters)
 			for (int32 Path = 0; Path < 2; ++Path)
 			{
 				auto& Input = Inputs[Path];
-				// 保留两条路径相同的 0.15 s 负载滤波，覆盖日志中的大转矩松绷切换。
+				// 两条路径使用相同的 0.15 s 负载滤波，覆盖日志中的大转矩松绷切换。
 				Input.MaximumFishTorque = bTaut ? 300.0 : 0.0;
 				Input.PullAxis = FRotator(0.0, bTaut ? -20.0 : 20.0, 0.0).Vector();
 				const double PreviousYaw = Input.CurrentAim.Yaw;
@@ -965,13 +965,13 @@ bool FCatFishingEqualStrengthConstraintTest::RunTest(const FString& Parameters)
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingStrongFishContinuousFightTest,
-	"Catfishing.Unit.Fishing.Simulation.StrongerFishContinuesCoupledMotionPastFormerBreakThreshold",
+	"Catfishing.Unit.Fishing.Simulation.StrongerFishContinuesCoupledMotionPastBreakThreshold",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingStrongFishContinuousFightTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	// 最近联机的 72.406 力量黑鱼曾在 0.41 秒被旧承载阈值结束；覆盖松左键和持续收线。
+	// 覆盖高力量鱼在松左键和持续收线下不能被承载阈值提前结束。
 	for (const double FishStrength : {53.38, 72.406, 150.0})
 	{
 		for (const ECatFightCatAction Action : {ECatFightCatAction::None, ECatFightCatAction::Pull})
@@ -990,7 +990,7 @@ bool FCatFishingStrongFishContinuousFightTest::RunTest(const FString& Parameters
 			{
 				const auto Step = FCatFishingFightSimulator::Step(Config, State, Rod, FVector::ForwardVector);
 				if (!TestTrue(TEXT("强鱼的连续受力步骤有效"), Step.bSucceeded)) return false;
-				if (!TestEqual(TEXT("力量高于猫和旧承载值仍继续搏斗"), Step.Outcome, ECatFightStepOutcome::None)) return false;
+				if (!TestEqual(TEXT("力量高于猫和承载值仍继续搏斗"), Step.Outcome, ECatFightStepOutcome::None)) return false;
 				TestTrue(TEXT("真实牵引加速度始终有限且非负"), FMath::IsFinite(Step.CarrierPullAccelerationCentimetersPerSecondSquared) && Step.CarrierPullAccelerationCentimetersPerSecondSquared >= 0.0);
 				bSawStrongConfrontation |= Step.bStrongConfrontation;
 				Rod.CarrierVelocityCentimetersPerSecond.X = FMath::Min(160.0,

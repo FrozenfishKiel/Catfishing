@@ -29,7 +29,7 @@ struct CATFISHING_API FCatFishingFightRunnerInit
 	FCatWaterRegionHandle WaterRegion;
 	FCatFightSimulationConfig Config;
 	FCatFightSimulationState InitialState;
-	/** 该玩家服务器已确认的最新连续输入序号；新 Runner 从此序号继续拒绝旧边沿。 */
+	/** 该玩家服务器已确认的最新连续输入序号；接力后的 Runner 从此序号继续拒绝已经确认过的边沿输入。 */
 	int64 InitialInputSequence = 0;
 	/** 进入本场搏斗时物理左/右键是否仍被按住；RefreshCatAction 统一裁决，右键优先。 */
 	bool bInitialPullHeld = false;
@@ -38,7 +38,7 @@ struct CATFISHING_API FCatFishingFightRunnerInit
 	FVector2D CalmDurationRangeSeconds = FVector2D::ZeroVector;
 	/** 向外游（发力）时长区间。 */
 	FVector2D StruggleDurationRangeSeconds = FVector2D::ZeroVector;
-	/** 鱼体力低于该比例后休息期乘以 LowStaminaRestMultiplier（规格 4.6 临时口径）。 */
+	/** 鱼体力低于该比例后休息期乘以 LowStaminaRestMultiplier。 */
 	double LowStaminaRestThreshold = 0.5;
 	double LowStaminaRestMultiplier = 1.5;
 	FCatFishSteeringConfig SteeringConfig;
@@ -75,14 +75,14 @@ public:
 	bool SetReeling(APlayerState* InputPlayerState, int64 InputSequence, bool bInReeling);
 	/** 右键按住/松开线杯并免耗体回体；零体力强制拖拽仍优先。 */
 	bool SetSlacking(APlayerState* InputPlayerState, int64 InputSequence, bool bInSlacking);
-	/** 主操作手离竿后进入无人值守松线；Runner 继续推进，但不再读写旧玩家的力量或体力。 */
+	/** 主操作手离竿后进入无人值守松线；Runner 继续推进，并清空前一个玩家的力量和体力引用。 */
 	bool BeginUnattendedSlackFromAuthority();
 	/** 鱼力竭关闭 AI 与鱼端驱动力并立即清除猫端牵引；固定步和同一线长约束继续负责收近。 */
 	bool SetFishExhaustedFromAuthority();
 	bool IsFishExhaustedForAuthority() const { return State.bFishExhausted; }
 	/** 鱼当前是否接触真实干地；水岸转换由连续表面查询裁决，不永久锁在某一种表面。 */
 	bool IsFishBeachedForAuthority() const { return bFishBeached; }
-	/** 搏斗接力时原子迁移 ASC、力量、体力上限/当前值与新玩家自己的输入序号域。 */
+	/** 搏斗接力时原子切换 ASC、力量、体力上限/当前值与新玩家自己的输入序号域。 */
 	bool TransferOperatorFromAuthority(APlayerState* NewPlayerState, UCatAbilitySystemComponent* NewAbilitySystem,
 		double NewCatStrength, double NewCatStaminaMaximum, double NewCatStamina,
 		int64 InitialInputSequence, bool bInitialPullHeld, bool bInitialSlackHeld);

@@ -29,7 +29,7 @@ public:
 
 	/**
 	 * 解绑 Save 子系统通知并清空生命周期弱引用；Controller、World 或 LocalPlayer 销毁时可重复调用。
-	 * 本方法不取消已经被正式 Save 子系统接管的异步磁盘请求，迟到通知会因解绑而不再作用于 View。
+	 * 本方法不取消已经被正式 Save 子系统接管的异步磁盘请求，迟到通知会因解绑而被丢弃。
 	 */
 	void Shutdown();
 

@@ -45,7 +45,7 @@ public:
 	FCatHUDModelChanged OnViewStateChanged;
 
 protected:
-	/** UObject 销毁兜底；即使外部没有显式 Unbind，也会收掉 Run 订阅和本地等待 Timer。 */
+	/** UObject 销毁清理；即使外部没有显式 Unbind，也会收掉 Run 订阅和本地等待 Timer。 */
 	virtual void BeginDestroy() override;
 
 private:
@@ -73,7 +73,7 @@ private:
 	/** Run GameState 重试 Tick；发现 GameState 后交给观察者接线入口完成首次刷新和订阅，否则保持等待。 */
 	void HandleRunGameStateBindingRetry();
 
-	/** Run 公开快照变化入口；重读天数和阶段相关 HUD 投影，避免客户端复制到达后界面继续显示旧天数。 */
+	/** Run 公开快照变化入口；重读天数和阶段相关 HUD 投影，避免客户端复制到达后界面继续显示失效天数。 */
 	void HandleRunPublicStateChanged();
 
 	/** Fishing 会话投影变化入口；Bridge 已经更新自身，Model 只重建 HUD 文本。 */

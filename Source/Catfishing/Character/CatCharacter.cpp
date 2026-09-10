@@ -9,29 +9,11 @@
 #include "Animation/AnimMontage.h"
 #include "Condition/CatConditionComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Growth/CatGrowthComponent.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/Presentation/CatFishingCameraComponent.h"
+#include "Inventory/CatBackPackComponent.h"
 #include "Inventory/CatInventoryComponent.h"
-#include "Inventory/CatInventorySettings.h"
-
-namespace
-{
-	// 初始随身库存容量迁移流程：角色创建正式库存时默认读 InventorySettings；旧 EquipmentSettings 被测试或诊断改值时保留一次兼容覆盖。
-	int32 ResolveInitialPlayerInventorySlotCapacity()
-	{
-		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
-		const int32 InventorySlotCapacity =
-			InventorySettings != nullptr ? InventorySettings->GetPlayerInventorySlotCapacity() : 0;
-		const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
-		const int32 LegacySlotCapacity =
-			EquipmentSettings != nullptr ? FMath::Max(0, EquipmentSettings->InventorySlotCapacity)
-			: UCatInventorySettings::ProjectDefaultPlayerInventorySlotCapacity;
-		return LegacySlotCapacity != UCatInventorySettings::ProjectDefaultPlayerInventorySlotCapacity
-			? LegacySlotCapacity : InventorySlotCapacity;
-	}
-}
 
 // 构造流程：一次创建 Character-owned ASC/AttributeSet、离散身体状态、吃鱼成长、正式随身库存和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
 ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
@@ -44,7 +26,7 @@ ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
 	AbilitySystemComponent->AddAttributeSetSubobject(SurvivalAttributes.Get());
 	ConditionComponent = CreateDefaultSubobject<UCatConditionComponent>(TEXT("ConditionComponent"));
 	GrowthComponent = CreateDefaultSubobject<UCatGrowthComponent>(TEXT("GrowthComponent"));
-	InventoryComponent = CreateDefaultSubobject<UCatInventoryComponent>(TEXT("InventoryComponent"));
+	InventoryComponent = CreateDefaultSubobject<UCatBackPackComponent>(TEXT("InventoryComponent"));
 	EquipmentComponent = CreateDefaultSubobject<UCatEquipmentComponent>(TEXT("EquipmentComponent"));
 	FishingCameraComponent = CreateDefaultSubobject<UCatFishingCameraComponent>(TEXT("FishingCameraComponent"));
 }
@@ -75,19 +57,18 @@ UCatConditionComponent* ACatCharacter::GetConditionComponent() const
 	return ConditionComponent;
 }
 
-// Growth 读取流程：直接返回构造期唯一组件；吃鱼入口只调用这一处，避免 Items、Condition 或 UI 各自缓存经验槽。
+// Growth 读取流程：直接返回构造期唯一组件；吃鱼入口只调用这一处，避免 Inventory、Condition 或 UI 各自缓存经验槽。
 UCatGrowthComponent* ACatCharacter::GetGrowthComponent() const
 {
 	return GrowthComponent;
 }
 
 // 一次性表现广播落地点：挥网仍由本地 Ability 先播，所以发起端跳过；Primary 输入有瞄准/提竿/收线
-// 三种语义，已不再按下即播，因此提竿事件也必须让发起端收到服务器确认后的表现。
+// 三种语义都等待服务器确认；提竿事件也必须让发起端收到确认后的表现。
 void ACatCharacter::Multicast_PlayCosmeticEvent_Implementation(const FGameplayTag EventTag)
 {
-	// 提竿、断线和落水都是服务器裁决后才知道的结果，本机玩家也必须收到；只有挥网等预测动作跳过本机重播。
+	// 提竿和落水都是服务器裁决后才知道的结果，本机玩家也必须收到；只有挥网等预测动作跳过本机重播。
 	const bool bServerConfirmed = EventTag == CatFishingAbilityTags::Cosmetic_Fishing_HookPull
-		|| EventTag == CatFishingAbilityTags::Cosmetic_Fishing_LineBroken
 		|| EventTag == CatFishingAbilityTags::Cosmetic_Fishing_CatInWater;
 	const bool bLocallyPredicted = !bServerConfirmed;
 	if (!EventTag.IsValid() || (IsLocallyControlled() && bLocallyPredicted))
@@ -140,7 +121,7 @@ bool ACatCharacter::PlayBodyActionMontageFromPresentation(const FGameplayTag Bod
 bool ACatCharacter::StopBodyActionMontageFromPresentation(const FGameplayTag BodyActionEventTag)
 {
 	// Montage 停止流程：专服和空动作标签直接拒绝；客户端按同一表现设置找到本动作 Montage，缺配置时不做动画副作用并返回 false。
-	// 返回 false 不代表停止表现广播失败，上层仍会调用 BP_StopBodyActionPresentation，正式蓝图可用它清理非 Montage 表现或执行兜底恢复。
+	// 返回 false 不代表停止表现广播失败，上层仍会调用 BP_StopBodyActionPresentation，正式蓝图可用它清理非 Montage 表现或执行恢复。
 	if (GetNetMode() == NM_DedicatedServer || !BodyActionEventTag.IsValid())
 	{
 		return false;
@@ -178,11 +159,7 @@ bool ACatCharacter::PlayFishingOutcomeMontageFromPresentation(const FGameplayTag
 		return false;
 	}
 	UAnimMontage* Montage = nullptr;
-	if (OutcomeEventTag == CatFishingAbilityTags::Cosmetic_Fishing_LineBroken)
-	{
-		Montage = Presentation->LineBrokenMontage.LoadSynchronous();
-	}
-	else if (OutcomeEventTag == CatFishingAbilityTags::Cosmetic_Fishing_CatInWater)
+	if (OutcomeEventTag == CatFishingAbilityTags::Cosmetic_Fishing_CatInWater)
 	{
 		Montage = Presentation->CatInWaterMontage.LoadSynchronous();
 	}
@@ -195,13 +172,13 @@ UCatEquipmentComponent* ACatCharacter::GetEquipmentComponent() const
 	return EquipmentComponent;
 }
 
-// Inventory 读取流程：直接返回构造期正式库存组件；后续商店、拾取和营地迁移都应从这个组件进入统一收货。
+// Inventory 读取流程：直接返回构造期正式库存组件；后续商店、拾取和营地转移都应从这个组件进入统一收货。
 UCatInventoryComponent* ACatCharacter::GetInventoryComponent() const
 {
 	return InventoryComponent;
 }
 
-// BeginPlay 流程：先让 Actor 与组件完成注册（ASC 此时会按引擎默认临时建立 ActorInfo），再用项目 gate 幂等刷新或清除，避免未裁 runtime 偷跑。
+// BeginPlay 流程：先让 Actor 与组件完成注册（ASC 此时会按引擎默认建立过渡 ActorInfo），再用项目 gate 幂等刷新或清除，避免未裁 runtime 偷跑。
 void ACatCharacter::BeginPlay()
 {
 	Super::BeginPlay();
@@ -216,18 +193,13 @@ void ACatCharacter::PossessedBy(AController* NewController)
 	InitializeAbilityActorInfo();
 	if (HasAuthority())
 	{
-		if (InventoryComponent)
+		if (UCatBackPackComponent* BackPack = Cast<UCatBackPackComponent>(InventoryComponent))
 		{
-			InventoryComponent->SetInventorySlotCountFromAuthority(ResolveInitialPlayerInventorySlotCapacity());
+			BackPack->InitializePlayerInventorySlotCapacityFromAuthority();
 		}
 		if (AbilitySystemComponent)
 		{
 			AbilitySystemComponent->GrantConfiguredDefaultAbilitySetFromAuthority();
-		}
-		if (EquipmentComponent)
-		{
-			EquipmentComponent->ApplyConfiguredStarterLoadoutFromAuthority();
-			EquipmentComponent->GrantStarterScoopNetIfConfigured();
 		}
 	}
 }
@@ -256,7 +228,7 @@ void ACatCharacter::PawnClientRestart()
 	InitializeAbilityActorInfo();
 }
 
-// 临时失去占有流程：只取消该身体当前 Ability；父类断开占有后才 ClearActorInfo，保留正式 Ability Spec 供同 Actor 重占有。跨系统 Fishing/Social 会话由 GameMode 的 Pawn 解除通知在存档捕获前统一收口。
+// 失去占有收口流程：只取消该身体当前 Ability；父类断开占有后才 ClearActorInfo，保留正式 Ability Spec 供同 Actor 重占有。跨系统 Fishing/Social 会话由 GameMode 的 Pawn 解除通知在存档捕获前统一收口。
 void ACatCharacter::UnPossessed()
 {
 	if (AbilitySystemComponent)

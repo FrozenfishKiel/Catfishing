@@ -6,77 +6,104 @@
 #include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
+#include "Equipment/CatEquipmentInventoryItemInstance.h"
 #include "Equipment/CatEquipmentSettings.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Float.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/CatFishingSession.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "Framework/Game/CatGameplayTypes.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
+#include "Inventory/CatInventorySettings.h"
 #include "UObject/StrongObjectPtr.h"
 
 #include <limits>
 
 namespace CatRodDurabilityTests
 {
-	// 只替换本测试的目录配置；所有实例、会话、磨损和维修均经过正式公开入口。
+	// 耐久测试夹具流程：只替换本测试窗口内的正式库存目录和装备策略配置；所有实例、会话和磨损均经过正式公开入口。
 	struct FFixture
 	{
+		/** 装备运行策略默认对象；本测试只写 Profile 信任策略，不向它注册物品定义。 */
 		UCatEquipmentSettings* Settings = GetMutableDefault<UCatEquipmentSettings>();
-		TArray<TSoftObjectPtr<UCatEquipmentDefinition>> SavedDefinitions = Settings->Definitions;
-		FName SavedDriftwoodId = Settings->DriftwoodDefinitionId;
+		/** 正式库存目录默认对象；本测试把临时装备定义注册到这里，验证路径与运行时一致。 */
+		UCatInventorySettings* InventorySettings = GetMutableDefault<UCatInventorySettings>();
+		/** 进入测试前的正式库存目录；析构时写回，防止本测试定义泄漏到后续用例。 */
+		TArray<FCatInventoryCatalogDefinition> SavedInventoryDefinitions = InventorySettings->Definitions;
+		/** 进入测试前的装配信任策略；本夹具只在测试窗口内启用服务器授予流程。 */
 		ECatDomainPolicy SavedTrustPolicy = Settings->ProfileLoadoutTrustPolicy;
-		int32 SavedCapacity = Settings->InventorySlotCapacity;
-		int32 SavedStackCapacity = Settings->InventoryQuantityStackCapacity;
-		TArray<TStrongObjectPtr<UCatEquipmentDefinition>> Definitions;
+		/** 进入测试前的玩家背包容量；测试需要固定容量，结束后恢复项目默认对象。 */
+		int32 SavedCapacity = InventorySettings->PlayerInventorySlotCapacity;
+		/** 进入测试前的数量堆叠容量；测试需要固定堆叠上限，结束后恢复项目默认对象。 */
+		int32 SavedStackCapacity = InventorySettings->DefaultQuantityStackCapacity;
+		/** 本测试创建的装备定义保活集合；目录身份仍由 InventorySettings::Definitions 持有。 */
+		TArray<TStrongObjectPtr<UCatEquipmentDefinition>> CreatedDefinitions;
+		/** 本测试持有的 authority World；析构由 FTestWorldWrapper 负责关闭。 */
 		FTestWorldWrapper WorldWrapper;
+		/** 本测试生成的角色；用来读取真实 EquipmentComponent 和 InventoryComponent。 */
 		ACatCharacter* Character = nullptr;
+		/** 角色拥有的装备组件；测试通过它提交公开装备和 Fishing 使用命令。 */
 		UCatEquipmentComponent* Equipment = nullptr;
+		/** 测试鱼竿实例的稳定 ID；后续磨损、跨会话和换竿断言都对齐这同一件物品。 */
 		FGuid RodId;
 
+		// 夹具恢复流程：测试结束时恢复正式库存目录、装备策略和容量配置；测试创建的运行对象交给 WorldWrapper 清理。
 		~FFixture()
 		{
-			Settings->Definitions = SavedDefinitions;
-			Settings->DriftwoodDefinitionId = SavedDriftwoodId;
+			InventorySettings->Definitions = SavedInventoryDefinitions;
 			Settings->ProfileLoadoutTrustPolicy = SavedTrustPolicy;
-			Settings->InventorySlotCapacity = SavedCapacity;
-			Settings->InventoryQuantityStackCapacity = SavedStackCapacity;
+			InventorySettings->PlayerInventorySlotCapacity = SavedCapacity;
+			InventorySettings->DefaultQuantityStackCapacity = SavedStackCapacity;
 		}
 
-		UCatEquipmentDefinition* AddDefinition(const FName Id, const ECatEquipmentKind Kind)
+		// 测试定义注册流程：创建一条内存装备定义，写入正式库存目录映射，并返回对象给调用方补齐对应能力字段。
+		UCatEquipmentDefinition* AddDefinition(const FName Id, const FName LoadoutSlotId = NAME_None)
 		{
 			UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>();
-			Definitions.Emplace(Definition);
+			CreatedDefinitions.Emplace(Definition);
 			Definition->EquipmentDefinitionId = Id;
-			Definition->Kind = Kind;
 			Definition->FunctionalRouteId = Id;
-			Definition->LoadoutSlotId = Id;
+			Definition->LoadoutSlotId = LoadoutSlotId;
 			Definition->bEnableRuntimeDefinition = true;
-			Settings->Definitions.Add(TSoftObjectPtr<UCatEquipmentDefinition>(Definition));
+			FCatInventoryCatalogDefinition& CatalogEntry = InventorySettings->Definitions.AddDefaulted_GetRef();
+			CatalogEntry.DefinitionId = Id;
+			CatalogEntry.ItemDefinition = TSoftObjectPtr<UCatInventoryItemDefinition>(Definition);
 			return Definition;
 		}
 
+		// 夹具初始化流程：先替换正式库存目录和必要装备策略，再创建 authority World、角色、PlayerState 和真实组件，最后通过公开授予入口拿到可部署鱼竿。
 		bool Initialize(FAutomationTestBase& Test)
 		{
-			Settings->Definitions.Reset();
+			InventorySettings->Definitions.Reset();
 			Settings->ProfileLoadoutTrustPolicy = ECatDomainPolicy::Enabled;
-			Settings->InventorySlotCapacity = 12;
-			Settings->InventoryQuantityStackCapacity = 20;
-			Settings->DriftwoodDefinitionId = TEXT("DurabilityTestWood");
-			UCatEquipmentDefinition* Rod = AddDefinition(TEXT("DurabilityTestRod"), ECatEquipmentKind::Rod);
-			Rod->MaximumRodDurability = 100.0;
-			Rod->MaximumLineLengthCentimeters = 1500.0;
-			Rod->HighTensionWearMultiplier = 1.0;
+			InventorySettings->PlayerInventorySlotCapacity = 12;
+			InventorySettings->DefaultQuantityStackCapacity = 20;
+			UCatEquipmentDefinition* Rod =
+				AddDefinition(TEXT("DurabilityTestRod"), UCatEquipmentDefinition::FishingRodLoadoutSlotId());
+			UCatEquipmentFragment_Rod* RodFragment = NewObject<UCatEquipmentFragment_Rod>(Rod);
+			Rod->Fragments.Add(RodFragment);
+			RodFragment->MaximumRodDurability = 100.0;
+			RodFragment->MaximumLineLengthCentimeters = 1500.0;
+			RodFragment->HighTensionWearMultiplier = 1.0;
 			Rod->UseActorClass = ACatFishingRodActor::StaticClass();
-			Rod->UseInventoryEffect = ECatEquipmentUseInventoryEffect::HoldInstanceUntilUnUse;
-			UCatEquipmentDefinition* Bait = AddDefinition(TEXT("DurabilityTestBait"), ECatEquipmentKind::Bait);
+			UCatEquipmentDefinition* Bait =
+				AddDefinition(TEXT("DurabilityTestBait"), UCatEquipmentDefinition::FishingBaitLoadoutSlotId());
+			UCatEquipmentFragment_Bait* BaitFragment = NewObject<UCatEquipmentFragment_Bait>(Bait);
+			Bait->Fragments.Add(BaitFragment);
 			Bait->bRunConsumable = true;
-			Bait->BiteRateMultiplier = 1.0;
-			Bait->MinimumBiteDelayMultiplier = 1.0;
-			UCatEquipmentDefinition* Float = AddDefinition(TEXT("DurabilityTestFloat"), ECatEquipmentKind::Float);
-			Float->MaximumCastDistanceCentimeters = 1000.0;
-			AddDefinition(Settings->DriftwoodDefinitionId, ECatEquipmentKind::Driftwood)->bRunConsumable = true;
-			for (const TStrongObjectPtr<UCatEquipmentDefinition>& Definition : Definitions)
+			BaitFragment->BiteRateMultiplier = 1.0;
+			BaitFragment->MinimumBiteDelayMultiplier = 1.0;
+			UCatEquipmentDefinition* Float =
+				AddDefinition(TEXT("DurabilityTestFloat"), UCatEquipmentDefinition::FishingFloatLoadoutSlotId());
+			UCatEquipmentFragment_Float* FloatFragment = NewObject<UCatEquipmentFragment_Float>(Float);
+			Float->Fragments.Add(FloatFragment);
+			FloatFragment->MaximumCastDistanceCentimeters = 1000.0;
+			for (const TStrongObjectPtr<UCatEquipmentDefinition>& Definition : CreatedDefinitions)
 			{
-				if (!Test.TestTrue(TEXT("temporary equipment definition is complete"), Definition->IsRuntimeDefinitionReady())) return false;
+				if (!Test.TestTrue(TEXT("test equipment definition is complete"), Definition->IsRuntimeDefinitionReady())) return false;
 			}
 			if (!Test.TestTrue(TEXT("creates authority equipment world"), WorldWrapper.CreateTestWorld(EWorldType::Game))) return false;
 			WorldWrapper.ForwardErrorMessages(&Test);
@@ -108,29 +135,26 @@ namespace CatRodDurabilityTests
 		bool Begin(FAutomationTestBase& Test, const FGuid SessionId, const bool bCommitBait = true)
 		{
 			const FCatEquipmentLoadoutSnapshot Loadout = Equipment->GetSnapshot();
-			if (!Test.TestTrue(TEXT("reserves fishing use of the deployed rod"), Equipment->BeginFishingUse(SessionId,
+			if (!Test.TestTrue(TEXT("freezes fishing use of the deployed rod"), Equipment->BeginFishingUse(SessionId,
 				Loadout.RodItemInstanceId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
 				Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId,
-				Loadout.Revision).bReserved)) return false;
+				Loadout.Revision).bBaitFrozen)) return false;
 			return !bCommitBait || Test.TestTrue(TEXT("commits this session bait"),
 				Equipment->CommitFishingBaitDeferred(SessionId).bApplied);
 		}
 
-		const FCatRunInventorySlot* FindRod(const FGuid Id) const
+		// 从正式背包按实例 ID 读取鱼竿运行格；耐久断言必须观察同一个库存实例，不能从 Equipment 读模型推导库存内容。
+		bool FindRod(const FGuid Id, const UCatEquipmentInventoryItemInstance*& OutInstance) const
 		{
-			return Equipment->GetSnapshot().InventorySlots.FindByPredicate(
-				[Id](const FCatRunInventorySlot& Slot) { return Slot.ItemInstanceId == Id; });
+			OutInstance = nullptr;
+			const UCatInventoryComponent* Inventory = Character ? Character->GetInventoryComponent() : nullptr;
+			const int32 SlotIndex = Inventory ? Inventory->FindInventorySlotIndexFromInstanceId(Id) : INDEX_NONE;
+			const FCatInventoryEntry* Entry = Inventory ? Inventory->GetInventoryEntryAtSlot(SlotIndex) : nullptr;
+			OutInstance = Entry != nullptr && Entry->StackCount > 0
+				? Cast<UCatEquipmentInventoryItemInstance>(Entry->Instance) : nullptr;
+			return OutInstance != nullptr;
 		}
 
-		int32 WoodQuantity() const
-		{
-			int32 Quantity = 0;
-			for (const FCatRunInventorySlot& Slot : Equipment->GetSnapshot().InventorySlots)
-			{
-				if (Slot.DefinitionId == Settings->DriftwoodDefinitionId) Quantity += Slot.Quantity;
-			}
-			return Quantity;
-		}
 	};
 }
 
@@ -209,11 +233,14 @@ bool FCatRodDurabilityAcrossSessionsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("first fight closes"), Equipment->ReleaseFishingUse(FirstSession).bApplied);
 	const FCatInventoryItemUseResult Recalled = Equipment->UnUse(FGuid::NewGuid(), Fixture.RodId);
 	if (!TestTrue(TEXT("recalls worn instance"), Recalled.bCommitted)) return false;
-	TestEqual(TEXT("recall retains the original instance"), Recalled.Item.ItemInstanceId, Fixture.RodId);
-	TestEqual(TEXT("recall returns worn durability"), Recalled.Item.RodDurability, 65.0);
-	const FCatRunInventorySlot* Slot = Fixture.FindRod(Fixture.RodId);
-	if (!TestNotNull(TEXT("same rod reappears in inventory"), Slot)) return false;
-	TestEqual(TEXT("inventory is not restored to definition maximum"), Slot->RodDurability, 65.0);
+	const UCatEquipmentInventoryItemInstance* RecalledUseInstance = Recalled.Item.StackCount > 0
+		? Cast<UCatEquipmentInventoryItemInstance>(Recalled.Item.Instance) : nullptr;
+	if (!TestTrue(TEXT("recall returns the original equipment instance"), RecalledUseInstance != nullptr)) return false;
+	TestEqual(TEXT("recall retains the original instance"), RecalledUseInstance->GetItemInstanceId(), Fixture.RodId);
+	TestEqual(TEXT("recall returns worn durability"), RecalledUseInstance->GetRodDurability(), 65.0);
+	const UCatEquipmentInventoryItemInstance* RecalledRod = nullptr;
+	if (!TestTrue(TEXT("same rod reappears in inventory"), Fixture.FindRod(Fixture.RodId, RecalledRod))) return false;
+	TestEqual(TEXT("inventory is not restored to definition maximum"), RecalledRod->GetRodDurability(), 65.0);
 	if (!Fixture.Deploy(*this, Fixture.RodId)) return false;
 	const FGuid SecondSession = FGuid::NewGuid();
 	if (!Fixture.Begin(*this, SecondSession)) return false;
@@ -226,52 +253,10 @@ bool FCatRodDurabilityAcrossSessionsTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("second fight closes"), Equipment->ReleaseFishingUse(SecondSession).bApplied);
 	const FCatInventoryItemUseResult RecalledAgain = Equipment->UnUse(FGuid::NewGuid(), Fixture.RodId);
 	TestTrue(TEXT("second recall succeeds"), RecalledAgain.bCommitted);
-	TestEqual(TEXT("second recall preserves total lifetime wear"), RecalledAgain.Item.RodDurability, 55.0);
-	return !HasAnyErrors();
-}
-
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatBrokenRodRepairTest,
-	"Catfishing.Unit.Equipment.RodDurability.BrokenInstanceRequiresRepairAndRetainsIdentity",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
-
-bool FCatBrokenRodRepairTest::RunTest(const FString& Parameters)
-{
-	using namespace CatRodDurabilityTests;
-	FFixture Fixture;
-	const FGuid SessionId = FGuid::NewGuid();
-	if (!Fixture.Initialize(*this) || !Fixture.Deploy(*this, Fixture.RodId) || !Fixture.Begin(*this, SessionId)) return false;
-	UCatEquipmentComponent* Equipment = Fixture.Equipment;
-	const FCatFishingUseOperationResult Break = Equipment->ApplyFishingRodWear(SessionId, 1, 120.0);
-	TestTrue(TEXT("wear reaching zero marks the instance broken immediately"), Break.bApplied && Break.bRodBroken);
-	TestEqual(TEXT("overdraw clamps remaining durability to zero"), Break.RemainingRodDurability, 0.0);
-	TestTrue(TEXT("wear leaves session cleanup to its owner"), Equipment->IsFishingUseActive(SessionId));
-	TestTrue(TEXT("public broken fact is already visible"), Equipment->GetSnapshot().bRodBroken);
-	TestTrue(TEXT("broken session releases"), Equipment->ReleaseFishingUse(SessionId).bApplied);
-	const FCatInventoryItemUseResult Recalled = Equipment->UnUse(FGuid::NewGuid(), Fixture.RodId);
-	if (!TestTrue(TEXT("broken rod can be returned for repair"), Recalled.bCommitted)) return false;
-	TestTrue(TEXT("returned item is still broken"), Recalled.Item.bRodBroken);
-	TestEqual(TEXT("returned broken item remains empty"), Recalled.Item.RodDurability, 0.0);
-	TestFalse(TEXT("redeployment cannot heal a broken rod"), Equipment->Use(
-		FGuid::NewGuid(), Equipment->GetSnapshot().Revision, Fixture.RodId).bCommitted);
-	const FCatRunInventorySlot* BrokenSlot = Fixture.FindRod(Fixture.RodId);
-	if (!TestNotNull(TEXT("rejected deployment retains the broken inventory item"), BrokenSlot)) return false;
-	TestTrue(TEXT("normalization preserves zero durability and broken state"), BrokenSlot->bRodBroken && BrokenSlot->RodDurability == 0.0);
-	if (!TestTrue(TEXT("grants repair material"), Equipment->GrantInventoryQuantityFromAuthority(
-		FGuid::NewGuid(), Equipment->GetSnapshot().Revision, Fixture.Settings->DriftwoodDefinitionId, 2).bCommitted)) return false;
-	const FGuid RepairRequest = FGuid::NewGuid();
-	const int64 RepairRevision = Equipment->GetSnapshot().Revision;
-	TestTrue(TEXT("camp repair restores the selected existing instance"), Equipment->RepairRodAtCamp(
-		RepairRequest, RepairRevision, true).bCommitted);
-	TestEqual(TEXT("repair preserves identity"), Equipment->GetSnapshot().RodItemInstanceId, Fixture.RodId);
-	TestEqual(TEXT("repair restores the maximum durability"), Equipment->GetSnapshot().RodDurability, 100.0);
-	TestFalse(TEXT("repair clears broken state"), Equipment->GetSnapshot().bRodBroken);
-	TestEqual(TEXT("repair consumes exactly one material"), Fixture.WoodQuantity(), 1);
-	TestFalse(TEXT("replayed repair does not apply again"), Equipment->RepairRodAtCamp(RepairRequest, RepairRevision, true).bCommitted);
-	TestEqual(TEXT("replayed repair cannot consume another material"), Fixture.WoodQuantity(), 1);
-	const FCatRunInventorySlot* RepairedSlot = Fixture.FindRod(Fixture.RodId);
-	if (!TestNotNull(TEXT("repaired instance remains in inventory"), RepairedSlot)) return false;
-	TestTrue(TEXT("inventory receives the repair fact"), !RepairedSlot->bRodBroken && RepairedSlot->RodDurability == 100.0);
-	if (!Fixture.Deploy(*this, Fixture.RodId) || !Fixture.Begin(*this, FGuid::NewGuid())) return false;
+	const UCatEquipmentInventoryItemInstance* RecalledAgainInstance = RecalledAgain.Item.StackCount > 0
+		? Cast<UCatEquipmentInventoryItemInstance>(RecalledAgain.Item.Instance) : nullptr;
+	if (!TestTrue(TEXT("second recall returns an equipment instance"), RecalledAgainInstance != nullptr)) return false;
+	TestEqual(TEXT("second recall preserves total lifetime wear"), RecalledAgainInstance->GetRodDurability(), 55.0);
 	return !HasAnyErrors();
 }
 
@@ -286,21 +271,29 @@ bool FCatPurchasedRodIndependenceTest::RunTest(const FString& Parameters)
 	const FGuid OldSession = FGuid::NewGuid();
 	if (!Fixture.Initialize(*this) || !Fixture.Deploy(*this, Fixture.RodId) || !Fixture.Begin(*this, OldSession)) return false;
 	UCatEquipmentComponent* Equipment = Fixture.Equipment;
-	if (!TestTrue(TEXT("old rod receives wear"), Equipment->ApplyFishingRodWear(OldSession, 1, 30.0).bApplied)) return false;
-	TestTrue(TEXT("old session releases"), Equipment->ReleaseFishingUse(OldSession).bApplied);
-	if (!TestTrue(TEXT("old rod returns to inventory"), Equipment->UnUse(FGuid::NewGuid(), Fixture.RodId).bCommitted)) return false;
+	if (!TestTrue(TEXT("previous rod receives wear"), Equipment->ApplyFishingRodWear(OldSession, 1, 30.0).bApplied)) return false;
+	TestTrue(TEXT("previous session releases"), Equipment->ReleaseFishingUse(OldSession).bApplied);
+	if (!TestTrue(TEXT("recalled rod returns to inventory"), Equipment->UnUse(FGuid::NewGuid(), Fixture.RodId).bCommitted)) return false;
 	if (!TestTrue(TEXT("shop grant creates another rod instance"), Equipment->GrantEquipmentFromAuthority(
 		FGuid::NewGuid(), Equipment->GetSnapshot().Revision, TEXT("DurabilityTestRod")).bCommitted)) return false;
 	FGuid NewRodId;
 	int32 RodCount = 0;
-	for (const FCatRunInventorySlot& Slot : Equipment->GetSnapshot().InventorySlots)
+	const UCatInventoryComponent* Inventory = Fixture.Character ? Fixture.Character->GetInventoryComponent() : nullptr;
+	if (!TestNotNull(TEXT("inventory stores both rod instances"), Inventory)) return false;
+	for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
 	{
-		if (Slot.DefinitionId != FName(TEXT("DurabilityTestRod"))) continue;
-		++RodCount;
-		if (Slot.ItemInstanceId != Fixture.RodId)
+		const UCatEquipmentInventoryItemInstance* RodInstance = Entry.StackCount > 0
+			? Cast<UCatEquipmentInventoryItemInstance>(Entry.Instance) : nullptr;
+		if (RodInstance == nullptr)
 		{
-			NewRodId = Slot.ItemInstanceId;
-			TestEqual(TEXT("only new instance starts full"), Slot.RodDurability, 100.0);
+			continue;
+		}
+		if (RodInstance->GetItemDefinitionId() != FName(TEXT("DurabilityTestRod"))) continue;
+		++RodCount;
+		if (RodInstance->GetItemInstanceId() != Fixture.RodId)
+		{
+			NewRodId = RodInstance->GetItemInstanceId();
+			TestEqual(TEXT("only new instance starts full"), RodInstance->GetRodDurability(), 100.0);
 		}
 	}
 	if (!TestEqual(TEXT("both purchased instances coexist"), RodCount, 2)
@@ -309,19 +302,19 @@ bool FCatPurchasedRodIndependenceTest::RunTest(const FString& Parameters)
 	if (!TestTrue(TEXT("selects new rod by its exact instance"), Equipment->ConfigureLoadoutFromAuthority(
 		FGuid::NewGuid(), Loadout.Revision, Loadout.RodDefinitionId, Loadout.BaitDefinitionId,
 		Loadout.FloatDefinitionId, NAME_None, NAME_None, NewRodId, Loadout.BaitItemInstanceId,
-		Loadout.FloatItemInstanceId).bCommitted)) return false;
+		Loadout.FloatItemInstanceId, FGuid()).bCommitted)) return false;
 	double OldDurability = 0.0;
 	bool bOldBroken = true;
-	TestTrue(TEXT("old session still reads its bound old rod"), Equipment->GetFishingRodDurability(OldSession, OldDurability, bOldBroken));
+	TestTrue(TEXT("previous session still reads its bound previous rod"), Equipment->GetFishingRodDurability(OldSession, OldDurability, bOldBroken));
 	TestEqual(TEXT("changing selection cannot redirect the session lookup"), OldDurability, 70.0);
 	AddExpectedErrorPlain(TEXT("Event=equipment_rod_wear_rejected"), EAutomationExpectedErrorFlags::Contains, 1);
 	const FCatFishingUseOperationResult Late = Equipment->ApplyFishingRodWear(OldSession, 2, 60.0);
-	TestEqual(TEXT("late wear from old session is terminal"), Late.Error, ECatDomainCommandError::AlreadyResolved);
-	TestEqual(TEXT("late result reports the old bound rod"), Late.RemainingRodDurability, 70.0);
-	TestEqual(TEXT("late old wear cannot damage newly selected rod"), Equipment->GetSnapshot().RodDurability, 100.0);
-	const FCatRunInventorySlot* OldSlot = Fixture.FindRod(Fixture.RodId);
-	if (!TestNotNull(TEXT("old worn rod remains separately stored"), OldSlot)) return false;
-	TestEqual(TEXT("buying another rod never repairs the old one"), OldSlot->RodDurability, 70.0);
+	TestEqual(TEXT("late wear from previous session is terminal"), Late.Error, ECatDomainCommandError::AlreadyResolved);
+	TestEqual(TEXT("late result reports the previous bound rod"), Late.RemainingRodDurability, 70.0);
+	TestEqual(TEXT("late previous wear cannot damage newly selected rod"), Equipment->GetSnapshot().RodDurability, 100.0);
+	const UCatEquipmentInventoryItemInstance* OldRodInstance = nullptr;
+	if (!TestTrue(TEXT("worn rod remains separately stored"), Fixture.FindRod(Fixture.RodId, OldRodInstance))) return false;
+	TestEqual(TEXT("buying another rod leaves previous wear unchanged"), OldRodInstance->GetRodDurability(), 70.0);
 	return !HasAnyErrors();
 }
 

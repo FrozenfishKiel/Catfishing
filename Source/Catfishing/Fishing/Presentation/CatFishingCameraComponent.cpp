@@ -165,7 +165,7 @@ void UCatFishingCameraComponent::TickComponent(const float DeltaTime, const ELev
 	FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-	// 切换观战目标后 CalcCamera 不再被调用，仍必须归还隐藏状态。
+	// 切换观战目标后 CalcCamera 停止调用，仍必须归还隐藏状态。
 	if (!FindLocalViewRod()) RestoreView();
 }
 

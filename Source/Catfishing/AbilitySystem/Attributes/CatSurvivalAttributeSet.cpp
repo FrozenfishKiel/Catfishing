@@ -17,15 +17,18 @@ namespace
 		return FMath::IsFinite(Value) ? FMath::Max(1.0f, Value) : 1.0f;
 	}
 
-	// 当前体力规整流程：FightStamina 是短周期消耗值，必须保持在 0 到当前上限之间；上限缺失时归零并让会话入口 fail-closed。
+	// 当前体力规整流程：FightStamina 是短周期消耗值；上限已经播种时夹在 0 到上限之间，裸 ASC 测试或初始化早帧尚无上限时只保证非负，正式会话入口仍负责拒绝未就绪上限。
 	float ClampFightStaminaValue(const float Value, const float MaxValue)
 	{
 		if (!FMath::IsFinite(Value))
 		{
 			return 0.0f;
 		}
-		const float EffectiveMax = FMath::IsFinite(MaxValue) && MaxValue > 0.0f ? MaxValue : 0.0f;
-		return FMath::Clamp(Value, 0.0f, EffectiveMax);
+		if (!FMath::IsFinite(MaxValue) || MaxValue <= 0.0f)
+		{
+			return FMath::Max(0.0f, Value);
+		}
+		return FMath::Clamp(Value, 0.0f, MaxValue);
 	}
 }
 
@@ -90,7 +93,7 @@ void UCatSurvivalAttributeSet::PostAttributeChange(const FGameplayAttribute& Att
 	}
 }
 
-// FishingStrength 复制通知流程：把旧基值交给 ASC，使客户端属性 delegate 与服务器最终力量收敛；不派生多人合力结论。
+// FishingStrength 复制通知流程：把变更前基值交给 ASC，使客户端属性 delegate 与服务器最终力量收敛；不派生多人合力结论。
 void UCatSurvivalAttributeSet::OnRep_FishingStrength(const FGameplayAttributeData& OldFishingStrength)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, FishingStrength, OldFishingStrength);

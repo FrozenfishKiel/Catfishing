@@ -31,7 +31,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Authority")
 	bool bRequireServerLineOfSight = true;
 
-	/** 1 预留为普通白色交互描边。 */
+	/** 1 固定给普通白色交互描边使用。 */
 	UPROPERTY(Config, EditAnywhere, Category="Presentation", meta=(ClampMin="1", ClampMax="255"))
 	int32 FocusStencilValue = 1;
 };

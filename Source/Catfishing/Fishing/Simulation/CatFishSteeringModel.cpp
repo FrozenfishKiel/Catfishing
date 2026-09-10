@@ -12,12 +12,12 @@ namespace
 		return FMath::IsFinite(Value) && Value >= 0.0 && Value <= 1.0;
 	}
 
-	FVector FlattenDirection(const FVector& Value, const FVector& Fallback)
+	FVector FlattenDirection(const FVector& Value, const FVector& DefaultDirection)
 	{
 		const FVector Flat(Value.X, Value.Y, 0.0);
-		const FVector FlatFallback(Fallback.X, Fallback.Y, 0.0);
+		const FVector FlatDefaultDirection(DefaultDirection.X, DefaultDirection.Y, 0.0);
 		return Flat.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER,
-			FlatFallback.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector));
+			FlatDefaultDirection.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector));
 	}
 
 	FVector TurnToward2D(const FVector& Current, const FVector& Target, const double MaximumDegrees)
@@ -205,7 +205,7 @@ bool FCatFishSteeringModel::RedirectFromWaterBoundary(const FCatFishSteeringConf
 	if (IntoWaterDot > 0.05)
 	{
 		// 玩家持续收线也可能让候选点越界；若鱼当前已经朝水里/沿岸游，就不重复抽切向，
-		// 只保证目标不再指向陆地并延长本段，避免每个固定步重新选左右造成抖动。
+		// 只保证目标保持水内方向并延长本段，避免每个固定步重新选左右造成抖动。
 		const double TargetWaterwardDot = FVector::DotProduct(InOutState.TargetDirection, Waterward);
 		InOutState.TargetDirection = FlattenDirection(InOutState.TargetDirection
 			+ Waterward * FMath::Max(0.0, 0.2 - TargetWaterwardDot), Current);

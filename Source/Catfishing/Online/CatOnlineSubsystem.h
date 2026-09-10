@@ -85,7 +85,7 @@ private:
 	/** 区分 World、OnlineSubsystem 和 Session 接口三层缺失；若接口在两次查询间恢复则返回 RequestRejected，让调用者重试而不把竞态写成成功。 */
 	ECatOnlineError GetSessionInterfaceError() const;
 
-	/** 开始唯一异步操作，使用外部关联键或生成 RequestId 并推进 epoch、撤销旧释放许可；Leave 在首个 pending 快照前废止大厅候选。 */
+	/** 开始唯一异步操作，使用外部关联键或生成 RequestId 并推进 epoch、撤销失效释放许可；Leave 在首个 pending 快照前清理大厅候选。 */
 	FCatOnlineResult BeginOperation(ECatOnlineOperation Operation, ECatOnlineSessionState PendingSessionState,
 		FGuid CorrelationRequestId = FGuid());
 
@@ -116,7 +116,7 @@ private:
 	/** 启动当前有效 Steam Lobby 的低频事实轮询；Steam 后端不转发公开 OSS 设置通知，因此成员与 ready 只从 SDK 实际数据读取。 */
 	void StartLobbyFactPolling();
 
-	/** 停止当前 Lobby 轮询；离开、反初始化与会话销毁时成对清理，不让旧 Lobby 驱动新 World。 */
+	/** 停止当前 Lobby 轮询；离开、反初始化与会话销毁时成对清理，不让失效 Lobby 驱动新 World。 */
 	void StopLobbyFactPolling();
 
 	/** 低频读取当前 Lobby 的成员、元数据和 ready 标记；Host 到达玩法图后按单调秒截止点重试 ready 发布且不回前台，Client 只在同一 Lobby 首次真实 ready 到达且尚未提交 Start 时开始包预载。 */
@@ -179,10 +179,10 @@ private:
 	/** Lake Host Leave 启动活动世界保存并订阅最终落盘结果；同步拒绝保留 Session，受理后由匹配 RequestId/epoch 的完成回调继续 teardown。 */
 	bool BeginHostLeaveSave();
 
-	/** 消费离开请求所属的世界保存结果；最终持久化成功才允许 teardown 和返回后的载荷释放，失败或过期回调不会销毁 Session。 */
+	/** 消费离开请求所属的世界保存结果；最终持久化成功才允许 teardown 和返回后的载荷释放，失败或失效回调不会销毁 Session。 */
 	void HandleHostLeaveSaveCompleted(FGuid SaveRequestId, bool bSuccess, uint64 CallbackEpoch);
 
-	/** 解除本次离开在精确 Save 子系统上的完成订阅并废止保存关联键；终态与反初始化均可幂等调用。 */
+	/** 解除本次离开在精确 Save 子系统上的完成订阅并清除保存关联键；终态与反初始化均可幂等调用。 */
 	void ClearHostLeaveSaveDelegate();
 
 	/** 在获准释放且已确认 NoSession/Frontend 的 Leave 终态释放 Save；busy 时保留原操作等待变化，完成后继续原成功或错误终态。 */
@@ -209,7 +209,7 @@ private:
 	/** CreateSession 回调：epoch 与操作匹配才消费；成功后恢复 Settings 的本地语音偏好、建立 Host 房间快照并留在 Frontend，失败发布结构化终态。 */
 	void HandleCreateSessionComplete(FName SessionName, bool bWasSuccessful, uint64 CallbackEpoch);
 
-	/** FindSessions 回调：epoch 匹配时复制兼容结果并生成 opaque 句柄，随后释放搜索对象。 */
+	/** FindSessions 回调：epoch 匹配时复制匹配结果并生成 opaque 句柄，随后释放搜索对象。 */
 	void HandleFindSessionsComplete(bool bWasSuccessful, uint64 CallbackEpoch);
 
 	/** JoinSession 回调：成功后恢复 Settings 的本地语音偏好、建立 Client Lobby 并留在 Frontend；真实 ready 触发本机预载后才连接。 */
@@ -227,10 +227,10 @@ private:
 	/** 按当前 World 维护邀请订阅，并有限等待 Frontend、本地玩家与接受账号就绪；条件满足只提交一次 Join，超时或被其他操作取代则明确结案。 */
 	bool TickPlatformInvites(float DeltaSeconds);
 
-	/** 废止待提交邀请及其 opaque 映射、身份与期限；提交、失败和反初始化共用，已进入 Join 的操作仍由原 epoch 管线收口。 */
+	/** 清理待提交邀请及其 opaque 映射、身份与期限；提交、失败和反初始化共用，已进入 Join 的操作仍由原 epoch 管线收口。 */
 	void ClearPendingAcceptedInvite();
 
-	/** PreLoadMap 回调：只记录本 GameInstance 正在进入引擎 LoadMap 阻塞段，让全局遮罩按真实切图生命周期保留而不是靠定时器兜底。 */
+	/** PreLoadMap 回调：只记录本 GameInstance 正在进入引擎 LoadMap 阻塞段，让全局遮罩按真实切图生命周期保留而不是按定时器推断完成。 */
 	void HandlePreLoadMap(const FWorldContext& WorldContext, const FString& MapName);
 
 	/** PostLoadMap 回调：按 GameInstance/ExpectedPackage 隔离后确认 World 与 Transport；Host 到达玩法图后不因 ready 缺失回前台，只安排低频重试，真实 TravelFailure、NetworkFailure 和 Leave 仍走各自回前台管线。 */
@@ -245,7 +245,7 @@ private:
 	/** 地图包名归类流程；只写 WorldState，不借包名猜测 NamedSession 或 NetDriver 终态。 */
 	bool SetWorldStateForPackage(const FString& PackageName);
 
-	/** 完成当前操作并清空错误；获准释放的 Leave 先等 Frontend 载荷清理，Start 成功保留玩法预热资源，其他终态解绑回调、废止 epoch 并广播稳定快照。 */
+	/** 完成当前操作并清空错误；获准释放的 Leave 先等 Frontend 载荷清理，Start 成功保留玩法预热资源，其他终态解绑回调、使 epoch 失效并广播稳定快照。 */
 	void FinishOperationSuccess();
 
 	/** 以结构化错误结束操作；已安全退出的 Leave 先释放载荷并保留原错，其他失败不释放。前台 Client Start 失败保留 Lobby、真实错误和已提交标记，用户显式离开后才会释放下一次进入机会。 */
@@ -302,10 +302,10 @@ private:
 	/** 远端 Host exit 要在本地 DestroySession 成功后回 ACK 的关联键；普通 Leave 保持无效。 */
 	FGuid PendingHostExitAckRequestId;
 
-	/** 每次 Begin/Finish/Deinitialize 单调推进的回调代际；迟到回调携带旧值时只记录并返回。 */
+	/** 每次 Begin/Finish/Deinitialize 单调推进的回调代际；迟到回调携带变更前值时只记录并返回。 */
 	uint64 OperationEpoch = 0;
 
-	/** 当前待确认的目标包名；跨旅行只保存字符串，不持有旧 World 或 Actor。 */
+	/** 当前待确认的目标包名；跨旅行只保存字符串，不持有失效 World 或 Actor。 */
 	FString ExpectedPackage;
 
 	/** Initialize 时从 CatOnlineSettings 冻结的玩法地图长包名；同一 GameInstance 的旅行、到达判定与 Session 过滤始终共用它。 */
@@ -394,7 +394,7 @@ private:
 	/** 当前引擎 LoadMap 目标名；它来自 PreLoadMap 回调，只用于状态展示和日志，不参与地图到达判定。 */
 	FString EngineLoadMapName;
 
-	/** 当前好友刷新代际；每次 Friends 请求递增，完成回调用它拒绝旧 World 或旧请求的结果。 */
+	/** 当前好友刷新代际；每次 Friends 请求递增，完成回调用它拒绝失效 World 或既有请求的结果。 */
 	uint64 FriendsRefreshEpoch = 0;
 
 	/** 当前是否仍在等待 OSS Friends 的完成委托；重复刷新会明确拒绝，不让两个缓存回调互相覆盖。 */
@@ -418,7 +418,7 @@ private:
 	/** 与私有搜索映射同代的公开摘要；其清理时机必须与句柄映射完全一致，GetSnapshot 只复制本数组。 */
 	TArray<FCatSessionSearchSummary> SearchSummaries;
 
-	/** 尚未提交 Join 的已接受邀请映射；平台接受事件写入，提交一次后失效，失败不能靠旧句柄无限重试。 */
+	/** 尚未提交 Join 的已接受邀请映射；平台接受事件写入，提交一次后失效，失败不能靠失效句柄无限重试。 */
 	TMap<FGuid, FOnlineSessionSearchResult> InvitesByHandle;
 
 	/** 与邀请私有映射同生命周期的公开摘要；不包含原始平台身份或连接字符串。 */
@@ -433,7 +433,7 @@ private:
 	/** 邀请等待的单调截止时间，单位秒；接受时冻结为当前时间加期限，轮询不能延长，终态清零。 */
 	double PendingInviteDeadline = 0.0;
 
-	/** 接受邀请时的操作代际；等待期间任何其他操作推进 epoch 都使原意图失效，防止旧邀请在用户完成另一条流程后突然加入。 */
+	/** 接受邀请时的操作代际；等待期间任何其他操作推进 epoch 都使原意图失效，防止失效邀请在用户完成另一条流程后突然加入。 */
 	uint64 PendingInviteOperationEpoch = 0;
 
 	/** GameInstance 邀请生命周期检查的 CoreTicker 句柄；Initialize 注册、Deinitialize 移除，空闲时只维护真实 World 的订阅且不刷日志。 */

@@ -73,7 +73,7 @@ bool FCatFishingFirstPersonCameraTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("进入角力"), Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector,
 		0, 0, 1, 0, true, 100, 50));
 	Controller->SetControlRotation(FRotator(0, 120, 0));
-	// 先等受载阻尼进入平衡，再验证镜头/身体消费者；平衡角与精度保持原契约。
+	// 先等受载阻尼进入平衡，再验证镜头/身体消费者；平衡角与精度保持当前契约。
 	for (int32 I = 0; I < 360; ++I) Rod->RefreshHeldTransformFromAuthority(1.0 / 60.0);
 	Character->CalcCamera(0.016f, View);
 	TestEqual(TEXT("转矩平衡后杆停在30度"), View.Rotation.Yaw, 30.0, 0.1);
@@ -208,7 +208,7 @@ bool FCatFishingCameraContinuousFollowTest::RunTest(const FString& Parameters)
 		Rod->SetActorRotation(FRotator(0, 60, 0));
 		Rod->SetCarrierConstraintFromAuthority(FVector::ForwardVector, 0, 0, 1, 0, true, 100, 50);
 		Character->CalcCamera(DeltaTime, View);
-		TestTrue(TEXT("重新上鱼首帧不沿用上场平滑历史"), View.Rotation.Equals(Rod->GetGripWorldTransform().Rotator(), 0.001));
+		TestTrue(TEXT("重新上鱼首帧不沿用上场平滑状态"), View.Rotation.Equals(Rod->GetGripWorldTransform().Rotator(), 0.001));
 	}
 	return !HasAnyErrors();
 }

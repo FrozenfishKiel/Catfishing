@@ -165,7 +165,7 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("右键期间左键释放被接受"), Runner->SetReeling(PrimaryPlayer, 3, false));
 	TestEqual(TEXT("松左键后继续右键回体"), Runner->State.CatAction, ECatFightCatAction::Slack);
 	TestTrue(TEXT("重新按下左键仍记录为按住"), Runner->SetReeling(PrimaryPlayer, 4, true));
-	TestFalse(TEXT("过期右键释放不能结束回体"), Runner->SetSlacking(PrimaryPlayer, 3, false));
+	TestFalse(TEXT("失效右键释放不能结束回体"), Runner->SetSlacking(PrimaryPlayer, 3, false));
 	TestTrue(TEXT("最新右键释放被接受"), Runner->SetSlacking(PrimaryPlayer, 5, false));
 	TestEqual(TEXT("松右键后立即恢复仍按住的左键收线"), Runner->State.CatAction, ECatFightCatAction::Pull);
 	const auto Resumed = Simulate();

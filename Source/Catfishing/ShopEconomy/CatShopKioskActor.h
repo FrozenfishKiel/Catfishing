@@ -22,7 +22,7 @@ public:
 
 	/** 判断本地玩家是否能打开此摊位；只检查交互开关、本地 Controller 和页面状态，不解析营地仓库。 */
 	virtual bool CanInteract_Implementation(AController* RequestingController) const override;
-	/** 返回当前摊位提示文本；不可交互或页面已打开时返回空文本，避免 UI 继续显示旧提示。 */
+	/** 返回当前摊位提示文本；不可交互或页面已打开时返回空文本，避免 UI 继续显示失效提示。 */
 	virtual FText GetInteractionPrompt_Implementation() const override;
 	/** 返回摊位距离证明使用的交互半径；非法或负数配置会收口为 0，服务端下单校验复用同一口径。 */
 	virtual double GetInteractionRadius_Implementation() const override;
@@ -37,7 +37,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Shop")
 	UCatShopInventoryComponent* GetShopInventory() const;
 
-	/** 服务端下单前验证请求确实来自这个摊位旁边的玩家；它只管摊位距离，不再持有或解析营地仓库。 */
+	/** 服务端下单前验证请求确实来自这个摊位旁边的玩家；它只管摊位距离，营地仓库由交易服务解析。 */
 	bool CanServeOrderFromAuthority(AController* RequestingController) const;
 
 protected:

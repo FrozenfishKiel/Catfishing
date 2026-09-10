@@ -13,7 +13,7 @@ struct CATFISHING_API FCatFishingViewState
 	/** 当前投影对应的 FishingSession 身份；FishingSession 复制快照写入，UI 用它区分同一玩家连续会话的显示来源。 */
 	UPROPERTY(BlueprintReadOnly) FGuid FishingSessionId;
 
-	/** 当前投影对应的会话版本；FishingSession 每次公开事实变化推进它，UI 只用来展示或判断快照新旧，不参与命令校验。 */
+	/** 当前投影对应的会话版本；FishingSession 每次公开事实变化推进它，UI 只用来展示或判断快照是否较新，不参与命令校验。 */
 	UPROPERTY(BlueprintReadOnly) int64 Revision = 0;
 
 	/** 当前会话阶段；FishingSession 是唯一写者，HUD 用它选择等待、搏斗、近岸或终态提示。 */
@@ -33,8 +33,6 @@ struct CATFISHING_API FCatFishingViewState
 
 	/** 鱼侧搏斗体力的展示比例；数值来自 FishingSession 的运行态归一化结果，UI 不反推鱼真实体力或搏斗公式。 */
 	UPROPERTY(BlueprintReadOnly) double NormalizedFishStamina = 0.0;
-	/** 旧 HUD 兼容二值；新 UI 使用 bReeling，不再显示蓄力条。 */
-	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Use bReeling; charging was removed")) float PrimaryPowerAlpha = 0.0f;
 	UPROPERTY(BlueprintReadOnly) double ActiveCombinedFishingStrength = 0.0;
 	UPROPERTY(BlueprintReadOnly) int32 ActiveHelperCount = 0;
 

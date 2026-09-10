@@ -40,11 +40,11 @@ public:
 	/** 把 NearShore 抢抄意图转给指定会话；服务不自己创建鱼或选择胜者。 */
 	FCatScoopResult RequestScoop(FGuid FishingSessionId, AController* ScoopingController, const FCatScoopCommand& Command);
 
-	/** Character 失去占有、倒地或销毁时终止所有相关未结算会话；不恢复旧半场。 */
+	/** Character 失去占有、倒地或销毁时终止所有相关未结算会话；不恢复失效半场。 */
 	void TerminateSessionsForCharacter(const ACatCharacter* Character);
 
 	/**
-	 * Run 暂停钓鱼（白天结束、额度完成或进入夜晚）时终止当前会话、释放全部竿位并恢复角色移动。
+	 * Run 暂停钓鱼（白天结束、进入夜晚或 teardown）时终止当前会话、释放全部竿位并恢复角色移动。
 	 * 该入口不永久关闭 World 内的 FishingService，下一天仍可重新使用已部署鱼竿。
 	 */
 	void SuspendFishingAndReleaseOperators();
@@ -55,7 +55,7 @@ public:
 	/** 查询指定存活且未终态的服务器 Session；未知或失效身份返回空且不创建索引项。 */
 	ACatFishingSession* FindSession(FGuid FishingSessionId);
 
-	/** 按 Controller 当前占据的主操作位查询该鱼竿上的活动 Session；离开竿位后不再把旧会话路由给玩家输入。 */
+	/** 按 Controller 当前占据的主操作位查询该鱼竿上的活动 Session；离开竿位后该会话会从玩家输入路由中移除。 */
 	bool TryGetActiveSessionForController(const AController* Controller, FGuid& OutFishingSessionId,
 		FCatFishingSessionSnapshot& OutSnapshot);
 
@@ -89,7 +89,7 @@ public:
 	/** 为 PlayerState 登记唯一部署鱼竿；相同 Actor 重放成功，不同存活 Actor 被拒绝。 */
 	bool RegisterDeployedRod(APlayerState* PlayerState, ACatFishingRodActor* RodActor);
 
-	/** 仅当当前登记值精确匹配 ExpectedRodActor 时注销，避免旧 Actor 迟到回调删除替代鱼竿。 */
+	/** 仅当当前登记值精确匹配 ExpectedRodActor 时注销，避免失效 Actor 迟到回调删除替代鱼竿。 */
 	void UnregisterDeployedRod(const APlayerState* PlayerState, const ACatFishingRodActor* ExpectedRodActor);
 
 	/** 仅统计当前存活且未终态的 Session，不暴露服务器索引。 */

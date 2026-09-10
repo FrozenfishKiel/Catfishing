@@ -47,7 +47,7 @@ bool FCatFishingCastViewRayTest::RunTest(const FString& Parameters)
 	const FVector CameraHit = Camera + Direction * (-Camera.Z / Direction.Z);
 	const FVector OldEyeHit = Eyes + Direction * (-Eyes.Z / Direction.Z);
 	TestTrue(TEXT("camera hits intended ten metre target"), CameraHit.Equals(Target));
-	TestTrue(TEXT("old eye ray falls much nearer"), OldEyeHit.X < Target.X * 0.5);
+	TestTrue(TEXT("previous eye ray falls much nearer"), OldEyeHit.X < Target.X * 0.5);
 	TestFalse(TEXT("forged distant camera rejected"), UCatFishingAimLibrary::IsCastViewRayValid(FVector(5000, 0, 400), Direction, Eyes, Direction));
 	TestFalse(TEXT("backward ray rejected"), UCatFishingAimLibrary::IsCastViewRayValid(Camera, -Direction, Eyes, Direction));
 	TestFalse(TEXT("zero ray rejected"), UCatFishingAimLibrary::IsCastViewRayValid(Camera, FVector::ZeroVector, Eyes, Direction));
@@ -69,7 +69,7 @@ bool FCatFishingCastActorTest::RunTest(const FString& Parameters)
 	if (!TestNotNull(TEXT("formal hook Blueprint loads"), HookClass)) return false;
 	ACatFishingHookActor* Hook = World->SpawnActor<ACatFishingHookActor>(HookClass);
 	if (!TestNotNull(TEXT("hook spawned"), Hook)) return false;
-	TestNull(TEXT("formal Blueprint has no obsolete projectile driver"), Hook->GetDefaultSubobjectByName(TEXT("ProjectileMovement")));
+	TestNull(TEXT("formal Blueprint uses the native hook path"), Hook->GetDefaultSubobjectByName(TEXT("ProjectileMovement")));
 	Hook->SetActorLocation(FVector(0, 0, -50)); // 竿尖低于水面也不能立即定住。
 	TestTrue(TEXT("identity initialized"), Hook->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid()));
 	const FVector Landing(1000, 0, 0);

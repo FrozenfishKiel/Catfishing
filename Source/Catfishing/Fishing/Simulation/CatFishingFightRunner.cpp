@@ -16,8 +16,8 @@
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/CharacterMovementComponent.h"
 #include "GameFramework/PlayerState.h"
-#include "Items/CatWorldItemSettings.h"
-#include "Items/World/CatWorldSurfaceResolver.h"
+#include "FishContainers/CatFishPickupSettings.h"
+#include "FishContainers/World/CatWorldSurfaceResolver.h"
 #include "Logging/CatLog.h"
 #include "TimerManager.h"
 #include "Fishing/Debug/CatFishingMotionDiagnostics.h"
@@ -55,7 +55,7 @@ bool UCatFishingFightRunner::InitializeFromAuthority(const FCatFishingFightRunne
 	{
 		return false;
 	}
-	// 逐一拷贝依赖引用与配置到成员变量，Runner 从此持有自己的一份快照，不再依赖调用方保留 Init 结构体。
+	// 逐一拷贝依赖引用与配置到成员变量，Runner 从此持有自己的一份快照，Init 结构体仅作为创建输入。
 	Session = Init.Session;
 	FishActor = Init.FishActor;
 	RodActor = Init.RodActor;
@@ -587,8 +587,8 @@ bool UCatFishingFightRunner::TryResolveGroundedFishPosition(const FVector& Desir
 	OutSurfaceNormal = FVector::UpVector;
 	OutSurfaceActor = nullptr;
 	UWorld* World = Session.IsValid() ? Session->GetWorld() : nullptr;
-	const UCatWorldItemSettings* ItemSettings = GetDefault<UCatWorldItemSettings>();
-	if (!World || !ItemSettings || QueryPosition.ContainsNaN())
+	const UCatFishPickupSettings* PickupSettings = GetDefault<UCatFishPickupSettings>();
+	if (!World || !PickupSettings || QueryPosition.ContainsNaN())
 	{
 		return false;
 	}
@@ -604,7 +604,7 @@ bool UCatFishingFightRunner::TryResolveGroundedFishPosition(const FVector& Desir
 		IgnoredActors.Add(Pair.Value.Character.Get());
 	}
 	const FCatWorldSurfaceResult Surface = FCatWorldSurfaceResolver::ResolveHighestBlockingSurface(
-		World, QueryPosition, ItemSettings->LandingGroundTraceChannel, IgnoredActors);
+		World, QueryPosition, PickupSettings->LandingGroundTraceChannel, IgnoredActors);
 	if (!Surface.bSucceeded)
 	{
 		return false;
@@ -659,7 +659,7 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 	const UCatWaterQuerySubsystem* Water = World ? World->GetSubsystem<UCatWaterQuerySubsystem>() : nullptr;
 	if (!Water || !Step.bSucceeded || Step.ProposedFishWorldPosition.ContainsNaN()) return Motion;
 
-	// 水域轮廓提供水面与岸向，不再用抛竿的内缩安全点或初始落点包围盒裁剪拖鱼运动。
+	// 水域轮廓提供水面与岸向，拖鱼运动只由水面、岸向和线约束裁决。
 	// 先投影水面再查岸向，高岸/下坡不会受抛竿高度容差限制。
 	const FCatWaterImmersionResult Immersion = Water->QueryImmersionAtWorldPoint(
 		Step.ProposedFishWorldPosition, WaterRegion);
@@ -688,7 +688,7 @@ FCatFishMotionSolveResult UCatFishingFightRunner::ResolveFishSurfaceFromAuthorit
 		? FMath::Max(0.0, Step.FishConstraintCorrectionCentimeters - Step.Trace.FishPositionCorrectionCentimeters) : 0.0;
 	Intent.bLineTaut = Step.bLineTaut;
 	const bool bCatHaulingFish = FCatFishFightMotionSolver::IsIntentionalLandwardHaul(Intent);
-	// 力竭鱼没有自主游动，所有候选位移都来自同一根鱼线，不再为它加活鱼的防甩杆力竭门槛。
+	// 力竭鱼没有自主游动，所有候选位移都来自同一根鱼线；活鱼的防甩杆力竭门槛不参与该状态。
 	const bool bSurfaceTow = (State.bFishExhausted || bCatHaulingFish)
 		&& Step.Outcome != ECatFightStepOutcome::RodBroken
 		&& Step.Outcome != ECatFightStepOutcome::Escaped;

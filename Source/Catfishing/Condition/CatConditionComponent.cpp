@@ -4,7 +4,9 @@
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
 #include "Components/CapsuleComponent.h"
+#include "Condition/CatHerbRecoveryItemFragment.h"
 #include "Environment/CatWaterQuerySubsystem.h"
+#include "Equipment/CatEquipmentComponent.h"
 #include "Logging/CatLog.h"
 #include "Logging/CatLogContext.h"
 #include "Condition/CatConditionSettings.h"
@@ -15,7 +17,28 @@
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
 #include "Growth/CatGrowthComponent.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemDefinition.h"
+#include "Inventory/CatInventoryItemInstance.h"
 #include "Net/UnrealNetwork.h"
+
+namespace CatConditionComponentPrivate
+{
+// 草药库存终态键只按 RequestId 分组；载荷差异交给签名检查，使网络重试和冲突请求能被明确区分。
+FString MakeHerbInventoryTerminalKey(const FGuid RequestId)
+{
+	return FString::Printf(TEXT("HerbInventory|%s"), *RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+}
+
+// 草药库存载荷签名记录施药者、目标和实例身份；同一个 RequestId 如果换目标或换药，会被视为非法重放。
+FString MakeHerbInventoryPayloadSignature(const AController* HelpingController, const ACatCharacter* TargetCharacter,
+	const FGuid HerbItemInstanceId)
+{
+	return FString::Printf(TEXT("Helper=%s|Target=%s|Herb=%s"),
+		*GetPathNameSafe(HelpingController), *GetPathNameSafe(TargetCharacter),
+		*HerbItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
+}
+}
 
 // 构造流程：开启默认复制并关闭 Tick；Snapshot 初始 Revision=0 表示尚未提交身体离散事实。
 UCatConditionComponent::UCatConditionComponent()
@@ -149,7 +172,7 @@ ECatDomainCommandError UCatConditionComponent::ValidateFishConsumption(const UCa
 		? ECatDomainCommandError::None : ECatDomainCommandError::DependencyUnavailable;
 }
 
-// 草药预检流程：只读核对 authority、施药者 Pawn、正式身体 runtime、ASC、倒地阈值、恢复量和服务器距离；不扣库存、不写 Attribute，也不制造预留状态。
+// 草药预检流程：只读核对 authority、施药者 Pawn、正式身体 runtime、ASC、倒地阈值、恢复量和服务器距离；不扣库存、不写 Attribute，也不制造临时占用状态。
 ECatDomainCommandError UCatConditionComponent::ValidateHerbRecovery(AController* HelpingController) const
 {
 	const UCatConditionSettings* Settings = GetDefault<UCatConditionSettings>();
@@ -163,6 +186,143 @@ ECatDomainCommandError UCatConditionComponent::ValidateHerbRecovery(AController*
 		&& FVector::DistSquared(HelpingPawn->GetActorLocation(), Owner->GetActorLocation())
 			<= FMath::Square(Settings->HerbUseRangeCentimeters)
 		? ECatDomainCommandError::None : ECatDomainCommandError::PolicyUndecided;
+}
+
+FCatDomainCommandResult UCatConditionComponent::UseHerbOnCharacterFromAuthority(AController* HelpingController,
+	const FGuid RequestId, const FGuid HerbItemInstanceId)
+{
+	// 草药库存恢复流程：
+	// 1. 先确认请求键、施药者当前 Pawn、双方组件、正式库存和目标 World；草药消耗没有正式库存时直接失败。
+	// 2. 重放命中时直接返回首次库存和身体提交终态，避免网络重试再次扣草药或重新恢复目标。
+	// 3. 不是重放时才检查玩法 gate、正式库存里的草药实例、施药者状态、范围和目标恢复预检，随后在库存组件扣草药并提交身体恢复。
+	// 4. Equipment 只在正式扣药成功后刷新钓具选择读模型；草药数量和幂等终态都由正式库存链路裁决。
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	UWorld* World = GetWorld();
+	ACatCharacter* TargetCharacter = Cast<ACatCharacter>(GetOwner());
+	ACatCharacter* ControlledCharacter = HelpingController ? Cast<ACatCharacter>(HelpingController->GetPawn()) : nullptr;
+	UCatEquipmentComponent* Equipment = ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr;
+	UCatInventoryComponent* OwnerInventory = ControlledCharacter ? ControlledCharacter->GetInventoryComponent() : nullptr;
+	UCatConditionComponent* SourceConditions = ControlledCharacter ? ControlledCharacter->GetConditionComponent() : nullptr;
+	if (!RequestId.IsValid() || !HerbItemInstanceId.IsValid() || !ControlledCharacter || !Equipment
+		|| !SourceConditions || !TargetCharacter || TargetCharacter->GetWorld() != World)
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+	if (!OwnerInventory)
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		return Result;
+	}
+
+	const FString HerbTerminalKey = CatConditionComponentPrivate::MakeHerbInventoryTerminalKey(RequestId);
+	const FString HerbPayloadSignature = CatConditionComponentPrivate::MakeHerbInventoryPayloadSignature(
+		HelpingController, TargetCharacter, HerbItemInstanceId);
+	FCatDomainCommandResult CachedResult;
+	const ECatTerminalReplayOutcome ReplayOutcome = CatQueryTerminalReplay(TerminalCache,
+		TerminalPayloadByKey, HerbTerminalKey, HerbPayloadSignature, CachedResult,
+		[](FCatDomainCommandResult& Cached)
+		{
+			MarkCommandReplayed(Cached);
+		});
+	if (ReplayOutcome == ECatTerminalReplayOutcome::Replayed)
+	{
+		return CachedResult;
+	}
+	if (ReplayOutcome == ECatTerminalReplayOutcome::PayloadMismatch)
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+
+	const auto StoreHerbTerminal = [&](const FCatDomainCommandResult& TerminalResult)
+	{
+		// 草药库存分支把失败和成功都缓存为同一个终态；后续同 RequestId 重试只回放结果，避免读取已经变化的库存格。
+		TerminalCache.Add(HerbTerminalKey, TerminalResult);
+		TerminalPayloadByKey.Add(HerbTerminalKey, HerbPayloadSignature);
+		return TerminalResult;
+	};
+	const auto LogBodyFailure = [&]
+	{
+		// 身体提交失败时保持 Equipment 终态；日志只记录本次草药与身体结果。
+		UE_LOG(LogCatCharacter, Error,
+			TEXT("Event=herb_recovery_body_commit_failed RequestId=%s Helper=%s Target=%s HerbItem=%s BodyError=%s BodyReplay=%s BodyReplayError=%s BodyRevision=%lld"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+			*GetNameSafe(ControlledCharacter), *GetNameSafe(TargetCharacter),
+			*HerbItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+			*UEnum::GetValueAsString(Result.Error),
+			Result.bTerminalReplay ? TEXT("true") : TEXT("false"),
+			*UEnum::GetValueAsString(Result.ReplayedTerminalError), Result.Revision);
+	};
+
+	const ACatfishingGameModeBase* GameMode = World ? World->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
+	const UCatConditionSettings* ConditionSettings = GetDefault<UCatConditionSettings>();
+	if (!GameMode || !GameMode->CanAcceptGameplayCommand(HelpingController))
+	{
+		Result.Error = ECatDomainCommandError::CommandsClosed;
+		return Result;
+	}
+	if (SourceConditions->GetSnapshot().bDowned || !ConditionSettings
+		|| !FMath::IsFinite(ConditionSettings->HerbUseRangeCentimeters)
+		|| ConditionSettings->HerbUseRangeCentimeters <= 0.0
+		|| FVector::DistSquared(ControlledCharacter->GetActorLocation(), TargetCharacter->GetActorLocation())
+			> FMath::Square(ConditionSettings->HerbUseRangeCentimeters))
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+
+	const int32 HerbSlotIndex = OwnerInventory->FindInventorySlotIndexFromInstanceId(HerbItemInstanceId);
+	const FCatInventoryEntry* HerbEntry = OwnerInventory->GetInventoryEntryAtSlot(HerbSlotIndex);
+	const UCatInventoryItemInstance* HerbInstance = HerbEntry != nullptr ? HerbEntry->Instance.Get() : nullptr;
+	const UCatInventoryItemDefinition* Definition = HerbInstance != nullptr
+		? HerbInstance->GetItemDefinition() : nullptr;
+	const bool bHasHerbRecoveryFragment = Definition != nullptr
+		&& Definition->FindFragmentByClass(UCatHerbRecoveryItemFragment::StaticClass()) != nullptr;
+	const bool bHasCurrentHerb = HerbEntry != nullptr
+		&& HerbEntry->StackCount > 0
+		&& HerbInstance != nullptr
+		&& HerbInstance->GetItemInstanceId() == HerbItemInstanceId
+		&& Definition != nullptr
+		&& Definition->IsInventoryRuntimeDefinitionReady()
+		&& bHasHerbRecoveryFragment;
+	if (!bHasCurrentHerb)
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		return Result;
+	}
+	Result.Error = ValidateHerbRecovery(HelpingController);
+	if (Result.Error != ECatDomainCommandError::None)
+	{
+		return Result;
+	}
+	const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
+	if (!OwnerInventory->ConsumeItemAtSlot(HerbSlotIndex, 1))
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		return StoreHerbTerminal(Result);
+	}
+
+	if (!Equipment->RefreshLoadoutFromInventoryComponentFromAuthority())
+	{
+		OwnerInventory->ReplaceInventoryEntriesFromAuthority(SavedEntries, SavedEntries.Num());
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		return StoreHerbTerminal(Result);
+	}
+
+	UE_LOG(LogCatCharacter, Log,
+		TEXT("Event=herb_inventory_consumed RequestId=%s Helper=%s Target=%s HerbItem=%s"),
+		*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
+		*GetNameSafe(ControlledCharacter), *GetNameSafe(TargetCharacter),
+		*HerbItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
+
+	Result = ApplyCommittedHerbRecovery(HelpingController, RequestId);
+	if (!CatIsAcceptedDomainCommandResult(Result))
+	{
+		LogBodyFailure();
+	}
+	return StoreHerbTerminal(Result);
 }
 
 // 进食流程：先按 RequestId 重放，再验证 authority/定义/项目 ASC/Growth；Toxic 鱼只通过 ApplyPoisonDelta/GE 增加 Poison。

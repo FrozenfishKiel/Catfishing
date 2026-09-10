@@ -63,7 +63,7 @@ bool ACatFishEncounterActor::InitializeAuthoritativeIdentity(const FGuid InFishi
 			&& PresentationState.CastAttemptId == InCastAttemptId
 			&& PresentationState.FishDefinitionId == InFishDefinitionId;
 	}
-	// 保存旧状态用于表现变化通知（Previous -> Current 对比）。
+	// 保存变更前状态用于表现变化通知（Previous -> Current 对比）。
 	const FCatFishEncounterPresentationState Previous = PresentationState;
 	PresentationState.FishingSessionId = InFishingSessionId;
 	PresentationState.CastAttemptId = InCastAttemptId;
@@ -316,7 +316,7 @@ void ACatFishEncounterActor::PublishInitialPresentationFromAuthority()
 	bPresentationDeferred = false; // 解除延迟标记，允许后续状态变化立即分发。
 	if (bHasPendingPresentationNotification && HasActorBegunPlay())
 	{
-		// 把此前排队的“首次表现状态”一次性补发出去。
+		// 把已排队的“首次表现状态”一次性补发出去。
 		bHasPendingPresentationNotification = false;
 		DispatchPresentationChanged(PendingPreviousPresentationState, PendingCurrentPresentationState);
 	}
@@ -340,7 +340,7 @@ void ACatFishEncounterActor::BeginPlay()
 
 void ACatFishEncounterActor::OnRep_PresentationState(const FCatFishEncounterPresentationState& Previous)
 {
-	// 客户端复制回调：引擎已经把 PresentationState 覆写为最新值，这里只需要用回调参数里的旧值对比分发。
+	// 客户端复制回调：引擎已经把 PresentationState 覆写为最新值，这里只需要用回调参数里的变更前值对比分发。
 	RefreshFishPresentation();
 	ApplyVisualScale();
 	ApplyVisualPose();

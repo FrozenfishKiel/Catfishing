@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Collection/CatImprintTypes.h"
-#include "Items/CatItemTypes.h"
+#include "FishContainers/CatFishContainerTypes.h"
 #include "Subsystems/WorldSubsystem.h"
 #include "CatRunImprintService.generated.h"
 
@@ -25,7 +25,7 @@ public:
 	FGuid RecordCommittedCapture(const FCatCaptureCommittedResult& Capture, const FString& RecipientStableNetId,
 		const FCatCaptureConditionSnapshot& Condition);
 
-	/** 只读判断服务是否仍能为下一条已提交实物鱼建立 FishRecorded Grant；调用方在 Items 不可逆写入前检查。 */
+	/** 只读判断服务是否仍能为下一条已提交实物鱼建立 FishRecorded Grant；调用方在鱼容器不可逆写入前检查。 */
 	bool CanRecordCommittedCapture() const;
 
 	/** 记录“重试次数耗尽”的合格逃鱼终态并生成一次剪影 Grant；其他逃脱原因没有裁决时不得调用。 */

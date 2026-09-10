@@ -196,7 +196,7 @@ FCatFishSelectionResult UCatFishCatalogSettings::SelectRuntimeDefinition(
 		{
 			continue;
 		}
-		// 先确定本鱼种在本次咬钩机会里的个体重量，再用同一重量推导力量和挑战度；选中后不再二次抽样。
+		// 先确定本鱼种在本次咬钩机会里的个体重量，再用同一重量推导力量和挑战度；选中后复用该重量。
 		const double WeightKilograms = CatFishCatalogSettingsPrivate::SampleIndividualWeight(
 			*Definition, Context);
 		const double BaseFishStrength = WeightKilograms * Context.StrengthPerKilogram;

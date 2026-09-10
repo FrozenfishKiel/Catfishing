@@ -180,7 +180,7 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 		NextHolder, Rod->GetPresentationState().RodActorRevision));
 	const auto Transferred = Rod->GetAuthoritativeRotationEffortSnapshot();
 	TestTrue(TEXT("holder transfer changes epoch"), Transferred.Epoch > Restarted.Epoch);
-	TestEqual(TEXT("new holder cannot inherit former holder effort"), Transferred.ExertionSquaredSeconds, 0.0);
+	TestEqual(TEXT("new holder cannot inherit previous holder effort"), Transferred.ExertionSquaredSeconds, 0.0);
 	return !HasAnyErrors();
 }
 

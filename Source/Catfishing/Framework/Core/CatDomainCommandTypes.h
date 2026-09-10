@@ -15,7 +15,7 @@ enum class ECatDomainPolicy : uint8
 	Enabled
 };
 
-/** 跨 Fishing、Items 与 Run 的稳定拒绝语义；服务可附加自己的细分错误，但不能用成功布尔值掩盖失败原因。 */
+/** 跨 Fishing、鱼容器服务与 Run 的稳定拒绝语义；服务可附加自己的细分错误，但不能用成功布尔值掩盖失败原因。 */
 UENUM(BlueprintType)
 enum class ECatDomainCommandError : uint8
 {
@@ -31,7 +31,7 @@ enum class ECatDomainCommandError : uint8
 	InvalidPhase,
 	/** 目标鱼、容器、会话或协议记录不存在。 */
 	NotFound,
-	/** 调用方依据的聚合版本已经陈旧；服务保持当前事实不写入，并返回最新 Revision 供重读。 */
+	/** 调用方依据的聚合版本低于当前事实；服务保持当前事实不写入，并返回最新 Revision 供重读。 */
 	RevisionConflict,
 	/** StableNetId 对目标实体没有所需权限。 */
 	PermissionDenied,
@@ -57,7 +57,7 @@ struct FCatDomainCommandContext
 	UPROPERTY(BlueprintReadWrite)
 	FGuid RequestId;
 
-	/** 调用方读取目标聚合时看到的版本；服务以它阻止陈旧命令覆盖较新事实，冲突时只返回当前版本。 */
+	/** 调用方读取目标聚合时看到的版本；服务以它阻止失效命令覆盖较新事实，冲突时只返回当前版本。 */
 	UPROPERTY(BlueprintReadWrite)
 	int64 ExpectedRevision = 0;
 
@@ -95,7 +95,7 @@ struct FCatDomainCommandResult
 	UPROPERTY(BlueprintReadOnly)
 	ECatDomainCommandError ReplayedTerminalError = ECatDomainCommandError::InvalidPayload;
 
-	/** 处理后目标聚合的 Revision；拒绝时返回当前 Revision，避免调用方继续使用陈旧快照。 */
+	/** 处理后目标聚合的 Revision；拒绝时返回当前 Revision，避免调用方继续使用无效快照。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 };

@@ -219,7 +219,7 @@ bool ACatFishingHookActor::FinalizeAuthoritativeLandingOnce(const bool bSucceede
 	if (bSucceeded)
 	{
 		// 落水时发布 L_paid=D、Slack=0，给搏斗前的曲线一份真实基线；不改变权威玩法范围。
-		// 飞行中尚无已放线快照时只按端点距离绘制，不保留旧 Cable 的占位长度制造假余线。
+		// 飞行中尚无已放线快照时只按端点距离建立可视长度，避免表现层制造额外余线。
 		if (const ACatFishingRodActor* Rod = Cast<ACatFishingRodActor>(GetOwner()))
 		{
 			const double LandedLineLength = FVector::Distance(
@@ -480,7 +480,7 @@ void ACatFishingHookActor::RefreshFishingLineAttachment()
 			break;
 		}
 	}
-	// 没放蓝图表现标记时回退原生 RodTipAnchor；再不济才回退根组件，始终保证端点可解析。
+	// 端点解析流程：优先使用蓝图表现标记，其次使用原生 RodTipAnchor，最后使用根组件。
 	if (!EndComponent)
 	{
 		for (USceneComponent* Component : Components)
@@ -586,9 +586,9 @@ void ACatFishingHookActor::UpdateFishingLinePresentation()
 	}
 
 	const UCatFishingPresentationSettings* Settings = GetDefault<UCatFishingPresentationSettings>();
-	const auto SafeNonNegative = [](const double Value, const double Fallback)
+	const auto SafeNonNegative = [](const double Value, const double DefaultValue)
 	{
-		return FMath::IsFinite(Value) && Value >= 0.0 ? Value : Fallback;
+		return FMath::IsFinite(Value) && Value >= 0.0 ? Value : DefaultValue;
 	};
 	const double EndpointSpeed = SafeNonNegative(
 		Settings ? Settings->FishingLineEndpointInterpolationSpeed : 18.0, 18.0);

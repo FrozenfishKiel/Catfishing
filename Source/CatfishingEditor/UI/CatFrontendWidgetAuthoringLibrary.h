@@ -6,7 +6,7 @@
 
 /**
  * 正式 Frontend WBP 的编辑器构造入口；只在编辑器中创建或修正目标资产并保存，不向运行时模块泄漏 UMGEditor API。
- * 主线程或资产脚本调用它建立首份可编辑控件树；普通子页面保留人工布局，Root 与 Loading 会在合同变化时重建来移除旧加载子页。
+ * 主线程或资产脚本调用它建立首份可编辑控件树；普通子页面保留人工布局，Root 与 Loading 在合同变化时重建对应控件树。
  */
 UCLASS()
 class CATFISHINGEDITOR_API UCatFrontendWidgetAuthoringLibrary : public UBlueprintFunctionLibrary
@@ -23,7 +23,7 @@ public:
 
 	/**
 	 * 创建或重建局内 ESC 菜单 WBP，并核验它继承局内菜单 View 基类且提供返回、设置、保存、退出和设置页控件。
-	 * 该入口沿用项目正式 WBP 作者链路；当前菜单资产由本工具生成，升级时重建同一路径以清除旧三按钮残留。
+	 * 该入口沿用项目正式 WBP 作者链路；当前菜单资产由本工具生成，升级时重建同一路径并按合同覆盖控件树。
 	 */
 	UFUNCTION(BlueprintCallable, Category="Catfishing|Authoring|Lake")
 	static bool CreateMissingLakeMainMenuWidgetBlueprint();

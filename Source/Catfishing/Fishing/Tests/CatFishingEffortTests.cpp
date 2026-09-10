@@ -346,7 +346,7 @@ bool FCatFishingRightButtonRecoveryTest::RunTest(const FString& Parameters)
 	State.bOperatorPresent = false;
 	const auto Unattended = Step(Config, State, Constraint);
 	TestFalse(TEXT("无人值守放线不冒充玩家右键恢复"), Unattended.bSlackRecoveryActive);
-	TestEqual(TEXT("离竿不再给旧玩家回体"), Unattended.CatStaminaDrain, 0.0);
+	TestEqual(TEXT("离竿不给先前玩家回体"), Unattended.CatStaminaDrain, 0.0);
 	return !HasAnyErrors();
 }
 
@@ -645,7 +645,7 @@ bool FCatFishingPassiveDragCannotExhaustFishTest::RunTest(const FString& Paramet
 	TestEqual(TEXT("张紧和被动转杆不能冒充猫对鱼的主动负载"), Result.FishNormalizedEffortLoad, 0.0);
 	TestEqual(TEXT("猫无力时鱼自身继续游动不扣体"), Result.FishStaminaDrain, 0.0);
 	TestEqual(TEXT("被动拖动不能触发低体力吸附力竭"), Result.Outcome, ECatFightStepOutcome::None);
-	TestEqual(TEXT("零体力猫的旧收线意图不能拉动活鱼"), Result.RequestedReelDistanceCentimeters, 0.0);
+	TestEqual(TEXT("零体力猫的先前收线意图不能拉动活鱼"), Result.RequestedReelDistanceCentimeters, 0.0);
 	return !HasAnyErrors();
 }
 

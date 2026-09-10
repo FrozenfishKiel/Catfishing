@@ -43,29 +43,6 @@ EStateTreeRunStatus FCatFishingWaitTask::EnterState(FStateTreeExecutionContext& 
 	return EStateTreeRunStatus::Running;
 }
 
-// 搏斗交换 Task 构造流程：关闭 Tick 与 Tick/Exit 属性复制；每次 State 进入只消费一次双方短周期资源。
-FCatFishingFightExchangeTask::FCatFishingFightExchangeTask()
-{
-	bShouldCallTick = false;
-	bShouldCopyBoundPropertiesOnTick = false;
-	bShouldCopyBoundPropertiesOnExitState = false;
-}
-
-// 搏斗交换 Task 进入流程：从 Context Owner 取得 Session，读取资产显式消耗并调用唯一资源写口；力量/人数/体力不足时返回 Failed。
-EStateTreeRunStatus FCatFishingFightExchangeTask::EnterState(FStateTreeExecutionContext& Context,
-	const FStateTreeTransitionResult& Transition) const
-{
-	(void)Transition;
-	ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
-	if (!Session)
-	{
-		return EStateTreeRunStatus::Failed;
-	}
-	const FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
-	return Session->ResolveFightExchangeFromStateTree(InstanceData.FishStaminaCost, InstanceData.ParticipantStaminaCost).bCommitted
-		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
-}
-
 // 失败预算 Task 构造流程：关闭 Tick 与属性复制；同一状态不会轮询或重复执行惩罚。
 FCatFishingFailureBudgetTask::FCatFishingFailureBudgetTask()
 {
@@ -120,22 +97,6 @@ EStateTreeRunStatus FCatFishingScheduleWaitingProbeTask::EnterState(FStateTreeEx
 	(void)Transition;
 	ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
 	return Session && Session->ScheduleWaitingProbeFromStateTree()
-		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
-}
-
-FCatFishingResolveTrueBiteSelectionTask::FCatFishingResolveTrueBiteSelectionTask()
-{
-	bShouldCallTick = false;
-	bShouldCopyBoundPropertiesOnTick = false;
-	bShouldCopyBoundPropertiesOnExitState = false;
-}
-
-EStateTreeRunStatus FCatFishingResolveTrueBiteSelectionTask::EnterState(FStateTreeExecutionContext& Context,
-	const FStateTreeTransitionResult& Transition) const
-{
-	(void)Transition;
-	ACatFishingSession* Session = Cast<ACatFishingSession>(Context.GetOwner());
-	return Session && Session->OpenTrueBiteWindowFromStateTree()
 		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Failed;
 }
 

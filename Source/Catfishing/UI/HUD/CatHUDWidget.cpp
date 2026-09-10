@@ -159,7 +159,7 @@ void UCatHUDWidget::NativeDestruct()
 	Super::NativeDestruct();
 }
 
-// Tick 流程：只在真咬钩窗口期间用服务器时间锚点刷新倒计时控件；窗口过期时本地收起提示，正式失败仍等命令/会话事实。
+// Tick 流程：只在真咬钩窗口期间用服务器时间锚点刷新倒计时控件；窗口失效时本地收起提示，正式失败仍等命令/会话事实。
 void UCatHUDWidget::NativeTick(const FGeometry& MyGeometry, const float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);

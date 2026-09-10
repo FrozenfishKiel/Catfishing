@@ -38,7 +38,7 @@ private:
 	TWeakObjectPtr<USkeletalMeshComponent> HiddenMesh;
 	TWeakObjectPtr<APlayerController> ViewingController;
 	FGuid ViewedRodId;
-	/** 仅本地镜头的插值历史；不能写回杆姿态、控制意图或鱼线约束。 */
+	/** 仅本地镜头的插值状态；不能写回杆姿态、控制意图或鱼线约束。 */
 	FTransform SmoothedGrip = FTransform::Identity;
 	FQuat LastTargetRotation = FQuat::Identity;
 	FRotator LastViewRotation = FRotator::ZeroRotator;

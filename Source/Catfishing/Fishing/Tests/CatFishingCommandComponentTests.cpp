@@ -169,7 +169,7 @@ bool FCatFishingCommandComponentRpcContractTest::RunTest(const FString& Paramete
 	UCatFishingCommandComponent* UnsupportedComponent = PlainActor
 		? NewObject<UCatFishingCommandComponent>(PlainActor, TEXT("UnsupportedFishingCommandComponent"))
 		: nullptr;
-	TestNotNull(TEXT("temporary non-controller command component exists"), UnsupportedComponent);
+	TestNotNull(TEXT("non-controller command component exists"), UnsupportedComponent);
 	if (PlainActor && UnsupportedComponent)
 	{
 		PlainActor->AddInstanceComponent(UnsupportedComponent);
@@ -270,7 +270,7 @@ bool FCatFishingCommandComponentMailboxTest::RunTest(const FString& Parameters)
 		RpcParameterIt && RpcParameterIt->HasAnyPropertyFlags(CPF_Parm));
 	const uint64 SignatureIgnoreFlags =
 		UFunction::GetDefaultIgnoredSignatureCompatibilityFlags() | CPF_OutParm;
-	TestTrue(TEXT("delegate and RPC signatures are reflection-compatible after the required UHT OutParm distinction"),
+	TestTrue(TEXT("delegate and RPC signatures satisfy reflection after the required UHT OutParm distinction"),
 		DelegateProperty->SignatureFunction->IsSignatureCompatibleWith(ClientRpc, SignatureIgnoreFlags));
 
 	UCatFishingCommandComponent* RelayComponent = NewObject<UCatFishingCommandComponent>(
@@ -427,7 +427,6 @@ bool FCatFishingPlaceChumMailboxTest::RunTest(const FString& Parameters)
 	First.bCommitted = true;
 	First.Error = ECatChumFieldError::None;
 	First.FieldId = FGuid::NewGuid();
-	First.EquipmentRevision = 8;
 	First.ChumFieldSetRevision = 4;
 	Component->DeliverPlaceChumResultFromAuthority(First);
 	FCatPlaceChumResult Spatial;
@@ -456,7 +455,7 @@ bool FCatFishingPlaceChumMailboxTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-// 旧竿入口 gate 测试流程：在没有活跃 Run 的权威 Controller 上提交四类直连命令；每条都应写入 CommandsClosed 回执，证明旧 UI/Ability 不会因为静默返回而卡在等待态。
+// 直连鱼竿入口 gate 测试流程：在没有活跃 Run 的权威 Controller 上提交四类直连命令；每条都应写入 CommandsClosed 回执，证明 UI/Ability 不会因为静默返回而卡在等待态。
 bool FCatFishingCommandComponentDirectRodGateResultTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;

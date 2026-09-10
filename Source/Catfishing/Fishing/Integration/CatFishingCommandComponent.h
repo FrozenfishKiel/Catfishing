@@ -87,10 +87,6 @@ public:
 	/** 显式切线入口；现有取消键也会在可切线阶段由服务器改派到同一命令。 */
 	FCatFishingInputEdge SubmitCutLine();
 	FCatFishingInputEdge SubmitScoop();
-	FCatFishingInputEdge SubmitChum();
-	void ForwardLegacyAssist(FGuid FishingSessionId, FGuid RequestId, int64 ExpectedRevision);
-	/** 旧蓝图抢抄入口的兼容转发；成功后同样直接变成嘴叼世界鱼，不接受客户端容器目标。 */
-	void ForwardLegacyScoop(FGuid FishingSessionId, FCatScoopCommand Command);
 
 	UPROPERTY(BlueprintAssignable)
 	FCatFishingCommandResultReceived OnResultReceived;
@@ -117,7 +113,7 @@ private:
 	static constexpr int32 MaxStoredResults = 32;
 
 	bool IsSupportedOwner() const;
-	/** 在路由到具体 Session 前先记录按下/松开事实；即使当前无会话或玩法 gate 关闭，Release 也必须能清掉旧状态。 */
+	/** 在路由到具体 Session 前先记录按下/松开事实；即使当前无会话或玩法 gate 关闭，Release 也必须能清掉已按下状态。 */
 	void TrackHeldFightInputFromAuthority(ECatFishingCommandType CommandType,
 		const FCatFishingInputEdge& Edge);
 	void ReceiveResultLocally(const FCatFishingCommandResult& Result);

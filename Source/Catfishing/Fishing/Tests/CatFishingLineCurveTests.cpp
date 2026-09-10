@@ -70,7 +70,7 @@ bool FCatFishingLineCurveGeometryTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("zero-length line is accepted"), Mesh->UpdateCurve(Start, Start, 0.0, 64, 1.25));
 	TestEqual(TEXT("zero-length line has no degenerate mesh"), Mesh->GetNumSections(), 0);
 	TestFalse(TEXT("invalid length fails closed"), Mesh->UpdateCurve(Start, End, -1.0, 64, 1.25));
-	TestEqual(TEXT("invalid input leaves no stale mesh"), Mesh->GetNumSections(), 0);
+	TestEqual(TEXT("invalid input leaves no mesh"), Mesh->GetNumSections(), 0);
 	return !HasAnyErrors();
 }
 

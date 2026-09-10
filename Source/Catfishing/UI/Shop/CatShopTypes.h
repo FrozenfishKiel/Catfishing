@@ -82,7 +82,7 @@ struct FCatShopEntryView
 	UPROPERTY(BlueprintReadOnly)
 	FText DescriptionText;
 
-	/** 商品行最终显示图标；Model 已按“商店覆盖图优先、库存定义缩略图兜底”解析，WBP 不再二次查目录。 */
+	/** 商品行最终显示图标；Model 已按“商店覆盖图优先、库存定义缩略图作为默认图”解析，WBP 直接使用该图标。 */
 	UPROPERTY(BlueprintReadOnly)
 	TSoftObjectPtr<UTexture2D> IconOverride;
 };
@@ -97,7 +97,7 @@ struct FCatShopCategoryView
 	UPROPERTY(BlueprintReadOnly)
 	FName CategoryId = NAME_None;
 
-	/** 分类按钮显示名；“全部”由程序兜底，其他分类优先来自 DataTable 的分类显示名覆盖。 */
+	/** 分类按钮显示名；“全部”由程序生成，其他分类优先来自 DataTable 的分类显示名覆盖。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText DisplayNameText;
 

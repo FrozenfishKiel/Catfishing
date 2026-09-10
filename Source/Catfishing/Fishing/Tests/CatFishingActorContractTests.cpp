@@ -166,8 +166,6 @@ bool FCatFishingActorNativeBasesContractTest::RunTest(const FString& Parameters)
 	const UCatFishingPresentationSettings* PresentationSettings = GetDefault<UCatFishingPresentationSettings>();
 	TestFalse(TEXT("cast montage is configured"), PresentationSettings->CastMontage.IsNull());
 	TestNotNull(TEXT("configured cast montage resolves"), PresentationSettings->CastMontage.LoadSynchronous());
-	TestFalse(TEXT("line-broken montage is configured"), PresentationSettings->LineBrokenMontage.IsNull());
-	TestNotNull(TEXT("configured line-broken montage resolves"), PresentationSettings->LineBrokenMontage.LoadSynchronous());
 	TestFalse(TEXT("cat-in-water montage is configured"), PresentationSettings->CatInWaterMontage.IsNull());
 	TestNotNull(TEXT("configured cat-in-water montage resolves"), PresentationSettings->CatInWaterMontage.LoadSynchronous());
 
@@ -262,7 +260,7 @@ bool FCatFishingRodCanonicalAnchorsContractTest::RunTest(const FString& Paramete
 	const FVector LeftLocation = Rod->GetOperatorStandWorldTransform(1).GetLocation();
 	TestTrue(TEXT("right and left stand remain centered on canonical stand"),
 		((RightLocation + LeftLocation) * 0.5).Equals(Rod->GetActorLocation(), UE_KINDA_SMALL_NUMBER));
-	TestTrue(TEXT("legacy stand getter aliases right primary slot"),
+	TestTrue(TEXT("stand getter aliases right primary slot"),
 		Rod->GetStandWorldTransform().Equals(Rod->GetOperatorStandWorldTransform(0)));
 	TestTrue(TEXT("all operators share the canonical interaction anchor"),
 		Rod->GetOperatorInteractionWorldTransform().Equals(Rod->GetActorTransform()));
@@ -303,7 +301,7 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("rod publishes immutable item instance identity"), RodFirst.ItemInstanceId, RodItemInstanceId);
 	TestTrue(TEXT("first place transition deploys the rod"), RodFirst.bDeployed);
 	TestEqual(TEXT("first place transition leaves all operator slots empty"), Rod->GetOperatorCount(), 0);
-	TestNull(TEXT("first place transition has no primary operator"), RodFirst.OperatorPlayerState);
+	TestFalse(TEXT("first place transition has no primary operator"), Rod->IsPrimaryOperator(Owner));
 	TestNull(TEXT("grounded rod has no holder"), RodFirst.HolderPlayerState);
 	TestEqual(TEXT("first place transition is grounded"), RodFirst.PoseMode, ECatFishingRodPoseMode::Grounded);
 	TestTrue(TEXT("rod exact identity replay succeeds"), Rod->InitializeAuthoritativeIdentity(
@@ -314,8 +312,7 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 	int32 JoinedSlot = INDEX_NONE;
 	TestTrue(TEXT("first operator joins right primary slot"), Rod->AddOperatorFromAuthority(Owner, 1, JoinedSlot));
 	TestEqual(TEXT("first operator slot index is zero"), JoinedSlot, 0);
-	TestEqual(TEXT("primary compatibility field follows slot zero"),
-		Rod->GetPresentationState().OperatorPlayerState.Get(), Owner);
+	TestTrue(TEXT("slot zero is the primary operator"), Rod->IsPrimaryOperator(Owner));
 	TestEqual(TEXT("first operator becomes authoritative holder"),
 		Rod->GetPresentationState().HolderPlayerState.Get(), Owner);
 	TestEqual(TEXT("first operator atomically switches rod to held"),
@@ -330,7 +327,7 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("coupled carrier constraint carries a target pull speed"),
 		Rod->GetCarrierConstraintState().TargetPullSpeedCentimetersPerSecond, 30.0f);
 	Rod->ClearCarrierConstraintFromAuthority();
-	TestFalse(TEXT("clearing the fight constraint removes stale carrier drag"),
+	TestFalse(TEXT("clearing the fight constraint removes carrier drag"),
 		Rod->GetCarrierConstraintState().bActive);
 	TestEqual(TEXT("clearing the fight constraint restores unrestricted movement"),
 		Rod->GetCarrierConstraintState().PullAccelerationCentimetersPerSecondSquared, 0.0f);
@@ -345,15 +342,14 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("left operator is explicitly reported as promoted"), PromotedPrimary, Helper);
 	TestEqual(TEXT("promoted operator becomes slot zero"), Rod->GetOperatorSlotIndex(Helper), 0);
 	TestEqual(TEXT("two-to-one transition clears cooperative occupancy immediately"), Rod->GetOperatorCount(), 1);
-	TestEqual(TEXT("primary mirror follows promoted operator"),
-		Rod->GetPresentationState().OperatorPlayerState.Get(), Helper);
+	TestTrue(TEXT("promoted slot zero is the primary operator"), Rod->IsPrimaryOperator(Helper));
 	TestEqual(TEXT("promotion atomically transfers holder"),
 		Rod->GetPresentationState().HolderPlayerState.Get(), Helper);
 	TestEqual(TEXT("promotion keeps rod held"), Rod->GetPresentationState().PoseMode,
 		ECatFishingRodPoseMode::Held);
 	TestTrue(TEXT("last operator can leave"), Rod->RemoveOperatorFromAuthority(Helper, 4, PromotedPrimary));
 	TestEqual(TEXT("empty occupancy has zero count"), Rod->GetOperatorCount(), 0);
-	TestNull(TEXT("empty occupancy clears primary mirror"), Rod->GetPresentationState().OperatorPlayerState);
+	TestFalse(TEXT("empty occupancy has no primary operator"), Rod->IsPrimaryOperator(Helper));
 	TestNull(TEXT("empty occupancy clears holder"), Rod->GetPresentationState().HolderPlayerState);
 	TestEqual(TEXT("last operator leaving atomically grounds the rod"),
 		Rod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Grounded);
@@ -378,7 +374,7 @@ bool FCatFishingActorIdentityContractTest::RunTest(const FString& Parameters)
 		SessionId, AttemptId, TEXT("RiverPatternFish"), 99.0, 1.75));
 	TestEqual(TEXT("fish replay preserves line length"), Fish->GetPresentationState().CurrentLineLength, 12.0);
 	TestEqual(TEXT("fish replay preserves frozen visual scale"), Fish->GetPresentationState().VisualScale, 1.25);
-	// CreateTestWorld does not start play automatically; exercise the same component lifecycle used by a real spawned fish.
+	// CreateTestWorld 不会自动触发 BeginPlay；这里显式走真实生成鱼会经历的组件生命周期。
 	WorldWrapper.BeginPlayInTestWorld();
 	const USkeletalMeshComponent* RuntimeFishMesh = Cast<USkeletalMeshComponent>(
 		Fish->GetDefaultSubobjectByName(TEXT("FishMesh")));
@@ -472,7 +468,7 @@ bool FCatFishingAttemptSnapshotContractTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("attempt rod definition defaults None"), Snapshot.RodDefinitionId.IsNone());
 	TestTrue(TEXT("attempt float definition defaults None"), Snapshot.FloatDefinitionId.IsNone());
 	TestTrue(TEXT("attempt bait definition defaults None"), Snapshot.BaitDefinitionId.IsNone());
-	TestEqual(TEXT("attempt reservation revision defaults zero"), Snapshot.EquipmentReservationRevision, int64{0});
+	TestEqual(TEXT("attempt equipment revision defaults zero"), Snapshot.EquipmentUseFreezeRevision, int64{0});
 	TestEqual(TEXT("attempt rod revision defaults zero"), Snapshot.RodActorRevision, int64{0});
 	TestEqual(TEXT("attempt landing defaults zero"), Snapshot.ServerCorrectedLandingWorldPoint, FVector::ZeroVector);
 	TestTrue(TEXT("attempt water region defaults invalid"), !Snapshot.WaterRegion.IsValid());
@@ -503,7 +499,7 @@ bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameter
 	const UCatFishingLineCurveComponent* Curve = Cast<UCatFishingLineCurveComponent>(Hook->GetDefaultSubobjectByName(TEXT("FishingLineCurve")));
 	TestNotNull(TEXT("hook owns a smoothed fishing-line start anchor"), LineStartAnchor);
 	TestNotNull(TEXT("hook owns a native fishing-line curve"), Curve);
-	TestNull(TEXT("hook no longer creates a legacy Cable subobject"), Hook->GetDefaultSubobjectByName(TEXT("FishingLine")));
+	TestNull(TEXT("hook uses the native curve instead of the Cable subobject"), Hook->GetDefaultSubobjectByName(TEXT("FishingLine")));
 	if (LineStartAnchor)
 	{
 		TestTrue(TEXT("line start anchor is world-space independent from replicated hook jumps"),
@@ -525,7 +521,7 @@ bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameter
 		FActorSpawnParameters SpawnParameters;
 		SpawnParameters.Owner = Rod;
 		UClass* FormalHookClass = Settings->HookActorClass.LoadSynchronous();
-		TestNotNull(TEXT("formal configured hook Blueprint loads after curve migration"), FormalHookClass);
+		TestNotNull(TEXT("formal configured hook Blueprint loads with configured curve assets"), FormalHookClass);
 		if (!FormalHookClass) return false;
 		ACatFishingHookActor* RuntimeHook = World->SpawnActor<ACatFishingHookActor>(
 			FormalHookClass, FTransform::Identity, SpawnParameters);
@@ -576,7 +572,7 @@ bool FCatFishingRodMutationAndLineContractTest::RunTest(const FString& Parameter
 				// 权威状态刷新复用与复制回调相同的端点重接入口。
 				RuntimeHook->SetFishingLinePresentationFromAuthority(600.0, 500.0, 100.0, 0.25f, false);
 				TestFalse(TEXT("curve hides when rod owner is lost"), RuntimeCurve->IsVisible());
-				TestEqual(TEXT("curve clears stale geometry when rod owner is lost"), RuntimeCurve->GetNumSections(), 0);
+				TestEqual(TEXT("curve clears geometry when rod owner is lost"), RuntimeCurve->GetNumSections(), 0);
 				RuntimeHook->SetOwner(Rod);
 				RuntimeHook->SetFishingLinePresentationFromAuthority(600.0, 500.0, 100.0, 0.25f, false);
 				TestTrue(TEXT("curve returns when rod owner resolves again"), RuntimeCurve->IsVisible());

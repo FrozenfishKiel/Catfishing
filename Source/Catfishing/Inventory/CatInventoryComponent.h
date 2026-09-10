@@ -3,15 +3,16 @@
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
 #include "Framework/Core/CatDomainCommandTypes.h"
-#include "Inventory/CatInventoryInterface.h"
 #include "Inventory/CatInventoryStatics.h"
 #include "Net/Serialization/FastArraySerializer.h"
+#include "Templates/Function.h"
 #include "CatInventoryComponent.generated.h"
 
 class APawn;
 class UActorChannel;
 class UCatInventoryItemDefinition;
 class UCatInventoryItemInstance;
+class UCatInventoryModel;
 class FOutBunch;
 struct FReplicationFlags;
 struct FCatInventoryItemUseContext;
@@ -28,13 +29,27 @@ struct FCatInventoryEntry : public FFastArraySerializerItem
 	/** 构造一个归属于指定库存组件的空格；用于清空格子后仍保留明确所有者。 */
 	explicit FCatInventoryEntry(UCatInventoryComponent* InSlotOwnerComponent);
 
+	/** 用另一格的物品内容替换本格；保留本格 FastArray 身份与客户端观察历史，让客户端把移动识别为原位置的内容变化。 */
+	FCatInventoryEntry& operator=(const FCatInventoryEntry& Other)
+	{
+		// 只搬运物品和归属；基类赋值会重置复制身份，使清空/移动变成删格再加格，客户端数组下标随之错位。
+		// LastObservedCount 属于目标格的本地观察历史，留给复制回调更新；自赋值不改变任何状态。
+		if (this != &Other)
+		{
+			Instance = Other.Instance;
+			StackCount = Other.StackCount;
+			SlotOwnerComponent = Other.SlotOwnerComponent;
+		}
+		return *this;
+	}
+
 	/** 格子身份只由实例指针决定；这样堆叠数量变化不会触发错误的换物判断。 */
 	bool operator==(const FCatInventoryEntry& Other) const;
 
 	/** 空格不能和空实例互相匹配；避免清理路径把两个空指针当作同一件物品。 */
 	bool operator==(const UCatInventoryItemInstance* InInstance) const;
 
-	/** 反向实例匹配复用同一套空值规则；避免移动和删除分支出现第二套判断口径。 */
+	/** 反向实例匹配复用同一套空值规则；避免移动和删除分支出现额外判断口径。 */
 	bool operator!=(const UCatInventoryItemInstance* InInstance) const;
 
 public:
@@ -55,6 +70,62 @@ public:
 	TObjectPtr<UCatInventoryComponent> SlotOwnerComponent = nullptr;
 };
 
+/** 一次库存 Use 或 UnUse 的事务结果；回执直接携带真实 entry，调用方必须从实例读取鱼竿或鱼的专属状态。 */
+USTRUCT(BlueprintType)
+struct FCatInventoryItemUseResult
+{
+	GENERATED_BODY()
+
+	/** 本次命令的稳定关联 ID；服务器幂等缓存和上层回执用它识别同一意图。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid RequestId;
+
+	/** 本次事务读取或移动的真实库存 entry；其中的实例是鱼竿、鱼等专属运行状态的唯一来源。 */
+	UPROPERTY(BlueprintReadOnly)
+	FCatInventoryEntry Item;
+
+	/** 本次库存裁决的领域错误；成功只表示库存事务成立，外层仍需提交自己的世界效果。 */
+	UPROPERTY(BlueprintReadOnly)
+	ECatDomainCommandError Error = ECatDomainCommandError::InvalidPayload;
+
+	/** 本次请求是否实际改变库存或活动实例所有权。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bCommitted = false;
+
+	/** 回执是否来自同一请求的终态缓存；重放不再次改变库存。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bTerminalReplay = false;
+
+	/** 重放的首次事务是否实际提交；下游只在此为真时继续自己的提交。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bReplayedTerminalCommitted = false;
+
+	/** 重放前首次事务的原始错误；失败重放继续暴露首次拒绝原因。 */
+	UPROPERTY(BlueprintReadOnly)
+	ECatDomainCommandError ReplayedTerminalError = ECatDomainCommandError::InvalidPayload;
+};
+
+/** 把首次 Use/UnUse 终态改写为只读重放，避免相同 RequestId 再次改变库存。 */
+inline void MarkInventoryItemUseReplayed(FCatInventoryItemUseResult& Result)
+{
+	const bool bOriginalCommitted = Result.bCommitted;
+	const ECatDomainCommandError OriginalError = Result.Error;
+	Result.bCommitted = false;
+	Result.bTerminalReplay = true;
+	Result.bReplayedTerminalCommitted = bOriginalCommitted;
+	Result.Error = bOriginalCommitted && OriginalError == ECatDomainCommandError::None
+		? ECatDomainCommandError::AlreadyResolved : OriginalError;
+	Result.ReplayedTerminalError = OriginalError;
+}
+
+/** 下游世界效果以首次提交事实为依据；成功重放允许续做尚未落地的效果，失败重放必须停止，不能只看当前错误码。 */
+inline bool CatIsAcceptedInventoryItemUseResult(const FCatInventoryItemUseResult& Result)
+{
+	return (Result.bCommitted && Result.Error == ECatDomainCommandError::None)
+		|| (Result.bTerminalReplay && Result.bReplayedTerminalCommitted
+			&& Result.ReplayedTerminalError == ECatDomainCommandError::None);
+}
+
 /** 库存格 FastArray；负责把格子增删改复制给客户端，并把变化通知交回拥有的库存组件。 */
 USTRUCT(BlueprintType)
 struct FCatInventoryList : public FFastArraySerializer
@@ -70,14 +141,17 @@ struct FCatInventoryList : public FFastArraySerializer
 	/** 收集当前所有非空物品实例；调用方拿到的是快照数组，不能通过它修改库存。 */
 	TArray<UCatInventoryItemInstance*> GetAllItems() const;
 
-	/** 复制删除回调；客户端用它刷新观察数量并通知 UI 或适配层重读库存。 */
+	/** 复制删除前更新观察数量；完整列表通知延后到删除真正完成后。 */
 	void PreReplicatedRemove(const TArrayView<int32> RemovedIndices, int32 FinalSize);
 
-	/** 复制新增回调；客户端在这里补齐本地格子 owner 并广播库存变化。 */
+	/** 复制新增回调；客户端在这里补齐本地格子 owner 和物品运行宿主。 */
 	void PostReplicatedAdd(const TArrayView<int32> AddedIndices, int32 FinalSize);
 
-	/** 复制变更回调；客户端在这里更新观察数量并广播库存变化。 */
+	/** 复制变更回调；客户端在这里更新观察数量和物品归属。 */
 	void PostReplicatedChange(const TArrayView<int32> ChangedIndices, int32 FinalSize);
+
+	/** 一批复制及延迟对象映射结束后通知组件；此时数组已经完成增删，Model 和 UI 可以读取最终槽位列表。 */
+	void PostReplicatedReceive(const FFastArraySerializer::FPostReplicatedReceiveParameters& Parameters);
 
 	/** FastArray delta 序列化入口；只复制 Entries 的变化，不额外复制派生缓存。 */
 	bool NetDeltaSerialize(FNetDeltaSerializeInfo& DeltaParms);
@@ -91,38 +165,28 @@ struct FCatInventoryList : public FFastArraySerializer
 	TObjectPtr<UCatInventoryComponent> OwnerComponent = nullptr;
 };
 
+/** Unreal 结构体 traits 声明这份库存列表走 FastArray delta 序列化；没有它时 Entries 会失去按条目增删改复制的语义。 */
 template<>
 struct TStructOpsTypeTraits<FCatInventoryList> : public TStructOpsTypeTraitsBase2<FCatInventoryList>
 {
 	enum { WithNetDeltaSerializer = true };
 };
 
-/** 被库存临时借出的不可堆叠单实例记录；部署型物品离开可见背包后，正式库存仍用它保管同一个数量为 1 的实例。 */
-USTRUCT()
-struct FCatInventoryHeldEntryRecord
-{
-	GENERATED_BODY()
-
-	/** 被借出的完整库存格；它必须是不可堆叠且数量为 1 的单实例，归还时不能按定义重新生成另一件物品。 */
-	UPROPERTY()
-	FCatInventoryEntry Entry;
-
-	/** 借出发生后的库存版本；诊断和回滚路径用它确认这条活动记录来自哪次库存内容变化。 */
-	UPROPERTY()
-	int64 HoldRevision = 0;
-};
-
-/** Aegis 风格库存组件的 Catfishing 适配版；它负责格子、实例、统一收货、使用扣量和跨库存交换。 */
+/** Catfishing 的正式库存组件；它负责格子、实例、统一收货、使用扣量和跨库存交换。 */
 UCLASS(ClassGroup = (Catfishing), meta = (BlueprintSpawnableComponent))
-class CATFISHING_API UCatInventoryComponent : public UActorComponent, public ICatInventoryInterface
+class CATFISHING_API UCatInventoryComponent : public UActorComponent
 {
 	GENERATED_BODY()
 
 public:
+	/** 库存观察变化的无参通知类型；监听者收到后必须重新读取库存快照，而不是从事件载荷拿可写事实。 */
 	DECLARE_MULTICAST_DELEGATE(FOnInventoryObservedChanged);
 
 	/** 构造库存组件并开启复制；格子数量由 NumSlots 在初始化时补齐。 */
 	UCatInventoryComponent(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+
+	/** 取得本库存的本地显示 Model；首次打开 UI 时创建并填入当前列表，此后由库存变化通知更新。 */
+	UCatInventoryModel* GetInventoryModel();
 
 	/** 组件初始化要补齐 owner 和空槽；只扩容不截断，避免蓝图改小容量时运行期丢物品。 */
 	virtual void InitializeComponent() override;
@@ -130,7 +194,7 @@ public:
 	/** BeginPlay 时再次刷新槽位；处理蓝图默认值或运行期构造顺序导致的延迟配置。 */
 	virtual void BeginPlay() override;
 
-	/** 复制声明流程：注册 FastArray 库存列表和内容版本；实例对象走 registered subobject list，终态缓存和本地通知不复制。 */
+	/** 复制声明流程：注册 FastArray 库存列表；实例对象走 registered subobject list，终态缓存和本地通知不复制。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 
 	/** 复制就绪后登记当前所有物品实例；客户端才能从 FastArray 指针解析到具体实例。 */
@@ -139,18 +203,15 @@ public:
 	/** 复制子对象入口；使用 registered subobject list，函数保留给引擎复制管线调用。 */
 	virtual bool ReplicateSubobjects(UActorChannel* Channel, FOutBunch* Bunch, FReplicationFlags* RepFlags) override;
 
-	/** 由库存接口暴露自身；统一收货入口据此发现组件。 */
-	virtual UCatInventoryComponent* GetInventoryComponent() override;
-
-	/** 按定义资产把数量写入服务器正式库存；返回第一份被接收的实例，InOutCount 和 bOutFullyAdded 交回剩余数量，调用方可选择是否立即提交版本。 */
+	/** 按定义资产把数量写入服务器正式库存；返回第一份被接收的实例，InOutCount 和 bOutFullyAdded 交回剩余数量，调用方可选择是否立即广播变化。 */
 	UCatInventoryItemInstance* AddEntry(UCatInventoryItemDefinition* ItemDefinition,
 		int32& InOutCount, bool& bOutFullyAdded,
 		TSubclassOf<UCatInventoryItemInstance> ItemInstanceClass = nullptr,
-		bool bAdvanceRevision = true);
+		bool bBroadcastChange = true);
 
-	/** 按现有实例把数量写入服务器正式库存；首个新格保留传入实例，剩余数量和版本提交时机由调用方通过输出参数和 bAdvanceRevision 接收。 */
+	/** 按现有实例把数量写入服务器正式库存；首个新格保留传入实例，剩余数量和变化通知时机由调用方通过输出参数和 bBroadcastChange 接收。 */
 	void AddEntry(UCatInventoryItemInstance* ItemInstance, int32& InOutCount, bool& bOutFullyAdded,
-		bool bAdvanceRevision = true);
+		bool bBroadcastChange = true);
 
 	/** 查找当前最适合接收指定实例的槽位；优先可堆叠格，其次空格，找不到返回 INDEX_NONE。 */
 	int32 FindAvailableSlot(UCatInventoryItemInstance* ItemInstance, int32 Count) const;
@@ -169,9 +230,13 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory", BlueprintPure = false)
 	TArray<FCatInventoryEntry> GetInventoryEntries() const;
 
-	/** 当前库存内容版本；玩家整理、收货和扣量都会推进它，钓鱼选择变化不会污染这份背包版本。 */
-	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")
-	int64 GetInventoryRevision() const;
+	/** authority 把当前库存拥有的可持久化 entry 导出为保存输入；空格只能是空实例与零数量，Save 用它序列化 visible slots 和 held entries。 */
+	bool ExportInventorySlotsFromAuthority(TArray<FCatInventoryEntry>& OutSlots,
+		int32 MaximumSlotCount, FText& OutFailure) const;
+
+	/** authority 从已恢复实例的 entry 替换当前库存；保存系统用它反序列化可见格、验证容器槽位规则，并拒绝活动区仍有未收口实例的覆盖。 */
+	bool RestoreInventorySlotsFromAuthority(const TArray<FCatInventoryEntry>& RestoredSlots,
+		int32 MinimumSlotCount, FText& OutFailure);
 
 	/** 服务器按现有实例正式入库；调用前建议用批次预检避免部分写入。 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
@@ -188,29 +253,30 @@ public:
 	/** 先预检整批载荷，再把它写入当前库存组件；成功后只由这一份组件成为事实源。 */
 	bool TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch);
 
-	/** authority 归还已经从本库存预留出去的批次；普通入库放不下时可补少量返还格，避免收口流程吞掉预留物。 */
-	bool TryReturnReservedInventoryBatchFromAuthority(
-		const FCatInventoryReceiveBatch& ReceiveBatch, int32 OverflowSlotCount);
-
 	/** 只读预检稳定物品 ID 能否进入当前正式库存；商店、奖励和初始化发货用它在提交前确认目录、authority 和容量。 */
 	ECatDomainCommandError ValidateInventoryDefinitionGrantFromAuthority(FGuid RequestId, FName DefinitionId,
 		int32 Count) const;
 
-	/** authority 按稳定物品 ID 向当前正式库存发货；库存组件负责目录解析、Revision、幂等和整批写入，并返回提交状态、错误码和最新正式库存版本。 */
-	FCatDomainCommandResult GrantInventoryDefinitionFromAuthority(FGuid RequestId, int64 ExpectedRevision,
-		FName DefinitionId, int32 Count);
+	/** authority 按稳定物品 ID 向当前正式库存发货；库存组件负责目录解析、幂等和整批写入，并返回提交状态与错误码。 */
+	FCatDomainCommandResult GrantInventoryDefinitionFromAuthority(FGuid RequestId, FName DefinitionId, int32 Count);
 
-	/** 只读预检已经解析出的物品定义能否进入当前正式库存；旧 Equipment 适配层用它把容量和堆叠裁决交回 Inventory。 */
+	/** 只读预检已经解析出的物品定义能否进入当前正式库存；调用方用它把容量和堆叠裁决交回 Inventory。 */
 	ECatDomainCommandError ValidateResolvedInventoryDefinitionGrantFromAuthority(
 		FGuid RequestId, UCatInventoryItemDefinition* ItemDefinition, int32 Count) const;
 
-	/** authority 按已经解析出的物品定义发货；调用方可另有业务 Revision，但这里的 ExpectedRevision 仍按正式库存版本裁决。 */
+	/** authority 按已经解析出的物品定义发货；调用方只提供业务载荷，库存按当前条目、容量和幂等缓存裁决。 */
 	FCatDomainCommandResult GrantResolvedInventoryDefinitionFromAuthority(FGuid RequestId,
-		int64 ExpectedRevision, UCatInventoryItemDefinition* ItemDefinition, int32 Count);
+		UCatInventoryItemDefinition* ItemDefinition, int32 Count);
 
-	/** 服务器整理本库存里的两个格子；RequestId 和库存 Revision 在正式库存层裁决，返回提交状态、错误和最新库存版本。 */
-	FCatDomainCommandResult MoveInventorySlotFromAuthority(FGuid RequestId, int64 ExpectedRevision,
-		int32 SourceSlotIndex, int32 TargetSlotIndex);
+	/** 只读预检一批已解析定义能否完整进入当前正式库存；调用方用它在扣款、奖励结算等不可逆动作前确认容量。 */
+	ECatDomainCommandError ValidateInventoryDefinitionBatchGrantFromAuthority(FGuid RequestId,
+		const FString& IdempotencyPayloadContext,
+		const FCatInventoryReceiveBatch& ReceiveBatch) const;
+
+	/** authority 按一批已解析定义发货；正式库存先物化实例批次，再负责幂等、容量预演、变化广播和成功重放。 */
+	FCatDomainCommandResult GrantInventoryDefinitionBatchFromAuthority(FGuid RequestId,
+		const FString& IdempotencyPayloadContext,
+		const FCatInventoryReceiveBatch& ReceiveBatch);
 
 	/** Actor 级收货用这个开关区分公共入口和专用容器；避免外部系统误把所有库存都当默认背包。 */
 	bool CanReceiveUnifiedInventoryIntake() const;
@@ -221,39 +287,52 @@ public:
 	/** authority 按外部配置刷新槽位容量；只补齐新增空槽，不因容量变小删除已有物品。 */
 	void SetInventorySlotCountFromAuthority(int32 NewSlotCount);
 
-	/** authority 用一份完整槽位快照替换当前库存；存档恢复和旧结构迁移靠它保留格子顺序。 */
+	/** authority 用一份完整槽位快照替换当前库存；存档恢复靠它保留格子顺序。 */
 	bool ReplaceInventoryEntriesFromAuthority(const TArray<FCatInventoryEntry>& NewEntries, int32 MinimumSlotCount);
 
 	/** 按实例移除物品；实例完全离开当前库存后会解除复制子对象登记。 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
 	void RemoveItemInstance(UCatInventoryItemInstance* ItemInstance);
 
-	/** 按槽位清空物品；调用方必须已确认这是允许丢弃或迁移的库存事务。 */
+	/** 按槽位清空物品；调用方必须已确认这是允许丢弃或转移的库存实例命令。 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
 	void RemoveItemInstanceFromIndex(int32 TargetIndex);
 
 	/** authority 从指定槽位移出完整 entry；部署、跨容器转移等需要保留实例身份的流程用它接走正式库存事实。 */
 	bool RemoveInventoryEntryAtSlotFromAuthority(int32 TargetIndex, FCatInventoryEntry& OutRemovedEntry);
 
-	/** authority 把指定槽位完整借出到库存内部活动区；部署型物品用它离开可见格子但仍归本库存保管同一不可堆叠实例。 */
+	/** authority 把指定槽位完整借出到库存内部活动区；部署型物品用它离开可见格子，收回时必须像普通拾取一样重新占用真实空位。 */
 	bool HoldInventoryEntryAtSlotFromAuthority(int32 SlotIndex, FCatInventoryEntry& OutHeldEntry);
 
-	/** authority 按实例身份借出部署型物品；正式库存负责 Revision、槽位解析和 held entry，返回值交给部署/回滚调用方串联同一实例。 */
-	FCatDomainCommandResult HoldInventoryItemInstanceFromAuthority(FGuid RequestId, int64 ExpectedRevision,
-		FGuid ItemInstanceId, FCatInventoryEntry& OutHeldEntry);
+	/** authority 按实例身份借出部署型物品；正式库存负责服务器校验、槽位解析和 held entry，返回值交给部署/回滚调用方串联同一实例。 */
+	FCatDomainCommandResult HoldInventoryItemInstanceFromAuthority(FGuid RequestId, FGuid ItemInstanceId, FCatInventoryEntry& OutHeldEntry);
 
-	/** authority 按实例身份把部署型物品从活动区归还可见库存；收杆和 Use 回滚只消费结构化结果，库存负责同一实例、容量、复制和 Revision，且不缓存终态以便外层失败后重新借回。 */
+	/** authority 按实例执行正式库存 Use；库存负责幂等、定义裁决、扣量/借出和回滚，调用方只补自己的提交后刷新。 */
+	FCatInventoryItemUseResult UseItemInstanceFromAuthority(FGuid RequestId, FGuid ItemInstanceId, int32 Quantity, const FString& IdempotencyPayloadContext,
+		TFunctionRef<ECatDomainCommandError(FCatInventoryItemUseResult&)> ValidateBeforeMutation,
+		TFunctionRef<bool(FCatInventoryItemUseResult&)> FinalizeCommittedUse);
+
+	/** 只读查询正式库存 Use 是否已有终态；命中时返回首次结果的可诊断重放，不重新读取当前槽位。 */
+	bool TryReplayItemUseTerminalFromAuthority(FGuid RequestId, FGuid ItemInstanceId, int32 Quantity,
+		const FString& IdempotencyPayloadContext, FCatInventoryItemUseResult& OutResult) const;
+
+	/** authority 按实例身份把部署型物品从活动区归还可见库存；收杆和 Use 回滚只消费结构化结果，库存负责同一实例、容量、复制和变化通知，且不缓存终态以便外层失败后重新借回。 */
 	FCatDomainCommandResult ReturnHeldInventoryItemInstanceFromAuthority(FGuid RequestId, FGuid ItemInstanceId,
-		int32 MinimumSlotCount, int32 OverflowSlotCount, FCatInventoryEntry& OutReturnedEntry);
+		int32 MinimumSlotCount, FCatInventoryEntry& OutReturnedEntry);
 
-	/** authority 把活动区里同一不可堆叠实例放回可见库存；这是库存内部低层拼装点，正式外部调用优先走结构化归还入口。 */
+	/** authority 按实例执行正式库存 UnUse；库存负责从活动区归还同一实例、终态重放和失败回滚，调用方只补自己的读模型同步。 */
+	FCatInventoryItemUseResult UnUseItemInstanceFromAuthority(FGuid RequestId, FGuid ItemInstanceId,
+		int32 MinimumSlotCount, const FString& IdempotencyPayloadContext,
+		TFunctionRef<bool(FCatInventoryItemUseResult&)> FinalizeCommittedUnUse);
+
+	/** authority 把活动区里同一不可堆叠实例归还当前库存；这是部署型物品收回时复用本组件容量规则的低层拼装点。 */
 	bool ReturnHeldInventoryEntryFromAuthority(FGuid ItemInstanceId, int32 MinimumSlotCount,
-		int32 OverflowSlotCount, FCatInventoryEntry& OutReturnedEntry);
+		FCatInventoryEntry& OutReturnedEntry);
 
 	/** authority 用保存的单实例 entry 重建活动区记录；只供外层归还后失败回滚，成功后可见库存不应再持有该实例。 */
 	bool RestoreHeldInventoryEntryForRollbackFromAuthority(const FCatInventoryEntry& HeldEntry);
 
-	/** authority 退役活动区里的同一实例；存档已接管部署物时用它清掉本库存临时保管记录。 */
+	/** authority 退役活动区里的同一实例；存档已接管部署物时用它清掉本库存活动区保管记录。 */
 	bool RetireHeldInventoryEntryFromAuthority(FGuid ItemInstanceId);
 
 	/** authority 读取活动区里某个实例的可写 entry；调用方只能用于同一服务器事务内同步运行状态。 */
@@ -265,7 +344,7 @@ public:
 	/** authority 把当前活动区里的 held entry 追加到输出快照；存档导出用它读取库存正在保管的部署型实例。 */
 	void AppendHeldInventoryEntriesFromAuthority(TArray<FCatInventoryEntry>& OutEntries) const;
 
-	/** authority 查询库存活动区是否仍有部署型实例；恢复、维修和失败预算用它判断库存是否处于可写空闲态。 */
+	/** authority 查询库存活动区是否仍有部署型实例；恢复和失败预算用它判断库存是否处于可写空闲态。 */
 	bool HasActiveHeldInventoryEntriesFromAuthority() const;
 
 	/** 从指定格扣除数量；数量归零时清空格子并在安全时解除实例复制登记。 */
@@ -284,13 +363,13 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")
 	int32 FindInventorySlotIndexFromInstance(const UCatInventoryItemInstance* ItemInstance) const;
 
-	/** 按稳定实例 ID 查找所在槽位；旧 Equipment 投影和网络命令只拿到 ID 时用它回到正式库存格。 */
+	/** 按稳定实例 ID 查找所在槽位；Equipment 读模型和网络命令只拿到 ID 时用它回到正式库存格。 */
 	int32 FindInventorySlotIndexFromInstanceId(FGuid ItemInstanceId) const;
 
-	/** 按稳定定义 ID 查找第一格可消费库存；材料消耗和旧选择修复用它回到正式库存事实。 */
+	/** 按稳定定义 ID 查找第一格可消费库存；材料扣除和库存可用性判断用它回到正式库存事实。 */
 	int32 FindFirstInventorySlotIndexByDefinitionId(FName DefinitionId) const;
 
-	/** 当前可见库存数量表示玩家背包格里仍可整理、可选择的同定义总数；选择修复和可用性判断读取它，不包含 held 活动区、Fishing 会话预留或其他已离开可见槽位的实例。 */
+	/** 当前可见库存数量表示玩家背包格里仍可整理、可选择的同定义总数；库存可用性判断读取它，不包含 held 活动区、Fishing 会话冻结或其他已离开可见槽位的实例。 */
 	int32 CountVisibleInventoryQuantityByDefinitionId(FName DefinitionId) const;
 
 	/** 读取当前库存槽位数量；用于 UI 创建格子和交换操作校验下标。 */
@@ -302,28 +381,16 @@ public:
 	/** Use 预检交给实例语义决定；默认使用拥有者 Pawn，库存核心不认识 GAS、装备、草药或窝料目标。 */
 	bool CanUseItemAtSlot(int32 SlotIndex, APawn* UserPawn = nullptr) const;
 
-	/** 从指定槽位发起旧版库存 Use；蓝图和旧 UI 仍可调用它，客户端只提交 RPC，服务器会收口到结构化 Use 命令，返回值按旧 bool 口径表达请求是否被接受或结果是否可视为成功。 */
-	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
-	bool TryUseItemAtSlot(int32 SlotIndex, APawn* UserPawn = nullptr);
-
-	/** 服务器用结构化上下文使用指定槽位；库存组件先裁决 RequestId、版本和槽位，再把真实效果交给物品实例。 */
+	/** 服务器用结构化上下文使用指定槽位；库存组件先裁决 RequestId、当前槽位和物品实例，再把真实效果交给实例侧流程。 */
 	FCatDomainCommandResult UseItemAtSlotFromAuthority(const FCatInventoryItemUseContext& UseContext);
 
-	/** 客户端请求服务器执行跨库存交换；真正写入仍由服务器再次校验。 */
-	UFUNCTION(Server, Reliable)
-	void ServerExchangeInventorySlot(UCatInventoryComponent* DropInventory, int32 DraggedSlotIndex,
-		int32 DropSlotIndex);
-
-	/** 拖放交换先做无副作用校验；避免客户端请求或 UI 预检直接改写库存事实。 */
-	static bool CanExecuteExchangeRequest(UCatInventoryComponent* DraggedInventory, int32 DraggedSlotIndex,
-		UCatInventoryComponent* DropInventory, int32 DropSlotIndex);
+	/** authority 把当前组件的一个槽位移动、合并或交换到另一个正式库存；组件负责幂等、格子写入和变化通知。 */
+	FCatDomainCommandResult MoveItemToInventoryFromAuthority(FGuid RequestId,
+		int32 SourceSlotIndex,
+		UCatInventoryComponent* TargetInventory, int32 TargetSlotIndex, const FString& IdempotencyPayloadContext);
 
 	/** 在服务器上执行一次拖放交换或堆叠合并；调用方必须已经位于 authority 路径。 */
 	static bool ExecuteExchangeRequestOnAuthority(UCatInventoryComponent* DraggedInventory, int32 DraggedSlotIndex,
-		UCatInventoryComponent* DropInventory, int32 DropSlotIndex);
-
-	/** 发起一次拖放交换；客户端走 RPC，服务器或单机直接执行 authority 写入。 */
-	static bool ExecuteExchangeRequest(UCatInventoryComponent* DraggedInventory, int32 DraggedSlotIndex,
 		UCatInventoryComponent* DropInventory, int32 DropSlotIndex);
 
 	/** 按实例返回一份格子快照；找不到时返回空格，不给调用方可写引用。 */
@@ -332,16 +399,6 @@ public:
 	/** 当库存复制或服务器提交发生变化时触发；UI 和适配层收到后重新读取完整库存。 */
 	FOnInventoryObservedChanged OnInventoryObservedChanged;
 
-	/** 客户端删除格子的表现扩展点；默认只依赖统一变化通知，子类可补 UI 特效。 */
-	virtual void BroadcastInventoryRemoveOnClient(const TArrayView<int32> RemovedIndices, int32 FinalSize);
-
-	/** 客户端新增格子的表现扩展点；默认只依赖统一变化通知，子类可补获取提示。 */
-	virtual void BroadcastInventoryAddOnClient(const TArrayView<int32> AddedIndices, int32 FinalSize,
-		const TArray<FCatInventoryEntry>& TargetList);
-
-	/** 客户端变更格子的表现扩展点；默认只依赖统一变化通知，子类可补高亮刷新。 */
-	virtual void BroadcastInventoryChangeOnClient(const TArrayView<int32> ChangedIndices, int32 FinalSize);
-
 	/** 广播本地库存变化；服务器提交和客户端复制最终都收敛到这一个通知。 */
 	virtual void BroadcastInventoryChange(int32 ChangedIndex = INDEX_NONE);
 
@@ -349,6 +406,14 @@ public:
 	virtual bool CanAcceptInventoryEntryAtSlot(const FCatInventoryEntry& IncomingEntry, int32 TargetSlotIndex) const;
 
 protected:
+	/** 本库存独立的显示 Model；组件按需创建并持有，服务器本地提交或客户端复制后更新，其他库存不会写入它。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatInventoryModel> InventoryModel;
+
+	/** 定义批次接收规则默认保持通用背包语义；不创建实例的容量预演用它和正式入库保持同一槽位口径。 */
+	virtual bool CanAcceptInventoryDefinitionAtSlot(const UCatInventoryItemDefinition& IncomingDefinition,
+		int32 TargetSlotIndex) const;
+
 	/** 容量预演里的轻量格子；它只保存定义和数量，不创建运行实例或触发复制。 */
 	struct FSimulatedInventorySlot
 	{
@@ -359,14 +424,15 @@ protected:
 		int32 StackCount = 0;
 	};
 
-	/** 库存交换的内部结果；公开命令和旧 bool 入口共用它，避免同一套移动规则复制两份。 */
+	/** 库存交换的内部结果；公开命令用它避免同一套移动规则复制两份。 */
 	struct FInventoryExchangeMutation
 	{
 		/** 本次交换的领域错误；None 只和真实格子变化一起出现。 */
 		ECatDomainCommandError Error = ECatDomainCommandError::InvalidPayload;
 
-		/** 格子数组是否已经被修改；调用方据此决定是否推进 Revision 和广播。 */
+		/** 格子数组是否已经被修改；调用方据此决定是否广播变化。 */
 		bool bChanged = false;
+
 	};
 
 	/** 解析定义资产和实例类型并创建真正入库的物品实例；失败时不修改任何格子。 */
@@ -386,9 +452,9 @@ protected:
 	ECatDomainCommandError ValidateInventoryDefinitionGrantFromAuthorityInternal(
 		FGuid RequestId, FName DefinitionId, UCatInventoryItemDefinition* ItemDefinition, int32 Count) const;
 
-	/** 稳定物品发货提交的共用事务；它是正式库存写入的唯一实现，外层系统只负责把自己的业务意图解析成库存定义。 */
+	/** 稳定物品发货提交的共用写入口；它是正式库存写入的唯一实现，外层系统只负责把自己的业务意图解析成库存定义。 */
 	FCatDomainCommandResult GrantInventoryDefinitionFromAuthorityInternal(
-		FGuid RequestId, int64 ExpectedRevision, FName DefinitionId,
+		FGuid RequestId, FName DefinitionId,
 		UCatInventoryItemDefinition* ItemDefinition, int32 Count);
 
 	/** 读取某个定义的有效堆叠上限；集中处理非法配置，确保预演和正式入库口径一致。 */
@@ -405,37 +471,21 @@ protected:
 	/** 把实例的运行宿主同步成当前库存拥有者；交换、收货和复制回调都通过它收束归属。 */
 	void SyncInventoryItemRuntimeOwner(UCatInventoryItemInstance* ItemInstance) const;
 
-	/** 判断传入整表是否和当前库存内容一致；只比较格位、实例和数量，不让外部同步无故推进版本。 */
+	/** 判断传入整表是否和当前库存内容一致；只比较格位、实例和数量，避免外部同步制造无意义广播。 */
 	bool AreInventoryEntriesEquivalent(const TArray<FCatInventoryEntry>& NewEntries,
 		int32 MinimumSlotCount) const;
 
-	/** authority 库存内容发生变化时推进版本并请求拥有 Actor 复制；客户端不能本地制造新版本。 */
-	void AdvanceInventoryRevisionFromAuthority();
-
-	/** 复用正式交换规则但暂不广播；返回结构化错误和变更标记，让命令入口先推进版本再统一通知读者重读。 */
+	/** 复用正式交换规则但暂不广播；返回结构化错误和变更标记，让命令入口统一通知读者重读。 */
 	static FInventoryExchangeMutation ExecuteExchangeRequestOnAuthorityInternal(
 		UCatInventoryComponent* DraggedInventory, int32 DraggedSlotIndex,
 		UCatInventoryComponent* DropInventory, int32 DropSlotIndex);
 
-	/** 构造库存命令幂等键；缓存只在当前组件生命周期内保护重复 RPC。 */
+	/** 构造库存命令幂等键；缓存只在当前组件生命周期内保护重复命令。 */
 	static FString MakeTerminalKey(const TCHAR* Operation, FGuid RequestId);
-
-	/** 库存版本复制到客户端时触发一次重读；FastArray 与版本字段到达顺序不稳定，因此刷新必须可重复。 */
-	UFUNCTION()
-	void OnRep_InventoryRevision();
-
-	/** 客户端请求服务器使用槽位；RPC 不信任客户端预检，服务器复用旧兼容外壳组装正式 Use 上下文，最终状态依靠结构化命令日志和库存复制回到客户端。 */
-	UFUNCTION(Server, Reliable)
-	void ServerTryUseItemAtSlot(int32 SlotIndex, APawn* UserPawn);
 
 	/** 当前库存的复制格子列表；它是组件内部的唯一库存事实源。 */
 	UPROPERTY(Replicated)
 	FCatInventoryList InventoryList;
-
-	/** 当前库存内容的乐观并发版本；服务器提交库存内容变化时递增，客户端只拿它回传命令前提。 */
-	UPROPERTY(ReplicatedUsing = OnRep_InventoryRevision, BlueprintReadOnly, Category = "InventoryConfig",
-		meta = (AllowPrivateAccess = "true"))
-	int64 InventoryRevision = 0;
 
 	/** 配置声明的槽位数；初始化只补齐空格，不会因为配置变小而删除已有物品。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "InventoryConfig")
@@ -449,13 +499,17 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "InventoryConfig")
 	int32 UnifiedInventoryIntakePriority = 0;
 
-	/** 当前从本库存借出但尚未归还或退役的不可堆叠单实例记录；库存靠它成为部署型物品离格后的唯一 UObject 保管者。 */
+	/** 当前从本库存借出但尚未归还或退役的不可堆叠单实例；键是实例身份，值是唯一的完整 entry，部署与收回都只操作这份所有权记录。 */
 	UPROPERTY(Transient)
-	TMap<FGuid, FCatInventoryHeldEntryRecord> ActiveHeldItemEntries;
+	TMap<FGuid, FCatInventoryEntry> ActiveHeldItemEntries;
 
-	/** 普通库存命令首次终态缓存；重复 RequestId 只返回首次结果，不再次整理格子。 */
+	/** 物品 Use/UnUse 的首次终态缓存；Transient 反射引用会保活回包 entry 中的实例，重复 RequestId 只重放原结果，不重新扣量、借出或归还实例。 */
+	UPROPERTY(Transient)
+	TMap<FString, FCatInventoryItemUseResult> InventoryItemUseTerminalCache;
+
+	/** 普通库存命令首次终态缓存；重复 RequestId 只返回首次结果，避免重复整理格子。 */
 	TMap<FString, FCatDomainCommandResult> TerminalCache;
 
-	/** 库存命令载荷签名；同一 RequestId 换槽位或版本会被拒绝，避免客户端复用幂等键改写新意图。 */
+	/** 库存命令载荷签名；同一 RequestId 换槽位、目标或物品载荷会被拒绝，避免客户端复用幂等键改写新意图。 */
 	TMap<FString, FString> TerminalPayloadByKey;
 };

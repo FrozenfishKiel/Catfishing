@@ -3,7 +3,7 @@
 #include "Logging/CatLog.h"
 #include "Engine/LocalPlayer.h"
 #include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentSettings.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Kismet/GameplayStatics.h"
 #include "Profile/CatProfileSaveGame.h"
 #include "Profile/CatProfileSettings.h"
@@ -120,13 +120,13 @@ bool UCatProfileSubsystem::ReceiveCapturePlan(const FCatCapturePlan& Plan)
 	return true;
 }
 
-// 装备选择流程：先验证 Request/槽位/正式定义及解锁资格，暂存旧值后写新选择并同步保存；保存失败恢复旧内存，绝不把局内耐久或数量带进 Profile。
+// 装备选择流程：先验证 Request/槽位/正式定义及解锁资格，暂存变更前值后写新选择并同步保存；保存失败恢复失效内存，绝不把局内耐久或数量带进 Profile。
 FCatDomainCommandResult UCatProfileSubsystem::SetEquipmentSelection(const FGuid RequestId, const FName SlotId,
 	const FName EquipmentDefinitionId)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(EquipmentDefinitionId);
+	UCatEquipmentDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(EquipmentDefinitionId);
 	if (!bPersistenceReady || !CurrentProfile || !RequestId.IsValid() || SlotId.IsNone() || !Definition
 		|| Definition->LoadoutSlotId != SlotId
 		|| (!Definition->RequiredUnlockId.IsNone() && !CurrentProfile->UnlockIds.Contains(Definition->RequiredUnlockId)))
@@ -194,7 +194,7 @@ bool UCatProfileSubsystem::GetEquipmentUnlockSnapshot(TArray<FName>& OutUnlockId
 	return true;
 }
 
-// 印记隐藏流程：定位本人本地索引并只改 bHidden；保存失败恢复旧值，不发送服务器 RPC，也不删除图片或其他玩家记录。
+// 印记隐藏流程：定位本人本地索引并只改 bHidden；保存失败恢复变更前值，不发送服务器 RPC，也不删除图片或其他玩家记录。
 FCatDomainCommandResult UCatProfileSubsystem::SetImprintHidden(const FGuid RequestId, const FGuid ImprintId,
 	const bool bHidden)
 {

@@ -23,7 +23,7 @@ public:
 	/** 在指定 EnhancedInputComponent 上绑定 Ability 输入标签；重复传入同一组件时保持幂等，配置缺失时不安装半套输入。 */
 	void BindAbilityActions(UEnhancedInputComponent& InputComponent, const UCatAbilityInputConfig* InputConfig);
 
-	/** Pawn 变化时切换当前 ASC 输入目标；旧 ASC 和新 ASC 都会清空边沿状态，避免按住输入穿过重生或旅行。 */
+	/** Pawn 变化时切换当前 ASC 输入目标；上一个 ASC 和新 ASC 都会清空边沿状态，避免按住输入穿过重生或旅行。 */
 	void RefreshForPawn(APawn* Pawn);
 
 	/** 消费当前 ASC 的本帧 Ability 输入；暂停时具体保留或丢弃策略仍由 ASC 自己决定。 */

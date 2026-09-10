@@ -17,31 +17,12 @@ void ACatfishingPlayerState::BeginPlay()
 		*GetClass()->GetName(), *StableNetId, HasAuthority() ? TEXT("true") : TEXT("false"));
 }
 
-// PlayerState 复制注册流程：保留父类 UniqueId 等身份字段，再注册个人 ready、公开鱼图鉴摘要和装备解锁投影；
-// ready 不包含全员转移判断，鱼图鉴和解锁都只是本局公开/授权摘要，不复制 Profile 私有记录。
+// PlayerState 复制注册流程：保留父类 UniqueId 等身份字段，再注册公开鱼图鉴摘要和装备解锁投影；它们都只是本局公开/授权摘要，不复制 Profile 私有记录。
 void ACatfishingPlayerState::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	DOREPLIFETIME(ThisClass, bReadyForNextDay);
 	DOREPLIFETIME(ThisClass, PublicFishCollection);
 	DOREPLIFETIME(ThisClass, AuthorizedEquipmentUnlockIds);
-}
-
-// 个人 ready 写入流程：仅 authority 可修改；值变化后强制网络更新，使本人的最终确认及时到达客户端。
-void ACatfishingPlayerState::SetNextDayReadyFromAuthority(const bool bNewReady)
-{
-	if (!HasAuthority() || bReadyForNextDay == bNewReady)
-	{
-		return;
-	}
-	bReadyForNextDay = bNewReady;
-	ForceNetUpdate();
-}
-
-// 个人 ready 读取流程：返回服务器最终值或客户端最近复制值，不推导本人是否仍在本夜资格集合。
-bool ACatfishingPlayerState::IsReadyForNextDay() const
-{
-	return bReadyForNextDay;
 }
 
 // 公开图鉴写入流程：仅 authority 接受有限数量、唯一非空鱼种、合法状态和有限非负数值；验证全部通过后整体替换并强制网络更新。
@@ -73,7 +54,7 @@ const TArray<FCatFishCollectionRecord>& ACatfishingPlayerState::GetPublicFishCol
 	return PublicFishCollection;
 }
 
-// 装备解锁摘要写入流程：只允许 authority 接收本人 owning client 的 durable Profile 摘要；数量、空值和重复不合法时保留旧授权，避免坏包清掉或扩大神授予范围。
+// 装备解锁摘要写入流程：只允许 authority 接收本人 owning client 的 durable Profile 摘要；数量、空值和重复不合法时保留失效授权，避免坏包清掉或扩大神授予范围。
 bool ACatfishingPlayerState::SetAuthorizedEquipmentUnlocksFromAuthority(const TArray<FName>& UnlockIds)
 {
 	if (!HasAuthority() || UnlockIds.Num() > 256)
@@ -115,12 +96,6 @@ bool ACatfishingPlayerState::AuthorizeEquipmentUnlockFromProfileGrant(const FCat
 bool ACatfishingPlayerState::HasServerAuthorizedEquipmentUnlock(const FName UnlockId) const
 {
 	return UnlockId.IsNone() || AuthorizedEquipmentUnlockIds.Contains(UnlockId);
-}
-
-// 个人 ready 复制回调流程：只记录最终布尔值；客户端不向 GameMode 回发确认，也不计算全员完成。
-void ACatfishingPlayerState::OnRep_ReadyForNextDay()
-{
-	UE_LOG(LogCatRun, Verbose, TEXT("Event=next_day_ready_received Ready=%s"), bReadyForNextDay ? TEXT("true") : TEXT("false"));
 }
 
 // 接管流程：先让父类建立 Pawn 所有权与输入链，再记录最终双方类型；不缓存 Pawn，也不从 Controller 复制 StableNetId 到 Character。

@@ -18,7 +18,7 @@ class UCatFishingCameraComponent;
 /**
  * Lake 的唯一玩法身体；同时宿主 Character-owned ASC、Condition、Growth、Inventory 与 Equipment。
  * Character 同时作为 ASC Owner/Avatar；丢失占有或销毁只处理身体和组件生命周期，跨系统会话由 GameMode 等 authority 协调者收口。
- * 鱼护是独立箱子式库存对象，不由 Character 创建、注册或复制；鱼以外的随身物品新主线走 Inventory，Equipment 暂时保留钓鱼选择和旧快照兼容。
+ * 鱼护是独立箱子式库存对象，不由 Character 创建、注册或复制；鱼以外的随身物品由 Inventory 承载，Equipment 只保存钓鱼选择读模型。
  */
 UCLASS()
 class CATFISHING_API ACatCharacter : public ACharacter, public IAbilitySystemInterface
@@ -47,7 +47,7 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Equipment")
 	UCatEquipmentComponent* GetEquipmentComponent() const;
 
-	/** 返回 Character 正式随身库存组件；新拾取、商店和营地发货入口应优先围绕它迁移。 */
+	/** 返回 Character 正式随身库存组件；拾取、商店、营地发货、保存和加载都围绕它提交。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")
 	UCatInventoryComponent* GetInventoryComponent() const;
 
@@ -65,7 +65,7 @@ public:
 
 	/**
 	 * 权威侧广播一次性表现事件到所有客户端。输入动作由 UCatFishingCommandComponent 发出；
-	 * 断线/落水由 ACatFishingSession 在首次写入终局后发出。
+	 * 切线/落水由 ACatFishingSession 在首次写入终局后发出。
 	 *
 	 * 为什么需要这条通道：挥网落空、提竿空竿这类动作**失败时不产生任何权威状态变化**，
 	 * 表现层没有可读的复制事实；挥网可由 Ability 在本地预测，提竿则必须等服务器先判明 Primary 的真实语义，
@@ -95,7 +95,7 @@ public:
 	/**
 	 * 服务器 BodyAction Ability 广播的长动作表现停止事件。
 	 * 只有提交窗口内取消、领域入口拒绝或 Ability 异常取消时触发，用来让蓝图停掉循环 Montage 或清掉正在播的前摇特效。
-	 * 该事件是 Reliable，因为收到开始表现的客户端必须收到停止信号；正式循环表现仍应保留 Montage 自身或 AnimBP 超时兜底。
+	 * 该事件是 Reliable，因为收到开始表现的客户端必须收到停止信号；正式循环表现仍应保留 Montage 自身或 AnimBP 超时保护。
 	 */
 	UFUNCTION(NetMulticast, Reliable)
 	void Multicast_StopBodyActionPresentation(FGameplayTag BodyActionEventTag, FGameplayTag PresentationEventTag);
@@ -130,7 +130,7 @@ public:
 	bool PlayFishingCastMontageFromPresentation();
 
 	/**
-	 * 按服务器确认的断线/落水 Cosmetic Tag，从 Fishing 表现设置读取并播放对应 Montage。
+	 * 按服务器确认的切线/落水 Cosmetic Tag，从 Fishing 表现设置读取并播放对应 Montage。
 	 * 只接受这两个终局标签；其他一次性表现仍交给 BP_PlayCosmeticEvent。
 	 */
 	UFUNCTION(BlueprintCallable, BlueprintCosmetic, Category = "Catfishing|Presentation")
@@ -175,15 +175,15 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Survival", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatConditionComponent> ConditionComponent;
 
-	/** 猫身体唯一吃鱼成长组件；复制经验槽与待选次数，Buff 内容未裁时不生成第二套效果状态。 */
+	/** 猫身体唯一吃鱼成长组件；复制经验槽与待选次数，Buff 内容未裁时不会生成额外效果状态。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Growth", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatGrowthComponent> GrowthComponent;
 
-	/** Character 的正式随身库存组件；它按 Aegis 主线承载物品实例和堆叠，旧 Equipment 快照迁移完成前只作为新入口落点。 */
+	/** Character 的正式随身库存组件；它承载物品实例和堆叠，是随身物品唯一事实源。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Inventory", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatInventoryComponent> InventoryComponent;
 
-	/** 一局功能型装配、耗材与鱼竿耐久宿主；没有等级、词条、战力或偷取接口。 */
+	/** 钓具选择读模型与 Fishing 使用协调宿主；正式物品实例和数量归库存系统。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Equipment", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatEquipmentComponent> EquipmentComponent;
 };

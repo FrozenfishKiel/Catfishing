@@ -71,7 +71,7 @@ public:
 
 	/**
 	 * 角色 CatDefinitionId 留空时使用的正式默认猫种 ID。
-	 * None 保留旧的全局 Initial* 回退；非 None 但资产缺失时 fail-closed，不绕回全局值。
+	 * None 保留原有的全局 Initial* 回退；非 None 但资产缺失时 fail-closed，不绕回全局值。
 	 */
 	UPROPERTY(Config, EditAnywhere, Category = "Characters")
 	FName DefaultCharacterDefinitionId = NAME_None;

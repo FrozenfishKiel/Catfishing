@@ -51,10 +51,10 @@ void UCatChumFieldReplicationComponent::ReconcileFieldFromAuthority(const FCatCh
 {
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !Field.FieldId.IsValid()) return; // 只允许服务器调用，且必须是合法 FieldId
 	// 按 FieldId 在已复制列表里查找是否已存在这个窝料场（新增 vs 更新）
-	FCatChumFieldPublicItem* Item = PublicFields.Items.FindByPredicate(
+	FCatChumFieldPublicItem* Item = PublicFields.Entries.FindByPredicate(
 		[&Field](const FCatChumFieldPublicItem& Candidate) { return Candidate.FieldId == Field.FieldId; });
 	const bool bAdded = Item == nullptr; // 没找到说明是首次广播这个窝料场
-	if (bAdded) Item = &PublicFields.Items.AddDefaulted_GetRef(); // 新增一个默认项并拿到引用以便填充
+	if (bAdded) Item = &PublicFields.Entries.AddDefaulted_GetRef(); // 新增一个默认项并拿到引用以便填充
 	// 逐字段从权威状态拷贝到公开精简结构；只暴露客户端表现需要的最小信息
 	Item->FieldId = Field.FieldId;
 	Item->WaterRegion = Field.WaterRegion;
@@ -71,14 +71,14 @@ void UCatChumFieldReplicationComponent::ReconcileFieldFromAuthority(const FCatCh
 	GetOwner()->ForceNetUpdate(); // 打窝是低频离散事件，主动请求一次网络更新以降低客户端可见延迟
 }
 
-// authority 唯一写口：窝料场过期或被清理时，从复制列表移除并驱动客户端销毁表现
+// authority 唯一写口：窝料场失效或被清理时，从复制列表移除并驱动客户端销毁表现
 void UCatChumFieldReplicationComponent::RemoveFieldFromAuthority(const FGuid FieldId)
 {
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !FieldId.IsValid()) return;
-	const int32 Index = PublicFields.Items.IndexOfByPredicate(
+	const int32 Index = PublicFields.Entries.IndexOfByPredicate(
 		[FieldId](const FCatChumFieldPublicItem& Item) { return Item.FieldId == FieldId; });
 	if (Index == INDEX_NONE) return; // 找不到说明已经被移除过，幂等直接返回
-	PublicFields.Items.RemoveAt(Index);
+	PublicFields.Entries.RemoveAt(Index);
 	PublicFields.MarkArrayDirty(); // 标记整个数组结构变化（元素数量变化用 MarkArrayDirty 而非 MarkItemDirty）
 	HandleReplicatedRemove(FieldId); // 服务器本地也走一遍和客户端相同的移除处理，保证表现一致
 	GetOwner()->ForceNetUpdate();

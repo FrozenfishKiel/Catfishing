@@ -86,7 +86,7 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<ACatfishingGameState> BoundGameState;
 
-	/** 当前页面对应的摊位库存组件；商品候选从它读取，不再从全局 Settings 猜。 */
+	/** 当前页面对应的摊位库存组件；商品候选从它读取。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UCatShopInventoryComponent> BoundShopInventory;
 
@@ -102,7 +102,7 @@ private:
 	/** 当前是否已有购物车支付请求提交后等待服务器回包；它由支付提交/回包写入，影响本地加购、删除和支付出口。 */
 	bool bActionPending = false;
 
-	/** 最近一次需要展示给商店页面的本地反馈；Model 直接写可读文本，不再用 UI action enum 二次分发。 */
+	/** 最近一次需要展示给商店页面的本地反馈；Model 直接写可读文本供 UI 展示。 */
 	FText FeedbackText;
 
 	/** 本地购物车里每个商品的选购次数；只存在于当前玩家客户端，支付时才转换成服务器命令。 */

@@ -11,8 +11,7 @@
 #include "Engine/World.h"
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
-#include "Items/CatFishTankActor.h"
-#include "Items/CatItemsService.h"
+#include "FishContainers/CatFishTankActor.h"
 #include "Logging/CatLog.h"
 
 namespace
@@ -23,7 +22,7 @@ namespace
 	/** 营地出生地面探测的上方余量，单位厘米；它允许营地实例按地面设施或 PlayerStart 中心两种编辑器高度摆放。 */
 	constexpr double CatCampPlayerEntryGroundProbeUpCentimeters = 1200.0;
 
-	/** 营地出生地面探测的下方距离，单位厘米；它覆盖 TestMap 这类旧地图里营地 Z 与可站地面高度不一致的情况。 */
+	/** 营地出生地面探测的下方距离，单位厘米；它覆盖 TestMap 这类地形高度与营地 Z 不一致的情况。 */
 	constexpr double CatCampPlayerEntryGroundProbeDownCentimeters = 4000.0;
 
 	/** Pawn 胶囊底部离地的最小余量，单位厘米；它防止精确贴地时被地面碰撞误判为初始穿插。 */
@@ -221,14 +220,6 @@ FCatDomainCommandResult ACatCampHubActor::RescueToCamp(AController* HelpingContr
 	return Result;
 }
 
-// 共享鱼缸读取流程：只通过 Items 公开快照口读取当前固定鱼缸；缺 Items、缺鱼缸或容器未注册都返回 false 并清空输出。
-bool ACatCampHubActor::TryGetSharedFishTankSnapshot(FCatContainerSnapshot& OutSnapshot) const
-{
-	OutSnapshot = FCatContainerSnapshot();
-	const UCatItemsService* Items = GetWorld() ? GetWorld()->GetSubsystem<UCatItemsService>() : nullptr;
-	return Items && SharedFishTank && Items->TryGetContainerSnapshot(SharedFishTank->GetTankContainerId(), OutSnapshot);
-}
-
 // 鱼缸归属判断流程：只比较关卡显式引用，不按位置或标签猜测；鱼缸交互因此不会误投到另一座营地。
 bool ACatCampHubActor::IsSharedFishTank(const ACatFishTankActor* Candidate) const
 {
@@ -238,7 +229,7 @@ bool ACatCampHubActor::IsSharedFishTank(const ACatFishTankActor* Candidate) cons
 // 商店发货仓库判断流程：
 // 1. 只在服务器侧回答，避免客户端把本地引用当成发货事实。
 // 2. 只接受本营地显式配置且同 World 的 PublicInventory；没有配置时返回空，由 PlayerController 回送 DependencyUnavailable。
-// 3. 本函数不执行入库，入库容量、堆叠和幂等仍由 ACatCampInventoryActor 自己裁决。
+// 3. 本函数不执行入库，入库容量、堆叠和幂等由公共仓库的正式 InventoryComponent 裁决。
 ACatCampInventoryActor* ACatCampHubActor::ResolvePublicInventoryForShopOrder() const
 {
 	return HasAuthority() && PublicInventory && PublicInventory->HasAuthority()

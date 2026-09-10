@@ -254,7 +254,7 @@ FCatImprintMediaResult UCatImprintMediaTransportService::CommitHostMediaChunk(co
 	CacheTerminalResult(TerminalKey, PayloadSignature, Result);
 	return Result;
 }
-// 读取流程：每次读取都重新校验收件人版本和 cursor；只返回下一块，不能靠旧 cursor 跳读后续块。
+// 读取流程：每次读取都重新校验收件人版本和 cursor；只返回下一块，不能靠失效 cursor 跳读后续块。
 FCatImprintMediaResult UCatImprintMediaTransportService::ReadRecipientChunk(const FGuid MediaId,
 	const FString& RecipientStableNetId, const int64 MembershipRevision, const int64 PermissionRevision,
 	const int32 ChunkIndex, FCatImprintMediaChunk& OutChunk) const
@@ -540,7 +540,7 @@ FString UCatImprintMediaTransportService::MakeChunkPayloadSignature(const TArray
 	return FString::Printf(TEXT("Bytes=%s|Sha=%s"), *LexToString(Bytes.Num()), *ComputePayloadHashHex(Bytes));
 }
 
-// ACK 签名流程：授权版本和块 hash 必须随 RequestId 一起稳定，避免旧成功 ACK 被不同 hash 复用。
+// ACK 签名流程：授权版本和块 hash 必须随 RequestId 一起稳定，避免失效成功 ACK 被不同 hash 复用。
 FString UCatImprintMediaTransportService::MakeAckPayloadSignature(const int64 MembershipRevision,
 	const int64 PermissionRevision, const FString& ChunkHashHex)
 {
@@ -552,7 +552,7 @@ FString UCatImprintMediaTransportService::MakeAckPayloadSignature(const int64 Me
 // 一是重放时缓存里的失败终态要原样返回，只有原本成功的终态才改写成 AlreadyResolved——媒体命令的失败原因
 // （PermissionDenied、RevisionConflict 等）对客户端是可操作信息，统一抹成 AlreadyResolved 会让重试方看不出该修什么。
 // 二是载荷冲突时共享模板不写 OutResult，而 FCatImprintMediaResult 约定「失败也带回已知 MediaId、最新 Revision 和 cursor」，
-// 所以这里从缓存补齐这些字段再打上 InvalidPayload，否则被拒绝的调用方只能继续用旧 cursor 重试。
+// 所以这里从缓存补齐这些字段再打上 InvalidPayload，否则被拒绝的调用方只能继续用失效 cursor 重试。
 bool UCatImprintMediaTransportService::TryResolveTerminalReplay(const FString& TerminalKey,
 	const FString& PayloadSignature, FCatImprintMediaResult& OutResult) const
 {
@@ -610,7 +610,7 @@ int32 UCatImprintMediaTransportService::GetExpectedChunkSize(const FCatImprintMe
 	}
 	return Manifest.ChunkSizeBytes;
 }
-// 只读授权流程：收件人必须存在且两个授权版本都匹配；不匹配用 RevisionConflict 暴露旧 cursor 风险。
+// 只读授权流程：收件人必须存在且两个授权版本都匹配；不匹配用 RevisionConflict 暴露失效 cursor 风险。
 ECatDomainCommandError UCatImprintMediaTransportService::ValidateRecipient(const FTransferRecord& Record,
 	const FString& RecipientStableNetId, const int64 MembershipRevision, const int64 PermissionRevision,
 	const FRecipientRecord*& OutRecipient)

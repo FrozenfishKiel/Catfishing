@@ -25,7 +25,7 @@ enum class ECatEnvironmentPresentationPhase : uint8
 	Day,
 	/** 可钓白天接近截止的黄昏表现段。 */
 	Dusk,
-	/** 额度达成后的普通夜晚表现段。 */
+	/** 白天结束后的普通夜晚表现段。 */
 	Night,
 	/** 失败或成功终局后的结算夜表现段。 */
 	SettlementNight,
@@ -39,7 +39,7 @@ struct FCatEnvironmentPresentationState
 {
 	GENERATED_BODY()
 
-	/** 当前一局的公开标识；蓝图可用它区分旧世界残留事件，不应用它写回玩法。 */
+	/** 当前一局的公开标识；蓝图可用它区分失效世界残留事件，不应用它写回玩法。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid RunId;
 
@@ -164,7 +164,7 @@ protected:
 	/** 每帧在本地用服务器时间刷新连续白天进度；离散阶段变化仍来自 GameState 委托。 */
 	virtual void Tick(float DeltaSeconds) override;
 
-	/** EndPlay 成对解除 GameState 订阅，避免 World 切换后旧 Actor 继续响应复制回调。 */
+	/** EndPlay 成对解除 GameState 订阅，避免 World 切换后失效 Actor 继续响应复制回调。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
@@ -256,7 +256,7 @@ private:
 		meta = (AllowPrivateAccess = "true"))
 	FCatEnvironmentScenePresentationValues DuskSceneValues;
 
-	/** 普通夜晚表现值，表示额度达成后 NormalNight 的本地画面目标；编辑器或蓝图默认值写入，BuildScenePresentationValues 读取，阶段来源只认 RunPhase。 */
+	/** 普通夜晚表现值，表示白天结束后 NormalNight 的本地画面目标；编辑器或蓝图默认值写入，BuildScenePresentationValues 读取，阶段来源只认 RunPhase。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catfishing|Environment|Presentation|Built In",
 		meta = (AllowPrivateAccess = "true"))
 	FCatEnvironmentScenePresentationValues NightSceneValues;

@@ -63,7 +63,7 @@ TSubclassOf<UCatInventoryWidget> UCatUISettings::LoadInventoryWidgetClass() cons
 	return LoadedClass;
 }
 
-// Frontend Root WBP 类加载流程：同步解析配置软类并验证继承正式 Root 基类；失败返回空，让 LocalPlayer 保持无前端而不是退回旧 TravelWidget。
+// Frontend Root WBP 类加载流程：同步解析配置软类并验证继承正式 Root 基类；失败返回空，让 LocalPlayer 保持无前端而不是退回原生 TravelWidget。
 TSubclassOf<UCatFrontendRootWidget> UCatUISettings::LoadFrontendRootWidgetClass() const
 {
 	UClass* LoadedClass = FrontendRootWidgetClass.LoadSynchronous();

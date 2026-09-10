@@ -79,7 +79,7 @@ public:
 	/** 请求离开当前房间；RoomModel 收口 Host 与 Client 的退出差异，完成后 Controller 回到存档列表。 */
 	void RequestLeaveRoom();
 
-	/** 请求由房主开始游戏并消费可能同步结案的快照；正式 Start 预载或旅行已成立时交给全局遮罩表现，失败保留 RoomModel 的正式反馈。 */
+	/** 请求由房主开始游戏并消费可能同步结案的快照；正式 Start 预载或旅行由全局遮罩接管，失败保留 RoomModel 的正式反馈。 */
 	void RequestStartRoomGame();
 
 	/** 请求应用设置草稿；具体字段和提交结果由 SettingsModel 定义，Controller 只维持页面流程。 */
@@ -122,19 +122,19 @@ private:
 	/** Model 变化处理入口；重新检查选中/确认槽位有效性，识别读档终态，并请求 Root 重绘当前业务页面。 */
 	void HandleSaveModelChanged();
 
-	/** 消费已有或新成立房间、关联创建终态及邀请反馈；真实 Start 的预载和旅行阶段只刷新房间反馈并交给全局遮罩，同请求失败退回 Room。 */
+	/** 消费已有或新成立房间、关联创建终态及邀请反馈；真实 Start 加载阶段不在房间页重复呈现，同请求失败退回 Room。 */
 	void HandleRoomModelChanged();
 
 	/** Model 变化处理入口；只请求设置页重绘并更新结果文本，不从设置变化触发存档或房间操作。 */
 	void HandleSettingsModelChanged();
 
-	/** 验证一个槽位仍属于 SaveModel 当前摘要；删除、刷新或失败后用于清理 Controller 的过期选择。 */
+	/** 验证一个槽位仍属于 SaveModel 当前摘要；删除、刷新或失败后用于清理 Controller 的失效选择。 */
 	bool IsCurrentSaveSlot(FName SlotId) const;
 
 	/** 仅在未入房流程明确失败或取消时释放本地载荷；Save busy 或 Online 仍持有操作/房间时拒绝，不接管已成立会话的 Leave 清理。 */
 	bool ReleaseUnjoinedSave();
 
-	/** 保存带 Model 来源的局部提示并请求 Root 刷新文本；空文本清除旧提示，不广播或覆写任何 Model 的正式结果。 */
+	/** 保存带 Model 来源的局部提示并请求 Root 刷新文本；空文本清除失效提示，不广播或覆写任何 Model 的正式结果。 */
 	void SetLocalResultText(FText InResultText, UObject* ResultSource = nullptr);
 
 	/** 当前流程绑定的 LocalPlayer；Initialize 写入，Shutdown 清空，只用于退出与 World 生命周期判断。 */
@@ -184,11 +184,8 @@ private:
 	/** 最近一次已呈现的邀请反馈文本；与请求身份一起抑制相同快照反复覆盖用户后续提示，不参与邀请或 Session 裁决。 */
 	FText PresentedInviteFeedback;
 
-	/** 最近一次邀请反馈对应的正式请求身份；同请求下文本变化仍重新呈现，兼容忙碌拒绝不更新 Snapshot.RequestId 的 Online 合同。 */
+	/** 最近一次邀请反馈对应的正式请求身份；同请求下文本变化仍重新呈现，允许忙碌拒绝不更新 Snapshot.RequestId 的 Online 合同。 */
 	FGuid PresentedInviteFeedbackRequestId;
-
-	/** 最近一次已交给全局遮罩表现的 Online 预载请求标识；房间通知写入并用于去重记录，新重试以新 RequestId 重新呈现，Shutdown 清空。 */
-	FGuid PresentedGameplayLoadRequestId;
 
 	/** Controller 最近一次本地流程反馈；占位、确认与输入校验写入，WBP 只读显示。 */
 	FText LastResultText;

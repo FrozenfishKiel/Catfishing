@@ -29,7 +29,7 @@ public:
 	/** 返回正式主 HUD WBP 类；缺失时调用方 fail-closed，不创建原生白盒替身。 */
 	TSubclassOf<UCatHUDWidget> LoadHUDWidgetClass() const;
 
-	/** 返回正式 Frontend Root WBP 类；缺失时 LocalPlayer fail-closed，不创建已废弃旧视图或任何原生替身。 */
+	/** 返回正式 Frontend Root WBP 类；缺失时 LocalPlayer fail-closed，不创建原生替身。 */
 	TSubclassOf<UCatFrontendRootWidget> LoadFrontendRootWidgetClass() const;
 
 	/** 返回正式背包主界面 WBP 类；缺失时调用方 fail-closed，不创建原生白盒替身。 */
@@ -68,7 +68,7 @@ public:
 	/** 从正式 IMC 中解析交互确认 Action 的第一个按键名；解析失败时返回 None。 */
 	FName ResolveInteractionConfirmKeyName() const;
 
-	/** 局内玩家 UI 的装配开关；默认开启后仍要求各模块 WBP 有效，关闭只用于测试或临时禁用玩家可见 UI。 */
+	/** 局内玩家 UI 的装配开关；默认开启后仍要求各模块 WBP 有效，关闭只用于测试或诊断禁用玩家可见 UI。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake")
 	bool bEnablePlayerLakeUI = true;
 

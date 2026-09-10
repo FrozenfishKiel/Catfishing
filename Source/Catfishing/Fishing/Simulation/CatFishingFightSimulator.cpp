@@ -239,7 +239,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	{
 		return FMath::Sqrt(FMath::Max(0.0, Length * Length - Height * Height));
 	};
-	// 历史几何误差单独回收，不能把位置纠偏伪装成新冲量，再写回鱼的惯性。
+	// 已有几何误差单独回收，不能把位置纠偏伪装成新冲量，再写回鱼的惯性。
 	const double ExistingHorizontalError = !bFreeSpool
 		? FMath::Max(0.0, FromRod.Size2D() - RadiusAtHeight(PaidOutLine0, VerticalDistance)) : 0.0;
 	const double PositionCorrection = FMath::Min(ExistingHorizontalError,
@@ -452,7 +452,7 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 {
 	const auto RejectResolvedResult = [&]()
 	{
-		// 保留诊断快照，但恢复旧有的失败结果契约：任何数值输出都必须是有限的默认值。
+		// 保留诊断快照，同时遵守失败结果契约：任何数值输出都必须是有限的默认值。
 		const FCatFightSimulationTrace Trace = Result.Trace;
 		Result = FCatFightStepResult{};
 		Result.RejectReason = ECatFightSimulationRejectReason::InvalidResolvedResult;
@@ -469,7 +469,7 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 		return RejectResolvedResult();
 	}
 	Result.Trace.bFinalizeInputAccepted = true;
-	// 该阶段可在地形解析后重新计算，但从未写入 ASC/装备；从输入状态重算，不能叠加临时费用。
+	// 该阶段可在地形解析后重新计算，但从未写入 ASC/装备；从输入状态重算，不能叠加候选求解费用。
 	Result.CatStaminaDrain = Result.FishStaminaDrain = Result.FishUncappedStaminaDrain = 0.0;
 	Result.CatMovementStaminaDrain = Result.CatReelStaminaDrain = Result.CatRodStaminaDrain = 0.0;
 	Result.CatRodWorkStaminaDrain = Result.CatRodSupportStaminaDrain = Result.CatHoldStaminaDrain = 0.0;
@@ -524,7 +524,7 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 	const double CatActiveIntentDistance = RequestedReelDistance + CatCarrierIntent;
 	const double FishOutwardIntentDistance = FMath::Max(0.0,
 		FVector::DotProduct(FishIntentDisplacement, LineDirection));
-	// 保留沿线意图距离供既有约束诊断；支撑费用另按负载与持续时间结算。
+	// 保留沿线意图距离供约束诊断；支撑费用另按负载与持续时间结算。
 	const double CatHoldIntentDistance = bLoadedConstraint && !bFreeSpool
 		? FishOutwardIntentDistance * NormalizedTension : 0.0;
 	Result.CatMovementIntentCentimeters = CatCarrierIntent;
@@ -555,7 +555,7 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 	Result.Trace.FishEffectiveEffortDistanceCentimeters = FishRealizedEffortDistance
 		+ FishBlockedEffortDistance * Config.IsometricEffortMultiplier;
 	Result.Trace.FishPhaseMultiplier = bStruggling ? Config.StruggleDrainMultiplier : Config.BaseDrainMultiplier;
-	// 对抗负载按各自可用力量归一化，松线解除约束后为零；相同意图在不同负载下不再等价。
+	// 对抗负载按各自可用力量归一化，松线解除约束后为零；相同意图会随负载不同得到不同结算。
 	Result.CatNormalizedEffortLoad = FMath::Clamp(LineTension / FMath::Max(CatForce, UE_DOUBLE_SMALL_NUMBER), 0.0, 1.0);
 	const double PerpendicularRodLever = FMath::Sqrt(FMath::Max(0.0, 1.0 - RodLineAlignment * RodLineAlignment));
 	Result.CatRodNormalizedEffortLoad = FMath::Clamp(LineTension * Config.RodPhysicsLengthCentimeters / 100.0
@@ -569,11 +569,11 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 	Result.Trace.CatRodNormalizedLoad = Result.CatRodNormalizedEffortLoad;
 
 	double IgnoredEffortDistance = 0.0;
-	// 鱼力竭后进入纯收尾：仍求解收线和双端位移，但不再向任何猫结算做功消耗。
+	// 鱼力竭后进入纯收尾：继续求解收线和双端位移，猫端做功消耗为零。
 	if (!bSlackRecovery && !State.bFishExhausted && bOperatorPresent && EffectiveCatStrength > UE_DOUBLE_SMALL_NUMBER)
 	{
 		FCatFightCatWorkInput CatWork;
-		// 猫费用不再额外叠加鱼行为阶段倍率；负载变化已经体现在受力观察量里。
+		// 猫费用只由动作与负载观察量决定；鱼行为阶段倍率不叠加到猫端费用。
 		CatWork.UnloadedWorkMultiplier = Config.CatUnloadedWorkMultiplier;
 		CatWork.LoadStaminaMultiplier = Config.CatLoadStaminaMultiplier;
 		const auto ComputeCatChannel = [&](const double ActualAmount, const double UnitCost, const double Multiplier,
@@ -616,7 +616,7 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 		}
 	}
 	// 正常右键期间独立回体，移动、转杆和最大线长处的张力均不产生双方费用。
-	// 无人值守放线不恢复旧操作手；零体力强制拖拽也不通过右键退出。
+	// 无人值守放线不恢复活动操作手；零体力强制拖拽也不通过右键退出。
 	if (bSlackRecovery)
 	{
 		Result.CatStaminaDrain = -FMath::Min(FMath::Max(0.0, Config.CatStaminaMaximum - State.CatStamina),
@@ -673,7 +673,7 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 	// 否则猫端收线制造的张力会让低负载帧继续按满负载磨线。
 	const double WearLoad = OutwardLoad;
 	Result.Trace.WearLoad = WearLoad;
-	// 鱼力竭后的收尾只保留线长约束和拖拽位移；死鱼不再施力，
+	// 鱼力竭后的收尾只保留线长约束和拖拽位移；死鱼施力为零，
 	// 猫的收线力也不能独自制造鱼竿磨损，否则拉鱼干仍会耗尽耐久。
 	// 拖落水期间不新增磨损，避免尚未落水就被断竿替代。
 	const double RodWearDelta = !State.bFishExhausted && !bExhaustedCatEscape && bLineRestraining

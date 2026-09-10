@@ -98,7 +98,7 @@ bool FCatFishingBiteTimingInvalidTest::RunTest(const FString& Parameters)
 		TestFalse(TEXT("非法贡献拒绝"), FCatFishingBiteTimingModel::BuildDistribution(Timing, Invalid, 1.0, 1.0, Distribution));
 		TestFalse(TEXT("非法鱼饵频率拒绝"), FCatFishingBiteTimingModel::BuildDistribution(Timing, 0.0, Invalid, 1.0, Distribution));
 		TestFalse(TEXT("非法鱼饵下限拒绝"), FCatFishingBiteTimingModel::BuildDistribution(Timing, 0.0, 1.0, Invalid, Distribution));
-		TestEqual(TEXT("失败不泄漏旧分布"), Distribution.RatePerSecond, 0.0);
+		TestEqual(TEXT("失败不泄漏上一次分布"), Distribution.RatePerSecond, 0.0);
 	}
 	for (const double InvalidMean : {4.5, 0.0, 21.0, std::numeric_limits<double>::quiet_NaN()})
 	{

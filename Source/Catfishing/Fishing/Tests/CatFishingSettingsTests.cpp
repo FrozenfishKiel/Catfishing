@@ -5,11 +5,12 @@
 #include "Animation/AnimSequenceBase.h"
 #include "Engine/SkeletalMesh.h"
 #include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentSettings.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Config/CatFishingFightBalanceDefinition.h"
 #include "Fishing/Presentation/CatFishAnimInstance.h"
 #include "Fishing/Presentation/CatFishPresentationDefinition.h"
+#include "Inventory/CatInventorySettings.h"
 #include "StateTree.h"
 #include "UObject/UnrealType.h"
 
@@ -80,7 +81,7 @@ bool FCatFormalFishingFightBalanceAssetTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("正式平衡资产 ID 稳定"), Balance->BalanceDefinitionId,
 		FName(TEXT("DefaultFishingFightBalance")));
 	TestEqual(TEXT("保留每公斤十点力量基线"), Balance->StrengthPerKilogram, 10.0);
-	TestEqual(TEXT("每点力量显式换算为一牛顿，不沿用旧加速度值"),
+	TestEqual(TEXT("每点力量显式换算为一牛顿"),
 		Balance->ForcePerStrengthNewtons, 1.0);
 	TestTrue(TEXT("正式资产的独立体力调参通过统一运行校验"), Balance->IsRuntimeDefinitionReady());
 	return !HasAnyErrors();
@@ -89,13 +90,15 @@ bool FCatFormalFishingFightBalanceAssetTest::RunTest(const FString& Parameters)
 bool FCatStarterRodDurabilityBaselineTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
-	const UCatEquipmentDefinition* StarterRod = EquipmentSettings
-		? EquipmentSettings->FindRuntimeDefinition(TEXT("StarterRodT1")) : nullptr;
-	if (!TestNotNull(TEXT("正式装备目录可加载初级鱼竿"), StarterRod)) return false;
+	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+	const UCatEquipmentDefinition* StarterRod = InventorySettings
+		? InventorySettings->FindRuntimeDefinition<UCatEquipmentDefinition>(TEXT("StarterRodT1")) : nullptr;
+	if (!TestNotNull(TEXT("正式库存目录可加载初级鱼竿"), StarterRod)) return false;
+	const UCatEquipmentFragment_Rod* StarterRodFragment = StarterRod->FindFragment<UCatEquipmentFragment_Rod>();
+	if (!TestNotNull(TEXT("初级鱼竿保留鱼竿参数片段"), StarterRodFragment)) return false;
 	TestEqual(TEXT("初级鱼竿定义 ID 稳定"), StarterRod->EquipmentDefinitionId,
 		FName(TEXT("StarterRodT1")));
-	TestEqual(TEXT("初级鱼竿最大耐久为 150，开场读取实例剩余值"), StarterRod->MaximumRodDurability, 150.0);
+	TestEqual(TEXT("初级鱼竿最大耐久为 150，开场读取实例剩余值"), StarterRodFragment->MaximumRodDurability, 150.0);
 	return !HasAnyErrors();
 }
 
@@ -125,9 +128,9 @@ bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
 	Balance->CatStaminaCostPerStrengthCentimeter = 0.003;
 	Balance->FishStaminaCostPerStrengthCentimeter = 0.001;
 	TestTrue(TEXT("猫鱼可以独立配置不同体力价格"), Balance->IsRuntimeDefinitionReady());
-	TestEqual(TEXT("旧资产通过新字段默认值获得弧度计价"), Balance->CatRodStaminaCostPerStrengthRadian, 0.03);
-	TestEqual(TEXT("旧资产通过新字段默认值获得时间支撑"), Balance->CatSupportStaminaPerSecond, 2.0);
-	TestEqual(TEXT("旧资产默认轻调杆费率"), Balance->CatUnloadedWorkMultiplier, 0.15);
+	TestEqual(TEXT("资产默认值提供弧度计价"), Balance->CatRodStaminaCostPerStrengthRadian, 0.03);
+	TestEqual(TEXT("资产默认值提供时间支撑"), Balance->CatSupportStaminaPerSecond, 2.0);
+	TestEqual(TEXT("资产默认轻调杆费率"), Balance->CatUnloadedWorkMultiplier, 0.15);
 	for (double* Field : {&Balance->CatRodStaminaCostPerStrengthRadian, &Balance->CatSupportStaminaPerSecond, &Balance->CatUnloadedWorkMultiplier})
 	{
 		const double Original = *Field;
@@ -157,7 +160,7 @@ bool FCatFishingFightBalanceDefinitionTest::RunTest(const FString& Parameters)
 	for (const FStaminaMultiplierCase& Case : MultiplierCases)
 	{
 		double& Multiplier = Balance->*Case.Field;
-		TestEqual(FString::Printf(TEXT("%s体力倍率为旧资产提供默认值"), Case.Name), Multiplier, 1.0);
+		TestEqual(FString::Printf(TEXT("%s体力倍率保持默认值"), Case.Name), Multiplier, 1.0);
 		Multiplier = 0.0;
 		TestTrue(FString::Printf(TEXT("%s体力倍率允许关闭该项"), Case.Name), Balance->IsRuntimeDefinitionReady());
 		Multiplier = 2.5;

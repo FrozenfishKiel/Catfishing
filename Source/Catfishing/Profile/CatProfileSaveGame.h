@@ -12,10 +12,10 @@ class CATFISHING_API UCatProfileSaveGame : public USaveGame
 	GENERATED_BODY()
 
 public:
-	/** 代码当前理解的唯一档案结构版本；版本迁移尚未实现，任何不匹配档案都必须保持不可写。 */
+	/** 代码当前理解的唯一档案结构版本；任何不匹配档案都保持不可写，避免未知结构覆盖玩家数据。 */
 	static constexpr int32 CurrentSchemaVersion = 1;
 
-	/** 当前档案结构版本；加载方只接受与代码一致的版本，未知版本保持不可写，避免无迁移规则时覆盖玩家数据。 */
+	/** 当前档案结构版本；加载方只接受与代码一致的版本，未知版本保持不可写。 */
 	UPROPERTY(SaveGame)
 	int32 SchemaVersion = CurrentSchemaVersion;
 

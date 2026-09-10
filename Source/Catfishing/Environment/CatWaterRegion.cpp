@@ -231,7 +231,7 @@ bool ACatWaterRegion::BuildCurrentGeometryInput(FCatWaterGeometryBuildInput& Out
 	return OutErrors.IsEmpty();
 }
 
-// 编辑器烘焙流程：先把当前 Actor 与边界样条折算成几何输入；输入不合法时只失效旧缓存并写结构化 Log，
+// 编辑器烘焙流程：先把当前 Actor 与边界样条折算成几何输入；输入不合法时只清空缓存并写结构化 Log，
 // 让 Data Validation 承担真正的资产错误报告。成功路径写回新的几何缓存、Revision 和源摘要，运行时查询只读取这份烘焙事实。
 void ACatWaterRegion::BakeGeometry()
 {
@@ -277,7 +277,7 @@ EDataValidationResult ACatWaterRegion::IsDataValid(FDataValidationContext& Conte
 	}
 	if (!HasValidBakedGeometry())
 	{
-		Context.AddError(FText::FromString(TEXT("WaterRegion baked geometry is missing or stale.")));
+		Context.AddError(FText::FromString(TEXT("WaterRegion baked geometry is missing or invalid.")));
 		return EDataValidationResult::Invalid;
 	}
 	for (TActorIterator<ACatWaterRegion> It(GetWorld()); It; ++It)

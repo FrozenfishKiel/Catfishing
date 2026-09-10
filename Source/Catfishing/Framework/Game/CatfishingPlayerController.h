@@ -2,14 +2,11 @@
 
 #include "CoreMinimal.h"
 #include "Collection/CatImprintTypes.h"
-#include "Equipment/CatEquipmentTypes.h"
 #include "Fishing/CatFishingTypes.h"
 #include "Framework/Core/CatProfileContracts.h"
 #include "Framework/Core/CatRunContracts.h"
-#include "Framework/Core/CatSacrificeContracts.h"
 #include "GameFramework/PlayerController.h"
 #include "GameplayTagContainer.h"
-#include "Items/CatItemTypes.h"
 #include "ShopEconomy/Trading/CatShopTradingTypes.h"
 #include "Social/CatSocialTypes.h"
 #include "CatfishingPlayerController.generated.h"
@@ -19,6 +16,7 @@ class UCatCampBodyActionCommandComponent;
 class UCatFishingCommandComponent;
 class UCatInteractionTargetingComponent;
 class UCatSocialBodyActionCommandComponent;
+class UCharacterMovementComponent;
 class UEnhancedInputComponent;
 class UEnhancedInputLocalPlayerSubsystem;
 class UInputAction;
@@ -29,34 +27,23 @@ class ACatCharacter;
 class ACatShopKioskActor;
 struct FInputActionValue;
 
-/** owning client 收到献祭协议结果后的本机通知；UI Model 只用它刷新读模型，不改变 Items 或 Run。 */
-DECLARE_MULTICAST_DELEGATE_OneParam(FCatSacrificeResultReceived, const FCatSacrificeResult&);
-
 /** owning client 收到公共领域命令结果后的本机通知；UI Model 只用它关联 RequestId，不重新执行领域动作。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatCampCommandResultReceived, const FCatDomainCommandResult&);
 
-/** owning client 收到直接吃鱼结果后的本机通知；UI Model 只用它证明鱼护命令终态并刷新显示。 */
-DECLARE_MULTICAST_DELEGATE_OneParam(FCatFishConsumeResultReceived, const FCatFishConsumeResult&);
-
-/** Lake owning-client 的网络适配器；将 Run、Fishing、Camp、Condition、Items、Social 意图转给 authority，并承接 Profile Grant/CapturePlan/HostExit 回执，不自存领域真相。 */
+/** Lake owning-client 的网络适配器；将 Run、Fishing、Camp、Inventory、Condition、Shop、Social 意图转给 authority，并承接 Profile Grant/CapturePlan/HostExit 回执，不自存领域真相。 */
 UCLASS()
 class CATFISHING_API ACatfishingPlayerController : public APlayerController
 {
 	GENERATED_BODY()
 public:
-	/** 控制器接管 Pawn 后只做宿主级收口：重置临时钓鱼输入和疾跑状态；Ability ASC 路由统一由 SetPawn 写入点刷新。 */
+	/** 控制器接管 Pawn 后只做宿主级收口：重置本地钓鱼输入和疾跑状态；Ability ASC 路由统一由 SetPawn 写入点刷新。 */
 	virtual void OnPossess(APawn* InPawn) override;
-	/** owning client 收到 Pawn 复制变化后重置临时输入与疾跑状态；复制链中的 SetPawn 负责切换 Ability ASC 路由。 */
+	/** owning client 收到 Pawn 复制变化后重置本地输入与疾跑状态；复制链中的 SetPawn 负责切换 Ability ASC 路由。 */
 	virtual void OnRep_Pawn() override;
 	/** 捕获服务器、客户端复制和 ClientRestart 的统一 Pawn 写入点；同步刷新 Ability ASC 路由，再通知 LocalPlayer UI 重新装配。 */
 	virtual void SetPawn(APawn* InPawn) override;
-	/** 把客户端额度意图转发给 authority GameMode；身份由服务器 PlayerState 派生。 */
-	UFUNCTION(Server, Reliable)
-	void ServerSubmitQuotaContribution(FGuid RequestId, int64 ExpectedRevision, int32 Contribution);
-	/** 把客户端翻天确认转发给 authority GameMode；GameMode 负责资格、Revision 与幂等裁决。 */
-	UFUNCTION(Server, Reliable)
-	void ServerSetNextDayReady(FGuid RequestId, int64 ExpectedRevision, bool bReady);
-
+	/** 每帧旋转收尾时同步持竿姿态；普通状态完全沿用 PlayerController，持竿状态由本 Controller 接管身体朝向、移动朝向和跳跃输入。 */
+	virtual void UpdateRotation(float DeltaTime) override;
 	/** 结算夜请求检查本局成像终态与 Grant ACK；只有归档已收口才向 Run StateTree 发送 SettlementComplete。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestSettlementCompletion(FGuid RequestId, int64 ExpectedRevision);
@@ -81,14 +68,6 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerReportImprintCaptureResult(FGuid CapturePlanId, bool bSucceeded, FGuid ImprintId);
 
-	/** 把 Giant HookedFight 的手动协作意图转给指定 FishingSession。 */
-	UFUNCTION(Server, Reliable)
-	void ServerAssistFishingSession(FGuid FishingSessionId, FGuid RequestId, int64 ExpectedRevision);
-
-	/** 把抄网意图转给指定 FishingSession；后续由命令组件和 Session 判断鱼是否可被抄起并完成结果。 */
-	UFUNCTION(Server, Reliable)
-	void ServerRequestScoop(FGuid FishingSessionId, FCatScoopCommand Command);
-
 	/** 建立项目玩家控制器的输入、交互和命令组件宿主；具体输入绑定会在 BeginPlay/SetupInputComponent 阶段安装。 */
 	ACatfishingPlayerController();
 
@@ -100,30 +79,14 @@ public:
 	UFUNCTION(BlueprintPure, Category="Catfishing|Interaction")
 	UCatInteractionTargetingComponent* GetInteractionTargetingComponent() const { return InteractionTargetingComponent; }
 
-	/** 按 Controller 的水平朝向把二维输入转成当前 Pawn 的前后/左右移动；自动化夹具也通过同一入口验证正式移动仲裁。 */
+	/** 按当前可见面对方向把二维输入转成当前 Pawn 的前后/左右移动；持竿搏斗时读取鱼竿相机方向，普通状态仍读 Controller yaw。 */
 	void Move(const FInputActionValue& Value);
-	/** 对当前已占有的 Character 开始跳跃；自动化夹具复用正式输入入口，避免另建测试专线。 */
+	/** 对当前已占有的 Character 开始跳跃；持竿操作时会吞掉跳跃，避免搏斗和收杆姿态被起跳输入打断。 */
 	void StartJump();
 
 	/** 权威交互转发；服务器检查玩法 gate 和通用接口后，在目标 Actor 上重新调用同一 Interact 虚函数。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestInteraction(AActor* Target, FGuid RequestId);
-
-
-	/** 由 owning client 发起献祭服务器入口；把命令转给唯一 SacrificeCoordinator，完成后通过 ClientReceiveSacrificeResult 回送完整阶段结果，Controller 不直接删鱼或增加 Run 额度。 */
-	UFUNCTION(Server, Reliable)
-	void ServerRequestSacrifice(FCatSacrificeCommand Command);
-
-	/** 服务器把献祭协调器的完整阶段结果可靠发给 owning client；客户端只保存最近读模型，不据此改鱼或 Run 额度。 */
-	UFUNCTION(Client, Reliable)
-	void ClientReceiveSacrificeResult(const FCatSacrificeResult& Result);
-
-	/** 返回本机最近收到的献祭协议结果供 UI 关联 RequestId 和阶段；权威恢复仍只发生在服务器协调器。 */
-	UFUNCTION(BlueprintPure, Category = "Catfishing|Run")
-	FCatSacrificeResult GetLastSacrificeResult() const;
-
-	/** 献祭结果到达 owning client 后广播的本机读模型事件；订阅方不能通过它修改服务器状态。 */
-	FCatSacrificeResultReceived OnSacrificeResultReceived;
 
 	/** 由 owning client 发起固定营地休息请求；把位置和身体裁决交给 Camp/Condition，完成后通过 ClientReceiveCampCommandResult 回送领域结果。 */
 	UFUNCTION(Server, Reliable)
@@ -133,19 +96,6 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerRequestCampfirePlayback(ACatCampHubActor* Camp, FGuid RequestId);
 
-	/** 由 owning client 发起普通容器库存拖拽请求；这是 Items 请求，不进入 BodyAction/Social，服务器按容器宿主、距离、Revision 和 Items 权限复核后回送领域结果。 */
-	UFUNCTION(Server, Reliable)
-	void ServerTransferObjectBetweenContainers(FGuid RequestId, ECatContainedObjectKind ObjectKind, FGuid ObjectInstanceId,
-		FGuid SourceContainerId, ECatContainerKind SourceContainerKind, int32 SourceContainerSlotIndex,
-		int64 ExpectedSourceRevision, FGuid TargetContainerId, ECatContainerKind TargetContainerKind,
-		int32 TargetContainerSlotIndex,
-		int64 ExpectedTargetRevision);
-
-	/** 由 owning client 从鱼护页请求把选中鱼存入营地共享鱼缸；服务器重读源鱼护、固定营地鱼缸和首个空目标格后复用 Items 转移。 */
-	UFUNCTION(Server, Reliable)
-	void ServerStoreFishInSharedTank(FGuid RequestId, FGuid FishInstanceId, FGuid SourceContainerId,
-		int32 SourceContainerSlotIndex, int64 ExpectedSourceRevision);
-
 	/** 由 owning client 发起伙伴救援请求；把倒地目标送往固定营地 RescuePoint 并交给 Camp/Condition 裁决，完成后通过 ClientReceiveCampCommandResult 回送领域结果，不进入死亡或重生旁路。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRescueCharacterToCamp(ACatCampHubActor* Camp, ACatCharacter* TargetCharacter, FGuid RequestId);
@@ -154,29 +104,12 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveCampCommandResult(const FCatDomainCommandResult& Result);
 
-	/** 从指定营地公共仓库 Actor 取物到本人随身库存；直接箱子交互使用它，服务器按距离、仓库版本和随身正式库存版本共同裁决。 */
-	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Camp")
-	void ServerWithdrawCampInventoryItemAtActor(ACatCampInventoryActor* CampInventory, FGuid RequestId,
-		int64 ExpectedCampInventoryRevision, int32 SourceSlotIndex, int32 Quantity, int64 ExpectedInventoryRevision);
+	/** 在两个正式库存宿主之间移动、合并或交换格子；服务器重读 Actor 和槽位后统一裁决背包整理与营地拖放。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Inventory")
+	void ServerMoveInventoryItemBetweenHosts(FGuid RequestId, AActor* SourceInventoryHost,
+		int32 SourceSlotIndex, AActor* TargetInventoryHost, int32 TargetSlotIndex);
 
-	/** 整理指定营地公共仓库 Actor 内部两个格子；服务器按仓库距离、版本和槽位下标重读后移动、合并或交换。 */
-	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Camp")
-	void ServerMoveCampInventorySlotAtActor(ACatCampInventoryActor* CampInventory, FGuid RequestId,
-		int64 ExpectedCampInventoryRevision, int32 SourceSlotIndex, int32 TargetSlotIndex);
-
-	/** 把本人随身库存指定格拖入营地公共仓库指定格；SourceInventorySlotIndex 是 UI 看到的正式库存槽位，Controller 只转发版本和候选下标。 */
-	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Camp")
-	void ServerDepositInventoryItemToCampAtActor(ACatCampInventoryActor* CampInventory, FGuid RequestId,
-		int64 ExpectedCampInventoryRevision, int32 TargetCampSlotIndex, int64 ExpectedInventoryRevision,
-		int32 SourceInventorySlotIndex);
-
-	/** 把营地公共仓库指定格拖到本人随身库存指定格；TargetInventorySlotIndex 是 UI 看到的正式库存槽位，Controller 只转发版本和候选下标。 */
-	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Camp")
-	void ServerWithdrawCampInventoryItemToSlotAtActor(ACatCampInventoryActor* CampInventory, FGuid RequestId,
-		int64 ExpectedCampInventoryRevision, int32 SourceCampSlotIndex, int64 ExpectedInventoryRevision,
-		int32 TargetInventorySlotIndex);
-
-	/** 返回本机最近收到的公共领域命令结果供表现层关联请求；该缓存不作为 Camp、Items、Equipment 或 Condition 的权限事实。 */
+	/** 返回本机最近收到的公共领域命令结果供表现层关联请求；该缓存不作为 Camp、Inventory、Equipment 或 Condition 的权限事实。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Camp")
 	FCatDomainCommandResult GetLastCampCommandResult() const;
 
@@ -196,54 +129,30 @@ public:
 		FGuid RodItemInstanceId, FGuid BaitItemInstanceId, FGuid FloatItemInstanceId,
 		FGuid ScoopNetItemInstanceId);
 
-	/** 使用本人正式随身库存格中的物品；Controller 只转交槽位和库存版本，当前钓具选择和后续物品效果都由库存协调器在服务器重读后分发。 */
+	/** 使用本人正式随身库存格中的物品；Controller 只做服务器 gate 和回执，物品效果由正式库存实例裁决。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Inventory")
-	void ServerUseInventoryItem(FGuid RequestId, int64 ExpectedInventoryRevision, int32 InventorySlotIndex);
+	void ServerUseInventoryItem(FGuid RequestId, int32 InventorySlotIndex);
 
-	/** 旧版钓具选择 RPC；保留给可能还未迁移的蓝图引用，运行时会转入通用库存物品使用入口并忽略旧 EquipmentRevision。 */
-	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Inventory",
-		meta = (DeprecatedFunction, DeprecationMessage = "Use ServerUseInventoryItem instead."))
-	void ServerSelectInventoryFishingItem(FGuid RequestId, int64 ExpectedInventoryRevision,
-		int64 ExpectedEquipmentRevision, int32 InventorySlotIndex);
+	/** 使用指定正式库存宿主中的物品；鱼护、鱼缸和营地仓库都通过 Actor 宿主回到同一条库存 Use 链。 */
+	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Inventory")
+	void ServerUseInventoryItemFromHost(FGuid RequestId, AActor* SourceInventoryHost,
+		int32 InventorySlotIndex);
 
-	/** 整理当前角色正式随身库存中的两个格子；服务器按 Inventory Revision 和数组下标重读后移动、合并或交换。 */
-	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Equipment")
-	void ServerMoveInventorySlot(FGuid RequestId, int64 ExpectedRevision,
-		int32 SourceSlotIndex, int32 TargetSlotIndex);
-
-	/** 从指定商店摊位支付整车服务器目录项；服务器先限制购物车载荷，再复核摊位和营地公共仓库。 */
+	/** 从指定商店摊位支付整车商品项；服务器先限制购物车载荷，再复核摊位和营地公共仓库。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
 	void ServerSubmitShopCartAtKiosk(ACatShopKioskActor* ShopKiosk,
 		const TArray<FCatShopCartLineCommand>& Lines, FGuid RequestId, int64 ExpectedWalletRevision);
 
-	/** 售出指定 Items 鱼容器中的鱼；服务器从地面鱼护箱子或共享鱼缸读取重量，并在删除鱼后把收入记入团队公款。 */
+	/** 售出指定正式库存格里的鱼；服务器从鱼物品实例读取重量，并在库存真实扣除后把收入记入团队公款。 */
 	UFUNCTION(Server, Reliable, BlueprintCallable, Category = "Catfishing|Shop")
-	void ServerSellFish(FGuid FishInstanceId, FGuid ContainerId, int64 ExpectedContainerRevision,
+	void ServerSellFish(FGuid FishItemInstanceId, AActor* SourceInventoryHost,
+		int32 SourceInventorySlotIndex,
 		FGuid RequestId, int64 ExpectedWalletRevision);
 
-	/** 在固定营地消费浮木并修复当前鱼竿；不升级或替换装备。 */
-	UFUNCTION(Server, Reliable)
-	void ServerRepairRodAtCamp(ACatCampHubActor* Camp, FGuid RequestId, int64 ExpectedEquipmentRevision);
-
-	/** 消费本人指定草药实例的一份数量后恢复目标 Character；正式库存角色传 InventoryRevision，旧宿主由协调器兼容旧 Equipment 版本，库存提交成功前不会修改身体。 */
+	/** 消费本人指定草药实例的一份数量后恢复目标 Character；Condition 恢复链按当前宿主事实校验请求，库存提交成功前不会修改身体。 */
 	UFUNCTION(Server, Reliable)
 	void ServerUseHerbOnCharacter(ACatCharacter* TargetCharacter, FGuid RequestId,
-		int64 ExpectedInventoryRevision, FGuid HerbItemInstanceId);
-
-	/** 从地面鱼护箱子或共享鱼缸直接吃一条鱼；Items 移除成功后才按 FishDefinition 修改 Poison 并推进吃鱼成长。 */
-	UFUNCTION(Server, Reliable)
-	void ServerConsumeFish(ACatCharacter* EatingCharacter, FCatFishConsumeCommand Command);
-
-	/** 服务器把直接吃鱼的 Items 终态和身体终态可靠发给 owning client；客户端只缓存和展示，不应用身体效果。 */
-	UFUNCTION(Client, Reliable)
-	void ClientReceiveFishConsumeResult(const FCatFishConsumeResult& Result);
-
-	/** 返回本机最近收到的直接吃鱼结果供 UI 关联 RequestId、容器 Revision 和身体提交结果；权威状态仍由各领域复制。 */
-	UFUNCTION(BlueprintPure, Category = "Catfishing|Items")
-	FCatFishConsumeResult GetLastFishConsumeResult() const;
-
-	/** 直接吃鱼结果到达 owning client 后广播的本机读模型事件；订阅方只能刷新 UI。 */
-	FCatFishConsumeResultReceived OnFishConsumeResultReceived;
+		FGuid HerbItemInstanceId);
 
 	/** 开始一条鱼的偷取与追回窗口；Social 覆盖客户端身份并保证每个小偷最多一条。 */
 	UFUNCTION(Server, Reliable)
@@ -253,7 +162,7 @@ public:
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveTheftResult(const FCatTheftResult& Result);
 
-	/** 提供本机最近收到的偷鱼协议结果供 UI 读取；它不授权客户端直接访问 Social、Items 或身体写口。 */
+	/** 提供本机最近收到的偷鱼协议结果供 UI 读取；它不授权客户端直接访问 Social、库存或身体写口。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Social")
 	FCatTheftResult GetLastTheftResult() const;
 
@@ -300,7 +209,7 @@ protected:
 	virtual void SetupInputComponent() override;
 	/** Super 完成每帧输入后恰好一次把 Ability 输入组件积累的边沿交给当前 Pawn ASC。 */
 	virtual void PostProcessInput(const float DeltaTime, const bool bGamePaused) override;
-	/** Pawn 断开前先清理当前 ASC 的 Ability 输入状态、钓鱼临时命令和疾跑意图，再交还父类结束占有，避免状态泄漏到下一次占有。 */
+	/** Pawn 断开前先清理当前 ASC 的 Ability 输入状态、钓鱼本地命令和疾跑意图，再交还父类结束占有，避免状态泄漏到下一次占有。 */
 	virtual void OnUnPossess() override;
 	/** EndPlay 时清空 Ability 路由状态、Native 输入弱绑定记录并只撤销本 Controller 安装的 Mapping Context；不清空 LocalPlayer 的其他输入层。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
@@ -364,13 +273,14 @@ private:
 	void NativeInputTagPressed(FGameplayTag InputTag);
 	/** 当 Pawn 或输入组件在 owning client 就绪时通知 LocalPlayer UI；服务器远端 Controller 和非 Cat UI World 安全跳过。 */
 	void NotifyLocalPlayerUISubsystemPawnChanged();
+	/** 进入或维持持竿面对模式；首次进入时保存普通移动配置，然后让身体跟随当前可见钓鱼方向。 */
+	void ApplyHeldRodFacingMode(ACatCharacter& ControlledCat, UCharacterMovementComponent& Movement,
+		const FRotator& FacingRotation);
+	/** 离开持竿面对模式时恢复进入前的普通移动配置；Pawn 已销毁时只清本地缓存，避免下个 Pawn 继承上一状态。 */
+	void RestoreHeldRodFacingMode();
 
-	/** 把献祭终态投给 owning client；本地 authority 没有网络回环时直接写本机读模型，远端玩家继续走可靠 RPC。 */
-	void DeliverSacrificeResultToOwningClient(const FCatSacrificeResult& Result);
 	/** 把公共领域命令终态投给 owning client；本地 authority 没有网络回环时直接写本机读模型，远端玩家继续走可靠 RPC。 */
 	void DeliverCampCommandResultToOwningClient(const FCatDomainCommandResult& Result);
-	/** 把直接吃鱼终态投给 owning client；本地 authority 没有网络回环时直接写本机读模型，远端玩家继续走可靠 RPC。 */
-	void DeliverFishConsumeResultToOwningClient(const FCatFishConsumeResult& Result);
 
 	/** owning client 只提交疾跑开关；最终速度始终取服务器 PlayerController 类默认配置。 */
 	UFUNCTION(Server, Reliable)
@@ -388,11 +298,35 @@ private:
 	UPROPERTY(Transient)
 	bool bSprintRequested = false;
 
+	/** 当前是否已经接管持竿期间的身体朝向；只表示 Controller 改过移动配置，真正是否持竿仍由 Fishing/Rod 查询决定。 */
+	UPROPERTY(Transient)
+	bool bHeldRodFacingModeActive = false;
+
+	/** 进入持竿模式前 Character 是否用 Controller Yaw 驱动身体；离竿时按它恢复，不硬编码项目默认值。 */
+	UPROPERTY(Transient)
+	bool bSavedHeldRodUseControllerRotationYaw = false;
+
+	/** 进入持竿模式前 CharacterMovement 是否按移动方向转身；离竿时恢复，避免持竿规则泄漏到普通移动。 */
+	UPROPERTY(Transient)
+	bool bSavedHeldRodOrientRotationToMovement = false;
+
+	/** 进入持竿模式前 CharacterMovement 是否使用 ControllerDesiredRotation；离竿时恢复原有蓝图/测试配置。 */
+	UPROPERTY(Transient)
+	bool bSavedHeldRodUseControllerDesiredRotation = false;
+
+	/** 当前被持竿模式改过朝向配置的 Character；恢复时用弱引用避免 Pawn 生命周期结束后访问悬空对象。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<ACatCharacter> HeldRodFacingCharacter;
+
+	/** 当前被持竿模式改过转向配置的移动组件；恢复时用弱引用避免组件已销毁时写回。 */
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UCharacterMovementComponent> HeldRodFacingMovement;
+
 	/** 当前 Controller 的 Ability 输入绑定子对象；它拥有 ASC 输入路由状态，Controller 只把 Pawn/输入生命周期转交给它。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Input", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatAbilityInputBindingComponent> AbilityInputBindingComponent;
 
-	/** 当前 Controller 的 Camp BodyAction 命令子对象；它只创建营地动作载荷，不接触库存、修竿或 Wet 反馈。 */
+	/** 当前 Controller 的 Camp BodyAction 命令子对象；它只创建营地动作载荷，不接触库存或 Wet 反馈。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|BodyAction", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatCampBodyActionCommandComponent> CampBodyActionCommandComponent;
 
@@ -413,17 +347,9 @@ private:
 	UPROPERTY(Transient)
 	FCatTheftResult LastTheftResult;
 
-	/** owning client 最近收到的献祭协议读模型，表示服务器协调器最后回送的完整阶段结果；可靠 Client RPC 整体写入，UI 只读且不会影响 Items 或 Run。 */
-	UPROPERTY(Transient)
-	FCatSacrificeResult LastSacrificeResult;
-
 	/** owning client 最近收到的公共领域命令读模型；可靠 Client RPC 整体写入，UI 只读且不会触发第二次领域操作。 */
 	UPROPERTY(Transient)
 	FCatDomainCommandResult LastCampCommandResult;
-
-	/** owning client 最近收到的直接吃鱼读模型，表示鱼实例移除和身体效果提交后的终态；可靠 Client RPC 整体写入，UI 只读且不会应用效果。 */
-	UPROPERTY(Transient)
-	FCatFishConsumeResult LastFishConsumeResult;
 
 	/** 当前 Controller 创建的钓鱼命令组件；它承接玩家钓鱼输入并把正式事务继续交给领域服务。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Catfishing|Fishing", meta=(AllowPrivateAccess="true"))

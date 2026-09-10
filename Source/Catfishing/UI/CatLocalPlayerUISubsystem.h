@@ -7,7 +7,6 @@
 
 class APlayerController;
 class APawn;
-class ACatCampInventoryActor;
 class ACatCharacter;
 class UCatHUDModel;
 class UCatHUDWidget;
@@ -16,11 +15,9 @@ class UCatFrontendRootWidget;
 class UCatFrontendRoomModel;
 class UCatFrontendSaveModel;
 class UCatFrontendSettingsModel;
-class UCatContainerReplicationComponent;
-class UCatCampInventoryWidget;
 class UCatInteractionPageController;
 class UCatInteractionPromptWidget;
-class UCatInventoryModel;
+class UCatInventoryComponent;
 class UCatInventoryPageController;
 class UCatInventoryWidget;
 class UCatLakeMainMenuController;
@@ -45,31 +42,19 @@ public:
 	/** 先移除本地玩家 UI 模块与 Controller 绑定，再移除 Frontend Root 和快照订阅，保证 LocalPlayer 销毁后没有迟到 UI 更新。 */
 	virtual void Deinitialize() override;
 
-	/** Controller 替换时先判断 Frontend Root 是否需要跨空窗保留；完成后旧局内 UI 已清理，新 Controller 已重新绑定并恢复必要焦点。 */
+	/** Controller 替换时先判断 Frontend Root 是否需要跨空窗保留；完成后失效局内 UI 已清理，新 Controller 已重新绑定并恢复必要焦点。 */
 	virtual void PlayerControllerChanged(APlayerController* NewController) override;
 
 	/** 切换当前 LocalPlayer 的背包页面；实际输入模式、焦点和鼠标由 Inventory PageController 管理。 */
 	void ToggleInventory();
 
-	/** 打开带外部容器上下文的背包；交互对象只提供只读容器复制源，跨容器移动仍由背包 Drop 和服务器裁决。 */
-	void OpenInventoryWithExternalContainerContexts(const TArray<UCatContainerReplicationComponent*>& ExternalContainers);
+	/** 打开一份明确库存对应的 WBP；交互对象提供库存与页面类，本地 UI 返回真实打开结果。 */
+	bool OpenInventory(UCatInventoryComponent* Inventory, TSubclassOf<UCatInventoryWidget> InventoryViewClass);
 
-	/** 用交互对象指定的库存页面打开外部容器；LocalPlayer 不理解箱子类型，只负责把页面请求交给库存控制器并返回打开结果。 */
-	bool OpenInventoryWithExternalContainerContextsUsingViewClass(
-		const TArray<UCatContainerReplicationComponent*>& ExternalContainers,
-		TSubclassOf<UCatInventoryWidget> InventoryViewClass);
-
-	/** 打开营地公共仓库；公共仓库是团队共享箱子，页面类必须由仓库 Actor 提供，取用由库存 PageController 提交服务器。 */
-	bool OpenCampInventory(ACatCampInventoryActor* CampInventory,
-		TSubclassOf<UCatCampInventoryWidget> InventoryViewClass);
-
-	/** 查询背包 PageController 打开态；没有已装配页面时返回 false，避免旧 Widget 引用影响输入切换判断。 */
+	/** 查询背包 PageController 打开态；没有已装配页面时返回 false，避免失效 Widget 引用影响输入切换判断。 */
 	bool IsInventoryOpen() const;
 
-	/** 返回当前 LocalPlayer 的库存 Model；库存 WBP 构建时用它订阅 ViewState，调用方不得通过它写玩法状态。 */
-	UCatInventoryModel* GetInventoryModel() const;
-
-	/** 返回当前 LocalPlayer 的库存 PageController；库存 WBP 用它提交玩家意图，刷新仍由 WBP 自己完成。 */
+	/** 返回当前 LocalPlayer 的库存窗口控制器；WBP 只用它关闭窗口，库存 Model 由各库存组件提供。 */
 	UCatInventoryPageController* GetInventoryPageController() const;
 
 	/** owning client 的 PlayerController 在 Pawn 或输入链就绪后调用；子系统据此重新对齐本地 HUD、背包和交互提示。 */
@@ -110,13 +95,13 @@ private:
 	/** 根据 Online 快照刷新全局加载遮罩；Start 和 Leave 等待期显示最高层遮罩，并把合成后的表现快照写给正式 Loading WBP。 */
 	void RefreshGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot);
 
-	/** 从当前 Online 子系统重新读取快照并刷新遮罩；Pawn/UI 真实就绪事件会调用它来收起等待态，不走定时器兜底。 */
+	/** 从当前 Online 子系统重新读取快照并刷新遮罩；Pawn/UI 真实就绪事件会调用它来收起等待态，不由定时器判断完成。 */
 	void RefreshGlobalLoadingScreenFromCurrentSnapshot();
 
 	/** 从 Online、Lyra 式引擎 gate 与本地 UI 就绪事实生成遮罩表现；进入游戏会同步给出真实 gate 合成总进度。 */
 	bool ShouldShowGlobalLoadingScreen(const FCatOnlineSnapshot& Snapshot, FCatGlobalLoadingPresentation& OutPresentation) const;
 
-	/** 创建或复用全局加载遮罩并写入本轮表现快照；遮罩复用正式 Loading WBP 资产，但不再属于 Frontend Root 子页。 */
+	/** 创建或复用全局加载遮罩并写入本轮表现快照；遮罩复用正式 Loading WBP 资产，并独立于 Frontend Root 子页。 */
 	void ShowGlobalLoadingScreen(const FCatGlobalLoadingPresentation& Presentation);
 
 	/** 移除全局加载遮罩并清空最后阶段文本与本地过渡记忆；它不改变 Online 操作，只释放本地 UMG 表现。 */
@@ -150,7 +135,7 @@ private:
 	bool TryGetEngineLoadingReason(const FCatOnlineSnapshot& Snapshot, bool bReturningToFrontend,
 		FText& OutStatusText, FText& OutDetailText, FText& OutReasonText) const;
 
-	/** 判断已有 Frontend Root 是否处于 Start 失败恢复保护窗；返回值只授权保留旧 Root，不授权在非 Frontend World 新建 Root。 */
+	/** 判断已有 Frontend Root 是否处于 Start 失败恢复保护窗；返回值只授权保留保留中的 Root，不授权在非 Frontend World 新建 Root。 */
 	bool ShouldKeepExistingFrontendRoot(const FCatOnlineSnapshot& Snapshot) const;
 
 	/** 先成对 Shutdown Frontend Controller 和三个 Model，再从视口移除 Root；调用时若仍有绑定 Controller，才恢复前端鼠标状态。 */
@@ -159,7 +144,7 @@ private:
 	/** 弱绑定当前 LocalPlayer Controller，并立即尝试装配其当前 Pawn；后续 Pawn 就绪通知由项目 PlayerController 主动转交。 */
 	void BindController(APlayerController* Controller);
 
-	/** 清理旧 Controller 弱引用；Controller 已销毁时不延长其生命周期。 */
+	/** 清理失效 Controller 弱引用；Controller 已销毁时不延长其生命周期。 */
 	void UnbindController();
 
 	/** 当前 Controller Pawn 变化入口；同 Pawn 刷新库存读模型和输入绑定，换 Pawn 或空 Pawn 才拆装本地玩家 UI 模块。 */
@@ -236,15 +221,11 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UCatHUDModel> HUDModel;
 
-	/** 当前 LocalPlayer 的背包主 WBP；普通打开展示个人资源，交互打开可追加外部容器上下文。 */
+	/** 当前 LocalPlayer 的默认背包 WBP；始终显示角色库存，外部库存由页面控制器另建指定 WBP。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryWidget> InventoryWidget;
 
-	/** 当前 LocalPlayer 的库存 Model；它只读随身库存、本次交互外部容器、当前选择和动作结果。 */
-	UPROPERTY(Transient)
-	TObjectPtr<UCatInventoryModel> InventoryModel;
-
-	/** 当前 LocalPlayer 的背包 PageController；它管理背包输入、外部容器打开和玩家库存操作转交。 */
+	/** 当前 LocalPlayer 的库存窗口控制器；它管理背包与外部库存的页面、输入和焦点，不中转物品操作。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryPageController> InventoryPageController;
 

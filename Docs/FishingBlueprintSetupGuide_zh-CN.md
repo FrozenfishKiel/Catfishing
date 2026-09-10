@@ -82,7 +82,7 @@ RunFlowStateTree=/Game/Data/StateTrees/ST_RunFlow.ST_RunFlow
 FishingSessionStateTree=/Game/.../ST_FishingSession.ST_FishingSession   ; ← 待补
 ```
 
-已填好的 section：`CatEnvironmentSettings`、`CatEquipmentSettings`、`CatFishCatalogSettings`、`CatItemsSettings`、`CatAbilitySettings`、`CatFishingPresentationSettings`、`CatFishingSettings`、`CatRunSettings`。
+已填好的 section：`CatEnvironmentSettings`、`CatEquipmentSettings`、`CatFishCatalogSettings`、`CatFishContainerSettings`、`CatFishPickupSettings`、`CatAbilitySettings`、`CatFishingPresentationSettings`、`CatFishingSettings`、`CatRunSettings`。
 
 **改完 ini 必须重启 Editor** —— `UDeveloperSettings` 只在启动时读一次配置，运行中改 ini 不会热加载（本轮验证过：写完 ini 后在运行中的编辑器里读 CDO，全部还是默认值）。
 
@@ -173,12 +173,10 @@ Make FCatBeginCastCommand
 ```
 Line Trace 拿目标水面点
 Get 关卡 ACatWaterRegion → Get Water Region Handle
-Get Player Character → Get Inventory Component → Get Inventory Revision   ← 正式库存版本
 
 Make FCatPlaceChumCommand
     RequestId = New Guid
     ExpectedWaterRegionHandle = Region.GetWaterRegionHandle()
-    ExpectedEquipmentRevision = InventoryRevision（字段名保留旧协议；正式角色必须传库存版本）
     ChumItemInstanceId = （玩家当前选择的窝料库存格 ItemInstanceId）
     ChumDefinitionId = （可选；服务器会按 ChumItemInstanceId 复核并覆盖为真实定义）
     Quantity = 1（或 UI 里选的数量）
@@ -191,7 +189,7 @@ Make FCatPlaceChumCommand
 
 ### 3.6 ConfigureEquipment（首次装配）—— 必须最先做，否则后面全部走不通
 
-`FCatEquipmentLoadoutSnapshot` 初始是空的（`RodDefinitionId`/`BaitDefinitionId`/`FloatDefinitionId` 全是 `NAME_None`），`PlaceRod`/`BeginCast` 都会因为 `Kind` 校验失败而拒绝。玩家进图后第一件事必须是装配：
+`FCatEquipmentLoadoutSnapshot` 初始是空的（`RodDefinitionId`/`BaitDefinitionId`/`FloatDefinitionId` 全是 `NAME_None`），`PlaceRod`/`BeginCast` 会因为缺少已装配定义，或定义自身字段不满足对应入口要求而拒绝。玩家进图后第一件事必须是装配：
 
 ```
 Get Player Character → Get Equipment Component → Get Snapshot   ← 初次是 Revision=0

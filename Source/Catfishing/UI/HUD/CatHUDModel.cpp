@@ -80,7 +80,7 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 	return true;
 }
 
-// 解绑流程：从原 Run、ASC、Condition、Growth、Fishing 命令和 Bridge 移除订阅，再清弱引用、最近结果和投影，防止跨 Pawn 显示旧状态。
+// 解绑流程：从原 Run、ASC、Condition、Growth、Fishing 命令和 Bridge 移除订阅，再清弱引用、最近结果和投影，防止跨 Pawn 显示失效状态。
 void UCatHUDModel::Unbind()
 {
 	ClearRunGameStateBinding();
@@ -301,7 +301,7 @@ const FCatHUDViewState& UCatHUDModel::GetViewState() const
 	return ViewState;
 }
 
-// 销毁兜底流程：先复用 Unbind 路径清理委托、FishingBridge 和等待 Timer，再交给 UObject 释放自身引用；这不发布新的 HUD 投影。
+// 销毁清理流程：先复用 Unbind 路径清理委托、FishingBridge 和等待 Timer，再交给 UObject 释放自身引用；这不发布新的 HUD 投影。
 void UCatHUDModel::BeginDestroy()
 {
 	Unbind();
@@ -365,7 +365,7 @@ bool UCatHUDModel::RefreshRunGameStateBinding()
 	return true;
 }
 
-// Run GameState 解绑流程：先停止等待 Timer，再从仍有效的 GameState 移除委托，最后清空弱引用和句柄；旧 World 已销毁时弱引用为空也保持幂等。
+// Run GameState 解绑流程：先停止等待 Timer，再从仍有效的 GameState 移除委托，最后清空弱引用和句柄；失效 World 已销毁时弱引用为空也保持幂等。
 void UCatHUDModel::ClearRunGameStateBinding()
 {
 	ClearRunGameStateBindingRetry();
@@ -399,7 +399,7 @@ void UCatHUDModel::ScheduleRunGameStateBindingRetry()
 		CatHUDRunGameStateBindingRetrySeconds, true);
 }
 
-// Run GameState 等待清理流程：优先回到创建 Timer 的 World 清理，缺失时才用当前 Controller World 兜底；无论清理是否命中都让句柄和所属 World 失效。
+// Run GameState Timer 释放流程：优先回到创建 Timer 的 World 释放，缺失时才改用当前 Controller World；无论释放是否命中都让句柄和所属 World 失效。
 void UCatHUDModel::ClearRunGameStateBindingRetry()
 {
 	UWorld* TimerWorld = RunGameStateBindingRetryWorld.Get();
