@@ -1,8 +1,31 @@
 # 物理抓握原型使用说明
 
-## 2026-09-10：直立 CMC 与抓推迁移（实施中）
+## 2026-09-10：抓握传递短时跳跃牵拉
 
-用户确认不需要悬挂、串联吊挂，正式角色保持直立，倒地由状态和动画控制。基线608b736；已有用户Skeleton修改保持SHA256=3AF77F901B4FD35EAF79A7133230BB8964A1F2E886064010F680A40C3DE18008。基线197项196通过，唯一既有StarterRod耐久150/500；首轮组合210项中207通过，剩余为四端旧位置夹具、需Render的RodBendRender及既有耐久差异，正在收口。期间出现并行CuteCat导入提交ffa23a5及16个Fish资产修改，均不属于本轮、不撤销或提交。开始时编辑器PID10024正在打开工程，使用Saved/Validation/UprightCMC-20260910隔离构建，不关闭或保存用户编辑器。
+用户追加确认：抓着朋友跳跃时，可以把对方短暂带离地面。基线`7d98c8c`；原CMC/搏鱼恢复的独立Editor、Game及主工程Editor构建成功，组合渲染212项中211通过、1项已确认的既有StarterRod耐久500/150失败。并行骨架/模型修改全部保留。新跳跃抓握已通过下述构建与运行回归；并行模型、骨架和动画源码不计入本次提交。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 起跳入口与生命周期 | `Character/Physics/CatPhysicalBodyComponent::RequestJump` 经已有ServerRequestJump/Epoch和DoJump权威裁决 | 原正常420cm/s起跳，角色抓握Z分量全丢弃 | 真正起跳成功后开放0.35秒垂直牵拉窗口，末0.08秒渐退；原起跳速度/重力保持。失效、传送、离手清旧力 | 成功起跳→握点力窗口→唯一CMC积分 | 空中重复按跳、乱序请求、释放重抓/传送不产生旧力 | 已接入0.35秒窗口/末0.08秒渐退；成功DoJump才开启，外部带起不续窗；释放、传送、目标退出的真实世界清力测试通过（161447报告）。 |
+| 抓握双向传力 | `Interaction/Grab/CatPhysicsGrabComponent::ApplyTraction/ResolveConstraintTarget`，Body外力表按每手Contact为唯一来源 | 已有650弹性/24阻尼/每手10000UE限力，仅水平作用猫 | 双端CMC且任一端有起跳窗口时，让同一真实握点力的Z分量渐退后作用双方；抓主控杆仍解析到主控身体，非角色/固定表面不提供垂直悬挂力 | 双端/窗口确认→现有握点公式→相反力 | 抓人/抓杆跳起、后退、双手及环路不重复力；轻道具不压人 | 已接入；单手、双手及两猫互抓共4握点×60/120Hz×正常/120ms共12场，双方Z力和为0，朋友被带起21.30–24.56cm，落地后原握点继续后退拖动；逐手释放不丢其他握点。 |
+| 双手慢帧稳定性 | `Grab::ApplyTraction`首次实际120ms双手测试将朋友弹起148/181cm，单手与常规帧正常；旧650/24力按帧初速度冻结 | 120Hz CMC细分不能修复整帧不更新的弹簧/阻尼力 | 垂直抓握采用包含本帧相对位移的隐式弹簧阻尼，按同一角色对的有效握点数计算共同质量响应；水平公式和每手独立来源保持 | 先只读统计双方有效握点，再解该握点平均垂直力，最后原CMC消费 | 保留原失败证据；双手120ms不弹飞；首轮0.25秒窗口在两猫错峰落地时导致剩余手越距，延长至0.35秒完成短跳回拉，仍末0.08秒渐退；逐手释放不丢另手、60/120Hz可比 | 已替换垂直力的整帧显式算法；161447报告12场全部通过，双手120ms不再出现148/181cm弹飞，既有32cm原生越距阈值未放宽。160700/160900失败报告保留。 |
+| CMC垂直接收 | `Character/CatCharacterMovementComponent::AdvanceFromAuthority/CalcVelocity/NewFallVelocity`；Body::ExternalForces | CMC原过滤Z；PhysFalling会恢复CalcVelocity前的Z速度，不能在该函数重复加垂直力 | 外力记录标注允许垂直抓握；向上合力超过重力时进入Falling，垂直力只经NewFallVelocity一次积分；停止窗口后只剩正常重力，保持直立 | 标注外力→离地→原CMC下坠/落地 | 被抓者短暂离地、起跳者受反力、120ms/60/120Hz、无持续悬挂 | NewFallVelocity唯一积分垂直力，胶囊保持UpZ=1；常规跳跃75–100cm契约与固定表面不能悬挂回归通过。窗口结束只剩原重力，双方落地、无残余Z力。 |
+| 预测与搏鱼衔接 | `CMC::CaptureMotionPrediction/AdvanceMotionPrediction`→`PhysicalRod::PopulateCMCEndpointPrediction` | 历史防抖预测必须跟上新增垂直抓握，不能让实际上移与预测分离 | 冻结同一允许垂直外力和地面离开门槛；空中改用与CMC一致的中点位移积分，地面提交的鱼线Z仍沿原队列过滤，空中鱼线Z由NewFallVelocity一次消费；鱼线仍唯一冲量队列、原主控费用和会话不变 | CMC规则→只读候选→原Simulator/Runner | 同竿助手跳起、主控跳跃、双主体历史短线不回归 | 地面离开/空中鱼线力×1/120、1/60、120ms的预测与真实CMC位置最大误差0.000005cm；历史短线6场继续无周期卸力；215项组合仅原耐久差异，无新增费用/会话/持竿失败。 |
+| 网络/表现/清理 | Body Snapshot与客户端实际离地/速度驱动原Visual/ABP；Grab::ReleaseHand/EndPlay | 不新增第二套跳跃RPC或复制载荷 | 原服务器快照复制带起结果、原动画消费离地；默认日志记录垂直力窗口和离地。退出移除同一每手外力，窗口不递归传播 | 单一裁决→快照→现有消费者 | 客户端发起跳跃，服务器/客户端观察两猫；不生成吊挂链 | 161447正式Listen+Client实际RPC抓人、跳跃、释放及快照验证通过。抓主控杆的朋友服务器/客户端升高19.495/19.367cm；直接抓猫升高21.391/21.147cm，均观察Falling并落地。主控人数仍1、助手不接任。 |
+| 测试、资产与文档 | 新增`Character/Tests/CatGrabJumpTests.cpp`；现有`Source/CatfishingEditor/Interaction/Grab/Tests/CatLightPropNetworkTests.cpp::FVerify`网络夹具；本页/唯一差距清单 | 新增行为需要实际轨迹及网络证据 | 原生与正式模型实测抓人跳跃/后退/双手/窗口结束；不改BP/动画/存档/输入配置或Cook入口，正式资产引用沿既有路径 | 局部→网络→受影响搏鱼→构建/提交 | contract/runtime_behavior/presentation_delivery分层；并行新模型仍独立验收 | 独立Editor/Game成功，161133组合215项中214通过、1既有StarterRod耐久失败；最后新增互抓4握点及观察镜头修正后161447专项3/3通过。正式截图已查看，本页及唯一差距清单同步；无资产保存、无输入/Cook/存档迁移。 |
+
+
+本轮分层证据（根目录`Saved/Automation/UprightCMC-20260910`）：
+
+- **contract**：`BuildEditor-GrabJumpDelivery.log`与`BuildGame-GrabJumpDelivery.log`均成功；生产源码与隔离副本摘要见`GrabJumpSourceManifest.json`。主工程Editor同样构建成功，记录于`BuildEditor-MainGrabJump.log`，该构建包含并行Rig源码，不属于本独立提交的源码证据。
+- **runtime_behavior**：`Report-20260910-161133-433/index.json`为215项、214通过（191 clean、23 warning）、1既有耐久失败；之后仅补互抓4握点测试和观察镜头，`Report-20260910-161447-342/index.json`最终3/3通过（2 clean、1 warning）。实际日志对应`Automation-20260910-161133-433.log`与`Automation-20260910-161447-342.log`。默认`LogCatPhysicsGrab`记录`physics_body_jump`、`physics_body_grip_lift`、`physics_body_jump_snapshot`、`physics_body_snapshot_observed`及`physics_grip_traction`；以World/NetMode、BodyId、GripId、ControlEpoch关联，不依赖Verbose。`GetJumpTractionWeight`是服务器窗口，客户端只消费姿态/速度/接地快照。
+- **presentation_delivery**：已人工查看实际正式猫的`Images/20260910-081519-formal-held-rod-grab-jump.png`与`Images/20260910-081525-formal-friend-grab-jump.png`，均来自真实客户端视口。初版直接抓猫截图未入镜，已在跳跃RPC前定位观察相机并重跑；未更改生产相机或动画。当前临时模型的原骨长/前爪表现保留；正式地图真人手感、互联网延迟/丢包下预测、新Cook/Development包不带-log的房主/客户端独立落盘尚未验收，仍挂原模块，不据本次局部回归关闭Fishing/Delivery。
+
+交付行为：成功起跳后，角色之间的实际握点力可以短暂带起另一只猫，并反过来限制起跳者。抓主钓手握住的鱼竿也通过原接收方传力；静态场景和自由道具不会提供悬挂支撑。没有新增远端Jump命令、鱼会话成员、体力叠加或倒地身体模拟。原APawn试验场仍有已确认的Chaos消费者，因此保留；正式CMC不再消费它的自由翻倒/支撑代码。窗口默认0.35秒、渐退0.08秒属于本次交互参数，420cm/s跳速、重力和原角色力量预算均未改变。
+
+## 2026-09-10：直立 CMC 与抓推迁移（检查点7d98c8c）
+
+用户确认不需要悬挂、串联吊挂，正式角色保持直立，倒地由状态和动画控制。基线608b736；已有用户Skeleton修改保持SHA256=3AF77F901B4FD35EAF79A7133230BB8964A1F2E886064010F680A40C3DE18008。基线197项196通过，唯一既有StarterRod耐久150/500；首轮组合210项中207通过，当时剩余为四端旧位置夹具、需Render的RodBendRender及既有耐久差异；前两项已处理，最终212项211通过。期间出现并行CuteCat导入提交ffa23a5及16个Fish资产修改，均不属于本轮、不撤销或提交。开始时编辑器PID10024正在打开工程，使用Saved/Validation/UprightCMC-20260910隔离构建，不关闭或保存用户编辑器。
 
 | 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -13,7 +36,7 @@
 | 倒地动画 | Condition::OnSnapshotChanged；新增Condition/CatConditionPresentationComponent；Character只创建宿主 | 原停支撑倒地；目标原Condition状态控制行动、动画控制躺下/起身 | 只消费bDowned，使用现有Stand→Sitting→Lying及反向动画，经正式DefaultSlot输出；不新增倒地判定或改变资源写口 | 状态→动作清理→表现；身体支撑始终保留 | 下毒倒地/恢复、双端姿势、动画中断及资产加载 | 已接入；正式ABP实际躺下头高48.69→26.01cm，胶囊Z42.15cm不变；服务器/客户端倒地和起身回归及渲染通过，截图072016/072024 |
 | 网络/清理/存档 | Body的ServerSetInput/ControlEpoch/Snapshot，Controller::Flush/StopMove，Save::TeleportBodyFromAuthority | 保留现有服务器模拟与客户端跟随；不让CMC默认Tick/ServerMove同时写位置 | 同一快照发布CMC结果与手点；传送清输入、握点、外力和CMC累计力；未增加预测/回滚或存档字段 | 单一移动写口→旧调用方回归 | 客户端实际按键、释放、失焦、退出、传送/存档恢复，默认落盘日志 | 已接入；服务器输入权威、四端控制与逐手状态复制通过。仍是服务器快照跟随，未实现CMC客户端预测/重放；新包双端落盘未验收 |
 | 资产/动画/配置 | /Game/Character/BP_CatCharacter及/Game/Animalia/Cat/ABP_Cat，Visual→QuadrupedLocomotion；Rider只读CDO证据 | BP原胶囊局部scale2、radius15.5285、halfheight17.0681；Mesh局部Z=-20，速度100/跳速420/重力1/台阶45 | 保留Mesh/相机世界变换；胶囊改为13×GeometryScale半径、20×GeometryScale半高，对齐现有脚底；原骨架/IK算法/输入资产不改。旧组件保留因BP序列化和APawn诊断消费者；新动画为现有硬引用，无资产保存 | 原生接线→正式BP载入→画面；Cook入口不变，新引用需核查 | 正式模型比例/爪点/镜头/动作；骨架hash，Game构建；新包未运行 | 旧正式BP/原生模型与动画消费者已验证；保护骨架hash未变；未保存资产。并行CuteCat/公共动画模板不属于本提交；新Cook/打包未运行 |
-| 测试/日志/文档 | Character/Physics/Tests、Editor/Character/Physics/Tests、Fishing/Tests及Build/Automation/verify_physics_grab_prototype.ps1；本页/差距清单 | 旧正式刚体断言需迁移，含Character/Animation/Tests与Editor/Character/Animation/Tests的正式IK权威断言；Editor/Fishing/Tests/CatFishingGroupNetworkTests的四端抓取夹具按胶囊和露出竿身放置，不能靠未抓住的手球反作用自动搬动身体；玩法契约不能随意放宽 | 替换已过时的模拟/翻滚契约，增加直立CMC/不悬挂和真实抓推回归。原关节间隙5cm迁移为实际手到握点间隙5cm；局部接触点漂移仍<0.1cm，肩部弹性误差另记。圆胶囊侧碰可能绕开偏置手球，逐步核查实体间距及偏转，不再用旧方盒平面回弹代替不穿透；默认日志记录新接收端及牵拉 | 隔离构建→运行→正式渲染→最终diff/独立提交 | contract/runtime_behavior/presentation_delivery分别记录；库存/存档格式/扣费入口不涉及修改 | 初始210项207通过，四端夹具及Render要求已在151605和151113报告定向补过；已检查正式躺下/双猫拉竿截图。唯一既有StarterRod150/500差异保留；历史防抖追加后还须最终组合回归 |
+| 测试/日志/文档 | Character/Physics/Tests、Editor/Character/Physics/Tests、Fishing/Tests及Build/Automation/verify_physics_grab_prototype.ps1；本页/差距清单 | 旧正式刚体断言需迁移，含Character/Animation/Tests与Editor/Character/Animation/Tests的正式IK权威断言；Editor/Fishing/Tests/CatFishingGroupNetworkTests的四端抓取夹具按胶囊和露出竿身放置，不能靠未抓住的手球反作用自动搬动身体；玩法契约不能随意放宽 | 替换已过时的模拟/翻滚契约，增加直立CMC/不悬挂和真实抓推回归。原关节间隙5cm迁移为实际手到握点间隙5cm；局部接触点漂移仍<0.1cm，肩部弹性误差另记。圆胶囊侧碰可能绕开偏置手球，逐步核查实体间距及偏转，不再用旧方盒平面回弹代替不穿透；默认日志记录新接收端及牵拉 | 隔离构建→运行→正式渲染→最终diff/独立提交 | contract/runtime_behavior/presentation_delivery分别记录；库存/存档格式/扣费入口不涉及修改 | 初始210项207通过，四端夹具及Render要求已在151605和151113报告定向补过；已检查正式躺下/双猫拉竿截图。最终154540报告212项211通过，唯一既有StarterRod150/500差异保留；独立Editor/Game及主工程Editor均通过 |
 
 ## 2026-09-10：起停响应与镜头独立朝向
 

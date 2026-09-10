@@ -15,6 +15,7 @@ struct CATFISHING_API FCatCMCMotionPrediction
     double GroundResistanceNewtons = .8;
     double GravityZ = -980;
     bool bGrounded = true;
+    bool bAcceptVerticalLineForce = false;
 };
 
 /** Upright capsule locomotion. The existing authority input/snapshot channel schedules one CMC step. */
@@ -39,6 +40,7 @@ public:
 	void UpdatePeerPushContacts();
 	virtual void StopMovementImmediately() override;
 	virtual void CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration) override;
+	virtual FVector NewFallVelocity(const FVector& InitialVelocity, const FVector& Gravity, float DeltaTime) const override;
 	virtual void PhysicsRotation(float DeltaTime) override;
 	virtual bool IsWalkable(const FHitResult& Hit) const override;
 	virtual void InitCollisionParams(FCollisionQueryParams& OutParams, FCollisionResponseParams& OutResponseParam) const override;

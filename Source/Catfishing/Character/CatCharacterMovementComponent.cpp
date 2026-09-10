@@ -48,6 +48,12 @@ void UCatCharacterMovementComponent::AdvanceFromAuthority(float DeltaSeconds)
 	// 4c5e8cd: continuous traction uses the same small steps even on slow frames.
     MovementExternalForce = QueuedExternalImpulse / DeltaSeconds;
     QueuedExternalImpulse = FVector::ZeroVector;
+    MovementExternalForce.Z += Body->GetVerticalGripForceFromAuthority();
+    if (IsMovingOnGround() && MovementExternalForce.Z > -GetGravityZ()*FMath::Max(1.0f,Mass))
+    {
+        SetMovementMode(MOVE_Falling);
+        Body->NotifyGripLiftFromAuthority();
+    }
     const bool bTraction = Body->HasFishingMotor() || Body->CaptureDriveSample().bConnected || !MovementExternalForce.IsNearlyZero();
     const float Step = bTraction ? FMath::Min(MaxSimulationTimeStep, 1.0f / 120.0f) : MaxSimulationTimeStep;
     TGuardValue<float> StepGuard(MaxSimulationTimeStep, Step);
@@ -63,10 +69,10 @@ void UCatCharacterMovementComponent::CalcVelocity(float DeltaTime, float Frictio
 	auto* Body = Cat ? Cat->GetPhysicalBodyComponent() : nullptr;
 	if (!Body || DeltaTime <= 0) return;
 	// Grounded voluntary braking and external traction share one finite force budget.
-	// In the air gravity remains CMC's responsibility; a hand cannot suspend the capsule.
+	// Vertical force is integrated only by NewFallVelocity; PhysFalling restores CalcVelocity's Z.
 	FVector Force = Body->GetExternalForceFromAuthority();
-	Force.Z = 0;
 	Force += MovementExternalForce;
+	Force.Z = 0;
     if (IsMovingOnGround())
     {
         auto Drive = Body->CaptureDriveSample();
@@ -74,6 +80,11 @@ void UCatCharacterMovementComponent::CalcVelocity(float DeltaTime, float Frictio
         Velocity = IntegrateGroundVelocity(Drive,CharacterOwner->GetActorLocation(),Velocity,Force,FMath::Max(1.0f,Mass),Resistance,DeltaTime);
     }
     else Velocity += Force*(DeltaTime/FMath::Max(1.0f,Mass));
+}
+
+FVector UCatCharacterMovementComponent::NewFallVelocity(const FVector& InitialVelocity, const FVector& Gravity, float DeltaTime) const
+{
+    return Super::NewFallVelocity(InitialVelocity, Gravity + FVector(0,0,MovementExternalForce.Z/FMath::Max(1.0f,Mass)), DeltaTime);
 }
 
 void UCatCharacterMovementComponent::PhysicsRotation(float DeltaTime)
@@ -166,10 +177,11 @@ FCatCMCMotionPrediction UCatCharacterMovementComponent::CaptureMotionPrediction(
     FCatCMCMotionPrediction Sample;
     Sample.Drive = Body->CaptureDriveSample();
     Sample.Position = CharacterOwner->GetActorLocation(); Sample.Velocity = Velocity;
-    Sample.ExternalForce = Body->GetExternalForceFromAuthority(); Sample.ExternalForce.Z = 0;
+    Sample.ExternalForce = Body->GetExternalForceFromAuthority(); Sample.ExternalForce.Z = Body->GetVerticalGripForceFromAuthority();
     Sample.MassKg = FMath::Max(1.0f, Mass);
     Sample.GroundResistanceNewtons = FMath::IsFinite(GroundResistanceNewtons) ? FMath::Max(0.0f, GroundResistanceNewtons) : .8;
     Sample.bGrounded = IsMovingOnGround(); Sample.GravityZ = GetGravityZ();
+    Sample.bAcceptVerticalLineForce = !Sample.bGrounded;
     return Sample;
 }
 
@@ -179,6 +191,9 @@ void UCatCharacterMovementComponent::AdvanceMotionPrediction(FCatCMCMotionPredic
     {
         const double H = FMath::Min(Remaining, 1.0 / 120.0);
         FVector Force = Sample.ExternalForce + LineForceNewtons * 100.0;
+        if (!Sample.bAcceptVerticalLineForce) Force.Z = Sample.ExternalForce.Z;
+        if (Sample.bGrounded && Force.Z > -Sample.GravityZ*Sample.MassKg) Sample.bGrounded = false;
+        const FVector OldVelocity = Sample.Velocity;
         if (Sample.bGrounded)
             Sample.Velocity = IntegrateGroundVelocity(Sample.Drive,Sample.Position,Sample.Velocity,Force,Sample.MassKg,Sample.GroundResistanceNewtons,H);
         else
@@ -186,7 +201,7 @@ void UCatCharacterMovementComponent::AdvanceMotionPrediction(FCatCMCMotionPredic
             Force.Z += Sample.GravityZ*Sample.MassKg;
             Sample.Velocity += Force*(H/Sample.MassKg);
         }
-        Sample.Position += Sample.Velocity * H;
+        Sample.Position += (Sample.bGrounded ? Sample.Velocity : (OldVelocity+Sample.Velocity)*.5) * H;
         Remaining -= H;
     }
 }

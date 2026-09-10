@@ -42,7 +42,7 @@ bool FCatUprightCMCWorldTest::RunTest(const FString& Parameters)
 		Body->SetExternalForceFromAuthority(Scene.Floor,FVector(6000,1500,100000));
 		Scene.Step(Rate/3,Rate);
 		TestTrue(TEXT("horizontal traction actually moves the capsule"),Cat->GetActorLocation().X>BeforePull.X+10);
-		TestTrue(TEXT("grip traction cannot lift or overturn the capsule"),Cat->GetActorUpVector().Z>.99999 && FMath::Abs(Cat->GetActorLocation().Z-StartZ)<.5);
+		TestTrue(TEXT("unqualified prop force cannot lift or overturn the capsule"),Cat->GetActorUpVector().Z>.99999 && FMath::Abs(Cat->GetActorLocation().Z-StartZ)<.5);
 		Body->ClearExternalForce(Scene.Floor);
 		Scene.Step(Rate,Rate);
 		Body->SetLocomotionEnabledFromAuthority(false,TEXT("CMCDownedContract"));

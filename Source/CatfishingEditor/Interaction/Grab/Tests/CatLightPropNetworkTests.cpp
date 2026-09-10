@@ -13,7 +13,6 @@
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
-#include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
 #include "Camera/CameraActor.h"
 #include "Camera/CameraComponent.h"
 #include "Components/BoxComponent.h"
@@ -150,7 +149,7 @@ namespace CatLightPropNetwork
 			ClientBody->SetMoveIntent(Stage == 5 ? -FVector::ForwardVector : FVector::ZeroVector);
 			ClientBody->SetViewIntent(FRotator(0, Stage == 2 ? 40 : 0, 0));
 			HelperBody->SetMoveIntent(Stage == 5 ? FVector::ForwardVector : FVector::ZeroVector);
-			HelperBody->SetViewIntent(Stage >= 5 && Rod ?
+			HelperBody->SetViewIntent(Stage >= 5 && Stage <= 10 && Rod ?
 				(Rod->GetGripWorldTransform().GetLocation() + Rod->GetPhysicalRodBody()->GetForwardVector() * 12.0 - HelperBody->GetGrab()->GetShoulderWorldLocation(true)).Rotation()
 				: FRotator(0, 180, 0));
 			if (Stage == 1)
@@ -274,9 +273,7 @@ namespace CatLightPropNetwork
 				Test->TestFalse(TEXT("pull test has no fish load"), Light->GetState().bExternalLoad);
 				Test->TestEqual(TEXT("helper never becomes a fishing operator"), Rod->GetOperatorCount(), 1);
 				Capture(Client, TEXT("formal-two-cats-pull-no-fish"));
-				Rod->ReleasePhysicalPrimaryHoldFromAuthority(Cat->GetPlayerState(), TEXT("LightPropOwnerLeavesHelper"));
-				Rod->RefreshPrimaryControlFromAuthority();
-				Next(6, Now);
+                Next(9, Now);
 			}
 			else if (Stage == 6)
 			{
@@ -294,12 +291,93 @@ namespace CatLightPropNetwork
 				Test->TestEqual(TEXT("last-release gentle fall replicates"), ClientLight->GetState().Mode, ECatLightPropMode::Falling);
 				Test->AddInfo(FString::Printf(TEXT("Event=light_prop_formal_network_verified PropId=%s MinBodyZ=%.3f MinUpZ=%.6f MaxBodyZ=%.3f MaxGripForceKgCmS2=%.3f ServerRevision=%u ClientRevision=%u Result=ObservedBothEndpoints"),
 					*Light->GetState().PropId.ToString(), MinimumBodyZ, MinimumUp, MaximumBodyZ, MaximumGripForce, Light->GetState().Revision, ClientLight->GetState().Revision));
-				Rod->Destroy();
-				return true;
+                Body->TeleportBodyFromAuthority(FTransform(FVector(0,0,Body->GetStandRootHeightCm())),TEXT("GrabJumpDirectSetup"));
+                HelperBody->TeleportBodyFromAuthority(FTransform(FVector(32*Body->GetGeometryScale(),0,HelperBody->GetStandRootHeightCm())),TEXT("GrabJumpFriendSetup"));
+                Next(11,Now);
 			}
+            else if (Stage==9)
+            {
+                if (Now-StageStarted<.75 || !Body->IsGrounded() || !HelperBody->IsGrounded()) return false;
+                BeginJump(Cat,Helper);
+                ClientBody->RequestJump();
+                Next(10,Now);
+            }
+            else if (Stage==11)
+            {
+                if (Now-StageStarted<1 || !Body->IsGrounded() || !HelperBody->IsGrounded()) return false;
+                ClientBody->GetGrab()->SetGrabInput(true,true);
+                Next(12,Now);
+            }
+            else if (Stage==12)
+            {
+                if (Now-StageStarted>4) { Test->AddError(TEXT("client reach could not latch the real friend's body")); return true; }
+                if (Body->GetGrab()->GetGripTarget(true)!=Helper || !ClientBody->GetGrab()->IsGripping(true)) return false;
+                DirectGrip=Body->GetGrab()->GetGripState(true).GripId;
+                BeginJump(Cat,Helper);
+                ClientBody->RequestJump();
+                Next(13,Now);
+            }
+            else if (Stage==10 || Stage==13)
+            {
+                ACatCharacter* ClientHelper=nullptr;
+                for (TActorIterator<ACatCharacter> It(Client);It;++It)
+                    if (It->GetPhysicalBodyComponent()->GetBodyId()==HelperBody->GetBodyId()) ClientHelper=*It;
+                if (!ClientHelper) return false;
+                JumpPeakA=FMath::Max(JumpPeakA,Cat->GetActorLocation().Z-JumpStartA);
+                JumpPeakB=FMath::Max(JumpPeakB,Helper->GetActorLocation().Z-JumpStartB);
+                ClientJumpPeakB=FMath::Max(ClientJumpPeakB,ClientHelper->GetActorLocation().Z-JumpStartB);
+                bObservedClientLift |= !ClientHelper->GetPhysicalBodyComponent()->IsGrounded() && ClientHelper->GetActorLocation().Z>JumpStartB+2;
+                if (!bLiftCaptured && ClientCat->GetActorLocation().Z>JumpStartA+4 && ClientHelper->GetActorLocation().Z>JumpStartB+2)
+                {
+                    Capture(Client,Stage==10 ? TEXT("formal-held-rod-grab-jump") : TEXT("formal-friend-grab-jump"));
+                    bLiftCaptured=true;
+                }
+                if (Now-StageStarted<2.5) return false;
+                Test->AddInfo(FString::Printf(TEXT("Event=cmc_grab_jump_network_verified World=%s NetMode=%d Kind=%s JumperBodyId=%s FriendBodyId=%s JumperRiseCm=%.3f FriendRiseCm=%.3f ClientFriendRiseCm=%.3f ClientSawFalling=%d"),
+                    *GetNameSafe(Server),int32(Server->GetNetMode()),Stage==10 ? TEXT("HeldRod") : TEXT("Friend"),*Body->GetBodyId().ToString(),*HelperBody->GetBodyId().ToString(),JumpPeakA,JumpPeakB,ClientJumpPeakB,bObservedClientLift));
+                Test->TestTrue(TEXT("client jump lifts the friend on both authority and replica"),JumpPeakA>4 && JumpPeakB>2 && ClientJumpPeakB>2 && bObservedClientLift);
+                Test->TestTrue(TEXT("both cats land upright and no vertical grip force remains"),Body->IsGrounded() && HelperBody->IsGrounded() && ClientBody->IsGrounded() && ClientHelper->GetPhysicalBodyComponent()->IsGrounded()
+                    && Cat->GetActorUpVector().Z>.99999 && Helper->GetActorUpVector().Z>.99999 && FMath::Abs(HelperBody->GetVerticalGripForceFromAuthority())<.01);
+                if (Stage==10)
+                {
+                    Test->TestEqual(TEXT("jumping while sharing a rod still has one primary only"),Rod->GetOperatorCount(),1);
+                    Test->TestTrue(TEXT("jump keeps the independent helper grip"),HelperBody->GetGrab()->IsGripping(true) && HelperBody->GetGrab()->GetGripState(true).GripId==HelperGrip);
+                    Rod->ReleasePhysicalPrimaryHoldFromAuthority(Cat->GetPlayerState(),TEXT("LightPropOwnerLeavesHelper"));
+                    Rod->RefreshPrimaryControlFromAuthority();
+                    Next(6,Now);
+                }
+                else
+                {
+                    Test->TestTrue(TEXT("direct friend grip remains replicated after landing"),Body->GetGrab()->IsGripping(true) && Body->GetGrab()->GetGripState(true).GripId==DirectGrip && ClientBody->GetGrab()->GetGripState(true).GripId==DirectGrip);
+                    ClientBody->GetGrab()->SetGrabInput(true,false);
+                    Next(14,Now);
+                }
+            }
+            else if (Stage==14)
+            {
+                if (Now-StageStarted<.5 || Body->GetGrab()->IsGripping(true) || ClientBody->GetGrab()->IsGripping(true)) return false;
+                Test->TestTrue(TEXT("client release clears authority and replica after a lifted grab"),Body->GetVerticalGripForceFromAuthority()==0 && HelperBody->GetVerticalGripForceFromAuthority()==0);
+                Rod->Destroy(); return true;
+            }
 			return false;
 		}
 	private:
+        void BeginJump(ACatCharacter* Jumper, ACatCharacter* Friend)
+        {
+            JumpStartA=Jumper->GetActorLocation().Z; JumpStartB=Friend->GetActorLocation().Z;
+            JumpPeakA=JumpPeakB=ClientJumpPeakB=0; bObservedClientLift=bLiftCaptured=false;
+            // Place the observer before sending the jump RPC so the rendered camera is
+            // already looking at this pair when their short airborne interval is captured.
+            if (ObservationCamera.IsValid())
+            {
+                const FVector Centre=(Jumper->GetActorLocation()+Friend->GetActorLocation())*.5+FVector(0,0,12);
+                const FVector At=Centre+FVector(-80,-260,100);
+                ObservationCamera->SetActorLocationAndRotation(At,(Centre-At).Rotation());
+            }
+        }
+        double JumpStartA=0,JumpStartB=0,JumpPeakA=0,JumpPeakB=0,ClientJumpPeakB=0;
+        bool bObservedClientLift=false,bLiftCaptured=false;
+        FGuid DirectGrip;
 		void Next(int32 Value, double Now) { Stage = Value; StageStarted = Now; }
 		void Capture(UWorld* World, const TCHAR* Label)
 		{

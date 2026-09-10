@@ -75,6 +75,10 @@ public:
 	double GetFacingYawDegrees() const { return FacingYawDegrees; }
 	FTickFunction& GetPostMovementTick() { return PostPhysicsTick; }
 	FVector GetExternalForceFromAuthority();
+	double GetVerticalGripForceFromAuthority() const;
+	/** A successful voluntary jump permits brief reciprocal vertical grip traction, never suspension. */
+	double GetJumpTractionWeight() const;
+	void NotifyGripLiftFromAuthority();
 	FVector ComputeHorizontalDriveForce(const FVector& Velocity, double Mass, double StepSeconds);
 	FCatBodyDriveSample CaptureDriveSample();
 	static FVector ComputeDriveForce(FCatBodyDriveSample& Sample, const FVector& Position, const FVector& Velocity, double Mass, double StepSeconds);
@@ -110,7 +114,7 @@ public:
 	void SetLocomotionEnabledFromAuthority(bool bEnabled, FName Reason);
 	bool TeleportBodyFromAuthority(const FTransform& Transform, FName Reason);
 	/** Each source replaces its own force. Units are kg*cm/s^2; multiply Newtons by 100 once. */
-	void SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2);
+	void SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction = false);
 	void ClearExternalForce(const UObject* Source);
 	/** Replaces the ordinary motor budget; zero means no voluntary motor force, never unlimited. */
 	void SetFishingMotorBudget(const UObject* Source, double MaxForceKgCmS2, double MaxSpeedCmS = 100.0);
@@ -152,7 +156,12 @@ private:
 	UPROPERTY(Replicated) FGuid BodyId;
 	UPROPERTY(Replicated) uint32 ControlEpoch = 1;
 	UPROPERTY(Replicated) bool bLocomotionEnabled = true;
-	TMap<TWeakObjectPtr<const UObject>, FVector> ExternalForces;
+	struct FExternalForce
+	{
+		FVector Force = FVector::ZeroVector;
+		bool bVerticalGripTraction = false;
+	};
+	TMap<TWeakObjectPtr<const UObject>, FExternalForce> ExternalForces;
 	TWeakObjectPtr<const UObject> FishingMotorSource;
 	double FishingMotorMaxForce = 0.0;
 	double FishingMotorMaxSpeed = 100.0;
@@ -170,6 +179,7 @@ private:
 	double LastSendSeconds = -1.0;
 	double LastSnapshotSeconds = -1.0;
 	double SupportDisabledUntilSeconds = 0.0;
+	double JumpTractionUntilSeconds = 0.0;
 	double NextMotionLogSeconds = 0.0;
 	double NextInputRejectLogSeconds = 0.0;
 	double NextBudgetRejectLogSeconds = 0.0;

@@ -234,7 +234,7 @@ void UCatPhysicalBodyComponent::UpdatePhysicalMovement(const float DeltaSeconds)
 	for (auto It=ExternalForces.CreateIterator(); It; ++It)
 	{
 		if (!It.Key().IsValid()) { It.RemoveCurrent(); continue; }
-		Body->AddForce(It.Value());
+		Body->AddForce(It.Value().Force);
 	}
 	if (bJumpSeparating && !bPublishJumpAfterPhysics && GetWorld()->GetTimeSeconds() >= SupportDisabledUntilSeconds && Velocity.Z <= 0) bJumpSeparating=false;
 	const FVector BodyUp = Body->GetUpVector();
@@ -401,9 +401,32 @@ FVector UCatPhysicalBodyComponent::GetExternalForceFromAuthority()
 	for (auto It = ExternalForces.CreateIterator(); It; ++It)
 	{
 		if (!It.Key().IsValid()) { It.RemoveCurrent(); continue; }
-		Sum += It.Value();
+		Sum += It.Value().Force;
 	}
 	return Sum;
+}
+
+double UCatPhysicalBodyComponent::GetVerticalGripForceFromAuthority() const
+{
+    double Sum = 0;
+    for (const auto& Entry : ExternalForces)
+        if (Entry.Key.IsValid() && Entry.Value.bVerticalGripTraction) Sum += Entry.Value.Force.Z;
+    return Sum;
+}
+
+double UCatPhysicalBodyComponent::GetJumpTractionWeight() const
+{
+    return HasAuthority() && bLocomotionEnabled && GetWorld()
+        ? FMath::Clamp((JumpTractionUntilSeconds-GetWorld()->GetTimeSeconds())/.08,0.0,1.0) : 0.0;
+}
+
+void UCatPhysicalBodyComponent::NotifyGripLiftFromAuthority()
+{
+    if (!HasAuthority()) return;
+    bGrounded = false;
+    bPublishJumpAfterPhysics = true;
+    // External lift never opens another jump window or propagates a hanging chain.
+    LogState(TEXT("physics_body_grip_lift"),TEXT("GripForceExceedsWeight"));
 }
 
 void UCatPhysicalBodyComponent::AddExternalImpulseFromAuthority(FVector ImpulseKgCmS)
@@ -540,7 +563,8 @@ void UCatPhysicalBodyComponent::RequestJump()
 		{
 			bGrounded = false;
 			bPublishJumpAfterPhysics = true;
-			LogState(TEXT("physics_body_jump"), TEXT("CMCJump"));
+			JumpTractionUntilSeconds = GetWorld()->GetTimeSeconds() + .35;
+			LogState(TEXT("physics_body_jump"), TEXT("CMCJumpWithGripTraction"));
 		}
 		return;
 	}
@@ -563,6 +587,7 @@ void UCatPhysicalBodyComponent::ServerRequestJump_Implementation(uint32 Epoch)
 }
 void UCatPhysicalBodyComponent::ClearControlIntent(FName Reason)
 {
+	JumpTractionUntilSeconds = 0;
 	if (HasAuthority() && !MoveInput.IsNearlyZero()) bPublishMovementAfterPhysics = true;
 	MoveInput = FVector::ZeroVector;
 	if (Grab)
@@ -595,6 +620,7 @@ void UCatPhysicalBodyComponent::BeginControlEpochFromAuthority()
 void UCatPhysicalBodyComponent::ReleaseConnectionsFromAuthority(FName Reason)
 {
 	if (!HasAuthority()) return;
+	JumpTractionUntilSeconds = 0;
 	if (Grab) Grab->ReleaseAllFromAuthority(Reason);
 	for (TActorIterator<AActor> It(GetWorld()); It; ++It)
 		if (*It != GetOwner())
@@ -609,10 +635,12 @@ void UCatPhysicalBodyComponent::SetLocomotionEnabledFromAuthority(bool bEnabled,
 	GetOwner()->ForceNetUpdate();
 	LogState(TEXT("physics_body_locomotion_changed"), Reason);
 }
-void UCatPhysicalBodyComponent::SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2)
+void UCatPhysicalBodyComponent::SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction)
 {
 	if (!HasAuthority() || !IsValid(Source) || ForceKgCmS2.ContainsNaN()) return;
-	ExternalForces.FindOrAdd(TWeakObjectPtr<const UObject>(Source)) = ForceKgCmS2;
+	auto& Entry = ExternalForces.FindOrAdd(TWeakObjectPtr<const UObject>(Source));
+	Entry.Force = ForceKgCmS2;
+	Entry.bVerticalGripTraction = bVerticalGripTraction;
 }
 void UCatPhysicalBodyComponent::ClearExternalForce(const UObject* Source)
 {
@@ -756,14 +784,14 @@ void UCatPhysicalBodyComponent::TickComponent(float DeltaSeconds, ELevelTick Tic
 void UCatPhysicalBodyComponent::LogState(FName Event, FName Reason) const
 {
 	const FString Record = FString::Printf(
-		TEXT("Event=%s World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s BodyId=%s ControlEpoch=%u ResetEpoch=%u Revision=%u Location=%s Velocity=%s Grounded=%d Locomotion=%d MoveIntent=%s MotorSource=%s MotorBudgetUE=%.3f MaxSpeedCmS=%.3f JumpSpeedCmS=%.3f GravityScale=%.3f ViewYaw=%.3f BodyYaw=%.3f FacingYaw=%.3f InputSequence=%u Result=%s"),
+		TEXT("Event=%s World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s BodyId=%s ControlEpoch=%u ResetEpoch=%u Revision=%u Location=%s Velocity=%s Grounded=%d Locomotion=%d MoveIntent=%s MotorSource=%s MotorBudgetUE=%.3f MaxSpeedCmS=%.3f JumpSpeedCmS=%.3f GravityScale=%.3f ViewYaw=%.3f BodyYaw=%.3f FacingYaw=%.3f InputSequence=%u JumpTractionWeight=%.3f VerticalGripForceUE=%.3f Result=%s"),
 		*Event.ToString(), *GetNameSafe(GetWorld()), GetOwner() ? int32(GetOwner()->GetNetMode()) : -1, HasAuthority(),
 		GetOwner() ? int32(GetOwner()->GetLocalRole()) : -1, *GetNameSafe(GetOwner()), *BodyId.ToString(), ControlEpoch,
 		Snapshot.ResetEpoch, Snapshot.Revision, *GetOwner()->GetActorLocation().ToCompactString(), *GetVelocity().ToCompactString(),
 		IsGrounded(), bLocomotionEnabled, *GetMoveIntent().ToCompactString(), *GetNameSafe(FishingMotorSource.Get()),
 		FishingMotorSource.IsValid() ? FishingMotorMaxForce : -1.0, MaxMovementSpeedCmS, JumpSpeedCmS, GravityScale,
 		ViewInput.Yaw, Body ? Body->GetComponentRotation().Yaw : 0.0, FacingYawDegrees,
-		HasAuthority() ? AcceptedInputSequence : LocalInputSequence, *Reason.ToString());
+		HasAuthority() ? AcceptedInputSequence : LocalInputSequence, GetJumpTractionWeight(), GetVerticalGripForceFromAuthority(), *Reason.ToString());
 	if (Event.ToString().EndsWith(TEXT("_rejected")))
 	{
 		UE_LOG(LogCatPhysicsGrab, Warning, TEXT("%s"), *Record);

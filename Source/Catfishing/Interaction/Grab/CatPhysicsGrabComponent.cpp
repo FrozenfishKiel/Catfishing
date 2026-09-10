@@ -3,6 +3,8 @@
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Interaction/Grab/CatLightPropComponent.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/Character.h"
+#include "GameFramework/CharacterMovementComponent.h"
 #include "Components/PrimitiveComponent.h"
 #include "Components/SphereComponent.h"
 #include "Components/BoxComponent.h"
@@ -531,20 +533,46 @@ void UCatPhysicsGrabComponent::ApplyTraction(bool bLeft)
 	const FVector Desired = GetShoulderWorldLocation(bLeft) + Physical->GetViewIntent().RotateVector(State.HeldAimLocalOffset);
 	const FVector TargetVelocity = Receiver ? Receiver->GetVelocity() : Target->GetPhysicsLinearVelocityAtPoint(Point);
 	// Force on target; the holder receives the equal and opposite force. No fishing membership or stamina sum.
-	const FVector Force = ((Desired - Point) * 650.0 + (Physical->GetVelocity() - TargetVelocity) * 24.0).GetClampedToMaxSize(10000.0);
+	FVector Force = ((Desired - Point) * 650.0 + (Physical->GetVelocity() - TargetVelocity) * 24.0).GetClampedToMaxSize(10000.0);
+    const bool bCharacterPair = Physical->UsesCharacterMovement() && Receiver && Receiver->UsesCharacterMovement();
+    const double JumpWeight = bCharacterPair ? FMath::Max(Physical->GetJumpTractionWeight(),Receiver->GetJumpTractionWeight()) : 0;
+    if (bCharacterPair)
+    {
+        // An implicit spring/damper bounds the average force over a slow frame. Every grip
+        // on this pair sees their combined mass response; two hands cannot double an old
+        // relative velocity impulse and fling the grounded endpoint during a hitch.
+        int32 PairGripCount = 0;
+        for (const auto* Component : {this,Receiver->GetGrab()})
+            if (Component) for (const bool Left : {true,false})
+            {
+                const auto& PairState=Component->GetGripState(Left);
+                const auto* PairTarget=Component->ResolveConstraintTarget(PairState);
+                if (PairState.bGripped && !PairState.bControlledHold && PairTarget
+                    && PairTarget->GetOwner()==(Component==this ? Receiver->GetOwner() : GetOwner())) ++PairGripCount;
+            }
+        const double InverseMass = 1.0/FMath::Max(1.0f,CastChecked<ACharacter>(GetOwner())->GetCharacterMovement()->Mass)
+            + 1.0/FMath::Max(1.0f,CastChecked<ACharacter>(Receiver->GetOwner())->GetCharacterMovement()->Mass);
+        const double Dt = FMath::Max(0.0f,GetWorld()->GetDeltaSeconds());
+        const double Spring=650*JumpWeight, Damping=24*JumpWeight;
+        const double RelativeSpeed=Physical->GetVelocity().Z-TargetVelocity.Z;
+        Force.Z=(Spring*(Desired.Z-Point.Z+RelativeSpeed*Dt)+Damping*RelativeSpeed)
+            /(1+(Damping*Dt+Spring*Dt*Dt)*InverseMass*FMath::Max(1,PairGripCount));
+        Force=Force.GetClampedToMaxSize(10000.0);
+    }
+    const bool bVerticalTraction = JumpWeight > 0;
 	if (GetWorld()->GetTimeSeconds() >= NextTractionLogSeconds[Index])
 	{
 		NextTractionLogSeconds[Index] = GetWorld()->GetTimeSeconds() + 1.0;
-		UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=physics_grip_traction World=%s NetMode=%d Authority=1 LocalRole=%d Actor=%s BodyId=%s Hand=%s GripId=%s Target=%s Receiver=%s ForceOnTargetN=%s ErrorCm=%s Result=BidirectionalHorizontalCharacterForce"),
+		UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=physics_grip_traction World=%s NetMode=%d Authority=1 LocalRole=%d Actor=%s BodyId=%s Hand=%s GripId=%s Target=%s Receiver=%s ForceOnTargetN=%s ErrorCm=%s JumpTractionWeight=%.3f Result=ReciprocalGripForce"),
 			*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(GetOwner()->GetLocalRole()), *GetNameSafe(GetOwner()),
 			*Physical->GetBodyId().ToString(), bLeft ? TEXT("Left") : TEXT("Right"), *State.GripId.ToString(), *GetNameSafe(State.TargetActor),
-			*GetNameSafe(Target->GetOwner()), *(Force / 100.0).ToCompactString(), *(Desired-Point).ToCompactString());
+			*GetNameSafe(Target->GetOwner()), *(Force / 100.0).ToCompactString(), *(Desired-Point).ToCompactString(), JumpWeight);
 	}
 	LastTractionForce[Index] = Force;
-	Physical->SetExternalForceFromAuthority(Contacts[Index], -Force);
+	Physical->SetExternalForceFromAuthority(Contacts[Index], -Force, bVerticalTraction);
 	if (Receiver)
 	{
-		Receiver->SetExternalForceFromAuthority(Contacts[Index], Force);
+		Receiver->SetExternalForceFromAuthority(Contacts[Index], Force, bVerticalTraction);
 		TractionReceiver[Index] = Receiver;
 	}
 	else if (Target->IsSimulatingPhysics(State.TargetBone)) Target->AddForceAtLocation(Force, Point, State.TargetBone);
