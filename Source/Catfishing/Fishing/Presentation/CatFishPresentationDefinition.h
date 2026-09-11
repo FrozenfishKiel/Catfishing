@@ -72,7 +72,7 @@ public:
 		meta=(ClampMin="-180.0", ClampMax="180.0", Units="deg"))
 	double ExhaustedVisualRollDegrees = 90.0;
 
-	/** 岸上鱼 Actor 的权威侧翻角；随 ReplicatedMovement 同步。 */
+	/** 世界鱼侧躺角，单位度；保留现有资产序列化字段名，鱼拾取Actor按该角旋转网格，物理根不再承担侧躺表现。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="Fish|Transform",
 		meta=(ClampMin="-180.0", ClampMax="180.0", Units="deg"))
 	double LandedActorRollDegrees = 90.0;

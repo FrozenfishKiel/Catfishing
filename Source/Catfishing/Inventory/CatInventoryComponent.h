@@ -9,6 +9,7 @@
 #include "CatInventoryComponent.generated.h"
 
 class APawn;
+class ACatCharacter;
 class UActorChannel;
 class UCatInventoryItemDefinition;
 class UCatInventoryItemInstance;
@@ -287,8 +288,9 @@ public:
 	/** authority 按外部配置刷新槽位容量；只补齐新增空槽，不因容量变小删除已有物品。 */
 	void SetInventorySlotCountFromAuthority(int32 NewSlotCount);
 
-	/** authority 用一份完整槽位快照替换当前库存；存档恢复靠它保留格子顺序。 */
-	bool ReplaceInventoryEntriesFromAuthority(const TArray<FCatInventoryEntry>& NewEntries, int32 MinimumSlotCount);
+	/** authority 原子替换完整槽位并保持格位顺序；售鱼可暂缓广播，调用方必须在经济提交成功后显式通知或失败时恢复原快照。 */
+	bool ReplaceInventoryEntriesFromAuthority(const TArray<FCatInventoryEntry>& NewEntries, int32 MinimumSlotCount,
+		bool bBroadcastChange = true);
 
 	/** 按实例移除物品；实例完全离开当前库存后会解除复制子对象登记。 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
@@ -352,6 +354,10 @@ public:
 	/** 从指定格扣除数量；数量归零时清空格子并在安全时解除实例复制登记。 */
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
 	bool ConsumeItemAtSlot(int32 SlotIndex, int32 ConsumeCount);
+
+	/** 丢弃或放置当前槽位的指定实例；生成和碰撞检查成功后才扣量，沿本库存终态缓存防止重复落地。 */
+	FCatDomainCommandResult ReleaseItemToWorldFromAuthority(ACatCharacter* Character, FGuid RequestId,
+		int32 SlotIndex, FGuid ItemInstanceId, int32 Quantity, ECatInventoryWorldAction Action);
 
 	/** 槽位合法性只代表数组边界成立；空槽也能参与拖放，避免 UI 把空目标格拒掉。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")

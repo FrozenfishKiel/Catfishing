@@ -10,32 +10,13 @@ class ACatShopKioskActor;
 class AController;
 class AActor;
 class UCatShopInventoryComponent;
+class ACatFishBuyerActor;
+class ACatFishGuardActor;
+
 
 /**
- * 玩家把一个正式库存格里的鱼卖给商店的完整意图。
- * 它只声明鱼实例、库存宿主和槽位；重量由服务器从鱼物品实例读取，公款由商店服务裁决。
- */
-USTRUCT()
-struct FCatShopFishSaleOrderCommand
-{
-	GENERATED_BODY()
-
-	/** RequestId 与服务器重建的身份；ExpectedRevision 在这条命令里指团队公款版本。 */
-	FCatDomainCommandContext Context;
-
-	/** 要卖掉的那条鱼物品实例；Shop 只记录它，删除和来源事实均由正式库存持有。 */
-	FGuid FishItemInstanceId;
-
-	/** 这条鱼当前所在的 Actor 宿主；控制器会从该宿主解析正式库存组件。 */
-	AActor* SourceInventoryHost = nullptr;
-
-	/** 这条鱼当前所在的库存槽位；服务器会重新读取该槽并核对 FishItemInstanceId。 */
-	int32 SourceInventorySlotIndex = INDEX_NONE;
-};
-
-/**
- * 一次“买下来并拿到手”或“一条鱼卖出入账”的完整结果。
- * 它刻意分成经济终态和实物终态：付款成功但交付失败、鱼已删但入账重试都是真实中间状态。
+ * 一次购买交付或整批售鱼的完整结果，分别呈现经济记录与实物提交回执。
+ * 购买仍可能等待发货；售鱼在独占实物期间统一入账，失败保留实物，不存在先删鱼再补款的中间状态。
  */
 USTRUCT(BlueprintType)
 struct FCatShopOrderResult
@@ -51,7 +32,7 @@ struct FCatShopOrderResult
 	FCatShopCartTransactionResult CartTransaction;
 
 	/**
-	 * 交付或库存提交这一段的终态。购物车发货失败时来自营地公共仓库，售鱼时来自来源库存移除鱼。
+	 * 交付或实物提交的终态。购物车发货来自营地公共仓库；售鱼来自鱼护批量移除或嘴叼鱼消费。
 	 * 它的 Revision 指向的聚合随来源不同而变化，读它时要先看调用链和 Error。
 	 */
 	UPROPERTY(BlueprintReadOnly)
@@ -75,16 +56,9 @@ public:
 	FCatShopOrderResult SubmitCartFromKiosk(AController* RequestingController, ACatShopKioskActor* ShopKiosk,
 		const TArray<FCatShopCartLineCommand>& Lines, FGuid RequestId, int64 ExpectedWalletRevision);
 
-	/** 玩家从可触达正式库存出售一条鱼；本控制器重建服务器身份并把鱼实例提交、钱包入账串成同一条事务链。 */
-	FCatShopOrderResult SubmitFishSaleFromPlayer(AController* RequestingController, FGuid FishItemInstanceId,
-		AActor* SourceInventoryHost, int32 SourceInventorySlotIndex,
-		FGuid RequestId, int64 ExpectedWalletRevision);
-
-	/**
-	 * 把玩家可触达库存里的一条鱼卖给商店：读取鱼事实 → 商店预检报价/公款 → 库存不可逆移除 → 公款入账。
-	 * 它和购买走同一个控制器，是因为二者都跨越“钱”和“实物”两个领域，必须在一个地方固定提交顺序。
-	 */
-	FCatShopOrderResult SubmitFishSale(const FCatShopFishSaleOrderCommand& Command);
+	/** 向明确买家出售当前鱼护内指定鱼实例；Guard为空时只售嘴叼鱼，整单复核后统一处理实物与GAS入账。 */
+	FCatShopOrderResult SubmitFishSaleFromPlayer(AController* RequestingController, ACatFishBuyerActor* Buyer,
+		ACatFishGuardActor* Guard, const TArray<FGuid>& FishInstanceIds, FGuid RequestId);
 
 private:
 	/**
@@ -101,6 +75,6 @@ private:
 	/** 售鱼命令终态缓存；跨库存扣除和公款入账的重放必须返回首次结果，不能再读已被扣除的鱼槽。 */
 	TMap<FString, FCatShopOrderResult> FishSaleTerminalCache;
 
-	/** 售鱼命令载荷签名；同一 RequestId 更换库存宿主、槽位、鱼或公款版本会被拒绝。 */
+	/** 售鱼请求绑定的买家、鱼护与鱼身份集合；同一 RequestId 换载荷会被拒绝，不依赖库存或钱包版本。 */
 	TMap<FString, FString> FishSaleTerminalPayloadByKey;
 };

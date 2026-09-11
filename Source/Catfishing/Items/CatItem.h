@@ -4,15 +4,16 @@
 #include "GameFramework/Actor.h"
 #include "Interaction/CatInteractable.h"
 #include "Inventory/CatInventoryStatics.h"
+#include "Inventory/CatInventoryWorldItem.h"
 #include "CatItem.generated.h"
 
 class UBoxComponent;
 class UStaticMeshComponent;
 class USkeletalMeshComponent;
 
-/** 可配置为任意正式库存批次的通用世界拾取物；它只持有静态发货载荷，成功收货前始终保留世界 Actor。 */
+/** 通用世界拾取物；关卡配置静态发货批次，库存落地写入实例批次，成功收货前始终保留实物与运行状态。 */
 UCLASS(Blueprintable, BlueprintType)
-class CATFISHING_API ACatItem : public AActor, public ICatInteractable
+class CATFISHING_API ACatItem : public AActor, public ICatInteractable, public ICatInventoryWorldItem
 {
 	GENERATED_BODY()
 
@@ -23,6 +24,9 @@ public:
 	/** 收货原子性的输入批次；交互入口用它整体检查容量并发货，派生装备可从定义生成，读取本身不改变库存。 */
 	virtual FCatInventoryReceiveBatch GetPickupInventory() const;
 
+	/** 接收来源库存的真实物品载荷；后续拾取沿用实例批次，保留耐久等实例状态而不是重新按定义发货。 */
+	virtual bool InitializeFromInventoryFromAuthority(UCatInventoryItemInstance* Item, int32 Quantity) override;
+
 	/** 生成后给派生物补齐表现或配置；基础物不需要额外状态，因此保持无副作用扩展点。 */
 	virtual void InitializeActorSpawnConfig();
 
@@ -32,17 +36,17 @@ public:
 	virtual FText GetInteractionPrompt_Implementation() const override;
 	/** 返回与服务器范围复核共用的交互距离，单位厘米。 */
 	virtual double GetInteractionRadius_Implementation() const override;
-	/** 客户端经现有 Controller RPC 转发；authority 以整批收货结果决定销毁或保留世界物。 */
+	/** 客户端经现有 Controller RPC 转发；authority 收货后由实例保管原物，无实例接管的发货载体才销毁。 */
 	virtual bool Interact_Implementation(AController* RequestingController, FGuid RequestId) override;
 
 protected:
 	/** 组件与蓝图默认值就绪后调用派生物配置，使关卡放置和运行生成采用同一初始化时序。 */
 	virtual void BeginPlay() override;
 
-	/** 本世界物是否已被一次收货流程占用；服务器在入库广播前写入，失败释放，成功保持到销毁，防止回调重入重复发货。 */
+	/** 本世界物是否已被拾取占用；服务器在入库广播前写入，失败释放，重新落地时清除，防止重复发货。 */
 	bool bPickupClaimed = false;
 
-	/** 拾取命中的查询碰撞根；目标扫描读它，成功收货后 Actor 销毁，失败时保持原位置和可交互性。 */
+	/** 拾取命中的查询与物理根；库存保管期间关闭物理和碰撞，落地恢复，拾取失败时保持原样。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Item")
 	TObjectPtr<UBoxComponent> PickupCollision;
 
@@ -54,9 +58,13 @@ protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Item")
 	TObjectPtr<USkeletalMeshComponent> SkeletalMesh;
 
-	/** 世界物成功拾取时一次性发给角色的静态库存载荷；蓝图与装备子类写入，InventoryStatics 预检并提交。 */
+	/** 拾取时交给角色的完整批次；蓝图可配置静态发货，落地入口覆盖为真实实例载荷，动态载荷优先于派生类静态发货。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catfishing|Item")
 	FCatInventoryReceiveBatch StaticPickupInventory;
+
+	/** 本 Actor 是一次库存落地的实例载体；生成端写入，读取批次时优先于装备子类的静态定义发货。 */
+	UPROPERTY(Transient)
+	bool bHasInventoryPayload = false;
 
 	/** 拾取可触达半径，单位厘米；本地目标扫描和服务器权威提交都读取同一值。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catfishing|Item", meta = (ClampMin = "1.0", Units = "cm"))

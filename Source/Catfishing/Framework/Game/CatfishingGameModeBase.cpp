@@ -1,6 +1,7 @@
 #include "Framework/Game/CatfishingGameModeBase.h"
 
 #include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
+#include "Camp/CatAltarActor.h"
 
 #include "Framework/Game/CatfishingGameState.h"
 #include "Framework/Game/CatfishingPlayerController.h"
@@ -279,6 +280,7 @@ void ACatfishingGameModeBase::HandlePersistenceCheckpoint()
 void ACatfishingGameModeBase::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	bRunCommandsOpen = false;
+	CancelAltarDayTransition(TransitionAltar.Get(), FText::GetEmpty());
 	for (TActorIterator<APlayerController> It(GetWorld()); It; ++It)
 	{
 		It->GetOnNewPawnNotifier().RemoveAll(this);
@@ -777,10 +779,10 @@ bool ACatfishingGameModeBase::IsPieNoSessionAdmissionAllowed() const
 #endif
 }
 
-// 玩法命令 gate 流程：要求 authority、本局命令门仍开放且 Controller 精确命中 Active 身份记录；Profile/Capture/Settlement/HostExit 等收口协议走各自校验，不调用本方法。
+// 玩法命令 gate 流程：要求 authority、本局命令门开放、没有翻天过场且 Controller 命中 Active；退出与持久化收口不经过此门。
 bool ACatfishingGameModeBase::CanAcceptGameplayCommand(const AController* Controller) const
 {
-	return HasAuthority() && bRunCommandsOpen && IsControllerActive(Controller);
+	return HasAuthority() && bRunCommandsOpen && !RunPublicState.DayTransition.bActive && IsControllerActive(Controller);
 }
 
 // 操作准入与新咬钩分开：白天截止和夜晚不封锁抛收竿、松线、抄网或打窝。
@@ -799,6 +801,7 @@ bool ACatfishingGameModeBase::CanAcceptFishingCommand(const AController* Control
 bool ACatfishingGameModeBase::CanGenerateNewFishingBites() const
 {
 	return HasAuthority() && bRunCommandsOpen && GetWorld()
+		&& !RunPublicState.DayTransition.bActive
 		&& RunPublicState.Phase.Phase == ECatRunPhase::DayActive
 		&& RunPublicState.Phase.bNewFishingBitesAllowed
 		&& (!RunPublicState.Phase.bHasDeadline
@@ -1112,13 +1115,23 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		RunPublicState.EndReason = ECatRunEndReason::None;
 		RunPublicState.Phase.bNewFishingBitesAllowed = true;
 		RunPublicState.Phase.bOfferingOpen = false;
+		if (RunPublicState.DayTransition.bActive)
+		{
+			const FCatRunDayTransition& Transition = RunPublicState.DayTransition;
+			RunPublicState.Phase.ServerTimeAnchorSeconds = Transition.StartServerTimeSeconds
+				+ Transition.FadeOutSeconds + Transition.HoldSeconds + Transition.FadeInSeconds;
+		}
 		RunPublicState.Phase.bHasDeadline = true;
 		RunPublicState.Phase.DeadlineServerTimeSeconds = RunPublicState.Phase.ServerTimeAnchorSeconds + DayLengthSeconds;
 		bRunCommandsOpen = true;
 		bAllEligibleReadyEventSent = false;
-		GetWorld()->GetTimerManager().SetTimer(DayDeadlineTimerHandle, this,
-			&ThisClass::HandleDayDeadlineElapsed, DayLengthSeconds, false);
-		bShouldScheduleDayEnvironmentRefreshes = true;
+		// 首日正常计时；祭坛翻天先发布晨景锚点，淡入结束后才注册计时器并校准截止，保证完整可玩时长。
+		if (!RunPublicState.DayTransition.bActive)
+		{
+			GetWorld()->GetTimerManager().SetTimer(DayDeadlineTimerHandle, this,
+				&ThisClass::HandleDayDeadlineElapsed, DayLengthSeconds, false);
+			bShouldScheduleDayEnvironmentRefreshes = true;
+		}
 		break;
 	}
 	case ECatRunPhase::NormalNight:
@@ -1137,6 +1150,13 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		CloseShopForSettlementNight();
 		break;
 	case ECatRunPhase::Ending:
+		if (RunPublicState.WorldProgress <= 0)
+		{
+			RunPublicState.EndReason = ECatRunEndReason::WorldProgressDepleted;
+			CloseShopForSettlementNight();
+		}
+		bRunCommandsOpen = false;
+		break;
 	case ECatRunPhase::Ended:
 		bRunCommandsOpen = false;
 		break;
@@ -1178,10 +1198,157 @@ bool ACatfishingGameModeBase::DoesLastRunFlowResultMatch(const ECatRunTransition
 		&& LastRunFlowResult.Reason == ExpectedReason;
 }
 
-// 玩家供品结算提交流程：服务器重建身份后汇入同一个 Run 写口；身份以外的载荷、属性预演、GE 应用、Revision 和 StateTree 事件都不在 Controller 分支重复实现。
+// 过渡开始：先由祭坛冻结地面鱼并与现有 GAS 预演联合检查，再发布唯一时间轴与操作门；拒绝只清确认，不扣鱼。
+bool ACatfishingGameModeBase::BeginAltarDayTransition(ACatAltarActor* Altar, AController* Controller, FGuid RequestId)
+{
+	if (!IsValid(Altar) || Altar->GetWorld() != GetWorld() || !RequestId.IsValid()
+		|| !CanAcceptGameplayCommand(Controller) || RunPublicState.Phase.Phase != ECatRunPhase::NormalNight
+		|| !RunPublicState.Phase.bOfferingOpen) return false;
+	FText Error;
+	FCatOfferingSettlementCommand Command;
+	int32 Points = 0, Delta = 0, Progress = 0;
+	bool bMetTarget = false;
+	const bool bTimingValid = FMath::IsFinite(Altar->FadeOutSeconds) && Altar->FadeOutSeconds > 0.0f
+		&& FMath::IsFinite(Altar->HoldSeconds) && Altar->HoldSeconds > 0.0f
+		&& FMath::IsFinite(Altar->FadeInSeconds) && Altar->FadeInSeconds > 0.0f
+		&& FMath::IsFinite(Altar->FadeOutSeconds + Altar->HoldSeconds + Altar->FadeInSeconds);
+	if (!bTimingValid || !RunStateTreeComponent || !RunStateTreeComponent->IsRunning()
+		|| !Altar->FreezeOffering(Controller, RequestId, Command, Error)
+		|| !FillServerCommandIdentity(Controller, Command.Context)
+		|| PreviewRunOfferingSettlement(Command, Points, Delta, Progress, bMetTarget) != ECatRunCommandError::None)
+	{
+		if (Error.IsEmpty()) Error = NSLOCTEXT("Catfishing", "AltarPreflightFailed", "献祭条件或过场配置无效，请稍后重试");
+		Altar->ResetOffering(Error);
+		UE_LOG(LogCatRun, Warning, TEXT("Event=AltarTransitionRejected World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s Reason=%s"),
+			*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *RequestId.ToString(), *Error.ToString());
+		return false;
+	}
+	TransitionAltar = Altar;
+	TransitionController = Controller;
+	TransitionOffering = Command;
+	FCatRunDayTransition& Transition = RunPublicState.DayTransition;
+	Transition = FCatRunDayTransition();
+	Transition.RequestId = RequestId;
+	Transition.bActive = true;
+	Transition.StartServerTimeSeconds = GetWorld()->GetTimeSeconds();
+	Transition.FadeOutSeconds = Altar->FadeOutSeconds;
+	Transition.HoldSeconds = Altar->HoldSeconds;
+	Transition.FadeInSeconds = Altar->FadeInSeconds;
+	Transition.TargetDayIndex = Progress > 0 && Progress < 100 ? RunPublicState.Phase.DayIndex + 1 : RunPublicState.Phase.DayIndex;
+	++RunPublicState.Revision;
+	RefreshEnvironmentAndPublish();
+	GetWorldTimerManager().SetTimer(AltarCommitTimer, this, &ThisClass::CommitAltarDayTransition, Transition.FadeOutSeconds, false);
+	GetWorldTimerManager().SetTimer(AltarFinishTimer, this, &ThisClass::FinishAltarDayTransition,
+		Transition.FadeOutSeconds + Transition.HoldSeconds + Transition.FadeInSeconds, false);
+	UE_LOG(LogCatRun, Display, TEXT("Event=AltarTransitionStarted World=%s NetMode=%d Authority=1 LocalRole=%d Altar=%s Player=%s RunId=%s RequestId=%s Day=%d TargetDay=%d"),
+		*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *Altar->GetName(), *GetNameSafe(Controller),
+		*RunPublicState.Phase.RunId.ToString(), *RequestId.ToString(), RunPublicState.Phase.DayIndex, Transition.TargetDayIndex);
+	return true;
+}
+
+// 黑屏提交：玩家仍有效且整批鱼通过预检才调用原有 GAS 结算；同步消费成功后公开结果。失败停止本轮计时并解锁，不重试扣鱼。
+void ACatfishingGameModeBase::CommitAltarDayTransition()
+{
+	if (!RunPublicState.DayTransition.bActive || RunPublicState.DayTransition.bCommitted) return;
+	ACatAltarActor* Altar = TransitionAltar.Get();
+	AController* Controller = TransitionController.Get();
+	FText Error;
+	if (!Altar || !IsControllerActive(Controller)
+		|| !Altar->ValidateFrozenOffering(Controller, RunPublicState.DayTransition.RequestId, Error))
+	{
+		if (Error.IsEmpty()) Error = NSLOCTEXT("Catfishing", "AltarParticipantLeft", "确认玩家或祭坛已离开，请重新确认");
+		CancelAltarDayTransition(Altar, Error);
+		return;
+	}
+	TransitionOffering.Context.ExpectedRevision = RunPublicState.Revision;
+	const FCatRunCommandResult Result = SubmitOfferingSettlementInternal(TransitionOffering);
+	if (!Result.bCommitted)
+	{
+		CancelAltarDayTransition(Altar, NSLOCTEXT("Catfishing", "AltarSettlementRejected", "献祭结算未被接受，供品未消耗"));
+		return;
+	}
+	if (!Altar->ConsumeFrozenOffering(Controller, RunPublicState.DayTransition.RequestId))
+	{
+		// 此分支意味着单鱼消费违反整批预检契约；不再次结算或伪造成功，保留已提交事实供日志定位。
+		CancelAltarDayTransition(Altar, NSLOCTEXT("Catfishing", "AltarConsumeContractFailed", "供品消费异常，结算已提交，请检查服务器日志"));
+		return;
+	}
+	FCatRunDayTransition& Transition = RunPublicState.DayTransition;
+	Transition.bCommitted = true;
+	Transition.TargetDayIndex = Result.NewWorldProgress > 0 && Result.NewWorldProgress < 100
+		? RunPublicState.Phase.DayIndex + 1 : RunPublicState.Phase.DayIndex;
+	Transition.Message = Result.NewWorldProgress <= 0
+		? NSLOCTEXT("Catfishing", "AltarRunFailed", "本次旅程结束")
+		: Result.NewWorldProgress >= 100 ? NSLOCTEXT("Catfishing", "AltarGraduation", "毕业之夜")
+		: FText::Format(NSLOCTEXT("Catfishing", "AltarNewDay", "第 {0} 天"), FText::AsNumber(Transition.TargetDayIndex));
+	Altar->ResetOffering();
+	++RunPublicState.Revision;
+	RefreshEnvironmentAndPublish();
+	UE_LOG(LogCatRun, Display, TEXT("Event=AltarTransitionCommitted World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s Offered=%d Delta=%d WorldProgress=%d TargetDay=%d"),
+		*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *Transition.RequestId.ToString(), Result.OfferedPoints,
+		Result.AppliedWorldProgressDelta, Result.NewWorldProgress, Transition.TargetDayIndex);
+}
+
+// 过场收口：统一清计时和引用并解锁；普通新天从现在建立可玩截止，毕业、失败和退出不计时。结算事件未被消费时显示真实错误，不另建阶段回退。
+void ACatfishingGameModeBase::FinishAltarDayTransition()
+{
+	if (!RunPublicState.DayTransition.bActive) return;
+	GetWorldTimerManager().ClearTimer(AltarCommitTimer);
+	GetWorldTimerManager().ClearTimer(AltarFinishTimer);
+	if (RunPublicState.DayTransition.bCommitted && RunPublicState.Phase.Phase == ECatRunPhase::NormalNight
+		&& !RunPublicState.DayTransition.bFailed)
+	{
+		RunPublicState.DayTransition.bFailed = true;
+		RunPublicState.DayTransition.Message = NSLOCTEXT("Catfishing", "AltarPhaseNotAdvanced", "阶段未正常推进，请检查服务器日志");
+	}
+	RunPublicState.DayTransition.bActive = false;
+	TransitionAltar.Reset();
+	TransitionController.Reset();
+	if (bRunCommandsOpen && RunPublicState.Phase.Phase == ECatRunPhase::DayActive)
+	{
+		float DayLength = 0.0f;
+		FCatRunDailyOfferingTuning Tuning;
+		if (GetDefault<UCatRunSettings>()->TryGetDayParameters(RunPublicState.Phase.DayIndex, DayLength, Tuning))
+		{
+			RunPublicState.Phase.ServerTimeAnchorSeconds = GetWorld()->GetTimeSeconds();
+			RunPublicState.Phase.bHasDeadline = true;
+			RunPublicState.Phase.DeadlineServerTimeSeconds = RunPublicState.Phase.ServerTimeAnchorSeconds + DayLength;
+			GetWorldTimerManager().SetTimer(DayDeadlineTimerHandle, this, &ThisClass::HandleDayDeadlineElapsed, DayLength, false);
+			ScheduleDayEnvironmentRefreshes();
+		}
+	}
+	++RunPublicState.Revision;
+	RefreshEnvironmentAndPublish();
+	if (UCatFishingService* Fishing = GetWorld()->GetSubsystem<UCatFishingService>())
+	{
+		Fishing->RefreshBiteAvailabilityFromAuthority();
+	}
+	UE_LOG(LogCatRun, Display, TEXT("Event=AltarTransitionFinished World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s Day=%d Phase=%s Deadline=%.3f"),
+		*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *RunPublicState.DayTransition.RequestId.ToString(),
+		RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(RunPublicState.Phase.Phase), RunPublicState.Phase.DeadlineServerTimeSeconds);
+}
+
+// 中止流程：只接受当前祭坛，清确认并保留原因，再走同一个过场收口；已提交的新天仍能恢复计时，未提交的鱼保持原样。
+void ACatfishingGameModeBase::CancelAltarDayTransition(ACatAltarActor* Altar, const FText& Error)
+{
+	if (!RunPublicState.DayTransition.bActive || TransitionAltar.Get() != Altar) return;
+	RunPublicState.DayTransition.bFailed = !Error.IsEmpty();
+	RunPublicState.DayTransition.Message = Error;
+	if (Altar) Altar->ResetOffering(Error);
+	FinishAltarDayTransition();
+	UE_LOG(LogCatRun, Warning, TEXT("Event=AltarTransitionCancelled World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s Committed=%d Reason=%s"),
+		*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *RunPublicState.DayTransition.RequestId.ToString(),
+		RunPublicState.DayTransition.bCommitted, *Error.ToString());
+}
+
+// 玩家供品结算提交流程：过场期间拒绝外部提交；否则服务器重建身份并汇入唯一 Run 写口。
 FCatRunCommandResult ACatfishingGameModeBase::SubmitOfferingSettlement(AController* RequestingController,
 	const FCatOfferingSettlementCommand& Command)
 {
+	if (RunPublicState.DayTransition.bActive)
+	{
+		return MakeRunCommandResult(Command.Context.RequestId, false, ECatRunCommandError::CommandsClosed);
+	}
 	FCatOfferingSettlementCommand ServerCommand = Command;
 	if (!FillServerCommandIdentity(RequestingController, ServerCommand.Context))
 	{
@@ -1673,6 +1840,7 @@ FCatRunTeardownResult ACatfishingGameModeBase::RequestRunTeardown(const FCatRunT
 	{
 		RunStateTreeComponent->StopLogic(TEXT("Host Online Leave"));
 	}
+	CancelAltarDayTransition(TransitionAltar.Get(), FText::GetEmpty());
 	RunPublicState.Phase.bNewFishingBitesAllowed = false;
 	RunPublicState.Phase.bOfferingOpen = false;
 	RunPublicState.EndReason = ECatRunEndReason::HostExit;

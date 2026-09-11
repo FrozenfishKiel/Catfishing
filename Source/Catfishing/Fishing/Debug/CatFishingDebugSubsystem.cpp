@@ -156,7 +156,8 @@ namespace CatFishingDebugCommands
 			+ Character->GetActorForwardVector() * 150.0 + FVector(0.0, 0.0, 40.0);
 		FRotator SpawnRotation = Character->GetActorRotation();
 		SpawnRotation.Pitch = 0.0;
-		SpawnRotation.Roll = FishPresentation ? FishPresentation->LandedActorRollDegrees : 90.0;
+		// 与正式生成入口一致，侧躺角由世界鱼网格消费，调试入口不再旋转物理根。
+		SpawnRotation.Roll = 0.0;
 		FActorSpawnParameters SpawnParams;
 		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 		ACatFishPickupActor* Pickup = World->SpawnActor<ACatFishPickupActor>(

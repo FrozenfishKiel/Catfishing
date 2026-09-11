@@ -21,7 +21,7 @@ public:
 	/** 绑定当前本地 Controller 的唯一 TargetingComponent 与提示 View。 */
 	bool Bind(APlayerController* InController, UCatInteractionPromptWidget* InPromptView);
 
-	/** 移除目标变化订阅，隐藏提示并释放弱引用。 */
+	/** 移除目标刷新订阅，隐藏提示并释放弱引用。 */
 	void Unbind();
 
 	/** 主动刷新准星目标；不扫描第二套靠近式组件。 */
@@ -31,7 +31,8 @@ public:
 	void InteractWithFocusedTarget();
 
 private:
-	void HandleTargetChanged(AActor* PreviousTarget, AActor* CurrentTarget);
+	/** 准星扫描完成后重读当前提示；同一祭坛的人数更新也会进入此处。 */
+	void HandleTargetRefreshed(AActor* PreviousTarget, AActor* CurrentTarget);
 	void RenderPrompt();
 
 	UPROPERTY(Transient)
@@ -46,5 +47,6 @@ private:
 	UPROPERTY(Transient)
 	TWeakObjectPtr<AActor> FocusedTarget;
 
-	FDelegateHandle TargetChangedHandle;
+	/** 当前准星刷新订阅；Bind 建立、Unbind 移除，防止页面拆除后仍收到目标回调。 */
+	FDelegateHandle TargetRefreshHandle;
 };

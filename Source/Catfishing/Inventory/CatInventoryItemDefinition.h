@@ -7,6 +7,7 @@
 
 class UCatInventoryItemInstance;
 class UTexture2D;
+class AActor;
 
 /** 物品定义上的可组合语义片段；定义负责静态配置，片段只声明这份定义额外具备的库存语义。 */
 UCLASS(Abstract, DefaultToInstanced, EditInlineNew, BlueprintType)
@@ -98,6 +99,10 @@ public:
 	/** 库存格缩略图；普通库存资产直接写它，格子事实只保存实例和数量。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
 	TSoftObjectPtr<UTexture2D> InventoryThumbnail;
+
+	/** 这类物品离开库存后的世界拾取 Actor；丢弃/放置读取它，必须实现 InventoryWorldItem，空值表示尚未配置落地表现。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "World")
+	TSoftClassPtr<AActor> WorldActorClass;
 
 	/** 物品语义标签；消费者只读取自己认识的语义信号，库存核心不把装备、草药或任务物写成业务枚举。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")

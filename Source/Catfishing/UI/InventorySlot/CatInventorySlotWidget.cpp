@@ -10,11 +10,15 @@
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Logging/CatLog.h"
+#include "Engine/LocalPlayer.h"
+#include "UI/CatLocalPlayerUISubsystem.h"
+#include "UI/ItemTooltip/CatItemTooltipController.h"
 
-// 先保存明确的库存和格位，再按条目更新图片与数量；空格或定义尚未到达时清掉旧图，正式 WBP 保留原有布局与悬停表现。
+// 先撤销旧悬停来源并保存明确的库存和格位，再按条目更新图片与数量；空格或定义尚未到达时清掉旧图。
 void UCatInventorySlotWidget::SetSlotContext(const int32 InSlotIndex, UCatInventoryComponent* InInventory,
 	const FCatInventoryEntry& InEntry)
 {
+	CancelTooltip();
 	SlotIndex = InSlotIndex;
 	SourceInventory = InInventory;
 	InventoryEntry = InEntry;
@@ -60,6 +64,44 @@ void UCatInventorySlotWidget::NativeOnInitialized()
 	SetIsFocusable(true);
 }
 
+// owning LocalPlayer 决定提示属于哪个玩家；子系统尚未装配时返回空，格子保持正常点击与拖放。
+UCatItemTooltipController* UCatInventorySlotWidget::ResolveTooltipController() const
+{
+	ULocalPlayer* LocalPlayer = GetOwningLocalPlayer();
+	UCatLocalPlayerUISubsystem* UI = LocalPlayer ? LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
+	return UI ? UI->GetItemTooltipController() : nullptr;
+}
+
+// 先保留 WBP 的悬停表现，再提交进入事件的鼠标屏幕绝对坐标；后续跟随由提示 View 更新，格子只负责来源。
+void UCatInventorySlotWidget::NativeOnMouseEnter(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
+{
+	Super::NativeOnMouseEnter(InGeometry, InMouseEvent);
+	if (UCatItemTooltipController* Tooltip = ResolveTooltipController())
+	{
+		Tooltip->ShowTooltip(this, InMouseEvent.GetScreenSpacePosition());
+	}
+}
+
+// 离开先撤销本格来源，再交给父类恢复原 WBP 悬停颜色；来源校验在 Controller 内完成。
+void UCatInventorySlotWidget::NativeOnMouseLeave(const FPointerEvent& InMouseEvent)
+{
+	CancelTooltip();
+	Super::NativeOnMouseLeave(InMouseEvent);
+}
+
+// 重建或销毁不能依赖 Slate 额外发送 Leave；主动撤销后再释放控件生命周期。
+void UCatInventorySlotWidget::NativeDestruct()
+{
+	CancelTooltip();
+	Super::NativeDestruct();
+}
+
+// 只把当前格身份交给已存在的控制器；另一格已经接管时 Hide 会忽略这次迟到清理。
+void UCatInventorySlotWidget::CancelTooltip()
+{
+	if (UCatItemTooltipController* Tooltip = ResolveTooltipController()) Tooltip->HideTooltip(this);
+}
+
 // 左键只检测拖拽，避免按下时重建控件中断鼠标捕获；右键复用唯一使用入口。
 FReply UCatInventorySlotWidget::NativeOnMouseButtonDown(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
@@ -86,11 +128,12 @@ FReply UCatInventorySlotWidget::NativeOnMouseButtonUp(const FGeometry& InGeometr
 	return Super::NativeOnMouseButtonUp(InGeometry, InMouseEvent);
 }
 
-// 只为非空库存格创建载荷；源位置保存到操作对象，预览取当前定义图片，临时控件随拖拽操作释放。
+// 先撤销悬停，再只为非空库存格创建载荷；源位置保存到操作对象，预览取当前定义图片，临时控件随拖拽操作释放。
 void UCatInventorySlotWidget::NativeOnDragDetected(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent,
 	UDragDropOperation*& OutOperation)
 {
 	OutOperation = nullptr;
+	CancelTooltip();
 	if (!SourceInventory || SlotIndex == INDEX_NONE || !InventoryEntry.Instance || InventoryEntry.StackCount <= 0)
 	{
 		return;

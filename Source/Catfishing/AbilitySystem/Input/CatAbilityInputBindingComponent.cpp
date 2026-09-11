@@ -6,9 +6,10 @@
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "EnhancedInputComponent.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "GameFramework/Pawn.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Presentation/CatFishingCameraComponent.h"
-#include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/PlayerController.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "Logging/CatLog.h"
@@ -49,8 +50,16 @@ void UCatAbilityInputBindingComponent::RefreshForPawn(APawn* Pawn)
 
 void UCatAbilityInputBindingComponent::ProcessAbilityInput(const float DeltaTime, const bool bGamePaused)
 {
+	// 帧处理流程：先读取当前 Pawn 的 ASC 路由；翻天锁生效时清掉已按住和边沿输入，防止锁前能力在物理控制被清理后继续激活。
+	// 未锁定时才把时长和暂停状态交给 ASC；路由尚未就绪则不缓存输入，等待 Controller 的 Pawn 切换重新建立。
 	if (UCatAbilitySystemComponent* AbilitySystem = RoutedAbilitySystem.Get())
 	{
+		const ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
+		if (Controller && Controller->IsDayTransitionInputBlocked())
+		{
+			AbilitySystem->ResetAbilityInput();
+			return;
+		}
 		AbilitySystem->ProcessAbilityInput(DeltaTime, bGamePaused);
 	}
 }

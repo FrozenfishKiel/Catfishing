@@ -28,7 +28,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category="Pickup")
 	FName MouthCarrySocketName = TEXT("Mouth");
 
-	/** 死鱼 Actor 根节点附着到嘴部 Socket 后的局部微调；美术可只调该值，不改变碰撞根或鱼重量缩放。 */
+	/** 死鱼根节点相对嘴部 Socket 的位置与朝向；附着和复制纠正只读取这两项，忽略缩放分量以保留原世界尺寸。 */
 	UPROPERTY(Config, EditAnywhere, Category="Pickup")
 	FTransform MouthCarryRelativeTransform = FTransform::Identity;
 };

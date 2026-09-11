@@ -8,11 +8,14 @@
 #include "UI/Interaction/CatInteractionPromptWidget.h"
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
+#include "UI/ItemTooltip/CatItemTooltipWidget.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
 
 // 构造流程：为正式拆分的 HUD、背包、交互提示、局内菜单 WBP 和输入资产写入稳定软路径；输入 Action 放在项目既有 InputContext 下维护，运行时代码只加载资产和绑定 Action。
 UCatUISettings::UCatUISettings()
 {
+	ItemTooltipWidgetClass = TSoftClassPtr<UCatItemTooltipWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatItemTooltip.WBP_CatItemTooltip_C")));
 	HUDWidgetClass = TSoftClassPtr<UCatHUDWidget>(
 		FSoftClassPath(TEXT("/Game/UI/HUD/WBP_CatHUD.WBP_CatHUD_C")));
 	FrontendRootWidgetClass = TSoftClassPtr<UCatFrontendRootWidget>(
@@ -94,6 +97,13 @@ TSubclassOf<UCatInteractionPromptWidget> UCatUISettings::LoadInteractionPromptWi
 		return nullptr;
 	}
 	return LoadedClass;
+}
+
+// 解析正式软类并验证父类；失败返回空，由 LocalPlayer 记录缺失，避免迁移未完成时显示白盒替身。
+TSubclassOf<UCatItemTooltipWidget> UCatUISettings::LoadItemTooltipWidgetClass() const
+{
+	UClass* LoadedClass = ItemTooltipWidgetClass.LoadSynchronous();
+	return LoadedClass && LoadedClass->IsChildOf(UCatItemTooltipWidget::StaticClass()) ? LoadedClass : nullptr;
 }
 
 // 局内菜单类加载流程：同步解析配置软类并验证继承菜单基类；失败返回空，避免 LocalPlayer 创建无交互空页。

@@ -168,7 +168,13 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("浮漂恢复平静"), Hook->GetPresentationState().BobberMode, ECatFishingBobberPresentationMode::Calm);
 		Mode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
 		Mode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
+		Mode->RunPublicState.DayTransition.bActive = true;
 		Fishing->RefreshBiteAvailabilityFromAuthority();
+		TestFalse(TEXT("翻天过场未结束时不允许新咬钩"), Mode->CanGenerateNewFishingBites());
+		TestFalse(TEXT("翻天遮罩期间等待会话不启动咬钩计时"), World->GetTimerManager().IsTimerActive(Session->ProbeTimerHandle));
+		TestEqual(TEXT("翻天遮罩期间不消耗下一咬钩机会"), Session->BiteOpportunitySequence, 1u);
+		Mode->FinishAltarDayTransition();
+		TestTrue(TEXT("正式过场收口重新开放新咬钩"), Mode->CanGenerateNewFishingBites());
 		TestEqual(TEXT("每个机会只调度一次"), Session->BiteOpportunitySequence, 2u);
 		TestTrue(TEXT("下一机会使用新种子"), Session->CurrentBiteRandomSeed != FirstSeed);
 		TestTrue(TEXT("下一等待计时器已启动"), World->GetTimerManager().IsTimerActive(Session->ProbeTimerHandle));

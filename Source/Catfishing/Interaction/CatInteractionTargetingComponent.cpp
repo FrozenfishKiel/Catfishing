@@ -1,6 +1,8 @@
 #include "Interaction/CatInteractionTargetingComponent.h"
 
 #include "Interaction/CatInteractable.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "Interaction/CatInteractionSettings.h"
 #include "Engine/World.h"
 #include "GameFramework/Pawn.h"
@@ -90,11 +92,13 @@ void UCatInteractionTargetingComponent::RefreshTargetFromCrosshair()
 	ApplyTarget(TraceInteractableFromCrosshair());
 }
 
+// 目标应用：相同有效目标只刷新提示；对象变化或销毁才保存上一目标、结束旧高亮并开启新高亮，最后发布本机通知。
 void UCatInteractionTargetingComponent::ApplyTarget(AActor* NewTarget)
 {
 	const bool bPreviousTargetWasDestroyed = CurrentTarget.IsStale();
 	if (!bPreviousTargetWasDestroyed && CurrentTarget.Get() == NewTarget)
 	{
+		if (NewTarget) OnTargetRefreshed.Broadcast(NewTarget, NewTarget);
 		return;
 	}
 	AActor* PreviousTarget = CurrentTarget.Get();
@@ -108,13 +112,53 @@ void UCatInteractionTargetingComponent::ApplyTarget(AActor* NewTarget)
 	{
 		ICatInteractable::Execute_BeginLocalFocus(NewTarget);
 	}
-	OnTargetChanged.Broadcast(PreviousTarget, NewTarget);
+	OnTargetRefreshed.Broadcast(PreviousTarget, NewTarget);
 }
 
 void UCatInteractionTargetingComponent::ClearTarget()
 {
+	EndInteractionInput(true);
 	ApplyTarget(nullptr);
 	LastTarget.Reset();
+}
+
+// 按下流程：丢弃上次候选后刷新准星；只有鱼护开启一次性计时，其他目标继续原有即时交互。
+void UCatInteractionTargetingComponent::BeginInteractionInput()
+{
+	EndInteractionInput(true);
+	RefreshTargetFromCrosshair();
+	if (Cast<ACatFishGuardActor>(CurrentTarget.Get()) && GetWorld())
+	{
+		PendingGuardTarget = CurrentTarget;
+		GetWorld()->GetTimerManager().SetTimer(GuardHoldTimer, this,
+			&ThisClass::CompleteGuardHold, FMath::Max(0.1f, GuardHoldSeconds), false);
+	}
+	else TryInteract();
+}
+
+// 松开流程：先清除计时和候选，再复核原目标；已完成长按或被取消时不触发短按，避免一次输入执行两种动作。
+void UCatInteractionTargetingComponent::EndInteractionInput(const bool bCanceled)
+{
+	AActor* PressedTarget = PendingGuardTarget.Get();
+	PendingGuardTarget.Reset();
+	if (GetWorld()) GetWorld()->GetTimerManager().ClearTimer(GuardHoldTimer);
+	if (!bCanceled && PressedTarget)
+	{
+		RefreshTargetFromCrosshair();
+		if (CurrentTarget.Get() == PressedTarget) TryInteract();
+	}
+}
+
+// 阈值流程：先取走本次候选防止重复提交；目标移开、输入被锁或鱼护已失效都只结束本次按键。
+void UCatInteractionTargetingComponent::CompleteGuardHold()
+{
+	ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(PendingGuardTarget.Get());
+	PendingGuardTarget.Reset();
+	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
+	RefreshTargetFromCrosshair();
+	if (Guard && Controller && !Controller->IsDayTransitionInputBlocked()
+		&& CurrentTarget.Get() == Guard && ICatInteractable::Execute_CanInteract(Guard, Controller))
+		Controller->ServerPickUpFishGuard(Guard, FGuid::NewGuid());
 }
 
 void UCatInteractionTargetingComponent::TryInteract()

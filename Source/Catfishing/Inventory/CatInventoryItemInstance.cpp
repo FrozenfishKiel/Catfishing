@@ -145,6 +145,18 @@ void UCatInventoryItemInstance::SetRuntimeOwnerActor(AActor* InRuntimeOwnerActor
 	RuntimeOwnerActor = InRuntimeOwnerActor;
 }
 
+// 世界载体读取流程：返回拾取保留的原物；已被销毁的 Actor 视为空，让落地沿用已有生成路径。
+AActor* UCatInventoryItemInstance::GetWorldActor() const
+{
+	return IsValid(WorldActor) && !WorldActor->IsActorBeingDestroyed() ? WorldActor.Get() : nullptr;
+}
+
+// 世界载体关联流程：只替换当前世界引用；不复制 Actor，也不改实例身份和数量。
+void UCatInventoryItemInstance::SetWorldActor(AActor* InWorldActor)
+{
+	WorldActor = InWorldActor;
+}
+
 // 宿主读取流程：优先使用显式运行宿主；新建实例尚未同步时回退到 Outer Actor。
 AActor* UCatInventoryItemInstance::GetRuntimeOwnerActor() const
 {

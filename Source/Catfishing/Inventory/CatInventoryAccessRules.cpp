@@ -4,6 +4,7 @@
 #include "Character/CatCharacter.h"
 #include "GameFramework/Actor.h"
 #include "Interaction/CatInteractable.h"
+#include "FishContainers/CatFishGuardActor.h"
 
 double CatInventoryAccessRules::ResolveReachRadiusCentimeters(const AActor* Host,
 	const UCatCampSettings* Settings)
@@ -25,8 +26,10 @@ double CatInventoryAccessRules::ResolveReachRadiusCentimeters(const AActor* Host
 bool CatInventoryAccessRules::IsHostReachable(const AActor* Host, const ACatCharacter* Character,
 	const UCatCampSettings* Settings)
 {
-	// 触达判断流程：先取得统一半径，再用服务器当前角色位置和宿主位置比较；库存内容和权限继续由正式库存组件裁决。
+	// 触达判断流程：先排除已进入库存的鱼护，再比较同世界角色与宿主距离；搬走鱼护后，旧页面或延迟 RPC 不能继续读写其中的鱼。
+	if (const ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(Host); Guard && !Guard->IsGrounded()) return false;
 	const double Radius = ResolveReachRadiusCentimeters(Host, Settings);
 	return Host && Character && Radius > 0.0
+		&& !Host->IsActorBeingDestroyed() && Host->GetWorld() == Character->GetWorld()
 		&& FVector::DistSquared(Character->GetActorLocation(), Host->GetActorLocation()) <= FMath::Square(Radius);
 }

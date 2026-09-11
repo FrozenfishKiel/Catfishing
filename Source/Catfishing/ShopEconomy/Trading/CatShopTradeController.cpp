@@ -4,6 +4,11 @@
 #include "Camp/CatCampInventoryActor.h"
 #include "Camp/CatCampSettings.h"
 #include "Character/CatCharacter.h"
+#include "Condition/CatConditionComponent.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "Inventory/CatFishOnlyInventoryComponent.h"
+#include "Items/Fish/CatFishPickupActor.h"
+#include "ShopEconomy/CatFishBuyerActor.h"
 #include "EngineUtils.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "GameFramework/Controller.h"
@@ -65,15 +70,6 @@ namespace
 			*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 	}
 
-	// 售鱼订单载荷签名流程：玩家可提交的库存坐标和公款前提都进入签名；重放必须是同一个槽位里的同一条鱼。
-	FString MakeFishSaleOrderPayloadSignature(const FCatShopFishSaleOrderCommand& Command)
-	{
-	return FString::Printf(TEXT("ExpectedWallet=%lld|Host=%s|Slot=%d|Fish=%s"),
-			Command.Context.ExpectedRevision,
-			*GetPathNameSafe(Command.SourceInventoryHost),
-			Command.SourceInventorySlotIndex,
-			*Command.FishItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
-	}
 }
 
 // 创建条件流程：只在服务器 Game World 建立这条链；客户端不能本地推进订单。
@@ -150,194 +146,142 @@ FCatShopOrderResult UCatShopTradeController::SubmitCartFromKiosk(AController* Re
 	return Result;
 }
 
+// 售鱼协调流程：先重放请求，再核对买家、来源与整批鱼身份；估价和余额预检全部通过后才进入实物与GAS提交。
+// 地面鱼护一次移除所有选中格且暂不广播，入账失败恢复原格；嘴叼鱼在消费保护内执行入账回调，失败继续叼着。
+// 成功结果先进入终态缓存，再通知库存观察者；拒绝按同一请求落盘，既不卖附近其他鱼护，也不信任客户端重量或价格。
 FCatShopOrderResult UCatShopTradeController::SubmitFishSaleFromPlayer(AController* RequestingController,
-	const FGuid FishItemInstanceId, AActor* SourceInventoryHost,
-	const int32 SourceInventorySlotIndex, const FGuid RequestId, const int64 ExpectedWalletRevision)
+	ACatFishBuyerActor* Buyer, ACatFishGuardActor* Guard, const TArray<FGuid>& FishInstanceIds, const FGuid RequestId)
 {
-	// 玩家售鱼提交流程：
-	// 1. 先重读服务器玩法 gate，关局或 teardown 时不进入鱼实例删除和钱包入账链。
-	// 2. 再从 Controller 的 PlayerState 重建稳定身份，并用同一个库存触达规则确认玩家仍靠近来源宿主。
-	// 3. 最后把命令交给售鱼交易链，库存提交结果和钱包结果都留在返回结构中供日志或调用方判断。
 	FCatShopOrderResult Result;
 	Result.Transaction.Command.RequestId = RequestId;
 	Result.Delivery.RequestId = RequestId;
-	UWorld* World = GetWorld();
-	const ACatfishingGameModeBase* GameMode = World ? World->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
-	if (!GameMode || !GameMode->CanAcceptGameplayCommand(RequestingController))
+	UCatShopEconomyService* Shop = GetWorld()->GetSubsystem<UCatShopEconomyService>();
+	const APlayerState* PlayerState = RequestingController ? RequestingController->PlayerState : nullptr;
+	const FString StableId = PlayerState && PlayerState->GetUniqueId().IsValid() ? PlayerState->GetUniqueId()->ToString() : FString();
+	const FString Key = MakeFishSaleTerminalKey(StableId, RequestId);
+	FString Payload = FString::Printf(TEXT("Buyer=%s|Guard=%s"), *GetPathNameSafe(Buyer), *GetPathNameSafe(Guard));
+	for (const FGuid Id : FishInstanceIds) Payload += TEXT("|") + Id.ToString();
+	const auto Finish = [&](const ECatDomainCommandError Error)
 	{
-		Result.Transaction.Command.Error = ECatDomainCommandError::CommandsClosed;
-		Result.Delivery.Error = ECatDomainCommandError::CommandsClosed;
-		return Result;
-	}
-	const APlayerState* CurrentPlayerState = RequestingController ? RequestingController->PlayerState : nullptr;
-	const ACatCharacter* RequestingCharacter = RequestingController
-		? Cast<ACatCharacter>(RequestingController->GetPawn()) : nullptr;
-	const UCatCampSettings* CampSettings = GetDefault<UCatCampSettings>();
-	if (!CurrentPlayerState || !CurrentPlayerState->GetUniqueId().IsValid()
-		|| !SourceInventoryHost || SourceInventoryHost->GetWorld() != World
-		|| !CatInventoryAccessRules::IsHostReachable(SourceInventoryHost, RequestingCharacter, CampSettings))
-	{
-		Result.Transaction.Command.Error = ECatDomainCommandError::DependencyUnavailable;
-		Result.Delivery.Error = ECatDomainCommandError::DependencyUnavailable;
-		return Result;
-	}
-
-	FCatShopFishSaleOrderCommand Command;
-	Command.Context.RequestId = RequestId;
-	Command.Context.ExpectedRevision = ExpectedWalletRevision;
-	Command.Context.StableNetId = CurrentPlayerState->GetUniqueId()->ToString();
-	Command.FishItemInstanceId = FishItemInstanceId;
-	Command.SourceInventoryHost = SourceInventoryHost;
-	Command.SourceInventorySlotIndex = SourceInventorySlotIndex;
-	Result = SubmitFishSale(Command);
-	UE_LOG(LogCatfishing, Log,
-		TEXT("Event=shop_fish_sale_submitted RequestId=%s FishItem=%s SourceHost=%s SourceSlot=%d Wallet=%s Inventory=%s"),
-		*RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-		*FishItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-		*GetNameSafe(SourceInventoryHost),
-		SourceInventorySlotIndex,
-		*UEnum::GetValueAsString(Result.Transaction.Command.Error),
-		*UEnum::GetValueAsString(Result.Delivery.Error));
-	return Result;
-}
-
-// 售鱼链流程：
-// 1. 先从来源 Actor 解析正式库存组件并读取指定槽位的鱼物品实例，重量和鱼 ID 只取服务器对象。
-// 2. 再让 Shop 用同一份售鱼命令做公款/价格预检；这一步失败时绝不触碰库存，鱼仍留在原槽。
-// 3. 预检通过后从同一库存槽真实移除物品实例，再把这次库存扣除作为入账证据交给 Shop::ApplyFishSale。
-// 4. Result.Delivery 始终暴露库存提交段，Result.Transaction 暴露公款/账本段，调用方能区分“鱼没删”和“钱没入账”。
-FCatShopOrderResult UCatShopTradeController::SubmitFishSale(const FCatShopFishSaleOrderCommand& Command)
-{
-	FCatShopOrderResult Result;
-	Result.Transaction.Command.RequestId = Command.Context.RequestId;
-	Result.Delivery.RequestId = Command.Context.RequestId;
-
-	UWorld* World = GetWorld();
-	UCatShopEconomyService* Shop = World ? World->GetSubsystem<UCatShopEconomyService>() : nullptr;
-	if (!Shop)
-	{
-		Result.Transaction.Command.Error = ECatDomainCommandError::DependencyUnavailable;
-		Result.Delivery.Error = ECatDomainCommandError::DependencyUnavailable;
-		return Result;
-	}
-
-	const auto RejectBeforeInventoryCommit = [&Result, Shop](const ECatDomainCommandError Error)
-	{
-		// 预检拒绝只回填当前公款，不写任何实物状态；同一个 RequestId 可重新提交。
-		Result.Transaction.Wallet = Shop->GetWalletSnapshot();
-		Result.Transaction.Command.Error = Error;
-		Result.Transaction.Command.Revision = Result.Transaction.Wallet.Revision;
 		Result.Delivery.Error = Error;
+		Result.Delivery.bCommitted = Error == ECatDomainCommandError::None;
+		if (Error != ECatDomainCommandError::None) Result.Transaction.Command.Error = Error;
+		if (Shop) Result.Transaction.Wallet = Shop->GetWalletSnapshot();
+		if (RequestId.IsValid() && !StableId.IsEmpty())
+		{
+			FishSaleTerminalCache.Add(Key, Result);
+			FishSaleTerminalPayloadByKey.Add(Key, Payload);
+		}
+		const FString Event = FString::Printf(TEXT("Event=fish_sale_order RequestId=%s Buyer=%s Guard=%s FishCount=%d Result=%s Balance=%d World=%s NetMode=%d Authority=1 LocalRole=%d Player=%s"),
+			*RequestId.ToString(), *GetNameSafe(Buyer), *GetNameSafe(Guard), Guard ? FishInstanceIds.Num() : 1,
+			*UEnum::GetValueAsString(Error), Result.Transaction.Wallet.Balance, *GetNameSafe(GetWorld()), GetWorld()->GetNetMode(),
+			RequestingController ? static_cast<int32>(RequestingController->GetLocalRole()) : -1, *GetNameSafe(RequestingController));
+		if (Error == ECatDomainCommandError::None || Error == ECatDomainCommandError::AlreadyResolved)
+		{ UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
+		else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
 		return Result;
 	};
-
-	if (!Command.Context.RequestId.IsValid() || Command.Context.StableNetId.IsEmpty()
-		|| !Command.FishItemInstanceId.IsValid() || !Command.SourceInventoryHost
-		|| Command.SourceInventorySlotIndex == INDEX_NONE)
+	if (const FCatShopOrderResult* Cached = FishSaleTerminalCache.Find(Key))
 	{
-		return RejectBeforeInventoryCommit(ECatDomainCommandError::InvalidPayload);
-	}
-
-	const FString TerminalKey = MakeFishSaleTerminalKey(Command.Context.StableNetId, Command.Context.RequestId);
-	const FString PayloadSignature = MakeFishSaleOrderPayloadSignature(Command);
-	if (const FCatShopOrderResult* Cached = FishSaleTerminalCache.Find(TerminalKey))
-	{
-		const FString* CachedPayload = FishSaleTerminalPayloadByKey.Find(TerminalKey);
-		if (!CachedPayload || *CachedPayload != PayloadSignature)
+		if (FishSaleTerminalPayloadByKey.FindRef(Key) != Payload)
 		{
-			return RejectBeforeInventoryCommit(ECatDomainCommandError::InvalidPayload);
+			Result.Delivery.Error = ECatDomainCommandError::InvalidPayload;
+			Result.Transaction.Command.Error = Result.Delivery.Error;
+			return Result;
 		}
-		FCatShopOrderResult Replay = *Cached;
-		MarkCommandReplayed(Replay.Delivery);
-		MarkCommandReplayed(Replay.Transaction.Command);
-		return Replay;
-	}
-
-	TArray<UCatInventoryComponent*> SourceInventories;
-	UCatInventoryStatics::AppendInventoryComponentsFromActor(Command.SourceInventoryHost, SourceInventories);
-	UCatInventoryComponent* SourceInventory = nullptr;
-	const FCatInventoryEntry* SourceEntry = nullptr;
-	UCatFishInventoryItemInstance* SaleFish = nullptr;
-	for (UCatInventoryComponent* CandidateInventory : SourceInventories)
-	{
-		const FCatInventoryEntry* CandidateEntry = CandidateInventory
-			? CandidateInventory->GetInventoryEntryAtSlot(Command.SourceInventorySlotIndex) : nullptr;
-		UCatFishInventoryItemInstance* CandidateFish = CandidateEntry
-			? Cast<UCatFishInventoryItemInstance>(CandidateEntry->Instance.Get()) : nullptr;
-		if (CandidateFish && CandidateFish->GetItemInstanceId() == Command.FishItemInstanceId
-			&& CandidateEntry->StackCount == 1)
-		{
-			SourceInventory = CandidateInventory;
-			SourceEntry = CandidateEntry;
-			SaleFish = CandidateFish;
-			break;
-		}
-	}
-	if (!SourceInventory || !SourceEntry || !SaleFish)
-	{
-		return RejectBeforeInventoryCommit(ECatDomainCommandError::NotFound);
-	}
-
-	int32 SaleValue = 0;
-	if (!Shop->TryAppraiseFishSale(SaleFish->GetFishWeightKilograms(), SaleValue))
-	{
-		return RejectBeforeInventoryCommit(ECatDomainCommandError::PolicyUndecided);
-	}
-
-	FCatShopFishSaleCommand SaleCommand;
-	SaleCommand.Context = Command.Context;
-	SaleCommand.FishInstanceId = SaleFish->GetItemInstanceId();
-	// InventoryCommitId 采用售鱼 RequestId：库存扣除和公款入账属于同一条协调链，Shop 只需要稳定记录这次实物提交回执。
-	SaleCommand.InventoryCommitId = Command.Context.RequestId;
-	SaleCommand.WeightKilograms = SaleFish->GetFishWeightKilograms();
-	SaleCommand.SaleValue = SaleValue;
-
-	ECatDomainCommandError ShopValidationError = ECatDomainCommandError::None;
-	int64 CurrentWalletRevision = Shop->GetWalletSnapshot().Revision;
-	if (!Shop->ValidateFishSale(SaleCommand, ShopValidationError, CurrentWalletRevision)
-		&& ShopValidationError != ECatDomainCommandError::AlreadyResolved)
-	{
-		Result.Transaction.Wallet = Shop->GetWalletSnapshot();
-		Result.Transaction.Command.Error = ShopValidationError;
-		Result.Transaction.Command.Revision = CurrentWalletRevision;
-		Result.Delivery.Error = ShopValidationError;
+		Result = *Cached;
+		MarkCommandReplayed(Result.Delivery);
+		MarkCommandReplayed(Result.Transaction.Command);
 		return Result;
 	}
-
-	FCatInventoryEntry RemovedEntry;
-	if (!SourceInventory->RemoveInventoryEntryAtSlotFromAuthority(Command.SourceInventorySlotIndex, RemovedEntry)
-		|| RemovedEntry.Instance.Get() != SaleFish)
+	ACatCharacter* Character = RequestingController ? Cast<ACatCharacter>(RequestingController->GetPawn()) : nullptr;
+	const ACatfishingGameModeBase* GameMode = GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>();
+	if (!Shop || !Character || StableId.IsEmpty() || !RequestId.IsValid()) return Finish(ECatDomainCommandError::InvalidPayload);
+	if (!GameMode || !GameMode->CanAcceptGameplayCommand(RequestingController)) return Finish(ECatDomainCommandError::CommandsClosed);
+	if (!Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned)
+		return Finish(ECatDomainCommandError::PermissionDenied);
+	AActor* Source = Guard ? static_cast<AActor*>(Guard) : Character;
+	if (!IsValid(Buyer) || Buyer->GetWorld() != GetWorld() || !Buyer->CanServeSource(RequestingController, Source)
+		|| (Guard && !CatInventoryAccessRules::IsHostReachable(Guard, Character, GetDefault<UCatCampSettings>())))
+		return Finish(ECatDomainCommandError::PermissionDenied);
+	FCatShopFishSaleCommand Command;
+	Command.Context.RequestId = RequestId;
+	Command.Context.StableNetId = StableId;
+	Command.InventoryCommitId = RequestId;
+	UCatInventoryComponent* Inventory = Guard ? Guard->GetFishInventoryComponent() : nullptr;
+	TArray<FCatInventoryEntry> OriginalEntries;
+	TArray<FCatInventoryEntry> RemainingEntries;
+	ACatFishPickupActor* MouthFish = nullptr;
+	if (Guard)
 	{
-		return RejectBeforeInventoryCommit(ECatDomainCommandError::NotFound);
+		if (!Inventory || FishInstanceIds.IsEmpty() || FishInstanceIds.Num() > Inventory->GetInventorySlotCount())
+			return Finish(ECatDomainCommandError::InvalidPayload);
+		OriginalEntries = Inventory->GetInventoryEntries();
+		RemainingEntries = OriginalEntries;
+		TSet<FGuid> Seen;
+		for (const FGuid Id : FishInstanceIds)
+		{
+			const int32 Slot = Inventory->FindInventorySlotIndexFromInstanceId(Id);
+			const FCatInventoryEntry* Entry = Inventory->GetInventoryEntryAtSlot(Slot);
+			UCatFishInventoryItemInstance* Fish = Entry ? Cast<UCatFishInventoryItemInstance>(Entry->Instance) : nullptr;
+			if (!Id.IsValid() || Seen.Contains(Id) || !Fish || Entry->StackCount != 1)
+				return Finish(ECatDomainCommandError::NotFound);
+			Seen.Add(Id);
+			FCatShopFishSaleLine& Line = Command.Fish.AddDefaulted_GetRef();
+			Line.FishInstanceId = Id;
+			Line.FishDefinitionId = Fish->GetItemDefinitionId();
+			Line.WeightKilograms = Fish->GetFishWeightKilograms();
+			RemainingEntries[Slot] = FCatInventoryEntry(Inventory);
+		}
 	}
-	Result.Delivery.RequestId = Command.Context.RequestId;
-	Result.Delivery.bCommitted = true;
-	Result.Delivery.Error = ECatDomainCommandError::None;
-
-	Result.Transaction = Shop->ApplyFishSale(SaleCommand);
+	else
+	{
+		MouthFish = ACatFishPickupActor::FindCarriedFish(Character);
+		if (!FishInstanceIds.IsEmpty() || !MouthFish || !MouthFish->CanConsumeFromAuthority(RequestingController))
+			return Finish(ECatDomainCommandError::NotFound);
+		const FCatFishPickupPresentationState& Fish = MouthFish->GetPresentationState();
+		FCatShopFishSaleLine& Line = Command.Fish.AddDefaulted_GetRef();
+		Line.FishInstanceId = Fish.FishInstanceId;
+		Line.FishDefinitionId = Fish.FishDefinitionId;
+		Line.WeightKilograms = Fish.WeightKilograms;
+	}
+	ECatDomainCommandError Error = ECatDomainCommandError::None;
+	int64 WalletRevision = 0;
+	if (!Shop->ValidateFishSale(Command, Error, WalletRevision))
+	{
+		if (Error == ECatDomainCommandError::AlreadyResolved)
+		{
+			Result.Transaction = Shop->ApplyFishSale(Command);
+			Result.Delivery = Result.Transaction.Command;
+			return Result;
+		}
+		return Finish(Error);
+	}
+	// 提交期间的同步回调不能用同一 RequestId 再次进入；真正结果在本函数结束时替换，未新增事务阶段或备用库存。
+	Result.Delivery.Error = ECatDomainCommandError::AlreadyResolved;
+	FishSaleTerminalCache.Add(Key, Result);
+	FishSaleTerminalPayloadByKey.Add(Key, Payload);
+	if (MouthFish)
+	{
+		const bool bConsumed = MouthFish->ConsumeFromAuthority(RequestingController, RequestId, [&]()
+		{
+			Result.Transaction = Shop->ApplyFishSale(Command);
+			return CatIsAcceptedDomainCommandResult(Result.Transaction.Command);
+		});
+		return Finish(bConsumed ? ECatDomainCommandError::None
+			: (Result.Transaction.Command.Error == ECatDomainCommandError::None
+				? ECatDomainCommandError::DependencyUnavailable : Result.Transaction.Command.Error));
+	}
+	if (!Inventory->ReplaceInventoryEntriesFromAuthority(RemainingEntries, OriginalEntries.Num(), false))
+		return Finish(ECatDomainCommandError::NotFound);
+	Result.Transaction = Shop->ApplyFishSale(Command);
 	if (!CatIsAcceptedDomainCommandResult(Result.Transaction.Command))
 	{
-		FCatInventoryReceiveBatch RollbackBatch;
-		FCatInventoryInstanceEntry& RollbackEntry = RollbackBatch.InstanceEntries.AddDefaulted_GetRef();
-		RollbackEntry.ItemInstance = RemovedEntry.Instance;
-		RollbackEntry.Count = RemovedEntry.StackCount;
-		if (!SourceInventory->TryAddInventoryBatch(RollbackBatch))
-		{
-			UE_LOG(LogCatfishing, Error,
-				TEXT("Event=shop_fish_sale_rollback_failed RequestId=%s FishItem=%s SourceHost=%s SourceSlot=%d WalletError=%s"),
-				*Command.Context.RequestId.ToString(EGuidFormats::DigitsWithHyphens),
-				*Command.FishItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
-				*GetNameSafe(Command.SourceInventoryHost),
-				Command.SourceInventorySlotIndex,
-				*UEnum::GetValueAsString(Result.Transaction.Command.Error));
-		}
-		Result.Delivery.bCommitted = false;
-		Result.Delivery.Error = Result.Transaction.Command.Error;
-		return Result;
+		Inventory->ReplaceInventoryEntriesFromAuthority(OriginalEntries, OriginalEntries.Num(), false);
+		return Finish(Result.Transaction.Command.Error);
 	}
-
-	FishSaleTerminalCache.Add(TerminalKey, Result);
-	FishSaleTerminalPayloadByKey.Add(TerminalKey, PayloadSignature);
+	Finish(ECatDomainCommandError::None);
+	Inventory->BroadcastInventoryChange();
 	return Result;
 }
 

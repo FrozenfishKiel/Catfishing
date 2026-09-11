@@ -207,9 +207,10 @@ bool UCatShopInventoryComponent::TryGetCatalogEntry(const FName EntryId, FCatSho
 // 整车库存扣减流程：
 // 1. 先在本摊位内合并重复 EntryId，并整批验证 authority、目录状态、条目存在和有限库存数量。
 // 2. 所有行都通过后才进入第二轮扣减；无限库存只返回快照，有限库存按选购次数推进版本。
-// 3. 本函数不广播变化，购买写口会在公款、库存和账本同一笔事务都写完后统一发布公开快照。
+// 3. 暂存本次货架后执行同步付款，拒绝则恢复数量和版本；全过程不广播，经济服务在账本也写完后统一发布。
 bool UCatShopInventoryComponent::ConsumeCatalogEntriesFromAuthority(
-	const TArray<FCatShopCartLineCommand>& Lines, TArray<FCatShopStockSnapshot>& OutSnapshots)
+	const TArray<FCatShopCartLineCommand>& Lines, TArray<FCatShopStockSnapshot>& OutSnapshots,
+	TFunctionRef<bool()> CommitPayment)
 {
 	OutSnapshots.Reset();
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !bCatalogReady)
@@ -236,6 +237,7 @@ bool UCatShopInventoryComponent::ConsumeCatalogEntriesFromAuthority(
 		}
 	}
 	OutSnapshots.Reserve(NormalizedLines.Num());
+	const TMap<FName, FStockRecord> OriginalStock = StockByEntryId;
 	for (const FCatShopCartLineCommand& Line : NormalizedLines)
 	{
 		FStockRecord* StockRecord = StockByEntryId.Find(Line.EntryId);
@@ -250,6 +252,12 @@ bool UCatShopInventoryComponent::ConsumeCatalogEntriesFromAuthority(
 			++StockRecord->Revision;
 		}
 		OutSnapshots.Add(MakeStockSnapshot(StockRecord));
+	}
+	if (!CommitPayment())
+	{
+		StockByEntryId = OriginalStock;
+		OutSnapshots.Reset();
+		return false;
 	}
 	return true;
 }

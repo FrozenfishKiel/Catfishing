@@ -10,9 +10,12 @@
 - `Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp`：Frontend、全局加载遮罩与局内玩家 UI 的创建、绑定和拆除入口。
 - `Source/Catfishing/UI/Frontend/CatFrontendRootWidget.h/.cpp`：主界面 Root、子页面控件解析、SettingsModel 复用边界。
 - `Source/Catfishing/UI/Save/CatLakeMainMenuWidget.h/.cpp`：局内 ESC 菜单 WBP 父类、控件名、蓝图事件和设置页输入回填。
+- `Source/Catfishing/UI/ItemTooltip/CatItemTooltipWidget.h/.cpp`、`CatItemTooltipModel.h/.cpp`、`CatItemTooltipController.h/.cpp`：物品悬停提示的正式父类、只读投影和本地控制器。
 - `Source/Catfishing/UI/Save/CatLakeMainMenuController.h/.cpp`：局内菜单打开态、输入模式、保存、设置和退出请求的 Controller 边界。
 - `Source/CatfishingEditor/UI/CatFrontendWidgetAuthoringLibrary.h/.cpp`：正式 Frontend 与局内菜单 WBP 的编辑器生成和合同校验入口。
+- `Source/CatfishingEditor/UI/CatItemTooltipAuthoringLibrary.h/.cpp`、`Scripts/migrate_item_tooltip.py`、`Source/CatfishingEditor/UI/Tests/CatItemTooltipTests.cpp`：Aegis 悬停 WBP 迁移、合同收尾和自动化用例入口。
 - `Config/DefaultGame.ini`：当前项目配置覆盖的输入 Action、IMC、地图和 Cook 目录。
+- 本轮运行证据（2026-09-10）：Editor 构建通过；正式 Tooltip WBP 已迁移并在新进程加载，`Saved/Automation/Tooltip/TooltipRerun.log` 记录投影与生命周期两项通过；`Saved/Automation/Tooltip/NetworkFinal.log` 记录正式两端联机检查通过；打包资源尚待核对。
 
 ## 总原则
 
@@ -35,6 +38,7 @@
 | `/Game/UI/Inventory/WBP_CatFishGuardInventory` | `UCatFishGuardInventoryWidget` | 鱼护库存页面，显示本次交互鱼护 Actor 自己的 `UCatInventoryComponent` | `ACatFishGuardActor` 提供页面类，`UCatInventoryPageController` 按需创建 |
 | `/Game/UI/Inventory/WBP_CatCampInventory` | `UCatCampInventoryWidget` | 营地公共仓库页面，显示营地 Actor 自己的 `UCatInventoryComponent`；需要玩家背包区时另放普通库存子页 | `ACatCampInventoryActor` 提供页面类，`UCatInventoryPageController` 按需创建 |
 | `/Game/UI/InventorySlot/WBP_CatInventorySlot` | `UCatInventorySlotWidget` | 背包单个格子，负责显示占用、选中、拖拽和 Drop | `UCatInventoryWidget` 重建格子列表时动态创建 |
+| `/Game/UI/Inventory/WBP_CatItemTooltip` | `UCatItemTooltipWidget` | Aegis 迁移来的物品悬停提示，显示名称、说明、图标和实例详情 | `UCatLocalPlayerUISubsystem` 启动局内 UI 时创建，库存格子悬停时由 `UCatItemTooltipController` 驱动 |
 | `/Game/UI/Shop/WBP_CatShop` | `UCatShopWidget` | 世界商店页面，显示商品、公款、购买和领取反馈 | `UCatShopInteractionComponent` 在靠近商店交互时创建 |
 | `/Game/UI/Interaction/WBP_CatInteractionPrompt` | `UCatInteractionPromptWidget` | 靠近对象时的“按键交互”提示 | `UCatLocalPlayerUISubsystem` 启动局内 UI 时创建 |
 | `/Game/UI/Save/WBP_CatLakeMainMenu` | `UCatLakeMainMenuWidget` | 局内 ESC 暂停菜单，承载返回游戏、设置、保存、退出到主菜单和退出游戏 | `UCatLocalPlayerUISubsystem` 启动局内 UI 时创建，`UCatLakeMainMenuController` 响应输入打开 |
@@ -362,6 +366,50 @@ Root 会在四个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 ### 操作含义
 
 左键在松开时选中格子。右键调用 `RequestUseItem()`，由 owning PlayerController 提交 `ServerUseInventoryItemFromHost(RequestId, SourceHost, SlotIndex)`。拖拽到另一个有效格时，目标格固定源宿主、源槽位、目标宿主和目标槽位，然后提交 `ServerMoveInventoryItemBetweenHosts()`；服务器会从两个 `InventoryComponent` 当前内容重读并裁决。WBP 不需要自己写移动、取物、吃鱼或装备选择逻辑。
+
+## 物品悬停提示：`WBP_CatItemTooltip`
+
+源码入口：`Source/Catfishing/UI/ItemTooltip/CatItemTooltipWidget.h`、`Source/Catfishing/UI/ItemTooltip/CatItemTooltipModel.h`、`Source/Catfishing/UI/ItemTooltip/CatItemTooltipController.h`
+
+正式物品提示路径是 `/Game/UI/Inventory/WBP_CatItemTooltip`，父类必须是 `UCatItemTooltipWidget`。这张 WBP 目标是承接 Aegis 的原始悬停框布局；`UCatUISettings::ItemTooltipWidgetClass` 默认指向它，`UCatLocalPlayerUISubsystem` 启动局内 UI 时把它加到本地玩家屏幕高层级，并创建唯一的 `UCatItemTooltipController`。库存格子只在鼠标进入、离开、销毁或重建时提交显示/隐藏意图，不在每个格子里创建自己的提示框。
+
+### 必需控件名
+
+| 控件名 | 类型 | 人话说明 |
+| --- | --- | --- |
+| `RootBorder` | `Border` | 迁移布局的定位根；C++ 在显示期间写入鼠标换算后的屏幕位置，不重排原始面板结构。 |
+| `ItemIconImage` | `Image` | 物品图标；当前物品没有缩略图时收起，不能沿用上一件物品的图。 |
+| `ItemNameText` | `TextBlock` | 物品名称，来自物品定义的库存显示名。 |
+| `ItemDescriptionText` | `TextBlock` | 物品说明，来自物品定义的库存说明，保留原换行。 |
+| `InstanceDetailsText` | `TextBlock` | 实例详情行；鱼显示重量，鱼竿显示耐久，普通物品或无详情时收起。 |
+
+### 只读 Model 信息范围
+
+`UCatItemTooltipModel` 只把当前 `UCatInventoryItemInstance` 投影成 `FCatItemTooltipViewData`，字段范围是 `Name`、`Description`、`Icon` 和 `InstanceDetails`。它不持有库存宿主、槽位、权限、网络请求或可写玩法状态。
+
+鱼实例只显示当前重量，格式为两位小数的 kg，例如 `重量：3.12 kg`；捕获者、Owner 或其他身份信息不进入悬停框。鱼竿实例读取当前耐久和定义里的最大耐久，断裂时在同一行追加 `（已断裂）`。耐久或重量复制尚未到达、数值非法或没有对应实例详情时，`InstanceDetailsText` 应为空并收起。
+
+### Controller 来源与关闭
+
+`UCatInventorySlotWidget::NativeOnMouseEnter()` 会把本格和进入事件的鼠标屏幕坐标交给 `UCatItemTooltipController::ShowTooltip()`；`NativeOnMouseLeave()`、`NativeDestruct()`、拖拽开始和格子重建会撤销本格来源。只有当前来源能隐藏当前提示，旧格子的迟到 Leave 不会关掉新格子的提示。
+
+库存页或局内 UI 关闭时会调用 `ForceHideTooltip()` 或 `Unbind()`，立即收起提示并停止继续读取实例。Controller 活动期间会 Tick 当前来源，从同一个实例重新投影耐久等变化；这个刷新不依赖库存列表重建，也不重启动画。
+
+### 默认动画与迁移脚本
+
+默认淡入和淡出时间都是 `0.2` 秒。`ShowAt()` 用进入事件的鼠标屏幕绝对坐标完成首次定位，`NativeTick()` 在可见期间持续读取鼠标位置，转换到玩家屏幕几何后写入 `RootBorder` 的 RenderTranslation；淡出期间也继续跟随，收起后停止。位置更新不会重复发起显示，换格时透明度仍从当前值接续。
+
+迁移入口是 `Scripts/migrate_item_tooltip.py`。脚本从 `D:\UnreaProjects\AegisOdyssey\Content` 复制旧 WBP 和最小依赖闭包，目标资产是 `/Game/UI/Inventory/WBP_CatItemTooltip`；它会调用 `UCatItemTooltipAuthoringLibrary::InstallLegacyParentRedirect()` 临时解析 Aegis 旧父类，再调用 `FinalizeMigratedTooltipWidget()` 固定父类、清理旧 MVVM 绑定并补齐 `InstanceDetailsText`。脚本拒绝覆盖已有目标资产或不同内容的同路径依赖。
+
+### 接手核对
+
+| 核对项 | 怎么看 | 当前状态 |
+| --- | --- | --- |
+| 父类与控件合同 | 打开 `/Game/UI/Inventory/WBP_CatItemTooltip`，确认父类是 `UCatItemTooltipWidget`，并存在上面五个必需控件名。 | 正式资产已迁移并成功加载；必需控件由 FormalWidgetLifecycle 检查通过。 |
+| 只读投影 | 读 `UCatItemTooltipModel::BuildViewData()`，确认普通物品不残留详情，鱼重量是两位 kg，鱼竿耐久能显示已断裂。 | InstanceProjection 已通过，覆盖重量、耐久、断裂与普通物品清理。 |
+| 格子悬停接入 | 读 `UCatInventorySlotWidget::NativeOnMouseEnter()` / `CancelTooltip()` 与 `UCatLocalPlayerUISubsystem::GetItemTooltipController()`，确认来源只走本地唯一 Controller。 | Editor 构建及 FormalTwoEndpointNetwork 通过；覆盖两端显示定位、真实鼠标切换、无列表重建的耐久复制刷新和关页清理。 |
+| 自动化用例 | 运行 `Catfishing.UI.ItemTooltip.InstanceProjection` 和 `Catfishing.UI.ItemTooltip.FormalWidgetLifecycle`。后者依赖正式 WBP 已迁移，并会尝试导出 `Saved/Automation/Tooltip/FishTooltip.png` 供布局检查。 | 两项已通过，日志为 `Saved/Automation/Tooltip/TooltipRerun.log`；布局截图见 `Saved/Automation/Tooltip/FishTooltip.png`。 |
+
 ## 商店：`WBP_CatShop`
 
 源码入口：`Source/Catfishing/UI/Shop/CatShopWidget.h`
@@ -561,6 +609,9 @@ Frontend 唯一 Root 路径是 `/Game/UI/Frontend/WBP_CatFrontendRoot`；资产�
 - `Source/Catfishing/UI/Inventory/CatInventoryWidget.h`
 - `Source/Catfishing/UI/Inventory/CatInventoryModel.h` / `.cpp`
 - `Source/Catfishing/UI/InventorySlot/CatInventorySlotWidget.h`
+- `Source/Catfishing/UI/ItemTooltip/CatItemTooltipWidget.h` / `.cpp`
+- `Source/Catfishing/UI/ItemTooltip/CatItemTooltipModel.h` / `.cpp`
+- `Source/Catfishing/UI/ItemTooltip/CatItemTooltipController.h` / `.cpp`
 - `Source/Catfishing/UI/Shop/CatShopWidget.h`
 - `Source/Catfishing/UI/Shop/CatShopTypes.h`
 - `Source/Catfishing/UI/Interaction/CatInteractionPromptWidget.h`
@@ -577,10 +628,14 @@ Frontend 唯一 Root 路径是 `/Game/UI/Frontend/WBP_CatFrontendRoot`；资产�
 - `Source/Catfishing/Save/CatSaveSubsystem.h/.cpp`
 - `Source/Catfishing/Online/CatOnlineSubsystem.h/.cpp`
 - `Source/CatfishingEditor/UI/CatFrontendWidgetAuthoringLibrary.h/.cpp`
+- `Source/CatfishingEditor/UI/CatItemTooltipAuthoringLibrary.h/.cpp`
+- `Source/CatfishingEditor/UI/Tests/CatItemTooltipTests.cpp`
+- `Scripts/migrate_item_tooltip.py`
 - `Scripts/create_frontend_assets.py`
 - `Config/DefaultGame.ini`
 - `Saved/Logs/FrontendIntegrationBuild.log`、`Saved/Logs/FrontendIntegrationBuild2.log`（失败记录，非完整构建通过证据）
 - 本轮人工决策与主线程交接（2026-09-07）：仅麦克风选择和语音输入模式允许暂不可用；Build1 部分修复、Build2 待冻结后强制 UHT 重编，正式资产与 runtime 未验证。
+- 本轮运行证据（2026-09-10）：Editor 构建通过；正式 Tooltip WBP 已迁移并在新进程加载，`Saved/Automation/Tooltip/TooltipRerun.log` 记录投影与生命周期两项通过；`Saved/Automation/Tooltip/NetworkFinal.log` 记录正式两端联机检查通过；打包资源尚待核对。
 - `Source/Catfishing/UI/CatInteractionWidget.h`
 
 

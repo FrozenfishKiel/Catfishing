@@ -43,6 +43,8 @@
 #include "FishContainers/CatFishContainerService.h"
 #include "FishContainers/CatFishPickupSettings.h"
 #include "Items/Fish/CatFishPickupActor.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "FishContainers/World/CatWorldSurfaceResolver.h"
 #include "Net/UnrealNetwork.h"
 #include "StateTree.h"
 #include "TimerManager.h"
@@ -388,7 +390,9 @@ FCatScoopResult ACatFishingSession::RequestScoop(AController* ScoopingController
 		: FCatWaterSpatialResult{};
 	const double FishRadius = FishDefinition ? FishDefinition->ScoopTargetRadiusCentimeters : 0.0;
 	const FVector FishLocation = Encounter ? Encounter->GetActorLocation() : FVector::ZeroVector;
-	const bool bMouthFree = ScoopingCharacter && !ACatFishPickupActor::FindCarriedFish(ScoopingCharacter);
+	// 抄鱼与拾取共用单嘴约束；鱼护虽在背包中，其可见嘴部载体仍占用这一位置。
+	const bool bMouthFree = ScoopingCharacter && !ACatFishPickupActor::FindCarriedFish(ScoopingCharacter)
+		&& !ACatFishGuardActor::FindCarriedGuard(ScoopingCharacter);
 	const bool bRayReachesFish = bScoopReachReady && ScoopingCharacter && Settings && Encounter && FishRadius > 0.0
 		&& UCatFishingAimLibrary::DoesScoopRayReachFish(ScooperLocation, ScooperFacing,
 			static_cast<float>(ScoopReachCentimeters), FishLocation, static_cast<float>(FishRadius),
@@ -1582,14 +1586,13 @@ bool ACatFishingSession::SpawnExhaustedFishPickupFromAuthority(const FVector& Su
 	FActorSpawnParameters SpawnParams;
 	SpawnParams.Owner = nullptr;
 	SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
-	// 可拾取鱼沿用水中最后的水平朝向，但清掉可能的俯仰并保持侧翻。
+	// 可拾取鱼沿用水中最后的水平朝向，并清掉可能的俯仰和侧翻；Actor 根保持直立，避免与 Pickup 自己应用的网格侧翻叠加。
 	// 旋转写在服务器生成的 Actor 上而不是只转客户端 Mesh，ReplicatedMovement 会让所有玩家看到同一结果。
 	FRotator LandedRotation = Snapshot.FishEncounterActor
 		? Snapshot.FishEncounterActor->GetActorRotation() : FRotator::ZeroRotator;
 	LandedRotation.Pitch = 0.0;
-	const UCatFishPresentationDefinition* FishPresentation =
-		FishDefinition->LoadRuntimePresentationDefinition();
-	LandedRotation.Roll = FishPresentation ? FishPresentation->LandedActorRollDegrees : 90.0;
+	// 世界鱼自己恢复侧躺网格和盒形碰撞；生成入口只提供水平朝向与地面位置。
+	LandedRotation.Roll = 0.0;
 	ACatFishPickupActor* Pickup = World->SpawnActor<ACatFishPickupActor>(
 		ACatFishPickupActor::StaticClass(), SpawnLocation, LandedRotation, SpawnParams);
 	TArray<FString> Participants;
@@ -1692,7 +1695,7 @@ bool ACatFishingSession::SpawnScoopedFishPickupFromAuthority(ACatCharacter* Scoo
 	ACatFishEncounterActor* Encounter = Snapshot.FishEncounterActor;
 	if (!HasAuthority() || !World || !ScoopingCharacter || !ScoopingPlayerState || ScooperStableNetId.IsEmpty()
 		|| !Encounter || !FishDefinition || !AttemptSnapshot.WaterRegion.IsValid()
-		|| ACatFishPickupActor::FindCarriedFish(ScoopingCharacter))
+		|| ACatFishPickupActor::FindCarriedFish(ScoopingCharacter) || ACatFishGuardActor::FindCarriedGuard(ScoopingCharacter))
 	{
 		return false;
 	}
@@ -2106,7 +2109,8 @@ bool ACatFishingSession::IsTerminal() const
 	return Snapshot.Phase == ECatFishingPhase::Resolved || Snapshot.Phase == ECatFishingPhase::Terminated;
 }
 
-// World 清理流程：停止仍在运行的 StateTree，并为仍可达参与者登记/应用 stamina 恢复后清私有弱引用；不补发捕获事务。
+// World 清理流程：先停 FightRunner 并清 Bite/Probe/TrueBite 计时器，再停止仍在运行的 StateTree。
+// authority 随后释放本会话的 Equipment use、请求仍可达参与者重置钓鱼体力并清弱引用；最后重置 ItemsService 和钓手引用后交给 Super，不补发捕获事务。
 void ACatFishingSession::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	if (FightRunner) FightRunner->Stop();

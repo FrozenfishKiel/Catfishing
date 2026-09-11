@@ -2,7 +2,10 @@
 
 #include "Character/CatCharacter.h"
 #include "Components/SceneComponent.h"
+#include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Condition/CatConditionComponent.h"
 #include "Engine/LocalPlayer.h"
 #include "Framework/Game/CatGameplayTypes.h"
 #include "GameFramework/PlayerController.h"
@@ -10,6 +13,10 @@
 #include "Items/Fish/CatFishPickupActor.h"
 #include "Inventory/CatFishOnlyInventoryComponent.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatFishGuardInventoryItemInstance.h"
+#include "Inventory/CatInventoryItemDefinition.h"
+#include "FishContainers/CatFishPickupSettings.h"
+#include "Net/UnrealNetwork.h"
 #include "Logging/CatLog.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
 #include "UI/Inventory/CatFishGuardInventoryWidget.h"
@@ -19,10 +26,18 @@ ACatFishGuardActor::ACatFishGuardActor()
 {
 	bReplicates = true;
 	PrimaryActorTick.bCanEverTick = false;
+	WorldCollision = CreateDefaultSubobject<UBoxComponent>(TEXT("WorldCollision"));
+	SetRootComponent(WorldCollision);
+	WorldCollision->SetBoxExtent(FVector(28.0, 17.0, 15.0));
+	WorldCollision->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	WorldCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
+	WorldCollision->SetCollisionResponseToChannel(ECC_WorldStatic, ECR_Block);
+	WorldCollision->SetCollisionResponseToChannel(ECC_WorldDynamic, ECR_Block);
 	GuardRoot = CreateDefaultSubobject<USceneComponent>(TEXT("GuardRoot"));
-	SetRootComponent(GuardRoot);
+	GuardRoot->SetupAttachment(WorldCollision);
 	InteractionCollision = CreateDefaultSubobject<USphereComponent>(TEXT("InteractionCollision"));
 	InteractionCollision->SetupAttachment(GuardRoot);
+	SetReplicateMovement(true);
 	InteractionCollision->SetSphereRadius(75.0f);
 	InteractionCollision->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
 	InteractionCollision->SetCollisionResponseToAllChannels(ECR_Ignore);
@@ -32,12 +47,176 @@ ACatFishGuardActor::ACatFishGuardActor()
 	InventoryViewClass = TSoftClassPtr<UCatFishGuardInventoryWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatFishGuardInventory.WBP_CatFishGuardInventory_C")));
 	InteractionPrompt = NSLOCTEXT("Catfishing", "FishGuardInteractionPrompt", "打开鱼护");
+	GuardDefinition = TSoftObjectPtr<UCatInventoryItemDefinition>(
+		FSoftObjectPath(TEXT("/Game/Catfishing/Data/Items/Item_FishGuard.Item_FishGuard")));
 }
 
-// BeginPlay 流程：服务器把编辑器容量写入正式鱼库存；客户端只通过库存复制得到格子和版本。
+// 归属复制流程：只追加库存宿主；鱼内容仍由原 FishInventory FastArray 复制，背包不保管另一份鱼快照。
+void ACatFishGuardActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ThisClass, InventoryOwner);
+}
+
+// 库存生成流程：只接收一件鱼护实例并绑定自身载体；初始容量继续由原 BeginPlay 设置，不复制或覆盖任何内鱼。
+bool ACatFishGuardActor::InitializeFromInventoryFromAuthority(UCatInventoryItemInstance* Item, const int32 Quantity)
+{
+	UCatFishGuardInventoryItemInstance* GuardInstance = Cast<UCatFishGuardInventoryItemInstance>(Item);
+	if (!HasAuthority() || Quantity != 1 || !GuardInstance || !GuardInstance->GetItemDefinition()) return false;
+	GuardItem = GuardInstance;
+	GuardDefinition = GuardInstance->GetItemDefinition();
+	GuardItem->SetGuardFromAuthority(this);
+	GuardItem->SetRuntimeOwnerActor(this);
+	return true;
+}
+
+// 地面资格读取流程：库存持有的载体不可作为世界容器访问；正在销毁的鱼护同样拒绝新的交易或开护。
+bool ACatFishGuardActor::IsGrounded() const
+{
+	return InventoryOwner == nullptr && !IsActorBeingDestroyed();
+}
+
+// 嘴部鱼护查询流程：只扫描角色已有附件，隐藏的背包载体不占嘴；不另建角色侧携带列表。
+ACatFishGuardActor* ACatFishGuardActor::FindCarriedGuard(const ACatCharacter* Character)
+{
+	if (!Character) return nullptr;
+	TArray<AActor*> AttachedActors;
+	Character->GetAttachedActors(AttachedActors);
+	for (AActor* Actor : AttachedActors)
+	{
+		ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(Actor);
+		if (Guard && Guard->InventoryOwner == Character && !Guard->IsHidden()) return Guard;
+	}
+	return nullptr;
+}
+
+// 拾取流程：依次验证地面、触达、身体、单嘴占用和配置，再让正式背包整件收货；各拒绝原因落盘，满包不变，成功由宿主同步附着原鱼护。
+bool ACatFishGuardActor::PickUpFromAuthority(AController* RequestingController, const FGuid RequestId)
+{
+	ACatCharacter* Character = RequestingController ? Cast<ACatCharacter>(RequestingController->GetPawn()) : nullptr;
+	const UCatFishPickupSettings* Settings = GetDefault<UCatFishPickupSettings>();
+	const auto Finish = [&](const bool bAccepted, const TCHAR* Reason)
+	{
+		const FString Event = FString::Printf(
+			TEXT("Event=fish_guard_pickup RequestId=%s Guard=%s Player=%s ItemInstanceId=%s Result=%s World=%s NetMode=%d Authority=%d LocalRole=%d"),
+			*RequestId.ToString(), *GetName(), *GetNameSafe(Character),
+			GuardItem ? *GuardItem->GetItemInstanceId().ToString() : TEXT("None"), Reason,
+			*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole());
+		if (bAccepted) { UE_LOG(LogCatFishContainers, Log, TEXT("%s"), *Event); }
+		else { UE_LOG(LogCatFishContainers, Warning, TEXT("%s"), *Event); }
+		return bAccepted;
+	};
+	if (!HasAuthority() || !RequestId.IsValid()) return Finish(false, TEXT("InvalidRequest"));
+	if (!IsGrounded() || !bInteractionEnabled) return Finish(false, TEXT("UnavailableGuard"));
+	if (!Character || !Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned)
+		return Finish(false, TEXT("UnavailableCharacter"));
+	if (!IsAuthorityRequestSpatiallyValid(RequestingController)) return Finish(false, TEXT("UnreachableGuard"));
+	if (ACatFishPickupActor::FindCarriedFish(Character) || FindCarriedGuard(Character)) return Finish(false, TEXT("MouthOccupied"));
+	if (!Character->GetMesh() || !Settings || !Character->GetMesh()->DoesSocketExist(Settings->MouthCarrySocketName))
+		return Finish(false, TEXT("MouthSocketUnavailable"));
+	if (!GuardItem)
+	{
+		UCatInventoryItemDefinition* Definition = GuardDefinition.LoadSynchronous();
+		if (!Definition || !Definition->IsInventoryRuntimeDefinitionReady()
+			|| Definition->GetMaxStackCount() != 1
+			|| !Definition->GetPreferredInstanceType()
+			|| !Definition->GetPreferredInstanceType()->IsChildOf(UCatFishGuardInventoryItemInstance::StaticClass()))
+			return Finish(false, TEXT("GuardDefinitionUnavailable"));
+		GuardItem = NewObject<UCatFishGuardInventoryItemInstance>(this, Definition->GetPreferredInstanceType());
+		GuardItem->SetItemDefinition(Definition);
+		GuardItem->SetGuardFromAuthority(this);
+		GuardItem->SetRuntimeOwnerActor(this);
+	}
+	FCatInventoryReceiveBatch Batch;
+	FCatInventoryInstanceEntry& Entry = Batch.InstanceEntries.AddDefaulted_GetRef();
+	Entry.ItemInstance = GuardItem;
+	Entry.Count = 1;
+	const bool bPickedUp = Character->GetInventoryComponent() && Character->GetInventoryComponent()->TryAddInventoryBatch(Batch);
+	return Finish(bPickedUp, bPickedUp ? TEXT("Success") : TEXT("InventoryRejected"));
+}
+
+// 宿主转换流程：解除旧宿主销毁回调，写入新归属并绑定新宿主，再更新表现和网络；原有鱼库存从未换所有者。
+void ACatFishGuardActor::SetInventoryOwnerFromAuthority(AActor* NewInventoryOwner)
+{
+	if (!HasAuthority() || InventoryOwner == NewInventoryOwner) return;
+	if (InventoryOwner) InventoryOwner->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleInventoryOwnerDestroyed);
+	InventoryOwner = NewInventoryOwner;
+	SetOwner(NewInventoryOwner);
+	if (InventoryOwner) InventoryOwner->OnDestroyed.AddDynamic(this, &ThisClass::HandleInventoryOwnerDestroyed);
+	OnRep_InventoryOwner();
+	ForceNetUpdate();
+	UE_LOG(LogCatFishContainers, Log, TEXT("Event=fish_guard_owner Guard=%s InventoryOwner=%s Grounded=%d World=%s NetMode=%d Authority=%d LocalRole=%d"),
+		*GetName(), *GetNameSafe(InventoryOwner), IsGrounded(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole());
+}
+
+// 附着接收流程：有父组件时，用原物当前世界尺寸计算附着所需的局部缩放，只修正待应用的附着参数。
+// 然后由引擎处理位置、朝向、附着或解绑；不让网络量化后的缩放改写原物，也不保存尺寸快照。
+void ACatFishGuardActor::OnRep_AttachmentReplication()
+{
+	if (RootComponent && AttachmentReplication.AttachParent)
+	{
+		USceneComponent* Parent = AttachmentReplication.AttachComponent ? AttachmentReplication.AttachComponent.Get()
+			: AttachmentReplication.AttachParent->GetRootComponent();
+		if (Parent)
+		{
+			AttachmentReplication.RelativeScale3D = RootComponent->IsUsingAbsoluteScale() ? GetActorScale3D()
+				: GetActorTransform().GetRelativeTransform(Parent->GetSocketTransform(AttachmentReplication.AttachSocket)).GetScale3D();
+		}
+	}
+	Super::OnRep_AttachmentReplication();
+}
+
+// 归属收敛流程：两端都按库存归属设置碰撞并停止携带刚体；嘴部资格、附着与隐藏只由服务器决定。
+// 客户端让引擎消费服务器的 AttachmentReplication/bHidden，避免旧鱼销毁晚到时重新裁决并覆盖正确附着。
+// 附着保留原世界尺寸，嘴部配置只调整位置和朝向，不能再覆盖引擎为抵消角色/Socket缩放算出的局部缩放。
+void ACatFishGuardActor::OnRep_InventoryOwner()
+{
+	SetActorEnableCollision(InventoryOwner == nullptr);
+	if (InventoryOwner) WorldCollision->SetSimulatePhysics(false);
+	if (!HasAuthority()) return;
+	if (InventoryOwner)
+	{
+		ACatCharacter* Character = Cast<ACatCharacter>(InventoryOwner);
+		const UCatFishPickupSettings* Settings = GetDefault<UCatFishPickupSettings>();
+		ACatFishGuardActor* OtherGuard = FindCarriedGuard(Character);
+		if (Character && Character->GetMesh() && Settings
+			&& Character->GetMesh()->DoesSocketExist(Settings->MouthCarrySocketName)
+			&& !ACatFishPickupActor::FindCarriedFish(Character) && (!OtherGuard || OtherGuard == this))
+		{
+			AttachToComponent(Character->GetMesh(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, Settings->MouthCarrySocketName);
+			GetRootComponent()->SetRelativeLocationAndRotation(MouthCarryTransform.GetLocation(), MouthCarryTransform.GetRotation());
+			SetActorHiddenInGame(false);
+		}
+		else
+		{
+			DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+			SetActorHiddenInGame(true);
+		}
+	}
+	else
+	{
+		DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+		SetActorHiddenInGame(false);
+		SetActorEnableCollision(true);
+	}
+}
+
+// 宿主退出流程：仍由该宿主保管时把实例交回鱼护自身并开启重力；世界 Actor 和内部鱼保留，销毁回调在归属转换时解除。
+void ACatFishGuardActor::HandleInventoryOwnerDestroyed(AActor* DestroyedActor)
+{
+	if (HasAuthority() && InventoryOwner == DestroyedActor && GuardItem)
+	{
+		GuardItem->SetRuntimeOwnerActor(this);
+		WorldCollision->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+		WorldCollision->SetSimulatePhysics(true);
+	}
+}
+
+// BeginPlay 流程：先按归属恢复碰撞和携带表现，再配置准星查询通道；服务器设置鱼库存容量，客户端通过库存复制接收格子。
 void ACatFishGuardActor::BeginPlay()
 {
 	Super::BeginPlay();
+	OnRep_InventoryOwner();
 	if (const UCatInteractionSettings* Settings = GetDefault<UCatInteractionSettings>(); Settings && InteractionCollision)
 	{
 		InteractionCollision->SetCollisionResponseToChannel(Settings->TargetingTraceChannel, ECR_Block);
@@ -73,13 +252,13 @@ TSubclassOf<UCatFishGuardInventoryWidget> ACatFishGuardActor::LoadInventoryViewC
 bool ACatFishGuardActor::CanInteract_Implementation(AController* RequestingController) const
 {
 	const APlayerController* PlayerController = Cast<APlayerController>(RequestingController);
-	return bInteractionEnabled && PlayerController && FishInventory;
+	return bInteractionEnabled && IsGrounded() && PlayerController && FishInventory;
 }
 
 // 提示文本流程：复用交互可用性的核心边界；禁用或库存组件缺失时返回空文本，避免玩家看到当前不可执行的鱼护提示。
 FText ACatFishGuardActor::GetInteractionPrompt_Implementation() const
 {
-	return bInteractionEnabled && FishInventory ? InteractionPrompt : FText::GetEmpty();
+	return bInteractionEnabled && IsGrounded() && FishInventory ? InteractionPrompt : FText::GetEmpty();
 }
 
 // 距离读取流程：把编辑器配置的厘米值裁成非负有限数；异常值按 0 处理，让服务器距离复核保守失败。
