@@ -29,6 +29,9 @@
 #include "Inventory/CatBackPackComponent.h"
 #include "Inventory/CatInventorySettings.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
+#include "Items/Fish/CatFishPickupActor.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "Net/UnrealNetwork.h"
 
 namespace
 {
@@ -247,6 +250,55 @@ UCatInventoryComponent* ACatCharacter::GetInventoryComponent() const
 	return InventoryComponent;
 }
 
+// 嘴部读取流程：直接返回服务器复制的唯一引用；调用方若需要鱼或鱼护类型只做 Cast，禁止再从 Attachments 搜索第二条真相。
+AActor* ACatCharacter::GetMouthCarriedActor() const
+{
+	return MouthCarriedActor;
+}
+
+// 嘴部认领流程：
+// 1. 只接受本 World 内仍有效的 Actor，避免跨世界或销毁中的对象写入复制状态。
+// 2. 只在当前为空时写入，因此并发拾取和库存回调最多有一个提交者获胜。
+// 3. 立即强制复制，让附件表现只消费这份已建立的权威事实。
+bool ACatCharacter::TryClaimMouthCarriedActorFromAuthority(AActor* ExpectedActor)
+{
+	if (!HasAuthority() || !IsValid(ExpectedActor) || ExpectedActor->IsActorBeingDestroyed() || ExpectedActor->GetWorld() != GetWorld()
+		|| MouthCarriedActor != nullptr)
+	{
+		return false;
+	}
+	MouthCarriedActor = ExpectedActor;
+	ExpectedActor->OnDestroyed.AddDynamic(this, &ThisClass::HandleMouthCarriedActorDestroyed);
+	ForceNetUpdate();
+	return true;
+}
+
+// 嘴部释放流程：只清除仍然属于 ExpectedActor 的引用；旧 Actor 的销毁回调无法误删新一轮携带状态。
+bool ACatCharacter::ReleaseMouthCarriedActorFromAuthority(AActor* ExpectedActor)
+{
+	if (!HasAuthority() || !ExpectedActor || MouthCarriedActor != ExpectedActor)
+	{
+		return false;
+	}
+	ExpectedActor->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleMouthCarriedActorDestroyed);
+	MouthCarriedActor = nullptr;
+	ForceNetUpdate();
+	return true;
+}
+
+// 通用销毁回调流程：只把回调中的旧 Actor 作为 expected actor 释放；若角色已经认领新对象，迟到销毁不会影响新嘴部状态。
+void ACatCharacter::HandleMouthCarriedActorDestroyed(AActor* DestroyedActor)
+{
+	ReleaseMouthCarriedActorFromAuthority(DestroyedActor);
+}
+
+// 复制声明流程：把嘴部占用作为角色唯一的网络事实下发；Actor 本身仍各自复制位置、附着和表现状态。
+void ACatCharacter::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
+{
+	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
+	DOREPLIFETIME(ThisClass, MouthCarriedActor);
+}
+
 // BeginPlay 流程：先让 Actor 与组件完成注册（ASC 此时会按引擎默认临时建立 ActorInfo），再用项目 gate 幂等刷新或清除，避免未裁 runtime 偷跑。
 void ACatCharacter::BeginPlay()
 {
@@ -336,6 +388,9 @@ void ACatCharacter::PawnClientRestart()
 // 失去占有流程：身份和 ASC 尚有效时先进入 GameMode 协调入口释放操作位并托管资源；随后取消身体 Ability 并断开占有。父类返回后清 ActorInfo，存档捕获由 Controller 的后置 Pawn 通知执行。
 void ACatCharacter::UnPossessed()
 {
+	// 生命周期释放流程：失去控制不能让嘴叼物跟随一个无主 Pawn 停留；对象自己的释放方法负责恢复地面状态，随后按 expected actor 清空引用。
+	if (ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(MouthCarriedActor)) Fish->ReleaseMouthCarryFromAuthority(GetActorLocation());
+	else if (ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(MouthCarriedActor)) Guard->ReleaseMouthCarryFromAuthority(GetActorLocation());
 	PhysicalBodyComponent->ReleaseConnectionsFromAuthority(TEXT("Unpossessed"));
 	PhysicalBodyComponent->BeginControlEpochFromAuthority();
 	ACatfishingGameModeBase::HandleCharacterUnavailable(this);
@@ -353,6 +408,9 @@ void ACatCharacter::UnPossessed()
 // 最终清理流程：直接 Destroy 或无占有的身体也先经过同一 GameMode 幂等协调入口；随后撤销默认授予、取消 Ability 并清 ActorInfo，最后交父类销毁组件。
 void ACatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	// 销毁路径复用同一 expected-actor 释放，覆盖直接 Destroy 而没有先走 UnPossessed 的服务器清理。
+	if (ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(MouthCarriedActor)) Fish->ReleaseMouthCarryFromAuthority(GetActorLocation());
+	else if (ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(MouthCarriedActor)) Guard->ReleaseMouthCarryFromAuthority(GetActorLocation());
 	ConditionComponent->OnSnapshotChanged.RemoveAll(this);
 	PhysicalBodyComponent->ReleaseConnectionsFromAuthority(TEXT("EndPlay"));
 	ACatfishingGameModeBase::HandleCharacterUnavailable(this);
@@ -396,9 +454,19 @@ void ACatCharacter::ConfigureCharacterMovementAuthority()
 	GetMesh()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
 	GetMesh()->SetGenerateOverlapEvents(false);
 }
+// 身体条件刷新流程：服务器先按最新 Downed 快照更新物理移动；进入倒地时只读取角色当前单嘴引用，分别调用鱼或鱼护的落地释放，随后由各 Actor 清理同一 expected-actor 引用。
+// 非服务器只接收复制结果，不在客户端改移动或世界物归属。
 void ACatCharacter::RefreshPhysicalCondition()
 {
-	if (HasAuthority()) PhysicalBodyComponent->SetLocomotionEnabledFromAuthority(!ConditionComponent->GetSnapshot().bDowned,TEXT("ConditionChanged"));
+	if (HasAuthority())
+	{
+		PhysicalBodyComponent->SetLocomotionEnabledFromAuthority(!ConditionComponent->GetSnapshot().bDowned,TEXT("ConditionChanged"));
+		if (ConditionComponent->GetSnapshot().bDowned)
+		{
+			if (ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(MouthCarriedActor)) Fish->ReleaseMouthCarryFromAuthority(GetActorLocation());
+			else if (ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(MouthCarriedActor)) Guard->ReleaseMouthCarryFromAuthority(GetActorLocation());
+		}
+	}
 }
 void ACatCharacter::Tick(float DeltaSeconds)
 {

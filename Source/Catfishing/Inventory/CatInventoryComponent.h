@@ -355,7 +355,7 @@ public:
 	UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Catfishing|Inventory")
 	bool ConsumeItemAtSlot(int32 SlotIndex, int32 ConsumeCount);
 
-	/** 丢弃或放置当前槽位的指定实例；生成和碰撞检查成功后才扣量，沿本库存终态缓存防止重复落地。 */
+	/** 丢弃、放置或 Carry 当前槽位的指定实例；Carry 只从鱼护或鱼缸移出数量一到嘴部且不做地面查询，其余动作生成或复用世界物并在空间检查成功后扣量，沿本库存终态缓存防止重复提交。 */
 	FCatDomainCommandResult ReleaseItemToWorldFromAuthority(ACatCharacter* Character, FGuid RequestId,
 		int32 SlotIndex, FGuid ItemInstanceId, int32 Quantity, ECatInventoryWorldAction Action);
 
@@ -414,6 +414,8 @@ public:
 	virtual bool CanAcceptInventoryEntryAtSlot(const FCatInventoryEntry& IncomingEntry, int32 TargetSlotIndex) const;
 
 protected:
+	friend class ACatFishPickupActor;
+	friend class ACatFishGuardActor;
 	friend class UCatEquipmentComponent;
 	/** Internal mutation lets the fishing coordinator establish its record before notifying observers. */
 	bool ConsumeItemAtSlotInternal(int32 SlotIndex, int32 ConsumeCount, bool bBroadcastChange);

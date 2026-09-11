@@ -45,6 +45,9 @@ protected:
 	/** authority 入场时按编辑器容量补齐正式库存，再显式发布只读摘要；客户端等待库存与摘要各自复制。 */
 	virtual void BeginPlay() override;
 
+	/** 鱼缸销毁时清理仍由本库存保管的隐藏鱼 Actor；已 Carry 离开库存的鱼不属于本容器。 */
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
 private:
 	/** 共享鱼缸的固定场景根；关卡用它摆放位置，运行时不把该坐标当成库存真相。 */
 	UPROPERTY(VisibleAnywhere)

@@ -11,12 +11,13 @@ class UCatInventoryComponent;
 class UCatInventoryItemInstance;
 class UCatInventorySettings;
 
-/** 物品离开库存的两种玩家动作；丢弃开启物理轻抛，放置在检测通过的位置固定，不触发物品 Use。 */
+/** 物品离开库存的玩家动作；丢弃开启物理轻抛，放置在检测通过的位置固定，Carry 只允许鱼护或鱼缸的一条鱼静默移出到嘴部，不触发物品 Use 或地面查询。 */
 UENUM(BlueprintType)
 enum class ECatInventoryWorldAction : uint8
 {
-	Drop,
-	Place
+	Drop = 0,
+	Place = 1,
+	Carry = 2
 };
 
 /** 按定义发货的一项库存载荷；拾取、商店、奖励等来源只需要描述物品类型和数量。 */
@@ -101,7 +102,7 @@ public:
 	static FCatDomainCommandResult UseItemFromInventoryHostFromAuthority(ACatCharacter* ControlledCharacter,
 		FGuid RequestId, AActor* SourceInventoryHost, int32 SourceSlotIndex);
 
-	/** 从可触达库存丢弃或放置指定实例数量；先复核宿主，具体生成、扣量和重放仍由来源库存统一裁决。 */
+	/** 从可触达库存丢弃、放置或 Carry 指定实例；Carry 只接受鱼容器中的数量一，先复核宿主与容器交互资格，具体移格和重放仍由来源库存裁决。 */
 	static FCatDomainCommandResult ReleaseItemToWorldFromAuthority(ACatCharacter* ControlledCharacter,
 		FGuid RequestId, AActor* SourceInventoryHost, int32 SourceSlotIndex, FGuid ItemInstanceId,
 		int32 Quantity, ECatInventoryWorldAction Action);

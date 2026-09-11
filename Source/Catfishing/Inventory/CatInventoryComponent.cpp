@@ -3,8 +3,15 @@
 #include "GameFramework/Pawn.h"
 #include "Character/CatCharacter.h"
 #include "Components/PrimitiveComponent.h"
+#include "Components/SkeletalMeshComponent.h"
 #include "Condition/CatConditionComponent.h"
 #include "Engine/World.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "FishContainers/CatFishTankActor.h"
+#include "FishContainers/CatFishPickupSettings.h"
+#include "Inventory/CatFishOnlyInventoryComponent.h"
+#include "Inventory/CatFishInventoryItemInstance.h"
+#include "Items/Fish/CatFishPickupActor.h"
 #include "Inventory/CatInventoryWorldItem.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "Inventory/CatInventoryItemInstance.h"
@@ -18,7 +25,6 @@ DEFINE_LOG_CATEGORY_STATIC(LogCatInventory, Log, All);
 
 namespace
 {
-
 	// 商店批量发货需要稳定载荷签名；这里拒绝混入实例项，避免批量购买把运行实例来源混进商店语义。
 	// 1. 只接受定义发货项，实例发货仍走底层 ReceiveBatch。
 	// 2. 按稳定定义 ID 合并重复行，并确认每行定义、数量、运行配置和实例类都能被正式库存创建。
@@ -746,7 +752,6 @@ void UCatInventoryComponent::RemoveEntry(UCatInventoryItemInstance* ItemInstance
 		{
 			RemoveReplicatedSubObject(ItemInstance);
 		}
-
 		BroadcastInventoryChange();
 	}
 }
@@ -2177,11 +2182,11 @@ bool UCatInventoryComponent::ConsumeItemAtSlotInternal(const int32 SlotIndex, co
 	return true;
 }
 
-// 物品落地流程：
+// 库存离开流程：
 // 1. 先重放同请求终态，再复核当前实例、数量、身体和配置，防止数量面板打开后误操作已换入的物品。
-// 2. 整份落地复用实例保管的原 Actor；部分丢弃或没有载体时仍生成新物并复制实例状态，失败不扣来源。
-// 3. 落点通过后才提交库存扣量；扣量的同步广播前记录重入拒绝，完成后用最终结果覆盖该请求缓存。
-// 4. 最后同步实例归属、解除附着并设置物理模式，丢弃只施加一次初速度，放置不调用任何装备使用逻辑；失败清理新载体后按请求记录拒绝原因。
+// 2. Carry 将鱼护或鱼缸的一条鱼取到空嘴：不求地面落点，先附着、再扣原格、最后统一发布；失败只恢复本次改变的 Actor 表现，不覆盖外部已完成的转移。
+// 3. Drop/Place 整份复用实例保管的原 Actor；部分丢弃或没有载体时仍生成新物并复制实例状态，失败不扣来源。
+// 4. Drop/Place 的落点通过后才提交库存扣量；扣量广播前记录重入拒绝，成功同步实例归属、解除附着与物理，失败清理新载体并记录原因。
 FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(ACatCharacter* Character,
 	const FGuid RequestId, const int32 SlotIndex, const FGuid ItemInstanceId, const int32 Quantity, const ECatInventoryWorldAction Action)
 {
@@ -2216,11 +2221,123 @@ FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(
 	const UCatInventorySettings* Settings = GetDefault<UCatInventorySettings>();
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !Character || Character->GetWorld() != GetWorld()
 		|| !RequestId.IsValid() || !ItemInstanceId.IsValid() || Quantity <= 0
-		|| (Action != ECatInventoryWorldAction::Drop && Action != ECatInventoryWorldAction::Place)
+		|| (Action != ECatInventoryWorldAction::Drop && Action != ECatInventoryWorldAction::Place && Action != ECatInventoryWorldAction::Carry)
 		|| !Entry || !Entry->Instance || Entry->Instance->GetItemInstanceId() != ItemInstanceId || Entry->StackCount < Quantity)
 		return Finish(ECatDomainCommandError::InvalidPayload);
 	if (!Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned)
 		return Finish(ECatDomainCommandError::PermissionDenied);
+	// Carry 事务流程：
+	// 1. 仅鱼护/鱼缸里完整的一条鱼可进入嘴部，格位、实例、访问和倒地校验仍沿本方法完成。
+	// 2. 先复用或首次生成同一世界 Actor，再认领空嘴并在任何库存广播前完成附着；失败不扣格也不改来源 Actor。
+	// 3. 静默扣除原格后才发布库存变化，Actor 保留原鱼实例、重量和缩放，终态缓存防止同请求再次消费新槽位。
+	if (Action == ECatInventoryWorldAction::Carry)
+	{
+		UCatFishInventoryItemInstance* FishItem = Cast<UCatFishInventoryItemInstance>(Entry->Instance);
+		AActor* OriginalWorldActor = FishItem ? FishItem->GetWorldActor() : nullptr;
+		AActor* OriginalRuntimeOwner = FishItem ? FishItem->GetRuntimeOwnerActor() : nullptr;
+		// 不只检查格子：回调若转移或重新关联同一实例，本请求已失去原始来源契约，不能继续提交。
+		const auto IsSourceStillCurrent = [&]()
+		{
+			const FCatInventoryEntry* CurrentEntry = GetInventoryEntryAtSlot(SlotIndex);
+			return CurrentEntry && CurrentEntry->Instance == FishItem && CurrentEntry->StackCount == 1
+				&& FishItem && FishItem->GetItemInstanceId() == ItemInstanceId
+				&& FishItem->GetWorldActor() == OriginalWorldActor && FishItem->GetRuntimeOwnerActor() == OriginalRuntimeOwner;
+		};
+		const ACatFishGuardActor* SourceGuard = Cast<ACatFishGuardActor>(GetOwner());
+		const ACatFishTankActor* SourceTank = Cast<ACatFishTankActor>(GetOwner());
+		const bool bFishContainer = (SourceGuard && SourceGuard->GetFishInventoryComponent() == this)
+			|| (SourceTank && SourceTank->GetFishInventoryComponent() == this);
+		if (!bFishContainer || !FishItem || Quantity != 1 || Entry->StackCount != 1 || Character->GetMouthCarriedActor() != nullptr)
+			return Finish(ECatDomainCommandError::PermissionDenied);
+		// 容器取鱼必须有真实嘴部挂点；在生成载体或认领嘴部前拒绝，不能退化成附着到空骨架根。
+		const UCatFishPickupSettings* PickupSettings = GetDefault<UCatFishPickupSettings>();
+		if (!PickupSettings || !Character->GetMesh() || !Character->GetMesh()->DoesSocketExist(PickupSettings->MouthCarrySocketName))
+			return Finish(ECatDomainCommandError::DependencyUnavailable);
+		AActor* CarriedActor = FishItem->GetWorldActor();
+		const FTransform OriginalRetainedTransform = IsValid(CarriedActor) ? CarriedActor->GetActorTransform() : FTransform::Identity;
+		bool bCreatedCarrier = false;
+		if (!IsValid(CarriedActor))
+		{
+			UCatInventoryItemDefinition* FishDefinition = FishItem->GetItemDefinition();
+			UClass* CarrierClass = FishDefinition ? FishDefinition->WorldActorClass.LoadSynchronous() : nullptr;
+			if (!CarrierClass || !CarrierClass->IsChildOf(ACatFishPickupActor::StaticClass())) return Finish(ECatDomainCommandError::DependencyUnavailable);
+			CarriedActor = GetWorld()->SpawnActorDeferred<AActor>(CarrierClass, Character->GetActorTransform(), nullptr, Character,
+				ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
+			bCreatedCarrier = true;
+			if (!CarriedActor) return Finish(ECatDomainCommandError::DependencyUnavailable);
+		}
+		ACatFishPickupActor* FishActor = Cast<ACatFishPickupActor>(CarriedActor);
+		WorldActor = CarriedActor;
+		if (!FishActor || (!bCreatedCarrier && !FishActor->CanCarryInventoryItemFromAuthority(FishItem)))
+		{
+			if (bCreatedCarrier && IsValid(CarriedActor)) CarriedActor->Destroy();
+			return Finish(ECatDomainCommandError::InvalidPayload);
+		}
+		// 在附着、初始化和可能触发表现回调之前写入同请求终态保留，后续任何重入都会直接看到 AlreadyResolved 而不能消耗新槽位。
+		Result.Error = ECatDomainCommandError::AlreadyResolved;
+		TerminalPayloadByKey.Add(Key, Payload);
+		TerminalCache.Add(Key, Result);
+		const bool bClaimedByThisRequest = Character->TryClaimMouthCarriedActorFromAuthority(FishActor);
+		if (!bClaimedByThisRequest)
+		{
+			if (bCreatedCarrier && IsValid(CarriedActor)) CarriedActor->Destroy();
+			return Finish(ECatDomainCommandError::PermissionDenied);
+		}
+		if (bCreatedCarrier)
+		{
+			CarriedActor->SetActorHiddenInGame(true);
+			CarriedActor->SetActorEnableCollision(false);
+			CarriedActor->FinishSpawning(Character->GetActorTransform());
+		}
+		// FinishSpawning 可能运行组件或蓝图回调；提交前必须重新确认原格尚是同一条鱼，不能按旧 SlotIndex 扣掉后来换入的实例。
+		if (!IsSourceStillCurrent())
+		{
+			Character->ReleaseMouthCarriedActorFromAuthority(FishActor);
+			if (bCreatedCarrier && IsValid(CarriedActor)) CarriedActor->Destroy();
+			return Finish(ECatDomainCommandError::InvalidPayload);
+		}
+		if (bCreatedCarrier && !FishActor->InitializeFromInventoryForCarryFromAuthority(FishItem, 1))
+		{
+			Character->ReleaseMouthCarriedActorFromAuthority(FishActor);
+			FishActor->Destroy();
+			return Finish(ECatDomainCommandError::InvalidPayload);
+		}
+		if (!IsSourceStillCurrent())
+		{
+			Character->ReleaseMouthCarriedActorFromAuthority(FishActor);
+			if (bCreatedCarrier && IsValid(CarriedActor)) CarriedActor->Destroy();
+			return Finish(ECatDomainCommandError::InvalidPayload);
+		}
+		if (!FishActor->BeginMouthCarryFromAuthority(Character, Character->GetPlayerState(), false))
+		{
+			Character->ReleaseMouthCarriedActorFromAuthority(FishActor);
+			if (!bCreatedCarrier) FishActor->RestoreInventoryRetentionFromAuthority(FishItem, OriginalRetainedTransform);
+			if (bCreatedCarrier && IsValid(CarriedActor)) CarriedActor->Destroy();
+			return Finish(ECatDomainCommandError::PermissionDenied);
+		}
+		// 附着路径也可能触发表现回调；再次核对实例身份后才执行不带广播的扣格，确保请求永远只消费自己的原条目。
+		if (!IsSourceStillCurrent() || !ConsumeItemAtSlotInternal(SlotIndex, 1, false))
+		{
+			if (!bCreatedCarrier) FishActor->RestoreInventoryRetentionFromAuthority(FishItem, OriginalRetainedTransform);
+			else
+			{
+				Character->ReleaseMouthCarriedActorFromAuthority(FishActor);
+				FishActor->Destroy();
+			}
+			return Finish(ECatDomainCommandError::InvalidPayload);
+		}
+		FishItem->SetWorldActor(FishActor);
+		FishItem->SetRuntimeOwnerActor(FishActor);
+		// 退出容器保管态后恢复 Actor 总开关；嘴叼期间仍由组件的 NoCollision 禁止碰撞，后续 Drop 才能正常恢复真实刚体。
+		FishActor->SetActorEnableCollision(true);
+		FishActor->SetActorHiddenInGame(false);
+		// 成功终态和网络脏标记必须先于观察者通知：回调可以同步重放本请求，且可能立刻消费或销毁这条鱼，因此之后不再解引用 FishActor。
+		FishActor->ForceNetUpdate();
+		Character->ForceNetUpdate();
+		const FCatDomainCommandResult Completed = Finish(ECatDomainCommandError::None);
+		BroadcastInventoryChange(SlotIndex);
+		return Completed;
+	}
 	if (!Settings || !FMath::IsFinite(Settings->PlacementRangeCentimeters) || Settings->PlacementRangeCentimeters <= 0
 		|| !FMath::IsFinite(Settings->PlacementHeightDifferenceCentimeters) || Settings->PlacementHeightDifferenceCentimeters < 0
 		|| !FMath::IsFinite(Settings->PlacementSlopeDegrees) || Settings->PlacementSlopeDegrees < 0 || Settings->PlacementSlopeDegrees >= 90

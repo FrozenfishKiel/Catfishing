@@ -10,6 +10,7 @@
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/CatInventorySettings.h"
+#include "Interaction/CatInteractable.h"
 #include "Logging/CatLog.h"
 
 // 落点求解流程：只用物理根的局部包围盒检查占用，不把准星交互球算作实体；放置依次搜索正前方与左右各30度内的地面。
@@ -350,6 +351,14 @@ FCatDomainCommandResult UCatInventoryStatics::ReleaseItemToWorldFromAuthority(AC
 	FCatInventoryHostEndpoint Endpoint;
 	if (!ControlledCharacter || !ControlledCharacter->HasAuthority()
 		|| !ResolveInventoryHostEndpoint(ControlledCharacter->GetWorld(), ControlledCharacter, SourceInventoryHost, SourceSlotIndex, Endpoint))
+	{
+		Result.Error = ECatDomainCommandError::PermissionDenied;
+		return Result;
+	}
+	// Carry 访问收敛流程：通用端点只保证同世界和可达；只有从鱼护/鱼缸叼鱼时还必须复核容器当前真的允许这个 Controller 交互，避免关闭入口后仍可通过旧 UI 请求取鱼。
+	if (Action == ECatInventoryWorldAction::Carry
+		&& (!SourceInventoryHost->Implements<UCatInteractable>()
+			|| !ICatInteractable::Execute_CanInteract(SourceInventoryHost, ControlledCharacter->GetController())))
 	{
 		Result.Error = ECatDomainCommandError::PermissionDenied;
 		return Result;

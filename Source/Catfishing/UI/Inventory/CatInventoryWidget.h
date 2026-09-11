@@ -54,6 +54,10 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
 	void RequestPlaceSelectedItem();
 
+	/** 请求把鱼缸或地面鱼护中当前选中的单条鱼叼到嘴部；仅转交既有库存世界动作入口，服务器继续复核容器、鱼实例和口中占用。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Inventory")
+	void RequestCarrySelectedFish();
+
 protected:
 	/** 构建时绑定按钮、领域回执和对应库存 Model，再读取当前列表；嵌套背包独立解析自己的 Pawn 库存。 */
 	virtual void NativeConstruct() override;
@@ -66,6 +70,9 @@ protected:
 
 	/** 根页获得键盘焦点时也接受同一关闭键；其他按键交回父类。 */
 	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
+
+	/** 页面可见期间只轮询已复制的嘴部携带引用并同步叼起按钮；不重建库存或改变选择，保证外部占用变化能立即禁用操作。 */
+	virtual void NativeTick(const FGeometry& MyGeometry, float InDeltaTime) override;
 
 	/** 读取当前选中格的只读副本和下标；子页面用它冻结操作对象，真实库存仍在提交前由服务器重读。 */
 	bool GetSelectedInventoryEntry(FCatInventoryEntry& OutEntry, int32& OutSlotIndex) const;
@@ -122,6 +129,12 @@ private:
 	/** 为选中格准备 Drop 或 Place；单件直接提交，堆叠物冻结来源、槽位、实例和数量上限后等待确认。 */
 	void BeginReleaseSelectedItem(ECatInventoryWorldAction Action);
 
+	/** 根据选中条目、目标鱼容器和角色已复制的嘴部携带 Actor 判断本地是否能叼起；它只控制 UI 与提交前拒绝，服务器仍是最终裁决者。 */
+	bool CanCarrySelectedFish(FCatInventoryEntry& OutEntry, int32& OutSlotIndex) const;
+
+	/** 只投影当前叼起资格到可选按钮；由选择、库存刷新、命令状态和窄 Tick 复用，避免为嘴部占用另建复制或事件真相。 */
+	void RefreshCarryAction();
+
 	/** 向 PlayerController 提交已冻结的物品离库意图；UI 不改库存，服务器以宿主、槽位和实例 ID 复核后执行。 */
 	void SubmitReleaseItem(UCatInventoryComponent* SourceInventory, int32 SourceSlotIndex,
 		const FGuid& ItemInstanceId, int32 Quantity, ECatInventoryWorldAction Action);
@@ -176,6 +189,10 @@ private:
 	/** 正式 WBP 的放置按钮；点击复用当前选中格与数量面板，但把动作语义交给服务器。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> PlaceButton;
+
+	/** 正式鱼缸与鱼护 WBP 可选的叼起按钮；只在选中单条鱼、当前容器受支持且嘴部空闲时启用，点击不直接写库存。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> CarryButton;
 
 	/** 当前库存页内的数量确认区域；只在堆叠 Drop/Place 时显示，不承担独立页面或库存状态。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))

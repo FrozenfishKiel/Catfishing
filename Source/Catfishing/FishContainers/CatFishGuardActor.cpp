@@ -76,18 +76,38 @@ bool ACatFishGuardActor::IsGrounded() const
 	return InventoryOwner == nullptr && !IsActorBeingDestroyed();
 }
 
-// 嘴部鱼护查询流程：只扫描角色已有附件，隐藏的背包载体不占嘴；不另建角色侧携带列表。
+// 嘴部鱼护查询流程：只把角色唯一复制引用转换为鱼护类型；隐藏保管态不会因为旧附件残留被误判为占嘴。
 ACatFishGuardActor* ACatFishGuardActor::FindCarriedGuard(const ACatCharacter* Character)
 {
-	if (!Character) return nullptr;
-	TArray<AActor*> AttachedActors;
-	Character->GetAttachedActors(AttachedActors);
-	for (AActor* Actor : AttachedActors)
+	return Character ? Cast<ACatFishGuardActor>(Character->GetMouthCarriedActor()) : nullptr;
+}
+
+// 鱼护生命周期释放流程：先从角色正式库存精确移出当前 GuardItem，再释放嘴部引用并脱离附件、落地和恢复运行宿主。
+// 内部 FishInventory 从头到尾不迁移；若库存格已被其它事务移除，仍继续收口嘴部与地面状态，避免角色继续占有已落地鱼护。
+void ACatFishGuardActor::ReleaseMouthCarryFromAuthority(const FVector& DropLocation)
+{
+	if (!HasAuthority()) return;
+	ACatCharacter* Character = Cast<ACatCharacter>(InventoryOwner);
+	if (!Character || Character->GetMouthCarriedActor() != this) return;
+	if (UCatInventoryComponent* CharacterInventory = Character->GetInventoryComponent(); CharacterInventory && GuardItem)
 	{
-		ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(Actor);
-		if (Guard && Guard->InventoryOwner == Character && !Guard->IsHidden()) return Guard;
+		const int32 GuardSlot = CharacterInventory->FindInventorySlotIndexFromInstanceId(GuardItem->GetItemInstanceId());
+		const FCatInventoryEntry* GuardEntry = CharacterInventory->GetInventoryEntryAtSlot(GuardSlot);
+		FCatInventoryEntry RemovedEntry;
+		if (GuardEntry && GuardEntry->Instance == GuardItem && GuardEntry->StackCount == 1)
+		{
+			CharacterInventory->RemoveInventoryEntryAtSlotFromAuthority(GuardSlot, RemovedEntry);
+		}
 	}
-	return nullptr;
+	Character->ReleaseMouthCarriedActorFromAuthority(this);
+	DetachFromActor(FDetachmentTransformRules::KeepWorldTransform);
+	SetActorLocation(DropLocation, false, nullptr, ETeleportType::TeleportPhysics);
+	if (GuardItem) GuardItem->SetRuntimeOwnerActor(this);
+	WorldCollision->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	InteractionCollision->SetCollisionEnabled(ECollisionEnabled::QueryOnly);
+	WorldCollision->SetSimulatePhysics(true);
+	SetActorHiddenInGame(false);
+	ForceNetUpdate();
 }
 
 // 拾取流程：依次验证地面、触达、身体、单嘴占用和配置，再让正式背包整件收货；各拒绝原因落盘，满包不变，成功由宿主同步附着原鱼护。
@@ -111,7 +131,7 @@ bool ACatFishGuardActor::PickUpFromAuthority(AController* RequestingController, 
 	if (!Character || !Character->GetConditionComponent() || Character->GetConditionComponent()->GetSnapshot().bDowned)
 		return Finish(false, TEXT("UnavailableCharacter"));
 	if (!IsAuthorityRequestSpatiallyValid(RequestingController)) return Finish(false, TEXT("UnreachableGuard"));
-	if (ACatFishPickupActor::FindCarriedFish(Character) || FindCarriedGuard(Character)) return Finish(false, TEXT("MouthOccupied"));
+	if (Character->GetMouthCarriedActor() != nullptr) return Finish(false, TEXT("MouthOccupied"));
 	if (!Character->GetMesh() || !Settings || !Character->GetMesh()->DoesSocketExist(Settings->MouthCarrySocketName))
 		return Finish(false, TEXT("MouthSocketUnavailable"));
 	if (!GuardItem)
@@ -131,14 +151,50 @@ bool ACatFishGuardActor::PickUpFromAuthority(AController* RequestingController, 
 	FCatInventoryInstanceEntry& Entry = Batch.InstanceEntries.AddDefaulted_GetRef();
 	Entry.ItemInstance = GuardItem;
 	Entry.Count = 1;
-	const bool bPickedUp = Character->GetInventoryComponent() && Character->GetInventoryComponent()->TryAddInventoryBatch(Batch);
-	return Finish(bPickedUp, bPickedUp ? TEXT("Success") : TEXT("InventoryRejected"));
+	UCatInventoryComponent* CharacterInventory = Character->GetInventoryComponent();
+	if (!CharacterInventory || !Character->TryClaimMouthCarriedActorFromAuthority(this))
+		return Finish(false, TEXT("MouthClaimRejected"));
+	const TArray<FCatInventoryEntry> OriginalEntries = CharacterInventory->GetInventoryEntries();
+	const FTransform OriginalTransform = GetActorTransform();
+	const bool bOriginalPhysics = WorldCollision->IsSimulatingPhysics();
+	const ECollisionEnabled::Type OriginalBodyCollision = WorldCollision->GetCollisionEnabled();
+	const ECollisionEnabled::Type OriginalInteractionCollision = InteractionCollision->GetCollisionEnabled();
+	if (!CharacterInventory->TryAddInventoryBatchInternal(Batch, false))
+	{
+		Character->ReleaseMouthCarriedActorFromAuthority(this);
+		return Finish(false, TEXT("InventoryRejected"));
+	}
+	// 收货设置实例宿主时已通过 OnRep_InventoryOwner 完成既有附着；这里只核对结果，不再执行第二次叼取。
+	if (GetAttachParentActor() != Character || Character->GetMouthCarriedActor() != this)
+	{
+		// 入包和附着是同一事务：附着失败时先恢复角色库存快照，再把鱼护实例交回地面 Actor，观察者只会看到回滚后的事实。
+		CharacterInventory->ReplaceInventoryEntriesFromAuthority(OriginalEntries, OriginalEntries.Num(), false);
+		GuardItem->SetRuntimeOwnerActor(this);
+		Character->ReleaseMouthCarriedActorFromAuthority(this);
+		// 失败不是一次 Drop：恢复请求前的姿态和碰撞/模拟模式，不能把原本固定放置的鱼护改成自由落体。
+		SetActorTransform(OriginalTransform, false, nullptr, ETeleportType::TeleportPhysics);
+		WorldCollision->SetCollisionEnabled(OriginalBodyCollision);
+		InteractionCollision->SetCollisionEnabled(OriginalInteractionCollision);
+		WorldCollision->SetSimulatePhysics(bOriginalPhysics);
+		CharacterInventory->BroadcastInventoryChange();
+		return Finish(false, TEXT("MouthAttachRejected"));
+	}
+	// 库存格、运行宿主和嘴部附件都已建立，才让 UI 与客户端观察这次拾取，避免看见入包但尚未占嘴的中间状态。
+	CharacterInventory->BroadcastInventoryChange();
+	ForceNetUpdate();
+	Character->ForceNetUpdate();
+	return Finish(true, TEXT("Success"));
 }
 
-// 宿主转换流程：解除旧宿主销毁回调，写入新归属并绑定新宿主，再更新表现和网络；原有鱼库存从未换所有者。
+// 宿主转换流程：先解除旧角色对嘴部的 expected-actor 引用，再切换销毁回调和库存归属；地面化不会留下阻塞后续拾取的陈旧单嘴状态。
 void ACatFishGuardActor::SetInventoryOwnerFromAuthority(AActor* NewInventoryOwner)
 {
 	if (!HasAuthority() || InventoryOwner == NewInventoryOwner) return;
+	if (ACatCharacter* PreviousCharacter = Cast<ACatCharacter>(InventoryOwner);
+		PreviousCharacter && PreviousCharacter->GetMouthCarriedActor() == this)
+	{
+		PreviousCharacter->ReleaseMouthCarriedActorFromAuthority(this);
+	}
 	if (InventoryOwner) InventoryOwner->OnDestroyed.RemoveDynamic(this, &ThisClass::HandleInventoryOwnerDestroyed);
 	InventoryOwner = NewInventoryOwner;
 	SetOwner(NewInventoryOwner);
@@ -178,10 +234,9 @@ void ACatFishGuardActor::OnRep_InventoryOwner()
 	{
 		ACatCharacter* Character = Cast<ACatCharacter>(InventoryOwner);
 		const UCatFishPickupSettings* Settings = GetDefault<UCatFishPickupSettings>();
-		ACatFishGuardActor* OtherGuard = FindCarriedGuard(Character);
 		if (Character && Character->GetMesh() && Settings
 			&& Character->GetMesh()->DoesSocketExist(Settings->MouthCarrySocketName)
-			&& !ACatFishPickupActor::FindCarriedFish(Character) && (!OtherGuard || OtherGuard == this))
+			&& Character->GetMouthCarriedActor() == this)
 		{
 			AttachToComponent(Character->GetMesh(), FAttachmentTransformRules::SnapToTargetNotIncludingScale, Settings->MouthCarrySocketName);
 			GetRootComponent()->SetRelativeLocationAndRotation(MouthCarryTransform.GetLocation(), MouthCarryTransform.GetRotation());
@@ -229,6 +284,29 @@ void ACatFishGuardActor::BeginPlay()
 	{
 		FishInventory->SetInventorySlotCountFromAuthority(FishInventorySlotCapacity);
 	}
+}
+
+// 容器销毁流程：
+// 1. 服务器只遍历本 FishInventory 仍保管的条目，已 Carry 到嘴部或其它宿主的实例不会误删。
+// 2. 每条鱼的 WorldActor 只是一对一隐藏表现载体；先清实例引用再销毁，避免后续析构读取悬空 Actor。
+// 3. 最后交给父类，客户端不执行权威清理而只消费销毁复制。
+void ACatFishGuardActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+	if (HasAuthority() && FishInventory)
+	{
+		for (const FCatInventoryEntry& Entry : FishInventory->GetInventoryEntries())
+		{
+			if (Entry.StackCount == 1 && Entry.Instance)
+			{
+				if (AActor* RetainedActor = Entry.Instance->GetWorldActor())
+				{
+					Entry.Instance->SetWorldActor(nullptr);
+					RetainedActor->Destroy();
+				}
+			}
+		}
+	}
+	Super::EndPlay(EndPlayReason);
 }
 
 // 鱼库存读取流程：返回本 Actor 持有的正式鱼库存组件；调用者继续通过 InventoryComponent 命令写入。

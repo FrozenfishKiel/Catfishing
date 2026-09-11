@@ -75,6 +75,16 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")
 	UCatInventoryComponent* GetInventoryComponent() const;
 
+	/** 当前猫嘴唯一携带的世界 Actor；仅服务器通过认领/释放接口写入，复制给表现和交互消费者，不从附着树反推占用。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")
+	AActor* GetMouthCarriedActor() const;
+
+	/** 服务器在所有可重入回调前认领空嘴；成功后该 Actor 成为唯一复制事实，失败表示嘴已被别的世界物占用。 */
+	bool TryClaimMouthCarriedActorFromAuthority(AActor* ExpectedActor);
+
+	/** 服务器仅在当前引用仍等于 ExpectedActor 时释放嘴部；迟到销毁或回滚不会清掉后来重新叼起的物体。 */
+	bool ReleaseMouthCarriedActorFromAuthority(AActor* ExpectedActor);
+
 	/** 猫种类定义 ID 是角色蓝图选择身体数值模板的稳定键；为空时角色类不猜默认值，而由能力系统配置在播种属性时解析。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Character")
 	FName GetCatDefinitionId() const { return CatDefinitionId; }
@@ -179,8 +189,16 @@ protected:
 	/** Actor 离开 World 时先复用 GameMode 幂等协调出口，再请求 ASC 撤销自身配置授予并清理身体 Ability。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
+	/** 声明嘴部 Actor 的网络复制；只复制单一权威引用，不复制附件扫描结果或第二份携带状态。 */
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
 private:
+	/** 任意被认领世界 Actor 销毁时按回调参数释放同一引用；鱼、鱼护以外的未来嘴叼物也不会留下失效占用。 */
+	UFUNCTION()
+	void HandleMouthCarriedActorDestroyed(AActor* DestroyedActor);
+
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatConditionPresentationComponent> ConditionPresentation;
+	/** 条件快照变化时在服务器同步身体移动开关；倒地会按当前 expected-actor 释放嘴叼鱼或鱼护，避免失能角色继续占有世界物。 */
 	void RefreshPhysicalCondition();
 	void ConfigureCharacterMovementAuthority();
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatPhysicalBodyComponent> PhysicalBodyComponent;
@@ -222,4 +240,8 @@ private:
 	/** 一局功能型装配、耗材与鱼竿耐久宿主；没有等级、词条、战力或偷取接口。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Equipment", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatEquipmentComponent> EquipmentComponent;
+
+	/** 猫嘴当前被哪一个世界 Actor 独占，空值代表空嘴；拾取、抄网、鱼护和库存 Carry 都由服务器写入，客户端只读作表现和按钮判定。 */
+	UPROPERTY(Replicated)
+	TObjectPtr<AActor> MouthCarriedActor;
 };
