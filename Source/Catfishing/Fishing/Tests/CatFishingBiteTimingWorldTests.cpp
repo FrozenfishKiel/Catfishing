@@ -19,6 +19,11 @@
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/Simulation/CatFishingBiteTimingModel.h"
+#include "Character/CatCharacter.h"
+#include "Equipment/CatEquipmentComponent.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
+#include "Framework/Game/CatfishingPlayerState.h"
+#include "GameFramework/CharacterMovementComponent.h"
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingBiteTimingWorldTest,
 	"Catfishing.Unit.Fishing.BiteTiming.WorldFieldsDriveFormalStateTreeAndBobber",
@@ -109,6 +114,26 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		ACatFishingSession* Session = World->SpawnActor<ACatFishingSession>();
 		if (!Hook || !Session) return false;
 		Session->Snapshot.FishingSessionId = FGuid::NewGuid();
+		auto* BaitCharacter = World->SpawnActor<ACatCharacter>();
+		auto* BaitPlayer = World->SpawnActor<ACatfishingPlayerState>();
+		auto* BaitRod = World->SpawnActor<ACatFishingRodActor>();
+		if (!BaitCharacter || !BaitPlayer || !BaitRod) return false;
+		BaitCharacter->SetPlayerState(BaitPlayer);
+		// 本夹具只验证计时和库存；没有角色地板，禁止无控制器角色自由落出世界。
+		BaitCharacter->GetCharacterMovement()->SetComponentTickEnabled(false);
+		auto* BaitEquipment = BaitCharacter->GetEquipmentComponent();
+		for (const FName Definition : {FName(TEXT("StarterRodT1")), FName(TEXT("FeatherFloat"))})
+			if (!BaitEquipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), BaitEquipment->GetSnapshot().Revision, Definition).bCommitted) return false;
+		if (!BaitEquipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), BaitEquipment->GetSnapshot().Revision, TEXT("BugBait"), 1).bCommitted) return false;
+		if (!BaitEquipment->Use(FGuid::NewGuid(), BaitEquipment->GetSnapshot().Revision, BaitEquipment->GetSnapshot().RodItemInstanceId).bCommitted) return false;
+		const auto BaitLoadout = BaitEquipment->GetSnapshot();
+		if (!BaitEquipment->BeginFishingUse(Session->Snapshot.FishingSessionId, BaitLoadout.RodItemInstanceId,
+			BaitLoadout.BaitItemInstanceId, BaitLoadout.FloatItemInstanceId, BaitLoadout.RodDefinitionId,
+			BaitLoadout.BaitDefinitionId, BaitLoadout.FloatDefinitionId, BaitLoadout.Revision).bBaitFrozen) return false;
+		if (!BaitRod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), BaitLoadout.RodItemInstanceId,
+			BaitLoadout.RodDefinitionId, NAME_None, BaitPlayer, nullptr, true, false)) return false;
+		Session->Snapshot.RodActor = BaitRod;
+		Session->CastEquipment = BaitEquipment;
 		Session->Snapshot.CastAttemptId = FGuid::NewGuid();
 		Session->Snapshot.HookActor = Hook;
 		Session->AttemptSnapshot.ServerRandomSeed = 78629;
@@ -138,10 +163,16 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		{
 			Wrapper.TickTestWorld(0.01f);
 			if (ObservedWarningTime < 0.0 && Hook->GetPresentationState().BobberMode == ECatFishingBobberPresentationMode::BiteWarning)
+			{
 				ObservedWarningTime = World->GetTimeSeconds();
+				TestEqual(TEXT("visible fast warning already closes the refund boundary"),
+					BaitEquipment->CommitFishingBaitDeferred(Session->Snapshot.FishingSessionId).Error, ECatDomainCommandError::AlreadyResolved);
+			}
 		}
 		TestTrue(TEXT("运行时观察到预警模式"), ObservedWarningTime >= 0.0);
 		TestEqual(TEXT("正式 StateTree 真正打开咬钩窗口"), Session->GetSnapshot().Phase, ECatFishingPhase::TrueBiteWindow);
+		TestEqual(TEXT("快速抖动开始已经确认鱼饵消耗"), BaitEquipment->CommitFishingBaitDeferred(Session->Snapshot.FishingSessionId).Error,
+			ECatDomainCommandError::AlreadyResolved);
 		TestEqual(TEXT("浮漂真咬时下沉"), Hook->GetPresentationState().BobberMode, ECatFishingBobberPresentationMode::Sunk);
 		TestEqual(TEXT("实际预警持续完整时段（帧量化容差）"), World->GetTimeSeconds() - ObservedWarningTime, 1.5, 0.04);
 		TestNull(TEXT("未提竿不提前创建鱼"), Session->GetSnapshot().FishEncounterActor.Get());
@@ -163,6 +194,8 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		for (int32 Frame = 0; Frame < 500 && Session->GetSnapshot().Phase != ECatFishingPhase::Waiting; ++Frame)
 			Wrapper.TickTestWorld(0.01f);
 		TestEqual(TEXT("错过窗口后正式回到等待"), Session->GetSnapshot().Phase, ECatFishingPhase::Waiting);
+		TestEqual(TEXT("漏过快速抖动不会恢复免费退饵资格"), BaitEquipment->CommitFishingBaitDeferred(Session->Snapshot.FishingSessionId).Error,
+			ECatDomainCommandError::AlreadyResolved);
 		TestEqual(TEXT("夜里漏按不生成下一机会"), Session->BiteOpportunitySequence, 1u);
 		TestFalse(TEXT("夜里漏按不再调度咬钩"), World->GetTimerManager().IsTimerActive(Session->ProbeTimerHandle));
 		TestEqual(TEXT("浮漂恢复平静"), Hook->GetPresentationState().BobberMode, ECatFishingBobberPresentationMode::Calm);

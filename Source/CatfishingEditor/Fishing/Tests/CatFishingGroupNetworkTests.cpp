@@ -451,7 +451,7 @@ namespace CatFishingGroupNetwork
 				for (TActorIterator<ACatFishingSession> It(Clients[Index]); It; ++It)
 					if (It->GetSnapshot().FishingSessionId == SessionId) Found = *It;
 				if (!Found) return false;
-				if (!Test->TestNull(TEXT("a physical helper has no fishing session or fishing HUD ownership"),
+				if (!(Stage >= 9 && Index == 0) && !Test->TestNull(TEXT("a physical helper has no fishing session or fishing HUD ownership"),
 					UCatFishingViewBridge::FindFishingSessionForPlayerState(Clients[Index], LocalClients[Index]->PlayerState))) return true;
 				ClientSessions.Add(Found);
 			}
@@ -582,6 +582,76 @@ namespace CatFishingGroupNetwork
 				Test->TestEqual(TEXT("R retake preserves rod identity"), Rod->GetPresentationState().RodActorId, RodId);
 				Test->TestEqual(TEXT("R retake preserves the same rod inventory instance"), Rod->GetPresentationState().ItemInstanceId, RodItemId);
 				Test->TestEqual(TEXT("R retake restores only the owner as fisher"), Session->GetSnapshot().FisherPlayerState.Get(), Primary->PlayerState.Get());
+				Primary->GetFishingCommandComponent()->SubmitRodInteract();
+				for (auto* Local : LocalClients)
+				{
+					auto* Grab = CastChecked<ACatCharacter>(Local->GetPawn())->GetPhysicalBodyComponent()->GetGrab();
+					Grab->SetGrabInput(true, false);
+					Grab->SetGrabInput(false, false);
+				}
+				auto* Borrower = CastChecked<ACatCharacter>(RemoteControllers[0]->GetPawn());
+				Borrower->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator,
+					Rod->GetGripWorldTransform().GetLocation() - FVector(80, 0, 0)), TEXT("SharedRodNetworkPickup"));
+				Stage = 8;
+				return false;
+			}
+			if (Stage == 8)
+			{
+				for (const auto* ClientRod : ClientRods) if (ClientRod->GetOperatorCount() != 0) return false;
+				auto* RemoteCat = CastChecked<ACatCharacter>(RemoteControllers[0]->GetPawn());
+				auto* LocalCat = CastChecked<ACatCharacter>(LocalClients[0]->GetPawn());
+				if (FVector::Distance(RemoteCat->GetActorLocation(), LocalCat->GetActorLocation()) > 10.0
+					|| !RemoteCat->GetPhysicalBodyComponent()->IsGrounded() || !LocalCat->GetPhysicalBodyComponent()->IsGrounded()
+					|| RemoteCat->GetPhysicalBodyComponent()->GetControlEpoch() != LocalCat->GetPhysicalBodyComponent()->GetControlEpoch()
+					|| RemoteCat->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true)
+					|| RemoteCat->GetPhysicalBodyComponent()->GetGrab()->IsGripping(false)) return false;
+				const FRotator PickupAim = (ClientRods[0]->GetGripWorldTransform().GetLocation() - LocalCat->GetActorLocation()).Rotation();
+				LocalClients[0]->SetControlRotation(PickupAim);
+				LocalCat->GetPhysicalBodyComponent()->SetViewIntent(PickupAim);
+				if (FMath::Abs(FMath::FindDeltaAngleDegrees(RemoteControllers[0]->GetControlRotation().Yaw, PickupAim.Yaw)) > 5) return false;
+				SharedPickupRequest = LocalClients[0]->GetFishingCommandComponent()->SubmitRodInteract().RequestId;
+				Stage = 9;
+				return false;
+			}
+			if (Stage == 9)
+			{
+				FCatFishingCommandResult Receipt;
+				if (!LocalClients[0]->GetFishingCommandComponent()->TryGetResult(SharedPickupRequest, Receipt)) return false;
+				if (!Test->TestTrue(TEXT("a different owning client R receives the shared pickup success"), Receipt.bCommitted)) return true;
+				for (int32 Index = 0; Index < ClientRods.Num(); ++Index)
+				{
+					const auto* Fisher = ClientSessions[Index]->GetSnapshot().FisherPlayerState.Get();
+					const auto* Operator = ClientRods[Index]->GetPresentationState().OperatorPlayerState.Get();
+					if (!Fisher || !Operator || Fisher->GetPlayerId() != RemoteControllers[0]->PlayerState->GetPlayerId()
+						|| Operator->GetPlayerId() != Fisher->GetPlayerId()) return false;
+				}
+				if (!Test->TestEqual(TEXT("server rebinds the same fight session to the borrowing client"),
+					Session->GetSnapshot().FisherPlayerState.Get(), RemoteControllers[0]->PlayerState.Get())) return true;
+				if (!Test->TestEqual(TEXT("borrower's fishing view resolves the transferred session"),
+					UCatFishingViewBridge::FindFishingSessionForPlayerState(Clients[0], LocalClients[0]->PlayerState), ClientSessions[0])) return true;
+				Test->TestEqual(TEXT("shared client pickup keeps the original item"), Rod->GetPresentationState().ItemInstanceId, RodItemId);
+				SharedPullRequest = LocalClients[0]->GetFishingCommandComponent()->SubmitPrimaryPressed().RequestId;
+				Stage = 10;
+				return false;
+			}
+			if (Stage == 10)
+			{
+				FCatFishingCommandResult Receipt;
+				if (!LocalClients[0]->GetFishingCommandComponent()->TryGetResult(SharedPullRequest, Receipt)) return false;
+				if (!Test->TestTrue(TEXT("borrower reel RPC is accepted under the transferred control epoch"), Receipt.bCommitted)
+					|| !Test->TestTrue(TEXT("borrower actually reels in the authority session"), Session->GetSnapshot().bReeling)) return true;
+				LocalClients[0]->GetFishingCommandComponent()->SubmitPrimaryReleased();
+				LocalClients[0]->GetFishingCommandComponent()->SubmitRodInteract();
+				Stage = 11;
+				return false;
+			}
+			if (Stage == 11)
+			{
+				if (Rod->GetOperatorCount() != 0) return false;
+				for (int32 Index = 0; Index < ClientRods.Num(); ++Index)
+					if (ClientRods[Index]->GetOperatorCount() != 0 || ClientSessions[Index]->GetSnapshot().FisherPlayerState) return false;
+				Test->AddInfo(FString::Printf(TEXT("Event=shared_rod_client_takeover_verified SessionId=%s RodActorId=%s PickupRequestId=%s PullRequestId=%s Clients=3 Result=SameFightReeledAndReleased Evidence=runtime_behavior"),
+					*SessionId.ToString(), *RodId.ToString(), *SharedPickupRequest.ToString(), *SharedPullRequest.ToString()));
 				Test->AddExpectedErrorPlain(TEXT("Outcome=ECatFishingOutcome::Cancelled"), EAutomationExpectedErrorFlags::Contains, 1);
 				Session->CancelFromAuthority(FGuid::NewGuid());
 				return true;
@@ -613,7 +683,7 @@ namespace CatFishingGroupNetwork
 		FVector InitialRodPosition = FVector::ZeroVector, InitialFishPosition = FVector::ZeroVector;
 		TArray<FVector> InitialHelperPositions;
 		uint32 OldEpoch = 0;
-		FGuid RodId, RodItemId, SessionId, StaleRequest;
+		FGuid RodId, RodItemId, SessionId, StaleRequest, SharedPickupRequest, SharedPullRequest;
 		TWeakObjectPtr<ACatFishingRodActor> Rod;
 		TWeakObjectPtr<ACatFishingSession> Session;
 		TWeakObjectPtr<UCatEquipmentComponent> Equipment;

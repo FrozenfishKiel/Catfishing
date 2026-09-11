@@ -132,7 +132,9 @@ bool UCatFishingPhysicalRodComponent::BeginPrimaryHold(APlayerState* Player, con
 	UCatPhysicalBodyComponent* Physical = Cat ? Cat->GetPhysicalBodyComponent() : nullptr;
 	UCatPhysicsGrabComponent* Grab = Physical ? Physical->GetGrab() : nullptr;
 	if (!bReady || !GetOwner()->HasAuthority() || !Grab) return false;
-	if (Player != CastChecked<ACatFishingRodActor>(GetOwner())->GetPresentationState().OwnerPlayerState) return false;
+	const auto* Rod = CastChecked<ACatFishingRodActor>(GetOwner());
+	if (!Rod->GetPresentationState().bDeployed || Rod->GetPresentationState().bBroken
+		|| (Rod->GetPresentationState().OperatorPlayerState && !Rod->IsPrimaryOperator(Player))) return false;
 	ObserveGrab(Grab);
 	if (IsHeldBy(Player)) return true;
 	const bool bLeft = !Grab->IsGripping(true);
@@ -164,7 +166,7 @@ bool UCatFishingPhysicalRodComponent::CommitPrimaryHold(APlayerState* Player)
 	auto* Cat = Player ? Cast<ACatCharacter>(Player->GetPawn()) : nullptr;
 	auto* Grab = Cat && Cat->GetPhysicalBodyComponent() ? Cat->GetPhysicalBodyComponent()->GetGrab() : nullptr;
 	if (!Rod || !Rod->HasAuthority() || !Rod->IsPrimaryOperator(Player)
-		|| Rod->GetPresentationState().OwnerPlayerState != Player || !Grab) return false;
+		|| !Grab) return false;
 	// Retain and control publish grip callbacks; defer reconciliation until both flags are committed.
 	TGuardValue<bool> Preparing(bPreparingPrimaryHold, true);
 	// Commit only one existing contact. The other hand remains an ordinary continuous grip.

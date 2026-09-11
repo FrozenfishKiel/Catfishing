@@ -420,7 +420,7 @@ FCatFishingInputEdge UCatFishingCommandComponent::MakeDiscreteEdge()
 
 FCatFishingInputEdge UCatFishingCommandComponent::SubmitRodInteract()
 {
-	// R explicitly takes or releases owner control; physical assistance has no command role.
+	// R explicitly takes or releases primary control; physical assistance has no command role.
 	FCatFishingInputEdge Edge = MakeDiscreteEdge();
 	UE_LOG(LogCatFishing, Log,
 		TEXT("Event=fishing_rod_interact_requested RequestId=%s InputSequence=%lld %s"),
@@ -807,16 +807,14 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		}
 		else if (TargetRod)
 		{
-			const bool bOwner = Controller->PlayerState
-				&& TargetRod->GetPresentationState().OwnerPlayerState == Controller->PlayerState;
-			const bool bPrimary = bOwner && TargetRod->IsPrimaryOperator(Controller->PlayerState);
+			const bool bPrimary = TargetRod->IsPrimaryOperator(Controller->PlayerState);
 			const bool bCurrentControl = CurrentRod == TargetRod
 				&& Edge.ControlRodActorId == TargetRod->GetPresentationState().RodActorId
 				&& Edge.ControlEpoch != 0 && Edge.ControlEpoch == TargetRod->GetControlEpoch();
 			if (!bPrimary || !bCurrentControl)
 			{
 				Result.Error = bPrimary ? ECatFishingCommandError::InputSequenceStale : ECatFishingCommandError::NotFisher;
-				RejectReason = !bOwner ? TEXT("NotRodOwner") : !bPrimary ? TEXT("NotCurrentOperator") : TEXT("StaleControl");
+				RejectReason = !bPrimary ? TEXT("NotCurrentOperator") : TEXT("StaleControl");
 			}
 		}
 		if (RejectReason)
@@ -927,7 +925,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	}
 	if (Fishing)
 	{
-		// R 架住当前主控竿；空手优先拾回附近本人架竿，否则部署本人库存实体竿。
+		// R 架住当前主控竿；空手优先接管附近空闲竿，否则部署本人库存实体竿。
 		if (CommandType == ECatFishingCommandType::OperateRod)
 		{
 			const ACatCharacter* Character = Cast<ACatCharacter>(Controller->GetPawn());
@@ -947,18 +945,18 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				for (const bool bLeft : {true, false})
 				{
 					UPrimitiveComponent* Target = Body->GetGrab()->GetGripTargetComponent(bLeft);
-					auto* HeldOwnRod = Target ? Cast<ACatFishingRodActor>(Target->GetOwner()) : nullptr;
-					if (!HeldOwnRod || HeldOwnRod->GetPresentationState().OwnerPlayerState != Controller->PlayerState) continue;
+					auto* HeldRod = Target ? Cast<ACatFishingRodActor>(Target->GetOwner()) : nullptr;
+					if (!HeldRod || HeldRod->GetOperatorCount() != 0 || HeldRod->GetPresentationState().bBroken) continue;
 					FCatOperateRodCommand OperateCommand;
 					OperateCommand.Context.RequestId = Edge.RequestId;
-					OperateCommand.Context.RodActorId = HeldOwnRod->GetPresentationState().RodActorId;
-					OperateCommand.Context.ExpectedRodActorRevision = HeldOwnRod->GetPresentationState().RodActorRevision;
+					OperateCommand.Context.RodActorId = HeldRod->GetPresentationState().RodActorId;
+					OperateCommand.Context.ExpectedRodActorRevision = HeldRod->GetPresentationState().RodActorRevision;
 					DeliverResultFromAuthority(Fishing->OperateRod(Controller, OperateCommand));
 					return;
 				}
 			}
 			if (ACatFishingRodActor* ParkedRod = Character
-				? Fishing->FindNearestOperableOwnedRod(Controller->PlayerState, Character->GetActorLocation(), 250.0) : nullptr)
+				? Fishing->FindNearestOperableRod(Controller->PlayerState, Character->GetActorLocation(), 250.0) : nullptr)
 			{
 				FCatOperateRodCommand OperateCommand;
 				OperateCommand.Context.RequestId = Edge.RequestId;
@@ -1034,8 +1032,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 		// 按当前主操作位对应的鱼竿判断是否有会话；玩家留在其他鱼竿上的会话不会截获这里的输入。
 		if (!Fishing->TryGetActiveSessionForController(Controller, SessionId, Snapshot))
 		{
-			// 地面无人值守的上钩会话仍可就近切线：会话会再次校验竿主/最后持竿者和 250cm 距离。
-			// 普通 Cancel 只在可切线阶段优先走止损；等待期仍保留后面的收竿/拒绝语义。
+			// 空闲竿有线时，任何附近玩家的 X 都先收线；会话再次校验占用与 250cm 距离。
 			if (CommandType == ECatFishingCommandType::CancelFishing
 				|| CommandType == ECatFishingCommandType::CutLine)
 			{
@@ -1048,6 +1045,10 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 				{
 					const FCatFishingSessionSnapshot& Unattended = UnattendedSession->GetSnapshot();
 					const bool bCuttable = Unattended.Phase == ECatFishingPhase::HookedFight
+						|| Unattended.Phase == ECatFishingPhase::CastFlight
+						|| Unattended.Phase == ECatFishingPhase::Waiting
+						|| Unattended.Phase == ECatFishingPhase::Probe
+						|| Unattended.Phase == ECatFishingPhase::TrueBiteWindow
 						|| Unattended.Phase == ECatFishingPhase::NearShore
 						|| Unattended.Phase == ECatFishingPhase::ExhaustedReel
 						|| Unattended.Phase == ECatFishingPhase::AutoHauling;
@@ -1096,20 +1097,6 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 			if (CommandType == ECatFishingCommandType::CancelFishing)
 			{
 				ACatFishingRodActor* Rod = Fishing->FindRodOperatedBy(Controller->PlayerState);
-				// 多人：正在操作别人的竿 → X 只是离开竿位（不能收走别人的竿）。
-				if (Rod)
-				{
-					const FCatFishingRodPresentationState& OperatedState = Rod->GetPresentationState();
-					if (OperatedState.OwnerPlayerState != Controller->PlayerState)
-					{
-						FCatLeaveRodCommand Leave;
-						Leave.Context.RequestId = Edge.RequestId;
-						Leave.Context.RodActorId = OperatedState.RodActorId;
-						Leave.Context.ExpectedRodActorRevision = OperatedState.RodActorRevision;
-						DeliverResultFromAuthority(Fishing->LeaveRod(Controller, Leave));
-						return;
-					}
-				}
 				if (!Rod)
 				{
 					const ACatCharacter* Character = Cast<ACatCharacter>(Controller->GetPawn());
@@ -1255,7 +1242,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 }
 
 
-// 服务器抛竿流程：要求本人处于某根竿的主操作位（鱼竿可以属于别人）；视线射线∩水面得到候选落点；
+// 服务器抛竿流程：要求本人处于某根共享竿的主操作位；视线射线∩水面得到候选落点；
 // RodActorId/Revision、Equipment Revision、WaterRegion Handle 全部由服务器事实填充，客户端不传任何载荷。
 void UCatFishingCommandComponent::BeginCastFromViewOnAuthority(APlayerController* Controller, const FCatFishingInputEdge& Edge)
 {

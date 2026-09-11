@@ -1,5 +1,32 @@
 # 钓鱼核心架构（技术文档）
 
+## 2026-09-11：共享鱼竿与按快速抖动划界的退饵
+
+当前规则：鱼竿是可共享的同一物品实例，没有部署者专属操作或收纳权限。R 放下当前竿，空手时拿起 250cm 内无人操作的竿；无目标时仍从自己的背包部署。X 有鱼线时先收线，无鱼线时收进按键者的背包。单竿同时只有一个显式主控，普通物理帮助不会自动接任。抛出立即扣实际抛竿者 1 份鱼饵；快速抖动 `BiteWarning` 开始前收线退还，上鱼成功（Caught/Landed）也退还；快速抖动开始后普通收线不退，即使漏过窗口重新回到 Waiting。退款始终给原扣饵者，接管不会新扣饵。下文历史检查点中的“仅本人竿”“仅主人 X”及“提竿才确认饵消耗”不再是当前规则。
+
+本轮发现：试玩日志 `打包/Windows/Catfishing/Saved/Logs/Catfishing.log` 的 17:38–17:39 多次 R 已到服务器，却因筛掉另一玩家的附近竿而转入 PlaceRod，得到 `NoUsableInventoryRod`。未发现按离开时长拒绝拾取的计时规则。开始时工作区已有 Character/Physics、PlayerController、GameMode、Online 与网络测试并行改动，保留并单独审查本轮差异。修改前 FirstRod 自动化基线 1 项通过；新构建/运行结果见本节交付记录。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| R 入口与目标 | `AbilitySystem/Fishing/InputAbilities/CatFishingRodInteractAbility::ActivateAbility` → `Fishing/Integration/CatFishingCommandComponent::SubmitRodInteract` → Service | 原仅本人竿；目标任何附近空闲可用竿。250cm、R 放下、无目标部署及默认输入均保持 | 原查询替换为 `FindNearestOperableRod`，已握空闲目标优先，随后最近空闲竿 | 先接收方后切查询 | 两正式竿型号、65秒架放、异玩家无库存接管、原实例与库存版本 | 已接入；FirstRod 最终复核通过（两种正式竿、架放65秒） |
+| 授权、握持与失败回滚 | `Service::OperateRod` → `RodActor::SetPrimaryOperatorFromAuthority` → `PhysicalRod::BeginPrimaryHold/CommitPrimaryHold` | 原要求主控等于部署者；改为空闲才可显式取得，不抢占已有主控 | 原单事务内授予，失败恢复姿态并释放本次握持；原角色位置/单位/时序不变 | 真实握持 → 主控 → Session → 提交持握 | 已占用、双手占用、过期Revision、恢复失败 | 已接入；成功事件 `fishing_rod_operated`，拒绝 `AlreadyControlled/PhysicalHoldRequired` |
+| 会话与搏鱼输入 | `Session::PrepareSessionFromAuthority/ResumePrimaryControlFromAuthority` → `FightRunner::ResumePrimaryFromAuthority/RefreshParticipants`；Command 控制世代门 | 原多处 Owner 门禁；改为当前显式主控。鱼、Hook、Session及扣饵记录不迁移 | 替换纯C++旧 Owner 命名入口；删除输入的 Owner 条件，保留 RodActorId/ControlEpoch/序号检查 | Runner → Session → RPC；体力只结算当前操作者 | 借竿抛出、等待接管、同场搏鱼/收线、旧边沿拒绝 | 已接入；OperatorIntegration 用不同部署者测试真实ASC采样及单次扣费 |
+| X 与库存物品 | `Service::FindNearestPackableRod/PackRod` → `Inventory::MoveHeldInventoryEntriesToCustodianFromAuthority` → `Equipment::UnUse` | 原仅归还部署者；改为收进当前按键者背包 | 先关闭世界部署态，移动精确 held entry，再 UnUse；满包时移回并恢复部署；成功按原来源索引注销 | 同一实例转移 → 入包 → 原来源清理 | ItemInstanceId、数量与耐久不变、满包/通知重入、不复制旧库存 | 已接入；FirstRod 最终复核通过；满包拒绝恢复原实例、腾位后另一玩家 X 入包及源活动区清除均成立 |
+| 空闲竿收线 | `FindNearestUnattendedSessionRod` → `Session::CutLineFromAuthority` | 原仅已上钩且限原主/最后钓手；目标附近玩家可收任意阶段空闲竿的线 | 增加 CastFlight/Waiting/Probe/TrueBiteWindow，鱼战前 Cancelled、鱼战中 LineCut；删无消费者的 LastSuspendedFisherPlayerState | 原 X 分派 → 同一终局写口 | 250cm、占用校验、快速抖动前后、不同玩家返饵归属 | 已接入；OwnedRod 生命周期回归扩充共享抛竿及他人收线 |
+| 扣饵与终局返还 | `Equipment::BeginFishingUse/CommitFishingBaitDeferred/ReleaseFishingUse`；`Session::HandleBiteWarningTimer/FinalizeSession` | Begin 已扣1；原到选鱼才确认且捕获不退。现抖动开始关闭免费退回，成功上鱼可返还已确认的一份 | 保留同Session的饵定义作退款凭证，终局仅返还一次；选择鱼时不再第二次提交饵消耗 | Begin扣1 → 快速抖动确认 → 同一终局退款 | 预警而非下沉边界、漏窗不重置、Caught/失败、重复请求 | 已接入；BiteTimingWorld 使用正式库存验证可见预警时已确认，BaitRestock 覆盖退款幂等 |
+| 满包、退出与持久化衔接 | `Equipment::ReleaseFishingUse/RetryPendingBaitReturns` → Inventory `OnInventoryObservedChanged`；`Service::PreserveFishingResourcesForEquipmentShutdown` | 原满包返回失败但终局缺重试；目标保留原退款 | 库存变化时重试；待退款不锁竿、不保留活动会话；离场将待退款记录一并移入原扣饵者托管。X 精确移动后原库存导出不再含该竿 | 关闭会话权限 → 退饵或保留待退记录 → 库存变化/离场衔接 | 满包腾位、重入、离线托管、原玩家不重复持有 | 已接入；满包自动退款及不锁竿回归通过；既有离场托管场景通过，新增待退款离场组合与磁盘存档往返未单独实跑 |
+| 网络、UI、资产和默认值 | `Rod::PresentationState/ControlEpoch` → Camera/ViewBridge；`/Game/Blueprint/Actors/BP_CatFishingRodActor`、`/Game/Blueprint/Abilities/BP_GA_RodInteract` | 使用原操作者复制，不改字段单位、枚举、默认值、输入映射或资产 | `OwnerPlayerState` 暂留为历史序列化的部署来源，库存/注销仍消费它，不用于玩法权限；隐藏BP图引用未确认，不能删除。无生成/迁移脚本、Cook入口变更 | 权威 → 原复制与回执 → 原表现 | 正式BP加载与四端状态；打包两端默认日志 | 正式四端客户端 R 接管、实际收线、三客户端主控/会话复制与 ViewBridge 切换通过；新包真人验收尚未执行 |
+| 清理、测试与交付边界 | `Fishing/Tests`、`Equipment/Tests`、`Editor/Fishing/Tests/CatFishingGroupNetworkTests`；本节和唯一差距清单 | 原权限断言及注释与共享玩法冲突 | 更新断言/当前说明；旧 Owner 查询/恢复名称和最后操作者特权已删除；保留有库存及二进制消费者的来源字段 | 基线 → 专项 → 相关回归 → 构建与检查点 | contract、runtime_behavior、presentation_delivery 分开记录 | 相关组合73项中72通过，唯一破竿换新测试补齐部署前提后6项复核全通过；合并覆盖73项；不关闭 Fishing/Delivery 模块 |
+| 破竿换新测试夹具 | `Equipment/Tests/CatRodReplacementTests.cpp::BreakDeployedRod` 手工创建 Actor → `PackRod` | 原测试遗漏正式 PlaceRod 会写入的 Instigator，无法定位共享物品来源 | 补齐测试来源角色；不改变生产门禁或原零耐久/实例/换竿断言 | 创建 → 来源 → 身份绑定 → 磨损 → 收纳/换新 | 四种购买/收纳顺序及共享收纳复核 | 已补齐；Confirmation 6/6通过，原破竿换新全部断言通过 |
+
+本轮交付证据（仅对应本节修改）：
+
+- `contract`：隔离 Editor `Saved/Logs/RodSharing-IsolatedEditor-03.log`、最终测试夹具构建 `RodSharing-IsolatedEditor-Final.log`，主工程 Game Win64 Development `Saved/Logs/RodSharing-GameDevelopment.log` 全部成功。早期原工程 Editor 链接受正在运行的用户编辑器/游戏占用；复制构建缓存的路径问题已通过重新生成隔离 Intermediate 排除。测试源码与主工作区本轮文件哈希记录在 `Saved/Validation/RodSharing-20260911/SourceManifest.json`。
+- `runtime_behavior`：`Saved/Automation/RodSharing-Final-20260911/Report/index.json` 为73项、72通过（63 clean、9 warning）；唯一失败是手工鱼竿缺部署来源的旧夹具。修正夹具后 `Saved/Automation/RodSharing-Confirmation-20260911/Report/index.json` 6/6通过（4 clean、2 warning），与前轮合并覆盖73项，未重写失败报告。真实客户端共享接管事件 `shared_rod_client_takeover_verified` 的 SessionId=`64D060244E2C585E27384D83A0909B54`，PickupRequestId=`1570CD614EDAF4F036ECAA867223BB58`；同一搏鱼继续收线并放下、服务器和三客户端复制、借竿者 ViewBridge、满包收纳回滚均已运行。完整日志为两个报告上级目录的 `Automation.log`；网络测试有无音频设备及过期移动世代拒绝警告，未弱化原断言。
+- `presentation_delivery`：加载正式竿 BP，并验证现有视图消费者；本轮未人工观看新画面、未新 Cook/打包，也未取得修改后打包房主与独立客户端的默认落盘日志，因此不关闭模块交付状态。旧试玩房主日志为 `打包/Windows/Catfishing/Saved/Logs/Catfishing.log`，只用于复现原因。新包应核对双方 `<打包根目录>/Catfishing/Saved/Logs` 的 `LogCatFishing` / `LogCatEquipment`，按 `fishing_rod_interact_requested`、`fishing_rod_operated`、`fishing_primary_resumed`、`fishing_bait_refund_boundary`、`fishing_use_released` 及 RequestId/SessionId/RodActorId 关联。
+
+保留项：`OwnerPlayerState` 仍被来源账本、登记/注销和既有序列化消费，Blueprint 隐藏图引用未确认，不能按文本搜索删除；纯 C++ 的旧 Owner 接管/查询入口和最后钓手专属收线权限已移除。待退款离场组合与新包双端验收仍未完成，记录在唯一差距清单。本轮不改存档格式、输入资产、Cook 配置或资产生成脚本。
+
 ## 2026-09-11：接入祭坛、搬运与售鱼上游改动
 
 以本地 `dfb9509`（包含入夜咬钩分流、个人意图出力、99999 秒白天及跳过清晨）合并上游 `418bd74`，保留正常双亲历史。合并前的 16 份鱼定义及 1 份未跟踪讨论文档备份于 `Saved/Integration/Upstream-20260911-Second/backup`，鱼定义另存 Git stash，未跟踪文档保持原样。

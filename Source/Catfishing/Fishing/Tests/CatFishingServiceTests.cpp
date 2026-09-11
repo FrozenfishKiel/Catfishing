@@ -319,8 +319,10 @@ bool FCatFishingServiceRodBoundSessionRoutingTest::RunTest(const FString& Parame
 	TestEqual(TEXT("主操作手离开后鱼竿占位数组为空"), FirstRod->GetOperatorCount(), 0);
 	TestEqual(TEXT("主操作手离开后同一鱼竿切到地面姿态"),
 		FirstRod->GetPresentationState().PoseMode, ECatFishingRodPoseMode::Grounded);
-	TestFalse(TEXT("旁人不能从物理接触获得本人鱼竿操作权"), FirstRod->SetPrimaryOperatorFromAuthority(ReplacementFisher,FirstRod->GetPresentationState().RodActorRevision));
 	TestFalse(TEXT("旁人不会自动接任空出的操作位"),FirstRod->IsPrimaryOperator(ReplacementFisher));
+	TestTrue(TEXT("服务器可显式将空闲鱼竿交给接力者"), FirstRod->SetPrimaryOperatorFromAuthority(ReplacementFisher,FirstRod->GetPresentationState().RodActorRevision));
+	TestFalse(TEXT("部署者不能抢占接力者的操作位"), FirstRod->SetPrimaryOperatorFromAuthority(PlayerState,FirstRod->GetPresentationState().RodActorRevision));
+	TestTrue(TEXT("清理显式接力操作位"), FirstRod->SetPrimaryOperatorFromAuthority(nullptr,FirstRod->GetPresentationState().RodActorRevision));
 	TestFalse(TEXT("离开后旧会话不再截获玩家输入"),
 		Fishing->TryGetActiveSessionForController(Controller, RoutedSessionId, RoutedSnapshot));
 

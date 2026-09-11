@@ -287,6 +287,24 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("formal hook actually lands after flight"), Hook->GetPresentationState().Phase, ECatFishingHookPresentationPhase::Landed);
 		TestFalse(TEXT("landed owned-rod session remains active"), Session->IsTerminal());
 		TestTrue(TEXT("formal hook reaches the server corrected water point"), Hook->GetActorLocation().Equals(CastResult.ServerCorrectedLandingWorldPoint, 1.0));
+		if (ExitScenario == 0)
+		{
+			FCatLeaveRodCommand Leave;
+			Leave.Context = Context();
+			if (!TestTrue(TEXT("R release preserves the live shared cast"), Fishing->LeaveRod(Owner.Controller, Leave).bCommitted)) return false;
+			Helper.Character->GetPhysicalBodyComponent()->TeleportBodyFromAuthority(FTransform(FRotator::ZeroRotator,
+				Rod->GetGripWorldTransform().GetLocation() - FVector(80, 0, 0)), TEXT("SharedSessionPickup"));
+			FCatOperateRodCommand Take;
+			Take.Context = Context();
+			if (!TestTrue(TEXT("another player explicitly takes the existing waiting session"), Fishing->OperateRod(Helper.Controller, Take).bCommitted)) return false;
+			TestEqual(TEXT("takeover binds the guest to the same hook"), Session->GetSnapshot().HookActor.Get(), Hook);
+			TestEqual(TEXT("takeover changes the actual session input receiver"), Session->GetSnapshot().FisherPlayerState.Get(), static_cast<APlayerState*>(Helper.State));
+			TestEqual(TEXT("takeover cannot debit another bait"), Quantity(Owner.Equipment, TEXT("BugBait")), 3);
+			Leave.Context = Context();
+			if (!Fishing->LeaveRod(Helper.Controller, Leave).bCommitted) return false;
+			Take.Context = Context();
+			if (!TestTrue(TEXT("deployer can retake the same released session"), Fishing->OperateRod(Owner.Controller, Take).bCommitted)) return false;
+		}
 
 		// 旁人只有真实约束，不调用 OperateRod，不进入会话或取得装备预留。
 		const auto AttachPhysicalHelper = [&]()
@@ -419,6 +437,47 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 			UCatSurvivalAttributeSet::GetFightStaminaAttribute()), HelperStamina);
 		TestFalse(TEXT("physical assistance never acquires a fishing equipment reservation"), Helper.Equipment->HasActiveFishingUse());
 		TestNull(TEXT("physical assistance never acquires a session index"), UCatFishingViewBridge::FindFishingSessionForPlayerState(World, Helper.State));
+		if (ExitScenario == 0)
+		{
+			FCatLeaveRodCommand Leave;
+			Leave.Context = Context();
+			if (!Fishing->LeaveRod(Owner.Controller, Leave).bCommitted) return false;
+			if (!Helper.Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), Helper.Equipment->GetSnapshot().Revision, TEXT("FeatherFloat")).bCommitted
+				|| !Helper.Equipment->GrantInventoryQuantityFromAuthority(FGuid::NewGuid(), Helper.Equipment->GetSnapshot().Revision, TEXT("BugBait"), 2).bCommitted) return false;
+			for (const bool bAfterWarning : {false, true})
+			{
+				FCatOperateRodCommand Take;
+				Take.Context = Context();
+				if (!TestTrue(TEXT("guest can operate an empty shared rod"), Fishing->OperateRod(Helper.Controller, Take).bCommitted)) return false;
+				auto BorrowedCommand = CastCommand();
+				BorrowedCommand.ExpectedEquipmentRevision = Helper.Equipment->GetSnapshot().Revision;
+				const auto BorrowedCast = Fishing->BeginCast(Helper.Controller, BorrowedCommand);
+				if (!TestTrue(TEXT("guest casts a shared rod through the production transaction"), BorrowedCast.Command.bCommitted)) return false;
+				auto* BorrowedSession = Fishing->FindSession(BorrowedCast.Command.FishingSessionId);
+				if (!BorrowedSession) return false;
+				TestEqual(TEXT("cast debits the actual caster's bait"), Quantity(Helper.Equipment, TEXT("BugBait")), 1);
+				TestEqual(TEXT("shared cast does not debit the deployer"), Quantity(Owner.Equipment, TEXT("BugBait")), 4);
+				if (bAfterWarning)
+				{
+					for (int32 Frame = 0; Frame < 5000 && BorrowedSession->GetSnapshot().HookActor
+						&& BorrowedSession->GetSnapshot().HookActor->GetPresentationState().BobberMode != ECatFishingBobberPresentationMode::BiteWarning; ++Frame)
+						TickConnectedWorld(.01f);
+					if (!TestTrue(TEXT("production timers reach the visible fast warning"), BorrowedSession->GetSnapshot().HookActor
+						&& BorrowedSession->GetSnapshot().HookActor->GetPresentationState().BobberMode == ECatFishingBobberPresentationMode::BiteWarning)) return false;
+				}
+				Leave.Context = Context();
+				if (!Fishing->LeaveRod(Helper.Controller, Leave).bCommitted) return false;
+				FCatFishingSessionCommandContext Recall;
+				Recall.RequestId = FGuid::NewGuid();
+				Recall.FishingSessionId = BorrowedSession->GetSnapshot().FishingSessionId;
+				Recall.CastAttemptId = BorrowedSession->GetSnapshot().CastAttemptId;
+				Recall.ExpectedRevision = BorrowedSession->GetSnapshot().Revision;
+				AddExpectedErrorPlain(TEXT("Outcome=ECatFishingOutcome::Cancelled"), EAutomationExpectedErrorFlags::Contains, 1);
+				if (!TestTrue(TEXT("a nearby different player can X-recall the unattended line"), BorrowedSession->CutLineFromAuthority(Owner.Controller, Recall).bCommitted)) return false;
+				TestEqual(TEXT("recall refunds the caster only before fast warning"), Quantity(Helper.Equipment, TEXT("BugBait")), bAfterWarning ? 1 : 2);
+				TestEqual(TEXT("recall never gives bait to the person pressing X"), Quantity(Owner.Equipment, TEXT("BugBait")), 4);
+			}
+		}
 		AddInfo(FString::Printf(TEXT("Event=owned_rod_service_lifecycle_verified Scenario=%d SessionId=%s RodItemInstanceId=%s Operators=%d Durability=%.3f Evidence=runtime_behavior"),
 			ExitScenario, *CastResult.Command.FishingSessionId.ToString(), *OwnerRodId.ToString(), Rod->GetOperatorCount(), CatFishingTest::Durability(ReleasedRod)));
 	}

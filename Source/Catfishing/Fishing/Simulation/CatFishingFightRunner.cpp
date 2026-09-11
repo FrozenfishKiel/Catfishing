@@ -236,8 +236,8 @@ bool UCatFishingFightRunner::RefreshPrimaryOperatorFromRod()
 		State.bOperatorPresent = false; OperatorState = {}; AbilitySystem.Reset();
 		return true;
 	}
-	// Only Service's explicit owner command may bind or resume the session. Physical helpers are never inspected.
-	return Primary == Rod->GetPresentationState().OwnerPlayerState && Primary == OperatorState.PlayerState
+	// Only Service's explicit primary command may bind or resume the session. Physical helpers are never inspected.
+	return Primary == OperatorState.PlayerState
 		&& Primary->GetPawn() == OperatorState.Character && State.bOperatorPresent;
 }
 
@@ -511,12 +511,12 @@ bool UCatFishingFightRunner::SetFishExhaustedFromAuthority()
 	return true;
 }
 
-bool UCatFishingFightRunner::ResumeOwnerFromAuthority(APlayerState* NewPlayerState, UCatAbilitySystemComponent* NewAbilitySystem,
+bool UCatFishingFightRunner::ResumePrimaryFromAuthority(APlayerState* NewPlayerState, UCatAbilitySystemComponent* NewAbilitySystem,
 	const double NewCatStrength, const double NewCatStaminaMaximum, const double NewCatStamina,
 	const int64 InitialInputSequence, const bool bInitialPullHeld, const bool bInitialSlackHeld)
 {
 	const auto* Rod = RodActor.Get();
-	if (!bInitialized || !Rod || !NewPlayerState || NewPlayerState != Rod->GetPresentationState().OwnerPlayerState
+	if (!bInitialized || !Rod || !NewPlayerState
 		|| !Rod->IsPrimaryOperator(NewPlayerState) || !NewAbilitySystem || InitialInputSequence < 0
 		|| !FMath::IsFinite(NewCatStrength) || NewCatStrength < 0.0 || !FMath::IsFinite(NewCatStaminaMaximum) || NewCatStaminaMaximum <= 0.0
 		|| !FMath::IsFinite(NewCatStamina) || NewCatStamina < 0.0 || NewCatStamina > NewCatStaminaMaximum) return false;

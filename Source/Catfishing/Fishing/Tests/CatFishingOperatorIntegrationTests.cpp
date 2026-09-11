@@ -41,10 +41,11 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 	Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	ACatCharacter* Cat = World->SpawnActor<ACatCharacter>(FVector(0, 0, 20), FRotator::ZeroRotator, Spawn);
 	APlayerState* Player = World->SpawnActor<ACatfishingPlayerState>();
+	APlayerState* Deployer = World->SpawnActor<ACatfishingPlayerState>();
 	auto* Controller = World->SpawnActor<ACatfishingPlayerController>();
 	ACatFishingSession* Session = World->SpawnActor<ACatFishingSession>();
 	ACatFishingRodActor* Rod = World->SpawnActor<ACatFishingRodActor>();
-	if (!Cat || !Player || !Controller || !Session || !Rod) return false;
+	if (!Cat || !Player || !Deployer || !Controller || !Session || !Rod) return false;
 	Controller->PlayerState = Player;
 	Controller->Possess(Cat);
 	Controller->SetActorTickEnabled(false);
@@ -60,20 +61,22 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute(), 60.0f);
 	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 30.0f);
 	ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 100.0f);
-	if (!TestTrue(TEXT("the owner is admitted and deploys a real rod identity"), Mode->CanAcceptFishingCommand(Controller)
-		&& Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("OperatorSamplingRod"), NAME_None, Player, nullptr, true, false)
-		&& World->GetSubsystem<UCatFishingService>()->RegisterDeployedRod(Player, Rod))) return false;
+	if (!TestTrue(TEXT("the operator is admitted and borrows a real rod deployed by another player"), Mode->CanAcceptFishingCommand(Controller)
+		&& Rod->InitializeAuthoritativeIdentity(FGuid::NewGuid(), FGuid::NewGuid(), TEXT("OperatorSamplingRod"), NAME_None, Deployer, nullptr, true, false)
+		&& World->GetSubsystem<UCatFishingService>()->RegisterDeployedRod(Deployer, Rod))) return false;
 	const auto HoldAndAuthorize = [&]()
 	{
 		return Rod->BeginPhysicalHoldFromAuthority(Player, true)
 			&& Rod->SetPrimaryOperatorFromAuthority(Player, Rod->GetPresentationState().RodActorRevision) && Rod->GetPhysicalRodComponent()->CommitPrimaryHold(Player);
 	};
-	if (!TestTrue(TEXT("a real hand constraint precedes explicit owner control"), HoldAndAuthorize())) return false;
+	if (!TestTrue(TEXT("a real hand constraint precedes explicit primary control"), HoldAndAuthorize())) return false;
 	UCatFishingFightRunner* Runner = NewObject<UCatFishingFightRunner>(Session);
 	Runner->Session = Session;
 	Runner->RodActor = Rod;
 	Runner->AbilitySystem = ASC;
 	Runner->bInitialized = Runner->bRunning = true;
+	if (!TestTrue(TEXT("runner can resume an explicitly authorized borrower using their own ASC"),
+		Runner->ResumePrimaryFromAuthority(Player, ASC, 100.0, 60.0, 30.0, 0, false, false))) return false;
 	if (!Runner->BindPrimaryOperatorFromAuthority(Player, true, false, 0)) return false;
 	Runner->Config.FixedStepSeconds = 0.05;
 	Runner->Config.CatStaminaMaximum = 60.0;
@@ -122,7 +125,7 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 	{
 		ASC->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 30.0f);
 		Movement->TeleportBodyFromAuthority(FTransform(FVector(-1000, 0, 20)), TEXT("SettlementFixtureStart"));
-		if (!TestTrue(TEXT("reset fixture reestablishes real hand contact and owner control"), HoldAndAuthorize())) return false;
+		if (!TestTrue(TEXT("reset fixture reestablishes real hand contact and primary control"), HoldAndAuthorize())) return false;
 		Movement->SetMovementSpeed(600.0);
 		Movement->SetMoveIntent(FVector::ForwardVector);
 		FCatFightOperatorRuntime& Operator = Runner->OperatorState;
