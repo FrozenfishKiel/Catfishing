@@ -5,10 +5,15 @@
 #include "Misc/Parse.h"
 #include "Engine/Engine.h"
 #include "Engine/GameInstance.h"
+#include "Engine/LocalPlayer.h"
+#include "Engine/GameViewportClient.h"
 #include "Engine/World.h"
+#include "Blueprint/UserWidget.h"
 #include "GameFramework/PlayerController.h"
 #include "Online/CatOnlineSubsystem.h"
 #include "Save/CatSaveSubsystem.h"
+#include "UI/CatLocalPlayerUISubsystem.h"
+#include "Misc/Paths.h"
 
 // 仅在隔离的打包副本中显式运行；通过正式入口验证预载、真实旅行、到达与返回，不修改测试外的存档。
 class FCatPackagedTravelCommand : public IAutomationLatentCommand
@@ -75,8 +80,28 @@ public:
 			break;
 		case 6:
 			if (FPlatformTime::Seconds() - Arrived < 2.0) { return false; }
+			{
+				ULocalPlayer* Player = Game->GetFirstGamePlayer();
+				UCatLocalPlayerUISubsystem* UI = Player ? Player->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
+				if (!Test->TestNotNull(TEXT("Local player UI subsystem exists"), UI)) { return true; }
+				const bool bReady = UI->IsGameplayLoadingReadyToDismiss(Snapshot);
+				const bool bLoadingVisible = UI->GlobalLoadingScreenWidget && UI->GlobalLoadingScreenWidget->IsInViewport();
+				if ((!bReady || bLoadingVisible) && FPlatformTime::Seconds() - Arrived < 15.0) { return false; }
+				Test->TestTrue(TEXT("All gameplay UI consumers are ready"), bReady);
+				Test->TestFalse(TEXT("Loading overlay has left the viewport"), bLoadingVisible);
+				if (bReady && !bLoadingVisible)
+				{
+					FScreenshotRequest::RequestScreenshot(FPaths::ProjectSavedDir() / TEXT("Screenshots/OnlinePreload-Gameplay.png"), true, false);
+				}
+			}
+			Arrived = FPlatformTime::Seconds();
+			Phase = 8;
+			break;
+		case 8:
+			// 截图需在后续渲染帧完成，再发离房请求，避免保存到返回前台的遮罩。
+			if (FPlatformTime::Seconds() - Arrived < 1.0) { return false; }
 			if (!Test->TestTrue(TEXT("Leave through production cleanup entry"), Online->RequestLeave().bAccepted)) { return true; }
-			++Phase;
+			Phase = 7;
 			break;
 		case 7:
 			if (Snapshot.ActiveOperation != ECatOnlineOperation::None) { return false; }
@@ -84,10 +109,10 @@ public:
 			Test->TestEqual(TEXT("Session destroyed on exit"), Snapshot.SessionState, ECatOnlineSessionState::NoSession);
 			Test->TestTrue(TEXT("Active test save released"), Save->GetActiveSlotId().IsNone());
 			if (!Test->TestTrue(TEXT("Delete only the newly created test slot"), Save->RequestDeleteSlot(SlotId).bAccepted)) { return true; }
-			++Phase;
+			Phase = 9;
 			break;
 		default:
-			Test->AddInfo(TEXT("Packaged production create/load/start/listen/spawn/leave cycle completed"));
+			Test->AddInfo(TEXT("Packaged production create/load/start/listen/spawn/UI-ready/loading-dismissal/leave cycle completed"));
 			return true;
 		}
 		return false;

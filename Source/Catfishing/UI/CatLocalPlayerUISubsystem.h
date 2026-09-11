@@ -37,6 +37,7 @@ class CATFISHING_API UCatLocalPlayerUISubsystem : public ULocalPlayerSubsystem
 
 #if WITH_DEV_AUTOMATION_TESTS
 	friend class FCatLocalPlayerUISubsystemSplitPlayerModulesAttachTest;
+	friend class FCatPackagedTravelCommand;
 #endif
 
 public:
