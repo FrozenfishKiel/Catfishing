@@ -464,6 +464,23 @@ bool UCatPhysicalBodyComponent::HasExternalLoadFromAuthority() const
     return CharacterMovement && CharacterMovement->HasExternalLoad();
 }
 
+double UCatPhysicalBodyComponent::GetCharacterInteractionLoadFromAuthority(FVector& OutDirectionForce) const
+{
+    OutDirectionForce = FVector::ZeroVector;
+    FVector Strongest = FVector::ZeroVector;
+    double MaximumSquared = 0;
+    for (const auto& Entry : ExternalForces)
+    {
+        if (!Entry.Key.IsValid() || !Entry.Value.bCharacterInteraction) continue;
+        const FVector Horizontal(Entry.Value.Force.X, Entry.Value.Force.Y, 0);
+        OutDirectionForce += Horizontal;
+        if (Horizontal.SizeSquared() > MaximumSquared) { MaximumSquared = Horizontal.SizeSquared(); Strongest = Horizontal; }
+    }
+    const double Magnitude = FMath::Max(FMath::Sqrt(MaximumSquared), OutDirectionForce.Size());
+    if (OutDirectionForce.IsNearlyZero(1.0)) OutDirectionForce = Strongest;
+    return Magnitude / 100.0;
+}
+
 double UCatPhysicalBodyComponent::GetVerticalGripForceFromAuthority() const
 {
     double Sum = 0;
@@ -694,13 +711,14 @@ void UCatPhysicalBodyComponent::SetLocomotionEnabledFromAuthority(bool bEnabled,
 	GetOwner()->ForceNetUpdate();
 	LogState(TEXT("physics_body_locomotion_changed"), Reason);
 }
-void UCatPhysicalBodyComponent::SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction, bool bBodyContact)
+void UCatPhysicalBodyComponent::SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction, bool bBodyContact, bool bCharacterInteraction)
 {
 	if (!HasAuthority() || !IsValid(Source) || ForceKgCmS2.ContainsNaN()) return;
 	auto& Entry = ExternalForces.FindOrAdd(TWeakObjectPtr<const UObject>(Source));
 	Entry.Force = ForceKgCmS2;
 	Entry.bVerticalGripTraction = bVerticalGripTraction;
 	Entry.bBodyContact = bBodyContact;
+	Entry.bCharacterInteraction = bCharacterInteraction || bBodyContact;
 }
 void UCatPhysicalBodyComponent::ClearExternalForce(const UObject* Source)
 {

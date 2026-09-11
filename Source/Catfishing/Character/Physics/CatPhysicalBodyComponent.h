@@ -83,6 +83,8 @@ public:
 	double GetFacingYawDegrees() const { return FacingYawDegrees; }
 	FTickFunction& GetPostMovementTick() { return PostPhysicsTick; }
 	FVector GetExternalForceFromAuthority();
+	/** Read-only character-pair load in N. Net force chooses direction; cancelling loads stay latched. */
+	double GetCharacterInteractionLoadFromAuthority(FVector& OutDirectionForce) const;
 	/** Any applied source, including cancelling or vertical loads; excludes gravity/floor support. */
 	bool HasExternalLoadFromAuthority() const;
 	double GetVerticalGripForceFromAuthority() const;
@@ -124,7 +126,7 @@ public:
 	void SetLocomotionEnabledFromAuthority(bool bEnabled, FName Reason);
 	bool TeleportBodyFromAuthority(const FTransform& Transform, FName Reason);
 	/** Each source replaces its own force. Units are kg*cm/s^2; multiply Newtons by 100 once. */
-	void SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction = false, bool bBodyContact = false);
+	void SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction = false, bool bBodyContact = false, bool bCharacterInteraction = false);
 	void ClearExternalForce(const UObject* Source);
 	/** Replaces the ordinary motor budget; zero means no voluntary motor force, never unlimited. */
 	void SetFishingMotorBudget(const UObject* Source, double MaxForceKgCmS2, double MaxSpeedCmS = 100.0);
@@ -172,6 +174,7 @@ private:
 		FVector Force = FVector::ZeroVector;
 		bool bVerticalGripTraction = false;
 		bool bBodyContact = false;
+		bool bCharacterInteraction = false;
 	};
 	TMap<TWeakObjectPtr<const UObject>, FExternalForce> ExternalForces;
 	TWeakObjectPtr<const UObject> FishingMotorSource;
