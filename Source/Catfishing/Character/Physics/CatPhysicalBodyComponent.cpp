@@ -40,22 +40,53 @@ void UCatPhysicalBodyComponent::RegisterComponentTickFunctions(bool bRegister)
 	}
 	else if (PostPhysicsTick.IsTickFunctionRegistered()) PostPhysicsTick.UnRegisterTickFunction();
 }
+FTickFunction& UCatPhysicalBodyComponent::GetPostMovementTick()
+{
+	// Components can bind their prerequisites before Character BeginPlay initializes Body.
+	// Preserve the public "after movement" contract for rods and force-reaction animation.
+	const auto* Character = Cast<ACharacter>(GetOwner());
+	if (auto* Movement = Character ? Cast<UCatCharacterMovementComponent>(Character->GetCharacterMovement()) : nullptr)
+		return Movement->PrimaryComponentTick;
+	return PostPhysicsTick;
+}
 void UCatPhysicalBodyComponent::PublishPostPhysicsSnapshot(float DeltaSeconds)
 {
 	if (!HasAuthority() || !Body || !Grab) return;
 	if (CharacterMovement)
 	{
-		const auto* Settings = UPhysicsSettings::Get();
-		const double Scale = GetWorld()->GetPhysicsScene() ? GetWorld()->GetPhysicsScene()->GetNetworkDeltaTimeScale() : 1.0;
-		const double Limit = Settings->bSubstepping ? Settings->MaxSubsteps * double(Settings->MaxSubstepDeltaTime) : double(Settings->MaxPhysicsDeltaTime);
-		CharacterMovement->AdvanceFromAuthority(Limit > 0 ? FMath::Min(DeltaSeconds * Scale, Limit) : DeltaSeconds * Scale);
-		bGrounded = CharacterMovement->IsMovingOnGround();
-		bSupportSampleReady = true;
-		Body->ComponentVelocity = CharacterMovement->Velocity;
-		Grab->RefreshKinematicHands();
+		// CMC Tick / ServerMove is the only motor scheduler. The model consumer publishes
+		// after the final pose; this tick must never advance a second authority step.
+		return;
 	}
 	// Model poses are finalized later this frame. That consumer publishes the same snapshot once.
 	if (!CharacterMovement || !UCatModelContactComponent::UsesModelContacts(GetOwner())) PublishCompletedSnapshot();
+}
+
+void UCatPhysicalBodyComponent::CompleteCharacterMovement()
+{
+	if (!CharacterMovement || !Body || !Grab) return;
+	bGrounded = CharacterMovement->IsMovingOnGround();
+	bSupportSampleReady = true;
+	Body->ComponentVelocity = CharacterMovement->Velocity;
+	if (HasAuthority() || IsLocallyControlled() || !bReceivedSnapshot) Grab->RefreshKinematicHands();
+	else
+	{
+		// Simulated proxies have no owning controller's aim. Retain the observed hand pose,
+		// expressed relative to the observed body, and carry it with the CMC-smoothed motion.
+		const FTransform ObservedBody(Snapshot.BodyRotation, Snapshot.BodyLocation, Body->GetComponentScale());
+		LeftHand->SetWorldLocation(Body->GetComponentTransform().TransformPosition(ObservedBody.InverseTransformPosition(Snapshot.LeftHandLocation)));
+		RightHand->SetWorldLocation(Body->GetComponentTransform().TransformPosition(ObservedBody.InverseTransformPosition(Snapshot.RightHandLocation)));
+	}
+	if (HasAuthority() && !UCatModelContactComponent::UsesModelContacts(GetOwner())) PublishCompletedSnapshot();
+}
+
+void UCatPhysicalBodyComponent::NotifyCharacterJump()
+{
+	if (!HasAuthority()) return;
+	bGrounded = false;
+	bPublishJumpAfterPhysics = true;
+	JumpTractionUntilSeconds = GetWorld()->GetTimeSeconds() + .35;
+	LogState(TEXT("physics_body_jump"), TEXT("CMCPredictedJumpWithGripTraction"));
 }
 
 void UCatPhysicalBodyComponent::FinalizeModelContactFromAuthority()
@@ -141,7 +172,7 @@ void UCatPhysicalBodyComponent::Initialize(UBoxComponent* InBody, USphereCompone
 
 	ViewInput=FRotator(-15,GetOwner()->GetActorRotation().Yaw,0);
 	FacingYawDegrees = ViewInput.Yaw;
-	GetOwner()->SetReplicateMovement(false);
+	GetOwner()->SetReplicateMovement(CharacterMovement != nullptr);
 	if (HasAuthority())
 	{
 		if (!BodyId.IsValid()) BodyId=FGuid::NewGuid();
@@ -184,7 +215,7 @@ void UCatPhysicalBodyComponent::Initialize(UBoxComponent* InBody, USphereCompone
 	LastInputSeconds=GetWorld()->GetTimeSeconds();
 	if (HasAuthority()) CaptureSnapshot();
 	else if (bReceivedSnapshot) { bReceivedSnapshot=false; OnRep_PhysicsSnapshot(); }
-	LogState(TEXT("physics_body_started"), CharacterMovement ? TEXT("UprightCMCServerSnapshots") : TEXT("PrototypeChaosServerSnapshots"));
+	LogState(TEXT("physics_body_started"), CharacterMovement ? TEXT("UprightCMCPrediction") : TEXT("PrototypeChaosServerSnapshots"));
 	UE_LOG(LogCatPhysicsGrab, Log,
 		TEXT("Event=physics_body_support_query World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s BodyId=%s TraceChannel=%d Result=BodyCollisionResponses"),
 		*GetNameSafe(GetWorld()), int32(GetOwner()->GetNetMode()), HasAuthority(), int32(GetOwner()->GetLocalRole()),
@@ -236,6 +267,12 @@ void UCatPhysicalBodyComponent::CaptureSnapshot()
 	Snapshot.RightHandLocation = RightHand->GetComponentLocation();
 	Snapshot.bGrounded = bGrounded;
 	Snapshot.bSupportSampleReady = bSupportSampleReady;
+	Snapshot.ControlEpoch = ControlEpoch;
+	if (CharacterMovement)
+	{
+		Snapshot.Drive = CaptureDriveSample();
+		Snapshot.ExternalForce = CharacterMovement->GetLastExternalForce();
+	}
 	++Snapshot.Revision;
 }
 void UCatPhysicalBodyComponent::UpdatePhysicalMovement(const float DeltaSeconds)
@@ -536,10 +573,14 @@ void UCatPhysicalBodyComponent::GetLifetimeReplicatedProps(TArray<FLifetimePrope
 	DOREPLIFETIME(UCatPhysicalBodyComponent, ControlEpoch);
 	DOREPLIFETIME(UCatPhysicalBodyComponent, bLocomotionEnabled);
 }
-FVector UCatPhysicalBodyComponent::GetVelocity() const { return HasAuthority() && Body ? (CharacterMovement ? CharacterMovement->Velocity : Body->GetPhysicsLinearVelocity()) : Snapshot.Velocity; }
-FVector UCatPhysicalBodyComponent::GetMoveIntent() const { return HasAuthority() ? MoveInput : Snapshot.MoveIntent; }
-bool UCatPhysicalBodyComponent::IsGrounded() const { return HasAuthority() ? bGrounded : Snapshot.bGrounded; }
-bool UCatPhysicalBodyComponent::HasMovementSample() const { return HasAuthority() ? bSupportSampleReady : bReceivedSnapshot && Snapshot.bSupportSampleReady; }
+FVector UCatPhysicalBodyComponent::GetVelocity() const { return CharacterMovement ? CharacterMovement->Velocity : (HasAuthority() && Body ? Body->GetPhysicsLinearVelocity() : Snapshot.Velocity); }
+FVector UCatPhysicalBodyComponent::GetMoveIntent() const
+{
+	if (HasAuthority() || (CharacterMovement && IsLocallyControlled())) return MoveInput;
+	return CharacterMovement ? (CharacterMovement->GetCurrentAcceleration() / FMath::Max(1.0f, CharacterMovement->GetMaxAcceleration())).GetClampedToMaxSize(1.0) : Snapshot.MoveIntent;
+}
+bool UCatPhysicalBodyComponent::IsGrounded() const { return CharacterMovement ? CharacterMovement->IsMovingOnGround() : (HasAuthority() ? bGrounded : Snapshot.bGrounded); }
+bool UCatPhysicalBodyComponent::HasMovementSample() const { return CharacterMovement ? bSupportSampleReady : (HasAuthority() ? bSupportSampleReady : bReceivedSnapshot && Snapshot.bSupportSampleReady); }
 double UCatPhysicalBodyComponent::GetStandRootHeightCm() const
 {
 	return 20.0 * GeometryScale * (Body ? FMath::Abs(Body->GetComponentScale().Z) : 1.0);
@@ -571,7 +612,7 @@ void UCatPhysicalBodyComponent::SetMoveIntent(FVector WorldDirection)
 	const bool bChanged = !MoveInput.Equals(NextInput, .05);
 	MoveInput = NextInput;
 	LastInputSeconds = GetWorld()->GetTimeSeconds();
-	if ((bStartOrStop || bChanged) && Body && IsLocallyControlled() && !HasAuthority()) SendLocalInput();
+	if (!CharacterMovement && (bStartOrStop || bChanged) && Body && IsLocallyControlled() && !HasAuthority()) SendLocalInput();
 	if (bStartOrStop)
 	{
 		if (HasAuthority()) bPublishMovementAfterPhysics = true;
@@ -605,6 +646,7 @@ void UCatPhysicalBodyComponent::SetMovementSpeed(double SpeedCmS)
 }
 void UCatPhysicalBodyComponent::ServerSetInput_Implementation(FVector Move, FRotator View, uint32 Epoch, uint32 Sequence)
 {
+	if (CharacterMovement) return; // Formal characters use timestamped CMC moves exclusively.
 	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
 	if (!OwnerPawn || !OwnerPawn->GetController() || Epoch != ControlEpoch || Sequence == 0 || Move.ContainsNaN() || View.ContainsNaN()
 		|| static_cast<int32>(Sequence - AcceptedInputSequence) <= 0)
@@ -619,28 +661,23 @@ void UCatPhysicalBodyComponent::ServerSetInput_Implementation(FVector Move, FRot
 	AcceptedInputSequence = Sequence;
 	SetMoveIntent(Move);
 	SetViewIntent(View);
-	// CMC ServerMove used to deliver this view. Keep server traces/casts and pawn aim on the
-	// same validated view now that only the physical input channel advances movement.
+	// The diagnostic Chaos pawn has no CMC view channel.
 	OwnerPawn->GetController()->SetControlRotation(ViewInput);
 }
 void UCatPhysicalBodyComponent::RequestJump()
 {
+	if (CharacterMovement)
+	{
+		// Host/test authority opens grip traction before this frame's force solve, as before.
+		// Owning clients save the jump flag; authority receives it through CMC MoveAutonomous.
+		if (HasAuthority()) CharacterMovement->DoJump(false, 0.0f);
+		else if (IsLocallyControlled()) CastChecked<ACharacter>(GetOwner())->Jump();
+		return;
+	}
 	if (!HasAuthority()) { if (IsLocallyControlled()) ServerRequestJump(ControlEpoch); return; }
 	if (!Body || !bLocomotionEnabled || !bGrounded || bJumpSeparating || GetWorld()->GetTimeSeconds() < SupportDisabledUntilSeconds)
 	{
 		LogState(TEXT("physics_body_jump_rejected"), TEXT("NoGroundSupport"));
-		return;
-	}
-	if (CharacterMovement)
-	{
-		CharacterMovement->JumpZVelocity = JumpSpeedCmS;
-		if (CharacterMovement->DoJump(false, 0.0f))
-		{
-			bGrounded = false;
-			bPublishJumpAfterPhysics = true;
-			JumpTractionUntilSeconds = GetWorld()->GetTimeSeconds() + .35;
-			LogState(TEXT("physics_body_jump"), TEXT("CMCJumpWithGripTraction"));
-		}
 		return;
 	}
 	const double DeltaSpeed = FMath::Max(0.0, JumpSpeedCmS - Body->GetPhysicsLinearVelocity().Z);
@@ -656,6 +693,7 @@ void UCatPhysicalBodyComponent::RequestJump()
 }
 void UCatPhysicalBodyComponent::ServerRequestJump_Implementation(uint32 Epoch)
 {
+	if (CharacterMovement) return;
 	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
 	if (OwnerPawn && OwnerPawn->GetController() && Epoch == ControlEpoch) RequestJump();
 	else LogState(TEXT("physics_body_jump_rejected"), TEXT("StaleOrUnpossessed"));
@@ -665,6 +703,7 @@ void UCatPhysicalBodyComponent::ClearControlIntent(FName Reason)
 	JumpTractionUntilSeconds = 0;
 	if (HasAuthority() && !MoveInput.IsNearlyZero()) bPublishMovementAfterPhysics = true;
 	MoveInput = FVector::ZeroVector;
+	if (CharacterMovement) CastChecked<ACharacter>(GetOwner())->StopJumping();
 	if (Grab)
 	{
 		if (HasAuthority()) Grab->ReleaseAllFromAuthority(Reason);
@@ -687,6 +726,7 @@ void UCatPhysicalBodyComponent::BeginControlEpochFromAuthority()
 	++ControlEpoch;
 	if (!ControlEpoch) ControlEpoch = 1;
 	AcceptedInputSequence = 0;
+	if (CharacterMovement) CharacterMovement->ResetControlPrediction();
 	LastInputSeconds = GetWorld()->GetTimeSeconds();
 	if (Grab) Grab->BeginInputEpochFromAuthority();
 	GetOwner()->ForceNetUpdate();
@@ -777,6 +817,8 @@ bool UCatPhysicalBodyComponent::TeleportBodyFromAuthority(const FTransform& Tran
 		CharacterMovement->ClearQueuedExternalImpulse();
 		CharacterMovement->SetMovementMode(MOVE_Falling);
 		CharacterMovement->bForceNextFloorCheck = true;
+		CharacterMovement->bJustTeleported = true;
+		CharacterMovement->ForceClientAdjustment();
 	}
 	else
 	{
@@ -806,6 +848,18 @@ bool UCatPhysicalBodyComponent::TeleportBodyFromAuthority(const FTransform& Tran
 void UCatPhysicalBodyComponent::OnRep_PhysicsSnapshot()
 {
 	if (!Body) { bReceivedSnapshot = true; return; }
+	if (CharacterMovement)
+	{
+		// Pose/velocity belongs solely to CMC replication. This snapshot supplies policy,
+		// lifecycle and diagnostics; applying its old pose would undo every predicted move.
+		if (!bReceivedSnapshot || ClientResetEpoch != Snapshot.ResetEpoch)
+		{
+			CharacterMovement->ResetControlPrediction();
+			ClientResetEpoch = Snapshot.ResetEpoch;
+		}
+		bReceivedSnapshot = true;
+		return;
+	}
 	if (!bReceivedSnapshot || ClientResetEpoch != Snapshot.ResetEpoch)
 	{
 		GetOwner()->SetActorLocationAndRotation(Snapshot.BodyLocation, Snapshot.BodyRotation, false, nullptr, ETeleportType::TeleportPhysics);
@@ -821,13 +875,13 @@ void UCatPhysicalBodyComponent::TickComponent(float DeltaSeconds, ELevelTick Tic
 	if (!Body || !Grab) return;
 	const double Now = GetWorld()->GetTimeSeconds();
 	const APawn* OwnerPawn = Cast<APawn>(GetOwner());
-	if (IsLocallyControlled() && !HasAuthority() && Now - LastSendSeconds >= 1.0 / 30.0)
+	if (!CharacterMovement && IsLocallyControlled() && !HasAuthority() && Now - LastSendSeconds >= 1.0 / 30.0)
 	{
 		SendLocalInput();
 	}
 	if (HasAuthority())
 	{
-		if (OwnerPawn && OwnerPawn->GetController() && !IsLocallyControlled() && Now - LastInputSeconds > 0.5)
+		if (!CharacterMovement && OwnerPawn && OwnerPawn->GetController() && !IsLocallyControlled() && Now - LastInputSeconds > 0.5)
 		{
 			if (!MoveInput.IsNearlyZero() || Grab->IsReaching(true) || Grab->IsReaching(false))
 			{
@@ -837,6 +891,7 @@ void UCatPhysicalBodyComponent::TickComponent(float DeltaSeconds, ELevelTick Tic
 		}
 		if (CharacterMovement)
 		{
+			if (OwnerPawn && OwnerPawn->GetController() && !IsLocallyControlled()) SetViewIntent(OwnerPawn->GetController()->GetControlRotation());
 			const bool bFacingAim = FishingMotorSource.IsValid() || Grab->IsReaching(true) || Grab->IsReaching(false);
 			if (bFacingAim) FacingYawDegrees = ViewInput.Yaw;
 			else if (!MoveInput.IsNearlyZero()) FacingYawDegrees = MoveInput.Rotation().Yaw;
@@ -844,9 +899,8 @@ void UCatPhysicalBodyComponent::TickComponent(float DeltaSeconds, ELevelTick Tic
 		}
 		else UpdatePhysicalMovement(DeltaSeconds);
 	}
-	else if (bReceivedSnapshot)
+	else if (bReceivedSnapshot && !CharacterMovement)
 	{
-		if (CharacterMovement) CharacterMovement->ObserveSnapshot(Snapshot.Velocity, Snapshot.MoveIntent);
 		const double Alpha = 1.0 - FMath::Exp(-60.0 * FMath::Max(0.0f, DeltaSeconds));
 		GetOwner()->SetActorLocationAndRotation(FMath::Lerp(GetOwner()->GetActorLocation(), Snapshot.BodyLocation, Alpha),
 			FQuat::Slerp(GetOwner()->GetActorQuat(), Snapshot.BodyRotation.Quaternion(), Alpha), false, nullptr, ETeleportType::TeleportPhysics);
@@ -856,7 +910,7 @@ void UCatPhysicalBodyComponent::TickComponent(float DeltaSeconds, ELevelTick Tic
 	if (Now >= NextMotionLogSeconds && (!GetVelocity().IsNearlyZero(3) || Grab->IsGripping(true) || Grab->IsGripping(false)))
 	{
 		NextMotionLogSeconds = Now + 1;
-		LogState(HasAuthority() ? TEXT("physics_body_motion") : TEXT("physics_body_snapshot_observed"), TEXT("Observed"));
+		LogState(CharacterMovement ? TEXT("cmc_body_motion") : (HasAuthority() ? TEXT("physics_body_motion") : TEXT("physics_body_snapshot_observed")), TEXT("Observed"));
 	}
 }
 void UCatPhysicalBodyComponent::LogState(FName Event, FName Reason) const

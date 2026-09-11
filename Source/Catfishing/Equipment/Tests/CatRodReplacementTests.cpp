@@ -76,6 +76,7 @@ namespace CatRodReplacementTests
 			UWorld* World = WorldWrapper.GetTestWorld();
 			OldRod = World->SpawnActor<ACatFishingRodActor>();
 			if (!Test.TestNotNull(TEXT("创建 T1 世界鱼竿"), OldRod)) return false;
+			OldRod->SetInstigator(Character); // 和正式 PlaceRod 一样绑定原物品存储来源。
 			if (!Test.TestTrue(TEXT("绑定 T1 世界身份"), OldRod->InitializeAuthoritativeIdentity(
 				FGuid::NewGuid(), OldItemId, Loadout.RodDefinitionId, NAME_None, Controller->PlayerState, nullptr, true, false))) return false;
 			OldRod->SetActorLocation(Controller->GetPawn()->GetActorLocation() + FVector(80, 0, 0));

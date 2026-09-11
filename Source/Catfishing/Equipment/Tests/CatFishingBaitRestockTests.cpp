@@ -156,4 +156,48 @@ bool FCatFishingBaitSelectionPreservedTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingCaughtBaitRefundTest,
+	"Catfishing.Unit.Equipment.BaitRestock.CaughtBaitReturnsOnceAfterFastBiteBoundary",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+bool FCatFishingCaughtBaitRefundTest::RunTest(const FString& Parameters)
+{
+	using namespace CatFishingBaitRestockTests;
+	for (const bool bCaught : {false, true})
+	{
+		FFixture Fixture;
+		if (!Fixture.Initialize(*this)) return false;
+		const FGuid SessionId = FGuid::NewGuid();
+		if (!TestTrue(TEXT("cast immediately debits one bait"), Fixture.Begin(SessionId).bBaitFrozen)) return false;
+		TestEqual(TEXT("bait left the visible inventory at cast"), Fixture.Quantity(), 0);
+		TestTrue(TEXT("fast bite closes early refund eligibility"), Fixture.Equipment->CommitFishingBaitDeferred(SessionId).bApplied);
+		TestTrue(TEXT("terminal settles the original bait record"), Fixture.Equipment->ReleaseFishingUse(SessionId, bCaught).bApplied);
+		TestEqual(TEXT("caught refunds one; late recall refunds none"), Fixture.Quantity(), bCaught ? 1 : 0);
+		TestFalse(TEXT("terminal replay cannot refund again"), Fixture.Equipment->ReleaseFishingUse(SessionId, true).bApplied);
+		TestEqual(TEXT("a different replay outcome cannot change the settled quantity"), Fixture.Quantity(), bCaught ? 1 : 0);
+	}
+	FFixture Full;
+	if (!Full.Initialize(*this)) return false;
+	const FGuid PendingSession = FGuid::NewGuid();
+	if (!Full.Begin(PendingSession).bBaitFrozen || !Full.Equipment->CommitFishingBaitDeferred(PendingSession).bApplied) return false;
+	auto* Inventory = Full.Character->GetInventoryComponent();
+	int32 EmptyCount = 0;
+	for (const auto& Entry : Inventory->GetInventoryEntries())
+		if (!Entry.Instance || Entry.StackCount == 0) ++EmptyCount;
+	for (int32 Index = 0; Index < EmptyCount; ++Index)
+		if (!Full.Equipment->GrantEquipmentFromAuthority(FGuid::NewGuid(), Full.Equipment->GetSnapshot().Revision, TEXT("FeatherFloat")).bCommitted) return false;
+	AddExpectedErrorPlain(TEXT("Event=fishing_bait_return_rejected"), EAutomationExpectedErrorFlags::Contains, 1);
+	TestEqual(TEXT("full backpack preserves a pending caught-bait refund"), Full.Equipment->ReleaseFishingUse(PendingSession, true).Error,
+		ECatDomainCommandError::CapacityExceeded);
+	TestEqual(TEXT("full backpack cannot silently create a bait"), Full.Quantity(), 0);
+	TestFalse(TEXT("pending refund does not keep the finished fishing session active"), Full.Equipment->IsFishingUseActive(PendingSession));
+	TestFalse(TEXT("pending refund cannot lock the shared rod against another user's X"),
+		Full.Equipment->IsFishingRodInUse(Full.Equipment->GetSnapshot().RodItemInstanceId));
+	Inventory->RemoveItemInstanceFromIndex(Inventory->FindFirstInventorySlotIndexByDefinitionId(TEXT("FeatherFloat")));
+	TestEqual(TEXT("freeing space automatically refunds the original bait"), Full.Quantity(), 1);
+	Inventory->BroadcastInventoryChange();
+	TestEqual(TEXT("further inventory changes cannot duplicate the refund"), Full.Quantity(), 1);
+	return !HasAnyErrors();
+}
+
 #endif

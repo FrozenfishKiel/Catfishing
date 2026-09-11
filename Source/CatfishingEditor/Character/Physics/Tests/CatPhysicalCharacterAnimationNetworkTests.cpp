@@ -115,7 +115,7 @@ namespace CatPhysicalCharacterAnimationNetwork
 			if (!Server || !Client) return false;
 			APlayerController* Local = Client->GetFirstPlayerController();
 			auto* ClientCat = Local ? Cast<ACatCharacter>(Local->GetPawn()) : nullptr;
-			if (!ClientCat || !Local->PlayerState) return false;
+			if (!ClientCat || !Local->PlayerState || Local->AcknowledgedPawn != ClientCat) return false;
 			ACatCharacter* ServerCat = nullptr;
 			for (TActorIterator<ACatCharacter> It(Server); It; ++It)
 				if (It->GetPlayerState() && It->GetPlayerState()->GetPlayerId() == Local->PlayerState->GetPlayerId()) ServerCat = *It;
@@ -177,7 +177,7 @@ namespace CatPhysicalCharacterAnimationNetwork
 					|| FVector::Dist(ClientCat->GetActorLocation(), ServerCat->GetActorLocation()) > 2.0) return false;
 				Test->TestTrue(TEXT("authority uses the upright CMC receiver"), ServerBody->UsesCharacterMovement());
 				Test->TestFalse(TEXT("authority capsule does not freely tumble"), ServerBody->GetBody()->IsSimulatingPhysics());
-				Test->TestFalse(TEXT("owning client consumes physical snapshots"), ClientBody->GetBody()->IsSimulatingPhysics());
+				Test->TestFalse(TEXT("owning client predicts CMC without enabling a Chaos body"), ClientBody->GetBody()->IsSimulatingPhysics());
 				for (ACatCharacter* Cat : {ServerCat, ClientCat})
 				{
 					const auto* Body = Cat->GetPhysicalBodyComponent();

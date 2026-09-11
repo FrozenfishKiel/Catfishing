@@ -94,8 +94,8 @@ public:
 	/** 鱼上钩后可无视鱼的剩余体力抄取；服务器范围校验成功即生成世界鱼并直接进入抄手嘴叼状态。 */
 	FCatScoopResult RequestScoop(AController* ScoopingController, const FCatScoopCommand& Command);
 
-	/** Service明确取回原拥有者控制后的会话恢复；禁止换成旁人，不迁移资源归属。 */
-	bool ResumeOwnerControlFromAuthority(AController* NewFisherController);
+	/** Service显式授予主控后的会话接管；保留原扣饵记录和同一竿实例。 */
+	bool ResumePrimaryControlFromAuthority(AController* NewFisherController);
 
 	/** 当前主控私有身份；无人值守为空，服务用于索引。 */
 	const FString& GetFisherStableNetIdForAuthority() const { return FisherStableNetId; }
@@ -252,8 +252,6 @@ private:
 
 	/** 本场唯一负责的主控体力池；主控放下后解除，终局不能恢复旁人。 */
 	TWeakObjectPtr<ACatCharacter> StaminaOwner;
-	/** 最后一次主动放下鱼竿的钓手；只用于允许其在地面姿态就近切线，不复制、不接管当前输入。 */
-	TWeakObjectPtr<APlayerState> LastSuspendedFisherPlayerState;
 
 	FCatFishingAttemptSnapshot AttemptSnapshot;
 	FCatFishSelectionContext FrozenSelectionContext;

@@ -59,10 +59,11 @@ struct FCatFishingRodPresentationState
 	UPROPERTY(BlueprintReadOnly) FGuid ItemInstanceId;
 	UPROPERTY(BlueprintReadOnly) FName RodDefinitionId = NAME_None;
 	UPROPERTY(BlueprintReadOnly) FName RodSkinDefinitionId = NAME_None;
+	/** 历史序列化字段：只标识部署来源以定位库存托管记录，不赋予 R、X 或钓鱼的独占权限。 */
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> OwnerPlayerState = nullptr;
 	/** 当前主操作手（OperatorPlayerStates[0]）的兼容快捷字段；只有主位驱动现有单人钓鱼会话。 */
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> OperatorPlayerState = nullptr;
-	/** 有序占位容器：加入时追加，离开时压紧；0=主位，之后按编号公式左右交替向外扩展，始终无空洞。 */
+	/** 当前唯一主控的兼容数组；普通物理助手不登记，空闲时为空。 */
 	UPROPERTY(BlueprintReadOnly) TArray<TObjectPtr<APlayerState>> OperatorPlayerStates;
 	/** 由唯一成员变更写口生成的元数据，按玩家身份匹配，不另作可写名单。 */
 	UPROPERTY(BlueprintReadOnly) TArray<FCatFishingOperatorMembership> OperatorMemberships;

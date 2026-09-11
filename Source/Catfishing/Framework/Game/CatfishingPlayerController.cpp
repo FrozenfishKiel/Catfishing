@@ -4,6 +4,7 @@
 #include "Logging/CatLogContext.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
 #include "Fishing/Presentation/CatFishingCameraComponent.h"
+#include "Character/CatCharacterMovementComponent.h"
 
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Framework/Game/CatfishingPlayerState.h"
@@ -599,20 +600,25 @@ void ACatfishingPlayerController::SetSprintRequested(const bool bNewSprintReques
 	bSprintRequested = bNewSprintRequested;
 	ApplySprintSpeed(GetPawn(), bSprintRequested);
 
-	if (bStateChanged && bNotifyServer && !HasAuthority())
+	if (bStateChanged && bNotifyServer && !HasAuthority() && !Cast<ACatCharacter>(GetPawn()))
 	{
 		ServerSetSprinting(bSprintRequested);
 	}
 }
 
 // 移动速度应用流程：物理电机使用服务器配置的 cm/s；CMC 保留同值供正式动画/通用只读消费者。
-void ACatfishingPlayerController::ApplySprintSpeed(APawn* TargetPawn, const bool bSprinting) const
+float ACatfishingPlayerController::GetConfiguredMovementSpeed(const APawn* TargetPawn, const bool bSprinting) const
 {
 	const ACharacter* DefaultCharacter = TargetPawn ? Cast<ACharacter>(TargetPawn->GetClass()->GetDefaultObject()) : nullptr;
 	const UCharacterMovementComponent* DefaultMovement = DefaultCharacter ? DefaultCharacter->GetCharacterMovement() : nullptr;
 	// 普通速度只读当前猫类 CDO 的正式 CMC 配置，不能用已被疾跑临时覆盖的实例值当基准。
 	const float WalkSpeed = DefaultMovement ? DefaultMovement->MaxWalkSpeed : 100.0f;
-	const float Speed = FMath::Max(0.0f, bSprinting ? SprintMaxSpeed : WalkSpeed);
+	return FMath::Max(0.0f, bSprinting ? SprintMaxSpeed : WalkSpeed);
+}
+
+void ACatfishingPlayerController::ApplySprintSpeed(APawn* TargetPawn, const bool bSprinting) const
+{
+	const float Speed = GetConfiguredMovementSpeed(TargetPawn, bSprinting);
 	if (const ACatCharacter* Cat = Cast<ACatCharacter>(TargetPawn))
 	{
 		if (UCatPhysicalBodyComponent* Body = Cat->GetPhysicalBodyComponent()) Body->SetMovementSpeed(Speed);
@@ -626,6 +632,7 @@ void ACatfishingPlayerController::ApplySprintSpeed(APawn* TargetPawn, const bool
 	}
 
 	MovementComponent->MaxWalkSpeed = Speed;
+	if (auto* Movement = Cast<UCatCharacterMovementComponent>(MovementComponent)) Movement->SetSprintIntent(bSprinting);
 }
 
 // authority 疾跑流程：翻天期间拒绝迟到的开启意图但接受释放；最终速度继续读取服务器类默认值。

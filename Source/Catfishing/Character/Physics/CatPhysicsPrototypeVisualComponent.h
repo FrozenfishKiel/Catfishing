@@ -51,6 +51,8 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	FTransform InitialVisualRelativeTransform;
+	FTransform InitialAnimationRelativeTransform;
 	enum class EAnimationState : uint8 { Idle, Walk, Takeoff, Airborne, Landing };
 	void UpdateBaseAnimation(float DeltaTime);
 	void PlayBaseAnimation(EAnimationState NewState);

@@ -74,37 +74,37 @@ public:
 	ACatFishingRodActor* FindDeployedRod(const APlayerState* PlayerState);
 	/** 统计本人场上实体竿；无人值守竿仍占本人名额，助手抓握不改变名额。 */
 	int32 GetDeployedRodCount(const APlayerState* PlayerState) const;
-	/** 本人范围内最近的无人操作、无活动会话部署竿；损坏竿也能收回。跨玩家收纳尚未开放。 */
+	/** 范围内最近的无人操作、无活动会话部署竿；任何玩家可收纳，损坏竿也能收回。 */
 	ACatFishingRodActor* FindNearestPackableRod(const APlayerState* PlayerState,
 		const FVector& WorldLocation, double MaxDistanceCentimeters);
 
-	/** 本人范围内最近的无人操作、未损坏部署竿；允许原活动会话继续。 */
-	ACatFishingRodActor* FindNearestOperableOwnedRod(const APlayerState* PlayerState,
+	/** 范围内最近的无人操作、未损坏部署竿；允许原活动会话继续。 */
+	ACatFishingRodActor* FindNearestOperableRod(const APlayerState* PlayerState,
 		const FVector& WorldLocation, double MaxDistanceCentimeters);
 
-	/** 按公开 RodActorId 查询；取得主控仍只允许竿主显式 R。 */
+	/** 按公开 RodActorId 查询；任何玩家可显式 R 接管空闲竿。 */
 	ACatFishingRodActor* FindDeployedRodById(FGuid RodActorId);
 
-	/** 查询 PlayerState 当前显式主控的本人竿；没有则空。 */
+	/** 查询 PlayerState 当前显式主控的竿；没有则空。 */
 	ACatFishingRodActor* FindRodOperatedBy(const APlayerState* PlayerState);
 
-	/** 最近的无人值守活动会话鱼竿；供原持竿者/竿主在不先拾起时主动切线止损。 */
+	/** 最近的无人值守活动会话鱼竿；供附近玩家不先拾起时收线。 */
 	ACatFishingRodActor* FindNearestUnattendedSessionRod(const FVector& WorldLocation,
 		double MaxDistanceCentimeters);
 
 	/** 查找绑定在指定竿上的存活未终态会话（操作位与会话解耦后，竿是会话的空间锚）；没有则空。 */
 	ACatFishingSession* FindActiveSessionByRod(const ACatFishingRodActor* RodActor) const;
-	/** Only validates or revokes explicit owner control. Physical helpers never become Session members. */
+	/** Only validates or revokes explicit primary control. Physical helpers never become Session members. */
 	bool ReconcilePrimaryControlFromPhysicalGrip(ACatFishingRodActor* Rod);
 
 	/** 抄网目标粗筛：按鱼与请求者的水平距离找最近的已上钩会话；精确范围仍由 Session 裁决。 */
 	ACatFishingSession* FindNearestScoopableSession(const FVector& WorldLocation, double MaxDistanceCentimeters);
 
 	/**
-	 * 原物品主人取回操控：会话唯一性属于鱼竿，主控始终只能是其 Owner；
-	 * 这里只调用会话 ResumeOwnerControlFromAuthority 恢复本人钓手事实。
+	 * 空闲竿接管：会话唯一性属于鱼竿，主控可由不同玩家显式取得；
+	 * 这里只调用会话 ResumePrimaryControlFromAuthority 恢复当前钓手事实。
 	 */
-	bool ResumeOwnedSessionControl(ACatFishingSession* Session, AController* NewFisherController);
+	bool ResumeSessionControl(ACatFishingSession* Session, AController* NewFisherController);
 
 	/** 为 PlayerState 登记部署竿；同一 Actor 重放成功，超过两根或跨玩家重复登记被拒绝。 */
 	bool RegisterDeployedRod(APlayerState* PlayerState, ACatFishingRodActor* RodActor);
