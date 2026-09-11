@@ -76,8 +76,11 @@ public:
 	/** 运行宿主记录当前拥有者；跨库存移动会刷新它，避免实例行为继续认为自己属于原 Actor。 */
 	virtual void SetRuntimeOwnerActor(AActor* InRuntimeOwnerActor);
 
-	/** 返回由这件库存物品保管的既有世界 Actor；普通物品返回空，鱼护用它复用仍承载内部库存的原 Actor。 */
+	/** 库存落地通过此入口取得原载体，保留拾取前的 Actor 状态和尺寸；空引用才走定义生成路径。 */
 	virtual AActor* GetWorldActor() const;
+
+	/** 拾取和落地时关联这份实例的原世界物；不改变数量、实例身份或存档。 */
+	void SetWorldActor(AActor* InWorldActor);
 
 	/** 读取当前运行宿主；没有显式宿主时回退到 Outer Actor，方便刚创建的实例立即可用。 */
 	AActor* GetRuntimeOwnerActor() const;
@@ -90,6 +93,10 @@ public:
 		const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext);
 
 protected:
+	/** 这份物品在当前世界中的原 Actor；拾取保存、落地复用，只有一个引用，不按堆叠数量保存多份。 */
+	UPROPERTY(Transient)
+	TObjectPtr<AActor> WorldActor = nullptr;
+
 	/** 定义绑定后的实例状态扩展点；父类片段已完成初始化后调用它，子类只能补齐自己拥有的运行状态。 */
 	virtual void HandleItemDefinitionAssigned();
 

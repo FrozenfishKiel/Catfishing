@@ -359,10 +359,11 @@ FCatDomainCommandResult UCatInventoryStatics::ReleaseItemToWorldFromAuthority(AC
 	return Result;
 }
 
-// Actor 收货流程：先按同一规则找到完整可接收者，再只让这个组件执行正式写入，避免多组件分摊一批货。
+// Actor 收货流程：先清空可选接收者输出，再按优先级找到完整可接收者；仅成功写入后返回该组件，失败不提供接收归属。
 bool UCatInventoryStatics::TryAddInventoryBatchToActor(AActor* TargetActor,
-	const FCatInventoryReceiveBatch& ReceiveBatch)
+	const FCatInventoryReceiveBatch& ReceiveBatch, UCatInventoryComponent** OutReceivingInventory)
 {
+	if (OutReceivingInventory) *OutReceivingInventory = nullptr;
 	if (ReceiveBatch.IsEmpty())
 	{
 		return true;
@@ -380,7 +381,9 @@ bool UCatInventoryStatics::TryAddInventoryBatchToActor(AActor* TargetActor,
 			continue;
 		}
 
-		return InventoryComponent->TryAddInventoryBatch(ReceiveBatch);
+		const bool bAdded = InventoryComponent->TryAddInventoryBatch(ReceiveBatch);
+		if (bAdded && OutReceivingInventory) *OutReceivingInventory = InventoryComponent;
+		return bAdded;
 	}
 
 	return false;

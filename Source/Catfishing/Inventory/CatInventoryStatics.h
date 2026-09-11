@@ -89,8 +89,9 @@ public:
 	static bool CanActorFullyAcceptInventoryBatch(const AActor* TargetActor,
 		const FCatInventoryReceiveBatch& ReceiveBatch);
 
-	/** 按库存组件优先级寻找第一个能完整接收整批物品的组件，并把批次正式写入那里。 */
-	static bool TryAddInventoryBatchToActor(AActor* TargetActor, const FCatInventoryReceiveBatch& ReceiveBatch);
+	/** 按优先级向首个能完整收货的组件写入；可选输出返回实际接收者，供拾取关联原世界物。 */
+	static bool TryAddInventoryBatchToActor(AActor* TargetActor, const FCatInventoryReceiveBatch& ReceiveBatch,
+		UCatInventoryComponent** OutReceivingInventory = nullptr);
 
 	/** 在两个可触达 Actor 的正式库存之间移动物品；外部只提交宿主和槽位，组件负责正式格子事务。 */
 	static FCatDomainCommandResult MoveItemBetweenInventoryHostsFromAuthority(ACatCharacter* ControlledCharacter,

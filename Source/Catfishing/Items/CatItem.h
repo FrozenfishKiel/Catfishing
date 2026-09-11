@@ -36,17 +36,17 @@ public:
 	virtual FText GetInteractionPrompt_Implementation() const override;
 	/** 返回与服务器范围复核共用的交互距离，单位厘米。 */
 	virtual double GetInteractionRadius_Implementation() const override;
-	/** 客户端经现有 Controller RPC 转发；authority 以整批收货结果决定销毁或保留世界物。 */
+	/** 客户端经现有 Controller RPC 转发；authority 收货后由实例保管原物，无实例接管的发货载体才销毁。 */
 	virtual bool Interact_Implementation(AController* RequestingController, FGuid RequestId) override;
 
 protected:
 	/** 组件与蓝图默认值就绪后调用派生物配置，使关卡放置和运行生成采用同一初始化时序。 */
 	virtual void BeginPlay() override;
 
-	/** 本世界物是否已被一次收货流程占用；服务器在入库广播前写入，失败释放，成功保持到销毁，防止回调重入重复发货。 */
+	/** 本世界物是否已被拾取占用；服务器在入库广播前写入，失败释放，重新落地时清除，防止重复发货。 */
 	bool bPickupClaimed = false;
 
-	/** 拾取命中的查询碰撞根；目标扫描读它，成功收货后 Actor 销毁，失败时保持原位置和可交互性。 */
+	/** 拾取命中的查询与物理根；库存保管期间关闭物理和碰撞，落地恢复，拾取失败时保持原样。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Item")
 	TObjectPtr<UBoxComponent> PickupCollision;
 

@@ -277,7 +277,7 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatInventoryReleaseStackTest,
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 // 堆叠落地回归：给真实背包五件普通物，丢两件后读取世界载荷的新GUID，再把剩余三件整体放置并核对原GUID。
-// 同时读取真实刚体状态、重放同请求并尝试改变数量；最后拾回整堆，验证数量和身份穿过正式世界拾取链。
+// 同时读取真实刚体状态与请求重放；拾回后检查原 Actor 引用和尺寸，再验证数量合并、部分丢弃和原物再次拾取。
 bool FCatInventoryReleaseStackTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
@@ -341,11 +341,30 @@ bool FCatInventoryReleaseStackTest::RunTest(const FString& Parameters)
 	TestFalse(TEXT("放置不误入Use的held区"), Inventory->HasActiveHeldInventoryEntriesFromAuthority());
 	TestTrue(TEXT("整堆放置后空格仍可重放原请求"), UCatInventoryStatics::ReleaseItemToWorldFromAuthority(
 		Character, PlaceRequest, Character, Slot, OriginalId, 3, ECatInventoryWorldAction::Place).bCommitted);
+	const FVector OriginalScale(1.3, 1.1, 0.8);
+	Placed->SetActorScale3D(OriginalScale);
 	if (!TestTrue(TEXT("真实交互拾回整堆"), Placed->Interact_Implementation(Controller, FGuid::NewGuid()))) return false;
 	const int32 ReturnedSlot = Inventory->FindInventorySlotIndexFromInstanceId(OriginalId);
 	if (!TestTrue(TEXT("拾回后原GUID可定位"), ReturnedSlot != INDEX_NONE)) return false;
 	TestEqual(TEXT("拾回不丢数量"), Inventory->GetInventoryEntryAtSlot(ReturnedSlot)->StackCount, 3);
-	TestTrue(TEXT("拾回成功销毁载体"), Placed->IsActorBeingDestroyed());
+	TestTrue(TEXT("拾回保留原Actor且隐藏碰撞"), IsValid(Placed) && !Placed->IsActorBeingDestroyed()
+		&& Placed->IsHidden() && !Placed->GetActorEnableCollision());
+	TestTrue(TEXT("现有实例保存原Actor"), Inventory->GetInventoryEntryAtSlot(ReturnedSlot)->Instance->GetWorldActor() == Placed);
+	TestFalse(TEXT("库存保管的原物不可重复拾取"), Placed->CanInteract_Implementation(Controller));
+	TestTrue(TEXT("堆叠仍只增加数量"), Inventory->AddItemDefinition(Definition.Get(), 2));
+	if (!TestTrue(TEXT("有原载体仍可部分丢弃"), Inventory->ReleaseItemToWorldFromAuthority(Character,
+		FGuid::NewGuid(), ReturnedSlot, OriginalId, 1, ECatInventoryWorldAction::Drop).bCommitted)) return false;
+	TestTrue(TEXT("部分丢弃不取走库存原Actor"), Placed->IsHidden()
+		&& Inventory->GetInventoryEntryAtSlot(ReturnedSlot)->Instance->GetWorldActor() == Placed);
+	for (TActorIterator<ACatItem> It(World); It; ++It)
+		if (*It != Placed) It->SetActorLocation(FVector(1500, 1500, 300), false, nullptr, ETeleportType::TeleportPhysics);
+	if (!TestTrue(TEXT("剩余四件复用原Actor放置"), Inventory->ReleaseItemToWorldFromAuthority(Character,
+		FGuid::NewGuid(), ReturnedSlot, OriginalId, 4, ECatInventoryWorldAction::Place).bCommitted)) return false;
+	TestTrue(TEXT("没有替换原Actor或重置尺寸"), FindPickup(*World, OriginalId) == Placed
+		&& Placed->GetActorScale3D().Equals(OriginalScale));
+	TestEqual(TEXT("原Actor载荷更新为当前数量"), Placed->GetPickupInventory().InstanceEntries[0].Count, 4);
+	TestTrue(TEXT("原Actor重新开放拾取"), Placed->Interact_Implementation(Controller, FGuid::NewGuid()));
+	TestEqual(TEXT("再次拾取不恢复旧数量"), Inventory->CountVisibleInventoryQuantityByDefinitionId(Definition->GetInventoryDefinitionId()), 4);
 	return !HasAnyErrors();
 }
 

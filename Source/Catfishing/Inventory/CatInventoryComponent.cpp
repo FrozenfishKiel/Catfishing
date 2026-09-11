@@ -555,6 +555,7 @@ UCatInventoryItemInstance* UCatInventoryComponent::AddEntry(
 // 按实例入库流程：
 // 1. 先拒绝空实例、无数量、非 authority 和缺定义的请求；失败不会占用或替换任何格子。
 // 2. 堆叠物优先合并到同定义格，并把观察数量、槽位 owner 和运行宿主同步到正式库存事实。
+//    接收格没有载体时接过来源的唯一 Actor 引用；已有载体则保留原引用，不为数量保存 Actor 数组。
 // 3. 剩余数量先放入传入实例，再按同定义补建实例；每个新占用格都会登记复制子对象并扣减 InOutCount。
 // 4. 接收过物品后更新 bOutFullyAdded；bBroadcastChange 为 true 时本次调用自成事务广播，否则等待外层批次统一通知。
 void UCatInventoryComponent::AddEntry(UCatInventoryItemInstance* ItemInstance, int32& InOutCount,
@@ -606,6 +607,11 @@ void UCatInventoryComponent::AddEntry(UCatInventoryItemInstance* ItemInstance, i
 			}
 
 			Entry.StackCount += AddAmount;
+			if (!Entry.Instance->GetWorldActor() && ItemInstance->GetWorldActor())
+			{
+				Entry.Instance->SetWorldActor(ItemInstance->GetWorldActor());
+				ItemInstance->SetWorldActor(nullptr);
+			}
 			Entry.LastObservedCount = Entry.StackCount;
 			Entry.SlotOwnerComponent = this;
 			SyncInventoryItemRuntimeOwner(Entry.Instance);
@@ -2163,7 +2169,7 @@ bool UCatInventoryComponent::ConsumeItemAtSlot(const int32 SlotIndex, const int3
 
 // 物品落地流程：
 // 1. 先重放同请求终态，再复核当前实例、数量、身体和配置，防止数量面板打开后误操作已换入的物品。
-// 2. 有既有载体的鱼护复用原 Actor；普通物品延迟生成配置 Actor 并复制实例状态，失败销毁新载体但不扣来源。
+// 2. 整份落地复用实例保管的原 Actor；部分丢弃或没有载体时仍生成新物并复制实例状态，失败不扣来源。
 // 3. 落点通过后才提交库存扣量；扣量的同步广播前记录重入拒绝，完成后用最终结果覆盖该请求缓存。
 // 4. 最后同步实例归属、解除附着并设置物理模式，丢弃只施加一次初速度，放置不调用任何装备使用逻辑；失败清理新载体后按请求记录拒绝原因。
 FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(ACatCharacter* Character,
@@ -2214,25 +2220,29 @@ FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(
 	UCatInventoryItemInstance* SourceItem = Entry->Instance;
 	UCatInventoryItemDefinition* Definition = SourceItem->GetItemDefinition();
 	if (!Definition || !Definition->IsInventoryRuntimeDefinitionReady()) return Finish(ECatDomainCommandError::InvalidPayload);
-	WorldActor = SourceItem->GetWorldActor();
+	AActor* SourceWorldActor = SourceItem->GetWorldActor();
+	WorldActor = Quantity == Entry->StackCount ? SourceWorldActor : nullptr;
 	UCatInventoryItemInstance* ReleasedItem = SourceItem;
 	if (!WorldActor)
 	{
-		UClass* ActorClass = Definition->WorldActorClass.LoadSynchronous();
+		UClass* ActorClass = SourceWorldActor ? SourceWorldActor->GetClass() : Definition->WorldActorClass.LoadSynchronous();
 		if (!ActorClass || !ActorClass->ImplementsInterface(UCatInventoryWorldItem::StaticClass())) return Finish(ECatDomainCommandError::DependencyUnavailable);
-		WorldActor = GetWorld()->SpawnActorDeferred<AActor>(ActorClass, Character->GetActorTransform(), nullptr, Character,
+		FTransform SpawnTransform = Character->GetActorTransform();
+		if (SourceWorldActor) SpawnTransform.SetScale3D(SourceWorldActor->GetActorScale3D());
+		WorldActor = GetWorld()->SpawnActorDeferred<AActor>(ActorClass, SpawnTransform, nullptr, Character,
 			ESpawnActorCollisionHandlingMethod::AlwaysSpawn);
 		bNewActor = true;
 		if (!WorldActor) return Finish(ECatDomainCommandError::DependencyUnavailable);
 		WorldActor->SetActorHiddenInGame(true);
 		WorldActor->SetActorEnableCollision(false);
 		ReleasedItem = DuplicateObject<UCatInventoryItemInstance>(SourceItem, WorldActor);
+		ReleasedItem->SetWorldActor(nullptr);
 		if (Quantity < Entry->StackCount) ReleasedItem->SetItemInstanceIdFromAuthority(FGuid::NewGuid());
 		ICatInventoryWorldItem* Receiver = Cast<ICatInventoryWorldItem>(WorldActor);
 		if (!Receiver || !Receiver->InitializeFromInventoryFromAuthority(ReleasedItem, Quantity)) return Finish(ECatDomainCommandError::InvalidPayload);
-		WorldActor->FinishSpawning(Character->GetActorTransform());
+		WorldActor->FinishSpawning(SpawnTransform);
 	}
-	else if (WorldActor->GetWorld() != GetWorld() || Quantity != Entry->StackCount)
+	else if (WorldActor->GetWorld() != GetWorld())
 	{
 		return Finish(ECatDomainCommandError::InvalidPayload);
 	}
@@ -2244,6 +2254,13 @@ FCatDomainCommandResult UCatInventoryComponent::ReleaseItemToWorldFromAuthority(
 		|| Body->GetBodySetup()->CollisionTraceFlag == CTF_UseComplexAsSimple
 		|| !UCatInventoryStatics::FindWorldReleaseTransform(Character, WorldActor, Action, *Settings, Transform))
 		return Finish(ECatDomainCommandError::PermissionDenied);
+	// 原物保管期间数量可能已合并或消耗；公开前必须更新拾取载荷，不能再次发放拾取前的旧数量。
+	if (!bNewActor)
+	{
+		ICatInventoryWorldItem* Receiver = Cast<ICatInventoryWorldItem>(WorldActor);
+		if (!Receiver || !Receiver->InitializeFromInventoryFromAuthority(ReleasedItem, Quantity))
+			return Finish(ECatDomainCommandError::InvalidPayload);
+	}
 	Result.Error = ECatDomainCommandError::AlreadyResolved;
 	TerminalPayloadByKey.Add(Key, Payload);
 	TerminalCache.Add(Key, Result);
