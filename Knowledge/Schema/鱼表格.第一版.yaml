@@ -14,8 +14,8 @@ table:
   wiki_node_token: DKhnweGaEiPTJZkO8OScQOJenqg
   spreadsheet_token: CQlMsQon6hlo8ctpZRWcAPzOnRi
   sheet_id: R7rRBp
-  mirror: C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu/GDD 系统分册/鱼/鱼表格/第一版.csv   # 镜像 2026-09-10 移出仓库，本机绝对路径
-  manifest: C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu/_manifest.json
+  mirror: Knowledge/Design/GDD 系统分册/鱼/鱼表格/第一版.csv   # SSOT 2026-09-11 迁进本仓库，路径相对工程根
+  manifest: Knowledge/Design/_manifest.json
   identity_column: fish_id            # 2026-09-09 加，值＝工程 FishDefinitionId
   declared_at_revision: 872           # 写本文件时的表 revision；表改列序不影响本文件（按列名对；09-09 晚 fish_id 已移到首列、「金钱系数」列在力量系数 K 旁；09-10 加「最近冲岸距离」列与两张子表）
   header_row: 1
