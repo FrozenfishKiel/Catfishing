@@ -55,7 +55,7 @@ protected:
 	/** 首次初始化时允许本格接收输入；布局和悬停颜色继续使用正式 WBP。 */
 	virtual void NativeOnInitialized() override;
 
-	/** 鼠标进入时把本格和中心坐标交给本地 Tooltip Controller。 */
+	/** 鼠标进入时把本格和鼠标屏幕坐标交给本地 Tooltip Controller。 */
 	virtual void NativeOnMouseEnter(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent) override;
 
 	/** 鼠标离开时仅撤销本格自己的悬停提示。 */

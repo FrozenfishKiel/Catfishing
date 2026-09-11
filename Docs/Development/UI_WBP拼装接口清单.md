@@ -377,7 +377,7 @@ Root 会在四个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 
 | 控件名 | 类型 | 人话说明 |
 | --- | --- | --- |
-| `RootBorder` | `Border` | 迁移布局的定位根；C++ 只写入格子中心换算后的屏幕位置，不重排原始面板结构。 |
+| `RootBorder` | `Border` | 迁移布局的定位根；C++ 在显示期间写入鼠标换算后的屏幕位置，不重排原始面板结构。 |
 | `ItemIconImage` | `Image` | 物品图标；当前物品没有缩略图时收起，不能沿用上一件物品的图。 |
 | `ItemNameText` | `TextBlock` | 物品名称，来自物品定义的库存显示名。 |
 | `ItemDescriptionText` | `TextBlock` | 物品说明，来自物品定义的库存说明，保留原换行。 |
@@ -391,13 +391,13 @@ Root 会在四个子 WBP 的 WidgetTree 内按名称解析以下关键控件：�
 
 ### Controller 来源与关闭
 
-`UCatInventorySlotWidget::NativeOnMouseEnter()` 会把本格和格子中心屏幕坐标交给 `UCatItemTooltipController::ShowTooltip()`；`NativeOnMouseLeave()`、`NativeDestruct()`、拖拽开始和格子重建会撤销本格来源。只有当前来源能隐藏当前提示，旧格子的迟到 Leave 不会关掉新格子的提示。
+`UCatInventorySlotWidget::NativeOnMouseEnter()` 会把本格和进入事件的鼠标屏幕坐标交给 `UCatItemTooltipController::ShowTooltip()`；`NativeOnMouseLeave()`、`NativeDestruct()`、拖拽开始和格子重建会撤销本格来源。只有当前来源能隐藏当前提示，旧格子的迟到 Leave 不会关掉新格子的提示。
 
 库存页或局内 UI 关闭时会调用 `ForceHideTooltip()` 或 `Unbind()`，立即收起提示并停止继续读取实例。Controller 活动期间会 Tick 当前来源，从同一个实例重新投影耐久等变化；这个刷新不依赖库存列表重建，也不重启动画。
 
 ### 默认动画与迁移脚本
 
-默认淡入和淡出时间都是 `0.2` 秒，位置取鼠标进入时的格子中心，不跟随鼠标移动。`ShowAt()` 只把屏幕绝对坐标转换到玩家屏幕几何，并写到 `RootBorder` 的 RenderTranslation；换格时透明度从当前值接续，避免先闪断再淡入。
+默认淡入和淡出时间都是 `0.2` 秒。`ShowAt()` 用进入事件的鼠标屏幕绝对坐标完成首次定位，`NativeTick()` 在可见期间持续读取鼠标位置，转换到玩家屏幕几何后写入 `RootBorder` 的 RenderTranslation；淡出期间也继续跟随，收起后停止。位置更新不会重复发起显示，换格时透明度仍从当前值接续。
 
 迁移入口是 `Scripts/migrate_item_tooltip.py`。脚本从 `D:\UnreaProjects\AegisOdyssey\Content` 复制旧 WBP 和最小依赖闭包，目标资产是 `/Game/UI/Inventory/WBP_CatItemTooltip`；它会调用 `UCatItemTooltipAuthoringLibrary::InstallLegacyParentRedirect()` 临时解析 Aegis 旧父类，再调用 `FinalizeMigratedTooltipWidget()` 固定父类、清理旧 MVVM 绑定并补齐 `InstanceDetailsText`。脚本拒绝覆盖已有目标资产或不同内容的同路径依赖。
 

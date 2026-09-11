@@ -72,13 +72,13 @@ UCatItemTooltipController* UCatInventorySlotWidget::ResolveTooltipController() c
 	return UI ? UI->GetItemTooltipController() : nullptr;
 }
 
-// 先保留 WBP 的悬停表现，再提交本格中心的屏幕绝对坐标；不从当前鼠标位置构造跟随提示。
+// 先保留 WBP 的悬停表现，再提交进入事件的鼠标屏幕绝对坐标；后续跟随由提示 View 更新，格子只负责来源。
 void UCatInventorySlotWidget::NativeOnMouseEnter(const FGeometry& InGeometry, const FPointerEvent& InMouseEvent)
 {
 	Super::NativeOnMouseEnter(InGeometry, InMouseEvent);
 	if (UCatItemTooltipController* Tooltip = ResolveTooltipController())
 	{
-		Tooltip->ShowTooltip(this, InGeometry.LocalToAbsolute(InGeometry.GetLocalSize() * 0.5f));
+		Tooltip->ShowTooltip(this, InMouseEvent.GetScreenSpacePosition());
 	}
 }
 

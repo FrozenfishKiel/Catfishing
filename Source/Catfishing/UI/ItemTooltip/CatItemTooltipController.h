@@ -19,7 +19,7 @@ public:
 	void Bind(UCatItemTooltipWidget* InView);
 	/** UI 卸载时立即清理来源并释放 Model、View 引用。 */
 	void Unbind();
-	/** 格子进入时提交自己和中心坐标；有效物品接管全局提示，空格不显示。 */
+	/** 格子进入时提交自己和鼠标屏幕坐标；有效物品接管全局提示，空格不显示。 */
 	void ShowTooltip(UCatInventorySlotWidget* Source, const FVector2D& ScreenPosition);
 	/** 只有当前来源可以隐藏；旧格子的 Leave/Destruct 不影响新格子的提示。 */
 	void HideTooltip(const UCatInventorySlotWidget* Source);

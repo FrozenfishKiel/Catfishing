@@ -217,7 +217,7 @@ namespace CatItemTooltipNetwork
 			if (!Details->GetText().ToString().Contains(TEXT("3.12 kg")) || !HostDetails->GetText().ToString().Contains(TEXT("3.12 kg"))
 				|| Tooltip->GetVisibility() != ESlateVisibility::HitTestInvisible || Tooltip->GetRenderOpacity() < 0.99f) return false;
 			const FVector2D Expected = UWidgetLayoutLibrary::GetPlayerScreenWidgetGeometry(ClientController.Get()).AbsoluteToLocal(
-				FishSlot->GetCachedGeometry().LocalToAbsolute(FishSlot->GetCachedGeometry().GetLocalSize() * 0.5f));
+				UWidgetLayoutLibrary::GetMousePositionOnPlatform());
 			if (!Root->GetRenderTransform().Translation.Equals(Expected, 0.1f)) return false;
 			if (!Test->TestTrue(TEXT("正式格子已经有实际布局尺寸"), FishSlot->GetCachedGeometry().GetLocalSize().GetMin() > 0.0)) return true;
 			// 保存两端实际玩家视口，包含正式库存与 Tooltip；它补足离屏渲染不能证明实际定位和背景资源的盲区。

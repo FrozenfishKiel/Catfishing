@@ -30,8 +30,7 @@ void UCatItemTooltipWidget::RenderItem(const FCatItemTooltipViewData& Data)
 	}
 }
 
-// 先打开不可命中的显示层，按玩家屏幕几何转换来源格中心，再从当前透明度接续淡入。
-// 不追踪鼠标坐标；此行为与 Aegis 的 ShowHoverTooltip / ResolveTooltipCanvasPosition 一致。
+// 先打开不可命中的显示层，把进入事件的鼠标绝对坐标转换到玩家屏幕空间，再从当前透明度接续淡入。
 void UCatItemTooltipWidget::ShowAt(const FVector2D& ScreenPosition)
 {
 	bWantsVisible = true;
@@ -55,11 +54,17 @@ void UCatItemTooltipWidget::HideTooltip(const bool bImmediate)
 	}
 }
 
-// 依当前显示方向选择时长并线性趋近目标；透明度连续，所以旧淡出被新悬停接管时不会重新闪黑。
+// 可见期间先把鼠标绝对坐标转换到玩家屏幕空间，更新原 WBP 根边框的位置；淡出期间也继续跟随。
+// 再依当前显示方向线性推进透明度；定位不重复调用 ShowAt，因此移动不会重启淡入或反转淡出。
 // 收起后 UMG 不再推进动画；下一次 ShowAt 会重新启用可见控件 Tick。
 void UCatItemTooltipWidget::NativeTick(const FGeometry& MyGeometry, const float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
+	if (RootBorder && GetOwningPlayer())
+	{
+		RootBorder->SetRenderTranslation(UWidgetLayoutLibrary::GetPlayerScreenWidgetGeometry(GetOwningPlayer()).AbsoluteToLocal(
+			UWidgetLayoutLibrary::GetMousePositionOnPlatform()));
+	}
 	const float Duration = bWantsVisible ? FadeInDurationSeconds : FadeOutDurationSeconds;
 	const float Target = bWantsVisible ? 1.0f : 0.0f;
 	SetRenderOpacity(Duration > KINDA_SMALL_NUMBER ? FMath::FInterpConstantTo(GetRenderOpacity(), Target, InDeltaTime, 1.0f / Duration) : Target);
