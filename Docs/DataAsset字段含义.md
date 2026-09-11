@@ -1,6 +1,6 @@
 # DataAsset 字段说明手册
 
-对应代码状态：2026-09-04。给配数值/建资产的人看：每个 DataAsset 类型的字段含义、校验规则、注册方法。
+对应代码状态：2026-09-04；2026-09-11 更新身体意图耗体及相关搏斗字段。给配数值/建资产的人看：每个 DataAsset 类型的字段含义、校验规则、注册方法。
 
 ## 0. 所有 DataAsset 共同的规矩
 
@@ -53,19 +53,20 @@
 | 满表现张力（牛顿） | DisplayTensionNewtons | 50 N | UI 和竿体弯曲表现的张力归一化基准 |
 | 收线速度 | ReelSpeedCentimetersPerSecond | 80 cm/s | 左键收线意图速度上限 |
 | 猫力竭后鱼外冲速度倍率 | ExhaustedCatEscapeSpeedMultiplier | 2 | 主位体力为零且没有助手实际出力时，按鱼两档游速中的较大值乘此倍率持续外冲；有限值且至少为 1 |
-| 猫做功体力消耗系数 | CatStaminaCostPerStrengthCentimeter | 默认 0.002 | 猫移动/收线每标准力量·cm 已完成正功的单价 |
+| 猫做功体力消耗系数 | CatStaminaCostPerStrengthCentimeter | 默认 0.002 | 收线每标准力量·cm 已完成正功的单价；身体意图缺失使用下述独立配置 |
 | 猫转杆每标准转矩弧度体力系数 | CatRodStaminaCostPerStrengthRadian | 默认 0.03 | 真实转角按主位主动转矩比例加权后计价，不使用最大转速虚拟弧长 |
 | 猫无负载动作成本倍率 | CatUnloadedWorkMultiplier | 默认 0.15 | 猫实际做功的基础价格，与负载价格相加 |
 | 猫满用力每秒支撑耗体 | CatSupportStaminaPerSecond | 默认 2/s | 支撑按用力/负载比例平方和持续时间结算；共享支撑与转杆支撑取较高者 |
-| 鱼做功体力消耗系数 | FishStaminaCostPerStrengthCentimeter | 默认 0.002 | 每点标准努力强度、每厘米有效对抗努力的体力价格；再乘鱼对抗负载，自由游动不扣体力 |
-| 猫移动体力倍率 | CatMovementStaminaMultiplier | 默认 1 | 绷线时主动远离鱼的身体移动费用；被动位移不计 |
+| 鱼每米未完成意图耗体 | FishStaminaPerUnfulfilledMeter | 默认 5/3 点/m | 沿主动意图未完成米数的独立价格；倒退增加缺失，侧移不抵扣，无额外张力/角度倍率 |
+| 旧鱼每厘米价格 | FishStaminaCostPerStrengthCentimeter | 已停用 | 仅保留资产字段身份，不参与现行计算，也不换算新价格 |
+| 猫移动体力倍率 | CatMovementStaminaMultiplier | 默认 1 | 主控身体意图缺失每米价格的无量纲倍率；不以张力或鱼线方向额外门控；零意图无此项费用 |
 | 猫收线体力倍率 | CatReelStaminaMultiplier | 默认 1 | 原求解器本步卷线量的正功费用 |
 | 猫转杆体力倍率 | CatRodStaminaMultiplier | 默认 1 | 主位实际转杆正功及其时间支撑的倍率 |
 | 猫持竿体力倍率 | CatHoldStaminaMultiplier | 默认 1 | 共享沿线支撑费用倍率；实际做功费用与支撑费用分别计算 |
 | 猫负载体力倍率 | CatLoadStaminaMultiplier | 默认 1 | 猫实际做功乘 `(无负载动作倍率 + 自身归一化负载 × 本倍率)` |
-| 鱼负载体力倍率 | FishLoadStaminaMultiplier | 默认 1 | 鱼有效努力费用仅乘 `自身归一化对抗负载 × 倍率`，无基础游动费用；0 完全关闭鱼对抗耗体 |
-| 鱼受阻努力折算倍率 | IsometricEffortMultiplier | 1 | 仅鱼使用的未完成对抗意图距离倍率；猫支撑改为按时间收费 |
-| 放线体力恢复速度 | SlackStaminaRegenPerSecond | 3/s | 正常按右键时猫的恢复速度，不受张力、移动或转杆限制；零体力强制拖拽除外 |
+| 旧鱼负载体力倍率 | FishLoadStaminaMultiplier | 已停用 | 仅保留资产字段身份，不参与意图缺失耗体 |
+| 旧鱼受阻努力折算倍率 | IsometricEffortMultiplier | 已停用 | 仅保留资产字段身份；现行缺失距离不另乘受阻倍率 |
+| 放线体力恢复速度 | SlackStaminaRegenPerSecond | 3/s | 正常右键且身体/杆完全卸载时主控的恢复速度；任一抓握/推挤/冲量负载包括相互抵消均阻止恢复；零体力强制拖拽除外 |
 | 鱼力竭吸附阈值 | FishExhaustionThreshold | 0.5 | 本步产生正的鱼对抗耗体后，剩余绝对体力不高于该值才吸附归零；零耗体不触发 |
 | 低体力休息触发比例/时长倍率 | LowStaminaRestThreshold/Multiplier | 0.5 / 1.5 | 低体力鱼延长平静期 |
 | 逃脱松线余量 | EscapeSlackCentimeters | 100 cm | 无人持竿时超过最大线长后的逃脱余量 |
@@ -75,7 +76,21 @@
 
 `DefaultGame.ini` 只保存 `FightBalanceDefinition` 资产引用，上述数值全部来自正式资产。资产缺失、未勾“启用正式运行”或任一字段非法时，Fishing runtime 保持 fail-closed。
 
-上述费用与倍率均允许非负有限值。猫实际做功与支撑分开，阶段倍率只作用在当前资产声明的费用项；正功量只来自已完成的主动身体移动、本步卷线与归一化主动转矩加权转角，受阻时只承担时间支撑。猫负载倍率为 0 只关闭实际做功的负载附加部分；完全关闭猫费用需要关闭线性单价、转杆单价及支撑费。鱼受阻倍率为 1 仍表示同等意图完成或受阻时有效努力相同，但必须同时存在张力、向外反抗与可用猫合力才计费，鱼没有基础游动费用。正常右键恢复与双方免耗体、零体力强制锁线拖拽保持。修改资产后下一场搏斗生效；创建脚本只初始化新资产，已有合法资产保留调参，非法资产报错而不自动覆盖。
+现行费用分为身体意图缺失、收线/转杆正功、主控持竿支撑。身体受阻按未完成米数收费，完成进展不收此费；收线按实际完成量，转杆按真实主动转角，主控支撑仍按相对用力平方和时间去重。`CatLoadStaminaMultiplier` 只作用于原收线/转杆正功的负载部分，不能关闭身体意图缺失费。鱼使用独立米价，不读取旧每厘米/每秒价或负载倍率。正常放线保留原鱼/主控免耗，恢复还须身体与杆完全卸载；辅助始终按自身身体状态结算。配置身份及创建脚本保持，已有合法资产不自动覆盖。
+
+### 1.2 身体意图与恢复：`UCatPhysicalEffortSettings`
+
+这是 Project Settings 的 Config=Game 设置，节名 `[/Script/Catfishing.CatPhysicalEffortSettings]`，不是新的 DataAsset；使用独立默认，不迁用旧做功数值。
+
+| 字段 | 默认与单位 | 含义 |
+| --- | --- | --- |
+| StaminaPerUnfulfilledMeter | 2 点/m | 身体沿意图缺失距离的价格；主控另乘原移动倍率 |
+| SupportReferenceSpeedCmS | 100 cm/s | 辅助满用力站稳的等效意图速度，与走路速度独立 |
+| RecoveryDelaySeconds | 2 s | 辅助完全卸载且不主动用力的连续等待；重新受力清零 |
+| RecoveryPerSecond | 5 点/s | 辅助等待结束后的本人恢复速度 |
+| ExhaustionResumeRatio | 0.2 | 辅助耗尽后恢复到最大体力的此比例，才开放辅助出力/抓握 |
+
+价格、速度、等待均需有限且非负，恢复比例在 (0,1]。辅助耗尽时主动地面力量为零，完全卸载之前不恢复；主控仍使用上述原放线恢复入口。实际公式、网络权威和验证见 `FishFightImplementationGuide_zh-CN.md` 顶部。
 
 ## 2. 装备/道具：`UCatEquipmentDefinition` 与正式库存目录
 

@@ -1,5 +1,6 @@
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
 
+#include "Physics/Simulation/CatIntentMotionModel.h"
 #include "Fishing/Simulation/CatFishingFightWorkModel.h"
 
 
@@ -564,13 +565,13 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 			* Config.ForcePerStrengthNewtons, UE_DOUBLE_SMALL_NUMBER), 0.0, 1.0);
 	const bool bChargeFishIntent = !bSlackRecovery && !bExhaustedCatEscape && bOperatorPresent
 		&& OperatorCatStrength > UE_DOUBLE_SMALL_NUMBER && !State.bFishExhausted && State.FishStamina > 0.0;
-	FCatFightFishIntentInput FishIntent;
+	FCatIntentMotionInput FishIntent;
 	FishIntent.IntendedDisplacementCentimeters = FishIntentDisplacement;
 	FishIntent.ActualDisplacementCentimeters = FishActualDisplacement;
 	// 豁免步骤仍记录运动缺失，但不能因一笔不会收取的高价格乘积溢出而拒绝物理结果。
 	FishIntent.StaminaPerUnfulfilledMeter = bChargeFishIntent ? Config.FishStaminaPerUnfulfilledMeter : 0.0;
-	FCatFightFishIntentResult FishIntentResult;
-	if (!FCatFishingFightWorkModel::ComputeFishIntentDrain(FishIntent, FishIntentResult))
+	FCatIntentMotionResult FishIntentResult;
+	if (!FCatIntentMotionModel::ComputeDrain(FishIntent, FishIntentResult))
 	{
 		return RejectResolvedResult();
 	}

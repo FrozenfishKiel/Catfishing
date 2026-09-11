@@ -1,6 +1,8 @@
 #include "Inventory/CatInventorySettings.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 #if WITH_DEV_AUTOMATION_TESTS
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 
 #include "Misc/AutomationTest.h"
 #include "Equipment/CatEquipmentSettings.h"
@@ -133,6 +135,9 @@ namespace CatLightPropNetwork
 			const double Now = Server->GetTimeSeconds();
 			if (Stage == 0)
 			{
+				// Preserve this fixture's stronger-primary contract now that helpers use ASC strength.
+				Cat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50);
+				Helper->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 20);
 				Local->SetActorTickEnabled(false);
 				for (auto It = Server->GetPlayerControllerIterator(); It; ++It) if (It->Get()) It->Get()->SetActorTickEnabled(false);
 				Body->TeleportBodyFromAuthority(FTransform(FVector(0, 0, Body->GetStandRootHeightCm())), TEXT("LightPropFormalSetup"));
@@ -150,7 +155,7 @@ namespace CatLightPropNetwork
 			}
 			if (ClientBody->GetControlEpoch() != Body->GetControlEpoch() || ClientBody->GetResetEpoch() != Body->GetResetEpoch()) return false;
 			ClientBody->SetMoveIntent(Stage == 5 ? -FVector::ForwardVector : FVector::ZeroVector);
-			ClientBody->SetViewIntent(FRotator(0, Stage == 2 ? 40 : 0, 0));
+			if (Stage < 11) ClientBody->SetViewIntent(FRotator(0, Stage == 2 ? 40 : 0, 0));
 			HelperBody->SetMoveIntent(Stage == 5 ? FVector::ForwardVector : FVector::ZeroVector);
 			HelperBody->SetViewIntent(Stage >= 5 && Stage <= 10 && Rod ?
 				(Rod->GetGripWorldTransform().GetLocation() + Rod->GetPhysicalRodBody()->GetForwardVector() * 12.0 - HelperBody->GetGrab()->GetShoulderWorldLocation(true)).Rotation()
@@ -273,7 +278,7 @@ namespace CatLightPropNetwork
 			else if (Stage == 5)
 			{
 				auto* HelperGrab = HelperBody->GetGrab();
-				Test->TestEqual(TEXT("helper rod grip applies traction to the primary carrier"), HelperGrab->GetTractionReceiverForDiagnostics(true), Body);
+				Test->TestEqual(TEXT("helper rod grip applies traction to the primary carrier"), HelperGrab->GetTractionReceiver(true), Body);
 				MaximumGripForce = FMath::Max(MaximumGripForce, HelperGrab->GetLastTractionForceForDiagnostics(true).Size());
 				MaximumTractionError = FMath::Max(MaximumTractionError, HelperGrab->GetTractionErrorForDiagnostics(true).Size());
 				MaximumHandGap = FMath::Max(MaximumHandGap, FVector::Distance(HelperBody->GetHand(true)->GetComponentLocation(), HelperGrab->GetGripWorldLocation(true)));

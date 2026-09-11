@@ -288,7 +288,7 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		auto* Mode = Payment->GetAuthGameMode<ACatfishingGameModeBase>();
 		Mode->bRunCommandsOpen = true;
 		Mode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
-		Mode->RunPublicState.Phase.bFishingAllowed = true;
+		Mode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
 		auto* Controller = Payment->SpawnActor<ACatfishingPlayerController>();
 		if (!Controller) return false;
 		Controller->PlayerState = Player;

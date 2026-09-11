@@ -230,6 +230,8 @@ void UCatHUDModel::Refresh()
 			? FText::FromString(FString::Printf(TEXT("玩家体力 %.0f / %.0f"),
 				NewState.FightStamina, NewState.FightStaminaMaximum))
 			: FText::FromString(FString::Printf(TEXT("玩家体力 %.0f"), NewState.FightStamina));
+	NewState.bShowPersonalStamina = NewState.FightStaminaMaximum > 0
+		&& NewState.FightStamina < NewState.FightStaminaMaximum;
 	NewState.FishStaminaText = FText::FromString(FString::Printf(
 		TEXT("鱼体力 %.0f%%"), NewState.NormalizedFishStamina * 100.0f));
 	if (NewState.HookCountdownText.IsEmpty())

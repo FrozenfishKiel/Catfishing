@@ -104,7 +104,7 @@ bool FCatPhysicalInputRouteTest::RunTest(const FString& Parameters)
 	GameMode->AdmissionRecords.Add(ACatfishingGameModeBase::MakeStableNetIdKey(Helper->GetUniqueId()), Admission);
 	GameMode->bRunCommandsOpen = true;
 	GameMode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
-	GameMode->RunPublicState.Phase.bFishingAllowed = true;
+	GameMode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
 	TStrongObjectPtr<ULocalPlayer> LocalPlayer(NewObject<ULocalPlayer>(GEngine));
 	Controller->SetPlayer(LocalPlayer.Get());
 	Controller->SetViewTarget(Cat);

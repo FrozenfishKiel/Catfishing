@@ -785,15 +785,27 @@ bool ACatfishingGameModeBase::CanAcceptGameplayCommand(const AController* Contro
 	return HasAuthority() && bRunCommandsOpen && !RunPublicState.DayTransition.bActive && IsControllerActive(Controller);
 }
 
-// Fishing/玩家打窝 gate 流程：先复用宽玩法命令 gate，再要求 Run 仍在白天且公开快照允许钓鱼，最后确认当前猫未倒地；结算收口、救援和 Social 命令继续走宽 gate，不被钓鱼白天规则误封。
+// 操作准入与新咬钩分开：白天截止和夜晚不封锁抛收竿、松线、抄网或打窝。
 bool ACatfishingGameModeBase::CanAcceptFishingCommand(const AController* Controller) const
 {
 	const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
 	const UCatConditionComponent* Conditions = Character ? Character->GetConditionComponent() : nullptr;
 	return CanAcceptGameplayCommand(Controller)
-		&& RunPublicState.Phase.Phase == ECatRunPhase::DayActive
-		&& RunPublicState.Phase.bFishingAllowed
+		&& (RunPublicState.Phase.Phase == ECatRunPhase::DayActive
+			|| RunPublicState.Phase.Phase == ECatRunPhase::NormalNight
+			|| RunPublicState.Phase.Phase == ECatRunPhase::FailureSettlementNight
+			|| RunPublicState.Phase.Phase == ECatRunPhase::SuccessSettlementNight)
 		&& Conditions && !Conditions->GetSnapshot().bDowned;
+}
+
+bool ACatfishingGameModeBase::CanGenerateNewFishingBites() const
+{
+	return HasAuthority() && bRunCommandsOpen && GetWorld()
+		&& !RunPublicState.DayTransition.bActive
+		&& RunPublicState.Phase.Phase == ECatRunPhase::DayActive
+		&& RunPublicState.Phase.bNewFishingBitesAllowed
+		&& (!RunPublicState.Phase.bHasDeadline
+			|| GetWorld()->GetTimeSeconds() < RunPublicState.Phase.DeadlineServerTimeSeconds);
 }
 
 // PostLogin 拒绝流程：优先让 GameSession 执行标准 Kick；GameSession 不可用时通知客户端回主菜单。该分支不调用父类生成 Character，也不删除无法安全匹配到本 Controller 的 Reserved 记录，避免替未裁 TTL/失效准入策略作决定。
@@ -1063,9 +1075,8 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		}
 	}
 
-	// 非白天阶段会关闭 Fishing gate；必须在改公开门禁前由服务器释放竿位和 MOVE_None，
-	// 否则玩家进入夜晚后连 LeaveRod 都会被同一个 gate 拒绝。
-	if (NewPhase != ECatRunPhase::DayActive)
+	// 只有局未启动或真正结束才终止会话；夜晚保留操作位和正在进行的搏斗。
+	if (NewPhase == ECatRunPhase::NotStarted || NewPhase == ECatRunPhase::Ending || NewPhase == ECatRunPhase::Ended)
 	{
 		if (UCatFishingService* Fishing = GetWorld()->GetSubsystem<UCatFishingService>())
 		{
@@ -1076,7 +1087,7 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 	ClearDayDeadline();
 	RunPublicState.Phase.Phase = NewPhase;
 	RunPublicState.Phase.ServerTimeAnchorSeconds = GetWorld()->GetTimeSeconds();
-	RunPublicState.Phase.bFishingAllowed = false;
+	RunPublicState.Phase.bNewFishingBitesAllowed = false;
 	RunPublicState.Phase.bOfferingOpen = false;
 	RunPublicState.bTeardownComplete = false;
 
@@ -1102,7 +1113,7 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 			DayStartDailyOfferingTargetMultiplier, DayStartDailyPressure, DayStartOldTarget,
 			RunPublicState.DailyOfferingTarget, RunPublicState.Revision);
 		RunPublicState.EndReason = ECatRunEndReason::None;
-		RunPublicState.Phase.bFishingAllowed = true;
+		RunPublicState.Phase.bNewFishingBitesAllowed = true;
 		RunPublicState.Phase.bOfferingOpen = false;
 		if (RunPublicState.DayTransition.bActive)
 		{
@@ -1155,6 +1166,10 @@ FCatRunTransitionResult ACatfishingGameModeBase::EnterRunPhaseFromStateTree(cons
 		break;
 	}
 
+	if (UCatFishingService* Fishing = GetWorld()->GetSubsystem<UCatFishingService>())
+	{
+		Fishing->RefreshBiteAvailabilityFromAuthority();
+	}
 	++RunPublicState.Revision;
 	Result.bApplied = true;
 	Result.CurrentPhase = NewPhase;
@@ -1323,6 +1338,10 @@ void ACatfishingGameModeBase::FinishAltarDayTransition()
 	}
 	++RunPublicState.Revision;
 	RefreshEnvironmentAndPublish();
+	if (UCatFishingService* Fishing = GetWorld()->GetSubsystem<UCatFishingService>())
+	{
+		Fishing->RefreshBiteAvailabilityFromAuthority();
+	}
 	UE_LOG(LogCatRun, Display, TEXT("Event=AltarTransitionFinished World=%s NetMode=%d Authority=1 LocalRole=%d RequestId=%s Day=%d Phase=%s Deadline=%.3f"),
 		*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()), *RunPublicState.DayTransition.RequestId.ToString(),
 		RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(RunPublicState.Phase.Phase), RunPublicState.Phase.DeadlineServerTimeSeconds);
@@ -1585,7 +1604,7 @@ void ACatfishingGameModeBase::ScheduleDayEnvironmentRefreshes()
 void ACatfishingGameModeBase::HandleDayEnvironmentRefreshElapsed()
 {
 	if (!HasAuthority() || !bRunCommandsOpen || RunPublicState.Phase.Phase != ECatRunPhase::DayActive
-		|| !RunPublicState.Phase.bHasDeadline || !RunPublicState.Phase.bFishingAllowed)
+		|| !RunPublicState.Phase.bHasDeadline || !RunPublicState.Phase.bNewFishingBitesAllowed)
 	{
 		return;
 	}
@@ -1596,7 +1615,9 @@ void ACatfishingGameModeBase::HandleDayEnvironmentRefreshElapsed()
 		RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(RunPublicState.Environment.TimeOfDay));
 }
 
-// 白天截止流程：先撤销实际计时器，再校验仍开放的 DayActive；通过后记录消费时刻与公开截止时间、关闭钓鱼并清理其余白天计时，保留公开 deadline 发布快照，最后用 DayEnded 请求进入普通夜晚。
+// 白天截止流程：先撤销实际计时器，再校验服务器仍开放的 DayActive；不满足则不推进阶段。
+// 通过后记录消费时刻和公开截止时间，只关闭新咬钩并通知钓鱼服务清理等待；已有真咬、搏斗与操作继续。
+// 最后关闭供品入口、清理其余白天计时，递增 Revision 并保留公开 deadline 发布环境快照，再用 DayEnded 请求普通夜晚。
 void ACatfishingGameModeBase::HandleDayDeadlineElapsed()
 {
 	// 调试入口会在计时器到点前直接调用本函数；只 Invalidate 会丢失清理句柄，让旧回调在下一天触发。ClearTimer 同时支持撤销待执行计时器和当前自然到点的回调。
@@ -1610,12 +1631,11 @@ void ACatfishingGameModeBase::HandleDayDeadlineElapsed()
 		*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()),
 		*RunPublicState.Phase.RunId.ToString(), RunPublicState.Phase.DayIndex,
 		GetWorld()->GetTimeSeconds(), RunPublicState.Phase.DeadlineServerTimeSeconds);
-	// 截止时先收口钓鱼并恢复所有操作角色移动，再把新命令门关闭。
+	RunPublicState.Phase.bNewFishingBitesAllowed = false;
 	if (UCatFishingService* Fishing = GetWorld()->GetSubsystem<UCatFishingService>())
 	{
-		Fishing->SuspendFishingAndReleaseOperators();
+		Fishing->RefreshBiteAvailabilityFromAuthority();
 	}
-	RunPublicState.Phase.bFishingAllowed = false;
 	RunPublicState.Phase.bOfferingOpen = false;
 	ClearDayTimers();
 	++RunPublicState.Revision;
@@ -1771,7 +1791,7 @@ void ACatfishingGameModeBase::FailRunStartup(const TCHAR* Reason)
 		RunStateTreeComponent->StopLogic(TEXT("RunStartupFailed"));
 	}
 	RunPublicState.Phase.Phase = ECatRunPhase::NotStarted;
-	RunPublicState.Phase.bFishingAllowed = false;
+	RunPublicState.Phase.bNewFishingBitesAllowed = false;
 	RunPublicState.Phase.bOfferingOpen = false;
 	RunPublicState.EndReason = ECatRunEndReason::StartupFailed;
 	++RunPublicState.Revision;
@@ -1847,7 +1867,7 @@ FCatRunTeardownResult ACatfishingGameModeBase::RequestRunTeardown(const FCatRunT
 		RunStateTreeComponent->StopLogic(TEXT("Host Online Leave"));
 	}
 	CancelAltarDayTransition(TransitionAltar.Get(), FText::GetEmpty());
-	RunPublicState.Phase.bFishingAllowed = false;
+	RunPublicState.Phase.bNewFishingBitesAllowed = false;
 	RunPublicState.Phase.bOfferingOpen = false;
 	RunPublicState.EndReason = ECatRunEndReason::HostExit;
 	ActiveHostExitRequestId = Request.RequestId;
@@ -2010,14 +2030,14 @@ bool ACatfishingGameModeBase::SubmitDebugDayEndForCurrentDay(const TCHAR* Trigge
 	const int32 DayIndex = RunPublicState.Phase.DayIndex;
 	const int64 Revision = RunPublicState.Revision;
 	if (RunPublicState.Phase.Phase != ECatRunPhase::DayActive || !RunPublicState.Phase.bHasDeadline
-		|| !RunPublicState.Phase.bFishingAllowed || RunPublicState.DailyOfferingTarget <= 0)
+		|| !RunPublicState.Phase.bNewFishingBitesAllowed || RunPublicState.DailyOfferingTarget <= 0)
 	{
 		UE_LOG(LogCatRun, Warning,
-			TEXT("Event=run_environment_social_debug_day_end_rejected Trigger=%s Reason=DayNotOpen RunId=%s Revision=%lld Day=%d Phase=%s HasDeadline=%s FishingAllowed=%s OfferingOpen=%s LastOfferingPoints=%d DailyOfferingTarget=%d"),
+			TEXT("Event=run_environment_social_debug_day_end_rejected Trigger=%s Reason=DayNotOpen RunId=%s Revision=%lld Day=%d Phase=%s HasDeadline=%s NewFishingBitesAllowed=%s OfferingOpen=%s LastOfferingPoints=%d DailyOfferingTarget=%d"),
 			TriggerText, *RunId.ToString(EGuidFormats::DigitsWithHyphens), Revision, DayIndex,
 			*UEnum::GetValueAsString(RunPublicState.Phase.Phase),
 			RunPublicState.Phase.bHasDeadline ? TEXT("true") : TEXT("false"),
-			RunPublicState.Phase.bFishingAllowed ? TEXT("true") : TEXT("false"),
+			RunPublicState.Phase.bNewFishingBitesAllowed ? TEXT("true") : TEXT("false"),
 			RunPublicState.Phase.bOfferingOpen ? TEXT("true") : TEXT("false"),
 			RunPublicState.LastOfferingPoints, RunPublicState.DailyOfferingTarget);
 		return false;
@@ -2191,14 +2211,14 @@ bool ACatfishingGameModeBase::ApplyDebugSkipToNight()
 		return true;
 	}
 	if (RunPublicState.Phase.Phase == ECatRunPhase::DayActive
-		&& (!RunPublicState.Phase.bFishingAllowed || !RunPublicState.Phase.bHasDeadline))
+		&& (!RunPublicState.Phase.bNewFishingBitesAllowed || !RunPublicState.Phase.bHasDeadline))
 	{
 		UE_LOG(LogCatRun, Display,
-			TEXT("Event=run_environment_social_debug_skip_to_night_waiting RunId=%s Revision=%lld Day=%d HasDeadline=%s FishingAllowed=%s OfferingOpen=%s"),
+			TEXT("Event=run_environment_social_debug_skip_to_night_waiting RunId=%s Revision=%lld Day=%d HasDeadline=%s NewFishingBitesAllowed=%s OfferingOpen=%s"),
 			*RunPublicState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens),
 			RunPublicState.Revision, RunPublicState.Phase.DayIndex,
 			RunPublicState.Phase.bHasDeadline ? TEXT("true") : TEXT("false"),
-			RunPublicState.Phase.bFishingAllowed ? TEXT("true") : TEXT("false"),
+			RunPublicState.Phase.bNewFishingBitesAllowed ? TEXT("true") : TEXT("false"),
 			RunPublicState.Phase.bOfferingOpen ? TEXT("true") : TEXT("false"));
 		return true;
 	}
@@ -2444,13 +2464,13 @@ bool ACatfishingGameModeBase::ApplyDebugDayLengthSeconds(const double NewDayLeng
 		return false;
 	}
 	if (!bRunCommandsOpen || RunPublicState.Phase.Phase != ECatRunPhase::DayActive
-		|| !RunPublicState.Phase.bHasDeadline || !RunPublicState.Phase.bFishingAllowed)
+		|| !RunPublicState.Phase.bHasDeadline || !RunPublicState.Phase.bNewFishingBitesAllowed)
 	{
 		UE_LOG(LogCatRun, Warning,
-			TEXT("Event=run_environment_social_debug_day_length_rejected Reason=NotOpenActiveDay Seconds=%.3f Phase=%s HasDeadline=%s FishingAllowed=%s OfferingOpen=%s CommandsOpen=%s"),
+			TEXT("Event=run_environment_social_debug_day_length_rejected Reason=NotOpenActiveDay Seconds=%.3f Phase=%s HasDeadline=%s NewFishingBitesAllowed=%s OfferingOpen=%s CommandsOpen=%s"),
 			NewDayLengthSeconds, *UEnum::GetValueAsString(RunPublicState.Phase.Phase),
 			RunPublicState.Phase.bHasDeadline ? TEXT("true") : TEXT("false"),
-			RunPublicState.Phase.bFishingAllowed ? TEXT("true") : TEXT("false"),
+			RunPublicState.Phase.bNewFishingBitesAllowed ? TEXT("true") : TEXT("false"),
 			RunPublicState.Phase.bOfferingOpen ? TEXT("true") : TEXT("false"),
 			bRunCommandsOpen ? TEXT("true") : TEXT("false"));
 		return false;

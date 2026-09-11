@@ -32,7 +32,7 @@ namespace
 		const bool bAccepted, const FCatRunPublicState& RunState)
 	{
 		UE_LOG(LogCatRun, Display,
-			TEXT("Event=%s Command=%s World=%s NetMode=%s Accepted=%s RunId=%s Revision=%lld EnvRevision=%lld Day=%d Phase=%s HasDeadline=%s FishingAllowed=%s OfferingOpen=%s LastOfferingPoints=%d DailyOfferingTarget=%d EndReason=%s"),
+			TEXT("Event=%s Command=%s World=%s NetMode=%s Accepted=%s RunId=%s Revision=%lld EnvRevision=%lld Day=%d Phase=%s HasDeadline=%s NewFishingBitesAllowed=%s OfferingOpen=%s LastOfferingPoints=%d DailyOfferingTarget=%d EndReason=%s"),
 			EventName, CommandName,
 			World ? *World->GetName() : TEXT("None"),
 			World ? *FormatRunEnvironmentSocialDebugNetMode(World->GetNetMode()) : TEXT("Unknown"),
@@ -41,7 +41,7 @@ namespace
 			RunState.Environment.SourceRunRevision, RunState.Phase.DayIndex,
 			*UEnum::GetValueAsString(RunState.Phase.Phase),
 			RunState.Phase.bHasDeadline ? TEXT("true") : TEXT("false"),
-			RunState.Phase.bFishingAllowed ? TEXT("true") : TEXT("false"),
+			RunState.Phase.bNewFishingBitesAllowed ? TEXT("true") : TEXT("false"),
 			RunState.Phase.bOfferingOpen ? TEXT("true") : TEXT("false"),
 			RunState.LastOfferingPoints, RunState.DailyOfferingTarget,
 			*UEnum::GetValueAsString(RunState.EndReason));

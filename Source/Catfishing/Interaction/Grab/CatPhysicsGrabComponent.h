@@ -49,7 +49,7 @@ public:
 	void SetGrabInput(bool bLeft, bool bHeld);
 	void RefreshKinematicHands();
 	FVector GetLastTractionForceForDiagnostics(bool bLeft) const { return LastTractionForce[bLeft ? 0 : 1]; }
-	UCatPhysicalBodyComponent* GetTractionReceiverForDiagnostics(bool bLeft) const { return TractionReceiver[bLeft ? 0 : 1].Get(); }
+	UCatPhysicalBodyComponent* GetTractionReceiver(bool bLeft) const { return TractionReceiver[bLeft ? 0 : 1].Get(); }
 	FVector GetTractionErrorForDiagnostics(bool bLeft) const;
 	/** Authority calls the same validation and constraint path for an explicitly positioned held prop. */
 	bool GripFromAuthority(bool bLeft, UPrimitiveComponent* Target, const FVector& WorldPoint);

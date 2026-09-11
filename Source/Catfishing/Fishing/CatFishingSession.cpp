@@ -596,6 +596,30 @@ bool ACatFishingSession::PrepareSessionFromAuthority(const FCatFishingAttemptSna
 	return bPrepared;
 }
 
+void ACatFishingSession::RefreshBiteAvailabilityFromAuthority()
+{
+	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::Waiting) return;
+	const ACatfishingGameModeBase* Mode = GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>();
+	if (Mode && Mode->CanGenerateNewFishingBites())
+	{
+		if (!GetWorldTimerManager().IsTimerActive(ProbeTimerHandle)
+			&& !ScheduleWaitingProbeFromStateTree())
+			TerminateSession(ECatFishingOutcome::Invalidated, TEXT("Daytime bite reschedule failed"));
+		return;
+	}
+	const bool bHadTimers = GetWorldTimerManager().IsTimerActive(ProbeTimerHandle)
+		|| GetWorldTimerManager().IsTimerActive(BiteWarningTimerHandle);
+	GetWorldTimerManager().ClearTimer(BiteWarningTimerHandle);
+	GetWorldTimerManager().ClearTimer(ProbeTimerHandle);
+	if (Snapshot.HookActor)
+		Snapshot.HookActor->SetBobberPresentationModeFromAuthority(ECatFishingBobberPresentationMode::Calm);
+	if (bHadTimers)
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_bite_wait_cleared SessionId=%s CastAttemptId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s Result=WaitingWithoutNewBites"),
+			*Snapshot.FishingSessionId.ToString(), *Snapshot.CastAttemptId.ToString(), *GetNameSafe(GetWorld()),
+			GetNetMode(), HasAuthority(), int32(GetLocalRole()), *GetName());
+}
+
 bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 {
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
@@ -639,6 +663,18 @@ bool ACatFishingSession::ScheduleWaitingProbeFromStateTree()
 	Snapshot.FishLineAlignment = 0.0f;
 	Snapshot.NormalizedLineLoad = 0.0f;
 	Snapshot.bStrongConfrontation = false;
+	// 夜间抛竿/漏过真咬都正常进入 Waiting，但不创建新的咬钩机会或消费随机数。
+	const ACatfishingGameModeBase* Mode = GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>();
+	if (!Mode || !Mode->CanGenerateNewFishingBites())
+	{
+		if (!EnterPhaseFromStateTree(ECatFishingPhase::Waiting).bApplied) return false;
+		RefreshBiteAvailabilityFromAuthority();
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_bite_schedule_suppressed SessionId=%s CastAttemptId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Actor=%s Result=WaitingWithoutNewBites"),
+			*Snapshot.FishingSessionId.ToString(), *Snapshot.CastAttemptId.ToString(), *GetNameSafe(GetWorld()),
+			GetNetMode(), HasAuthority(), int32(GetLocalRole()), *GetName());
+		return true;
+	}
 
 	// 每个咬钩机会使用独立、但可由服务器抛竿种子重放的随机流。否则窗口漏按后，
 	// 下一轮会重复完全相同的等待时长，并在最终点击时固定抽到同一条鱼。
@@ -731,6 +767,12 @@ void ACatFishingSession::HandleBiteWarningTimer()
 	{
 		return;
 	}
+	const ACatfishingGameModeBase* Mode = GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>();
+	if (!Mode || !Mode->CanGenerateNewFishingBites())
+	{
+		RefreshBiteAvailabilityFromAuthority();
+		return;
+	}
 	Snapshot.HookActor->SetBobberPresentationModeFromAuthority(ECatFishingBobberPresentationMode::BiteWarning);
 }
 
@@ -739,6 +781,12 @@ void ACatFishingSession::HandleProbeTimer()
 	// 计时器到期：只有仍处于 Waiting 阶段才把"试探触发"事件送进 StateTree，
 	// 阶段已经变化（比如提前被取消/提竿）则说明这次触发已经过期，直接忽略。
 	if (!HasAuthority() || IsTerminal() || Snapshot.Phase != ECatFishingPhase::Waiting || !StateTreeComponent) return;
+	const ACatfishingGameModeBase* Mode = GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>();
+	if (!Mode || !Mode->CanGenerateNewFishingBites())
+	{
+		RefreshBiteAvailabilityFromAuthority();
+		return;
+	}
 	StateTreeComponent->SendStateTreeEvent(CatFishingGameplayTags::ProbeTriggered, FConstStructView(), TEXT("CatFishing"));
 }
 
@@ -754,9 +802,21 @@ bool ACatFishingSession::OpenTrueBiteWindowFromStateTree()
 		return false;
 	}
 
+	// 防止白天计时器已排队、StateTree 到夜晚才消费的竞态；复用 Probe -> Waiting 事件边。
+	const ACatfishingGameModeBase* Mode = World->GetAuthGameMode<ACatfishingGameModeBase>();
+	if (!Mode || !Mode->CanGenerateNewFishingBites())
+	{
+		if (!StateTreeComponent) return false;
+		StateTreeComponent->SendStateTreeEvent(CatFishingGameplayTags::WindowExpired, FConstStructView(), TEXT("CatFishing"));
+		return true;
+	}
+
 	// 此刻只发布“真咬信号”：鱼仍未被选择、未生成，饵料也仍处于抛竿时建立的预约状态。
 	// WindowEnds 必须在 EnterPhase 发布快照前写好，客户端第一次看到 TrueBiteWindow 时截止时间就是完整的。
 	const double PreviousWindowEnd = Snapshot.WindowEndsServerTime;
+	const ACatfishingGameState* GameState = World->GetGameState<ACatfishingGameState>();
+	BiteTimeOfDay = GameState ? GameState->GetRunPublicState().Environment.TimeOfDay : ECatEnvironmentTimeOfDay::Unknown;
+	BiteWeather = GameState ? GameState->GetRunPublicState().Environment.Weather : ECatEnvironmentWeather::Unknown;
 	Snapshot.WindowEndsServerTime = World->GetTimeSeconds() + Settings->TrueBiteWindowSeconds;
 	if (!EnterPhaseFromStateTree(ECatFishingPhase::TrueBiteWindow).bApplied)
 	{
@@ -819,8 +879,8 @@ FCatFishSelectionCommitResult ACatFishingSession::ResolveHookSelectionFromAuthor
 	// 再次采样打窝浓度（与上钩率采样同源），用于影响鱼种选择的品质/稀有度权重。
 	FrozenSelectionContext.ChumSample = Chum->SampleChumAtPoint(Snapshot.HookActor->GetActorLocation(),
 		AttemptSnapshot.WaterRegion, World->GetTimeSeconds());
-	FrozenSelectionContext.TimeOfDay = GameState->GetRunPublicState().Environment.TimeOfDay;
-	FrozenSelectionContext.Weather = GameState->GetRunPublicState().Environment.Weather;
+	FrozenSelectionContext.TimeOfDay = BiteTimeOfDay;
+	FrozenSelectionContext.Weather = BiteWeather;
 	FrozenSelectionContext.BaitDefinitionId = AttemptSnapshot.BaitDefinitionId;
 	FrozenSelectionContext.ActivePlayerCount = PlayerCount;
 	FrozenSelectionContext.CombinedFishingStrength = FishingStrength;

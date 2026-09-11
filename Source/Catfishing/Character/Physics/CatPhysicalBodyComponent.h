@@ -21,8 +21,14 @@ struct CATFISHING_API FCatBodyDriveSample
     double MaxSpeed = 0;
     double MaxForce = 0;
     bool bFishing = false;
+    bool bCooperative = false;
     bool bLocomotion = false;
     bool bConnected = false;
+    bool bUnderLoad = false;
+    /** Only ungripped body contact: passive displacement does not request a full-strength stance. */
+    bool bPassiveBodyContact = false;
+    /** A peer is still moving or transmitting grab/fishing load; otherwise allow prompt braking. */
+    bool bBodyContactDriven = false;
     bool bHoldActive = false;
 };
 
@@ -65,6 +71,8 @@ class CATFISHING_API UCatPhysicalBodyComponent : public UActorComponent
 	GENERATED_BODY()
 public:
 	UCatPhysicalBodyComponent();
+	/** Completes animated-model separation and the existing snapshot, without a second motor step. */
+	void FinalizeModelContactFromAuthority();
 	static void ConfigureGeometry(UBoxComponent* Body, USphereComponent* Left, USphereComponent* Right);
 	void Initialize(UBoxComponent* InBody, USphereComponent* InLeft, USphereComponent* InRight,
 		UPhysicsConstraintComponent* InLeftArm, UPhysicsConstraintComponent* InRightArm, UCatPhysicsGrabComponent* InGrab,
@@ -75,6 +83,8 @@ public:
 	double GetFacingYawDegrees() const { return FacingYawDegrees; }
 	FTickFunction& GetPostMovementTick() { return PostPhysicsTick; }
 	FVector GetExternalForceFromAuthority();
+	/** Any applied source, including cancelling or vertical loads; excludes gravity/floor support. */
+	bool HasExternalLoadFromAuthority() const;
 	double GetVerticalGripForceFromAuthority() const;
 	/** A successful voluntary jump permits brief reciprocal vertical grip traction, never suspension. */
 	double GetJumpTractionWeight() const;
@@ -114,7 +124,7 @@ public:
 	void SetLocomotionEnabledFromAuthority(bool bEnabled, FName Reason);
 	bool TeleportBodyFromAuthority(const FTransform& Transform, FName Reason);
 	/** Each source replaces its own force. Units are kg*cm/s^2; multiply Newtons by 100 once. */
-	void SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction = false);
+	void SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction = false, bool bBodyContact = false);
 	void ClearExternalForce(const UObject* Source);
 	/** Replaces the ordinary motor budget; zero means no voluntary motor force, never unlimited. */
 	void SetFishingMotorBudget(const UObject* Source, double MaxForceKgCmS2, double MaxSpeedCmS = 100.0);
@@ -130,6 +140,7 @@ protected:
 private:
 	friend struct FCatPhysicalBodyPostPhysicsTick;
 	void PublishPostPhysicsSnapshot(float DeltaSeconds);
+	void PublishCompletedSnapshot();
 	FCatPhysicalBodyPostPhysicsTick PostPhysicsTick;
 	double GeometryScale = 1.0;
 	bool bPublishJumpAfterPhysics = false;
@@ -160,6 +171,7 @@ private:
 	{
 		FVector Force = FVector::ZeroVector;
 		bool bVerticalGripTraction = false;
+		bool bBodyContact = false;
 	};
 	TMap<TWeakObjectPtr<const UObject>, FExternalForce> ExternalForces;
 	TWeakObjectPtr<const UObject> FishingMotorSource;

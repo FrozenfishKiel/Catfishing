@@ -482,7 +482,7 @@ void ACatEnvironmentPresentationActor::ResolveDaySegmentFractions(float& OutMorn
 	OutDuskStartFraction = DefaultDuskStartFraction;
 	const UCatEnvironmentSettings* Settings = GetDefault<UCatEnvironmentSettings>();
 	if (Settings && FMath::IsFinite(Settings->MorningEndFraction) && FMath::IsFinite(Settings->DuskStartFraction)
-		&& Settings->MorningEndFraction > 0.0 && Settings->DuskStartFraction > Settings->MorningEndFraction
+		&& Settings->MorningEndFraction >= 0.0 && Settings->DuskStartFraction > Settings->MorningEndFraction
 		&& Settings->DuskStartFraction < 1.0)
 	{
 		OutMorningEndFraction = static_cast<float>(Settings->MorningEndFraction);

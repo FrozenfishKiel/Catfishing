@@ -1,8 +1,10 @@
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Character/CatCharacterMovementComponent.h"
+#include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/Character.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Interaction/CatModelContactComponent.h"
 #include "Interaction/Grab/CatLightPropSubsystem.h"
 #include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
@@ -52,6 +54,21 @@ void UCatPhysicalBodyComponent::PublishPostPhysicsSnapshot(float DeltaSeconds)
 		Body->ComponentVelocity = CharacterMovement->Velocity;
 		Grab->RefreshKinematicHands();
 	}
+	// Model poses are finalized later this frame. That consumer publishes the same snapshot once.
+	if (!CharacterMovement || !UCatModelContactComponent::UsesModelContacts(GetOwner())) PublishCompletedSnapshot();
+}
+
+void UCatPhysicalBodyComponent::FinalizeModelContactFromAuthority()
+{
+	if (!HasAuthority() || !CharacterMovement || !Body || !Grab) return;
+	CharacterMovement->ResolveModelPeerPenetration();
+	bGrounded = CharacterMovement->IsMovingOnGround();
+	Grab->RefreshKinematicHands();
+	PublishCompletedSnapshot();
+}
+
+void UCatPhysicalBodyComponent::PublishCompletedSnapshot()
+{
 	const double Now = GetWorld()->GetTimeSeconds();
 	if (bPublishJumpAfterPhysics || bPublishMovementAfterPhysics || Now - LastSnapshotSeconds >= 1.0 / 30.0)
 	{
@@ -347,9 +364,38 @@ FCatBodyDriveSample UCatPhysicalBodyComponent::CaptureDriveSample()
     Sample.bHoldActive = bFishingHoldActive;
     Sample.bFishing = FishingMotorSource.IsValid();
     Sample.bLocomotion = bLocomotionEnabled;
-    Sample.bConnected = HasPhysicalGrabConnection() || !GetExternalForceFromAuthority().IsNearlyZero();
+    Sample.bUnderLoad = HasExternalLoadFromAuthority();
+    const bool bGripped = HasPhysicalGrabConnection();
+    Sample.bConnected = bGripped || Sample.bUnderLoad;
+    bool bHasBodyContact = false, bHasOtherLoad = false;
+    for (const auto& Entry : ExternalForces)
+        if (Entry.Key.IsValid())
+        {
+            bHasBodyContact |= Entry.Value.bBodyContact;
+            bHasOtherLoad |= !Entry.Value.bBodyContact;
+            if (Entry.Value.bBodyContact)
+                if (const auto* SourceMovement = Cast<UCatCharacterMovementComponent>(Entry.Key.Get()))
+                    if (const auto* PeerBody = SourceMovement->GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>())
+                    {
+                        Sample.bBodyContactDriven |= !PeerBody->GetMoveIntent().IsNearlyZero()
+                            || PeerBody->HasFishingMotor() || PeerBody->HasPhysicalGrabConnection();
+                    }
+        }
+    Sample.bPassiveBodyContact = bHasBodyContact && !bHasOtherLoad && !bGripped && !Sample.bFishing
+        && (!CharacterMovement || !CharacterMovement->HasExternalLoad());
+    // Contact remains real at zero load and when opposite forces cancel. Neither condition
+    // may restore the unlimited free-walking motor between two contact frames.
+    if (!Sample.bConnected)
+        for (const auto& Entry : ExternalForces)
+            if (Entry.Key.IsValid()) { Sample.bConnected = true; break; }
     Sample.MaxSpeed = Sample.bFishing ? FishingMotorMaxSpeed : MaxMovementSpeedCmS;
     Sample.MaxForce = FishingMotorMaxForce;
+    if (!Sample.bFishing && Sample.bConnected && CharacterMovement)
+        if (const auto* Effort = GetOwner()->FindComponentByClass<UCatPhysicalEffortComponent>())
+        {
+            Sample.bCooperative = true;
+            Sample.MaxForce = Effort->GetMaximumForceKgCmS2();
+        }
     return Sample;
 }
 
@@ -358,7 +404,12 @@ FVector UCatPhysicalBodyComponent::ComputeDriveForce(FCatBodyDriveSample& Sample
 {
     if (!Sample.bLocomotion) { Sample.bHoldActive = false; return FVector::ZeroVector; }
     const FVector HorizontalVelocity(Velocity.X, Velocity.Y, 0);
-    if (Sample.bFishing && Sample.MoveIntent.IsNearlyZero())
+    if (Sample.bPassiveBodyContact && Sample.MoveIntent.IsNearlyZero())
+    {
+        Sample.bHoldActive = false;
+        return FVector::ZeroVector;
+    }
+    if ((Sample.bFishing || Sample.bCooperative) && Sample.MoveIntent.IsNearlyZero())
     {
         if (!Sample.bHoldActive) { Sample.HoldLocation = Position; Sample.bHoldActive = true; }
         FVector Error = Sample.HoldLocation - Position; Error.Z = 0;
@@ -372,8 +423,8 @@ FVector UCatPhysicalBodyComponent::ComputeDriveForce(FCatBodyDriveSample& Sample
     }
     Sample.bHoldActive = false;
     const FVector Error = Sample.MoveIntent * Sample.MaxSpeed - HorizontalVelocity;
-    if (!Sample.bFishing && Sample.bConnected) return (Error / .22).GetClampedToMaxSize(450.0) * Mass;
-    const double Limit = Sample.bFishing ? Sample.MaxForce : 6000.0 * Mass;
+    if (!Sample.bFishing && !Sample.bCooperative && Sample.bConnected) return (Error / .22).GetClampedToMaxSize(450.0) * Mass;
+    const double Limit = Sample.bFishing || Sample.bCooperative ? Sample.MaxForce : 6000.0 * Mass;
     return (Error * (Mass / FMath::Max(UE_DOUBLE_SMALL_NUMBER, StepSeconds))).GetClampedToMaxSize(Limit);
 }
 
@@ -404,6 +455,13 @@ FVector UCatPhysicalBodyComponent::GetExternalForceFromAuthority()
 		Sum += It.Value().Force;
 	}
 	return Sum;
+}
+
+bool UCatPhysicalBodyComponent::HasExternalLoadFromAuthority() const
+{
+    for (const auto& Entry : ExternalForces)
+        if (Entry.Key.IsValid() && !Entry.Value.Force.IsNearlyZero(UE_DOUBLE_SMALL_NUMBER)) return true;
+    return CharacterMovement && CharacterMovement->HasExternalLoad();
 }
 
 double UCatPhysicalBodyComponent::GetVerticalGripForceFromAuthority() const
@@ -636,12 +694,13 @@ void UCatPhysicalBodyComponent::SetLocomotionEnabledFromAuthority(bool bEnabled,
 	GetOwner()->ForceNetUpdate();
 	LogState(TEXT("physics_body_locomotion_changed"), Reason);
 }
-void UCatPhysicalBodyComponent::SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction)
+void UCatPhysicalBodyComponent::SetExternalForceFromAuthority(const UObject* Source, FVector ForceKgCmS2, bool bVerticalGripTraction, bool bBodyContact)
 {
 	if (!HasAuthority() || !IsValid(Source) || ForceKgCmS2.ContainsNaN()) return;
 	auto& Entry = ExternalForces.FindOrAdd(TWeakObjectPtr<const UObject>(Source));
 	Entry.Force = ForceKgCmS2;
 	Entry.bVerticalGripTraction = bVerticalGripTraction;
+	Entry.bBodyContact = bBodyContact;
 }
 void UCatPhysicalBodyComponent::ClearExternalForce(const UObject* Source)
 {

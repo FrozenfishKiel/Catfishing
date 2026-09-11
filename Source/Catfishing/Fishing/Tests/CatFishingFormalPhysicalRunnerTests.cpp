@@ -100,7 +100,7 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("spawns the formal Blueprint and authority hosts"), Mode && Controller && Player && Cat)) return false;
 		Mode->bRunCommandsOpen = true;
 		Mode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
-		Mode->RunPublicState.Phase.bFishingAllowed = true;
+		Mode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
 		Controller->PlayerState = Player;
 		Cat->SetPlayerState(Player);
 		TStrongObjectPtr<ULocalPlayer> LocalPlayer(NewObject<ULocalPlayer>(GEngine));
@@ -184,6 +184,7 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 		Session->Snapshot.FishDefinitionId = FishDefinition->FishDefinitionId;
 		Session->Snapshot.FishWeightKilograms = 30;
 		Session->Snapshot.Phase = ECatFishingPhase::HookedFight;
+		Service->Sessions.Add(SessionId, Session);
 		Session->Snapshot.RodActor = Rod;
 		Session->Snapshot.FisherPlayerState = Player;
 		Session->Snapshot.FishEncounterActor = Fish;
@@ -247,8 +248,23 @@ bool FCatFishingFormalPhysicalRunnerTest::RunTest(const FString& Parameters)
 		uint64 LastLoadStep = 0;
 		int32 CompletedFrames = 0, HitchCount = 0;
 		bool bGripSurvived = true, bMovementStarted = false;
+		bool bEnteredNight = false;
 		while (SimulatedSeconds < 8.0 - 1e-6)
 		{
+			if (!bEnteredNight && SimulatedSeconds >= 2.0)
+			{
+				Mode->RunPublicState.Phase.RunId = FGuid::NewGuid();
+				Mode->bRunStartupInProgress = true;
+				TestTrue(TEXT("active fight crosses the production night entry"), Mode->EnterRunPhaseFromStateTree(
+					ECatRunPhase::NormalNight, ECatRunTransitionReason::DayEnded).bApplied);
+				Mode->bRunStartupInProgress = false;
+				TestTrue(TEXT("night preserves fishing commands and disables only new bites"),
+					Mode->CanAcceptFishingCommand(Controller) && !Mode->CanGenerateNewFishingBites());
+				TestTrue(TEXT("night preserves the same runner, operator and resource reservation"),
+					Runner->IsRunning() && !Session->IsTerminal() && Rod->IsPrimaryOperator(Player)
+					&& Equipment->IsFishingUseActive(SessionId));
+				bEnteredNight = true;
+			}
 			if (!bMovementStarted && SimulatedSeconds >= 4.0 - 1e-6)
 			{
 				Body->SetMoveIntent(FVector(-1, 1, 0).GetSafeNormal());

@@ -1,4 +1,6 @@
 #include "Character/CatCharacterMovementComponent.h"
+#include "AbilitySystem/Config/CatPhysicalEffortSettings.h"
+#include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
 
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
@@ -15,13 +17,13 @@ FVector IntegrateGroundVelocity(FCatBodyDriveSample& Drive, const FVector& Posit
     FVector ExternalForce, double Mass, double ResistanceNewtons, double Dt)
 {
     ExternalForce.Z = 0;
-    const bool bSupportOnly = Drive.bLocomotion && Drive.bFishing && Drive.MoveIntent.IsNearlyZero();
+    const bool bSupportOnly = Drive.bLocomotion && (Drive.bFishing || Drive.bCooperative) && Drive.MoveIntent.IsNearlyZero();
     if (!bSupportOnly) ExternalForce += UCatPhysicalBodyComponent::ComputeDriveForce(Drive,Position,Velocity,Mass,Dt);
     if (!Drive.bLocomotion) ExternalForce -= FVector(Velocity.X,Velocity.Y,0)*Mass*FMath::Min(8.0,1.0/Dt);
     Velocity += ExternalForce*(Dt/Mass);
     // 4c5e8cd: passive stance can stop at zero, but can never spring toward an old position.
     const double Speed = Velocity.Size2D();
-    const double Support = bSupportOnly ? Drive.MaxForce : 0;
+    const double Support = bSupportOnly && (!Drive.bPassiveBodyContact || !Drive.bBodyContactDriven) ? Drive.MaxForce : 0;
     const double Reduction = FMath::Min(Speed,(ResistanceNewtons*100+Support)*Dt/Mass);
     if (Speed > UE_DOUBLE_SMALL_NUMBER) { Velocity.X*=1-Reduction/Speed; Velocity.Y*=1-Reduction/Speed; }
     return Velocity;
@@ -43,6 +45,22 @@ void UCatCharacterMovementComponent::AdvanceFromAuthority(float DeltaSeconds)
 	auto* Cat = Cast<ACatCharacter>(CharacterOwner);
 	auto* Body = Cat ? Cat->GetPhysicalBodyComponent() : nullptr;
 	if (!Body || !Cat->HasAuthority() || DeltaSeconds <= 0) return;
+	const auto EffortDrive = Body->CaptureDriveSample();
+	const FVector StartPosition = Cat->GetActorLocation();
+	const FVector StartCorrection = TotalMotionCorrection;
+	const uint32 StartResetEpoch = Body->GetResetEpoch();
+	const bool bStartedGrounded = IsMovingOnGround();
+	FVector IntendedDisplacement = EffortDrive.MoveIntent * EffortDrive.MaxSpeed * DeltaSeconds;
+	if (EffortDrive.bCooperative && !EffortDrive.bPassiveBodyContact && EffortDrive.MoveIntent.IsNearlyZero() && EffortDrive.MaxForce > 0)
+	{
+		// A stance actively opposes the load and existing drift. Convert relative effort to an
+		// equivalent directional intent; no load and no drift produce no fictitious support bill.
+		FVector Reaction = -Body->GetExternalForceFromAuthority() - Velocity * (FMath::Max(1.0f, Mass) / DeltaSeconds);
+		Reaction.Z = 0;
+		const double Effort = FMath::Clamp(Reaction.Size() / EffortDrive.MaxForce, 0.0, 1.0);
+		IntendedDisplacement = Reaction.GetSafeNormal() * Effort
+			* GetDefault<UCatPhysicalEffortSettings>()->SupportReferenceSpeedCmS * DeltaSeconds;
+	}
 	MaxWalkSpeed = Body->MaxMovementSpeedCmS;
 	JumpZVelocity = Body->JumpSpeedCmS;
 	GravityScale = Body->GravityScale;
@@ -62,7 +80,22 @@ void UCatCharacterMovementComponent::AdvanceFromAuthority(float DeltaSeconds)
     TGuardValue<int32> IterationGuard(MaxSimulationIterations, bTraction
         ? FMath::Max(MaxSimulationIterations, FMath::CeilToInt(FMath::Min(DeltaSeconds, .25f) / Step) + 1) : MaxSimulationIterations);
     Super::PerformMovement(DeltaSeconds);
+    const FVector BeforePeerCorrection = TotalMotionCorrection;
+    ResolveModelPeerPenetration();
+    const FVector PeerCorrection = TotalMotionCorrection - BeforePeerCorrection;
     MovementExternalForce = FVector::ZeroVector;
+	bQueuedExternalLoad = false;
+	if (auto* Effort = Cat->FindComponentByClass<UCatPhysicalEffortComponent>())
+		if (StartResetEpoch == Body->GetResetEpoch())
+		{
+			FVector ActualDisplacement = Cat->GetActorLocation() - StartPosition - (TotalMotionCorrection - StartCorrection);
+            // Reverse separation cancels an attempted step. Removing that correction must
+            // not credit the rejected step as successful progress (for example against a wall).
+            const FVector IntentDirection = IntendedDisplacement.GetSafeNormal2D();
+            ActualDisplacement += IntentDirection * FMath::Min(0.0, FVector::DotProduct(PeerCorrection,IntentDirection));
+			ActualDisplacement.Z = 0;
+			Effort->SettleMovementFromAuthority(EffortDrive, IntendedDisplacement, ActualDisplacement, DeltaSeconds, bStartedGrounded);
+		}
 }
 
 void UCatCharacterMovementComponent::CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration)
@@ -142,7 +175,7 @@ void UCatCharacterMovementComponent::UpdatePeerPushContacts()
 		const auto* OtherModel = Other->FindComponentByClass<UCatModelContactComponent>();
 		if (Model && OtherModel && Model->HasModelContacts() && OtherModel->HasModelContacts())
 		{
-			if (!Model->FindPeerContact(OtherModel, Normal, Penetration)) continue;
+			if (!Model->FindPeerContact(OtherModel, Normal, Penetration, 3.0)) continue;
 		}
 		else
 		{
@@ -154,21 +187,91 @@ void UCatCharacterMovementComponent::UpdatePeerPushContacts()
 			Normal = Difference.GetSafeNormal2D();
 			Penetration = FMath::Max(0.0, Radius - Difference.Size2D());
 		}
-		const FVector RelativeIntent = Body->GetMoveIntent() * Body->MaxMovementSpeedCmS
-			- OtherBody->GetMoveIntent() * OtherBody->MaxMovementSpeedCmS;
-		const double ClosingSpeed = FVector::DotProduct(RelativeIntent, Normal);
-		const FVector Force = Normal * FMath::Clamp(ClosingSpeed * 12.0 + Penetration * 650.0, 0.0, 3000.0);
-		if (Force.IsNearlyZero()) continue;
-		Body->SetExternalForceFromAuthority(OtherMovement, -Force);
-		OtherBody->SetExternalForceFromAuthority(this, Force);
+		// Contact transmits motion; a pressed key must not manufacture a second, stamina-free motor.
+		const double ClosingSpeed = FVector::DotProduct(Body->GetVelocity() - OtherBody->GetVelocity(), Normal);
+		const auto IntoContactDrive = [](UCatPhysicalBodyComponent* Participant, const FVector& Axis, double BodyMass)
+		{
+			auto Drive = Participant->CaptureDriveSample();
+			if (!Drive.bLocomotion || Drive.MoveIntent.IsNearlyZero()) return 0.0;
+			if (!Drive.bFishing)
+				if (const auto* Effort = Participant->GetOwner()->FindComponentByClass<UCatPhysicalEffortComponent>())
+				{ Drive.bCooperative = true; Drive.MaxForce = Effort->GetMaximumForceKgCmS2(); }
+			return FVector::DotProduct(UCatPhysicalBodyComponent::ComputeDriveForce(Drive,
+				Participant->GetOwner()->GetActorLocation(), Participant->GetVelocity(), BodyMass, 1.0/120.0), Axis);
+		};
+		// Share the bounded motor reaction according to both inverse masses. A moving
+		// cat must retain its share of acceleration while transmitting the rest to its peer.
+		const double MassA = FMath::Max(1.0f, Mass), MassB = FMath::Max(1.0f, OtherMovement->Mass);
+		const double DriveA = IntoContactDrive(Body, Normal, MassA), DriveB = IntoContactDrive(OtherBody, -Normal, MassB);
+		// A retained grab already couples both motors. Keep that contact law and let the
+		// grip solve separation, avoiding a second position constraint against its anchors.
+		const bool bConstrained = Model && Model->HasTractionConnectionWith(OtherModel);
+		const double MotorReaction = bConstrained ? FMath::Max(0.0, FMath::Max(DriveA,DriveB))
+			: FMath::Max(0.0, (DriveA / MassA + DriveB / MassB) / (1.0 / MassA + 1.0 / MassB));
+		const FVector Force = Normal * FMath::Max(MotorReaction, FMath::Clamp(ClosingSpeed * 12.0 + Penetration * 650.0, 0.0, 3000.0));
+		Body->SetExternalForceFromAuthority(OtherMovement, -Force, false, true);
+		OtherBody->SetExternalForceFromAuthority(this, Force, false, true);
 		if (Model && OtherModel && Model->HasModelContacts() && OtherModel->HasModelContacts()
 			&& GetWorld()->GetTimeSeconds() >= NextModelContactLogSeconds)
 		{
 			NextModelContactLogSeconds = GetWorld()->GetTimeSeconds() + 1;
-			UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=model_contact_push World=%s NetMode=%d Authority=1 LocalRole=%d Actor=%s BodyId=%s Peer=%s PeerBodyId=%s DepthCm=%.3f ForceOnPeerN=%s Result=ReciprocalHorizontalForce"),
+			UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=model_contact_push World=%s NetMode=%d Authority=1 LocalRole=%d Actor=%s BodyId=%s Peer=%s PeerBodyId=%s HorizontalSeparationEstimateCm=%.3f ForceOnPeerN=%s Result=ReciprocalHorizontalForce"),
 				*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(Cat->GetLocalRole()), *GetNameSafe(Cat), *Body->GetBodyId().ToString(),
 				*GetNameSafe(Other), *OtherBody->GetBodyId().ToString(), Penetration, *(Force/100).ToCompactString());
 		}
+	}
+}
+
+void UCatCharacterMovementComponent::ResolveModelPeerPenetration()
+{
+	const auto* Model = CharacterOwner ? CharacterOwner->FindComponentByClass<UCatModelContactComponent>() : nullptr;
+	if (!HasValidData() || !CharacterOwner->HasAuthority() || !Model || !Model->HasModelContacts()) return;
+	const FVector Before = UpdatedComponent->GetComponentLocation();
+	const FVector PreviousCorrection = TotalMotionCorrection;
+	const FVector SavedVelocity = Velocity;
+	double MaximumDepth = 0;
+	// Correct only already intersecting model surfaces. Every adjustment sweeps the terrain
+	// capsule and follows its actual walkable floor, rather than teleporting horizontally into a slope.
+	// Articulated tails can sweep through several contacts during a walking pose or a hitch.
+	// Keep each terrain move bounded, but allow the intersecting pair to finish separating.
+	for (int32 Iteration = 0; Iteration < 8; ++Iteration)
+	{
+		bool bAdjusted = false;
+		for (TActorIterator<ACatCharacter> It(GetWorld()); It; ++It)
+		{
+			if (*It == CharacterOwner || Model->HasTractionConnectionWith(It->FindComponentByClass<UCatModelContactComponent>())) continue;
+			FVector Normal; double Depth;
+			if (!Model->FindPeerContact(It->FindComponentByClass<UCatModelContactComponent>(), Normal, Depth) || Depth <= .1) continue;
+			MaximumDepth = FMath::Max(MaximumDepth, Depth);
+			const FVector Adjustment = -Normal * FMath::Min(4.0, (Depth - .1) * .5);
+			const FVector OldLocation = UpdatedComponent->GetComponentLocation();
+			if (IsMovingOnGround() && CurrentFloor.IsWalkableFloor())
+			{
+				MoveAlongFloor(Adjustment, 1.0f);
+				FindFloor(UpdatedComponent->GetComponentLocation(), CurrentFloor, false);
+				if (CurrentFloor.IsWalkableFloor()) { AdjustFloorHeight(); SetBaseFromFloor(CurrentFloor); }
+				else SetMovementMode(MOVE_Falling);
+			}
+			else
+			{
+				FHitResult Hit;
+				SafeMoveUpdatedComponent(Adjustment, UpdatedComponent->GetComponentQuat(), true, Hit);
+			}
+			bAdjusted |= !UpdatedComponent->GetComponentLocation().Equals(OldLocation, .001);
+		}
+		if (!bAdjusted) break;
+	}
+	Velocity = SavedVelocity;
+	// Collision correction must never become paid player progress or a second motor.
+	TotalMotionCorrection = PreviousCorrection + UpdatedComponent->GetComponentLocation() - Before;
+	if (MaximumDepth > .2 && GetWorld()->GetTimeSeconds() >= NextPeerSeparationLogSeconds)
+	{
+		NextPeerSeparationLogSeconds = GetWorld()->GetTimeSeconds() + 1;
+		const auto* Body = CastChecked<ACatCharacter>(CharacterOwner)->GetPhysicalBodyComponent();
+		UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=model_contact_resolved World=%s NetMode=%d Authority=1 LocalRole=%d Actor=%s BodyId=%s HorizontalSeparationEstimateCm=%.3f CorrectionCm=%s FloorNormalZ=%.4f Grounded=%d Result=TerrainSweptSeparation"),
+			*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(CharacterOwner->GetLocalRole()), *GetNameSafe(CharacterOwner),
+			*Body->GetBodyId().ToString(), MaximumDepth, *(UpdatedComponent->GetComponentLocation()-Before).ToCompactString(),
+			CurrentFloor.HitResult.ImpactNormal.Z, IsMovingOnGround());
 	}
 }
 
@@ -177,6 +280,14 @@ void UCatCharacterMovementComponent::ObserveSnapshot(const FVector& ObservedVelo
 	if (!CharacterOwner || CharacterOwner->HasAuthority()) return;
 	Velocity = ObservedVelocity;
 	Acceleration = ObservedIntent * GetMaxAcceleration();
+}
+
+bool UCatCharacterMovementComponent::ResolvePenetrationImpl(const FVector& Adjustment, const FHitResult& Hit, const FQuat& Rotation)
+{
+	const FVector Before = UpdatedComponent ? UpdatedComponent->GetComponentLocation() : FVector::ZeroVector;
+	const bool bResolved = Super::ResolvePenetrationImpl(Adjustment, Hit, Rotation);
+	if (UpdatedComponent) TotalMotionCorrection += UpdatedComponent->GetComponentLocation() - Before;
+	return bResolved;
 }
 
 bool UCatCharacterMovementComponent::IsFalling() const

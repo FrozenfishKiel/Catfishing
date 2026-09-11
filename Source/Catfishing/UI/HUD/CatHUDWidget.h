@@ -121,6 +121,10 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bShowFightMeters = false;
 
+	/** Personal effort can be visible without granting fishing-session controls or fish information. */
+	UPROPERTY(BlueprintReadOnly, Category="Catfishing|HUD")
+	bool bShowPersonalStamina = false;
+
 	/** 当前是否显示真咬钩提竿提示；来源是 FishingSession 公开阶段，不由 HUD 自行判定鱼漂。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bShowBitePrompt = false;

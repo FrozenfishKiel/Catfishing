@@ -34,14 +34,18 @@ public:
     void RefreshPose();
     bool HasModelContacts() const { return !Bodies.IsEmpty(); }
     const TArray<TObjectPtr<UCatModelContactBody>>& GetBodies() const { return Bodies; }
-    /** Normal points from this character toward Other; depth is in world centimeters. */
-    bool FindPeerContact(const UCatModelContactComponent* Other, FVector& Normal, double& Depth) const;
+    /** Ungripped peers use the upright pair axis and estimated horizontal separation travel in cm.
+     * Retained grips keep their existing surface normal/soft-contact depth. MarginCm (0..3)
+     * retains only ungripped near contacts; it is never part of penetration correction. */
+    bool FindPeerContact(const UCatModelContactComponent* Other, FVector& Normal, double& SeparationTravelCm, double MarginCm = 0) const;
+    bool HasTractionConnectionWith(const UCatModelContactComponent* Other) const;
     static bool UsesModelContacts(const AActor* Actor);
     static bool IsLegacyContactProxy(const UPrimitiveComponent* Component);
 protected:
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* Tick) override;
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 private:
+    double LastAutomaticPoseRefreshSeconds = -1;
     UPROPERTY(Transient) TObjectPtr<UPoseableMeshComponent> Pose;
     UPROPERTY(Transient) TArray<TObjectPtr<UCatModelContactBody>> Bodies;
 };

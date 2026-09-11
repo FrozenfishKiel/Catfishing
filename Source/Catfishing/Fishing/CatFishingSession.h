@@ -49,6 +49,8 @@ public:
 	bool PublishPreparedSessionFromAuthority();
 	void AbortPreparedSessionFromAuthority();
 	bool ScheduleWaitingProbeFromStateTree();
+	/** 仅刷新尚未真咬的计时；次日重新采样，已有真咬和搏斗不受影响。 */
+	void RefreshBiteAvailabilityFromAuthority();
 	/** Probe 状态只打开响应窗口，不选鱼、不生成鱼、不扣饵；鱼只在合法 RequestHook 到达后创建。 */
 	bool OpenTrueBiteWindowFromStateTree();
 	FCatFishingCommandResult RequestHookFromAuthority(FGuid RequestId);
@@ -264,6 +266,9 @@ private:
 	/** 服务器是否仍接受当前真咬窗口的首次左键；计时器先关闸，再把 WindowExpired 交给 StateTree。 */
 	bool bTrueBiteWindowAcceptingHook = false;
 	FTimerHandle BiteWarningTimerHandle;
+	/** 当前真咬成立时的鱼情；仅用于这次窗口跨夜后的选鱼，不是另一份世界昼夜状态。 */
+	ECatEnvironmentTimeOfDay BiteTimeOfDay = ECatEnvironmentTimeOfDay::Unknown;
+	ECatEnvironmentWeather BiteWeather = ECatEnvironmentWeather::Unknown;
 	FTimerHandle ProbeTimerHandle;
 	FTimerHandle TrueBiteTimerHandle;
 	TMap<FGuid, FCatFishingCommandResult> HookTerminalByRequest;

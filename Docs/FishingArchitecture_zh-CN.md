@@ -1,5 +1,28 @@
 # 钓鱼核心架构（技术文档）
 
+## 2026-09-11：接入祭坛、搬运与售鱼上游改动
+
+以本地 `dfb9509`（包含入夜咬钩分流、个人意图出力、99999 秒白天及跳过清晨）合并上游 `418bd74`，保留正常双亲历史。合并前的 16 份鱼定义及 1 份未跟踪讨论文档备份于 `Saved/Integration/Upstream-20260911-Second/backup`，鱼定义另存 Git stash，未跟踪文档保持原样。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 入夜、祭坛、状态和退出 | `Framework/Game/CatfishingGameModeBase::CanGenerateNewFishingBites/FinishAltarDayTransition` → `FishingService::RefreshBiteAvailabilityFromAuthority` → `FishingSession`；`Camp/CatAltarActor`、GameState 的 DayTransition | 保留夜间操作与既有搏斗，夜间不新增咬钩；上游新增全员献祭及遮罩输入锁 | 合并退出取消与本地新咬钩字段；过场期间阻止新咬钩，过场收口发布环境后重新调度等待会话 | 阶段/环境发布 → 服务刷新 → 单一会话计时；不另建结算权威 | 真实 StateTree、浮漂、跨夜及过场恢复；沿用 `AltarTransitionFinished` 与咬钩诊断日志 | 2 处 GameMode 冲突已逐行解决；回归结果见下 |
+| 个人出力、体力和钓鱼测试 | `AbilitySystem/Physics/CatPhysicalEffortComponent` → `CharacterMovementComponent`、`Fishing/Simulation`；`Fishing/Tests` | 本地以意图位移结算，上游删除 30 个测试文件 | 生产公式完整保留；保留本地已更新的 BiteTimingWorld、CatWork、Effort、ForceIntegration、ParticipantStrength、RodEffort、Service 共 7 个测试；其余 23 个沿用上游删除 | 保留现有行为契约后执行剩余回归 | 个人出力、费用、合力、跨夜，不靠新期望替代行为验证 | 本地产生出力的源码目录无合并差异；测试删除不表示相关功能已删除或通过验收 |
+| 搬运、落地鱼、售鱼和 UI | 上游 `Inventory`、`FishContainers`、`Items/Fish`、`ShopEconomy`、`UI`，`FishingSession::RequestScoop/SpawnExhaustedFishPickupFromAuthority` | 采用原 Actor 搬运、GAS 售鱼和正式悬停提示；叼鱼护也占嘴，上岸侧躺由网格实现 | 使用上游实现、正式 BP/WBP/价格表；抄鱼接入单嘴约束，避免 Actor 与网格重复侧翻 | 正式实例/目录 → 世界载体 → 服务及 UI → 双端 | 原实例/Actor 身份、重复交易、体型、正式双端按钮与悬停 | 自动合并衔接；本轮结果见下，不将上游历史验证当作本轮验证 |
+| 资产、配置、默认值与持久化 | `Content/Catfishing/Data/Fish/Fish_*`、`DefaultGame.ini` 的 InventorySettings/ShopEconomySettings/EnvironmentSettings/RunSettings；原存档消费者 | 16 份本地鱼资产二进制变化但 36 个可编辑字段均与基线一致；上游唯一字段变化为 WorldActorClass | 采用上游 CatFishPickupActor 配置，原本地二进制保留备份/stash；MorningEndFraction=0、DayLengthSeconds=99999 保留 | 三方实际 UObject 字段对照后选取资产；不运行资产重生成 | 16×3 份包实际加载、逐字段 JSON 比较；未对未知二进制内容作无差异承诺 | `fish-three-way.json`：16 鱼、每鱼 36 字段，本地字段差异 0；上游差异仅 world_actor_class；临时副本已清理 |
+| 构建、脚本、日志与文档 | 原 Editor/Game Target、Cook 目录、上游运行日志、本文；`Docs/Development/需求对齐差距清单.md` 仍为唯一业务进度入口 | 接入上游售鱼表 Cook 配置；保留本地环境及现有生成入口，不另建玩法状态或业务账本 | Editor/Game 构建与相关回归；证据放 Saved；存档格式、出力公式和资产生成脚本本轮不改 | 最终 diff/配置 → 构建 → 运行回归 → 提交 | 新 Cook、打包双机默认落盘和真人画面未运行 | 不改变模块级完成状态；验证记录见下 |
+
+证据目录：`Saved/Integration/Upstream-20260911-Second`。
+
+构建记录补正：该轮首轮 UBT 日志虽以 `Succeeded` 和退出码 0 结束，仍输出了 FightRunner/FightSimulator 自身头文件未置首的两条 `error`；当时仅依据成功状态判断，未能证明 IDE/MSBuild 构建通过。随后将两份 `.cpp` 的自身头文件移至首位，保留其他依赖和全部玩法逻辑；通过 VS MSBuild 的 `Development_Editor|x64` 入口重新编译、链接成功，退出码 0，未再出现头文件错误或 MSB3077。证据：`Saved/Integration/MSB3077-20260911/ubt-before.log`、`msbuild-editor.log`。本次仅验证编译契约，runtime_behavior/presentation_delivery 不涉及，未重复运行玩法测试。
+
+- `contract`：Editor `build-editor-02.log` 与 Game `build-game-01.log` 均通过；`regression-01/index.json` 合计 85/85 通过（70 无警告、15 带警告），0 失败、0 未运行。
+- `runtime_behavior`：本轮 85 项包含保留的钓鱼契约/运行回归、4 项个人出力、跳过清晨、物理抓取与库存世界操作；过场等待与恢复断言加入现有 `BiteTiming.WorldFieldsDriveFormalStateTreeAndBobber`，三组窝料输入均经正式过场收口恢复计时。鱼护搬运、真实售鱼按钮和悬停提示三项正式双端 PIE 全部通过。不另建测试模型。
+- `presentation_delivery`：正式资产字段已读取，三项正式双端 PIE 消费者已运行；未在本轮人工查看完整画面，新 Cook/打包、正式地图真人手感与新包双端日志未验证，不关闭模块交付状态。
+
+
+2026-09-11 当前合力钓鱼采用猫鱼/猫猫共用意图位移：辅助各自有限出力、各付体力，松方向键承载站稳，耗尽主动地面力量为零，任何外部负载下禁止恢复。主控仍唯一控竿且独立结算杆操作。完整影响对照表、单位、清理和分层证据见 [猫鱼/猫猫意图位移与合力钓鱼](FishFightImplementationGuide_zh-CN.md)。下方带日期的集成/迁移报告只对应其检查点。
+
 ## 2026-09-11：保留本地钓鱼玩法并接入远端库存与外围系统
 
 本次按用户要求集成 `0c2b86e` 与 `c8bd5bb`，共同基线 `e6e0313`。保留本地 R 取放/架竿禁抓、双鱼竿、鼠标控竿与过期输入清理、角色物理抓取/脚步动画、鱼行为与线力、单主控结算、无人值守及离场资源托管。其他系统采用远端实现；共享入口按实际职责衔接，未整体覆盖 PlayerController、Equipment 或 Save。开始时的 26 份未提交资产已按 SHA256 备份，在隔离工程按原文件参与验证，不纳入集成提交。

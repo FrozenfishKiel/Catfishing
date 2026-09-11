@@ -310,7 +310,7 @@ bool FCatFishingSlackAimRodContinuityTest::RunTest(const FString& Parameters)
 	ACatfishingGameModeBase::FAdmissionRecord Admission;
 	Admission.Phase=ACatfishingGameModeBase::EAdmissionPhase::Active; Admission.Controller=Fixture.Controller;
 	GameMode->AdmissionRecords.Add(ACatfishingGameModeBase::MakeStableNetIdKey(Fixture.Player->GetUniqueId()),Admission);
-	GameMode->bRunCommandsOpen=true; GameMode->RunPublicState.Phase.Phase=ECatRunPhase::DayActive; GameMode->RunPublicState.Phase.bFishingAllowed=true;
+	GameMode->bRunCommandsOpen=true; GameMode->RunPublicState.Phase.Phase=ECatRunPhase::DayActive; GameMode->RunPublicState.Phase.bNewFishingBitesAllowed=true;
 	if (!Fixture.BeginFight(*this) || !Fixture.AccumulateActualMotorEffort(*this)) return false;
 	auto* Rod=Fixture.Rod;
 	FCatFishingRodControlObservation Before;
@@ -387,7 +387,7 @@ bool FCatFishingSlackAimCommandRoutingTest::RunTest(const FString& Parameters)
 	GameMode->AdmissionRecords.Add(ACatfishingGameModeBase::MakeStableNetIdKey(Fixture.Player->GetUniqueId()), Admission);
 	GameMode->bRunCommandsOpen = true;
 	GameMode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
-	GameMode->RunPublicState.Phase.bFishingAllowed = true;
+	GameMode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
 	if (!Fixture.BeginFight(*this)) return false;
 	TStrongObjectPtr<ULocalPlayer> LocalPlayer(NewObject<ULocalPlayer>(GEngine));
 	Fixture.Controller->SetPlayer(LocalPlayer.Get());

@@ -1040,10 +1040,31 @@ bool UCatFishingService::PreserveFishingResourcesForEquipmentShutdown(UCatEquipm
 	return true;
 }
 
-// Run 钓鱼窗口关闭流程：终止当前半场并释放所有竿位/移动锁，但不关闭 World 级命令门；下一天仍可重新上竿。
+void UCatFishingService::RefreshBiteAvailabilityFromAuthority()
+{
+	TArray<TWeakObjectPtr<ACatFishingSession>> PendingSessions;
+	Sessions.GenerateValueArray(PendingSessions);
+	for (const TWeakObjectPtr<ACatFishingSession>& Pending : PendingSessions)
+	{
+		if (ACatFishingSession* Session = Pending.Get(); Session && Session->HasAuthority() && !Session->IsTerminal())
+		{
+			Session->RefreshBiteAvailabilityFromAuthority();
+			const auto& Snapshot = Session->GetSnapshot();
+			const auto* Mode = GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>();
+			UE_LOG(LogCatFishing, Log,
+				TEXT("Event=fishing_run_bite_gate_refreshed SessionId=%s CastAttemptId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Actor=%s NewBitesAllowed=%d Phase=%s Result=%s"),
+				*Snapshot.FishingSessionId.ToString(), *Snapshot.CastAttemptId.ToString(), *GetNameSafe(GetWorld()),
+				int32(GetWorld()->GetNetMode()), int32(Session->GetLocalRole()), *Session->GetName(),
+				Mode && Mode->CanGenerateNewFishingBites(), *UEnum::GetValueAsString(Snapshot.Phase),
+				Session->IsTerminal() ? TEXT("SessionTerminated") : TEXT("SessionPreserved"));
+		}
+	}
+}
+
+// 启动失败/局末补偿：释放所有竿位；白天截止和夜晚只刷新新咬钩准入。
 void UCatFishingService::SuspendFishingAndReleaseOperators()
 {
-	TerminateAllSessionsAndReleaseOperators(TEXT("Fishing window closed"));
+	TerminateAllSessionsAndReleaseOperators(TEXT("Run unavailable"));
 }
 
 // Teardown 流程：永久关闭新入口，并让每个存活会话进入 Terminated；随后让全部手持鱼竿落地。
