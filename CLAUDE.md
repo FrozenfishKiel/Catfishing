@@ -16,17 +16,19 @@ python <game-toolkit 插件>/skills/layer-contracts/scripts/project_env.py check
 
 ## 设计文档（Design Documents）
 
-设计真值在飞书知识库「小猫钓鱼」（space `7670823117626870757`）。它的导出镜像
-**不在本仓库**——2026-09-10 移到设计项目 `C:/Users/lzcm7/OneDrive/GameProject/CatFishing/Feishu/`（本机路径）：
-docx → Markdown（带 front matter 记 revision）、sheet → CSV，`_manifest.json` 记每个节点的
-token / revision / 导出时间。**镜像只读**——改内容去飞书，改完重跑镜像目录下的
-`_export/export_feishu.py <space_id> <镜像目录>`。
+**设计真值在本仓库 `Knowledge/Design/`**（2026-09-11 起）。飞书知识库「小猫钓鱼」
+（space `7670823117626870757`）降级为草稿、点子与同步页；两边不一致以仓库为准。
+**动手前先读 `Knowledge/Design/README.md`**，那里写了三条数据流——改错地方会被覆盖或被忽略。
 
-- 九册与子页：镜像的 `GDD 系统分册/`（含「钓鱼规则」＝唯一实现规格书）
-- 内容表（道具四表 / 鱼表格 / UI 表）：同目录下的 `*.csv`
-- 裁决与修改记录：镜像的 `裁决同步/`
-- 本地 `Knowledge/GDD/` 旧快照已删除（三册也已改名：装备与道具→道具、鱼类图鉴→鱼、
-  印记图鉴→印记），一律以上面那份飞书镜像为准。
+- 九册与子页：`Knowledge/Design/GDD 系统分册/`（含「钓鱼规则」＝唯一实现规格书）
+- 裁决账本：`Knowledge/Design/设计修改记录.md`，按日期、最新为准；**判口径以最新裁决为准，
+  不以页面字面为准**
+- 内容表（鱼表格 / 道具四表 / ui 表 / 商店表）：同目录下的 `*.csv`。**这些仍在飞书填**
+  （张佳、王甜甜），定稿后由人拉进仓库；不要直接改仓库里的 CSV
+- 正文（九册、愿景、账本）直接改仓库文件，走 git；飞书那边由人定期同步
+- `_feishu/` 是飞书非正式页的只读快照，给对表工具当 refs 读，不是 SSOT
+- `_assets/` 是 45 张配图，原本挂在飞书要登录才打得开
+- 旧的 `Knowledge/GDD/` 快照与 `Knowledge/Feishu/` 镜像都已删除，不要再引用
 
 ## 一条要先知道的
 

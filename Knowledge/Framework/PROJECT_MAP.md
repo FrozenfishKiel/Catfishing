@@ -8,12 +8,12 @@
 
 本目录描述当前 `Source/Catfishing` 已落地的框架。若它与交接或调研文档冲突，以真实源码、配置、资产和最新构建证据为准。
 
-- 产品规则先读 `Knowledge/Feishu/`。
+- 产品规则先读 `Knowledge/Design/`。
 - 当前架构先读本目录和真实源码；`Docs/Architecture/项目技术方案.md` 与接线溯源只作为背景材料，凡与当前源码冲突都以本目录为准。
 - 当前代码事实先读本文和本目录其他文件。
 - 构建、运行和验收证据看 `.codex/docs/testing-report.md`、`.codex/docs/acceptance-report.md`、`.codex/docs/review-report.md`。
-- `Knowledge/Feishu/` 是飞书知识库「小猫钓鱼」的只读导出镜像；需要改设计时回飞书改，不手改本地镜像。
-- 本地 GDD 快照已按人工要求删除，遇到同名或改名文档时以 `Knowledge/Feishu/README.md` 里的镜像说明为准。
+- `Knowledge/Design/` 是设计真值（2026-09-11 起）：正文直接改这里、走 git；内容表 CSV 仍在飞书填、定稿拉进来；`_feishu/` 是飞书非正式页的只读快照。动手前读该目录 README。
+- 旧的 `Knowledge/GDD/` 快照与 `Knowledge/Feishu/` 镜像都已删除；遇到同名或改名文档以 `Knowledge/Design/README.md` 为准。
 - `Docs/gap-analysis/2026-09-09/` 是飞书镜像和代码的对表审计材料；总览看 `SUMMARY.md`，待讨论项看 `讨论清单.md`。在属主确认前，它不等同于产品需求、工程进度或代码修改指令。
 
 交接文档中关于“空模板”的描述不能用于判断当前工程是否已实现框架。

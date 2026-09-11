@@ -8,7 +8,7 @@
 
 1. 先读 `Knowledge/Framework/PROJECT_MAP.md`，确认当前源码目录、运行时真相和最短阅读顺序。
 2. 再读 `Knowledge/Framework/RULES.md`、`TERMS.md`、`DECISIONS.md` 和 `KNOWN_ISSUES.md`，统一边界、术语和常见误读。
-3. 涉及具体产品规则时，读 `Knowledge/Feishu/README.md` 指向的飞书镜像。
+3. 涉及具体产品规则时，读 `Knowledge/Design/`（设计真值，2026-09-11 起在本仓库；先看该目录 README 的三条数据流）。
 4. 涉及属性、商店、存档、UI 或联机等专题时，读 `Docs/Architecture/` 下对应当前方案，并以真实 `Source/`、`Config/`、`Content/` 和最新验证证据为准。
 
 ## 当前硬边界
