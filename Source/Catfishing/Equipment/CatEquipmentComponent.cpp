@@ -1,4 +1,6 @@
-﻿#include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatEquipmentComponent.h"
+#include "EngineUtils.h"
+#include "UObject/UObjectIterator.h"
 
 #include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
 
@@ -72,34 +74,29 @@ bool UCatEquipmentComponent::ExportSnapshotFromAuthority(FCatEquipmentLoadoutSna
 	return true;
 }
 
-// 退出部署收口流程：按真实 PlayerState 从 Fishing 查唯一部署竿，再核对该实例仍由正式库存 held entry 保管。
-// 不把实例再加回即将销毁的组件；持久化调用方已接管正式记录，Destroy 后只让库存退役 held entry。
+// Retire only records still owned by this inventory; transferred rods continue in world custody.
 bool UCatEquipmentComponent::RetireDeploymentAfterPersistentCapture(APlayerState& PlayerState)
 {
-	UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
-	ACatFishingRodActor* Rod = Fishing ? Fishing->FindDeployedRod(&PlayerState) : nullptr;
-	if (!Rod)
+	UCatInventoryComponent* Inventory = ResolveOwnerInventoryComponent();
+	if (!GetOwner() || !GetOwner()->HasAuthority() || !Inventory) return false;
+	TArray<FCatInventoryEntry> HeldEntries;
+	Inventory->AppendHeldInventoryEntriesFromAuthority(HeldEntries);
+	TArray<FGuid> RodItemIds;
+	for (const FCatInventoryEntry& Entry : HeldEntries)
 	{
-		return true;
+		const UCatEquipmentInventoryItemInstance* Instance = Cast<UCatEquipmentInventoryItemInstance>(Entry.Instance);
+		const UCatEquipmentDefinition* Definition = Instance ? GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(Instance->GetItemDefinitionId()) : nullptr;
+		if (!Definition || !Definition->CanServeFishingRod()) continue;
+		if (IsFishingRodInUse(Instance->GetItemInstanceId())) return false;
+		RodItemIds.Add(Instance->GetItemInstanceId());
 	}
-	const FGuid ItemInstanceId = Rod->GetPresentationState().ItemInstanceId;
-	UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
-	const FCatInventoryEntry* HeldEntry =
-		OwnerInventory != nullptr ? OwnerInventory->FindHeldInventoryEntryFromAuthority(ItemInstanceId) : nullptr;
-	if (!GetOwner() || !GetOwner()->HasAuthority() || OwnerInventory == nullptr || HeldEntry == nullptr
-		|| !Rod->Destroy())
-	{
-		UE_LOG(LogCatRun, Error, TEXT("Event=persistence_departure_deployment_rejected Owner=%s Rod=%s"),
-			*GetNameSafe(GetOwner()), *GetNameSafe(Rod));
-		return false;
-	}
-	if (OwnerInventory != nullptr && !OwnerInventory->RetireHeldInventoryEntryFromAuthority(ItemInstanceId))
-	{
-		UE_LOG(LogCatRun, Error,
-			TEXT("Event=persistence_departure_deployment_retire_failed Owner=%s Instance=%s"),
-			*GetNameSafe(GetOwner()), *ItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
-		return false;
-	}
+	TArray<TWeakObjectPtr<ACatFishingRodActor>> Rods;
+	for (TActorIterator<ACatFishingRodActor> It(GetWorld()); It; ++It)
+		if (RodItemIds.Contains(It->GetPresentationState().ItemInstanceId)) Rods.Add(*It);
+	for (const auto& Rod : Rods) if (Rod.IsValid() && !Rod->Destroy()) return false;
+	for (const FGuid ItemId : RodItemIds) if (!Inventory->RetireHeldInventoryEntryFromAuthority(ItemId)) return false;
+	UE_LOG(LogCatEquipment, Log, TEXT("Event=persistence_departure_deployment_retired Owner=%s PlayerId=%d Items=%d Rods=%d World=%s NetMode=%d Authority=1"),
+		*GetNameSafe(GetOwner()), PlayerState.GetPlayerId(), RodItemIds.Num(), Rods.Num(), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()));
 	return true;
 }
 
@@ -207,7 +204,6 @@ bool UCatEquipmentComponent::RestoreSnapshotFromAuthority(const FCatEquipmentLoa
 	Snapshot.Revision = FMath::Max<int64>(1, Snapshot.Revision + 1);
 	TerminalCache.Reset();
 	TerminalPayloadByKey.Reset();
-	FailureTerminalCache.Reset();
 	FishingUseRecords.Reset();
 	PublishSnapshot();
 	return true;
@@ -692,6 +688,13 @@ FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, 
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;
 	}
+	if (IsFishingRodInUse(ItemInstanceId))
+	{
+		Result.Error = ECatDomainCommandError::InvalidPhase;
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_return_rejected RequestId=%s RodItemInstanceId=%s Reason=ActiveFishingUse World=%s Owner=%s"),
+			*RequestId.ToString(), *ItemInstanceId.ToString(), *GetNameSafe(GetWorld()), *GetNameSafe(GetOwner()));
+		return Result;
+	}
 	const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
 	Result = OwnerInventory->UnUseItemInstanceFromAuthority(
 		RequestId,
@@ -719,158 +722,6 @@ FCatInventoryItemUseResult UCatEquipmentComponent::UnUse(const FGuid RequestId, 
 			}
 			return true;
 		});
-	return Result;
-}
-
-// 失败预算提交流程：
-// 1. 先拒绝正在 Use 或 Fishing Use 的物品，再按 RequestId 返回已缓存终态，避免重放时再次扣饵或耐久。
-// 2. 首次请求校验 authority、Revision 和惩罚枚举；None 只提交一次无物资变化的终态。
-// 3. 丢特殊饵按当前选择实例 ID 回到 InventoryComponent 扣一份，Equipment 读模型只在扣量后重建。
-// 4. 伤竿解析当前选择的鱼竿实例，直接写实例耐久和断竿状态，再刷新 Equipment 读模型。
-// 5. 正式写入后的读模型刷新失败会回滚库存 entry、鱼竿实例或读模型；没有正式库存时拒绝结算。
-FCatFishingFailureResult UCatEquipmentComponent::CommitFishingFailure(const FGuid RequestId,
-	const int64 ExpectedRevision, const ECatFishingFailurePenalty Penalty)
-{
-	FCatFishingFailureResult Result;
-	Result.Command.RequestId = RequestId;
-	if (HasActiveFishingUse() || HasActiveInventoryItemUse())
-	{
-		Result.Command.Error = ECatDomainCommandError::InvalidPhase;
-		Result.Command.Revision = Snapshot.Revision;
-		Result.Penalty = Penalty;
-		Result.RemainingRodDurability = Snapshot.RodDurability;
-		return Result;
-	}
-	if (const FCatFishingFailureResult* Cached = FailureTerminalCache.Find(RequestId))
-	{
-		Result = *Cached;
-		MarkCommandReplayed(Result.Command);
-		return Result;
-	}
-	if (!GetOwner() || !GetOwner()->HasAuthority() || !RequestId.IsValid())
-	{
-		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
-	}
-	else if (Snapshot.Revision != ExpectedRevision)
-	{
-		Result.Command.Error = ECatDomainCommandError::RevisionConflict;
-	}
-	else if (Penalty == ECatFishingFailurePenalty::None)
-	{
-		Result.Command.bCommitted = true;
-		Result.Command.Error = ECatDomainCommandError::None;
-	}
-	else if (Penalty == ECatFishingFailurePenalty::LoseSpecialBait)
-	{
-		UCatEquipmentDefinition* Bait =
-			GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(Snapshot.BaitDefinitionId);
-		UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
-		if (OwnerInventory == nullptr)
-		{
-			Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
-		}
-		else
-		{
-			// 失败惩罚只把当前选择实例 ID 映射回 InventoryComponent 槽位；Equipment 读模型不直接扣量。
-			FCatInventoryEntry FormalBaitSlot;
-			const int32 FormalBaitSlotIndex =
-				OwnerInventory->FindInventorySlotIndexFromInstanceId(Snapshot.BaitItemInstanceId);
-			const FCatInventoryEntry* FormalBaitEntry =
-				OwnerInventory->GetInventoryEntryAtSlot(FormalBaitSlotIndex);
-			if (!Bait || !Bait->CanServeFishingBait()
-				|| !Bait->FindFragment<UCatEquipmentFragment_Bait>()->bSpecialBait || FormalBaitEntry == nullptr
-				|| !TryReadEquipmentInventoryEntry(*FormalBaitEntry, FormalBaitSlot)
-				|| FormalBaitSlot.Instance->GetItemDefinitionId() != Snapshot.BaitDefinitionId || FormalBaitSlot.StackCount <= 0)
-			{
-				Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
-			}
-			else
-			{
-				const FName LostBaitDefinitionId = Snapshot.BaitDefinitionId;
-				const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
-				const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
-				if (FormalBaitSlot.StackCount <= 1)
-				{
-					Snapshot.BaitItemInstanceId = FGuid();
-				}
-				if (OwnerInventory->ConsumeItemAtSlot(FormalBaitSlotIndex, 1)
-					&& RefreshLoadoutFromInventoryComponentFromAuthority(Bait, LostBaitDefinitionId))
-				{
-					Result.Command.bCommitted = true;
-					Result.Command.Error = ECatDomainCommandError::None;
-				}
-				else
-				{
-					OwnerInventory->ReplaceInventoryEntriesFromAuthority(
-						SavedEntries, GetConfiguredInventorySlotCapacity());
-					Snapshot = SavedSnapshot;
-					Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
-				}
-			}
-		}
-	}
-	else if (Penalty == ECatFishingFailurePenalty::DamageRod)
-	{
-		const double Loss = GetDefault<UCatEquipmentSettings>()->RodFailureDurabilityLoss;
-		UCatEquipmentDefinition* Rod =
-			GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(Snapshot.RodDefinitionId);
-		if (!FMath::IsFinite(Loss) || Loss <= 0.0 || Snapshot.RodDefinitionId.IsNone() || Snapshot.bRodBroken
-			|| Rod == nullptr || !Rod->CanServeFishingRod())
-		{
-			Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
-		}
-		else
-		{
-			UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
-			if (OwnerInventory == nullptr)
-			{
-				Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
-			}
-			else
-			{
-				FCatInventoryEntry FormalRodSlot;
-				UCatEquipmentInventoryItemInstance* FormalRodInstance =
-					ResolveSelectedFormalRodInstanceFromInventory(*OwnerInventory, *Rod, FormalRodSlot);
-				if (FormalRodInstance == nullptr || CastChecked<UCatEquipmentInventoryItemInstance>(FormalRodSlot.Instance)->IsRodBroken()
-					|| !FMath::IsFinite(CastChecked<UCatEquipmentInventoryItemInstance>(FormalRodSlot.Instance)->GetRodDurability()) || CastChecked<UCatEquipmentInventoryItemInstance>(FormalRodSlot.Instance)->GetRodDurability() <= 0.0)
-				{
-					Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
-				}
-				else
-				{
-					const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
-					const double SavedRodDurability = FormalRodInstance->GetRodDurability();
-					const bool bSavedRodBroken = FormalRodInstance->IsRodBroken();
-					const double NewDurability = FMath::Max(0.0, CastChecked<UCatEquipmentInventoryItemInstance>(FormalRodSlot.Instance)->GetRodDurability() - Loss);
-					const bool bNewBroken = NewDurability <= 0.0;
-					FormalRodInstance->SetRodRuntimeStateFromAuthority(NewDurability, bNewBroken);
-					if (RefreshLoadoutFromInventoryComponentFromAuthority(Rod, FormalRodSlot.Instance->GetItemDefinitionId()))
-					{
-						Result.Command.bCommitted = true;
-						Result.Command.Error = ECatDomainCommandError::None;
-					}
-					else
-					{
-						FormalRodInstance->SetRodRuntimeStateFromAuthority(SavedRodDurability, bSavedRodBroken);
-						Snapshot = SavedSnapshot;
-						Result.Command.Error = ECatDomainCommandError::PolicyUndecided;
-					}
-				}
-			}
-		}
-	}
-	else
-	{
-		Result.Command.Error = ECatDomainCommandError::InvalidPayload;
-	}
-	Result.Penalty = Penalty;
-	Result.RemainingRodDurability = Snapshot.RodDurability;
-	Result.Command.Revision = Snapshot.Revision;
-	if (Result.Command.bCommitted)
-	{
-		PublishSnapshot();
-	}
-	FailureTerminalCache.Add(RequestId, Result);
 	return Result;
 }
 
@@ -915,8 +766,7 @@ FCatFishingUseFreezeResult UCatEquipmentComponent::BeginFishingUse(const FGuid F
 	{
 		return MakeFishingUseFreezeResult(FishingSessionId, ECatDomainCommandError::RevisionConflict, false);
 	}
-	if (Snapshot.RodDefinitionId != RodDefinitionId
-		|| Snapshot.BaitDefinitionId != BaitDefinitionId || Snapshot.BaitItemInstanceId != BaitItemInstanceId
+	if (Snapshot.BaitDefinitionId != BaitDefinitionId || Snapshot.BaitItemInstanceId != BaitItemInstanceId
 		|| Snapshot.FloatDefinitionId != FloatDefinitionId || Snapshot.FloatItemInstanceId != FloatItemInstanceId)
 	{
 		return MakeFishingUseFreezeResult(FishingSessionId, ECatDomainCommandError::InvalidPayload, false);
@@ -979,37 +829,31 @@ FCatFishingUseFreezeResult UCatEquipmentComponent::BeginFishingUse(const FGuid F
 	{
 		return MakeFishingUseFreezeResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false);
 	}
-	FCatInventoryEntry FrozenBaitItem;
-	const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
-	const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
-	FrozenBaitItem = *BaitSlot;
-	FrozenBaitItem.StackCount = 1;
-	if (BaitSlot->StackCount <= 1)
+	for (TObjectIterator<UCatEquipmentComponent> It; It; ++It)
 	{
-		Snapshot.BaitItemInstanceId = FGuid();
+		if (It->GetWorld() != GetWorld()) continue;
+		for (const auto& Pair : It->FishingUseRecords)
+			if (!Pair.Value.bReleased && Pair.Value.RodInventory.Get() == RodInventory
+				&& Pair.Value.RodItemInstanceId == RodItemInstanceId)
+				return MakeFishingUseFreezeResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false);
 	}
-	if (!OwnerInventory->ConsumeItemAtSlot(FormalBaitSlotIndex, 1))
-	{
-		Snapshot = SavedSnapshot;
+	if (!OwnerInventory->ConsumeItemAtSlotInternal(FormalBaitSlotIndex, 1, false))
 		return MakeFishingUseFreezeResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false);
-	}
-	if (!RefreshLoadoutFromInventoryComponentFromAuthority(Bait, BaitDefinitionId))
-	{
-		OwnerInventory->ReplaceInventoryEntriesFromAuthority(
-			SavedEntries, GetConfiguredInventorySlotCapacity());
-		Snapshot = SavedSnapshot;
-		return MakeFishingUseFreezeResult(FishingSessionId,
-			ECatDomainCommandError::DependencyUnavailable, false);
-	}
-
 	FCatFishingUseRecord Record;
 	Record.RodItemInstanceId = RodItemInstanceId;
 	Record.RodDefinitionId = RodDefinitionId;
 	Record.RodInventory = RodInventory;
-	Record.FrozenBaitDefinitionId = FrozenBaitItem.Instance->GetItemDefinitionId();
+	Record.FrozenBaitDefinitionId = BaitDefinitionId;
 	Record.bBaitQuantityFrozen = true;
 	FishingUseRecords.Add(FishingSessionId, Record);
-	return MakeFishingUseFreezeResult(FishingSessionId, ECatDomainCommandError::None, true);
+	ReconcileLoadoutSelectionsWithInventory(Bait, BaitDefinitionId);
+	++Snapshot.Revision;
+	const FCatFishingUseFreezeResult Result = MakeFishingUseFreezeResult(FishingSessionId, ECatDomainCommandError::None, true);
+	UE_LOG(LogCatEquipment, Log, TEXT("Event=fishing_use_frozen SessionId=%s RodItemInstanceId=%s World=%s NetMode=%d Authority=1 Owner=%s Result=CommittedBeforeNotify"),
+		*FishingSessionId.ToString(), *RodItemInstanceId.ToString(), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), *GetNameSafe(GetOwner()));
+	OwnerInventory->BroadcastInventoryChange(FormalBaitSlotIndex);
+	PublishSnapshot();
+	return Result;
 }
 
 FCatFishingUseOperationResult UCatEquipmentComponent::CommitFishingBaitDeferred(const FGuid FishingSessionId)
@@ -1133,7 +977,7 @@ FCatFishingUseOperationResult UCatEquipmentComponent::ApplyFishingRodWear(const 
 	if (bChanged)
 	{
 		++Snapshot.Revision;
-		PublishSnapshot();
+
 	}
 	if (WearSequence == 1 || bWasBroken != bBroken
 		|| FMath::FloorToDouble(Before / 5.0) != FMath::FloorToDouble(Remaining / 5.0))
@@ -1145,7 +989,21 @@ FCatFishingUseOperationResult UCatEquipmentComponent::ApplyFishingRodWear(const 
 			*GetNameSafe(GetWorld()), static_cast<int32>(GetWorld() ? GetWorld()->GetNetMode() : NM_Standalone),
 			*GetNameSafe(GetOwner()));
 	}
-	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
+	UCatEquipmentComponent* RodEquipment = Record->RodInventory.IsValid() && Record->RodInventory->GetOwner()
+		? Record->RodInventory->GetOwner()->FindComponentByClass<UCatEquipmentComponent>() : nullptr;
+	const bool bUpdateRodOwner = bChanged && RodEquipment && RodEquipment != this
+		&& RodEquipment->Snapshot.RodItemInstanceId == Record->RodItemInstanceId;
+	if (bUpdateRodOwner)
+	{
+		RodEquipment->Snapshot.RodDurability = Remaining;
+		RodEquipment->Snapshot.bRodBroken = bBroken;
+		++RodEquipment->Snapshot.Revision;
+	}
+	// A notification may transfer the record into custody. Freeze the receipt before any callback.
+	const FCatFishingUseOperationResult Result = MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
+	if (bUpdateRodOwner) RodEquipment->PublishSnapshot();
+	if (bChanged) PublishSnapshot();
+	return Result;
 }
 
 bool UCatEquipmentComponent::GetFishingRodDurability(const FGuid FishingSessionId,
@@ -1180,83 +1038,40 @@ bool UCatEquipmentComponent::GetFishingRodDurability(const FGuid FishingSessionI
 
 FCatFishingUseOperationResult UCatEquipmentComponent::ReleaseFishingUse(const FGuid FishingSessionId)
 {
-	// Fishing 使用释放流程：
-	// 1. 先按 SessionId 找到 Begin 留下的短生命周期记录；已结束会话和重复释放只返回稳定终态。
-	// 2. 如果饵料还没确认消耗，就把这一份按 DefinitionId 交给 Actor 级统一入包；背包放不下时保留会话记录供调用方重试或走失败收口。
-	// 3. 归还前用正式库存确认当前选择是否还有可见数量；归还后刷新读模型并修正空选择，再关闭记录。
-	// 4. 已确认消耗的会话只关闭记录，库存和读模型保持当前状态。
 	FCatFishingUseRecord* Record = FindFishingUseRecord(FishingSessionId);
-	if (!Record)
+	if (!Record) return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::NotFound, false);
+	if (Record->bReleased) return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false, Record);
+	if (!GetOwner() || !GetOwner()->HasAuthority())
+		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::DependencyUnavailable, false, Record);
+	UCatInventoryComponent* Inventory = ResolveOwnerInventoryComponent();
+	const bool bReturnBait = Record->bBaitQuantityFrozen && !Record->bBaitCommitted;
+	if (bReturnBait)
 	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::NotFound, false);
-	}
-	if (Record->bReleased)
-	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::AlreadyResolved, false, Record);
-	}
-	if (!IsFishingUseActive(FishingSessionId))
-	{
-		return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::InvalidPhase, false, Record);
-	}
-	if (Record->bBaitQuantityFrozen && !Record->bBaitCommitted)
-	{
-		UCatEquipmentDefinition* Bait =
-			GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(
-				Record->FrozenBaitDefinitionId);
-		if (!Bait || !Bait->CanServeFishingBait()
-			|| GetInventoryStackLimit(*Bait) <= 0)
+		UCatEquipmentDefinition* Bait = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(Record->FrozenBaitDefinitionId);
+		if (!Inventory || !Bait || !Bait->CanServeFishingBait())
+			return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::DependencyUnavailable, false, Record);
+		FCatInventoryReceiveBatch Batch;
+		FCatInventoryDefinitionEntry& Entry = Batch.DefinitionEntries.AddDefaulted_GetRef();
+		Entry.ItemDefinition = Bait;
+		Entry.Count = 1;
+		if (!Inventory->TryAddInventoryBatchInternal(Batch, false))
 		{
-			return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::DependencyUnavailable,
-				false, Record);
+			UE_LOG(LogCatEquipment, Warning, TEXT("Event=fishing_bait_return_rejected SessionId=%s Owner=%s World=%s NetMode=%d Authority=1 Reason=InventoryCapacity"),
+				*FishingSessionId.ToString(), *GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()));
+			return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::CapacityExceeded, false, Record);
 		}
-		const FName RestoredDefinitionId = Record->FrozenBaitDefinitionId;
-		UCatInventoryComponent* OwnerInventory = ResolveOwnerInventoryComponent();
-		if (OwnerInventory == nullptr)
-		{
-			return MakeFishingUseOperationResult(FishingSessionId,
-				ECatDomainCommandError::DependencyUnavailable, false, Record);
-		}
-		const TArray<FCatInventoryEntry> SavedEntries = OwnerInventory->GetInventoryEntries();
-		const FCatEquipmentLoadoutSnapshot SavedSnapshot = Snapshot;
-		const FCatFishingUseRecord SavedRecord = *Record;
-		FCatInventoryReceiveBatch ReceiveBatch;
-		FCatInventoryDefinitionEntry& DefinitionEntry =
-			ReceiveBatch.DefinitionEntries.AddDefaulted_GetRef();
-		DefinitionEntry.ItemDefinition = Bait;
-		DefinitionEntry.Count = 1;
-		// 鱼饵选择恢复只问正式 InventoryComponent 还有没有同定义可见数量；Equipment 读模型在这里只保存当前选择字段。
-		const bool bShouldRestoreBaitSelection = Snapshot.BaitDefinitionId == RestoredDefinitionId
-			|| Snapshot.BaitDefinitionId.IsNone()
-			|| OwnerInventory->CountVisibleInventoryQuantityByDefinitionId(Snapshot.BaitDefinitionId) <= 0;
-		if (bShouldRestoreBaitSelection)
-		{
-			Snapshot.BaitDefinitionId = RestoredDefinitionId;
-			Snapshot.BaitItemInstanceId = FGuid();
-		}
-		if (!UCatInventoryStatics::TryAddInventoryBatchToActor(GetOwner(), ReceiveBatch))
-		{
-			Snapshot = SavedSnapshot;
-			UE_LOG(LogCatEquipment, Warning,
-			TEXT("Event=equipment_fishing_bait_release_pickup_rejected SessionId=%s Owner=%s Definition=%s"),
-				*FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(GetOwner()),
-				*RestoredDefinitionId.ToString());
-			return MakeFishingUseOperationResult(FishingSessionId,
-				ECatDomainCommandError::DependencyUnavailable, false, Record);
-		}
+		ReconcileLoadoutSelectionsWithInventory(Bait, Record->FrozenBaitDefinitionId);
 		Record->FrozenBaitDefinitionId = NAME_None;
 		Record->bBaitQuantityFrozen = false;
-		if (!RefreshLoadoutFromInventoryComponentFromAuthority(Bait, RestoredDefinitionId))
-		{
-			OwnerInventory->ReplaceInventoryEntriesFromAuthority(
-				SavedEntries, GetConfiguredInventorySlotCapacity());
-			Snapshot = SavedSnapshot;
-			*Record = SavedRecord;
-			return MakeFishingUseOperationResult(FishingSessionId,
-				ECatDomainCommandError::DependencyUnavailable, false, Record);
-		}
 	}
 	Record->bReleased = true;
-	return MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
+	++Snapshot.Revision;
+	const FCatFishingUseOperationResult Result = MakeFishingUseOperationResult(FishingSessionId, ECatDomainCommandError::None, true, Record);
+	UE_LOG(LogCatEquipment, Log, TEXT("Event=fishing_use_released SessionId=%s Owner=%s World=%s NetMode=%d Authority=1 BaitReturned=%d Result=ClosedBeforeNotify"),
+		*FishingSessionId.ToString(), *GetNameSafe(GetOwner()), *GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), bReturnBait);
+	if (bReturnBait) Inventory->BroadcastInventoryChange();
+	PublishSnapshot();
+	return Result;
 }
 
 bool UCatEquipmentComponent::HasActiveFishingUse() const
@@ -1859,4 +1674,79 @@ void UCatEquipmentComponent::PublishSnapshot()
 		Owner->ForceNetUpdate();
 	}
 	OnSnapshotChanged.Broadcast();
+}
+
+bool UCatEquipmentComponent::TryGetInventoryRodForDeployment(FCatInventoryEntry& OutRod) const
+{
+    OutRod = {};
+    const UCatInventoryComponent* Inventory = ResolveOwnerInventoryComponent();
+    if (!Inventory) return false;
+    const auto IsDeployable = [](const FCatInventoryEntry& Entry)
+    {
+        const auto* Instance = Cast<UCatEquipmentInventoryItemInstance>(Entry.Instance);
+        const auto* Definition = Instance ? Cast<UCatEquipmentDefinition>(Instance->GetItemDefinition()) : nullptr;
+        return Entry.StackCount == 1 && Definition && Definition->CanServeFishingRod()
+            && !Instance->IsRodBroken() && FMath::IsFinite(Instance->GetRodDurability()) && Instance->GetRodDurability() > 0.0;
+    };
+    for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
+        if (IsDeployable(Entry) && Entry.Instance->GetItemInstanceId() == Snapshot.RodItemInstanceId) { OutRod = Entry; return true; }
+    for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
+        if (IsDeployable(Entry)) { OutRod = Entry; return true; }
+    return false;
+}
+
+bool UCatEquipmentComponent::MoveFishingResourcesToCustodian(UCatEquipmentComponent* Target,
+    const TArray<FGuid>& SessionIds, const TArray<FGuid>& RodItemInstanceIds)
+{
+    if (!Target || Target == this || !GetOwner() || !GetOwner()->HasAuthority()
+        || !Target->GetOwner() || !Target->GetOwner()->HasAuthority() || Target->GetWorld() != GetWorld()) return false;
+    for (const FGuid SessionId : SessionIds)
+    {
+        const FCatFishingUseRecord* Record = FindFishingUseRecord(SessionId);
+        if (!Record || Record->bReleased || Target->FishingUseRecords.Contains(SessionId)) return false;
+    }
+    UCatInventoryComponent* SourceInventory = ResolveOwnerInventoryComponent();
+    UCatInventoryComponent* TargetInventory = Target->ResolveOwnerInventoryComponent();
+    if (!SourceInventory || !TargetInventory) return false;
+    TargetInventory->SetInventorySlotCountFromAuthority(FMath::Max(TargetInventory->GetInventorySlotCount(), SessionIds.Num()));
+    if (!SourceInventory->MoveHeldInventoryEntriesToCustodianFromAuthority(TargetInventory, RodItemInstanceIds)) return false;
+    for (const FGuid SessionId : SessionIds)
+    {
+        Target->FishingUseRecords.Add(SessionId, MoveTemp(FishingUseRecords.FindChecked(SessionId)));
+        FishingUseRecords.Remove(SessionId);
+    }
+    // Borrowers retain their own bait records; only the transferred rod's authoritative inventory changes.
+    for (TObjectIterator<UCatEquipmentComponent> It; It; ++It)
+    {
+        if (It->GetWorld() != GetWorld()) continue;
+        for (auto& Pair : It->FishingUseRecords)
+            if (Pair.Value.RodInventory.Get(true) == SourceInventory && RodItemInstanceIds.Contains(Pair.Value.RodItemInstanceId))
+                Pair.Value.RodInventory = TargetInventory;
+    }
+    ReconcileLoadoutSelectionsWithInventory(nullptr, NAME_None);
+    Target->ReconcileLoadoutSelectionsWithInventory(nullptr, NAME_None);
+    ++Snapshot.Revision;
+    ++Target->Snapshot.Revision;
+    return true;
+}
+
+bool UCatEquipmentComponent::IsFishingRodInUse(const FGuid ItemInstanceId) const
+{
+    const auto* Inventory = ResolveOwnerInventoryComponent();
+    if (!Inventory || !ItemInstanceId.IsValid()) return false;
+    for (TObjectIterator<UCatEquipmentComponent> It; It; ++It)
+    {
+        if (It->GetWorld() != GetWorld()) continue;
+        for (const auto& Pair : It->FishingUseRecords)
+            if (!Pair.Value.bReleased && Pair.Value.RodInventory.Get(true) == Inventory && Pair.Value.RodItemInstanceId == ItemInstanceId) return true;
+    }
+    return false;
+}
+
+void UCatEquipmentComponent::EndPlay(const EEndPlayReason::Type EndPlayReason)
+{
+    if (GetOwner() && GetOwner()->HasAuthority() && GetWorld())
+        if (auto* Fishing = GetWorld()->GetSubsystem<UCatFishingService>())
+            Fishing->PreserveFishingResourcesForEquipmentShutdown(this);
+    Super::EndPlay(EndPlayReason);
 }

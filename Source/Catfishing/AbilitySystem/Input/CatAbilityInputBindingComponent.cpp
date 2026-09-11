@@ -2,13 +2,21 @@
 
 #include "AbilitySystem/Config/CatAbilityInputConfig.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
+#include "AbilitySystem/Tags/CatFishingAbilityTags.h"
+#include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "EnhancedInputComponent.h"
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "GameFramework/Pawn.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/Presentation/CatFishingCameraComponent.h"
+#include "GameFramework/PlayerController.h"
+#include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Logging/CatLog.h"
+#include "Logging/CatLogContext.h"
 
 UCatAbilityInputBindingComponent::UCatAbilityInputBindingComponent()
 {
-	// 构造流程：关闭 Tick 和复制，只让拥有它的本地 Controller 在输入生命周期节点显式驱动，避免组件自己建立第二条运行时循环。
 	PrimaryComponentTick.bCanEverTick = false;
 	SetIsReplicatedByDefault(false);
 }
@@ -16,52 +24,34 @@ UCatAbilityInputBindingComponent::UCatAbilityInputBindingComponent()
 void UCatAbilityInputBindingComponent::BindAbilityActions(UEnhancedInputComponent& InputComponent,
 	const UCatAbilityInputConfig* InputConfig)
 {
-	// 绑定流程：
-	// 1. 先拒绝缺失或运行时未就绪的 Ability 输入配置，防止半套绑定绕过 AbilitySettings 的正式 gate。
-	// 2. 同一个 EnhancedInputComponent 只绑定一次；UE 输入组件没有被本类拥有，不能通过重复 SetupInputComponent 堆叠回调。
-	// 3. 对每个 Ability Action 同时绑定按下和两类释放边沿，后续具体 Ability 查找、激活策略和预测事件都交给 ASC。
-	if (!InputConfig || !InputConfig->IsRuntimeReady() || BoundInputComponent.Get() == &InputComponent)
-	{
-		return;
-	}
+	if (!InputConfig || !InputConfig->IsRuntimeReady() || BoundInputComponent.Get() == &InputComponent) return;
 	for (const FCatAbilityInputAction& Entry : InputConfig->AbilityInputActions)
 	{
-		if (!Entry.InputAction || !Entry.InputTag.IsValid())
-		{
-			continue;
-		}
+		if (!Entry.InputAction || !Entry.InputTag.IsValid()) continue;
 		InputComponent.BindAction(Entry.InputAction, ETriggerEvent::Started,
 			this, &ThisClass::HandleAbilityInputTagPressed, Entry.InputTag);
 		InputComponent.BindAction(Entry.InputAction, ETriggerEvent::Completed,
 			this, &ThisClass::HandleAbilityInputTagReleased, Entry.InputTag);
 		InputComponent.BindAction(Entry.InputAction, ETriggerEvent::Canceled,
-			this, &ThisClass::HandleAbilityInputTagReleased, Entry.InputTag);
+			this, &ThisClass::HandleAbilityInputTagCanceled, Entry.InputTag);
 	}
 	BoundInputComponent = &InputComponent;
 }
 
 void UCatAbilityInputBindingComponent::RefreshForPawn(APawn* Pawn)
 {
-	// 路由刷新流程：
-	// 1. 从 Pawn 的 AbilitySystemInterface 解析项目 ASC，不依赖具体 Character 类型。
-	// 2. 上一个 ASC 若不同于新 ASC，先清掉仍按住的输入，防止失效身体继续消费边沿。
-	// 3. 新 ASC 也清一次输入，保证重生、复制 Pawn 和旅行后不会继承上一具身体的输入状态。
 	UCatAbilitySystemComponent* NewAbilitySystem = UCatAbilitySystemComponent::FindCatAbilitySystemFromActor(Pawn);
-	if (UCatAbilitySystemComponent* PreviousAbilitySystem = RoutedAbilitySystem.Get();
-		PreviousAbilitySystem && PreviousAbilitySystem != NewAbilitySystem)
-	{
-		PreviousAbilitySystem->ResetAbilityInput();
-	}
-	if (NewAbilitySystem)
-	{
-		NewAbilitySystem->ResetAbilityInput();
-	}
+	if (RoutedPawn.Get() == Pawn && RoutedAbilitySystem.Get() == NewAbilitySystem) return;
+	ReleaseAllInputRoutes(TEXT("PawnChanged"));
+	RoutedPawn = Pawn;
 	RoutedAbilitySystem = NewAbilitySystem;
+	if (NewAbilitySystem) NewAbilitySystem->ResetAbilityInput();
 }
 
 void UCatAbilityInputBindingComponent::ProcessAbilityInput(const float DeltaTime, const bool bGamePaused)
 {
-	// 帧处理流程：翻天期间清掉已路由 ASC 的按住和边沿状态并跳过激活；其余把时长和暂停交给 ASC，目标缺失时等待 Pawn 路由。
+	// 帧处理流程：先读取当前 Pawn 的 ASC 路由；翻天锁生效时清掉已按住和边沿输入，防止锁前能力在物理控制被清理后继续激活。
+	// 未锁定时才把时长和暂停状态交给 ASC；路由尚未就绪则不缓存输入，等待 Controller 的 Pawn 切换重新建立。
 	if (UCatAbilitySystemComponent* AbilitySystem = RoutedAbilitySystem.Get())
 	{
 		const ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
@@ -74,30 +64,111 @@ void UCatAbilityInputBindingComponent::ProcessAbilityInput(const float DeltaTime
 	}
 }
 
+void UCatAbilityInputBindingComponent::ReleaseAllInputRoutes(const FName Reason)
+{
+	// 生命周期取消不能经过 Primary InputReleased（瞄准时该方法会抛钩）。
+	// 先丢弃边沿，再取消对应活跃 Spec；领域持续输入另由 Controller 的统一清理入口收口。
+	TSet<UCatAbilitySystemComponent*> Systems;
+	for (const TPair<FGameplayTag, FPressedRoute>& Pair : PressedRoutes)
+	{
+		if (UCatAbilitySystemComponent* AbilitySystem = Pair.Value.AbilitySystem.Get()) Systems.Add(AbilitySystem);
+	}
+	for (UCatAbilitySystemComponent* AbilitySystem : Systems) AbilitySystem->ResetAbilityInput();
+	TArray<FGameplayTag> Tags;
+	PressedRoutes.GetKeys(Tags);
+	for (const FGameplayTag Tag : Tags)
+	{
+		FPressedRoute Route;
+		if (!PressedRoutes.RemoveAndCopyValue(Tag, Route)) continue;
+		if (UCatPhysicsGrabComponent* Grab = Route.Grab.Get()) Grab->SetGrabInput(Route.bLeft, false);
+		if (UCatAbilitySystemComponent* AbilitySystem = Route.AbilitySystem.Get())
+		{
+			TArray<FGameplayAbilitySpecHandle> Handles;
+			for (const FGameplayAbilitySpec& Spec : AbilitySystem->GetActivatableAbilities())
+				if (Spec.IsActive() && Spec.GetDynamicSpecSourceTags().HasTagExact(Tag)) Handles.Add(Spec.Handle);
+			for (const FGameplayAbilitySpecHandle Handle : Handles) AbilitySystem->CancelAbilityHandle(Handle);
+		}
+		UE_LOG(LogCatfishing, Display, TEXT("Event=physical_input_route_canceled InputTag=%s Route=%s Reason=%s Result=OriginalRecipientCanceled %s"),
+			*Tag.ToString(), Route.Grab.IsValid() ? TEXT("Grab") : TEXT("Ability"), *Reason.ToString(),
+			*CatLogContext::BuildControllerFields(Cast<APlayerController>(GetOwner())));
+	}
+	if (const ACatCharacter* Character = Cast<ACatCharacter>(RoutedPawn.Get()))
+	{
+		if (UCatPhysicalBodyComponent* Body = Character->GetPhysicalBodyComponent())
+		{
+			if (UCatPhysicsGrabComponent* Grab = Body->GetGrab())
+			{
+				Grab->SetGrabInput(true, false);
+				Grab->SetGrabInput(false, false);
+			}
+		}
+	}
+	if (!Tags.IsEmpty())
+	{
+		UE_LOG(LogCatfishing, Display, TEXT("Event=physical_input_routes_cleared Reason=%s RouteCount=%d %s"),
+			*Reason.ToString(), Tags.Num(), *CatLogContext::BuildControllerFields(Cast<APlayerController>(GetOwner())));
+	}
+}
+
 void UCatAbilityInputBindingComponent::ResetAbilityInput()
 {
-	// 重置流程：当前 ASC 仍存在时先清输入状态，再忘记 ASC；已安装的输入组件绑定不在占有变化时撤销，避免下次 SetupInputComponent 重入重复绑定。
-	if (UCatAbilitySystemComponent* AbilitySystem = RoutedAbilitySystem.Get())
-	{
-		AbilitySystem->ResetAbilityInput();
-	}
+	ReleaseAllInputRoutes(TEXT("InputReset"));
+	if (UCatAbilitySystemComponent* AbilitySystem = RoutedAbilitySystem.Get()) AbilitySystem->ResetAbilityInput();
 	RoutedAbilitySystem.Reset();
+	RoutedPawn.Reset();
 }
 
 void UCatAbilityInputBindingComponent::HandleAbilityInputTagPressed(const FGameplayTag InputTag)
 {
-	// 按下转发流程：回调只认当前 ASC；目标缺失时静默丢弃边沿，避免组件替 Ability 或领域命令保存补发状态。
-	if (UCatAbilitySystemComponent* AbilitySystem = RoutedAbilitySystem.Get())
+	if (PressedRoutes.Contains(InputTag)) return;
+	APlayerController* Controller = Cast<APlayerController>(GetOwner());
+	if (Controller && Controller->IsMoveInputIgnored()) return;
+	if (InputTag == CatFishingAbilityTags::Input_Fishing_Cancel) ReleaseAllInputRoutes(TEXT("CancelInput"));
+	const bool bLeft = InputTag == CatFishingAbilityTags::Input_Fishing_Primary;
+	const bool bHandInput = bLeft || InputTag == CatFishingAbilityTags::Input_Fishing_Slack;
+	const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindHeldRodOperatedBy(Controller);
+	const bool bPrimary = Rod && Rod->IsPrimaryOperator(Controller ? Controller->PlayerState : nullptr);
+	FPressedRoute Route;
+	if (bHandInput && !bPrimary)
 	{
+		const ACatCharacter* Character = Cast<ACatCharacter>(RoutedPawn.Get());
+		UCatPhysicalBodyComponent* Body = Character ? Character->GetPhysicalBodyComponent() : nullptr;
+		if (Body && Body->GetGrab())
+		{
+			Route.Grab = Body->GetGrab();
+			Route.bLeft = bLeft;
+			PressedRoutes.Add(InputTag, Route);
+			Route.Grab->SetGrabInput(bLeft, true);
+		}
+		else return;
+	}
+	else if (UCatAbilitySystemComponent* AbilitySystem = RoutedAbilitySystem.Get())
+	{
+		Route.AbilitySystem = AbilitySystem;
+		PressedRoutes.Add(InputTag, Route);
 		AbilitySystem->AbilityInputTagPressed(InputTag);
 	}
+	else return;
+	UE_LOG(LogCatfishing, Display, TEXT("Event=physical_input_route_pressed InputTag=%s Route=%s Pawn=%s %s"),
+		*InputTag.ToString(), Route.Grab.IsValid() ? TEXT("Grab") : TEXT("Ability"),
+		*GetNameSafe(RoutedPawn.Get()), *CatLogContext::BuildControllerFields(Controller));
 }
 
 void UCatAbilityInputBindingComponent::HandleAbilityInputTagReleased(const FGameplayTag InputTag)
 {
-	// 释放转发流程：回调只认当前 ASC；持续技能释放、复制事件和清理策略继续由 UCatAbilitySystemComponent 统一处理。
-	if (UCatAbilitySystemComponent* AbilitySystem = RoutedAbilitySystem.Get())
-	{
-		AbilitySystem->AbilityInputTagReleased(InputTag);
-	}
+	FPressedRoute Route;
+	if (!PressedRoutes.RemoveAndCopyValue(InputTag, Route)) return;
+	if (UCatPhysicsGrabComponent* Grab = Route.Grab.Get()) Grab->SetGrabInput(Route.bLeft, false);
+	if (UCatAbilitySystemComponent* AbilitySystem = Route.AbilitySystem.Get()) AbilitySystem->AbilityInputTagReleased(InputTag);
+	UE_LOG(LogCatfishing, Display, TEXT("Event=physical_input_route_released InputTag=%s Route=%s Result=OriginalRecipientReleased %s"),
+		*InputTag.ToString(), Route.Grab.IsValid() ? TEXT("Grab") : TEXT("Ability"),
+		*CatLogContext::BuildControllerFields(Cast<APlayerController>(GetOwner())));
+}
+
+void UCatAbilityInputBindingComponent::HandleAbilityInputTagCanceled(const FGameplayTag InputTag)
+{
+	if (!PressedRoutes.Contains(InputTag)) return;
+	if (ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner()))
+		Controller->ClearPhysicalControlInput(TEXT("InputCanceled"));
+	else ReleaseAllInputRoutes(TEXT("InputCanceled"));
 }

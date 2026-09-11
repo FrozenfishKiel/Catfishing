@@ -1,5 +1,5 @@
-﻿#include "Fishing/Debug/CatFishingDebugSubsystem.h"
-
+#include "Fishing/Debug/CatFishingDebugSubsystem.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 
 #include "AbilitySystemComponent.h"
@@ -23,6 +23,7 @@
 #include "Data/CatFishDefinition.h"
 #include "Equipment/CatEquipmentDefinition.h"
 #include "Equipment/CatEquipmentInventoryItemInstance.h"
+#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/Actors/CatFishEncounterActor.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
@@ -34,7 +35,6 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "HAL/IConsoleManager.h"
-#include "Inventory/CatInventorySettings.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "FishContainers/CatFishPickupSettings.h"
 #include "Items/Fish/CatFishPickupActor.h"
@@ -44,7 +44,7 @@
 #if !UE_BUILD_SHIPPING
 namespace CatFishingDebugCommands
 {
-	// 鱼定义选择流程：显式参数先按稳定 FishDefinitionId 查找，再同步加载配置里的候选资产名做匹配。
+	// 鱼定义选择流程：显式参数先按稳定 FishDefinitionId 查找，再同步加载配置里的候选资产名做兼容。
 	// 没有参数时优先返回可进鱼缸展示的正式鱼，若都不可展示则退到第一条可运行定义。
 	// 同步加载只发生在非 Shipping 调试命令里，避免正式链路为验收便利付成本。
 	static UCatFishDefinition* ResolveFishDefinition(const TArray<FString>& Args)
@@ -247,6 +247,11 @@ void UCatFishingDebugSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 #if ENABLE_DRAW_DEBUG
 	FishingStatsDrawHandle = UDebugDrawService::Register(TEXT("Game"),
 		FDebugDrawDelegate::CreateUObject(this, &ThisClass::DrawFishingStats));
+	UE_LOG(LogCatFishing, Log,
+		TEXT("Event=fishing_stats_overlay_registered World=%s NetMode=%d Subsystem=%s StatsEnabled=%d WorldDebugMode=%d Registered=%d"),
+		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1,
+		*GetName(), CVarCatFishingStats.GetValueOnGameThread() != 0,
+		CVarCatFishingDebug.GetValueOnGameThread(), FishingStatsDrawHandle.IsValid());
 #endif
 }
 
@@ -271,7 +276,7 @@ FString UCatFishingDebugSubsystem::FormatFishTypeLine(const FName FishDefinition
 
 // 右上角数值面板：
 // 1. 鱼和战斗中的鱼竿耐久读取 Session 复制快照；猫的力量、当前体力和上限读取本地 Character ASC。
-// 2. 非战斗阶段的鱼竿耐久优先读取正式库存实例；无库存宿主没有 InventoryComponent 时才退回 Equipment 匹配快照，避免调试面板出现第二套库存口径。
+// 2. 有会话时保持本地 Session 的原竿耐久口径；无会话优先读取正式库存实例，已部署实例离包后读取 Equipment 的只读投影。
 void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerController* Controller)
 {
 #if ENABLE_DRAW_DEBUG
@@ -326,14 +331,11 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 	}
 	FString RodLine = TEXT("ROD   Durability --  Strength --");
 	if (const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(
-		RodDefinitionId); RodDefinition && RodDefinition->CanServeFishingRod())
+		RodDefinitionId))
 	{
 		double CurrentDurability = 0.0;
 		bool bHasCurrentDurability = false;
-		const bool bUsesSessionDurability = SessionSnapshot
-			&& (SessionSnapshot->Phase == ECatFishingPhase::HookedFight
-				|| SessionSnapshot->Phase == ECatFishingPhase::NearShore
-				|| SessionSnapshot->Phase == ECatFishingPhase::ExhaustedReel);
+		const bool bUsesSessionDurability = SessionSnapshot && SessionSnapshot->RodActor;
 		if (bUsesSessionDurability)
 		{
 			CurrentDurability = SessionSnapshot->RodDurabilityRemaining;
@@ -352,7 +354,7 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 				bHasCurrentDurability = true;
 			}
 		}
-		else if (!Inventory && Loadout && Loadout->RodDefinitionId == RodDefinitionId)
+		if (!bHasCurrentDurability && Loadout && Loadout->RodDefinitionId == RodDefinitionId)
 		{
 			CurrentDurability = Loadout->RodDurability;
 			bHasCurrentDurability = true;
@@ -546,8 +548,10 @@ void UCatFishingDebugSubsystem::DrawCastAimPoint(APlayerController* Controller) 
 	if (!Pawn) return;
 	FCatWaterRegionHandle AimRegion;
 	FVector AimLanding;
-	if (UCatFishingAimLibrary::ResolveCastAimPoint(World, Pawn->GetPawnViewLocation(),
-		Controller->GetControlRotation(), AimRegion, AimLanding))
+	FVector ViewOrigin, ViewDirection;
+	if (UCatFishingAimLibrary::TryGetLocalCastViewRay(Controller, ViewOrigin, ViewDirection)
+		&& UCatFishingAimLibrary::ResolveCastAimPoint(World, ViewOrigin,
+			ViewDirection.Rotation(), AimRegion, AimLanding))
 	{
 		DrawDebugSphere(World, AimLanding, 20.0f, 12, FColor::Green, false, -1.0f, 0, 2.0f);
 		DrawDebugCircle(World, AimLanding + FVector(0, 0, 2), 60.0f, 24, FColor::Green, false, -1.0f, 0, 1.5f,
@@ -590,7 +594,7 @@ void UCatFishingDebugSubsystem::DrawChumChargePreview(APlayerController* Control
 }
 
 // 会话状态：钩/鱼位置球、竿尖到鱼的连线、近岸圈与规格 7.1 的状态提示文字。
-// 精简模式关闭完整细节时，保留鱼线、阶段文字和抄网提示；窝料数量只读正式库存组件，避免调试层继续把装备投影当库存事实。
+// 精简模式关闭完整细节时，保留鱼线、阶段文字和抄网提示；窝料数量只读正式库存组件，避免调试层继续把旧投影当库存事实。
 void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const bool bFullDetail) const
 {
 #if ENABLE_DRAW_DEBUG
@@ -631,7 +635,7 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 	const FVector RodTip = Rod ? ResolveRodTipDrawLocation(*Rod) : FVector::ZeroVector;
 	if (Hook)
 	{
-		// Debug 只为正式浮漂表现着色/画锚点；VisualRoot 保持由正式表现链写入，避免关闭 Debug 后玩法反馈一起消失。
+		// Debug 只为正式浮漂表现着色/画锚点，不再写 VisualRoot，避免关闭 Debug 后玩法反馈一起消失。
 		FColor HookColor = FColor::Blue;
 		switch (Hook->GetPresentationState().BobberMode)
 		{
@@ -644,7 +648,7 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 		default:
 			break;
 		}
-		// 搏斗/近岸阶段钩 Actor 已跟随鱼移动：省略钩球避免与鱼球重叠，线也直接画到鱼。
+		// 搏斗/近岸阶段钩 Actor 已跟随鱼移动：不再单独画钩球（避免与鱼球重叠），线也直接画到鱼。
 		if (!Fish)
 		{
 			const FVector HookDrawLocation = Hook->GetPresentationVisualWorldLocation();

@@ -2,54 +2,50 @@
 
 #include "CoreMinimal.h"
 #include "GameFramework/CharacterMovementComponent.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "CatCharacterMovementComponent.generated.h"
 
-/** 已由服务器裁决的外部牵引。只改变移动，不包含体力、耐久或会话状态。 */
-struct FCatExternalTractionInput
+struct CATFISHING_API FCatCMCMotionPrediction
 {
-	FGuid SourceId;
-	FVector Direction = FVector::ZeroVector;
-	double AccelerationCentimetersPerSecondSquared = 0.0;
-	/** 已扣除鱼线拉力后剩余的支撑减速度，只能减缓向鱼运动，不能把静止角色推离鱼。 */
-	double BrakingDecelerationCentimetersPerSecondSquared = 0.0;
-	double SpeedLimitCentimetersPerSecond = 0.0;
-	bool bActive = false;
+    FCatBodyDriveSample Drive;
+    FVector Position = FVector::ZeroVector;
+    FVector Velocity = FVector::ZeroVector;
+    FVector ExternalForce = FVector::ZeroVector;
+    double MassKg = 4;
+    double GroundResistanceNewtons = .8;
+    double GravityZ = -980;
+    bool bGrounded = true;
+    bool bAcceptVerticalLineForce = false;
 };
 
-/** 外力进入 CMC 的速度积分和碰撞流程，并随 SavedMove 重放。 */
+/** Upright capsule locomotion. The existing authority input/snapshot channel schedules one CMC step. */
 UCLASS()
 class CATFISHING_API UCatCharacterMovementComponent : public UCharacterMovementComponent
 {
 	GENERATED_BODY()
 public:
-	void SetExternalTraction(const UObject* Source, const FCatExternalTractionInput& Input);
-	void ClearExternalTraction(const UObject* Source);
-	FCatExternalTractionInput GetExternalTraction() const { return TractionSource.IsValid() ? LiveTraction : FCatExternalTractionInput{}; }
-	void RestoreTractionForSavedMove(const FCatExternalTractionInput& Input);
-	/** 只读胶囊探测，供外力求解约束下一步可移动距离；实际落位仍由 CMC 完成。 */
+	UCatCharacterMovementComponent();
+	/** Passive ground contact resistance, independent of voluntary fishing strength. */
+	UPROPERTY(EditAnywhere, Category="Catfishing|Movement", meta=(ClampMin="0"))
+	float GroundResistanceNewtons = 0.8f;
+	void AdvanceFromAuthority(float DeltaSeconds);
+	void QueueExternalImpulse(FVector Impulse) { QueuedExternalImpulse += Impulse; }
+	void ClearQueuedExternalImpulse() { QueuedExternalImpulse = MovementExternalForce = FVector::ZeroVector; }
+	FCatCMCMotionPrediction CaptureMotionPrediction();
+	static void AdvanceMotionPrediction(FCatCMCMotionPrediction& Sample, const FVector& LineForceNewtons, double Seconds);
 	double GetExternalTractionTravelLimit(const FVector& Direction, double MaximumDistance) const;
-	virtual FNetworkPredictionData_Client* GetPredictionData_Client() const override;
-	virtual void PerformMovement(float DeltaSeconds) override;
+	void ObserveSnapshot(const FVector& ObservedVelocity, const FVector& ObservedIntent);
+	virtual bool IsFalling() const override;
+	virtual bool IsMovingOnGround() const override;
+	void UpdatePeerPushContacts();
+	virtual void StopMovementImmediately() override;
 	virtual void CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration) override;
+	virtual FVector NewFallVelocity(const FVector& InitialVelocity, const FVector& Gravity, float DeltaTime) const override;
+	virtual void PhysicsRotation(float DeltaTime) override;
+	virtual bool IsWalkable(const FHitResult& Hit) const override;
+	virtual void InitCollisionParams(FCollisionQueryParams& OutParams, FCollisionResponseParams& OutResponseParam) const override;
 private:
-	TWeakObjectPtr<const UObject> TractionSource;
-	FCatExternalTractionInput LiveTraction;
-	FCatExternalTractionInput MovementTraction;
-	bool bUseSavedTraction = false;
-	double NextTractionDiagnosticSeconds = 0.0;
-	double NextReplayDiagnosticSeconds = 0.0;
-	FGuid LastTractionDiagnosticSourceId;
-	bool bLastTractionActive = false;
-};
-
-class FCatSavedMove : public FSavedMove_Character
-{
-public:
-	using Super = FSavedMove_Character;
-	FCatExternalTractionInput Traction;
-	virtual void Clear() override;
-	virtual void SetMoveFor(ACharacter* Character, float InDeltaTime, const FVector& NewAccel,
-		FNetworkPredictionData_Client_Character& ClientData) override;
-	virtual void PrepMoveFor(ACharacter* Character) override;
-	virtual bool CanCombineWith(const FSavedMovePtr& NewMove, ACharacter* Character, float MaxDelta) const override;
+	double NextModelContactLogSeconds = 0;
+	FVector QueuedExternalImpulse = FVector::ZeroVector;
+	FVector MovementExternalForce = FVector::ZeroVector;
 };

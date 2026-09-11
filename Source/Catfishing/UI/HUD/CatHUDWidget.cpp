@@ -7,12 +7,67 @@
 #include "Engine/World.h"
 #include "GameFramework/GameStateBase.h"
 #include "GameFramework/PlayerController.h"
+#include "GameFramework/PlayerState.h"
 #include "Logging/CatLog.h"
 #include "Rendering/DrawElementTypes.h"
 
 // HUD 渲染流程：缓存 Model 生成的只读投影，按 Designer 真实绑定控件写入天数、调试文本、钓鱼反馈、入口按钮状态和进度条，再触发蓝图扩展点。
 void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 {
+	if (ViewState.bShowPhysicalControls && (!PhysicalControlTextBlock || !PhysicalHandStateTextBlock)
+		&& !bHasLoggedMissingPhysicalControls)
+	{
+		UE_LOG(LogCatUI, Warning,
+			TEXT("Event=ui_hud_physical_controls_missing Widget=%s World=%s Result=FormalWidgetNeedsMigration"),
+			*GetName(), *GetNameSafe(GetWorld()));
+		bHasLoggedMissingPhysicalControls = true;
+	}
+	if (ViewState.bShowPhysicalControls != LastHUDViewState.bShowPhysicalControls
+		|| ViewState.bPrimaryRodOperator != LastHUDViewState.bPrimaryRodOperator
+		|| ViewState.bLeftHandGripped != LastHUDViewState.bLeftHandGripped
+		|| ViewState.bRightHandGripped != LastHUDViewState.bRightHandGripped)
+	{
+		const APlayerController* Controller = GetOwningPlayer();
+		UE_LOG(LogCatUI, Log,
+			TEXT("Event=ui_hud_physical_controls_applied World=%s NetMode=%d Authority=%d LocalRole=%d PlayerId=%d Operator=%d LeftGrip=%d RightGrip=%d Result=ViewStateApplied"),
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE,
+			Controller && Controller->HasAuthority(), Controller ? static_cast<int32>(Controller->GetLocalRole()) : INDEX_NONE,
+			Controller && Controller->PlayerState ? Controller->PlayerState->GetPlayerId() : INDEX_NONE,
+			ViewState.bPrimaryRodOperator, ViewState.bLeftHandGripped, ViewState.bRightHandGripped);
+	}
+	if (PhysicalControlTextBlock)
+	{
+		PhysicalControlTextBlock->SetText(ViewState.PhysicalControlText);
+		PhysicalControlTextBlock->SetVisibility(ViewState.bShowPhysicalControls ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+	if (PhysicalHandStateTextBlock)
+	{
+		PhysicalHandStateTextBlock->SetText(ViewState.PhysicalHandStateText);
+		PhysicalHandStateTextBlock->SetVisibility(ViewState.bShowPhysicalControls ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+	if (ViewState.bShowFightMeters && (!CatStaminaTextBlock || !CatStaminaProgressBar)
+		&& !bHasLoggedMissingFishingMeter)
+	{
+		const APlayerController* Controller = GetOwningPlayer();
+		UE_LOG(LogCatUI, Warning,
+			TEXT("Event=ui_hud_fishing_meter_missing World=%s NetMode=%d Authority=%d LocalRole=%d PlayerId=%d Widget=%s SessionId=%s TextBound=%d BarBound=%d Result=FormalWidgetNeedsMigration"),
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE,
+			Controller && Controller->HasAuthority(), Controller ? static_cast<int32>(Controller->GetLocalRole()) : INDEX_NONE,
+			Controller && Controller->PlayerState ? Controller->PlayerState->GetPlayerId() : INDEX_NONE,
+			*GetName(), *ViewState.Fishing.FishingSessionId.ToString(), CatStaminaTextBlock != nullptr, CatStaminaProgressBar != nullptr);
+		bHasLoggedMissingFishingMeter = true;
+	}
+	if (ViewState.bHasFishingSession && (!LastHUDViewState.bHasFishingSession
+		|| LastHUDViewState.Fishing.FishingSessionId != ViewState.Fishing.FishingSessionId))
+	{
+		const APlayerController* Controller = GetOwningPlayer();
+		UE_LOG(LogCatUI, Log,
+			TEXT("Event=ui_hud_fishing_operator_applied World=%s NetMode=%d Authority=%d LocalRole=%d PlayerId=%d SessionId=%s FightStamina=%.3f FightStaminaMaximum=%.3f Result=ViewStateApplied"),
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE,
+			Controller && Controller->HasAuthority(), Controller ? static_cast<int32>(Controller->GetLocalRole()) : INDEX_NONE,
+			Controller && Controller->PlayerState ? Controller->PlayerState->GetPlayerId() : INDEX_NONE,
+			*ViewState.Fishing.FishingSessionId.ToString(), ViewState.FightStamina, ViewState.FightStaminaMaximum);
+	}
 	if (!bHasLoggedCrosshairVisibility || LastHUDViewState.bShowCrosshair != ViewState.bShowCrosshair)
 	{
 		const APlayerController* Controller = GetOwningPlayer();
@@ -159,7 +214,7 @@ void UCatHUDWidget::NativeDestruct()
 	Super::NativeDestruct();
 }
 
-// Tick 流程：只在真咬钩窗口期间用服务器时间锚点刷新倒计时控件；窗口失效时本地收起提示，正式失败仍等命令/会话事实。
+// Tick 流程：只在真咬钩窗口期间用服务器时间锚点刷新倒计时控件；窗口过期时本地收起提示，正式失败仍等命令/会话事实。
 void UCatHUDWidget::NativeTick(const FGeometry& MyGeometry, const float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);

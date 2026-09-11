@@ -5,7 +5,7 @@
 #include "Framework/Core/CatDomainCommandTypes.h"
 #include "CatEquipmentSettings.generated.h"
 
-/** 装备运行策略与失败预算配置；装备定义目录由正式 InventorySettings 统一持有。 */
+/** 装备运行策略配置；装备定义目录由正式 InventorySettings 统一持有。 */
 UCLASS(Config = Game, DefaultConfig, meta = (DisplayName = "Catfishing Equipment"))
 class CATFISHING_API UCatEquipmentSettings : public UDeveloperSettings
 {
@@ -16,8 +16,5 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Loadout")
 	ECatDomainPolicy ProfileLoadoutTrustPolicy = ECatDomainPolicy::Unset;
 
-	/** 一次 DamageRod 失败预算扣除的耐久；0 表示公式/数值未裁。 */
-	UPROPERTY(Config, EditAnywhere, Category = "FailureBudget", meta = (ClampMin = "0.0"))
-	double RodFailureDurabilityLoss = 0.0;
 
 };

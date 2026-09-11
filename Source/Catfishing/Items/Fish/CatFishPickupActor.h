@@ -30,6 +30,7 @@ USTRUCT(BlueprintType)
 struct FCatFishPickupPresentationState
 {
 	GENERATED_BODY()
+	friend class FCatFishingSessionScoopMouthCarryTest;
 
 	UPROPERTY(BlueprintReadOnly) FGuid FishingSessionId;
 	UPROPERTY(BlueprintReadOnly) FGuid FishInstanceId;
@@ -50,6 +51,7 @@ UCLASS(Blueprintable, meta=(ChildCannotTick))
 class CATFISHING_API ACatFishPickupActor : public AActor, public ICatInteractable, public ICatInventoryWorldItem
 {
 	GENERATED_BODY()
+	friend class FCatFishingSessionScoopMouthCarryTest;
 
 public:
 	/** 为世界鱼装配独立的刚体与准星探测组件，防止交互半径影响物理支撑；鱼身份由后续初始化提供。 */

@@ -45,10 +45,13 @@ public:
 	FCatHUDModelChanged OnViewStateChanged;
 
 protected:
-	/** UObject 销毁清理；即使外部没有显式 Unbind，也会收掉 Run 订阅和本地等待 Timer。 */
+	/** UObject 销毁兜底；即使外部没有显式 Unbind，也会收掉 Run 订阅和本地等待 Timer。 */
 	virtual void BeginDestroy() override;
 
 private:
+	friend class FCatHUDPersonalStaminaTest;
+	friend class FCatHUDFishingOwnerBindingTest;
+	friend class FCatHUDPhysicalGrabProjectionTest;
 	/** ASC 属性变化入口；忽略单项载荷后重读完整 HUD 事实。 */
 	void HandleAttributeChanged(const FOnAttributeChangeData& ChangeData);
 
@@ -73,7 +76,7 @@ private:
 	/** Run GameState 重试 Tick；发现 GameState 后交给观察者接线入口完成首次刷新和订阅，否则保持等待。 */
 	void HandleRunGameStateBindingRetry();
 
-	/** Run 公开快照变化入口；重读天数和阶段相关 HUD 投影，避免客户端复制到达后界面继续显示失效天数。 */
+	/** Run 公开快照变化入口；重读天数和阶段相关 HUD 投影，避免客户端复制到达后界面继续显示旧天数。 */
 	void HandleRunPublicStateChanged();
 
 	/** Fishing 会话投影变化入口；Bridge 已经更新自身，Model 只重建 HUD 文本。 */
@@ -85,6 +88,9 @@ private:
 
 	/** 按当前 PlayerState 定位 FishingSession 并调和 FishingViewBridge；找不到时显示无活动会话。 */
 	void RefreshFishingSessionBinding();
+	/** 有界频率调和唯一主控与 Session 复制到达顺序，不把命令回执当作复制完成通知。 */
+	void ScheduleFishingSessionBindingReconcile();
+	void ClearFishingSessionBindingReconcile();
 
 	/** 当前本地玩家读源；只用于定位 Profile/World 生命周期，不保存领域状态。 */
 	UPROPERTY(Transient)
@@ -148,6 +154,9 @@ private:
 
 	/** FishingViewBridge 投影变化解绑句柄。 */
 	FDelegateHandle FishingViewChangedHandle;
+	FTimerHandle FishingSessionBindingReconcileTimerHandle;
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UWorld> FishingSessionBindingReconcileWorld;
 
 	/** 最近钓鱼命令结果；只用于 HUD 反馈文本，不承担请求幂等缓存。 */
 	FCatFishingCommandResult LastFishingCommandResult;

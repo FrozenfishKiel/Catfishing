@@ -1,4 +1,4 @@
-﻿#include "Framework/Game/CatfishingGameModeBase.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
 
 #include "Equipment/Fragments/CatEquipmentFragment_Chum.h"
 #include "Camp/CatAltarActor.h"
@@ -441,7 +441,7 @@ void ACatfishingGameModeBase::PostLogin(APlayerController* NewPlayer)
 		RejectPostLoginController(NewPlayer, TEXT("CAT_IDENTITY_RESERVATION_MISMATCH"));
 		return;
 	}
-	
+
 	Record->Phase = EAdmissionPhase::Active;
 	Record->Controller = NewPlayer;
 	const bool bWasReconnect = PendingReconnectStableNetIds.Remove(StableNetIdKey) > 0;
@@ -626,16 +626,20 @@ APawn* ACatfishingGameModeBase::SpawnDefaultPawnFor_Implementation(AController* 
 // 3. 最后记录两项服务是否存在，缺服务时保持幂等降级，不影响随后原有的条件化存档捕获。
 void ACatfishingGameModeBase::HandleCharacterUnavailable(ACatCharacter* Character)
 {
-	UWorld* World = GetWorld();
-	if (!HasAuthority() || !Character || !World)
+	UWorld* World = Character ? Character->GetWorld() : nullptr;
+	if (!Character || !Character->HasAuthority() || !World)
 	{
 		return;
 	}
 
 	UCatFishingService* Fishing = World->GetSubsystem<UCatFishingService>();
+	const APlayerState* DepartingPlayerState = Character->GetPlayerState();
+	const int32 DepartingPlayerId = DepartingPlayerState ? DepartingPlayerState->GetPlayerId() : INDEX_NONE;
+	bool bResourcesPreserved = false;
 	if (Fishing)
 	{
-		Fishing->TerminateSessionsForCharacter(Character);
+		Fishing->ReleaseFishingOperatorForCharacter(Character);
+		bResourcesPreserved = Fishing->PreserveFishingResourcesForEquipmentShutdown(Character->GetEquipmentComponent());
 	}
 	UCatSocialService* Social = World->GetSubsystem<UCatSocialService>();
 	if (Social)
@@ -643,9 +647,10 @@ void ACatfishingGameModeBase::HandleCharacterUnavailable(ACatCharacter* Characte
 		Social->CancelTheftsForCharacter(Character);
 	}
 	UE_LOG(LogCatRun, Log,
-		TEXT("Event=character_unavailable_cleanup Character=%s World=%s NetMode=%d FishingAvailable=%s SocialAvailable=%s"),
-		*GetNameSafe(Character), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
-		Fishing ? TEXT("true") : TEXT("false"), Social ? TEXT("true") : TEXT("false"));
+		TEXT("Event=character_unavailable_cleanup Character=%s PlayerId=%d World=%s NetMode=%d Authority=true LocalRole=%d FishingAvailable=%s SocialAvailable=%s ResourcesPreserved=%s Result=CleanupRequested"),
+		*GetNameSafe(Character), DepartingPlayerId, *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
+		static_cast<int32>(Character->GetLocalRole()), Fishing ? TEXT("true") : TEXT("false"),
+		Social ? TEXT("true") : TEXT("false"), bResourcesPreserved ? TEXT("true") : TEXT("false"));
 }
 
 // Logout 流程：先对精确 Active 连接完成或复核末次持久化捕获，再移除准入记录与 Pawn 通知；失效连接不能覆盖新连接的存档，之后继续原有重连 TTL。

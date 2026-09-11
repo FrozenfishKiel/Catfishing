@@ -20,7 +20,6 @@ void UCatRunImprintService::Deinitialize()
 	CapturePlanByRecipient.Reset();
 	GrantDeliveries.Reset();
 	CaptureGrantByRequest.Reset();
-	SilhouetteGrantByFishingSession.Reset();
 	UnlockGrantByRecipientAndUnlockId.Reset();
 	AlbumByRun.Reset();
 	Super::Deinitialize();
@@ -58,30 +57,6 @@ FGuid UCatRunImprintService::RecordCommittedCapture(const FCatCaptureCommittedRe
 bool UCatRunImprintService::CanRecordCommittedCapture() const
 {
 	return bCommandsOpen;
-}
-
-// 剪影归档流程：先按 FishingSessionId 重放，再验证命令仍开放、会话/鱼种/接收者完整；首次只生成 FishSilhouette Grant，不创建实物鱼、CapturePlan 或图片结论。
-FGuid UCatRunImprintService::RecordRetryExhaustedSilhouette(const FGuid FishingSessionId,
-	const FName FishDefinitionId, const FString& RecipientStableNetId)
-{
-	if (const FGuid* Existing = SilhouetteGrantByFishingSession.Find(FishingSessionId))
-	{
-		return *Existing;
-	}
-	if (!bCommandsOpen || !FishingSessionId.IsValid() || FishDefinitionId.IsNone() || RecipientStableNetId.IsEmpty())
-	{
-		return FGuid();
-	}
-	FCatProfileGrant Grant;
-	Grant.Kind = ECatProfileGrantKind::FishSilhouette;
-	Grant.FishDefinitionId = FishDefinitionId;
-	Grant.RecipientStableNetId = RecipientStableNetId;
-	const FGuid GrantId = EnqueueGrant(MoveTemp(Grant));
-	if (GrantId.IsValid())
-	{
-		SilhouetteGrantByFishingSession.Add(FishingSessionId, GrantId);
-	}
-	return GrantId;
 }
 
 // 解锁归档流程：按接收者和 UnlockId 重放既有 Grant，再验证命令门与稳定字段；首次只生成 Unlock Grant，不在服务器伪造 Profile 存档。
@@ -162,7 +137,7 @@ FCatCapturePlan UCatRunImprintService::CreateCapturePlan(const FGuid CandidateId
 		&& Plans.Num() == 1 ? Plans[0] : FCatCapturePlan();
 }
 
-// 批量计划流程：第一阶段去重并完整预检候选归属/原索引，为所有缺失者预分配 ID 后一次建齐 Planned 记录；第二阶段才逐条 RPC，同步回入或 teardown 只能改变投递阶段，不能阻止其余 Planned 事实存在。
+// 批量计划流程：第一阶段去重并完整预检候选归属/旧索引，为所有缺失者预分配 ID 后一次建齐 Planned 记录；第二阶段才逐条 RPC，同步回入或 teardown 只能改变投递阶段，不能阻止其余 Planned 事实存在。
 bool UCatRunImprintService::CreateCapturePlansForParticipants(const FGuid CandidateId,
 	const TArray<FString>& RecipientStableNetIds, const bool bCampfireCover, TArray<FCatCapturePlan>& OutPlans)
 {
@@ -507,7 +482,7 @@ FString UCatRunImprintService::ResolveStableNetId(const AController* Controller)
 	return PlayerState && PlayerState->GetUniqueId().IsValid() ? PlayerState->GetUniqueId()->ToString() : FString();
 }
 
-// Controller 查找流程：遍历当前 World 的项目控制器并比较继承 UniqueId；不使用名字、地址或缓存失效 Controller。
+// Controller 查找流程：遍历当前 World 的项目控制器并比较继承 UniqueId；不使用名字、地址或缓存旧 Controller。
 AController* UCatRunImprintService::FindControllerByStableNetId(const FString& StableNetId) const
 {
 	if (!GetWorld() || StableNetId.IsEmpty())
@@ -552,7 +527,7 @@ bool UCatRunImprintService::DeliverCaptureRecord(FCatImprintCaptureDeliveryRecor
 	}
 	++Record.DeliveryAttempts;
 	Record.Stage = ECatImprintCaptureDeliveryStage::Delivered;
-	// 客户 RPC 在本机 listen server 路径上可同步重入 ReportCaptureResult；先发布 Delivered，RPC 返回后保持记录不变，避免覆盖内层已提交的成功/失败终态。
+	// 客户 RPC 在本机 listen server 路径上可同步重入 ReportCaptureResult；先发布 Delivered，且 RPC 返回后不再写 Record，避免覆盖内层已提交的成功/失败终态。
 	Controller->ClientReceiveImprintCapturePlan(Record.Plan);
 	return true;
 }
@@ -567,7 +542,7 @@ bool UCatRunImprintService::DeliverGrantRecord(FCatGrantDeliveryRecord& Record)
 	}
 	++Record.DeliveryAttempts;
 	Record.Stage = ECatGrantDeliveryStage::Delivered;
-	// 本机客户可在 RPC 调用栈内完成 durable 写入并 ACK；发送前写投递事实，发送后保持可能已进入 Acknowledged 的记录不变。
+	// 本机客户可在 RPC 调用栈内完成 durable 写入并 ACK；发送前写投递事实，发送后不再触碰可能已进入 Acknowledged 的记录。
 	Controller->ClientReceiveProfileGrant(Record.Grant);
 	return true;
 }

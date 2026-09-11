@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
@@ -21,10 +21,17 @@ UCLASS(ClassGroup = (Catfishing), meta = (BlueprintSpawnableComponent))
 class CATFISHING_API UCatEquipmentComponent : public UActorComponent
 {
 	GENERATED_BODY()
+	friend class UCatFishingService;
 
 public:
 	/** 开启默认复制并关闭 Tick；所有写入由 authority 命令提交。 */
 	UCatEquipmentComponent();
+	/** Whether this deployed instance is bound by a live fishing transaction, including a borrower. */
+	bool IsFishingRodInUse(FGuid ItemInstanceId) const;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+	bool TryGetInventoryRodForDeployment(FCatInventoryEntry& OutRod) const;
+	bool MoveFishingResourcesToCustodian(UCatEquipmentComponent* Target, const TArray<FGuid>& SessionIds, const TArray<FGuid>& RodItemInstanceIds);
+	FString FishingResourceOwnerStableId;
 
 	/** 注册钓鱼选择读模型；终态缓存不复制。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
@@ -79,9 +86,6 @@ public:
 	/** InventoryComponent 提交后刷新钓具选择读模型；返回 false 表示当前库存事实无法支持选择校正。 */
 	bool RefreshLoadoutFromInventoryComponentFromAuthority();
 
-	/** 提交一次钓鱼失败预算；特殊饵和伤竿优先写正式库存事实，一个 RequestId 只能选择一种惩罚且绝不双罚。 */
-	FCatFishingFailureResult CommitFishingFailure(FGuid RequestId, int64 ExpectedRevision,
-		ECatFishingFailurePenalty Penalty);
 
 	/** Fishing 会话开始前按 SessionId 申请当前钓鱼选择使用权；Begin 从操作者库存暂存一份鱼饵，并把世界鱼竿归属库存记录为耐久写回目标。 */
 	FCatFishingUseFreezeResult BeginFishingUse(FGuid FishingSessionId, FGuid RodItemInstanceId,
@@ -199,7 +203,7 @@ private:
 	TMap<FString, FString> TerminalPayloadByKey;
 
 	/** 失败预算命令首次完整终态缓存；重放不会再次扣饵或耐久。 */
-	TMap<FGuid, FCatFishingFailureResult> FailureTerminalCache;
+
 
 	/** 当前 Character 生命周期内按 SessionId 隔离的 Fishing 使用冻结记录；不复制也不持久化。 */
 	TMap<FGuid, FCatFishingUseRecord> FishingUseRecords;

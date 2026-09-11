@@ -92,13 +92,8 @@ ECatWaterExposureUpdate UCatConditionComponent::UpdateWaterExposureFromAuthority
 	{
 		return ECatWaterExposureUpdate::Unavailable;
 	}
-	const UCapsuleComponent* Capsule = Character->GetCapsuleComponent();
-	if (!Capsule)
-	{
-		return ECatWaterExposureUpdate::Unavailable;
-	}
-	const FVector FootPoint = Character->GetActorLocation()
-		- FVector::UpVector * Capsule->GetScaledCapsuleHalfHeight();
+	// 身体组件提供真实支撑脚点；停用的 Character 胶囊不再代表物理猫的身高。
+	const FVector FootPoint = Character->GetBodyFootPointWorld();
 	const FCatWaterImmersionResult Immersion = Water->QueryImmersionAtWorldPoint(FootPoint, WaterRegion);
 	if (!Immersion.bSucceeded)
 	{
@@ -532,7 +527,7 @@ void UCatConditionComponent::EvaluateDownedFromAttributes(const ECatRecoveryMode
 			*GetOwner()->GetName(), Snapshot.Revision, *UEnum::GetValueAsString(Snapshot.RecoveryMode));
 		if (UCatFishingService* Fishing = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr)
 		{
-			Fishing->TerminateSessionsForCharacter(Cast<ACatCharacter>(GetOwner()));
+			Fishing->ReleaseFishingOperatorForCharacter(Cast<ACatCharacter>(GetOwner()));
 		}
 	}
 }

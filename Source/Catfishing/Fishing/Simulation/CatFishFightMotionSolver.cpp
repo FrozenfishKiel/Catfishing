@@ -159,7 +159,7 @@ FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContac
 		return Result;
 	}
 	double ProposedLineLength = Input.ProposedLineLengthCentimeters;
-	// 岸线层只做可恢复的空间校正。收线时最多保持失效长度，放线时至少保持失效长度，
+	// 岸线层只做可恢复的空间校正。收线时最多保持旧长度，放线时至少保持旧长度，
 	// 不因竿尖旋转造成的亚帧几何偏差终止整场会话。
 	if (Input.bReeling)
 	{
@@ -219,7 +219,7 @@ FCatFishShoreContactResult FCatFishFightMotionSolver::ResolveLiveFishShoreContac
 	}
 	if (Input.bSlacking)
 	{
-		// Simulator 先按候选鱼距放宽线端，才能让鱼自由游动；真实水域校正可能随后把候选点挡在岸边。
+		// Simulator 先用候选鱼距临时放宽线端，才能让鱼自由游动；真实水域校正可能随后把候选点挡在岸边。
 		// 因此这里以服务器最终落点二次结算：鱼实际没有远离竿尖就绝不出线，已有余线也不会被收回。
 		Result.LineLengthCentimeters = FMath::Max(Input.PreviousLineLengthCentimeters,
 			FVector::Distance(Input.RodTipWorldPosition, Result.FishWorldPosition));

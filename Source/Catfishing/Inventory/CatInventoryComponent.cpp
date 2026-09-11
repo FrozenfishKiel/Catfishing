@@ -956,6 +956,11 @@ bool UCatInventoryComponent::CanFullyAcceptInventoryBatch(const FCatInventoryRec
 // 4. 全批成功且确有变更时只广播一次，避免一批收货拆成多次 UI 刷新。
 bool UCatInventoryComponent::TryAddInventoryBatch(const FCatInventoryReceiveBatch& ReceiveBatch)
 {
+	return TryAddInventoryBatchInternal(ReceiveBatch, true);
+}
+
+bool UCatInventoryComponent::TryAddInventoryBatchInternal(const FCatInventoryReceiveBatch& ReceiveBatch, const bool bBroadcastChange)
+{
 	AActor* OwningActor = GetOwner();
 	if (OwningActor == nullptr || !OwningActor->HasAuthority())
 	{
@@ -1023,7 +1028,7 @@ bool UCatInventoryComponent::TryAddInventoryBatch(const FCatInventoryReceiveBatc
 		}
 	}
 
-	if (bAnyMutation)
+	if (bAnyMutation && bBroadcastChange)
 	{
 
 		BroadcastInventoryChange();
@@ -2129,6 +2134,11 @@ bool UCatInventoryComponent::HasActiveHeldInventoryEntriesFromAuthority() const
 // 扣量流程：服务器验证槽位和数量后扣减；清空格子时才解除实例复制登记，任一成功扣减都会广播变化。
 bool UCatInventoryComponent::ConsumeItemAtSlot(const int32 SlotIndex, const int32 ConsumeCount)
 {
+	return ConsumeItemAtSlotInternal(SlotIndex, ConsumeCount, true);
+}
+
+bool UCatInventoryComponent::ConsumeItemAtSlotInternal(const int32 SlotIndex, const int32 ConsumeCount, const bool bBroadcastChange)
+{
 	if (GetOwner() == nullptr
 		|| !GetOwner()->HasAuthority()
 		|| ConsumeCount <= 0
@@ -2163,7 +2173,7 @@ bool UCatInventoryComponent::ConsumeItemAtSlot(const int32 SlotIndex, const int3
 		}
 	}
 
-	BroadcastInventoryChange(SlotIndex);
+	if (bBroadcastChange) BroadcastInventoryChange(SlotIndex);
 	return true;
 }
 
@@ -2929,4 +2939,35 @@ bool UCatInventoryComponent::IsItemInstanceReferencedByOtherSlots(
 	}
 
 	return false;
+}
+
+bool UCatInventoryComponent::MoveHeldInventoryEntriesToCustodianFromAuthority(
+	UCatInventoryComponent* Target, const TArray<FGuid>& ItemInstanceIds)
+{
+	if (!IsValid(Target) || Target == this || !GetOwner() || !GetOwner()->HasAuthority()
+		|| !Target->GetOwner() || !Target->GetOwner()->HasAuthority() || GetWorld() != Target->GetWorld()) return false;
+	TSet<FGuid> Seen;
+	for (const FGuid ItemId : ItemInstanceIds)
+	{
+		const FCatInventoryEntry* Entry = FindHeldInventoryEntryFromAuthority(ItemId);
+		if (Seen.Contains(ItemId) || !Entry || !Entry->Instance || Entry->StackCount != 1
+			|| Target->ActiveHeldItemEntries.Contains(ItemId)
+			|| Target->FindInventorySlotIndexFromInstanceId(ItemId) != INDEX_NONE) return false;
+		Seen.Add(ItemId);
+	}
+	for (const FGuid ItemId : ItemInstanceIds)
+	{
+		FCatInventoryEntry Record = MoveTemp(ActiveHeldItemEntries.FindChecked(ItemId));
+		ActiveHeldItemEntries.Remove(ItemId);
+		Record.SlotOwnerComponent = Target;
+		UpdateReplicatedItemRegistration(Record.Instance, this, Target);
+		Target->SyncInventoryItemRuntimeOwner(Record.Instance);
+		Target->ActiveHeldItemEntries.Add(ItemId, MoveTemp(Record));
+	}
+	if (!ItemInstanceIds.IsEmpty())
+	{
+		UE_LOG(LogCatInventory, Log, TEXT("Event=inventory_held_resources_transferred Source=%s Target=%s Count=%d World=%s NetMode=%d Authority=true LocalRole=%d"),
+			*GetNameSafe(GetOwner()), *GetNameSafe(Target->GetOwner()), ItemInstanceIds.Num(), *GetNameSafe(GetWorld()), static_cast<int32>(GetWorld()->GetNetMode()), static_cast<int32>(GetOwner()->GetLocalRole()));
+	}
+	return true;
 }

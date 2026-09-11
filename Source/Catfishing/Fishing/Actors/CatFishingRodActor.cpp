@@ -1,13 +1,21 @@
 #include "Fishing/Actors/CatFishingRodActor.h"
-#include "Character/CatCharacterMovementComponent.h"
+
+#include "Character/CatCharacter.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 
 #include "Components/SceneComponent.h"
+#include "Components/BoxComponent.h"
+#include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
+#include "Interaction/Grab/CatLightPropComponent.h"
 #include "Fishing/CatFishingService.h"
+#include "Fishing/CatFishingSession.h"
 #include "Fishing/CatFishingSettings.h"
+#include "Fishing/Config/CatFishingFightBalanceDefinition.h"
 #include "Fishing/Debug/CatFishingMotionDiagnostics.h"
 #include "Fishing/Presentation/CatRodBendComponent.h"
 #include "GameFramework/Character.h"
-#include "GameFramework/CharacterMovementComponent.h"
+
 #include "GameFramework/Controller.h"
 #include "GameFramework/Pawn.h"
 #include "GameFramework/PlayerState.h"
@@ -28,6 +36,11 @@ ACatFishingRodActor::ACatFishingRodActor()
 	// SceneRoot 是根组件，其余锚点都挂在它下面，整体随 Actor Transform 移动
 	SceneRoot = CreateDefaultSubobject<USceneComponent>(TEXT("SceneRoot"));
 	SetRootComponent(SceneRoot);
+	PhysicsBody = CreateDefaultSubobject<UBoxComponent>(TEXT("PhysicsRodBody"));
+	PhysicsBody->SetupAttachment(SceneRoot);
+	PhysicsBody->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	PhysicalRod = CreateDefaultSubobject<UCatFishingPhysicalRodComponent>(TEXT("PhysicalRod"));
+	LightProp = CreateDefaultSubobject<UCatLightPropComponent>(TEXT("LightProp"));
 	// VisualRoot 承载美术表现（皮肤/特效），与权威判定用的锚点分层，便于蓝图独立驱动视觉
 	VisualRoot = CreateDefaultSubobject<USceneComponent>(TEXT("VisualRoot"));
 	VisualRoot->SetupAttachment(SceneRoot);
@@ -56,36 +69,62 @@ ACatFishingRodActor::ACatFishingRodActor()
 void ACatFishingRodActor::Tick(const float DeltaSeconds)
 {
 	Super::Tick(DeltaSeconds);
+	if (IsUsingPhysicalRod())
+	{
+		PhysicalRod->FinishPhysicsFrame();
+		PhysicalRod->RefreshObservedPose();
+		return;
+	}
 	if (HasAuthority() && PresentationState.PoseMode == ECatFishingRodPoseMode::Held)
 	{
 		RefreshHeldTransformFromAuthority(DeltaSeconds);
 	}
-	PublishCarrierConstraintToMovement();
 }
 
 void ACatFishingRodActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
 {
 	Super::GetLifetimeReplicatedProps(OutLifetimeProps);
-	// 离散身份/姿态、连续约束和三个不变锚点分别复制；锚点在生成前配置，客户端不能从皮肤或零偏移推导玩法位置。
+	// 离散身份/姿态、连续约束和不变握把标定各自复制，不从客户端视觉组件推导玩法锚点。
 	DOREPLIFETIME(ThisClass, PresentationState);
 	DOREPLIFETIME(ThisClass, CarrierConstraintState);
+	DOREPLIFETIME_CONDITION(ThisClass, GripCanonicalLocalTransform, COND_InitialOnly);
 	DOREPLIFETIME_CONDITION(ThisClass, RodTipCanonicalLocalTransform, COND_InitialOnly);
 	DOREPLIFETIME_CONDITION(ThisClass, StandCanonicalLocalTransform, COND_InitialOnly);
-	DOREPLIFETIME_CONDITION(ThisClass, GripCanonicalLocalTransform, COND_InitialOnly);
 }
 
-// 初始锚点接收流程：用服务器已配置的三个本地变换刷新场景锚点与左右站位；Getter 读取同一份复制值，皮肤标记不参与裁决。
-void ACatFishingRodActor::OnRep_CanonicalAnchors()
+bool ACatFishingRodActor::IsUsingPhysicalRod() const { return PhysicalRod && PhysicalRod->IsReady(); }
+
+bool ACatFishingRodActor::BeginPhysicalHoldFromAuthority(APlayerState* Player, const bool bPositionAtHand)
 {
-	RodTipAnchor->SetRelativeTransform(RodTipCanonicalLocalTransform);
-	StandAnchor->SetRelativeTransform(StandCanonicalLocalTransform);
-	RightStandAnchor->SetRelativeTransform(ResolveOperatorStandLocalTransform(0));
-	LeftStandAnchor->SetRelativeTransform(ResolveOperatorStandLocalTransform(1));
+	return IsUsingPhysicalRod() && PhysicalRod->BeginPrimaryHold(Player, bPositionAtHand);
+}
+
+void ACatFishingRodActor::ReleasePhysicalPrimaryHoldFromAuthority(APlayerState* Player, const FName Reason)
+{
+	if (IsUsingPhysicalRod()) PhysicalRod->ReleasePrimaryHold(Player, Reason);
+}
+
+void ACatFishingRodActor::RefreshPrimaryControlFromAuthority()
+{
+	if (IsUsingPhysicalRod()) PhysicalRod->RefreshPrimaryControl();
+}
+
+bool ACatFishingRodActor::SetPrimaryOperatorFromAuthority(APlayerState* PlayerOrNull, const int64 ExpectedRevision)
+{
+	if (!HasAuthority() || !bIdentityInitialized || ExpectedRevision != PresentationState.RodActorRevision
+		|| (PlayerOrNull && (PlayerOrNull != PresentationState.OwnerPlayerState || !PresentationState.bDeployed || PresentationState.bBroken))) return false;
+	FCatFishingRodPresentationState Next = PresentationState;
+	Next.OperatorPlayerStates.Reset();
+	if (PlayerOrNull) Next.OperatorPlayerStates.Add(PlayerOrNull);
+	if (Next.OperatorPlayerStates == PresentationState.OperatorPlayerStates) return true;
+	return CommitAuthoritativeMutation(Next, ExpectedRevision);
+}
+void ACatFishingRodActor::OnRep_GripCanonicalLocalTransform()
+{
 	GripAnchor->SetRelativeTransform(GripCanonicalLocalTransform);
 	UE_LOG(LogCatFishing, Display,
-		TEXT("Event=fishing_rod_anchors_received Rod=%s RodActorId=%s TipLocation=%s StandLocation=%s GripLocation=%s GripRotation=%s World=%s NetMode=%d Authority=false LocalRole=%d"),
+		TEXT("Event=fishing_rod_grip_received Rod=%s RodActorId=%s GripLocation=%s GripRotation=%s World=%s NetMode=%d Authority=false LocalRole=%d"),
 		*GetName(), *PresentationState.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
-		*RodTipCanonicalLocalTransform.GetLocation().ToCompactString(), *StandCanonicalLocalTransform.GetLocation().ToCompactString(),
 		*GripCanonicalLocalTransform.GetLocation().ToCompactString(), *GripCanonicalLocalTransform.Rotator().ToCompactString(),
 		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()));
 }
@@ -104,10 +143,17 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	{
 		return false;
 	}
+	if (InOperatorPlayerState && InOperatorPlayerState != InOwnerPlayerState)
+	{
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_rod_identity_rejected RodActorId=%s OwnerPlayerId=%d OperatorPlayerId=%d World=%s NetMode=%d Authority=1 LocalRole=%d Reason=OperatorNotOwner"),
+			*InRodActorId.ToString(), InOwnerPlayerState->GetPlayerId(), InOperatorPlayerState->GetPlayerId(),
+			*GetNameSafe(GetWorld()), int32(GetNetMode()), int32(GetLocalRole()));
+		return false;
+	}
 	if (bIdentityInitialized)
 	{
 		// 幂等保护：身份已初始化过后只比较不可变身份；皮肤、操作位和部署状态由后续权威写口单独提交。
-		// 这样既能防止同一个 Actor 承载第二根竿，也不会让测试夹具重放的可变表现字段破坏正式身份。
+		// 这样既能防止同一个 Actor 承载第二根竿，也不会让旧测试夹具的表现字段重放破坏正式身份。
 		return PresentationState.RodActorId == InRodActorId
 			&& PresentationState.ItemInstanceId == InItemInstanceId
 			&& PresentationState.RodDefinitionId == InRodDefinitionId
@@ -123,6 +169,7 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	Next.RodDefinitionId = InRodDefinitionId;
 	Next.RodSkinDefinitionId = InRodSkinDefinitionId;
 	Next.OwnerPlayerState = InOwnerPlayerState;
+	Next.OperatorPlayerState = InOperatorPlayerState;
 	if (InOperatorPlayerState)
 	{
 		Next.OperatorPlayerStates.Add(InOperatorPlayerState);
@@ -131,12 +178,46 @@ bool ACatFishingRodActor::InitializeAuthoritativeIdentity(const FGuid InRodActor
 	}
 	Next.bDeployed = bInDeployed;
 	Next.bBroken = bInBroken;
+	PrepareOperatorMemberships(Next);
 	PresentationState = Next;
 	bIdentityInitialized = true;
 	// 本地（服务器）立即广播表现变化事件；客户端则依赖下面的 OnRep 触发同样的事件
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 	ForceNetUpdate(); // 身份初始化是一次性关键事件，强制立即复制，不等下个 tick 窗口
 	return true;
+}
+
+void ACatFishingRodActor::PrepareOperatorMemberships(FCatFishingRodPresentationState& Next)
+{
+	Next.OperatorPlayerState = Next.OperatorPlayerStates.IsEmpty() ? nullptr : Next.OperatorPlayerStates[0];
+	Next.HolderPlayerState = Next.OperatorPlayerState;
+	Next.PoseMode = Next.HolderPlayerState ? ECatFishingRodPoseMode::Held : ECatFishingRodPoseMode::Grounded;
+	const bool bRosterChanged = Next.OperatorPlayerStates != PresentationState.OperatorPlayerStates;
+	Next.RosterVersion = PresentationState.RosterVersion;
+	if (bRosterChanged)
+	{
+		if (++Next.RosterVersion == 0) ++Next.RosterVersion;
+	}
+	Next.ControlEpoch = PresentationState.ControlEpoch;
+	if (Next.OperatorPlayerState != PresentationState.OperatorPlayerState)
+	{
+		if (++Next.ControlEpoch == 0) ++Next.ControlEpoch;
+	}
+	Next.OperatorMemberships.Reset();
+	for (APlayerState* Member : Next.OperatorPlayerStates)
+	{
+		const FCatFishingOperatorMembership* Existing = PresentationState.OperatorMemberships.FindByPredicate(
+			[Member](const FCatFishingOperatorMembership& Entry) { return Entry.PlayerState == Member; });
+		FCatFishingOperatorMembership Entry;
+		if (Existing && Existing->Epoch != 0) Entry = *Existing;
+		else
+		{
+			Entry.PlayerState = Member;
+			Entry.Epoch = ++NextMembershipEpoch;
+			if (Entry.Epoch == 0) Entry.Epoch = ++NextMembershipEpoch;
+		}
+		Next.OperatorMemberships.Add(Entry);
+	}
 }
 
 bool ACatFishingRodActor::ConfigureCanonicalAnchorsFromAuthority(const FTransform& InRodTip,
@@ -155,8 +236,14 @@ bool ACatFishingRodActor::ConfigureCanonicalAnchorsFromAuthority(const FTransfor
 	// 同步应用到实际场景组件上，使编辑器/运行时可视化与权威数据一致
 	RodTipAnchor->SetRelativeTransform(InRodTip);
 	StandAnchor->SetRelativeTransform(InStand);
-	RightStandAnchor->SetRelativeTransform(ResolveOperatorStandLocalTransform(0));
-	LeftStandAnchor->SetRelativeTransform(ResolveOperatorStandLocalTransform(1));
+	// BP_Rod and TestMap still serialize these named reference components. Preserve their
+	// historical authoring pose until those assets are migrated; no gameplay reads these offsets.
+	FTransform LegacyRightStand = InStand;
+	FTransform LegacyLeftStand = InStand;
+	LegacyRightStand.AddToTranslation(FVector(0.0, 70.0, 0.0));
+	LegacyLeftStand.AddToTranslation(FVector(0.0, -70.0, 0.0));
+	RightStandAnchor->SetRelativeTransform(LegacyRightStand);
+	LeftStandAnchor->SetRelativeTransform(LegacyLeftStand);
 	GripAnchor->SetRelativeTransform(InGrip);
 	return true;
 }
@@ -164,7 +251,7 @@ bool ACatFishingRodActor::ConfigureCanonicalAnchorsFromAuthority(const FTransfor
 bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresentationState& Next,
 	const int64 ExpectedRevision)
 {
-	// 乐观并发控制：调用方必须带上它读到的当前 Revision，若与提交时状态不一致说明状态已被其他写者改过，拒绝本次提交
+	// 乐观并发控制：调用方必须带上它读到的旧 Revision，若与当前不一致说明状态已被其他写者改过，拒绝本次提交
 	if (!HasAuthority() || !bIdentityInitialized || ExpectedRevision != PresentationState.RodActorRevision)
 	{
 		return false;
@@ -175,21 +262,31 @@ bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresen
 	Committed.ItemInstanceId = PresentationState.ItemInstanceId;
 	Committed.RodDefinitionId = PresentationState.RodDefinitionId;
 	Committed.OwnerPlayerState = PresentationState.OwnerPlayerState;
-	// 主位、持有者和空间姿态都从同一个紧凑数组推导，不能分别保存成互相矛盾的事实。
-	Committed.HolderPlayerState = Committed.OperatorPlayerStates.IsEmpty()
-		? nullptr : Committed.OperatorPlayerStates[0];
-	Committed.PoseMode = Committed.HolderPlayerState
-		? ECatFishingRodPoseMode::Held : ECatFishingRodPoseMode::Grounded;
+	PrepareOperatorMemberships(Committed);
 	Committed.RodActorRevision = PresentationState.RodActorRevision + 1; // 每次成功提交 Revision 自增一
 	const FCatFishingRodPresentationState Previous = PresentationState;
+	const bool bWasFight = CarrierConstraintState.bFightActive;
+
 	PresentationState = Committed;
+	if (bWasFight && bHeldAimInitialized && Previous.HolderPlayerState && PresentationState.HolderPlayerState
+		&& Previous.HolderPlayerState != PresentationState.HolderPlayerState)
+	{
+		bAwaitingNewHolderAim = true;
+	}
+	if (PresentationState.RosterVersion != Previous.RosterVersion)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_rod_roster_committed RodActorId=%s World=%s NetMode=%d Authority=%d LocalRole=%d RosterVersion=%u ControlEpoch=%u OperatorCount=%d Result=Committed"),
+			*PresentationState.RodActorId.ToString(), *GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()),
+			PresentationState.RosterVersion, PresentationState.ControlEpoch, PresentationState.OperatorPlayerStates.Num());
+	}
 	if (PresentationState.HolderPlayerState != Previous.HolderPlayerState
 		|| PresentationState.PoseMode != Previous.PoseMode
 		|| (!PresentationState.bDeployed && Previous.bDeployed)
 		|| (PresentationState.bBroken && !Previous.bBroken))
 	{
 		ResetAuthoritativeRotationEffort();
-		ClearCarrierMovementBinding();
+		HeldAimInput.Reset();
 		CarrierConstraintState = FCatFishingCarrierConstraintState{};
 	}
 	if (PresentationState.PoseMode != ECatFishingRodPoseMode::Held)
@@ -198,64 +295,13 @@ bool ACatFishingRodActor::CommitAuthoritativeMutation(const FCatFishingRodPresen
 		bHeldAimInitialized = false;
 		AuthoritativeAimHolder.Reset();
 	}
-	SetActorTickEnabled(PresentationState.PoseMode == ECatFishingRodPoseMode::Held);
+	if (PresentationState.PoseMode != ECatFishingRodPoseMode::Held || !PresentationState.bDeployed || PresentationState.bBroken)
+	{
+		bAwaitingNewHolderAim = false;
+	}
+	SetActorTickEnabled(IsUsingPhysicalRod() || PresentationState.PoseMode == ECatFishingRodPoseMode::Held);
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 	ForceNetUpdate();
-	return true;
-}
-
-bool ACatFishingRodActor::SetOperatorFromAuthority(APlayerState* InOperatorPlayerState, const int64 ExpectedRevision)
-{
-	// SetOperator 入口语义保持为“整组替换”，避免调用方只清快捷字段却留下数组里的幽灵占位。
-	FCatFishingRodPresentationState Next = PresentationState;
-	Next.OperatorPlayerStates.Reset();
-	if (InOperatorPlayerState)
-	{
-		Next.OperatorPlayerStates.Add(InOperatorPlayerState);
-	}
-	return CommitAuthoritativeMutation(Next, ExpectedRevision);
-}
-
-bool ACatFishingRodActor::AddOperatorFromAuthority(APlayerState* InOperatorPlayerState,
-	const int64 ExpectedRevision, int32& OutSlotIndex)
-{
-	OutSlotIndex = INDEX_NONE;
-	const int32 FreeSlotIndex = GetFirstFreeOperatorSlotIndex();
-	if (!InOperatorPlayerState || FreeSlotIndex == INDEX_NONE
-		|| PresentationState.OperatorPlayerStates.Contains(InOperatorPlayerState)
-		|| !PresentationState.bDeployed || PresentationState.bBroken)
-	{
-		return false;
-	}
-	FCatFishingRodPresentationState Next = PresentationState;
-	Next.OperatorPlayerStates.Add(InOperatorPlayerState);
-	if (!CommitAuthoritativeMutation(Next, ExpectedRevision))
-	{
-		return false;
-	}
-	OutSlotIndex = FreeSlotIndex;
-	return true;
-}
-
-bool ACatFishingRodActor::RemoveOperatorFromAuthority(APlayerState* InOperatorPlayerState,
-	const int64 ExpectedRevision, APlayerState*& OutPromotedPrimaryPlayerState)
-{
-	OutPromotedPrimaryPlayerState = nullptr;
-	const int32 ExistingSlotIndex = GetOperatorSlotIndex(InOperatorPlayerState);
-	if (ExistingSlotIndex == INDEX_NONE)
-	{
-		return false;
-	}
-	FCatFishingRodPresentationState Next = PresentationState;
-	Next.OperatorPlayerStates.RemoveAt(ExistingSlotIndex);
-	if (!CommitAuthoritativeMutation(Next, ExpectedRevision))
-	{
-		return false;
-	}
-	if (ExistingSlotIndex == 0 && !PresentationState.OperatorPlayerStates.IsEmpty())
-	{
-		OutPromotedPrimaryPlayerState = PresentationState.OperatorPlayerStates[0];
-	}
 	return true;
 }
 
@@ -286,13 +332,22 @@ bool ACatFishingRodActor::SetDeployedFromAuthority(const bool bInDeployed, const
 const FCatFishingRodPresentationState& ACatFishingRodActor::GetPresentationState() const { return PresentationState; }
 
 // 三个世界 Transform 都是“本地规范 Transform 叠乘 Actor 当前世界 Transform”，随 Actor 移动/旋转自动更新
-FTransform ACatFishingRodActor::GetRodTipWorldTransform() const { return RodTipCanonicalLocalTransform * GetActorTransform(); }
-FTransform ACatFishingRodActor::GetStandWorldTransform() const { return GetOperatorStandWorldTransform(0); }
-FTransform ACatFishingRodActor::GetOperatorInteractionWorldTransform() const
+FTransform ACatFishingRodActor::GetRodTipWorldTransform() const
 {
-	return StandCanonicalLocalTransform * GetActorTransform();
+	const FTransform Pose = HasAuthority() && IsUsingPhysicalRod() ? PhysicalRod->GetObservedActorTransform() : GetActorTransform();
+	return RodTipCanonicalLocalTransform * Pose;
 }
-FTransform ACatFishingRodActor::GetGripWorldTransform() const { return GripCanonicalLocalTransform * GetActorTransform(); }
+FTransform ACatFishingRodActor::GetGripWorldTransform() const
+{
+	const FTransform Pose = HasAuthority() && IsUsingPhysicalRod() ? PhysicalRod->GetObservedActorTransform() : GetActorTransform();
+	return GripCanonicalLocalTransform * Pose;
+}
+
+FVector ACatFishingRodActor::GetAuthoritativeRodTipVelocity() const
+{
+	return HasAuthority() && IsUsingPhysicalRod()
+		? PhysicalRod->GetPointVelocity(GetRodTipWorldTransform().GetLocation()) : AuthoritativeRodTipVelocity;
+}
 
 APawn* ACatFishingRodActor::GetHolderPawnFromAuthority() const
 {
@@ -306,27 +361,16 @@ FVector ACatFishingRodActor::GetAuthoritativeRodForwardVector() const
 		.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, GetActorForwardVector());
 }
 
-bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullDirection,
-	const double PullAccelerationCentimetersPerSecondSquared,
-	const double TargetPullSpeedCentimetersPerSecond,
+bool ACatFishingRodActor::SetFightConstraintObservationFromAuthority(const FVector& PullDirection,
 	const double NormalizedTension, const double ConstraintErrorCentimeters,
 	const bool bFightActive, const double MaximumFishTorqueStrengthMeters,
-	const double CatTorqueCapacityStrengthMeters, const FVector& RodPullAxis,
-	const double PullBrakingDecelerationCentimetersPerSecondSquared, const bool bUseContinuousTraction)
+	const double CatTorqueCapacityStrengthMeters, const FVector& RodPullAxis)
 {
 	FVector HorizontalDirection(PullDirection.X, PullDirection.Y, 0.0);
-	const bool bHasDirection = !HorizontalDirection.ContainsNaN() && HorizontalDirection.Normalize();
-	const bool bNeedsDirection = TargetPullSpeedCentimetersPerSecond > UE_DOUBLE_SMALL_NUMBER;
+	if (!HorizontalDirection.ContainsNaN()) HorizontalDirection.Normalize();
 	const bool bValid = HasAuthority()
-		&& PresentationState.PoseMode == ECatFishingRodPoseMode::Held
-		&& (!bNeedsDirection || bHasDirection)
-		&& FMath::IsFinite(PullAccelerationCentimetersPerSecondSquared)
-		&& PullAccelerationCentimetersPerSecondSquared >= 0.0
-		&& FMath::IsFinite(PullBrakingDecelerationCentimetersPerSecondSquared)
-		&& PullBrakingDecelerationCentimetersPerSecondSquared >= 0.0
-		&& (!bUseContinuousTraction || bFightActive)
-		&& FMath::IsFinite(TargetPullSpeedCentimetersPerSecond)
-		&& TargetPullSpeedCentimetersPerSecond >= 0.0
+		&& (!bFightActive || PresentationState.PoseMode == ECatFishingRodPoseMode::Held)
+		&& !PullDirection.ContainsNaN()
 		&& FMath::IsFinite(NormalizedTension)
 		&& FMath::IsFinite(ConstraintErrorCentimeters) && ConstraintErrorCentimeters >= 0.0
 		&& FMath::IsFinite(MaximumFishTorqueStrengthMeters)
@@ -336,101 +380,106 @@ bool ACatFishingRodActor::SetCarrierConstraintFromAuthority(const FVector& PullD
 		&& !RodPullAxis.ContainsNaN() && !RodPullAxis.IsNearlyZero();
 	if (!bValid)
 	{
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_fight_constraint_observation_rejected RodActorId=%s ControlEpoch=%u World=%s NetMode=%d Authority=%d LocalRole=%d Reason=InvalidAuthorityPoseOrValues"),
+			*PresentationState.RodActorId.ToString(), PresentationState.ControlEpoch, *GetNameSafe(GetWorld()),
+			int32(GetNetMode()), HasAuthority(), int32(GetLocalRole()));
 		return false;
 	}
 
 	FCatFishingCarrierConstraintState Next;
 	Next.ConstraintHolderPlayerState = PresentationState.HolderPlayerState;
+	Next.RosterVersion = PresentationState.RosterVersion;
+	Next.ControlEpoch = PresentationState.ControlEpoch;
 	Next.PullDirection = HorizontalDirection;
-	Next.PullAccelerationCentimetersPerSecondSquared =
-		static_cast<float>(PullAccelerationCentimetersPerSecondSquared);
-	Next.PullBrakingDecelerationCentimetersPerSecondSquared = static_cast<float>(PullBrakingDecelerationCentimetersPerSecondSquared);
-	Next.bUseContinuousTraction = bUseContinuousTraction;
-	Next.TargetPullSpeedCentimetersPerSecond =
-		static_cast<float>(TargetPullSpeedCentimetersPerSecond);
+	// Deprecated reflected movement fields retain their zero defaults; this writes observations only.
 	Next.NormalizedTension = static_cast<float>(FMath::Clamp(NormalizedTension, 0.0, 1.0));
 	Next.ConstraintErrorCentimeters = static_cast<float>(ConstraintErrorCentimeters);
 	Next.bFightActive = bFightActive;
+	// 停止记录保留最后输入域，拒绝同域迟到输入；下一场仍生成更大的新域。
+	Next.AimInputEpoch = CarrierConstraintState.AimInputEpoch;
+	if (bFightActive)
+	{
+		Next.AimInputEpoch = CarrierConstraintState.bFightActive
+			&& CarrierConstraintState.ConstraintHolderPlayerState == Next.ConstraintHolderPlayerState
+			? CarrierConstraintState.AimInputEpoch : ++NextAimInputEpoch;
+	}
 	Next.RodPullAxis = RodPullAxis.GetSafeNormal();
 	Next.MaximumFishTorqueStrengthMeters = static_cast<float>(MaximumFishTorqueStrengthMeters);
 	Next.CatTorqueCapacityStrengthMeters = static_cast<float>(CatTorqueCapacityStrengthMeters);
-	Next.bActive = Next.TargetPullSpeedCentimetersPerSecond > KINDA_SMALL_NUMBER
-		&& Next.PullAccelerationCentimetersPerSecondSquared > KINDA_SMALL_NUMBER;
+
 	if (!Next.bFightActive)
 	{
-		SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
+		bAwaitingNewHolderAim = false;
+		HeldAimInput.Reset();
 	}
 	if (Next.bFightActive != CarrierConstraintState.bFightActive)
 	{
 		ResetAuthoritativeRotationEffort();
 	}
+	if (Next.AimInputEpoch != CarrierConstraintState.AimInputEpoch) HeldAimInput.Reset();
+	if (Next.bFightActive != CarrierConstraintState.bFightActive || Next.AimInputEpoch != CarrierConstraintState.AimInputEpoch)
+		UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_fight_constraint_observation_changed RodActorId=%s ControlEpoch=%u AimInputEpoch=%u FightActive=%d NormalizedTension=%.3f ErrorCm=%.3f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+			*PresentationState.RodActorId.ToString(), Next.ControlEpoch, Next.AimInputEpoch, Next.bFightActive,
+			Next.NormalizedTension, Next.ConstraintErrorCentimeters, *GetNameSafe(GetWorld()), int32(GetNetMode()), int32(GetLocalRole()));
 	CarrierConstraintState = Next;
 	LastConstraintUpdateWorldSeconds = GetWorld() ? GetWorld()->GetTimeSeconds() : -1.0;
-	PublishCarrierConstraintToMovement();
 	ForceNetUpdate();
 	return true;
 }
 
-void ACatFishingRodActor::ClearCarrierConstraintFromAuthority()
+void ACatFishingRodActor::ClearFightConstraintAndLoadFromAuthority(const FGuid SessionId)
 {
 	if (!HasAuthority())
 	{
 		return;
 	}
-	// 服务器终止鱼端驱动力时立即停止本地牵引；客户端在复制回调里做同样处理。
-	ClearCarrierMovementBinding();
-	SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
-	if (!CarrierConstraintState.bActive
-		&& !CarrierConstraintState.bFightActive
-		&& !CarrierConstraintState.bUseContinuousTraction
-		&& CarrierConstraintState.ConstraintErrorCentimeters <= KINDA_SMALL_NUMBER
-		&& CarrierConstraintState.PullAccelerationCentimetersPerSecondSquared <= KINDA_SMALL_NUMBER
-		&& CarrierConstraintState.TargetPullSpeedCentimetersPerSecond <= KINDA_SMALL_NUMBER)
+	UCatFishingService* Service = GetWorld() ? GetWorld()->GetSubsystem<UCatFishingService>() : nullptr;
+	const ACatFishingSession* ActiveSession = Service ? Service->FindActiveSessionByRod(this) : nullptr;
+	if (SessionId.IsValid() && ActiveSession && ActiveSession->GetSnapshot().FishingSessionId != SessionId)
 	{
+		UE_LOG(LogCatFishing, Warning, TEXT("Event=fishing_fight_constraint_clear_rejected SessionId=%s ActiveSessionId=%s RodActorId=%s World=%s NetMode=%d Authority=1 LocalRole=%d Reason=SessionDomain"),
+			*SessionId.ToString(), *ActiveSession->GetSnapshot().FishingSessionId.ToString(), *PresentationState.RodActorId.ToString(),
+			*GetNameSafe(GetWorld()), int32(GetNetMode()), int32(GetLocalRole()));
 		return;
 	}
+	if (IsUsingPhysicalRod()) PhysicalRod->ClearLineLoad(SessionId);
+	// 单场结束移除鱼载荷；唯一主控生命周期由离竿/收竿/销毁负责。
+	const uint32 StoppedAimInputEpoch = CarrierConstraintState.AimInputEpoch;
+	HeldAimInput.Reset();
+	bAwaitingNewHolderAim = false;
 	ResetAuthoritativeRotationEffort();
 	CarrierConstraintState = FCatFishingCarrierConstraintState{};
-	NextRodRotationResistanceDiagnosticWorldSeconds = 0.0;
-	bLastRodTorqueBalanced = false;
+	CarrierConstraintState.ConstraintHolderPlayerState = PresentationState.HolderPlayerState;
+	CarrierConstraintState.RosterVersion = PresentationState.RosterVersion;
+	CarrierConstraintState.ControlEpoch = PresentationState.ControlEpoch;
+	CarrierConstraintState.AimInputEpoch = StoppedAimInputEpoch;
 	ForceNetUpdate();
 }
 
 void ACatFishingRodActor::OnRep_CarrierConstraintState()
 {
-	PublishCarrierConstraintToMovement();
 	UWorld* World = GetWorld();
 	LastConstraintUpdateWorldSeconds = World ? World->GetTimeSeconds() : -1.0;
 	if (World && (bLastReceivedFightActive != CarrierConstraintState.bFightActive
 		|| (CarrierConstraintState.bFightActive && LastConstraintUpdateWorldSeconds >= NextCarrierReceiptDiagnosticWorldSeconds)))
 	{
 		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_carrier_constraint_received RodActorId=%s Frame=%llu WorldTime=%.6f FightActive=%s ContinuousTraction=%s "
-				"MovementBound=%s SnapshotHolder=%s CurrentHolder=%s AccelerationCmS2=%.3f BrakingDecelerationCmS2=%.3f "
-				"PullAxis=%s FishTorque=%.3f CatTorque=%.3f ObservedRotation=%s GripLocation=%s World=%s NetMode=%d Authority=%s LocalRole=%d"),
+			TEXT("Event=fishing_fight_constraint_received RodActorId=%s Frame=%llu WorldTime=%.6f FightActive=%s "
+				"PhysicalReceiver=%s SnapshotHolder=%s CurrentHolder=%s NormalizedTension=%.3f ErrorCm=%.3f "
+				"PullAxis=%s FishTorque=%.3f CatTorque=%.3f ObservedRotation=%s GripLocation=%s World=%s NetMode=%d Authority=%s LocalRole=%d RosterVersion=%u ControlEpoch=%u"),
 			*PresentationState.RodActorId.ToString(EGuidFormats::DigitsWithHyphens), GFrameCounter, LastConstraintUpdateWorldSeconds,
 			CarrierConstraintState.bFightActive ? TEXT("true") : TEXT("false"),
-			CarrierConstraintState.bUseContinuousTraction ? TEXT("true") : TEXT("false"),
-			CarrierMovement.IsValid() ? TEXT("true") : TEXT("false"),
+			IsUsingPhysicalRod() ? TEXT("true") : TEXT("false"),
 			*GetNameSafe(CarrierConstraintState.ConstraintHolderPlayerState), *GetNameSafe(PresentationState.HolderPlayerState),
-			CarrierConstraintState.PullAccelerationCentimetersPerSecondSquared, CarrierConstraintState.PullBrakingDecelerationCentimetersPerSecondSquared,
+			CarrierConstraintState.NormalizedTension, CarrierConstraintState.ConstraintErrorCentimeters,
 			*FVector(CarrierConstraintState.RodPullAxis).ToCompactString(), CarrierConstraintState.MaximumFishTorqueStrengthMeters,
 			CarrierConstraintState.CatTorqueCapacityStrengthMeters, *GetActorRotation().ToCompactString(),
 			*GetGripWorldTransform().GetLocation().ToCompactString(), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
-			HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(GetLocalRole()));
+			HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(GetLocalRole()),
+			PresentationState.RosterVersion, PresentationState.ControlEpoch);
 		NextCarrierReceiptDiagnosticWorldSeconds = LastConstraintUpdateWorldSeconds + CatFishingMotionDiagnostics::SampleIntervalSeconds();
 	}
 	bLastReceivedFightActive = CarrierConstraintState.bFightActive;
-}
-
-void ACatFishingRodActor::ClearCarrierMovementBinding()
-{
-	if (UCatCharacterMovementComponent* Movement = CarrierMovement.Get())
-	{
-		Movement->ClearExternalTraction(this);
-		PrimaryActorTick.RemovePrerequisite(Movement, Movement->PrimaryComponentTick);
-	}
-	CarrierMovement.Reset();
 }
 
 void ACatFishingRodActor::ResetAuthoritativeRotationEffort()
@@ -440,219 +489,104 @@ void ACatFishingRodActor::ResetAuthoritativeRotationEffort()
 	AuthoritativeRotationEffort.Epoch = NextEpoch;
 }
 
-void ACatFishingRodActor::PublishCarrierConstraintToMovement()
+bool ACatFishingRodActor::CanRebaseHeldAimFromAuthority(APlayerState* Player,
+	const FCatFishingRodAimSample& Sample) const
 {
-	ACharacter* Holder = PresentationState.HolderPlayerState
-		? Cast<ACharacter>(PresentationState.HolderPlayerState->GetPawn()) : nullptr;
-	UCatCharacterMovementComponent* Movement = Holder
-		? Cast<UCatCharacterMovementComponent>(Holder->GetCharacterMovement()) : nullptr;
-	if (!Movement || PresentationState.PoseMode != ECatFishingRodPoseMode::Held
-		|| !PresentationState.bDeployed || PresentationState.bBroken
-		|| CarrierConstraintState.ConstraintHolderPlayerState != PresentationState.HolderPlayerState
-		|| (!HasAuthority() && !Holder->IsLocallyControlled()))
-	{
-		ClearCarrierMovementBinding();
-		return;
-	}
-	if (CarrierMovement.Get() != Movement)
-	{
-		ClearCarrierMovementBinding();
-		CarrierMovement = Movement;
-		// 仅保持姿态采样时序：竿尖跟随碰撞后的身体。牵引不在 Rod Tick 中执行。
-		PrimaryActorTick.AddPrerequisite(Movement, Movement->PrimaryComponentTick);
-	}
-	FCatExternalTractionInput Input;
-	Input.SourceId = PresentationState.RodActorId;
-	Input.Direction = CarrierConstraintState.PullDirection;
-	Input.AccelerationCentimetersPerSecondSquared = CarrierConstraintState.PullAccelerationCentimetersPerSecondSquared;
-	Input.BrakingDecelerationCentimetersPerSecondSquared = CarrierConstraintState.PullBrakingDecelerationCentimetersPerSecondSquared;
-	Input.SpeedLimitCentimetersPerSecond = CarrierConstraintState.TargetPullSpeedCentimetersPerSecond;
-	Input.bActive = CarrierConstraintState.bUseContinuousTraction || CarrierConstraintState.bActive;
-	Movement->SetExternalTraction(this, Input);
+	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	return HasAuthority() && Player && Player == PresentationState.HolderPlayerState
+		&& PresentationState.PoseMode == ECatFishingRodPoseMode::Held
+		&& PresentationState.bDeployed && !PresentationState.bBroken
+		&& CarrierConstraintState.bFightActive && bHeldAimInitialized
+		&& GetHolderPawnFromAuthority()
+		&& AuthoritativeAimHolder.Get() == GetHolderPawnFromAuthority()
+		&& Sample.IsValid() && Sample.Sequence > HeldAimInput.GetLastRebaseSequence()
+		// 首帧约束复制可能尚未抵达拥有客户端；没有客户端域时按本次已授权的 Session 补建。
+		// 已明确携带旧域的输入则必须拒绝，不能把上一场右键迁入当前搏斗。
+		&& (!Sample.RodActorId.IsValid() || Sample.RodActorId == PresentationState.RodActorId)
+		&& (Sample.InputEpoch == 0 || Sample.InputEpoch == CarrierConstraintState.AimInputEpoch)
+		&& (!bAwaitingNewHolderAim || (Sample.RodActorId == PresentationState.RodActorId
+			&& Sample.InputEpoch != 0 && Sample.InputEpoch == CarrierConstraintState.AimInputEpoch))
+		&& FMath::IsFinite(Settings->HeldRodMinimumPitchDegrees)
+		&& FMath::IsFinite(Settings->HeldRodMaximumPitchDegrees)
+		&& Settings->HeldRodMinimumPitchDegrees <= Settings->HeldRodMaximumPitchDegrees;
 }
 
-bool ACatFishingRodActor::GetRotationPredictionFromAuthority(const double DeltaSeconds, FCatFishingRodRotationPrediction& OutPrediction) const
+void ACatFishingRodActor::RebaseHeldAimFromAuthority(APlayerState* Player,
+	const FCatFishingRodAimSample& Sample, const FGuid RequestId, const int64 InputSequence)
 {
-	OutPrediction = {};
-	APawn* HolderPawn = GetHolderPawnFromAuthority();
+	if (!CanRebaseHeldAimFromAuthority(Player, Sample)) return;
 	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
-	if (!HasAuthority() || PresentationState.PoseMode != ECatFishingRodPoseMode::Held
-		|| !HolderPawn || !Settings
-		|| !FMath::IsFinite(Settings->HeldRodMinimumPitchDegrees)
-		|| !FMath::IsFinite(Settings->HeldRodMaximumPitchDegrees)
-		|| Settings->HeldRodMinimumPitchDegrees > Settings->HeldRodMaximumPitchDegrees
-		|| !FMath::IsFinite(Settings->HeldRodMaximumAngularSpeedDegreesPerSecond)
-		|| Settings->HeldRodMaximumAngularSpeedDegreesPerSecond <= 0.0
-		|| !FMath::IsFinite(Settings->HeldRodAngularResistanceResponseSeconds)
-		|| Settings->HeldRodAngularResistanceResponseSeconds <= 0.0
-		|| !FMath::IsFinite(Settings->HeldRodFishPullSmoothingSeconds)
-		|| Settings->HeldRodFishPullSmoothingSeconds <= 0.0
-		|| !FMath::IsFinite(Settings->HeldRodLoadedAngularDampingRatio)
-		|| Settings->HeldRodLoadedAngularDampingRatio < 0.0
-		|| Settings->HeldRodGripOffsetCentimeters.ContainsNaN())
-	{
-		return false;
-	}
+	const FRotator PreviousRequested = HeldAimInput.IsRebased() ? HeldAimInput.GetRequestedAim()
+		: AuthoritativeHeldAimRotation;
+	if (!HeldAimInput.Rebase(Sample, AuthoritativeHeldAimRotation,
+		Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees, GetWorld()->GetTimeSeconds())) return;
+	bAwaitingNewHolderAim = false;
+	UE_LOG(LogCatFishing, Display,
+		TEXT("Event=fishing_rod_aim_rebased RequestId=%s InputSequence=%lld RodActorId=%s AimInputEpoch=%u "
+			"AimSequence=%lld LatestAimSequence=%lld PreviousRequested=%s ActualAim=%s RequestedAim=%s "
+			"PlayerId=%d World=%s NetMode=%d Authority=true LocalRole=%d"),
+		*RequestId.ToString(), InputSequence, *PresentationState.RodActorId.ToString(), CarrierConstraintState.AimInputEpoch,
+		Sample.Sequence, HeldAimInput.GetLastSequence(), *PreviousRequested.ToCompactString(),
+		*AuthoritativeHeldAimRotation.ToCompactString(), *HeldAimInput.GetRequestedAim().ToCompactString(),
+		Player->GetPlayerId(), *GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()));
+}
 
-	FRotator RequestedAimRotation = HolderPawn->GetController()
-		? HolderPawn->GetController()->GetControlRotation() : HolderPawn->GetActorRotation();
-	RequestedAimRotation.Pitch = FMath::ClampAngle(RequestedAimRotation.Pitch,
-		Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
-	RequestedAimRotation.Roll = 0.0;
-	FCatFishingRodRotationInput& RotationInput = OutPrediction.Input;
-	RotationInput.CurrentAim = AuthoritativeHeldAimRotation;
-	RotationInput.RequestedAim = RequestedAimRotation;
-	RotationInput.PullAxis = CarrierConstraintState.RodPullAxis;
-	RotationInput.PreviousSmoothedFishPullStrengthMeters = SmoothedRodFishPullStrengthMeters;
-	RotationInput.CatTorqueCapacity = CarrierConstraintState.CatTorqueCapacityStrengthMeters;
-	RotationInput.MaximumFishTorque = CarrierConstraintState.MaximumFishTorqueStrengthMeters;
-	RotationInput.MaximumAngularSpeedDegreesPerSecond = Settings->HeldRodMaximumAngularSpeedDegreesPerSecond;
-	RotationInput.ResponseSeconds = Settings->HeldRodAngularResistanceResponseSeconds;
-	RotationInput.FishPullSmoothingSeconds = Settings->HeldRodFishPullSmoothingSeconds;
-	RotationInput.LoadedAngularDampingRatio = Settings->HeldRodLoadedAngularDampingRatio;
-	RotationInput.DeltaSeconds = DeltaSeconds;
-	OutPrediction.HolderWorldPosition = HolderPawn->GetActorLocation();
-	OutPrediction.TipOffsetInAimSpace = Settings->HeldRodGripOffsetCentimeters
-		+ GripCanonicalLocalTransform.InverseTransformPosition(RodTipCanonicalLocalTransform.GetLocation());
-	OutPrediction.MinimumPitchDegrees = Settings->HeldRodMinimumPitchDegrees;
-	OutPrediction.MaximumPitchDegrees = Settings->HeldRodMaximumPitchDegrees;
-	OutPrediction.bValid = true;
+bool ACatFishingRodActor::AcceptHeldAimSampleFromAuthority(APlayerState* Player,
+	const FCatFishingRodAimSample& Sample)
+{
+	if (!HasAuthority() || !Player || Player != PresentationState.HolderPlayerState
+		|| !PresentationState.bDeployed || PresentationState.bBroken
+		|| PresentationState.PoseMode != ECatFishingRodPoseMode::Held || !CarrierConstraintState.bFightActive
+		|| Sample.RodActorId != PresentationState.RodActorId || Sample.InputEpoch == 0
+		|| Sample.InputEpoch != CarrierConstraintState.AimInputEpoch) return false;
+	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
+	if (bAwaitingNewHolderAim)
+	{
+		if (!HeldAimInput.AcceptSample(Sample, AuthoritativeHeldAimRotation,
+			Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees, GetWorld()->GetTimeSeconds())) return false;
+		bAwaitingNewHolderAim = false;
+		AuthoritativeAimHolder = GetHolderPawnFromAuthority();
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_rod_handoff_aim_accepted RodActorId=%s PlayerId=%d AimInputEpoch=%u AimSequence=%lld ControlEpoch=%u ActualAim=%s World=%s NetMode=%d Authority=%d LocalRole=%d Result=Rebased"),
+			*PresentationState.RodActorId.ToString(), Player->GetPlayerId(), CarrierConstraintState.AimInputEpoch, Sample.Sequence,
+			PresentationState.ControlEpoch, *AuthoritativeHeldAimRotation.ToCompactString(), *GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()));
+		return true;
+	}
+	return HeldAimInput.AcceptSample(Sample, AuthoritativeHeldAimRotation,
+		Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees, GetWorld()->GetTimeSeconds());
+}
+
+bool ACatFishingRodActor::GetControlObservationFromAuthority(FCatFishingRodControlObservation& OutObservation) const
+{
+	OutObservation = {};
+	if (!HasAuthority() || !IsUsingPhysicalRod()) return false;
+	OutObservation.ActualAim = GetGripWorldTransform().Rotator();
+	OutObservation.AngularVelocityRadiansPerSecond = PhysicalRod->GetAngularVelocityRadiansPerSecond();
+	OutObservation.bWaitingForNewHolder = bAwaitingNewHolderAim;
+	OutObservation.bMouseDriveActive = !bAwaitingNewHolderAim && CarrierConstraintState.bFightActive
+		&& HeldAimInput.IsMouseActive(GetWorld()->GetTimeSeconds());
+	OutObservation.RequestedAim = OutObservation.bMouseDriveActive ? HeldAimInput.GetRequestedAim() : OutObservation.ActualAim;
 	return true;
 }
 
 bool ACatFishingRodActor::RefreshHeldTransformFromAuthority(const double DeltaSeconds)
 {
-	FCatFishingRodRotationPrediction Prediction;
-	if (!GetRotationPredictionFromAuthority(DeltaSeconds, Prediction)) return false;
-	APawn* HolderPawn = GetHolderPawnFromAuthority();
-	const UCatFishingSettings* Settings = GetDefault<UCatFishingSettings>();
-
-	const FVector PreviousTip = GetRodTipWorldTransform().GetLocation();
-	const FRotator RequestedAimRotation = Prediction.Input.RequestedAim;
-	const FRotator PreviousAimForDiagnostic = AuthoritativeHeldAimRotation;
-	FCatFishingRodRotationResult RotationStep;
-	const bool bNewHolder = AuthoritativeAimHolder.Get() != HolderPawn;
-	if (!bHeldAimInitialized || bNewHolder || !CarrierConstraintState.bFightActive)
-	{
-		if (bNewHolder)
-		{
-			ResetAuthoritativeRotationEffort();
-		}
-		AuthoritativeHeldAimRotation = RequestedAimRotation;
-		SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
-		bHeldAimInitialized = true;
-		AuthoritativeAimHolder = HolderPawn;
-	}
-	else if (FMath::IsFinite(DeltaSeconds) && DeltaSeconds > UE_DOUBLE_SMALL_NUMBER)
-	{
-		const FCatFishingRodRotationInput& RotationInput = Prediction.Input;
-		RotationStep = FCatFishingRodResistanceModel::StepRotation(RotationInput);
-		if (!RotationStep.bSucceeded) return false;
-		AuthoritativeRotationEffort.ExertionSquaredSeconds += RotationStep.CatExertionSquaredSeconds;
-		AuthoritativeRotationEffort.PositiveWorkRadians += RotationStep.CatPositiveWorkRadians;
-		AuthoritativeRotationEffort.IntegratedSeconds += RotationStep.IntegratedSeconds;
-		AuthoritativeHeldAimRotation = RotationStep.ActualAim;
-		SmoothedRodFishPullStrengthMeters = RotationStep.SmoothedFishPullStrengthMeters;
-		// 握持姿态受角色身体可表现的俯仰范围约束；阻力本身没有角度裁剪。
-		AuthoritativeHeldAimRotation.Pitch = FMath::ClampAngle(AuthoritativeHeldAimRotation.Pitch,
-			Settings->HeldRodMinimumPitchDegrees, Settings->HeldRodMaximumPitchDegrees);
-	}
-	const FRotator AimRotation = AuthoritativeHeldAimRotation;
-	const FVector GripLocation = HolderPawn->GetActorLocation()
-		+ AimRotation.RotateVector(Settings->HeldRodGripOffsetCentimeters);
-	const FTransform DesiredGripTransform(AimRotation.Quaternion(), GripLocation);
-	const FTransform DesiredActorTransform = GripCanonicalLocalTransform.Inverse() * DesiredGripTransform;
-	SetActorTransform(DesiredActorTransform, false, nullptr, ETeleportType::TeleportPhysics);
-	const FVector CurrentTip = GetRodTipWorldTransform().GetLocation();
-	AuthoritativeRodTipVelocity = FMath::IsFinite(DeltaSeconds) && DeltaSeconds > UE_DOUBLE_SMALL_NUMBER
-		? (CurrentTip - PreviousTip) / DeltaSeconds : FVector::ZeroVector;
-	AuthoritativeHolderVelocity = HolderPawn->GetVelocity();
-	// 仅诊断观察，不参与下一帧是否允许转动的裁决。
-	const bool bTorqueBalanced = RotationStep.bSucceeded
-		&& RotationStep.AngularSpeedDegreesPerSecond < 0.1
-		&& !AuthoritativeHeldAimRotation.Equals(RequestedAimRotation, 1.0);
-	UWorld* World = GetWorld();
-	const double WorldSeconds = World ? World->GetTimeSeconds() : 0.0;
-	if (World && CarrierConstraintState.bFightActive
-		&& (bTorqueBalanced != bLastRodTorqueBalanced
-			|| WorldSeconds >= NextRodRotationResistanceDiagnosticWorldSeconds))
-	{
-		UE_LOG(LogCatFishing, Display,
-			TEXT("Event=fishing_rod_rotation_resistance_sample RodActorId=%s RequestedYaw=%.2f ActualYaw=%.2f "
-				"RequestedPitch=%.2f ActualPitch=%.2f AngularSpeed=%.3f NetTorque=%s "
-				"MaximumFishTorque=%.3f CatTorqueCapacity=%.3f TorqueBalanced=%s "
-				"PullAxis=%s AppliedFishPull=%s FishPullSmoothingSeconds=%.3f LoadedAngularDampingRatio=%.3f AppliedAngularDampingMultiplier=%.3f "
-				"RotationEffortEpoch=%llu RotationExertionSquaredSeconds=%.3f RotationPositiveWorkRadians=%.3f RotationIntegratedSeconds=%.3f "
-				"HolderPlayerId=%d Holder=%s World=%s NetMode=%d Authority=true LocalRole=%d "
-				"Frame=%llu WorldTime=%.6f DeltaSeconds=%.6f DeltaYaw=%.5f DeltaPitch=%.5f "
-				"HolderLocation=%s HolderVelocityCmS=%s RodTip=%s RodTipVelocityCmS=%s ConstraintAgeSeconds=%.6f Integrated=%s"),
-			*PresentationState.RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
-			RequestedAimRotation.Yaw, AimRotation.Yaw, RequestedAimRotation.Pitch, AimRotation.Pitch,
-			RotationStep.AngularSpeedDegreesPerSecond, *RotationStep.NetTorque.ToCompactString(),
-			CarrierConstraintState.MaximumFishTorqueStrengthMeters,
-			CarrierConstraintState.CatTorqueCapacityStrengthMeters,
-			bTorqueBalanced ? TEXT("true") : TEXT("false"), *FVector(CarrierConstraintState.RodPullAxis).ToCompactString(),
-			*SmoothedRodFishPullStrengthMeters.ToCompactString(), Settings->HeldRodFishPullSmoothingSeconds,
-			Settings->HeldRodLoadedAngularDampingRatio, RotationStep.AppliedAngularDampingMultiplier,
-			AuthoritativeRotationEffort.Epoch, AuthoritativeRotationEffort.ExertionSquaredSeconds,
-			AuthoritativeRotationEffort.PositiveWorkRadians, AuthoritativeRotationEffort.IntegratedSeconds,
-			PresentationState.HolderPlayerState->GetPlayerId(),
-			*GetNameSafe(HolderPawn), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
-			static_cast<int32>(GetLocalRole()), GFrameCounter, WorldSeconds, DeltaSeconds,
-			FMath::FindDeltaAngleDegrees(PreviousAimForDiagnostic.Yaw, AimRotation.Yaw),
-			FMath::FindDeltaAngleDegrees(PreviousAimForDiagnostic.Pitch, AimRotation.Pitch),
-			*HolderPawn->GetActorLocation().ToCompactString(), *AuthoritativeHolderVelocity.ToCompactString(),
-			*CurrentTip.ToCompactString(), *AuthoritativeRodTipVelocity.ToCompactString(),
-			LastConstraintUpdateWorldSeconds >= 0.0 ? WorldSeconds - LastConstraintUpdateWorldSeconds : -1.0,
-			RotationStep.bSucceeded ? TEXT("true") : TEXT("false"));
-		NextRodRotationResistanceDiagnosticWorldSeconds = WorldSeconds + CatFishingMotionDiagnostics::SampleIntervalSeconds();
-		bLastRodTorqueBalanced = bTorqueBalanced;
-	}
-	return !CurrentTip.ContainsNaN() && !AuthoritativeRodTipVelocity.ContainsNaN()
-		&& !AuthoritativeHolderVelocity.ContainsNaN();
-}
-
-bool ACatFishingRodActor::PlaceOnGroundFromAuthority(const FTransform& GroundTransform)
-{
-	if (!HasAuthority() || PresentationState.PoseMode != ECatFishingRodPoseMode::Grounded
-		|| GroundTransform.ContainsNaN())
-	{
-		return false;
-	}
-	SetActorTransform(GroundTransform, false, nullptr, ETeleportType::TeleportPhysics);
-	AuthoritativeRodTipVelocity = FVector::ZeroVector;
-	AuthoritativeHolderVelocity = FVector::ZeroVector;
-	SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
-	bHeldAimInitialized = false;
-	AuthoritativeAimHolder.Reset();
-	ResetAuthoritativeRotationEffort();
-	CarrierConstraintState = FCatFishingCarrierConstraintState{};
-	ClearCarrierMovementBinding();
-	SetActorTickEnabled(false);
-	ForceNetUpdate();
+	if (!HasAuthority() || !IsUsingPhysicalRod()) return false;
+	PhysicalRod->RefreshObservedPose();
 	return true;
 }
 
-FTransform ACatFishingRodActor::ResolveOperatorStandLocalTransform(const int32 SlotIndex) const
+uint32 ACatFishingRodActor::GetOperatorMembershipEpoch(APlayerState* PlayerState) const
 {
-	int32 MaximumSlots = 0;
-	double Spacing = 0.0;
-	if (SlotIndex < 0 || !GetDefault<UCatFishingSettings>()->TryGetRodOperatorLayout(MaximumSlots, Spacing)
-		|| SlotIndex >= MaximumSlots)
-	{
-		return StandCanonicalLocalTransform;
-	}
-	// 0/1 是最靠近中心的右/左；2/3 是外侧第二对。数组扩容时无需改变复制结构和占位算法。
-	const double PairDistance = (static_cast<double>(SlotIndex / 2) + 0.5) * Spacing;
-	const double LateralOffset = SlotIndex % 2 == 0 ? PairDistance : -PairDistance;
-	FTransform SlotTransform = StandCanonicalLocalTransform;
-	SlotTransform.AddToTranslation(FVector(0.0, LateralOffset, 0.0));
-	return SlotTransform;
+	const FCatFishingOperatorMembership* Member = PresentationState.OperatorMemberships.FindByPredicate(
+		[PlayerState](const FCatFishingOperatorMembership& Entry) { return Entry.PlayerState == PlayerState; });
+	return Member ? Member->Epoch : 0;
 }
 
-FTransform ACatFishingRodActor::GetOperatorStandWorldTransform(const int32 SlotIndex) const
+void ACatFishingRodActor::StopHeldAimInputFromAuthority(APlayerState* Player)
 {
-	return ResolveOperatorStandLocalTransform(SlotIndex) * GetActorTransform();
+	if (HasAuthority() && Player && Player == PresentationState.HolderPlayerState)
+		HeldAimInput.StopInput(AuthoritativeHeldAimRotation);
 }
 
 int32 ACatFishingRodActor::GetOperatorCount() const
@@ -667,24 +601,17 @@ int32 ACatFishingRodActor::GetOperatorSlotIndex(APlayerState* PlayerState) const
 
 bool ACatFishingRodActor::IsPrimaryOperator(APlayerState* PlayerState) const
 {
-	return PlayerState && PresentationState.OperatorPlayerStates.IsValidIndex(0)
-		&& PresentationState.OperatorPlayerStates[0] == PlayerState;
-}
-
-int32 ACatFishingRodActor::GetFirstFreeOperatorSlotIndex() const
-{
-	int32 MaximumSlots = 0;
-	double Spacing = 0.0;
-	return GetDefault<UCatFishingSettings>()->TryGetRodOperatorLayout(MaximumSlots, Spacing)
-		&& PresentationState.OperatorPlayerStates.Num() < MaximumSlots
-		? PresentationState.OperatorPlayerStates.Num() : INDEX_NONE;
+	return PlayerState && PresentationState.OperatorPlayerState == PlayerState;
 }
 
 // BeginPlay 流程：先完成 Actor 自身进入 World 的初始化，再补发权威身份可能提前排队的表现变化；没有积压时不触发蓝图事件。
 void ACatFishingRodActor::BeginPlay()
 {
 	Super::BeginPlay();
-	SetActorTickEnabled(PresentationState.PoseMode == ECatFishingRodPoseMode::Held);
+	PhysicalRod->Initialize(PhysicsBody, GripCanonicalLocalTransform, RodTipCanonicalLocalTransform);
+	SetTickGroup(TG_PostPhysics);
+	SetActorTickEnabled(true);
+	SetActorTickEnabled(IsUsingPhysicalRod() || PresentationState.PoseMode == ECatFishingRodPoseMode::Held);
 	// 身份可能在 Actor BeginPlay 之前就由权威初始化完毕（生成时序问题），
 	// 那时事件被推迟到这里；BeginPlay 后再把积压的“上一次变化”补发一次。
 	if (bHasPendingPresentationNotification)
@@ -694,12 +621,12 @@ void ACatFishingRodActor::BeginPlay()
 	}
 }
 
-// EndPlay 流程：权威端先从 FishingService 注销这根已部署鱼竿，再交还给父类清理；客户端或无 Owner 的未登记 Actor 不写服务登记。
+// EndPlay 流程：权威端先从 FishingService 注销这根已部署鱼竿，再交还给父类清理；客户端或无 Owner 的临时 Actor 不写服务登记。
 void ACatFishingRodActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	if (PhysicalRod) PhysicalRod->ReleaseAllConnections(TEXT("RodEndPlay"));
+	CarrierConstraintState = FCatFishingCarrierConstraintState{};
 	ResetAuthoritativeRotationEffort();
-	ClearCarrierMovementBinding();
-	SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
 	// 只有权威端且已绑定 Owner 时才需要清理服务里的“已部署鱼竿”登记，避免野指针残留。
 	if (HasAuthority() && PresentationState.OwnerPlayerState)
 	{
@@ -718,7 +645,19 @@ void ACatFishingRodActor::EndPlay(const EEndPlayReason::Type EndPlayReason)
 // 复制回调流程：客户端收到 PresentationState 后只把前后状态交给表现分发层；它不修改权威身份、库存实例或操作位数组。
 void ACatFishingRodActor::OnRep_PresentationState(const FCatFishingRodPresentationState& Previous)
 {
-	// Previous 由引擎在应用新值前自动传入变更前值，蓝图可以据此区分皮肤、部署或操作位变化。
+	// Previous 由引擎在应用新值前自动传入旧值，蓝图可以据此区分皮肤、部署或操作位变化。
+	if (Previous.PoseMode != PresentationState.PoseMode
+		|| Previous.HolderPlayerState != PresentationState.HolderPlayerState
+		|| Previous.RodActorId != PresentationState.RodActorId)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_rod_pose_received RodActorId=%s RodActorRevision=%lld Pose=%s Holder=%s OperatorCount=%d World=%s NetMode=%d Authority=%s LocalRole=%d RosterVersion=%u ControlEpoch=%u"),
+			*PresentationState.RodActorId.ToString(), PresentationState.RodActorRevision,
+			*UEnum::GetValueAsString(PresentationState.PoseMode), *GetNameSafe(PresentationState.HolderPlayerState),
+			PresentationState.OperatorPlayerStates.Num(), *GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()),
+			HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(GetLocalRole()),
+			PresentationState.RosterVersion, PresentationState.ControlEpoch);
+	}
 	QueueOrDispatchPresentationChanged(Previous, PresentationState);
 }
 
@@ -743,13 +682,7 @@ void ACatFishingRodActor::QueueOrDispatchPresentationChanged(const FCatFishingRo
 void ACatFishingRodActor::DispatchPresentationChanged(const FCatFishingRodPresentationState& Previous,
 	const FCatFishingRodPresentationState& Current)
 {
-	if (Current.PoseMode != ECatFishingRodPoseMode::Held
-		|| Current.HolderPlayerState != Previous.HolderPlayerState)
-	{
-		ClearCarrierMovementBinding();
-		SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
-	}
-	SetActorTickEnabled(Current.PoseMode == ECatFishingRodPoseMode::Held);
+	SetActorTickEnabled(IsUsingPhysicalRod() || Current.PoseMode == ECatFishingRodPoseMode::Held);
 	// 收竿后 Actor 还要活满一个终态复制窗（见 UCatFishingService::PackRod）才销毁，
 	// 期间必须立刻从视觉和碰撞上消失，否则玩家会看到一根杵着不走、还挡路的幽灵竿。
 	// 放在分发路径而不是权威写口：服务器与每个客户端各自在"得知"这次变化的那一刻本地执行；

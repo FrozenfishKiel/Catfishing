@@ -206,7 +206,7 @@ bool UCatAbilitySystemComponent::ApplyFishingStaminaDelta(const float Delta)
 {
 	// 体力提交流程：先拒绝非法 delta、缺 ActorInfo 和非 authority 调用；再创建正式 GE 并写入 SetByCaller。
 	// 返回值必须来自 GAS 实际应用结果，因为会话初始化用它判断是否真的完成回满或消耗。
-	if (!FMath::IsFinite(Delta) || FMath::IsNearlyZero(Delta) || !GetOwnerActor() || !GetAvatarActor()
+	if (!FMath::IsFinite(Delta) || Delta == 0.0f || !GetOwnerActor() || !GetAvatarActor()
 		|| !IsOwnerActorAuthoritative())
 	{
 		return false;

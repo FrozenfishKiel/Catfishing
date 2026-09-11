@@ -39,6 +39,8 @@ UCLASS()
 class CATFISHING_API ACatfishingPlayerController : public APlayerController
 {
 	GENERATED_BODY()
+	friend class FCatFishingSlackAimCommandRoutingTest;
+	friend class FCatPhysicalInputRouteTest;
 public:
 	/** 每帧先对齐公开翻天快照与锁，再交给引擎处理输入；同时覆盖 GameState 晚到与复制延迟。 */
 	virtual void Tick(float DeltaSeconds) override;
@@ -50,10 +52,15 @@ public:
 	virtual void OnPossess(APawn* InPawn) override;
 	/** owning client 收到 Pawn 复制变化后重置本地输入与疾跑状态；复制链中的 SetPawn 负责切换 Ability ASC 路由。 */
 	virtual void OnRep_Pawn() override;
-	/** 捕获统一 Pawn 写入点；归还旧身体翻天锁，刷新 Ability 路由与本地 UI，再按公开快照接管新身体。 */
+	/** 捕获统一 Pawn 写入点；先撤销旧身体持续输入并归还翻天锁，再刷新 Ability 路由与本地 UI，最后按公开快照接管新身体。 */
 	virtual void SetPawn(APawn* InPawn) override;
-	/** 每帧旋转收尾时同步持竿姿态；普通状态完全沿用 PlayerController，持竿状态由本 Controller 接管身体朝向、移动朝向和跳跃输入。 */
+	/** 每帧旋转收尾先保留父类视角处理，再将鱼竿瞄准或普通视角写成物理身体的 view intent；不直接接管身体朝向。 */
 	virtual void UpdateRotation(float DeltaTime) override;
+	/** 菜单、失焦和 Pawn 切换只停止自主输入，外部拉力与已有物理速度继续生效。 */
+	void ClearPhysicalControlInput(FName Reason);
+	/** 视口失焦或输入层移除时先撤销持续物理输入，再交给父类清空按键记录，避免旧按住意图恢复。 */
+	virtual void FlushPressedKeys() override;
+	virtual bool ShouldFlushKeysWhenViewportFocusChanges() const override { return true; }
 	/** 结算夜请求检查本局成像终态与 Grant ACK；只有归档已收口才向 Run StateTree 发送 SettlementComplete。 */
 	UFUNCTION(Server, Reliable)
 	void ServerRequestSettlementCompletion(FGuid RequestId, int64 ExpectedRevision);
@@ -89,9 +96,9 @@ public:
 	UFUNCTION(BlueprintPure, Category="Catfishing|Interaction")
 	UCatInteractionTargetingComponent* GetInteractionTargetingComponent() const { return InteractionTargetingComponent; }
 
-	/** 翻天期间拒绝移动；其他时候按可见朝向把二维输入转成 Pawn 移动，持竿时读取鱼竿相机方向。 */
+	/** 翻天或引擎移动忽略时清掉自愿移动意图；其他时候按可见朝向把二维输入转成 Pawn 移动，持竿时读取鱼竿相机方向。 */
 	void Move(const FInputActionValue& Value);
-	/** 请求当前 Character 跳跃；翻天或持竿操作时拒绝，避免过渡和搏斗姿态被起跳打断。 */
+	/** 请求当前 Character 跳跃；翻天、引擎移动忽略或持竿操作时拒绝，并清掉保持态，避免过渡和搏斗姿态被起跳打断。 */
 	void StartJump();
 
 	/** 权威交互转发；服务器检查玩法 gate 和通用接口后，在目标 Actor 上重新调用同一 Interact 虚函数。 */
@@ -233,7 +240,7 @@ protected:
 	virtual void PostProcessInput(const float DeltaTime, const bool bGamePaused) override;
 	/** Pawn 断开前先清理当前 ASC 的 Ability 输入状态、钓鱼本地命令和疾跑意图，再交还父类结束占有，避免状态泄漏到下一次占有。 */
 	virtual void OnUnPossess() override;
-	/** EndPlay 清理翻天锁及订阅、Ability 路由和 Native 输入记录，只撤销本 Controller 安装的输入层。 */
+	/** EndPlay 清理翻天锁及订阅、物理与 Ability 路由和 Native 输入记录，只撤销本 Controller 安装的输入层。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	/** 玩法输入映射；在 PlayerController 蓝图默认值中接入 IMC。 */
@@ -256,12 +263,7 @@ protected:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|Input")
 	TObjectPtr<UInputAction> SprintAction;
 
-	/** 未按疾跑键时 CharacterMovement 的最大地面移动速度。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|Input|Movement",
-		meta = (ClampMin = "0.0", UIMin = "0.0", Units = "cm/s"))
-	float WalkMaxSpeed = 100.0f;
-
-	/** 按住疾跑键时 CharacterMovement 的最大地面移动速度。 */
+	/** 按住疾跑键时物理电机的目标地面速度上限。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Catfishing|Input|Movement",
 		meta = (ClampMin = "0.0", UIMin = "0.0", Units = "cm/s"))
 	float SprintMaxSpeed = 350.0f;
@@ -275,7 +277,7 @@ private:
 
 	/** 消费当前 GameState 快照；绑定变化通知，调和本地输入与服务器移动锁，再刷新 LocalPlayer 的时间轴表现。 */
 	void ReconcileDayTransition();
-	/** 成对申请或释放翻天专属锁；重复状态不叠加计数，服务器只恢复本功能接管的原移动模式。 */
+	/** 成对申请或释放翻天专属锁；首次加锁撤销持续物理输入，重复状态不叠加计数，服务器只恢复本功能接管的原移动模式。 */
 	void SetDayTransitionLocked(bool bLocked);
 	/** 结束或旅行时解绑快照并清理本功能持有的输入、移动和 UI；不触碰 Run 权威状态。 */
 	void ClearDayTransition();
@@ -306,6 +308,8 @@ private:
 	void RemoveInputMappingContext();
 	/** 翻天期间拒绝视角操作；其他时候把二维输入写入 Controller 的 Yaw/Pitch。 */
 	void Look(const FInputActionValue& Value);
+	/** 把当前猫身体的自愿移动意图归零；只处理输入持续态，不抵消外力、速度或抓握牵引。 */
+	void StopMove();
 	/** 对当前已占有的 Character 停止跳跃。 */
 	void StopJump();
 	/** 本地 Started 输入在非翻天状态开启疾跑，并把布尔意图可靠同步给 authority。 */
@@ -316,6 +320,8 @@ private:
 	void SetSprintRequested(bool bNewSprintRequested, bool bNotifyServer);
 	/** 把服务器配置的普通/疾跑速度应用到指定 Character；非 Character Pawn 安全跳过。 */
 	void ApplySprintSpeed(APawn* TargetPawn, bool bSprinting) const;
+	/** 将实际杆朝向或自由视角提交为物理电机意图，不直接写入身体旋转。 */
+	void RefreshPhysicalViewIntent();
 	/** 项目原生输入标签入口；翻天期间拒绝交互，其他时候处理非 Ability 动作，未知标签无副作用。 */
 	void NativeInputTagPressed(FGameplayTag InputTag);
 	/** 交互键正常松开时完成鱼护短按；其他原生输入不消费该边沿。 */
@@ -324,12 +330,6 @@ private:
 	void NativeInputTagCanceled(FGameplayTag InputTag);
 	/** 当 Pawn 或输入组件在 owning client 就绪时通知 LocalPlayer UI；服务器远端 Controller 和非 Cat UI World 安全跳过。 */
 	void NotifyLocalPlayerUISubsystemPawnChanged();
-	/** 进入或维持持竿面对模式；首次进入时保存普通移动配置，然后让身体跟随当前可见钓鱼方向。 */
-	void ApplyHeldRodFacingMode(ACatCharacter& ControlledCat, UCharacterMovementComponent& Movement,
-		const FRotator& FacingRotation);
-	/** 离开持竿面对模式时恢复进入前的普通移动配置；Pawn 已销毁时只清本地缓存，避免下个 Pawn 继承上一状态。 */
-	void RestoreHeldRodFacingMode();
-
 	/** 把公共领域命令终态投给 owning client；本地 authority 没有网络回环时直接写本机读模型，远端玩家继续走可靠 RPC。 */
 	void DeliverCampCommandResultToOwningClient(const FCatDomainCommandResult& Result);
 
@@ -348,30 +348,6 @@ private:
 	/** 当前 Controller 的疾跑按键意图；客户端和 authority 分别维护，不作为远端动画事实复制。 */
 	UPROPERTY(Transient)
 	bool bSprintRequested = false;
-
-	/** 当前是否已经接管持竿期间的身体朝向；只表示 Controller 改过移动配置，真正是否持竿仍由 Fishing/Rod 查询决定。 */
-	UPROPERTY(Transient)
-	bool bHeldRodFacingModeActive = false;
-
-	/** 进入持竿模式前 Character 是否用 Controller Yaw 驱动身体；离竿时按它恢复，不硬编码项目默认值。 */
-	UPROPERTY(Transient)
-	bool bSavedHeldRodUseControllerRotationYaw = false;
-
-	/** 进入持竿模式前 CharacterMovement 是否按移动方向转身；离竿时恢复，避免持竿规则泄漏到普通移动。 */
-	UPROPERTY(Transient)
-	bool bSavedHeldRodOrientRotationToMovement = false;
-
-	/** 进入持竿模式前 CharacterMovement 是否使用 ControllerDesiredRotation；离竿时恢复原有蓝图/测试配置。 */
-	UPROPERTY(Transient)
-	bool bSavedHeldRodUseControllerDesiredRotation = false;
-
-	/** 当前被持竿模式改过朝向配置的 Character；恢复时用弱引用避免 Pawn 生命周期结束后访问悬空对象。 */
-	UPROPERTY(Transient)
-	TWeakObjectPtr<ACatCharacter> HeldRodFacingCharacter;
-
-	/** 当前被持竿模式改过转向配置的移动组件；恢复时用弱引用避免组件已销毁时写回。 */
-	UPROPERTY(Transient)
-	TWeakObjectPtr<UCharacterMovementComponent> HeldRodFacingMovement;
 
 	/** 当前 Controller 的 Ability 输入绑定子对象；它拥有 ASC 输入路由状态，Controller 只把 Pawn/输入生命周期转交给它。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Input", meta = (AllowPrivateAccess = "true"))

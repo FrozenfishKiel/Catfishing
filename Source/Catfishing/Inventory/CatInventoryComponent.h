@@ -336,6 +336,8 @@ public:
 
 	/** authority 退役活动区里的同一实例；存档已接管部署物时用它清掉本库存活动区保管记录。 */
 	bool RetireHeldInventoryEntryFromAuthority(FGuid ItemInstanceId);
+	/** Transfer exact deployed instances during owner teardown; callers rebind consumers before publishing. */
+	bool MoveHeldInventoryEntriesToCustodianFromAuthority(UCatInventoryComponent* Target, const TArray<FGuid>& ItemInstanceIds);
 
 	/** authority 读取活动区里某个实例的可写 entry；调用方只能用于同一服务器事务内同步运行状态。 */
 	FCatInventoryEntry* FindHeldInventoryEntryFromAuthority(FGuid ItemInstanceId);
@@ -412,6 +414,10 @@ public:
 	virtual bool CanAcceptInventoryEntryAtSlot(const FCatInventoryEntry& IncomingEntry, int32 TargetSlotIndex) const;
 
 protected:
+	friend class UCatEquipmentComponent;
+	/** Internal mutation lets the fishing coordinator establish its record before notifying observers. */
+	bool ConsumeItemAtSlotInternal(int32 SlotIndex, int32 ConsumeCount, bool bBroadcastChange);
+	bool TryAddInventoryBatchInternal(const FCatInventoryReceiveBatch& ReceiveBatch, bool bBroadcastChange);
 	/** 本库存独立的显示 Model；组件按需创建并持有，服务器本地提交或客户端复制后更新，其他库存不会写入它。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatInventoryModel> InventoryModel;

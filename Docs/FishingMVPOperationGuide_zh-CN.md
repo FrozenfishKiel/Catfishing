@@ -153,14 +153,16 @@ Root
 | `Cat Fishing Schedule Waiting Probe` | Task | ✅ 用 |
 | `Cat Fishing Enter Phase` | Task（参数 `Phase`） | ✅ 用 |
 | `Cat Fishing Open True Bite Window` | Task | ✅ 用 |
+| `Cat Fishing Open True Bite Window (Legacy Node)` | Task | ❌ 仅用于加载旧资产 |
 | `Cat Fishing Start Fight Runner` | Task | ✅ 用 |
 | `Cat Fishing Wait For Fight Runner` | Task | ✅ 用 |
 | `Cat Fishing Wait` | Task | ✅ 用 |
 | `Cat Fishing Phase Is` | Condition（参数 `ExpectedPhase`） | 可选 |
+| `Cat Fishing Fight Exchange` | Task | ❌ 不用（见下） |
 | `Cat Fishing Commit Failure Budget` | Task | ❌ 不用 |
 | `Cat Fishing Resolve Retry Exhausted Escape` | Task | ❌ 不用 |
 
-搏斗数值全在 `UCatFishingFightRunner` 里跑，StateTree 只负责阶段调度和等待 Runner 完成。
+> `Cat Fishing Fight Exchange` 在当前 Runner 驱动的搏斗模型下不能用 —— 保留反射身份仅供旧资产加载，执行始终返回 `FixedStepOwnsBilling`，不能形成第二套扣费入口。搏斗数值全在 `UCatFishingFightRunner` 里跑。
 
 C++ 实际只发这 5 个事件（头文件里声明了 16 个，其余 11 个**没有任何发送点**，别在资产里等它们）：
 
@@ -212,9 +214,9 @@ Root
 
 3. **`Cat Fishing Enter Phase` 的 Phase 不能选 `Resolved` 或 `Terminated`。** 选了会直接返回 `AlreadyResolved` → Failed。终态只能由 C++ 写。
 
-4. **`ExhaustedReelHold` 状态只保留等待节点。** C++ 在搏斗 Runner 结束时已经 EnterPhase(ExhaustedReel) 过了，重复进入会递增 Revision。叶子状态名称应与当前阶段一致。
+4. **`ExhaustedReelHold` 状态不要再放 `Enter Phase`。** C++ 在搏斗 Runner 结束时已经 EnterPhase(ExhaustedReel) 过了，重复进入只会白白递增 Revision。旧资产中的叶子状态即使仍命名为 `NearShore` 也能兼容运行，但建议改名避免误解。
 
-5. **`WindowExpired` 必须接回 `Waiting`。** 漏按只关闭这一轮响应窗，不释放竿、线或饵料使用冻结；Waiting 重入后会清空窗口并重新调度。`EarlyHook` / `Interrupted` 才由 C++ 直接终止并停树，不需要资产终态。
+5. **`WindowExpired` 必须接回 `Waiting`。** 漏按只关闭这一轮响应窗，不释放竿、线或饵料预约；Waiting 重入后会清空窗口并重新调度。`EarlyHook` / `Interrupted` 才由 C++ 直接终止并停树，不需要资产终态。
 
 6. **`Cat Fishing Start Fight Runner` 是幂等的。** `RequestHook` 在发 `HookAccepted` 之前就已经启动了 Runner，这个节点检测到已在运行会直接返回 Succeeded，不会重复启动。
 
@@ -244,10 +246,10 @@ FishingSessionStateTree=/Game/Data/StateTrees/ST_FishingSession.ST_FishingSessio
 
 | 键 | InputAction | 用途 | 走哪条路 |
 |---|---|---|---|
-| **R** | `IA_PutDownFishingRod` | **鱼竿一键三态**：已在操作容器→离开 / 公共交互锚点附近且容器有容量→追加加入 / 否则→放自己的竿 | ✅ C++ 已实现，服务器按事实自动分派 |
+| **R** | `IA_PutDownFishingRod` | 取出自己的竿并成为主控；主控再次按下放竿。抓回本人竿后按R恢复主控 | C++ 按服务器事实分派 |
 | **E** | `IA_Interact` | 准星交互/拾取；本地只选择 Current Target，真正拾取由服务器复核距离、视线和物品状态 | ✅ C++ 已实现，走 Native InputTag 而不是 Gameplay Ability |
-| **左键** | `IA_LMB` | 无会话→**长按预览抛物线（不蓄力）松手抛竿**；真咬窗→**提竿**（1 秒内=完美）；遛鱼→**按住拖** | 提竿/拖 ✅ C++；**抛竿预览+提交走蓝图**（5.2） |
-| **右键** | `IA_RMB` | 遛鱼时**按住松开线杯**（鱼在 L_max 内自由带线，发力期喘气回体力 +1.5/s） | ✅ C++（`UCatGA_FishingSlack`） |
+| **左键** | `IA_LMB` | 空手/辅助：按住伸左爪抓握；主位：按住瞄准、松手抛竿，真咬窗提竿，遛鱼时按住收线 | 输入层按按下时身份固定接收方，正常松开回到原接收方 |
+| **右键** | `IA_RMB` | 空手/辅助：按住伸右爪抓握；主位：遛鱼时按住松开线杯 | 抓握或原 `UCatGA_FishingSlack` 路由 |
 | **Q** | `IA_BaitSpot` | **长按蓄力打窝**：抛物线越蓄越远，松手投出 | ✅ C++ 已接管提交；蓝图只保留可选预览 |
 | **F** | `IA_CatchFish` | 抢抄 | ✅ C++ |
 | **X** | `IA_CancelFishing` | 取消当前会话 | ✅ C++ |
@@ -285,7 +287,7 @@ Get Fishing Command Component      ← BlueprintPure，Controller 自己身上�
 
 ### 5.1 放竿 / 操作 / 离开 —— 已由 R 键 C++ 三态接管，**不用做蓝图**
 
-按 R 服务器自动分派 PlaceRod / OperateRod / LeaveRod。第一次 R 只部署空杆并播放放杆表现，第二次 R 才进入右侧主位，第三次 R 离开；不能把部署和使用合并。架杆不再要求靠近岸线，只要角色前方有坡度合法的实体地面即可；抛竿阶段仍受有效水域和射程限制。你只需要**接结果并缓存**：
+R负责取出本人鱼竿或放下当前主控竿，不加入别人会话。第一次R取竿后直接建立持握并成为唯一主控；再次R放下，不把旁人自动提升为主控。首次成功复制即为 `Held`，无需蓝图补发 OperateRod 或播放落地空竿过渡。取竿仍要求角色前方有坡度合法的实体地面，不要求靠近岸线；抛竿阶段仍受有效水域和射程限制。你只需要**接结果并缓存**：
 
 ```
 Get Fishing Command Component → Bind Event to On Result Received
@@ -300,9 +302,12 @@ BeginCast 要用这两个值做乐观锁；OperateRod 成功后 `RodActorRevisio
 
 **常见失败原因**（放竿）：`InvalidPayload`=前方太斜/没实体地面；`DependencyUnavailable`=还没装配（5.4）。`InvalidWaterTarget/CastOutOfRange` 现在只属于抛竿阶段。
 
-多人占位口径：所有玩家都从同一个公共交互锚点按 R 加入，服务器把 PlayerState 追加到紧凑容器 `OperatorPlayerStates`，编号从 `0` 依次递增；任意成员离开后更高编号依次递减，并按新编号重排全部剩余站位。`[0]` 是当前主位，现有抛竿、提竿、收线和松线由它驱动；新的 `[0]` 会在原主位退出时接管当前会话。配置容量当前为 2，但第三、第四人只需提高 `MaximumRodOperatorSlots`，无需新增专用交互点或分支。多人同时合力、体力分摊和多输入配合尚未接入当前实现。
+多人协作：只有主控拥有收放线、转向和钓鱼会话。旁人按住左右键伸爪抓竿、猫或场景，再用WASD沿任意方向发力；没有按键加入、人数成员名单、辅助系数或自动接任。真实碰撞与抓握约束传递作用力，旁人抓两根竿也不串会话或转移物品归属。
 
-会话跟随鱼竿而不是角色：按 R 离开任何阶段都不会直接结束鱼竿上的会话。多人各自部署鱼竿后，同一玩家可以在第一根竿抛线、离开，再进入第二根空竿抛线；左键与 HUD 始终只路由当前主操作鱼竿。等待/试探/真咬阶段允许迁移当前钓手；`HookedFight` 离竿后自动保持松线，鱼在 `L_max` 内自由带线，放尽后开始按负载磨损本场鱼线，期间不结算离开玩家的力量或体力。下一位玩家进入空主位时会用自己的 ASC、力量、满额搏斗体力和输入状态接管 Runner，原操作手的短周期体力立即恢复。
+主控的钓鱼运动预算与费用由本人ASC承担；旁人保持普通身体运动，Session不汇总或扣他们的体力。HUD显示本人属性和手部状态；非主控不绑定鱼的会话UI。公式、单位及验证边界见 [正式接入审查](FishingArchitecture_zh-CN.md)。
+
+主控放下进入现有无人值守处理，其他人的真实抓握继续保留。完成/取消一轮只清本场鱼载荷；破竿、收纳与销毁清相应约束。菜单/失焦清持续输入并取消未提交瞄准，不误抛竿。
+
 
 ---
 
@@ -343,7 +348,7 @@ Draw Debug Line 逐段画 Path；Draw Debug Sphere 画 Landing（bHitWater 绿 /
 
 ### 5.4 ConfigureEquipment（首次装配）—— 必须最先执行
 
-**这是整条钓鱼链最上游的前置条件。** `FCatEquipmentLoadoutSnapshot` 初始是空的（三个 ID 都是 `None`），`PlaceRod`/`BeginCast` 会因为缺少已装配定义，或定义自身字段不满足对应入口要求而直接拒绝。
+**这是整条钓鱼链最上游的前置条件。** `FCatEquipmentLoadoutSnapshot` 初始是空的（三个 ID 都是 `None`），`PlaceRod`/`BeginCast` 会因为 Kind 校验失败直接拒绝。
 
 最简单做法：在 `BP_CatFishingController` 的 `BeginPlay` 里自动装配一次。
 
@@ -368,7 +373,7 @@ Event BeginPlay
 
 **怎么知道成功了**：这是个 `Server, Reliable` RPC，没有回执结构体。判断方式是**轮询 `Get Snapshot` 的 `Revision` 是否从 0 变成 1**，或者监听装备组件的复制变化。建议在 UI 上显示当前 `RodDefinitionId`，非 `None` 就说明装配好了。
 
-> `RequestScoop` 要求服务器装备快照里存在有效 `ScoopNet`。当前手工装配留空不会沿用服务器默认抄网；在商店/奖励获取接入前，抄网链路只能通过人工准备好库存实例后再选择验证。
+> `RequestScoop` 仍要求服务器装备快照里存在有效 `ScoopNet`。临时默认抄网发放配置和启动分支已删除，当前手工装配留空不会再沿用服务器默认抄网；在商店/奖励获取接入前，抄网链路只能通过人工准备好库存实例后再选择验证。
 
 ---
 
@@ -380,19 +385,22 @@ Event BeginPlay
 |---|---|---|
 | 1 | PIE 启动 | `Event=run_started` 且 `Event=run_phase_entered ... Phase=DayActive` |
 | 2 | （自动）装配 | Equipment `Revision` 从 0 → 1，`RodDefinitionId = Rod_Basic` |
-| 3 | 在任意合法地面第一次按 R | 世界里出现无人操作的 Rod Actor并播放放杆表现；角色不吸附、不锁移动 |
-| 3.1 | 放置者再次按 R | 放置者进入右侧主位并开始操作，`OperatorPlayerStates.Num=1` |
-| 4 | 主位仍有人时，第二个玩家走近同一个公共交互锚点按 R | 第二人追加为编号 1；两端都看到 `OperatorPlayerStates.Num=2` |
-| 4.1 | 编号 0 的玩家按 R 离开 | 原编号 1 自动变为 0、按新编号重新站位并接管当前会话；若容器为空，搏斗才进入无人值守松线 |
-| 5 | 瞄水面按住再松开左键 | `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去 |
+| 3 | 在合法地面第一次按 R | 真实手部约束持竿，只有本人为主控；不传送角色 |
+| 3.1 | R放下后，走近按住鼠标键抓回本人原竿，再按R | 抓握先建立物理连接；原拥有者按R才恢复唯一主控，不转让物品归属 |
+| 4 | 第二个玩家走近，按住鼠标键抓竿或第一人 | 两端看到真实抓握；Session仍只有主控，旁人无收放线权限或钓鱼账单 |
+| 4.1 | 主控放下，旁人继续抓住竿 | 会话无人值守，旁人的抓握保留；不自动接任，不转让物品归属 |
+| 4.2 | 抛投前向同向、反向和侧向拉动，再让一人顶墙 | 力通过实际约束传递；碰撞与拉扯可改变站位，未连接的猫不会被整组锁住；不产生搏斗费用 |
+| 4.3 | 抓队友后松一只手、松双手；断开链条中间连接 | 剩余连接继续传力；断开的身体不再经此连接传力，不修改会话人数或权限 |
+| 5 | 主位瞄水面按住再松开左键，队员继续移动 | `Event=fishing_phase_entered ... Phase=Waiting`，浮漂飞出去；飞行和等待期间保持实际抓握，不开启搏斗扣费 |
 | 6 | 等浮漂落水 | Hook 的 `BP_OnHookPresentationChanged` 收到 `Phase=Landed` |
-| 7 | 等咬钩 | `Phase=Probe` → 紧接着 `Phase=TrueBiteWindow`，鱼 Actor 生成 |
-| 8 | 3 秒内按住左键 | `Phase=HookedFight` |
+| 7 | 等咬钩，窗口内尝试移动 | `Phase=Probe` → `Phase=TrueBiteWindow`；实际抓握继续，尚不因进入咬钩窗口生成鱼或扣搏斗体力 |
+| 8 | 主位在3秒内按住左键 | 服务器选鱼并生成鱼Actor，进入 `Phase=HookedFight`；鱼线从实际竿尖施力，经手部约束传到身体 |
 | 9 | 持续按住左键收线 | Snapshot 里 `NormalizedFishStamina` 下降 |
 | 10 | 鱼被收到面前（**搏斗中就可以**） | debug 里鱼身上的圈从红变绿 = 现在按 F 抄得到 |
 | 11 | 对着鱼按 F | 不论鱼剩余体力，范围合法即直接变成嘴叼世界鱼；失败按同一 `RequestId` 查看 `scoop_target_* → scoop_rejected → fishing_scoop_terminal → fishing_command_result` |
-| 12 | 或者等鱼翻肚 | `Phase=ExhaustedReel`；仍可按 F 抄，也可继续按住左键把鱼拖上岸 |
+| 12 | 或者等鱼翻肚 | `Phase=ExhaustedReel`；仍是同一场搏斗与物理连接，鱼停止主动发力；可按F抄或继续收线上岸，身体不会被重新摆放 |
 | 13 | 鱼落到岸上后准星对准并按 E | 服务器只允许一个玩家成功叼起；随后再对具体地面鱼护按 E 才入箱 |
+| 14 | 完成或取消一轮后，保持抓握继续移动，再松手离开；主位也可按R放下 | 原抓握继续传力且不扣搏斗体力；全部连接断开者恢复自由移动。再抛一轮时，旧Session销毁不应打断新场 |
 
 鱼生成时的大小由服务器随机重量决定：每个 `FishPresentation_*` 用自己的 `MeshReferenceWeightKilograms` 定义
 `Scale=1` 的参考重量，再按体积关系取立方根并裁在本鱼的 `Minimum/MaximumUniformScale`。水中鱼和岸上拾取鱼
@@ -402,7 +410,7 @@ Event BeginPlay
 
 **咬钩要等多久**：`BaseBiteRatePerSecond=0.2` + 泊松分布，clamp 在 `[2, 15]` 秒。嫌慢就把 ini 里 `BaseBiteRatePerSecond` 调大（比如 2.0）再重启。
 
-**日志过滤关键字**：`LogCatRun`、`LogCatFishing`、`LogCatEquipment`。多人差异先比较 `IsLocalController`、`NetMode`、`PawnLocation`；抄网站位再比较 `CenterWater*`、`FootWater*`、`GroundWater*` 的 `Error`、`Containment`、`VerticalDeltaCm` 与 `SignedShoreDistanceCm`。`FootWater`/`GroundWater` 是诊断对照，不代表当前服务器改成用脚底判定。
+**日志过滤关键字**：`LogCatPhysicsGrab`、`LogCatRun`、`LogCatFishing`、`LogCatEquipment`。多人差异先比较 `Authority/LocalRole`、`NetMode`、`PawnLocation`；连接看 `physics_grip_*` 的 `BodyId/GripId/Target`，主控看 `fishing_primary_released` 和命令回执的 `RodActorId/ControlEpoch`，实际鱼力看 `fishing_physical_line_load` 的 `SessionId/Step/ForceN`，旧场清理看 `fishing_fight_runner_stopped`。抄网站位再比较 `CenterWater*`、`FootWater*`、`GroundWater*` 的 `Error`、`Containment`、`VerticalDeltaCm` 与 `SignedShoreDistanceCm`；抄网仍保留原角色中心判定，Condition水深单独读取物理脚点。
 
 ---
 
@@ -410,13 +418,13 @@ Event BeginPlay
 
 ### ~~1. 抢抄需要 ScoopNet，但装配接口传不进去~~ ✅ 已修
 
-`ServerConfigureEquipment` 现在提交 Rod/Bait/Float/ScoopNet 四个 DefinitionId，并同时提交对应的四个 ItemInstanceId。库存 UI 必须从当前格子带上实例 ID；服务器只接受正式库存里真实存在的实例。当前正式目录仍有 `"StarterScoopNet"` 定义，但默认配置不发放它；没有已有库存实例时，抄网选择必须保持失败而不是凭空补发。
+`ServerConfigureEquipment` 现在提交 Rod/Bait/Float/ScoopNet 四个 DefinitionId，并可同时提交对应的四个 ItemInstanceId。库存 UI 应从当前格子带上实例 ID；旧调用没带实例 ID 时，服务器仍会按 DefinitionId 兼容解析一份可用实例。当前正式目录仍有 `"StarterScoopNet"` 定义，但默认配置不发放它；没有已有库存实例时，抄网选择必须保持失败而不是凭空补发。
 
 ### ~~2. 打窝需要窝料库存，但没有发放入口~~ ✅ 已修
 
 数量型物品不再提供客户端直连发放 RPC；调试和正式链路都应通过服务器权威入口把物品写入统一库存格。
 
-> 没有直接给组件方法加 `BlueprintCallable`，而是走 Controller RPC 转发；正式库存和装备命令都保持同一权限边界，避免任何蓝图都能直接摸到域写入口。
+> 没有直接给组件方法加 `BlueprintCallable`，而是走 Controller RPC 转发 —— 和 `ServerConfigureEquipment` / `ServerRepairRodAtCamp` 保持一致的权限边界，避免任何蓝图都能直接摸到域写入口。
 
 ### 3. `IA_BaitSpot`(Q) 那个 Chum Ability 是输入壳
 
@@ -460,7 +468,7 @@ Event BeginPlay
 /Game/Data/Curves/      Curve_ChumDistanceFalloff, Curve_ChumTimeFalloff
 ```
 
-**配置**：`Config/DefaultGame.ini` 已注册正式鱼、咬钩性格与搏斗性格软引用；测试资产不再注册。
+**配置**：`Config/DefaultGame.ini` 已注册正式鱼、咬钩性格与搏斗性格软引用；旧测试资产不再注册。
 
 **关卡**：`Showcase2` 的唯一 `BP_CatWaterRegion` 已迁移为 `RegionId=River` 并重新烘焙、保存、重载验证；当前 `GeometryRevision=776404699334229561`，`HasValidBakedGeometry()=True`。该水域现在直接匹配正式 16 鱼库中的 `River` 鱼种。
 
@@ -483,7 +491,7 @@ CatWaterBoundarySplineActor → ACatWaterBoundarySplineActor
 
 - `ST_RunFlow` / `ST_FishingSession` 两棵树已建好，结构核对通过：Schema、Context Actor、`Tasks Completion=All`、Task 顺序与参数、转移链路全部正确
 - 两条 StateTree 路径已写进 `Config/DefaultGame.ini`
-- C++ 缺口 1、2 已补；数量型物品改走统一库存格，直连发放入口已移除
+- C++ 缺口 1、2 已补；数量型物品改走统一库存格，旧直连发放入口已移除
 
 ### ✅ PIE 已验证通过（2026-08-18）
 

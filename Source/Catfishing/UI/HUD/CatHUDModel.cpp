@@ -3,6 +3,10 @@
 #include "AbilitySystemComponent.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/Presentation/CatFishingCameraComponent.h"
+#include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "Condition/CatConditionComponent.h"
 #include "Engine/World.h"
 #include "Fishing/CatFishingSession.h"
@@ -20,6 +24,7 @@ namespace
 {
 	/** HUD 等待客户端 GameState 的重试间隔；只影响 UI 订阅恢复速度，不改变 Run 复制频率或服务器时钟。 */
 	constexpr float CatHUDRunGameStateBindingRetrySeconds = 0.20f;
+	constexpr float CatHUDFishingSessionBindingReconcileSeconds = 0.20f;
 }
 
 // 绑定流程：校验本地玩家、Controller、Character 和 ASC，随后订阅身体属性、Condition、Growth 和 Fishing 命令结果；Run 快照按“先读一次当前 GameState，再订阅后续变化”的观察者口径接线，最后保证至少发布首份 HUD 投影。
@@ -73,6 +78,7 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 	FishingViewChangedHandle = FishingViewBridge->OnViewStateChanged.AddUObject(
 		this, &ThisClass::HandleFishingViewStateChanged);
 	RefreshFishingSessionBinding();
+	ScheduleFishingSessionBindingReconcile();
 	if (!RefreshRunGameStateBinding())
 	{
 		Refresh();
@@ -80,9 +86,10 @@ bool UCatHUDModel::Bind(ULocalPlayer* InLocalPlayer, APlayerController* InContro
 	return true;
 }
 
-// 解绑流程：从原 Run、ASC、Condition、Growth、Fishing 命令和 Bridge 移除订阅，再清弱引用、最近结果和投影，防止跨 Pawn 显示失效状态。
+// 解绑流程：从原 Run、ASC、Condition、Growth、Fishing 命令和 Bridge 移除订阅，再清弱引用、最近结果和投影，防止跨 Pawn 显示旧状态。
 void UCatHUDModel::Unbind()
 {
+	ClearFishingSessionBindingReconcile();
 	ClearRunGameStateBinding();
 	if (UAbilitySystemComponent* AbilitySystem = BoundAbilitySystem.Get())
 	{
@@ -132,6 +139,30 @@ void UCatHUDModel::Refresh()
 {
 	FCatHUDViewState NewState;
 	APlayerController* Controller = BoundPlayerController.Get();
+	const ACatCharacter* Character = Controller ? Cast<ACatCharacter>(Controller->GetPawn()) : nullptr;
+	const UCatPhysicalBodyComponent* Body = Character ? Character->GetPhysicalBodyComponent() : nullptr;
+	if (const UCatPhysicsGrabComponent* Grab = Body ? Body->GetGrab() : nullptr)
+	{
+		NewState.bShowPhysicalControls = true;
+		NewState.bLeftHandReaching = Grab->IsReaching(true);
+		NewState.bRightHandReaching = Grab->IsReaching(false);
+		NewState.bLeftHandGripped = Grab->IsGripping(true);
+		NewState.bRightHandGripped = Grab->IsGripping(false);
+		const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindHeldRodOperatedBy(Controller);
+		NewState.bPrimaryRodOperator = Rod && Rod->IsPrimaryOperator(Controller->PlayerState);
+		NewState.PhysicalControlText = FText::FromString(NewState.bPrimaryRodOperator
+			? TEXT("主控 · 左键抛竿 / 收线 · 右键放线 · R 放竿")
+			: TEXT("按住左 / 右键抓人或抓竿 · WASD 拉动 · 松键释放"));
+		const auto HandLabel = [&](const bool bLeft, const bool bReaching, const bool bGripped)
+		{
+			if (bGripped && Grab->GetGripState(bLeft).bExplicitHold && NewState.bPrimaryRodOperator && Grab->GetGripTarget(bLeft) == Rod)
+				return TEXT("持竿（R 放竿）");
+			return bGripped ? TEXT("抓住（松键释放）") : (bReaching ? TEXT("伸手中") : TEXT("收回"));
+		};
+		NewState.PhysicalHandStateText = FText::FromString(FString::Printf(TEXT("左爪：%s    右爪：%s"),
+			HandLabel(true, NewState.bLeftHandReaching, NewState.bLeftHandGripped),
+			HandLabel(false, NewState.bRightHandReaching, NewState.bRightHandGripped)));
+	}
 	UWorld* World = Controller ? Controller->GetWorld() : nullptr;
 	const AGameStateBase* GameStateBase = World ? World->GetGameState() : nullptr;
 	const double ServerNowSeconds = GameStateBase ? GameStateBase->GetServerWorldTimeSeconds()
@@ -196,9 +227,9 @@ void UCatHUDModel::Refresh()
 	NewState.BitePromptText = FText::FromString(TEXT("鱼儿咬钩啦！提竿"));
 	NewState.HookSuccessFeedbackText = FText::FromString(TEXT("提竿成功！"));
 	NewState.CatStaminaText = NewState.FightStaminaMaximum > 0.0f
-		? FText::FromString(FString::Printf(TEXT("玩家体力 %.0f / %.0f"),
-			NewState.FightStamina, NewState.FightStaminaMaximum))
-		: FText::FromString(FString::Printf(TEXT("玩家体力 %.0f"), NewState.FightStamina));
+			? FText::FromString(FString::Printf(TEXT("玩家体力 %.0f / %.0f"),
+				NewState.FightStamina, NewState.FightStaminaMaximum))
+			: FText::FromString(FString::Printf(TEXT("玩家体力 %.0f"), NewState.FightStamina));
 	NewState.FishStaminaText = FText::FromString(FString::Printf(
 		TEXT("鱼体力 %.0f%%"), NewState.NormalizedFishStamina * 100.0f));
 	if (NewState.HookCountdownText.IsEmpty())
@@ -287,9 +318,11 @@ void UCatHUDModel::Refresh()
 		: FText::FromString(TEXT("钓鱼反馈：当前没有进行中的钓鱼会话"));
 	if (NewState.bHasFishingCommandResult)
 	{
-		NewState.FishingFeedbackText = FText::FromString(FString::Printf(TEXT("钓鱼反馈：最近命令 %s，版本 %lld"),
-			*UEnum::GetValueAsString(NewState.LastFishingCommandResult.Error),
-			NewState.LastFishingCommandResult.Revision));
+		NewState.FishingFeedbackText = NewState.LastFishingCommandResult.Error == ECatFishingCommandError::RodDeploymentLimitReached
+			? FText::FromString(TEXT("场上鱼竿已达上限，请先收起一根。"))
+			: FText::FromString(FString::Printf(TEXT("钓鱼反馈：最近命令 %s，版本 %lld"),
+				*UEnum::GetValueAsString(NewState.LastFishingCommandResult.Error),
+				NewState.LastFishingCommandResult.Revision));
 	}
 	ViewState = MoveTemp(NewState);
 	OnViewStateChanged.Broadcast();
@@ -301,7 +334,7 @@ const FCatHUDViewState& UCatHUDModel::GetViewState() const
 	return ViewState;
 }
 
-// 销毁清理流程：先复用 Unbind 路径清理委托、FishingBridge 和等待 Timer，再交给 UObject 释放自身引用；这不发布新的 HUD 投影。
+// 销毁兜底流程：先复用 Unbind 路径清理委托、FishingBridge 和等待 Timer，再交给 UObject 释放自身引用；这不发布新的 HUD 投影。
 void UCatHUDModel::BeginDestroy()
 {
 	Unbind();
@@ -365,7 +398,7 @@ bool UCatHUDModel::RefreshRunGameStateBinding()
 	return true;
 }
 
-// Run GameState 解绑流程：先停止等待 Timer，再从仍有效的 GameState 移除委托，最后清空弱引用和句柄；失效 World 已销毁时弱引用为空也保持幂等。
+// Run GameState 解绑流程：先停止等待 Timer，再从仍有效的 GameState 移除委托，最后清空弱引用和句柄；旧 World 已销毁时弱引用为空也保持幂等。
 void UCatHUDModel::ClearRunGameStateBinding()
 {
 	ClearRunGameStateBindingRetry();
@@ -399,7 +432,7 @@ void UCatHUDModel::ScheduleRunGameStateBindingRetry()
 		CatHUDRunGameStateBindingRetrySeconds, true);
 }
 
-// Run GameState Timer 释放流程：优先回到创建 Timer 的 World 释放，缺失时才改用当前 Controller World；无论释放是否命中都让句柄和所属 World 失效。
+// Run GameState 等待清理流程：优先回到创建 Timer 的 World 清理，缺失时才用当前 Controller World 兜底；无论清理是否命中都让句柄和所属 World 失效。
 void UCatHUDModel::ClearRunGameStateBindingRetry()
 {
 	UWorld* TimerWorld = RunGameStateBindingRetryWorld.Get();
@@ -457,8 +490,11 @@ void UCatHUDModel::RefreshFishingSessionBinding()
 		Controller, PlayerState);
 	if (FishingViewBridge->GetBoundSession() == Session)
 	{
+		// 普通抓握也刷新手部复制；不依赖钓鱼会话或命令回执。
+		Refresh();
 		return;
 	}
+	const FGuid PreviousSessionId = FishingViewBridge->GetViewState().FishingSessionId;
 	if (Session)
 	{
 		FishingViewBridge->BindSession(Session);
@@ -466,5 +502,36 @@ void UCatHUDModel::RefreshFishingSessionBinding()
 	else
 	{
 		FishingViewBridge->UnbindSession();
+		Refresh();
 	}
+	UE_LOG(LogCatUI, Log,
+		TEXT("Event=ui_hud_fishing_session_binding World=%s NetMode=%d Authority=%d LocalRole=%d PlayerId=%d PreviousSessionId=%s SessionId=%s Result=%s"),
+		*GetNameSafe(Controller ? Controller->GetWorld() : nullptr),
+		Controller && Controller->GetWorld() ? static_cast<int32>(Controller->GetWorld()->GetNetMode()) : INDEX_NONE,
+		Controller && Controller->HasAuthority(), Controller ? static_cast<int32>(Controller->GetLocalRole()) : INDEX_NONE,
+		PlayerState ? PlayerState->GetPlayerId() : INDEX_NONE, *PreviousSessionId.ToString(),
+		*FishingViewBridge->GetViewState().FishingSessionId.ToString(), Session ? TEXT("Bound") : TEXT("Unbound"));
+}
+
+void UCatHUDModel::ScheduleFishingSessionBindingReconcile()
+{
+	APlayerController* Controller = BoundPlayerController.Get();
+	UWorld* World = Controller ? Controller->GetWorld() : nullptr;
+	if (!World || (FishingSessionBindingReconcileWorld.Get() == World
+		&& World->GetTimerManager().IsTimerActive(FishingSessionBindingReconcileTimerHandle))) return;
+	ClearFishingSessionBindingReconcile();
+	FishingSessionBindingReconcileWorld = World;
+	World->GetTimerManager().SetTimer(FishingSessionBindingReconcileTimerHandle,
+		FTimerDelegate::CreateUObject(this, &ThisClass::RefreshFishingSessionBinding),
+		CatHUDFishingSessionBindingReconcileSeconds, true);
+}
+
+void UCatHUDModel::ClearFishingSessionBindingReconcile()
+{
+	if (UWorld* World = FishingSessionBindingReconcileWorld.Get())
+	{
+		World->GetTimerManager().ClearTimer(FishingSessionBindingReconcileTimerHandle);
+	}
+	FishingSessionBindingReconcileTimerHandle.Invalidate();
+	FishingSessionBindingReconcileWorld.Reset();
 }

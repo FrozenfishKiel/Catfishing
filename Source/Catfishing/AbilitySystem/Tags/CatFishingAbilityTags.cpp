@@ -44,4 +44,5 @@ namespace CatFishingAbilityTags
 	UE_DEFINE_GAMEPLAY_TAG(Data_Run_Offering_StinkyFishCount, "Cat.Data.Run.Offering.StinkyFishCount");
 	UE_DEFINE_GAMEPLAY_TAG(Data_Run_Offering_BaseProgressGain, "Cat.Data.Run.Offering.BaseProgressGain");
 	UE_DEFINE_GAMEPLAY_TAG(Data_Run_Offering_BaseProgressLoss, "Cat.Data.Run.Offering.BaseProgressLoss");
+	UE_DEFINE_GAMEPLAY_TAG(Cosmetic_Fishing_LineBroken, "Cat.Cosmetic.Fishing.LineBroken");
 }

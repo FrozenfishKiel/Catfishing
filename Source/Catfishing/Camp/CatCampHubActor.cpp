@@ -207,7 +207,7 @@ FCatDomainCommandResult ACatCampHubActor::RescueToCamp(AController* HelpingContr
 		Result.Error = ECatDomainCommandError::InvalidPhase;
 		return Result;
 	}
-	if (!TargetCharacter->TeleportTo(RescuePoint->GetComponentLocation(), RescuePoint->GetComponentRotation(), false, true))
+	if (!TargetCharacter->TeleportTo(RescuePoint->GetComponentLocation(), RescuePoint->GetComponentRotation(), false, false))
 	{
 		Result.Error = ECatDomainCommandError::DependencyUnavailable;
 		return Result;

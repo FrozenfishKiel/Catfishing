@@ -36,6 +36,8 @@ ACatFishEncounterActor::ACatFishEncounterActor()
 	FishMesh->SetGenerateOverlapEvents(false);
 	FishBehaviorStateTree = CreateDefaultSubobject<UStateTreeComponent>(TEXT("FishBehaviorStateTree"));
 	FishBehaviorStateTree->SetStartLogicAutomatically(false);
+	FishBehaviorStateTree->PrimaryComponentTick.bCanEverTick = false;
+	FishBehaviorStateTree->PrimaryComponentTick.bStartWithTickEnabled = false;
 }
 
 void ACatFishEncounterActor::GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const
@@ -63,7 +65,7 @@ bool ACatFishEncounterActor::InitializeAuthoritativeIdentity(const FGuid InFishi
 			&& PresentationState.CastAttemptId == InCastAttemptId
 			&& PresentationState.FishDefinitionId == InFishDefinitionId;
 	}
-	// 保存变更前状态用于表现变化通知（Previous -> Current 对比）。
+	// 保存旧状态用于表现变化通知（Previous -> Current 对比）。
 	const FCatFishEncounterPresentationState Previous = PresentationState;
 	PresentationState.FishingSessionId = InFishingSessionId;
 	PresentationState.CastAttemptId = InCastAttemptId;
@@ -94,8 +96,10 @@ bool ACatFishEncounterActor::StartFishBehaviorFromAuthority(UStateTree* Behavior
 	bBehaviorStartupInProgress = true;
 	FishBehaviorStateTree->StartLogic();
 	bBehaviorStartupInProgress = false;
-	if (!FishBehaviorStateTree->IsRunning())
+	if (!FishBehaviorStateTree->IsRunning()
+		|| FishBehaviorStateTree->GetStateTreeRunStatus() != EStateTreeRunStatus::Running)
 	{
+		FishBehaviorStateTree->StopLogic(TEXT("Fish behavior startup failed"));
 		AuthorityFightRunner.Reset();
 		return false;
 	}
@@ -116,14 +120,26 @@ void ACatFishEncounterActor::StopFishBehaviorFromAuthority()
 	AuthorityFightRunner.Reset();
 }
 
-bool ACatFishEncounterActor::BeginBehaviorStateFromStateTree(const ECatFishMotionIntent MotionIntent,
-	double& OutDurationSeconds)
+bool ACatFishEncounterActor::TickFishBehaviorFromAuthority(const float FixedStepSeconds)
 {
-	OutDurationSeconds = 0.0;
+	if (!HasAuthority() || !FishBehaviorStateTree || !FishBehaviorStateTree->IsRunning()
+		|| !FMath::IsFinite(FixedStepSeconds) || FixedStepSeconds <= 0.0f) return false;
+	FishBehaviorStateTree->TickComponent(FixedStepSeconds, LEVELTICK_All, nullptr);
+	return FishBehaviorStateTree->GetStateTreeRunStatus() == EStateTreeRunStatus::Running;
+}
+
+bool ACatFishEncounterActor::BeginFishBehaviorFromStateTree(const ECatFishBehavior Behavior)
+{
 	return HasAuthority() && FishBehaviorStateTree
 		&& (FishBehaviorStateTree->IsRunning() || bBehaviorStartupInProgress)
 		&& AuthorityFightRunner.IsValid()
-		&& AuthorityFightRunner->BeginBehaviorStateFromStateTree(MotionIntent, OutDurationSeconds);
+		&& AuthorityFightRunner->BeginFishBehaviorFromStateTree(Behavior);
+}
+
+bool ACatFishEncounterActor::TestFishBehaviorConditionFromStateTree(const ECatFishBehaviorCondition Condition) const
+{
+	return HasAuthority() && AuthorityFightRunner.IsValid()
+		&& AuthorityFightRunner->TestFishBehaviorConditionFromStateTree(Condition);
 }
 
 // 直接返回 VisualRoot 的世界变换位置：三个偏移和朝向都已经烘在组件变换里，调试绘制不需要自己重算一遍。
@@ -237,7 +253,8 @@ bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionInt
 	const double CurrentLineLength, const FVector& FishWorldPosition, const float StepDeltaSeconds,
 	const float FishLineAlignment, const float NormalizedLineLoad,
 	const float IntendedSwimSpeedCentimetersPerSecond, const bool bStrongConfrontation,
-	const bool bGrounded, const FVector GroundNormal)
+	const bool bGrounded, const FVector GroundNormal, const FVector SwimHeading,
+	const ECatFishBehavior Behavior, const float FishEffortRatio)
 {
 	// [FishLogic 4/5：权威落位与多人表现]
 	// Simulator 给出事实，本 Actor 只负责在服务器应用 Transform/表现快照；位置和 PresentationState 再复制给客户端。
@@ -246,13 +263,18 @@ bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionInt
 		|| !FMath::IsFinite(FishLineAlignment) || FishLineAlignment < -1.0f || FishLineAlignment > 1.0f
 		|| !FMath::IsFinite(NormalizedLineLoad) || NormalizedLineLoad < 0.0f || NormalizedLineLoad > 1.0f
 		|| !FMath::IsFinite(IntendedSwimSpeedCentimetersPerSecond)
-		|| IntendedSwimSpeedCentimetersPerSecond < 0.0f || GroundNormal.ContainsNaN())
+		|| IntendedSwimSpeedCentimetersPerSecond < 0.0f || GroundNormal.ContainsNaN()
+		|| SwimHeading.ContainsNaN() || !FMath::IsFinite(FishEffortRatio)
+		|| FishEffortRatio < 0.0f || FishEffortRatio > 1.0f)
 	{
 		// 必须已经完成身份初始化才允许推进搏斗表现；位置/线长必须是合法有限值，防止把 NaN/负数同步给客户端。
 		return false;
 	}
 	const FCatFishEncounterPresentationState Previous = PresentationState;
 	PresentationState.MotionIntent = MotionIntent; // 更新鱼当前的运动意图（平静/向外挣扎/自动收线中）供表现层驱动动画。
+	PresentationState.Behavior = Behavior;
+	PresentationState.FishEffortRatio = FishEffortRatio;
+	PresentationState.SwimHeading = SwimHeading.GetSafeNormal2D();
 	// 复制行为层选中的自由游速，而不是根据最终 Actor 位移反推；鱼被线端或岸线挡住时仍应猛烈甩尾。
 	PresentationState.IntendedSwimSpeedCentimetersPerSecond = IntendedSwimSpeedCentimetersPerSecond;
 	PresentationState.CurrentLineLength = CurrentLineLength; // 更新鱼与浮标/竿之间的当前线长，供表现层估算张力/位置。
@@ -262,14 +284,17 @@ bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionInt
 	PresentationState.bGrounded = bGrounded;
 	PresentationState.GroundNormal = bGrounded ? GroundNormal.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::UpVector) : FVector::UpVector;
 
-	// 朝向跟随实际游动方向：取本步位移的水平分量求偏航角。
+	// 活鱼身体追向主动游向；被收线侧拖的位移不再强迫鱼掉头。初次落位及收尾仍可使用位移方向。
 	// 只写 Actor 旋转（随 SetReplicateMovement 一起复制），玩法判定（线长/近岸/抄网半圆）全部只用位置，旋转不参与任何裁决。
 	// 只转偏航不转俯仰：鱼贴着水面走，Z 的微小抖动会让 Pitch 疯狂跳动。
 	const FVector MoveDelta = FishWorldPosition - GetActorLocation();
 	constexpr double MinimumMoveCentimeters = 1.0; // 位移过小（僵持不动）时保持上一帧朝向，避免噪声导致乱转。
-	if (FVector2D(MoveDelta.X, MoveDelta.Y).SizeSquared() >= MinimumMoveCentimeters * MinimumMoveCentimeters)
+	const bool bActiveHeading = MotionIntent != ECatFishMotionIntent::AutoHauling
+		&& !PresentationState.SwimHeading.IsNearlyZero();
+	const FVector FacingDirection = bActiveHeading ? PresentationState.SwimHeading : MoveDelta;
+	if (bActiveHeading || FVector2D(MoveDelta.X, MoveDelta.Y).SizeSquared() >= MinimumMoveCentimeters * MinimumMoveCentimeters)
 	{
-		const double TargetYaw = FMath::RadiansToDegrees(FMath::Atan2(MoveDelta.Y, MoveDelta.X));
+		const double TargetYaw = FMath::RadiansToDegrees(FMath::Atan2(FacingDirection.Y, FacingDirection.X));
 		FRotator NewRotation = GetActorRotation();
 		if (!bFacingInitialized || StepDeltaSeconds <= 0.0f || MaximumTurnRateDegreesPerSecond <= 0.0f)
 		{
@@ -290,6 +315,20 @@ bool ACatFishEncounterActor::ApplyFightStepFromAuthority(const ECatFishMotionInt
 	// 用 TeleportPhysics 直接落位而非物理模拟移动：鱼的位置由服务器权威搏斗模拟计算，这里只是把结果“摆”过去。
 	SetActorLocation(FishWorldPosition, false, nullptr, ETeleportType::TeleportPhysics);
 	ApplyVisualPose();
+	if (Previous.Behavior != PresentationState.Behavior || Previous.MotionIntent != PresentationState.MotionIntent)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_behavior_applied SessionId=%s CastAttemptId=%s FishActor=%s FishDefinitionId=%s "
+				"Behavior=%s MotionIntent=%s ActualEffort=%.3f SwimHeading=%s IntendedSwimSpeedCmPerSec=%.3f "
+				"Result=Applied World=%s NetMode=%d Authority=%s LocalRole=%d"),
+			*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*PresentationState.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), *GetName(),
+			*PresentationState.FishDefinitionId.ToString(), *UEnum::GetValueAsString(PresentationState.Behavior),
+			*UEnum::GetValueAsString(PresentationState.MotionIntent), PresentationState.FishEffortRatio,
+			*PresentationState.SwimHeading.ToCompactString(), PresentationState.IntendedSwimSpeedCentimetersPerSecond,
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
+			static_cast<int32>(GetLocalRole()));
+	}
 	if (Previous.bGrounded != PresentationState.bGrounded)
 	{
 		UE_LOG(LogCatFishing, Log, TEXT("Event=fish_ground_presentation SessionId=%s Actor=%s Grounded=%d Contact=%s Normal=%s VisualOffset=%s VisualScale=%.3f World=%s NetMode=%d Authority=%d Role=%s"),
@@ -316,7 +355,7 @@ void ACatFishEncounterActor::PublishInitialPresentationFromAuthority()
 	bPresentationDeferred = false; // 解除延迟标记，允许后续状态变化立即分发。
 	if (bHasPendingPresentationNotification && HasActorBegunPlay())
 	{
-		// 把已排队的“首次表现状态”一次性补发出去。
+		// 把此前排队的“首次表现状态”一次性补发出去。
 		bHasPendingPresentationNotification = false;
 		DispatchPresentationChanged(PendingPreviousPresentationState, PendingCurrentPresentationState);
 	}
@@ -340,10 +379,24 @@ void ACatFishEncounterActor::BeginPlay()
 
 void ACatFishEncounterActor::OnRep_PresentationState(const FCatFishEncounterPresentationState& Previous)
 {
-	// 客户端复制回调：引擎已经把 PresentationState 覆写为最新值，这里只需要用回调参数里的变更前值对比分发。
+	// 客户端复制回调：引擎已经把 PresentationState 覆写为最新值，这里只需要用回调参数里的旧值对比分发。
 	RefreshFishPresentation();
 	ApplyVisualScale();
 	ApplyVisualPose();
+	if (Previous.Behavior != PresentationState.Behavior || Previous.MotionIntent != PresentationState.MotionIntent)
+	{
+		UE_LOG(LogCatFishing, Log,
+			TEXT("Event=fishing_behavior_received SessionId=%s CastAttemptId=%s FishActor=%s FishDefinitionId=%s "
+				"Behavior=%s MotionIntent=%s ActualEffort=%.3f SwimHeading=%s IntendedSwimSpeedCmPerSec=%.3f "
+				"Result=Applied World=%s NetMode=%d Authority=%s LocalRole=%d"),
+			*PresentationState.FishingSessionId.ToString(EGuidFormats::DigitsWithHyphens),
+			*PresentationState.CastAttemptId.ToString(EGuidFormats::DigitsWithHyphens), *GetName(),
+			*PresentationState.FishDefinitionId.ToString(), *UEnum::GetValueAsString(PresentationState.Behavior),
+			*UEnum::GetValueAsString(PresentationState.MotionIntent), PresentationState.FishEffortRatio,
+			*PresentationState.SwimHeading.ToCompactString(), PresentationState.IntendedSwimSpeedCentimetersPerSecond,
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
+			static_cast<int32>(GetLocalRole()));
+	}
 	if (Previous.bGrounded != PresentationState.bGrounded)
 	{
 		UE_LOG(LogCatFishing, Log, TEXT("Event=fish_ground_presentation_received SessionId=%s Actor=%s Grounded=%d Contact=%s Normal=%s VisualOffset=%s VisualScale=%.3f World=%s NetMode=%d Role=%s"),

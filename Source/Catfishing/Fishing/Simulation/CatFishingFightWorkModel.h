@@ -2,20 +2,24 @@
 
 #include "CoreMinimal.h"
 
-/** 鱼的对抗努力输入；猫改用实际做功与时间支撑，不能再走受阻距离计费。 */
-struct CATFISHING_API FCatFightWorkInput
+/** 同一固定步的主动意图与实际物理位移；距离为 cm，费率为每米未完成意图的体力点数。 */
+struct CATFISHING_API FCatFightFishIntentInput
 {
-	double Strength = 0.0;
-	double IntendedLineDistanceCentimeters = 0.0;
-	double ActualLineDistanceCentimeters = 0.0;
-	double IsometricEffortMultiplier = 1.0;
-	double CostPerStrengthCentimeter = 0.0;
-	double PhaseMultiplier = 1.0;
-	/** 正式鱼计费固定为 0，自由游动不扣体。 */
-	double BaseEffortMultiplier = 1.0;
-	/** 自身主动努力承受的相对负载；被动位移不生成努力。 */
-	double NormalizedLoad = 0.0;
-	double LoadStaminaMultiplier = 0.0;
+	/** 当前出力对应的期望速度乘步长，不使用单步自由加速预测位置差。 */
+	FVector IntendedDisplacementCentimeters = FVector::ZeroVector;
+	/** 最终实际位移减去历史位置纠偏；保留真实受阻和反向拖行。 */
+	FVector ActualDisplacementCentimeters = FVector::ZeroVector;
+	double StaminaPerUnfulfilledMeter = 0.0;
+};
+
+/** 沿主动意图衡量进度；反向进度为负，未完成距离可以大于意图长度。 */
+struct CATFISHING_API FCatFightFishIntentResult
+{
+	double IntendedDistanceCentimeters = 0.0;
+	double ActualProgressCentimeters = 0.0;
+	/** 不超过 UE_DOUBLE_SMALL_NUMBER cm 的正缺失按舍入误差归零；不对费用金额设最小门槛。 */
+	double UnfulfilledDistanceCentimeters = 0.0;
+	double StaminaDrain = 0.0;
 };
 
 /** 猫端实际做功单位为标准力量·cm 或标准转矩·rad，必须传入对应单价。 */
@@ -29,11 +33,11 @@ struct CATFISHING_API FCatFightCatWorkInput
 	double ActionMultiplier = 1.0;
 };
 
-/** 猫结算实际做功，时间支撑由模拟器统一去重；鱼保留独立对抗努力计价。 */
+/** 猫结算实际做功，时间支撑由模拟器统一去重；鱼按未完成意图距离独立计价。 */
 class CATFISHING_API FCatFishingFightWorkModel
 {
 public:
 	static bool ComputeCatWorkDrain(const FCatFightCatWorkInput& Input, double& OutDrain);
-	static bool ComputeDrain(const FCatFightWorkInput& Input, double& OutDrain,
-		double& OutEffectiveEffortDistanceCentimeters);
+	/** 零意图返回零结果；输入或计算结果非法时返回 false 并清空结果。 */
+	static bool ComputeFishIntentDrain(const FCatFightFishIntentInput& Input, FCatFightFishIntentResult& OutResult);
 };

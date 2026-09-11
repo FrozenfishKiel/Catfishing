@@ -1,6 +1,9 @@
 #include "Framework/Game/CatfishingPlayerController.h"
 #include "Framework/Game/CatfishingGameState.h"
 #include "Components/InputComponent.h"
+#include "Logging/CatLogContext.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/Presentation/CatFishingCameraComponent.h"
 
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Framework/Game/CatfishingPlayerState.h"
@@ -8,6 +11,7 @@
 #include "FishContainers/CatFishGuardActor.h"
 #include "ShopEconomy/CatFishBuyerActor.h"
 #include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "AbilitySystem/Config/CatAbilityInputConfig.h"
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/BodyAction/Camp/CatCampBodyActionCommandComponent.h"
@@ -44,7 +48,6 @@
 #include "ShopEconomy/Trading/CatShopTradeController.h"
 #include "Social/CatSocialService.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
-#include "Fishing/Presentation/CatFishingCameraComponent.h"
 
 // 构造流程：创建 Controller 负责的输入与命令路由组件；不读取 Pawn、World 或玩家身份，避免类默认对象阶段产生运行时依赖。
 ACatfishingPlayerController::ACatfishingPlayerController()
@@ -117,7 +120,7 @@ void ACatfishingPlayerController::ReconcileDayTransition()
 // 锁配对流程：
 // 1. 服务器先归还已换走或已结束的移动组件；只有组件仍处于本功能写入的 None 模式才恢复原模式和自定义编号。
 // 2. 新组件保存原模式后停止并禁用移动；客户端只用输入锁，绝不写 CharacterMovement 模式。
-// 3. 首次加锁申请一层移动/视角忽略计数，清跳跃和疾跑，并为本地输入压入专属阻断组件。
+// 3. 首次加锁先申请一层移动/视角忽略计数，再取消钓鱼、Ability、抓握与物理身体的持续输入，并压入本地阻断组件。
 // 4. 解锁只归还本层计数和本组件；状态未变时不重复申请，日志只记录边沿。
 void ACatfishingPlayerController::SetDayTransitionLocked(const bool bLocked)
 {
@@ -147,6 +150,8 @@ void ACatfishingPlayerController::SetDayTransitionLocked(const bool bLocked)
 	SetIgnoreLookInput(bLocked);
 	if (bLocked)
 	{
+		// 翻天锁只阻止后续 Enhanced Input 回调不足以取消先前的物理按住意图；统一入口同时撤销本地和服务器的对应输入路由。
+		ClearPhysicalControlInput(TEXT("DayTransitionLocked"));
 		if (ControlledCharacter)
 		{
 			ControlledCharacter->StopJumping();
@@ -237,10 +242,14 @@ void ACatfishingPlayerController::OnRep_Pawn()
 	ApplySprintSpeed(GetPawn(), false);
 }
 
-// Pawn 写入流程：换身体前归还旧身体的翻天锁；父类写入后刷新 Ability 路由和本地 UI，再按当前服务器快照锁定新身体。
+// Pawn 写入流程：换身体前先撤销旧身体的物理持续输入并归还翻天锁；父类写入后刷新 Ability 路由和本地 UI，再按当前服务器快照锁定新身体。
 void ACatfishingPlayerController::SetPawn(APawn* InPawn)
 {
-	if (GetPawn() != InPawn) SetDayTransitionLocked(false);
+	if (GetPawn() != InPawn)
+	{
+		ClearPhysicalControlInput(TEXT("PawnChanged"));
+		SetDayTransitionLocked(false);
+	}
 	Super::SetPawn(InPawn);
 	if (AbilityInputBindingComponent)
 	{
@@ -258,6 +267,31 @@ void ACatfishingPlayerController::BeginPlay()
 	ApplyInputMappingContext();
 	PublishProfileEquipmentUnlocksIfAvailable();
 	ReconcileDayTransition();
+}
+
+// 上鱼后的身体、移动与可见镜头跟随实际杆姿态；右键重设之后，转杆只消费新鼠标增量。
+void ACatfishingPlayerController::UpdateRotation(const float DeltaTime)
+{
+	const FRotator LookDeltaDegrees = RotationInput;
+	Super::UpdateRotation(DeltaTime);
+	if (FishingCommandComponent)
+	{
+		// PostProcessInput 中的右键边沿先采基准，本帧尚未处理的鼠标量在这里且只累计一次。
+		FishingCommandComponent->UpdateLocalRodAimInput(DeltaTime, LookDeltaDegrees);
+	}
+	RefreshPhysicalViewIntent();
+}
+
+void ACatfishingPlayerController::RefreshPhysicalViewIntent()
+{
+	if (const ACatCharacter* Cat = Cast<ACatCharacter>(GetPawn()))
+	{
+		if (UCatPhysicalBodyComponent* Body = Cat->GetPhysicalBodyComponent())
+		{
+			// 仍以实际杆姿态作为持竿镜头和移动基准；身体旋转只由物理电机写入。
+			Body->SetViewIntent(UCatFishingCameraComponent::ResolveFacingRotation(this));
+		}
+	}
 }
 
 // 输入绑定流程：只接受项目配置的 EnhancedInputComponent；物理移动、视角、跳跃和疾跑绑定随当前 InputComponent 生命周期销毁，不由 Controller 手动解绑。
@@ -279,6 +313,8 @@ void ACatfishingPlayerController::SetupInputComponent()
 	if (MoveAction)
 	{
 		EnhancedInput->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ThisClass::Move);
+		EnhancedInput->BindAction(MoveAction, ETriggerEvent::Completed, this, &ThisClass::StopMove);
+		EnhancedInput->BindAction(MoveAction, ETriggerEvent::Canceled, this, &ThisClass::StopMove);
 	}
 	if (LookAction)
 	{
@@ -350,10 +386,10 @@ void ACatfishingPlayerController::PostProcessInput(const float DeltaTime, const 
 	}
 }
 
-// Pawn 断开流程：先恢复持竿期间接管过的转向配置，再清 ASC 输入、钓鱼本地状态和疾跑意图；最后恢复普通速度并交还父类断开占有。
+// Pawn 断开流程：先经统一入口撤销物理持续输入，再重置 ASC 路由和钓鱼临时状态、恢复普通疾跑速度并清本地疾跑意图；最后交还父类断开占有。
 void ACatfishingPlayerController::OnUnPossess()
 {
-	RestoreHeldRodFacingMode();
+	ClearPhysicalControlInput(TEXT("UnPossessed"));
 	if (AbilityInputBindingComponent)
 	{
 		AbilityInputBindingComponent->ResetAbilityInput();
@@ -367,13 +403,13 @@ void ACatfishingPlayerController::OnUnPossess()
 	Super::OnUnPossess();
 }
 
-// 输入清理流程：先解绑翻天并归还专属锁，再恢复持竿转向和输入/钓鱼状态，撤销自己的 Mapping Context，最后交还父类销毁。
+// 输入清理流程：先解绑翻天并归还专属锁，再撤销物理持续输入、Ability 路由和钓鱼临时状态，撤销自己的 Mapping Context，最后交还父类销毁。
 void ACatfishingPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
 	// 父类结束流程可能再次写 Pawn；禁止该回调重新订阅即将销毁的 World。
 	DayTransitionTravelWorld = GetWorld();
 	ClearDayTransition();
-	RestoreHeldRodFacingMode();
+	ClearPhysicalControlInput(TEXT("ControllerEndPlay"));
 	if (AbilityInputBindingComponent)
 	{
 		AbilityInputBindingComponent->ResetAbilityInput();
@@ -438,29 +474,14 @@ void ACatfishingPlayerController::RemoveInputMappingContext()
 	AppliedMappingContext = nullptr;
 }
 
-// 持竿旋转同步流程：
-// 1. 先让 PlayerController 消化本帧视角输入，保留普通相机、网络和输入收尾行为。
-// 2. 再从 Fishing/Rod 的现有查询入口判断当前 Pawn 是否正在操作世界鱼竿；没有持竿就恢复进入前的移动配置。
-// 3. 持竿时不新增玩法状态，只接管 Character/Movement 的转向开关，并把身体 yaw 写到可见钓鱼方向。
-void ACatfishingPlayerController::UpdateRotation(const float DeltaTime)
-{
-	Super::UpdateRotation(DeltaTime);
-
-	ACatCharacter* ControlledCat = Cast<ACatCharacter>(GetPawn());
-	UCharacterMovementComponent* Movement = ControlledCat ? ControlledCat->GetCharacterMovement() : nullptr;
-	if (!ControlledCat || !Movement || !UCatFishingCameraComponent::FindHeldRodOperatedBy(this))
-	{
-		RestoreHeldRodFacingMode();
-		return;
-	}
-
-	ApplyHeldRodFacingMode(*ControlledCat, *Movement, UCatFishingCameraComponent::ResolveFacingRotation(this));
-}
-
-// 移动输入流程：先拒绝翻天操作；其余以可见水平朝向转换前后左右输入，Pawn 缺失时不制造旁路状态。
+// 移动输入流程：翻天锁或引擎移动忽略时先清物理移动意图；其余以可见水平朝向转换前后左右输入，Pawn 缺失时不制造旁路状态。
 void ACatfishingPlayerController::Move(const FInputActionValue& Value)
 {
-	if (IsDayTransitionInputBlocked()) return;
+	if (IsDayTransitionInputBlocked() || IsMoveInputIgnored())
+	{
+		StopMove();
+		return;
+	}
 	APawn* ControlledPawn = GetPawn();
 	if (!ControlledPawn)
 	{
@@ -472,29 +493,78 @@ void ACatfishingPlayerController::Move(const FInputActionValue& Value)
 	const FRotator YawRotation(0.0, FacingRotation.Yaw, 0.0);
 	const FVector ForwardDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
 	const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
+	if (const ACatCharacter* Cat = Cast<ACatCharacter>(ControlledPawn))
+	{
+		if (UCatPhysicalBodyComponent* Body = Cat->GetPhysicalBodyComponent())
+		{
+			Body->SetMoveIntent((ForwardDirection * Movement.Y + RightDirection * Movement.X).GetClampedToMaxSize(1.0));
+			return;
+		}
+	}
 	ControlledPawn->AddMovementInput(ForwardDirection, Movement.Y);
 	ControlledPawn->AddMovementInput(RightDirection, Movement.X);
 }
 
-// 视角输入流程：先拒绝翻天操作，再将经过 Mapping Context 反转、缩放和死区处理的二维意图写入视角。
+// 移动停止流程：Completed、Canceled 或输入锁都把本地物理身体的自愿移动意图清零；已有速度、外力和抓握牵引保持由各自系统结算。
+void ACatfishingPlayerController::StopMove()
+{
+	if (const ACatCharacter* Cat = Cast<ACatCharacter>(GetPawn()))
+	{
+		if (UCatPhysicalBodyComponent* Body = Cat->GetPhysicalBodyComponent()) Body->SetMoveIntent(FVector::ZeroVector);
+	}
+}
+
+// 物理输入清理流程：先清钓鱼保持态与 Ability 路由，再清身体移动/抓握意图，最后关闭疾跑；各子系统仍保留自己的权限与复制收口。
+void ACatfishingPlayerController::ClearPhysicalControlInput(const FName Reason)
+{
+	if (FishingCommandComponent && GetPawn()) FishingCommandComponent->ClearHeldInputForLifecycle(Reason);
+	if (AbilityInputBindingComponent) AbilityInputBindingComponent->ReleaseAllInputRoutes(Reason);
+	if (const ACatCharacter* Cat = Cast<ACatCharacter>(GetPawn()))
+	{
+		if (UCatPhysicalBodyComponent* Body = Cat->GetPhysicalBodyComponent()) Body->ClearControlIntent(Reason);
+	}
+	SetSprintRequested(false, true);
+}
+
+// 按键刷新流程：视口失焦或输入层切换时先撤销持续物理输入，再让父类丢弃引擎记录的按键状态，避免恢复焦点后重放旧意图。
+void ACatfishingPlayerController::FlushPressedKeys()
+{
+	ClearPhysicalControlInput(TEXT("KeysFlushed"));
+	Super::FlushPressedKeys();
+}
+
+// 视角输入流程：翻天锁或引擎视角忽略时不累积 RotationInput；其他时候把 Mapping Context 已处理过的二维意图写入视角。
 void ACatfishingPlayerController::Look(const FInputActionValue& Value)
 {
-	if (IsDayTransitionInputBlocked()) return;
+	if (IsDayTransitionInputBlocked() || IsLookInputIgnored()) return;
 	const FVector2D LookAxis = Value.Get<FVector2D>();
 	AddYawInput(LookAxis.X);
 	AddPitchInput(LookAxis.Y);
 }
 
-// 跳跃按下流程：先拒绝翻天操作；只对当前 Character 生效，持竿时清保持态并拒绝起跳，普通 Pawn 不伪造实现。
+// 跳跃按下流程：翻天锁或引擎移动忽略时先停止已有跳跃保持态；其他时候只对当前 Character 生效，持竿时清保持态并拒绝起跳，普通 Pawn 不伪造实现。
 void ACatfishingPlayerController::StartJump()
 {
-	if (IsDayTransitionInputBlocked()) return;
+	if (IsDayTransitionInputBlocked() || IsMoveInputIgnored())
+	{
+		StopJump();
+		return;
+	}
 	if (ACharacter* ControlledCharacter = Cast<ACharacter>(GetPawn()))
 	{
-		if (UCatFishingCameraComponent::FindHeldRodOperatedBy(this))
+		if (const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindHeldRodOperatedBy(this);
+			Rod && Rod->IsPrimaryOperator(PlayerState))
 		{
 			ControlledCharacter->StopJumping();
 			return;
+		}
+		if (const ACatCharacter* Cat = Cast<ACatCharacter>(ControlledCharacter))
+		{
+			if (UCatPhysicalBodyComponent* Body = Cat->GetPhysicalBodyComponent())
+			{
+				Body->RequestJump();
+				return;
+			}
 		}
 		ControlledCharacter->Jump();
 	}
@@ -535,9 +605,18 @@ void ACatfishingPlayerController::SetSprintRequested(const bool bNewSprintReques
 	}
 }
 
-// 移动速度应用流程：只修改当前 CharacterMovement 的 MaxWalkSpeed；实际速度仍由移动组件加速度、制动和网络移动决定。
+// 移动速度应用流程：物理电机使用服务器配置的 cm/s；CMC 保留同值供正式动画/通用只读消费者。
 void ACatfishingPlayerController::ApplySprintSpeed(APawn* TargetPawn, const bool bSprinting) const
 {
+	const ACharacter* DefaultCharacter = TargetPawn ? Cast<ACharacter>(TargetPawn->GetClass()->GetDefaultObject()) : nullptr;
+	const UCharacterMovementComponent* DefaultMovement = DefaultCharacter ? DefaultCharacter->GetCharacterMovement() : nullptr;
+	// 普通速度只读当前猫类 CDO 的正式 CMC 配置，不能用已被疾跑临时覆盖的实例值当基准。
+	const float WalkSpeed = DefaultMovement ? DefaultMovement->MaxWalkSpeed : 100.0f;
+	const float Speed = FMath::Max(0.0f, bSprinting ? SprintMaxSpeed : WalkSpeed);
+	if (const ACatCharacter* Cat = Cast<ACatCharacter>(TargetPawn))
+	{
+		if (UCatPhysicalBodyComponent* Body = Cat->GetPhysicalBodyComponent()) Body->SetMovementSpeed(Speed);
+	}
 	ACharacter* ControlledCharacter = Cast<ACharacter>(TargetPawn);
 	UCharacterMovementComponent* MovementComponent = ControlledCharacter
 		? ControlledCharacter->GetCharacterMovement() : nullptr;
@@ -546,73 +625,7 @@ void ACatfishingPlayerController::ApplySprintSpeed(APawn* TargetPawn, const bool
 		return;
 	}
 
-	MovementComponent->MaxWalkSpeed = FMath::Max(0.0f, bSprinting ? SprintMaxSpeed : WalkMaxSpeed);
-}
-
-// 持竿面对模式应用流程：
-// 1. 首次接管或持竿 Pawn 切换时，先恢复上一对象，再保存新 Character/Movement 的普通转向配置。
-// 2. 持竿期间每帧清掉跳跃保持态，避免进入持竿前的按键让角色在搏斗或操作杆时起跳。
-// 3. 最后让身体只跟随当前钓鱼方向 yaw；控制器仍保留鼠标施力意图，第一人称镜头可继续读实际鱼竿姿态。
-void ACatfishingPlayerController::ApplyHeldRodFacingMode(ACatCharacter& ControlledCat,
-	UCharacterMovementComponent& Movement, const FRotator& FacingRotation)
-{
-	if (!bHeldRodFacingModeActive || HeldRodFacingCharacter.Get() != &ControlledCat
-		|| HeldRodFacingMovement.Get() != &Movement)
-	{
-		RestoreHeldRodFacingMode();
-		bSavedHeldRodUseControllerRotationYaw = ControlledCat.bUseControllerRotationYaw;
-		bSavedHeldRodOrientRotationToMovement = Movement.bOrientRotationToMovement;
-		bSavedHeldRodUseControllerDesiredRotation = Movement.bUseControllerDesiredRotation;
-		HeldRodFacingCharacter = &ControlledCat;
-		HeldRodFacingMovement = &Movement;
-		bHeldRodFacingModeActive = true;
-		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_holder_facing_mode_changed State=Applied Controller=%s Pawn=%s SavedUseControllerYaw=%s SavedOrientToMovement=%s SavedDesiredRotation=%s"),
-			*GetNameSafe(this), *GetNameSafe(&ControlledCat),
-			bSavedHeldRodUseControllerRotationYaw ? TEXT("true") : TEXT("false"),
-			bSavedHeldRodOrientRotationToMovement ? TEXT("true") : TEXT("false"),
-			bSavedHeldRodUseControllerDesiredRotation ? TEXT("true") : TEXT("false"));
-	}
-
-	ControlledCat.StopJumping();
-	ControlledCat.bPressedJump = false;
-	ControlledCat.bUseControllerRotationYaw = true;
-	Movement.bOrientRotationToMovement = false;
-	Movement.bUseControllerDesiredRotation = false;
-	ControlledCat.SetActorRotation(FRotator(0.0, FacingRotation.Yaw, 0.0));
-}
-
-// 持竿面对模式恢复流程：
-// 1. 只在本 Controller 曾经接管过转向配置时写回，避免普通状态每帧碰 CharacterMovement。
-// 2. 弱引用仍有效时恢复进入前的三个转向开关；对象已销毁时只清缓存，让新 Pawn 使用自己的默认值。
-// 3. 恢复同时清掉跳跃保持态，避免离竿同帧把持竿期间的输入带回普通移动。
-void ACatfishingPlayerController::RestoreHeldRodFacingMode()
-{
-	if (!bHeldRodFacingModeActive)
-	{
-		return;
-	}
-
-	if (ACatCharacter* ControlledCat = HeldRodFacingCharacter.Get())
-	{
-		ControlledCat->bUseControllerRotationYaw = bSavedHeldRodUseControllerRotationYaw;
-		ControlledCat->StopJumping();
-		ControlledCat->bPressedJump = false;
-	}
-	if (UCharacterMovementComponent* Movement = HeldRodFacingMovement.Get())
-	{
-		Movement->bOrientRotationToMovement = bSavedHeldRodOrientRotationToMovement;
-		Movement->bUseControllerDesiredRotation = bSavedHeldRodUseControllerDesiredRotation;
-	}
-	UE_LOG(LogCatFishing, Log,
-		TEXT("Event=fishing_holder_facing_mode_changed State=Restored Controller=%s Pawn=%s RestoredUseControllerYaw=%s RestoredOrientToMovement=%s RestoredDesiredRotation=%s"),
-		*GetNameSafe(this), *GetNameSafe(HeldRodFacingCharacter.Get()),
-		bSavedHeldRodUseControllerRotationYaw ? TEXT("true") : TEXT("false"),
-		bSavedHeldRodOrientRotationToMovement ? TEXT("true") : TEXT("false"),
-		bSavedHeldRodUseControllerDesiredRotation ? TEXT("true") : TEXT("false"));
-	bHeldRodFacingModeActive = false;
-	HeldRodFacingCharacter.Reset();
-	HeldRodFacingMovement.Reset();
+	MovementComponent->MaxWalkSpeed = Speed;
 }
 
 // authority 疾跑流程：翻天期间拒绝迟到的开启意图但接受释放；最终速度继续读取服务器类默认值。

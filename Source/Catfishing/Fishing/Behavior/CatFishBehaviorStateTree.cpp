@@ -5,7 +5,7 @@
 
 FCatFishBehaviorStateTask::FCatFishBehaviorStateTask()
 {
-	bShouldCallTick = true;
+	bShouldCallTick = false;
 	bShouldCopyBoundPropertiesOnTick = false;
 	bShouldCopyBoundPropertiesOnExitState = false;
 }
@@ -15,32 +15,25 @@ EStateTreeRunStatus FCatFishBehaviorStateTask::EnterState(FStateTreeExecutionCon
 {
 	(void)Transition;
 	ACatFishEncounterActor* Fish = Cast<ACatFishEncounterActor>(Context.GetOwner());
-	FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
-	InstanceData.RemainingSeconds = 0.0;
-	if (!Fish || !Fish->BeginBehaviorStateFromStateTree(
-		InstanceData.MotionIntent, InstanceData.RemainingSeconds))
+	const FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
+	if (!Fish || !Fish->BeginFishBehaviorFromStateTree(InstanceData.Behavior))
 	{
 		return EStateTreeRunStatus::Failed;
 	}
 	return EStateTreeRunStatus::Running;
 }
 
-EStateTreeRunStatus FCatFishBehaviorStateTask::Tick(FStateTreeExecutionContext& Context,
-	const float DeltaTime) const
+bool FCatFishBehaviorFeedbackCondition::TestCondition(FStateTreeExecutionContext& Context) const
 {
-	FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
-	if (!FMath::IsFinite(DeltaTime) || DeltaTime < 0.0f
-		|| !FMath::IsFinite(InstanceData.RemainingSeconds))
-	{
-		return EStateTreeRunStatus::Failed;
-	}
-	InstanceData.RemainingSeconds -= static_cast<double>(DeltaTime);
-	return InstanceData.RemainingSeconds <= 0.0
-		? EStateTreeRunStatus::Succeeded : EStateTreeRunStatus::Running;
+	const ACatFishEncounterActor* Fish = Cast<ACatFishEncounterActor>(Context.GetOwner());
+	const FInstanceDataType& InstanceData = Context.GetInstanceData(*this);
+	if (!Fish || !Fish->HasAuthority() || InstanceData.Condition == ECatFishBehaviorCondition::None) return false;
+	const bool bResult = Fish->TestFishBehaviorConditionFromStateTree(InstanceData.Condition);
+	return InstanceData.bInvert ? !bResult : bResult;
 }
 
 UCatFishBehaviorStateTreeSchema::UCatFishBehaviorStateTreeSchema()
 {
 	ContextActorClass = ACatFishEncounterActor::StaticClass();
-	ScheduledTickPolicy = EStateTreeComponentSchemaScheduledTickPolicy::Allowed;
+	ScheduledTickPolicy = EStateTreeComponentSchemaScheduledTickPolicy::Denied;
 }

@@ -1,6 +1,8 @@
 #include "Fishing/Presentation/CatFishingCameraComponent.h"
 
 #include "Camera/CameraTypes.h"
+#include "Character/CatCharacter.h"
+#include "Components/MeshComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "EngineUtils.h"
 #include "Fishing/Actors/CatFishingRodActor.h"
@@ -27,7 +29,7 @@ const ACatFishingRodActor* UCatFishingCameraComponent::FindHeldRodOperatedBy(con
 		return IsValid(Rod) && Rod->GetPresentationState().bDeployed
 			&& !Rod->GetPresentationState().bBroken
 			&& Rod->GetPresentationState().PoseMode == ECatFishingRodPoseMode::Held
-			&& Rod->GetPresentationState().OperatorPlayerStates.Contains(Player);
+			&& Rod->IsPrimaryOperator(Player);
 	};
 	if (UCatFishingService* Fishing = World->GetSubsystem<UCatFishingService>())
 	{
@@ -75,7 +77,7 @@ bool UCatFishingCameraComponent::TryGetCameraView(const float DeltaTime, FMinima
 		return false;
 	}
 	const UCatFishingPresentationSettings* Settings = GetDefault<UCatFishingPresentationSettings>();
-	const FTransform Grip = Rod->GetGripWorldTransform();
+	FTransform Grip = Rod->GetGripWorldTransform();
 	// 配置非法时沿用原镜头；只报告一次，避免每帧重复刷屏。
 	if (Grip.ContainsNaN() || Settings->FightCameraGripOffsetCentimeters.ContainsNaN()
 		|| !FMath::IsFinite(Settings->FightCameraFieldOfView)
@@ -95,6 +97,10 @@ bool UCatFishingCameraComponent::TryGetCameraView(const float DeltaTime, FMinima
 		}
 		return false;
 	}
+	// 验证之后才转成欧拉角；刚体竿的轴向滚转不应倾斜玩家地平线。
+	FRotator CameraAim = Grip.Rotator();
+	CameraAim.Roll = 0.0;
+	Grip.SetRotation(CameraAim.Quaternion());
 	bReportedInvalidView = false;
 	const bool bNewRod = ViewedRodId != Rod->GetPresentationState().RodActorId;
 	if (bNewRod)
@@ -102,8 +108,9 @@ bool UCatFishingCameraComponent::TryGetCameraView(const float DeltaTime, FMinima
 		RestoreView();
 		ACharacter* Character = CastChecked<ACharacter>(GetOwner());
 		ViewingController = Cast<APlayerController>(Character->GetController());
-		HiddenMesh = Character->GetMesh();
-		if (USkeletalMeshComponent* Mesh = HiddenMesh.Get())
+		const ACatCharacter* Cat = Cast<ACatCharacter>(Character);
+		HiddenMesh = Cat ? Cat->GetBodyVisualMesh() : Character->GetMesh();
+		if (UMeshComponent* Mesh = HiddenMesh.Get())
 		{
 			bSavedOwnerNoSee = Mesh->bOwnerNoSee;
 			Mesh->SetOwnerNoSee(true);
@@ -128,6 +135,10 @@ bool UCatFishingCameraComponent::TryGetCameraView(const float DeltaTime, FMinima
 			FMath::RadiansToDegrees(PreviousRotation.AngularDistance(SmoothedGrip.GetRotation())));
 		LastTargetRotation = Grip.GetRotation();
 	}
+	// 两个无滚转姿态之间的四元数插值也可能产生少量滚转，最终镜头仍保持水平。
+	FRotator SmoothedAim = SmoothedGrip.Rotator();
+	SmoothedAim.Roll = 0.0;
+	SmoothedGrip.SetRotation(SmoothedAim.Quaternion());
 	OutView.Location = SmoothedGrip.TransformPositionNoScale(Settings->FightCameraGripOffsetCentimeters);
 	OutView.Rotation = SmoothedGrip.Rotator();
 	OutView.FOV = Settings->FightCameraFieldOfView;
@@ -145,7 +156,7 @@ bool UCatFishingCameraComponent::TryGetCameraView(const float DeltaTime, FMinima
 void UCatFishingCameraComponent::RestoreView()
 {
 	if (!ViewedRodId.IsValid()) return;
-	if (USkeletalMeshComponent* Mesh = HiddenMesh.Get()) Mesh->SetOwnerNoSee(bSavedOwnerNoSee);
+	if (UMeshComponent* Mesh = HiddenMesh.Get()) Mesh->SetOwnerNoSee(bSavedOwnerNoSee);
 	if (APlayerController* Controller = ViewingController.Get(); Controller && Controller->GetPawn() == GetOwner())
 	{
 		// 离开时从最后看见的方向继续，丢弃受阻期间看不见的超前目标。
@@ -165,7 +176,7 @@ void UCatFishingCameraComponent::TickComponent(const float DeltaTime, const ELev
 	FActorComponentTickFunction* ThisTickFunction)
 {
 	Super::TickComponent(DeltaTime, TickType, ThisTickFunction);
-	// 切换观战目标后 CalcCamera 停止调用，仍必须归还隐藏状态。
+	// 切换观战目标后 CalcCamera 不再被调用，仍必须归还隐藏状态。
 	if (!FindLocalViewRod()) RestoreView();
 }
 

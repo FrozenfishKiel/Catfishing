@@ -30,22 +30,25 @@ public:
 		meta = (DisplayName = "启用正式运行"))
 	bool bEnableRuntimeDefinition = false;
 
-	/** 鱼使用实际重量生成力量；猫质量独立配置，不随力量成长而增加。 */
+	/** 鱼使用实际重量生成力量；猫端质量读取真实刚体。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "力量与运动",
 		meta = (DisplayName = "每公斤力量", ClampMin = "0.001"))
 	double StrengthPerKilogram = 0.0;
 
+	/** DA_FishingFightBalance_Default 仍序列化的旧载荷，无运行读取；迁移并重存该资产后才能删除。 */
+	UPROPERTY(BlueprintReadOnly, Category="已废弃（仅资产载荷）", meta=(DeprecationMessage="Use ForcePerStrengthNewtons"))
+	double AccelerationPerStrength = 0.0;
+	UPROPERTY(BlueprintReadOnly, Category="已废弃（仅资产载荷）", meta=(DeprecationMessage="Force integration replaces drive response"))
+	double DriveResponseSeconds = 0.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="每点力量推力（牛顿）", ClampMin="0.001"))
 	double ForcePerStrengthNewtons = 1.0;
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="单猫系统质量", Units="kg", ClampMin="0.001"))
-	double CatBodyMassKilograms = 5.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="力竭鱼回收辅助力（牛顿）", ClampMin="0.001"))
 	double ExhaustedReelForceNewtons = 200.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="力量与运动", meta=(DisplayName="猫力竭拖行辅助加速度", ClampMin="0.0"))
 	double ExhaustedCatTowAccelerationCentimetersPerSecondSquared = 300.0;
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category="鱼线与张力", meta=(DisplayName="满表现张力（牛顿）", ClampMin="0.001"))
 	double DisplayTensionNewtons = 50.0;
-	/** 当前力量模型参数版本；只用于编辑器和审计识别资产使用的参数口径，不重置已经编辑的数值。 */
+	/** 显式资产迁移版本；不会据此重置已经编辑的新参数。 */
 	UPROPERTY(EditDefaultsOnly, Category="身份", AdvancedDisplay)
 	int32 ForceModelVersion = 0;
 
@@ -54,7 +57,7 @@ public:
 		meta = (DisplayName = "收线速度", ClampMin = "0.001", Units = "cm/s"))
 	double ReelSpeedCentimetersPerSecond = 0.0;
 
-	/** 主猫力竭且无助手出力时，按鱼较快的配置游速持续外冲；拖拽保持锁线直到落水或获救。 */
+	/** 持竿主控力竭时，按鱼较快的配置游速持续外冲；拖拽保持锁线直到落水或获救。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "力量与运动",
 		meta = (DisplayName = "猫力竭后鱼外冲速度倍率", ClampMin = "1.0"))
 	double ExhaustedCatEscapeSpeedMultiplier = 2.0;
@@ -79,9 +82,19 @@ public:
 		meta = (DisplayName = "猫满用力每秒支撑耗体", ClampMin = "0.0"))
 	double CatSupportStaminaPerSecond = 2.0;
 
-	/** 鱼每 1 点标准努力强度、每 1 cm 有效对抗努力的体力价格；再乘对抗负载，自由游动不耗体。 */
+	/** 沿鱼本步主动意图未完成的位移单价（体力点/m）；180 cm/s 满出力且完全受阻时独立标定为 3 点/s。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DisplayName = "鱼做功体力消耗系数", ClampMin = "0.0"))
+		meta = (DisplayName = "鱼每米未完成意图耗体", ClampMin = "0.0"))
+	double FishStaminaPerUnfulfilledMeter = 5.0 / 3.0;
+
+	/** 仅保留旧资产和未完成审计的 Blueprint 字段身份；旧每秒价不读取、不换算为每米价。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
+		meta = (DeprecatedProperty, DeprecationMessage = "旧每秒鱼价格不再使用；请设置FishStaminaPerUnfulfilledMeter，单位为体力点/m。"))
+	double FishEffortStaminaPerSecond = 3.0;
+
+	/** 仅保留旧资产序列化兼容；旧力量乘厘米单价不换算为沿意图缺失位移单价。 */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
+		meta = (DeprecatedProperty, DeprecationMessage = "旧每厘米鱼价格不再使用；请设置FishStaminaPerUnfulfilledMeter。"))
 	double FishStaminaCostPerStrengthCentimeter = -1.0;
 
 	/** 猫主动移动形成的对抗努力体力倍率；不会重复计入转杆或收线。 */
@@ -89,7 +102,7 @@ public:
 		meta = (DisplayName = "猫移动体力倍率", ClampMin = "0.0"))
 	double CatMovementStaminaMultiplier = 1.0;
 
-	/** 猫主动收线实际做功的体力倍率；受阻费用由共享持竿支撑承担。 */
+	/** 猫主动收线实际做功的体力倍率；受阻费用由同一主控的持竿支撑承担。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "猫收线体力倍率", ClampMin = "0.0"))
 	double CatReelStaminaMultiplier = 1.0;
@@ -109,14 +122,14 @@ public:
 		meta = (DisplayName = "猫负载体力倍率", ClampMin = "0.0"))
 	double CatLoadStaminaMultiplier = 1.0;
 
-	/** 鱼仅按归一化对抗负载 × 本参数结算有效努力；无自由游动基础费用，设为 0 可关闭鱼对抗耗体。 */
+	/** 仅保留旧资产序列化兼容，运行不再叠加负载价格倍率。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DisplayName = "鱼负载体力倍率", ClampMin = "0.0"))
+		meta = (DeprecatedProperty, DeprecationMessage = "旧鱼负载倍率不再使用；请设置FishStaminaPerUnfulfilledMeter。"))
 	double FishLoadStaminaMultiplier = 1.0;
 
-	/** 仅鱼使用：未完成的对抗意图距离折算系数；猫支撑已独立按时间计费。 */
+	/** 仅保留旧资产序列化兼容；当前沿意图缺失位移不使用旧等效受阻倍率。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DisplayName = "鱼受阻努力折算倍率", ClampMin = "0.0"))
+		meta = (DeprecatedProperty, DeprecationMessage = "旧受阻距离倍率不再使用；沿意图缺失位移按FishStaminaPerUnfulfilledMeter结算。"))
 	double IsometricEffortMultiplier = -1.0;
 
 	/** 正常右键时猫每秒恢复的搏斗体力，不受张力或其他操作限制；强制力竭拖拽除外。 */
@@ -129,15 +142,19 @@ public:
 		meta = (DisplayName = "鱼力竭吸附阈值", ClampMin = "0.0", ClampMax = "1.0"))
 	double FishExhaustionThreshold = -1.0;
 
-	/** 鱼体力比例低于该值后延长平静期。 */
+	/** 仅保留旧资产序列化兼容；疲劳反馈由连续行为配置控制。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DisplayName = "低体力休息触发比例", ClampMin = "0.0", ClampMax = "1.0"))
+		meta = (DeprecatedProperty, DeprecationMessage = "旧平静计时不再使用；疲劳反馈由鱼行为配置控制。"))
 	double LowStaminaRestThreshold = -1.0;
 
-	/** 低体力状态下平静期时长倍率。 */
+	/** 仅保留旧资产序列化兼容；疲劳反馈由连续行为配置控制。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
-		meta = (DisplayName = "低体力休息时长倍率", ClampMin = "1.0"))
+		meta = (DeprecatedProperty, DeprecationMessage = "旧平静计时不再使用；疲劳反馈由鱼行为配置控制。"))
 	double LowStaminaRestMultiplier = 0.0;
+
+	/** 废弃几何表现阈值，仅保留旧资产载荷，不参与新张力计算。 */
+	UPROPERTY(BlueprintReadOnly, Category="已废弃（仅资产载荷）", meta=(DeprecationMessage="Use DisplayTensionNewtons"))
+	double TensionResponseRangeCentimeters = 0.0;
 
 	/** 无人持竿且鱼超出最大线长后的逃脱余量。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "鱼线与张力",
@@ -154,9 +171,12 @@ public:
 		meta = (DisplayName = "持竿最低杠杆倍率", ClampMin = "0.05", ClampMax = "1.0"))
 	double HeldRodMinimumLeverageMultiplier = 0.0;
 
-	/** 鱼端每秒允许承担的最大约束修正速度，同时限制猫端目标牵引速度。 */
+	/** 鱼端每秒允许承担的最大约束修正速度，只限制静态锚点模型的鱼端历史误差修正，物理身体不读该上限。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "鱼线与张力",
 		meta = (DisplayName = "最大约束修正速度", ClampMin = "1.0", Units = "cm/s"))
 	double MaximumFishConstraintCorrectionSpeedCentimetersPerSecond = 0.0;
 
+	/** DA_FishingFightBalance_Default 仍序列化的旧速度截断载荷；没有运行读取，删除前须迁移该资产。 */
+	UPROPERTY(BlueprintReadOnly, Category="已废弃（仅资产载荷）")
+	double MinimumCarrierAwaySpeedMultiplier = -1.0;
 };

@@ -12,8 +12,7 @@ FCatFishingViewState FCatFishingViewState::FromSnapshot(const FCatFishingSession
 	View.WindowEndsServerTime = Snapshot.WindowEndsServerTime;
 	View.FishDefinitionId = Snapshot.FishDefinitionId;
 	View.NormalizedFishStamina = Snapshot.NormalizedFishStamina;
-	View.ActiveCombinedFishingStrength = Snapshot.ActiveCombinedFishingStrength;
-	View.ActiveHelperCount = Snapshot.ActiveHelperCount;
+	View.PrimaryPowerAlpha = Snapshot.PrimaryPowerAlpha;
 	View.bReeling = Snapshot.bReeling;
 	View.bSlacking = Snapshot.bSlacking;
 	View.bPerfectHook = Snapshot.bPerfectHook;

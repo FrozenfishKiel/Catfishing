@@ -75,6 +75,16 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasFishingSession = false;
 
+	/** 抓握只读状态来自当前身体；只有鱼竿的明确主控切换到钓鱼鼠标操作提示。 */
+	UPROPERTY(BlueprintReadOnly) bool bShowPhysicalControls = false;
+	UPROPERTY(BlueprintReadOnly) bool bPrimaryRodOperator = false;
+	UPROPERTY(BlueprintReadOnly) bool bLeftHandReaching = false;
+	UPROPERTY(BlueprintReadOnly) bool bRightHandReaching = false;
+	UPROPERTY(BlueprintReadOnly) bool bLeftHandGripped = false;
+	UPROPERTY(BlueprintReadOnly) bool bRightHandGripped = false;
+	UPROPERTY(BlueprintReadOnly) FText PhysicalControlText;
+	UPROPERTY(BlueprintReadOnly) FText PhysicalHandStateText;
+
 	/** 当前是否显示主页菜单入口；布局可用它隐藏设置按钮而不改玩法状态或天数展示。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bMainMenuEntryVisible = true;
@@ -91,11 +101,11 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bCanOpenInventory = true;
 
-	/** 猫状态调试摘要是否显示在主界面上；默认关闭以避免正式 HUD 出现研发态属性文本，只由诊断排查显式开启。 */
+	/** 猫状态调试摘要是否显示在主界面上；默认关闭以避免正式 HUD 出现研发态属性文本，只由临时排查显式开启。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bShowCatStatusDebugText = false;
 
-	/** 钓鱼调试反馈是否显示在主界面上；默认关闭以避免空闲状态出现流程诊断文案，只由诊断排查显式开启。 */
+	/** 钓鱼调试反馈是否显示在主界面上；默认关闭以避免空闲状态出现流程诊断文案，只由临时排查显式开启。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bShowFishingFeedbackDebugText = false;
 
@@ -175,7 +185,7 @@ struct FCatHUDViewState
 	UPROPERTY(BlueprintReadOnly)
 	FText FishStateText;
 
-	/** 给玩家体力条旁显示的短文本；数值来自 ASC 当前体力和 MaxFightStamina 上限。 */
+	/** 给体力条旁显示本人 ASC 的体力和上限；物理协助不合并其他玩家余额。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText CatStaminaText;
 
@@ -234,9 +244,18 @@ protected:
 
 private:
 	friend class FCatHUDCrosshairVisibilityTest;
+	friend class FCatHUDPersonalStaminaTest;
 
 	/** 仅用于首次投影的显隐诊断去重；准星是否显示仍只读取 LastHUDViewState。 */
 	bool bHasLoggedCrosshairVisibility = false;
+	/** 正式 WBP 缺失钓鱼体力控件时只记录一次，避免固定步投影反复刷屏。 */
+	bool bHasLoggedMissingFishingMeter = false;
+	bool bHasLoggedMissingPhysicalControls = false;
+
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> PhysicalControlTextBlock;
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> PhysicalHandStateTextBlock;
 
 	/** 统一广播 HUD 入口意图；先通知原生协调层，再给蓝图表现层处理页面或动画。 */
 	void SubmitHUDAction(ECatHUDAction Action);
@@ -305,7 +324,7 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> FishStateTextBlock;
 
-	/** WBP Designer 中的玩家体力文本控件；存在时显示当前体力和可解析上限。 */
+	/** WBP Designer 中的体力文本控件；只显示本人 ASC 的体力和上限。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> CatStaminaTextBlock;
 
@@ -321,7 +340,7 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> InventoryButton;
 
-	/** WBP Designer 中的玩家体力条；存在时直接绑定 NormalizedFightStamina。 */
+	/** WBP Designer 中的体力条；始终读取 NormalizedFightStamina 个人比例。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UProgressBar> CatStaminaProgressBar;
 

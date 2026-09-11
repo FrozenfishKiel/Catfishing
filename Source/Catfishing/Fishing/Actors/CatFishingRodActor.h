@@ -3,6 +3,7 @@
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
 #include "Fishing/Actors/CatFishingActorTypes.h"
+#include "Fishing/Integration/CatFishingRodAimState.h"
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 #include "CatFishingRodActor.generated.h"
 
@@ -10,31 +11,49 @@ class APlayerState;
 class USceneComponent;
 class UCharacterMovementComponent;
 class UCatRodBendComponent;
+class UBoxComponent;
+class UPrimitiveComponent;
+class ACatCharacter;
+class UCatFishingPhysicalRodComponent;
+class UCatLightPropComponent;
 
-/** 高频复制的手持鱼线约束目标；不推进鱼竿业务 Revision，也不保存第二份搏斗终态。 */
+/** Read-only control observation; no predicted pose or second physics integration. */
+struct CATFISHING_API FCatFishingRodControlObservation
+{
+	FRotator ActualAim = FRotator::ZeroRotator;
+	FRotator RequestedAim = FRotator::ZeroRotator;
+	FVector AngularVelocityRadiansPerSecond = FVector::ZeroVector;
+	bool bMouseDriveActive = false;
+	bool bWaitingForNewHolder = false;
+};
+
+/** 鱼线负载与鼠标域的复制观察。旧运动字段仅保留尚未确认的 Blueprint 序列化引用。 */
 USTRUCT(BlueprintType)
 struct CATFISHING_API FCatFishingCarrierConstraintState
 {
 	GENERATED_BODY()
 
-	/** 将受力快照绑定到当时的持有人，拒绝与换人复制乱序的失效快照。 */
+	/** 将受力快照绑定到当时的持有人，拒绝与换人复制乱序的旧快照。 */
 	UPROPERTY()
 	TObjectPtr<APlayerState> ConstraintHolderPlayerState;
+	UPROPERTY() uint32 RosterVersion = 0;
+	UPROPERTY() uint32 ControlEpoch = 0;
 
 	UPROPERTY(BlueprintReadOnly)
 	FVector_NetQuantizeNormal PullDirection = FVector::ZeroVector;
-	UPROPERTY(BlueprintReadOnly)
+	/** 废弃的运动指令，当前恒零，物理接收方不读取。 */
+	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Physical body owns motion; this legacy acceleration is always zero"))
 	float PullAccelerationCentimetersPerSecondSquared = 0.0f;
-	/** 当前支撑超过张力的减速度，单位 cm/s²；与正牵引由同一最终负载裁决。 */
-	UPROPERTY(BlueprintReadOnly)
+	/** 废弃的运动指令，当前恒零。 */
+	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Physical body owns motion; legacy braking is always zero"))
 	float PullBrakingDecelerationCentimetersPerSecondSquared = 0.0f;
-	/** 活鱼搏斗中的连续移动上下文；零张力仍按支撑力减速，终局后恢复普通移动。 */
-	UPROPERTY(BlueprintReadOnly)
+	/** 废弃的 CMC 开关，当前恒 false。 */
+	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Physical constraints own traction; this legacy switch is always false"))
 	bool bUseContinuousTraction = false;
-	/** 向鱼速度上限；实际速度按发布的有限加速度积分，不瞬间补齐。 */
-	UPROPERTY(BlueprintReadOnly)
+	/** 废弃的速度目标，当前恒零。 */
+	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Observe physical body velocity; this legacy target is always zero"))
 	float TargetPullSpeedCentimetersPerSecond = 0.0f;
-	/** 蓝图载荷匹配字段当前恒为 1；移动求解实际读取目标速度和有限加速度。 */
+	/** 旧蓝图载荷兼容，恒为 1；新移动不读取这个硬限速字段。 */
 	UPROPERTY(BlueprintReadOnly)
 	float MaximumAwaySpeedMultiplier = 1.0f;
 	UPROPERTY(BlueprintReadOnly)
@@ -44,6 +63,9 @@ struct CATFISHING_API FCatFishingCarrierConstraintState
 	/** 当前搏斗是否要求鱼竿使用受力后的实际姿态，而不是瞬时跟随控制器。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bFightActive = false;
+	/** 开始搏斗/换主生成新域；停止后保留末次域作为拒绝旧组快照的边界。 */
+	UPROPERTY()
+	uint32 AimInputEpoch = 0;
 	UPROPERTY(BlueprintReadOnly)
 	FVector_NetQuantizeNormal RodPullAxis = FVector::ForwardVector;
 	/** 垂直鱼线时的最大转矩；实际有向转矩随杆姿态连续计算。 */
@@ -60,12 +82,43 @@ UCLASS(Blueprintable, meta=(ChildCannotTick))
 class CATFISHING_API ACatFishingRodActor : public AActor
 {
 	GENERATED_BODY()
-	friend class FCatFishingCarrierHandoffTest;
+	friend class UCatFishingPhysicalRodComponent;
+	friend class UCatFishingService;
+	friend class FCatFishingActorIdentityContractTest;
+	friend class FCatFishingServiceOwnerControlLookupTest;
+	friend class FCatFishingParticipantStrengthTest;
+	friend class FCatFishBehaviorStateTreeRuntimeTest;
+	friend class FCatFishingSlackAimNetworkTest;
+	friend class FCatFishingOperatorRunnerIntegrationTest;
+	friend class FCatFishingPhysicalGripGraphTest;
+	friend class FCatFishingPhysicalCouplingTest;
+	friend class FCatFishingCMCStabilityTest;
+	friend class FCatFishingFormalPhysicalRunnerTest;
+	friend struct FCatLightPropNetworkTestAccess;
+	friend class FCatFishingRodEffortSnapshotLifecycleTest;
+	friend class FCatFishingOwnedRodLifecycleTest;
+	friend class FCatHUDFishingOwnerBindingTest;
+	friend class FCatFishingSlackAimCommandRoutingTest;
+	friend class FCatPhysicalInputRouteTest;
+	friend class FCatHUDPhysicalGrabProjectionTest;
+
+	friend class FCatFishingServiceRodOperationsPreserveMovementTest;
+	friend class FCatFishingHeldFacingFollowsControlRotationTest;
+	friend class FCatFishingServiceRodBoundSessionRoutingTest;
+	friend class FCatFishingFirstPersonCameraTest;
+	friend class FCatBrokenRodPackCapacityTest;
 	friend class FCatFishingMotionDiagnosticTest;
+
 
 public:
 	/** 创建鱼竿表现 Actor 的组件和默认复制姿态；身份和锚点仍要等服务器初始化后才可信。 */
 	ACatFishingRodActor();
+	UBoxComponent* GetPhysicalRodBody() const { return PhysicsBody; }
+	UCatFishingPhysicalRodComponent* GetPhysicalRodComponent() const { return PhysicalRod; }
+	bool IsUsingPhysicalRod() const;
+	bool BeginPhysicalHoldFromAuthority(APlayerState* Player, bool bPositionAtHand = false);
+	void ReleasePhysicalPrimaryHoldFromAuthority(APlayerState* Player, FName Reason);
+	void RefreshPrimaryControlFromAuthority();
 	virtual void Tick(float DeltaSeconds) override;
 	/** 注册鱼竿表现状态复制；客户端只读 PresentationState，并通过 OnRep 驱动蓝图表现刷新。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
@@ -75,13 +128,6 @@ public:
 		bool bInDeployed, bool bInBroken);
 	/** 写入这根竿的权威本地锚点；必须在身份初始化前完成，之后蓝图和钓鱼逻辑都从这些锚点取世界坐标。 */
 	bool ConfigureCanonicalAnchorsFromAuthority(const FTransform& InRodTip, const FTransform& InStand, const FTransform& InGrip);
-	/** 重置操作位集合：传入玩家时只保留该玩家为主操作位，传空时清空全部槽位。 */
-	bool SetOperatorFromAuthority(APlayerState* InOperatorPlayerState, int64 ExpectedRevision);
-	/** 把玩家追加到第一个空槽；OutSlotIndex 只有成功时有效。 */
-	bool AddOperatorFromAuthority(APlayerState* InOperatorPlayerState, int64 ExpectedRevision, int32& OutSlotIndex);
-	/** 移除玩家并压紧数组；主位离开时原 1 号位自动晋升为 0 号位。 */
-	bool RemoveOperatorFromAuthority(APlayerState* InOperatorPlayerState, int64 ExpectedRevision,
-		APlayerState*& OutPromotedPrimaryPlayerState);
 	/** 切换鱼竿皮肤定义；成功后只改变表现状态，不改变库存实例和耐久。 */
 	bool SetRodSkinFromAuthority(FName InRodSkinDefinitionId, int64 ExpectedRevision);
 	/** 写入断竿表现状态；真正的耐久结算由 Equipment/Fishing 流程完成，这里只负责复制可见结果。 */
@@ -92,33 +138,27 @@ public:
 	const FCatFishingRodPresentationState& GetPresentationState() const;
 	/** 读取竿尖世界坐标；鱼线、浮漂和蓝图表现都以这个锚点作为挂接点。 */
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetRodTipWorldTransform() const;
-	/** 读取主操作位世界坐标；Stand 是 0 号玩家站位的基准。 */
-	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetStandWorldTransform() const;
-	/** 所有玩家共用的 R 交互锚点；只决定能否加入，不随当前人数或下一个槽位变化。 */
-	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetOperatorInteractionWorldTransform() const;
-	/** 槽位 0 是右侧，1 是左侧；更高索引左右交替向外扩展。非法索引回退到原始 Stand 中心。 */
-	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetOperatorStandWorldTransform(int32 SlotIndex) const;
 	/** 读取当前占用操作位的玩家数量；表现和交互只把它当只读计数。 */
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") int32 GetOperatorCount() const;
 	/** 查询某个玩家当前占用的操作位编号；未加入或空玩家返回 INDEX_NONE。 */
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") int32 GetOperatorSlotIndex(APlayerState* PlayerState) const;
-	/** 判断玩家是否占用 0 号操作位；钓鱼服务、会话和视图桥用它决定谁能驱动主控钓竿输入。 */
+	/** 判断玩家是否是当前主操作位；兼容旧单人逻辑读取 OperatorPlayerState 的场景。 */
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") bool IsPrimaryOperator(APlayerState* PlayerState) const;
-	/** 读取下一个可用操作位编号；满员或布局配置无效时返回 INDEX_NONE。 */
-	int32 GetFirstFreeOperatorSlotIndex() const;
+	uint32 GetOperatorMembershipEpoch(APlayerState* PlayerState) const;
+	uint32 GetControlEpoch() const { return PresentationState.ControlEpoch; }
+	uint32 GetRosterVersion() const { return PresentationState.RosterVersion; }
 	/** 读取握持点世界坐标；角色手部 IK 和竿体表现用它对齐。 */
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FTransform GetGripWorldTransform() const;
-	/** 服务器规范握持跟随：只读 PlayerController/Pawn 权威姿态，不信任客户端 Socket Transform。 */
+	/** 服务器读取实际物理竿姿态并更新只读锚点，不覆盖物理身体位置。 */
 	bool RefreshHeldTransformFromAuthority(double DeltaSeconds = 0.0);
-	/** 预测和实际旋转使用同一组输入；该函数只读取当前权威状态。 */
-	bool GetRotationPredictionFromAuthority(double DeltaSeconds, FCatFishingRodRotationPrediction& OutPrediction) const;
-	/** 最后一名操作者离开后把同一 Actor 放到服务器裁定的地面 Transform；不改会话或物品身份。 */
-	bool PlaceOnGroundFromAuthority(const FTransform& GroundTransform);
+	bool GetControlObservationFromAuthority(FCatFishingRodControlObservation& OutObservation) const;
+	bool CanRebaseHeldAimFromAuthority(APlayerState* Player, const FCatFishingRodAimSample& Sample) const;
+	void RebaseHeldAimFromAuthority(APlayerState* Player, const FCatFishingRodAimSample& Sample,
+		FGuid RequestId, int64 InputSequence);
+	bool AcceptHeldAimSampleFromAuthority(APlayerState* Player, const FCatFishingRodAimSample& Sample);
+	void StopHeldAimInputFromAuthority(APlayerState* Player);
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FVector GetAuthoritativeRodForwardVector() const;
-	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FVector GetAuthoritativeRodTipVelocity() const
-	{
-		return AuthoritativeRodTipVelocity;
-	}
+	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FVector GetAuthoritativeRodTipVelocity() const;
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod") FVector GetAuthoritativeHolderVelocity() const
 	{
 		return AuthoritativeHolderVelocity;
@@ -128,15 +168,12 @@ public:
 	{
 		return AuthoritativeRotationEffort;
 	}
-	/** FightRunner 发布同一份最终受力；服务器与拥有客户端由 CMC 积分加速/减速，不直接写 Actor Transform。 */
-	bool SetCarrierConstraintFromAuthority(const FVector& PullDirection,
-		double PullAccelerationCentimetersPerSecondSquared, double TargetPullSpeedCentimetersPerSecond,
-		double NormalizedTension, double ConstraintErrorCentimeters,
-		bool bFightActive = false, double MaximumFishTorqueStrengthMeters = 0.0,
-		double CatTorqueCapacityStrengthMeters = 0.0,
-		const FVector& RodPullAxis = FVector::ForwardVector,
-		double PullBrakingDecelerationCentimetersPerSecondSquared = 0.0, bool bUseContinuousTraction = false);
-	void ClearCarrierConstraintFromAuthority();
+	/** 历史反射约束状态的观察投影；旧移动载荷只发布零值，真实线力由 PhysicalRod 单独接收。 */
+	bool SetFightConstraintObservationFromAuthority(const FVector& PullDirection,
+		double NormalizedTension, double ConstraintErrorCentimeters, bool bFightActive = false,
+		double MaximumFishTorqueStrengthMeters = 0.0, double CatTorqueCapacityStrengthMeters = 0.0,
+		const FVector& RodPullAxis = FVector::ForwardVector);
+	void ClearFightConstraintAndLoadFromAuthority(FGuid SessionId = FGuid());
 	UFUNCTION(BlueprintPure, Category="Fishing|Rod")
 	const FCatFishingCarrierConstraintState& GetCarrierConstraintState() const
 	{
@@ -158,36 +195,41 @@ protected:
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 private:
+	/** The Service alone commits a roster projected from authority grip connectivity. */
+	bool SetPrimaryOperatorFromAuthority(APlayerState* PlayerOrNull, int64 ExpectedRevision);
 	/** 客户端收到表现状态复制后的入口；Previous 由引擎提供，用来让蓝图比较前后变化。 */
 	UFUNCTION()
 	void OnRep_PresentationState(const FCatFishingRodPresentationState& Previous);
 	UFUNCTION()
 	void OnRep_CarrierConstraintState();
-	/** 初始复制到达后刷新三个场景锚点及多人站位；客户端 Getter 与视觉组件使用同一份服务器标定。 */
 	UFUNCTION()
-	void OnRep_CanonicalAnchors();
+	void OnRep_GripCanonicalLocalTransform();
 	/** 分发表现变化或延迟到 BeginPlay 后再分发；保证蓝图事件只在组件可用时触发。 */
 	void QueueOrDispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
 	/** 立即应用皮肤、隐藏状态和蓝图通知；服务器与客户端各自在本地执行这一层表现副作用。 */
 	void DispatchPresentationChanged(const FCatFishingRodPresentationState& Previous, const FCatFishingRodPresentationState& Current);
-	void PublishCarrierConstraintToMovement();
-	void ClearCarrierMovementBinding();
+	/** 初始化与图投影变更共用成员元数据；不改变任何身体或竿姿态。 */
+	void PrepareOperatorMemberships(FCatFishingRodPresentationState& Next);
 	void ResetAuthoritativeRotationEffort();
 	/** 提交一次权威可变状态；它保留 Actor/Item/Owner 身份，只允许操作位、皮肤、部署和断竿状态变化。 */
 	bool CommitAuthoritativeMutation(const FCatFishingRodPresentationState& Next, int64 ExpectedRevision);
 	/** 鱼竿 Actor 的场景根节点；所有可视锚点跟随它接受 Actor Transform。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> SceneRoot;
+	/** Detached on authority when simulating; SceneRoot observes it and never drives it. */
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UBoxComponent> PhysicsBody;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatFishingPhysicalRodComponent> PhysicalRod;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatLightPropComponent> LightProp;
 	/** 美术表现根节点；皮肤和特效挂在这里，不参与权威锚点计算。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> VisualRoot;
 	/** Local deformation of the existing art; never changes canonical anchors or the fight simulation. */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatRodBendComponent> RodBend;
 	/** 竿尖的本地锚点组件；鱼线和浮漂表现从它换算世界坐标。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> RodTipAnchor;
-	/** 默认操作站位的本地锚点组件；0 号站位和交互基准都从这里派生。 */
+	/** BP_Rod/TestMap 已序列化的历史站位标定组件，不参与主控或身体移动。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> StandAnchor;
-	/** 当前产品左右两位的编辑器可见参考锚；第三位及以后也统一由编号公式计算，不增加专用锚点。 */
+	/** 已序列化的历史右参考组件；资产迁移前保留名字与姿态，无玩法读取。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> RightStandAnchor;
-	/** 当前产品左侧站位的编辑器可见参考锚；运行时位置仍由同一编号公式保持左右对称。 */
+	/** 已序列化的历史左参考组件；资产迁移前保留名字与姿态，无玩法读取。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> LeftStandAnchor;
 	/** 握持点的本地锚点组件；角色手部 IK 和竿体视觉对齐会读取它。 */
 	UPROPERTY(VisibleAnywhere) TObjectPtr<USceneComponent> GripAnchor;
@@ -196,31 +238,27 @@ private:
 	FCatFishingRodPresentationState PresentationState;
 	UPROPERTY(ReplicatedUsing=OnRep_CarrierConstraintState, VisibleInstanceOnly, BlueprintReadOnly, meta=(AllowPrivateAccess="true"))
 	FCatFishingCarrierConstraintState CarrierConstraintState;
-	/** 竿尖的规范本地变换；服务器从装备片段写入并初始复制，双端鱼线与玩法坐标都读取它。 */
-	UPROPERTY(ReplicatedUsing=OnRep_CanonicalAnchors)
-	FTransform RodTipCanonicalLocalTransform = FTransform::Identity;
-	/** 操作基准位的规范本地变换；服务器配置后初始复制，客户端交互提示与服务器多人站位按同一基准计算。 */
-	UPROPERTY(ReplicatedUsing=OnRep_CanonicalAnchors)
-	FTransform StandCanonicalLocalTransform = FTransform::Identity;
-	/** 握把的规范本地变换；服务器配置后初始复制，双端相机和持竿对齐组合它与实际 Actor 姿态。 */
-	UPROPERTY(ReplicatedUsing=OnRep_CanonicalAnchors)
+	uint32 NextMembershipEpoch = 0;
+	/** 竿尖权威本地 Transform；配置后不再读蓝图组件作为数据源，避免表现改动反向污染玩法坐标。 */
+	UPROPERTY(Replicated) FTransform RodTipCanonicalLocalTransform = FTransform::Identity;
+	/** 装备提供的历史站位标定，只保持已序列化参考组件数据。 */
+	UPROPERTY(Replicated) FTransform StandCanonicalLocalTransform = FTransform::Identity;
+	/** 不变握把标定随初始复制发送；客户端相机必须组合它与实际 Actor 姿态。 */
+	UPROPERTY(ReplicatedUsing=OnRep_GripCanonicalLocalTransform)
 	FTransform GripCanonicalLocalTransform = FTransform::Identity;
 	FVector AuthoritativeRodTipVelocity = FVector::ZeroVector;
 	FVector AuthoritativeHolderVelocity = FVector::ZeroVector;
 	FRotator AuthoritativeHeldAimRotation = FRotator::ZeroRotator;
-	/** 权威旋转的连续负载状态；不得随猫端牵引 bActive 或一次松线目标清零。 */
-	FVector SmoothedRodFishPullStrengthMeters = FVector::ZeroVector;
+	FCatFishingRodAimState HeldAimInput;
+	uint32 NextAimInputEpoch = 0;
 	TWeakObjectPtr<APawn> AuthoritativeAimHolder;
 	FCatFishingRodRotationEffortSnapshot AuthoritativeRotationEffort;
-	TWeakObjectPtr<class UCatCharacterMovementComponent> CarrierMovement;
-	double NextRodRotationResistanceDiagnosticWorldSeconds = 0.0;
 	double LastConstraintUpdateWorldSeconds = -1.0;
 	double NextCarrierReceiptDiagnosticWorldSeconds = 0.0;
 	bool bLastReceivedFightActive = false;
-	bool bLastRodTorqueBalanced = false;
 	bool bHeldAimInitialized = false;
-	/** 根据操作位编号计算本地站位；非法编号回退到基准 Stand，避免上层拿到 NaN 或随机位置。 */
-	FTransform ResolveOperatorStandLocalTransform(int32 SlotIndex) const;
+	/** 换主保留实际竿向，直到新主在新输入域提交首个有效采样。 */
+	bool bAwaitingNewHolderAim = false;
 	/** 身份是否已经完成权威初始化；为真后 Actor/Item/Owner 身份不可再改。 */
 	bool bIdentityInitialized = false;
 	/** BeginPlay 前是否积压了一次表现变化；用于延迟蓝图通知而不丢掉状态跳变。 */

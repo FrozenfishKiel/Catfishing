@@ -5,6 +5,7 @@
 #include "Async/Async.h"
 #include "Camp/CatCampInventoryActor.h"
 #include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
 #include "Engine/World.h"
@@ -799,12 +800,13 @@ bool UCatSaveSubsystem::RestorePlayerAfterSpawn(AController& Controller, ACatCha
 		return true;
 	}
 	UCatEquipmentComponent* Equipment = Character.GetEquipmentComponent();
+	UCatPhysicalBodyComponent* PhysicalBody = Character.GetPhysicalBodyComponent();
 	UCatInventoryComponent* Inventory = Character.GetInventoryComponent();
 	const FCatSavedPlayerRunState& SavedPlayer = PendingRestoreSaveGame->PlayerSnapshot;
 	const FCatEquipmentLoadoutSnapshot SavedEquipmentSnapshot = ToRuntimeEquipment(SavedPlayer.EquipmentSnapshot);
 	const TArray<FCatSavedRunInventorySlot>& SavedInventorySlots = SavedPlayer.InventorySlots;
 	FText Failure;
-	if (!Equipment || !Inventory || SavedPlayer.CharacterTransform.ContainsNaN())
+	if (!PhysicalBody || !PhysicalBody->GetBody() || !Equipment || !Inventory || SavedPlayer.CharacterTransform.ContainsNaN())
 	{
 		RejectPendingRestore(Failure.IsEmpty() ? FText::FromString(TEXT("玩家库存或位置快照无效。")) : Failure);
 		return false;
@@ -823,7 +825,11 @@ bool UCatSaveSubsystem::RestorePlayerAfterSpawn(AController& Controller, ACatCha
 		return false;
 	}
 	const FTransform RestoredTransform = SavedPlayer.CharacterTransform;
-	Character.SetActorTransform(RestoredTransform, false, nullptr, ETeleportType::TeleportPhysics);
+	if (!PhysicalBody->TeleportBodyFromAuthority(RestoredTransform, TEXT("SavedRunRestore")))
+	{
+		RejectPendingRestore(FText::FromString(TEXT("玩家物理身体位置恢复被拒绝。")));
+		return false;
+	}
 	const FTransform AppliedTransform = Character.GetActorTransform();
 	bLocalPlayerRestoredInCurrentWorld = true;
 	UE_LOG(LogCatRun, Log,

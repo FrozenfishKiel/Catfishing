@@ -2,6 +2,7 @@
 
 #include "Fishing/Simulation/CatFishingFightWorkModel.h"
 
+
 namespace
 {
 	bool IsFiniteVector(const FVector& Value)
@@ -19,16 +20,11 @@ bool FCatFightSimulationConfig::IsValid() const
 {
 	return FMath::IsFinite(FixedStepSeconds) && FixedStepSeconds > 0.0
 		&& IsFiniteNonNegative(PrimaryOperatorCatStrength)
-		&& IsFiniteNonNegative(SecondCatStrength)
-		&& IsFiniteNonNegative(GetCombinedCatStrength())
-		&& IsFiniteNonNegative(PrimaryOperatorMassKilograms)
-		&& IsFiniteNonNegative(HelperMassKilograms)
-		&& FMath::IsFinite(GetCombinedCatMass()) && GetCombinedCatMass() > 0.0
+		&& FMath::IsFinite(PrimaryOperatorMassKilograms) && PrimaryOperatorMassKilograms > 0.0
 		&& FMath::IsFinite(FishMassKilograms) && FishMassKilograms > 0.0
 		&& FMath::IsFinite(FishStrength) && FishStrength > 0.0
 		&& FMath::IsFinite(StrengthPerKilogram) && StrengthPerKilogram > 0.0
 		&& FMath::IsFinite(ForcePerStrengthNewtons) && ForcePerStrengthNewtons > 0.0
-		&& FMath::IsFinite(CatBodyMassKilograms) && CatBodyMassKilograms > 0.0
 		&& FMath::IsFinite(ExhaustedReelForceNewtons) && ExhaustedReelForceNewtons > 0.0
 		&& IsFiniteNonNegative(ExhaustedCatTowAccelerationCentimetersPerSecondSquared)
 		&& FMath::IsFinite(DisplayTensionNewtons) && DisplayTensionNewtons > 0.0
@@ -38,23 +34,18 @@ bool FCatFightSimulationConfig::IsValid() const
 		&& IsFiniteNonNegative(CatRodStaminaCostPerStrengthRadian)
 		&& IsFiniteNonNegative(CatUnloadedWorkMultiplier)
 		&& IsFiniteNonNegative(CatSupportStaminaPerSecond)
-		&& IsFiniteNonNegative(FishStaminaCostPerStrengthCentimeter)
-		&& IsFiniteNonNegative(IsometricEffortMultiplier)
+		&& IsFiniteNonNegative(FishStaminaPerUnfulfilledMeter)
 		&& IsFiniteNonNegative(CatMovementStaminaMultiplier)
 		&& IsFiniteNonNegative(CatReelStaminaMultiplier)
 		&& IsFiniteNonNegative(CatRodStaminaMultiplier)
 		&& IsFiniteNonNegative(CatHoldStaminaMultiplier)
 		&& IsFiniteNonNegative(CatLoadStaminaMultiplier)
-		&& IsFiniteNonNegative(FishLoadStaminaMultiplier)
-		&& FMath::IsFinite(BaseDrainMultiplier) && BaseDrainMultiplier > 0.0
-		&& FMath::IsFinite(StruggleDrainMultiplier) && StruggleDrainMultiplier >= BaseDrainMultiplier
 		&& IsFiniteNonNegative(SlackStaminaRegenPerSecond)
 		&& IsFiniteNonNegative(StalemateRodWearPerFishStrength)
-		&& IsFiniteNonNegative(StruggleHoldRodWearPerSecond)
+		&& IsFiniteNonNegative(FishFullEffortRodWearPerSecond)
 		&& FMath::IsFinite(TautRodWearMultiplier) && TautRodWearMultiplier >= 1.0
 		&& FMath::IsFinite(ReelSpeedCentimetersPerSecond) && ReelSpeedCentimetersPerSecond > 0.0
-		&& IsFiniteNonNegative(FishCalmSpeedCentimetersPerSecond)
-		&& FMath::IsFinite(FishStruggleSpeedCentimetersPerSecond) && FishStruggleSpeedCentimetersPerSecond > 0.0
+		&& FMath::IsFinite(FishFullEffortSpeedCentimetersPerSecond) && FishFullEffortSpeedCentimetersPerSecond > 0.0
 		&& FMath::IsFinite(ExhaustedCatEscapeSpeedMultiplier) && ExhaustedCatEscapeSpeedMultiplier >= 1.0
 		&& FMath::IsFinite(FishExhaustionThreshold) && FishExhaustionThreshold >= 0.0
 		&& FishExhaustionThreshold <= 1.0
@@ -72,11 +63,17 @@ bool FCatFightSimulationConfig::IsValid() const
 		&& IsFiniteNonNegative(EscapeSlackCentimeters);
 }
 
+bool FCatFishingFightSimulator::IsLineAtMaximum(const FCatFightSimulationConfig& Config,
+	const double LineLengthCentimeters)
+{
+	return LineLengthCentimeters >= Config.MaximumLineLengthCentimeters - UE_DOUBLE_KINDA_SMALL_NUMBER;
+}
+
 bool FCatFishingFightSimulator::ShouldEscapeExhaustedCat(const FCatFightSimulationConfig& Config,
 	const FCatFightSimulationState& State, const bool bRodHeld)
 {
 	return bRodHeld && State.bOperatorPresent && !State.bFishExhausted && State.FishStamina > 0.0
-		&& State.CatStamina == 0.0 && Config.GetCombinedCatStrength() <= 0.0;
+		&& State.CatStamina == 0.0;
 }
 
 FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationConfig& Config,
@@ -101,6 +98,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	}
 	if (!FMath::IsFinite(State.CatStamina) || State.CatStamina < 0.0
 		|| !FMath::IsFinite(State.FishStamina) || State.FishStamina < 0.0
+		|| !FMath::IsFinite(State.FishEffortRatio) || State.FishEffortRatio < 0.0 || State.FishEffortRatio > 1.0
 		|| !FMath::IsFinite(State.LineLengthCentimeters) || State.LineLengthCentimeters < 0.0
 		|| !FMath::IsFinite(State.AbsoluteRodWear) || State.AbsoluteRodWear < 0.0
 		|| !FMath::IsFinite(State.StrongConfrontationBuildUpSeconds)
@@ -116,15 +114,15 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		|| !IsFiniteVector(RodConstraint.RodForwardWorld)
 		|| !IsFiniteVector(RodConstraint.RodTipVelocityCentimetersPerSecond)
 		|| !IsFiniteVector(RodConstraint.CarrierVelocityCentimetersPerSecond)
-		|| !IsFiniteVector(RodConstraint.CarrierDesiredVelocityCentimetersPerSecond)
-		|| !FMath::IsFinite(RodConstraint.CarrierTravelLimitCentimeters)
-		|| RodConstraint.CarrierTravelLimitCentimeters < -1.0
-		|| (RodConstraint.RodRotationPrediction.bValid && (
-			!IsFiniteVector(RodConstraint.RodRotationPrediction.HolderWorldPosition)
-			|| !IsFiniteVector(RodConstraint.RodRotationPrediction.TipOffsetInAimSpace)
-			|| !FMath::IsFinite(RodConstraint.RodRotationPrediction.MinimumPitchDegrees)
-			|| !FMath::IsFinite(RodConstraint.RodRotationPrediction.MaximumPitchDegrees)
-			|| RodConstraint.RodRotationPrediction.MinimumPitchDegrees > RodConstraint.RodRotationPrediction.MaximumPitchDegrees))
+		|| !IsFiniteVector(RodConstraint.RodTipAccelerationCentimetersPerSecondSquared)
+		|| !IsFiniteVector(RodConstraint.PreviousLineForceNewtons)
+		|| !IsFiniteNonNegative(RodConstraint.PendingLineResponseSeconds)
+		|| !IsFiniteVector(RodConstraint.PendingLineImpulseNewtonSeconds)
+		|| !IsFiniteVector(RodConstraint.PendingLinePositionMomentNewtonSecondsSquared)
+		|| !IsFiniteVector(RodConstraint.RodPointInverseMassX) || !IsFiniteVector(RodConstraint.RodPointInverseMassY)
+		|| !IsFiniteVector(RodConstraint.RodPointInverseMassZ) || !IsFiniteNonNegative(RodConstraint.PhysicsStepSeconds)
+		|| !FMath::IsFinite(RodConstraint.CatSupportAlignment)
+		|| RodConstraint.CatSupportAlignment < -1.0 || RodConstraint.CatSupportAlignment > 1.0
 		|| !IsFiniteNonNegative(RodConstraint.CatRodExertionSquaredSeconds)
 		|| RodConstraint.CatRodExertionSquaredSeconds > Config.FixedStepSeconds + UE_DOUBLE_KINDA_SMALL_NUMBER
 		|| !IsFiniteNonNegative(RodConstraint.CatRodPositiveWorkRadians)
@@ -145,7 +143,7 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const double Dt = Config.FixedStepSeconds;
 	Result.Trace.bInputAccepted = true;
 	Result.Trace.FixedStepSeconds = Dt;
-	Result.Trace.CombinedCatMassKilograms = Config.GetCombinedCatMass();
+	Result.Trace.OperatorBodyMassKilograms = Config.PrimaryOperatorMassKilograms;
 	const FVector RodTip = RodConstraint.RodTipWorldPosition;
 	const FVector FromRod = State.FishWorldPosition - RodTip;
 	const double Distance0 = FromRod.Size();
@@ -178,7 +176,8 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	Result.bExhaustedCatEscape = bExhaustedCatEscape;
 	// 力竭拖拽维持锁线；不能靠残留右键在零体力时反复放线回体、恢复全力。
 	const bool bReeling = bOperatorPresent && !bExhaustedCatEscape && State.CatAction == ECatFightCatAction::Pull;
-	const bool bSlackRecovery = bOperatorPresent && !bExhaustedCatEscape && State.CatAction == ECatFightCatAction::Slack;
+	const bool bSlackRecovery = bOperatorPresent && !bExhaustedCatEscape
+		&& State.CatAction == ECatFightCatAction::Slack && !IsLineAtMaximum(Config, State.LineLengthCentimeters);
 	Result.bSlackRecoveryActive = bSlackRecovery;
 	const bool bFreeSpool = !bOperatorPresent || bSlackRecovery;
 	const bool bStruggling = !State.bFishExhausted
@@ -198,160 +197,171 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 		? FMath::Clamp(FVector::DotProduct(RodForward, LineDirection), 0.0, 1.0) : 1.0;
 	const double RodLeverage = RodConstraint.bRodHeld
 		? FMath::Lerp(Config.MinimumRodLeverageMultiplier, 1.0, RodLineAlignment) : 1.0;
-	const double CombinedCatStrength = bOperatorPresent ? Config.GetCombinedCatStrength() : 0.0;
-	const double EffectiveCatStrength = CombinedCatStrength * RodLeverage;
-	const double ActiveFishStrength = State.bFishExhausted ? 0.0 : Config.FishStrength;
-	const double CatForce = EffectiveCatStrength * Config.ForcePerStrengthNewtons;
-	const double CatDriveAcceleration = 100.0 * CatForce / Config.GetCombinedCatMass();
-	const double FishSpeedCap = bStruggling
-		? Config.FishStruggleSpeedCentimetersPerSecond : Config.FishCalmSpeedCentimetersPerSecond;
+	const double OperatorCatStrength = bOperatorPresent ? Config.PrimaryOperatorCatStrength : 0.0;
+	const double SignedCatSupportStrength = OperatorCatStrength * RodLeverage * RodConstraint.CatSupportAlignment;
+	const double EffectiveCatStrength = FMath::Max(0.0, SignedCatSupportStrength);
+	const double FishEffortRatio = State.bFishExhausted ? 0.0 : bExhaustedCatEscape ? 1.0 : State.FishEffortRatio;
+	const double ActiveFishStrength = Config.FishStrength * FishEffortRatio;
+	const double FullEffortThrust = Config.FishStrength * Config.ForcePerStrengthNewtons;
+	const double CatForce = SignedCatSupportStrength * Config.ForcePerStrengthNewtons;
+	const double CatDriveAcceleration = 100.0 * CatForce / Config.PrimaryOperatorMassKilograms;
 	const double SwimSpeed = State.bFishExhausted ? 0.0 : bExhaustedCatEscape
-		? FMath::Max(Config.FishCalmSpeedCentimetersPerSecond, Config.FishStruggleSpeedCentimetersPerSecond)
-			* Config.ExhaustedCatEscapeSpeedMultiplier : FishSpeedCap;
-	const double FishThrust = SwimSpeed > UE_DOUBLE_SMALL_NUMBER
-		? ActiveFishStrength * Config.ForcePerStrengthNewtons + (bExhaustedCatEscape
-			? Config.GetCombinedCatMass() * Config.ExhaustedCatTowAccelerationCentimetersPerSecondSquared / 100.0 : 0.0) : 0.0;
+		? Config.FishFullEffortSpeedCentimetersPerSecond * Config.ExhaustedCatEscapeSpeedMultiplier
+		: Config.FishFullEffortSpeedCentimetersPerSecond * FishEffortRatio;
+	const double FishThrust = ActiveFishStrength * Config.ForcePerStrengthNewtons + (bExhaustedCatEscape
+		? Config.PrimaryOperatorMassKilograms * Config.ExhaustedCatTowAccelerationCentimetersPerSecondSquared / 100.0 : 0.0);
 	const double FishDriveAcceleration = 100.0 * FishThrust / Config.FishMassKilograms;
 	Result.Trace.RodLineAlignment = RodLineAlignment;
 	Result.Trace.RodLeverageMultiplier = RodLeverage;
-	Result.Trace.CombinedCatStrength = CombinedCatStrength;
+	Result.Trace.OperatorCatStrength = OperatorCatStrength;
 	Result.Trace.EffectiveCatStrength = EffectiveCatStrength;
 	Result.Trace.ActiveFishStrength = ActiveFishStrength;
 	Result.Trace.CatForceNewtons = CatForce;
 	Result.Trace.FishThrustNewtons = FishThrust;
 	Result.Trace.CatDriveAccelerationCentimetersPerSecondSquared = CatDriveAcceleration;
 	Result.Trace.FishDriveAccelerationCentimetersPerSecondSquared = FishDriveAcceleration;
-	Result.Trace.FishSpeedCapCentimetersPerSecond = FishSpeedCap;
+	Result.Trace.FishFullEffortSpeedCentimetersPerSecond = Config.FishFullEffortSpeedCentimetersPerSecond;
+	Result.Trace.FishEffortRatio = FishEffortRatio;
+	Result.Trace.FishFullEffortThrustNewtons = FullEffortThrust;
+	Result.Trace.FishStaminaPerUnfulfilledMeter = Config.FishStaminaPerUnfulfilledMeter;
 	Result.Trace.SwimSpeedCentimetersPerSecond = SwimSpeed;
-	// 隐式线性水阻使自由游动渐近性格目标速度，换向保留惯性；不会用力量永久限制小鱼游速。
-	const double Drag = FMath::Max(FishThrust, Config.FishStrength * Config.ForcePerStrengthNewtons)
-		/ FMath::Max(1.0, State.bFishExhausted ? Config.FishStruggleSpeedCentimetersPerSecond : SwimSpeed) * 100.0;
+	// 正常水阻固定按满出力校准，不能随u缩小抵消降力。零体力拖水保留独立的辅助推力/速度政策。
+	const double Drag = bExhaustedCatEscape
+		? FishThrust / FMath::Max(1.0, SwimSpeed) * 100.0
+		: FullEffortThrust / FMath::Max(1.0, Config.FishFullEffortSpeedCentimetersPerSecond) * 100.0;
+	Result.Trace.FishLinearDragKilogramsPerSecond = Drag;
 	const double EffectiveFishMass = Config.FishMassKilograms + Dt * Drag;
 	// 力竭收尾保持既定的无自主漂游规则；辅助卷线仍有独立的有限出力。
 	const FVector PreviousVelocity = State.bFishExhausted ? FVector::ZeroVector
 		: FVector(State.FishVelocityCentimetersPerSecond.X, State.FishVelocityCentimetersPerSecond.Y, 0.0);
 	const FVector FreeVelocity = (PreviousVelocity * Config.FishMassKilograms
 		+ FishDirection * (100.0 * FishThrust * Dt)) / EffectiveFishMass;
-	// 计费意图是鱼主动努力的目标距离，不能因被锁住后速度归零就免除支撑努力。
-	const FVector FishIntentDisplacement = FishDirection * SwimSpeed * Dt;
 	const double PaidOutLine0 = FMath::Clamp(State.LineLengthCentimeters, 0.0, Config.MaximumLineLengthCentimeters);
 	const auto RadiusAtHeight = [](const double Length, const double Height)
 	{
 		return FMath::Sqrt(FMath::Max(0.0, Length * Length - Height * Height));
 	};
-	// 已有几何误差单独回收，不能把位置纠偏伪装成新冲量，再写回鱼的惯性。
+	// 历史几何误差单独回收，不能把位置纠偏伪装成新冲量，再写回鱼的惯性。
 	const double ExistingHorizontalError = !bFreeSpool
 		? FMath::Max(0.0, FromRod.Size2D() - RadiusAtHeight(PaidOutLine0, VerticalDistance)) : 0.0;
-	const double PositionCorrection = FMath::Min(ExistingHorizontalError,
+	const bool bCMC = bool(RodConstraint.PredictCMCEndpoint);
+	const double PositionCorrection = RodConstraint.bPhysicalRodEndpoint && !bCMC ? 0.0 : FMath::Min(ExistingHorizontalError,
 		Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond * Dt);
-	const FVector ForceStart = State.FishWorldPosition - HorizontalOutward * ExistingHorizontalError;
-	const FVector ResidualPositionError = HorizontalOutward * (ExistingHorizontalError - PositionCorrection);
+	const FVector ForceStart = RodConstraint.bPhysicalRodEndpoint && !bCMC ? State.FishWorldPosition : State.FishWorldPosition - HorizontalOutward * ExistingHorizontalError;
+	const FVector ResidualPositionError = RodConstraint.bPhysicalRodEndpoint && !bCMC ? FVector::ZeroVector : HorizontalOutward * (ExistingHorizontalError - PositionCorrection);
 	const FVector FreeFishPosition = ForceStart + FreeVelocity * Dt;
 	const double FreeDistance = FVector::Distance(RodTip, FreeFishPosition + ResidualPositionError);
 	const double RequestedReelDistance = bReeling && (State.bFishExhausted || CatForce > UE_DOUBLE_SMALL_NUMBER)
 		? FMath::Min(Config.ReelSpeedCentimetersPerSecond * Dt, FMath::Max(0.0, PaidOutLine0 - VerticalDistance)) : 0.0;
-	const double ReelForceLimit = State.bFishExhausted ? Config.ExhaustedReelForceNewtons : CatForce;
-	const bool bMovingCarrier = RodConstraint.bRodHeld && bOperatorPresent && !State.bFishExhausted
-		&& RodConstraint.CarrierTravelLimitCentimeters >= 0.0;
-	const double CarrierSpeed = FVector::DotProduct(RodConstraint.CarrierVelocityCentimetersPerSecond, HorizontalOutward);
-	const double CarrierSpeedLimit = bExhaustedCatEscape ? SwimSpeed : Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond;
-	const FVector KinematicTipVelocity = bMovingCarrier
-		? RodConstraint.RodTipVelocityCentimetersPerSecond - HorizontalOutward * CarrierSpeed : FVector::ZeroVector;
+	const double ReelForceLimit = State.bFishExhausted ? Config.ExhaustedReelForceNewtons : FMath::Max(0.0, CatForce);
 	const double HorizontalDistance = FVector::Dist2D(RodTip, FreeFishPosition);
 	const double MobilityCmPerNewton = 100.0 * Dt * Dt / EffectiveFishMass;
 	Result.Trace.HorizontalDistanceCentimeters = HorizontalDistance;
 	Result.Trace.MobilityCentimetersPerNewton = MobilityCmPerNewton;
 	Result.Trace.FishPositionCorrectionCentimeters = PositionCorrection;
-	Result.Trace.CarrierTravelLimitCentimeters = RodConstraint.CarrierTravelLimitCentimeters;
-	const auto CarrierDisplacement = [&](const double Tension, const double HorizontalFraction)
-	{
-		if (!bMovingCarrier) return 0.0;
-		const double Acceleration = 100.0 * (Tension * HorizontalFraction - CatForce) / Config.GetCombinedCatMass();
-		// 与 CMC 相同的非反向支撑、速度上限和小步积分；只预测，不提交 Actor 或计费。
-		double Speed = CarrierSpeed, Distance = 0.0, Remaining = Dt;
-		while (Remaining > UE_DOUBLE_SMALL_NUMBER)
-		{
-			const double H = FMath::Min(Remaining, 1.0 / 120.0);
-			if (Speed >= 0.0 || Acceleration > 0.0)
-			{
-				const double Previous = Speed;
-				Speed += Acceleration * H;
-				if (Previous >= 0.0) Speed = FMath::Max(0.0, Speed);
-				if (Acceleration > 0.0) Speed = FMath::Min(CarrierSpeedLimit, Speed);
-			}
-			Distance += Speed * H;
-			Remaining -= H;
-		}
-		return FMath::Min(Distance, RodConstraint.CarrierTravelLimitCentimeters);
-	};
 	struct FLineSolve
 	{
 		double Tension = 0.0;
+		FVector Force = FVector::ZeroVector;
 		FVector Velocity = FVector::ZeroVector;
 		FVector Position = FVector::ZeroVector;
 		FVector RodEnd = FVector::ZeroVector;
 	};
-	bool bRotationPredictionSucceeded = true;
+	const auto ApplyPointResponse = [&](const FVector& Force)
+	{
+		return RodConstraint.RodPointInverseMassX * Force.X + RodConstraint.RodPointInverseMassY * Force.Y
+			+ RodConstraint.RodPointInverseMassZ * Force.Z;
+	};
+	const double EndpointPositionFactor = 0.5 + 0.5 * FMath::Clamp(RodConstraint.PhysicsStepSeconds / Dt, 0.0, 1.0);
+	const FVector ExternalEndpointAcceleration = RodConstraint.RodTipAccelerationCentimetersPerSecondSquared
+		- ApplyPointResponse(RodConstraint.PreviousLineForceNewtons) * 100.0;
+	const double PendingSeconds = RodConstraint.PendingLineResponseSeconds;
+	const FVector QueuedEndpoint = RodTip + RodConstraint.RodTipVelocityCentimetersPerSecond * PendingSeconds
+		+ ExternalEndpointAcceleration * (0.5 * PendingSeconds * PendingSeconds)
+		+ ApplyPointResponse(RodConstraint.PendingLinePositionMomentNewtonSecondsSquared) * 100.0;
+	const FVector QueuedVelocity = RodConstraint.RodTipVelocityCentimetersPerSecond + ExternalEndpointAcceleration * PendingSeconds
+		+ ApplyPointResponse(RodConstraint.PendingLineImpulseNewtonSeconds) * 100.0;
+	const FVector FreePhysicalEndpoint = QueuedEndpoint + QueuedVelocity * Dt
+		+ ExternalEndpointAcceleration * (EndpointPositionFactor * Dt * Dt);
+    bool bCandidateSucceeded = true;
+    const double CMCTravelLimit = bCMC && RodConstraint.GetCMCTravelLimit ? RodConstraint.GetCMCTravelLimit(HorizontalOutward,100000.0) : 0.0;
+    Result.Trace.bCMCEndpointPredicted = bCMC;
 	const auto SolveForLength = [&](const double Length)
 	{
-		FLineSolve Solved;
-		const bool bPredictRotation = bMovingCarrier && RodConstraint.RodRotationPrediction.bValid;
-		const FVector KinematicTip = bPredictRotation ? RodTip : RodTip + KinematicTipVelocity * Dt;
-		const FVector FreeOffset = FreeFishPosition - KinematicTip;
+        FLineSolve Solved;
+        if (bCMC)
+        {
+            // 7e606dd: one candidate tension drives fish, collision-bounded CMC motion and the same aim model.
+            const FVector Offset = FreeFishPosition - RodTip;
+            const FVector Axis = Offset.GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, HorizontalOutward);
+            const double Radius = RadiusAtHeight(Length, FMath::Abs(Offset.Z));
+            const double MidRadius = .5 * (Offset.Size2D() + FMath::Min(Offset.Size2D(),Radius));
+            const double HorizontalFraction = FMath::Max(.001, MidRadius / FMath::Max(UE_DOUBLE_SMALL_NUMBER,
+                FMath::Sqrt(MidRadius*MidRadius + Offset.Z*Offset.Z)));
+            const FVector ForceAxis = Axis * HorizontalFraction + FVector(0,0,FMath::Sign(Offset.Z)*FMath::Sqrt(1-HorizontalFraction*HorizontalFraction));
+            const auto Evaluate = [&](double Tension)
+            {
+                Solved.Tension = Tension; Solved.Force = ForceAxis * Tension;
+                Solved.Velocity = FreeVelocity - Axis * (100*Tension*HorizontalFraction*Dt/EffectiveFishMass);
+                Solved.Position = ForceStart + Solved.Velocity * Dt;
+                FCatFightCMCPredictionQuery Query;
+                Query.ForceNewtons = Solved.Force; Query.Seconds = Dt;
+                Query.TorqueStrengthMetersPerNewton = Config.RodPhysicsLengthCentimeters / (100*Config.ForcePerStrengthNewtons);
+                Query.TravelAxis = HorizontalOutward; Query.TravelLimitCentimeters = CMCTravelLimit;
+                const auto Predicted = RodConstraint.PredictCMCEndpoint(Query);
+                bCandidateSucceeded &= Predicted.bSucceeded;
+                Solved.RodEnd = Predicted.bSucceeded ? Predicted.RodTipWorldPosition : RodTip;
+                const FVector Separation = Solved.Position - Solved.RodEnd;
+                const double EndRadius = RadiusAtHeight(Length,FMath::Abs(Separation.Z));
+                const double Along = FVector::DotProduct(Separation,Axis);
+                const double AcrossSquared = FMath::Max(0.0,Separation.SizeSquared2D()-Along*Along);
+                return Along-FMath::Sqrt(FMath::Max(0.0,EndRadius*EndRadius-AcrossSquared));
+            };
+            if (Evaluate(0)>UE_DOUBLE_SMALL_NUMBER)
+            {
+                double Low=0, High=(Offset.Size2D()+FMath::Max(0.0,-FVector::DotProduct(RodConstraint.CarrierVelocityCentimetersPerSecond,Axis)*Dt))
+                    / (MobilityCmPerNewton*HorizontalFraction);
+                for(int32 I=0;I<40;++I) { const double Mid=(Low+High)*.5; if(Evaluate(Mid)>0) Low=Mid; else High=Mid; }
+                Evaluate(High);
+            }
+            Solved.Position += ResidualPositionError;
+            return Solved;
+        }
+        if (RodConstraint.bPhysicalRodEndpoint)
+		{
+			const FVector FreeOffset = FreeFishPosition - FreePhysicalEndpoint;
+			const FVector Axis = FreeOffset.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, LineDirection);
+			const FVector FishResponse = FVector(Axis.X, Axis.Y, 0) * MobilityCmPerNewton;
+			const FVector RodResponse = ApplyPointResponse(Axis) * (100.0 * EndpointPositionFactor * Dt * Dt);
+			const FVector RelativeResponse = FishResponse + RodResponse;
+			const double ErrorSquared = FreeOffset.SizeSquared() - Length * Length;
+			if (ErrorSquared > 0 && RelativeResponse.SizeSquared() > UE_DOUBLE_SMALL_NUMBER)
+			{
+				const double Projection = FVector::DotProduct(FreeOffset, RelativeResponse);
+				const double Discriminant = Projection * Projection - RelativeResponse.SizeSquared() * ErrorSquared;
+				if (Projection > 0)
+					Solved.Tension = Discriminant >= 0
+						? ErrorSquared / (Projection + FMath::Sqrt(Discriminant))
+						: Projection / RelativeResponse.SizeSquared();
+			}
+			Solved.Force = Axis * Solved.Tension;
+			Solved.Velocity = FreeVelocity - FishResponse * (Solved.Tension / Dt);
+			Solved.Position = State.FishWorldPosition + Solved.Velocity * Dt;
+			Solved.RodEnd = RodTip; // Observation only. No predicted transform is committed to Chaos.
+			return Solved;
+		}
+		const FVector FreeOffset = FreeFishPosition - RodTip;
 		const FVector Axis = FreeOffset.GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, HorizontalOutward);
 		const double Radius = RadiusAtHeight(Length, FMath::Abs(FreeOffset.Z));
 		const double MidRadius = 0.5 * (FreeOffset.Size2D() + FMath::Min(FreeOffset.Size2D(), Radius));
 		const double HorizontalFraction = FMath::Max(0.001, MidRadius / FMath::Max(UE_DOUBLE_SMALL_NUMBER,
 			FMath::Sqrt(MidRadius * MidRadius + FreeOffset.Z * FreeOffset.Z)));
-		const auto Evaluate = [&](const double Tension)
-		{
-			Solved.Tension = Tension;
-			Solved.Velocity = FreeVelocity - Axis * (100.0 * Tension * HorizontalFraction * Dt / EffectiveFishMass);
-			Solved.Position = ForceStart + Solved.Velocity * Dt;
-			Solved.RodEnd = KinematicTip + HorizontalOutward * CarrierDisplacement(Tension, HorizontalFraction);
-			if (bPredictRotation)
-			{
-				const auto& Prediction = RodConstraint.RodRotationPrediction;
-				FCatFishingRodRotationInput RotationInput = Prediction.Input;
-				RotationInput.DeltaSeconds = Dt;
-				RotationInput.CatTorqueCapacity = Config.PrimaryOperatorCatStrength;
-				RotationInput.MaximumFishTorque = Tension / Config.ForcePerStrengthNewtons * Config.RodPhysicsLengthCentimeters / 100.0;
-				RotationInput.PullAxis = (Solved.Position + ResidualPositionError - RodTip).GetSafeNormal();
-				const auto Rotation = FCatFishingRodResistanceModel::StepRotation(RotationInput);
-				bRotationPredictionSucceeded &= Rotation.bSucceeded;
-				FRotator Aim = Rotation.ActualAim;
-				Aim.Pitch = FMath::ClampAngle(Aim.Pitch, Prediction.MinimumPitchDegrees, Prediction.MaximumPitchDegrees);
-				const FVector TangentialBodyVelocity = RodConstraint.CarrierVelocityCentimetersPerSecond - HorizontalOutward * CarrierSpeed;
-				Solved.RodEnd = Prediction.HolderWorldPosition + Aim.RotateVector(Prediction.TipOffsetInAimSpace)
-					+ TangentialBodyVelocity * Dt + HorizontalOutward * CarrierDisplacement(Tension, HorizontalFraction);
-			}
-			const double EndRadius = RadiusAtHeight(Length, FMath::Abs(Solved.Position.Z - Solved.RodEnd.Z));
-			FVector Separation = Solved.Position - Solved.RodEnd;
-			Separation.Z = 0.0;
-			const double Along = FVector::DotProduct(Separation, Axis);
-			const double AcrossSquared = FMath::Max(0.0, Separation.SizeSquared() - Along * Along);
-			// 有符号径向误差在零半径时仍能找到相遇点，不会越过后再次增大残差。
-			return Along - FMath::Sqrt(FMath::Max(0.0, EndRadius * EndRadius - AcrossSquared));
-		};
-		if (Evaluate(0.0) > UE_DOUBLE_SMALL_NUMBER)
-		{
-			if (!bMovingCarrier)
-			{
-				Evaluate(FMath::Max(0.0, FreeOffset.Size2D() - Radius) / (MobilityCmPerNewton * HorizontalFraction));
-				Solved.Position += ResidualPositionError;
-				return Solved;
-			}
-			double Low = 0.0;
-			double High = (FreeOffset.Size2D() + FMath::Max(0.0, -CarrierSpeed * Dt))
-				/ (MobilityCmPerNewton * HorizontalFraction);
-			for (int32 I = 0; I < 40; ++I)
-			{
-				const double Candidate = 0.5 * (Low + High);
-				if (Evaluate(Candidate) > 0.0) Low = Candidate; else High = Candidate;
-			}
-			Evaluate(High);
-		}
-		Solved.Position += ResidualPositionError;
+		Solved.Tension = FMath::Max(0.0, FreeOffset.Size2D() - Radius) / (MobilityCmPerNewton * HorizontalFraction);
+		Solved.Force = (FreeFishPosition - RodTip).GetSafeNormal() * Solved.Tension;
+		Solved.Velocity = FreeVelocity - Axis * (100.0 * Solved.Tension * HorizontalFraction * Dt / EffectiveFishMass);
+		Solved.Position = ForceStart + Solved.Velocity * Dt + ResidualPositionError;
+		// Static-anchor callers retain the sampled endpoint. No hypothetical pose is committed.
+		Solved.RodEnd = RodTip;
 		return Solved;
 	};
 	// 卷线器和锁线使用同一个张力求解；先检验接收端是否有余力，再提交真正完成的线长。
@@ -373,14 +383,15 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	const double IntendedDistance = FreeDistance;
 	const double ConstraintError = FMath::Max(0.0, FreeDistance - LineLength);
 	FLineSolve Solved = SolveForLength(LineLength);
-	if (!bRotationPredictionSucceeded)
-	{
-		Result.RejectReason = Result.Trace.RejectReason = ECatFightSimulationRejectReason::InvalidRodConstraint;
-		return Result;
-	}
+    if (!bCandidateSucceeded)
+    {
+        Result.RejectReason = Result.Trace.RejectReason = ECatFightSimulationRejectReason::InvalidRodConstraint;
+        return Result;
+    }
 	if (bFreeSpoolReleased)
 	{
 		Solved.Tension = 0.0;
+		Solved.Force = FVector::ZeroVector;
 		Solved.Velocity = FreeVelocity;
 		Solved.Position = State.FishWorldPosition + FreeVelocity * Dt;
 		Solved.RodEnd = RodTip;
@@ -399,7 +410,6 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	Result.ResolvedFishVelocityCentimetersPerSecond = Solved.Velocity;
 	Result.FishPositionCorrectionWorldDisplacement = -HorizontalOutward * PositionCorrection;
 	Result.Trace.ConstraintRodEndWorldPosition = Solved.RodEnd;
-	Result.Trace.bRodRotationPredicted = bMovingCarrier && RodConstraint.RodRotationPrediction.bValid && !bFreeSpoolReleased;
 	const double NormalizedTension = FMath::Clamp(LineTension / Config.DisplayTensionNewtons, 0.0, 1.0);
 
 	const double Distance1 = FVector::Distance(RodTip, ProposedFishPosition);
@@ -424,10 +434,11 @@ FCatFightStepResult FCatFishingFightSimulator::Step(const FCatFightSimulationCon
 	Result.RodLineAlignment = RodLineAlignment;
 	Result.RodLeverageMultiplier = RodLeverage;
 	Result.EffectiveCatStrength = EffectiveCatStrength;
-	Result.CombinedCatStrength = CombinedCatStrength;
+	Result.OperatorCatStrength = OperatorCatStrength;
 	Result.CatDriveAccelerationCentimetersPerSecondSquared = CatDriveAcceleration;
 	Result.FishDriveAccelerationCentimetersPerSecondSquared = FishDriveAcceleration;
 	Result.LineTensionNewtons = LineTension;
+	Result.RodLineForceNewtons = Solved.Force;
 	Result.ConstraintErrorCentimeters = ConstraintError;
 	Result.RelativeConstraintSpeedCentimetersPerSecond = Dt > 0.0
 		? (IntendedDistance - Distance0 + RequestedReelDistance) / Dt : 0.0;
@@ -452,7 +463,7 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 {
 	const auto RejectResolvedResult = [&]()
 	{
-		// 保留诊断快照，同时遵守失败结果契约：任何数值输出都必须是有限的默认值。
+		// 保留诊断快照，但恢复旧有的失败结果契约：任何数值输出都必须是有限的默认值。
 		const FCatFightSimulationTrace Trace = Result.Trace;
 		Result = FCatFightStepResult{};
 		Result.RejectReason = ECatFightSimulationRejectReason::InvalidResolvedResult;
@@ -462,118 +473,121 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 		return false;
 	};
 	if (!Result.bSucceeded || !Config.IsValid() || Result.ProposedFishWorldPosition.ContainsNaN() || Result.FishEffortDirection.ContainsNaN()
+		|| !FMath::IsFinite(State.FishEffortRatio) || State.FishEffortRatio < 0.0 || State.FishEffortRatio > 1.0
 		|| !IsFiniteVector(Result.ResolvedFishVelocityCentimetersPerSecond)
+		|| !IsFiniteVector(Result.RodLineForceNewtons)
 		|| !IsFiniteVector(Result.FishPositionCorrectionWorldDisplacement)
+		|| !FMath::IsFinite(RodConstraint.CatSupportAlignment)
+		|| RodConstraint.CatSupportAlignment < -1.0 || RodConstraint.CatSupportAlignment > 1.0
 		|| !IsFiniteNonNegative(Result.LineLengthCentimeters) || !IsFiniteNonNegative(Result.LineTensionNewtons))
 	{
 		return RejectResolvedResult();
 	}
 	Result.Trace.bFinalizeInputAccepted = true;
-	// 该阶段可在地形解析后重新计算，但从未写入 ASC/装备；从输入状态重算，不能叠加候选求解费用。
+	// 该阶段可在地形解析后重新计算，但从未写入 ASC/装备；从输入状态重算，不能叠加临时费用。
 	Result.CatStaminaDrain = Result.FishStaminaDrain = Result.FishUncappedStaminaDrain = 0.0;
-	Result.CatMovementStaminaDrain = Result.CatReelStaminaDrain = Result.CatRodStaminaDrain = 0.0;
+	Result.Trace.FishStaminaDrainBeforeClamp = 0.0;
+	Result.CatReelStaminaDrain = Result.CatRodStaminaDrain = 0.0;
 	Result.CatRodWorkStaminaDrain = Result.CatRodSupportStaminaDrain = Result.CatHoldStaminaDrain = 0.0;
 	const double Dt = Config.FixedStepSeconds;
 	const bool bOperatorPresent = State.bOperatorPresent;
 	const bool bExhaustedCatEscape = Result.bExhaustedCatEscape;
-	const bool bSlackRecovery = Result.bSlackRecoveryActive;
+	// 使用最终已放线长，覆盖本步刚好放尽和岸线解析后的重算；满线完全复用普通锁线费用。
+	const bool bSlackRecovery = bOperatorPresent && !bExhaustedCatEscape
+		&& State.CatAction == ECatFightCatAction::Slack && !IsLineAtMaximum(Config, Result.LineLengthCentimeters);
+	Result.bSlackRecoveryActive = bSlackRecovery;
 	const bool bFreeSpool = !bOperatorPresent || bSlackRecovery;
 	const bool bReeling = bOperatorPresent && !bExhaustedCatEscape && State.CatAction == ECatFightCatAction::Pull;
 	const bool bStruggling = !State.bFishExhausted
 		&& (bExhaustedCatEscape || State.MotionIntent == ECatFishMotionIntent::StrugglingOutward);
 	const double LineTension = Result.LineTensionNewtons;
+	if (LineTension <= 0.0) Result.RodLineForceNewtons = FVector::ZeroVector;
 	const bool bLineRestraining = LineTension > UE_DOUBLE_SMALL_NUMBER;
 	const bool bFreeSpoolReleased = !bLineRestraining;
 	const double NormalizedTension = Result.NormalizedTension;
 	const double EffectiveCatStrength = Result.EffectiveCatStrength;
-	const double CombinedCatStrength = Result.CombinedCatStrength;
-	const double ActiveFishStrength = State.bFishExhausted ? 0.0 : Config.FishStrength;
-	const double FishThrust = ActiveFishStrength * Config.ForcePerStrengthNewtons;
-	const double CatForce = EffectiveCatStrength * Config.ForcePerStrengthNewtons;
+	const double OperatorCatStrength = Result.OperatorCatStrength;
+	const double FishEffortRatio = State.bFishExhausted ? 0.0 : bExhaustedCatEscape ? 1.0 : State.FishEffortRatio;
+	const double ActiveFishStrength = Config.FishStrength * FishEffortRatio;
+	const double CatForce = OperatorCatStrength * Result.RodLeverageMultiplier
+		* RodConstraint.CatSupportAlignment * Config.ForcePerStrengthNewtons;
 	Result.Trace.bFreeSpool = bFreeSpool;
 	Result.Trace.bReeling = bReeling;
 	Result.Trace.bStruggling = bStruggling;
 	Result.Trace.bLineRestraining = bLineRestraining;
 	Result.Trace.CatForceNewtons = CatForce;
-	Result.Trace.FishThrustNewtons = FishThrust;
 	const FVector LineDirection = (Result.ProposedFishWorldPosition - RodConstraint.RodTipWorldPosition)
 		.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector);
 	const double RodLineAlignment = FVector::DotProduct(RodConstraint.RodForwardWorld.GetSafeNormal(), LineDirection);
-	const double Alignment = Result.FishLineAlignment;
 	const double OutwardLoad = Result.NormalizedLineLoad;
 	const double SwimSpeed = Result.IntendedSwimSpeedCentimetersPerSecond;
 	Result.Trace.RodLineAlignment = RodLineAlignment;
 	Result.Trace.LineTensionNewtons = LineTension;
 	Result.Trace.NormalizedLineLoad = OutwardLoad;
 	const FVector FishIntentDisplacement = Result.FishEffortDirection * SwimSpeed * Dt;
-	const FVector CarrierIntentDisplacement = RodConstraint.bRodHeld
-		? RodConstraint.CarrierDesiredVelocityCentimetersPerSecond * Dt : FVector::ZeroVector;
 	const double RequestedReelDistance = Result.RequestedReelDistanceCentimeters;
 	const double ActualReelDistance = FMath::Clamp(State.LineLengthCentimeters - Result.LineLengthCentimeters, 0.0, RequestedReelDistance);
 	const FVector ProposedFishPosition = Result.ProposedFishWorldPosition;
 	const bool bLoadedConstraint = bLineRestraining && !bFreeSpoolReleased;
-	const bool bPrimaryCanPayEffort = Config.PrimaryOperatorCatStrength > UE_DOUBLE_SMALL_NUMBER;
-	const double CatCarrierIntent = bOperatorPresent && RodConstraint.bRodHeld && bLoadedConstraint && bPrimaryCanPayEffort
-		? FMath::Max(0.0, -FVector::DotProduct(CarrierIntentDisplacement, LineDirection)) : 0.0;
-	const double CatCarrierActual = bOperatorPresent && RodConstraint.bRodHeld
-		? FMath::Max(0.0, -FVector::DotProduct(
-			RodConstraint.CarrierVelocityCentimetersPerSecond * Dt, LineDirection)) : 0.0;
-	// 转杆仅消费转矩积分的支撑时间与真实正功，身体位移只使用 CarrierVelocity。
-	const double CatRodExertion = bOperatorPresent && RodConstraint.bRodHeld && bPrimaryCanPayEffort
+	const bool bOperatorCanPayEffort = EffectiveCatStrength > UE_DOUBLE_SMALL_NUMBER;
+	// 转杆仅消费本人实际物理转矩积分；本人的身体移动费用由 Runner 单独结算。
+	const double CatRodExertion = bOperatorPresent && RodConstraint.bRodHeld && bOperatorCanPayEffort
 		? RodConstraint.CatRodExertionSquaredSeconds : 0.0;
-	const double CatActiveIntentDistance = RequestedReelDistance + CatCarrierIntent;
 	const double FishOutwardIntentDistance = FMath::Max(0.0,
 		FVector::DotProduct(FishIntentDisplacement, LineDirection));
-	// 保留沿线意图距离供约束诊断；支撑费用另按负载与持续时间结算。
+	// 保留沿线意图距离供既有约束诊断；支撑费用另按负载与持续时间结算。
 	const double CatHoldIntentDistance = bLoadedConstraint && !bFreeSpool
 		? FishOutwardIntentDistance * NormalizedTension : 0.0;
-	Result.CatMovementIntentCentimeters = CatCarrierIntent;
-	Result.CatMovementActualCentimeters = FMath::Min(CatCarrierActual, CatCarrierIntent);
 	Result.CatRodExertionSquaredSeconds = CatRodExertion;
-	Result.CatRodPositiveWorkRadians = bOperatorPresent && RodConstraint.bRodHeld && bPrimaryCanPayEffort
+	Result.CatRodPositiveWorkRadians = bOperatorPresent && RodConstraint.bRodHeld && bOperatorCanPayEffort
 		? RodConstraint.CatRodPositiveWorkRadians : 0.0;
 	Result.CatHoldIntentCentimeters = CatHoldIntentDistance;
 	Result.RequestedReelDistanceCentimeters = RequestedReelDistance;
 	Result.ActualReelDistanceCentimeters = ActualReelDistance;
-	Result.CatIntendedLineDistanceCentimeters = CatActiveIntentDistance + CatHoldIntentDistance;
-	Result.CatActualLineDistanceCentimeters = ActualReelDistance + Result.CatMovementActualCentimeters;
+	Result.CatIntendedLineDistanceCentimeters = RequestedReelDistance + CatHoldIntentDistance;
+	Result.CatActualLineDistanceCentimeters = ActualReelDistance;
 	const double FishSignedIntentLineDistance = FVector::DotProduct(
 		FishIntentDisplacement, LineDirection);
-	const double FishSignedActualLineDistance = FVector::DotProduct(
-		ProposedFishPosition - State.FishWorldPosition - Result.FishPositionCorrectionWorldDisplacement, LineDirection);
+	const FVector FishActualDisplacement = ProposedFishPosition - State.FishWorldPosition
+		- Result.FishPositionCorrectionWorldDisplacement;
+	const double FishSignedActualLineDistance = FVector::DotProduct(FishActualDisplacement, LineDirection);
 	Result.FishIntendedLineDistanceCentimeters = FMath::Abs(FishSignedIntentLineDistance);
 	// 被收线或甩杆强迫拖向意图反方向的位移仍参与位置约束，但不能冒充鱼主动做功。
 	Result.FishActualLineDistanceCentimeters = FishSignedIntentLineDistance >= 0.0
 		? FMath::Max(0.0, FishSignedActualLineDistance)
 		: FMath::Max(0.0, -FishSignedActualLineDistance);
-	const double FishRealizedEffortDistance = FMath::Min(
-		Result.FishActualLineDistanceCentimeters, Result.FishIntendedLineDistanceCentimeters);
-	const double FishBlockedEffortDistance = FMath::Max(0.0,
-		Result.FishIntendedLineDistanceCentimeters - FishRealizedEffortDistance);
-	Result.Trace.FishRealizedEffortDistanceCentimeters = FishRealizedEffortDistance;
-	Result.Trace.FishBlockedEffortDistanceCentimeters = FishBlockedEffortDistance;
-	Result.Trace.FishEffectiveEffortDistanceCentimeters = FishRealizedEffortDistance
-		+ FishBlockedEffortDistance * Config.IsometricEffortMultiplier;
-	Result.Trace.FishPhaseMultiplier = bStruggling ? Config.StruggleDrainMultiplier : Config.BaseDrainMultiplier;
-	// 对抗负载按各自可用力量归一化，松线解除约束后为零；相同意图会随负载不同得到不同结算。
+	// 猫负载按可用力量归一化；鱼费用独立使用沿本步主动方向的运动缺失。
 	Result.CatNormalizedEffortLoad = FMath::Clamp(LineTension / FMath::Max(CatForce, UE_DOUBLE_SMALL_NUMBER), 0.0, 1.0);
 	const double PerpendicularRodLever = FMath::Sqrt(FMath::Max(0.0, 1.0 - RodLineAlignment * RodLineAlignment));
 	Result.CatRodNormalizedEffortLoad = FMath::Clamp(LineTension * Config.RodPhysicsLengthCentimeters / 100.0
-		* PerpendicularRodLever / FMath::Max(Config.PrimaryOperatorCatStrength * Config.ForcePerStrengthNewtons, UE_DOUBLE_SMALL_NUMBER), 0.0, 1.0);
-	Result.FishNormalizedEffortLoad = CombinedCatStrength > UE_DOUBLE_SMALL_NUMBER
-		? FMath::Max(0.0, Alignment) * FMath::Clamp(LineTension / FMath::Max(FishThrust, UE_DOUBLE_SMALL_NUMBER), 0.0, 1.0) : 0.0;
-	Result.Trace.CatMovementPositiveWorkUnits = Config.StrengthPerKilogram * Result.CatMovementActualCentimeters;
+		* PerpendicularRodLever / FMath::Max(FMath::Max(0.0, OperatorCatStrength * RodConstraint.CatSupportAlignment)
+			* Config.ForcePerStrengthNewtons, UE_DOUBLE_SMALL_NUMBER), 0.0, 1.0);
+	const bool bChargeFishIntent = !bSlackRecovery && !bExhaustedCatEscape && bOperatorPresent
+		&& OperatorCatStrength > UE_DOUBLE_SMALL_NUMBER && !State.bFishExhausted && State.FishStamina > 0.0;
+	FCatFightFishIntentInput FishIntent;
+	FishIntent.IntendedDisplacementCentimeters = FishIntentDisplacement;
+	FishIntent.ActualDisplacementCentimeters = FishActualDisplacement;
+	// 豁免步骤仍记录运动缺失，但不能因一笔不会收取的高价格乘积溢出而拒绝物理结果。
+	FishIntent.StaminaPerUnfulfilledMeter = bChargeFishIntent ? Config.FishStaminaPerUnfulfilledMeter : 0.0;
+	FCatFightFishIntentResult FishIntentResult;
+	if (!FCatFishingFightWorkModel::ComputeFishIntentDrain(FishIntent, FishIntentResult))
+	{
+		return RejectResolvedResult();
+	}
+	Result.FishIntendedDistanceCentimeters = Result.Trace.FishIntendedDistanceCentimeters = FishIntentResult.IntendedDistanceCentimeters;
+	Result.FishActualIntentProgressCentimeters = Result.Trace.FishActualIntentProgressCentimeters = FishIntentResult.ActualProgressCentimeters;
+	Result.FishUnfulfilledDistanceCentimeters = Result.Trace.FishUnfulfilledDistanceCentimeters = FishIntentResult.UnfulfilledDistanceCentimeters;
+	Result.Trace.FishStaminaPerUnfulfilledMeter = Config.FishStaminaPerUnfulfilledMeter;
 	Result.Trace.CatReelPositiveWorkUnits = Config.StrengthPerKilogram * ActualReelDistance;
 	Result.Trace.CatRodPositiveWorkUnits = Result.CatRodPositiveWorkRadians;
 	Result.Trace.CatHoldNormalizedLoad = Result.CatNormalizedEffortLoad;
 	Result.Trace.CatRodNormalizedLoad = Result.CatRodNormalizedEffortLoad;
 
-	double IgnoredEffortDistance = 0.0;
-	// 鱼力竭后进入纯收尾：继续求解收线和双端位移，猫端做功消耗为零。
+	// 鱼力竭后进入纯收尾：仍求解收线和双端位移，但不再向任何猫结算做功消耗。
 	if (!bSlackRecovery && !State.bFishExhausted && bOperatorPresent && EffectiveCatStrength > UE_DOUBLE_SMALL_NUMBER)
 	{
 		FCatFightCatWorkInput CatWork;
-		// 猫费用只由动作与负载观察量决定；鱼行为阶段倍率不叠加到猫端费用。
+		// 猫费用不再额外叠加鱼行为阶段倍率；负载变化已经体现在受力观察量里。
 		CatWork.UnloadedWorkMultiplier = Config.CatUnloadedWorkMultiplier;
 		CatWork.LoadStaminaMultiplier = Config.CatLoadStaminaMultiplier;
 		const auto ComputeCatChannel = [&](const double ActualAmount, const double UnitCost, const double Multiplier,
@@ -585,66 +599,50 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 			CatWork.NormalizedLoad = Load;
 			return FCatFishingFightWorkModel::ComputeCatWorkDrain(CatWork, OutDrain);
 		};
-		if (!ComputeCatChannel(Result.CatMovementActualCentimeters, Config.CatStaminaCostPerStrengthCentimeter,
-			Config.CatMovementStaminaMultiplier, Result.CatNormalizedEffortLoad, Result.CatMovementStaminaDrain)
-			|| !ComputeCatChannel(ActualReelDistance, Config.CatStaminaCostPerStrengthCentimeter,
+		if (!ComputeCatChannel(ActualReelDistance, Config.CatStaminaCostPerStrengthCentimeter,
 				Config.CatReelStaminaMultiplier, Result.CatNormalizedEffortLoad, Result.CatReelStaminaDrain)
 			|| !ComputeCatChannel(Result.CatRodPositiveWorkRadians, Config.CatRodStaminaCostPerStrengthRadian,
 				Config.CatRodStaminaMultiplier, Result.CatRodNormalizedEffortLoad, Result.CatRodWorkStaminaDrain))
 		{
 			return RejectResolvedResult();
 		}
-		// 共享沿线支撑先按负载平方和真实步长结算；主位的转杆仅承担超出共享支撑的部分。
-		// 实际做功费用不能抵扣支撑，从而不会因微动或无力主位的不可支付动作而免掉助手费用。
+		// 本人沿线与转杆支撑只收较高者；本人移动由 Runner 独立结算后再次去重。
+		// 实际做功不能抵扣支撑；其他身体的物理接触不产生此账单。
 		Result.CatHoldStaminaDrain = bLoadedConstraint && !bFreeSpool
 			? Config.CatSupportStaminaPerSecond * Dt * FMath::Square(Result.CatNormalizedEffortLoad)
 				* Config.CatHoldStaminaMultiplier : 0.0;
 		const double RodSupport = Config.CatSupportStaminaPerSecond
 			* Result.CatRodExertionSquaredSeconds * Config.CatRodStaminaMultiplier;
-		Result.Trace.CatRodSupportBeforeSharedStaminaDrain = RodSupport;
+		Result.Trace.CatRodSupportBeforeHoldDeduction = RodSupport;
 		if (!IsFiniteNonNegative(RodSupport) || !IsFiniteNonNegative(Result.CatHoldStaminaDrain))
 		{
 			return RejectResolvedResult();
 		}
 		Result.CatRodSupportStaminaDrain = FMath::Max(0.0, RodSupport - Result.CatHoldStaminaDrain);
 		Result.CatRodStaminaDrain = Result.CatRodWorkStaminaDrain + Result.CatRodSupportStaminaDrain;
-		Result.CatStaminaDrain = Result.CatMovementStaminaDrain + Result.CatReelStaminaDrain
+		Result.CatStaminaDrain = Result.CatReelStaminaDrain
 			+ Result.CatRodStaminaDrain + Result.CatHoldStaminaDrain;
 		if (!IsFiniteNonNegative(Result.CatStaminaDrain))
 		{
 			return RejectResolvedResult();
 		}
 	}
-	// 正常右键期间独立回体，移动、转杆和最大线长处的张力均不产生双方费用。
-	// 无人值守放线不恢复活动操作手；零体力强制拖拽也不通过右键退出。
+	// 尚有线杯容量时右键独立回体；已放尽则恢复正常做功、支撑与鱼出力费用。
+	// 无人值守放线不恢复旧操作手；零体力强制拖拽也不通过右键退出。
 	if (bSlackRecovery)
 	{
 		Result.CatStaminaDrain = -FMath::Min(FMath::Max(0.0, Config.CatStaminaMaximum - State.CatStamina),
 			Config.SlackStaminaRegenPerSecond * Dt);
 	}
 
-	if (!bSlackRecovery && !State.bFishExhausted && State.FishStamina > 0.0
-		&& Result.FishIntendedLineDistanceCentimeters > UE_DOUBLE_SMALL_NUMBER)
+	if (bChargeFishIntent)
 	{
-		FCatFightWorkInput FishWork;
-		// 鱼只为对抗负载付费；自由游动、放线和没有可用猫合力的游动不产生基础耗体。
-		FishWork.BaseEffortMultiplier = 0.0;
-		FishWork.Strength = Config.StrengthPerKilogram;
-		FishWork.IntendedLineDistanceCentimeters = Result.FishIntendedLineDistanceCentimeters;
-		FishWork.ActualLineDistanceCentimeters = Result.FishActualLineDistanceCentimeters;
-		FishWork.IsometricEffortMultiplier = Config.IsometricEffortMultiplier;
-		FishWork.CostPerStrengthCentimeter = Config.FishStaminaCostPerStrengthCentimeter;
-		FishWork.PhaseMultiplier = bStruggling ? Config.StruggleDrainMultiplier : Config.BaseDrainMultiplier;
-		FishWork.NormalizedLoad = Result.FishNormalizedEffortLoad;
-		FishWork.LoadStaminaMultiplier = Config.FishLoadStaminaMultiplier;
-		if (!FCatFishingFightWorkModel::ComputeDrain(FishWork, Result.FishStaminaDrain, IgnoredEffortDistance))
-		{
-			return RejectResolvedResult();
-		}
+		// u 已进入意图速度；不再乘 u²、张力或鱼线夹角。倒拖保留全部负进展。
+		Result.FishStaminaDrain = FishIntentResult.StaminaDrain;
 		Result.FishUncappedStaminaDrain = Result.FishStaminaDrain;
 		Result.Trace.FishStaminaDrainBeforeClamp = Result.FishStaminaDrain;
 		Result.FishStaminaDrain = FMath::Min(Result.FishStaminaDrain, State.FishStamina);
-		// 无负载或费用关闭时不能仅因剩余体力低于阈值而把鱼判为力竭。
+		// 没有运动缺失或费用关闭时，不能仅因残余体力低于阈值就判为力竭。
 		if (Result.FishStaminaDrain > 0.0
 			&& State.FishStamina - Result.FishStaminaDrain <= Config.FishExhaustionThreshold)
 		{
@@ -666,19 +664,19 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 
 	const double FishLineForce = ActiveFishStrength * OutwardLoad;
 	const double CatLineForce = bReeling ? EffectiveCatStrength : 0.0;
-	Result.Trace.FishLineForceNewtons = FishLineForce;
-	Result.Trace.CatLineForceNewtons = CatLineForce;
+	Result.Trace.FishLineForceNewtons = FishLineForce * Config.ForcePerStrengthNewtons;
+	Result.Trace.CatLineForceNewtons = CatLineForce * Config.ForcePerStrengthNewtons;
 	// LineLoad 是鱼主动沿线向外施力的投影，也是鱼竿磨损的唯一方向负载。
 	// Tension 只说明几何约束已经介入，不能在鱼回头或横游时替代 LineLoad，
 	// 否则猫端收线制造的张力会让低负载帧继续按满负载磨线。
 	const double WearLoad = OutwardLoad;
 	Result.Trace.WearLoad = WearLoad;
-	// 鱼力竭后的收尾只保留线长约束和拖拽位移；死鱼施力为零，
+	// 鱼力竭后的收尾只保留线长约束和拖拽位移；死鱼不再施力，
 	// 猫的收线力也不能独自制造鱼竿磨损，否则拉鱼干仍会耗尽耐久。
 	// 拖落水期间不新增磨损，避免尚未落水就被断竿替代。
 	const double RodWearDelta = !State.bFishExhausted && !bExhaustedCatEscape && bLineRestraining
 		? (FMath::Max(FishLineForce, CatLineForce) * Config.StalemateRodWearPerFishStrength
-			+ (bStruggling ? Config.StruggleHoldRodWearPerSecond : 0.0))
+			+ Config.FishFullEffortRodWearPerSecond * FMath::Square(FishEffortRatio))
 			* WearLoad * Dt * Config.TautRodWearMultiplier : 0.0;
 	Result.RodWearDelta = RodWearDelta;
 	Result.AbsoluteRodWear = State.AbsoluteRodWear + RodWearDelta;
@@ -694,25 +692,10 @@ bool FCatFishingFightSimulator::FinalizeResolvedStep(const FCatFightSimulationCo
 		Result.Outcome = ECatFightStepOutcome::FishExhausted;
 	}
 	else if (bEscaped) Result.Outcome = ECatFightStepOutcome::Escaped;
-	// 岸线/坡面可能改变最终力臂；猫与杆都必须消费最终线方向上的同一张力。
-	const double SignedCarrierAcceleration = 100.0
-		* (LineTension * LineDirection.Size2D() - CatForce) / Config.GetCombinedCatMass();
+	// No net-cat acceleration is published: the complete line load has one physical rod receiver.
 	Result.Trace.HorizontalLineFactor = LineDirection.Size2D();
-	Result.Trace.SignedCarrierAccelerationCentimetersPerSecondSquared = SignedCarrierAcceleration;
-	Result.NetFishPullAccelerationCentimetersPerSecondSquared = FMath::Max(0.0, SignedCarrierAcceleration);
-	Result.bUseContinuousCarrierTraction = RodConstraint.bRodHeld && bOperatorPresent
-		&& !State.bFishExhausted && Result.Outcome == ECatFightStepOutcome::None;
-	Result.CarrierPullAccelerationCentimetersPerSecondSquared = Result.bUseContinuousCarrierTraction
-		? Result.NetFishPullAccelerationCentimetersPerSecondSquared : 0.0;
-	Result.CarrierBrakingDecelerationCentimetersPerSecondSquared = Result.bUseContinuousCarrierTraction
-		? FMath::Max(0.0, -SignedCarrierAcceleration) : 0.0;
 	Result.Trace.CatStaminaAfterStep = FMath::Clamp(State.CatStamina - Result.CatStaminaDrain, 0.0, Config.CatStaminaMaximum);
 	Result.Trace.FishStaminaAfterStep = FMath::Max(0.0, State.FishStamina - Result.FishStaminaDrain);
-	// 连续积分中极小的正加速度也必须有有效上限；不能因另一套容差发布零上限，瞬间刹停已有速度。
-	Result.CarrierTargetPullSpeedCentimetersPerSecond = Result.CarrierPullAccelerationCentimetersPerSecondSquared > 0.0
-		? (bExhaustedCatEscape ? SwimSpeed : Config.MaximumFishConstraintCorrectionSpeedCentimetersPerSecond) : 0.0;
 	return IsFiniteNonNegative(Result.AbsoluteRodWear) && IsFiniteNonNegative(Result.FishStaminaDrain)
-		&& FMath::IsFinite(Result.CatStaminaDrain)
-		&& IsFiniteNonNegative(Result.CarrierPullAccelerationCentimetersPerSecondSquared)
-		&& IsFiniteNonNegative(Result.CarrierBrakingDecelerationCentimetersPerSecondSquared);
+		&& FMath::IsFinite(Result.CatStaminaDrain);
 }

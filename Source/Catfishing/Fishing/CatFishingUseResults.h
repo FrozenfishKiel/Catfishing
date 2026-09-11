@@ -4,37 +4,6 @@
 #include "Framework/Core/CatDomainCommandTypes.h"
 #include "CatFishingUseResults.generated.h"
 
-/** 一次钓鱼失败预算允许的唯一惩罚结果；它只描述 Fishing 会话的失败结算，不是物品或装备的中心分类入口。 */
-UENUM(BlueprintType)
-enum class ECatFishingFailurePenalty : uint8
-{
-	/** 失败发生但本次不提交物资惩罚。 */
-	None,
-	/** 只追加损失一份已选特殊鱼饵；普通饵的基础使用扣减由 Fishing 提交链处理，不进入额外失败惩罚。 */
-	LoseSpecialBait,
-	/** 只降低当前鱼竿耐久；降至零即断竿，断竿和丢饵互斥。 */
-	DamageRod
-};
-
-/** 一次失败预算提交结果；明确记录唯一选择的惩罚。 */
-USTRUCT(BlueprintType)
-struct FCatFishingFailureResult
-{
-	GENERATED_BODY()
-
-	/** 公共幂等终态；Revision 对应 Equipment 聚合。 */
-	UPROPERTY(BlueprintReadOnly)
-	FCatDomainCommandResult Command;
-
-	/** 首次提交的唯一失败结算结果；StateTree 写入它，Session 和 Equipment 只按该结果收口一次预算。 */
-	UPROPERTY(BlueprintReadOnly)
-	ECatFishingFailurePenalty Penalty = ECatFishingFailurePenalty::None;
-
-	/** 惩罚后的鱼竿耐久；丢饵时保持原值。 */
-	UPROPERTY(BlueprintReadOnly)
-	double RemainingRodDurability = 0.0;
-};
-
 /** Fishing 使用冻结的 Begin 结果；bBaitFrozen 表示本次 Fishing 已从随身库存暂存一份鱼饵，直到 Commit 消耗或 Release 归还。 */
 USTRUCT(BlueprintType)
 struct FCatFishingUseFreezeResult

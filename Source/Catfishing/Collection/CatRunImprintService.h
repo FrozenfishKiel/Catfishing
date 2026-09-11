@@ -25,12 +25,8 @@ public:
 	FGuid RecordCommittedCapture(const FCatCaptureCommittedResult& Capture, const FString& RecipientStableNetId,
 		const FCatCaptureConditionSnapshot& Condition);
 
-	/** 只读判断服务是否仍能为下一条已提交实物鱼建立 FishRecorded Grant；调用方在鱼容器不可逆写入前检查。 */
+	/** 只读判断服务是否仍能为下一条已提交实物鱼建立 FishRecorded Grant；调用方在 Items 不可逆写入前检查。 */
 	bool CanRecordCommittedCapture() const;
-
-	/** 记录“重试次数耗尽”的合格逃鱼终态并生成一次剪影 Grant；其他逃脱原因没有裁决时不得调用。 */
-	FGuid RecordRetryExhaustedSilhouette(FGuid FishingSessionId, FName FishDefinitionId,
-		const FString& RecipientStableNetId);
 
 	/** 记录一份外部里程碑已裁决的装备解锁 Grant；本服务只负责不可变投递和 ACK，不决定解锁条件。 */
 	FGuid RecordCommittedUnlock(FName UnlockId, const FString& RecipientStableNetId);
@@ -108,9 +104,6 @@ private:
 
 	/** CaptureRequestId 到 FishRecorded GrantId，保证捕获重放不重复增长图鉴。 */
 	TMap<FGuid, FGuid> CaptureGrantByRequest;
-
-	/** 合格逃鱼 FishingSessionId 到唯一 FishSilhouette GrantId；StateTree 重入或 ACK 丢失不重复生成。 */
-	TMap<FGuid, FGuid> SilhouetteGrantByFishingSession;
 
 	/** Recipient+UnlockId 到唯一 Unlock GrantId；重试或重复里程碑不会制造多份待 ACK 解锁。 */
 	TMap<FString, FGuid> UnlockGrantByRecipientAndUnlockId;

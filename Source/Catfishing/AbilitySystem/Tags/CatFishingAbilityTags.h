@@ -66,4 +66,5 @@ namespace CatFishingAbilityTags
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Data_Run_Offering_BaseProgressGain);
 	/** 夜晚供品结算 GE 读取的本日基础失败损失；来源是 RunSettings 日程，不由客户端提交。 */
 	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Data_Run_Offering_BaseProgressLoss);
+	UE_DECLARE_GAMEPLAY_TAG_EXTERN(Cosmetic_Fishing_LineBroken);
 }

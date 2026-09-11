@@ -4,6 +4,7 @@
 #include "Components/ActorComponent.h"
 #include "GameplayTagContainer.h"
 #include "Fishing/Integration/CatFishingCommandTypes.h"
+#include "Fishing/Integration/CatFishingRodAimState.h"
 #include "CatFishingCommandComponent.generated.h"
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(
@@ -33,10 +34,15 @@ struct FCatFishingInputEdge
 
 	UPROPERTY(BlueprintReadOnly)
 	int64 InputSequence = 0;
+	/** 收线/放线按键绑定产生时看到的操竿权；换主后的迟到包不能获得新权限。 */
+	UPROPERTY() FGuid ControlRodActorId;
+	UPROPERTY() uint32 ControlEpoch = 0;
 	/** 松开时采集的鼠标/镜头输入，服务器验证后自行与水面求交。 */
 	UPROPERTY() bool bHasCastViewRay = false;
 	UPROPERTY() FVector CastViewOrigin = FVector::ZeroVector;
 	UPROPERTY() FVector CastViewDirection = FVector::ZeroVector;
+	/** 右键按下时的输入累计量；不携带任何客户端权威竿角。 */
+	UPROPERTY() FCatFishingRodAimSample RodAimSample;
 };
 
 UCLASS(ClassGroup=(Catfishing), meta=(BlueprintSpawnableComponent))
@@ -70,6 +76,10 @@ public:
 	void ConsumeResult(FGuid RequestId);
 
 	void ResetTransientCommandState();
+	/** 放下或取回本人竿时清持续按键并保留递增序号，取回后需要新的按键边沿。 */
+	void ClearHeldFightInputForControlTransferFromAuthority();
+	/** Focus/menu/body exit cancels pending aims and held effort without casting or cutting an existing line. */
+	void ClearHeldInputForLifecycle(FName Reason);
 	/**
 	 * 读取服务器最后确认的连续搏斗输入。该状态属于玩家输入生命周期，不属于某个 FishingSession；
 	 * 新 Runner 用它恢复跨断线边界仍真实按住的按键，避免必须松开再按一次。
@@ -81,17 +91,28 @@ public:
 	FCatFishingInputEdge SubmitPrimaryReleased();
 	FCatFishingInputEdge SubmitSlackPressed();
 	FCatFishingInputEdge SubmitSlackReleased();
+	/** 由本地 Controller::UpdateRotation 每帧提交一次已缩放的鼠标增量；组件自身不 Tick。 */
+	void UpdateLocalRodAimInput(double DeltaSeconds, const FRotator& LookDeltaDegrees);
+	/** 输入失焦或生命周期退出时撤掉主动转杆；不回绕累计量、样本序号或鼠标段序号。 */
+	void StopLocalRodAimInput();
 	FCatFishingInputEdge SubmitChumPressed();
 	FCatFishingInputEdge SubmitChumReleased();
 	FCatFishingInputEdge SubmitCancel();
 	/** 显式切线入口；现有取消键也会在可切线阶段由服务器改派到同一命令。 */
 	FCatFishingInputEdge SubmitCutLine();
 	FCatFishingInputEdge SubmitScoop();
+	FCatFishingInputEdge SubmitChum();
+	void ForwardLegacyAssist(FGuid FishingSessionId, FGuid RequestId, int64 ExpectedRevision);
+	/** 旧蓝图抢抄入口的兼容转发；成功后同样直接变成嘴叼世界鱼，不接受客户端容器目标。 */
+	void ForwardLegacyScoop(FGuid FishingSessionId, FCatScoopCommand Command);
 
 	UPROPERTY(BlueprintAssignable)
 	FCatFishingCommandResultReceived OnResultReceived;
 
 private:
+	friend class FCatFishingGroupNetworkTest;
+	friend class FCatFishingSlackAimCommandRoutingTest;
+	friend class FCatFishingCommandComponentHeldFightInputTest;
 	UFUNCTION(Client, Reliable)
 	void ClientReceiveFishingCommandResult(const FCatFishingCommandResult& Result);
 
@@ -109,15 +130,27 @@ private:
 
 	UFUNCTION(Server, Reliable)
 	void ServerSubmitFishingAbilityCommand(ECatFishingCommandType CommandType, FCatFishingInputEdge Edge);
+	UFUNCTION(Server, Reliable)
+	void ServerClearHeldInputForLifecycle(FName Reason, FCatFishingInputEdge Edge);
+	UFUNCTION(Client, Reliable)
+	void ClientReceiveHeldInputCleared(FName Reason, int64 InputSequence, bool bAccepted);
+	UFUNCTION(Server, Unreliable)
+	void ServerSubmitRodAimSample(FCatFishingRodAimSample Sample);
+	/** 鼠标启停绕过30Hz节流；仍与普通快照共用同一服务器序号裁决。 */
+	UFUNCTION(Server, Reliable)
+	void ServerSubmitRodAimTransition(FCatFishingRodAimSample Sample);
 
 	static constexpr int32 MaxStoredResults = 32;
 
 	bool IsSupportedOwner() const;
-	/** 在路由到具体 Session 前先记录按下/松开事实；即使当前无会话或玩法 gate 关闭，Release 也必须能清掉已按下状态。 */
+	/** 在路由到具体 Session 前先记录按下/松开事实；即使当前无会话或玩法 gate 关闭，Release 也必须能清掉旧状态。 */
 	void TrackHeldFightInputFromAuthority(ECatFishingCommandType CommandType,
 		const FCatFishingInputEdge& Edge);
 	void ReceiveResultLocally(const FCatFishingCommandResult& Result);
 	FCatFishingInputEdge MakeDiscreteEdge();
+	FCatFishingRodAimSample MakeRodAimSample(const class ACatFishingRodActor* Rod);
+	void SendLocalRodAimSample(const FCatFishingRodAimSample& Sample, bool bTransition);
+	void HandleRodAimSampleFromAuthority(const FCatFishingRodAimSample& Sample, bool bTransition);
 	void DispatchAbilityCommand(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge);
 	/** 权威侧统一处理 Ability 输入命令；抄网会搜索已上钩目标并交给 Session 完成嘴叼世界鱼交接。 */
 	void HandleAbilityCommandFromAuthority(ECatFishingCommandType CommandType, const FCatFishingInputEdge& Edge);
@@ -152,6 +185,24 @@ private:
 	bool bServerPrimaryHeld = false;
 	bool bServerSlackHeld = false;
 	int64 LastServerHeldInputSequence = 0;
+
+	// 输入采样序号与累计量只在 Controller 构造时归零。ResetTransientCommandState 不得回绕，
+	// 否则同一根竿尚未退出时新的采样会被误判为旧包。
+	int64 NextRodAimSequence = 0;
+	FVector2D CumulativeRodLookDegrees = FVector2D::ZeroVector;
+	int64 MouseStrokeSequence = 0;
+	FVector2D MouseStrokeStartLookDegrees = FVector2D::ZeroVector;
+	FGuid LocalMouseAimRodActorId;
+	uint32 LocalMouseAimEpoch = 0;
+	bool bLocalMouseActive = false;
+	TWeakObjectPtr<const class ACatFishingRodActor> LocalPitchAimRod;
+	uint32 LocalPitchAimEpoch = 0;
+	double LocalRequestedRodPitch = 0.0;
+	bool bLocalPitchAimInitialized = false;
+	bool bLocalSlackHeld = false;
+	double RodAimSendElapsedSeconds = 0.0;
+	double NextLocalRodAimDiagnosticSeconds = 0.0;
+	double NextServerRodAimDiagnosticSeconds = 0.0;
 
 	/** 每个 PlayerController 独立的抄网权威冷却；目标鱼/Session 切换不会绕过。 */
 	FCatFishingCooldownGate ScoopCooldownGate;

@@ -12,12 +12,26 @@ namespace
 		return FMath::IsFinite(Value) && Value >= 0.0 && Value <= 1.0;
 	}
 
-	FVector FlattenDirection(const FVector& Value, const FVector& DefaultDirection)
+	bool IsPositiveRange(const FVector2D& Range)
 	{
-		const FVector Flat(Value.X, Value.Y, 0.0);
-		const FVector FlatDefaultDirection(DefaultDirection.X, DefaultDirection.Y, 0.0);
-		return Flat.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER,
-			FlatDefaultDirection.GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector));
+		return FMath::IsFinite(Range.X) && FMath::IsFinite(Range.Y) && Range.X > 0.0 && Range.Y >= Range.X;
+	}
+
+	bool IsEffortRange(const FVector2D& Range)
+	{
+		return IsUnitInterval(Range.X) && IsUnitInterval(Range.Y) && Range.Y >= Range.X;
+	}
+
+	bool IsLiveBehavior(const ECatFishBehavior Behavior)
+	{
+		return Behavior == ECatFishBehavior::OutwardRush || Behavior == ECatFishBehavior::LateralArc
+			|| Behavior == ECatFishBehavior::EaseOff;
+	}
+
+	FVector FlattenDirection(const FVector& Value, const FVector& Fallback)
+	{
+		return FVector(Value.X, Value.Y, 0.0).GetSafeNormal(UE_DOUBLE_SMALL_NUMBER,
+			FVector(Fallback.X, Fallback.Y, 0.0).GetSafeNormal(UE_DOUBLE_SMALL_NUMBER, FVector::ForwardVector));
 	}
 
 	FVector TurnToward2D(const FVector& Current, const FVector& Target, const double MaximumDegrees)
@@ -27,208 +41,267 @@ namespace
 		const double CurrentYaw = FMath::Atan2(SafeCurrent.Y, SafeCurrent.X);
 		const double TargetYaw = FMath::Atan2(SafeTarget.Y, SafeTarget.X);
 		const double MaximumRadians = FMath::DegreesToRadians(FMath::Max(0.0, MaximumDegrees));
-		const double DeltaYaw = FMath::FindDeltaAngleRadians(CurrentYaw, TargetYaw);
-		const double NewYaw = CurrentYaw + FMath::Clamp(DeltaYaw, -MaximumRadians, MaximumRadians);
+		const double NewYaw = CurrentYaw + FMath::Clamp(FMath::FindDeltaAngleRadians(CurrentYaw, TargetYaw),
+			-MaximumRadians, MaximumRadians);
 		return FVector(FMath::Cos(NewYaw), FMath::Sin(NewYaw), 0.0);
 	}
 
-	FVector RotateAroundUp(const FVector& Direction, const double OffsetDegrees)
+	FVector ConstrainTargetToWater(const FVector& Target, const FCatFishSteeringState& State)
 	{
-		return FlattenDirection(Direction, FVector::ForwardVector)
-			.RotateAngleAxis(OffsetDegrees, FVector::UpVector);
+		if (State.BoundaryAvoidanceSecondsRemaining <= 0.0) return Target;
+		const FVector Waterward = State.BoundaryWaterwardDirection;
+		return FlattenDirection(Target + Waterward * FMath::Max(0.0,
+			0.2 - FVector::DotProduct(Target, Waterward)), Waterward);
 	}
 }
 
 bool FCatFishSteeringConfig::IsValid() const
 {
-	return FMath::IsFinite(RetargetDurationRangeSeconds.X) && RetargetDurationRangeSeconds.X > 0.0
-		&& FMath::IsFinite(RetargetDurationRangeSeconds.Y)
-		&& RetargetDurationRangeSeconds.Y >= RetargetDurationRangeSeconds.X
+	return IsPositiveRange(RetargetDurationRangeSeconds)
 		&& FMath::IsFinite(MaximumTurnRateDegreesPerSecond) && MaximumTurnRateDegreesPerSecond > 0.0
-		&& IsUnitInterval(StruggleOutwardBias) && IsUnitInterval(CalmInwardBias)
-		&& IsUnitInterval(LateralMovementBias) && IsUnitInterval(FeintProbability)
-		&& IsUnitInterval(FullStaminaInwardProbability)
-		&& IsUnitInterval(ExhaustedInwardProbability)
-		&& ExhaustedInwardProbability >= FullStaminaInwardProbability
-		&& FMath::IsFinite(InwardProbabilityExponent)
-		&& InwardProbabilityExponent >= 0.1 && InwardProbabilityExponent <= 4.0
-		&& FMath::IsFinite(InwardConeHalfAngleDegrees)
-		&& InwardConeHalfAngleDegrees >= 1.0 && InwardConeHalfAngleDegrees <= 89.0;
-}
-
-double FCatFishSteeringModel::ComputeInwardProbability(const FCatFishSteeringConfig& Config,
-	const double FishStaminaRatio)
-{
-	if (!Config.IsValid() || !FMath::IsFinite(FishStaminaRatio))
-	{
-		return 0.0;
-	}
-	const double ExhaustionAlpha = FMath::Pow(1.0 - FMath::Clamp(FishStaminaRatio, 0.0, 1.0),
-		Config.InwardProbabilityExponent);
-	return FMath::Lerp(Config.FullStaminaInwardProbability,
-		Config.ExhaustedInwardProbability, ExhaustionAlpha);
+		&& FMath::IsFinite(OutwardAngularSpreadDegrees) && OutwardAngularSpreadDegrees >= 0.0
+		&& OutwardAngularSpreadDegrees <= 75.0 && IsUnitInterval(LateralOutwardBias)
+		&& IsUnitInterval(EaseOffInwardBias) && IsEffortRange(OutwardEffortRange)
+		&& IsEffortRange(LateralEffortRange) && IsEffortRange(EaseOffEffortRange)
+		&& FMath::IsFinite(EffortRisePerSecond) && EffortRisePerSecond > 0.0
+		&& FMath::IsFinite(EffortFallPerSecond) && EffortFallPerSecond > 0.0
+		&& IsPositiveRange(OutwardDurationRangeSeconds) && IsPositiveRange(LateralDurationRangeSeconds)
+		&& IsPositiveRange(EaseOffDurationRangeSeconds) && IsPositiveRange(ActiveBoutDurationRangeSeconds)
+		&& FMath::IsFinite(MinimumBehaviorDurationSeconds) && MinimumBehaviorDurationSeconds >= 0.0
+		&& IsUnitInterval(LowStaminaRatio)
+		&& FMath::IsFinite(LowStaminaActiveDurationMultiplier) && LowStaminaActiveDurationMultiplier > 0.0
+		&& LowStaminaActiveDurationMultiplier <= 1.0
+		&& FMath::IsFinite(LowStaminaEaseOffDurationMultiplier) && LowStaminaEaseOffDurationMultiplier >= 1.0
+		&& IsUnitInterval(BlockedLoadThreshold) && IsUnitInterval(BlockedProgressFraction)
+		&& FMath::IsFinite(BlockedConfirmationSeconds) && BlockedConfirmationSeconds >= 0.0
+		&& FMath::IsFinite(LoadSmoothingSeconds) && LoadSmoothingSeconds >= 0.0;
 }
 
 bool FCatFishSteeringModel::Initialize(const FCatFishSteeringConfig& Config,
-	const FVector& LineOutwardDirection, const ECatFishMotionIntent MotionIntent,
-	const double FishStaminaRatio, FRandomStream& Random, FCatFishSteeringState& InOutState)
+	const FVector& LineOutwardDirection, const ECatFishBehavior Behavior, const double FishStaminaRatio,
+	FRandomStream& Random, FCatFishSteeringState& InOutState)
 {
-	if (!Config.IsValid() || !IsFiniteDirection(LineOutwardDirection)
-		|| !FMath::IsFinite(FishStaminaRatio)
-		|| LineOutwardDirection.IsNearlyZero() || MotionIntent == ECatFishMotionIntent::None
-		|| MotionIntent == ECatFishMotionIntent::AutoHauling)
-	{
-		return false;
-	}
+	if (!Config.IsValid() || !IsFiniteDirection(LineOutwardDirection) || LineOutwardDirection.IsNearlyZero()
+		|| !IsUnitInterval(FishStaminaRatio) || !IsLiveBehavior(Behavior)) return false;
 	InOutState = FCatFishSteeringState{};
 	InOutState.CurrentDirection = FlattenDirection(LineOutwardDirection, FVector::ForwardVector);
-	InOutState.LastMotionIntent = MotionIntent;
+	InOutState.TargetDirection = InOutState.CurrentDirection;
 	InOutState.bInitialized = true;
-	return SelectTarget(Config, LineOutwardDirection, MotionIntent, FishStaminaRatio, Random, InOutState);
+	return BeginBehavior(Config, LineOutwardDirection, Behavior, FishStaminaRatio, Random, InOutState);
 }
 
-bool FCatFishSteeringModel::SelectTarget(const FCatFishSteeringConfig& Config,
-	const FVector& LineOutwardDirection, const ECatFishMotionIntent MotionIntent,
-	const double FishStaminaRatio, FRandomStream& Random, FCatFishSteeringState& InOutState)
+bool FCatFishSteeringModel::BeginBehavior(const FCatFishSteeringConfig& Config,
+	const FVector& LineOutwardDirection, const ECatFishBehavior Behavior, const double FishStaminaRatio,
+	FRandomStream& Random, FCatFishSteeringState& InOutState)
 {
-	// [FishLogic 2/5：性格选方向]
-	// Random 只抽“下一段的目标方向和持续时间”；当前位置绝不随机跳变。
-	// StrugglingOutward 以鱼线向外为锚，CalmOrInward 以朝竿尖为锚，再混合随机方向、左右横切和假动作。
 	if (!Config.IsValid() || !IsFiniteDirection(LineOutwardDirection) || LineOutwardDirection.IsNearlyZero()
-		|| !FMath::IsFinite(FishStaminaRatio))
-	{
-		return false;
-	}
-	const FVector Outward = FlattenDirection(LineOutwardDirection, InOutState.CurrentDirection);
-	const bool bStruggling = MotionIntent == ECatFishMotionIntent::StrugglingOutward;
-	const double StaminaDrivenInwardProbability = ComputeInwardProbability(Config, FishStaminaRatio);
-	// 发力状态仍以外冲为主，FeintProbability 只允许其中一小部分采用体力驱动的向内概率；
-	// 平静状态则直接使用完整概率。这样“低体力更容易向内”不会把发力状态变成反向游。
-	const double EffectiveInwardProbability = bStruggling
-		? StaminaDrivenInwardProbability * Config.FeintProbability : StaminaDrivenInwardProbability;
-	const bool bChooseInward = Random.FRand() < EffectiveInwardProbability;
-	const FVector Anchor = bChooseInward ? -Outward : Outward;
-	const double DirectionalBias = bChooseInward ? Config.CalmInwardBias : Config.StruggleOutwardBias;
-	// 向内选择严格落在朝竿尖的 ±InwardConeHalfAngleDegrees；向外选择使用剩余扇区，
-	// 因而不会被随机横切重新推回“向内”分类。Bias 越高、横向性越低，实际偏角越靠近锚方向。
-	const double BaseHalfAngle = bChooseInward ? Config.InwardConeHalfAngleDegrees
-		: 180.0 - Config.InwardConeHalfAngleDegrees;
-	const double SpreadScale = FMath::Lerp(0.2, 1.0, Config.LateralMovementBias)
-		* FMath::Lerp(1.0, 0.3, DirectionalBias);
-	const double OffsetDegrees = Random.FRandRange(-BaseHalfAngle, BaseHalfAngle) * SpreadScale;
-	const FVector Target = RotateAroundUp(Anchor, OffsetDegrees);
+		|| !IsUnitInterval(FishStaminaRatio) || !IsLiveBehavior(Behavior)) return false;
+	if (!InOutState.bInitialized)
+		return Initialize(Config, LineOutwardDirection, Behavior, FishStaminaRatio, Random, InOutState);
+	if (!IsUnitInterval(InOutState.CurrentEffortRatio) || !IsFiniteDirection(InOutState.CurrentDirection)) return false;
 
-	InOutState.TargetDirection = Target;
+	const FVector2D& EffortRange = Behavior == ECatFishBehavior::OutwardRush ? Config.OutwardEffortRange
+		: Behavior == ECatFishBehavior::LateralArc ? Config.LateralEffortRange : Config.EaseOffEffortRange;
+	const FVector2D& DurationRange = Behavior == ECatFishBehavior::OutwardRush ? Config.OutwardDurationRangeSeconds
+		: Behavior == ECatFishBehavior::LateralArc ? Config.LateralDurationRangeSeconds : Config.EaseOffDurationRangeSeconds;
+	const double DurationMultiplier = FishStaminaRatio <= Config.LowStaminaRatio
+		? (Behavior == ECatFishBehavior::EaseOff ? Config.LowStaminaEaseOffDurationMultiplier
+			: Config.LowStaminaActiveDurationMultiplier) : 1.0;
+
+	// 只在一轮对抗开始时抽总时限。受阻改道保留已付出的时间，不能靠反复切状态无限冲刺。
+	if (Behavior != ECatFishBehavior::EaseOff && (InOutState.Behavior == ECatFishBehavior::None
+		|| InOutState.Behavior == ECatFishBehavior::EaseOff))
+	{
+		InOutState.ActiveBoutElapsedSeconds = 0.0;
+		InOutState.ActiveBoutDurationSeconds = FMath::Max(Config.MinimumBehaviorDurationSeconds,
+			Random.FRandRange(Config.ActiveBoutDurationRangeSeconds.X, Config.ActiveBoutDurationRangeSeconds.Y)
+			* DurationMultiplier);
+	}
+	// 随机只在树真正进入行为时冻结目标出力/时长；不从模型选择下一状态。
+	InOutState.Behavior = Behavior;
+	InOutState.TargetEffortRatio = Random.FRandRange(EffortRange.X, EffortRange.Y);
+	InOutState.BehaviorDurationSeconds = FMath::Max(Config.MinimumBehaviorDurationSeconds,
+		Random.FRandRange(DurationRange.X, DurationRange.Y) * DurationMultiplier);
+	InOutState.BehaviorElapsedSeconds = 0.0;
+	InOutState.BlockedSeconds = 0.0;
+	InOutState.FishStaminaRatio = FishStaminaRatio;
+
+	if (Behavior == ECatFishBehavior::LateralArc)
+	{
+		const FVector Outward = FlattenDirection(LineOutwardDirection, InOutState.CurrentDirection);
+		const FVector Tangent(-Outward.Y, Outward.X, 0.0);
+		const double CurrentLateral = FVector::DotProduct(InOutState.CurrentDirection, Tangent);
+		InOutState.LateralSign = FMath::Abs(CurrentLateral) > 0.15
+			? FMath::Sign(CurrentLateral) : (Random.RandBool() ? 1.0 : -1.0);
+	}
+	InOutState.DirectionOffsetDegrees = Random.FRandRange(-Config.OutwardAngularSpreadDegrees,
+		Config.OutwardAngularSpreadDegrees);
 	InOutState.RetargetSecondsRemaining = Random.FRandRange(
 		Config.RetargetDurationRangeSeconds.X, Config.RetargetDurationRangeSeconds.Y);
-	InOutState.LastMotionIntent = MotionIntent;
-	return FMath::IsFinite(InOutState.RetargetSecondsRemaining)
-		&& InOutState.RetargetSecondsRemaining > 0.0;
+	UpdateTargetDirection(Config, LineOutwardDirection, InOutState);
+	return true;
 }
 
-bool FCatFishSteeringModel::Step(const FCatFishSteeringConfig& Config,
-	const FVector& LineOutwardDirection, const ECatFishMotionIntent MotionIntent,
-	const double FishStaminaRatio, const double DeltaSeconds,
-	FRandomStream& Random, FCatFishSteeringState& InOutState, FVector& OutDesiredDirection, const bool bForceOutward)
+bool FCatFishSteeringModel::AdvanceFeedback(const FCatFishSteeringConfig& Config,
+	const FCatFishBehaviorFeedback& Feedback, const double DeltaSeconds, FCatFishSteeringState& InOutState)
 {
-	// [FishLogic 2/5：平滑转向]
-	// 目标到期/运动意图改变时才重新抽方向；其他固定步只按最大角速度转过去，所以轨迹连续而非白噪声抖动。
-	OutDesiredDirection = FVector::ZeroVector;
-	if (!Config.IsValid() || !FMath::IsFinite(FishStaminaRatio)
+	if (!Config.IsValid() || !InOutState.bInitialized || !IsLiveBehavior(InOutState.Behavior)
 		|| !FMath::IsFinite(DeltaSeconds) || DeltaSeconds <= 0.0
-		|| !IsFiniteDirection(LineOutwardDirection) || LineOutwardDirection.IsNearlyZero()
-		|| MotionIntent == ECatFishMotionIntent::None || MotionIntent == ECatFishMotionIntent::AutoHauling)
+		|| !FMath::IsFinite(Feedback.NormalizedLineLoad) || Feedback.NormalizedLineLoad < 0.0
+		|| !IsFiniteDirection(Feedback.ActualFishVelocityCentimetersPerSecond)
+		|| !IsFiniteDirection(Feedback.ActiveSwimDirection) || Feedback.ActiveSwimDirection.IsNearlyZero()
+		|| !FMath::IsFinite(Feedback.ExpectedFreeSpeedCentimetersPerSecond)
+		|| Feedback.ExpectedFreeSpeedCentimetersPerSecond < 0.0 || !IsUnitInterval(Feedback.FishStaminaRatio)
+		|| !FMath::IsFinite(InOutState.BehaviorElapsedSeconds) || !FMath::IsFinite(InOutState.BlockedSeconds)
+		|| !FMath::IsFinite(InOutState.SmoothedLineLoad)
+		|| !FMath::IsFinite(InOutState.ActiveBoutElapsedSeconds) || InOutState.ActiveBoutElapsedSeconds < 0.0
+		|| !FMath::IsFinite(InOutState.ActiveBoutDurationSeconds) || InOutState.ActiveBoutDurationSeconds < 0.0) return false;
+
+	InOutState.BehaviorElapsedSeconds += DeltaSeconds;
+	if (InOutState.Behavior != ECatFishBehavior::EaseOff)
+		InOutState.ActiveBoutElapsedSeconds += DeltaSeconds;
+	InOutState.FishStaminaRatio = Feedback.FishStaminaRatio;
+	const double Alpha = Config.LoadSmoothingSeconds <= 0.0 ? 1.0 : 1.0 - FMath::Exp(-DeltaSeconds / Config.LoadSmoothingSeconds);
+	InOutState.SmoothedLineLoad = FMath::Lerp(InOutState.SmoothedLineLoad,
+		FMath::Clamp(Feedback.NormalizedLineLoad, 0.0, 1.0), Alpha);
+	const double ActiveProgressSpeed = FVector::DotProduct(Feedback.ActualFishVelocityCentimetersPerSecond,
+		FlattenDirection(Feedback.ActiveSwimDirection, InOutState.CurrentDirection));
+	// 先确认真实承载，再比较主动方向上的进展；乘法阈值避免低出力归一化被放大。
+	const bool bBlocked = Feedback.bLineTaut && InOutState.SmoothedLineLoad >= Config.BlockedLoadThreshold
+		&& Feedback.ExpectedFreeSpeedCentimetersPerSecond > UE_DOUBLE_KINDA_SMALL_NUMBER
+		&& ActiveProgressSpeed < Feedback.ExpectedFreeSpeedCentimetersPerSecond * Config.BlockedProgressFraction;
+	InOutState.BlockedSeconds = bBlocked ? InOutState.BlockedSeconds + DeltaSeconds : 0.0;
+	return true;
+}
+
+bool FCatFishSteeringModel::TestCondition(const FCatFishSteeringConfig& Config,
+	const FCatFishSteeringState& State, const ECatFishBehaviorCondition Condition)
+{
+	if (!Config.IsValid() || !State.bInitialized || !IsLiveBehavior(State.Behavior)) return false;
+	switch (Condition)
 	{
+	case ECatFishBehaviorCondition::MinimumDurationElapsed:
+		return State.BehaviorElapsedSeconds + UE_DOUBLE_SMALL_NUMBER >= Config.MinimumBehaviorDurationSeconds;
+	case ECatFishBehaviorCondition::DurationExpired:
+		return State.BehaviorElapsedSeconds + UE_DOUBLE_SMALL_NUMBER >= State.BehaviorDurationSeconds;
+	case ECatFishBehaviorCondition::SustainedBlocked:
+		return State.BlockedSeconds > 0.0
+			&& State.BlockedSeconds + UE_DOUBLE_SMALL_NUMBER >= Config.BlockedConfirmationSeconds;
+	case ECatFishBehaviorCondition::LowStamina:
+		return State.FishStaminaRatio <= Config.LowStaminaRatio;
+	case ECatFishBehaviorCondition::NeedsRecovery:
+		return State.Behavior != ECatFishBehavior::EaseOff && State.ActiveBoutDurationSeconds > 0.0
+			&& State.ActiveBoutElapsedSeconds + UE_DOUBLE_SMALL_NUMBER >= State.ActiveBoutDurationSeconds;
+	default:
 		return false;
 	}
+}
+
+void FCatFishSteeringModel::UpdateTargetDirection(const FCatFishSteeringConfig& Config,
+	const FVector& LineOutwardDirection, FCatFishSteeringState& InOutState)
+{
+	const FVector Outward = FlattenDirection(LineOutwardDirection, InOutState.CurrentDirection);
+	const FVector Tangent = FVector(-Outward.Y, Outward.X, 0.0) * InOutState.LateralSign;
+	FVector Target = Outward;
+	switch (InOutState.Behavior)
+	{
+	case ECatFishBehavior::OutwardRush:
+		Target = Outward.RotateAngleAxis(InOutState.DirectionOffsetDegrees, FVector::UpVector);
+		break;
+	case ECatFishBehavior::LateralArc:
+		Target = FlattenDirection(Tangent + Outward * Config.LateralOutwardBias, Tangent);
+		break;
+	case ECatFishBehavior::EaseOff:
+		Target = FlattenDirection(Tangent * (1.0 - Config.EaseOffInwardBias)
+			- Outward * Config.EaseOffInwardBias, Tangent);
+		break;
+	default:
+		break;
+	}
+	InOutState.TargetDirection = ConstrainTargetToWater(Target, InOutState);
+}
+
+bool FCatFishSteeringModel::Step(const FCatFishSteeringConfig& Config, const FVector& LineOutwardDirection,
+	const double DeltaSeconds, FRandomStream& Random, FCatFishSteeringState& InOutState,
+	FVector& OutDesiredDirection, const bool bForceOutward)
+{
+	OutDesiredDirection = FVector::ZeroVector;
+	if (!Config.IsValid() || !FMath::IsFinite(DeltaSeconds) || DeltaSeconds <= 0.0
+		|| !IsFiniteDirection(LineOutwardDirection) || LineOutwardDirection.IsNearlyZero()) return false;
+	if (!InOutState.bInitialized)
+	{
+		if (!bForceOutward) return false;
+		// 强拖可以从未初始化夹具启动，也不抽取一次普通策略随机数。
+		InOutState = FCatFishSteeringState{};
+		InOutState.CurrentDirection = FlattenDirection(LineOutwardDirection, FVector::ForwardVector);
+		InOutState.bInitialized = true;
+	}
+	if (!IsFiniteDirection(InOutState.CurrentDirection) || !IsFiniteDirection(InOutState.TargetDirection)
+		|| !IsUnitInterval(InOutState.CurrentEffortRatio) || !IsUnitInterval(InOutState.TargetEffortRatio)
+		|| !FMath::IsFinite(InOutState.RetargetSecondsRemaining)
+		|| !FMath::IsFinite(InOutState.BoundaryAvoidanceSecondsRemaining)) return false;
+
+	double DesiredEffort = InOutState.TargetEffortRatio;
 	if (bForceOutward)
 	{
-		const FVector Outward = FlattenDirection(LineOutwardDirection, FVector::ForwardVector);
-		if (!InOutState.bInitialized)
-		{
-			InOutState = FCatFishSteeringState{};
-			InOutState.bInitialized = true;
-			InOutState.CurrentDirection = Outward;
-		}
-		InOutState.TargetDirection = Outward;
-		if (InOutState.BoundaryAvoidanceSecondsRemaining > 0.0)
-		{
-			const FVector Waterward = InOutState.BoundaryWaterwardDirection;
-			const double IntoWater = FVector::DotProduct(Outward, Waterward);
-			InOutState.TargetDirection = FlattenDirection(Outward
-				+ Waterward * FMath::Max(0.0, 0.2 - IntoWater), Waterward);
-		}
-		// 不抽休息、假动作或随机内游；退出强制外冲后立即交还普通重选逻辑。
-		InOutState.LastMotionIntent = MotionIntent;
-		InOutState.RetargetSecondsRemaining = 0.0;
+		InOutState.TargetDirection = ConstrainTargetToWater(
+			FlattenDirection(LineOutwardDirection, InOutState.CurrentDirection), InOutState);
+		DesiredEffort = 1.0;
+		// 强拖物理特例本步已按满力结算，执行记忆同步该事实；恢复普通策略后从1连续降回原目标。
+		InOutState.CurrentEffortRatio = 1.0;
 	}
-	else if (!InOutState.bInitialized
-		&& !Initialize(Config, LineOutwardDirection, MotionIntent, FishStaminaRatio, Random, InOutState))
+	else
 	{
-		return false;
-	}
-
-	InOutState.RetargetSecondsRemaining -= DeltaSeconds;
-	if (!bForceOutward && (InOutState.LastMotionIntent != MotionIntent || InOutState.RetargetSecondsRemaining <= 0.0))
-	{
-		if (!SelectTarget(Config, LineOutwardDirection, MotionIntent, FishStaminaRatio, Random, InOutState))
+		if (!IsLiveBehavior(InOutState.Behavior)) return false;
+		InOutState.RetargetSecondsRemaining -= DeltaSeconds;
+		if (InOutState.RetargetSecondsRemaining <= 0.0)
 		{
-			return false;
+			InOutState.DirectionOffsetDegrees = Random.FRandRange(-Config.OutwardAngularSpreadDegrees,
+				Config.OutwardAngularSpreadDegrees);
+			InOutState.RetargetSecondsRemaining = Random.FRandRange(
+				Config.RetargetDurationRangeSeconds.X, Config.RetargetDurationRangeSeconds.Y);
 		}
+		// 弧线跟随实际线方向转动，但左右侧在整个命令中冻结；不会每个固定步抛硬币。
+		UpdateTargetDirection(Config, LineOutwardDirection, InOutState);
 	}
+	const double EffortRate = DesiredEffort > InOutState.CurrentEffortRatio
+		? Config.EffortRisePerSecond : Config.EffortFallPerSecond;
+	InOutState.CurrentEffortRatio += FMath::Clamp(DesiredEffort - InOutState.CurrentEffortRatio,
+		-EffortRate * DeltaSeconds, EffortRate * DeltaSeconds);
 	InOutState.CurrentDirection = TurnToward2D(InOutState.CurrentDirection, InOutState.TargetDirection,
 		Config.MaximumTurnRateDegreesPerSecond * DeltaSeconds);
 	InOutState.BoundaryAvoidanceSecondsRemaining = FMath::Max(0.0,
 		InOutState.BoundaryAvoidanceSecondsRemaining - DeltaSeconds);
 	OutDesiredDirection = InOutState.CurrentDirection;
-	return IsFiniteDirection(OutDesiredDirection) && !OutDesiredDirection.IsNearlyZero();
+	return true;
 }
 
 bool FCatFishSteeringModel::RedirectFromWaterBoundary(const FCatFishSteeringConfig& Config,
 	const FVector& WaterwardDirection, FRandomStream& Random, FCatFishSteeringState& InOutState)
 {
-	// [FishLogic 2/5：活鱼撞岸反馈]
-	// 岸线求解只保留真实入水与沿岸位移，不把鱼瞬移到最近岸点或抛竿内缩点。
-	// 同时修正 Steering，避免下一固定步继续朝陆地游；岸外间隙也能逐步回到水域内。
 	if (!Config.IsValid() || !InOutState.bInitialized || !IsFiniteDirection(WaterwardDirection)
-		|| WaterwardDirection.IsNearlyZero())
-	{
-		return false;
-	}
-
+		|| WaterwardDirection.IsNearlyZero() || !IsFiniteDirection(InOutState.CurrentDirection)) return false;
 	const FVector Waterward = FlattenDirection(WaterwardDirection, InOutState.CurrentDirection);
 	InOutState.BoundaryWaterwardDirection = Waterward;
 	InOutState.BoundaryAvoidanceSecondsRemaining = Config.RetargetDurationRangeSeconds.Y;
 	const FVector Current = FlattenDirection(InOutState.CurrentDirection, Waterward);
-	const double IntoWaterDot = FVector::DotProduct(Current, Waterward);
 	const FVector ShoreTangent(-Waterward.Y, Waterward.X, 0.0);
-	if (IntoWaterDot > 0.05)
-	{
-		// 玩家持续收线也可能让候选点越界；若鱼当前已经朝水里/沿岸游，就不重复抽切向，
-		// 只保证目标保持水内方向并延长本段，避免每个固定步重新选左右造成抖动。
-		const double TargetWaterwardDot = FVector::DotProduct(InOutState.TargetDirection, Waterward);
-		InOutState.TargetDirection = FlattenDirection(InOutState.TargetDirection
-			+ Waterward * FMath::Max(0.0, 0.2 - TargetWaterwardDot), Current);
-		InOutState.RetargetSecondsRemaining = FMath::Max(InOutState.RetargetSecondsRemaining,
-			Config.RetargetDurationRangeSeconds.Y);
-		return FVector::DotProduct(InOutState.TargetDirection, Waterward) > 0.0;
-	}
-
-	// Waterward 是岸线指向水里的法线。当前方向指向岸上时 dot<0，按法线镜面反射；
-	// 再加入稳定的沿岸切向，让持续按住左键时鱼仍会沿岸逃窜，而不是被径向收线压在一个点上。
-	const FVector Reflected = IntoWaterDot < 0.0
-		? Current - 2.0 * IntoWaterDot * Waterward : Current;
 	const double ExistingLateral = FVector::DotProduct(Current, ShoreTangent);
-	const double LateralSign = FMath::Abs(ExistingLateral) > 0.05
-		? FMath::Sign(ExistingLateral) : (Random.RandBool() ? 1.0 : -1.0);
-	const FVector AlongShore = ShoreTangent * LateralSign;
-	InOutState.CurrentDirection = FlattenDirection(Reflected + Waterward * 0.25 + AlongShore * 0.5,
-		Waterward);
-	InOutState.TargetDirection = FlattenDirection(Waterward * 0.5
-		+ AlongShore * (0.75 + Config.LateralMovementBias * 0.5), InOutState.CurrentDirection);
-	// 至少保持一个最长换向周期，不让 CalmOrInward 在下一帧立刻重新抽到朝岸方向。
+	if (FVector::DotProduct(Current, Waterward) > 0.05)
+	{
+		InOutState.TargetDirection = ConstrainTargetToWater(InOutState.TargetDirection, InOutState);
+	}
+	else
+	{
+		// 岸线只修正目标，实际方向仍由同一个限角速度入口连续转向。
+		const double LateralSign = FMath::Abs(ExistingLateral) > 0.05
+			? FMath::Sign(ExistingLateral)
+			: (FVector::DotProduct(InOutState.TargetDirection, ShoreTangent) >= 0.0 ? 1.0 : -1.0);
+		InOutState.TargetDirection = FlattenDirection(Waterward * 0.5 + ShoreTangent * LateralSign,
+			Waterward);
+	}
+	(void)Random; // 岸线反馈不得每帧消耗随机数或抖动左右侧。
 	InOutState.RetargetSecondsRemaining = FMath::Max(InOutState.RetargetSecondsRemaining,
 		Config.RetargetDurationRangeSeconds.Y);
-	return FVector::DotProduct(InOutState.CurrentDirection, Waterward) > 0.0
-		&& FVector::DotProduct(InOutState.TargetDirection, Waterward) > 0.0;
+	return FVector::DotProduct(InOutState.TargetDirection, Waterward) > 0.0;
 }

@@ -16,9 +16,8 @@ public class Catfishing : ModuleRules
 		});
 		PrivateDependencyModuleNames.AddRange(new string[]
 		{
-			"InputCore", "ApplicationCore", "GameplayTasks", "CableComponent", "EnhancedInput",
-			// 丢弃前读取引擎解析后的简单/复杂碰撞策略；PhysicsCore 只由实现使用，不向公开头传播。
-			"Slate", "SlateCore", "OnlineSubsystemUtils", "PhysicsCore"
+			"InputCore", "ApplicationCore", "GameplayTasks", "EnhancedInput",
+			"Slate", "SlateCore", "OnlineSubsystemUtils", "PhysicsCore", "Chaos"
 		});
 		// Steamworks.Build.cs 只导出 SDK 版本与路径，不定义功能宏；按 UE 5.8 Steam 插件的平台支持范围装配宏和依赖，Win64 ARM64 被插件明确排除。
 		bool bWithSteamworks = (Target.Platform == UnrealTargetPlatform.Win64 && Target.Architecture == UnrealArch.X64)

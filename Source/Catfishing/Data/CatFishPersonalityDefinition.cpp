@@ -12,34 +12,41 @@ bool UCatBitePersonalityDefinition::IsRuntimeDefinitionReady() const
 		&& PerfectInitialLineLengthMultiplier <= 1.0;
 }
 
+void UCatFightPersonalityDefinition::PostLoad()
+{
+	Super::PostLoad();
+	MigrateLegacyMotionSettings();
+}
+
+bool UCatFightPersonalityDefinition::MigrateLegacyMotionSettings()
+{
+	// 只迁移旧序列化格式；新版本里的非法配置不能回退旧值。
+	if (AdaptiveMotionVersion != 0) return false;
+	if (FullEffortMovementSpeedCentimetersPerSecond > 0.0)
+	{
+		AdaptiveMotionVersion = 1;
+		return true;
+	}
+	const double LegacySpeed = FMath::Max(CalmMovementSpeedCentimetersPerSecond, StruggleMovementSpeedCentimetersPerSecond);
+	if (!FMath::IsFinite(LegacySpeed) || LegacySpeed <= 0.0) return false;
+	FullEffortMovementSpeedCentimetersPerSecond = LegacySpeed;
+	AdaptiveSteeringConfig.OutwardDurationRangeSeconds = StruggleDurationRangeSeconds;
+	AdaptiveSteeringConfig.EaseOffDurationRangeSeconds = CalmDurationRangeSeconds;
+	AdaptiveSteeringConfig.RetargetDurationRangeSeconds = DirectionRetargetDurationRangeSeconds;
+	AdaptiveSteeringConfig.MaximumTurnRateDegreesPerSecond = MaximumTurnRateDegreesPerSecond;
+	// 旧扇区的几何展开仍使用角度单位；只迁移外冲分散程度，旧随机内游概率退出。
+	AdaptiveSteeringConfig.OutwardAngularSpreadDegrees = (180.0 - InwardConeHalfAngleDegrees)
+		* FMath::Lerp(0.2, 1.0, LateralMovementBias)
+		* FMath::Lerp(1.0, 0.3, StruggleOutwardDirectionBias);
+	AdaptiveMotionVersion = 1;
+	return true;
+}
+
 bool UCatFightPersonalityDefinition::IsRuntimeDefinitionReady() const
 {
-	const auto ValidRange = [](const FVector2D& Range)
-	{
-		return FMath::IsFinite(Range.X) && FMath::IsFinite(Range.Y) && Range.X > 0.0 && Range.Y >= Range.X;
-	};
-	return !FightPersonalityId.IsNone() && ValidRange(CalmDurationRangeSeconds) && ValidRange(StruggleDurationRangeSeconds)
-		&& FMath::IsFinite(CalmMovementSpeedCentimetersPerSecond) && CalmMovementSpeedCentimetersPerSecond > 0.0
-		&& FMath::IsFinite(StruggleMovementSpeedCentimetersPerSecond) && StruggleMovementSpeedCentimetersPerSecond > 0.0
-		&& FMath::IsFinite(BaseDrainMultiplier) && BaseDrainMultiplier > 0.0
-		&& FMath::IsFinite(StruggleDrainMultiplier) && StruggleDrainMultiplier > BaseDrainMultiplier
-		&& ValidRange(DirectionRetargetDurationRangeSeconds)
-		&& FMath::IsFinite(MaximumTurnRateDegreesPerSecond) && MaximumTurnRateDegreesPerSecond > 0.0
-		&& FMath::IsFinite(StruggleOutwardDirectionBias) && StruggleOutwardDirectionBias >= 0.0
-		&& StruggleOutwardDirectionBias <= 1.0
-		&& FMath::IsFinite(CalmInwardDirectionBias) && CalmInwardDirectionBias >= 0.0
-		&& CalmInwardDirectionBias <= 1.0
-		&& FMath::IsFinite(LateralMovementBias) && LateralMovementBias >= 0.0 && LateralMovementBias <= 1.0
-		&& FMath::IsFinite(FeintProbability) && FeintProbability >= 0.0 && FeintProbability <= 1.0
-		&& FMath::IsFinite(FullStaminaInwardProbability)
-		&& FullStaminaInwardProbability >= 0.0 && FullStaminaInwardProbability <= 1.0
-		&& FMath::IsFinite(ExhaustedInwardProbability)
-		&& ExhaustedInwardProbability >= FullStaminaInwardProbability
-		&& ExhaustedInwardProbability <= 1.0
-		&& FMath::IsFinite(InwardProbabilityExponent)
-		&& InwardProbabilityExponent >= 0.1 && InwardProbabilityExponent <= 4.0
-		&& FMath::IsFinite(InwardConeHalfAngleDegrees)
-		&& InwardConeHalfAngleDegrees >= 1.0 && InwardConeHalfAngleDegrees <= 89.0
+	return !FightPersonalityId.IsNone() && AdaptiveSteeringConfig.IsValid()
+		&& FMath::IsFinite(FullEffortMovementSpeedCentimetersPerSecond)
+		&& FullEffortMovementSpeedCentimetersPerSecond > 0.0
 		&& FMath::IsFinite(StrongConfrontationAlignmentThreshold)
 		&& StrongConfrontationAlignmentThreshold > 0.0 && StrongConfrontationAlignmentThreshold <= 1.0
 		&& FMath::IsFinite(StrongConfrontationConfirmationSeconds)

@@ -1,4 +1,15 @@
 #include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
+#include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Interaction/CatModelContactComponent.h"
+#include "Components/BoxComponent.h"
+#include "Components/SphereComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/SkeletalMeshComponent.h"
+#include "Components/PoseableMeshComponent.h"
+#include "PhysicsEngine/PhysicsConstraintComponent.h"
+#include "Engine/World.h"
 #include "Character/CatCharacterMovementComponent.h"
 
 #include "AbilitySystemComponent.h"
@@ -8,12 +19,25 @@
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "Animation/AnimMontage.h"
 #include "Condition/CatConditionComponent.h"
+#include "Condition/CatConditionPresentationComponent.h"
 #include "Equipment/CatEquipmentComponent.h"
+#include "Equipment/CatEquipmentSettings.h"
 #include "Growth/CatGrowthComponent.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/Presentation/CatFishingCameraComponent.h"
-#include "Inventory/CatBackPackComponent.h"
 #include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatBackPackComponent.h"
+#include "Inventory/CatInventorySettings.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
+
+namespace
+{
+	// 初始随身库存容量迁移流程：角色创建正式库存时默认读 InventorySettings；旧 EquipmentSettings 被测试或诊断改值时保留一次兼容覆盖。
+	int32 ResolveInitialPlayerInventorySlotCapacity()
+	{
+		return GetDefault<UCatInventorySettings>()->GetPlayerInventorySlotCapacity();
+	}
+}
 
 // 构造流程：一次创建 Character-owned ASC/AttributeSet、离散身体状态、吃鱼成长、正式随身库存和局内装备组件；只开启组件复制，ActorInfo、属性初值与 Ability 仍由显式 runtime gate 启动。
 ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
@@ -25,10 +49,36 @@ ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
 	// ASC 不会仅凭同 Actor 上存在 AttributeSet 就稳定纳入查询列表；构造期显式登记，保证占有时播种属性不会找不到 AttributeSet。
 	AbilitySystemComponent->AddAttributeSetSubobject(SurvivalAttributes.Get());
 	ConditionComponent = CreateDefaultSubobject<UCatConditionComponent>(TEXT("ConditionComponent"));
+	ConditionPresentation = CreateDefaultSubobject<UCatConditionPresentationComponent>(TEXT("ConditionPresentation"));
 	GrowthComponent = CreateDefaultSubobject<UCatGrowthComponent>(TEXT("GrowthComponent"));
 	InventoryComponent = CreateDefaultSubobject<UCatBackPackComponent>(TEXT("InventoryComponent"));
 	EquipmentComponent = CreateDefaultSubobject<UCatEquipmentComponent>(TEXT("EquipmentComponent"));
 	FishingCameraComponent = CreateDefaultSubobject<UCatFishingCameraComponent>(TEXT("FishingCameraComponent"));
+	GetCharacterMovement()->MaxWalkSpeed=100.0f;
+	PrimaryActorTick.bCanEverTick=true;
+	PrimaryActorTick.TickGroup=TG_PostPhysics;
+	SetReplicateMovement(false);
+	SetNetUpdateFrequency(30);
+	bUseControllerRotationYaw=false;
+	PhysicalBody=CreateDefaultSubobject<UBoxComponent>(TEXT("PhysicsBody"));
+	SetRootComponent(PhysicalBody);
+	GetCapsuleComponent()->SetupAttachment(PhysicalBody);
+	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	GetCapsuleComponent()->SetGenerateOverlapEvents(false);
+	LeftPhysicsHand=CreateDefaultSubobject<USphereComponent>(TEXT("LeftPhysicsHand"));
+	RightPhysicsHand=CreateDefaultSubobject<USphereComponent>(TEXT("RightPhysicsHand"));
+	LeftPhysicsHand->SetupAttachment(PhysicalBody);
+	RightPhysicsHand->SetupAttachment(PhysicalBody);
+	UCatPhysicalBodyComponent::ConfigureGeometry(PhysicalBody,LeftPhysicsHand,RightPhysicsHand);
+	LeftPhysicsArm=CreateDefaultSubobject<UPhysicsConstraintComponent>(TEXT("LeftShoulder"));
+	RightPhysicsArm=CreateDefaultSubobject<UPhysicsConstraintComponent>(TEXT("RightShoulder"));
+	LeftPhysicsArm->SetupAttachment(PhysicalBody);
+	RightPhysicsArm->SetupAttachment(PhysicalBody);
+	PhysicsGrab=CreateDefaultSubobject<UCatPhysicsGrabComponent>(TEXT("PhysicsGrab"));
+	PhysicalBodyComponent=CreateDefaultSubobject<UCatPhysicalBodyComponent>(TEXT("PhysicalBody"));
+	PhysicalVisual=CreateDefaultSubobject<UCatPhysicsPrototypeVisualComponent>(TEXT("PhysicalVisual"));
+	ModelContacts=CreateDefaultSubobject<UCatModelContactComponent>(TEXT("ModelContacts"));
+
 }
 
 void ACatCharacter::CalcCamera(const float DeltaTime, FMinimalViewInfo& OutResult)
@@ -38,6 +88,19 @@ void ACatCharacter::CalcCamera(const float DeltaTime, FMinimalViewInfo& OutResul
 	{
 		Super::CalcCamera(DeltaTime, OutResult);
 	}
+}
+
+// Gameplay keeps its original montage identity; each skin resolves playback to its own skeleton.
+float ACatCharacter::PlayAnimMontage(UAnimMontage* AnimMontage, float InPlayRate, FName StartSectionName)
+{
+	UAnimMontage* Resolved = PhysicalVisual ? Cast<UAnimMontage>(PhysicalVisual->ResolveAnimationAsset(AnimMontage)) : AnimMontage;
+	return Resolved ? Super::PlayAnimMontage(Resolved, InPlayRate, StartSectionName) : 0.0f;
+}
+
+void ACatCharacter::StopAnimMontage(UAnimMontage* AnimMontage)
+{
+	UAnimMontage* Resolved = PhysicalVisual ? Cast<UAnimMontage>(PhysicalVisual->ResolveAnimationAsset(AnimMontage)) : AnimMontage;
+	if (!AnimMontage || Resolved) Super::StopAnimMontage(Resolved);
 }
 
 // ASC 查询流程：直接返回构造期唯一组件；不通过 Controller、PlayerState 或全局管理器寻找第二份身体能力真相。
@@ -57,18 +120,20 @@ UCatConditionComponent* ACatCharacter::GetConditionComponent() const
 	return ConditionComponent;
 }
 
-// Growth 读取流程：直接返回构造期唯一组件；吃鱼入口只调用这一处，避免 Inventory、Condition 或 UI 各自缓存经验槽。
+// Growth 读取流程：直接返回构造期唯一组件；吃鱼入口只调用这一处，避免 Items、Condition 或 UI 各自缓存经验槽。
 UCatGrowthComponent* ACatCharacter::GetGrowthComponent() const
 {
 	return GrowthComponent;
 }
 
 // 一次性表现广播落地点：挥网仍由本地 Ability 先播，所以发起端跳过；Primary 输入有瞄准/提竿/收线
-// 三种语义都等待服务器确认；提竿事件也必须让发起端收到确认后的表现。
+// 三种语义，已不再按下即播，因此提竿事件也必须让发起端收到服务器确认后的表现。
 void ACatCharacter::Multicast_PlayCosmeticEvent_Implementation(const FGameplayTag EventTag)
 {
-	// 提竿和落水都是服务器裁决后才知道的结果，本机玩家也必须收到；只有挥网等预测动作跳过本机重播。
+	// 提竿、断线、主动切线和落水都是服务器裁决后才知道的结果，本机玩家也必须收到；只有挥网等预测动作跳过本机重播。
 	const bool bServerConfirmed = EventTag == CatFishingAbilityTags::Cosmetic_Fishing_HookPull
+		|| EventTag == CatFishingAbilityTags::Cosmetic_Fishing_LineBroken
+		|| EventTag == CatFishingAbilityTags::Cosmetic_Fishing_LineCut
 		|| EventTag == CatFishingAbilityTags::Cosmetic_Fishing_CatInWater;
 	const bool bLocallyPredicted = !bServerConfirmed;
 	if (!EventTag.IsValid() || (IsLocallyControlled() && bLocallyPredicted))
@@ -121,7 +186,7 @@ bool ACatCharacter::PlayBodyActionMontageFromPresentation(const FGameplayTag Bod
 bool ACatCharacter::StopBodyActionMontageFromPresentation(const FGameplayTag BodyActionEventTag)
 {
 	// Montage 停止流程：专服和空动作标签直接拒绝；客户端按同一表现设置找到本动作 Montage，缺配置时不做动画副作用并返回 false。
-	// 返回 false 不代表停止表现广播失败，上层仍会调用 BP_StopBodyActionPresentation，正式蓝图可用它清理非 Montage 表现或执行恢复。
+	// 返回 false 不代表停止表现广播失败，上层仍会调用 BP_StopBodyActionPresentation，正式蓝图可用它清理非 Montage 表现或执行兜底恢复。
 	if (GetNetMode() == NM_DedicatedServer || !BodyActionEventTag.IsValid())
 	{
 		return false;
@@ -159,7 +224,11 @@ bool ACatCharacter::PlayFishingOutcomeMontageFromPresentation(const FGameplayTag
 		return false;
 	}
 	UAnimMontage* Montage = nullptr;
-	if (OutcomeEventTag == CatFishingAbilityTags::Cosmetic_Fishing_CatInWater)
+	if (OutcomeEventTag == CatFishingAbilityTags::Cosmetic_Fishing_LineBroken)
+	{
+		Montage = Presentation->LineBrokenMontage.LoadSynchronous();
+	}
+	else if (OutcomeEventTag == CatFishingAbilityTags::Cosmetic_Fishing_CatInWater)
 	{
 		Montage = Presentation->CatInWaterMontage.LoadSynchronous();
 	}
@@ -172,16 +241,46 @@ UCatEquipmentComponent* ACatCharacter::GetEquipmentComponent() const
 	return EquipmentComponent;
 }
 
-// Inventory 读取流程：直接返回构造期正式库存组件；后续商店、拾取和营地转移都应从这个组件进入统一收货。
+// Inventory 读取流程：直接返回构造期正式库存组件；后续商店、拾取和营地迁移都应从这个组件进入统一收货。
 UCatInventoryComponent* ACatCharacter::GetInventoryComponent() const
 {
 	return InventoryComponent;
 }
 
-// BeginPlay 流程：先让 Actor 与组件完成注册（ASC 此时会按引擎默认建立过渡 ActorInfo），再用项目 gate 幂等刷新或清除，避免未裁 runtime 偷跑。
+// BeginPlay 流程：先让 Actor 与组件完成注册（ASC 此时会按引擎默认临时建立 ActorInfo），再用项目 gate 幂等刷新或清除，避免未裁 runtime 偷跑。
 void ACatCharacter::BeginPlay()
 {
 	Super::BeginPlay();
+	// Preserve the authored mesh/camera world transforms while restoring the capsule root.
+	const FTransform ActorPose = GetActorTransform();
+	const double MeshGeometryScale = GetMesh()->GetSkeletalMeshAsset()
+		? GetMesh()->GetComponentTransform().GetRelativeTransform(PhysicalBody->GetComponentTransform()).GetScale3D().GetAbsMax() : 1.0;
+	TArray<USceneComponent*> AuthoredChildren;
+	GetCapsuleComponent()->GetChildrenComponents(true, AuthoredChildren);
+	TArray<FTransform> ChildTransforms;
+	for (const auto* Child : AuthoredChildren) ChildTransforms.Add(Child->GetComponentTransform());
+	GetCapsuleComponent()->DetachFromComponent(FDetachmentTransformRules::KeepWorldTransform);
+	SetRootComponent(GetCapsuleComponent());
+	GetCapsuleComponent()->SetWorldTransform(ActorPose);
+	PhysicalBody->AttachToComponent(GetCapsuleComponent(), FAttachmentTransformRules::KeepWorldTransform);
+	for (int32 Index=0; Index<AuthoredChildren.Num(); ++Index) AuthoredChildren[Index]->SetWorldTransform(ChildTransforms[Index]);
+	GetCapsuleComponent()->SetCapsuleSize(13.0 * MeshGeometryScale, 20.0 * MeshGeometryScale);
+	ConfigureCharacterMovementAuthority();
+	PhysicalBodyComponent->UseCharacterMovement(CastChecked<UCatCharacterMovementComponent>(GetCharacterMovement()));
+	PhysicalBodyComponent->ConfigureMovementDefaults(GetCharacterMovement()->JumpZVelocity,
+		GetCharacterMovement()->GravityScale, GetCharacterMovement()->MaxWalkSpeed);
+	PhysicalBodyComponent->Initialize(PhysicalBody,LeftPhysicsHand,RightPhysicsHand,LeftPhysicsArm,RightPhysicsArm,PhysicsGrab,MeshGeometryScale);
+	PrimaryActorTick.AddPrerequisite(PhysicalBodyComponent, PhysicalBodyComponent->GetPostMovementTick());
+	if (GetMesh()->GetSkeletalMeshAsset())
+	{
+		GetMesh()->PrimaryComponentTick.TickGroup=TG_PostPhysics;
+		GetMesh()->PrimaryComponentTick.AddPrerequisite(this,PrimaryActorTick);
+		PhysicalVisual->InitializeVisual(PhysicalBody,LeftPhysicsHand,RightPhysicsHand,GetMesh());
+		ModelContacts->Initialize(PhysicalVisual->GetVisualMesh());
+	}
+	ConditionComponent->OnSnapshotChanged.AddUObject(this,&ACatCharacter::RefreshPhysicalCondition);
+	RefreshPhysicalCondition();
+
 	InitializeAbilityActorInfo();
 }
 
@@ -190,16 +289,21 @@ void ACatCharacter::BeginPlay()
 void ACatCharacter::PossessedBy(AController* NewController)
 {
 	Super::PossessedBy(NewController);
+	ConfigureCharacterMovementAuthority();
+	PhysicalBodyComponent->BeginControlEpochFromAuthority();
 	InitializeAbilityActorInfo();
 	if (HasAuthority())
 	{
-		if (UCatBackPackComponent* BackPack = Cast<UCatBackPackComponent>(InventoryComponent))
+		if (InventoryComponent)
 		{
-			BackPack->InitializePlayerInventorySlotCapacityFromAuthority();
+			InventoryComponent->SetInventorySlotCountFromAuthority(ResolveInitialPlayerInventorySlotCapacity());
 		}
 		if (AbilitySystemComponent)
 		{
 			AbilitySystemComponent->GrantConfiguredDefaultAbilitySetFromAuthority();
+		}
+		if (EquipmentComponent)
+		{
 		}
 	}
 }
@@ -225,12 +329,16 @@ void ACatCharacter::OnRep_Controller()
 void ACatCharacter::PawnClientRestart()
 {
 	Super::PawnClientRestart();
+	ConfigureCharacterMovementAuthority();
 	InitializeAbilityActorInfo();
 }
 
-// 失去占有收口流程：只取消该身体当前 Ability；父类断开占有后才 ClearActorInfo，保留正式 Ability Spec 供同 Actor 重占有。跨系统 Fishing/Social 会话由 GameMode 的 Pawn 解除通知在存档捕获前统一收口。
+// 失去占有流程：身份和 ASC 尚有效时先进入 GameMode 协调入口释放操作位并托管资源；随后取消身体 Ability 并断开占有。父类返回后清 ActorInfo，存档捕获由 Controller 的后置 Pawn 通知执行。
 void ACatCharacter::UnPossessed()
 {
+	PhysicalBodyComponent->ReleaseConnectionsFromAuthority(TEXT("Unpossessed"));
+	PhysicalBodyComponent->BeginControlEpochFromAuthority();
+	ACatfishingGameModeBase::HandleCharacterUnavailable(this);
 	if (AbilitySystemComponent)
 	{
 		AbilitySystemComponent->CancelAllAbilities();
@@ -242,10 +350,12 @@ void ACatCharacter::UnPossessed()
 	}
 }
 
-// 最终清理流程：先请求 ASC 撤销它自己记录的默认授予，再取消身体 Ability 并清 ActorInfo，最后才交还父类销毁组件。
-// 跨系统 Fishing/Social 会话不在角色身体 EndPlay 中直接触发，以免与 GameMode 的离局存档顺序分叉。
+// 最终清理流程：直接 Destroy 或无占有的身体也先经过同一 GameMode 幂等协调入口；随后撤销默认授予、取消 Ability 并清 ActorInfo，最后交父类销毁组件。
 void ACatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
+	ConditionComponent->OnSnapshotChanged.RemoveAll(this);
+	PhysicalBodyComponent->ReleaseConnectionsFromAuthority(TEXT("EndPlay"));
+	ACatfishingGameModeBase::HandleCharacterUnavailable(this);
 	if (AbilitySystemComponent)
 	{
 		AbilitySystemComponent->RevokeConfiguredDefaultAbilitySet();
@@ -255,7 +365,7 @@ void ACatCharacter::EndPlay(const EEndPlayReason::Type EndPlayReason)
 	Super::EndPlay(EndPlayReason);
 }
 
-// ActorInfo 初始化流程：角色只把自身交给项目 ASC；ASC 负责读取 runtime gate、设置复制策略并按 CatDefinitionId 处理一次性身体属性播种，失败时保留后续生命周期重试机会。
+// ActorInfo 初始化流程：角色只把自身交给项目 ASC；ASC 负责 runtime gate、复制策略和一次性身体属性播种，失败时保留生命周期重试机会。
 void ACatCharacter::InitializeAbilityActorInfo()
 {
 	if (!AbilitySystemComponent)
@@ -266,4 +376,61 @@ void ACatCharacter::InitializeAbilityActorInfo()
 	{
 		AbilitySystemComponent->InitializeCharacterAttributesFromDefinition(CatDefinitionId);
 	}
+}
+
+void ACatCharacter::ConfigureCharacterMovementAuthority()
+{
+	SetReplicateMovement(false);
+	bUseControllerRotationYaw=false;
+	GetCapsuleComponent()->SetCollisionProfileName(TEXT("Pawn"));
+	GetCapsuleComponent()->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	GetCapsuleComponent()->SetCollisionResponseToChannel(ECC_Visibility, ECR_Ignore);
+	GetCapsuleComponent()->CanCharacterStepUpOn=ECB_No;
+	GetCharacterMovement()->SetUpdatedComponent(GetCapsuleComponent());
+	GetCharacterMovement()->bRunPhysicsWithNoController=true;
+	GetCharacterMovement()->bEnablePhysicsInteraction=false;
+	GetCharacterMovement()->Mass=4.0f;
+	GetCharacterMovement()->SetMovementMode(MOVE_Falling);
+	GetCharacterMovement()->SetComponentTickEnabled(false);
+	GetMesh()->bOnlyAllowAutonomousTickPose=false;
+	GetMesh()->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	GetMesh()->SetGenerateOverlapEvents(false);
+}
+void ACatCharacter::RefreshPhysicalCondition()
+{
+	if (HasAuthority()) PhysicalBodyComponent->SetLocomotionEnabledFromAuthority(!ConditionComponent->GetSnapshot().bDowned,TEXT("ConditionChanged"));
+}
+void ACatCharacter::Tick(float DeltaSeconds)
+{
+	Super::Tick(DeltaSeconds);
+	PhysicalVisual->SetHandReachState(PhysicsGrab->IsReaching(true),PhysicsGrab->IsReaching(false));
+}
+FVector ACatCharacter::GetVelocity() const { return PhysicalBodyComponent ? PhysicalBodyComponent->GetVelocity() : Super::GetVelocity(); }
+float ACatCharacter::GetDefaultHalfHeight() const
+{
+	return PhysicalBodyComponent && PhysicalBodyComponent->GetBody() ? PhysicalBodyComponent->GetStandRootHeightCm()
+		: 20.0f * GetCapsuleComponent()->GetRelativeScale3D().GetAbs().Z;
+}
+FVector ACatCharacter::GetBodyFootPointWorld() const { return PhysicalBodyComponent->GetSupportFootPointWorld(); }
+double ACatCharacter::GetBodyStandRootHeightCm() const { return GetDefaultHalfHeight(); }
+UMeshComponent* ACatCharacter::GetBodyVisualMesh() const
+{
+	return PhysicalVisual && PhysicalVisual->GetVisualMesh() ? static_cast<UMeshComponent*>(PhysicalVisual->GetVisualMesh()) : GetMesh();
+}
+void ACatCharacter::FaceRotation(FRotator NewControlRotation,float DeltaTime)
+{
+	if (PhysicalBodyComponent) PhysicalBodyComponent->SetViewIntent(NewControlRotation);
+	else Super::FaceRotation(NewControlRotation,DeltaTime);
+}
+bool ACatCharacter::TeleportTo(const FVector& DestLocation,const FRotator& DestRotation,bool bIsATest,bool bNoCheck)
+{
+	if (!PhysicalBodyComponent || !PhysicalBodyComponent->GetBody()) return Super::TeleportTo(DestLocation,DestRotation,bIsATest,bNoCheck);
+	if (!HasAuthority() || DestLocation.ContainsNaN() || DestRotation.ContainsNaN()) return false;
+	FCollisionQueryParams Params(SCENE_QUERY_STAT(CatPhysicalTeleport),false,this);
+	const FTransform Destination(DestRotation,DestLocation,GetActorScale3D());
+	PhysicalBodyComponent->AppendSupportQueryIgnores(Params);
+	if (!bNoCheck && GetWorld()->OverlapBlockingTestByChannel(DestLocation, FQuat::Identity, ECC_Pawn,
+		FCollisionShape::MakeCapsule(GetCapsuleComponent()->GetScaledCapsuleRadius() * .99,
+			GetCapsuleComponent()->GetScaledCapsuleHalfHeight() * .99), Params)) return false;
+	return bIsATest || PhysicalBodyComponent->TeleportBodyFromAuthority(Destination,TEXT("CharacterTeleport"));
 }

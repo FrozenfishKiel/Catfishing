@@ -15,6 +15,7 @@
 #include "StateTreeEditingSubsystem.h"
 #include "StateTreeState.h"
 #include "UObject/SavePackage.h"
+#include <initializer_list>
 
 bool UCatFishStateTreeAuthoringLibrary::CreateOrUpdateDefaultFishBehaviorStateTree()
 {
@@ -38,7 +39,7 @@ bool UCatFishStateTreeAuthoringLibrary::CreateOrUpdateDefaultFishBehaviorStateTr
 		return false;
 	}
 
-	// 整份 EditorData 由本工具拥有；重复执行会稳定重建默认拓扑，不做脆弱的增量修补。
+	// 整份 EditorData 由本工具拥有；重复执行会稳定重建默认拓扑，不在旧节点上做脆弱的增量修补。
 	FStateTreeEditorModule& EditorModule = FStateTreeEditorModule::GetModule();
 	const TSubclassOf<UStateTreeSchema> SchemaClass = UCatFishBehaviorStateTreeSchema::StaticClass();
 	UStateTreeEditorData* EditorData = NewObject<UStateTreeEditorData>(StateTree,
@@ -54,19 +55,35 @@ bool UCatFishStateTreeAuthoringLibrary::CreateOrUpdateDefaultFishBehaviorStateTr
 		EditorModule.GetEditorSchemaClass(SchemaClass), NAME_None, RF_Transactional);
 
 	UStateTreeState& Root = EditorData->AddSubTree(TEXT("Hooked Fish Behavior"));
-	Root.Description = TEXT("高层行为拓扑；位置、鱼线、力量和体力只由服务器固定步模拟结算。");
-	UStateTreeState& Struggling = Root.AddChildState(TEXT("Struggling Outward"));
-	UStateTreeState& Calm = Root.AddChildState(TEXT("Calm Direction Selection"));
+	Root.Description = TEXT("三个真实行为叶子由固定步反馈条件选边；位置、鱼线、力量和费用仍只有原模拟写口。");
+	UStateTreeState& Outward = Root.AddChildState(TEXT("Outward Rush"));
+	UStateTreeState& Lateral = Root.AddChildState(TEXT("Lateral Arc"));
+	UStateTreeState& EaseOff = Root.AddChildState(TEXT("Ease Off"));
+	Outward.AddTask<FCatFishBehaviorStateTask>().GetInstanceData().Behavior = ECatFishBehavior::OutwardRush;
+	Lateral.AddTask<FCatFishBehaviorStateTask>().GetInstanceData().Behavior = ECatFishBehavior::LateralArc;
+	EaseOff.AddTask<FCatFishBehaviorStateTask>().GetInstanceData().Behavior = ECatFishBehavior::EaseOff;
 
-	auto& StruggleTask = Struggling.AddTask<FCatFishBehaviorStateTask>();
-	StruggleTask.GetInstanceData().MotionIntent = ECatFishMotionIntent::StrugglingOutward;
-	Struggling.AddTransition(EStateTreeTransitionTrigger::OnStateCompleted,
-		EStateTreeTransitionType::GotoState, &Calm);
-
-	auto& CalmTask = Calm.AddTask<FCatFishBehaviorStateTask>();
-	CalmTask.GetInstanceData().MotionIntent = ECatFishMotionIntent::CalmOrInward;
-	Calm.AddTransition(EStateTreeTransitionTrigger::OnStateCompleted,
-		EStateTreeTransitionType::GotoState, &Struggling);
+	const auto AddFeedbackTransition = [](UStateTreeState& Source, UStateTreeState& Target,
+		std::initializer_list<ECatFishBehaviorCondition> Conditions)
+	{
+		FStateTreeTransition& Transition = Source.AddTransition(EStateTreeTransitionTrigger::OnTick,
+			EStateTreeTransitionType::GotoState, &Target);
+		for (const ECatFishBehaviorCondition Condition : Conditions)
+		{
+			Transition.AddConditionWithOuter<FCatFishBehaviorFeedbackCondition>(&Source)
+				.GetInstanceData().Condition = Condition;
+		}
+	};
+	using ECondition = ECatFishBehaviorCondition;
+	// 总对抗时限优先于局部承诺，保证反复改道也能给玩家恢复窗口。
+	AddFeedbackTransition(Outward, EaseOff, { ECondition::NeedsRecovery });
+	AddFeedbackTransition(Outward, Lateral, { ECondition::MinimumDurationElapsed, ECondition::SustainedBlocked });
+	AddFeedbackTransition(Outward, EaseOff, { ECondition::DurationExpired });
+	AddFeedbackTransition(Lateral, EaseOff, { ECondition::NeedsRecovery });
+	AddFeedbackTransition(Lateral, Outward, { ECondition::MinimumDurationElapsed, ECondition::SustainedBlocked });
+	AddFeedbackTransition(Lateral, Outward, { ECondition::DurationExpired });
+	AddFeedbackTransition(EaseOff, Lateral, { ECondition::DurationExpired, ECondition::SustainedBlocked });
+	AddFeedbackTransition(EaseOff, Outward, { ECondition::DurationExpired });
 
 	FStateTreeCompilerLog CompilerLog;
 	if (!UStateTreeEditingSubsystem::CompileStateTree(StateTree, CompilerLog))
@@ -109,7 +126,7 @@ bool UCatFishStateTreeAuthoringLibrary::CreateOrUpdateDefaultFishingSessionState
 		return false;
 	}
 
-	// 与鱼行为树相同：整份 EditorData 稳定重建，避免依赖当前资产中的节点 Guid 做脆弱的二进制增量修补。
+	// 与鱼行为树相同：整份 EditorData 稳定重建，避免依赖旧资产中的节点 Guid 做脆弱的二进制增量修补。
 	FStateTreeEditorModule& EditorModule = FStateTreeEditorModule::GetModule();
 	const TSubclassOf<UStateTreeSchema> SchemaClass = UCatFishingSessionStateTreeSchema::StaticClass();
 	UStateTreeEditorData* EditorData = NewObject<UStateTreeEditorData>(StateTree,
