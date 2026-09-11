@@ -16,7 +16,10 @@
 #include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "Growth/CatGrowthComponent.h"
+#include "Inventory/CatInventoryItemDefinition.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Logging/CatLog.h"
+#include "ShopEconomy/Trading/CatShopTradingTypes.h"
 #include "TimerManager.h"
 #include "UI/CatFishingViewBridge.h"
 
@@ -25,6 +28,27 @@ namespace
 	/** HUD 等待客户端 GameState 的重试间隔；只影响 UI 订阅恢复速度，不改变 Run 复制频率或服务器时钟。 */
 	constexpr float CatHUDRunGameStateBindingRetrySeconds = 0.20f;
 	constexpr float CatHUDFishingSessionBindingReconcileSeconds = 0.20f;
+
+	/**
+	 * 接上 GameState 之后多久以内到达的公开流水算既往账本。中途进局的第一次复制会一次性带来整本流水，
+	 * 那是历史不是事件；正常成交离接线远得多，落不进这个窗口。
+	 */
+	constexpr double CatHUDPurchaseBroadcastSeedGraceSeconds = 1.0;
+
+	// 商品名解析流程：公开流水只带 DefinitionId 和 EntryId，摊位目录里的展示名覆盖属于商店页那份绑定，
+	// HUD 够不到也不该为一条播报去绑摊位；所以按库存定义的展示名解析，缺定义时退成 ID 本身。
+	FText MakePurchaseItemNameText(const FName DefinitionId, const FName EntryId)
+	{
+		const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
+		const UCatInventoryItemDefinition* Definition =
+			(InventorySettings && !DefinitionId.IsNone()) ? InventorySettings->FindRuntimeDefinition(DefinitionId) : nullptr;
+		const FText DefinitionNameText = Definition ? Definition->GetInventoryDisplayName() : FText();
+		if (!DefinitionNameText.IsEmpty())
+		{
+			return DefinitionNameText;
+		}
+		return FText::FromName(DefinitionId.IsNone() ? EntryId : DefinitionId);
+	}
 }
 
 // 绑定流程：校验本地玩家、Controller、Character 和 ASC，随后订阅身体属性、Condition、Growth 和 Fishing 命令结果；Run 快照按“先读一次当前 GameState，再订阅后续变化”的观察者口径接线，最后保证至少发布首份 HUD 投影。
@@ -170,8 +194,25 @@ void UCatHUDModel::Refresh()
 	if (const ACatfishingGameState* RunGameState = BoundRunGameState.Get())
 	{
 		NewState.DayIndex = FMath::Max(1, RunGameState->GetRunPublicState().Phase.DayIndex);
+		// 公款只有 GameState 上这一份，且已经复制给每个客户端；HUD 常驻位读它，不另存第二份余额。
+		const FCatShopPublicEconomySnapshot& Economy = RunGameState->GetShopEconomySnapshot();
+		NewState.bHasTeamWallet = true;
+		NewState.TeamWalletBalance = Economy.Balance;
+		NewState.TeamWalletRevision = Economy.WalletRevision;
 	}
 	NewState.DayText = FText::FromString(FString::Printf(TEXT("第 %d 天"), NewState.DayIndex));
+	NewState.TeamWalletText = NewState.bHasTeamWallet
+		? FText::FromString(FString::Printf(TEXT("团队公款 %d"), NewState.TeamWalletBalance))
+		: FText::FromString(TEXT("团队公款 未同步"));
+	NewState.PurchaseBroadcasts = PurchaseBroadcasts;
+	if (!NewState.PurchaseBroadcasts.IsEmpty())
+	{
+		const FCatHUDPurchaseBroadcast& LatestBroadcast = NewState.PurchaseBroadcasts.Last();
+		NewState.PurchaseBroadcastText = LatestBroadcast.BroadcastText;
+		// 展示窗口到点后由 HUD Widget 的本地 Tick 收起；这里只负责给出「刚发生过」这一次判断。
+		NewState.bShowPurchaseBroadcast = ServerNowSeconds - LatestBroadcast.AnnouncedServerTime
+			<= CatHUDPurchaseBroadcastLimits::VisibleSeconds;
+	}
 	if (const UAbilitySystemComponent* AbilitySystem = BoundAbilitySystem.Get())
 	{
 		NewState.Poison = AbilitySystem->GetNumericAttribute(UCatSurvivalAttributeSet::GetPoisonAttribute());
@@ -363,12 +404,15 @@ void UCatHUDModel::HandleGrowthChanged()
 }
 
 // Run GameState 绑定调和流程：先从当前 Controller 的 World 读取最新 GameState；找不到时启动短重试，找到后按观察者模式先刷新一次 HUD 投影，再订阅后续 OnRep/服务器本机写入通知。
+// Run 天数和团队公款/公开流水都挂在这一个 GameState 上，所以两条订阅在这里一起接、一起断，不各自维护一份宿主。
 bool UCatHUDModel::RefreshRunGameStateBinding()
 {
 	APlayerController* Controller = BoundPlayerController.Get();
 	UWorld* World = Controller ? Controller->GetWorld() : nullptr;
 	ACatfishingGameState* CurrentGameState = World ? World->GetGameState<ACatfishingGameState>() : nullptr;
-	if (BoundRunGameState.Get() == CurrentGameState && CurrentGameState && RunPublicStateChangedHandle.IsValid())
+	// Run 快照和商店快照在这里成对接线，所以两个句柄都得成立才算已接上；只补一个会让余额和广播永远停在旧值。
+	if (BoundRunGameState.Get() == CurrentGameState && CurrentGameState
+		&& RunPublicStateChangedHandle.IsValid() && ShopEconomySnapshotChangedHandle.IsValid())
 	{
 		ClearRunGameStateBindingRetry();
 		return true;
@@ -377,8 +421,12 @@ bool UCatHUDModel::RefreshRunGameStateBinding()
 	if (ACatfishingGameState* PreviousGameState = BoundRunGameState.Get())
 	{
 		PreviousGameState->OnRunPublicStateChanged.Remove(RunPublicStateChangedHandle);
+		PreviousGameState->OnShopEconomySnapshotChanged.Remove(ShopEconomySnapshotChangedHandle);
 	}
 	RunPublicStateChangedHandle.Reset();
+	ShopEconomySnapshotChangedHandle.Reset();
+	// 换到另一份 GameState 就是换了一局公开流水；旧局播报过的整车 ID 在新账本里没有意义。
+	ResetPurchaseBroadcastState();
 	BoundRunGameState = CurrentGameState;
 
 	if (!CurrentGameState)
@@ -388,9 +436,14 @@ bool UCatHUDModel::RefreshRunGameStateBinding()
 	}
 
 	ClearRunGameStateBindingRetry();
+	// 公款和公开流水跟 Run 快照挂在同一个 GameState 上，所以复用同一次接线：
+	// 先把已经复制到本机的既往成交折成广播，再刷新一次投影，最后订阅后续变化。
+	RefreshPurchaseBroadcasts();
 	Refresh();
 	RunPublicStateChangedHandle = CurrentGameState->OnRunPublicStateChanged.AddUObject(
 		this, &ThisClass::HandleRunPublicStateChanged);
+	ShopEconomySnapshotChangedHandle = CurrentGameState->OnShopEconomySnapshotChanged.AddUObject(
+		this, &ThisClass::HandleShopEconomySnapshotChanged);
 	UE_LOG(LogCatUI, Log, TEXT("Event=ui_hud_run_gamestate_bound World=%s NetMode=%d Revision=%lld Day=%d Phase=%s"),
 		World ? *World->GetName() : TEXT("None"),
 		World ? static_cast<int32>(World->GetNetMode()) : INDEX_NONE,
@@ -407,8 +460,11 @@ void UCatHUDModel::ClearRunGameStateBinding()
 	if (ACatfishingGameState* RunGameState = BoundRunGameState.Get())
 	{
 		RunGameState->OnRunPublicStateChanged.Remove(RunPublicStateChangedHandle);
+		RunGameState->OnShopEconomySnapshotChanged.Remove(ShopEconomySnapshotChangedHandle);
 	}
 	RunPublicStateChangedHandle.Reset();
+	ShopEconomySnapshotChangedHandle.Reset();
+	ResetPurchaseBroadcastState();
 	BoundRunGameState.Reset();
 }
 
@@ -461,6 +517,130 @@ void UCatHUDModel::HandleRunGameStateBindingRetry()
 void UCatHUDModel::HandleRunPublicStateChanged()
 {
 	Refresh();
+}
+
+// 商店快照变化流程：先把新成交折成全场广播队列，再重读完整投影；余额和广播都只来自这份复制事实。
+void UCatHUDModel::HandleShopEconomySnapshotChanged()
+{
+	RefreshPurchaseBroadcasts();
+	Refresh();
+}
+
+// 全场购买广播归并流程：
+// 1. 商店 §7 定「一车一条」，但公开流水是一车一种商品一行；账本按提交顺序追加，同一车的行连续、
+//    同操作者、同摊位，所以把这样一段连续行合成一条广播。整车 ID 不在复制 DTO 里，这是本机能拿到的最近事实。
+// 2. 同一车的后续行可能分批复制到本机，所以已播报的车按整车 ID 原地更新，不追加第二条。
+// 3. 接线后一个短窗口内看到的车只记不播：中途进局的玩家第一次复制会一次性拿到整本流水，那是历史不是事件。
+void UCatHUDModel::RefreshPurchaseBroadcasts()
+{
+	const ACatfishingGameState* RunGameState = BoundRunGameState.Get();
+	if (!RunGameState)
+	{
+		return;
+	}
+	const FCatShopPublicEconomySnapshot& Economy = RunGameState->GetShopEconomySnapshot();
+	const double ServerNowSeconds = RunGameState->GetServerWorldTimeSeconds();
+	if (!bHasPurchaseBroadcastSeedTime)
+	{
+		PurchaseBroadcastSeedServerTime = ServerNowSeconds;
+		bHasPurchaseBroadcastSeedTime = true;
+	}
+	const bool bSeedOnly =
+		ServerNowSeconds - PurchaseBroadcastSeedServerTime <= CatHUDPurchaseBroadcastSeedGraceSeconds;
+	for (int32 CartFirstIndex = 0; CartFirstIndex < Economy.Transactions.Num(); )
+	{
+		const FCatShopPublicTransaction& CartFirst = Economy.Transactions[CartFirstIndex];
+		if (!CartFirst.bPurchase)
+		{
+			++CartFirstIndex;
+			continue;
+		}
+		int32 CartLastIndex = CartFirstIndex;
+		while (CartLastIndex + 1 < Economy.Transactions.Num())
+		{
+			const FCatShopPublicTransaction& Next = Economy.Transactions[CartLastIndex + 1];
+			if (!Next.bPurchase || Next.ActorPlayerState != CartFirst.ActorPlayerState
+				|| Next.ShopInventoryId != CartFirst.ShopInventoryId)
+			{
+				break;
+			}
+			++CartLastIndex;
+		}
+		const FGuid CartId = CartFirst.TransactionId;
+		const int32 EntryCount = CartLastIndex - CartFirstIndex + 1;
+		int32 ItemCount = 0;
+		int32 SpentCoins = 0;
+		for (int32 Index = CartFirstIndex; Index <= CartLastIndex; ++Index)
+		{
+			const FCatShopPublicTransaction& Line = Economy.Transactions[Index];
+			ItemCount += FMath::Max(0, Line.PurchaseQuantity);
+			SpentCoins += FMath::Max(0, -Line.WalletDelta);
+		}
+		CartFirstIndex = CartLastIndex + 1;
+
+		FCatHUDPurchaseBroadcast* Existing = PurchaseBroadcasts.FindByPredicate(
+			[&CartId](const FCatHUDPurchaseBroadcast& Candidate) { return Candidate.CartId == CartId; });
+		if (!Existing && AnnouncedPurchaseCartIds.Contains(CartId))
+		{
+			// 已经播过、又已经被后来的车挤出队列：不补播，也不重排。
+			continue;
+		}
+		if (Existing && Existing->EntryCount == EntryCount && Existing->ItemCount == ItemCount
+			&& Existing->SpentCoins == SpentCoins)
+		{
+			continue;
+		}
+		FCatHUDPurchaseBroadcast Broadcast;
+		Broadcast.CartId = CartId;
+		Broadcast.EntryCount = EntryCount;
+		Broadcast.ItemCount = ItemCount;
+		Broadcast.SpentCoins = SpentCoins;
+		Broadcast.AnnouncedServerTime = Existing ? Existing->AnnouncedServerTime : ServerNowSeconds;
+		const APlayerState* Buyer = CartFirst.ActorPlayerState;
+		// 操作者留空说明这只猫已经离局或还没进 Active；服务端刻意不挑人顶替，这里也只写一个中性称呼。
+		const FString BuyerName = Buyer ? Buyer->GetPlayerName() : FString();
+		Broadcast.BuyerNameText = !BuyerName.IsEmpty()
+			? FText::FromString(BuyerName)
+			: FText::FromString(TEXT("某只猫"));
+		const FText FirstItemNameText = MakePurchaseItemNameText(CartFirst.DefinitionId, CartFirst.EntryId);
+		Broadcast.ItemsText = EntryCount > 1
+			? FText::FromString(FString::Printf(TEXT("%s 等 %d 样"), *FirstItemNameText.ToString(), EntryCount))
+			: FirstItemNameText;
+		Broadcast.BroadcastText = FText::FromString(FString::Printf(TEXT("%s 买了 %s，花掉公款 %d"),
+			*Broadcast.BuyerNameText.ToString(), *Broadcast.ItemsText.ToString(), Broadcast.SpentCoins));
+		AnnouncedPurchaseCartIds.Add(CartId);
+		if (bSeedOnly)
+		{
+			continue;
+		}
+		if (Existing)
+		{
+			*Existing = MoveTemp(Broadcast);
+			continue;
+		}
+		UE_LOG(LogCatUI, Log,
+			TEXT("Event=ui_hud_purchase_broadcast World=%s NetMode=%d CartId=%s Buyer=%s Entries=%d Items=%d Spent=%d Balance=%d WalletRevision=%lld Result=ViewStateApplied"),
+			*GetNameSafe(RunGameState->GetWorld()),
+			RunGameState->GetWorld() ? static_cast<int32>(RunGameState->GetWorld()->GetNetMode()) : INDEX_NONE,
+			*CartId.ToString(), *Broadcast.BuyerNameText.ToString(),
+			Broadcast.EntryCount, Broadcast.ItemCount, Broadcast.SpentCoins,
+			Economy.Balance, Economy.WalletRevision);
+		PurchaseBroadcasts.Add(MoveTemp(Broadcast));
+	}
+	if (PurchaseBroadcasts.Num() > CatHUDPurchaseBroadcastLimits::MaxKeptEntries)
+	{
+		PurchaseBroadcasts.RemoveAt(0,
+			PurchaseBroadcasts.Num() - CatHUDPurchaseBroadcastLimits::MaxKeptEntries);
+	}
+}
+
+// 全场购买广播收口流程：换 GameState、换 World 或解绑时清空本局播报记录；它不读也不写商店账本。
+void UCatHUDModel::ResetPurchaseBroadcastState()
+{
+	AnnouncedPurchaseCartIds.Reset();
+	PurchaseBroadcasts.Reset();
+	PurchaseBroadcastSeedServerTime = 0.0;
+	bHasPurchaseBroadcastSeedTime = false;
 }
 
 // Fishing 投影变化流程：Bridge 已保存最新会话 DTO，HUD 只重建展示文本。

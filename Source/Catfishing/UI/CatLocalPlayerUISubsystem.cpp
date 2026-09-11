@@ -16,6 +16,8 @@
 #include "Online/CatOnlineSubsystem.h"
 #include "Framework/Application/SlateApplication.h"
 #include "UI/CatUISettings.h"
+#include "UI/Collection/CatCollectionPageController.h"
+#include "UI/Collection/CatCollectionWidget.h"
 #include "UI/Frontend/CatFrontendPageController.h"
 #include "UI/Frontend/CatFrontendRootWidget.h"
 #include "UI/Frontend/CatFrontendRoomModel.h"
@@ -189,13 +191,18 @@ void UCatLocalPlayerUISubsystem::PlayerControllerChanged(APlayerController* NewC
 	RefreshFrontendForCurrentController();
 }
 
-// 背包切换流程：先拒绝翻天期间的 HUD 调用，再由窗口控制器管理视口与输入；库存仍由自己的 Model 通知。
+// 背包切换流程：先拒绝翻天期间的 HUD 调用，打开前先关掉图鉴，再由窗口控制器管理视口与输入；库存仍由自己的 Model 通知。
 void UCatLocalPlayerUISubsystem::ToggleInventory()
 {
 	const ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
 	if (Controller && Controller->IsDayTransitionInputBlocked()) return;
 	if (InventoryPageController)
 	{
+		if (!InventoryPageController->IsInventoryOpen()
+			&& CollectionPageController && CollectionPageController->IsCollectionOpen())
+		{
+			CollectionPageController->RequestCloseCollectionFromWidget();
+		}
 		InventoryPageController->ToggleInventory();
 	}
 }
@@ -221,8 +228,33 @@ bool UCatLocalPlayerUISubsystem::IsInventoryOpen() const
 	return InventoryPageController ? InventoryPageController->IsInventoryOpen() : false;
 }
 
+// 图鉴切换流程：先拒绝翻天期间的调用；打开前先关掉背包和局内菜单，保证同一 Controller 只有一层模态输入锁在生效。
+void UCatLocalPlayerUISubsystem::ToggleCollection()
+{
+	const ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
+	if (Controller && Controller->IsDayTransitionInputBlocked()) return;
+	if (!CollectionPageController)
+	{
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_collection_toggle_rejected Reason=PageControllerUnavailable World=%s"),
+			*GetPathNameSafe(GetWorld()));
+		return;
+	}
+	if (!CollectionPageController->IsCollectionOpen())
+	{
+		if (InventoryPageController && InventoryPageController->IsInventoryOpen())
+		{
+			InventoryPageController->RequestCloseInventoryFromWidget();
+		}
+		if (LakeMainMenuController && LakeMainMenuController->IsMenuOpen())
+		{
+			LakeMainMenuController->RequestCloseFromWidget();
+		}
+	}
+	CollectionPageController->ToggleCollection();
+}
+
 // 翻天表现流程：
-// 1. 只接收本 LocalPlayer 的当前 Controller；锁定期关闭库存和菜单，切断格子直接 use 与模态按键入口。
+// 1. 只接收本 LocalPlayer 的当前 Controller；锁定期关闭库存、菜单和图鉴，切断格子直接 use 与模态按键入口。
 // 2. 失败按 RequestId 只开启一次基于本机实时时钟的两秒提示；无锁且无提示时先归还焦点，再移除视图，保留去重记录。
 // 3. 按服务器时间计算淡出、停留、淡入；已经越过完整过场时透明度为零，阻断仍取 active 且非 failed，不由本地时钟解除。
 // 4. 提交且处于结果展示时间段时显示 Message 或目标天数；成功凭据只有请求标识匹配才追加结算摘要，失败只显示错误文本。
@@ -243,6 +275,10 @@ void UCatLocalPlayerUISubsystem::RefreshDayTransition(APlayerController* Control
 		if (LakeMainMenuController && LakeMainMenuController->IsMenuOpen())
 		{
 			LakeMainMenuController->RequestCloseFromWidget();
+		}
+		if (CollectionPageController && CollectionPageController->IsCollectionOpen())
+		{
+			CollectionPageController->RequestCloseCollectionFromWidget();
 		}
 	}
 	const double Now = FPlatformTime::Seconds();
@@ -1214,6 +1250,12 @@ UCatItemTooltipController* UCatLocalPlayerUISubsystem::GetItemTooltipController(
 	return ItemTooltipController;
 }
 
+// 图鉴控制器读取流程：只返回 AttachPlayerLakeUI 写入的本地玩家唯一控制器；WBP 缺失或绑定失败时返回空，图鉴 WBP 据此跳过关闭请求。
+UCatCollectionPageController* UCatLocalPlayerUISubsystem::GetCollectionPageController() const
+{
+	return CollectionPageController;
+}
+
 // Pawn 变化流程：
 // 1. 先把 NewPawn 裁成项目猫身体；同一个已装配身体的重复通知只刷新输入绑定，库存和菜单数据继续等自己的读源广播。
 // 2. 新身体或空身体会先完整拆掉上一套本地玩家 UI，避免跨 Pawn 复用 Model、View 或输入锁。
@@ -1226,6 +1268,11 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 	{
 		InventoryPageController->RefreshInputBinding();
 		LakeMainMenuController->RefreshInputBinding();
+		// 图鉴页是可选模块；WBP 缺失时这里没有控制器，其余局内 UI 的输入刷新照常。
+		if (CollectionPageController)
+		{
+			CollectionPageController->RefreshInputBinding();
+		}
 		RefreshGlobalLoadingScreenFromCurrentSnapshot();
 		return;
 	}
@@ -1248,7 +1295,9 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 // 2. 创建 HUD Model/View、库存、菜单和交互提示实例；任一必需实例缺失则统一解绑已创建部分，再结束本次装配。
 // 3. 绑定 HUD 动作与角色 Model，订阅 Model 更新后把 HUD 放入视口；Model 绑定失败同样统一清理。
 // 4. 创建物品悬停 View；成功加入全视口层后才绑定控制器，失败释放引用并记录，库存格只提交来源。
-// 5. 刷新 HUD，绑定库存和菜单控制器；页面暂不入视口，仍由既有输入打开，任一绑定失败则整体解绑。
+// 5. 刷新 HUD，先创建图鉴页并绑定其页面控制器，再绑定库存和菜单控制器；页面都暂不入视口，仍由既有入口打开。
+//    图鉴走在菜单之前，是为了让局内菜单首次渲染就能读到图鉴控制器决定图鉴按钮可用性；它绑定失败只关掉三个图鉴入口并记录，
+//    库存或菜单绑定失败才整体解绑（DetachPlayerLakeUI 同时清理已建好的图鉴页）。
 // 6. 将交互提示初始化为隐藏并放入视口，再订阅唯一准星目标；绑定失败清理所有局内 UI。
 // 7. 最后绑定本玩家的 WorldInfo 控制器并记录装配日志；它读取注册锚点，后续单个信息牌资产失败不拆除整个 HUD。
 void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
@@ -1329,6 +1378,25 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 			*GetPathNameSafe(GetWorld()), *Settings->ItemTooltipWidgetClass.ToSoftObjectPath().ToString());
 	}
 	HandleHUDModelViewStateChanged();
+	// 图鉴页隶属于本玩家但不是装配前提；类或绑定失败只关闭三个图鉴入口并落盘，不影响 HUD、背包、菜单与 Profile 记录。
+	if (const TSubclassOf<UCatCollectionWidget> CollectionViewClass = Settings->LoadCollectionWidgetClass())
+	{
+		CollectionWidget = CreateWidget<UCatCollectionWidget>(Controller, CollectionViewClass);
+		if (CollectionWidget)
+		{
+			CollectionPageController = NewObject<UCatCollectionPageController>(this);
+			if (!CollectionPageController->Bind(GetLocalPlayer(), Controller, CollectionWidget))
+			{
+				CollectionPageController = nullptr;
+				CollectionWidget = nullptr;
+			}
+		}
+	}
+	if (!CollectionPageController)
+	{
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_collection_unavailable World=%s Class=%s"),
+			*GetPathNameSafe(GetWorld()), *Settings->CollectionWidgetClass.ToSoftObjectPath().ToString());
+	}
 	if (!InventoryPageController->Bind(Controller, InventoryWidget)
 		|| !LakeMainMenuController->Bind(GetLocalPlayer(), Controller, LakeMainMenuWidget))
 	{
@@ -1349,7 +1417,7 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	const UWorld* World = GetWorld();
 	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	UE_LOG(LogCatUI, Log,
-		TEXT("Event=ui_player_modules_attached World=%s NetMode=%d LocalPlayerIndex=%d Controller=%s LocalController=%s HUD=%s HUDMode=minimal_main Inventory=%s Slot=%s LakeMenu=%s Interaction=%s ShopPrecreated=false"),
+		TEXT("Event=ui_player_modules_attached World=%s NetMode=%d LocalPlayerIndex=%d Controller=%s LocalController=%s HUD=%s HUDMode=minimal_main Inventory=%s Slot=%s LakeMenu=%s Interaction=%s Collection=%s ShopPrecreated=false"),
 		World ? *World->GetName() : TEXT("None"),
 		World ? static_cast<int32>(World->GetNetMode()) : -1,
 		LocalPlayer ? LocalPlayer->GetLocalPlayerIndex() : INDEX_NONE,
@@ -1359,12 +1427,13 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 		*GetNameSafe(InventoryWidget->GetClass()),
 		*GetNameSafe(InventorySlotViewClass.Get()),
 		*GetNameSafe(LakeMainMenuWidget ? LakeMainMenuWidget->GetClass() : nullptr),
-		*GetNameSafe(InteractionPromptWidget ? InteractionPromptWidget->GetClass() : nullptr));
+		*GetNameSafe(InteractionPromptWidget ? InteractionPromptWidget->GetClass() : nullptr),
+		*GetNameSafe(CollectionWidget ? CollectionWidget->GetClass() : nullptr));
 }
 
 // 本地玩家 UI 解绑流程：
 // 1. 先让 WorldInfo 释放观察距离和信息牌，再解绑悬停来源并移除提示视图。
-// 2. 按菜单、库存的顺序解绑控制器以恢复各自输入状态，再移除对应页面；尚未创建的对象直接跳过。
+// 2. 按图鉴、菜单、库存的顺序解绑控制器以恢复各自输入状态，再移除对应页面；尚未创建的对象直接跳过。
 // 3. 解除 HUD Model 事件与玩法订阅，清掉 HUD 动作委托并移除 HUD，随后解绑交互提示控制器和视图。
 // 4. 清空当前挂接角色并记录卸载日志；各步释放自身引用，允许装配失败后复用同一清理入口。
 void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
@@ -1384,6 +1453,16 @@ void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 	{
 		ItemTooltipWidget->RemoveFromParent();
 		ItemTooltipWidget = nullptr;
+	}
+	if (CollectionPageController)
+	{
+		CollectionPageController->Unbind();
+		CollectionPageController = nullptr;
+	}
+	if (CollectionWidget)
+	{
+		CollectionWidget->RemoveFromParent();
+		CollectionWidget = nullptr;
 	}
 	if (LakeMainMenuController)
 	{
@@ -1450,7 +1529,7 @@ void UCatLocalPlayerUISubsystem::HandleHUDModelViewStateChanged()
 	}
 }
 
-// 局内菜单切换流程：翻天期间拒绝打开；其他时候先关闭背包，保证同一 Controller 只有一个菜单模态恢复记录。
+// 局内菜单切换流程：翻天期间拒绝打开；其他时候先关闭背包和图鉴，保证同一 Controller 只有一个菜单模态恢复记录。
 void UCatLocalPlayerUISubsystem::ToggleLakeMainMenu()
 {
 	const ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
@@ -1459,14 +1538,21 @@ void UCatLocalPlayerUISubsystem::ToggleLakeMainMenu()
 	{
 		return;
 	}
-	if (!LakeMainMenuController->IsMenuOpen() && InventoryPageController && InventoryPageController->IsInventoryOpen())
+	if (!LakeMainMenuController->IsMenuOpen())
 	{
-		InventoryPageController->RequestCloseInventoryFromWidget();
+		if (InventoryPageController && InventoryPageController->IsInventoryOpen())
+		{
+			InventoryPageController->RequestCloseInventoryFromWidget();
+		}
+		if (CollectionPageController && CollectionPageController->IsCollectionOpen())
+		{
+			CollectionPageController->RequestCloseCollectionFromWidget();
+		}
 	}
 	LakeMainMenuController->ToggleMenu();
 }
 
-// HUD 入口动作流程：背包和主菜单都转交已有控制器；HUD 不拼业务页面，也不持有保存或离局业务。
+// HUD 入口动作流程：背包、主菜单和图鉴都转交已有控制器；HUD 不拼业务页面，也不持有保存或离局业务。
 void UCatLocalPlayerUISubsystem::HandleHUDActionRequested(const ECatHUDAction Action)
 {
 	switch (Action)
@@ -1476,6 +1562,9 @@ void UCatLocalPlayerUISubsystem::HandleHUDActionRequested(const ECatHUDAction Ac
 		break;
 	case ECatHUDAction::OpenMainMenu:
 		ToggleLakeMainMenu();
+		break;
+	case ECatHUDAction::OpenCollection:
+		ToggleCollection();
 		break;
 	default:
 		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_hud_action_unknown Action=%d"), static_cast<int32>(Action));

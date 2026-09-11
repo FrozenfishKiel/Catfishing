@@ -85,6 +85,26 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 	{
 		DayTextBlock->SetText(ViewState.DayText);
 	}
+	if ((!TeamWalletTextBlock || !PurchaseBroadcastTextBlock) && !bHasLoggedMissingShopHUD)
+	{
+		// 公款是常驻位、购买是全场事件，两者都不该只在商店页里存在；正式 WBP 补齐控件之前先落一条可查诊断。
+		UE_LOG(LogCatUI, Warning,
+			TEXT("Event=ui_hud_shop_slots_missing Widget=%s World=%s WalletBound=%d BroadcastBound=%d Result=FormalWidgetNeedsMigration"),
+			*GetName(), *GetNameSafe(GetWorld()),
+			TeamWalletTextBlock != nullptr, PurchaseBroadcastTextBlock != nullptr);
+		bHasLoggedMissingShopHUD = true;
+	}
+	if (TeamWalletTextBlock)
+	{
+		TeamWalletTextBlock->SetText(ViewState.TeamWalletText);
+		TeamWalletTextBlock->SetVisibility(ESlateVisibility::HitTestInvisible);
+	}
+	if (PurchaseBroadcastTextBlock)
+	{
+		PurchaseBroadcastTextBlock->SetText(ViewState.PurchaseBroadcastText);
+		PurchaseBroadcastTextBlock->SetVisibility(ViewState.bShowPurchaseBroadcast
+			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
 	if (CatStatusTextBlock)
 	{
 		CatStatusTextBlock->SetText(BlueprintCatStatusText);
@@ -157,6 +177,12 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 		InventoryButton->SetVisibility(ViewState.bInventoryEntryVisible
 			? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
 	}
+	if (CollectionButton)
+	{
+		CollectionButton->SetIsEnabled(ViewState.bCanOpenCollection);
+		CollectionButton->SetVisibility(ViewState.bCollectionEntryVisible
+			? ESlateVisibility::Visible : ESlateVisibility::Collapsed);
+	}
 	if (CatStaminaProgressBar)
 	{
 		CatStaminaProgressBar->SetPercent(ViewState.NormalizedFightStamina);
@@ -184,7 +210,7 @@ const FCatHUDViewState& UCatHUDWidget::GetLastHUDViewState() const
 	return LastHUDViewState;
 }
 
-// 构造流程：让父类完成 Slate 构建后，对两个主 HUD 入口按钮执行 Remove/Add 配对，保证重建时不会重复广播。
+// 构造流程：让父类完成 Slate 构建后，对三个主 HUD 入口按钮执行 Remove/Add 配对，保证重建时不会重复广播。
 void UCatHUDWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
@@ -198,9 +224,14 @@ void UCatHUDWidget::NativeConstruct()
 		InventoryButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenInventory);
 		InventoryButton->OnClicked.AddDynamic(this, &ThisClass::RequestOpenInventory);
 	}
+	if (CollectionButton)
+	{
+		CollectionButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenCollection);
+		CollectionButton->OnClicked.AddDynamic(this, &ThisClass::RequestOpenCollection);
+	}
 }
 
-// 销毁流程：解除两个主 HUD 入口按钮对本对象的动态绑定，再交还父类 Slate 生命周期；业务广播不保存 World 引用。
+// 销毁流程：解除三个主 HUD 入口按钮对本对象的动态绑定，再交还父类 Slate 生命周期；业务广播不保存 World 引用。
 void UCatHUDWidget::NativeDestruct()
 {
 	if (MainMenuButton)
@@ -211,25 +242,39 @@ void UCatHUDWidget::NativeDestruct()
 	{
 		InventoryButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenInventory);
 	}
+	if (CollectionButton)
+	{
+		CollectionButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenCollection);
+	}
 	Super::NativeDestruct();
 }
 
 // Tick 流程：只在真咬钩窗口期间用服务器时间锚点刷新倒计时控件；窗口过期时本地收起提示，正式失败仍等命令/会话事实。
+// 全场购买广播同样只在这里做本地淡出：投影只在公开流水变化时重建，靠它自己收不起过期的提示。
 void UCatHUDWidget::NativeTick(const FGeometry& MyGeometry, const float InDeltaTime)
 {
 	Super::NativeTick(MyGeometry, InDeltaTime);
+	UWorld* TickWorld = GetWorld();
+	const AGameStateBase* TickGameState = TickWorld ? TickWorld->GetGameState() : nullptr;
+	const double TickServerNowSeconds = TickGameState ? TickGameState->GetServerWorldTimeSeconds()
+		: (TickWorld ? TickWorld->GetTimeSeconds() : 0.0);
+	if (PurchaseBroadcastTextBlock && LastHUDViewState.bShowPurchaseBroadcast
+		&& !LastHUDViewState.PurchaseBroadcasts.IsEmpty())
+	{
+		const double AnnouncedServerTime = LastHUDViewState.PurchaseBroadcasts.Last().AnnouncedServerTime;
+		const bool bStillVisible =
+			TickServerNowSeconds - AnnouncedServerTime <= CatHUDPurchaseBroadcastLimits::VisibleSeconds;
+		PurchaseBroadcastTextBlock->SetVisibility(bStillVisible
+			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
 	if (!LastHUDViewState.bShowHookCountdown)
 	{
 		return;
 	}
-	UWorld* World = GetWorld();
-	const AGameStateBase* GameState = World ? World->GetGameState() : nullptr;
-	const double ServerNowSeconds = GameState ? GameState->GetServerWorldTimeSeconds()
-		: (World ? World->GetTimeSeconds() : 0.0);
 	const double WindowDuration = FMath::Max(
 		LastHUDViewState.Fishing.WindowEndsServerTime - LastHUDViewState.Fishing.PhaseStartedServerTime, 0.01);
 	const double RemainingSeconds = FMath::Max(
-		LastHUDViewState.Fishing.WindowEndsServerTime - ServerNowSeconds, 0.0);
+		LastHUDViewState.Fishing.WindowEndsServerTime - TickServerNowSeconds, 0.0);
 	const float CountdownPercent = FMath::Clamp(
 		static_cast<float>(RemainingSeconds / WindowDuration), 0.0f, 1.0f);
 	const ESlateVisibility CountdownVisibility = RemainingSeconds > 0.0
@@ -307,6 +352,12 @@ void UCatHUDWidget::RequestOpenMainMenu()
 void UCatHUDWidget::RequestOpenInventory()
 {
 	SubmitHUDAction(ECatHUDAction::OpenInventory);
+}
+
+// 图鉴入口流程：左上角猫爪印只提交纯 UI 意图；实际开关图鉴由 LocalPlayer UI 协调层转交图鉴页面控制器。
+void UCatHUDWidget::RequestOpenCollection()
+{
+	SubmitHUDAction(ECatHUDAction::OpenCollection);
 }
 
 // 意图提交流程：先广播给原生协调层处理已有页面，再通知蓝图扩展点处理未接原生控制器的页面或动画。

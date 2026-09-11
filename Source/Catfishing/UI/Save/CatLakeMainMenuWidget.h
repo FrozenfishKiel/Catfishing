@@ -54,7 +54,10 @@ enum class ECatLakeMainMenuAction : uint8
 	SelectAudioSettings,
 
 	/** 请求切到控制设置分类；当前只显示正式不可用说明，不生成临时键位配置。 */
-	SelectControlsSettings
+	SelectControlsSettings,
+
+	/** 请求打开个人图鉴页；Controller 会先关闭本菜单，再把意图交给 LocalPlayer UI 的图鉴页面控制器。 */
+	OpenCollection
 };
 
 /** 局内菜单按钮点击通知；订阅者收到后读取 Action 并调用各自权威系统。 */
@@ -89,6 +92,10 @@ struct FCatLakeMainMenuViewState
 	/** 退出游戏按钮是否可点击；点击后走本地 Quit，通常不会停留在菜单里等待异步离局。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bExitEnabled = true;
+
+	/** 图鉴按钮是否可点击；只有本地 UI 真的装配出图鉴页面控制器时才为 true。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bCollectionEnabled = false;
 
 	/** 当前是否处于退出到主菜单的等待状态；View 据此锁住命令页输入，实际等待遮罩由全局 UI 显示。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -131,6 +138,10 @@ public:
 	/** 提交设置入口意图；本 Widget 不创建设置页，也不写任何设置草稿。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|LakeMenu")
 	void RequestOpenSettings();
+
+	/** 提交图鉴入口意图；本 Widget 不创建图鉴页，也不读取任何 Profile 记录。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|LakeMenu")
+	void RequestOpenCollection();
 
 	/** 提交手动保存意图；是否保存、保存哪个活动槽以及失败原因全部交给 Save 子系统。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|LakeMenu")
@@ -312,6 +323,10 @@ private:
 	/** WBP Designer 中的可选关闭按钮；存在时只关闭菜单并恢复输入，不提交保存或退出游戏。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> CloseButton;
+
+	/** WBP Designer 中的派对菜单图鉴按钮；存在时点击广播 OpenCollection，由 Controller 关菜单后转交图鉴页面控制器。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> CollectionButton;
 
 	/** WBP Designer 中的结果文本；存在时显示保存、设置、回主菜单或退出进程入口返回的明确反馈。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))

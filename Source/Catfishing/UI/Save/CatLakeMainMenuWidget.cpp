@@ -67,6 +67,10 @@ void UCatLakeMainMenuWidget::RenderMenu(const FCatLakeMainMenuViewState& ViewSta
 	{
 		ExitGameButton->SetIsEnabled(LastMenuViewState.bExitEnabled);
 	}
+	if (CollectionButton)
+	{
+		CollectionButton->SetIsEnabled(LastMenuViewState.bCollectionEnabled);
+	}
 	BP_RenderMenu(LastMenuViewState);
 }
 
@@ -140,6 +144,12 @@ void UCatLakeMainMenuWidget::RequestCloseMenu()
 void UCatLakeMainMenuWidget::RequestOpenSettings()
 {
 	SubmitMenuAction(ECatLakeMainMenuAction::OpenSettings);
+}
+
+// 图鉴请求流程：只广播图鉴意图；Controller 负责先关闭本菜单，再把意图交给 LocalPlayer UI 的图鉴页面控制器。
+void UCatLakeMainMenuWidget::RequestOpenCollection()
+{
+	SubmitMenuAction(ECatLakeMainMenuAction::OpenCollection);
 }
 
 // 保存请求流程：只广播保存意图；Save 子系统负责判断 Host、活动槽、busy 和磁盘结果。
@@ -284,6 +294,11 @@ void UCatLakeMainMenuWidget::BindDesignerButtons()
 		CloseButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCloseMenu);
 		CloseButton->OnClicked.AddDynamic(this, &ThisClass::RequestCloseMenu);
 	}
+	if (CollectionButton)
+	{
+		CollectionButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenCollection);
+		CollectionButton->OnClicked.AddDynamic(this, &ThisClass::RequestOpenCollection);
+	}
 }
 
 // Designer 按钮解绑流程：只解除本类添加的动态委托，蓝图自己绑定的动画或声音反馈不被清掉。
@@ -308,6 +323,10 @@ void UCatLakeMainMenuWidget::UnbindDesignerButtons()
 	if (CloseButton)
 	{
 		CloseButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCloseMenu);
+	}
+	if (CollectionButton)
+	{
+		CollectionButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestOpenCollection);
 	}
 }
 

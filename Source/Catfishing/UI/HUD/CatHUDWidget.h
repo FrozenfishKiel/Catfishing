@@ -19,11 +19,65 @@ enum class ECatHUDAction : uint8
 	/** 打开局内主页或 ESC 菜单入口；正式页面由蓝图或上层控制器决定。 */
 	OpenMainMenu,
 	/** 打开随身背包入口；当前原生协调层会把它转交给 Inventory PageController。 */
-	OpenInventory
+	OpenInventory,
+	/** 打开个人图鉴入口；左上角猫爪印图标提交它，原生协调层转交 Collection PageController。 */
+	OpenCollection
 };
 
 /** HUD View 向 LocalPlayer UI 协调层广播的纯入口意图；接收方决定具体页面和输入模式。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatHUDActionRequested, ECatHUDAction);
+
+/**
+ * 一条对全场播报的购买事件。商店 §7 定「一车一条」，所以它对应玩家的一次整车成交，
+ * 而不是账本里的一行；同一车的多种商品在这里折成同一条。它只是展示事实，
+ * 不能据此补发物品、改公款或确认交付。
+ */
+USTRUCT(BlueprintType)
+struct FCatHUDPurchaseBroadcast
+{
+	GENERATED_BODY()
+
+	/** 这一车里第一条公开流水的账本 ID；HUD 用它做整车去重，同车后到的行只更新这一条广播。 */
+	UPROPERTY(BlueprintReadOnly)
+	FGuid CartId;
+
+	/** 购买者的公开身份名；操作者已离局或身份尚未解析时退成“某只猫”。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText BuyerNameText;
+
+	/** 这一车的商品摘要；多种商品时为“首件 等 N 样”。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText ItemsText;
+
+	/** 这一车实际花掉的公款；整车一次成交，数值来自公开流水 WalletDelta 之和取反。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 SpentCoins = 0;
+
+	/** 这一车包含的公开流水行数；一行等于一种商品，不等于件数。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 EntryCount = 0;
+
+	/** 这一车发放的物品总件数；免费商品也计数。 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 ItemCount = 0;
+
+	/** 给全场提示控件直接显示的整句中文；至少含购买者、商品和支出。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText BroadcastText;
+
+	/** 本机首次看到这一车时的服务器时间；WBP 只用它做淡出，不用它判断交易是否成立。 */
+	UPROPERTY(BlueprintReadOnly)
+	double AnnouncedServerTime = 0.0;
+};
+
+namespace CatHUDPurchaseBroadcastLimits
+{
+	/** 一条全场购买广播在 HUD 上的展示秒数；Model 发布投影和 Widget 本地淡出用同一个数。 */
+	inline constexpr double VisibleSeconds = 6.0;
+
+	/** HUD 同时保留的全场购买广播条数上限；更早的车只留在公开流水里，不再占屏幕。 */
+	inline constexpr int32 MaxKeptEntries = 8;
+}
 
 /** 主界面 HUD 的只读显示投影；它聚合天数、默认入口和必要玩法提示，不持有任何玩法写口。 */
 USTRUCT(BlueprintType)
@@ -38,6 +92,37 @@ struct FCatHUDViewState
 	/** 给顶部天数展示控件直接显示的中文文本；它只表达 Run 天数，不承载点击入口或页面切换。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText DayText;
+
+	/**
+	 * 团队公款余额；来源是 GameState 复制的商店公开经济快照。公款对全队常时可见，
+	 * 所以它跟天数一样是常驻位，关掉商店页仍在；HUD 只展示，买得起与否仍由服务器整车裁决。
+	 */
+	UPROPERTY(BlueprintReadOnly)
+	int32 TeamWalletBalance = 0;
+
+	/** 公款余额版本；WBP 可用它做数字跳动去重，不用它判断交易是否成立。 */
+	UPROPERTY(BlueprintReadOnly)
+	int64 TeamWalletRevision = 0;
+
+	/** 本机是否已经拿到公开经济快照来源；为 false 时余额位显示未同步而不是 0。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bHasTeamWallet = false;
+
+	/** 给常驻余额控件直接显示的中文文本。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText TeamWalletText;
+
+	/** 本局至今看到的全场购买广播，一车一条、按发生顺序排列，只保留最近若干条。 */
+	UPROPERTY(BlueprintReadOnly)
+	TArray<FCatHUDPurchaseBroadcast> PurchaseBroadcasts;
+
+	/** 当前是否有一条还在展示窗口内的全场购买广播；过期由 HUD 本地收起，不改公开流水。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bShowPurchaseBroadcast = false;
+
+	/** 最近一条全场购买广播的整句文本；没有广播时为空。 */
+	UPROPERTY(BlueprintReadOnly)
+	FText PurchaseBroadcastText;
 
 	/** 当前猫中毒值；来源是 Character ASC，HUD 只展示，不据此裁决倒地。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -100,6 +185,14 @@ struct FCatHUDViewState
 	/** 背包入口是否可点击；禁用只影响 UI 按钮，背包打开仍由 Inventory PageController 裁决。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bCanOpenInventory = true;
+
+	/** 当前是否显示左上角猫爪印图鉴入口；按主界面口径白天常驻，布局可用它隐藏图标而不改变图鉴记录。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bCollectionEntryVisible = true;
+
+	/** 图鉴入口是否可点击；禁用只影响 UI 按钮，图鉴打开仍由 Collection PageController 裁决。 */
+	UPROPERTY(BlueprintReadOnly)
+	bool bCanOpenCollection = true;
 
 	/** 猫状态调试摘要是否显示在主界面上；默认关闭以避免正式 HUD 出现研发态属性文本，只由临时排查显式开启。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -220,14 +313,18 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|HUD")
 	void RequestOpenInventory();
 
+	/** 提交图鉴入口意图；左上角猫爪印按钮只广播它，页面仍由 Collection PageController 打开。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|HUD")
+	void RequestOpenCollection();
+
 	/** 用户点击 HUD 入口后的原生广播；LocalPlayer UI 子系统和外部控制器只接收意图。 */
 	FCatHUDActionRequested OnActionRequested;
 
 protected:
-	/** Slate 构造完成后对两个主 HUD 入口按钮去重绑定；没有对应按钮的 WBP 仍保持可用。 */
+	/** Slate 构造完成后对三个主 HUD 入口按钮去重绑定；没有对应按钮的 WBP 仍保持可用。 */
 	virtual void NativeConstruct() override;
 
-	/** 离开视口时解除两个主 HUD 入口按钮绑定，避免重建 Slate 后重复广播同一点击。 */
+	/** 离开视口时解除三个主 HUD 入口按钮绑定，避免重建 Slate 后重复广播同一点击。 */
 	virtual void NativeDestruct() override;
 
 	/** 每帧只刷新本地倒计时表现；提竿窗口裁决仍以服务器 FishingSession 命令结果为准。 */
@@ -255,6 +352,8 @@ private:
 	/** 正式 WBP 缺失钓鱼体力控件时只记录一次，避免固定步投影反复刷屏。 */
 	bool bHasLoggedMissingFishingMeter = false;
 	bool bHasLoggedMissingPhysicalControls = false;
+	/** 正式 WBP 还没有公款余额位或全场广播位时只记录一次，避免余额每变一次就刷同一条诊断。 */
+	bool bHasLoggedMissingShopHUD = false;
 
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> PhysicalControlTextBlock;
@@ -304,6 +403,14 @@ private:
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> DayTextBlock;
 
+	/** WBP Designer 中的公款余额文本控件；存在时常驻显示团队公款，未同步时显示未同步文案。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> TeamWalletTextBlock;
+
+	/** WBP Designer 中的全场购买广播文本控件；存在时按展示窗口显示最近一车成交，过期本地收起。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UTextBlock> PurchaseBroadcastTextBlock;
+
 	/** WBP Designer 中的真咬钩提示控件；存在时只在 TrueBiteWindow 阶段显示。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> BitePromptTextBlock;
@@ -343,6 +450,10 @@ private:
 	/** WBP Designer 中的旅行包入口按钮；点击时只广播 OpenInventory 意图。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UButton> InventoryButton;
+
+	/** WBP Designer 中的左上角猫爪印入口按钮；点击时只广播 OpenCollection 意图，不创建图鉴页。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> CollectionButton;
 
 	/** WBP Designer 中的体力条；始终读取 NormalizedFightStamina 个人比例。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))

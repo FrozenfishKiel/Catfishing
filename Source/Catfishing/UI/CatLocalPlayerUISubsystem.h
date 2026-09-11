@@ -8,6 +8,8 @@
 class APlayerController;
 class APawn;
 class ACatCharacter;
+class UCatCollectionPageController;
+class UCatCollectionWidget;
 class UCatHUDModel;
 class UCatHUDWidget;
 class UCatItemTooltipController;
@@ -30,7 +32,7 @@ class UCatWorldInfoController;
 struct FCatRunDayTransition;
 enum class ECatHUDAction : uint8;
 
-/** 每个 LocalPlayer 的 UI 生命周期协调器；只装配本地玩家拥有的 HUD、背包、物品提示和交互提示，不预建商店或聚合业务页面。 */
+/** 每个 LocalPlayer 的 UI 生命周期协调器；只装配本地玩家拥有的 HUD、背包、物品提示、交互提示和个人图鉴，不预建商店或聚合业务页面。 */
 UCLASS()
 class CATFISHING_API UCatLocalPlayerUISubsystem : public ULocalPlayerSubsystem
 {
@@ -63,6 +65,12 @@ public:
 
 	/** 返回当前 LocalPlayer 的库存窗口控制器；WBP 只用它关闭窗口，库存 Model 由各库存组件提供。 */
 	UCatInventoryPageController* GetInventoryPageController() const;
+
+	/** 切换当前 LocalPlayer 的个人图鉴页；HUD 猫爪印、图鉴按键和局内派对菜单三个入口都经这里，不各自创建页面。 */
+	void ToggleCollection();
+
+	/** 返回当前 LocalPlayer 的图鉴页面控制器；图鉴 WBP 只用它关闭窗口，记录仍由 Collection Model 单向推送。 */
+	UCatCollectionPageController* GetCollectionPageController() const;
 
 	/** 返回此玩家已经装配的唯一悬停控制器；库存格只提交显示意图，不创建各自的 Tooltip。 */
 	UCatItemTooltipController* GetItemTooltipController() const;
@@ -263,6 +271,14 @@ private:
 	/** 本玩家唯一的正式物品提示 View；显示在库存上层且不参与命中，卸载时移出视口。 */
 	UPROPERTY(Transient)
 	TObjectPtr<UCatItemTooltipWidget> ItemTooltipWidget;
+
+	/** 当前 LocalPlayer 的个人图鉴 WBP；装配时创建但不入视口，三个图鉴入口打开时才由页面控制器挂上去。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatCollectionWidget> CollectionWidget;
+
+	/** 当前 LocalPlayer 的图鉴页面控制器；它管理图鉴页的开关、模态输入与焦点，并持有只读 Collection Model。 */
+	UPROPERTY(Transient)
+	TObjectPtr<UCatCollectionPageController> CollectionPageController;
 
 	/** 当前 LocalPlayer 的局内主菜单 WBP；它只展示设置、保存和退出入口，不持有 Save 或 Online 系统。 */
 	UPROPERTY(Transient)

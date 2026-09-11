@@ -5,6 +5,8 @@
 #include "Framework/Core/CatProfileContracts.h"
 #include "CatCollectionWidget.generated.h"
 
+class UButton;
+class UCatCollectionPageController;
 class UTextBlock;
 
 /** 图鉴 UI 的单行展示投影；它来自 Profile durable 快照，不引用任何实物鱼容器。 */
@@ -67,12 +69,34 @@ public:
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Collection")
 	const FCatCollectionViewState& GetLastCollectionViewState() const;
 
+	/** 提交关闭图鉴页意图；按钮、图鉴键和 Escape 都走这个入口，输入恢复只由 PageController 成对处理。 */
+	UFUNCTION(BlueprintCallable, Category = "Catfishing|Collection")
+	void RequestCloseCollection();
+
 protected:
+	/** Slate 构造完成后对可选关闭按钮去重绑定；没有该按钮的 WBP 仍可用图鉴键或 Escape 关闭。 */
+	virtual void NativeConstruct() override;
+
+	/** 离开视口时解除关闭按钮绑定，避免重建 Slate 后重复提交关闭意图。 */
+	virtual void NativeDestruct() override;
+
+	/** 在子控件消费之前处理关闭键，避免焦点落在列表控件上后无法关闭整页。 */
+	virtual FReply NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
+
+	/** 根控件直接收到按键时复用同一关闭判断；其余输入保持默认传播。 */
+	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
+
 	/** WBP 可选渲染扩展点；正式列表表现可在蓝图里根据 Entries 构建。 */
 	UFUNCTION(BlueprintImplementableEvent, BlueprintCosmetic, Category = "Catfishing|Collection")
 	void BP_RenderCollection(const FCatCollectionViewState& ViewState);
 
 private:
+	/** 只为页面关闭解析 owning LocalPlayer 的图鉴页面控制器；图鉴数据仍由 Model 单向推送。 */
+	UCatCollectionPageController* ResolveCollectionPageController() const;
+
+	/** 关闭条件读取页面控制器的唯一打开状态；接受 Escape 与配置解析出的图鉴键。 */
+	bool ShouldCloseCollectionFromKey(const FKeyEvent& InKeyEvent) const;
+
 	/** 最近一次图鉴只读投影；本 Widget 不持有 Profile 子系统。 */
 	UPROPERTY(BlueprintReadOnly, Transient, Category = "Catfishing|Collection", meta = (AllowPrivateAccess = "true"))
 	FCatCollectionViewState LastCollectionViewState;
@@ -92,4 +116,8 @@ private:
 	/** WBP Designer 中的图鉴列表文本控件；存在时 RenderCollection 会直接写入只读记录列表。 */
 	UPROPERTY(Transient, meta = (BindWidgetOptional))
 	TObjectPtr<UTextBlock> EntriesTextBlock;
+
+	/** WBP Designer 中的可选关闭按钮；存在时点击只提交关闭意图，不改变任何图鉴记录。 */
+	UPROPERTY(Transient, meta = (BindWidgetOptional))
+	TObjectPtr<UButton> CloseButton;
 };

@@ -11,7 +11,9 @@
 #include "Logging/CatLog.h"
 #include "Online/CatOnlineSubsystem.h"
 #include "Save/CatSaveSubsystem.h"
+#include "UI/CatLocalPlayerUISubsystem.h"
 #include "UI/CatUISettings.h"
+#include "UI/Collection/CatCollectionPageController.h"
 #include "UI/Frontend/CatFrontendSettingsModel.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
 
@@ -525,6 +527,29 @@ void UCatLakeMainMenuController::ApplyMenuInputMode(const bool bOpen)
 	CatUIModalInputMode::Close(Controller, ModalInputModeState);
 }
 
+// 图鉴请求流程：先关闭本菜单释放模态输入，再把意图交给 LocalPlayer UI；图鉴页面与记录都不由局内菜单持有。
+void UCatLakeMainMenuController::RequestCollectionFromWidget()
+{
+	if (bReturnToMainMenuPending)
+	{
+		UpdateView();
+		return;
+	}
+	UCatLocalPlayerUISubsystem* UI = GetLocalPlayerUISubsystem();
+	if (!UI || !UI->GetCollectionPageController())
+	{
+		LastStatusText = FText::FromString(TEXT("图鉴当前不可用。"));
+		UpdateView();
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_lake_menu_collection_unavailable UI=%s"), *GetNameSafe(UI));
+		return;
+	}
+	LastStatusText = FText::GetEmpty();
+	SetMenuOpen(false);
+	UI->ToggleCollection();
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_lake_menu_collection_opened Controller=%s"),
+		*GetNameSafe(BoundPlayerController.Get()));
+}
+
 // ViewState 刷新流程：状态文本来自最近入口反馈；回主菜单等待中锁住返回、设置、保存和重复离局，直接退出进程保持独立。
 void UCatLakeMainMenuController::UpdateView()
 {
@@ -549,10 +574,12 @@ void UCatLakeMainMenuController::UpdateView()
 	ViewState.bReturnToMainMenuEnabled = bCanReturnToMainMenu;
 	ViewState.bExitEnabled = true;
 	ViewState.bReturnToMainMenuPending = bReturnToMainMenuPending;
+	const UCatLocalPlayerUISubsystem* UI = GetLocalPlayerUISubsystem();
+	ViewState.bCollectionEnabled = UI && UI->GetCollectionPageController() && !bReturnToMainMenuPending;
 	View->RenderMenu(ViewState);
 }
 
-// 菜单意图分发流程：Widget 只广播语义，这里才根据语义调用关闭、设置、保存、回主菜单、退出进程和设置页命令入口。
+// 菜单意图分发流程：Widget 只广播语义，这里才根据语义调用关闭、设置、图鉴、保存、回主菜单、退出进程和设置页命令入口。
 void UCatLakeMainMenuController::HandleMenuActionRequested(const ECatLakeMainMenuAction Action)
 {
 	if (bReturnToMainMenuPending && Action != ECatLakeMainMenuAction::ExitGame)
@@ -600,6 +627,9 @@ void UCatLakeMainMenuController::HandleMenuActionRequested(const ECatLakeMainMen
 		break;
 	case ECatLakeMainMenuAction::SelectControlsSettings:
 		RequestSelectControlsSettingsFromWidget();
+		break;
+	case ECatLakeMainMenuAction::OpenCollection:
+		RequestCollectionFromWidget();
 		break;
 	default:
 		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_lake_menu_action_unknown Action=%d"), static_cast<int32>(Action));
@@ -701,6 +731,13 @@ void UCatLakeMainMenuController::HandleOnlineChanged()
 		*UEnum::GetValueAsString(Snapshot.WorldState),
 		*UEnum::GetValueAsString(Snapshot.SessionState),
 		*UEnum::GetValueAsString(Snapshot.SessionRole));
+}
+
+// 本地 UI 协调器定位流程：LocalPlayer 是图鉴页面控制器的生命周期锚点；失效时返回空，菜单只把图鉴按钮置灰。
+UCatLocalPlayerUISubsystem* UCatLakeMainMenuController::GetLocalPlayerUISubsystem() const
+{
+	ULocalPlayer* Player = BoundLocalPlayer.Get();
+	return Player ? Player->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
 }
 
 // Save 来源定位流程：LocalPlayer 是本地 UI 与 GameInstance 子系统的生命周期锚点；失效时不退回全局对象。

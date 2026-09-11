@@ -79,6 +79,18 @@ private:
 	/** Run 公开快照变化入口；重读天数和阶段相关 HUD 投影，避免客户端复制到达后界面继续显示旧天数。 */
 	void HandleRunPublicStateChanged();
 
+	/** 商店公开经济快照变化入口；先把新成交的整车折成全场广播，再重读完整 HUD 投影刷新常驻余额。 */
+	void HandleShopEconomySnapshotChanged();
+
+	/**
+	 * 全场购买广播归并入口；把 GameState 复制的公开流水按「一车一条」折成 HUD 广播队列。
+	 * 它只读复制事实，不确认交付、不改公款，也不代表本机看到的车就是全部账本。
+	 */
+	void RefreshPurchaseBroadcasts();
+
+	/** 全场购买广播收口入口；换 GameState 或解绑时清掉本局播报记录，避免跨局跨 World 复播旧车。 */
+	void ResetPurchaseBroadcastState();
+
 	/** Fishing 会话投影变化入口；Bridge 已经更新自身，Model 只重建 HUD 文本。 */
 	void HandleFishingViewStateChanged(const FCatFishingViewState& ViewState);
 
@@ -145,6 +157,9 @@ private:
 	/** Run 公开快照变化解绑句柄。 */
 	FDelegateHandle RunPublicStateChangedHandle;
 
+	/** 商店公开经济快照变化解绑句柄；它和 Run 快照挂在同一个 GameState 上，成对接线成对移除。 */
+	FDelegateHandle ShopEconomySnapshotChangedHandle;
+
 	/** 等待客户端 GameState 出现的本地 Timer；它只保证 HUD 订阅接上线，不保存 Run 天数或阶段。 */
 	FTimerHandle RunGameStateBindingRetryTimerHandle;
 
@@ -163,6 +178,21 @@ private:
 
 	/** 最近是否收到过钓鱼命令结果。 */
 	bool bHasFishingCommandResult = false;
+
+	/** 本机已经播报过的整车 ID；它只增不减，保证被队列挤掉的旧车不会因为重新遍历账本而二次刷屏。 */
+	TSet<FGuid> AnnouncedPurchaseCartIds;
+
+	/**
+	 * 接上当前 GameState 那一刻的服务器时间。接线后极短时间内到达的公开流水按既往账本处理，只记不播：
+	 * 中途进局的玩家第一次复制会一次性拿到整本流水，那不是刚发生的全场事件。
+	 */
+	double PurchaseBroadcastSeedServerTime = 0.0;
+
+	/** 是否已经记下接线时刻；没有接线时不做既往账本的时间比较。 */
+	bool bHasPurchaseBroadcastSeedTime = false;
+
+	/** 当前留在 HUD 上的全场购买广播，一车一条、按发生顺序排列；Refresh 只把它拷进投影。 */
+	TArray<FCatHUDPurchaseBroadcast> PurchaseBroadcasts;
 
 	/** 最近发布给 HUD View 的完整投影。 */
 	FCatHUDViewState ViewState;
