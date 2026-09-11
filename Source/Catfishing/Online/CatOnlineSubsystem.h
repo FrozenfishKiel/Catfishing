@@ -79,6 +79,7 @@ public:
 	FCatOnlineSnapshotChanged OnSnapshotChanged;
 
 private:
+	friend class FCatOnlinePreloadLifetimeTest;
 	/** 按当前 World 取得对应 OSS Session 接口；PIE 多 World 下不得退回进程级无上下文查询。 */
 	IOnlineSessionPtr GetWorldSessionInterface() const;
 
@@ -362,16 +363,16 @@ private:
 	/** 当前玩法启动资源集合的可读阶段；UI 用它说明资源数量进展，日志用它定位卡住的加载阶段。 */
 	FString CurrentGameplayStartupAssetLoadProgressStatus;
 
-	/** 玩法地图预载成功后暂存的包对象；在 Host/Client 旅行提交和 PostLoadMap 收口之间保持强引用，防止 GC 卸载刚完成的包。 */
+	/** 预载地图的实际 World；包本身不会保活其导出对象，必须持有 World 才能跨越 LoadMap 的 GC，终态释放。 */
 	UPROPERTY(Transient)
-	TObjectPtr<UPackage> PreloadedGameplayPackage;
+	TObjectPtr<UWorld> PreloadedGameplayWorld;
 
 	/** 当前回主菜单流程对应的前台地图 LoadPackageAsync 请求 ID；非 INDEX_NONE 表示返回主菜单仍在真实包预载阶段。 */
 	int32 FrontendPreloadRequestId = INDEX_NONE;
 
-	/** 前台地图预载成功后暂存的包对象；回主菜单旅行提交后继续保留到 PostLoadMap 或终态清理，避免旅行前被 GC 卸载。 */
+	/** 返回前台预载的实际 World；保活到 PostLoadMap 或失败清理，避免留下已被 GC 清空的地图包。 */
 	UPROPERTY(Transient)
-	TObjectPtr<UPackage> PreloadedFrontendPackage;
+	TObjectPtr<UWorld> PreloadedFrontendWorld;
 
 	/** 当前正在给 UI 暴露进度的地图长包名；Start 写 Gameplay 包，Leave 写 Frontend 包，空值代表 Online 没有可查询的地图包进度。 */
 	FString ActiveMapLoadPackage;

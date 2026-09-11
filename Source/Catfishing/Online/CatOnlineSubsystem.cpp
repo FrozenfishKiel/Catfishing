@@ -237,9 +237,9 @@ void UCatOnlineSubsystem::Deinitialize()
 	CurrentRoomName.Reset();
 	CurrentSessionAccess = ECatSessionAccessPolicy::Undecided;
 	GameplayPreloadRequestId = INDEX_NONE;
-	PreloadedGameplayPackage = nullptr;
+	PreloadedGameplayWorld = nullptr;
 	FrontendPreloadRequestId = INDEX_NONE;
-	PreloadedFrontendPackage = nullptr;
+	PreloadedFrontendWorld = nullptr;
 	bIsEngineLoadMapPending = false;
 	EngineLoadMapName.Reset();
 	SearchResultsByHandle.Reset();
@@ -1223,7 +1223,8 @@ FCatOnlineResult UCatOnlineSubsystem::RequestStartHostedGame()
 	return Result;
 }
 
-// 预载完成流程：先拒绝失效 epoch、错误包名或非 Start 回调；成功时保活实际包，Host 提交 Listen 旅行，Client 复核真实 Lobby ready 后才解析 OSS 地址并 ClientTravel，失败时不旅行。
+// 预载完成流程：先拒绝失效 epoch、错误包名或非 Start 回调；成功时保活实际 World，跨越 LoadMap GC 后仍可从包中找到地图。
+// Host 提交 Listen 旅行，Client 复核真实 Lobby ready 后才解析 OSS 地址并 ClientTravel；包加载成功但没有 World 也必须拒绝。
 void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& PackageName, UPackage* LoadedPackage,
 	const EAsyncLoadingResult::Type Result, const uint64 CallbackEpoch)
 {
@@ -1234,11 +1235,16 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
 		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_callback_ignored Callback=GameplayPreload Epoch=%llu CurrentEpoch=%llu"), CallbackEpoch, OperationEpoch);
 		return;
 	}
-	if (Result != EAsyncLoadingResult::Succeeded || !LoadedPackage)
+	UWorld* LoadedWorld = Result == EAsyncLoadingResult::Succeeded && LoadedPackage
+		? UWorld::FindWorldInPackage(LoadedPackage) : nullptr;
+	if (!LoadedWorld)
 	{
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_map_preload_world_missing RequestId=%s Epoch=%llu Package=%s Result=%d World=%s NetMode=%d Role=%s"),
+			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, *PackageName.ToString(), static_cast<int32>(Result),
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1, *UEnum::GetValueAsString(OperationRole));
 		GameplayPreloadRequestId = INDEX_NONE;
 		StopMapPreloadProgressTracking();
-		PreloadedGameplayPackage = nullptr;
+		PreloadedGameplayWorld = nullptr;
 		FinishOperationFailure(ECatOnlineError::GameplayPreloadFailed);
 		return;
 	}
@@ -1246,12 +1252,15 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
 	HandleMapPreloadProgressOnGameThread(PackageName, EAsyncLoadingProgress::FullyLoaded, CallbackEpoch);
 	GameplayPreloadRequestId = INDEX_NONE;
 	StopMapPreloadProgressTracking();
-	PreloadedGameplayPackage = LoadedPackage;
+	PreloadedGameplayWorld = LoadedWorld;
+	UE_LOG(LogCatOnline, Log, TEXT("Event=online_map_preload_world_retained RequestId=%s Epoch=%llu Package=%s RetainedWorld=%s World=%s NetMode=%d Role=%s"),
+		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, *PackageName.ToString(), *LoadedWorld->GetPathName(),
+		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1, *UEnum::GetValueAsString(OperationRole));
 	if (OperationRole == ECatOnlineSessionRole::Host)
 	{
 		if (!BeginHostTravelToGameplayMap())
 		{
-			PreloadedGameplayPackage = nullptr;
+			PreloadedGameplayWorld = nullptr;
 			FinishOperationFailure(ECatOnlineError::TravelRejected);
 		}
 		return;
@@ -1259,7 +1268,7 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
 
 	if (!IsCurrentLobbyReady())
 	{
-		PreloadedGameplayPackage = nullptr;
+		PreloadedGameplayWorld = nullptr;
 		FinishOperationFailure(ECatOnlineError::LobbyReadyPublishFailed);
 		return;
 	}
@@ -1269,7 +1278,7 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
 		|| !OperationSessionInterface->GetResolvedConnectString(CatOnlineNames::GameSession, ConnectString)
 		|| ConnectString.IsEmpty())
 	{
-		PreloadedGameplayPackage = nullptr;
+		PreloadedGameplayWorld = nullptr;
 		FinishOperationFailure(ECatOnlineError::ConnectStringUnavailable);
 		return;
 	}
@@ -2020,7 +2029,7 @@ bool UCatOnlineSubsystem::BeginClientTravelToGameplayMap(const FString& ConnectS
 	return true;
 }
 
-// 前台预载完成流程：先拒绝失效 epoch、错误包名或无效角色；成功时保活 Frontend 包并提交真实旅行，失败时停止进度跟踪并按旅行拒绝收口。
+// 前台预载完成流程：先拒绝失效 epoch、错误包名或无效角色；成功时保活 Frontend World 并提交真实旅行，失败时停止进度跟踪并按旅行拒绝收口。
 void UCatOnlineSubsystem::HandleFrontendPackagePreloadComplete(const FName& PackageName, UPackage* LoadedPackage,
 	const EAsyncLoadingResult::Type Result, const uint64 CallbackEpoch)
 {
@@ -2031,11 +2040,16 @@ void UCatOnlineSubsystem::HandleFrontendPackagePreloadComplete(const FName& Pack
 		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_callback_ignored Callback=FrontendPreload Epoch=%llu CurrentEpoch=%llu"), CallbackEpoch, OperationEpoch);
 		return;
 	}
-	if (Result != EAsyncLoadingResult::Succeeded || !LoadedPackage)
+	UWorld* LoadedWorld = Result == EAsyncLoadingResult::Succeeded && LoadedPackage
+		? UWorld::FindWorldInPackage(LoadedPackage) : nullptr;
+	if (!LoadedWorld)
 	{
+		UE_LOG(LogCatOnline, Warning, TEXT("Event=online_map_preload_world_missing RequestId=%s Epoch=%llu Package=%s Result=%d World=%s NetMode=%d Role=%s"),
+			*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, *PackageName.ToString(), static_cast<int32>(Result),
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1, *UEnum::GetValueAsString(OperationRole));
 		FrontendPreloadRequestId = INDEX_NONE;
 		StopMapPreloadProgressTracking();
-		PreloadedFrontendPackage = nullptr;
+		PreloadedFrontendWorld = nullptr;
 		FinishOperationFailure(ECatOnlineError::TravelRejected);
 		return;
 	}
@@ -2043,10 +2057,13 @@ void UCatOnlineSubsystem::HandleFrontendPackagePreloadComplete(const FName& Pack
 	HandleMapPreloadProgressOnGameThread(PackageName, EAsyncLoadingProgress::FullyLoaded, CallbackEpoch);
 	FrontendPreloadRequestId = INDEX_NONE;
 	StopMapPreloadProgressTracking();
-	PreloadedFrontendPackage = LoadedPackage;
+	PreloadedFrontendWorld = LoadedWorld;
+	UE_LOG(LogCatOnline, Log, TEXT("Event=online_map_preload_world_retained RequestId=%s Epoch=%llu Package=%s RetainedWorld=%s World=%s NetMode=%d Role=%s"),
+		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch, *PackageName.ToString(), *LoadedWorld->GetPathName(),
+		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1, *UEnum::GetValueAsString(OperationRole));
 	if (!CommitFrontendTravelAfterPreload())
 	{
-		PreloadedFrontendPackage = nullptr;
+		PreloadedFrontendWorld = nullptr;
 		FinishOperationFailure(ECatOnlineError::TravelRejected);
 	}
 }
@@ -2060,7 +2077,7 @@ bool UCatOnlineSubsystem::BeginTravelToFrontend()
 	if (WorldState == ECatOnlineWorldState::Frontend)
 	{
 		FrontendPreloadRequestId = INDEX_NONE;
-		PreloadedFrontendPackage = nullptr;
+		PreloadedFrontendWorld = nullptr;
 		StopMapPreloadProgressTracking();
 		TransportState = ECatOnlineTransportState::Idle;
 		if (DeferredFailureAfterTravel != ECatOnlineError::None)
@@ -2779,14 +2796,14 @@ void UCatOnlineSubsystem::FinishOperationSuccess()
 	if (bFinishingGameplayStart)
 	{
 		GameplayPreloadRequestId = INDEX_NONE;
-		PreloadedGameplayPackage = nullptr;
+		PreloadedGameplayWorld = nullptr;
 	}
 	if (WorldState == ECatOnlineWorldState::Frontend)
 	{
 		ClearGameplayStartupAssetsPreload(true);
 	}
 	FrontendPreloadRequestId = INDEX_NONE;
-	PreloadedFrontendPackage = nullptr;
+	PreloadedFrontendWorld = nullptr;
 	LastError = ECatOnlineError::None;
 	++OperationEpoch;
 	BroadcastSnapshot(TEXT("online_operation_succeeded"));
@@ -2822,14 +2839,14 @@ void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 	{
 		ClearGameplayStartupAssetsPreload(true);
 		GameplayPreloadRequestId = INDEX_NONE;
-		PreloadedGameplayPackage = nullptr;
+		PreloadedGameplayWorld = nullptr;
 	}
 	else if (WorldState == ECatOnlineWorldState::Frontend)
 	{
 		ClearGameplayStartupAssetsPreload(true);
 	}
 	FrontendPreloadRequestId = INDEX_NONE;
-	PreloadedFrontendPackage = nullptr;
+	PreloadedFrontendWorld = nullptr;
 	LastError = Error;
 	++OperationEpoch;
 	BroadcastSnapshot(TEXT("online_operation_failed"));
