@@ -44,7 +44,7 @@ UCatGameUserSettings::UCatGameUserSettings()
 
 // 项目设置单例读取流程确保前端只接触配置指定的 UCatGameUserSettings，避免误用基类实例丢失项目字段：
 // 1. 向引擎读取唯一 GameUserSettings 实例，避免页面私自 NewObject 形成第二份持久化来源。
-// 2. 验证 DefaultEngine 指向本项目子类；配置错误或启动早期无法取得实例时返回空。
+// 2. 验证 DefaultEngine 指向本项目子类；配置错误或初始化阶段无法取得实例时返回空。
 // 3. 调用方据此禁用设置页实际提交，而不是退回基类后丢失项目音频与 UI 缩放配置。
 UCatGameUserSettings* UCatGameUserSettings::Get()
 {
@@ -70,7 +70,7 @@ FCatGameUserSettingsDefaultSnapshot UCatGameUserSettings::MakeDefaultSnapshot()
 
 // 语言应用流程：
 // 1. 拒绝空 culture，避免把无效输入保存为“当前语言”。
-// 2. 让国际化系统原子切换语言与区域，失败时保留此前生效状态和持久化字段。
+// 2. 让国际化系统原子切换语言与区域，失败时保留当前生效状态和持久化字段。
 // 3. 只有切换成功才记录 culture 名称，后续由 ApplySettings/SaveSettings 写入本机配置。
 bool UCatGameUserSettings::ApplyLanguage(const FString& NewLanguage)
 {
@@ -84,7 +84,7 @@ bool UCatGameUserSettings::ApplyLanguage(const FString& NewLanguage)
 }
 
 // UI 比例应用流程：
-// 1. 先确认 Slate 已启动；专用服务器或引擎启动早期没有 UI 时不能伪装为成功。
+// 1. 先确认 Slate 已启动；专用服务器或 UI 初始化阶段没有界面时不能伪装为成功。
 // 2. 把输入限制到前端约定的可读范围，避免配置文件异常把整个界面缩到不可操作。
 // 3. 将有效值交给 Slate 并记录为用户偏好，持久化仍由页面最终的 SaveSettings 统一完成。
 bool UCatGameUserSettings::ApplyUIScale(float NewUIScale)
@@ -100,7 +100,7 @@ bool UCatGameUserSettings::ApplyUIScale(float NewUIScale)
 }
 
 // 亮度应用流程：
-// 1. 先确认全局引擎实例存在，专用服务器或启动早期没有渲染输出时不能保存假成功。
+// 1. 先确认全局引擎实例存在，专用服务器或渲染初始化阶段没有输出时不能保存假成功。
 // 2. 使用 UE Gamma 命令相同的安全范围裁剪输入，避免损坏配置让渲染目标取得无效 Gamma。
 // 3. 同时更新 GEngine 的真实输出值和本机持久化记录，调用方后续统一 SaveSettings。
 bool UCatGameUserSettings::ApplyDisplayGamma(const float NewDisplayGamma)
@@ -118,7 +118,7 @@ bool UCatGameUserSettings::ApplyDisplayGamma(const float NewDisplayGamma)
 // 震动应用流程：
 // 1. 只接受当前本地 PlayerController，避免设置页跨网络修改其他玩家的反馈 gate。
 // 2. 将正式偏好写入 Controller 的 bForceFeedbackEnabled，UE 更新输入设备时会据此输出实际值或归零。
-// 3. 仅写入成功后更新本机持久化字段；控制器不存在时保持旧偏好，由 World/Controller 生命周期恢复。
+// 3. 仅写入成功后更新本机持久化字段；控制器不存在时保持已有偏好，由 World/Controller 生命周期恢复。
 bool UCatGameUserSettings::ApplyVibration(APlayerController* PlayerController, const bool bEnableVibration)
 {
 	if (!PlayerController || !PlayerController->IsLocalController())
@@ -140,7 +140,7 @@ bool UCatGameUserSettings::HasVoiceChatSupport(const UWorld* World) const
 
 // 语音应用流程：
 // 1. 检查 World 对应 OSS 的 Voice 接口和本地用户范围；接口缺失或非法用户均记录失败，不改偏好。
-// 2. 开启时要求正式 talker 注册成功后再启动发送；注册失败立即停止并清包，避免 RegisterLocalTalker 自带的启动副作用遗留。
+// 2. 开启时要求正式 talker 注册成功后再启动发送；注册失败立即停止并清包，避免 RegisterLocalTalker 自带的启动副作用残留。
 // 3. 关闭时停止发送并清除排队包；接口命令成功提交后更新偏好。Start/Stop 为 void，日志不把提交等同于麦克风采集或远端收听证明。
 bool UCatGameUserSettings::ApplyVoiceChat(UWorld* World, const uint8 LocalUserNum, const bool bEnableVoiceChat)
 {
@@ -195,7 +195,7 @@ void UCatGameUserSettings::RestoreVoiceChatForLocalPlayers(UWorld* World)
 	}
 }
 
-// 自动输出恢复取消流程：撤销尚在等待的请求并释放身份引用；已进入平台的切换无法撤回，但旧结果不再触发恢复完成通知，也不会保存任何设备偏好。
+// 自动输出恢复取消流程：撤销尚在等待的请求并释放身份引用；已进入平台的切换无法撤回，但失效结果不会触发恢复完成通知，也不会保存任何设备偏好。
 void UCatGameUserSettings::CancelAudioOutputRestore()
 {
 	if (AudioOutputRestoreRequest)
@@ -322,7 +322,7 @@ bool UCatGameUserSettings::HasAudioRoutingAssets() const
 // 音量应用流程：
 // 1. 先验证 World、AudioDevice 和完整分类资产，缺任一项均不写持久化字段。
 // 2. 对唯一 Base SoundMix 写入递归 Master 乘子，再为其四个同级分类写入各自递归乘子；分类值不预乘 Master，故每个叶类最终只乘一次 Master 和一次所属分类值。
-// 3. 不再重复 PushSoundMixModifier 增加 ActiveRefCount；覆盖提交后更新五个持久化值，供页面最终 SaveSettings 落盘。
+// 3. 覆盖提交后只更新五个持久化值，供页面最终 SaveSettings 落盘。
 bool UCatGameUserSettings::ApplyAudioVolumes(UWorld* World, const float NewMasterVolume, const float NewMusicVolume,
 	const float NewSFXVolume, const float NewAmbienceVolume, const float NewVoiceVolume)
 {
@@ -593,7 +593,7 @@ void UCatGameUserSettings::HandlePawnControllerChanged(APawn*, AController* Cont
 // World 恢复流程：
 // 1. 将五类持久化音量提交给目标 World 的 AudioDevice；音频资产或设备缺失时保留保存值并记录失败状态。
 // 2. 遍历该 GameInstance 的本地玩家，恢复每个已存在 Controller 的震动与可用网络语音。
-// 3. 对已保存的非空设备 ID 建立一次有界活动确认请求，替换旧 World 的恢复请求；空值保留平台默认输出，恢复不重新保存配置。
+// 3. 对已保存的非空设备 ID 建立一次有界活动确认请求，替换失效 World 的恢复请求；空值保留平台默认输出，恢复不重新保存配置。
 void UCatGameUserSettings::RestoreRuntimePreferencesForWorld(UWorld* World)
 {
 	if (!World || !World->IsGameWorld())
@@ -661,7 +661,7 @@ void UCatGameUserSettings::RestoreRuntimePreferencesForController(APlayerControl
 		bVoiceChatApplied ? TEXT("true") : TEXT("false"));
 }
 
-// 输出恢复完成流程：只消费本宿主当前持有的单次请求，清除引用后记录实际活动确认或明确失败；旅行、取消后的旧结果被忽略，自动恢复不改写用户保存值。
+// 输出恢复完成流程：只消费本宿主当前持有的单次请求，清除引用后记录实际活动确认或明确失败；旅行、取消后的失效结果被忽略，自动恢复不改写用户保存值。
 void UCatGameUserSettings::HandleRuntimeAudioOutputDeviceSwapCompleted(UCatAudioOutputRequest* Request, const FName Error)
 {
 	if (!Request || AudioOutputRestoreRequest != Request)

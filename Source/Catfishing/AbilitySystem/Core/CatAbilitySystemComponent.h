@@ -18,7 +18,7 @@ public:
 	void RegisterAbilityInput(FGameplayAbilitySpecHandle Handle, FGameplayTag InputTag,
 		ECatAbilityActivationPolicy ActivationPolicy);
 
-	/** 移除某个 Ability Spec 的输入索引；Ability 被撤销或生命周期结束时调用，防止旧句柄继续响应输入。 */
+	/** 移除某个 Ability Spec 的输入索引；Ability 被撤销或生命周期结束时调用，防止失效句柄继续响应输入。 */
 	void UnregisterAbilityInput(FGameplayAbilitySpecHandle Handle);
 
 	/** 记录当前帧按下的输入标签；真正激活在 ProcessAbilityInput 中统一发生，便于预测事件成对发送。 */
@@ -85,7 +85,7 @@ public:
 	/** 建立或刷新 GAS Owner/Avatar；若存在待处理体力重置，会在 ActorInfo 恢复后补做一次。 */
 	virtual void InitAbilityActorInfo(AActor* InOwnerActor, AActor* InAvatarActor) override;
 
-	/** 清理 ActorInfo 前先清输入状态；防止无占有期间旧输入句柄继续激活 Ability。 */
+	/** 清理 ActorInfo 前先清输入状态；防止无占有期间失效输入句柄继续激活 Ability。 */
 	virtual void ClearActorInfo() override;
 
 protected:

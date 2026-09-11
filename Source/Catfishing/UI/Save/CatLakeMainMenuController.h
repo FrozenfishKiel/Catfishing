@@ -133,7 +133,7 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UInputAction> AppliedMainMenuToggleAction;
 
-	/** Action 实际绑定的 EnhancedInputComponent；Controller 输入链重建时从旧组件精确移除。 */
+	/** Action 实际绑定的 EnhancedInputComponent；Controller 输入链重建时从失效组件精确移除。 */
 	UPROPERTY(Transient)
 	TWeakObjectPtr<UEnhancedInputComponent> BoundMenuInputComponent;
 

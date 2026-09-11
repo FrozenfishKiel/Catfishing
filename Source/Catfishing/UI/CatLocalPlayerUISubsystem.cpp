@@ -1,6 +1,8 @@
 #include "UI/CatLocalPlayerUISubsystem.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "UI/Run/CatDayTransitionWidget.h"
+#include "UI/WorldInfo/CatWorldInfoController.h"
 
-#include "Camp/CatCampInventoryActor.h"
 #include "Character/CatCharacter.h"
 #include "Blueprint/UserWidget.h"
 #include "Components/ProgressBar.h"
@@ -23,10 +25,10 @@
 #include "UI/HUD/CatHUDWidget.h"
 #include "UI/Interaction/CatInteractionPageController.h"
 #include "UI/Interaction/CatInteractionPromptWidget.h"
-#include "UI/Inventory/CatCampInventoryWidget.h"
-#include "UI/Inventory/CatInventoryModel.h"
 #include "UI/Inventory/CatInventoryPageController.h"
 #include "UI/Inventory/CatInventoryWidget.h"
+#include "UI/ItemTooltip/CatItemTooltipController.h"
+#include "UI/ItemTooltip/CatItemTooltipWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
 #include "UI/Save/CatLakeMainMenuController.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
@@ -35,6 +37,9 @@ namespace CatLocalPlayerUILoadingScreen
 {
 	/** 全局加载遮罩必须盖过 Frontend Root、HUD、背包和局内 ESC 菜单，避免等待表现落在某个业务页面下面。 */
 	constexpr int32 ViewportZOrder = 10000;
+
+	/** 正式 Loading WBP 的固定类路径；它原本属于 Frontend 资产组，现在直接由 LocalPlayer UI 挂成全局遮罩。 */
+	constexpr const TCHAR* WidgetClassPath = TEXT("/Game/UI/Frontend/WBP_CatFrontendLoading.WBP_CatFrontendLoading_C");
 
 	/** Start 请求已被 Online 接受这一真实 gate 在总进度中的权重；它只在请求事实存在时计入。 */
 	constexpr float GameplayStartAcceptedWeight = 3.0f;
@@ -122,7 +127,7 @@ void UCatLocalPlayerUISubsystem::Initialize(FSubsystemCollectionBase& Collection
 	RefreshFrontendForCurrentController();
 }
 
-// 销毁流程：先释放 HUD、背包和唯一交互提示模块；再解绑 Controller、移除 Frontend Root 与 Online 快照订阅。
+// 销毁流程：先释放 HUD、背包、物品提示和交互提示模块；Controller 解绑时移除翻天表现，最后清理 Frontend Root 与 Online 快照。
 void UCatLocalPlayerUISubsystem::Deinitialize()
 {
 	DetachPlayerLakeUI();
@@ -145,7 +150,7 @@ void UCatLocalPlayerUISubsystem::Deinitialize()
 
 // Controller 替换流程：
 // 1. 先按当前 Online 快照判断已有 Frontend Root 是否只处于 Start 失败恢复保护窗。
-// 2. 局内 HUD、背包和交互提示始终拆掉，因为它们绑定旧 Pawn 和输入；受保护的 Frontend Root 不在这里移除。
+// 2. 局内 HUD、背包和交互提示始终拆掉，因为它们绑定已解绑 Pawn 和输入；受保护的 Frontend Root 不在这里移除。
 // 3. 父类完成 LocalPlayer 的 Controller 切换后重新绑定新 Controller，并在保留 Root 时显式恢复拥有者、鼠标和键盘焦点。
 // 4. 最后重新调和 Frontend 和全局加载遮罩，非受保护状态会按常规 World/配置规则移除或重建。
 void UCatLocalPlayerUISubsystem::PlayerControllerChanged(APlayerController* NewController)
@@ -184,62 +189,30 @@ void UCatLocalPlayerUISubsystem::PlayerControllerChanged(APlayerController* NewC
 	RefreshFrontendForCurrentController();
 }
 
-// 背包切换流程：把输入、焦点和 ViewState 更新全部交给 Inventory PageController；Subsystem 不持有背包布尔值或渲染细节。
+// 背包切换流程：先拒绝翻天期间的 HUD 调用，再由窗口控制器管理视口与输入；库存仍由自己的 Model 通知。
 void UCatLocalPlayerUISubsystem::ToggleInventory()
 {
+	const ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
+	if (Controller && Controller->IsDayTransitionInputBlocked()) return;
 	if (InventoryPageController)
 	{
 		InventoryPageController->ToggleInventory();
 	}
 }
 
-// 外部容器背包打开流程：把交互对象提供的容器读源原样交给 Inventory PageController；Subsystem 不解释容器种类或移动权限。
-void UCatLocalPlayerUISubsystem::OpenInventoryWithExternalContainerContexts(
-	const TArray<UCatContainerReplicationComponent*>& ExternalContainers)
+// 打开流程：先拒绝翻天中的交互请求，再验证页面控制器；有效时用对象提供的库存和 WBP 打开页面，不转移 Model 所有权。
+bool UCatLocalPlayerUISubsystem::OpenInventory(UCatInventoryComponent* Inventory,
+    const TSubclassOf<UCatInventoryWidget> InventoryViewClass)
 {
-	if (InventoryPageController)
-	{
-		InventoryPageController->OpenInventoryWithExternalContainerContexts(ExternalContainers);
-	}
-}
-
-// 指定库存页打开流程：
-// 1. 只检查本地库存控制器是否存在；具体箱子类型、页面类和容器来源都由交互对象提供。
-// 2. 控制器缺失时直接返回 false，避免把外部容器打开请求伪装成普通背包切换。
-// 3. 把 ViewClass 原样交给库存 PageController 创建并持有，LocalPlayer 不预建鱼护、鱼缸或未来箱子的专用字段。
-// 4. 返回真实打开结果，让交互对象按自己的规则决定是否继续报告成功或记录拒绝。
-bool UCatLocalPlayerUISubsystem::OpenInventoryWithExternalContainerContextsUsingViewClass(
-	const TArray<UCatContainerReplicationComponent*>& ExternalContainers,
-	const TSubclassOf<UCatInventoryWidget> InventoryViewClass)
-{
-	if (!InventoryPageController)
-	{
-		UE_LOG(LogCatUI, Warning,
-			TEXT("Event=ui_external_inventory_unavailable PageController=missing ViewClass=%s"),
-			*GetNameSafe(InventoryViewClass.Get()));
-		return false;
-	}
-	return InventoryPageController->OpenInventoryWithExternalContainerContextsUsingViewClass(
-		ExternalContainers, InventoryViewClass);
-}
-
-// 营地公共仓库打开流程：
-// 1. 只检查本地库存控制器、目标公共仓库和仓库自己的独立 WBP 类；缺任一项都明确返回失败。
-// 2. 把目标 Actor 和页面类原样交给库存 PageController，LocalPlayer 不读取公共仓库格，也不把这次请求退回普通背包。
-// 3. 返回真实打开结果，让交互 Actor 可以记录拒绝或成功，不把失败伪装成默认背包切换。
-bool UCatLocalPlayerUISubsystem::OpenCampInventory(ACatCampInventoryActor* CampInventory,
-	const TSubclassOf<UCatCampInventoryWidget> InventoryViewClass)
-{
-	if (!InventoryPageController || !CampInventory || !InventoryViewClass)
-	{
-		UE_LOG(LogCatUI, Warning,
-			TEXT("Event=ui_camp_inventory_unavailable PageController=%s CampInventory=%s ViewClass=%s"),
-			InventoryPageController ? TEXT("valid") : TEXT("missing"),
-			*GetNameSafe(CampInventory),
-			*GetNameSafe(InventoryViewClass.Get()));
-		return false;
-	}
-	return InventoryPageController->OpenCampInventory(CampInventory, InventoryViewClass);
+	const ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
+	if (Controller && Controller->IsDayTransitionInputBlocked()) return false;
+    if (!InventoryPageController)
+    {
+        UE_LOG(LogCatUI, Warning, TEXT("Event=ui_inventory_open_rejected Reason=PageControllerUnavailable ViewClass=%s"),
+            *GetNameSafe(InventoryViewClass.Get()));
+        return false;
+    }
+    return InventoryPageController->OpenInventory(Inventory, InventoryViewClass);
 }
 
 // 状态读取流程：从 PageController 读取唯一背包状态；未装配背包时固定返回 false，避免从 Widget 可见性拼第二份状态。
@@ -248,16 +221,144 @@ bool UCatLocalPlayerUISubsystem::IsInventoryOpen() const
 	return InventoryPageController ? InventoryPageController->IsInventoryOpen() : false;
 }
 
-// 库存 Model 查询流程：只把当前本地玩家已有的 Model 暴露给库存 WBP；空指针表示本地玩家 UI 尚未装配完成。
-UCatInventoryModel* UCatLocalPlayerUISubsystem::GetInventoryModel() const
+// 翻天表现流程：
+// 1. 只接收本 LocalPlayer 的当前 Controller；锁定期关闭库存和菜单，切断格子直接 use 与模态按键入口。
+// 2. 失败按 RequestId 只开启一次基于本机实时时钟的两秒提示；无锁且无提示时先归还焦点，再移除视图，保留去重记录。
+// 3. 按服务器时间计算淡出、停留、淡入；已经越过完整过场时透明度为零，阻断仍取 active 且非 failed，不由本地时钟解除。
+// 4. 提交且处于结果展示时间段时显示 Message 或目标天数；成功凭据只有请求标识匹配才追加结算摘要，失败只显示错误文本。
+// 5. 需要展示时加载正式 WBP，加载或创建失败按请求记录并停止重试；实例存在但视口晚到时保留实例，后续帧继续挂接。
+// 6. 挂接全视口 9000 层后提交透明度、文本和阻断状态；旅行由 ClearDayTransition 清除视图、加载失败记忆及反馈计时。
+void UCatLocalPlayerUISubsystem::RefreshDayTransition(APlayerController* Controller,
+	const FCatRunDayTransition& Transition, const double ServerTimeSeconds)
 {
-	return InventoryModel;
+	ULocalPlayer* LocalPlayer = GetLocalPlayer();
+	if (!Controller || !LocalPlayer || Controller != LocalPlayer->GetPlayerController(GetWorld())) return;
+	const bool bBlocked = Transition.bActive && !Transition.bFailed;
+	if (bBlocked)
+	{
+		if (InventoryPageController && InventoryPageController->IsInventoryOpen())
+		{
+			InventoryPageController->RequestCloseInventoryFromWidget();
+		}
+		if (LakeMainMenuController && LakeMainMenuController->IsMenuOpen())
+		{
+			LakeMainMenuController->RequestCloseFromWidget();
+		}
+	}
+	const double Now = FPlatformTime::Seconds();
+	if (Transition.bFailed && Transition.RequestId.IsValid() && Transition.RequestId != LastDayTransitionFailureId)
+	{
+		LastDayTransitionFailureId = Transition.RequestId;
+		DayTransitionFailureUntilSeconds = Now + 2.0;
+		UE_LOG(LogCatUI, Warning,
+			TEXT("Event=day_transition_failure_feedback RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s Message=%s"),
+			*Transition.RequestId.ToString(), *GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()),
+			Controller->HasAuthority(), static_cast<int32>(Controller->GetLocalRole()), *GetNameSafe(Controller), *Transition.Message.ToString());
+	}
+	const bool bShowFailure = Transition.bFailed && Now < DayTransitionFailureUntilSeconds;
+	if (!bBlocked && !bShowFailure)
+	{
+		if (DayTransitionWidget)
+		{
+			DayTransitionWidget->RenderTransition(0.0f, FText::GetEmpty(), false);
+			DayTransitionWidget->RemoveFromParent();
+			DayTransitionWidget = nullptr;
+		}
+		return;
+	}
+	float BlackOpacity = 0.0f;
+	FText Title;
+	FText SettlementDetails;
+	if (bShowFailure)
+	{
+		Title = Transition.Message;
+	}
+	else
+	{
+		const double FadeOut = FMath::Max(0.0, static_cast<double>(Transition.FadeOutSeconds));
+		const double Hold = FMath::Max(0.0, static_cast<double>(Transition.HoldSeconds));
+		const double FadeIn = FMath::Max(0.0, static_cast<double>(Transition.FadeInSeconds));
+		const double Elapsed = FMath::Max(0.0, ServerTimeSeconds - Transition.StartServerTimeSeconds);
+		if (Elapsed < FadeOut)
+		{
+			BlackOpacity = static_cast<float>(Elapsed / FadeOut);
+		}
+		else if (Elapsed < FadeOut + Hold)
+		{
+			BlackOpacity = 1.0f;
+		}
+		else if (Elapsed < FadeOut + Hold + FadeIn)
+		{
+			BlackOpacity = static_cast<float>(1.0 - (Elapsed - FadeOut - Hold) / FadeIn);
+		}
+		if (Transition.bCommitted && Elapsed >= FadeOut && Elapsed < FadeOut + Hold + FadeIn)
+		{
+			Title = Transition.Message.IsEmpty()
+				? FText::Format(NSLOCTEXT("CatDayTransition", "DayTitle", "第 {0} 天"), FText::AsNumber(Transition.TargetDayIndex))
+				: Transition.Message;
+			const FCatOfferingResultSnapshot& Result = Transition.LastCommittedOffering;
+			if (Result.RequestId == Transition.RequestId)
+			{
+				SettlementDetails = FText::Format(NSLOCTEXT("CatDayTransition", "SettlementDetails", "献祭 {0}/{1} 点 · {2}\n世界进度 {3}% → {4}%"),
+					FText::AsNumber(Result.OfferedPoints), FText::AsNumber(Result.TargetPoints),
+					Result.bMetTarget ? NSLOCTEXT("CatWorldInfo", "TargetMet", "达标") : NSLOCTEXT("CatWorldInfo", "TargetMissed", "未达标"),
+					FText::AsNumber(Result.WorldProgressBefore), FText::AsNumber(Result.WorldProgressAfter));
+			}
+		}
+	}
+	const bool bCreatedThisFrame = !DayTransitionWidget;
+	if (bCreatedThisFrame)
+	{
+		if (UnavailableDayTransitionViewId == Transition.RequestId) return;
+		const UCatUISettings* Settings = GetDefault<UCatUISettings>();
+		const TSubclassOf<UCatDayTransitionWidget> ViewClass = Settings->LoadDayTransitionWidgetClass();
+		if (ViewClass) DayTransitionWidget = CreateWidget<UCatDayTransitionWidget>(Controller, ViewClass);
+		if (!DayTransitionWidget)
+		{
+			UnavailableDayTransitionViewId = Transition.RequestId;
+			UE_LOG(LogCatUI, Error, TEXT("Event=DayTransitionWBPUnavailable World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s RequestId=%s Class=%s"),
+				*GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()), Controller->HasAuthority(),
+				static_cast<int32>(Controller->GetLocalRole()), *Controller->GetName(), *Transition.RequestId.ToString(), *Settings->DayTransitionWidgetClass.ToString());
+			return;
+		}
+	}
+	if (!DayTransitionWidget) return;
+	// 与现有 HUD 使用同一全视口层：9000 遮住 HUD，仍低于 Online 的 10000；玩家子层无法覆盖全视口 HUD。
+	if (!DayTransitionWidget->IsInViewport()) DayTransitionWidget->AddToViewport(9000);
+	// 视口晚到时保留实例，下一帧再挂接；只在首次失败时记录，避免依赖未就绪期间刷屏。
+	if (!DayTransitionWidget->IsInViewport())
+	{
+		if (bCreatedThisFrame)
+		{
+			UE_LOG(LogCatUI, Warning,
+				TEXT("Event=day_transition_view_unavailable RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s"),
+				*Transition.RequestId.ToString(), *GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()),
+				Controller->HasAuthority(), static_cast<int32>(Controller->GetLocalRole()), *GetNameSafe(Controller));
+		}
+		return;
+	}
+	DayTransitionWidget->RenderTransition(BlackOpacity, Title, bBlocked, SettlementDetails);
 }
 
-// 库存 PageController 查询流程：库存 WBP 通过它提交点击、拖拽和关闭意图；显示刷新仍由 WBP 自己完成。
+// 清理流程：有视图时先以非阻断空内容渲染，使它归还自己仍持有的焦点，再移出视口并清引用；最后清空两种失败去重键和提示截止时间。
+// 不修改玩家输入模式、Online loading 或 Run 快照，已由别的页面接管的焦点不会被强行抢回。
+void UCatLocalPlayerUISubsystem::ClearDayTransition()
+{
+	if (DayTransitionWidget)
+	{
+		DayTransitionWidget->RenderTransition(0.0f, FText::GetEmpty(), false);
+		DayTransitionWidget->RemoveFromParent();
+		DayTransitionWidget = nullptr;
+	}
+	LastDayTransitionFailureId.Invalidate();
+	UnavailableDayTransitionViewId.Invalidate();
+	DayTransitionFailureUntilSeconds = 0.0;
+}
+
+// 页面只为关闭和输入读取这个控制器；每个库存 WBP 自己绑定所属库存的 Model。
 UCatInventoryPageController* UCatLocalPlayerUISubsystem::GetInventoryPageController() const
 {
-	return InventoryPageController;
+    return InventoryPageController;
 }
 
 // 快照消费流程：Online 变更时按当前 World 调和正式 Frontend Root，并刷新局内 HUD；库存只听自己的数据源，不把会话状态当库存变化。
@@ -271,10 +372,10 @@ void UCatLocalPlayerUISubsystem::HandleOnlineSnapshotChanged()
 }
 
 // Frontend 调和流程：
-// 1. 先读取当前 LocalPlayer、Controller 和 Online 快照；缺 LocalPlayer 或 Online 时拆掉 Root 与全局遮罩，避免旧 UI 脱离事实源继续显示。
-// 2. 全局遮罩先消费 Start/Leave 快照并独立入视口；Start 加载一旦成立，Root 立即拆除，避免旧前端在地图包异步加载期间继续创建动态行。
+// 1. 先读取当前 LocalPlayer、Controller 和 Online 快照；缺 LocalPlayer 或 Online 时拆掉 Root 与全局遮罩，避免失效 UI 脱离事实源继续显示。
+// 2. 全局遮罩先消费 Start/Leave 快照并独立入视口；Start 加载一旦成立，Root 立即拆除，避免已遮挡前端在地图包异步加载期间继续创建动态行。
 // 3. 没有本地 Controller 时只允许已有 Root 在 Start 失败恢复保护窗内短暂保留；其它情况立即拆除。
-// 4. 非 Frontend World 只保留受保护的已有 Root，不在玩法图或异常 World 补建新主界面，避免旧前端变成第二入口。
+// 4. 非 Frontend World 只保留受保护的已有 Root，不在玩法图或异常 World 补建新主界面，避免已遮挡前端变成第二入口。
 // 5. 已有 Root 直接复用；需要新建时必须仍处于 Frontend World，并且配置能加载正式 Root WBP，否则记录失败并保持无原生替身。
 // 6. 创建成功后装配 Root、PageController 和三个只读 Model，最后入视口、打开鼠标并设置键盘焦点。
 void UCatLocalPlayerUISubsystem::RefreshFrontendForCurrentController()
@@ -396,7 +497,7 @@ void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreen(const FCatOnlineSnap
 	HideGlobalLoadingScreen();
 }
 
-// 当前快照刷新流程：从本 LocalPlayer 的 GameInstance 找回 Online 子系统并复用主遮罩刷新入口；缺事实源时清掉过渡记忆，避免旧请求跨 World 继续显示。
+// 当前快照刷新流程：从本 LocalPlayer 的 GameInstance 找回 Online 子系统并复用主遮罩刷新入口；缺事实源时清掉过渡记忆，避免既有请求跨 World 继续显示。
 void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreenFromCurrentSnapshot()
 {
 	ULocalPlayer* LocalPlayer = GetLocalPlayer();
@@ -432,7 +533,6 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 		|| GlobalLoadingOperation == ECatOnlineOperation::Leave;
 	if (bGameplayStartPending && !IsGameplayLoadingReadyToDismiss(Snapshot))
 	{
-		OutPresentation.LoadingOperation = ECatOnlineOperation::Start;
 		OutPresentation.HeadingText = FText::FromString(TEXT("正在进入游戏"));
 		OutPresentation.bShowProgressBar = true;
 		OutPresentation.bHasProgressPercent = true;
@@ -511,7 +611,6 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 	}
 	if (bReturnToMenuPending && !IsFrontendLoadingReadyToDismiss(Snapshot))
 	{
-		OutPresentation.LoadingOperation = ECatOnlineOperation::Leave;
 		OutPresentation.HeadingText = FText::FromString(TEXT("正在返回主菜单"));
 		OutPresentation.bShowProgressBar = false;
 		if (Snapshot.SessionState == ECatOnlineSessionState::Destroying)
@@ -567,45 +666,17 @@ bool UCatLocalPlayerUISubsystem::ShouldShowGlobalLoadingScreen(
 	return false;
 }
 
-// 全局遮罩显示流程：先拒绝没有真实 Start/Leave 身份的快照；已有实例若属于另一种业务就移除并清空资产身份缓存；首次显示时从 UI 设置加载对应专用 WBP，缺类或缺 GameInstance 只记录错误并返回；创建成功后写入当前业务身份，最后把同一套真实状态文本写入当前 View。
+// 全局遮罩显示流程：优先复用当前实例；首次显示时用 GameInstance 创建正式 Loading WBP 并加到最高层，随后写入已经合成好的表现快照。
 void UCatLocalPlayerUISubsystem::ShowGlobalLoadingScreen(const FCatGlobalLoadingPresentation& Presentation)
 {
-	if (Presentation.LoadingOperation != ECatOnlineOperation::Start
-		&& Presentation.LoadingOperation != ECatOnlineOperation::Leave)
-	{
-		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_global_loading_screen_rejected Reason=invalid_operation Operation=%d"),
-			static_cast<int32>(Presentation.LoadingOperation));
-		return;
-	}
-	if (GlobalLoadingScreenWidget && GlobalLoadingScreenWidgetOperation != Presentation.LoadingOperation)
-	{
-		UE_LOG(LogCatUI, Log, TEXT("Event=ui_global_loading_screen_swapped From=%d To=%d LastStatus=\"%s\""),
-			static_cast<int32>(GlobalLoadingScreenWidgetOperation),
-			static_cast<int32>(Presentation.LoadingOperation),
-			*LastGlobalLoadingStatusText.ToString());
-		GlobalLoadingScreenWidget->RemoveFromParent();
-		GlobalLoadingScreenWidget = nullptr;
-		GlobalLoadingScreenWidgetOperation = ECatOnlineOperation::None;
-		LastGlobalLoadingStatusText = FText::GetEmpty();
-	}
 	if (!GlobalLoadingScreenWidget)
 	{
-		const UCatUISettings* Settings = GetDefault<UCatUISettings>();
-		TSubclassOf<UUserWidget> LoadingClass;
-		if (Settings && Presentation.LoadingOperation == ECatOnlineOperation::Start)
-		{
-			LoadingClass = Settings->LoadGameplayLoadingWidgetClass();
-		}
-		else if (Settings)
-		{
-			LoadingClass = Settings->LoadReturnToMainMenuLoadingWidgetClass();
-		}
+		const TSubclassOf<UUserWidget> LoadingClass = LoadClass<UUserWidget>(nullptr, CatLocalPlayerUILoadingScreen::WidgetClassPath);
 		UGameInstance* GameInstance = GetLocalPlayer() ? GetLocalPlayer()->GetGameInstance() : nullptr;
 		if (!LoadingClass || !GameInstance)
 		{
-			UE_LOG(LogCatUI, Error, TEXT("Event=ui_global_loading_screen_unavailable Operation=%d Class=%s GameInstance=%s"),
-				static_cast<int32>(Presentation.LoadingOperation),
-				*GetNameSafe(LoadingClass.Get()),
+			UE_LOG(LogCatUI, Error, TEXT("Event=ui_global_loading_screen_unavailable Class=%s GameInstance=%s"),
+				CatLocalPlayerUILoadingScreen::WidgetClassPath,
 				*GetNameSafe(GameInstance));
 			return;
 		}
@@ -617,9 +688,7 @@ void UCatLocalPlayerUISubsystem::ShowGlobalLoadingScreen(const FCatGlobalLoading
 			return;
 		}
 		GlobalLoadingScreenWidget->AddToViewport(CatLocalPlayerUILoadingScreen::ViewportZOrder);
-		GlobalLoadingScreenWidgetOperation = Presentation.LoadingOperation;
-		UE_LOG(LogCatUI, Log, TEXT("Event=ui_global_loading_screen_shown Operation=%d Class=%s Status=\"%s\""),
-			static_cast<int32>(Presentation.LoadingOperation),
+		UE_LOG(LogCatUI, Log, TEXT("Event=ui_global_loading_screen_shown Class=%s Status=\"%s\""),
 			*GetNameSafe(LoadingClass.Get()), *Presentation.StatusText.ToString());
 	}
 	else if (!GlobalLoadingScreenWidget->IsInViewport())
@@ -637,7 +706,6 @@ void UCatLocalPlayerUISubsystem::HideGlobalLoadingScreen()
 	GlobalLoadingRequestId.Invalidate();
 	if (!GlobalLoadingScreenWidget)
 	{
-		GlobalLoadingScreenWidgetOperation = ECatOnlineOperation::None;
 		LastGlobalLoadingStatusText = FText::GetEmpty();
 		return;
 	}
@@ -645,14 +713,13 @@ void UCatLocalPlayerUISubsystem::HideGlobalLoadingScreen()
 		*LastGlobalLoadingStatusText.ToString());
 	GlobalLoadingScreenWidget->RemoveFromParent();
 	GlobalLoadingScreenWidget = nullptr;
-	GlobalLoadingScreenWidgetOperation = ECatOnlineOperation::None;
 	LastGlobalLoadingStatusText = FText::GetEmpty();
 }
 
 // 完成态遮罩移除请求流程：
 // 1. 根据刚完成的 Start/Leave 写入真实完成文案，Start 明确显示总进度 100%，Leave 仍不显示进度条。
 // 2. 从 UI 设置读取最短展示秒数并换成单调时间；这段等待发生在加载全部完成之后，只服务玩家看清完成态。
-// 3. 若 Slate 可用则注册 PostTick 回调按界面刷新周期检查到点时间；PostTick 只是展示层检查点，不构造加载兜底。
+// 3. 若 Slate 可用则注册 PostTick 回调按界面刷新周期检查到点时间；PostTick 只是完成文案的展示检查点，不参与加载判断。
 void UCatLocalPlayerUISubsystem::RequestGlobalLoadingDismissalAfterPresentation(
 	const ECatOnlineOperation CompletedOperation)
 {
@@ -667,7 +734,6 @@ void UCatLocalPlayerUISubsystem::RequestGlobalLoadingDismissalAfterPresentation(
 	FCatGlobalLoadingPresentation Presentation;
 	if (CompletedOperation == ECatOnlineOperation::Start)
 	{
-		Presentation.LoadingOperation = ECatOnlineOperation::Start;
 		Presentation.HeadingText = FText::FromString(TEXT("正在进入游戏"));
 		Presentation.StatusText = FText::FromString(TEXT("游戏世界准备完成。"));
 		Presentation.DetailText = FText::FromString(TEXT("本地玩家界面已就绪。"));
@@ -678,7 +744,6 @@ void UCatLocalPlayerUISubsystem::RequestGlobalLoadingDismissalAfterPresentation(
 	}
 	else
 	{
-		Presentation.LoadingOperation = ECatOnlineOperation::Leave;
 		Presentation.HeadingText = FText::FromString(TEXT("正在返回主菜单"));
 		Presentation.StatusText = FText::FromString(TEXT("主菜单准备完成。"));
 		Presentation.DetailText = FText::FromString(TEXT("主菜单界面已就绪。"));
@@ -726,7 +791,7 @@ void UCatLocalPlayerUISubsystem::HandleGlobalLoadingDismissalPostTick(const floa
 	HideGlobalLoadingScreen();
 }
 
-// 完成态停留回调清理流程：如果曾经注册 Slate PostTick 就成对移除；随后清空完成态请求字段，避免新一次 Start/Leave 继承旧完成展示。
+// 完成态停留回调清理流程：如果曾经注册 Slate PostTick 就成对移除；随后清空完成态请求字段，避免新一次 Start/Leave 继承失效完成展示。
 void UCatLocalPlayerUISubsystem::ClearGlobalLoadingDismissalPostTick()
 {
 	if (GlobalLoadingDismissalPostTickHandle.IsValid() && FSlateApplication::IsInitialized())
@@ -743,7 +808,7 @@ void UCatLocalPlayerUISubsystem::ClearGlobalLoadingDismissalPostTick()
 // 全局遮罩表现刷新流程：
 // 1. 先写高层目标和当前真实步骤，让玩家能看到正在等保存、销毁房间、切图还是 UI 装配。
 // 2. 进入游戏时把模型合成出的总进度和百分号直接写到 WBP；总进度来自状态事实，不来自倒计时或动画时长。
-// 3. 返回主菜单会折叠进度条，只更新文字状态；后续可由资产侧替换成旋转动画，代码不做定时器兜底。
+// 3. 返回主菜单会折叠进度条，只更新文字状态；代码只展示真实等待阶段，不由定时器判断完成。
 void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreenPresentation(const FCatGlobalLoadingPresentation& Presentation)
 {
 	if (!GlobalLoadingScreenWidget)
@@ -768,10 +833,10 @@ void UCatLocalPlayerUISubsystem::RefreshGlobalLoadingScreenPresentation(const FC
 		DayTextBlock->SetText(Presentation.HeadingText.IsEmpty()
 			? FText::FromString(TEXT("正在切换世界")) : Presentation.HeadingText);
 	}
-	if (UTextBlock* SacrificeTextBlock = Cast<UTextBlock>(
-		GlobalLoadingScreenWidget->GetWidgetFromName(TEXT("LoadingSacrificeProgressTextBlock"))))
+	if (UTextBlock* DetailTextBlock = Cast<UTextBlock>(
+		GlobalLoadingScreenWidget->GetWidgetFromName(TEXT("LoadingDetailTextBlock"))))
 	{
-		SacrificeTextBlock->SetText(Presentation.DetailText.IsEmpty()
+		DetailTextBlock->SetText(Presentation.DetailText.IsEmpty()
 			? FText::FromString(TEXT("等待当前步骤完成。")) : Presentation.DetailText);
 	}
 	if (UTextBlock* HintTextBlock = Cast<UTextBlock>(
@@ -1060,7 +1125,7 @@ bool UCatLocalPlayerUISubsystem::TryGetEngineLoadingReason(const FCatOnlineSnaps
 
 // 已有 Root 保留判断流程：
 // 1. 没有 Root 时直接返回 false；该策略只保护 Start 失败后仍需要显示错误的既有前端，不负责补建任何非 Frontend World UI。
-// 2. Start 加载和旅行期间由全局遮罩接管，Root 不再跨 World 保留，避免 Root 局部页面成为第二套表现。
+// 2. Start 加载和旅行期间由全局遮罩接管，Root 在 World 切换前释放，避免 Root 局部页面成为第二套表现。
 // 3. Start 失败恢复只在已有 Root 上成立，让错误文本能回到 Frontend/Room；其它 Lake 或无关 World 继续走拆除路径。
 bool UCatLocalPlayerUISubsystem::ShouldKeepExistingFrontendRoot(const FCatOnlineSnapshot& Snapshot) const
 {
@@ -1140,16 +1205,23 @@ void UCatLocalPlayerUISubsystem::BindController(APlayerController* Controller)
 	HandleControllerPawnChanged(Controller->GetPawn());
 }
 
-// Controller 解绑流程：只清理本地弱引用；Pawn 刷新由 PlayerController 生命周期主动推送，因此这里不再保留旧 notifier 句柄。
+// Controller 解绑流程：先移除仅属于旧 Controller 的翻天表现，再清理弱引用；Pawn 刷新继续由 Controller 生命周期推送。
 void UCatLocalPlayerUISubsystem::UnbindController()
 {
+	ClearDayTransition();
 	BoundPlayerController.Reset();
+}
+
+// Tooltip 控制器读取流程：只返回 AttachPlayerLakeUI 写入的本地玩家唯一控制器；局内 UI 未装配或资产创建失败时返回空，调用者据此跳过显示请求而不创建第二条提示链路。
+UCatItemTooltipController* UCatLocalPlayerUISubsystem::GetItemTooltipController() const
+{
+	return ItemTooltipController;
 }
 
 // Pawn 变化流程：
 // 1. 先把 NewPawn 裁成项目猫身体；同一个已装配身体的重复通知只刷新输入绑定，库存和菜单数据继续等自己的读源广播。
 // 2. 新身体或空身体会先完整拆掉上一套本地玩家 UI，避免跨 Pawn 复用 Model、View 或输入锁。
-// 3. 只有新的 ACatCharacter 通过配置校验时才重新装配 HUD、背包、交互提示和拾取提示层。
+// 3. 只有新的 ACatCharacter 通过配置校验时才重新装配 HUD、背包、物品提示、交互提示和局内菜单。
 void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 {
 	ACatCharacter* Character = Cast<ACatCharacter>(NewPawn);
@@ -1176,11 +1248,13 @@ void UCatLocalPlayerUISubsystem::HandleControllerPawnChanged(APawn* NewPawn)
 }
 
 // 本地玩家 UI 装配流程：
-// 1. 验证本地设置、当前 Controller/Pawn 和 World；任一正式 WBP 类缺失或无效时直接 fail-closed，不创建脱离项目资产的原生替身。
-// 2. 创建 HUD Model/View 并入视口；默认常驻天数、背包入口、设置入口和中心准星，背包内容由库存页打开后再显示。
-// 3. 创建 Inventory Model/PageController/普通背包 View，但背包 View 不预先入视口，只通过既有 InputContext 的 Action 打开。
-// 4. 创建局内主菜单 View/Controller；菜单不常驻视口，只在主菜单 Action 或 HUD 按钮触发时打开。
-// 5. 创建 Interaction 提示 View 和控制器；控制器订阅 PlayerController 的唯一准星交互目标，商店、鱼护和未来箱子仍由世界交互对象提供页面上下文。
+// 1. 验证本地设置、当前 Controller/Pawn 和 World；核心页面 WBP 缺失时停止装配，物品提示缺失则只关闭该提示并记录原因，均不创建原生替身。
+// 2. 创建 HUD Model/View、库存、菜单和交互提示实例；任一必需实例缺失则统一解绑已创建部分，再结束本次装配。
+// 3. 绑定 HUD 动作与角色 Model，订阅 Model 更新后把 HUD 放入视口；Model 绑定失败同样统一清理。
+// 4. 创建物品悬停 View；成功加入全视口层后才绑定控制器，失败释放引用并记录，库存格只提交来源。
+// 5. 刷新 HUD，绑定库存和菜单控制器；页面暂不入视口，仍由既有输入打开，任一绑定失败则整体解绑。
+// 6. 将交互提示初始化为隐藏并放入视口，再订阅唯一准星目标；绑定失败清理所有局内 UI。
+// 7. 最后绑定本玩家的 WorldInfo 控制器并记录装配日志；它读取注册锚点，后续单个信息牌资产失败不拆除整个 HUD。
 void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 {
 	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
@@ -1215,14 +1289,13 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 
 	HUDModel = NewObject<UCatHUDModel>(this);
 	HUDWidget = CreateWidget<UCatHUDWidget>(Controller, HUDViewClass);
-	InventoryModel = NewObject<UCatInventoryModel>(this);
 	InventoryPageController = NewObject<UCatInventoryPageController>(this);
 	InventoryWidget = CreateWidget<UCatInventoryWidget>(Controller, InventoryViewClass);
 	LakeMainMenuController = NewObject<UCatLakeMainMenuController>(this);
 	LakeMainMenuWidget = CreateWidget<UCatLakeMainMenuWidget>(Controller, LakeMainMenuViewClass);
 	InteractionPageController = NewObject<UCatInteractionPageController>(this);
 	InteractionPromptWidget = CreateWidget<UCatInteractionPromptWidget>(Controller, InteractionPromptViewClass);
-	if (!HUDModel || !HUDWidget || !InventoryModel || !InventoryPageController || !InventoryWidget
+	if (!HUDModel || !HUDWidget || !InventoryPageController || !InventoryWidget
 		|| !LakeMainMenuController || !LakeMainMenuWidget || !InteractionPageController || !InteractionPromptWidget)
 	{
 		DetachPlayerLakeUI();
@@ -1238,9 +1311,29 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 	HUDModelViewChangedHandle = HUDModel->OnViewStateChanged.AddUObject(
 		this, &ThisClass::HandleHUDModelViewStateChanged);
 	HUDWidget->AddToViewport(1);
+	// 库存提示独立于页面但隶属于本玩家；类缺失只关闭提示并落盘，不影响既有库存操作。
+	if (const TSubclassOf<UCatItemTooltipWidget> TooltipClass = Settings->LoadItemTooltipWidgetClass())
+	{
+		ItemTooltipWidget = CreateWidget<UCatItemTooltipWidget>(Controller, TooltipClass);
+		// 库存页和 Aegis 提示都在视口层；玩家层的 ZOrder 无法跨层覆盖库存，必须沿用同一层级排序。
+		if (ItemTooltipWidget) ItemTooltipWidget->AddToViewport(1100);
+		if (ItemTooltipWidget && ItemTooltipWidget->IsInViewport())
+		{
+			ItemTooltipController = NewObject<UCatItemTooltipController>(this);
+			ItemTooltipController->Bind(ItemTooltipWidget);
+		}
+		else
+		{
+			ItemTooltipWidget = nullptr;
+		}
+	}
+	if (!ItemTooltipController)
+	{
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_item_tooltip_unavailable World=%s Class=%s"),
+			*GetPathNameSafe(GetWorld()), *Settings->ItemTooltipWidgetClass.ToSoftObjectPath().ToString());
+	}
 	HandleHUDModelViewStateChanged();
-	if (!InventoryModel->Bind(GetLocalPlayer(), Controller, Character)
-		|| !InventoryPageController->Bind(GetLocalPlayer(), Controller, InventoryModel, InventoryWidget)
+	if (!InventoryPageController->Bind(Controller, InventoryWidget)
 		|| !LakeMainMenuController->Bind(GetLocalPlayer(), Controller, LakeMainMenuWidget))
 	{
 		DetachPlayerLakeUI();
@@ -1255,6 +1348,8 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 		DetachPlayerLakeUI();
 		return;
 	}
+	WorldInfoController = NewObject<UCatWorldInfoController>(this);
+	WorldInfoController->Bind(Controller);
 	const UWorld* World = GetWorld();
 	const ULocalPlayer* LocalPlayer = GetLocalPlayer();
 	UE_LOG(LogCatUI, Log,
@@ -1271,9 +1366,29 @@ void UCatLocalPlayerUISubsystem::AttachPlayerLakeUI(ACatCharacter* Character)
 		*GetNameSafe(InteractionPromptWidget ? InteractionPromptWidget->GetClass() : nullptr));
 }
 
-// 本地玩家 UI 解绑流程：PageController 先恢复输入并移出当前模态页，Model 再解除玩法订阅，最后移除各自 WBP 并清引用。
+// 本地玩家 UI 解绑流程：
+// 1. 先让 WorldInfo 释放观察距离和信息牌，再解绑悬停来源并移除提示视图。
+// 2. 按菜单、库存的顺序解绑控制器以恢复各自输入状态，再移除对应页面；尚未创建的对象直接跳过。
+// 3. 解除 HUD Model 事件与玩法订阅，清掉 HUD 动作委托并移除 HUD，随后解绑交互提示控制器和视图。
+// 4. 清空当前挂接角色并记录卸载日志；各步释放自身引用，允许装配失败后复用同一清理入口。
 void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 {
+	if (WorldInfoController)
+	{
+		WorldInfoController->Unbind();
+		WorldInfoController = nullptr;
+	}
+	// 先清理全局悬停来源，再移除 View；后续格子的 Destruct 不会再触发过期提示。
+	if (ItemTooltipController)
+	{
+		ItemTooltipController->Unbind();
+		ItemTooltipController = nullptr;
+	}
+	if (ItemTooltipWidget)
+	{
+		ItemTooltipWidget->RemoveFromParent();
+		ItemTooltipWidget = nullptr;
+	}
 	if (LakeMainMenuController)
 	{
 		LakeMainMenuController->Unbind();
@@ -1288,11 +1403,6 @@ void UCatLocalPlayerUISubsystem::DetachPlayerLakeUI()
 	{
 		InventoryPageController->Unbind();
 		InventoryPageController = nullptr;
-	}
-	if (InventoryModel)
-	{
-		InventoryModel->Unbind();
-		InventoryModel = nullptr;
 	}
 	if (InventoryWidget)
 	{
@@ -1344,9 +1454,11 @@ void UCatLocalPlayerUISubsystem::HandleHUDModelViewStateChanged()
 	}
 }
 
-// 局内菜单切换流程：打开菜单前先关闭当前背包页面，保证同一 Controller 上只有一个模态输入恢复记录处于打开状态。
+// 局内菜单切换流程：翻天期间拒绝打开；其他时候先关闭背包，保证同一 Controller 只有一个菜单模态恢复记录。
 void UCatLocalPlayerUISubsystem::ToggleLakeMainMenu()
 {
+	const ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(BoundPlayerController.Get());
+	if (Controller && Controller->IsDayTransitionInputBlocked()) return;
 	if (!LakeMainMenuController)
 	{
 		return;
@@ -1358,7 +1470,7 @@ void UCatLocalPlayerUISubsystem::ToggleLakeMainMenu()
 	LakeMainMenuController->ToggleMenu();
 }
 
-// HUD 入口动作流程：背包和主菜单都转交已有控制器；HUD 不兜底拼页面，也不持有保存或离局业务。
+// HUD 入口动作流程：背包和主菜单都转交已有控制器；HUD 不拼业务页面，也不持有保存或离局业务。
 void UCatLocalPlayerUISubsystem::HandleHUDActionRequested(const ECatHUDAction Action)
 {
 	switch (Action)

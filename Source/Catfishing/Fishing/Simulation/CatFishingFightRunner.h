@@ -4,7 +4,7 @@
 #include "UObject/Object.h"
 #include "Environment/CatWaterTypes.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
-#include "Fishing/Simulation/CatFishingGroupModel.h"
+#include "Fishing/Simulation/CatFishingOperatorWorkModel.h"
 #include "Fishing/Simulation/CatFishSteeringModel.h"
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 #include "CatFishingFightRunner.generated.h"
@@ -41,7 +41,7 @@ struct CATFISHING_API FCatFishingFightRunnerInit
 };
 
 /** 一段服务器已接受移动的观察量；按真实采样时间分给固定步，不能重复消费身体位移。 */
-struct FCatFightParticipantMovementSample
+struct FCatFightOperatorMovementSample
 {
 	double DurationSeconds = 0.0;
 	FVector MoveIntentWorld = FVector::ZeroVector;
@@ -50,23 +50,24 @@ struct FCatFightParticipantMovementSample
 };
 
 /** 一名鱼竿操作者在本场搏斗中的服务器私有意图/体力绑定。 */
-struct CATFISHING_API FCatFightParticipantRuntime
+struct CATFISHING_API FCatFightOperatorRuntime
 {
 	TWeakObjectPtr<APlayerState> PlayerState;
 	TWeakObjectPtr<ACatCharacter> Character;
 	TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
 	double BaseFishingStrength = 0.0;
-	/** 有正体力时为基础力量乘角色贡献系数，归零时停止出力；不按体力比例衰减。 */
+	/** 有正体力时使用本人的基础力量，归零时停止出力；不按体力比例衰减。 */
 	double ActiveFishingStrength = 0.0;
 	int64 LastInputSequence = 0;
 	bool bPullHeld = false;
 	bool bSlackHeld = false;
-	bool bPrimary = false;
-	uint32 MembershipEpoch = 0;
+	uint32 ControlEpoch = 0;
 	double StaminaMaximum = 0.0;
 	FVector LastSampledPosition = FVector::ZeroVector;
+	FVector LastSampledMotionCorrection = FVector::ZeroVector;
 	double LastMovementSampleWorldSeconds = 0.0;
-	TArray<FCatFightParticipantMovementSample> PendingMovementSamples;
+	uint32 LastBodyResetEpoch = 0;
+	TArray<FCatFightOperatorMovementSample> PendingMovementSamples;
 	bool bHasSampledPosition = false;
 };
 
@@ -93,8 +94,8 @@ public:
 	bool IsFishExhaustedForAuthority() const { return State.bFishExhausted; }
 	/** 鱼当前是否接触真实干地；水岸转换由连续表面查询裁决，不永久锁在某一种表面。 */
 	bool IsFishBeachedForAuthority() const { return bFishBeached; }
-	/** 搏斗接力时原子迁移 ASC、力量、体力上限/当前值与新玩家自己的输入序号域。 */
-	bool TransferOperatorFromAuthority(APlayerState* NewPlayerState, UCatAbilitySystemComponent* NewAbilitySystem,
+	/** 原物品主人明确取回操控时，重新绑定本人 ASC 与输入序号域。 */
+	bool ResumeOwnerFromAuthority(APlayerState* NewPlayerState, UCatAbilitySystemComponent* NewAbilitySystem,
 		double NewCatStrength, double NewCatStaminaMaximum, double NewCatStamina,
 		int64 InitialInputSequence, bool bInitialPullHeld, bool bInitialSlackHeld);
 	ECatFightCatAction GetCatAction() const { return State.CatAction; }
@@ -104,23 +105,26 @@ public:
 	bool TestFishBehaviorConditionFromStateTree(ECatFishBehaviorCondition Condition) const;
 
 private:
+	virtual void BeginDestroy() override;
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class FCatFishingExhaustedPickupHandoffTest;
 	friend class FCatFishingSurfaceTraversalTest;
 	friend class FCatFishingParticipantStrengthTest;
-	friend class FCatFishingGroupRunnerIntegrationTest;
+	friend class FCatFishingOperatorRunnerIntegrationTest;
+	friend class FCatFishingPhysicalCouplingTest;
+	friend class FCatFishingFormalPhysicalRunnerTest;
 	friend class FCatFishingMotionDiagnosticTest;
 	friend class FCatFishBehaviorStateTreeRuntimeTest;
 	void HandleFixedStep();
+	void HandlePhysicsFrame(float DeltaSeconds);
+	void HandlePhysicsReceiverUnavailable();
 	void RefreshCatAction();
 	bool UpdateFishBehaviorForCurrentOperator(bool bRodHeld);
-	bool RefreshParticipantsFromRod();
-	bool AddParticipantFromAuthority(APlayerState* PlayerState, bool bPrimary,
-		bool bInitialPullHeld, bool bInitialSlackHeld, int64 InitialInputSequence);
-	FCatFightParticipantRuntime* FindParticipant(APlayerState* PlayerState);
-	FCatFightParticipantRuntime* FindPrimaryParticipant();
-	bool UpdateParticipantIntentAndProperties();
-	bool ApplyGroupStaminaChanges(const FCatFightStepResult& Step);
+	bool RefreshPrimaryOperatorFromRod();
+	bool BindPrimaryOperatorFromAuthority(APlayerState* PlayerState, bool bInitialPullHeld, bool bInitialSlackHeld, int64 InitialInputSequence);
+	FCatFightOperatorRuntime* GetPrimaryOperator();
+	bool UpdateOperatorIntentAndProperties();
+	bool ApplyOperatorStaminaChanges(const FCatFightStepResult& Step);
 	bool TryResolveGroundedFishPosition(const FVector& DesiredPosition,
 		FVector& OutGroundedPosition, FVector& OutSurfaceNormal, AActor*& OutSurfaceActor) const;
 	FCatFishMotionSolveResult ResolveFishSurfaceFromAuthority(FCatFightStepResult& Step,
@@ -131,14 +135,16 @@ private:
 	TWeakObjectPtr<ACatFishEncounterActor> FishActor;
 	TWeakObjectPtr<ACatFishingRodActor> RodActor;
 	TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
-	TMap<TWeakObjectPtr<APlayerState>, FCatFightParticipantRuntime> Participants;
-	FCatFightGroupInput GroupInput;
-	FCatFightGroupResult GroupResult;
-	TArray<TWeakObjectPtr<APlayerState>> FrozenParticipantPlayers;
-	TArray<TWeakObjectPtr<UCatAbilitySystemComponent>> FrozenParticipantAbilitySystems;
-	TArray<TArray<FCatFightParticipantMovementSample>> FrozenParticipantMovementSamples;
-	double LastGroupStaminaDrain = 0.0;
-	bool bGroupSettlementPending = false;
+	FCatFightOperatorRuntime OperatorState;
+	TArray<FCatFightOperatorMovementSample> FrozenOperatorMovementSamples;
+	TWeakObjectPtr<UCatAbilitySystemComponent> FrozenOperatorAbilitySystem;
+	double FrozenOperatorStamina = 0.0;
+	double FrozenOperatorStaminaMaximum = 0.0;
+	bool bFrozenOperatorUnderLoad = false;
+	double OperatorSupportAlignment = 1.0;
+	double LastOperatorStaminaDrain = 0.0;
+	double NextStaminaDiagnosticSeconds = 0.0;
+	bool bOperatorSettlementPending = false;
 	FCatWaterRegionHandle WaterRegion;
 	FCatFightSimulationConfig Config;
 	FCatFightSimulationState State;
@@ -153,7 +159,9 @@ private:
 	UPROPERTY(Transient)
 	TObjectPtr<UStateTree> BehaviorStateTree = nullptr;
 	FRandomStream SteeringRandom;
-	FTimerHandle FixedStepTimer;
+	FDelegateHandle PhysicsFrameHandle;
+	FDelegateHandle PhysicsReceiverUnavailableHandle;
+	double PendingFixedStepSeconds = 0.0;
 	double NextConstraintDiagnosticWorldSeconds = 0.0;
 	uint64 DiagnosticFixedStepSequence = 0;
 	double LastFixedStepDiagnosticWorldSeconds = -1.0;

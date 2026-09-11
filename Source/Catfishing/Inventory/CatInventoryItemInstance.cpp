@@ -68,6 +68,65 @@ FGuid UCatInventoryItemInstance::GetItemInstanceId() const
 	return ItemInstanceId;
 }
 
+// 库存实例 Use 裁决流程：
+// 1. 先确认运行格确实指向当前实例和当前定义，避免调用方只按同类定义误用另一份物品。
+// 2. 再读取实例声明的库存 mutation 语义；普通实例没有声明时返回 AlreadyResolved，不产生格子变化。
+// 3. 数量物只能扣不超过当前堆栈的数量；借出物只能一格一件，确保 held entry 保管的是完整实例。
+// 4. 基础实例不理解装备、GAS 或 Fishing 规则，具体物品子类在同一实例入口补自己的条件。
+ECatDomainCommandError UCatInventoryItemInstance::Use(const FCatInventoryEntry& Item,
+	const int32 Quantity) const
+{
+	const UCatInventoryItemDefinition* Definition = GetItemDefinition();
+	const FName RuntimeDefinitionId =
+		Definition != nullptr ? Definition->GetInventoryDefinitionId() : NAME_None;
+	if (Item.Instance != this || Item.StackCount <= 0 || Quantity <= 0 || Quantity > Item.StackCount
+		|| !GetItemInstanceId().IsValid() || RuntimeDefinitionId.IsNone()
+		|| GetItemDefinitionId() != RuntimeDefinitionId)
+	{
+		return ECatDomainCommandError::InvalidPayload;
+	}
+
+	const bool bKeepsInstance = KeepsInventoryInstanceWhileUsed();
+	const bool bConsumesQuantity = ConsumesInventoryQuantityOnUse();
+	if (!bKeepsInstance && !bConsumesQuantity)
+	{
+		return ECatDomainCommandError::AlreadyResolved;
+	}
+	if (bKeepsInstance && bConsumesQuantity)
+	{
+		return ECatDomainCommandError::InvalidPhase;
+	}
+	if (bKeepsInstance && (Definition->GetMaxStackCount() > 1 || Item.StackCount != 1 || Quantity != 1))
+	{
+		return ECatDomainCommandError::InvalidPhase;
+	}
+	return ECatDomainCommandError::None;
+}
+
+// 库存实例 UnUse 裁决流程：只确认活动记录仍然指向当前实例和定义；子类可在同一入口补热配置或损坏状态检查。
+ECatDomainCommandError UCatInventoryItemInstance::UnUse(const FCatInventoryEntry& Item) const
+{
+	const FName RuntimeDefinitionId = GetItemDefinitionId();
+	if (Item.Instance != this || Item.StackCount <= 0 || !GetItemInstanceId().IsValid()
+		|| RuntimeDefinitionId.IsNone() || GetItemDefinitionId() != RuntimeDefinitionId)
+	{
+		return ECatDomainCommandError::InvalidPayload;
+	}
+	return ECatDomainCommandError::None;
+}
+
+// 库存实例持有策略读取流程：普通实例没有部署语义；只有专属实例明确覆盖后才能离开可见背包进入 held entry。
+bool UCatInventoryItemInstance::KeepsInventoryInstanceWhileUsed() const
+{
+	return false;
+}
+
+// 库存实例扣量策略读取流程：普通实例没有消耗语义；数量耗材必须通过专属实例覆盖后才由库存组件扣减。
+bool UCatInventoryItemInstance::ConsumesInventoryQuantityOnUse() const
+{
+	return false;
+}
+
 // 实例身份恢复流程：只有服务器拥有的实例能接收外部 ID，非法 ID 保持现有身份，避免客户端或坏存档制造无身份物品。
 void UCatInventoryItemInstance::SetItemInstanceIdFromAuthority(const FGuid InItemInstanceId)
 {
@@ -84,6 +143,18 @@ void UCatInventoryItemInstance::SetItemInstanceIdFromAuthority(const FGuid InIte
 void UCatInventoryItemInstance::SetRuntimeOwnerActor(AActor* InRuntimeOwnerActor)
 {
 	RuntimeOwnerActor = InRuntimeOwnerActor;
+}
+
+// 世界载体读取流程：返回拾取保留的原物；已被销毁的 Actor 视为空，让落地沿用已有生成路径。
+AActor* UCatInventoryItemInstance::GetWorldActor() const
+{
+	return IsValid(WorldActor) && !WorldActor->IsActorBeingDestroyed() ? WorldActor.Get() : nullptr;
+}
+
+// 世界载体关联流程：只替换当前世界引用；不复制 Actor，也不改实例身份和数量。
+void UCatInventoryItemInstance::SetWorldActor(AActor* InWorldActor)
+{
+	WorldActor = InWorldActor;
 }
 
 // 宿主读取流程：优先使用显式运行宿主；新建实例尚未同步时回退到 Outer Actor。
@@ -105,14 +176,14 @@ bool UCatInventoryItemInstance::CanUseFromInventory(const FCatInventoryEntry& In
 	return false;
 }
 
-// 结构化使用流程：基础实例仍然拒绝，因为它没有声明任何真实物品效果；返回当前库存版本和请求 ID，让 UI 只按正式命令回包诊断和刷新。
+// 结构化使用流程：基础实例仍然拒绝，因为它没有声明任何真实物品效果；返回请求 ID 和错误码，让 UI 只按正式命令回包诊断和刷新。
 FCatDomainCommandResult UCatInventoryItemInstance::UseFromInventorySlotFromAuthority(
 	const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext)
 {
 	(void)InventoryEntry;
 	FCatDomainCommandResult Result;
 	Result.RequestId = UseContext.RequestId;
-	Result.Revision = UseContext.SourceInventory ? UseContext.SourceInventory->GetInventoryRevision() : 0;
+
 	Result.Error = ECatDomainCommandError::InvalidPayload;
 	return Result;
 }

@@ -56,7 +56,6 @@ namespace CatFishSelectionPolicyTestsPrivate
 		Definition->FishDefinitionId = FishId;
 		Definition->PresentationDefinition = Presentation;
 		Definition->BodyClass = ECatFishBodyClass::Standard;
-		Definition->SacrificeContribution = 1;
 		Definition->RarityTierId = TEXT("TestRarity");
 		Definition->RegionIds = {TEXT("TestLake")};
 		Definition->TimeOfDay = {ECatEnvironmentTimeOfDay::Morning};
@@ -65,7 +64,6 @@ namespace CatFishSelectionPolicyTestsPrivate
 		Definition->MinimumWeightKilograms = 1.0;
 		Definition->MaximumWeightKilograms = 1.0;
 		Definition->MinimumFightParticipants = 1;
-		Definition->FishStrength = 5.0;
 		Definition->FishFightStamina = 5.0;
 		Definition->BitePersonalityId = TEXT("TestBite");
 		Definition->FightPersonalityId = TEXT("TestFight");
@@ -117,8 +115,6 @@ bool FCatFishSelectionPostFilterNormalizationTest::RunTest(const FString& Parame
 		TEXT("LightFish"), 1.0, Presentation);
 	UCatFishDefinition* HeavyFish = CatFishSelectionPolicyTestsPrivate::MakeFishDefinition(
 		TEXT("HeavyFish"), 3.0, Presentation);
-	// 旧静态字段故意制造巨大差异；选鱼必须只使用本次抽到的重量和统一换算系数。
-	HeavyFish->FishStrength = 500.0;
 	if (!TestNotNull(TEXT("creates transient catalog settings"), Settings)
 		|| !TestNotNull(TEXT("creates transient saturation curve"), SaturationCurve)
 		|| !TestNotNull(TEXT("creates transient presentation"), Presentation)

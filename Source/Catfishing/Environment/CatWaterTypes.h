@@ -19,9 +19,9 @@ enum class ECatWaterQueryError : uint8
 	RegionNotFound,
 	/** 多个水域同时命中；几何优先级未裁时拒绝猜测。 */
 	AmbiguousRegion,
-	/** 查询所依据的 Run Revision 已陈旧。 */
+	/** 查询所依据的 Run Revision 低于当前事实。 */
 	RevisionConflict,
-	/** 查询所依据的几何 Revision 已陈旧。 */
+	/** 查询所依据的几何 Revision 低于当前事实。 */
 	StaleGeometry,
 	/** 水域几何未通过规范化或拓扑校验。 */
 	InvalidGeometry,

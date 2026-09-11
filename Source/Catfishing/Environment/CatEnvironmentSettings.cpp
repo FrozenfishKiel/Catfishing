@@ -5,7 +5,7 @@ bool UCatEnvironmentSettings::IsRuntimeReady() const
 {
 	return bEnableEnvironmentRuntime && ConfiguredWeather != ECatEnvironmentWeather::Unknown
 		&& FMath::IsFinite(MorningEndFraction) && FMath::IsFinite(DuskStartFraction)
-		&& MorningEndFraction > 0.0 && DuskStartFraction > MorningEndFraction && DuskStartFraction < 1.0;
+		&& MorningEndFraction >= 0.0 && DuskStartFraction > MorningEndFraction && DuskStartFraction < 1.0;
 }
 
 // 时段计算流程：只接受 DayActive 和有效服务器白天区间；把当前世界时间规范化到 0..1 后按显式分界返回 Morning/Day/Dusk，绝不读取现实时间。
@@ -44,7 +44,7 @@ bool UCatEnvironmentSettings::TryResolveTimeOfDayRefreshTimes(const FCatRunPhase
 	const double DayDurationSeconds = RunSnapshot.DeadlineServerTimeSeconds - RunSnapshot.ServerTimeAnchorSeconds;
 	OutMorningEndServerTimeSeconds = RunSnapshot.ServerTimeAnchorSeconds + DayDurationSeconds * MorningEndFraction;
 	OutDuskStartServerTimeSeconds = RunSnapshot.ServerTimeAnchorSeconds + DayDurationSeconds * DuskStartFraction;
-	return OutMorningEndServerTimeSeconds > RunSnapshot.ServerTimeAnchorSeconds
+	return OutMorningEndServerTimeSeconds >= RunSnapshot.ServerTimeAnchorSeconds
 		&& OutDuskStartServerTimeSeconds > OutMorningEndServerTimeSeconds
 		&& OutDuskStartServerTimeSeconds < RunSnapshot.DeadlineServerTimeSeconds;
 }

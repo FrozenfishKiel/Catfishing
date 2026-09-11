@@ -45,7 +45,7 @@ public:
 	/** 把 NearShore 抢抄意图转给指定会话；服务不自己创建鱼或选择胜者。 */
 	FCatScoopResult RequestScoop(FGuid FishingSessionId, AController* ScoopingController, const FCatScoopCommand& Command);
 
-	/** Character 失去占有、倒地或销毁时仅移除其操作身份；剩余成员按加入顺序接力。 */
+	/** Character 失去占有、倒地或销毁时撤销本人主控；其它抓握不取得会话。 */
 	void ReleaseFishingOperatorForCharacter(const ACatCharacter* Character);
 	/** 原角色装备真正销毁前转存精确场上竿/预约饵；保留原物资归属，不复制普通背包。 */
 	bool PreserveFishingResourcesForEquipmentShutdown(UCatEquipmentComponent* Equipment);
@@ -53,10 +53,12 @@ public:
 	void FlushDeferredOperatorRemovalsFromAuthority();
 
 	/**
-	 * Run 暂停钓鱼（白天结束、额度完成或进入夜晚）时终止当前会话、释放全部竿位并恢复角色移动。
+	 * Run 启动失败或进入结束阶段时终止当前会话、释放全部竿位并恢复角色移动；夜晚不调用。
 	 * 该入口不永久关闭 World 内的 FishingService，下一天仍可重新使用已部署鱼竿。
 	 */
 	void SuspendFishingAndReleaseOperators();
+	/** Run 更新新咬钩准入后刷新等待计时，不结束真咬窗口或搏斗、不释放竿位。 */
+	void RefreshBiteAvailabilityFromAuthority();
 
 	/** Host teardown 关闭入口并终止所有未结算会话。 */
 	void CloseCommandsAndTerminateAll();
@@ -70,35 +72,39 @@ public:
 
 	/** 只读查询该玩家任意一根存活登记竿；不表示当前操作或收纳目标，业务命令须按 RodActorId 解析。 */
 	ACatFishingRodActor* FindDeployedRod(const APlayerState* PlayerState);
-	/** 统计本人场上实体竿；拥有与操作分离，替别人持竿不改变双方名额。 */
+	/** 统计本人场上实体竿；无人值守竿仍占本人名额，助手抓握不改变名额。 */
 	int32 GetDeployedRodCount(const APlayerState* PlayerState) const;
 	/** 本人范围内最近的无人操作、无活动会话部署竿；损坏竿也能收回。跨玩家收纳尚未开放。 */
 	ACatFishingRodActor* FindNearestPackableRod(const APlayerState* PlayerState,
 		const FVector& WorldLocation, double MaxDistanceCentimeters);
 
-	/** 按公开 RodActorId 在全部部署鱼竿中查找（多人：允许操作别人的竿）；未知返回空。 */
+	/** 本人范围内最近的无人操作、未损坏部署竿；允许原活动会话继续。 */
+	ACatFishingRodActor* FindNearestOperableOwnedRod(const APlayerState* PlayerState,
+		const FVector& WorldLocation, double MaxDistanceCentimeters);
+
+	/** 按公开 RodActorId 查询；取得主控仍只允许竿主显式 R。 */
 	ACatFishingRodActor* FindDeployedRodById(FGuid RodActorId);
 
-	/** 查询 PlayerState 当前占用任意操作槽的竿（不限竿主、主辅位）；没有则空。 */
+	/** 查询 PlayerState 当前显式主控的本人竿；没有则空。 */
 	ACatFishingRodActor* FindRodOperatedBy(const APlayerState* PlayerState);
 
-	/** 最近的可加入竿：已部署、未损坏、容器仍有容量，且公共交互锚点在 MaxDistance 内；不限竿主。 */
-	ACatFishingRodActor* FindNearestOperableRod(const FVector& WorldLocation, double MaxDistanceCentimeters);
 	/** 最近的无人值守活动会话鱼竿；供原持竿者/竿主在不先拾起时主动切线止损。 */
 	ACatFishingRodActor* FindNearestUnattendedSessionRod(const FVector& WorldLocation,
 		double MaxDistanceCentimeters);
 
 	/** 查找绑定在指定竿上的存活未终态会话（操作位与会话解耦后，竿是会话的空间锚）；没有则空。 */
-	ACatFishingSession* FindActiveSessionByRod(const ACatFishingRodActor* RodActor);
+	ACatFishingSession* FindActiveSessionByRod(const ACatFishingRodActor* RodActor) const;
+	/** Only validates or revokes explicit owner control. Physical helpers never become Session members. */
+	bool ReconcilePrimaryControlFromPhysicalGrip(ACatFishingRodActor* Rod);
 
 	/** 抄网目标粗筛：按鱼与请求者的水平距离找最近的已上钩会话；精确范围仍由 Session 裁决。 */
 	ACatFishingSession* FindNearestScoopableSession(const FVector& WorldLocation, double MaxDistanceCentimeters);
 
 	/**
-	 * 钓手接力转移编排（多人用别人的竿继续钓）：会话唯一性属于鱼竿，不属于玩家；
-	 * 这里只调用会话 TransferFisherFromAuthority 更新当前钓手事实。
+	 * 原物品主人取回操控：会话唯一性属于鱼竿，主控始终只能是其 Owner；
+	 * 这里只调用会话 ResumeOwnerControlFromAuthority 恢复本人钓手事实。
 	 */
-	bool TransferSessionFisher(ACatFishingSession* Session, AController* NewFisherController);
+	bool ResumeOwnedSessionControl(ACatFishingSession* Session, AController* NewFisherController);
 
 	/** 为 PlayerState 登记部署竿；同一 Actor 重放成功，超过两根或跨玩家重复登记被拒绝。 */
 	bool RegisterDeployedRod(APlayerState* PlayerState, ACatFishingRodActor* RodActor);
@@ -113,6 +119,12 @@ public:
 	int32 GetDeployedRodCountForDiagnostics() const;
 
 private:
+	friend class FCatFishingBiteTimingWorldTest;
+	friend class FCatFishingPhysicalGripGraphTest;
+	friend class FCatFishingPhysicalCouplingTest;
+	friend class FCatFishingCMCStabilityTest;
+	friend class FCatFishingFormalPhysicalRunnerTest;
+	friend class FCatFishBehaviorStateTreeRuntimeTest;
 	friend class FCatFishingSlackAimCommandRoutingTest;
 	friend class ACatFishingSession;
 	friend class FCatFishingServiceRodBoundSessionRoutingTest;
@@ -126,7 +138,7 @@ private:
 	/** 终止全部存活会话并释放所有竿位；DiagnosticReason 只进入 Session 终态诊断。 */
 	void TerminateAllSessionsAndReleaseOperators(const TCHAR* DiagnosticReason);
 
-	/** 正常离开与异常失效共用的成员变更事务；主位变化后同步会话，跳过不能操竿的候选。 */
+	/** 正常放下与异常失效共用的主控撤销事务；会话进入无人值守。 */
 	bool RemoveOperatorAndReconcileSession(ACatFishingRodActor* Rod, APlayerState* PlayerState,
 		int64 ExpectedRevision, const ACatCharacter* LeavingCharacter, const TCHAR* Reason);
 
@@ -171,6 +183,7 @@ private:
 		TWeakObjectPtr<ACatCharacter> Character;
 	};
 	TArray<FDeferredOperatorRemoval> DeferredOperatorRemovals;
+	TSet<TWeakObjectPtr<ACatFishingRodActor>> DeferredPrimaryControlChecks;
 
 	/** teardown 后永久拒绝本 World 新会话。 */
 	bool bCommandsOpen = true;

@@ -7,7 +7,7 @@
 class AController;
 class APlayerController;
 class ACatFishingRodActor;
-class USkeletalMeshComponent;
+class UMeshComponent;
 struct FMinimalViewInfo;
 
 /** 只消费持杆/搏斗复制事实和实际握把姿态，不修改角力、输入意图或鱼竿 Transform。 */
@@ -35,7 +35,7 @@ private:
 	const ACatFishingRodActor* FindLocalViewRod() const;
 	void RestoreView();
 	void LogView(const TCHAR* Mode) const;
-	TWeakObjectPtr<USkeletalMeshComponent> HiddenMesh;
+	TWeakObjectPtr<UMeshComponent> HiddenMesh;
 	TWeakObjectPtr<APlayerController> ViewingController;
 	FGuid ViewedRodId;
 	/** 仅本地镜头的插值历史；不能写回杆姿态、控制意图或鱼线约束。 */

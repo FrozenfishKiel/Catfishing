@@ -20,7 +20,7 @@ public:
 
 	FCatFishSelectionResult SelectRuntimeDefinition(const FCatFishSelectionContext& Context) const;
 
-	/** 正式 FishDefinition 软引用清单；默认空使 Fishing fail-closed，不扫描旧鱼种文档或测试资产。 */
+	/** 正式 FishDefinition 软引用清单；默认空使 Fishing fail-closed，只读取显式登记的鱼种资产。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Catalog")
 	TArray<TSoftObjectPtr<UCatFishDefinition>> Definitions;
 

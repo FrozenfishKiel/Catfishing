@@ -81,7 +81,7 @@ namespace CatLakeMainMenuText
 }
 
 // 绑定流程：
-// 1. 先解除可能残留的旧 Controller、输入绑定和系统订阅，确保复用对象不会向旧 World 回写 UI。
+// 1. 先解除可能残留的失效 Controller、输入绑定和系统订阅，确保复用对象不会向失效 World 回写 UI。
 // 2. 只接受本地 Controller 和有效菜单 View；服务缺失不阻止菜单创建，只会让对应按钮禁用或显示明确反馈。
 // 3. 创建局内设置 Model 并注入 View，复用主界面设置来源与草稿规则。
 // 4. 订阅 Widget 意图、Save 变化和 Online 快照，再安装 Enhanced Input Action。
@@ -130,7 +130,7 @@ bool UCatLakeMainMenuController::Bind(ULocalPlayer* InLocalPlayer, APlayerContro
 // 解绑流程：
 // 1. 若菜单打开，先关闭菜单并释放本页申请的输入锁。
 // 2. 再移除 Enhanced Input 绑定、Widget 意图订阅、设置模型连接、Save 订阅和 Online 快照订阅。
-// 3. 最后清空弱引用、等待标记和结果文本，避免下一次 Pawn 装配继承旧反馈。
+// 3. 最后清空弱引用、等待标记和结果文本，避免下一次 Pawn 装配继承失效反馈。
 void UCatLakeMainMenuController::Unbind()
 {
 	SetMenuOpen(false);
@@ -199,7 +199,7 @@ bool UCatLakeMainMenuController::IsMenuOpen() const
 	return bMenuOpen;
 }
 
-// 输入刷新流程：Controller InputComponent 可能因 Pawn 或重启重建；重新安装前会移除旧组件绑定。
+// 输入刷新流程：Controller InputComponent 可能因 Pawn 或重启重建；重新安装前会移除失效组件绑定。
 void UCatLakeMainMenuController::RefreshInputBinding()
 {
 	InstallMenuInput();
@@ -216,7 +216,7 @@ void UCatLakeMainMenuController::RequestCloseFromWidget()
 	SetMenuOpen(false);
 }
 
-// 设置请求流程：切到局内设置页并清理暂停菜单底部反馈；设置内容复用 UCatFrontendSettingsModel，不再显示“未接入”的旧缺口。
+// 设置请求流程：切到局内设置页并清理暂停菜单底部反馈；设置内容复用 UCatFrontendSettingsModel，局内页面只显示当前可用项。
 void UCatLakeMainMenuController::RequestSettingsFromWidget()
 {
 	if (bReturnToMainMenuPending)
@@ -331,7 +331,7 @@ void UCatLakeMainMenuController::RequestReturnToMainMenuFromWidget()
 }
 
 // 退出流程：先确认本地 Player、World 和 Controller 都仍有效；缺上下文时写入失败文本、刷新 View 并记录可定位日志。
-// 成功分支按主界面同一语义直接请求本地 Quit，不再走 Online Leave 的保存、拆局、DestroySession 和回前台等待链。
+// 成功分支按主界面同一语义直接请求本地 Quit；该命令不进入 Online Leave 的保存、拆局、DestroySession 和回前台等待链。
 void UCatLakeMainMenuController::RequestExitGameFromWidget()
 {
 	ULocalPlayer* Player = BoundLocalPlayer.Get();
@@ -634,7 +634,7 @@ void UCatLakeMainMenuController::HandleSaveCompleted(const FGuid RequestId, cons
 // Online 快照处理流程：
 // 1. 非回主菜单等待时只刷新按钮可用性，让会话状态变化能启用或禁用回主菜单按钮。
 // 2. 等待中只消费同一 Leave RequestId 的事实；Pending 继续锁住命令页，失败恢复命令页并保留错误文本。
-// 3. 成功到达 Frontend 且 Session 已释放后清本地等待标记，旧玩法菜单随后会被 LocalPlayer UI 生命周期移除。
+// 3. 成功到达 Frontend 且 Session 已释放后清本地等待标记，已失效玩法菜单随后会被 LocalPlayer UI 生命周期移除。
 void UCatLakeMainMenuController::HandleOnlineChanged()
 {
 	UCatOnlineSubsystem* Online = GetOnlineSubsystem();

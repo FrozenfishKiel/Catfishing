@@ -19,14 +19,14 @@ public:
 	/** 构造商店交互组件默认值；它默认不 Tick，只响应交互调用。 */
 	UCatShopInteractionComponent();
 
-	/** 组件离开 World 时关闭当前商店 UI；避免交互对象销毁后旧页面继续持有 Controller。 */
+	/** 组件离开 World 时关闭当前商店 UI；避免交互对象销毁后失效页面继续持有 Controller。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
 	/** 为指定玩家打开商店 UI；创建 Model/PageController/WBP 并绑定来源摊位后，由本组件拥有本次实例，营地仓库由 PlayerController 的服务器购买链路检查。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Shop")
 	bool OpenShopForPlayer(APlayerController* PlayerController);
 
-	/** 关闭并销毁当前商店 UI 实例；正常视口移除交给 PageController，组件最后只兜底仍挂在视口里的 View。 */
+	/** 关闭并销毁当前商店 UI 实例；正常视口移除交给 PageController，组件最后确认仍挂在视口里的 View 已移除。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Shop")
 	void CloseShop();
 
@@ -41,7 +41,7 @@ private:
 	/** PageController 关闭通知入口；组件收到后销毁本次商店页面对象。 */
 	void HandleShopPageCloseRequested();
 
-	/** 本摊位打开商店时使用的 WBP 类；这是世界对象自己的页面配置，不再放在全局 UI Settings。 */
+	/** 本摊位打开商店时使用的 WBP 类；商店页面配置归世界对象。 */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Catfishing|Shop", meta = (AllowPrivateAccess = "true"))
 	TSoftClassPtr<UCatShopWidget> ShopWidgetClass;
 

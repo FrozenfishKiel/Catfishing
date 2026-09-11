@@ -70,11 +70,11 @@ struct FCatShopTransactionRecord
 	UPROPERTY(BlueprintReadOnly)
 	FString StableNetId;
 
-	/** 这条记录是否来自购物车购买；交付确认只接受购买记录，不再用商品枚举判断业务分支。 */
+	/** 这条记录是否来自购物车购买；交付确认只接受购买记录，由交易来源判断业务分支。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bPurchase = false;
 
-	/** 这条记录是否来自售鱼入账；它用于公开流水展示，不授权任何 Items 或 Social 后续操作。 */
+	/** 这条记录是否来自售鱼入账；它用于公开流水展示，不授权任何库存或 Social 后续操作。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bFishSale = false;
 
@@ -82,17 +82,13 @@ struct FCatShopTransactionRecord
 	UPROPERTY(BlueprintReadOnly)
 	bool bDeliveryPending = false;
 
-	/** 下游领域是否已经确认交付完成；重复确认只读取这条事实，不再次扣公款或发货。 */
+	/** 下游领域是否已经确认交付完成；重复确认只读取这条事实，支付和发货只发生一次。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bDeliveryConfirmed = false;
 
 	/** 下游领域成功交付时返回的回执 ID；未交付或售鱼记录保持无效。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid DeliveryReceiptId;
-
-	/** 下游领域成功交付后的聚合版本；用于审计交付发生在哪个下游库存版本之后。 */
-	UPROPERTY(BlueprintReadOnly)
-	int64 DeliveryRevision = 0;
 
 	/** 购物车购买时的商店目录项；售鱼可保持 None。 */
 	UPROPERTY(BlueprintReadOnly)
@@ -110,11 +106,11 @@ struct FCatShopTransactionRecord
 	UPROPERTY(BlueprintReadOnly)
 	int32 PurchaseQuantity = 0;
 
-	/** 售鱼时被 Items 不可逆移除的鱼实例；购买可保持无效。 */
+	/** 售鱼批次中首条鱼的身份摘要；服务写入供流水定位，不证明实物已移除，购买时保持无效。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid FishInstanceId;
 
-	/** 对团队公款的真实增量；购物车购买为负或 0，售鱼为正。 */
+	/** 对团队公款的真实增量；购物车购买为负或 0，售鱼为非负整数，逐鱼舍入可产生零收入。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 WalletDelta = 0;
 
@@ -122,14 +118,14 @@ struct FCatShopTransactionRecord
 	UPROPERTY(BlueprintReadOnly)
 	int64 WalletRevision = 0;
 
-	/** 交易提交后的库存版本；售鱼不涉及库存时为 0。 */
+	/** 交易提交后的摊位货架版本；售鱼不涉及货架扣减时为 0。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 StockRevision = 0;
 };
 
 /**
  * 一条对全队公开的经济交易记录。它只留下“谁、做了什么、钱怎么动了”的展示事实，
- * 不带服务器私有身份键，也不暴露商店内部或 Items 容器决策。
+ * 不带服务器私有身份键，也不暴露商店内部或库存写口决策。
  */
 USTRUCT(BlueprintType)
 struct FCatShopPublicTransaction
@@ -151,7 +147,7 @@ struct FCatShopPublicTransaction
 	UPROPERTY(BlueprintReadOnly)
 	bool bPurchase = false;
 
-	/** 这条公开流水是否来自售鱼入账；表现层用它选择文案，不回写 Items 状态。 */
+	/** 这条公开流水是否来自售鱼入账；表现层用它选择文案，不回写库存状态。 */
 	UPROPERTY(BlueprintReadOnly)
 	bool bFishSale = false;
 
@@ -179,11 +175,11 @@ struct FCatShopPublicTransaction
 	UPROPERTY(BlueprintReadOnly)
 	int32 PurchaseQuantity = 0;
 
-	/** 售鱼流水对应的实物鱼实例；购买保持无效，客户端不能用它补删 Items。 */
+	/** 售鱼批次首条鱼的公开身份摘要；购买保持无效，客户端不能用它补删库存或当作整批鱼清单。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid FishInstanceId;
 
-	/** 公款余额的真实增量；购物车购买为负或 0，售鱼为正。 */
+	/** 公款余额的真实增量；购物车购买为负或 0，售鱼可为正或零，客户端只展示已提交的结果。 */
 	UPROPERTY(BlueprintReadOnly)
 	int32 WalletDelta = 0;
 };
@@ -293,35 +289,42 @@ struct FCatShopResolvedCart
 	FCatShopWalletSnapshot Wallet;
 };
 
-/** Items 已完成不可逆售鱼后提交给经济系统的入账命令。 */
+/** 一条待收购的服务器确认鱼事实；价格只由 FishDefinitionId 和实际千克重量计算，不接受客户端金额。 */
+USTRUCT(BlueprintType)
+struct FCatShopFishSaleLine
+{
+	GENERATED_BODY()
+
+	/** 正式鱼实例 ID；交易账本可保留首条摘要，库存提交和重放以整组实例事实为准。 */
+	UPROPERTY(BlueprintReadWrite)
+	FGuid FishInstanceId;
+
+	/** 正式鱼种 ID；服务以它查本地收购 DataTable 的金币系数。 */
+	UPROPERTY(BlueprintReadWrite)
+	FName FishDefinitionId = NAME_None;
+
+	/** 服务器冻结的实际重量，单位千克；逐条乘系数并四舍五入后才汇总整单收入。 */
+	UPROPERTY(BlueprintReadWrite)
+	double WeightKilograms = 0.0;
+};
+
+/** 售鱼协调器保护实物后提交的整批入账命令；经济成功才完成实物消费，失败仍可恢复原来源。 */
 USTRUCT(BlueprintType)
 struct FCatShopFishSaleCommand
 {
 	GENERATED_BODY()
 
-	/** RequestId、ExpectedRevision 与服务器身份；ExpectedRevision 仍指向团队公款版本。 */
+	/** RequestId 与服务器身份；ExpectedRevision 不参与售鱼库存或乐观并发校验。 */
 	UPROPERTY(BlueprintReadWrite)
 	FCatDomainCommandContext Context;
 
-	/** 已经由 Items 移除或预留提交的鱼实例 ID；ShopEconomy 只记录它，不再删除鱼。 */
+	/** 实物与经济提交的关联号；协调器在占用前写入并纳入重放签名，不代表库存已经不可逆扣除。 */
 	UPROPERTY(BlueprintReadWrite)
-	FGuid FishInstanceId;
+	FGuid InventoryCommitId;
 
-	/** Items 不可逆提交或交易协调记录 ID；没有该证据时不能给公款入账。 */
+	/** 本次协调器冻结的实物鱼行；服务完整重算一笔收入，任一行非法即整单拒绝，不自行访问鱼护或世界鱼。 */
 	UPROPERTY(BlueprintReadWrite)
-	FGuid ItemsCommitId;
-
-	/** 这条鱼被捕获时服务器冻结下来的重量，单位千克；它是收购价的唯一输入，必须由 Items 从鱼实例上取，不接受客户端填写。 */
-	UPROPERTY(BlueprintReadWrite)
-	double WeightKilograms = 0.0;
-
-	/**
-	 * 调用方带进来的成交价。服务器会用 WeightKilograms 自己查一次体重轴，两个值不完全相等就拒绝这笔售鱼。
-	 * 保留一个由调用方填的价格，是为了让玩家在界面上看到的报价和最终入账的钱必须是同一个数；
-	 * 它不是定价权：客户端伪造一个大数只会让整笔交易被拒，不会让公款多出一分钱。
-	 */
-	UPROPERTY(BlueprintReadWrite)
-	int32 SaleValue = 0;
+	TArray<FCatShopFishSaleLine> Fish;
 };
 
 /** 下游领域完成购买交付后的确认命令；它只推进账本状态，不重新扣公款或库存。 */
@@ -342,9 +345,6 @@ struct FCatShopDeliveryConfirmationCommand
 	UPROPERTY(BlueprintReadWrite)
 	FGuid DeliveryReceiptId;
 
-	/** 下游领域提交成功后的聚合版本；0 表示调用方没有真实提交证据。 */
-	UPROPERTY(BlueprintReadWrite)
-	int64 DeliveryRevision = 0;
 };
 
 /** 经济命令的统一返回；包含公共终态、公款快照、库存快照和首次账本记录。 */

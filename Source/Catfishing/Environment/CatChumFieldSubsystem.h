@@ -62,8 +62,8 @@ public:
 	virtual void OnWorldBeginPlay(UWorld& InWorld) override;
 	virtual void Deinitialize() override;
 	FCatPrepareChumFieldResult PrepareField(const FCatPrepareChumFieldRequest& Request);
-	// 把 Prepare 阶段预占的窝料场转入服务端活跃表；库存扣量成功后调用，返回值携带扣量后的正式库存版本并同步旧回执字段。
-	FCatPlaceChumResult ActivatePreparedFieldDeferred(FCatChumFieldCommitToken Token, int64 InventoryRevision);
+	// 把 Prepare 阶段预占的窝料场转入服务端活跃表；库存扣量成功后调用，返回值携带窝料场集合的新序号。
+	FCatPlaceChumResult ActivatePreparedFieldDeferred(FCatChumFieldCommitToken Token);
 	void PublishActivatedField(FGuid FieldId);
 	void AbortPreparedField(FCatChumFieldCommitToken Token);
 	bool TryGetTerminalResult(const FString& StableNetId, FGuid RequestId, FCatPlaceChumResult& OutResult) const;

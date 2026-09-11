@@ -113,7 +113,7 @@ def main():
         f"StrengthPerKg={asset.get_editor_property('strength_per_kilogram'):.3f} "
         f"ForcePerStrengthN={asset.get_editor_property('force_per_strength_newtons'):.3f} "
         f"CatBodyMassKg={asset.get_editor_property('cat_body_mass_kilograms'):.3f} "
-        f"HelperStrengthMultiplier={asset.get_editor_property('helper_strength_multiplier'):.3f} "
+        "ControlMode=SingleOperatorPhysicalAssistance "
         f"ForceModelMigrated={migrated} "
         f"ExhaustedCatEscapeSpeedMultiplier={asset.get_editor_property('exhausted_cat_escape_speed_multiplier'):.3f} "
         f"CatCost={asset.get_editor_property('cat_stamina_cost_per_strength_centimeter'):.6f} "

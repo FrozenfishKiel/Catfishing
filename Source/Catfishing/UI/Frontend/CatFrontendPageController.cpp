@@ -10,7 +10,7 @@
 #include "UI/Frontend/CatFrontendSettingsModel.h"
 
 // Controller 绑定流程把本地玩家、Root 和三个 Model 收束到同一个流程真相，避免页面自己缓存跨页状态：
-// 1. 先解除旧协作者，避免 LocalPlayer 或 World 更换后保留失效 Model 的通知。
+// 1. 先解除失效协作者，避免 LocalPlayer 或 World 更换后保留失效 Model 的通知。
 // 2. 保存本轮 LocalPlayer、Root 与三个专属 Model，并成对订阅各自的无参变化事件。
 // 3. 菜单作为无房间初态，随后立即消费已有快照；初始化前已加入的 Host/Client 会在首次呈现前进入 Room，不重新发起 Join。
 void UCatFrontendPageController::Initialize(ULocalPlayer* InLocalPlayer, UCatFrontendRootWidget* InRootWidget,
@@ -72,7 +72,7 @@ void UCatFrontendPageController::Shutdown()
 	LastResultSource.Reset();
 }
 
-// 开始游戏流程：先挡住正在读档、创建或已有 Online 操作/房间的重复入口，再清旧选择、确认与提示；显示存档页并刷新真实目录，不创建虚拟槽或房间。
+// 开始游戏流程：先挡住正在读档、创建或已有 Online 操作/房间的重复入口，再清失效选择、确认与提示；显示存档页并刷新真实目录，不创建虚拟槽或房间。
 void UCatFrontendPageController::RequestStartGameFlow()
 {
 	if (bWaitingForSaveLoad || bWaitingForRoomCreation) { return; }
@@ -141,7 +141,7 @@ void UCatFrontendPageController::RequestCancelExitConfirmation()
 	if (UCatFrontendRootWidget* Root = RootWidget.Get()) { Root->ShowMenu(); }
 }
 
-// 槽位选择流程：只接受当前 SaveModel 真实摘要中的稳定标识；busy、空值或旧行都会拒绝，避免异步刷新后选择串线。
+// 槽位选择流程：只接受当前 SaveModel 真实摘要中的稳定标识；busy、空值或失效行都会拒绝，避免异步刷新后选择串线。
 void UCatFrontendPageController::RequestSelectSaveSlot(const FName SlotId)
 {
 	if (!bStartGameFlowActive || bWaitingForSaveLoad || bWaitingForRoomCreation
@@ -179,8 +179,8 @@ void UCatFrontendPageController::RequestCreateSaveSlot(const FString& DisplayNam
 
 // 读档请求流程：
 // 1. 先拒绝没有正式开始入口、无选择、busy 或已有读档等待的重复输入。
-// 2. 先显示存档页再提交；受理返回后才登记等待并重读当前状态，兼容同步完成，也避免同步拒绝时消费旧载荷。
-// 3. 当前重读或后续通知必须同时确认旅行许可和活动槽匹配才创建房间，失败留存档页，调用返回后不再次强制切页。
+// 2. 先显示存档页再提交；受理返回后才登记等待并重读当前状态，允许同步完成，也避免同步拒绝时消费失效载荷。
+// 3. 当前重读或后续通知必须同时确认旅行许可和活动槽匹配才创建房间，失败留存档页，调用返回后页面状态继续由通知裁决。
 void UCatFrontendPageController::RequestLoadSelectedSaveSlot()
 {
 	UCatFrontendSaveModel* Save = SaveModel.Get();
@@ -400,7 +400,7 @@ void UCatFrontendPageController::RequestSelectAudioSettings() { if (UCatFrontend
 // 控制分类流程：取得有效 SettingsModel 后选择当前受限分类；只由 Model 通知刷新，不生成尚未接线的配置。
 void UCatFrontendPageController::RequestSelectControlsSettings() { if (UCatFrontendSettingsModel* Settings = SettingsModel.Get()) { Settings->SelectControls(); } }
 
-// 槽位读取流程：返回当前已验证选择；不再验证时返回 None 的责任由 SaveModel 变化处理承担。
+// 槽位读取流程：返回当前已验证选择；无有效选择时返回 None 的责任由 SaveModel 变化处理承担。
 FName UCatFrontendPageController::GetSelectedSlotId() const { return SelectedSlotId; }
 
 // 删除确认目标读取：这里暴露的是等待二次确认的槽位身份，Root 只能据此表现确认层，真正删除仍必须由确认意图回到 Controller。
@@ -418,7 +418,7 @@ FText UCatFrontendPageController::GetLastResultText(const UObject* ResultSource)
 // 存档变化流程：
 // 1. 只清除属于 Save 的局部提示及失效选择，不把异步 Save 文本写到当前设置页。
 // 2. 读档终态必须同时匹配入口、活动槽和旅行许可；先清等待再调用 Room，防止同步通知重复创建。
-// 3. Room 缺失或同步拒绝时先释放未入房载荷再回存档页；受理后记录 RequestId，并重新消费快照兼容同步结案。
+// 3. Room 缺失或同步拒绝时先释放未入房载荷再回存档页；受理后记录 RequestId，并重新消费快照允许同步结案。
 void UCatFrontendPageController::HandleSaveModelChanged()
 {
 	UCatFrontendSaveModel* Save = SaveModel.Get();
@@ -452,7 +452,7 @@ void UCatFrontendPageController::HandleSaveModelChanged()
 	if (BeforeCreate.SessionState != ECatOnlineSessionState::NoSession || BeforeCreate.ActiveOperation != ECatOnlineOperation::None
 		|| BeforeCreate.bIsAcceptedInvitePending)
 	{
-		// 邀请可能在磁盘读取期间先成立；不再创建第二个房间，也不释放已由 Online 接管的会话载荷。
+		// 邀请可能在磁盘读取期间先成立；已有房间和已由 Online 接管的会话载荷保持不变。
 		SetLocalResultText(Room->GetLastResultText(), Save);
 		HandleRoomModelChanged();
 		return;
@@ -591,7 +591,7 @@ void UCatFrontendPageController::HandleRoomModelChanged()
 	}
 }
 
-// 设置变化流程：仅清除属于 Settings 的旧局部校验提示，让 View 读取新正式结果；不复制 Model 文本，也不清掉其他来源的异步反馈。
+// 设置变化流程：仅清除属于 Settings 的失效局部校验提示，让 View 读取新正式结果；不复制 Model 文本，也不清掉其他来源的异步反馈。
 void UCatFrontendPageController::HandleSettingsModelChanged()
 {
 	if (LastResultSource.Get() == SettingsModel.Get()) { SetLocalResultText(FText::GetEmpty()); }

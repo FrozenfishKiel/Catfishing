@@ -6,7 +6,6 @@
 #include "Data/CatFishCatalogSettings.h"
 #include "Engine/AssetManager.h"
 #include "Engine/StreamableManager.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Inventory/CatInventorySettings.h"
@@ -49,7 +48,7 @@ namespace CatOnlineNames
 	/** AppId 480 是共享测试池；项目键把 Catfishing 会话与其他 Spacewar 开发房间隔离。 */
 	static const FName ProjectSetting(TEXT("CAT_PROJECT"));
 	static const FString ProjectId(TEXT("Catfishing"));
-	/** 协议键阻止网络合同不兼容的旧构建进入当前房间。 */
+	/** 协议键阻止网络合同不匹配的构建进入当前房间。 */
 	static const FName ProtocolSetting(TEXT("CAT_PROTOCOL_VERSION"));
 	static const FString ProtocolVersion(TEXT("1"));
 	/** Steam Lobby 元数据里的可展示名称；值由 Steam Lobby 写入，缺失时 UI 回退到 OSS 房主显示名。 */
@@ -380,7 +379,7 @@ void UCatOnlineSubsystem::StartLobbyFactPolling()
 		FTickerDelegate::CreateUObject(this, &ThisClass::TickLobbyFacts), 0.5f);
 }
 
-// Lobby 轮询停止流程：仅移除本子系统自己注册的 ticker，再清空 ready 观察值、Host 发布截止点和 Client 已提交标记；只有离开旧 Lobby 才允许下一次真实 ready 重新触发进入。
+// Lobby 轮询停止流程：仅移除本子系统自己注册的 ticker，再清空 ready 观察值、Host 发布截止点和 Client 已提交标记；只有离开失效 Lobby 才允许下一次真实 ready 重新触发进入。
 void UCatOnlineSubsystem::StopLobbyFactPolling()
 {
 	if (LobbyFactPollHandle.IsValid())
@@ -519,7 +518,7 @@ bool UCatOnlineSubsystem::IsHostGameplayWorldReadyForClientAdmission() const
 	return true;
 }
 
-// Host ready 发布流程：这里只处理 Steam Lobby 元数据写入，不再把平台元数据不可写误判为 Host 玩法地图启动失败。
+// Host ready 发布流程：这里只处理 Steam Lobby 元数据写入；平台元数据不可写只影响发布事实，不判为 Host 玩法地图启动失败。
 // 返回 false 表示当前平台无法写 CAT_GAME_READY；Host 仍留在 Lake/Session，Client 只会在前台继续等待 ready 或沿自身失败路径提示退出重加入。
 bool UCatOnlineSubsystem::PublishLobbyReady()
 {
@@ -761,15 +760,6 @@ void UCatOnlineSubsystem::CollectGameplayStartupAssetPaths(TArray<FSoftObjectPat
 		AddUniquePath(OutAssetPaths, FishCatalogSettings->ChumSaturationCurve.ToSoftObjectPath());
 	}
 
-	const UCatEquipmentSettings* EquipmentSettings = GetDefault<UCatEquipmentSettings>();
-	if (EquipmentSettings)
-	{
-		for (const TSoftObjectPtr<UCatEquipmentDefinition>& Definition : EquipmentSettings->Definitions)
-		{
-			AddUniquePath(OutAssetPaths, Definition.ToSoftObjectPath());
-		}
-	}
-
 	const UCatInventorySettings* InventorySettings = GetDefault<UCatInventorySettings>();
 	if (InventorySettings)
 	{
@@ -801,7 +791,6 @@ void UCatOnlineSubsystem::CollectGameplayStartupAssetPaths(TArray<FSoftObjectPat
 		AddUniquePath(OutAssetPaths, FishingPresentationSettings->HookActorClass.ToSoftObjectPath());
 		AddUniquePath(OutAssetPaths, FishingPresentationSettings->FishEncounterActorClass.ToSoftObjectPath());
 		AddUniquePath(OutAssetPaths, FishingPresentationSettings->CastMontage.ToSoftObjectPath());
-		AddUniquePath(OutAssetPaths, FishingPresentationSettings->LineBrokenMontage.ToSoftObjectPath());
 		AddUniquePath(OutAssetPaths, FishingPresentationSettings->CatInWaterMontage.ToSoftObjectPath());
 		AddUniquePath(OutAssetPaths, FishingPresentationSettings->ChumFieldPresentationClass.ToSoftObjectPath());
 		for (const TSoftObjectPtr<UCatRodSkinDefinition>& RodSkin : FishingPresentationSettings->RodSkinCatalog)
@@ -1059,7 +1048,7 @@ void UCatOnlineSubsystem::BeginClientGameplayPreload()
 	}
 }
 
-// 好友事实刷新流程：先让旧 opaque 句柄整体失效，再读取 OSS 已完成缓存；每个公开摘要只保留名称与 Presence，原始 FUniqueNetId 仅由私有映射持有以供邀请调用。
+// 好友事实刷新流程：先清掉 opaque 句柄映射，再读取 OSS 已完成缓存；每个公开摘要只保留名称与 Presence，原始 FUniqueNetId 仅由私有映射持有以供邀请调用。
 void UCatOnlineSubsystem::RefreshFriendSnapshotFacts()
 {
 	FriendsByHandle.Reset();
@@ -1183,7 +1172,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestInviteFriend(const FCatOnlineFriend
 	return Result;
 }
 
-// 房主开始流程：先在 Frontend 验证 Host Session、无并发操作和 Save 已加载许可；再冻结操作 epoch 并提交统一 Start 预载管线，任何同步拒绝、失败回调或旧 epoch 都不会进入 ServerTravel。
+// 房主开始流程：先在 Frontend 验证 Host Session、无并发操作和 Save 已加载许可；再冻结操作 epoch 并提交统一 Start 预载管线，任何同步拒绝、失败回调或失效 epoch 都不会进入 ServerTravel。
 FCatOnlineResult UCatOnlineSubsystem::RequestStartHostedGame()
 {
 	if (ActiveOperation != ECatOnlineOperation::None)
@@ -1234,7 +1223,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestStartHostedGame()
 	return Result;
 }
 
-// 预载完成流程：先拒绝旧 epoch、错误包名或非 Start 回调；成功时保活实际包，Host 提交 Listen 旅行，Client 复核真实 Lobby ready 后才解析 OSS 地址并 ClientTravel，失败时不旅行。
+// 预载完成流程：先拒绝失效 epoch、错误包名或非 Start 回调；成功时保活实际包，Host 提交 Listen 旅行，Client 复核真实 Lobby ready 后才解析 OSS 地址并 ClientTravel，失败时不旅行。
 void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& PackageName, UPackage* LoadedPackage,
 	const EAsyncLoadingResult::Type Result, const uint64 CallbackEpoch)
 {
@@ -1290,8 +1279,8 @@ void UCatOnlineSubsystem::HandleGameplayPackagePreloadComplete(const FName& Pack
 	}
 }
 
-// 操作开始流程：优先使用有效外部关联键，否则为本次 UI 意图生成 RequestId；若已有操作则保留旧操作的 RequestId/epoch，只返回独立同步拒绝。
-// 受理后推进 epoch 并清除上一操作的载荷释放许可；Leave 在首个 pending 快照前统一废止搜索与邀请候选，确保主动离局、Host 通知和网络失败遵守同一代际边界。
+// 操作开始流程：优先使用有效外部关联键，否则为本次 UI 意图生成 RequestId；若已有操作则保留活动操作的 RequestId/epoch，只返回独立同步拒绝。
+// 受理后推进 epoch 并清除上一操作的载荷释放许可；Leave 在首个 pending 快照前统一清除搜索与邀请候选，确保主动离局、Host 通知和网络失败遵守同一代际边界。
 FCatOnlineResult UCatOnlineSubsystem::BeginOperation(const ECatOnlineOperation Operation,
 	const ECatOnlineSessionState PendingSessionState, const FGuid CorrelationRequestId)
 {
@@ -1368,7 +1357,7 @@ FCatOnlineResult UCatOnlineSubsystem::RejectRequest(const ECatOnlineError Error)
 	return Result;
 }
 
-// Create 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再依次检查前台、SessionAccess 策略、World-aware Session 接口和兼容合同；创建平台设置时把公开容量对齐营地自动出生容量，最后绑定携带 epoch 的回调后提交平台请求。
+// Create 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再依次检查前台、SessionAccess 策略、World-aware Session 接口和匹配合同；创建平台设置时把公开容量对齐营地自动出生容量，最后绑定携带 epoch 的回调后提交平台请求。
 // UE 5.8 的 OSS 允许在 API 返回前同步触发完成委托，因此返回后必须同时复核 operation、epoch 与句柄；只有回调尚未消费本次提交时，false 才发布一次 RequestRejected。
 FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 {
@@ -1453,7 +1442,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestCreateSession()
 	return Result;
 }
 
-// Find 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再检查前台与公开搜索策略；受理新 Find 前整代清除旧搜索句柄，使 pending 快照也不暴露上一代结果。
+// Find 流程：先以 CommandAlreadyPending 拒绝活动操作且不覆盖其关联键，再检查前台与公开搜索策略；受理新 Find 前整代清除失效搜索句柄，使 pending 快照也不暴露上一代结果。
 // 提交后按 operation、epoch 与句柄识别同步完成；只有 OSS 返回 false 且回调仍未消费本代时才结为 RequestRejected。
 FCatOnlineResult UCatOnlineSubsystem::RequestFindSessions()
 {
@@ -1554,7 +1543,7 @@ FCatOnlineResult UCatOnlineSubsystem::RequestAcceptInvite(const FCatSessionInvit
 	return RequestJoinInternal(InviteResultCopy);
 }
 
-// 统一 Join 流程：前台和 SessionAccess gate 通过后检查目标兼容合同；再绑定当前 epoch 回调并提交 JoinSession，邀请与搜索从这里起没有分叉。
+// 统一 Join 流程：前台和 SessionAccess gate 通过后检查目标匹配合同；再绑定当前 epoch 回调并提交 JoinSession，邀请与搜索从这里起没有分叉。
 // OSS 可能在返回前同步完成，故返回后只有 operation、epoch 与句柄仍指向本次提交时，false 才能结束操作；回调产生的 JoinFailed 或旅行状态不得被覆盖。
 FCatOnlineResult UCatOnlineSubsystem::RequestJoinInternal(const FOnlineSessionSearchResult& SearchResult)
 {
@@ -1694,7 +1683,7 @@ bool UCatOnlineSubsystem::BeginHostLeaveSave()
 	return true;
 }
 
-// 保存完成流程：按 Save RequestId、Online epoch、活动角色和订阅句柄拒绝旧通知；匹配后先解绑，失败只发布退出错误并保留 Session。最终持久化成功才授予回前台后的载荷释放许可并提交 Run teardown，沿用同一次 Leave 关联键。
+// 保存完成流程：按 Save RequestId、Online epoch、活动角色和订阅句柄拒绝失效通知；匹配后先解绑，失败只发布退出错误并保留 Session。最终持久化成功才授予回前台后的载荷释放许可并提交 Run teardown，沿用同一次 Leave 关联键。
 void UCatOnlineSubsystem::HandleHostLeaveSaveCompleted(const FGuid SaveRequestId, const bool bSuccess, const uint64 CallbackEpoch)
 {
 	if (ActiveOperation != ECatOnlineOperation::Leave || OperationRole != ECatOnlineSessionRole::Host
@@ -1914,7 +1903,7 @@ FCatOnlineSnapshot UCatOnlineSubsystem::GetSnapshot() const
 	return Snapshot;
 }
 
-// Destroy 提交流程：补偿开始先废止所有大厅候选；再在当前 World 精确取得 Session 接口，NamedSession 已不存在时把清理视为幂等完成。
+// Destroy 提交流程：补偿开始先清除所有大厅候选；再在当前 World 精确取得 Session 接口，NamedSession 已不存在时把清理视为幂等完成。
 // 平台调用返回后复核提交时的 operation、epoch 与 Destroy 句柄，避免同步完成已经旅行或结案后再次广播 queued/失败。
 bool UCatOnlineSubsystem::BeginDestroySession(const ECatOnlineError FailureAfterDestroy)
 {
@@ -2015,7 +2004,7 @@ bool UCatOnlineSubsystem::BeginHostTravelToGameplayMap()
 	return true;
 }
 
-// Client 旅行流程：Client 已预载成功、复核 Lobby ready 并解析真实地址后临时取得本地控制器调用 ClientTravel；不保存 Controller 引用，PostLoadMap 才发布到达终态。
+// Client 旅行流程：Client 已预载成功、复核 Lobby ready 并解析真实地址后，当次取得本地控制器调用 ClientTravel；不保存 Controller 引用，PostLoadMap 才发布到达终态。
 bool UCatOnlineSubsystem::BeginClientTravelToGameplayMap(const FString& ConnectString)
 {
 	APlayerController* PlayerController = GetGameInstance() ? GetGameInstance()->GetFirstLocalPlayerController() : nullptr;
@@ -2031,7 +2020,7 @@ bool UCatOnlineSubsystem::BeginClientTravelToGameplayMap(const FString& ConnectS
 	return true;
 }
 
-// 前台预载完成流程：先拒绝旧 epoch、错误包名或无效角色；成功时保活 Frontend 包并提交真实旅行，失败时停止进度跟踪并按旅行拒绝收口。
+// 前台预载完成流程：先拒绝失效 epoch、错误包名或无效角色；成功时保活 Frontend 包并提交真实旅行，失败时停止进度跟踪并按旅行拒绝收口。
 void UCatOnlineSubsystem::HandleFrontendPackagePreloadComplete(const FName& PackageName, UPackage* LoadedPackage,
 	const EAsyncLoadingResult::Type Result, const uint64 CallbackEpoch)
 {
@@ -2195,7 +2184,7 @@ void UCatOnlineSubsystem::HandleCreateSessionComplete(const FName SessionName, c
 	FinishOperationSuccess();
 }
 
-// Find 回调流程：只消费当前 Find epoch；失败清空结果，成功为每个兼容平台结果生成随机句柄和不含原始身份的摘要，随后发布唯一终态。
+// Find 回调流程：只消费当前 Find epoch；失败清空结果，成功为每个匹配平台结果生成随机句柄和不含原始身份的摘要，随后发布唯一终态。
 void UCatOnlineSubsystem::HandleFindSessionsComplete(const bool bWasSuccessful, const uint64 CallbackEpoch)
 {
 	if (ActiveOperation != ECatOnlineOperation::Find || CallbackEpoch != OperationEpoch || !FindSessionsHandle.IsValid())
@@ -2207,7 +2196,7 @@ void UCatOnlineSubsystem::HandleFindSessionsComplete(const bool bWasSuccessful, 
 	{
 		OperationSessionInterface->ClearOnFindSessionsCompleteDelegate_Handle(FindSessionsHandle);
 	}
-	// 同步完成时先作废句柄，FindSessions 返回后的外层就不会再用同步 false 覆盖本回调的具体结果。
+	// 同步完成时先让句柄失效，FindSessions 返回后的外层就不会再用同步 false 覆盖本回调的具体结果。
 	FindSessionsHandle.Reset();
 	SearchResultsByHandle.Reset();
 	SearchSummaries.Reset();
@@ -2239,7 +2228,7 @@ void UCatOnlineSubsystem::HandleFindSessionsComplete(const bool bWasSuccessful, 
 	FinishOperationSuccess();
 }
 
-// Join 回调流程：只消费当前 Join epoch；成功后确立 Client Lobby 并立即让 Settings 恢复已保存的语音发送偏好，覆盖 Steam 本地 talker 注册的默认开启。随后废止候选并启动真实数据轮询，留在 Frontend 等 Host ready，绝不因 Join 成功自行旅行。
+// Join 回调流程：只消费当前 Join epoch；成功后确立 Client Lobby 并立即让 Settings 恢复已保存的语音发送偏好，覆盖 Steam 本地 talker 注册的默认开启。随后清除候选并启动真实数据轮询，留在 Frontend 等 Host ready，绝不因 Join 成功自行旅行。
 void UCatOnlineSubsystem::HandleJoinSessionComplete(const FName SessionName, const EOnJoinSessionCompleteResult::Type Result, const uint64 CallbackEpoch)
 {
 	if (SessionName != CatOnlineNames::GameSession || ActiveOperation != ECatOnlineOperation::Join
@@ -2290,7 +2279,7 @@ void UCatOnlineSubsystem::HandleDestroySessionComplete(const FName SessionName, 
 	{
 		OperationSessionInterface->ClearOnDestroySessionCompleteDelegate_Handle(DestroySessionHandle);
 	}
-	// DestroySession 也可能同步回调；先作废句柄，外层只能观察已推进的旅行或终态，不能再广播 queued。
+	// DestroySession 也可能同步回调；先让句柄失效，外层只能观察已推进的旅行或终态，不能再广播 queued。
 	DestroySessionHandle.Reset();
 	if (!bWasSuccessful)
 	{
@@ -2360,8 +2349,8 @@ void UCatOnlineSubsystem::HandleRunTeardownCompleted(const FCatRunTeardownResult
 	BeginDestroySession(ECatOnlineError::None);
 }
 
-// 邀请接受流程：先核对真实平台结果、单本地玩家账号与房间兼容性，再拒绝忙或已有会话，绝不替用户离房。
-// 可受理时只保存一个带固定期限和操作代际的意图并广播；下一次生命周期检查会等 Frontend/身份就绪后自动复用 RequestAcceptInvite，不再等待不存在的确认页。
+// 邀请接受流程：先核对真实平台结果、单本地玩家账号与房间匹配性，再拒绝忙或已有会话，绝不替用户离房。
+// 可受理时只保存一个带固定期限和操作代际的意图并广播；下一次生命周期检查会等 Frontend/身份就绪后自动复用 RequestAcceptInvite。
 void UCatOnlineSubsystem::HandleSessionUserInviteAccepted(const bool bWasSuccessful, const int32 ControllerId, FUniqueNetIdPtr UserId, const FOnlineSessionSearchResult& InviteResult)
 {
 	ECatOnlineError Error = ECatOnlineError::None;
@@ -2583,14 +2572,14 @@ void UCatOnlineSubsystem::HandlePostLoadMap(UWorld* LoadedWorld)
 	BroadcastSnapshot(TEXT("online_world_observed"));
 }
 
-// 旅行失败流程：先按 GameInstance 过滤并记录来源 World；Client Start 仍在 Frontend 时只结束本次进入并保留 Lobby 与真实错误，重复失败通知不再改变已提交标记；其他已建会话走 Destroy 补偿，Leave 不触发第二次旅行。
+// 旅行失败流程：先按 GameInstance 过滤并记录来源 World；Client Start 仍在 Frontend 时只结束本次进入并保留 Lobby 与真实错误，重复失败通知保持已提交标记；其他已建会话走 Destroy 补偿，Leave 不触发第二次旅行。
 void UCatOnlineSubsystem::HandleTravelFailure(UWorld* FailureWorld, const ETravelFailure::Type FailureType, const FString& Reason)
 {
 	if (!FailureWorld || FailureWorld->GetGameInstance() != GetGameInstance())
 	{
 		return;
 	}
-	// TravelFailure 已经把这次切图等待收口到失败分支；清掉 PreLoadMap 观测，避免 UI 继续显示“等待 PostLoadMap”的旧状态。
+	// TravelFailure 已经把这次切图等待收口到失败分支；清掉 PreLoadMap 观测，避免 UI 继续显示“等待 PostLoadMap”的失效状态。
 	bIsEngineLoadMapPending = false;
 	EngineLoadMapName.Reset();
 	const FString PackageName = UWorld::StripPIEPrefixFromPackageName(FailureWorld->GetPackage()->GetName(), FailureWorld->StreamingLevelsPrefix);
@@ -2804,7 +2793,7 @@ void UCatOnlineSubsystem::FinishOperationSuccess()
 }
 
 // 失败结案流程：若 Leave 已安全清会话并回 Frontend 且获释放许可，保留原错误并等待载荷释放；保存失败没有许可，Destroy/返回失败未达到终态，均不清载荷。
-// 其他情况撤销释放许可并解绑所有等待，清操作和预载、废止 epoch；Start 失败或已经回到 Frontend 的 Leave 失败都会释放玩法预热资源，不按本地时间安排兜底重试。
+// 其他情况撤销释放许可并解绑所有等待，清操作和预载、使 epoch 失效；Start 失败或已经回到 Frontend 的 Leave 失败都会释放玩法预热资源，不按本地时间安排重试。
 void UCatOnlineSubsystem::FinishOperationFailure(const ECatOnlineError Error)
 {
 	if (ActiveOperation == ECatOnlineOperation::Leave && bReleaseActiveRunOnFrontend
@@ -2886,7 +2875,7 @@ void UCatOnlineSubsystem::ClearOperationDelegates()
 	OperationSessionInterface.Reset();
 }
 
-// 邀请重绑流程：先查询当前 World 的真实接口；与现有订阅一致时不动委托，避免低频检查反复解绑。接口变化才移除旧订阅并绑定新接口；暂缺接口保持空，等待后续地图或生命周期检查恢复。
+// 邀请重绑流程：先查询当前 World 的真实接口；与现有订阅一致时不动委托，避免低频检查反复解绑。接口变化才移除失效订阅并绑定新接口；暂缺接口保持空，等待后续地图或生命周期检查恢复。
 void UCatOnlineSubsystem::RebindInviteDelegate()
 {
 	const IOnlineSessionPtr CurrentSessions = GetWorldSessionInterface();
@@ -2915,7 +2904,7 @@ void UCatOnlineSubsystem::ClearInviteDelegate()
 	InviteSessionInterface.Reset();
 }
 
-// 快照广播流程：日志关联 RequestId/epoch 和四类事实，World 只临时读取名称/NetMode；原始 StableNetId、连接字符串和平台结果不会进入日志。
+// 快照广播流程：日志关联 RequestId/epoch 和四类事实，World 只在本次广播内读取名称/NetMode；原始 StableNetId、连接字符串和平台结果不会进入日志。
 void UCatOnlineSubsystem::BroadcastSnapshot(const TCHAR* EventName)
 {
 	RefreshRoomSnapshotFacts();
@@ -2935,7 +2924,7 @@ void UCatOnlineSubsystem::BroadcastSnapshot(const TCHAR* EventName)
 	OnSnapshotChanged.Broadcast();
 }
 
-// 兼容合同检查流程：会话必须使用 Presence Lobby，并携带本项目、协议、地图标识和当前营地出生容量；AppId 480 的其他开发房间或旧 8 人房间不会进入公开句柄映射、Join 或邀请接受。
+// 匹配合同检查流程：会话必须使用 Presence Lobby，并携带本项目、协议、地图标识和当前营地出生容量；AppId 480 的其他开发房间或容量不匹配房间不会进入公开句柄映射、Join 或邀请接受。
 bool UCatOnlineSubsystem::HasCompatibleSessionSettings(const FOnlineSessionSettings& Settings) const
 {
 	FString ProjectId;

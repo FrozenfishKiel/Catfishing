@@ -25,9 +25,9 @@ void UCatShopInteractionComponent::EndPlay(const EEndPlayReason::Type EndPlayRea
 }
 
 // 打开流程：
-// 1. 关闭旧实例，避免同一个商店对象同时拥有两套 UI。
+// 1. 关闭失效实例，避免同一个商店对象同时拥有两套 UI。
 // 2. 读取拥有本组件的商店摊位和它自己的库存组件；组件挂错对象时不打开。
-// 3. 从本组件加载正式商店 WBP；缺失时 fail-closed，不再回退全局 UI Settings 或原生白盒替身。
+// 3. 从本组件加载正式商店 WBP；缺失时 fail-closed，不创建全局 UI Settings 或原生白盒替身。
 // 4. 创建 Model/PageController/View 并把摊位库存传给 Model，最后由 PageController 入视口和切输入模式。
 bool UCatShopInteractionComponent::OpenShopForPlayer(APlayerController* PlayerController)
 {
@@ -82,7 +82,7 @@ bool UCatShopInteractionComponent::OpenShopForPlayer(APlayerController* PlayerCo
 	return true;
 }
 
-// 关闭流程：先让 PageController 成对恢复输入并处理视口；组件最后只做带视口检查的兜底清理，避免警告也避免残留。
+// 关闭流程：先让 PageController 成对恢复输入并处理视口；组件最后只做带视口检查的收尾清理，避免警告也避免残留。
 void UCatShopInteractionComponent::CloseShop()
 {
 	if (ShopPageController)

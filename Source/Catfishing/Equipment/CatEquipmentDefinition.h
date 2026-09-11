@@ -1,9 +1,6 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
-#include "Environment/CatChumFieldTypes.h"
-#include "Environment/CatWaterTypes.h"
-#include "Equipment/CatEquipmentTypes.h"
 #include "Inventory/CatInventoryItemDefinition.h"
 #include "CatEquipmentDefinition.generated.h"
 
@@ -17,10 +14,10 @@ class CATFISHING_API UCatEquipmentDefinition : public UCatInventoryItemDefinitio
 	GENERATED_BODY()
 
 public:
-	/** 库存目录读取装备资产时使用 EquipmentDefinitionId；这样商店和背包不再需要知道 EquipmentSettings 的字段名。 */
+	/** 库存目录读取装备资产时使用 EquipmentDefinitionId；商店和背包只消费库存定义的稳定身份。 */
 	virtual FName GetInventoryDefinitionId() const override;
 
-	/** 库存表现读取装备资产自己的显示名；避免迁移期维护第二份 InventoryDisplayName。 */
+	/** 库存表现读取装备资产自己的显示名；背包和商店把缺省回退留在各自展示模型里。 */
 	virtual FText GetInventoryDisplayName() const override;
 
 	/** 库存详情读取装备资产自己的说明；钓鱼参数仍留给装备/钓鱼系统解释。 */
@@ -29,7 +26,7 @@ public:
 	/** 库存格读取装备资产自己的缩略图；运行实例和格子不保存表现资源。 */
 	virtual TSoftObjectPtr<UTexture2D> GetInventoryThumbnail() const override;
 
-	/** 装备资产进入库存运行目录仍沿用原运行 gate；失败时库存、商店和钓鱼都应拒绝使用。 */
+	/** 装备资产进入库存目录时调用；只有装备定义自己的正式运行能力完整时才允许入库。 */
 	virtual bool IsInventoryRuntimeDefinitionReady() const override;
 
 	/** 装备资产默认生成装备适配实例；鱼竿耐久等专属状态不进入通用库存格。 */
@@ -38,34 +35,42 @@ public:
 	/** 装备资产的库存堆叠上限；数量型默认读库存项目配置，工具和装备保持一格一件。 */
 	virtual int32 GetMaxStackCount() const override;
 
-	/** 把装备旧配置解析为库存层 Use 策略；资产仍保留旧字段，运行裁决读库存统一口径。 */
-	virtual ECatInventoryItemUseEffect GetInventoryUseEffect() const override;
-
-	/** 校验这条定义能否进入运行目录；服务器目录读取它做 fail-closed，失败会阻止装配、Use 裁决和消耗事务。 */
+	/** 校验通用身份、实例类型和全部片段；新增能力通过片段扩展，无须修改中央用途列表。 */
 	bool IsRuntimeDefinitionReady() const;
 
-	/** 统一物品入口在提交库存事务前调用的 Use 裁决；它只读取当前实例、数量和定义数据，返回值决定 Equipment 是否继续移动或扣量。 */
-	virtual ECatDomainCommandError Use(const FCatRunInventorySlot& Item, int32 Quantity) const;
+	/** 鱼竿钓具槽的稳定数据 ID；钓具选择和存档用它对齐现有 Rod 槽，不承担物品用途分类。 */
+	static FName FishingRodLoadoutSlotId();
 
-	/** 统一停止使用入口在放回活动实例前调用的 UnUse 裁决；失败会让 Equipment 保持活动记录，不按定义重新生成物品。 */
-	virtual ECatDomainCommandError UnUse(const FCatRunInventorySlot& Item) const;
+	/** 鱼饵钓具槽的稳定数据 ID；Fishing 预算和装配槽用它对齐现有 Bait 槽。 */
+	static FName FishingBaitLoadoutSlotId();
 
-	/** 这类物品 Use 成功后是否由活动记录暂存整份实例；Equipment 读取它区分部署型物品和 no-op/扣量型物品。 */
-	virtual bool KeepsInventoryInstanceWhileUsed() const override;
+	/** 鱼漂钓具槽的稳定数据 ID；抛投裁决用它对齐现有 Float 槽。 */
+	static FName FishingFloatLoadoutSlotId();
 
-	/** 这类物品 Use 成功后是否直接扣库存数量；Equipment 读取它处理已经完成玩法前置裁决的数量耗材。 */
-	virtual bool ConsumesInventoryQuantityOnUse() const override;
+	/** 抄网钓具槽的稳定数据 ID；捕获和装配校验用它对齐现有 ScoopNet 槽。 */
+	static FName ScoopNetLoadoutSlotId();
 
-	/** 读取旧装备资产声明或兼容推导出的库存影响策略；运行代码随后会映射到库存层策略，保留它只为旧资产和测试字段。 */
-	virtual ECatEquipmentUseInventoryEffect GetUseInventoryEffect() const;
+	/** 鱼竿入口要求同一份定义同时描述 Rod 槽、部署 Actor、耐久、线长和手部锚点；装配、部署、耐久和存档读模型都按这些字段组合接入。 */
+	bool CanServeFishingRod() const;
+
+	/** 鱼饵入口只接受本局数量物和咬钩倍率字段完整的定义；Fishing 使用冻结和失败预算用它排除鱼竿、鱼漂和普通部署物。 */
+	bool CanServeFishingBait() const;
+
+	/** 鱼漂入口读取射程、误差和信号稳定字段；抛投距离裁决和 Profile 装配用它排除没有这些字段语义的定义。 */
+	bool CanServeFishingFloat() const;
+
+	/** 抄网入口只需要有效范围字段；捕获命令和装配校验用它确认这份定义能进入抄取流程。 */
+	bool CanServeScoopNet() const;
+
+	/** 窝料入口要求非钓具槽、数量物和聚鱼影响配置同时成立；投放命令和调试补货按这些字段组合进入消耗流程。 */
+	bool CanServeChumPlacement() const;
+
+	/** 判断这份定义能否填入指定钓具槽；Profile、存档和读模型用它校验现有四个选择槽。 */
+	bool CanServeFishingLoadoutSlot(FName SlotId) const;
 
 	/** 装备/道具稳定 ID；Profile 选择、运行装配和鱼偏好只引用该值。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
 	FName EquipmentDefinitionId = NAME_None;
-
-	/** 功能类别；不映射数值强弱。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
-	ECatEquipmentKind Kind = ECatEquipmentKind::Unknown;
 
 	/** 跨局 Profile 选择使用的稳定槽位 ID；非装配型消耗品保持 None。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Loadout")
@@ -75,7 +80,7 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Loadout")
 	FName RequiredUnlockId = NAME_None;
 
-	/** 玩家可见名称；库存格和商店表现优先读取它，未配置时才回退到稳定 ID。 */
+	/** 玩家可见名称；库存格和商店表现读取它，空名称时显示稳定 ID。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Presentation")
 	FText DisplayName;
 
@@ -91,84 +96,20 @@ public:
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")
 	TSoftClassPtr<AActor> UseActorClass;
 
-	/** 旧装备资产声明的库存影响；当前运行会映射成 ECatInventoryItemUseEffect，字段暂留以保护 DataAsset 和历史测试。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Use")
-	ECatEquipmentUseInventoryEffect UseInventoryEffect = ECatEquipmentUseInventoryEffect::Auto;
-
 	/** 单格最大堆叠数；0 表示沿用项目默认规则，1 表示这类物品不可堆叠。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Inventory", meta = (ClampMin = "0"))
 	int32 MaxStackSize = 0;
 
-	/** 是否为本局数量型物品；Bait、Chum、Herb 会以数量栈进入随身库存，Rod、Float 和 ScoopNet 不能打开。 */
+	/** 是否为本局数量型物品；Bait、Chum 和片段型耗材会以数量栈进入随身库存，Rod、Float 和 ScoopNet 不是数量栈物品。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Consumption")
 	bool bRunConsumable = false;
 
-	/** Bait 的特殊身份标记；它只区分偏好和失败惩罚语义，不再决定该饵是否需要一局数量。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Consumption")
-	bool bSpecialBait = false;
-
-	/** 鱼竿实例耐久上限；仅新物品与营地维修补满，钓鱼磨损跨会话保留。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0", DisplayName = "鱼竿耐久上限"))
-	double MaximumRodDurability = 0.0;
-
-	/** 旧承载阈值，仅保留既有资产/蓝图字段兼容；运行就绪与搏斗不再读取。 */
-	UPROPERTY(BlueprintReadOnly, Category = "Deprecated", meta = (DeprecatedProperty,
-		DeprecationMessage = "旧承载阈值已停用；力量差由双端约束处理，鱼竿损坏由实例耐久决定。"))
-	double FishingStrength = 0.0;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0"))
-	double MaximumLineLengthCentimeters = 0.0;
-
-	/** 转矩公式使用的玩法杆长；不读取 Mesh Bounds，换皮和视觉缩放不会改变遛鱼手感。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "1.0", Units = "cm"))
-	double RodPhysicsLengthCentimeters = 200.0;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0", DisplayName = "鱼竿基础磨损每秒"))
-	double BaseDurabilityWearPerSecond = 0.0;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod", meta = (ClampMin = "0.0", DisplayName = "绷线磨损倍率"))
-	double HighTensionWearMultiplier = 0.0;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod")
-	FTransform RodTipLocalTransform = FTransform::Identity;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod")
-	FTransform StandLocalTransform = FTransform::Identity;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Rod")
-	FTransform GripLocalTransform = FTransform::Identity;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Float", meta = (ClampMin = "0.0"))
-	double MaximumCastDistanceCentimeters = 0.0;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Float", meta = (ClampMin = "0.0"))
-	double CastErrorStandardDeviationCentimeters = 0.0;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Float", meta = (ClampMin = "0.0"))
-	double MaximumCastErrorRadiusCentimeters = 0.0;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Float", meta = (ClampMin = "0.0", ClampMax = "1.0"))
-	double BiteSignalStability = 0.0;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Bait", meta = (ClampMin = "0.0"))
-	double BiteRateMultiplier = 0.0;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Bait", meta = (ClampMin = "0.0"))
-	double MinimumBiteDelayMultiplier = 0.0;
-
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Scoop", meta = (ClampMin = "0.0"))
-	double ScoopReachCentimeters = 0.0;
-
-	/** 公开的功能路线 ID；钓鱼/表现按稳定 ID消费，不比较大小。 */
+	/** 公开的功能路线 ID；钓鱼/表现按稳定 ID 消费，不比较大小。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Function")
 	FName FunctionalRouteId = NAME_None;
-
-	/** Chum 耗材提交给共享 WaterRegion 的三轴增量；其他类别必须保持零值，客户端不能覆盖该数据。 */
-	/** Chum placement 的空间影响定义；运行时冻结曲线 LUT，数量只放大三轴贡献。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Chum")
-	FCatChumInfluenceSpec ChumInfluence;
 
 	/** 数据人员对正式定义的显式运行 gate；默认关闭。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Runtime")
 	bool bEnableRuntimeDefinition = false;
+
 };

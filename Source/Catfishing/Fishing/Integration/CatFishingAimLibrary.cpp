@@ -1,4 +1,6 @@
-#include "Fishing/Integration/CatFishingAimLibrary.h"
+﻿#include "Fishing/Integration/CatFishingAimLibrary.h"
+
+#include "Equipment/Fragments/CatEquipmentFragment_Scoop.h"
 
 #include "Engine/World.h"
 #include "Environment/CatChumFieldSettings.h"
@@ -6,8 +8,8 @@
 #include "Character/CatCharacter.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Equipment/CatEquipmentDefinition.h"
-#include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/CatFishingSettings.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Kismet/GameplayStatics.h"
 #include "GameFramework/PlayerController.h"
 
@@ -164,14 +166,14 @@ bool UCatFishingAimLibrary::TryResolveScoopReach(const UCatEquipmentComponent* E
 
 	const FName SelectedScoopDefinitionId = Equipment ? Equipment->GetSnapshot().ScoopNetDefinitionId : NAME_None;
 	const UCatEquipmentDefinition* ScoopDefinition = SelectedScoopDefinitionId.IsNone() ? nullptr
-		: GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(SelectedScoopDefinitionId);
-	if (!ScoopDefinition || ScoopDefinition->Kind != ECatEquipmentKind::ScoopNet
-		|| !ScoopDefinition->IsRuntimeDefinitionReady() || ScoopDefinition->ScoopReachCentimeters <= 0.0)
+		: GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(SelectedScoopDefinitionId);
+	if (!ScoopDefinition || !ScoopDefinition->CanServeScoopNet()
+		|| !ScoopDefinition->IsRuntimeDefinitionReady() || ScoopDefinition->FindFragment<UCatEquipmentFragment_Scoop>()->ScoopReachCentimeters <= 0.0)
 	{
 		OutReachCentimeters = 0.0;
 		return false;
 	}
-	OutReachCentimeters = FMath::Min(OutReachCentimeters, ScoopDefinition->ScoopReachCentimeters);
+	OutReachCentimeters = FMath::Min(OutReachCentimeters, ScoopDefinition->FindFragment<UCatEquipmentFragment_Scoop>()->ScoopReachCentimeters);
 	return FMath::IsFinite(OutReachCentimeters) && OutReachCentimeters > 0.0;
 }
 

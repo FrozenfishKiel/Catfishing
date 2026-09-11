@@ -28,8 +28,6 @@ public:
 	bool TryGetBiteWarning(double& OutWarningSeconds) const;
 	/** 读取中性鱼饵的窝料/平均等待锚点；均值包含慢浮和预警，非法或不可达配置拒绝。 */
 	bool TryGetBiteTimingParameters(FCatFishingBiteTimingParameters& OutParameters) const;
-	/** 读取有界操作位数量与左右间距；槽位 0 从右侧开始，后续左右交替向外扩展。 */
-	bool TryGetRodOperatorLayout(int32& OutMaximumSlots, double& OutSlotSpacingCentimeters) const;
 
 	/** 读取终态快照的有界复制留存秒数；未裁或 runtime gate 关闭时清零并返回 false。 */
 	bool TryGetTerminalReplicationWindow(double& OutWindowSeconds) const;
@@ -86,13 +84,6 @@ public:
 	/** 服务器权威固定模拟步长，属于运行时技术配置，不进入策划平衡资产。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight", meta=(ClampMin="0.001")) double FixedFightStepSeconds = 0.05;
 
-	/** 一根部署鱼竿最多可占用的操作位；当前产品使用左右两位，数组/站位算法预留到更多协作者。 */
-	UPROPERTY(Config, EditAnywhere, Category="Rod|Operators", meta=(ClampMin="1", ClampMax="8"))
-	int32 MaximumRodOperatorSlots = 4;
-	/** 左右第一对站位中心之间的距离；0 表示所有槽位暂时共用原 Stand 锚点。 */
-	UPROPERTY(Config, EditAnywhere, Category="Rod|Operators", meta=(ClampMin="0", Units="cm"))
-	double RodOperatorSlotSpacingCentimeters = 140.0;
-
 	/** 手持鱼竿的服务器规范握把偏移：X=角色前方、Y=角色右侧、Z=角色中心向上。 */
 	UPROPERTY(Config, EditAnywhere, Category="Rod|HeldPose", meta=(Units="cm"))
 	FVector HeldRodGripOffsetCentimeters = FVector(35.0, 24.0, 24.0);
@@ -101,16 +92,19 @@ public:
 	double HeldRodMinimumPitchDegrees = -35.0;
 	UPROPERTY(Config, EditAnywhere, Category="Rod|HeldPose", meta=(ClampMin="-89", ClampMax="89", Units="deg"))
 	double HeldRodMaximumPitchDegrees = 70.0;
-	/** 实际鱼竿的角速度上限；猫与鱼线的净转矩连续决定本步角速度。 */
+	/** 实际鱼竿的全局角速度上限；净转矩先改变角速度，受载时允许连续减速。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="1", Units="deg/s"))
 	double HeldRodMaximumAngularSpeedDegreesPerSecond = 360.0;
-	/** 猫端瞄准施力的阻尼响应时间；净转矩抵消时自然停转，不设角度锁。 */
+	/** 猫端瞄准转矩的响应尺度；与最大转速的乘积为达到满力所需的目标偏差。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.01", Units="s"))
 	double HeldRodAngularResistanceResponseSeconds = 0.08;
+	/** 杆和握杆动作的等效转动惯性时间；保存角速度，卸载或恢复力量时连续加减速。 */
+	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.01", Units="s"))
+	double HeldRodAngularInertiaSeconds = 0.08;
 	/** 鱼游向/松绷线改变时，有向负载的指数插值时间常数；越大越柔和，不改变稳态平衡角。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0.01", Units="s"))
 	double HeldRodFishPullSmoothingSeconds = 0.15;
-	/** 鱼负载下追加的粘性阻尼倍率；3 表示满负载时以四倍阻尼减缓摆动，空载与平衡角不变。 */
+	/** 鱼负载下追加的粘性阻尼倍率；3 对应满载倍率4，实际阻尼还受空载临界阻尼下限约束。 */
 	UPROPERTY(Config, EditAnywhere, Category="Fight|HeldRod", meta=(ClampMin="0"))
 	double HeldRodLoadedAngularDampingRatio = 3.0;
 

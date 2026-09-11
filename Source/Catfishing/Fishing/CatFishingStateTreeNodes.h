@@ -2,7 +2,6 @@
 
 #include "CoreMinimal.h"
 #include "Fishing/CatFishingTypes.h"
-#include "Equipment/CatEquipmentTypes.h"
 #include "StateTreeTaskBase.h"
 #include "StateTreeConditionBase.h"
 #include "CatFishingStateTreeNodes.generated.h"
@@ -92,53 +91,6 @@ struct CATFISHING_API FCatFishingFightExchangeTask : public FStateTreeTaskCommon
 	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
 
 	/** 进入 State 时向 Session 提交力量/体力交换；任何不足返回 Failed 供资产选择失败边。 */
-	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
-};
-
-/** 失败预算 Task 参数；每个节点只能选择一个正式惩罚类别。 */
-USTRUCT()
-struct FCatFishingFailureBudgetTaskInstanceData
-{
-	GENERATED_BODY()
-
-	/** 本次失败要提交的唯一惩罚；同会话第二次提交会被 Session 拒绝。 */
-	UPROPERTY(EditAnywhere, Category = "Parameter")
-	ECatFishingFailurePenalty Penalty = ECatFishingFailurePenalty::None;
-};
-
-/** ST_FishingSession 的失败预算节点；把互斥惩罚提交给 Equipment，不同时扣饵和耐久。 */
-USTRUCT(meta = (DisplayName = "Cat Fishing Commit Failure Budget", Category = "Catfishing|Fishing"))
-struct CATFISHING_API FCatFishingFailureBudgetTask : public FStateTreeTaskCommonBase
-{
-	GENERATED_BODY()
-
-	using FInstanceDataType = FCatFishingFailureBudgetTaskInstanceData;
-
-	/** 关闭 Tick；失败预算只有单次提交点。 */
-	FCatFishingFailureBudgetTask();
-
-	/** 向 StateTree 暴露唯一失败惩罚参数，使资产只能选择一次互斥预算而不能组合双罚。 */
-	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
-
-	/** 进入 State 时提交互斥预算；成功返回 Succeeded，依赖/策略失败返回 Failed。 */
-	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
-};
-
-/** ST_FishingSession 的重试耗尽终态节点；生成一次剪影 Grant 并终止会话，不创建实物鱼。 */
-USTRUCT(meta = (DisplayName = "Cat Fishing Resolve Retry Exhausted Escape", Category = "Catfishing|Fishing"))
-struct CATFISHING_API FCatFishingResolveRetryExhaustedTask : public FStateTreeTaskCommonBase
-{
-	GENERATED_BODY()
-
-	using FInstanceDataType = FCatFishingWaitTaskInstanceData;
-
-	/** 关闭 Tick；资产进入该终态时只提交一次已裁的剪影资格。 */
-	FCatFishingResolveRetryExhaustedTask();
-
-	/** 复用无参数实例数据；重试耗尽资格由资产所选节点本身表达。 */
-	virtual const UStruct* GetInstanceDataType() const override { return FInstanceDataType::StaticStruct(); }
-
-	/** 进入 State 时调用 Session 唯一剪影终态写口；Collection 拒绝时返回 Failed 且会话保持可诊断。 */
 	virtual EStateTreeRunStatus EnterState(FStateTreeExecutionContext& Context, const FStateTreeTransitionResult& Transition) const override;
 };
 

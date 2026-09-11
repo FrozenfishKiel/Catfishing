@@ -56,8 +56,8 @@ void FCatfishingEditorModule::ShutdownModule()
 // 快捷键修复流程：
 // 1. 从 Slate 的真实命令表查找 PlayWorld.StopPlaySession，命令缺失时返回 false 交给启动重试。
 // 2. 读取当前主键和备用键；如果已经是 Shift+Escape 且没有备用键，直接视为完成。
-// 3. 写入 Shift+Escape 主键并清空备用键，防止旧的裸 Escape 仍从第二快捷键停止 PIE。
-// 4. 调用 SaveInputBindings 写入 UE 实际读取的 EditorKeyBindings.ini，并记录旧值与目标文件路径。
+// 3. 写入 Shift+Escape 主键并清空备用键，防止原有的裸 Escape 仍从第二快捷键停止 PIE。
+// 4. 调用 SaveInputBindings 写入 UE 实际读取的 EditorKeyBindings.ini，并记录变更前值与目标文件路径。
 bool FCatfishingEditorModule::ApplyPlayWorldStopShortcut()
 {
 	using namespace UE::CatfishingEditor::Private;

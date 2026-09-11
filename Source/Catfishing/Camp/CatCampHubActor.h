@@ -1,8 +1,8 @@
 #pragma once
 
 #include "CoreMinimal.h"
+#include "Framework/Core/CatDomainCommandTypes.h"
 #include "GameFramework/PlayerStart.h"
-#include "Items/CatItemTypes.h"
 #include "CatCampHubActor.generated.h"
 
 class ACatCharacter;
@@ -11,7 +11,7 @@ class ACatCampInventoryActor;
 class APawn;
 class USceneComponent;
 
-/** 篝火公共回看请求；它只启动可跳过表现，不参与普通夜晚 ready 或 StateTree 转移。 */
+/** 篝火公共回看请求；它只启动可跳过表现，不参与普通夜晚供品结算或 StateTree 转移。 */
 DECLARE_MULTICAST_DELEGATE_OneParam(FCatCampfirePlaybackRequested, FGuid);
 
 /** 玩法世界唯一固定营地宿主；同时承载玩家出生点语义、休息、救援落点、共享鱼缸引用和可选回看，不支持建造/装饰/搬迁。 */
@@ -33,11 +33,12 @@ public:
 	/** 伙伴把倒地目标送到固定 RescuePoint；Teleport 成功后才提交 CarriedToCamp 事实。 */
 	FCatDomainCommandResult RescueToCamp(AController* HelpingController, ACatCharacter* TargetCharacter, FGuid RequestId);
 
-	/** 读取固定共享鱼缸当前快照；UI 只用它投影共享容器，不获得鱼缸写权限。 */
-	bool TryGetSharedFishTankSnapshot(FCatContainerSnapshot& OutSnapshot) const;
-
 	/** 判断传入鱼缸是否就是本营地显式关联的共享鱼缸；交互组件只用它解析 Camp 上下文，不取得写权限。 */
 	bool IsSharedFishTank(const ACatFishTankActor* Candidate) const;
+
+	/** 信息提供者查询关卡显式关联的共享鱼缸；有效引用直接返回，失效时返回空以显示关联未就绪，不扫描世界补配对象。 */
+	UFUNCTION(BlueprintPure, Category="Camp")
+	ACatFishTankActor* ResolveSharedFishTank() const;
 
 	/** 商店发货询问本营地能否提供公共仓库；PlayerController 全图扫描命中后调用它，空值表示本营地当前不能接收购买物。 */
 	ACatCampInventoryActor* ResolvePublicInventoryForShopOrder() const;
@@ -49,7 +50,7 @@ public:
 	UFUNCTION(NetMulticast, Reliable)
 	void MulticastCampfirePlaybackRequested(FGuid RequestId);
 
-	/** 只读判断 Controller 当前 Character 是否位于固定营地交互范围；供修竿等其他领域适配，不产生回看或休息副作用。 */
+	/** 只读判断 Controller 当前 Character 是否位于固定营地交互范围；供需要营地位置前提的领域调用，不产生回看或休息副作用。 */
 	bool IsControllerInCamp(AController* Controller) const;
 
 	/** 篝火表现订阅入口；表现结束/跳过无需回写 Run。 */
@@ -67,17 +68,17 @@ private:
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<USceneComponent> RescuePoint;
 
-	/** 关卡显式关联的共享鱼缸；空引用时外部容器上下文 fail-closed，不在命令中临时 Spawn。 */
+	/** 关卡显式关联的共享鱼缸；空引用时外部容器上下文 fail-closed，不在命令执行中 Spawn。 */
 	UPROPERTY(EditInstanceOnly, Category = "Camp")
 	TObjectPtr<ACatFishTankActor> SharedFishTank;
 
-	/** 关卡显式关联的营地公共仓库；它接收商店购买物，并作为玩家取用公共装备的唯一营地入口，不由商店摊位配置。 */
+	/** 关卡显式关联的营地公共仓库；它接收商店购买物，并作为玩家移动公共装备的唯一营地入口，不由商店摊位配置。 */
 	UPROPERTY(EditInstanceOnly, Category = "Camp")
 	TObjectPtr<ACatCampInventoryActor> PublicInventory;
 
 	/** 救援者身份、命令类别与 RequestId 到首次成功终态；网络重试先重放，避免重复 Teleport 同一倒地目标。 */
 	TMap<FString, FCatDomainCommandResult> RescueTerminalCache;
 
-	/** 玩家身份+RequestId 到篝火回看首次终态；成功重试只重放结果，不再次广播表现或创建成像计划。 */
+	/** 玩家身份+RequestId 到篝火回看首次终态；成功重试只重放结果，不重复广播表现或创建成像计划。 */
 	TMap<FString, FCatDomainCommandResult> CampfirePlaybackTerminalCache;
 };

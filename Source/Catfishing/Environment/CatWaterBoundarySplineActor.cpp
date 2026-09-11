@@ -203,7 +203,7 @@ void ACatWaterBoundarySplineActor::PostEditChangeProperty(FPropertyChangedEvent&
 {
 	Super::PostEditChangeProperty(PropertyChangedEvent);
 	// 蓝图 compile-on-load / 重实例化会以空 Property 触发本回调；那不是真实编辑，
-	// 无条件作废会导致每次编辑器重启都清掉 Region 的烘焙数据。只有携带具体属性的编辑才作废。
+	// 无条件清理会导致每次编辑器重启都清掉 Region 的烘焙数据。只有携带具体属性的编辑才让烘焙几何失效。
 	if (PropertyChangedEvent.Property && OwningRegion)
 	{
 		OwningRegion->InvalidateBakedGeometry();

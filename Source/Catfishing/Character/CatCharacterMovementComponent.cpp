@@ -1,303 +1,363 @@
 #include "Character/CatCharacterMovementComponent.h"
+#include "AbilitySystem/Config/CatPhysicalEffortSettings.h"
+#include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
 
-#include "GameFramework/Character.h"
-#include "Components/PrimitiveComponent.h"
-#include "Engine/World.h"
-#include "Logging/CatLog.h"
-#include "Fishing/Debug/CatFishingMotionDiagnostics.h"
-#include "Fishing/Simulation/CatFishingGroupModel.h"
+#include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Interaction/Grab/CatLightPropComponent.h"
+#include "Interaction/CatModelContactComponent.h"
+#include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Components/CapsuleComponent.h"
+#include "EngineUtils.h"
 
 namespace
 {
-	class FCatNetworkPredictionDataClient : public FNetworkPredictionData_Client_Character
-	{
-	public:
-		explicit FCatNetworkPredictionDataClient(const UCharacterMovementComponent& Movement)
-			: FNetworkPredictionData_Client_Character(Movement) {}
-		virtual FSavedMovePtr AllocateNewMove() override { return FSavedMovePtr(new FCatSavedMove()); }
-	};
+// Actual grounded CMC and frozen endpoint prediction consume the same finite force law.
+FVector IntegrateGroundVelocity(FCatBodyDriveSample& Drive, const FVector& Position, FVector Velocity,
+    FVector ExternalForce, double Mass, double ResistanceNewtons, double Dt)
+{
+    ExternalForce.Z = 0;
+    const bool bSupportOnly = Drive.bLocomotion && (Drive.bFishing || Drive.bCooperative) && Drive.MoveIntent.IsNearlyZero();
+    if (!bSupportOnly) ExternalForce += UCatPhysicalBodyComponent::ComputeDriveForce(Drive,Position,Velocity,Mass,Dt);
+    if (!Drive.bLocomotion) ExternalForce -= FVector(Velocity.X,Velocity.Y,0)*Mass*FMath::Min(8.0,1.0/Dt);
+    Velocity += ExternalForce*(Dt/Mass);
+    // 4c5e8cd: passive stance can stop at zero, but can never spring toward an old position.
+    const double Speed = Velocity.Size2D();
+    const double Support = bSupportOnly && (!Drive.bPassiveBodyContact || !Drive.bBodyContactDriven) ? Drive.MaxForce : 0;
+    const double Reduction = FMath::Min(Speed,(ResistanceNewtons*100+Support)*Dt/Mass);
+    if (Speed > UE_DOUBLE_SMALL_NUMBER) { Velocity.X*=1-Reduction/Speed; Velocity.Y*=1-Reduction/Speed; }
+    return Velocity;
+}
 }
 
-void UCatCharacterMovementComponent::SetExternalTraction(const UObject* Source, const FCatExternalTractionInput& Input)
+UCatCharacterMovementComponent::UCatCharacterMovementComponent()
 {
-	if (!Source || Input.Direction.ContainsNaN() || Input.GroupDesiredVelocity.ContainsNaN()
-		|| Input.GroupLateralAcceleration.ContainsNaN() || Input.FormationCorrectionVelocity.ContainsNaN()
-		|| (Input.bGroupDriven && (!Input.SourceId.IsValid() || Input.RosterVersion == 0
-			|| Input.ControlEpoch == 0 || Input.MembershipEpoch == 0))
-		|| !FMath::IsFinite(Input.AccelerationCentimetersPerSecondSquared) || Input.AccelerationCentimetersPerSecondSquared < 0.0
-		|| !FMath::IsFinite(Input.BrakingDecelerationCentimetersPerSecondSquared) || Input.BrakingDecelerationCentimetersPerSecondSquared < 0.0
-		|| !FMath::IsFinite(Input.SpeedLimitCentimetersPerSecond) || Input.SpeedLimitCentimetersPerSecond < 0.0)
+	bRunPhysicsWithNoController = true;
+	bEnablePhysicsInteraction = false;
+	bOrientRotationToMovement = false;
+	bUseControllerDesiredRotation = false;
+	Mass = 4.0f;
+	MaxAcceleration = BrakingDecelerationWalking = 6000.0f;
+}
+
+void UCatCharacterMovementComponent::AdvanceFromAuthority(float DeltaSeconds)
+{
+	auto* Cat = Cast<ACatCharacter>(CharacterOwner);
+	auto* Body = Cat ? Cat->GetPhysicalBodyComponent() : nullptr;
+	if (!Body || !Cat->HasAuthority() || DeltaSeconds <= 0) return;
+	const auto EffortDrive = Body->CaptureDriveSample();
+	const FVector StartPosition = Cat->GetActorLocation();
+	const FVector StartCorrection = TotalMotionCorrection;
+	const uint32 StartResetEpoch = Body->GetResetEpoch();
+	const bool bStartedGrounded = IsMovingOnGround();
+	FVector IntendedDisplacement = EffortDrive.MoveIntent * EffortDrive.MaxSpeed * DeltaSeconds;
+	if (EffortDrive.bCooperative && !EffortDrive.bPassiveBodyContact && EffortDrive.MoveIntent.IsNearlyZero() && EffortDrive.MaxForce > 0)
 	{
-		UE_LOG(LogCatFishing, Warning,
-			TEXT("Event=fishing_group_traction_rejected RodActorId=%s World=%s NetMode=%d Authority=%d LocalRole=%d RosterVersion=%u ControlEpoch=%u MembershipEpoch=%u Result=InvalidInput"),
-			*Input.SourceId.ToString(), *GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE,
-			CharacterOwner && CharacterOwner->HasAuthority(), CharacterOwner ? static_cast<int32>(CharacterOwner->GetLocalRole()) : INDEX_NONE,
-			Input.RosterVersion, Input.ControlEpoch, Input.MembershipEpoch);
-		ClearExternalTraction(Source);
-		return;
+		// A stance actively opposes the load and existing drift. Convert relative effort to an
+		// equivalent directional intent; no load and no drift produce no fictitious support bill.
+		FVector Reaction = -Body->GetExternalForceFromAuthority() - Velocity * (FMath::Max(1.0f, Mass) / DeltaSeconds);
+		Reaction.Z = 0;
+		const double Effort = FMath::Clamp(Reaction.Size() / EffortDrive.MaxForce, 0.0, 1.0);
+		IntendedDisplacement = Reaction.GetSafeNormal() * Effort
+			* GetDefault<UCatPhysicalEffortSettings>()->SupportReferenceSpeedCmS * DeltaSeconds;
 	}
-	if (TractionSource.IsValid() && TractionSource.Get() != Source)
-	{
-		if (UWorld* World = GetWorld(); World && World->GetTimeSeconds() >= NextSourceConflictDiagnosticSeconds)
+	MaxWalkSpeed = Body->MaxMovementSpeedCmS;
+	JumpZVelocity = Body->JumpSpeedCmS;
+	GravityScale = Body->GravityScale;
+	Acceleration = Body->GetMoveIntent() * GetMaxAcceleration();
+	// 4c5e8cd: continuous traction uses the same small steps even on slow frames.
+    MovementExternalForce = QueuedExternalImpulse / DeltaSeconds;
+    QueuedExternalImpulse = FVector::ZeroVector;
+    MovementExternalForce.Z += Body->GetVerticalGripForceFromAuthority();
+    if (IsMovingOnGround() && MovementExternalForce.Z > -GetGravityZ()*FMath::Max(1.0f,Mass))
+    {
+        SetMovementMode(MOVE_Falling);
+        Body->NotifyGripLiftFromAuthority();
+    }
+    const bool bTraction = Body->HasFishingMotor() || Body->CaptureDriveSample().bConnected || !MovementExternalForce.IsNearlyZero();
+    const float Step = bTraction ? FMath::Min(MaxSimulationTimeStep, 1.0f / 120.0f) : MaxSimulationTimeStep;
+    TGuardValue<float> StepGuard(MaxSimulationTimeStep, Step);
+    TGuardValue<int32> IterationGuard(MaxSimulationIterations, bTraction
+        ? FMath::Max(MaxSimulationIterations, FMath::CeilToInt(FMath::Min(DeltaSeconds, .25f) / Step) + 1) : MaxSimulationIterations);
+    Super::PerformMovement(DeltaSeconds);
+    const FVector BeforePeerCorrection = TotalMotionCorrection;
+    ResolveModelPeerPenetration();
+    const FVector PeerCorrection = TotalMotionCorrection - BeforePeerCorrection;
+    MovementExternalForce = FVector::ZeroVector;
+	bQueuedExternalLoad = false;
+	if (auto* Effort = Cat->FindComponentByClass<UCatPhysicalEffortComponent>())
+		if (StartResetEpoch == Body->GetResetEpoch())
 		{
-			UE_LOG(LogCatFishing, Warning,
-				TEXT("Event=fishing_group_traction_source_conflict RodActorId=%s BoundRodActorId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Result=KeepCurrentSource"),
-				*Input.SourceId.ToString(), *LiveTraction.SourceId.ToString(), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
-				CharacterOwner && CharacterOwner->HasAuthority(), CharacterOwner ? static_cast<int32>(CharacterOwner->GetLocalRole()) : INDEX_NONE);
-			NextSourceConflictDiagnosticSeconds = World->GetTimeSeconds() + 0.5;
+			FVector ActualDisplacement = Cat->GetActorLocation() - StartPosition - (TotalMotionCorrection - StartCorrection);
+            // Reverse separation cancels an attempted step. Removing that correction must
+            // not credit the rejected step as successful progress (for example against a wall).
+            const FVector IntentDirection = IntendedDisplacement.GetSafeNormal2D();
+            ActualDisplacement += IntentDirection * FMath::Min(0.0, FVector::DotProduct(PeerCorrection,IntentDirection));
+			ActualDisplacement.Z = 0;
+			Effort->SettleMovementFromAuthority(EffortDrive, IntendedDisplacement, ActualDisplacement, DeltaSeconds, bStartedGrounded);
 		}
-		return;
-	}
-	TractionSource = Source;
-	LiveTraction = Input;
-	LiveTraction.Direction = Input.Direction.GetSafeNormal2D();
-	LiveTraction.bActive &= !LiveTraction.Direction.IsNearlyZero();
 }
 
-FVector UCatCharacterMovementComponent::GetAcceptedFishingMoveIntent() const
+void UCatCharacterMovementComponent::CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration)
 {
-	return GetMaxAcceleration() > UE_SMALL_NUMBER
-		? (Acceleration / GetMaxAcceleration()).GetClampedToMaxSize(1.0) : FVector::ZeroVector;
+	const auto* Cat = Cast<ACatCharacter>(CharacterOwner);
+	auto* Body = Cat ? Cat->GetPhysicalBodyComponent() : nullptr;
+	if (!Body || DeltaTime <= 0) return;
+	// Grounded voluntary braking and external traction share one finite force budget.
+	// Vertical force is integrated only by NewFallVelocity; PhysFalling restores CalcVelocity's Z.
+	FVector Force = Body->GetExternalForceFromAuthority();
+	Force += MovementExternalForce;
+	Force.Z = 0;
+    if (IsMovingOnGround())
+    {
+        auto Drive = Body->CaptureDriveSample();
+        const double Resistance = FMath::IsFinite(GroundResistanceNewtons) ? FMath::Max(0.0f,GroundResistanceNewtons) : .8;
+        Velocity = IntegrateGroundVelocity(Drive,CharacterOwner->GetActorLocation(),Velocity,Force,FMath::Max(1.0f,Mass),Resistance,DeltaTime);
+    }
+    else Velocity += Force*(DeltaTime/FMath::Max(1.0f,Mass));
 }
 
-void UCatCharacterMovementComponent::ClearExternalTraction(const UObject* Source)
+FVector UCatCharacterMovementComponent::NewFallVelocity(const FVector& InitialVelocity, const FVector& Gravity, float DeltaTime) const
 {
-	if (TractionSource.Get() != Source) return;
-	TractionSource.Reset();
-	LiveTraction = FCatExternalTractionInput{};
-	MovementTraction = FCatExternalTractionInput{};
-	bUseSavedTraction = false;
+    return Super::NewFallVelocity(InitialVelocity, Gravity + FVector(0,0,MovementExternalForce.Z/FMath::Max(1.0f,Mass)), DeltaTime);
 }
 
-void UCatCharacterMovementComponent::RestoreTractionForSavedMove(const FCatExternalTractionInput& Input)
+void UCatCharacterMovementComponent::PhysicsRotation(float DeltaTime)
 {
-	MovementTraction = Input;
-	bUseSavedTraction = true;
+	const auto* Cat = Cast<ACatCharacter>(CharacterOwner);
+	const auto* Body = Cat ? Cat->GetPhysicalBodyComponent() : nullptr;
+	if (!Body || !UpdatedComponent) return;
+	const double Yaw = FMath::FixedTurn(UpdatedComponent->GetComponentRotation().Yaw,
+		Body->GetFacingYawDegrees(), 720.0 * FMath::Max(0.0f, DeltaTime));
+	MoveUpdatedComponent(FVector::ZeroVector, FRotator(0,Yaw,0), true);
 }
 
-double UCatCharacterMovementComponent::GetExternalTractionTravelLimit(const FVector& Direction, const double MaximumDistance) const
+bool UCatCharacterMovementComponent::IsWalkable(const FHitResult& Hit) const
 {
-	if (!HasValidData() || !UpdatedPrimitive || !GetWorld() || MovementMode == MOVE_None || UpdatedPrimitive->IsSimulatingPhysics()
-		|| HasAnimRootMotion() || CurrentRootMotion.HasOverrideVelocity()
-		|| !FMath::IsFinite(MaximumDistance) || MaximumDistance <= 0.0) return 0.0;
-	const FVector Axis = ConstrainDirectionToPlane(Direction.GetSafeNormal2D());
-	if (Axis.IsNearlyZero()) return 0.0;
-	FCollisionQueryParams Params(SCENE_QUERY_STAT(FishingTraction), false, CharacterOwner);
-	FCollisionResponseParams Response;
-	InitCollisionParams(Params, Response);
-	FHitResult Hit;
-	const FVector Start = UpdatedComponent->GetComponentLocation();
-	const bool bBlocked = GetWorld()->SweepSingleByChannel(Hit, Start, Start + Axis * MaximumDistance,
-		UpdatedComponent->GetComponentQuat(), UpdatedPrimitive->GetCollisionObjectType(),
-		UpdatedPrimitive->GetCollisionShape(), Params, Response);
-	// 可行走地面仍由 CMC 的坡面/台阶逻辑处理；探测绝不移动角色或触发重叠事件。
-	if (bBlocked && !IsWalkable(Hit) && FVector::DotProduct(Hit.Normal, Axis) < -0.001)
-		return FMath::Max(0.0, MaximumDistance * Hit.Time - 0.1);
-	return MaximumDistance;
+	if (Cast<ACatCharacter>(Hit.GetActor()) || UCatLightPropComponent::FindFor(Hit.GetComponent())) return false;
+	return Super::IsWalkable(Hit);
 }
 
-FNetworkPredictionData_Client* UCatCharacterMovementComponent::GetPredictionData_Client() const
+void UCatCharacterMovementComponent::InitCollisionParams(FCollisionQueryParams& OutParams, FCollisionResponseParams& OutResponseParam) const
 {
-	if (!ClientPredictionData)
+	Super::InitCollisionParams(OutParams, OutResponseParam);
+	if (const auto* Cat = Cast<ACatCharacter>(CharacterOwner)) Cat->GetPhysicalBodyComponent()->AppendSupportQueryIgnores(OutParams);
+	if (UCatModelContactComponent::UsesModelContacts(CharacterOwner))
+		for (TActorIterator<ACatCharacter> It(GetWorld()); It; ++It)
+			if (*It != CharacterOwner && UCatModelContactComponent::UsesModelContacts(*It)) OutParams.AddIgnoredActor(*It);
+}
+
+void UCatCharacterMovementComponent::StopMovementImmediately()
+{
+	Super::StopMovementImmediately();
+	ClearQueuedExternalImpulse();
+	if (auto* Cat = Cast<ACatCharacter>(CharacterOwner)) Cat->GetPhysicalBodyComponent()->ClearControlIntent(TEXT("MovementStopped"));
+}
+
+void UCatCharacterMovementComponent::UpdatePeerPushContacts()
+{
+	auto* Cat = Cast<ACatCharacter>(CharacterOwner);
+	if (!Cat || !Cat->HasAuthority()) return;
+	auto* Body = Cat->GetPhysicalBodyComponent();
+	const auto* Capsule = Cat->GetCapsuleComponent();
+	for (TActorIterator<ACatCharacter> It(GetWorld()); It; ++It)
 	{
-		const_cast<UCatCharacterMovementComponent*>(this)->ClientPredictionData = new FCatNetworkPredictionDataClient(*this);
-	}
-	return ClientPredictionData;
-}
-
-void UCatCharacterMovementComponent::PerformMovement(const float DeltaSeconds)
-{
-	const bool bReplaying = bUseSavedTraction;
-	if (!bReplaying) MovementTraction = TractionSource.IsValid() ? LiveTraction : FCatExternalTractionInput{};
-	else if ((MovementTraction.bGroupDriven || LiveTraction.bGroupDriven) && (!TractionSource.IsValid()
-		|| MovementTraction.SourceId != LiveTraction.SourceId
-		|| MovementTraction.bGroupDriven != LiveTraction.bGroupDriven
-		|| MovementTraction.bWaitingForGroupSolve != LiveTraction.bWaitingForGroupSolve
-		|| MovementTraction.RosterVersion != LiveTraction.RosterVersion
-		|| MovementTraction.ControlEpoch != LiveTraction.ControlEpoch
-		|| MovementTraction.AimInputEpoch != LiveTraction.AimInputEpoch
-		|| MovementTraction.MembershipEpoch != LiveTraction.MembershipEpoch))
-	{
-		// 离队后或重新加入后的旧 SavedMove 不能重新绑定上一轮握持。
-		UWorld* World = GetWorld();
-		if (World && World->GetTimeSeconds() >= NextReplayDiagnosticSeconds)
+		auto* Other = *It;
+		if (Other == Cat || Other->GetUniqueID() < Cat->GetUniqueID()) continue;
+		auto* OtherBody = Other->GetPhysicalBodyComponent();
+		auto* OtherMovement = Cast<UCatCharacterMovementComponent>(Other->GetCharacterMovement());
+		Body->ClearExternalForce(OtherMovement);
+		OtherBody->ClearExternalForce(this);
+		if (!OtherBody->GetBody()) continue;
+		FVector Normal;
+		double Penetration = 0;
+		const auto* Model = Cat->FindComponentByClass<UCatModelContactComponent>();
+		const auto* OtherModel = Other->FindComponentByClass<UCatModelContactComponent>();
+		if (Model && OtherModel && Model->HasModelContacts() && OtherModel->HasModelContacts())
 		{
-			UE_LOG(LogCatFishing, Log,
-				TEXT("Event=fishing_group_saved_move_rejected RodActorId=%s World=%s NetMode=%d Authority=%d LocalRole=%d SavedRosterVersion=%u RosterVersion=%u SavedControlEpoch=%u ControlEpoch=%u SavedMembershipEpoch=%u MembershipEpoch=%u SavedAimInputEpoch=%u AimInputEpoch=%u Waiting=%d Result=UseCurrentMovementDomain"),
-				*MovementTraction.SourceId.ToString(), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
-				CharacterOwner && CharacterOwner->HasAuthority(), CharacterOwner ? static_cast<int32>(CharacterOwner->GetLocalRole()) : INDEX_NONE,
-				MovementTraction.RosterVersion, LiveTraction.RosterVersion, MovementTraction.ControlEpoch, LiveTraction.ControlEpoch,
-				MovementTraction.MembershipEpoch, LiveTraction.MembershipEpoch, MovementTraction.AimInputEpoch, LiveTraction.AimInputEpoch,
-				LiveTraction.bWaitingForGroupSolve);
-			NextReplayDiagnosticSeconds = World->GetTimeSeconds() + 0.5;
-		}
-		MovementTraction = TractionSource.IsValid() ? LiveTraction : FCatExternalTractionInput{};
-	}
-	const FVector Before = UpdatedComponent ? UpdatedComponent->GetComponentLocation() : FVector::ZeroVector;
-	const FVector VelocityBefore = Velocity;
-	{
-		// 牵引与固定步张力互相反馈；低帧率不能把整段外力一次积分成大位移。
-		// 实时移动和 SavedMove 共用相同的 CMC 子步规则，碰撞/滑动仍由引擎执行。
-		const bool bTractionMovement = MovementTraction.bActive || MovementTraction.bGroupDriven;
-		const float TractionStep = bTractionMovement ? FMath::Min(MaxSimulationTimeStep, 1.0f / 120.0f) : MaxSimulationTimeStep;
-		TGuardValue<float> StepGuard(MaxSimulationTimeStep, TractionStep);
-		TGuardValue<int32> IterationGuard(MaxSimulationIterations, bTractionMovement
-			? FMath::Max(MaxSimulationIterations, FMath::CeilToInt(FMath::Clamp(DeltaSeconds, 0.0f, 0.25f) / TractionStep) + 1)
-			: MaxSimulationIterations);
-		Super::PerformMovement(DeltaSeconds);
-	}
-	if (MovementTraction.bGroupDriven && !MovementTraction.bWaitingForGroupSolve && DeltaSeconds > 0.0f && HasValidData()
-		&& !HasAnimRootMotion() && !CurrentRootMotion.HasOverrideVelocity() && MovementMode != MOVE_None)
-	{
-		// 队形误差是一次受碰撞限制的位置修正，不是动力速度。若加入 Velocity，CMC 多子步
-		// 会把前一步修正再次积分成惯性，站位误差固定时也会越走越快。
-		FVector Correction = ConstrainDirectionToPlane(MovementTraction.FormationCorrectionVelocity);
-		Correction.Z = 0.0;
-		const FVector CorrectionDelta = Correction * DeltaSeconds;
-		if (!CorrectionDelta.IsNearlyZero())
-		{
-			FHitResult Hit;
-			SafeMoveUpdatedComponent(CorrectionDelta, UpdatedComponent->GetComponentQuat(), true, Hit);
-			if (Hit.IsValidBlockingHit())
-			{
-				SlideAlongSurface(CorrectionDelta, 1.0f - Hit.Time, Hit.Normal, Hit, true);
-			}
-		}
-	}
-	bUseSavedTraction = false;
-	UWorld* World = GetWorld();
-	if (World && CharacterOwner && ((!bReplaying && (bLastTractionActive != MovementTraction.bActive
-		|| (MovementTraction.bActive && World->GetTimeSeconds() >= NextTractionDiagnosticSeconds)))
-		|| (bReplaying && CatFishingMotionDiagnostics::IsDetailedEnabled() && MovementTraction.bActive
-			&& World->GetTimeSeconds() >= NextReplayDiagnosticSeconds)))
-	{
-		// 来源已清除的退出帧仍关联最后一根竿，仅用于日志，不恢复任何旧牵引。
-		const FGuid DiagnosticSourceId = MovementTraction.SourceId.IsValid()
-			? MovementTraction.SourceId : LastTractionDiagnosticSourceId;
-		UE_LOG(LogCatFishing, Log,
-			TEXT("Event=fishing_carrier_movement_sample RodActorId=%s Holder=%s Active=%s AccelerationCmS2=%.3f BrakingDecelerationCmS2=%.3f "
-				"Velocity=%s ActualDelta=%s MovementMode=%d World=%s NetMode=%d Authority=%s LocalRole=%d Model=CMCForceIntegration "
-				"Frame=%llu WorldTime=%.6f DeltaSeconds=%.6f Replay=%s VelocityBefore=%s LocationBefore=%s InputAccelerationCmS2=%s "
-				"PullDirection=%s SpeedLimitCmS=%.3f GroupDriven=%d RosterVersion=%u ControlEpoch=%u MembershipEpoch=%u FormationCorrectionCmS=%s"),
-			*DiagnosticSourceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(CharacterOwner), MovementTraction.bActive ? TEXT("true") : TEXT("false"),
-			MovementTraction.AccelerationCentimetersPerSecondSquared, MovementTraction.BrakingDecelerationCentimetersPerSecondSquared, *Velocity.ToCompactString(),
-			*(UpdatedComponent ? UpdatedComponent->GetComponentLocation() - Before : FVector::ZeroVector).ToCompactString(),
-			static_cast<int32>(MovementMode), *GetNameSafe(World), static_cast<int32>(World->GetNetMode()),
-			CharacterOwner->HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(CharacterOwner->GetLocalRole()),
-			GFrameCounter, World->GetTimeSeconds(), DeltaSeconds, bReplaying ? TEXT("true") : TEXT("false"),
-			*VelocityBefore.ToCompactString(), *Before.ToCompactString(), *Acceleration.ToCompactString(),
-			*MovementTraction.Direction.ToCompactString(), MovementTraction.SpeedLimitCentimetersPerSecond,
-			MovementTraction.bGroupDriven, MovementTraction.RosterVersion, MovementTraction.ControlEpoch, MovementTraction.MembershipEpoch,
-			*MovementTraction.FormationCorrectionVelocity.ToCompactString());
-		if (bReplaying)
-		{
-			NextReplayDiagnosticSeconds = World->GetTimeSeconds() + CatFishingMotionDiagnostics::SampleIntervalSeconds();
+			if (!Model->FindPeerContact(OtherModel, Normal, Penetration, 3.0)) continue;
 		}
 		else
 		{
-			LastTractionDiagnosticSourceId = DiagnosticSourceId;
-			bLastTractionActive = MovementTraction.bActive;
-			NextTractionDiagnosticSeconds = World->GetTimeSeconds() + CatFishingMotionDiagnostics::SampleIntervalSeconds();
+			// Native test characters without a mesh retain the existing capsule contact contract.
+			const FVector Difference = Other->GetActorLocation() - Cat->GetActorLocation();
+			const double Radius = Capsule->GetScaledCapsuleRadius() + Other->GetCapsuleComponent()->GetScaledCapsuleRadius();
+			if (Difference.Size2D() > Radius + 3.0 || FMath::Abs(Difference.Z) >
+				Capsule->GetScaledCapsuleHalfHeight() + Other->GetCapsuleComponent()->GetScaledCapsuleHalfHeight() - Radius) continue;
+			Normal = Difference.GetSafeNormal2D();
+			Penetration = FMath::Max(0.0, Radius - Difference.Size2D());
 		}
-	}
-}
-
-void UCatCharacterMovementComponent::CalcVelocity(const float DeltaTime, const float Friction,
-	const bool bFluid, const float BrakingDeceleration)
-{
-	if (MovementTraction.bGroupDriven && MovementTraction.bWaitingForGroupSolve)
-	{
-		TGuardValue<FVector> InputGuard(Acceleration, FVector::ZeroVector);
-		const bool bPreviousRequestedVelocity = bHasRequestedVelocity;
-		const bool bPreviousForceMaxAccel = bForceMaxAccel;
-		bHasRequestedVelocity = bForceMaxAccel = false;
-		Super::CalcVelocity(DeltaTime, Friction, bFluid, BrakingDeceleration);
-		bHasRequestedVelocity = bPreviousRequestedVelocity;
-		bForceMaxAccel = bPreviousForceMaxAccel;
-		return;
-	}
-	if (MovementTraction.bGroupDriven && DeltaTime > 0.0f && HasValidData()
-		&& !HasAnimRootMotion() && !CurrentRootMotion.HasOverrideVelocity() && MovementMode != MOVE_None)
-	{
-		const FVector Axis = MovementTraction.Direction.GetSafeNormal2D();
-		const FVector PreviousVelocity = Velocity;
-		// 禁用个人的第二份行走加速；组结果通过同一个 CMC 速度/碰撞入口落位。
+		// Contact transmits motion; a pressed key must not manufacture a second, stamina-free motor.
+		const double ClosingSpeed = FVector::DotProduct(Body->GetVelocity() - OtherBody->GetVelocity(), Normal);
+		const auto IntoContactDrive = [](UCatPhysicalBodyComponent* Participant, const FVector& Axis, double BodyMass)
 		{
-			TGuardValue<FVector> InputGuard(Acceleration, FVector::ZeroVector);
-			const bool bPreviousRequestedVelocity = bHasRequestedVelocity;
-			const bool bPreviousForceMaxAccel = bForceMaxAccel;
-			bHasRequestedVelocity = bForceMaxAccel = false;
-			Super::CalcVelocity(DeltaTime, Friction, bFluid, BrakingDeceleration);
-			bHasRequestedVelocity = bPreviousRequestedVelocity;
-			bForceMaxAccel = bPreviousForceMaxAccel;
+			auto Drive = Participant->CaptureDriveSample();
+			if (!Drive.bLocomotion || Drive.MoveIntent.IsNearlyZero()) return 0.0;
+			if (!Drive.bFishing)
+				if (const auto* Effort = Participant->GetOwner()->FindComponentByClass<UCatPhysicalEffortComponent>())
+				{ Drive.bCooperative = true; Drive.MaxForce = Effort->GetMaximumForceKgCmS2(); }
+			return FVector::DotProduct(UCatPhysicalBodyComponent::ComputeDriveForce(Drive,
+				Participant->GetOwner()->GetActorLocation(), Participant->GetVelocity(), BodyMass, 1.0/120.0), Axis);
+		};
+		// Share the bounded motor reaction according to both inverse masses. A moving
+		// cat must retain its share of acceleration while transmitting the rest to its peer.
+		const double MassA = FMath::Max(1.0f, Mass), MassB = FMath::Max(1.0f, OtherMovement->Mass);
+		const double DriveA = IntoContactDrive(Body, Normal, MassA), DriveB = IntoContactDrive(OtherBody, -Normal, MassB);
+		// A retained grab already couples both motors. Keep that contact law and let the
+		// grip solve separation, avoiding a second position constraint against its anchors.
+		const bool bConstrained = Model && Model->HasTractionConnectionWith(OtherModel);
+		const double MotorReaction = bConstrained ? FMath::Max(0.0, FMath::Max(DriveA,DriveB))
+			: FMath::Max(0.0, (DriveA / MassA + DriveB / MassB) / (1.0 / MassA + 1.0 / MassB));
+		const FVector Force = Normal * FMath::Max(MotorReaction, FMath::Clamp(ClosingSpeed * 12.0 + Penetration * 650.0, 0.0, 3000.0));
+		Body->SetExternalForceFromAuthority(OtherMovement, -Force, false, true);
+		OtherBody->SetExternalForceFromAuthority(this, Force, false, true);
+		if (Model && OtherModel && Model->HasModelContacts() && OtherModel->HasModelContacts()
+			&& GetWorld()->GetTimeSeconds() >= NextModelContactLogSeconds)
+		{
+			NextModelContactLogSeconds = GetWorld()->GetTimeSeconds() + 1;
+			UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=model_contact_push World=%s NetMode=%d Authority=1 LocalRole=%d Actor=%s BodyId=%s Peer=%s PeerBodyId=%s HorizontalSeparationEstimateCm=%.3f ForceOnPeerN=%s Result=ReciprocalHorizontalForce"),
+				*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(Cat->GetLocalRole()), *GetNameSafe(Cat), *Body->GetBodyId().ToString(),
+				*GetNameSafe(Other), *OtherBody->GetBodyId().ToString(), Penetration, *(Force/100).ToCompactString());
 		}
-		const FVector Target = MovementTraction.GroupDesiredVelocity;
-		const double DesiredAlong = FVector::DotProduct(Target, Axis);
-		const double PreviousAlong = FVector::DotProduct(PreviousVelocity, Axis);
-		const double NetAcceleration = MovementTraction.AccelerationCentimetersPerSecondSquared
-			- MovementTraction.BrakingDecelerationCentimetersPerSecondSquared;
-		double Along = PreviousAlong + NetAcceleration * DeltaTime;
-		// 静止支撑只能减速；主动后退才允许越过零速度。
-		Along = FMath::Max(FMath::Min(0.0, DesiredAlong), Along);
-		const double AlongLimit = FMath::Max(FMath::Max(0.0, DesiredAlong), MovementTraction.SpeedLimitCentimetersPerSecond);
-		if (NetAcceleration > 0.0) Along = FMath::Min(AlongLimit, Along);
-		FVector Lateral = PreviousVelocity - Axis * PreviousAlong;
-		Lateral.Z = 0.0;
-		const FVector LateralTarget = Target - Axis * DesiredAlong;
-		const double EffectiveFriction = FMath::Max(0.0f,
-			(bUseSeparateBrakingFriction ? BrakingFriction : Friction) * BrakingFrictionFactor);
-		const FVector PreviousLateral = Lateral;
-		FCatFishingGroupModel::IntegrateLateralVelocity(PreviousLateral, LateralTarget,
-			MovementTraction.GroupLateralAcceleration, DeltaTime, EffectiveFriction, BrakingDeceleration, Lateral);
-		const double Vertical = Velocity.Z;
-		Velocity = Axis * Along + Lateral;
-		Velocity.Z = Vertical;
-		return;
 	}
-	const double PreviousPullSpeed = FVector::DotProduct(Velocity, MovementTraction.Direction);
-	Super::CalcVelocity(DeltaTime, Friction, bFluid, BrakingDeceleration);
-	if (!MovementTraction.bActive || DeltaTime <= 0.0f || !HasValidData()
-		|| HasAnimRootMotion() || CurrentRootMotion.HasOverrideVelocity() || MovementMode == MOVE_None) return;
-	// 支撑与拉力来自同一权威计算。过平衡点时连续减速，不能突然切回普通行走急刹。
-	// 减速只作用于向鱼运动；静止不会反向滑走，主动远离鱼仍走原行走/制动规则。
-	const double PullAcceleration = MovementTraction.AccelerationCentimetersPerSecondSquared;
-	if (PreviousPullSpeed < 0.0 && PullAcceleration <= 0.0) return;
-	double IntegratedPullSpeed = PreviousPullSpeed + (PullAcceleration
-		- MovementTraction.BrakingDecelerationCentimetersPerSecondSquared) * DeltaTime;
-	if (PreviousPullSpeed >= 0.0) IntegratedPullSpeed = FMath::Max(0.0, IntegratedPullSpeed);
-	if (PullAcceleration > 0.0) IntegratedPullSpeed = FMath::Min(MovementTraction.SpeedLimitCentimetersPerSecond, IntegratedPullSpeed);
-	const double ActualPullSpeed = FVector::DotProduct(Velocity, MovementTraction.Direction);
-	// 无输入时替换沿线制动，保留其余轴；有输入时保留引擎完成的主动加速，牵引仅提供下限。
-	if ((Acceleration.IsNearlyZero() && !bHasRequestedVelocity) || ActualPullSpeed < IntegratedPullSpeed)
+}
+
+void UCatCharacterMovementComponent::ResolveModelPeerPenetration()
+{
+	const auto* Model = CharacterOwner ? CharacterOwner->FindComponentByClass<UCatModelContactComponent>() : nullptr;
+	if (!HasValidData() || !CharacterOwner->HasAuthority() || !Model || !Model->HasModelContacts()) return;
+	const FVector Before = UpdatedComponent->GetComponentLocation();
+	const FVector PreviousCorrection = TotalMotionCorrection;
+	const FVector SavedVelocity = Velocity;
+	double MaximumDepth = 0;
+	// Correct only already intersecting model surfaces. Every adjustment sweeps the terrain
+	// capsule and follows its actual walkable floor, rather than teleporting horizontally into a slope.
+	// Articulated tails can sweep through several contacts during a walking pose or a hitch.
+	// Keep each terrain move bounded, but allow the intersecting pair to finish separating.
+	for (int32 Iteration = 0; Iteration < 8; ++Iteration)
 	{
-		Velocity += MovementTraction.Direction * (IntegratedPullSpeed - ActualPullSpeed);
+		bool bAdjusted = false;
+		for (TActorIterator<ACatCharacter> It(GetWorld()); It; ++It)
+		{
+			if (*It == CharacterOwner || Model->HasTractionConnectionWith(It->FindComponentByClass<UCatModelContactComponent>())) continue;
+			FVector Normal; double Depth;
+			if (!Model->FindPeerContact(It->FindComponentByClass<UCatModelContactComponent>(), Normal, Depth) || Depth <= .1) continue;
+			MaximumDepth = FMath::Max(MaximumDepth, Depth);
+			const FVector Adjustment = -Normal * FMath::Min(4.0, (Depth - .1) * .5);
+			const FVector OldLocation = UpdatedComponent->GetComponentLocation();
+			if (IsMovingOnGround() && CurrentFloor.IsWalkableFloor())
+			{
+				MoveAlongFloor(Adjustment, 1.0f);
+				FindFloor(UpdatedComponent->GetComponentLocation(), CurrentFloor, false);
+				if (CurrentFloor.IsWalkableFloor()) { AdjustFloorHeight(); SetBaseFromFloor(CurrentFloor); }
+				else SetMovementMode(MOVE_Falling);
+			}
+			else
+			{
+				FHitResult Hit;
+				SafeMoveUpdatedComponent(Adjustment, UpdatedComponent->GetComponentQuat(), true, Hit);
+			}
+			bAdjusted |= !UpdatedComponent->GetComponentLocation().Equals(OldLocation, .001);
+		}
+		if (!bAdjusted) break;
+	}
+	Velocity = SavedVelocity;
+	// Collision correction must never become paid player progress or a second motor.
+	TotalMotionCorrection = PreviousCorrection + UpdatedComponent->GetComponentLocation() - Before;
+	if (MaximumDepth > .2 && GetWorld()->GetTimeSeconds() >= NextPeerSeparationLogSeconds)
+	{
+		NextPeerSeparationLogSeconds = GetWorld()->GetTimeSeconds() + 1;
+		const auto* Body = CastChecked<ACatCharacter>(CharacterOwner)->GetPhysicalBodyComponent();
+		UE_LOG(LogCatPhysicsGrab, Log, TEXT("Event=model_contact_resolved World=%s NetMode=%d Authority=1 LocalRole=%d Actor=%s BodyId=%s HorizontalSeparationEstimateCm=%.3f CorrectionCm=%s FloorNormalZ=%.4f Grounded=%d Result=TerrainSweptSeparation"),
+			*GetNameSafe(GetWorld()), int32(GetWorld()->GetNetMode()), int32(CharacterOwner->GetLocalRole()), *GetNameSafe(CharacterOwner),
+			*Body->GetBodyId().ToString(), MaximumDepth, *(UpdatedComponent->GetComponentLocation()-Before).ToCompactString(),
+			CurrentFloor.HitResult.ImpactNormal.Z, IsMovingOnGround());
 	}
 }
 
-void FCatSavedMove::Clear()
+void UCatCharacterMovementComponent::ObserveSnapshot(const FVector& ObservedVelocity, const FVector& ObservedIntent)
 {
-	Super::Clear();
-	Traction = FCatExternalTractionInput{};
+	if (!CharacterOwner || CharacterOwner->HasAuthority()) return;
+	Velocity = ObservedVelocity;
+	Acceleration = ObservedIntent * GetMaxAcceleration();
 }
 
-void FCatSavedMove::SetMoveFor(ACharacter* Character, const float InDeltaTime, const FVector& NewAccel,
-	FNetworkPredictionData_Client_Character& ClientData)
+bool UCatCharacterMovementComponent::ResolvePenetrationImpl(const FVector& Adjustment, const FHitResult& Hit, const FQuat& Rotation)
 {
-	Super::SetMoveFor(Character, InDeltaTime, NewAccel, ClientData);
-	Traction = CastChecked<UCatCharacterMovementComponent>(Character->GetCharacterMovement())->GetExternalTraction();
+	const FVector Before = UpdatedComponent ? UpdatedComponent->GetComponentLocation() : FVector::ZeroVector;
+	const bool bResolved = Super::ResolvePenetrationImpl(Adjustment, Hit, Rotation);
+	if (UpdatedComponent) TotalMotionCorrection += UpdatedComponent->GetComponentLocation() - Before;
+	return bResolved;
 }
 
-void FCatSavedMove::PrepMoveFor(ACharacter* Character)
+bool UCatCharacterMovementComponent::IsFalling() const
 {
-	Super::PrepMoveFor(Character);
-	CastChecked<UCatCharacterMovementComponent>(Character->GetCharacterMovement())->RestoreTractionForSavedMove(Traction);
+	const auto* Cat = Cast<ACatCharacter>(CharacterOwner);
+	if (Cat && !Cat->HasAuthority())
+	{
+		const auto* Body = Cat->GetPhysicalBodyComponent();
+		return Body->HasMovementSample() && !Body->IsGrounded();
+	}
+	return Super::IsFalling();
 }
 
-bool FCatSavedMove::CanCombineWith(const FSavedMovePtr& NewMove, ACharacter* Character, const float MaxDelta) const
+bool UCatCharacterMovementComponent::IsMovingOnGround() const
 {
-	// 受力与碰撞积分依赖原始步长；搏斗移动禁止合并，避免吞掉松/绷线切换或重放成大步长。
-	return !Traction.bActive && !Traction.bGroupDriven
-		&& !static_cast<const FCatSavedMove*>(NewMove.Get())->Traction.bGroupDriven
-		&& !static_cast<const FCatSavedMove*>(NewMove.Get())->Traction.bActive
-		&& Super::CanCombineWith(NewMove, Character, MaxDelta);
+	const auto* Cat = Cast<ACatCharacter>(CharacterOwner);
+	return Cat && !Cat->HasAuthority() ? Cat->GetPhysicalBodyComponent()->IsGrounded() : Super::IsMovingOnGround();
+}
+
+FCatCMCMotionPrediction UCatCharacterMovementComponent::CaptureMotionPrediction()
+{
+    auto* Body = CastChecked<ACatCharacter>(CharacterOwner)->GetPhysicalBodyComponent();
+    FCatCMCMotionPrediction Sample;
+    Sample.Drive = Body->CaptureDriveSample();
+    Sample.Position = CharacterOwner->GetActorLocation(); Sample.Velocity = Velocity;
+    Sample.ExternalForce = Body->GetExternalForceFromAuthority(); Sample.ExternalForce.Z = Body->GetVerticalGripForceFromAuthority();
+    Sample.MassKg = FMath::Max(1.0f, Mass);
+    Sample.GroundResistanceNewtons = FMath::IsFinite(GroundResistanceNewtons) ? FMath::Max(0.0f, GroundResistanceNewtons) : .8;
+    Sample.bGrounded = IsMovingOnGround(); Sample.GravityZ = GetGravityZ();
+    Sample.bAcceptVerticalLineForce = !Sample.bGrounded;
+    return Sample;
+}
+
+void UCatCharacterMovementComponent::AdvanceMotionPrediction(FCatCMCMotionPrediction& Sample, const FVector& LineForceNewtons, double Seconds)
+{
+    for (double Remaining = Seconds; Remaining > UE_DOUBLE_SMALL_NUMBER; )
+    {
+        const double H = FMath::Min(Remaining, 1.0 / 120.0);
+        FVector Force = Sample.ExternalForce + LineForceNewtons * 100.0;
+        if (!Sample.bAcceptVerticalLineForce) Force.Z = Sample.ExternalForce.Z;
+        if (Sample.bGrounded && Force.Z > -Sample.GravityZ*Sample.MassKg) Sample.bGrounded = false;
+        const FVector OldVelocity = Sample.Velocity;
+        if (Sample.bGrounded)
+            Sample.Velocity = IntegrateGroundVelocity(Sample.Drive,Sample.Position,Sample.Velocity,Force,Sample.MassKg,Sample.GroundResistanceNewtons,H);
+        else
+        {
+            Force.Z += Sample.GravityZ*Sample.MassKg;
+            Sample.Velocity += Force*(H/Sample.MassKg);
+        }
+        Sample.Position += (Sample.bGrounded ? Sample.Velocity : (OldVelocity+Sample.Velocity)*.5) * H;
+        Remaining -= H;
+    }
+}
+
+double UCatCharacterMovementComponent::GetExternalTractionTravelLimit(const FVector& Direction, double MaximumDistance) const
+{
+    if (!HasValidData() || !UpdatedPrimitive || !GetWorld() || MovementMode == MOVE_None
+        || !FMath::IsFinite(MaximumDistance) || MaximumDistance <= 0) return 0;
+    const FVector Axis = ConstrainDirectionToPlane(Direction.GetSafeNormal2D());
+    if (Axis.IsNearlyZero()) return 0;
+    FCollisionQueryParams Params(SCENE_QUERY_STAT(CatCMCTractionPrediction),false,CharacterOwner);
+    FCollisionResponseParams Responses;
+    InitCollisionParams(Params,Responses);
+    Params.AddIgnoredActors(UpdatedPrimitive->GetMoveIgnoreActors());
+    Params.AddIgnoredComponents(UpdatedPrimitive->GetMoveIgnoreComponents());
+    FHitResult Hit;
+    const bool Blocked = GetWorld()->SweepSingleByChannel(Hit, UpdatedComponent->GetComponentLocation(),
+        UpdatedComponent->GetComponentLocation()+Axis*MaximumDistance, UpdatedComponent->GetComponentQuat(),
+        UpdatedPrimitive->GetCollisionObjectType(), UpdatedPrimitive->GetCollisionShape(), Params, Responses);
+    // Only a read-only feasibility bound. Actual CMC movement still owns collisions and stepping.
+    return Blocked && !IsWalkable(Hit) && FVector::DotProduct(Hit.Normal,Axis)<-.001
+        ? FMath::Max(0.0,MaximumDistance*Hit.Time-.1) : MaximumDistance;
 }

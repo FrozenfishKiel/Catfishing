@@ -1,5 +1,6 @@
 #include "Framework/Game/CatfishingGameState.h"
 
+#include "AbilitySystem/Attributes/CatEconomyAttributeSet.h"
 #include "AbilitySystem/Attributes/CatRunAttributeSet.h"
 #include "AbilitySystem/Attributes/CatRunModifierAttributeSet.h"
 #include "AbilitySystemComponent.h"
@@ -7,9 +8,10 @@
 #include "Environment/CatChumFieldReplicationComponent.h"
 #include "Logging/CatLog.h"
 #include "Net/UnrealNetwork.h"
+#include "ShopEconomy/CatShopEconomySettings.h"
 
-// 构造流程：先创建 ChumField 公开复制组件，再创建 GameState 自己拥有的 Run ASC、最终额度集和来源倍率集；
-// ASC 立即开启复制并采用 Lyra 口径的 Mixed 模式，最后把两套属性集稳定挂到同一 ASC，后续 GameMode 只应用 GE，不再找第二份额度宿主。
+// 构造流程：先创建 ChumField 公开复制组件，再创建 GameState 自己拥有的 Run ASC、最终供品/世界进度集和来源倍率集；
+// ASC 开启复制并采用 Lyra 口径的 Mixed 模式；两套Run属性和独立经济属性共用此ASC，商店不再持有另一份可写余额。
 ACatfishingGameState::ACatfishingGameState()
 {
 	ChumFieldReplication = CreateDefaultSubobject<UCatChumFieldReplicationComponent>(TEXT("ChumFieldReplication"));
@@ -20,6 +22,8 @@ ACatfishingGameState::ACatfishingGameState()
 	RunAbilitySystemComponent->AddAttributeSetSubobject(RunAttributes.Get());
 	RunModifiers = CreateDefaultSubobject<UCatRunModifierAttributeSet>(TEXT("RunModifiers"));
 	RunAbilitySystemComponent->AddAttributeSetSubobject(RunModifiers.Get());
+	EconomyAttributes = CreateDefaultSubobject<UCatEconomyAttributeSet>(TEXT("EconomyAttributes"));
+	RunAbilitySystemComponent->AddAttributeSetSubobject(EconomyAttributes.Get());
 }
 
 // ASC 查询流程：直接返回构造期唯一 Run 组件，避免 GameMode、UI 或协调器从全局服务重新查找第二份公共数值宿主。
@@ -40,17 +44,36 @@ UAbilitySystemComponent* ACatfishingGameState::GetRunAbilitySystemComponentFromA
 	return HasAuthority() ? RunAbilitySystemComponent : nullptr;
 }
 
-// GameState 组件初始化流程：按 Lyra 的 GameState ASC 口径先完成父类组件初始化，再把唯一 Run ASC 的 Owner/Avatar 都绑定为本 GameState；失败只记录依赖缺口，不运行额度兜底公式。
+// 经济属性查询流程：返回与 Run 共用同一 ASC 的只读属性集，避免商店服务另存一份可写余额。
+const UCatEconomyAttributeSet* ACatfishingGameState::GetEconomyAttributeSet() const
+{
+	return EconomyAttributes;
+}
+
+// 权威经济属性查询流程：只给服务器交易服务提供目标属性集，客户端读取余额仍走 GAS 复制或公开快照。
+UCatEconomyAttributeSet* ACatfishingGameState::GetEconomyAttributeSetFromAuthority() const
+{
+	return HasAuthority() ? EconomyAttributes : nullptr;
+}
+
+// GameState 初始化流程：父类完成后把唯一ASC的Owner/Avatar绑定自身；服务器再从经济设置播种初始余额，经济关闭时写零，客户端只等复制。
+// 任一必要组件缺失只记录错误，不创建替代属性集或公式；后续购买、售鱼都经经济GE修改余额。
 void ACatfishingGameState::PostInitializeComponents()
 {
 	Super::PostInitializeComponents();
-	if (!RunAbilitySystemComponent || !RunAttributes || !RunModifiers)
+	if (!RunAbilitySystemComponent || !RunAttributes || !RunModifiers || !EconomyAttributes)
 	{
 		UE_LOG(LogCatRun, Error, TEXT("Event=RunASCInitialized Result=Failed Reason=ComponentOrAttributeMissing World=%s"),
 			GetWorld() ? *GetWorld()->GetName() : TEXT("None"));
 		return;
 	}
 	RunAbilitySystemComponent->InitAbilityActorInfo(this, this);
+	if (HasAuthority())
+	{
+		const UCatShopEconomySettings* Settings = GetDefault<UCatShopEconomySettings>();
+		EconomyAttributes->InitTeamWalletBalance(Settings && Settings->IsRuntimeEnabled()
+			? static_cast<float>(Settings->StartingTeamWalletBalance) : 0.0f);
+	}
 	UE_LOG(LogCatRun, Display, TEXT("Event=RunASCInitialized Result=Success World=%s NetMode=%d Authority=%s Owner=%s Avatar=%s"),
 		GetWorld() ? *GetWorld()->GetName() : TEXT("None"), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : -1,
 		HasAuthority() ? TEXT("true") : TEXT("false"), *GetName(), *GetName());

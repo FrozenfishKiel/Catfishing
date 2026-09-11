@@ -279,7 +279,7 @@ State 的另一个属性，决定"这个 State 被考虑时，是自己上还是
 | 加 Transition | 选中状态 → Details 面板 `Transitions` 分类 → 点 `+` |
 | 改 Tasks Completion | 选中状态 → Details 面板 `State` 分类里找 |
 | 调整状态顺序 | 主视图里拖拽 |
-| **编译** | 工具栏 `Compile`（**改完必须编译，否则运行时用的还是旧的**） |
+| **编译** | 工具栏 `Compile`（**改完必须编译，否则运行时用的还是修改前版本**） |
 
 > Schema 设置在哪：主视图里**选中 Root**（或者点空白处），Details 面板顶部就有 `Schema` 相关设置，包括 **Context Actor Class**。不同小版本位置略有差异，找不到就在 Details 面板搜索框里输 `Context`。
 
@@ -483,7 +483,6 @@ Root
 
 | 节点 | 为什么不用 |
 |---|---|
-| `Cat Fishing Fight Exchange` | 实现开头就检查 `FightRunner->IsRunning()`，Runner 在跑时直接拒绝。搏斗数值全在 Runner 里 |
 | `Cat Fishing Commit Failure Budget` | 失败惩罚（丢饵/伤竿）当前由 C++ 路径处理 |
 | `Cat Fishing Resolve Retry Exhausted Escape` | 剪影图鉴终态，MVP 范围外 |
 
@@ -491,48 +490,25 @@ Root
 
 # 第五部分：单条鱼行为树 ST_FishFight
 
-树挂在 `ACatFishEncounterActor::FishBehaviorStateTree`，仅服务器运行，不需要 AIController。2026-09-08 阻力修正继续使用以下三个真实行为叶子，增加跨外冲/横切的主动行为总时限，并调整受阻后的选边；当前资产与运行验证证据见 [鱼运动实现导读](FishFightImplementationGuide_zh-CN.md)。
+这棵树挂在 `ACatFishEncounterActor` 的 `FishBehaviorStateTree` 组件上，并且**只在服务器启动**。默认拓扑很小：
 
 ```text
 Hooked Fish Behavior
- ├─ Outward Rush [Behavior=OutwardRush]
- ├─ Lateral Arc  [Behavior=LateralArc]
- └─ Ease Off     [Behavior=EaseOff]
+ ├─ Struggling Outward       [Cat Fish Behavior State: StrugglingOutward]
+ │        └─ On State Completed → Calm Direction Selection
+ └─ Calm Direction Selection [Cat Fish Behavior State: CalmOrInward]
+          └─ On State Completed → Struggling Outward
 ```
 
-三个叶子使用 `Cat Fish Run Behavior State` Task，只在 Enter 时提交 `Behavior`，不自建倒计时或 Tick。Runner 在每个固定步先更新上一完整物理结果形成的反馈，再手动 Tick 树的条件，最后连续执行游向/出力和物理求解。组件自动 Tick 关闭，时长、受阻与体力观察都归 Runner 同一份行为记忆。
+每个 Task 进入时只做两件事：把 `MotionIntent` 交给 FightRunner，并从鱼性格 DA 的时长区间抽出本状态持续时间；倒计时结束后 Task 成功，让树切到另一个状态。位置、转向、鱼线、力量、体力和鱼竿磨损全部仍由服务器固定步模拟器处理。
 
-全部转移为 `On Tick`，按下表顺序检查，条件由 `FCatFishBehaviorFeedbackCondition` 只读测试；不是 `On State Completed` 的两状态循环：
-
-| 来源 | 条件与目标（从先到后） |
-|---|---|
-| Outward Rush | 需要恢复→Ease Off；最短承诺+持续受阻→Lateral Arc；最长时长到期→Ease Off |
-| Lateral Arc | 需要恢复→Ease Off；最短承诺+持续受阻→Outward Rush；最长时长到期→Outward Rush |
-| Ease Off | 到期+持续受阻→Lateral Arc；到期→Outward Rush |
-
-`NeedsRecovery` 表示主动行为总时限耗尽，优先于受阻换招，且不受最短承诺时间门控。低体力在开始一轮主动行为时缩短该总时限，不再作为当前正式树独立的立即退让条件。外冲与横切之间切换会保留这份总计时；这样横切受阻时可以重新外冲，又不会靠反复换招无限延长强动作。每个叶子的自身最长时长仍保留：外冲自然到期进入缓游，横切自然到期重新外冲。
-
-`CatFishBehaviorStateTreeSchema` 将 Context Actor 限定为鱼 Encounter。Task/条件不写位置、线长、ASC、耐久和终局。它们也不使用旧 `MotionIntent` 决定行为，旧枚举只保留正式三动画兼容投影。新的出力比例、转向、时长和受阻阈值由人格 `AdaptiveSteeringConfig` 配置；鱼费用由独立实际出力与物理对抗计算。
-
-完整编译 Editor 模块后，用新进程运行受控脚本。新增 `USTRUCT` 字段需要新进程重新加载原生类型和 Python 包装；不能以旧编辑器中的热重载对象作为资产保存依据。脚本默认只读；三个显式模式互斥：
-
-| 参数 | 作用与写入范围 |
-|---|---|
-| `-ApplyFishAdaptiveMotion` | 旧模型迁移入口。保存四个性格与 Balance，仅在已知旧树指纹匹配时重建鱼树；已有版本 1 调参和自定义新树保持原值。 |
-| `-AuditFishResistanceTuning` | 只读检查当前值、预期调参、五包基线指纹和八条目标边；也用于阻力调参保存后的独立重载验证。 |
-| `-ApplyFishResistanceTuning` | 仅接受已盘点的五个正式包指纹，检查无目标包未保存改动和新原生字段，再备份四性格与鱼树。只写七个约定的方向/出力/时长配置，经同一个原生生成器更新鱼树；拒绝未知改动或已经部分保存的包。 |
-
-阻力模式保留性格 ID、`AdaptiveMotionVersion=1`、满出力参考速度，以及其余转向、外冲时长等配置。保护包共 51 个：16 Fish、16 Presentation、17 AnimBP、`ST_FishingSession` 和 Balance；Balance 不保存，体力单价不变。四性格的主动行为总时限分别为 6～8 / 7～10 / 8～12 / 10～14 秒；缓游分别为 1.25～1.5 / 1.25～1.75 / 1.25～2 / 1.25～2 秒，最短承诺均为 1.25 秒。
+使用自定义 `CatFishBehaviorStateTreeSchema` 的好处是编辑器会把 Context Actor 限定为鱼 Encounter，鱼专用 Task 不会误挂到 Session 或 GameState。编译好 Editor 模块后，可用命令行编辑器稳定生成/重建默认资产：
 
 ```text
-D:/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe D:/develop/Catfishing/Catfishing.uproject -ExecutePythonScript=D:/develop/Catfishing/Scripts/migrate_fish_adaptive_behavior.py -AuditFishResistanceTuning -FishAdaptiveEvidenceDir=D:/develop/Catfishing/Saved/Automation/FishResistance-20260908/ReadOnlyExample -unattended -nop4 -NullRHI -DDC=NoZenLocalFallback -DDC-ForceMemoryCache
+D:/UE_5.8/Engine/Binaries/Win64/UnrealEditor-Cmd.exe D:/develop/Catfishing/Catfishing.uproject -ExecutePythonScript=D:/develop/Catfishing/Scripts/create_fish_behavior_state_tree.py -unattended -nop4 -NullRHI
 ```
 
-每次使用新的证据目录。保存后在另一进程执行只读模式，核对目标值、八条边、全部保护包指纹和正式鱼引用；`saved_requires_fresh_process_verification` 只表示保存成功，需要该重载证据才能确认资产持久化。`Scripts/create_fish_behavior_state_tree.py` 仍是整份重建默认树的作者入口，会替换 EditorData；已有手工编辑的资产应先做引用/拓扑盘点。日常资产迁移使用上述带指纹与备份的脚本。
-
-本轮已完成上述五包保存和独立进程重载，证据在 `Saved/Automation/FishResistance-20260908/Migration/Migration.json`、`FreshReload/Audit.json` 与 `Verification.json`。11 项资产核对通过：四性格目标值和实际八边符合预期，51 个保护包指纹、16 鱼引用与运行配置不变；四性格仍为版本 1，满出力速度仍为 110/140/180/240 cm/s。该证据确认资产持久化，不代替真实场景的阻力手感或打包联机验收。
-
-折返、近岸反扑与效用评分选路尚未实现。扩展时在新 `ECatFishBehavior` 与树条件中表达策略，继续由同一 Steering/Simulator 执行，不能另开一套位置或扣体逻辑。
+未来添加“低体力蓄力冲刺”时，推荐新增一个 StateTree 状态和一个新的 `MotionIntent`，条件只负责决定何时进入；冲刺速度、体力门槛与网络结果仍写在纯 C++ 模拟层并加单元测试。这样 StateTree 是可视化编排，不会变成无法验证的第二套战斗逻辑。
 
 ---
 

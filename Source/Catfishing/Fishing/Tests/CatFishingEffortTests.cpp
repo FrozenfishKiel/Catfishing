@@ -1,8 +1,10 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Physics/Simulation/CatIntentMotionModel.h"
 #include "Misc/AutomationTest.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
 #include "Fishing/Simulation/CatFishingFightWorkModel.h"
+#include "Fishing/Simulation/CatFishingOperatorWorkModel.h"
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 
 #include <limits>
@@ -48,12 +50,23 @@ namespace CatFishingEffortTest
 	FCatFightRodConstraintInput MakeCombinedEffortConstraint()
 	{
 		FCatFightRodConstraintInput Constraint = MakeHeldConstraint();
-		Constraint.CarrierDesiredVelocityCentimetersPerSecond = FVector(-100.0, 0.0, 0.0);
-		Constraint.CarrierVelocityCentimetersPerSecond = FVector(-40.0, 0.0, 0.0);
 		Constraint.RodTipVelocityCentimetersPerSecond = FVector(-200.0, 0.0, 0.0);
 		Constraint.CatRodExertionSquaredSeconds = 0.04;
 		Constraint.CatRodPositiveWorkRadians = 0.02;
 		return Constraint;
+	}
+
+	FCatFightOperatorMovementCostInput MakeMovementCost(const FCatFightSimulationConfig& Config)
+	{
+		// Same frozen prices consumed by Runner; the sample belongs to one physical body.
+		FCatFightOperatorMovementCostInput Cost;
+		Cost.MoveIntentWorld = -FVector::ForwardVector;
+		Cost.ActualDisplacementCentimeters = FVector(-4.0, 0.0, 0.0);
+		Cost.MaximumMoveSpeedCentimetersPerSecond = 100.0;
+		Cost.FixedStepSeconds = Config.FixedStepSeconds;
+		Cost.ActiveStrength = Config.PrimaryOperatorCatStrength;
+		Cost.MovementStaminaMultiplier = Config.CatMovementStaminaMultiplier;
+		return Cost;
 	}
 
 	FCatFightStepResult Step(const FCatFightSimulationConfig& Config,
@@ -64,7 +77,7 @@ namespace CatFishingEffortTest
 }
 
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingMovementEffortIntentTest,
-	"Catfishing.Unit.Fishing.Effort.MovementRequiresActiveOpposingIntent",
+	"Catfishing.Unit.Fishing.Effort.MovementUsesEachBodyIntentAndResolvedDisplacement",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingMovementEffortIntentTest::RunTest(const FString& Parameters)
@@ -72,32 +85,36 @@ bool FCatFishingMovementEffortIntentTest::RunTest(const FString& Parameters)
 	(void)Parameters;
 	using namespace CatFishingEffortTest;
 	const FCatFightSimulationConfig Config = MakeConfig();
-	const FCatFightSimulationState State = MakeState();
-	FCatFightRodConstraintInput Constraint = MakeHeldConstraint();
-	Constraint.CarrierDesiredVelocityCentimetersPerSecond = FVector(-100.0, 0.0, 0.0);
-	Constraint.CarrierVelocityCentimetersPerSecond = FVector(-40.0, 0.0, 0.0);
-	Constraint.RodTipVelocityCentimetersPerSecond = FVector(-200.0, 0.0, 0.0);
-	const auto Away = Step(Config, State, Constraint);
-	TestTrue(TEXT("主动后退的绷线步骤有效"), Away.bSucceeded && Away.bLineTaut);
-	TestTrue(TEXT("主动后退产生独立移动耗体"), Away.CatMovementStaminaDrain > 0.0);
-	TestEqual(TEXT("移动实际努力只读取身体平移，不含竿尖转动"),
-		Away.CatMovementActualCentimeters,
-		Constraint.CarrierVelocityCentimetersPerSecond.Size() * Config.FixedStepSeconds, 1e-6);
-
-	Constraint.CarrierDesiredVelocityCentimetersPerSecond = FVector::ZeroVector;
-	const auto Passive = Step(Config, State, Constraint);
-	TestTrue(TEXT("身体被动移动仍可求解约束"), Passive.bSucceeded);
-	TestEqual(TEXT("没有主动输入就没有移动努力"), Passive.CatMovementIntentCentimeters, 0.0);
-	TestEqual(TEXT("被动移动不生成移动耗体"), Passive.CatMovementStaminaDrain, 0.0);
-
-	Constraint.CarrierDesiredVelocityCentimetersPerSecond = FVector(100.0, 0.0, 0.0);
-	const auto Toward = Step(Config, State, Constraint);
-	TestTrue(TEXT("朝鱼移动步骤有效"), Toward.bSucceeded);
-	TestEqual(TEXT("朝鱼移动没有额外对抗移动耗体"), Toward.CatMovementStaminaDrain, 0.0);
-	Constraint.CarrierDesiredVelocityCentimetersPerSecond = FVector(0.0, 100.0, 0.0);
-	const auto Across = Step(Config, State, Constraint);
-	TestTrue(TEXT("纯横向移动步骤有效"), Across.bSucceeded);
-	TestEqual(TEXT("纯横向移动没有额外沿线移动耗体"), Across.CatMovementStaminaDrain, 0.0);
+	const auto RodStep = Step(Config, MakeState(), MakeCombinedEffortConstraint());
+	if (!TestTrue(TEXT("实际端点为个人运动账提供负载观察"), RodStep.bSucceeded && RodStep.bLineTaut)) return false;
+	auto Cost = MakeMovementCost(Config);
+	FCatFightOperatorMovementCostResult Away;
+	if (!TestTrue(TEXT("主动后退个人费用有效"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Cost, Away))) return false;
+	TestTrue(TEXT("主动后退产生独立移动耗体"), Away.StaminaDrain > 0.0);
+	TestEqual(TEXT("个人实际努力只读取身体四厘米位移，不含二十厘米竿尖运动"), Away.ActualProgressCentimeters, 4.0, 1e-6);
+	Cost.MoveIntentWorld = FVector::ZeroVector;
+	Cost.ActualDisplacementCentimeters = FVector(-200.0, 30.0, 0.0);
+	FCatFightOperatorMovementCostResult Passive;
+	TestTrue(TEXT("身体被动拖动的个人费用可求解"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Cost, Passive));
+	TestEqual(TEXT("没有主动输入就没有移动努力"), Passive.IntendedDistanceCentimeters, 0.0);
+	TestEqual(TEXT("被动移动不生成运动或支撑费用"), Passive.StaminaDrain, 0.0);
+	for (const FVector Direction : {FVector::ForwardVector, FVector::RightVector, -FVector::RightVector})
+	{
+		Cost.MoveIntentWorld = Direction;
+		Cost.ActualDisplacementCentimeters = Direction * 4.0;
+		FCatFightOperatorMovementCostResult Directional;
+		TestTrue(TEXT("朝鱼和两侧的真实主动运动均可计费"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Cost, Directional));
+		TestEqual(TEXT("相同主动位移不按鱼线方向漏收个人费用"), Directional.StaminaDrain, Away.StaminaDrain, 1e-6);
+	}
+	Cost.ActualDisplacementCentimeters = FVector::ZeroVector;
+	FCatFightOperatorMovementCostResult Blocked;
+	TestTrue(TEXT("主动拉扯但身体受阻的样本有效"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Cost, Blocked));
+	TestEqual(TEXT("受阻不会伪造身体正功"), Blocked.ActualProgressCentimeters, 0.0);
+	TestTrue(TEXT("受阻主动拉扯仍支付自己的持续支撑"), Blocked.UnfulfilledDistanceCentimeters > 0.0);
+	Cost.ActiveStrength = 0.0;
+	FCatFightOperatorMovementCostResult Exhausted;
+	TestTrue(TEXT("力竭个人仍可提交样本"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Cost, Exhausted));
+	TestEqual(TEXT("力竭主控不会产生主动移动费用"), Exhausted.StaminaDrain, 0.0);
 	return !HasAnyErrors();
 }
 
@@ -117,10 +134,14 @@ bool FCatFishingRodEffortIsolationTest::RunTest(const FString& Parameters)
 	const auto Result = Step(MakeConfig(), MakeState(), Constraint);
 	TestTrue(TEXT("主动转杆步骤有效"), Result.bSucceeded);
 	TestTrue(TEXT("转杆拥有独立正耗体"), Result.CatRodStaminaDrain > 0.0);
-	TestEqual(TEXT("转杆不会冒充身体移动"), Result.CatMovementStaminaDrain, 0.0);
-	TestEqual(TEXT("转杆实际做功不能抵扣共享支撑"), Result.CatHoldStaminaDrain,
+	auto PassiveCost = MakeMovementCost(MakeConfig());
+	PassiveCost.MoveIntentWorld = FVector::ZeroVector;
+	FCatFightOperatorMovementCostResult Passive;
+	TestTrue(TEXT("转杆带来的被动身体观察可计账"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(PassiveCost, Passive));
+	TestEqual(TEXT("转杆不会冒充个人主动移动"), Passive.StaminaDrain, 0.0);
+	TestEqual(TEXT("转杆实际做功不能抵扣持竿支撑"), Result.CatHoldStaminaDrain,
 		HoldBaseline.CatStaminaDrain, 1e-6);
-	TestEqual(TEXT("转杆支撑仅收超出共享支撑的部分"), Result.CatRodSupportStaminaDrain,
+	TestEqual(TEXT("转杆支撑仅收超出持竿支撑的部分"), Result.CatRodSupportStaminaDrain,
 		FMath::Max(0.0, MakeConfig().CatSupportStaminaPerSecond * Constraint.CatRodExertionSquaredSeconds - HoldBaseline.CatHoldStaminaDrain), 1e-6);
 	TestEqual(TEXT("仅转杆时总耗体由转杆与必要持竿差额组成"), Result.CatStaminaDrain,
 		Result.CatRodStaminaDrain + Result.CatHoldStaminaDrain, 1e-6);
@@ -135,18 +156,31 @@ bool FCatFishingCombinedEffortAccountingTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	using namespace CatFishingEffortTest;
-	const auto Result = Step(MakeConfig(), MakeState(ECatFightCatAction::Pull), MakeCombinedEffortConstraint());
+	const auto Config = MakeConfig();
+	const auto Result = Step(Config, MakeState(ECatFightCatAction::Pull), MakeCombinedEffortConstraint());
 	TestTrue(TEXT("三个操作同时参与的步骤有效"), Result.bSucceeded);
-	TestTrue(TEXT("移动分项独立耗体"), Result.CatMovementStaminaDrain > 0.0);
+	FCatFightOperatorMovementCostResult Movement;
+	if (!TestTrue(TEXT("身体样本独立计费"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(
+		MakeMovementCost(Config), Movement))) return false;
+	TestTrue(TEXT("移动分项独立耗体"), Movement.StaminaDrain > 0.0);
 	TestTrue(TEXT("收线分项独立耗体"), Result.CatReelStaminaDrain > 0.0);
 	TestTrue(TEXT("转杆分项独立耗体"), Result.CatRodStaminaDrain > 0.0);
 	TestTrue(TEXT("三个操作参与受载对抗时鱼仍消耗对抗体力"),
 		Result.FishUnfulfilledDistanceCentimeters > 0.0 && Result.FishStaminaDrain > 0.0);
-	TestTrue(TEXT("三个操作仍只保留一份共享支撑"), Result.CatHoldStaminaDrain > 0.0 && Result.CatRodSupportStaminaDrain == 0.0);
-	TestEqual(TEXT("总耗体等于三操作实际费用及一次共享支撑"), Result.CatStaminaDrain,
-		Result.CatMovementStaminaDrain + Result.CatReelStaminaDrain + Result.CatRodStaminaDrain + Result.CatHoldStaminaDrain, 1e-6);
-	TestEqual(TEXT("主位与共同分担的耗体之和守恒"), Result.CatStaminaDrain,
-		Result.CatMovementStaminaDrain + Result.GetSharedCatStaminaDrain(), 1e-6);
+	TestTrue(TEXT("三个操作仍只保留一份持竿支撑"), Result.CatHoldStaminaDrain > 0.0 && Result.CatRodSupportStaminaDrain == 0.0);
+	TestEqual(TEXT("鱼竿步骤只结算收线转杆及一次持竿支撑"), Result.CatStaminaDrain,
+		Result.CatReelStaminaDrain + Result.CatRodStaminaDrain + Result.CatHoldStaminaDrain, 1e-6);
+	FCatFightSimulationConfig MoreMovementPrice = Config;
+	MoreMovementPrice.CatMovementStaminaMultiplier *= 2.0;
+	const auto SameRodStep = Step(MoreMovementPrice, MakeState(ECatFightCatAction::Pull), MakeCombinedEffortConstraint());
+	FCatFightOperatorMovementCostResult MoreMovement;
+	if (!TestTrue(TEXT("主控个人费率变化可计算"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(
+		MakeMovementCost(MoreMovementPrice), MoreMovement))) return false;
+	TestTrue(TEXT("主控自己的身体费率提高个人账单"), MoreMovement.StaminaDrain > Movement.StaminaDrain);
+	TestEqual(TEXT("个人移动费率不在竿端重复收费"), SameRodStep.CatStaminaDrain, Result.CatStaminaDrain, 1e-6);
+	TestEqual(TEXT("移动费率不改变实际鱼端运动"), SameRodStep.ProposedFishWorldPosition, Result.ProposedFishWorldPosition);
+	TestEqual(TEXT("主控竿端费用只有收线转杆持竿三项"), Result.GetRodActionStaminaDrain(),
+		Result.CatReelStaminaDrain + Result.CatRodStaminaDrain + Result.CatHoldStaminaDrain, 1e-6);
 	return !HasAnyErrors();
 }
 
@@ -212,6 +246,12 @@ bool FCatFishingIndependentStaminaPricingTest::RunTest(const FString& Parameters
 	const auto ChangedCat = Step(CatPricing, State, Constraint);
 	TestTrue(TEXT("猫独立调价步骤有效"), Baseline.bSucceeded && ChangedCat.bSucceeded);
 	TestTrue(TEXT("猫调价提高猫耗体"), ChangedCat.CatStaminaDrain > Baseline.CatStaminaDrain);
+	FCatFightOperatorMovementCostResult BaselineMovement, ChangedMovement;
+	TestTrue(TEXT("个人运动读取相同冻结价格"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(
+		MakeMovementCost(Config), BaselineMovement));
+	TestTrue(TEXT("个人运动调价有效"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(
+		MakeMovementCost(CatPricing), ChangedMovement));
+	TestTrue(TEXT("个人运动价格仍独立提高自己的费用"), ChangedMovement.StaminaDrain > BaselineMovement.StaminaDrain);
 	TestEqual(TEXT("仅改猫体力参数不会改变鱼耗体"), ChangedCat.FishStaminaDrain, Baseline.FishStaminaDrain, 1e-6);
 
 	FCatFightSimulationConfig FishPricing = Config;
@@ -220,6 +260,10 @@ bool FCatFishingIndependentStaminaPricingTest::RunTest(const FString& Parameters
 	TestTrue(TEXT("鱼独立调价步骤有效"), ChangedFish.bSucceeded);
 	TestTrue(TEXT("鱼调价提高鱼耗体"), ChangedFish.FishStaminaDrain > Baseline.FishStaminaDrain);
 	TestEqual(TEXT("仅改鱼体力参数不会改变猫耗体"), ChangedFish.CatStaminaDrain, Baseline.CatStaminaDrain, 1e-6);
+	FCatFightOperatorMovementCostResult FishPricedMovement;
+	TestTrue(TEXT("鱼调价后个人样本有效"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(
+		MakeMovementCost(FishPricing), FishPricedMovement));
+	TestEqual(TEXT("鱼价格不改变个人运动账"), FishPricedMovement.StaminaDrain, BaselineMovement.StaminaDrain, 1e-6);
 	return !HasAnyErrors();
 }
 
@@ -238,7 +282,6 @@ bool FCatFishingEffortReleaseAndExhaustionTest::RunTest(const FString& Parameter
 	const auto Exhausted = Step(Config, ExhaustedState, MakeCombinedEffortConstraint());
 	TestTrue(TEXT("力竭后仍可求解三个操作的收尾约束"), Exhausted.bSucceeded);
 	TestEqual(TEXT("力竭鱼收尾不再扣猫体力"), Exhausted.CatStaminaDrain, 0.0);
-	TestEqual(TEXT("力竭后移动不扣体"), Exhausted.CatMovementStaminaDrain, 0.0);
 	TestEqual(TEXT("力竭后收线不扣体"), Exhausted.CatReelStaminaDrain, 0.0);
 	TestEqual(TEXT("力竭后转杆不扣体"), Exhausted.CatRodStaminaDrain, 0.0);
 	TestEqual(TEXT("力竭后持竿不扣体"), Exhausted.CatHoldStaminaDrain, 0.0);
@@ -251,7 +294,7 @@ bool FCatFishingEffortReleaseAndExhaustionTest::RunTest(const FString& Parameter
 		Released.bSlackRecoveryActive && Released.FishUnfulfilledDistanceCentimeters > 0.0);
 	TestEqual(TEXT("右键恢复期间鱼自身游动不扣体力"), Released.FishStaminaDrain, 0.0);
 	TestEqual(TEXT("无主动操作时放线不收取分项费用"),
-		Released.CatMovementStaminaDrain + Released.GetSharedCatStaminaDrain(), 0.0);
+		Released.GetRodActionStaminaDrain(), 0.0);
 	TestTrue(TEXT("解除约束且无主动努力时猫恢复体力"), Released.CatStaminaDrain < 0.0);
 	TestTrue(TEXT("放线恢复不突破体力上限"),
 		MakeState().CatStamina - Released.CatStaminaDrain <= Config.CatStaminaMaximum);
@@ -299,7 +342,6 @@ bool FCatFishingRightButtonRecoveryTest::RunTest(const FString& Parameters)
 	using namespace CatFishingEffortTest;
 	auto Config = MakeConfig();
 	Config.SlackStaminaRegenPerSecond = 2.75;
-	Config.SecondCatStrength = 30.0;
 	const auto Constraint = MakeCombinedEffortConstraint();
 	for (const auto Motion : {ECatFishMotionIntent::CalmOrInward, ECatFishMotionIntent::StrugglingOutward})
 	{
@@ -321,19 +363,18 @@ bool FCatFishingRightButtonRecoveryTest::RunTest(const FString& Parameters)
 					const auto Locked = Step(Config, State, Constraint);
 					TestFalse(TEXT("满线时不能靠右键恢复体力"), Result.bSlackRecoveryActive);
 					TestTrue(TEXT("满线时恢复普通角力耗体"), Result.CatStaminaDrain > 0.0 && Result.FishStaminaDrain > 0.0);
-					TestEqual(TEXT("满线移动转杆与支撑费用等同无右键"), Result.CatStaminaDrain, Locked.CatStaminaDrain, 1e-9);
-					TestEqual(TEXT("满线助手分摊费用等同无右键"), Result.GetSharedCatStaminaDrain(), Locked.GetSharedCatStaminaDrain(), 1e-9);
+					TestEqual(TEXT("满线转杆与持竿支撑费用等同无右键"), Result.CatStaminaDrain, Locked.CatStaminaDrain, 1e-9);
+					TestEqual(TEXT("满线竿端费用等同无右键"), Result.GetRodActionStaminaDrain(), Locked.GetRodActionStaminaDrain(), 1e-9);
 					TestEqual(TEXT("满线鱼低体力结算等同无右键"), Result.FishStaminaDrain, Locked.FishStaminaDrain, 1e-9);
 					TestEqual(TEXT("满线磨损仍只使用普通受力费用"), Result.RodWearDelta, Locked.RodWearDelta, 1e-9);
 					TestEqual(TEXT("满线不会继续出线"), Result.LineLengthCentimeters, Config.MaximumLineLengthCentimeters);
 					continue;
 				}
 				TestTrue(TEXT("未满线右键继续恢复体力"), Result.bSlackRecoveryActive);
-				TestEqual(TEXT("右键移动不扣体"), Result.CatMovementStaminaDrain, 0.0);
 				TestEqual(TEXT("右键收线不扣体"), Result.CatReelStaminaDrain, 0.0);
 				TestEqual(TEXT("右键转杆不扣体"), Result.CatRodStaminaDrain, 0.0);
 				TestEqual(TEXT("右键保持不扣体"), Result.CatHoldStaminaDrain, 0.0);
-				TestEqual(TEXT("辅助出力也不产生共同扣费"), Result.GetSharedCatStaminaDrain(), 0.0);
+				TestEqual(TEXT("竿端也不产生操作扣费"), Result.GetRodActionStaminaDrain(), 0.0);
 				TestEqual(TEXT("右键期间鱼不产生待结算费用"), Result.FishUncappedStaminaDrain, 0.0);
 				TestEqual(TEXT("右键期间鱼不耗体或清空低体力尾数"), Result.FishStaminaDrain, 0.0);
 				TestEqual(TEXT("回体只取配置速度及距上限的余量，已达或超过上限不倒扣"), Result.CatStaminaDrain,
@@ -350,7 +391,6 @@ bool FCatFishingRightButtonRecoveryTest::RunTest(const FString& Parameters)
 	State.FishStamina = 0.0;
 	State.CatStamina = 0.0;
 	Config.PrimaryOperatorCatStrength = 0.0;
-	Config.SecondCatStrength = 0.0;
 	const auto ExhaustedFish = Step(Config, State, Constraint);
 	TestTrue(TEXT("鱼已力竭的收尾仍可右键回体"), ExhaustedFish.bSucceeded && ExhaustedFish.bSlackRecoveryActive && !ExhaustedFish.bExhaustedCatEscape);
 	TestEqual(TEXT("收尾零体力回体按原配置结算"), ExhaustedFish.CatStaminaDrain, -0.55, 1e-9);
@@ -448,49 +488,8 @@ bool FCatFishingLoadEffortTuningTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingExhaustedPrimaryEffortOwnershipTest,
-	"Catfishing.Unit.Fishing.Effort.ExhaustedPrimaryDirectsTeamPoweredRotationWithSharedCost",
-	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
-
-bool FCatFishingExhaustedPrimaryEffortOwnershipTest::RunTest(const FString& Parameters)
-{
-	(void)Parameters;
-	using namespace CatFishingEffortTest;
-	FCatFightSimulationConfig Config = MakeConfig();
-	Config.PrimaryOperatorCatStrength = 0.0;
-	Config.SecondCatStrength = 50.0;
-	Config.HelperMassKilograms = 10.0;
-	FCatFightSimulationState State = MakeState(ECatFightCatAction::Pull);
-	State.CatStamina = 0.0;
-	FCatFightRodConstraintInput Constraint = MakeHeldConstraint();
-
-	// 这里验证 Runner 所需的纯模型连接契约；真实多人 ASC 分摊仍由运行验收覆盖。
-	FCatFishingRodRotationInput RotationInput;
-	RotationInput.CatTorqueCapacity = Config.GetCombinedCatStrength();
-	RotationInput.MaximumFishTorque = 10.0;
-	RotationInput.CurrentAim = FRotator(0.0, 30.0, 0.0);
-	RotationInput.RequestedAim = FRotator(0.0, 90.0, 0.0);
-	RotationInput.PullAxis = FVector::ForwardVector;
-	RotationInput.DeltaSeconds = Config.FixedStepSeconds;
-	const auto Rotation = FCatFishingRodResistanceModel::StepRotation(RotationInput);
-	TestTrue(TEXT("主位力竭后仍可指挥队友力量转杆"), Rotation.bSucceeded);
-	TestTrue(TEXT("转杆由有力队友提供真实主动努力"), Rotation.CatExertionSquaredSeconds > 0.0 && Rotation.CatPositiveWorkRadians > 0.0);
-	Constraint.CatRodExertionSquaredSeconds = Rotation.CatExertionSquaredSeconds;
-	Constraint.CatRodPositiveWorkRadians = Rotation.CatPositiveWorkRadians;
-	const auto Result = Step(Config, State, Constraint);
-	TestTrue(TEXT("主位力竭但辅助仍有力时步骤有效"), Result.bSucceeded);
-	TestTrue(TEXT("辅助合力仍可参与收线"), Result.RequestedReelDistanceCentimeters > 0.0);
-	TestTrue(TEXT("辅助支持的收线仍产生共同费用"), Result.GetSharedCatStaminaDrain() > 0.0);
-	TestTrue(TEXT("主位力竭时辅助的有效力量仍能给鱼造成对抗耗体"),
-		Result.FishUnfulfilledDistanceCentimeters > 0.0 && Result.FishStaminaDrain > 0.0);
-	TestTrue(TEXT("实际转杆做功产生共同支付费用，不是免费借力"), Result.CatRodStaminaDrain > 0.0);
-	TestEqual(TEXT("无身体输入时收线转杆支撑全部属于共同负担"),
-		Result.CatStaminaDrain, Result.GetSharedCatStaminaDrain(), 1e-6);
-	return !HasAnyErrors();
-}
-
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingEffortFiniteTotalsTest,
-	"Catfishing.Unit.Fishing.Effort.NonFiniteIndividualAndCombinedChargesFailClosed",
+	"Catfishing.Unit.Fishing.Effort.NonFiniteIndividualAndTotalRodChargesFailClosed",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
 bool FCatFishingEffortFiniteTotalsTest::RunTest(const FString& Parameters)
@@ -498,15 +497,15 @@ bool FCatFishingEffortFiniteTotalsTest::RunTest(const FString& Parameters)
 	(void)Parameters;
 	using namespace CatFishingEffortTest;
 	const double LargeFinite = std::numeric_limits<double>::max() * 0.6;
-	FCatFightFishIntentInput Work;
+	FCatIntentMotionInput Work;
 	Work.IntendedDisplacementCentimeters = FVector(100.0, 0.0, 0.0);
 	Work.StaminaPerUnfulfilledMeter = LargeFinite;
-	FCatFightFishIntentResult WorkResult;
-	TestTrue(TEXT("一米缺失对应的有限大费用仍可计算"), FCatFishingFightWorkModel::ComputeFishIntentDrain(Work, WorkResult));
+	FCatIntentMotionResult WorkResult;
+	TestTrue(TEXT("一米缺失对应的有限大费用仍可计算"), FCatIntentMotionModel::ComputeDrain(Work, WorkResult));
 	TestTrue(TEXT("单项结果确实有限"), FMath::IsFinite(WorkResult.StaminaDrain));
 	Work.IntendedDisplacementCentimeters.X = 200.0;
 	TestFalse(TEXT("每米费率与缺失米数乘积溢出时拒绝结算"),
-		FCatFishingFightWorkModel::ComputeFishIntentDrain(Work, WorkResult));
+		FCatIntentMotionModel::ComputeDrain(Work, WorkResult));
 	TestEqual(TEXT("拒绝费用溢出后不泄漏上次结果"), WorkResult.StaminaDrain, 0.0);
 
 	FCatFightSimulationConfig Config = MakeConfig();
@@ -518,19 +517,34 @@ bool FCatFishingEffortFiniteTotalsTest::RunTest(const FString& Parameters)
 	Config.ReelSpeedCentimetersPerSecond = 10.0;
 	Config.FishFullEffortSpeedCentimetersPerSecond = 0.1;
 	FCatFightRodConstraintInput Constraint = MakeHeldConstraint();
-	Constraint.CarrierDesiredVelocityCentimetersPerSecond = FVector(-10.0, 0.0, 0.0);
-	Constraint.CarrierVelocityCentimetersPerSecond = Constraint.CarrierDesiredVelocityCentimetersPerSecond;
-	Constraint.CatRodExertionSquaredSeconds = 0.1;
-	Constraint.CatRodPositiveWorkRadians = 1.0;
+	Constraint.CatRodExertionSquaredSeconds = Config.FixedStepSeconds;
+	Constraint.CatRodPositiveWorkRadians = 0.1;
+	Config.CatRodStaminaMultiplier = 10.0;
+	Config.CatSupportStaminaPerSecond = LargeFinite;
 	TestTrue(TEXT("求和溢出用例的各配置字段均有限合法"), Config.IsValid());
-	const auto Overflow = Step(Config, MakeState(ECatFightCatAction::Pull), Constraint);
-	TestFalse(TEXT("三个单项均有限但合计溢出时拒绝整个步骤"), Overflow.bSucceeded);
-	TestTrue(TEXT("拒绝后的默认结果不会泄漏无穷总费用"), FMath::IsFinite(Overflow.CatStaminaDrain));
+	// The physical endpoint can block reeling completely. Two observed rod channels supply the finite addends.
+	FCatFightSimulationConfig WorkOnlyConfig = Config;
+	WorkOnlyConfig.CatSupportStaminaPerSecond = 0.0;
+	const auto WorkOnly = Step(WorkOnlyConfig, MakeState(), Constraint);
+	TestTrue(TEXT("单独的真实转杆正功账有限且成功"), WorkOnly.bSucceeded && FMath::IsFinite(WorkOnly.CatStaminaDrain));
+	TestTrue(TEXT("正功账确实大于 double 最大值的一半"), WorkOnly.CatRodWorkStaminaDrain > std::numeric_limits<double>::max() * 0.5);
+	FCatFightSimulationConfig SupportOnlyConfig = Config;
+	SupportOnlyConfig.CatRodStaminaCostPerStrengthRadian = 0.0;
+	const auto SupportOnly = Step(SupportOnlyConfig, MakeState(), Constraint);
+	TestTrue(TEXT("单独的真实转杆支撑账有限且成功"), SupportOnly.bSucceeded && FMath::IsFinite(SupportOnly.CatStaminaDrain));
+	TestTrue(TEXT("支撑不重复相加后的总账仍超过最大值的一半"), SupportOnly.CatStaminaDrain > std::numeric_limits<double>::max() * 0.5);
+	const auto Overflow = Step(Config, MakeState(), Constraint);
+	TestFalse(TEXT("两项分别有限的主控竿端费用合计溢出时拒绝整个步骤"), Overflow.bSucceeded);
+	TestEqual(TEXT("明确报告结算溢出而非输入配置拒绝"), Overflow.RejectReason, ECatFightSimulationRejectReason::InvalidResolvedResult);
+	TestEqual(TEXT("拒绝后不泄漏任何无穷或部分总费用"), Overflow.CatStaminaDrain, 0.0);
 
-	FCatFightSimulationConfig StrengthOverflow = MakeConfig();
-	StrengthOverflow.PrimaryOperatorCatStrength = LargeFinite;
-	StrengthOverflow.SecondCatStrength = LargeFinite;
-	TestFalse(TEXT("主辅力量各自有限但合力溢出时拒绝配置"), StrengthOverflow.IsValid());
+	auto MovementCost = MakeMovementCost(Config);
+	MovementCost.StaminaPerUnfulfilledMeter = LargeFinite;
+	MovementCost.MovementStaminaMultiplier = 10;
+	FCatFightOperatorMovementCostResult Movement;
+	TestFalse(TEXT("个人身体样本溢出同样拒绝结算"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(MovementCost, Movement));
+	TestEqual(TEXT("个人计费拒绝不泄漏部分费用"), Movement.StaminaDrain, 0.0);
+
 	return !HasAnyErrors();
 }
 
@@ -555,24 +569,24 @@ bool FCatFishingSmallActionsPreserveHoldFloorTest::RunTest(const FString& Parame
 		const auto SmallRod = Step(Config, State, Rod);
 		TestTrue(TEXT("微小转杆产生自身费用并保留必要的持竿差额"),
 			SmallRod.bSucceeded && SmallRod.CatRodStaminaDrain > 0.0 && SmallRod.CatHoldStaminaDrain > 0.0);
-		TestEqual(TEXT("微小转杆完整保留共享支撑"),
+		TestEqual(TEXT("微小转杆完整保留持竿支撑"),
 			SmallRod.CatHoldStaminaDrain, Baseline.CatHoldStaminaDrain, 1e-6);
 
-		FCatFightRodConstraintInput Movement = MakeHeldConstraint();
-		Movement.CarrierDesiredVelocityCentimetersPerSecond = FVector(-SmallDistance / Config.FixedStepSeconds, 0.0, 0.0);
-		Movement.CarrierVelocityCentimetersPerSecond = Movement.CarrierDesiredVelocityCentimetersPerSecond;
-		const auto SmallMovement = Step(Config, State, Movement);
-		TestTrue(TEXT("微小后退产生自身费用并保留必要的持竿差额"),
-			SmallMovement.bSucceeded && SmallMovement.CatMovementStaminaDrain > 0.0 && SmallMovement.CatHoldStaminaDrain > 0.0);
-		TestEqual(TEXT("微小后退完整保留共享支撑"),
-			SmallMovement.CatHoldStaminaDrain, Baseline.CatHoldStaminaDrain, 1e-6);
+		auto Cost = MakeMovementCost(Config);
+		Cost.MoveIntentWorld = FVector(-SmallDistance / (100.0 * Config.FixedStepSeconds), 0.0, 0.0);
+		Cost.ActualDisplacementCentimeters = FVector(-SmallDistance, 0.0, 0.0);
+		FCatFightOperatorMovementCostResult SmallMovement;
+		TestTrue(TEXT("微小后退的个人实际样本可计费"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Cost, SmallMovement));
+		TestTrue(TEXT("完成微小后退意图不收费，也不会抵消本人竿端支撑费用"),
+			SmallMovement.StaminaDrain == 0.0
+			&& SmallMovement.StaminaDrain + Baseline.GetRodActionStaminaDrain() == Baseline.GetRodActionStaminaDrain());
 
 		FCatFightSimulationConfig SlowReelConfig = Config;
 		SlowReelConfig.ReelSpeedCentimetersPerSecond = SmallDistance / Config.FixedStepSeconds;
 		const auto SmallReel = Step(SlowReelConfig, MakeState(ECatFightCatAction::Pull), MakeHeldConstraint());
 		TestTrue(TEXT("微小收线产生自身费用并保留必要的持竿差额"),
 			SmallReel.bSucceeded && SmallReel.CatReelStaminaDrain > 0.0 && SmallReel.CatHoldStaminaDrain > 0.0);
-		TestTrue(TEXT("微小收线增加负载也不能减少原共享支撑"), SmallReel.CatHoldStaminaDrain + 1e-6 >= Baseline.CatHoldStaminaDrain);
+		TestTrue(TEXT("微小收线增加负载也不能减少原持竿支撑"), SmallReel.CatHoldStaminaDrain + 1e-6 >= Baseline.CatHoldStaminaDrain);
 	}
 
 	FCatFightRodConstraintInput StrongRod = MakeHeldConstraint();
@@ -581,7 +595,7 @@ bool FCatFishingSmallActionsPreserveHoldFloorTest::RunTest(const FString& Parame
 	const auto AboveFloor = Step(Config, State, StrongRod);
 	TestTrue(TEXT("足够大的主动操作费用可以超过保持基线"),
 		AboveFloor.bSucceeded && AboveFloor.CatStaminaDrain > Baseline.CatStaminaDrain);
-	TestEqual(TEXT("大幅转杆只收超出共享支撑的差额"), AboveFloor.CatRodSupportStaminaDrain,
+	TestEqual(TEXT("大幅转杆只收超出持竿支撑的差额"), AboveFloor.CatRodSupportStaminaDrain,
 		Config.CatSupportStaminaPerSecond * Config.FixedStepSeconds - Baseline.CatHoldStaminaDrain, 1e-6);
 	Config.CatRodStaminaMultiplier *= 2.0;
 	const auto HigherRodPrice = Step(Config, State, StrongRod);
@@ -590,48 +604,23 @@ bool FCatFishingSmallActionsPreserveHoldFloorTest::RunTest(const FString& Parame
 	return !HasAnyErrors();
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingPersonalEffortCoverageBudgetTest,
-	"Catfishing.Unit.Fishing.Effort.TeamOperationsCannotEraseSharedHoldCost",
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingOperatorEffortBoundaryTest,
+	"Catfishing.Unit.Fishing.Effort.OperatorMovementKeepsPositiveStrengthAndExhaustionBoundary",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-bool FCatFishingPersonalEffortCoverageBudgetTest::RunTest(const FString& Parameters)
+bool FCatFishingOperatorEffortBoundaryTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 	using namespace CatFishingEffortTest;
-	FCatFightSimulationConfig Config = MakeConfig();
-	Config.PrimaryOperatorCatStrength = 0.0;
-	Config.SecondCatStrength = 50.0;
-	Config.HelperMassKilograms = 10.0;
-	FCatFightSimulationState State = MakeState();
-	State.CatStamina = 0.0;
-	FCatFightRodConstraintInput Constraint = MakeCombinedEffortConstraint();
-	const auto ExhaustedBaseline = Step(Config, State, MakeHeldConstraint());
-	const auto ExhaustedActive = Step(Config, State, Constraint);
-	TestTrue(TEXT("主位力竭且辅助发力时两种步骤都有效"),
-		ExhaustedBaseline.bSucceeded && ExhaustedActive.bSucceeded);
-	TestTrue(TEXT("辅助承担的完整保持费用存在"), ExhaustedBaseline.GetSharedCatStaminaDrain() > 0.0);
-	TestTrue(TEXT("载体运动与转杆的团队努力不因主位个人耗尽被删掉"),
-		ExhaustedActive.CatMovementIntentCentimeters > 0.0 && ExhaustedActive.CatRodExertionSquaredSeconds > 0.0);
-	TestEqual(TEXT("额外团队操作不能抵扣已有沿线保持费用"),
-		ExhaustedActive.CatHoldStaminaDrain, ExhaustedBaseline.CatHoldStaminaDrain, 1e-6);
-	TestTrue(TEXT("转杆支撑与做功完整计入共同负担"),
-		ExhaustedActive.GetSharedCatStaminaDrain() >= ExhaustedBaseline.GetSharedCatStaminaDrain());
-	TestEqual(TEXT("未完成的身体意图不再伪造额外端点误差"), ExhaustedActive.ConstraintErrorCentimeters, ExhaustedBaseline.ConstraintErrorCentimeters, 1e-6);
-
-	Config.PrimaryOperatorCatStrength = 0.001;
-	State.CatStamina = 0.001;
-	const auto NearlyExhaustedBaseline = Step(Config, State, MakeHeldConstraint());
-	const auto NearlyExhaustedActive = Step(Config, State, Constraint);
-	TestTrue(TEXT("主位接近力竭时两种步骤都有效"),
-		NearlyExhaustedBaseline.bSucceeded && NearlyExhaustedActive.bSucceeded);
-	TestTrue(TEXT("该用例个人原始费用确实超过当下支付能力"),
-		NearlyExhaustedActive.CatMovementStaminaDrain > State.CatStamina);
-	TestEqual(TEXT("个人费用完全不抵扣沿线支撑"),
-		NearlyExhaustedBaseline.CatHoldStaminaDrain - NearlyExhaustedActive.CatHoldStaminaDrain,
-		0.0, 1e-6);
-	TestTrue(TEXT("不可支付的个人费用不能免除其余保持"), NearlyExhaustedActive.GetSharedCatStaminaDrain() > 0.0);
-	TestEqual(TEXT("个人请求费用与剩余共享费用仍可完整诊断"), NearlyExhaustedActive.CatStaminaDrain,
-		NearlyExhaustedActive.CatMovementStaminaDrain + NearlyExhaustedActive.GetSharedCatStaminaDrain(), 1e-6);
+	auto Cost = MakeMovementCost(MakeConfig());
+	FCatFightOperatorMovementCostResult Full, Tiny, Exhausted;
+	if (!TestTrue(TEXT("主控身体实际位移生成有效费用"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Cost, Full))) return false;
+	Cost.ActiveStrength = 1e-9;
+	TestTrue(TEXT("极小正出力仍可计算个人费用"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Cost, Tiny));
+	TestEqual(TEXT("极小正体力不会被免费阈值吞掉"), Tiny.StaminaDrain, Full.StaminaDrain, 1e-9);
+	Cost.ActiveStrength = 0.0;
+	TestTrue(TEXT("力竭主控仍可观察被拖动位移"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Cost, Exhausted));
+	TestEqual(TEXT("主控耗尽不能把被拖动当个人主动费用"), Exhausted.StaminaDrain, 0.0);
 	return !HasAnyErrors();
 }
 
@@ -737,28 +726,15 @@ bool FCatFishingPassiveDragCannotExhaustFishTest::RunTest(const FString& Paramet
 	FCatFightSimulationState State = MakeState(ECatFightCatAction::Pull);
 	State.CatStamina = 0.0;
 	State.FishStamina = 0.1;
-	FCatFishingRodRotationInput RotationInput;
-	RotationInput.CurrentAim.Yaw = 30.0;
-	RotationInput.RequestedAim.Yaw = 90.0;
-	RotationInput.CatTorqueCapacity = 0.0;
-	RotationInput.MaximumFishTorque = 100.0;
-	RotationInput.PreviousSmoothedFishPullStrengthMeters = FVector(100.0, 0.0, 0.0);
-	RotationInput.DeltaSeconds = Config.FixedStepSeconds;
-	const auto Rotation = FCatFishingRodResistanceModel::StepRotation(RotationInput);
-	TestTrue(TEXT("零猫转矩时鱼仍能被动拉转鱼竿"),
-		Rotation.bSucceeded && Rotation.ActualAim.Yaw < RotationInput.CurrentAim.Yaw);
-	TestEqual(TEXT("被动转杆没有猫主动转杆意图"), Rotation.CatExertionSquaredSeconds, 0.0);
 	FCatFightRodConstraintInput Constraint = MakeHeldConstraint();
-	Constraint.CarrierVelocityCentimetersPerSecond = FVector(10.0, 0.0, 0.0);
-	Constraint.RodTipVelocityCentimetersPerSecond = Constraint.CarrierVelocityCentimetersPerSecond
-		+ (Rotation.ActualAim.Vector() - RotationInput.CurrentAim.Vector()) * 200.0 / Config.FixedStepSeconds;
-	Constraint.CatRodExertionSquaredSeconds = Rotation.CatExertionSquaredSeconds;
-	Constraint.CatRodPositiveWorkRadians = Rotation.CatPositiveWorkRadians;
+	Constraint.RodTipVelocityCentimetersPerSecond = FVector(10.0, 30.0, 0.0);
+	Constraint.CatRodExertionSquaredSeconds = 0.0;
+	Constraint.CatRodPositiveWorkRadians = 0.0;
 	const auto Result = Step(Config, State, Constraint);
 	TestTrue(TEXT("猫力竭后仍能求解鱼拉人和鱼线约束"), Result.bSucceeded);
 	TestTrue(TEXT("本例鱼线张紧且鱼能被动拉动猫"),
-		Result.NormalizedTension > 0.0 && Result.CarrierTargetPullSpeedCentimetersPerSecond > 0.0);
-	TestTrue(TEXT("零猫合力进入明确的强拖免耗分支"), Result.bExhaustedCatEscape && Result.CombinedCatStrength == 0.0);
+		Result.NormalizedTension > 0.0 && Result.LineTensionNewtons > 0.0);
+	TestTrue(TEXT("主控无有效力量时进入明确的强拖免耗分支"), Result.bExhaustedCatEscape && Result.OperatorCatStrength == 0.0);
 	TestEqual(TEXT("猫无力时鱼自身继续游动不扣体"), Result.FishStaminaDrain, 0.0);
 	TestEqual(TEXT("被动拖动不能触发低体力吸附力竭"), Result.Outcome, ECatFightStepOutcome::None);
 	TestEqual(TEXT("零体力猫的旧收线意图不能拉动活鱼"), Result.RequestedReelDistanceCentimeters, 0.0);
@@ -783,8 +759,11 @@ bool FCatFishingZeroPriceCannotSnapFishStaminaTest::RunTest(const FString& Param
 		TestEqual(TEXT("鱼每米费率为零时原始费用为零"), Result.FishUncappedStaminaDrain, 0.0);
 		TestEqual(TEXT("零费用不会被吸附阈值变成全额扣费"), Result.FishStaminaDrain, 0.0);
 		TestEqual(TEXT("零费用不触发鱼力竭结果"), Result.Outcome, ECatFightStepOutcome::None);
+		FCatFightOperatorMovementCostResult Movement;
+		TestTrue(TEXT("零鱼价格下个人运动样本可计费"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(
+			MakeMovementCost(Config), Movement));
 		TestTrue(TEXT("鱼价格关闭不影响猫的三个操作耗体"),
-			Result.CatMovementStaminaDrain > 0.0 && Result.CatReelStaminaDrain > 0.0 && Result.CatRodStaminaDrain > 0.0);
+			Movement.StaminaDrain > 0.0 && Result.CatReelStaminaDrain > 0.0 && Result.CatRodStaminaDrain > 0.0);
 	}
 	FCatFightSimulationConfig Priced = MakeConfig();
 	// 独立米价明确选为0.001点/m，仅用于验证真实小额扣费之后的阈值吸附。

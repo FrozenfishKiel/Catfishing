@@ -2,8 +2,9 @@
 
 #include "CoreMinimal.h"
 #include "Framework/Core/CatDomainCommandTypes.h"
-#include "Items/CatItemTypes.h"
 #include "CatSocialTypes.generated.h"
+
+class AActor;
 
 /** 手动/系统求助信号类型；普通帮助必须手动，只有巨鱼搏斗允许系统全体提示。 */
 UENUM(BlueprintType)
@@ -17,18 +18,6 @@ enum class ECatHelpSignalKind : uint8
 	ManualDowned,
 	/** Giant FishingSession 开始时由系统发布的全体提示。 */
 	GiantFishSystem
-};
-
-/** 共享鱼缸偷鱼追回权限；具体团队体验未裁时保持 Undecided。 */
-UENUM()
-enum class ECatSharedTankRecoveryPolicy : uint8
-{
-	/** 谁能追回团队鱼尚未裁决，偷共享缸路径 fail-closed。 */
-	Undecided,
-	/** 只有 FishInstance 原主人能追回。 */
-	OriginalOwner,
-	/** 任一当前 Active 玩家都能追回。 */
-	AnyActivePlayer
 };
 
 /** GameState 复制的最近求助信号；客户端表现只消费，不据此自动加入玩法。 */
@@ -57,28 +46,32 @@ struct FCatHelpSignalSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bGlobal = false;
 
-	/** GameState 发布序号；客户端忽略陈旧信号。 */
+	/** GameState 发布序号；客户端忽略低于当前序号的信号。 */
 	UPROPERTY(BlueprintReadOnly)
 	int64 Revision = 0;
 };
 
-/** 偷鱼开始命令；客户端只提供稳定意图，Social/Items 在服务器重建身份并裁决唯一实物鱼。 */
+/** 偷鱼开始命令；客户端只提供稳定意图，Social 在服务器重建身份并从正式库存裁决唯一实物鱼。 */
 USTRUCT(BlueprintType)
 struct FCatTheftCommand
 {
 	GENERATED_BODY()
 
-	/** RequestId 与源容器 ExpectedRevision；StableNetId 由服务器覆盖。 */
+	/** RequestId 与 StableNetId；服务器覆盖身份字段。 */
 	UPROPERTY(BlueprintReadWrite)
 	FCatDomainCommandContext Context;
 
-	/** 要偷的一条鱼实例。 */
+	/** 要偷的一条鱼物品实例。 */
 	UPROPERTY(BlueprintReadWrite)
-	FGuid FishInstanceId;
+	FGuid FishItemInstanceId;
 
-	/** 他人鱼护或共享鱼缸 ID。 */
+	/** 这条鱼当前所在的 Actor 宿主；服务器从它解析正式库存组件。 */
 	UPROPERTY(BlueprintReadWrite)
-	FGuid SourceContainerId;
+	TObjectPtr<AActor> SourceInventoryHost = nullptr;
+
+	/** 这条鱼当前所在的库存槽位；服务器会重新读取该槽并核对 FishItemInstanceId。 */
+	UPROPERTY(BlueprintReadWrite)
+	int32 SourceInventorySlotIndex = INDEX_NONE;
 };
 
 /** Social 偷鱼协议公开结果；只暴露阶段和结构化错误，不复制受害者 StableNetId。 */
@@ -87,7 +80,7 @@ struct FCatTheftResult
 {
 	GENERATED_BODY()
 
-	/** 公共命令终态；Revision 对应源容器。 */
+	/** 公共命令终态。 */
 	UPROPERTY(BlueprintReadOnly)
 	FCatDomainCommandResult Command;
 
@@ -95,7 +88,7 @@ struct FCatTheftResult
 	UPROPERTY(BlueprintReadOnly)
 	FCatDomainCommandResult Body;
 
-	/** 首次合法 Begin 后由服务器分配的协议 ID；追回 RPC、Timer 和 Items escrow 只使用此键。 */
+	/** 首次合法 Begin 后由服务器分配的协议 ID；追回 RPC、Timer 和来源库存返还只使用此键。 */
 	UPROPERTY(BlueprintReadOnly)
 	FGuid TheftProtocolId;
 

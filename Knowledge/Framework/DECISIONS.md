@@ -6,7 +6,7 @@
 
 ## 单 Runtime 模块化单体
 
-项目保持一个 `Catfishing` Runtime 模块，内部按领域目录分层。这样可以让 Run、Fishing、Items、Profile、Online 在同一局内共享清晰的 C++ 调用和生命周期，不提前制造跨模块 ABI、加载顺序和插件边界问题。
+项目保持一个 `Catfishing` Runtime 模块，内部按领域目录分层。这样可以让 Run、Fishing、FishContainers、Inventory、Profile、Online 在同一局内共享清晰的 C++ 调用和生命周期，不提前制造跨模块 ABI、加载顺序和插件边界问题。
 
 后续可以整理目录，但不应为了“看起来模块化”拆多个 Runtime 模块。
 
@@ -28,33 +28,33 @@ ASC 放在 `ACatCharacter`，Character 同时作为 Owner 和 Avatar。PlayerSta
 
 Ability 输入路由属于 `AbilitySystem/`。`ACatfishingPlayerController` 可以在 UE 输入生命周期里安装物理按键和转交当前 Pawn，但不能长期持有 ASC 缓存、Ability 输入边沿或 AbilitySpec 激活状态；这些由 `UCatAbilityInputBindingComponent` 和 `UCatAbilitySystemComponent` 收口。
 
-## Items 表示鱼实例与容器事务
+## FishContainers 表示鱼实例与鱼容器事务
 
-当前 `Items/` 不是传统道具系统，也不是装备系统。它只拥有局内实物鱼、容器、转移、捕获、吃鱼、献祭预留和偷鱼 escrow。
+当前 `FishContainers/` 不是传统道具系统，也不是装备系统。它只拥有局内实物鱼、鱼容器、转移、捕获、吃鱼、售鱼和偷鱼 escrow。
 
-装备、草药、窝料、浮木和鱼竿耐久由 `Equipment/` 拥有；图鉴、印记和解锁由 `Collection/` 与 `Profile/` 拥有。这个拆分避免建立万能 `Item` 基类，也避免让实物鱼、装备选择、本地永久记录混成一份状态。
+功能装备、耗材和材料的正式实例与数量由 `Inventory/` 拥有；`Equipment/` 只拥有钓具选择读模型、Fishing 使用冻结、绑定鱼竿磨损和失败预算。图鉴、印记和解锁由 `Collection/` 与 `Profile/` 拥有。这个拆分禁止建立万能物品基类，也避免让实物鱼、库存物品、装备选择和本地永久记录混成一份状态。
 
-## 献祭由 Run-owned 协调器跨 Items 和 Run
+## 供品结算由 Run 写口收口
 
-献祭不是简单 Items 操作，也不是纯 Run 操作。`UCatSacrificeCoordinator` 用单向协议协调：预留鱼、Run 预检、Items commit、Run apply。
+供品结算不是通用库存动作。`ACatfishingGameModeBase` 通过 `FCatOfferingSettlementCommand` 收口玩家提交的供品计数，Run ASC 只按冻结后的供品事实计算最近供品点和世界进度。
 
-Items commit 之后鱼已经不可逆消费，不能回滚；如果 Run apply 失败，只能重试补 Run 或暴露失败。这比伪装数据库事务更诚实，也让 Host teardown 能有明确收口点。
+FishContainers 是实物鱼唯一写口，Run 只消费已经由上游冻结出来的供品数量。这避免把鱼容器提交和世界进度写成两套互相补偿的状态机。
 
 ## CapturePlan 与 ProfileGrant 分离
 
 CapturePlan 表示本局成像任务；ProfileGrant 表示永久授予内容；Grant ACK 表示客户端 durable 写入后回执。它们由 `UCatRunImprintService` 和 `UCatProfileSubsystem` 分开持有。
 
-这个分离防止服务器把“已经生成成像任务”误说成“玩家本地相册已经保存”，也防止鱼被偷、献祭或局末清空后回滚已经授予的图鉴记录。
+这个分离防止服务器把“已经生成成像任务”误说成“玩家本地相册已经保存”，也防止鱼被偷、供品结算或局末清空后回滚已经授予的图鉴记录。
 
 ## 巨鱼协作只发生在搏斗阶段
 
-旧“双人抄网”说法不再采用。当前规则是：巨鱼可在 HookedFight 阶段协作；NearShore 后由第一个合法抢抄者得到实物鱼。
+当前规则是：巨鱼可在 HookedFight 阶段协作；NearShore 后由第一个合法抢抄者得到实物鱼。
 
 实现中 `ACatFishingSession` 保留搏斗参与者用于候选/印记，但实物归属仍按抢抄提交者决定。
 
 ## Social 不拥有救援状态
 
-Social 管求助、恶作剧、保护牌和偷鱼协议权限，不持有 Downed、Recovery、搬运或草药恢复状态。救援写入由 Camp、Condition、Character 和 Equipment 链完成。
+Social 管求助、恶作剧、保护牌和偷鱼协议权限，不持有 Downed、Recovery、搬运或草药恢复状态。救援写入由 Camp、Condition 和 Character 链完成，草药恢复通过正式库存结果写回身体状态。
 
 这样能避免“社交系统看起来和玩家互动有关，所以把救援状态也塞进去”的误分类。
 
@@ -70,10 +70,10 @@ Social 管求助、恶作剧、保护牌和偷鱼协议权限，不持有 Downed
 
 ## 营地承载玩家出生点语义
 
-玩家进入玩法世界时不再依赖地图上的普通 `APlayerStart`。固定营地 `ACatCampHubActor` 继承 `APlayerStart`，由 `ACatfishingGameModeBase` 作为当前 World 唯一合法出生点选择；普通 `APlayerStart` 即使残留在地图中，也只作为待清理资产，不参与运行时裁决。
+玩家进入玩法世界时只依赖固定营地出生点。固定营地 `ACatCampHubActor` 继承 `APlayerStart`，由 `ACatfishingGameModeBase` 作为当前 World 唯一合法出生点选择；普通 `APlayerStart` 即使残留在地图中，也只作为编辑器资产，不参与运行时裁决。
 
 这样做把“出生点”和“开局聚集地”合成同一个领域事实，避免多人同时进图时引擎找不到可用 PlayerStart 后退回世界原点。营地只负责按当前玩家队列在附近解析最多 4 个合法生成位置；GameMode 保留引擎的 Pawn 设置和重启收尾链路，Online 会话容量也读取同一 4 人上限。
 
 ## Fail-closed 配置优先
 
-未裁数值、未接资产、未验证策略和临时诊断能力默认关闭或拒绝。这样会让早期原型显得保守，但能防止占位 DataAsset、空配置或测试入口在多人运行中产生“看似成功”的假事实。
+未裁数值、未接资产、未验证策略和临时诊断能力默认关闭或拒绝。这样会让原型显得保守，但能防止占位 DataAsset、空配置或测试入口在多人运行中产生“看似成功”的假事实。

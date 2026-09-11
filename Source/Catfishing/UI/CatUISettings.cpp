@@ -1,27 +1,29 @@
 #include "UI/CatUISettings.h"
 
 #include "EnhancedActionKeyMapping.h"
-#include "Blueprint/UserWidget.h"
 #include "InputAction.h"
 #include "InputMappingContext.h"
 #include "UI/HUD/CatHUDWidget.h"
+#include "UI/Run/CatDayTransitionWidget.h"
 #include "UI/Frontend/CatFrontendRootWidget.h"
 #include "UI/Interaction/CatInteractionPromptWidget.h"
 #include "UI/Inventory/CatInventoryWidget.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
+#include "UI/ItemTooltip/CatItemTooltipWidget.h"
 #include "UI/Save/CatLakeMainMenuWidget.h"
 
-// 构造流程：为正式拆分的 HUD、Frontend Root、进入游戏 Loading、回主菜单 Loading、背包、交互提示、局内菜单 WBP 和输入资产写入稳定软路径；项目配置可以覆盖这些默认值，LocalPlayer UI 读取两个 Loading 软类来决定 Start/Leave 使用哪张全局遮罩，类加载失败时对应流程只记录错误并保持 fail-closed。
+// 构造流程：为翻天、物品提示、HUD、背包及格子、交互提示、前端和局内菜单写入正式 WBP 默认软路径，再设置既有 InputAction 与 InputContext 的输入资产路径。
+// 此处只保存可被项目配置覆盖的引用，不加载或创建控件；各加载入口在实际装配时解析资产。
 UCatUISettings::UCatUISettings()
 {
+	DayTransitionWidgetClass = TSoftClassPtr<UCatDayTransitionWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Run/WBP_CatDayTransition.WBP_CatDayTransition_C")));
+	ItemTooltipWidgetClass = TSoftClassPtr<UCatItemTooltipWidget>(
+		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatItemTooltip.WBP_CatItemTooltip_C")));
 	HUDWidgetClass = TSoftClassPtr<UCatHUDWidget>(
 		FSoftClassPath(TEXT("/Game/UI/HUD/WBP_CatHUD.WBP_CatHUD_C")));
 	FrontendRootWidgetClass = TSoftClassPtr<UCatFrontendRootWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Frontend/WBP_CatFrontendRoot.WBP_CatFrontendRoot_C")));
-	GameplayLoadingWidgetClass = TSoftClassPtr<UUserWidget>(
-		FSoftClassPath(TEXT("/Game/UI/Frontend/WBP_CatGameplayLoading.WBP_CatGameplayLoading_C")));
-	ReturnToMainMenuLoadingWidgetClass = TSoftClassPtr<UUserWidget>(
-		FSoftClassPath(TEXT("/Game/UI/Frontend/WBP_CatReturnToMainMenuLoading.WBP_CatReturnToMainMenuLoading_C")));
 	InventoryWidgetClass = TSoftClassPtr<UCatInventoryWidget>(
 		FSoftClassPath(TEXT("/Game/UI/Inventory/WBP_CatInventory.WBP_CatInventory_C")));
 	InventorySlotWidgetClass = TSoftClassPtr<UCatInventorySlotWidget>(
@@ -68,33 +70,11 @@ TSubclassOf<UCatInventoryWidget> UCatUISettings::LoadInventoryWidgetClass() cons
 	return LoadedClass;
 }
 
-// Frontend Root WBP 类加载流程：同步解析配置软类并验证继承正式 Root 基类；失败返回空，让 LocalPlayer 保持无前端而不是退回旧 TravelWidget。
+// Frontend Root WBP 类加载流程：同步解析配置软类并验证继承正式 Root 基类；失败返回空，让 LocalPlayer 保持无前端而不是退回原生 TravelWidget。
 TSubclassOf<UCatFrontendRootWidget> UCatUISettings::LoadFrontendRootWidgetClass() const
 {
 	UClass* LoadedClass = FrontendRootWidgetClass.LoadSynchronous();
 	if (!LoadedClass || !LoadedClass->IsChildOf(UCatFrontendRootWidget::StaticClass()))
-	{
-		return nullptr;
-	}
-	return LoadedClass;
-}
-
-// 进入游戏 Loading 类加载流程：同步解析 Start 专用软类并验证它仍是 UUserWidget；失败返回空，让调用方记录缺配置而不是借用 Leave 资产。
-TSubclassOf<UUserWidget> UCatUISettings::LoadGameplayLoadingWidgetClass() const
-{
-	UClass* LoadedClass = GameplayLoadingWidgetClass.LoadSynchronous();
-	if (!LoadedClass || !LoadedClass->IsChildOf(UUserWidget::StaticClass()))
-	{
-		return nullptr;
-	}
-	return LoadedClass;
-}
-
-// 回主菜单 Loading 类加载流程：同步解析 Leave 专用软类并验证它仍是 UUserWidget；失败返回空，让调用方记录缺配置而不是借用 Start 资产。
-TSubclassOf<UUserWidget> UCatUISettings::LoadReturnToMainMenuLoadingWidgetClass() const
-{
-	UClass* LoadedClass = ReturnToMainMenuLoadingWidgetClass.LoadSynchronous();
-	if (!LoadedClass || !LoadedClass->IsChildOf(UUserWidget::StaticClass()))
 	{
 		return nullptr;
 	}
@@ -121,6 +101,21 @@ TSubclassOf<UCatInteractionPromptWidget> UCatUISettings::LoadInteractionPromptWi
 		return nullptr;
 	}
 	return LoadedClass;
+}
+
+// 正式翻天视图加载：解析软类后核对 UMG 父类和蓝图生成标志；失败不实例化原生类，不改变过场时钟。
+TSubclassOf<UCatDayTransitionWidget> UCatUISettings::LoadDayTransitionWidgetClass() const
+{
+	UClass* LoadedClass = DayTransitionWidgetClass.LoadSynchronous();
+	return LoadedClass && LoadedClass->IsChildOf(UCatDayTransitionWidget::StaticClass())
+		&& LoadedClass->HasAnyClassFlags(CLASS_CompiledFromBlueprint) ? LoadedClass : nullptr;
+}
+
+// 解析正式软类并验证父类；失败返回空，由 LocalPlayer 记录缺失，避免迁移未完成时显示白盒替身。
+TSubclassOf<UCatItemTooltipWidget> UCatUISettings::LoadItemTooltipWidgetClass() const
+{
+	UClass* LoadedClass = ItemTooltipWidgetClass.LoadSynchronous();
+	return LoadedClass && LoadedClass->IsChildOf(UCatItemTooltipWidget::StaticClass()) ? LoadedClass : nullptr;
 }
 
 // 局内菜单类加载流程：同步解析配置软类并验证继承菜单基类；失败返回空，避免 LocalPlayer 创建无交互空页。

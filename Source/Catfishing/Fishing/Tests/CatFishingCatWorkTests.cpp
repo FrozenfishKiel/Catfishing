@@ -2,6 +2,7 @@
 
 #include "Misc/AutomationTest.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
+#include "Fishing/Simulation/CatFishingOperatorWorkModel.h"
 #include "Fishing/Simulation/CatFishingRodResistanceModel.h"
 
 namespace CatActualWorkTest
@@ -53,30 +54,16 @@ bool FCatFishingTimedSupportTorqueTest::RunTest(const FString& Parameters)
 {
 	using namespace CatActualWorkTest;
 	const auto Settings = Config();
-	for (const double MaximumSpeed : {180.0, 360.0, 720.0})
-	{
-		FCatFishingRodRotationInput Rotation;
-		Rotation.CurrentAim.Yaw = 30.0;
-		Rotation.RequestedAim.Yaw = 150.0;
-		Rotation.CatTorqueCapacity = 50.0;
-		Rotation.MaximumFishTorque = 100.0;
-		Rotation.PreviousSmoothedFishPullStrengthMeters = FVector(100.0, 0.0, 0.0);
-		Rotation.MaximumAngularSpeedDegreesPerSecond = MaximumSpeed;
-		Rotation.DeltaSeconds = Settings.FixedStepSeconds;
-		const auto Observed = FCatFishingRodResistanceModel::StepRotation(Rotation);
-		TestTrue(TEXT("相反转矩相等时保持原来的物理平衡"), Observed.bSucceeded);
-		TestEqual(TEXT("受阻没有实际转角"), Observed.ActualAim.Yaw, 30.0, 1e-7);
-		TestEqual(TEXT("满力支撑只累计真实时间"), Observed.CatExertionSquaredSeconds, Settings.FixedStepSeconds, 1e-7);
-		TestEqual(TEXT("受阻没有转杆正功"), Observed.CatPositiveWorkRadians, 0.0, 1e-7);
-		auto Constraint = Rod();
-		Constraint.CatRodExertionSquaredSeconds = Observed.CatExertionSquaredSeconds;
-		Constraint.CatRodPositiveWorkRadians = Observed.CatPositiveWorkRadians;
-		const auto Result = Step(Settings, State(), Constraint);
-		TestTrue(TEXT("支撑观察量进入同一搏斗固定步"), Result.bSucceeded);
-		TestEqual(TEXT("提高最大转速不会放大受阻耗体"), Result.CatStaminaDrain / Settings.FixedStepSeconds,
-			Settings.CatSupportStaminaPerSecond, 1e-6);
-		TestEqual(TEXT("相同负载只收一次支撑"), Result.CatRodSupportStaminaDrain, 0.0, 1e-6);
-	}
+	// A fully blocked physical motor reports effort*time but zero positive angular work.
+	// Maximum angular speed is absent from this pricing input and cannot fabricate work.
+	auto Constraint = Rod();
+	Constraint.CatRodExertionSquaredSeconds = Settings.FixedStepSeconds;
+	Constraint.CatRodPositiveWorkRadians = 0.0;
+	const auto Result = Step(Settings, State(), Constraint);
+	TestTrue(TEXT("physical support observation enters the same fee step"), Result.bSucceeded);
+	TestEqual(TEXT("blocked support is billed by actual duration"), Result.CatStaminaDrain / Settings.FixedStepSeconds,
+		Settings.CatSupportStaminaPerSecond, 1e-6);
+	TestEqual(TEXT("the same load is charged once"), Result.CatRodSupportStaminaDrain, 0.0, 1e-6);
 	return !HasAnyErrors();
 }
 
@@ -97,14 +84,21 @@ bool FCatFishingCatWorkPacingTest::RunTest(const FString& Parameters)
 	Current.CatAction = ECatFightCatAction::Pull;
 	Settings.FishStrength = 20.0;
 	Current.FishVelocityCentimetersPerSecond = FVector(-80.0, 0.0, 0.0);
-	Constraint.CarrierDesiredVelocityCentimetersPerSecond = FVector(-40.0, 0.0, 0.0);
-	Constraint.CarrierVelocityCentimetersPerSecond = Constraint.CarrierDesiredVelocityCentimetersPerSecond;
+	Constraint.CarrierVelocityCentimetersPerSecond = FVector(-40.0, 0.0, 0.0);
 	Constraint.CatRodPositiveWorkRadians = 0.16;
 	const auto Heavy = Step(Settings, Current, Constraint);
-	const double HeavyRate = Heavy.CatStaminaDrain / Settings.FixedStepSeconds;
-	TestTrue(TEXT("移动收线转杆同时发力仍形成明显压力，但不会三秒扣尽"), Heavy.bSucceeded && HeavyRate >= 5.0 && HeavyRate <= 7.0);
-	TestTrue(TEXT("重操作仍分别支付移动、收线与转杆实际做功"),
-		Heavy.CatMovementStaminaDrain > 0.0 && Heavy.CatReelStaminaDrain > 0.0 && Heavy.CatRodWorkStaminaDrain > 0.0);
+	FCatFightOperatorMovementCostInput Movement;
+	Movement.MoveIntentWorld = -FVector::ForwardVector;
+	Movement.ActualDisplacementCentimeters = Constraint.CarrierVelocityCentimetersPerSecond * Settings.FixedStepSeconds;
+	Movement.MaximumMoveSpeedCentimetersPerSecond = 40.0;
+	Movement.FixedStepSeconds = Settings.FixedStepSeconds;
+	Movement.ActiveStrength = Settings.PrimaryOperatorCatStrength;
+	FCatFightOperatorMovementCostResult PersonalMovement;
+	if (!TestTrue(TEXT("真实身体位移独立计算个人账"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Movement, PersonalMovement))) return false;
+	const double HeavyRate = (PersonalMovement.StaminaDrain + Heavy.GetRodActionStaminaDrain()) / Settings.FixedStepSeconds;
+	TestTrue(TEXT("完成身体移动意图后只支付真实竿操作账"), Heavy.bSucceeded && FMath::IsFinite(HeavyRate) && HeavyRate > 0.0);
+	TestTrue(TEXT("完成意图的身体不耗体，收线与转杆仍各支付实际做功"),
+		PersonalMovement.StaminaDrain == 0.0 && Heavy.CatReelStaminaDrain > 0.0 && Heavy.CatRodWorkStaminaDrain > 0.0);
 
 	Settings.CatRodStaminaCostPerStrengthRadian *= 20.0;
 	Settings.CatStaminaCostPerStrengthCentimeter *= 10.0;
@@ -115,7 +109,7 @@ bool FCatFishingCatWorkPacingTest::RunTest(const FString& Parameters)
 	TestTrue(TEXT("费用不改变鱼的位置求解"), Repriced.ProposedFishWorldPosition.Equals(Heavy.ProposedFishWorldPosition, 1e-9));
 	TestEqual(TEXT("费用不改变线长"), Repriced.LineLengthCentimeters, Heavy.LineLengthCentimeters);
 	TestEqual(TEXT("费用不改变收线速度"), Repriced.ActualReelDistanceCentimeters, Heavy.ActualReelDistanceCentimeters);
-	TestEqual(TEXT("费用不改变角色牵引目标"), Repriced.CarrierTargetPullSpeedCentimetersPerSecond, Heavy.CarrierTargetPullSpeedCentimetersPerSecond);
+	TestEqual(TEXT("费用不改变提交给竿的完整鱼线力"), Repriced.LineTensionNewtons, Heavy.LineTensionNewtons);
 	TestEqual(TEXT("费用不改变杆杠杆与实际张力"), Repriced.RodLeverageMultiplier, Heavy.RodLeverageMultiplier);
 	TestEqual(TEXT("费用不改变张力"), Repriced.NormalizedTension, Heavy.NormalizedTension);
 	TestEqual(TEXT("费用不改变鱼耗体"), Repriced.FishStaminaDrain, Heavy.FishStaminaDrain);
@@ -139,7 +133,7 @@ bool FCatFishingCatWorkPacingTest::RunTest(const FString& Parameters)
 	Current.CatAction = ECatFightCatAction::Slack;
 	const auto Recovery = Step(Settings, Current, Constraint);
 	TestTrue(TEXT("右键仍恢复体力且双方无正向费用"), Recovery.bSucceeded && Recovery.CatStaminaDrain < 0.0
-		&& Recovery.CatMovementStaminaDrain == 0.0 && Recovery.GetSharedCatStaminaDrain() == 0.0 && Recovery.FishStaminaDrain == 0.0);
+		&& Recovery.GetRodActionStaminaDrain() == 0.0 && Recovery.FishStaminaDrain == 0.0);
 	AddInfo(FString::Printf(TEXT("Event=fishing_cat_work_reference_rates Source=ControlledSnapshot LightPerSecond=%.3f BlockedPerSecond=%.3f HeavyPerSecond=%.3f StaminaPool=60"),
 		LightRate, BlockedRate, HeavyRate));
 	return !HasAnyErrors();

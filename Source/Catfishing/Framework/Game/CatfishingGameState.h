@@ -10,6 +10,7 @@
 
 class UAbilitySystemComponent;
 class UCatChumFieldReplicationComponent;
+class UCatEconomyAttributeSet;
 class UCatRunAttributeSet;
 class UCatRunModifierAttributeSet;
 
@@ -32,15 +33,20 @@ public:
 	ACatfishingGameState();
 	/** 返回 GameState 持有的唯一 Run ASC；GAS 查询只读到这一份全队公共数值宿主。 */
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
-	/** 返回本局 Run 专用 ASC，供 GameMode 创建 GE Spec；调用方不得直接 SetNumericAttributeBase 写额度。 */
+	/** 返回本局 Run 专用 ASC，供 GameMode 创建 GE Spec；调用方不得直接 SetNumericAttributeBase 写供品目标或世界进度。 */
 	UAbilitySystemComponent* GetRunAbilitySystemComponent() const;
 	/** 返回 authority 上可写的 Run ASC；客户端返回空，防止 UI 或复制回调绕过 GameMode 命令协议。 */
 	UAbilitySystemComponent* GetRunAbilitySystemComponentFromAuthority() const;
+	/** 返回团队经济属性集；它与 Run 属性集挂在同一 GameState ASC，余额服务只能读取或经 GE 修改这一份属性。 */
+	const UCatEconomyAttributeSet* GetEconomyAttributeSet() const;
+	/** authority 获取可写经济属性集；经济服务用它创建交易 GE，客户端和 UI 不获得写入口。 */
+	UCatEconomyAttributeSet* GetEconomyAttributeSetFromAuthority() const;
 	/** 注册 Run/Help/Shop 三类公开快照复制；客户端分别经 RepNotify 消费，不在本地推进领域状态。 */
 	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
 	/** 仅允许 authority GameMode 写入组合公开事实；每次写入都会触发网络更新。 */
 	void SetRunPublicStateFromAuthority(const FCatRunPublicState& NewState);
-	/** 提供服务器最终值或客户端最近复制值，调用方据此渲染一局状态；返回 const 引用保证外部不能绕过 GameMode 写口推进 Run。 */
+	/** 提供服务器最终值或客户端最近复制值，供 C++、蓝图表现和编辑器检查读取；原生调用返回 const 引用，反射调用只取得值，不开放 Run 写口。 */
+	UFUNCTION(BlueprintPure, Category="Catfishing|Run")
 	const FCatRunPublicState& GetRunPublicState() const;
 	/** 仅允许 authority Social 服务发布最近一次求助；它不启动任务或自动加入 Fishing。 */
 	void SetHelpSignalFromAuthority(const FCatHelpSignalSnapshot& NewSignal);
@@ -61,9 +67,9 @@ public:
 	/** 本机商店公开经济快照变化通知；只提示 UI 重读，不授权客户端确认交付或改余额。 */
 	FCatShopEconomySnapshotChanged OnShopEconomySnapshotChanged;
 protected:
-	/** 组件完成注册后按 Lyra 口径初始化 Run ASC 的 Owner/Avatar；这里不计算额度、不推进 StateTree。 */
+	/** 组件完成注册后按 Lyra 口径初始化 Run ASC 的 Owner/Avatar；这里不计算供品目标、不推进 StateTree。 */
 	virtual void PostInitializeComponents() override;
-	/** 实例进入 World 后记录实际类；Run ASC 已在组件初始化阶段绑定，不在这里补算额度或推进 StateTree。 */
+	/** 实例进入 World 后记录实际类；Run ASC 已在组件初始化阶段绑定，不在这里补算供品目标或推进 StateTree。 */
 	virtual void BeginPlay() override;
 	/** 客户端收到新 Revision 后记录结构化诊断，UI/玩法只能继续读取复制快照。 */
 	UFUNCTION()
@@ -80,19 +86,23 @@ private:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Run", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UAbilitySystemComponent> RunAbilitySystemComponent;
 
-	/** Run ASC 持有的最终额度属性集，保存目标和进度；GameMode 只投影它，不维护第二套最终数值公式。 */
+	/** Run ASC 持有的最终供品与世界进度属性集；GameMode 只投影它，不维护第二套最终数值公式。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Run", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatRunAttributeSet> RunAttributes;
 
-	/** Run ASC 持有的来源倍率属性集，保存压力、效率和目标倍率；ExecCalc 捕获它，业务模块不得各自重算来源修正。 */
+	/** Run ASC 持有的来源倍率属性集，保存压力、世界进度奖惩倍率和目标倍率；ExecCalc 捕获它，业务模块不得各自重算来源修正。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Run", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatRunModifierAttributeSet> RunModifiers;
+
+	/** GameState ASC 上唯一团队余额属性集；构造时注册，PostInitializeComponents 在服务器用 Settings 播种本局起始金币。 */
+	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Economy", meta = (AllowPrivateAccess = "true"))
+	TObjectPtr<UCatEconomyAttributeSet> EconomyAttributes;
 
 	/** 自然事件与玩家打窝的公开复制组件；服务器 ChumFieldSubsystem 写入，客户端只用它驱动窝点表现。 */
 	UPROPERTY(VisibleAnywhere)
 	TObjectPtr<UCatChumFieldReplicationComponent> ChumFieldReplication;
 
-	/** Run 对外展示的局内进度真相；服务器在昼夜/额度变化时写入，客户端只通过 OnRep 观察。 */
+	/** Run 对外展示的局内进度真相；服务器在昼夜和供品结算变化时写入，客户端只通过 OnRep 观察。 */
 	UPROPERTY(ReplicatedUsing = OnRep_RunPublicState)
 	FCatRunPublicState RunPublicState;
 

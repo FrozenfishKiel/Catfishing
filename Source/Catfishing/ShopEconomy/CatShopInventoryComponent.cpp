@@ -10,7 +10,7 @@
 
 namespace
 {
-	// 目录排序流程：排序只影响 UI 展示和快照稳定性，不改变购买裁决；EntryId 次序兜底让同 SortOrder 的条目也有确定顺序。
+	// 目录排序流程：排序只影响 UI 展示和快照稳定性，不改变购买裁决；EntryId 次序让同 SortOrder 的条目也有确定顺序。
 	void SortCatalogEntries(TArray<FCatShopCatalogEntry>& Entries)
 	{
 		Entries.StableSort([](const FCatShopCatalogEntry& Left, const FCatShopCatalogEntry& Right)
@@ -23,13 +23,13 @@ namespace
 		});
 	}
 
-	/** 随机刷新池里的临时候选；它只在构建当前货架时存在，不会成为第二份库存状态。 */
+	/** 随机刷新池里的构建期候选；它只在生成当前货架时存在，不会成为第二份库存状态。 */
 	struct FWeightedRandomCandidate
 	{
 		/** 已经转换好的运行目录项；被抽中后会进入当前货架库存。 */
 		FCatShopCatalogEntry Entry;
 
-		/** 本候选剩余抽取权重；候选被抽走后整项移除，不再参与后续抽取。 */
+		/** 本候选剩余抽取权重；候选被抽走后整项移除，不参与本轮余下抽取。 */
 		int32 Weight = 0;
 	};
 
@@ -37,8 +37,8 @@ namespace
 
 // 构造流程：
 // 1. 关闭 Tick 并打开组件复制，让客户端能拿到和服务器一致的摊位库存 ID。
-// 2. 不再写入任何 C++ 默认商品，正式商品、价格、分类和随机池都必须来自策划 DataTable。
-// 3. 随机抽取数量保留为组件配置，默认 0 表示只展示表中固定上架行。
+// 2. 构造阶段不写入 C++ 默认商品，正式商品、价格、分类和随机池都必须来自策划 DataTable。
+// 3. 随机抽取数量由组件配置提供，默认 0 表示只展示表中固定上架行。
 UCatShopInventoryComponent::UCatShopInventoryComponent()
 {
 	PrimaryComponentTick.bCanEverTick = false;
@@ -91,6 +91,7 @@ void UCatShopInventoryComponent::EndPlay(const EEndPlayReason::Type EndPlayReaso
 			Shop->UnregisterShopInventory(this);
 		}
 	}
+	// Super 放在注销之后；父类清理组件引用时，商店服务不应再把本组件当作有效摊位。
 	Super::EndPlay(EndPlayReason);
 }
 
@@ -128,7 +129,7 @@ bool UCatShopInventoryComponent::RebuildInitialInventoryFromCatalog()
 // 刷新流程：
 // 1. 只允许 authority 用有效 RequestId 刷新本摊位，刷新触发时机不在这里决定。
 // 2. 同一 RequestId 只生效一次，避免网络重试重复抽随机池。
-// 3. 成功时整体替换货架并广播，失败保留旧货架，避免半刷新影响购买。
+// 3. 成功时整体替换货架并广播，失败时不提交新货架，避免半刷新影响购买。
 bool UCatShopInventoryComponent::RefreshShopInventoryFromCatalog(const FGuid& RequestId,
 	const FCatShopRefreshRequest& Request)
 {
@@ -206,9 +207,10 @@ bool UCatShopInventoryComponent::TryGetCatalogEntry(const FName EntryId, FCatSho
 // 整车库存扣减流程：
 // 1. 先在本摊位内合并重复 EntryId，并整批验证 authority、目录状态、条目存在和有限库存数量。
 // 2. 所有行都通过后才进入第二轮扣减；无限库存只返回快照，有限库存按选购次数推进版本。
-// 3. 本函数不广播变化，购买写口会在公款、库存和账本同一笔事务都写完后统一发布公开快照。
+// 3. 暂存本次货架后执行同步付款，拒绝则恢复数量和版本；全过程不广播，经济服务在账本也写完后统一发布。
 bool UCatShopInventoryComponent::ConsumeCatalogEntriesFromAuthority(
-	const TArray<FCatShopCartLineCommand>& Lines, TArray<FCatShopStockSnapshot>& OutSnapshots)
+	const TArray<FCatShopCartLineCommand>& Lines, TArray<FCatShopStockSnapshot>& OutSnapshots,
+	TFunctionRef<bool()> CommitPayment)
 {
 	OutSnapshots.Reset();
 	if (!GetOwner() || !GetOwner()->HasAuthority() || !bCatalogReady)
@@ -235,6 +237,7 @@ bool UCatShopInventoryComponent::ConsumeCatalogEntriesFromAuthority(
 		}
 	}
 	OutSnapshots.Reserve(NormalizedLines.Num());
+	const TMap<FName, FStockRecord> OriginalStock = StockByEntryId;
 	for (const FCatShopCartLineCommand& Line : NormalizedLines)
 	{
 		FStockRecord* StockRecord = StockByEntryId.Find(Line.EntryId);
@@ -249,6 +252,12 @@ bool UCatShopInventoryComponent::ConsumeCatalogEntriesFromAuthority(
 			++StockRecord->Revision;
 		}
 		OutSnapshots.Add(MakeStockSnapshot(StockRecord));
+	}
+	if (!CommitPayment())
+	{
+		StockByEntryId = OriginalStock;
+		OutSnapshots.Reset();
+		return false;
 	}
 	return true;
 }
@@ -318,7 +327,7 @@ bool UCatShopInventoryComponent::BuildRuntimeCatalogEntries(FRandomStream& Rando
 }
 
 // DataTable 构建流程：
-// 1. 先要求表结构就是 FCatShopCatalogTableRow，再遍历启用行并用 RowName 兜底 EntryId。
+// 1. 先要求表结构就是 FCatShopCatalogTableRow，再遍历启用行；EntryId 留空时使用 RowName。
 // 2. 固定上架行直接进入输出；随机候选要求正权重，并在进入候选池前解析本轮库存覆盖。
 // 3. 随机池按权重不放回抽取 RefreshRule.RandomEntryCount 条，权重总量超出随机接口范围也视为配置错误。
 // 4. 最后整体排序；任一启用行非法都会关闭整份目录，避免客户端看到服务器不会接受的货架。
@@ -438,7 +447,7 @@ TSoftObjectPtr<UDataTable> UCatShopInventoryComponent::ResolveShopCatalogTable()
 // DataTable 展示候选流程：
 // 1. 只读取启用且有上架路径的行；固定行和有权重的随机候选都可作为 UI 候选。
 // 2. 行本身非法时不进入展示候选，服务器初始构建会继续用 fail-closed 日志暴露配置错误。
-// 3. 重复 EntryId 只保留首次候选，避免 WBP 按公开库存反查时出现两个同名商品行。
+// 3. 重复 EntryId 只采用首次候选，避免 WBP 按公开库存反查时出现两个同名商品行。
 void UCatShopInventoryComponent::CollectDisplayCatalogEntriesFromTable(const UDataTable& CatalogTable,
 	TArray<FCatShopCatalogEntry>& OutEntries) const
 {
@@ -468,7 +477,7 @@ void UCatShopInventoryComponent::CollectDisplayCatalogEntriesFromTable(const UDa
 	SortCatalogEntries(OutEntries);
 }
 
-// 货架重建流程：逐条校验运行目录、拒绝重复 EntryId，并把库存版本从 1 开始；失败时清空临时结果，不留下半张货架。
+// 货架重建流程：逐条校验运行目录、拒绝重复 EntryId，并把货架版本从 1 开始；失败时清空构建结果，不留下半张货架。
 bool UCatShopInventoryComponent::RebuildStockFromCatalogEntries(const TArray<FCatShopCatalogEntry>& CatalogEntries,
 	FString& OutError)
 {

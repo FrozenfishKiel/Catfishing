@@ -5,12 +5,13 @@
 #include "CatUISettings.generated.h"
 
 class UCatHUDWidget;
+class UCatDayTransitionWidget;
+class UCatItemTooltipWidget;
 class UCatFrontendRootWidget;
 class UCatInteractionPromptWidget;
 class UCatInventorySlotWidget;
 class UCatInventoryWidget;
 class UCatLakeMainMenuWidget;
-class UUserWidget;
 class UInputAction;
 class UInputMappingContext;
 
@@ -30,20 +31,20 @@ public:
 	/** 返回正式主 HUD WBP 类；缺失时调用方 fail-closed，不创建原生白盒替身。 */
 	TSubclassOf<UCatHUDWidget> LoadHUDWidgetClass() const;
 
-	/** 返回正式 Frontend Root WBP 类；缺失时 LocalPlayer fail-closed，不创建已废弃旧视图或任何原生替身。 */
+	/** 读取正式翻天 WBP；缺失、原生类或错误父类都返回空，调用方必须隐藏并记录而非创建替身。 */
+	TSubclassOf<UCatDayTransitionWidget> LoadDayTransitionWidgetClass() const;
+
+	/** 返回正式 Frontend Root WBP 类；缺失时 LocalPlayer fail-closed，不创建原生替身。 */
 	TSubclassOf<UCatFrontendRootWidget> LoadFrontendRootWidgetClass() const;
-
-	/** 返回进入游戏专用全局 Loading WBP 类；缺失时 Start 遮罩 fail-closed，不借用退出等待页。 */
-	TSubclassOf<UUserWidget> LoadGameplayLoadingWidgetClass() const;
-
-	/** 返回回主菜单专用全局等待 WBP 类；缺失时 Leave 遮罩 fail-closed，不借用进图加载页。 */
-	TSubclassOf<UUserWidget> LoadReturnToMainMenuLoadingWidgetClass() const;
 
 	/** 返回正式背包主界面 WBP 类；缺失时调用方 fail-closed，不创建原生白盒替身。 */
 	TSubclassOf<UCatInventoryWidget> LoadInventoryWidgetClass() const;
 
 	/** 读取正式背包格子 WBP 类；缺失时背包只能显示主界面文本，不创建原生格子替身。 */
 	TSubclassOf<UCatInventorySlotWidget> LoadInventorySlotWidgetClass() const;
+
+	/** 读取迁移后的正式物品提示 WBP；资源或父类不符时返回空，不生成替代布局。 */
+	TSubclassOf<UCatItemTooltipWidget> LoadItemTooltipWidgetClass() const;
 
 	/** 读取正式交互提示 WBP 类；缺失时只关闭提示表现，不影响交互目标自己的服务器裁决。 */
 	TSubclassOf<UCatInteractionPromptWidget> LoadInteractionPromptWidgetClass() const;
@@ -75,7 +76,7 @@ public:
 	/** 从正式 IMC 中解析交互确认 Action 的第一个按键名；解析失败时返回 None。 */
 	FName ResolveInteractionConfirmKeyName() const;
 
-	/** 局内玩家 UI 的装配开关；默认开启后仍要求各模块 WBP 有效，关闭只用于测试或临时禁用玩家可见 UI。 */
+	/** 局内玩家 UI 的装配开关；默认开启后仍要求各模块 WBP 有效，关闭只用于测试或诊断禁用玩家可见 UI。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake")
 	bool bEnablePlayerLakeUI = true;
 
@@ -83,17 +84,13 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|HUD")
 	TSoftClassPtr<UCatHUDWidget> HUDWidgetClass;
 
+	/** 翻天遮罩的正式 WBP 软类引用；构造器提供默认路径，项目配置可覆盖，LocalPlayer 经加载入口按请求创建实例，布局由资产维护。 */
+	UPROPERTY(Config, EditAnywhere, Category="Lake|Run")
+	TSoftClassPtr<UCatDayTransitionWidget> DayTransitionWidgetClass;
+
 	/** 正式 Frontend 根 WBP 类；只在 Frontend World 为本地玩家创建，Root 内只装配主菜单、存档、房间和设置页面。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Frontend")
 	TSoftClassPtr<UCatFrontendRootWidget> FrontendRootWidgetClass;
-
-	/** 进入游戏专用全局 Loading WBP 类；构造默认值或项目配置写入，`LoadGameplayLoadingWidgetClass()` 与 LocalPlayer UI 读取；改值会改变 Start 遮罩使用的 WBP 和缺类时的 fail-closed 结果。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Loading")
-	TSoftClassPtr<UUserWidget> GameplayLoadingWidgetClass;
-
-	/** 回主菜单专用全局等待 WBP 类；构造默认值或项目配置写入，`LoadReturnToMainMenuLoadingWidgetClass()` 与 LocalPlayer UI 读取；改值会改变 Leave 遮罩使用的 WBP 和缺类时的 fail-closed 结果。 */
-	UPROPERTY(Config, EditAnywhere, Category = "Loading")
-	TSoftClassPtr<UUserWidget> ReturnToMainMenuLoadingWidgetClass;
 
 	/** 正式背包主 WBP 类；它拥有 WrapBox，并按当前打开的容器容量创建格子。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")
@@ -102,6 +99,10 @@ public:
 	/** 正式背包格子 WBP 类；每个格子是独立 UserWidget，不是 Button。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")
 	TSoftClassPtr<UCatInventorySlotWidget> InventorySlotWidgetClass;
+
+	/** 玩家唯一物品悬停框的正式 WBP；LocalPlayer 装配时读取，资产位于已有库存 Cook 目录。 */
+	UPROPERTY(Config, EditAnywhere, Category = "Lake|Inventory")
+	TSoftClassPtr<UCatItemTooltipWidget> ItemTooltipWidgetClass;
 
 	/** 正式交互提示 WBP 类；只显示靠近对象和确认键提示。 */
 	UPROPERTY(Config, EditAnywhere, Category = "Lake|Interaction")

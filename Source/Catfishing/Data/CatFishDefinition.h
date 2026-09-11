@@ -1,9 +1,9 @@
 #pragma once
 
 #include "CoreMinimal.h"
-#include "Engine/DataAsset.h"
 #include "Data/CatFishSelectionTypes.h"
 #include "Framework/Core/CatRunContracts.h"
+#include "Inventory/CatInventoryItemDefinition.h"
 #include "CatFishDefinition.generated.h"
 
 class UTexture2D;
@@ -33,18 +33,47 @@ enum class ECatFishFoodSafety : uint8
 	Toxic
 };
 
-/** 鱼种运行定义的最小 SSOT 接缝；无显式启用、稳定 ID、体型和价值时不能伪造可捕获鱼。 */
+/** 鱼种运行定义的最小 SSOT 接缝；同时也是鱼物品静态定义，实物鱼进入鱼护、鱼缸和商店时不再走第二套容器物品表。 */
 UCLASS(BlueprintType)
-class CATFISHING_API UCatFishDefinition : public UPrimaryDataAsset
+class CATFISHING_API UCatFishDefinition : public UCatInventoryItemDefinition
 {
 	GENERATED_BODY()
 
 public:
-	/** 检查该资产是否足以进入阶段 E 事务；任一必需字段 Unset 都返回 false。 */
+	/** 构造鱼定义资产；库存侧的展示、ID 和实例类型都从鱼表字段覆盖读取。 */
+	UCatFishDefinition(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+
+	/** 检查该资产是否足以进入运行时捕获与容器事务；任一必需字段 Unset 都返回 false。 */
 	bool IsRuntimeDefinitionReady() const;
 	double FindBaitMultiplierOrNeutral(FName BaitDefinitionId) const;
 	/** 解析本鱼直接引用且合同完整的表现定义；不会扫描目录或按 ID 查询第二张表。 */
 	UCatFishPresentationDefinition* LoadRuntimePresentationDefinition() const;
+
+	/** 鱼物品稳定 ID 直接复用鱼种稳定 ID；库存、商店和保存不会维护平行鱼物品 ID。 */
+	virtual FName GetInventoryDefinitionId() const override;
+
+	/** 鱼物品展示名直接复用鱼种展示名；UI 不需要为鱼再查第二份物品表。 */
+	virtual FText GetInventoryDisplayName() const override;
+
+	/** 鱼物品说明直接复用鱼种说明；库存详情和图鉴共享同一份内容配置。 */
+	virtual FText GetInventoryDescription() const override;
+
+	/** 鱼物品缩略图直接复用鱼种缩略图；表现层仍从鱼定义取资源。 */
+	virtual TSoftObjectPtr<UTexture2D> GetInventoryThumbnail() const override;
+
+	/** 鱼定义只有能进入 Fishing 运行时且能生成鱼物品实例时才允许进正式库存。 */
+	virtual bool IsInventoryRuntimeDefinitionReady() const override;
+
+	/** 鱼物品默认生成鱼专用实例，重量、来源会话和捕获者身份都落在实例上。 */
+	virtual TSubclassOf<UCatInventoryItemInstance> GetPreferredInstanceType() const override;
+
+	/** 实物鱼不能堆叠；每条鱼都必须保留自己的实例 ID、重量和来源会话。 */
+	virtual int32 GetMaxStackCount() const override;
+
+	/** 鱼运行槽归一化会验证鱼专属字段，防止普通空格或鱼竿状态混入实物鱼。 */
+
+	/** 不允许两条鱼按定义合并；同鱼种不同个体也必须保持两个实例。 */
+	virtual bool CanStackWith(const UCatInventoryItemDefinition& Other) const override;
 
 	/** 鱼种稳定 ID；FishInstance、图鉴候选和日志只引用该值，不把资产对象当永久身份。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Identity")
@@ -72,10 +101,6 @@ public:
 	/** 体型协作档位；只有 Giant 可在 Fishing 阶段接受搏斗协作者。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing")
 	ECatFishBodyClass BodyClass = ECatFishBodyClass::Unknown;
-
-	/** 献祭提交后贡献的额度值；0 表示 Unset，客户端命令不能覆盖它。 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Sacrifice", meta = (ClampMin = "0"))
-	int32 SacrificeContribution = 0;
 
 	/** 捕获后可选成像事件的正式语义 ID；None 只跳过 CapturePlan，不阻止实物鱼与 FishRecorded 提交。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Imprint")
@@ -121,15 +146,6 @@ public:
 	/** 刷新该鱼需要的在场协作能力人数；单人局过滤任何大于 1 的定义。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "1", ClampMax = "8"))
 	int32 MinimumFightParticipants = 0;
-
-	/**
-	 * 旧资产序列化字段；运行时力量已统一由“本条实际重量 × UCatFishingFightBalanceDefinition::StrengthPerKilogram”生成。
-	 * 暂留字段只为安全读取尚未重存的二进制 DataAsset，不再参与选鱼、搏斗或 UI。
-	 */
-	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing",
-		meta = (ClampMin = "0.0", DeprecatedProperty,
-			DeprecationMessage = "FishStrength is derived from sampled weight at runtime"))
-	double FishStrength = 0.0;
 
 	/** 搏斗中的鱼短周期体力；与日常属性/稀有度独立，0 表示未裁。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Fishing", meta = (ClampMin = "0.0"))

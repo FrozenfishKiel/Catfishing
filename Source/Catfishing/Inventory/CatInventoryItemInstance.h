@@ -17,17 +17,14 @@ struct FCatInventoryItemUseContext
 	/** 本次 Use 意图的稳定请求 ID；服务器和下游领域命令用它做幂等和 UI 回包关联。 */
 	FGuid RequestId;
 
-	/** 发起 Use 的玩家控制器；领域 gate 已在协调器检查，下游只把它作为身份或日志来源。 */
+	/** 发起 Use 的玩家控制器；RPC 入口已经完成命令 gate，下游只把它作为身份或日志来源。 */
 	AController* RequestingController = nullptr;
 
 	/** 实际使用物品的 Pawn；装备、消耗品或未来工具效果通过它寻找自己的目标组件。 */
 	APawn* UserPawn = nullptr;
 
-	/** 持有被点击槽位的正式库存组件；实例如需扣量或查询当前版本，只能回到这份事实源。 */
+	/** 持有被点击槽位的正式库存组件；实例如需扣量或重读当前条目，只能回到这份事实源。 */
 	UCatInventoryComponent* SourceInventory = nullptr;
-
-	/** UI 观察到的正式库存版本；库存组件先用它阻止陈旧 Use 覆盖较新的背包事实。 */
-	int64 ExpectedInventoryRevision = 0;
 
 	/** 被使用物品所在的正式库存槽位；库存组件按它重读条目，实例不能信任 UI 传来的定义或类别。 */
 	int32 InventorySlotIndex = INDEX_NONE;
@@ -52,20 +49,38 @@ public:
 	/** 定义资产一旦绑定就驱动片段初始化；这样实例状态从静态配置派生，避免显示名或标签反推身份。 */
 	void SetItemDefinition(UCatInventoryItemDefinition* InDefinition);
 
-	/** 读取这份实例的静态定义资产；存档、日志或适配层需要稳定目录入口时使用它。 */
+	/** 读取这份实例的静态定义资产；存档、日志或领域系统需要稳定目录入口时使用它。 */
 	UCatInventoryItemDefinition* GetItemDefinition() const;
 
-	/** 读取这份实例的稳定定义 ID；日志、旧快照投影和商店回执用它对齐同一种物品。 */
+	/** 读取这份实例的稳定定义 ID；日志、读模型和商店回执用它对齐同一种物品。 */
 	FName GetItemDefinitionId() const;
 
 	/** 读取这份运行实例自己的稳定 ID；堆叠格共享一个实例 ID，非堆叠物每件各自拥有一个。 */
 	FGuid GetItemInstanceId() const;
 
-	/** authority 恢复这份实例的稳定 ID；存档和旧快照迁移用它保留原物品身份，客户端不能伪造。 */
+	/** 正式库存 Use 事务调用的实例侧裁决；条目和实例身份必须一致，返回值决定是否继续扣量或借出。 */
+	virtual ECatDomainCommandError Use(const FCatInventoryEntry& Item, int32 Quantity) const;
+
+	/** 正式库存 UnUse 事务调用的实例侧裁决；成功只说明这份活动 entry 可以归还可见库存。 */
+	virtual ECatDomainCommandError UnUse(const FCatInventoryEntry& Item) const;
+
+	/** 这份实例 Use 成功后是否由库存活动区暂存整份对象；部署物和长期占用物用它离开可见背包但不丢身份。 */
+	virtual bool KeepsInventoryInstanceWhileUsed() const;
+
+	/** 这份实例 Use 成功后是否直接扣库存数量；数量耗材通过它让 InventoryComponent 执行同一槽位扣减。 */
+	virtual bool ConsumesInventoryQuantityOnUse() const;
+
+	/** authority 恢复这份实例的稳定 ID；存档恢复用它保留原物品身份，客户端不能伪造。 */
 	void SetItemInstanceIdFromAuthority(FGuid InItemInstanceId);
 
-	/** 运行宿主记录当前拥有者；跨库存移动会刷新它，避免实例行为继续认为自己属于旧 Actor。 */
-	void SetRuntimeOwnerActor(AActor* InRuntimeOwnerActor);
+	/** 运行宿主记录当前拥有者；跨库存移动会刷新它，避免实例行为继续认为自己属于原 Actor。 */
+	virtual void SetRuntimeOwnerActor(AActor* InRuntimeOwnerActor);
+
+	/** 库存落地通过此入口取得原载体，保留拾取前的 Actor 状态和尺寸；空引用才走定义生成路径。 */
+	virtual AActor* GetWorldActor() const;
+
+	/** 拾取和落地时关联这份实例的原世界物；不改变数量、实例身份或存档。 */
+	void SetWorldActor(AActor* InWorldActor);
 
 	/** 读取当前运行宿主；没有显式宿主时回退到 Outer Actor，方便刚创建的实例立即可用。 */
 	AActor* GetRuntimeOwnerActor() const;
@@ -73,15 +88,19 @@ public:
 	/** Use 预检只读地声明实例是否可进入正式提交；通用实例默认拒绝，避免库存层绕过物品语义直接结算。 */
 	virtual bool CanUseFromInventory(const FCatInventoryEntry& InventoryEntry, APawn* UserPawn) const;
 
-	/** 正式库存 Use 的唯一实例扩展面；服务器命令入口用它传递 RequestId、Revision 和错误码，具体物品效果只通过结构化回包提交。 */
+	/** 正式库存 Use 的唯一实例扩展面；服务器命令入口用它传递 RequestId、槽位上下文和错误码，具体物品效果只通过结构化回包提交。 */
 	virtual FCatDomainCommandResult UseFromInventorySlotFromAuthority(
 		const FCatInventoryEntry& InventoryEntry, const FCatInventoryItemUseContext& UseContext);
 
 protected:
+	/** 这份物品在当前世界中的原 Actor；拾取保存、落地复用，只有一个引用，不按堆叠数量保存多份。 */
+	UPROPERTY(Transient)
+	TObjectPtr<AActor> WorldActor = nullptr;
+
 	/** 定义绑定后的实例状态扩展点；父类片段已完成初始化后调用它，子类只能补齐自己拥有的运行状态。 */
 	virtual void HandleItemDefinitionAssigned();
 
-	/** 这份运行物品的稳定实例 ID；服务器创建时写入，客户端和旧快照投影只读取它。 */
+	/** 这份运行物品的稳定实例 ID；服务器创建时写入，客户端和读模型只读取它。 */
 	UPROPERTY(Replicated, BlueprintReadOnly, Category = "Inventory")
 	FGuid ItemInstanceId;
 

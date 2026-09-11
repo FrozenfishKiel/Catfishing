@@ -16,7 +16,7 @@ struct FCatInteractionPromptViewState
 	UPROPERTY(BlueprintReadOnly)
 	bool bVisible = false;
 
-	/** 当前可交互对象的短名称；例如商店、鱼缸、祭坛或修竿点。 */
+	/** 当前可交互对象的短名称；例如商店、鱼缸或祭坛。 */
 	UPROPERTY(BlueprintReadOnly)
 	FText TargetText;
 

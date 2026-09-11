@@ -1,6 +1,6 @@
 #pragma once
 
-// 兼容旧 include 入口；Framework/Game 的真实框架类已经一对一拆到各自头文件。
+// Framework/Game 框架头聚合入口；这里只转发真实拆分头，业务实现不写在这里。
 #include "Framework/Game/CatFrontendGameMode.h"
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Framework/Game/CatfishingGameState.h"

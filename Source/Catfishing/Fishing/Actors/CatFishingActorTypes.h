@@ -8,7 +8,7 @@
 
 class APlayerState;
 
-/** 鱼竿的稳定空间姿态；会话阶段与姿态正交，放到地上不会终止鱼、钩或鱼线。 */
+/** 鱼竿的稳定空间姿态；会话阶段与姿态正交，架住不终止鱼、钩或鱼线；Grounded 保留序列化值，表示离手固定架竿。 */
 UENUM(BlueprintType)
 enum class ECatFishingRodPoseMode : uint8
 {
@@ -45,7 +45,8 @@ struct FCatFishingOperatorMembership
 	GENERATED_BODY()
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> PlayerState = nullptr;
 	UPROPERTY() uint32 Epoch = 0;
-	UPROPERTY(BlueprintReadOnly) FVector FormationOffsetWorld = FVector::ZeroVector;
+	/** 旧资产序列化槽位偏移，恒零；正式身体位置完全由物理约束决定。 */
+	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Physical bodies have independent positions; this legacy offset is always zero")) FVector FormationOffsetWorld = FVector::ZeroVector;
 };
 
 USTRUCT(BlueprintType)

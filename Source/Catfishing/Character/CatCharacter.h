@@ -10,10 +10,19 @@ class UAbilitySystemComponent;
 class UCatAbilitySystemComponent;
 class UCatSurvivalAttributeSet;
 class UCatConditionComponent;
+class UCatConditionPresentationComponent;
 class UCatEquipmentComponent;
 class UCatInventoryComponent;
 class UCatGrowthComponent;
 class UCatFishingCameraComponent;
+class UCatPhysicalBodyComponent;
+class UCatPhysicsGrabComponent;
+class UCatPhysicsPrototypeVisualComponent;
+class UCatModelContactComponent;
+class UBoxComponent;
+class USphereComponent;
+class UPhysicsConstraintComponent;
+class UMeshComponent;
 
 /**
  * Lake 的唯一玩法身体；同时宿主 Character-owned ASC、Condition、Growth、Inventory 与 Equipment。
@@ -28,8 +37,23 @@ class CATFISHING_API ACatCharacter : public ACharacter, public IAbilitySystemInt
 public:
 	/** 构造 ASC/属性集、Condition、Growth、Inventory 与 Equipment，开启组件复制但不在 CDO 写任何运行数值。 */
 	ACatCharacter(const FObjectInitializer& ObjectInitializer = FObjectInitializer::Get());
+	UFUNCTION(BlueprintPure, Category="Catfishing|Physics")
+	UCatPhysicalBodyComponent* GetPhysicalBodyComponent() const { return PhysicalBodyComponent; }
+	UFUNCTION(BlueprintPure, Category="Catfishing|Physics")
+	FVector GetBodyFootPointWorld() const;
+	UFUNCTION(BlueprintPure, Category="Catfishing|Physics")
+	double GetBodyStandRootHeightCm() const;
+	UMeshComponent* GetBodyVisualMesh() const;
+	virtual FVector GetVelocity() const override;
+	virtual float GetDefaultHalfHeight() const override;
+	virtual void Tick(float DeltaSeconds) override;
+	virtual bool TeleportTo(const FVector& DestLocation, const FRotator& DestRotation, bool bIsATest=false, bool bNoCheck=false) override;
+	virtual void FaceRotation(FRotator NewControlRotation, float DeltaTime=0.0f) override;
 	/** 上鱼时由 Fishing 表现提供持杆第一人称；其余时间保留角色蓝图的相机。 */
 	virtual void CalcCamera(float DeltaTime, FMinimalViewInfo& OutResult) override;
+	/** Route gameplay/Blueprint montages through the selected skin's compatible animation map. */
+	virtual float PlayAnimMontage(UAnimMontage* AnimMontage, float InPlayRate=1.0f, FName StartSectionName=NAME_None) override;
+	virtual void StopAnimMontage(UAnimMontage* AnimMontage=nullptr) override;
 
 	/** 返回 Character 持有的唯一 ASC；runtime gate 关闭也返回组件，让外部只读接缝不需要第二条查找路径。 */
 	virtual UAbilitySystemComponent* GetAbilitySystemComponent() const override;
@@ -50,6 +74,16 @@ public:
 	/** 返回 Character 正式随身库存组件；新拾取、商店和营地发货入口应优先围绕它迁移。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")
 	UCatInventoryComponent* GetInventoryComponent() const;
+
+	/** 当前猫嘴唯一携带的世界 Actor；仅服务器通过认领/释放接口写入，复制给表现和交互消费者，不从附着树反推占用。 */
+	UFUNCTION(BlueprintPure, Category = "Catfishing|Inventory")
+	AActor* GetMouthCarriedActor() const;
+
+	/** 服务器在所有可重入回调前认领空嘴；成功后该 Actor 成为唯一复制事实，失败表示嘴已被别的世界物占用。 */
+	bool TryClaimMouthCarriedActorFromAuthority(AActor* ExpectedActor);
+
+	/** 服务器仅在当前引用仍等于 ExpectedActor 时释放嘴部；迟到销毁或回滚不会清掉后来重新叼起的物体。 */
+	bool ReleaseMouthCarriedActorFromAuthority(AActor* ExpectedActor);
 
 	/** 猫种类定义 ID 是角色蓝图选择身体数值模板的稳定键；为空时角色类不猜默认值，而由能力系统配置在播种属性时解析。 */
 	UFUNCTION(BlueprintPure, Category = "Catfishing|Character")
@@ -155,7 +189,27 @@ protected:
 	/** Actor 离开 World 时先复用 GameMode 幂等协调出口，再请求 ASC 撤销自身配置授予并清理身体 Ability。 */
 	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
 
+	/** 声明嘴部 Actor 的网络复制；只复制单一权威引用，不复制附件扫描结果或第二份携带状态。 */
+	virtual void GetLifetimeReplicatedProps(TArray<FLifetimeProperty>& OutLifetimeProps) const override;
+
 private:
+	/** 任意被认领世界 Actor 销毁时按回调参数释放同一引用；鱼、鱼护以外的未来嘴叼物也不会留下失效占用。 */
+	UFUNCTION()
+	void HandleMouthCarriedActorDestroyed(AActor* DestroyedActor);
+
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatConditionPresentationComponent> ConditionPresentation;
+	/** 条件快照变化时在服务器同步身体移动开关；倒地会按当前 expected-actor 释放嘴叼鱼或鱼护，避免失能角色继续占有世界物。 */
+	void RefreshPhysicalCondition();
+	void ConfigureCharacterMovementAuthority();
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatPhysicalBodyComponent> PhysicalBodyComponent;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UBoxComponent> PhysicalBody;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<USphereComponent> LeftPhysicsHand;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<USphereComponent> RightPhysicsHand;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UPhysicsConstraintComponent> LeftPhysicsArm;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UPhysicsConstraintComponent> RightPhysicsArm;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatPhysicsGrabComponent> PhysicsGrab;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatPhysicsPrototypeVisualComponent> PhysicalVisual;
+	UPROPERTY(VisibleAnywhere) TObjectPtr<UCatModelContactComponent> ModelContacts;
 	/** 钓鱼专用第一人称相机组件；只在上鱼表现可提供有效视角时接管 CalcCamera，平时让角色蓝图相机继续生效。 */
 	UPROPERTY(VisibleAnywhere, Category = "Catfishing|Fishing")
 	TObjectPtr<UCatFishingCameraComponent> FishingCameraComponent;
@@ -186,4 +240,8 @@ private:
 	/** 一局功能型装配、耗材与鱼竿耐久宿主；没有等级、词条、战力或偷取接口。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category = "Catfishing|Equipment", meta = (AllowPrivateAccess = "true"))
 	TObjectPtr<UCatEquipmentComponent> EquipmentComponent;
+
+	/** 猫嘴当前被哪一个世界 Actor 独占，空值代表空嘴；拾取、抄网、鱼护和库存 Carry 都由服务器写入，客户端只读作表现和按钮判定。 */
+	UPROPERTY(Replicated)
+	TObjectPtr<AActor> MouthCarriedActor;
 };

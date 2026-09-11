@@ -54,7 +54,7 @@ bool FCatRunResultReasonCondition::TestCondition(FStateTreeExecutionContext& Con
 	return GameMode->DoesLastRunFlowResultMatch(InstanceData.ExpectedReason);
 }
 
-// 成功结算资格读取流程：只允许普通夜晚在全员 ready 事件后被这条 Transition 选择；判断所需天数来自同一份 RunPublicState，策略与最终天来自 RunSettings，缺宿主或缺策略都 fail-closed。
+// 成功结算资格读取流程：只允许普通夜晚在夜晚供品结算事件后被这条 Transition 选择；世界进度来自同一份 RunPublicState，策略来自 RunSettings，缺宿主或缺策略都 fail-closed。
 bool FCatRunSuccessSettlementEligibleCondition::TestCondition(FStateTreeExecutionContext& Context) const
 {
 	const ACatfishingGameModeBase* GameMode = Cast<ACatfishingGameModeBase>(Context.GetOwner());
@@ -68,5 +68,5 @@ bool FCatRunSuccessSettlementEligibleCondition::TestCondition(FStateTreeExecutio
 		return false;
 	}
 	const UCatRunSettings* Settings = GetDefault<UCatRunSettings>();
-	return Settings && Settings->CanEnterSuccessSettlementNight(RunState.Phase.DayIndex);
+	return Settings && Settings->CanEnterSuccessSettlementNight(RunState.WorldProgress);
 }

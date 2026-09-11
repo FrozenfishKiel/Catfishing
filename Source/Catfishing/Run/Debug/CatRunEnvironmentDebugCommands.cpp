@@ -32,7 +32,7 @@ namespace
 		const bool bAccepted, const FCatRunPublicState& RunState)
 	{
 		UE_LOG(LogCatRun, Display,
-			TEXT("Event=%s Command=%s World=%s NetMode=%s Accepted=%s RunId=%s Revision=%lld EnvRevision=%lld Day=%d Phase=%s HasDeadline=%s FishingAllowed=%s QuotaOpen=%s QuotaProgress=%d QuotaTarget=%d EndReason=%s"),
+			TEXT("Event=%s Command=%s World=%s NetMode=%s Accepted=%s RunId=%s Revision=%lld EnvRevision=%lld Day=%d Phase=%s HasDeadline=%s NewFishingBitesAllowed=%s OfferingOpen=%s LastOfferingPoints=%d DailyOfferingTarget=%d EndReason=%s"),
 			EventName, CommandName,
 			World ? *World->GetName() : TEXT("None"),
 			World ? *FormatRunEnvironmentSocialDebugNetMode(World->GetNetMode()) : TEXT("Unknown"),
@@ -41,13 +41,13 @@ namespace
 			RunState.Environment.SourceRunRevision, RunState.Phase.DayIndex,
 			*UEnum::GetValueAsString(RunState.Phase.Phase),
 			RunState.Phase.bHasDeadline ? TEXT("true") : TEXT("false"),
-			RunState.Phase.bFishingAllowed ? TEXT("true") : TEXT("false"),
-			RunState.Phase.bQuotaOpen ? TEXT("true") : TEXT("false"),
-			RunState.QuotaProgress, RunState.QuotaTarget,
+			RunState.Phase.bNewFishingBitesAllowed ? TEXT("true") : TEXT("false"),
+			RunState.Phase.bOfferingOpen ? TEXT("true") : TEXT("false"),
+			RunState.LastOfferingPoints, RunState.DailyOfferingTarget,
 			*UEnum::GetValueAsString(RunState.EndReason));
 	}
 
-	// 跳夜晚指令入口流程：只拒绝多余参数和非 authority World，然后请求 GameMode 用正式额度事件进入普通夜晚；它不会提交夜晚 ready 或推进下一天。
+	// 跳夜晚指令入口流程：只拒绝多余参数和非 authority World，然后请求 GameMode 用正式白天截止事件进入普通夜晚；它不会提交夜晚结算或推进下一天。
 	void SkipRunEnvironmentSocialToNightForWorld(const TArray<FString>& Args, UWorld* World)
 	{
 		if (!Args.IsEmpty())
@@ -73,7 +73,7 @@ namespace
 			TEXT("cat.RunEnvironmentSocial.SkipToNight"), bAccepted, GameMode->GetRunPublicState());
 	}
 
-	// 跳天指令入口流程：只拒绝多余参数和非 authority World，然后把请求交给 GameMode 的正式流程加速入口；本文件不提交额度、不提交 ready、不安排阶段轮询。
+	// 跳天指令入口流程：只拒绝多余参数和非 authority World，然后把请求交给 GameMode 的正式流程加速入口；本文件不提交供品、不安排阶段轮询。
 	void SkipRunEnvironmentSocialToNextDayForWorld(const TArray<FString>& Args, UWorld* World)
 	{
 		if (!Args.IsEmpty())
@@ -99,7 +99,7 @@ namespace
 			TEXT("cat.RunEnvironmentSocial.SkipToNextDay"), bAccepted, GameMode->GetRunPublicState());
 	}
 
-	// 强制下一天指令入口流程：只在非 Shipping 的服务器 authority 上调用显式作弊救援；它只处理失败夜继续测试或普通夜全员 ready 卡住，不让客户端或 UI 本地改天数。
+	// 强制下一天指令入口流程：只在非 Shipping 的服务器 authority 上调用显式作弊救援；它只处理失败夜继续测试或普通夜供品结算事件卡住，不让客户端或 UI 本地改天数。
 	void ForceRunEnvironmentSocialNextDayForWorld(const TArray<FString>& Args, UWorld* World)
 	{
 		if (!Args.IsEmpty())
@@ -125,24 +125,24 @@ namespace
 			TEXT("cat.RunEnvironmentSocial.ForceNextDay"), bAccepted, GameMode->GetRunPublicState());
 	}
 
-	/** 非 Shipping 构建里的跳到普通夜晚调试指令；它只补足当前白天额度并发送正式 QuotaReached，不提交 ready、不递增天数。 */
+	/** 非 Shipping 构建里的跳到普通夜晚调试指令；它只结束当前白天并发送 DayEnded，不提交夜晚结算、不递增天数。 */
 	static FAutoConsoleCommandWithWorldAndArgs CmdRunEnvironmentSocialSkipToNight(
 		TEXT("cat.RunEnvironmentSocial.SkipToNight"),
-		TEXT("服务器调试：用正式额度贡献把当前 DayActive 推进到普通夜晚；只能在服务器/ListenServer/Standalone 生效。"),
+		TEXT("服务器调试：用正式白天截止事件把当前 DayActive 推进到普通夜晚；只能在服务器/ListenServer/Standalone 生效。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SkipRunEnvironmentSocialToNightForWorld),
 		ECVF_Cheat);
 
-	/** 非 Shipping 构建里的跳到下一天调试指令；它只把请求交给服务器 GameMode，加速正式额度与夜晚 ready 流程，不直接改 DayIndex、Phase 或客户端状态。 */
+	/** 非 Shipping 构建里的跳到下一天调试指令；它只把请求交给服务器 GameMode，加速白天截止与夜晚供品结算流程，不直接改 DayIndex、Phase 或客户端状态。 */
 	static FAutoConsoleCommandWithWorldAndArgs CmdRunEnvironmentSocialSkipToNextDay(
 		TEXT("cat.RunEnvironmentSocial.SkipToNextDay"),
-		TEXT("服务器调试：请求 GameMode 加速正式额度与夜晚 ready 流程跳到下一天；只能在服务器/ListenServer/Standalone 生效。"),
+		TEXT("服务器调试：请求 GameMode 加速白天截止与夜晚供品结算流程跳到下一天；只能在服务器/ListenServer/Standalone 生效。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&SkipRunEnvironmentSocialToNextDayForWorld),
 		ECVF_Cheat);
 
-	/** 非 Shipping 构建里的强制下一天作弊指令；它保留正式成功/失败/拆局规则，只在失败夜继续测试或普通夜 ready 卡住时把服务器 StateTree 重启到下一次 DayActive。 */
+	/** 非 Shipping 构建里的强制下一天作弊指令；它保留正式成功/失败/拆局规则，只在失败夜继续测试或普通夜供品结算事件卡住时把服务器 StateTree 重启到下一次 DayActive。 */
 	static FAutoConsoleCommandWithWorldAndArgs CmdRunEnvironmentSocialForceNextDay(
 		TEXT("cat.RunEnvironmentSocial.ForceNextDay"),
-		TEXT("服务器调试作弊：从失败夜继续测试，或在普通夜全员 ready 卡住时强制重启 ST_RunFlow 到下一次 DayActive；Shipping 不存在。"),
+		TEXT("服务器调试作弊：从失败夜继续测试，或在普通夜供品结算事件卡住时强制重启 ST_RunFlow 到下一次 DayActive；Shipping 不存在。"),
 		FConsoleCommandWithWorldAndArgsDelegate::CreateStatic(&ForceRunEnvironmentSocialNextDayForWorld),
 		ECVF_Cheat);
 }

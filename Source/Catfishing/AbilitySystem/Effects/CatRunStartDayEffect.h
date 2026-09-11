@@ -4,7 +4,7 @@
 #include "GameplayEffect.h"
 #include "CatRunStartDayEffect.generated.h"
 
-/** 新一天的即时 Run GE；它只承载 SetByCaller 基础目标并委托 ExecCalc 写目标/进度。 */
+/** 新一天的即时 Run GE；它只承载 SetByCaller 基础供品目标并委托 ExecCalc 写每日目标和清空上一晚结果。 */
 UCLASS()
 class CATFISHING_API UCatGE_RunStartDay : public UGameplayEffect
 {

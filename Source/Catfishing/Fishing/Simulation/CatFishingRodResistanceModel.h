@@ -25,16 +25,25 @@ struct CATFISHING_API FCatFishingRodRotationInput
 {
 	FRotator CurrentAim = FRotator::ZeroRotator;
 	FRotator RequestedAim = FRotator::ZeroRotator;
+	/** 鼠标正在移动且输入未超时才允许主动转杆；不改变猫的容量、鱼力或已有角速度。 */
+	bool bCatDriveActive = false;
 	FVector PullAxis = FVector::ForwardVector;
 	/** 上一帧已应用的有向鱼线负载，跨固定步保持；不是额外的鱼端驱动力。 */
 	FVector PreviousSmoothedFishPullStrengthMeters = FVector::ZeroVector;
+	/** 上一实际步的世界空间角速度；预测只读副本，单位 rad/s。 */
+	FVector PreviousAngularVelocityRadiansPerSecond = FVector::ZeroVector;
 	double CatTorqueCapacity = 0.0;
 	double MaximumFishTorque = 0.0;
 	double MaximumAngularSpeedDegreesPerSecond = 360.0;
 	double ResponseSeconds = 0.08;
+	/** 归一化转矩作用下的等效转动惯性时间，单位秒，不是物理 kg*m^2。 */
+	double AngularInertiaSeconds = 0.08;
 	double FishPullSmoothingSeconds = 0.15;
-	/** 鱼负载下追加的粘性阻尼倍率，无量纲；零负载时不改变瞄准响应，零值可禁用追加阻尼。 */
+	/** 鱼负载下追加的粘性阻尼倍率；实际阻尼至少满足空载瞄准的临界阻尼。 */
 	double LoadedAngularDampingRatio = 3.0;
+	/** 身体俯仰限位；实际运动与鱼线候选预测共用，不属于瞄准输入限幅。 */
+	double MinimumPitchDegrees = -89.0;
+	double MaximumPitchDegrees = 89.0;
 	double DeltaSeconds = 0.0;
 };
 
@@ -44,6 +53,10 @@ struct CATFISHING_API FCatFishingRodRotationResult
 	FRotator ActualAim = FRotator::ZeroRotator;
 	FVector NetTorque = FVector::ZeroVector;
 	FVector SmoothedFishPullStrengthMeters = FVector::ZeroVector;
+	FVector AngularVelocityRadiansPerSecond = FVector::ZeroVector;
+	/** 最后亚步的实际速度变化率，含身体限位的制动。 */
+	FVector AngularAccelerationRadiansPerSecondSquared = FVector::ZeroVector;
+	bool bHitPitchLimit = false;
 	double AngularSpeedDegreesPerSecond = 0.0;
 	/** 本步最后一个亚步实际使用的阻尼倍率，供开发包诊断。 */
 	double AppliedAngularDampingMultiplier = 1.0;
@@ -52,19 +65,6 @@ struct CATFISHING_API FCatFishingRodRotationResult
 	/** 沿主动转矩方向完成的真实转角 × 主动转矩/自身容量；反向被拖不计正功。 */
 	double CatPositiveWorkRadians = 0.0;
 	double IntegratedSeconds = 0.0;
-};
-
-/** 权威旋转求解的只读输入快照；预测不得写回姿态、滤波历史或努力累计量。 */
-struct CATFISHING_API FCatFishingRodRotationPrediction
-{
-	FCatFishingRodRotationInput Input;
-	FVector HolderWorldPosition = FVector::ZeroVector;
-	FVector TipOffsetInAimSpace = FVector::ZeroVector;
-	double MinimumPitchDegrees = -89.0;
-	double MaximumPitchDegrees = 89.0;
-	/** 接力等待新主位瞄准时保持实际姿态，载体平移仍继续预测。 */
-	bool bHoldActualAim = false;
-	bool bValid = false;
 };
 
 /** 权威旋转积分的累计观察量；同一 Epoch 求差，换持有人或搏斗生命周期后重新计数。 */
@@ -91,7 +91,7 @@ private:
 	FCatFishingRodRotationEffortSnapshot PendingEffort;
 };
 
-/** 鱼线负载先连续插值，再做有阻尼的转矩对抗；不保存锁定状态，也不裁剪允许角度。 */
+/** Original held-aim rotation and effort integration; body movement remains in Chaos. */
 class CATFISHING_API FCatFishingRodResistanceModel
 {
 public:

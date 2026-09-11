@@ -125,7 +125,7 @@ private:
 };
 
 /**
- * Frontend 根视图；只维护 Root 内业务页和动态行的装配与可见页，不拥有两张全局 Loading 资产，也不保存存档、房间或设置的业务事实。
+ * Frontend 根视图；只维护九个 WBP 资产的装配与可见页，不拥有存档、房间或设置的业务事实。
  * LocalPlayer UI 子系统创建它，页面按钮经由这里转成 Controller 意图，Model 只供 WBP 只读渲染。
  */
 UCLASS(Abstract, BlueprintType)
@@ -142,8 +142,8 @@ public:
 		UCatFrontendRoomModel* InRoomModel, UCatFrontendSettingsModel* InSettingsModel);
 
 	/**
-	 * 清除前端协作者引用；LocalPlayer UI 子系统在 Controller 或 World 变化前调用，防止旧 World 的 WBP 继续向失效 Controller 提交意图。
-	 * 本方法解除 Model 和控件订阅，清空协作者与输出设备显示映射，不负责关闭 Session、读取存档或应用设置。
+	 * 清除前端协作者引用；LocalPlayer UI 子系统在 Controller 或 World 变化前调用，防止失效 World 的 WBP 继续向失效 Controller 提交意图。
+	 * 本方法解除 Model 和控件订阅，清空动态行、协作者与输出设备显示映射，不负责关闭 Session、读取存档或应用设置。
 	 */
 	void ResetFrontend();
 
@@ -272,7 +272,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestRestoreFrontendSettingsDefaults();
 
-	/** 刷新音频输出设备意图；Root 把玩家明确点击交给 Controller 发起 AudioMixer 异步枚举，不能把旧下拉选项当正式设备列表。 */
+	/** 刷新音频输出设备意图；Root 把玩家明确点击交给 Controller 发起 AudioMixer 异步枚举，不能把失效下拉选项当正式设备列表。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Frontend")
 	void RequestRefreshAudioOutputDevices();
 
@@ -298,7 +298,7 @@ public:
 
 protected:
 	/**
-	 * UMG 子控件完成创建后解析并绑定每页的必需控件；只有背景等扩展表现才可以省略，页面交互不得交给空蓝图事件图兜底。
+	 * UMG 子控件完成创建后解析并绑定每页的必需控件；只有背景等扩展表现才可以省略，页面交互不得交给空蓝图事件图承接。
 	 * 本实现把实际 View 控件绑定到 Controller 的单向意图入口，并渲染当前页面，不创建原生替身或业务数据。
 	 */
 	virtual void NativeOnInitialized() override;
@@ -310,7 +310,7 @@ protected:
 	virtual FReply NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent) override;
 
 	/**
-	 * UMG 即将销毁时解除按钮委托并清除协作者引用；避免 Root 被移出视口后仍从旧按钮接收玩家输入。
+	 * UMG 即将销毁时解除按钮委托、动态行和协作者引用；避免 Root 被移出视口后仍从失效按钮或失效列表行接收玩家输入。
 	 * 本实现不关闭 Session、不取消存档请求，生命周期收口由 Controller 与 LocalPlayer 子系统负责。
 	 */
 	virtual void NativeDestruct() override;
@@ -340,7 +340,7 @@ private:
 
 	/**
 	 * 按页面根与控件名解析指定类型的控件；只读取该子 WidgetTree，不扫描其他页面，避免同名控件被错误接线。
-	 * 解析失败会记录所属页面与控件名，调用方据此决定禁用哪一条交互，不生成原生兜底。
+	 * 解析失败会记录所属页面与控件名，调用方据此决定禁用哪一条交互，不生成原生替代控件。
 	 */
 	template <typename WidgetType>
 	WidgetType* FindPageControl(UUserWidget* Page, const FName ControlName, const TCHAR* PageName) const;
@@ -364,7 +364,7 @@ private:
 	void BindModelChanges();
 
 	/**
-	 * 解除三个 Model 的本地刷新通知；弱协作者失效或 Root 拆除时安全跳过，避免旧 World 的迟到 View 刷新。
+	 * 解除三个 Model 的本地刷新通知；弱协作者失效或 Root 拆除时安全跳过，避免失效 World 的迟到 View 刷新。
 	 * 保存的委托句柄只代表 View 订阅，不代表底层异步请求生命周期。
 	 */
 	void UnbindModelChanges();
@@ -383,6 +383,12 @@ private:
 
 	/** 依据 RoomModel 当前真实快照重建好友与成员行；每行使用 opaque FriendHandle 或已确认成员事实，不按索引猜身份。 */
 	void RebuildRoomRows();
+
+	/**
+	 * 清空 Root 运行期创建的存档、好友和玩家行；ResetFrontend 在 Root 拆除或销毁前使用它切断 ScrollBox 对失效行和失效 Slot 的拥有关系。
+	 * 本方法只释放 View 树里的瞬态列表项，不改变 SaveModel、RoomModel、Online 快照或玩家当前选择。
+	 */
+	void ClearDynamicRows();
 
 	/** 更新当前房间的邀请码、访问方式和页面级按钮可用性；缺少真实 Lobby URI 时保持明确不可用状态。 */
 	void RefreshRoomPresentation();

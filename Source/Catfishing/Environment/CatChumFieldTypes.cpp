@@ -23,7 +23,7 @@ namespace CatChumFieldTypesPrivate
 			const double Value = static_cast<double>(Curve->GetFloatValue(Input));
 			if (!FMath::IsFinite(Value) || Value < 0.0)
 			{
-				// 曲线配置出现非法值（NaN/Inf/负数）时整表作废，防止污染后续插值结果
+				// 曲线配置出现非法值（NaN/Inf/负数）时整表判为无效，防止污染后续插值结果
 				OutTable = FCatChumFalloffTable();
 				return false;
 			}

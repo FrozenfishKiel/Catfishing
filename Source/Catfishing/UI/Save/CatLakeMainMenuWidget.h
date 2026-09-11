@@ -211,7 +211,7 @@ private:
 	/** 解除 Designer 按钮绑定；每个控件只移除本对象的委托，不影响蓝图自己追加的表现逻辑。 */
 	void UnbindDesignerButtons();
 
-	/** 订阅当前 SettingsModel 的刷新通知；重复注入时先移除旧句柄，避免旧 World 设置页回调进来。 */
+	/** 订阅当前 SettingsModel 的刷新通知；重复注入时先移除失效句柄，避免失效 World 设置页回调进来。 */
 	void BindSettingsModelChanges();
 
 	/** 解除 SettingsModel 刷新通知；菜单关闭不调用它，只有 Controller 拆除或重新注入时成对清理。 */

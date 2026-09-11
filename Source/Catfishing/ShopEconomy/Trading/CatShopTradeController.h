@@ -8,33 +8,15 @@
 class ACatCampInventoryActor;
 class ACatShopKioskActor;
 class AController;
+class AActor;
 class UCatShopInventoryComponent;
+class ACatFishBuyerActor;
+class ACatFishGuardActor;
+
 
 /**
- * 玩家把一个 Items 鱼容器里的鱼卖给商店的完整意图。
- * 它只声明鱼实例、容器和两个版本前提；鱼来自哪类容器、是否能卖、重量是多少都由 Items 读取权威事实后裁决。
- */
-USTRUCT()
-struct FCatShopFishSaleOrderCommand
-{
-	GENERATED_BODY()
-
-	/** RequestId 与服务器重建的身份；ExpectedRevision 在这条命令里指团队公款版本。 */
-	FCatDomainCommandContext Context;
-
-	/** 要卖掉的那条鱼；Shop 只记录它，删除和来源事实均由 Items 持有。 */
-	FGuid FishInstanceId;
-
-	/** 这条鱼当前所在的 Items 容器；容器种类和权限不由客户端提交。 */
-	FGuid ContainerId;
-
-	/** 上述容器的并发前提版本；Items 用它判断调用方看到的容器内容是否已经过时。 */
-	int64 ExpectedContainerRevision = 0;
-};
-
-/**
- * 一次“买下来并拿到手”或“一条鱼卖出入账”的完整结果。
- * 它刻意分成经济终态和实物终态：付款成功但交付失败、鱼已删但入账重试都是真实中间状态。
+ * 一次购买交付或整批售鱼的完整结果，分别呈现经济记录与实物提交回执。
+ * 购买仍可能等待发货；售鱼在独占实物期间统一入账，失败保留实物，不存在先删鱼再补款的中间状态。
  */
 USTRUCT(BlueprintType)
 struct FCatShopOrderResult
@@ -50,7 +32,7 @@ struct FCatShopOrderResult
 	FCatShopCartTransactionResult CartTransaction;
 
 	/**
-	 * 交付或 Items 提交这一段的终态。购物车发货失败时来自营地公共仓库，售鱼时来自 Items 移除鱼。
+	 * 交付或实物提交的终态。购物车发货来自营地公共仓库；售鱼来自鱼护批量移除或嘴叼鱼消费。
 	 * 它的 Revision 指向的聚合随来源不同而变化，读它时要先看调用链和 Error。
 	 */
 	UPROPERTY(BlueprintReadOnly)
@@ -59,7 +41,7 @@ struct FCatShopOrderResult
 
 /**
  * 商店交易控制器负责串起付款、交付、售鱼和入账的服务器链路。
- * PlayerController 只把 owning client 的请求送进来；公款、摊位库存、公共仓库和 Items 都在这里按顺序协调。
+ * PlayerController 只把 owning client 的请求送进来；公款、摊位库存、公共仓库和玩家库存都在这里按顺序协调。
  */
 UCLASS()
 class CATFISHING_API UCatShopTradeController : public UWorldSubsystem
@@ -74,25 +56,25 @@ public:
 	FCatShopOrderResult SubmitCartFromKiosk(AController* RequestingController, ACatShopKioskActor* ShopKiosk,
 		const TArray<FCatShopCartLineCommand>& Lines, FGuid RequestId, int64 ExpectedWalletRevision);
 
-	/** 玩家从权威 Items 容器出售一条鱼；本控制器重建服务器身份并把鱼实例提交、钱包入账串成同一条事务链。 */
-	FCatShopOrderResult SubmitFishSaleFromPlayer(AController* RequestingController, FGuid FishInstanceId,
-		FGuid ContainerId, int64 ExpectedContainerRevision, FGuid RequestId, int64 ExpectedWalletRevision);
-
-	/**
-	 * 把玩家容器里的一条鱼卖给商店：读取鱼事实 → 商店预检报价/公款 → Items 不可逆移除 → 公款入账。
-	 * 它和购买走同一个控制器，是因为二者都跨越“钱”和“实物”两个领域，必须在一个地方固定提交顺序。
-	 */
-	FCatShopOrderResult SubmitFishSale(const FCatShopFishSaleOrderCommand& Command);
+	/** 向明确买家出售当前鱼护内指定鱼实例；Guard为空时只售嘴叼鱼，整单复核后统一处理实物与GAS入账。 */
+	FCatShopOrderResult SubmitFishSaleFromPlayer(AController* RequestingController, ACatFishBuyerActor* Buyer,
+		ACatFishGuardActor* Guard, const TArray<FGuid>& FishInstanceIds, FGuid RequestId);
 
 private:
 	/**
 	 * 声明：按同一条链跑完整个购物车，实际卖货对象是来源摊位库存，收货对象是营地公共仓库。
-	 * 实现：先取本 World 的经济服务、来源摊位库存和公共仓库版本；再用整车报价得到每行 DefinitionId + DeliveryQuantity，
+	 * 实现：先取本 World 的经济服务、来源摊位库存和营地收货库存；再用整车报价得到每行 DefinitionId + DeliveryQuantity，
 	 *       并把公共仓库能否整批接收问在扣钱之前。任一不成立就直接返回，此时公款、商店库存和账本一个字都没动。
 	 *       前提都成立才提交整车购买，并只在订单确实成立时继续；已经全部交付过的购物车直接返回 AlreadyResolved。
-	 *       否则用同一个公共仓库版本和购物车 RequestId 把整批物品加入公共仓库，随后逐条确认购买账本并回填最新状态。
+	 *       否则用同一个购物车 RequestId 把整批物品加入营地收货库存，随后逐条确认购买账本并回填最新状态。
 	 * 边界：前置 gate 是这条链处理交付失败的主要手段，因为扣钱那一步不可逆而商店根本没有退款写口。
 	 */
 	FCatShopOrderResult RunCartOrder(const FCatShopCartCommand& Command,
 		UCatShopInventoryComponent* ShopInventory, ACatCampInventoryActor* DeliveryInventory);
+
+	/** 售鱼命令终态缓存；跨库存扣除和公款入账的重放必须返回首次结果，不能再读已被扣除的鱼槽。 */
+	TMap<FString, FCatShopOrderResult> FishSaleTerminalCache;
+
+	/** 售鱼请求绑定的买家、鱼护与鱼身份集合；同一 RequestId 换载荷会被拒绝，不依赖库存或钱包版本。 */
+	TMap<FString, FString> FishSaleTerminalPayloadByKey;
 };

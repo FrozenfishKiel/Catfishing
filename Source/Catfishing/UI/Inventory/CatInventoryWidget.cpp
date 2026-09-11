@@ -1,199 +1,114 @@
 #include "UI/Inventory/CatInventoryWidget.h"
 
+#include "Character/CatCharacter.h"
 #include "Components/Button.h"
+#include "Components/SpinBox.h"
 #include "Components/TextBlock.h"
+#include "Components/Widget.h"
 #include "Components/WrapBox.h"
 #include "Engine/LocalPlayer.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "FishContainers/CatFishTankActor.h"
+#include "Framework/Game/CatfishingPlayerController.h"
 #include "Input/Events.h"
 #include "InputCoreTypes.h"
+#include "Inventory/CatFishInventoryItemInstance.h"
+#include "Inventory/CatFishOnlyInventoryComponent.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
+#include "Inventory/CatInventoryStatics.h"
+#include "Logging/CatLog.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
 #include "UI/CatUISettings.h"
 #include "UI/Inventory/CatInventoryModel.h"
 #include "UI/Inventory/CatInventoryPageController.h"
 #include "UI/InventorySlot/CatInventorySlotWidget.h"
 
-namespace
+// 先移除原 Model 监听；切换来源时清理旧请求与结果，再绑定新库存并重读列表，避免迟到回执污染另一份库存。
+void UCatInventoryWidget::SetInventoryContext(UCatInventoryComponent* InInventory)
 {
-	// 格子身份比较流程：Widget 只把同一页自己的 Slots 标成本地选中；来源不同但局部下标相同的格子不能互相命中。
-	bool IsSameWidgetSlotIdentity(const FCatInventorySlotView& Left, const FCatInventorySlotView& Right)
+	UnbindInventoryModel();
+	if (DisplayInventory.Get() != InInventory)
 	{
-		if (Left.SlotSource != Right.SlotSource)
-		{
-			return false;
-		}
-		switch (Left.SlotSource)
-		{
-		case ECatInventorySlotSource::InventoryObject:
-			return Left.InventorySlotIndex != INDEX_NONE
-				&& Left.InventorySlotIndex == Right.InventorySlotIndex;
-		case ECatInventorySlotSource::ContainerObject:
-			return Left.ContainerId.IsValid()
-				&& Left.ContainerId == Right.ContainerId
-				&& Left.ContainerKind == Right.ContainerKind
-				&& Left.ContainerSlotIndex != INDEX_NONE
-				&& Left.ContainerSlotIndex == Right.ContainerSlotIndex;
-		case ECatInventorySlotSource::CampInventoryObject:
-			return Left.CampInventorySlotIndex != INDEX_NONE
-				&& Left.CampInventorySlotIndex == Right.CampInventorySlotIndex;
-		case ECatInventorySlotSource::Unknown:
-		default:
-			return false;
-		}
+		PendingCommandRequestId.Invalidate();
+		if (InventoryActionResultText) { InventoryActionResultText->SetText(FText::GetEmpty()); }
 	}
-
-	// 本页选择定位流程：只从当前 WBP 自己保存的格子身份里找高亮；Model 不再保存或广播任何 UI 选择。
-	int32 FindLocalSelectionIndex(const TArray<FCatInventorySlotView>& Slots,
-		const FCatInventorySlotView& SelectionIdentity, const bool bHasSelection)
+	DisplayInventory = InInventory;
+	if (InInventory)
 	{
-		if (!bHasSelection)
-		{
-			return INDEX_NONE;
-		}
-		for (int32 SlotIndex = 0; SlotIndex < Slots.Num(); ++SlotIndex)
-		{
-			if (IsSameWidgetSlotIdentity(Slots[SlotIndex], SelectionIdentity))
-			{
-				return SlotIndex;
-			}
-		}
-		return INDEX_NONE;
+		InventoryModelChangedHandle = InInventory->GetInventoryModel()->OnInventoryListChanged.AddUObject(
+			this, &ThisClass::RefreshInventorySlots);
 	}
-
-	// 本地选择清理流程：Model 原始投影不带选择；页面每次渲染前先清空副本，避免上一格高亮混进新的数据源。
-	void ClearLocalSelectionFromViewState(FCatInventoryViewState& State)
-	{
-		State.SelectedSlot = FCatInventorySlotView();
-		State.bHasSelectedSlot = false;
-		State.SelectedObject = FCatContainedObjectInstance();
-		State.bHasSelectedObject = false;
-		State.bSelectedObjectInFishGuard = false;
-		State.SelectedFish = FCatFishInstance();
-		State.bHasSelectedFish = false;
-		State.bSelectedFishInFishGuard = false;
-		State.bSelectedFishInSharedTank = false;
-		State.bCanSubmitAction = false;
-		State.bCanStoreSelectedFishInSharedTank = false;
-	}
-
-	// 格子详情压缩流程：SlotView 已经带有 Model 投影好的显示文本，Widget 只把换行压成一行，避免再复制一套数据解释规则。
-	FString MakeCompactSlotDisplayText(const FCatInventorySlotView& SelectedSlot)
-	{
-		FString SlotText = SelectedSlot.DisplayText.ToString();
-		SlotText.ReplaceInline(TEXT("\r\n"), TEXT("，"));
-		SlotText.ReplaceInline(TEXT("\n"), TEXT("，"));
-		return SlotText.IsEmpty() ? FString(TEXT("未知格子")) : SlotText;
-	}
-
-	// 本地选择说明流程：只把当前页命中的 SlotView 文本展示出来；它不写 Model，也不会让同屏其他库存页跟着换选中态。
-	FText MakeLocalSelectedSlotText(const FCatInventoryViewState& State, const FCatInventorySlotView& SelectedSlot)
-	{
-		const FString SlotText = MakeCompactSlotDisplayText(SelectedSlot);
-		if (SelectedSlot.SlotSource == ECatInventorySlotSource::InventoryObject)
-		{
-			return SelectedSlot.bOccupied
-				? FText::FromString(FString::Printf(TEXT("选中：%s；拖拽可整理或转移。"), *SlotText))
-				: FText::FromString(FString::Printf(TEXT("选中：%s。"), *SlotText));
-		}
-		if (SelectedSlot.SlotSource == ECatInventorySlotSource::CampInventoryObject)
-		{
-			return SelectedSlot.bOccupied
-				? FText::FromString(FString::Printf(TEXT("选中：%s；右键取到随身库存，也可拖到背包格。"), *SlotText))
-				: FText::FromString(FString::Printf(TEXT("选中：%s。"), *SlotText));
-		}
-		if (SelectedSlot.SlotSource == ECatInventorySlotSource::ContainerObject)
-		{
-			const TCHAR* HintLabel = State.bHasExternalContainers
-				? TEXT("拖到其他格子可整理或跨容器移动")
-				: TEXT("拖到其他鱼护格子可整理");
-			return SelectedSlot.bOccupied
-				? FText::FromString(FString::Printf(TEXT("选中：%s；%s。"), *SlotText, HintLabel))
-				: FText::FromString(FString::Printf(TEXT("选中：%s。"), *SlotText));
-		}
-		return State.SelectedFishText;
-	}
-
-	// 本地选择叠加流程：页面把自己的选择写进 ViewState 副本；鱼护和共享鱼缸都能点吃鱼/献祭，只有鱼护鱼能点存入鱼缸，共享 Model 仍保持无选择。
-	void ApplyLocalSelectionToViewState(FCatInventoryViewState& State, const FCatInventorySlotView& SelectedSlot)
-	{
-		ClearLocalSelectionFromViewState(State);
-		State.SelectedSlot = SelectedSlot;
-		State.bHasSelectedSlot = true;
-		State.bHasSelectedObject = SelectedSlot.SlotSource == ECatInventorySlotSource::ContainerObject
-			&& SelectedSlot.bOccupied
-			&& SelectedSlot.ObjectKind != ECatContainedObjectKind::Unknown
-			&& SelectedSlot.ObjectInstanceId.IsValid();
-		State.bSelectedObjectInFishGuard = State.bHasSelectedObject
-			&& SelectedSlot.ContainerKind == ECatContainerKind::FishGuard;
-		if (State.bHasSelectedObject)
-		{
-			State.SelectedObject = SelectedSlot.Object;
-		}
-		State.bHasSelectedFish = SelectedSlot.SlotSource == ECatInventorySlotSource::ContainerObject
-			&& SelectedSlot.bOccupied
-			&& SelectedSlot.ObjectKind == ECatContainedObjectKind::Fish
-			&& SelectedSlot.Fish.FishInstanceId.IsValid();
-		State.bSelectedFishInFishGuard = State.bHasSelectedFish
-			&& SelectedSlot.ContainerKind == ECatContainerKind::FishGuard;
-		State.bSelectedFishInSharedTank = State.bHasSelectedFish
-			&& SelectedSlot.ContainerKind == ECatContainerKind::SharedFishTank;
-		if (State.bHasSelectedFish)
-		{
-			State.SelectedFish = SelectedSlot.Fish;
-		}
-		const bool bCanUseSelectedFish = State.bSelectedFishInFishGuard || State.bSelectedFishInSharedTank;
-		State.bCanSubmitAction = State.bOpen && bCanUseSelectedFish && !State.bActionPending;
-		State.bCanStoreSelectedFishInSharedTank =
-			State.bOpen && State.bSelectedFishInFishGuard && !State.bActionPending;
-		State.SelectedFishText = MakeLocalSelectedSlotText(State, SelectedSlot);
-	}
+	RefreshInventorySlots();
 }
 
-// 进入视口绑定流程：
-// 1. 先对可选按钮执行 Remove/Add 配对，保证蓝图重建后点击出口仍只有一份。
-// 2. 再兜底解析库存格 WBP 类，让每个库存页面都能独立创建自己的格子。
-// 3. 最后绑定当前 LocalPlayer 的库存 Model 并直接读取最新 ViewState 刷新本页。
+// 本页只暴露构建或打开时确定的库存组件；没有上下文就返回空，避免 UI 根据营地、鱼护等页面种类重新选择数据源。
+UCatInventoryComponent* UCatInventoryWidget::GetInventoryContext() const
+{
+	return DisplayInventory.Get();
+}
+
+// 仅保存本页格子类；构建或库存数据通知到达时由同一刷新入口使用。
+void UCatInventoryWidget::SetInventorySlotWidgetClass(const TSubclassOf<UCatInventorySlotWidget> InSlotWidgetClass)
+{
+	InventorySlotWidgetClass = InSlotWidgetClass;
+}
+
+// 先清理旧请求并从原控制器重绑回执，再绑定按钮与数据源；已有上下文时保留，未注入的背包只解析 owning Pawn，最后刷新列表。
 void UCatInventoryWidget::NativeConstruct()
 {
 	Super::NativeConstruct();
-	SetIsFocusable(true);
+	PendingCommandRequestId.Invalidate();
+	if (InventoryActionResultText) { InventoryActionResultText->SetText(FText::GetEmpty()); }
+	if (ACatfishingPlayerController* PreviousController = CommandResultController.Get())
+	{
+		PreviousController->OnCampCommandResultReceived.RemoveAll(this);
+	}
+	CommandResultController = Cast<ACatfishingPlayerController>(GetOwningPlayer());
+	if (ACatfishingPlayerController* Controller = CommandResultController.Get())
+	{
+		Controller->OnCampCommandResultReceived.AddUObject(this, &ThisClass::HandleInventoryCommandResult);
+	}
 	if (CloseButton)
 	{
-		CloseButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleCloseClicked);
-		CloseButton->OnClicked.AddDynamic(this, &ThisClass::HandleCloseClicked);
+		CloseButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleCloseClicked);
 	}
 	if (ConsumeFishButton)
 	{
-		ConsumeFishButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleConsumeClicked);
-		ConsumeFishButton->OnClicked.AddDynamic(this, &ThisClass::HandleConsumeClicked);
+		ConsumeFishButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleConsumeClicked);
 	}
-	if (SacrificeFishButton)
-	{
-		SacrificeFishButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleSacrificeClicked);
-		SacrificeFishButton->OnClicked.AddDynamic(this, &ThisClass::HandleSacrificeClicked);
-	}
-	if (StoreFishInTankButton)
-	{
-		StoreFishInTankButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleStoreFishInTankClicked);
-		StoreFishInTankButton->OnClicked.AddDynamic(this, &ThisClass::HandleStoreFishInTankClicked);
-	}
+	if (DropButton) { DropButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleDropClicked); }
+	if (PlaceButton) { PlaceButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandlePlaceClicked); }
+	if (CarryButton) { CarryButton->OnClicked.AddUniqueDynamic(this, &ThisClass::RequestCarrySelectedFish); }
+	if (ReleaseQuantityConfirmButton) { ReleaseQuantityConfirmButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleReleaseQuantityConfirmed); }
+	if (ReleaseQuantityCancelButton) { ReleaseQuantityCancelButton->OnClicked.AddUniqueDynamic(this, &ThisClass::HandleReleaseQuantityCancelled); }
+	ResetPendingRelease();
 	if (!InventorySlotWidgetClass)
 	{
-		if (const UCatUISettings* Settings = GetDefault<UCatUISettings>())
+		InventorySlotWidgetClass = GetDefault<UCatUISettings>()->LoadInventorySlotWidgetClass();
+	}
+	UCatInventoryComponent* Inventory = DisplayInventory.Get();
+	if (!Inventory)
+	{
+		if (const ACatCharacter* Character = Cast<ACatCharacter>(GetOwningPlayerPawn()))
 		{
-			InventorySlotWidgetClass = Settings->LoadInventorySlotWidgetClass();
+			Inventory = Character->GetInventoryComponent();
 		}
 	}
-	BindInventoryModel(ResolveInventoryModel());
+	SetInventoryContext(Inventory);
 }
 
-// 销毁流程：
-// 1. 先解除动态格子委托，避免已移除槽位在本次移出视口后继续回调本页。
-// 2. 再从当前 Model 广播上移除本页监听；页面下次构建会重新解析当前 LocalPlayer 的 Model。
-// 3. 最后解除本 View 绑定到可选按钮上的 UMG 点击事件，外部 PageController 不再保存本页委托句柄。
+// 先从原控制器解绑回执并清理请求，再移除 Model、格子和按钮监听及数量状态；显示库存保留，最后交给 UMG 结束生命周期。
 void UCatInventoryWidget::NativeDestruct()
 {
-	UnbindSlotWidgets();
+	if (ACatfishingPlayerController* Controller = CommandResultController.Get())
+	{
+		Controller->OnCampCommandResultReceived.RemoveAll(this);
+	}
+	CommandResultController.Reset();
+	PendingCommandRequestId.Invalidate();
 	UnbindInventoryModel();
+	UnbindSlotWidgets();
 	if (CloseButton)
 	{
 		CloseButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleCloseClicked);
@@ -202,18 +117,183 @@ void UCatInventoryWidget::NativeDestruct()
 	{
 		ConsumeFishButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleConsumeClicked);
 	}
-	if (SacrificeFishButton)
-	{
-		SacrificeFishButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleSacrificeClicked);
-	}
-	if (StoreFishInTankButton)
-	{
-		StoreFishInTankButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleStoreFishInTankClicked);
-	}
+	if (DropButton) { DropButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleDropClicked); }
+	if (PlaceButton) { PlaceButton->OnClicked.RemoveDynamic(this, &ThisClass::HandlePlaceClicked); }
+	if (CarryButton) { CarryButton->OnClicked.RemoveDynamic(this, &ThisClass::RequestCarrySelectedFish); }
+	if (ReleaseQuantityConfirmButton) { ReleaseQuantityConfirmButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleReleaseQuantityConfirmed); }
+	if (ReleaseQuantityCancelButton) { ReleaseQuantityCancelButton->OnClicked.RemoveDynamic(this, &ThisClass::HandleReleaseQuantityCancelled); }
+	ResetPendingRelease();
 	Super::NativeDestruct();
 }
 
-// 预览键盘流程：先于子按钮和格子消费关闭键；命中后把关闭意图交给当前库存 PageController 处理输入恢复。
+// 按 AOBackPackUI 的列表刷新方式清空本页格子，再逐条设置库存、下标和条目；子库存面板有自己的 Model 和 WrapBox。
+void UCatInventoryWidget::RefreshInventorySlots()
+{
+	// 库存通知意味着槽位可能已移动、合并或换物；先废弃数量面板的旧快照，再按最新 Model 重建显示。
+	ResetPendingRelease();
+	UnbindSlotWidgets();
+	SelectedSlotIndex = INDEX_NONE;
+	if (ConsumeFishButton)
+	{
+		ConsumeFishButton->SetIsEnabled(false);
+	}
+	if (DropButton) { DropButton->SetIsEnabled(false); }
+	if (PlaceButton) { PlaceButton->SetIsEnabled(false); }
+	RefreshCarryAction();
+	if (!InventorySlotWrapBox)
+	{
+		return;
+	}
+	InventorySlotWrapBox->ClearChildren();
+	UCatInventoryComponent* Inventory = DisplayInventory.Get();
+	if (!Inventory || !InventorySlotWidgetClass)
+	{
+		return;
+	}
+	const TArray<FCatInventoryEntry>& Entries = Inventory->GetInventoryModel()->GetInventoryList();
+	// 槽位下标来自 Model；个别 WBP 创建失败仍保留空位，不能让后续格位整体错位。
+	SlotWidgets.SetNum(Entries.Num());
+	for (int32 Index = 0; Index < Entries.Num(); ++Index)
+	{
+		UCatInventorySlotWidget* SlotWidget = CreateWidget<UCatInventorySlotWidget>(GetOwningPlayer(), InventorySlotWidgetClass);
+		if (!SlotWidget)
+		{
+			continue;
+		}
+		SlotWidget->SetSlotContext(Index, Inventory, Entries[Index]);
+		SlotWidget->OnSlotSelected.AddUObject(this, &ThisClass::RequestSelectSlot);
+		InventorySlotWrapBox->AddChildToWrapBox(SlotWidget);
+		SlotWidgets[Index] = SlotWidget;
+	}
+}
+
+// 句柄始终从原显示库存的 Model 移除；库存已销毁时只清句柄，不创建替代数据源。
+void UCatInventoryWidget::UnbindInventoryModel()
+{
+	if (InventoryModelChangedHandle.IsValid())
+	{
+		if (UCatInventoryComponent* Inventory = DisplayInventory.Get())
+		{
+			Inventory->GetInventoryModel()->OnInventoryListChanged.Remove(InventoryModelChangedHandle);
+		}
+		InventoryModelChangedHandle.Reset();
+	}
+}
+
+// 逐个撤销本页格子的悬停来源和选择监听，再释放引用；先撤销提示才能保证重建期间不显示旧实例。
+void UCatInventoryWidget::UnbindSlotWidgets()
+{
+	for (UCatInventorySlotWidget* SlotWidget : SlotWidgets)
+	{
+		if (SlotWidget)
+		{
+			SlotWidget->CancelTooltip();
+			SlotWidget->OnSlotSelected.RemoveAll(this);
+		}
+	}
+	SlotWidgets.Reset();
+}
+
+// 点击只保存本页使用按钮所指的格位，并按是否有物品更新按钮；不修改 Model 或重建格子，因此不会中断后续拖放。
+void UCatInventoryWidget::RequestSelectSlot(const int32 SlotIndex)
+{
+	// 新的手动选择会改变用户操作对象；数量面板若仍指向旧格必须立即失效，不能把确认意图带到新选择上。
+	if (PendingReleaseInventory.IsValid())
+	{
+		ResetPendingRelease();
+	}
+	SelectedSlotIndex = SlotWidgets.IsValidIndex(SlotIndex) && SlotWidgets[SlotIndex] ? SlotIndex : INDEX_NONE;
+	FCatInventoryEntry Entry;
+	int32 EntryIndex = INDEX_NONE;
+	const bool bCanAct = !PendingCommandRequestId.IsValid() && GetSelectedInventoryEntry(Entry, EntryIndex);
+	if (ConsumeFishButton)
+	{
+		ConsumeFishButton->SetIsEnabled(bCanAct);
+	}
+	if (DropButton) { DropButton->SetIsEnabled(bCanAct); }
+	if (PlaceButton) { PlaceButton->SetIsEnabled(bCanAct); }
+	RefreshCarryAction();
+}
+
+// 先取消尚未确认的数量选择；本页没有离库或售鱼请求等待回执且格子有效时，使用按钮转入与右键相同的格子方法。
+void UCatInventoryWidget::RequestUseSelectedItem()
+{
+	ResetPendingRelease();
+	if (!PendingCommandRequestId.IsValid() && SlotWidgets.IsValidIndex(SelectedSlotIndex) && SlotWidgets[SelectedSlotIndex])
+	{
+		SlotWidgets[SelectedSlotIndex]->RequestUseItem();
+	}
+}
+
+// 丢弃请求流程：读取当前选中格；堆叠物冻结在同页数量面板，单件立即交给统一世界落地 RPC。
+void UCatInventoryWidget::RequestDropSelectedItem()
+{
+	BeginReleaseSelectedItem(ECatInventoryWorldAction::Drop);
+}
+
+// 放置请求流程：读取当前选中格；数量选择沿用丢弃面板，服务器据动作类型验证落点并决定是否固定。
+void UCatInventoryWidget::RequestPlaceSelectedItem()
+{
+	BeginReleaseSelectedItem(ECatInventoryWorldAction::Place);
+}
+
+// 叼起请求流程：先废弃未提交的 Drop/Place 数量快照，再拒绝等待回执期间的重复点击；随后按当前 Model 确认外部鱼容器、单条鱼和空嘴状态，通过后固定数量一复用正式世界动作提交。
+void UCatInventoryWidget::RequestCarrySelectedFish()
+{
+	// 叼起不使用数量面板；先废弃任何尚未提交的 Drop/Place 快照，避免同一页面遗留另一种世界动作的确认入口。
+	ResetPendingRelease();
+	if (PendingCommandRequestId.IsValid())
+	{
+		RefreshCarryAction();
+		return;
+	}
+	FCatInventoryEntry Entry;
+	int32 SlotIndex = INDEX_NONE;
+	if (!CanCarrySelectedFish(Entry, SlotIndex))
+	{
+		RefreshCarryAction();
+		return;
+	}
+	SubmitReleaseItem(DisplayInventory.Get(), SlotIndex, Entry.Instance->GetItemInstanceId(), 1, ECatInventoryWorldAction::Carry);
+}
+
+// 先取消尚未提交的数量选择，再向 PageController 提交关闭意图；窗口和输入恢复仍由页面控制器负责。
+void UCatInventoryWidget::RequestCloseInventory()
+{
+	ResetPendingRelease();
+	if (UCatInventoryPageController* Controller = ResolveInventoryPageController())
+	{
+		Controller->RequestCloseInventoryFromWidget();
+	}
+}
+
+// 只为页面关闭解析 owning LocalPlayer 的控制器；Model 数据源由 DisplayInventory 独立确定。
+UCatInventoryPageController* UCatInventoryWidget::ResolveInventoryPageController() const
+{
+	ULocalPlayer* LocalPlayer = GetOwningLocalPlayer();
+	UCatLocalPlayerUISubsystem* UI = LocalPlayer ? LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
+	return UI ? UI->GetInventoryPageController() : nullptr;
+}
+
+// 关闭条件读取页面控制器的唯一打开状态；外部库存额外接受交互键，普通背包保持背包键与 Escape。
+bool UCatInventoryWidget::ShouldCloseInventoryFromKey(const FKeyEvent& InKeyEvent) const
+{
+	const UCatInventoryPageController* Controller = ResolveInventoryPageController();
+	if (!Controller || !Controller->IsInventoryOpen())
+	{
+		return false;
+	}
+	const FName Key = InKeyEvent.GetKey().GetFName();
+	const UCatUISettings* Settings = GetDefault<UCatUISettings>();
+	if (Key == EKeys::Escape.GetFName() || Key == Settings->ResolveInventoryToggleKeyName())
+	{
+		return true;
+	}
+	const UCatInventoryComponent* Inventory = DisplayInventory.Get();
+	return Inventory && Inventory->GetOwner() != GetOwningPlayerPawn() && Key == Settings->ResolveInteractionConfirmKeyName();
+}
+
+// 在子控件消费之前处理关闭键，避免焦点落在格子上后无法关闭整个库存窗口。
 FReply UCatInventoryWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
 	if (ShouldCloseInventoryFromKey(InKeyEvent))
@@ -224,7 +304,7 @@ FReply UCatInventoryWidget::NativeOnPreviewKeyDown(const FGeometry& InGeometry, 
 	return Super::NativeOnPreviewKeyDown(InGeometry, InKeyEvent);
 }
 
-// 键盘流程：库存根页拿到焦点时复用同一关闭键判断；预览未命中的按键继续保持默认传播。
+// 根控件直接收到按键时复用同一关闭判断；其余输入保持默认传播。
 FReply UCatInventoryWidget::NativeOnKeyDown(const FGeometry& InGeometry, const FKeyEvent& InKeyEvent)
 {
 	if (ShouldCloseInventoryFromKey(InKeyEvent))
@@ -235,388 +315,242 @@ FReply UCatInventoryWidget::NativeOnKeyDown(const FGeometry& InGeometry, const F
 	return Super::NativeOnKeyDown(InGeometry, InKeyEvent);
 }
 
-// 渲染流程：
-// 1. 接收 Model 的最新只读投影并保存成蓝图可读状态。
-// 2. 从本 WBP 对应的数据源取自己的 DisplayedSlots，并先清掉上一轮本地高亮。
-// 3. 用本页保存的格子身份在自己的 Slots 中复核；命中时只改本页 ViewState 副本，失效时只清本页选择。
-// 4. 把本页渲染后的 Slots 写回对应数组，让蓝图扩展和 Slot Widget 看到同一份本地结果。
-// 5. 把文本和按钮状态写入本页 Designer 字段，再刷新自己的 WrapBox；其他库存 WBP 各自处理自己的选择。
-void UCatInventoryWidget::RenderInventory(const FCatInventoryViewState& ViewState)
+// 可见页面 Tick 流程：父类先维持 UMG 生命周期，再只读取角色已复制的嘴部 Actor 并更新按钮禁用态；不触发库存重建、选择变化或额外网络请求。
+void UCatInventoryWidget::NativeTick(const FGeometry& MyGeometry, const float InDeltaTime)
 {
-	LastInventoryViewState = ViewState;
-	DisplayedSlots = GetInventorySlotsForWidget(ViewState);
-	for (FCatInventorySlotView& DisplayedSlot : DisplayedSlots)
-	{
-		DisplayedSlot.bSelected = false;
-	}
-	ClearLocalSelectionFromViewState(LastInventoryViewState);
-	const int32 LocalSelectionIndex = FindLocalSelectionIndex(DisplayedSlots,
-		LocalSelectedSlotIdentity, bHasLocalSelectedSlotIdentity);
-	if (DisplayedSlots.IsValidIndex(LocalSelectionIndex))
-	{
-		DisplayedSlots[LocalSelectionIndex].bSelected = true;
-		LocalSelectedSlotIdentity = DisplayedSlots[LocalSelectionIndex];
-		ApplyLocalSelectionToViewState(LastInventoryViewState, DisplayedSlots[LocalSelectionIndex]);
-	}
-	else
-	{
-		LocalSelectedSlotIdentity = FCatInventorySlotView();
-		bHasLocalSelectedSlotIdentity = false;
-	}
-	StoreDisplayedSlotsInViewState(LastInventoryViewState, DisplayedSlots);
-	BlueprintSummaryText = LastInventoryViewState.SummaryText;
-	BlueprintEquipmentText = LastInventoryViewState.EquipmentText;
-	BlueprintInventoryItemsText = LastInventoryViewState.InventoryItemsText;
-	BlueprintSelectedFishText = LastInventoryViewState.SelectedFishText;
-	BlueprintResultText = LastInventoryViewState.ResultText;
-	if (SummaryTextBlock)
-	{
-		SummaryTextBlock->SetText(BlueprintSummaryText);
-	}
-	if (EquipmentTextBlock)
-	{
-		EquipmentTextBlock->SetText(BlueprintEquipmentText);
-	}
-	if (InventoryItemsTextBlock)
-	{
-		InventoryItemsTextBlock->SetText(BlueprintInventoryItemsText);
-	}
-	if (SelectedFishTextBlock)
-	{
-		SelectedFishTextBlock->SetText(BlueprintSelectedFishText);
-	}
-	if (ResultTextBlock)
-	{
-		ResultTextBlock->SetText(BlueprintResultText);
-	}
-	const bool bFishUseActionEnabled = LastInventoryViewState.bCanSubmitAction;
-	const bool bStoreFishInTankActionEnabled = LastInventoryViewState.bCanStoreSelectedFishInSharedTank;
-	if (ConsumeFishButton)
-	{
-		ConsumeFishButton->SetIsEnabled(bFishUseActionEnabled);
-	}
-	if (SacrificeFishButton)
-	{
-		SacrificeFishButton->SetIsEnabled(bFishUseActionEnabled);
-	}
-	if (StoreFishInTankButton)
-	{
-		StoreFishInTankButton->SetIsEnabled(bStoreFishInTankActionEnabled);
-	}
-	RebuildSlotWidgets();
-	BP_RenderInventory(LastInventoryViewState);
+	Super::NativeTick(MyGeometry, InDeltaTime);
+	RefreshCarryAction();
 }
 
-// 格子 WBP 类设置流程：保存外部指定的 Slot 类；如果本页已经有显示数据，立即用同一份 ViewState 重建自己的格子。
-void UCatInventoryWidget::SetInventorySlotWidgetClass(TSubclassOf<UCatInventorySlotWidget> InSlotWidgetClass)
+// 选中格读取流程：先清空输出，再按本页选择下标重读当前 Model；不依赖旧格子副本，空格或失效实例不能成为提交目标。
+bool UCatInventoryWidget::GetSelectedInventoryEntry(FCatInventoryEntry& OutEntry, int32& OutSlotIndex) const
 {
-	if (InventorySlotWidgetClass == InSlotWidgetClass)
-	{
-		return;
-	}
-	InventorySlotWidgetClass = InSlotWidgetClass;
-	RebuildSlotWidgets();
-}
-
-// Model 绑定流程：
-// 1. 同一个 Model 重复绑定时只重读当前 ViewState，覆盖 WBP 先构建后收到外部绑定的顺序。
-// 2. 换 Model 时先从上一广播解绑，再监听新 Model 的变化广播。
-// 3. 绑定完成后直接从新 Model 读取当前投影刷新本页，避免等待下一次库存变化。
-void UCatInventoryWidget::BindInventoryModel(UCatInventoryModel* InModel)
-{
-	if (BoundInventoryModel.Get() == InModel)
-	{
-		RefreshInventoryViewFromModel();
-		return;
-	}
-	UnbindInventoryModel();
-	BoundInventoryModel = InModel;
-	if (InModel)
-	{
-		InventoryModelViewChangedHandle = InModel->OnViewStateChanged.AddUObject(
-			this, &ThisClass::HandleInventoryModelViewStateChanged);
-		RefreshInventoryViewFromModel();
-	}
-}
-
-// Model 解绑流程：只移除本页注册的广播句柄并清弱引用；Model 生命周期仍由 LocalPlayer UI 子系统维护。
-void UCatInventoryWidget::UnbindInventoryModel()
-{
-	if (UCatInventoryModel* Model = BoundInventoryModel.Get())
-	{
-		Model->OnViewStateChanged.Remove(InventoryModelViewChangedHandle);
-	}
-	InventoryModelViewChangedHandle.Reset();
-	BoundInventoryModel.Reset();
-}
-
-// 关闭请求流程：库存 Widget 只表达玩家意图；输入模式、鼠标和页面状态仍由当前 PageController 成对处理。
-void UCatInventoryWidget::RequestCloseInventory()
-{
-	if (UCatInventoryPageController* PageController = ResolveInventoryPageController())
-	{
-		PageController->RequestCloseInventoryFromWidget();
-	}
-}
-
-// 选择请求流程：蓝图传来的数字只在本页 DisplayedSlots 中查找；找到后进入本页本地选择，避免跨库存复用下标。
-void UCatInventoryWidget::RequestSelectSlot(const int32 SlotIndex)
-{
-	if (DisplayedSlots.IsValidIndex(SlotIndex))
-	{
-		RequestSelectSlotView(DisplayedSlots[SlotIndex]);
-	}
-}
-
-// 吃鱼请求流程：Widget 只提交本页当前选择身份；鱼实例、容器 ID 和 Revision 仍由 PageController 从最新 Model 快照复核。
-void UCatInventoryWidget::RequestConsumeSelectedFish()
-{
-	if (UCatInventoryPageController* PageController = ResolveInventoryPageController())
-	{
-		const FCatInventorySlotView SelectedSlot = LastInventoryViewState.bHasSelectedSlot
-			? LastInventoryViewState.SelectedSlot : FCatInventorySlotView();
-		PageController->RequestInventoryActionFromWidget(ECatInventoryAction::ConsumeSelectedFish, SelectedSlot);
-	}
-}
-
-// 献祭请求流程：Widget 只提交本页当前选择身份；献祭命令不在蓝图或 Widget 里组装。
-void UCatInventoryWidget::RequestSacrificeSelectedFish()
-{
-	if (UCatInventoryPageController* PageController = ResolveInventoryPageController())
-	{
-		const FCatInventorySlotView SelectedSlot = LastInventoryViewState.bHasSelectedSlot
-			? LastInventoryViewState.SelectedSlot : FCatInventorySlotView();
-		PageController->RequestInventoryActionFromWidget(ECatInventoryAction::SacrificeSelectedFish, SelectedSlot);
-	}
-}
-
-// 存入鱼缸请求流程：Widget 只提交本页当前选择身份；目标鱼缸、目标格和距离权限全部留给 PageController/服务器复核。
-void UCatInventoryWidget::RequestStoreSelectedFishInSharedTank()
-{
-	if (UCatInventoryPageController* PageController = ResolveInventoryPageController())
-	{
-		const FCatInventorySlotView SelectedSlot = LastInventoryViewState.bHasSelectedSlot
-			? LastInventoryViewState.SelectedSlot : FCatInventorySlotView();
-		PageController->RequestInventoryActionFromWidget(
-			ECatInventoryAction::StoreSelectedFishInSharedTank, SelectedSlot);
-	}
-}
-
-// 状态读取流程：返回本页最近一次渲染后的 ViewState 副本；蓝图只读展示当前 WBP 自己的选择和动作表现。
-const FCatInventoryViewState& UCatInventoryWidget::GetLastInventoryViewState() const
-{
-	return LastInventoryViewState;
-}
-
-// 数据源选择流程：普通库存页被鱼缸等外部容器直接打开时优先读外部容器 Slots，否则读取随身背包；专用页通过派生类保持自己的独立 Slots。
-const TArray<FCatInventorySlotView>& UCatInventoryWidget::GetInventorySlotsForWidget(
-	const FCatInventoryViewState& ViewState) const
-{
-	if (ViewState.bHasExternalContainers)
-	{
-		return ViewState.ExternalContainerSlots;
-	}
-	return ViewState.InventorySlots;
-}
-
-// 本页 Slots 回写流程：普通库存页按本次上下文写回外部容器或随身库存副本，保证鱼缸格子的本地高亮和按钮状态能进入蓝图可读 ViewState。
-void UCatInventoryWidget::StoreDisplayedSlotsInViewState(FCatInventoryViewState& ViewState,
-	const TArray<FCatInventorySlotView>& Slots) const
-{
-	if (ViewState.bHasExternalContainers)
-	{
-		ViewState.ExternalContainerSlots = Slots;
-		return;
-	}
-	ViewState.InventorySlots = Slots;
-}
-
-// WrapBox 格子刷新流程：
-// 1. 如果格子数量、Widget 类和所在位置都没变，就只把最新 SlotView 写回现有 Slot Widget，避免普通选择时重建 WrapBox 打断同一次鼠标输入。
-// 2. 数量变化或已存在 Widget 缺失时，才解绑并清空本页的单一 WrapBox，再按本页 DisplayedSlots 创建格子。
-// 3. 本页只管理自己 Designer 里绑定的 WrapBox；同屏多个库存 WBP 也各自刷新各自的格子。
-void UCatInventoryWidget::RebuildSlotWidgets()
-{
-	if (!InventorySlotWidgetClass || !InventorySlotWrapBox)
-	{
-		UnbindSlotWidgets();
-		return;
-	}
-	bool bCanRefreshExistingSlots = BoundSlotWidgets.Num() == DisplayedSlots.Num()
-		&& InventorySlotWrapBox->GetChildrenCount() == BoundSlotWidgets.Num();
-	const UClass* ExpectedSlotClass = InventorySlotWidgetClass.Get();
-	for (int32 WidgetIndex = 0; WidgetIndex < BoundSlotWidgets.Num(); ++WidgetIndex)
-	{
-		const UCatInventorySlotWidget* SlotWidget = BoundSlotWidgets[WidgetIndex];
-		if (!SlotWidget || !SlotWidget->IsA(ExpectedSlotClass) || InventorySlotWrapBox->GetChildAt(WidgetIndex) != SlotWidget)
-		{
-			bCanRefreshExistingSlots = false;
-			break;
-		}
-	}
-	if (bCanRefreshExistingSlots)
-	{
-		for (int32 SlotIndex = 0; SlotIndex < DisplayedSlots.Num(); ++SlotIndex)
-		{
-			BoundSlotWidgets[SlotIndex]->RenderSlot(DisplayedSlots[SlotIndex]);
-		}
-		return;
-	}
-	UnbindSlotWidgets();
-	InventorySlotWrapBox->ClearChildren();
-	for (const FCatInventorySlotView& SlotView : DisplayedSlots)
-	{
-		UCatInventorySlotWidget* SlotWidget = CreateWidget<UCatInventorySlotWidget>(GetOwningPlayer(), InventorySlotWidgetClass);
-		if (!SlotWidget)
-		{
-			continue;
-		}
-		SlotWidget->OnSlotSelected.AddUObject(this, &ThisClass::HandleSlotSelected);
-		SlotWidget->OnContextRequested.AddUObject(this, &ThisClass::HandleSlotContextRequested);
-		SlotWidget->OnSlotDropRequested.AddUObject(this, &ThisClass::HandleSlotDropRequested);
-		SlotWidget->RenderSlot(SlotView);
-		InventorySlotWrapBox->AddChildToWrapBox(SlotWidget);
-		BoundSlotWidgets.Add(SlotWidget);
-	}
-}
-
-// Model 解析流程：每个库存 WBP 实例都从 owning LocalPlayer 找当前正式库存 Model。
-UCatInventoryModel* UCatInventoryWidget::ResolveInventoryModel() const
-{
-	ULocalPlayer* LocalPlayer = GetOwningLocalPlayer();
-	UCatLocalPlayerUISubsystem* UISubsystem = LocalPlayer
-		? LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
-	return UISubsystem ? UISubsystem->GetInventoryModel() : nullptr;
-}
-
-// Model 刷新流程：从本页已绑定 Model 读取当前投影并渲染；没有 Model 时不构造空白状态覆盖蓝图预览。
-void UCatInventoryWidget::RefreshInventoryViewFromModel()
-{
-	if (const UCatInventoryModel* Model = BoundInventoryModel.Get())
-	{
-		RenderInventory(Model->GetViewState());
-	}
-}
-
-// Model 广播流程：广播本身不携带额外数据，本页收到后只重读当前 Model 的最新 ViewState。
-void UCatInventoryWidget::HandleInventoryModelViewStateChanged()
-{
-	RefreshInventoryViewFromModel();
-}
-
-// PageController 解析流程：Widget 不保存 Controller；玩家动作发生时从 owning LocalPlayer 找当前库存页面控制器。
-UCatInventoryPageController* UCatInventoryWidget::ResolveInventoryPageController() const
-{
-	ULocalPlayer* LocalPlayer = GetOwningLocalPlayer();
-	UCatLocalPlayerUISubsystem* UISubsystem = LocalPlayer
-		? LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
-	return UISubsystem ? UISubsystem->GetInventoryPageController() : nullptr;
-}
-
-// 格子解绑流程：逐个移除本对象绑定的原生委托，再清本地数组；格子对象释放交给 UMG 生命周期处理。
-void UCatInventoryWidget::UnbindSlotWidgets()
-{
-	for (UCatInventorySlotWidget* SlotWidget : BoundSlotWidgets)
-	{
-		if (!SlotWidget)
-		{
-			continue;
-		}
-		SlotWidget->OnSlotSelected.RemoveAll(this);
-		SlotWidget->OnContextRequested.RemoveAll(this);
-		SlotWidget->OnSlotDropRequested.RemoveAll(this);
-	}
-	BoundSlotWidgets.Reset();
-}
-
-// 选择转交流程：只在本页 DisplayedSlots 中复核并保存本地身份，然后用本页缓存数据重渲染自己；共享 Model 不知道这次点击。
-void UCatInventoryWidget::RequestSelectSlotView(const FCatInventorySlotView& SlotView)
-{
-	const int32 LocalSelectionIndex = FindLocalSelectionIndex(DisplayedSlots, SlotView, true);
-	if (!DisplayedSlots.IsValidIndex(LocalSelectionIndex))
-	{
-		return;
-	}
-	LocalSelectedSlotIdentity = DisplayedSlots[LocalSelectionIndex];
-	bHasLocalSelectedSlotIdentity = true;
-	RenderInventory(LastInventoryViewState);
-}
-
-// 关闭键判断流程：
-// 1. 先要求库存处于打开投影，避免构造或移出视口期间的迟到按键误触发关闭。
-// 2. Escape 始终作为模态 UI 兜底关闭键；普通背包再接受配置里的背包开关键。
-// 3. 鱼护、鱼缸和营地公共仓库这类由交互键打开的页面，也接受同一个交互键再次关闭。
-bool UCatInventoryWidget::ShouldCloseInventoryFromKey(const FKeyEvent& InKeyEvent) const
-{
-	if (!LastInventoryViewState.bOpen)
+	OutEntry = FCatInventoryEntry();
+	OutSlotIndex = INDEX_NONE;
+	UCatInventoryComponent* Inventory = DisplayInventory.Get();
+	if (!Inventory)
 	{
 		return false;
 	}
-	const FName PressedKeyName = InKeyEvent.GetKey().GetFName();
-	if (PressedKeyName == EKeys::Escape.GetFName())
+	const TArray<FCatInventoryEntry>& Entries = Inventory->GetInventoryModel()->GetInventoryList();
+	if (!Entries.IsValidIndex(SelectedSlotIndex) || !IsValid(Entries[SelectedSlotIndex].Instance)
+		|| Entries[SelectedSlotIndex].StackCount <= 0)
 	{
-		return true;
+		return false;
 	}
-	if (!LastInventoryViewState.ToggleKeyName.IsNone() && PressedKeyName == LastInventoryViewState.ToggleKeyName)
-	{
-		return true;
-	}
-	if (LastInventoryViewState.bHasExternalContainers || LastInventoryViewState.bHasCampInventory)
-	{
-		const UCatUISettings* Settings = GetDefault<UCatUISettings>();
-		const FName InteractionKeyName = Settings ? Settings->ResolveInteractionConfirmKeyName() : NAME_None;
-		return !InteractionKeyName.IsNone() && PressedKeyName == InteractionKeyName;
-	}
-	return false;
+	OutEntry = Entries[SelectedSlotIndex];
+	OutSlotIndex = SelectedSlotIndex;
+	return true;
 }
 
-// 格子点击流程：动态 Slot Widget 直接交出自己的来源身份，本页不把局部下标扩展成全局概念。
-void UCatInventoryWidget::HandleSlotSelected(const FCatInventorySlotView& SlotView)
-{
-	RequestSelectSlotView(SlotView);
-}
-
-// 格子上下文流程：右键意图直接交给 PageController；选择同步和服务器命令分流都基于格子所属数据源完成。
-void UCatInventoryWidget::HandleSlotContextRequested(const FCatInventorySlotView& SlotView)
-{
-	if (UCatInventoryPageController* PageController = ResolveInventoryPageController())
-	{
-		PageController->RequestInventorySlotContextFromWidget(SlotView);
-	}
-}
-
-// 格子 Drop 流程：只复制源/目标快照并提交移动意图；不在 Drop 中先选中或刷新，避免同一次鼠标事件里重建同屏库存格。
-void UCatInventoryWidget::HandleSlotDropRequested(const FCatInventorySlotView& SourceSlot,
-	const FCatInventorySlotView& TargetSlot)
-{
-	const FCatInventorySlotView SourceSlotCopy = SourceSlot;
-	const FCatInventorySlotView TargetSlotCopy = TargetSlot;
-	if (UCatInventoryPageController* PageController = ResolveInventoryPageController())
-	{
-		PageController->RequestInventorySlotDropFromWidget(SourceSlotCopy, TargetSlotCopy);
-	}
-}
-
-// 关闭按钮流程：收口到统一关闭请求，避免 WBP 图表和按钮绑定产生两套出口。
+// 关闭按钮使用公开关闭入口，和键盘关闭共享输入恢复时序。
 void UCatInventoryWidget::HandleCloseClicked()
 {
 	RequestCloseInventory();
 }
 
-// 吃鱼按钮流程：收口到统一吃鱼请求。
+// 使用按钮直接使用当前选中格，和该格右键共享服务器请求。
 void UCatInventoryWidget::HandleConsumeClicked()
 {
-	RequestConsumeSelectedFish();
+	RequestUseSelectedItem();
 }
 
-// 献祭按钮流程：收口到统一献祭请求。
-void UCatInventoryWidget::HandleSacrificeClicked()
+// Drop 按钮流程：不自行读取或扣除库存，只把选中格交给统一准备入口决定是否需要数量确认。
+void UCatInventoryWidget::HandleDropClicked()
 {
-	RequestSacrificeSelectedFish();
+	RequestDropSelectedItem();
 }
 
-// 存鱼缸按钮流程：收口到统一存缸请求，避免鱼护 WBP 自己查找鱼缸或拼 RPC 参数。
-void UCatInventoryWidget::HandleStoreFishInTankClicked()
+// Place 按钮流程：不生成客户端预览，只把选中格交给统一准备入口冻结本次离库意图。
+void UCatInventoryWidget::HandlePlaceClicked()
 {
-	RequestStoreSelectedFishInSharedTank();
+	RequestPlaceSelectedItem();
+}
+
+// 数量确认流程：先验证冻结实例仍在原槽位并把输入向下取整到可用范围，再复制来源并清空面板后提交；不匹配时直接取消。
+void UCatInventoryWidget::HandleReleaseQuantityConfirmed()
+{
+	int32 Quantity = 0;
+	if (!ResolvePendingRelease(Quantity))
+	{
+		ResetPendingRelease();
+		return;
+	}
+	UCatInventoryComponent* SourceInventory = PendingReleaseInventory.Get();
+	const int32 SourceSlotIndex = PendingReleaseSlotIndex;
+	const FGuid ItemInstanceId = PendingReleaseItemInstanceId;
+	const ECatInventoryWorldAction Action = PendingReleaseAction;
+	ResetPendingRelease();
+	SubmitReleaseItem(SourceInventory, SourceSlotIndex, ItemInstanceId, Quantity, Action);
+}
+
+// 数量取消流程：只撤销 UI 冻结选择和面板显示；从未向库存或服务器提交任何变更。
+void UCatInventoryWidget::HandleReleaseQuantityCancelled()
+{
+	ResetPendingRelease();
+}
+
+// 先取消旧数量并拒绝等待回执期间的新请求，再读取选中实例；单件直接提交，堆叠物仅在确认控件齐备时冻结来源并初始化整数输入。
+void UCatInventoryWidget::BeginReleaseSelectedItem(const ECatInventoryWorldAction Action)
+{
+	ResetPendingRelease();
+	if (PendingCommandRequestId.IsValid()) { return; }
+	FCatInventoryEntry Entry;
+	int32 SlotIndex = INDEX_NONE;
+	UCatInventoryComponent* SourceInventory = DisplayInventory.Get();
+	if (!SourceInventory || !GetSelectedInventoryEntry(Entry, SlotIndex) || !Entry.Instance || !Entry.Instance->GetItemInstanceId().IsValid())
+	{
+		return;
+	}
+	if (Entry.StackCount == 1)
+	{
+		SubmitReleaseItem(SourceInventory, SlotIndex, Entry.Instance->GetItemInstanceId(), 1, Action);
+		return;
+	}
+	if (!ReleaseQuantityPanel || !ReleaseQuantitySpinBox || !ReleaseQuantityConfirmButton || !ReleaseQuantityCancelButton)
+	{
+		UE_LOG(LogCatUI, Warning, TEXT("Event=ui_inventory_release_rejected World=%s Reason=QuantityControlsMissing View=%s"),
+			*GetPathNameSafe(GetWorld()), *GetName());
+		return;
+	}
+	PendingReleaseInventory = SourceInventory;
+	PendingReleaseSlotIndex = SlotIndex;
+	PendingReleaseItemInstanceId = Entry.Instance->GetItemInstanceId();
+	PendingReleaseMaximumQuantity = Entry.StackCount;
+	PendingReleaseAction = Action;
+	ReleaseQuantitySpinBox->SetMinValue(1.0f);
+	ReleaseQuantitySpinBox->SetMaxValue(static_cast<float>(Entry.StackCount));
+	ReleaseQuantitySpinBox->SetMinSliderValue(1.0f);
+	ReleaseQuantitySpinBox->SetMaxSliderValue(static_cast<float>(Entry.StackCount));
+	ReleaseQuantitySpinBox->SetDelta(1.0f);
+	ReleaseQuantitySpinBox->SetMinFractionalDigits(0);
+	ReleaseQuantitySpinBox->SetMaxFractionalDigits(0);
+	ReleaseQuantitySpinBox->SetValue(1.0f);
+	ReleaseQuantityPanel->SetVisibility(ESlateVisibility::Visible);
+}
+
+// 叼起资格判定流程：先读取当前选中条目与显示库存，再确认宿主正是鱼缸或鱼护且该库存就是宿主的正式鱼库存；最后要求实例为单条鱼、ID 有效且本地角色复制的嘴部引用为空。
+bool UCatInventoryWidget::CanCarrySelectedFish(FCatInventoryEntry& OutEntry, int32& OutSlotIndex) const
+{
+	OutEntry = FCatInventoryEntry();
+	OutSlotIndex = INDEX_NONE;
+	UCatInventoryComponent* Inventory = DisplayInventory.Get();
+	if (!Inventory || PendingCommandRequestId.IsValid() || !GetSelectedInventoryEntry(OutEntry, OutSlotIndex)
+		|| OutEntry.StackCount != 1 || !Cast<UCatFishInventoryItemInstance>(OutEntry.Instance)
+		|| !OutEntry.Instance->GetItemInstanceId().IsValid())
+	{
+		return false;
+	}
+	AActor* InventoryHost = Inventory->GetOwner();
+	ACatFishTankActor* FishTank = Cast<ACatFishTankActor>(InventoryHost);
+	ACatFishGuardActor* FishGuard = Cast<ACatFishGuardActor>(InventoryHost);
+	const bool bIsFishTankInventory = FishTank && FishTank->GetFishInventoryComponent() == Inventory;
+	const bool bIsFishGuardInventory = FishGuard && FishGuard->GetFishInventoryComponent() == Inventory;
+	const ACatCharacter* Character = Cast<ACatCharacter>(GetOwningPlayerPawn());
+	return (bIsFishTankInventory || bIsFishGuardInventory) && Character && !Character->GetMouthCarriedActor();
+}
+
+// 叼起按钮投影流程：每次只依据当前选择、等待状态和已复制的嘴部引用设置可用性；按钮未在旧 WBP 中接线时直接跳过，保持现有页面兼容。
+void UCatInventoryWidget::RefreshCarryAction()
+{
+	if (!CarryButton)
+	{
+		return;
+	}
+	FCatInventoryEntry Entry;
+	int32 SlotIndex = INDEX_NONE;
+	CarryButton->SetIsEnabled(CanCarrySelectedFish(Entry, SlotIndex));
+}
+
+// 离库提交流程：本地只生成请求 ID 并交出来源事实；服务器负责重读库存、计算位置、生成世界 Actor 和扣量的原子性。
+void UCatInventoryWidget::SubmitReleaseItem(UCatInventoryComponent* SourceInventory, const int32 SourceSlotIndex,
+	const FGuid& ItemInstanceId, const int32 Quantity, const ECatInventoryWorldAction Action)
+{
+	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwningPlayer());
+	AActor* SourceHost = SourceInventory ? SourceInventory->GetOwner() : nullptr;
+	if (PendingCommandRequestId.IsValid() || !Controller || !IsValid(SourceHost) || SourceHost->IsActorBeingDestroyed()
+		|| SourceInventory != DisplayInventory.Get() || SourceSlotIndex < 0 || !ItemInstanceId.IsValid() || Quantity <= 0)
+	{
+		return;
+	}
+	const FGuid RequestId = FGuid::NewGuid();
+	BeginInventoryCommand(RequestId);
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_inventory_release_submitted World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s RequestId=%s Source=%s Slot=%d ItemInstanceId=%s Quantity=%d Action=%s"),
+		*GetPathNameSafe(GetWorld()), static_cast<int32>(Controller->GetNetMode()), Controller->HasAuthority(),
+		static_cast<int32>(Controller->GetLocalRole()), *GetNameSafe(Controller), *RequestId.ToString(),
+		*GetPathNameSafe(SourceHost), SourceSlotIndex, *ItemInstanceId.ToString(), Quantity, *UEnum::GetValueAsString(Action));
+	Controller->ServerReleaseInventoryItemToWorld(RequestId, SourceHost, SourceSlotIndex, ItemInstanceId, Quantity, Action);
+}
+
+// 冻结选择校验流程：先读取冻结库存和槽位，再比对实例 ID 与当前数量；任何库存变化都会让确认失效而非猜测替代物品。
+bool UCatInventoryWidget::ResolvePendingRelease(int32& OutQuantity) const
+{
+	OutQuantity = 0;
+	UCatInventoryComponent* SourceInventory = PendingReleaseInventory.Get();
+	if (PendingCommandRequestId.IsValid() || !SourceInventory || SourceInventory != DisplayInventory.Get()
+		|| PendingReleaseSlotIndex == INDEX_NONE || !PendingReleaseItemInstanceId.IsValid()
+		|| PendingReleaseMaximumQuantity <= 0 || !ReleaseQuantitySpinBox)
+	{
+		return false;
+	}
+	const TArray<FCatInventoryEntry>& Entries = SourceInventory->GetInventoryModel()->GetInventoryList();
+	if (!Entries.IsValidIndex(PendingReleaseSlotIndex))
+	{
+		return false;
+	}
+	const FCatInventoryEntry& CurrentEntry = Entries[PendingReleaseSlotIndex];
+	if (!CurrentEntry.Instance || CurrentEntry.Instance->GetItemInstanceId() != PendingReleaseItemInstanceId
+		|| CurrentEntry.StackCount <= 0)
+	{
+		return false;
+	}
+	const float RequestedQuantity = ReleaseQuantitySpinBox->GetValue();
+	if (!FMath::IsFinite(RequestedQuantity)) { return false; }
+	// 先按双精度裁剪再取整，避免 SpinBox 的 float 在大堆叠上越过 int32 边界。
+	OutQuantity = static_cast<int32>(FMath::FloorToDouble(FMath::Clamp(static_cast<double>(RequestedQuantity), 1.0,
+		static_cast<double>(FMath::Min(PendingReleaseMaximumQuantity, CurrentEntry.StackCount)))));
+	return true;
+}
+
+// 先清空来源事实并恢复默认动作与数量一，再折叠可选数量面板；重复调用保持安全，不触碰真实库存。
+void UCatInventoryWidget::ResetPendingRelease()
+{
+	PendingReleaseInventory.Reset();
+	PendingReleaseSlotIndex = INDEX_NONE;
+	PendingReleaseItemInstanceId.Invalidate();
+	PendingReleaseMaximumQuantity = 0;
+	PendingReleaseAction = ECatInventoryWorldAction::Drop;
+	if (ReleaseQuantitySpinBox) { ReleaseQuantitySpinBox->SetValue(1.0f); }
+	if (ReleaseQuantityPanel)
+	{
+		ReleaseQuantityPanel->SetVisibility(ESlateVisibility::Collapsed);
+	}
+}
+
+// 提交前先登记关联 ID 并清除上次结果，再重读当前列表以撤销选择和数量；必须早于 RPC，房主可能在调用中同步收到回执。
+void UCatInventoryWidget::BeginInventoryCommand(const FGuid& RequestId)
+{
+	PendingCommandRequestId = RequestId;
+	if (InventoryActionResultText) { InventoryActionResultText->SetText(FText::GetEmpty()); }
+	RefreshInventorySlots();
+}
+
+// 回执先匹配本页请求，忽略其他操作；匹配后解除等待、显示服务器结果并刷新 Model，复制若稍后到达仍由原通知再次刷新。
+void UCatInventoryWidget::HandleInventoryCommandResult(const FCatDomainCommandResult& Result)
+{
+	if (!PendingCommandRequestId.IsValid() || Result.RequestId != PendingCommandRequestId) { return; }
+	PendingCommandRequestId.Invalidate();
+	const bool bAccepted = CatIsAcceptedDomainCommandResult(Result);
+	if (InventoryActionResultText)
+	{
+		InventoryActionResultText->SetText(bAccepted
+			? NSLOCTEXT("Catfishing", "InventoryActionSucceeded", "操作成功")
+			: NSLOCTEXT("Catfishing", "InventoryActionRejected", "操作未完成，请重新选择物品"));
+	}
+	const ACatfishingPlayerController* Controller = CommandResultController.Get();
+	UE_LOG(LogCatUI, Log, TEXT("Event=ui_inventory_command_result World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s RequestId=%s Accepted=%d Error=%s"),
+		*GetPathNameSafe(GetWorld()), Controller ? static_cast<int32>(Controller->GetNetMode()) : -1,
+		Controller && Controller->HasAuthority(), Controller ? static_cast<int32>(Controller->GetLocalRole()) : -1,
+		*GetNameSafe(Controller), *Result.RequestId.ToString(), bAccepted, *UEnum::GetValueAsString(Result.Error));
+	RefreshInventorySlots();
 }

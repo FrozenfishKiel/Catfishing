@@ -1,24 +1,30 @@
 #include "Framework/Game/CatfishingPlayerController.h"
+#include "Framework/Game/CatfishingGameState.h"
+#include "Components/InputComponent.h"
+#include "Logging/CatLogContext.h"
+#include "Fishing/Actors/CatFishingRodActor.h"
+#include "Fishing/Presentation/CatFishingCameraComponent.h"
 
 #include "Framework/Game/CatfishingGameModeBase.h"
 #include "Framework/Game/CatfishingPlayerState.h"
+#include "Camp/CatCampHubActor.h"
+#include "FishContainers/CatFishGuardActor.h"
+#include "ShopEconomy/CatFishBuyerActor.h"
 #include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "AbilitySystem/Config/CatAbilityInputConfig.h"
 #include "AbilitySystem/Config/CatAbilitySettings.h"
 #include "AbilitySystem/BodyAction/Camp/CatCampBodyActionCommandComponent.h"
 #include "AbilitySystem/BodyAction/Social/CatSocialBodyActionCommandComponent.h"
 #include "AbilitySystem/Input/CatAbilityInputBindingComponent.h"
 #include "Logging/CatLog.h"
-#include "Logging/CatLogContext.h"
-#include "Fishing/Actors/CatFishingRodActor.h"
-#include "Fishing/Presentation/CatFishingCameraComponent.h"
 #include "Online/CatOnlineSubsystem.h"
 #include "Condition/CatConditionComponent.h"
-#include "Condition/CatHerbRecoveryCoordinator.h"
 #include "Collection/CatRunImprintService.h"
 #include "Engine/GameInstance.h"
 #include "Engine/LocalPlayer.h"
-#include "Equipment/CatEquipmentCommandCoordinator.h"
+#include "Engine/World.h"
+#include "Equipment/CatEquipmentComponent.h"
 #include "EnhancedInputComponent.h"
 #include "EnhancedInputSubsystems.h"
 #include "Fishing/CatFishingService.h"
@@ -29,29 +35,19 @@
 #include "InputAction.h"
 #include "InputActionValue.h"
 #include "InputMappingContext.h"
-#include "Items/CatContainerCommandCoordinator.h"
-#include "Items/CatFishConsumptionCoordinator.h"
 #include "Interaction/CatInteractable.h"
 #include "Interaction/CatInteractionTags.h"
 #include "Interaction/CatInteractionTargetingComponent.h"
-#include "Inventory/CatInventoryCommandCoordinator.h"
+#include "Inventory/CatInventoryComponent.h"
+#include "Inventory/CatInventoryItemInstance.h"
+#include "Inventory/CatInventoryStatics.h"
+#include "Items/Fish/CatFishPickupActor.h"
 #include "Net/UnrealNetwork.h"
 #include "Profile/CatProfileSubsystem.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
-#include "Run/CatSacrificeCoordinator.h"
 #include "ShopEconomy/Trading/CatShopTradeController.h"
 #include "Social/CatSocialService.h"
 #include "Fishing/Integration/CatFishingCommandComponent.h"
-
-namespace
-{
-	bool IsPrimaryFishingRodHolder(ACatfishingPlayerController* Controller)
-	{
-		APlayerState* PlayerState = Controller ? Controller->PlayerState : nullptr;
-		const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindHeldRodOperatedBy(Controller);
-		return Rod && Rod->IsPrimaryOperator(PlayerState);
-	}
-}
 
 // 构造流程：创建 Controller 负责的输入与命令路由组件；不读取 Pawn、World 或玩家身份，避免类默认对象阶段产生运行时依赖。
 ACatfishingPlayerController::ACatfishingPlayerController()
@@ -71,9 +67,158 @@ UCatFishingCommandComponent* ACatfishingPlayerController::GetFishingCommandCompo
 	return FishingCommandComponent;
 }
 
+// 帧流程：先消费新快照并刷新遮罩，使本帧输入看到最新锁；父类仍负责正常 Controller、相机和网络生命周期。
+void ACatfishingPlayerController::Tick(const float DeltaSeconds)
+{
+	ReconcileDayTransition();
+	Super::Tick(DeltaSeconds);
+}
+
+// 锁查询流程：旅行清理后不再接受旧 World 的快照；其他时候直接读取当前 GameState，不用动画超时推断权威解锁。
+bool ACatfishingPlayerController::IsDayTransitionInputBlocked() const
+{
+	const UWorld* World = GetWorld();
+	if (!World || DayTransitionTravelWorld.Get() == World) return false;
+	const ACatfishingGameState* State = World->GetGameState<ACatfishingGameState>();
+	return State && State->GetRunPublicState().DayTransition.bActive
+		&& !State->GetRunPublicState().DayTransition.bFailed;
+}
+
+// 调和流程：
+// 1. 旧旅行 World 不再处理；GameState 替换时清理旧绑定，再订阅新的公开快照，晚到依赖由下一帧接入。
+// 2. 输入与服务器移动只跟随 active/failed；重复通知不叠锁，换 Pawn 时归还旧组件并接管新组件。
+// 3. 仅 owning client 把服务器秒数和快照交给独立 UI；这里不提交供品、不推进 Run、不开始新天倒计时。
+void ACatfishingPlayerController::ReconcileDayTransition()
+{
+	UWorld* World = GetWorld();
+	if (!World || DayTransitionTravelWorld.Get() == World) return;
+	ACatfishingGameState* State = World->GetGameState<ACatfishingGameState>();
+	if (!State)
+	{
+		ClearDayTransition();
+		return;
+	}
+	if (DayTransitionGameState.Get() != State)
+	{
+		ClearDayTransition();
+		DayTransitionGameState = State;
+		DayTransitionStateHandle = State->OnRunPublicStateChanged.AddUObject(this, &ThisClass::ReconcileDayTransition);
+	}
+	SetDayTransitionLocked(State->GetRunPublicState().DayTransition.bActive
+		&& !State->GetRunPublicState().DayTransition.bFailed);
+	if (IsLocalController())
+	{
+		ULocalPlayer* LocalPlayer = GetLocalPlayer();
+		UCatLocalPlayerUISubsystem* UI = LocalPlayer ? LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>() : nullptr;
+		if (UI)
+		{
+			UI->RefreshDayTransition(this, State->GetRunPublicState().DayTransition, State->GetServerWorldTimeSeconds());
+		}
+	}
+}
+
+// 锁配对流程：
+// 1. 服务器先归还已换走或已结束的移动组件；只有组件仍处于本功能写入的 None 模式才恢复原模式和自定义编号。
+// 2. 新组件保存原模式后停止并禁用移动；客户端只用输入锁，绝不写 CharacterMovement 模式。
+// 3. 首次加锁先申请一层移动/视角忽略计数，再取消钓鱼、Ability、抓握与物理身体的持续输入，并压入本地阻断组件。
+// 4. 解锁只归还本层计数和本组件；状态未变时不重复申请，日志只记录边沿。
+void ACatfishingPlayerController::SetDayTransitionLocked(const bool bLocked)
+{
+	ACharacter* ControlledCharacter = Cast<ACharacter>(GetPawn());
+	UCharacterMovementComponent* Movement = HasAuthority() && bLocked && ControlledCharacter ? ControlledCharacter->GetCharacterMovement() : nullptr;
+	if (DayTransitionMovement.Get() != Movement)
+	{
+		if (UCharacterMovementComponent* Previous = DayTransitionMovement.Get())
+		{
+			if (Previous->MovementMode == MOVE_None)
+			{
+				Previous->SetMovementMode(static_cast<EMovementMode>(DayTransitionSavedMovementMode), DayTransitionSavedCustomMode);
+			}
+		}
+		DayTransitionMovement = Movement;
+		if (Movement)
+		{
+			DayTransitionSavedMovementMode = Movement->MovementMode;
+			DayTransitionSavedCustomMode = Movement->CustomMovementMode;
+			Movement->StopMovementImmediately();
+			Movement->DisableMovement();
+		}
+	}
+	if (bDayTransitionLocked == bLocked) return;
+	bDayTransitionLocked = bLocked;
+	SetIgnoreMoveInput(bLocked);
+	SetIgnoreLookInput(bLocked);
+	if (bLocked)
+	{
+		// 翻天锁只阻止后续 Enhanced Input 回调不足以取消先前的物理按住意图；统一入口同时撤销本地和服务器的对应输入路由。
+		ClearPhysicalControlInput(TEXT("DayTransitionLocked"));
+		if (ControlledCharacter)
+		{
+			ControlledCharacter->StopJumping();
+			ControlledCharacter->ConsumeMovementInputVector();
+			// 本地先清惯性，移动模式仍只由服务器写入，避免复制到达前继续滑行。
+			if (UCharacterMovementComponent* CharacterMovement = ControlledCharacter->GetCharacterMovement())
+			{
+				CharacterMovement->StopMovementImmediately();
+			}
+		}
+		SetSprintRequested(false, false);
+		RotationInput = FRotator::ZeroRotator;
+		if (IsLocalController())
+		{
+			DayTransitionInputBlocker = NewObject<UEnhancedInputComponent>(this);
+			DayTransitionInputBlocker->Priority = MAX_int32;
+			DayTransitionInputBlocker->bBlockInput = true;
+			DayTransitionInputBlocker->RegisterComponent();
+			PushInputComponent(DayTransitionInputBlocker);
+		}
+	}
+	else if (DayTransitionInputBlocker)
+	{
+		PopInputComponent(DayTransitionInputBlocker);
+		DayTransitionInputBlocker->DestroyComponent();
+		DayTransitionInputBlocker = nullptr;
+	}
+	const ACatfishingGameState* State = DayTransitionGameState.Get();
+	const FCatRunDayTransition* Transition = State ? &State->GetRunPublicState().DayTransition : nullptr;
+	UE_LOG(LogCatRun, Log,
+		TEXT("Event=day_transition_operation_lock RequestId=%s Locked=%d Committed=%d Failed=%d TargetDay=%d World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s Pawn=%s"),
+		Transition ? *Transition->RequestId.ToString() : TEXT("None"), bLocked,
+		Transition && Transition->bCommitted, Transition && Transition->bFailed, Transition ? Transition->TargetDayIndex : INDEX_NONE,
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()),
+		*GetNameSafe(this), *GetNameSafe(GetPawn()));
+}
+
+// 清理流程：先从原 GameState 移除确切订阅，再归还本功能锁和本地表现；远端服务器 Controller 不接触 LocalPlayer UI。
+void ACatfishingPlayerController::ClearDayTransition()
+{
+	if (ACatfishingGameState* State = DayTransitionGameState.Get())
+	{
+		State->OnRunPublicStateChanged.Remove(DayTransitionStateHandle);
+	}
+	DayTransitionStateHandle.Reset();
+	SetDayTransitionLocked(false);
+	DayTransitionGameState.Reset();
+	if (ULocalPlayer* LocalPlayer = GetLocalPlayer())
+	{
+		if (UCatLocalPlayerUISubsystem* UI = LocalPlayer->GetSubsystem<UCatLocalPlayerUISubsystem>())
+		{
+			UI->ClearDayTransition();
+		}
+	}
+}
+
+// 旅行流程：先记住将离开的 World，清理翻天订阅和锁，再交给父类广播旅行；后续旧世界帧不能重新创建遮罩。
+void ACatfishingPlayerController::PreClientTravel(const FString& PendingURL, const ETravelType TravelType, const bool bIsSeamlessTravel)
+{
+	DayTransitionTravelWorld = GetWorld();
+	ClearDayTransition();
+	Super::PreClientTravel(PendingURL, TravelType, bIsSeamlessTravel);
+}
+
 void ACatfishingPlayerController::OnPossess(APawn* InPawn)
 {
-	// 接管流程：父类先完成 Pawn 所有权切换，并经 SetPawn 统一刷新 Ability 输入路由；随后只清 Controller 自己的临时钓鱼命令和疾跑状态。
+	// 接管流程：父类先完成 Pawn 所有权切换，并经 SetPawn 统一刷新 Ability 输入路由；随后只清 Controller 自己的本地钓鱼命令和疾跑状态。
 	Super::OnPossess(InPawn);
 	if (FishingCommandComponent)
 	{
@@ -85,10 +230,9 @@ void ACatfishingPlayerController::OnPossess(APawn* InPawn)
 		*GetClass()->GetName(), InPawn ? *InPawn->GetClass()->GetName() : TEXT("None"));
 }
 
-// Pawn 复制刷新流程：父类复制收尾会经 SetPawn 切换 Ability 输入路由；这里只重置 Controller 本地临时输入和普通移动速度。
+// Pawn 复制刷新流程：父类复制收尾会经 SetPawn 切换 Ability 输入路由；这里只重置 Controller 本地输入和普通移动速度。
 void ACatfishingPlayerController::OnRep_Pawn()
 {
-	RestoreFishingFacingMode();
 	Super::OnRep_Pawn();
 	if (FishingCommandComponent)
 	{
@@ -98,12 +242,13 @@ void ACatfishingPlayerController::OnRep_Pawn()
 	ApplySprintSpeed(GetPawn(), false);
 }
 
-// Pawn 写入流程：先保留 PlayerController 引擎内部的 SetPawn 行为，再按最终 Pawn 刷新 Ability 输入路由，最后让 owning client 的 LocalPlayer UI 消费当前身体。
+// Pawn 写入流程：换身体前先撤销旧身体的物理持续输入并归还翻天锁；父类写入后刷新 Ability 路由和本地 UI，再按当前服务器快照锁定新身体。
 void ACatfishingPlayerController::SetPawn(APawn* InPawn)
 {
-	if (FishingFacingCharacter.IsValid() && FishingFacingCharacter.Get() != InPawn)
+	if (GetPawn() != InPawn)
 	{
-		RestoreFishingFacingMode();
+		ClearPhysicalControlInput(TEXT("PawnChanged"));
+		SetDayTransitionLocked(false);
 	}
 	Super::SetPawn(InPawn);
 	if (AbilityInputBindingComponent)
@@ -111,15 +256,17 @@ void ACatfishingPlayerController::SetPawn(APawn* InPawn)
 		AbilityInputBindingComponent->RefreshForPawn(InPawn);
 	}
 	NotifyLocalPlayerUISubsystemPawnChanged();
+	ReconcileDayTransition();
 }
 
 // 本地启动流程：父类完成 Actor 生命周期后，幂等安装本 Controller 的玩法输入层；
-// 如果本机 durable Profile 已可读，再把装备解锁摘要投影给服务器 PlayerState，缺失时保持服务器 fail-closed。
+// 如果本机 durable Profile 已可读，再把装备解锁摘要投影给服务器；最后消费翻天快照，缺失时由 Tick 补齐。
 void ACatfishingPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 	ApplyInputMappingContext();
 	PublishProfileEquipmentUnlocksIfAvailable();
+	ReconcileDayTransition();
 }
 
 // 上鱼后的身体、移动与可见镜头跟随实际杆姿态；右键重设之后，转杆只消费新鼠标增量。
@@ -132,78 +279,19 @@ void ACatfishingPlayerController::UpdateRotation(const float DeltaTime)
 		// PostProcessInput 中的右键边沿先采基准，本帧尚未处理的鼠标量在这里且只累计一次。
 		FishingCommandComponent->UpdateLocalRodAimInput(DeltaTime, LookDeltaDegrees);
 	}
-	RefreshFishingFacingMode(DeltaTime);
+	RefreshPhysicalViewIntent();
 }
 
-void ACatfishingPlayerController::RefreshFishingFacingMode(const float DeltaTime)
+void ACatfishingPlayerController::RefreshPhysicalViewIntent()
 {
-	ACharacter* ControlledCharacter = Cast<ACharacter>(GetPawn());
-	UCharacterMovementComponent* Movement = ControlledCharacter
-		? ControlledCharacter->GetCharacterMovement() : nullptr;
-	if (!ControlledCharacter || !Movement || !IsPrimaryFishingRodHolder(this))
+	if (const ACatCharacter* Cat = Cast<ACatCharacter>(GetPawn()))
 	{
-		RestoreFishingFacingMode();
-		return;
+		if (UCatPhysicalBodyComponent* Body = Cat->GetPhysicalBodyComponent())
+		{
+			// 仍以实际杆姿态作为持竿镜头和移动基准；身体旋转只由物理电机写入。
+			Body->SetViewIntent(UCatFishingCameraComponent::ResolveFacingRotation(this));
+		}
 	}
-
-	if (FishingFacingCharacter.Get() != ControlledCharacter)
-	{
-		RestoreFishingFacingMode();
-		// 持竿状态可能在 Jump Started 之后由服务器回执；进入时同步清除旧意图，
-		// 否则按住跳跃进竿位会继续提供 JumpForce，仍可造成竿尖垂直突变。
-		ControlledCharacter->StopJumping();
-		FishingFacingCharacter = ControlledCharacter;
-		bSavedUseControllerRotationYaw = ControlledCharacter->bUseControllerRotationYaw;
-		bSavedOrientRotationToMovement = Movement->bOrientRotationToMovement;
-		bSavedUseControllerDesiredRotation = Movement->bUseControllerDesiredRotation;
-		UE_LOG(LogCatFishing, Display,
-			TEXT("Event=fishing_holder_facing_mode_changed Mode=HeldViewFacing Holder=%s PlayerId=%d "
-				"ActorYaw=%.2f ControlYaw=%.2f PreviousUseControllerYaw=%s PreviousOrientToMovement=%s "
-				"PreviousUseControllerDesired=%s World=%s NetMode=%d Authority=%s LocalRole=%d"),
-			*GetNameSafe(ControlledCharacter), PlayerState ? PlayerState->GetPlayerId() : INDEX_NONE,
-			ControlledCharacter->GetActorRotation().Yaw, GetControlRotation().Yaw,
-			bSavedUseControllerRotationYaw ? TEXT("true") : TEXT("false"),
-			bSavedOrientRotationToMovement ? TEXT("true") : TEXT("false"),
-			bSavedUseControllerDesiredRotation ? TEXT("true") : TEXT("false"),
-			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE,
-			HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(ControlledCharacter->GetLocalRole()));
-	}
-
-	// FaceRotation 时暂开 Yaw；搏斗期间随后关闭，阻止 Character 其他更新用超前意图覆盖实际朝向。
-	ControlledCharacter->bUseControllerRotationYaw = true;
-	Movement->bOrientRotationToMovement = false;
-	Movement->bUseControllerDesiredRotation = false;
-	ControlledCharacter->FaceRotation(UCatFishingCameraComponent::ResolveFacingRotation(this), DeltaTime);
-	ControlledCharacter->bUseControllerRotationYaw = !UCatFishingCameraComponent::FindFightRodHeldBy(this);
-}
-
-void ACatfishingPlayerController::RestoreFishingFacingMode()
-{
-	ACharacter* PreviousCharacter = FishingFacingCharacter.Get();
-	if (!PreviousCharacter)
-	{
-		FishingFacingCharacter.Reset();
-		return;
-	}
-
-	PreviousCharacter->bUseControllerRotationYaw = bSavedUseControllerRotationYaw;
-	if (UCharacterMovementComponent* Movement = PreviousCharacter->GetCharacterMovement())
-	{
-		Movement->bOrientRotationToMovement = bSavedOrientRotationToMovement;
-		Movement->bUseControllerDesiredRotation = bSavedUseControllerDesiredRotation;
-	}
-	UE_LOG(LogCatFishing, Display,
-		TEXT("Event=fishing_holder_facing_mode_changed Mode=Restored Holder=%s PlayerId=%d "
-			"ActorYaw=%.2f ControlYaw=%.2f RestoredUseControllerYaw=%s RestoredOrientToMovement=%s "
-			"RestoredUseControllerDesired=%s World=%s NetMode=%d Authority=%s LocalRole=%d"),
-		*GetNameSafe(PreviousCharacter), PlayerState ? PlayerState->GetPlayerId() : INDEX_NONE,
-		PreviousCharacter->GetActorRotation().Yaw, GetControlRotation().Yaw,
-		bSavedUseControllerRotationYaw ? TEXT("true") : TEXT("false"),
-		bSavedOrientRotationToMovement ? TEXT("true") : TEXT("false"),
-		bSavedUseControllerDesiredRotation ? TEXT("true") : TEXT("false"),
-		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE,
-		HasAuthority() ? TEXT("true") : TEXT("false"), static_cast<int32>(PreviousCharacter->GetLocalRole()));
-	FishingFacingCharacter.Reset();
 }
 
 // 输入绑定流程：只接受项目配置的 EnhancedInputComponent；物理移动、视角、跳跃和疾跑绑定随当前 InputComponent 生命周期销毁，不由 Controller 手动解绑。
@@ -225,6 +313,8 @@ void ACatfishingPlayerController::SetupInputComponent()
 	if (MoveAction)
 	{
 		EnhancedInput->BindAction(MoveAction, ETriggerEvent::Triggered, this, &ThisClass::Move);
+		EnhancedInput->BindAction(MoveAction, ETriggerEvent::Completed, this, &ThisClass::StopMove);
+		EnhancedInput->BindAction(MoveAction, ETriggerEvent::Canceled, this, &ThisClass::StopMove);
 	}
 	if (LookAction)
 	{
@@ -253,6 +343,10 @@ void ACatfishingPlayerController::SetupInputComponent()
 		{
 			EnhancedInput->BindAction(Entry.InputAction, ETriggerEvent::Started,
 				this, &ThisClass::NativeInputTagPressed, Entry.InputTag);
+			EnhancedInput->BindAction(Entry.InputAction, ETriggerEvent::Completed,
+				this, &ThisClass::NativeInputTagReleased, Entry.InputTag);
+			EnhancedInput->BindAction(Entry.InputAction, ETriggerEvent::Canceled,
+				this, &ThisClass::NativeInputTagCanceled, Entry.InputTag);
 		}
 		NativeInputBoundComponent = EnhancedInput;
 	}
@@ -282,7 +376,7 @@ void ACatfishingPlayerController::NotifyLocalPlayerUISubsystemPawnChanged()
 	}
 }
 
-// 输入后处理流程：先保留父类每帧输入收尾，再把本帧 Delta/GamePaused 交给当前 Pawn 的 ASC；没有有效 ASC 时保持静默，不缓存旧 Pawn。
+// 输入后处理流程：先保留父类每帧输入收尾，再把本帧 Delta/GamePaused 交给当前 Pawn 的 ASC；没有有效 ASC 时保持静默，不缓存上一 Pawn。
 void ACatfishingPlayerController::PostProcessInput(const float DeltaTime, const bool bGamePaused)
 {
 	Super::PostProcessInput(DeltaTime, bGamePaused);
@@ -292,10 +386,10 @@ void ACatfishingPlayerController::PostProcessInput(const float DeltaTime, const 
 	}
 }
 
-// Pawn 断开流程：Controller 仍持有 Pawn 时先恢复普通速度并清意图，再交还父类断开占有。
+// Pawn 断开流程：先经统一入口撤销物理持续输入，再重置 ASC 路由和钓鱼临时状态、恢复普通疾跑速度并清本地疾跑意图；最后交还父类断开占有。
 void ACatfishingPlayerController::OnUnPossess()
 {
-	RestoreFishingFacingMode();
+	ClearPhysicalControlInput(TEXT("UnPossessed"));
 	if (AbilityInputBindingComponent)
 	{
 		AbilityInputBindingComponent->ResetAbilityInput();
@@ -309,10 +403,13 @@ void ACatfishingPlayerController::OnUnPossess()
 	Super::OnUnPossess();
 }
 
-// 输入清理流程：只撤销本 Controller 安装的 Context，再交还父类销毁；不干扰诊断或 UI 输入层。
+// 输入清理流程：先解绑翻天并归还专属锁，再撤销物理持续输入、Ability 路由和钓鱼临时状态，撤销自己的 Mapping Context，最后交还父类销毁。
 void ACatfishingPlayerController::EndPlay(const EEndPlayReason::Type EndPlayReason)
 {
-	RestoreFishingFacingMode();
+	// 父类结束流程可能再次写 Pawn；禁止该回调重新订阅即将销毁的 World。
+	DayTransitionTravelWorld = GetWorld();
+	ClearDayTransition();
+	ClearPhysicalControlInput(TEXT("ControllerEndPlay"));
 	if (AbilityInputBindingComponent)
 	{
 		AbilityInputBindingComponent->ResetAbilityInput();
@@ -377,9 +474,14 @@ void ACatfishingPlayerController::RemoveInputMappingContext()
 	AppliedMappingContext = nullptr;
 }
 
-// 移动输入流程：以控制器水平朝向为基准，Y 驱动前后、X 驱动左右；Pawn 缺失时不制造旁路移动状态。
+// 移动输入流程：翻天锁或引擎移动忽略时先清物理移动意图；其余以可见水平朝向转换前后左右输入，Pawn 缺失时不制造旁路状态。
 void ACatfishingPlayerController::Move(const FInputActionValue& Value)
 {
+	if (IsDayTransitionInputBlocked() || IsMoveInputIgnored())
+	{
+		StopMove();
+		return;
+	}
 	APawn* ControlledPawn = GetPawn();
 	if (!ControlledPawn)
 	{
@@ -387,34 +489,82 @@ void ACatfishingPlayerController::Move(const FInputActionValue& Value)
 	}
 
 	const FVector2D Movement = Value.Get<FVector2D>();
-	const FRotator YawRotation(0.0, UCatFishingCameraComponent::ResolveFacingRotation(this).Yaw, 0.0);
+	const FRotator FacingRotation = UCatFishingCameraComponent::ResolveFacingRotation(this);
+	const FRotator YawRotation(0.0, FacingRotation.Yaw, 0.0);
 	const FVector ForwardDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::X);
 	const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
+	if (const ACatCharacter* Cat = Cast<ACatCharacter>(ControlledPawn))
+	{
+		if (UCatPhysicalBodyComponent* Body = Cat->GetPhysicalBodyComponent())
+		{
+			Body->SetMoveIntent((ForwardDirection * Movement.Y + RightDirection * Movement.X).GetClampedToMaxSize(1.0));
+			return;
+		}
+	}
 	ControlledPawn->AddMovementInput(ForwardDirection, Movement.Y);
 	ControlledPawn->AddMovementInput(RightDirection, Movement.X);
 }
 
-// 视角输入流程：输入资产只提供二维意图，轴反转、缩放和死区由 Mapping Context 的 Modifier 决定。
+// 移动停止流程：Completed、Canceled 或输入锁都把本地物理身体的自愿移动意图清零；已有速度、外力和抓握牵引保持由各自系统结算。
+void ACatfishingPlayerController::StopMove()
+{
+	if (const ACatCharacter* Cat = Cast<ACatCharacter>(GetPawn()))
+	{
+		if (UCatPhysicalBodyComponent* Body = Cat->GetPhysicalBodyComponent()) Body->SetMoveIntent(FVector::ZeroVector);
+	}
+}
+
+// 物理输入清理流程：先清钓鱼保持态与 Ability 路由，再清身体移动/抓握意图，最后关闭疾跑；各子系统仍保留自己的权限与复制收口。
+void ACatfishingPlayerController::ClearPhysicalControlInput(const FName Reason)
+{
+	if (FishingCommandComponent && GetPawn()) FishingCommandComponent->ClearHeldInputForLifecycle(Reason);
+	if (AbilityInputBindingComponent) AbilityInputBindingComponent->ReleaseAllInputRoutes(Reason);
+	if (const ACatCharacter* Cat = Cast<ACatCharacter>(GetPawn()))
+	{
+		if (UCatPhysicalBodyComponent* Body = Cat->GetPhysicalBodyComponent()) Body->ClearControlIntent(Reason);
+	}
+	SetSprintRequested(false, true);
+}
+
+// 按键刷新流程：视口失焦或输入层切换时先撤销持续物理输入，再让父类丢弃引擎记录的按键状态，避免恢复焦点后重放旧意图。
+void ACatfishingPlayerController::FlushPressedKeys()
+{
+	ClearPhysicalControlInput(TEXT("KeysFlushed"));
+	Super::FlushPressedKeys();
+}
+
+// 视角输入流程：翻天锁或引擎视角忽略时不累积 RotationInput；其他时候把 Mapping Context 已处理过的二维意图写入视角。
 void ACatfishingPlayerController::Look(const FInputActionValue& Value)
 {
+	if (IsDayTransitionInputBlocked() || IsLookInputIgnored()) return;
 	const FVector2D LookAxis = Value.Get<FVector2D>();
 	AddYawInput(LookAxis.X);
 	AddPitchInput(LookAxis.Y);
 }
 
-// 跳跃按下流程：手持鱼竿操作位禁止起跳，避免竿尖垂直突变改变鱼线负载。
+// 跳跃按下流程：翻天锁或引擎移动忽略时先停止已有跳跃保持态；其他时候只对当前 Character 生效，持竿时清保持态并拒绝起跳，普通 Pawn 不伪造实现。
 void ACatfishingPlayerController::StartJump()
 {
+	if (IsDayTransitionInputBlocked() || IsMoveInputIgnored())
+	{
+		StopJump();
+		return;
+	}
 	if (ACharacter* ControlledCharacter = Cast<ACharacter>(GetPawn()))
 	{
-		if (const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindHeldRodOperatedBy(this))
+		if (const ACatFishingRodActor* Rod = UCatFishingCameraComponent::FindHeldRodOperatedBy(this);
+			Rod && Rod->IsPrimaryOperator(PlayerState))
 		{
 			ControlledCharacter->StopJumping();
-			UE_LOG(LogCatFishing, Display,
-				TEXT("Event=fishing_jump_blocked Reason=OperatingHeldRod RodActorId=%s Pose=Held %s"),
-				*Rod->GetPresentationState().RodActorId.ToString(EGuidFormats::DigitsWithHyphens),
-				*CatLogContext::BuildControllerFields(this));
 			return;
+		}
+		if (const ACatCharacter* Cat = Cast<ACatCharacter>(ControlledCharacter))
+		{
+			if (UCatPhysicalBodyComponent* Body = Cat->GetPhysicalBodyComponent())
+			{
+				Body->RequestJump();
+				return;
+			}
 		}
 		ControlledCharacter->Jump();
 	}
@@ -429,9 +579,10 @@ void ACatfishingPlayerController::StopJump()
 	}
 }
 
-// 疾跑按下流程：本地立即应用以保持操控响应，同时仅向 authority 发送布尔意图，客户端不能提交任意速度。
+// 疾跑按下流程：先拒绝翻天操作，再本地应用并向 authority 发送布尔意图，客户端不能提交任意速度。
 void ACatfishingPlayerController::StartSprint()
 {
+	if (IsDayTransitionInputBlocked()) return;
 	SetSprintRequested(true, true);
 }
 
@@ -454,9 +605,18 @@ void ACatfishingPlayerController::SetSprintRequested(const bool bNewSprintReques
 	}
 }
 
-// 移动速度应用流程：只修改当前 CharacterMovement 的 MaxWalkSpeed；实际速度仍由移动组件加速度、制动和网络移动决定。
+// 移动速度应用流程：物理电机使用服务器配置的 cm/s；CMC 保留同值供正式动画/通用只读消费者。
 void ACatfishingPlayerController::ApplySprintSpeed(APawn* TargetPawn, const bool bSprinting) const
 {
+	const ACharacter* DefaultCharacter = TargetPawn ? Cast<ACharacter>(TargetPawn->GetClass()->GetDefaultObject()) : nullptr;
+	const UCharacterMovementComponent* DefaultMovement = DefaultCharacter ? DefaultCharacter->GetCharacterMovement() : nullptr;
+	// 普通速度只读当前猫类 CDO 的正式 CMC 配置，不能用已被疾跑临时覆盖的实例值当基准。
+	const float WalkSpeed = DefaultMovement ? DefaultMovement->MaxWalkSpeed : 100.0f;
+	const float Speed = FMath::Max(0.0f, bSprinting ? SprintMaxSpeed : WalkSpeed);
+	if (const ACatCharacter* Cat = Cast<ACatCharacter>(TargetPawn))
+	{
+		if (UCatPhysicalBodyComponent* Body = Cat->GetPhysicalBodyComponent()) Body->SetMovementSpeed(Speed);
+	}
 	ACharacter* ControlledCharacter = Cast<ACharacter>(TargetPawn);
 	UCharacterMovementComponent* MovementComponent = ControlledCharacter
 		? ControlledCharacter->GetCharacterMovement() : nullptr;
@@ -465,12 +625,13 @@ void ACatfishingPlayerController::ApplySprintSpeed(APawn* TargetPawn, const bool
 		return;
 	}
 
-	MovementComponent->MaxWalkSpeed = FMath::Max(0.0f, bSprinting ? SprintMaxSpeed : WalkMaxSpeed);
+	MovementComponent->MaxWalkSpeed = Speed;
 }
 
-// authority 疾跑流程：客户端只能选择开关，服务器使用自身类默认速度重新应用并参与权威移动校验。
+// authority 疾跑流程：翻天期间拒绝迟到的开启意图但接受释放；最终速度继续读取服务器类默认值。
 void ACatfishingPlayerController::ServerSetSprinting_Implementation(const bool bNewSprinting)
 {
+	if (bNewSprinting && IsDayTransitionInputBlocked()) return;
 	SetSprintRequested(bNewSprinting, false);
 }
 
@@ -482,7 +643,7 @@ bool ACatfishingPlayerController::CanForwardGameplayCommand() const
 	return GameMode && GameMode->CanAcceptGameplayCommand(this);
 }
 
-// Controller 钓鱼 gate 流程：现取 authority GameMode 并使用 Fishing 专用白天规则；它只服务抛竿、鱼竿操作、协作、抢抄和玩家打窝，不影响 Social、翻天 ready 或结算 RPC。
+// Controller 钓鱼 gate 流程：现取 authority GameMode 并使用 Fishing 专用白天规则；它只服务抛竿、鱼竿操作、协作、抢抄和玩家打窝，不影响 Social 或结算 RPC。
 bool ACatfishingPlayerController::CanForwardFishingCommand() const
 {
 	const ACatfishingGameModeBase* GameMode = GetWorld()
@@ -490,49 +651,7 @@ bool ACatfishingPlayerController::CanForwardFishingCommand() const
 	return GameMode && GameMode->CanAcceptFishingCommand(this);
 }
 
-// 额度 RPC 流程：先过统一玩法 gate，再组装客户端意图；随后由 GameMode 重建身份并完成 Revision/幂等裁决，结果只写结构化日志。
-void ACatfishingPlayerController::ServerSubmitQuotaContribution_Implementation(const FGuid RequestId,
-	const int64 ExpectedRevision, const int32 Contribution)
-{
-	if (!CanForwardGameplayCommand())
-	{
-		return;
-	}
-	FCatQuotaContributionCommand Command;
-	Command.Context.RequestId = RequestId;
-	Command.Context.ExpectedRevision = ExpectedRevision;
-	Command.Contribution = Contribution;
-	ACatfishingGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
-	const FCatRunCommandResult Result = GameMode
-		? GameMode->SubmitQuotaContribution(this, Command)
-		: FCatRunCommandResult();
-	UE_LOG(LogCatRun, Log, TEXT("Event=quota_command_result RequestId=%s Committed=%s Error=%s Revision=%lld"),
-		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), Result.bCommitted ? TEXT("true") : TEXT("false"),
-		*UEnum::GetValueAsString(Result.Error), Result.Revision);
-}
-
-// Ready RPC 流程：先过统一玩法 gate，再转发 RequestId/ExpectedRevision/意图布尔值；GameMode 决定资格、个人复制值和全员 StateTree 事件。
-void ACatfishingPlayerController::ServerSetNextDayReady_Implementation(const FGuid RequestId,
-	const int64 ExpectedRevision, const bool bReady)
-{
-	if (!CanForwardGameplayCommand())
-	{
-		return;
-	}
-	FCatNextDayReadyCommand Command;
-	Command.Context.RequestId = RequestId;
-	Command.Context.ExpectedRevision = ExpectedRevision;
-	Command.bReady = bReady;
-	ACatfishingGameModeBase* GameMode = GetWorld() ? GetWorld()->GetAuthGameMode<ACatfishingGameModeBase>() : nullptr;
-	const FCatRunCommandResult Result = GameMode
-		? GameMode->SubmitNextDayReady(this, Command)
-		: FCatRunCommandResult();
-	UE_LOG(LogCatRun, Log, TEXT("Event=ready_command_result RequestId=%s Committed=%s Error=%s Revision=%lld"),
-		*RequestId.ToString(EGuidFormats::DigitsWithHyphens), Result.bCommitted ? TEXT("true") : TEXT("false"),
-		*UEnum::GetValueAsString(Result.Error), Result.Revision);
-}
-
-// 结算完成 RPC 流程：现取 authority GameMode/Imprint 服务并检查当前 Run 的计划终态与 Grant ACK；通过后才调用 Run 唯一协调入口，不让客户端布尔值直接结束结算夜。
+// 结算完成 RPC 流程：现取 authority GameMode/Imprint 服务并检查当前 Run 的计划终态与 Grant ACK；通过后才调用 Run 唯一写入口，不让客户端布尔值直接结束结算夜。
 void ACatfishingPlayerController::ServerRequestSettlementCompletion_Implementation(const FGuid RequestId,
 	const int64 ExpectedRevision)
 {
@@ -542,7 +661,7 @@ void ACatfishingPlayerController::ServerRequestSettlementCompletion_Implementati
 	Result.RequestId = RequestId;
 	if (GameMode && Imprint && Imprint->IsSettlementArchiveReady(GameMode->GetRunPublicState().Phase.RunId))
 	{
-		Result = GameMode->CompleteSettlementFromCoordinator(RequestId, ExpectedRevision);
+		Result = GameMode->CompleteSettlementFromServerRequest(RequestId, ExpectedRevision);
 	}
 	else
 	{
@@ -602,7 +721,7 @@ void ACatfishingPlayerController::ServerAcknowledgeProfileGrant_Implementation(c
 	}
 }
 
-// 装备解锁摘要 RPC 流程：服务器只把 owning client 提交的 durable Profile 摘要写到当前 PlayerState；非法摘要保留旧授权，不回写 Profile 或生成 Grant。
+// 装备解锁摘要 RPC 流程：服务器只把 owning client 提交的 durable Profile 摘要写到当前 PlayerState；非法摘要保留原授权，不回写 Profile 或生成 Grant。
 void ACatfishingPlayerController::ServerPublishEquipmentUnlocks_Implementation(const TArray<FName>& UnlockIds)
 {
 	if (ACatfishingPlayerState* CatPlayerState = GetPlayerState<ACatfishingPlayerState>())
@@ -638,69 +757,6 @@ void ACatfishingPlayerController::ServerReportImprintCaptureResult_Implementatio
 	}
 }
 
-// 搏斗协作 RPC 流程：先过钓鱼白天 gate，再转交会话键、幂等键与 ExpectedRevision；Session 继续验证 Giant 与 HookedFight。
-void ACatfishingPlayerController::ServerAssistFishingSession_Implementation(const FGuid FishingSessionId,
-	const FGuid RequestId, const int64 ExpectedRevision)
-{
-	if (!CanForwardFishingCommand())
-	{
-		return;
-	}
-	if (FishingCommandComponent)
-	{
-		FishingCommandComponent->ForwardLegacyAssist(FishingSessionId, RequestId, ExpectedRevision);
-	}
-}
-
-// 抄网 RPC 流程：先过钓鱼白天 gate，再把客户端意图交给命令组件；后续由命令组件和 Session 裁决范围，并在成功时完成抄网结果。
-void ACatfishingPlayerController::ServerRequestScoop_Implementation(const FGuid FishingSessionId,
-	FCatScoopCommand Command)
-{
-	if (!CanForwardFishingCommand())
-	{
-		return;
-	}
-	if (FishingCommandComponent)
-	{
-		FishingCommandComponent->ForwardLegacyScoop(FishingSessionId, Command);
-	}
-}
-
-// 献祭 RPC 路由流程：服务器 RPC 只做网络入口和回执转交；协议顺序、鱼预留和 Run apply 仍由 SacrificeCoordinator 独占，不进入 BodyAction。
-void ACatfishingPlayerController::ServerRequestSacrifice_Implementation(FCatSacrificeCommand Command)
-{
-	FCatSacrificeResult Result;
-	Result.RequestId = Command.Context.RequestId;
-	if (!CanForwardGameplayCommand())
-	{
-		Result.Error = ECatDomainCommandError::CommandsClosed;
-	}
-	else if (UCatSacrificeCoordinator* Coordinator = GetWorld()
-		? GetWorld()->GetSubsystem<UCatSacrificeCoordinator>() : nullptr)
-	{
-		Command.Context.StableNetId.Reset();
-		Result = Coordinator->RequestSacrifice(this, Command);
-	}
-	else
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	DeliverSacrificeResultToOwningClient(Result);
-}
-
-// 献祭结果客户端流程：可靠接收服务器协调器的完整阶段结果并整体替换本机读模型；随后广播本机通知供 UI Model 刷新，不参与任何服务器恢复或写入。
-void ACatfishingPlayerController::ClientReceiveSacrificeResult_Implementation(const FCatSacrificeResult& Result)
-{
-	LastSacrificeResult = Result;
-	OnSacrificeResultReceived.Broadcast(Result);
-}
-
-// 献祭结果读取流程：返回 owning client 最近收到的完整副本；调用方只能展示 RequestId、阶段与 Revision，不能据此直接操作 Items 或 Run。
-FCatSacrificeResult ACatfishingPlayerController::GetLastSacrificeResult() const
-{
-	return LastSacrificeResult;
-}
-
 // 营地休息 RPC 路由流程：只把固定营地和 RequestId 投给 BodyAction Ability；没有正式 Ability 接管时回送依赖错误。
 void ACatfishingPlayerController::ServerRequestCampRest_Implementation(ACatCampHubActor* Camp, const FGuid RequestId)
 {
@@ -726,53 +782,6 @@ void ACatfishingPlayerController::ServerRequestCampfirePlayback_Implementation(A
 	}
 }
 
-// 普通容器库存拖拽 RPC 流程：owning client 只把请求送到自己的 PlayerController；服务器直接进入 Items 提交，地面鱼护箱子按外部箱子处理，不依赖 Actor Owner，也不投 BodyAction/Social。
-void ACatfishingPlayerController::ServerTransferObjectBetweenContainers_Implementation(const FGuid RequestId,
-	const ECatContainedObjectKind ObjectKind, const FGuid ObjectInstanceId, const FGuid SourceContainerId,
-	const ECatContainerKind SourceContainerKind,
-	const int32 SourceContainerSlotIndex, const int64 ExpectedSourceRevision, const FGuid TargetContainerId,
-	const ECatContainerKind TargetContainerKind, const int32 TargetContainerSlotIndex,
-	const int64 ExpectedTargetRevision)
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	if (UCatContainerCommandCoordinator* Coordinator = GetWorld()
-		? GetWorld()->GetSubsystem<UCatContainerCommandCoordinator>() : nullptr)
-	{
-		Result = Coordinator->TransferReachableObject(this, ControlledCharacter, RequestId, ObjectKind,
-			ObjectInstanceId, SourceContainerId, SourceContainerKind, SourceContainerSlotIndex,
-			ExpectedSourceRevision, TargetContainerId, TargetContainerKind, TargetContainerSlotIndex,
-			ExpectedTargetRevision);
-	}
-	else
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	DeliverCampCommandResultToOwningClient(Result);
-}
-
-// 一键存入共享鱼缸 RPC 流程：owning client 只提交鱼护源格和鱼实例；目标鱼缸不接受客户端指定，统一交给服务器从固定营地解析。
-void ACatfishingPlayerController::ServerStoreFishInSharedTank_Implementation(const FGuid RequestId,
-	const FGuid FishInstanceId, const FGuid SourceContainerId, const int32 SourceContainerSlotIndex,
-	const int64 ExpectedSourceRevision)
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	if (UCatContainerCommandCoordinator* Coordinator = GetWorld()
-		? GetWorld()->GetSubsystem<UCatContainerCommandCoordinator>() : nullptr)
-	{
-		Result = Coordinator->StoreFishInReachableSharedTank(this, ControlledCharacter, RequestId,
-			FishInstanceId, SourceContainerId, SourceContainerSlotIndex, ExpectedSourceRevision);
-	}
-	else
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	DeliverCampCommandResultToOwningClient(Result);
-}
-
 // 搬运救援 RPC 路由流程：只把目标和营地投给 BodyAction Ability；没有正式 Ability 接管时回送依赖错误。
 void ACatfishingPlayerController::ServerRescueCharacterToCamp_Implementation(ACatCampHubActor* Camp,
 	ACatCharacter* TargetCharacter, const FGuid RequestId)
@@ -787,16 +796,16 @@ void ACatfishingPlayerController::ServerRescueCharacterToCamp_Implementation(ACa
 	}
 }
 
-// 公共领域结果客户端流程：可靠接收 Camp、容器移动、库存物品使用和旧钓具选择等结果并整体替换本机读模型；随后广播本机通知供 UI Model 刷新，不解释错误、不重算 Revision，也不触发新的领域命令。
+// 公共领域结果客户端流程：可靠接收结果后按请求落盘并整体替换本机读模型，再广播给 UI；未开界面也保留接收证据，不触发新的领域命令。
 void ACatfishingPlayerController::ClientReceiveCampCommandResult_Implementation(
 	const FCatDomainCommandResult& Result)
 {
-	UE_LOG(LogCatfishing, Log,
-		TEXT("Event=camp_command_result_received RequestId=%s Committed=%s Error=%s Revision=%lld World=%s NetMode=%d Authority=%s LocalRole=%d Controller=%s PlayerId=%d"),
-		*Result.RequestId.ToString(), Result.bCommitted ? TEXT("true") : TEXT("false"),
-		*UEnum::GetValueAsString(Result.Error), Result.Revision, *GetNameSafe(GetWorld()),
-		static_cast<int32>(GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
-		static_cast<int32>(GetLocalRole()), *GetNameSafe(this), PlayerState ? PlayerState->GetPlayerId() : INDEX_NONE);
+	const FString Event = FString::Printf(
+		TEXT("Event=inventory_command_received RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Committed=%d Replay=%d Error=%s"),
+		*Result.RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
+		Result.bCommitted, Result.bTerminalReplay, *UEnum::GetValueAsString(Result.Error));
+	if (CatIsAcceptedDomainCommandResult(Result)) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
+	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
 	LastCampCommandResult = Result;
 	OnCampCommandResultReceived.Broadcast(Result);
 }
@@ -820,93 +829,34 @@ void ACatfishingPlayerController::DeliverBodyActionCommandResultToOwningClient(
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 公共仓库 Actor 取用 RPC 路由流程：Controller 只把网络参数和当前 Pawn 交给 Items 协调器，仓库触达、双方 Revision 和容量由 Items/Camp 自己裁决。
-void ACatfishingPlayerController::ServerWithdrawCampInventoryItemAtActor_Implementation(
-	ACatCampInventoryActor* CampInventory, const FGuid RequestId, const int64 ExpectedCampInventoryRevision,
-	const int32 SourceSlotIndex, const int32 Quantity, const int64 ExpectedInventoryRevision)
+// 通用库存移动 RPC 路由流程：Controller 先执行玩法命令 gate，再把宿主和槽位交给 Actor 级库存入口；正式移动由 Source InventoryComponent 裁决。
+void ACatfishingPlayerController::ServerMoveInventoryItemBetweenHosts_Implementation(
+	const FGuid RequestId, AActor* SourceInventoryHost, const int32 SourceSlotIndex,
+	AActor* TargetInventoryHost, const int32 TargetSlotIndex)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	if (UCatContainerCommandCoordinator* Coordinator = GetWorld()
-		? GetWorld()->GetSubsystem<UCatContainerCommandCoordinator>() : nullptr)
+	if (!CanForwardGameplayCommand())
 	{
-		Result = Coordinator->WithdrawCampInventoryItem(this, ControlledCharacter, CampInventory, RequestId,
-			ExpectedCampInventoryRevision, SourceSlotIndex, Quantity, ExpectedInventoryRevision);
+		Result.Error = ECatDomainCommandError::CommandsClosed;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=move_inventory_item_between_hosts_rejected Reason=CommandsClosedOrInactive Request=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 	}
 	else
 	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		Result = UCatInventoryStatics::MoveItemBetweenInventoryHostsFromAuthority(ControlledCharacter, RequestId,
+			SourceInventoryHost, SourceSlotIndex, TargetInventoryHost, TargetSlotIndex);
 	}
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 公共仓库 Actor 整理 RPC 路由流程：Controller 不解释营地仓库格子，只把源/目标槽位交给 Items 协调器并回送终态。
-void ACatfishingPlayerController::ServerMoveCampInventorySlotAtActor_Implementation(
-	ACatCampInventoryActor* CampInventory, const FGuid RequestId, const int64 ExpectedCampInventoryRevision,
-	const int32 SourceSlotIndex, const int32 TargetSlotIndex)
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	if (UCatContainerCommandCoordinator* Coordinator = GetWorld()
-		? GetWorld()->GetSubsystem<UCatContainerCommandCoordinator>() : nullptr)
-	{
-		Result = Coordinator->MoveCampInventorySlot(this, ControlledCharacter, CampInventory, RequestId,
-			ExpectedCampInventoryRevision, SourceSlotIndex, TargetSlotIndex);
-	}
-	else
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	DeliverCampCommandResultToOwningClient(Result);
-}
-
-// 背包存入公共仓库 RPC 路由流程：Controller 只保留网络入口，跨随身正式库存和公共仓库的原子事务由 Items 协调器持有。
-void ACatfishingPlayerController::ServerDepositInventoryItemToCampAtActor_Implementation(
-	ACatCampInventoryActor* CampInventory, const FGuid RequestId, const int64 ExpectedCampInventoryRevision,
-	const int32 TargetCampSlotIndex, const int64 ExpectedInventoryRevision, const int32 SourceInventorySlotIndex)
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	if (UCatContainerCommandCoordinator* Coordinator = GetWorld()
-		? GetWorld()->GetSubsystem<UCatContainerCommandCoordinator>() : nullptr)
-	{
-		Result = Coordinator->DepositInventorySlotToCampInventory(this, ControlledCharacter, CampInventory,
-			RequestId, ExpectedCampInventoryRevision, TargetCampSlotIndex, ExpectedInventoryRevision,
-			SourceInventorySlotIndex);
-	}
-	else
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	DeliverCampCommandResultToOwningClient(Result);
-}
-
-// 公共仓库拖入背包 RPC 路由流程：Controller 不读取公共仓库、随身库存或旧 Equipment 投影细节，只把候选槽位交给 Items 协调器。
-void ACatfishingPlayerController::ServerWithdrawCampInventoryItemToSlotAtActor_Implementation(
-	ACatCampInventoryActor* CampInventory, const FGuid RequestId, const int64 ExpectedCampInventoryRevision,
-	const int32 SourceCampSlotIndex, const int64 ExpectedInventoryRevision, const int32 TargetInventorySlotIndex)
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	if (UCatContainerCommandCoordinator* Coordinator = GetWorld()
-		? GetWorld()->GetSubsystem<UCatContainerCommandCoordinator>() : nullptr)
-	{
-		Result = Coordinator->WithdrawCampInventoryItemToInventorySlot(this, ControlledCharacter, CampInventory,
-			RequestId, ExpectedCampInventoryRevision, SourceCampSlotIndex, ExpectedInventoryRevision,
-			TargetInventorySlotIndex);
-	}
-	else
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	DeliverCampCommandResultToOwningClient(Result);
-}
-
-// 当前选择 RPC 路由流程：Controller 只转交玩家意图，装备定义、实例、解锁和 Revision 由 Equipment 协调器与组件裁决。
+// 装备配置 RPC 执行流程：
+// 1. 先在服务器侧读取当前 Pawn 和 EquipmentComponent，确保后续裁决只基于正式角色状态。
+// 2. 再依次处理玩法命令 gate、RequestId 和依赖缺失分支，失败时只写结构化错误和诊断日志。
+// 3. 校验通过后把装备定义、实例和 Revision 原样提交给 EquipmentComponent 裁决。
+// 4. 最后统一记录结果并回送 owning client，让 UI 只消费服务器确认后的终态。
 void ACatfishingPlayerController::ServerConfigureEquipment_Implementation(const FGuid RequestId,
 	const int64 ExpectedRevision, const FName RodDefinitionId, const FName BaitDefinitionId,
 	const FName FloatDefinitionId, const FName ScoopNetDefinitionId, const FGuid RodItemInstanceId,
@@ -915,77 +865,132 @@ void ACatfishingPlayerController::ServerConfigureEquipment_Implementation(const 
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	if (UCatEquipmentCommandCoordinator* Coordinator = GetWorld()
-		? GetWorld()->GetSubsystem<UCatEquipmentCommandCoordinator>() : nullptr)
+	UCatEquipmentComponent* Equipment = ControlledCharacter ? ControlledCharacter->GetEquipmentComponent() : nullptr;
+	if (!CanForwardGameplayCommand())
 	{
-		Result = Coordinator->ConfigureLoadout(this, ControlledCharacter, RequestId, ExpectedRevision,
-			RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId, RodItemInstanceId,
-			BaitItemInstanceId, FloatItemInstanceId, ScoopNetItemInstanceId);
+		Result.Error = ECatDomainCommandError::CommandsClosed;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=configure_equipment_rejected Reason=CommandsClosedOrInactive Request=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+	}
+	else if (!RequestId.IsValid())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=configure_equipment_rejected Reason=InvalidRequest Request=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
+	}
+	else if (!ControlledCharacter || ControlledCharacter->GetWorld() != GetWorld() || !Equipment)
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=configure_equipment_rejected Reason=NoEquipmentComponent Request=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens));
 	}
 	else
 	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		Result = Equipment->ConfigureLoadoutFromAuthority(RequestId, ExpectedRevision,
+			RodDefinitionId, BaitDefinitionId, FloatDefinitionId, ScoopNetDefinitionId, NAME_None,
+			RodItemInstanceId, BaitItemInstanceId, FloatItemInstanceId, ScoopNetItemInstanceId);
 	}
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=configure_equipment Committed=%s Error=%s Revision=%lld Rod=%s RodItem=%s Bait=%s BaitItem=%s Float=%s FloatItem=%s Net=%s NetItem=%s"),
+		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
+		Result.Revision, *RodDefinitionId.ToString(), *RodItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*BaitDefinitionId.ToString(), *BaitItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*FloatDefinitionId.ToString(), *FloatItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens),
+		*ScoopNetDefinitionId.ToString(), *ScoopNetItemInstanceId.ToString(EGuidFormats::DigitsWithHyphens));
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 随身库存物品使用 RPC 路由流程：Controller 只转交槽位意图和库存版本；库存协调器重读正式 InventoryComponent 后再决定当前钓具选择或后续物品效果。
+// 随身库存物品使用 RPC 路由流程：
+// 1. Controller 先执行玩法命令 gate、RequestId、Pawn 和库存组件校验，失败只回结构化错误。
+// 2. 通过后构造正式库存 Use 上下文；物品定义、数量扣减和钓具读模型刷新都留在 InventoryComponent/ItemInstance 内部。
+// 3. 最后统一回送 owning client，UI 只显示服务器确认后的终态。
 void ACatfishingPlayerController::ServerUseInventoryItem_Implementation(
-	const FGuid RequestId, const int64 ExpectedInventoryRevision, const int32 InventorySlotIndex)
+	const FGuid RequestId, const int32 InventorySlotIndex)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	if (UCatInventoryCommandCoordinator* Coordinator = GetWorld()
-		? GetWorld()->GetSubsystem<UCatInventoryCommandCoordinator>() : nullptr)
+	UCatInventoryComponent* Inventory = ControlledCharacter ? ControlledCharacter->GetInventoryComponent() : nullptr;
+	if (!CanForwardGameplayCommand())
 	{
-		Result = Coordinator->UseInventoryItemFromSlot(this, ControlledCharacter, RequestId,
-			ExpectedInventoryRevision, InventorySlotIndex);
+		Result.Error = ECatDomainCommandError::CommandsClosed;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=use_inventory_item_rejected Reason=CommandsClosedOrInactive Request=%s Slot=%d"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), InventorySlotIndex);
+	}
+	else if (!RequestId.IsValid())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=use_inventory_item_rejected Reason=InvalidRequest Request=%s Slot=%d"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), InventorySlotIndex);
+	}
+	else if (!ControlledCharacter || ControlledCharacter->GetWorld() != GetWorld() || !Inventory)
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=use_inventory_item_rejected Reason=MissingInventory Request=%s Slot=%d Character=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), InventorySlotIndex,
+			*GetNameSafe(ControlledCharacter));
 	}
 	else
 	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		FCatInventoryItemUseContext UseContext;
+		UseContext.RequestId = RequestId;
+		UseContext.RequestingController = this;
+		UseContext.UserPawn = ControlledCharacter;
+		UseContext.SourceInventory = Inventory;
+		UseContext.InventorySlotIndex = InventorySlotIndex;
+		Result = Inventory->UseItemAtSlotFromAuthority(UseContext);
 	}
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=use_inventory_item Committed=%s Error=%s Slot=%d"),
+		Result.bCommitted ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Result.Error),
+		InventorySlotIndex);
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 旧钓具选择 RPC 路由流程：历史蓝图或旧客户端仍可能发这个请求；服务器只保留参数形状，实际转入库存协调器后按正式库存版本裁决。
-void ACatfishingPlayerController::ServerSelectInventoryFishingItem_Implementation(
-	const FGuid RequestId, const int64 ExpectedInventoryRevision,
-	const int64 ExpectedEquipmentRevision, const int32 InventorySlotIndex)
+// 指定宿主库存物品使用 RPC 流程：
+// 1. Controller 先执行玩法命令 gate、RequestId 和 Pawn 校验，失败只回结构化错误。
+// 2. 通过后把来源 Actor 和槽位交给 InventoryStatics，服务器重新解析可触达正式 InventoryComponent。
+// 3. 物品实际效果、数量扣减和失败回滚都由 InventoryComponent/ItemInstance 完成，Controller 不再拆鱼容器或物品类别。
+void ACatfishingPlayerController::ServerUseInventoryItemFromHost_Implementation(
+	const FGuid RequestId, AActor* SourceInventoryHost, const int32 InventorySlotIndex)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
 	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	if (UCatInventoryCommandCoordinator* Coordinator = GetWorld()
-		? GetWorld()->GetSubsystem<UCatInventoryCommandCoordinator>() : nullptr)
+	if (!CanForwardGameplayCommand())
 	{
-		Result = Coordinator->SelectFishingItemFromInventorySlot(this, ControlledCharacter, RequestId,
-			ExpectedInventoryRevision, ExpectedEquipmentRevision, InventorySlotIndex);
+		Result.Error = ECatDomainCommandError::CommandsClosed;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=use_inventory_item_from_host_rejected Reason=CommandsClosedOrInactive Request=%s Slot=%d Host=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), InventorySlotIndex,
+			*GetNameSafe(SourceInventoryHost));
+	}
+	else if (!RequestId.IsValid())
+	{
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=use_inventory_item_from_host_rejected Reason=InvalidRequest Request=%s Slot=%d Host=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), InventorySlotIndex,
+			*GetNameSafe(SourceInventoryHost));
+	}
+	else if (!ControlledCharacter || ControlledCharacter->GetWorld() != GetWorld())
+	{
+		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		UE_LOG(LogCatfishing, Warning,
+			TEXT("Event=use_inventory_item_from_host_rejected Reason=MissingCharacter Request=%s Slot=%d Character=%s Host=%s"),
+			*RequestId.ToString(EGuidFormats::DigitsWithHyphens), InventorySlotIndex,
+			*GetNameSafe(ControlledCharacter), *GetNameSafe(SourceInventoryHost));
 	}
 	else
 	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	DeliverCampCommandResultToOwningClient(Result);
-}
-
-// 随身库存整理 RPC 路由流程：Controller 只提交源/目标槽位，正式库存移动由 Inventory 协调器转给 InventoryComponent 裁决。
-void ACatfishingPlayerController::ServerMoveInventorySlot_Implementation(const FGuid RequestId,
-	const int64 ExpectedRevision, const int32 SourceSlotIndex, const int32 TargetSlotIndex)
-{
-	FCatDomainCommandResult Result;
-	Result.RequestId = RequestId;
-	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	if (UCatInventoryCommandCoordinator* Coordinator = GetWorld()
-		? GetWorld()->GetSubsystem<UCatInventoryCommandCoordinator>() : nullptr)
-	{
-		Result = Coordinator->MoveInventorySlot(this, ControlledCharacter, RequestId, ExpectedRevision,
-			SourceSlotIndex, TargetSlotIndex);
-	}
-	else
-	{
-		Result.Error = ECatDomainCommandError::DependencyUnavailable;
+		Result = UCatInventoryStatics::UseItemFromInventoryHostFromAuthority(ControlledCharacter, RequestId,
+			SourceInventoryHost, InventorySlotIndex);
 	}
 	DeliverCampCommandResultToOwningClient(Result);
 }
@@ -993,13 +998,21 @@ void ACatfishingPlayerController::ServerMoveInventorySlot_Implementation(const F
 // 交互 RPC 流程：先过玩法 gate、RequestId、World 和接口校验，再让目标 Actor 按自己的 Interact 实现处理；失败分支保持无副作用返回。
 void ACatfishingPlayerController::ServerRequestInteraction_Implementation(AActor* Target, const FGuid RequestId)
 {
-	if (!CanForwardGameplayCommand() || !RequestId.IsValid() || !IsValid(Target)
-		|| Target->GetWorld() != GetWorld()
-		|| !Target->GetClass()->ImplementsInterface(UCatInteractable::StaticClass())
-		|| !ICatInteractable::Execute_CanInteract(Target, this))
+	// 服务器先记录命令门与目标校验，再执行同一接口；拒绝也落盘，避免客户端只看到按键没有结果。
+	const bool bGameplayOpen = CanForwardGameplayCommand();
+	const bool bValidTarget = IsValid(Target) && Target->GetWorld() == GetWorld()
+		&& Target->GetClass()->ImplementsInterface(UCatInteractable::StaticClass());
+	const bool bAccepted = bGameplayOpen && RequestId.IsValid() && bValidTarget
+		&& ICatInteractable::Execute_CanInteract(Target, this);
+	if (!bAccepted)
 	{
+		UE_LOG(LogCatfishing, Warning, TEXT("Event=interaction_request_rejected World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Target=%s RequestId=%s GameplayOpen=%d ValidTarget=%d ValidRequest=%d"),
+			*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()), *GetName(),
+			*GetNameSafe(Target), *RequestId.ToString(), bGameplayOpen, bValidTarget, RequestId.IsValid());
 		return;
 	}
+	UE_LOG(LogCatfishing, Log, TEXT("Event=interaction_request_accepted World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Target=%s RequestId=%s"),
+		*GetNameSafe(GetWorld()), static_cast<int32>(GetNetMode()), HasAuthority(), static_cast<int32>(GetLocalRole()), *GetName(), *GetNameSafe(Target), *RequestId.ToString());
 	ICatInteractable::Execute_Interact(Target, this, RequestId);
 }
 
@@ -1023,45 +1036,129 @@ void ACatfishingPlayerController::ServerSubmitShopCartAtKiosk_Implementation(ACa
 	DeliverCampCommandResultToOwningClient(DeliveryResult);
 }
 
-void ACatfishingPlayerController::ServerSellFish_Implementation(const FGuid FishInstanceId,
-	const FGuid ContainerId, const int64 ExpectedContainerRevision, const FGuid RequestId,
-	const int64 ExpectedWalletRevision)
+// 售鱼路由流程：记录买家与鱼身份请求后转交协调器重读来源和距离，再按原请求记录并回送结果；失败和重放不丢失跨端关联。
+void ACatfishingPlayerController::ServerSellFishBatch_Implementation(const FGuid RequestId,
+	ACatFishBuyerActor* Buyer, ACatFishGuardActor* Guard, const TArray<FGuid>& FishInstanceIds)
 {
-	// 售鱼 RPC 流程：Controller 只取当前 World 的商店交易控制器并转交鱼、容器和版本前提。
-	// 依赖缺失时这里静默返回，和旧入口保持一致；真正的鱼移除、估价、入公款和账本幂等都在 ShopTradeController 中完成。
-	UCatShopTradeController* Controller =
-		GetWorld() ? GetWorld()->GetSubsystem<UCatShopTradeController>() : nullptr;
-	if (!Controller)
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=fish_sale_requested RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Buyer=%s Source=%s FishCount=%d"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
+		*GetNameSafe(Buyer), *GetNameSafe(Guard), FishInstanceIds.Num());
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	if (UCatShopTradeController* Trading = GetWorld() ? GetWorld()->GetSubsystem<UCatShopTradeController>() : nullptr)
 	{
-		return;
+		Result = Trading->SubmitFishSaleFromPlayer(this, Buyer, Guard, FishInstanceIds, RequestId).Delivery;
 	}
-	Controller->SubmitFishSaleFromPlayer(this, FishInstanceId, ContainerId, ExpectedContainerRevision,
-		RequestId, ExpectedWalletRevision);
+	else Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	const FString Event = FString::Printf(
+		TEXT("Event=fish_sale_result RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Buyer=%s Source=%s Committed=%d Replay=%d Error=%s"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
+		*GetNameSafe(Buyer), *GetNameSafe(Guard), Result.bCommitted, Result.bTerminalReplay, *UEnum::GetValueAsString(Result.Error));
+	if (CatIsAcceptedDomainCommandResult(Result)) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
+	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
+	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 修竿 RPC 路由流程：修竿是 Equipment 事务，Controller 只把营地候选和当前 Pawn 转交给 Equipment 协调器。
-void ACatfishingPlayerController::ServerRepairRodAtCamp_Implementation(ACatCampHubActor* Camp,
-	const FGuid RequestId, const int64 ExpectedEquipmentRevision)
+// 落地路由流程：先记录来源和意图，拒绝关闭阶段与错误载荷，其余交库存校验提交；结果按原请求落盘并回送，客户端不决定落点。
+void ACatfishingPlayerController::ServerReleaseInventoryItemToWorld_Implementation(const FGuid RequestId,
+	AActor* SourceHost, const int32 Slot, const FGuid ItemInstanceId, const int32 Quantity,
+	const ECatInventoryWorldAction Action)
 {
-	ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn());
-	if (UCatEquipmentCommandCoordinator* Coordinator = GetWorld()
-		? GetWorld()->GetSubsystem<UCatEquipmentCommandCoordinator>() : nullptr)
-	{
-		Coordinator->RepairRodAtCamp(this, ControlledCharacter, Camp, RequestId, ExpectedEquipmentRevision);
-	}
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=inventory_world_requested RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Source=%s Slot=%d ItemInstanceId=%s Quantity=%d Action=%d"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
+		*GetNameSafe(SourceHost), Slot, *ItemInstanceId.ToString(), Quantity, static_cast<int32>(Action));
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	if (!CanForwardGameplayCommand()) Result.Error = ECatDomainCommandError::CommandsClosed;
+	else if (!RequestId.IsValid() || !ItemInstanceId.IsValid() || Quantity <= 0
+		|| (Action != ECatInventoryWorldAction::Drop && Action != ECatInventoryWorldAction::Place && Action != ECatInventoryWorldAction::Carry))
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	else if (ACatCharacter* ControlledCharacter = Cast<ACatCharacter>(GetPawn()))
+		Result = UCatInventoryStatics::ReleaseItemToWorldFromAuthority(ControlledCharacter, RequestId,
+			SourceHost, Slot, ItemInstanceId, Quantity, Action);
+	else Result.Error = ECatDomainCommandError::DependencyUnavailable;
+	const FString Event = FString::Printf(
+		TEXT("Event=inventory_world_result RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Source=%s Action=%d Committed=%d Replay=%d Error=%s"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
+		*GetNameSafe(SourceHost), static_cast<int32>(Action), Result.bCommitted, Result.bTerminalReplay, *UEnum::GetValueAsString(Result.Error));
+	if (CatIsAcceptedDomainCommandResult(Result)) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
+	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
+	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 草药 RPC 路由流程：草药救援是库存 + Condition 事务，不进入 BodyAction；Controller 不碰 Equipment，完整扣草药和恢复顺序由 Condition 协调器处理。
+// 快捷丢弃流程：服务器检查玩法门和身体，再读取当前携带对象；空嘴直接返回。
+// 单鱼解除原Actor的携带，鱼护沿原库存Drop释放；不接收客户端目标、不保存快捷请求，也不改背包选中格。
+void ACatfishingPlayerController::ServerDropCarriedItem_Implementation()
+{
+	ACatCharacter* CatCharacter = Cast<ACatCharacter>(GetPawn());
+	if (!CanForwardGameplayCommand() || !CatCharacter || !CatCharacter->GetConditionComponent()
+		|| CatCharacter->GetConditionComponent()->GetSnapshot().bDowned) return;
+	ACatFishPickupActor* Fish = Cast<ACatFishPickupActor>(CatCharacter->GetMouthCarriedActor());
+	ACatFishGuardActor* Guard = Cast<ACatFishGuardActor>(CatCharacter->GetMouthCarriedActor());
+	if (!IsValid(Fish) && !IsValid(Guard)) return;
+	bool bDropped = false;
+	if (IsValid(Fish))
+	{
+		bDropped = Fish->DropFromAuthority(this);
+	}
+	else if (UCatInventoryComponent* Inventory = CatCharacter->GetInventoryComponent())
+	{
+		for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
+		{
+			if (Entry.Instance && Entry.StackCount == 1 && Entry.Instance->GetWorldActor() == Guard)
+			{
+				// 这里只满足原库存接口的事务参数，不为快捷入口另建请求状态。
+				bDropped = UCatInventoryStatics::ReleaseItemToWorldFromAuthority(CatCharacter, FGuid::NewGuid(), CatCharacter,
+					Inventory->FindInventorySlotIndexFromInstance(Entry.Instance), Entry.Instance->GetItemInstanceId(),
+					1, ECatInventoryWorldAction::Drop).bCommitted;
+				break;
+			}
+		}
+	}
+	const FString Event = FString::Printf(
+		TEXT("Event=mouth_drop_result World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s ItemActor=%s Dropped=%d"),
+		*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
+		*GetNameSafe(Fish ? static_cast<AActor*>(Fish) : static_cast<AActor*>(Guard)), bDropped);
+	if (bDropped) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
+	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
+}
+
+// 鱼护拾取路由：记录请求后确认命令窗口与同世界对象，再让鱼护裁决所有权和容量；按原请求记录及回送结果，不创建第二份携带状态。
+void ACatfishingPlayerController::ServerPickUpFishGuard_Implementation(ACatFishGuardActor* Guard, const FGuid RequestId)
+{
+	UE_LOG(LogCatfishing, Log,
+		TEXT("Event=fish_guard_pickup_requested RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Guard=%s"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(), *GetNameSafe(Guard));
+	FCatDomainCommandResult Result;
+	Result.RequestId = RequestId;
+	if (!CanForwardGameplayCommand()) Result.Error = ECatDomainCommandError::CommandsClosed;
+	else if (!RequestId.IsValid() || !IsValid(Guard) || Guard->GetWorld() != GetWorld())
+		Result.Error = ECatDomainCommandError::InvalidPayload;
+	else Result.Error = Guard->PickUpFromAuthority(this, RequestId)
+		? ECatDomainCommandError::None : ECatDomainCommandError::InvalidPayload;
+	Result.bCommitted = Result.Error == ECatDomainCommandError::None;
+	const FString Event = FString::Printf(
+		TEXT("Event=fish_guard_pickup_result RequestId=%s World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Guard=%s Committed=%d Error=%s"),
+		*RequestId.ToString(), *GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
+		*GetNameSafe(Guard), Result.bCommitted, *UEnum::GetValueAsString(Result.Error));
+	if (Result.bCommitted) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
+	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
+	DeliverCampCommandResultToOwningClient(Result);
+}
+
+// 草药 RPC 路由流程：Controller 只定位目标 Character 的 ConditionComponent 并转交请求；正式扣草药、刷新装备读模型和恢复身体都由 ConditionComponent 按服务器事实提交。
 void ACatfishingPlayerController::ServerUseHerbOnCharacter_Implementation(ACatCharacter* TargetCharacter,
-	const FGuid RequestId, const int64 ExpectedInventoryRevision, const FGuid HerbItemInstanceId)
+	const FGuid RequestId, const FGuid HerbItemInstanceId)
 {
 	FCatDomainCommandResult Result;
 	Result.RequestId = RequestId;
-	if (UCatHerbRecoveryCoordinator* Coordinator = GetWorld()
-		? GetWorld()->GetSubsystem<UCatHerbRecoveryCoordinator>() : nullptr)
+	UCatConditionComponent* TargetConditions = TargetCharacter && TargetCharacter->GetWorld() == GetWorld()
+		? TargetCharacter->GetConditionComponent() : nullptr;
+	if (TargetConditions)
 	{
-		Result = Coordinator->UseHerbOnCharacter(this, TargetCharacter, RequestId, ExpectedInventoryRevision,
-			HerbItemInstanceId);
+		Result = TargetConditions->UseHerbOnCharacterFromAuthority(this, RequestId, HerbItemInstanceId);
 	}
 	else
 	{
@@ -1070,44 +1167,9 @@ void ACatfishingPlayerController::ServerUseHerbOnCharacter_Implementation(ACatCh
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
-// 直接吃鱼 RPC 路由流程：吃鱼是 Items + Condition 事务，不进入 BodyAction；Controller 只调用协调器并回送结构化终态。
-void ACatfishingPlayerController::ServerConsumeFish_Implementation(ACatCharacter* EatingCharacter,
-	FCatFishConsumeCommand Command)
-{
-	FCatFishConsumeResult Result;
-	Result.Command.RequestId = Command.Context.RequestId;
-	if (UCatFishConsumptionCoordinator* Coordinator = GetWorld()
-		? GetWorld()->GetSubsystem<UCatFishConsumptionCoordinator>() : nullptr)
-	{
-		Result = Coordinator->ConsumeReachableFish(this, EatingCharacter, Command);
-	}
-	else
-	{
-		Result.Command.Error = ECatDomainCommandError::DependencyUnavailable;
-	}
-	DeliverFishConsumeResultToOwningClient(Result);
-}
-
-// 献祭回执投递流程：单机或 listen server 本地玩家没有远端连接可回送时，直接复用 Client 实现刷新本机缓存；远端玩家保持可靠 RPC 语义。
-void ACatfishingPlayerController::DeliverSacrificeResultToOwningClient(const FCatSacrificeResult& Result)
-{
-	if (HasAuthority() && IsLocalController())
-	{
-		ClientReceiveSacrificeResult_Implementation(Result);
-		return;
-	}
-	ClientReceiveSacrificeResult(Result);
-}
-
 // 公共领域回执投递流程：单机或 listen server 本地玩家没有远端连接可回送时，直接复用 Client 实现刷新本机缓存；远端玩家保持可靠 RPC 语义。
 void ACatfishingPlayerController::DeliverCampCommandResultToOwningClient(const FCatDomainCommandResult& Result)
 {
-	UE_LOG(LogCatfishing, Log,
-		TEXT("Event=camp_command_result_sent RequestId=%s Committed=%s Error=%s Revision=%lld World=%s NetMode=%d Authority=%s LocalRole=%d Controller=%s PlayerId=%d"),
-		*Result.RequestId.ToString(), Result.bCommitted ? TEXT("true") : TEXT("false"),
-		*UEnum::GetValueAsString(Result.Error), Result.Revision, *GetNameSafe(GetWorld()),
-		static_cast<int32>(GetNetMode()), HasAuthority() ? TEXT("true") : TEXT("false"),
-		static_cast<int32>(GetLocalRole()), *GetNameSafe(this), PlayerState ? PlayerState->GetPlayerId() : INDEX_NONE);
 	if (HasAuthority() && IsLocalController())
 	{
 		ClientReceiveCampCommandResult_Implementation(Result);
@@ -1116,31 +1178,7 @@ void ACatfishingPlayerController::DeliverCampCommandResultToOwningClient(const F
 	ClientReceiveCampCommandResult(Result);
 }
 
-// 直接吃鱼回执投递流程：单机或 listen server 本地玩家没有远端连接可回送时，直接复用 Client 实现刷新本机缓存；远端玩家保持可靠 RPC 语义。
-void ACatfishingPlayerController::DeliverFishConsumeResultToOwningClient(const FCatFishConsumeResult& Result)
-{
-	if (HasAuthority() && IsLocalController())
-	{
-		ClientReceiveFishConsumeResult_Implementation(Result);
-		return;
-	}
-	ClientReceiveFishConsumeResult(Result);
-}
-
-// 直接吃鱼结果客户端流程：可靠接收 Items 消费鱼和身体提交的完整结果并整体替换本机读模型；随后广播本机通知供 UI Model 刷新，不应用效果。
-void ACatfishingPlayerController::ClientReceiveFishConsumeResult_Implementation(const FCatFishConsumeResult& Result)
-{
-	LastFishConsumeResult = Result;
-	OnFishConsumeResultReceived.Broadcast(Result);
-}
-
-// 直接吃鱼结果读取流程：返回 owning client 最近收到的完整副本；调用方只能展示 RequestId、错误、容器 Revision 和身体提交终态。
-FCatFishConsumeResult ACatfishingPlayerController::GetLastFishConsumeResult() const
-{
-	return LastFishConsumeResult;
-}
-
-// 偷鱼开始 RPC 路由流程：偷鱼是 Social + Items escrow 协议，不进入 BodyAction；Controller 只清客户端身份并转交 Social。
+// 偷鱼开始 RPC 路由流程：偷鱼是 Social 持有同一鱼物品实例的短协议，不进入 BodyAction；Controller 只清客户端身份并转交 Social。
 void ACatfishingPlayerController::ServerBeginTheft_Implementation(FCatTheftCommand Command)
 {
 	FCatTheftResult Result;
@@ -1228,19 +1266,48 @@ void ACatfishingPlayerController::ServerPlaceProtectionSign_Implementation(const
 }
 
 // Native 输入分流流程：
-// 1. 只处理项目约定的交互标签，其他 Native 标签保持无副作用返回。
-// 2. IA_Interact 只进入 PlayerController 持有的唯一 TargetingComponent；提示 UI 不再绑定第二次 E。
-// 3. TargetingComponent 对当前 Actor 调用 ICatInteractable，商店、营地公共仓库、鱼护、鱼缸和死鱼各自在 Actor 实现中处理。
+// 1. 先拒绝翻天操作；快捷丢弃还检查本地输入锁，菜单打开时不丢物，空嘴也不发请求。
+// 2. 丢弃先查当前嘴部，取消尚未完成的交互长按，再通知服务器读取携带对象；Started 绑定避免按住重复触发。
+// 3. 其余仅处理 IA_Interact，由唯一 TargetingComponent 把交互交给准星 Actor；不认识的标签无副作用返回。
 void ACatfishingPlayerController::NativeInputTagPressed(const FGameplayTag InputTag)
 {
+	if (IsDayTransitionInputBlocked()) return;
+	if (InputTag.MatchesTagExact(CatInteractionTags::Input_DropCarriedItem))
+	{
+		if (!IsLocalController() || IsMoveInputIgnored()) return;
+		ACatCharacter* CatCharacter = Cast<ACatCharacter>(GetPawn());
+		if (!CatCharacter) return;
+		AActor* Item = CatCharacter->GetMouthCarriedActor();
+		if (!Item) return;
+		if (InteractionTargetingComponent) InteractionTargetingComponent->EndInteractionInput(true);
+		UE_LOG(LogCatfishing, Log,
+			TEXT("Event=mouth_drop_submitted World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s ItemActor=%s"),
+			*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(), *GetNameSafe(Item));
+		ServerDropCarriedItem();
+		return;
+	}
 	if (!InputTag.MatchesTagExact(CatInteractionTags::Input_Interact))
 	{
 		return;
 	}
 	if (InteractionTargetingComponent)
 	{
-		InteractionTargetingComponent->TryInteract();
+		InteractionTargetingComponent->BeginInteractionInput();
 	}
+}
+
+// 松开流程：只处理交互标签；翻天锁已接管时取消候选，其他时候由目标组件决定是否属于短按。
+void ACatfishingPlayerController::NativeInputTagReleased(const FGameplayTag InputTag)
+{
+	if (InputTag.MatchesTagExact(CatInteractionTags::Input_Interact) && InteractionTargetingComponent)
+		InteractionTargetingComponent->EndInteractionInput(IsDayTransitionInputBlocked());
+}
+
+// 取消流程：输入层失效只释放计时器与候选，绝不提交短按或拾取命令。
+void ACatfishingPlayerController::NativeInputTagCanceled(const FGameplayTag InputTag)
+{
+	if (InputTag.MatchesTagExact(CatInteractionTags::Input_Interact) && InteractionTargetingComponent)
+		InteractionTargetingComponent->EndInteractionInput(true);
 }
 
 // 主动离局 RPC 流程：只把当前 Controller 交给 authority GameMode；标记不销毁 Session、不旅行，并由随后 Logout 精确消费。

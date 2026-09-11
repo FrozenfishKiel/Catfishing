@@ -35,20 +35,11 @@ struct CATFISHING_API FCatFishingViewState
 	UPROPERTY(BlueprintReadOnly) double NormalizedFishStamina = 0.0;
 	/** 旧 HUD 兼容二值；新 UI 使用 bReeling，不再显示蓄力条。 */
 	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Use bReeling; charging was removed")) float PrimaryPowerAlpha = 0.0f;
-	UPROPERTY(BlueprintReadOnly) double ActiveCombinedFishingStrength = 0.0;
-	UPROPERTY(BlueprintReadOnly) int32 ActiveHelperCount = 0;
-	/** 当前同竿成员数；零体力成员仍保留成员身份，出力由服务器另行裁决。 */
-	UPROPERTY(BlueprintReadOnly) int32 FightParticipantCount = 0;
-	/** 服务器发布的同竿力量摘要；UI 不按人数重算贡献系数。 */
-	UPROPERTY(BlueprintReadOnly) double CombinedFishingStrength = 0.0;
-	/** 所有当前成员个人体力余额与上限的合计；仅为展示，不是共享资源账户。 */
-	UPROPERTY(BlueprintReadOnly) double CombinedFightStamina = 0.0;
-	UPROPERTY(BlueprintReadOnly) double CombinedFightStaminaMaximum = 0.0;
 
 	/** 主位当前是否按住收线；命令组件和会话裁决状态才是写口。 */
 	UPROPERTY(BlueprintReadOnly) bool bReeling = false;
 
-	/** 主位是否正在放线；辅助观察相同会话事实，Widget 不把本机按钮状态当成第二份真相。 */
+	/** 主控是否正在放线；Widget 不把本机按钮状态当成第二份真相。 */
 	UPROPERTY(BlueprintReadOnly) bool bSlacking = false;
 
 	/** 本次刺鱼是否获得完美响应；会话进入搏斗时写入，UI 只把它作为反馈和高光提示。 */

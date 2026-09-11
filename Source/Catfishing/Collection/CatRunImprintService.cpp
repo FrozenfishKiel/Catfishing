@@ -20,7 +20,6 @@ void UCatRunImprintService::Deinitialize()
 	CapturePlanByRecipient.Reset();
 	GrantDeliveries.Reset();
 	CaptureGrantByRequest.Reset();
-	SilhouetteGrantByFishingSession.Reset();
 	UnlockGrantByRecipientAndUnlockId.Reset();
 	AlbumByRun.Reset();
 	Super::Deinitialize();
@@ -58,30 +57,6 @@ FGuid UCatRunImprintService::RecordCommittedCapture(const FCatCaptureCommittedRe
 bool UCatRunImprintService::CanRecordCommittedCapture() const
 {
 	return bCommandsOpen;
-}
-
-// 剪影归档流程：先按 FishingSessionId 重放，再验证命令仍开放、会话/鱼种/接收者完整；首次只生成 FishSilhouette Grant，不创建实物鱼、CapturePlan 或图片结论。
-FGuid UCatRunImprintService::RecordRetryExhaustedSilhouette(const FGuid FishingSessionId,
-	const FName FishDefinitionId, const FString& RecipientStableNetId)
-{
-	if (const FGuid* Existing = SilhouetteGrantByFishingSession.Find(FishingSessionId))
-	{
-		return *Existing;
-	}
-	if (!bCommandsOpen || !FishingSessionId.IsValid() || FishDefinitionId.IsNone() || RecipientStableNetId.IsEmpty())
-	{
-		return FGuid();
-	}
-	FCatProfileGrant Grant;
-	Grant.Kind = ECatProfileGrantKind::FishSilhouette;
-	Grant.FishDefinitionId = FishDefinitionId;
-	Grant.RecipientStableNetId = RecipientStableNetId;
-	const FGuid GrantId = EnqueueGrant(MoveTemp(Grant));
-	if (GrantId.IsValid())
-	{
-		SilhouetteGrantByFishingSession.Add(FishingSessionId, GrantId);
-	}
-	return GrantId;
 }
 
 // 解锁归档流程：按接收者和 UnlockId 重放既有 Grant，再验证命令门与稳定字段；首次只生成 Unlock Grant，不在服务器伪造 Profile 存档。

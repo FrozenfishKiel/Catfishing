@@ -29,7 +29,7 @@ namespace CatFrontendRoomModelText
 		case ECatOnlineError::JoinFailed:
 			return FText::FromString(TEXT("加入房间失败。"));
 		case ECatOnlineError::SessionCompatibilityMismatch:
-			return FText::FromString(TEXT("该房间与当前游戏版本或地图配置不兼容。"));
+			return FText::FromString(TEXT("该房间与当前游戏版本或地图配置不匹配。"));
 		case ECatOnlineError::InviteAcceptanceBusy:
 			return FText::FromString(TEXT("当前请求尚未完成，请稍后在 Steam 重新接受邀请。"));
 		case ECatOnlineError::InviteSessionConflict:
@@ -55,7 +55,7 @@ namespace CatFrontendRoomModelText
 	}
 }
 
-// 初始化流程：先成对拆除旧来源，再从 LocalPlayer 的 GameInstance 获取唯一 Online 子系统并订阅；绑定后立即读取已有快照，接住 Model 创建前到达的冷启动邀请或失败，来源缺失则发布不可用文本。
+// 初始化流程：先成对拆除失效来源，再从 LocalPlayer 的 GameInstance 获取唯一 Online 子系统并订阅；绑定后立即读取已有快照，接住 Model 创建前到达的冷启动邀请或失败，来源缺失则发布不可用文本。
 void UCatFrontendRoomModel::Initialize(ULocalPlayer* InLocalPlayer)
 {
 	Shutdown();
@@ -200,7 +200,7 @@ bool UCatFrontendRoomModel::CanStartGame() const
 		&& !Snapshot.bIsGameplayLoadPending;
 }
 
-// Online 通知流程：先读取唯一快照，错误优先，其次为已接受邀请的有界等待和真实 Join 提交生成文本，其他状态清除旧文本；最后广播，Controller 再读取房间事实决定显示，不要求玩家再次确认邀请。
+// Online 通知流程：先读取唯一快照，错误优先，其次为已接受邀请的有界等待和真实 Join 提交生成文本，其他状态清除失效文本；最后广播，Controller 再读取房间事实决定显示，不要求玩家再次确认邀请。
 void UCatFrontendRoomModel::HandleOnlineChanged()
 {
 	const FCatOnlineSnapshot Snapshot = GetSnapshot();

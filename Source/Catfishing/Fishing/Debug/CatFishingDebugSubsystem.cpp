@@ -1,4 +1,6 @@
 #include "Fishing/Debug/CatFishingDebugSubsystem.h"
+#include "Inventory/CatInventorySettings.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
 
 #include "AbilitySystemComponent.h"
 #include "AbilitySystemInterface.h"
@@ -34,8 +36,8 @@
 #include "GameFramework/PlayerState.h"
 #include "HAL/IConsoleManager.h"
 #include "Inventory/CatInventoryComponent.h"
-#include "Items/CatWorldItemSettings.h"
-#include "Items/World/CatFishPickupActor.h"
+#include "FishContainers/CatFishPickupSettings.h"
+#include "Items/Fish/CatFishPickupActor.h"
 #include "Logging/CatLog.h"
 #include "UI/CatFishingViewBridge.h"
 
@@ -154,7 +156,8 @@ namespace CatFishingDebugCommands
 			+ Character->GetActorForwardVector() * 150.0 + FVector(0.0, 0.0, 40.0);
 		FRotator SpawnRotation = Character->GetActorRotation();
 		SpawnRotation.Pitch = 0.0;
-		SpawnRotation.Roll = FishPresentation ? FishPresentation->LandedActorRollDegrees : 90.0;
+		// 与正式生成入口一致，侧躺角由世界鱼网格消费，调试入口不再旋转物理根。
+		SpawnRotation.Roll = 0.0;
 		FActorSpawnParameters SpawnParams;
 		SpawnParams.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 		ACatFishPickupActor* Pickup = World->SpawnActor<ACatFishPickupActor>(
@@ -327,7 +330,7 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 		RodDefinitionId = SessionSnapshot->RodActor->GetPresentationState().RodDefinitionId;
 	}
 	FString RodLine = TEXT("ROD   Durability --  Strength --");
-	if (const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(
+	if (const UCatEquipmentDefinition* RodDefinition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(
 		RodDefinitionId))
 	{
 		double CurrentDurability = 0.0;
@@ -357,10 +360,10 @@ void UCatFishingDebugSubsystem::DrawFishingStats(UCanvas* Canvas, APlayerControl
 			bHasCurrentDurability = true;
 		}
 		RodLine = bHasCurrentDurability
-			? FString::Printf(TEXT("ROD   Durability %.1f / %.1f  Strength %.1f"),
-				CurrentDurability, RodDefinition->MaximumRodDurability, RodDefinition->FishingStrength)
-			: FString::Printf(TEXT("ROD   Durability -- / %.1f  Strength %.1f"),
-				RodDefinition->MaximumRodDurability, RodDefinition->FishingStrength);
+			? FString::Printf(TEXT("ROD   Durability %.1f / %.1f"),
+				CurrentDurability, RodDefinition->FindFragment<UCatEquipmentFragment_Rod>()->MaximumRodDurability)
+			: FString::Printf(TEXT("ROD   Durability -- / %.1f"),
+				RodDefinition->FindFragment<UCatEquipmentFragment_Rod>()->MaximumRodDurability);
 	}
 
 	FString CatLine = TEXT("CAT   Stamina --  Strength --");
@@ -610,7 +613,7 @@ void UCatFishingDebugSubsystem::DrawSession(APlayerController* Controller, const
 			{
 				const UCatEquipmentDefinition* Definition = Entry.Instance
 					? Cast<UCatEquipmentDefinition>(Entry.Instance->GetItemDefinition()) : nullptr;
-				if (Definition && Definition->Kind == ECatEquipmentKind::Chum && Entry.StackCount > 0)
+				if (Definition && Definition->CanServeChumPlacement() && Entry.StackCount > 0)
 				{
 					ChumCount += Entry.StackCount;
 				}

@@ -23,7 +23,7 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Fishing|View", meta = (DefaultToSelf = "Outer"))
 	static UCatFishingViewBridge* CreateFishingViewBridge(UObject* Outer);
 
-	/** 在客户端按 PlayerState 当前参与的鱼竿查找会话；主位和辅助共用投影，玩家离竿后不显示旧会话。 */
+	/** 在客户端按 PlayerState 唯一主控鱼竿与本人会话身份查询，玩家离竿后不显示旧会话。 */
 	UFUNCTION(BlueprintCallable, Category = "Catfishing|Fishing|View", meta = (WorldContext = "WorldContextObject"))
 	static ACatFishingSession* FindFishingSessionForPlayerState(UObject* WorldContextObject, APlayerState* PlayerState);
 
@@ -32,7 +32,7 @@ public:
 	 *
 	 * 存在的理由：权威侧的等价查询是 UCatFishingService::FindRodOperatedBy，但那个 WorldSubsystem
 	 * 在客户端压根不创建（ShouldCreateSubsystem 里 NetMode != NM_Client），表现层够不着。
-	 * Rod Actor 及其 PresentationState.OperatorPlayerStates 是复制的，所以客户端自己扫一遍即可。
+	 * Rod Actor 及其 PresentationState.OperatorPlayerState 是复制的，所以客户端自己扫一遍即可。
 	 *
 	 * 典型用途：左键按下的表现钩子要区分"我在竿位上准备甩竿"和"我只是站着按了下左键"——
 	 * 后者服务器不会有任何反应，播举竿动画就是表现骗玩家。

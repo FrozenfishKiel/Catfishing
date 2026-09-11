@@ -38,7 +38,7 @@ public:
 	UPROPERTY(Config, EditAnywhere, Category = "Weather")
 	ECatEnvironmentWeather ConfiguredWeather = ECatEnvironmentWeather::Unknown;
 
-	/** 白天进度小于该比例为 Morning；必须在 0 到 DuskStartFraction 之间。 */
+	/** 白天进度小于该比例为 Morning；0 表示跳过清晨、从 Day 开始，必须小于 DuskStartFraction。 */
 	UPROPERTY(Config, EditAnywhere, Category = "TimeOfDay", meta = (ClampMin = "0.0", ClampMax = "1.0"))
 	double MorningEndFraction = 0.0;
 

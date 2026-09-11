@@ -7,6 +7,7 @@
 #include "UI/CatUISettings.h"
 #include "UI/Interaction/CatInteractionPromptWidget.h"
 
+// 绑定流程：先解除旧页面，再验证本地控制器与视图；订阅唯一准星刷新并立即读取当前目标，不增加轮询计时器。
 bool UCatInteractionPageController::Bind(APlayerController* InController,
 	UCatInteractionPromptWidget* InPromptView)
 {
@@ -22,18 +23,19 @@ bool UCatInteractionPageController::Bind(APlayerController* InController,
 	BoundPlayerController = CatController;
 	BoundPromptView = InPromptView;
 	BoundTargetingComponent = Targeting;
-	TargetChangedHandle = Targeting->OnTargetChanged.AddUObject(this, &ThisClass::HandleTargetChanged);
+	TargetRefreshHandle = Targeting->OnTargetRefreshed.AddUObject(this, &ThisClass::HandleTargetRefreshed);
 	RefreshFocusedTarget();
 	return true;
 }
 
+// 解绑流程：先移除本页面订阅，再清目标并隐藏提示，最后释放控件与控制器弱引用。
 void UCatInteractionPageController::Unbind()
 {
 	if (UCatInteractionTargetingComponent* Targeting = BoundTargetingComponent.Get())
 	{
-		Targeting->OnTargetChanged.Remove(TargetChangedHandle);
+		Targeting->OnTargetRefreshed.Remove(TargetRefreshHandle);
 	}
-	TargetChangedHandle.Reset();
+	TargetRefreshHandle.Reset();
 	FocusedTarget.Reset();
 	RenderPrompt();
 	BoundTargetingComponent.Reset();
@@ -64,7 +66,8 @@ void UCatInteractionPageController::InteractWithFocusedTarget()
 	}
 }
 
-void UCatInteractionPageController::HandleTargetChanged(AActor* PreviousTarget, AActor* CurrentTarget)
+// 刷新流程：以准星当前对象替换弱引用，再重读接口文本；不从旧人数或旧目标推导新提示。
+void UCatInteractionPageController::HandleTargetRefreshed(AActor* PreviousTarget, AActor* CurrentTarget)
 {
 	(void)PreviousTarget;
 	FocusedTarget = CurrentTarget;

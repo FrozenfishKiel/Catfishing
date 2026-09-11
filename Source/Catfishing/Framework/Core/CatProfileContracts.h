@@ -24,7 +24,7 @@ enum class ECatFishCollectionState : uint8
 {
 	/** 从未获得合格候选或捕获事实。 */
 	Unknown,
-	/** 曾经合格交手但未捕获。 */
+	/** 合格交手后未捕获。 */
 	Silhouette,
 	/** 至少一次捕获事务已经提交。 */
 	Recorded
@@ -165,7 +165,7 @@ struct FCatFishCollectionRecord
 	UPROPERTY(SaveGame)
 	FCatCaptureConditionSnapshot FirstCaptureCondition;
 
-	/** 合格剪影候选累计次数；Recorded 后仍保留历史。 */
+	/** 合格剪影候选累计次数；Recorded 后继续保留累计值。 */
 	UPROPERTY(SaveGame)
 	int32 EncounterCount = 0;
 };

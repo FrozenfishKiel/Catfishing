@@ -2,7 +2,7 @@
 
 #include "CoreMinimal.h"
 #include "Environment/CatWaterTypes.h"
-#include "Items/CatItemTypes.h"
+#include "FishContainers/CatFishContainerTypes.h"
 #include "CatFishingTypes.generated.h"
 
 /** 单次钓鱼长流程的公开阶段；转移拓扑只由 ST_FishingSession 资产编排。 */
@@ -249,8 +249,8 @@ struct FCatFishingSessionSnapshot
 	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Carrier movement is an endpoint intent"))
 	float CarrierMovementAlpha = 0.0f;
 
-	/** 共同张力超过猫支撑能力后的加速度；由 CMC 进行速度积分与碰撞。 */
-	UPROPERTY(BlueprintReadOnly)
+	/** 旧 WBP 序列化兼容，恒为零；真实身体加速度只能观察物理身体，不能由鱼线减猫力推导。 */
+	UPROPERTY(BlueprintReadOnly, meta=(DeprecatedProperty, DeprecationMessage="Observe the physical body; this legacy acceleration is always zero"))
 	float CarrierPullAccelerationCentimetersPerSecondSquared = 0.0f;
 
 	/** 废弃的硬限速观察字段。当前恒为 1；仅保留尚未完整加载的旧 WBP 序列化兼容。 */

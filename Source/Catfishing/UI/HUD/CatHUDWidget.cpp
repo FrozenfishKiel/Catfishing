@@ -14,7 +14,38 @@
 // HUD 渲染流程：缓存 Model 生成的只读投影，按 Designer 真实绑定控件写入天数、调试文本、钓鱼反馈、入口按钮状态和进度条，再触发蓝图扩展点。
 void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 {
-	if (ViewState.bShowFightMeters && (!CatStaminaTextBlock || !CatStaminaProgressBar)
+	if (ViewState.bShowPhysicalControls && (!PhysicalControlTextBlock || !PhysicalHandStateTextBlock)
+		&& !bHasLoggedMissingPhysicalControls)
+	{
+		UE_LOG(LogCatUI, Warning,
+			TEXT("Event=ui_hud_physical_controls_missing Widget=%s World=%s Result=FormalWidgetNeedsMigration"),
+			*GetName(), *GetNameSafe(GetWorld()));
+		bHasLoggedMissingPhysicalControls = true;
+	}
+	if (ViewState.bShowPhysicalControls != LastHUDViewState.bShowPhysicalControls
+		|| ViewState.bPrimaryRodOperator != LastHUDViewState.bPrimaryRodOperator
+		|| ViewState.bLeftHandGripped != LastHUDViewState.bLeftHandGripped
+		|| ViewState.bRightHandGripped != LastHUDViewState.bRightHandGripped)
+	{
+		const APlayerController* Controller = GetOwningPlayer();
+		UE_LOG(LogCatUI, Log,
+			TEXT("Event=ui_hud_physical_controls_applied World=%s NetMode=%d Authority=%d LocalRole=%d PlayerId=%d Operator=%d LeftGrip=%d RightGrip=%d Result=ViewStateApplied"),
+			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE,
+			Controller && Controller->HasAuthority(), Controller ? static_cast<int32>(Controller->GetLocalRole()) : INDEX_NONE,
+			Controller && Controller->PlayerState ? Controller->PlayerState->GetPlayerId() : INDEX_NONE,
+			ViewState.bPrimaryRodOperator, ViewState.bLeftHandGripped, ViewState.bRightHandGripped);
+	}
+	if (PhysicalControlTextBlock)
+	{
+		PhysicalControlTextBlock->SetText(ViewState.PhysicalControlText);
+		PhysicalControlTextBlock->SetVisibility(ViewState.bShowPhysicalControls ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+	if (PhysicalHandStateTextBlock)
+	{
+		PhysicalHandStateTextBlock->SetText(ViewState.PhysicalHandStateText);
+		PhysicalHandStateTextBlock->SetVisibility(ViewState.bShowPhysicalControls ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
+	}
+	if ((ViewState.bShowFightMeters || ViewState.bShowPersonalStamina) && (!CatStaminaTextBlock || !CatStaminaProgressBar)
 		&& !bHasLoggedMissingFishingMeter)
 	{
 		const APlayerController* Controller = GetOwningPlayer();
@@ -27,17 +58,15 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 		bHasLoggedMissingFishingMeter = true;
 	}
 	if (ViewState.bHasFishingSession && (!LastHUDViewState.bHasFishingSession
-		|| LastHUDViewState.Fishing.FishingSessionId != ViewState.Fishing.FishingSessionId
-		|| LastHUDViewState.Fishing.FightParticipantCount != ViewState.Fishing.FightParticipantCount))
+		|| LastHUDViewState.Fishing.FishingSessionId != ViewState.Fishing.FishingSessionId))
 	{
 		const APlayerController* Controller = GetOwningPlayer();
 		UE_LOG(LogCatUI, Log,
-			TEXT("Event=ui_hud_fishing_group_applied World=%s NetMode=%d Authority=%d LocalRole=%d PlayerId=%d SessionId=%s ParticipantCount=%d TotalFightStamina=%.3f TotalFightStaminaMaximum=%.3f PersonalFightStamina=%.3f Result=ViewStateApplied"),
+			TEXT("Event=ui_hud_fishing_operator_applied World=%s NetMode=%d Authority=%d LocalRole=%d PlayerId=%d SessionId=%s FightStamina=%.3f FightStaminaMaximum=%.3f Result=ViewStateApplied"),
 			*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE,
 			Controller && Controller->HasAuthority(), Controller ? static_cast<int32>(Controller->GetLocalRole()) : INDEX_NONE,
 			Controller && Controller->PlayerState ? Controller->PlayerState->GetPlayerId() : INDEX_NONE,
-			*ViewState.Fishing.FishingSessionId.ToString(), ViewState.Fishing.FightParticipantCount,
-			ViewState.TotalFightStamina, ViewState.TotalFightStaminaMaximum, ViewState.FightStamina);
+			*ViewState.Fishing.FishingSessionId.ToString(), ViewState.FightStamina, ViewState.FightStaminaMaximum);
 	}
 	if (!bHasLoggedCrosshairVisibility || LastHUDViewState.bShowCrosshair != ViewState.bShowCrosshair)
 	{
@@ -107,7 +136,7 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 	if (CatStaminaTextBlock)
 	{
 		CatStaminaTextBlock->SetText(ViewState.CatStaminaText);
-		CatStaminaTextBlock->SetVisibility(ViewState.bShowFightMeters
+		CatStaminaTextBlock->SetVisibility((ViewState.bShowFightMeters || ViewState.bShowPersonalStamina)
 			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
 	if (FishStaminaTextBlock)
@@ -130,9 +159,8 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 	}
 	if (CatStaminaProgressBar)
 	{
-		CatStaminaProgressBar->SetPercent(ViewState.bHasFishingSession
-			? ViewState.NormalizedTotalFightStamina : ViewState.NormalizedFightStamina);
-		CatStaminaProgressBar->SetVisibility(ViewState.bShowFightMeters
+		CatStaminaProgressBar->SetPercent(ViewState.NormalizedFightStamina);
+		CatStaminaProgressBar->SetVisibility((ViewState.bShowFightMeters || ViewState.bShowPersonalStamina)
 			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
 	if (FishStaminaProgressBar)

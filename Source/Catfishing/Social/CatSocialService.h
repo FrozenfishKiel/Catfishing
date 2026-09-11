@@ -7,6 +7,8 @@
 
 class ACatCharacter;
 class AController;
+class UCatFishInventoryItemInstance;
+class UCatInventoryComponent;
 
 /** 一局服务器 Social 深模块；拥有权限/求助/偷鱼协议，不拥有 Character 救援或 Fishing 阶段状态。 */
 UCLASS()
@@ -21,10 +23,10 @@ public:
 	/** World 销毁时清计时器并返还所有仍在追回窗口的鱼；随后清一局协议。 */
 	virtual void Deinitialize() override;
 
-	/** Host teardown 时先关闭全部新 Social 命令，再清计时器并经 Items 返还所有 theft escrow；全部协议清空才返回 true。 */
+	/** Host teardown 时先关闭全部新 Social 命令，再清计时器并经来源库存返还所有被偷鱼实例；全部协议清空才返回 true。 */
 	bool CloseCommandsAndResolveAll();
 
-	/** 开始最多一条鱼的偷取；按身份/操作/RequestId 重放，首提通过权限与 Items escrow 后开启唯一进食计时器。 */
+	/** 开始最多一条鱼的偷取；按身份/操作/RequestId 重放，首提通过权限与来源库存扣除后开启唯一进食计时器。 */
 	FCatTheftResult BeginTheft(AController* ThiefController, const FCatTheftCommand& Command);
 
 	/** 用服务器 ProtocolId 让真实受害者或已裁共享缸成员在窗口内追回；成功按身份重放，距离/状态失败可在窗口内重新尝试。 */
@@ -49,10 +51,10 @@ public:
 	void CancelTheftsForCharacter(const ACatCharacter* Character);
 
 private:
-	/** 一条服务器私有偷鱼协议；鱼实体在 Items escrow，Social 只持计时器、参与者和公开结果。 */
+	/** 一条服务器私有偷鱼协议；鱼实体已经离开来源库存，Social 只持同一实例、计时器、参与者和公开结果。 */
 	struct FActiveTheft
 	{
-		/** Social 分配并贯穿 Items/Timer/追回的服务器唯一协议 ID。 */
+		/** Social 分配并贯穿库存返还、Timer 和追回的服务器唯一协议 ID。 */
 		FGuid TheftProtocolId;
 		/** 客户端最初 Begin 意图的 RequestId；只用于身份作用域终态重放。 */
 		FGuid ClientRequestId;
@@ -62,20 +64,26 @@ private:
 		FString VictimStableNetId;
 		/** 偷取者当前 Character 弱引用；失效时返还鱼。 */
 		TWeakObjectPtr<ACatCharacter> ThiefCharacter;
-		/** 源容器种类，用于共享缸追回策略。 */
-		ECatContainerKind SourceKind = ECatContainerKind::Unknown;
-		/** Items escrow 返回的不可变鱼事实。 */
-		FCatFishInstance Fish;
+		/** 被偷前持有鱼实例的库存组件；追回和 teardown 用它把同一实例放回可见库存。 */
+		TWeakObjectPtr<UCatInventoryComponent> SourceInventory;
+		/** 被偷前的来源槽位；日志和未来 UI 回放使用，返还时不伪造旧槽仍然可用。 */
+		int32 SourceInventorySlotIndex = INDEX_NONE;
+		/** 被偷的鱼物品实例；开始偷取后它不再位于任何库存槽，但仍是同一个 UObject。 */
+		TWeakObjectPtr<UCatFishInventoryItemInstance> FishItem;
+		/** 被偷鱼实例的稳定 ID；公开结果、日志和印记候选用它，不重新从可能失效的实例猜测。 */
+		FGuid FishItemInstanceId;
+		/** 被偷鱼的定义 ID；被抓印记需要这个稳定鱼种，而不依赖追回时实例仍可访问。 */
+		FName FishDefinitionId = NAME_None;
 		/** 当前可重放公开结果。 */
 		FCatTheftResult Result;
 		/** 进食窗口的唯一 Timer；追回/取消/销毁必须清除。 */
 		FTimerHandle EatingWindowTimer;
 	};
 
-	/** 进食窗口到期回调；依赖完整时先由 Items 不可逆吃掉，再向小偷 Character 提交食用效果并回送最终协议。 */
+	/** 进食窗口到期回调；依赖完整时直接用已移出的鱼实例向小偷 Character 提交食用效果并回送最终协议。 */
 	void HandleTheftWindowExpired(FGuid TheftProtocolId);
 
-	/** 让 Items 按 ProtocolId 原位返还并在成功后移除 Social 协议；依赖失败时保留活跃记录，调用方可继续有界收口且不会伪造 returned。 */
+	/** 把已移出的鱼实例放回来源库存并在成功后移除 Social 协议；依赖失败时保留活跃记录，调用方可继续有界收口且不会伪造 returned。 */
 	FCatTheftResult ReturnActiveTheft(FGuid TheftProtocolId);
 
 	/** 被抓终态成功后提交双方印记候选，并批量先建齐两人的 Planned 记录再投递；事件 ID 未配置时安全跳过。 */
@@ -93,7 +101,7 @@ private:
 	/** 判断项目 Character 当前可参与 Social 交互：角色/Condition 有效且未倒地。 */
 	static bool IsCharacterSociallyActive(const ACatCharacter* Character);
 
-	/** 服务器 TheftProtocolId 到活跃偷鱼协议；同一鱼只由 Items escrow 保证单一实体。 */
+	/** 服务器 TheftProtocolId 到活跃偷鱼协议；同一鱼只会离开一个来源库存并由这个协议持有。 */
 	TMap<FGuid, FActiveTheft> ActiveThefts;
 
 	/** 偷取者 StableNetId 到唯一活跃 ProtocolId；保证最大负面影响为一条鱼。 */
@@ -117,6 +125,6 @@ private:
 	/** 玩家 StableNetId 到其当前唯一防骚扰牌子弱引用；重放移动同一 Actor，不叠加多个保护区。 */
 	TMap<FString, TWeakObjectPtr<class ACatProtectionSignActor>> ProtectionSignByPlayer;
 
-	/** 一局 Social 新命令门；Host teardown 在 Items 关闭前永久置 false，内部返还辅助仍可完成既有协议。 */
+	/** 一局 Social 新命令门；Host teardown 后永久置 false，内部返还辅助仍可完成既有协议。 */
 	bool bCommandsOpen = true;
 };

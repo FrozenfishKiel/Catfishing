@@ -1,3 +1,7 @@
+#include "Inventory/CatInventorySettings.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
+#include "Fishing/Tests/CatFishingEquipmentTestFixtures.h"
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
@@ -30,44 +34,42 @@ bool FCatBorrowedRodReservationAudit::RunTest(const FString& Parameters)
 {
 	struct FRestoreSettings
 	{
-		UCatEquipmentSettings* Settings = GetMutableDefault<UCatEquipmentSettings>();
-		TArray<TSoftObjectPtr<UCatEquipmentDefinition>> Definitions = Settings->Definitions;
-		ECatDomainPolicy Trust = Settings->ProfileLoadoutTrustPolicy;
-		int32 Capacity = Settings->InventorySlotCapacity;
+		UCatInventorySettings* Settings = GetMutableDefault<UCatInventorySettings>();
+		TArray<FCatInventoryCatalogDefinition> Definitions = Settings->Definitions;
+		ECatDomainPolicy Trust = GetMutableDefault<UCatEquipmentSettings>()->ProfileLoadoutTrustPolicy;
+		int32 Capacity = Settings->PlayerInventorySlotCapacity;
 		~FRestoreSettings()
 		{
 			Settings->Definitions = Definitions;
-			Settings->ProfileLoadoutTrustPolicy = Trust;
-			Settings->InventorySlotCapacity = Capacity;
+			GetMutableDefault<UCatEquipmentSettings>()->ProfileLoadoutTrustPolicy = Trust;
+			Settings->PlayerInventorySlotCapacity = Capacity;
 		}
 	} Restore;
 	Restore.Settings->Definitions.Reset();
-	Restore.Settings->ProfileLoadoutTrustPolicy = ECatDomainPolicy::Enabled;
-	Restore.Settings->InventorySlotCapacity = 12;
+	GetMutableDefault<UCatEquipmentSettings>()->ProfileLoadoutTrustPolicy = ECatDomainPolicy::Enabled;
+	Restore.Settings->PlayerInventorySlotCapacity = 12;
 	TArray<TStrongObjectPtr<UCatEquipmentDefinition>> Definitions;
-	const auto AddDefinition = [&](const FName Id, const ECatEquipmentKind Kind)
+	const auto AddDefinition = [&](const FName Id, const CatFishingTest::EFixtureKind Kind)
 	{
 		UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>();
 		Definitions.Emplace(Definition);
 		Definition->EquipmentDefinitionId = Id;
-		Definition->Kind = Kind;
+		CatFishingTest::Configure(Definition, Kind);
 		Definition->FunctionalRouteId = Id;
-		Definition->LoadoutSlotId = Id;
 		Definition->bEnableRuntimeDefinition = true;
-		Restore.Settings->Definitions.Add(Definition);
+		Restore.Settings->Definitions.Add({Id, Definition});
 		return Definition;
 	};
-	UCatEquipmentDefinition* RodDefinition = AddDefinition(TEXT("AuditRod"), ECatEquipmentKind::Rod);
-	RodDefinition->MaximumRodDurability = 100.0;
-	RodDefinition->MaximumLineLengthCentimeters = 1500.0;
-	RodDefinition->HighTensionWearMultiplier = 1.0;
+	UCatEquipmentDefinition* RodDefinition = AddDefinition(TEXT("AuditRod"), CatFishingTest::EFixtureKind::Rod);
+	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumRodDurability = 100.0;
+	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumLineLengthCentimeters = 1500.0;
+	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->HighTensionWearMultiplier = 1.0;
 	RodDefinition->UseActorClass = ACatFishingRodActor::StaticClass();
-	RodDefinition->UseInventoryEffect = ECatEquipmentUseInventoryEffect::HoldInstanceUntilUnUse;
-	UCatEquipmentDefinition* BaitDefinition = AddDefinition(TEXT("AuditBait"), ECatEquipmentKind::Bait);
+	UCatEquipmentDefinition* BaitDefinition = AddDefinition(TEXT("AuditBait"), CatFishingTest::EFixtureKind::Bait);
 	BaitDefinition->bRunConsumable = true;
-	BaitDefinition->BiteRateMultiplier = 1.0;
-	BaitDefinition->MinimumBiteDelayMultiplier = 1.0;
-	AddDefinition(TEXT("AuditFloat"), ECatEquipmentKind::Float)->MaximumCastDistanceCentimeters = 1000.0;
+	CatFishingTest::Fragment<UCatEquipmentFragment_Bait>(BaitDefinition)->BiteRateMultiplier = 1.0;
+	CatFishingTest::Fragment<UCatEquipmentFragment_Bait>(BaitDefinition)->MinimumBiteDelayMultiplier = 1.0;
+	CatFishingTest::Fragment<UCatEquipmentFragment_Float>(AddDefinition(TEXT("AuditFloat"), CatFishingTest::EFixtureKind::Float))->MaximumCastDistanceCentimeters = 1000.0;
 	for (const auto& Definition : Definitions)
 	{
 		if (!TestTrue(TEXT("audit definitions are valid"), Definition->IsRuntimeDefinitionReady())) return false;
@@ -105,25 +107,32 @@ bool FCatBorrowedRodReservationAudit::RunTest(const FString& Parameters)
 	const auto Borrowed = FisherEquipment->BeginFishingUse(BorrowedSessionId, OwnerRodId,
 		FisherLoadout.BaitItemInstanceId, FisherLoadout.FloatItemInstanceId, FisherLoadout.RodDefinitionId,
 		FisherLoadout.BaitDefinitionId, FisherLoadout.FloatDefinitionId, FisherLoadout.Revision,
-		OwnerEquipment, OwnerEquipment->GetSnapshot().Revision);
+		CatFishingTest::Inventory(OwnerEquipment));
 	AddInfo(FString::Printf(TEXT("Event=multiplayer_borrowed_rod_probe Reserved=%s Error=%s"),
-		Borrowed.bReserved ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Borrowed.Error)));
+		Borrowed.bBaitFrozen ? TEXT("true") : TEXT("false"), *UEnum::GetValueAsString(Borrowed.Error)));
 	// 对照组走同一生产入口，证明不是装备夹具缺配置导致一切抛竿均失败。
 	const auto CurrentLoadout = FisherEquipment->GetSnapshot();
 	const FGuid OwnSessionId = FGuid::NewGuid();
 	const auto Own = FisherEquipment->BeginFishingUse(OwnSessionId, CurrentLoadout.RodItemInstanceId,
 		CurrentLoadout.BaitItemInstanceId, CurrentLoadout.FloatItemInstanceId, CurrentLoadout.RodDefinitionId,
 		CurrentLoadout.BaitDefinitionId, CurrentLoadout.FloatDefinitionId, CurrentLoadout.Revision);
-	TestTrue(TEXT("control: own deployed rod can reserve bait"), Own.bReserved);
-	TestTrue(TEXT("shared rod: another fisher can reserve their own bait for the owner's rod"), Borrowed.bReserved);
-	if (Borrowed.bReserved)
+	TestTrue(TEXT("control: own deployed rod can reserve bait"), Own.bBaitFrozen);
+	TestTrue(TEXT("shared rod: another fisher can reserve their own bait for the owner's rod"), Borrowed.bBaitFrozen);
+	if (Borrowed.bBaitFrozen)
 	{
-		TestEqual(TEXT("borrowed session freezes original rod inventory host"),
-			FisherEquipment->GetFishingRodEquipment(BorrowedSessionId), OwnerEquipment);
-		TestTrue(TEXT("borrowed session returns unused bait to fisher"),
+		TestTrue(TEXT("borrowed session locks the original owner rod"), OwnerEquipment->IsFishingRodInUse(OwnerRodId));
+		TestFalse(TEXT("borrowed rod is not rebound to fisher inventory"), FisherEquipment->IsFishingRodInUse(OwnerRodId));
+		const double OwnerBeforeWear = OwnerEquipment->GetSnapshot().RodDurability;
+		const double FisherBeforeWear = FisherEquipment->GetSnapshot().RodDurability;
+		TestTrue(TEXT("borrowed session commits its fisher bait"), FisherEquipment->CommitFishingBaitDeferred(BorrowedSessionId).bApplied);
+		const auto Wear = FisherEquipment->ApplyFishingRodWear(BorrowedSessionId, 1, 7.0);
+		TestTrue(TEXT("borrowed rod applies exact wear"), Wear.bApplied);
+		TestEqual(TEXT("owner read model follows the worn original instance"), OwnerEquipment->GetSnapshot().RodDurability, OwnerBeforeWear - 7.0);
+		TestEqual(TEXT("fisher own rod is never charged for a borrowed rod"), FisherEquipment->GetSnapshot().RodDurability, FisherBeforeWear);
+		TestTrue(TEXT("borrowed session closes its independent transaction"),
 			FisherEquipment->ReleaseFishingUse(BorrowedSessionId).bApplied);
 	}
-	if (Own.bReserved)
+	if (Own.bBaitFrozen)
 	{
 		TestTrue(TEXT("own control releases its independent reservation"),
 			FisherEquipment->ReleaseFishingUse(OwnSessionId).bApplied);
@@ -155,7 +164,7 @@ namespace CatFishingMultiplayerAudit
 				{
 					APlayerState* Owner = Server->GetFirstPlayerController()->PlayerState;
 					if (!Owner) return TimedOut();
-					const UCatEquipmentDefinition* Definition = GetDefault<UCatEquipmentSettings>()->FindRuntimeDefinition(TEXT("StarterRodT1"));
+					const UCatEquipmentDefinition* Definition = GetDefault<UCatInventorySettings>()->FindRuntimeDefinition<UCatEquipmentDefinition>(TEXT("StarterRodT1"));
 					if (!Test->TestNotNull(TEXT("formal starter rod definition"), Definition)) return true;
 					UClass* RodClass = bFormal ? Definition->UseActorClass.LoadSynchronous() : ACatFishingRodActor::StaticClass();
 					if (!Test->TestNotNull(TEXT("rod actor class is available"), RodClass)) return true;
@@ -166,8 +175,8 @@ namespace CatFishingMultiplayerAudit
 					ServerRod = Rod;
 					RodId = FGuid::NewGuid();
 					// 原生和正式蓝图分别验证，区分玩法 getter 与视觉 RodTipMarker 的口径。
-					Rod->ConfigureCanonicalAnchorsFromAuthority(Definition->RodTipLocalTransform,
-						Definition->StandLocalTransform, Definition->GripLocalTransform);
+					Rod->ConfigureCanonicalAnchorsFromAuthority(CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(Definition)->RodTipLocalTransform,
+						CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(Definition)->StandLocalTransform, CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(Definition)->GripLocalTransform);
 					Rod->InitializeAuthoritativeIdentity(RodId, FGuid::NewGuid(), Definition->EquipmentDefinitionId,
 						TEXT("AuditSkin"), Owner, nullptr, true, false);
 					Rod->FinishSpawning(SpawnTransform);
@@ -180,7 +189,6 @@ namespace CatFishingMultiplayerAudit
 					const ACatFishingRodActor* AuthorityRod = ServerRod.Get();
 					if (!It->GetActorTransform().Equals(AuthorityRod->GetActorTransform(), 0.01)) continue;
 					const double TipError = FVector::Distance(It->GetRodTipWorldTransform().GetLocation(), AuthorityRod->GetRodTipWorldTransform().GetLocation());
-					const double StandError = FVector::Distance(It->GetOperatorInteractionWorldTransform().GetLocation(), AuthorityRod->GetOperatorInteractionWorldTransform().GetLocation());
 					const double GripError = FVector::Distance(It->GetGripWorldTransform().GetLocation(), AuthorityRod->GetGripWorldTransform().GetLocation());
 					const auto FindVisualLineAnchor = [](const ACatFishingRodActor* Rod) -> const USceneComponent*
 					{
@@ -194,12 +202,11 @@ namespace CatFishingMultiplayerAudit
 					const USceneComponent* ServerVisual = FindVisualLineAnchor(AuthorityRod);
 					const USceneComponent* ClientVisual = FindVisualLineAnchor(*It);
 					const double VisualError = FVector::Distance(ServerVisual->GetComponentLocation(), ClientVisual->GetComponentLocation());
-					Test->AddInfo(FString::Printf(TEXT("Event=multiplayer_anchor_probe Variant=%s ServerNetMode=%d ClientNetMode=%d RodActorId=%s TipErrorCm=%.3f StandErrorCm=%.3f GripErrorCm=%.3f VisualErrorCm=%.3f VisualAnchor=%s"),
+					Test->AddInfo(FString::Printf(TEXT("Event=multiplayer_anchor_probe Variant=%s ServerNetMode=%d ClientNetMode=%d RodActorId=%s TipErrorCm=%.3f GripErrorCm=%.3f VisualErrorCm=%.3f VisualAnchor=%s"),
 						bFormal ? TEXT("FormalBlueprint") : TEXT("Native"), Server->GetNetMode(), Client->GetNetMode(),
-						*RodId.ToString(), TipError, StandError, GripError, VisualError, *GetNameSafe(ClientVisual)));
+						*RodId.ToString(), TipError, GripError, VisualError, *GetNameSafe(ClientVisual)));
 					Test->TestTrue(TEXT("control: replicated grip agrees"), GripError < 0.1);
 					Test->TestTrue(TEXT("client rod tip agrees with server"), TipError < 0.1);
-					Test->TestTrue(TEXT("client interaction anchor agrees with server"), StandError < 0.1);
 					return true;
 				}
 			}

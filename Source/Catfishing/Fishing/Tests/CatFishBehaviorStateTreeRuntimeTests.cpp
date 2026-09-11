@@ -1,9 +1,21 @@
+#include "Inventory/CatInventorySettings.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Rod.h"
+#include "Equipment/Fragments/CatEquipmentFragment_Bait.h"
+#include "Fishing/Tests/CatFishingEquipmentTestFixtures.h"
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
 #include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/CatCharacter.h"
+#include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "Components/BoxComponent.h"
+#include "Fishing/CatFishingService.h"
+#include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
+#include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
+#include "Framework/Game/CatfishingPlayerController.h"
+#include "OnlineSubsystemTypes.h"
 #include "Components/StateTreeComponent.h"
 #include "Data/CatFishDefinition.h"
 #include "Environment/CatWaterQuerySubsystem.h"
@@ -206,35 +218,32 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 
 	// 补齐生产消费者：只准备已经中鱼的事务状态，之后由真正的 HandleFixedStep
 	// 执行树、受力、最终水面落位、ASC 付款及 Session 发布，不手工提交 Step 或余额。
-	UCatEquipmentSettings* EquipmentSettings = GetMutableDefault<UCatEquipmentSettings>();
-	TGuardValue<TArray<TSoftObjectPtr<UCatEquipmentDefinition>>> SavedDefinitions(EquipmentSettings->Definitions, {});
-	TGuardValue<ECatDomainPolicy> SavedTrust(EquipmentSettings->ProfileLoadoutTrustPolicy, ECatDomainPolicy::Enabled);
-	TGuardValue<int32> SavedSlots(EquipmentSettings->InventorySlotCapacity, 12);
-	TGuardValue<int32> SavedStacks(EquipmentSettings->InventoryQuantityStackCapacity, 20);
-	TGuardValue<FName> SavedWood(EquipmentSettings->DriftwoodDefinitionId, FName(TEXT("IntentRuntimeWood")));
+	UCatInventorySettings* EquipmentSettings = GetMutableDefault<UCatInventorySettings>();
+	TGuardValue<TArray<FCatInventoryCatalogDefinition>> SavedDefinitions(EquipmentSettings->Definitions, {});
+	TGuardValue<ECatDomainPolicy> SavedTrust(GetMutableDefault<UCatEquipmentSettings>()->ProfileLoadoutTrustPolicy, ECatDomainPolicy::Enabled);
+	TGuardValue<int32> SavedSlots(EquipmentSettings->PlayerInventorySlotCapacity, 12);
+	TGuardValue<int32> SavedStacks(EquipmentSettings->DefaultQuantityStackCapacity, 20);
 	TArray<TStrongObjectPtr<UCatEquipmentDefinition>> Definitions;
-	const auto AddDefinition = [&](const FName Id, const ECatEquipmentKind Kind)
+	const auto AddDefinition = [&](const FName Id, const CatFishingTest::EFixtureKind Kind)
 	{
 		UCatEquipmentDefinition* Definition = NewObject<UCatEquipmentDefinition>();
 		Definitions.Emplace(Definition);
 		Definition->EquipmentDefinitionId = Id;
 		Definition->FunctionalRouteId = Definition->LoadoutSlotId = Id;
-		Definition->Kind = Kind;
+		CatFishingTest::Configure(Definition, Kind);
 		Definition->bEnableRuntimeDefinition = true;
-		EquipmentSettings->Definitions.Add(TSoftObjectPtr<UCatEquipmentDefinition>(Definition));
+		EquipmentSettings->Definitions.Add({Definition->EquipmentDefinitionId, Definition});
 		return Definition;
 	};
-	UCatEquipmentDefinition* RodDefinition = AddDefinition(TEXT("IntentRuntimeRod"), ECatEquipmentKind::Rod);
-	RodDefinition->MaximumRodDurability = 1000.0;
-	RodDefinition->MaximumLineLengthCentimeters = 1500.0;
-	RodDefinition->HighTensionWearMultiplier = 1.0;
+	UCatEquipmentDefinition* RodDefinition = AddDefinition(TEXT("IntentRuntimeRod"), CatFishingTest::EFixtureKind::Rod);
+	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumRodDurability = 1000.0;
+	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumLineLengthCentimeters = 1500.0;
+	CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->HighTensionWearMultiplier = 1.0;
 	RodDefinition->UseActorClass = ACatFishingRodActor::StaticClass();
-	RodDefinition->UseInventoryEffect = ECatEquipmentUseInventoryEffect::HoldInstanceUntilUnUse;
-	UCatEquipmentDefinition* BaitDefinition = AddDefinition(TEXT("IntentRuntimeBait"), ECatEquipmentKind::Bait);
+	UCatEquipmentDefinition* BaitDefinition = AddDefinition(TEXT("IntentRuntimeBait"), CatFishingTest::EFixtureKind::Bait);
 	BaitDefinition->bRunConsumable = true;
-	BaitDefinition->BiteRateMultiplier = BaitDefinition->MinimumBiteDelayMultiplier = 1.0;
-	AddDefinition(TEXT("IntentRuntimeFloat"), ECatEquipmentKind::Float)->MaximumCastDistanceCentimeters = 1000.0;
-	AddDefinition(EquipmentSettings->DriftwoodDefinitionId, ECatEquipmentKind::Driftwood)->bRunConsumable = true;
+	CatFishingTest::Fragment<UCatEquipmentFragment_Bait>(BaitDefinition)->BiteRateMultiplier = CatFishingTest::Fragment<UCatEquipmentFragment_Bait>(BaitDefinition)->MinimumBiteDelayMultiplier = 1.0;
+	CatFishingTest::Fragment<UCatEquipmentFragment_Float>(AddDefinition(TEXT("IntentRuntimeFloat"), CatFishingTest::EFixtureKind::Float))->MaximumCastDistanceCentimeters = 1000.0;
 	for (const TStrongObjectPtr<UCatEquipmentDefinition>& Definition : Definitions)
 		if (!TestTrue(TEXT("生产付款夹具的装备定义完整"), Definition->IsRuntimeDefinitionReady())) return false;
 
@@ -247,6 +256,9 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		if (!TestTrue(TEXT("创建独立生产付款世界"), PaymentWorld.CreateTestWorld(EWorldType::Game))) return false;
 		PaymentWorld.ForwardErrorMessages(this);
 		UWorld* Payment = PaymentWorld.GetTestWorld();
+		FURL PaymentURL;
+		PaymentURL.AddOption(TEXT("game=/Script/Catfishing.CatfishingGameModeBase"));
+		if (!TestTrue(TEXT("生产固定步使用正式准入GameMode"), Payment->SetGameMode(PaymentURL))) return false;
 		ACatCharacter* Character = Payment->SpawnActor<ACatCharacter>(FVector(-200.0, 0.0, 200.0), FRotator::ZeroRotator);
 		ACatfishingPlayerState* Player = Payment->SpawnActor<ACatfishingPlayerState>();
 		ACatWaterRegion* Region = Payment->SpawnActor<ACatWaterRegion>();
@@ -269,7 +281,29 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		const auto Baked = FCatWaterGeometry::Build(Geometry);
 		if (!TestTrue(TEXT("烘焙付款夹具真实水域"), Baked.bSucceeded)) return false;
 		FCatWaterRegionTestAccess::InjectBakedGeometry(*Region, Baked.Cache);
-		PaymentWorld.BeginPlayInTestWorld();
+		// 与正式 SpawnActorDeferred 配置顺序一致，BeginPlay 创建刚体前冻结规范锚点。
+		if (!TestTrue(TEXT("物理竿初始化前配置规范竿尖和握点"), Rod->ConfigureCanonicalAnchorsFromAuthority(
+			FTransform::Identity, FTransform::Identity, FTransform(FVector(-200.0, 0.0, 0.0))))) return false;
+		if (!TestTrue(TEXT("启动真实角色身体与水域生命周期"), PaymentWorld.BeginPlayInTestWorld())) return false;
+		auto* Mode = Payment->GetAuthGameMode<ACatfishingGameModeBase>();
+		Mode->bRunCommandsOpen = true;
+		Mode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
+		Mode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
+		auto* Controller = Payment->SpawnActor<ACatfishingPlayerController>();
+		if (!Controller) return false;
+		Controller->PlayerState = Player;
+		Character->SetPlayerState(Player);
+		Controller->Possess(Character);
+		Controller->SetActorTickEnabled(false);
+		Player->SetPlayerId(1);
+		const FUniqueNetIdRef PlayerNetId = FUniqueNetIdString::Create(TEXT("BehaviorRuntimePayment"), FName(TEXT("CAT_TEST")));
+		Player->SetUniqueId(FUniqueNetIdRepl(PlayerNetId));
+		ACatfishingGameModeBase::FAdmissionRecord Admission;
+		Admission.Phase = ACatfishingGameModeBase::EAdmissionPhase::Active;
+		Admission.Controller = Controller;
+		Mode->AdmissionRecords.Add(ACatfishingGameModeBase::MakeStableNetIdKey(Player->GetUniqueId()), Admission);
+		if (!TestTrue(TEXT("付款参与者持有正式准入和已初始化刚体"), Mode->CanAcceptFishingCommand(Controller)
+			&& Character->GetPhysicalBodyComponent()->GetBody())) return false;
 		if (!TestTrue(TEXT("生产付款水域已注册"), Payment->GetSubsystem<UCatWaterQuerySubsystem>()
 			->QueryShoreRelation(FVector(500.0, 0.0, 0.0), Region->GetWaterRegionHandle()).bSucceeded)) return false;
 		UCatAbilitySystemComponent* ASC = Character->GetCatAbilitySystemComponent();
@@ -294,12 +328,16 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		const FGuid SessionId = FGuid::NewGuid();
 		if (!TestTrue(TEXT("会话预留真实鱼竿和饵漂"), Equipment->BeginFishingUse(SessionId,
 			RodItemId, Loadout.BaitItemInstanceId, Loadout.FloatItemInstanceId,
-			Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bReserved)
+			Loadout.RodDefinitionId, Loadout.BaitDefinitionId, Loadout.FloatDefinitionId, Loadout.Revision).bBaitFrozen)
 			|| !TestTrue(TEXT("会话完成中鱼扣饵"), Equipment->CommitFishingBaitDeferred(SessionId).bApplied)) return false;
-		if (!TestTrue(TEXT("配置固定规范竿尖"), Rod->ConfigureCanonicalAnchorsFromAuthority(
-			FTransform::Identity, FTransform::Identity, FTransform(FVector(-200.0, 0.0, 0.0))))
-			|| !TestTrue(TEXT("鱼竿绑定真实操作者及库存实例"), Rod->InitializeAuthoritativeIdentity(
-				FGuid::NewGuid(), RodItemId, Loadout.RodDefinitionId, NAME_None, Player, Player, true, false))) return false;
+		if (!TestTrue(TEXT("鱼竿绑定真实操作者及库存实例"), Rod->InitializeAuthoritativeIdentity(
+			FGuid::NewGuid(), RodItemId, Loadout.RodDefinitionId, NAME_None, Player, nullptr, true, false))) return false;
+		UCatFishingService* Service = Payment->GetSubsystem<UCatFishingService>();
+		if (!TestTrue(TEXT("已部署的真实杆进入生产查找索引"), Service && Service->RegisterDeployedRod(Player, Rod))
+			|| !TestTrue(TEXT("规范握点放在实际手爪后经生产校验建约束"), Rod->BeginPhysicalHoldFromAuthority(Player, true))
+			|| !TestTrue(TEXT("实际握持后按部署事务显式授予拥有者主控"),
+				Rod->SetPrimaryOperatorFromAuthority(Player, Rod->GetPresentationState().RodActorRevision) && Rod->GetPhysicalRodComponent()->CommitPrimaryHold(Player))) return false;
+		if (!TestEqual(TEXT("真实握边保留固定步主位"), Rod->GetOperatorCount(), 1)) return false;
 		const FVector InitialFishPosition(500.0, 0.0, 0.0);
 		Fish->SetActorLocation(InitialFishPosition);
 		Fish->bIdentityInitialized = true;
@@ -314,6 +352,7 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		Session->AttemptSnapshot.RodItemInstanceId = RodItemId;
 		Session->CastEquipment = Equipment;
 		Session->FisherCharacter = Character;
+		Service->Sessions.Add(SessionId, Session); // The rod receiver validates the same live session domain.
 		UCatFishingFightRunner* Runner = NewObject<UCatFishingFightRunner>(Session);
 		Session->FightRunner = Runner;
 		FCatFishingFightRunnerInit Init;
@@ -328,14 +367,14 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		Init.bInitialPullHeld = true;
 		Init.Config.FixedStepSeconds = FixedStepSeconds;
 		Init.Config.PrimaryOperatorCatStrength = 50.0;
-		Init.Config.PrimaryOperatorMassKilograms = 5.0;
+		Init.Config.PrimaryOperatorMassKilograms = Character->GetPhysicalBodyComponent()->GetBody()->GetMass();
 		Init.Config.FishMassKilograms = 3.0;
 		Init.Config.FishStrength = 30.0;
 		Init.Config.CatStaminaMaximum = CatStaminaMaximum;
 		Init.Config.FishFullEffortSpeedCentimetersPerSecond = 180.0;
 		Init.Config.FishStaminaPerUnfulfilledMeter = Price;
-		Init.Config.MaximumLineLengthCentimeters = RodDefinition->MaximumLineLengthCentimeters;
-		Init.Config.RodDurability = RodDefinition->MaximumRodDurability;
+		Init.Config.MaximumLineLengthCentimeters = CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumLineLengthCentimeters;
+		Init.Config.RodDurability = CatFishingTest::Fragment<UCatEquipmentFragment_Rod>(RodDefinition)->MaximumRodDurability;
 		Init.Config.ReelSpeedCentimetersPerSecond = 80.0;
 		Init.InitialState.CatStamina = CatStaminaMaximum;
 		Init.InitialState.FishStamina = FishDefinition->FishFightStamina;
@@ -392,6 +431,7 @@ bool FCatFishBehaviorStateTreeRuntimeTest::RunTest(const FString& Parameters)
 		AddInfo(FString::Printf(TEXT("Event=fish_intent_runtime_paid Price=%.6f IntentCm=%.6f ActualCm=%.6f MissingCm=%.6f FishDrain=%.6f CatDrain=%.6f ASCWrites=%d SessionPublications=%d"),
 			Price, IntendedDistance, ActualProgress, MissingDistance, FishDrain, CatDrain, CatStaminaWrites, SessionPublications));
 		Runner->Stop();
+		Service->Sessions.Remove(SessionId);
 	}
 	return !HasAnyErrors();
 }

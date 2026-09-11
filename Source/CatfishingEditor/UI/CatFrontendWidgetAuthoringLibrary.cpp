@@ -21,7 +21,6 @@
 #include "Components/Slider.h"
 #include "Components/SizeBox.h"
 #include "Components/TextBlock.h"
-#include "Components/Throbber.h"
 #include "Blueprint/UserWidget.h"
 #include "Components/VerticalBox.h"
 #include "Components/WidgetSwitcher.h"
@@ -61,7 +60,7 @@ namespace CatFrontendWidgetAuthoring
 	const TCHAR* const FrontendChineseFontPath = TEXT("/Game/UI/Shop/F_CatShopChinese.F_CatShopChinese");
 	/** 前端文本统一使用的字重名；当前中文 Font 资产只承诺 Regular 字面，标题靠字号区分层级。 */
 	const FName FrontendTypefaceName = TEXT("Regular");
-	/** 输入框和下拉框没有旧字号来源时使用的默认字号；与作者器 1280x720 设计画布的正文尺寸保持一致。 */
+	/** 输入框和下拉框没有可用字号来源时使用的默认字号；与作者器 1280x720 设计画布的正文尺寸保持一致。 */
 	const int32 FrontendDefaultFontSize = 18;
 
 	/** 一个页面资产必须提供的具名控件；资产验证用它确认 Root 的原生子树解析不会落到空指针。 */
@@ -76,7 +75,7 @@ namespace CatFrontendWidgetAuthoring
 	/** 加载项目内的中文 Font 资产；该资产是 WBP 序列化引用，打包时会随正式前端资源一起被依赖收集。 */
 	UObject* LoadFrontendChineseFont()
 	{
-		// 字体加载流程：先复用同进程缓存，缓存失效时按固定内容路径加载；缺失时记录明确事件，让作者脚本失败而不是静默生成缺字界面。
+		// 字体加载流程：先复用同进程缓存，缓存不可用时按固定内容路径加载；缺失时记录明确事件，让作者脚本失败而不是静默生成缺字界面。
 		static TWeakObjectPtr<UObject> CachedFont;
 		if (!CachedFont.IsValid())
 		{
@@ -101,6 +100,35 @@ namespace CatFrontendWidgetAuthoring
 		return FCoreStyle::GetDefaultFontStyle(TEXT("Regular"), FontSize);
 	}
 
+	/** 写入下拉框模板的字体数据；作者器在保存 WBP 前使用它保持当前值和列表项共用同一中文 Font，失败时返回 false 阻止上层计入已修复。 */
+	bool SetComboBoxTemplateFont(UComboBoxString* ComboBox, const FSlateFontInfo& FontInfo)
+	{
+		// 下拉框模板字体写入流程：先确认控件实例、引擎保存字段和结构类型都匹配，再写入可序列化模板值；任一不满足都会记录资产作者器错误并返回失败。
+		FStructProperty* FontProperty = FindFProperty<FStructProperty>(UComboBoxString::StaticClass(), TEXT("Font"));
+		if (!ComboBox || !FontProperty || FontProperty->Struct != FSlateFontInfo::StaticStruct())
+		{
+			UE_LOG(LogTemp, Error, TEXT("Event=frontend_combo_authoring_font_field_missing"));
+			return false;
+		}
+		*FontProperty->ContainerPtrToValuePtr<FSlateFontInfo>(ComboBox) = FontInfo;
+		return true;
+	}
+
+	/** 写入下拉框模板的前景色；作者器只在 WBP 模板阶段设置它，运行时颜色交给生成出的 Slate 控件消费，失败时返回 false。 */
+	bool SetComboBoxTemplateForegroundColor(UComboBoxString* ComboBox, const FSlateColor& ForegroundColor)
+	{
+		// 下拉框模板颜色写入流程：先确认控件实例、引擎保存字段和结构类型都匹配，再写入前景色；任一不满足都会记录资产作者器错误并返回失败。
+		FStructProperty* ForegroundColorProperty = FindFProperty<FStructProperty>(
+			UComboBoxString::StaticClass(), TEXT("ForegroundColor"));
+		if (!ComboBox || !ForegroundColorProperty || ForegroundColorProperty->Struct != FSlateColor::StaticStruct())
+		{
+			UE_LOG(LogTemp, Error, TEXT("Event=frontend_combo_authoring_foreground_field_missing"));
+			return false;
+		}
+		*ForegroundColorProperty->ContainerPtrToValuePtr<FSlateColor>(ComboBox) = ForegroundColor;
+		return true;
+	}
+
 	/** 只替换单个前端控件的文本字体；返回是否命中文本类控件，供现有 WBP 修复流程统计保存。 */
 	bool ApplyFrontendFontToWidget(UWidget* Widget, int32& OutChangedFontCount)
 	{
@@ -121,11 +149,11 @@ namespace CatFrontendWidgetAuthoring
 		}
 		if (UComboBoxString* ComboBox = Cast<UComboBoxString>(Widget))
 		{
-			// UE 5.8 仍把 ComboBoxString 的显示字体序列化在这个弃用字段里；修复既有 WBP 时必须直接写它，才能让当前值和下拉选项共享中文 Font。
-			PRAGMA_DISABLE_DEPRECATION_WARNINGS
-			ComboBox->Font = MakeFrontendFont(ComboBox->Font.Size > 0 ? ComboBox->Font.Size : FrontendDefaultFontSize);
-			PRAGMA_ENABLE_DEPRECATION_WARNINGS
-			++OutChangedFontCount;
+			const int32 FontSize = ComboBox->GetFont().Size > 0 ? ComboBox->GetFont().Size : FrontendDefaultFontSize;
+			if (SetComboBoxTemplateFont(ComboBox, MakeFrontendFont(FontSize)))
+			{
+				++OutChangedFontCount;
+			}
 			return true;
 		}
 		return false;
@@ -166,9 +194,7 @@ namespace CatFrontendWidgetAuthoring
 		{
 			++OutCheckedFontCount;
 			// 这里读的是 WBP 模板上的序列化字段，不是运行时生成的 Slate 子控件；验证目标是确认资产重载后仍会拿到中文 Font。
-			PRAGMA_DISABLE_DEPRECATION_WARNINGS
-			const bool bValid = IsFrontendFontApplied(ComboBox->Font, ExpectedFont);
-			PRAGMA_ENABLE_DEPRECATION_WARNINGS
+			const bool bValid = IsFrontendFontApplied(ComboBox->GetFont(), ExpectedFont);
 			if (!bValid)
 			{
 				UE_LOG(LogTemp, Error, TEXT("Event=frontend_widget_font_invalid Asset=%s Control=%s Type=ComboBoxString"), AssetName, *Widget->GetName());
@@ -213,7 +239,7 @@ namespace CatFrontendWidgetAuthoring
 	/** 统一盒式容器的自动尺寸、剩余空间分配和间距；作者阶段调用，使列表拿到可滚动高度而文字与命令保留内容尺寸。 */
 	void SetBoxSlot(UWidget* Widget, const bool bFill, const FMargin& Padding = FMargin(0.0f))
 	{
-		// 槽位布局流程：读取控件当前所属的横列或纵列槽，写入空间分配和边距；其他容器保持原有锚点规则。
+		// 槽位布局流程：读取控件当前所属的横列或纵列槽，写入空间分配和边距；其他容器的锚点由创建它们的布局方法负责。
 		if (!Widget)
 		{
 			return;
@@ -234,7 +260,7 @@ namespace CatFrontendWidgetAuthoring
 		}
 	}
 
-	/** 提供按钮与下拉框共用的深色交互表面；样式值直接序列化到新 WBP，后续可在 Designer 独立修改。 */
+	/** 提供按钮与下拉框共用的深色交互表面；样式值直接序列化到新 WBP，Designer 可以独立修改。 */
 	FButtonStyle MakeFrontendButtonStyle()
 	{
 		// 样式创建流程：为普通、悬停、按下和禁用状态指定平面笔刷及前景色，固定内容边距以避免按下时文本跳位。
@@ -358,25 +384,22 @@ namespace CatFrontendWidgetAuthoring
 		{
 			ComboBox->SetSelectedOption(Options[0]);
 		}
-		// UE 5.8 仅允许构造阶段设置这两个属性，没有运行时 setter；这里修改的是未编译的新资产模板。
-		PRAGMA_DISABLE_DEPRECATION_WARNINGS
-		ComboBox->Font = MakeFrontendFont(FrontendDefaultFontSize);
-		ComboBox->ForegroundColor = FLinearColor(0.9f, 0.94f, 0.93f);
-		PRAGMA_ENABLE_DEPRECATION_WARNINGS
+		SetComboBoxTemplateFont(ComboBox, MakeFrontendFont(FrontendDefaultFontSize));
+		SetComboBoxTemplateForegroundColor(ComboBox, FSlateColor(FLinearColor(0.9f, 0.94f, 0.93f)));
 		FComboBoxStyle Style = ComboBox->GetWidgetStyle();
 		Style.ComboButtonStyle.SetButtonStyle(MakeFrontendButtonStyle());
 		Style.ComboButtonStyle.SetMenuBorderBrush(FSlateColorBrush(FLinearColor(0.035f, 0.042f, 0.04f)));
 		ComboBox->SetWidgetStyle(Style);
-		FTableRowStyle Items = ComboBox->GetItemStyle();
-		Items.SetEvenRowBackgroundBrush(FSlateColorBrush(FLinearColor(0.04f, 0.05f, 0.047f)));
-		Items.SetOddRowBackgroundBrush(FSlateColorBrush(FLinearColor(0.04f, 0.05f, 0.047f)));
-		Items.SetEvenRowBackgroundHoveredBrush(FSlateColorBrush(FLinearColor(0.03f, 0.20f, 0.17f)));
-		Items.SetOddRowBackgroundHoveredBrush(FSlateColorBrush(FLinearColor(0.03f, 0.20f, 0.17f)));
-		Items.SetActiveBrush(FSlateColorBrush(FLinearColor(0.03f, 0.27f, 0.23f)));
-		Items.SetInactiveBrush(FSlateColorBrush(FLinearColor(0.03f, 0.20f, 0.17f)));
-		Items.SetTextColor(FLinearColor(0.9f, 0.94f, 0.93f));
-		Items.SetSelectedTextColor(FLinearColor::White);
-		ComboBox->SetItemStyle(Items);
+		FTableRowStyle ItemStyle = ComboBox->GetItemStyle();
+		ItemStyle.SetEvenRowBackgroundBrush(FSlateColorBrush(FLinearColor(0.04f, 0.05f, 0.047f)));
+		ItemStyle.SetOddRowBackgroundBrush(FSlateColorBrush(FLinearColor(0.04f, 0.05f, 0.047f)));
+		ItemStyle.SetEvenRowBackgroundHoveredBrush(FSlateColorBrush(FLinearColor(0.03f, 0.20f, 0.17f)));
+		ItemStyle.SetOddRowBackgroundHoveredBrush(FSlateColorBrush(FLinearColor(0.03f, 0.20f, 0.17f)));
+		ItemStyle.SetActiveBrush(FSlateColorBrush(FLinearColor(0.03f, 0.27f, 0.23f)));
+		ItemStyle.SetInactiveBrush(FSlateColorBrush(FLinearColor(0.03f, 0.20f, 0.17f)));
+		ItemStyle.SetTextColor(FLinearColor(0.9f, 0.94f, 0.93f));
+		ItemStyle.SetSelectedTextColor(FLinearColor::White);
+		ComboBox->SetItemStyle(ItemStyle);
 		ComboBox->SetContentPadding(FMargin(10.0f, 6.0f));
 		ComboBox->SetMaxListHeight(280.0f);
 		Parent->AddChild(ComboBox);
@@ -457,7 +480,7 @@ namespace CatFrontendWidgetAuthoring
 	/** 为子页面提供铺满设计画布的透明深色表面和固定安全边距；只有 Root 拥有缩放盒，页面内部使用可分配空间。 */
 	UVerticalBox* CreatePageColumn(UWidgetBlueprint* WidgetBlueprint, const TCHAR* PageRootName)
 	{
-		// 页面布局流程：验证 Canvas 根后创建满幅表面与填充内容列，保留 64px 水平及 48px 垂直安全边距；不再用最小期望尺寸驱动第二次缩放。
+		// 页面布局流程：验证 Canvas 根后创建满幅表面与填充内容列，由 64px 水平及 48px 垂直安全边距决定页面内部可用空间。
 		if (!WidgetBlueprint || !WidgetBlueprint->WidgetTree)
 		{
 			return nullptr;
@@ -966,11 +989,11 @@ namespace CatFrontendWidgetAuthoring
 		return true;
 	}
 
-	/** 构造进入游戏专用 Loading 遮罩；资产只提供进度 View 控件，阶段和地图包百分比由 LocalPlayer UI 从 Online 快照写入。 */
-	bool BuildGameplayLoadingWidget(UWidgetBlueprint* WidgetBlueprint)
+	/** 构造全局 Loading 遮罩的真实状态展示位；资产只提供 View 控件，阶段和地图包百分比由 LocalPlayer UI 从 Online 快照写入。 */
+	bool BuildLoadingWidget(UWidgetBlueprint* WidgetBlueprint)
 	{
-		// 进图加载布局流程：检查页面根，保留上方标题和背景空间，再把阶段文本、提示与细条形控件排列在底部；初始值只是占位，运行时以 Online 快照为准。
-		// 条形控件默认确定进度，只在 Start 资产里存在；回主菜单等待使用另一份 WBP，避免退出流程继承进图百分比合同。
+		// 加载遮罩布局流程：检查页面根，保留上方标题和背景空间，再把阶段文本、提示与细条形控件排列在底部；初始值只是占位，运行时以 Online 快照为准。
+		// 条形控件默认确定进度，由 LocalPlayer UI 在 Online 没有真实包百分比时才切成 marquee；资产本身不创建计时器、不伪造百分比。
 		UVerticalBox* Column = CreatePageColumn(WidgetBlueprint, TEXT("LoadingRoot"));
 		if (!Column)
 		{
@@ -982,7 +1005,7 @@ namespace CatFrontendWidgetAuthoring
 		Column->AddChild(Space);
 		SetBoxSlot(Space, true);
 		AddText(Tree, Column, TEXT("LoadingDayTextBlock"), TEXT("正在切换世界"));
-		AddText(Tree, Column, TEXT("LoadingSacrificeProgressTextBlock"), TEXT("请稍候"));
+		AddText(Tree, Column, TEXT("LoadingDetailTextBlock"), TEXT("请稍候"));
 		AddText(Tree, Column, TEXT("LoadingHintText"), TEXT("旅程即将开始"), 16);
 		AddText(Tree, Column, TEXT("LoadingProgressTextBlock"), TEXT("正在加载。"));
 		USizeBox* ProgressBounds = Tree->ConstructWidget<USizeBox>(USizeBox::StaticClass(), TEXT("LoadingProgressBounds"));
@@ -999,36 +1022,6 @@ namespace CatFrontendWidgetAuthoring
 		Column->AddChild(ProgressBounds);
 		SetBoxSlot(ProgressBounds, false, FMargin(0.0f, 12.0f, 0.0f, 8.0f));
 		ExposeWidget(WidgetBlueprint, ProgressBar);
-		return true;
-	}
-
-	/** 构造回主菜单专用等待遮罩；资产提供文字状态和忙碌指示，真实阶段仍由 LocalPlayer UI 从 Leave 快照写入。 */
-	bool BuildReturnToMainMenuLoadingWidget(UWidgetBlueprint* WidgetBlueprint)
-	{
-		// 回主菜单等待布局流程：检查页面根并建立独立的退出等待视觉；只暴露通用状态文本和忙碌指示，不创建进度条或百分比控件。
-		// 这个 WBP 后续可在 Designer 内替换为旋转动画，C++ 仍只负责写真实保存、拆局、销毁会话、切图和主菜单 UI 装配状态。
-		UVerticalBox* Column = CreatePageColumn(WidgetBlueprint, TEXT("ReturnToMainMenuLoadingRoot"));
-		if (!Column)
-		{
-			return false;
-		}
-		UWidgetTree* Tree = WidgetBlueprint->WidgetTree;
-		AddText(Tree, Column, TEXT("LoadingTitleText"), TEXT("正在返回主菜单"), 30);
-		USpacer* Space = Tree->ConstructWidget<USpacer>(USpacer::StaticClass(), TEXT("ReturnLoadingOpenSpace"));
-		Column->AddChild(Space);
-		SetBoxSlot(Space, true);
-		AddText(Tree, Column, TEXT("LoadingDayTextBlock"), TEXT("正在返回主菜单"));
-		AddText(Tree, Column, TEXT("LoadingSacrificeProgressTextBlock"), TEXT("正在保存并关闭当前房间"));
-		UThrobber* BusyIndicator = Tree->ConstructWidget<UThrobber>(UThrobber::StaticClass(), TEXT("ReturnLoadingBusyIndicator"));
-		if (!BusyIndicator)
-		{
-			return false;
-		}
-		Column->AddChild(BusyIndicator);
-		SetBoxSlot(BusyIndicator, false, FMargin(0.0f, 18.0f, 0.0f, 18.0f));
-		ExposeWidget(WidgetBlueprint, BusyIndicator);
-		AddText(Tree, Column, TEXT("LoadingHintText"), TEXT("等待真实退出流程完成"), 16);
-		AddText(Tree, Column, TEXT("LoadingProgressTextBlock"), TEXT("正在返回主菜单。"));
 		return true;
 	}
 
@@ -1208,10 +1201,10 @@ namespace CatFrontendWidgetAuthoring
 		return true;
 	}
 
-	/** 同步 WBP 当前源控件的变量 GUID 表；重建资产会替换整棵 WidgetTree，这一步负责移除旧树残留并补齐新树控件。 */
+	/** 同步 WBP 当前源控件的变量 GUID 表；重建资产会替换整棵 WidgetTree，这一步负责移除不存在的控件登记并补齐新树控件。 */
 	void SyncWidgetVariableGuids(UWidgetBlueprint* WidgetBlueprint)
 	{
-		// GUID 同步流程：收集当前 WidgetTree 下的源控件名，移除不再存在的旧名，再为缺少 GUID 的当前控件补登记，保证 UE 编译器不会在修复阶段报残留或缺项。
+		// GUID 同步流程：收集当前 WidgetTree 下的源控件名，移除未出现在当前树里的登记，再为缺少 GUID 的当前控件补登记。
 		if (!WidgetBlueprint)
 		{
 			return;
@@ -1230,7 +1223,7 @@ namespace CatFrontendWidgetAuthoring
 				It.RemoveCurrent();
 			}
 		}
-		// UE 编译器在 GUID 表非空时检查全部源控件，包括非变量布局容器；只同步当前 WidgetTree，避免重建资产时把旧树残留带进编译。
+		// UE 编译器在 GUID 表非空时检查全部源控件，包括非变量布局容器；只同步当前 WidgetTree，避免重建资产时把不存在的源控件带进编译。
 		for (const FName WidgetName : SourceWidgetNames)
 		{
 			if (!WidgetBlueprint->WidgetVariableNameToGuidMap.Contains(WidgetName))
@@ -1292,11 +1285,11 @@ namespace CatFrontendWidgetAuthoring
 		return true;
 	}
 
-	/** 重建指定目录中的单个正式 WBP；当前只用于局内菜单资产升级，避免旧三按钮布局继续通过“已存在”分支残留。 */
+	/** 重建指定目录中的单个正式 WBP；当前用于局内菜单资产升级和合同重刷。 */
 	bool RebuildWidgetInDirectory(const FString& Directory, const TCHAR* AssetName, TSubclassOf<UUserWidget> ParentClass,
 		TSubclassOf<UWidget> RootWidgetClass, const TCHAR* AuthoringTag, TFunctionRef<bool(UWidgetBlueprint*)> BuildWidget)
 	{
-		// WBP 重建流程：缺失时沿用创建路径；存在时确认父类合同，先清掉旧控件变量 GUID，再换入新的 WidgetTree 根并重新构造、编译和保存，不影响其它 Frontend 页面资产。
+		// WBP 重建流程：缺失时沿用创建路径；存在时确认父类合同，先同步当前控件的变量 GUID，再换入新的 WidgetTree 根并重新构造、编译和保存。
 		const FString PackageName = FString::Printf(TEXT("%s/%s"), *Directory, AssetName);
 		const FString ObjectPath = FString::Printf(TEXT("%s.%s"), *PackageName, AssetName);
 		UWidgetBlueprint* WidgetBlueprint = LoadObject<UWidgetBlueprint>(nullptr, *ObjectPath);
@@ -1341,7 +1334,7 @@ namespace CatFrontendWidgetAuthoring
 	bool CreateMissingWidget(const TCHAR* AssetName, TSubclassOf<UUserWidget> ParentClass, TSubclassOf<UWidget> RootWidgetClass,
 		TFunctionRef<bool(UWidgetBlueprint*)> BuildWidget)
 	{
-		// 前端 WBP 创建流程：固定使用 Frontend 资产目录和作者标签，确保正式资产集合的包路径不因局内菜单作者入口而变化。
+		// 前端 WBP 创建流程：固定使用 Frontend 资产目录和作者标签，确保九个正式资产的包路径不因局内菜单作者入口而变化。
 		return CreateMissingWidgetInDirectory(WidgetDirectory, AssetName, ParentClass, RootWidgetClass,
 			TEXT("CatFrontendWidgetAuthoring"), BuildWidget);
 	}
@@ -1372,10 +1365,10 @@ namespace CatFrontendWidgetAuthoring
 		return true;
 	}
 
-	/** 修复十个正式 Frontend WBP 的中文字体引用；列表与创建入口保持一致，避免漏掉两类 Loading 和动态行控件。 */
+	/** 修复九个正式 Frontend WBP 的中文字体引用；列表与创建入口保持一致，避免漏掉动态行控件。 */
 	bool RepairFrontendWidgetFonts()
 	{
-		// 批量字体修复流程：先确认中文 Font 资产可加载，再逐一修复 Root、业务页面、两类 Loading 和动态行 WBP；任一失败都会阻止脚本报成功。
+		// 批量字体修复流程：先确认中文 Font 资产可加载，再逐一修复 Root、页面和动态行 WBP；任一失败都会阻止脚本报成功。
 		if (!LoadFrontendChineseFont())
 		{
 			return false;
@@ -1385,8 +1378,7 @@ namespace CatFrontendWidgetAuthoring
 			TEXT("WBP_CatFrontendSaveList"),
 			TEXT("WBP_CatFrontendRoom"),
 			TEXT("WBP_CatFrontendSettings"),
-			TEXT("WBP_CatGameplayLoading"),
-			TEXT("WBP_CatReturnToMainMenuLoading"),
+			TEXT("WBP_CatFrontendLoading"),
 			TEXT("WBP_CatSaveSlotRow"),
 			TEXT("WBP_CatRoomFriendRow"),
 			TEXT("WBP_CatRoomPlayerSlot"),
@@ -1424,10 +1416,10 @@ namespace CatFrontendWidgetAuthoring
 		return bAllFontsValid;
 	}
 
-	/** 核验十个正式 Frontend WBP 的文本字体对象；它与修复列表同源，防止两类 Loading 或新行 WBP 被遗漏。 */
+	/** 核验九个正式 Frontend WBP 的文本字体对象；它与修复列表同源，防止新行 WBP 被遗漏。 */
 	bool ValidateFrontendWidgetFonts()
 	{
-		// 批量字体核验流程：先加载正式中文 Font，再逐一只读检查 Root、业务页面、两类 Loading 和动态行 WBP；任一字体不匹配都会让脚本失败。
+		// 批量字体核验流程：先加载正式中文 Font，再逐一只读检查 Root、页面和动态行 WBP；任一字体不匹配都会让脚本失败。
 		const UObject* ExpectedFont = LoadFrontendChineseFont();
 		if (!ExpectedFont)
 		{
@@ -1438,8 +1430,7 @@ namespace CatFrontendWidgetAuthoring
 			TEXT("WBP_CatFrontendSaveList"),
 			TEXT("WBP_CatFrontendRoom"),
 			TEXT("WBP_CatFrontendSettings"),
-			TEXT("WBP_CatGameplayLoading"),
-			TEXT("WBP_CatReturnToMainMenuLoading"),
+			TEXT("WBP_CatFrontendLoading"),
 			TEXT("WBP_CatSaveSlotRow"),
 			TEXT("WBP_CatRoomFriendRow"),
 			TEXT("WBP_CatRoomPlayerSlot"),
@@ -1516,10 +1507,10 @@ namespace CatFrontendWidgetAuthoring
 		return true;
 	}
 
-	/** 核验一个已创建前端 WBP 的核心控件合同；固定读取 Frontend 目录，保持 Root、业务页、两类 Loading 与动态行的资产入口一致。 */
+	/** 核验一个已创建前端 WBP 的核心控件合同；固定读取 Frontend 目录，保持既有九资产合同入口不变。 */
 	bool ValidateWidgetContract(const TCHAR* AssetName, TConstArrayView<FRequiredWidgetControl> RequiredControls)
 	{
-		// 前端 WBP 合同核验流程：把旧调用继续限定在 Frontend 目录，不因局内菜单新增而改变已有资产查找路径。
+		// 前端 WBP 合同核验流程：保持 Frontend 目录的合同核验，不因局内菜单新增而改变已有资产查找路径。
 		return ValidateWidgetContractInDirectory(WidgetDirectory, AssetName, RequiredControls);
 	}
 
@@ -1539,7 +1530,7 @@ namespace CatFrontendWidgetAuthoring
 		return true;
 	}
 
-	/** 核验一个 Frontend 目录下 WBP 的原生父类合同；动态列表行继续走旧目录和旧事件口径。 */
+	/** 核验一个 Frontend 目录下 WBP 的原生父类合同；动态列表行继续走 Frontend 目录和当前事件口径。 */
 	bool ValidateWidgetParent(const TCHAR* AssetName, UClass* RequiredParentClass)
 	{
 		// 前端父类合同核验流程：固定使用 Frontend 目录，确保列表行和 Root 的原生类型检查不被局内菜单路径影响。
@@ -1601,10 +1592,10 @@ namespace CatFrontendWidgetAuthoring
 				LakeMenuControls);
 	}
 
-	/** 核验十个正式 WBP 的 Root、两类全局 Loading 与子树接线点；它证明对象树可供原生代码解析，但不替代 Editor 中的运行期交互验收。 */
+	/** 核验九个正式 WBP 的 Root、全局 Loading 与子树接线点；它证明对象树可供原生代码解析，但不替代 Editor 中的运行期交互验收。 */
 	bool ValidateFrontendWidgetContracts()
 	{
-		// 整体合同核验流程：逐页检查具名控件的类型和变量标记，再检查 Root、进图 Loading、回主菜单 Loading 与三类行的原生父类；全部满足才报告成功。
+		// 整体合同核验流程：逐页检查具名控件的类型和变量标记，再检查 Root、全局 Loading 与三类行的原生父类；设置包含真实输入、设备刷新、语音禁用下拉框及原因文本，全部满足才报告成功。
 		const FRequiredWidgetControl RootControls[] = {
 			{ TEXT("FrontendPageSwitcher"), UWidgetSwitcher::StaticClass() },
 			{ TEXT("MenuPage"), UUserWidget::StaticClass() },
@@ -1650,19 +1641,10 @@ namespace CatFrontendWidgetAuthoring
 			{ TEXT("StartRoomGameButton"), UButton::StaticClass() },
 			{ TEXT("CopyInviteCodeButton"), UButton::StaticClass() }
 		};
-		const FRequiredWidgetControl GameplayLoadingControls[] = {
-			{ TEXT("LoadingDayTextBlock"), UTextBlock::StaticClass() },
-			{ TEXT("LoadingSacrificeProgressTextBlock"), UTextBlock::StaticClass() },
+		const FRequiredWidgetControl LoadingControls[] = {
 			{ TEXT("LoadingProgressTextBlock"), UTextBlock::StaticClass() },
 			{ TEXT("LoadingHintText"), UTextBlock::StaticClass() },
 			{ TEXT("LoadingProgressBar"), UProgressBar::StaticClass() }
-		};
-		const FRequiredWidgetControl ReturnToMainMenuLoadingControls[] = {
-			{ TEXT("LoadingDayTextBlock"), UTextBlock::StaticClass() },
-			{ TEXT("LoadingSacrificeProgressTextBlock"), UTextBlock::StaticClass() },
-			{ TEXT("LoadingProgressTextBlock"), UTextBlock::StaticClass() },
-			{ TEXT("LoadingHintText"), UTextBlock::StaticClass() },
-			{ TEXT("ReturnLoadingBusyIndicator"), UThrobber::StaticClass() }
 		};
 		const FRequiredWidgetControl ExpandedSettingsControls[] = {
 			{ TEXT("SettingsDescriptionTextBlock"), UTextBlock::StaticClass() },
@@ -1710,8 +1692,7 @@ namespace CatFrontendWidgetAuthoring
 			&& ValidateWidgetContract(TEXT("WBP_CatFrontendRoom"), RoomControls)
 			&& ValidateWidgetContract(TEXT("WBP_CatFrontendSettings"), SettingsControls)
 			&& ValidateWidgetContract(TEXT("WBP_CatFrontendSettings"), ExpandedSettingsControls)
-			&& ValidateWidgetContract(TEXT("WBP_CatGameplayLoading"), GameplayLoadingControls)
-			&& ValidateWidgetContract(TEXT("WBP_CatReturnToMainMenuLoading"), ReturnToMainMenuLoadingControls)
+			&& ValidateWidgetContract(TEXT("WBP_CatFrontendLoading"), LoadingControls)
 			&& ValidateWidgetParent(TEXT("WBP_CatSaveSlotRow"), UCatFrontendSaveSlotRowWidget::StaticClass())
 			&& ValidateWidgetContract(TEXT("WBP_CatSaveSlotRow"), SaveRowControls)
 			&& ValidateWidgetParent(TEXT("WBP_CatRoomFriendRow"), UCatFrontendRoomFriendRowWidget::StaticClass())
@@ -1723,7 +1704,7 @@ namespace CatFrontendWidgetAuthoring
 
 bool UCatFrontendWidgetAuthoringLibrary::CreateMissingFrontendWidgetBlueprints()
 {
-	// 前端 WBP 创建流程：先补齐普通业务子资产，再重建进图 Loading、回主菜单 Loading 和 Root，确保两类全局遮罩不再复用同一份资产；最后修复文本字体并核验全部合同。
+	// 前端 WBP 创建流程：先补齐普通业务子资产，再重建全局 Loading 和 Root，确保 Root 只挂独立 Loading 页面合同；最后修复文本字体并核验全部合同。
 	using namespace CatFrontendWidgetAuthoring;
 	const bool bCreated = CreateMissingWidget(TEXT("WBP_CatFrontendMenu"), UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), BuildMenuWidget)
 		&& CreateMissingWidget(TEXT("WBP_CatFrontendSaveList"), UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), BuildSaveListWidget)
@@ -1732,10 +1713,8 @@ bool UCatFrontendWidgetAuthoringLibrary::CreateMissingFrontendWidgetBlueprints()
 		&& CreateMissingWidget(TEXT("WBP_CatSaveSlotRow"), UCatFrontendSaveSlotRowWidget::StaticClass(), USizeBox::StaticClass(), BuildSaveSlotRowWidget)
 		&& CreateMissingWidget(TEXT("WBP_CatRoomFriendRow"), UCatFrontendRoomFriendRowWidget::StaticClass(), USizeBox::StaticClass(), BuildRoomFriendRowWidget)
 		&& CreateMissingWidget(TEXT("WBP_CatRoomPlayerSlot"), UCatFrontendRoomPlayerSlotWidget::StaticClass(), USizeBox::StaticClass(), BuildRoomPlayerSlotWidget)
-		&& RebuildWidgetInDirectory(WidgetDirectory, TEXT("WBP_CatGameplayLoading"),
-			UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), TEXT("CatGameplayLoadingAuthoring"), BuildGameplayLoadingWidget)
-		&& RebuildWidgetInDirectory(WidgetDirectory, TEXT("WBP_CatReturnToMainMenuLoading"),
-			UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), TEXT("CatReturnToMainMenuLoadingAuthoring"), BuildReturnToMainMenuLoadingWidget)
+		&& RebuildWidgetInDirectory(WidgetDirectory, TEXT("WBP_CatFrontendLoading"),
+			UUserWidget::StaticClass(), UCanvasPanel::StaticClass(), TEXT("CatFrontendWidgetAuthoring"), BuildLoadingWidget)
 		&& RebuildWidgetInDirectory(WidgetDirectory, TEXT("WBP_CatFrontendRoot"),
 			UCatFrontendRootWidget::StaticClass(), UCanvasPanel::StaticClass(), TEXT("CatFrontendWidgetAuthoring"), BuildRootWidget);
 	return bCreated && RepairFrontendWidgetFonts() && ValidateFrontendWidgetContracts();
@@ -1743,7 +1722,7 @@ bool UCatFrontendWidgetAuthoringLibrary::CreateMissingFrontendWidgetBlueprints()
 
 bool UCatFrontendWidgetAuthoringLibrary::CreateMissingLakeMainMenuWidgetBlueprint()
 {
-	// 局内菜单 WBP 创建流程：固定在 /Game/UI/Save 下创建或重建正式菜单资产，升级旧三按钮布局并立即核验全部控件合同。
+	// 局内菜单 WBP 创建流程：固定在 /Game/UI/Save 下创建或重建正式菜单资产，并立即核验全部控件合同。
 	using namespace CatFrontendWidgetAuthoring;
 	const bool bCreated = RebuildWidgetInDirectory(LakeMenuWidgetDirectory, TEXT("WBP_CatLakeMainMenu"),
 		UCatLakeMainMenuWidget::StaticClass(), UCanvasPanel::StaticClass(), TEXT("CatLakeMainMenuWidgetAuthoring"),
@@ -1753,19 +1732,19 @@ bool UCatFrontendWidgetAuthoringLibrary::CreateMissingLakeMainMenuWidgetBlueprin
 
 bool UCatFrontendWidgetAuthoringLibrary::RepairFrontendWidgetBlueprintFonts()
 {
-	// 公开字体修复入口流程：复用命名空间内的十个 Frontend WBP 批处理，专门给已生成 WBP 或人工调整后重新落中文字体使用。
+	// 公开字体修复入口流程：复用命名空间内的九资产批处理，专门给已生成 WBP 或人工调整后重新落中文字体使用。
 	return CatFrontendWidgetAuthoring::RepairFrontendWidgetFonts();
 }
 
 bool UCatFrontendWidgetAuthoringLibrary::ValidateFrontendWidgetBlueprintFonts()
 {
-	// 公开字体核验入口流程：只读复核十个正式 WBP 的文本字体对象，让资产脚本能在中文缺字回归时直接失败。
+	// 公开字体核验入口流程：只读复核九个正式 WBP 的文本字体对象，让资产脚本能在中文缺字回归时直接失败。
 	return CatFrontendWidgetAuthoring::ValidateFrontendWidgetFonts();
 }
 
 bool UCatFrontendWidgetAuthoringLibrary::CreateMissingFrontendAudioSettingsAssets()
 {
-	// 音频设置资产创建流程：先拒绝部分残留集，再新建 Master、四个子分类和 SoundMix，连接子分类后逐包保存；运行时音量覆写仍由 Settings Model 负责。
+	// 音频设置资产创建流程：先拒绝资源集合不完整的状态，再新建 Master、四个子分类和 SoundMix，连接子分类后逐包保存；运行时音量覆写仍由 Settings Model 负责。
 	using namespace CatFrontendWidgetAuthoring;
 	bool bAlreadyComplete = false;
 	if (!HasCompleteOrEmptyAudioAssetSet(bAlreadyComplete))

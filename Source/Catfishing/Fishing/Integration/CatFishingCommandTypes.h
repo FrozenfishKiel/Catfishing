@@ -14,7 +14,7 @@ enum class ECatFishingCommandType : uint8
 	SlackPressed, SlackReleased,
 	/** Q 打窝蓄力按下 / 松开；服务器按按住时长换算蓄力并投放。 */
 	ChumPressed, ChumReleased,
-	/** 主动切断当前上钩会话的鱼线；与自然断线及普通取消分别结算。 */
+	/** 主动切断当前上钩会话的鱼线；与鱼竿断裂及普通取消分别结算。 */
 	CutLine
 };
 
@@ -27,7 +27,6 @@ enum class ECatFishingCommandError : uint8
 	RevisionConflict, CastAttemptConflict, InputSequenceStale, InputSequenceGapTooLarge, InvalidPhase,
 	WindowClosed, AlreadyResolved, NotNearShore, StaleScoopTarget, ScoopGeometryFailed, CooldownActive,
 	GuardCapacityExceeded, CaptureAlreadyCommitted,
-	/** 本人场上实体竿已达到部署上限；独立于当前是否有钓鱼会话。 */
 	RodDeploymentLimitReached
 };
 
@@ -60,10 +59,8 @@ struct FCatPlaceRodCommand
 
 	/** 本次放竿意图的幂等键；服务端用它串联库存借出、鱼竿生成和失败回滚。 */
 	UPROPERTY(BlueprintReadWrite) FGuid RequestId;
-	/** 放竿命令发起时观察到的钓具选择投影版本；它和正式库存版本不是替代关系，只保护当前选中的竿、皮肤等装备视图。 */
+	/** 放竿命令发起时观察到的钓具选择投影版本；它只保护当前选中的竿、皮肤等装备视图。 */
 	UPROPERTY(BlueprintReadWrite) int64 ExpectedEquipmentRevision = 0;
-	/** 新输入分派在提交放竿时写入的正式随身库存版本；PlaceRod 用它判断鱼竿实例离开背包前，背包是否仍是同一份事实。0 表示旧调用方未提供该版本，只跳过库存版本校验，不代表当前库存版本为 0。 */
-	UPROPERTY(BlueprintReadWrite) int64 ExpectedInventoryRevision = 0;
 };
 
 USTRUCT(BlueprintType)
@@ -159,9 +156,7 @@ struct FCatFishingCommandResult
 	UPROPERTY(BlueprintReadOnly) FGuid CastAttemptId;
 	UPROPERTY(BlueprintReadOnly) FGuid RodActorId;
 	UPROPERTY(BlueprintReadOnly) int64 RodActorRevision = 0;
-	/** 涉及正式库存事务的命令完成后，服务器看到的背包内容版本；旧命令可保持 0，不参与钓鱼会话或鱼竿 Actor 并发。 */
-	UPROPERTY(BlueprintReadOnly) int64 InventoryRevision = 0;
-	/** 钓具选择或旧库存投影的版本；迁移期仍供旧监听者读取，但不能当作正式库存内容版本。 */
+	/** 钓具选择投影的版本；它只保护当前选中的鱼竿、鱼漂等装备视图，不能当作随身库存内容版本。 */
 	UPROPERTY(BlueprintReadOnly) int64 EquipmentRevision = 0;
 	UPROPERTY(BlueprintReadOnly) FGuid SuggestedFishingSessionId;
 };
@@ -177,4 +172,3 @@ struct FCatBeginCastResult
 };
 
 ECatFishingCommandError MapDomainCommandError(ECatDomainCommandError Error);
-FCatFishingSessionCommandContext MakeFishingSessionCommandContext(FGuid FishingSessionId, const FCatScoopCommand& LegacyCommand);

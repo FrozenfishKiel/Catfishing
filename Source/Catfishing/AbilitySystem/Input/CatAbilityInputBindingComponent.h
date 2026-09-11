@@ -9,8 +9,9 @@ class APawn;
 class UCatAbilityInputConfig;
 class UCatAbilitySystemComponent;
 class UEnhancedInputComponent;
+class UCatPhysicsGrabComponent;
 
-/** Ability 输入绑定组件；把 Enhanced Input 的 Ability Tag 边沿集中送入当前 Pawn ASC，Controller 只负责把输入组件和 Pawn 生命周期交给它。 */
+/** Enhanced Input 路由：非主控的左右键控制抓握，主控及其他标签进入 ASC；每次按下锁定接收方。 */
 UCLASS(ClassGroup=(Catfishing))
 class CATFISHING_API UCatAbilityInputBindingComponent : public UActorComponent
 {
@@ -23,7 +24,7 @@ public:
 	/** 在指定 EnhancedInputComponent 上绑定 Ability 输入标签；重复传入同一组件时保持幂等，配置缺失时不安装半套输入。 */
 	void BindAbilityActions(UEnhancedInputComponent& InputComponent, const UCatAbilityInputConfig* InputConfig);
 
-	/** Pawn 变化时切换当前 ASC 输入目标；旧 ASC 和新 ASC 都会清空边沿状态，避免按住输入穿过重生或旅行。 */
+	/** Pawn 变化先松开旧接收方，再切换 ASC 与身体；重复刷新同一 Pawn 不打断按住动作。 */
 	void RefreshForPawn(APawn* Pawn);
 
 	/** 消费当前 ASC 的本帧 Ability 输入；暂停时具体保留或丢弃策略仍由 ASC 自己决定。 */
@@ -32,12 +33,26 @@ public:
 	/** 清空当前路由 ASC 的输入状态并忘记 ASC；输入组件绑定记录保留到组件销毁，防止占有重入重复绑定。 */
 	void ResetAbilityInput();
 
+	/** 松开按下时锁定的接收方；菜单、失焦和换 Pawn 共用，不修改物理速度。 */
+	void ReleaseAllInputRoutes(FName Reason);
+
 private:
-	/** Ability 按下标签回调；只转交当前 ASC，不在组件里解释具体技能或领域命令。 */
+	friend class FCatPhysicalInputRouteTest;
+	struct FPressedRoute
+	{
+		TWeakObjectPtr<UCatAbilitySystemComponent> AbilitySystem;
+		TWeakObjectPtr<UCatPhysicsGrabComponent> Grab;
+		bool bLeft = false;
+	};
+	TMap<FGameplayTag, FPressedRoute> PressedRoutes;
+	TWeakObjectPtr<APawn> RoutedPawn;
+	/** 按当前鱼竿主控事实选择 Grab/ASC，只在按下边沿选择一次。 */
 	void HandleAbilityInputTagPressed(FGameplayTag InputTag);
 
-	/** Ability 释放标签回调；只转交当前 ASC，由 ASC 决定持续激活 Ability 的释放事件。 */
+	/** 释放始终交给按下时的接收方，操作位变化、离竿或取消不会吞掉原抓握释放。 */
 	void HandleAbilityInputTagReleased(FGameplayTag InputTag);
+	/** Mapping Context 取消不是玩家主动松键；终止按住动作，避免取消瞄准被解释成抛钩。 */
+	void HandleAbilityInputTagCanceled(FGameplayTag InputTag);
 
 	/** 当前接收 Ability 输入边沿的 ASC；Refresh/Reset 独占读写，防止 Controller 再保存第二份路由状态。 */
 	UPROPERTY(Transient)
