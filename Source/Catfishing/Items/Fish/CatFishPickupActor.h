@@ -25,7 +25,7 @@ enum class ECatFishPickupState : uint8
 	Carried
 };
 
-/** 所有客户端可见的可携带世界鱼只读状态；StableNetId、候选参与者和容器 Revision 永不复制。 */
+/** 所有客户端可见的可携带世界鱼只读状态；归属只以服务器解析后的 PlayerState 出网，StableNetId、候选参与者和容器 Revision 永不复制。 */
 USTRUCT(BlueprintType)
 struct FCatFishPickupPresentationState
 {
@@ -42,6 +42,8 @@ struct FCatFishPickupPresentationState
 	UPROPERTY(BlueprintReadOnly) FVector GroundNormal = FVector::UpVector;
 	UPROPERTY(BlueprintReadOnly) ECatFishPickupState State = ECatFishPickupState::Available;
 	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> CarriedByPlayerState = nullptr;
+	/** 这条实物鱼已归档的捕获者；服务器把私有 OwnerStableNetId 现场解析成可复制 PlayerState，表现层据此画主人色环。尚未归档或捕获者当前不在场时为空，身份字符串本身仍不出网。 */
+	UPROPERTY(BlueprintReadOnly) TObjectPtr<APlayerState> OwnerPlayerState = nullptr;
 };
 
 /**
@@ -154,6 +156,8 @@ private:
 	/** Carried 状态清除落地专用 Mesh 位置和旋转，使鱼原点直接对齐嘴部骨骼，同时保留冻结重量缩放。 */
 	void ApplyCarriedVisualTransform();
 	void ApplyVisualScale();
+	/** 把实物鱼实例记的服务器私有捕获者身份现场解析成可复制 PlayerState 并发布归属；只写表现状态，不改实例归属，也不把 StableNetId 送出网。 */
+	void PublishOwnerPresentationFromAuthority(const FString& InOwnerStableNetId);
 	/** 首次消费或入护后归档捕获并提交图鉴候选；已归档的库存鱼再次落地不重复生成奖励。 */
 	void ArchiveCommittedCapture(const FCatCaptureCommittedResult& Committed, const FString& PickerStableNetId);
 

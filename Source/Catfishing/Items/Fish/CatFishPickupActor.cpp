@@ -15,6 +15,7 @@
 #include "Framework/Game/CatGameplayTypes.h"
 #include "Framework/Game/CatfishingGameState.h"
 #include "GameFramework/Pawn.h"
+#include "GameFramework/PlayerController.h"
 #include "GameFramework/PlayerState.h"
 #include "Interaction/CatInteractionSettings.h"
 #include "FishContainers/CatFishPickupSettings.h"
@@ -822,6 +823,8 @@ FCatCaptureCommitResult ACatFishPickupActor::StoreInFishGuardFromAuthority(ACont
 	SetActorHiddenInGame(true);
 	InventoryItem = FishItemInstance;
 	FishItemInstance->SetWorldActor(this);
+	// 入护提交这一刻这条鱼才有正式归属；按实例自己记下的捕获者发布色环身份，不用本次提交者覆盖既有实例的原主。
+	PublishOwnerPresentationFromAuthority(FishItemInstance->GetFishOwnerStableNetId());
 	// 入护提交后 Actor 是静态保管载体而非消费终态；允许同一实例后续从库存重新叼起。
 	bConsumptionCommitted = false;
 	TargetInventory->BroadcastInventoryChange();
@@ -843,6 +846,7 @@ bool ACatFishPickupActor::InitializeFromInventoryFromAuthority(UCatInventoryItem
 		InventoryItem = FishItem;
 		InventoryItem->SetWorldActor(this);
 		InventoryItem->SetRuntimeOwnerActor(this);
+		PublishOwnerPresentationFromAuthority(FishItem->GetFishOwnerStableNetId());
 		return FishItem->GetItemInstanceId() == PresentationState.FishInstanceId;
 	}
 	bCaptureRecorded = true;
@@ -856,6 +860,7 @@ bool ACatFishPickupActor::InitializeFromInventoryFromAuthority(UCatInventoryItem
 	InventoryItem = FishItem;
 	InventoryItem->SetWorldActor(this);
 	InventoryItem->SetRuntimeOwnerActor(this);
+	PublishOwnerPresentationFromAuthority(FishItem->GetFishOwnerStableNetId());
 	return true;
 }
 
@@ -874,6 +879,7 @@ bool ACatFishPickupActor::InitializeFromInventoryForCarryFromAuthority(UCatFishI
 		return false;
 	}
 	InventoryItem = Item;
+	PublishOwnerPresentationFromAuthority(Item->GetFishOwnerStableNetId());
 	return true;
 }
 
@@ -1072,6 +1078,37 @@ bool ACatFishPickupActor::Interact_Implementation(AController* RequestingControl
 	}
 	PickupTerminalByRequester.Add(CacheKey, Terminal);
 	return Terminal.bCommitted;
+}
+
+// 归属发布流程：只在服务器把实物鱼实例记的捕获者 StableNetId 现场解析成同 World 的 PlayerState，再写进复制表现供表现层画主人色环。
+// 身份字符串仍留在服务器；尚未归档、捕获者已离场或重连换了 PlayerState 时发布空归属，等下一次入护/落地/取回重新解析，不在这里缓存身份字符串。
+// 只写表现字段，不新建也不改写实例归属；空归属与有归属都按同一条复制路径通知蓝图。
+void ACatFishPickupActor::PublishOwnerPresentationFromAuthority(const FString& InOwnerStableNetId)
+{
+	const UWorld* World = GetWorld();
+	if (!HasAuthority() || !World) return;
+	APlayerState* ResolvedOwner = nullptr;
+	if (!InOwnerStableNetId.IsEmpty())
+	{
+		for (FConstPlayerControllerIterator It = World->GetPlayerControllerIterator(); It; ++It)
+		{
+			APlayerController* Controller = It->Get();
+			APlayerState* CandidatePlayerState = Controller ? Controller->PlayerState : nullptr;
+			if (CandidatePlayerState && CandidatePlayerState->GetUniqueId().IsValid()
+				&& CandidatePlayerState->GetUniqueId()->ToString() == InOwnerStableNetId)
+			{
+				ResolvedOwner = CandidatePlayerState;
+				break;
+			}
+		}
+	}
+	if (PresentationState.OwnerPlayerState == ResolvedOwner) return;
+	PresentationState.OwnerPlayerState = ResolvedOwner;
+	ForceNetUpdate();
+	UE_LOG(LogCatFishContainers, Log,
+		TEXT("Event=fish_pickup_owner_published FishInstanceId=%s Pickup=%s Owner=%s Resolved=%d World=%s NetMode=%d Authority=%d"),
+		*PresentationState.FishInstanceId.ToString(EGuidFormats::DigitsWithHyphens), *GetNameSafe(this),
+		*GetNameSafe(ResolvedOwner), ResolvedOwner != nullptr, *GetNameSafe(World), GetNetMode(), HasAuthority());
 }
 
 // 捕获归档流程：已入库的鱼直接跳过；新捕获先写 FishRecorded，再按现有配置提交可选印记候选与成像计划。
