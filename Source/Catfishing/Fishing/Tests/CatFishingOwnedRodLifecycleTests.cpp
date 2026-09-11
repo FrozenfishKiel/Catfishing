@@ -89,7 +89,7 @@ bool FCatFishingOwnedRodLifecycleTest::RunTest(const FString& Parameters)
 		ON_SCOPE_EXIT { Fishing->CloseCommandsAndTerminateAll(); };
 		GameMode->bRunCommandsOpen = true;
 		GameMode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
-		GameMode->RunPublicState.Phase.bFishingAllowed = true;
+		GameMode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
 
 		AActor* Ground = World->SpawnActor<AActor>();
 		UBoxComponent* GroundBox = NewObject<UBoxComponent>(Ground);

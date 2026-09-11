@@ -53,10 +53,12 @@ public:
 	void FlushDeferredOperatorRemovalsFromAuthority();
 
 	/**
-	 * Run 暂停钓鱼（白天结束、额度完成或进入夜晚）时终止当前会话、释放全部竿位并恢复角色移动。
+	 * Run 启动失败或进入结束阶段时终止当前会话、释放全部竿位并恢复角色移动；夜晚不调用。
 	 * 该入口不永久关闭 World 内的 FishingService，下一天仍可重新使用已部署鱼竿。
 	 */
 	void SuspendFishingAndReleaseOperators();
+	/** Run 更新新咬钩准入后刷新等待计时，不结束真咬窗口或搏斗、不释放竿位。 */
+	void RefreshBiteAvailabilityFromAuthority();
 
 	/** Host teardown 关闭入口并终止所有未结算会话。 */
 	void CloseCommandsAndTerminateAll();
@@ -117,6 +119,7 @@ public:
 	int32 GetDeployedRodCountForDiagnostics() const;
 
 private:
+	friend class FCatFishingBiteTimingWorldTest;
 	friend class FCatFishingPhysicalGripGraphTest;
 	friend class FCatFishingPhysicalCouplingTest;
 	friend class FCatFishingCMCStabilityTest;

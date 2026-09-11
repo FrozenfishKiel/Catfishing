@@ -32,7 +32,7 @@ bool FCatFishingRodEffortSnapshotLifecycleTest::RunTest(const FString& Parameter
 	FURL URL; URL.AddOption(TEXT("game=/Script/Catfishing.CatfishingGameModeBase"));
 	if (!World->SetGameMode(URL) || !Wrapper.BeginPlayInTestWorld()) return false;
 	auto* GameMode=World->GetAuthGameMode<ACatfishingGameModeBase>();
-	GameMode->bRunCommandsOpen=true; GameMode->RunPublicState.Phase.Phase=ECatRunPhase::DayActive; GameMode->RunPublicState.Phase.bFishingAllowed=true;
+	GameMode->bRunCommandsOpen=true; GameMode->RunPublicState.Phase.Phase=ECatRunPhase::DayActive; GameMode->RunPublicState.Phase.bNewFishingBitesAllowed=true;
 	auto* Floor=World->SpawnActor<AStaticMeshActor>();
 	Floor->GetStaticMeshComponent()->SetMobility(EComponentMobility::Movable);
 	Floor->GetStaticMeshComponent()->SetStaticMesh(LoadObject<UStaticMesh>(nullptr,TEXT("/Engine/BasicShapes/Cube.Cube")));

@@ -509,7 +509,7 @@ bool FCatFishingSlackAimNetworkTest::RunTest(const FString& Parameters)
 		{
 			Mode->bRunCommandsOpen = true;
 			Mode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
-			Mode->RunPublicState.Phase.bFishingAllowed = true;
+			Mode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
 		},
 		[](ACatFishingRodActor* Rod, APlayerState* Player)
 		{ return Rod->SetPrimaryOperatorFromAuthority(Player, Rod->GetPresentationState().RodActorRevision); }));

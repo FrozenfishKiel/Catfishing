@@ -11,6 +11,11 @@
 #include "Equipment/CatEquipmentSettings.h"
 #include "Fishing/Actors/CatFishingHookActor.h"
 #include "Fishing/CatFishingSession.h"
+#include "Fishing/CatFishingService.h"
+#include "Framework/Game/CatfishingGameModeBase.h"
+#include "Framework/Game/CatfishingGameState.h"
+#include "Fishing/CatFishingGameplayTags.h"
+#include "Components/StateTreeComponent.h"
 #include "Fishing/CatFishingSettings.h"
 #include "Fishing/Presentation/CatFishingPresentationSettings.h"
 #include "Fishing/Simulation/CatFishingBiteTimingModel.h"
@@ -32,6 +37,9 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		if (!Wrapper.CreateTestWorld(EWorldType::Game)) return false;
 		Wrapper.ForwardErrorMessages(this);
 		UWorld* World = Wrapper.GetTestWorld();
+		FURL URL;
+		URL.AddOption(TEXT("game=/Script/Catfishing.CatfishingGameModeBase"));
+		if (!TestTrue(TEXT("使用正式昼夜准入宿主"), World->SetGameMode(URL))) return false;
 		FCatWaterGeometryBuildInput WaterInput;
 		WaterInput.RegionId = TEXT("BiteTimingTestWater");
 		WaterInput.WaterPointVerticalToleranceCm = 100.0;
@@ -49,6 +57,11 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		if (!Region) return false;
 		FCatWaterRegionTestAccess::InjectBakedGeometry(*Region, Built.Cache);
 		if (!TestTrue(TEXT("水域注册并启动 World 生命周期"), Wrapper.BeginPlayInTestWorld())) return false;
+		auto* Mode = World->GetAuthGameMode<ACatfishingGameModeBase>();
+		Mode->bRunCommandsOpen = true;
+		Mode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
+		Mode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
+		auto* Fishing = World->GetSubsystem<UCatFishingService>();
 		UCatChumFieldSubsystem* Chum = World->GetSubsystem<UCatChumFieldSubsystem>();
 		if (!TestNotNull(TEXT("真实窝料子系统存在"), Chum)) return false;
 		const double StartTime = World->GetTimeSeconds();
@@ -103,6 +116,7 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		Session->AttemptSnapshot.WaterRegion = Built.Cache.Handle;
 		Session->AttemptSnapshot.ServerCorrectedLandingWorldPoint = FVector::ZeroVector;
 		Session->bPrepared = true;
+		Fishing->Sessions.Add(Session->Snapshot.FishingSessionId, Session);
 		Hook->InitializeAuthoritativeIdentity(Session->Snapshot.FishingSessionId, Session->Snapshot.CastAttemptId);
 		Hook->SetActorLocation(FVector(-2000, 0, 100)); // 飞行起点在窝外，必须读冻结落点。
 		if (!TestTrue(TEXT("真实抛竿飞行启动"), Hook->BeginAuthoritativeFlight(FVector::ZeroVector))) return false;
@@ -132,16 +146,59 @@ bool FCatFishingBiteTimingWorldTest::RunTest(const FString& Parameters)
 		TestEqual(TEXT("实际预警持续完整时段（帧量化容差）"), World->GetTimeSeconds() - ObservedWarningTime, 1.5, 0.04);
 		TestNull(TEXT("未提竿不提前创建鱼"), Session->GetSnapshot().FishEncounterActor.Get());
 		TestTrue(TEXT("未提竿不提前选鱼"), Session->GetSnapshot().FishDefinitionId.IsNone());
+		// 正式 Morning/Day/Dusk timer 在等待期间会刷新鱼情，必须捕获实际真咬时的环境。
+		const FCatEnvironmentSnapshot BiteEnvironment = World->GetGameState<ACatfishingGameState>()->GetRunPublicState().Environment;
+		TestTrue(TEXT("真咬发生于正式可用的白天鱼情"), BiteEnvironment.TimeOfDay != ECatEnvironmentTimeOfDay::Unknown);
+		Mode->RunPublicState.Phase.RunId = FGuid::NewGuid();
+		Mode->bRunStartupInProgress = true;
+		TestTrue(TEXT("正式 Run 入夜入口成功"), Mode->EnterRunPhaseFromStateTree(
+			ECatRunPhase::NormalNight, ECatRunTransitionReason::DayEnded).bApplied);
+		Mode->bRunStartupInProgress = false;
+		TestEqual(TEXT("入夜不打断已经成立的真咬窗口"), Session->GetSnapshot().Phase, ECatFishingPhase::TrueBiteWindow);
+		TestTrue(TEXT("入夜保留既有提竿响应计时"), World->GetTimerManager().IsTimerActive(Session->TrueBiteTimerHandle));
+		TestEqual(TEXT("入夜后世界鱼情已没有白天时段"), World->GetGameState<ACatfishingGameState>()->GetRunPublicState().Environment.TimeOfDay,
+			ECatEnvironmentTimeOfDay::Unknown);
+		TestEqual(TEXT("跨夜真咬保留发生时的时段"), Session->BiteTimeOfDay, BiteEnvironment.TimeOfDay);
+		TestEqual(TEXT("跨夜真咬保留发生时的天气"), Session->BiteWeather, BiteEnvironment.Weather);
 		for (int32 Frame = 0; Frame < 500 && Session->GetSnapshot().Phase != ECatFishingPhase::Waiting; ++Frame)
 			Wrapper.TickTestWorld(0.01f);
 		TestEqual(TEXT("错过窗口后正式回到等待"), Session->GetSnapshot().Phase, ECatFishingPhase::Waiting);
+		TestEqual(TEXT("夜里漏按不生成下一机会"), Session->BiteOpportunitySequence, 1u);
+		TestFalse(TEXT("夜里漏按不再调度咬钩"), World->GetTimerManager().IsTimerActive(Session->ProbeTimerHandle));
+		TestEqual(TEXT("浮漂恢复平静"), Hook->GetPresentationState().BobberMode, ECatFishingBobberPresentationMode::Calm);
+		Mode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
+		Mode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
+		Fishing->RefreshBiteAvailabilityFromAuthority();
 		TestEqual(TEXT("每个机会只调度一次"), Session->BiteOpportunitySequence, 2u);
 		TestTrue(TEXT("下一机会使用新种子"), Session->CurrentBiteRandomSeed != FirstSeed);
 		TestTrue(TEXT("下一等待计时器已启动"), World->GetTimerManager().IsTimerActive(Session->ProbeTimerHandle));
-		Session->TerminateSession(ECatFishingOutcome::Cancelled, TEXT("Bite timing automation complete"));
+		// 白天刚排队的事件在夜晚才由正式 StateTree 消费，也不能打开新真咬窗口。
+		Session->HandleProbeTimer();
+		Mode->bRunStartupInProgress = true;
+		TestTrue(TEXT("等待中正式入夜成功"), Mode->EnterRunPhaseFromStateTree(
+			ECatRunPhase::NormalNight, ECatRunTransitionReason::DayEnded).bApplied);
+		Mode->bRunStartupInProgress = false;
+		TestFalse(TEXT("入夜立即清掉原咬钩计时"), World->GetTimerManager().IsTimerActive(Session->ProbeTimerHandle));
+		for (int32 Frame = 0; Frame < 300; ++Frame) Wrapper.TickTestWorld(.01f);
+		TestEqual(TEXT("迟到事件仍返回等待而非夜间真咬"), Session->GetSnapshot().Phase, ECatFishingPhase::Waiting);
+		TestTrue(TEXT("夜间左键可以正常空竿收回"), Session->RequestHookFromAuthority(FGuid::NewGuid()).bCommitted);
+		TestEqual(TEXT("空竿终局不变"), Session->GetSnapshot().Outcome, ECatFishingOutcome::EmptyHook);
 		TestFalse(TEXT("退出清理预警"), World->GetTimerManager().IsTimerActive(Session->BiteWarningTimerHandle));
 		TestFalse(TEXT("退出清理咬钩调度"), World->GetTimerManager().IsTimerActive(Session->ProbeTimerHandle));
 		TestFalse(TEXT("退出清理响应窗口"), World->GetTimerManager().IsTimerActive(Session->TrueBiteTimerHandle));
+		auto* NightSession = World->SpawnActor<ACatFishingSession>();
+		auto* NightHook = World->SpawnActor<ACatFishingHookActor>(HookClass);
+		if (!NightSession || !NightHook) return false;
+		NightSession->Snapshot.FishingSessionId = FGuid::NewGuid();
+		NightSession->Snapshot.CastAttemptId = FGuid::NewGuid();
+		NightSession->Snapshot.HookActor = NightHook;
+		NightSession->AttemptSnapshot = Session->AttemptSnapshot;
+		NightSession->bPrepared = true;
+		NightHook->InitializeAuthoritativeIdentity(NightSession->Snapshot.FishingSessionId, NightSession->Snapshot.CastAttemptId);
+		TestTrue(TEXT("夜间新抛竿的正式 StateTree 正常启动"), NightSession->StartPreparedSessionLogicFromAuthority());
+		TestEqual(TEXT("夜间新会话保持等待"), NightSession->GetSnapshot().Phase, ECatFishingPhase::Waiting);
+		TestFalse(TEXT("夜间新抛竿没有咬钩计时"), World->GetTimerManager().IsTimerActive(NightSession->ProbeTimerHandle));
+		TestTrue(TEXT("夜间取消正常结束新会话"), NightSession->CancelFromAuthority(FGuid::NewGuid()).bCommitted);
 	}
 	return !HasAnyErrors();
 }

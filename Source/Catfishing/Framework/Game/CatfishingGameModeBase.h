@@ -143,12 +143,15 @@ public:
 	void NotifyHostExitGrantAckProgress();
 	/** 只读判断当前 Controller 是否仍为 Active 且 Run 玩法命令门开放；teardown/回执协议不调用该 gate。 */
 	bool CanAcceptGameplayCommand(const AController* Controller) const;
-	/** 只读判断当前 Controller 是否可发起新的 Fishing/玩家打窝命令；Social 和结算收口不使用这个更窄的白天 gate。 */
+	/** 白天和夜晚均可操作鱼竿/打窝；仍要求 Active 身份、本局命令开放且角色未倒地。 */
 	bool CanAcceptFishingCommand(const AController* Controller) const;
+	/** 只读新咬钩准入，独立于玩家操作；服务器白天截止后立即关闭。 */
+	bool CanGenerateNewFishingBites() const;
 	/** 只读确认 Controller 的继承 UniqueId 已与当前 Active 记录精确配对；Save 据此筛选正式玩家，不受玩法命令开关影响，也不读取或复制私有准入表。 */
 	bool IsControllerActive(const AController* Controller) const;
 
 private:
+	friend class FCatFishingBiteTimingWorldTest;
 #if WITH_DEV_AUTOMATION_TESTS
 	/** 自动化夹具直接种入 Active 身份与 Phase，用来验证 Fishing gate 不会误封 Social/Settlement 宽命令。 */
 	friend class FCatGameModeCommandIntentGateTest;
@@ -228,7 +231,7 @@ private:
 	void ClearDebugSkipToNextDayRequest();
 	/** 开发期结算玩家选择入口；返回当前仍能走正式 Run 命令 gate 的第一名服务器可见玩家，供夜晚调试结算复用。 */
 	APlayerController* FindDebugOfferingController() const;
-	/** 开发期结束当前白天入口；只在开放 DayActive 上关闭捕鱼并发送入夜事件，返回 false 表示白天 gate 不满足且不会推进 StateTree。 */
+	/** 开发期结束当前白天入口；只在开放 DayActive 上关闭新咬钩并发送入夜事件，返回 false 表示白天 gate 不满足且不会推进 StateTree。 */
 	bool SubmitDebugDayEndForCurrentDay(const TCHAR* Trigger);
 	/** 开发期跳天加速的夜晚结算提交入口；构造一份达标调试供品并调用正式结算写口，返回 true 表示已发送继续推进事件。 */
 	bool SubmitDebugOfferingSettlementForCurrentDay(const TCHAR* Trigger);

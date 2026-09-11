@@ -129,13 +129,13 @@ bool FCatFishingServiceUnknownQueriesTest::RunTest(const FString& Parameters)
 	return !HasAnyErrors();
 }
 
-// 手持鱼竿不再写 MOVE_None：窗口关闭、角色中断、重新拾取和 Actor 销毁都只能改鱼竿操作身份，不能改 CharacterMovement。
+// 手持鱼竿不再写 MOVE_None：局不可用清理、角色中断、重新拾取和 Actor 销毁都只能改鱼竿操作身份，不能改 CharacterMovement。
 bool FCatFishingServiceRodOperationsPreserveMovementTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
 
 	FTestWorldWrapper WorldWrapper;
-	TestTrue(TEXT("创建 Fishing 窗口关闭测试 Game World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
+	TestTrue(TEXT("创建 Fishing 局不可用清理测试 Game World"), WorldWrapper.CreateTestWorld(EWorldType::Game));
 	WorldWrapper.ForwardErrorMessages(this);
 	UWorld* World = WorldWrapper.GetTestWorld();
 	WorldWrapper.BeginPlayInTestWorld();
@@ -166,13 +166,13 @@ bool FCatFishingServiceRodOperationsPreserveMovementTest::RunTest(const FString&
 	const EMovementMode InitialMovementMode=Movement->MovementMode.GetValue();
 	TestEqual(TEXT("夹具从可移动状态开始"), Movement->MovementMode.GetValue(), InitialMovementMode);
 	Fishing->SuspendFishingAndReleaseOperators();
-	TestEqual(TEXT("窗口关闭清空全部操作槽"), Rod->GetOperatorCount(), 0);
-	TestEqual(TEXT("窗口关闭不改角色移动模式"), Movement->MovementMode.GetValue(), InitialMovementMode);
-	TestEqual(TEXT("窗口关闭让鱼竿落地"), Rod->GetPresentationState().PoseMode,
+	TestEqual(TEXT("局不可用清理清空全部操作槽"), Rod->GetOperatorCount(), 0);
+	TestEqual(TEXT("局不可用清理不改角色移动模式"), Movement->MovementMode.GetValue(), InitialMovementMode);
+	TestEqual(TEXT("局不可用清理让鱼竿落地"), Rod->GetPresentationState().PoseMode,
 		ECatFishingRodPoseMode::Grounded);
-	TestTrue(TEXT("窗口关闭不收走已部署鱼竿"), Rod->GetPresentationState().bDeployed);
+	TestTrue(TEXT("局不可用清理不收走已部署鱼竿"), Rod->GetPresentationState().bDeployed);
 
-	TestTrue(TEXT("下一钓鱼窗口可重新占据原鱼竿"), Rod->SetPrimaryOperatorFromAuthority(PlayerState, Rod->GetPresentationState().RodActorRevision));
+	TestTrue(TEXT("局重新开放后可占据原鱼竿"), Rod->SetPrimaryOperatorFromAuthority(PlayerState, Rod->GetPresentationState().RodActorRevision));
 	TestTrue(TEXT("主位投影一致"),Rod->IsPrimaryOperator(PlayerState));
 	TestEqual(TEXT("重新拾取切回手持姿态"), Rod->GetPresentationState().PoseMode,
 		ECatFishingRodPoseMode::Held);

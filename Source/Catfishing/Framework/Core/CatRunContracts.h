@@ -114,7 +114,7 @@ enum class ECatEnvironmentWeather : uint8
 	Fog
 };
 
-/** 局内白天的正式时段轴；夜晚不进入该枚举，因为夜晚禁止钓鱼。 */
+/** 局内白天的正式鱼情时段轴；夜晚不产生新咬钩，已有搏斗和鱼竿操作仍可继续。 */
 UENUM(BlueprintType)
 enum class ECatEnvironmentTimeOfDay : uint8
 {
@@ -158,9 +158,9 @@ struct FCatRunPhaseSnapshot
 	UPROPERTY(BlueprintReadOnly)
 	bool bHasDeadline = false;
 
-	/** 当前是否允许钓鱼规则消费本阶段；白天截止后会先关闭，夜晚始终为 false。 */
+	/** 是否允许产生新咬钩；默认 false，白天截止即关闭。不是鱼竿操作门禁，夜晚仍可抛收竿和完成已有搏斗。 */
 	UPROPERTY(BlueprintReadOnly)
-	bool bFishingAllowed = false;
+	bool bNewFishingBitesAllowed = false;
 
 	/** 当前是否接受夜晚供品结算；它只在 NormalNight 内打开，白天不能把鱼直接转换成进度。 */
 	UPROPERTY(BlueprintReadOnly)

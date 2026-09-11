@@ -655,7 +655,7 @@ bool FCatFishingGroupNetworkTest::RunTest(const FString& Parameters)
 		{
 			Mode->bRunCommandsOpen = true;
 			Mode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
-			Mode->RunPublicState.Phase.bFishingAllowed = true;
+			Mode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
 		},
 		[](UCatFishingCommandComponent* Commands, FCatFishingInputEdge Edge)
 		{ Commands->ServerSubmitFishingAbilityCommand(ECatFishingCommandType::RequestHook, Edge); }));

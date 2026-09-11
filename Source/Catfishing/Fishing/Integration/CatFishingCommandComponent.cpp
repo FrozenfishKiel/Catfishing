@@ -776,7 +776,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 {
 	// 权威输入收口流程：
 	// 1. 先验证拥有者、服务器权威和 RequestId，非法入口不产生任何结果。
-	// 2. 再统一读取 Fishing 白天 gate；被关闭时回送 CommandsClosed，防止 UI 卡在等待态。
+	// 2. 再统一读取 Fishing 操作 gate；被关闭时回送 CommandsClosed，防止 UI 卡在等待态。
 	// 3. gate 通过后才允许抄网/提竿表现及服务器抔网冷却裁决。
 	// 4. 本函数只处理 Fishing/玩家打窝意图，Social、ready 和结算仍由 Controller 的宽玩法 gate 收口。
 	APlayerController* Controller = Cast<APlayerController>(GetOwner());
@@ -853,7 +853,7 @@ void UCatFishingCommandComponent::HandleAbilityCommandFromAuthority(const ECatFi
 	if (const ACatfishingPlayerController* CatController = Cast<ACatfishingPlayerController>(Controller);
 		!CatController || !CatController->CanForwardFishingCommand())
 	{
-		// 钓鱼/玩家打窝只在 DayActive 且 bFishingAllowed 时开放；夜晚 ready、结算和 Social 继续走 GameMode 的宽 gate，不在这里误封。
+		// 钓鱼/打窝在白天和夜晚均可操作；只拒绝身份、身体状态或局生命周期不允许的命令。
 		Result.Error = ECatFishingCommandError::CommandsClosed;
 		DeliverResultFromAuthority(Result);
 		return;
@@ -1431,7 +1431,7 @@ void UCatFishingCommandComponent::ThrowChumFromChargeOnAuthority(APlayerControll
 	DeliverPlaceChumResultFromAuthority(Service->PlaceChum(Controller, Command));
 }
 
-// 旧版搏斗协作转发流程：先复查 Fishing 白天 gate，再把会话键、幂等键和期望 Revision 交给 Fishing Service；Session 继续裁 Giant、阶段和版本。
+// 旧版搏斗协作转发流程：先复查 Fishing 操作 gate，再把会话键、幂等键和期望 Revision 交给 Fishing Service；Session 继续裁 Giant、阶段和版本。
 void UCatFishingCommandComponent::ForwardLegacyAssist(const FGuid FishingSessionId, const FGuid RequestId,
 	const int64 ExpectedRevision)
 {
@@ -1492,7 +1492,7 @@ void UCatFishingCommandComponent::ForwardLegacyScoop(const FGuid FishingSessionI
 	DeliverResultFromAuthority(Result);
 }
 
-// 显式打窝 RPC 流程：先保留 RequestId，再用 Fishing 白天 gate 裁阶段；gate 关闭也回送 CommandsClosed，合法路径才进入 ChumPlacementService 的水域、库存和幂等校验。
+// 显式打窝 RPC 流程：先保留 RequestId，再用 Fishing 操作 gate 裁阶段；gate 关闭也回送 CommandsClosed，合法路径才进入 ChumPlacementService 的水域、库存和幂等校验。
 void UCatFishingCommandComponent::ServerSubmitPlaceChum_Implementation(const FCatPlaceChumCommand& Command)
 {
 	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());
@@ -1501,7 +1501,7 @@ void UCatFishingCommandComponent::ServerSubmitPlaceChum_Implementation(const FCa
 	if (!Controller || !Controller->HasAuthority()) return;
 	if (!Controller->CanForwardFishingCommand())
 	{
-		// 显式 PlaceChum RPC 与 Q 蓄力路径共用同一个白天 gate；拒绝也投递终态，避免 UI 在夜晚挂着 pending。
+		// 显式 PlaceChum RPC 与 Q 蓄力路径共用同一个操作 gate；拒绝也投递终态，避免 UI 在夜晚挂着 pending。
 		Result.Error = ECatChumFieldError::CommandsClosed;
 		DeliverPlaceChumResultFromAuthority(Result);
 		return;
@@ -1512,7 +1512,7 @@ void UCatFishingCommandComponent::ServerSubmitPlaceChum_Implementation(const FCa
 	DeliverPlaceChumResultFromAuthority(Result);
 }
 
-// 显式抛竿 RPC 流程：先构造 BeginCast 回执，再用 Fishing 白天 gate 裁阶段；gate 关闭回送 CommandsClosed，合法路径才交 Fishing Service 重做射程、视线和装备校验。
+// 显式抛竿 RPC 流程：先构造 BeginCast 回执，再用 Fishing 操作 gate 裁阶段；gate 关闭回送 CommandsClosed，合法路径才交 Fishing Service 重做射程、视线和装备校验。
 void UCatFishingCommandComponent::ServerSubmitBeginCast_Implementation(const FCatBeginCastCommand& Command)
 {
 	ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetOwner());

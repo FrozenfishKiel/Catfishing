@@ -40,7 +40,7 @@ bool FCatFishingParticipantStrengthTest::RunTest(const FString& Parameters)
 	auto* Mode = World->GetAuthGameMode<ACatfishingGameModeBase>();
 	Mode->bRunCommandsOpen = true;
 	Mode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
-	Mode->RunPublicState.Phase.bFishingAllowed = true;
+	Mode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
 	FActorSpawnParameters SpawnParameters;
 	SpawnParameters.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	ACatCharacter* PrimaryCharacter = World->SpawnActor<ACatCharacter>(

@@ -75,7 +75,7 @@ bool FCatFishingPhysicalGripGraphTest::RunTest(const FString& Parameters)
 	auto* GameMode = World->GetAuthGameMode<ACatfishingGameModeBase>();
 	GameMode->bRunCommandsOpen = true;
 	GameMode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
-	GameMode->RunPublicState.Phase.bFishingAllowed = true;
+	GameMode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
 	TArray<ACatCharacter*> Cats;
 	TArray<ACatfishingPlayerState*> Players;
 	FActorSpawnParameters Spawn;
@@ -264,7 +264,7 @@ bool FCatFishingPhysicalCouplingTest::RunTest(const FString& Parameters)
 		auto* GameMode = World->GetAuthGameMode<ACatfishingGameModeBase>();
 		GameMode->bRunCommandsOpen = true;
 		GameMode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
-		GameMode->RunPublicState.Phase.bFishingAllowed = true;
+		GameMode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
 		TArray<ACatCharacter*> Cats;
 		TArray<ACatfishingPlayerState*> Players;
 		FActorSpawnParameters Spawn;

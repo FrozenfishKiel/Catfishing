@@ -39,7 +39,7 @@ bool FCatFishingCMCStabilityTest::RunTest(const FString& Parameters)
         auto* GameMode = World->GetAuthGameMode<ACatfishingGameModeBase>();
         GameMode->bRunCommandsOpen = true;
         GameMode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
-        GameMode->RunPublicState.Phase.bFishingAllowed = true;
+        GameMode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
         auto* Cat = Scene.SpawnCat(FVector(0,0,20));
         auto* Controller = World->SpawnActor<ACatfishingPlayerController>();
         auto* Player = World->SpawnActor<ACatfishingPlayerState>();

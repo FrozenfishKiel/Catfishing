@@ -36,7 +36,7 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 	auto* Mode = World->GetAuthGameMode<ACatfishingGameModeBase>();
 	Mode->bRunCommandsOpen = true;
 	Mode->RunPublicState.Phase.Phase = ECatRunPhase::DayActive;
-	Mode->RunPublicState.Phase.bFishingAllowed = true;
+	Mode->RunPublicState.Phase.bNewFishingBitesAllowed = true;
 	FActorSpawnParameters Spawn;
 	Spawn.SpawnCollisionHandlingOverride = ESpawnActorCollisionHandlingMethod::AlwaysSpawn;
 	ACatCharacter* Cat = World->SpawnActor<ACatCharacter>(FVector(0, 0, 20), FRotator::ZeroRotator, Spawn);

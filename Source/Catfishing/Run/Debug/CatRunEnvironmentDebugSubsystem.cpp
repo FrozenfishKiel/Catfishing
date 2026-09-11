@@ -355,7 +355,7 @@ namespace
 			return TEXT("异常：Environment Revision 没有对齐当前 Run Revision，可能正在显示失效环境事实。");
 		}
 		if (RunState.Phase.Phase == ECatRunPhase::DayActive
-			&& (!RunState.Phase.bFishingAllowed || !RunState.Phase.bHasDeadline))
+			&& (!RunState.Phase.bNewFishingBitesAllowed || !RunState.Phase.bHasDeadline))
 		{
 			if (AuthoritySnapshot && AuthoritySnapshot->bDebugSkipToNextDayRequested)
 			{
@@ -496,8 +496,8 @@ namespace
 		Lines.Add({ FString::Printf(TEXT("RunId：%s ｜ 第 %d 天 ｜ 阶段：%s ｜ Revision：%lld"),
 			*RunState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunState.Phase.DayIndex,
 			*FormatRunPhaseForPanel(RunState.Phase.Phase), RunState.Revision), TextColor });
-		Lines.Add({ FString::Printf(TEXT("Run 门禁：有截止 %s ｜ 可钓鱼 %s ｜ 供品开放 %s ｜ 供品 %d / %d ｜ 世界进度 %d(%+d) ｜ 终局原因 %s"),
-			FormatBoolForPanel(RunState.Phase.bHasDeadline), FormatBoolForPanel(RunState.Phase.bFishingAllowed),
+		Lines.Add({ FString::Printf(TEXT("Run 门禁：有截止 %s ｜ 新咬钩 %s ｜ 供品开放 %s ｜ 供品 %d / %d ｜ 世界进度 %d(%+d) ｜ 终局原因 %s"),
+			FormatBoolForPanel(RunState.Phase.bHasDeadline), FormatBoolForPanel(RunState.Phase.bNewFishingBitesAllowed),
 			FormatBoolForPanel(RunState.Phase.bOfferingOpen), RunState.LastOfferingPoints, RunState.DailyOfferingTarget,
 			RunState.WorldProgress, RunState.LastWorldProgressDelta,
 			*FormatEndReasonForPanel(RunState.EndReason)), TextColor });
@@ -632,14 +632,14 @@ namespace
 		const FCatTheftResult TheftResult = CatController ? CatController->GetLastTheftResult() : FCatTheftResult();
 
 		UE_LOG(LogCatRun, Display,
-			TEXT("Event=run_environment_social_debug_snapshot Trigger=%s World=%s NetMode=%s RunId=%s Revision=%lld Day=%d Phase=%s End=%s ServerNow=%.3f Anchor=%.3f Deadline=%.3f DayElapsed=%.3f DayLength=%.3f DeadlineRemaining=%.3f DayProgress=%.3f HasDeadline=%s FishingAllowed=%s OfferingOpen=%s LastOfferingPoints=%d DailyOfferingTarget=%d Weather=%s TimeOfDay=%s HasEvent=%s ActiveEvent=%s EnvRevision=%lld EnvRevisionMatch=%s PlayerCount=%d HelpKind=%s HelpRevision=%lld HelpGlobal=%s HelpRadius=%.3f HelpSignalId=%s HelpX=%.3f HelpY=%.3f HelpZ=%.3f TheftProtocolId=%s TheftFishId=%s TheftError=%s TheftWindow=%s TheftReturned=%s TheftConsumed=%s ChumFields=%d NaturalChumFields=%d TeardownComplete=%s"),
+			TEXT("Event=run_environment_social_debug_snapshot Trigger=%s World=%s NetMode=%s RunId=%s Revision=%lld Day=%d Phase=%s End=%s ServerNow=%.3f Anchor=%.3f Deadline=%.3f DayElapsed=%.3f DayLength=%.3f DeadlineRemaining=%.3f DayProgress=%.3f HasDeadline=%s NewFishingBitesAllowed=%s OfferingOpen=%s LastOfferingPoints=%d DailyOfferingTarget=%d Weather=%s TimeOfDay=%s HasEvent=%s ActiveEvent=%s EnvRevision=%lld EnvRevisionMatch=%s PlayerCount=%d HelpKind=%s HelpRevision=%lld HelpGlobal=%s HelpRadius=%.3f HelpSignalId=%s HelpX=%.3f HelpY=%.3f HelpZ=%.3f TheftProtocolId=%s TheftFishId=%s TheftError=%s TheftWindow=%s TheftReturned=%s TheftConsumed=%s ChumFields=%d NaturalChumFields=%d TeardownComplete=%s"),
 			Trigger, *World->GetName(), *FormatNetMode(World->GetNetMode()),
 			*RunState.Phase.RunId.ToString(EGuidFormats::DigitsWithHyphens), RunState.Revision,
 			RunState.Phase.DayIndex, *UEnum::GetValueAsString(RunState.Phase.Phase),
 			*UEnum::GetValueAsString(RunState.EndReason), ServerNow, RunState.Phase.ServerTimeAnchorSeconds,
 			RunState.Phase.DeadlineServerTimeSeconds, DayElapsedSeconds, DayLengthSeconds, DeadlineRemaining,
 			DayProgressPercent, FormatBoolForLog(RunState.Phase.bHasDeadline),
-			FormatBoolForLog(RunState.Phase.bFishingAllowed), FormatBoolForLog(RunState.Phase.bOfferingOpen),
+			FormatBoolForLog(RunState.Phase.bNewFishingBitesAllowed), FormatBoolForLog(RunState.Phase.bOfferingOpen),
 			RunState.LastOfferingPoints, RunState.DailyOfferingTarget, *UEnum::GetValueAsString(RunState.Environment.Weather),
 			*UEnum::GetValueAsString(RunState.Environment.TimeOfDay),
 			FormatBoolForLog(RunState.Environment.bHasActiveEvent),
