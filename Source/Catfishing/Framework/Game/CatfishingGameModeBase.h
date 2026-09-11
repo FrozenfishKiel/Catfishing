@@ -226,7 +226,7 @@ private:
 	void ScheduleDayEnvironmentRefreshes();
 	/** 白天时段分界到达时重新发布同一 RunPublicState；只有服务器仍处于有效 DayActive 才递增 Revision。 */
 	void HandleDayEnvironmentRefreshElapsed();
-	/** 白天唯一截止回调关闭捕鱼并发送 DayEnded 事件进夜晚；夜晚没有倒计时器。 */
+	/** 白天自然到点和调试提前结束共用的截止入口；撤销原计时器后关闭捕鱼并发送 DayEnded，旧截止不会跨天触发，夜晚不建立倒计时。 */
 	void HandleDayDeadlineElapsed();
 	/** 把当前 Run Revision 的只读 DTO 交给 Environment，并将同 Revision 的组合快照发布到 GameState；不改变角色身体或表现状态。 */
 	bool RefreshEnvironmentAndPublish();

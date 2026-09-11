@@ -1596,15 +1596,20 @@ void ACatfishingGameModeBase::HandleDayEnvironmentRefreshElapsed()
 		RunPublicState.Phase.DayIndex, *UEnum::GetValueAsString(RunPublicState.Environment.TimeOfDay));
 }
 
-// 白天截止流程：只消费仍开放的同一 DayActive，先关闭钓鱼并停白天计时，保留公开 deadline 发布同 Revision 过渡快照，再用 DayEnded 事件请求进入普通夜晚。
+// 白天截止流程：先撤销实际计时器，再校验仍开放的 DayActive；通过后记录消费时刻与公开截止时间、关闭钓鱼并清理其余白天计时，保留公开 deadline 发布快照，最后用 DayEnded 请求进入普通夜晚。
 void ACatfishingGameModeBase::HandleDayDeadlineElapsed()
 {
-	DayDeadlineTimerHandle.Invalidate();
+	// 调试入口会在计时器到点前直接调用本函数；只 Invalidate 会丢失清理句柄，让旧回调在下一天触发。ClearTimer 同时支持撤销待执行计时器和当前自然到点的回调。
+	GetWorldTimerManager().ClearTimer(DayDeadlineTimerHandle);
 	if (!HasAuthority() || !bRunCommandsOpen || RunPublicState.Phase.Phase != ECatRunPhase::DayActive
 		|| !RunPublicState.Phase.bHasDeadline)
 	{
 		return;
 	}
+	UE_LOG(LogCatRun, Log, TEXT("Event=RunDayDeadlineConsumed World=%s NetMode=%d Authority=1 LocalRole=%d RunId=%s Day=%d ServerNow=%.3f Deadline=%.3f"),
+		*GetWorld()->GetName(), static_cast<int32>(GetNetMode()), static_cast<int32>(GetLocalRole()),
+		*RunPublicState.Phase.RunId.ToString(), RunPublicState.Phase.DayIndex,
+		GetWorld()->GetTimeSeconds(), RunPublicState.Phase.DeadlineServerTimeSeconds);
 	// 截止时先收口钓鱼并恢复所有操作角色移动，再把新命令门关闭。
 	if (UCatFishingService* Fishing = GetWorld()->GetSubsystem<UCatFishingService>())
 	{
