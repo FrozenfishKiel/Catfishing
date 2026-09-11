@@ -43,7 +43,7 @@ UCatModelContactComponent::UCatModelContactComponent()
 {
     PrimaryComponentTick.bCanEverTick = true;
     PrimaryComponentTick.bStartWithTickEnabled = false;
-    PrimaryComponentTick.TickGroup = TG_PostPhysics;
+    PrimaryComponentTick.TickGroup = TG_PostUpdateWork;
 }
 
 bool UCatModelContactComponent::Initialize(UPoseableMeshComponent* FinalPose)
@@ -109,7 +109,17 @@ void UCatModelContactComponent::RefreshPose()
 void UCatModelContactComponent::TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* Tick)
 {
     Super::TickComponent(DeltaTime, TickType, Tick);
-    RefreshPose();
+    if (!GetOwner()->HasAuthority()) { RefreshPose(); return; }
+    // All PostPhysics visual poses are complete. Refresh peers before resolving the first cat,
+    // otherwise a later tail update can penetrate an earlier cat that is already against a wall.
+    const double Now=GetWorld()->GetTimeSeconds();
+    for (TActorIterator<ACatCharacter> It(GetWorld()); It; ++It)
+        if (auto* Model=It->FindComponentByClass<UCatModelContactComponent>(); Model && Model->LastAutomaticPoseRefreshSeconds!=Now)
+        {
+            Model->RefreshPose();
+            Model->LastAutomaticPoseRefreshSeconds=Now;
+        }
+    if (auto* Body=GetOwner()->FindComponentByClass<UCatPhysicalBodyComponent>()) Body->FinalizeModelContactFromAuthority();
 }
 
 bool UCatModelContactComponent::UsesModelContacts(const AActor* Actor)

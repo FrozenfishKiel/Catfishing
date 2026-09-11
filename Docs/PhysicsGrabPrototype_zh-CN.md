@@ -1,5 +1,34 @@
 # 物理抓握原型使用说明
 
+## 2026-09-11：CuteCat 分段碰撞贴合
+
+基线 `d8bdaa9`，源码/资产无未提交修改，用户未跟踪的裁决同步文档保留。编辑器资产注册表确认 `SK_CuteCat_PhysicsAsset` 的直接引用者仅 `SK_CuteCat`；后者由 `BP_CuteCatCharacter`、ABP、重定向动画和 IK 资产引用。当前编辑器无脏内容包。旧四凸包将 Tail_001..009 和四肢主权重顶点并入最近的躯干物理祖先，造成静态凸包填满空隙、动画时碰撞不随肢体。此前总体宽度回归不能证明局部空隙贴合。旧的抓人跳跃落地后抓点保持/复制失败仍是已知缺口；本轮前先按已知缺口保留，最终复验结果见下文。
+
+最终形状为 **37个有效凸包**：头部、臀部、胸部、8段有蒙皮的尾巴、6段脊背/颈部及四肢关节/爪部。`Tail_009`没有主权重表面，不制造空碰撞；`Center_001`的皮肤已归属独立脊背骨，移除其原包围凸包，仅保留资产索引/身份，运行初始化按原规则跳过空形状。其他已有索引及约束保留，新增体均为运动学设置，运行仍QueryOnly，不引入重心、翻倒或新的质量解算。3cm近接触力余量保留用于稳定互推；本次凸包测量不包含该余量，不能声称接触逐三角面精确或所有姿态误差均小于3cm。
+
+证据目录 `Saved/Automation/ContactFit-20260911`；复用隔离构建 `Saved/Validation/PeerPush-20260911`，新的每次报告位于 `Saved/Automation/PeerPush-20260911`，按下列时间戳区分。
+
+- **contract/runtime_behavior**：旧资产 `Report-20260911-145516-824` 的臀后射线对照，静止/行走最大表面空气厚度45.494/23.799cm，尾巴/手/足均无独立碰撞体。测量使用最终完整权重蒙皮三角面，跳过退化三角形，并与真实Query形状的射线命中比较，非复用拟合公式。新资产 `Report-20260911-150635-528` 对应2.623/2.240cm，独立尾巴/爪子跟随、实际伸手/移动抓点/目标销毁均通过；模型/CMC/体力/原搏鱼合计80/80（72 clean、8条既有或预期诊断）。24组坡面/贴墙/60、120Hz/100ms卡顿场景全部通过，未放宽8cm实际形状穿入或体力断言。
+- **联机**：`Report-20260911-150756-173` 中普通猫真实W互推/抓握/失焦释放，以及CuteCat跳跃、倒地/恢复联机均通过；其中新增CuteCat抓握夹具仍沿用普通猫固定52cm站位和类名断言而失败，随后按CuteCat体型切换为分离站位及实际脸颊瞄准（无生产输入/手长改动）。最终 `Report-20260911-151114-041` CuteCat真实W互推双端各130.085cm、位置差0；伸手拉动朋友21.595cm、GripId及Revision双端一致，失焦后权威/客户端/HUD均释放。`Report-20260911-151211-070` 三客户端原钓鱼链通过。
+- **presentation_delivery**：已查看按运行时导出的完整蒙皮与实际凸包生成的 `Saved/Automation/ContactFit-20260911/CollisionFitComparison.png`，旧臀后和腿间的整块包围形状已被分段表面替代；对应原始OBJ/采样CSV在隔离副本 `Saved/Automation/ContactFit`。已查看客户端截图 `Saved/Validation/PeerPush-20260911/Saved/Automation/MovementResponse-20260910/Images/20260911-071141-formal-body-push-no-reach.png` 以及 `Saved/Automation/PhysicalGrabProduction/Images/20260911-071144-formal-client-grip.png`（后者同在隔离副本Saved下）。它们是正式模型在受控场景中的证据，不替代Showcase2真人手感、新Cook、DedicatedServer或打包双端无-log验收。
+- **诊断/清理**：沿用默认落盘 `LogCatPhysicsGrab` 的 `model_contact_ready`（双端Bodies=37）、`model_contact_resolved`、`model_contact_push`、`physics_grip_observed`；身体和抓握身份/World/NetMode/Authority字段不变。原四整体凸包生成口径已经在同一编辑器入口替换；运行没有两套CuteCat碰撞模型。无模型原型仍保留已确认的原快照/胶囊路径，普通猫仍使用其独立物理资产。编辑器拟合、完整骨骼蒙皮导出仅在Editor模块。
+- **最终补充**：`Report-20260911-151313-153` 原抓竿组合本轮通过，包括此前失败的朋友跳跃落地后持续抓点断言。抓竿双端锚点漂移0、手到握点间距0cm；直接抓朋友跳跃时服务端朋友升高26.272cm、客户端26.105cm，双方落地后握点保留。此结果仅关闭该用例本次失败，不代替正式地图和其他网络条件下的整套交互验收。动画后分离使24组坡面最大实际形状穿入降至0.205cm。`RepeatPreview.log` 确认两次只读拟合输出完全一致且内容包未变脏；资产保存成功见 `SaveContacts-Joints.log`。主Editor Development完整构建通过（`BuildEditor-Main.log`）。
+- **构建载入**：主Game Development完整构建通过（`BuildGame-Main.log`）。主编辑器PID20296已经重新打开Showcase2并加载本轮Editor/Gameplay DLL，见 `MainEditorReload.json`（含模块及资产SHA256）；启动时Zen本地缓存连接重试后编辑器已正常完成初始化，无需修改项目缓存配置。源码与已通过回归的隔离副本逐字节核对见 `FinalSourceComparison.json`。尚未制作新Cook或Development包，因此不声称完成包内双端日志验收。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 资产拟合及写入 | `Source/CatfishingEditor/Interaction/CatModelContactAuthoringLibrary.cpp::RefitCuteCatContacts`→`/Game/Characters/CuteCat/Meshes/SK_CuteCat_PhysicsAsset` | 四凸包按最近物理祖先合并活动肢体；单位为骨骼局部厘米，正式骨骼世界缩放200 | 同一生成入口追加尾巴各段、四肢上下段和爪部；按LOD0蒙皮分配顶点拟合凸包，保留原四个索引/骨名/约束，不使用原始primitive的0.5cm最小尺寸 | 临时对象拟合→cook/尺寸校验→保存指定资产；拒绝脏包 | 有效形状、局部空隙、重复生成一致；保存前备份 | 已保存37个有效凸包；SaveContacts-Joints.log；RepeatPreview.log重复预览一致且无脏包 |
+| 运行碰撞/表现 | `Source/Catfishing/Interaction/CatModelContactComponent.cpp::Initialize/RefreshPose`由`CatCharacter::BeginPlay`初始化，最终PoseableMesh之后更新 | 尾巴/腿部接触跟躯干；四肢间及臀后可能误挡 | 原运行消费者直接读取细分身体，原稳定索引保留，新骨骼稳定追加；CMC地形胶囊、3cm接触力余量和单次成对力暂保持原契约 | 资产先落盘再重新载入角色 | 尾巴独立摆动、四肢/臀后空隙、真实抓取、无握持身体推动、坡面60/120Hz/卡顿 | Report-20260911-150635-528通过；臀后静止/行走采样2.623/2.240cm，独立骨骼跟随与真实伸手通过 |
+| 动态脊背蒙皮 | `Scripts/Art/create_cute_cat_retarget.py`明确绑定 Spine_001/002/003；原 Center_001 凸包合并三段脊背，`CatModelContactFitTests`行走采样仍有6.316cm偏离 | 尾巴拆分后仍需脊背独立随动画，不能以缩小全身或放宽测量掩盖 | 同一拟合入口细分有蒙皮的脊背/颈段；保留没有表面的旧身体索引但不保留错误实体 | 测量定位→追加分段→重建资产→重新跑接触/坡面 | 空隙与地形互推、旧索引及引用保持 | 已拆出6个有蒙皮的脊背/颈段；Center_001旧实体移除、索引保留；行走采样通过 |
+| 关节及分离迭代 | 行走蒙皮射线定位到`Leg_R_001`合并关节产生3.146cm偏差；`CatCharacterMovementComponent::ResolveModelPeerPenetration`每次4轮、每轮最多4cm，经CMC地形扫掠 | 新活动尾巴在贴墙/卡顿时比旧固定凸包移动更快，原迭代预算可能不足 | 同一资产拟合细分四肢中间关节；提高有重叠时的有界分离迭代预算，保留单步限幅、地形扫掠、费用/快照顺序、抓连双方跳过规则 | 形状贴合→原解算接收→原回归 | 不增加接触余量或力量，不放宽8cm穿透断言；体力/抓握/联机复验 | 已细分四肢关节并保留4cm单次扫掠、最多8轮；配合动画后分离，24场景最大实际穿入0.205cm |
+| CuteCat联机消费者 | `Source/CatfishingEditor/Character/Physics/Tests/CatPhysicalCharacterNetworkTests.cpp::FRestore/FVerify`目前只生成普通猫 | 新增的CuteCat骨骼组件也需实际双端抓推证明 | 同一夹具增加CuteCat变体，保留普通猫回归与所有既有行为断言 | 新资产→双端建形状→客户端实际输入→回执及截图 | 客户端互推、抓取传力、焦点释放、截图；不改生产输入 | 普通猫在Report-20260911-150756-173通过；CuteCat专用分离站位在Report-20260911-151114-041通过，双端抓推/HUD/释放一致 |
+| 动画后分离与最终快照 | `CatPhysicalBodyComponent::PublishPostPhysicsSnapshot`原先Advance/费用/快照先执行，随后`PhysicalVisual`和`ModelContact::TickComponent`才更新活动尾巴 | 37段形状已贴合，但贴墙时最后动画仍可制造10.627cm穿入；增加早期迭代不能消除这个时序缺口 | ModelContact改在PostUpdateWork统一刷新本世界最终形状，再经原CMC扫掠做动画后的被动分离；正式模型的原30Hz/跳跃/输入快照延后到此唯一发布入口；无模型/原型仍保留原发布时机 | 仍只推进一次CMC、只结算一次主动费用→所有可见姿态→接触纠正→手位置→唯一快照；动画造成的被动分离不另收体力 | 8cm原阈值、地形/跳跃/体力与双端抓推/复制；默认Log原接触日志继续记录权威修正 | 已接通PostUpdateWork统一最终姿态、被动分离和单次原快照发布；80/80及三客户端/抓竿组合通过 |
+| 抓握/权威/清理 | `Interaction/Grab/CatPhysicsGrabComponent::TryLatch/GetGripWorldLocation/ReleaseTargetFromAuthority`消费模型组件名及骨骼局部点；服务端解算后复制原状态 | 新增骨骼表面必须双端一致 | 不改RPC、GripId、力量/费用、主钓身份、R取放、断开或销毁清理入口；新表面仍是QueryOnly、不能当CMC地面 | 同版资产→权威查询→原复制/回执 | 客户端接触组件身份、真实抓点、随骨骼移动与退出 | Report-20260911-151114-041、151211-070、151313-153通过；无新增RPC、费用或业务权威入口 |
+| 配置/持久化/资产消费者 | 资产注册表：PhysicsAsset→SK_CuteCat→BP_CuteCatCharacter/ABP及重定向动画；普通猫用独立PhysicsAsset | 无需更换蓝图、模型、动画或资产路径 | 不涉及存档、库存、UI/WBP、输入/默认力量重力；Cook沿原硬引用；不删除未穷举的二进制消费者 | 同路径替换资产；编辑器代码不进入Game | Editor/Game Development构建；动画、地形支持回归；新Cook及打包联机不作为本轮已验证项 | 仅保存原路径PhysicsAsset；直接引用仍SK_CuteCat，其他蓝图/动画/配置未改；Editor构建通过，Cook/新包未运行 |
+| 测试/日志/文档 | `Interaction/Tests/CatModelContactTests.cpp`、Editor模型/联机测试；`Build/Automation/verify_physics_grab_prototype.ps1`隔离编译；本说明及唯一需求清单 | 整体包围宽度测试未覆盖凸包内部空气 | 新增局部形状/蒙皮对照与尾巴/爪子跟随检查；保留现有坡面、体力、抓握回归；使用现有默认Log的model_contact_ready/push/grip事件 | 旧资产对照→新资产→回归与实际图像→独立提交 | contract/runtime_behavior/presentation_delivery分别记实，不以编译代替视觉交付 | 已更新本说明及唯一需求清单；新增蒙皮射线/活动骨跟随回归与CuteCat联机变体，图像及日志见本节交付证据 |
+
+
+
 
 ## 2026-09-11：普通身体互推与斜坡分离
 

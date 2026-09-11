@@ -43,6 +43,8 @@ public:
 	virtual bool IsFalling() const override;
 	virtual bool IsMovingOnGround() const override;
 	void UpdatePeerPushContacts();
+	/** Passive shape separation only; also used after final animation, without advancing the motor. */
+	void ResolveModelPeerPenetration();
 	virtual void StopMovementImmediately() override;
 	virtual void CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration) override;
 	virtual FVector NewFallVelocity(const FVector& InitialVelocity, const FVector& Gravity, float DeltaTime) const override;
@@ -52,7 +54,6 @@ public:
 	virtual bool ResolvePenetrationImpl(const FVector& Adjustment, const FHitResult& Hit, const FQuat& Rotation) override;
 	FVector GetTotalMotionCorrection() const { return TotalMotionCorrection; }
 private:
-	void ResolveModelPeerPenetration();
 	FVector TotalMotionCorrection = FVector::ZeroVector;
 	double NextModelContactLogSeconds = 0;
 	double NextPeerSeparationLogSeconds = 0;

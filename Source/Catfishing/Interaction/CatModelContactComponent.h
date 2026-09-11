@@ -45,6 +45,7 @@ protected:
     virtual void TickComponent(float DeltaTime, ELevelTick TickType, FActorComponentTickFunction* Tick) override;
     virtual void EndPlay(const EEndPlayReason::Type Reason) override;
 private:
+    double LastAutomaticPoseRefreshSeconds = -1;
     UPROPERTY(Transient) TObjectPtr<UPoseableMeshComponent> Pose;
     UPROPERTY(Transient) TArray<TObjectPtr<UCatModelContactBody>> Bodies;
 };

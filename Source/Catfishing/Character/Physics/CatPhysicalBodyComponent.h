@@ -71,6 +71,8 @@ class CATFISHING_API UCatPhysicalBodyComponent : public UActorComponent
 	GENERATED_BODY()
 public:
 	UCatPhysicalBodyComponent();
+	/** Completes animated-model separation and the existing snapshot, without a second motor step. */
+	void FinalizeModelContactFromAuthority();
 	static void ConfigureGeometry(UBoxComponent* Body, USphereComponent* Left, USphereComponent* Right);
 	void Initialize(UBoxComponent* InBody, USphereComponent* InLeft, USphereComponent* InRight,
 		UPhysicsConstraintComponent* InLeftArm, UPhysicsConstraintComponent* InRightArm, UCatPhysicsGrabComponent* InGrab,
@@ -138,6 +140,7 @@ protected:
 private:
 	friend struct FCatPhysicalBodyPostPhysicsTick;
 	void PublishPostPhysicsSnapshot(float DeltaSeconds);
+	void PublishCompletedSnapshot();
 	FCatPhysicalBodyPostPhysicsTick PostPhysicsTick;
 	double GeometryScale = 1.0;
 	bool bPublishJumpAfterPhysics = false;

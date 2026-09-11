@@ -232,7 +232,9 @@ void UCatCharacterMovementComponent::ResolveModelPeerPenetration()
 	double MaximumDepth = 0;
 	// Correct only already intersecting model surfaces. Every adjustment sweeps the terrain
 	// capsule and follows its actual walkable floor, rather than teleporting horizontally into a slope.
-	for (int32 Iteration = 0; Iteration < 4; ++Iteration)
+	// Articulated tails can sweep through several contacts during a walking pose or a hitch.
+	// Keep each terrain move bounded, but allow the intersecting pair to finish separating.
+	for (int32 Iteration = 0; Iteration < 8; ++Iteration)
 	{
 		bool bAdjusted = false;
 		for (TActorIterator<ACatCharacter> It(GetWorld()); It; ++It)

@@ -42,7 +42,7 @@ namespace CatPhysicalCharacterNetwork
 class FRestore final : public IAutomationLatentCommand
 {
 public:
-	FRestore()
+	explicit FRestore(const FString& CharacterClassPath)
 	{
 		const auto* Settings=GetDefault<ULevelEditorPlaySettings>();
 		Settings->GetPlayNetMode(Mode); Settings->GetPlayNumberOfClients(Count); Settings->GetRunUnderOneProcess(OneProcess);
@@ -50,11 +50,11 @@ public:
 		Drivers=GEngine->NetDriverDefinitions;
 		StableWorld=FWorldDelegates::OnPreWorldInitialization.AddLambda([](UWorld* World,const UWorld::InitializationValues)
 		{ if (World && World->WorldType==EWorldType::PIE) World->bIsNameStableForNetworking=true; });
-		GameModeInitialized=FGameModeEvents::OnGameModeInitializedEvent().AddLambda([](AGameModeBase* GameMode)
+		GameModeInitialized=FGameModeEvents::OnGameModeInitializedEvent().AddLambda([CharacterClassPath](AGameModeBase* GameMode)
 		{
 			if (!GameMode || !GameMode->GetWorld() || GameMode->GetWorld()->WorldType!=EWorldType::PIE
 				|| GameMode->GetClass()!=AGameModeBase::StaticClass()) return;
-			GameMode->DefaultPawnClass=LoadClass<ACatCharacter>(nullptr,TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C"));
+			GameMode->DefaultPawnClass=LoadClass<ACatCharacter>(nullptr,*CharacterClassPath);
 			GameMode->PlayerControllerClass=LoadClass<ACatfishingPlayerController>(nullptr,TEXT("/Game/Player/BP_CatFishingController.BP_CatFishingController_C"));
 			GameMode->PlayerStateClass=ACatfishingPlayerState::StaticClass();
 		});
@@ -84,10 +84,12 @@ private:
 class FVerify final : public IAutomationLatentCommand
 {
 public:
-	explicit FVerify(FAutomationTestBase* InTest):Test(InTest),Started(FPlatformTime::Seconds()) {}
+	explicit FVerify(FAutomationTestBase* InTest,const FString& InClassPath):ExpectedClassPath(InClassPath),Test(InTest),Started(FPlatformTime::Seconds()) {}
 	bool Update() override
 	{
 		const double Now=FPlatformTime::Seconds();
+		const bool bCute=ExpectedClassPath.Contains(TEXT("BP_CuteCatCharacter"));
+		const FRotator ReachView(bCute ? 20.0 : 0.0,90,0);
 		if (Now-Started>55.0)
 		{
 			Test->AddError(FString::Printf(TEXT("Physical formal network timeout Stage=%d LastWait={%s}; no dual-end verdict"),Stage,*LastWait));
@@ -120,7 +122,7 @@ public:
 		if (!ServerGrab || !ClientGrab || !ClientBody->HasMovementSample()) return Wait(TEXT("physical body initialization and first client sample"));
 		if (Stage==0)
 		{
-			Test->TestEqual(TEXT("listen uses actual formal pawn asset"),ServerCat->GetClass()->GetPathName(),FString(TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C")));
+			Test->TestEqual(TEXT("listen uses actual formal pawn asset"),ServerCat->GetClass()->GetPathName(),ExpectedClassPath);
 			Test->TestEqual(TEXT("client uses actual formal controller asset"),Local->GetClass()->GetPathName(),FString(TEXT("/Game/Player/BP_CatFishingController.BP_CatFishingController_C")));
 			ServerCat->TeleportTo(FVector(0,0,ServerCat->GetBodyStandRootHeightCm()),FRotator::ZeroRotator,false,false);
 			HostCat->TeleportTo(FVector(500,500,HostCat->GetBodyStandRootHeightCm()),FRotator(0,90,0),false,false);
@@ -239,7 +241,8 @@ public:
 			if (EvidenceCamera.IsValid()) { EvidenceCamera->Destroy(); EvidenceCamera.Reset(); }
 			ServerCat->TeleportTo(FVector(0,0,ServerCat->GetBodyStandRootHeightCm()),FRotator::ZeroRotator,false,false);
 			// Expose the friend's side to the approaching hand, rather than the retired body box.
-			HostCat->TeleportTo(FVector(0,52,HostCat->GetBodyStandRootHeightCm()),FRotator::ZeroRotator,false,false);
+			// CuteCat has a much larger head: keep the skins initially apart and aim at its cheek.
+			HostCat->TeleportTo(FVector(bCute ? -15.0 : 0.0,bCute ? 85.0 : 52.0,HostCat->GetBodyStandRootHeightCm()),FRotator::ZeroRotator,false,false);
 			Stage=1; StageStarted=Now;
 		}
 		if (Stage==1)
@@ -250,7 +253,7 @@ public:
 			Test->TestFalse(TEXT("server body cannot freely tumble"),ServerBody->GetBody()->IsSimulatingPhysics());
 			Test->TestFalse(TEXT("client observes server body snapshots"),ClientBody->GetBody()->IsSimulatingPhysics());
 			// Only the owning client changes view. Server yaw must arrive through the physical input RPC, not a test write.
-			Local->SetControlRotation(FRotator(0,90,0));
+			Local->SetControlRotation(ReachView);
 			Stage=2; StageStarted=Now;
 		}
 		if (Stage==2)
@@ -258,7 +261,7 @@ public:
 			const double YawError=FMath::Abs(FMath::FindDeltaAngleDegrees(Remote->GetControlRotation().Yaw,90.0));
 			if (Now-StageStarted<1.0 || YawError>2.0)
 				return Wait(FString::Printf(TEXT("server view/motor yaw %.2f/%.2f"),Remote->GetControlRotation().Yaw,ServerCat->GetActorRotation().Yaw));
-			Test->TestTrue(TEXT("server trace/cast controller view rotated 90 degrees without CMC movement"),Remote->GetControlRotation().Vector().Y>.99);
+			Test->TestTrue(TEXT("server trace/cast controller receives the actual client reach direction without CMC movement"),FVector::DotProduct(Remote->GetControlRotation().Vector(),ReachView.Vector())>.99);
 			Test->TestTrue(TEXT("idle camera rotation does not steer the physical cat"),FMath::Abs(ServerCat->GetActorRotation().Yaw)<5);
 			Test->AddInfo(FString::Printf(TEXT("Event=physical_formal_network_view_verified ServerWorld=%s ClientWorld=%s PlayerId=%d ServerControlYaw=%.3f ClientControlYaw=%.3f ServerBodyYaw=%.3f Source=PhysicalInputRpc"),
 				*Server->GetName(),*Client->GetName(),Local->PlayerState->GetPlayerId(),Remote->GetControlRotation().Yaw,Local->GetControlRotation().Yaw,ServerCat->GetActorRotation().Yaw));
@@ -356,6 +359,7 @@ public:
 		return false;
 	}
 private:
+	FString ExpectedClassPath;
 	bool Wait(const FString& Reason) { LastWait=Reason; return false; }
 	void CaptureMovement(UWorld* World,const TCHAR* Label)
 	{
@@ -402,16 +406,23 @@ private:
 };
 }
 
-IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatPhysicalCharacterNetworkTest,
+IMPLEMENT_COMPLEX_AUTOMATION_TEST(FCatPhysicalCharacterNetworkTest,
 	"Catfishing.PhysicalGrab.Network.FormalClientViewGripForceAndFocusRelease",
 	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+void FCatPhysicalCharacterNetworkTest::GetTests(TArray<FString>& Names,TArray<FString>& Commands) const
+{
+	Names.Add(TEXT("OriginalCat")); Commands.Add(TEXT("OriginalCat"));
+	Names.Add(TEXT("CuteCat")); Commands.Add(TEXT("CuteCat"));
+}
 
 bool FCatPhysicalCharacterNetworkTest::RunTest(const FString& Parameters)
 {
 	if (!TestTrue(TEXT("requires its own idle validation editor"),GEditor&&GEngine&&!GEditor->PlayWorld)) return false;
-	if (!TestNotNull(TEXT("formal BP character exists"),LoadClass<ACatCharacter>(nullptr,TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C")))
+	const FString ClassPath=Parameters==TEXT("CuteCat") ? TEXT("/Game/Character/BP_CuteCatCharacter.BP_CuteCatCharacter_C") : TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C");
+	if (!TestNotNull(TEXT("formal BP character exists"),LoadClass<ACatCharacter>(nullptr,*ClassPath))
 		|| !TestNotNull(TEXT("formal BP controller exists"),LoadClass<ACatfishingPlayerController>(nullptr,TEXT("/Game/Player/BP_CatFishingController.BP_CatFishingController_C")))) return false;
-	const auto Restore=MakeShared<CatPhysicalCharacterNetwork::FRestore>();
+	const auto Restore=MakeShared<CatPhysicalCharacterNetwork::FRestore>(ClassPath);
 	UWorld* Map=nullptr;
 	if (FApp::CanEverRender())
 	{
@@ -438,7 +449,7 @@ bool FCatPhysicalCharacterNetworkTest::RunTest(const FString& Parameters)
 	for (auto& Driver:GEngine->NetDriverDefinitions)
 		if (Driver.DefName==TEXT("GameNetDriver")) Driver.DriverClassName=Driver.DriverClassNameFallback=TEXT("/Script/OnlineSubsystemUtils.IpNetDriver");
 	ADD_LATENT_AUTOMATION_COMMAND(FStartPIECommand(false));
-	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatPhysicalCharacterNetwork::FVerify>(this));
+	FAutomationTestFramework::Get().EnqueueLatentCommand(MakeShared<CatPhysicalCharacterNetwork::FVerify>(this,ClassPath));
 	ADD_LATENT_AUTOMATION_COMMAND(FEndPlayMapCommand());
 	FAutomationTestFramework::Get().EnqueueLatentCommand(Restore);
 	return true;

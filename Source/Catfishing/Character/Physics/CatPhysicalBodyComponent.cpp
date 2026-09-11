@@ -4,6 +4,7 @@
 #include "Components/CapsuleComponent.h"
 #include "GameFramework/Character.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
+#include "Interaction/CatModelContactComponent.h"
 #include "Interaction/Grab/CatLightPropSubsystem.h"
 #include "Components/BoxComponent.h"
 #include "Components/SphereComponent.h"
@@ -53,6 +54,21 @@ void UCatPhysicalBodyComponent::PublishPostPhysicsSnapshot(float DeltaSeconds)
 		Body->ComponentVelocity = CharacterMovement->Velocity;
 		Grab->RefreshKinematicHands();
 	}
+	// Model poses are finalized later this frame. That consumer publishes the same snapshot once.
+	if (!CharacterMovement || !UCatModelContactComponent::UsesModelContacts(GetOwner())) PublishCompletedSnapshot();
+}
+
+void UCatPhysicalBodyComponent::FinalizeModelContactFromAuthority()
+{
+	if (!HasAuthority() || !CharacterMovement || !Body || !Grab) return;
+	CharacterMovement->ResolveModelPeerPenetration();
+	bGrounded = CharacterMovement->IsMovingOnGround();
+	Grab->RefreshKinematicHands();
+	PublishCompletedSnapshot();
+}
+
+void UCatPhysicalBodyComponent::PublishCompletedSnapshot()
+{
 	const double Now = GetWorld()->GetTimeSeconds();
 	if (bPublishJumpAfterPhysics || bPublishMovementAfterPhysics || Now - LastSnapshotSeconds >= 1.0 / 30.0)
 	{
