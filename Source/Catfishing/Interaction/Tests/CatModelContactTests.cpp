@@ -276,6 +276,17 @@ bool FCatModelWalkingPushSlopeTest::RunTest(const FString&)
             && B->GetActorLocation().X+B->GetCapsuleComponent()->GetScaledCapsuleRadius()<290.5);
         TestTrue(TEXT("both cats keep real terrain support and stay upright"),A->GetPhysicalBodyComponent()->IsGrounded() && B->GetPhysicalBodyComponent()->IsGrounded()
             && A->GetActorUpVector().Z>.999 && B->GetActorUpVector().Z>.999);
+        if (bWall)
+        {
+            auto* ASC=A->GetCatAbilitySystemComponent();
+            const double Before=ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+            const FVector BeforePosition=A->GetActorLocation();
+            Scene.Step(Hz,Hz);
+            const double Paid=Before-ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+            AddInfo(FString::Printf(TEXT("Event=model_contact_wall_effort Blueprint=%s Pitch=%.1f Paid=%.3f TravelCm=%.3f"),
+                Path,Pitch,Paid,FVector::Dist2D(BeforePosition,A->GetActorLocation())));
+            TestTrue(TEXT("blocked model contact cannot credit depenetration as completed player intention"),Paid>.9);
+        }
         const FVector StopA=A->GetActorLocation(), StopB=B->GetActorLocation();
         A->GetPhysicalBodyComponent()->SetMoveIntent(FVector::ZeroVector);
         Scene.Step(Hz/2,Hz);

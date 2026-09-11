@@ -80,13 +80,19 @@ void UCatCharacterMovementComponent::AdvanceFromAuthority(float DeltaSeconds)
     TGuardValue<int32> IterationGuard(MaxSimulationIterations, bTraction
         ? FMath::Max(MaxSimulationIterations, FMath::CeilToInt(FMath::Min(DeltaSeconds, .25f) / Step) + 1) : MaxSimulationIterations);
     Super::PerformMovement(DeltaSeconds);
+    const FVector BeforePeerCorrection = TotalMotionCorrection;
     ResolveModelPeerPenetration();
+    const FVector PeerCorrection = TotalMotionCorrection - BeforePeerCorrection;
     MovementExternalForce = FVector::ZeroVector;
 	bQueuedExternalLoad = false;
 	if (auto* Effort = Cat->FindComponentByClass<UCatPhysicalEffortComponent>())
 		if (StartResetEpoch == Body->GetResetEpoch())
 		{
 			FVector ActualDisplacement = Cat->GetActorLocation() - StartPosition - (TotalMotionCorrection - StartCorrection);
+            // Reverse separation cancels an attempted step. Removing that correction must
+            // not credit the rejected step as successful progress (for example against a wall).
+            const FVector IntentDirection = IntendedDisplacement.GetSafeNormal2D();
+            ActualDisplacement += IntentDirection * FMath::Min(0.0, FVector::DotProduct(PeerCorrection,IntentDirection));
 			ActualDisplacement.Z = 0;
 			Effort->SettleMovementFromAuthority(EffortDrive, IntendedDisplacement, ActualDisplacement, DeltaSeconds, bStartedGrounded);
 		}
