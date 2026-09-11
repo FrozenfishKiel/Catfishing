@@ -6,10 +6,11 @@
 #include "Framework/Game/CatfishingGameState.h"
 #include "Engine/World.h"
 
-// 默认装配：使用公共正式信息牌，调整为八米完整信息；低频观察只读取有限的已关联对象。
+// 构造流程：沿用公共正式信息牌，将默认阅读条件设为本玩家准心命中且身体位于八米内，并设置排序权重为 10；
+// 再启用间隔 0.2 秒的 Tick，供后续观察已关联对象的信息变化，不在构造时读取业务状态或判断献祭权限。
 UCatAltarWorldInfoComponent::UCatAltarWorldInfoComponent()
 {
-	DisplayPolicy = ECatWorldInfoPolicy::NearbyFull;
+	DisplayPolicy = ECatWorldInfoPolicy::FocusOnly;
 	DisplayDistanceCentimeters = 800.0f;
 	DisplayPriority = 10;
 	PrimaryComponentTick.bCanEverTick = true;

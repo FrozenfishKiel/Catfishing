@@ -125,7 +125,7 @@ bool FCatWorldInfoRegistrationTest::RunTest(const FString& Parameters)
 IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatWorldInfoDisplayPoliciesTest,
 	"Catfishing.UI.WorldInfo.DisplayPolicies", EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
 
-// 为真实观察者逐个选择三种公开策略，以明确的内侧、等距、外侧样例验证层级，而不在测试里重算生产公式。
+// 先核对默认只在准心命中时显示，再为真实观察者逐个选择三种公开策略，以明确的内侧、等距、外侧样例验证层级，不重算生产公式。
 // 每种策略再检查焦点不能越界、总开关和无观察者拒绝，以及非有限距离和非法配置；所有设置只写临时组件。
 bool FCatWorldInfoDisplayPoliciesTest::RunTest(const FString& Parameters)
 {
@@ -134,7 +134,9 @@ bool FCatWorldInfoDisplayPoliciesTest::RunTest(const FString& Parameters)
 	APlayerController* Viewer = WorldWrapper.GetTestWorld()->SpawnActor<APlayerController>();
 	if (!TestNotNull(TEXT("创建策略观察者"), Viewer)) return false;
 	UCatWorldInfoComponent* Source = NewObject<UCatWorldInfoComponent>();
-	TestEqual(TEXT("默认策略为附近摘要"), Source->DisplayPolicy, ECatWorldInfoPolicy::NearbySummary);
+	TestEqual(TEXT("默认策略仅准心命中显示"), Source->DisplayPolicy, ECatWorldInfoPolicy::FocusOnly);
+	TestEqual(TEXT("默认策略不因靠近而显示"), Source->EvaluateDisplay(Viewer, false, 100.0), ECatWorldInfoDetail::Hidden);
+	TestEqual(TEXT("默认策略在准心命中时显示详情"), Source->EvaluateDisplay(Viewer, true, 100.0), ECatWorldInfoDetail::Full);
 	TestEqual(TEXT("默认阅读距离为 500 厘米"), Source->DisplayDistanceCentimeters, 500.0f);
 	TestTrue(TEXT("默认允许阅读"), Source->bInfoEnabled);
 	const ECatWorldInfoPolicy Policies[] = {ECatWorldInfoPolicy::NearbyFull, ECatWorldInfoPolicy::NearbySummary, ECatWorldInfoPolicy::FocusOnly};

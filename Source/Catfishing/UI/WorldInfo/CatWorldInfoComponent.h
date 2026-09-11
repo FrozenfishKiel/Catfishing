@@ -31,9 +31,9 @@ public:
 	void NotifyInfoChanged();
 	/** 显示控制器读取本地内容通知序号，与上次渲染序号比较以决定是否重读；直接返回计数，不参与业务版本或并发校验。 */
 	uint32 GetInfoSerial() const;
-	/** 该对象采用的内置显隐策略；设计者可逐实例配置，运行时仍可由 EvaluateDisplay 覆盖。 */
+	/** 该对象采用的内置显隐策略，默认仅准心命中时显示；设计者可逐实例配置，EvaluateDisplay 读取以决定显示层级，蓝图可覆盖求值结果。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="World Info")
-	ECatWorldInfoPolicy DisplayPolicy = ECatWorldInfoPolicy::NearbySummary;
+	ECatWorldInfoPolicy DisplayPolicy = ECatWorldInfoPolicy::FocusOnly;
 	/** 从玩家身体到对象原点的可读距离上限，单位厘米；设计者配置，EvaluateDisplay 读取，控制器同时用它声明观察射线范围，不改变按键交互距离。 */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category="World Info", meta=(ClampMin="1", Units="cm"))
 	float DisplayDistanceCentimeters = 500.0f;

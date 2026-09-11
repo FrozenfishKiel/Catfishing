@@ -10,10 +10,10 @@
 
 DEFINE_LOG_CATEGORY_STATIC(LogCatFishTankWorldInfo, Log, All);
 
-// 构造流程：沿用父类的无 Tick 锚点与正式 WBP，指定附近摘要距离，再启用组件属性复制。
+// 构造流程：沿用父类的无 Tick 锚点与正式 WBP，仅在本玩家准心命中且身体位于五米内时显示，再启用业务摘要复制。
 UCatFishTankWorldInfoComponent::UCatFishTankWorldInfoComponent()
 {
-	DisplayPolicy = ECatWorldInfoPolicy::NearbySummary;
+	DisplayPolicy = ECatWorldInfoPolicy::FocusOnly;
 	DisplayDistanceCentimeters = 500.0f;
 	SetIsReplicatedByDefault(true);
 }

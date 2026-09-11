@@ -81,7 +81,7 @@ def find_view(world, title):
 
 
 def tick(delta):
-    """等待真实网络世界后依次观察日间祭坛、远距离鱼缸焦点和服务器库存变动；所有显示均由生产组件刷新。"""
+    """等待真实网络世界后依次聚焦日间祭坛、远距离鱼缸和观察服务器库存变动；确认附近未聚焦对象隐藏，不改生产策略。"""
     now = time.monotonic()
     if state['ended']:
         if now - state['at'] > 2:
@@ -139,7 +139,9 @@ def tick(delta):
                     source.get_component_by_class(unreal.CatAltarWorldInfoComponent).get_world_location(),
                     player.player_camera_manager.get_camera_location(),
                     player.project_world_location_to_screen(source.get_component_by_class(unreal.CatAltarWorldInfoComponent).get_world_location(), True)))
-                check(found and found['visible'], 'daytime altar WBP is visibly attached on {}'.format(world.get_path_name()))
+                check(found and found['visible'], 'focused daytime altar WBP is visibly attached on {}'.format(world.get_path_name()))
+                unfocused_tank = find_view(world, '共享鱼缸')
+                check(not unfocused_tank or not unfocused_tank['visible'], 'nearby tank stays hidden while crosshair is on altar')
                 check(found['detail'] == 1 and found['rows'].get('TankReserve') == '0 点', 'daytime full altar uses ready tank zero, not missing fallback')
                 check(found['rows'].get('DailyTarget') == '13 点', 'altar target reads formal Run state')
             unreal.SystemLibrary.execute_console_command(server, 'Shot SHOWUI filename=WorldInfo_DayAltar.png -nosuffix', host)
