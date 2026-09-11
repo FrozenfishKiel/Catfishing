@@ -1,6 +1,7 @@
+#include "Fishing/Simulation/CatFishingFightRunner.h"
+
 #include "AbilitySystem/Config/CatPhysicalEffortSettings.h"
 #include "Character/CatCharacterMovementComponent.h"
-#include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
 #include "Components/BoxComponent.h"

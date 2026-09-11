@@ -1,6 +1,6 @@
-#include "Physics/Simulation/CatIntentMotionModel.h"
 #include "Fishing/Simulation/CatFishingFightSimulator.h"
 
+#include "Physics/Simulation/CatIntentMotionModel.h"
 #include "Fishing/Simulation/CatFishingFightWorkModel.h"
 
 

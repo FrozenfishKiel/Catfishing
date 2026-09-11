@@ -14,6 +14,8 @@
 
 证据目录：`Saved/Integration/Upstream-20260911-Second`。
 
+构建记录补正：该轮首轮 UBT 日志虽以 `Succeeded` 和退出码 0 结束，仍输出了 FightRunner/FightSimulator 自身头文件未置首的两条 `error`；当时仅依据成功状态判断，未能证明 IDE/MSBuild 构建通过。随后将两份 `.cpp` 的自身头文件移至首位，保留其他依赖和全部玩法逻辑；通过 VS MSBuild 的 `Development_Editor|x64` 入口重新编译、链接成功，退出码 0，未再出现头文件错误或 MSB3077。证据：`Saved/Integration/MSB3077-20260911/ubt-before.log`、`msbuild-editor.log`。本次仅验证编译契约，runtime_behavior/presentation_delivery 不涉及，未重复运行玩法测试。
+
 - `contract`：Editor `build-editor-02.log` 与 Game `build-game-01.log` 均通过；`regression-01/index.json` 合计 85/85 通过（70 无警告、15 带警告），0 失败、0 未运行。
 - `runtime_behavior`：本轮 85 项包含保留的钓鱼契约/运行回归、4 项个人出力、跳过清晨、物理抓取与库存世界操作；过场等待与恢复断言加入现有 `BiteTiming.WorldFieldsDriveFormalStateTreeAndBobber`，三组窝料输入均经正式过场收口恢复计时。鱼护搬运、真实售鱼按钮和悬停提示三项正式双端 PIE 全部通过。不另建测试模型。
 - `presentation_delivery`：正式资产字段已读取，三项正式双端 PIE 消费者已运行；未在本轮人工查看完整画面，新 Cook/打包、正式地图真人手感与新包双端日志未验证，不关闭模块交付状态。
