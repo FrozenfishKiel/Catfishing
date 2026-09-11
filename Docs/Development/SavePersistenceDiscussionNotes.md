@@ -1,6 +1,6 @@
 ﻿# Save / Persistence 需求核对笔记
 
-更新时间：2026-09-10
+更新时间：2026-09-11
 
 文档状态：2026-09-10 本轮 LocalPlayerSaveGame 重构已完成代码与运行验证；Editor / Win64 Development 构建、16 项回归通过。证据为同进程 PIE 与真实本地磁盘，不代表打包 Steam 房主退出链路或完整 Save 模块已验收。
 
@@ -99,3 +99,22 @@
 | 旧档、文件与工程资产 | v5 FormatVersion 字段；Save 配置、现有 WBP；开发说明 | v5 可读且读取不改文件；新写入 v6；无配置和二进制资产迁移 | 保留兼容字段，去掉旧固定索引与重复校验；无效头/错误类拒绝 | 读取迁移只在内存；后续主动保存才写新版本 | 旧 DTO 文件迁移前后逐字节比较；无效头与错误类读取 | 兼容与拒绝检查通过；Editor 和 Game Development 构建通过；未重新 Cook/打包 |
 
 本轮删减审查保留了必要的三处边界：SaveGame 对象承接引擎生命周期；一次性完成委托衔接 Online 的真实落盘回执；文件头检查阻止已复现的引擎旧格式回退断言。库存载荷只保留一套预检，旧 FormatVersion 和装备磁盘 DTO 因 v5 消费者继续保留。没有新增配置、业务进度清单或并行存档实现。
+
+## 2026-09-11 房主保存退出卡住修复
+
+故障证据是 `打包/Windows/Catfishing/Saved/Logs/Catfishing-backup-2026.09.11-09.21.13.log`：09:20:38 UTC，退出 RequestId `6944D663-4D62-C2A8-A727-BDB64BC4FCFC` 的保存已经 `Verified=1`、`Success=1`；随后 `run_teardown_pending` 为 `PendingRemoteAcks=1 PendingGrantAcks=0`。约 0.18 秒后远端断开并触发 `identity_released Result=ControllerMatched`，房主仍未开始 Destroy/Frontend travel。当前客户端 `HandleDestroySessionComplete` 在平台销毁后才提交末次 Reliable RPC，随后马上旅行；连接结束后不能保证该 RPC 送达。原 `Logout` 删除准入身份却没有解除退出等待，使后续 ACK 也无法再通过 Active Controller 校验。
+
+修复仅改变远端离局的完成证据：精确匹配 Active 准入记录的 authority `Logout` 可以解除该远端的等待，原销毁成功 ACK 仍可先行解除同一等待。服务器完成身份和 `Super::Logout` 清理后，调用原 `NotifyHostExitGrantAckProgress`，仍要求所有永久 Grant 收到真实 durable ACK 才通知 Online 继续。没有超时伪成功、第二次保存、奖励补发或客户端状态伪造；RequestId/epoch、存档格式、计时单位、默认配置与服务器权威均保持。断线本身不证明客户端 Session 销毁或永久档案落盘成功。
+
+| 功能/环节 | 当前位置与引用证据 | 现有行为与目标差异 | 处理方式与目标位置 | 衔接依赖与顺序 | 回归风险与验证方式 | 处理结果与证据 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 保存和入口 | `Source/Catfishing/UI/Save/CatLakeMainMenuController.cpp::RequestReturnToMainMenuFromWidget` → `Online/CatOnlineSubsystem.cpp::BeginHostLeaveSave/HandleHostLeaveSaveCompleted` | 保留保存成功后才 teardown；保存失败保持原错误回执 | 保留原接口、槽位和异步写盘 | 菜单 → 保存完成 → GameMode | 原始日志写盘成功；核对失败分支仍不拆局 | 未改存档代码；故障日志已确认存档完成 |
+| 权威离局与生命周期 | `Source/Catfishing/Framework/Game/CatfishingGameModeBase.cpp::RequestRunTeardown/Logout/AcknowledgeHostExitClient` | 原来只接受末次销毁 RPC；现在还接受精确连接的真实 Logout | 同一等待集合改名 `PendingHostExitRemoteStableNetIds`；完成函数改名 `CompleteHostExitWait` 并复核所有门槛 | 先校验身份，清理 Logout，再通知原 Online 委托 | 两客户端、ACK 丢失/先到、重复 Logout、旧连接、错误 RequestId、单次完成 | `Report-Red` 在原代码复现；`Report-Green` 修复后通过，原 RequestId/epoch 随真实完成委托返回 |
+| 永久档案 | `Source/Catfishing/Collection/CatRunImprintService.cpp::AreAllGrantAcksComplete` → GameMode 完成 gate | 离线不得冒充奖励落盘；原契约保持 | 不改 Grant 投递记录，缺 ACK 时 `run_teardown_grants_pending` 明确告警 | 远端离局全齐后仍复核 durable ACK | 用正式服务创建真实未 ACK Grant，所有玩家 Logout 后仍不得完成 | 专项通过，待确认 Grant 仍为 1；没有强行清空记录 |
+| 客户端与旅行 | `Source/Catfishing/Online/CatOnlineSubsystem.cpp::RequestRemoteHostExit/HandleDestroySessionComplete` → `ServerAcknowledgeHostExit`、`BeginTravelToFrontend` | 保留客户端销毁与旅行时序；发送日志不再暗示服务器已收到 | 原入口新增 `online_host_exit_received/online_destroy_completed/online_host_exit_ack_submitted/online_host_exit_ack_unavailable` | 房主仍经原 teardown 完成委托调用 Destroy 和旅行 | 源码调用链、预载 World 的 GC/释放回归；真实 Steam 双端另验 | 预载回归通过；本轮没有客户端故障日志，不能宣称双端已验收 |
+| UI、配置与资产 | `Source/Catfishing/UI/CatLocalPlayerUISubsystem.cpp` 消费 Online 快照；`/Game/UI/Save/WBP_CatLakeMainMenu`、Frontend loading WBP；`Config/DefaultGame.ini` 的 `CatOnlineSettings`、`ProjectPackagingSettings` | 接口、地图、默认值、遮罩消费者不变；动画不涉及 | 不改 WBP/Blueprint/DataAsset、不迁移资产、不改生成脚本与 Cook 入口 | 保留原快照驱动；新包须含修复源码 | 二进制资产额外引用未全面审计，因此保留所有公开/RPC 入口 | 无资产删除；正式新包菜单和双端无 `-log` 落盘尚未验证 |
+| 旧路径与诊断 | GameMode 私有等待字段和 `run_teardown_acks_complete` 日志；现有 `Build/Automation/RunCatAutomation.ps1` | 等待人数现在表示远端离局，不能继续称全部是 ACK | 私有字段与所有 C++ 消费者同步改名；新事件为 `run_teardown_complete`，字段 `PendingRemoteExits` | 不改外部 RPC 签名或新建退出状态机 | 搜索 Source/Config/Scripts/Build/Docs，检查最终 diff | 旧私有字段/函数/日志运行入口均移除；原 RPC 保留为已确认消费者，非废弃路径 |
+
+验证证据位于 `Saved/Automation/HostExit-20260911/`：`contract` 的主工程 Editor 构建 `BuildEditor.log` 成功，`Report-Green/index.json` 为两项 clean Success（退出专项内三种时序、原预载生命周期回归）。`runtime_behavior` 限于真实 UE 测试 World 中调用生产 Logout/ACK/完成委托，见 `Green.log`；它不是 Steam 网络传输实测。修改前只有测试夹具的初次编译遇到 UniqueNetId 构造重载歧义，修正后 `Saved/Logs/HostExit-BuildEditor-Red.log` 成功，`Red.log` 证实原退出逻辑失败。主工作区 `BuildGame.log` 被并行 `CatPhysicsPrototypeVisualComponent.cpp` 中未声明的 `InitialAnimationRelativeTransform/InitialVisualRelativeTransform` 阻塞，本修复不修改该代码；游戏构建另使用 `IsolationBase.txt` 中的已提交基线 `d4ec285` 加 `FixSourceHashes.json` 对应的四个修复文件验证，`BuildGame-Isolated.log` 为 Win64 Development `Succeeded`。验证期间另一个任务提交了祭坛/截止计时相关修改；它们保留在主工作区，本次隔离构建与退出检查点不包含这些修改。
+
+`presentation_delivery` 未完成：当前运行的旧包没有自动获得修复；需新 Cook/打包并以房主和客户端分别退出复测，核对双方 `<打包根目录>/Catfishing/Saved/Logs` 默认落盘日志中的同一 RequestId、`run_teardown_remote_departed` 或 `run_teardown_remote_ack_received`、`run_teardown_complete`、Destroy 结果与 Frontend 到达。若 `PendingGrantAcks>0`，原永久档案失败/重连恢复缺口仍须保留，不能用离线或计时器绕过；此次用户故障为 `PendingGrantAcks=0`。Run/Online 原子模块不因此关闭。

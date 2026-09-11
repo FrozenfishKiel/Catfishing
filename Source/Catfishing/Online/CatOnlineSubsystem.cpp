@@ -1324,6 +1324,11 @@ FCatOnlineResult UCatOnlineSubsystem::BeginOperation(const ECatOnlineOperation O
 // 远端 Host exit 流程：先拒绝并发并验证 Lake Client 与服务器关联键；受理后不提交主动离局标记，保存 Destroy 后的 ACK 键并允许 Client 回前台后释放本机载荷，复用同一 Leave 状态机。
 FCatOnlineResult UCatOnlineSubsystem::RequestRemoteHostExit(const FGuid HostExitRequestId)
 {
+	UE_LOG(LogCatOnline, Log,
+		TEXT("Event=online_host_exit_received RequestId=%s Epoch=%llu World=%s NetMode=%d Role=%s Operation=%s Result=Observed"),
+		*HostExitRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
+		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE,
+		*UEnum::GetValueAsString(SessionRole), *UEnum::GetValueAsString(ActiveOperation));
 	if (ActiveOperation != ECatOnlineOperation::None)
 	{
 		return RejectRequest(ECatOnlineError::CommandAlreadyPending);
@@ -2298,6 +2303,11 @@ void UCatOnlineSubsystem::HandleDestroySessionComplete(const FName SessionName, 
 	}
 	// DestroySession 也可能同步回调；先让句柄失效，外层只能观察已推进的旅行或终态，不能再广播 queued。
 	DestroySessionHandle.Reset();
+	UE_LOG(LogCatOnline, Log,
+		TEXT("Event=online_destroy_completed RequestId=%s Epoch=%llu World=%s NetMode=%d Role=%s Session=%s Success=%d"),
+		*ActiveRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
+		*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE,
+		*UEnum::GetValueAsString(OperationRole), *SessionName.ToString(), bWasSuccessful);
 	if (!bWasSuccessful)
 	{
 		SessionState = ECatOnlineSessionState::Error;
@@ -2331,6 +2341,19 @@ void UCatOnlineSubsystem::HandleDestroySessionComplete(const FName SessionName, 
 		if (ACatfishingPlayerController* Controller = Cast<ACatfishingPlayerController>(GetWorld() ? GetWorld()->GetFirstPlayerController() : nullptr))
 		{
 			Controller->ServerAcknowledgeHostExit(PendingHostExitAckRequestId);
+			// 这里只能证明 RPC 已提交；Steam 销毁/旅行可能先断线，Host 还会按真实 Logout 收口。
+			UE_LOG(LogCatOnline, Log,
+				TEXT("Event=online_host_exit_ack_submitted RequestId=%s Epoch=%llu World=%s NetMode=%d Authority=%d LocalRole=%d Controller=%s Result=RpcSubmitted"),
+				*PendingHostExitAckRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
+				*GetNameSafe(GetWorld()), static_cast<int32>(Controller->GetNetMode()), Controller->HasAuthority(),
+				static_cast<int32>(Controller->GetLocalRole()), *GetNameSafe(Controller));
+		}
+		else
+		{
+			UE_LOG(LogCatOnline, Warning,
+				TEXT("Event=online_host_exit_ack_unavailable RequestId=%s Epoch=%llu World=%s NetMode=%d Result=ControllerMissing"),
+				*PendingHostExitAckRequestId.ToString(EGuidFormats::DigitsWithHyphens), OperationEpoch,
+				*GetNameSafe(GetWorld()), GetWorld() ? static_cast<int32>(GetWorld()->GetNetMode()) : INDEX_NONE);
 		}
 		PendingHostExitAckRequestId.Invalidate();
 	}
