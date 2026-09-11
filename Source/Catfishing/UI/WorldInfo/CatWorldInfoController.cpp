@@ -19,7 +19,7 @@ void UCatWorldInfoController::Bind(APlayerController* Controller)
 	if (Controller && Controller->IsLocalController())
 	{
 		BoundController = Controller;
-		UE_LOG(LogCatUI, Log, TEXT("Event=WorldInfoLayoutBound World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Layout=WorldAnchorAbove"),
+		UE_LOG(LogCatUI, Log, TEXT("Event=WorldInfoLayoutBound World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s Layout=WorldAnchorCentered"),
 			*GetNameSafe(Controller->GetWorld()), static_cast<int32>(Controller->GetNetMode()), Controller->HasAuthority(),
 			static_cast<int32>(Controller->GetLocalRole()), *Controller->GetName());
 	}
@@ -164,9 +164,9 @@ void UCatWorldInfoController::RefreshCandidates()
 // 显示帧流程：
 // 1. 未绑定则返回；否则累计刷新倒计时，每 0.2 秒更新候选，随后按焦点、优先级、距离和源路径排序。
 // 2. 无 Pawn、显示鼠标光标或日切输入被阻断时收起整层；每张牌先收起，再排除离开视口、失效或策略隐藏的源。
-// 3. 将物体信息组件的世界锚点投影到本玩家屏幕，失败或离屏则隐藏；内容通知序号变化时重读快照，读取失败保持隐藏。
-// 4. 可显示的正式 WBP 先恢复布局参与，再预排版测量；底边始终位于锚点上方，尺寸无效、越界或与排序在前且已成功放置的牌重叠则隐藏。
-// 5. 成功放置后写入左上角对齐、尺寸与位置并记录占用矩形；不夹向屏幕边缘、不改到物体下方或两侧、不缩字或裁切正文。
+// 3. 将物体信息组件的上方挂点投影到本玩家屏幕；投影失败或视口无效则隐藏，内容序号变化时重读快照，读取失败保持隐藏。
+// 4. 可显示的正式 WBP 恢复布局参与并测量，以面板中心对齐挂点；尺寸无效、整板离屏或与排序在前且已放置的牌重叠则隐藏。
+// 5. 成功放置后写入左上角对齐、尺寸与位置并记录占用矩形；保持物体锚定，不换边、不夹向屏幕固定位置，边缘部分超出交给视口自然裁切。
 void UCatWorldInfoController::Tick(const float DeltaTime)
 {
 	APlayerController* Controller = BoundController.Get();
@@ -201,7 +201,7 @@ void UCatWorldInfoController::Tick(const float DeltaTime)
 		FVector2D AnchorPosition;
 		if (!UWidgetLayoutLibrary::ProjectWorldLocationToWidgetPosition(Controller, Source->GetComponentLocation(), AnchorPosition, true)
 			|| AnchorPosition.ContainsNaN() || ViewportSize.ContainsNaN()
-			|| AnchorPosition.X < 0 || AnchorPosition.Y < 0 || AnchorPosition.X > ViewportSize.X || AnchorPosition.Y > ViewportSize.Y) continue;
+			|| ViewportSize.X <= 0 || ViewportSize.Y <= 0) continue;
 		if (Entry.RenderedSerial != Source->GetInfoSerial())
 		{
 			FCatWorldInfoViewData Data;
@@ -217,10 +217,11 @@ void UCatWorldInfoController::Tick(const float DeltaTime)
 			Widget->SetVisibility(ESlateVisibility::Collapsed);
 			continue;
 		}
-		// 面板底部中心与物体锚点保持 8 个 UMG 布局单位的间隔；只跟随物体投影，不尝试其他方向或固定屏幕位置。
-		const FVector2D TopLeft = AnchorPosition - FVector2D(Size.X * 0.5, Size.Y + 8.0);
+		// 组件挂点已经在物体上方，应对齐面板中心；再上移整个面板高度会让祭坛详情在普通视角下越出屏幕。
+		const FVector2D TopLeft = AnchorPosition - Size * 0.5;
 		const FBox2D Rect(TopLeft, TopLeft + Size);
-		if (Rect.Min.X < 0 || Rect.Min.Y < 0 || Rect.Max.X > ViewportSize.X || Rect.Max.Y > ViewportSize.Y
+		// 只排除完全离屏的面板；部分越界仍保留可见内容，不能因为标题或一行越界就把整块祭坛信息收起。
+		if (Rect.Max.X <= 0 || Rect.Max.Y <= 0 || Rect.Min.X >= ViewportSize.X || Rect.Min.Y >= ViewportSize.Y
 			|| Occupied.ContainsByPredicate([&](const FBox2D& Other) { return Rect.Intersect(Other); }))
 		{
 			Widget->SetVisibility(ESlateVisibility::Collapsed);

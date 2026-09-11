@@ -8,7 +8,8 @@
 class APlayerController;
 class UCatWorldInfoWidget;
 
-/** 可挂到任意 Actor 的只读信息锚点；策略和数据由对象扩展，公共 UI 不依赖 Actor 的具体类型。 */
+/** 可挂到任意 Actor 的只读信息源；世界位置是面板中心的挂点及遮挡采样点，默认位于对象上方。
+ * 策略和数据由对象扩展，公共 UI 不依赖 Actor 的具体类型；调整组件位置不会授予交互权限。 */
 UCLASS(Blueprintable, ClassGroup=(UI), meta=(BlueprintSpawnableComponent))
 class CATFISHING_API UCatWorldInfoComponent : public USceneComponent
 {

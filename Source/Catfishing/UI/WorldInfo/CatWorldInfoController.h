@@ -44,7 +44,7 @@ public:
 	void Bind(APlayerController* Controller);
 	/** 移除本玩家所有信息牌并释放观察缓存；旅行和 LocalPlayer UI 拆除时调用。 */
 	void Unbind();
-	/** 引擎逐帧调用：低频刷新候选，将可见项投影到物体锚点上方；受抑制、离屏或放不下的牌隐藏，不自动换边、不发送 RPC。 */
+	/** 引擎逐帧调用：低频刷新候选，把面板中心锚定到物体上方挂点；受抑制或整板离屏时隐藏，部分越界不整板收起，不自动换边或发送 RPC。 */
 	virtual void Tick(float DeltaTime) override;
 	/** 只有绑定本地控制器的实例运行，默认对象与解绑实例不注册有效工作。 */
 	virtual bool IsTickable() const override;
