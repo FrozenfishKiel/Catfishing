@@ -8,7 +8,7 @@
 #include "Profile/CatProfileSaveGame.h"
 #include "Profile/CatProfileSettings.h"
 
-// 初始化流程：先验证显式设置和 LocalPlayer 索引，再加载既有档案或创建空档案；最后逐个重放 Pending，任何落盘失败都关闭本次会话的 ACK 能力。
+// 初始化流程：先验证显式设置和 LocalPlayer 索引，再加载既有档案；读不出或版本不符按空档重建（覆盖写同一槽位，不调用任何删档接口），最后逐个重放 Pending，任何落盘失败都关闭本次会话的 ACK 能力、留给下局开局重试。
 void UCatProfileSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
@@ -22,19 +22,22 @@ void UCatProfileSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 	if (UGameplayStatics::DoesSaveGameExist(ResolvedSlotName, ResolvedUserIndex))
 	{
 		CurrentProfile = Cast<UCatProfileSaveGame>(UGameplayStatics::LoadGameFromSlot(ResolvedSlotName, ResolvedUserIndex));
-	}
-	else
-	{
-		CurrentProfile = Cast<UCatProfileSaveGame>(UGameplayStatics::CreateSaveGameObject(UCatProfileSaveGame::StaticClass()));
-		if (CurrentProfile && !SaveCurrentProfile())
+		const int32 FoundSchemaVersion = CurrentProfile ? CurrentProfile->SchemaVersion : INDEX_NONE;
+		if (FoundSchemaVersion != UCatProfileSaveGame::CurrentSchemaVersion)
 		{
+			UE_LOG(LogCatProfile, Warning, TEXT("Event=profile_rebuilt_as_empty Slot=%s FoundSchemaVersion=%d ExpectedSchemaVersion=%d"),
+				*ResolvedSlotName, FoundSchemaVersion, UCatProfileSaveGame::CurrentSchemaVersion);
 			CurrentProfile = nullptr;
 		}
 	}
-	if (!CurrentProfile || CurrentProfile->SchemaVersion != UCatProfileSaveGame::CurrentSchemaVersion)
+	if (!CurrentProfile)
 	{
-		CurrentProfile = nullptr;
-		return;
+		CurrentProfile = Cast<UCatProfileSaveGame>(UGameplayStatics::CreateSaveGameObject(UCatProfileSaveGame::StaticClass()));
+		if (!CurrentProfile || !SaveCurrentProfile())
+		{
+			CurrentProfile = nullptr;
+			return;
+		}
 	}
 	bPersistenceReady = true;
 	TArray<FGuid> PendingGrantIds;
