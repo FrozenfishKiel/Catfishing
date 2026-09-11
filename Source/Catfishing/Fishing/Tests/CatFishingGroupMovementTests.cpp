@@ -20,8 +20,8 @@ bool FCatFishingPhysicalConnectionMovementTest::RunTest(const FString& Parameter
 	if (!Puller || !Partner) return false;
 	UCatPhysicalBodyComponent* First = Puller->GetPhysicalBodyComponent();
 	UCatPhysicalBodyComponent* Second = Partner->GetPhysicalBodyComponent();
-	// Outside a fishing Session, ordinary movement does not read fishing stamina or a group budget.
-	Puller->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 0.0f);
+	// Cooperation uses personal resources even without a fishing membership.
+	Puller->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 60.0f);
 	Scene.Step(60);
 	First->SetViewIntent(FRotator::ZeroRotator);
 	First->GetGrab()->SetGrabInput(true, true);
@@ -33,8 +33,8 @@ bool FCatFishingPhysicalConnectionMovementTest::RunTest(const FString& Parameter
 	First->SetMoveIntent(FVector(-1, -1, 0));
 	Scene.Step(90);
 	const FVector Pulled = Partner->GetActorLocation() - Before;
-	TestEqual(TEXT("ordinary physical assistance does not create or charge fishing stamina"),
-		Puller->GetCatAbilitySystemComponent()->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), 0.0f);
+	TestTrue(TEXT("physical assistance spends its own stamina without joining a session"),
+		Puller->GetCatAbilitySystemComponent()->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()) < 60.0f);
 	TestTrue(TEXT("ordinary diagonal movement transfers both force components through the grip without fishing membership"), Pulled.X < -10 && Pulled.Y < -10);
 	TestTrue(TEXT("load-bearing connection stays within physical arm reach"), FVector::Distance(Puller->GetActorLocation(), Partner->GetActorLocation()) < 70);
 	TestEqual(TEXT("the partner moves by physics without a teleport epoch"), Second->GetResetEpoch(), ResetEpoch);

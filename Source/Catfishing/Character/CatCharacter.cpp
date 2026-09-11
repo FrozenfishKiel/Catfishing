@@ -1,5 +1,6 @@
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
+#include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
 #include "Character/Physics/CatPhysicsPrototypeVisualComponent.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
 #include "Interaction/CatModelContactComponent.h"
@@ -76,6 +77,7 @@ ACatCharacter::ACatCharacter(const FObjectInitializer& ObjectInitializer)
 	RightPhysicsArm->SetupAttachment(PhysicalBody);
 	PhysicsGrab=CreateDefaultSubobject<UCatPhysicsGrabComponent>(TEXT("PhysicsGrab"));
 	PhysicalBodyComponent=CreateDefaultSubobject<UCatPhysicalBodyComponent>(TEXT("PhysicalBody"));
+	CreateDefaultSubobject<UCatPhysicalEffortComponent>(TEXT("PhysicalEffort"));
 	PhysicalVisual=CreateDefaultSubobject<UCatPhysicsPrototypeVisualComponent>(TEXT("PhysicalVisual"));
 	ModelContacts=CreateDefaultSubobject<UCatModelContactComponent>(TEXT("ModelContacts"));
 

@@ -93,13 +93,12 @@ bool FCatFishingCatWorkPacingTest::RunTest(const FString& Parameters)
 	Movement.MaximumMoveSpeedCentimetersPerSecond = 40.0;
 	Movement.FixedStepSeconds = Settings.FixedStepSeconds;
 	Movement.ActiveStrength = Settings.PrimaryOperatorCatStrength;
-	Movement.NormalizedLoad = Heavy.CatNormalizedEffortLoad;
 	FCatFightOperatorMovementCostResult PersonalMovement;
 	if (!TestTrue(TEXT("真实身体位移独立计算个人账"), FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Movement, PersonalMovement))) return false;
 	const double HeavyRate = (PersonalMovement.StaminaDrain + Heavy.GetRodActionStaminaDrain()) / Settings.FixedStepSeconds;
-	TestTrue(TEXT("移动收线转杆同时发力仍形成明显压力，但不会三秒扣尽"), Heavy.bSucceeded && HeavyRate >= 5.0 && HeavyRate <= 7.0);
-	TestTrue(TEXT("重操作仍分别支付移动、收线与转杆实际做功"),
-		PersonalMovement.WorkStaminaDrain > 0.0 && Heavy.CatReelStaminaDrain > 0.0 && Heavy.CatRodWorkStaminaDrain > 0.0);
+	TestTrue(TEXT("完成身体移动意图后只支付真实竿操作账"), Heavy.bSucceeded && FMath::IsFinite(HeavyRate) && HeavyRate > 0.0);
+	TestTrue(TEXT("完成意图的身体不耗体，收线与转杆仍各支付实际做功"),
+		PersonalMovement.StaminaDrain == 0.0 && Heavy.CatReelStaminaDrain > 0.0 && Heavy.CatRodWorkStaminaDrain > 0.0);
 
 	Settings.CatRodStaminaCostPerStrengthRadian *= 20.0;
 	Settings.CatStaminaCostPerStrengthCentimeter *= 10.0;

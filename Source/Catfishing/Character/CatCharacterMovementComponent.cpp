@@ -1,4 +1,6 @@
 #include "Character/CatCharacterMovementComponent.h"
+#include "AbilitySystem/Config/CatPhysicalEffortSettings.h"
+#include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
 
 #include "Character/CatCharacter.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
@@ -15,7 +17,7 @@ FVector IntegrateGroundVelocity(FCatBodyDriveSample& Drive, const FVector& Posit
     FVector ExternalForce, double Mass, double ResistanceNewtons, double Dt)
 {
     ExternalForce.Z = 0;
-    const bool bSupportOnly = Drive.bLocomotion && Drive.bFishing && Drive.MoveIntent.IsNearlyZero();
+    const bool bSupportOnly = Drive.bLocomotion && (Drive.bFishing || Drive.bCooperative) && Drive.MoveIntent.IsNearlyZero();
     if (!bSupportOnly) ExternalForce += UCatPhysicalBodyComponent::ComputeDriveForce(Drive,Position,Velocity,Mass,Dt);
     if (!Drive.bLocomotion) ExternalForce -= FVector(Velocity.X,Velocity.Y,0)*Mass*FMath::Min(8.0,1.0/Dt);
     Velocity += ExternalForce*(Dt/Mass);
@@ -43,6 +45,22 @@ void UCatCharacterMovementComponent::AdvanceFromAuthority(float DeltaSeconds)
 	auto* Cat = Cast<ACatCharacter>(CharacterOwner);
 	auto* Body = Cat ? Cat->GetPhysicalBodyComponent() : nullptr;
 	if (!Body || !Cat->HasAuthority() || DeltaSeconds <= 0) return;
+	const auto EffortDrive = Body->CaptureDriveSample();
+	const FVector StartPosition = Cat->GetActorLocation();
+	const FVector StartCorrection = TotalMotionCorrection;
+	const uint32 StartResetEpoch = Body->GetResetEpoch();
+	const bool bStartedGrounded = IsMovingOnGround();
+	FVector IntendedDisplacement = EffortDrive.MoveIntent * EffortDrive.MaxSpeed * DeltaSeconds;
+	if (EffortDrive.bCooperative && EffortDrive.MoveIntent.IsNearlyZero() && EffortDrive.MaxForce > 0)
+	{
+		// A stance actively opposes the load and existing drift. Convert relative effort to an
+		// equivalent directional intent; no load and no drift produce no fictitious support bill.
+		FVector Reaction = -Body->GetExternalForceFromAuthority() - Velocity * (FMath::Max(1.0f, Mass) / DeltaSeconds);
+		Reaction.Z = 0;
+		const double Effort = FMath::Clamp(Reaction.Size() / EffortDrive.MaxForce, 0.0, 1.0);
+		IntendedDisplacement = Reaction.GetSafeNormal() * Effort
+			* GetDefault<UCatPhysicalEffortSettings>()->SupportReferenceSpeedCmS * DeltaSeconds;
+	}
 	MaxWalkSpeed = Body->MaxMovementSpeedCmS;
 	JumpZVelocity = Body->JumpSpeedCmS;
 	GravityScale = Body->GravityScale;
@@ -63,6 +81,14 @@ void UCatCharacterMovementComponent::AdvanceFromAuthority(float DeltaSeconds)
         ? FMath::Max(MaxSimulationIterations, FMath::CeilToInt(FMath::Min(DeltaSeconds, .25f) / Step) + 1) : MaxSimulationIterations);
     Super::PerformMovement(DeltaSeconds);
     MovementExternalForce = FVector::ZeroVector;
+	bQueuedExternalLoad = false;
+	if (auto* Effort = Cat->FindComponentByClass<UCatPhysicalEffortComponent>())
+		if (StartResetEpoch == Body->GetResetEpoch())
+		{
+			FVector ActualDisplacement = Cat->GetActorLocation() - StartPosition - (TotalMotionCorrection - StartCorrection);
+			ActualDisplacement.Z = 0;
+			Effort->SettleMovementFromAuthority(EffortDrive, IntendedDisplacement, ActualDisplacement, DeltaSeconds, bStartedGrounded);
+		}
 }
 
 void UCatCharacterMovementComponent::CalcVelocity(float DeltaTime, float Friction, bool bFluid, float BrakingDeceleration)
@@ -154,11 +180,24 @@ void UCatCharacterMovementComponent::UpdatePeerPushContacts()
 			Normal = Difference.GetSafeNormal2D();
 			Penetration = FMath::Max(0.0, Radius - Difference.Size2D());
 		}
-		const FVector RelativeIntent = Body->GetMoveIntent() * Body->MaxMovementSpeedCmS
-			- OtherBody->GetMoveIntent() * OtherBody->MaxMovementSpeedCmS;
-		const double ClosingSpeed = FVector::DotProduct(RelativeIntent, Normal);
-		const FVector Force = Normal * FMath::Clamp(ClosingSpeed * 12.0 + Penetration * 650.0, 0.0, 3000.0);
-		if (Force.IsNearlyZero()) continue;
+		// Contact transmits motion; a pressed key must not manufacture a second, stamina-free motor.
+		const double ClosingSpeed = FVector::DotProduct(Body->GetVelocity() - OtherBody->GetVelocity(), Normal);
+		const auto IntoContactDrive = [](UCatPhysicalBodyComponent* Participant, const FVector& Axis, double BodyMass)
+		{
+			auto Drive = Participant->CaptureDriveSample();
+			if (!Drive.bLocomotion || Drive.MoveIntent.IsNearlyZero()) return 0.0;
+			if (!Drive.bFishing)
+				if (const auto* Effort = Participant->GetOwner()->FindComponentByClass<UCatPhysicalEffortComponent>())
+				{ Drive.bCooperative = true; Drive.MaxForce = Effort->GetMaximumForceKgCmS2(); }
+			return FMath::Max(0.0, FVector::DotProduct(UCatPhysicalBodyComponent::ComputeDriveForce(Drive,
+				Participant->GetOwner()->GetActorLocation(), Participant->GetVelocity(), BodyMass, 1.0/120.0), Axis));
+		};
+		// A capsule sweep can stop both bodies at zero penetration/velocity. Transmit the
+		// already bounded motor reaction at that contact, once and reciprocally; opposing
+		// motors are not summed into two copies of the same normal force.
+		const double MotorReaction = FMath::Max(IntoContactDrive(Body, Normal, FMath::Max(1.0f,Mass)),
+			IntoContactDrive(OtherBody, -Normal, FMath::Max(1.0f,OtherMovement->Mass)));
+		const FVector Force = Normal * FMath::Max(MotorReaction, FMath::Clamp(ClosingSpeed * 12.0 + Penetration * 650.0, 0.0, 3000.0));
 		Body->SetExternalForceFromAuthority(OtherMovement, -Force);
 		OtherBody->SetExternalForceFromAuthority(this, Force);
 		if (Model && OtherModel && Model->HasModelContacts() && OtherModel->HasModelContacts()
@@ -177,6 +216,14 @@ void UCatCharacterMovementComponent::ObserveSnapshot(const FVector& ObservedVelo
 	if (!CharacterOwner || CharacterOwner->HasAuthority()) return;
 	Velocity = ObservedVelocity;
 	Acceleration = ObservedIntent * GetMaxAcceleration();
+}
+
+bool UCatCharacterMovementComponent::ResolvePenetrationImpl(const FVector& Adjustment, const FHitResult& Hit, const FQuat& Rotation)
+{
+	const FVector Before = UpdatedComponent ? UpdatedComponent->GetComponentLocation() : FVector::ZeroVector;
+	const bool bResolved = Super::ResolvePenetrationImpl(Adjustment, Hit, Rotation);
+	if (UpdatedComponent) TotalMotionCorrection += UpdatedComponent->GetComponentLocation() - Before;
+	return bResolved;
 }
 
 bool UCatCharacterMovementComponent::IsFalling() const

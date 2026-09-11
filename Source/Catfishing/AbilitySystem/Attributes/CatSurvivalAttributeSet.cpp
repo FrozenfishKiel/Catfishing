@@ -1,4 +1,5 @@
 #include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Physics/CatPhysicalEffortComponent.h"
 
 #include "AbilitySystemComponent.h"
 #include "Net/UnrealNetwork.h"
@@ -103,6 +104,10 @@ void UCatSurvivalAttributeSet::OnRep_FishingStrength(const FGameplayAttributeDat
 void UCatSurvivalAttributeSet::OnRep_FightStamina(const FGameplayAttributeData& OldFightStamina)
 {
 	GAMEPLAYATTRIBUTE_REPNOTIFY(UCatSurvivalAttributeSet, FightStamina, OldFightStamina);
+	if (const auto* ASC = GetOwningAbilitySystemComponent())
+		if (AActor* Avatar = ASC->GetAvatarActor())
+			if (auto* Effort = Avatar->FindComponentByClass<UCatPhysicalEffortComponent>())
+				Effort->ObserveStaminaFromReplication(OldFightStamina.GetCurrentValue());
 }
 
 // MaxFightStamina 复制通知流程：使用标准 RepNotify 更新搏斗体力上限；显示层和接力会话都只观察 ASC 的同一份上限。

@@ -62,7 +62,7 @@ public:
 		meta = (DisplayName = "猫力竭后鱼外冲速度倍率", ClampMin = "1.0"))
 	double ExhaustedCatEscapeSpeedMultiplier = 2.0;
 
-	/** 猫移动/收线每标准力量·cm 实际正功单价；受阻支撑单独按时间收费。 */
+	/** 收线每标准力量·cm 实际正功单价；身体移动改用 CatPhysicalEffortSettings 的意图缺失米价。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "猫做功体力消耗系数", ClampMin = "0.0"))
 	double CatStaminaCostPerStrengthCentimeter = -1.0;
@@ -97,7 +97,7 @@ public:
 		meta = (DeprecatedProperty, DeprecationMessage = "旧每厘米鱼价格不再使用；请设置FishStaminaPerUnfulfilledMeter。"))
 	double FishStaminaCostPerStrengthCentimeter = -1.0;
 
-	/** 猫主动移动形成的对抗努力体力倍率；不会重复计入转杆或收线。 */
+	/** 主控身体意图缺失米价的无量纲倍率；辅助使用独立身体默认价，不计入转杆或收线。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "猫移动体力倍率", ClampMin = "0.0"))
 	double CatMovementStaminaMultiplier = 1.0;
@@ -132,7 +132,7 @@ public:
 		meta = (DeprecatedProperty, DeprecationMessage = "旧受阻距离倍率不再使用；沿意图缺失位移按FishStaminaPerUnfulfilledMeter结算。"))
 	double IsometricEffortMultiplier = -1.0;
 
-	/** 正常右键时猫每秒恢复的搏斗体力，不受张力或其他操作限制；强制力竭拖拽除外。 */
+	/** 正常右键且身体/杆完全卸载时主控每秒恢复的体力；受外部负载、满线或强制力竭拖拽时不恢复。 */
 	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "体力",
 		meta = (DisplayName = "放线体力恢复速度", ClampMin = "0.0"))
 	double SlackStaminaRegenPerSecond = -1.0;

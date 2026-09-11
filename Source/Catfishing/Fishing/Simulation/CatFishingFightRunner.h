@@ -64,6 +64,7 @@ struct CATFISHING_API FCatFightOperatorRuntime
 	uint32 ControlEpoch = 0;
 	double StaminaMaximum = 0.0;
 	FVector LastSampledPosition = FVector::ZeroVector;
+	FVector LastSampledMotionCorrection = FVector::ZeroVector;
 	double LastMovementSampleWorldSeconds = 0.0;
 	uint32 LastBodyResetEpoch = 0;
 	TArray<FCatFightOperatorMovementSample> PendingMovementSamples;
@@ -139,6 +140,7 @@ private:
 	TWeakObjectPtr<UCatAbilitySystemComponent> FrozenOperatorAbilitySystem;
 	double FrozenOperatorStamina = 0.0;
 	double FrozenOperatorStaminaMaximum = 0.0;
+	bool bFrozenOperatorUnderLoad = false;
 	double OperatorSupportAlignment = 1.0;
 	double LastOperatorStaminaDrain = 0.0;
 	double NextStaminaDiagnosticSeconds = 0.0;

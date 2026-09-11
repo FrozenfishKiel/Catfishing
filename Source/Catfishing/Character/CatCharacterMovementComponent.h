@@ -29,8 +29,13 @@ public:
 	UPROPERTY(EditAnywhere, Category="Catfishing|Movement", meta=(ClampMin="0"))
 	float GroundResistanceNewtons = 0.8f;
 	void AdvanceFromAuthority(float DeltaSeconds);
-	void QueueExternalImpulse(FVector Impulse) { QueuedExternalImpulse += Impulse; }
-	void ClearQueuedExternalImpulse() { QueuedExternalImpulse = MovementExternalForce = FVector::ZeroVector; }
+	void QueueExternalImpulse(FVector Impulse)
+	{
+		QueuedExternalImpulse += Impulse;
+		bQueuedExternalLoad |= !Impulse.IsNearlyZero(UE_DOUBLE_SMALL_NUMBER);
+	}
+	void ClearQueuedExternalImpulse() { QueuedExternalImpulse = MovementExternalForce = FVector::ZeroVector; bQueuedExternalLoad = false; }
+	bool HasExternalLoad() const { return bQueuedExternalLoad || !MovementExternalForce.IsNearlyZero(UE_DOUBLE_SMALL_NUMBER); }
 	FCatCMCMotionPrediction CaptureMotionPrediction();
 	static void AdvanceMotionPrediction(FCatCMCMotionPrediction& Sample, const FVector& LineForceNewtons, double Seconds);
 	double GetExternalTractionTravelLimit(const FVector& Direction, double MaximumDistance) const;
@@ -44,8 +49,12 @@ public:
 	virtual void PhysicsRotation(float DeltaTime) override;
 	virtual bool IsWalkable(const FHitResult& Hit) const override;
 	virtual void InitCollisionParams(FCollisionQueryParams& OutParams, FCollisionResponseParams& OutResponseParam) const override;
+	virtual bool ResolvePenetrationImpl(const FVector& Adjustment, const FHitResult& Hit, const FQuat& Rotation) override;
+	FVector GetTotalMotionCorrection() const { return TotalMotionCorrection; }
 private:
+	FVector TotalMotionCorrection = FVector::ZeroVector;
 	double NextModelContactLogSeconds = 0;
 	FVector QueuedExternalImpulse = FVector::ZeroVector;
+	bool bQueuedExternalLoad = false;
 	FVector MovementExternalForce = FVector::ZeroVector;
 };

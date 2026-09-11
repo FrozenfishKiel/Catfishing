@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/Physics/Tests/CatPhysicalTestWorld.h"
 #include "Character/CatCharacterMovementComponent.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
@@ -69,6 +71,7 @@ bool FCatUprightCMCPushTest::RunTest(const FString& Parameters)
 	auto* A=Scene.SpawnCat(FVector(0,0,20)); auto* B=Scene.SpawnCat(FVector(28,0,20));
 	if (!A || !B) return false;
 	Scene.Step(60);
+	B->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(),10);
 	const FVector Start=B->GetActorLocation();
 	A->GetPhysicalBodyComponent()->SetMoveIntent(FVector::ForwardVector);
 	Scene.Step(120);

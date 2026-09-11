@@ -21,8 +21,10 @@ struct CATFISHING_API FCatBodyDriveSample
     double MaxSpeed = 0;
     double MaxForce = 0;
     bool bFishing = false;
+    bool bCooperative = false;
     bool bLocomotion = false;
     bool bConnected = false;
+    bool bUnderLoad = false;
     bool bHoldActive = false;
 };
 
@@ -75,6 +77,8 @@ public:
 	double GetFacingYawDegrees() const { return FacingYawDegrees; }
 	FTickFunction& GetPostMovementTick() { return PostPhysicsTick; }
 	FVector GetExternalForceFromAuthority();
+	/** Any applied source, including cancelling or vertical loads; excludes gravity/floor support. */
+	bool HasExternalLoadFromAuthority() const;
 	double GetVerticalGripForceFromAuthority() const;
 	/** A successful voluntary jump permits brief reciprocal vertical grip traction, never suspension. */
 	double GetJumpTractionWeight() const;

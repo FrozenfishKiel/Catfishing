@@ -1,5 +1,6 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
+#include "Physics/Simulation/CatIntentMotionModel.h"
 #include <limits>
 
 #include "Misc/AutomationTest.h"
@@ -70,14 +71,14 @@ bool FCatFishingFishIntentProjectionTest::RunTest(const FString& Parameters)
 	};
 	for (const FExample& Example : Examples)
 	{
-		FCatFightFishIntentInput Input;
+		FCatIntentMotionInput Input;
 		Input.IntendedDisplacementCentimeters = FVector(500.0, 0.0, 0.0);
 		const double Radians = FMath::DegreesToRadians(Example.AngleDegrees);
 		Input.ActualDisplacementCentimeters = FVector(FMath::Cos(Radians), FMath::Sin(Radians), 0.0) * 300.0;
 		Input.StaminaPerUnfulfilledMeter = CatFishingFishIntentTests::PricePerMeter;
-		FCatFightFishIntentResult Result;
+		FCatIntentMotionResult Result;
 		if (!TestTrue(FString::Printf(TEXT("%.0f度运动可结算"), Example.AngleDegrees),
-			FCatFishingFightWorkModel::ComputeFishIntentDrain(Input, Result))) return false;
+			FCatIntentMotionModel::ComputeDrain(Input, Result))) return false;
 		TestEqual(TEXT("五米意图不因实际方向变化而改写"), Result.IntendedDistanceCentimeters, 500.0, 1e-7);
 		TestEqual(TEXT("实际进展保留正反方向"), Result.ActualProgressCentimeters, Example.ExpectedProgressCentimeters, 1e-7);
 		TestEqual(TEXT("意图缺失按投影计算且反拖超过五米不截断"),
@@ -95,31 +96,31 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFishIntentBoundariesTest,
 bool FCatFishingFishIntentBoundariesTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	FCatFightFishIntentInput Input;
+	FCatIntentMotionInput Input;
 	Input.IntendedDisplacementCentimeters = FVector(500.0, 0.0, 0.0);
 	Input.StaminaPerUnfulfilledMeter = CatFishingFishIntentTests::PricePerMeter;
-	FCatFightFishIntentResult Result;
+	FCatIntentMotionResult Result;
 	for (const FVector& Actual : {FVector(600.0, 0.0, 0.0), FVector(500.0, 1000.0, 0.0), FVector(500.0, 0.0, 1000.0)})
 	{
 		Input.ActualDisplacementCentimeters = Actual;
-		if (!TestTrue(TEXT("超额前进或额外侧移是合法运动"), FCatFishingFightWorkModel::ComputeFishIntentDrain(Input, Result))) return false;
+		if (!TestTrue(TEXT("超额前进或额外侧移是合法运动"), FCatIntentMotionModel::ComputeDrain(Input, Result))) return false;
 		TestEqual(TEXT("兑现完整前进意图后侧移不能被向量差模长误收费"), Result.UnfulfilledDistanceCentimeters, 0.0);
 		TestEqual(TEXT("超额前进不收费也不负扣费回血"), Result.StaminaDrain, 0.0);
 	}
 	Input.ActualDisplacementCentimeters = FVector::ZeroVector;
-	if (!TestTrue(TEXT("零位移僵持可结算"), FCatFishingFightWorkModel::ComputeFishIntentDrain(Input, Result))) return false;
+	if (!TestTrue(TEXT("零位移僵持可结算"), FCatIntentMotionModel::ComputeDrain(Input, Result))) return false;
 	TestEqual(TEXT("僵持没有实际进展"), Result.ActualProgressCentimeters, 0.0);
 	TestEqual(TEXT("僵持未兑现全部五米意图"), Result.UnfulfilledDistanceCentimeters, 500.0, 1e-9);
 	TestEqual(TEXT("僵持按未兑现米数收费"), Result.StaminaDrain, 25.0 / 3.0, 1e-9);
 
 	Input.StaminaPerUnfulfilledMeter = 0.0;
-	if (!TestTrue(TEXT("零单价仍能观察意图缺失"), FCatFishingFightWorkModel::ComputeFishIntentDrain(Input, Result))) return false;
+	if (!TestTrue(TEXT("零单价仍能观察意图缺失"), FCatIntentMotionModel::ComputeDrain(Input, Result))) return false;
 	TestEqual(TEXT("调价不修改实际缺失"), Result.UnfulfilledDistanceCentimeters, 500.0, 1e-9);
 	TestEqual(TEXT("零价没有隐藏基础游动费"), Result.StaminaDrain, 0.0);
 	Input.StaminaPerUnfulfilledMeter = CatFishingFishIntentTests::PricePerMeter;
 	Input.IntendedDisplacementCentimeters = FVector::ZeroVector;
 	Input.ActualDisplacementCentimeters = FVector(-1000.0, 500.0, 0.0);
-	if (!TestTrue(TEXT("没有主动意图时被拖动仍合法"), FCatFishingFightWorkModel::ComputeFishIntentDrain(Input, Result))) return false;
+	if (!TestTrue(TEXT("没有主动意图时被拖动仍合法"), FCatIntentMotionModel::ComputeDrain(Input, Result))) return false;
 	TestEqual(TEXT("零意图没有可被取消的主动距离"), Result.UnfulfilledDistanceCentimeters, 0.0);
 	TestEqual(TEXT("零意图的被动拖动不制造鱼费用"), Result.StaminaDrain, 0.0);
 	return !HasAnyErrors();
@@ -132,31 +133,31 @@ IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatFishingFishIntentInvalidInputTest,
 bool FCatFishingFishIntentInvalidInputTest::RunTest(const FString& Parameters)
 {
 	(void)Parameters;
-	FCatFightFishIntentInput Valid;
+	FCatIntentMotionInput Valid;
 	Valid.IntendedDisplacementCentimeters = FVector(200.0, 0.0, 0.0);
 	Valid.StaminaPerUnfulfilledMeter = CatFishingFishIntentTests::PricePerMeter;
-	FCatFightFishIntentResult Result;
+	FCatIntentMotionResult Result;
 	const double NaN = std::numeric_limits<double>::quiet_NaN();
 	const double Infinity = std::numeric_limits<double>::infinity();
 	for (const double Invalid : {NaN, Infinity})
 	{
 		auto Input = Valid;
 		Input.IntendedDisplacementCentimeters.X = Invalid;
-		TestFalse(TEXT("非有限意图拒绝结算"), FCatFishingFightWorkModel::ComputeFishIntentDrain(Input, Result));
+		TestFalse(TEXT("非有限意图拒绝结算"), FCatIntentMotionModel::ComputeDrain(Input, Result));
 		Input = Valid;
 		Input.ActualDisplacementCentimeters.Y = Invalid;
-		TestFalse(TEXT("非有限实际位移拒绝结算"), FCatFishingFightWorkModel::ComputeFishIntentDrain(Input, Result));
+		TestFalse(TEXT("非有限实际位移拒绝结算"), FCatIntentMotionModel::ComputeDrain(Input, Result));
 		Input = Valid;
 		Input.StaminaPerUnfulfilledMeter = Invalid;
-		TestFalse(TEXT("非有限单价拒绝结算"), FCatFishingFightWorkModel::ComputeFishIntentDrain(Input, Result));
+		TestFalse(TEXT("非有限单价拒绝结算"), FCatIntentMotionModel::ComputeDrain(Input, Result));
 	}
 	auto Input = Valid;
 	Input.StaminaPerUnfulfilledMeter = -1.0;
-	TestFalse(TEXT("负价不能让受阻转为回血"), FCatFishingFightWorkModel::ComputeFishIntentDrain(Input, Result));
+	TestFalse(TEXT("负价不能让受阻转为回血"), FCatIntentMotionModel::ComputeDrain(Input, Result));
 	Input = Valid;
-	if (!TestTrue(TEXT("拒绝前先保留一份真实正费用结果"), FCatFishingFightWorkModel::ComputeFishIntentDrain(Input, Result))) return false;
+	if (!TestTrue(TEXT("拒绝前先保留一份真实正费用结果"), FCatIntentMotionModel::ComputeDrain(Input, Result))) return false;
 	Input.StaminaPerUnfulfilledMeter = std::numeric_limits<double>::max();
-	TestFalse(TEXT("单项有限但最终费用溢出仍拒绝"), FCatFishingFightWorkModel::ComputeFishIntentDrain(Input, Result));
+	TestFalse(TEXT("单项有限但最终费用溢出仍拒绝"), FCatIntentMotionModel::ComputeDrain(Input, Result));
 	TestEqual(TEXT("计算失败不会遗留上次有效费用"), Result.StaminaDrain, 0.0);
 	TestEqual(TEXT("计算失败清除未完成的诊断结果"), Result.UnfulfilledDistanceCentimeters, 0.0);
 	return !HasAnyErrors();
@@ -188,12 +189,12 @@ bool FCatFishingFishIntentTimeTest::RunTest(const FString& Parameters)
 			double TotalDrain = 0.0;
 			for (int32 Index = 0; Index < FMath::RoundToInt(2.0 / Dt); ++Index)
 			{
-				FCatFightFishIntentInput Input;
+				FCatIntentMotionInput Input;
 				Input.IntendedDisplacementCentimeters = FVector::ForwardVector * (180.0 * Trajectory.EffortRatio * Dt);
 				Input.ActualDisplacementCentimeters = FVector::ForwardVector * (Trajectory.ActualSpeedCentimetersPerSecond * Dt);
 				Input.StaminaPerUnfulfilledMeter = CatFishingFishIntentTests::PricePerMeter;
-				FCatFightFishIntentResult Result;
-				if (!TestTrue(TEXT("相同两秒轨迹的每个分步均合法"), FCatFishingFightWorkModel::ComputeFishIntentDrain(Input, Result))) return false;
+				FCatIntentMotionResult Result;
+				if (!TestTrue(TEXT("相同两秒轨迹的每个分步均合法"), FCatIntentMotionModel::ComputeDrain(Input, Result))) return false;
 				TotalUnfulfilled += Result.UnfulfilledDistanceCentimeters;
 				TotalDrain += Result.StaminaDrain;
 			}

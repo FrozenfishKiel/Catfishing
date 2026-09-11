@@ -1,6 +1,8 @@
 #if WITH_DEV_AUTOMATION_TESTS
 
 #include "Misc/AutomationTest.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/Physics/Tests/CatPhysicalTestWorld.h"
 #include "Components/BoxComponent.h"
 
@@ -21,11 +23,13 @@ bool FCatFishingPhysicalPeerCollisionTest::RunTest(const FString& Parameters)
 		{
 			ACatCharacter* Second = Scene.SpawnCat(FVector(32, 0, 20));
 			if (!Second) return false;
+			First->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 50);
+			Second->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(), 10);
 			Scene.Step(60);
 			const double Before = Second->GetActorLocation().X;
 			Body->SetMoveIntent(FVector::ForwardVector);
 			Scene.Step(90);
-			TestTrue(TEXT("ordinary walking contact actually pushes a standing peer"), Second->GetActorLocation().X > Before + 20);
+			TestTrue(TEXT("a stronger walking cat pushes a weaker finite stance through real contact"), Second->GetActorLocation().X > Before + 20);
 			TestTrue(TEXT("the pusher cannot pass through the peer"), First->GetActorLocation().X < Second->GetActorLocation().X);
 			TestEqual(TEXT("physics bodies keep peer blocking instead of group collision ignores"), Body->GetBody()->GetCollisionResponseToChannel(ECC_PhysicsBody), ECR_Block);
 		}

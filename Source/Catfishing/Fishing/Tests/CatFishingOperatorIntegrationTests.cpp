@@ -140,7 +140,7 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 				const float FrameSeconds = Schedule == 0 ? 0.10f : 0.05f;
 				World->TimeSeconds += FrameSeconds;
 				Movement->GetBody()->SetWorldLocation(Movement->GetBody()->GetComponentLocation()
-					+ FVector(600.0 * FrameSeconds, 0, 0), false, nullptr, ETeleportType::TeleportPhysics);
+					+ FVector(300.0 * FrameSeconds, 0, 0), false, nullptr, ETeleportType::TeleportPhysics);
 			}
 			if (!TestTrue(TEXT("each fixed step freezes the real body observation"), Runner->UpdateOperatorIntentAndProperties())) return false;
 			if (Schedule == 0 && FixedStepIndex == 0)
@@ -148,7 +148,7 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 				const auto& Pending = Runner->OperatorState.PendingMovementSamples;
 				TestTrue(TEXT("a 100 ms sample retains the second 50 ms and its progress"), Pending.Num() == 1
 					&& FMath::IsNearlyEqual(Pending[0].DurationSeconds, 0.05, 1e-7)
-					&& Pending[0].ActualDisplacementCentimeters.X > 29.9);
+					&& Pending[0].ActualDisplacementCentimeters.X > 14.9);
 			}
 			const auto MovementStep = FCatFishingFightSimulator::Step(Runner->Config, Runner->State, Constraint, FVector::ForwardVector);
 			if (!TestTrue(TEXT("unloaded line has no extra operation bill"), MovementStep.bSucceeded && MovementStep.CatStaminaDrain == 0.0)
@@ -160,7 +160,7 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 		for (const auto& Pending : Runner->OperatorState.PendingMovementSamples) RemainingSeconds += Pending.DurationSeconds;
 		TestTrue(TEXT("two fixed steps consume the complete sample exactly once"), RemainingSeconds < 1e-7);
 	}
-	TestTrue(TEXT("schedule comparison includes real observations and a nonzero ASC bill"), ScheduleTravel[0] > 59.9 && ScheduleDrains[0] > 0.1);
+	TestTrue(TEXT("schedule comparison includes real observations and a nonzero ASC bill"), ScheduleTravel[0] > 29.9 && ScheduleDrains[0] > 0.1);
 	TestEqual(TEXT("one 100 ms frame and two 50 ms frames conserve observed progress"), ScheduleTravel[0], ScheduleTravel[1], 1e-4);
 	TestEqual(TEXT("catch-up timers cannot double-charge one body's movement"), ScheduleDrains[0], ScheduleDrains[1], 1e-5);
 
@@ -208,6 +208,24 @@ bool FCatFishingOperatorRunnerIntegrationTest::RunTest(const FString& Parameters
 	}
 	AddInfo(FString::Printf(TEXT("Event=fishing_operator_sampling_contract_verified OneFrameTravelCm=%.3f TwoFrameTravelCm=%.3f OneFrameDrain=%.6f TwoFrameDrain=%.6f Evidence=contract"),
 		ScheduleTravel[0], ScheduleTravel[1], ScheduleDrains[0], ScheduleDrains[1]));
+	Runner->State.bFishExhausted = false;
+	Runner->State.LineLengthCentimeters = 800;
+	Movement->SetMoveIntent(FVector::ZeroVector);
+	for (int32 LoadCase=0; LoadCase<4; ++LoadCase)
+	{
+		Movement->ClearExternalForce(Session);
+		Movement->ClearExternalForce(Rod);
+		if (LoadCase<2) Movement->SetExternalForceFromAuthority(Session, FVector(1000,0,0));
+		if (LoadCase==1) Movement->SetExternalForceFromAuthority(Rod, FVector(-1000,0,0));
+		World->TimeSeconds += .05;
+		if (!Runner->UpdateOperatorIntentAndProperties()) return false;
+		auto SlackStep = FCatFishingFightSimulator::Step(Runner->Config, Runner->State, Constraint, FVector::ForwardVector);
+		if (!TestTrue(TEXT("load recovery cases retain the existing free-spool action"), SlackStep.bSucceeded && SlackStep.bSlackRecoveryActive)) return false;
+		if (LoadCase==2) SlackStep.RodLineForceNewtons = FVector(1,0,0);
+		if (!Runner->ApplyOperatorStaminaChanges(SlackStep)) return false;
+		if (LoadCase<3) TestEqual(TEXT("one primary ASC writer blocks recovery for applied or cancelling loads"), Runner->LastOperatorStaminaDrain, 0.0);
+		else TestTrue(TEXT("the primary retains normal unloaded slack recovery"), Runner->LastOperatorStaminaDrain<0);
+	}
 	return !HasAnyErrors();
 }
 #endif

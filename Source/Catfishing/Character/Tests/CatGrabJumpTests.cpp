@@ -1,5 +1,7 @@
 #if WITH_DEV_AUTOMATION_TESTS
 #include "Misc/AutomationTest.h"
+#include "AbilitySystem/Attributes/CatSurvivalAttributeSet.h"
+#include "AbilitySystem/Core/CatAbilitySystemComponent.h"
 #include "Character/Physics/Tests/CatPhysicalTestWorld.h"
 #include "Character/CatCharacterMovementComponent.h"
 #include "Interaction/Grab/CatPhysicsGrabComponent.h"
@@ -69,6 +71,9 @@ bool FCatGrabJumpWorldTest::RunTest(const FString& Parameters)
             if (ReferenceRise<0) ReferenceRise=PeakB-BZ;
             else TestTrue(TEXT("60 and 120 Hz deliver comparable lift"),FMath::Abs(ReferenceRise-(PeakB-BZ))<8);
         }
+        // Jump physics stays identical; backward towing requires a stronger mover than the standing friend.
+        A->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(),60);
+        B->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFishingStrengthAttribute(),20);
         const double BeforePull=B->GetActorLocation().X;
         AB->SetMoveIntent(-FVector::ForwardVector);
         Scene.Step(Rate,Rate);

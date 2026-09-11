@@ -82,7 +82,12 @@ bool FCatHUDPersonalStaminaTest::RunTest(const FString& Parameters)
 	Model->Refresh();
 	Widget->RenderHUD(Model->GetViewState());
 	TestFalse(TEXT("离竿后清会话标记"), Model->GetViewState().bHasFishingSession);
-	TestEqual(TEXT("离竿后隐藏钓鱼体力条"), Widget->CatStaminaProgressBar->GetVisibility(), ESlateVisibility::Collapsed);
+	TestEqual(TEXT("没有会话仍显示个人消耗与恢复中的体力"), Widget->CatStaminaProgressBar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+	TestFalse(TEXT("个人体力可见不会赋予鱼信息或钓鱼会话"), Model->GetViewState().bShowFightMeters || Model->GetViewState().bHasFishingSession);
+	AbilitySystem->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), 100.0f);
+	Model->Refresh();
+	Widget->RenderHUD(Model->GetViewState());
+	TestEqual(TEXT("恢复至上限且无会话后收起体力条"), Widget->CatStaminaProgressBar->GetVisibility(), ESlateVisibility::Collapsed);
 	Model->Unbind();
 	return !HasAnyErrors();
 }
@@ -175,6 +180,13 @@ bool FCatHUDFormalPersonalMeterTest::RunTest(const FString& Parameters)
 	TestEqual(TEXT("正式体力控件解除初始隐藏"), Bar->GetVisibility(), ESlateVisibility::HitTestInvisible);
 	TestNotNull(TEXT("保留正式背包按钮"), Widget->GetWidgetFromName(TEXT("InventoryButton")));
 	TestNotNull(TEXT("保留正式设置按钮"), Widget->GetWidgetFromName(TEXT("MainMenuButton")));
+	State.bHasFishingSession = false;
+	State.bShowFightMeters = false;
+	State.bShowPersonalStamina = true;
+	Widget->RenderHUD(State);
+	TestEqual(TEXT("正式辅助者无会话仍显示本人耗体"), Bar->GetVisibility(), ESlateVisibility::HitTestInvisible);
+	if (auto* FishBar = Cast<UProgressBar>(Widget->GetWidgetFromName(TEXT("FishStaminaProgressBar"))))
+		TestEqual(TEXT("辅助者体力条不泄漏鱼端会话表现"), FishBar->GetVisibility(), ESlateVisibility::Collapsed);
 	Widget->RenderHUD(FCatHUDViewState());
 	TestEqual(TEXT("退出钓鱼后正式体力条隐藏"), Bar->GetVisibility(), ESlateVisibility::Collapsed);
 	return !HasAnyErrors();

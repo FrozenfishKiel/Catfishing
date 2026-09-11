@@ -152,13 +152,13 @@ bool FCatFishingActualEndpointTest::RunTest(const FString& Parameters)
 	FCatFightOperatorMovementCostResult BlockedCost;
 	if (!TestTrue(TEXT("personal billing accepts a blocked physical body"),
 		FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Personal, BlockedCost))) return false;
-	TestEqual(TEXT("blocked body has no positive movement work"), BlockedCost.WorkStaminaDrain, 0.0);
-	TestTrue(TEXT("blocked voluntary effort retains its timed support bill"), BlockedCost.SupportStaminaDrain > 0.0);
+	TestEqual(TEXT("blocked body has no positive movement work"), BlockedCost.ActualProgressCentimeters, 0.0);
+	TestTrue(TEXT("blocked voluntary effort pays the unfulfilled intention"), BlockedCost.StaminaDrain > 0.0);
 	Personal.ActualDisplacementCentimeters = FVector(-5.0, 0.0, 0.0);
 	FCatFightOperatorMovementCostResult ProgressCost;
 	if (!TestTrue(TEXT("personal billing accepts actual progress"),
 		FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Personal, ProgressCost))) return false;
-	TestTrue(TEXT("actual progress alone enables positive movement work"), ProgressCost.WorkStaminaDrain > 0.0);
+	TestTrue(TEXT("actual forward progress reduces the same directional deficit"), ProgressCost.StaminaDrain < BlockedCost.StaminaDrain);
 	Personal.MoveIntentWorld = FVector::ZeroVector;
 	FCatFightOperatorMovementCostResult PassiveCost;
 	if (!TestTrue(TEXT("personal billing accepts passive drag"),

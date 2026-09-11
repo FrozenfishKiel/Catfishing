@@ -1,3 +1,5 @@
+#include "AbilitySystem/Config/CatPhysicalEffortSettings.h"
+#include "Character/CatCharacterMovementComponent.h"
 #include "Fishing/Simulation/CatFishingFightRunner.h"
 #include "Fishing/Integration/CatFishingPhysicalRodComponent.h"
 #include "Character/Physics/CatPhysicalBodyComponent.h"
@@ -214,6 +216,8 @@ bool UCatFishingFightRunner::BindPrimaryOperatorFromAuthority(APlayerState* Play
 	OperatorState.StaminaMaximum = Maximum; OperatorState.LastInputSequence = InitialInputSequence;
 	OperatorState.bPullHeld = bInitialPullHeld; OperatorState.bSlackHeld = bInitialSlackHeld;
 	OperatorState.LastSampledPosition = Physical->GetBody()->GetComponentLocation();
+	if (const auto* Movement = Cast<UCatCharacterMovementComponent>(Character->GetCharacterMovement()))
+		OperatorState.LastSampledMotionCorrection = Movement->GetTotalMotionCorrection();
 	OperatorState.LastMovementSampleWorldSeconds = Character->GetWorld()->GetTimeSeconds();
 	OperatorState.LastBodyResetEpoch = Physical->GetResetEpoch(); OperatorState.bHasSampledPosition = true;
 	OperatorState.ControlEpoch = RodActor.IsValid() ? RodActor->GetControlEpoch() : 0;
@@ -241,6 +245,7 @@ bool UCatFishingFightRunner::UpdateOperatorIntentAndProperties()
 	bOperatorSettlementPending = false;
 	FrozenOperatorMovementSamples.Reset(); FrozenOperatorAbilitySystem.Reset();
 	FrozenOperatorStamina = FrozenOperatorStaminaMaximum = 0.0;
+	bFrozenOperatorUnderLoad = false;
 	Config.PrimaryOperatorCatStrength = 0.0;
 	OperatorSupportAlignment = 0.0;
 	if (!State.bOperatorPresent)
@@ -265,15 +270,19 @@ bool UCatFishingFightRunner::UpdateOperatorIntentAndProperties()
 	Config.CatStaminaMaximum = FrozenOperatorStaminaMaximum;
 	State.CatStamina = FrozenOperatorStamina;
 	FrozenOperatorAbilitySystem = ASC;
+	bFrozenOperatorUnderLoad = Physical->HasExternalLoadFromAuthority();
 	const FVector Intent = FVector(Physical->GetMoveIntent().X, Physical->GetMoveIntent().Y, 0.0).GetClampedToMaxSize(1.0);
 	const FVector ResistanceDirection = ((RodActor.IsValid() ? RodActor->GetRodTipWorldTransform().GetLocation() : FVector::ZeroVector)
 		- State.FishWorldPosition).GetSafeNormal2D(UE_DOUBLE_SMALL_NUMBER, -FVector::ForwardVector);
 	OperatorSupportAlignment = 1.0 - Intent.Size() + FVector::DotProduct(Intent, ResistanceDirection);
 	const FVector Position = Physical->GetBody()->GetComponentLocation();
+	const auto* Movement = Cast<UCatCharacterMovementComponent>(Character->GetCharacterMovement());
+	const FVector Correction = Movement ? Movement->GetTotalMotionCorrection() : FVector::ZeroVector;
 	const double Now = Character->GetWorld()->GetTimeSeconds();
 	if (!OperatorState.bHasSampledPosition || OperatorState.LastBodyResetEpoch != Physical->GetResetEpoch())
 	{
 		OperatorState.LastSampledPosition = Position; OperatorState.LastBodyResetEpoch = Physical->GetResetEpoch();
+		OperatorState.LastSampledMotionCorrection = Correction;
 		OperatorState.PendingMovementSamples.Reset(); OperatorState.LastMovementSampleWorldSeconds = Now;
 		OperatorState.bHasSampledPosition = true;
 	}
@@ -285,10 +294,11 @@ bool UCatFishingFightRunner::UpdateOperatorIntentAndProperties()
 		if (!Intent.IsNearlyZero())
 		{
 			const FVector Direction = Intent.GetSafeNormal();
-			Sample.ActualDisplacementCentimeters = Direction * FMath::Clamp(FVector::DotProduct(Position - OperatorState.LastSampledPosition, Direction),
-				0.0, Intent.Size() * Sample.MaximumMoveSpeedCentimetersPerSecond * Sample.DurationSeconds);
+			Sample.ActualDisplacementCentimeters = Direction * FVector::DotProduct(Position - OperatorState.LastSampledPosition
+				- (Correction - OperatorState.LastSampledMotionCorrection), Direction);
 		}
 		OperatorState.LastSampledPosition = Position; OperatorState.LastMovementSampleWorldSeconds = Now;
+		OperatorState.LastSampledMotionCorrection = Correction;
 	}
 	double RemainingSeconds = Config.FixedStepSeconds;
 	while (RemainingSeconds > UE_DOUBLE_SMALL_NUMBER && !OperatorState.PendingMovementSamples.IsEmpty())
@@ -324,10 +334,9 @@ bool UCatFishingFightRunner::ApplyOperatorStaminaChanges(const FCatFightStepResu
 			FCatFightOperatorMovementCostInput Cost;
 			Cost.MoveIntentWorld = Sample.MoveIntentWorld; Cost.ActualDisplacementCentimeters = Sample.ActualDisplacementCentimeters;
 			Cost.MaximumMoveSpeedCentimetersPerSecond = Sample.MaximumMoveSpeedCentimetersPerSecond; Cost.FixedStepSeconds = Sample.DurationSeconds;
-			Cost.ActiveStrength = OperatorState.ActiveFishingStrength; Cost.StandardStrength = Config.StrengthPerKilogram;
-			Cost.CostPerStrengthCentimeter = Config.CatStaminaCostPerStrengthCentimeter; Cost.NormalizedLoad = Step.CatNormalizedEffortLoad;
-			Cost.UnloadedWorkMultiplier = Config.CatUnloadedWorkMultiplier; Cost.LoadStaminaMultiplier = Config.CatLoadStaminaMultiplier;
-			Cost.MovementStaminaMultiplier = Config.CatMovementStaminaMultiplier; Cost.SupportStaminaPerSecond = Config.CatSupportStaminaPerSecond;
+			Cost.ActiveStrength = OperatorState.ActiveFishingStrength;
+			Cost.StaminaPerUnfulfilledMeter = GetDefault<UCatPhysicalEffortSettings>()->StaminaPerUnfulfilledMeter;
+			Cost.MovementStaminaMultiplier = Config.CatMovementStaminaMultiplier;
 			FCatFightOperatorMovementCostResult Result;
 			if (!FCatFishingOperatorWorkModel::ComputeMovementStaminaDrain(Cost, Result)) return false;
 			MovementDrain += Result.StaminaDrain;
@@ -336,7 +345,8 @@ bool UCatFishingFightRunner::ApplyOperatorStaminaChanges(const FCatFightStepResu
 	const double RequestedDrain = MovementDrain + RodDrain;
 	if (!FMath::IsFinite(RequestedDrain) || RequestedDrain < 0.0) return false;
 	const double Paid = FMath::Min(FrozenOperatorStamina, RequestedDrain);
-	const double Recovery = Step.bSlackRecoveryActive
+	const bool bRecoveryLoaded = bFrozenOperatorUnderLoad || !Step.RodLineForceNewtons.IsNearlyZero(UE_DOUBLE_SMALL_NUMBER);
+	const double Recovery = Step.bSlackRecoveryActive && !bRecoveryLoaded
 		? FMath::Min(FrozenOperatorStaminaMaximum - FrozenOperatorStamina, Config.SlackStaminaRegenPerSecond * Config.FixedStepSeconds) : 0.0;
 	LastOperatorStaminaDrain = Paid - Recovery;
 	const float AttributeDelta = static_cast<float>(-LastOperatorStaminaDrain);
@@ -348,12 +358,12 @@ bool UCatFishingFightRunner::ApplyOperatorStaminaChanges(const FCatFightStepResu
 	{
 		OwnerSession->PublishPrimarySummaryFromAuthority(OperatorState.ActiveFishingStrength, State.CatStamina,
 			FrozenOperatorStaminaMaximum, true);
-		if ((MovementDrain > 0.0 || RodDrain > 0.0 || Recovery > 0.0) && OwnerSession->GetWorld()->GetTimeSeconds() >= NextStaminaDiagnosticSeconds)
+		if ((MovementDrain > 0.0 || RodDrain > 0.0 || Recovery > 0.0 || (Step.bSlackRecoveryActive && bRecoveryLoaded)) && OwnerSession->GetWorld()->GetTimeSeconds() >= NextStaminaDiagnosticSeconds)
 		{
 			NextStaminaDiagnosticSeconds = OwnerSession->GetWorld()->GetTimeSeconds() + 1.0;
-			UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_primary_stamina_settled SessionId=%s PlayerId=%d MovementDrain=%.5f RodDrain=%.5f ActualPaid=%.5f Recovery=%.5f Remaining=%.5f World=%s NetMode=%d Authority=1 LocalRole=%d"),
+			UE_LOG(LogCatFishing, Log, TEXT("Event=fishing_primary_stamina_settled SessionId=%s PlayerId=%d MovementDrain=%.5f RodDrain=%.5f ActualPaid=%.5f Recovery=%.5f RecoveryLoaded=%d Remaining=%.5f World=%s NetMode=%d Authority=1 LocalRole=%d"),
 				*OwnerSession->GetSnapshot().FishingSessionId.ToString(), OperatorState.PlayerState.IsValid() ? OperatorState.PlayerState->GetPlayerId() : INDEX_NONE,
-				MovementDrain, RodDrain, Paid, Recovery, State.CatStamina, *GetNameSafe(OwnerSession->GetWorld()), int32(OwnerSession->GetNetMode()), int32(OwnerSession->GetLocalRole()));
+				MovementDrain, RodDrain, Paid, Recovery, bRecoveryLoaded, State.CatStamina, *GetNameSafe(OwnerSession->GetWorld()), int32(OwnerSession->GetNetMode()), int32(OwnerSession->GetLocalRole()));
 		}
 	}
 	return true;

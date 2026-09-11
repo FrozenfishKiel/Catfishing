@@ -173,9 +173,9 @@ namespace CatFishingGroupNetwork
 						}
 						else
 						{
-							const float ExistingBalance = 17.0f + Index;
+							// Reserve enough personal stamina for the real bite wait; exhaustion has its own physical runtime test.
+							const float ExistingBalance = Cat->GetCatAbilitySystemComponent()->GetNumericAttributeBase(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()) - Index;
 							Cat->GetCatAbilitySystemComponent()->SetNumericAttributeBase(UCatSurvivalAttributeSet::GetFightStaminaAttribute(), ExistingBalance);
-							HelperStamina.Add(ExistingBalance);
 						}
 					}
 					PrimaryCat->GetPhysicalBodyComponent()->GetGrab()->SetGrabInput(true, true);
@@ -216,16 +216,19 @@ namespace CatFishingGroupNetwork
                     const FVector At(ShaftPoint.X + 40, ShaftPoint.Y - 6.8 + I * 64.4, HelperBody->GetStandRootHeightCm());
                     HelperBody->TeleportBodyFromAuthority(FTransform(FRotator(0, I == 0 ? 180 : -90, 0), At), TEXT("UprightGroundGripFixture"));
                 }
-				// Leave the real rod at its authored hold pose. One helper holds the shaft;
-				// the other two grip the preceding cat, so the graph follows physical contact.
+				// Leave the real rod at its authored hold pose;
+				// this four-player case grips cats in sequence; the separate LightProps network case covers shaft grips.
 				Stage = 1;
 				StageStarted = Now;
 			}
 
 			for (int32 Index = 0; Index < RemoteControllers.Num(); ++Index)
-				if (!Test->TestEqual(TEXT("physical helpers never initialize, pay or recover fishing stamina"),
-					CastChecked<ACatCharacter>(RemoteControllers[Index]->GetPawn())->GetCatAbilitySystemComponent()->GetNumericAttribute(
-						UCatSurvivalAttributeSet::GetFightStaminaAttribute()), HelperStamina[Index])) return true;
+			{
+				const auto* ASC = CastChecked<ACatCharacter>(RemoteControllers[Index]->GetPawn())->GetCatAbilitySystemComponent();
+				const double Remaining = ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+				if (!Test->TestTrue(TEXT("each helper retains a finite personal stamina balance"), FMath::IsFinite(Remaining) && Remaining >= 0
+					&& Remaining <= ASC->GetNumericAttribute(UCatSurvivalAttributeSet::GetMaxFightStaminaAttribute()))) return true;
+			}
 
 			TArray<ACatFishingRodActor*> ClientRods;
 			for (UWorld* Client : Clients)
@@ -241,22 +244,13 @@ namespace CatFishingGroupNetwork
 			{
 				auto* Body = CastChecked<ACatCharacter>(LocalClients[Index]->GetPawn())->GetPhysicalBodyComponent();
 				const FVector Shoulder = Body->GetGrab()->GetShoulderWorldLocation(true);
-				AActor* Target = ClientRods[Index];
-				FVector AimPoint;
-				if (Index == 0)
-				{
-					AimPoint = ClientRods[Index]->GetGripWorldTransform().GetLocation() + ClientRods[Index]->GetPhysicalRodBody()->GetForwardVector() * 12.0;
-				}
-				else
-				{
-					ACatCharacter* PreviousCat = nullptr;
-					const int32 PreviousPlayerId = LocalClients[Index - 1]->PlayerState->GetPlayerId();
-					for (TActorIterator<ACatCharacter> It(Clients[Index]); It; ++It)
-						if (It->GetPlayerState() && It->GetPlayerState()->GetPlayerId() == PreviousPlayerId) PreviousCat = *It;
-					if (!PreviousCat) return false;
-					Target = PreviousCat;
-					AimPoint = PreviousCat->GetPhysicalBodyComponent()->GetBody()->GetComponentLocation();
-				}
+				ACatCharacter* PreviousCat = nullptr;
+				const int32 PreviousPlayerId = Index == 0 ? Primary->PlayerState->GetPlayerId() : LocalClients[Index-1]->PlayerState->GetPlayerId();
+				for (TActorIterator<ACatCharacter> It(Clients[Index]); It; ++It)
+					if (It->GetPlayerState() && It->GetPlayerState()->GetPlayerId() == PreviousPlayerId) PreviousCat = *It;
+				if (!PreviousCat) return false;
+				AActor* Target = PreviousCat;
+				const FVector AimPoint = PreviousCat->GetPhysicalBodyComponent()->GetBody()->GetComponentLocation();
 				ClientGripTargets.Add(Target);
 				// A human stops moving the mouse once contact is established. Continuing to
 				// aim at the moving target's centre would keep applying new shoulder/yaw input
@@ -297,7 +291,7 @@ namespace CatFishingGroupNetwork
 						bGrabRequested = true; GripStarted = Now;
 					}
 					UCatPhysicsGrabComponent* AuthorityGrab = AuthorityCats[JoinIndex + 1]->GetPhysicalBodyComponent()->GetGrab();
-					AActor* AuthorityTarget = JoinIndex == 0 ? static_cast<AActor*>(Rod.Get()) : AuthorityCats[JoinIndex];
+					AActor* AuthorityTarget = AuthorityCats[JoinIndex];
 					if (!AuthorityGrab->IsGripping(true) || AuthorityGrab->GetGripTarget(true) != AuthorityTarget
 						|| !LocalBody->GetGrab()->IsGripping(true) || LocalBody->GetGrab()->GetGripTarget(true) != ClientGripTargets[JoinIndex]
 						|| ClientRods[JoinIndex]->GetOperatorCount() != 1)
@@ -369,11 +363,13 @@ namespace CatFishingGroupNetwork
 						if (Now - PreCastMotionStarted < 6.0) return false;
 						Test->AddError(TEXT("physical bodies failed to settle and replicate after releasing movement")); return true;
 					}
-					for (int32 Index = 0; Index < AuthorityCats.Num(); ++Index)
-						if (!Test->TestEqual(TEXT("pre-cast physical cooperation spends no fishing stamina"), AuthorityCats[Index]->GetCatAbilitySystemComponent()->GetNumericAttribute(
-							UCatSurvivalAttributeSet::GetFightStaminaAttribute()), PreCastStamina[Index])) return true;
+					if (!Test->TestEqual(TEXT("the primary has no pre-cast rod bill"),
+						AuthorityCats[0]->GetCatAbilitySystemComponent()->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute()), PreCastStamina[0])) return true;
+					for (int32 Index = 1; Index < AuthorityCats.Num(); ++Index)
+						if (!Test->TestTrue(TEXT("real pre-cast physical effort pays the helper's own stamina"), AuthorityCats[Index]->GetCatAbilitySystemComponent()->GetNumericAttribute(
+							UCatSurvivalAttributeSet::GetFightStaminaAttribute()) < PreCastStamina[Index])) return true;
 					PreCastMotionStage = 3;
-					Test->AddInfo(TEXT("Event=fishing_physical_network_precast_verified FishingOperators=1 ActualGrips=4 OwnerPositionErrorCm=5 StaminaUnchanged=1"));
+					Test->AddInfo(TEXT("Event=fishing_physical_network_precast_verified FishingOperators=1 ActualGrips=4 OwnerPositionErrorCm=5 PersonalEffortPaid=1"));
 				}
 				auto* Region = Server->SpawnActorDeferred<ACatWaterRegion>(ACatWaterRegion::StaticClass(), FTransform::Identity);
 				auto* Boundary = Server->SpawnActor<ACatWaterBoundarySplineActor>();
@@ -431,7 +427,7 @@ namespace CatFishingGroupNetwork
 				for (int32 Index = 0; Index < AuthorityCats.Num(); ++Index)
 				{
 					if (!Test->TestTrue(TEXT("pre-fight session retains every actual rod or cat-chain grip"), AuthorityCats[Index]->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true))) return true;
-					if (!Test->TestEqual(TEXT("cast and bite waiting do not charge movement fishing stamina"), AuthorityCats[Index]->GetCatAbilitySystemComponent()->GetNumericAttribute(
+					if (Index == 0 && !Test->TestEqual(TEXT("cast and bite waiting do not charge the primary rod bill"), AuthorityCats[Index]->GetCatAbilitySystemComponent()->GetNumericAttribute(
 						UCatSurvivalAttributeSet::GetFightStaminaAttribute()), PreCastStamina[Index])) return true;
 				}
 				if (Session->GetSnapshot().Phase != ECatFishingPhase::TrueBiteWindow) return false;
@@ -487,6 +483,14 @@ namespace CatFishingGroupNetwork
 						RemoteControllers[Index]->PlayerState->GetPlayerId(), *InitialHelperPositions[Index].ToCompactString(),
 						*RemoteControllers[Index]->GetPawn()->GetActorLocation().ToCompactString()),
 						FVector::DistSquared(InitialHelperPositions[Index], RemoteControllers[Index]->GetPawn()->GetActorLocation()) > 1.0)) return true;
+				for (int32 Index = 0; Index < LocalClients.Num(); ++Index)
+				{
+					const double ServerStamina = CastChecked<ACatCharacter>(RemoteControllers[Index]->GetPawn())->GetCatAbilitySystemComponent()->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+					const double ClientStamina = CastChecked<ACatCharacter>(LocalClients[Index]->GetPawn())->GetCatAbilitySystemComponent()->GetNumericAttribute(UCatSurvivalAttributeSet::GetFightStaminaAttribute());
+					if (FMath::Abs(ServerStamina-ClientStamina)>0.5) return false;
+					if (!Test->TestTrue(TEXT("each client observes its own helper effort payment"),ServerStamina<PreCastStamina[Index+1])) return true;
+					Test->AddInfo(FString::Printf(TEXT("Event=physical_effort_network_observed Helper=%d ServerStamina=%.6f ClientStamina=%.6f SessionId=%s"),Index,ServerStamina,ClientStamina,*SessionId.ToString()));
+				}
 				SampledRodTravel = FVector::Distance(InitialRodPosition, Rod->GetActorLocation());
 				SampledFishTravel = FVector::Distance(InitialFishPosition, Session->GetSnapshot().FishEncounterActor->GetActorLocation());
 				OldEpoch = Rod->GetControlEpoch();
@@ -544,15 +548,15 @@ namespace CatFishingGroupNetwork
 					if (ClientRods[Index]->GetOperatorCount() != 0 || ClientRods[Index]->GetControlEpoch() == OldEpoch
 						|| ClientSessions[Index]->GetSnapshot().FisherPlayerState != nullptr) return false;
 				UCatPhysicsGrabComponent* RemainingGrab = CastChecked<ACatCharacter>(RemoteControllers[0]->GetPawn())->GetPhysicalBodyComponent()->GetGrab();
-				if (!Test->TestFalse(TEXT("parking clears the helper rod grip on both endpoints"),
-					RemainingGrab->IsGripping(true) || CastChecked<ACatCharacter>(LocalClients[0]->GetPawn())->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true))
+				if (!Test->TestTrue(TEXT("parking retains the independent helper body grip on both endpoints"),
+					RemainingGrab->IsGripping(true) && CastChecked<ACatCharacter>(LocalClients[0]->GetPawn())->GetPhysicalBodyComponent()->GetGrab()->IsGripping(true))
 					|| !Test->TestNull(TEXT("a remaining physical helper is never promoted automatically"), Rod->GetPresentationState().OperatorPlayerState.Get())
 					|| !Test->TestEqual(TEXT("unattended fishing preserves the deployment owner"), Rod->GetPresentationState().OwnerPlayerState.Get(), Primary->PlayerState.Get())
 					|| !Test->TestFalse(TEXT("the same line and fishing session continue unattended"), Session->IsTerminal())) return true;
 				FCatInventoryEntry Locked;
 				Test->TestEqual(TEXT("unattended fishing keeps the original rod resource lock"), CatFishingTest::ReadHeldRod(Equipment.Get(), RodItemId, Locked), ECatDomainCommandError::InvalidPhase);
 				if (Test->HasAnyErrors()) return true;
-				Test->AddInfo(FString::Printf(TEXT("Event=fishing_physical_helpers_network_verified SessionId=%s RodActorId=%s PreviousFishingOperators=1 CurrentFishingOperators=0 PhysicalHelpers=3 HelperASCUnchanged=1 AutoPromotion=0 ControlEpoch=%u OldControlEpoch=%u LineLoad=%.3f Samples=%d MaximumLineLoad=%.3f RodTravelCm=%.3f FishTravelCm=%.3f Server=Listen Clients=3 Evidence=runtime_behavior"),
+				Test->AddInfo(FString::Printf(TEXT("Event=fishing_physical_helpers_network_verified SessionId=%s RodActorId=%s PreviousFishingOperators=1 CurrentFishingOperators=0 PhysicalHelpers=3 HelperPersonalEffortReplicated=1 AutoPromotion=0 ControlEpoch=%u OldControlEpoch=%u LineLoad=%.3f Samples=%d MaximumLineLoad=%.3f RodTravelCm=%.3f FishTravelCm=%.3f Server=Listen Clients=3 Evidence=runtime_behavior"),
 					*SessionId.ToString(), *RodId.ToString(), Rod->GetControlEpoch(), OldEpoch, Session->GetSnapshot().NormalizedLineLoad,
 					FightSamples, MaximumSampledLineLoad, SampledRodTravel, SampledFishTravel));
 				Test->TestTrue(TEXT("same session's rod stays fixed while unattended"), Rod->GetActorTransform().Equals(ParkedPose, .01));
@@ -601,7 +605,6 @@ namespace CatFishingGroupNetwork
 		double LastSettleSampleSeconds = 0.0, SettledSinceSeconds = 0.0;
 		TArray<FVector> PreCastPositions;
 		TArray<float> PreCastStamina;
-		TArray<float> HelperStamina;
 		bool bOwnerAimFixed[3] = {false, false, false};
 		FRotator FixedOwnerAim[3] = {FRotator::ZeroRotator, FRotator::ZeroRotator, FRotator::ZeroRotator};
 		TSet<ECatFishingPhase> UnloadedPhases;

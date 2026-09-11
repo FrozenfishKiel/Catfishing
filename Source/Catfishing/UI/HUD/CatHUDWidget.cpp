@@ -45,7 +45,7 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 		PhysicalHandStateTextBlock->SetText(ViewState.PhysicalHandStateText);
 		PhysicalHandStateTextBlock->SetVisibility(ViewState.bShowPhysicalControls ? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
-	if (ViewState.bShowFightMeters && (!CatStaminaTextBlock || !CatStaminaProgressBar)
+	if ((ViewState.bShowFightMeters || ViewState.bShowPersonalStamina) && (!CatStaminaTextBlock || !CatStaminaProgressBar)
 		&& !bHasLoggedMissingFishingMeter)
 	{
 		const APlayerController* Controller = GetOwningPlayer();
@@ -136,7 +136,7 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 	if (CatStaminaTextBlock)
 	{
 		CatStaminaTextBlock->SetText(ViewState.CatStaminaText);
-		CatStaminaTextBlock->SetVisibility(ViewState.bShowFightMeters
+		CatStaminaTextBlock->SetVisibility((ViewState.bShowFightMeters || ViewState.bShowPersonalStamina)
 			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
 	if (FishStaminaTextBlock)
@@ -160,7 +160,7 @@ void UCatHUDWidget::RenderHUD(const FCatHUDViewState& ViewState)
 	if (CatStaminaProgressBar)
 	{
 		CatStaminaProgressBar->SetPercent(ViewState.NormalizedFightStamina);
-		CatStaminaProgressBar->SetVisibility(ViewState.bShowFightMeters
+		CatStaminaProgressBar->SetVisibility((ViewState.bShowFightMeters || ViewState.bShowPersonalStamina)
 			? ESlateVisibility::HitTestInvisible : ESlateVisibility::Collapsed);
 	}
 	if (FishStaminaProgressBar)
