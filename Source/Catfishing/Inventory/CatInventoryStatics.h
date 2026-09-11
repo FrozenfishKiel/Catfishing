@@ -9,6 +9,7 @@
 class ACatCharacter;
 class UCatInventoryComponent;
 class UCatInventoryItemInstance;
+class UCatInventorySettings;
 
 /** 物品离开库存的两种玩家动作；丢弃开启物理轻抛，放置在检测通过的位置固定，不触发物品 Use。 */
 UENUM(BlueprintType)
@@ -80,6 +81,10 @@ class CATFISHING_API UCatInventoryStatics : public UBlueprintFunctionLibrary
 	GENERATED_BODY()
 
 public:
+	/** 只读求解已有世界物的丢弃或放置变换；库存落地与嘴叼鱼共用碰撞和空间规则，失败不移动物体或改变所有权。 */
+	static bool FindWorldReleaseTransform(ACatCharacter* Character, AActor* ItemActor,
+		ECatInventoryWorldAction Action, const UCatInventorySettings& Settings, FTransform& OutTransform);
+
 	/** 判断目标 Actor 身上的某个库存组件能否完整接收这一批物品；它只做预检，不改变库存状态。 */
 	static bool CanActorFullyAcceptInventoryBatch(const AActor* TargetActor,
 		const FCatInventoryReceiveBatch& ReceiveBatch);

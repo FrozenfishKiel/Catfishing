@@ -167,6 +167,10 @@ public:
 	UFUNCTION(Server, Reliable)
 	void ServerPickUpFishGuard(ACatFishGuardActor* Guard, FGuid RequestId);
 
+	/** 请求服务器释放当前嘴叼的原Actor；服务器自行查携带对象，空嘴无副作用。 */
+	UFUNCTION(Server, Reliable)
+	void ServerDropCarriedItem();
+
 	/** 消费本人指定草药实例的一份数量后恢复目标 Character；Condition 恢复链按当前宿主事实校验请求，库存提交成功前不会修改身体。 */
 	UFUNCTION(Server, Reliable)
 	void ServerUseHerbOnCharacter(ACatCharacter* TargetCharacter, FGuid RequestId,
@@ -397,6 +401,8 @@ private:
 	/** owning client 最近收到的公共领域命令读模型；可靠 Client RPC 整体写入，UI 只读且不会触发第二次领域操作。 */
 	UPROPERTY(Transient)
 	FCatDomainCommandResult LastCampCommandResult;
+
+
 
 	/** 当前 Controller 创建的钓鱼命令组件；它承接玩家钓鱼输入并把正式事务继续交给领域服务。 */
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly, Category="Catfishing|Fishing", meta=(AllowPrivateAccess="true"))

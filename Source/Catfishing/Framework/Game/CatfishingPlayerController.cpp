@@ -37,6 +37,7 @@
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
 #include "Inventory/CatInventoryStatics.h"
+#include "Items/Fish/CatFishPickupActor.h"
 #include "Net/UnrealNetwork.h"
 #include "Profile/CatProfileSubsystem.h"
 #include "UI/CatLocalPlayerUISubsystem.h"
@@ -1074,6 +1075,43 @@ void ACatfishingPlayerController::ServerReleaseInventoryItemToWorld_Implementati
 	DeliverCampCommandResultToOwningClient(Result);
 }
 
+// 快捷丢弃流程：服务器检查玩法门和身体，再读取当前携带对象；空嘴直接返回。
+// 单鱼解除原Actor的携带，鱼护沿原库存Drop释放；不接收客户端目标、不保存快捷请求，也不改背包选中格。
+void ACatfishingPlayerController::ServerDropCarriedItem_Implementation()
+{
+	ACatCharacter* CatCharacter = Cast<ACatCharacter>(GetPawn());
+	if (!CanForwardGameplayCommand() || !CatCharacter || !CatCharacter->GetConditionComponent()
+		|| CatCharacter->GetConditionComponent()->GetSnapshot().bDowned) return;
+	ACatFishPickupActor* Fish = ACatFishPickupActor::FindCarriedFish(CatCharacter);
+	ACatFishGuardActor* Guard = ACatFishGuardActor::FindCarriedGuard(CatCharacter);
+	if (!IsValid(Fish) && !IsValid(Guard)) return;
+	bool bDropped = false;
+	if (IsValid(Fish))
+	{
+		bDropped = Fish->DropFromAuthority(this);
+	}
+	else if (UCatInventoryComponent* Inventory = CatCharacter->GetInventoryComponent())
+	{
+		for (const FCatInventoryEntry& Entry : Inventory->GetInventoryEntries())
+		{
+			if (Entry.Instance && Entry.StackCount == 1 && Entry.Instance->GetWorldActor() == Guard)
+			{
+				// 这里只满足原库存接口的事务参数，不为快捷入口另建请求状态。
+				bDropped = UCatInventoryStatics::ReleaseItemToWorldFromAuthority(CatCharacter, FGuid::NewGuid(), CatCharacter,
+					Inventory->FindInventorySlotIndexFromInstance(Entry.Instance), Entry.Instance->GetItemInstanceId(),
+					1, ECatInventoryWorldAction::Drop).bCommitted;
+				break;
+			}
+		}
+	}
+	const FString Event = FString::Printf(
+		TEXT("Event=mouth_drop_result World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s ItemActor=%s Dropped=%d"),
+		*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(),
+		*GetNameSafe(Fish ? static_cast<AActor*>(Fish) : static_cast<AActor*>(Guard)), bDropped);
+	if (bDropped) { UE_LOG(LogCatfishing, Log, TEXT("%s"), *Event); }
+	else { UE_LOG(LogCatfishing, Warning, TEXT("%s"), *Event); }
+}
+
 // 鱼护拾取路由：记录请求后确认命令窗口与同世界对象，再让鱼护裁决所有权和容量；按原请求记录及回送结果，不创建第二份携带状态。
 void ACatfishingPlayerController::ServerPickUpFishGuard_Implementation(ACatFishGuardActor* Guard, const FGuid RequestId)
 {
@@ -1215,12 +1253,27 @@ void ACatfishingPlayerController::ServerPlaceProtectionSign_Implementation(const
 }
 
 // Native 输入分流流程：
-// 1. 先拒绝翻天操作，再筛选项目交互标签，避免本地接口先打开库存或发起 Ability；其他标签无副作用返回。
-// 2. IA_Interact 只进入 PlayerController 持有的唯一 TargetingComponent；提示 UI 只展示当前目标。
-// 3. TargetingComponent 对当前 Actor 调用 ICatInteractable，商店、营地公共仓库、鱼护、鱼缸和死鱼各自在 Actor 实现中处理。
+// 1. 先拒绝翻天操作；快捷丢弃还检查本地输入锁，菜单打开时不丢物，空嘴也不发请求。
+// 2. 丢弃先查当前嘴部，取消尚未完成的交互长按，再通知服务器读取携带对象；Started 绑定避免按住重复触发。
+// 3. 其余仅处理 IA_Interact，由唯一 TargetingComponent 把交互交给准星 Actor；不认识的标签无副作用返回。
 void ACatfishingPlayerController::NativeInputTagPressed(const FGameplayTag InputTag)
 {
 	if (IsDayTransitionInputBlocked()) return;
+	if (InputTag.MatchesTagExact(CatInteractionTags::Input_DropCarriedItem))
+	{
+		if (!IsLocalController() || IsMoveInputIgnored()) return;
+		ACatCharacter* CatCharacter = Cast<ACatCharacter>(GetPawn());
+		if (!CatCharacter) return;
+		AActor* Item = ACatFishPickupActor::FindCarriedFish(CatCharacter);
+		if (!Item) Item = ACatFishGuardActor::FindCarriedGuard(CatCharacter);
+		if (!Item) return;
+		if (InteractionTargetingComponent) InteractionTargetingComponent->EndInteractionInput(true);
+		UE_LOG(LogCatfishing, Log,
+			TEXT("Event=mouth_drop_submitted World=%s NetMode=%d Authority=%d LocalRole=%d Player=%s ItemActor=%s"),
+			*GetNameSafe(GetWorld()), GetNetMode(), HasAuthority(), GetLocalRole(), *GetName(), *GetNameSafe(Item));
+		ServerDropCarriedItem();
+		return;
+	}
 	if (!InputTag.MatchesTagExact(CatInteractionTags::Input_Interact))
 	{
 		return;

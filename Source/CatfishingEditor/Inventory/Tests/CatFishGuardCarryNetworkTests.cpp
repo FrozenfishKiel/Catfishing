@@ -86,8 +86,8 @@ namespace CatFishGuardCarryNetwork
 		 * 1. 等正式登录、身体与地图地面就绪，在服务器生成原鱼护并通过既有库存装鱼。
 		 * 2. 等初始复制完整才从客户端拾取；收到对应回执后检查两端归属、嘴部附着与原鱼。
 		 * 3. 从客户端背包读取实际槽位和 GUID 发送 Place，等地面、扣格和固定变换收敛后再次拾取。
-		 * 4. 第二次携带收敛后发送 Drop，分别采样两端释放后的位移，等真实刚体落稳、位置收敛且嘴空。
-		 * 前提丢失或 RPC 拒绝立即带阶段报错；未完整复制时继续等待，阶段超时保留具体等待原因。 */
+		 * 4. 第二次携带收敛后无参通知服务器丢弃当前携带物，分别采样两端释放后的位移，等真实刚体落稳、位置收敛且嘴空。
+		 * 前提丢失或拾取、放置回执拒绝时立即带阶段报错；丢弃只观察复制结果，未收敛时继续等待并在阶段超时报告原因。 */
 		bool Update() override
 		{
 			const double Now = FPlatformTime::Seconds();
@@ -145,8 +145,8 @@ namespace CatFishGuardCarryNetwork
 			}
 			WaitingFor = FString::Printf(TEXT("owning-client RPC receipt Request=%s"), *RequestId.ToString());
 			const FCatDomainCommandResult Result = ClientController->GetLastCampCommandResult();
-			if (Result.RequestId != RequestId) return false;
-			if (!Result.bCommitted || Result.Error != ECatDomainCommandError::None)
+			if (Stage != 5 && Result.RequestId != RequestId) return false;
+			if (Stage != 5 && (!Result.bCommitted || Result.Error != ECatDomainCommandError::None))
 			{
 				Test->AddError(FString::Printf(TEXT("FishGuard RPC rejected: stage=%d Request=%s Error=%d Committed=%d"),
 					Stage, *RequestId.ToString(), int32(Result.Error), Result.bCommitted));
@@ -170,8 +170,15 @@ namespace CatFishGuardCarryNetwork
 				if (!ServerEntry || ServerEntry->StackCount != 1 || !ServerEntry->Instance
 					|| ServerEntry->Instance->GetWorldActor() != ServerGuard.Get()) return false;
 				RequestId = FGuid::NewGuid();
-				ClientController->ServerReleaseInventoryItemToWorld(RequestId, ClientCat, Slot, Item->GetItemInstanceId(), 1,
-					Stage == 2 ? ECatInventoryWorldAction::Place : ECatInventoryWorldAction::Drop);
+				if (Stage == 2)
+				{
+					ClientController->ServerReleaseInventoryItemToWorld(RequestId, ClientCat, Slot, Item->GetItemInstanceId(), 1,
+						ECatInventoryWorldAction::Place);
+				}
+				else
+				{
+					ClientController->ServerDropCarriedItem();
+				}
 				++Stage;
 				StageStartedAt = Now;
 				StableSince = 0.0;

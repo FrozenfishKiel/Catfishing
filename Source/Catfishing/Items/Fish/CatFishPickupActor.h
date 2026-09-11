@@ -79,6 +79,9 @@ public:
 	/** 查找该角色当前嘴上叼着的唯一世界鱼；没有或附件状态不一致时返回空。 */
 	static ACatFishPickupActor* FindCarriedFish(const ACatCharacter* Character);
 
+	/** 玩家主动丢弃当前真实嘴叼鱼；先预检空间，成功才解除携带并轻抛原 Actor，失败保持嘴部与鱼身份不变。 */
+	bool DropFromAuthority(AController* RequestingController);
+
 	/**
 	 * authority 把这条嘴叼鱼提交到射线命中的地面鱼护。
 	 * 只有目标鱼护正式库存已接收同一个鱼 ItemInstance 才销毁世界鱼；箱满或权限失败时继续叼着。
@@ -102,7 +105,10 @@ public:
 protected:
 	/** 完成生成后设置独立交互范围并恢复当前鱼姿态；客户端按复制的身份配置同一尺寸的物理根。 */
 	virtual void BeginPlay() override;
+	/** 附着复制到达后按表现与物理事实收敛，防止迟到的嘴部附件覆盖丢弃。 */
 	virtual void OnRep_AttachmentReplication() override;
+	/** 运动复制到达后再次收敛嘴部状态，使先到的物理丢弃不会被旧携带表现回挂。 */
+	virtual void OnRep_ReplicatedMovement() override;
 
 private:
 	friend class ACatFishingSession;
@@ -122,6 +128,8 @@ private:
 	void RetryAttachmentReconcile();
 	/** 携带者退出后解除嘴部占用，在既有地面查询结果上固定鱼体；不触发新的捕获记录或物理抛掷。 */
 	void ReleaseMouthCarryFromAuthority(const FVector& DropLocation);
+	/** 结束服务器嘴部携带生命周期，解除宿主回调、附着和归属；落点与物理由主动丢弃或宿主销毁入口决定。 */
+	void EndMouthCarryFromAuthority();
 	void ApplyLocalFocus(bool bFocused);
 	/** 沿 FishDefinition 的直接引用解析 Mesh/落地动画；客户端不会维护独立鱼种映射。 */
 	void RefreshFishPresentation();

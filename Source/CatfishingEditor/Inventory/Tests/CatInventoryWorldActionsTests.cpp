@@ -20,6 +20,7 @@
 #include "FishContainers/CatFishPickupSettings.h"
 #include "Framework/Game/CatfishingGameState.h"
 #include "Framework/Game/CatfishingPlayerController.h"
+#include "Framework/Game/CatfishingPlayerState.h"
 #include "GameFramework/GameModeBase.h"
 #include "GameFramework/WorldSettings.h"
 #include "Inventory/CatFishGuardInventoryItemInstance.h"
@@ -27,8 +28,11 @@
 #include "Inventory/CatFishOnlyInventoryComponent.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemDefinition.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Inventory/CatInventoryStatics.h"
 #include "Items/CatItem.h"
+#include "Items/Fish/CatFishPickupActor.h"
+#include "OnlineSubsystemTypes.h"
 #include "ShopEconomy/CatShopEconomyService.h"
 #include "ShopEconomy/CatShopEconomySettings.h"
 #include "UObject/StrongObjectPtr.h"
@@ -529,6 +533,151 @@ bool FCatInventoryFishGuardRoundTripTest::RunTest(const FString& Parameters)
 			TestEqual(TEXT("内鱼重量未重置"), FishInstances[Index]->GetFishWeightKilograms(), Index == 0 ? 2.5 : 3.75);
 		}
 	}
+	return !HasAnyErrors();
+}
+
+IMPLEMENT_SIMPLE_AUTOMATION_TEST(FCatWorldFishMouthDropTest,
+	"Catfishing.Runtime.Inventory.WorldActions.MouthFishDropIdentityAndPhysics",
+	EAutomationTestFlags::EditorContext | EAutomationTestFlags::ProductFilter)
+
+// 单鱼丢弃回归：复用独立 authority World 和正式猫骨架、鱼种，以有效玩家身份初始化库存鱼实例并经真实交互叼起。
+// 先验证错误携带者与前方障碍均拒绝且保留嘴部、变换和鱼身份，再移除障碍，观察原 Actor 的物理状态和配置初速度。
+bool FCatWorldFishMouthDropTest::RunTest(const FString& Parameters)
+{
+	(void)Parameters;
+	using namespace CatInventoryWorldActionsTests;
+	FTestWorldWrapper Wrapper;
+	if (!StartWorld(*this, Wrapper)) return false;
+	UWorld* World = Wrapper.GetTestWorld();
+	UClass* CatClass = LoadClass<ACatCharacter>(nullptr, TEXT("/Game/Character/BP_CatCharacter.BP_CatCharacter_C"));
+	UCatFishDefinition* Definition = LoadObject<UCatFishDefinition>(nullptr,
+		TEXT("/Game/Catfishing/Data/Fish/Fish_LittleSilver.Fish_LittleSilver"));
+	if (!TestTrue(TEXT("正式猫和鱼种可加载"), CatClass && Definition)) return false;
+	ACatCharacter* Character = World->SpawnActor<ACatCharacter>(FVector(0, 0, 100), FRotator::ZeroRotator);
+	ACatCharacter* OtherCharacter = World->SpawnActor<ACatCharacter>(FVector(0, 1000, 100), FRotator::ZeroRotator);
+	ACatfishingPlayerController* Controller = World->SpawnActor<ACatfishingPlayerController>();
+	ACatfishingPlayerController* OtherController = World->SpawnActor<ACatfishingPlayerController>();
+	if (!TestTrue(TEXT("创建两个独立玩家宿主"), Character && OtherCharacter && Controller && OtherController)) return false;
+	// 两个请求者都持有合法身份并真实占有角色，保证错误携带者分支不会被无效身份提前截断。
+	for (ACatfishingPlayerController* PlayerController : {Controller, OtherController})
+	{
+		ACatfishingPlayerState* State = World->SpawnActor<ACatfishingPlayerState>();
+		if (!TestNotNull(TEXT("创建正式玩家身份"), State)) return false;
+		const FUniqueNetIdRef UniqueId = FUniqueNetIdString::Create(
+			PlayerController == Controller ? TEXT("MouthFishOwner") : TEXT("MouthFishOther"), FName(TEXT("CAT_TEST")));
+		State->SetUniqueId(FUniqueNetIdRepl(UniqueId));
+		PlayerController->PlayerState = State;
+		ACatCharacter* Pawn = PlayerController == Controller ? Character : OtherCharacter;
+		Pawn->SetPlayerState(State);
+		PlayerController->Possess(Pawn);
+	}
+	const USkeletalMeshComponent* FormalMesh = CatClass->GetDefaultObject<ACatCharacter>()->GetMesh();
+	if (!TestTrue(TEXT("正式猫骨架资源存在"), FormalMesh && FormalMesh->GetSkeletalMeshAsset())) return false;
+	Character->GetMesh()->SetSkeletalMeshAsset(FormalMesh->GetSkeletalMeshAsset());
+	Character->GetMesh()->SetRelativeTransform(FormalMesh->GetRelativeTransform());
+	const FName MouthSocket = GetDefault<UCatFishPickupSettings>()->MouthCarrySocketName;
+	if (!TestTrue(TEXT("正式猫具有嘴部Socket"), Character->GetMesh()->DoesSocketExist(MouthSocket))) return false;
+	if (!TestNotNull(TEXT("创建真实地面"), AddFloor(*Character))) return false;
+	ACatFishPickupActor* Fish = World->SpawnActor<ACatFishPickupActor>(FVector(100, 0, 100), FRotator::ZeroRotator);
+	if (!TestNotNull(TEXT("创建唯一世界鱼"), Fish)) return false;
+	UCatFishInventoryItemInstance* Item = NewObject<UCatFishInventoryItemInstance>(Fish);
+	Item->SetItemDefinition(Definition);
+	Item->SetRuntimeOwnerActor(Fish);
+	const FGuid FishId = FGuid::NewGuid();
+	const FGuid SessionId = FGuid::NewGuid();
+	constexpr double WeightKilograms = 2.5;
+	if (!TestTrue(TEXT("初始化冻结身份和重量"), Item->InitializeFishFromAuthority(
+		SessionId, FishId, TEXT("MouthFishOwner"), WeightKilograms))) return false;
+	if (!TestTrue(TEXT("世界鱼接收原库存实例"), Fish->InitializeFromInventoryFromAuthority(Item, 1))) return false;
+	UBoxComponent* Body = Cast<UBoxComponent>(Fish->GetRootComponent());
+	USkeletalMeshComponent* FishMesh = Fish->FindComponentByClass<USkeletalMeshComponent>();
+	UCatInventoryComponent* Inventory = Character->GetInventoryComponent();
+	if (!TestTrue(TEXT("鱼物理根、正式网格及玩家库存就绪"), Body && FishMesh && FishMesh->GetSkeletalMeshAsset() && Inventory)) return false;
+	const int32 InitialInventoryFish = Inventory->CountVisibleInventoryQuantityByDefinitionId(Definition->GetInventoryDefinitionId());
+	if (!TestTrue(TEXT("通过真实Interact叼起原鱼"), ICatInteractable::Execute_Interact(Fish, Controller, FGuid::NewGuid()))) return false;
+	const FTransform CarriedMeshTransform = FishMesh->GetRelativeTransform();
+	const FVector CarriedBoxExtent = Body->GetUnscaledBoxExtent();
+
+	// 每个阶段从世界枚举活鱼并核对原实例与公开身份，同时观察背包未接收鱼，防止仅以命令返回值掩盖替换或复制载体。
+	const auto CheckIdentity = [&, this](const TCHAR* Phase)
+	{
+		const FString Prefix = FString(Phase) + TEXT(": ");
+		int32 LiveFishCount = 0;
+		for (TActorIterator<ACatFishPickupActor> It(World); It; ++It)
+		{
+			if (It->IsActorBeingDestroyed()) continue;
+			++LiveFishCount;
+			TestTrue(Prefix + TEXT("世界仍是原Actor"), *It == Fish);
+		}
+		TestEqual(Prefix + TEXT("只有一条活鱼"), LiveFishCount, 1);
+		TestTrue(Prefix + TEXT("原鱼未被销毁"), IsValid(Fish) && !Fish->IsActorBeingDestroyed());
+		TestEqual(Prefix + TEXT("世界鱼GUID不变"), Fish->GetPresentationState().FishInstanceId, FishId);
+		TestEqual(Prefix + TEXT("世界鱼重量不变"), Fish->GetPresentationState().WeightKilograms, WeightKilograms);
+		TestEqual(Prefix + TEXT("来源会话不变"), Fish->GetPresentationState().FishingSessionId, SessionId);
+		TestEqual(Prefix + TEXT("原实例GUID不变"), Item->GetItemInstanceId(), FishId);
+		TestEqual(Prefix + TEXT("原实例重量不变"), Item->GetFishWeightKilograms(), WeightKilograms);
+		TestTrue(Prefix + TEXT("原实例运行宿主仍是原鱼"), Item->GetRuntimeOwnerActor() == Fish);
+		TestEqual(Prefix + TEXT("没有经背包收货"), Inventory->CountVisibleInventoryQuantityByDefinitionId(
+			Definition->GetInventoryDefinitionId()), InitialInventoryFish);
+	};
+	// 拒绝后读取真实嘴部附件、归属、几何与模拟状态；期望变换在请求前捕获，任何副作用都会留下断言失败。
+	// 变换比较容差为位置0.001厘米、缩放及四元数分量0.001；盒尺寸容差为0.001厘米，不允许可见位移或切换姿态。
+	const auto CheckMouth = [&, this](const TCHAR* Phase, const FTransform& ExpectedTransform)
+	{
+		const FString Prefix = FString(Phase) + TEXT(": ");
+		CheckIdentity(Phase);
+		TestTrue(Prefix + TEXT("原鱼仍占用原玩家嘴部"), ACatFishPickupActor::FindCarriedFish(Character) == Fish);
+		TestEqual(Prefix + TEXT("保持Carried"), Fish->GetPresentationState().State, ECatFishPickupState::Carried);
+		TestTrue(Prefix + TEXT("携带玩家身份不变"), Fish->GetPresentationState().CarriedByPlayerState == Controller->PlayerState);
+		TestTrue(Prefix + TEXT("附着仍是角色Mesh"), Body->GetAttachParent() == Character->GetMesh());
+		TestEqual(Prefix + TEXT("嘴部Socket不变"), Body->GetAttachSocketName(), MouthSocket);
+		TestTrue(Prefix + TEXT("世界变换不变"), Fish->GetActorTransform().Equals(ExpectedTransform, 0.001));
+		TestTrue(Prefix + TEXT("嘴叼网格姿态不变"), FishMesh->GetRelativeTransform().Equals(CarriedMeshTransform, 0.001));
+		TestTrue(Prefix + TEXT("物理盒尺寸不变"), Body->GetUnscaledBoxExtent().Equals(CarriedBoxExtent, 0.001));
+		TestTrue(Prefix + TEXT("归属仍是原角色"), Fish->GetOwner() == Character && Fish->GetInstigator() == Character);
+		TestFalse(Prefix + TEXT("嘴叼鱼未启动物理"), Body->IsSimulatingPhysics());
+		TestEqual(Prefix + TEXT("嘴叼碰撞保持关闭"), Body->GetCollisionEnabled(), ECollisionEnabled::NoCollision);
+	};
+	const FTransform BeforeReject = Fish->GetActorTransform();
+	CheckMouth(TEXT("初次叼起"), BeforeReject);
+	AddExpectedMessagePlain(TEXT("Event=fish_drop_rejected"), ELogVerbosity::Warning, EAutomationExpectedMessageFlags::Contains, 2);
+	TestFalse(TEXT("错误携带者没有丢弃"), Fish->DropFromAuthority(OtherController));
+	CheckMouth(TEXT("错误携带者拒绝"), BeforeReject);
+
+	AActor* Obstacle = World->SpawnActor<AActor>();
+	if (!TestNotNull(TEXT("创建前方障碍宿主"), Obstacle)) return false;
+	UBoxComponent* Blocker = NewObject<UBoxComponent>(Obstacle);
+	Obstacle->AddInstanceComponent(Blocker);
+	Obstacle->SetRootComponent(Blocker);
+	Blocker->SetBoxExtent(FVector(20.0, 200.0, 200.0));
+	Blocker->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	Blocker->SetCollisionObjectType(ECC_WorldStatic);
+	Blocker->SetCollisionResponseToAllChannels(ECR_Block);
+	Blocker->SetWorldLocation(Character->GetPawnViewLocation() + Character->GetActorForwardVector() * 40.0);
+	Blocker->SetMobility(EComponentMobility::Static);
+	Blocker->RegisterComponent();
+	TestFalse(TEXT("真实空间查询拒绝障碍"), Fish->DropFromAuthority(Controller));
+	CheckMouth(TEXT("障碍拒绝"), BeforeReject);
+	if (!TestTrue(TEXT("移除障碍以打开同一释放区域"), Obstacle->Destroy())) return false;
+
+	if (!TestTrue(TEXT("无遮挡时正式丢弃"), Fish->DropFromAuthority(Controller))) return false;
+	CheckIdentity(TEXT("成功丢弃"));
+	TestEqual(TEXT("原鱼切到Available"), Fish->GetPresentationState().State, ECatFishPickupState::Available);
+	TestNull(TEXT("嘴部占用解除"), ACatFishPickupActor::FindCarriedFish(Character));
+	TestNull(TEXT("附件解除"), Body->GetAttachParent());
+	TestTrue(TEXT("携带归属全部清空"), !Fish->GetOwner() && !Fish->GetInstigator() && !Fish->GetPresentationState().CarriedByPlayerState);
+	TestTrue(TEXT("原物理根正在模拟"), Body->IsSimulatingPhysics());
+	TestTrue(TEXT("没有替换原物理根"), Fish->GetRootComponent() == Body);
+	TestTrue(TEXT("释放到角色前方而非原嘴部"), FVector::DotProduct(Fish->GetActorLocation() - Character->GetPawnViewLocation(),
+		Character->GetActorForwardVector()) > Character->GetCapsuleComponent()->GetScaledCapsuleRadius());
+	TestEqual(TEXT("恢复物理碰撞"), Body->GetCollisionEnabled(), ECollisionEnabled::QueryAndPhysics);
+	const UCatInventorySettings* Settings = GetDefault<UCatInventorySettings>();
+	const FVector Velocity = Body->GetPhysicsLinearVelocity();
+	// 在任何物理帧推进前读初速度；各轴容差为0.01厘米/秒，允许物理存储精度而不接受零速度或漏掉向上轻抛。
+	TestTrue(TEXT("水平初速度来自现有配置"), FMath::IsNearlyEqual(
+		FVector::DotProduct(Velocity, Character->GetActorForwardVector().GetSafeNormal2D()), Settings->DropForwardSpeed, 0.01));
+	TestTrue(TEXT("向上初速度来自现有配置"), FMath::IsNearlyEqual(Velocity.Z, Settings->DropUpwardSpeed, 0.01));
+	TestTrue(TEXT("没有额外侧向速度"), FMath::IsNearlyZero(Velocity.Y, 0.01));
 	return !HasAnyErrors();
 }
 

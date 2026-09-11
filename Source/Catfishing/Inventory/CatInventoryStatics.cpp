@@ -2,11 +2,91 @@
 
 #include "Camp/CatCampSettings.h"
 #include "Character/CatCharacter.h"
+#include "Components/CapsuleComponent.h"
+#include "Components/PrimitiveComponent.h"
+#include "Engine/World.h"
 #include "Equipment/CatEquipmentComponent.h"
 #include "Inventory/CatInventoryAccessRules.h"
 #include "Inventory/CatInventoryComponent.h"
 #include "Inventory/CatInventoryItemInstance.h"
+#include "Inventory/CatInventorySettings.h"
 #include "Logging/CatLog.h"
+
+// 落点求解流程：只用物理根的局部包围盒检查占用，不把准星交互球算作实体；放置依次搜索正前方与左右各30度内的地面。
+// 丢弃从视点、角色半径和物理盒尺寸求前方释放中心，沿途扫盒并检查终点占用，阻挡即拒绝；成功把盒中心换算为Actor变换。
+// 放置同时检查坡度、相对脚底高差、视线、物体占用和四角支撑，全部通过才返回最终 Actor 变换；全过程不移动 Actor。
+bool UCatInventoryStatics::FindWorldReleaseTransform(ACatCharacter* Character, AActor* ItemActor, const ECatInventoryWorldAction Action,
+	const UCatInventorySettings& Settings, FTransform& OutTransform)
+{
+	if (!IsValid(Character) || !IsValid(ItemActor) || Character->GetWorld() != ItemActor->GetWorld()
+		|| (Action != ECatInventoryWorldAction::Drop && Action != ECatInventoryWorldAction::Place)) return false;
+	UWorld* World = Character->GetWorld();
+	const UPrimitiveComponent* Body = Cast<UPrimitiveComponent>(ItemActor->GetRootComponent());
+	if (!Body) return false;
+	const FBox Bounds = Body->CalcBounds(FTransform::Identity).GetBox();
+	if (!Bounds.IsValid) return false;
+	const FVector Scale = ItemActor->GetActorScale3D();
+	const FVector Extent = Bounds.GetExtent() * Scale.GetAbs();
+	const FVector CenterOffset = Bounds.GetCenter() * Scale;
+	const FVector Forward = Character->GetActorForwardVector().GetSafeNormal2D();
+	const FVector Eye = Character->GetPawnViewLocation();
+	if (!World || Extent.ContainsNaN() || Extent.GetMin() <= 0.0 || Forward.IsNearlyZero()) return false;
+	FCollisionQueryParams Query(SCENE_QUERY_STAT(CatInventoryWorldRelease), false, Character);
+	Query.AddIgnoredActor(ItemActor);
+	const FCollisionShape Shape = FCollisionShape::MakeBox(Extent);
+	const double FeetZ = Character->GetActorLocation().Z - Character->GetCapsuleComponent()->GetScaledCapsuleHalfHeight();
+	if (Action == ECatInventoryWorldAction::Drop)
+	{
+		const FQuat Rotation = Forward.Rotation().Quaternion();
+		const FVector Center = Eye + Forward * (Character->GetCapsuleComponent()->GetScaledCapsuleRadius() + Extent.GetMax() + 10.0);
+		FHitResult Hit;
+		if (World->SweepSingleByChannel(Hit, Eye, Center, Rotation, ECC_WorldDynamic, Shape, Query)
+			|| World->OverlapBlockingTestByChannel(Center, Rotation, ECC_WorldDynamic, Shape, Query)) return false;
+		OutTransform = FTransform(Rotation, Center - Rotation.RotateVector(CenterOffset), Scale);
+		return true;
+	}
+	const double Height = Settings.PlacementHeightDifferenceCentimeters;
+	const double MinimumNormalZ = FMath::Cos(FMath::DegreesToRadians(Settings.PlacementSlopeDegrees));
+	for (const double Angle : {0.0, -15.0, 15.0, -30.0, 30.0})
+	{
+		const FVector Direction = Forward.RotateAngleAxis(Angle, FVector::UpVector);
+		for (const double Fraction : {2.0 / 3.0, 0.5, 5.0 / 6.0, 1.0, 1.0 / 3.0})
+		{
+			FVector Candidate = Eye + Direction * Settings.PlacementRangeCentimeters * Fraction;
+			Candidate.Z = FeetZ;
+			FHitResult Ground;
+			if (!World->LineTraceSingleByChannel(Ground, Candidate + FVector(0, 0, Height + 2.0),
+				Candidate - FVector(0, 0, Height + 2.0), ECC_WorldDynamic, Query)
+				|| FMath::Abs(Ground.ImpactPoint.Z - FeetZ) > Height || Ground.ImpactNormal.Z < MinimumNormalZ) continue;
+			FHitResult Sight;
+			if (World->LineTraceSingleByChannel(Sight, Eye, Ground.ImpactPoint, ECC_Visibility, Query)
+				&& FVector::DistSquared(Sight.ImpactPoint, Ground.ImpactPoint) > FMath::Square(3.0)) continue;
+			const FQuat Rotation = FRotationMatrix::MakeFromZX(Ground.ImpactNormal, Forward).ToQuat();
+			const FVector Center = Ground.ImpactPoint + Ground.ImpactNormal * (Extent.Z + 1.0);
+			if (World->OverlapBlockingTestByChannel(Center, Rotation, ECC_WorldDynamic, Shape, Query)) continue;
+			bool bSupported = true;
+			for (const FVector2D Corner : {FVector2D(-1, -1), FVector2D(-1, 1), FVector2D(1, -1), FVector2D(1, 1)})
+			{
+				const FVector Support = Ground.ImpactPoint + Rotation.RotateVector(FVector(Corner.X * Extent.X * 0.9, Corner.Y * Extent.Y * 0.9, 0));
+				FHitResult Foot;
+				if (!World->LineTraceSingleByChannel(Foot, Support + FVector(0, 0, Height + 2.0),
+					Support - FVector(0, 0, Height + 2.0), ECC_WorldDynamic, Query)
+					|| Foot.ImpactNormal.Z < MinimumNormalZ
+					|| FMath::Abs(FVector::DotProduct(Foot.ImpactPoint - Ground.ImpactPoint, Ground.ImpactNormal)) > 2.0)
+				{
+					bSupported = false;
+					break;
+				}
+			}
+			if (bSupported)
+			{
+				OutTransform = FTransform(Rotation, Center - Rotation.RotateVector(CenterOffset), Scale);
+				return true;
+			}
+		}
+	}
+	return false;
+}
 
 namespace
 {
